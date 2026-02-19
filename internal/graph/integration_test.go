@@ -145,6 +145,42 @@ func TestIntegration_GetItem_NotFound(t *testing.T) {
 	assert.True(t, isExpectedErr, "expected ErrNotFound or ErrBadRequest, got: %v", err)
 }
 
+// TestIntegration_Me verifies Me() returns a valid user profile.
+func TestIntegration_Me(t *testing.T) {
+	client := newIntegrationClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	defer cancel()
+
+	user, err := client.Me(ctx)
+	require.NoError(t, err)
+
+	assert.NotEmpty(t, user.DisplayName, "DisplayName should be non-empty")
+	assert.NotEmpty(t, user.ID, "ID should be non-empty")
+
+	t.Logf("user: id=%s displayName=%s email=%s", user.ID, user.DisplayName, user.Email)
+}
+
+// TestIntegration_Drives verifies Drives() returns at least one drive.
+func TestIntegration_Drives(t *testing.T) {
+	client := newIntegrationClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	defer cancel()
+
+	drives, err := client.Drives(ctx)
+	require.NoError(t, err)
+
+	assert.NotEmpty(t, drives, "should have at least one drive")
+
+	for i, d := range drives {
+		assert.NotEmpty(t, d.ID, "drive %d should have an ID", i)
+		assert.NotEmpty(t, d.DriveType, "drive %d should have a drive type", i)
+
+		t.Logf("drive[%d]: id=%s name=%s type=%s", i, d.ID, d.Name, d.DriveType)
+	}
+}
+
 // TestIntegration_CreateAndDeleteFolder creates a test folder, verifies it,
 // then deletes it and confirms deletion.
 func TestIntegration_CreateAndDeleteFolder(t *testing.T) {

@@ -9,10 +9,8 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -44,7 +42,8 @@ func main() {
 	fmt.Println("Login successful. Token saved.")
 }
 
-// printDrive loads an existing token and fetches the user's default drive ID.
+// printDrive loads an existing token and fetches the user's default drive ID
+// using the typed Drives() method (B-024 cleanup: replaces raw Do() + JSON parsing).
 // Prints only the drive ID to stdout for use in shell scripting:
 //
 //	export ONEDRIVE_TEST_DRIVE_ID=$(go run ./cmd/integration-bootstrap --print-drive-id)
@@ -57,33 +56,17 @@ func printDrive(ctx context.Context, profile string, logger *slog.Logger) {
 
 	client := graph.NewClient(graph.DefaultBaseURL, http.DefaultClient, ts, logger)
 
-	resp, err := client.Do(ctx, http.MethodGet, "/me/drive", nil)
+	drives, err := client.Drives(ctx)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to fetch drive: %v\n", err)
-		os.Exit(1)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to read response: %v\n", err)
+		fmt.Fprintf(os.Stderr, "failed to fetch drives: %v\n", err)
 		os.Exit(1)
 	}
 
-	var result struct {
-		ID string `json:"id"`
-	}
-
-	if err := json.Unmarshal(body, &result); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to parse drive response: %v\n", err)
+	if len(drives) == 0 {
+		fmt.Fprintln(os.Stderr, "no drives found")
 		os.Exit(1)
 	}
 
-	if result.ID == "" {
-		fmt.Fprintln(os.Stderr, "drive ID is empty in response")
-		os.Exit(1)
-	}
-
-	// Print only the ID, no newline decoration, for shell capture.
-	fmt.Print(result.ID)
+	// Print the first drive's ID (primary drive), no newline decoration, for shell capture.
+	fmt.Print(drives[0].ID)
 }
