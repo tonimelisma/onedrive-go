@@ -4,10 +4,8 @@ package graph
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -23,6 +21,7 @@ const (
 	integrationTimeout = 30 * time.Second
 	defaultTestProfile = "personal"
 	profileEnvVar      = "ONEDRIVE_TEST_PROFILE"
+	driveIDEnvVar      = "ONEDRIVE_TEST_DRIVE_ID"
 )
 
 // testLogger returns an slog.Logger at Debug level that writes to t.Log,
@@ -71,62 +70,25 @@ func newIntegrationClient(t *testing.T) *Client {
 	return NewClient(DefaultBaseURL, http.DefaultClient, ts, logger)
 }
 
-// driveIDForTest fetches the user's default drive ID via raw GET /me/drive.
-// Temporary helper until increment 1.6 adds typed Drives() method.
-func driveIDForTest(t *testing.T, client *Client) string {
+// driveIDForTest reads the test drive ID from ONEDRIVE_TEST_DRIVE_ID.
+// Skips the test if not set. Populated by bootstrap tool (--print-drive-id)
+// or CI workflow.
+func driveIDForTest(t *testing.T) string {
 	t.Helper()
 
-	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
-	defer cancel()
-
-	resp, err := client.Do(ctx, http.MethodGet, "/me/drive", nil)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-
-	var result map[string]interface{}
-	require.NoError(t, json.Unmarshal(body, &result))
-
-	id, ok := result["id"].(string)
-	require.True(t, ok, "drive id should be a string")
-	require.NotEmpty(t, id)
-
-	t.Logf("test drive ID: %s", id)
+	id := os.Getenv(driveIDEnvVar)
+	if id == "" {
+		t.Skipf("%s not set -- run: go run ./cmd/integration-bootstrap --print-drive-id", driveIDEnvVar)
+	}
 
 	return id
-}
-
-// TestIntegration_GetMe is an auth smoke test — validates the full
-// auth stack (token load, refresh, request signing). Becomes typed in 1.6.
-func TestIntegration_GetMe(t *testing.T) {
-	client := newIntegrationClient(t)
-
-	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
-	defer cancel()
-
-	resp, err := client.Do(ctx, http.MethodGet, "/me", nil)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-
-	var result map[string]interface{}
-	require.NoError(t, json.Unmarshal(body, &result))
-
-	assert.NotEmpty(t, result["displayName"], "displayName should be non-empty")
-	assert.NotEmpty(t, result["id"], "id should be non-empty")
-
-	t.Logf("authenticated as: %s", result["displayName"])
 }
 
 // TestIntegration_GetItem verifies GetItem returns a properly normalized Item
 // for the drive root.
 func TestIntegration_GetItem(t *testing.T) {
 	client := newIntegrationClient(t)
-	driveID := driveIDForTest(t, client)
+	driveID := driveIDForTest(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
@@ -146,7 +108,7 @@ func TestIntegration_GetItem(t *testing.T) {
 // TestIntegration_ListChildren verifies ListChildren returns items for the drive root.
 func TestIntegration_ListChildren(t *testing.T) {
 	client := newIntegrationClient(t)
-	driveID := driveIDForTest(t, client)
+	driveID := driveIDForTest(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
@@ -169,7 +131,7 @@ func TestIntegration_ListChildren(t *testing.T) {
 // returns ErrNotFound or ErrBadRequest (Graph API returns 400 for invalid ID formats).
 func TestIntegration_GetItem_NotFound(t *testing.T) {
 	client := newIntegrationClient(t)
-	driveID := driveIDForTest(t, client)
+	driveID := driveIDForTest(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
@@ -187,7 +149,7 @@ func TestIntegration_GetItem_NotFound(t *testing.T) {
 // then deletes it and confirms deletion.
 func TestIntegration_CreateAndDeleteFolder(t *testing.T) {
 	client := newIntegrationClient(t)
-	driveID := driveIDForTest(t, client)
+	driveID := driveIDForTest(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
@@ -205,7 +167,7 @@ func TestIntegration_CreateAndDeleteFolder(t *testing.T) {
 		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), integrationTimeout)
 		defer cleanCancel()
 
-		// Best-effort cleanup — don't fail the test if cleanup fails.
+		// Best-effort cleanup -- don't fail the test if cleanup fails.
 		_ = client.DeleteItem(cleanCtx, driveID, createdID)
 
 		t.Logf("cleanup: deleted test folder %s", createdID)
