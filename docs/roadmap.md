@@ -98,6 +98,7 @@
 - Me() -> *User
 - Drives() -> []Drive
 - Drive(driveID) -> *Drive
+- **Cleanup**: Replace `cmd/integration-bootstrap --print-drive-id` raw `Do()` with typed `Drive()` method (B-024)
 - **Acceptance**: `go test` with mock responses
 - **Inputs**: architecture.md section 3
 - **Size**: ~100 LOC
@@ -109,6 +110,7 @@
 - `logout` — delete token file
 - `whoami` — display authenticated user + account type
 - All support `--profile` and `--json` flags
+- **Cleanup**: Delete `cmd/integration-bootstrap` entirely, update CI to use `onedrive-go` CLI (B-025)
 - **Acceptance**: Build succeeds, `--help` works, unit tests for flag parsing
 - **Inputs**: prd.md section 4
 - **Size**: ~200 LOC
