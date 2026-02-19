@@ -1,0 +1,94 @@
+package graph
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+)
+
+// ErrNoDownloadURL is returned when a drive item has no pre-authenticated download URL.
+// This can happen for folders, OneNote packages, or zero-byte files.
+var ErrNoDownloadURL = errors.New("graph: item has no download URL")
+
+// Download streams the content of a drive item to the given writer.
+// It first fetches the item metadata to obtain the pre-authenticated download URL,
+// then streams the content directly from that URL (bypassing the Graph API).
+// Returns the number of bytes written.
+func (c *Client) Download(ctx context.Context, driveID, itemID string, w io.Writer) (int64, error) {
+	c.logger.Info("downloading item",
+		slog.String("drive_id", driveID),
+		slog.String("item_id", itemID),
+	)
+
+	item, err := c.GetItem(ctx, driveID, itemID)
+	if err != nil {
+		return 0, fmt.Errorf("graph: getting item for download: %w", err)
+	}
+
+	if item.DownloadURL == "" {
+		c.logger.Error("item has no download URL",
+			slog.String("drive_id", driveID),
+			slog.String("item_id", itemID),
+		)
+
+		return 0, ErrNoDownloadURL
+	}
+
+	n, err := c.downloadFromURL(ctx, item.DownloadURL, w)
+	if err != nil {
+		return 0, err
+	}
+
+	c.logger.Debug("download complete",
+		slog.String("drive_id", driveID),
+		slog.String("item_id", itemID),
+		slog.Int64("bytes_written", n),
+	)
+
+	return n, nil
+}
+
+// downloadFromURL streams content from a pre-authenticated URL directly to the writer.
+// The URL is pre-authenticated by the Graph API, so no Authorization header is needed.
+// The URL itself is never logged because it contains embedded auth tokens (architecture.md section 9.2).
+func (c *Client) downloadFromURL(ctx context.Context, url string, w io.Writer) (int64, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	if err != nil {
+		return 0, fmt.Errorf("graph: creating download request: %w", err)
+	}
+
+	req.Header.Set("User-Agent", userAgent)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		c.logger.Error("download request failed",
+			slog.String("error", err.Error()),
+		)
+
+		return 0, fmt.Errorf("graph: download request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		c.logger.Error("download returned non-200 status",
+			slog.Int("status", resp.StatusCode),
+		)
+
+		return 0, fmt.Errorf("graph: download failed with status %d", resp.StatusCode)
+	}
+
+	n, err := io.Copy(w, resp.Body)
+	if err != nil {
+		c.logger.Error("streaming download content failed",
+			slog.String("error", err.Error()),
+			slog.Int64("bytes_before_error", n),
+		)
+
+		return n, fmt.Errorf("graph: streaming download content: %w", err)
+	}
+
+	return n, nil
+}
