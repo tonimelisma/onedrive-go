@@ -8,7 +8,7 @@ Currently: CLI-first OneDrive client, pivoted to "Pragmatic Flat" architecture (
 
 ## Current Phase
 
-**Phase 1 in progress (Graph Client + Auth + CLI Basics).** Increments 1.1 (HTTP transport) and 1.2 (auth) complete. Foundation: config package (94.8% coverage), QuickXorHash, design docs, research corpus. See [docs/roadmap.md](docs/roadmap.md) for the phase plan.
+**Phase 1 in progress (Graph Client + Auth + CLI Basics).** Increments 1.1 (HTTP transport), 1.2 (auth), and 1.3 (items CRUD) complete. Foundation: config package (94.8% coverage), QuickXorHash, design docs, research corpus. See [docs/roadmap.md](docs/roadmap.md) for the phase plan.
 
 ## Architecture Overview
 
@@ -138,6 +138,7 @@ Every change must pass ALL gates before committing:
 8. **Docs**: CLAUDE.md documentation index is current. All doc links are valid.
 9. **Git**: Working tree is clean after commit. No uncommitted changes left behind.
 10. **Retrospective**: After each increment, conduct a brief retro covering: what went well, what could be improved, and what to change going forward. Capture actionable improvements in `LEARNINGS.md`. This applies to the increment as a whole, not to every individual commit.
+11. **Re-envisioning check**: After each increment, step back and consider the project from a blank slate. Ask: "If I were starting this today, knowing everything I know now, would I build the same thing?" Evaluate architecture, package boundaries, API design, roadmap ordering, and testing strategy. If something feels stale or constrained by earlier decisions, flag it. Don't just follow the roadmap — challenge it. Propose concrete changes if warranted, or explicitly confirm the current direction is still correct. This check prevents path dependency from accumulating across increments.
 
 ### DOD Quick Check
 ```bash
