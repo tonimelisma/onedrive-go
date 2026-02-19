@@ -123,3 +123,25 @@ The `cmd/integration-bootstrap/main.go` `printDrive()` function was updated to u
 ### Cross-package concern: Drives() vs /me/drive
 The bootstrap tool previously used `GET /me/drive` (single default drive), but the new typed API uses `GET /me/drives` (all drives) and takes the first. This is functionally equivalent for Personal accounts (which have one drive) but may differ for Business accounts with multiple drives. The first drive in the list should be the user's primary drive, but this is not explicitly documented by Microsoft. Worth monitoring in integration tests.
 
+---
+
+## 8. Transfers (Increment 1.5)
+
+### Pre-authenticated URLs bypass the Graph API
+The `@microsoft.graph.downloadUrl` from GetItem and the `uploadUrl` from CreateUploadSession are pre-authenticated URLs that go directly to SharePoint/OneDrive storage. They must NOT use `Do()` (no base URL prefix, no auth headers). Use `httpClient.Do(req)` directly. These URLs contain embedded auth tokens and must NEVER be logged.
+
+### SimpleUpload needs custom content type
+`Do()` in client.go always sets `Content-Type: application/json` when body is non-nil. SimpleUpload needs `application/octet-stream`. Solution: a private `doRawUpload` helper that takes a contentType parameter. It also provides auth (unlike pre-authenticated URL calls) but does not retry (can't safely replay a partially-consumed reader).
+
+### Upload chunk responses have three shapes
+- 202 Accepted: intermediate chunk, body has `nextExpectedRanges` (drain and discard)
+- 200 OK or 201 Created: final chunk complete, body has driveItem JSON
+- Error: various HTTP error codes with error body
+
+Use a `switch resp.StatusCode` to handle all three cases cleanly.
+
+### URL encoding in file paths
+When building upload paths like `/drives/{driveID}/items/{parentID}:/{name}:/content`, be careful with filenames containing URL-special characters. `%s` as a filename causes `net/http` to reject the URL as an invalid escape sequence. Test with valid filenames only.
+
+### No retry for upload operations
+Retrying a `SimpleUpload` or `UploadChunk` with a partially-consumed `io.Reader` would silently send incomplete data. The `doRawUpload` helper deliberately does not implement retry. For resumable uploads, the caller should use `UploadChunk` with fresh readers for each chunk.
