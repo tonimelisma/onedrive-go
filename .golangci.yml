@@ -64,6 +64,9 @@ linters:
             - github.com/BurntSushi/toml
             - github.com/stretchr/testify
             - golang.org/x/oauth2
+            - github.com/spf13/cobra
+            - github.com/spf13/pflag
+            - github.com/inconshreveable/mousetrap
 
     gocyclo:
       min-complexity: 15

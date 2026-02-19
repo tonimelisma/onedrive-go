@@ -1,5 +1,7 @@
 package main
 
 func main() {
-	// CLI will be implemented in Phase 4
+	if err := newRootCmd().Execute(); err != nil {
+		exitOnError(err)
+	}
 }
