@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// Retry and backoff constants.
+// Per architecture.md §7.2: base 1s, factor 2x, max 60s, ±25% jitter, max 5 retries.
 const (
 	maxRetries     = 5
 	baseBackoff    = 1 * time.Second
@@ -22,9 +22,9 @@ const (
 	userAgent      = "onedrive-go/0.1"
 )
 
-// TokenSource provides OAuth2 bearer tokens. Defined at the consumer
-// (graph package) per Go convention "accept interfaces, return structs".
-// The auth increment (1.2) provides the real implementation.
+// TokenSource provides OAuth2 bearer tokens.
+// Defined at the consumer (graph/) per "accept interfaces, return structs" —
+// do not move this interface to the auth provider package.
 type TokenSource interface {
 	Token() (string, error)
 }
@@ -63,10 +63,10 @@ func NewClient(baseURL string, httpClient *http.Client, token TokenSource, logge
 	}
 }
 
-// Do executes an HTTP request against the Graph API.
-// The path is appended to the client's base URL.
-// For non-nil bodies, Content-Type is set to application/json.
+// Do executes an authenticated HTTP request against the Graph API with automatic
+// retry on transient errors (per architecture.md §7.2).
 // The caller is responsible for closing the response body on success.
+// On error, returns a *GraphError wrapping a sentinel (use errors.Is to classify).
 func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
 	url := c.baseURL + path
 
@@ -74,12 +74,12 @@ func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*
 	for {
 		resp, err := c.doOnce(ctx, method, url, body)
 		if err != nil {
-			// Context cancellation is not retryable.
+			// Fail fast on context cancellation — never retry a deliberate abort.
 			if ctx.Err() != nil {
 				return nil, fmt.Errorf("graph: request canceled: %w", ctx.Err())
 			}
 
-			// Network errors are retryable.
+			// Network errors (DNS, TCP, TLS) are always worth retrying.
 			if attempt < maxRetries {
 				backoff := c.calcBackoff(attempt)
 				c.logger.Warn("retrying after network error",
@@ -102,7 +102,6 @@ func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*
 			return nil, fmt.Errorf("graph: %s %s failed after %d retries: %w", method, path, maxRetries, err)
 		}
 
-		// 2xx — success.
 		if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
 			c.logger.Debug("request succeeded",
 				slog.String("method", method),
@@ -113,7 +112,8 @@ func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*
 			return resp, nil
 		}
 
-		// Read and close body for error responses.
+		// Must drain and close the body even on errors, otherwise the
+		// underlying TCP connection won't be reused by the HTTP client pool.
 		errBody, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
@@ -121,6 +121,8 @@ func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*
 			errBody = []byte("(failed to read response body)")
 		}
 
+		// Graph API returns request-id in every response — essential for debugging
+		// issues with Microsoft support.
 		reqID := resp.Header.Get("request-id")
 
 		if isRetryable(resp.StatusCode) && attempt < maxRetries {
@@ -186,7 +188,8 @@ func (c *Client) doOnce(ctx context.Context, method, url string, body io.Reader)
 }
 
 // retryBackoff returns the backoff duration for a retryable response.
-// For 429 responses with a Retry-After header, that value is used.
+// For 429 (throttled), the Graph API's Retry-After header takes precedence
+// over calculated backoff — ignoring it risks extended throttling.
 func (c *Client) retryBackoff(resp *http.Response, attempt int) time.Duration {
 	if resp.StatusCode == http.StatusTooManyRequests {
 		if ra := resp.Header.Get("Retry-After"); ra != "" {
@@ -206,7 +209,7 @@ func (c *Client) calcBackoff(attempt int) time.Duration {
 		backoff = float64(maxBackoff)
 	}
 
-	// Apply ±25% jitter.
+	// Jitter prevents thundering herd when multiple workers hit rate limits simultaneously.
 	jitter := backoff * jitterFraction * (rand.Float64()*2 - 1) //nolint:gosec // jitter does not need crypto rand
 	backoff += jitter
 

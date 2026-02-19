@@ -73,6 +73,8 @@ func classifyStatus(code int) error {
 }
 
 // isRetryable reports whether the given HTTP status code should be retried.
+// Retry set defined in architecture.md §7.4. Callers should also check
+// Retry-After headers for 429 responses before computing backoff.
 func isRetryable(code int) bool {
 	switch code {
 	case http.StatusRequestTimeout,
