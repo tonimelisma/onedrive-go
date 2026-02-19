@@ -12,6 +12,9 @@ import (
 	"time"
 )
 
+// DefaultBaseURL is the production Microsoft Graph API v1.0 endpoint.
+const DefaultBaseURL = "https://graph.microsoft.com/v1.0"
+
 // Per architecture.md §7.2: base 1s, factor 2x, max 60s, ±25% jitter, max 5 retries.
 const (
 	maxRetries     = 5

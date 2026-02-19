@@ -6,10 +6,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,10 +20,9 @@ import (
 )
 
 const (
-	graphBaseURL        = "https://graph.microsoft.com/v1.0"
-	integrationTimeout  = 30 * time.Second
-	defaultTestProfile  = "personal"
-	profileEnvVar       = "ONEDRIVE_TEST_PROFILE"
+	integrationTimeout = 30 * time.Second
+	defaultTestProfile = "personal"
+	profileEnvVar      = "ONEDRIVE_TEST_PROFILE"
 )
 
 // testLogger returns an slog.Logger at Debug level that writes to t.Log,
@@ -63,13 +64,42 @@ func newIntegrationClient(t *testing.T) *Client {
 
 	ts, err := TokenSourceFromProfile(ctx, profile, logger)
 	if errors.Is(err, ErrNotLoggedIn) {
-		t.Skipf("no token for profile %q — run bootstrap first", profile)
+		t.Skipf("no token for profile %q -- run bootstrap first", profile)
 	}
 	require.NoError(t, err, "loading token for profile %q", profile)
 
-	return NewClient(graphBaseURL, http.DefaultClient, ts, logger)
+	return NewClient(DefaultBaseURL, http.DefaultClient, ts, logger)
 }
 
+// driveIDForTest fetches the user's default drive ID via raw GET /me/drive.
+// Temporary helper until increment 1.6 adds typed Drives() method.
+func driveIDForTest(t *testing.T, client *Client) string {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	defer cancel()
+
+	resp, err := client.Do(ctx, http.MethodGet, "/me/drive", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+
+	var result map[string]interface{}
+	require.NoError(t, json.Unmarshal(body, &result))
+
+	id, ok := result["id"].(string)
+	require.True(t, ok, "drive id should be a string")
+	require.NotEmpty(t, id)
+
+	t.Logf("test drive ID: %s", id)
+
+	return id
+}
+
+// TestIntegration_GetMe is an auth smoke test — validates the full
+// auth stack (token load, refresh, request signing). Becomes typed in 1.6.
 func TestIntegration_GetMe(t *testing.T) {
 	client := newIntegrationClient(t)
 
@@ -92,61 +122,116 @@ func TestIntegration_GetMe(t *testing.T) {
 	t.Logf("authenticated as: %s", result["displayName"])
 }
 
-func TestIntegration_GetDriveRoot(t *testing.T) {
+// TestIntegration_GetItem verifies GetItem returns a properly normalized Item
+// for the drive root.
+func TestIntegration_GetItem(t *testing.T) {
 	client := newIntegrationClient(t)
+	driveID := driveIDForTest(t, client)
 
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
-	resp, err := client.Do(ctx, http.MethodGet, "/me/drive/root", nil)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
+	item, err := client.GetItem(ctx, driveID, "root")
 	require.NoError(t, err)
 
-	var result map[string]interface{}
-	require.NoError(t, json.Unmarshal(body, &result))
+	assert.NotEmpty(t, item.ID, "root item ID should be non-empty")
+	assert.NotEmpty(t, item.Name, "root item name should be non-empty")
+	assert.True(t, item.IsFolder, "root should be a folder")
+	// DriveID normalization: must be lowercase regardless of what the API returns.
+	assert.Equal(t, strings.ToLower(item.DriveID), item.DriveID, "DriveID should be lowercase")
 
-	assert.NotEmpty(t, result["id"], "root item id should be non-empty")
-	assert.NotEmpty(t, result["name"], "root item name should be non-empty")
-
-	t.Logf("drive root: id=%s name=%s", result["id"], result["name"])
+	t.Logf("root item: id=%s name=%s driveID=%s isFolder=%v", item.ID, item.Name, item.DriveID, item.IsFolder)
 }
 
-func TestIntegration_ListRootChildren(t *testing.T) {
+// TestIntegration_ListChildren verifies ListChildren returns items for the drive root.
+func TestIntegration_ListChildren(t *testing.T) {
 	client := newIntegrationClient(t)
+	driveID := driveIDForTest(t, client)
 
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
-	resp, err := client.Do(ctx, http.MethodGet, "/me/drive/root/children", nil)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
+	items, err := client.ListChildren(ctx, driveID, "root")
 	require.NoError(t, err)
 
-	var result map[string]interface{}
-	require.NoError(t, json.Unmarshal(body, &result))
+	// Most OneDrive accounts have at least one item in root.
+	assert.NotEmpty(t, items, "root children should not be empty")
 
-	value, ok := result["value"]
-	require.True(t, ok, "response should contain 'value' array")
+	for i, item := range items {
+		assert.NotEmpty(t, item.ID, "item %d should have an ID", i)
+		assert.NotEmpty(t, item.Name, "item %d should have a name", i)
 
-	items, ok := value.([]interface{})
-	require.True(t, ok, "value should be an array")
-
-	t.Logf("root children count: %d", len(items))
+		t.Logf("child[%d]: id=%s name=%s isFolder=%v", i, item.ID, item.Name, item.IsFolder)
+	}
 }
 
-func TestIntegration_InvalidPath_404(t *testing.T) {
+// TestIntegration_GetItem_NotFound verifies that requesting a nonexistent item
+// returns ErrNotFound or ErrBadRequest (Graph API returns 400 for invalid ID formats).
+func TestIntegration_GetItem_NotFound(t *testing.T) {
 	client := newIntegrationClient(t)
+	driveID := driveIDForTest(t, client)
 
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
-	// Path-based lookup returns 404; item-ID-based with invalid format returns 400.
-	_, err := client.Do(ctx, http.MethodGet, "/me/drive/root:/nonexistent-path-that-does-not-exist", nil)
+	_, err := client.GetItem(ctx, driveID, "nonexistent-item-id-that-does-not-exist")
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrNotFound), "expected ErrNotFound, got: %v", err)
+
+	// Graph API returns 400 for invalid ID format, 404 for valid format but missing.
+	// Accept either (see LEARNINGS.md section 5).
+	isExpectedErr := errors.Is(err, ErrNotFound) || errors.Is(err, ErrBadRequest)
+	assert.True(t, isExpectedErr, "expected ErrNotFound or ErrBadRequest, got: %v", err)
+}
+
+// TestIntegration_CreateAndDeleteFolder creates a test folder, verifies it,
+// then deletes it and confirms deletion.
+func TestIntegration_CreateAndDeleteFolder(t *testing.T) {
+	client := newIntegrationClient(t)
+	driveID := driveIDForTest(t, client)
+
+	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	defer cancel()
+
+	folderName := fmt.Sprintf("onedrive-go-test-%d", time.Now().UnixNano())
+
+	// Register cleanup first to handle test failures.
+	var createdID string
+
+	t.Cleanup(func() {
+		if createdID == "" {
+			return
+		}
+
+		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), integrationTimeout)
+		defer cleanCancel()
+
+		// Best-effort cleanup — don't fail the test if cleanup fails.
+		_ = client.DeleteItem(cleanCtx, driveID, createdID)
+
+		t.Logf("cleanup: deleted test folder %s", createdID)
+	})
+
+	// Create folder in root.
+	folder, err := client.CreateFolder(ctx, driveID, "root", folderName)
+	require.NoError(t, err)
+
+	createdID = folder.ID
+
+	assert.NotEmpty(t, folder.ID)
+	assert.Equal(t, folderName, folder.Name)
+	assert.True(t, folder.IsFolder, "created item should be a folder")
+
+	t.Logf("created test folder: id=%s name=%s", folder.ID, folder.Name)
+
+	// Delete the folder.
+	err = client.DeleteItem(ctx, driveID, folder.ID)
+	require.NoError(t, err)
+
+	createdID = "" // Prevent double-delete in cleanup.
+
+	t.Logf("deleted test folder: id=%s", folder.ID)
+
+	// Verify it's gone. Graph API may return 404 or 400 for deleted items.
+	_, err = client.GetItem(ctx, driveID, folder.ID)
+	require.Error(t, err, "GetItem should fail after deletion")
 }
