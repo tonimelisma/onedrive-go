@@ -1,0 +1,202 @@
+version: "2"
+
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+formatters:
+  enable:
+    - gofmt
+    - gofumpt
+    - goimports
+
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/tonimelisma/onedrive-go
+
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - copyloopvar
+    - depguard
+    - dogsled
+    - dupl
+    - errcheck
+    - exhaustive
+    - funlen
+    - gochecknoinits
+    - goconst
+    - gocritic
+    - gocyclo
+    - goprintffuncname
+    - gosec
+    - govet
+    - ineffassign
+    - lll
+    - misspell
+    - mnd
+    - nakedret
+    - noctx
+    - nolintlint
+    - rowserrcheck
+    - staticcheck
+    - unconvert
+    - unparam
+    - unused
+    - whitespace
+
+  settings:
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+
+    depguard:
+      rules:
+        main:
+          files:
+            - "**/*.go"
+          allow:
+            - $gostd
+            - github.com/tonimelisma/onedrive-go
+            - github.com/BurntSushi/toml
+            - github.com/stretchr/testify
+
+    gocyclo:
+      min-complexity: 15
+
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - experimental
+        - opinionated
+        - performance
+        - style
+      disabled-checks:
+        - dupImport
+        - ifElseChain
+        - octalLiteral
+        - paramTypeCombine
+        - unnamedResult
+        - whyNoLint
+        - wrapperFunc
+        - importShadow
+
+    dupl:
+      threshold: 100
+
+    funlen:
+      lines: 100
+      statements: 50
+
+    mnd:
+      checks:
+        - argument
+        - case
+        - condition
+        - operation
+        - return
+        - assign
+      ignored-numbers:
+        - '0'
+        - '1'
+        - '2'
+        - '3'
+        - '200'
+        - '201'
+        - '400'
+        - '401'
+        - '403'
+        - '404'
+        - '429'
+        - '500'
+
+    goconst:
+      min-len: 2
+      min-occurrences: 2
+
+    gosec:
+      excludes:
+        - G104
+        - G204
+        - G304
+        - G307
+
+    lll:
+      line-length: 140
+
+    misspell:
+      locale: US
+
+    nakedret:
+      max-func-lines: 30
+
+    nolintlint:
+      allow-unused: false
+      require-explanation: false
+      require-specific: false
+
+    staticcheck:
+      checks: ["all", "-ST1003", "-ST1016", "-ST1020", "-ST1021", "-ST1022"]
+
+    unparam:
+      check-exported: false
+
+    whitespace:
+      multi-if: false
+      multi-func: false
+
+    exhaustive:
+      default-signifies-exhaustive: false
+
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - lll
+        source: "^//go:generate "
+      - linters:
+          - gocritic
+        text: "unnecessaryDefer:"
+      # Struct tags and inline comments in model definitions are inherently long
+      - linters:
+          - lll
+        source: "`json:"
+      - linters:
+          - lll
+        source: "`toml:"
+      # Test mock implementations mirror interfaces and can't be shortened
+      - linters:
+          - lll
+        path: _test\.go
+      # Defer close patterns are standard in Go HTTP clients
+      - linters:
+          - errcheck
+        source: "defer "
+      - path: _test\.go
+        linters:
+          - mnd
+          - gocritic
+          - funlen
+          - dupl
+          - gosec
+          - bodyclose
+          - errcheck
+      - path: main\.go
+        linters:
+          - gocritic
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
