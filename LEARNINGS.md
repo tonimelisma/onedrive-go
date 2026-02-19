@@ -76,6 +76,9 @@ GitHub secrets can't be updated from within workflows, so we use Azure Key Vault
 ### Integration test build tag pattern
 Integration tests use `//go:build integration` and are excluded from `go test ./...`. Run with `go test -tags=integration`. The `newIntegrationClient(t)` helper skips (not fails) when no token is available, so these tests degrade gracefully.
 
+### Graph API returns 400 (not 404) for invalid item ID formats
+Requesting `/me/drive/items/nonexistent-string` returns HTTP 400 ("invalidRequest"), not 404. The Graph API validates item ID format before lookup. Use path-based addressing (`/me/drive/root:/nonexistent-path`) to get proper 404 responses for nonexistent items.
+
 ### Nightly CI keeps refresh tokens alive
 Microsoft rotates refresh tokens on use and they expire after 90 days of inactivity. The nightly schedule (3 AM UTC) ensures tokens stay active.
 
