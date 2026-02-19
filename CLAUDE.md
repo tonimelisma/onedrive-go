@@ -133,9 +133,11 @@ Every change must pass ALL gates before committing:
 3. **Lint**: `golangci-lint run` — zero issues
 4. **Format**: `gofumpt` and `goimports -local github.com/tonimelisma/onedrive-go` applied
 5. **Coverage**: New/modified code must have tests. Never decrease coverage.
-6. **Docs**: CLAUDE.md documentation index is current. All doc links are valid.
-7. **Git**: Working tree is clean after commit. No uncommitted changes left behind.
-8. **Retrospective**: After each increment, conduct a brief retro covering: what went well, what could be improved, and what to change going forward. Capture actionable improvements in `LEARNINGS.md`. This applies to the increment as a whole, not to every individual commit.
+6. **Logging review**: Review new/modified code for sufficient logging. Every public function entry, every state transition, every error path must have a log line. See Logging Standard below.
+7. **Comment review**: Review new/modified code for sufficient comments explaining *why*. See Comment Convention below.
+8. **Docs**: CLAUDE.md documentation index is current. All doc links are valid.
+9. **Git**: Working tree is clean after commit. No uncommitted changes left behind.
+10. **Retrospective**: After each increment, conduct a brief retro covering: what went well, what could be improved, and what to change going forward. Capture actionable improvements in `LEARNINGS.md`. This applies to the increment as a whole, not to every individual commit.
 
 ### DOD Quick Check
 ```bash
@@ -153,20 +155,21 @@ go build ./... && go test -race -coverprofile=/tmp/cover.out ./... && golangci-l
 
 ## Comment Convention
 
-Comments explain **why**, not **what**. Both humans and AI read the code — inline comments are the most reliable context since they're right there when the code is read. Doc files can be missed.
+Comments explain **why**, not **what**. Good: intent, constraints, architectural boundaries, gotcha warnings, external references. Bad: restating code, temporary project state, obvious descriptions.
 
-**Good comments** (keep):
-- **Why / intent**: `// Jitter prevents thundering herd when multiple workers hit rate limits`
-- **Non-obvious constraints**: `// Must be 320 KiB-aligned or the Graph API returns 400`
-- **Architectural boundaries**: `// Defined at consumer per "accept interfaces, return structs" — do not move to provider`
-- **External references**: `// Per architecture.md §7.2` or `// See tier1-research/issues-api-bugs.md §3`
-- **Gotcha warnings**: `// Graph API returns driveId in inconsistent casing across endpoints`
-- **Contract/caller obligations**: `// Caller is responsible for closing the response body on success`
+## Logging Standard
 
-**Bad comments** (remove or rewrite):
-- Restating the code: `// Check if status is 429` next to `if status == 429`
-- Temporary project state: `// Increment 1.2 will implement this` (goes stale)
-- Obvious type/function descriptions: `// staticToken returns a static token` on a type named staticToken
+All code uses `log/slog` with structured key-value fields. Logging is a first-class concern — not an afterthought. Every function that does I/O, state changes, or non-trivial processing must log enough to debug a CI failure or user bug report without adding instrumentation later.
+
+**Log levels**:
+- **Debug**: Every HTTP request/response, token acquisition, file read/write. Off by default for users.
+- **Info**: Lifecycle events — login/logout, token load/refresh/save, sync start/complete, config load.
+- **Warn**: Degraded but recoverable — retries, expired tokens, failed persistence with fallback.
+- **Error**: Terminal failures — request failed after all retries, unrecoverable auth failure.
+
+**Minimum logging per code path**: public function entry with key parameters, every state transition, every error path, every external call (method, URL, status, request-id), every security event (token acquire/refresh/save/delete). Never log token values or secrets (architecture.md §9.2).
+
+**Testing**: Integration tests use a Debug-level `testLogger(t)` writing to `t.Log`, so all activity appears in CI output.
 
 ## Linter Patterns
 
@@ -194,14 +197,7 @@ See [docs/design/decisions.md](docs/design/decisions.md) for the full list. High
 
 ## Code Quality Standards
 
-Idiomatic Go and clean code principles — enforced by review, not just linters:
-
-- **Functions do one thing.** If a function name contains "and", split it. If it needs a comment explaining *what* it does (not *why*), rename it.
-- **Accept interfaces, return structs.** Define interfaces at the consumer, not the provider. Keep interfaces small (1-3 methods).
-- **Errors are values, not strings.** Use sentinel errors (`var ErrNotFound = errors.New(...)`) or custom types. Wrap with `%w` for context. Never `log.Fatal` in library code.
-- **No package-level state.** No `init()`, no global `var` for mutable state. Pass dependencies explicitly.
-- **Table-driven tests.** Preferred for any function with >2 interesting inputs. Name subtests descriptively.
-- **Regression tests are mandatory.** Every bug fix must include a test that reproduces the bug. The test must fail without the fix and pass with it. No exceptions.
+Idiomatic Go: functions do one thing, accept interfaces / return structs (consumer-defined), sentinel errors with `%w` wrapping, no package-level mutable state, table-driven tests, mandatory regression tests for every bug fix. See [docs/design/decisions.md](docs/design/decisions.md) for rationale.
 
 ## CI Protocol
 

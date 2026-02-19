@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/microsoft"
@@ -68,10 +69,16 @@ func doLogin(
 	display func(DeviceAuth),
 	logger *slog.Logger,
 ) (TokenSource, error) {
+	logger.Info("starting device code auth flow",
+		slog.String("path", tokenPath),
+	)
+
 	da, err := cfg.DeviceAuth(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("graph: device auth request failed: %w", err)
 	}
+
+	logger.Info("device code received, waiting for user authorization")
 
 	display(DeviceAuth{
 		UserCode:        da.UserCode,
@@ -83,15 +90,22 @@ func doLogin(
 		return nil, fmt.Errorf("graph: device code authorization failed: %w", err)
 	}
 
+	logger.Info("user authorized, saving token",
+		slog.Time("expiry", tok.Expiry),
+	)
+
 	if saveErr := saveToken(tokenPath, tok); saveErr != nil {
 		return nil, fmt.Errorf("graph: saving token: %w", saveErr)
 	}
 
-	logger.Info("login successful", slog.String("path", tokenPath))
+	logger.Info("login successful",
+		slog.String("path", tokenPath),
+		slog.Time("expiry", tok.Expiry),
+	)
 
 	src := cfg.TokenSource(ctx, tok)
 
-	return &tokenBridge{src: src}, nil
+	return &tokenBridge{src: src, logger: logger}, nil
 }
 
 // TokenSourceFromProfile loads a saved token and returns a TokenSource with
@@ -117,37 +131,51 @@ func tokenSourceFromPath(ctx context.Context, tokenPath string, logger *slog.Log
 		return nil, ErrNotLoggedIn
 	}
 
+	expired := !tok.Expiry.IsZero() && tok.Expiry.Before(time.Now())
 	logger.Info("loaded saved token",
 		slog.String("path", tokenPath),
 		slog.Time("expiry", tok.Expiry),
+		slog.Bool("expired", expired),
 	)
 
 	cfg := oauthConfig(tokenPath, logger)
 	src := cfg.TokenSource(ctx, tok)
 
-	return &tokenBridge{src: src}, nil
+	return &tokenBridge{src: src, logger: logger}, nil
 }
 
 // Logout removes the saved token file for a profile.
 // Returns nil if the token file does not exist (already logged out).
-func Logout(profile string) error {
+func Logout(profile string, logger *slog.Logger) error {
 	tokenPath := config.ProfileTokenPath(profile)
 	if tokenPath == "" {
 		return fmt.Errorf("graph: cannot determine token path for profile %q", profile)
 	}
 
-	return logout(tokenPath)
+	return logout(tokenPath, logger)
 }
 
 // logout removes the token file at the given path.
 // Returns nil if the file does not exist (idempotent).
-func logout(tokenPath string) error {
+func logout(tokenPath string, logger *slog.Logger) error {
 	err := os.Remove(tokenPath)
 	if errors.Is(err, fs.ErrNotExist) {
+		logger.Info("logout: no token file to remove (already logged out)",
+			slog.String("path", tokenPath),
+		)
+
 		return nil
 	}
 
-	return err
+	if err != nil {
+		return err
+	}
+
+	logger.Info("logout: removed token file",
+		slog.String("path", tokenPath),
+	)
+
+	return nil
 }
 
 // oauthConfig builds an oauth2.Config with OnTokenChange wired to persist
@@ -159,26 +187,45 @@ func oauthConfig(tokenPath string, logger *slog.Logger) *oauth2.Config {
 		Endpoint: microsoft.AzureADEndpoint("common"),
 		// Called by ReuseTokenSource after each silent refresh, outside its mutex.
 		OnTokenChange: func(tok *oauth2.Token) {
+			logger.Info("token refreshed by oauth2 library",
+				slog.String("path", tokenPath),
+				slog.Time("new_expiry", tok.Expiry),
+			)
+
 			if err := saveToken(tokenPath, tok); err != nil {
 				logger.Warn("failed to persist refreshed token",
 					slog.String("path", tokenPath),
 					slog.String("error", err.Error()),
 				)
+
+				return
 			}
+
+			logger.Info("persisted refreshed token to disk",
+				slog.String("path", tokenPath),
+			)
 		},
 	}
 }
 
 // tokenBridge adapts oauth2.TokenSource to graph.TokenSource.
+// Logs every token acquisition so refresh activity is visible.
 type tokenBridge struct {
-	src oauth2.TokenSource
+	src    oauth2.TokenSource
+	logger *slog.Logger
 }
 
 func (b *tokenBridge) Token() (string, error) {
 	t, err := b.src.Token()
 	if err != nil {
+		b.logger.Warn("token acquisition failed", slog.String("error", err.Error()))
 		return "", fmt.Errorf("graph: obtaining token: %w", err)
 	}
+
+	b.logger.Debug("token acquired",
+		slog.Time("expiry", t.Expiry),
+		slog.Bool("valid", t.Valid()),
+	)
 
 	return t.AccessToken, nil
 }
