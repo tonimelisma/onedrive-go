@@ -82,6 +82,15 @@ Requesting `/me/drive/items/nonexistent-string` returns HTTP 400 ("invalidReques
 ### Nightly CI keeps refresh tokens alive
 Microsoft rotates refresh tokens on use and they expire after 90 days of inactivity. The nightly schedule (3 AM UTC) ensures tokens stay active.
 
+### Graph API JSON tag nolint patterns
+Graph API uses non-standard JSON keys like `@odata.nextLink` and `@microsoft.graph.conflictBehavior`. These trigger the `tagliatelle` linter — suppress with `//nolint:tagliatelle` on the struct field.
+
+### gofumpt stricter than gofmt on field alignment
+`gofumpt` enforces stricter struct field alignment than `gofmt`. Multi-byte characters (em-dashes) in field comments can cause alignment differences. Always run `gofumpt -w` before committing, not just `gofmt`.
+
+### httptest closure variable forward-reference
+When an `httptest.NewServer` handler needs `srv.URL` (e.g., to build pagination URLs), declare `var srv *httptest.Server` first, then assign. Direct `srv := httptest.NewServer(...)` with a closure referencing `srv.URL` won't compile.
+
 ---
 
 ## 6. Tier 1 Research
