@@ -94,6 +94,18 @@ Graph API uses non-standard JSON keys like `@odata.nextLink` and `@microsoft.gra
 ### httptest closure variable forward-reference
 When an `httptest.NewServer` handler needs `srv.URL` (e.g., to build pagination URLs), declare `var srv *httptest.Server` first, then assign. Direct `srv := httptest.NewServer(...)` with a closure referencing `srv.URL` won't compile.
 
+### Delta normalization pipeline design
+The delta normalization pipeline applies four steps in order: (1) filter packages, (2) clear bogus hashes on deleted items, (3) deduplicate items keeping last occurrence, (4) reorder deletions before creations at the same parent. Each step is a separate unexported function for testability. The pipeline runs only on delta responses, not on single-item or list-children responses. `slices.SortStableFunc` is the right choice for deletion reordering because it preserves relative order of items at different parents.
+
+### Delta token is always a full URL
+The Graph API delta endpoint returns `@odata.deltaLink` and `@odata.nextLink` as full URLs (e.g., `https://graph.microsoft.com/v1.0/drives/{id}/root/delta?token=...`). The cleanest API design passes these opaque URLs back as tokens. Use `stripBaseURL()` to convert to a relative path for `Do()`. Empty token means initial sync, non-HTTP-prefixed strings are treated as initial sync too (defensive).
+
+### gosec G602 false positive on backwards iteration
+`gosec` flags `items[i]` as "slice index out of range" (G602) when iterating backwards with `for i := len(items) - 1; i >= 0; i--`. This is a false positive. Work around by copying the slice, reversing it with `slices.Reverse()`, and iterating forward. Alternatively, use `//nolint:gosec` but the reverse approach is cleaner.
+
+### Parallel agent file conflicts during concurrent branch work
+When multiple agents work on different increments in parallel using different git branches, `git checkout` destroys untracked files that exist on the current branch but not the target. Files must be staged immediately after creation and committed as quickly as possible to survive branch switching. Use single-shell-session heredocs (`cat > file << 'EOF' ... EOF && git add file`) to atomically create and stage files.
+
 ---
 
 ## 6. Tier 1 Research
