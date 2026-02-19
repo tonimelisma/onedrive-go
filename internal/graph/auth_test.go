@@ -462,6 +462,103 @@ func TestTokenPath_UsesProfileName(t *testing.T) {
 	}
 }
 
+func TestDoLogin_SaveError(t *testing.T) {
+	// When saveToken fails (e.g., read-only directory), doLogin should return an error.
+	endpoint := newMockOAuthServer(t, nil)
+	tmpDir := t.TempDir()
+
+	// Create a file where the tokens directory should be, so MkdirAll fails.
+	blocker := filepath.Join(tmpDir, "blocked")
+	require.NoError(t, os.WriteFile(blocker, []byte("x"), tokenFilePerms))
+
+	tokenPath := filepath.Join(blocker, "tokens", "test.json")
+	cfg := testOAuthConfig(t, tokenPath, endpoint)
+
+	_, err := doLogin(context.Background(), tokenPath, cfg, noopDisplay, slog.Default())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "saving token")
+}
+
+func TestDoLogin_DeviceAuthError(t *testing.T) {
+	// DeviceAuth fails when the endpoint is unreachable.
+	tokenPath := filepath.Join(t.TempDir(), "tokens", "test.json")
+
+	cfg := &oauth2.Config{
+		ClientID: defaultClientID,
+		Scopes:   defaultScopes,
+		Endpoint: oauth2.Endpoint{
+			DeviceAuthURL: "http://127.0.0.1:1/devicecode",
+			TokenURL:      "http://127.0.0.1:1/token",
+		},
+	}
+
+	_, err := doLogin(context.Background(), tokenPath, cfg, noopDisplay, slog.Default())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "device auth request failed")
+}
+
+func TestSaveToken_CreateTempError(t *testing.T) {
+	tmpDir := t.TempDir()
+	tokDir := filepath.Join(tmpDir, "tokens")
+	require.NoError(t, os.MkdirAll(tokDir, dirPerms))
+
+	// Make directory read-only so CreateTemp fails.
+	require.NoError(t, os.Chmod(tokDir, 0o555))
+	t.Cleanup(func() { os.Chmod(tokDir, dirPerms) })
+
+	path := filepath.Join(tokDir, "token.json")
+	tok := &oauth2.Token{AccessToken: "fail"}
+
+	err := saveToken(path, tok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "creating temp file")
+}
+
+func TestLoadToken_ReadError(t *testing.T) {
+	// Reading a directory as a file produces a non-ENOENT error.
+	dir := t.TempDir()
+
+	_, err := loadToken(dir)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "reading token file")
+}
+
+func TestSaveToken_MkdirAllError(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a file where the directory should be, blocking MkdirAll.
+	blocker := filepath.Join(tmpDir, "blocked")
+	require.NoError(t, os.WriteFile(blocker, []byte("x"), tokenFilePerms))
+
+	path := filepath.Join(blocker, "sub", "token.json")
+	tok := &oauth2.Token{AccessToken: "fail"}
+
+	err := saveToken(path, tok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "creating token directory")
+}
+
+func TestOAuthConfig_OnTokenChangeError(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a file where the tokens directory should be, so saveToken fails.
+	blocker := filepath.Join(tmpDir, "blocked")
+	require.NoError(t, os.WriteFile(blocker, []byte("x"), tokenFilePerms))
+
+	tokenPath := filepath.Join(blocker, "sub", "callback.json")
+
+	cfg := oauthConfig(tokenPath, slog.Default())
+
+	// OnTokenChange should log a warning but not panic.
+	newTok := &oauth2.Token{AccessToken: "will-fail"}
+	cfg.OnTokenChange(newTok)
+
+	// Verify nothing was written (since it failed). The token file's parent
+	// can't be created (blocked by a regular file), so the path can't exist.
+	_, statErr := os.Stat(tokenPath)
+	assert.Error(t, statErr)
+}
+
 func TestSaveToken_JSONFormat(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "format.json")

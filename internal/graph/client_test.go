@@ -343,6 +343,29 @@ func TestNewClient_Defaults(t *testing.T) {
 	assert.NotNil(t, c.logger)
 }
 
+func TestTimeSleep_Completes(t *testing.T) {
+	err := timeSleep(context.Background(), 10*time.Millisecond)
+	assert.NoError(t, err)
+}
+
+func TestTimeSleep_ContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := timeSleep(ctx, time.Minute)
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
+func TestCalcBackoff_MaxCap(t *testing.T) {
+	c := NewClient("http://localhost", nil, staticToken("tok"), nil)
+
+	// Attempt 10 produces 1s * 2^10 = 1024s which exceeds maxBackoff (60s).
+	// Verify the result is capped near maxBackoff (±jitter).
+	backoff := c.calcBackoff(10)
+	assert.LessOrEqual(t, backoff, maxBackoff+maxBackoff/4)
+	assert.GreaterOrEqual(t, backoff, maxBackoff-maxBackoff/4)
+}
+
 func TestIsRetryable(t *testing.T) {
 	retryable := []int{
 		http.StatusRequestTimeout,
