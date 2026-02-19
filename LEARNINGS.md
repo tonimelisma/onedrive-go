@@ -31,7 +31,26 @@ go test ./...
 
 ---
 
-## 4. Tier 1 Research
+## 4. Graph Client (`internal/graph/`)
+
+### Test-friendly time delays
+Any code with `time.Sleep` or timer-based backoff must use an injectable sleep function. Pattern:
+```go
+type Client struct {
+    sleepFunc func(ctx context.Context, d time.Duration) error // default: timeSleep
+}
+```
+Tests override with `noopSleep` that returns immediately. Without this, retry tests took 70s instead of 1.4s.
+
+### govet shadow checks are strict
+This project enables `govet` with `enable-all: true`. Variable shadowing in nested scopes (e.g., `if err := ...` inside a block that already has `err`) triggers lint failures. Use distinct names like `sleepErr`, `readErr`.
+
+### httptest is the right choice for Graph API tests
+Decision: use `httptest.NewServer` for all Graph client tests. Real HTTP, no interfaces for mocking. Tests are realistic and simple. Confirmed this works well in 1.1.
+
+---
+
+## 5. Tier 1 Research
 
 16 research documents in `docs/tier1-research/` covering Graph API bugs, reference implementation analysis, and tool surveys. Consult these before implementing any API interaction — they contain critical gotchas (upload session resume, delta headers, hash fallbacks, etc.) tracked as B-015 through B-023 in BACKLOG.md.
 
