@@ -107,6 +107,7 @@ func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*
 				slog.String("method", method),
 				slog.String("path", path),
 				slog.Int("status", resp.StatusCode),
+				slog.String("request_id", resp.Header.Get("request-id")),
 			)
 
 			return resp, nil
@@ -157,7 +158,15 @@ func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*
 				slog.String("method", method),
 				slog.String("path", path),
 				slog.Int("status", resp.StatusCode),
+				slog.String("request_id", reqID),
 				slog.Int("attempts", attempt+1),
+			)
+		} else {
+			c.logger.Warn("request failed",
+				slog.String("method", method),
+				slog.String("path", path),
+				slog.Int("status", resp.StatusCode),
+				slog.String("request_id", reqID),
 			)
 		}
 
@@ -167,6 +176,11 @@ func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*
 
 // doOnce executes a single HTTP request (no retry).
 func (c *Client) doOnce(ctx context.Context, method, url string, body io.Reader) (*http.Response, error) {
+	c.logger.Debug("preparing request",
+		slog.String("method", method),
+		slog.String("url", url),
+	)
+
 	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
@@ -184,7 +198,25 @@ func (c *Client) doOnce(ctx context.Context, method, url string, body io.Reader)
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	return c.httpClient.Do(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		c.logger.Debug("HTTP request failed",
+			slog.String("method", method),
+			slog.String("url", url),
+			slog.String("error", err.Error()),
+		)
+
+		return nil, err
+	}
+
+	c.logger.Debug("HTTP response received",
+		slog.String("method", method),
+		slog.String("url", url),
+		slog.Int("status", resp.StatusCode),
+		slog.String("request_id", resp.Header.Get("request-id")),
+	)
+
+	return resp, nil
 }
 
 // retryBackoff returns the backoff duration for a retryable response.

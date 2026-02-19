@@ -24,6 +24,26 @@ const (
 	profileEnvVar       = "ONEDRIVE_TEST_PROFILE"
 )
 
+// testLogger returns an slog.Logger at Debug level that writes to t.Log,
+// so all token and request activity appears in CI output with -v.
+func testLogger(t *testing.T) *slog.Logger {
+	t.Helper()
+
+	return slog.New(slog.NewTextHandler(testLogWriter{t: t}, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+}
+
+// testLogWriter adapts testing.T.Log to io.Writer for slog output.
+type testLogWriter struct {
+	t *testing.T
+}
+
+func (w testLogWriter) Write(p []byte) (int, error) {
+	w.t.Log(string(p))
+	return len(p), nil
+}
+
 // newIntegrationClient loads a token for the test profile and returns
 // a configured Client. Skips the test if no token is available.
 func newIntegrationClient(t *testing.T) *Client {
@@ -35,7 +55,11 @@ func newIntegrationClient(t *testing.T) *Client {
 	}
 
 	ctx := context.Background()
-	logger := slog.Default()
+	logger := testLogger(t)
+
+	logger.Info("loading token for integration test",
+		slog.String("profile", profile),
+	)
 
 	ts, err := TokenSourceFromProfile(ctx, profile, logger)
 	if errors.Is(err, ErrNotLoggedIn) {

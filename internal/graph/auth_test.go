@@ -342,7 +342,7 @@ func TestLogout_RemovesFile(t *testing.T) {
 	require.NoError(t, err)
 
 	// Delete via the internal logout function.
-	err = logout(path)
+	err = logout(path, slog.Default())
 	require.NoError(t, err)
 
 	// Verify it's gone.
@@ -354,13 +354,13 @@ func TestLogout_NoFile(t *testing.T) {
 	// Removing a nonexistent file should not be an error (idempotent).
 	path := filepath.Join(t.TempDir(), "nonexistent.json")
 
-	err := logout(path)
+	err := logout(path, slog.Default())
 	assert.NoError(t, err)
 }
 
 func TestLogoutPublic_NoFile(t *testing.T) {
 	// The public Logout function should handle a profile with no token file.
-	err := Logout("nonexistent-test-profile-xyz")
+	err := Logout("nonexistent-test-profile-xyz", slog.Default())
 	assert.NoError(t, err)
 }
 
@@ -381,7 +381,7 @@ func TestTokenBridge(t *testing.T) {
 		Expiry:      time.Now().Add(time.Hour),
 	}
 
-	bridge := &tokenBridge{src: oauth2.StaticTokenSource(tok)}
+	bridge := &tokenBridge{src: oauth2.StaticTokenSource(tok), logger: slog.Default()}
 
 	got, err := bridge.Token()
 	require.NoError(t, err)
@@ -402,7 +402,7 @@ func TestTokenBridge_Error(t *testing.T) {
 		Endpoint: oauth2.Endpoint{TokenURL: "http://invalid.test/token"},
 	}
 
-	bridge := &tokenBridge{src: cfg.TokenSource(context.Background(), tok)}
+	bridge := &tokenBridge{src: cfg.TokenSource(context.Background(), tok), logger: slog.Default()}
 
 	_, err := bridge.Token()
 	require.Error(t, err)
