@@ -218,7 +218,7 @@ func TestDo_ContextCancellation(t *testing.T) {
 	defer srv.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel immediately.
+	cancel()
 
 	client := newTestClient(t, srv.URL)
 	_, err := client.Do(ctx, http.MethodGet, "/cancel", nil)

@@ -150,6 +150,23 @@ go build ./... && go test -race ./... && golangci-lint run && echo "ALL GATES PA
 - Error returns must be checked (except where `// nolint:errcheck` is justified)
 - Three-group imports: stdlib, third-party, then local (`github.com/tonimelisma/...`)
 
+## Comment Convention
+
+Comments explain **why**, not **what**. Both humans and AI read the code — inline comments are the most reliable context since they're right there when the code is read. Doc files can be missed.
+
+**Good comments** (keep):
+- **Why / intent**: `// Jitter prevents thundering herd when multiple workers hit rate limits`
+- **Non-obvious constraints**: `// Must be 320 KiB-aligned or the Graph API returns 400`
+- **Architectural boundaries**: `// Defined at consumer per "accept interfaces, return structs" — do not move to provider`
+- **External references**: `// Per architecture.md §7.2` or `// See tier1-research/issues-api-bugs.md §3`
+- **Gotcha warnings**: `// Graph API returns driveId in inconsistent casing across endpoints`
+- **Contract/caller obligations**: `// Caller is responsible for closing the response body on success`
+
+**Bad comments** (remove or rewrite):
+- Restating the code: `// Check if status is 429` next to `if status == 429`
+- Temporary project state: `// Increment 1.2 will implement this` (goes stale)
+- Obvious type/function descriptions: `// staticToken returns a static token` on a type named staticToken
+
 ## Linter Patterns
 
 Common golangci-lint rules that require specific patterns:
@@ -188,7 +205,8 @@ Idiomatic Go and clean code principles — enforced by review, not just linters:
 
 CI must never be broken. Work is not done until CI passes.
 
-- **Always use PRs.** Never push directly to main. Create a branch, push, open a PR, let CI run.
+- **Code changes require PRs.** Create a branch, push, open a PR, let CI run.
+- **Doc-only changes push directly to main.** If the change only touches `.md` files, CLAUDE.md, LEARNINGS.md, BACKLOG.md, or roadmap — push to main directly. No PR needed. This keeps doc updates snappy.
 - **Workflow**: `.github/workflows/ci.yml` runs build + test (with race detector) + lint on every push and PR
 - **Merge**: `./scripts/poll-and-merge.sh <pr_number>` — polls checks, merges when green, verifies post-merge workflow
 - If CI fails, fix it immediately — it's your top priority. Never leave CI broken.
