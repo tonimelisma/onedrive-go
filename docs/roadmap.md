@@ -18,7 +18,7 @@
 |-----------|-------------|----------|--------|
 | 1.1 | graph/ client: HTTP transport, retry, rate limiting, error mapping | ~350 | **DONE** |
 | 1.2 | graph/ auth: device code flow, token persistence, refresh | ~250 | **DONE** |
-| 1.3 | graph/ items: GetItem, ListChildren, CreateFolder, MoveItem, DeleteItem | ~200 |
+| 1.3 | graph/ items: GetItem, ListChildren, CreateFolder, MoveItem, DeleteItem | ~200 | **DONE** |
 | 1.4 | graph/ delta: Delta with full normalization pipeline (all quirks) | ~400 |
 | 1.5 | graph/ transfers: Download, SimpleUpload, chunked uploads | ~300 |
 | 1.6 | graph/ drives: Me, Drives, Drive | ~100 |
@@ -53,17 +53,18 @@
 - **Actual**: 872 LOC (auth.go 257, auth_test.go 583, client_test.go +23, errors.go +1), 88.6% package coverage
 - **Decision**: oauth2 fork (`github.com/tonimelisma/oauth2`) via `go.mod` replace directive for `OnTokenChange` callback. Separate `doLogin`/`tokenSourceFromPath`/`logout` internal functions for testability.
 
-### 1.3: Graph items — CRUD operations — `internal/graph/items.go`
+### 1.3: Graph items — CRUD operations — `internal/graph/items.go`, `internal/graph/types.go` ✅
 
-- GetItem(driveID, itemID) -> *Item
-- ListChildren(driveID, itemID) -> []Item (with pagination)
-- CreateFolder(driveID, parentID, name) -> *Item
-- MoveItem(driveID, itemID, newParentID, newName) -> *Item
-- DeleteItem(driveID, itemID) -> error
-- All responses normalized through internal pipeline (driveID fix, timestamp validation)
-- **Acceptance**: `go test` with mock HTTP responses
+- Item type with all fields needed by CLI and sync engine
+- GetItem, ListChildren (with automatic pagination), CreateFolder, MoveItem, DeleteItem
+- Response normalization: DriveID lowercasing, timestamp validation with fallback, nil-safe facet extraction
+- Unexported JSON response types + `toItem()` normalization
+- Refactored integration tests from raw `Do()` to typed methods with `/drives/{driveID}/...` paths
+- Added `DefaultBaseURL` constant, `driveIDForTest` helper, CreateAndDeleteFolder round-trip test
+- **Acceptance**: `go test` with mock HTTP responses + integration tests against real Graph API
 - **Inputs**: architecture.md section 3
-- **Size**: ~200 LOC
+- **Actual**: 1177 LOC (items.go 384, types.go 30, items_test.go 642, integration_test.go +121), 90.8% package coverage
+- **Decision**: `toItem()` normalization lives in items.go for now; extracted to dedicated files in 1.4 when delta adds more quirk handlers.
 
 ### 1.4: Graph delta — normalization pipeline — `internal/graph/delta.go`, `internal/graph/normalize.go`, `internal/graph/raw.go`, `internal/graph/types.go`
 
