@@ -640,3 +640,151 @@ func TestStripBaseURL(t *testing.T) {
 func testNoopLogger() *slog.Logger {
 	return slog.Default()
 }
+
+// --- GetItemByPath tests ---
+
+func TestGetItemByPath_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, "/drives/d/root:/Documents/file.txt:", r.URL.Path)
+		assert.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{
+			"id": "item-path-1",
+			"name": "file.txt",
+			"size": 2048,
+			"eTag": "etag-path",
+			"cTag": "ctag-path",
+			"createdDateTime": "2024-03-15T09:00:00Z",
+			"lastModifiedDateTime": "2024-06-20T15:30:00Z",
+			"parentReference": {
+				"id": "documents-folder-id",
+				"driveId": "D"
+			},
+			"file": {
+				"mimeType": "text/plain",
+				"hashes": {
+					"quickXorHash": "cGF0aGhhc2g="
+				}
+			}
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	item, err := client.GetItemByPath(context.Background(), "d", "Documents/file.txt")
+	require.NoError(t, err)
+
+	assert.Equal(t, "item-path-1", item.ID)
+	assert.Equal(t, "file.txt", item.Name)
+	assert.Equal(t, int64(2048), item.Size)
+	assert.Equal(t, "etag-path", item.ETag)
+	assert.Equal(t, "ctag-path", item.CTag)
+	assert.Equal(t, "d", item.DriveID) // normalized to lowercase
+	assert.Equal(t, "documents-folder-id", item.ParentID)
+	assert.False(t, item.IsFolder)
+	assert.Equal(t, "text/plain", item.MimeType)
+	assert.Equal(t, "cGF0aGhhc2g=", item.QuickXorHash)
+	assert.Equal(t, 2024, item.CreatedAt.Year())
+	assert.Equal(t, 2024, item.ModifiedAt.Year())
+}
+
+func TestGetItemByPath_NotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("request-id", "req-path-404")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"error":{"code":"itemNotFound"}}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.GetItemByPath(context.Background(), "d", "nonexistent/path.txt")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+// --- ListChildrenByPath tests ---
+
+func TestListChildrenByPath_SinglePage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, "/drives/d/root:/Documents:/children", r.URL.Path)
+		assert.Equal(t, "200", r.URL.Query().Get("$top"))
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{
+			"value": [
+				{"id":"a","name":"report.pdf","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"docs","driveId":"d"},"file":{"mimeType":"application/pdf"}},
+				{"id":"b","name":"notes.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"docs","driveId":"d"},"file":{"mimeType":"text/plain"}},
+				{"id":"c","name":"Images","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"docs","driveId":"d"},"folder":{"childCount":12}}
+			]
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	items, err := client.ListChildrenByPath(context.Background(), "d", "Documents")
+	require.NoError(t, err)
+
+	assert.Len(t, items, 3)
+	assert.Equal(t, "report.pdf", items[0].Name)
+	assert.Equal(t, "notes.txt", items[1].Name)
+	assert.Equal(t, "Images", items[2].Name)
+	assert.False(t, items[0].IsFolder)
+	assert.False(t, items[1].IsFolder)
+	assert.True(t, items[2].IsFolder)
+	assert.Equal(t, 12, items[2].ChildCount)
+}
+
+func TestListChildrenByPath_MultiPage(t *testing.T) {
+	var srv *httptest.Server
+
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+
+		if !strings.Contains(r.URL.RawQuery, "page=2") {
+			// First page — includes nextLink
+			fmt.Fprintf(w, `{
+				"value": [
+					{"id":"a","name":"first.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"p","driveId":"d"}}
+				],
+				"@odata.nextLink": "%s/drives/d/root:/Documents:/children?$top=200&page=2"
+			}`, srv.URL)
+		} else {
+			// Second page — no nextLink
+			fmt.Fprint(w, `{
+				"value": [
+					{"id":"b","name":"second.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"p","driveId":"d"}}
+				]
+			}`)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	items, err := client.ListChildrenByPath(context.Background(), "d", "Documents")
+	require.NoError(t, err)
+
+	assert.Len(t, items, 2)
+	assert.Equal(t, "first.txt", items[0].Name)
+	assert.Equal(t, "second.txt", items[1].Name)
+}
+
+func TestListChildrenByPath_Empty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"value": []}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	items, err := client.ListChildrenByPath(context.Background(), "d", "EmptyFolder")
+	require.NoError(t, err)
+
+	assert.Empty(t, items)
+}
