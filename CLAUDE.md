@@ -8,7 +8,7 @@ Currently: CLI-first OneDrive client, pivoted to "Pragmatic Flat" architecture (
 
 ## Current Phase
 
-**Phase 1 in progress (Graph Client + Auth + CLI Basics).** Increment 1.1 (HTTP transport) complete. Foundation: config package (94.8% coverage), QuickXorHash, design docs, research corpus. See [docs/roadmap.md](docs/roadmap.md) for the phase plan.
+**Phase 1 in progress (Graph Client + Auth + CLI Basics).** Increments 1.1 (HTTP transport) and 1.2 (auth) complete. Foundation: config package (94.8% coverage), QuickXorHash, design docs, research corpus. See [docs/roadmap.md](docs/roadmap.md) for the phase plan.
 
 ## Architecture Overview
 
@@ -47,7 +47,7 @@ Currently: CLI-first OneDrive client, pivoted to "Pragmatic Flat" architecture (
 ### Active packages
 - **`pkg/quickxorhash/`** — QuickXorHash algorithm (hash.Hash interface) — complete
 - **`internal/config/`** — TOML configuration with profiles, validation, XDG paths — existing, will be updated in Phase 3
-- **`internal/graph/`** — Graph API client: HTTP transport (1.1 done), retry, rate limiting, auth, delta, upload, download, all quirk handling
+- **`internal/graph/`** — Graph API client: HTTP transport (1.1 done), device code auth with token persistence (1.2 done), retry, rate limiting, delta, upload, download, all quirk handling
 
 ### Building next (Phase 1)
 - **`internal/graph/`** — Remaining: auth (1.2), items (1.3), delta (1.4), transfers (1.5), drives (1.6)

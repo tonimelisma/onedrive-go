@@ -17,7 +17,7 @@
 | Increment | Description | Est. LOC | Status |
 |-----------|-------------|----------|--------|
 | 1.1 | graph/ client: HTTP transport, retry, rate limiting, error mapping | ~350 | **DONE** |
-| 1.2 | graph/ auth: device code flow, token persistence, refresh | ~250 |
+| 1.2 | graph/ auth: device code flow, token persistence, refresh | ~250 | **DONE** |
 | 1.3 | graph/ items: GetItem, ListChildren, CreateFolder, MoveItem, DeleteItem | ~200 |
 | 1.4 | graph/ delta: Delta with full normalization pipeline (all quirks) | ~400 |
 | 1.5 | graph/ transfers: Download, SimpleUpload, chunked uploads | ~300 |
@@ -41,15 +41,17 @@
 - **Actual**: 690 LOC (client.go 228, errors.go 90, client_test.go 372), 88.5% coverage
 - **Decision**: `httptest` servers for all tests (no mock interfaces). `sleepFunc` override for fast retry tests.
 
-### 1.2: Graph auth — device code flow — `internal/graph/auth.go`
+### 1.2: Graph auth — device code flow — `internal/graph/auth.go` ✅
 
-- Device code OAuth2 flow (displays URL + code, polls for token)
-- Token persistence to profile-specific JSON file (XDG paths)
-- Automatic token refresh before expiry
-- persistingTokenSource wrapper (refreshes + saves atomically)
-- **Acceptance**: `go test ./internal/graph/...` passes with mock OAuth server
+- Device code OAuth2 flow via `oauth2` fork with `OnTokenChange` callback
+- Atomic token persistence to disk (write-to-temp + rename, 0600 permissions)
+- Token bridge: `oauth2.TokenSource` → `graph.TokenSource`
+- Login, TokenSourceFromProfile, Logout functions
+- ErrNotLoggedIn sentinel error
+- **Acceptance**: `go test ./internal/graph/...` passes with httptest mock OAuth server
 - **Inputs**: architecture.md section 9 (security model)
-- **Size**: ~250 LOC
+- **Actual**: 752 LOC (auth.go 257, auth_test.go 486, errors.go +1), 81.4% package coverage
+- **Decision**: oauth2 fork (`github.com/tonimelisma/oauth2`) via `go.mod` replace directive for `OnTokenChange` callback. Separate `doLogin`/`tokenSourceFromPath`/`logout` internal functions for testability.
 
 ### 1.3: Graph items — CRUD operations — `internal/graph/items.go`
 

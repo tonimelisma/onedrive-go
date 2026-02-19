@@ -46,7 +46,19 @@ Tests override with `noopSleep` that returns immediately. Without this, retry te
 This project enables `govet` with `enable-all: true`. Variable shadowing in nested scopes (e.g., `if err := ...` inside a block that already has `err`) triggers lint failures. Use distinct names like `sleepErr`, `readErr`.
 
 ### httptest is the right choice for Graph API tests
-Decision: use `httptest.NewServer` for all Graph client tests. Real HTTP, no interfaces for mocking. Tests are realistic and simple. Confirmed this works well in 1.1.
+Decision: use `httptest.NewServer` for all Graph client tests. Real HTTP, no interfaces for mocking. Tests are realistic and simple. Confirmed this works well in 1.1 and 1.2.
+
+### oauth2 fork for OnTokenChange
+`golang.org/x/oauth2` has no persistence callback — when `ReuseTokenSource` silently refreshes a token, the new refresh token is only in memory. We use `github.com/tonimelisma/oauth2` fork (branch `on-token-change`) via `go.mod` replace directive. Adds `Config.OnTokenChange func(newToken *Token)` — fires after refresh, outside mutex, nil-safe. Tracks upstream proposal `golang/go#77502`.
+
+### Public functions that depend on config paths need internal helpers for testability
+Functions like `Login`, `Logout`, `TokenSourceFromProfile` call `config.ProfileTokenPath()` which resolves to real OS paths. Extract the actual logic into internal functions (`doLogin`, `logout`, `tokenSourceFromPath`) that accept explicit paths, and test those. The public wrappers are thin path-resolvers.
+
+### oauth2 device code tests use real polling delays
+Tests using `cfg.DeviceAccessToken()` incur real 1-second polling intervals (the minimum per RFC 8628). Set `"interval": 1` in mock device code responses to minimize delay, but tests still take ~1-3s each. Use `context.WithTimeout` for cancellation tests.
+
+### go.mod replace directive pseudo-version format
+When using `replace` with a commit hash, the pseudo-version timestamp must match the commit's actual timestamp. Use `go mod download <module>@<commit>` first to discover the correct timestamp from error messages, then construct the pseudo-version as `v0.0.0-YYYYMMDDHHMMSS-<12-char-hash>`.
 
 ---
 
