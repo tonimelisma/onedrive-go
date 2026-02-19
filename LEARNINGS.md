@@ -70,8 +70,11 @@ When using `replace` with a commit hash, the pseudo-version timestamp must match
 ### Azure OIDC + Key Vault for CI token management
 GitHub secrets can't be updated from within workflows, so we use Azure Key Vault as a writable secret store. OIDC federation means no stored credentials — GitHub Actions presents a short-lived JWT to Azure, scoped to `repo:tonimelisma/onedrive-go:ref:refs/heads/main`. Token files flow Key Vault <-> disk via `az keyvault secret download/set --file`, never through stdout/CI logs.
 
-### Token bootstrap before CLI login exists
-`cmd/integration-bootstrap/main.go` is a thin wrapper around `graph.Login()` for bootstrapping tokens before the real CLI `login` command (1.7). Upload the resulting token to Key Vault manually.
+### Token and drive ID bootstrap before CLI exists
+`cmd/integration-bootstrap/main.go` bootstraps tokens (`--profile`) and discovers drive IDs (`--print-drive-id`). Replaced by `cmd/onedrive-go login` + `whoami` in 1.7. Integration tests require `ONEDRIVE_TEST_DRIVE_ID` env var; CI discovers it via bootstrap tool before running tests.
+
+### POC code creates path dependency
+When rewriting POC tests to use typed methods, audit for raw API patterns that survive by inertia. If a test helper uses raw `Do()` + `map[string]interface{}`, it biases all downstream tests toward that pattern. Prefer env vars or external tools for test prerequisites over inline raw API calls.
 
 ### Integration test build tag pattern
 Integration tests use `//go:build integration` and are excluded from `go test ./...`. Run with `go test -tags=integration`. The `newIntegrationClient(t)` helper skips (not fails) when no token is available, so these tests degrade gracefully.
