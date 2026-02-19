@@ -28,3 +28,33 @@ type Item struct {
 	ChildCount    int    // ChildCountUnknown if not present
 	DownloadURL   string // pre-authenticated, ephemeral; NEVER log (architecture.md §9.2)
 }
+
+// DeltaPage holds one page of delta query results.
+type DeltaPage struct {
+	Items     []Item
+	NextLink  string // non-empty if more pages available
+	DeltaLink string // non-empty on final page (use as token for next sync)
+}
+
+// User represents a Microsoft Graph user profile.
+type User struct {
+	ID          string
+	DisplayName string
+	Email       string
+}
+
+// Drive represents a OneDrive drive.
+type Drive struct {
+	ID         string
+	Name       string
+	DriveType  string // "personal", "business", "documentLibrary"
+	OwnerName  string
+	QuotaUsed  int64
+	QuotaTotal int64
+}
+
+// UploadSession represents an in-progress resumable upload.
+type UploadSession struct {
+	UploadURL      string
+	ExpirationTime time.Time
+}
