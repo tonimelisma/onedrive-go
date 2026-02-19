@@ -1,0 +1,117 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 3 * * *' # 3 AM UTC daily — keeps refresh token alive
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # OIDC federation with Azure
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    # Skip entirely on forks (no OIDC trust)
+    if: vars.AZURE_CLIENT_ID != ''
+    env:
+      ONEDRIVE_TEST_PROFILES: ${{ vars.ONEDRIVE_TEST_PROFILES || 'personal' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build ./...
+
+      - name: Azure OIDC login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Load tokens from Key Vault
+        run: |
+          set -euo pipefail
+          IFS=',' read -ra PROFILES <<< "$ONEDRIVE_TEST_PROFILES"
+          CONFIG_DIR="$HOME/.config/onedrive-go/tokens"
+          mkdir -p "$CONFIG_DIR"
+
+          for profile in "${PROFILES[@]}"; do
+            profile=$(echo "$profile" | xargs) # trim whitespace
+            secret_name="onedrive-oauth-token-${profile}"
+            token_path="${CONFIG_DIR}/${profile}.json"
+
+            echo "Loading token for profile: ${profile}"
+            az keyvault secret download \
+              --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
+              --name "$secret_name" \
+              --file "$token_path" \
+              --encoding utf-8
+
+            # Validate token structure
+            if ! jq -e '.refresh_token' "$token_path" > /dev/null 2>&1; then
+              echo "::error::Token for profile '${profile}' is missing refresh_token field"
+              exit 1
+            fi
+
+            echo "Token loaded for profile: ${profile}"
+          done
+
+      - name: Run integration tests
+        run: |
+          set -euo pipefail
+          IFS=',' read -ra PROFILES <<< "$ONEDRIVE_TEST_PROFILES"
+
+          for profile in "${PROFILES[@]}"; do
+            profile=$(echo "$profile" | xargs)
+            echo "=== Running integration tests for profile: ${profile} ==="
+            ONEDRIVE_TEST_PROFILE="$profile" \
+              go test -tags=integration -race -v -timeout=5m ./internal/graph/...
+          done
+
+      - name: Save rotated tokens to Key Vault
+        if: always()
+        run: |
+          set -euo pipefail
+          IFS=',' read -ra PROFILES <<< "$ONEDRIVE_TEST_PROFILES"
+          CONFIG_DIR="$HOME/.config/onedrive-go/tokens"
+
+          for profile in "${PROFILES[@]}"; do
+            profile=$(echo "$profile" | xargs)
+            secret_name="onedrive-oauth-token-${profile}"
+            token_path="${CONFIG_DIR}/${profile}.json"
+
+            if [ ! -f "$token_path" ]; then
+              echo "::warning::Token file missing for profile '${profile}' — skipping save"
+              continue
+            fi
+
+            # Reject corrupted files before overwriting Key Vault
+            if ! jq -e '.refresh_token' "$token_path" > /dev/null 2>&1; then
+              echo "::warning::Token for profile '${profile}' has no refresh_token — skipping save"
+              continue
+            fi
+
+            echo "Saving rotated token for profile: ${profile}"
+            az keyvault secret set \
+              --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
+              --name "$secret_name" \
+              --file "$token_path" \
+              --content-type "application/json" \
+              --output none
+          done
+
+      - name: Auth failure guidance
+        if: failure()
+        run: |
+          echo "::warning::Integration test auth may have failed."
+          echo "::warning::If the refresh token has expired (90 days idle), re-bootstrap:"
+          echo "::warning::  1. go run ./cmd/integration-bootstrap --profile personal"
+          echo "::warning::  2. az keyvault secret set --vault-name ${{ vars.AZURE_KEY_VAULT_NAME }} --name onedrive-oauth-token-personal --file <token-path> --content-type application/json"

@@ -708,34 +708,25 @@ All three account types will run in CI. Personal is free and runs from day one. 
 
 **Credential management**:
 
-CI credentials use a **private GitHub Gist** as persistent storage for OAuth refresh tokens. This approach avoids the `GITHUB_TOKEN` limitation (cannot update secrets) and requires no external infrastructure.
+CI credentials use **Azure Key Vault + OIDC federation** for OAuth refresh token storage. OIDC means GitHub Actions authenticates to Azure without any stored credentials — the trust is federated via short-lived JWTs.
 
 Setup:
-1. Create a private gist containing `tokens.json` with the refresh token
-2. Store two GitHub Actions secrets: `CI_GIST_PAT` (gist-scope PAT) and `CI_GIST_ID`
-3. CI reads the gist at job start, exchanges the refresh token for an access token
-4. After token refresh, CI writes the new refresh token back to the gist
+1. Azure OIDC service principal (`onedrive-go-ci-github-oidc`) with federated credential scoped to `repo:tonimelisma/onedrive-go:ref:refs/heads/main`
+2. Azure Key Vault (`kv-onedrivego-ci`) with RBAC authorization; SP has "Key Vault Secrets Officer" role
+3. GitHub repository variables: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_KEY_VAULT_NAME` (non-sensitive identifiers)
+4. CI loads tokens via `az keyvault secret download --file` (token never in stdout/logs)
+5. After tests, CI saves rotated tokens back via `az keyvault secret set --file` (with JSON validation)
+6. Per-profile secrets named `onedrive-oauth-token-{profile}`
 
-```yaml
-# CI workflow step
-- name: Load OneDrive credentials
-  env:
-    GH_TOKEN: ${{ secrets.CI_GIST_PAT }}
-  run: |
-    gh gist view ${{ secrets.CI_GIST_ID }} --raw > tokens.json
-    # onedrive-go reads tokens.json, refreshes if needed, writes back
-    onedrive-go login --profile ci --token-file tokens.json --non-interactive
-    gh gist edit ${{ secrets.CI_GIST_ID }} --filename tokens.json < tokens.json
-```
-
-When tokens expire completely (90 days of inactivity), re-auth from a developer laptop:
-
+Token bootstrap (one-time per profile):
 ```bash
-onedrive-go login --profile ci
-gh gist edit <GIST_ID> --filename tokens.json < tokens.json
+go run ./cmd/integration-bootstrap --profile personal
+az keyvault secret set --vault-name kv-onedrivego-ci --name onedrive-oauth-token-personal --file <token-path> --content-type application/json
 ```
 
-**CI auth failure handling**: If the E2E job fails authentication, it posts a warning to the PR (not a hard failure) and sends a notification. E2E auth failure must not block PRs.
+When tokens expire completely (90 days of inactivity), re-bootstrap from a developer laptop using the same steps.
+
+**CI auth failure handling**: If the integration job fails authentication, it prints re-bootstrap instructions. Integration tests run only on push to main, nightly, and manual dispatch — never on PRs.
 
 **Test isolation**: Each test creates a timestamped directory on OneDrive (`/onedrive-go-e2e-test-20260217-143052-{random}/`) and cleans it up on teardown. Tests run serially to avoid rate limiting.
 
@@ -1256,7 +1247,7 @@ Phase 2 introduces E2E CI **before** the sync engine is built. This is deliberat
 - Concurrent operations (parallel uploads/downloads via worker pool)
 - Token refresh mid-operation (access token expires during upload session)
 
-**CI infrastructure**: GitHub Actions with GitHub Gist-based token rotation for OneDrive API tokens (details in §6.1). E2E auth failure warns but does not block PRs.
+**CI infrastructure**: GitHub Actions with Azure Key Vault + OIDC federation for OneDrive API tokens (details in §6.1). Integration tests run on push to main + nightly, not on PRs.
 
 ### 10.3 Job 1: Lint + Build + Unit Tests
 
