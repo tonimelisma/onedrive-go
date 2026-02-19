@@ -73,6 +73,7 @@ Currently: CLI-first OneDrive client, pivoted to "Pragmatic Flat" architecture (
 | [LEARNINGS.md](LEARNINGS.md) | Institutional knowledge base (patterns, gotchas) |
 | [docs/archive/](docs/archive/) | Historical learnings and backlog from earlier phases |
 | [docs/tier1-research/](docs/tier1-research/) | 16 Tier 1 research docs (API bugs, edge cases, reference impl analysis) |
+| [docs/parallel-agents.md](docs/parallel-agents.md) | Parallel agent worktree workflow guide |
 
 ## Subagent Protocol
 
@@ -209,7 +210,24 @@ CI must never be broken. Work is not done until CI passes.
 - **Integration tests**: `.github/workflows/integration.yml` runs `go test -tags=integration` against real Graph API on push to main + nightly. Uses Azure OIDC + Key Vault for token management. Local: `go test -tags=integration -race -v -timeout=5m ./internal/graph/...` (requires bootstrapped token via `go run ./cmd/integration-bootstrap`)
 - **Merge**: `./scripts/poll-and-merge.sh <pr_number>` — polls checks, merges when green, verifies post-merge workflow
 - If CI fails, fix it immediately — it's your top priority. Never leave CI broken.
-- **Pre-commit hook**: `scripts/pre-commit` runs `golangci-lint run` before every commit. Configured via `git config core.hooksPath scripts`. If lint fails, the commit is rejected — fix lint first, then commit.
+- **Pre-commit hook**: `.githooks/pre-commit` runs `golangci-lint run` before every commit. Configured via `git config core.hooksPath .githooks`. If lint fails, the commit is rejected — fix lint first, then commit.
+
+## Worktree Workflow
+
+Source code changes require a worktree + PR. Doc-only changes (`.md`, CLAUDE.md, LEARNINGS.md, BACKLOG.md) push directly to main.
+
+| Type | Format | Example |
+|------|--------|---------|
+| **Branch** | `<type>/<task-name>` | `feat/cli-auth`, `fix/delta-pagination` |
+| **Worktree** | `onedrive-go-<type>-<task>` | `onedrive-go-feat-cli-auth` |
+
+**Types:** `feat`, `fix`, `refactor`, `test`, `docs`, `chore`
+
+**Setup:** `git worktree add ../onedrive-go-<type>-<task> -b <type>/<task> main` — then work entirely inside the worktree directory.
+
+**Cleanup:** After merge, `git worktree remove` + `git branch -D`. Never `--force` — inspect first.
+
+See [docs/parallel-agents.md](docs/parallel-agents.md) for the full guide.
 
 ## Self-Maintenance Rule
 
