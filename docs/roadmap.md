@@ -14,9 +14,9 @@
 
 **Build a working tool first.** After this phase, users can `login`, `ls`, `get`, `put`, `rm`, `mkdir`.
 
-| Increment | Description | Est. LOC |
-|-----------|-------------|----------|
-| 1.1 | graph/ client: HTTP transport, retry, rate limiting, error mapping | ~350 |
+| Increment | Description | Est. LOC | Status |
+|-----------|-------------|----------|--------|
+| 1.1 | graph/ client: HTTP transport, retry, rate limiting, error mapping | ~350 | **DONE** |
 | 1.2 | graph/ auth: device code flow, token persistence, refresh | ~250 |
 | 1.3 | graph/ items: GetItem, ListChildren, CreateFolder, MoveItem, DeleteItem | ~200 |
 | 1.4 | graph/ delta: Delta with full normalization pipeline (all quirks) | ~400 |
@@ -25,11 +25,11 @@
 | 1.7 | cmd/ auth: login (device code), logout, whoami | ~200 |
 | 1.8 | cmd/ file ops: ls, get, put, rm, mkdir, stat | ~400 |
 
-### Pre-Phase 1 decision: Test strategy for `internal/graph/`
+### Pre-Phase 1 decision: Test strategy for `internal/graph/` ✅
 
-Before starting increment 1.1, decide the mocking approach for Graph API tests. Options: `httptest` server (real HTTP, no interfaces), interface-based injection (flexible but more boilerplate), record/replay (realistic but brittle). This decision affects every test file in the package. Decide once during 1.1 planning.
+**Decided**: `httptest` servers (real HTTP, no interfaces for mocking). Confirmed working well in 1.1. See LEARNINGS.md §4.
 
-### 1.1: Graph client — HTTP transport — `internal/graph/client.go`
+### 1.1: Graph client — HTTP transport — `internal/graph/client.go` ✅
 
 - Client struct with configurable base URL, HTTP client, auth token source
 - Automatic retry with exponential backoff + jitter for 429/5xx
@@ -38,7 +38,8 @@ Before starting increment 1.1, decide the mocking approach for Graph API tests. 
 - Request/response logging via slog
 - **Acceptance**: `go test ./internal/graph/...` passes with httptest server
 - **Inputs**: architecture.md section 7 (error handling), section 8 (quirk catalog)
-- **Size**: ~350 LOC
+- **Actual**: 690 LOC (client.go 228, errors.go 90, client_test.go 372), 88.5% coverage
+- **Decision**: `httptest` servers for all tests (no mock interfaces). `sleepFunc` override for fast retry tests.
 
 ### 1.2: Graph auth — device code flow — `internal/graph/auth.go`
 
