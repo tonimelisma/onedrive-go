@@ -9,9 +9,8 @@
 
 | ID | Title | Priority | Package | Notes |
 |----|-------|----------|---------|-------|
-| B-024 | Replace `--print-drive-id` bootstrap with typed `Drive()` in CI | P2 | CI + `internal/graph/` | When 1.6 adds `Drive()`, replace raw `/me/drive` call in bootstrap tool with typed method. Currently `cmd/integration-bootstrap --print-drive-id` uses raw `Do()`. |
 | B-025 | Delete `cmd/integration-bootstrap` when CLI login exists | P2 | `cmd/` | When 1.7 adds `cmd/onedrive-go login`, delete `cmd/integration-bootstrap` entirely. Update CI workflow to use `onedrive-go login` + `onedrive-go whoami` instead. |
-| B-026 | Replace `ONEDRIVE_TEST_DRIVE_ID` env var with typed discovery | P3 | CI + tests | When 1.6 adds `Drive()`, CI could use a typed Go helper instead of the bootstrap tool to discover the drive ID. Lower priority since env var approach is clean. |
+| B-026 | Replace `ONEDRIVE_TEST_DRIVE_ID` env var with typed discovery | P3 | CI + tests | CI could use a typed Go helper instead of the bootstrap tool to discover the drive ID. Lower priority since env var approach is clean. |
 
 ## Future Phase Review (Before Phase 4)
 

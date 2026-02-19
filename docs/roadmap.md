@@ -19,9 +19,9 @@
 | 1.1 | graph/ client: HTTP transport, retry, rate limiting, error mapping | ~350 | **DONE** |
 | 1.2 | graph/ auth: device code flow, token persistence, refresh | ~250 | **DONE** |
 | 1.3 | graph/ items: GetItem, ListChildren, CreateFolder, MoveItem, DeleteItem | ~200 | **DONE** |
-| 1.4 | graph/ delta: Delta with full normalization pipeline (all quirks) | ~400 |
-| 1.5 | graph/ transfers: Download, SimpleUpload, chunked uploads | ~300 |
-| 1.6 | graph/ drives: Me, Drives, Drive | ~100 |
+| 1.4 | graph/ delta: Delta with full normalization pipeline (all quirks) | ~400 | **DONE** |
+| 1.5 | graph/ transfers: Download, SimpleUpload, chunked uploads | ~300 | **DONE** |
+| 1.6 | graph/ drives: Me, Drives, Drive | ~100 | **DONE** |
 | 1.7 | cmd/ auth: login (device code), logout, whoami | ~200 |
 | 1.8 | cmd/ file ops: ls, get, put, rm, mkdir, stat | ~400 |
 
@@ -66,42 +66,35 @@
 - **Actual**: 1177 LOC (items.go 384, types.go 30, items_test.go 642, integration_test.go +121), 90.8% package coverage
 - **Decision**: `toItem()` normalization lives in items.go for now; extracted to dedicated files in 1.4 when delta adds more quirk handlers.
 
-### 1.4: Graph delta — normalization pipeline — `internal/graph/delta.go`, `internal/graph/normalize.go`, `internal/graph/raw.go`, `internal/graph/types.go`
+### 1.4: Graph delta — normalization pipeline — `internal/graph/delta.go`, `internal/graph/normalize.go` ✅
 
-- Delta(driveID, token) -> *DeltaPage (items + nextToken + deltaToken)
-- Full normalization pipeline:
-  - rawDriveItem JSON deserialization (unexported)
-  - DriveID lowercase + zero-pad
-  - Deletion reordering (deletions before creations at same path)
-  - Missing name/size recovery via ItemLookup callback
-  - Invalid timestamp fallback
-  - Bogus hash detection on deleted items
-  - OneNote package filtering
-  - Duplicate item dedup (last occurrence wins)
-- Clean graph.Item type (exported)
-- **Acceptance**: `go test` with fixtures for each quirk (15+ test cases)
-- **Inputs**: architecture.md section 8 (full quirk catalog)
-- **Size**: ~400 LOC
+- `Delta(driveID, token)` — single page. `DeltaAll(driveID, token)` — all pages with automatic pagination.
+- Normalization pipeline in normalize.go: `filterPackages()`, `clearDeletedHashes()`, `deduplicateItems()`, `reorderDeletions()`
+- Delta token handling: empty (initial sync), full URL (strip base), relative path
+- Reuses `driveItemResponse` + `toItem()` from items.go
+- **Acceptance**: `go test` with 25 test cases (13 delta + 12 normalize)
+- **Inputs**: architecture.md section 8 (quirk catalog)
+- **Actual**: 837 LOC (delta.go 146, normalize.go 157, delta_test.go 308, normalize_test.go 226), 92.2% package coverage
 
-### 1.5: Graph transfers — download + upload — `internal/graph/download.go`, `internal/graph/upload.go`
+### 1.5: Graph transfers — download + upload — `internal/graph/download.go`, `internal/graph/upload.go` ✅
 
-- Download(driveID, itemID, w io.Writer) -> (int64, error)
-- SimpleUpload(driveID, parentID, name, r io.Reader, size int64) -> (*Item, error)
-- CreateUploadSession + UploadChunk for large files (320KiB-aligned fragments)
-- GetUploadSessionStatus, CancelUploadSession
-- **Acceptance**: `go test` with httptest serving file content
+- `Download(driveID, itemID, w io.Writer)` — streams via pre-authenticated URL (bypasses Graph API base URL)
+- `SimpleUpload` for <4MB, `CreateUploadSession`/`UploadChunk`/`CancelUploadSession` for resumable uploads
+- Private `doRawUpload()` helper for auth + custom content type, no retry (can't safely replay io.Reader)
+- 320 KiB chunk alignment validation
+- **Acceptance**: `go test` with 27 test cases (7 download + 20 upload)
 - **Inputs**: architecture.md section 3
-- **Size**: ~300 LOC
+- **Actual**: 1004 LOC (download.go 94, upload.go 294, download_test.go 194, upload_test.go 422), 91.2% package coverage
 
-### 1.6: Graph drives — `internal/graph/drives.go`
+### 1.6: Graph drives — `internal/graph/drives.go` ✅
 
-- Me() -> *User
-- Drives() -> []Drive
-- Drive(driveID) -> *Drive
-- **Cleanup**: Replace `cmd/integration-bootstrap --print-drive-id` raw `Do()` with typed `Drive()` method (B-024)
-- **Acceptance**: `go test` with mock responses
+- `Me()` -> *User, `Drives()` -> []Drive, `Drive(driveID)` -> *Drive
+- Email fallback: uses `userPrincipalName` when `mail` is empty (Personal account quirk)
+- **Cleanup**: B-024 done — replaced raw `Do()` in bootstrap tool with typed `Drives()` method
+- Integration tests: TestIntegration_Me, TestIntegration_Drives added
+- **Acceptance**: `go test` with mock responses + integration tests
 - **Inputs**: architecture.md section 3
-- **Size**: ~100 LOC
+- **Actual**: 521 LOC (drives.go 165, drives_test.go 289, integration_test.go +36, bootstrap -25), 90.9% package coverage
 
 ### 1.7: CLI auth commands — `cmd/onedrive-go/auth.go`
 

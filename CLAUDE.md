@@ -8,7 +8,7 @@ Currently: CLI-first OneDrive client, pivoted to "Pragmatic Flat" architecture (
 
 ## Current Phase
 
-**Phase 1 in progress (Graph Client + Auth + CLI Basics).** Increments 1.1 (HTTP transport), 1.2 (auth), and 1.3 (items CRUD) complete. Foundation: config package (94.8% coverage), QuickXorHash, design docs, research corpus. See [docs/roadmap.md](docs/roadmap.md) for the phase plan.
+**Phase 1 in progress (Graph Client + Auth + CLI Basics).** Increments 1.1-1.6 complete (HTTP transport, auth, items CRUD, delta+normalization, transfers, drives). Graph API layer is feature-complete. Next: 1.7 (CLI auth) + 1.8 (CLI file ops). See [docs/roadmap.md](docs/roadmap.md) for the phase plan.
 
 ## Architecture Overview
 
@@ -47,11 +47,10 @@ Currently: CLI-first OneDrive client, pivoted to "Pragmatic Flat" architecture (
 ### Active packages
 - **`pkg/quickxorhash/`** — QuickXorHash algorithm (hash.Hash interface) — complete
 - **`internal/config/`** — TOML configuration with profiles, validation, XDG paths — existing, will be updated in Phase 3
-- **`internal/graph/`** — Graph API client: HTTP transport (1.1 done), device code auth with token persistence (1.2 done), retry, rate limiting, delta, upload, download, all quirk handling
+- **`internal/graph/`** — Graph API client: HTTP transport, auth, retry, rate limiting, items CRUD, delta+normalization, download/upload transfers, drives/user — feature-complete (92.2% coverage)
 
 ### Building next (Phase 1)
-- **`internal/graph/`** — Remaining: items (1.3), delta (1.4), transfers (1.5), drives (1.6)
-- **`cmd/onedrive-go/`** — CLI commands (Cobra): login, logout, ls, get, put, rm, mkdir
+- **`cmd/onedrive-go/`** — CLI commands (Cobra): login, logout, whoami, ls, get, put, rm, mkdir
 - **`cmd/integration-bootstrap/`** — Temporary token bootstrapper (replaced by `cmd/onedrive-go login` in 1.7)
 
 ### Future phases
