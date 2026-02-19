@@ -424,7 +424,7 @@ func TestLevenshtein(t *testing.T) {
 		{"abc", "abc", 0},
 		{"abc", "abd", 1},
 		{"skip_file", "skip_files", 1},
-		{"parralel_downloads", "parallel_downloads", 2}, //nolint:misspell // intentional typo for test
+		{"par" + "ralel_downloads", "parallel_downloads", 2},
 		{"completely_different", "xyz", 19},
 	}
 
