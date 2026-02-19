@@ -50,7 +50,7 @@
 - ErrNotLoggedIn sentinel error
 - **Acceptance**: `go test ./internal/graph/...` passes with httptest mock OAuth server
 - **Inputs**: architecture.md section 9 (security model)
-- **Actual**: 752 LOC (auth.go 257, auth_test.go 486, errors.go +1), 81.4% package coverage
+- **Actual**: 872 LOC (auth.go 257, auth_test.go 583, client_test.go +23, errors.go +1), 88.6% package coverage
 - **Decision**: oauth2 fork (`github.com/tonimelisma/oauth2`) via `go.mod` replace directive for `OnTokenChange` callback. Separate `doLogin`/`tokenSourceFromPath`/`logout` internal functions for testability.
 
 ### 1.3: Graph items — CRUD operations — `internal/graph/items.go`
