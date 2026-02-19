@@ -100,3 +100,26 @@ When an `httptest.NewServer` handler needs `srv.URL` (e.g., to build pagination 
 
 16 research documents in `docs/tier1-research/` covering Graph API bugs, reference implementation analysis, and tool surveys. Consult these before implementing any API interaction — they contain critical gotchas (upload session resume, delta headers, hash fallbacks, etc.) tracked as B-015 through B-023 in BACKLOG.md.
 
+---
+
+## 7. Increment 1.6 — Drives (Me, Drives, Drive)
+
+### No pivots from plan
+The implementation followed the plan exactly. The `Me()`, `Drives()`, and `Drive()` methods, JSON response types, and conversion functions were implemented as specified.
+
+### Graph API quirk: Personal accounts have empty mail field
+The Graph API often returns an empty `mail` field for Personal (consumer) accounts. The `userPrincipalName` (UPN) field is the reliable fallback for email. The `toUser()` conversion function handles this with a simple fallback: use `mail` if non-empty, otherwise use `userPrincipalName`.
+
+### Parallel agent file conflicts are severe
+When multiple Claude Code agents work on the same package directory simultaneously, untracked files from one agent appear in another agent's working directory. This causes build failures, lint failures, and pre-commit hook failures. Key issues:
+- `rm` + `git commit` is a race condition: files can reappear between delete and commit
+- Branch switches carry untracked files across branches (they aren't branch-specific)
+- Parallel agents can stage files into each other's git index
+- **Mitigation**: Use separate branches (as documented) but coordinate to avoid parallel work in the same directory. Alternatively, use `.gitignore` for work-in-progress files from other increments.
+
+### B-024 cleanup completed
+The `cmd/integration-bootstrap/main.go` `printDrive()` function was updated to use the typed `Drives()` method instead of raw `Do()` + manual JSON parsing. This eliminated the `encoding/json` and `io` imports.
+
+### Cross-package concern: Drives() vs /me/drive
+The bootstrap tool previously used `GET /me/drive` (single default drive), but the new typed API uses `GET /me/drives` (all drives) and takes the first. This is functionally equivalent for Personal accounts (which have one drive) but may differ for Business accounts with multiple drives. The first drive in the list should be the user's primary drive, but this is not explicitly documented by Microsoft. Worth monitoring in integration tests.
+
