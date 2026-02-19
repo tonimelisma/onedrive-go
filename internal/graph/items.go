@@ -166,16 +166,10 @@ func parseTimestamp(raw, field, itemID string, logger *slog.Logger) time.Time {
 	return t
 }
 
-// GetItem retrieves a single drive item by ID.
-func (c *Client) GetItem(ctx context.Context, driveID, itemID string) (*Item, error) {
-	c.logger.Info("getting item",
-		slog.String("drive_id", driveID),
-		slog.String("item_id", itemID),
-	)
-
-	path := fmt.Sprintf("/drives/%s/items/%s", driveID, itemID)
-
-	resp, err := c.Do(ctx, http.MethodGet, path, nil)
+// fetchItem fetches a single drive item from the given API path and decodes it.
+// Shared by GetItem (ID-based) and GetItemByPath (path-based) to avoid duplication.
+func (c *Client) fetchItem(ctx context.Context, apiPath string) (*Item, error) {
+	resp, err := c.Do(ctx, http.MethodGet, apiPath, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -191,37 +185,94 @@ func (c *Client) GetItem(ctx context.Context, driveID, itemID string) (*Item, er
 	return &item, nil
 }
 
-// ListChildren returns all children of a folder, handling pagination automatically.
-func (c *Client) ListChildren(ctx context.Context, driveID, parentID string) ([]Item, error) {
-	c.logger.Info("listing children",
-		slog.String("drive_id", driveID),
-		slog.String("parent_id", parentID),
-	)
+// fetchAllChildren paginates through all children starting from the given API path,
+// logging entry/completion with the provided attrs. Shared by ListChildren (ID-based)
+// and ListChildrenByPath (path-based) to avoid duplication.
+func (c *Client) fetchAllChildren(
+	ctx context.Context,
+	apiPath string,
+	entryMsg string,
+	doneMsg string,
+	logAttrs []slog.Attr,
+) ([]Item, error) {
+	args := make([]any, 0, len(logAttrs))
+	for _, a := range logAttrs {
+		args = append(args, a)
+	}
 
-	path := fmt.Sprintf("/drives/%s/items/%s/children?$top=%d", driveID, parentID, listChildrenPageSize)
+	c.logger.Info(entryMsg, args...)
 
 	var items []Item
 
 	page := 1
 
-	for path != "" {
-		pageItems, nextPath, err := c.listChildrenPage(ctx, path, page)
+	for apiPath != "" {
+		pageItems, nextPath, err := c.listChildrenPage(ctx, apiPath, page)
 		if err != nil {
 			return nil, err
 		}
 
 		items = append(items, pageItems...)
-		path = nextPath
+		apiPath = nextPath
 		page++
 	}
 
-	c.logger.Info("listed children complete",
-		slog.String("drive_id", driveID),
-		slog.String("parent_id", parentID),
-		slog.Int("total_items", len(items)),
-	)
+	args = append(args, slog.Int("total_items", len(items)))
+	c.logger.Info(doneMsg, args...)
 
 	return items, nil
+}
+
+// GetItem retrieves a single drive item by ID.
+func (c *Client) GetItem(ctx context.Context, driveID, itemID string) (*Item, error) {
+	c.logger.Info("getting item",
+		slog.String("drive_id", driveID),
+		slog.String("item_id", itemID),
+	)
+
+	return c.fetchItem(ctx, fmt.Sprintf("/drives/%s/items/%s", driveID, itemID))
+}
+
+// GetItemByPath retrieves a drive item by its path relative to the drive root.
+// The path must NOT have a leading slash (caller strips it).
+// For root, callers should use GetItem with itemID "root" instead.
+func (c *Client) GetItemByPath(ctx context.Context, driveID, remotePath string) (*Item, error) {
+	c.logger.Info("getting item by path",
+		slog.String("drive_id", driveID),
+		slog.String("path", remotePath),
+	)
+
+	return c.fetchItem(ctx, fmt.Sprintf("/drives/%s/root:/%s:", driveID, remotePath))
+}
+
+// ListChildren returns all children of a folder, handling pagination automatically.
+func (c *Client) ListChildren(ctx context.Context, driveID, parentID string) ([]Item, error) {
+	return c.fetchAllChildren(
+		ctx,
+		fmt.Sprintf("/drives/%s/items/%s/children?$top=%d", driveID, parentID, listChildrenPageSize),
+		"listing children",
+		"listed children complete",
+		[]slog.Attr{
+			slog.String("drive_id", driveID),
+			slog.String("parent_id", parentID),
+		},
+	)
+}
+
+// ListChildrenByPath returns all children of a folder identified by path,
+// handling pagination automatically. The path must NOT have a leading slash.
+// For root, callers should use ListChildren with parentID "root" instead.
+func (c *Client) ListChildrenByPath(ctx context.Context, driveID, remotePath string) ([]Item, error) {
+	return c.fetchAllChildren(
+		ctx,
+		fmt.Sprintf("/drives/%s/root:/%s:/children?$top=%d", driveID, remotePath, listChildrenPageSize),
+		"listing children by path",
+		"listed children by path complete",
+		[]slog.Attr{
+			slog.String("drive_id", driveID),
+			slog.String("remote_path", remotePath),
+		},
+	)
 }
 
 // listChildrenPage fetches a single page of children and returns the items
