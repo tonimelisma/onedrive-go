@@ -95,7 +95,7 @@ After subagents complete their work, before closing an increment:
 3. **Propose improvements**: Present a concrete list of fixes/improvements to the user before wrapping up.
 4. **Propose new safeguards**: Based on any mistakes or near-misses, propose new lint rules, tests, or process changes for continuous improvement.
 5. **Update all documents**: CLAUDE.md, LEARNINGS.md, BACKLOG.md, roadmap.md — remove stale content, add new patterns. If something is clearly stale, update it. If you think something should be added or removed, propose it to the user.
-6. **Retrospective**: What went well, what could improve, what to change. Capture actionable items in LEARNINGS.md.
+6. **Retrospective in chat**: Always present the retrospective **in the chat** for the user to read and discuss. Cover: what went well, what went wrong, what to change. Suggest concrete actions. Then capture actionable items in LEARNINGS.md. Never skip this — the user wants to review and discuss it interactively.
 
 ## Planning Protocol
 
@@ -138,7 +138,7 @@ Every change must pass ALL gates before committing:
 
 ### DOD Quick Check
 ```bash
-go build ./... && go test -race ./... && golangci-lint run && echo "ALL GATES PASS"
+go build ./... && go test -race -coverprofile=/tmp/cover.out ./... && golangci-lint run && go tool cover -func=/tmp/cover.out | grep total && echo "ALL GATES PASS"
 ```
 
 ## Coding Conventions
@@ -174,6 +174,7 @@ Common golangci-lint rules that require specific patterns:
 - **mnd**: Every number needs a named constant; tests are exempt
 - **funlen**: Max 100 lines / 50 statements — decompose into small helpers
 - **depguard**: Update `.golangci.yml` when adding new external dependencies
+- **go.mod pseudo-versions**: Never use placeholder timestamps. Always run `go mod download <module>@<commit>` first to discover the correct timestamp, then construct `v0.0.0-YYYYMMDDHHMMSS-<12-char-hash>`.
 
 ## Test Patterns
 
@@ -210,6 +211,7 @@ CI must never be broken. Work is not done until CI passes.
 - **Workflow**: `.github/workflows/ci.yml` runs build + test (with race detector) + lint on every push and PR
 - **Merge**: `./scripts/poll-and-merge.sh <pr_number>` — polls checks, merges when green, verifies post-merge workflow
 - If CI fails, fix it immediately — it's your top priority. Never leave CI broken.
+- **Pre-commit hook**: `scripts/pre-commit` runs `golangci-lint run` before every commit. Configured via `git config core.hooksPath scripts`. If lint fails, the commit is rejected — fix lint first, then commit.
 
 ## Self-Maintenance Rule
 
