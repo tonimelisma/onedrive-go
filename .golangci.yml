@@ -63,6 +63,7 @@ linters:
             - github.com/tonimelisma/onedrive-go
             - github.com/BurntSushi/toml
             - github.com/stretchr/testify
+            - golang.org/x/oauth2
 
     gocyclo:
       min-complexity: 15

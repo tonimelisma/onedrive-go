@@ -20,6 +20,7 @@ var (
 	ErrThrottled    = errors.New("graph: throttled")
 	ErrLocked       = errors.New("graph: resource locked")
 	ErrServerError  = errors.New("graph: server error")
+	ErrNotLoggedIn  = errors.New("graph: not logged in")
 )
 
 // GraphError wraps a sentinel error with HTTP status code, request ID,
