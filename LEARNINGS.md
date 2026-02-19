@@ -65,7 +65,26 @@ When using `replace` with a commit hash, the pseudo-version timestamp must match
 
 ---
 
-## 5. Tier 1 Research
+## 5. Integration Tests & CI
+
+### Azure OIDC + Key Vault for CI token management
+GitHub secrets can't be updated from within workflows, so we use Azure Key Vault as a writable secret store. OIDC federation means no stored credentials — GitHub Actions presents a short-lived JWT to Azure, scoped to `repo:tonimelisma/onedrive-go:ref:refs/heads/main`. Token files flow Key Vault <-> disk via `az keyvault secret download/set --file`, never through stdout/CI logs.
+
+### Token bootstrap before CLI login exists
+`cmd/integration-bootstrap/main.go` is a thin wrapper around `graph.Login()` for bootstrapping tokens before the real CLI `login` command (1.7). Upload the resulting token to Key Vault manually.
+
+### Integration test build tag pattern
+Integration tests use `//go:build integration` and are excluded from `go test ./...`. Run with `go test -tags=integration`. The `newIntegrationClient(t)` helper skips (not fails) when no token is available, so these tests degrade gracefully.
+
+### Graph API returns 400 (not 404) for invalid item ID formats
+Requesting `/me/drive/items/nonexistent-string` returns HTTP 400 ("invalidRequest"), not 404. The Graph API validates item ID format before lookup. Use path-based addressing (`/me/drive/root:/nonexistent-path`) to get proper 404 responses for nonexistent items.
+
+### Nightly CI keeps refresh tokens alive
+Microsoft rotates refresh tokens on use and they expire after 90 days of inactivity. The nightly schedule (3 AM UTC) ensures tokens stay active.
+
+---
+
+## 6. Tier 1 Research
 
 16 research documents in `docs/tier1-research/` covering Graph API bugs, reference implementation analysis, and tool surveys. Consult these before implementing any API interaction — they contain critical gotchas (upload session resume, delta headers, hash fallbacks, etc.) tracked as B-015 through B-023 in BACKLOG.md.
 

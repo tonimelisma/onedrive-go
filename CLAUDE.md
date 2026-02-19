@@ -50,8 +50,9 @@ Currently: CLI-first OneDrive client, pivoted to "Pragmatic Flat" architecture (
 - **`internal/graph/`** — Graph API client: HTTP transport (1.1 done), device code auth with token persistence (1.2 done), retry, rate limiting, delta, upload, download, all quirk handling
 
 ### Building next (Phase 1)
-- **`internal/graph/`** — Remaining: auth (1.2), items (1.3), delta (1.4), transfers (1.5), drives (1.6)
+- **`internal/graph/`** — Remaining: items (1.3), delta (1.4), transfers (1.5), drives (1.6)
 - **`cmd/onedrive-go/`** — CLI commands (Cobra): login, logout, ls, get, put, rm, mkdir
+- **`cmd/integration-bootstrap/`** — Temporary token bootstrapper (replaced by `cmd/onedrive-go login` in 1.7)
 
 ### Future phases
 - **`internal/sync/`** — Sync engine: state DB, delta processing, local scanner, reconciler, executor, conflict handler, filter, transfer pipeline (Phase 4)
@@ -209,6 +210,7 @@ CI must never be broken. Work is not done until CI passes.
 - **Code changes require PRs.** Create a branch, push, open a PR, let CI run.
 - **Doc-only changes push directly to main.** If the change only touches `.md` files, CLAUDE.md, LEARNINGS.md, BACKLOG.md, or roadmap — push to main directly. No PR needed. This keeps doc updates snappy.
 - **Workflow**: `.github/workflows/ci.yml` runs build + test (with race detector) + lint on every push and PR
+- **Integration tests**: `.github/workflows/integration.yml` runs `go test -tags=integration` against real Graph API on push to main + nightly. Uses Azure OIDC + Key Vault for token management. Local: `go test -tags=integration -race -v -timeout=5m ./internal/graph/...` (requires bootstrapped token via `go run ./cmd/integration-bootstrap`)
 - **Merge**: `./scripts/poll-and-merge.sh <pr_number>` — polls checks, merges when green, verifies post-merge workflow
 - If CI fails, fix it immediately — it's your top priority. Never leave CI broken.
 - **Pre-commit hook**: `scripts/pre-commit` runs `golangci-lint run` before every commit. Configured via `git config core.hooksPath scripts`. If lint fails, the commit is rejected — fix lint first, then commit.

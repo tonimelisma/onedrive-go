@@ -129,23 +129,26 @@
 
 ## Phase 2: E2E CI _(3 increments)_
 
-**Prove the tool works against real OneDrive.** GitHub Gist-based token rotation.
+**Prove the tool works against real OneDrive.** Azure Key Vault + OIDC for token management.
 
-| Increment | Description | Est. LOC |
-|-----------|-------------|----------|
-| 2.1 | CI scaffold: GitHub Actions, token management (Gist refresh) | ~200 YAML |
+| Increment | Description | Est. LOC | Status |
+|-----------|-------------|----------|--------|
+| 2.1 | CI scaffold: GitHub Actions, Azure Key Vault + OIDC, integration tests | ~200 YAML + Go | **DONE** |
 | 2.2 | E2E tests: login, ls, get, put, rm round-trip against live API | ~400 |
 | 2.3 | E2E edge cases: large files, special characters, concurrent ops | ~300 |
 
-### 2.1: CI scaffold — GitHub Actions + token management
+### 2.1: CI scaffold — GitHub Actions + Azure Key Vault ✅
 
-- GitHub Actions workflow for running E2E tests on merge to main + nightly
-- Private Gist for OAuth refresh token storage (read/write via GitHub API)
-- Token rotation: refresh before each run, update Gist with new refresh token
-- CI auth failure warns but does not block PRs (E2E is informational, not gating)
+- Azure OIDC federation: GitHub Actions authenticates to Azure via federated identity (no stored credentials)
+- Azure Key Vault stores OAuth token JSON per profile (`onedrive-oauth-token-{profile}`)
+- Integration tests (`//go:build integration`) in `internal/graph/integration_test.go` validate full stack against real Graph API
+- CI workflow (`.github/workflows/integration.yml`) runs on push to main + nightly + manual dispatch
+- Token bootstrap tool (`cmd/integration-bootstrap/main.go`) for initial auth before CLI `login` exists
+- Multi-profile support via `ONEDRIVE_TEST_PROFILES` env var (comma-separated)
+- Corrupted token writeback protection: validates JSON structure before uploading to Key Vault
 - **Acceptance**: Workflow runs, authenticates with OneDrive, completes without error
 - **Inputs**: test-strategy.md section 10
-- **Size**: ~200 lines YAML
+- **Actual**: ~200 LOC (integration.yml ~100, integration_test.go ~80, bootstrap ~30)
 
 ### 2.2: E2E tests — round-trip file operations
 
