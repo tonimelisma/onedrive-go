@@ -121,7 +121,8 @@ func TestIntegration_InvalidPath_404(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
-	_, err := client.Do(ctx, http.MethodGet, "/me/drive/items/nonexistent-item-id-that-does-not-exist", nil)
+	// Path-based lookup returns 404; item-ID-based with invalid format returns 400.
+	_, err := client.Do(ctx, http.MethodGet, "/me/drive/root:/nonexistent-path-that-does-not-exist", nil)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrNotFound), "expected ErrNotFound, got: %v", err)
 }
