@@ -343,7 +343,6 @@ Upload session URLs (for chunks, queries, and cancellations) include embedded au
 
 ---
 
-<<<<<<< HEAD
 ## 17. Foundation Hardening — Graph Package (Agent A)
 
 ### Retry body consumption bug was real and subtle
@@ -407,6 +406,38 @@ When `UploadChunk` fails, the upload session should be canceled to free server-s
 - **Cross-package concerns**: The `DefaultSyncDir` signature change (removing unused email parameter) requires Agent C to update the call site in `auth.go:277`. The build will fail at the repo level until Agent C makes the corresponding change.
 - **Code smells noticed**: (1) `parseSizeNumber` uses `int64(n * float64(multiplier))` which loses precision for very large sizes near the int64 boundary — acceptable for practical file sizes but technically imprecise. (2) The `knownGlobalKeys`/`knownDriveKeys` maps and their list counterparts are package-level mutable state (slices), though they are initialized once and never modified after init.
 
+
+---
+
+
+---
+
+## 20. SQLite State Store (Phase 4.1)
+
+### Pivots
+- **Skipped golang-migrate.** The `golang-migrate/migrate` sqlite driver has compatibility issues with `modernc.org/sqlite` (pure Go driver registers as "sqlite" not "sqlite3"). Implemented a simple 30-line migration runner using `embed.FS` + `PRAGMA user_version` instead. Simpler, no extra dependency, fully sufficient for sequential numbered migrations.
+
+### Issues Found
+- **noctx linter is aggressive.** Even `db.Exec()` for PRAGMAs and `db.Prepare()` need `ExecContext`/`PrepareContext` variants. Every database call must use the Context variant — no exceptions.
+- **dupl linter catches structural patterns.** Four-statement prepare helpers with identical structure (if-err-return, if-err-return, ..., last-assign-check) trigger dupl. Solved with a generic `prepareAll()` helper using a `stmtDef` slice pattern.
+- **unparam catches always-nil error returns.** `walkParentChain` returned `([]string, error)` but error was always nil (B-022 returns nil slice instead of error). Changed to return only `[]string`.
+- **gosec G101 false positive.** SQL variable named `sqlGetDeltaToken` triggers "potential hardcoded credentials" because of the word "token". Fixed with `//nolint:gosec` comment.
+
+### Linter Surprises
+- SQL string constants easily exceed 140 chars. Must use multi-line string concatenation (`const sqlGetItem = "SELECT " + sqlItemColumns + " FROM ..."`) or raw string newlines.
+- `goconst` applies to test files too (unlike `mnd`, `funlen`, `dupl`). Cannot use the same string literal twice even in tests.
+
+### Suggested Improvements
+- Consider adding a `DB()` accessor on `SQLiteStore` for advanced use cases (VACUUM, ANALYZE).
+- The `closeStatements` method could be generated or use reflection, but explicit is fine for 25 statements.
+- `Checkpoint()` currently uses `context.Background()`. Consider accepting a context parameter if callers need cancellation.
+
+### Cross-Package Concerns
+- `modernc.org/sqlite` pulls in significant transitive deps (libc, memory, mathutil, bigfft). All were pre-approved in `.golangci.yml` depguard.
+- The `Store` interface in `types.go` is large (30+ methods). May benefit from interface segregation in future if consumers only need subsets.
+
+### Code Smells
+- None significant. The prepared statement grouping into sub-structs (`itemStatements`, `deltaStatements`, etc.) keeps the main struct manageable. The generic `prepareAll()` helper eliminates all duplication.
 
 ---
 
