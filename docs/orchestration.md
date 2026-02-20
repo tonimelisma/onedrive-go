@@ -247,6 +247,7 @@ During execution, report to the human at these milestones:
 - CI passed/failed for PR
 - PR merged to main
 - **Integration tests passed/failed on main** (wait for `integration.yml` — catches regressions unit tests miss)
+- **Key Vault / CI infrastructure updated** (when increment changes token paths, secret naming, or env vars — orchestrator manages this directly via `az` CLI)
 - Agent finished (brief one-line: success or issue encountered)
 - Wave complete (all agents in wave done)
 

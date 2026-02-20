@@ -713,20 +713,81 @@ CI credentials use **Azure Key Vault + OIDC federation** for OAuth refresh token
 Setup:
 1. Azure OIDC service principal (`onedrive-go-ci-github-oidc`) with federated credential scoped to `repo:tonimelisma/onedrive-go:ref:refs/heads/main`
 2. Azure Key Vault (`kv-onedrivego-ci`) with RBAC authorization; SP has "Key Vault Secrets Officer" role
-3. GitHub repository variables: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_KEY_VAULT_NAME` (non-sensitive identifiers)
+3. GitHub repository variables: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_KEY_VAULT_NAME`, `ONEDRIVE_TEST_DRIVES` (non-sensitive identifiers)
 4. CI loads tokens via `az keyvault secret download --file` (token never in stdout/logs)
 5. After tests, CI saves rotated tokens back via `az keyvault secret set --file` (with JSON validation)
-6. Per-drive secrets named `onedrive-oauth-token-{drive}` (e.g., `onedrive-oauth-token-personal`)
+6. Per-drive secrets follow the naming convention: canonical drive ID with `:`, `@`, and `.` replaced by `-`, prefixed with `onedrive-oauth-token-`. E.g., `personal:toni@outlook.com` → `onedrive-oauth-token-personal-toni-outlook-com`
+
+**Key Vault secret naming derivation**:
+```bash
+# Input: canonical drive ID (e.g., "personal:toni@outlook.com")
+# Transform: sed 's/[:@.]/-/g'
+# Result: "onedrive-oauth-token-personal-toni-outlook-com"
+echo "onedrive-oauth-token-$(echo 'personal:toni@outlook.com' | sed 's/[:@.]/-/g')"
+```
+
+**Token file naming derivation**:
+```bash
+# Input: canonical drive ID (e.g., "personal:toni@outlook.com")
+# Transform: replace first ":" with "_"
+# Result: "token_personal_toni@outlook.com.json"
+# Location: ~/.local/share/onedrive-go/
+```
 
 Token bootstrap (one-time per drive):
 ```bash
-go run ./cmd/integration-bootstrap --drive personal
-az keyvault secret set --vault-name kv-onedrivego-ci --name onedrive-oauth-token-personal --file <token-path> --content-type application/json
+# 1. Login to get a token file
+go run . login --drive personal:toni@outlook.com
+
+# 2. Upload token to Key Vault
+az keyvault secret set \
+  --vault-name kv-onedrivego-ci \
+  --name onedrive-oauth-token-personal-toni-outlook-com \
+  --file ~/.local/share/onedrive-go/token_personal_toni@outlook.com.json \
+  --content-type application/json
+
+# 3. Set the GitHub repository variable
+gh variable set ONEDRIVE_TEST_DRIVES --body "personal:toni@outlook.com"
 ```
 
-When tokens expire completely (90 days of inactivity), re-bootstrap from a developer laptop using the same steps.
+When tokens expire completely (90 days of inactivity), re-bootstrap using the same steps.
+
+**Who manages secrets**: The AI orchestrator (Claude) has `az` CLI access and **should** manage Key Vault secrets directly. This includes creating, updating, rotating, and verifying secrets — not just human-only operations. When CI changes affect token paths or secret naming, the orchestrator should update Key Vault secrets and GitHub variables as part of the same increment, then verify CI passes before declaring done. The human only needs to intervene for one-time Azure infrastructure setup (service principal, RBAC, federated credentials) and interactive `login` flows that require a browser.
 
 **CI auth failure handling**: If the integration job fails authentication, it prints re-bootstrap instructions. Integration tests run only on push to main, nightly, and manual dispatch — never on PRs.
+
+**Local CI validation** (before pushing changes that affect CI):
+
+When changing token paths, secret naming, environment variables, or workflow logic, validate locally before pushing to avoid push-and-pray cycles:
+
+```bash
+# 1. Verify az CLI is logged in and can access the vault
+az keyvault secret list --vault-name kv-onedrivego-ci --query "[].name" -o tsv
+
+# 2. Verify the secret exists with the expected name
+DRIVE="personal:toni@outlook.com"
+SECRET_NAME="onedrive-oauth-token-$(echo "$DRIVE" | sed 's/[:@.]/-/g')"
+az keyvault secret show --vault-name kv-onedrivego-ci --name "$SECRET_NAME" --query "name" -o tsv
+
+# 3. Download token locally and validate structure
+TOKEN_FILE="/tmp/ci-token-test.json"
+az keyvault secret download --vault-name kv-onedrivego-ci --name "$SECRET_NAME" --file "$TOKEN_FILE" --encoding utf-8
+jq -e '.refresh_token' "$TOKEN_FILE" > /dev/null && echo "Token valid" || echo "Token INVALID"
+
+# 4. Verify the token works with the CLI (same as CI does)
+DATA_DIR="$HOME/.local/share/onedrive-go"
+SANITIZED=$(echo "$DRIVE" | sed 's/:/_/')
+cp "$TOKEN_FILE" "$DATA_DIR/token_${SANITIZED}.json"
+go run . whoami --json --drive "$DRIVE" | jq '.drives[0].id'
+
+# 5. Verify E2E tests pass locally (same as CI)
+ONEDRIVE_TEST_DRIVE="$DRIVE" go test -tags=e2e -race -v -timeout=5m ./e2e/...
+
+# 6. Clean up temp file
+rm -f "$TOKEN_FILE"
+```
+
+This local validation mirrors the CI workflow exactly and catches issues like wrong secret names, missing tokens, or broken token paths before they reach GitHub Actions.
 
 **Test isolation**: Each test creates a timestamped directory on OneDrive (`/onedrive-go-e2e-test-20260217-143052-{random}/`) and cleans it up on teardown. Tests run serially to avoid rate limiting.
 
@@ -1337,40 +1398,25 @@ job2-integration-chaos:
 
 ### 10.5 Job 3: E2E Tests
 
-Runs only on merge to main and nightly schedule. Requires OneDrive credentials.
+E2E tests run in the same workflow as integration tests (`.github/workflows/integration.yml`), not a separate job. They share the same Azure OIDC + Key Vault credential flow. Runs on push to main, nightly schedule, and manual dispatch.
 
 ```yaml
-job3-e2e:
-  runs-on: ubuntu-latest
-  if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'schedule'
-  env:
-    ONEDRIVE_E2E_ENABLED: '1'
-  steps:
-    - uses: actions/checkout@v4
+# E2E tests run after integration tests in integration.yml
+# Credentials are already loaded from Key Vault in a prior step
 
-    - uses: actions/setup-go@v5
-      with:
-        go-version: '1.24'
-
-    # Load credentials from private gist
-    - name: Load OneDrive credentials
-      env:
-        GH_TOKEN: ${{ secrets.CI_GIST_PAT }}
-      run: |
-        gh gist view ${{ secrets.CI_GIST_ID }} --raw > tokens.json
-        go run ./cmd/onedrive-go/ login --token-file tokens.json --non-interactive
-        gh gist edit ${{ secrets.CI_GIST_ID }} --filename tokens.json < tokens.json
-
-    # E2E tests (serial, to avoid rate limiting)
-    - name: E2E tests
-      run: go test -tags=e2e -timeout=30m -count=1 -p=1 ./e2e/...
-
-    # Auth failure handling
-    - name: Notify on auth failure
-      if: failure()
-      run: |
-        echo "::warning::E2E auth may have expired. Re-auth with: onedrive-go login && gh gist edit $CI_GIST_ID < tokens.json"
+- name: Run E2E tests
+  run: |
+    set -euo pipefail
+    IFS=',' read -ra DRIVES <<< "$ONEDRIVE_TEST_DRIVES"
+    for drive in "${DRIVES[@]}"; do
+      drive=$(echo "$drive" | xargs)
+      echo "=== Running E2E tests for: ${drive} ==="
+      ONEDRIVE_TEST_DRIVE="$drive" \
+        go test -tags=e2e -race -v -timeout=5m ./e2e/...
+    done
 ```
+
+See §6.1 for the full credential management flow (Key Vault download, token validation, post-test rotation).
 
 ### 10.6 Nightly Extended
 

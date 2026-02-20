@@ -85,6 +85,12 @@ Requesting `/me/drive/items/nonexistent-string` returns HTTP 400 ("invalidReques
 ### Nightly CI keeps refresh tokens alive
 Microsoft rotates refresh tokens on use and they expire after 90 days of inactivity. The nightly schedule (3 AM UTC) ensures tokens stay active.
 
+### Orchestrator manages Key Vault secrets directly
+The AI orchestrator (Claude) has `az` CLI access and should manage Key Vault secrets as part of CI-impacting changes. This includes: creating/renaming secrets, downloading/uploading tokens, setting GitHub repository variables via `gh variable set`, and verifying secret structure. When code changes affect token paths or secret naming (like the profiles → drives migration), update Key Vault and GitHub variables in the same increment rather than escalating to the human. The human only handles one-time Azure infrastructure (service principal, RBAC) and interactive browser-based `login` flows.
+
+### Local CI validation prevents push-and-pray
+When making changes that affect the integration workflow (token paths, secret names, env vars, workflow YAML), always validate locally before pushing. Mirror the workflow's token loading logic with `az keyvault secret download`, test `whoami --json --drive`, and run E2E tests locally with the same env vars. See test-strategy.md §6.1 for the full local validation script. This catches issues like wrong secret names or broken token paths without waiting for GitHub Actions.
+
 ### Graph API JSON tag nolint patterns
 Graph API uses non-standard JSON keys like `@odata.nextLink` and `@microsoft.graph.conflictBehavior`. These trigger the `tagliatelle` linter — suppress with `//nolint:tagliatelle` on the struct field.
 

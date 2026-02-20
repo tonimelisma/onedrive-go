@@ -211,10 +211,12 @@ CI must never be broken. Work is not done until CI passes.
 - **Doc-only changes push directly to main.** If the change only touches `.md` files, CLAUDE.md, LEARNINGS.md, BACKLOG.md, or roadmap — push to main directly. No PR needed. This keeps doc updates snappy.
 - **Workflow**: `.github/workflows/ci.yml` runs build + test (with race detector) + lint on every push and PR
 - **Integration tests**: `.github/workflows/integration.yml` runs `go test -tags=integration` against real Graph API on push to main + nightly. Uses Azure OIDC + Key Vault for token management. Local: `go test -tags=integration -race -v -timeout=5m ./internal/graph/...` (requires token via `onedrive-go login --drive <canonical-id>`)
-- **E2E tests**: Same workflow runs `go test -tags=e2e` after integration tests. Builds binary, exercises full CLI round-trip (whoami, ls, mkdir, put, get, stat, rm). Local: `ONEDRIVE_TEST_DRIVE=personal:user@example.com go test -tags=e2e -race -v -timeout=5m ./e2e/...`
+- **E2E tests**: Same workflow runs `go test -tags=e2e` after integration tests. Builds binary, exercises full CLI round-trip (whoami, ls, mkdir, put, get, stat, rm). Local: `ONEDRIVE_TEST_DRIVE=personal:toni@outlook.com go test -tags=e2e -race -v -timeout=5m ./e2e/...`
 - **Merge**: `./scripts/poll-and-merge.sh <pr_number>` — polls checks, merges when green, verifies post-merge workflow
 - If CI fails, fix it immediately — it's your top priority. Never leave CI broken.
 - **Pre-commit hook**: `.githooks/pre-commit` runs `golangci-lint run` before every commit. Configured via `git config core.hooksPath .githooks`. If lint fails, the commit is rejected — fix lint first, then commit.
+- **Azure Key Vault management**: The orchestrator (Claude) has `az` CLI access and **should** manage Key Vault secrets directly when CI changes affect token paths, secret naming, or environment variables. Use `az keyvault secret set/download/list` for token management and `gh variable set` for GitHub repository variables. See [docs/design/test-strategy.md §6.1](docs/design/test-strategy.md) for naming conventions and local validation steps. The human only handles one-time Azure infrastructure setup and interactive browser-based `login` flows.
+- **Local CI validation**: Before pushing changes that affect integration.yml (token paths, secret names, env vars), validate locally by mirroring the workflow's token loading logic. See [docs/design/test-strategy.md §6.1](docs/design/test-strategy.md) for the full local validation script. This avoids push-and-pray cycles.
 
 ## Worktree Workflow
 
