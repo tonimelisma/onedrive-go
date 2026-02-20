@@ -121,6 +121,12 @@ func clientAndDrive(ctx context.Context) (*graph.Client, string, *slog.Logger, e
 
 	client := graph.NewClient(graph.DefaultBaseURL, http.DefaultClient, ts, logger)
 
+	// Skip the Drives() API call when the drive ID is already known from config.
+	if resolvedCfg.DriveID != "" {
+		logger.Debug("using configured drive ID", "drive_id", resolvedCfg.DriveID)
+		return client, resolvedCfg.DriveID, logger, nil
+	}
+
 	drives, err := client.Drives(ctx)
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("discovering drive: %w", err)
@@ -263,16 +269,40 @@ func runGet(_ *cobra.Command, args []string) error {
 		localPath = args[1]
 	}
 
-	f, err := os.Create(localPath)
-	if err != nil {
-		return fmt.Errorf("creating local file: %w", err)
-	}
-	defer f.Close()
+	// Atomic download: write to a temp file in the same directory, then rename.
+	// This prevents partial downloads from leaving corrupt files on disk.
+	dir := filepath.Dir(localPath)
 
-	n, err := client.Download(ctx, driveID, item.ID, f)
+	tmp, err := os.CreateTemp(dir, ".download-*.tmp")
 	if err != nil {
+		return fmt.Errorf("creating temp file for download: %w", err)
+	}
+
+	tmpPath := tmp.Name()
+
+	// Clean up temp file on any error path.
+	success := false
+	defer func() {
+		if !success {
+			os.Remove(tmpPath)
+		}
+	}()
+
+	n, err := client.Download(ctx, driveID, item.ID, tmp)
+	if err != nil {
+		tmp.Close()
 		return fmt.Errorf("downloading %q: %w", remotePath, err)
 	}
+
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("closing temp file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, localPath); err != nil {
+		return fmt.Errorf("renaming download to %q: %w", localPath, err)
+	}
+
+	success = true
 
 	logger.Debug("download complete", "local_path", localPath, "bytes", n)
 	statusf("Downloaded %s (%s)\n", localPath, formatSize(n))

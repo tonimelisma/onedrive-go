@@ -431,7 +431,7 @@ func TestOAuthConfig_Defaults(t *testing.T) {
 	assert.NotEmpty(t, cfg.Endpoint.TokenURL)
 }
 
-func TestTokenPath_UsesProfileName(t *testing.T) {
+func TestTokenPath_UsesDriveName(t *testing.T) {
 	// Verify that oauthConfig passes through the token path correctly
 	// by checking that OnTokenChange writes to the expected location.
 	tmpDir := t.TempDir()
