@@ -461,6 +461,8 @@
 - RPC interface for pause/resume/status
 - FUSE filesystem mount
 - National cloud support
+- Performance profiling and optimization (CPU, memory, I/O hotspots)
+- Like-for-like performance benchmarks against rclone and abraunegg/onedrive
 
 ---
 
