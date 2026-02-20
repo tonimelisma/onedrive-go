@@ -302,6 +302,34 @@ func TestDeltaAll_GoneError(t *testing.T) {
 	assert.ErrorIs(t, err, ErrGone)
 }
 
+func TestDeltaAll_MaxPages(t *testing.T) {
+	// Override maxDeltaPages to a small value for fast testing.
+	origMax := maxDeltaPages
+	maxDeltaPages = 3
+	defer func() { maxDeltaPages = origMax }()
+
+	var srv *httptest.Server
+
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// Always return a NextLink, never a DeltaLink — simulates infinite loop.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `{
+			"value": [
+				{"id":"item","name":"file.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root","driveId":"d"}}
+			],
+			"@odata.nextLink": "%s/drives/d/root/delta?token=next"
+		}`, srv.URL)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, _, err := client.DeltaAll(context.Background(), "d", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeded")
+	assert.Contains(t, err.Error(), "3")
+}
+
 func TestBuildDeltaPath_EmptyToken(t *testing.T) {
 	client := newTestClient(t, "http://localhost")
 	path, err := client.buildDeltaPath("my-drive", "")

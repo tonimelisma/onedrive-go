@@ -61,14 +61,14 @@ type Organization struct {
 
 // UploadSession represents an in-progress resumable upload.
 type UploadSession struct {
-	UploadURL      string
+	UploadURL      string // pre-authenticated, ephemeral; NEVER log (architecture.md §9.2)
 	ExpirationTime time.Time
 }
 
 // UploadSessionStatus represents the current state of a resumable upload session.
 // Returned by QueryUploadSession to determine which byte ranges have been accepted.
 type UploadSessionStatus struct {
-	UploadURL          string
+	UploadURL          string // pre-authenticated, ephemeral; NEVER log (architecture.md §9.2)
 	ExpirationTime     time.Time
 	NextExpectedRanges []string // e.g., ["0-", "327680-"]
 }

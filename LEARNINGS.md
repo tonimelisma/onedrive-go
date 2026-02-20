@@ -340,3 +340,32 @@ Upload session URLs (for chunks, queries, and cancellations) include embedded au
 
 ### Extract shared parsing logic into helpers
 `parseUploadSessionResponse` was extracted from `CreateUploadSession` to share the response parsing logic. This keeps methods focused and allows future callers (e.g., session refresh) to reuse the same parsing without duplication.
+
+---
+
+## 17. Foundation Hardening — Graph Package (Agent A)
+
+### Retry body consumption bug was real and subtle
+The `doRetry` loop reused an `io.Reader` body across retries. After the first request consumed the body, subsequent retries sent empty POST/PATCH payloads. The fix is to seek the body to offset 0 before each attempt. All callers already use `bytes.NewReader` (which implements `io.Seeker`), so the fix is backward-compatible. The `rewindBody` helper was extracted to keep `doRetry` under the cyclomatic complexity limit.
+
+### Extracting helpers from doRetry to satisfy linter limits
+Adding the body-rewind check pushed `doRetry` over both `gocyclo` (16 > 15) and `funlen` (104 > 100) limits. Two helpers were extracted: `rewindBody()` for the seek logic and `terminalError()` for building `GraphError` and logging the final failure. This is a recurring pattern: any change to a near-limit function requires extracting helpers rather than just adding code inline.
+
+### JSON dot-notation tags never work in encoding/json
+The `driveItemResponse.MimeType` field had `json:"file.mimeType"` — Go's `encoding/json` does not support dot notation in struct tags. The field was never populated; the actual MIME type came from `d.File.MimeType` via the nested `fileFacet` struct. Dead fields with misleading tags are a maintenance hazard.
+
+### URL encoding in Graph API path-based operations
+Path segments interpolated into Graph API URLs must be individually URL-encoded. Characters like `#`, `?`, `%`, and spaces in filenames break the URL if interpolated raw. The `encodePathSegments()` helper splits on `/`, encodes each segment with `url.PathEscape`, and reassembles. For single segments (upload name), `url.PathEscape` is used directly.
+
+### httptest RequestURI vs URL.RawPath for verifying encoding
+When testing URL encoding with `httptest.Server`, `r.URL.RawPath` is empty unless Go's URL parser needed it (i.e., when the decoded path differs from the raw path AND the path can be parsed without it). Use `r.RequestURI` instead — it preserves the raw percent-encoded path as sent over the wire.
+
+### Package-level var (not const) for test-overridable guards
+The `maxDeltaPages` guard needed to be overridable in tests (testing 10000 HTTP calls is too slow). Using `var` instead of `const` with a `//nolint:gochecknoglobals` annotation is the pragmatic choice. Tests save/restore the original value with `defer`.
+
+- **Pivots**: Extracted `terminalError` helper (not in plan) to satisfy `funlen` lint after `rewindBody` extraction pushed `doRetry` over the limit. Changed test from `r.URL.RawPath` to `r.RequestURI` for URL encoding verification.
+- **Issues found**: `driveItemResponse.MimeType` was a dead field with a non-functional JSON tag (dot notation). Removed as planned.
+- **Linter surprises**: Adding 4 lines to `doRetry` (already at 100 lines) triggered both `gocyclo` and `funlen`. Required extracting two helpers instead of one.
+- **Suggested improvements**: None specific to graph package.
+- **Cross-package concerns**: URL encoding fix affects CLI callers that construct paths for `GetItemByPath`/`ListChildrenByPath` — they should not pre-encode paths now (double-encoding). Currently CLI passes raw user input which is correct.
+- **Code smells noticed**: The `doRetry` function was already at the lint limit before this change — any future additions will require further decomposition. The `rewindBody` seek-error branch is practically untestable (no easy way to make `bytes.NewReader.Seek` fail).

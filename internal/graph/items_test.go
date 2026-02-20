@@ -691,6 +691,57 @@ func TestGetItemByPath_Success(t *testing.T) {
 	assert.Equal(t, 2024, item.ModifiedAt.Year())
 }
 
+func TestGetItemByPath_EncodesSpecialChars(t *testing.T) {
+	// Verify that paths with special characters (#, spaces, ?) are URL-encoded
+	// per-segment before being sent to the server.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// RequestURI preserves the raw percent-encoded path as sent on the wire.
+		// "folder/my file#2.txt" → "folder/my%20file%232.txt"
+		assert.Contains(t, r.RequestURI, "/drives/d/root:/folder/my%20file%232.txt:")
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{
+			"id": "encoded-item",
+			"name": "my file#2.txt",
+			"createdDateTime": "2024-01-01T00:00:00Z",
+			"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+			"parentReference": {"id": "folder-id", "driveId": "d"}
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	item, err := client.GetItemByPath(context.Background(), "d", "folder/my file#2.txt")
+	require.NoError(t, err)
+
+	assert.Equal(t, "encoded-item", item.ID)
+	assert.Equal(t, "my file#2.txt", item.Name)
+}
+
+func TestEncodePathSegments(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"simple path", "folder/file.txt", "folder/file.txt"},
+		{"spaces", "my folder/my file.txt", "my%20folder/my%20file.txt"},
+		{"hash", "folder/file#2.txt", "folder/file%232.txt"},
+		{"question mark", "folder/file?.txt", "folder/file%3F.txt"},
+		{"percent", "folder/100%.txt", "folder/100%25.txt"},
+		{"mixed", "my docs/report #1.pdf", "my%20docs/report%20%231.pdf"},
+		{"single segment", "file.txt", "file.txt"},
+		{"deep path", "a/b/c/d.txt", "a/b/c/d.txt"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, encodePathSegments(tt.input))
+		})
+	}
+}
+
 func TestGetItemByPath_NotFound(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("request-id", "req-path-404")
