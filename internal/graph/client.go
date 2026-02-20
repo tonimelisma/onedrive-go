@@ -71,18 +71,32 @@ func NewClient(baseURL string, httpClient *http.Client, token TokenSource, logge
 // The caller is responsible for closing the response body on success.
 // On error, returns a *GraphError wrapping a sentinel (use errors.Is to classify).
 func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
+	return c.doRetry(ctx, method, path, body, nil)
+}
+
+// DoWithHeaders executes an authenticated HTTP request with additional headers.
+// It behaves identically to Do but merges extraHeaders into every request attempt.
+// Use this for API calls that require special headers (e.g., Prefer for delta queries).
+func (c *Client) DoWithHeaders(
+	ctx context.Context, method, path string, body io.Reader, extraHeaders http.Header,
+) (*http.Response, error) {
+	return c.doRetry(ctx, method, path, body, extraHeaders)
+}
+
+// doRetry is the shared retry loop for Do and DoWithHeaders.
+func (c *Client) doRetry(
+	ctx context.Context, method, path string, body io.Reader, extraHeaders http.Header,
+) (*http.Response, error) {
 	url := c.baseURL + path
 
 	var attempt int
 	for {
-		resp, err := c.doOnce(ctx, method, url, body)
+		resp, err := c.doOnce(ctx, method, url, body, extraHeaders)
 		if err != nil {
-			// Fail fast on context cancellation — never retry a deliberate abort.
 			if ctx.Err() != nil {
 				return nil, fmt.Errorf("graph: request canceled: %w", ctx.Err())
 			}
 
-			// Network errors (DNS, TCP, TLS) are always worth retrying.
 			if attempt < maxRetries {
 				backoff := c.calcBackoff(attempt)
 				c.logger.Warn("retrying after network error",
@@ -116,8 +130,6 @@ func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*
 			return resp, nil
 		}
 
-		// Must drain and close the body even on errors, otherwise the
-		// underlying TCP connection won't be reused by the HTTP client pool.
 		errBody, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
@@ -125,8 +137,6 @@ func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*
 			errBody = []byte("(failed to read response body)")
 		}
 
-		// Graph API returns request-id in every response — essential for debugging
-		// issues with Microsoft support.
 		reqID := resp.Header.Get("request-id")
 
 		if isRetryable(resp.StatusCode) && attempt < maxRetries {
@@ -178,7 +188,9 @@ func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*
 }
 
 // doOnce executes a single HTTP request (no retry).
-func (c *Client) doOnce(ctx context.Context, method, url string, body io.Reader) (*http.Response, error) {
+func (c *Client) doOnce(
+	ctx context.Context, method, url string, body io.Reader, extraHeaders http.Header,
+) (*http.Response, error) {
 	c.logger.Debug("preparing request",
 		slog.String("method", method),
 		slog.String("url", url),
@@ -199,6 +211,13 @@ func (c *Client) doOnce(ctx context.Context, method, url string, body io.Reader)
 
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+
+	// Merge caller-supplied headers (e.g., Prefer for delta queries).
+	for key, vals := range extraHeaders {
+		for _, v := range vals {
+			req.Header.Add(key, v)
+		}
 	}
 
 	resp, err := c.httpClient.Do(req)

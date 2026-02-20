@@ -7,6 +7,53 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestDecodeURLEncodedNames(t *testing.T) {
+	items := []Item{
+		{ID: "item-1", Name: "my%20file.txt"},
+		{ID: "item-2", Name: "normal.txt"},
+		{ID: "item-3", Name: "path%2Fslash.txt"},
+		{ID: "item-4", Name: "%E6%97%A5%E6%9C%AC%E8%AA%9E.txt"},
+	}
+
+	result := decodeURLEncodedNames(items, testNoopLogger())
+
+	assert.Len(t, result, 4)
+	assert.Equal(t, "my file.txt", result[0].Name)
+	assert.Equal(t, "normal.txt", result[1].Name)
+	assert.Equal(t, "path/slash.txt", result[2].Name)
+	assert.Equal(t, "日本語.txt", result[3].Name)
+}
+
+func TestDecodeURLEncodedNames_NoEncoding(t *testing.T) {
+	items := []Item{
+		{ID: "item-1", Name: "plain.txt"},
+		{ID: "item-2", Name: "also plain.txt"},
+	}
+
+	result := decodeURLEncodedNames(items, testNoopLogger())
+
+	assert.Len(t, result, 2)
+	assert.Equal(t, "plain.txt", result[0].Name)
+	assert.Equal(t, "also plain.txt", result[1].Name)
+}
+
+func TestDecodeURLEncodedNames_Empty(t *testing.T) {
+	result := decodeURLEncodedNames([]Item{}, testNoopLogger())
+	assert.Empty(t, result)
+}
+
+func TestDecodeURLEncodedNames_InvalidEscapeKept(t *testing.T) {
+	// A malformed percent-encoding like "%zz" should keep the original name.
+	items := []Item{
+		{ID: "item-1", Name: "bad%zzname.txt"},
+	}
+
+	result := decodeURLEncodedNames(items, testNoopLogger())
+
+	assert.Len(t, result, 1)
+	assert.Equal(t, "bad%zzname.txt", result[0].Name)
+}
+
 func TestFilterPackages(t *testing.T) {
 	items := []Item{
 		{ID: "file-1", Name: "doc.txt", IsPackage: false},
@@ -186,7 +233,7 @@ func TestNormalizeDeltaItems_FullPipeline(t *testing.T) {
 		{ID: "pkg-1", Name: "Notebook.one", IsPackage: true, ParentID: "root"},
 		{ID: "deleted-1", Name: "old.txt", IsDeleted: true, QuickXorHash: "bogus", ParentID: "folder-a"},
 		{ID: "dup-1", Name: "v1-of-file", ParentID: "folder-a"},
-		{ID: "create-1", Name: "new.txt", ParentID: "folder-a", IsDeleted: false},
+		{ID: "create-1", Name: "new%20file.txt", ParentID: "folder-a", IsDeleted: false},
 		{ID: "dup-1", Name: "v2-of-file", ParentID: "folder-a"},
 	}
 
@@ -208,6 +255,11 @@ func TestNormalizeDeltaItems_FullPipeline(t *testing.T) {
 	for _, item := range result {
 		if item.ID == "dup-1" {
 			assert.Equal(t, "v2-of-file", item.Name)
+		}
+
+		// Verify URL decoding was applied (step 0).
+		if item.ID == "create-1" {
+			assert.Equal(t, "new file.txt", item.Name)
 		}
 	}
 }

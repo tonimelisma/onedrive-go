@@ -9,6 +9,14 @@ import (
 	"strings"
 )
 
+// deltaPreferHeader requests that the Graph API include remote/shared items
+// using stable alias IDs in delta responses. Without this header, Personal
+// accounts may receive incomplete delta results for shared folders.
+// See docs/tier1-research/issues-graph-api-bugs.md.
+var deltaPreferHeader = http.Header{
+	"Prefer": {"deltashowremoteitemsaliasid"},
+}
+
 // deltaResponse mirrors the Graph API delta response JSON structure.
 // Unexported — callers receive normalized DeltaPage values.
 type deltaResponse struct {
@@ -38,7 +46,7 @@ func (c *Client) Delta(ctx context.Context, driveID, token string) (*DeltaPage, 
 		slog.Bool("initial_sync", token == ""),
 	)
 
-	resp, err := c.Do(ctx, http.MethodGet, path, nil)
+	resp, err := c.DoWithHeaders(ctx, http.MethodGet, path, nil, deltaPreferHeader)
 	if err != nil {
 		return nil, err
 	}

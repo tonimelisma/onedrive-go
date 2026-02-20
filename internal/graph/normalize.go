@@ -2,17 +2,20 @@ package graph
 
 import (
 	"log/slog"
+	"net/url"
 	"slices"
 )
 
 // normalizeDeltaItems applies delta-specific quirk handling to a batch of items.
 // This handles quirks that only manifest in delta responses, not in single-item
 // or list-children responses. The pipeline runs in a fixed order:
+// 0. URL-decode item names (Graph API sometimes returns %20-encoded names)
 // 1. Filter out OneNote packages (not syncable)
 // 2. Clear bogus hashes on deleted items
 // 3. Deduplicate items that appear multiple times (keep last occurrence)
 // 4. Reorder so deletions at a parent are processed before creations
 func normalizeDeltaItems(items []Item, logger *slog.Logger) []Item {
+	items = decodeURLEncodedNames(items, logger)
 	items = filterPackages(items, logger)
 	items = clearDeletedHashes(items, logger)
 	items = deduplicateItems(items, logger)
@@ -151,6 +154,48 @@ func reorderDeletions(items []Item, logger *slog.Logger) []Item {
 
 	if reordered {
 		logger.Debug("reordered deletions before creations in delta batch")
+	}
+
+	return items
+}
+
+// decodeURLEncodedNames applies url.PathUnescape to item names.
+// The Graph API sometimes returns URL-encoded names (e.g., "my%20file.txt")
+// in delta responses, particularly for items in shared folders on Personal
+// accounts. This step normalizes names before further processing.
+func decodeURLEncodedNames(items []Item, logger *slog.Logger) []Item {
+	decoded := 0
+
+	for i := range items {
+		unescaped, err := url.PathUnescape(items[i].Name)
+		if err != nil {
+			// If unescaping fails, keep the original name — this should be
+			// extremely rare (malformed percent-encoding from the API).
+			logger.Debug("failed to URL-decode item name, keeping original",
+				slog.String("item_id", items[i].ID),
+				slog.String("name", items[i].Name),
+				slog.String("error", err.Error()),
+			)
+
+			continue
+		}
+
+		if unescaped != items[i].Name {
+			logger.Debug("URL-decoded item name",
+				slog.String("item_id", items[i].ID),
+				slog.String("encoded", items[i].Name),
+				slog.String("decoded", unescaped),
+			)
+
+			items[i].Name = unescaped
+			decoded++
+		}
+	}
+
+	if decoded > 0 {
+		logger.Info("URL-decoded item names in delta batch",
+			slog.Int("decoded_count", decoded),
+		)
 	}
 
 	return items

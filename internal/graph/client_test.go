@@ -366,6 +366,69 @@ func TestCalcBackoff_MaxCap(t *testing.T) {
 	assert.GreaterOrEqual(t, backoff, maxBackoff-maxBackoff/4)
 }
 
+func TestDoWithHeaders_SendsExtraHeaders(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "deltashowremoteitemsaliasid", r.Header.Get("Prefer"))
+		assert.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"value":"ok"}`))
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	headers := http.Header{"Prefer": {"deltashowremoteitemsaliasid"}}
+
+	resp, err := client.DoWithHeaders(context.Background(), http.MethodGet, "/test", nil, headers)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestDoWithHeaders_NilHeaders(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+
+	resp, err := client.DoWithHeaders(context.Background(), http.MethodGet, "/test", nil, nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestDoWithHeaders_RetriesWithHeaders(t *testing.T) {
+	var calls atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify the Prefer header is present on every attempt (including retries).
+		assert.Equal(t, "deltashowremoteitemsaliasid", r.Header.Get("Prefer"))
+
+		n := calls.Add(1)
+		if n <= 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`ok`))
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	headers := http.Header{"Prefer": {"deltashowremoteitemsaliasid"}}
+
+	resp, err := client.DoWithHeaders(context.Background(), http.MethodGet, "/retry", nil, headers)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, int32(2), calls.Load())
+}
+
 func TestIsRetryable(t *testing.T) {
 	retryable := []int{
 		http.StatusRequestTimeout,
