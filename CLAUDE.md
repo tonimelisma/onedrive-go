@@ -136,16 +136,23 @@ Every change must pass ALL gates before committing:
 6. **Logging review**: Review new/modified code for sufficient logging. Every public function entry, every state transition, every error path must have a log line. See Logging Standard below.
 7. **Comment review**: Review new/modified code for sufficient comments explaining *why*. See Comment Convention below.
 8. **Docs**: CLAUDE.md documentation index is current. All doc links are valid.
-9. **Git**: Working tree is clean after commit. No uncommitted changes left behind.
-10. **CI verification**: After merging PRs, wait for ALL CI workflows (both `ci.yml` and `integration.yml`) to pass before declaring the increment done. Integration tests catch regressions that unit tests miss (e.g., config changes breaking `--drive` in CI). Never skip this step.
-11. **CI infrastructure**: If the increment changed anything affecting CI (token paths, secret naming, env vars, workflow YAML), verify that Key Vault secrets and GitHub variables are updated, and run `scripts/validate-ci-locally.sh` before pushing. See [docs/design/test-strategy.md §6.1](docs/design/test-strategy.md) and [docs/orchestration.md §1.4](docs/orchestration.md).
-12. **Retrospective**: After each increment, conduct a brief retro covering: what went well, what could be improved, and what to change going forward. Capture actionable improvements in `LEARNINGS.md`. This applies to the increment as a whole, not to every individual commit.
-13. **Re-envisioning check**: After each increment, step back and consider the project from a blank slate. Ask: "If I were starting this today, knowing everything I know now, would I build the same thing?" Evaluate architecture, package boundaries, API design, roadmap ordering, and testing strategy. If something feels stale or constrained by earlier decisions, flag it. Don't just follow the roadmap — challenge it. Propose concrete changes if warranted, or explicitly confirm the current direction is still correct. This check prevents path dependency from accumulating across increments.
+9. **Git clean**: Working tree is clean after commit. No uncommitted changes left behind.
+10. **Git cleanup**: After merging PRs, delete merged branches (local and remote), remove worktrees (`git worktree remove`), prune remote refs (`git fetch --prune`), verify no stashes (`git stash list`), remove coordination files (e.g., PLAN_LEFT.md). Verify: only `main` branch exists locally, only `origin/main` remotely, no open PRs, no orphaned worktree directories on disk. This is not optional — the repo must be fully clean before declaring an increment done.
+11. **CI verification**: After merging PRs, wait for ALL CI workflows (both `ci.yml` and `integration.yml`) to pass before declaring the increment done. Integration tests catch regressions that unit tests miss (e.g., config changes breaking `--drive` in CI). Never skip this step.
+12. **CI infrastructure**: If the increment changed anything affecting CI (token paths, secret naming, env vars, workflow YAML), verify that Key Vault secrets and GitHub variables are updated, and run `scripts/validate-ci-locally.sh` before pushing. See [docs/design/test-strategy.md §6.1](docs/design/test-strategy.md) and [docs/orchestration.md §1.4](docs/orchestration.md).
+13. **Retrospective**: After each increment, conduct a brief retro covering: what went well, what could be improved, and what to change going forward. Capture actionable improvements in `LEARNINGS.md`. This applies to the increment as a whole, not to every individual commit.
+14. **Re-envisioning check**: After each increment, step back and consider the project from a blank slate. Ask: "If I were starting this today, knowing everything I know now, would I build the same thing?" Evaluate architecture, package boundaries, API design, roadmap ordering, and testing strategy. If something feels stale or constrained by earlier decisions, flag it. Don't just follow the roadmap — challenge it. Propose concrete changes if warranted, or explicitly confirm the current direction is still correct. This check prevents path dependency from accumulating across increments.
 
 ### DOD Quick Check
 ```bash
 go build ./... && go test -race -coverprofile=/tmp/cover.out ./... && golangci-lint run && go tool cover -func=/tmp/cover.out | grep total && echo "ALL GATES PASS"
 ```
+
+### DOD Cleanup Check (after increment)
+```bash
+echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r && echo "=== Worktrees ===" && git worktree list && echo "=== Stashes ===" && git stash list && echo "=== Open PRs ===" && gh pr list --state open && echo "=== Status ===" && git status
+```
+Expected: only `main` local, only `origin/main` remote, one worktree (main), no stashes, no open PRs, clean status.
 
 ## Coding Conventions
 
