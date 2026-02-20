@@ -307,3 +307,22 @@ When finding the end of a TOML section for deletion, blank lines and comments be
 
 ### Atomic writes: temp file in same directory, then rename
 `os.Rename` is atomic on POSIX when source and target are on the same filesystem. Creating the temp file in the same directory as the target guarantees this. The `succeeded` flag pattern with deferred cleanup handles all error paths without OS-level error injection in tests.
+
+---
+
+## 15. E2E Edge Case Tests (Increment 2.3)
+
+### No pivots from plan
+The implementation followed the plan exactly. All four subtests (large file, unicode, spaces, concurrent) were implemented as specified.
+
+### t.Fatalf cannot be called from non-test goroutines
+Go's `testing.T.Fatalf` calls `runtime.Goexit()` which panics when called from a goroutine that is not the test goroutine. The `runCLI` helper uses `t.Fatalf`, so concurrent upload tests must use `exec.Command` directly with error channels instead of `runCLI`. This is the correct pattern for any test that needs parallelism.
+
+### Deterministic large file data for corruption detection
+Using `byte(i % 251)` (prime modulus) generates a repeating pattern that covers all 251 distinct byte values. This is better than random data because it's deterministic (no seed management) and better than all-zeros because it catches offset/truncation bugs where a zero-filled region would silently match.
+
+### E2E test decomposition avoids funlen
+Even though test files are exempt from `funlen`, decomposing the `TestE2E_EdgeCases` parent into helper functions (`testLargeFileUploadDownload`, `testUnicodeFilename`, etc.) improves readability and follows the existing project pattern of focused, single-purpose functions.
+
+### Build tag isolation is reliable
+Files with `//go:build e2e` are completely excluded from `go build ./...` and `go test ./...`. The compilation check `go test -tags e2e -c -o /dev/null ./e2e/...` catches syntax/type errors without requiring live API access. This two-tier verification (compile without API, run with API) is the right pattern for E2E tests.
