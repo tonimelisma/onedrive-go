@@ -114,7 +114,7 @@ func clientAndDrive(ctx context.Context) (*graph.Client, string, *slog.Logger, e
 	ts, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
 	if err != nil {
 		if errors.Is(err, graph.ErrNotLoggedIn) {
-			return nil, "", nil, fmt.Errorf("not logged in — run 'onedrive-go login --drive %s' first", resolvedCfg.CanonicalID)
+			return nil, "", nil, fmt.Errorf("not logged in — run 'onedrive-go login' first")
 		}
 
 		return nil, "", nil, err
