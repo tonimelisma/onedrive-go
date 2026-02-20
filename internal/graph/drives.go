@@ -82,6 +82,17 @@ func (d *driveResponse) toDrive() Drive {
 	return drive
 }
 
+// orgResponse mirrors the Graph API /me/organization response.
+// Unexported — callers use Organization via the Organization() method.
+type orgResponse struct {
+	Value []orgEntry `json:"value"`
+}
+
+// orgEntry represents a single organization entry from the Graph API.
+type orgEntry struct {
+	DisplayName string `json:"displayName"`
+}
+
 // Me returns the authenticated user's profile.
 func (c *Client) Me(ctx context.Context) (*User, error) {
 	c.logger.Info("fetching authenticated user profile")
@@ -162,4 +173,35 @@ func (c *Client) Drive(ctx context.Context, driveID string) (*Drive, error) {
 	)
 
 	return &drive, nil
+}
+
+// Organization returns the authenticated user's organization.
+// Personal accounts return an empty Organization (the API returns an empty array).
+// Business/education accounts return the first organization's display name,
+// which is used for sync directory naming (e.g., "~/OneDrive - Contoso").
+func (c *Client) Organization(ctx context.Context) (*Organization, error) {
+	c.logger.Info("fetching user organization")
+
+	resp, err := c.Do(ctx, http.MethodGet, "/me/organization", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var or orgResponse
+	if err := json.NewDecoder(resp.Body).Decode(&or); err != nil {
+		return nil, fmt.Errorf("graph: decoding organization response: %w", err)
+	}
+
+	org := &Organization{}
+	if len(or.Value) > 0 {
+		org.DisplayName = or.Value[0].DisplayName
+	}
+
+	c.logger.Debug("fetched organization",
+		slog.String("display_name", org.DisplayName),
+		slog.Bool("has_org", len(or.Value) > 0),
+	)
+
+	return org, nil
 }

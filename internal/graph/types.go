@@ -53,6 +53,12 @@ type Drive struct {
 	QuotaTotal int64
 }
 
+// Organization represents a user's organizational membership.
+// Personal accounts have no organization; DisplayName is empty.
+type Organization struct {
+	DisplayName string
+}
+
 // UploadSession represents an in-progress resumable upload.
 type UploadSession struct {
 	UploadURL      string
