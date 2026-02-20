@@ -29,8 +29,9 @@
 | B-035 | Add --quiet support for login, logout, whoami, status, drive | P2 | root | Auth/drive commands write to stdout via `fmt.Printf`. File ops use `statusf()` which respects --quiet. Standardize all commands. |
 | B-036 | Extract CLI service layer for testability | P2 | root | Root package at 28.1% coverage. All RunE handlers are untested. Need to extract pure logic from I/O and create interfaces for Graph client to enable mock-based testing. Target: 50%+ root package coverage. |
 | B-037 | Add chunk upload retry for pre-auth URLs | P2 | `internal/graph/` | `UploadChunk`, `CancelUploadSession`, `QueryUploadSession`, `downloadFromURL` bypass retry. Need lightweight retry wrapper for pre-authenticated URL operations. Important for Phase 4 transfer pipeline. |
-| B-038 | Document token source context lifetime | P3 | `internal/graph/` | `graph.Login` and `TokenSourceFromPath` bind caller's context to token source. Works because callers use `context.Background()`, but API is fragile. Add doc comments specifying context must outlive token source. |
-| B-039 | Add fsync to graph/auth.go saveToken | P3 | `internal/graph/` | Same pattern as config atomicWriteFile — no fsync before rename. Fix when touching auth.go next. |
+| ~~B-038~~ | ~~Document token source context lifetime~~ | ~~P3~~ | ~~`internal/graph/`~~ | **CLOSED**: Doc comments added to `Login()` and `TokenSourceFromPath()` specifying context must outlive TokenSource. PR #40. |
+| ~~B-039~~ | ~~Add fsync to graph/auth.go saveToken~~ | ~~P3~~ | ~~`internal/graph/`~~ | **CLOSED**: `tmp.Sync()` added between Write and Close in `saveToken()`. PR #40. |
+| B-040 | Inject logger into config package for debug observability | P3 | `internal/config/` | `Load()`, `ResolveDrive()`, `ReadEnvOverrides()` have no logger parameter. Adding one would require API changes across the package. Useful for debugging config resolution in Phase 4. |
 
 ## Icebox (Deferred / Nice-to-have)
 
