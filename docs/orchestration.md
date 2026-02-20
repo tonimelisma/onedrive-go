@@ -246,6 +246,7 @@ During execution, report to the human at these milestones:
 - Agent created PR (include PR number and link)
 - CI passed/failed for PR
 - PR merged to main
+- **Integration tests passed/failed on main** (wait for `integration.yml` — catches regressions unit tests miss)
 - Agent finished (brief one-line: success or issue encountered)
 - Wave complete (all agents in wave done)
 
@@ -507,6 +508,7 @@ Use this checklist for every increment. Check off each item.
 - [ ] Non-trivial issues escalated to human during execution
 - [ ] Worktrees cleaned up after each wave
 - [ ] All PRs merged, main CI green
+- [ ] Integration tests (`integration.yml`) pass on main after merge — WAIT for this before proceeding
 
 ### Post-Agent Review
 - [ ] All agent final summaries read (all 9 points)

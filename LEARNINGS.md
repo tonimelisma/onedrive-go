@@ -201,3 +201,6 @@ When no config file exists, `Resolve()` creates a synthetic default profile (`Ac
 
 ### File extraction is zero-risk refactoring
 Extracting functions from oversized files (unknown.go from load.go, size.go from validate.go) is purely mechanical — move functions + their tests to new files, no logic changes. If tests pass before and after, the refactor is correct. Good way to reduce file size without introducing bugs.
+
+### Always wait for integration tests after merge
+Unit tests passing is NOT sufficient to declare an increment done. The `integration.yml` workflow runs `--profile personal` against real OneDrive — this caught a regression where `Resolve()` always created a synthetic profile named "default", breaking `--profile personal` in CI. **DOD now requires waiting for integration tests to pass on main before proceeding.** (PR #21 fix)
