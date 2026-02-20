@@ -839,3 +839,33 @@ func TestListChildrenByPath_Empty(t *testing.T) {
 
 	assert.Empty(t, items)
 }
+
+// --- Path validation tests ---
+
+func TestGetItemByPath_EmptyPath(t *testing.T) {
+	client := newTestClient(t, "http://localhost")
+	_, err := client.GetItemByPath(context.Background(), "d", "")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidPath)
+}
+
+func TestGetItemByPath_LeadingSlash(t *testing.T) {
+	client := newTestClient(t, "http://localhost")
+	_, err := client.GetItemByPath(context.Background(), "d", "/foo/bar.txt")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidPath)
+}
+
+func TestListChildrenByPath_EmptyPath(t *testing.T) {
+	client := newTestClient(t, "http://localhost")
+	_, err := client.ListChildrenByPath(context.Background(), "d", "")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidPath)
+}
+
+func TestListChildrenByPath_LeadingSlash(t *testing.T) {
+	client := newTestClient(t, "http://localhost")
+	_, err := client.ListChildrenByPath(context.Background(), "d", "/Documents")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidPath)
+}

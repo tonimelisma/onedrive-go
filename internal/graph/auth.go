@@ -43,6 +43,10 @@ type DeviceAuth struct {
 //  4. Saves the token to disk at tokenPath
 //  5. Returns a TokenSource for use with Client
 //
+// The returned TokenSource binds ctx to the underlying oauth2 token source.
+// ctx must outlive the TokenSource — if ctx is canceled, silent token refresh
+// will fail. Callers should pass context.Background() for long-lived sessions.
+//
 // The caller is responsible for computing tokenPath (via config.DriveTokenPath).
 // This decouples graph/ from config/ — graph/ has no config import.
 func Login(
@@ -107,6 +111,10 @@ func doLogin(
 // TokenSourceFromPath loads a saved token from the given path and returns a
 // TokenSource with auto-refresh and auto-persistence via OnTokenChange.
 // Returns ErrNotLoggedIn if no token file exists at the path.
+//
+// The returned TokenSource binds ctx to the underlying oauth2 token source.
+// ctx must outlive the TokenSource — if ctx is canceled, silent token refresh
+// will fail. Callers should pass context.Background() for long-lived sessions.
 //
 // The caller is responsible for computing tokenPath (via config.DriveTokenPath).
 // This decouples graph/ from config/ — graph/ has no config import.
@@ -269,6 +277,13 @@ func saveToken(path string, tok *oauth2.Token) error {
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		return fmt.Errorf("graph: writing token file: %w", err)
+	}
+
+	// Flush to stable storage before rename so a power loss between close and
+	// rename cannot leave an empty or partial token file at the final path.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("graph: syncing token file: %w", err)
 	}
 
 	if err := tmp.Close(); err != nil {

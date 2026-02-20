@@ -25,6 +25,21 @@ const (
 	maxValidYear = 2100
 )
 
+// ErrInvalidPath is returned when a remote path is empty or has a leading slash.
+// These indicate a caller bug — path-based API methods require a relative path
+// without leading slashes. For root, callers should use the ID-based methods instead.
+var ErrInvalidPath = errors.New("graph: invalid remote path (empty or has leading slash)")
+
+// validateRemotePath rejects empty paths and paths with a leading slash.
+// Both produce malformed Graph API URLs (e.g. "/drives/d/root:/:" or "/drives/d/root://foo:").
+func validateRemotePath(remotePath string) error {
+	if remotePath == "" || strings.HasPrefix(remotePath, "/") {
+		return ErrInvalidPath
+	}
+
+	return nil
+}
+
 // encodePathSegments URL-encodes each segment of a slash-separated path.
 // Characters like #, ?, %, and spaces are encoded per-segment so the
 // resulting path is safe for interpolation into Graph API URLs.
@@ -246,9 +261,14 @@ func (c *Client) GetItem(ctx context.Context, driveID, itemID string) (*Item, er
 }
 
 // GetItemByPath retrieves a drive item by its path relative to the drive root.
-// The path must NOT have a leading slash (caller strips it).
+// The path must NOT have a leading slash and must not be empty — these are caller
+// bugs that produce malformed API URLs. Returns ErrInvalidPath for both cases.
 // For root, callers should use GetItem with itemID "root" instead.
 func (c *Client) GetItemByPath(ctx context.Context, driveID, remotePath string) (*Item, error) {
+	if err := validateRemotePath(remotePath); err != nil {
+		return nil, err
+	}
+
 	c.logger.Info("getting item by path",
 		slog.String("drive_id", driveID),
 		slog.String("path", remotePath),
@@ -272,9 +292,14 @@ func (c *Client) ListChildren(ctx context.Context, driveID, parentID string) ([]
 }
 
 // ListChildrenByPath returns all children of a folder identified by path,
-// handling pagination automatically. The path must NOT have a leading slash.
+// handling pagination automatically. The path must NOT have a leading slash and
+// must not be empty — returns ErrInvalidPath for both cases.
 // For root, callers should use ListChildren with parentID "root" instead.
 func (c *Client) ListChildrenByPath(ctx context.Context, driveID, remotePath string) ([]Item, error) {
+	if err := validateRemotePath(remotePath); err != nil {
+		return nil, err
+	}
+
 	return c.fetchAllChildren(
 		ctx,
 		fmt.Sprintf("/drives/%s/root:/%s:/children?$top=%d", driveID, encodePathSegments(remotePath), listChildrenPageSize),

@@ -156,6 +156,9 @@ func applyDriveOverrides(resolved *ResolvedDrive, drive *Drive) {
 }
 
 // expandTilde replaces a leading "~/" with the user's home directory.
+// If os.UserHomeDir() fails, the path is returned unexpanded. This is safe
+// because ValidateResolved() catches invalid sync_dir paths downstream and
+// will report a clear error to the user.
 func expandTilde(path string) string {
 	if !strings.HasPrefix(path, "~/") {
 		return path

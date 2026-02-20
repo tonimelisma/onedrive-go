@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -158,7 +159,7 @@ func TestFindTokenFallback(t *testing.T) {
 	// that it returns the correct prefix based on which file exists.
 
 	// With no token files on disk, should default to personal.
-	got := findTokenFallback("nobody@example.com")
+	got := findTokenFallback("nobody@example.com", slog.Default())
 	assert.Equal(t, "personal:nobody@example.com", got)
 }
 
@@ -178,7 +179,7 @@ func TestFindTokenFallback_PersonalExists(t *testing.T) {
 	require.NoError(t, os.WriteFile(personalPath, []byte("{}"), 0o600))
 	t.Cleanup(func() { os.Remove(personalPath) })
 
-	got := findTokenFallback("test-fallback@example.com")
+	got := findTokenFallback("test-fallback@example.com", slog.Default())
 	assert.Equal(t, personalID, got)
 }
 
@@ -197,7 +198,7 @@ func TestFindTokenFallback_BusinessExists(t *testing.T) {
 	require.NoError(t, os.WriteFile(businessPath, []byte("{}"), 0o600))
 	t.Cleanup(func() { os.Remove(businessPath) })
 
-	got := findTokenFallback("test-fallback-biz@example.com")
+	got := findTokenFallback("test-fallback-biz@example.com", slog.Default())
 	assert.Equal(t, businessID, got)
 }
 

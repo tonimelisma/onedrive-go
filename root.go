@@ -28,6 +28,10 @@ var (
 // resolvedCfg holds the effective configuration loaded by PersistentPreRunE.
 // It is available to all subcommands after the root pre-run phase completes.
 // Auth commands and account management commands handle config loading themselves.
+//
+// Thread safety: this global is safe because the CLI is single-threaded —
+// PersistentPreRunE writes it once, then RunE reads it. If the sync engine
+// ever runs commands concurrently, this must be refactored (see B-036).
 var resolvedCfg *config.ResolvedDrive
 
 // httpClientTimeout is the default timeout for HTTP requests.
@@ -104,6 +108,11 @@ func newRootCmd() *cobra.Command {
 // loadConfig resolves the effective configuration from the four-layer override
 // chain and stores the result in resolvedCfg for use by subcommands.
 func loadConfig(cmd *cobra.Command) error {
+	// Bootstrap logger derived from CLI flags only (resolvedCfg doesn't exist yet).
+	// Logs config resolution inputs and outputs at Debug level so --verbose
+	// reveals what config path, drive selector, and env overrides are in play.
+	logger := bootstrapLogger()
+
 	cli := config.CLIOverrides{
 		ConfigPath: flagConfigPath,
 	}
@@ -115,14 +124,43 @@ func loadConfig(cmd *cobra.Command) error {
 
 	env := config.ReadEnvOverrides()
 
+	logger.Debug("resolving config",
+		slog.String("config_path", cli.ConfigPath),
+		slog.String("cli_drive", cli.Drive),
+		slog.String("env_config", env.ConfigPath),
+		slog.String("env_drive", env.Drive),
+	)
+
 	resolved, err := config.ResolveDrive(env, cli)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
+	logger.Debug("config resolved",
+		slog.String("canonical_id", resolved.CanonicalID),
+		slog.String("sync_dir", resolved.SyncDir),
+		slog.String("drive_id", resolved.DriveID),
+	)
+
 	resolvedCfg = resolved
 
 	return nil
+}
+
+// bootstrapLogger creates a minimal logger from CLI flags before resolvedCfg
+// exists. Only --verbose and --quiet are considered (no config-file log level).
+func bootstrapLogger() *slog.Logger {
+	level := slog.LevelInfo
+
+	if flagVerbose {
+		level = slog.LevelDebug
+	}
+
+	if flagQuiet {
+		level = slog.LevelError
+	}
+
+	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 }
 
 // buildLogger creates an slog.Logger configured by the resolved config and

@@ -143,6 +143,8 @@ func clientAndDrive(ctx context.Context) (*graph.Client, string, *slog.Logger, e
 
 // resolveItem resolves a remote path to an Item.
 // For root (""), uses GetItem with "root". Otherwise uses GetItemByPath.
+// Note: "/" normalizes to "" via cleanRemotePath, so callers can pass either
+// "/" or "" to mean root. This is intentional — the CLI defaults to "/".
 func resolveItem(ctx context.Context, client *graph.Client, driveID, remotePath string) (*graph.Item, error) {
 	clean := cleanRemotePath(remotePath)
 	if clean == "" {
