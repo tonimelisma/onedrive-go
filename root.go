@@ -25,8 +25,20 @@ var (
 
 // resolvedCfg holds the effective configuration loaded by PersistentPreRunE.
 // It is available to all subcommands after the root pre-run phase completes.
-// Auth commands (login, logout, whoami) skip config loading and use --drive directly.
+// Auth commands and account management commands handle config loading themselves.
 var resolvedCfg *config.ResolvedDrive
+
+// skipConfigCommands lists commands that handle config loading themselves,
+// either because they bootstrap config (login) or because they load config
+// directly to avoid the four-layer resolution (logout, whoami, status, drive).
+var skipConfigCommands = map[string]bool{
+	"login":  true,
+	"logout": true,
+	"whoami": true,
+	"status": true,
+	"add":    true,
+	"remove": true,
+}
 
 // newRootCmd builds and returns the fully-assembled root command with all
 // subcommands registered. Called once from main().
@@ -39,17 +51,16 @@ func newRootCmd() *cobra.Command {
 		// Silence Cobra's default error/usage printing — we handle it ourselves.
 		SilenceErrors: true,
 		SilenceUsage:  true,
-		// PersistentPreRunE loads configuration before every command. Auth commands
-		// (login, logout, whoami) skip config loading because they work with --drive
-		// directly — solving the bootstrap problem where login must work before any
-		// config file or drive section exists.
+		// PersistentPreRunE loads configuration before every command. Auth and
+		// account management commands skip config loading because they handle
+		// config access directly. Login must bootstrap config before it exists;
+		// logout, whoami, status, and drive subcommands load config themselves.
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
-			switch cmd.Name() {
-			case "login", "logout", "whoami":
+			if skipConfigCommands[cmd.Name()] {
 				return nil
-			default:
-				return loadConfig(cmd)
 			}
+
+			return loadConfig(cmd)
 		},
 	}
 
@@ -64,6 +75,8 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newLoginCmd())
 	cmd.AddCommand(newLogoutCmd())
 	cmd.AddCommand(newWhoamiCmd())
+	cmd.AddCommand(newStatusCmd())
+	cmd.AddCommand(newDriveCmd())
 	cmd.AddCommand(newLsCmd())
 	cmd.AddCommand(newGetCmd())
 	cmd.AddCommand(newPutCmd())

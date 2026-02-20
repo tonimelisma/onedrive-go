@@ -110,7 +110,7 @@ func TestBuildLogger_QuietOverrides(t *testing.T) {
 func TestNewRootCmd_Subcommands(t *testing.T) {
 	cmd := newRootCmd()
 
-	expected := []string{"login", "logout", "whoami", "ls", "get", "put", "rm", "mkdir", "stat"}
+	expected := []string{"login", "logout", "whoami", "status", "drive", "ls", "get", "put", "rm", "mkdir", "stat"}
 	for _, name := range expected {
 		found := false
 
@@ -139,16 +139,56 @@ func TestNewRootCmd_PersistentFlags(t *testing.T) {
 func TestNewRootCmd_AuthSkipsConfig(t *testing.T) {
 	cmd := newRootCmd()
 
-	// Auth commands should pass through PersistentPreRunE without error,
-	// because they skip config loading entirely.
-	authCmds := []string{"login", "logout", "whoami"}
-	for _, name := range authCmds {
+	// Auth and account management commands should pass through PersistentPreRunE
+	// without error, because they skip the four-layer config resolution.
+	skipCmds := []string{"login", "logout", "whoami", "status"}
+	for _, name := range skipCmds {
 		t.Run(name, func(t *testing.T) {
 			sub, _, err := cmd.Find([]string{name})
 			require.NoError(t, err)
 
 			err = cmd.PersistentPreRunE(sub, nil)
 			assert.NoError(t, err, "%s should skip config loading", name)
+		})
+	}
+}
+
+func TestNewRootCmd_DriveSubcommands(t *testing.T) {
+	cmd := newRootCmd()
+
+	// Find the "drive" command and verify its subcommands.
+	driveSub, _, err := cmd.Find([]string{"drive"})
+	require.NoError(t, err)
+	require.Equal(t, "drive", driveSub.Name())
+
+	expectedSubs := []string{"add", "remove"}
+	for _, name := range expectedSubs {
+		found := false
+
+		for _, sub := range driveSub.Commands() {
+			if sub.Name() == name {
+				found = true
+
+				break
+			}
+		}
+
+		assert.True(t, found, "expected drive subcommand %q not found", name)
+	}
+}
+
+func TestNewRootCmd_DriveSubcommandsSkipConfig(t *testing.T) {
+	cmd := newRootCmd()
+
+	// drive add and drive remove should skip config loading via PersistentPreRunE.
+	driveSubCmds := []string{"add", "remove"}
+	for _, name := range driveSubCmds {
+		t.Run(name, func(t *testing.T) {
+			sub, _, err := cmd.Find([]string{"drive", name})
+			require.NoError(t, err)
+
+			err = cmd.PersistentPreRunE(sub, nil)
+			assert.NoError(t, err, "drive %s should skip config loading", name)
 		})
 	}
 }
