@@ -74,7 +74,7 @@ Currently: Working CLI OneDrive client with discovery-based auth, account manage
 | [docs/tier1-research/](docs/tier1-research/) | 16 Tier 1 research docs (API bugs, edge cases, reference impl analysis) |
 | [docs/parallel-agents.md](docs/parallel-agents.md) | Parallel agent worktree workflow guide |
 | [docs/orchestration.md](docs/orchestration.md) | Full orchestration workflow: planning, agent prompts, review, wrap-up |
-| [docs/metrics.md](docs/metrics.md) | Quantitative metrics tracked per increment (LOC, coverage, scorecards) |
+| [docs/metrics.md](docs/metrics.md) | Quantitative metrics tracked per increment (coverage, scorecards) |
 
 ## Orchestration — Planning, Agents, Wrap-Up
 

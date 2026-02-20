@@ -78,7 +78,7 @@ Every plan document must include:
 | Non-Goals | What this increment deliberately does NOT include and why |
 | Key Decisions | Trade-offs made, alternatives considered, human's choices |
 | Implementation Steps | File-level detail per agent |
-| Files Summary | Table: file, action, estimated LOC |
+| Files Summary | Table: file, action (create/modify/delete) |
 | Parallelization Strategy | Waves, agents, worktrees, file conflict matrix |
 | Risk Register | Known risks, mitigations, accepted risks (with human acknowledgment) |
 | Verification | Commands to validate the complete increment |
@@ -138,7 +138,7 @@ if you discover a dependency on another agent's work.]
 - Base: main
 
 ### Implementation Steps
-[Detailed steps with file paths, function signatures, expected LOC.
+[Detailed steps with file paths, function signatures.
 Be specific enough that the agent can work autonomously.]
 
 ### Files You Will Create/Modify
@@ -188,8 +188,8 @@ to understand your reasoning after your context expires.
 #### C. Final Summary Report
 Your final message back to the orchestrator MUST include ALL of:
 
-1. **What was built**: Files created/modified, LOC counts, test
-   counts, new dependencies added
+1. **What was built**: Files created/modified, test counts,
+   new dependencies added
 2. **Quality metrics**: Coverage % (before and after), lint status,
    build status
 3. **Confidence ratings**: Rate your confidence 1-5 for each major
@@ -229,11 +229,9 @@ Launching [N] agents in Wave [X]:
 
 Agent A ([branch]): [one-line description]
   Files: [list]
-  Estimated: [LOC] new code
 
 Agent B ([branch]): [one-line description]
   Files: [list]
-  Estimated: [LOC] new code
 
 File conflicts: None (safe to parallelize)
 ```
@@ -356,7 +354,7 @@ Record every top-up fix — the human needs to see what was changed and why.
 - Merge all agent LEARNINGS.md entries (deduplicate, clarify, correct)
 - Add orchestrator's own observations from the code review
 - Update BACKLOG.md: close completed items, add new discoveries (with IDs)
-- Update roadmap.md: mark increments as done with actuals (LOC, coverage)
+- Update roadmap.md: mark increments as done with actuals (coverage)
 
 ### 3.5 Update Metrics
 
@@ -368,6 +366,21 @@ Update `docs/metrics.md` with data from this increment (see Metrics section belo
 - Package layout (new packages, coverage numbers)
 - Any new conventions, linter patterns, or test patterns discovered
 - Documentation index (add/remove links as needed)
+
+### 3.7 Git Cleanup (MANDATORY)
+
+After all PRs are merged, the repo must be fully clean. This is not optional.
+
+1. **Delete merged local branches**: `git branch -D <branch>` for every branch except `main`
+2. **Delete merged remote branches**: `git push origin --delete <branch>` for every merged branch
+3. **Remove worktrees**: `git worktree remove <path>` for every worktree except main
+4. **Prune remote refs**: `git fetch --prune`
+5. **Verify no stashes**: `git stash list` (must be empty)
+6. **Remove coordination files**: Delete PLAN_LEFT.md or any other temporary coordination files
+7. **Verify no open PRs**: `gh pr list --state open` (must be empty)
+8. **Verify no orphaned directories**: Check for `onedrive-go-*` directories on disk
+
+Run the DOD Cleanup Check (see CLAUDE.md) and confirm the output matches expectations before declaring the increment done.
 
 ---
 
@@ -439,7 +452,7 @@ For each file created or significantly modified in this increment:
 1. **What went well** — specific examples
 2. **What went wrong** — specific examples with root causes
 3. **What to change** — concrete actions with owners (not "we should try to...")
-4. **Metrics comparison** — planned vs actual LOC, coverage change, deviation count
+4. **Metrics comparison** — coverage change, deviation count
 
 ### 4.8 Re-Envisioning Check
 
@@ -481,9 +494,6 @@ Maintained in `docs/metrics.md`. Updated after every increment.
 
 | Metric | Description |
 |--------|-------------|
-| **Planned LOC** | Total estimated LOC from the plan |
-| **Actual LOC** | Total LOC produced (new + modified) |
-| **Estimation accuracy** | Actual / Planned as percentage |
 | **Agent count** | Number of subagents used |
 | **Wave count** | Number of sequential waves |
 | **PR count** | Number of PRs created and merged |
@@ -498,8 +508,6 @@ Maintained in `docs/metrics.md`. Updated after every increment.
 
 | Metric | Description |
 |--------|-------------|
-| **Planned LOC** | Estimated LOC for this agent |
-| **Actual LOC** | Actual LOC produced |
 | **Test count** | Number of test cases written |
 | **Coverage** | Package-scoped coverage % |
 | **Scorecard avg** | Average of 7 scorecard ratings (1-5) |
@@ -559,7 +567,8 @@ Use this checklist for every increment. Check off each item.
 - [ ] Orchestrator self-assessment completed
 - [ ] Code changes summarized
 - [ ] Retrospective: well / wrong / change with specifics
-- [ ] Metrics comparison: planned vs actual
+- [ ] Metrics comparison: coverage change, deviation count
 - [ ] Re-envisioning check performed (architecture, roadmap, process, tests, debt)
 - [ ] Action items captured in BACKLOG with IDs
 - [ ] Changelog entry written
+- [ ] **Git cleanup**: merged branches deleted (local+remote), worktrees removed, refs pruned, no stashes, no open PRs, no orphaned dirs

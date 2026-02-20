@@ -1,6 +1,6 @@
 # Increment Metrics
 
-Tracking quantitative metrics across increments to spot trends and calibrate planning.
+Tracking quantitative metrics across increments to spot trends and improve process.
 
 ---
 
@@ -12,9 +12,6 @@ Tracking quantitative metrics across increments to spot trends and calibrate pla
 
 | Metric | Value |
 |--------|-------|
-| **Planned LOC** | ~1180 |
-| **Actual LOC** | ~1170 (root.go 73, auth.go 166, format.go 80, format_test.go 111, files.go 493, e2e_test.go 188, items.go +60) |
-| **Estimation accuracy** | 99% |
 | **Agent count** | 3 |
 | **Wave count** | 2 (Wave 1: 2 parallel, Wave 2: 1 sequential) |
 | **PR count** | 3 (#15, #16, #17) |
@@ -27,11 +24,11 @@ Tracking quantitative metrics across increments to spot trends and calibrate pla
 
 #### Per-Agent Breakdown
 
-| Agent | Planned LOC | Actual LOC | Tests | Coverage | Deviations | LEARNINGS |
-|-------|:-----------:|:----------:|:-----:|:--------:|:----------:|:---------:|
-| A (graph paths) | 120 | ~120 | 5 | 92.3% | 1 (dupl helpers) | 0 (protocol gap) |
-| B (CLI auth) | 600 | 430 | 6 | n/a (root pkg) | 2 (gochecknoinits, mousetrap) | 0 (protocol gap) |
-| C (file ops + E2E) | 460 | 620 | 9 | n/a (root pkg + e2e) | 0 | 0 (protocol gap) |
+| Agent | Tests | Coverage | Deviations | LEARNINGS |
+|-------|:-----:|:--------:|:----------:|:---------:|
+| A (graph paths) | 5 | 92.3% | 1 (dupl helpers) | 0 (protocol gap) |
+| B (CLI auth) | 6 | n/a (root pkg) | 2 (gochecknoinits, mousetrap) | 0 (protocol gap) |
+| C (file ops + E2E) | 9 | n/a (root pkg + e2e) | 0 | 0 (protocol gap) |
 
 #### Agent Scorecards (Retrospective — assessed after the fact)
 
@@ -75,12 +72,12 @@ Tracking quantitative metrics across increments to spot trends and calibrate pla
 
 ## Trend Summary
 
-| Increment | Planned | Actual | Accuracy | Agents | Top-ups | Deviations | Coverage Δ |
-|-----------|:-------:|:------:|:--------:|:------:|:-------:|:----------:|:----------:|
-| Phase 1 (1.7+1.8+2.2) | 1180 | 1170 | 99% | 3 | 0* | 3 | +0.4% |
-| Phase 3 (3.3) | 550 | 550 | 100% | 2 | 0 | 1 | +0.8% (config) |
-| Phase 3.5 (3.5.2) | 3633 | 4248 | 85% | 4 | 7 | 3 | -1.6% (total) |
-| Phase 4.1 (3.5.2+4.1) | 1900 | 3049 | 62% | 6 | 2 | 2 | -2.5% (total) |
+| Increment | Agents | Top-ups | Deviations | Coverage Δ |
+|-----------|:------:|:-------:|:----------:|:----------:|
+| Phase 1 (1.7+1.8+2.2) | 3 | 0* | 3 | +0.4% |
+| Phase 3 (3.3) | 2 | 0 | 1 | +0.8% (config) |
+| Phase 3.5 (3.5.2) | 4 | 7 | 3 | -1.6% (total) |
+| Phase 4.1 (3.5.2+4.1) | 6 | 2 | 2 | -2.5% (total) |
 
 *\* Review not performed — process gap. Subsequent increments will have accurate top-up counts.*
 
@@ -90,16 +87,13 @@ Tracking quantitative metrics across increments to spot trends and calibrate pla
 
 | Metric | Value |
 |--------|-------|
-| **Planned LOC** | ~1,900 (850 prod, 1050 test) |
-| **Actual LOC** | ~3,049 (21 files, +3,049 ins, -85 del across 6 PRs) |
-| **Estimation accuracy** | ~62% (significantly underestimated config write + account discovery) |
 | **Agent count** | 6 (A: graph-cli-cleanup, B: CLI tests, C: graph org, D: config write, E: account discovery, F: e2e improvements) |
 | **Wave count** | 3 (Wave 0: doc fixes, Wave 1: A+B+D parallel, Wave 2: C+E+F) |
 | **PR count** | 6 (#26, #27, #28, #32, #34, #36) + 1 orchestrator top-up commit |
 | **Coverage before** | 71.8% (total), 95.1% (config), 6.7% (root pkg) |
 | **Coverage after** | 69.3% (total), 94.8% (config), 26.7% (root pkg) |
 | **Top-up fix count** | 2 (typo in test name, stale login hint in error message) |
-| **Agent deviation count** | 2 (Agent D: 1104 LOC vs 500 planned; Agent E: 1229 LOC vs 500 planned) |
+| **Agent deviation count** | 2 (Agent D: larger scope than expected; Agent E: larger scope than expected) |
 | **CI failures** | 0 (all 6 PRs passed on first try) |
 | **Wall-clock time** | ~3 hours (across 2 sessions, including waiting for other orchestrator) |
 
@@ -107,14 +101,14 @@ Tracking quantitative metrics across increments to spot trends and calibrate pla
 
 #### Per-Agent Breakdown
 
-| Agent | Planned LOC | Actual LOC | Tests | Coverage | Deviations | LEARNINGS |
-|-------|:-----------:|:----------:|:-----:|:--------:|:----------:|:---------:|
-| A (graph-cli-cleanup) | 30 | 35 (+35, -11) | 0 (renamed 1) | 92.9% (graph) | 0 | 0 |
-| B (CLI tests) | 295 | 472 | 15 | 35.0% (root) | 0 | Section 13 |
-| C (graph organization) | 60 | 104 | 3 | 92.9% (graph) | 0 | 0 |
-| D (config write) | 500 | 1104 | 47 | 94.8% (config) | 1 (typo in test name) | Section 14 |
-| E (account discovery) | 910 | 1229 (+1229, -73) | 22 | 27.2% (root) | 1 (no files.go mod) | 0 |
-| F (e2e improvements) | 105 | 105 | 7 | N/A (e2e) | 0 | 0 |
+| Agent | Tests | Coverage | Deviations | LEARNINGS |
+|-------|:-----:|:--------:|:----------:|:---------:|
+| A (graph-cli-cleanup) | 0 (renamed 1) | 92.9% (graph) | 0 | 0 |
+| B (CLI tests) | 15 | 35.0% (root) | 0 | Section 13 |
+| C (graph organization) | 3 | 92.9% (graph) | 0 | 0 |
+| D (config write) | 47 | 94.8% (config) | 1 (typo in test name) | Section 14 |
+| E (account discovery) | 22 | 27.2% (root) | 1 (no files.go mod) | 0 |
+| F (e2e improvements) | 7 | N/A (e2e) | 0 | 0 |
 
 #### Agent Scorecards
 
@@ -163,7 +157,7 @@ Tracking quantitative metrics across increments to spot trends and calibrate pla
 | Code style | 5 | Clean line-based text manipulation, no TOML round-tripping |
 | Logging | 5 | All public functions log with slog structured fields |
 | Documentation | 4 | LEARNINGS section 14, good godoc |
-| Plan adherence | 4 | 1104 LOC vs 500 planned (more thorough than expected) |
+| Plan adherence | 4 | More thorough than expected |
 | Communication | 4 | Good summary with test details |
 
 **Agent E (account discovery)**
@@ -175,7 +169,7 @@ Tracking quantitative metrics across increments to spot trends and calibrate pla
 | Code style | 5 | Excellent decomposition: small helpers, clear flow |
 | Logging | 5 | Every step logged, every error path logged |
 | Documentation | 3 | No LEARNINGS update (large scope deserved one) |
-| Plan adherence | 4 | 1229 LOC vs 500 planned; didn't modify files.go (noted stale error) |
+| Plan adherence | 4 | Didn't modify files.go (noted stale error) |
 | Communication | 5 | Full 9-point summary with risks and deviations |
 
 **Agent F (e2e improvements)**
@@ -187,14 +181,14 @@ Tracking quantitative metrics across increments to spot trends and calibrate pla
 | Code style | 5 | Follows existing e2e patterns exactly |
 | Logging | N/A | Test-only agent |
 | Documentation | 3 | No LEARNINGS update (small scope) |
-| Plan adherence | 5 | Zero deviations, exact LOC match |
+| Plan adherence | 5 | Zero deviations |
 | Communication | 5 | Full 9-point summary with decision log |
 
 #### Orchestrator Self-Assessment
 
 | Criterion | Rating | Notes |
 |-----------|:------:|-------|
-| Planning quality | 4 | Good wave structure but LOC estimates off by 38% |
+| Planning quality | 4 | Good wave structure, clear agent separation |
 | Agent prompt clarity | 5 | All 6 agents executed with minimal deviations |
 | Review thoroughness | 4 | Line-by-line review of all files; found 2 top-up items |
 | Top-up effectiveness | 5 | Both issues fixed promptly (typo, stale error message) |
@@ -207,9 +201,6 @@ Tracking quantitative metrics across increments to spot trends and calibrate pla
 
 | Metric | Value |
 |--------|-------|
-| **Planned LOC** | ~3,633 |
-| **Actual LOC** | ~4,248 (32 files changed, 1917 ins, 2331 del) |
-| **Estimation accuracy** | ~85% (underestimated doc updates and LEARNINGS) |
 | **Agent count** | 4 (A: docs prd+config, B: docs roadmap+5, C: config rewrite, D: CLI+graph+CI) |
 | **Wave count** | 2 (Wave 1: A+B+C parallel, Wave 2: D sequential after C) |
 | **PR count** | 1 (#23, combined config+CLI — PR #22 closed, absorbed into #23) |
@@ -224,12 +215,12 @@ Tracking quantitative metrics across increments to spot trends and calibrate pla
 
 #### Per-Agent Breakdown
 
-| Agent | Planned LOC | Actual LOC | Tests | Coverage | Deviations | LEARNINGS |
-|-------|:-----------:|:----------:|:-----:|:--------:|:----------:|:---------:|
-| A (docs: prd+config) | ~500 | ~1046 (355+691) | 0 | N/A | 1 (heredoc backtick workaround) | 0 |
-| B (docs: roadmap+5) | ~300 | ~184 (121 ins, 63 del) | 0 | N/A | 0 | 0 |
-| C (config rewrite) | ~3,633 | ~3,680 (+1593, -2087 net) | 117 | 95.1% | 1 (staticcheck QF1008) | Section 11 |
-| D (CLI+graph+CI) | ~1,200 | ~496 (+270, -226) | N/A (root pkg) | 71.8% total | 1 (no --dry-run) | Section 12 |
+| Agent | Tests | Coverage | Deviations | LEARNINGS |
+|-------|:-----:|:--------:|:----------:|:---------:|
+| A (docs: prd+config) | 0 | N/A | 1 (heredoc backtick workaround) | 0 |
+| B (docs: roadmap+5) | 0 | N/A | 0 | 0 |
+| C (config rewrite) | 117 | 95.1% | 1 (staticcheck QF1008) | Section 11 |
+| D (CLI+graph+CI) | N/A (root pkg) | 71.8% total | 1 (no --dry-run) | Section 12 |
 
 #### Agent Scorecards
 
@@ -298,9 +289,6 @@ Tracking quantitative metrics across increments to spot trends and calibrate pla
 
 | Metric | Value |
 |--------|-------|
-| **Planned LOC** | ~550 |
-| **Actual LOC** | ~550 (Wave 1: ~350 new, Wave 2: ~200 new, plus ~340 moved via file extraction) |
-| **Estimation accuracy** | ~100% |
 | **Agent count** | 2 (sequential waves) |
 | **Wave count** | 2 (Wave 1: config enhance, Wave 2: CLI integration) |
 | **PR count** | 2 (#19, #20) |
@@ -313,10 +301,10 @@ Tracking quantitative metrics across increments to spot trends and calibrate pla
 
 #### Per-Agent Breakdown
 
-| Agent | Planned LOC | Actual LOC | Tests | Coverage | Deviations | LEARNINGS |
-|-------|:-----------:|:----------:|:-----:|:--------:|:----------:|:---------:|
-| Wave 1 (Config enhance) | 350 | ~350 | ~15 | 95.6% (config) | 1 (errWriter) | 0 |
-| Wave 2 (CLI integration) | 200 | ~200 | 0 (manual) | n/a (root pkg) | 0 | 0 |
+| Agent | Tests | Coverage | Deviations | LEARNINGS |
+|-------|:-----:|:--------:|:----------:|:---------:|
+| Wave 1 (Config enhance) | ~15 | 95.6% (config) | 1 (errWriter) | 0 |
+| Wave 2 (CLI integration) | 0 (manual) | n/a (root pkg) | 0 | 0 |
 
 #### Agent Scorecards
 
