@@ -139,12 +139,6 @@ func TokenSourceFromPath(ctx context.Context, tokenPath string, logger *slog.Log
 // The caller is responsible for computing tokenPath (via config.DriveTokenPath).
 // This decouples graph/ from config/ — graph/ has no config import.
 func Logout(tokenPath string, logger *slog.Logger) error {
-	return logout(tokenPath, logger)
-}
-
-// logout removes the token file at the given path.
-// Returns nil if the file does not exist (idempotent).
-func logout(tokenPath string, logger *slog.Logger) error {
 	err := os.Remove(tokenPath)
 	if errors.Is(err, fs.ErrNotExist) {
 		logger.Info("logout: no token file to remove (already logged out)",
