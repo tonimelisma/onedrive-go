@@ -271,6 +271,62 @@ func TestToDrive_NilOwner(t *testing.T) {
 	assert.Equal(t, int64(200), drive.QuotaTotal)
 }
 
+// --- Organization tests ---
+
+func TestOrganization_Business(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, "/me/organization", r.URL.Path)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{
+			"value": [
+				{
+					"displayName": "Contoso Ltd"
+				}
+			]
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	org, err := client.Organization(context.Background())
+	require.NoError(t, err)
+
+	assert.Equal(t, "Contoso Ltd", org.DisplayName)
+}
+
+func TestOrganization_Personal(t *testing.T) {
+	// Personal accounts return an empty array from /me/organization.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"value": []}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	org, err := client.Organization(context.Background())
+	require.NoError(t, err)
+
+	assert.Empty(t, org.DisplayName)
+}
+
+func TestOrganization_Error(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("request-id", "req-org-401")
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `{"error":{"code":"InvalidAuthenticationToken"}}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.Organization(context.Background())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrUnauthorized)
+}
+
 func TestToDrive_NilQuota(t *testing.T) {
 	dr := &driveResponse{
 		ID:        "d2",
