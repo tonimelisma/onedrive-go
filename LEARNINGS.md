@@ -369,3 +369,28 @@ The `maxDeltaPages` guard needed to be overridable in tests (testing 10000 HTTP 
 - **Suggested improvements**: None specific to graph package.
 - **Cross-package concerns**: URL encoding fix affects CLI callers that construct paths for `GetItemByPath`/`ListChildrenByPath` — they should not pre-encode paths now (double-encoding). Currently CLI passes raw user input which is correct.
 - **Code smells noticed**: The `doRetry` function was already at the lint limit before this change — any future additions will require further decomposition. The `rewindBody` seek-error branch is practically untestable (no easy way to make `bytes.NewReader.Seek` fail).
+
+---
+
+## 18. CLI Command Hardening (Foundation Hardening Increment)
+### SplitN limit must account for SharePoint canonical IDs
+SharePoint canonical IDs have the form `"sharepoint:alice@contoso.com:marketing:Docs"` — four colon-separated segments. Using `SplitN(id, ":", 2)` incorrectly yields `"alice@contoso.com:marketing:Docs"` as the email. Fix: use limit 3, which splits into `["sharepoint", "alice@contoso.com", "marketing:Docs"]`, making `parts[1]` always the clean email. This was a data-loss bug — SharePoint drives were invisible to account grouping in `drivesForAccount`, `groupDrivesByAccount`, and `uniqueAccounts`.
+
+### mnd linter ignores small numbers (0-3, common HTTP codes)
+The `.golangci.yml` `ignored-numbers` list includes `'2'`, so `if len(parts) < 2` does not need `//nolint:mnd`. The `nolintlint` linter (which checks nolint directives are actually used) catches unnecessary directives.
+
+### cmd.CommandPath() is safer than cmd.Name() for skip lists
+`cmd.Name()` returns just the leaf command name (e.g., `"add"`), which risks collisions with future subcommands under different parents (e.g., `sync add` vs. `drive add`). `cmd.CommandPath()` returns the full path (e.g., `"onedrive-go drive add"`), making skip list entries explicit and collision-proof.
+
+### Dead struct fields create false expectations
+`statusAccount.OrgName` was declared and conditionally checked in `printStatusText`, but never populated anywhere. This created the illusion that org names would appear in status output. Removing dead fields prevents future contributors from writing code that depends on always-empty values.
+
+### Upload session cancellation on chunk failure
+When `UploadChunk` fails, the upload session should be canceled to free server-side resources. Use `context.Background()` for the cancel call since the original context may already be done. This is a best-effort operation — log but don't fail on cancel errors.
+
+- **Pivots**: None. All seven fixes (C1-C7) were implemented as planned. C8 was correctly skipped per plan.
+- **Issues found**: The `//nolint:mnd` directive on `< 2` comparisons was unnecessary because `2` is in the ignored-numbers list. Caught by `nolintlint`.
+- **Linter surprises**: `nolintlint` catching unnecessary `//nolint:mnd` — reminder to check the ignored-numbers list before adding nolint directives.
+- **Suggested improvements**: None outside scope.
+- **Cross-package concerns**: C8 (DefaultSyncDir signature change) depends on Agent B. The orchestrator will handle the call site update in top-up work after Agent B merges.
+- **Code smells noticed**: (1) `drive.go` previously imported `errors` and `os` only for the duplicated purge logic — removing the duplication also cleaned up imports. (2) The `findTokenFallback` function probes the filesystem, which makes it harder to test in isolation without creating actual files. An interface-based approach would be cleaner but over-engineered for this use case.

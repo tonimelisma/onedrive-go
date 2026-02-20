@@ -1,10 +1,8 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 
 	"github.com/spf13/cobra"
 
@@ -181,19 +179,8 @@ func pauseDrive(cfgPath, driveID, syncDir string) error {
 // purgeDrive deletes the config section and state database for a drive.
 // The token is NOT deleted here — it may be shared with other drives (SharePoint).
 func purgeDrive(cfgPath, driveID string, logger *slog.Logger) error {
-	// Delete state database if it exists.
-	statePath := config.DriveStatePath(driveID)
-	if statePath != "" {
-		if err := os.Remove(statePath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			logger.Warn("failed to remove state database", "path", statePath, "error", err)
-		} else if err == nil {
-			logger.Info("removed state database", "path", statePath)
-		}
-	}
-
-	// Delete config section.
-	if err := config.DeleteDriveSection(cfgPath, driveID); err != nil {
-		return fmt.Errorf("deleting drive section: %w", err)
+	if err := purgeSingleDrive(cfgPath, driveID, logger); err != nil {
+		return err
 	}
 
 	fmt.Printf("Purged config and state for %s.\n", driveID)

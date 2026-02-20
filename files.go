@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -120,7 +119,7 @@ func clientAndDrive(ctx context.Context) (*graph.Client, string, *slog.Logger, e
 		return nil, "", nil, err
 	}
 
-	client := graph.NewClient(graph.DefaultBaseURL, http.DefaultClient, ts, logger)
+	client := graph.NewClient(graph.DefaultBaseURL, defaultHTTPClient(), ts, logger)
 
 	// Skip the Drives() API call when the drive ID is already known from config.
 	if resolvedCfg.DriveID != "" {
@@ -386,9 +385,16 @@ func doChunkedUpload(
 
 		chunk := io.NewSectionReader(r, offset, length)
 
-		_, err := client.UploadChunk(ctx, session, chunk, offset, length, total)
-		if err != nil {
-			return err
+		_, chunkErr := client.UploadChunk(ctx, session, chunk, offset, length, total)
+		if chunkErr != nil {
+			// Best-effort cancel — use background context since the original may be done.
+			cancelCtx := context.Background()
+			if cancelErr := client.CancelUploadSession(cancelCtx, session); cancelErr != nil {
+				logger.Warn("failed to cancel upload session after chunk error",
+					"error", cancelErr.Error())
+			}
+
+			return chunkErr
 		}
 
 		offset += length
