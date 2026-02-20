@@ -64,3 +64,11 @@ type UploadSession struct {
 	UploadURL      string
 	ExpirationTime time.Time
 }
+
+// UploadSessionStatus represents the current state of a resumable upload session.
+// Returned by QueryUploadSession to determine which byte ranges have been accepted.
+type UploadSessionStatus struct {
+	UploadURL          string
+	ExpirationTime     time.Time
+	NextExpectedRanges []string // e.g., ["0-", "327680-"]
+}
