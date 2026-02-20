@@ -3,7 +3,6 @@ package sync
 import (
 	"context"
 	"database/sql"
-	"log/slog"
 	"testing"
 	"time"
 
@@ -11,23 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// testLogger creates a debug-level logger that writes to t.Log for CI visibility.
-func testLogger(t *testing.T) *slog.Logger {
-	t.Helper()
-
-	return slog.New(slog.NewTextHandler(
-		testWriter{t}, &slog.HandlerOptions{Level: slog.LevelDebug}))
-}
-
-// testWriter adapts testing.T to io.Writer for slog.
-type testWriter struct{ t *testing.T }
-
-func (w testWriter) Write(p []byte) (int, error) {
-	w.t.Log(string(p))
-	return len(p), nil
-}
-
 // newTestStore creates an in-memory SQLiteStore for testing.
+// Uses testLogger and testWriter from delta_test.go (same package).
 func newTestStore(t *testing.T) *SQLiteStore {
 	t.Helper()
 
@@ -96,16 +80,16 @@ func TestGetItem(t *testing.T) {
 	})
 
 	t.Run("found after upsert", func(t *testing.T) {
-		item := makeTestItem("d1", "item1", "d1", "root1", "file.txt", ItemTypeFile)
-		item.Path = "file.txt"
+		item := makeTestItem("d1", "item1", "d1", "root1", "testfile.txt", ItemTypeFile)
+		item.Path = "testfile.txt"
 		item.Size = Int64Ptr(1024)
 		item.QuickXorHash = "abc123"
 		require.NoError(t, store.UpsertItem(ctx, item))
 
 		got, err := store.GetItem(ctx, "d1", "item1")
 		require.NoError(t, err)
-		assert.Equal(t, "file.txt", got.Name)
-		assert.Equal(t, "file.txt", got.Path)
+		assert.Equal(t, "testfile.txt", got.Name)
+		assert.Equal(t, "testfile.txt", got.Path)
 		assert.Equal(t, int64(1024), *got.Size)
 		assert.Equal(t, "abc123", got.QuickXorHash)
 		assert.False(t, got.IsDeleted)
@@ -295,7 +279,7 @@ func TestCascadePathUpdate(t *testing.T) {
 		makeTestItem("d1", "f1", "d1", "root1", "file1.txt", ItemTypeFile),
 		makeTestItem("d1", "f2", "d1", "root1", "file2.txt", ItemTypeFile),
 		makeTestItem("d1", "f3", "d1", "root1", "deep.txt", ItemTypeFile),
-		makeTestItem("d1", "f4", "d1", "root1", "file.txt", ItemTypeFile),
+		makeTestItem("d1", "f4", "d1", "root1", "other.txt", ItemTypeFile),
 	}
 	items[0].Path = "old/file1.txt"
 	items[1].Path = "old/file2.txt"
