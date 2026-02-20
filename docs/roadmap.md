@@ -213,14 +213,14 @@
 
 ---
 
-## Phase 3.5: Account/Drive System Alignment _(doc-only)_
+## Phase 3.5: Account/Drive System Alignment ✅
 
-**Align all documentation with the account/drive design defined in [accounts.md](design/accounts.md).**
+**Align all documentation and code with the account/drive design defined in [accounts.md](design/accounts.md).**
 
 | Increment | Description | Status |
 |-----------|-------------|--------|
 | 3.5.1 | Align prd.md, configuration.md, roadmap.md, decisions.md, test-strategy.md, data-model.md, sync-algorithm.md, BACKLOG.md with accounts.md terminology and design | **DONE** |
-| 3.5.2 | Rewrite internal/config/ to implement flat drive-section config format | **IN PROGRESS** |
+| 3.5.2 | Rewrite internal/config/ + CLI + graph/auth + CI to implement flat drive-section format | **DONE** |
 
 ### 3.5.1: Documentation alignment ✅
 
@@ -232,6 +232,15 @@
 - Replaced `config init` -> `setup`, `config show` -> removed (users read config file directly)
 - Closed B-014 (profile name validation) — obsolete with canonical drive IDs
 - Added B-033 (accounts.md feature implementation tracking)
+
+### 3.5.2: Config + CLI + graph/auth migration ✅
+
+- **Config**: Flat TOML with embedded structs, two-pass decode, drive sections (`["personal:user@example.com"]`), `ResolveDrive()`, `DriveTokenPath()`, `DriveStatePath()`, drive matching (exact/alias/partial). 95.1% coverage.
+- **CLI**: `--profile` → `--account`/`--drive`, auth commands skip config loading (bootstrapping), `config show` removed.
+- **Graph/auth**: Decoupled from config — `Login`, `TokenSourceFromPath`, `Logout` accept tokenPath directly. 93.0% coverage.
+- **CI**: `ONEDRIVE_TEST_DRIVES` env var, drive-based token paths in data dir, updated Key Vault derivation.
+- **Docs**: architecture.md, CLAUDE.md, LEARNINGS.md updated. All stale profile refs in code eliminated.
+- Net diff: -414 lines (1917 added, 2331 removed) across 32 files.
 
 ---
 
