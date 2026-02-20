@@ -21,16 +21,34 @@ const simpleUploadMaxSize = 4 * 1024 * 1024
 
 // Upload session request/response types for Graph API JSON serialization.
 type createUploadSessionRequest struct {
-	Item uploadSessionItem `json:"item"`
+	Item        uploadSessionItem `json:"item"`
+	DeferCommit bool              `json:"deferCommit,omitempty"`
 }
 
 type uploadSessionItem struct {
-	ConflictBehavior string `json:"@microsoft.graph.conflictBehavior"` //nolint:tagliatelle // Graph API annotation key
+	ConflictBehavior string          `json:"@microsoft.graph.conflictBehavior"` //nolint:tagliatelle // Graph API annotation key
+	FileSystemInfo   *fileSystemInfo `json:"fileSystemInfo,omitempty"`
+}
+
+// fileSystemInfo provides client-side timestamps to the Graph API.
+// Including this in upload session creation prevents double-versioning on
+// Business/SharePoint drives, where the server otherwise creates a second
+// version when it assigns its own timestamps.
+type fileSystemInfo struct {
+	CreatedDateTime      string `json:"createdDateTime"`
+	LastModifiedDateTime string `json:"lastModifiedDateTime"`
 }
 
 type uploadSessionResponse struct {
 	UploadURL          string `json:"uploadUrl"`
 	ExpirationDateTime string `json:"expirationDateTime"`
+}
+
+// uploadSessionStatusResponse is the JSON shape returned by GET on an upload session URL.
+type uploadSessionStatusResponse struct {
+	UploadURL          string   `json:"uploadUrl"`
+	ExpirationDateTime string   `json:"expirationDateTime"`
+	NextExpectedRanges []string `json:"nextExpectedRanges"`
 }
 
 // SimpleUpload uploads a file up to 4 MB using a single PUT request.
@@ -66,8 +84,10 @@ func (c *Client) SimpleUpload(
 
 // CreateUploadSession creates a resumable upload session for a file.
 // The returned UploadSession contains a pre-authenticated upload URL.
+// When mtime is non-zero, fileSystemInfo is included to prevent double-versioning
+// on Business/SharePoint drives.
 func (c *Client) CreateUploadSession(
-	ctx context.Context, driveID, parentID, name string, size int64,
+	ctx context.Context, driveID, parentID, name string, size int64, mtime time.Time,
 ) (*UploadSession, error) {
 	c.logger.Info("creating upload session",
 		slog.String("drive_id", driveID),
@@ -80,6 +100,16 @@ func (c *Client) CreateUploadSession(
 
 	reqBody := createUploadSessionRequest{
 		Item: uploadSessionItem{ConflictBehavior: "replace"},
+	}
+
+	// Include fileSystemInfo when mtime is provided, to prevent the server
+	// from creating an extra version with its own timestamps.
+	if !mtime.IsZero() {
+		ts := mtime.UTC().Format(time.RFC3339)
+		reqBody.Item.FileSystemInfo = &fileSystemInfo{
+			CreatedDateTime:      ts,
+			LastModifiedDateTime: ts,
+		}
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)
@@ -116,6 +146,73 @@ func (c *Client) CreateUploadSession(
 	)
 
 	return session, nil
+}
+
+// QueryUploadSession queries an upload session's status to determine
+// which byte ranges have been accepted. Used for resume after interruption.
+// The session URL is pre-authenticated, so no Authorization header is sent.
+func (c *Client) QueryUploadSession(
+	ctx context.Context, session *UploadSession,
+) (*UploadSessionStatus, error) {
+	c.logger.Info("querying upload session status")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, session.UploadURL, http.NoBody)
+	if err != nil {
+		return nil, fmt.Errorf("graph: creating query session request: %w", err)
+	}
+
+	req.Header.Set("User-Agent", userAgent)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		c.logger.Error("query upload session request failed",
+			slog.String("error", err.Error()),
+		)
+
+		return nil, fmt.Errorf("graph: query upload session request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		// Drain body before returning to reuse connection.
+		if _, drainErr := io.Copy(io.Discard, resp.Body); drainErr != nil {
+			return nil, fmt.Errorf("graph: draining expired session response body: %w", drainErr)
+		}
+
+		return nil, fmt.Errorf("graph: upload session expired or not found: %w", ErrNotFound)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body) //nolint:errcheck // best-effort read for error message
+
+		return nil, fmt.Errorf("graph: query upload session failed with status %d: %s",
+			resp.StatusCode, string(body))
+	}
+
+	var usr uploadSessionStatusResponse
+	if decErr := json.NewDecoder(resp.Body).Decode(&usr); decErr != nil {
+		return nil, fmt.Errorf("graph: decoding upload session status: %w", decErr)
+	}
+
+	expTime, parseErr := time.Parse(time.RFC3339, usr.ExpirationDateTime)
+	if parseErr != nil {
+		c.logger.Warn("invalid upload session status expiration, using zero time",
+			slog.String("raw", usr.ExpirationDateTime),
+			slog.String("error", parseErr.Error()),
+		)
+	}
+
+	status := &UploadSessionStatus{
+		UploadURL:          usr.UploadURL,
+		ExpirationTime:     expTime,
+		NextExpectedRanges: usr.NextExpectedRanges,
+	}
+
+	c.logger.Debug("upload session status retrieved",
+		slog.Int("next_ranges_count", len(status.NextExpectedRanges)),
+	)
+
+	return status, nil
 }
 
 // UploadChunk uploads a chunk of data to an upload session.
@@ -159,6 +256,7 @@ func (c *Client) UploadChunk(
 
 // handleChunkResponse processes the HTTP response from an upload chunk request.
 // 202 Accepted means intermediate chunk; 200/201 means upload complete with item data.
+// 416 Range Not Satisfiable means the server has different byte range expectations.
 func (c *Client) handleChunkResponse(resp *http.Response) (*Item, error) {
 	switch resp.StatusCode {
 	case http.StatusAccepted:
@@ -186,6 +284,17 @@ func (c *Client) handleChunkResponse(resp *http.Response) (*Item, error) {
 		)
 
 		return &item, nil
+
+	case http.StatusRequestedRangeNotSatisfiable:
+		// 416: Server has different byte range expectations.
+		// Caller should query session status to determine correct resume offset.
+		if _, drainErr := io.Copy(io.Discard, resp.Body); drainErr != nil {
+			return nil, fmt.Errorf("graph: draining 416 response body: %w", drainErr)
+		}
+
+		c.logger.Warn("chunk upload returned 416, range not satisfiable")
+
+		return nil, ErrRangeNotSatisfiable
 
 	default:
 		body, _ := io.ReadAll(resp.Body) //nolint:errcheck // best-effort read for error message

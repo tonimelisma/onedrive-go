@@ -302,3 +302,27 @@ The `whoamiDrive` construction loop uses `for _, d := range drives` because `gra
 - **Suggested improvements**: (1) The `printWhoamiJSON`, `printStatJSON`, `printItemsJSON` functions write directly to `os.Stdout` and are harder to test without os.Pipe capture. Accepting an `io.Writer` parameter would make them more testable. (2) `exitOnError` calls `os.Exit(1)` which is untestable. Could be refactored to return an error code.
 - **Cross-package concerns**: None. All tests are self-contained in the root package.
 - **Code smells noticed**: (1) `flagDrive` global is used by both `loadConfig` (via `cmd.Flags().Changed()` gate) and `authTokenPath` (direct read). Two different access patterns for the same global. (2) `printStatText` and `printWhoamiText` write to `os.Stdout` directly while `printTable` accepts an `io.Writer` -- inconsistent output patterns in the same package.
+
+---
+
+## 15. Upload Session Resume & fileSystemInfo (B-015, B-016)
+
+### Pivots
+None. Implementation followed the plan exactly.
+
+### Issues found
+- Unused import (`errors`) in test file caused build failure. Test code used `assert.ErrorIs` (testify) but imported `errors` (stdlib). Always check imports match actual usage.
+
+### Linter surprises
+- `gofumpt` reformatted the sentinel error var block after adding `ErrRangeNotSatisfiable` (longest name changed alignment). All sentinels needed realignment to satisfy formatting rules. When adding a new sentinel with a longer name, expect to realign the entire var block.
+
+### Suggested improvements
+- The `doChunkedUpload` function in `files.go` does not yet use `QueryUploadSession` for actual resume-after-failure. It currently fails fast on any chunk error. Future work: catch `ErrRangeNotSatisfiable`, call `QueryUploadSession`, parse `NextExpectedRanges`, and resume from the correct offset. This is sync engine territory (Phase 4).
+- `CreateUploadSession` sets both `createdDateTime` and `lastModifiedDateTime` to the same mtime value. For sync, we may want to preserve separate creation/modification times from the local filesystem.
+
+### Cross-package concerns
+- The `files.go` caller passes `fi.ModTime()` for mtime. The sync engine will need to decide whether to pass the local file's mtime or the previously known remote mtime when re-uploading. This is a sync-layer decision, not a graph-layer one.
+- The `createUploadSessionRequest` now includes `DeferCommit bool` field (with `omitempty`). Currently unused but ready for the sync engine to use deferred commits for atomic upload-then-verify workflows.
+
+### Code smells noticed
+- The `handleChunkResponse` function has four cases now (202, 200/201, 416, default). Each drains or reads the body differently. A refactor to a common body-handling pattern might improve clarity, but the current switch is readable enough and each case has distinct semantics.
