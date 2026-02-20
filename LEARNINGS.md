@@ -321,3 +321,4 @@ Even though test files are exempt from `funlen`, decomposing the `TestE2E_EdgeCa
 
 ### Build tag isolation is reliable
 Files with `//go:build e2e` are completely excluded from `go build ./...` and `go test ./...`. The compilation check `go test -tags e2e -c -o /dev/null ./e2e/...` catches syntax/type errors without requiring live API access. This two-tier verification (compile without API, run with API) is the right pattern for E2E tests.
+
