@@ -38,6 +38,7 @@ type Scanner struct {
 	filter       Filter
 	logger       *slog.Logger
 	skipSymlinks bool
+	visited      map[string]bool // DB paths visited during current scan (for orphan detection)
 }
 
 // NewScanner creates a Scanner with the given dependencies.
@@ -64,7 +65,12 @@ func (s *Scanner) Scan(ctx context.Context, syncRoot string) error {
 		return err
 	}
 
-	if err := s.walkDir(ctx, syncRoot, ""); err != nil {
+	// Track NFC paths visited during walk for robust orphan detection.
+	// On Linux, NFC-normalized DB paths may differ from NFD filesystem paths,
+	// so os.Stat alone in orphan detection would produce false positives.
+	s.visited = make(map[string]bool)
+
+	if err := s.walkDir(ctx, syncRoot, "", ""); err != nil {
 		return fmt.Errorf("scanner: walk failed: %w", err)
 	}
 
@@ -94,9 +100,10 @@ func (s *Scanner) checkNosyncGuard(syncRoot string) error {
 	return nil
 }
 
-// walkDir performs a depth-first traversal of the directory at relPath.
-func (s *Scanner) walkDir(ctx context.Context, fsRoot, relPath string) error {
-	fullPath := filepath.Join(fsRoot, relPath)
+// walkDir performs a depth-first traversal of the directory.
+// fsRelPath uses original filesystem names for I/O; dbRelPath uses NFC-normalized names for DB storage.
+func (s *Scanner) walkDir(ctx context.Context, fsRoot, fsRelPath, dbRelPath string) error {
+	fullPath := filepath.Join(fsRoot, fsRelPath)
 
 	entries, err := os.ReadDir(fullPath)
 	if err != nil {
@@ -108,7 +115,7 @@ func (s *Scanner) walkDir(ctx context.Context, fsRoot, relPath string) error {
 			return err
 		}
 
-		if err := s.processEntry(ctx, fsRoot, relPath, entry); err != nil {
+		if err := s.processEntry(ctx, fsRoot, fsRelPath, dbRelPath, entry); err != nil {
 			return err
 		}
 	}
@@ -117,26 +124,33 @@ func (s *Scanner) walkDir(ctx context.Context, fsRoot, relPath string) error {
 }
 
 // processEntry handles a single directory entry during the walk.
-func (s *Scanner) processEntry(ctx context.Context, fsRoot, relPath string, entry os.DirEntry) error {
-	// B-019: NFC normalize to handle macOS NFD filenames
-	name := norm.NFC.String(entry.Name())
-	entryRelPath := joinRelPath(relPath, name)
+// fsRelPath/dbRelPath track the parent's filesystem and NFC-normalized paths respectively.
+func (s *Scanner) processEntry(
+	ctx context.Context, fsRoot, fsRelPath, dbRelPath string, entry os.DirEntry,
+) error {
+	originalName := entry.Name()
+	// B-019: NFC normalize to handle macOS NFD filenames.
+	// Use original name for filesystem I/O, normalized name for DB storage.
+	normalizedName := norm.NFC.String(originalName)
 
-	if err := s.validateEntry(name, entryRelPath, entry); err != nil {
+	fsEntryRelPath := joinRelPath(fsRelPath, originalName)
+	dbEntryRelPath := joinRelPath(dbRelPath, normalizedName)
+
+	if err := s.validateEntry(normalizedName, dbEntryRelPath, entry); err != nil {
 		return nil // validation failures are logged and skipped, not propagated
 	}
 
-	// Handle symlinks: resolve or skip depending on configuration
-	resolvedEntry, err := s.resolveSymlink(fsRoot, entryRelPath, entry)
+	// Handle symlinks: resolve or skip depending on configuration (uses filesystem path)
+	resolvedEntry, err := s.resolveSymlink(fsRoot, fsEntryRelPath, entry)
 	if err != nil || resolvedEntry == nil {
 		return nil // broken symlink or skip-symlinks mode
 	}
 
 	if resolvedEntry.IsDir() {
-		return s.walkDir(ctx, fsRoot, entryRelPath)
+		return s.walkDir(ctx, fsRoot, fsEntryRelPath, dbEntryRelPath)
 	}
 
-	return s.processFileEntry(ctx, fsRoot, entryRelPath)
+	return s.processFileEntry(ctx, fsRoot, fsEntryRelPath, dbEntryRelPath)
 }
 
 // validateEntry checks filter, name validity, and UTF-8 encoding. Returns non-nil to skip.
@@ -196,29 +210,33 @@ func (s *Scanner) resolveSymlink(fsRoot, entryRelPath string, entry os.DirEntry)
 }
 
 // processFileEntry handles a file discovered during the walk.
-func (s *Scanner) processFileEntry(ctx context.Context, fsRoot, relPath string) error {
-	fullPath := filepath.Join(fsRoot, relPath)
+// fsRelPath is the original filesystem path for I/O; dbRelPath is the NFC-normalized path for DB storage.
+func (s *Scanner) processFileEntry(ctx context.Context, fsRoot, fsRelPath, dbRelPath string) error {
+	fullPath := filepath.Join(fsRoot, fsRelPath)
 
 	info, err := os.Stat(fullPath)
 	if err != nil {
-		s.logger.Warn("scanner: cannot stat file, skipping", "path", relPath, "error", err)
+		s.logger.Warn("scanner: cannot stat file, skipping", "path", dbRelPath, "error", err)
 		return nil
 	}
 
-	existing, err := s.store.GetItemByPath(ctx, relPath)
+	// Mark as visited for robust orphan detection (NFC/NFD mismatch on Linux)
+	s.visited[dbRelPath] = true
+
+	existing, err := s.store.GetItemByPath(ctx, dbRelPath)
 	if err != nil {
-		return fmt.Errorf("scanner: store lookup for %q: %w", relPath, err)
+		return fmt.Errorf("scanner: store lookup for %q: %w", dbRelPath, err)
 	}
 
 	if existing == nil {
-		return s.handleNewFile(ctx, fullPath, relPath, info)
+		return s.handleNewFile(ctx, fullPath, dbRelPath, info)
 	}
 
 	if existing.IsDeleted {
-		return s.handleResurrectedFile(ctx, fullPath, relPath, info, existing)
+		return s.handleResurrectedFile(ctx, fullPath, dbRelPath, info, existing)
 	}
 
-	return s.handleExistingFile(ctx, fullPath, relPath, info, existing)
+	return s.handleExistingFile(ctx, fullPath, dbRelPath, info, existing)
 }
 
 // handleNewFile creates a new item for a file not yet tracked in the store.
@@ -319,6 +337,12 @@ func (s *Scanner) detectOrphans(ctx context.Context, syncRoot string) error {
 
 // checkOrphan handles a single synced item during orphan detection.
 func (s *Scanner) checkOrphan(ctx context.Context, syncRoot string, item *Item) error {
+	// If this NFC path was visited during the walk, the file exists on disk.
+	// This handles Linux where NFC DB paths differ from NFD filesystem paths.
+	if s.visited[item.Path] {
+		return nil
+	}
+
 	fullPath := filepath.Join(syncRoot, item.Path)
 
 	_, err := os.Stat(fullPath)
