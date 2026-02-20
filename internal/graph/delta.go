@@ -29,6 +29,11 @@ type deltaResponse struct {
 // returned by the Graph API delta endpoint.
 const deltaHTTPPrefix = "http"
 
+// maxDeltaPages is the upper bound on pages fetched by DeltaAll.
+// A buggy API or circular NextLinks could loop forever without this guard.
+// Package-level var (not const) so tests can temporarily override it.
+var maxDeltaPages = 10000 //nolint:gochecknoglobals // test-overridable guard
+
 // Delta fetches one page of delta changes for a drive.
 // Pass an empty token for the initial sync (fetches all items).
 // For subsequent calls, pass the DeltaLink or NextLink value from the
@@ -139,6 +144,10 @@ func (c *Client) DeltaAll(ctx context.Context, driveID, token string) ([]Item, s
 		if dp.NextLink != "" {
 			currentToken = dp.NextLink
 			page++
+
+			if page > maxDeltaPages {
+				return nil, "", fmt.Errorf("graph: delta enumeration exceeded %d pages", maxDeltaPages)
+			}
 
 			continue
 		}

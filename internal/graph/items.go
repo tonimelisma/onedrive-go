@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -24,6 +25,18 @@ const (
 	maxValidYear = 2100
 )
 
+// encodePathSegments URL-encodes each segment of a slash-separated path.
+// Characters like #, ?, %, and spaces are encoded per-segment so the
+// resulting path is safe for interpolation into Graph API URLs.
+func encodePathSegments(path string) string {
+	segments := strings.Split(path, "/")
+	for i, seg := range segments {
+		segments[i] = url.PathEscape(seg)
+	}
+
+	return strings.Join(segments, "/")
+}
+
 // driveItemResponse mirrors the Graph API driveItem JSON exactly.
 // Unexported — callers use Item via toItem() normalization.
 type driveItemResponse struct {
@@ -32,7 +45,6 @@ type driveItemResponse struct {
 	Size                 int64            `json:"size"`
 	ETag                 string           `json:"eTag"`
 	CTag                 string           `json:"cTag"`
-	MimeType             string           `json:"file.mimeType"` //nolint:tagliatelle // Graph API uses dot notation
 	CreatedDateTime      string           `json:"createdDateTime"`
 	LastModifiedDateTime string           `json:"lastModifiedDateTime"`
 	ParentReference      *parentRef       `json:"parentReference"`
@@ -242,7 +254,7 @@ func (c *Client) GetItemByPath(ctx context.Context, driveID, remotePath string) 
 		slog.String("path", remotePath),
 	)
 
-	return c.fetchItem(ctx, fmt.Sprintf("/drives/%s/root:/%s:", driveID, remotePath))
+	return c.fetchItem(ctx, fmt.Sprintf("/drives/%s/root:/%s:", driveID, encodePathSegments(remotePath)))
 }
 
 // ListChildren returns all children of a folder, handling pagination automatically.
@@ -265,7 +277,7 @@ func (c *Client) ListChildren(ctx context.Context, driveID, parentID string) ([]
 func (c *Client) ListChildrenByPath(ctx context.Context, driveID, remotePath string) ([]Item, error) {
 	return c.fetchAllChildren(
 		ctx,
-		fmt.Sprintf("/drives/%s/root:/%s:/children?$top=%d", driveID, remotePath, listChildrenPageSize),
+		fmt.Sprintf("/drives/%s/root:/%s:/children?$top=%d", driveID, encodePathSegments(remotePath), listChildrenPageSize),
 		"listing children by path",
 		"listed children by path complete",
 		[]slog.Attr{

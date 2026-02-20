@@ -91,6 +91,11 @@ func (c *Client) doRetry(
 
 	var attempt int
 	for {
+		// Rewind seekable bodies so retries send the full payload.
+		if err := rewindBody(body); err != nil {
+			return nil, err
+		}
+
 		resp, err := c.doOnce(ctx, method, url, body, extraHeaders)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -158,32 +163,7 @@ func (c *Client) doRetry(
 			continue
 		}
 
-		sentinel := classifyStatus(resp.StatusCode)
-		graphErr := &GraphError{
-			StatusCode: resp.StatusCode,
-			RequestID:  reqID,
-			Message:    string(errBody),
-			Err:        sentinel,
-		}
-
-		if attempt > 0 {
-			c.logger.Error("request failed after retries",
-				slog.String("method", method),
-				slog.String("path", path),
-				slog.Int("status", resp.StatusCode),
-				slog.String("request_id", reqID),
-				slog.Int("attempts", attempt+1),
-			)
-		} else {
-			c.logger.Warn("request failed",
-				slog.String("method", method),
-				slog.String("path", path),
-				slog.Int("status", resp.StatusCode),
-				slog.String("request_id", reqID),
-			)
-		}
-
-		return nil, graphErr
+		return nil, c.terminalError(method, path, resp.StatusCode, reqID, errBody, attempt)
 	}
 }
 
@@ -241,6 +221,38 @@ func (c *Client) doOnce(
 	return resp, nil
 }
 
+// terminalError builds a GraphError and logs the final failure.
+// Extracted from doRetry to keep the retry loop under funlen limits.
+func (c *Client) terminalError(
+	method, path string, statusCode int, reqID string, body []byte, attempt int,
+) *GraphError {
+	graphErr := &GraphError{
+		StatusCode: statusCode,
+		RequestID:  reqID,
+		Message:    string(body),
+		Err:        classifyStatus(statusCode),
+	}
+
+	if attempt > 0 {
+		c.logger.Error("request failed after retries",
+			slog.String("method", method),
+			slog.String("path", path),
+			slog.Int("status", statusCode),
+			slog.String("request_id", reqID),
+			slog.Int("attempts", attempt+1),
+		)
+	} else {
+		c.logger.Warn("request failed",
+			slog.String("method", method),
+			slog.String("path", path),
+			slog.Int("status", statusCode),
+			slog.String("request_id", reqID),
+		)
+	}
+
+	return graphErr
+}
+
 // retryBackoff returns the backoff duration for a retryable response.
 // For 429 (throttled), the Graph API's Retry-After header takes precedence
 // over calculated backoff — ignoring it risks extended throttling.
@@ -268,6 +280,23 @@ func (c *Client) calcBackoff(attempt int) time.Duration {
 	backoff += jitter
 
 	return time.Duration(backoff)
+}
+
+// rewindBody seeks an io.Reader back to offset 0 if it implements io.Seeker.
+// All callers use bytes.NewReader (which is an io.ReadSeeker), so the body
+// is fully available on retry. Returns nil when body is nil or not seekable.
+func rewindBody(body io.Reader) error {
+	if body == nil {
+		return nil
+	}
+
+	if seeker, ok := body.(io.Seeker); ok {
+		if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+			return fmt.Errorf("graph: rewinding request body for retry: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // timeSleep waits for the given duration or until the context is canceled.

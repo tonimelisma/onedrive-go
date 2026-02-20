@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -427,6 +429,59 @@ func TestDoWithHeaders_RetriesWithHeaders(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, int32(2), calls.Load())
+}
+
+func TestDo_RetryWithBody(t *testing.T) {
+	// Verify that POST/PATCH bodies are fully readable on retry attempts.
+	// Before the fix, the body io.Reader was consumed on the first attempt
+	// and subsequent retries sent empty bodies.
+	expectedBody := `{"name":"test-folder","folder":{}}`
+
+	var calls atomic.Int32
+
+	var capturedBodies []string
+
+	var mu sync.Mutex
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, readErr := io.ReadAll(r.Body)
+		require.NoError(t, readErr)
+
+		mu.Lock()
+		capturedBodies = append(capturedBodies, string(body))
+		mu.Unlock()
+
+		n := calls.Add(1)
+		if n <= 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"created"}`))
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	resp, err := client.Do(
+		context.Background(),
+		http.MethodPost,
+		"/create",
+		bytes.NewReader([]byte(expectedBody)),
+	)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, int32(2), calls.Load())
+
+	// Both attempts must have received the full body.
+	mu.Lock()
+	defer mu.Unlock()
+
+	require.Len(t, capturedBodies, 2)
+	assert.Equal(t, expectedBody, capturedBodies[0], "first attempt body")
+	assert.Equal(t, expectedBody, capturedBodies[1], "retry attempt body")
 }
 
 func TestIsRetryable(t *testing.T) {

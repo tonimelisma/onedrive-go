@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -60,7 +61,7 @@ func (c *Client) SimpleUpload(
 		slog.Int64("size", size),
 	)
 
-	path := fmt.Sprintf("/drives/%s/items/%s:/%s:/content", driveID, parentID, name)
+	path := fmt.Sprintf("/drives/%s/items/%s:/%s:/content", driveID, parentID, url.PathEscape(name))
 
 	resp, err := c.doRawUpload(ctx, http.MethodPut, path, "application/octet-stream", r)
 	if err != nil {
@@ -92,7 +93,7 @@ func (c *Client) CreateUploadSession(
 		slog.Int64("size", size),
 	)
 
-	path := fmt.Sprintf("/drives/%s/items/%s:/%s:/createUploadSession", driveID, parentID, name)
+	path := fmt.Sprintf("/drives/%s/items/%s:/%s:/createUploadSession", driveID, parentID, url.PathEscape(name))
 
 	item := uploadSessionItem{ConflictBehavior: "replace"}
 	if !mtime.IsZero() {
