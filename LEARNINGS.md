@@ -302,3 +302,23 @@ The `whoamiDrive` construction loop uses `for _, d := range drives` because `gra
 - **Suggested improvements**: (1) The `printWhoamiJSON`, `printStatJSON`, `printItemsJSON` functions write directly to `os.Stdout` and are harder to test without os.Pipe capture. Accepting an `io.Writer` parameter would make them more testable. (2) `exitOnError` calls `os.Exit(1)` which is untestable. Could be refactored to return an error code.
 - **Cross-package concerns**: None. All tests are self-contained in the root package.
 - **Code smells noticed**: (1) `flagDrive` global is used by both `loadConfig` (via `cmd.Flags().Changed()` gate) and `authTokenPath` (direct read). Two different access patterns for the same global. (2) `printStatText` and `printWhoamiText` write to `os.Stdout` directly while `printTable` accepts an `io.Writer` -- inconsistent output patterns in the same package.
+
+---
+
+## 15. E2E Edge Case Tests (Increment 2.3)
+
+### No pivots from plan
+The implementation followed the plan exactly. All four subtests (large file, unicode, spaces, concurrent) were implemented as specified.
+
+### t.Fatalf cannot be called from non-test goroutines
+Go's `testing.T.Fatalf` calls `runtime.Goexit()` which panics when called from a goroutine that is not the test goroutine. The `runCLI` helper uses `t.Fatalf`, so concurrent upload tests must use `exec.Command` directly with error channels instead of `runCLI`. This is the correct pattern for any test that needs parallelism.
+
+### Deterministic large file data for corruption detection
+Using `byte(i % 251)` (prime modulus) generates a repeating pattern that covers all 251 distinct byte values. This is better than random data because it's deterministic (no seed management) and better than all-zeros because it catches offset/truncation bugs where a zero-filled region would silently match.
+
+### E2E test decomposition avoids funlen
+Even though test files are exempt from `funlen`, decomposing the `TestE2E_EdgeCases` parent into helper functions (`testLargeFileUploadDownload`, `testUnicodeFilename`, etc.) improves readability and follows the existing project pattern of focused, single-purpose functions.
+
+### Build tag isolation is reliable
+Files with `//go:build e2e` are completely excluded from `go build ./...` and `go test ./...`. The compilation check `go test -tags e2e -c -o /dev/null ./e2e/...` catches syntax/type errors without requiring live API access. This two-tier verification (compile without API, run with API) is the right pattern for E2E tests.
+
