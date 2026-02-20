@@ -72,46 +72,20 @@ Currently: Working CLI OneDrive client with auth + file ops. "Pragmatic Flat" ar
 | [docs/archive/](docs/archive/) | Historical learnings and backlog from earlier phases |
 | [docs/tier1-research/](docs/tier1-research/) | 16 Tier 1 research docs (API bugs, edge cases, reference impl analysis) |
 | [docs/parallel-agents.md](docs/parallel-agents.md) | Parallel agent worktree workflow guide |
+| [docs/orchestration.md](docs/orchestration.md) | Full orchestration workflow: planning, agent prompts, review, wrap-up |
 
-## Subagent Protocol
+## Orchestration — Planning, Agents, Wrap-Up
 
-When work is delegated to subagents (via the Task tool), each subagent **must** document the following in `LEARNINGS.md` before wrapping up:
+**Full process**: [docs/orchestration.md](docs/orchestration.md) — the complete workflow for planning, instructing agents, reviewing their work, and closing increments. Read it before every increment.
 
-1. **Pivots**: Any deviation from the plan — what changed and why
-2. **Issues found**: Bugs, code smells, architectural concerns, or surprising behavior
-3. **Weird observations**: Unexpected API behavior, linter gotchas, edge cases discovered
-4. **Suggested improvements**: Top-up work, coverage gaps, or follow-up items
-5. **Cross-package concerns**: Anything that affects other packages or future work
+**Key rules** (enforced by the orchestrator, not self-policed by agents):
 
-This ensures institutional knowledge is captured even when agent contexts are discarded after completion. The main orchestrator will review and consolidate entries.
+1. **Every plan MUST include a parallelization strategy.** Break work into independent units, build a file conflict matrix, define waves. This is not optional — the user expects parallel execution.
+2. **Every agent task prompt MUST use the template from orchestration.md.** The template includes mandatory Wrap-Up Requirements that instruct the agent to update LEARNINGS.md and provide a 7-point final summary (architecture observations, code quality concerns, test gaps, process observations, re-envisioning). Copy the template — do not freestyle prompts.
+3. **After agents complete, the orchestrator MUST do line-by-line code review and top-up work.** Read every new/modified file. Check correctness, consistency, quality, gaps. Fix issues before presenting the retrospective. This is not optional — incomplete review means the increment is not done.
+4. **The retrospective MUST synthesize agent observations.** Agents report their internal thoughts about architecture, quality, and process. The orchestrator combines these into a coherent picture for the user. The re-envisioning check draws on agent perspectives, not just the orchestrator's.
 
-## Increment Wrap-Up Protocol
-
-After subagents complete their work, before closing an increment:
-
-1. **Review subagent output**: Read their code like a code reviewer. Check for consistency, missed edge cases, naming, test quality.
-2. **Top-up work**: Fix anything that doesn't meet standards. Don't leave it for later.
-3. **Propose improvements**: Present a concrete list of fixes/improvements to the user before wrapping up.
-4. **Propose new safeguards**: Based on any mistakes or near-misses, propose new lint rules, tests, or process changes for continuous improvement.
-5. **Update all documents**: CLAUDE.md, LEARNINGS.md, BACKLOG.md, roadmap.md — remove stale content, add new patterns. If something is clearly stale, update it. If you think something should be added or removed, propose it to the user.
-6. **Retrospective in chat**: Always present the retrospective **in the chat** for the user to read and discuss. Cover: what went well, what went wrong, what to change. Suggest concrete actions. Then capture actionable items in LEARNINGS.md. Never skip this — the user wants to review and discuss it interactively.
-
-## Planning Protocol
-
-When entering plan mode for an increment:
-
-1. **Ask questions first.** Present the user with key decisions, trade-offs, and alternatives. The user wants to make informed decisions — don't assume.
-2. **Research before proposing.** Read the relevant design docs, check BACKLOG.md for related issues, review LEARNINGS.md for patterns.
-3. **Define test strategy upfront.** How will this code be tested? What mocking approach? What fixtures? Decide before writing code.
-
-## Context Preservation
-
-Agent contexts expire. Mitigate knowledge loss:
-
-- Commit frequently with descriptive messages so `git log` serves as a secondary knowledge trail
-- Document decisions in commit messages (the "why", not just the "what")
-- Subagents must write to LEARNINGS.md before finishing (see Subagent Protocol)
-- After each increment, consolidate subagent learnings into LEARNINGS.md and CLAUDE.md
+**Context preservation**: Commit frequently with descriptive messages. Document decisions in commit messages (the "why"). After each increment, consolidate agent LEARNINGS.md entries and orchestrator observations into LEARNINGS.md and CLAUDE.md.
 
 ## Ownership and Standards
 
@@ -176,10 +150,9 @@ Common golangci-lint rules that require specific patterns:
 
 - **mnd**: Every number needs a named constant; tests are exempt
 - **funlen**: Max 100 lines / 50 statements — decompose into small helpers
-- **depguard**: Update `.golangci.yml` when adding new external dependencies
+- **depguard**: Update `.golangci.yml` when adding new external dependencies. Check transitive deps too (e.g. Cobra pulls in `mousetrap`)
 - **gochecknoinits**: No `init()` functions allowed. Use constructor functions instead (e.g. `newRootCmd()`)
 - **gocritic:rangeValCopy**: Use `for i := range items` with `items[i]` instead of `for _, item := range items` when struct > ~128 bytes
-- **depguard**: Check transitive deps too (e.g. Cobra pulls in `mousetrap`)
 - **go.mod pseudo-versions**: Never use placeholder timestamps. Always run `go mod download <module>@<commit>` first to discover the correct timestamp, then construct `v0.0.0-YYYYMMDDHHMMSS-<12-char-hash>`.
 
 ## Test Patterns
