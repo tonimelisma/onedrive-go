@@ -291,3 +291,14 @@ The `whoamiDrive` construction loop uses `for _, d := range drives` because `gra
 - **Suggested improvements**: None
 - **Cross-package concerns**: None. The conflict resolution UX design (interactive + batch) is consistent with existing CLI patterns (--json for machine output, --dry-run for previewing). The resolution actions table in sync-algorithm.md §7.4 maps cleanly to the executor (4.7) and conflict handler (4.8) interfaces that will be implemented in Phase 4.
 - **Code smells noticed**: None
+
+---
+
+## 14. CLI Test Coverage (Root Package)
+
+- **Pivots**: Two deviations from plan. (1) The TOML format for config tests used `[drives."personal:..."]` (nested table syntax) but the actual format uses `["personal:..."]` (top-level quoted key). Discovered by running tests against real config loader. (2) The zero-config `loadConfig` test could not use `cmd.Flags().Set()` or `cmd.PersistentFlags().Set()` to mark `--drive` as "changed" because Cobra tracks Changed per FlagSet and `loadConfig` checks `cmd.Flags().Changed("drive")`. Fixed by using `cmd.Execute()` with `SetArgs()`, which properly merges persistent flags into child commands -- matching real CLI invocation.
+- **Issues found**: No bugs in production code. The global mutable state pattern (package-level `flagDrive`, `flagQuiet`, `resolvedCfg`, etc.) makes tests fragile and requires careful save/restore via `t.Cleanup`. This is a known trade-off of Cobra's design.
+- **Linter surprises**: None -- all new test code passed lint on first commit.
+- **Suggested improvements**: (1) The `printWhoamiJSON`, `printStatJSON`, `printItemsJSON` functions write directly to `os.Stdout` and are harder to test without os.Pipe capture. Accepting an `io.Writer` parameter would make them more testable. (2) `exitOnError` calls `os.Exit(1)` which is untestable. Could be refactored to return an error code.
+- **Cross-package concerns**: None. All tests are self-contained in the root package.
+- **Code smells noticed**: (1) `flagDrive` global is used by both `loadConfig` (via `cmd.Flags().Changed()` gate) and `authTokenPath` (direct read). Two different access patterns for the same global. (2) `printStatText` and `printWhoamiText` write to `os.Stdout` directly while `printTable` accepts an `io.Writer` -- inconsistent output patterns in the same package.
