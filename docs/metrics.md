@@ -78,8 +78,85 @@ Tracking quantitative metrics across increments to spot trends and improve proce
 | Phase 3 (3.3) | 2 | 0 | 1 | +0.8% (config) |
 | Phase 3.5 (3.5.2) | 4 | 7 | 3 | -1.6% (total) |
 | Phase 4.1 (3.5.2+4.1) | 6 | 2 | 2 | -2.5% (total) |
+| Foundation Hardening | 3 | 1 | 0 | +0.4% (total) |
 
 *\* Review not performed — process gap. Subsequent increments will have accurate top-up counts.*
+
+---
+
+### Foundation Hardening — 2026-02-20
+
+| Metric | Value |
+|--------|-------|
+| **Agent count** | 3 (A: graph hardening, B: config hardening, C: CLI hardening) |
+| **Wave count** | 1 (all 3 parallel — zero file conflicts) |
+| **PR count** | 3 (#37, #38, #39) |
+| **Coverage before** | 69.3% (total), 94.8% (config), 92.9% (graph), 26.7% (root) |
+| **Coverage after** | 69.7% (total), 94.6% (config), 92.7% (graph), 28.1% (root) |
+| **Top-up fix count** | 1 (C8: DefaultSyncDir call site update applied during Agent B rebase) |
+| **Agent deviation count** | 0 (all 3 agents followed plan exactly) |
+| **CI failures** | 0 (all 3 PRs passed after rebase; Agent B's initial push failed as expected due to cross-agent dependency) |
+| **Wall-clock time** | ~2 hours |
+| **Backlog items created** | 6 (B-034 through B-039) |
+
+*Note: Config coverage dropped 0.2% (94.8% → 94.6%) due to new untestable error paths in atomicWriteFile fsync. Graph dropped 0.2% (92.9% → 92.7%) due to infinite-loop guard code path. Root improved +1.4% (26.7% → 28.1%) from new CLI tests. Total improved +0.4% (69.3% → 69.7%).*
+
+#### Per-Agent Breakdown
+
+| Agent | Tests Added | Coverage | Deviations | LEARNINGS |
+|-------|:----------:|:--------:|:----------:|:---------:|
+| A (graph hardening) | 4 | 92.7% (graph) | 0 | Section 17 |
+| B (config hardening) | 7 | 94.6% (config) | 0 | Section 19 |
+| C (CLI hardening) | 6 | 28.1% (root) | 0 | Section 18 |
+
+#### Agent Scorecards
+
+**Agent A (Graph Package Hardening)**
+
+| Criterion | Rating | Notes |
+|-----------|:------:|-------|
+| Correctness | 5 | All 5 fixes (A1-A5) correct. rewindBody handles nil/non-seekable gracefully |
+| Test quality | 5 | 4 new tests, httptest server for retry, table-driven encodePathSegments |
+| Code style | 5 | Clean helper extraction (rewindBody, terminalError) to satisfy lint limits |
+| Logging | 5 | terminalError logs attempt count + request-id |
+| Documentation | 5 | LEARNINGS section 17 with 6 learnings, full 9-point summary |
+| Plan adherence | 5 | Zero deviations — all 5 fixes as planned |
+| Communication | 5 | Full 9-point summary with decision log, confidence ratings |
+
+**Agent B (Config Package Hardening)**
+
+| Criterion | Rating | Notes |
+|-----------|:------:|-------|
+| Correctness | 5 | All 6 fixes (B1-B6) correct. fsync, validation, parameter order all solid |
+| Test quality | 5 | 7 new tests, new size_test.go file, sorted-list verification |
+| Code style | 5 | Clean, focused changes. sort.Strings for determinism |
+| Logging | N/A | Config package doesn't do I/O logging |
+| Documentation | 5 | LEARNINGS section 19, cross-package concern noted |
+| Plan adherence | 5 | Zero deviations — all 6 fixes as planned |
+| Communication | 5 | Full 9-point summary, noted expected build failure |
+
+**Agent C (CLI Command Hardening)**
+
+| Criterion | Rating | Notes |
+|-----------|:------:|-------|
+| Correctness | 5 | All 7 fixes (C1-C7) correct. SharePoint email extraction was a major bug fix |
+| Test quality | 5 | 6 new tests, updated SharePoint test expectations, token fallback tests |
+| Code style | 5 | Clean purgeSingleDrive extraction, CommandPath() usage |
+| Logging | 4 | Upload cancel logs warning on failure; findTokenFallback doesn't log probes |
+| Documentation | 5 | LEARNINGS section 18 with 5 learnings, full 9-point summary |
+| Plan adherence | 5 | C8 correctly deferred per plan (cross-agent dependency) |
+| Communication | 5 | Full 9-point summary with decision log |
+
+#### Orchestrator Self-Assessment
+
+| Criterion | Rating | Notes |
+|-----------|:------:|-------|
+| Planning quality | 5 | Perfect parallelization — zero file conflicts, one wave, clear cross-agent dependency documented |
+| Agent prompt clarity | 5 | All 3 agents followed plan with zero deviations |
+| Review thoroughness | 4 | Line-by-line review of all files; used explore agents for systematic review |
+| Top-up effectiveness | 5 | C8 call site applied cleanly during Agent B rebase |
+| Documentation updates | 5 | BACKLOG (6 items), metrics, CLAUDE.md all updated |
+| Escalation discipline | 5 | No autonomous decisions on non-trivial items |
 
 ---
 

@@ -21,6 +21,17 @@
 | B-030 | Review whether `internal/graph/` should be split | P2 | `internal/graph/` | After 1.4-1.6, package will have ~15 files. Assess cohesion vs. size. architecture.md already calls for this review point. |
 | B-033 | Implement accounts.md features | P1 | all | New features from accounts.md that will need implementation: setup wizard, `--browser` auth flow, `drive add`/`drive remove`, fuzzy `--drive` matching, RPC for `sync --watch`, email change detection, `service install`/`uninstall`/`status`, `status` command, `--account` flag for auth commands, text-level config manipulation, commented-out config defaults on first login. |
 
+## Backlog (Discovered During Foundation Hardening)
+
+| ID | Title | Priority | Package | Notes |
+|----|-------|----------|---------|-------|
+| B-034 | Add --json support for login, logout, drive add/remove | P2 | root | These commands output plain text only. `whoami` has --json but login/logout/drive don't. Per accounts.md §9, login should emit JSON events. |
+| B-035 | Add --quiet support for login, logout, whoami, status, drive | P2 | root | Auth/drive commands write to stdout via `fmt.Printf`. File ops use `statusf()` which respects --quiet. Standardize all commands. |
+| B-036 | Extract CLI service layer for testability | P2 | root | Root package at 28.1% coverage. All RunE handlers are untested. Need to extract pure logic from I/O and create interfaces for Graph client to enable mock-based testing. Target: 50%+ root package coverage. |
+| B-037 | Add chunk upload retry for pre-auth URLs | P2 | `internal/graph/` | `UploadChunk`, `CancelUploadSession`, `QueryUploadSession`, `downloadFromURL` bypass retry. Need lightweight retry wrapper for pre-authenticated URL operations. Important for Phase 4 transfer pipeline. |
+| B-038 | Document token source context lifetime | P3 | `internal/graph/` | `graph.Login` and `TokenSourceFromPath` bind caller's context to token source. Works because callers use `context.Background()`, but API is fragile. Add doc comments specifying context must outlive token source. |
+| B-039 | Add fsync to graph/auth.go saveToken | P3 | `internal/graph/` | Same pattern as config atomicWriteFile — no fsync before rename. Fix when touching auth.go next. |
+
 ## Icebox (Deferred / Nice-to-have)
 
 | ID | Title | Priority | Package | Notes |

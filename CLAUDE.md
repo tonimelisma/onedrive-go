@@ -46,8 +46,8 @@ Currently: Working CLI OneDrive client with discovery-based auth, account manage
 
 ### Active packages
 - **`pkg/quickxorhash/`** — QuickXorHash algorithm (hash.Hash interface) — complete
-- **`internal/config/`** — TOML configuration with flat global settings and per-drive sections, validation, XDG paths, four-layer override chain (`ResolveDrive()`), cross-field validation (`ValidateResolved()`), drive matching (exact/alias/partial), token/state path derivation (`DriveTokenPath()`, `DriveStatePath()`) — 95.1% coverage
-- **`internal/graph/`** — Graph API client: HTTP transport, auth (token path-based, no config import), retry, rate limiting, items CRUD, delta+normalization (incl. URL-decode + Prefer header), download/upload transfers (incl. session resume + fileSystemInfo), drives/user, path-based item resolution — feature-complete (92.9% coverage)
+- **`internal/config/`** — TOML configuration with flat global settings and per-drive sections, validation, XDG paths, four-layer override chain (`ResolveDrive()`), cross-field validation (`ValidateResolved()`), drive matching (exact/alias/partial), token/state path derivation (`DriveTokenPath()`, `DriveStatePath()`) — 94.6% coverage
+- **`internal/graph/`** — Graph API client: HTTP transport, auth (token path-based, no config import), retry, rate limiting, items CRUD, delta+normalization (incl. URL-decode + Prefer header), download/upload transfers (incl. session resume + fileSystemInfo), drives/user, path-based item resolution — feature-complete (92.7% coverage)
 - **Root package** — Cobra CLI: login (discovery-based), logout, whoami, status, drive add/remove, ls, get, put, rm, mkdir, stat (root.go, auth.go, files.go, format.go, status.go, drive.go). Global flags: `--account`, `--drive`, `--config`, `--json`, `--verbose`, `--quiet`
 - **`e2e/`** — E2E test suite (`//go:build e2e`): builds binary, exercises full round-trip against live OneDrive
 
