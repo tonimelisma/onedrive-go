@@ -54,20 +54,23 @@ MIT
 
 ### Design Principles
 
-Start small. Top-level verbs, no nested subcommands (except `config`). Familiar Unix-style names. Scriptable with `--json`. Add commands based on user demand, not speculation.
+Start small. Top-level verbs, no nested subcommands (except `drive` and `service`). Familiar Unix-style names. Scriptable with `--json`. Add commands based on user demand, not speculation.
+
+Two separate flags for two separate concepts: `--account` for authentication commands (identifies a Microsoft account by email), `--drive` for everything else (identifies a drive by canonical ID, alias, or partial match). See [accounts.md §7](accounts.md) for full details.
 
 ### Command Reference
 
 #### File Operations (scp-style)
 
-Direct API calls. No sync database involved. Work regardless of whether sync is running.
+Direct API calls. No sync database involved. Work regardless of whether sync is running. Work on all drives including disabled ones (tokens are still valid).
 
 ```
-onedrive-go ls [path]                  # List files and folders
+onedrive-go ls [path]                  # List remote files
 onedrive-go get <remote> [local]       # Download file or folder
 onedrive-go put <local> [remote]       # Upload file or folder
 onedrive-go rm <path>                  # Delete (to recycle bin by default)
 onedrive-go mkdir <path>               # Create folder
+onedrive-go stat <path>                # Show file/folder metadata
 ```
 
 #### Sync
@@ -76,7 +79,7 @@ One verb. Flags control mode. Only one sync process can run at a time (SQLite lo
 
 ```
 onedrive-go sync                       # One-shot bidirectional sync, exits when done
-onedrive-go sync --watch               # Continuous sync — stays running, reacts to changes
+onedrive-go sync --watch               # Continuous sync — stays running, re-syncs on interval
 onedrive-go sync --download-only       # One-way: download remote changes only
 onedrive-go sync --upload-only         # One-way: upload local changes only
 onedrive-go sync --dry-run             # Preview what would happen
@@ -85,15 +88,18 @@ onedrive-go sync --watch --quiet       # What you put in a systemd unit file
 
 `sync --watch` is just sync that doesn't exit. Run it interactively and you get progress output. Run it from systemd with `--quiet` and it logs to file. Same binary, same code path. There is no separate "daemon" concept.
 
+`sync --watch` re-reads config on each sync cycle. Drives added/removed/paused while running take effect on the next cycle. It idles gracefully with no enabled drives — can be installed as a service before any login.
+
 #### Sync Status and Conflicts
 
-Read the sync database directly. No RPC needed.
-
 ```
-onedrive-go status                     # Sync state, pending changes, unresolved conflict count
+onedrive-go status                     # Show all accounts, drives, and sync state
 onedrive-go conflicts                  # List unresolved conflicts with details
 onedrive-go resolve <id|path>          # Resolve conflicts (TBD: interactive and non-interactive modes)
+onedrive-go verify                     # Re-hash local files, compare to DB and remote
 ```
+
+`status` shows an account/drive hierarchy with token status and per-drive sync state. See [accounts.md §12](accounts.md).
 
 `resolve` is TBD — it may support interactive resolution (prompting per conflict), non-interactive batch resolution (e.g. `--accept-remote`, `--accept-local`), or both. Design will be finalized in the sync algorithm spec.
 
@@ -111,23 +117,49 @@ When paused, the process stays alive and continues tracking changes (delta API, 
 #### Account Management
 
 ```
-onedrive-go login                      # Authenticate (auto-detects best method)
-onedrive-go login --headless           # Force headless auth (no browser needed)
-onedrive-go logout                     # Clear credentials
+onedrive-go login [--browser]          # Sign in + auto-add primary drive (device code by default)
+onedrive-go logout [--purge]           # Sign out (--purge: also delete state DBs + config sections)
+onedrive-go whoami                     # Show authenticated accounts
 ```
 
-Authentication auto-detects the environment:
-- **Interactive with browser available**: Starts a temporary localhost HTTP server, opens the system browser to Microsoft OAuth, catches the redirect token automatically. Zero copy-paste.
-- **Headless / SSH / no browser**: Falls back to device code flow (displays a URL and code to enter on any device). Forced with `--headless`.
+Authentication defaults to device code flow (works everywhere — headless, SSH, containers). The `--browser` flag switches to authorization code flow with a localhost callback (opens browser, fewer steps for desktop users). Both methods block until auth completes or time out.
 
-Exact auth flow design is TBD and will be finalized post-MVP. The existing device code flow works for MVP; localhost redirect is a UX improvement to add later.
+`login` auto-detects account type (personal vs business) and auto-adds the primary drive with sensible defaults. No interactive config prompts — just authenticate and go. Business logins mention SharePoint availability and suggest `drive add`.
+
+See [accounts.md §9](accounts.md) for full login flow details, including `--json` output for GUI/scripting integration.
+
+#### Drive Management
+
+```
+onedrive-go drive add                  # Add a SharePoint library or resume a paused drive
+onedrive-go drive remove [--purge]     # Pause a drive (--purge: delete state DB + config section)
+```
+
+`drive add` is interactive — it shows available SharePoint libraries and paused drives. For non-interactive use: `drive add --site marketing --library Documents`. It does NOT offer new account sign-in — that's what `login` is for.
+
+`drive remove` sets `enabled = false` in config. Everything preserved. `--purge` permanently removes state DB and config section; token kept if shared with other drives.
+
+See [accounts.md §10](accounts.md) for details.
 
 #### Configuration
 
 ```
-onedrive-go config init                # Interactive setup wizard
-onedrive-go config show                # Display current configuration
+onedrive-go setup                      # Interactive guided configuration (menu-driven)
 ```
+
+`setup` is the one interactive command for configuration. It covers: viewing drives/settings, changing sync directories, configuring exclusions, setting sync interval and log level, per-drive overrides, and aliases. Everything `setup` does can also be done by editing `config.toml` directly. Power users edit the file.
+
+There is no `config show` command. Users read the config file directly. `status` shows runtime state. `--debug` shows config resolution at startup.
+
+#### Service Management
+
+```
+onedrive-go service install            # Generate and install systemd/launchd service file (does NOT enable)
+onedrive-go service uninstall          # Remove the installed service file
+onedrive-go service status             # Show whether service is installed, enabled, running
+```
+
+`service install` writes the appropriate service file for the platform and prints native commands to enable/disable. Never auto-enables. See [accounts.md §13](accounts.md).
 
 #### Migration
 
@@ -139,28 +171,42 @@ onedrive-go migrate --from abraunegg   # Explicitly migrate from abraunegg/onedr
 onedrive-go migrate --from rclone      # Explicitly migrate from rclone OneDrive remote
 ```
 
-During `config init`, the wizard also checks for existing abraunegg/rclone configurations and offers to import them. It detects existing ignore/filter files (abraunegg's `sync_list`, rclone's filter config) in the OneDrive directory and offers to convert them to `.odignore` / config patterns.
-
 #### Future Commands (added on demand)
 
 These are not in the MVP. They may be added later based on user requests:
 
 ```
 cp, mv                                # Server-side copy/move
-find, du, stat, cat, share            # Utility commands
-whoami                                # Show current user and account type
-config edit, config validate           # Config management
+find, du, cat, share                   # Utility commands
 ```
 
 ### Global Flags
 
 ```
---profile <name>       # Select account profile (default: "default")
+--account <email>      # Select account by email (auth commands: login, logout)
+--drive <id|alias>     # Select drive by canonical ID, alias, or partial match (repeatable for sync/status)
 --config <path>        # Override config file location
 --json                 # Machine-readable JSON output
---verbose / -v         # Verbose output (stackable: -vv for debug)
---quiet / -q           # Suppress non-error output
+--verbose / -v         # Show individual file operations
+--debug                # Show HTTP requests, internal state, config resolution
+--quiet / -q           # Errors only
 --dry-run              # Preview operations without executing
+```
+
+`--drive` uses shortest unique partial matching. Error messages show all available drives with their shortest unique identifiers. See [accounts.md §7](accounts.md) for full matching semantics.
+
+### Sync-Specific Flags
+
+```
+--watch                # Continuous sync — stay running, re-sync on poll_interval
+--download-only        # One-way: download remote changes only
+--upload-only          # One-way: upload local changes only
+```
+
+### Login-Specific Flags
+
+```
+--browser              # Use authorization code flow (opens browser, localhost callback)
 ```
 
 ---
@@ -173,10 +219,10 @@ The sync database (SQLite) enforces single-writer exclusivity. Only one sync pro
 
 | Command type | Another sync running? | What happens |
 |---|---|---|
-| File ops (`ls`, `get`, `put`, `rm`, `mkdir`) | Doesn't matter | Direct API call, no DB involved |
+| File ops (`ls`, `get`, `put`, `rm`, `mkdir`, `stat`) | Doesn't matter | Direct API call, no DB involved |
 | `sync` (one-shot or `--watch`) | No | Open DB, do work |
 | `sync` | Yes | Error: database is locked |
-| `status`, `conflicts`, `resolve` | Doesn't matter | Read DB directly (SQLite supports concurrent readers) |
+| `status`, `conflicts`, `resolve`, `verify` | Doesn't matter | Read DB directly (SQLite supports concurrent readers) |
 
 There is no RPC, no control socket, no daemon concept at MVP. `sync --watch` is just sync that keeps running. If you want to stop it, Ctrl-C or `systemctl stop`.
 
@@ -187,13 +233,14 @@ When RPC is added, `sync --watch` exposes a JSON-over-HTTP API on a Unix domain 
 - `pause` / `resume` CLI commands
 - GUI frontends (real-time status, pause/resume, conflict resolution)
 - `sync` while `--watch` is running could delegate instead of erroring
+- Status queries, force-sync, pause/resume
 
 Two access patterns, same socket:
 
 - **Polling**: `GET /status` returns JSON and closes. Simple scripts and status bar widgets poll this as often as they want.
 - **Push**: `GET /events` is an SSE (Server-Sent Events) stream. The connection stays open and the daemon pushes events (transfer progress, sync complete, conflict detected, paused/resumed) the instant they happen. GUIs use this for real-time updates.
 
-The RPC API serves CLI and GUI identically — same socket, same endpoints, same capabilities. Protocol details (SSE vs alternatives) finalized in the architecture spec. This is a deliberate improvement over abraunegg, where OneDriveGUI must parse stdout with regex.
+The RPC API serves CLI and GUI identically — same socket, same endpoints, same capabilities. Login is always done via the CLI, not via RPC — login requires user interaction. If a token expires while the service is running, it logs an error and tells the user to run `onedrive-go login` in a terminal.
 
 ---
 
@@ -205,37 +252,40 @@ All three OneDrive account types supported from day one:
 
 - **OneDrive Personal**: Consumer Microsoft accounts
 - **OneDrive Business**: Microsoft 365 / Azure AD work accounts
-- **SharePoint Document Libraries**: Via drive ID targeting
+- **SharePoint Document Libraries**: Via drive management (one business login grants access to all)
 
 ### Multi-Account Support
 
-A single config file holds multiple named profiles. A single `sync --watch` process can sync all profiles simultaneously.
+A single config file holds multiple drive sections. A single `sync --watch` process syncs all enabled drives simultaneously. Each drive syncs in its own goroutine with its own state DB.
 
 ```toml
-[profile.personal]
-account_type = "personal"
+# ── Global settings ──
+log_level = "info"
+skip_dotfiles = true
+
+# ── Drives ──
+
+["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
-remote_path = "/"
 
-[profile.work]
-account_type = "business"
-sync_dir = "~/OneDrive-Work"
-remote_path = "/"
+["business:alice@contoso.com"]
+sync_dir = "~/OneDrive - Contoso"
+skip_dirs = ["node_modules", ".git", "vendor"]
 
-[profile.sharepoint-docs]
-account_type = "sharepoint"
-drive_id = "b!abc123..."
-sync_dir = "~/SharePoint-Docs"
-remote_path = "/Shared Documents"
+["sharepoint:alice@contoso.com:marketing:Documents"]
+sync_dir = "~/Contoso/Marketing - Documents"
+enabled = false
 ```
 
 CLI usage:
 
 ```
-onedrive-go sync --profile work
-onedrive-go ls /Documents --profile personal
-onedrive-go sync --watch                 # syncs all profiles
+onedrive-go sync --drive work          # sync one drive (by alias)
+onedrive-go ls /Documents --drive personal
+onedrive-go sync --watch               # syncs all enabled drives
 ```
+
+SharePoint drives share the business account's OAuth token — same user, same session, same scopes. Only the state DB is per-drive.
 
 ---
 
@@ -251,15 +301,9 @@ All sync modes are flags on the `sync` verb. No separate verbs for direction or 
 
 `onedrive-go sync --download-only` — downloads remote changes to local. Local changes are ignored. Useful for read-only mirrors, backups, or shared resource consumption.
 
-Options:
-- `--cleanup-local`: Delete local files that were deleted remotely (off by default — archive mode)
-
 ### Upload-Only
 
 `onedrive-go sync --upload-only` — uploads local changes to remote. Remote changes are ignored. Useful for backup, publishing, or one-way deployment.
-
-Options:
-- `--no-remote-delete`: Don't propagate local deletions to remote (off by default)
 
 ### One-Shot vs. Continuous
 
@@ -324,27 +368,31 @@ This is a differentiating feature. No competing tool does this well.
 
 ### Config-Based Filtering
 
-Global filtering rules in the TOML config file:
+Global filtering rules as flat top-level TOML keys:
 
 ```toml
-[filter]
-skip_dotfiles = false                    # Skip .hidden files and folders
-skip_symlinks = false                    # Skip symbolic links (default: follow them)
-max_file_size = "50GB"                   # Skip files larger than this
-skip_files = ["~*", "*.tmp", "*.partial", "*.crdownload", ".DS_Store", "Thumbs.db"]
-skip_dirs = ["node_modules", ".git", "__pycache__", ".Trash-*"]
+skip_dotfiles = false
+skip_files = ["~*", "*.tmp", "*.partial", ".DS_Store", "Thumbs.db"]
+skip_dirs = ["node_modules", ".git", "__pycache__"]
+ignore_marker = ".odignore"
+max_file_size = "50GB"
+```
 
-# Per-profile overrides
-[profile.work.filter]
+Per-drive overrides for individual filter settings:
+
+```toml
+["business:alice@contoso.com"]
+sync_dir = "~/OneDrive - Contoso"
 skip_dirs = ["node_modules", ".git", "vendor"]
 ```
 
 ### Inclusion Lists (Selective Sync)
 
-For syncing only specific directories:
+For syncing only specific directories, set `sync_paths` in a drive section:
 
 ```toml
-[profile.personal]
+["personal:toni@outlook.com"]
+sync_dir = "~/OneDrive"
 sync_paths = ["/Documents", "/Photos/Camera Roll", "/Work"]
 ```
 
@@ -369,8 +417,7 @@ dist/
 The marker filename is configurable:
 
 ```toml
-[filter]
-ignore_marker = ".odignore"    # default
+ignore_marker = ".odignore"
 ```
 
 ### Symlink Handling
@@ -390,10 +437,9 @@ ignore_marker = ".odignore"    # default
 - Transfer count configurable independently:
 
 ```toml
-[transfers]
 parallel_downloads = 8
 parallel_uploads = 8
-parallel_checkers = 8           # Hash comparison workers
+parallel_checkers = 8
 ```
 
 ### Resumable Transfers
@@ -408,13 +454,12 @@ parallel_checkers = 8           # Hash comparison workers
 Global bandwidth limit with time-of-day scheduling:
 
 ```toml
-[transfers]
 bandwidth_limit = "0"                           # No limit (default)
 # Or with schedule:
 bandwidth_schedule = [
-    { time = "08:00", limit = "5MB/s" },        # Throttle during work hours
-    { time = "18:00", limit = "50MB/s" },        # More bandwidth evenings
-    { time = "23:00", limit = "0" },             # Unlimited overnight
+    { time = "08:00", limit = "5MB/s" },
+    { time = "18:00", limit = "50MB/s" },
+    { time = "23:00", limit = "0" },
 ]
 ```
 
@@ -439,8 +484,7 @@ Run with --force to proceed, or adjust big_delete_threshold in config.
 ```
 
 ```toml
-[safety]
-big_delete_threshold = 1000     # Abort if deleting more than this many items
+big_delete_threshold = 1000
 ```
 
 ### Dry-Run Mode
@@ -463,9 +507,8 @@ Remote deletions go to the OneDrive recycle bin (not permanent delete) by defaul
 Local deletions triggered by remote changes go to the OS trash (FreeDesktop.org Trash spec on Linux, Finder Trash on macOS) by default.
 
 ```toml
-[safety]
-use_recycle_bin = true          # Remote: use OneDrive recycle bin (default)
-use_local_trash = true          # Local: use OS trash for remote-triggered deletes (default)
+use_recycle_bin = true
+use_local_trash = true
 ```
 
 ### Disk Space Reservation
@@ -473,8 +516,7 @@ use_local_trash = true          # Local: use OS trash for remote-triggered delet
 Reserve minimum free disk space before downloading:
 
 ```toml
-[safety]
-min_free_space = "1GB"          # Don't download if less than this free
+min_free_space = "1GB"
 ```
 
 ### Crash Recovery
@@ -487,80 +529,59 @@ The sync database uses SQLite with WAL mode and FULL synchronous writes. Every o
 
 ### Format
 
-TOML. Human-readable, supports comments, hierarchical. File location:
+TOML. Human-readable, supports comments, flat top-level keys with drive sections. File location:
 
-- Linux: `~/.config/onedrive-go/config.toml`
+- Linux: `~/.config/onedrive-go/config.toml` (or `~/.local/share/onedrive-go/config.toml`)
 - macOS: `~/Library/Application Support/onedrive-go/config.toml`
 - Override: `ONEDRIVE_GO_CONFIG` environment variable or `--config` flag
 
+### Config Auto-Creation
+
+Config is auto-created by `login`. On first login, a complete config is written from a template string with all global settings as commented-out defaults (so users discover options without reading docs). The drive section is appended. See [configuration.md](configuration.md) and [accounts.md §4](accounts.md) for details.
+
+### Config Modification
+
+Config is modified by `login`, `drive add`, `drive remove`, and `setup`. Modifications use line-based text edits (not TOML round-trip serialization) to preserve all comments. Manual editing is always supported and encouraged. See [accounts.md §4](accounts.md) for the text-level manipulation approach.
+
 ### Interactive Setup
 
-`onedrive-go config init` runs an interactive wizard:
-
-1. Authenticate with Microsoft (device code flow)
-2. Select account type (Personal / Business / SharePoint)
-3. Choose or create local sync directory
-4. Set basic filtering preferences
-5. **Auto-detect existing tools**: check for abraunegg config (`~/.config/onedrive/`), rclone OneDrive remotes (`~/.config/rclone/rclone.conf`), and existing ignore files in the sync directory. Offer to import.
-6. **Detect running instances**: warn if abraunegg or rclone is currently syncing the same OneDrive account to avoid conflicts.
-7. Write config.toml with comments explaining each option
+`onedrive-go setup` is the interactive guided configuration command. It covers all configuration tasks: viewing drives, changing sync directories, managing exclusions, setting poll intervals, log levels, per-drive overrides, and aliases. Unlike `login` (which assumes defaults and tells you what it did), `setup` is menu-driven and lets users change anything.
 
 ### Example Config
 
 ```toml
 # onedrive-go configuration
+# Docs: https://github.com/tonimelisma/onedrive-go
 
-[profile.default]
-account_type = "personal"       # personal, business, sharepoint
-sync_dir = "~/OneDrive"         # Local directory to sync
-remote_path = "/"               # Remote path to sync from
-# drive_id = ""                 # Required for SharePoint
+# ── Global settings ──
+# Uncomment and modify to override defaults.
 
-[filter]
-skip_dotfiles = false
-skip_files = ["~*", "*.tmp", "*.partial", ".DS_Store", "Thumbs.db"]
-skip_dirs = ["node_modules", ".git", "__pycache__"]
-ignore_marker = ".odignore"
-# max_file_size = "50GB"
-# sync_paths = ["/Documents", "/Photos"]    # Selective sync (empty = sync all)
+# log_level = "info"
+# skip_dotfiles = false
+# skip_dirs = []
+# skip_files = []
+# poll_interval = "5m"
 
-[transfers]
-parallel_downloads = 8
-parallel_uploads = 8
-parallel_checkers = 8
-chunk_size = "10MB"
-# bandwidth_limit = "0"
-# bandwidth_schedule = [
-#     { time = "08:00", limit = "5MB/s" },
-#     { time = "23:00", limit = "0" },
-# ]
+# ── Drives ──
 
-[safety]
-big_delete_threshold = 1000
-use_recycle_bin = true
-use_local_trash = true
-min_free_space = "1GB"
+["personal:toni@outlook.com"]
+sync_dir = "~/OneDrive"
 
-[sync]
-poll_interval = "5m"            # Fallback polling interval
-conflict_reminder_interval = "1h"
-# websocket = true              # Near-real-time remote changes (default: true)
-
-[logging]
-level = "info"                  # debug, info, warn, error
-file = ""                       # Log file path (empty = stderr only in interactive, auto with --quiet)
-format = "text"                 # text (interactive) or json (--quiet/structured)
+["business:alice@contoso.com"]
+sync_dir = "~/OneDrive - Contoso"
+alias = "work"
+skip_dirs = ["node_modules", ".git", "vendor"]
 ```
 
 ---
 
 ## 13. Service Integration
 
-`sync --watch --quiet` is what you run as a service. It's the same binary, same code path — just continuous sync with machine-friendly output.
+`sync --watch` runs in the foreground. No `--daemon` flag — modern service managers handle process lifecycle.
 
 ### Linux (systemd)
 
-Ship a systemd unit file:
+`onedrive-go service install` generates:
 
 ```ini
 [Unit]
@@ -570,7 +591,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/onedrive-go sync --watch --quiet
+ExecStart=/usr/bin/onedrive-go sync --watch
 Restart=on-failure
 RestartSec=10
 
@@ -580,14 +601,14 @@ WantedBy=default.target
 
 Usage:
 ```
-systemctl --user enable onedrive-go
-systemctl --user start onedrive-go
+onedrive-go service install
+systemctl --user enable --now onedrive-go
 journalctl --user-unit onedrive-go -f
 ```
 
 ### macOS (launchd)
 
-Ship a launchd plist for `~/Library/LaunchAgents/`. Runs `sync --watch --quiet`.
+`onedrive-go service install` generates a launchd plist for `~/Library/LaunchAgents/`.
 
 ### Docker
 
@@ -600,9 +621,22 @@ docker run -d \
   onedrive-go sync --watch --quiet
 ```
 
+### Service-First Setup
+
+The service can be installed and enabled before any login. It idles with no drives. When a drive is added via `login`, the next sync cycle picks it up automatically. No restart needed.
+
 ---
 
 ## 14. Observability
+
+### Two Independent Logging Channels
+
+| Channel | What controls it | Default |
+|---|---|---|
+| **Console** (stderr) | CLI flags (`--quiet`, `--verbose`, `--debug`) | Operational summaries |
+| **Log file** | `log_level` in config | `info` level, platform-default path |
+
+Console flags and log file level are independent. See [accounts.md §5](accounts.md).
 
 ### Interactive Mode
 
@@ -610,7 +644,7 @@ Human-readable output to stderr. Progress bars for transfers. Color-coded status
 
 ```
 $ onedrive-go sync
-Syncing profile "default" (OneDrive Personal)...
+Syncing personal:toni@outlook.com...
 ↓ report-v2.pdf                    2.3 MB  [===========] 100%  3.2 MB/s
 ↑ IMG_001.jpg                      4.1 MB  [======>    ]  62%  5.1 MB/s
 ! 1 conflict: Notes/meeting.md
@@ -620,16 +654,16 @@ Sync complete: 3 downloaded, 2 uploaded, 1 conflict
 
 ### Quiet / Service Mode
 
-With `--quiet`, output switches to structured JSON logs to file (default: `~/.local/share/onedrive-go/onedrive-go.log`):
+With `--quiet`, only errors reach stderr. The log file captures everything:
 
 ```json
-{"time":"2026-02-17T10:30:00Z","level":"info","msg":"sync_complete","profile":"default","downloaded":3,"uploaded":2,"conflicts":1,"duration":"12.4s"}
+{"time":"2026-02-17T10:30:00Z","level":"info","msg":"sync_complete","drive":"personal:toni@outlook.com","downloaded":3,"uploaded":2,"conflicts":1,"duration":"12.4s"}
 ```
 
 ### Future: TUI (post-1.0)
 
 Interactive terminal UI (like lazygit/lazydocker) showing:
-- Real-time sync status across all profiles
+- Real-time sync status across all drives
 - Transfer progress
 - Conflict resolution interface
 - Log viewer
@@ -678,30 +712,30 @@ All 12+ known Microsoft Graph API quirks are handled from day one.
 ### From abraunegg/onedrive
 
 **What it migrates:**
-- `sync_dir` -> `profile.default.sync_dir`
-- `skip_dir`, `skip_file` patterns -> `filter.skip_dirs`, `filter.skip_files`
-- `skip_dotfiles` -> `filter.skip_dotfiles`
+- `sync_dir` -> drive section `sync_dir`
+- `skip_dir`, `skip_file` patterns -> `skip_dirs`, `skip_files`
+- `skip_dotfiles` -> `skip_dotfiles`
 - `download_only` / `upload_only` -> noted in output (these are CLI flags, not config)
-- `rate_limit` -> `transfers.bandwidth_limit`
-- `threads` -> `transfers.parallel_downloads` / `transfers.parallel_uploads`
-- `monitor_interval` -> `sync.poll_interval`
-- `sync_list` -> `filter.sync_paths` + `filter.skip_*` (best-effort conversion)
-- `classify_as_big_delete` -> `safety.big_delete_threshold`
+- `rate_limit` -> `bandwidth_limit`
+- `threads` -> `parallel_downloads` / `parallel_uploads`
+- `monitor_interval` -> `poll_interval`
+- `sync_list` -> `sync_paths` (best-effort conversion)
+- `classify_as_big_delete` -> `big_delete_threshold`
 
 ### From rclone
 
 **What it migrates:**
-- Remote name -> profile name
-- `drive_id` -> `profile.<name>.drive_id`
-- `drive_type` -> `profile.<name>.account_type`
+- Remote name -> drive alias
+- `drive_id` -> drive section `drive_id`
+- `drive_type` -> auto-detected drive type
 - Token -> NOT migrated (different OAuth application ID; must re-authenticate)
-- rclone filter rules -> `filter.*` (best-effort conversion)
+- rclone filter rules -> `skip_files`/`skip_dirs` (best-effort conversion)
 
 ### Common to Both
 
 - Authentication tokens -> NOT migrated (must re-authenticate with `onedrive-go login`)
 - Sync state database -> NOT migrated (fresh initial sync required)
-- Generated `config.toml` includes comments noting where each value came from
+- Generated config includes comments noting where each value came from
 - Warnings for source options that have no equivalent
 - Instructions for completing the migration
 
@@ -719,9 +753,9 @@ All 12+ known Microsoft Graph API quirks are handled from day one.
 | **Shared folders** | Not supported for OneDrive | Supported (post-MVP) |
 | **OneDrive API quirks** | Minimal workarounds | All 12+ known quirks handled |
 | **Real-time sync** | No daemon, no filesystem watching | `sync --watch` with WebSocket + inotify/FSEvents |
-| **Setup** | Complex config for OneDrive (client ID, etc.) | Interactive wizard, just works |
+| **Setup** | Complex config for OneDrive (client ID, etc.) | `login` auto-configures, `setup` for guided config |
 | **Delta queries** | Only from drive root, no folder-scoped delta | Full delta support with token management |
-| **Multi-account** | Separate remotes in config | Single config, single process, multiple profiles |
+| **Multi-account** | Separate remotes in config | Single config, single process, multiple drives |
 | **GUI integration** | HTTP API (rclone rc) | Control socket API (post-MVP, purpose-built) |
 | **FUSE mount** | Excellent (`rclone mount`) | Planned post-MVP |
 | **Encryption** | Built-in crypt backend | Not a goal (use rclone crypt or OS encryption) |
@@ -738,14 +772,14 @@ All 12+ known Microsoft Graph API quirks are handled from day one.
 | **Memory usage** | ~1GB per 100K items | Target: <100MB per 100K items |
 | **CPU when idle** | #1 complaint: high CPU | Target: <1% idle CPU |
 | **Initial sync** | Reports of 16+ hours | Parallel delta + parallel transfers from start |
-| **Config changes** | Require destructive `--resync` | Hot-reload where possible, graceful re-scan otherwise |
+| **Config changes** | Require destructive `--resync` | Config re-read each sync cycle, changes take effect automatically |
 | **Filtering** | 7 layers with confusing interactions | Layered but predictable: config -> sync_paths -> .odignore markers |
 | **Conflict handling** | Creates backup files, forgets about them | Conflict ledger with resolution tracking |
-| **Multi-account** | Separate process per account | Single `sync --watch`, multiple profiles |
+| **Multi-account** | Separate process per account | Single `sync --watch`, multiple drives |
 | **CLI design** | Monolithic: flags control everything | Unix-style verbs: `ls`, `get`, `put`, `sync` |
 | **GUI integration** | stdout parsing (fragile, one-way) | Control socket API (post-MVP, structured, bidirectional) |
 | **Pause/resume** | Not supported | Built-in (post-MVP, works from CLI and GUI) |
-| **Setup** | Manual config file creation | Interactive wizard with auto-migration |
+| **Setup** | Manual config file creation | `login` auto-configures, `setup` for guided changes, `migrate` for import |
 | **Real-time remote** | WebSocket (v2.5.8+) | WebSocket from day one |
 | **Shared folders** | Supported (complex, fragile) | Post-MVP, designed to be robust |
 | **Dry-run** | Supported | Supported (MVP) |
@@ -767,12 +801,14 @@ All 12+ known Microsoft Graph API quirks are handled from day one.
 
 The minimum to be useful. Start small, add based on demand.
 
-**CLI commands (13 verbs):**
+**CLI commands:**
 - [ ] `sync` [--watch] [--download-only] [--upload-only] [--dry-run]
-- [ ] `status`, `conflicts`, `resolve`
-- [ ] `ls`, `get`, `put`, `rm`, `mkdir`
-- [ ] `login`, `logout`
-- [ ] `config` (init, show)
+- [ ] `status`, `conflicts`, `resolve`, `verify`
+- [ ] `ls`, `get`, `put`, `rm`, `mkdir`, `stat`
+- [ ] `login` [--browser], `logout` [--purge], `whoami`
+- [ ] `drive add`, `drive remove` [--purge]
+- [ ] `setup`
+- [ ] `service install`, `service uninstall`, `service status`
 - [ ] `migrate` (from abraunegg + rclone, with auto-detection)
 
 **Sync engine:**
@@ -791,8 +827,9 @@ The minimum to be useful. Start small, add based on demand.
 - [ ] QuickXorHash for content verification
 
 **Infrastructure:**
-- [ ] TOML configuration with profiles
+- [ ] TOML configuration with flat global keys + drive sections
 - [ ] Personal + Business + SharePoint account support
+- [ ] Multi-drive sync in a single process
 - [ ] All known API quirk workarounds
 - [ ] Structured logging (text interactive, JSON with --quiet)
 - [ ] E2E test suite against live OneDrive
@@ -820,7 +857,7 @@ The minimum to be useful. Start small, add based on demand.
 
 ### Someday / Maybe
 
-- [ ] `cp`, `mv`, `find`, `du`, `stat`, `cat`, `share`, `whoami` commands
+- [ ] `cp`, `mv`, `find`, `du`, `cat`, `share` commands
 - [ ] On-demand files (FUSE with lazy download)
 - [ ] Desktop notifications (libnotify / macOS Notification Center)
 - [ ] File manager integration (Nautilus, Dolphin sidebar)
