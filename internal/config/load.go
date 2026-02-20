@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -14,7 +15,9 @@ import (
 // it, and returns the resulting Config. Pass 1 decodes flat global settings
 // into embedded structs. Pass 2 extracts drive sections (keys containing ":").
 // Unknown keys are treated as fatal errors with "did you mean?" suggestions.
-func Load(path string) (*Config, error) {
+func Load(path string, logger *slog.Logger) (*Config, error) {
+	logger.Debug("loading config file", "path", path)
+
 	cfg := DefaultConfig()
 
 	data, err := os.ReadFile(path)
@@ -41,6 +44,11 @@ func Load(path string) (*Config, error) {
 	if err := Validate(cfg); err != nil {
 		return nil, fmt.Errorf("config validation failed: %w", err)
 	}
+
+	logger.Debug("config file parsed successfully",
+		"path", path,
+		"drive_count", len(cfg.Drives),
+	)
 
 	return cfg, nil
 }
@@ -99,23 +107,25 @@ func mapToDrive(m map[string]any, d *Drive) error {
 // LoadOrDefault reads a TOML config file if it exists, otherwise returns
 // a Config populated with all default values. This supports the zero-config
 // first-run experience: users can start without creating a config file.
-func LoadOrDefault(path string) (*Config, error) {
+func LoadOrDefault(path string, logger *slog.Logger) (*Config, error) {
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		logger.Debug("config file not found, using defaults", "path", path)
+
 		return DefaultConfig(), nil
 	}
 
-	return Load(path)
+	return Load(path, logger)
 }
 
 // ResolveDrive loads configuration and applies the four-layer override chain:
 // defaults -> config file -> environment variables -> CLI flags.
 // It returns a fully resolved and validated drive configuration ready for use.
-func ResolveDrive(env EnvOverrides, cli CLIOverrides) (*ResolvedDrive, error) {
+func ResolveDrive(env EnvOverrides, cli CLIOverrides, logger *slog.Logger) (*ResolvedDrive, error) {
 	// Step 1: resolve config path (CLI > env > default).
-	cfgPath := resolveConfigPath(env, cli)
+	cfgPath := resolveConfigPath(env, cli, logger)
 
 	// Step 2: load config file (returns defaults if no file exists).
-	cfg, err := LoadOrDefault(cfgPath)
+	cfg, err := LoadOrDefault(cfgPath, logger)
 	if err != nil {
 		return nil, fmt.Errorf("loading config: %w", err)
 	}
@@ -126,18 +136,25 @@ func ResolveDrive(env EnvOverrides, cli CLIOverrides) (*ResolvedDrive, error) {
 		selector = cli.Drive
 	}
 
+	logger.Debug("drive selector resolved",
+		"selector", selector,
+		"source_env", env.Drive,
+		"source_cli", cli.Drive,
+	)
+
 	// Step 4: match drive.
-	canonicalID, drive, err := matchDrive(cfg, selector)
+	canonicalID, drive, err := matchDrive(cfg, selector, logger)
 	if err != nil {
 		return nil, err
 	}
 
 	// Step 5: build resolved drive (global + per-drive overrides).
-	resolved := buildResolvedDrive(cfg, canonicalID, &drive)
+	resolved := buildResolvedDrive(cfg, canonicalID, &drive, logger)
 
 	// Step 6: apply CLI overrides.
 	if cli.DryRun != nil {
 		resolved.DryRun = *cli.DryRun
+		logger.Debug("CLI override applied", "dry_run", resolved.DryRun)
 	}
 
 	// Step 7: validate the final resolved drive.
@@ -150,16 +167,21 @@ func ResolveDrive(env EnvOverrides, cli CLIOverrides) (*ResolvedDrive, error) {
 
 // resolveConfigPath determines the config file path from CLI flags,
 // environment variables, or the platform default.
-func resolveConfigPath(env EnvOverrides, cli CLIOverrides) string {
+func resolveConfigPath(env EnvOverrides, cli CLIOverrides, logger *slog.Logger) string {
 	cfgPath := DefaultConfigPath()
+	source := "default"
 
 	if env.ConfigPath != "" {
 		cfgPath = env.ConfigPath
+		source = "env"
 	}
 
 	if cli.ConfigPath != "" {
 		cfgPath = cli.ConfigPath
+		source = "cli"
 	}
+
+	logger.Debug("config path resolved", "path", cfgPath, "source", source)
 
 	return cfgPath
 }

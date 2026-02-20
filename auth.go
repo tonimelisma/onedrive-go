@@ -287,7 +287,7 @@ func resolveLoginConfigPath() string {
 
 // driveExistsInConfig checks whether a canonical ID already exists in the config file.
 func driveExistsInConfig(cfgPath, canonicalID string) (bool, error) {
-	cfg, err := config.LoadOrDefault(cfgPath)
+	cfg, err := config.LoadOrDefault(cfgPath, slog.Default())
 	if err != nil {
 		return false, err
 	}
@@ -300,7 +300,7 @@ func driveExistsInConfig(cfgPath, canonicalID string) (bool, error) {
 // collectExistingSyncDirs reads the config file and returns all configured sync_dir values.
 // Used for collision detection when picking a default sync directory.
 func collectExistingSyncDirs(cfgPath string, logger *slog.Logger) []string {
-	cfg, err := config.LoadOrDefault(cfgPath)
+	cfg, err := config.LoadOrDefault(cfgPath, logger)
 	if err != nil {
 		logger.Warn("failed to load config for sync dir collision check",
 			"config_path", cfgPath, "error", err)
@@ -379,7 +379,7 @@ func runLogout(cmd *cobra.Command, _ []string) error {
 	cfgPath := resolveLoginConfigPath()
 
 	// Load config to find drives associated with the account.
-	cfg, loadErr := config.LoadOrDefault(cfgPath)
+	cfg, loadErr := config.LoadOrDefault(cfgPath, logger)
 	if loadErr != nil {
 		logger.Warn("failed to load config, proceeding with --account only", "error", loadErr)
 		cfg = config.DefaultConfig()
@@ -630,7 +630,7 @@ func resolveWhoamiDrive() (string, error) {
 
 	cfgPath := resolveLoginConfigPath()
 
-	cfg, err := config.LoadOrDefault(cfgPath)
+	cfg, err := config.LoadOrDefault(cfgPath, slog.Default())
 	if err != nil {
 		return "", fmt.Errorf("loading config: %w", err)
 	}

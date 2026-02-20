@@ -122,7 +122,7 @@ func loadConfig(cmd *cobra.Command) error {
 		cli.Drive = flagDrive
 	}
 
-	env := config.ReadEnvOverrides()
+	env := config.ReadEnvOverrides(logger)
 
 	logger.Debug("resolving config",
 		slog.String("config_path", cli.ConfigPath),
@@ -131,7 +131,7 @@ func loadConfig(cmd *cobra.Command) error {
 		slog.String("env_drive", env.Drive),
 	)
 
-	resolved, err := config.ResolveDrive(env, cli)
+	resolved, err := config.ResolveDrive(env, cli, logger)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}

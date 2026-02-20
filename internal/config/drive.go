@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -37,12 +38,14 @@ type ResolvedDrive struct {
 // matchDrive selects a drive from the config by selector string. The matching
 // precedence is: exact canonical ID > alias > partial canonical ID substring.
 // If selector is empty, auto-selects when exactly one drive is configured.
-func matchDrive(cfg *Config, selector string) (string, Drive, error) {
+func matchDrive(cfg *Config, selector string, logger *slog.Logger) (string, Drive, error) {
 	if len(cfg.Drives) == 0 {
 		// If the selector looks like a canonical ID (contains ":"), allow
 		// zero-config usage. This supports CLI-only workflows where --drive
 		// provides a canonical ID and no config file exists.
 		if strings.Contains(selector, ":") {
+			logger.Debug("zero-config mode: using selector as canonical ID", "selector", selector)
+
 			return selector, Drive{}, nil
 		}
 
@@ -50,16 +53,18 @@ func matchDrive(cfg *Config, selector string) (string, Drive, error) {
 	}
 
 	if selector == "" {
-		return matchSingleDrive(cfg)
+		return matchSingleDrive(cfg, logger)
 	}
 
-	return matchBySelector(cfg, selector)
+	return matchBySelector(cfg, selector, logger)
 }
 
 // matchSingleDrive auto-selects when exactly one drive is configured.
-func matchSingleDrive(cfg *Config) (string, Drive, error) {
+func matchSingleDrive(cfg *Config, logger *slog.Logger) (string, Drive, error) {
 	if len(cfg.Drives) == 1 {
 		for id := range cfg.Drives {
+			logger.Debug("auto-selected single drive", "canonical_id", id)
+
 			return id, cfg.Drives[id], nil
 		}
 	}
@@ -68,24 +73,28 @@ func matchSingleDrive(cfg *Config) (string, Drive, error) {
 }
 
 // matchBySelector finds a drive by exact ID, alias, or partial substring match.
-func matchBySelector(cfg *Config, selector string) (string, Drive, error) {
+func matchBySelector(cfg *Config, selector string, logger *slog.Logger) (string, Drive, error) {
 	// Exact canonical ID match
 	if d, ok := cfg.Drives[selector]; ok {
+		logger.Debug("drive matched by exact canonical ID", "canonical_id", selector)
+
 		return selector, d, nil
 	}
 
 	// Alias match
 	for id := range cfg.Drives {
 		if cfg.Drives[id].Alias == selector {
+			logger.Debug("drive matched by alias", "alias", selector, "canonical_id", id)
+
 			return id, cfg.Drives[id], nil
 		}
 	}
 
-	return matchPartial(cfg, selector)
+	return matchPartial(cfg, selector, logger)
 }
 
 // matchPartial finds drives whose canonical ID contains the selector as a substring.
-func matchPartial(cfg *Config, selector string) (string, Drive, error) {
+func matchPartial(cfg *Config, selector string, logger *slog.Logger) (string, Drive, error) {
 	var matches []string
 
 	for id := range cfg.Drives {
@@ -95,6 +104,8 @@ func matchPartial(cfg *Config, selector string) (string, Drive, error) {
 	}
 
 	if len(matches) == 1 {
+		logger.Debug("drive matched by partial substring", "selector", selector, "canonical_id", matches[0])
+
 		return matches[0], cfg.Drives[matches[0]], nil
 	}
 
@@ -110,7 +121,7 @@ func matchPartial(cfg *Config, selector string) (string, Drive, error) {
 
 // buildResolvedDrive creates a ResolvedDrive by starting with global config
 // values and applying per-drive overrides for fields that the drive specifies.
-func buildResolvedDrive(cfg *Config, canonicalID string, drive *Drive) *ResolvedDrive {
+func buildResolvedDrive(cfg *Config, canonicalID string, drive *Drive, logger *slog.Logger) *ResolvedDrive {
 	resolved := &ResolvedDrive{
 		CanonicalID:     canonicalID,
 		Alias:           drive.Alias,
@@ -130,28 +141,32 @@ func buildResolvedDrive(cfg *Config, canonicalID string, drive *Drive) *Resolved
 		resolved.RemotePath = defaultRemotePath
 	}
 
-	applyDriveOverrides(resolved, drive)
+	applyDriveOverrides(resolved, drive, logger)
 
 	return resolved
 }
 
 // applyDriveOverrides selectively replaces global config values with per-drive
 // values for fields that the drive explicitly sets.
-func applyDriveOverrides(resolved *ResolvedDrive, drive *Drive) {
+func applyDriveOverrides(resolved *ResolvedDrive, drive *Drive, logger *slog.Logger) {
 	if drive.SkipDotfiles != nil {
 		resolved.SkipDotfiles = *drive.SkipDotfiles
+		logger.Debug("per-drive override applied", "field", "skip_dotfiles", "value", *drive.SkipDotfiles)
 	}
 
 	if drive.SkipDirs != nil {
 		resolved.SkipDirs = drive.SkipDirs
+		logger.Debug("per-drive override applied", "field", "skip_dirs", "count", len(drive.SkipDirs))
 	}
 
 	if drive.SkipFiles != nil {
 		resolved.SkipFiles = drive.SkipFiles
+		logger.Debug("per-drive override applied", "field", "skip_files", "count", len(drive.SkipFiles))
 	}
 
 	if drive.PollInterval != "" {
 		resolved.PollInterval = drive.PollInterval
+		logger.Debug("per-drive override applied", "field", "poll_interval", "value", drive.PollInterval)
 	}
 }
 

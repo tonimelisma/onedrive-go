@@ -1,6 +1,9 @@
 package config
 
-import "os"
+import (
+	"log/slog"
+	"os"
+)
 
 // Environment variable names for overrides. These form the third layer in the
 // four-layer override chain (defaults -> file -> environment -> CLI flags).
@@ -19,9 +22,17 @@ type EnvOverrides struct {
 
 // ReadEnvOverrides reads environment variables and returns any overrides found.
 // This does not modify the Config; callers pass the result to ResolveDrive().
-func ReadEnvOverrides() EnvOverrides {
+func ReadEnvOverrides(logger *slog.Logger) EnvOverrides {
+	configPath := os.Getenv(EnvConfig)
+	drive := os.Getenv(EnvDrive)
+
+	logger.Debug("reading env overrides",
+		"ONEDRIVE_GO_CONFIG_set", configPath != "",
+		"ONEDRIVE_GO_DRIVE_set", drive != "",
+	)
+
 	return EnvOverrides{
-		ConfigPath: os.Getenv(EnvConfig),
-		Drive:      os.Getenv(EnvDrive),
+		ConfigPath: configPath,
+		Drive:      drive,
 	}
 }

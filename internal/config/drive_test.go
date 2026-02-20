@@ -17,7 +17,7 @@ func TestMatchDrive_SingleDrive_AutoSelect(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Drives["personal:toni@outlook.com"] = Drive{SyncDir: "~/OneDrive"}
 
-	id, d, err := matchDrive(cfg, "")
+	id, d, err := matchDrive(cfg, "", testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, "personal:toni@outlook.com", id)
 	assert.Equal(t, "~/OneDrive", d.SyncDir)
@@ -28,7 +28,7 @@ func TestMatchDrive_MultipleDrives_NoSelector_Error(t *testing.T) {
 	cfg.Drives["personal:toni@outlook.com"] = Drive{SyncDir: "~/OneDrive"}
 	cfg.Drives["business:alice@contoso.com"] = Drive{SyncDir: "~/Work"}
 
-	_, _, err := matchDrive(cfg, "")
+	_, _, err := matchDrive(cfg, "", testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "multiple drives")
 }
@@ -36,7 +36,7 @@ func TestMatchDrive_MultipleDrives_NoSelector_Error(t *testing.T) {
 func TestMatchDrive_NoDrives_Error(t *testing.T) {
 	cfg := DefaultConfig()
 
-	_, _, err := matchDrive(cfg, "")
+	_, _, err := matchDrive(cfg, "", testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no drives configured")
 }
@@ -47,7 +47,7 @@ func TestMatchDrive_NoDrives_CanonicalSelector(t *testing.T) {
 	// This supports zero-config CLI usage (e.g., --drive personal:user@example.com).
 	cfg := DefaultConfig()
 
-	id, _, err := matchDrive(cfg, "personal:toni@outlook.com")
+	id, _, err := matchDrive(cfg, "personal:toni@outlook.com", testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, "personal:toni@outlook.com", id)
 }
@@ -56,7 +56,7 @@ func TestMatchDrive_NoDrives_NonCanonicalSelector_Error(t *testing.T) {
 	// A non-canonical selector (no ":") should still fail when no drives configured.
 	cfg := DefaultConfig()
 
-	_, _, err := matchDrive(cfg, "home")
+	_, _, err := matchDrive(cfg, "home", testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no drives configured")
 }
@@ -66,7 +66,7 @@ func TestMatchDrive_ExactCanonicalID(t *testing.T) {
 	cfg.Drives["personal:toni@outlook.com"] = Drive{SyncDir: "~/OneDrive"}
 	cfg.Drives["business:alice@contoso.com"] = Drive{SyncDir: "~/Work"}
 
-	id, _, err := matchDrive(cfg, "personal:toni@outlook.com")
+	id, _, err := matchDrive(cfg, "personal:toni@outlook.com", testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, "personal:toni@outlook.com", id)
 }
@@ -76,7 +76,7 @@ func TestMatchDrive_AliasMatch(t *testing.T) {
 	cfg.Drives["personal:toni@outlook.com"] = Drive{SyncDir: "~/OneDrive", Alias: "home"}
 	cfg.Drives["business:alice@contoso.com"] = Drive{SyncDir: "~/Work", Alias: "work"}
 
-	id, _, err := matchDrive(cfg, "work")
+	id, _, err := matchDrive(cfg, "work", testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, "business:alice@contoso.com", id)
 }
@@ -86,7 +86,7 @@ func TestMatchDrive_PartialMatch(t *testing.T) {
 	cfg.Drives["personal:toni@outlook.com"] = Drive{SyncDir: "~/OneDrive"}
 	cfg.Drives["business:alice@contoso.com"] = Drive{SyncDir: "~/Work"}
 
-	id, _, err := matchDrive(cfg, "toni")
+	id, _, err := matchDrive(cfg, "toni", testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, "personal:toni@outlook.com", id)
 }
@@ -96,7 +96,7 @@ func TestMatchDrive_AmbiguousPartialMatch_Error(t *testing.T) {
 	cfg.Drives["personal:user@example.com"] = Drive{SyncDir: "~/OneDrive"}
 	cfg.Drives["business:user@example.com"] = Drive{SyncDir: "~/Work"}
 
-	_, _, err := matchDrive(cfg, "user@example.com")
+	_, _, err := matchDrive(cfg, "user@example.com", testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ambiguous")
 }
@@ -105,7 +105,7 @@ func TestMatchDrive_NoMatch_Error(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Drives["personal:toni@outlook.com"] = Drive{SyncDir: "~/OneDrive"}
 
-	_, _, err := matchDrive(cfg, "nonexistent")
+	_, _, err := matchDrive(cfg, "nonexistent", testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no drive matching")
 }
@@ -118,7 +118,7 @@ func TestBuildResolvedDrive_GlobalDefaults(t *testing.T) {
 	cfg.LogLevel = "debug"
 
 	drive := &Drive{SyncDir: "~/OneDrive"}
-	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive)
+	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive, testLogger(t))
 
 	assert.Equal(t, "personal:toni@outlook.com", resolved.CanonicalID)
 	assert.True(t, resolved.Enabled)
@@ -131,7 +131,7 @@ func TestBuildResolvedDrive_EnabledDefault(t *testing.T) {
 	cfg := DefaultConfig()
 	drive := &Drive{SyncDir: "~/OneDrive"}
 
-	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive)
+	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive, testLogger(t))
 	assert.True(t, resolved.Enabled, "Enabled should default to true when nil")
 }
 
@@ -140,7 +140,7 @@ func TestBuildResolvedDrive_EnabledExplicitFalse(t *testing.T) {
 	enabled := false
 	drive := &Drive{SyncDir: "~/OneDrive", Enabled: &enabled}
 
-	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive)
+	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive, testLogger(t))
 	assert.False(t, resolved.Enabled)
 }
 
@@ -149,7 +149,7 @@ func TestBuildResolvedDrive_EnabledExplicitTrue(t *testing.T) {
 	enabled := true
 	drive := &Drive{SyncDir: "~/OneDrive", Enabled: &enabled}
 
-	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive)
+	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive, testLogger(t))
 	assert.True(t, resolved.Enabled)
 }
 
@@ -167,7 +167,7 @@ func TestBuildResolvedDrive_PerDriveOverrides(t *testing.T) {
 		PollInterval: "10m",
 	}
 
-	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive)
+	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive, testLogger(t))
 
 	assert.True(t, resolved.SkipDotfiles)
 	assert.Equal(t, []string{"vendor"}, resolved.SkipDirs)
@@ -179,7 +179,7 @@ func TestBuildResolvedDrive_RemotePathDefault(t *testing.T) {
 	cfg := DefaultConfig()
 	drive := &Drive{SyncDir: "~/OneDrive"}
 
-	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive)
+	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive, testLogger(t))
 	assert.Equal(t, "/", resolved.RemotePath)
 }
 
@@ -187,7 +187,7 @@ func TestBuildResolvedDrive_RemotePathExplicit(t *testing.T) {
 	cfg := DefaultConfig()
 	drive := &Drive{SyncDir: "~/OneDrive", RemotePath: "/Documents"}
 
-	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive)
+	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive, testLogger(t))
 	assert.Equal(t, "/Documents", resolved.RemotePath)
 }
 
@@ -195,7 +195,7 @@ func TestBuildResolvedDrive_TildeExpanded(t *testing.T) {
 	cfg := DefaultConfig()
 	drive := &Drive{SyncDir: "~/OneDrive"}
 
-	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive)
+	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive, testLogger(t))
 
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
@@ -207,7 +207,7 @@ func TestBuildResolvedDrive_AbsolutePathPreserved(t *testing.T) {
 	cfg := DefaultConfig()
 	drive := &Drive{SyncDir: "/absolute/path/OneDrive"}
 
-	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive)
+	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive, testLogger(t))
 	assert.Equal(t, "/absolute/path/OneDrive", resolved.SyncDir)
 }
 
@@ -219,7 +219,7 @@ func TestBuildResolvedDrive_AliasAndDriveID(t *testing.T) {
 		DriveID: "abc123",
 	}
 
-	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive)
+	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive, testLogger(t))
 	assert.Equal(t, "home", resolved.Alias)
 	assert.Equal(t, "abc123", resolved.DriveID)
 }
@@ -335,7 +335,7 @@ alias = "work"
 skip_dotfiles = true
 skip_dirs = ["vendor"]
 `)
-	cfg, err := Load(path)
+	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 
 	assert.False(t, cfg.SkipDotfiles)
@@ -365,6 +365,7 @@ skip_dirs = ["vendor"]
 	resolved, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path},
 		CLIOverrides{Drive: "work"},
+		testLogger(t),
 	)
 	require.NoError(t, err)
 	assert.True(t, resolved.SkipDotfiles)
@@ -375,6 +376,7 @@ skip_dirs = ["vendor"]
 	resolved, err = ResolveDrive(
 		EnvOverrides{ConfigPath: path},
 		CLIOverrides{Drive: "home"},
+		testLogger(t),
 	)
 	require.NoError(t, err)
 	assert.False(t, resolved.SkipDotfiles)
@@ -395,10 +397,11 @@ alias = "home"
 sync_dir = "~/Work"
 alias = "work"
 `)
-	overrides := ReadEnvOverrides()
+	overrides := ReadEnvOverrides(testLogger(t))
 	resolved, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path, Drive: overrides.Drive},
 		CLIOverrides{},
+		testLogger(t),
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "business:alice@contoso.com", resolved.CanonicalID)
