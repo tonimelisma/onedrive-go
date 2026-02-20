@@ -12,6 +12,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDelta_SendsPreferHeader(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify the Prefer header is sent on delta requests.
+		assert.Equal(t, "deltashowremoteitemsaliasid", r.Header.Get("Prefer"))
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"value":[],"@odata.deltaLink":"https://example.com/delta?token=abc"}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.Delta(context.Background(), "d", "")
+	require.NoError(t, err)
+}
+
 func TestDelta_SinglePage(t *testing.T) {
 	var srv *httptest.Server
 
