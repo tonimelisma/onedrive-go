@@ -10,7 +10,7 @@ import (
 
 func TestLoad_UnknownKey_TopLevel(t *testing.T) {
 	path := writeTestConfig(t, `unknown_section = "value"`)
-	_, err := Load(path)
+	_, err := Load(path, testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown config key")
 }
@@ -18,7 +18,7 @@ func TestLoad_UnknownKey_TopLevel(t *testing.T) {
 func TestLoad_UnknownKey_TypoInFlatKey(t *testing.T) {
 	//nolint:misspell // intentional typo to test unknown key detection
 	path := writeTestConfig(t, `parralel_downloads = 4`)
-	_, err := Load(path)
+	_, err := Load(path, testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown config key")
 	assert.Contains(t, err.Error(), "parallel_downloads")
@@ -26,14 +26,14 @@ func TestLoad_UnknownKey_TypoInFlatKey(t *testing.T) {
 
 func TestLoad_UnknownKey_TypoInFilter(t *testing.T) {
 	path := writeTestConfig(t, `skip_file = ["*.tmp"]`)
-	_, err := Load(path)
+	_, err := Load(path, testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "skip_files")
 }
 
 func TestLoad_UnknownKey_NoSuggestion(t *testing.T) {
 	path := writeTestConfig(t, `completely_unrelated_key = true`)
-	_, err := Load(path)
+	_, err := Load(path, testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown config key")
 	assert.NotContains(t, err.Error(), "did you mean")
@@ -45,7 +45,7 @@ func TestLoad_UnknownKeyInDriveSection(t *testing.T) {
 sync_dir = "~/OneDrive"
 unknown_field = "value"
 `)
-	_, err := Load(path)
+	_, err := Load(path, testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown key")
 	assert.Contains(t, err.Error(), "personal:toni@outlook.com")
@@ -57,7 +57,7 @@ func TestLoad_TypoInDriveSection_Suggestion(t *testing.T) {
 sync_dir = "~/OneDrive"
 aliaz = "home"
 `)
-	_, err := Load(path)
+	_, err := Load(path, testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "did you mean")
 	assert.Contains(t, err.Error(), "alias")
@@ -76,7 +76,7 @@ skip_dirs = ["vendor"]
 skip_files = ["*.log"]
 poll_interval = "10m"
 `)
-	cfg, err := Load(path)
+	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 	require.Len(t, cfg.Drives, 1)
 }

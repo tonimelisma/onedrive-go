@@ -40,7 +40,7 @@ func TestCreateConfigWithDrive_RoundTrip(t *testing.T) {
 	err := CreateConfigWithDrive(path, "personal:toni@outlook.com", "~/OneDrive")
 	require.NoError(t, err)
 
-	cfg, err := Load(path)
+	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 	require.Len(t, cfg.Drives, 1)
 
@@ -103,7 +103,7 @@ func TestAppendDriveSection_RoundTrip(t *testing.T) {
 	err = AppendDriveSection(path, "business:alice@contoso.com", "~/OneDrive - Contoso")
 	require.NoError(t, err)
 
-	cfg, err := Load(path)
+	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 	require.Len(t, cfg.Drives, 2)
 
@@ -126,7 +126,7 @@ sync_dir = "~/OneDrive"`), configFilePermissions)
 	err = AppendDriveSection(path, "business:alice@contoso.com", "~/Work")
 	require.NoError(t, err)
 
-	cfg, err := Load(path)
+	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 	require.Len(t, cfg.Drives, 2)
 	assert.Equal(t, "~/Work", cfg.Drives["business:alice@contoso.com"].SyncDir)
@@ -150,7 +150,7 @@ func TestSetDriveKey_InsertNewKey(t *testing.T) {
 	err = SetDriveKey(path, "personal:toni@outlook.com", "alias", "home")
 	require.NoError(t, err)
 
-	cfg, err := Load(path)
+	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, "home", cfg.Drives["personal:toni@outlook.com"].Alias)
 }
@@ -170,7 +170,7 @@ func TestSetDriveKey_UpdateExistingKey(t *testing.T) {
 	err = SetDriveKey(path, "personal:toni@outlook.com", "alias", "personal")
 	require.NoError(t, err)
 
-	cfg, err := Load(path)
+	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, "personal", cfg.Drives["personal:toni@outlook.com"].Alias)
 }
@@ -191,7 +191,7 @@ func TestSetDriveKey_BooleanFormatting(t *testing.T) {
 	assert.Contains(t, string(data), "enabled = false")
 	assert.NotContains(t, string(data), `enabled = "false"`)
 
-	cfg, err := Load(path)
+	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 	d := cfg.Drives["personal:toni@outlook.com"]
 	require.NotNil(t, d.Enabled)
@@ -223,7 +223,7 @@ func TestSetDriveKey_RoundTrip(t *testing.T) {
 	err = SetDriveKey(path, "personal:toni@outlook.com", "enabled", "true")
 	require.NoError(t, err)
 
-	cfg, err := Load(path)
+	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 	d := cfg.Drives["personal:toni@outlook.com"]
 	require.NotNil(t, d.Enabled)
@@ -262,7 +262,7 @@ func TestSetDriveKey_MultipleSections(t *testing.T) {
 	err = SetDriveKey(path, "business:alice@contoso.com", "enabled", "false")
 	require.NoError(t, err)
 
-	cfg, err := Load(path)
+	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 
 	// First section should be unaffected
@@ -294,7 +294,7 @@ func TestDeleteDriveSection_DeleteFromMiddle(t *testing.T) {
 	err = DeleteDriveSection(path, "business:alice@contoso.com")
 	require.NoError(t, err)
 
-	cfg, err := Load(path)
+	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 	require.Len(t, cfg.Drives, 2)
 	assert.Contains(t, cfg.Drives, "personal:toni@outlook.com")
@@ -316,7 +316,7 @@ func TestDeleteDriveSection_DeleteFromEnd(t *testing.T) {
 	err = DeleteDriveSection(path, "business:alice@contoso.com")
 	require.NoError(t, err)
 
-	cfg, err := Load(path)
+	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 	require.Len(t, cfg.Drives, 1)
 	assert.Contains(t, cfg.Drives, "personal:toni@outlook.com")
@@ -335,7 +335,7 @@ func TestDeleteDriveSection_RoundTrip(t *testing.T) {
 	err = DeleteDriveSection(path, "personal:toni@outlook.com")
 	require.NoError(t, err)
 
-	cfg, err := Load(path)
+	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 	require.Len(t, cfg.Drives, 1)
 	assert.Equal(t, "~/Work", cfg.Drives["business:alice@contoso.com"].SyncDir)
@@ -637,7 +637,7 @@ func TestScenario_FirstLoginThenSecondLogin(t *testing.T) {
 	err = AppendDriveSection(path, "business:alice@contoso.com", "~/OneDrive - Contoso")
 	require.NoError(t, err)
 
-	cfg, err := Load(path)
+	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 	require.Len(t, cfg.Drives, 2)
 
@@ -656,7 +656,7 @@ func TestScenario_DriveRemove(t *testing.T) {
 	err = SetDriveKey(path, "business:alice@contoso.com", "enabled", "false")
 	require.NoError(t, err)
 
-	cfg, err := Load(path)
+	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 	d := cfg.Drives["business:alice@contoso.com"]
 	require.NotNil(t, d.Enabled)
@@ -678,7 +678,7 @@ func TestScenario_DriveRemovePurge(t *testing.T) {
 	err = DeleteDriveSection(path, "business:alice@contoso.com")
 	require.NoError(t, err)
 
-	cfg, err := Load(path)
+	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 	require.Len(t, cfg.Drives, 1)
 	assert.Contains(t, cfg.Drives, "personal:toni@outlook.com")
@@ -705,7 +705,7 @@ func TestScenario_LogoutPurge_AllDrives(t *testing.T) {
 	err = DeleteDriveSection(path, "sharepoint:alice@contoso.com:marketing:Documents")
 	require.NoError(t, err)
 
-	cfg, err := Load(path)
+	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 	require.Len(t, cfg.Drives, 1)
 	assert.Contains(t, cfg.Drives, "personal:toni@outlook.com")
@@ -725,7 +725,7 @@ func TestScenario_SetKeyThenDeleteSection(t *testing.T) {
 	err = DeleteDriveSection(path, "personal:toni@outlook.com")
 	require.NoError(t, err)
 
-	cfg, err := Load(path)
+	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 	assert.Empty(t, cfg.Drives)
 }
@@ -741,7 +741,7 @@ func TestSetDriveKey_UpdateSyncDir(t *testing.T) {
 	err = SetDriveKey(path, "personal:toni@outlook.com", "sync_dir", "~/NewDrive")
 	require.NoError(t, err)
 
-	cfg, err := Load(path)
+	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, "~/NewDrive", cfg.Drives["personal:toni@outlook.com"].SyncDir)
 }

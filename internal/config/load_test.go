@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -8,6 +9,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// testLogger returns a debug-level logger that writes to t.Log, ensuring all
+// config debug output appears in test output for CI visibility.
+func testLogger(t *testing.T) *slog.Logger {
+	t.Helper()
+
+	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+}
 
 func writeTestConfig(t *testing.T, content string) string {
 	t.Helper()
@@ -70,7 +79,7 @@ force_http_11 = true
 `
 
 	path := writeTestConfig(t, tomlContent)
-	cfg, err := Load(path)
+	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"*.tmp", "*.swp"}, cfg.SkipFiles)
@@ -122,7 +131,7 @@ force_http_11 = true
 
 func TestLoad_MinimalConfig_UsesDefaults(t *testing.T) {
 	path := writeTestConfig(t, "")
-	cfg, err := Load(path)
+	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 
 	assert.Equal(t, 8, cfg.ParallelDownloads)
@@ -134,32 +143,32 @@ func TestLoad_MinimalConfig_UsesDefaults(t *testing.T) {
 func TestLoad_MalformedTOML(t *testing.T) {
 	path := writeTestConfig(t, `[filter
 not valid toml`)
-	_, err := Load(path)
+	_, err := Load(path, testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parsing config file")
 }
 
 func TestLoad_FileNotFound(t *testing.T) {
-	_, err := Load("/nonexistent/path/config.toml")
+	_, err := Load("/nonexistent/path/config.toml", testLogger(t))
 	require.Error(t, err)
 }
 
 func TestLoad_ValidationError(t *testing.T) {
 	path := writeTestConfig(t, `parallel_downloads = 0`)
-	_, err := Load(path)
+	_, err := Load(path, testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "validation failed")
 }
 
 func TestLoadOrDefault_FileExists(t *testing.T) {
 	path := writeTestConfig(t, `log_level = "debug"`)
-	cfg, err := LoadOrDefault(path)
+	cfg, err := LoadOrDefault(path, testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, "debug", cfg.LogLevel)
 }
 
 func TestLoadOrDefault_FileNotFound(t *testing.T) {
-	cfg, err := LoadOrDefault("/nonexistent/path/config.toml")
+	cfg, err := LoadOrDefault("/nonexistent/path/config.toml", testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, "info", cfg.LogLevel)
 	assert.Equal(t, 8, cfg.ParallelDownloads)
@@ -167,7 +176,7 @@ func TestLoadOrDefault_FileNotFound(t *testing.T) {
 
 func TestLoad_PartialConfig_UsesDefaults(t *testing.T) {
 	path := writeTestConfig(t, `log_level = "warn"`)
-	cfg, err := Load(path)
+	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 
 	assert.Equal(t, "warn", cfg.LogLevel)
@@ -184,7 +193,7 @@ bandwidth_schedule = [
     { time = "23:00", limit = "0" },
 ]
 `)
-	cfg, err := Load(path)
+	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 	require.Len(t, cfg.BandwidthSchedule, 3)
 	assert.Equal(t, "08:00", cfg.BandwidthSchedule[0].Time)
@@ -203,7 +212,7 @@ log_level = "debug"
 sync_dir = "~/OneDrive"
 alias = "home"
 `)
-	cfg, err := Load(path)
+	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 	require.Len(t, cfg.Drives, 1)
 
@@ -226,7 +235,7 @@ sync_dir = "~/OneDrive - Contoso"
 alias = "work"
 skip_dirs = ["node_modules", ".git", "vendor"]
 `)
-	cfg, err := Load(path)
+	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 	require.Len(t, cfg.Drives, 2)
 
@@ -253,7 +262,7 @@ skip_dirs = ["vendor"]
 skip_files = ["*.log"]
 poll_interval = "10m"
 `)
-	cfg, err := Load(path)
+	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 
 	d := cfg.Drives["personal:toni@outlook.com"]
@@ -276,7 +285,7 @@ func TestLoad_SharePointDrive(t *testing.T) {
 sync_dir = "~/Contoso/Marketing"
 enabled = false
 `)
-	cfg, err := Load(path)
+	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 	require.Len(t, cfg.Drives, 1)
 
@@ -296,6 +305,7 @@ sync_dir = "~/OneDrive"
 	resolved, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path},
 		CLIOverrides{},
+		testLogger(t),
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "personal:toni@outlook.com", resolved.CanonicalID)
@@ -307,6 +317,7 @@ func TestResolveDrive_NoDrives_Error(t *testing.T) {
 	_, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path},
 		CLIOverrides{},
+		testLogger(t),
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no drives configured")
@@ -323,6 +334,7 @@ sync_dir = "~/Work"
 	_, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path},
 		CLIOverrides{},
+		testLogger(t),
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "multiple drives")
@@ -341,6 +353,7 @@ alias = "work"
 	resolved, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path},
 		CLIOverrides{Drive: "work"},
+		testLogger(t),
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "business:alice@contoso.com", resolved.CanonicalID)
@@ -359,6 +372,7 @@ alias = "work"
 	resolved, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path, Drive: "home"},
 		CLIOverrides{},
+		testLogger(t),
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "personal:toni@outlook.com", resolved.CanonicalID)
@@ -377,6 +391,7 @@ alias = "work"
 	resolved, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path, Drive: "home"},
 		CLIOverrides{Drive: "work"},
+		testLogger(t),
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "business:alice@contoso.com", resolved.CanonicalID)
@@ -390,6 +405,7 @@ sync_dir = "~/OneDrive"
 	resolved, err := ResolveDrive(
 		EnvOverrides{ConfigPath: "/wrong/path"},
 		CLIOverrides{ConfigPath: path},
+		testLogger(t),
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "personal:toni@outlook.com", resolved.CanonicalID)
@@ -404,6 +420,7 @@ sync_dir = "~/OneDrive"
 	resolved, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path},
 		CLIOverrides{DryRun: &dryRun},
+		testLogger(t),
 	)
 	require.NoError(t, err)
 	assert.True(t, resolved.DryRun)
@@ -414,6 +431,7 @@ func TestResolveDrive_InvalidConfigFile(t *testing.T) {
 	_, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path},
 		CLIOverrides{},
+		testLogger(t),
 	)
 	require.Error(t, err)
 }
@@ -422,6 +440,7 @@ func TestResolveDrive_NoConfigFile(t *testing.T) {
 	_, err := ResolveDrive(
 		EnvOverrides{ConfigPath: "/nonexistent/config.toml"},
 		CLIOverrides{},
+		testLogger(t),
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no drives configured")
@@ -442,6 +461,7 @@ poll_interval = "10m"
 	resolved, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path},
 		CLIOverrides{},
+		testLogger(t),
 	)
 	require.NoError(t, err)
 
@@ -462,6 +482,7 @@ sync_dir = "~/OneDrive"
 	resolved, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path},
 		CLIOverrides{},
+		testLogger(t),
 	)
 	require.NoError(t, err)
 
@@ -474,7 +495,7 @@ sync_dir = "~/OneDrive"
 func TestLoad_DriveSectionNotTable(t *testing.T) {
 	// A drive section key containing ":" but with a scalar value instead of a table.
 	path := writeTestConfig(t, `"personal:toni@outlook.com" = "not a table"`)
-	_, err := Load(path)
+	_, err := Load(path, testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must be a table")
 }
@@ -489,7 +510,7 @@ bandwidth_schedule = [
     { time = "08:00", limit = "5MB/s" },
 ]
 `)
-	cfg, err := Load(path)
+	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 	require.Len(t, cfg.BandwidthSchedule, 1)
 }

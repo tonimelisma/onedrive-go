@@ -52,7 +52,7 @@ func runStatus(_ *cobra.Command, _ []string) error {
 	logger := buildLogger()
 	cfgPath := resolveLoginConfigPath()
 
-	cfg, err := config.LoadOrDefault(cfgPath)
+	cfg, err := config.LoadOrDefault(cfgPath, logger)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
