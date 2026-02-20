@@ -72,14 +72,25 @@ jobs:
           for profile in "${PROFILES[@]}"; do
             profile=$(echo "$profile" | xargs)
             echo "=== Discovering drive ID for profile: ${profile} ==="
-            DRIVE_ID=$(ONEDRIVE_TEST_PROFILE="$profile" \
-              go run ./cmd/integration-bootstrap --print-drive-id --profile "$profile")
+            DRIVE_ID=$(go run . whoami --json --profile "$profile" | jq -r '.drives[0].id')
             echo "Drive ID: ${DRIVE_ID}"
 
             echo "=== Running integration tests for profile: ${profile} ==="
             ONEDRIVE_TEST_PROFILE="$profile" \
               ONEDRIVE_TEST_DRIVE_ID="$DRIVE_ID" \
               go test -tags=integration -race -v -timeout=5m ./internal/graph/...
+          done
+
+      - name: Run E2E tests
+        run: |
+          set -euo pipefail
+          IFS=',' read -ra PROFILES <<< "$ONEDRIVE_TEST_PROFILES"
+
+          for profile in "${PROFILES[@]}"; do
+            profile=$(echo "$profile" | xargs)
+            echo "=== Running E2E tests for profile: ${profile} ==="
+            ONEDRIVE_TEST_PROFILE="$profile" \
+              go test -tags=e2e -race -v -timeout=5m ./e2e/...
           done
 
       - name: Save rotated tokens to Key Vault
@@ -119,5 +130,5 @@ jobs:
         run: |
           echo "::warning::Integration test auth may have failed."
           echo "::warning::If the refresh token has expired (90 days idle), re-bootstrap:"
-          echo "::warning::  1. go run ./cmd/integration-bootstrap --profile personal"
+          echo "::warning::  1. go run . login --profile personal"
           echo "::warning::  2. az keyvault secret set --vault-name ${{ vars.AZURE_KEY_VAULT_NAME }} --name onedrive-oauth-token-personal --file <token-path> --content-type application/json"
