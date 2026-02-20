@@ -192,6 +192,65 @@ Config is auto-created by `login` and modified by `drive add`/`drive remove`:
 
 Manual editing always supported. The tool reads config fresh on each run (or each sync cycle in watch mode).
 
+### Config file management: text-level manipulation
+
+TOML libraries strip comments on round-trip (parse → modify → serialize). To preserve all comments — both the initial defaults and any the user adds — the app **never round-trips the config through a TOML serializer**.
+
+- **Read path**: normal TOML parsing (parser ignores comments, that's fine)
+- **Write path**: surgical line-based text edits — never serialize the whole document
+
+This is how `sshd_config`, `nginx.conf`, and most Unix tools handle commented config files.
+
+#### Initial creation (first `login`)
+
+On first login, the app writes a complete config from a template string constant baked into the code. All global settings are present as commented-out defaults, so users can discover every option without reading docs:
+
+```toml
+# onedrive-go configuration
+# Docs: https://github.com/tonimelisma/onedrive-go
+
+# ── Global settings ──
+# Uncomment and modify to override defaults.
+
+# Log file verbosity: debug, info, warn, error
+# log_level = "info"
+
+# Log file path (default: platform standard location)
+# log_file = ""
+
+# Skip files and directories starting with "."
+# skip_dotfiles = false
+
+# Directory names to skip everywhere
+# skip_dirs = []
+
+# File name patterns to skip
+# skip_files = []
+
+# Check interval for sync --watch
+# poll_interval = "5m"
+
+# ── Drives ──
+# Added automatically by 'login' and 'drive add'.
+# Each section name is the canonical drive identifier.
+
+["personal:toni@outlook.com"]
+sync_dir = "~/OneDrive"
+```
+
+#### Write operations
+
+Each modification is a small, testable function that operates on the file as lines of text:
+
+| Operation | When | How |
+|-----------|------|-----|
+| Append drive section | `login`, `drive add` | Append new `["type:email"]` block at end of file |
+| Set `enabled = false` | `drive remove` | Find section header, find or insert `enabled` key |
+| Delete section | `drive remove --purge` | Find section header, delete lines through next header or EOF |
+| Rename section header | Email change detection | Find-and-replace one `["old"]` → `["new"]` line |
+
+User comments survive every operation because no line is touched unless it's the specific target of the edit.
+
 ---
 
 ## 5. Logging
@@ -237,7 +296,7 @@ Default console output is fine for services. The log file provides persistent hi
 
 ```
 Authentication:
-  login                     Sign in + auto-add primary drive
+  login [--headless]        Sign in + auto-add primary drive
   logout [--purge]          Sign out (--purge: also delete state DBs + config sections)
   whoami                    Show authenticated accounts
 
@@ -246,19 +305,31 @@ Drive management:
   drive remove [--purge]    Pause a drive (--purge: delete state DB + config section)
 
 Sync:
-  sync [--watch]            Sync drives (once, or continuously with --watch)
+  sync                      One-shot bidirectional sync, exits when done
+  sync --watch              Continuous sync — stays running, re-syncs on interval
+  sync --download-only      One-way: download remote changes only
+  sync --upload-only        One-way: upload local changes only
   status                    Show all accounts, drives, and sync state
+  conflicts                 List unresolved conflicts with details
+  resolve <id|path>         Resolve a conflict
+  verify                    Re-hash local files, compare to DB and remote
 
 File operations:
-  ls                        List remote files
-  get                       Download files
-  put                       Upload files
-  rm                        Delete remote files/folders
-  mkdir                     Create remote directory
-  stat                      Show file/folder info
+  ls [path]                 List remote files
+  get <remote> [local]      Download file
+  put <local> [remote]      Upload file
+  rm <path>                 Delete remote file/folder
+  mkdir <path>              Create remote directory
+  stat <path>               Show file/folder metadata
 
 Configuration:
+  config show               Display effective configuration after all overrides
   setup                     Interactive guided configuration (menu-driven)
+
+Migration:
+  migrate                   Auto-detect and migrate from abraunegg or rclone
+  migrate --from abraunegg  Explicitly migrate from abraunegg/onedrive
+  migrate --from rclone     Explicitly migrate from rclone OneDrive remote
 ```
 
 ### What each command affects
@@ -272,7 +343,13 @@ Configuration:
 | `drive remove` | Kept | Kept | `enabled = false` | Untouched |
 | `drive remove --purge` | Kept (unless orphaned) | **Deleted** | **Section removed** | Untouched |
 | `sync` | May refresh | Updated | — | Files synced |
+| `status` | — | Read | Read | — |
+| `conflicts` | — | Read | — | — |
+| `resolve` | May refresh | Updated | — | May modify files |
+| `verify` | May refresh | Read | — | — |
+| `config show` | — | — | Read | — |
 | `setup` | — | — | Modified | — |
+| `migrate` | — | Created | Created | — |
 
 **Sync directories on disk are NEVER deleted by any command.** They contain the user's files. All remove/logout/purge commands explicitly state: "Sync directory kept — delete manually if desired."
 
@@ -287,7 +364,21 @@ Configuration:
 | `--debug` | All | bool | Show HTTP requests, internal state |
 | `--quiet` / `-q` | All | bool | Errors only |
 | `--json` | All | bool | Machine-readable output |
-| `--dry-run` | All | bool | Show what would happen |
+| `--dry-run` | `sync`, file ops | bool | Show what would happen |
+
+### Sync-specific flags
+
+| Flag | Description |
+|---|---|
+| `--watch` | Continuous sync — stay running, re-sync on `poll_interval` |
+| `--download-only` | One-way: download remote changes only |
+| `--upload-only` | One-way: upload local changes only |
+
+### Login-specific flags
+
+| Flag | Description |
+|---|---|
+| `--headless` | Force headless auth (no browser needed, device code only) |
 
 ---
 
@@ -921,6 +1012,8 @@ No confirmation prompt. Just does it and reports.
 | 23 | Stable user GUID for email change detection | Auto-rename files on email change. No re-sync needed. |
 | 24 | Guest/B2B uses real email from `mail` field | Users never see ugly UPN. Fallback only if `mail` is empty. |
 | 25 | Sync dirs never deleted by any command | User's files. Always state explicitly in output. |
+| 26 | Text-level config manipulation | TOML libraries strip comments on round-trip. Read with parser, write with line-based text edits. Preserves all comments (ours and user's). |
+| 27 | Commented-out defaults on first start | Config bootstrapped with all global settings as comments. Users discover options without reading docs. Only written once — never regenerated. |
 
 ---
 
