@@ -294,11 +294,16 @@ The `whoamiDrive` construction loop uses `for _, d := range drives` because `gra
 
 ---
 
-## 14. CLI Test Coverage (Root Package)
+## 14. Config File Write Operations
 
-- **Pivots**: Two deviations from plan. (1) The TOML format for config tests used `[drives."personal:..."]` (nested table syntax) but the actual format uses `["personal:..."]` (top-level quoted key). Discovered by running tests against real config loader. (2) The zero-config `loadConfig` test could not use `cmd.Flags().Set()` or `cmd.PersistentFlags().Set()` to mark `--drive` as "changed" because Cobra tracks Changed per FlagSet and `loadConfig` checks `cmd.Flags().Changed("drive")`. Fixed by using `cmd.Execute()` with `SetArgs()`, which properly merges persistent flags into child commands -- matching real CLI invocation.
-- **Issues found**: No bugs in production code. The global mutable state pattern (package-level `flagDrive`, `flagQuiet`, `resolvedCfg`, etc.) makes tests fragile and requires careful save/restore via `t.Cleanup`. This is a known trade-off of Cobra's design.
-- **Linter surprises**: None -- all new test code passed lint on first commit.
-- **Suggested improvements**: (1) The `printWhoamiJSON`, `printStatJSON`, `printItemsJSON` functions write directly to `os.Stdout` and are harder to test without os.Pipe capture. Accepting an `io.Writer` parameter would make them more testable. (2) `exitOnError` calls `os.Exit(1)` which is untestable. Could be refactored to return an error code.
-- **Cross-package concerns**: None. All tests are self-contained in the root package.
-- **Code smells noticed**: (1) `flagDrive` global is used by both `loadConfig` (via `cmd.Flags().Changed()` gate) and `authTokenPath` (direct read). Two different access patterns for the same global. (2) `printStatText` and `printWhoamiText` write to `os.Stdout` directly while `printTable` accepts an `io.Writer` -- inconsistent output patterns in the same package.
+### findSectionEnd must exclude next section's preamble
+When finding the end of a TOML section for deletion, blank lines and comments between the last key-value line and the next section header belong to the NEXT section, not the current one. The initial implementation naively included everything up to the next `["` header, which deleted comments belonging to the subsequent section. Fix: walk backwards from the next header to skip blank/comment lines.
+
+### gocritic sprintfQuotedString prefers %q
+`fmt.Sprintf("[\"%s\"]", id)` triggers `sprintfQuotedString`. Use `fmt.Sprintf("[%q]", id)` instead. `%q` produces the same output (`"personal:toni@outlook.com"`) and is idiomatic Go.
+
+### unparam catches single-value parameters
+`atomicWriteFile(path, data, perm)` where `perm` is always `configFilePermissions` triggers `unparam`. When a parameter always receives the same value, the linter suggests removing it and using the constant directly. This is correct for internal helpers.
+
+### Atomic writes: temp file in same directory, then rename
+`os.Rename` is atomic on POSIX when source and target are on the same filesystem. Creating the temp file in the same directory as the target guarantees this. The `succeeded` flag pattern with deferred cleanup handles all error paths without OS-level error injection in tests.
