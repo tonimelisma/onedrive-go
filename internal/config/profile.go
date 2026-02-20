@@ -28,7 +28,10 @@ const defaultRemotePath = "/"
 // Default profile name when --profile is omitted.
 const defaultProfileName = "default"
 
-// Profile represents a single OneDrive account configuration.
+// Profile represents a single OneDrive account configuration within a TOML
+// config file. Per-profile section overrides (e.g. [profile.work.filter])
+// completely replace the corresponding global section — individual fields
+// are not merged.
 type Profile struct {
 	AccountType     string `toml:"account_type"`
 	SyncDir         string `toml:"sync_dir"`
@@ -48,7 +51,8 @@ type Profile struct {
 }
 
 // ResolvedProfile contains profile fields plus effective config sections
-// (global replaced by per-profile if present).
+// after merging global defaults with per-profile overrides. This is the
+// final product consumed by the CLI and sync engine.
 type ResolvedProfile struct {
 	Name            string
 	AccountType     string
@@ -68,7 +72,9 @@ type ResolvedProfile struct {
 }
 
 // ResolveProfile merges global defaults with profile-specific overrides.
-// If profileName is empty, the default profile is selected.
+// If profileName is empty, the default profile is selected. Section-level
+// override semantics are "replace, not merge" — if a profile defines
+// [profile.work.filter], that entire FilterConfig replaces the global one.
 func ResolveProfile(cfg *Config, profileName string) (*ResolvedProfile, error) {
 	name, err := resolveProfileName(cfg, profileName)
 	if err != nil {

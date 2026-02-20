@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -35,8 +36,8 @@ const (
 )
 
 // Validate checks all configuration values and returns all errors found.
-// It does not stop at the first error, collecting them all for a single
-// comprehensive report.
+// It accumulates every error rather than stopping at the first, so users
+// see a complete report and can fix all issues in one pass.
 func Validate(cfg *Config) error {
 	var errs []error
 
@@ -47,6 +48,28 @@ func Validate(cfg *Config) error {
 	errs = append(errs, validateSync(&cfg.Sync)...)
 	errs = append(errs, validateLogging(&cfg.Logging)...)
 	errs = append(errs, validateNetwork(&cfg.Network)...)
+
+	return errors.Join(errs...)
+}
+
+// ValidateResolved checks cross-field constraints on a fully resolved profile.
+// Unlike Validate(), which checks raw config file values, this runs after the
+// four-layer override chain (defaults -> file -> env -> CLI) has been applied.
+// It catches constraints that only make sense on the final merged result.
+func ValidateResolved(rp *ResolvedProfile) error {
+	var errs []error
+
+	// SyncDir must be absolute after tilde expansion and env/CLI overrides.
+	// Relative paths would resolve differently depending on cwd.
+	if rp.SyncDir != "" && !filepath.IsAbs(rp.SyncDir) {
+		errs = append(errs, fmt.Errorf("sync_dir: must be absolute after expansion, got %q", rp.SyncDir))
+	}
+
+	// azure_ad_endpoint requires azure_tenant_id — the endpoint alone is
+	// meaningless without knowing which tenant to authenticate against.
+	if rp.AzureADEndpoint != "" && rp.AzureTenantID == "" {
+		errs = append(errs, fmt.Errorf("azure_ad_endpoint is set but azure_tenant_id is empty"))
+	}
 
 	return errors.Join(errs...)
 }
@@ -345,84 +368,4 @@ func validateNetwork(n *NetworkConfig) []error {
 	errs = append(errs, validateDurationMin("network.data_timeout", n.DataTimeout, minDataTimeout)...)
 
 	return errs
-}
-
-// parseSize converts a human-readable size string to bytes using the same
-// library as internal/filter. This is a local wrapper to avoid cross-package
-// imports within internal/.
-func parseSize(s string) (int64, error) {
-	if s == "" || s == "0" {
-		return 0, nil
-	}
-
-	// Simple parser for size strings: number + optional suffix.
-	// Supports: KB, MB, GB, TB (decimal), KiB, MiB, GiB, TiB (binary).
-	s = strings.TrimSpace(s)
-
-	return parseSizeWithSuffix(s)
-}
-
-// Size multiplier constants (decimal / SI).
-const (
-	kilobyte = 1000
-	megabyte = 1000 * kilobyte
-	gigabyte = 1000 * megabyte
-	terabyte = 1000 * gigabyte
-)
-
-// Size multiplier constants (binary / IEC).
-const (
-	kibibyte = 1024
-	mebibyte = 1024 * kibibyte
-	gibibyte = 1024 * mebibyte
-	tebibyte = 1024 * gibibyte
-)
-
-// parseSizeWithSuffix extracts a numeric prefix and size suffix, returning bytes.
-func parseSizeWithSuffix(s string) (int64, error) {
-	upper := strings.ToUpper(s)
-
-	suffixes := []struct {
-		suffix     string
-		multiplier int64
-	}{
-		{"TIB", tebibyte},
-		{"GIB", gibibyte},
-		{"MIB", mebibyte},
-		{"KIB", kibibyte},
-		{"TB", terabyte},
-		{"GB", gigabyte},
-		{"MB", megabyte},
-		{"KB", kilobyte},
-		{"B", 1},
-	}
-
-	for _, sf := range suffixes {
-		if strings.HasSuffix(upper, sf.suffix) {
-			numStr := strings.TrimSpace(s[:len(s)-len(sf.suffix)])
-
-			return parseSizeNumber(numStr, sf.multiplier, s)
-		}
-	}
-
-	// No suffix: treat as raw bytes.
-	n, err := strconv.ParseInt(s, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("invalid size %q: %w", s, err)
-	}
-
-	if n < 0 {
-		return 0, fmt.Errorf("invalid size %q: must be non-negative", s)
-	}
-
-	return n, nil
-}
-
-func parseSizeNumber(numStr string, multiplier int64, original string) (int64, error) {
-	n, err := strconv.ParseFloat(numStr, 64)
-	if err != nil {
-		return 0, fmt.Errorf("invalid size %q: %w", original, err)
-	}
-
-	return int64(n * float64(multiplier)), nil
 }

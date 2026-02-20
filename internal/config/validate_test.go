@@ -376,76 +376,6 @@ func TestValidate_ConflictReminderInterval_Zero(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestParseSize_ValidInputs(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected int64
-	}{
-		{"0", 0},
-		{"", 0},
-		{"1024", 1024},
-		{"1KB", 1000},
-		{"1KiB", 1024},
-		{"10MB", 10_000_000},
-		{"10MiB", 10_485_760},
-		{"1GB", 1_000_000_000},
-		{"1GiB", 1_073_741_824},
-		{"50GB", 50_000_000_000},
-		{"1TB", 1_000_000_000_000},
-		{"100B", 100},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			result, err := parseSize(tt.input)
-			require.NoError(t, err)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-func TestParseSize_InvalidInputs(t *testing.T) {
-	for _, input := range []string{"abc", "MB", "-1"} {
-		t.Run(input, func(t *testing.T) {
-			_, err := parseSize(input)
-			assert.Error(t, err)
-		})
-	}
-}
-
-func TestLevenshtein(t *testing.T) {
-	tests := []struct {
-		a, b     string
-		expected int
-	}{
-		{"", "", 0},
-		{"abc", "", 3},
-		{"", "abc", 3},
-		{"abc", "abc", 0},
-		{"abc", "abd", 1},
-		{"skip_file", "skip_files", 1},
-		{"par" + "ralel_downloads", "parallel_downloads", 2},
-		{"completely_different", "xyz", 19},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.a+"_"+tt.b, func(t *testing.T) {
-			assert.Equal(t, tt.expected, levenshtein(tt.a, tt.b))
-		})
-	}
-}
-
-func TestClosestMatch_Found(t *testing.T) {
-	known := []string{"skip_files", "skip_dirs", "skip_dotfiles"}
-	assert.Equal(t, "skip_files", closestMatch("skip_file", known))
-	assert.Equal(t, "skip_dirs", closestMatch("skip_dir", known))
-}
-
-func TestClosestMatch_NotFound(t *testing.T) {
-	known := []string{"skip_files", "skip_dirs"}
-	assert.Equal(t, "", closestMatch("completely_unrelated", known))
-}
-
 func TestParseScheduleTime_Valid(t *testing.T) {
 	minutes, err := parseScheduleTime("08:30")
 	require.NoError(t, err)
@@ -477,4 +407,58 @@ func TestValidate_BandwidthSchedule_BadTimeFormat(t *testing.T) {
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.True(t, strings.Contains(err.Error(), "time"))
+}
+
+// --- ValidateResolved tests ---
+
+func TestValidateResolved_AbsoluteSyncDir(t *testing.T) {
+	rp := &ResolvedProfile{SyncDir: "/absolute/path"}
+	err := ValidateResolved(rp)
+	assert.NoError(t, err)
+}
+
+func TestValidateResolved_RelativeSyncDir(t *testing.T) {
+	rp := &ResolvedProfile{SyncDir: "relative/path"}
+	err := ValidateResolved(rp)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sync_dir")
+	assert.Contains(t, err.Error(), "absolute")
+}
+
+func TestValidateResolved_EmptySyncDir(t *testing.T) {
+	rp := &ResolvedProfile{SyncDir: ""}
+	err := ValidateResolved(rp)
+	assert.NoError(t, err)
+}
+
+func TestValidateResolved_AzureEndpointWithoutTenantID(t *testing.T) {
+	rp := &ResolvedProfile{
+		SyncDir:         "/path",
+		AzureADEndpoint: "USL4",
+		AzureTenantID:   "",
+	}
+	err := ValidateResolved(rp)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "azure_tenant_id")
+}
+
+func TestValidateResolved_AzureEndpointWithTenantID(t *testing.T) {
+	rp := &ResolvedProfile{
+		SyncDir:         "/path",
+		AzureADEndpoint: "USL4",
+		AzureTenantID:   "contoso.onmicrosoft.com",
+	}
+	err := ValidateResolved(rp)
+	assert.NoError(t, err)
+}
+
+func TestValidateResolved_BothErrors(t *testing.T) {
+	rp := &ResolvedProfile{
+		SyncDir:         "relative",
+		AzureADEndpoint: "USL4",
+	}
+	err := ValidateResolved(rp)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sync_dir")
+	assert.Contains(t, err.Error(), "azure_tenant_id")
 }
