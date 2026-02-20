@@ -302,7 +302,7 @@ func collectExistingSyncDirs(cfgPath string) []string {
 // and prints the appropriate login success message.
 func writeLoginConfig(cfgPath, canonicalID, driveType, email, orgName string, logger *slog.Logger) error {
 	existingDirs := collectExistingSyncDirs(cfgPath)
-	syncDir := config.DefaultSyncDir(driveType, email, orgName, existingDirs)
+	syncDir := config.DefaultSyncDir(driveType, orgName, existingDirs)
 
 	logger.Info("writing config", "config_path", cfgPath, "canonical_id", canonicalID, "sync_dir", syncDir)
 

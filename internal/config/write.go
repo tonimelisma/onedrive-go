@@ -189,7 +189,7 @@ func DeleteDriveSection(path, canonicalID string) error {
 // Personal: ~/OneDrive (fall back to ~/OneDrive - Personal if taken).
 // Business: ~/OneDrive - {OrgName}.
 // SharePoint: not implemented yet (returns empty).
-func DefaultSyncDir(driveType, _ string, orgName string, existingDirs []string) string {
+func DefaultSyncDir(driveType, orgName string, existingDirs []string) string {
 	switch driveType {
 	case driveTypePersonal:
 		return personalSyncDir(existingDirs)
@@ -337,6 +337,14 @@ func atomicWriteFile(path string, data []byte) error {
 		f.Close()
 
 		return fmt.Errorf("writing temp file: %w", err)
+	}
+
+	// Flush data to disk before rename. Without fsync, a power loss after
+	// rename could leave the file empty (rename is metadata-only on POSIX).
+	if err := f.Sync(); err != nil {
+		f.Close()
+
+		return fmt.Errorf("syncing temp file: %w", err)
 	}
 
 	if err := f.Close(); err != nil {

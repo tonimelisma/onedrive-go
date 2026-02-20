@@ -211,6 +211,12 @@ func DriveStatePath(canonicalID string) string {
 		return ""
 	}
 
+	// Validate canonical ID format — must be non-empty and contain ":"
+	// to match DriveTokenPath's validation behavior.
+	if canonicalID == "" || !strings.Contains(canonicalID, ":") {
+		return ""
+	}
+
 	sanitized := strings.ReplaceAll(canonicalID, ":", "_")
 
 	return filepath.Join(dataDir, "state_"+sanitized+".db")

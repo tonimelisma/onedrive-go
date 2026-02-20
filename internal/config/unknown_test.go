@@ -1,6 +1,7 @@
 package config
 
 import (
+	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -127,4 +128,16 @@ func TestBuildGlobalKeyError_UnknownParent_SubField(t *testing.T) {
 	err := buildGlobalKeyError("nonexistent_section.field")
 	assert.NotNil(t, err)
 	assert.Contains(t, err.Error(), "unknown config key")
+}
+
+func TestKnownGlobalKeysList_Sorted(t *testing.T) {
+	// Verify the list is sorted for deterministic Levenshtein suggestions.
+	assert.True(t, sort.StringsAreSorted(knownGlobalKeysList),
+		"knownGlobalKeysList must be sorted")
+}
+
+func TestKnownDriveKeysList_Sorted(t *testing.T) {
+	// Verify the list is sorted for deterministic Levenshtein suggestions.
+	assert.True(t, sort.StringsAreSorted(knownDriveKeysList),
+		"knownDriveKeysList must be sorted")
 }

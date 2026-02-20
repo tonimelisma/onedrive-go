@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -36,12 +37,16 @@ var knownGlobalKeys = map[string]bool{
 	"connect_timeout": true, "data_timeout": true, "user_agent": true, "force_http_11": true,
 }
 
-// knownGlobalKeysList is the slice form of knownGlobalKeys for Levenshtein matching.
+// knownGlobalKeysList is the sorted slice form of knownGlobalKeys for
+// Levenshtein matching. Sorted for deterministic suggestions when two
+// candidates have the same edit distance.
 var knownGlobalKeysList = func() []string {
 	keys := make([]string, 0, len(knownGlobalKeys))
 	for k := range knownGlobalKeys {
 		keys = append(keys, k)
 	}
+
+	sort.Strings(keys)
 
 	return keys
 }()
@@ -53,12 +58,16 @@ var knownDriveKeys = map[string]bool{
 	"poll_interval": true,
 }
 
-// knownDriveKeysList is the slice form for Levenshtein matching.
+// knownDriveKeysList is the sorted slice form for Levenshtein matching.
+// Sorted for deterministic suggestions when two candidates have the same
+// edit distance.
 var knownDriveKeysList = func() []string {
 	keys := make([]string, 0, len(knownDriveKeys))
 	for k := range knownDriveKeys {
 		keys = append(keys, k)
 	}
+
+	sort.Strings(keys)
 
 	return keys
 }()
