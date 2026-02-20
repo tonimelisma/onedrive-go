@@ -78,5 +78,69 @@ Tracking quantitative metrics across increments to spot trends and calibrate pla
 | Increment | Planned | Actual | Accuracy | Agents | Top-ups | Deviations | Coverage Δ |
 |-----------|:-------:|:------:|:--------:|:------:|:-------:|:----------:|:----------:|
 | Phase 1 (1.7+1.8+2.2) | 1180 | 1170 | 99% | 3 | 0* | 3 | +0.4% |
+| Phase 3 (3.3) | 550 | 550 | 100% | 2 | 0 | 1 | +0.8% (config) |
 
 *\* Review not performed — process gap. Subsequent increments will have accurate top-up counts.*
+
+---
+
+### Phase 3: Config Completion (3.3) — 2026-02-19
+
+| Metric | Value |
+|--------|-------|
+| **Planned LOC** | ~550 |
+| **Actual LOC** | ~550 (Wave 1: ~350 new, Wave 2: ~200 new, plus ~340 moved via file extraction) |
+| **Estimation accuracy** | ~100% |
+| **Agent count** | 2 (sequential waves) |
+| **Wave count** | 2 (Wave 1: config enhance, Wave 2: CLI integration) |
+| **PR count** | 2 (#19, #20) |
+| **Coverage before** | 73.4% (total), 94.8% (config) |
+| **Coverage after** | 73.4% (total), 95.6% (config) |
+| **Top-up fix count** | 0 |
+| **Agent deviation count** | 1 (errWriter pattern for show.go — improvement over plan) |
+| **CI failures** | 0 |
+| **Wall-clock time** | ~1.5 hours |
+
+#### Per-Agent Breakdown
+
+| Agent | Planned LOC | Actual LOC | Tests | Coverage | Deviations | LEARNINGS |
+|-------|:-----------:|:----------:|:-----:|:--------:|:----------:|:---------:|
+| Wave 1 (Config enhance) | 350 | ~350 | ~15 | 95.6% (config) | 1 (errWriter) | 0 |
+| Wave 2 (CLI integration) | 200 | ~200 | 0 (manual) | n/a (root pkg) | 0 | 0 |
+
+#### Agent Scorecards
+
+**Wave 1 Agent (Config package enhancements)**
+
+| Criterion | Rating | Notes |
+|-----------|:------:|-------|
+| Correctness | 5 | All code correct, no bugs found in review |
+| Test quality | 5 | 95.6% coverage, error paths tested, table-driven |
+| Code style | 5 | Clean errWriter pattern, consistent formatting |
+| Logging | N/A | Config package doesn't do I/O logging |
+| Documentation | 5 | Comprehensive godoc on all exported symbols |
+| Plan adherence | 4 | One deviation (errWriter) — improvement |
+| Communication | 4 | Clear summary with coverage numbers |
+
+**Wave 2 Agent (CLI integration)**
+
+| Criterion | Rating | Notes |
+|-----------|:------:|-------|
+| Correctness | 5 | PersistentPreRunE, config show, --config all work |
+| Test quality | 3 | No unit tests (CLI wiring), manual verification only |
+| Code style | 5 | Clean, minimal, follows existing patterns |
+| Logging | 4 | buildLogger() properly respects config + CLI flags |
+| Documentation | 3 | No new godoc (thin wiring code) |
+| Plan adherence | 5 | Followed plan exactly |
+| Communication | 4 | Clear summary |
+
+#### Orchestrator Self-Assessment
+
+| Criterion | Rating | Notes |
+|-----------|:------:|-------|
+| Planning quality | 5 | Two-wave plan with zero conflicts, accurate estimates |
+| Agent prompt clarity | 4 | Agents executed correctly with minimal deviation |
+| Review thoroughness | 5 | Line-by-line review of all new/modified files |
+| Top-up effectiveness | N/A | No top-ups needed |
+| Documentation updates | 5 | All docs updated: roadmap, LEARNINGS, BACKLOG, metrics, CLAUDE.md |
+| Escalation discipline | 5 | No non-trivial decisions made autonomously |

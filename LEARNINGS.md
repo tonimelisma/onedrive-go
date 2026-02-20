@@ -182,3 +182,22 @@ E2E tests build the binary in `TestMain` to a temp dir, then run it via `os/exec
 
 ### Recursive mkdir with 409 Conflict handling
 When creating nested folders, walk path segments and create each. If CreateFolder returns 409 (Conflict), the folder already exists — resolve it by path and continue with its ID as the parent. Track the `builtPath` as you go to enable path-based resolution.
+
+---
+
+## 10. Config Phase 3
+
+### errWriter pattern for multi-write formatting
+When a function makes many `fmt.Fprintf` calls (e.g., rendering config sections), each creates an uncoverable error branch. Solution: the `errWriter` pattern — wrap `io.Writer`, capture the first error, subsequent writes are no-ops. One `failWriter` test covers all error paths. Used in `show.go`.
+
+### cmd.Flags().Changed() for pflag default disambiguation
+pflag's default value is indistinguishable from an explicit `--flag=defaultValue` at the value level. Use `cmd.Flags().Changed("flag")` to detect whether the user actually passed the flag. Used in `root.go` for `--profile` to distinguish "not specified" from `--profile=default`.
+
+### CLIOverrides pointer fields for nil-vs-zero-value
+`CLIOverrides` uses `*string` / `*bool` for optional flags. `nil` means "not specified by user" (use config/env value), while `&false` means "user explicitly set to false" (override config). Without pointers, `--dry-run=false` would be indistinguishable from not passing `--dry-run`.
+
+### Synthetic default profile for zero-config UX
+When no config file exists, `Resolve()` creates a synthetic default profile (`AccountType: "personal"`, `SyncDir: "~/OneDrive"`). This means CLI commands work out-of-the-box without creating a config file first.
+
+### File extraction is zero-risk refactoring
+Extracting functions from oversized files (unknown.go from load.go, size.go from validate.go) is purely mechanical — move functions + their tests to new files, no logic changes. If tests pass before and after, the refactor is correct. Good way to reduce file size without introducing bugs.

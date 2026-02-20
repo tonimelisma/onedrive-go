@@ -4,11 +4,11 @@
 
 **onedrive-go** — a fast, safe, and well-tested OneDrive CLI and sync client in Go. Unix-style file operations (`ls`, `get`, `put`) plus robust bidirectional sync with conflict tracking. Targets Linux and macOS. MIT licensed.
 
-Currently: Working CLI OneDrive client with auth + file ops. "Pragmatic Flat" architecture (5 packages). Next: Phase 2.3 (E2E edge cases) or Phase 3 (config).
+Currently: Working CLI OneDrive client with auth + file ops + config integration. "Pragmatic Flat" architecture (5 packages). Next: Phase 2.3 (E2E edge cases) or Phase 4 (sync engine).
 
 ## Current Phase
 
-**Phase 1 complete. Phase 2 partially complete.** All 8 Phase 1 increments done (Graph API layer + CLI auth + file ops). Phase 2.1 (CI scaffold) and 2.2 (E2E round-trip tests) done. Users can `login`, `logout`, `whoami`, `ls`, `get`, `put`, `rm`, `mkdir`, `stat`. CI runs unit tests, integration tests against real Graph API, and E2E tests. See [docs/roadmap.md](docs/roadmap.md).
+**Phases 1 and 3 complete. Phase 2 partially complete.** All Phase 1 increments done (Graph API + CLI auth + file ops). Phase 3 complete (config CLI integration, `config show`, four-layer override chain). Phase 2.1 (CI scaffold) and 2.2 (E2E round-trip tests) done. Users can `login`, `logout`, `whoami`, `ls`, `get`, `put`, `rm`, `mkdir`, `stat`, `config show`. CLI loads config via `PersistentPreRunE` with four-layer override: defaults -> file -> env -> CLI flags. See [docs/roadmap.md](docs/roadmap.md).
 
 ## Architecture Overview
 
@@ -46,9 +46,9 @@ Currently: Working CLI OneDrive client with auth + file ops. "Pragmatic Flat" ar
 
 ### Active packages
 - **`pkg/quickxorhash/`** — QuickXorHash algorithm (hash.Hash interface) — complete
-- **`internal/config/`** — TOML configuration with profiles, validation, XDG paths — existing, will be updated in Phase 3
+- **`internal/config/`** — TOML configuration with profiles, validation, XDG paths, four-layer override chain (`Resolve()`), cross-field validation (`ValidateResolved()`), human-readable rendering (`RenderEffective()`) — 95.6% coverage
 - **`internal/graph/`** — Graph API client: HTTP transport, auth, retry, rate limiting, items CRUD, delta+normalization, download/upload transfers, drives/user, path-based item resolution — feature-complete (92.3% coverage)
-- **Root package** — Cobra CLI: login, logout, whoami, ls, get, put, rm, mkdir, stat (root.go, auth.go, files.go, format.go)
+- **Root package** — Cobra CLI: login, logout, whoami, ls, get, put, rm, mkdir, stat, config show (root.go, auth.go, files.go, format.go, config_cmd.go)
 - **`e2e/`** — E2E test suite (`//go:build e2e`): builds binary, exercises full round-trip against live OneDrive
 
 ### Future phases

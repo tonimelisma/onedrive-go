@@ -171,13 +171,13 @@
 
 ## Phase 3: Config _(3 increments)_
 
-| Increment | Description | Est. LOC |
-|-----------|-------------|----------|
-| 3.1 | config/ TOML loading + validation (reuse existing internal/config/ logic) | ~550 |
-| 3.2 | config/ profiles + path derivation | ~300 |
-| 3.3 | cmd/ config: config init wizard, config show, migrate | ~300 |
+| Increment | Description | Est. LOC | Status |
+|-----------|-------------|----------|--------|
+| 3.1 | config/ TOML loading + validation (reuse existing internal/config/ logic) | ~550 | **DONE** |
+| 3.2 | config/ profiles + path derivation | ~300 | **DONE** |
+| 3.3 | cmd/ config: config show + CLI integration | ~550 | **DONE** |
 
-### 3.1: Config — TOML loading + validation — `internal/config/`
+### 3.1: Config — TOML loading + validation — `internal/config/` ✅
 
 - Much of this exists already in internal/config/. Validate, refine, ensure all options from configuration.md are covered.
 - Config struct with all global options (sync, filter, transfers, safety, logging, network)
@@ -189,8 +189,9 @@
 - **Acceptance**: `go test ./internal/config/...` passes with valid + invalid + malformed config fixtures
 - **Inputs**: configuration.md sections 1-2, 9-10, 13
 - **Size**: ~550 LOC
+- **Actual**: Pre-existing (built in earlier phases). 1,415 LOC prod, 1,757 LOC tests, 94.8% coverage.
 
-### 3.2: Config — profiles + path derivation — `internal/config/`
+### 3.2: Config — profiles + path derivation — `internal/config/` ✅
 
 - Multi-profile support with `[profile.NAME]` sections in TOML
 - Per-profile fields: account_type, sync_dir, remote_path, drive_id
@@ -200,16 +201,16 @@
 - **Acceptance**: `go test ./internal/config/...` passes with multi-profile scenarios
 - **Inputs**: configuration.md sections 3-5
 - **Size**: ~300 LOC
+- **Actual**: Pre-existing (built in earlier phases). Covered by 3.1 actuals.
 
-### 3.3: CLI config commands — `cmd/onedrive-go/config.go`
+### 3.3: CLI config commands + integration ✅
 
-- `config init` — interactive setup wizard (authenticate -> account type -> sync dir -> filters -> write TOML)
-- `config show` — display effective config with overrides highlighted
-- `migrate [--from abraunegg|rclone]` — detect + convert existing configuration
-- All support `--profile` and `--json` flags
-- **Acceptance**: Build succeeds, unit tests for config generation and migration
+- **Wave 1**: Config package enhancements — file extraction (unknown.go, size.go), `CLIOverrides` type, `Resolve()` four-layer override chain, `ValidateResolved()` cross-field checks, `RenderEffective()` for config show, godoc across all exported symbols
+- **Wave 2**: CLI integration — `PersistentPreRunE` with config loading, `--config` flag, `config show` command with `--json` support, `buildLogger()` respects config log level
+- **Deferred to Phase 5**: `config init` wizard (needs interactive prompts + auth flow), `migrate` (needs config init first)
+- **Acceptance**: Build succeeds, tests pass, `config show` works with/without config file
 - **Inputs**: prd.md section 4, configuration.md sections 4, 12
-- **Size**: ~300 LOC
+- **Actual**: ~550 new LOC across 2 waves (PR #19 Wave 1, PR #20 Wave 2). Coverage improved 94.8% → 95.6% for config package.
 
 ---
 

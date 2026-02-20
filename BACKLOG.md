@@ -16,7 +16,7 @@
 | ID | Title | Priority | Package | Notes |
 |----|-------|----------|---------|-------|
 | B-027 | Decide conflict resolution UX before building sync engine | P1 | `internal/sync/` | Interactive vs. batch resolution affects schema (4.1), reconciler (4.5), executor (4.7), and conflict handler (4.8). Write a design doc or extend sync-algorithm.md. |
-| B-028 | Evaluate merging Phase 3 into Phase 4 | P2 | `internal/config/` | Config package already works at 94.8% coverage. Sync-specific settings can be added as-needed in each sync increment. `config init` wizard moves to Phase 5 (polish). |
+| ~~B-028~~ | ~~Evaluate merging Phase 3 into Phase 4~~ | ~~P2~~ | ~~`internal/config/`~~ | **CLOSED**: Phase 3 completed (PRs #19, #20). Config package now at 95.6% coverage with Resolve(), CLI integration, config show. Config init wizard and migrate deferred to Phase 5. |
 | B-029 | Plan Phase 4 in two waves | P1 | `internal/sync/` | Wave 1 (4.1-4.4): state store, delta processor, scanner, filters — independent. Wave 2 (4.5-4.12): re-plan after Wave 1 based on lessons learned. Reconciler, safety, executor, conflict handler are deeply interconnected. |
 | B-030 | Review whether `internal/graph/` should be split | P2 | `internal/graph/` | After 1.4-1.6, package will have ~15 files. Assess cohesion vs. size. architecture.md already calls for this review point. |
 
