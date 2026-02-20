@@ -73,19 +73,46 @@ Currently: Working CLI OneDrive client with auth + file ops. "Pragmatic Flat" ar
 | [docs/tier1-research/](docs/tier1-research/) | 16 Tier 1 research docs (API bugs, edge cases, reference impl analysis) |
 | [docs/parallel-agents.md](docs/parallel-agents.md) | Parallel agent worktree workflow guide |
 | [docs/orchestration.md](docs/orchestration.md) | Full orchestration workflow: planning, agent prompts, review, wrap-up |
+| [docs/metrics.md](docs/metrics.md) | Quantitative metrics tracked per increment (LOC, coverage, scorecards) |
 
 ## Orchestration — Planning, Agents, Wrap-Up
 
-**Full process**: [docs/orchestration.md](docs/orchestration.md) — the complete workflow for planning, instructing agents, reviewing their work, and closing increments. Read it before every increment.
+**Full process**: [docs/orchestration.md](docs/orchestration.md). Read it before every increment.
 
-**Key rules** (enforced by the orchestrator, not self-policed by agents):
+**Core principle**: The human has full visibility. Information flows upward — nothing is hidden, nothing is silent. Escalate anything non-trivial.
 
-1. **Every plan MUST include a parallelization strategy.** Break work into independent units, build a file conflict matrix, define waves. This is not optional — the user expects parallel execution.
-2. **Every agent task prompt MUST use the template from orchestration.md.** The template includes mandatory Wrap-Up Requirements that instruct the agent to update LEARNINGS.md and provide a 7-point final summary (architecture observations, code quality concerns, test gaps, process observations, re-envisioning). Copy the template — do not freestyle prompts.
-3. **After agents complete, the orchestrator MUST do line-by-line code review and top-up work.** Read every new/modified file. Check correctness, consistency, quality, gaps. Fix issues before presenting the retrospective. This is not optional — incomplete review means the increment is not done.
-4. **The retrospective MUST synthesize agent observations.** Agents report their internal thoughts about architecture, quality, and process. The orchestrator combines these into a coherent picture for the user. The re-envisioning check draws on agent perspectives, not just the orchestrator's.
+**Planning**:
+1. Confirm intent with the human before investing in a plan
+2. Show research findings (not just conclusions)
+3. Present alternatives with trade-offs for every significant decision
+4. Every plan MUST include parallelization strategy (file conflict matrix, waves, worktrees)
+5. Write non-goals, risk register, decision log
+6. Check Definition of Ready before launching agents
 
-**Context preservation**: Commit frequently with descriptive messages. Document decisions in commit messages (the "why"). After each increment, consolidate agent LEARNINGS.md entries and orchestrator observations into LEARNINGS.md and CLAUDE.md.
+**Execution**:
+1. Agent task prompts MUST use the template from orchestration.md (includes 9-point final summary, decision log, confidence ratings, risk flags, code smell register)
+2. Show pre-launch briefing to human (agent summary, files, conflicts)
+3. Provide milestone updates during execution (PR created, CI passed, merged, etc.)
+4. Escalate non-trivial issues to human — do NOT decide autonomously
+
+**Post-Agent Review** (MANDATORY — not optional):
+1. Read all agent reports (9-point summaries, LEARNINGS.md, decision logs)
+2. Line-by-line code review of every new/modified file
+3. Top-up work: fix issues BEFORE presenting retrospective
+4. Consolidate learnings, update BACKLOG, roadmap, CLAUDE.md
+5. Update metrics in [docs/metrics.md](docs/metrics.md)
+
+**Increment Report** (presented to human in chat):
+1. Executive summary
+2. Agent scorecards (7 criteria, rated 1-5) + orchestrator self-assessment
+3. Agent observations (raw quotes + synthesis)
+4. Top-up work report (file, change, why)
+5. Code changes summary
+6. Retrospective (well/wrong/change) + metrics comparison
+7. Re-envisioning check drawing on agent perspectives
+8. Action items with BACKLOG IDs + changelog entry
+
+**Context preservation**: Commit frequently with descriptive messages. Document decisions in commit messages. After each increment, consolidate learnings into LEARNINGS.md and CLAUDE.md.
 
 ## Ownership and Standards
 
