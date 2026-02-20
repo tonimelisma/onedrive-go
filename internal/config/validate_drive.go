@@ -46,7 +46,7 @@ func validateSingleDrive(id string, drive *Drive, syncDirs map[string]string) []
 	}
 
 	if drive.PollInterval != "" {
-		if err := validateDuration(drive.PollInterval, "poll_interval", minPollInterval); err != nil {
+		if err := validateDuration("poll_interval", drive.PollInterval, minPollInterval); err != nil {
 			errs = append(errs, fmt.Errorf("drive %q: %w", id, err))
 		}
 	}

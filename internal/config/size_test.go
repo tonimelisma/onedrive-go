@@ -43,3 +43,17 @@ func TestParseSize_InvalidInputs(t *testing.T) {
 		})
 	}
 }
+
+func TestParseSize_NegativeWithSuffix(t *testing.T) {
+	// Negative sizes with suffixes must be rejected, matching the bare-number
+	// path that already rejects negative values.
+	tests := []string{"-5MB", "-1GiB", "-100KB"}
+
+	for _, input := range tests {
+		t.Run(input, func(t *testing.T) {
+			_, err := parseSize(input)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "must be non-negative")
+		})
+	}
+}

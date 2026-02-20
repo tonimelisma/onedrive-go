@@ -343,6 +343,7 @@ Upload session URLs (for chunks, queries, and cancellations) include embedded au
 
 ---
 
+<<<<<<< HEAD
 ## 17. Foundation Hardening — Graph Package (Agent A)
 
 ### Retry body consumption bug was real and subtle
@@ -394,3 +395,14 @@ When `UploadChunk` fails, the upload session should be canceled to free server-s
 - **Suggested improvements**: None outside scope.
 - **Cross-package concerns**: C8 (DefaultSyncDir signature change) depends on Agent B. The orchestrator will handle the call site update in top-up work after Agent B merges.
 - **Code smells noticed**: (1) `drive.go` previously imported `errors` and `os` only for the duplicated purge logic — removing the duplication also cleaned up imports. (2) The `findTokenFallback` function probes the filesystem, which makes it harder to test in isolation without creating actual files. An interface-based approach would be cleaner but over-engineered for this use case.
+
+---
+
+## 19. Config Hardening (Foundation Hardening Increment)
+
+- **Pivots**: None. All six fixes implemented exactly as planned.
+- **Issues found**: `DriveStatePath` accepted empty strings and strings without colons, producing invalid state file paths like `state_.db`. This could cause issues if a caller passed an invalid canonical ID. Now matches `DriveTokenPath` validation.
+- **Linter surprises**: None. All fixes passed lint on first try.
+- **Suggested improvements**: The `atomicWriteFile` fsync error path and close error path are not covered by tests (64% function coverage). OS-level error injection would be needed to test these. Consider an interface-based approach for the file handle if this becomes a concern.
+- **Cross-package concerns**: The `DefaultSyncDir` signature change (removing unused email parameter) requires Agent C to update the call site in `auth.go:277`. The build will fail at the repo level until Agent C makes the corresponding change.
+- **Code smells noticed**: (1) `parseSizeNumber` uses `int64(n * float64(multiplier))` which loses precision for very large sizes near the int64 boundary — acceptable for practical file sizes but technically imprecise. (2) The `knownGlobalKeys`/`knownDriveKeys` maps and their list counterparts are package-level mutable state (slices), though they are initialized once and never modified after init.

@@ -288,7 +288,7 @@ func validateConflictStrategy(s string) []error {
 
 // validateDuration checks that a duration string is valid and meets a minimum.
 // Used for per-drive poll_interval validation where the field name is contextual.
-func validateDuration(value, field string, minimum time.Duration) error {
+func validateDuration(field, value string, minimum time.Duration) error {
 	d, err := time.ParseDuration(value)
 	if err != nil {
 		return fmt.Errorf("%s: invalid duration %q: %w", field, value, err)
@@ -302,7 +302,7 @@ func validateDuration(value, field string, minimum time.Duration) error {
 }
 
 func validateDurationMin(field, value string, minimum time.Duration) []error {
-	if err := validateDuration(value, field, minimum); err != nil {
+	if err := validateDuration(field, value, minimum); err != nil {
 		return []error{err}
 	}
 

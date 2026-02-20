@@ -362,33 +362,33 @@ func TestDeleteDriveSection_FileNotFound(t *testing.T) {
 // --- DefaultSyncDir tests ---
 
 func TestDefaultSyncDir_Personal_NoCollision(t *testing.T) {
-	result := DefaultSyncDir("personal", "toni@outlook.com", "", nil)
+	result := DefaultSyncDir("personal", "", nil)
 	assert.Equal(t, "~/OneDrive", result)
 }
 
 func TestDefaultSyncDir_Personal_WithCollision(t *testing.T) {
 	existing := []string{"~/OneDrive"}
-	result := DefaultSyncDir("personal", "toni@outlook.com", "", existing)
+	result := DefaultSyncDir("personal", "", existing)
 	assert.Equal(t, "~/OneDrive - Personal", result)
 }
 
 func TestDefaultSyncDir_Business(t *testing.T) {
-	result := DefaultSyncDir("business", "alice@contoso.com", "Contoso", nil)
+	result := DefaultSyncDir("business", "Contoso", nil)
 	assert.Equal(t, "~/OneDrive - Contoso", result)
 }
 
 func TestDefaultSyncDir_Business_NoOrgName(t *testing.T) {
-	result := DefaultSyncDir("business", "alice@contoso.com", "", nil)
+	result := DefaultSyncDir("business", "", nil)
 	assert.Equal(t, "~/OneDrive - Business", result)
 }
 
 func TestDefaultSyncDir_SharePoint_Empty(t *testing.T) {
-	result := DefaultSyncDir("sharepoint", "alice@contoso.com", "Contoso", nil)
+	result := DefaultSyncDir("sharepoint", "Contoso", nil)
 	assert.Equal(t, "", result)
 }
 
 func TestDefaultSyncDir_UnknownType_Empty(t *testing.T) {
-	result := DefaultSyncDir("unknown", "test@test.com", "", nil)
+	result := DefaultSyncDir("unknown", "", nil)
 	assert.Equal(t, "", result)
 }
 

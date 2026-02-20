@@ -295,12 +295,16 @@ func TestDriveStatePath_SharePoint(t *testing.T) {
 	assert.Contains(t, path, "state_sharepoint_alice@contoso.com_marketing_Docs.db")
 }
 
-func TestDriveStatePath_InvalidID(t *testing.T) {
-	// DriveStatePath does a simple replace, so even an empty string works but returns
-	// a path in the data dir.
+func TestDriveStatePath_EmptyID(t *testing.T) {
+	// Empty canonical ID should return empty, matching DriveTokenPath behavior.
 	path := DriveStatePath("")
-	assert.NotEmpty(t, path)
-	assert.Contains(t, path, "state_.db")
+	assert.Empty(t, path)
+}
+
+func TestDriveStatePath_NoColon(t *testing.T) {
+	// Canonical IDs must contain ":" — bare strings are rejected.
+	path := DriveStatePath("nocolon")
+	assert.Empty(t, path)
 }
 
 func TestDriveStatePath_PlatformSpecific(t *testing.T) {

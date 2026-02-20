@@ -81,5 +81,10 @@ func parseSizeNumber(numStr string, multiplier int64, original string) (int64, e
 		return 0, fmt.Errorf("invalid size %q: %w", original, err)
 	}
 
-	return int64(n * float64(multiplier)), nil
+	result := int64(n * float64(multiplier))
+	if result < 0 {
+		return 0, fmt.Errorf("invalid size %q: must be non-negative", original)
+	}
+
+	return result, nil
 }
