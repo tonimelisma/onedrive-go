@@ -4,11 +4,11 @@
 
 **onedrive-go** — a fast, safe, and well-tested OneDrive CLI and sync client in Go. Unix-style file operations (`ls`, `get`, `put`) plus robust bidirectional sync with conflict tracking. Targets Linux and macOS. MIT licensed.
 
-Currently: Working CLI OneDrive client with auth + file ops + config integration. "Pragmatic Flat" architecture (5 packages). Next: Phase 2.3 (E2E edge cases) or Phase 4 (sync engine).
+Currently: Working CLI OneDrive client with discovery-based auth, account management, file ops, and config integration. "Pragmatic Flat" architecture (5 packages). Next: Phase 4 (sync engine).
 
 ## Current Phase
 
-**Phases 1, 2, 3, and 3.5 complete.** All Phase 1 increments done (Graph API + CLI auth + file ops). Phase 2 complete (CI scaffold, E2E round-trip, E2E edge cases). Phase 3 complete (config integration). Phase 3.5 complete (alignment: profiles → drives migration). Pre-Phase 4 must-dos resolved (B-015/B-016 upload resume + fileSystemInfo, B-017 delta Prefer header + URL decoding, B-027/B-029 docs). Users can `login`, `logout`, `whoami`, `ls`, `get`, `put`, `rm`, `mkdir`, `stat`. CLI loads config via `PersistentPreRunE` with four-layer override: defaults -> file -> env -> CLI flags. Auth commands skip config loading and use `--drive` directly. See [docs/roadmap.md](docs/roadmap.md).
+**Phases 1, 2, 3, 3.5, and 4.1 complete.** All Phase 1 increments done (Graph API + CLI auth + file ops). Phase 2 complete (CI scaffold, E2E round-trip, E2E edge cases). Phase 3 complete (config integration). Phase 3.5 complete (alignment: profiles → drives migration). Phase 4.1 complete (account discovery + drive management). Login is now discovery-based: device code auth → API discovery → auto-create config. Users can `login`, `logout`, `whoami`, `status`, `drive add`, `drive remove`, `ls`, `get`, `put`, `rm`, `mkdir`, `stat`. CLI loads config via `PersistentPreRunE` with four-layer override: defaults -> file -> env -> CLI flags. Auth and account management commands skip config loading. See [docs/roadmap.md](docs/roadmap.md).
 
 ## Architecture Overview
 
@@ -48,7 +48,7 @@ Currently: Working CLI OneDrive client with auth + file ops + config integration
 - **`pkg/quickxorhash/`** — QuickXorHash algorithm (hash.Hash interface) — complete
 - **`internal/config/`** — TOML configuration with flat global settings and per-drive sections, validation, XDG paths, four-layer override chain (`ResolveDrive()`), cross-field validation (`ValidateResolved()`), drive matching (exact/alias/partial), token/state path derivation (`DriveTokenPath()`, `DriveStatePath()`) — 95.1% coverage
 - **`internal/graph/`** — Graph API client: HTTP transport, auth (token path-based, no config import), retry, rate limiting, items CRUD, delta+normalization (incl. URL-decode + Prefer header), download/upload transfers (incl. session resume + fileSystemInfo), drives/user, path-based item resolution — feature-complete (92.9% coverage)
-- **Root package** — Cobra CLI: login, logout, whoami, ls, get, put, rm, mkdir, stat (root.go, auth.go, files.go, format.go). Global flags: `--account`, `--drive`, `--config`, `--json`, `--verbose`, `--quiet`
+- **Root package** — Cobra CLI: login (discovery-based), logout, whoami, status, drive add/remove, ls, get, put, rm, mkdir, stat (root.go, auth.go, files.go, format.go, status.go, drive.go). Global flags: `--account`, `--drive`, `--config`, `--json`, `--verbose`, `--quiet`
 - **`e2e/`** — E2E test suite (`//go:build e2e`): builds binary, exercises full round-trip against live OneDrive
 
 ### Future phases

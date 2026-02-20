@@ -80,8 +80,126 @@ Tracking quantitative metrics across increments to spot trends and calibrate pla
 | Phase 1 (1.7+1.8+2.2) | 1180 | 1170 | 99% | 3 | 0* | 3 | +0.4% |
 | Phase 3 (3.3) | 550 | 550 | 100% | 2 | 0 | 1 | +0.8% (config) |
 | Phase 3.5 (3.5.2) | 3633 | 4248 | 85% | 4 | 7 | 3 | -1.6% (total) |
+| Phase 4.1 (3.5.2+4.1) | 1900 | 3049 | 62% | 6 | 2 | 2 | -2.5% (total) |
 
 *\* Review not performed — process gap. Subsequent increments will have accurate top-up counts.*
+
+---
+
+### Phase 4.1: Account Discovery & Drive Management (3.5.2 + 4.1) — 2026-02-20
+
+| Metric | Value |
+|--------|-------|
+| **Planned LOC** | ~1,900 (850 prod, 1050 test) |
+| **Actual LOC** | ~3,049 (21 files, +3,049 ins, -85 del across 6 PRs) |
+| **Estimation accuracy** | ~62% (significantly underestimated config write + account discovery) |
+| **Agent count** | 6 (A: graph-cli-cleanup, B: CLI tests, C: graph org, D: config write, E: account discovery, F: e2e improvements) |
+| **Wave count** | 3 (Wave 0: doc fixes, Wave 1: A+B+D parallel, Wave 2: C+E+F) |
+| **PR count** | 6 (#26, #27, #28, #32, #34, #36) + 1 orchestrator top-up commit |
+| **Coverage before** | 71.8% (total), 95.1% (config), 6.7% (root pkg) |
+| **Coverage after** | 69.3% (total), 94.8% (config), 26.7% (root pkg) |
+| **Top-up fix count** | 2 (typo in test name, stale login hint in error message) |
+| **Agent deviation count** | 2 (Agent D: 1104 LOC vs 500 planned; Agent E: 1229 LOC vs 500 planned) |
+| **CI failures** | 0 (all 6 PRs passed on first try) |
+| **Wall-clock time** | ~3 hours (across 2 sessions, including waiting for other orchestrator) |
+
+*Note: Total coverage dropped from 71.8% to 69.3% because the account discovery work (auth.go, status.go, drive.go) added many I/O-heavy functions that require integration tests. Root package coverage rose from 6.7% to 26.7%. Config package stayed high at 94.8%.*
+
+#### Per-Agent Breakdown
+
+| Agent | Planned LOC | Actual LOC | Tests | Coverage | Deviations | LEARNINGS |
+|-------|:-----------:|:----------:|:-----:|:--------:|:----------:|:---------:|
+| A (graph-cli-cleanup) | 30 | 35 (+35, -11) | 0 (renamed 1) | 92.9% (graph) | 0 | 0 |
+| B (CLI tests) | 295 | 472 | 15 | 35.0% (root) | 0 | Section 13 |
+| C (graph organization) | 60 | 104 | 3 | 92.9% (graph) | 0 | 0 |
+| D (config write) | 500 | 1104 | 47 | 94.8% (config) | 1 (typo in test name) | Section 14 |
+| E (account discovery) | 910 | 1229 (+1229, -73) | 22 | 27.2% (root) | 1 (no files.go mod) | 0 |
+| F (e2e improvements) | 105 | 105 | 7 | N/A (e2e) | 0 | 0 |
+
+#### Agent Scorecards
+
+**Agent A (graph-cli-cleanup)**
+
+| Criterion | Rating | Notes |
+|-----------|:------:|-------|
+| Correctness | 5 | All 4 tasks (inline logout, rename test, DriveID early-return, atomic download) clean |
+| Test quality | 4 | Renamed stale test; no new tests needed for simple refactors |
+| Code style | 5 | Follows existing patterns (saveToken, atomicWriteFile) |
+| Logging | 5 | Added debug log for DriveID early-return path |
+| Documentation | 3 | No LEARNINGS update (small scope) |
+| Plan adherence | 5 | Zero deviations |
+| Communication | 4 | Clear summary, good risk assessment |
+
+**Agent B (CLI tests)**
+
+| Criterion | Rating | Notes |
+|-----------|:------:|-------|
+| Correctness | 5 | All tests correct, proper global state cleanup |
+| Test quality | 5 | 15 tests, covers buildLogger, Cobra structure, loadConfig, pure functions |
+| Code style | 5 | captureStdout helper, t.Cleanup for globals, table-driven |
+| Logging | N/A | Test-only agent |
+| Documentation | 4 | LEARNINGS section 13 |
+| Plan adherence | 5 | Followed plan exactly |
+| Communication | 4 | Good summary with coverage numbers |
+
+**Agent C (graph Organization)**
+
+| Criterion | Rating | Notes |
+|-----------|:------:|-------|
+| Correctness | 5 | Organization() handles empty response for personal accounts |
+| Test quality | 5 | 3 tests: business, personal (empty), error |
+| Code style | 5 | Clean unexported types, proper error wrapping |
+| Logging | 5 | Info log on fetch, debug log on empty response |
+| Documentation | 3 | No LEARNINGS update (small scope) |
+| Plan adherence | 5 | Zero deviations |
+| Communication | 4 | Clear 9-point summary |
+
+**Agent D (config write)**
+
+| Criterion | Rating | Notes |
+|-----------|:------:|-------|
+| Correctness | 5 | All write operations atomic (temp + rename), comment preservation verified |
+| Test quality | 5 | 47 tests, round-trip validation, edge cases (empty file, no newline) |
+| Code style | 5 | Clean line-based text manipulation, no TOML round-tripping |
+| Logging | 5 | All public functions log with slog structured fields |
+| Documentation | 4 | LEARNINGS section 14, good godoc |
+| Plan adherence | 4 | 1104 LOC vs 500 planned (more thorough than expected) |
+| Communication | 4 | Good summary with test details |
+
+**Agent E (account discovery)**
+
+| Criterion | Rating | Notes |
+|-----------|:------:|-------|
+| Correctness | 5 | Full discovery flow: device code → /me → /me/drive → /me/organization → config |
+| Test quality | 4 | 22 tests for pure functions; I/O paths need integration tests |
+| Code style | 5 | Excellent decomposition: small helpers, clear flow |
+| Logging | 5 | Every step logged, every error path logged |
+| Documentation | 3 | No LEARNINGS update (large scope deserved one) |
+| Plan adherence | 4 | 1229 LOC vs 500 planned; didn't modify files.go (noted stale error) |
+| Communication | 5 | Full 9-point summary with risks and deviations |
+
+**Agent F (e2e improvements)**
+
+| Criterion | Rating | Notes |
+|-----------|:------:|-------|
+| Correctness | 5 | Clean error case tests, JSON schema validation, quiet flag test |
+| Test quality | 5 | 7 tests covering error paths, --json, --quiet |
+| Code style | 5 | Follows existing e2e patterns exactly |
+| Logging | N/A | Test-only agent |
+| Documentation | 3 | No LEARNINGS update (small scope) |
+| Plan adherence | 5 | Zero deviations, exact LOC match |
+| Communication | 5 | Full 9-point summary with decision log |
+
+#### Orchestrator Self-Assessment
+
+| Criterion | Rating | Notes |
+|-----------|:------:|-------|
+| Planning quality | 4 | Good wave structure but LOC estimates off by 38% |
+| Agent prompt clarity | 5 | All 6 agents executed with minimal deviations |
+| Review thoroughness | 4 | Line-by-line review of all files; found 2 top-up items |
+| Top-up effectiveness | 5 | Both issues fixed promptly (typo, stale error message) |
+| Documentation updates | 5 | metrics.md, CLAUDE.md updated |
+| Escalation discipline | 4 | Correctly waited for other orchestrator's PRs instead of skipping work |
 
 ---
 
