@@ -16,7 +16,8 @@ var version = "dev"
 // Global persistent flags, bound in setupRootCmd().
 var (
 	flagConfigPath string
-	flagProfile    string
+	flagAccount    string
+	flagDrive      string
 	flagJSON       bool
 	flagVerbose    bool
 	flagQuiet      bool
@@ -24,7 +25,8 @@ var (
 
 // resolvedCfg holds the effective configuration loaded by PersistentPreRunE.
 // It is available to all subcommands after the root pre-run phase completes.
-var resolvedCfg *config.ResolvedProfile
+// Auth commands (login, logout, whoami) skip config loading and use --drive directly.
+var resolvedCfg *config.ResolvedDrive
 
 // newRootCmd builds and returns the fully-assembled root command with all
 // subcommands registered. Called once from main().
@@ -37,16 +39,23 @@ func newRootCmd() *cobra.Command {
 		// Silence Cobra's default error/usage printing — we handle it ourselves.
 		SilenceErrors: true,
 		SilenceUsage:  true,
-		// PersistentPreRunE loads configuration before every command. The four-layer
-		// override chain (defaults -> file -> env -> CLI) is applied here so that
-		// subcommands always see a fully resolved config via resolvedCfg.
+		// PersistentPreRunE loads configuration before every command. Auth commands
+		// (login, logout, whoami) skip config loading because they work with --drive
+		// directly — solving the bootstrap problem where login must work before any
+		// config file or drive section exists.
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
-			return loadConfig(cmd)
+			switch cmd.Name() {
+			case "login", "logout", "whoami":
+				return nil
+			default:
+				return loadConfig(cmd)
+			}
 		},
 	}
 
 	cmd.PersistentFlags().StringVar(&flagConfigPath, "config", "", "config file path")
-	cmd.PersistentFlags().StringVar(&flagProfile, "profile", "default", "configuration profile name")
+	cmd.PersistentFlags().StringVar(&flagAccount, "account", "", "account for auth commands (e.g., user@example.com)")
+	cmd.PersistentFlags().StringVar(&flagDrive, "drive", "", "drive selector (canonical ID, alias, or partial match)")
 	cmd.PersistentFlags().BoolVar(&flagJSON, "json", false, "output in JSON format")
 	cmd.PersistentFlags().BoolVarP(&flagVerbose, "verbose", "v", false, "enable debug logging")
 	cmd.PersistentFlags().BoolVarP(&flagQuiet, "quiet", "q", false, "suppress informational output")
@@ -61,7 +70,6 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newRmCmd())
 	cmd.AddCommand(newMkdirCmd())
 	cmd.AddCommand(newStatCmd())
-	cmd.AddCommand(newConfigCmd())
 
 	return cmd
 }
@@ -73,16 +81,14 @@ func loadConfig(cmd *cobra.Command) error {
 		ConfigPath: flagConfigPath,
 	}
 
-	// Only pass --profile to the resolver if the user explicitly set it.
-	// The pflag default "default" is indistinguishable from an explicit
-	// --profile=default at the value level, so we check Changed() instead.
-	if cmd.Flags().Changed("profile") {
-		cli.Profile = flagProfile
+	// Only pass --drive to the resolver if the user explicitly set it.
+	if cmd.Flags().Changed("drive") {
+		cli.Drive = flagDrive
 	}
 
 	env := config.ReadEnvOverrides()
 
-	resolved, err := config.Resolve(env, cli)
+	resolved, err := config.ResolveDrive(env, cli)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
@@ -100,7 +106,7 @@ func buildLogger() *slog.Logger {
 
 	// Config-based log level (lower priority than CLI flags).
 	if resolvedCfg != nil {
-		switch resolvedCfg.Logging.LogLevel {
+		switch resolvedCfg.LogLevel {
 		case "debug":
 			level = slog.LevelDebug
 		case "warn":

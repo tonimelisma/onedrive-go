@@ -37,12 +37,13 @@ const (
 // fields retain defaults) and as the fallback when no config file exists.
 func DefaultConfig() *Config {
 	return &Config{
-		Filter:    defaultFilterConfig(),
-		Transfers: defaultTransfersConfig(),
-		Safety:    defaultSafetyConfig(),
-		Sync:      defaultSyncConfig(),
-		Logging:   defaultLoggingConfig(),
-		Network:   defaultNetworkConfig(),
+		FilterConfig:    defaultFilterConfig(),
+		TransfersConfig: defaultTransfersConfig(),
+		SafetyConfig:    defaultSafetyConfig(),
+		SyncConfig:      defaultSyncConfig(),
+		LoggingConfig:   defaultLoggingConfig(),
+		NetworkConfig:   defaultNetworkConfig(),
+		Drives:          make(map[string]Drive),
 	}
 }
 

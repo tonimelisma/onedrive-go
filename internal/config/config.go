@@ -1,21 +1,24 @@
 // Package config implements TOML configuration loading, validation, and
 // platform-specific path resolution for onedrive-go. It supports a four-layer
 // override chain (defaults -> config file -> environment -> CLI flags) with
-// per-profile section-level overrides that completely replace global sections.
+// per-drive overrides that selectively replace global values.
+//
+// The config file uses flat TOML keys for global settings and quoted section
+// names containing ":" for drive configuration (e.g. ["personal:user@example.com"]).
 package config
 
-// Config is the top-level configuration structure parsed from a TOML file.
-// It contains named profiles and global configuration sections. When a profile
-// defines its own section (e.g. [profile.work.filter]), that section completely
-// replaces the global one — there is no merging of individual fields.
+// Config is the top-level configuration structure. Global settings live in
+// embedded sub-structs, which BurntSushi/toml promotes to flat TOML keys.
+// Drive sections use quoted headers containing ":" and are parsed in a
+// separate decode pass.
 type Config struct {
-	Profiles  map[string]Profile `toml:"profile"`
-	Filter    FilterConfig       `toml:"filter"`
-	Transfers TransfersConfig    `toml:"transfers"`
-	Safety    SafetyConfig       `toml:"safety"`
-	Sync      SyncConfig         `toml:"sync"`
-	Logging   LoggingConfig      `toml:"logging"`
-	Network   NetworkConfig      `toml:"network"`
+	FilterConfig
+	TransfersConfig
+	SafetyConfig
+	SyncConfig
+	LoggingConfig
+	NetworkConfig
+	Drives map[string]Drive `toml:"-"` // parsed via two-pass decode, keyed by canonical ID
 }
 
 // FilterConfig controls which files and directories are included in sync.
@@ -96,13 +99,29 @@ type NetworkConfig struct {
 	ForceHTTP11    bool   `toml:"force_http_11"`
 }
 
+// Drive represents a single synced drive in the config file.
+// Drive sections are keyed by canonical IDs like "personal:user@example.com".
+// Per-drive fields override global settings when set (pointer fields distinguish
+// "not specified" from "set to zero value").
+type Drive struct {
+	SyncDir      string   `toml:"sync_dir"`
+	Enabled      *bool    `toml:"enabled,omitempty"`
+	Alias        string   `toml:"alias,omitempty"`
+	RemotePath   string   `toml:"remote_path,omitempty"`
+	DriveID      string   `toml:"drive_id,omitempty"`
+	SkipDotfiles *bool    `toml:"skip_dotfiles,omitempty"`
+	SkipDirs     []string `toml:"skip_dirs,omitempty"`
+	SkipFiles    []string `toml:"skip_files,omitempty"`
+	PollInterval string   `toml:"poll_interval,omitempty"`
+}
+
 // CLIOverrides holds values from CLI flags that override config file and
 // environment settings. Pointer fields distinguish "not specified" (nil)
 // from "explicitly set to zero value" — this matters because --dry-run=false
 // is different from not passing --dry-run at all.
 type CLIOverrides struct {
-	ConfigPath string  // --config flag (empty = use default)
-	Profile    string  // --profile flag (empty = use default)
-	SyncDir    *string // --sync-dir flag
-	DryRun     *bool   // --dry-run flag
+	ConfigPath string // --config flag (empty = use default)
+	Account    string // --account flag (auth commands)
+	Drive      string // --drive flag (drive selection)
+	DryRun     *bool  // --dry-run flag
 }

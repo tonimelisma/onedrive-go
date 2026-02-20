@@ -41,34 +41,28 @@ const (
 func Validate(cfg *Config) error {
 	var errs []error
 
-	errs = append(errs, validateProfiles(cfg.Profiles)...)
-	errs = append(errs, validateFilter(&cfg.Filter)...)
-	errs = append(errs, validateTransfers(&cfg.Transfers)...)
-	errs = append(errs, validateSafety(&cfg.Safety)...)
-	errs = append(errs, validateSync(&cfg.Sync)...)
-	errs = append(errs, validateLogging(&cfg.Logging)...)
-	errs = append(errs, validateNetwork(&cfg.Network)...)
+	errs = append(errs, validateDrives(cfg)...)
+	errs = append(errs, validateFilter(&cfg.FilterConfig)...)
+	errs = append(errs, validateTransfers(&cfg.TransfersConfig)...)
+	errs = append(errs, validateSafety(&cfg.SafetyConfig)...)
+	errs = append(errs, validateSync(&cfg.SyncConfig)...)
+	errs = append(errs, validateLogging(&cfg.LoggingConfig)...)
+	errs = append(errs, validateNetwork(&cfg.NetworkConfig)...)
 
 	return errors.Join(errs...)
 }
 
-// ValidateResolved checks cross-field constraints on a fully resolved profile.
+// ValidateResolved checks cross-field constraints on a fully resolved drive.
 // Unlike Validate(), which checks raw config file values, this runs after the
 // four-layer override chain (defaults -> file -> env -> CLI) has been applied.
 // It catches constraints that only make sense on the final merged result.
-func ValidateResolved(rp *ResolvedProfile) error {
+func ValidateResolved(rd *ResolvedDrive) error {
 	var errs []error
 
 	// SyncDir must be absolute after tilde expansion and env/CLI overrides.
 	// Relative paths would resolve differently depending on cwd.
-	if rp.SyncDir != "" && !filepath.IsAbs(rp.SyncDir) {
-		errs = append(errs, fmt.Errorf("sync_dir: must be absolute after expansion, got %q", rp.SyncDir))
-	}
-
-	// azure_ad_endpoint requires azure_tenant_id — the endpoint alone is
-	// meaningless without knowing which tenant to authenticate against.
-	if rp.AzureADEndpoint != "" && rp.AzureTenantID == "" {
-		errs = append(errs, fmt.Errorf("azure_ad_endpoint is set but azure_tenant_id is empty"))
+	if rd.SyncDir != "" && !filepath.IsAbs(rd.SyncDir) {
+		errs = append(errs, fmt.Errorf("sync_dir: must be absolute after expansion, got %q", rd.SyncDir))
 	}
 
 	return errors.Join(errs...)
@@ -79,18 +73,18 @@ func validateFilter(f *FilterConfig) []error {
 
 	if f.MaxFileSize != "" && f.MaxFileSize != "0" {
 		if _, err := parseSize(f.MaxFileSize); err != nil {
-			errs = append(errs, fmt.Errorf("filter.max_file_size: %w", err))
+			errs = append(errs, fmt.Errorf("max_file_size: %w", err))
 		}
 	}
 
 	for _, p := range f.SyncPaths {
 		if !strings.HasPrefix(p, "/") {
-			errs = append(errs, fmt.Errorf("filter.sync_paths: path %q must start with /", p))
+			errs = append(errs, fmt.Errorf("sync_paths: path %q must start with /", p))
 		}
 	}
 
 	if f.IgnoreMarker == "" {
-		errs = append(errs, errors.New("filter.ignore_marker: must not be empty"))
+		errs = append(errs, errors.New("ignore_marker: must not be empty"))
 	}
 
 	return errs
@@ -99,9 +93,9 @@ func validateFilter(f *FilterConfig) []error {
 func validateTransfers(t *TransfersConfig) []error {
 	var errs []error
 
-	errs = append(errs, validateWorkerCount("transfers.parallel_downloads", t.ParallelDownloads)...)
-	errs = append(errs, validateWorkerCount("transfers.parallel_uploads", t.ParallelUploads)...)
-	errs = append(errs, validateWorkerCount("transfers.parallel_checkers", t.ParallelCheckers)...)
+	errs = append(errs, validateWorkerCount("parallel_downloads", t.ParallelDownloads)...)
+	errs = append(errs, validateWorkerCount("parallel_uploads", t.ParallelUploads)...)
+	errs = append(errs, validateWorkerCount("parallel_checkers", t.ParallelCheckers)...)
 	errs = append(errs, validateChunkSize(t.ChunkSize)...)
 	errs = append(errs, validateTransferOrder(t.TransferOrder)...)
 	errs = append(errs, validateBandwidthSchedule(t.BandwidthSchedule)...)
@@ -121,16 +115,16 @@ func validateWorkerCount(field string, n int) []error {
 func validateChunkSize(s string) []error {
 	bytes, err := parseSize(s)
 	if err != nil {
-		return []error{fmt.Errorf("transfers.chunk_size: %w", err)}
+		return []error{fmt.Errorf("chunk_size: %w", err)}
 	}
 
 	if bytes < minChunkBytes || bytes > maxChunkBytes {
-		return []error{fmt.Errorf("transfers.chunk_size: must be between 10MiB and 60MiB, got %s", s)}
+		return []error{fmt.Errorf("chunk_size: must be between 10MiB and 60MiB, got %s", s)}
 	}
 
 	if bytes%chunkAlignBytes != 0 {
 		return []error{fmt.Errorf(
-			"transfers.chunk_size: must be a multiple of 320 KiB (%d bytes), got %s (%d bytes)",
+			"chunk_size: must be a multiple of 320 KiB (%d bytes), got %s (%d bytes)",
 			chunkAlignBytes, s, bytes)}
 	}
 
@@ -148,7 +142,7 @@ var validTransferOrders = map[string]bool{
 func validateTransferOrder(order string) []error {
 	if !validTransferOrders[order] {
 		return []error{fmt.Errorf(
-			"transfers.transfer_order: must be one of default, size_asc, size_desc, name_asc, name_desc; got %q", order)}
+			"transfer_order: must be one of default, size_asc, size_desc, name_asc, name_desc; got %q", order)}
 	}
 
 	return nil
@@ -162,13 +156,13 @@ func validateBandwidthSchedule(entries []BandwidthScheduleEntry) []error {
 	for i := range entries {
 		minutes, err := parseScheduleTime(entries[i].Time)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("transfers.bandwidth_schedule[%d].time: %w", i, err))
+			errs = append(errs, fmt.Errorf("bandwidth_schedule[%d].time: %w", i, err))
 
 			continue
 		}
 
 		if prevMinutes >= 0 && minutes <= prevMinutes {
-			errs = append(errs, fmt.Errorf("transfers.bandwidth_schedule: entries must be sorted by time; %q is not after %q",
+			errs = append(errs, fmt.Errorf("bandwidth_schedule: entries must be sorted by time; %q is not after %q",
 				entries[i].Time, entries[max(0, i-1)].Time))
 		}
 
@@ -202,17 +196,17 @@ func validateSafety(s *SafetyConfig) []error {
 	var errs []error
 
 	if s.BigDeleteThreshold < minBigDelete {
-		errs = append(errs, fmt.Errorf("safety.big_delete_threshold: must be >= %d, got %d",
+		errs = append(errs, fmt.Errorf("big_delete_threshold: must be >= %d, got %d",
 			minBigDelete, s.BigDeleteThreshold))
 	}
 
 	if s.BigDeletePercentage < minPercentage || s.BigDeletePercentage > maxPercentage {
-		errs = append(errs, fmt.Errorf("safety.big_delete_percentage: must be between %d and %d, got %d",
+		errs = append(errs, fmt.Errorf("big_delete_percentage: must be between %d and %d, got %d",
 			minPercentage, maxPercentage, s.BigDeletePercentage))
 	}
 
 	if s.BigDeleteMinItems < minBigDelete {
-		errs = append(errs, fmt.Errorf("safety.big_delete_min_items: must be >= %d, got %d",
+		errs = append(errs, fmt.Errorf("big_delete_min_items: must be >= %d, got %d",
 			minBigDelete, s.BigDeleteMinItems))
 	}
 
@@ -226,15 +220,15 @@ func validateSafetyRemaining(s *SafetyConfig) []error {
 
 	if s.MinFreeSpace != "" && s.MinFreeSpace != "0" {
 		if _, err := parseSize(s.MinFreeSpace); err != nil {
-			errs = append(errs, fmt.Errorf("safety.min_free_space: %w", err))
+			errs = append(errs, fmt.Errorf("min_free_space: %w", err))
 		}
 	}
 
-	errs = append(errs, validateOctalPermission("safety.sync_dir_permissions", s.SyncDirPermissions)...)
-	errs = append(errs, validateOctalPermission("safety.sync_file_permissions", s.SyncFilePermissions)...)
+	errs = append(errs, validateOctalPermission("sync_dir_permissions", s.SyncDirPermissions)...)
+	errs = append(errs, validateOctalPermission("sync_file_permissions", s.SyncFilePermissions)...)
 
 	if s.TombstoneRetentionDays < minTombstoneDays {
-		errs = append(errs, fmt.Errorf("safety.tombstone_retention_days: must be >= %d, got %d",
+		errs = append(errs, fmt.Errorf("tombstone_retention_days: must be >= %d, got %d",
 			minTombstoneDays, s.TombstoneRetentionDays))
 	}
 
@@ -265,19 +259,19 @@ func validateOctalPermission(field, value string) []error {
 func validateSync(s *SyncConfig) []error {
 	var errs []error
 
-	errs = append(errs, validateDurationMin("sync.poll_interval", s.PollInterval, minPollInterval)...)
+	errs = append(errs, validateDurationMin("poll_interval", s.PollInterval, minPollInterval)...)
 	errs = append(errs, validateFullscanFrequency(s.FullscanFrequency)...)
 	errs = append(errs, validateConflictStrategy(s.ConflictStrategy)...)
-	errs = append(errs, validateDurationNonNeg("sync.conflict_reminder_interval", s.ConflictReminderInterval)...)
-	errs = append(errs, validateDurationNonNeg("sync.verify_interval", s.VerifyInterval)...)
-	errs = append(errs, validateDurationMin("sync.shutdown_timeout", s.ShutdownTimeout, minShutdownTimeout)...)
+	errs = append(errs, validateDurationNonNeg("conflict_reminder_interval", s.ConflictReminderInterval)...)
+	errs = append(errs, validateDurationNonNeg("verify_interval", s.VerifyInterval)...)
+	errs = append(errs, validateDurationMin("shutdown_timeout", s.ShutdownTimeout, minShutdownTimeout)...)
 
 	return errs
 }
 
 func validateFullscanFrequency(n int) []error {
 	if n != 0 && n < minFullscanNonZero {
-		return []error{fmt.Errorf("sync.fullscan_frequency: must be 0 (disabled) or >= %d, got %d",
+		return []error{fmt.Errorf("fullscan_frequency: must be 0 (disabled) or >= %d, got %d",
 			minFullscanNonZero, n)}
 	}
 
@@ -286,20 +280,30 @@ func validateFullscanFrequency(n int) []error {
 
 func validateConflictStrategy(s string) []error {
 	if s != "keep_both" {
-		return []error{fmt.Errorf("sync.conflict_strategy: must be \"keep_both\", got %q", s)}
+		return []error{fmt.Errorf("conflict_strategy: must be \"keep_both\", got %q", s)}
+	}
+
+	return nil
+}
+
+// validateDuration checks that a duration string is valid and meets a minimum.
+// Used for per-drive poll_interval validation where the field name is contextual.
+func validateDuration(value, field string, minimum time.Duration) error {
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return fmt.Errorf("%s: invalid duration %q: %w", field, value, err)
+	}
+
+	if d < minimum {
+		return fmt.Errorf("%s: must be >= %s, got %s", field, minimum, d)
 	}
 
 	return nil
 }
 
 func validateDurationMin(field, value string, minimum time.Duration) []error {
-	d, err := time.ParseDuration(value)
-	if err != nil {
-		return []error{fmt.Errorf("%s: invalid duration %q: %w", field, value, err)}
-	}
-
-	if d < minimum {
-		return []error{fmt.Errorf("%s: must be >= %s, got %s", field, minimum, d)}
+	if err := validateDuration(value, field, minimum); err != nil {
+		return []error{err}
 	}
 
 	return nil
@@ -325,7 +329,7 @@ func validateLogging(l *LoggingConfig) []error {
 	errs = append(errs, validateLogFormat(l.LogFormat)...)
 
 	if l.LogRetentionDays < minLogRetention {
-		errs = append(errs, fmt.Errorf("logging.log_retention_days: must be >= %d, got %d",
+		errs = append(errs, fmt.Errorf("log_retention_days: must be >= %d, got %d",
 			minLogRetention, l.LogRetentionDays))
 	}
 
@@ -341,7 +345,7 @@ var validLogLevels = map[string]bool{
 
 func validateLogLevel(level string) []error {
 	if !validLogLevels[level] {
-		return []error{fmt.Errorf("logging.log_level: must be one of debug, info, warn, error; got %q", level)}
+		return []error{fmt.Errorf("log_level: must be one of debug, info, warn, error; got %q", level)}
 	}
 
 	return nil
@@ -355,7 +359,7 @@ var validLogFormats = map[string]bool{
 
 func validateLogFormat(format string) []error {
 	if !validLogFormats[format] {
-		return []error{fmt.Errorf("logging.log_format: must be one of auto, text, json; got %q", format)}
+		return []error{fmt.Errorf("log_format: must be one of auto, text, json; got %q", format)}
 	}
 
 	return nil
@@ -364,8 +368,8 @@ func validateLogFormat(format string) []error {
 func validateNetwork(n *NetworkConfig) []error {
 	var errs []error
 
-	errs = append(errs, validateDurationMin("network.connect_timeout", n.ConnectTimeout, minConnectTimeout)...)
-	errs = append(errs, validateDurationMin("network.data_timeout", n.DataTimeout, minDataTimeout)...)
+	errs = append(errs, validateDurationMin("connect_timeout", n.ConnectTimeout, minConnectTimeout)...)
+	errs = append(errs, validateDurationMin("data_timeout", n.DataTimeout, minDataTimeout)...)
 
 	return errs
 }

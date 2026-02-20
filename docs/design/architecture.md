@@ -38,7 +38,7 @@
                                                     │
                                      ┌──────────────┴───────────────┐
                                      │       internal/config/       │
-                                     │       TOML + profiles        │
+                                     │       TOML + drives          │
                                      └──────────────────────────────┘
 
            ┌────────────────┐
@@ -90,9 +90,9 @@ internal/
     filter.go                       # Three-layer filtering
     transfer.go                     # Download/upload with hash verification, worker pools
 
-  config/                           # TOML config with profiles
+  config/                           # TOML config with drives
     config.go                       # Types, loading, validation
-    paths.go                        # XDG paths, profile derivation
+    paths.go                        # XDG paths, data dir derivation
 
 pkg/
   quickxorhash/                     # Copied from rclone (BSD-0 license)
@@ -183,19 +183,14 @@ There is no `NormalizedItem` type. There is no `DriveItem` in any public API. `g
 
 ### 3.5 Config (`internal/config/`)
 
-**Responsibility**: Loads, validates, and provides access to TOML configuration. Manages multi-profile configuration and migration from abraunegg/rclone formats.
+**Responsibility**: Loads, validates, and provides access to TOML configuration. Manages multi-drive configuration with flat global settings and per-drive sections.
 
-**Key interfaces exposed**:
-```go
-type Config interface {
-    Profile(name string) (*Profile, error)
-    ProfileNames() []string
-    Global() *GlobalConfig
-    FilterConfig() *FilterConfig
-    TransferConfig() *TransferConfig
-    SafetyConfig() *SafetyConfig
-}
-```
+**Key types exposed**:
+- `Config` — global settings (embedded structs: FilterConfig, TransfersConfig, SafetyConfig, SyncConfig, LoggingConfig, NetworkConfig) plus per-drive sections (`Drives map[string]Drive`)
+- `Drive` — per-drive configuration (sync_dir, alias, enabled, per-drive filter overrides)
+- `ResolvedDrive` — effective settings after merging global defaults + per-drive overrides + CLI/env flags
+- `ResolveDrive(env, cli)` — four-layer override chain: defaults → config file → environment → CLI flags
+- `DriveTokenPath(canonicalID)` / `DriveStatePath(canonicalID)` — derive filesystem paths from canonical drive IDs
 
 ### 3.6 QuickXorHash (`pkg/quickxorhash/`)
 
@@ -228,7 +223,7 @@ cmd/onedrive-go/  ──►  sync.Engine
 The engine internally:
 
 ```
- 1. Load config + open per-profile state DB
+ 1. Load config + open per-drive state DB
  2. graph.Delta() ──► []graph.Item (clean, normalized)
  3. Convert to sync.Record, store in SQLite
  4. Scan local filesystem ──► sync.Record updates
@@ -248,7 +243,7 @@ The engine internally:
                     └────┬────┘
                          │
                     ┌────▼────┐
-                    │  State  │◄──── open per-profile DB
+                    │  State  │◄──── open per-drive DB
                     │   DB    │
                     └────┬────┘
                          │
@@ -313,7 +308,7 @@ After initial sync completes, a delta token is saved and all subsequent syncs us
 
 ### 5.1 Database Writer
 
-- **Single writer goroutine per profile**. All write operations are serialized through a channel to this goroutine. This eliminates the need for SQLite busy handling or mutex contention on writes.
+- **Single writer goroutine per drive**. All write operations are serialized through a channel to this goroutine. This eliminates the need for SQLite busy handling or mutex contention on writes.
 - **Concurrent readers** via SQLite WAL mode. Status queries, conflict listing, and other read operations can proceed without blocking the writer.
 
 ### 5.2 Worker Pools
@@ -373,8 +368,8 @@ rootCtx
 
 ### 6.2 Database Scope
 
-- **Separate database file per profile** -- complete isolation between accounts
-- Path: `~/.local/share/onedrive-go/state/{profile}.db` (Linux) or `~/Library/Application Support/onedrive-go/state/{profile}.db` (macOS)
+- **Separate database file per drive** -- complete isolation between accounts
+- Path: `~/.local/share/onedrive-go/state_{canonicalID}.db` (Linux) or `~/Library/Application Support/onedrive-go/state_{canonicalID}.db` (macOS)
 
 ### 6.3 Database Resilience
 
@@ -526,7 +521,7 @@ All known API quirks are handled inside `internal/graph/`. The normalization pip
 
 ### 9.1 Token Storage
 
-- **Separate token file per profile**: `~/.config/onedrive-go/tokens/{profile}.json` (Linux) or `~/Library/Application Support/onedrive-go/tokens/{profile}.json` (macOS)
+- **Separate token file per drive**: `~/.local/share/onedrive-go/token_{type}_{email}.json` (Linux) or `~/Library/Application Support/onedrive-go/token_{type}_{email}.json` (macOS)
 - File permissions: `0600` (owner read/write only)
 - Keychain integration: post-MVP
 
@@ -570,32 +565,32 @@ All known API quirks are handled inside `internal/graph/`. The normalization pip
 | `put <local> [remote]` | Upload file or folder | No | Yes |
 | `rm <path>` | Delete (to recycle bin by default) | No | Yes |
 | `mkdir <path>` | Create folder | No | Yes |
+| `stat <path>` | Display file/folder metadata | No | Yes |
 | `sync` | One-shot or continuous sync | Yes (write) | Yes |
 | `status` | Sync state and pending changes | Yes (read) | No |
 | `conflicts` | List unresolved conflicts | Yes (read) | No |
 | `resolve <id\|path>` | Resolve a conflict | Yes (write) | Maybe |
 | `verify` | Re-hash all local files, compare to DB and remote | Yes (read) | Yes |
-| `login [--headless]` | Authenticate | No | Yes |
+| `login` | Authenticate (device code flow) | No | Yes |
 | `logout` | Clear credentials | No | No |
-| `config init` | Interactive setup wizard | No | Yes |
-| `config show` | Display current configuration | No | No |
-| `migrate` | Import from abraunegg/rclone | No | No |
+| `whoami` | Display authenticated user and drive info | No | Yes |
+| `setup` | Interactive setup wizard (future) | No | Yes |
 
 ### 10.3 Global Flags
 
 ```
---profile <name>       # Select account profile (default: "default")
+--account <id>         # Account for auth commands (e.g., user@example.com)
+--drive <selector>     # Drive selector (canonical ID, alias, or partial match)
 --config <path>        # Override config file location
 --json                 # Machine-readable JSON output (all commands, from MVP)
 --verbose / -v         # Verbose output (stackable: -vv for debug)
 --quiet / -q           # Suppress non-error output
 --dry-run              # Preview operations without executing
---debug                # Trace-level logging (from day 1)
 ```
 
 ### 10.4 Process Model
 
-- **SQLite lock** enforces single sync writer per profile. A second `sync` process gets a "database is locked" error.
+- **SQLite lock enforces single sync writer per drive. A second `sync` process gets a "database is locked" error.
 - **Concurrent readers**: `status`, `conflicts`, and `resolve` (read path) can run while sync is active, via SQLite WAL.
 - **File operations** (`ls`, `get`, `put`, `rm`, `mkdir`) are completely independent -- no database, no lock contention.
 - **`sync --watch`** is just sync that keeps running. No separate daemon concept. Run it interactively or from systemd/launchd with `--quiet`.
@@ -752,7 +747,7 @@ When the sync directory is a mount point (NFS, CIFS, USB), the mount can disappe
 
 Every log entry includes context fields as appropriate:
 
-- `profile` -- which account profile
+- `drive` -- which drive (canonical ID)
 - `drive` -- which drive ID
 - `path` -- item path
 - `op` -- operation (download, upload, delete, move, conflict)
@@ -788,7 +783,7 @@ Internal counters tracked during sync: files downloaded, uploaded, deleted, move
 
 | Package | Action |
 |---------|--------|
-| `internal/config/` | Rewrite. TOML + profiles replaces JSON config entirely. |
+| `internal/config/` | Rewrite. TOML + drives replaces JSON config entirely. |
 | `cmd/onedrive-go/` | Rewrite. New command structure (Unix verbs + sync). |
 
 ### 15.5 Keep
@@ -825,7 +820,7 @@ If `internal/graph/` proves valuable as a standalone, reusable Graph API client,
 | State (DBs) | `~/.local/share/onedrive-go/state/` | `~/Library/Application Support/onedrive-go/state/` |
 | Logs | `~/.local/share/onedrive-go/logs/` | `~/Library/Application Support/onedrive-go/logs/` |
 | Cache | `~/.cache/onedrive-go/` | `~/Library/Caches/onedrive-go/` |
-| Tokens | `~/.config/onedrive-go/tokens/` | `~/Library/Application Support/onedrive-go/tokens/` |
+| Tokens | `~/.local/share/onedrive-go/token_*.json` | `~/Library/Application Support/onedrive-go/token_*.json` |
 
 ### 16.3 Symlinks
 
@@ -887,14 +882,14 @@ All three OneDrive account types are supported from MVP:
 | Business | SHA256 hash available, QuickXorHash primary. cTag absent on folders and in delta. Different driveId format. |
 | SharePoint | Same as Business, plus post-upload enrichment. Each document library is a separate drive. Quota may be restricted/absent. |
 
-A common interface handles all three, with quirk dispatch based on the profile's `account_type` field. `internal/graph/` applies account-type-specific normalization rules internally.
+A common interface handles all three, with quirk dispatch based on the drive's account type (derived from canonical ID). `internal/graph/` applies account-type-specific normalization rules internally.
 
-### 18.2 Multi-Profile
+### 18.2 Multi-Drive
 
-- **Single config file** holds all profiles
-- **Separate DB per profile** -- complete isolation
-- **Separate token file per profile** -- independent authentication
-- **Single `sync --watch`** manages all profiles simultaneously, each with its own sync loop and worker pools
+- **Single config file** with flat global settings and per-drive sections (`["personal:user@example.com"]`)
+- **Separate DB per drive** -- complete isolation (`state_{type}_{email}.db`)
+- **Separate token file per drive** -- independent authentication (`token_{type}_{email}.json`)
+- **Single `sync --watch`** manages all drives simultaneously, each with its own sync loop and worker pools
 
 ### 18.3 Shared Folders
 
@@ -915,7 +910,7 @@ This architecture defines constraints that downstream design documents must resp
 - Must include conflict ledger and stale files ledger tables
 - Must use WAL mode with FULL synchronous
 - Must define tombstone retention and purge strategy
-- Must support separate DB per profile
+- Must support separate DB per drive
 - State DB is owned by `internal/sync/` (not a separate package)
 
 ### For `sync-algorithm.md`
@@ -929,7 +924,7 @@ This architecture defines constraints that downstream design documents must resp
 
 ### For `configuration.md`
 - Must use TOML via BurntSushi/toml
-- Must support multi-profile with `[profile.NAME]` sections
+- Must support multi-drive with quoted section headers like ["personal:user@example.com"]
 - Must define all safety thresholds (big_delete_threshold, min_free_space, etc.)
 - Must define transfer pool sizes and bandwidth scheduling
 - Must support XDG-compliant paths with platform detection
@@ -948,8 +943,8 @@ This architecture defines constraints that downstream design documents must resp
 | # | Area | Decision |
 |---|------|----------|
 | 1 | DB engine | modernc.org/sqlite, WAL mode, FULL synchronous |
-| 2 | DB scope | Separate DB per profile |
-| 3 | DB writer | Single writer goroutine per profile, readers concurrent via WAL |
+| 2 | DB scope | Separate DB per drive |
+| 3 | DB writer | Single writer goroutine per drive, readers concurrent via WAL |
 | 4 | Item identity | (driveId, itemId) composite primary key |
 | 5 | Paths | Materialized in DB, rebuilt on delta |
 | 6 | Sync model | Three-way merge (local vs remote vs last-known) |
@@ -982,7 +977,7 @@ This architecture defines constraints that downstream design documents must resp
 | 33 | TOML library | BurntSushi/toml |
 | 34 | QuickXorHash | Copied from rclone (BSD-0) |
 | 35 | Logging | log/slog, auto file logging, daily rotation, 30-day retention |
-| 36 | Token storage | Separate file per profile, 0600 permissions |
+| 36 | Token storage | Separate file per drive, 0600 permissions |
 | 37 | Data layout | XDG-compliant split |
 | 38 | Symlinks | Follow by default, circular detection |
 | 39 | Filter order | sync_paths -> config patterns -> .odignore |

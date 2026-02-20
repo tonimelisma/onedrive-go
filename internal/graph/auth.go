@@ -13,8 +13,6 @@ import (
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/microsoft"
-
-	"github.com/tonimelisma/onedrive-go/internal/config"
 )
 
 // Azure AD application registered for onedrive-go (public client, multi-tenant + personal).
@@ -38,23 +36,21 @@ type DeviceAuth struct {
 	VerificationURI string
 }
 
-// Login performs the device code OAuth2 flow for a profile:
+// Login performs the device code OAuth2 flow:
 //  1. Requests a device code from Microsoft
 //  2. Calls display so the CLI can show the user code and verification URL
 //  3. Polls until the user authorizes (blocking, respects ctx cancellation)
-//  4. Saves the token to disk
+//  4. Saves the token to disk at tokenPath
 //  5. Returns a TokenSource for use with Client
+//
+// The caller is responsible for computing tokenPath (via config.DriveTokenPath).
+// This decouples graph/ from config/ — graph/ has no config import.
 func Login(
 	ctx context.Context,
-	profile string,
+	tokenPath string,
 	display func(DeviceAuth),
 	logger *slog.Logger,
 ) (TokenSource, error) {
-	tokenPath := config.ProfileTokenPath(profile)
-	if tokenPath == "" {
-		return nil, fmt.Errorf("graph: cannot determine token path for profile %q", profile)
-	}
-
 	cfg := oauthConfig(tokenPath, logger)
 
 	return doLogin(ctx, tokenPath, cfg, display, logger)
@@ -108,20 +104,13 @@ func doLogin(
 	return &tokenBridge{src: src, logger: logger}, nil
 }
 
-// TokenSourceFromProfile loads a saved token and returns a TokenSource with
-// auto-refresh and auto-persistence via OnTokenChange.
-// Returns ErrNotLoggedIn if no token file exists for the profile.
-func TokenSourceFromProfile(ctx context.Context, profile string, logger *slog.Logger) (TokenSource, error) {
-	tokenPath := config.ProfileTokenPath(profile)
-	if tokenPath == "" {
-		return nil, fmt.Errorf("graph: cannot determine token path for profile %q", profile)
-	}
-
-	return tokenSourceFromPath(ctx, tokenPath, logger)
-}
-
-// tokenSourceFromPath loads a token from the given path and returns a TokenSource.
-func tokenSourceFromPath(ctx context.Context, tokenPath string, logger *slog.Logger) (TokenSource, error) {
+// TokenSourceFromPath loads a saved token from the given path and returns a
+// TokenSource with auto-refresh and auto-persistence via OnTokenChange.
+// Returns ErrNotLoggedIn if no token file exists at the path.
+//
+// The caller is responsible for computing tokenPath (via config.DriveTokenPath).
+// This decouples graph/ from config/ — graph/ has no config import.
+func TokenSourceFromPath(ctx context.Context, tokenPath string, logger *slog.Logger) (TokenSource, error) {
 	tok, err := loadToken(tokenPath)
 	if err != nil {
 		return nil, err
@@ -144,14 +133,12 @@ func tokenSourceFromPath(ctx context.Context, tokenPath string, logger *slog.Log
 	return &tokenBridge{src: src, logger: logger}, nil
 }
 
-// Logout removes the saved token file for a profile.
+// Logout removes the saved token file at the given path.
 // Returns nil if the token file does not exist (already logged out).
-func Logout(profile string, logger *slog.Logger) error {
-	tokenPath := config.ProfileTokenPath(profile)
-	if tokenPath == "" {
-		return fmt.Errorf("graph: cannot determine token path for profile %q", profile)
-	}
-
+//
+// The caller is responsible for computing tokenPath (via config.DriveTokenPath).
+// This decouples graph/ from config/ — graph/ has no config import.
+func Logout(tokenPath string, logger *slog.Logger) error {
 	return logout(tokenPath, logger)
 }
 

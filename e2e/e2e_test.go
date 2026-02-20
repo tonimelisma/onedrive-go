@@ -18,7 +18,7 @@ import (
 
 var (
 	binaryPath string
-	profile    string
+	drive      string
 )
 
 func TestMain(m *testing.M) {
@@ -42,9 +42,9 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	profile = os.Getenv("ONEDRIVE_TEST_PROFILE")
-	if profile == "" {
-		profile = "default"
+	drive = os.Getenv("ONEDRIVE_TEST_DRIVE")
+	if drive == "" {
+		drive = "personal:test@example.com"
 	}
 
 	os.Exit(m.Run())
@@ -71,7 +71,7 @@ func findModuleRoot() string {
 func runCLI(t *testing.T, args ...string) (string, string) {
 	t.Helper()
 
-	fullArgs := append([]string{"--profile", profile}, args...)
+	fullArgs := append([]string{"--drive", drive}, args...)
 	cmd := exec.Command(binaryPath, fullArgs...)
 
 	var stdout, stderr bytes.Buffer
@@ -95,7 +95,7 @@ func TestE2E_RoundTrip(t *testing.T) {
 	// Cleanup at the end — delete the test folder.
 	t.Cleanup(func() {
 		// Best-effort cleanup — ignore errors.
-		fullArgs := []string{"--profile", profile, "rm", "/" + testFolder}
+		fullArgs := []string{"--drive", drive, "rm", "/" + testFolder}
 		cmd := exec.Command(binaryPath, fullArgs...)
 		_ = cmd.Run()
 	})
