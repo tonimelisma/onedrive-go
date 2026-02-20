@@ -283,10 +283,10 @@ Overridable via `log_file` in config. Level controlled by `log_level` in config.
 
 `sync --watch` runs in the foreground. No `--daemon` flag, no fork/detach — modern service managers handle process lifecycle:
 
-- **systemd**: captures stdout/stderr to journal automatically. Query with `journalctl -u onedrive-go`.
-- **launchd**: redirect stdout/stderr in the plist file.
+- **systemd**: captures stdout/stderr to journal automatically. Query with `journalctl --user -u onedrive-go`.
+- **launchd**: stdout/stderr configured in the plist file.
 
-Default console output is fine for services. The log file provides persistent history. No special flags needed. Ship example `.service` and `.plist` files.
+Default console output is fine for services. The log file provides persistent history. No special flags needed. Run `onedrive-go service install` to generate the service file (see section 13).
 
 ---
 
@@ -296,7 +296,7 @@ Default console output is fine for services. The log file provides persistent hi
 
 ```
 Authentication:
-  login [--headless]        Sign in + auto-add primary drive
+  login [--browser]         Sign in + auto-add primary drive (device code by default)
   logout [--purge]          Sign out (--purge: also delete state DBs + config sections)
   whoami                    Show authenticated accounts
 
@@ -322,8 +322,12 @@ File operations:
   mkdir <path>              Create remote directory
   stat <path>               Show file/folder metadata
 
+Service:
+  service install           Generate and install systemd/launchd service file (does NOT enable)
+  service uninstall         Remove the installed service file
+  service status            Show whether service is installed, enabled, running
+
 Configuration:
-  config show               Display effective configuration after all overrides
   setup                     Interactive guided configuration (menu-driven)
 
 Migration:
@@ -347,7 +351,8 @@ Migration:
 | `conflicts` | — | Read | — | — |
 | `resolve` | May refresh | Updated | — | May modify files |
 | `verify` | May refresh | Read | — | — |
-| `config show` | — | — | Read | — |
+| `service install` | — | — | — | — (writes service file) |
+| `service uninstall` | — | — | — | — (removes service file) |
 | `setup` | — | — | Modified | — |
 | `migrate` | — | Created | Created | — |
 
@@ -378,7 +383,7 @@ Migration:
 
 | Flag | Description |
 |---|---|
-| `--headless` | Force headless auth (no browser needed, device code only) |
+| `--browser` | Use authorization code flow (opens browser, localhost callback). Better UX on desktop. |
 
 ---
 
@@ -445,12 +450,25 @@ Try:
 
 ### Auto-selection (when `--drive` is omitted)
 
-| Active drives | Behavior |
+`enabled = false` is a **sync concept only**. File operations (`ls`, `get`, `put`, `rm`, `mkdir`, `stat`) work on all drives including disabled ones — the token is still valid, the drive still exists.
+
+**File operations** (single-target):
+
+| State | Behavior |
 |---|---|
-| 0 | Error: "No drives configured. Run: onedrive-go login" |
-| 1 | Auto-select the only drive |
-| 2+ single-target (ls, get, etc.) | Error with list of drives and shortest identifiers |
-| 2+ multi-target (sync, status) | All enabled drives |
+| No accounts (no tokens) | Error: "No accounts. Run: onedrive-go login" |
+| 1 drive (enabled or disabled) | Auto-select |
+| 2+ drives | Error with list of all drives and shortest identifiers |
+
+**Sync** (multi-target):
+
+| State | Behavior |
+|---|---|
+| No accounts | Error: "No accounts. Run: onedrive-go login" |
+| Accounts exist, all drives disabled | "All drives paused. Run: onedrive-go drive add" |
+| Some enabled | Sync enabled drives only |
+
+**Status**: always shows everything — all accounts, all drives (enabled, disabled, removed).
 
 ### Repeatable for multi-target commands
 
@@ -516,7 +534,34 @@ If config is updated without moving files -> new empty dir -> big-delete safety 
 
 ## 9. Login Flow
 
-`login` is **not interactive** (beyond the device code flow which requires visiting a URL). No prompts. Assumes defaults. Tells the user what was done.
+`login` is **interactive** — it blocks while the user authenticates in a browser. No config prompts though — assumes defaults for sync dir and settings, tells the user what was done.
+
+### Auth methods
+
+| Method | Flag | How it works | Best for |
+|--------|------|-------------|----------|
+| **Device code** (default) | (none) | Prints code + URL, user visits URL in any browser, CLI polls until complete | Headless, SSH, CI bootstrap, containers |
+| **Auth code + localhost** | `--browser` | Opens browser, starts `http://127.0.0.1:<port>/callback` listener, Microsoft redirects back | Desktop users (fewer steps) |
+
+Both methods block until auth completes or times out. If killed (ctrl-C, crash), no state is corrupted — the device code expires, or the localhost listener stops. Run login again.
+
+### Machine-readable login (`--json`)
+
+For GUIs, scripts, or other tools that need to drive the login flow programmatically, `--json` outputs newline-delimited JSON events on stdout:
+
+```json
+{"event": "device_code", "url": "https://microsoft.com/devicelogin", "code": "ABCD-EFGH", "expires_in": 900}
+{"event": "login_complete", "email": "toni@outlook.com", "drive_type": "personal", "drive_id": "personal:toni@outlook.com", "sync_dir": "~/OneDrive"}
+```
+
+Or with `--browser --json`:
+
+```json
+{"event": "auth_url", "url": "https://login.microsoftonline.com/..."}
+{"event": "login_complete", "email": "toni@outlook.com", "drive_type": "personal", "drive_id": "personal:toni@outlook.com", "sync_dir": "~/OneDrive"}
+```
+
+A GUI reads the first event, presents the code or opens the URL in a webview, then waits for the completion event. The CLI is the API — no RPC needed for login.
 
 ### Personal account
 
@@ -607,9 +652,9 @@ To add a new Microsoft account, use 'onedrive-go login'.
 
 `drive add` is the one command that's interactive (SharePoint site/library selection). Everything else assumes defaults.
 
-For non-interactive use (CI, scripts):
+For non-interactive use (scripts):
 ```bash
-onedrive-go drive add --site marketing --library Documents --sync-dir ~/Marketing
+onedrive-go drive add --site marketing --library Documents
 ```
 
 ### `drive remove`
@@ -751,16 +796,64 @@ Runs in the foreground forever. Suitable for systemd/launchd service management.
 
 - Syncs all enabled drives on each cycle (configurable `poll_interval`)
 - **Re-reads config on each cycle.** If a drive is added/removed/paused while running, changes take effect on the next cycle.
+- **Idles gracefully with no enabled drives.** Can be installed as a service before any login — just waits. When a drive is added via `login` or `drive add`, the next cycle picks it up and starts syncing. No restart needed.
 - Token expiration -> log error, skip that drive, continue others
 - No interactive prompts — all output goes to stderr + log file
 - Commands that modify config (`login`, `drive add/remove`) output: "If sync is running, changes take effect on the next sync cycle."
 
+### RPC (runtime control)
+
+`sync --watch` exposes a Unix domain socket for runtime queries and control:
+
+- **Status queries**: current sync state, progress, errors — same data as `onedrive-go status`
+- **Force sync**: trigger an immediate sync cycle without waiting for `poll_interval`
+- **Pause/resume**: temporarily stop syncing without modifying config
+
+RPC is **only available when `sync --watch` is running**. Login is always done via the CLI, not via RPC — login requires user interaction (device code or browser). If a token expires while the service is running, it logs an error and tells the user to run `onedrive-go login` in a terminal.
+
 ### No `--daemon` flag
 
-Modern Linux doesn't need daemon mode (fork, detach, setsid). systemd handles process lifecycle — backgrounding, restart on failure, logging. Same with launchd on macOS. `sync --watch` just runs in the foreground. We ship example service files:
+Modern Linux doesn't need daemon mode (fork, detach, setsid). systemd handles process lifecycle — backgrounding, restart on failure, logging. Same with launchd on macOS. `sync --watch` just runs in the foreground.
 
-- `contrib/systemd/onedrive-go.service`
-- `contrib/launchd/com.onedrive-go.plist`
+### Service management
+
+```
+onedrive-go service install       # writes service file, does NOT enable
+onedrive-go service uninstall     # removes service file
+onedrive-go service status        # installed? enabled? running?
+```
+
+`service install` generates the appropriate service file for the platform:
+- Linux: `~/.config/systemd/user/onedrive-go.service`
+- macOS: `~/Library/LaunchAgents/com.onedrive-go.plist`
+
+After install, it prints the native commands to enable/disable — no wrapping:
+
+```
+Service file created: ~/.config/systemd/user/onedrive-go.service
+
+To enable and start:
+  systemctl --user enable --now onedrive-go
+
+To stop and disable:
+  systemctl --user disable --now onedrive-go
+
+To check logs:
+  journalctl --user -u onedrive-go
+```
+
+**Never auto-enables.** The user explicitly chooses when to start the service. Uninstall removes the file — if the service was enabled, it tells the user to disable first.
+
+### Typical setup flow
+
+```
+$ onedrive-go service install                          # write service file
+$ systemctl --user enable --now onedrive-go            # start the service (idles, no drives yet)
+$ onedrive-go login                                    # add account + drive
+  -> next sync cycle picks it up automatically
+```
+
+The service can be installed once and forgotten. Login, drive add/remove, and config changes are all picked up on the next cycle.
 
 ---
 
@@ -890,15 +983,26 @@ $ onedrive-go sync   # respects new exclusions
 
 Or use `onedrive-go setup`.
 
-### I: CI / scripted usage
+### I: CI usage
+
+CI doesn't login — a human bootstraps the token once, uploads it to secret storage (e.g., Azure Key Vault), and CI downloads it to disk before running. The app just finds the token file and uses it.
 
 ```bash
-onedrive-go login --sync-dir ~/OneDrive     # non-interactive
+# CI workflow downloads pre-provisioned token to disk, then:
 onedrive-go ls /                            # auto-selects only drive
 onedrive-go sync                            # syncs
 ```
 
-### J: Email changes
+### J: Service-first setup
+
+```
+$ onedrive-go service install
+$ systemctl --user enable --now onedrive-go     # service starts, idles (no drives)
+$ onedrive-go login                             # adds drive to config
+  -> next sync cycle, service picks it up and starts syncing
+```
+
+### K: Email changes
 
 ```
 # User's email changed from old@company.com to new@company.com
@@ -935,10 +1039,16 @@ Configured drives:
   business:alice@contoso.com    (--drive business, --drive work)
 ```
 
-### No drives configured
+### No accounts
 
 ```
-Error: no drives configured. Run 'onedrive-go login' to get started.
+Error: no accounts. Run 'onedrive-go login' to get started.
+```
+
+### All drives disabled
+
+```
+All drives paused. Run 'onedrive-go drive add' to resume a drive.
 ```
 
 ### Multiple drives, single-target command, no `--drive`
@@ -996,7 +1106,7 @@ No confirmation prompt. Just does it and reports.
 | 7 | Aliases are per-drive convenience | Optional. Set in config. Resolved during fuzzy matching. |
 | 8 | SharePoint shares business token | Same OAuth session. Token per-user, state DB per-drive. |
 | 9 | Microsoft convention for sync dirs | `~/OneDrive`, `~/OneDrive - Org`, `~/Org/Site - Library`. |
-| 10 | Login is non-interactive | No prompts. Assume defaults. Tell user what happened. Suggest `setup`. |
+| 10 | Login is interactive (blocks for auth) | Device code by default, `--browser` for auth code flow. Assumes config defaults. No config prompts. |
 | 11 | Business OneDrive always auto-added | Even if user only wants SharePoint. `drive remove` to pause. |
 | 12 | `drive add` doesn't offer new sign-ins | Tells user to use `login`. Only shows SharePoint + paused drives. |
 | 13 | `drive remove` = pause (`enabled=false`) | Config, state DB, token preserved. `drive add` resumes. |
@@ -1014,6 +1124,15 @@ No confirmation prompt. Just does it and reports.
 | 25 | Sync dirs never deleted by any command | User's files. Always state explicitly in output. |
 | 26 | Text-level config manipulation | TOML libraries strip comments on round-trip. Read with parser, write with line-based text edits. Preserves all comments (ours and user's). |
 | 27 | Commented-out defaults on first start | Config bootstrapped with all global settings as comments. Users discover options without reading docs. Only written once — never regenerated. |
+| 28 | Device code as default auth | Works everywhere (headless, SSH, containers). `--browser` for desktop convenience. Both block. |
+| 29 | `--json` on login for GUI/scripting | Outputs newline-delimited JSON events. GUI reads events, presents code/URL in own UI. CLI is the API. |
+| 30 | Login always via CLI, never RPC | Login requires user interaction. RPC only for `sync --watch` runtime ops (status, force-sync, pause). |
+| 31 | `sync --watch` idles with no drives | Can be installed as service before any login. Picks up new drives on next cycle. No restart needed. |
+| 32 | File ops work on disabled drives | `enabled = false` is a sync concept only. `ls`, `get`, etc. still work — token is valid, drive exists. |
+| 33 | `service install` never auto-enables | Writes service file only. Prints native commands to enable. User explicitly chooses. |
+| 34 | No `--sync-dir` flag | All drives get sensible defaults from Microsoft conventions. Change via config file or `setup`. |
+| 35 | No `config show` command | Users read config file directly. `status` shows runtime state. `--debug` shows config resolution. |
+| 36 | `127.0.0.1` only for auth callback | `--browser` binds to localhost only. Never `0.0.0.0`. Standard OAuth security practice. |
 
 ---
 
@@ -1026,4 +1145,5 @@ No confirmation prompt. Just does it and reports.
 | 3 | `setup` wizard UX | Menu structure, navigation. Design when implementing. |
 | 4 | Personal `mail` field often empty | For personal accounts, `mail` is often null. UPN is ugly. Need to extract actual email from the UPN or from token claims. Current code handles with fallback. |
 | 5 | Config file location | Should config live with data files (one directory) or separate (XDG: `~/.config` vs `~/.local/share`)? |
-| 6 | Service file examples | Ship `contrib/systemd/onedrive-go.service` and `contrib/launchd/com.onedrive-go.plist`. Design when implementing. |
+| 6 | RPC protocol | Unix socket path, message format (JSON-RPC? gRPC? plain JSON?), auth model for the socket. Design when implementing `sync --watch`. |
+| 7 | Localhost callback port | Fixed port (e.g., 53682 like OneDrive) or dynamic (random available port)? Dynamic is more robust but requires registering `http://localhost` redirect URI without port in Azure AD. |
