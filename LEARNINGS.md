@@ -70,8 +70,8 @@ When using `replace` with a commit hash, the pseudo-version timestamp must match
 ### Azure OIDC + Key Vault for CI token management
 GitHub secrets can't be updated from within workflows, so we use Azure Key Vault as a writable secret store. OIDC federation means no stored credentials — GitHub Actions presents a short-lived JWT to Azure, scoped to `repo:tonimelisma/onedrive-go:ref:refs/heads/main`. Token files flow Key Vault <-> disk via `az keyvault secret download/set --file`, never through stdout/CI logs.
 
-### Token and drive ID bootstrap before CLI exists
-`cmd/integration-bootstrap/main.go` bootstraps tokens (`--profile`) and discovers drive IDs (`--print-drive-id`). Replaced by `cmd/onedrive-go login` + `whoami` in 1.7. Integration tests require `ONEDRIVE_TEST_DRIVE_ID` env var; CI discovers it via bootstrap tool before running tests.
+### Token and drive ID bootstrap
+Tokens are bootstrapped via `go run . login --profile personal`. Drive IDs are discovered via `go run . whoami --json --profile personal | jq -r '.drives[0].id'`. Integration tests require `ONEDRIVE_TEST_DRIVE_ID` env var; CI discovers it via whoami. The old `cmd/integration-bootstrap` was deleted in 1.7 (B-025).
 
 ### POC code creates path dependency
 When rewriting POC tests to use typed methods, audit for raw API patterns that survive by inertia. If a test helper uses raw `Do()` + `map[string]interface{}`, it biases all downstream tests toward that pattern. Prefer env vars or external tools for test prerequisites over inline raw API calls.
@@ -157,3 +157,28 @@ When building upload paths like `/drives/{driveID}/items/{parentID}:/{name}:/con
 
 ### No retry for upload operations
 Retrying a `SimpleUpload` or `UploadChunk` with a partially-consumed `io.Reader` would silently send incomplete data. The `doRawUpload` helper deliberately does not implement retry. For resumable uploads, the caller should use `UploadChunk` with fresh readers for each chunk.
+
+---
+
+## 9. CLI (Increments 1.7-1.8 + E2E 2.2)
+
+### gochecknoinits forbids init() functions
+The golangci-lint config enables `gochecknoinits`. Cobra CLI patterns that use `init()` to register commands and flags won't pass lint. Use constructor functions instead: `newRootCmd()` builds the root, calls `newLoginCmd()` etc. This is actually better — testable, no package-level mutable state.
+
+### Cobra transitive dependency: mousetrap
+Cobra depends on `github.com/inconshreveable/mousetrap` (Windows-only, detects "launched from Explorer"). Must be added to the depguard allow list alongside cobra and pflag. Always check transitive deps when adding new dependencies.
+
+### graph.Item is 264 bytes — avoid range value copies
+`gocritic:rangeValCopy` flags `for _, item := range items` when the struct is large. Use `for i := range items` with `items[i]` instead. This applies to any struct over ~128 bytes.
+
+### dupl linter catches near-identical method pairs
+`GetItem`/`GetItemByPath` and `ListChildren`/`ListChildrenByPath` had identical fetch+decode logic differing only in URL construction. The `dupl` linter flagged this. Solution: extract shared helpers (`fetchItem`, `fetchAllChildren`) that take the URL as a parameter.
+
+### CLI output conventions
+Status/error messages go to stderr (`fmt.Fprintf(os.Stderr, ...)`). Structured data output (JSON, tables) goes to stdout. This allows piping `onedrive-go ls --json / | jq ...` while still seeing status messages.
+
+### E2E test pattern: build once, run as subprocess
+E2E tests build the binary in `TestMain` to a temp dir, then run it via `os/exec` in each test. The binary path and profile are package-level vars set in `TestMain`. Tests use `t.Cleanup` for teardown of remote resources.
+
+### Recursive mkdir with 409 Conflict handling
+When creating nested folders, walk path segments and create each. If CreateFolder returns 409 (Conflict), the folder already exists — resolve it by path and continue with its ID as the parent. Track the `builtPath` as you go to enable path-based resolution.

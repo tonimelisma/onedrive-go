@@ -9,7 +9,6 @@
 
 | ID | Title | Priority | Package | Notes |
 |----|-------|----------|---------|-------|
-| B-025 | Delete `cmd/integration-bootstrap` when CLI login exists | P2 | `cmd/` | When 1.7 adds `cmd/onedrive-go login`, delete `cmd/integration-bootstrap` entirely. Update CI workflow to use `onedrive-go login` + `onedrive-go whoami` instead. |
 | B-026 | Replace `ONEDRIVE_TEST_DRIVE_ID` env var with typed discovery | P3 | CI + tests | CI could use a typed Go helper instead of the bootstrap tool to discover the drive ID. Lower priority since env var approach is clean. |
 
 ## Future Phase Review (Before Phase 4)

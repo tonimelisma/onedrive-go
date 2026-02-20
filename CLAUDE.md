@@ -4,11 +4,11 @@
 
 **onedrive-go** — a fast, safe, and well-tested OneDrive CLI and sync client in Go. Unix-style file operations (`ls`, `get`, `put`) plus robust bidirectional sync with conflict tracking. Targets Linux and macOS. MIT licensed.
 
-Currently: CLI-first OneDrive client, pivoted to "Pragmatic Flat" architecture (5 packages). Next: Phase 1 — Graph client + auth + CLI basics.
+Currently: Working CLI OneDrive client with auth + file ops. "Pragmatic Flat" architecture (5 packages). Next: Phase 2.3 (E2E edge cases) or Phase 3 (config).
 
 ## Current Phase
 
-**Phase 1 in progress (Graph Client + Auth + CLI Basics).** Increments 1.1-1.6 complete (HTTP transport, auth, items CRUD, delta+normalization, transfers, drives). Graph API layer is feature-complete. Next: 1.7 (CLI auth) + 1.8 (CLI file ops). See [docs/roadmap.md](docs/roadmap.md) for the phase plan.
+**Phase 1 complete. Phase 2 partially complete.** All 8 Phase 1 increments done (Graph API layer + CLI auth + file ops). Phase 2.1 (CI scaffold) and 2.2 (E2E round-trip tests) done. Users can `login`, `logout`, `whoami`, `ls`, `get`, `put`, `rm`, `mkdir`, `stat`. CI runs unit tests, integration tests against real Graph API, and E2E tests. See [docs/roadmap.md](docs/roadmap.md).
 
 ## Architecture Overview
 
@@ -47,11 +47,9 @@ Currently: CLI-first OneDrive client, pivoted to "Pragmatic Flat" architecture (
 ### Active packages
 - **`pkg/quickxorhash/`** — QuickXorHash algorithm (hash.Hash interface) — complete
 - **`internal/config/`** — TOML configuration with profiles, validation, XDG paths — existing, will be updated in Phase 3
-- **`internal/graph/`** — Graph API client: HTTP transport, auth, retry, rate limiting, items CRUD, delta+normalization, download/upload transfers, drives/user — feature-complete (92.2% coverage)
-
-### Building next (Phase 1)
-- **`cmd/onedrive-go/`** — CLI commands (Cobra): login, logout, whoami, ls, get, put, rm, mkdir
-- **`cmd/integration-bootstrap/`** — Temporary token bootstrapper (replaced by `cmd/onedrive-go login` in 1.7)
+- **`internal/graph/`** — Graph API client: HTTP transport, auth, retry, rate limiting, items CRUD, delta+normalization, download/upload transfers, drives/user, path-based item resolution — feature-complete (92.3% coverage)
+- **Root package** — Cobra CLI: login, logout, whoami, ls, get, put, rm, mkdir, stat (root.go, auth.go, files.go, format.go)
+- **`e2e/`** — E2E test suite (`//go:build e2e`): builds binary, exercises full round-trip against live OneDrive
 
 ### Future phases
 - **`internal/sync/`** — Sync engine: state DB, delta processing, local scanner, reconciler, executor, conflict handler, filter, transfer pipeline (Phase 4)
@@ -179,6 +177,9 @@ Common golangci-lint rules that require specific patterns:
 - **mnd**: Every number needs a named constant; tests are exempt
 - **funlen**: Max 100 lines / 50 statements — decompose into small helpers
 - **depguard**: Update `.golangci.yml` when adding new external dependencies
+- **gochecknoinits**: No `init()` functions allowed. Use constructor functions instead (e.g. `newRootCmd()`)
+- **gocritic:rangeValCopy**: Use `for i := range items` with `items[i]` instead of `for _, item := range items` when struct > ~128 bytes
+- **depguard**: Check transitive deps too (e.g. Cobra pulls in `mousetrap`)
 - **go.mod pseudo-versions**: Never use placeholder timestamps. Always run `go mod download <module>@<commit>` first to discover the correct timestamp, then construct `v0.0.0-YYYYMMDDHHMMSS-<12-char-hash>`.
 
 ## Test Patterns
@@ -207,7 +208,8 @@ CI must never be broken. Work is not done until CI passes.
 - **Code changes require PRs.** Create a branch, push, open a PR, let CI run.
 - **Doc-only changes push directly to main.** If the change only touches `.md` files, CLAUDE.md, LEARNINGS.md, BACKLOG.md, or roadmap — push to main directly. No PR needed. This keeps doc updates snappy.
 - **Workflow**: `.github/workflows/ci.yml` runs build + test (with race detector) + lint on every push and PR
-- **Integration tests**: `.github/workflows/integration.yml` runs `go test -tags=integration` against real Graph API on push to main + nightly. Uses Azure OIDC + Key Vault for token management. Local: `go test -tags=integration -race -v -timeout=5m ./internal/graph/...` (requires bootstrapped token via `go run ./cmd/integration-bootstrap`)
+- **Integration tests**: `.github/workflows/integration.yml` runs `go test -tags=integration` against real Graph API on push to main + nightly. Uses Azure OIDC + Key Vault for token management. Local: `go test -tags=integration -race -v -timeout=5m ./internal/graph/...` (requires token via `go run . login`)
+- **E2E tests**: Same workflow runs `go test -tags=e2e` after integration tests. Builds binary, exercises full CLI round-trip (whoami, ls, mkdir, put, get, stat, rm). Local: `ONEDRIVE_TEST_PROFILE=personal go test -tags=e2e -race -v -timeout=5m ./e2e/...`
 - **Merge**: `./scripts/poll-and-merge.sh <pr_number>` — polls checks, merges when green, verifies post-merge workflow
 - If CI fails, fix it immediately — it's your top priority. Never leave CI broken.
 - **Pre-commit hook**: `.githooks/pre-commit` runs `golangci-lint run` before every commit. Configured via `git config core.hooksPath .githooks`. If lint fails, the commit is rejected — fix lint first, then commit.

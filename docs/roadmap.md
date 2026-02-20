@@ -22,8 +22,8 @@
 | 1.4 | graph/ delta: Delta with full normalization pipeline (all quirks) | ~400 | **DONE** |
 | 1.5 | graph/ transfers: Download, SimpleUpload, chunked uploads | ~300 | **DONE** |
 | 1.6 | graph/ drives: Me, Drives, Drive | ~100 | **DONE** |
-| 1.7 | cmd/ auth: login (device code), logout, whoami | ~200 |
-| 1.8 | cmd/ file ops: ls, get, put, rm, mkdir, stat | ~400 |
+| 1.7 | cmd/ auth: login (device code), logout, whoami | ~200 | **DONE** |
+| 1.8 | cmd/ file ops: ls, get, put, rm, mkdir, stat | ~400 | **DONE** |
 
 ### Pre-Phase 1 decision: Test strategy for `internal/graph/` ✅
 
@@ -96,30 +96,31 @@
 - **Inputs**: architecture.md section 3
 - **Actual**: 521 LOC (drives.go 165, drives_test.go 289, integration_test.go +36, bootstrap -25), 90.9% package coverage
 
-### 1.7: CLI auth commands — `cmd/onedrive-go/auth.go`
+### 1.7: CLI auth commands — `auth.go` ✅
 
 - `login` — device code flow (display URL, wait for auth, save token)
-- `login --headless` — print URL only
 - `logout` — delete token file
-- `whoami` — display authenticated user + account type
+- `whoami` — display authenticated user + account type (text or JSON)
 - All support `--profile` and `--json` flags
-- **Cleanup**: Delete `cmd/integration-bootstrap` entirely, update CI to use `onedrive-go` CLI (B-025)
-- **Acceptance**: Build succeeds, `--help` works, unit tests for flag parsing
+- **Cleanup**: Deleted `cmd/integration-bootstrap` entirely (B-025), updated CI to use `whoami --json`
+- **Acceptance**: Build succeeds, `--help` works, format_test.go covers formatters
 - **Inputs**: prd.md section 4
-- **Size**: ~200 LOC
+- **Actual**: ~430 LOC (root.go 73, auth.go 166, format.go 80, format_test.go 111)
+- **Decision**: Constructor pattern (`newRootCmd()`) instead of `init()` — `gochecknoinits` linter requires it. Root package (not `cmd/onedrive-go/`) — single binary via `go install`.
 
-### 1.8: CLI file operations — `cmd/onedrive-go/files.go`
+### 1.8: CLI file operations — `files.go` ✅
 
-- `ls [path]` — list directory (table or JSON)
+- `ls [path]` — list directory (table or JSON, folders first)
 - `get <remote> [local]` — download file
-- `put <local> [remote]` — upload file
-- `rm <path>` — delete (to recycle bin by default)
-- `mkdir <path>` — create folder
-- `stat <path>` — show item metadata
+- `put <local> [remote]` — upload file (simple <4MB, chunked >=4MB)
+- `rm <path>` — delete file or folder
+- `mkdir <path>` — create folder (recursive, handles 409 Conflict)
+- `stat <path>` — show item metadata (text or JSON)
 - All support `--profile` and `--json` flags
-- **Acceptance**: Build succeeds, unit tests for output formatting
+- **Acceptance**: Build succeeds, E2E tests pass against live OneDrive
 - **Inputs**: prd.md section 4
-- **Size**: ~400 LOC
+- **Actual**: ~493 LOC (files.go 493)
+- **Decision**: Path-based methods (`GetItemByPath`, `ListChildrenByPath`) added to graph client. `clientAndDrive()` discovers primary drive via `Drives()` call.
 
 ---
 
@@ -130,7 +131,7 @@
 | Increment | Description | Est. LOC | Status |
 |-----------|-------------|----------|--------|
 | 2.1 | CI scaffold: GitHub Actions, Azure Key Vault + OIDC, integration tests | ~200 YAML + Go | **DONE** |
-| 2.2 | E2E tests: login, ls, get, put, rm round-trip against live API | ~400 |
+| 2.2 | E2E tests: login, ls, get, put, rm round-trip against live API | ~400 | **DONE** |
 | 2.3 | E2E edge cases: large files, special characters, concurrent ops | ~300 |
 
 ### 2.1: CI scaffold — GitHub Actions + Azure Key Vault ✅
@@ -146,15 +147,16 @@
 - **Inputs**: test-strategy.md section 10
 - **Actual**: ~200 LOC (integration.yml ~100, integration_test.go ~80, bootstrap ~30)
 
-### 2.2: E2E tests — round-trip file operations
+### 2.2: E2E tests — round-trip file operations ✅
 
 - Build tag `//go:build e2e` to separate from unit tests
-- Timestamped test directories on OneDrive (auto-cleanup after test)
-- Serial execution to avoid rate limiting
-- Test scenarios: login, ls root, put file, ls to verify, get file, compare content, rm file, ls to confirm deletion
+- `TestMain` builds binary to temp dir, `runCLI` subprocess executor
+- Timestamped test directories on OneDrive (auto-cleanup via `t.Cleanup`)
+- Serial subtests: whoami, ls root, mkdir (with subfolder), put, ls folder, stat, get (content verification), rm file, rm subfolder
+- CI step added to integration.yml
 - **Acceptance**: `go test -tags e2e ./e2e/...` passes against live OneDrive
 - **Inputs**: test-strategy.md section 7
-- **Size**: ~400 LOC
+- **Actual**: ~188 LOC (e2e/e2e_test.go 188)
 
 ### 2.3: E2E edge cases — large files, special characters, concurrent ops
 
