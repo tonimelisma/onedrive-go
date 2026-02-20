@@ -67,6 +67,21 @@ linters:
             - github.com/spf13/cobra
             - github.com/spf13/pflag
             - github.com/inconshreveable/mousetrap
+            # Phase 4: sync engine dependencies
+            - modernc.org/sqlite
+            - github.com/golang-migrate/migrate
+            - github.com/sabhiram/go-gitignore
+            - golang.org/x/text
+            - github.com/google/uuid
+            - github.com/dustin/go-humanize
+            - github.com/mattn/go-isatty
+            - github.com/ncruces/go-strftime
+            - github.com/remyoudompheng/bigfft
+            - modernc.org/libc
+            - modernc.org/mathutil
+            - modernc.org/memory
+            - golang.org/x/exp
+            - golang.org/x/sys
 
     gocyclo:
       min-complexity: 15
