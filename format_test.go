@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"io"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestFormatSize(t *testing.T) {
@@ -66,4 +69,51 @@ func TestPrintTable(t *testing.T) {
 	assert.Contains(t, output, "MODIFIED")
 	assert.Contains(t, output, "file.txt")
 	assert.Contains(t, output, "folder/")
+}
+
+func TestStatusf(t *testing.T) {
+	t.Run("quiet suppresses output", func(t *testing.T) {
+		old := flagQuiet
+		t.Cleanup(func() { flagQuiet = old })
+
+		flagQuiet = true
+
+		// Capture stderr via pipe to verify nothing is written.
+		oldStderr := os.Stderr
+		r, w, err := os.Pipe()
+		require.NoError(t, err)
+
+		os.Stderr = w
+
+		t.Cleanup(func() { os.Stderr = oldStderr })
+
+		statusf("should not appear %s", "test")
+		w.Close()
+
+		out, err := io.ReadAll(r)
+		require.NoError(t, err)
+		assert.Empty(t, string(out))
+	})
+
+	t.Run("normal mode writes to stderr", func(t *testing.T) {
+		old := flagQuiet
+		t.Cleanup(func() { flagQuiet = old })
+
+		flagQuiet = false
+
+		oldStderr := os.Stderr
+		r, w, err := os.Pipe()
+		require.NoError(t, err)
+
+		os.Stderr = w
+
+		t.Cleanup(func() { os.Stderr = oldStderr })
+
+		statusf("hello %s", "world")
+		w.Close()
+
+		out, err := io.ReadAll(r)
+		require.NoError(t, err)
+		assert.Equal(t, "hello world", string(out))
+	})
 }
