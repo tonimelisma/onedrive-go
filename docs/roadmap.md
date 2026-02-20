@@ -46,7 +46,7 @@
 - Device code OAuth2 flow via `oauth2` fork with `OnTokenChange` callback
 - Atomic token persistence to disk (write-to-temp + rename, 0600 permissions)
 - Token bridge: `oauth2.TokenSource` → `graph.TokenSource`
-- Login, TokenSourceFromProfile, Logout functions
+- Login, TokenSourceFromDrive, Logout functions
 - ErrNotLoggedIn sentinel error
 - **Acceptance**: `go test ./internal/graph/...` passes with httptest mock OAuth server
 - **Inputs**: architecture.md section 9 (security model)
@@ -101,7 +101,7 @@
 - `login` — device code flow (display URL, wait for auth, save token)
 - `logout` — delete token file
 - `whoami` — display authenticated user + account type (text or JSON)
-- All support `--profile` and `--json` flags
+- All support `--drive` and `--json` flags
 - **Cleanup**: Deleted `cmd/integration-bootstrap` entirely (B-025), updated CI to use `whoami --json`
 - **Acceptance**: Build succeeds, `--help` works, format_test.go covers formatters
 - **Inputs**: prd.md section 4
@@ -116,7 +116,7 @@
 - `rm <path>` — delete file or folder
 - `mkdir <path>` — create folder (recursive, handles 409 Conflict)
 - `stat <path>` — show item metadata (text or JSON)
-- All support `--profile` and `--json` flags
+- All support `--drive` and `--json` flags
 - **Acceptance**: Build succeeds, E2E tests pass against live OneDrive
 - **Inputs**: prd.md section 4
 - **Actual**: ~493 LOC (files.go 493)
@@ -137,11 +137,11 @@
 ### 2.1: CI scaffold — GitHub Actions + Azure Key Vault ✅
 
 - Azure OIDC federation: GitHub Actions authenticates to Azure via federated identity (no stored credentials)
-- Azure Key Vault stores OAuth token JSON per profile (`onedrive-oauth-token-{profile}`)
+- Azure Key Vault stores OAuth token JSON per drive (`onedrive-oauth-token-{drive}`)
 - Integration tests (`//go:build integration`) in `internal/graph/integration_test.go` validate full stack against real Graph API
 - CI workflow (`.github/workflows/integration.yml`) runs on push to main + nightly + manual dispatch
 - Token bootstrap tool (`cmd/integration-bootstrap/main.go`) for initial auth before CLI `login` exists
-- Multi-profile support via `ONEDRIVE_TEST_PROFILES` env var (comma-separated)
+- Multi-drive support via `ONEDRIVE_TEST_DRIVE` env var
 - Corrupted token writeback protection: validates JSON structure before uploading to Key Vault
 - **Acceptance**: Workflow runs, authenticates with OneDrive, completes without error
 - **Inputs**: test-strategy.md section 10
@@ -174,7 +174,7 @@
 | Increment | Description | Est. LOC | Status |
 |-----------|-------------|----------|--------|
 | 3.1 | config/ TOML loading + validation (reuse existing internal/config/ logic) | ~550 | **DONE** |
-| 3.2 | config/ profiles + path derivation | ~300 | **DONE** |
+| 3.2 | config/ drives + path derivation | ~300 | **DONE** |
 | 3.3 | cmd/ config: config show + CLI integration | ~550 | **DONE** |
 
 ### 3.1: Config — TOML loading + validation — `internal/config/` ✅
@@ -184,22 +184,21 @@
 - Unknown key detection -> fatal error with "did you mean X?" suggestion
 - Validation: type checks, range checks, cross-field constraints
 - XDG-compliant default paths (Linux + macOS)
-- Environment variable overrides (ONEDRIVE_GO_CONFIG, ONEDRIVE_GO_PROFILE, ONEDRIVE_GO_SYNC_DIR)
+- Environment variable overrides (ONEDRIVE_GO_CONFIG, ONEDRIVE_GO_SYNC_DIR)
 - Override precedence: defaults -> file -> env -> CLI flags
 - **Acceptance**: `go test ./internal/config/...` passes with valid + invalid + malformed config fixtures
 - **Inputs**: configuration.md sections 1-2, 9-10, 13
 - **Size**: ~550 LOC
 - **Actual**: Pre-existing (built in earlier phases). 1,415 LOC prod, 1,757 LOC tests, 94.8% coverage.
 
-### 3.2: Config — profiles + path derivation — `internal/config/` ✅
+### 3.2: Config — drives + path derivation — `internal/config/` ✅
 
-- Multi-profile support with `[profile.NAME]` sections in TOML
-- Per-profile fields: account_type, sync_dir, remote_path, drive_id
-- Per-profile section overrides: `[profile.work.filter]` replaces global `[filter]`
-- Profile path derivation: DB path, token path
-- Default profile when --profile omitted
-- **Acceptance**: `go test ./internal/config/...` passes with multi-profile scenarios
-- **Inputs**: configuration.md sections 3-5
+- Drive sections identified by canonical drive IDs in config (`["personal:toni@outlook.com"]`)
+- Per-drive fields: sync_dir, enabled, alias, remote_path, drive_id, skip_dotfiles, skip_dirs, skip_files, poll_interval
+- Per-drive overrides replace global settings when specified
+- Drive path derivation: token path, state DB path (from canonical ID with `:` -> `_`)
+- **Acceptance**: `go test ./internal/config/...` passes with multi-drive scenarios
+- **Inputs**: configuration.md, accounts.md §3-4
 - **Size**: ~300 LOC
 - **Actual**: Pre-existing (built in earlier phases). Covered by 3.1 actuals.
 
@@ -207,10 +206,32 @@
 
 - **Wave 1**: Config package enhancements — file extraction (unknown.go, size.go), `CLIOverrides` type, `Resolve()` four-layer override chain, `ValidateResolved()` cross-field checks, `RenderEffective()` for config show, godoc across all exported symbols
 - **Wave 2**: CLI integration — `PersistentPreRunE` with config loading, `--config` flag, `config show` command with `--json` support, `buildLogger()` respects config log level
-- **Deferred to Phase 5**: `config init` wizard (needs interactive prompts + auth flow), `migrate` (needs config init first)
+- **Deferred to Phase 5**: `setup` wizard (needs interactive prompts + auth flow), `migrate` (needs setup first)
 - **Acceptance**: Build succeeds, tests pass, `config show` works with/without config file
 - **Inputs**: prd.md section 4, configuration.md sections 4, 12
-- **Actual**: ~550 new LOC across 2 waves (PR #19 Wave 1, PR #20 Wave 2). Coverage improved 94.8% → 95.6% for config package.
+- **Actual**: ~550 new LOC across 2 waves (PR #19 Wave 1, PR #20 Wave 2). Coverage improved 94.8% -> 95.6% for config package.
+
+---
+
+## Phase 3.5: Account/Drive System Alignment _(doc-only)_
+
+**Align all documentation with the account/drive design defined in [accounts.md](design/accounts.md).**
+
+| Increment | Description | Status |
+|-----------|-------------|--------|
+| 3.5.1 | Align prd.md, configuration.md, roadmap.md, decisions.md, test-strategy.md, data-model.md, sync-algorithm.md, BACKLOG.md with accounts.md terminology and design | **DONE** |
+| 3.5.2 | Rewrite internal/config/ to implement flat drive-section config format | **IN PROGRESS** |
+
+### 3.5.1: Documentation alignment ✅
+
+- Replaced profile-based terminology with account/drive terminology across all design docs
+- Updated config format examples from `[profile.NAME]` sections to flat `["type:email"]` drive sections
+- Updated file paths: `tokens/{profile}.json` -> `token_{type}_{email}.json`, `state/{profile}.db` -> `state_{type}_{email}.db`
+- Updated CLI flags: `--profile` -> `--drive` (drive commands) / `--account` (auth commands)
+- Updated env vars: `ONEDRIVE_GO_PROFILE` removed, `ONEDRIVE_TEST_PROFILE` -> `ONEDRIVE_TEST_DRIVE`
+- Replaced `config init` -> `setup`, `config show` -> removed (users read config file directly)
+- Closed B-014 (profile name validation) — obsolete with canonical drive IDs
+- Added B-033 (accounts.md feature implementation tracking)
 
 ---
 
@@ -356,15 +377,15 @@
 
 ### 4.11: CLI sync command — `cmd/onedrive-go/sync.go`
 
-- `sync` — one-shot bidirectional sync
+- `sync` — one-shot bidirectional sync (all enabled drives)
 - `sync --watch` — continuous mode (placeholder, wired in Phase 5)
 - `sync --download-only`, `sync --upload-only` — directional modes
 - `sync --dry-run` — show action plan without executing
-- `sync --profile NAME` — sync specific profile
+- `sync --drive <id>` — sync specific drive(s), repeatable for multi-target
 - `sync status` — show current sync state, pending actions, last sync time
 - Cobra command with proper flag definitions and validation
 - **Acceptance**: Build succeeds, `--help` works, unit tests for flag parsing
-- **Inputs**: prd.md section 4 (CLI design), architecture.md section 2
+- **Inputs**: prd.md section 4 (CLI design), architecture.md section 2, accounts.md §7
 - **Size**: ~300 LOC
 
 ### 4.12: CLI conflict + verify commands — `cmd/onedrive-go/conflicts.go`
@@ -372,7 +393,7 @@
 - `conflicts` — list unresolved conflicts from ledger (table or JSON)
 - `resolve <id|path>` — interactive conflict resolution (keep local, keep remote, keep both)
 - `verify` — full-tree hash verification (compare local vs remote vs DB)
-- All support `--profile` and `--json` flags
+- All support `--drive` and `--json` flags
 - **Acceptance**: Build succeeds, unit tests for ledger display and resolution flow
 - **Inputs**: prd.md section 4, sync-algorithm.md section 7
 - **Size**: ~300 LOC
@@ -386,7 +407,7 @@
 | 5.1 | sync/ local monitor (inotify/FSEvents, debounce) | ~250 |
 | 5.2 | sync/ remote monitor (WebSocket + polling fallback) | ~350 |
 | 5.3 | sync/ RunWatch (continuous mode, SIGINT/SIGTERM, SIGHUP reload) | ~300 |
-| 5.4 | cmd/ sync --watch | ~100 |
+| 5.4 | cmd/ sync --watch + service install/uninstall/status | ~200 |
 | 5.5 | CI: full pipeline (unit + integration + E2E + chaos) | ~300 YAML |
 | 5.6 | Packaging: goreleaser, Homebrew, man pages | ~300 |
 
@@ -416,19 +437,23 @@
 - Trigger sync cycle on change events (debounced)
 - Periodic full scan (configurable frequency, default every 12 hours)
 - Graceful shutdown: SIGINT/SIGTERM -> finish current cycle -> exit
-- SIGHUP -> reload config
+- SIGHUP -> reload config (re-reads config each cycle, picks up new/removed drives)
+- RPC via Unix domain socket for runtime control (status, force sync, pause/resume)
 - **Acceptance**: Integration test: start watch -> create file -> verify sync triggered -> stop
-- **Inputs**: sync-algorithm.md section 11, configuration.md section 14
+- **Inputs**: sync-algorithm.md section 11, configuration.md section 14, accounts.md §13
 - **Size**: ~300 LOC
 
-### 5.4: CLI sync --watch — `cmd/onedrive-go/sync.go`
+### 5.4: CLI sync --watch + service management — `cmd/onedrive-go/sync.go`, `cmd/onedrive-go/service.go`
 
 - Wire `sync --watch` flag to sync.Engine.RunWatch
 - Signal handling: forward SIGINT/SIGTERM/SIGHUP to engine
 - Status output: periodic summary of sync activity
+- `service install` — generate systemd/launchd service file (does NOT enable)
+- `service uninstall` — remove service file
+- `service status` — show installed/enabled/running status
 - **Acceptance**: Build succeeds, `--help` documents --watch, integration test with mock engine
-- **Inputs**: prd.md section 4
-- **Size**: ~100 LOC
+- **Inputs**: prd.md section 4, accounts.md §13
+- **Size**: ~200 LOC
 
 ### 5.5: CI — full pipeline — `.github/workflows/`
 
@@ -438,7 +463,7 @@
 - Coverage enforcement: fail if below 80% overall
 - Benchmark tracking: run benchmarks, store results, comment on PR with trends
 - Nightly: extended chaos + stress tests
-- Credential management: private GitHub Gist for OAuth tokens
+- Credential management: Azure Key Vault + OIDC for token storage
 - **Acceptance**: CI green on push. All 3 jobs defined and functional.
 - **Inputs**: test-strategy.md section 10
 - **Size**: ~300 lines YAML
@@ -458,6 +483,12 @@
 
 ## Future (post-v1)
 
+- Setup wizard (`setup` command for interactive configuration)
+- `--browser` auth flow (authorization code + localhost callback)
+- `drive add` / `drive remove` commands
+- `status` command with account/drive hierarchy display
+- `migrate` command (abraunegg/rclone config migration)
+- Email change detection (stable user GUID, auto-rename files)
 - RPC interface for pause/resume/status
 - FUSE filesystem mount
 - National cloud support
@@ -472,10 +503,11 @@
 |-------|-----------|-------|
 | 1 | 8 | Graph API client + auth + CLI basics |
 | 2 | 3 | E2E CI against real OneDrive |
-| 3 | 3 | Config (TOML, profiles, wizard) |
+| 3 | 3 | Config (TOML, drives, CLI integration) |
+| 3.5 | 2 | Account/drive system alignment (docs + config rewrite) |
 | 4 | 12 | Sync engine (state, delta, reconciler, executor, conflicts) |
 | 5 | 6 | Real-time monitoring + polish + packaging |
-| **Total** | **32** | |
+| **Total** | **34** | |
 
 Each increment: ~200-700 LOC new code, independently testable, completable by a single agent.
 

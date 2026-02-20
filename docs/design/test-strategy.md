@@ -461,11 +461,11 @@ Tests for the path construction and cascade update logic ([data-model.md §10](d
 | `TestConfig_ValidTOML` | Complete valid config parses without error |
 | `TestConfig_MinimalTOML` | Config with only required fields |
 | `TestConfig_UnknownKey_Fatal` | Unknown key → fatal error with closest-match suggestion |
-| `TestConfig_ProfileOverride_FullReplace` | `[profile.work.filter]` replaces global `[filter]` entirely |
-| `TestConfig_ProfileOverride_Inherit` | Profile without section inherits global |
-| `TestConfig_MultipleProfiles` | Multiple profiles coexist |
+| `TestConfig_DriveOverride_FullReplace` | `["business:alice@contoso.com"]` drive-level settings replace globals entirely |
+| `TestConfig_DriveOverride_Inherit` | Drive without overrides inherits global |
+| `TestConfig_MultipleDrives` | Multiple drive sections coexist |
 | `TestConfig_DefaultValues` | Every option has the documented default |
-| `TestConfig_EnvOverride` | `ONEDRIVE_GO_CONFIG`, `ONEDRIVE_GO_PROFILE`, `ONEDRIVE_GO_SYNC_DIR` |
+| `TestConfig_EnvOverride` | `ONEDRIVE_GO_CONFIG`, `ONEDRIVE_GO_SYNC_DIR` |
 | `TestConfig_CLIFlagOverride` | CLI flags override config file values |
 | `TestConfig_Precedence` | defaults → config → env → CLI flags |
 | `TestConfig_Validation_ChunkSize` | Must be 320KiB multiple |
@@ -665,9 +665,9 @@ These tests run the full sync pipeline — delta fetch through execution — wit
 
 | Test | Scenario |
 |------|----------|
-| `TestConfigIntegration_LoadAndInitProfiles` | Load config → init 3 profiles → each gets its own DB |
+| `TestConfigIntegration_LoadAndInitDrives` | Load config → init 3 drives → each gets its own DB |
 | `TestConfigIntegration_FilterEngineFromConfig` | Config patterns → sync/ filter engine evaluates correctly |
-| `TestConfigIntegration_CrossProfileValidation` | Two profiles with same sync_dir → error |
+| `TestConfigIntegration_CrossDriveValidation` | Two drives with same sync_dir → error |
 | `TestConfigIntegration_HotReload_SIGHUP` | Send SIGHUP → config re-read → filter engine re-init |
 | `TestConfigIntegration_HotReload_StaleFiles` | Filter change → stale files detected → ledger populated |
 | `TestConfigIntegration_HotReload_BandwidthImmediate` | Bandwidth change → transfer manager updated immediately |
@@ -716,11 +716,11 @@ Setup:
 3. GitHub repository variables: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_KEY_VAULT_NAME` (non-sensitive identifiers)
 4. CI loads tokens via `az keyvault secret download --file` (token never in stdout/logs)
 5. After tests, CI saves rotated tokens back via `az keyvault secret set --file` (with JSON validation)
-6. Per-profile secrets named `onedrive-oauth-token-{profile}`
+6. Per-drive secrets named `onedrive-oauth-token-{drive}` (e.g., `onedrive-oauth-token-personal`)
 
-Token bootstrap (one-time per profile):
+Token bootstrap (one-time per drive):
 ```bash
-go run ./cmd/integration-bootstrap --profile personal
+go run ./cmd/integration-bootstrap --drive personal
 az keyvault secret set --vault-name kv-onedrivego-ci --name onedrive-oauth-token-personal --file <token-path> --content-type application/json
 ```
 
@@ -1105,7 +1105,7 @@ Stress tests use `//go:build stress` and run only in the nightly CI job. They ve
 | `TestStress_DeepNesting_100Levels` | 100-level nested directory tree | Path materialization works, no stack overflow |
 | `TestStress_WideBranching_1000` | 1,000 items in single directory | Listing + reconciliation within 1 second |
 | `TestStress_LargeUpload_250GB` | Upload session simulation (250GB, mock) | Session management handles boundary correctly |
-| `TestStress_ConcurrentProfiles_5` | 5 profiles syncing simultaneously | No DB contention, each profile isolated |
+| `TestStress_ConcurrentDrives_5` | 5 drives syncing simultaneously | No DB contention, each drive isolated |
 | `TestStress_RapidChanges_1000` | 1,000 filesystem events in 1 second | Debounce coalesces, no event loss |
 | `TestStress_DeltaPages_1000` | Delta response with 1,000 pages | All pages processed, token saved once |
 | `TestStress_ConflictBurst_100` | 100 simultaneous conflicts | All recorded in ledger, no deadlock |
@@ -1358,7 +1358,7 @@ job3-e2e:
         GH_TOKEN: ${{ secrets.CI_GIST_PAT }}
       run: |
         gh gist view ${{ secrets.CI_GIST_ID }} --raw > tokens.json
-        go run ./cmd/onedrive-go/ login --profile ci --token-file tokens.json --non-interactive
+        go run ./cmd/onedrive-go/ login --token-file tokens.json --non-interactive
         gh gist edit ${{ secrets.CI_GIST_ID }} --filename tokens.json < tokens.json
 
     # E2E tests (serial, to avoid rate limiting)
@@ -1369,7 +1369,7 @@ job3-e2e:
     - name: Notify on auth failure
       if: failure()
       run: |
-        echo "::warning::E2E auth may have expired. Re-auth with: onedrive-go login --profile ci && gh gist edit $CI_GIST_ID < tokens.json"
+        echo "::warning::E2E auth may have expired. Re-auth with: onedrive-go login && gh gist edit $CI_GIST_ID < tokens.json"
 ```
 
 ### 10.6 Nightly Extended
@@ -1737,7 +1737,7 @@ All fixtures are stored as JSON files in `testdata/` directories (primarily `int
 | `valid_config.toml` | Complete valid config with all sections |
 | `minimal_config.toml` | Only required fields |
 | `unknown_key.toml` | Config with typo'd key (e.g., `sync_directory`) |
-| `multiple_profiles.toml` | Three profiles with overrides |
+| `multiple_drives.toml` | Three drive sections with overrides |
 | `invalid_chunk_size.toml` | chunk_size not a 320KiB multiple |
 | `mutually_exclusive.toml` | download_only + upload_only both set |
 | `abraunegg_config.toml` | Real abraunegg config for migration testing |
