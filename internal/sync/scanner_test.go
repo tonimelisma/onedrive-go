@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -17,19 +16,19 @@ import (
 
 // --- Mock Store ---
 
-// mockStore implements the Store interface for testing the scanner.
+// scannerMockStore implements the Store interface for testing the scanner.
 // Only methods used by the scanner have real implementations.
-type mockStore struct {
+type scannerMockStore struct {
 	items       map[string]*Item // keyed by Path
 	syncedItems []*Item
 	upserted    []*Item // tracks all upserted items
 }
 
-func newMockStore() *mockStore {
-	return &mockStore{items: make(map[string]*Item)}
+func newScannerMockStore() *scannerMockStore {
+	return &scannerMockStore{items: make(map[string]*Item)}
 }
 
-func (m *mockStore) GetItemByPath(_ context.Context, path string) (*Item, error) {
+func (m *scannerMockStore) GetItemByPath(_ context.Context, path string) (*Item, error) {
 	item, ok := m.items[path]
 	if !ok {
 		return nil, nil
@@ -39,82 +38,86 @@ func (m *mockStore) GetItemByPath(_ context.Context, path string) (*Item, error)
 	return &cp, nil
 }
 
-func (m *mockStore) UpsertItem(_ context.Context, item *Item) error {
+func (m *scannerMockStore) UpsertItem(_ context.Context, item *Item) error {
 	cp := *item
 	m.items[item.Path] = &cp
 	m.upserted = append(m.upserted, &cp)
 	return nil
 }
 
-func (m *mockStore) ListSyncedItems(_ context.Context) ([]*Item, error) {
+func (m *scannerMockStore) ListSyncedItems(_ context.Context) ([]*Item, error) {
 	return m.syncedItems, nil
 }
 
 // Unused Store interface methods — required for interface satisfaction.
 
-func (m *mockStore) GetItem(context.Context, string, string) (*Item, error) { return nil, nil }
+func (m *scannerMockStore) GetItem(context.Context, string, string) (*Item, error) { return nil, nil }
 
-func (m *mockStore) MarkDeleted(context.Context, string, string, int64) error { return nil }
+func (m *scannerMockStore) MarkDeleted(context.Context, string, string, int64) error { return nil }
 
-func (m *mockStore) ListChildren(context.Context, string, string) ([]*Item, error) { return nil, nil }
-
-func (m *mockStore) ListAllActiveItems(context.Context) ([]*Item, error) { return nil, nil }
-
-func (m *mockStore) BatchUpsert(context.Context, []*Item) error { return nil }
-
-func (m *mockStore) MaterializePath(context.Context, string, string) (string, error) { return "", nil }
-
-func (m *mockStore) CascadePathUpdate(context.Context, string, string) error { return nil }
-
-func (m *mockStore) CleanupTombstones(context.Context, int) (int64, error) { return 0, nil }
-
-func (m *mockStore) GetDeltaToken(context.Context, string) (string, error) { return "", nil }
-
-func (m *mockStore) SaveDeltaToken(context.Context, string, string) error { return nil }
-
-func (m *mockStore) DeleteDeltaToken(context.Context, string) error { return nil }
-
-func (m *mockStore) SetDeltaComplete(context.Context, string, bool) error { return nil }
-
-func (m *mockStore) IsDeltaComplete(context.Context, string) (bool, error) { return false, nil }
-
-func (m *mockStore) RecordConflict(context.Context, *ConflictRecord) error { return nil }
-
-func (m *mockStore) ListConflicts(context.Context, string) ([]*ConflictRecord, error) {
+func (m *scannerMockStore) ListChildren(context.Context, string, string) ([]*Item, error) {
 	return nil, nil
 }
 
-func (m *mockStore) ResolveConflict(context.Context, string, ConflictResolution, ConflictResolvedBy) error {
+func (m *scannerMockStore) ListAllActiveItems(context.Context) ([]*Item, error) { return nil, nil }
+
+func (m *scannerMockStore) BatchUpsert(context.Context, []*Item) error { return nil }
+
+func (m *scannerMockStore) MaterializePath(context.Context, string, string) (string, error) {
+	return "", nil
+}
+
+func (m *scannerMockStore) CascadePathUpdate(context.Context, string, string) error { return nil }
+
+func (m *scannerMockStore) CleanupTombstones(context.Context, int) (int64, error) { return 0, nil }
+
+func (m *scannerMockStore) GetDeltaToken(context.Context, string) (string, error) { return "", nil }
+
+func (m *scannerMockStore) SaveDeltaToken(context.Context, string, string) error { return nil }
+
+func (m *scannerMockStore) DeleteDeltaToken(context.Context, string) error { return nil }
+
+func (m *scannerMockStore) SetDeltaComplete(context.Context, string, bool) error { return nil }
+
+func (m *scannerMockStore) IsDeltaComplete(context.Context, string) (bool, error) { return false, nil }
+
+func (m *scannerMockStore) RecordConflict(context.Context, *ConflictRecord) error { return nil }
+
+func (m *scannerMockStore) ListConflicts(context.Context, string) ([]*ConflictRecord, error) {
+	return nil, nil
+}
+
+func (m *scannerMockStore) ResolveConflict(context.Context, string, ConflictResolution, ConflictResolvedBy) error {
 	return nil
 }
 
-func (m *mockStore) ConflictCount(context.Context, string) (int, error) { return 0, nil }
+func (m *scannerMockStore) ConflictCount(context.Context, string) (int, error) { return 0, nil }
 
-func (m *mockStore) RecordStaleFile(context.Context, *StaleRecord) error { return nil }
+func (m *scannerMockStore) RecordStaleFile(context.Context, *StaleRecord) error { return nil }
 
-func (m *mockStore) ListStaleFiles(context.Context) ([]*StaleRecord, error) { return nil, nil }
+func (m *scannerMockStore) ListStaleFiles(context.Context) ([]*StaleRecord, error) { return nil, nil }
 
-func (m *mockStore) RemoveStaleFile(context.Context, string) error { return nil }
+func (m *scannerMockStore) RemoveStaleFile(context.Context, string) error { return nil }
 
-func (m *mockStore) SaveUploadSession(context.Context, *UploadSessionRecord) error { return nil }
+func (m *scannerMockStore) SaveUploadSession(context.Context, *UploadSessionRecord) error { return nil }
 
-func (m *mockStore) GetUploadSession(context.Context, string) (*UploadSessionRecord, error) {
+func (m *scannerMockStore) GetUploadSession(context.Context, string) (*UploadSessionRecord, error) {
 	return nil, nil
 }
 
-func (m *mockStore) DeleteUploadSession(context.Context, string) error { return nil }
+func (m *scannerMockStore) DeleteUploadSession(context.Context, string) error { return nil }
 
-func (m *mockStore) ListExpiredSessions(context.Context, int64) ([]*UploadSessionRecord, error) {
+func (m *scannerMockStore) ListExpiredSessions(context.Context, int64) ([]*UploadSessionRecord, error) {
 	return nil, nil
 }
 
-func (m *mockStore) GetConfigSnapshot(context.Context, string) (string, error) { return "", nil }
+func (m *scannerMockStore) GetConfigSnapshot(context.Context, string) (string, error) { return "", nil }
 
-func (m *mockStore) SaveConfigSnapshot(context.Context, string, string) error { return nil }
+func (m *scannerMockStore) SaveConfigSnapshot(context.Context, string, string) error { return nil }
 
-func (m *mockStore) Checkpoint() error { return nil }
+func (m *scannerMockStore) Checkpoint() error { return nil }
 
-func (m *mockStore) Close() error { return nil }
+func (m *scannerMockStore) Close() error { return nil }
 
 // --- Mock Filter ---
 
@@ -136,26 +139,6 @@ func (f *mockFilter) ShouldSync(path string, _ bool, _ int64) FilterResult {
 }
 
 // --- Test helpers ---
-
-// testLogWriter adapts testing.T.Log to io.Writer for slog output.
-type testLogWriter struct {
-	t *testing.T
-}
-
-func (w testLogWriter) Write(p []byte) (int, error) {
-	w.t.Log(string(p))
-	return len(p), nil
-}
-
-// testLogger returns an slog.Logger at Debug level that writes to t.Log,
-// so all scanner activity appears in test output with -v.
-func testLogger(t *testing.T) *slog.Logger {
-	t.Helper()
-
-	return slog.New(slog.NewTextHandler(testLogWriter{t: t}, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
-	}))
-}
 
 // writeFile creates a file with the given content in the temp directory.
 func writeFile(t *testing.T, dir, name, content string) string {
@@ -187,7 +170,7 @@ func TestScan_BasicFiles(t *testing.T) {
 	writeFile(t, root, "hello.txt", "hello world")
 	writeFile(t, root, "data.bin", "binary data")
 
-	store := newMockStore()
+	store := newScannerMockStore()
 	scanner := testScanner(t, store, newMockFilter(), true)
 
 	err := scanner.Scan(context.Background(), root)
@@ -216,7 +199,7 @@ func TestScan_NosyncGuard(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, ".nosync", "")
 
-	store := newMockStore()
+	store := newScannerMockStore()
 	scanner := testScanner(t, store, newMockFilter(), true)
 
 	err := scanner.Scan(context.Background(), root)
@@ -230,7 +213,7 @@ func TestScan_NosyncAbsent(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "file.txt", "content")
 
-	store := newMockStore()
+	store := newScannerMockStore()
 	scanner := testScanner(t, store, newMockFilter(), true)
 
 	err := scanner.Scan(context.Background(), root)
@@ -247,7 +230,7 @@ func TestScan_FilterExclusion(t *testing.T) {
 	filter := newMockFilter()
 	filter.excluded["skip.log"] = "matched *.log pattern"
 
-	store := newMockStore()
+	store := newScannerMockStore()
 	scanner := testScanner(t, store, filter, true)
 
 	err := scanner.Scan(context.Background(), root)
@@ -268,7 +251,7 @@ func TestScan_UnicodeNFCNormalization(t *testing.T) {
 
 	writeFile(t, root, nfdName, "coffee")
 
-	store := newMockStore()
+	store := newScannerMockStore()
 	scanner := testScanner(t, store, newMockFilter(), true)
 
 	err := scanner.Scan(context.Background(), root)
@@ -318,7 +301,8 @@ func TestScan_OneDriveNameValidation(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, tc.valid, isValidOneDriveName(tc.fileName))
+			valid, _ := isValidOneDriveName(tc.fileName)
+			assert.Equal(t, tc.valid, valid)
 		})
 	}
 }
@@ -332,7 +316,7 @@ func TestScan_SymlinkSkipMode(t *testing.T) {
 	err := os.Symlink(filepath.Join(root, "real.txt"), filepath.Join(root, "link.txt"))
 	require.NoError(t, err)
 
-	store := newMockStore()
+	store := newScannerMockStore()
 	scanner := testScanner(t, store, newMockFilter(), true) // skipSymlinks=true
 
 	err = scanner.Scan(context.Background(), root)
@@ -352,7 +336,7 @@ func TestScan_SymlinkFollowMode(t *testing.T) {
 	err := os.Symlink(filepath.Join(root, "real.txt"), filepath.Join(root, "link.txt"))
 	require.NoError(t, err)
 
-	store := newMockStore()
+	store := newScannerMockStore()
 	scanner := testScanner(t, store, newMockFilter(), false) // skipSymlinks=false
 
 	err = scanner.Scan(context.Background(), root)
@@ -375,7 +359,7 @@ func TestScan_MtimeFastPath(t *testing.T) {
 	mtime := ToUnixNano(info.ModTime().UTC())
 
 	// Pre-populate store with matching mtime
-	store := newMockStore()
+	store := newScannerMockStore()
 	store.items["stable.txt"] = &Item{
 		Path:       "stable.txt",
 		Name:       "stable.txt",
@@ -400,7 +384,7 @@ func TestScan_MtimeSlowPath(t *testing.T) {
 	writeFile(t, root, "changed.txt", "new content")
 
 	// Pre-populate store with a different (old) mtime
-	store := newMockStore()
+	store := newScannerMockStore()
 	store.items["changed.txt"] = &Item{
 		Path:       "changed.txt",
 		Name:       "changed.txt",
@@ -428,7 +412,7 @@ func TestScan_OrphanDetection_SyncedFile(t *testing.T) {
 	root := t.TempDir()
 	// No files on disk — the synced item is missing
 
-	store := newMockStore()
+	store := newScannerMockStore()
 	store.syncedItems = []*Item{
 		{
 			Path:       "deleted.txt",
@@ -460,7 +444,7 @@ func TestScan_OrphanDetection_S1Safety(t *testing.T) {
 	root := t.TempDir()
 	// No files on disk
 
-	store := newMockStore()
+	store := newScannerMockStore()
 	store.syncedItems = []*Item{
 		{
 			Path:       "never-synced.txt",
@@ -489,7 +473,7 @@ func TestScan_NestedDirectories(t *testing.T) {
 	writeFile(t, root, "sub/middle.txt", "middle")
 	writeFile(t, root, "sub/deep/bottom.txt", "bottom")
 
-	store := newMockStore()
+	store := newScannerMockStore()
 	scanner := testScanner(t, store, newMockFilter(), true)
 
 	err := scanner.Scan(context.Background(), root)
@@ -505,7 +489,7 @@ func TestScan_EmptyDirectory(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 
-	store := newMockStore()
+	store := newScannerMockStore()
 	scanner := testScanner(t, store, newMockFilter(), true)
 
 	err := scanner.Scan(context.Background(), root)
@@ -522,7 +506,7 @@ func TestScan_ContextCancellation(t *testing.T) {
 		writeFile(t, root, filepath.Join("dir", "file"+string(rune('a'+i))+".txt"), "data")
 	}
 
-	store := newMockStore()
+	store := newScannerMockStore()
 	scanner := testScanner(t, store, newMockFilter(), true)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -538,7 +522,7 @@ func TestScan_TombstonedFileResurrection(t *testing.T) {
 	writeFile(t, root, "revived.txt", "I'm back")
 
 	deletedAt := Int64Ptr(NowNano())
-	store := newMockStore()
+	store := newScannerMockStore()
 	store.items["revived.txt"] = &Item{
 		Path:      "revived.txt",
 		Name:      "revived.txt",
@@ -570,7 +554,7 @@ func TestScan_BrokenSymlink(t *testing.T) {
 	err := os.Symlink("/nonexistent/target", filepath.Join(root, "broken.txt"))
 	require.NoError(t, err)
 
-	store := newMockStore()
+	store := newScannerMockStore()
 	scanner := testScanner(t, store, newMockFilter(), false) // follow symlinks
 
 	err = scanner.Scan(context.Background(), root)
@@ -589,7 +573,7 @@ func TestScan_FilterExcludesDirectory(t *testing.T) {
 	filter := newMockFilter()
 	filter.excluded["node_modules"] = "directory excluded"
 
-	store := newMockStore()
+	store := newScannerMockStore()
 	scanner := testScanner(t, store, filter, true)
 
 	err := scanner.Scan(context.Background(), root)
@@ -605,7 +589,7 @@ func TestScan_OrphanStillPresent(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "stillhere.txt", "present")
 
-	store := newMockStore()
+	store := newScannerMockStore()
 	store.syncedItems = []*Item{
 		{
 			Path:       "stillhere.txt",
@@ -628,31 +612,6 @@ func TestScan_OrphanStillPresent(t *testing.T) {
 			assert.NotEmpty(t, item.LocalHash)
 			assert.NotNil(t, item.LocalSize)
 		}
-	}
-}
-
-func TestIsValidOneDriveName(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name  string
-		input string
-		want  bool
-	}{
-		{"empty", "", false},
-		{"dot", ".", false},
-		{"dotdot", "..", false},
-		{"normal", "file.txt", true},
-		{"dotfile", ".hidden", true},
-		{"long name", string(make([]byte, 256)), false},
-		{"max length", string(make([]byte, 255)), true},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			assert.Equal(t, tc.want, isValidOneDriveName(tc.input))
-		})
 	}
 }
 
@@ -685,7 +644,7 @@ func TestNewScanner_NilLogger(t *testing.T) {
 	t.Parallel()
 
 	// Should not panic when logger is nil
-	s := NewScanner(newMockStore(), newMockFilter(), true, nil)
+	s := NewScanner(newScannerMockStore(), newMockFilter(), true, nil)
 	assert.NotNil(t, s)
 	assert.NotNil(t, s.logger)
 }
@@ -697,7 +656,7 @@ func TestScan_NosyncGuardSentinelError(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, ".nosync", "")
 
-	scanner := testScanner(t, newMockStore(), newMockFilter(), true)
+	scanner := testScanner(t, newScannerMockStore(), newMockFilter(), true)
 	err := scanner.Scan(context.Background(), root)
 	assert.True(t, errors.Is(err, ErrNosyncGuard))
 }
@@ -716,7 +675,7 @@ func TestScan_PathTooLong(t *testing.T) {
 	require.NoError(t, os.MkdirAll(longDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(longDir, "deep.txt"), []byte("x"), 0o644))
 
-	store := newMockStore()
+	store := newScannerMockStore()
 	scanner := testScanner(t, store, newMockFilter(), true)
 
 	err := scanner.Scan(context.Background(), root)
@@ -745,7 +704,7 @@ func TestScan_OrphanDetection_ErrorFromStore(t *testing.T) {
 
 // errorStore returns errors from specific methods for testing error paths.
 type errorStore struct {
-	mockStore
+	scannerMockStore
 	listSyncedErr error
 }
 
@@ -757,7 +716,7 @@ func TestScan_OrphanDetection_ContextCancel(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 
-	store := newMockStore()
+	store := newScannerMockStore()
 	store.syncedItems = []*Item{
 		{Path: "a.txt", SyncedHash: "hash1"},
 		{Path: "b.txt", SyncedHash: "hash2"},
@@ -778,7 +737,7 @@ func TestScan_ExistingFileNilMtime(t *testing.T) {
 	writeFile(t, root, "nomtime.txt", "data")
 
 	// Existing item with nil LocalMtime triggers the slow path
-	store := newMockStore()
+	store := newScannerMockStore()
 	store.items["nomtime.txt"] = &Item{
 		Path:       "nomtime.txt",
 		Name:       "nomtime.txt",
@@ -804,8 +763,8 @@ func TestScan_StoreGetItemByPathError(t *testing.T) {
 	writeFile(t, root, "problem.txt", "data")
 
 	store := &getItemErrorStore{
-		mockStore: mockStore{items: make(map[string]*Item)},
-		errPath:   "problem.txt",
+		scannerMockStore: scannerMockStore{items: make(map[string]*Item)},
+		errPath:          "problem.txt",
 	}
 	scanner := testScanner(t, store, newMockFilter(), true)
 
@@ -816,7 +775,7 @@ func TestScan_StoreGetItemByPathError(t *testing.T) {
 
 // getItemErrorStore returns an error for GetItemByPath on a specific path.
 type getItemErrorStore struct {
-	mockStore
+	scannerMockStore
 	errPath string
 }
 
@@ -824,7 +783,7 @@ func (g *getItemErrorStore) GetItemByPath(_ context.Context, path string) (*Item
 	if path == g.errPath {
 		return nil, errors.New("db read error")
 	}
-	return g.mockStore.GetItemByPath(context.Background(), path)
+	return g.scannerMockStore.GetItemByPath(context.Background(), path)
 }
 
 func TestScan_UnreadableDirectory(t *testing.T) {
@@ -842,7 +801,7 @@ func TestScan_UnreadableDirectory(t *testing.T) {
 		os.Chmod(unreadable, 0o755)
 	})
 
-	store := newMockStore()
+	store := newScannerMockStore()
 	scanner := testScanner(t, store, newMockFilter(), true)
 
 	// The walk should fail when trying to read the unreadable directory

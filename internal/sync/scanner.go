@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
@@ -24,9 +23,6 @@ var ErrNosyncGuard = errors.New("sync halted: .nosync guard file found")
 
 // nosyncFileName is the sentinel guard file name checked at the sync root.
 const nosyncFileName = ".nosync"
-
-// maxNameBytes is the OneDrive maximum file/folder name length in bytes.
-const maxNameBytes = 255
 
 // maxPathChars is the OneDrive maximum total path length in characters.
 const maxPathChars = 400
@@ -167,9 +163,9 @@ func (s *Scanner) validateEntry(name, entryRelPath string, entry os.DirEntry) er
 		return errors.New("excluded")
 	}
 
-	if !isValidOneDriveName(name) {
-		s.logger.Warn("scanner: invalid OneDrive name, skipping", "path", entryRelPath, "name", name)
-		return errors.New("invalid name")
+	if valid, reason := isValidOneDriveName(name); !valid {
+		s.logger.Warn("scanner: invalid OneDrive name, skipping", "path", entryRelPath, "name", name, "reason", reason)
+		return errors.New("invalid name: " + reason)
 	}
 
 	if !utf8.ValidString(name) {
@@ -387,51 +383,6 @@ func computeHash(path string) (string, error) {
 	}
 
 	return base64.StdEncoding.EncodeToString(h.Sum(nil)), nil
-}
-
-// oneDriveIllegalChars contains characters forbidden in OneDrive file/folder names.
-const oneDriveIllegalChars = `"*:<>?/\|`
-
-// oneDriveReservedNames lists Windows reserved device names forbidden by OneDrive.
-// These are checked case-insensitively without extensions.
-var oneDriveReservedNames = map[string]bool{
-	"CON": true, "PRN": true, "AUX": true, "NUL": true,
-	"COM0": true, "COM1": true, "COM2": true, "COM3": true, "COM4": true,
-	"COM5": true, "COM6": true, "COM7": true, "COM8": true, "COM9": true,
-	"LPT0": true, "LPT1": true, "LPT2": true, "LPT3": true, "LPT4": true,
-	"LPT5": true, "LPT6": true, "LPT7": true, "LPT8": true, "LPT9": true,
-}
-
-// isValidOneDriveName checks whether a filename conforms to OneDrive naming restrictions.
-// Checks: illegal characters, reserved names, trailing dots/spaces, byte length.
-func isValidOneDriveName(name string) bool {
-	if name == "" || name == "." || name == ".." {
-		return false
-	}
-
-	if len(name) > maxNameBytes {
-		return false
-	}
-
-	if strings.ContainsAny(name, oneDriveIllegalChars) {
-		return false
-	}
-
-	if strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") {
-		return false
-	}
-
-	// Check reserved names (case-insensitive, without extension)
-	baseName := strings.ToUpper(name)
-	if idx := strings.IndexByte(baseName, '.'); idx >= 0 {
-		baseName = baseName[:idx]
-	}
-
-	if oneDriveReservedNames[baseName] {
-		return false
-	}
-
-	return true
 }
 
 // joinRelPath builds a relative path from a parent and child component.
