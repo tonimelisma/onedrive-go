@@ -41,7 +41,10 @@ func runLogin(_ *cobra.Command, _ []string) error {
 	logger := buildLogger()
 	ctx := context.Background()
 
+	logger.Info("login started", "profile", flagProfile)
+
 	_, err := graph.Login(ctx, flagProfile, func(da graph.DeviceAuth) {
+		// Device code prompts must always be visible — not suppressed by --quiet.
 		fmt.Fprintf(os.Stderr, "To sign in, visit: %s\n", da.VerificationURI)
 		fmt.Fprintf(os.Stderr, "Enter code: %s\n", da.UserCode)
 	}, logger)
@@ -49,7 +52,8 @@ func runLogin(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
-	fmt.Fprintln(os.Stderr, "Login successful.")
+	logger.Info("login successful", "profile", flagProfile)
+	statusf("Login successful.\n")
 
 	return nil
 }
@@ -57,11 +61,14 @@ func runLogin(_ *cobra.Command, _ []string) error {
 func runLogout(_ *cobra.Command, _ []string) error {
 	logger := buildLogger()
 
+	logger.Info("logout started", "profile", flagProfile)
+
 	if err := graph.Logout(flagProfile, logger); err != nil {
 		return err
 	}
 
-	fmt.Fprintln(os.Stderr, "Logged out.")
+	logger.Info("logout successful", "profile", flagProfile)
+	statusf("Logged out.\n")
 
 	return nil
 }
@@ -89,6 +96,8 @@ type whoamiDrive struct {
 func runWhoami(_ *cobra.Command, _ []string) error {
 	logger := buildLogger()
 	ctx := context.Background()
+
+	logger.Debug("whoami", "profile", flagProfile)
 
 	ts, err := graph.TokenSourceFromProfile(ctx, flagProfile, logger)
 	if err != nil {
