@@ -1138,29 +1138,110 @@ function generateConflictPath(originalPath) string:
 
 ### 7.4 Resolution Commands
 
-The `conflicts` and `resolve` commands provide user-facing conflict management:
+The `conflicts` and `resolve` commands provide user-facing conflict management. Resolution supports two modes: interactive (per-conflict prompting) and batch (flag-driven, for scripting and bulk resolution).
+
+#### Listing Conflicts
 
 ```
 $ onedrive-go conflicts
-ID       Path                          Detected            Status
-c1a2b3   /Documents/report.docx       2026-02-17 14:30    unresolved
-c4d5e6   /Notes/meeting.md            2026-02-17 14:31    keep_both
+ID       Path                          Type          Detected            Status
+c1a2b3   /Documents/report.docx       edit-edit     2026-02-17 14:30    unresolved
+c4d5e6   /Notes/meeting.md            edit-delete   2026-02-17 14:31    unresolved
+a7b8c9   /Photos/vacation.jpg         create-create 2026-02-18 09:15    keep_both
 
+$ onedrive-go conflicts --json
+[{"id":"c1a2b3","path":"/Documents/report.docx","type":"edit-edit",...}]
+```
+
+#### Interactive Mode
+
+When `resolve` is called with an ID or path but no batch flags, it enters interactive mode. The user sees full conflict details and chooses a resolution for each conflict:
+
+```
+$ onedrive-go resolve c1a2b3
+Conflict: /Documents/report.docx
+  Type:         edit-edit
+  Detected:     2026-02-17 14:30:52 UTC
+  Local:        size=24831  mtime=2026-02-17T14:28:00Z  hash=a1b2c3...
+  Remote:       size=25104  mtime=2026-02-17T14:29:30Z  hash=d4e5f6...
+  Conflict copy: /Documents/report.conflict-20260217-143052.docx
+
+  [L]ocal / [R]emote / [B]oth / [S]kip / [Q]uit? L
+Resolved: /Documents/report.docx -> kept local version
+```
+
+When called with a path that matches multiple conflicts, or with `--all`, interactive mode cycles through each unresolved conflict in turn:
+
+```
+$ onedrive-go resolve --all
+Conflict 1/2: /Documents/report.docx
+  Type:         edit-edit
+  Detected:     2026-02-17 14:30:52 UTC
+  Local:        size=24831  mtime=2026-02-17T14:28:00Z  hash=a1b2c3...
+  Remote:       size=25104  mtime=2026-02-17T14:29:30Z  hash=d4e5f6...
+
+  [L]ocal / [R]emote / [B]oth / [S]kip / [Q]uit? R
+Resolved: /Documents/report.docx -> kept remote version
+
+Conflict 2/2: /Notes/meeting.md
+  Type:         edit-delete
+  Detected:     2026-02-17 14:31:10 UTC
+  Local:        size=1503   mtime=2026-02-17T14:30:00Z  hash=g7h8i9...
+  Remote:       (deleted)
+
+  [L]ocal / [R]emote / [B]oth / [S]kip / [Q]uit? S
+Skipped: /Notes/meeting.md
+
+Summary: 1 resolved, 1 skipped
+```
+
+Interactive prompt options:
+- **L (Local)**: Upload local version, delete the remote conflict copy
+- **R (Remote)**: Download remote version, overwrite local
+- **B (Both)**: Keep both versions (re-confirm the automatic default)
+- **S (Skip)**: Leave this conflict unresolved, move to the next
+- **Q (Quit)**: Stop processing, leave remaining conflicts unresolved
+
+#### Batch Mode
+
+Batch flags bypass interactive prompting. They are designed for scripting and automation:
+
+```
 $ onedrive-go resolve c1a2b3 --keep-local
-Resolved: /Documents/report.docx → kept local version
+Resolved: /Documents/report.docx -> kept local version
 
-$ onedrive-go resolve c1a2b3 --keep-remote
-Resolved: /Documents/report.docx → kept remote version
+$ onedrive-go resolve c4d5e6 --keep-remote
+Resolved: /Notes/meeting.md -> kept remote version
 
 $ onedrive-go resolve --all --keep-both
 Resolved 2 conflicts: kept both versions
+
+$ onedrive-go resolve --all --keep-local --dry-run
+Would resolve: /Documents/report.docx -> keep local version
+Would resolve: /Notes/meeting.md -> keep local version
+(dry run, no changes made)
 ```
 
-Resolution options:
-- `--keep-local`: Upload local version, overwrite remote
+Batch flags:
+- `--keep-local`: Upload local version, delete the remote conflict copy
 - `--keep-remote`: Download remote version, overwrite local
-- `--keep-both`: Keep both versions (default automatic behavior)
-- `--all`: Apply resolution to all unresolved conflicts
+- `--keep-both`: Keep both versions (default automatic behavior, also available as manual re-confirm)
+- `--all`: Apply chosen resolution to all unresolved conflicts
+- `--dry-run`: Show what would happen without executing any resolution
+
+Batch flags are mutually exclusive — specifying more than one of `--keep-local`, `--keep-remote`, `--keep-both` is an error. `--dry-run` can be combined with any resolution flag.
+
+#### Resolution Actions
+
+Each resolution option performs specific filesystem and API operations:
+
+| Resolution | Local action | Remote action | Conflict copy |
+|------------|-------------|---------------|---------------|
+| Keep local | No change | Upload local version to remote | Delete conflict copy |
+| Keep remote | Overwrite local with remote version | No change | Delete conflict copy |
+| Keep both | No change | No change | Kept as-is |
+
+After resolution, the conflict record in the ledger is updated with the chosen strategy and a resolution timestamp. Resolved conflicts are retained in the ledger for audit purposes and can be viewed with `onedrive-go conflicts --resolved`.
 
 ### 7.5 False Conflict Handling
 

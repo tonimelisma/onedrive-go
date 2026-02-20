@@ -95,13 +95,13 @@ onedrive-go sync --watch --quiet       # What you put in a systemd unit file
 ```
 onedrive-go status                     # Show all accounts, drives, and sync state
 onedrive-go conflicts                  # List unresolved conflicts with details
-onedrive-go resolve <id|path>          # Resolve conflicts (TBD: interactive and non-interactive modes)
+onedrive-go resolve <id|path>          # Resolve conflicts (interactive prompting or batch flags)
 onedrive-go verify                     # Re-hash local files, compare to DB and remote
 ```
 
 `status` shows an account/drive hierarchy with token status and per-drive sync state. See [accounts.md §12](accounts.md).
 
-`resolve` is TBD — it may support interactive resolution (prompting per conflict), non-interactive batch resolution (e.g. `--accept-remote`, `--accept-local`), or both. Design will be finalized in the sync algorithm spec.
+`resolve` supports two modes: **interactive** (prompts per conflict with `[L]ocal / [R]emote / [B]oth / [S]kip / [Q]uit`) and **batch** (flag-driven: `--keep-local`, `--keep-remote`, `--keep-both`, `--all`, `--dry-run`). Interactive mode is the default when no batch flags are passed. See [sync-algorithm.md §7.4](sync-algorithm.md) for full details.
 
 #### Daemon Control (post-MVP, requires RPC)
 
@@ -356,7 +356,7 @@ A conflict exists when the same file has been modified on both the local filesys
 Unlike other tools that create conflict files and forget about them, onedrive-go tracks every conflict and ensures the user addresses them:
 
 - `onedrive-go conflicts` lists all unresolved conflicts
-- `onedrive-go resolve <id|path>` resolves conflicts (TBD: may support interactive per-conflict prompting, non-interactive batch resolution via `--accept-remote`/`--accept-local`, or both — design finalized in sync algorithm spec)
+- `onedrive-go resolve <id|path>` resolves conflicts interactively (prompts per conflict) or in batch mode (`--keep-local`, `--keep-remote`, `--keep-both`, `--all`, `--dry-run`)
 - `sync --watch` periodically reminds the user of unresolved conflicts (configurable)
 - The `status` output always shows the unresolved conflict count
 

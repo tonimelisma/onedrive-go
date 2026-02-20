@@ -15,9 +15,9 @@
 
 | ID | Title | Priority | Package | Notes |
 |----|-------|----------|---------|-------|
-| B-027 | Decide conflict resolution UX before building sync engine | P1 | `internal/sync/` | Interactive vs. batch resolution affects schema (4.1), reconciler (4.5), executor (4.7), and conflict handler (4.8). Write a design doc or extend sync-algorithm.md. |
+| ~~B-027~~ | ~~Decide conflict resolution UX before building sync engine~~ | ~~P1~~ | ~~`internal/sync/`~~ | **CLOSED**: Conflict resolution UX finalized in sync-algorithm.md §7.4. Interactive mode (per-conflict prompting with L/R/B/S/Q) + batch mode (--keep-local, --keep-remote, --keep-both, --all, --dry-run). prd.md §4 and §8 updated to match. |
 | ~~B-028~~ | ~~Evaluate merging Phase 3 into Phase 4~~ | ~~P2~~ | ~~`internal/config/`~~ | **CLOSED**: Phase 3 completed (PRs #19, #20). Config package now at 95.6% coverage with Resolve(), CLI integration, config show. Config init wizard and migrate deferred to Phase 5. |
-| B-029 | Plan Phase 4 in two waves | P1 | `internal/sync/` | Wave 1 (4.1-4.4): state store, delta processor, scanner, filters — independent. Wave 2 (4.5-4.12): re-plan after Wave 1 based on lessons learned. Reconciler, safety, executor, conflict handler are deeply interconnected. |
+| ~~B-029~~ | ~~Plan Phase 4 in two waves~~ | ~~P1~~ | ~~`internal/sync/`~~ | **CLOSED**: Phase 4 wave structure added to roadmap.md. Wave 1A (4.1+4.4), Wave 1B (4.2+4.3), Wave 2 (4.5-4.12, re-plan after Wave 1). All four Wave 1 increments can potentially run as a single wave if file conflicts are zero. |
 | B-030 | Review whether `internal/graph/` should be split | P2 | `internal/graph/` | After 1.4-1.6, package will have ~15 files. Assess cohesion vs. size. architecture.md already calls for this review point. |
 | B-033 | Implement accounts.md features | P1 | all | New features from accounts.md that will need implementation: setup wizard, `--browser` auth flow, `drive add`/`drive remove`, fuzzy `--drive` matching, RPC for `sync --watch`, email change detection, `service install`/`uninstall`/`status`, `status` command, `--account` flag for auth commands, text-level config manipulation, commented-out config defaults on first login. |
 

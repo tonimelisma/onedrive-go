@@ -280,3 +280,14 @@ The `config show` command (config_cmd.go) was deleted entirely. `config.RenderEf
 
 ### Drive struct (graph.Drive) range iteration
 The `whoamiDrive` construction loop uses `for _, d := range drives` because `graph.Drive` is small enough (~100 bytes) to not trigger `rangeValCopy`. If Drive grows significantly, switch to index-based iteration.
+
+---
+
+## 13. Pre-Phase 4 Docs (B-027, B-029)
+
+- **Pivots**: None (doc-only increment)
+- **Issues found**: None
+- **Linter surprises**: N/A (no code changes)
+- **Suggested improvements**: None
+- **Cross-package concerns**: None. The conflict resolution UX design (interactive + batch) is consistent with existing CLI patterns (--json for machine output, --dry-run for previewing). The resolution actions table in sync-algorithm.md §7.4 maps cleanly to the executor (4.7) and conflict handler (4.8) interfaces that will be implemented in Phase 4.
+- **Code smells noticed**: None

@@ -263,6 +263,18 @@
 | 4.11 | cmd/ sync: sync command (one-shot, --download-only, --upload-only, --dry-run) | ~300 |
 | 4.12 | cmd/ conflicts: conflicts list, resolve, verify | ~300 |
 
+### Phase 4 Wave Structure
+
+Phase 4 increments are organized into waves to enable parallelism and allow re-planning after early increments provide real implementation experience.
+
+**Wave 1A**: 4.1 (state store) + 4.4 (filter engine) — fully independent packages with no shared types or interfaces. Can be developed in parallel by separate agents.
+
+**Wave 1B**: 4.2 (delta processor) + 4.3 (local scanner) — independent of each other but both depend on the state store from 4.1. Can run in parallel once 4.1 is merged.
+
+**Wave 1 optimization**: If file conflict analysis shows zero overlap between all four increments (4.1, 4.2, 4.3, 4.4), they can potentially all run as a single wave with four parallel agents. This requires careful interface definition upfront so 4.2 and 4.3 can code against 4.1's types before 4.1 is merged.
+
+**Wave 2**: Re-plan after Wave 1 completes. Increments 4.5-4.12 are deeply interconnected — the reconciler (4.5) feeds the safety checks (4.6), which gate the executor (4.7), which calls the conflict handler (4.8) and transfer pipeline (4.9). The engine (4.10) wires everything together, and the CLI commands (4.11, 4.12) expose it. Sequencing and parallelization decisions for Wave 2 should be informed by Wave 1 lessons: actual LOC, interface stability, integration complexity, and any architectural surprises.
+
 ### 4.1: SQLite state store — `internal/sync/state.go`
 
 - Schema from data-model.md: items table, checkpoints table, conflicts table, stale_files table, upload_sessions table
