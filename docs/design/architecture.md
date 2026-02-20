@@ -185,17 +185,12 @@ There is no `NormalizedItem` type. There is no `DriveItem` in any public API. `g
 
 **Responsibility**: Loads, validates, and provides access to TOML configuration. Manages multi-drive configuration with flat global settings and per-drive sections.
 
-**Key interfaces exposed**:
-```go
-type Config interface {
-    Profile(name string) (*Profile, error)
-    ProfileNames() []string
-    Global() *GlobalConfig
-    FilterConfig() *FilterConfig
-    TransferConfig() *TransferConfig
-    SafetyConfig() *SafetyConfig
-}
-```
+**Key types exposed**:
+- `Config` — global settings (embedded structs: FilterConfig, TransfersConfig, SafetyConfig, SyncConfig, LoggingConfig, NetworkConfig) plus per-drive sections (`Drives map[string]Drive`)
+- `Drive` — per-drive configuration (sync_dir, alias, enabled, per-drive filter overrides)
+- `ResolvedDrive` — effective settings after merging global defaults + per-drive overrides + CLI/env flags
+- `ResolveDrive(env, cli)` — four-layer override chain: defaults → config file → environment → CLI flags
+- `DriveTokenPath(canonicalID)` / `DriveStatePath(canonicalID)` — derive filesystem paths from canonical drive IDs
 
 ### 3.6 QuickXorHash (`pkg/quickxorhash/`)
 
@@ -825,7 +820,7 @@ If `internal/graph/` proves valuable as a standalone, reusable Graph API client,
 | State (DBs) | `~/.local/share/onedrive-go/state/` | `~/Library/Application Support/onedrive-go/state/` |
 | Logs | `~/.local/share/onedrive-go/logs/` | `~/Library/Application Support/onedrive-go/logs/` |
 | Cache | `~/.cache/onedrive-go/` | `~/Library/Caches/onedrive-go/` |
-| Tokens | `~/.config/onedrive-go/tokens/` | `~/Library/Application Support/onedrive-go/tokens/` |
+| Tokens | `~/.local/share/onedrive-go/token_*.json` | `~/Library/Application Support/onedrive-go/token_*.json` |
 
 ### 16.3 Symlinks
 
@@ -889,11 +884,11 @@ All three OneDrive account types are supported from MVP:
 
 A common interface handles all three, with quirk dispatch based on the drive's account type (derived from canonical ID). `internal/graph/` applies account-type-specific normalization rules internally.
 
-### 18.2 Multi-Profile
+### 18.2 Multi-Drive
 
-- **Single config file with flat global settings and per-drive sections
-- **Separate DB per profile** -- complete isolation
-- **Separate token file per drive** -- independent authentication
+- **Single config file** with flat global settings and per-drive sections (`["personal:user@example.com"]`)
+- **Separate DB per drive** -- complete isolation (`state_{type}_{email}.db`)
+- **Separate token file per drive** -- independent authentication (`token_{type}_{email}.json`)
 - **Single `sync --watch`** manages all drives simultaneously, each with its own sync loop and worker pools
 
 ### 18.3 Shared Folders

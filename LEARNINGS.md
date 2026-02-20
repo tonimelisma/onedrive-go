@@ -52,7 +52,7 @@ Decision: use `httptest.NewServer` for all Graph client tests. Real HTTP, no int
 `golang.org/x/oauth2` has no persistence callback — when `ReuseTokenSource` silently refreshes a token, the new refresh token is only in memory. We use `github.com/tonimelisma/oauth2` fork (branch `on-token-change`) via `go.mod` replace directive. Adds `Config.OnTokenChange func(newToken *Token)` — fires after refresh, outside mutex, nil-safe. Tracks upstream proposal `golang/go#77502`.
 
 ### Public functions that depend on config paths need internal helpers for testability
-Functions like `Login`, `Logout`, `TokenSourceFromProfile` call `config.ProfileTokenPath()` which resolves to real OS paths. Extract the actual logic into internal functions (`doLogin`, `logout`, `tokenSourceFromPath`) that accept explicit paths, and test those. The public wrappers are thin path-resolvers.
+Public auth functions (`Login`, `Logout`, `TokenSourceFromPath`) accept explicit `tokenPath` parameters — the caller computes the path via `config.DriveTokenPath(canonicalID)`. This decouples `graph/` from `config/` entirely. Internal test helpers (`doLogin`, `logout`) accept the same explicit paths for testability.
 
 ### oauth2 device code tests use real polling delays
 Tests using `cfg.DeviceAccessToken()` incur real 1-second polling intervals (the minimum per RFC 8628). Set `"interval": 1` in mock device code responses to minimize delay, but tests still take ~1-3s each. Use `context.WithTimeout` for cancellation tests.
@@ -71,7 +71,7 @@ When using `replace` with a commit hash, the pseudo-version timestamp must match
 GitHub secrets can't be updated from within workflows, so we use Azure Key Vault as a writable secret store. OIDC federation means no stored credentials — GitHub Actions presents a short-lived JWT to Azure, scoped to `repo:tonimelisma/onedrive-go:ref:refs/heads/main`. Token files flow Key Vault <-> disk via `az keyvault secret download/set --file`, never through stdout/CI logs.
 
 ### Token and drive ID bootstrap
-Tokens are bootstrapped via `go run . login --profile personal`. Drive IDs are discovered via `go run . whoami --json --profile personal | jq -r '.drives[0].id'`. Integration tests require `ONEDRIVE_TEST_DRIVE_ID` env var; CI discovers it via whoami. The old `cmd/integration-bootstrap` was deleted in 1.7 (B-025).
+Tokens are bootstrapped via `go run . login --drive personal:user@example.com`. Drive IDs are discovered via `go run . whoami --json --drive personal:user@example.com | jq -r '.drives[0].id'`. Integration tests require `ONEDRIVE_TEST_DRIVE_ID` env var; CI discovers it via whoami. The old `cmd/integration-bootstrap` was deleted in 1.7 (B-025).
 
 ### POC code creates path dependency
 When rewriting POC tests to use typed methods, audit for raw API patterns that survive by inertia. If a test helper uses raw `Do()` + `map[string]interface{}`, it biases all downstream tests toward that pattern. Prefer env vars or external tools for test prerequisites over inline raw API calls.
@@ -191,7 +191,7 @@ When creating nested folders, walk path segments and create each. If CreateFolde
 When a function makes many `fmt.Fprintf` calls (e.g., rendering config sections), each creates an uncoverable error branch. Solution: the `errWriter` pattern — wrap `io.Writer`, capture the first error, subsequent writes are no-ops. One `failWriter` test covers all error paths. Used in `show.go`.
 
 ### cmd.Flags().Changed() for pflag default disambiguation
-pflag's default value is indistinguishable from an explicit `--flag=defaultValue` at the value level. Use `cmd.Flags().Changed("flag")` to detect whether the user actually passed the flag. Used in `root.go` for `--profile` to distinguish "not specified" from `--profile=default`.
+pflag's default value is indistinguishable from an explicit `--flag=defaultValue` at the value level. Use `cmd.Flags().Changed("flag")` to detect whether the user actually passed the flag. Used in `root.go` for `--drive` to distinguish "not specified" from an explicitly specified drive selector.
 
 ### CLIOverrides pointer fields for nil-vs-zero-value
 `CLIOverrides` uses `*string` / `*bool` for optional flags. `nil` means "not specified by user" (use config/env value), while `&false` means "user explicitly set to false" (override config). Without pointers, `--dry-run=false` would be indistinguishable from not passing `--dry-run`.
@@ -203,7 +203,7 @@ When no config file exists, `Resolve()` creates a synthetic default profile (`Ac
 Extracting functions from oversized files (unknown.go from load.go, size.go from validate.go) is purely mechanical — move functions + their tests to new files, no logic changes. If tests pass before and after, the refactor is correct. Good way to reduce file size without introducing bugs.
 
 ### Always wait for integration tests after merge
-Unit tests passing is NOT sufficient to declare an increment done. The `integration.yml` workflow runs `--profile personal` against real OneDrive — this caught a regression where `Resolve()` always created a synthetic profile named "default", breaking `--profile personal` in CI. **DOD now requires waiting for integration tests to pass on main before proceeding.** (PR #21 fix)
+Unit tests passing is NOT sufficient to declare an increment done. The `integration.yml` workflow runs `--drive personal:user@example.com` against real OneDrive — this caught a regression in the old profile system where `Resolve()` always created a synthetic profile, breaking CI. **DOD now requires waiting for integration tests to pass on main before proceeding.** (PR #21 fix)
 
 ---
 
