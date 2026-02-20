@@ -297,7 +297,7 @@ func TestLoadToken_InvalidJSON(t *testing.T) {
 func TestTokenSourceFromPath_NoFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nonexistent.json")
 
-	_, err := tokenSourceFromPath(context.Background(), path, slog.Default())
+	_, err := TokenSourceFromPath(context.Background(), path, slog.Default())
 	assert.ErrorIs(t, err, ErrNotLoggedIn)
 }
 
@@ -313,7 +313,7 @@ func TestTokenSourceFromPath_ValidToken(t *testing.T) {
 
 	require.NoError(t, saveToken(path, tok))
 
-	ts, err := tokenSourceFromPath(context.Background(), path, slog.Default())
+	ts, err := TokenSourceFromPath(context.Background(), path, slog.Default())
 	require.NoError(t, err)
 	require.NotNil(t, ts)
 
@@ -323,10 +323,15 @@ func TestTokenSourceFromPath_ValidToken(t *testing.T) {
 	assert.Equal(t, "saved-access-token", got)
 }
 
-func TestTokenSourceFromProfile_NoFile(t *testing.T) {
-	// Use a profile name that won't have a token file on the test machine.
-	_, err := TokenSourceFromProfile(context.Background(), "nonexistent-test-profile-xyz", slog.Default())
-	assert.ErrorIs(t, err, ErrNotLoggedIn)
+func TestTokenSourceFromPath_InvalidJSON(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "corrupt.json")
+
+	require.NoError(t, os.WriteFile(path, []byte("not valid json"), tokenFilePerms))
+
+	_, err := TokenSourceFromPath(context.Background(), path, slog.Default())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "decoding token file")
 }
 
 func TestLogout_RemovesFile(t *testing.T) {
@@ -341,8 +346,8 @@ func TestLogout_RemovesFile(t *testing.T) {
 	_, err := os.Stat(path)
 	require.NoError(t, err)
 
-	// Delete via the internal logout function.
-	err = logout(path, slog.Default())
+	// Delete via the public Logout function.
+	err = Logout(path, slog.Default())
 	require.NoError(t, err)
 
 	// Verify it's gone.
@@ -354,25 +359,8 @@ func TestLogout_NoFile(t *testing.T) {
 	// Removing a nonexistent file should not be an error (idempotent).
 	path := filepath.Join(t.TempDir(), "nonexistent.json")
 
-	err := logout(path, slog.Default())
+	err := Logout(path, slog.Default())
 	assert.NoError(t, err)
-}
-
-func TestLogoutPublic_NoFile(t *testing.T) {
-	// The public Logout function should handle a profile with no token file.
-	err := Logout("nonexistent-test-profile-xyz", slog.Default())
-	assert.NoError(t, err)
-}
-
-func TestTokenSourceFromPath_InvalidJSON(t *testing.T) {
-	tmpDir := t.TempDir()
-	path := filepath.Join(tmpDir, "corrupt.json")
-
-	require.NoError(t, os.WriteFile(path, []byte("not valid json"), tokenFilePerms))
-
-	_, err := tokenSourceFromPath(context.Background(), path, slog.Default())
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "decoding token file")
 }
 
 func TestTokenBridge(t *testing.T) {
@@ -448,17 +436,17 @@ func TestTokenPath_UsesProfileName(t *testing.T) {
 	// by checking that OnTokenChange writes to the expected location.
 	tmpDir := t.TempDir()
 
-	profiles := []string{"personal", "work", "shared"}
-	for _, profile := range profiles {
-		path := filepath.Join(tmpDir, "tokens", profile+".json")
+	paths := []string{"personal", "work", "shared"}
+	for _, name := range paths {
+		path := filepath.Join(tmpDir, "tokens", name+".json")
 		cfg := oauthConfig(path, slog.Default())
 
-		tok := &oauth2.Token{AccessToken: "tok-" + profile}
+		tok := &oauth2.Token{AccessToken: "tok-" + name}
 		cfg.OnTokenChange(tok)
 
 		loaded, err := loadToken(path)
-		require.NoError(t, err, "profile %s", profile)
-		assert.Equal(t, "tok-"+profile, loaded.AccessToken, "profile %s", profile)
+		require.NoError(t, err, "token path %s", name)
+		assert.Equal(t, "tok-"+name, loaded.AccessToken, "token path %s", name)
 	}
 }
 
@@ -580,4 +568,23 @@ func TestSaveToken_JSONFormat(t *testing.T) {
 	assert.Equal(t, "at", parsed["access_token"])
 	assert.Equal(t, "Bearer", parsed["token_type"])
 	assert.Equal(t, "rt", parsed["refresh_token"])
+}
+
+func TestLogin_Success(t *testing.T) {
+	// Test the public Login function with a mock server.
+	endpoint := newMockOAuthServer(t, nil)
+	tmpDir := t.TempDir()
+	tokenPath := filepath.Join(tmpDir, "tokens", "login-public.json")
+
+	// We need to override the endpoint used by Login. Since Login calls
+	// oauthConfig internally, we test via doLogin (which is what Login delegates to).
+	cfg := testOAuthConfig(t, tokenPath, endpoint)
+
+	ts, err := doLogin(context.Background(), tokenPath, cfg, noopDisplay, slog.Default())
+	require.NoError(t, err)
+	require.NotNil(t, ts)
+
+	tok, tokenErr := ts.Token()
+	require.NoError(t, tokenErr)
+	assert.Equal(t, "test-access-token", tok)
 }

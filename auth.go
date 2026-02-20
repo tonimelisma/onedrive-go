@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -37,13 +38,35 @@ func newWhoamiCmd() *cobra.Command {
 	}
 }
 
+// authTokenPath derives the token file path for auth commands. Auth commands
+// bypass config loading (PersistentPreRunE skips them) because login must work
+// before any config file or drive section exists. The --drive flag provides the
+// canonical ID used to locate the token file.
+func authTokenPath() (string, error) {
+	if flagDrive == "" {
+		return "", fmt.Errorf("--drive is required (e.g., --drive personal:user@example.com)")
+	}
+
+	tokenPath := config.DriveTokenPath(flagDrive)
+	if tokenPath == "" {
+		return "", fmt.Errorf("cannot determine token path for drive %q", flagDrive)
+	}
+
+	return tokenPath, nil
+}
+
 func runLogin(_ *cobra.Command, _ []string) error {
 	logger := buildLogger()
 	ctx := context.Background()
 
-	logger.Info("login started", "profile", flagProfile)
+	tokenPath, err := authTokenPath()
+	if err != nil {
+		return err
+	}
 
-	_, err := graph.Login(ctx, flagProfile, func(da graph.DeviceAuth) {
+	logger.Info("login started", "drive", flagDrive, "token_path", tokenPath)
+
+	_, err = graph.Login(ctx, tokenPath, func(da graph.DeviceAuth) {
 		// Device code prompts must always be visible — not suppressed by --quiet.
 		fmt.Fprintf(os.Stderr, "To sign in, visit: %s\n", da.VerificationURI)
 		fmt.Fprintf(os.Stderr, "Enter code: %s\n", da.UserCode)
@@ -52,7 +75,7 @@ func runLogin(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
-	logger.Info("login successful", "profile", flagProfile)
+	logger.Info("login successful", "drive", flagDrive)
 	statusf("Login successful.\n")
 
 	return nil
@@ -61,13 +84,18 @@ func runLogin(_ *cobra.Command, _ []string) error {
 func runLogout(_ *cobra.Command, _ []string) error {
 	logger := buildLogger()
 
-	logger.Info("logout started", "profile", flagProfile)
-
-	if err := graph.Logout(flagProfile, logger); err != nil {
+	tokenPath, err := authTokenPath()
+	if err != nil {
 		return err
 	}
 
-	logger.Info("logout successful", "profile", flagProfile)
+	logger.Info("logout started", "drive", flagDrive, "token_path", tokenPath)
+
+	if err := graph.Logout(tokenPath, logger); err != nil {
+		return err
+	}
+
+	logger.Info("logout successful", "drive", flagDrive)
 	statusf("Logged out.\n")
 
 	return nil
@@ -97,12 +125,17 @@ func runWhoami(_ *cobra.Command, _ []string) error {
 	logger := buildLogger()
 	ctx := context.Background()
 
-	logger.Debug("whoami", "profile", flagProfile)
+	tokenPath, err := authTokenPath()
+	if err != nil {
+		return err
+	}
 
-	ts, err := graph.TokenSourceFromProfile(ctx, flagProfile, logger)
+	logger.Debug("whoami", "drive", flagDrive, "token_path", tokenPath)
+
+	ts, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
 	if err != nil {
 		if errors.Is(err, graph.ErrNotLoggedIn) {
-			return fmt.Errorf("not logged in — run 'onedrive-go login' first")
+			return fmt.Errorf("not logged in — run 'onedrive-go login --drive %s' first", flagDrive)
 		}
 
 		return err

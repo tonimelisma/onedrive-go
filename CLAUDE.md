@@ -8,7 +8,7 @@ Currently: Working CLI OneDrive client with auth + file ops + config integration
 
 ## Current Phase
 
-**Phases 1 and 3 complete. Phase 2 partially complete.** All Phase 1 increments done (Graph API + CLI auth + file ops). Phase 3 complete (config CLI integration, `config show`, four-layer override chain). Phase 2.1 (CI scaffold) and 2.2 (E2E round-trip tests) done. Users can `login`, `logout`, `whoami`, `ls`, `get`, `put`, `rm`, `mkdir`, `stat`, `config show`. CLI loads config via `PersistentPreRunE` with four-layer override: defaults -> file -> env -> CLI flags. See [docs/roadmap.md](docs/roadmap.md).
+**Phases 1, 3, and 3.5 complete. Phase 2 partially complete.** All Phase 1 increments done (Graph API + CLI auth + file ops). Phase 3 complete (config integration). Phase 3.5 complete (alignment: profiles → drives migration across config, CLI, graph/auth, CI, and docs). Phase 2.1 (CI scaffold) and 2.2 (E2E round-trip tests) done. Users can `login`, `logout`, `whoami`, `ls`, `get`, `put`, `rm`, `mkdir`, `stat`. CLI loads config via `PersistentPreRunE` with four-layer override: defaults -> file -> env -> CLI flags. Auth commands skip config loading and use `--drive` directly. See [docs/roadmap.md](docs/roadmap.md).
 
 ## Architecture Overview
 
@@ -16,7 +16,7 @@ Currently: Working CLI OneDrive client with auth + file ops + config integration
 ┌─────────────────────────────────────────────────────────────────────┐
 │                      cmd/onedrive-go/ (Cobra CLI)                   │
 │  ls, get, put, rm, mkdir, sync, status, conflicts, resolve, login  │
-│  logout, config, migrate, verify                                   │
+│  logout, whoami, verify                                            │
 └──────────┬───────────────────────────────────────┬──────────────────┘
            │ file ops (direct API)                 │ sync operations
            │                                       │
@@ -30,7 +30,7 @@ Currently: Working CLI OneDrive client with auth + file ops + config integration
                                                     │
                                      ┌──────────────┴───────────────┐
                                      │       internal/config/       │
-                                     │       TOML + profiles        │
+                                     │       TOML + drives          │
                                      └──────────────────────────────┘
 
            ┌────────────────┐
@@ -40,15 +40,15 @@ Currently: Working CLI OneDrive client with auth + file ops + config integration
            └────────────────┘
 ```
 
-**Dependency direction**: `cmd/` -> `internal/*` -> `pkg/*`. No cycles. `cmd/` uses `graph/` directly for CLI file operations and `sync/` for sync operations. `sync/` depends on `graph/` for API access and `config/` for settings. `pkg/quickxorhash/` is a leaf utility used by `sync/` and `graph/`. `internal/graph/` handles all API quirks internally -- callers never see raw API data.
+**Dependency direction**: `cmd/` -> `internal/*` -> `pkg/*`. No cycles. `cmd/` uses `graph/` directly for CLI file operations and `sync/` for sync operations. `sync/` depends on `graph/` for API access and `config/` for settings. `pkg/quickxorhash/` is a leaf utility used by `sync/` and `graph/`. `internal/graph/` handles all API quirks internally -- callers never see raw API data. `internal/graph/` does NOT import `internal/config/` — callers pass token paths directly.
 
 ## Package Layout
 
 ### Active packages
 - **`pkg/quickxorhash/`** — QuickXorHash algorithm (hash.Hash interface) — complete
-- **`internal/config/`** — TOML configuration with profiles, validation, XDG paths, four-layer override chain (`Resolve()`), cross-field validation (`ValidateResolved()`), human-readable rendering (`RenderEffective()`) — 95.6% coverage
-- **`internal/graph/`** — Graph API client: HTTP transport, auth, retry, rate limiting, items CRUD, delta+normalization, download/upload transfers, drives/user, path-based item resolution — feature-complete (92.3% coverage)
-- **Root package** — Cobra CLI: login, logout, whoami, ls, get, put, rm, mkdir, stat, config show (root.go, auth.go, files.go, format.go, config_cmd.go)
+- **`internal/config/`** — TOML configuration with flat global settings and per-drive sections, validation, XDG paths, four-layer override chain (`ResolveDrive()`), cross-field validation (`ValidateResolved()`), drive matching (exact/alias/partial), token/state path derivation (`DriveTokenPath()`, `DriveStatePath()`) — 95.1% coverage
+- **`internal/graph/`** — Graph API client: HTTP transport, auth (token path-based, no config import), retry, rate limiting, items CRUD, delta+normalization, download/upload transfers, drives/user, path-based item resolution — feature-complete (93.0% coverage)
+- **Root package** — Cobra CLI: login, logout, whoami, ls, get, put, rm, mkdir, stat (root.go, auth.go, files.go, format.go). Global flags: `--account`, `--drive`, `--config`, `--json`, `--verbose`, `--quiet`
 - **`e2e/`** — E2E test suite (`//go:build e2e`): builds binary, exercises full round-trip against live OneDrive
 
 ### Future phases
@@ -67,6 +67,7 @@ Currently: Working CLI OneDrive client with auth + file ops + config integration
 | [docs/design/test-strategy.md](docs/design/test-strategy.md) | Testing approach |
 | [docs/design/sharepoint-enrichment.md](docs/design/sharepoint-enrichment.md) | SharePoint enrichment design (per-side hash baselines) |
 | [docs/design/decisions.md](docs/design/decisions.md) | Architectural and design decisions |
+| [docs/design/accounts.md](docs/design/accounts.md) | Account and drive system design |
 | [BACKLOG.md](BACKLOG.md) | Issue/task tracker (bugs, improvements, research) |
 | [LEARNINGS.md](LEARNINGS.md) | Institutional knowledge base (patterns, gotchas) |
 | [docs/archive/](docs/archive/) | Historical learnings and backlog from earlier phases |
@@ -136,7 +137,7 @@ Every change must pass ALL gates before committing:
 7. **Comment review**: Review new/modified code for sufficient comments explaining *why*. See Comment Convention below.
 8. **Docs**: CLAUDE.md documentation index is current. All doc links are valid.
 9. **Git**: Working tree is clean after commit. No uncommitted changes left behind.
-10. **CI verification**: After merging PRs, wait for ALL CI workflows (both `ci.yml` and `integration.yml`) to pass before declaring the increment done. Integration tests catch regressions that unit tests miss (e.g., config changes breaking `--profile` in CI). Never skip this step.
+10. **CI verification**: After merging PRs, wait for ALL CI workflows (both `ci.yml` and `integration.yml`) to pass before declaring the increment done. Integration tests catch regressions that unit tests miss (e.g., config changes breaking `--drive` in CI). Never skip this step.
 11. **Retrospective**: After each increment, conduct a brief retro covering: what went well, what could be improved, and what to change going forward. Capture actionable improvements in `LEARNINGS.md`. This applies to the increment as a whole, not to every individual commit.
 12. **Re-envisioning check**: After each increment, step back and consider the project from a blank slate. Ask: "If I were starting this today, knowing everything I know now, would I build the same thing?" Evaluate architecture, package boundaries, API design, roadmap ordering, and testing strategy. If something feels stale or constrained by earlier decisions, flag it. Don't just follow the roadmap — challenge it. Propose concrete changes if warranted, or explicitly confirm the current direction is still correct. This check prevents path dependency from accumulating across increments.
 
@@ -209,8 +210,8 @@ CI must never be broken. Work is not done until CI passes.
 - **Code changes require PRs.** Create a branch, push, open a PR, let CI run.
 - **Doc-only changes push directly to main.** If the change only touches `.md` files, CLAUDE.md, LEARNINGS.md, BACKLOG.md, or roadmap — push to main directly. No PR needed. This keeps doc updates snappy.
 - **Workflow**: `.github/workflows/ci.yml` runs build + test (with race detector) + lint on every push and PR
-- **Integration tests**: `.github/workflows/integration.yml` runs `go test -tags=integration` against real Graph API on push to main + nightly. Uses Azure OIDC + Key Vault for token management. Local: `go test -tags=integration -race -v -timeout=5m ./internal/graph/...` (requires token via `go run . login`)
-- **E2E tests**: Same workflow runs `go test -tags=e2e` after integration tests. Builds binary, exercises full CLI round-trip (whoami, ls, mkdir, put, get, stat, rm). Local: `ONEDRIVE_TEST_PROFILE=personal go test -tags=e2e -race -v -timeout=5m ./e2e/...`
+- **Integration tests**: `.github/workflows/integration.yml` runs `go test -tags=integration` against real Graph API on push to main + nightly. Uses Azure OIDC + Key Vault for token management. Local: `go test -tags=integration -race -v -timeout=5m ./internal/graph/...` (requires token via `onedrive-go login --drive <canonical-id>`)
+- **E2E tests**: Same workflow runs `go test -tags=e2e` after integration tests. Builds binary, exercises full CLI round-trip (whoami, ls, mkdir, put, get, stat, rm). Local: `ONEDRIVE_TEST_DRIVE=personal:user@example.com go test -tags=e2e -race -v -timeout=5m ./e2e/...`
 - **Merge**: `./scripts/poll-and-merge.sh <pr_number>` — polls checks, merges when green, verifies post-merge workflow
 - If CI fails, fix it immediately — it's your top priority. Never leave CI broken.
 - **Pre-commit hook**: `.githooks/pre-commit` runs `golangci-lint run` before every commit. Configured via `git config core.hooksPath .githooks`. If lint fails, the commit is rejected — fix lint first, then commit.

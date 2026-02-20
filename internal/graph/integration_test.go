@@ -15,12 +15,14 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/config"
 )
 
 const (
 	integrationTimeout = 30 * time.Second
-	defaultTestProfile = "personal"
-	profileEnvVar      = "ONEDRIVE_TEST_PROFILE"
+	defaultTestDrive   = "personal:test@example.com"
+	driveEnvVar        = "ONEDRIVE_TEST_DRIVE"
 	driveIDEnvVar      = "ONEDRIVE_TEST_DRIVE_ID"
 )
 
@@ -44,28 +46,34 @@ func (w testLogWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// newIntegrationClient loads a token for the test profile and returns
+// newIntegrationClient loads a token for the test drive and returns
 // a configured Client. Skips the test if no token is available.
 func newIntegrationClient(t *testing.T) *Client {
 	t.Helper()
 
-	profile := os.Getenv(profileEnvVar)
-	if profile == "" {
-		profile = defaultTestProfile
+	drive := os.Getenv(driveEnvVar)
+	if drive == "" {
+		drive = defaultTestDrive
 	}
 
 	ctx := context.Background()
 	logger := testLogger(t)
 
+	tokenPath := config.DriveTokenPath(drive)
+	if tokenPath == "" {
+		t.Fatalf("cannot determine token path for drive %q", drive)
+	}
+
 	logger.Info("loading token for integration test",
-		slog.String("profile", profile),
+		slog.String("drive", drive),
+		slog.String("token_path", tokenPath),
 	)
 
-	ts, err := TokenSourceFromProfile(ctx, profile, logger)
+	ts, err := TokenSourceFromPath(ctx, tokenPath, logger)
 	if errors.Is(err, ErrNotLoggedIn) {
-		t.Skipf("no token for profile %q -- run bootstrap first", profile)
+		t.Skipf("no token for drive %q at %s -- run bootstrap first", drive, tokenPath)
 	}
-	require.NoError(t, err, "loading token for profile %q", profile)
+	require.NoError(t, err, "loading token for drive %q", drive)
 
 	return NewClient(DefaultBaseURL, http.DefaultClient, ts, logger)
 }
@@ -78,7 +86,7 @@ func driveIDForTest(t *testing.T) string {
 
 	id := os.Getenv(driveIDEnvVar)
 	if id == "" {
-		t.Skipf("%s not set -- run: go run ./cmd/integration-bootstrap --print-drive-id", driveIDEnvVar)
+		t.Skipf("%s not set -- run: onedrive-go whoami --json --drive <canonical-id>", driveIDEnvVar)
 	}
 
 	return id

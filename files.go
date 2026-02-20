@@ -15,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -98,16 +99,21 @@ func splitParentAndName(path string) (string, string) {
 	return clean[:idx], clean[idx+1:]
 }
 
-// clientAndDrive loads a saved token, creates a Graph client, and discovers
-// the user's primary drive ID. Returns the client, drive ID, and logger for
-// callers that need to log additional events.
+// clientAndDrive loads a saved token using the resolved config's canonical ID,
+// creates a Graph client, and discovers the user's primary drive ID.
+// Returns the client, drive ID, and logger for callers that need to log.
 func clientAndDrive(ctx context.Context) (*graph.Client, string, *slog.Logger, error) {
 	logger := buildLogger()
 
-	ts, err := graph.TokenSourceFromProfile(ctx, flagProfile, logger)
+	tokenPath := config.DriveTokenPath(resolvedCfg.CanonicalID)
+	if tokenPath == "" {
+		return nil, "", nil, fmt.Errorf("cannot determine token path for drive %q", resolvedCfg.CanonicalID)
+	}
+
+	ts, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
 	if err != nil {
 		if errors.Is(err, graph.ErrNotLoggedIn) {
-			return nil, "", nil, fmt.Errorf("not logged in — run 'onedrive-go login' first")
+			return nil, "", nil, fmt.Errorf("not logged in — run 'onedrive-go login --drive %s' first", resolvedCfg.CanonicalID)
 		}
 
 		return nil, "", nil, err

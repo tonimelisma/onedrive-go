@@ -245,3 +245,32 @@ The config rewrite changes these public APIs that callers depend on:
 - `CLIOverrides.Profile/SyncDir` → `CLIOverrides.Drive/Account`
 - `EnvOverrides.Profile/SyncDir` → `EnvOverrides.Drive`
 - `RenderEffective()` removed entirely (show.go deleted)
+
+---
+
+## 12. CLI and Graph/Auth — Profiles → Drives Migration (Increment 3.5)
+
+### Graph/auth decoupling from config
+The `internal/graph/` package no longer imports `internal/config/`. All public auth functions (`Login`, `TokenSourceFromPath`, `Logout`) now accept a `tokenPath string` parameter instead of a profile name. The caller (CLI layer) is responsible for computing the token path via `config.DriveTokenPath(canonicalID)`. This makes graph/ independently testable and eliminates a dependency cycle risk.
+
+Previously: `graph.Login(ctx, "personal", display, logger)` → graph calls `config.ProfileTokenPath("personal")` internally.
+Now: `graph.Login(ctx, "/home/user/.local/share/onedrive-go/token_personal_user@example.com.json", display, logger)`.
+
+### Auth command bootstrapping problem
+Login must work before any config file or drive section exists (it's how users get started). But `PersistentPreRunE` calls `config.ResolveDrive()` which fails with "no drives configured" when there's no config file. Solution: skip `loadConfig()` for auth commands (login, logout, whoami) in `PersistentPreRunE` via a `switch cmd.Name()` check. Auth commands derive their token path directly from the `--drive` flag.
+
+### CI token path migration
+The CI workflow (`integration.yml`) changed from profile-based (`~/.config/onedrive-go/tokens/{profile}.json`) to drive-based (`~/.local/share/onedrive-go/token_{type}_{email}.json`) token paths. Key changes:
+- `ONEDRIVE_TEST_PROFILES` → `ONEDRIVE_TEST_DRIVES` (comma-separated canonical IDs)
+- Token file derivation: `sed 's/:/_/'` on the canonical ID for the filename
+- Key Vault secret names: `sed 's/[:@.]/-/g'` on the canonical ID for Azure naming compliance
+- Data directory changed from `~/.config/onedrive-go/tokens/` to `~/.local/share/onedrive-go/`
+
+### staticcheck QF1008 with ResolvedDrive embedded structs
+`ResolvedDrive` embeds `LoggingConfig`, `FilterConfig`, etc. Using `resolvedCfg.LoggingConfig.LogLevel` triggers QF1008 ("could remove embedded field from selector"). Must use the promoted form `resolvedCfg.LogLevel`. This is consistent with the config package rewrite learning about embedded field promotion.
+
+### config show command removed
+The `config show` command (config_cmd.go) was deleted entirely. `config.RenderEffective()` was removed in the config rewrite. If a config inspection command is needed in the future, it would work differently with the new drive-based config model.
+
+### Drive struct (graph.Drive) range iteration
+The `whoamiDrive` construction loop uses `for _, d := range drives` because `graph.Drive` is small enough (~100 bytes) to not trigger `rangeValCopy`. If Drive grows significantly, switch to index-based iteration.
