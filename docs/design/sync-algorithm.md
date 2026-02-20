@@ -1655,7 +1655,7 @@ function calculateBackoff(attempt int) time.Duration:
 
 ## 10. Initial Sync (First Run)
 
-On first run with a new profile, there is no delta token and no state database entries. The initial sync establishes the baseline for all future delta-based syncs.
+On first run with a new drive, there is no delta token and no state database entries. The initial sync establishes the baseline for all future delta-based syncs.
 
 ### 10.1 First Run Detection
 
@@ -1980,7 +1980,7 @@ type SyncReport struct {
 **Interactive mode** (human-readable to stderr):
 
 ```
-Sync complete (profile "default", bidirectional)
+Sync complete (drive "personal:toni@outlook.com", bidirectional)
   ↓ 3 downloaded (12.4 MB)    ↑ 2 uploaded (8.1 MB)
   × 1 conflict                 ⊘ 1 deleted locally
   Duration: 4.2s
@@ -1991,7 +1991,7 @@ Sync complete (profile "default", bidirectional)
 
 ```json
 {
-  "profile": "default",
+  "drive": "personal:toni@outlook.com",
   "mode": "bidirectional",
   "dry_run": false,
   "duration_ms": 4200,
@@ -2075,7 +2075,7 @@ function Verify(ctx, syncRoot string) VerifyReport:
 
 ```
 $ onedrive-go verify
-Verifying profile "default"...
+Verifying drive "personal:toni@outlook.com"...
   Verified: 4,993 files OK
   Missing locally: 1 file
     /Documents/deleted-remotely.pdf
@@ -2110,7 +2110,7 @@ Every constraint from [architecture.md §19](architecture.md) "For `sync-algorit
 | Four-tier error model | §19, §7 | §9.6 Error Handling |
 | Never delete remote based on download state | §19, §7.3 | §4.3 Orphan Detection (S1), §8.4 Hash-Before-Delete Guard (S4) |
 | Parallel worker pools (uploads, downloads, checkers) | §5.2 | §9.1 Execution Order (parallel Phase 3) |
-| Single writer goroutine per profile | §5.1 | All DB writes go through store interface (serialized) |
+| Single writer goroutine per drive | §5.1 | All DB writes go through store interface (serialized) |
 | Context tree with cancellation propagation | §5.4 | §2.4 Context Tree |
 | Bounded channels for backpressure | §5.3 | §2.4 Pipeline stages connected via bounded channels |
 | Graceful shutdown (two-signal protocol) | §5.5 | §11.4 Graceful Shutdown |

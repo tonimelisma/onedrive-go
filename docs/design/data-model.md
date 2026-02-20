@@ -52,14 +52,28 @@ Conversion happens at system boundaries only. Internal code uses `int64` nanosec
 
 ## 2. Database Lifecycle
 
-### One Database per Profile
+### One Database per Drive
 
-Each configured profile gets its own SQLite database file, providing complete isolation between accounts:
+Each configured drive gets its own SQLite database file, providing complete isolation between drives. The canonical drive identifier (see [accounts.md](accounts.md) §2) determines the filename, with `:` replaced by `_`:
 
-- **Linux**: `~/.local/share/onedrive-go/state/{profile}.db`
-- **macOS**: `~/Library/Application Support/onedrive-go/state/{profile}.db`
+- **Linux**: `~/.local/share/onedrive-go/state_<type>_<email>[_<site>_<library>].db`
+- **macOS**: `~/Library/Application Support/onedrive-go/state_<type>_<email>[_<site>_<library>].db`
 
-This matches architecture §6.2.
+Examples:
+- `state_personal_toni@outlook.com.db`
+- `state_business_alice@contoso.com.db`
+- `state_sharepoint_alice@contoso.com_marketing_Documents.db`
+
+See [accounts.md](accounts.md) §3 for the complete file layout.
+
+### Token File Layout
+
+Token files follow the same naming pattern, stored in the same data directory:
+
+- `token_personal_<email>.json`
+- `token_business_<email>.json`
+
+SharePoint drives share the business account's token file (same OAuth session). Only the state DB is per-drive. For example, `token_business_alice@contoso.com.json` serves both her OneDrive for Business and all her SharePoint drives.
 
 ### Migration Strategy
 
@@ -73,7 +87,7 @@ Schema migrations use the [golang-migrate](https://github.com/golang-migrate/mig
 
 ### First Run
 
-On first run with a new profile:
+On first run with a new drive:
 
 1. Create the database file and parent directories
 2. Set SQLite pragmas (WAL, FULL synchronous, foreign keys)
@@ -488,8 +502,8 @@ All timestamp conversion happens at system boundaries. Internal code uses `int64
 
 ### Validation Rules
 
-- **Invalid dates**: `0001-01-01T00:00:00Z` or dates before 1970 → fall back to `NowNano()`
-- **Far-future dates**: Dates more than 1 year in the future → fall back to `NowNano()`
+- **Invalid dates**: `0001-01-01T00:00:00Z` or dates before 1970 -> fall back to `NowNano()`
+- **Far-future dates**: Dates more than 1 year in the future -> fall back to `NowNano()`
 - **Fractional seconds**: OneDrive does not store fractional seconds; truncate to whole seconds before comparison (but store full nanosecond precision from local filesystem)
 - **Timezone**: All API timestamps are UTC. All stored timestamps are UTC nanoseconds.
 
@@ -500,7 +514,7 @@ All timestamp conversion happens at system boundaries. Internal code uses `int64
 | Architecture Constraint | Section | Data Model Implementation |
 |------------------------|---------|--------------------------|
 | modernc.org/sqlite, WAL, FULL synchronous | §6.1 | §1 SQLite Configuration |
-| Separate DB per profile | §6.2 | §2 Database Lifecycle |
+| Separate DB per drive | §6.2 | §2 Database Lifecycle |
 | Primary key: (driveId, itemId) composite | §6.3 | §3 Items Table — `PRIMARY KEY (drive_id, item_id)` |
 | Materialized paths, rebuilt on parent change | §6.4 | §10 Path Materialization |
 | Checkpoints: configurable batch, delta tokens per drive | §6.5 | §4 Delta Tokens Table, §9 WAL checkpointing |
