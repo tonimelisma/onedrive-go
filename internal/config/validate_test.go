@@ -24,7 +24,7 @@ func TestValidate_ValidDefaults(t *testing.T) {
 
 func TestValidate_ParallelWorkers_BelowMin(t *testing.T) {
 	cfg := validConfig()
-	cfg.Transfers.ParallelDownloads = 0
+	cfg.ParallelDownloads = 0
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parallel_downloads")
@@ -32,7 +32,7 @@ func TestValidate_ParallelWorkers_BelowMin(t *testing.T) {
 
 func TestValidate_ParallelWorkers_AboveMax(t *testing.T) {
 	cfg := validConfig()
-	cfg.Transfers.ParallelUploads = 17
+	cfg.ParallelUploads = 17
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parallel_uploads")
@@ -40,7 +40,7 @@ func TestValidate_ParallelWorkers_AboveMax(t *testing.T) {
 
 func TestValidate_ParallelCheckers_BelowMin(t *testing.T) {
 	cfg := validConfig()
-	cfg.Transfers.ParallelCheckers = 0
+	cfg.ParallelCheckers = 0
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parallel_checkers")
@@ -48,7 +48,7 @@ func TestValidate_ParallelCheckers_BelowMin(t *testing.T) {
 
 func TestValidate_ChunkSize_TooSmall(t *testing.T) {
 	cfg := validConfig()
-	cfg.Transfers.ChunkSize = "1MB"
+	cfg.ChunkSize = "1MB"
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "chunk_size")
@@ -56,7 +56,7 @@ func TestValidate_ChunkSize_TooSmall(t *testing.T) {
 
 func TestValidate_ChunkSize_TooLarge(t *testing.T) {
 	cfg := validConfig()
-	cfg.Transfers.ChunkSize = "100MB"
+	cfg.ChunkSize = "100MB"
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "chunk_size")
@@ -65,7 +65,7 @@ func TestValidate_ChunkSize_TooLarge(t *testing.T) {
 func TestValidate_ChunkSize_NotAligned(t *testing.T) {
 	cfg := validConfig()
 	// 11 MiB = 11,534,336 bytes. 11,534,336 / 327,680 = 35.2 — not aligned.
-	cfg.Transfers.ChunkSize = "11MiB"
+	cfg.ChunkSize = "11MiB"
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "multiple of 320 KiB")
@@ -75,7 +75,7 @@ func TestValidate_ChunkSize_Valid(t *testing.T) {
 	// Valid chunk sizes must be multiples of 320 KiB and between 10-60 MiB.
 	for _, size := range []string{"10MiB", "20MiB", "40MiB", "60MiB"} {
 		cfg := validConfig()
-		cfg.Transfers.ChunkSize = size
+		cfg.ChunkSize = size
 		err := Validate(cfg)
 		assert.NoError(t, err, "expected %s to be valid", size)
 	}
@@ -83,7 +83,7 @@ func TestValidate_ChunkSize_Valid(t *testing.T) {
 
 func TestValidate_TransferOrder_Invalid(t *testing.T) {
 	cfg := validConfig()
-	cfg.Transfers.TransferOrder = "random"
+	cfg.TransferOrder = "random"
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "transfer_order")
@@ -92,7 +92,7 @@ func TestValidate_TransferOrder_Invalid(t *testing.T) {
 func TestValidate_TransferOrder_AllValid(t *testing.T) {
 	for _, order := range []string{"default", "size_asc", "size_desc", "name_asc", "name_desc"} {
 		cfg := validConfig()
-		cfg.Transfers.TransferOrder = order
+		cfg.TransferOrder = order
 		err := Validate(cfg)
 		assert.NoError(t, err, "expected %s to be valid", order)
 	}
@@ -100,12 +100,12 @@ func TestValidate_TransferOrder_AllValid(t *testing.T) {
 
 func TestValidate_BigDeletePercentage_OutOfRange(t *testing.T) {
 	cfg := validConfig()
-	cfg.Safety.BigDeletePercentage = 0
+	cfg.BigDeletePercentage = 0
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "big_delete_percentage")
 
-	cfg.Safety.BigDeletePercentage = 101
+	cfg.BigDeletePercentage = 101
 	err = Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "big_delete_percentage")
@@ -113,7 +113,7 @@ func TestValidate_BigDeletePercentage_OutOfRange(t *testing.T) {
 
 func TestValidate_BigDeleteThreshold_BelowMin(t *testing.T) {
 	cfg := validConfig()
-	cfg.Safety.BigDeleteThreshold = 0
+	cfg.BigDeleteThreshold = 0
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "big_delete_threshold")
@@ -121,7 +121,7 @@ func TestValidate_BigDeleteThreshold_BelowMin(t *testing.T) {
 
 func TestValidate_BigDeleteMinItems_BelowMin(t *testing.T) {
 	cfg := validConfig()
-	cfg.Safety.BigDeleteMinItems = 0
+	cfg.BigDeleteMinItems = 0
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "big_delete_min_items")
@@ -142,7 +142,7 @@ func TestValidate_Permissions_Invalid(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := validConfig()
-			cfg.Safety.SyncDirPermissions = tt.value
+			cfg.SyncDirPermissions = tt.value
 			err := Validate(cfg)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "sync_dir_permissions")
@@ -153,8 +153,8 @@ func TestValidate_Permissions_Invalid(t *testing.T) {
 func TestValidate_Permissions_Valid(t *testing.T) {
 	for _, perm := range []string{"0600", "0700", "0755", "0644", "777"} {
 		cfg := validConfig()
-		cfg.Safety.SyncDirPermissions = perm
-		cfg.Safety.SyncFilePermissions = perm
+		cfg.SyncDirPermissions = perm
+		cfg.SyncFilePermissions = perm
 		err := Validate(cfg)
 		assert.NoError(t, err, "expected %s to be valid", perm)
 	}
@@ -162,7 +162,7 @@ func TestValidate_Permissions_Valid(t *testing.T) {
 
 func TestValidate_PollInterval_TooShort(t *testing.T) {
 	cfg := validConfig()
-	cfg.Sync.PollInterval = "1m"
+	cfg.PollInterval = "1m"
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "poll_interval")
@@ -170,7 +170,7 @@ func TestValidate_PollInterval_TooShort(t *testing.T) {
 
 func TestValidate_PollInterval_InvalidFormat(t *testing.T) {
 	cfg := validConfig()
-	cfg.Sync.PollInterval = "not-a-duration"
+	cfg.PollInterval = "not-a-duration"
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "poll_interval")
@@ -178,7 +178,7 @@ func TestValidate_PollInterval_InvalidFormat(t *testing.T) {
 
 func TestValidate_ShutdownTimeout_TooShort(t *testing.T) {
 	cfg := validConfig()
-	cfg.Sync.ShutdownTimeout = "1s"
+	cfg.ShutdownTimeout = "1s"
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "shutdown_timeout")
@@ -186,7 +186,7 @@ func TestValidate_ShutdownTimeout_TooShort(t *testing.T) {
 
 func TestValidate_ConnectTimeout_TooShort(t *testing.T) {
 	cfg := validConfig()
-	cfg.Network.ConnectTimeout = "500ms"
+	cfg.ConnectTimeout = "500ms"
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "connect_timeout")
@@ -194,7 +194,7 @@ func TestValidate_ConnectTimeout_TooShort(t *testing.T) {
 
 func TestValidate_DataTimeout_TooShort(t *testing.T) {
 	cfg := validConfig()
-	cfg.Network.DataTimeout = "2s"
+	cfg.DataTimeout = "2s"
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "data_timeout")
@@ -202,7 +202,7 @@ func TestValidate_DataTimeout_TooShort(t *testing.T) {
 
 func TestValidate_ConflictStrategy_Invalid(t *testing.T) {
 	cfg := validConfig()
-	cfg.Sync.ConflictStrategy = "keep_remote"
+	cfg.ConflictStrategy = "keep_remote"
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "conflict_strategy")
@@ -210,7 +210,7 @@ func TestValidate_ConflictStrategy_Invalid(t *testing.T) {
 
 func TestValidate_FullscanFrequency_InvalidNonZero(t *testing.T) {
 	cfg := validConfig()
-	cfg.Sync.FullscanFrequency = 1
+	cfg.FullscanFrequency = 1
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "fullscan_frequency")
@@ -218,14 +218,14 @@ func TestValidate_FullscanFrequency_InvalidNonZero(t *testing.T) {
 
 func TestValidate_FullscanFrequency_Zero(t *testing.T) {
 	cfg := validConfig()
-	cfg.Sync.FullscanFrequency = 0
+	cfg.FullscanFrequency = 0
 	err := Validate(cfg)
 	assert.NoError(t, err)
 }
 
 func TestValidate_LogLevel_Invalid(t *testing.T) {
 	cfg := validConfig()
-	cfg.Logging.LogLevel = "verbose"
+	cfg.LogLevel = "verbose"
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "log_level")
@@ -234,7 +234,7 @@ func TestValidate_LogLevel_Invalid(t *testing.T) {
 func TestValidate_LogLevel_AllValid(t *testing.T) {
 	for _, level := range []string{"debug", "info", "warn", "error"} {
 		cfg := validConfig()
-		cfg.Logging.LogLevel = level
+		cfg.LogLevel = level
 		err := Validate(cfg)
 		assert.NoError(t, err, "expected %s to be valid", level)
 	}
@@ -242,7 +242,7 @@ func TestValidate_LogLevel_AllValid(t *testing.T) {
 
 func TestValidate_LogFormat_Invalid(t *testing.T) {
 	cfg := validConfig()
-	cfg.Logging.LogFormat = "xml"
+	cfg.LogFormat = "xml"
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "log_format")
@@ -251,7 +251,7 @@ func TestValidate_LogFormat_Invalid(t *testing.T) {
 func TestValidate_LogFormat_AllValid(t *testing.T) {
 	for _, format := range []string{"auto", "text", "json"} {
 		cfg := validConfig()
-		cfg.Logging.LogFormat = format
+		cfg.LogFormat = format
 		err := Validate(cfg)
 		assert.NoError(t, err, "expected %s to be valid", format)
 	}
@@ -259,7 +259,7 @@ func TestValidate_LogFormat_AllValid(t *testing.T) {
 
 func TestValidate_LogRetentionDays_BelowMin(t *testing.T) {
 	cfg := validConfig()
-	cfg.Logging.LogRetentionDays = 0
+	cfg.LogRetentionDays = 0
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "log_retention_days")
@@ -267,7 +267,7 @@ func TestValidate_LogRetentionDays_BelowMin(t *testing.T) {
 
 func TestValidate_SyncPaths_MustStartWithSlash(t *testing.T) {
 	cfg := validConfig()
-	cfg.Filter.SyncPaths = []string{"/Documents", "Photos"}
+	cfg.SyncPaths = []string{"/Documents", "Photos"}
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "sync_paths")
@@ -276,7 +276,7 @@ func TestValidate_SyncPaths_MustStartWithSlash(t *testing.T) {
 
 func TestValidate_IgnoreMarker_Empty(t *testing.T) {
 	cfg := validConfig()
-	cfg.Filter.IgnoreMarker = ""
+	cfg.IgnoreMarker = ""
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ignore_marker")
@@ -284,7 +284,7 @@ func TestValidate_IgnoreMarker_Empty(t *testing.T) {
 
 func TestValidate_MaxFileSize_Invalid(t *testing.T) {
 	cfg := validConfig()
-	cfg.Filter.MaxFileSize = invalidSizeStr
+	cfg.MaxFileSize = invalidSizeStr
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "max_file_size")
@@ -292,7 +292,7 @@ func TestValidate_MaxFileSize_Invalid(t *testing.T) {
 
 func TestValidate_MinFreeSpace_Invalid(t *testing.T) {
 	cfg := validConfig()
-	cfg.Safety.MinFreeSpace = invalidSizeStr
+	cfg.MinFreeSpace = invalidSizeStr
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "min_free_space")
@@ -300,10 +300,10 @@ func TestValidate_MinFreeSpace_Invalid(t *testing.T) {
 
 func TestValidate_MultipleErrors(t *testing.T) {
 	cfg := validConfig()
-	cfg.Transfers.ParallelDownloads = 0
-	cfg.Transfers.ParallelUploads = 0
-	cfg.Sync.ConflictStrategy = invalidEnumStr
-	cfg.Logging.LogLevel = invalidEnumStr
+	cfg.ParallelDownloads = 0
+	cfg.ParallelUploads = 0
+	cfg.ConflictStrategy = invalidEnumStr
+	cfg.LogLevel = invalidEnumStr
 
 	err := Validate(cfg)
 	require.Error(t, err)
@@ -317,7 +317,7 @@ func TestValidate_MultipleErrors(t *testing.T) {
 
 func TestValidate_BandwidthSchedule_InvalidTime(t *testing.T) {
 	cfg := validConfig()
-	cfg.Transfers.BandwidthSchedule = []BandwidthScheduleEntry{
+	cfg.BandwidthSchedule = []BandwidthScheduleEntry{
 		{Time: "25:00", Limit: "5MB/s"},
 	}
 	err := Validate(cfg)
@@ -327,7 +327,7 @@ func TestValidate_BandwidthSchedule_InvalidTime(t *testing.T) {
 
 func TestValidate_BandwidthSchedule_NotSorted(t *testing.T) {
 	cfg := validConfig()
-	cfg.Transfers.BandwidthSchedule = []BandwidthScheduleEntry{
+	cfg.BandwidthSchedule = []BandwidthScheduleEntry{
 		{Time: "18:00", Limit: "50MB/s"},
 		{Time: "08:00", Limit: "5MB/s"},
 	}
@@ -338,7 +338,7 @@ func TestValidate_BandwidthSchedule_NotSorted(t *testing.T) {
 
 func TestValidate_BandwidthSchedule_Valid(t *testing.T) {
 	cfg := validConfig()
-	cfg.Transfers.BandwidthSchedule = []BandwidthScheduleEntry{
+	cfg.BandwidthSchedule = []BandwidthScheduleEntry{
 		{Time: "08:00", Limit: "5MB/s"},
 		{Time: "18:00", Limit: "50MB/s"},
 		{Time: "23:00", Limit: "0"},
@@ -349,7 +349,7 @@ func TestValidate_BandwidthSchedule_Valid(t *testing.T) {
 
 func TestValidate_TombstoneRetentionDays_Negative(t *testing.T) {
 	cfg := validConfig()
-	cfg.Safety.TombstoneRetentionDays = -1
+	cfg.TombstoneRetentionDays = -1
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "tombstone_retention_days")
@@ -357,21 +357,21 @@ func TestValidate_TombstoneRetentionDays_Negative(t *testing.T) {
 
 func TestValidate_TombstoneRetentionDays_Zero(t *testing.T) {
 	cfg := validConfig()
-	cfg.Safety.TombstoneRetentionDays = 0
+	cfg.TombstoneRetentionDays = 0
 	err := Validate(cfg)
 	assert.NoError(t, err)
 }
 
 func TestValidate_VerifyInterval_Valid(t *testing.T) {
 	cfg := validConfig()
-	cfg.Sync.VerifyInterval = "168h"
+	cfg.VerifyInterval = "168h"
 	err := Validate(cfg)
 	assert.NoError(t, err)
 }
 
 func TestValidate_ConflictReminderInterval_Zero(t *testing.T) {
 	cfg := validConfig()
-	cfg.Sync.ConflictReminderInterval = "0s"
+	cfg.ConflictReminderInterval = "0s"
 	err := Validate(cfg)
 	assert.NoError(t, err)
 }
@@ -401,7 +401,7 @@ func TestParseScheduleTime_Invalid(t *testing.T) {
 
 func TestValidate_BandwidthSchedule_BadTimeFormat(t *testing.T) {
 	cfg := validConfig()
-	cfg.Transfers.BandwidthSchedule = []BandwidthScheduleEntry{
+	cfg.BandwidthSchedule = []BandwidthScheduleEntry{
 		{Time: "noon", Limit: "5MB/s"},
 	}
 	err := Validate(cfg)
@@ -412,53 +412,21 @@ func TestValidate_BandwidthSchedule_BadTimeFormat(t *testing.T) {
 // --- ValidateResolved tests ---
 
 func TestValidateResolved_AbsoluteSyncDir(t *testing.T) {
-	rp := &ResolvedProfile{SyncDir: "/absolute/path"}
-	err := ValidateResolved(rp)
+	rd := &ResolvedDrive{SyncDir: "/absolute/path"}
+	err := ValidateResolved(rd)
 	assert.NoError(t, err)
 }
 
 func TestValidateResolved_RelativeSyncDir(t *testing.T) {
-	rp := &ResolvedProfile{SyncDir: "relative/path"}
-	err := ValidateResolved(rp)
+	rd := &ResolvedDrive{SyncDir: "relative/path"}
+	err := ValidateResolved(rd)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "sync_dir")
 	assert.Contains(t, err.Error(), "absolute")
 }
 
 func TestValidateResolved_EmptySyncDir(t *testing.T) {
-	rp := &ResolvedProfile{SyncDir: ""}
-	err := ValidateResolved(rp)
+	rd := &ResolvedDrive{SyncDir: ""}
+	err := ValidateResolved(rd)
 	assert.NoError(t, err)
-}
-
-func TestValidateResolved_AzureEndpointWithoutTenantID(t *testing.T) {
-	rp := &ResolvedProfile{
-		SyncDir:         "/path",
-		AzureADEndpoint: "USL4",
-		AzureTenantID:   "",
-	}
-	err := ValidateResolved(rp)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "azure_tenant_id")
-}
-
-func TestValidateResolved_AzureEndpointWithTenantID(t *testing.T) {
-	rp := &ResolvedProfile{
-		SyncDir:         "/path",
-		AzureADEndpoint: "USL4",
-		AzureTenantID:   "contoso.onmicrosoft.com",
-	}
-	err := ValidateResolved(rp)
-	assert.NoError(t, err)
-}
-
-func TestValidateResolved_BothErrors(t *testing.T) {
-	rp := &ResolvedProfile{
-		SyncDir:         "relative",
-		AzureADEndpoint: "USL4",
-	}
-	err := ValidateResolved(rp)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "sync_dir")
-	assert.Contains(t, err.Error(), "azure_tenant_id")
 }

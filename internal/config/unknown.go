@@ -12,80 +12,61 @@ import (
 // suggestions when unknown config keys are detected.
 const maxLevenshteinDistance = 3
 
-// sectionTopLevel is used when an unknown key has no section prefix.
-const sectionTopLevel = "top-level"
-
-// profileSectionDepth is the minimum number of dot-separated parts
-// for a key to be inside a [profile.NAME] section (e.g., "profile.work.sync_dir").
-const profileSectionDepth = 3
-
-// profileSubSectionParts is the number of dot-separated parts in
-// a profile subsection path like "profile.work.filter".
-const profileSubSectionParts = 3
-
-// knownFilterKeys are the valid keys in the [filter] section.
-var knownFilterKeys = []string{
-	"skip_files", "skip_dirs", "skip_dotfiles",
-	"skip_symlinks", "max_file_size", "sync_paths", "ignore_marker",
+// knownGlobalKeys are the valid flat top-level keys in the config file.
+// These correspond to fields in the embedded sub-config structs.
+var knownGlobalKeys = map[string]bool{
+	// Filter settings
+	"skip_files": true, "skip_dirs": true, "skip_dotfiles": true,
+	"skip_symlinks": true, "max_file_size": true, "sync_paths": true, "ignore_marker": true,
+	// Transfer settings
+	"parallel_downloads": true, "parallel_uploads": true, "parallel_checkers": true,
+	"chunk_size": true, "bandwidth_limit": true, "bandwidth_schedule": true, "transfer_order": true,
+	// Safety settings
+	"big_delete_threshold": true, "big_delete_percentage": true, "big_delete_min_items": true,
+	"min_free_space": true, "use_recycle_bin": true, "use_local_trash": true,
+	"disable_download_validation": true, "disable_upload_validation": true,
+	"sync_dir_permissions": true, "sync_file_permissions": true, "tombstone_retention_days": true,
+	// Sync settings
+	"poll_interval": true, "fullscan_frequency": true, "websocket": true,
+	"conflict_strategy": true, "conflict_reminder_interval": true, "dry_run": true,
+	"verify_interval": true, "shutdown_timeout": true,
+	// Logging settings
+	"log_level": true, "log_file": true, "log_format": true, "log_retention_days": true,
+	// Network settings
+	"connect_timeout": true, "data_timeout": true, "user_agent": true, "force_http_11": true,
 }
 
-// knownTransfersKeys are the valid keys in the [transfers] section.
-var knownTransfersKeys = []string{
-	"parallel_downloads", "parallel_uploads", "parallel_checkers",
-	"chunk_size", "bandwidth_limit", "bandwidth_schedule", "transfer_order",
+// knownGlobalKeysList is the slice form of knownGlobalKeys for Levenshtein matching.
+var knownGlobalKeysList = func() []string {
+	keys := make([]string, 0, len(knownGlobalKeys))
+	for k := range knownGlobalKeys {
+		keys = append(keys, k)
+	}
+
+	return keys
+}()
+
+// knownDriveKeys are the valid keys inside a drive section.
+var knownDriveKeys = map[string]bool{
+	"sync_dir": true, "enabled": true, "alias": true, "remote_path": true,
+	"drive_id": true, "skip_dotfiles": true, "skip_dirs": true, "skip_files": true,
+	"poll_interval": true,
 }
 
-// knownSafetyKeys are the valid keys in the [safety] section.
-var knownSafetyKeys = []string{
-	"big_delete_threshold", "big_delete_percentage", "big_delete_min_items",
-	"min_free_space", "use_recycle_bin", "use_local_trash",
-	"disable_download_validation", "disable_upload_validation",
-	"sync_dir_permissions", "sync_file_permissions", "tombstone_retention_days",
-}
+// knownDriveKeysList is the slice form for Levenshtein matching.
+var knownDriveKeysList = func() []string {
+	keys := make([]string, 0, len(knownDriveKeys))
+	for k := range knownDriveKeys {
+		keys = append(keys, k)
+	}
 
-// knownSyncKeys are the valid keys in the [sync] section.
-var knownSyncKeys = []string{
-	"poll_interval", "fullscan_frequency", "websocket",
-	"conflict_strategy", "conflict_reminder_interval",
-	"dry_run", "verify_interval", "shutdown_timeout",
-}
-
-// knownLoggingKeys are the valid keys in the [logging] section.
-var knownLoggingKeys = []string{
-	"log_level", "log_file", "log_format", "log_retention_days",
-}
-
-// knownNetworkKeys are the valid keys in the [network] section.
-var knownNetworkKeys = []string{
-	"connect_timeout", "data_timeout", "user_agent", "force_http_11",
-}
-
-// knownSectionKeys maps each config section to its valid keys.
-var knownSectionKeys = map[string][]string{
-	"filter":    knownFilterKeys,
-	"transfers": knownTransfersKeys,
-	"safety":    knownSafetyKeys,
-	"sync":      knownSyncKeys,
-	"logging":   knownLoggingKeys,
-	"network":   knownNetworkKeys,
-}
-
-// topLevelSections are the valid top-level section names.
-var topLevelSections = []string{
-	"profile", "filter", "transfers", "safety", "sync", "logging", "network",
-}
-
-// knownProfileKeys are the valid direct keys inside a [profile.NAME] section.
-var knownProfileKeys = []string{
-	"account_type", "sync_dir", "remote_path", "drive_id",
-	"application_id", "azure_ad_endpoint", "azure_tenant_id",
-	"filter", "transfers", "safety", "sync", "logging", "network",
-}
+	return keys
+}()
 
 // checkUnknownKeys inspects TOML metadata for undecoded keys and returns
 // an error with "did you mean?" suggestions for each unknown key.
-// Strictness here is intentional: a typo in a config file is almost always
-// a user error, and silently ignoring it leads to hard-to-debug behavior.
+// Drive sections (keys containing ":") are skipped because they are parsed
+// separately in the two-pass decode.
 func checkUnknownKeys(md *toml.MetaData) error {
 	undecoded := md.Undecoded()
 	if len(undecoded) == 0 {
@@ -95,124 +76,70 @@ func checkUnknownKeys(md *toml.MetaData) error {
 	var errs []error
 
 	for _, key := range undecoded {
-		errs = append(errs, buildUnknownKeyError(key))
+		keyStr := key.String()
+
+		// Skip drive sections — they contain ":" and are handled separately.
+		topKey := strings.SplitN(keyStr, ".", 2)[0]
+		if strings.Contains(topKey, ":") {
+			continue
+		}
+
+		if err := buildGlobalKeyError(keyStr); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+
+	return nil
+}
+
+// buildGlobalKeyError creates a descriptive error for an unknown top-level key,
+// optionally suggesting the closest known key. Returns nil if the key is a
+// valid sub-field of a known key (e.g., bandwidth_schedule entries).
+func buildGlobalKeyError(keyStr string) error {
+	// For nested keys like "bandwidth_schedule.time", extract the leaf.
+	parts := strings.SplitN(keyStr, ".", 2)
+	fieldName := parts[0]
+
+	if len(parts) > 1 {
+		// Nested unknown key — e.g., a sub-field of bandwidth_schedule entries.
+		// These are valid TOML but undecoded because of array-of-tables structure.
+		if knownGlobalKeys[fieldName] {
+			return nil // parent is known, sub-field is expected
+		}
+	}
+
+	suggestion := closestMatch(fieldName, knownGlobalKeysList)
+	if suggestion != "" {
+		return fmt.Errorf("unknown config key %q — did you mean %q?", fieldName, suggestion)
+	}
+
+	return fmt.Errorf("unknown config key %q", fieldName)
+}
+
+// checkDriveUnknownKeys validates that all keys in a drive section map are
+// recognized drive keys. Returns an error with suggestions for unknown keys.
+func checkDriveUnknownKeys(driveMap map[string]any, canonicalID string) error {
+	var errs []error
+
+	for key := range driveMap {
+		if knownDriveKeys[key] {
+			continue
+		}
+
+		suggestion := closestMatch(key, knownDriveKeysList)
+		if suggestion != "" {
+			errs = append(errs, fmt.Errorf(
+				"unknown key %q in drive [%q] — did you mean %q?", key, canonicalID, suggestion))
+		} else {
+			errs = append(errs, fmt.Errorf("unknown key %q in drive [%q]", key, canonicalID))
+		}
 	}
 
 	return errors.Join(errs...)
-}
-
-// buildUnknownKeyError creates a descriptive error for a single unknown key,
-// optionally suggesting the closest known key.
-func buildUnknownKeyError(key toml.Key) error {
-	keyParts := key.String()
-
-	section, fieldName, isProfile := classifyKey(keyParts)
-
-	if isProfile {
-		return buildProfileKeyError(section, fieldName)
-	}
-
-	return buildSectionKeyError(section, fieldName)
-}
-
-// classifyKey determines whether a key belongs to a profile section or a
-// regular section, and extracts the relevant section and field name.
-func classifyKey(keyStr string) (section, field string, isProfile bool) {
-	parts := strings.Split(keyStr, ".")
-
-	if len(parts) >= profileSectionDepth && parts[0] == "profile" {
-		return classifyProfileKey(parts)
-	}
-
-	return classifyRegularKey(parts), extractField(parts), false
-}
-
-// classifyProfileKey handles keys within [profile.NAME...] sections.
-func classifyProfileKey(parts []string) (section, field string, isProfile bool) {
-	profileName := parts[1]
-
-	if len(parts) == profileSectionDepth {
-		// e.g., "profile.work.sync_dir" -> field in profile
-		return fmt.Sprintf("profile.%s", profileName), parts[2], true
-	}
-
-	// e.g., "profile.work.filter.skip_files" -> field in profile subsection
-	subSection := parts[2]
-
-	return fmt.Sprintf("profile.%s.%s", profileName, subSection), parts[profileSectionDepth], true
-}
-
-// classifyRegularKey handles non-profile keys.
-func classifyRegularKey(parts []string) string {
-	if len(parts) == 1 {
-		return sectionTopLevel
-	}
-
-	return parts[0]
-}
-
-// extractField returns the field name from key parts.
-func extractField(parts []string) string {
-	if len(parts) == 1 {
-		return parts[0]
-	}
-
-	return parts[1]
-}
-
-// buildProfileKeyError creates an error for an unknown key inside a profile.
-func buildProfileKeyError(section, fieldName string) error {
-	parts := strings.Split(section, ".")
-
-	var known []string
-
-	if len(parts) == profileSubSectionParts {
-		// Inside a profile subsection like profile.work.filter
-		subSection := parts[2]
-		known = knownKeysForGlobalSection(subSection)
-	} else {
-		// Inside profile.NAME directly
-		known = knownProfileKeys
-	}
-
-	suggestion := closestMatch(fieldName, known)
-	if suggestion != "" {
-		return fmt.Errorf(
-			"unknown config key %q in [%s] — did you mean %q?",
-			fieldName, section, suggestion)
-	}
-
-	return fmt.Errorf("unknown config key %q in [%s]", fieldName, section)
-}
-
-// buildSectionKeyError creates an error for an unknown key in a regular section.
-func buildSectionKeyError(section, fieldName string) error {
-	known := knownKeysForGlobalSection(section)
-	suggestion := closestMatch(fieldName, known)
-
-	if suggestion != "" {
-		return fmt.Errorf(
-			"unknown config key %q in [%s] — did you mean %q?",
-			fieldName, section, suggestion)
-	}
-
-	return fmt.Errorf("unknown config key %q in [%s]", fieldName, section)
-}
-
-// knownKeysForGlobalSection returns the valid keys for a given global section.
-// For "top-level", it returns the section names. For bandwidth_schedule
-// entries, it returns the entry field names.
-func knownKeysForGlobalSection(section string) []string {
-	if section == sectionTopLevel {
-		return topLevelSections
-	}
-
-	if keys, ok := knownSectionKeys[section]; ok {
-		return keys
-	}
-
-	// Could be a nested key like "bandwidth_schedule.time".
-	return []string{"time", "limit"}
 }
 
 // closestMatch finds the closest known key by Levenshtein distance.

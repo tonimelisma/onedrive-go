@@ -8,17 +8,15 @@ import (
 )
 
 func TestLoad_UnknownKey_TopLevel(t *testing.T) {
-	path := writeTestConfig(t, `
-unknown_section = "value"
-`)
+	path := writeTestConfig(t, `unknown_section = "value"`)
 	_, err := Load(path)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown config key")
 }
 
-func TestLoad_UnknownKey_InSection(t *testing.T) {
+func TestLoad_UnknownKey_TypoInFlatKey(t *testing.T) {
 	//nolint:misspell // intentional typo to test unknown key detection
-	path := writeTestConfig(t, "[transfers]\nparralel_downloads = 4\n")
+	path := writeTestConfig(t, `parralel_downloads = 4`)
 	_, err := Load(path)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown config key")
@@ -26,24 +24,60 @@ func TestLoad_UnknownKey_InSection(t *testing.T) {
 }
 
 func TestLoad_UnknownKey_TypoInFilter(t *testing.T) {
-	path := writeTestConfig(t, `
-[filter]
-skip_file = ["*.tmp"]
-`)
+	path := writeTestConfig(t, `skip_file = ["*.tmp"]`)
 	_, err := Load(path)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "skip_files")
 }
 
 func TestLoad_UnknownKey_NoSuggestion(t *testing.T) {
-	path := writeTestConfig(t, `
-[filter]
-completely_unrelated_key = true
-`)
+	path := writeTestConfig(t, `completely_unrelated_key = true`)
 	_, err := Load(path)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown config key")
 	assert.NotContains(t, err.Error(), "did you mean")
+}
+
+func TestLoad_UnknownKeyInDriveSection(t *testing.T) {
+	path := writeTestConfig(t, `
+["personal:toni@outlook.com"]
+sync_dir = "~/OneDrive"
+unknown_field = "value"
+`)
+	_, err := Load(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown key")
+	assert.Contains(t, err.Error(), "personal:toni@outlook.com")
+}
+
+func TestLoad_TypoInDriveSection_Suggestion(t *testing.T) {
+	path := writeTestConfig(t, `
+["personal:toni@outlook.com"]
+sync_dir = "~/OneDrive"
+aliaz = "home"
+`)
+	_, err := Load(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "did you mean")
+	assert.Contains(t, err.Error(), "alias")
+}
+
+func TestLoad_DriveSection_ValidKeysPass(t *testing.T) {
+	path := writeTestConfig(t, `
+["personal:toni@outlook.com"]
+sync_dir = "~/OneDrive"
+alias = "home"
+enabled = true
+remote_path = "/"
+drive_id = "abc"
+skip_dotfiles = true
+skip_dirs = ["vendor"]
+skip_files = ["*.log"]
+poll_interval = "10m"
+`)
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.Len(t, cfg.Drives, 1)
 }
 
 func TestLevenshtein(t *testing.T) {
@@ -77,4 +111,20 @@ func TestClosestMatch_Found(t *testing.T) {
 func TestClosestMatch_NotFound(t *testing.T) {
 	known := []string{"skip_files", "skip_dirs"}
 	assert.Equal(t, "", closestMatch("completely_unrelated", known))
+}
+
+// --- Edge case: known parent with sub-field is not flagged ---
+
+func TestBuildGlobalKeyError_KnownParent_SubField(t *testing.T) {
+	// A nested key like "bandwidth_schedule.time" has a known parent,
+	// so buildGlobalKeyError should return nil.
+	err := buildGlobalKeyError("bandwidth_schedule.time")
+	assert.Nil(t, err)
+}
+
+func TestBuildGlobalKeyError_UnknownParent_SubField(t *testing.T) {
+	// An unknown nested key should still return an error.
+	err := buildGlobalKeyError("nonexistent_section.field")
+	assert.NotNil(t, err)
+	assert.Contains(t, err.Error(), "unknown config key")
 }

@@ -11,62 +11,79 @@ func TestDefaultConfig_AllFieldsPopulated(t *testing.T) {
 	cfg := DefaultConfig()
 	require.NotNil(t, cfg)
 
-	// Filter defaults
-	assert.Equal(t, ".odignore", cfg.Filter.IgnoreMarker)
-	assert.Equal(t, "50GB", cfg.Filter.MaxFileSize)
-	assert.False(t, cfg.Filter.SkipDotfiles)
-	assert.False(t, cfg.Filter.SkipSymlinks)
-	assert.Empty(t, cfg.Filter.SkipFiles)
-	assert.Empty(t, cfg.Filter.SkipDirs)
-	assert.Empty(t, cfg.Filter.SyncPaths)
+	// Filter defaults (using promoted field access)
+	assert.Equal(t, ".odignore", cfg.IgnoreMarker)
+	assert.Equal(t, "50GB", cfg.MaxFileSize)
+	assert.False(t, cfg.SkipDotfiles)
+	assert.False(t, cfg.SkipSymlinks)
+	assert.Empty(t, cfg.SkipFiles)
+	assert.Empty(t, cfg.SkipDirs)
+	assert.Empty(t, cfg.SyncPaths)
 
 	// Transfers defaults
-	assert.Equal(t, 8, cfg.Transfers.ParallelDownloads)
-	assert.Equal(t, 8, cfg.Transfers.ParallelUploads)
-	assert.Equal(t, 8, cfg.Transfers.ParallelCheckers)
-	assert.Equal(t, "10MiB", cfg.Transfers.ChunkSize)
-	assert.Equal(t, "0", cfg.Transfers.BandwidthLimit)
-	assert.Equal(t, "default", cfg.Transfers.TransferOrder)
-	assert.Empty(t, cfg.Transfers.BandwidthSchedule)
+	assert.Equal(t, 8, cfg.ParallelDownloads)
+	assert.Equal(t, 8, cfg.ParallelUploads)
+	assert.Equal(t, 8, cfg.ParallelCheckers)
+	assert.Equal(t, "10MiB", cfg.ChunkSize)
+	assert.Equal(t, "0", cfg.BandwidthLimit)
+	assert.Equal(t, "default", cfg.TransferOrder)
+	assert.Empty(t, cfg.BandwidthSchedule)
 
 	// Safety defaults
-	assert.Equal(t, 1000, cfg.Safety.BigDeleteThreshold)
-	assert.Equal(t, 50, cfg.Safety.BigDeletePercentage)
-	assert.Equal(t, 10, cfg.Safety.BigDeleteMinItems)
-	assert.Equal(t, "1GB", cfg.Safety.MinFreeSpace)
-	assert.True(t, cfg.Safety.UseRecycleBin)
-	assert.True(t, cfg.Safety.UseLocalTrash)
-	assert.False(t, cfg.Safety.DisableDownloadValidation)
-	assert.False(t, cfg.Safety.DisableUploadValidation)
-	assert.Equal(t, "0700", cfg.Safety.SyncDirPermissions)
-	assert.Equal(t, "0600", cfg.Safety.SyncFilePermissions)
-	assert.Equal(t, 30, cfg.Safety.TombstoneRetentionDays)
+	assert.Equal(t, 1000, cfg.BigDeleteThreshold)
+	assert.Equal(t, 50, cfg.BigDeletePercentage)
+	assert.Equal(t, 10, cfg.BigDeleteMinItems)
+	assert.Equal(t, "1GB", cfg.MinFreeSpace)
+	assert.True(t, cfg.UseRecycleBin)
+	assert.True(t, cfg.UseLocalTrash)
+	assert.False(t, cfg.DisableDownloadValidation)
+	assert.False(t, cfg.DisableUploadValidation)
+	assert.Equal(t, "0700", cfg.SyncDirPermissions)
+	assert.Equal(t, "0600", cfg.SyncFilePermissions)
+	assert.Equal(t, 30, cfg.TombstoneRetentionDays)
 
 	// Sync defaults
-	assert.Equal(t, "5m", cfg.Sync.PollInterval)
-	assert.Equal(t, 12, cfg.Sync.FullscanFrequency)
-	assert.True(t, cfg.Sync.Websocket)
-	assert.Equal(t, "keep_both", cfg.Sync.ConflictStrategy)
-	assert.Equal(t, "1h", cfg.Sync.ConflictReminderInterval)
-	assert.False(t, cfg.Sync.DryRun)
-	assert.Equal(t, "0", cfg.Sync.VerifyInterval)
-	assert.Equal(t, "30s", cfg.Sync.ShutdownTimeout)
+	assert.Equal(t, "5m", cfg.PollInterval)
+	assert.Equal(t, 12, cfg.FullscanFrequency)
+	assert.True(t, cfg.Websocket)
+	assert.Equal(t, "keep_both", cfg.ConflictStrategy)
+	assert.Equal(t, "1h", cfg.ConflictReminderInterval)
+	assert.False(t, cfg.DryRun)
+	assert.Equal(t, "0", cfg.VerifyInterval)
+	assert.Equal(t, "30s", cfg.ShutdownTimeout)
 
 	// Logging defaults
-	assert.Equal(t, "info", cfg.Logging.LogLevel)
-	assert.Equal(t, "", cfg.Logging.LogFile)
-	assert.Equal(t, "auto", cfg.Logging.LogFormat)
-	assert.Equal(t, 30, cfg.Logging.LogRetentionDays)
+	assert.Equal(t, "info", cfg.LogLevel)
+	assert.Equal(t, "", cfg.LogFile)
+	assert.Equal(t, "auto", cfg.LogFormat)
+	assert.Equal(t, 30, cfg.LogRetentionDays)
 
 	// Network defaults
-	assert.Equal(t, "10s", cfg.Network.ConnectTimeout)
-	assert.Equal(t, "60s", cfg.Network.DataTimeout)
-	assert.Equal(t, "", cfg.Network.UserAgent)
-	assert.False(t, cfg.Network.ForceHTTP11)
+	assert.Equal(t, "10s", cfg.ConnectTimeout)
+	assert.Equal(t, "60s", cfg.DataTimeout)
+	assert.Equal(t, "", cfg.UserAgent)
+	assert.False(t, cfg.ForceHTTP11)
+
+	// Drives map initialized
+	require.NotNil(t, cfg.Drives)
+	assert.Empty(t, cfg.Drives)
 }
 
 func TestDefaultConfig_PassesValidation(t *testing.T) {
 	cfg := DefaultConfig()
 	err := Validate(cfg)
 	assert.NoError(t, err)
+}
+
+func TestConfig_EmbeddedStructPromotion(t *testing.T) {
+	// Verify that embedded struct fields are accessible directly on Config.
+	cfg := DefaultConfig()
+
+	// These should compile and work because of struct embedding.
+	assert.Equal(t, false, cfg.SkipDotfiles)
+	assert.Equal(t, 8, cfg.ParallelDownloads)
+	assert.Equal(t, 1000, cfg.BigDeleteThreshold)
+	assert.Equal(t, "5m", cfg.PollInterval)
+	assert.Equal(t, "info", cfg.LogLevel)
+	assert.Equal(t, "10s", cfg.ConnectTimeout)
 }
