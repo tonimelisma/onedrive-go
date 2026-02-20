@@ -37,7 +37,6 @@ Shows token validity, sync directory, and enabled/disabled status for each drive
 type statusAccount struct {
 	Email      string        `json:"email"`
 	DriveType  string        `json:"drive_type"`
-	OrgName    string        `json:"org_name,omitempty"`
 	TokenState string        `json:"token_state"`
 	Drives     []statusDrive `json:"drives"`
 }
@@ -158,7 +157,8 @@ func buildSingleAccountStatus(
 func checkTokenState(account string, driveIDs []string, logger *slog.Logger) string {
 	tokenID := canonicalIDForToken(account, driveIDs)
 	if tokenID == "" {
-		tokenID = "personal:" + account
+		// No drives in config — probe the filesystem for an existing token.
+		tokenID = findTokenFallback(account)
 	}
 
 	tokenPath := config.DriveTokenPath(tokenID)
@@ -213,12 +213,7 @@ func printStatusText(accounts []statusAccount) {
 			fmt.Println()
 		}
 
-		label := acct.DriveType
-		if acct.OrgName != "" {
-			label = acct.OrgName
-		}
-
-		fmt.Printf("Account: %s (%s)\n", acct.Email, label)
+		fmt.Printf("Account: %s (%s)\n", acct.Email, acct.DriveType)
 		fmt.Printf("  Token: %s\n", acct.TokenState)
 
 		for _, d := range acct.Drives {

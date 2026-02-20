@@ -141,6 +141,7 @@ func TestNewRootCmd_AuthSkipsConfig(t *testing.T) {
 
 	// Auth and account management commands should pass through PersistentPreRunE
 	// without error, because they skip the four-layer config resolution.
+	// Uses CommandPath() for matching, so we test with the full command paths.
 	skipCmds := []string{"login", "logout", "whoami", "status"}
 	for _, name := range skipCmds {
 		t.Run(name, func(t *testing.T) {
@@ -180,17 +181,63 @@ func TestNewRootCmd_DriveSubcommands(t *testing.T) {
 func TestNewRootCmd_DriveSubcommandsSkipConfig(t *testing.T) {
 	cmd := newRootCmd()
 
-	// drive add and drive remove should skip config loading via PersistentPreRunE.
-	driveSubCmds := []string{"add", "remove"}
-	for _, name := range driveSubCmds {
-		t.Run(name, func(t *testing.T) {
-			sub, _, err := cmd.Find([]string{"drive", name})
+	// drive, drive add, and drive remove should skip config loading via PersistentPreRunE.
+	driveSubCmds := []struct {
+		args []string
+		name string
+	}{
+		{[]string{"drive"}, "drive"},
+		{[]string{"drive", "add"}, "drive add"},
+		{[]string{"drive", "remove"}, "drive remove"},
+	}
+
+	for _, tc := range driveSubCmds {
+		t.Run(tc.name, func(t *testing.T) {
+			sub, _, err := cmd.Find(tc.args)
 			require.NoError(t, err)
 
 			err = cmd.PersistentPreRunE(sub, nil)
-			assert.NoError(t, err, "drive %s should skip config loading", name)
+			assert.NoError(t, err, "%s should skip config loading", tc.name)
 		})
 	}
+}
+
+// --- defaultHTTPClient tests ---
+
+func TestDefaultHTTPClient_HasTimeout(t *testing.T) {
+	client := defaultHTTPClient()
+	assert.Equal(t, httpClientTimeout, client.Timeout)
+}
+
+// --- skipConfigCommands uses CommandPath ---
+
+func TestSkipConfigCommands_UsesCommandPath(t *testing.T) {
+	cmd := newRootCmd()
+
+	// Verify that all skip commands use full command paths, not bare names.
+	allSkip := [][]string{
+		{"login"},
+		{"logout"},
+		{"whoami"},
+		{"status"},
+		{"drive"},
+		{"drive", "add"},
+		{"drive", "remove"},
+	}
+
+	for _, args := range allSkip {
+		sub, _, err := cmd.Find(args)
+		require.NoError(t, err)
+
+		path := sub.CommandPath()
+		assert.True(t, skipConfigCommands[path],
+			"CommandPath %q should be in skipConfigCommands", path)
+	}
+
+	// Verify that bare names like "add" or "remove" are NOT in the skip map
+	// (protecting against future subcommand collisions).
+	assert.False(t, skipConfigCommands["add"], "bare 'add' should not be in skipConfigCommands")
+	assert.False(t, skipConfigCommands["remove"], "bare 'remove' should not be in skipConfigCommands")
 }
 
 // --- loadConfig tests ---

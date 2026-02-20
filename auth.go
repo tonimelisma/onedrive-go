@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -67,16 +66,19 @@ func constructCanonicalID(driveType, email string) string {
 	return driveType + ":" + email
 }
 
-// canonicalIDParts is the number of colon-separated segments expected when
-// splitting a canonical ID into type and email (e.g. "personal:user@example.com").
-const canonicalIDParts = 2
+// canonicalIDParts is the maximum split limit for parsing canonical IDs.
+// Using SplitN with limit 3 splits "type:email:rest" into at most 3 parts,
+// ensuring the email (parts[1]) is extracted cleanly even for SharePoint IDs
+// like "sharepoint:alice@contoso.com:marketing:Docs".
+const canonicalIDParts = 3
 
 // accountEmailFromCanonicalID extracts the email portion from a canonical ID.
 // For "personal:user@example.com" returns "user@example.com".
+// For "sharepoint:alice@contoso.com:marketing:Docs" returns "alice@contoso.com".
 // Returns the input unchanged if no colon separator is found.
 func accountEmailFromCanonicalID(id string) string {
 	parts := strings.SplitN(id, ":", canonicalIDParts)
-	if len(parts) < canonicalIDParts {
+	if len(parts) < 2 {
 		return id
 	}
 
@@ -88,11 +90,37 @@ func accountEmailFromCanonicalID(id string) string {
 // Returns the input unchanged if no colon separator is found.
 func driveTypeFromCanonicalID(id string) string {
 	parts := strings.SplitN(id, ":", canonicalIDParts)
-	if len(parts) < canonicalIDParts {
+	if len(parts) < 2 {
 		return id
 	}
 
 	return parts[0]
+}
+
+// findTokenFallback tries personal and business canonical ID prefixes
+// and returns whichever one has a token file on disk. Falls back to
+// "personal:" if neither exists, since personal is the most common case.
+func findTokenFallback(account string) string {
+	personalID := "personal:" + account
+
+	personalPath := config.DriveTokenPath(personalID)
+	if personalPath != "" {
+		if _, err := os.Stat(personalPath); err == nil {
+			return personalID
+		}
+	}
+
+	businessID := "business:" + account
+
+	businessPath := config.DriveTokenPath(businessID)
+	if businessPath != "" {
+		if _, err := os.Stat(businessPath); err == nil {
+			return businessID
+		}
+	}
+
+	// Default to personal if neither exists (best guess for most users).
+	return personalID
 }
 
 // pendingTokenPath returns the path for the temporary token file used during
@@ -171,7 +199,7 @@ func runLogin(_ *cobra.Command, _ []string) error {
 // canonical drive ID and extract the organization name. Returns the canonical
 // ID and org display name.
 func discoverAccount(ctx context.Context, ts graph.TokenSource, logger *slog.Logger) (string, string, error) {
-	client := graph.NewClient(graph.DefaultBaseURL, http.DefaultClient, ts, logger)
+	client := graph.NewClient(graph.DefaultBaseURL, defaultHTTPClient(), ts, logger)
 
 	// GET /me -> email, user GUID
 	user, err := client.Me(ctx)
@@ -398,8 +426,8 @@ func executeLogout(cfg *config.Config, cfgPath, account string, purge bool, logg
 	// account email to derive the token path (all drives for one account share a token).
 	tokenCanonicalID := canonicalIDForToken(account, affected)
 	if tokenCanonicalID == "" {
-		// Fallback: try personal and business prefixes.
-		tokenCanonicalID = "personal:" + account
+		// No drives in config — probe the filesystem for an existing token.
+		tokenCanonicalID = findTokenFallback(account)
 	}
 
 	tokenPath := config.DriveTokenPath(tokenCanonicalID)
@@ -472,27 +500,34 @@ func printAffectedDrives(cfg *config.Config, affected []string) {
 	}
 }
 
+// purgeSingleDrive removes the state database and config section for one drive.
+// Token deletion is handled separately since tokens may be shared (SharePoint).
+func purgeSingleDrive(cfgPath, driveID string, logger *slog.Logger) error {
+	statePath := config.DriveStatePath(driveID)
+	if statePath != "" {
+		if err := os.Remove(statePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			logger.Warn("failed to remove state database", "path", statePath, "error", err)
+		} else if err == nil {
+			logger.Info("removed state database", "path", statePath)
+		}
+	}
+
+	if err := config.DeleteDriveSection(cfgPath, driveID); err != nil {
+		return fmt.Errorf("deleting drive section: %w", err)
+	}
+
+	return nil
+}
+
 // purgeAccountDrives removes drive config sections and state databases for
 // all affected drives. Token deletion is already handled before this call.
 func purgeAccountDrives(cfgPath string, affected []string, logger *slog.Logger) {
 	fmt.Println()
 
 	for _, id := range affected {
-		// Delete state database if it exists.
-		statePath := config.DriveStatePath(id)
-		if statePath != "" {
-			if err := os.Remove(statePath); err != nil && !errors.Is(err, os.ErrNotExist) {
-				logger.Warn("failed to remove state database", "path", statePath, "error", err)
-			} else if err == nil {
-				logger.Info("removed state database", "path", statePath)
-			}
-		}
-
-		// Delete config section.
-		if err := config.DeleteDriveSection(cfgPath, id); err != nil {
-			logger.Warn("failed to remove drive section from config", "drive", id, "error", err)
+		if err := purgeSingleDrive(cfgPath, id, logger); err != nil {
+			logger.Warn("failed to purge drive", "drive", id, "error", err)
 		} else {
-			logger.Info("removed drive section from config", "drive", id)
 			fmt.Printf("Purged config and state for %s.\n", id)
 		}
 	}
@@ -545,7 +580,7 @@ func runWhoami(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
-	client := graph.NewClient(graph.DefaultBaseURL, http.DefaultClient, ts, logger)
+	client := graph.NewClient(graph.DefaultBaseURL, defaultHTTPClient(), ts, logger)
 
 	user, err := client.Me(ctx)
 	if err != nil {

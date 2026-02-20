@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -28,16 +30,28 @@ var (
 // Auth commands and account management commands handle config loading themselves.
 var resolvedCfg *config.ResolvedDrive
 
+// httpClientTimeout is the default timeout for HTTP requests.
+// Prevents hung connections from blocking CLI commands indefinitely.
+const httpClientTimeout = 30 * time.Second
+
+// defaultHTTPClient returns an HTTP client with a sensible timeout.
+func defaultHTTPClient() *http.Client {
+	return &http.Client{Timeout: httpClientTimeout}
+}
+
 // skipConfigCommands lists commands that handle config loading themselves,
 // either because they bootstrap config (login) or because they load config
 // directly to avoid the four-layer resolution (logout, whoami, status, drive).
+// Uses CommandPath() for explicit matching, safe against future subcommand collisions
+// (e.g., a hypothetical "sync add" would not accidentally skip config loading).
 var skipConfigCommands = map[string]bool{
-	"login":  true,
-	"logout": true,
-	"whoami": true,
-	"status": true,
-	"add":    true,
-	"remove": true,
+	"onedrive-go login":        true,
+	"onedrive-go logout":       true,
+	"onedrive-go whoami":       true,
+	"onedrive-go status":       true,
+	"onedrive-go drive":        true,
+	"onedrive-go drive add":    true,
+	"onedrive-go drive remove": true,
 }
 
 // newRootCmd builds and returns the fully-assembled root command with all
@@ -56,7 +70,7 @@ func newRootCmd() *cobra.Command {
 		// config access directly. Login must bootstrap config before it exists;
 		// logout, whoami, status, and drive subcommands load config themselves.
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
-			if skipConfigCommands[cmd.Name()] {
+			if skipConfigCommands[cmd.CommandPath()] {
 				return nil
 			}
 

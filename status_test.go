@@ -55,6 +55,25 @@ func TestGroupDrivesByAccount(t *testing.T) {
 	assert.Len(t, grouped["charlie@example.com"], 1)
 }
 
+func TestGroupDrivesByAccount_WithSharePoint(t *testing.T) {
+	// With the fixed email extraction, SharePoint drives are now grouped
+	// under the same account as personal/business drives.
+	cfg := &config.Config{
+		Drives: map[string]config.Drive{
+			"business:alice@contoso.com":                    {},
+			"sharepoint:alice@contoso.com:marketing:Docs":   {},
+			"sharepoint:alice@contoso.com:engineering:Wiki": {},
+		},
+	}
+
+	grouped, order := groupDrivesByAccount(cfg)
+
+	// All three drives belong to alice@contoso.com.
+	assert.Len(t, order, 1)
+	assert.Equal(t, "alice@contoso.com", order[0])
+	assert.Len(t, grouped["alice@contoso.com"], 3)
+}
+
 func TestGroupDrivesByAccount_Empty(t *testing.T) {
 	cfg := &config.Config{
 		Drives: map[string]config.Drive{},
