@@ -41,6 +41,12 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newLoginCmd())
 	cmd.AddCommand(newLogoutCmd())
 	cmd.AddCommand(newWhoamiCmd())
+	cmd.AddCommand(newLsCmd())
+	cmd.AddCommand(newGetCmd())
+	cmd.AddCommand(newPutCmd())
+	cmd.AddCommand(newRmCmd())
+	cmd.AddCommand(newMkdirCmd())
+	cmd.AddCommand(newStatCmd())
 
 	return cmd
 }

@@ -1,0 +1,493 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/spf13/cobra"
+
+	"github.com/tonimelisma/onedrive-go/internal/graph"
+)
+
+// maxSimpleUploadSize is the threshold for simple vs chunked upload (4 MB).
+// Defined locally to avoid exporting the internal/graph constant.
+const maxSimpleUploadSize = 4 * 1024 * 1024
+
+// chunkSize is the upload chunk size for resumable uploads (10 MB, aligned to 320 KiB).
+const chunkSize = 10 * 1024 * 1024
+
+func newLsCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "ls [path]",
+		Short: "List files and folders",
+		Args:  cobra.MaximumNArgs(1),
+		RunE:  runLs,
+	}
+}
+
+func newGetCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "get <remote-path> [local-path]",
+		Short: "Download a file",
+		Args:  cobra.RangeArgs(1, 2),
+		RunE:  runGet,
+	}
+}
+
+func newPutCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "put <local-path> [remote-path]",
+		Short: "Upload a file",
+		Args:  cobra.RangeArgs(1, 2),
+		RunE:  runPut,
+	}
+}
+
+func newRmCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "rm <path>",
+		Short: "Delete a file or folder",
+		Args:  cobra.ExactArgs(1),
+		RunE:  runRm,
+	}
+}
+
+func newMkdirCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "mkdir <path>",
+		Short: "Create a folder (recursive)",
+		Args:  cobra.ExactArgs(1),
+		RunE:  runMkdir,
+	}
+}
+
+func newStatCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "stat <path>",
+		Short: "Display file or folder metadata",
+		Args:  cobra.ExactArgs(1),
+		RunE:  runStat,
+	}
+}
+
+// cleanRemotePath strips leading/trailing slashes, returns "" for root.
+func cleanRemotePath(path string) string {
+	return strings.Trim(path, "/")
+}
+
+// splitParentAndName splits a remote path into parent path and name.
+// For "foo/bar/baz" returns ("foo/bar", "baz").
+// For "baz" returns ("", "baz").
+func splitParentAndName(path string) (string, string) {
+	clean := cleanRemotePath(path)
+	idx := strings.LastIndex(clean, "/")
+
+	if idx < 0 {
+		return "", clean
+	}
+
+	return clean[:idx], clean[idx+1:]
+}
+
+// clientAndDrive loads a saved token, creates a Graph client, and discovers
+// the user's primary drive ID.
+func clientAndDrive(ctx context.Context) (*graph.Client, string, error) {
+	logger := buildLogger()
+
+	ts, err := graph.TokenSourceFromProfile(ctx, flagProfile, logger)
+	if err != nil {
+		if errors.Is(err, graph.ErrNotLoggedIn) {
+			return nil, "", fmt.Errorf("not logged in — run 'onedrive-go login' first")
+		}
+
+		return nil, "", err
+	}
+
+	client := graph.NewClient(graph.DefaultBaseURL, http.DefaultClient, ts, logger)
+
+	drives, err := client.Drives(ctx)
+	if err != nil {
+		return nil, "", fmt.Errorf("discovering drive: %w", err)
+	}
+
+	if len(drives) == 0 {
+		return nil, "", fmt.Errorf("no drives found for this account")
+	}
+
+	return client, drives[0].ID, nil
+}
+
+// resolveItem resolves a remote path to an Item.
+// For root (""), uses GetItem with "root". Otherwise uses GetItemByPath.
+func resolveItem(ctx context.Context, client *graph.Client, driveID, remotePath string) (*graph.Item, error) {
+	clean := cleanRemotePath(remotePath)
+	if clean == "" {
+		return client.GetItem(ctx, driveID, "root")
+	}
+
+	return client.GetItemByPath(ctx, driveID, clean)
+}
+
+// listItems lists children of a remote path.
+// For root (""), uses ListChildren with "root". Otherwise uses ListChildrenByPath.
+func listItems(ctx context.Context, client *graph.Client, driveID, remotePath string) ([]graph.Item, error) {
+	clean := cleanRemotePath(remotePath)
+	if clean == "" {
+		return client.ListChildren(ctx, driveID, "root")
+	}
+
+	return client.ListChildrenByPath(ctx, driveID, clean)
+}
+
+func runLs(_ *cobra.Command, args []string) error {
+	remotePath := "/"
+	if len(args) > 0 {
+		remotePath = args[0]
+	}
+
+	ctx := context.Background()
+
+	client, driveID, err := clientAndDrive(ctx)
+	if err != nil {
+		return err
+	}
+
+	items, err := listItems(ctx, client, driveID, remotePath)
+	if err != nil {
+		return fmt.Errorf("listing %q: %w", remotePath, err)
+	}
+
+	if flagJSON {
+		return printItemsJSON(items)
+	}
+
+	printItemsTable(items)
+
+	return nil
+}
+
+// lsJSONItem is the JSON output schema for a single item in ls output.
+type lsJSONItem struct {
+	Name       string `json:"name"`
+	Size       int64  `json:"size"`
+	IsFolder   bool   `json:"is_folder"`
+	ModifiedAt string `json:"modified_at"`
+	ID         string `json:"id"`
+}
+
+func printItemsJSON(items []graph.Item) error {
+	out := make([]lsJSONItem, 0, len(items))
+	for i := range items {
+		out = append(out, lsJSONItem{
+			Name:       items[i].Name,
+			Size:       items[i].Size,
+			IsFolder:   items[i].IsFolder,
+			ModifiedAt: items[i].ModifiedAt.Format("2006-01-02T15:04:05Z"),
+			ID:         items[i].ID,
+		})
+	}
+
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+
+	return enc.Encode(out)
+}
+
+func printItemsTable(items []graph.Item) {
+	// Sort: folders first, then alphabetical.
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].IsFolder != items[j].IsFolder {
+			return items[i].IsFolder
+		}
+
+		return items[i].Name < items[j].Name
+	})
+
+	headers := []string{"NAME", "SIZE", "MODIFIED"}
+	rows := make([][]string, 0, len(items))
+
+	for i := range items {
+		name := items[i].Name
+		if items[i].IsFolder {
+			name += "/"
+		}
+
+		rows = append(rows, []string{name, formatSize(items[i].Size), formatTime(items[i].ModifiedAt)})
+	}
+
+	printTable(os.Stdout, headers, rows)
+}
+
+func runGet(_ *cobra.Command, args []string) error {
+	remotePath := args[0]
+	ctx := context.Background()
+
+	client, driveID, err := clientAndDrive(ctx)
+	if err != nil {
+		return err
+	}
+
+	item, err := resolveItem(ctx, client, driveID, remotePath)
+	if err != nil {
+		return fmt.Errorf("resolving %q: %w", remotePath, err)
+	}
+
+	if item.IsFolder {
+		return fmt.Errorf("%q is a folder, not a file", remotePath)
+	}
+
+	localPath := item.Name
+	if len(args) > 1 {
+		localPath = args[1]
+	}
+
+	f, err := os.Create(localPath)
+	if err != nil {
+		return fmt.Errorf("creating local file: %w", err)
+	}
+	defer f.Close()
+
+	n, err := client.Download(ctx, driveID, item.ID, f)
+	if err != nil {
+		return fmt.Errorf("downloading %q: %w", remotePath, err)
+	}
+
+	fmt.Fprintf(os.Stderr, "Downloaded %s (%s)\n", localPath, formatSize(n))
+
+	return nil
+}
+
+func runPut(_ *cobra.Command, args []string) error {
+	localPath := args[0]
+	ctx := context.Background()
+
+	fi, err := os.Stat(localPath)
+	if err != nil {
+		return fmt.Errorf("stating local file: %w", err)
+	}
+
+	if fi.IsDir() {
+		return fmt.Errorf("%q is a directory, not a file", localPath)
+	}
+
+	// Default remote path is root + local filename.
+	remotePath := "/" + filepath.Base(localPath)
+	if len(args) > 1 {
+		remotePath = args[1]
+	}
+
+	client, driveID, err := clientAndDrive(ctx)
+	if err != nil {
+		return err
+	}
+
+	parentPath, name := splitParentAndName(remotePath)
+
+	// Resolve parent folder ID.
+	parentItem, err := resolveItem(ctx, client, driveID, parentPath)
+	if err != nil {
+		return fmt.Errorf("resolving parent %q: %w", parentPath, err)
+	}
+
+	f, err := os.Open(localPath)
+	if err != nil {
+		return fmt.Errorf("opening local file: %w", err)
+	}
+	defer f.Close()
+
+	if fi.Size() <= maxSimpleUploadSize {
+		_, err = client.SimpleUpload(ctx, driveID, parentItem.ID, name, f, fi.Size())
+	} else {
+		err = doChunkedUpload(ctx, client, driveID, parentItem.ID, name, f, fi.Size())
+	}
+
+	if err != nil {
+		return fmt.Errorf("uploading %q: %w", remotePath, err)
+	}
+
+	fmt.Fprintf(os.Stderr, "Uploaded %s (%s)\n", remotePath, formatSize(fi.Size()))
+
+	return nil
+}
+
+func doChunkedUpload(
+	ctx context.Context, client *graph.Client,
+	driveID, parentID, name string,
+	r io.ReaderAt, total int64,
+) error {
+	session, err := client.CreateUploadSession(ctx, driveID, parentID, name, total)
+	if err != nil {
+		return err
+	}
+
+	var offset int64
+	for offset < total {
+		length := int64(chunkSize)
+		if offset+length > total {
+			length = total - offset
+		}
+
+		chunk := io.NewSectionReader(r, offset, length)
+
+		_, err := client.UploadChunk(ctx, session, chunk, offset, length, total)
+		if err != nil {
+			return err
+		}
+
+		offset += length
+	}
+
+	return nil
+}
+
+func runRm(_ *cobra.Command, args []string) error {
+	remotePath := args[0]
+	ctx := context.Background()
+
+	client, driveID, err := clientAndDrive(ctx)
+	if err != nil {
+		return err
+	}
+
+	item, err := resolveItem(ctx, client, driveID, remotePath)
+	if err != nil {
+		return fmt.Errorf("resolving %q: %w", remotePath, err)
+	}
+
+	if err := client.DeleteItem(ctx, driveID, item.ID); err != nil {
+		return fmt.Errorf("deleting %q: %w", remotePath, err)
+	}
+
+	fmt.Fprintf(os.Stderr, "Deleted %s\n", remotePath)
+
+	return nil
+}
+
+func runMkdir(_ *cobra.Command, args []string) error {
+	remotePath := cleanRemotePath(args[0])
+	if remotePath == "" {
+		return fmt.Errorf("cannot create root folder")
+	}
+
+	ctx := context.Background()
+
+	client, driveID, err := clientAndDrive(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Walk path segments, creating each missing folder.
+	segments := strings.Split(remotePath, "/")
+	parentID := "root"
+	builtPath := ""
+
+	for _, seg := range segments {
+		if builtPath == "" {
+			builtPath = seg
+		} else {
+			builtPath = builtPath + "/" + seg
+		}
+
+		item, createErr := client.CreateFolder(ctx, driveID, parentID, seg)
+		if createErr != nil {
+			// If folder already exists (409 Conflict), resolve it and continue.
+			if errors.Is(createErr, graph.ErrConflict) {
+				existing, resolveErr := resolveItem(ctx, client, driveID, builtPath)
+				if resolveErr != nil {
+					return fmt.Errorf("resolving existing folder %q: %w", seg, resolveErr)
+				}
+
+				parentID = existing.ID
+
+				continue
+			}
+
+			return fmt.Errorf("creating folder %q: %w", seg, createErr)
+		}
+
+		parentID = item.ID
+	}
+
+	fmt.Fprintf(os.Stderr, "Created %s\n", remotePath)
+
+	return nil
+}
+
+func runStat(_ *cobra.Command, args []string) error {
+	remotePath := args[0]
+	ctx := context.Background()
+
+	client, driveID, err := clientAndDrive(ctx)
+	if err != nil {
+		return err
+	}
+
+	item, err := resolveItem(ctx, client, driveID, remotePath)
+	if err != nil {
+		return fmt.Errorf("resolving %q: %w", remotePath, err)
+	}
+
+	if flagJSON {
+		return printStatJSON(item)
+	}
+
+	printStatText(item)
+
+	return nil
+}
+
+// statJSONOutput is the JSON output schema for the stat command.
+type statJSONOutput struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Size       int64  `json:"size"`
+	IsFolder   bool   `json:"is_folder"`
+	ModifiedAt string `json:"modified_at"`
+	CreatedAt  string `json:"created_at"`
+	MimeType   string `json:"mime_type,omitempty"`
+	ETag       string `json:"etag"`
+}
+
+func printStatJSON(item *graph.Item) error {
+	out := statJSONOutput{
+		ID:         item.ID,
+		Name:       item.Name,
+		Size:       item.Size,
+		IsFolder:   item.IsFolder,
+		ModifiedAt: item.ModifiedAt.Format("2006-01-02T15:04:05Z"),
+		CreatedAt:  item.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		MimeType:   item.MimeType,
+		ETag:       item.ETag,
+	}
+
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+
+	return enc.Encode(out)
+}
+
+func printStatText(item *graph.Item) {
+	itemType := "file"
+	if item.IsFolder {
+		itemType = "folder"
+	}
+
+	fmt.Printf("Name:     %s\n", item.Name)
+	fmt.Printf("Type:     %s\n", itemType)
+	fmt.Printf("Size:     %s (%d bytes)\n", formatSize(item.Size), item.Size)
+	fmt.Printf("Modified: %s\n", item.ModifiedAt.Format("2006-01-02 15:04:05 UTC"))
+	fmt.Printf("Created:  %s\n", item.CreatedAt.Format("2006-01-02 15:04:05 UTC"))
+	fmt.Printf("ID:       %s\n", item.ID)
+
+	if item.MimeType != "" {
+		fmt.Printf("MIME:     %s\n", item.MimeType)
+	}
+}
