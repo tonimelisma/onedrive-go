@@ -407,6 +407,7 @@ When `UploadChunk` fails, the upload session should be canceled to free server-s
 - **Cross-package concerns**: The `DefaultSyncDir` signature change (removing unused email parameter) requires Agent C to update the call site in `auth.go:277`. The build will fail at the repo level until Agent C makes the corresponding change.
 - **Code smells noticed**: (1) `parseSizeNumber` uses `int64(n * float64(multiplier))` which loses precision for very large sizes near the int64 boundary — acceptable for practical file sizes but technically imprecise. (2) The `knownGlobalKeys`/`knownDriveKeys` maps and their list counterparts are package-level mutable state (slices), though they are initialized once and never modified after init.
 
+
 ---
 
 ## 21. Delta Processor (Phase 4.2)
@@ -417,3 +418,13 @@ When `UploadChunk` fails, the upload session should be canceled to free server-s
 - **Suggested improvements**: Coverage is 88.9%. The uncovered paths are error returns from `store.MaterializePath`, `store.CascadePathUpdate`, `store.SaveDeltaToken`, and secondary error paths in `handleFetchError` (DeleteDeltaToken/SetDeltaComplete failures). These could be covered with error injection in the mock store, but the paths are straightforward `fmt.Errorf` wrapping.
 - **Cross-package concerns**: The `DeltaProcessor` depends on the `Store` interface defined in `types.go` (Agent A's domain). The mock store in tests implements the full interface with panics on unused methods. If Agent A changes the `Store` interface, the mock must be updated.
 - **Code smells noticed**: (1) The `convertGraphItem` function sets `Size = Int64Ptr(0)` for non-deleted items with zero size, which is technically a valid file size (empty file) but could be confused with "missing data" in other contexts. The nullable `Size` field semantics need clear documentation. (2) `NowNano()` is called from within the processor (non-injectable), making tests time-sensitive for exact timestamp assertions — tests use `Greater(t, ..., 0)` instead of exact matching, which is fine.
+
+---
+
+## 23. Filter Engine (Phase 4.4)
+- **Pivots**: `config.parseSize` is unexported so had to duplicate size parsing logic locally rather than modifying config package (owned by Agent E). This duplication should be resolved post-merge by exporting `ParseSize`.
+- **Issues found**: (1) "." path component was rejected by OneDrive name validation (trailing dot check). Fixed by skipping "." and ".." in component validation. (2) Path length tests used single-component paths that hit the 255-byte name limit before the 400-char path limit. Fixed by using multi-component paths. (3) `FilterConfig` is 112 bytes — gocritic `hugeParam` required passing by pointer.
+- **Linter surprises**: `gocritic:emptyStringTest` prefers `name != ""` over `len(name) > 0`. `gocritic:hugeParam` triggers at 112 bytes for `FilterConfig` struct, requiring pointer parameter.
+- **Suggested improvements**: Export `config.parseSize` to eliminate duplication between config and sync packages. Consider a shared `nameutil` package if name validation logic is needed by multiple consumers.
+- **Cross-package concerns**: The `NewFilterEngine` constructor accepts `*config.FilterConfig` — callers must pass a pointer. The `types.go` `NewFilterConfig` helper already returns `config.FilterConfig` by value, so callers will need `&sync.NewFilterConfig(resolved)` or the helper should return a pointer.
+- **Code smells noticed**: (1) Size parsing duplication between `config/size.go` and `sync/filter.go` — same algorithm, different constant names to avoid conflicts. (2) The `matchesSkipPattern` function uses package-level `slog.Warn` instead of the engine's logger, because it's a standalone function. Consider making it a method.

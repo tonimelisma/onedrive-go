@@ -6,6 +6,7 @@ toolchain go1.24.4
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.10.0
 	golang.org/x/oauth2 v0.30.0
