@@ -158,7 +158,7 @@ func checkTokenState(account string, driveIDs []string, logger *slog.Logger) str
 	tokenID := canonicalIDForToken(account, driveIDs)
 	if tokenID == "" {
 		// No drives in config — probe the filesystem for an existing token.
-		tokenID = findTokenFallback(account)
+		tokenID = findTokenFallback(account, logger)
 	}
 
 	tokenPath := config.DriveTokenPath(tokenID)

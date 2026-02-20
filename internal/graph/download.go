@@ -29,9 +29,13 @@ func (c *Client) Download(ctx context.Context, driveID, itemID string, w io.Writ
 	}
 
 	if item.DownloadURL == "" {
-		c.logger.Error("item has no download URL",
+		// Warn, not Error: this is expected for folders, OneNote packages, and
+		// zero-byte files — not a terminal failure requiring investigation.
+		c.logger.Warn("item has no download URL",
 			slog.String("drive_id", driveID),
 			slog.String("item_id", itemID),
+			slog.Bool("is_folder", item.IsFolder),
+			slog.Bool("is_package", item.IsPackage),
 		)
 
 		return 0, ErrNoDownloadURL
@@ -75,6 +79,8 @@ func (c *Client) downloadFromURL(ctx context.Context, url string, w io.Writer) (
 	if resp.StatusCode != http.StatusOK {
 		c.logger.Error("download returned non-200 status",
 			slog.Int("status", resp.StatusCode),
+			slog.Int64("content_length", resp.ContentLength),
+			slog.String("content_type", resp.Header.Get("Content-Type")),
 		)
 
 		return 0, fmt.Errorf("graph: download failed with status %d", resp.StatusCode)

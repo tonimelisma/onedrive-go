@@ -100,12 +100,15 @@ func driveTypeFromCanonicalID(id string) string {
 // findTokenFallback tries personal and business canonical ID prefixes
 // and returns whichever one has a token file on disk. Falls back to
 // "personal:" if neither exists, since personal is the most common case.
-func findTokenFallback(account string) string {
+// Logs the probe results so --verbose reveals which token path was selected.
+func findTokenFallback(account string, logger *slog.Logger) string {
 	personalID := "personal:" + account
 
 	personalPath := config.DriveTokenPath(personalID)
 	if personalPath != "" {
 		if _, err := os.Stat(personalPath); err == nil {
+			logger.Debug("token fallback: found personal token", "path", personalPath)
+
 			return personalID
 		}
 	}
@@ -115,11 +118,15 @@ func findTokenFallback(account string) string {
 	businessPath := config.DriveTokenPath(businessID)
 	if businessPath != "" {
 		if _, err := os.Stat(businessPath); err == nil {
+			logger.Debug("token fallback: found business token", "path", businessPath)
+
 			return businessID
 		}
 	}
 
 	// Default to personal if neither exists (best guess for most users).
+	logger.Debug("token fallback: no token found, defaulting to personal", "account", account)
+
 	return personalID
 }
 
@@ -222,6 +229,16 @@ func discoverAccount(ctx context.Context, ts graph.TokenSource, logger *slog.Log
 	driveType := drives[0].DriveType
 	logger.Info("discovered drive type", "drive_type", driveType)
 
+	// Warn on unknown drive types — don't block login, but flag it for debugging.
+	// Known types: "personal", "business", "documentLibrary" (SharePoint).
+	switch driveType {
+	case "personal", "business", "documentLibrary": //nolint:goconst // case labels are self-documenting
+		// expected
+	default:
+		logger.Warn("unknown drive type from Graph API, proceeding anyway",
+			"drive_type", driveType)
+	}
+
 	// GET /me/organization -> org display name (business only)
 	var orgName string
 
@@ -282,9 +299,12 @@ func driveExistsInConfig(cfgPath, canonicalID string) (bool, error) {
 
 // collectExistingSyncDirs reads the config file and returns all configured sync_dir values.
 // Used for collision detection when picking a default sync directory.
-func collectExistingSyncDirs(cfgPath string) []string {
+func collectExistingSyncDirs(cfgPath string, logger *slog.Logger) []string {
 	cfg, err := config.LoadOrDefault(cfgPath)
 	if err != nil {
+		logger.Warn("failed to load config for sync dir collision check",
+			"config_path", cfgPath, "error", err)
+
 		return nil
 	}
 
@@ -301,7 +321,7 @@ func collectExistingSyncDirs(cfgPath string) []string {
 // writeLoginConfig creates or appends to the config file with a new drive section,
 // and prints the appropriate login success message.
 func writeLoginConfig(cfgPath, canonicalID, driveType, email, orgName string, logger *slog.Logger) error {
-	existingDirs := collectExistingSyncDirs(cfgPath)
+	existingDirs := collectExistingSyncDirs(cfgPath, logger)
 	syncDir := config.DefaultSyncDir(driveType, orgName, existingDirs)
 
 	logger.Info("writing config", "config_path", cfgPath, "canonical_id", canonicalID, "sync_dir", syncDir)
@@ -427,7 +447,7 @@ func executeLogout(cfg *config.Config, cfgPath, account string, purge bool, logg
 	tokenCanonicalID := canonicalIDForToken(account, affected)
 	if tokenCanonicalID == "" {
 		// No drives in config — probe the filesystem for an existing token.
-		tokenCanonicalID = findTokenFallback(account)
+		tokenCanonicalID = findTokenFallback(account, logger)
 	}
 
 	tokenPath := config.DriveTokenPath(tokenCanonicalID)
