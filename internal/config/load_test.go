@@ -363,3 +363,25 @@ func TestResolve_InvalidConfigFile(t *testing.T) {
 	)
 	require.Error(t, err)
 }
+
+func TestResolve_NoConfigFile_CustomProfileName(t *testing.T) {
+	// Regression test: --profile personal with no config file must not fail.
+	// The synthetic profile should use the requested name, not just "default".
+	resolved, err := Resolve(
+		EnvOverrides{ConfigPath: "/nonexistent/config.toml"},
+		CLIOverrides{Profile: "personal"},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "personal", resolved.Name)
+	assert.Equal(t, AccountTypePersonal, resolved.AccountType)
+}
+
+func TestResolve_NoConfigFile_EnvProfileName(t *testing.T) {
+	// Env-specified profile should also work without a config file.
+	resolved, err := Resolve(
+		EnvOverrides{ConfigPath: "/nonexistent/config.toml", Profile: "work"},
+		CLIOverrides{},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "work", resolved.Name)
+}

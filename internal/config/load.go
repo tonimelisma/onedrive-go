@@ -64,21 +64,27 @@ func Resolve(env EnvOverrides, cli CLIOverrides) (*ResolvedProfile, error) {
 		return nil, err
 	}
 
-	// 3. If no profiles defined, create synthetic default for out-of-box use.
-	// This lets users run "onedrive-go sync" without any config file at all.
+	// 3. Resolve profile name: CLI > env > "default"
+	profileName := cli.Profile
+	if profileName == "" {
+		profileName = env.Profile
+	}
+
+	// 4. If no profiles defined, create a synthetic profile for out-of-box use.
+	// Use the requested profile name (or "default") so that --profile works
+	// without a config file — important for CI and first-run experience.
 	if len(cfg.Profiles) == 0 {
+		syntheticName := defaultProfileName
+		if profileName != "" {
+			syntheticName = profileName
+		}
+
 		cfg.Profiles = map[string]Profile{
-			"default": {
+			syntheticName: {
 				AccountType: AccountTypePersonal,
 				SyncDir:     "~/OneDrive",
 			},
 		}
-	}
-
-	// 4. Resolve profile name: CLI > env > "default"
-	profileName := cli.Profile
-	if profileName == "" {
-		profileName = env.Profile
 	}
 
 	// 5. Merge global + profile
