@@ -86,21 +86,6 @@ func runCLI(t *testing.T, args ...string) (string, string) {
 	return stdout.String(), stderr.String()
 }
 
-func runCLIExpectError(t *testing.T, args ...string) (string, string) {
-	t.Helper()
-
-	fullArgs := append([]string{"--profile", profile}, args...)
-	cmd := exec.Command(binaryPath, fullArgs...)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	_ = cmd.Run()
-
-	return stdout.String(), stderr.String()
-}
-
 func TestE2E_RoundTrip(t *testing.T) {
 	testFolder := fmt.Sprintf("onedrive-go-e2e-%d", time.Now().UnixNano())
 	testSubfolder := testFolder + "/subfolder"

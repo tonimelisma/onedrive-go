@@ -3,9 +3,17 @@ package main
 import (
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 )
+
+// statusf prints a status message to stderr unless --quiet is set.
+func statusf(format string, args ...any) {
+	if !flagQuiet {
+		fmt.Fprintf(os.Stderr, format, args...)
+	}
+}
 
 // Size unit constants for human-readable formatting.
 const (

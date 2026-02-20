@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -98,31 +99,34 @@ func splitParentAndName(path string) (string, string) {
 }
 
 // clientAndDrive loads a saved token, creates a Graph client, and discovers
-// the user's primary drive ID.
-func clientAndDrive(ctx context.Context) (*graph.Client, string, error) {
+// the user's primary drive ID. Returns the client, drive ID, and logger for
+// callers that need to log additional events.
+func clientAndDrive(ctx context.Context) (*graph.Client, string, *slog.Logger, error) {
 	logger := buildLogger()
 
 	ts, err := graph.TokenSourceFromProfile(ctx, flagProfile, logger)
 	if err != nil {
 		if errors.Is(err, graph.ErrNotLoggedIn) {
-			return nil, "", fmt.Errorf("not logged in — run 'onedrive-go login' first")
+			return nil, "", nil, fmt.Errorf("not logged in — run 'onedrive-go login' first")
 		}
 
-		return nil, "", err
+		return nil, "", nil, err
 	}
 
 	client := graph.NewClient(graph.DefaultBaseURL, http.DefaultClient, ts, logger)
 
 	drives, err := client.Drives(ctx)
 	if err != nil {
-		return nil, "", fmt.Errorf("discovering drive: %w", err)
+		return nil, "", nil, fmt.Errorf("discovering drive: %w", err)
 	}
 
 	if len(drives) == 0 {
-		return nil, "", fmt.Errorf("no drives found for this account")
+		return nil, "", nil, fmt.Errorf("no drives found for this account")
 	}
 
-	return client, drives[0].ID, nil
+	logger.Debug("discovered primary drive", "drive_id", drives[0].ID)
+
+	return client, drives[0].ID, logger, nil
 }
 
 // resolveItem resolves a remote path to an Item.
@@ -155,10 +159,12 @@ func runLs(_ *cobra.Command, args []string) error {
 
 	ctx := context.Background()
 
-	client, driveID, err := clientAndDrive(ctx)
+	client, driveID, logger, err := clientAndDrive(ctx)
 	if err != nil {
 		return err
 	}
+
+	logger.Debug("ls", "path", remotePath)
 
 	items, err := listItems(ctx, client, driveID, remotePath)
 	if err != nil {
@@ -230,10 +236,12 @@ func runGet(_ *cobra.Command, args []string) error {
 	remotePath := args[0]
 	ctx := context.Background()
 
-	client, driveID, err := clientAndDrive(ctx)
+	client, driveID, logger, err := clientAndDrive(ctx)
 	if err != nil {
 		return err
 	}
+
+	logger.Debug("get", "remote_path", remotePath)
 
 	item, err := resolveItem(ctx, client, driveID, remotePath)
 	if err != nil {
@@ -260,7 +268,8 @@ func runGet(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("downloading %q: %w", remotePath, err)
 	}
 
-	fmt.Fprintf(os.Stderr, "Downloaded %s (%s)\n", localPath, formatSize(n))
+	logger.Debug("download complete", "local_path", localPath, "bytes", n)
+	statusf("Downloaded %s (%s)\n", localPath, formatSize(n))
 
 	return nil
 }
@@ -284,10 +293,12 @@ func runPut(_ *cobra.Command, args []string) error {
 		remotePath = args[1]
 	}
 
-	client, driveID, err := clientAndDrive(ctx)
+	client, driveID, logger, err := clientAndDrive(ctx)
 	if err != nil {
 		return err
 	}
+
+	logger.Debug("put", "local_path", localPath, "remote_path", remotePath, "size", fi.Size())
 
 	parentPath, name := splitParentAndName(remotePath)
 
@@ -306,14 +317,15 @@ func runPut(_ *cobra.Command, args []string) error {
 	if fi.Size() <= maxSimpleUploadSize {
 		_, err = client.SimpleUpload(ctx, driveID, parentItem.ID, name, f, fi.Size())
 	} else {
-		err = doChunkedUpload(ctx, client, driveID, parentItem.ID, name, f, fi.Size())
+		err = doChunkedUpload(ctx, client, driveID, parentItem.ID, name, f, fi.Size(), logger)
 	}
 
 	if err != nil {
 		return fmt.Errorf("uploading %q: %w", remotePath, err)
 	}
 
-	fmt.Fprintf(os.Stderr, "Uploaded %s (%s)\n", remotePath, formatSize(fi.Size()))
+	logger.Debug("upload complete", "remote_path", remotePath, "size", fi.Size())
+	statusf("Uploaded %s (%s)\n", remotePath, formatSize(fi.Size()))
 
 	return nil
 }
@@ -321,7 +333,7 @@ func runPut(_ *cobra.Command, args []string) error {
 func doChunkedUpload(
 	ctx context.Context, client *graph.Client,
 	driveID, parentID, name string,
-	r io.ReaderAt, total int64,
+	r io.ReaderAt, total int64, logger *slog.Logger,
 ) error {
 	session, err := client.CreateUploadSession(ctx, driveID, parentID, name, total)
 	if err != nil {
@@ -343,19 +355,29 @@ func doChunkedUpload(
 		}
 
 		offset += length
+
+		logger.Debug("chunk uploaded", "offset", offset, "total", total)
+		statusf("Uploading: %s / %s\n", formatSize(offset), formatSize(total))
 	}
 
 	return nil
+}
+
+// rmJSONOutput is the JSON output schema for the rm command.
+type rmJSONOutput struct {
+	Deleted string `json:"deleted"`
 }
 
 func runRm(_ *cobra.Command, args []string) error {
 	remotePath := args[0]
 	ctx := context.Background()
 
-	client, driveID, err := clientAndDrive(ctx)
+	client, driveID, logger, err := clientAndDrive(ctx)
 	if err != nil {
 		return err
 	}
+
+	logger.Debug("rm", "path", remotePath)
 
 	item, err := resolveItem(ctx, client, driveID, remotePath)
 	if err != nil {
@@ -366,9 +388,24 @@ func runRm(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("deleting %q: %w", remotePath, err)
 	}
 
-	fmt.Fprintf(os.Stderr, "Deleted %s\n", remotePath)
+	logger.Debug("delete complete", "path", remotePath, "item_id", item.ID)
+
+	if flagJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+
+		return enc.Encode(rmJSONOutput{Deleted: remotePath})
+	}
+
+	statusf("Deleted %s\n", remotePath)
 
 	return nil
+}
+
+// mkdirJSONOutput is the JSON output schema for the mkdir command.
+type mkdirJSONOutput struct {
+	Created string `json:"created"`
+	ID      string `json:"id"`
 }
 
 func runMkdir(_ *cobra.Command, args []string) error {
@@ -379,10 +416,12 @@ func runMkdir(_ *cobra.Command, args []string) error {
 
 	ctx := context.Background()
 
-	client, driveID, err := clientAndDrive(ctx)
+	client, driveID, logger, err := clientAndDrive(ctx)
 	if err != nil {
 		return err
 	}
+
+	logger.Debug("mkdir", "path", remotePath)
 
 	// Walk path segments, creating each missing folder.
 	segments := strings.Split(remotePath, "/")
@@ -416,7 +455,16 @@ func runMkdir(_ *cobra.Command, args []string) error {
 		parentID = item.ID
 	}
 
-	fmt.Fprintf(os.Stderr, "Created %s\n", remotePath)
+	logger.Debug("mkdir complete", "path", remotePath, "folder_id", parentID)
+
+	if flagJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+
+		return enc.Encode(mkdirJSONOutput{Created: remotePath, ID: parentID})
+	}
+
+	statusf("Created %s\n", remotePath)
 
 	return nil
 }
@@ -425,10 +473,12 @@ func runStat(_ *cobra.Command, args []string) error {
 	remotePath := args[0]
 	ctx := context.Background()
 
-	client, driveID, err := clientAndDrive(ctx)
+	client, driveID, logger, err := clientAndDrive(ctx)
 	if err != nil {
 		return err
 	}
+
+	logger.Debug("stat", "path", remotePath)
 
 	item, err := resolveItem(ctx, client, driveID, remotePath)
 	if err != nil {
