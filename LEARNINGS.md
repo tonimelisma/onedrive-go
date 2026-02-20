@@ -452,6 +452,29 @@ When `UploadChunk` fails, the upload session should be canceled to free server-s
 
 ---
 
+## 22. Local Scanner (Phase 4.3)
+
+### NFC normalization must use separate filesystem and DB paths
+On macOS (APFS), the filesystem normalizes filenames transparently, so NFC and NFD lookups resolve to the same file. On Linux (ext4), filenames are stored as exact bytes. When the scanner NFC-normalizes an NFD filename for the DB path and then uses that NFC path for `os.Stat()`, the stat fails on Linux because the file is at the NFD path. Fix: thread two separate paths through the walk — `fsRelPath` (original filesystem bytes for I/O) and `dbRelPath` (NFC-normalized for database storage). Also track visited DB paths during the walk so orphan detection doesn't produce false positives from NFC/NFD mismatches.
+
+### Mtime fast-path requires nil-check on stored LocalMtime
+When an existing item has a nil `LocalMtime` (e.g., after a DB migration or incomplete initial sync), comparing `TruncateToSeconds(nil)` would panic. The scanner checks for nil before the fast-path comparison, falling through to the slow path (hash computation) when mtime is unavailable.
+
+### DirEntry.Info() can fail independently of ReadDir
+`os.ReadDir` returns `DirEntry` values that defer their `Info()` call. The `Info()` call can fail even though `ReadDir` succeeded (e.g., file deleted between readdir and stat). The scanner handles this as a skip-and-warn rather than a fatal error.
+
+### os.ReadDir vs filepath.Walk for scanner control
+Using `os.ReadDir` + manual recursion (instead of `filepath.Walk` or `filepath.WalkDir`) gives the scanner full control over entry ordering, filter short-circuiting, and error handling per-directory. This enables skipping entire subtrees when a directory is filtered, without walking into them first.
+
+- **Pivots**: NFC normalization approach changed from single-path to dual-path (fsRelPath/dbRelPath) after Linux CI failure. Original approach used NFC path for both I/O and DB, which failed on Linux ext4 where NFD bytes are stored as-is.
+- **Issues found**: staticcheck caught an unused `segments` slice append in a test — fixed by removing the variable.
+- **Linter surprises**: The `nilnil` return pattern for "skip this entry" in `resolveSymlink` required a `//nolint:nilnil` directive. This is the idiomatic pattern when a function returns `(value, error)` and both nil means "nothing to do, no error."
+- **Suggested improvements**: (1) The scanner currently runs single-threaded; section 4.4 describes a checker pool for parallel hash computation that would be a future enhancement. (2) Directory tracking (section 4.5) is not yet implemented — directories are walked but not stored as items.
+- **Cross-package concerns**: None. The scanner only depends on Store and Filter interfaces, which other agents are implementing concurrently.
+- **Code smells noticed**: (1) The `validateEntry` function does both filtering and validation in one pass, which means the filter is consulted even for entries that would fail name validation. The order is intentional (filter first for performance) but could be surprising. (2) The `oneDriveReservedNames` map is package-level mutable state (though initialized once and never modified).
+
+---
+
 ## 23. Filter Engine (Phase 4.4)
 - **Pivots**: `config.parseSize` is unexported so had to duplicate size parsing logic locally rather than modifying config package (owned by Agent E). This duplication should be resolved post-merge by exporting `ParseSize`.
 - **Issues found**: (1) "." path component was rejected by OneDrive name validation (trailing dot check). Fixed by skipping "." and ".." in component validation. (2) Path length tests used single-component paths that hit the 255-byte name limit before the 400-char path limit. Fixed by using multi-component paths. (3) `FilterConfig` is 112 bytes — gocritic `hugeParam` required passing by pointer.
