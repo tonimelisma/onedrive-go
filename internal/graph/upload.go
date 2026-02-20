@@ -25,12 +25,26 @@ type createUploadSessionRequest struct {
 }
 
 type uploadSessionItem struct {
-	ConflictBehavior string `json:"@microsoft.graph.conflictBehavior"` //nolint:tagliatelle // Graph API annotation key
+	ConflictBehavior string          `json:"@microsoft.graph.conflictBehavior"` //nolint:tagliatelle // Graph API annotation key
+	FileSystemInfo   *fileSystemInfo `json:"fileSystemInfo,omitempty"`
+}
+
+// fileSystemInfo preserves local timestamps on upload, preventing OneDrive
+// from overwriting them with server-side receipt time (double-versioning).
+type fileSystemInfo struct {
+	LastModifiedDateTime string `json:"lastModifiedDateTime"`
 }
 
 type uploadSessionResponse struct {
 	UploadURL          string `json:"uploadUrl"`
 	ExpirationDateTime string `json:"expirationDateTime"`
+}
+
+// uploadSessionStatusResponse is the JSON shape returned when querying an upload session.
+type uploadSessionStatusResponse struct {
+	UploadURL          string   `json:"uploadUrl"`
+	ExpirationDateTime string   `json:"expirationDateTime"`
+	NextExpectedRanges []string `json:"nextExpectedRanges"`
 }
 
 // SimpleUpload uploads a file up to 4 MB using a single PUT request.
@@ -66,8 +80,10 @@ func (c *Client) SimpleUpload(
 
 // CreateUploadSession creates a resumable upload session for a file.
 // The returned UploadSession contains a pre-authenticated upload URL.
+// When mtime is non-zero, fileSystemInfo is included in the request to
+// preserve the local modification timestamp on the server.
 func (c *Client) CreateUploadSession(
-	ctx context.Context, driveID, parentID, name string, size int64,
+	ctx context.Context, driveID, parentID, name string, size int64, mtime time.Time,
 ) (*UploadSession, error) {
 	c.logger.Info("creating upload session",
 		slog.String("drive_id", driveID),
@@ -78,9 +94,14 @@ func (c *Client) CreateUploadSession(
 
 	path := fmt.Sprintf("/drives/%s/items/%s:/%s:/createUploadSession", driveID, parentID, name)
 
-	reqBody := createUploadSessionRequest{
-		Item: uploadSessionItem{ConflictBehavior: "replace"},
+	item := uploadSessionItem{ConflictBehavior: "replace"}
+	if !mtime.IsZero() {
+		item.FileSystemInfo = &fileSystemInfo{
+			LastModifiedDateTime: mtime.UTC().Format(time.RFC3339),
+		}
 	}
+
+	reqBody := createUploadSessionRequest{Item: item}
 
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
@@ -93,29 +114,7 @@ func (c *Client) CreateUploadSession(
 	}
 	defer resp.Body.Close()
 
-	var usr uploadSessionResponse
-	if decErr := json.NewDecoder(resp.Body).Decode(&usr); decErr != nil {
-		return nil, fmt.Errorf("graph: decoding upload session response: %w", decErr)
-	}
-
-	expTime, parseErr := time.Parse(time.RFC3339, usr.ExpirationDateTime)
-	if parseErr != nil {
-		c.logger.Warn("invalid upload session expiration, using zero time",
-			slog.String("raw", usr.ExpirationDateTime),
-			slog.String("error", parseErr.Error()),
-		)
-	}
-
-	session := &UploadSession{
-		UploadURL:      usr.UploadURL,
-		ExpirationTime: expTime,
-	}
-
-	c.logger.Debug("upload session created",
-		slog.Time("expires", session.ExpirationTime),
-	)
-
-	return session, nil
+	return c.parseUploadSessionResponse(resp)
 }
 
 // UploadChunk uploads a chunk of data to an upload session.
@@ -186,6 +185,17 @@ func (c *Client) handleChunkResponse(resp *http.Response) (*Item, error) {
 		)
 
 		return &item, nil
+
+	case http.StatusRequestedRangeNotSatisfiable:
+		// 416 means the server has different byte ranges than what we sent.
+		// Callers should use QueryUploadSession to discover accepted ranges.
+		if _, drainErr := io.Copy(io.Discard, resp.Body); drainErr != nil {
+			return nil, fmt.Errorf("graph: draining 416 response body: %w", drainErr)
+		}
+
+		c.logger.Warn("upload chunk returned 416 Range Not Satisfiable")
+
+		return nil, ErrRangeNotSatisfiable
 
 	default:
 		body, _ := io.ReadAll(resp.Body) //nolint:errcheck // best-effort read for error message
@@ -291,4 +301,95 @@ func (c *Client) doRawUpload(
 	}
 
 	return resp, nil
+}
+
+// QueryUploadSession queries an upload session's status to determine
+// which byte ranges have been accepted. Used for resume after interruption.
+// The session URL is pre-authenticated, so no Authorization header is sent.
+func (c *Client) QueryUploadSession(
+	ctx context.Context, session *UploadSession,
+) (*UploadSessionStatus, error) {
+	c.logger.Info("querying upload session status")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, session.UploadURL, http.NoBody)
+	if err != nil {
+		return nil, fmt.Errorf("graph: creating query session request: %w", err)
+	}
+
+	req.Header.Set("User-Agent", userAgent)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		c.logger.Error("query upload session request failed",
+			slog.String("error", err.Error()),
+		)
+
+		return nil, fmt.Errorf("graph: query upload session request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body) //nolint:errcheck // best-effort read for error message
+
+		sentinel := classifyStatus(resp.StatusCode)
+
+		return nil, &GraphError{
+			StatusCode: resp.StatusCode,
+			RequestID:  resp.Header.Get("request-id"),
+			Message:    string(body),
+			Err:        sentinel,
+		}
+	}
+
+	var ssr uploadSessionStatusResponse
+	if decErr := json.NewDecoder(resp.Body).Decode(&ssr); decErr != nil {
+		return nil, fmt.Errorf("graph: decoding session status response: %w", decErr)
+	}
+
+	expTime, parseErr := time.Parse(time.RFC3339, ssr.ExpirationDateTime)
+	if parseErr != nil {
+		c.logger.Warn("invalid session status expiration, using zero time",
+			slog.String("raw", ssr.ExpirationDateTime),
+			slog.String("error", parseErr.Error()),
+		)
+	}
+
+	status := &UploadSessionStatus{
+		UploadURL:          ssr.UploadURL,
+		ExpirationTime:     expTime,
+		NextExpectedRanges: ssr.NextExpectedRanges,
+	}
+
+	c.logger.Debug("upload session status",
+		slog.Int("pending_ranges", len(status.NextExpectedRanges)),
+	)
+
+	return status, nil
+}
+
+// parseUploadSessionResponse parses the HTTP response from CreateUploadSession.
+func (c *Client) parseUploadSessionResponse(resp *http.Response) (*UploadSession, error) {
+	var usr uploadSessionResponse
+	if decErr := json.NewDecoder(resp.Body).Decode(&usr); decErr != nil {
+		return nil, fmt.Errorf("graph: decoding upload session response: %w", decErr)
+	}
+
+	expTime, parseErr := time.Parse(time.RFC3339, usr.ExpirationDateTime)
+	if parseErr != nil {
+		c.logger.Warn("invalid upload session expiration, using zero time",
+			slog.String("raw", usr.ExpirationDateTime),
+			slog.String("error", parseErr.Error()),
+		)
+	}
+
+	session := &UploadSession{
+		UploadURL:      usr.UploadURL,
+		ExpirationTime: expTime,
+	}
+
+	c.logger.Debug("upload session created",
+		slog.Time("expires", session.ExpirationTime),
+	)
+
+	return session, nil
 }

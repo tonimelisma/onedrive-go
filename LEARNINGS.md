@@ -326,3 +326,17 @@ Even though test files are exempt from `funlen`, decomposing the `TestE2E_EdgeCa
 
 ### Build tag isolation is reliable
 Files with `//go:build e2e` are completely excluded from `go build ./...` and `go test ./...`. The compilation check `go test -tags e2e -c -o /dev/null ./e2e/...` catches syntax/type errors without requiring live API access. This two-tier verification (compile without API, run with API) is the right pattern for E2E tests.
+
+## 16. Upload Session Resume and fileSystemInfo (B-015, B-016)
+
+### fileSystemInfo prevents double-versioning on upload
+When uploading via `CreateUploadSession`, OneDrive sets `lastModifiedDateTime` to the server-side receipt time, not the local file's modification time. Including `fileSystemInfo` in the upload session request preserves local timestamps. Use `omitempty` on the pointer field so zero-value `mtime` produces a clean JSON body with no `fileSystemInfo` key.
+
+### 416 Range Not Satisfiable is a recoverable condition
+A 416 from an upload chunk means the server's byte ranges disagree with what the client sent. The correct response is to call `QueryUploadSession` (GET on the session URL) to discover `nextExpectedRanges` and resume from there. This is not a terminal error — it's the API's way of telling the client to re-sync its upload offset.
+
+### Upload session URLs are pre-authenticated
+Upload session URLs (for chunks, queries, and cancellations) include embedded auth tokens. No `Authorization` header should be sent — these requests bypass the normal auth flow. The `httpClient.Do` path (not `c.Do`) is the correct choice for all session URL requests.
+
+### Extract shared parsing logic into helpers
+`parseUploadSessionResponse` was extracted from `CreateUploadSession` to share the response parsing logic. This keeps methods focused and allows future callers (e.g., session refresh) to reuse the same parsing without duplication.

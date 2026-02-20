@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -323,7 +324,7 @@ func runPut(_ *cobra.Command, args []string) error {
 	if fi.Size() <= maxSimpleUploadSize {
 		_, err = client.SimpleUpload(ctx, driveID, parentItem.ID, name, f, fi.Size())
 	} else {
-		err = doChunkedUpload(ctx, client, driveID, parentItem.ID, name, f, fi.Size(), logger)
+		err = doChunkedUpload(ctx, client, driveID, parentItem.ID, name, f, fi.Size(), fi.ModTime(), logger)
 	}
 
 	if err != nil {
@@ -339,9 +340,9 @@ func runPut(_ *cobra.Command, args []string) error {
 func doChunkedUpload(
 	ctx context.Context, client *graph.Client,
 	driveID, parentID, name string,
-	r io.ReaderAt, total int64, logger *slog.Logger,
+	r io.ReaderAt, total int64, mtime time.Time, logger *slog.Logger,
 ) error {
-	session, err := client.CreateUploadSession(ctx, driveID, parentID, name, total)
+	session, err := client.CreateUploadSession(ctx, driveID, parentID, name, total, mtime)
 	if err != nil {
 		return err
 	}

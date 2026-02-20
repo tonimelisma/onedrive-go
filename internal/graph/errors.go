@@ -11,16 +11,17 @@ import (
 // Sentinel errors for HTTP status code classification.
 // Use errors.Is(err, graph.ErrNotFound) to check.
 var (
-	ErrBadRequest   = errors.New("graph: bad request")
-	ErrUnauthorized = errors.New("graph: unauthorized")
-	ErrForbidden    = errors.New("graph: forbidden")
-	ErrNotFound     = errors.New("graph: not found")
-	ErrConflict     = errors.New("graph: conflict")
-	ErrGone         = errors.New("graph: resource gone")
-	ErrThrottled    = errors.New("graph: throttled")
-	ErrLocked       = errors.New("graph: resource locked")
-	ErrServerError  = errors.New("graph: server error")
-	ErrNotLoggedIn  = errors.New("graph: not logged in")
+	ErrBadRequest          = errors.New("graph: bad request")
+	ErrUnauthorized        = errors.New("graph: unauthorized")
+	ErrForbidden           = errors.New("graph: forbidden")
+	ErrNotFound            = errors.New("graph: not found")
+	ErrConflict            = errors.New("graph: conflict")
+	ErrGone                = errors.New("graph: resource gone")
+	ErrThrottled           = errors.New("graph: throttled")
+	ErrLocked              = errors.New("graph: resource locked")
+	ErrRangeNotSatisfiable = errors.New("graph: range not satisfiable")
+	ErrServerError         = errors.New("graph: server error")
+	ErrNotLoggedIn         = errors.New("graph: not logged in")
 )
 
 // GraphError wraps a sentinel error with HTTP status code, request ID,
@@ -64,6 +65,8 @@ func classifyStatus(code int) error {
 		return ErrThrottled
 	case http.StatusLocked:
 		return ErrLocked
+	case http.StatusRequestedRangeNotSatisfiable:
+		return ErrRangeNotSatisfiable
 	default:
 		if code >= http.StatusInternalServerError {
 			return ErrServerError
