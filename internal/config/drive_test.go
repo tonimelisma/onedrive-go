@@ -41,6 +41,26 @@ func TestMatchDrive_NoDrives_Error(t *testing.T) {
 	assert.Contains(t, err.Error(), "no drives configured")
 }
 
+func TestMatchDrive_NoDrives_CanonicalSelector(t *testing.T) {
+	// When no drives are configured but the selector looks like a canonical ID,
+	// matchDrive should return the selector as the canonical ID with an empty Drive.
+	// This supports zero-config CLI usage (e.g., --drive personal:user@example.com).
+	cfg := DefaultConfig()
+
+	id, _, err := matchDrive(cfg, "personal:toni@outlook.com")
+	require.NoError(t, err)
+	assert.Equal(t, "personal:toni@outlook.com", id)
+}
+
+func TestMatchDrive_NoDrives_NonCanonicalSelector_Error(t *testing.T) {
+	// A non-canonical selector (no ":") should still fail when no drives configured.
+	cfg := DefaultConfig()
+
+	_, _, err := matchDrive(cfg, "home")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no drives configured")
+}
+
 func TestMatchDrive_ExactCanonicalID(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Drives["personal:toni@outlook.com"] = Drive{SyncDir: "~/OneDrive"}

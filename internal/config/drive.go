@@ -39,6 +39,13 @@ type ResolvedDrive struct {
 // If selector is empty, auto-selects when exactly one drive is configured.
 func matchDrive(cfg *Config, selector string) (string, Drive, error) {
 	if len(cfg.Drives) == 0 {
+		// If the selector looks like a canonical ID (contains ":"), allow
+		// zero-config usage. This supports CLI-only workflows where --drive
+		// provides a canonical ID and no config file exists.
+		if strings.Contains(selector, ":") {
+			return selector, Drive{}, nil
+		}
+
 		return "", Drive{}, fmt.Errorf("no drives configured — run 'onedrive-go login' to get started")
 	}
 
