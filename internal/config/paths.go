@@ -20,7 +20,8 @@ const configFileName = "config.toml"
 
 // DefaultConfigDir returns the platform-specific directory for config files.
 // On Linux, respects XDG_CONFIG_HOME (defaults to ~/.config/onedrive-go).
-// On macOS, uses ~/Library/Application Support/onedrive-go.
+// On macOS, uses ~/Library/Application Support/onedrive-go per Apple guidelines.
+// Other platforms fall back to ~/.config/onedrive-go.
 func DefaultConfigDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -49,7 +50,8 @@ func linuxConfigDir(home string) string {
 // DefaultDataDir returns the platform-specific directory for application data
 // (state databases, logs, tokens).
 // On Linux, respects XDG_DATA_HOME (defaults to ~/.local/share/onedrive-go).
-// On macOS, uses ~/Library/Application Support/onedrive-go.
+// On macOS, uses ~/Library/Application Support/onedrive-go (macOS convention
+// collapses config and data into one directory).
 func DefaultDataDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -77,7 +79,7 @@ func linuxDataDir(home string) string {
 
 // DefaultCacheDir returns the platform-specific directory for cache files.
 // On Linux, respects XDG_CACHE_HOME (defaults to ~/.cache/onedrive-go).
-// On macOS, uses ~/Library/Caches/onedrive-go.
+// On macOS, uses ~/Library/Caches/onedrive-go per Apple guidelines.
 func DefaultCacheDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -104,6 +106,8 @@ func linuxCacheDir(home string) string {
 }
 
 // DefaultConfigPath returns the full path to the default config file.
+// This is used as the fallback when neither ONEDRIVE_GO_CONFIG nor
+// --config is specified.
 func DefaultConfigPath() string {
 	dir := DefaultConfigDir()
 	if dir == "" {

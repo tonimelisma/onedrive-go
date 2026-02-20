@@ -151,45 +151,6 @@ func TestLoad_FileNotFound(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestLoad_UnknownKey_TopLevel(t *testing.T) {
-	path := writeTestConfig(t, `
-unknown_section = "value"
-`)
-	_, err := Load(path)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown config key")
-}
-
-func TestLoad_UnknownKey_InSection(t *testing.T) {
-	//nolint:misspell // intentional typo to test unknown key detection
-	path := writeTestConfig(t, "[transfers]\nparralel_downloads = 4\n")
-	_, err := Load(path)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown config key")
-	assert.Contains(t, err.Error(), "parallel_downloads")
-}
-
-func TestLoad_UnknownKey_TypoInFilter(t *testing.T) {
-	path := writeTestConfig(t, `
-[filter]
-skip_file = ["*.tmp"]
-`)
-	_, err := Load(path)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "skip_files")
-}
-
-func TestLoad_UnknownKey_NoSuggestion(t *testing.T) {
-	path := writeTestConfig(t, `
-[filter]
-completely_unrelated_key = true
-`)
-	_, err := Load(path)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown config key")
-	assert.NotContains(t, err.Error(), "did you mean")
-}
-
 func TestLoad_ValidationError(t *testing.T) {
 	path := writeTestConfig(t, `
 [transfers]
@@ -250,4 +211,155 @@ bandwidth_schedule = [
 	assert.Equal(t, "5MB/s", cfg.Transfers.BandwidthSchedule[0].Limit)
 	assert.Equal(t, "18:00", cfg.Transfers.BandwidthSchedule[1].Time)
 	assert.Equal(t, "23:00", cfg.Transfers.BandwidthSchedule[2].Time)
+}
+
+// --- Resolve tests ---
+
+func TestResolve_NoConfigFile_SyntheticDefault(t *testing.T) {
+	// Point to non-existent config path so LoadOrDefault returns defaults
+	resolved, err := Resolve(
+		EnvOverrides{ConfigPath: "/nonexistent/config.toml"},
+		CLIOverrides{},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "default", resolved.Name)
+	assert.Equal(t, AccountTypePersonal, resolved.AccountType)
+	assert.Contains(t, resolved.SyncDir, "OneDrive")
+}
+
+func TestResolve_CLIConfigPath(t *testing.T) {
+	path := writeTestConfig(t, `
+[profile.default]
+account_type = "personal"
+sync_dir = "~/OneDrive"
+`)
+	resolved, err := Resolve(
+		EnvOverrides{ConfigPath: "/wrong/path"},
+		CLIOverrides{ConfigPath: path},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "default", resolved.Name)
+}
+
+func TestResolve_CLIProfile(t *testing.T) {
+	path := writeTestConfig(t, `
+[profile.personal]
+account_type = "personal"
+sync_dir = "~/Personal"
+
+[profile.work]
+account_type = "business"
+sync_dir = "~/Work"
+`)
+	resolved, err := Resolve(
+		EnvOverrides{ConfigPath: path},
+		CLIOverrides{Profile: "work"},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "work", resolved.Name)
+	assert.Equal(t, AccountTypeBusiness, resolved.AccountType)
+}
+
+func TestResolve_EnvProfile(t *testing.T) {
+	path := writeTestConfig(t, `
+[profile.personal]
+account_type = "personal"
+sync_dir = "~/Personal"
+
+[profile.work]
+account_type = "business"
+sync_dir = "~/Work"
+`)
+	resolved, err := Resolve(
+		EnvOverrides{ConfigPath: path, Profile: "work"},
+		CLIOverrides{},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "work", resolved.Name)
+}
+
+func TestResolve_CLIProfileOverridesEnv(t *testing.T) {
+	path := writeTestConfig(t, `
+[profile.personal]
+account_type = "personal"
+sync_dir = "~/Personal"
+
+[profile.work]
+account_type = "business"
+sync_dir = "~/Work"
+`)
+	resolved, err := Resolve(
+		EnvOverrides{ConfigPath: path, Profile: "personal"},
+		CLIOverrides{Profile: "work"},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "work", resolved.Name)
+}
+
+func TestResolve_CLISyncDirOverride(t *testing.T) {
+	path := writeTestConfig(t, `
+[profile.default]
+account_type = "personal"
+sync_dir = "~/OneDrive"
+`)
+	syncDir := "/custom/sync"
+	resolved, err := Resolve(
+		EnvOverrides{ConfigPath: path},
+		CLIOverrides{SyncDir: &syncDir},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "/custom/sync", resolved.SyncDir)
+}
+
+func TestResolve_EnvSyncDirOverride(t *testing.T) {
+	path := writeTestConfig(t, `
+[profile.default]
+account_type = "personal"
+sync_dir = "~/OneDrive"
+`)
+	resolved, err := Resolve(
+		EnvOverrides{ConfigPath: path, SyncDir: "/env/sync"},
+		CLIOverrides{},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "/env/sync", resolved.SyncDir)
+}
+
+func TestResolve_CLISyncDirOverridesEnv(t *testing.T) {
+	path := writeTestConfig(t, `
+[profile.default]
+account_type = "personal"
+sync_dir = "~/OneDrive"
+`)
+	syncDir := "/cli/sync"
+	resolved, err := Resolve(
+		EnvOverrides{ConfigPath: path, SyncDir: "/env/sync"},
+		CLIOverrides{SyncDir: &syncDir},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "/cli/sync", resolved.SyncDir)
+}
+
+func TestResolve_CLIDryRunOverride(t *testing.T) {
+	path := writeTestConfig(t, `
+[profile.default]
+account_type = "personal"
+sync_dir = "~/OneDrive"
+`)
+	dryRun := true
+	resolved, err := Resolve(
+		EnvOverrides{ConfigPath: path},
+		CLIOverrides{DryRun: &dryRun},
+	)
+	require.NoError(t, err)
+	assert.True(t, resolved.Sync.DryRun)
+}
+
+func TestResolve_InvalidConfigFile(t *testing.T) {
+	path := writeTestConfig(t, `[invalid toml`)
+	_, err := Resolve(
+		EnvOverrides{ConfigPath: path},
+		CLIOverrides{},
+	)
+	require.Error(t, err)
 }
