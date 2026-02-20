@@ -44,7 +44,17 @@ Also present:
 - Test strategy (mocking approach, fixtures, test structure)
 - Any BACKLOG items that should be addressed in this increment
 
-### 1.4 Parallelization Analysis (MANDATORY)
+### 1.4 CI Impact Analysis
+
+If the increment changes anything that affects CI (token paths, secret naming, environment variables, workflow YAML, data directory locations, config file format):
+
+1. **List every CI artifact affected**: Key Vault secret names, GitHub variables, workflow steps, token file paths
+2. **Include infrastructure changes in the plan**: Don't defer Key Vault/GitHub variable updates to "after merge" — they are part of the increment. The orchestrator manages these directly via `az` CLI and `gh` CLI.
+3. **Ask the minimal-environment question**: "What happens when this code runs with no config file, no home directory customization, and only environment variables for input?" CI environments are stripped-down — never assume config files exist.
+4. **Include local validation step**: Plan must specify running `scripts/validate-ci-locally.sh` (or equivalent manual steps) before pushing CI-impacting changes.
+5. **Check test-strategy.md accuracy**: If the increment changes CI behavior, verify that test-strategy.md §6.1 and §10.x still match the actual workflow YAML. Update if stale.
+
+### 1.5 Parallelization Analysis (MANDATORY)
 
 Every plan MUST include a parallelization strategy. This is not optional.
 
@@ -58,7 +68,7 @@ Every plan MUST include a parallelization strategy. This is not optional.
 
 If work truly cannot be parallelized (single coherent change touching the same files throughout), state this explicitly with reasoning. But this should be rare.
 
-### 1.5 Plan Structure
+### 1.6 Plan Structure
 
 Every plan document must include:
 
@@ -73,7 +83,7 @@ Every plan document must include:
 | Risk Register | Known risks, mitigations, accepted risks (with human acknowledgment) |
 | Verification | Commands to validate the complete increment |
 
-### 1.6 Definition of Ready
+### 1.7 Definition of Ready
 
 A plan is ready for execution when ALL of:
 
@@ -84,10 +94,11 @@ A plan is ready for execution when ALL of:
 - [ ] Non-goals section written
 - [ ] Test strategy defined
 - [ ] Parallelization analysis complete (waves, file conflicts, worktrees)
+- [ ] CI impact analysis complete (if applicable — Key Vault, GitHub vars, workflow YAML, local validation)
 - [ ] Risk register written, risks acknowledged
 - [ ] Human has approved the plan
 
-### 1.7 Decision Log
+### 1.8 Decision Log
 
 After plan approval, write a brief summary:
 
@@ -262,6 +273,19 @@ If an agent encounters an issue that requires a non-trivial decision:
 3. Resume the agent with the human's decision
 
 Do NOT make the decision autonomously. Do NOT let the agent make it.
+
+**Operational tasks the orchestrator handles directly** (no escalation needed):
+- Azure Key Vault: `az keyvault secret set/download/list/show` — creating, updating, verifying secrets
+- GitHub variables: `gh variable set/get` — setting repository variables
+- CI workflow dispatch: `gh workflow run` — re-triggering workflows
+- Token validation: downloading tokens, checking JSON structure, verifying `whoami` works
+- Local CI validation: running `scripts/validate-ci-locally.sh`
+
+**Tasks that require the human**:
+- One-time Azure infrastructure: service principal creation, RBAC assignment, federated credentials
+- Interactive browser-based flows: OAuth `login` that opens a browser
+- Trade-offs in architecture, API design, or scope
+- Any deviation from the approved plan
 
 ---
 
@@ -496,6 +520,7 @@ Use this checklist for every increment. Check off each item.
 - [ ] Non-goals section written
 - [ ] Test strategy defined
 - [ ] Parallelization analysis complete (waves, file conflicts, worktrees)
+- [ ] CI impact analysis complete (if applicable — secret names, GitHub vars, minimal-environment check)
 - [ ] Risk register written
 - [ ] Definition of Ready met
 - [ ] Plan approved by human
@@ -522,6 +547,9 @@ Use this checklist for every increment. Check off each item.
 - [ ] roadmap.md updated with actuals
 - [ ] Metrics updated in docs/metrics.md
 - [ ] CLAUDE.md updated
+- [ ] If CI-impacting: Key Vault secrets and GitHub variables updated
+- [ ] If CI-impacting: `scripts/validate-ci-locally.sh` run successfully (or equivalent manual validation)
+- [ ] If CI-impacting: test-strategy.md §6.1 and §10.x still match actual workflow YAML
 
 ### Increment Report & Retrospective
 - [ ] Executive summary written
