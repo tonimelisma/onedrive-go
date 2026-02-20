@@ -407,3 +407,108 @@ func testConcurrentUploads(t *testing.T, testFolder string) {
 		assert.Contains(t, stderr, "Deleted")
 	}
 }
+
+// runCLIExpectError runs the CLI binary with the given args and expects a
+// non-zero exit code. It returns the combined stdout+stderr output for
+// assertion. If the command unexpectedly succeeds, it fails the test.
+func runCLIExpectError(t *testing.T, args ...string) string {
+	t.Helper()
+
+	fullArgs := append([]string{"--drive", drive}, args...)
+	cmd := exec.Command(binaryPath, fullArgs...)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	require.Error(t, err, "expected CLI to fail for args %v, but it succeeded\nstdout: %s\nstderr: %s",
+		args, stdout.String(), stderr.String())
+
+	return stdout.String() + stderr.String()
+}
+
+// TestE2E_ErrorCases verifies that the CLI returns non-zero exit codes
+// and meaningful error messages for invalid operations.
+func TestE2E_ErrorCases(t *testing.T) {
+	t.Run("ls_not_found", func(t *testing.T) {
+		output := runCLIExpectError(t, "ls", "/nonexistent-uuid-path-12345")
+		assert.Contains(t, output, "nonexistent-uuid-path-12345")
+	})
+
+	t.Run("get_root_is_folder", func(t *testing.T) {
+		output := runCLIExpectError(t, "get", "/")
+		// The CLI reports "is a folder, not a file" when get targets a folder.
+		assert.Contains(t, output, "folder")
+	})
+
+	t.Run("rm_not_found", func(t *testing.T) {
+		output := runCLIExpectError(t, "rm", "/nonexistent-uuid-path-12345")
+		assert.Contains(t, output, "nonexistent-uuid-path-12345")
+	})
+}
+
+// TestE2E_JSONOutput validates that --json flags produce well-formed JSON
+// with the expected schema for ls and stat commands.
+func TestE2E_JSONOutput(t *testing.T) {
+	t.Run("ls_json", func(t *testing.T) {
+		stdout, _ := runCLI(t, "ls", "--json", "/")
+
+		var items []map[string]interface{}
+		require.NoError(t, json.Unmarshal([]byte(stdout), &items),
+			"ls --json output should be valid JSON array, got: %s", stdout)
+
+		// Root should have at least one item in any real OneDrive.
+		require.NotEmpty(t, items, "expected at least one item in root listing")
+
+		for i, item := range items {
+			assert.Contains(t, item, "name",
+				"item %d missing 'name' key", i)
+			assert.Contains(t, item, "id",
+				"item %d missing 'id' key", i)
+		}
+	})
+
+	t.Run("stat_json", func(t *testing.T) {
+		stdout, _ := runCLI(t, "stat", "--json", "/")
+
+		var obj map[string]interface{}
+		require.NoError(t, json.Unmarshal([]byte(stdout), &obj),
+			"stat --json output should be valid JSON object, got: %s", stdout)
+
+		assert.Contains(t, obj, "name", "stat JSON missing 'name' key")
+		assert.Contains(t, obj, "id", "stat JSON missing 'id' key")
+	})
+}
+
+// TestE2E_QuietFlag verifies that --quiet suppresses informational output
+// on stderr during file operations.
+func TestE2E_QuietFlag(t *testing.T) {
+	t.Run("put_quiet_suppresses_output", func(t *testing.T) {
+		testFolder := fmt.Sprintf("onedrive-go-e2e-quiet-%d", time.Now().UnixNano())
+		remotePath := "/" + testFolder + "/quiet-test.txt"
+
+		// Cleanup at the end.
+		t.Cleanup(func() {
+			fullArgs := []string{"--drive", drive, "rm", "/" + testFolder}
+			cmd := exec.Command(binaryPath, fullArgs...)
+			_ = cmd.Run()
+		})
+
+		// Create parent folder.
+		runCLI(t, "mkdir", "/"+testFolder)
+
+		// Write a small local file for upload.
+		tmpFile, err := os.CreateTemp("", "e2e-quiet-*")
+		require.NoError(t, err)
+		defer os.Remove(tmpFile.Name())
+
+		_, err = tmpFile.Write([]byte("quiet test content\n"))
+		require.NoError(t, err)
+		require.NoError(t, tmpFile.Close())
+
+		// Upload with --quiet — stderr should be empty (no "Uploaded" status line).
+		_, stderr := runCLI(t, "put", "--quiet", tmpFile.Name(), remotePath)
+		assert.Empty(t, stderr, "expected no stderr output with --quiet flag")
+	})
+}
