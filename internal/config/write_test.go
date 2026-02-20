@@ -248,7 +248,7 @@ func TestSetDriveKey_FileNotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "reading config file")
 }
 
-func TestSetDriveKey_MultiplesSections(t *testing.T) {
+func TestSetDriveKey_MultipleSections(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 
