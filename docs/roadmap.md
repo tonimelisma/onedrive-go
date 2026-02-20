@@ -132,7 +132,7 @@
 |-----------|-------------|----------|--------|
 | 2.1 | CI scaffold: GitHub Actions, Azure Key Vault + OIDC, integration tests | ~200 YAML + Go | **DONE** |
 | 2.2 | E2E tests: login, ls, get, put, rm round-trip against live API | ~400 | **DONE** |
-| 2.3 | E2E edge cases: large files, special characters, concurrent ops | ~300 |
+| 2.3 | E2E edge cases: large files, special characters, concurrent ops | ~300 | **DONE** |
 
 ### 2.1: CI scaffold — GitHub Actions + Azure Key Vault ✅
 
@@ -158,14 +158,14 @@
 - **Inputs**: test-strategy.md section 7
 - **Actual**: ~188 LOC (e2e/e2e_test.go 188)
 
-### 2.3: E2E edge cases — large files, special characters, concurrent ops
+### 2.3: E2E edge cases — large files, special characters, concurrent ops ✅
 
-- Large file upload/download via resumable upload session (>4MB)
-- Unicode filenames, special characters, spaces, long paths
-- Concurrent upload + download of multiple files
+- Large file upload/download via resumable upload session (5 MiB, triggers chunked upload)
+- Unicode filenames (Japanese characters), spaces in filenames
+- Concurrent uploads (3 parallel files)
 - **Acceptance**: `go test -tags e2e ./e2e/...` passes including edge case scenarios
 - **Inputs**: test-strategy.md section 7, architecture.md section 8 (quirk catalog)
-- **Size**: ~300 LOC
+- **Actual**: ~236 LOC (e2e/e2e_test.go additions)
 
 ---
 

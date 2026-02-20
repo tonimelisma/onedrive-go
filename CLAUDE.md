@@ -8,7 +8,7 @@ Currently: Working CLI OneDrive client with auth + file ops + config integration
 
 ## Current Phase
 
-**Phases 1, 3, and 3.5 complete. Phase 2 partially complete.** All Phase 1 increments done (Graph API + CLI auth + file ops). Phase 3 complete (config integration). Phase 3.5 complete (alignment: profiles → drives migration across config, CLI, graph/auth, CI, and docs). Phase 2.1 (CI scaffold) and 2.2 (E2E round-trip tests) done. Users can `login`, `logout`, `whoami`, `ls`, `get`, `put`, `rm`, `mkdir`, `stat`. CLI loads config via `PersistentPreRunE` with four-layer override: defaults -> file -> env -> CLI flags. Auth commands skip config loading and use `--drive` directly. See [docs/roadmap.md](docs/roadmap.md).
+**Phases 1, 2, 3, and 3.5 complete.** All Phase 1 increments done (Graph API + CLI auth + file ops). Phase 2 complete (CI scaffold, E2E round-trip, E2E edge cases). Phase 3 complete (config integration). Phase 3.5 complete (alignment: profiles → drives migration). Pre-Phase 4 must-dos resolved (B-015/B-016 upload resume + fileSystemInfo, B-017 delta Prefer header + URL decoding, B-027/B-029 docs). Users can `login`, `logout`, `whoami`, `ls`, `get`, `put`, `rm`, `mkdir`, `stat`. CLI loads config via `PersistentPreRunE` with four-layer override: defaults -> file -> env -> CLI flags. Auth commands skip config loading and use `--drive` directly. See [docs/roadmap.md](docs/roadmap.md).
 
 ## Architecture Overview
 
@@ -47,7 +47,7 @@ Currently: Working CLI OneDrive client with auth + file ops + config integration
 ### Active packages
 - **`pkg/quickxorhash/`** — QuickXorHash algorithm (hash.Hash interface) — complete
 - **`internal/config/`** — TOML configuration with flat global settings and per-drive sections, validation, XDG paths, four-layer override chain (`ResolveDrive()`), cross-field validation (`ValidateResolved()`), drive matching (exact/alias/partial), token/state path derivation (`DriveTokenPath()`, `DriveStatePath()`) — 95.1% coverage
-- **`internal/graph/`** — Graph API client: HTTP transport, auth (token path-based, no config import), retry, rate limiting, items CRUD, delta+normalization, download/upload transfers, drives/user, path-based item resolution — feature-complete (93.0% coverage)
+- **`internal/graph/`** — Graph API client: HTTP transport, auth (token path-based, no config import), retry, rate limiting, items CRUD, delta+normalization (incl. URL-decode + Prefer header), download/upload transfers (incl. session resume + fileSystemInfo), drives/user, path-based item resolution — feature-complete (92.9% coverage)
 - **Root package** — Cobra CLI: login, logout, whoami, ls, get, put, rm, mkdir, stat (root.go, auth.go, files.go, format.go). Global flags: `--account`, `--drive`, `--config`, `--json`, `--verbose`, `--quiet`
 - **`e2e/`** — E2E test suite (`//go:build e2e`): builds binary, exercises full round-trip against live OneDrive
 
