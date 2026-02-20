@@ -62,7 +62,6 @@ cmd/onedrive-go/                    # CLI (Cobra commands)
   files.go                          # ls, get, put, rm, mkdir, stat, cat
   sync.go                           # sync (one-shot + watch)
   conflicts.go                      # conflicts, resolve, verify
-  config.go                         # config init, config show, migrate
 
 internal/
   graph/                            # Graph API client -- ALL API interaction + quirk handling

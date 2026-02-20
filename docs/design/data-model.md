@@ -1,6 +1,6 @@
 # Data Model: onedrive-go
 
-This document specifies the SQLite database schema and state management model for the onedrive-go sync engine. It defines every table, column, index, and constraint that the `internal/state/` package implements.
+This document specifies the SQLite database schema and state management model for the onedrive-go sync engine. It defines every table, column, index, and constraint that the `internal/sync/` package implements.
 
 ---
 

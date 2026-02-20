@@ -8,7 +8,7 @@ A fast, safe, and well-tested OneDrive CLI and sync client written in Go. Unix-s
 
 ## Status
 
-**Early development** — building the foundation. The config package and design docs are complete. Currently implementing the Graph API client (Phase 1).
+**Active development** — Phases 1, 3, and 3.5 complete. Phase 2 partially complete (CI + E2E). Working CLI with auth, file ops, and config integration. Next: account discovery and sync engine.
 
 See the [roadmap](docs/roadmap.md) for the full plan.
 
@@ -16,7 +16,7 @@ See the [roadmap](docs/roadmap.md) for the full plan.
 
 - **CLI file operations**: `ls`, `get`, `put`, `rm`, `mkdir` — familiar Unix-style commands
 - **Bidirectional sync**: Delta-based with three-way merge and conflict detection
-- **Multi-account**: Single config, multiple profiles
+- **Multi-account**: Single config, multiple drives
 - **Safety first**: Big-delete protection, dry-run mode, recycle bin support
 - **Graph API quirk handling**: All 12+ known Microsoft Graph API quirks handled
 - **SharePoint/OneDrive Business**: Full support including shared libraries

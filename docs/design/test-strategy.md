@@ -465,7 +465,7 @@ Tests for the path construction and cascade update logic ([data-model.md §10](d
 | `TestConfig_DriveOverride_Inherit` | Drive without overrides inherits global |
 | `TestConfig_MultipleDrives` | Multiple drive sections coexist |
 | `TestConfig_DefaultValues` | Every option has the documented default |
-| `TestConfig_EnvOverride` | `ONEDRIVE_GO_CONFIG`, `ONEDRIVE_GO_SYNC_DIR` |
+| `TestConfig_EnvOverride` | `ONEDRIVE_GO_CONFIG`, `ONEDRIVE_GO_DRIVE` |
 | `TestConfig_CLIFlagOverride` | CLI flags override config file values |
 | `TestConfig_Precedence` | defaults → config → env → CLI flags |
 | `TestConfig_Validation_ChunkSize` | Must be 320KiB multiple |
@@ -1615,7 +1615,7 @@ func TestSomething(t *testing.T) {
 
 // Use t.Setenv() for environment variable isolation
 func TestConfig_EnvOverride(t *testing.T) {
-    t.Setenv("ONEDRIVE_GO_SYNC_DIR", "/tmp/test")
+    t.Setenv("ONEDRIVE_GO_DRIVE", "personal")
     // ...
 }
 

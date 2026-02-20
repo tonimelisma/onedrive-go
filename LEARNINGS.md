@@ -184,7 +184,7 @@ Cobra depends on `github.com/inconshreveable/mousetrap` (Windows-only, detects "
 Status/error messages go to stderr (`fmt.Fprintf(os.Stderr, ...)`). Structured data output (JSON, tables) goes to stdout. This allows piping `onedrive-go ls --json / | jq ...` while still seeing status messages.
 
 ### E2E test pattern: build once, run as subprocess
-E2E tests build the binary in `TestMain` to a temp dir, then run it via `os/exec` in each test. The binary path and profile are package-level vars set in `TestMain`. Tests use `t.Cleanup` for teardown of remote resources.
+E2E tests build the binary in `TestMain` to a temp dir, then run it via `os/exec` in each test. The binary path and drive are package-level vars set in `TestMain`. Tests use `t.Cleanup` for teardown of remote resources.
 
 ### Recursive mkdir with 409 Conflict handling
 When creating nested folders, walk path segments and create each. If CreateFolder returns 409 (Conflict), the folder already exists — resolve it by path and continue with its ID as the parent. Track the `builtPath` as you go to enable path-based resolution.
@@ -202,8 +202,8 @@ pflag's default value is indistinguishable from an explicit `--flag=defaultValue
 ### CLIOverrides pointer fields for nil-vs-zero-value
 `CLIOverrides` uses `*string` / `*bool` for optional flags. `nil` means "not specified by user" (use config/env value), while `&false` means "user explicitly set to false" (override config). Without pointers, `--dry-run=false` would be indistinguishable from not passing `--dry-run`.
 
-### Synthetic default profile for zero-config UX
-When no config file exists, `Resolve()` creates a synthetic default profile (`AccountType: "personal"`, `SyncDir: "~/OneDrive"`). This means CLI commands work out-of-the-box without creating a config file first.
+### Synthetic default drive for zero-config UX
+When no config file exists, `ResolveDrive()` creates a synthetic default drive with `SyncDir: "~/OneDrive"`. This means CLI commands work out-of-the-box without creating a config file first.
 
 ### File extraction is zero-risk refactoring
 Extracting functions from oversized files (unknown.go from load.go, size.go from validate.go) is purely mechanical — move functions + their tests to new files, no logic changes. If tests pass before and after, the refactor is correct. Good way to reduce file size without introducing bugs.

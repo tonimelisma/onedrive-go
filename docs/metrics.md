@@ -102,7 +102,7 @@ Tracking quantitative metrics across increments to spot trends and calibrate pla
 | **CI failures** | 1 (integration.yml — Key Vault secret name mismatch, requires human fix) |
 | **Wall-clock time** | ~3 hours |
 
-*Note: Total coverage dropped from 73.4% to 71.8% because config show.go (which had tests) was deleted, and the root package coverage stayed at 6.7%. Config package coverage is steady at 95.1%.*
+*Note: Total coverage dropped from 73.4% to 71.8% because the config show command (which had tests) was removed during the profiles → drives migration, and the root package coverage stayed at 6.7%. Config package coverage is steady at 95.1%.*
 
 #### Per-Agent Breakdown
 
@@ -218,7 +218,7 @@ Tracking quantitative metrics across increments to spot trends and calibrate pla
 
 | Criterion | Rating | Notes |
 |-----------|:------:|-------|
-| Correctness | 5 | PersistentPreRunE, config show, --config all work |
+| Correctness | 5 | PersistentPreRunE, --config, drive resolution all work |
 | Test quality | 3 | No unit tests (CLI wiring), manual verification only |
 | Code style | 5 | Clean, minimal, follows existing patterns |
 | Logging | 4 | buildLogger() properly respects config + CLI flags |

@@ -184,7 +184,7 @@
 - Unknown key detection -> fatal error with "did you mean X?" suggestion
 - Validation: type checks, range checks, cross-field constraints
 - XDG-compliant default paths (Linux + macOS)
-- Environment variable overrides (ONEDRIVE_GO_CONFIG, ONEDRIVE_GO_SYNC_DIR)
+- Environment variable overrides (ONEDRIVE_GO_CONFIG, ONEDRIVE_GO_DRIVE)
 - Override precedence: defaults -> file -> env -> CLI flags
 - **Acceptance**: `go test ./internal/config/...` passes with valid + invalid + malformed config fixtures
 - **Inputs**: configuration.md sections 1-2, 9-10, 13
