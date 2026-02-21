@@ -144,9 +144,6 @@ linters:
         - G304
         - G307
         - G602  # slice bounds: false positive on backwards iteration (quickxorhash)
-        - G703  # path traversal taint: false positive on safe temp-dir rename patterns
-        - G704  # SSRF taint: false positive on Graph API HTTP client calls
-        - G705  # XSS taint: false positive on stderr format strings
 
     lll:
       line-length: 140
@@ -208,6 +205,13 @@ linters:
       - linters:
           - errcheck
         source: "defer "
+      # gosec G703/G704/G705 (taint analysis) — only in golangci-lint v2.10+.
+      # CI runs v2.8.0 which doesn't have these rules, so they can't be added
+      # to gosec.excludes (schema validation rejects unknown IDs). Using a text
+      # pattern here works with both versions: no-op on v2.8.0, suppresses on v2.10+.
+      - linters:
+          - gosec
+        text: "G70[345]:"
       - path: _test\.go
         linters:
           - mnd
