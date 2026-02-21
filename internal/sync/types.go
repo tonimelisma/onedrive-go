@@ -90,6 +90,19 @@ const (
 	ResolvedByAuto ConflictResolvedBy = "auto"
 )
 
+// ConflictType classifies the nature of a sync conflict.
+// Carried in-memory only — not persisted to DB (avoids schema migration).
+// The reconciler tags each conflict action with the correct type so the
+// executor's conflict handler can choose the right resolution strategy.
+type ConflictType string
+
+// Conflict type values corresponding to the decision matrix rows (sync-algorithm.md §5.2).
+const (
+	ConflictEditEdit     ConflictType = "edit_edit"     // F5: both sides changed from synced base
+	ConflictEditDelete   ConflictType = "edit_delete"   // F9: local edited, remote tombstoned
+	ConflictCreateCreate ConflictType = "create_create" // F11: both sides created different files
+)
+
 // ConflictRecord represents a file conflict entry in the conflict ledger
 // (data-model.md section 5).
 type ConflictRecord struct {
@@ -106,6 +119,9 @@ type ConflictRecord struct {
 	ResolvedAt  *int64
 	ResolvedBy  *ConflictResolvedBy
 	History     string // JSON array of resolution events
+
+	// Type classifies the conflict; in-memory only, not persisted to DB.
+	Type ConflictType
 }
 
 // StaleRecord represents a file that became excluded by filter changes

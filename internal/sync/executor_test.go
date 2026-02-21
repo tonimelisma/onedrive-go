@@ -757,6 +757,11 @@ func TestExecutor_LocalDelete_Modified_ConflictBackup(t *testing.T) {
 	_, statErr := os.Stat(localPath)
 	assert.True(t, os.IsNotExist(statErr))
 
+	// Conflict file exists with new timestamp-based naming pattern (modified.conflict-*.txt).
+	matches, globErr := filepath.Glob(filepath.Join(syncRoot, "modified.conflict-*.txt"))
+	require.NoError(t, globErr)
+	assert.Len(t, matches, 1, "expected one conflict file with timestamped name")
+
 	// Conflict should be recorded.
 	require.Len(t, store.recordConflicts, 1)
 	assert.Equal(t, ConflictUnresolved, store.recordConflicts[0].Resolution)
@@ -855,21 +860,40 @@ func TestExecutor_RemoteDelete_Forbidden_Skip(t *testing.T) {
 
 // --- Conflict tests ---
 
-func TestExecutor_Conflict_Records(t *testing.T) {
+// TestExecutor_Conflict_EditEdit verifies that an edit-edit conflict (F5):
+// renames the local file to a conflict copy, downloads the remote version,
+// and records a keep_both resolution.
+func TestExecutor_Conflict_EditEdit(t *testing.T) {
 	syncRoot := t.TempDir()
-	exec, store, _, _ := newTestExecutor(t, syncRoot)
+
+	// Local file that will be renamed to a conflict copy.
+	content := []byte("local content")
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "conflict.txt"), content, 0o644))
+
+	exec, store, _, transfer := newTestExecutor(t, syncRoot)
+	transfer.downloadContent = []byte("remote content") // simulates remote version
+
+	item := &Item{
+		DriveID:  "d1",
+		ItemID:   "item-id",
+		ParentID: "parent-id",
+		Name:     "conflict.txt",
+		Path:     "conflict.txt",
+	}
 
 	action := Action{
 		Type:    ActionConflict,
 		DriveID: "d1",
 		ItemID:  "item-id",
 		Path:    "conflict.txt",
+		Item:    item,
 		ConflictInfo: &ConflictRecord{
 			DriveID:    "d1",
 			ItemID:     "item-id",
 			Path:       "conflict.txt",
 			LocalHash:  "local-hash",
 			RemoteHash: "remote-hash",
+			Type:       ConflictEditEdit,
 		},
 	}
 
@@ -879,11 +903,91 @@ func TestExecutor_Conflict_Records(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, report.Conflicts)
 
+	// Conflict recorded with keep_both resolution.
 	require.Len(t, store.recordConflicts, 1)
 	rc := store.recordConflicts[0]
-	assert.Equal(t, ConflictUnresolved, rc.Resolution)
+	assert.Equal(t, ConflictKeepBoth, rc.Resolution)
 	assert.NotEmpty(t, rc.ID)
 	assert.Greater(t, rc.DetectedAt, int64(0))
+
+	// After rename + download the file is recreated by executeDownload; verify download occurred.
+	assert.Equal(t, 1, transfer.downloadCalls)
+}
+
+// TestExecutor_Conflict_EditDelete verifies that an edit-delete conflict (F9):
+// does not rename the local file, uploads it to restore the remote, and records keep_both.
+func TestExecutor_Conflict_EditDelete(t *testing.T) {
+	syncRoot := t.TempDir()
+
+	// Local file to be re-uploaded.
+	content := []byte("local edit")
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "deleted.txt"), content, 0o644))
+
+	exec, store, _, transfer := newTestExecutor(t, syncRoot)
+
+	item := &Item{
+		DriveID:  "d1",
+		ItemID:   "item-id",
+		ParentID: "parent-id",
+		Name:     "deleted.txt",
+		Path:     "deleted.txt",
+	}
+
+	action := Action{
+		Type:    ActionConflict,
+		DriveID: "d1",
+		ItemID:  "item-id",
+		Path:    "deleted.txt",
+		Item:    item,
+		ConflictInfo: &ConflictRecord{
+			DriveID:   "d1",
+			ItemID:    "item-id",
+			Path:      "deleted.txt",
+			LocalHash: "local-hash",
+			Type:      ConflictEditDelete,
+		},
+	}
+
+	plan := &ActionPlan{Conflicts: []Action{action}}
+	report, err := exec.Execute(context.Background(), plan)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.Conflicts)
+
+	// Conflict recorded with keep_both.
+	require.Len(t, store.recordConflicts, 1)
+	assert.Equal(t, ConflictKeepBoth, store.recordConflicts[0].Resolution)
+
+	// Local file still exists (no rename for edit-delete).
+	_, statErr := os.Stat(filepath.Join(syncRoot, "deleted.txt"))
+	assert.NoError(t, statErr)
+
+	// Upload was triggered to restore the remote.
+	assert.Equal(t, 1, transfer.uploadCalls)
+}
+
+// TestExecutor_Conflict_NilConflictInfo verifies that a conflict action with nil
+// ConflictInfo is treated as a skip-tier error.
+func TestExecutor_Conflict_NilConflictInfo(t *testing.T) {
+	syncRoot := t.TempDir()
+	// Use only the executor; name store and items to avoid dogsled (>2 blank identifiers).
+	exec, store, items, _ := newTestExecutor(t, syncRoot)
+	_, _ = store, items
+
+	action := Action{
+		Type:    ActionConflict,
+		DriveID: "d1",
+		ItemID:  "item-id",
+		Path:    "file.txt",
+		// ConflictInfo intentionally nil.
+	}
+
+	plan := &ActionPlan{Conflicts: []Action{action}}
+	report, err := exec.Execute(context.Background(), plan)
+
+	require.NoError(t, err) // skip-tier, not fatal
+	assert.Equal(t, 0, report.Conflicts)
+	assert.Equal(t, 1, report.Skipped)
 }
 
 // --- SyncedUpdate tests ---

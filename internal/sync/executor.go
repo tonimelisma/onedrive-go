@@ -31,12 +31,13 @@ const simpleUploadMax = 4_194_304
 // It processes phases sequentially (sync-algorithm.md section 9.1).
 // Fatal errors abort the sync; skip-tier errors are recorded and execution continues.
 type Executor struct {
-	store    ExecutorStore
-	items    ItemClient
-	transfer TransferClient
-	syncRoot string
-	cfg      *config.SafetyConfig
-	logger   *slog.Logger
+	store           ExecutorStore
+	items           ItemClient
+	transfer        TransferClient
+	syncRoot        string
+	cfg             *config.SafetyConfig
+	logger          *slog.Logger
+	conflictHandler *ConflictHandler
 }
 
 // NewExecutor creates an Executor with the given dependencies.
@@ -54,12 +55,13 @@ func NewExecutor(
 	}
 
 	return &Executor{
-		store:    store,
-		items:    items,
-		transfer: transfer,
-		syncRoot: syncRoot,
-		cfg:      cfg,
-		logger:   logger,
+		store:           store,
+		items:           items,
+		transfer:        transfer,
+		syncRoot:        syncRoot,
+		cfg:             cfg,
+		logger:          logger,
+		conflictHandler: NewConflictHandler(syncRoot, logger),
 	}
 }
 
@@ -464,13 +466,14 @@ func (e *Executor) executeLocalDelete(ctx context.Context, action *Action) error
 }
 
 // handleLocalDeleteConflict backs up a locally-modified file that was scheduled for deletion.
-// The file is renamed to a timestamped .conflict path, and the conflict is recorded in the DB.
+// The file is renamed to a conflict copy using generateConflictPath, and the conflict is
+// recorded in the DB. This is a safety-check (S4) backup, not a full keep-both resolution.
 func (e *Executor) handleLocalDeleteConflict(
 	ctx context.Context,
 	action *Action,
 	localPath, currentHash string,
 ) error {
-	conflictPath := fmt.Sprintf("%s.conflict-%d", localPath, NowNano())
+	conflictPath := generateConflictPath(localPath)
 
 	e.logger.Warn("executor: local delete conflict: file changed since sync, backing up",
 		"path", action.Path,
@@ -518,26 +521,45 @@ func (e *Executor) executeRemoteDelete(ctx context.Context, action *Action) erro
 	return e.store.MarkDeleted(ctx, action.DriveID, action.ItemID, NowNano())
 }
 
-// executeConflict records a conflict in the DB. Resolution logic is deferred to 4.8.
+// executeConflict resolves a conflict using the keep-both policy (4.8).
+// The conflict handler renames local files and produces sub-actions (downloads/uploads)
+// that are dispatched inline before recording the resolved conflict.
 func (e *Executor) executeConflict(ctx context.Context, action *Action) error {
 	if action.ConflictInfo == nil {
 		return fmt.Errorf("executor: conflict action for %s has nil ConflictInfo", action.ItemID)
 	}
 
-	e.logger.Info("executor: recording conflict", "path", action.Path)
+	e.logger.Info("executor: resolving conflict", "path", action.Path, "type", action.ConflictInfo.Type)
 
-	record := action.ConflictInfo
-	if record.ID == "" {
-		record.ID = fmt.Sprintf("conflict-%d", NowNano())
+	result, err := e.conflictHandler.Resolve(ctx, action)
+	if err != nil {
+		return fmt.Errorf("executor: resolve conflict %s: %w", action.Path, err)
 	}
 
-	if record.DetectedAt == 0 {
-		record.DetectedAt = NowNano()
+	if err := e.store.RecordConflict(ctx, result.Record); err != nil {
+		return fmt.Errorf("executor: record conflict %s: %w", action.Path, err)
 	}
 
-	record.Resolution = ConflictUnresolved
+	// Dispatch resolution sub-actions (download or upload) to complete keep-both.
+	// Only ActionDownload and ActionUpload are valid here; other types indicate a bug.
+	for i := range result.SubActions {
+		sub := &result.SubActions[i]
+		switch sub.Type { //nolint:exhaustive // conflict handler only returns download/upload
+		case ActionDownload:
+			if _, err := e.executeDownload(ctx, sub); err != nil {
+				return fmt.Errorf("executor: conflict download %s: %w", sub.Path, err)
+			}
+		case ActionUpload:
+			if _, err := e.executeUpload(ctx, sub); err != nil {
+				return fmt.Errorf("executor: conflict upload %s: %w", sub.Path, err)
+			}
+		default:
+			// Conflict handler only returns download/upload sub-actions; other types are a bug.
+			return fmt.Errorf("executor: conflict %s: unexpected sub-action type %d", action.Path, sub.Type)
+		}
+	}
 
-	return e.store.RecordConflict(ctx, record)
+	return nil
 }
 
 // executeSyncedUpdate snapshots the current item state as the new synced base.

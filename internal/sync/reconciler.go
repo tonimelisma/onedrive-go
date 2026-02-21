@@ -193,7 +193,7 @@ func (r *Reconciler) classifyRemoteTombstone(
 
 	// F9: Remote tombstoned, local changed → edit-delete conflict.
 	r.logger.Debug("F9: edit-delete conflict", "path", item.Path)
-	return []Action{r.conflictAction(item)}, true
+	return []Action{r.conflictAction(item, ConflictEditDelete)}, true
 }
 
 // classifyStandardChange handles F1-F5 (synced) and F10-F13 (unsynced) for items
@@ -233,7 +233,7 @@ func (r *Reconciler) classifyBothChanged(item *Item, synced bool) []Action {
 		// F5: True conflict.
 		r.logger.Debug("F5: conflict", "path", item.Path)
 
-		return []Action{r.conflictAction(item)}
+		return []Action{r.conflictAction(item, ConflictEditEdit)}
 	}
 
 	// Unsynced (new).
@@ -246,7 +246,7 @@ func (r *Reconciler) classifyBothChanged(item *Item, synced bool) []Action {
 	// F11: Create-create conflict.
 	r.logger.Debug("F11: create-create conflict", "path", item.Path)
 
-	return []Action{r.conflictAction(item)}
+	return []Action{r.conflictAction(item, ConflictCreateCreate)}
 }
 
 // --- Folder reconciliation ---
@@ -545,7 +545,10 @@ func (r *Reconciler) remoteDeleteAction(item *Item) Action {
 	}
 }
 
-func (r *Reconciler) conflictAction(item *Item) Action {
+// conflictAction creates an ActionConflict with the correct ConflictType tag.
+// The type is determined by the reconciler's decision matrix row (F5/F9/F11),
+// so the conflict handler in the executor can apply the right resolution strategy.
+func (r *Reconciler) conflictAction(item *Item, conflictType ConflictType) Action {
 	return Action{
 		Type:    ActionConflict,
 		DriveID: item.DriveID,
@@ -559,6 +562,7 @@ func (r *Reconciler) conflictAction(item *Item) Action {
 			LocalHash:  item.LocalHash,
 			RemoteHash: item.QuickXorHash,
 			LocalMtime: item.LocalMtime,
+			Type:       conflictType,
 		},
 	}
 }
