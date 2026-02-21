@@ -484,12 +484,14 @@ func (e *Executor) handleLocalDeleteConflict(
 		return fmt.Errorf("executor: backup conflict file %s: %w", action.Path, err)
 	}
 
+	now := NowNano()
+
 	record := &ConflictRecord{
-		ID:         fmt.Sprintf("conflict-%d", NowNano()),
+		ID:         fmt.Sprintf("conflict-%d", now),
 		DriveID:    action.DriveID,
 		ItemID:     action.ItemID,
 		Path:       action.Path,
-		DetectedAt: NowNano(),
+		DetectedAt: now,
 		LocalHash:  currentHash,
 		RemoteHash: action.Item.QuickXorHash,
 		LocalMtime: action.Item.LocalMtime,
@@ -500,7 +502,7 @@ func (e *Executor) handleLocalDeleteConflict(
 		return fmt.Errorf("executor: record delete conflict for %s: %w", action.Path, err)
 	}
 
-	return e.store.MarkDeleted(ctx, action.DriveID, action.ItemID, NowNano())
+	return e.store.MarkDeleted(ctx, action.DriveID, action.ItemID, now)
 }
 
 // executeRemoteDelete deletes a remote item via the Graph API.

@@ -990,6 +990,115 @@ func TestExecutor_Conflict_NilConflictInfo(t *testing.T) {
 	assert.Equal(t, 1, report.Skipped)
 }
 
+// TestExecutor_Conflict_DownloadSubActionFails verifies that when the sub-action
+// download fails after the conflict is recorded, the error propagates as a skip.
+func TestExecutor_Conflict_DownloadSubActionFails(t *testing.T) {
+	syncRoot := t.TempDir()
+
+	// Local file exists so the rename succeeds.
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "fail.txt"), []byte("local"), 0o644))
+
+	exec, store, _, transfer := newTestExecutor(t, syncRoot)
+	transfer.downloadErr = graph.ErrForbidden // download will fail
+
+	action := Action{
+		Type:    ActionConflict,
+		DriveID: "d1",
+		ItemID:  "item-id",
+		Path:    "fail.txt",
+		Item:    &Item{DriveID: "d1", ItemID: "item-id", ParentID: "p", Name: "fail.txt", Path: "fail.txt"},
+		ConflictInfo: &ConflictRecord{
+			DriveID:   "d1",
+			ItemID:    "item-id",
+			Path:      "fail.txt",
+			LocalHash: "local-hash",
+			Type:      ConflictEditEdit,
+		},
+	}
+
+	plan := &ActionPlan{Conflicts: []Action{action}}
+	report, err := exec.Execute(context.Background(), plan)
+
+	require.NoError(t, err) // skip-tier, not fatal
+	assert.Equal(t, 0, report.Conflicts, "conflict should not count as success")
+	assert.Equal(t, 1, report.Skipped)
+
+	// Conflict was recorded before the download failed.
+	require.Len(t, store.recordConflicts, 1)
+	assert.Equal(t, ConflictKeepBoth, store.recordConflicts[0].Resolution)
+}
+
+// TestExecutor_Conflict_RecordConflictFails verifies that when RecordConflict
+// returns an error, the entire conflict action is skipped.
+func TestExecutor_Conflict_RecordConflictFails(t *testing.T) {
+	syncRoot := t.TempDir()
+
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "rec.txt"), []byte("local"), 0o644))
+
+	exec, store, _, _ := newTestExecutor(t, syncRoot)
+	store.conflictErr = fmt.Errorf("db write failed")
+
+	action := Action{
+		Type:    ActionConflict,
+		DriveID: "d1",
+		ItemID:  "item-id",
+		Path:    "rec.txt",
+		Item:    &Item{DriveID: "d1", ItemID: "item-id", ParentID: "p", Name: "rec.txt", Path: "rec.txt"},
+		ConflictInfo: &ConflictRecord{
+			DriveID:   "d1",
+			ItemID:    "item-id",
+			Path:      "rec.txt",
+			LocalHash: "local-hash",
+			Type:      ConflictEditEdit,
+		},
+	}
+
+	plan := &ActionPlan{Conflicts: []Action{action}}
+	report, err := exec.Execute(context.Background(), plan)
+
+	require.NoError(t, err) // skip-tier, not fatal
+	assert.Equal(t, 0, report.Conflicts)
+	assert.Equal(t, 1, report.Skipped)
+	require.Len(t, report.Errors, 1)
+	assert.Contains(t, report.Errors[0].Err.Error(), "record conflict")
+}
+
+// TestExecutor_Conflict_UploadSubActionFails verifies that when the sub-action
+// upload fails for an edit-delete conflict, the error propagates as a skip.
+func TestExecutor_Conflict_UploadSubActionFails(t *testing.T) {
+	syncRoot := t.TempDir()
+
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "upfail.txt"), []byte("content"), 0o644))
+
+	exec, store, _, transfer := newTestExecutor(t, syncRoot)
+	transfer.uploadErr = graph.ErrForbidden // upload will fail
+
+	action := Action{
+		Type:    ActionConflict,
+		DriveID: "d1",
+		ItemID:  "item-id",
+		Path:    "upfail.txt",
+		Item:    &Item{DriveID: "d1", ItemID: "item-id", ParentID: "p", Name: "upfail.txt", Path: "upfail.txt"},
+		ConflictInfo: &ConflictRecord{
+			DriveID:   "d1",
+			ItemID:    "item-id",
+			Path:      "upfail.txt",
+			LocalHash: "local-hash",
+			Type:      ConflictEditDelete,
+		},
+	}
+
+	plan := &ActionPlan{Conflicts: []Action{action}}
+	report, err := exec.Execute(context.Background(), plan)
+
+	require.NoError(t, err) // skip-tier, not fatal
+	assert.Equal(t, 0, report.Conflicts)
+	assert.Equal(t, 1, report.Skipped)
+
+	// Conflict was recorded before the upload failed.
+	require.Len(t, store.recordConflicts, 1)
+}
+
 // --- SyncedUpdate tests ---
 
 func TestExecutor_SyncedUpdate(t *testing.T) {
