@@ -107,6 +107,9 @@ All reference implementations (Syncthing, abraunegg/onedrive, rclone, Dropbox Nu
 ### Platform-specific build tags for disk space
 Darwin uses `syscall.Statfs` directly; Linux needs `golang.org/x/sys/unix.Statfs`. Both use `Bavail` (available to unprivileged users), NOT `Bfree`.
 
+### APFS prevents creating filenames with invalid UTF-8
+macOS APFS normalizes filenames and rejects invalid byte sequences. To test UTF-8 validation guards in scanner's `validateEntry`, use mock `os.DirEntry`/`os.FileInfo` types rather than real filesystem operations.
+
 ---
 
 ## 3. Linter Patterns
@@ -143,6 +146,9 @@ SQL variable named `sqlGetDeltaToken` triggers false positive. Fix with `//nolin
 
 ### nilnil return pattern
 Returning `(nil, nil)` for "skip this entry" requires `//nolint:nilnil`. Idiomatic when both nil means "nothing to do, no error."
+
+### errcheck is disabled in test files
+`.golangci.yml` excludes `errcheck` from `_test.go` files. Do NOT add `//nolint:errcheck` in tests — the `nolintlint` linter will reject it as an unnecessary directive.
 
 ### goconst applies to test files and counts cross-file
 Unlike `mnd`, `funlen`, `dupl` -- `goconst` flags repeated string literals even in tests. It counts across all files in a package, so adding `"file.txt"` in `state_test.go` can trigger goconst for an existing occurrence in `delta_test.go`. Use unique filenames in each test file to avoid cross-file constant warnings.

@@ -390,6 +390,7 @@ Phase 4 increments are organized into waves to enable parallelism and allow re-p
 - Context-based cancellation, tombstone cleanup, `Close()` for TransferManager lifecycle
 - **Bug fix**: `GetItem` and `GetItemByPath` returned wrapped `sql.ErrNoRows` instead of `(nil, nil)` for missing items — mismatch with mock stores exposed by integration tests
 - **Actual**: PR #60 (engine), PR #61 (GetItem fix). 17 unit tests + 3 integration tests. sync/ 92.0% coverage.
+- **Top-up hardening**: PRs #62, #63, #64. Fixed `errors.Is` consistency (3 sites), `GetUploadSession` nil-nil semantics, Engine WaitGroup for use-after-close safety, TransferManager lifecycle docs. Added 20 new tests (state store failure paths, scanner validation edge cases, executor conflict error paths, bandwidth wrappers, end-to-end state assertions). sync/ 92.7% coverage.
 - **Inputs**: sync-algorithm.md sections 1-2, architecture.md section 3.1
 
 ### 4.11: CLI sync command — `cmd/onedrive-go/sync.go`

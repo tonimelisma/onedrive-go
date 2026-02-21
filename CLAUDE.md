@@ -52,7 +52,7 @@ Currently: Working CLI OneDrive client with discovery-based auth, account manage
 - **`e2e/`** — E2E test suite (`//go:build e2e`): builds binary, exercises full round-trip against live OneDrive
 
 ### In progress (Phase 4)
-- **`internal/sync/`** — Sync engine through 4.10 complete: SQLite state store, delta processor, local scanner, filter engine, reconciler (14+7 decision matrix), safety checks (S1-S7), executor (9 phases, error classification, configurable chunk size), conflict handler (ConflictType tagging, keep-both resolution, timestamped conflict copies), transfer pipeline (TransferManager with errgroup worker pools, BandwidthLimiter with token bucket rate limiting, 5 transfer orderings), engine wiring (Engine.RunOnce orchestrates full pipeline: delta→scan→reconcile→safety→execute→cleanup). ~308 tests, 92.0% coverage. Next: CLI commands (4.11-4.12)
+- **`internal/sync/`** — Sync engine through 4.10 complete: SQLite state store, delta processor, local scanner, filter engine, reconciler (14+7 decision matrix), safety checks (S1-S7), executor (9 phases, error classification, configurable chunk size), conflict handler (ConflictType tagging, keep-both resolution, timestamped conflict copies), transfer pipeline (TransferManager with errgroup worker pools, BandwidthLimiter with token bucket rate limiting, 5 transfer orderings), engine wiring (Engine.RunOnce orchestrates full pipeline: delta→scan→reconcile→safety→execute→cleanup). ~339 tests, 92.7% coverage. Next: CLI commands (4.11-4.12)
 
 ## Documentation Index
 
