@@ -27,6 +27,22 @@ Detailed per-increment metrics from earlier phases archived in [docs/archive/met
 
 ## Latest Increment
 
+### Phase 4.7: Executor — 2026-02-20
+
+| Metric | Value |
+|--------|-------|
+| **Agent count** | 0 (orchestrator-only) |
+| **Wave count** | 1 |
+| **PR count** | 1 (#56) |
+| **Coverage before** | 78.5% (total), 91.7% (sync) |
+| **Coverage after** | 79.3% (total), 91.3% (sync) |
+| **Top-up fix count** | 4 (dupl→dispatchPhase refactor; removed unused graphChunkAlignment constant; misspell "cancelled"→"canceled"; errcheck Checkpoint handling) |
+| **Agent deviation count** | 2 (GetItemByPath added to ExecutorStore — missed from plan; TransferClient interface fix was plan-known but confirmed needed) |
+| **CI failures** | 0 |
+| **Wall-clock time** | ~45 min |
+
+---
+
 ### Pre-4.7 Foundation Cleanup — 2026-02-20
 
 | Metric | Value |

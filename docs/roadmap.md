@@ -254,7 +254,7 @@
 | ~~4.4~~ | ~~sync/ filter engine (three-layer cascade, .odignore, reuse existing logic)~~ **DONE** |
 | ~~4.5~~ | ~~sync/ reconciler (F1-F14, D1-D7 decision matrix, move detection)~~ **DONE** |
 | ~~4.6~~ | ~~sync/ safety checks (S1-S7, big-delete protection, dry-run)~~ **DONE** |
-| 4.7 | sync/ executor (dispatch actions, update state, error classification) |
+| ~~4.7~~ | ~~sync/ executor (dispatch actions, update state, error classification)~~ **DONE** |
 | 4.8 | sync/ conflict handler (detect, classify, keep-both resolution, ledger) |
 | 4.9 | sync/ transfer (download pipeline, upload pipeline, worker pools, bandwidth) |
 | 4.10 | sync/ engine (RunOnce: wire delta->scan->reconcile->safety->execute) |
@@ -343,15 +343,20 @@ Phase 4 increments are organized into waves to enable parallelism and allow re-p
 - **Acceptance**: `go test` passes with one test per invariant (7 tests minimum)
 - **Inputs**: sync-algorithm.md section 8
 
-### 4.7: Executor — `internal/sync/executor.go`
+### 4.7: Executor — `internal/sync/executor.go` ✅
 
-- Process ordered action plan from reconciler
-- Dispatch downloads/uploads to transfer pipeline
-- Local filesystem operations: create dirs, rename, delete (to OS trash by default)
-- Update state DB after each successful action
-- Error handling per four-tier model: Fatal (abort), Retryable (queue retry), Skip (log + continue), Deferred (save for next cycle)
-- Generate SyncReport with counts and errors
-- **Acceptance**: `go test` passes with mock graph client + mock filesystem
+- Process ordered action plan from reconciler (9 sequential phases)
+- `dispatchPhase` helper routes fatal vs skip-tier errors; download/upload track bytes
+- Download: .partial temp file, QuickXorHash verify, atomic rename, mtime restore
+- Upload: SimpleUpload (≤4 MiB) or chunked session (>4 MiB) with io.TeeReader hashing
+- Local delete: S4 hash-before-delete runtime check; conflict backup if content changed
+- Remote delete: 404 treated as success (already gone)
+- Conflict recording (resolution deferred to 4.8)
+- Synced-base update for false conflicts; cleanup for stale DB entries
+- `classifyError` maps graph sentinels to Fatal/Retryable/Skip tiers
+- Also fixes `TransferClient` interface mismatches (forward declarations vs actual signatures)
+- **Acceptance**: 28 tests, real-filesystem + real-SQLite integration test
+- **Actual**: PR #56. Coverage: 91.3% (sync), 79.3% (total)
 - **Inputs**: sync-algorithm.md section 9, architecture.md section 7
 
 ### 4.8: Conflict handler — `internal/sync/conflict.go`

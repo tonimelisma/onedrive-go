@@ -4,11 +4,11 @@
 
 **onedrive-go** — a fast, safe, and well-tested OneDrive CLI and sync client in Go. Unix-style file operations (`ls`, `get`, `put`) plus robust bidirectional sync with conflict tracking. Targets Linux and macOS. MIT licensed.
 
-Currently: Working CLI OneDrive client with discovery-based auth, account management, file ops, and config integration. "Pragmatic Flat" architecture (5 packages). Phase 4 sync engine foundation complete (4.1-4.6). Next: Phase 4 executor, conflict handler, transfer pipeline, engine wiring, CLI commands.
+Currently: Working CLI OneDrive client with discovery-based auth, account management, file ops, and config integration. "Pragmatic Flat" architecture (5 packages). Phase 4 sync engine foundation complete (4.1-4.7). Next: Phase 4 conflict handler, transfer pipeline, engine wiring, CLI commands.
 
 ## Current Phase
 
-**Phases 1, 2, 3, 3.5, 4.1-4.6 complete.** All Phase 1 increments done (Graph API + CLI auth + file ops). Phase 2 complete (CI scaffold, E2E round-trip, E2E edge cases). Phase 3 complete (config integration). Phase 3.5 complete (alignment: profiles → drives migration). Phase 4.1-4.6 complete (sync engine foundation: state store, delta processor, scanner, filter, reconciler, safety checks). Login is now discovery-based: device code auth → API discovery → auto-create config. Users can `login`, `logout`, `whoami`, `status`, `drive add`, `drive remove`, `ls`, `get`, `put`, `rm`, `mkdir`, `stat`. CLI loads config via `PersistentPreRunE` with four-layer override: defaults -> file -> env -> CLI flags. Auth and account management commands skip config loading. See [docs/roadmap.md](docs/roadmap.md).
+**Phases 1, 2, 3, 3.5, 4.1-4.7 complete.** All Phase 1 increments done (Graph API + CLI auth + file ops). Phase 2 complete (CI scaffold, E2E round-trip, E2E edge cases). Phase 3 complete (config integration). Phase 3.5 complete (alignment: profiles → drives migration). Phase 4.1-4.7 complete (sync engine foundation: state store, delta processor, scanner, filter, reconciler, safety checks, executor). Login is now discovery-based: device code auth → API discovery → auto-create config. Users can `login`, `logout`, `whoami`, `status`, `drive add`, `drive remove`, `ls`, `get`, `put`, `rm`, `mkdir`, `stat`. CLI loads config via `PersistentPreRunE` with four-layer override: defaults -> file -> env -> CLI flags. Auth and account management commands skip config loading. See [docs/roadmap.md](docs/roadmap.md).
 
 ## Architecture Overview
 
@@ -52,7 +52,7 @@ Currently: Working CLI OneDrive client with discovery-based auth, account manage
 - **`e2e/`** — E2E test suite (`//go:build e2e`): builds binary, exercises full round-trip against live OneDrive
 
 ### In progress (Phase 4)
-- **`internal/sync/`** — Sync engine foundation complete: SQLite state store, delta processor, local scanner, filter engine, reconciler (14+7 decision matrix), safety checks (S1-S7). 216 tests, 91.7% coverage. Next: executor (4.7), conflict handler (4.8), transfer pipeline (4.9), engine wiring (4.10), CLI commands (4.11-4.12)
+- **`internal/sync/`** — Sync engine foundation complete: SQLite state store, delta processor, local scanner, filter engine, reconciler (14+7 decision matrix), safety checks (S1-S7), executor (sequential dispatch, 9 phases, error classification). ~245 tests, 91.3% coverage. Next: conflict handler (4.8), transfer pipeline (4.9), engine wiring (4.10), CLI commands (4.11-4.12)
 
 ## Documentation Index
 

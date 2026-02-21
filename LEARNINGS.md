@@ -305,6 +305,15 @@ Calling `db.Close()` twice does not error with the pure-Go SQLite driver. To tes
 - **uint64 to int64 overflow.** Cap at `math.MaxInt64` before conversion.
 - **S2 belongs in the safety checker, not the reconciler (SRP).** Reconciler's `checkDeltaCompleteness` was buggy (single-drive assumption). Safety checker has correct per-drive implementation.
 
+### Executor
+- **`dispatchPhase` helper eliminates `dupl` linter hits across 9 phase runners.** All phase runners have structurally identical error-routing loops; a single `dispatchPhase(ctx, report, actions, label, handler, onSuccess)` helper deduplicates them. Downloads/uploads accumulate bytes via closure (`if err == nil { r.BytesDownloaded += n }`).
+- **Interface forward declarations must be validated against real implementations.** `TransferClient` in `types.go` had two signature mismatches with actual `graph.Client` methods — a bug only caught when wiring the executor. Validate interfaces against the real type before writing consumers.
+- **`GetItemByPath` needed by move handler but missing from planned `ExecutorStore`.** Narrow interface definitions should be derived from actual handler method calls, not just design-doc reading. The move handler needs parent lookup by path to resolve `newParentID`.
+- **`io.TeeReader` for concurrent hashing and upload.** Wrap the file reader once: `tee := io.TeeReader(file, hasher)`. Each `UploadChunk` call reads from `io.LimitReader(tee, chunkSize)`, feeding both the upload and the hasher in a single pass. No second file read needed.
+- **S4 hash-before-delete is a runtime check, not just plan-time.** The safety checker filters out items with no `SyncedHash` at plan time. The executor re-hashes the actual file at execution time to catch modifications that happened after planning. Both checks are necessary.
+- **Checkpoint failure should log a warning, not be silently discarded.** The original `_ = e.store.Checkpoint()` pattern was flagged by `errcheck`. Changed to `if err := ...; err != nil { logger.Warn(...) }` — non-fatal but visible.
+- **errcheck linter flags `_ = expr` on error returns.** Use `if err := expr; err != nil { logger.Warn(...) }` for best-effort operations, or `//nolint:errcheck` with a comment for truly unhandleable errors (e.g., defer cleanup).
+
 ---
 
 ## 8. Agent Coordination
