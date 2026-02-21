@@ -109,9 +109,10 @@ func hashContent(content string) string {
 }
 
 // testScanner creates a Scanner with a test logger that writes to t.Log.
+// DriveID is hardcoded to "test-drive" — all scanner tests use the same value.
 func testScanner(t *testing.T, store ScannerStore, filter Filter, skipSymlinks bool) *Scanner {
 	t.Helper()
-	return NewScanner(store, filter, skipSymlinks, testLogger(t))
+	return NewScanner("test-drive", store, filter, skipSymlinks, testLogger(t))
 }
 
 // --- Tests ---
@@ -601,7 +602,7 @@ func TestNewScanner_NilLogger(t *testing.T) {
 	t.Parallel()
 
 	// Should not panic when logger is nil
-	s := NewScanner(newScannerMockStore(), newMockFilter(), true, nil)
+	s := NewScanner("test-drive", newScannerMockStore(), newMockFilter(), true, nil)
 	assert.NotNil(t, s)
 	assert.NotNil(t, s.logger)
 }

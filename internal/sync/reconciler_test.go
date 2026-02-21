@@ -14,7 +14,7 @@ import (
 // reconcilerMockStore implements ReconcilerStore for reconciler tests.
 // It returns pre-configured item lists and tracks calls.
 type reconcilerMockStore struct {
-	activeItems []*Item
+	reconciliationItems []*Item
 
 	// Error injection
 	listActiveErr error
@@ -24,11 +24,11 @@ func newReconcilerMockStore() *reconcilerMockStore {
 	return &reconcilerMockStore{}
 }
 
-func (s *reconcilerMockStore) ListAllActiveItems(_ context.Context) ([]*Item, error) {
+func (s *reconcilerMockStore) ListItemsForReconciliation(_ context.Context) ([]*Item, error) {
 	if s.listActiveErr != nil {
 		return nil, s.listActiveErr
 	}
-	return s.activeItems, nil
+	return s.reconciliationItems, nil
 }
 
 // --- reconciler test helpers ---
@@ -118,7 +118,7 @@ func reconcilerFolder(path string, localExists, remoteExists, synced, isDeleted 
 func TestReconcile_F1_NoChange(t *testing.T) {
 	t.Parallel()
 	store := newReconcilerMockStore()
-	store.activeItems = []*Item{
+	store.reconciliationItems = []*Item{
 		reconcilerItem("file.txt", "AAA", "AAA", "AAA", true, false),
 	}
 
@@ -132,7 +132,7 @@ func TestReconcile_F2_RemoteChanged(t *testing.T) {
 	t.Parallel()
 	store := newReconcilerMockStore()
 	// Local unchanged (AAA), remote changed (BBB vs synced AAA).
-	store.activeItems = []*Item{
+	store.reconciliationItems = []*Item{
 		reconcilerItem("file.txt", "AAA", "BBB", "AAA", true, false),
 	}
 
@@ -152,7 +152,7 @@ func TestReconcile_F3_LocalChanged(t *testing.T) {
 	// Ensure LocalMtime is after LastSyncedAt so enrichment guard doesn't suppress.
 	futureMtime := *item.LastSyncedAt + int64(2e9)
 	item.LocalMtime = &futureMtime
-	store.activeItems = []*Item{item}
+	store.reconciliationItems = []*Item{item}
 
 	r := NewReconciler(store, reconcilerTestLogger(t))
 	plan, err := r.Reconcile(context.Background(), SyncBidirectional)
@@ -169,7 +169,7 @@ func TestReconcile_F4_FalseConflict(t *testing.T) {
 	item := reconcilerItem("file.txt", "BBB", "BBB", "AAA", true, false)
 	futureMtime := *item.LastSyncedAt + int64(2e9)
 	item.LocalMtime = &futureMtime
-	store.activeItems = []*Item{item}
+	store.reconciliationItems = []*Item{item}
 
 	r := NewReconciler(store, reconcilerTestLogger(t))
 	plan, err := r.Reconcile(context.Background(), SyncBidirectional)
@@ -185,7 +185,7 @@ func TestReconcile_F5_Conflict(t *testing.T) {
 	item := reconcilerItem("file.txt", "BBB", "CCC", "AAA", true, false)
 	futureMtime := *item.LastSyncedAt + int64(2e9)
 	item.LocalMtime = &futureMtime
-	store.activeItems = []*Item{item}
+	store.reconciliationItems = []*Item{item}
 
 	r := NewReconciler(store, reconcilerTestLogger(t))
 	plan, err := r.Reconcile(context.Background(), SyncBidirectional)
@@ -203,7 +203,7 @@ func TestReconcile_F6_LocalDeleted_RemoteUnchanged(t *testing.T) {
 	t.Parallel()
 	store := newReconcilerMockStore()
 	// Local deleted (LocalHash empty), remote unchanged, was synced.
-	store.activeItems = []*Item{
+	store.reconciliationItems = []*Item{
 		reconcilerItem("file.txt", "", "AAA", "AAA", true, false),
 	}
 
@@ -218,7 +218,7 @@ func TestReconcile_F7_LocalDeleted_RemoteChanged(t *testing.T) {
 	t.Parallel()
 	store := newReconcilerMockStore()
 	// Local deleted, remote changed (BBB vs synced AAA).
-	store.activeItems = []*Item{
+	store.reconciliationItems = []*Item{
 		reconcilerItem("file.txt", "", "BBB", "AAA", true, false),
 	}
 
@@ -233,7 +233,7 @@ func TestReconcile_F8_RemoteTombstoned_LocalUnchanged(t *testing.T) {
 	t.Parallel()
 	store := newReconcilerMockStore()
 	// Remote tombstoned, local unchanged.
-	store.activeItems = []*Item{
+	store.reconciliationItems = []*Item{
 		reconcilerItem("file.txt", "AAA", "", "AAA", true, true),
 	}
 
@@ -251,7 +251,7 @@ func TestReconcile_F9_EditDeleteConflict(t *testing.T) {
 	item := reconcilerItem("file.txt", "BBB", "", "AAA", true, true)
 	futureMtime := *item.LastSyncedAt + int64(2e9)
 	item.LocalMtime = &futureMtime
-	store.activeItems = []*Item{item}
+	store.reconciliationItems = []*Item{item}
 
 	r := NewReconciler(store, reconcilerTestLogger(t))
 	plan, err := r.Reconcile(context.Background(), SyncBidirectional)
@@ -267,7 +267,7 @@ func TestReconcile_F10_IdenticalNewFile(t *testing.T) {
 	t.Parallel()
 	store := newReconcilerMockStore()
 	// Both present, never synced, hashes match.
-	store.activeItems = []*Item{
+	store.reconciliationItems = []*Item{
 		reconcilerItem("file.txt", "AAA", "AAA", "", false, false),
 	}
 
@@ -282,7 +282,7 @@ func TestReconcile_F11_CreateCreateConflict(t *testing.T) {
 	t.Parallel()
 	store := newReconcilerMockStore()
 	// Both present, never synced, hashes differ.
-	store.activeItems = []*Item{
+	store.reconciliationItems = []*Item{
 		reconcilerItem("file.txt", "AAA", "BBB", "", false, false),
 	}
 
@@ -300,7 +300,7 @@ func TestReconcile_F12_NewLocalFile(t *testing.T) {
 	t.Parallel()
 	store := newReconcilerMockStore()
 	// Present locally, absent remotely, never synced → upload.
-	store.activeItems = []*Item{
+	store.reconciliationItems = []*Item{
 		reconcilerItem("file.txt", "AAA", "", "", false, false),
 	}
 
@@ -315,7 +315,7 @@ func TestReconcile_F13_NewRemoteFile(t *testing.T) {
 	t.Parallel()
 	store := newReconcilerMockStore()
 	// Absent locally, present remotely, never synced → download.
-	store.activeItems = []*Item{
+	store.reconciliationItems = []*Item{
 		reconcilerItem("file.txt", "", "AAA", "", false, false),
 	}
 
@@ -330,7 +330,7 @@ func TestReconcile_F14_BothAbsent(t *testing.T) {
 	t.Parallel()
 	store := newReconcilerMockStore()
 	// Both absent, was synced → cleanup.
-	store.activeItems = []*Item{
+	store.reconciliationItems = []*Item{
 		reconcilerItem("file.txt", "", "", "AAA", true, true),
 	}
 
@@ -346,7 +346,7 @@ func TestReconcile_F14_BothAbsent(t *testing.T) {
 func TestReconcile_D1_FolderBothExist_Synced(t *testing.T) {
 	t.Parallel()
 	store := newReconcilerMockStore()
-	store.activeItems = []*Item{
+	store.reconciliationItems = []*Item{
 		reconcilerFolder("docs", true, true, true, false),
 	}
 
@@ -359,7 +359,7 @@ func TestReconcile_D1_FolderBothExist_Synced(t *testing.T) {
 func TestReconcile_D2_FolderBothExist_Unsynced(t *testing.T) {
 	t.Parallel()
 	store := newReconcilerMockStore()
-	store.activeItems = []*Item{
+	store.reconciliationItems = []*Item{
 		reconcilerFolder("docs", true, true, false, false),
 	}
 
@@ -373,7 +373,7 @@ func TestReconcile_D2_FolderBothExist_Unsynced(t *testing.T) {
 func TestReconcile_D3_FolderMissingLocally(t *testing.T) {
 	t.Parallel()
 	store := newReconcilerMockStore()
-	store.activeItems = []*Item{
+	store.reconciliationItems = []*Item{
 		reconcilerFolder("docs", false, true, false, false),
 	}
 
@@ -388,7 +388,7 @@ func TestReconcile_D3_FolderMissingLocally(t *testing.T) {
 func TestReconcile_D4_FolderRemoteTombstoned(t *testing.T) {
 	t.Parallel()
 	store := newReconcilerMockStore()
-	store.activeItems = []*Item{
+	store.reconciliationItems = []*Item{
 		reconcilerFolder("docs", true, false, true, true),
 	}
 
@@ -402,7 +402,7 @@ func TestReconcile_D4_FolderRemoteTombstoned(t *testing.T) {
 func TestReconcile_D5_FolderNewLocal(t *testing.T) {
 	t.Parallel()
 	store := newReconcilerMockStore()
-	store.activeItems = []*Item{
+	store.reconciliationItems = []*Item{
 		reconcilerFolder("docs", true, false, false, false),
 	}
 
@@ -418,7 +418,7 @@ func TestReconcile_D6_FolderBothMissing_Synced(t *testing.T) {
 	store := newReconcilerMockStore()
 	folder := reconcilerFolder("docs", false, false, true, false)
 	folder.ItemID = "" // No remote presence either.
-	store.activeItems = []*Item{folder}
+	store.reconciliationItems = []*Item{folder}
 
 	r := NewReconciler(store, reconcilerTestLogger(t))
 	plan, err := r.Reconcile(context.Background(), SyncBidirectional)
@@ -436,7 +436,7 @@ func TestReconcile_DownloadOnly_IgnoresLocalChanges(t *testing.T) {
 	item := reconcilerItem("file.txt", "BBB", "AAA", "AAA", true, false)
 	futureMtime := *item.LastSyncedAt + int64(2e9)
 	item.LocalMtime = &futureMtime
-	store.activeItems = []*Item{item}
+	store.reconciliationItems = []*Item{item}
 
 	r := NewReconciler(store, reconcilerTestLogger(t))
 	plan, err := r.Reconcile(context.Background(), SyncDownloadOnly)
@@ -447,7 +447,7 @@ func TestReconcile_DownloadOnly_IgnoresLocalChanges(t *testing.T) {
 func TestReconcile_DownloadOnly_AllowsDownloads(t *testing.T) {
 	t.Parallel()
 	store := newReconcilerMockStore()
-	store.activeItems = []*Item{
+	store.reconciliationItems = []*Item{
 		reconcilerItem("file.txt", "AAA", "BBB", "AAA", true, false),
 	}
 
@@ -461,7 +461,7 @@ func TestReconcile_UploadOnly_IgnoresRemoteChanges(t *testing.T) {
 	t.Parallel()
 	store := newReconcilerMockStore()
 	// Remote changed (BBB), local unchanged — in upload-only, remote changes are ignored.
-	store.activeItems = []*Item{
+	store.reconciliationItems = []*Item{
 		reconcilerItem("file.txt", "AAA", "BBB", "AAA", true, false),
 	}
 
@@ -478,7 +478,7 @@ func TestReconcile_UploadOnly_AllowsUploads(t *testing.T) {
 	item := reconcilerItem("file.txt", "BBB", "AAA", "AAA", true, false)
 	futureMtime := *item.LastSyncedAt + int64(2e9)
 	item.LocalMtime = &futureMtime
-	store.activeItems = []*Item{item}
+	store.reconciliationItems = []*Item{item}
 
 	r := NewReconciler(store, reconcilerTestLogger(t))
 	plan, err := r.Reconcile(context.Background(), SyncUploadOnly)
@@ -515,7 +515,7 @@ func TestReconcile_LocalMove_Detected(t *testing.T) {
 	mt := NowNano()
 	dst.LocalMtime = &mt
 
-	store.activeItems = []*Item{src, dst}
+	store.reconciliationItems = []*Item{src, dst}
 
 	r := NewReconciler(store, reconcilerTestLogger(t))
 	plan, err := r.Reconcile(context.Background(), SyncBidirectional)
@@ -545,7 +545,7 @@ func TestReconcile_LocalMove_AmbiguousNotDetected(t *testing.T) {
 		Path: "c.txt", LocalHash: "HASH", LocalMtime: &mt,
 	}
 
-	store.activeItems = []*Item{src1, src2, dst}
+	store.reconciliationItems = []*Item{src1, src2, dst}
 
 	r := NewReconciler(store, reconcilerTestLogger(t))
 	plan, err := r.Reconcile(context.Background(), SyncBidirectional)
@@ -565,7 +565,7 @@ func TestReconcile_RemoteMove(t *testing.T) {
 	// already applied the path change. The executor handles the local rename.
 	// A dedicated D7 test exercises the folder case.
 	item := reconcilerItem("file.txt", "AAA", "AAA", "AAA", true, false)
-	store.activeItems = []*Item{item}
+	store.reconciliationItems = []*Item{item}
 
 	r := NewReconciler(store, reconcilerTestLogger(t))
 	plan, err := r.Reconcile(context.Background(), SyncBidirectional)
@@ -579,7 +579,7 @@ func TestReconcile_FolderCreateOrder_TopDown(t *testing.T) {
 	t.Parallel()
 	store := newReconcilerMockStore()
 	// Three nested folders: create deepest first in input, expect shallowest first in output.
-	store.activeItems = []*Item{
+	store.reconciliationItems = []*Item{
 		reconcilerFolder("a/b/c", false, true, false, false),
 		reconcilerFolder("a", false, true, false, false),
 		reconcilerFolder("a/b", false, true, false, false),
@@ -600,7 +600,7 @@ func TestReconcile_DeleteOrder_FilesBeforeFolders(t *testing.T) {
 	// Mix of file and folder deletes. Files should come before folders in the plan.
 	folder := reconcilerFolder("dir", true, false, true, true)
 	file := reconcilerItem("dir/file.txt", "AAA", "", "AAA", true, true)
-	store.activeItems = []*Item{folder, file}
+	store.reconciliationItems = []*Item{folder, file}
 
 	r := NewReconciler(store, reconcilerTestLogger(t))
 	plan, err := r.Reconcile(context.Background(), SyncBidirectional)
@@ -617,7 +617,7 @@ func TestReconcile_DeleteOrder_FoldersDeepestFirst(t *testing.T) {
 	store := newReconcilerMockStore()
 	// Three nested folder deletes — deepest should come last, after files, but deepest first
 	// among folders.
-	store.activeItems = []*Item{
+	store.reconciliationItems = []*Item{
 		reconcilerFolder("a", true, false, true, true),
 		reconcilerFolder("a/b", true, false, true, true),
 		reconcilerFolder("a/b/c", true, false, true, true),
@@ -655,7 +655,7 @@ func TestReconcile_Enrichment_NoAction(t *testing.T) {
 	// LocalMtime is at or before sync time → file untouched → enrichment.
 	localMtime := syncTime - int64(1e9)
 	item.LocalMtime = &localMtime
-	store.activeItems = []*Item{item}
+	store.reconciliationItems = []*Item{item}
 
 	r := NewReconciler(store, reconcilerTestLogger(t))
 	plan, err := r.Reconcile(context.Background(), SyncBidirectional)
@@ -683,7 +683,7 @@ func TestReconcile_Enrichment_ThenLocalModify(t *testing.T) {
 	// LocalMtime is after sync time → real edit.
 	futureMtime := syncTime + int64(2e9)
 	item.LocalMtime = &futureMtime
-	store.activeItems = []*Item{item}
+	store.reconciliationItems = []*Item{item}
 
 	r := NewReconciler(store, reconcilerTestLogger(t))
 	plan, err := r.Reconcile(context.Background(), SyncBidirectional)
@@ -709,7 +709,7 @@ func TestReconcile_Enrichment_ThenRemoteChange(t *testing.T) {
 	item.LastSyncedAt = &syncTime
 	localMtime := syncTime - int64(1e9)
 	item.LocalMtime = &localMtime
-	store.activeItems = []*Item{item}
+	store.reconciliationItems = []*Item{item}
 
 	r := NewReconciler(store, reconcilerTestLogger(t))
 	plan, err := r.Reconcile(context.Background(), SyncBidirectional)
@@ -735,7 +735,7 @@ func TestReconcile_Enrichment_ThenBothChange(t *testing.T) {
 	item.LastSyncedAt = &syncTime
 	futureMtime := syncTime + int64(2e9)
 	item.LocalMtime = &futureMtime
-	store.activeItems = []*Item{item}
+	store.reconciliationItems = []*Item{item}
 
 	r := NewReconciler(store, reconcilerTestLogger(t))
 	plan, err := r.Reconcile(context.Background(), SyncBidirectional)
@@ -764,7 +764,7 @@ func TestReconcile_Enrichment_UserSavesSameContent(t *testing.T) {
 	// must detect that mtime hasn't advanced past sync time for no change.
 	localMtime := syncTime - int64(1e9)
 	item.LocalMtime = &localMtime
-	store.activeItems = []*Item{item}
+	store.reconciliationItems = []*Item{item}
 
 	r := NewReconciler(store, reconcilerTestLogger(t))
 	plan, err := r.Reconcile(context.Background(), SyncBidirectional)
@@ -782,13 +782,13 @@ func TestReconcile_ListActiveItemsError(t *testing.T) {
 	r := NewReconciler(store, reconcilerTestLogger(t))
 	_, err := r.Reconcile(context.Background(), SyncBidirectional)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "list active items")
+	assert.Contains(t, err.Error(), "list items for reconciliation")
 }
 
 func TestReconcile_EmptyItemList(t *testing.T) {
 	t.Parallel()
 	store := newReconcilerMockStore()
-	store.activeItems = []*Item{}
+	store.reconciliationItems = []*Item{}
 
 	r := NewReconciler(store, reconcilerTestLogger(t))
 	plan, err := r.Reconcile(context.Background(), SyncBidirectional)
@@ -799,7 +799,7 @@ func TestReconcile_EmptyItemList(t *testing.T) {
 func TestReconcile_NilLogger(t *testing.T) {
 	t.Parallel()
 	store := newReconcilerMockStore()
-	store.activeItems = []*Item{}
+	store.reconciliationItems = []*Item{}
 
 	r := NewReconciler(store, nil)
 	plan, err := r.Reconcile(context.Background(), SyncBidirectional)
@@ -975,7 +975,7 @@ func TestPathDepth(t *testing.T) {
 func TestReconcile_UploadOnly_SkipsFolderAdopt(t *testing.T) {
 	t.Parallel()
 	store := newReconcilerMockStore()
-	store.activeItems = []*Item{
+	store.reconciliationItems = []*Item{
 		reconcilerFolder("docs", true, true, false, false),
 	}
 
@@ -988,7 +988,7 @@ func TestReconcile_UploadOnly_SkipsFolderAdopt(t *testing.T) {
 func TestReconcile_UploadOnly_SkipsLocalFolderCreate(t *testing.T) {
 	t.Parallel()
 	store := newReconcilerMockStore()
-	store.activeItems = []*Item{
+	store.reconciliationItems = []*Item{
 		reconcilerFolder("docs", false, true, false, false),
 	}
 
@@ -1001,7 +1001,7 @@ func TestReconcile_UploadOnly_SkipsLocalFolderCreate(t *testing.T) {
 func TestReconcile_DownloadOnly_SkipsRemoteFolderCreate(t *testing.T) {
 	t.Parallel()
 	store := newReconcilerMockStore()
-	store.activeItems = []*Item{
+	store.reconciliationItems = []*Item{
 		reconcilerFolder("docs", true, false, false, false),
 	}
 
@@ -1016,7 +1016,7 @@ func TestReconcile_DownloadOnly_SkipsRemoteFolderCreate(t *testing.T) {
 func TestReconcile_D4_UploadOnly_Skipped(t *testing.T) {
 	t.Parallel()
 	store := newReconcilerMockStore()
-	store.activeItems = []*Item{
+	store.reconciliationItems = []*Item{
 		reconcilerFolder("docs", true, false, true, true),
 	}
 
@@ -1047,7 +1047,7 @@ func TestReconcile_MoveOrder_FoldersBeforeFiles(t *testing.T) {
 	// Folder move: we simulate by adding a remote move action directly.
 	// Actually, local moves only detect files (hash-based). Folder moves come from
 	// delta processor (remote moves). Let's test the orderPlan directly instead.
-	store.activeItems = []*Item{fileSrc, fileDst}
+	store.reconciliationItems = []*Item{fileSrc, fileDst}
 
 	r := NewReconciler(store, reconcilerTestLogger(t))
 	plan, err := r.Reconcile(context.Background(), SyncBidirectional)
@@ -1070,7 +1070,7 @@ func TestReconcile_MixedActions(t *testing.T) {
 	file4 := reconcilerItem("file4.txt", "", "AAA", "AAA", true, false) // F6: remote delete
 	folder1 := reconcilerFolder("newdir", false, true, false, false)    // D3: create locally
 
-	store.activeItems = []*Item{file1, file2, file3, file4, folder1}
+	store.reconciliationItems = []*Item{file1, file2, file3, file4, folder1}
 
 	r := NewReconciler(store, reconcilerTestLogger(t))
 	plan, err := r.Reconcile(context.Background(), SyncBidirectional)

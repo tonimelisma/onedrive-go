@@ -40,9 +40,9 @@ func NewReconciler(store ReconcilerStore, logger *slog.Logger) *Reconciler {
 func (r *Reconciler) Reconcile(ctx context.Context, mode SyncMode) (*ActionPlan, error) {
 	r.logger.Info("reconciliation started", "mode", mode)
 
-	items, err := r.store.ListAllActiveItems(ctx)
+	items, err := r.store.ListItemsForReconciliation(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list active items: %w", err)
+		return nil, fmt.Errorf("list items for reconciliation: %w", err)
 	}
 
 	plan := &ActionPlan{}
