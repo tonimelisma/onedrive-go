@@ -50,6 +50,9 @@ When using `replace` with a commit hash, the pseudo-version timestamp must match
 - 200/201: final chunk complete (body has driveItem JSON)
 - Error: various HTTP error codes
 
+### rewindBody is called before every attempt, not just retries
+`doRetry` calls `rewindBody` at the top of the loop, which means the first attempt also rewinds. Testing "rewind fails on retry" requires a seeker that succeeds on the first Seek but fails on subsequent ones -- a simple always-failing seeker will fail before any HTTP call is made.
+
 ### Delta normalization pipeline
 Four steps in order: (1) filter packages, (2) clear bogus hashes on deleted items, (3) deduplicate keeping last occurrence, (4) reorder deletions before creations. Each step is a separate unexported function. `slices.SortStableFunc` preserves relative order.
 
@@ -139,7 +142,10 @@ SQL variable named `sqlGetDeltaToken` triggers false positive. Fix with `//nolin
 Returning `(nil, nil)` for "skip this entry" requires `//nolint:nilnil`. Idiomatic when both nil means "nothing to do, no error."
 
 ### goconst applies to test files
-Unlike `mnd`, `funlen`, `dupl` — `goconst` flags repeated string literals even in tests.
+Unlike `mnd`, `funlen`, `dupl` -- `goconst` flags repeated string literals even in tests.
+
+### handleChunkResponse can be tested with crafted *http.Response
+For error paths that don't depend on the HTTP transport (drain errors on 202/416), construct an `*http.Response` directly with a custom `Body` instead of using httptest. This is simpler and avoids server setup for paths that are purely about response body processing.
 
 ### gofumpt stricter than gofmt
 Enforces stricter struct field alignment. Multi-byte characters in comments can cause differences. Always run `gofumpt -w` before committing.
