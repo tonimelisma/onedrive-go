@@ -407,9 +407,9 @@ func TestRunOnce_Upload_EndToEnd(t *testing.T) {
 	assert.Equal(t, 1, mock.uploadCalls)
 
 	// B4: Verify the state store was updated with remote+synced fields after upload.
-	// The scanner creates the initial item with empty DriveID/ItemID. populateDriveID
-	// (B-050) fills in the engine's drive ID before execution. After upload, the
-	// executor upserts a row at (driveID, server-assigned-ID).
+	// The scanner creates the initial item with the engine's DriveID and empty ItemID.
+	// After upload, the executor upserts a new row at (driveID, server-assigned-ID)
+	// and deletes the stale scanner row (B-050).
 	uploaded, err := store.GetItem(ctx, "test-drive-id", "uploaded-id")
 	require.NoError(t, err)
 	require.NotNil(t, uploaded, "uploaded item should exist in store")
@@ -876,8 +876,11 @@ func TestRunOnce_LocalDelete_EndToEnd(t *testing.T) {
 	require.NoError(t, store.SetDeltaComplete(ctx, "test-drive-id", true))
 
 	// Seed a synced item that the delta processor has tombstoned.
-	size := int64(100)
-	hash := "AAAAAAAAAAAAAAAAAAAAAA=="
+	// The hash must match the actual content written to disk below, otherwise
+	// the executor's S4 safety check treats the delete as a conflict backup.
+	localContent := []byte("delete me")
+	size := int64(len(localContent))
+	hash := engineHash(localContent)
 	item := &Item{
 		DriveID:       "test-drive-id",
 		ItemID:        "local-del-item",
@@ -906,7 +909,7 @@ func TestRunOnce_LocalDelete_EndToEnd(t *testing.T) {
 
 	// Create the local file so the executor can delete it.
 	localPath := filepath.Join(eng.syncRoot, "todelete.txt")
-	require.NoError(t, os.WriteFile(localPath, []byte("delete me"), 0o644))
+	require.NoError(t, os.WriteFile(localPath, localContent, 0o644))
 
 	// Run download-only: scanner is skipped, reconciler sees the tombstoned item
 	// via ListItemsForReconciliation, classifies as F8, executor deletes locally.
