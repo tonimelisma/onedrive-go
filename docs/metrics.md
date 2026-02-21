@@ -21,12 +21,31 @@ Detailed per-increment metrics from earlier phases archived in [docs/archive/met
 | Pre-4.7 Coverage Hardening | 2 | 1 | 2 | +1.1% (total) |
 | Pre-4.7 Foundation Cleanup | 0 | 1 | 0 | 0.0% (no change) |
 | Phase 4.8 Conflict Handler | 0 | 2 | 1 | +0.0% (sync 91.3%→91.2%) |
+| Phase 4.8 Top-Up | 0 | 7 | 0 | +0.2% (sync 91.2%→91.4%) |
 
 *\* Review not performed — process gap. Subsequent increments will have accurate top-up counts.*
 
 ---
 
 ## Latest Increment
+
+### Phase 4.8 Top-Up: Bug Fixes + Regression Tests — 2026-02-21
+
+| Metric | Value |
+|--------|-------|
+| **Agent count** | 0 (orchestrator-only) |
+| **Wave count** | 1 |
+| **PR count** | 1 (#58) |
+| **Coverage before** | 79.5% (total), 91.2% (sync) |
+| **Coverage after** | 79.6% (total), 91.4% (sync) |
+| **Top-up fix count** | 7 (RemoteMtime missing in conflictAction; UTC in generateConflictPath; consolidate NowNano in handleLocalDeleteConflict; nil logger test; download failure test; RecordConflict failure test; upload failure test + content verification) |
+| **Agent deviation count** | 0 |
+| **CI failures** | 0 |
+| **Wall-clock time** | ~15 min |
+| **New tests** | 4 (executor) + 1 (conflict) + updated assertions |
+| **Lines changed** | +145 / -13 |
+
+---
 
 ### Phase 4.8: Conflict Handler — 2026-02-21
 

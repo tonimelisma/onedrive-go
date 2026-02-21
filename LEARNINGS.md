@@ -317,6 +317,12 @@ Calling `db.Close()` twice does not error with the pure-Go SQLite driver. To tes
 - **Checkpoint failure should log a warning, not be silently discarded.** The original `_ = e.store.Checkpoint()` pattern was flagged by `errcheck`. Changed to `if err := ...; err != nil { logger.Warn(...) }` — non-fatal but visible.
 - **errcheck linter flags `_ = expr` on error returns.** Use `if err := expr; err != nil { logger.Warn(...) }` for best-effort operations, or `//nolint:errcheck` with a comment for truly unhandleable errors (e.g., defer cleanup).
 
+### Conflict handler
+- **Action constructors must populate ALL spec-required fields.** `conflictAction` initially omitted `RemoteMtime` — a data completeness bug that would have caused incomplete conflict records. Spec compliance requires field-by-field review of pseudocode against the implementation.
+- **Use UTC for user-facing timestamps.** `generateConflictPath` initially used `time.Now().Format(...)` (local time). The spec says UTC. Local time causes cross-timezone naming inconsistency. Always use `time.Now().UTC()` for deterministic, portable timestamps.
+- **Consolidate `NowNano()` calls.** Multiple calls in a single function produce slightly different timestamps for related fields (ID, DetectedAt, MarkDeleted). Use a single `now := NowNano()` for consistency.
+- **Post-merge code review catches bugs that DOD gates miss.** Line-by-line review found 2 correctness bugs (RemoteMtime, UTC) that build, test, lint all passed — the bugs were semantic, not syntactic. Mandatory review is not optional.
+
 ---
 
 ## 8. Agent Coordination
