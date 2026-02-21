@@ -284,6 +284,15 @@ Login must work before any config file exists. `PersistentPreRunE` skips `loadCo
 - **FolderCreateSide enum eliminates stringly-typed encoding.** `iota + 1` distinguishes from zero-value (unset).
 - **`reconcilerMockStore` prefix pattern works.** Avoids symbol collisions with delta_test.go's `mockStore`.
 
+### Error injection pattern for mock stores
+Add `error` fields to mock stores (e.g., `deleteDeltaErr`, `upsertItemErr`). Check at the top of the mock method before real logic. Zero-value (nil) = no error, so existing tests are unaffected. This pattern scales well across delta, scanner, reconciler, and safety mocks.
+
+### modernc.org/sqlite Close() is idempotent
+Calling `db.Close()` twice does not error with the pure-Go SQLite driver. To test "store is unusable after close", test that subsequent queries fail, not that Close returns an error.
+
+### applyMigration naming convention
+`applyMigration` constructs filenames with `migrations/%06d_initial_schema.up.sql`. Only version 1 has a migration file. Future versions will need additional embedded SQL files with matching names.
+
 ### Safety checks
 - **`filterBySyncedHash` extracted to deduplicate S1/S4.** Parameterized by invariant name for log messages.
 - **Injectable `statfsFunc` requires default mock in test helpers.** Tests not specifically testing S6 need a mock returning ample space.
