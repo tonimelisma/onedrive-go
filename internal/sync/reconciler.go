@@ -621,23 +621,19 @@ func (r *Reconciler) cleanupAction(item *Item) Action {
 }
 
 func (r *Reconciler) folderCreateAction(item *Item, local bool) Action {
-	a := Action{
-		Type:    ActionFolderCreate,
-		DriveID: item.DriveID,
-		ItemID:  item.ItemID,
-		Path:    item.Path,
-		Item:    item,
-	}
-
-	// NewPath encodes whether it is a local or remote create.
-	// The executor uses this to decide between mkdir and API call.
+	side := FolderCreateRemote
 	if local {
-		a.NewPath = "local"
-	} else {
-		a.NewPath = "remote"
+		side = FolderCreateLocal
 	}
 
-	return a
+	return Action{
+		Type:       ActionFolderCreate,
+		DriveID:    item.DriveID,
+		ItemID:     item.ItemID,
+		Path:       item.Path,
+		CreateSide: side,
+		Item:       item,
+	}
 }
 
 // --- Action plan helpers ---

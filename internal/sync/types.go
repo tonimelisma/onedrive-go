@@ -149,6 +149,14 @@ const (
 	ActionCleanup                        // Remove stale DB record
 )
 
+// FolderCreateSide indicates whether a folder should be created locally or remotely.
+type FolderCreateSide int
+
+const (
+	FolderCreateLocal  FolderCreateSide = iota + 1 // Create folder on local filesystem
+	FolderCreateRemote                             // Create folder via Graph API
+)
+
 // SyncMode controls which sides of the sync are active.
 type SyncMode int
 
@@ -164,9 +172,10 @@ type Action struct {
 	Type         ActionType
 	DriveID      string
 	ItemID       string
-	Path         string // current path
-	NewPath      string // destination path for moves
-	Item         *Item  // full item state for context
+	Path         string           // current path
+	NewPath      string           // destination path for moves
+	CreateSide   FolderCreateSide // only set for ActionFolderCreate
+	Item         *Item            // full item state for context
 	ConflictInfo *ConflictRecord
 }
 

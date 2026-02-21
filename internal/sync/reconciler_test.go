@@ -491,7 +491,7 @@ func TestReconcile_D3_FolderMissingLocally(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, plan.FolderCreates, 1)
 	assert.Equal(t, ActionFolderCreate, plan.FolderCreates[0].Type)
-	assert.Equal(t, "local", plan.FolderCreates[0].NewPath, "should be a local create")
+	assert.Equal(t, FolderCreateLocal, plan.FolderCreates[0].CreateSide, "should be a local create")
 }
 
 func TestReconcile_D4_FolderRemoteTombstoned(t *testing.T) {
@@ -533,7 +533,7 @@ func TestReconcile_D5_FolderNewLocal(t *testing.T) {
 	plan, err := r.Reconcile(context.Background(), SyncBidirectional)
 	require.NoError(t, err)
 	require.Len(t, plan.FolderCreates, 1)
-	assert.Equal(t, "remote", plan.FolderCreates[0].NewPath, "should be a remote create")
+	assert.Equal(t, FolderCreateRemote, plan.FolderCreates[0].CreateSide, "should be a remote create")
 }
 
 func TestReconcile_D6_FolderBothMissing_Synced(t *testing.T) {
