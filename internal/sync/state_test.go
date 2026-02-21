@@ -551,8 +551,9 @@ func TestUploadSessionCRUD(t *testing.T) {
 	t.Run("delete", func(t *testing.T) {
 		require.NoError(t, store.DeleteUploadSession(ctx, "sess-1"))
 
-		_, err := store.GetUploadSession(ctx, "sess-1")
-		assert.ErrorIs(t, err, sql.ErrNoRows)
+		got, err := store.GetUploadSession(ctx, "sess-1")
+		require.NoError(t, err)
+		assert.Nil(t, got, "deleted session should return (nil, nil)")
 	})
 }
 
@@ -666,4 +667,184 @@ func TestBatchUpsert_TxError(t *testing.T) {
 
 	batchErr := store.BatchUpsert(context.Background(), items)
 	require.Error(t, batchErr)
+}
+
+// --- A3: GetUploadSession not-found returns (nil, nil) ---
+
+func TestGetUploadSession_NotFound(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	// Querying a session ID that was never saved should return (nil, nil),
+	// matching the pattern used by GetItem and GetItemByPath.
+	got, err := store.GetUploadSession(ctx, "nonexistent-session")
+	require.NoError(t, err)
+	assert.Nil(t, got, "missing upload session should return nil, not an error")
+}
+
+// --- A5: NewStore failure paths when DB is closed before each stage ---
+
+func TestSetPragmas_ClosedDB(t *testing.T) {
+	// setPragmas should fail when the underlying DB connection is closed.
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	pragmaErr := setPragmas(context.Background(), db, testLogger(t))
+	require.Error(t, pragmaErr)
+	assert.Contains(t, pragmaErr.Error(), "set pragma")
+}
+
+func TestRunMigrations_ClosedDB(t *testing.T) {
+	// runMigrations should fail when the DB is closed because PRAGMA user_version
+	// cannot be read.
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	migErr := runMigrations(context.Background(), db, testLogger(t))
+	require.Error(t, migErr)
+	assert.Contains(t, migErr.Error(), "read schema version")
+}
+
+func TestPrepareAllStatements_ClosedDB(t *testing.T) {
+	// prepareAllStatements should fail when the DB is closed.
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	s := &SQLiteStore{db: db, logger: testLogger(t)}
+
+	prepErr := s.prepareAllStatements(context.Background())
+	require.Error(t, prepErr)
+}
+
+// --- A6: Prepare statement groups fail when their table is missing ---
+
+func TestPrepareStatements_DeltaGroupFailure(t *testing.T) {
+	// When the delta_tokens table is missing, prepareDeltaStmts should fail.
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := &SQLiteStore{db: db, logger: testLogger(t)}
+
+	// No migrations applied — tables don't exist.
+	prepErr := s.prepareDeltaStmts(context.Background())
+	require.Error(t, prepErr)
+	assert.Contains(t, prepErr.Error(), "prepare")
+}
+
+func TestPrepareStatements_ConflictGroupFailure(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := &SQLiteStore{db: db, logger: testLogger(t)}
+
+	prepErr := s.prepareConflictStmts(context.Background())
+	require.Error(t, prepErr)
+	assert.Contains(t, prepErr.Error(), "prepare")
+}
+
+func TestPrepareStatements_StaleGroupFailure(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := &SQLiteStore{db: db, logger: testLogger(t)}
+
+	prepErr := s.prepareStaleStmts(context.Background())
+	require.Error(t, prepErr)
+	assert.Contains(t, prepErr.Error(), "prepare")
+}
+
+func TestPrepareStatements_UploadGroupFailure(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := &SQLiteStore{db: db, logger: testLogger(t)}
+
+	prepErr := s.prepareUploadStmts(context.Background())
+	require.Error(t, prepErr)
+	assert.Contains(t, prepErr.Error(), "prepare")
+}
+
+func TestPrepareStatements_ConfigGroupFailure(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := &SQLiteStore{db: db, logger: testLogger(t)}
+
+	prepErr := s.prepareConfigStmts(context.Background())
+	require.Error(t, prepErr)
+	assert.Contains(t, prepErr.Error(), "prepare")
+}
+
+// --- A7: applyMigration with closed DB (BeginTx fails) ---
+
+func TestApplyMigration_BeginTxError(t *testing.T) {
+	// When the DB is closed, BeginTx should fail, exercising the early error path.
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	applyErr := applyMigration(context.Background(), db, testLogger(t), 1)
+	require.Error(t, applyErr)
+	assert.Contains(t, applyErr.Error(), "begin migration tx")
+}
+
+// --- A8: closeStatements double-close is safe (modernc.org/sqlite is idempotent) ---
+
+func TestCloseStatements_DoubleClose(t *testing.T) {
+	// Per LEARNINGS.md: "modernc.org/sqlite Close() is idempotent".
+	// Manually close a statement, then call closeStatements — should not panic.
+	store, err := NewStore(":memory:", testLogger(t))
+	require.NoError(t, err)
+
+	// Manually close the getItem prepared statement.
+	require.NoError(t, store.itemStmts.get.Close())
+
+	// closeStatements should handle the already-closed statement gracefully.
+	// With modernc.org/sqlite, closing again is a no-op (no error).
+	closeErr := store.closeStatements()
+	assert.NoError(t, closeErr, "double-closing prepared statements should not error with modernc.org/sqlite")
+
+	// Clean up the DB connection (statements already closed above).
+	require.NoError(t, store.db.Close())
+}
+
+// --- A9: Query operations on closed DB propagate errors ---
+
+func TestListStaleFiles_ClosedDB(t *testing.T) {
+	store, err := NewStore(":memory:", testLogger(t))
+	require.NoError(t, err)
+
+	// Close the underlying DB to force query errors.
+	require.NoError(t, store.db.Close())
+
+	_, listErr := store.ListStaleFiles(context.Background())
+	require.Error(t, listErr)
+	assert.Contains(t, listErr.Error(), "list stale files")
+}
+
+func TestScanItemRows_ClosedDB(t *testing.T) {
+	store, err := NewStore(":memory:", testLogger(t))
+	require.NoError(t, err)
+
+	// Insert an item so there's data to query.
+	ctx := context.Background()
+	item := makeTestItem("d1", "item1", "d1", "root1", "scan-closed.txt", ItemTypeFile)
+	item.Path = "scan-closed.txt"
+	require.NoError(t, store.UpsertItem(ctx, item))
+
+	// Close the underlying DB — subsequent queries using prepared statements
+	// should fail, exercising scanItemRows error propagation.
+	require.NoError(t, store.db.Close())
+
+	_, listErr := store.ListAllActiveItems(ctx)
+	require.Error(t, listErr)
+	assert.Contains(t, listErr.Error(), "list active items")
 }
