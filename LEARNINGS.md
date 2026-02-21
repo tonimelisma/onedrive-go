@@ -482,3 +482,27 @@ Using `os.ReadDir` + manual recursion (instead of `filepath.Walk` or `filepath.W
 - **Suggested improvements**: Export `config.parseSize` to eliminate duplication between config and sync packages. Consider a shared `nameutil` package if name validation logic is needed by multiple consumers.
 - **Cross-package concerns**: The `NewFilterEngine` constructor accepts `*config.FilterConfig` — callers must pass a pointer. The `types.go` `NewFilterConfig` helper already returns `config.FilterConfig` by value, so callers will need `&sync.NewFilterConfig(resolved)` or the helper should return a pointer.
 - **Code smells noticed**: (1) Size parsing duplication between `config/size.go` and `sync/filter.go` — same algorithm, different constant names to avoid conflicts. (2) The `matchesSkipPattern` function uses package-level `slog.Warn` instead of the engine's logger, because it's a standalone function. Consider making it a method.
+
+---
+
+## 24. Wave 1 Orchestration Learnings (Phase 4)
+
+### Test symbol collisions between same-package agents
+When multiple agents create `*_test.go` files in the same Go package, symbol redeclarations cause build failures after merge. Wave 1's scanner_test.go redeclared `mockStore`, `testLogger`, and `TestIsValidOneDriveName` from delta_test.go and filter_test.go — requiring 8 post-merge fixes and 3 rebases.
+
+**Fix**: Orchestrator MUST (1) list existing test symbols in agent prompts, (2) assign unique prefixes per agent (e.g., `reconcilerMockStore`), (3) instruct agents to reuse shared helpers like `testLogger(t)` from existing test files. Added to orchestration.md §2.2 and parallel-agents.md.
+
+### Plan merge order to minimize rebase churn
+The scanner PR was rebased 3 times as other PRs merged. With 5 parallel agents, the last-to-merge PR bears all the conflict burden.
+
+**Fix**: When agents have no file conflicts, merge whichever finishes first. When agents do have potential test conflicts (same package), plan which one defines shared infrastructure and merge it first.
+
+### Export shared utilities in Wave 0
+Agent D (Filter) duplicated `config.parseSize` because it's unexported, and Agent D couldn't modify config files (owned by Agent E). This created 67 lines of duplicated code.
+
+**Fix**: Export shared utilities in Wave 0 (the shared foundation pass on main) before launching agents. If two agents might need the same function, make it available upfront.
+
+### Plan NFC/NFD normalization upfront for cross-platform code
+Agent C (Scanner) had a late pivot from single-path to dual-path NFC normalization after Linux CI failure. This was foreseeable — the plan should have specified dual-path threading from the start.
+
+**Fix**: For any code that touches filesystem paths AND a database, the plan must explicitly specify how platform-specific path encoding is handled. On macOS (APFS), NFC/NFD are transparent. On Linux (ext4), they are distinct byte sequences.

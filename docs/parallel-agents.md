@@ -179,6 +179,29 @@ To minimize conflicts, assign agents to **non-overlapping areas**:
 - `CLAUDE.md`, `LEARNINGS.md`
 - `.golangci.yml`
 
+### Test Symbol Collisions in Same-Package Agents
+
+When multiple agents create `*_test.go` files in the **same Go package**, they share the test namespace. Symbol redeclarations (duplicate `mockStore`, `testLogger`, etc.) cause build failures when branches merge.
+
+**Prevention rules:**
+
+1. **Unique mock prefixes**: Each agent MUST prefix mock types with its component name:
+   - `reconcilerMockStore`, `safetyMockStore` (not just `mockStore`)
+   - `newReconcilerMockStore()`, `newSafetyMockStore()` (not `newMockStore()`)
+
+2. **Reuse existing helpers**: If `testLogger(t)` or `mockStore` already exists in a package test file, use it — do NOT redefine it. The orchestrator must list existing test symbols in the agent prompt.
+
+3. **Embed for extension**: If you need different mock behavior, embed the existing mock:
+   ```go
+   type reconcilerMockStore struct {
+       mockStore // embed the existing mock from delta_test.go
+   }
+   // Override only the methods you need different behavior for
+   func (s *reconcilerMockStore) ListAllActiveItems(...) { ... }
+   ```
+
+This was learned after Wave 1 Phase 4, where scanner_test.go redeclared `mockStore`, `testLogger`, and `TestIsValidOneDriveName` from delta_test.go and filter_test.go, requiring 8 post-merge fixes.
+
 ## Troubleshooting
 
 ### "Branch already checked out"

@@ -612,7 +612,7 @@ func TestNewFilterEngine_InvalidMaxFileSize(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid max_file_size")
 }
 
-// --- Size parsing ---
+// --- Size parsing (config.ParseSize integration) ---
 
 func TestParseSizeFilter(t *testing.T) {
 	t.Parallel()
@@ -642,7 +642,7 @@ func TestParseSizeFilter(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
 			t.Parallel()
-			result, err := parseSizeFilter(tt.input)
+			result, err := config.ParseSize(tt.input)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {

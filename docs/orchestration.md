@@ -145,6 +145,17 @@ Be specific enough that the agent can work autonomously.]
 [Explicit list — the agent must NOT touch files outside this list
 without good reason and documentation of why.]
 
+### Existing Test Helpers (DO NOT REDEFINE)
+[List all types, functions, and variables already defined in
+test files within the same package. The agent MUST NOT redeclare
+these — use the existing versions. Example:
+- `mockStore` (delta_test.go) — use this, do NOT create your own
+- `testLogger(t)` (delta_test.go) — returns *slog.Logger for tests
+- `newMockStore()` (delta_test.go) — returns initialized mock
+If you need a mock with different behavior, embed the existing
+mock and override specific methods, or use a uniquely-prefixed
+name like `<component>MockStore`.]
+
 ### Quality Gates
 Before committing, you MUST verify ALL of:
 1. `go build ./...` — zero errors
@@ -220,7 +231,22 @@ inside the implementation is invaluable and cannot be reconstructed
 after your context expires.
 ```
 
-### 2.2 Pre-Launch Briefing
+### 2.2 Test Symbol Collision Prevention (MANDATORY)
+
+When multiple agents create test files in the same Go package, symbol redeclarations cause build failures after merge. The orchestrator MUST prevent this:
+
+1. **List existing test symbols**: Before launching agents, grep all `*_test.go` files in the target package for exported/unexported types, functions, and variables. Include this list in every agent's prompt under "Existing Test Helpers."
+
+2. **Assign unique prefixes**: Each agent's mock types and helpers MUST use a component-specific prefix:
+   - Agent working on `reconciler.go` → `reconcilerMockStore`, `newReconcilerMockStore`
+   - Agent working on `safety.go` → `safetyMockStore`, `newSafetyMockStore`
+   - **Exception**: If an existing mock (e.g., `mockStore` from `delta_test.go`) provides all needed methods, the agent should reuse it directly instead of creating a new one.
+
+3. **Share common helpers**: `testLogger(t)` and similar utilities should be defined exactly ONCE per package. All agents reuse the existing definition.
+
+4. **Plan merge order**: When possible, merge agents that define shared test infrastructure first. Agents that only consume test helpers merge after.
+
+### 2.3 Pre-Launch Briefing
 
 Before launching agents, present the human with a brief summary:
 
@@ -238,7 +264,7 @@ File conflicts: None (safe to parallelize)
 
 This gives the human a last chance to catch scope issues before agents start.
 
-### 2.3 Launching Agents
+### 2.4 Launching Agents
 
 1. Set up worktrees for all Wave N agents (from main repo)
 2. Launch all Wave N agents in parallel using the Task tool
@@ -247,7 +273,7 @@ This gives the human a last chance to catch scope issues before agents start.
 5. Sync main: `git fetch origin && git merge --ff-only origin/main`
 6. Repeat for next wave
 
-### 2.4 Milestone Updates
+### 2.5 Milestone Updates
 
 During execution, report to the human at these milestones:
 
@@ -262,7 +288,7 @@ During execution, report to the human at these milestones:
 
 Format: concise, one line per event. Don't interrupt the human's flow with walls of text.
 
-### 2.5 Escalation During Execution
+### 2.6 Escalation During Execution
 
 If an agent encounters an issue that requires a non-trivial decision:
 

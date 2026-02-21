@@ -28,7 +28,7 @@ func TestParseSize_ValidInputs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			result, err := parseSize(tt.input)
+			result, err := ParseSize(tt.input)
 			require.NoError(t, err)
 			assert.Equal(t, tt.expected, result)
 		})
@@ -38,7 +38,7 @@ func TestParseSize_ValidInputs(t *testing.T) {
 func TestParseSize_InvalidInputs(t *testing.T) {
 	for _, input := range []string{"abc", "MB", "-1"} {
 		t.Run(input, func(t *testing.T) {
-			_, err := parseSize(input)
+			_, err := ParseSize(input)
 			assert.Error(t, err)
 		})
 	}
@@ -51,7 +51,7 @@ func TestParseSize_NegativeWithSuffix(t *testing.T) {
 
 	for _, input := range tests {
 		t.Run(input, func(t *testing.T) {
-			_, err := parseSize(input)
+			_, err := ParseSize(input)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "must be non-negative")
 		})

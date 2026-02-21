@@ -22,10 +22,10 @@ const (
 	tebibyte = 1024 * gibibyte
 )
 
-// parseSize converts a human-readable size string to bytes.
+// ParseSize converts a human-readable size string to bytes.
 // Supports both SI (KB, MB, GB, TB) and IEC (KiB, MiB, GiB, TiB) suffixes.
 // Empty string and "0" return 0. A bare number is treated as raw bytes.
-func parseSize(s string) (int64, error) {
+func ParseSize(s string) (int64, error) {
 	if s == "" || s == "0" {
 		return 0, nil
 	}

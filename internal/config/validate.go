@@ -72,7 +72,7 @@ func validateFilter(f *FilterConfig) []error {
 	var errs []error
 
 	if f.MaxFileSize != "" && f.MaxFileSize != "0" {
-		if _, err := parseSize(f.MaxFileSize); err != nil {
+		if _, err := ParseSize(f.MaxFileSize); err != nil {
 			errs = append(errs, fmt.Errorf("max_file_size: %w", err))
 		}
 	}
@@ -113,7 +113,7 @@ func validateWorkerCount(field string, n int) []error {
 }
 
 func validateChunkSize(s string) []error {
-	bytes, err := parseSize(s)
+	bytes, err := ParseSize(s)
 	if err != nil {
 		return []error{fmt.Errorf("chunk_size: %w", err)}
 	}
@@ -219,7 +219,7 @@ func validateSafetyRemaining(s *SafetyConfig) []error {
 	var errs []error
 
 	if s.MinFreeSpace != "" && s.MinFreeSpace != "0" {
-		if _, err := parseSize(s.MinFreeSpace); err != nil {
+		if _, err := ParseSize(s.MinFreeSpace); err != nil {
 			errs = append(errs, fmt.Errorf("min_free_space: %w", err))
 		}
 	}
