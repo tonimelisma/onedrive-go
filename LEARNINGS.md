@@ -334,6 +334,7 @@ Calling `db.Close()` twice does not error with the pure-Go SQLite driver. To tes
 - **Composite interface pattern for Graph client.** `GraphClient` combines `DeltaFetcher + ItemClient + TransferClient`. `*graph.Client` satisfies it without adapter. A single mock struct (`engineMockGraph`) implements all three, simplifying test setup.
 - **CI lint can fail transiently due to schema download timeouts.** `golangci-lint config verify` fetches a JSON schema from the internet. Network timeouts cause CI failures unrelated to code. Mitigation: re-run the workflow.
 - **`walkParentChain` must check both `err != nil` and `item == nil`.** After `GetItem` was changed to return `(nil, nil)` for not-found, callers that only checked `err != nil` would dereference nil items. Always check both return values from functions with `(T, error)` that use nil-means-not-found semantics.
+- **Upload creates a second DB row, not an update.** The scanner creates local-only items with empty `DriveID`/`ItemID`. After upload, `updateUploadState` sets `ItemID = uploaded.ID` and upserts — but the `ON CONFLICT(drive_id, item_id)` key is different from the original, so it creates a new row instead of updating. When writing end-to-end test assertions, use `GetItem(ctx, "", "uploaded-id")` with the known post-upload key, not `ListAllActiveItems` filtered by path (which may find the stale scanner row first). This dual-row pattern is a design smell that Phase 5 should address.
 
 ---
 
