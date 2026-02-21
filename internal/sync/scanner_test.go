@@ -19,9 +19,10 @@ import (
 // scannerMockStore implements the Store interface for testing the scanner.
 // Only methods used by the scanner have real implementations.
 type scannerMockStore struct {
-	items       map[string]*Item // keyed by Path
-	syncedItems []*Item
-	upserted    []*Item // tracks all upserted items
+	items          map[string]*Item // keyed by Path
+	syncedItems    []*Item
+	allActiveItems []*Item // returned by ListAllActiveItems for folder orphan detection
+	upserted       []*Item // tracks all upserted items
 }
 
 func newScannerMockStore() *scannerMockStore {
@@ -59,7 +60,9 @@ func (m *scannerMockStore) ListChildren(context.Context, string, string) ([]*Ite
 	return nil, nil
 }
 
-func (m *scannerMockStore) ListAllActiveItems(context.Context) ([]*Item, error) { return nil, nil }
+func (m *scannerMockStore) ListAllActiveItems(context.Context) ([]*Item, error) {
+	return m.allActiveItems, nil
+}
 
 func (m *scannerMockStore) BatchUpsert(context.Context, []*Item) error { return nil }
 
@@ -479,10 +482,13 @@ func TestScan_NestedDirectories(t *testing.T) {
 	err := scanner.Scan(context.Background(), root)
 	require.NoError(t, err)
 
-	assert.Len(t, store.upserted, 3)
+	// 3 files + 2 directories (sub, sub/deep) tracked
+	assert.Len(t, store.upserted, 5)
 	assert.NotNil(t, store.items["top.txt"])
 	assert.NotNil(t, store.items["sub/middle.txt"])
 	assert.NotNil(t, store.items["sub/deep/bottom.txt"])
+	assert.NotNil(t, store.items["sub"])
+	assert.NotNil(t, store.items["sub/deep"])
 }
 
 func TestScan_EmptyDirectory(t *testing.T) {
@@ -579,9 +585,11 @@ func TestScan_FilterExcludesDirectory(t *testing.T) {
 	err := scanner.Scan(context.Background(), root)
 	require.NoError(t, err)
 
-	// Only src/main.go should be tracked
-	assert.Len(t, store.upserted, 1)
+	// src/ directory + src/main.go tracked; node_modules excluded by filter
+	assert.Len(t, store.upserted, 2)
 	assert.NotNil(t, store.items["src/main.go"])
+	assert.NotNil(t, store.items["src"])
+	assert.Nil(t, store.items["node_modules"])
 }
 
 func TestScan_OrphanStillPresent(t *testing.T) {
@@ -807,4 +815,173 @@ func TestScan_UnreadableDirectory(t *testing.T) {
 	// The walk should fail when trying to read the unreadable directory
 	err := scanner.Scan(context.Background(), root)
 	assert.Error(t, err)
+}
+
+// --- Directory tracking tests (C1 / B-043) ---
+
+func TestScan_DirectoryTracking_NewLocalDir(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+
+	// Create directories with a file so the walk enters them
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "photos", "vacation"), 0o755))
+	writeFile(t, root, "photos/vacation/beach.txt", "sand")
+
+	store := newScannerMockStore()
+	scanner := testScanner(t, store, newMockFilter(), true)
+
+	err := scanner.Scan(context.Background(), root)
+	require.NoError(t, err)
+
+	// Both directories and the file should be tracked
+	photos := store.items["photos"]
+	require.NotNil(t, photos, "photos directory should be tracked")
+	assert.Equal(t, ItemTypeFolder, photos.ItemType)
+	assert.NotNil(t, photos.LocalMtime, "directory should have LocalMtime set")
+	assert.Equal(t, "photos", photos.Name)
+
+	vacation := store.items["photos/vacation"]
+	require.NotNil(t, vacation, "nested directory should be tracked")
+	assert.Equal(t, ItemTypeFolder, vacation.ItemType)
+	assert.NotNil(t, vacation.LocalMtime)
+
+	file := store.items["photos/vacation/beach.txt"]
+	require.NotNil(t, file, "file should be tracked")
+	assert.Equal(t, ItemTypeFile, file.ItemType)
+}
+
+func TestScan_DirectoryTracking_ResurrectedDir(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+
+	// Create directory on disk
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "docs"), 0o755))
+	writeFile(t, root, "docs/readme.txt", "hello")
+
+	// Pre-populate a tombstoned folder in store
+	deletedAt := Int64Ptr(NowNano())
+	store := newScannerMockStore()
+	store.items["docs"] = &Item{
+		Path:      "docs",
+		Name:      "docs",
+		ItemType:  ItemTypeFolder,
+		ItemID:    "remote-id-123",
+		IsDeleted: true,
+		DeletedAt: deletedAt,
+	}
+
+	scanner := testScanner(t, store, newMockFilter(), true)
+
+	err := scanner.Scan(context.Background(), root)
+	require.NoError(t, err)
+
+	item := store.items["docs"]
+	require.NotNil(t, item)
+	assert.False(t, item.IsDeleted, "tombstone should be cleared")
+	assert.Nil(t, item.DeletedAt, "deleted_at should be nil")
+	assert.NotNil(t, item.LocalMtime, "LocalMtime should be set")
+	assert.Equal(t, "remote-id-123", item.ItemID, "remote ID should be preserved")
+}
+
+func TestScan_DirectoryTracking_RemoteOnlyGetsLocalMtime(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+
+	// Create directory on disk
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "shared"), 0o755))
+	writeFile(t, root, "shared/file.txt", "data")
+
+	// Pre-populate a remote-only folder: has ItemID but no LocalMtime
+	store := newScannerMockStore()
+	store.items["shared"] = &Item{
+		Path:     "shared",
+		Name:     "shared",
+		ItemType: ItemTypeFolder,
+		ItemID:   "remote-shared-id",
+		DriveID:  "drive-1",
+	}
+
+	scanner := testScanner(t, store, newMockFilter(), true)
+
+	err := scanner.Scan(context.Background(), root)
+	require.NoError(t, err)
+
+	item := store.items["shared"]
+	require.NotNil(t, item)
+	assert.NotNil(t, item.LocalMtime, "LocalMtime should now be set for remote-only folder found locally")
+	assert.Equal(t, "remote-shared-id", item.ItemID, "remote ID should be preserved")
+	assert.Equal(t, "drive-1", item.DriveID, "drive ID should be preserved")
+}
+
+func TestScan_FolderOrphanDetection(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	// Do NOT create the "deleted-folder" directory on disk
+
+	mtime := Int64Ptr(NowNano())
+	folderItem := &Item{
+		Path:       "deleted-folder",
+		Name:       "deleted-folder",
+		ItemType:   ItemTypeFolder,
+		ItemID:     "remote-folder-id",
+		LocalMtime: mtime,
+	}
+
+	store := newScannerMockStore()
+	store.items["deleted-folder"] = folderItem
+	// allActiveItems must include the folder for detectFolderOrphans to find it
+	store.allActiveItems = []*Item{folderItem}
+
+	scanner := testScanner(t, store, newMockFilter(), true)
+
+	err := scanner.Scan(context.Background(), root)
+	require.NoError(t, err)
+
+	item := store.items["deleted-folder"]
+	require.NotNil(t, item, "item should still exist in store")
+	assert.Nil(t, item.LocalMtime, "LocalMtime should be cleared for deleted folder")
+	assert.Equal(t, "remote-folder-id", item.ItemID, "remote ID should be preserved")
+}
+
+// TestScan_DirectoryTracking_FolderBoundaryWithReconciler (M2) verifies the
+// delta-to-scan-to-reconcile pipeline for folders. A folder item created by
+// the delta processor (has ItemID, no LocalMtime) gets LocalMtime set when the
+// scanner finds the corresponding directory on disk, making it a D2 (both exist)
+// item for the reconciler.
+func TestScan_DirectoryTracking_FolderBoundaryWithReconciler(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+
+	// Simulate a folder that arrived from delta: has remote fields, no local fields
+	store := newScannerMockStore()
+	store.items["projects"] = &Item{
+		Path:     "projects",
+		Name:     "projects",
+		ItemType: ItemTypeFolder,
+		DriveID:  "drive-abc",
+		ItemID:   "item-xyz",
+	}
+
+	// Create the directory on disk (simulating it was downloaded or already existed)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "projects"), 0o755))
+	writeFile(t, root, "projects/code.go", "package main")
+
+	scanner := testScanner(t, store, newMockFilter(), true)
+
+	err := scanner.Scan(context.Background(), root)
+	require.NoError(t, err)
+
+	item := store.items["projects"]
+	require.NotNil(t, item)
+
+	// After scan, folder should have both remote identity and local presence
+	assert.Equal(t, "item-xyz", item.ItemID, "remote ItemID preserved from delta")
+	assert.Equal(t, "drive-abc", item.DriveID, "remote DriveID preserved from delta")
+	assert.NotNil(t, item.LocalMtime, "LocalMtime set by scanner")
+
+	// Verify the reconciler would see this as D2 (both exist):
+	// localExists = LocalMtime != nil → true
+	// remoteExists = !IsDeleted && ItemID != "" → true
+	assert.False(t, item.IsDeleted)
+	assert.NotEmpty(t, item.ItemID)
 }

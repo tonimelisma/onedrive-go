@@ -74,6 +74,10 @@ func (s *Scanner) Scan(ctx context.Context, syncRoot string) error {
 		return fmt.Errorf("scanner: orphan detection failed: %w", err)
 	}
 
+	if err := s.detectFolderOrphans(ctx); err != nil {
+		return fmt.Errorf("scanner: folder orphan detection failed: %w", err)
+	}
+
 	s.logger.Info("scanner: local scan complete", "sync_root", syncRoot)
 
 	return nil
@@ -143,10 +147,91 @@ func (s *Scanner) processEntry(
 	}
 
 	if resolvedEntry.IsDir() {
-		return s.walkDir(ctx, fsRoot, fsEntryRelPath, dbEntryRelPath)
+		return s.processDirectoryEntry(ctx, fsRoot, fsEntryRelPath, dbEntryRelPath)
 	}
 
 	return s.processFileEntry(ctx, fsRoot, fsEntryRelPath, dbEntryRelPath)
+}
+
+// processDirectoryEntry tracks a directory in the state DB so the reconciler
+// knows whether a folder exists locally. Without this, the reconciler's
+// localExists check (via LocalMtime != nil) would always be false for folders.
+// Uses NowNano() instead of filesystem mtime because directory mtime changes
+// whenever contents change, which is not meaningful for existence tracking.
+func (s *Scanner) processDirectoryEntry(
+	ctx context.Context, fsRoot, fsRelPath, dbRelPath string,
+) error {
+	// Mark directory as visited for folder orphan detection
+	s.visited[dbRelPath] = true
+
+	existing, err := s.store.GetItemByPath(ctx, dbRelPath)
+	if err != nil {
+		return fmt.Errorf("scanner: store lookup for dir %q: %w", dbRelPath, err)
+	}
+
+	if err := s.upsertDirectoryItem(ctx, dbRelPath, existing); err != nil {
+		return err
+	}
+
+	return s.walkDir(ctx, fsRoot, fsRelPath, dbRelPath)
+}
+
+// upsertDirectoryItem creates or updates the DB entry for a directory found on disk.
+// New directories get a fresh item; tombstoned and remote-only directories get LocalMtime set.
+func (s *Scanner) upsertDirectoryItem(ctx context.Context, relPath string, existing *Item) error {
+	if existing == nil {
+		return s.handleNewDirectory(ctx, relPath)
+	}
+
+	if existing.IsDeleted {
+		return s.handleResurrectedDirectory(ctx, relPath, existing)
+	}
+
+	// Remote-only folder now found locally: set LocalMtime so reconciler sees localExists=true
+	if existing.LocalMtime == nil {
+		return s.handleRemoteOnlyDirectory(ctx, relPath, existing)
+	}
+
+	return nil
+}
+
+// handleNewDirectory creates a folder item for a directory not yet tracked in the store.
+func (s *Scanner) handleNewDirectory(ctx context.Context, relPath string) error {
+	now := NowNano()
+	item := &Item{
+		Path:       relPath,
+		Name:       filepath.Base(relPath),
+		ItemType:   ItemTypeFolder,
+		LocalMtime: Int64Ptr(now),
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+
+	s.logger.Debug("scanner: new local directory", "path", relPath)
+
+	return s.store.UpsertItem(ctx, item)
+}
+
+// handleResurrectedDirectory clears the tombstone on a directory that reappeared locally.
+func (s *Scanner) handleResurrectedDirectory(ctx context.Context, relPath string, existing *Item) error {
+	existing.IsDeleted = false
+	existing.DeletedAt = nil
+	existing.LocalMtime = Int64Ptr(NowNano())
+	existing.UpdatedAt = NowNano()
+
+	s.logger.Debug("scanner: resurrected tombstoned directory", "path", relPath)
+
+	return s.store.UpsertItem(ctx, existing)
+}
+
+// handleRemoteOnlyDirectory sets LocalMtime on a remote-only folder now found on disk.
+func (s *Scanner) handleRemoteOnlyDirectory(ctx context.Context, relPath string, existing *Item) error {
+	existing.LocalMtime = Int64Ptr(NowNano())
+	existing.UpdatedAt = NowNano()
+
+	s.logger.Debug("scanner: remote-only directory now found locally", "path", relPath)
+
+	return s.store.UpsertItem(ctx, existing)
 }
 
 // validateEntry checks filter, name validity, and UTF-8 encoding. Returns non-nil to skip.
@@ -366,6 +451,44 @@ func (s *Scanner) checkOrphan(ctx context.Context, syncRoot string, item *Item) 
 	s.logger.Debug("scanner: orphan detected (local deletion)", "path", item.Path)
 
 	return s.store.UpsertItem(ctx, item)
+}
+
+// detectFolderOrphans finds folder items in the store that are no longer present
+// on the local filesystem. Unlike file orphan detection (which uses ListSyncedItems),
+// folder orphan detection checks all active folder items with LocalMtime set, because
+// folders don't have a SyncedHash to gate on.
+func (s *Scanner) detectFolderOrphans(ctx context.Context) error {
+	allItems, err := s.store.ListAllActiveItems(ctx)
+	if err != nil {
+		return fmt.Errorf("scanner: listing active items for folder orphans: %w", err)
+	}
+
+	for i := range allItems {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		item := allItems[i]
+		if item.ItemType != ItemTypeFolder || item.LocalMtime == nil {
+			continue
+		}
+
+		if s.visited[item.Path] {
+			continue
+		}
+
+		// Folder had LocalMtime but was not visited during walk: local deletion
+		item.LocalMtime = nil
+		item.UpdatedAt = NowNano()
+
+		s.logger.Debug("scanner: folder orphan detected (local deletion)", "path", item.Path)
+
+		if err := s.store.UpsertItem(ctx, item); err != nil {
+			return fmt.Errorf("scanner: upserting folder orphan %q: %w", item.Path, err)
+		}
+	}
+
+	return nil
 }
 
 // computeHash streams a file through QuickXorHash and returns the base64 digest.
