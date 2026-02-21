@@ -74,7 +74,6 @@ Currently: Working CLI OneDrive client with discovery-based auth, account manage
 | [docs/tier1-research/](docs/tier1-research/) | 16 Tier 1 research docs (API bugs, edge cases, reference impl analysis) |
 | [docs/parallel-agents.md](docs/parallel-agents.md) | Parallel agent worktree workflow guide |
 | [docs/orchestration.md](docs/orchestration.md) | Full orchestration workflow: planning, agent prompts, review, wrap-up |
-| [docs/metrics.md](docs/metrics.md) | Quantitative metrics tracked per increment (coverage, scorecards) |
 
 ## Orchestration — Planning, Agents, Wrap-Up
 
@@ -101,7 +100,6 @@ Currently: Working CLI OneDrive client with discovery-based auth, account manage
 2. Line-by-line code review of every new/modified file
 3. Top-up work: fix issues BEFORE presenting retrospective
 4. Consolidate learnings, update BACKLOG, roadmap, CLAUDE.md
-5. Update metrics in [docs/metrics.md](docs/metrics.md)
 
 **Increment Report** (presented to human in chat):
 1. Executive summary

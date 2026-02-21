@@ -346,11 +346,7 @@ Record every top-up fix — the human needs to see what was changed and why.
 - Update BACKLOG.md: close completed items, add new discoveries (with IDs)
 - Update roadmap.md: mark increments as done with actuals (coverage)
 
-### 3.5 Update Metrics
-
-Update `docs/metrics.md` with data from this increment (see Metrics section below).
-
-### 3.6 Update CLAUDE.md
+### 3.5 Update CLAUDE.md
 
 - Current phase description
 - Package layout (new packages, coverage numbers)
@@ -396,7 +392,6 @@ For each file created or significantly modified:
 2. What went wrong — specific examples with root causes
 3. What to change — concrete actions
 4. Orchestrator self-assessment — what I did well, what I missed, what I'd change next time
-5. Metrics — coverage change, top-up count, deviation count
 
 ### 4.6 Re-Envisioning
 
@@ -406,26 +401,6 @@ Drawing on agent re-envisioning answers (question 4) and orchestrator review: ar
 
 | ID | Action | Priority | Owner |
 |----|--------|----------|-------|
-
----
-
-## Metrics Tracking
-
-Maintained in `docs/metrics.md`. Updated after every increment.
-
-### Per-Increment Metrics
-
-| Metric | Description |
-|--------|-------------|
-| **Agent count** | Number of subagents used |
-| **Wave count** | Number of sequential waves |
-| **PR count** | Number of PRs created and merged |
-| **Coverage before** | Total test coverage % before increment |
-| **Coverage after** | Total test coverage % after increment |
-| **Top-up fix count** | Number of issues fixed in orchestrator review |
-| **Agent deviation count** | Number of plan deviations across all agents |
-| **CI failures** | Number of CI failures during the increment |
-| **Wall-clock time** | Approximate total time from plan approval to retrospective |
 
 ---
 
