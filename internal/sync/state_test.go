@@ -614,3 +614,53 @@ func TestCloseAndReopen(t *testing.T) {
 func TestInterfaceCompliance(t *testing.T) {
 	var _ Store = (*SQLiteStore)(nil)
 }
+
+// --- Error path tests for NewStore, Close, applyMigration, BatchUpsert ---
+
+func TestNewStore_InvalidPath(t *testing.T) {
+	// Attempting to open a database in a non-existent directory should fail.
+	_, err := NewStore("/nonexistent/dir/db.sqlite", testLogger(t))
+	require.Error(t, err)
+}
+
+func TestApplyMigration_MissingFile(t *testing.T) {
+	// applyMigration with a version that has no corresponding embedded SQL file
+	// should return an error about reading the migration.
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	// Version 999 has no migration file embedded.
+	applyErr := applyMigration(context.Background(), db, testLogger(t), 999)
+	require.Error(t, applyErr)
+	assert.Contains(t, applyErr.Error(), "read migration 999")
+}
+
+func TestClose_ThenQuery(t *testing.T) {
+	// After closing a store, database operations should fail because the
+	// underlying connection and prepared statements are no longer valid.
+	store, err := NewStore(":memory:", testLogger(t))
+	require.NoError(t, err)
+
+	require.NoError(t, store.Close())
+
+	// Querying after close should fail.
+	_, queryErr := store.GetDeltaToken(context.Background(), "d1")
+	require.Error(t, queryErr)
+}
+
+func TestBatchUpsert_TxError(t *testing.T) {
+	// Close the underlying DB before calling BatchUpsert so the transaction begin fails.
+	store, err := NewStore(":memory:", testLogger(t))
+	require.NoError(t, err)
+
+	// Close the raw DB handle directly to poison the connection.
+	require.NoError(t, store.db.Close())
+
+	items := []*Item{
+		makeTestItem("d1", "b1", "d1", "root1", "batch1.txt", ItemTypeFile),
+	}
+
+	batchErr := store.BatchUpsert(context.Background(), items)
+	require.Error(t, batchErr)
+}

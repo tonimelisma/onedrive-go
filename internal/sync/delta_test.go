@@ -1015,6 +1015,108 @@ func TestFetchAndApply_GetDeltaTokenError(t *testing.T) {
 	assert.Contains(t, err.Error(), "get delta token")
 }
 
+// --- Error path tests for handleFetchError, finalizeDelta, applyBatch ---
+
+func TestHandleFetchError_DeleteTokenError(t *testing.T) {
+	// When a 410 Gone arrives but DeleteDeltaToken fails, the error should propagate.
+	store := newMockStore()
+	store.deltaToken = "stale-token"
+	store.deleteDeltaErr = errors.New("disk full")
+
+	fetcher := &mockDeltaFetcher{
+		errAtIdx: 0,
+		err:      &graph.GraphError{StatusCode: 410, Err: graph.ErrGone, Message: "resyncRequired"},
+	}
+
+	dp := NewDeltaProcessor(fetcher, store, testLogger(t))
+	err := dp.FetchAndApply(context.Background(), "d")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "delete expired delta token")
+	assert.Contains(t, err.Error(), "disk full")
+}
+
+func TestHandleFetchError_SetCompleteError(t *testing.T) {
+	// When a 410 Gone arrives and token deletion succeeds but SetDeltaComplete fails,
+	// the error should propagate.
+	store := newMockStore()
+	store.deltaToken = "expired-complete-token"
+	store.setCompleteErr = errors.New("db locked")
+
+	fetcher := &mockDeltaFetcher{
+		errAtIdx: 0,
+		err:      &graph.GraphError{StatusCode: 410, Err: graph.ErrGone, Message: "resyncRequired"},
+	}
+
+	dp := NewDeltaProcessor(fetcher, store, testLogger(t))
+	err := dp.FetchAndApply(context.Background(), "d")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "set delta incomplete after 410")
+	assert.Contains(t, err.Error(), "db locked")
+}
+
+func TestFinalizeDelta_FlushBatchError(t *testing.T) {
+	// When the final page has items and the batch flush (UpsertItem) fails,
+	// finalizeDelta should return the error.
+	store := newMockStore()
+	store.upsertErr = errors.New("constraint violation")
+	store.materializeResults["d/item-1"] = "flush-err.txt"
+
+	fetcher := newMockFetcher(&graph.DeltaPage{
+		Items: []graph.Item{
+			{
+				ID: "item-1", Name: "flush-err.txt", DriveID: "d", ParentID: "root", Size: 42,
+				ModifiedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+			},
+		},
+		DeltaLink: "token:final",
+	})
+
+	dp := NewDeltaProcessor(fetcher, store, testLogger(t))
+	err := dp.FetchAndApply(context.Background(), "d")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "constraint violation")
+}
+
+func TestFinalizeDelta_SaveTokenError(t *testing.T) {
+	// When the delta completes with an empty final page but SaveDeltaToken fails,
+	// finalizeDelta should return the error.
+	store := newMockStore()
+	store.saveDeltaTokenErr = errors.New("io error")
+
+	fetcher := newMockFetcher(&graph.DeltaPage{
+		Items:     []graph.Item{},
+		DeltaLink: "token:final",
+	})
+
+	dp := NewDeltaProcessor(fetcher, store, testLogger(t))
+	err := dp.FetchAndApply(context.Background(), "d")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "save delta token")
+	assert.Contains(t, err.Error(), "io error")
+}
+
+func TestApplyBatch_ItemError(t *testing.T) {
+	// When GetItem fails during applyDeltaItem, the error should propagate.
+	store := newMockStore()
+	store.getItemErr = errors.New("db corruption")
+	store.materializeResults["d/item-1"] = "apply-err.txt"
+
+	fetcher := newMockFetcher(&graph.DeltaPage{
+		Items: []graph.Item{
+			{
+				ID: "item-1", Name: "apply-err.txt", DriveID: "d", ParentID: "root", Size: 42,
+				ModifiedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+			},
+		},
+		DeltaLink: "token:done",
+	})
+
+	dp := NewDeltaProcessor(fetcher, store, testLogger(t))
+	err := dp.FetchAndApply(context.Background(), "d")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "db corruption")
+}
+
 func TestFetchAndApply_DeletionReorderedBeforeCreation(t *testing.T) {
 	// Verify that when a deletion and creation arrive in the same page
 	// (creation first, deletion second — the API bug), the deletion is

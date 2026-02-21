@@ -844,3 +844,69 @@ func TestFilterEngine_Odignore_Subdirectory(t *testing.T) {
 	result = fe.ShouldSync("subdir/code.generated", false, 0)
 	assert.False(t, result.Included, "subdir file should be excluded by subdir .odignore")
 }
+
+// --- Config extraction tests ---
+
+func TestNewFilterConfig(t *testing.T) {
+	t.Parallel()
+
+	resolved := &config.ResolvedDrive{
+		FilterConfig: config.FilterConfig{
+			SkipFiles:    []string{"*.tmp", "*.log"},
+			SkipDirs:     []string{"node_modules", ".git"},
+			SkipDotfiles: true,
+			SkipSymlinks: true,
+			MaxFileSize:  "500MB",
+			SyncPaths:    []string{"Documents", "Photos"},
+			IgnoreMarker: ".syncignore",
+		},
+	}
+
+	fc := NewFilterConfig(resolved)
+
+	assert.Equal(t, resolved.SkipFiles, fc.SkipFiles)
+	assert.Equal(t, resolved.SkipDirs, fc.SkipDirs)
+	assert.True(t, fc.SkipDotfiles)
+	assert.True(t, fc.SkipSymlinks)
+	assert.Equal(t, "500MB", fc.MaxFileSize)
+	assert.Equal(t, []string{"Documents", "Photos"}, fc.SyncPaths)
+	assert.Equal(t, ".syncignore", fc.IgnoreMarker)
+}
+
+func TestNewSafetyConfig(t *testing.T) {
+	t.Parallel()
+
+	resolved := &config.ResolvedDrive{
+		SafetyConfig: config.SafetyConfig{
+			BigDeleteThreshold:        100,
+			BigDeletePercentage:       50,
+			BigDeleteMinItems:         10,
+			MinFreeSpace:              "1GB",
+			UseRecycleBin:             true,
+			UseLocalTrash:             true,
+			DisableDownloadValidation: false,
+			DisableUploadValidation:   true,
+			SyncDirPermissions:        "0755",
+			SyncFilePermissions:       "0644",
+			TombstoneRetentionDays:    30,
+		},
+	}
+
+	sc := NewSafetyConfig(resolved)
+
+	assert.Equal(t, 100, sc.BigDeleteThreshold)
+	assert.Equal(t, 50, sc.BigDeletePercentage)
+	assert.Equal(t, 10, sc.BigDeleteMinItems)
+	assert.Equal(t, "1GB", sc.MinFreeSpace)
+	assert.True(t, sc.UseRecycleBin)
+	assert.True(t, sc.UseLocalTrash)
+	assert.False(t, sc.DisableDownloadValidation)
+	assert.True(t, sc.DisableUploadValidation)
+	assert.Equal(t, "0755", sc.SyncDirPermissions)
+	assert.Equal(t, "0644", sc.SyncFilePermissions)
+	assert.Equal(t, 30, sc.TombstoneRetentionDays)
+
+	// Verify it returns a pointer (new allocation, not aliased to input)
+	sc.BigDeleteThreshold = 999
+	assert.Equal(t, 100, resolved.BigDeleteThreshold, "returned pointer should not alias input")
+}

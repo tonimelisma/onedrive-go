@@ -502,6 +502,19 @@ func TestLoad_DriveSectionNotTable(t *testing.T) {
 
 // --- Edge case: unknown key with known parent in bandwidth_schedule ---
 
+func TestLoad_DriveSection_TypeMismatch(t *testing.T) {
+	// A drive section where "enabled" is a string instead of a boolean should
+	// trigger a type-coercion error in mapToDrive during the re-encode/decode cycle.
+	path := writeTestConfig(t, `
+["personal:toni@outlook.com"]
+sync_dir = "~/OneDrive"
+enabled = "not-a-bool"
+`)
+	_, err := Load(path, testLogger(t))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "personal:toni@outlook.com")
+}
+
 func TestLoad_BandwidthScheduleSubField_NotFlagged(t *testing.T) {
 	// bandwidth_schedule entries have "time" and "limit" sub-fields.
 	// These appear as undecoded keys but the parent is known, so they should be skipped.
