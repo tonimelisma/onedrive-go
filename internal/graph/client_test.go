@@ -23,6 +23,40 @@ func noopSleep(_ context.Context, _ time.Duration) error {
 	return nil
 }
 
+// failingSeeker is an io.ReadSeeker where Read succeeds but Seek always fails.
+// Used to test the rewindBody error path directly.
+type failingSeeker struct {
+	data []byte
+}
+
+func (f *failingSeeker) Read(p []byte) (int, error) {
+	return copy(p, f.data), io.EOF
+}
+
+func (f *failingSeeker) Seek(_ int64, _ int) (int64, error) {
+	return 0, errors.New("seek failed")
+}
+
+// failOnSecondSeeker is an io.ReadSeeker where the first Seek succeeds but
+// subsequent Seeks fail. Used to test the rewindBody failure on retry in doRetry.
+type failOnSecondSeeker struct {
+	data      []byte
+	seekCount atomic.Int32
+}
+
+func (f *failOnSecondSeeker) Read(p []byte) (int, error) {
+	return copy(p, f.data), io.EOF
+}
+
+func (f *failOnSecondSeeker) Seek(_ int64, _ int) (int64, error) {
+	n := f.seekCount.Add(1)
+	if n > 1 {
+		return 0, errors.New("seek failed on retry")
+	}
+
+	return 0, nil
+}
+
 // staticToken is a test TokenSource that returns a fixed token.
 type staticToken string
 
@@ -510,4 +544,75 @@ func TestIsRetryable(t *testing.T) {
 	for _, code := range notRetryable {
 		assert.False(t, isRetryable(code), "expected %d to not be retryable", code)
 	}
+}
+
+func TestRewindBody_SeekError(t *testing.T) {
+	// Verify that rewindBody returns an error when Seek fails.
+	fs := &failingSeeker{data: []byte("test data")}
+	err := rewindBody(fs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rewinding request body for retry")
+	assert.Contains(t, err.Error(), "seek failed")
+}
+
+func TestDoRetry_RewindBodyFailure(t *testing.T) {
+	// The first rewind (before attempt 0) succeeds, the HTTP call gets a 500
+	// (retryable), then the second rewind (before the retry) fails.
+	var calls atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+
+	body := &failOnSecondSeeker{data: []byte(`{"key":"value"}`)}
+
+	_, err := client.Do(context.Background(), http.MethodPost, "/test", body)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rewinding request body for retry")
+
+	// Only one HTTP call should have been made — the rewind failure prevents retry.
+	assert.Equal(t, int32(1), calls.Load())
+}
+
+func TestRetryBackoff_MalformedRetryAfter(t *testing.T) {
+	// Verify that a non-numeric Retry-After header falls back to exponential backoff
+	// instead of crashing or using a zero duration.
+	var calls atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		n := calls.Add(1)
+		if n <= 1 {
+			w.Header().Set("Retry-After", "not-a-number")
+			w.WriteHeader(http.StatusTooManyRequests)
+
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`ok`))
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	resp, err := client.Do(context.Background(), http.MethodGet, "/throttle", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, int32(2), calls.Load())
+}
+
+func TestDoRetry_NetworkError_MaxRetries(t *testing.T) {
+	// Point the client at an unreachable address and verify that all retries
+	// are exhausted before returning an error.
+	client := NewClient("http://127.0.0.1:1", http.DefaultClient, staticToken("tok"), slog.Default())
+	client.sleepFunc = noopSleep
+
+	_, err := client.Do(context.Background(), http.MethodGet, "/unreachable", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed after 5 retries")
 }

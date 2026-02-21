@@ -3,6 +3,7 @@ package graph
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// errorWriter is an io.Writer that always returns an error.
+// Used to test the io.Copy failure path in downloadFromURL.
+type errorWriter struct{}
+
+func (errorWriter) Write(_ []byte) (int, error) {
+	return 0, errors.New("write failed")
+}
 
 func TestDownload_Success(t *testing.T) {
 	fileContent := "Hello, this is the file content for download testing."
@@ -162,6 +171,34 @@ func TestDownload_NetworkError(t *testing.T) {
 	_, err := client.Download(context.Background(), "d", "item-net", &buf)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "download request failed")
+}
+
+func TestDownloadFromURL_WriterError(t *testing.T) {
+	// Verify that downloadFromURL returns an error when the writer fails mid-stream.
+	dlSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("some data that will fail to write"))
+	}))
+	defer dlSrv.Close()
+
+	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `{
+			"id": "item-ew", "name": "fail-write.txt",
+			"createdDateTime": "2024-01-01T00:00:00Z",
+			"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+			"parentReference": {"id": "p", "driveId": "d"},
+			"file": {"mimeType": "text/plain"},
+			"@microsoft.graph.downloadUrl": %q
+		}`, dlSrv.URL+"/dl")
+	}))
+	defer graphSrv.Close()
+
+	client := newTestClient(t, graphSrv.URL)
+	_, err := client.Download(context.Background(), "d", "item-ew", errorWriter{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "streaming download content")
 }
 
 func TestDownload_NoAuthOnPreAuthURL(t *testing.T) {

@@ -3,6 +3,7 @@ package graph
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,6 +16,18 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// errorReadCloser is an io.ReadCloser that always returns an error from Read.
+// Used to test drain-failure paths in handleChunkResponse.
+type errorReadCloser struct{}
+
+func (errorReadCloser) Read(_ []byte) (int, error) {
+	return 0, errors.New("read failed")
+}
+
+func (errorReadCloser) Close() error {
+	return nil
+}
 
 func TestSimpleUpload_Success(t *testing.T) {
 	content := "simple upload file content"
@@ -551,4 +564,100 @@ func TestQueryUploadSession_NetworkError(t *testing.T) {
 	_, err := client.QueryUploadSession(context.Background(), session)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "query upload session request failed")
+}
+
+func TestHandleChunkResponse_FinalDecodeError(t *testing.T) {
+	// Verify that handleChunkResponse returns a decode error when the final
+	// chunk response (201) contains invalid JSON.
+	chunkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{not valid json`)
+	}))
+	defer chunkSrv.Close()
+
+	client := newTestClient(t, "http://unused")
+	session := &UploadSession{UploadURL: chunkSrv.URL + "/upload"}
+
+	_, err := client.UploadChunk(
+		context.Background(), session,
+		strings.NewReader("final-data"),
+		0, 10, 10,
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decoding final chunk response")
+}
+
+func TestHandleChunkResponse_IntermediateDrainError(t *testing.T) {
+	// Verify that handleChunkResponse returns a drain error when the 202
+	// response body fails to read during drain.
+	client := newTestClient(t, "http://unused")
+
+	// Build a crafted *http.Response with an errorReadCloser body.
+	resp := &http.Response{
+		StatusCode: http.StatusAccepted,
+		Body:       errorReadCloser{},
+	}
+
+	_, err := client.handleChunkResponse(resp)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "draining chunk response body")
+}
+
+func TestHandleChunkResponse_416DrainError(t *testing.T) {
+	// Verify that handleChunkResponse returns a drain error when the 416
+	// response body fails to read during drain.
+	client := newTestClient(t, "http://unused")
+
+	resp := &http.Response{
+		StatusCode: http.StatusRequestedRangeNotSatisfiable,
+		Body:       errorReadCloser{},
+	}
+
+	_, err := client.handleChunkResponse(resp)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "draining 416 response body")
+}
+
+func TestQueryUploadSession_DecodeError(t *testing.T) {
+	// Verify that QueryUploadSession returns a decode error when the server
+	// returns 200 with invalid JSON.
+	sessionSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{not valid json`)
+	}))
+	defer sessionSrv.Close()
+
+	client := newTestClient(t, "http://unused")
+	session := &UploadSession{UploadURL: sessionSrv.URL + "/session"}
+
+	_, err := client.QueryUploadSession(context.Background(), session)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decoding session status response")
+}
+
+func TestQueryUploadSession_InvalidExpiration(t *testing.T) {
+	// Verify that QueryUploadSession handles an unparseable expirationDateTime
+	// gracefully by using zero time (matching CreateUploadSession behavior).
+	sessionSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{
+			"uploadUrl": "https://upload.example.com/session/inv-exp",
+			"expirationDateTime": "not-a-date",
+			"nextExpectedRanges": ["0-"]
+		}`)
+	}))
+	defer sessionSrv.Close()
+
+	client := newTestClient(t, "http://unused")
+	session := &UploadSession{UploadURL: sessionSrv.URL + "/session"}
+
+	status, err := client.QueryUploadSession(context.Background(), session)
+	require.NoError(t, err)
+
+	assert.Equal(t, "https://upload.example.com/session/inv-exp", status.UploadURL)
+	assert.True(t, status.ExpirationTime.IsZero(), "invalid expiration should produce zero time")
+	assert.Equal(t, []string{"0-"}, status.NextExpectedRanges)
 }
