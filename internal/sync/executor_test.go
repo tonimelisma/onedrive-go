@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	gosync "sync"
 	"testing"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 // --- Mock types (executor-prefixed to avoid collision with delta/reconciler mocks) ---
 
 type executorMockStore struct {
+	mu    gosync.Mutex     // protects all fields for thread-safe parallel transfer tests
 	items map[string]*Item // keyed by "driveID/itemID"
 
 	// Call recordings
@@ -59,10 +61,16 @@ func (s *executorMockStore) storeKey(driveID, itemID string) string {
 }
 
 func (s *executorMockStore) GetItem(_ context.Context, driveID, itemID string) (*Item, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	return s.items[s.storeKey(driveID, itemID)], nil
 }
 
 func (s *executorMockStore) GetItemByPath(_ context.Context, path string) (*Item, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if s.getItemByPathErr != nil {
 		return nil, s.getItemByPathErr
 	}
@@ -71,6 +79,9 @@ func (s *executorMockStore) GetItemByPath(_ context.Context, path string) (*Item
 }
 
 func (s *executorMockStore) UpsertItem(_ context.Context, item *Item) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	s.upsertCalls = append(s.upsertCalls, item)
 	s.items[s.storeKey(item.DriveID, item.ItemID)] = item
 
@@ -78,6 +89,9 @@ func (s *executorMockStore) UpsertItem(_ context.Context, item *Item) error {
 }
 
 func (s *executorMockStore) MarkDeleted(_ context.Context, driveID, itemID string, deletedAt int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	s.markDeletedCalls = append(s.markDeletedCalls, executorMarkDeletedCall{
 		DriveID:   driveID,
 		ItemID:    itemID,
@@ -92,16 +106,25 @@ func (s *executorMockStore) MaterializePath(_ context.Context, _, _ string) (str
 }
 
 func (s *executorMockStore) CascadePathUpdate(_ context.Context, _, _ string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	return s.cascadeErr
 }
 
 func (s *executorMockStore) RecordConflict(_ context.Context, record *ConflictRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	s.recordConflicts = append(s.recordConflicts, record)
 
 	return s.conflictErr
 }
 
 func (s *executorMockStore) Checkpoint() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	s.checkpointCalled = true
 
 	return nil
@@ -277,7 +300,7 @@ func newTestExecutorWithCfg(t *testing.T, syncRoot string, cfg *config.SafetyCon
 	items := &executorMockItems{}
 	transfer := &executorMockTransfer{}
 
-	exec := NewExecutor(store, items, transfer, syncRoot, cfg, testLogger(t))
+	exec := NewExecutor(store, items, transfer, syncRoot, cfg, nil, testLogger(t))
 
 	return exec, store, items, transfer
 }
@@ -1290,7 +1313,7 @@ func TestExecutor_Integration_Download(t *testing.T) {
 
 	transfer := &executorMockTransfer{downloadContent: content}
 	items := &executorMockItems{}
-	exec := NewExecutor(realStore, items, transfer, syncRoot, &config.SafetyConfig{}, testLogger(t))
+	exec := NewExecutor(realStore, items, transfer, syncRoot, &config.SafetyConfig{}, nil, testLogger(t))
 
 	plan := &ActionPlan{Downloads: []Action{{
 		Type:    ActionDownload,

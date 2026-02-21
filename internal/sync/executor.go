@@ -38,20 +38,35 @@ type Executor struct {
 	cfg             *config.SafetyConfig
 	logger          *slog.Logger
 	conflictHandler *ConflictHandler
+
+	// Transfer pipeline fields (4.9). nil = sequential fallback via dispatchPhase.
+	transferMgr      *TransferManager
+	bandwidthLimiter *BandwidthLimiter // shared rate limiter; nil = unlimited
+	chunkSize        int64             // parsed from config; default uploadChunkSize (10 MiB)
 }
 
 // NewExecutor creates an Executor with the given dependencies.
 // syncRoot must be an absolute path to the local sync directory.
+// transfersCfg controls chunk size for uploads; pass nil to use defaults.
 func NewExecutor(
 	store ExecutorStore,
 	items ItemClient,
 	transfer TransferClient,
 	syncRoot string,
 	cfg *config.SafetyConfig,
+	transfersCfg *config.TransfersConfig,
 	logger *slog.Logger,
 ) *Executor {
 	if logger == nil {
 		logger = slog.Default()
+	}
+
+	chunkSize := int64(uploadChunkSize)
+
+	if transfersCfg != nil && transfersCfg.ChunkSize != "" {
+		if parsed, err := config.ParseSize(transfersCfg.ChunkSize); err == nil && parsed > 0 {
+			chunkSize = parsed
+		}
 	}
 
 	return &Executor{
@@ -62,7 +77,15 @@ func NewExecutor(
 		cfg:             cfg,
 		logger:          logger,
 		conflictHandler: NewConflictHandler(syncRoot, logger),
+		chunkSize:       chunkSize,
 	}
+}
+
+// SetTransferManager attaches a TransferManager for parallel download/upload dispatch.
+// Called by the engine after construction. If not set, Execute falls back to sequential dispatch.
+func (e *Executor) SetTransferManager(tm *TransferManager) {
+	e.transferMgr = tm
+	e.bandwidthLimiter = tm.limiter
 }
 
 // Execute processes the validated action plan in 9 sequential phases.
@@ -88,6 +111,10 @@ func (e *Executor) Execute(ctx context.Context, plan *ActionPlan) (*SyncReport, 
 				func(s2 *SyncReport) { s2.Moved++ })
 		}},
 		{"downloads", func(c context.Context, s *SyncReport) error {
+			if e.transferMgr != nil {
+				return e.transferMgr.DownloadAll(c, plan.Downloads, s)
+			}
+
 			return e.dispatchPhase(c, s, plan.Downloads, "download",
 				func(c2 context.Context, a *Action) error {
 					n, err := e.executeDownload(c2, a)
@@ -100,6 +127,10 @@ func (e *Executor) Execute(ctx context.Context, plan *ActionPlan) (*SyncReport, 
 				func(s2 *SyncReport) { s2.Downloaded++ })
 		}},
 		{"uploads", func(c context.Context, s *SyncReport) error {
+			if e.transferMgr != nil {
+				return e.transferMgr.UploadAll(c, plan.Uploads, s)
+			}
+
 			return e.dispatchPhase(c, s, plan.Uploads, "upload",
 				func(c2 context.Context, a *Action) error {
 					n, err := e.executeUpload(c2, a)
@@ -334,8 +365,9 @@ func (e *Executor) downloadToPartial(ctx context.Context, action *Action, partia
 
 	hasher := quickxorhash.New()
 	mw := io.MultiWriter(f, hasher)
+	w := wrapWriter(e.bandwidthLimiter, ctx, mw)
 
-	n, err := e.transfer.Download(ctx, action.DriveID, action.ItemID, mw)
+	n, err := e.transfer.Download(ctx, action.DriveID, action.ItemID, w)
 	if err != nil {
 		return 0, "", fmt.Errorf("executor: download %s: %w", action.Path, err)
 	}
@@ -389,7 +421,8 @@ func (e *Executor) executeUpload(ctx context.Context, action *Action) (int64, er
 	var uploaded *graph.Item
 	if size <= simpleUploadMax {
 		tee := io.TeeReader(f, hasher)
-		uploaded, err = e.transfer.SimpleUpload(ctx, action.DriveID, action.Item.ParentID, action.Item.Name, tee, size)
+		r := wrapReader(e.bandwidthLimiter, ctx, tee)
+		uploaded, err = e.transfer.SimpleUpload(ctx, action.DriveID, action.Item.ParentID, action.Item.Name, r, size)
 	} else {
 		uploaded, err = e.uploadChunked(ctx, action.DriveID, action.Item.ParentID, action.Item.Name, f, size, mtime, hasher)
 	}
@@ -611,16 +644,17 @@ func (e *Executor) uploadChunked(
 
 	// TeeReader causes every byte read from file to also be written to hasher.
 	tee := io.TeeReader(file, hasher)
+	r := wrapReader(e.bandwidthLimiter, ctx, tee)
 
 	var offset int64
 
 	for offset < size {
-		length := int64(uploadChunkSize)
+		length := e.chunkSize
 		if remaining := size - offset; remaining < length {
 			length = remaining
 		}
 
-		item, err := e.transfer.UploadChunk(ctx, session, io.LimitReader(tee, length), offset, length, size)
+		item, err := e.transfer.UploadChunk(ctx, session, io.LimitReader(r, length), offset, length, size)
 		if err != nil {
 			return nil, fmt.Errorf("executor: upload chunk at offset %d: %w", offset, err)
 		}
