@@ -589,9 +589,10 @@ func TestRunOnce_TombstoneCleanup(t *testing.T) {
 	report, err := eng.RunOnce(ctx, SyncBidirectional, SyncOptions{})
 	require.NoError(t, err)
 
-	// Tombstone should have been cleaned up — GetItem returns sql.ErrNoRows for purged items.
-	_, err = store.GetItem(ctx, "test-drive-id", "dead-item")
-	require.Error(t, err, "tombstone should have been purged")
+	// Tombstone should have been cleaned up — GetItem returns (nil, nil) for purged items.
+	item, err := store.GetItem(ctx, "test-drive-id", "dead-item")
+	require.NoError(t, err)
+	assert.Nil(t, item, "tombstone should have been purged")
 
 	// Report is clean (tombstone cleanup is maintenance, not reported).
 	assert.Equal(t, 0, report.Downloaded)
