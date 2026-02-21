@@ -18,6 +18,7 @@ Detailed per-increment metrics from earlier phases archived in [docs/archive/met
 | Phase 4 Wave 1 (4.1-4.4+B-040) | 5 | 8 | 5 | +5.2% (total) |
 | Phase 4 Wave 2 (4.5-4.6) | 2 | 1 | 4 | +2.5% (total) |
 | Post-Wave 2 Top-Up | 2 | 0 | 2 | +0.0% (total) |
+| Pre-4.7 Coverage Hardening | 2 | 1 | 2 | +1.1% (total) |
 
 *\* Review not performed — process gap. Subsequent increments will have accurate top-up counts.*
 
@@ -25,19 +26,19 @@ Detailed per-increment metrics from earlier phases archived in [docs/archive/met
 
 ## Latest Increment
 
-### Post-Wave 2 Top-Up: Foundation Alignment Fixes — 2026-02-22
+### Pre-4.7 Coverage Hardening — 2026-02-20
 
 | Metric | Value |
 |--------|-------|
 | **Agent count** | 2 |
-| **Wave count** | 3 |
-| **PR count** | 3 (#49, #50, #51) |
-| **Coverage before** | 77.4% (total), 90.3% (sync) |
-| **Coverage after** | 77.4% (total), 90.0% (sync) |
-| **Top-up fix count** | 0 |
-| **Agent deviation count** | 2 |
+| **Wave count** | 1 |
+| **PR count** | 2 (#53, #54) |
+| **Coverage before** | 77.4% (total), 92.6% (graph), 90.0% (sync), 94.6% (config) |
+| **Coverage after** | 78.5% (total), 94.2% (graph), 91.7% (sync), 95.1% (config) |
+| **Top-up fix count** | 1 (missing LEARNINGS.md entries from Agent B) |
+| **Agent deviation count** | 2 (graph 95% target missed at 94.2%; Agent B renamed TestClose_AlreadyClosed → TestClose_ThenQuery) |
 | **CI failures** | 0 |
-| **Wall-clock time** | ~2.5 hours |
+| **Wall-clock time** | ~25 min |
 
 ---
 
