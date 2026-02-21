@@ -300,6 +300,7 @@ type Store interface {
 	GetItem(ctx context.Context, driveID, itemID string) (*Item, error)
 	UpsertItem(ctx context.Context, item *Item) error
 	MarkDeleted(ctx context.Context, driveID, itemID string, deletedAt int64) error
+	DeleteItemByKey(ctx context.Context, driveID, itemID string) error
 	ListChildren(ctx context.Context, driveID, parentID string) ([]*Item, error)
 	GetItemByPath(ctx context.Context, path string) (*Item, error)
 	ListAllActiveItems(ctx context.Context) ([]*Item, error)
@@ -355,6 +356,7 @@ type ExecutorStore interface {
 	GetItemByPath(ctx context.Context, path string) (*Item, error)
 	UpsertItem(ctx context.Context, item *Item) error
 	MarkDeleted(ctx context.Context, driveID, itemID string, deletedAt int64) error
+	DeleteItemByKey(ctx context.Context, driveID, itemID string) error
 	MaterializePath(ctx context.Context, driveID, itemID string) (string, error)
 	CascadePathUpdate(ctx context.Context, oldPrefix, newPrefix string) error
 	RecordConflict(ctx context.Context, record *ConflictRecord) error

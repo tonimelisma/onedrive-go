@@ -256,6 +256,17 @@ func (e *Executor) executeFolderCreate(ctx context.Context, action *Action) erro
 		return fmt.Errorf("executor: remote folder create for %s has nil item", action.Path)
 	}
 
+	// B-050: Capture pre-create key so we can delete the stale scanner row
+	// after the upsert creates a new row with the server-assigned ID.
+	oldDriveID := action.Item.DriveID
+	oldItemID := action.Item.ItemID
+
+	// Inject the engine's DriveID into the item for the upsert. This must
+	// happen AFTER capturing the old key (scanner rows have DriveID="").
+	if action.Item.DriveID == "" {
+		action.Item.DriveID = action.DriveID
+	}
+
 	created, err := e.items.CreateFolder(ctx, action.DriveID, action.Item.ParentID, action.Item.Name)
 	if err != nil {
 		return fmt.Errorf("executor: create remote folder %s: %w", action.Path, err)
@@ -266,7 +277,19 @@ func (e *Executor) executeFolderCreate(ctx context.Context, action *Action) erro
 	action.Item.CTag = created.CTag
 	action.Item.UpdatedAt = NowNano()
 
-	return e.store.UpsertItem(ctx, action.Item)
+	if err := e.store.UpsertItem(ctx, action.Item); err != nil {
+		return err
+	}
+
+	// B-050: Delete stale scanner row if the primary key changed.
+	if created.ID != "" && (oldItemID != created.ID || oldDriveID != action.Item.DriveID) {
+		if delErr := e.store.DeleteItemByKey(ctx, oldDriveID, oldItemID); delErr != nil {
+			e.logger.Warn("executor: failed to clean up stale scanner row for folder",
+				"old_drive_id", oldDriveID, "old_item_id", oldItemID, "error", delErr)
+		}
+	}
+
+	return nil
 }
 
 // executeMove renames or moves a remote item via the Graph API, then updates path state.
@@ -448,6 +471,17 @@ func (e *Executor) updateUploadState(
 	now := NowNano()
 	mtimeNano := Int64Ptr(mtime.UnixNano())
 
+	// B-050: Capture pre-upload key so we can delete the stale scanner row
+	// after the upsert creates a new row with the server-assigned ID.
+	oldDriveID := action.Item.DriveID
+	oldItemID := action.Item.ItemID
+
+	// Inject the engine's DriveID into the item for the upsert. This must
+	// happen AFTER capturing the old key (scanner rows have DriveID="").
+	if action.Item.DriveID == "" {
+		action.Item.DriveID = action.DriveID
+	}
+
 	if uploaded != nil {
 		action.Item.ItemID = uploaded.ID
 		action.Item.ETag = uploaded.ETag
@@ -461,7 +495,19 @@ func (e *Executor) updateUploadState(
 	action.Item.LastSyncedAt = Int64Ptr(now)
 	action.Item.UpdatedAt = now
 
-	return e.store.UpsertItem(ctx, action.Item)
+	if err := e.store.UpsertItem(ctx, action.Item); err != nil {
+		return err
+	}
+
+	// B-050: Delete stale scanner row if the primary key changed.
+	if uploaded != nil && (oldItemID != action.Item.ItemID || oldDriveID != action.Item.DriveID) {
+		if delErr := e.store.DeleteItemByKey(ctx, oldDriveID, oldItemID); delErr != nil {
+			e.logger.Warn("executor: failed to clean up stale pre-upload row",
+				"old_drive_id", oldDriveID, "old_item_id", oldItemID, "error", delErr)
+		}
+	}
+
+	return nil
 }
 
 // executeLocalDelete removes a local file after verifying its hash matches the last-synced

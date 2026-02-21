@@ -44,7 +44,7 @@ type SQLiteStore struct {
 
 // Statement groups to avoid a flat list of 25+ fields.
 type itemStatements struct {
-	get, upsert, markDeleted, listChildren, getByPath, listAllActive, listSynced *sql.Stmt
+	get, upsert, markDeleted, deleteByKey, listChildren, getByPath, listAllActive, listSynced *sql.Stmt
 }
 
 type deltaStatements struct {
@@ -229,6 +229,8 @@ const (
 		SET is_deleted = 1, deleted_at = ?, updated_at = ?
 		WHERE drive_id = ? AND item_id = ?`
 
+	sqlDeleteItemByKey = `DELETE FROM items WHERE drive_id = ? AND item_id = ?`
+
 	sqlListChildren = `SELECT ` + sqlItemColumns +
 		` FROM items
 		WHERE parent_drive_id = ? AND parent_id = ? AND is_deleted = 0`
@@ -378,6 +380,7 @@ func (s *SQLiteStore) prepareItemStmts(ctx context.Context) error {
 		{&s.itemStmts.get, sqlGetItem, "getItem"},
 		{&s.itemStmts.upsert, sqlUpsertItem, "upsertItem"},
 		{&s.itemStmts.markDeleted, sqlMarkDeleted, "markDeleted"},
+		{&s.itemStmts.deleteByKey, sqlDeleteItemByKey, "deleteItemByKey"},
 		{&s.itemStmts.listChildren, sqlListChildren, "listChildren"},
 		{&s.itemStmts.getByPath, sqlGetItemByPath, "getItemByPath"},
 		{&s.itemStmts.listAllActive, sqlListAllActive, "listAllActive"},
@@ -528,6 +531,20 @@ func (s *SQLiteStore) MarkDeleted(ctx context.Context, driveID, itemID string, d
 	_, err := s.itemStmts.markDeleted.ExecContext(ctx, deletedAt, now, driveID, itemID)
 	if err != nil {
 		return fmt.Errorf("mark deleted %s/%s: %w", driveID, itemID, err)
+	}
+
+	return nil
+}
+
+// DeleteItemByKey physically removes an item by primary key.
+// Used to clean up stale scanner-originated rows after upload assigns
+// a server ItemID, preventing dual-row accumulation (B-050).
+func (s *SQLiteStore) DeleteItemByKey(ctx context.Context, driveID, itemID string) error {
+	s.logger.Debug("deleting item by key", "drive_id", driveID, "item_id", itemID)
+
+	_, err := s.itemStmts.deleteByKey.ExecContext(ctx, driveID, itemID)
+	if err != nil {
+		return fmt.Errorf("delete item %s/%s: %w", driveID, itemID, err)
 	}
 
 	return nil
@@ -1144,7 +1161,7 @@ func (s *SQLiteStore) Close() error {
 func (s *SQLiteStore) closeStatements() error {
 	stmts := []*sql.Stmt{
 		s.itemStmts.get, s.itemStmts.upsert, s.itemStmts.markDeleted,
-		s.itemStmts.listChildren, s.itemStmts.getByPath,
+		s.itemStmts.deleteByKey, s.itemStmts.listChildren, s.itemStmts.getByPath,
 		s.itemStmts.listAllActive, s.itemStmts.listSynced,
 		s.deltaStmts.getToken, s.deltaStmts.saveToken,
 		s.deltaStmts.deleteToken, s.deltaStmts.setComplete,
