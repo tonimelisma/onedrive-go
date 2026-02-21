@@ -506,3 +506,29 @@ Agent D (Filter) duplicated `config.parseSize` because it's unexported, and Agen
 Agent C (Scanner) had a late pivot from single-path to dual-path NFC normalization after Linux CI failure. This was foreseeable — the plan should have specified dual-path threading from the start.
 
 **Fix**: For any code that touches filesystem paths AND a database, the plan must explicitly specify how platform-specific path encoding is handled. On macOS (APFS), NFC/NFD are transparent. On Linux (ext4), they are distinct byte sequences.
+
+---
+
+## 25. Safety Checks (Phase 4.6)
+
+### dupl linter catches structural patterns across safety invariants
+S1 (remote delete guard) and S4 (hash-before-delete guard) have identical structure: filter actions by SyncedHash presence. The `dupl` linter (threshold 100 lines) flags this. Solution: extract a shared `filterBySyncedHash` function parameterized by invariant name for log messages. This pattern will recur whenever multiple safety checks share the same filtering logic.
+
+### SafetyConfig is 88 bytes — exceeds gocritic hugeParam threshold
+`config.SafetyConfig` with its string fields and int fields totals 88 bytes, exceeding the ~128-byte gocritic threshold would be fine but the actual threshold is lower. Must pass by pointer to `NewSafetyChecker`. Updated `NewSafetyConfig` helper in `types.go` to return `*config.SafetyConfig` for consistency.
+
+### Injectable statfsFunc requires default mock in test helpers
+Safety tests that don't specifically test disk space (S6) still run through the full `Check()` method, which calls `getDiskSpace` on a path that may not exist ("/tmp/sync"). The `safetyChecker` test helper must inject a default mock `statfsFunc` returning ample space. Only S6-specific tests override it with controlled values. Without this, tests fail with "no such file or directory" on the real syscall.
+
+### uint64 to int64 overflow in disk space comparison
+`getDiskSpace` returns `uint64` (from syscall) but download sizes are `int64`. Direct `int64(available)` triggers gosec G115 (integer overflow). Solution: cap `available` at `math.MaxInt64` before conversion. In practice, no filesystem has more than 9.2 exabytes available, but the guard satisfies the linter without nolint.
+
+### Platform-specific build tags for disk space
+Darwin uses `syscall.Statfs` directly; Linux needs `golang.org/x/sys/unix.Statfs` because the syscall package has inconsistent field types across architectures. Both use `Bavail` (available to unprivileged users), NOT `Bfree` (total free including root-reserved blocks). `golang.org/x/sys` was already a transitive dependency.
+
+- **Pivots**: Extracted `filterBySyncedHash` to deduplicate S1/S4 (not in plan). Extracted `handleBigDeleteViolation` and `handleDiskSpaceViolation` to keep `checkS5BigDelete` and `checkS6DiskSpace` under funlen limit. Changed `SafetyConfig` from value to pointer parameter after gocritic hugeParam.
+- **Issues found**: None beyond lint issues.
+- **Linter surprises**: `dupl` catching S1/S4 pattern overlap, `gocritic:hugeParam` on SafetyConfig (88 bytes), `gosec:G115` on uint64->int64 conversion.
+- **Suggested improvements**: None specific to safety checker.
+- **Cross-package concerns**: `NewSafetyConfig` in `types.go` changed to return pointer. Callers (future reconciler/engine) must accept `*config.SafetyConfig`.
+- **Code smells noticed**: None significant. The seven safety checks are well-separated into individual methods.

@@ -331,7 +331,9 @@ func NewFilterConfig(resolved *config.ResolvedDrive) config.FilterConfig {
 }
 
 // NewSafetyConfig extracts the safety configuration needed by the safety checker
-// from a resolved drive configuration.
-func NewSafetyConfig(resolved *config.ResolvedDrive) config.SafetyConfig {
-	return resolved.SafetyConfig
+// from a resolved drive configuration. Returns a pointer because SafetyConfig
+// is 88 bytes — exceeds gocritic's hugeParam threshold.
+func NewSafetyConfig(resolved *config.ResolvedDrive) *config.SafetyConfig {
+	cfg := resolved.SafetyConfig
+	return &cfg
 }
