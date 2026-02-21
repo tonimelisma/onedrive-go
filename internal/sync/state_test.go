@@ -848,3 +848,36 @@ func TestScanItemRows_ClosedDB(t *testing.T) {
 	require.Error(t, listErr)
 	assert.Contains(t, listErr.Error(), "list active items")
 }
+
+// --- B-050: DeleteItemByKey tests ---
+
+func TestDeleteItemByKey(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	item := makeTestItem("d1", "item1", "d1", "root1", "deltest.txt", ItemTypeFile)
+	item.Path = "deltest.txt"
+	require.NoError(t, store.UpsertItem(ctx, item))
+
+	// Verify the item exists.
+	got, err := store.GetItem(ctx, "d1", "item1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+
+	// Delete by key.
+	require.NoError(t, store.DeleteItemByKey(ctx, "d1", "item1"))
+
+	// Verify the item is gone (physical delete, not tombstone).
+	got, err = store.GetItem(ctx, "d1", "item1")
+	require.NoError(t, err)
+	assert.Nil(t, got, "item should be physically deleted")
+}
+
+func TestDeleteItemByKey_Nonexistent(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	// Deleting a nonexistent key should not return an error.
+	err := store.DeleteItemByKey(ctx, "d1", "nonexistent")
+	assert.NoError(t, err)
+}

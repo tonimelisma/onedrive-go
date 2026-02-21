@@ -38,6 +38,7 @@ type executorMockStore struct {
 	// Error injection
 	upsertErr        error
 	markDeletedErr   error
+	deleteByKeyErr   error
 	getItemByPathErr error
 	cascadeErr       error
 	conflictErr      error
@@ -99,6 +100,19 @@ func (s *executorMockStore) MarkDeleted(_ context.Context, driveID, itemID strin
 	})
 
 	return s.markDeletedErr
+}
+
+func (s *executorMockStore) DeleteItemByKey(_ context.Context, driveID, itemID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.deleteByKeyErr != nil {
+		return s.deleteByKeyErr
+	}
+
+	delete(s.items, s.storeKey(driveID, itemID))
+
+	return nil
 }
 
 func (s *executorMockStore) MaterializePath(_ context.Context, _, _ string) (string, error) {
@@ -1549,4 +1563,124 @@ func TestNewExecutor_ChunkSize_InvalidFallback(t *testing.T) {
 	cfg := &config.TransfersConfig{ChunkSize: "garbage"}
 	exec := NewExecutor(store, &executorMockItems{}, &executorMockTransfer{}, "/tmp", nil, cfg, testLogger(t))
 	assert.Equal(t, int64(uploadChunkSize), exec.chunkSize, "invalid chunk size should fall back to default")
+}
+
+// --- B-050: Stale row cleanup tests ---
+
+// TestExecutor_Upload_CleansStaleRow verifies that after upload assigns a new ItemID,
+// the stale scanner-originated row (with empty ItemID) is deleted from the store.
+func TestExecutor_Upload_CleansStaleRow(t *testing.T) {
+	syncRoot := t.TempDir()
+
+	content := []byte("new local file")
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "new.txt"), content, 0o644))
+
+	exec, store, _, transfer := newTestExecutor(t, syncRoot)
+
+	// Simulate a scanner-originated row with empty ItemID.
+	scannerItem := &Item{
+		DriveID:  "d1",
+		ItemID:   "",
+		ParentID: "parent-id",
+		Name:     "new.txt",
+		ItemType: ItemTypeFile,
+		Path:     "new.txt",
+	}
+	store.items[store.storeKey("d1", "")] = scannerItem
+
+	// Upload returns a server-assigned ID.
+	transfer.uploadedItem = &graph.Item{ID: "server-assigned-id", ETag: "etag-new"}
+
+	action := Action{
+		Type:    ActionUpload,
+		DriveID: "d1",
+		ItemID:  "",
+		Path:    "new.txt",
+		Item:    scannerItem,
+	}
+
+	plan := &ActionPlan{Uploads: []Action{action}}
+	report, err := exec.Execute(context.Background(), plan)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.Uploaded)
+
+	// New row should exist with server-assigned ID.
+	newRow := store.items[store.storeKey("d1", "server-assigned-id")]
+	require.NotNil(t, newRow, "new row with server ID should exist")
+	assert.Equal(t, "server-assigned-id", newRow.ItemID)
+
+	// Stale scanner row should be deleted.
+	staleRow := store.items[store.storeKey("d1", "")]
+	assert.Nil(t, staleRow, "stale scanner row should be deleted")
+}
+
+// TestExecutor_FolderCreateRemote_CleansStaleRow verifies that after remote folder
+// creation assigns a new ItemID, the stale scanner row is deleted.
+func TestExecutor_FolderCreateRemote_CleansStaleRow(t *testing.T) {
+	syncRoot := t.TempDir()
+	exec, store, items, _ := newTestExecutor(t, syncRoot)
+
+	// Simulate a scanner-originated folder row with empty ItemID.
+	scannerItem := &Item{
+		DriveID:  "d1",
+		ItemID:   "",
+		ParentID: "root-id",
+		Name:     "docs",
+		ItemType: ItemTypeFolder,
+	}
+	store.items[store.storeKey("d1", "")] = scannerItem
+
+	items.createFolderResult = &graph.Item{ID: "server-folder-id", Name: "docs", ETag: "etag-f", IsFolder: true}
+
+	action := Action{
+		Type:       ActionFolderCreate,
+		DriveID:    "d1",
+		ItemID:     "",
+		Path:       "docs",
+		CreateSide: FolderCreateRemote,
+		Item:       scannerItem,
+	}
+
+	plan := &ActionPlan{FolderCreates: []Action{action}}
+	report, err := exec.Execute(context.Background(), plan)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.FoldersCreated)
+
+	// New row should exist with server-assigned ID.
+	newRow := store.items[store.storeKey("d1", "server-folder-id")]
+	require.NotNil(t, newRow, "new row with server folder ID should exist")
+
+	// Stale scanner row should be deleted.
+	staleRow := store.items[store.storeKey("d1", "")]
+	assert.Nil(t, staleRow, "stale scanner row should be deleted")
+}
+
+// TestDispatchPhase_ErrorRetryable_RecordedAsSkipped verifies that ErrorRetryable errors
+// (e.g., graph.ErrThrottled) are handled as skips in the current implementation.
+// Full retry logic is deferred to Phase 5 (B-048).
+func TestDispatchPhase_ErrorRetryable_RecordedAsSkipped(t *testing.T) {
+	syncRoot := t.TempDir()
+	exec, _, _, transfer := newTestExecutor(t, syncRoot)
+
+	transfer.downloadErr = graph.ErrThrottled
+
+	action := Action{
+		Type:    ActionDownload,
+		DriveID: "d1",
+		ItemID:  "throttled-item",
+		Path:    "throttled.txt",
+		Item:    &Item{DriveID: "d1", ItemID: "throttled-item", Name: "throttled.txt", ItemType: ItemTypeFile},
+	}
+
+	plan := &ActionPlan{Downloads: []Action{action}}
+	report, err := exec.Execute(context.Background(), plan)
+
+	// ErrorRetryable is not fatal — handled as skip until Phase 5 adds retry.
+	require.NoError(t, err)
+	assert.Equal(t, 0, report.Downloaded)
+	assert.Equal(t, 1, report.Skipped)
+	require.Len(t, report.Errors, 1)
+	assert.Equal(t, ErrorRetryable, report.Errors[0].Tier)
 }

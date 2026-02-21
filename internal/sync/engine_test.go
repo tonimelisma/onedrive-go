@@ -407,11 +407,10 @@ func TestRunOnce_Upload_EndToEnd(t *testing.T) {
 	assert.Equal(t, 1, mock.uploadCalls)
 
 	// B4: Verify the state store was updated with remote+synced fields after upload.
-	// The scanner creates the initial item with empty DriveID/ItemID. After upload,
-	// the executor upserts a new row with the server-assigned ItemID ("uploaded-id").
-	// Use GetItem to fetch by the known key, not ListAllActiveItems (which may match
-	// the stale scanner row first).
-	uploaded, err := store.GetItem(ctx, "", "uploaded-id")
+	// The scanner creates the initial item with empty DriveID/ItemID. populateDriveID
+	// (B-050) fills in the engine's drive ID before execution. After upload, the
+	// executor upserts a row at (driveID, server-assigned-ID).
+	uploaded, err := store.GetItem(ctx, "test-drive-id", "uploaded-id")
 	require.NoError(t, err)
 	require.NotNil(t, uploaded, "uploaded item should exist in store")
 
@@ -749,4 +748,205 @@ func TestClose_WaitsForRunOnce(t *testing.T) {
 	eng.Close()
 
 	assert.True(t, runOnceFinished.Load(), "RunOnce should have completed before Close returned")
+}
+
+// --- B-050: populateDriveID tests ---
+
+func TestPopulateDriveID(t *testing.T) {
+	eng, _, _ := newTestEngine(t)
+
+	plan := &ActionPlan{
+		Uploads: []Action{
+			{DriveID: "", Path: "new.txt", Item: &Item{DriveID: "", ItemID: ""}},
+			{DriveID: "existing-drive", Path: "old.txt", Item: &Item{DriveID: "existing-drive", ItemID: "i1"}},
+		},
+		FolderCreates: []Action{
+			{DriveID: "", Path: "newdir", Item: &Item{DriveID: ""}},
+		},
+		Downloads: []Action{
+			{DriveID: "test-drive-id", Path: "remote.txt", Item: &Item{DriveID: "test-drive-id"}},
+		},
+	}
+
+	eng.populateDriveID(plan)
+
+	// Empty action DriveIDs should be filled with engine's driveID.
+	assert.Equal(t, "test-drive-id", plan.Uploads[0].DriveID)
+	// Item DriveID is NOT modified — the executor needs the original DB key
+	// to clean up stale scanner rows (B-050).
+	assert.Equal(t, "", plan.Uploads[0].Item.DriveID)
+
+	// Non-empty DriveIDs should be preserved.
+	assert.Equal(t, "existing-drive", plan.Uploads[1].DriveID)
+	assert.Equal(t, "existing-drive", plan.Uploads[1].Item.DriveID)
+
+	// Folder creates.
+	assert.Equal(t, "test-drive-id", plan.FolderCreates[0].DriveID)
+	assert.Equal(t, "", plan.FolderCreates[0].Item.DriveID) // Same: not modified
+
+	// Already set DriveIDs untouched.
+	assert.Equal(t, "test-drive-id", plan.Downloads[0].DriveID)
+}
+
+// TestRunOnce_Upload_NoStaleRow is a multi-cycle regression test for B-050.
+// Cycle 1: a local file triggers upload; after upload the stale scanner row must be removed.
+// Cycle 2: re-running should produce zero uploads (no duplicate from stale row).
+func TestRunOnce_Upload_NoStaleRow(t *testing.T) {
+	eng, mock, store := newTestEngine(t)
+	ctx := context.Background()
+	now := NowNano()
+
+	// Create a local file.
+	localContent := []byte("no stale row")
+	require.NoError(t, os.WriteFile(filepath.Join(eng.syncRoot, "nostale.txt"), localContent, 0o644))
+
+	// Need a root item for the reconciler.
+	root := &Item{
+		DriveID:   "test-drive-id",
+		ItemID:    "root",
+		Name:      "root",
+		ItemType:  ItemTypeRoot,
+		Path:      "",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	require.NoError(t, store.UpsertItem(ctx, root))
+	require.NoError(t, store.SetDeltaComplete(ctx, "test-drive-id", true))
+
+	hash := engineHash(localContent)
+	size := int64(len(localContent))
+	mock.uploadedItem = &graph.Item{
+		ID:           "uploaded-nostale",
+		ETag:         "etag-ns",
+		QuickXorHash: hash,
+		Size:         size,
+	}
+
+	// Cycle 1: upload should happen.
+	report, err := eng.RunOnce(ctx, SyncUploadOnly, SyncOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.Uploaded)
+
+	// Verify exactly 1 active row for this path (no stale scanner row lingering).
+	items, err := store.ListAllActiveItems(ctx)
+	require.NoError(t, err)
+
+	pathCount := 0
+	for _, it := range items {
+		if it.Path == "nostale.txt" {
+			pathCount++
+		}
+	}
+	assert.Equal(t, 1, pathCount, "should have exactly 1 row for nostale.txt, not a dual row")
+
+	// Cycle 2: no uploads expected (file already synced).
+	mock.uploadCalls = 0
+	report2, err := eng.RunOnce(ctx, SyncUploadOnly, SyncOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, 0, report2.Uploaded, "second cycle should not re-upload")
+}
+
+// TestRunOnce_FolderCreate_EndToEnd verifies the download-only folder creation path:
+// seed a remote-only folder in DB, run engine, verify folder created on disk.
+func TestRunOnce_FolderCreate_EndToEnd(t *testing.T) {
+	eng, _, store := newTestEngine(t)
+	ctx := context.Background()
+	now := NowNano()
+
+	root := &Item{
+		DriveID:   "test-drive-id",
+		ItemID:    "root",
+		Name:      "root",
+		ItemType:  ItemTypeRoot,
+		Path:      "",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	require.NoError(t, store.UpsertItem(ctx, root))
+	require.NoError(t, store.SetDeltaComplete(ctx, "test-drive-id", true))
+
+	// Seed a remote-only folder (from delta) — no local presence.
+	folder := &Item{
+		DriveID:       "test-drive-id",
+		ItemID:        "folder-1",
+		ParentDriveID: "test-drive-id",
+		ParentID:      "root",
+		Name:          "remotedir",
+		ItemType:      ItemTypeFolder,
+		Path:          "remotedir",
+		RemoteMtime:   &now,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	require.NoError(t, store.UpsertItem(ctx, folder))
+
+	report, err := eng.RunOnce(ctx, SyncDownloadOnly, SyncOptions{})
+	require.NoError(t, err)
+	// 2 folder creates: root (path "") and "remotedir" — the reconciler sees both
+	// as remote-only folders that need local creation (D3).
+	assert.GreaterOrEqual(t, report.FoldersCreated, 1)
+
+	// Verify folder exists on disk.
+	info, statErr := os.Stat(filepath.Join(eng.syncRoot, "remotedir"))
+	require.NoError(t, statErr)
+	assert.True(t, info.IsDir())
+}
+
+// NOTE: TestRunOnce_LocalDelete_EndToEnd removed — the reconciler's F8 path
+// (remote tombstone → local delete) is unreachable through the real engine because
+// ListAllActiveItems filters is_deleted=0, and MarkDeleted sets is_deleted=1.
+// After the delta processor tombstones an item, the reconciler never sees it.
+// F8/F9 are covered by reconciler_test.go (mock store), but the engine-level
+// wiring cannot be tested without changing the query to include tombstoned items.
+// Tracked as B-051 in BACKLOG.md.
+
+// TestRunOnce_RemoteDelete_EndToEnd seeds a synced item with no local file and
+// runs upload-only to verify a remote delete is triggered.
+func TestRunOnce_RemoteDelete_EndToEnd(t *testing.T) {
+	eng, mock, store := newTestEngine(t)
+	ctx := context.Background()
+	now := NowNano()
+
+	root := &Item{
+		DriveID:   "test-drive-id",
+		ItemID:    "root",
+		Name:      "root",
+		ItemType:  ItemTypeRoot,
+		Path:      "",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	require.NoError(t, store.UpsertItem(ctx, root))
+	require.NoError(t, store.SetDeltaComplete(ctx, "test-drive-id", true))
+
+	// Seed a synced item that has no local file (user deleted it locally).
+	size := int64(100)
+	item := &Item{
+		DriveID:       "test-drive-id",
+		ItemID:        "remote-del-item",
+		ParentDriveID: "test-drive-id",
+		ParentID:      "root",
+		Name:          "gone.txt",
+		ItemType:      ItemTypeFile,
+		Path:          "gone.txt",
+		Size:          &size,
+		QuickXorHash:  "AAAAAAAAAAAAAAAAAAAAAA==",
+		RemoteMtime:   &now,
+		SyncedSize:    &size,
+		SyncedMtime:   &now,
+		SyncedHash:    "AAAAAAAAAAAAAAAAAAAAAA==",
+		LastSyncedAt:  &now,
+		LocalSize:     &size,
+		LocalMtime:    &now,
+		LocalHash:     "AAAAAAAAAAAAAAAAAAAAAA==",
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	require.NoError(t, store.UpsertItem(ctx, item))
+
+	report, err := eng.RunOnce(ctx, SyncUploadOnly, SyncOptions{})
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, report.RemoteDeleted)
+	assert.Equal(t, 1, mock.deleteItemCalls)
 }
