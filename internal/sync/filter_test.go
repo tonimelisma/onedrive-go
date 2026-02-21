@@ -677,7 +677,8 @@ func TestMatchesSkipPattern(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, tt.expected, matchesSkipPattern(tt.filename, tt.patterns))
+			engine := &FilterEngine{logger: testLogger(t)}
+			assert.Equal(t, tt.expected, engine.matchesSkipPattern(tt.filename, tt.patterns))
 		})
 	}
 }

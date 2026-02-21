@@ -13,9 +13,7 @@ import (
 
 // --- Safety-specific mock store ---
 
-// safetyMockStore implements the Store interface for safety checker tests.
-// Only methods used by the safety checker have real implementations;
-// unused methods return zero values.
+// safetyMockStore implements SafetyStore for safety checker tests.
 type safetyMockStore struct {
 	items         []*Item          // returned by ListAllActiveItems
 	deltaComplete map[string]bool  // driveID -> complete
@@ -41,82 +39,9 @@ func (s *safetyMockStore) IsDeltaComplete(_ context.Context, driveID string) (bo
 	return s.deltaComplete[driveID], nil
 }
 
-// Unused Store interface methods — required for interface satisfaction.
-
-func (s *safetyMockStore) GetItem(context.Context, string, string) (*Item, error) { return nil, nil }
-func (s *safetyMockStore) UpsertItem(context.Context, *Item) error                { return nil }
-
-func (s *safetyMockStore) MarkDeleted(context.Context, string, string, int64) error { return nil }
-
-func (s *safetyMockStore) ListChildren(context.Context, string, string) ([]*Item, error) {
-	return nil, nil
-}
-
-func (s *safetyMockStore) GetItemByPath(context.Context, string) (*Item, error) { return nil, nil }
-
-func (s *safetyMockStore) ListSyncedItems(context.Context) ([]*Item, error) { return nil, nil }
-
-func (s *safetyMockStore) BatchUpsert(context.Context, []*Item) error { return nil }
-
-func (s *safetyMockStore) MaterializePath(context.Context, string, string) (string, error) {
-	return "", nil
-}
-
-func (s *safetyMockStore) CascadePathUpdate(context.Context, string, string) error { return nil }
-
-func (s *safetyMockStore) CleanupTombstones(context.Context, int) (int64, error) { return 0, nil }
-
-func (s *safetyMockStore) GetDeltaToken(context.Context, string) (string, error) { return "", nil }
-
-func (s *safetyMockStore) SaveDeltaToken(context.Context, string, string) error { return nil }
-
-func (s *safetyMockStore) DeleteDeltaToken(context.Context, string) error { return nil }
-
-func (s *safetyMockStore) SetDeltaComplete(context.Context, string, bool) error { return nil }
-
-func (s *safetyMockStore) RecordConflict(context.Context, *ConflictRecord) error { return nil }
-
-func (s *safetyMockStore) ListConflicts(context.Context, string) ([]*ConflictRecord, error) {
-	return nil, nil
-}
-
-func (s *safetyMockStore) ResolveConflict(context.Context, string, ConflictResolution, ConflictResolvedBy) error {
-	return nil
-}
-
-func (s *safetyMockStore) ConflictCount(context.Context, string) (int, error) { return 0, nil }
-
-func (s *safetyMockStore) RecordStaleFile(context.Context, *StaleRecord) error { return nil }
-
-func (s *safetyMockStore) ListStaleFiles(context.Context) ([]*StaleRecord, error) { return nil, nil }
-
-func (s *safetyMockStore) RemoveStaleFile(context.Context, string) error { return nil }
-
-func (s *safetyMockStore) SaveUploadSession(context.Context, *UploadSessionRecord) error {
-	return nil
-}
-
-func (s *safetyMockStore) GetUploadSession(context.Context, string) (*UploadSessionRecord, error) {
-	return nil, nil
-}
-
-func (s *safetyMockStore) DeleteUploadSession(context.Context, string) error { return nil }
-
-func (s *safetyMockStore) ListExpiredSessions(context.Context, int64) ([]*UploadSessionRecord, error) {
-	return nil, nil
-}
-
-func (s *safetyMockStore) GetConfigSnapshot(context.Context, string) (string, error) { return "", nil }
-
-func (s *safetyMockStore) SaveConfigSnapshot(context.Context, string, string) error { return nil }
-
-func (s *safetyMockStore) Checkpoint() error { return nil }
-
-func (s *safetyMockStore) Close() error { return nil }
-
 // --- Test helpers ---
 
-func safetyChecker(t *testing.T, store Store) *SafetyChecker {
+func safetyChecker(t *testing.T, store SafetyStore) *SafetyChecker {
 	t.Helper()
 
 	sc := NewSafetyChecker(
@@ -794,10 +719,8 @@ func TestSafety_S5_ListActiveItemsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "S5")
 }
 
-// safetyListErrorStore errors on ListAllActiveItems but supports delta checks.
-type safetyListErrorStore struct {
-	safetyMockStore
-}
+// safetyListErrorStore implements SafetyStore and errors on ListAllActiveItems.
+type safetyListErrorStore struct{}
 
 func (s *safetyListErrorStore) ListAllActiveItems(_ context.Context) ([]*Item, error) {
 	return nil, errors.New("db read error")

@@ -30,7 +30,7 @@ const percentMultiplier = 100
 // before any destructive operations are executed. It is the pre-execution gate
 // described in sync-algorithm.md section 8.
 type SafetyChecker struct {
-	store      Store
+	store      SafetyStore
 	cfg        *config.SafetyConfig
 	logger     *slog.Logger
 	syncRoot   string
@@ -41,7 +41,7 @@ type SafetyChecker struct {
 // and logger. The sync root is needed for disk space checks (S6). The default
 // disk space function uses platform-specific syscalls (getDiskSpace).
 func NewSafetyChecker(
-	store Store,
+	store SafetyStore,
 	cfg *config.SafetyConfig,
 	syncRoot string,
 	logger *slog.Logger,

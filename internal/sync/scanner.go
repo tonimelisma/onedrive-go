@@ -30,7 +30,7 @@ const maxPathChars = 400
 // Scanner walks the local filesystem to detect changes relative to the state database.
 // It implements sync-algorithm.md sections 4.1-4.5.
 type Scanner struct {
-	store        Store
+	store        ScannerStore
 	filter       Filter
 	logger       *slog.Logger
 	skipSymlinks bool
@@ -38,7 +38,7 @@ type Scanner struct {
 }
 
 // NewScanner creates a Scanner with the given dependencies.
-func NewScanner(store Store, filter Filter, skipSymlinks bool, logger *slog.Logger) *Scanner {
+func NewScanner(store ScannerStore, filter Filter, skipSymlinks bool, logger *slog.Logger) *Scanner {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}

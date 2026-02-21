@@ -24,13 +24,13 @@ var errDeltaTokenExpired = errors.New("delta token expired")
 // deletions, apply to DB, handle HTTP 410, and track delta completeness.
 type DeltaProcessor struct {
 	fetcher DeltaFetcher
-	store   Store
+	store   DeltaStore
 	logger  *slog.Logger
 }
 
 // NewDeltaProcessor creates a DeltaProcessor that fetches remote changes
 // via fetcher and persists state via store.
-func NewDeltaProcessor(fetcher DeltaFetcher, store Store, logger *slog.Logger) *DeltaProcessor {
+func NewDeltaProcessor(fetcher DeltaFetcher, store DeltaStore, logger *slog.Logger) *DeltaProcessor {
 	return &DeltaProcessor{
 		fetcher: fetcher,
 		store:   store,

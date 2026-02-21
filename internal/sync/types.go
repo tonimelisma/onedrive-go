@@ -239,8 +239,42 @@ type TransferClient interface {
 	UploadChunk(ctx context.Context, uploadURL string, r io.Reader, offset, length, totalSize int64) (*graph.Item, error)
 }
 
-// Store is the interface for the sync state database. All sync components
-// operate against this interface rather than the concrete SQLite implementation.
+// ReconcilerStore is the subset of Store used by Reconciler.
+type ReconcilerStore interface {
+	ListAllActiveItems(ctx context.Context) ([]*Item, error)
+}
+
+// SafetyStore is the subset of Store used by SafetyChecker.
+type SafetyStore interface {
+	IsDeltaComplete(ctx context.Context, driveID string) (bool, error)
+	ListAllActiveItems(ctx context.Context) ([]*Item, error)
+}
+
+// ScannerStore is the subset of Store used by Scanner.
+type ScannerStore interface {
+	GetItemByPath(ctx context.Context, path string) (*Item, error)
+	UpsertItem(ctx context.Context, item *Item) error
+	ListSyncedItems(ctx context.Context) ([]*Item, error)
+	ListAllActiveItems(ctx context.Context) ([]*Item, error)
+}
+
+// DeltaStore is the subset of Store used by DeltaProcessor.
+type DeltaStore interface {
+	GetItem(ctx context.Context, driveID, itemID string) (*Item, error)
+	UpsertItem(ctx context.Context, item *Item) error
+	MarkDeleted(ctx context.Context, driveID, itemID string, deletedAt int64) error
+	MaterializePath(ctx context.Context, driveID, itemID string) (string, error)
+	CascadePathUpdate(ctx context.Context, oldPrefix, newPrefix string) error
+	GetDeltaToken(ctx context.Context, driveID string) (string, error)
+	SaveDeltaToken(ctx context.Context, driveID, token string) error
+	DeleteDeltaToken(ctx context.Context, driveID string) error
+	SetDeltaComplete(ctx context.Context, driveID string, complete bool) error
+}
+
+// Store composes all consumer-specific store interfaces plus maintenance methods.
+// It is the interface for the sync state database that the concrete SQLite
+// implementation satisfies. Consumers should accept only the narrow interface
+// they need (ReconcilerStore, SafetyStore, ScannerStore, or DeltaStore).
 type Store interface {
 	// Items
 	GetItem(ctx context.Context, driveID, itemID string) (*Item, error)

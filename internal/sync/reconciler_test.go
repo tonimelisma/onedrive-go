@@ -11,7 +11,7 @@ import (
 
 // --- reconcilerMockStore ---
 
-// reconcilerMockStore implements Store for reconciler tests.
+// reconcilerMockStore implements ReconcilerStore for reconciler tests.
 // It returns pre-configured item lists and tracks calls.
 type reconcilerMockStore struct {
 	activeItems []*Item
@@ -30,91 +30,6 @@ func (s *reconcilerMockStore) ListAllActiveItems(_ context.Context) ([]*Item, er
 	}
 	return s.activeItems, nil
 }
-
-func (s *reconcilerMockStore) IsDeltaComplete(_ context.Context, _ string) (bool, error) {
-	return true, nil
-}
-
-// Unused Store methods — satisfy interface.
-func (s *reconcilerMockStore) GetItem(context.Context, string, string) (*Item, error) {
-	return nil, nil
-}
-
-func (s *reconcilerMockStore) UpsertItem(context.Context, *Item) error { return nil }
-
-func (s *reconcilerMockStore) MarkDeleted(context.Context, string, string, int64) error { return nil }
-
-func (s *reconcilerMockStore) ListChildren(context.Context, string, string) ([]*Item, error) {
-	return nil, nil
-}
-
-func (s *reconcilerMockStore) GetItemByPath(context.Context, string) (*Item, error) {
-	return nil, nil
-}
-
-func (s *reconcilerMockStore) ListSyncedItems(context.Context) ([]*Item, error) { return nil, nil }
-
-func (s *reconcilerMockStore) BatchUpsert(context.Context, []*Item) error { return nil }
-
-func (s *reconcilerMockStore) MaterializePath(context.Context, string, string) (string, error) {
-	return "", nil
-}
-
-func (s *reconcilerMockStore) CascadePathUpdate(context.Context, string, string) error { return nil }
-
-func (s *reconcilerMockStore) CleanupTombstones(context.Context, int) (int64, error) { return 0, nil }
-
-func (s *reconcilerMockStore) GetDeltaToken(context.Context, string) (string, error) { return "", nil }
-
-func (s *reconcilerMockStore) SaveDeltaToken(context.Context, string, string) error { return nil }
-
-func (s *reconcilerMockStore) DeleteDeltaToken(context.Context, string) error { return nil }
-
-func (s *reconcilerMockStore) SetDeltaComplete(context.Context, string, bool) error { return nil }
-
-func (s *reconcilerMockStore) RecordConflict(context.Context, *ConflictRecord) error { return nil }
-
-func (s *reconcilerMockStore) ListConflicts(context.Context, string) ([]*ConflictRecord, error) {
-	return nil, nil
-}
-
-func (s *reconcilerMockStore) ResolveConflict(context.Context, string, ConflictResolution, ConflictResolvedBy) error {
-	return nil
-}
-
-func (s *reconcilerMockStore) ConflictCount(context.Context, string) (int, error) { return 0, nil }
-
-func (s *reconcilerMockStore) RecordStaleFile(context.Context, *StaleRecord) error { return nil }
-
-func (s *reconcilerMockStore) ListStaleFiles(context.Context) ([]*StaleRecord, error) {
-	return nil, nil
-}
-
-func (s *reconcilerMockStore) RemoveStaleFile(context.Context, string) error { return nil }
-
-func (s *reconcilerMockStore) SaveUploadSession(context.Context, *UploadSessionRecord) error {
-	return nil
-}
-
-func (s *reconcilerMockStore) GetUploadSession(context.Context, string) (*UploadSessionRecord, error) {
-	return nil, nil
-}
-
-func (s *reconcilerMockStore) DeleteUploadSession(context.Context, string) error { return nil }
-
-func (s *reconcilerMockStore) ListExpiredSessions(context.Context, int64) ([]*UploadSessionRecord, error) {
-	return nil, nil
-}
-
-func (s *reconcilerMockStore) GetConfigSnapshot(context.Context, string) (string, error) {
-	return "", nil
-}
-
-func (s *reconcilerMockStore) SaveConfigSnapshot(context.Context, string, string) error { return nil }
-
-func (s *reconcilerMockStore) Checkpoint() error { return nil }
-
-func (s *reconcilerMockStore) Close() error { return nil }
 
 // --- reconciler test helpers ---
 

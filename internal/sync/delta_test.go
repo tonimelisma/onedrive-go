@@ -58,9 +58,7 @@ func (m *mockDeltaFetcher) Delta(_ context.Context, driveID, token string) (*gra
 
 // --- Mock Store ---
 
-// mockStore records calls and returns configurable results.
-// Only the methods used by DeltaProcessor are implemented here;
-// unused Store interface methods panic to catch unexpected calls.
+// mockStore implements DeltaStore for delta processor tests.
 type mockStore struct {
 	// Delta token state
 	deltaToken    string
@@ -139,10 +137,6 @@ func (s *mockStore) SetDeltaComplete(_ context.Context, _ string, complete bool)
 	return s.setCompleteErr
 }
 
-func (s *mockStore) IsDeltaComplete(_ context.Context, _ string) (bool, error) {
-	return s.deltaComplete, nil
-}
-
 func (s *mockStore) GetItem(_ context.Context, driveID, itemID string) (*Item, error) {
 	if s.getItemErr != nil {
 		return nil, s.getItemErr
@@ -187,87 +181,6 @@ func (s *mockStore) CascadePathUpdate(_ context.Context, oldPrefix, newPrefix st
 	s.cascadeCalls = append(s.cascadeCalls, cascadeCall{OldPrefix: oldPrefix, NewPrefix: newPrefix})
 	return s.cascadeErr
 }
-
-// --- Unused Store interface methods (panic on unexpected calls) ---
-
-func (s *mockStore) ListChildren(context.Context, string, string) ([]*Item, error) {
-	panic("unexpected call to ListChildren")
-}
-
-func (s *mockStore) GetItemByPath(context.Context, string) (*Item, error) {
-	panic("unexpected call to GetItemByPath")
-}
-
-func (s *mockStore) ListAllActiveItems(context.Context) ([]*Item, error) {
-	panic("unexpected call to ListAllActiveItems")
-}
-
-func (s *mockStore) ListSyncedItems(context.Context) ([]*Item, error) {
-	panic("unexpected call to ListSyncedItems")
-}
-
-func (s *mockStore) BatchUpsert(context.Context, []*Item) error {
-	panic("unexpected call to BatchUpsert")
-}
-
-func (s *mockStore) CleanupTombstones(context.Context, int) (int64, error) {
-	panic("unexpected call to CleanupTombstones")
-}
-
-func (s *mockStore) RecordConflict(context.Context, *ConflictRecord) error {
-	panic("unexpected call to RecordConflict")
-}
-
-func (s *mockStore) ListConflicts(context.Context, string) ([]*ConflictRecord, error) {
-	panic("unexpected call to ListConflicts")
-}
-
-func (s *mockStore) ResolveConflict(context.Context, string, ConflictResolution, ConflictResolvedBy) error {
-	panic("unexpected call to ResolveConflict")
-}
-
-func (s *mockStore) ConflictCount(context.Context, string) (int, error) {
-	panic("unexpected call to ConflictCount")
-}
-
-func (s *mockStore) RecordStaleFile(context.Context, *StaleRecord) error {
-	panic("unexpected call to RecordStaleFile")
-}
-
-func (s *mockStore) ListStaleFiles(context.Context) ([]*StaleRecord, error) {
-	panic("unexpected call to ListStaleFiles")
-}
-
-func (s *mockStore) RemoveStaleFile(context.Context, string) error {
-	panic("unexpected call to RemoveStaleFile")
-}
-
-func (s *mockStore) SaveUploadSession(context.Context, *UploadSessionRecord) error {
-	panic("unexpected call to SaveUploadSession")
-}
-
-func (s *mockStore) GetUploadSession(context.Context, string) (*UploadSessionRecord, error) {
-	panic("unexpected call to GetUploadSession")
-}
-
-func (s *mockStore) DeleteUploadSession(context.Context, string) error {
-	panic("unexpected call to DeleteUploadSession")
-}
-
-func (s *mockStore) ListExpiredSessions(context.Context, int64) ([]*UploadSessionRecord, error) {
-	panic("unexpected call to ListExpiredSessions")
-}
-
-func (s *mockStore) GetConfigSnapshot(context.Context, string) (string, error) {
-	panic("unexpected call to GetConfigSnapshot")
-}
-
-func (s *mockStore) SaveConfigSnapshot(context.Context, string, string) error {
-	panic("unexpected call to SaveConfigSnapshot")
-}
-
-func (s *mockStore) Checkpoint() error { return nil }
-func (s *mockStore) Close() error      { return nil }
 
 // --- Test helper ---
 
