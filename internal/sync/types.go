@@ -99,7 +99,7 @@ type ConflictRecord struct {
 	Path        string // file path at time of conflict detection
 	DetectedAt  int64  // Unix nanoseconds
 	LocalHash   string
-	RemoteHash  string
+	RemoteHash  string // QuickXorHash from remote side; name is generic for future hash algorithm support
 	LocalMtime  *int64
 	RemoteMtime *int64
 	Resolution  ConflictResolution
@@ -141,7 +141,7 @@ const (
 	ActionUpload                         // Push local file to remote
 	ActionLocalDelete                    // Delete local file/folder
 	ActionRemoteDelete                   // Delete remote file/folder
-	ActionLocalMove                      // Rename/move local file/folder
+	ActionLocalMove                      // Reserved: local moves are expressed as ActionRemoteMove (update server path)
 	ActionRemoteMove                     // Rename/move remote file/folder
 	ActionFolderCreate                   // Create folder (local or remote)
 	ActionConflict                       // Record and resolve conflict

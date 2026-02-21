@@ -246,6 +246,10 @@ When multiple agents create test files in the same Go package, symbol redeclarat
 
 4. **Plan merge order**: When possible, merge agents that define shared test infrastructure first. Agents that only consume test helpers merge after.
 
+5. **Assign unique LEARNINGS.md section numbers**: Each agent prompt MUST specify the section number for LEARNINGS.md (e.g., "Agent A → section 27, Agent B → section 28"). Without this, agents pick the same number and cause merge conflicts.
+
+6. **Plan for gocritic/hugeParam on new struct types**: When an agent creates functions accepting structs > 80 bytes by value, the `gocritic:hugeParam` linter will force pointer returns/parameters. Include these type changes in the file conflict matrix, since they affect shared types in `types.go`.
+
 ### 2.3 Pre-Launch Briefing
 
 Before launching agents, present the human with a brief summary:

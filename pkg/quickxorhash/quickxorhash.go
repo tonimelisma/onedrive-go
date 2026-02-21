@@ -130,7 +130,7 @@ func (d *digest) Sum(b []byte) []byte {
 	binary.LittleEndian.PutUint64(rgb[0:8], dup.data[0])
 	binary.LittleEndian.PutUint64(rgb[8:16], dup.data[1])
 	// data[2] only uses bitsInLastCell (32) bits, so truncation to uint32 is safe.
-	lastCell := uint32(dup.data[2]) //nolint:gosec // truncation is intentional; see bitsInLastCell
+	lastCell := uint32(dup.data[2]) // truncation is intentional; data[2] only uses bitsInLastCell (32) bits
 	binary.LittleEndian.PutUint32(rgb[16:Size], lastCell)
 
 	// XOR the file length (little-endian int64) into the last 8 bytes of rgb.

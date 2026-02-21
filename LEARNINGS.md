@@ -555,3 +555,25 @@ Following the §24.1 learning, naming the mock `reconcilerMockStore` (not `mockS
 - **Suggested improvements**: The `NewPath` field on `FolderCreate` actions encoding "local" vs "remote" as a string is a code smell — consider a dedicated `FolderCreateSide` enum.
 - **Cross-package concerns**: None. The reconciler only depends on Store and types from the same package.
 - **Code smells noticed**: (1) The `folderCreateAction` using `NewPath` as a "local"/"remote" discriminator is stringly-typed. (2) `dispatchFolder` default branch is unreachable but required by exhaustive checking patterns.
+
+---
+
+## 27. Post-Wave 2 Top-Up: Foundation Alignment Fixes
+
+### S2 belongs in the safety checker, not the reconciler (SRP)
+The reconciler's original `checkDeltaCompleteness` checked only `items[0].DriveID` — a single-drive assumption that's buggy in multi-drive scenarios. The safety checker already had a correct per-drive implementation at `safety.go:144-193`. Duplicating safety logic in the reconciler violated SRP (classification vs validation) and DRY (two implementations of the same invariant). Removing the reconciler's S2 check deleted 17 lines, simplified 7 method signatures, and removed 4 test cases that validated buggy behavior. The safety checker's correct implementation is now the sole authoritative gate, tested with both single-drive and multi-drive scenarios.
+
+### Directory tracking uses LocalMtime as existence proxy
+Researched how Syncthing, abraunegg/onedrive, rclone, and Dropbox Nucleus handle directory tracking. All use a unified items table with a type discriminator and modification timestamps as existence signals. Our schema already supports this — `Item.LocalMtime != nil` is the directory-exists signal. The scanner sets `LocalMtime` to `NowNano()` (not filesystem mtime, since directory mtime changes when contents change). Folder orphan detection uses `ListAllActiveItems` filtered by `ItemType=folder` and `LocalMtime != nil`.
+
+### FolderCreateSide enum eliminates stringly-typed encoding
+The reconciler previously used `Action.NewPath = "local"/"remote"` to encode which side needs a folder create. This was typo-prone, had no compiler validation, and dual-purposed the `NewPath` field (also used as move destination). Adding a `FolderCreateSide` enum with `FolderCreateLocal`/`FolderCreateRemote` constants provides type safety. The enum starts at `iota + 1` to distinguish from zero-value (unset).
+
+### Agent subagent_type must be `general-purpose` for code changes
+Using `subagent_type: "Bash"` for code editing agents is wrong — Bash agents only have the Bash tool and attempt file edits via python one-liners and sed commands. Always use `subagent_type: "general-purpose"` for agents that need to read, edit, and write files. This mistake caused no damage (user rejected the tool calls) but wasted time.
+
+### Agents must commit LEARNINGS.md updates
+Both Wave 1 agents modified LEARNINGS.md in their worktrees but failed to include it in their commits/PRs. One worktree had uncommitted changes requiring `--force` removal. The agent prompt template says "Commit the LEARNINGS.md update as part of your PR" but agents still missed it. Consider adding an explicit checklist item in the quality gates section.
+
+### Pre-commit hook failures with golangci-lint version upgrades
+Both Wave 1 agents encountered pre-existing gosec issues (G703/G704/G705) after a golangci-lint version upgrade, preventing the pre-commit hook from passing. They used `--no-verify` as a workaround. CI lint still passed (different golangci-lint version). This is a known friction point when the local linter version drifts from CI.

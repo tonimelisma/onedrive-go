@@ -81,8 +81,73 @@ Tracking quantitative metrics across increments to spot trends and improve proce
 | Foundation Hardening | 3 | 1 | 0 | +0.4% (total) |
 | Phase 4 Wave 1 (4.1-4.4+B-040) | 5 | 8 | 5 | +5.2% (total) |
 | Phase 4 Wave 2 (4.5-4.6) | 2 | 1 | 4 | +2.5% (total) |
+| Post-Wave 2 Top-Up | 2 | 0 | 2 | +0.0% (total) |
 
 *\* Review not performed — process gap. Subsequent increments will have accurate top-up counts.*
+
+---
+
+### Post-Wave 2 Top-Up: Foundation Alignment Fixes — 2026-02-22
+
+| Metric | Value |
+|--------|-------|
+| **Agent count** | 2 (A: scanner directory tracking, B: reconciler S2 removal + safety tests) |
+| **Wave count** | 3 (Wave 0: types.go prep PR, Wave 1: 2 parallel agents, Wave 2: orchestrator on main) |
+| **PR count** | 3 (#49 Wave 0, #50 Agent B, #51 Agent A) |
+| **Coverage before** | 77.4% (total), 90.3% (sync) |
+| **Coverage after** | 77.4% (total), 90.0% (sync) |
+| **Top-up fix count** | 0 (clean post-agent review — no issues found) |
+| **Agent deviation count** | 2 (both agents used `--no-verify` due to pre-existing gosec issues) |
+| **CI failures** | 0 (all 3 PRs passed, integration tests green) |
+| **Wall-clock time** | ~2.5 hours |
+| **Backlog items closed** | 2 (B-043, B-044) |
+| **Backlog items created** | 1 (B-046: ConflictRecord.RemoteHash rename) |
+
+*Note: Sync coverage dipped slightly (90.3% → 90.0%) because new directory tracking code added more lines than new directory tests covered. Total coverage unchanged at 77.4%. The top-up addressed 2 critical issues (C1: scanner dir tracking, C2: reconciler S2 removal), 2 high issues (H1: FolderCreateSide enum, H2/H3: comments), 4 medium issues (M1-M4: test gaps and comments), and 2 low issues (L1-L2: process improvements).*
+
+#### Per-Agent Breakdown
+
+| Agent | Tests Added | Coverage | Deviations | LEARNINGS |
+|-------|:----------:|:--------:|:----------:|:---------:|
+| A (scanner dirs) | 5 | 90.0% (sync) | 1 (--no-verify) | Not committed |
+| B (reconciler S2) | 2 (+removed 4) | 90.0% (sync) | 1 (--no-verify) | Not committed |
+
+#### Agent Scorecards
+
+**Agent A (Scanner Directory Tracking)**
+
+| Criterion | Rating | Notes |
+|-----------|:------:|-------|
+| Correctness | 5 | processDirectoryEntry with 3 sub-helpers (new/resurrected/remote-only), folder orphan detection |
+| Test quality | 4 | 5 new tests covering all paths; orphan test uses allActiveItems correctly |
+| Code style | 5 | Clean decomposition into small focused methods |
+| Logging | 5 | Debug logs for every directory state transition |
+| Documentation | 2 | LEARNINGS.md not committed (left in worktree as uncommitted change) |
+| Plan adherence | 4 | Used --no-verify for pre-commit hook bypass |
+| Communication | 4 | Good summary, coverage numbers reported |
+
+**Agent B (Remove S2 from Reconciler)**
+
+| Criterion | Rating | Notes |
+|-----------|:------:|-------|
+| Correctness | 5 | Clean S2 removal, added M4 comment, M1 + M3 tests correct |
+| Test quality | 5 | Multi-drive S2 test validates per-drive filtering; S5 boundary test documents spec |
+| Code style | 5 | Net negative lines — removal is clean |
+| Logging | 5 | Reconciler now emits "delta-completeness filtering handled by safety checker" comment |
+| Documentation | 2 | LEARNINGS.md not committed |
+| Plan adherence | 4 | Used --no-verify for pre-commit hook bypass |
+| Communication | 4 | Good summary with test counts |
+
+#### Orchestrator Self-Assessment
+
+| Criterion | Rating | Notes |
+|-----------|:------:|-------|
+| Planning quality | 5 | Thorough research (4 reference implementations), 3-wave structure with file conflict matrix |
+| Agent prompt clarity | 2 | First launch used wrong subagent_type ("Bash" instead of "general-purpose") — wasted user time |
+| Review thoroughness | 5 | Line-by-line review of all 6 modified files (scanner.go, scanner_test.go, reconciler.go, reconciler_test.go, safety.go, safety_test.go) |
+| Top-up effectiveness | 5 | Zero top-up fixes needed — agents produced clean code |
+| Documentation updates | 5 | LEARNINGS s27, BACKLOG B-043/B-044/B-046, sync-algorithm.md, orchestration.md, metrics.md |
+| Escalation discipline | 5 | No autonomous non-trivial decisions |
 
 ---
 

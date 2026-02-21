@@ -443,7 +443,7 @@ A boolean `deltaComplete` flag per drive tracks whether the most recent delta fe
 - **`deltaComplete = true`**: The remote view in the state DB is complete. Deletions (items in DB but not in remote) can be processed.
 - **`deltaComplete = false`**: The remote view is incomplete (fetch was interrupted). Deletions MUST NOT be processed. Only additions and modifications are safe.
 
-The reconciler checks this flag before generating any deletion actions from the remote side.
+The **safety checker** (not the reconciler) enforces S2 on a per-drive basis. The reconciler generates tombstone-based deletion actions unconditionally; the safety checker's `checkS2IncompleteDelta` filters out local deletes whose drive has an incomplete delta. This follows the single responsibility principle: the reconciler classifies actions, the safety checker validates them.
 
 ---
 
@@ -1347,18 +1347,26 @@ function CheckDiskSpace(path string, requiredBytes int64) error:
 
 ### 8.3 Incomplete Delta Guard
 
-Safety invariant **S2**: Never process deletions from an incomplete delta response.
+Safety invariant **S2**: Never process deletions from an incomplete delta response. Enforced by the safety checker on a per-drive basis — the reconciler does not check delta completeness.
 
 ```
-function CheckDeltaComplete(plan ActionPlan, driveID string) error:
-    deltaComplete = store.GetDeltaComplete(driveID)
+function CheckDeltaComplete(plan ActionPlan, store Store) error:
+    // Collect unique drive IDs from local delete actions
+    driveIDs = uniqueDriveIDs(plan.LocalDeletes)
 
-    if not deltaComplete:
-        // Remove all local delete actions (items deleted remotely)
-        plan.LocalDeletes = filterOutRemoteDeletions(plan.LocalDeletes)
-        log.Warn("delta incomplete, suppressing remote deletion processing",
-                 "driveID", driveID,
-                 "suppressed", suppressedCount)
+    incompleteDrives = {}
+    for driveID in driveIDs:
+        if not store.IsDeltaComplete(driveID):
+            incompleteDrives.add(driveID)
+
+    if incompleteDrives is empty:
+        return nil
+
+    // Remove local deletes only for drives with incomplete deltas
+    plan.LocalDeletes = filter(plan.LocalDeletes,
+        action => action.DriveID not in incompleteDrives)
+    log.Warn("S2: suppressed local deletes from incomplete delta",
+             "removed", removedCount)
     return nil
 ```
 
