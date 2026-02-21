@@ -257,7 +257,7 @@
 | ~~4.7~~ | ~~sync/ executor (dispatch actions, update state, error classification)~~ **DONE** |
 | ~~4.8~~ | ~~sync/ conflict handler (classify F5/F9/F11, keep-both, timestamped conflict copies)~~ **DONE** |
 | ~~4.9~~ | ~~sync/ transfer (download pipeline, upload pipeline, worker pools, bandwidth)~~ **DONE** |
-| 4.10 | sync/ engine (RunOnce: wire delta->scan->reconcile->safety->execute) |
+| ~~4.10~~ | ~~sync/ engine (RunOnce: wire delta->scan->reconcile->safety->execute)~~ **DONE** |
 | 4.11 | cmd/ sync: sync command (one-shot, --download-only, --upload-only, --dry-run) |
 | 4.12 | cmd/ conflicts: conflicts list, resolve, verify |
 
@@ -379,14 +379,17 @@ Phase 4 increments are organized into waves to enable parallelism and allow re-p
 - Deferred: hash checker pools (scanner concern), time-of-day bandwidth schedule (Phase 5.3), disk space check (engine 4.10)
 - **Actual**: PR #59. 26 new tests in bandwidth_test.go + transfer_test.go. sync/ 91.4% coverage, 0 lint issues.
 
-### 4.10: Engine — RunOnce — `internal/sync/engine.go`
+### 4.10: Engine — RunOnce — `internal/sync/engine.go` ✅
 
-- Wire the full pipeline: delta fetch -> scan -> reconcile -> safety check -> execute
-- Mode dispatch: bidirectional (default), download-only, upload-only
-- Sync report aggregation
-- Context-based cancellation
-- Interface-only dependencies (all injected)
-- **Acceptance**: Integration test with mock graph client + real SQLite + real temp dir passes end-to-end
+- `GraphClient` composite interface (`DeltaFetcher + ItemClient + TransferClient`), `SyncOptions` struct, `Engine` struct with pre-constructed components
+- `NewEngine` constructor: builds all components from `*config.ResolvedDrive`, injectable store
+- `RunOnce(ctx, mode, opts)`: full pipeline (delta → scan → reconcile → safety → execute → cleanup)
+- Mode dispatch: bidirectional, download-only (skip scan), upload-only (skip delta)
+- Dry-run mode: `buildDryRunReport(plan)` creates preview from action counts, skips execution
+- `SyncReport` augmented: `StartedAt`, `CompletedAt`, `Mode`, `DryRun` fields
+- Context-based cancellation, tombstone cleanup, `Close()` for TransferManager lifecycle
+- **Bug fix**: `GetItem` and `GetItemByPath` returned wrapped `sql.ErrNoRows` instead of `(nil, nil)` for missing items — mismatch with mock stores exposed by integration tests
+- **Actual**: PR #60 (engine), PR #61 (GetItem fix). 17 unit tests + 3 integration tests. sync/ 92.0% coverage.
 - **Inputs**: sync-algorithm.md sections 1-2, architecture.md section 3.1
 
 ### 4.11: CLI sync command — `cmd/onedrive-go/sync.go`

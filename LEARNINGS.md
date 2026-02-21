@@ -329,6 +329,12 @@ Calling `db.Close()` twice does not error with the pure-Go SQLite driver. To tes
 - **Context-aware mock delays for cancellation tests.** `time.Sleep(delay)` ignores context cancellation — mock operations must use `select { case <-time.After(d): case <-ctx.Done(): return ctx.Err() }` to test context propagation through worker pools.
 - **Bandwidth throttle tests need data > burst size.** With `burstMultiplier = 2`, a 1000 bytes/sec limiter has burst 2000. Test data must exceed burst (e.g., 4000 bytes) to observe actual throttling delays.
 
+### Engine wiring
+- **Mock vs real store mismatch on not-found semantics.** All sync component mocks returned `(nil, nil)` for not-found items, but `SQLiteStore.GetItem` and `GetItemByPath` returned wrapped `sql.ErrNoRows`. Bug only exposed when engine wired real components. Fix: intercept `sql.ErrNoRows` in the store to return `(nil, nil)`. **Lesson:** integration tests against real implementations catch contract mismatches that unit tests with mocks miss. Always test with real stores, not just mocks, for at least one end-to-end scenario.
+- **Composite interface pattern for Graph client.** `GraphClient` combines `DeltaFetcher + ItemClient + TransferClient`. `*graph.Client` satisfies it without adapter. A single mock struct (`engineMockGraph`) implements all three, simplifying test setup.
+- **CI lint can fail transiently due to schema download timeouts.** `golangci-lint config verify` fetches a JSON schema from the internet. Network timeouts cause CI failures unrelated to code. Mitigation: re-run the workflow.
+- **`walkParentChain` must check both `err != nil` and `item == nil`.** After `GetItem` was changed to return `(nil, nil)` for not-found, callers that only checked `err != nil` would dereference nil items. Always check both return values from functions with `(T, error)` that use nil-means-not-found semantics.
+
 ---
 
 ## 8. Agent Coordination
