@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	gosync "sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -340,6 +342,27 @@ func TestRunOnce_Download_EndToEnd(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(eng.syncRoot, "remote.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, fileContent, data)
+
+	// B3: Verify the state store was updated with local+synced fields after download.
+	got, err := store.GetItem(ctx, "test-drive-id", "file-1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+
+	// Local state should reflect the downloaded content.
+	require.NotNil(t, got.LocalSize, "LocalSize should be set after download")
+	assert.Equal(t, size, *got.LocalSize)
+	assert.Equal(t, hash, got.LocalHash)
+
+	// Synced baseline should match the remote item's size/mtime.
+	require.NotNil(t, got.SyncedSize, "SyncedSize should be set after download")
+	assert.Equal(t, size, *got.SyncedSize)
+	require.NotNil(t, got.SyncedMtime, "SyncedMtime should be set after download")
+	assert.Equal(t, now, *got.SyncedMtime)
+	assert.Equal(t, hash, got.SyncedHash)
+
+	// LastSyncedAt must be populated.
+	require.NotNil(t, got.LastSyncedAt, "LastSyncedAt should be set after download")
+	assert.Greater(t, *got.LastSyncedAt, int64(0))
 }
 
 func TestRunOnce_Upload_EndToEnd(t *testing.T) {
@@ -382,6 +405,22 @@ func TestRunOnce_Upload_EndToEnd(t *testing.T) {
 
 	assert.Equal(t, 1, report.Uploaded)
 	assert.Equal(t, 1, mock.uploadCalls)
+
+	// B4: Verify the state store was updated with remote+synced fields after upload.
+	// The scanner creates the initial item with empty DriveID/ItemID. After upload,
+	// the executor upserts a new row with the server-assigned ItemID ("uploaded-id").
+	// Use GetItem to fetch by the known key, not ListAllActiveItems (which may match
+	// the stale scanner row first).
+	uploaded, err := store.GetItem(ctx, "", "uploaded-id")
+	require.NoError(t, err)
+	require.NotNil(t, uploaded, "uploaded item should exist in store")
+
+	assert.Equal(t, "uploaded-id", uploaded.ItemID)
+	assert.Equal(t, "etag-1", uploaded.ETag)
+	assert.Equal(t, hash, uploaded.LocalHash)
+	assert.Equal(t, hash, uploaded.SyncedHash)
+	require.NotNil(t, uploaded.LastSyncedAt, "LastSyncedAt should be set after upload")
+	assert.Greater(t, *uploaded.LastSyncedAt, int64(0))
 }
 
 func TestRunOnce_DryRun(t *testing.T) {
@@ -679,4 +718,35 @@ func TestNewEngine_NilLogger(t *testing.T) {
 	require.NoError(t, err)
 
 	eng.Close()
+}
+
+func TestClose_WaitsForRunOnce(t *testing.T) {
+	// Verify that Close blocks until an in-flight RunOnce completes,
+	// exercising the WaitGroup-based use-after-close safety in Engine.
+	store := newTestStore(t)
+	mock := &engineMockGraph{}
+	resolved := testResolvedDrive(t.TempDir())
+
+	eng, err := NewEngine(store, mock, resolved, testLogger(t))
+	require.NoError(t, err)
+
+	// Track whether RunOnce has finished.
+	var runOnceFinished atomic.Bool
+
+	var wg gosync.WaitGroup
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+
+		_, _ = eng.RunOnce(context.Background(), SyncBidirectional, SyncOptions{})
+		runOnceFinished.Store(true)
+	}()
+
+	// Wait briefly for RunOnce to start, then Close.
+	// Close must return only after RunOnce has finished.
+	wg.Wait()
+	eng.Close()
+
+	assert.True(t, runOnceFinished.Load(), "RunOnce should have completed before Close returned")
 }

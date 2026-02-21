@@ -188,3 +188,44 @@ func TestBandwidthLimiter_WrapWriter_NilReceiver(t *testing.T) {
 	got := bl.WrapWriter(context.Background(), &buf)
 	assert.Equal(t, &buf, got, "nil BandwidthLimiter should return original writer")
 }
+
+func TestWrapReader_NonNilLimiter(t *testing.T) {
+	// Verify that wrapReader with a non-nil limiter returns a wrapped reader
+	// that produces the correct data (high rate so no throttling delay).
+	bl, err := NewBandwidthLimiter("100MB/s", testLogger(t))
+	require.NoError(t, err)
+	require.NotNil(t, bl)
+
+	input := "hello bandwidth"
+	r := strings.NewReader(input)
+	wrapped := wrapReader(bl, context.Background(), r)
+
+	// The wrapped reader should not be the original reader.
+	assert.NotEqual(t, r, wrapped, "non-nil limiter should wrap the reader")
+
+	// Reading through the wrapped reader should return correct data.
+	data, err := io.ReadAll(wrapped)
+	require.NoError(t, err)
+	assert.Equal(t, input, string(data))
+}
+
+func TestWrapWriter_NonNilLimiter(t *testing.T) {
+	// Verify that wrapWriter with a non-nil limiter returns a wrapped writer
+	// that writes the correct data (high rate so no throttling delay).
+	bl, err := NewBandwidthLimiter("100MB/s", testLogger(t))
+	require.NoError(t, err)
+	require.NotNil(t, bl)
+
+	var buf bytes.Buffer
+	wrapped := wrapWriter(bl, context.Background(), &buf)
+
+	// The wrapped writer should not be the original writer.
+	assert.NotEqual(t, &buf, wrapped, "non-nil limiter should wrap the writer")
+
+	// Writing through the wrapped writer should produce correct output.
+	input := []byte("hello bandwidth writer")
+	n, err := wrapped.Write(input)
+	require.NoError(t, err)
+	assert.Equal(t, len(input), n)
+	assert.Equal(t, input, buf.Bytes())
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	gosync "sync"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 )
@@ -37,6 +38,10 @@ type Engine struct {
 	safety      *SafetyChecker
 	executor    *Executor
 	transferMgr *TransferManager
+
+	// running tracks in-flight RunOnce calls so Close can wait for them to
+	// finish before tearing down the TransferManager (use-after-close safety).
+	running gosync.WaitGroup
 
 	driveID                string
 	syncRoot               string
@@ -104,6 +109,9 @@ func NewEngine(
 // Returns a SyncReport summarizing what happened. Errors from delta or scan
 // abort the cycle — running reconciliation on stale state violates safety invariants.
 func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts SyncOptions) (*SyncReport, error) {
+	e.running.Add(1)
+	defer e.running.Done()
+
 	startedAt := NowNano()
 
 	e.logger.Info("engine: sync cycle started",
@@ -171,7 +179,11 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts SyncOptions) (
 }
 
 // Close releases engine-owned resources. The store is NOT closed — the caller owns it.
+// Close waits for any in-flight RunOnce calls to finish before tearing down the
+// TransferManager, preventing use-after-close races.
 func (e *Engine) Close() {
+	e.running.Wait()
+
 	if e.transferMgr != nil {
 		e.transferMgr.Close()
 	}

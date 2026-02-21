@@ -109,7 +109,12 @@ func (tm *TransferManager) UploadAll(ctx context.Context, actions []Action, repo
 	return tm.dispatchPool(ctx, actions, report, tm.uploadWorkers, tm.executeUploadAction)
 }
 
-// Close releases resources. Placeholder for future bandwidth schedule goroutine cleanup.
+// Close releases TransferManager-owned resources. Currently a no-op because all
+// transfer work happens synchronously within DownloadAll/UploadAll — there are no
+// background goroutines to stop. Callers (Engine.Close) must ensure that all
+// DownloadAll/UploadAll calls have returned before calling Close; Engine enforces
+// this via its WaitGroup. RunWatch (Phase 5) will add background goroutines and
+// make Close meaningful.
 func (tm *TransferManager) Close() {
 	tm.logger.Debug("transfer: manager closed")
 }
