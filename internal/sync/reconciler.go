@@ -17,13 +17,13 @@ import (
 // correctly (sharepoint-enrichment.md §4). See detectLocalChange and
 // detectRemoteChange for the implementation.
 type Reconciler struct {
-	store  Store
+	store  ReconcilerStore
 	logger *slog.Logger
 }
 
 // NewReconciler creates a Reconciler that reads item state from the given store
 // and logs decisions at debug level.
-func NewReconciler(store Store, logger *slog.Logger) *Reconciler {
+func NewReconciler(store ReconcilerStore, logger *slog.Logger) *Reconciler {
 	if logger == nil {
 		logger = slog.Default()
 	}

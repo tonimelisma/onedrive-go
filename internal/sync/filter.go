@@ -203,7 +203,7 @@ func (f *FilterEngine) checkSafetyPatterns(name, path string) FilterResult {
 
 // checkDirPatterns checks skip_dirs glob patterns against the directory basename.
 func (f *FilterEngine) checkDirPatterns(name, path string) FilterResult {
-	if matchesSkipPattern(name, f.cfg.SkipDirs) {
+	if f.matchesSkipPattern(name, f.cfg.SkipDirs) {
 		f.logger.Debug("path excluded by skip_dirs", "path", path, "name", name)
 		return FilterResult{Included: false, Reason: "matches skip_dirs pattern"}
 	}
@@ -213,7 +213,7 @@ func (f *FilterEngine) checkDirPatterns(name, path string) FilterResult {
 
 // checkFilePatterns checks skip_files glob patterns and max_file_size threshold.
 func (f *FilterEngine) checkFilePatterns(name, path string, size int64) FilterResult {
-	if matchesSkipPattern(name, f.cfg.SkipFiles) {
+	if f.matchesSkipPattern(name, f.cfg.SkipFiles) {
 		f.logger.Debug("path excluded by skip_files", "path", path, "name", name)
 		return FilterResult{Included: false, Reason: "matches skip_files pattern"}
 	}
@@ -284,8 +284,10 @@ func (f *FilterEngine) matchesSyncPaths(path string, isDir bool) bool {
 }
 
 // matchesSkipPattern checks if name matches any of the given glob patterns.
-// Comparison is case-insensitive. Malformed patterns are logged and skipped.
-func matchesSkipPattern(name string, patterns []string) bool {
+// Comparison is case-insensitive. Malformed patterns are logged via the engine's
+// injected logger (rather than the package-level slog) so that tests and callers
+// can capture the warning.
+func (f *FilterEngine) matchesSkipPattern(name string, patterns []string) bool {
 	lowerName := strings.ToLower(name)
 
 	for _, pattern := range patterns {
@@ -294,7 +296,7 @@ func matchesSkipPattern(name string, patterns []string) bool {
 		matched, err := filepath.Match(lowerPattern, lowerName)
 		if err != nil {
 			// Malformed pattern — skip it rather than failing the entire filter.
-			slog.Warn("malformed skip pattern", "pattern", pattern, "error", err)
+			f.logger.Warn("malformed skip pattern", "pattern", pattern, "error", err)
 			continue
 		}
 

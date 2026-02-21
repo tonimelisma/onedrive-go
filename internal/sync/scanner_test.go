@@ -16,8 +16,7 @@ import (
 
 // --- Mock Store ---
 
-// scannerMockStore implements the Store interface for testing the scanner.
-// Only methods used by the scanner have real implementations.
+// scannerMockStore implements ScannerStore for testing the scanner.
 type scannerMockStore struct {
 	items          map[string]*Item // keyed by Path
 	syncedItems    []*Item
@@ -63,16 +62,6 @@ func (m *scannerMockStore) ListSyncedItems(_ context.Context) ([]*Item, error) {
 	return m.syncedItems, nil
 }
 
-// Unused Store interface methods — required for interface satisfaction.
-
-func (m *scannerMockStore) GetItem(context.Context, string, string) (*Item, error) { return nil, nil }
-
-func (m *scannerMockStore) MarkDeleted(context.Context, string, string, int64) error { return nil }
-
-func (m *scannerMockStore) ListChildren(context.Context, string, string) ([]*Item, error) {
-	return nil, nil
-}
-
 func (m *scannerMockStore) ListAllActiveItems(context.Context) ([]*Item, error) {
 	if m.listAllActiveErr != nil {
 		return nil, m.listAllActiveErr
@@ -80,64 +69,6 @@ func (m *scannerMockStore) ListAllActiveItems(context.Context) ([]*Item, error) 
 
 	return m.allActiveItems, nil
 }
-
-func (m *scannerMockStore) BatchUpsert(context.Context, []*Item) error { return nil }
-
-func (m *scannerMockStore) MaterializePath(context.Context, string, string) (string, error) {
-	return "", nil
-}
-
-func (m *scannerMockStore) CascadePathUpdate(context.Context, string, string) error { return nil }
-
-func (m *scannerMockStore) CleanupTombstones(context.Context, int) (int64, error) { return 0, nil }
-
-func (m *scannerMockStore) GetDeltaToken(context.Context, string) (string, error) { return "", nil }
-
-func (m *scannerMockStore) SaveDeltaToken(context.Context, string, string) error { return nil }
-
-func (m *scannerMockStore) DeleteDeltaToken(context.Context, string) error { return nil }
-
-func (m *scannerMockStore) SetDeltaComplete(context.Context, string, bool) error { return nil }
-
-func (m *scannerMockStore) IsDeltaComplete(context.Context, string) (bool, error) { return false, nil }
-
-func (m *scannerMockStore) RecordConflict(context.Context, *ConflictRecord) error { return nil }
-
-func (m *scannerMockStore) ListConflicts(context.Context, string) ([]*ConflictRecord, error) {
-	return nil, nil
-}
-
-func (m *scannerMockStore) ResolveConflict(context.Context, string, ConflictResolution, ConflictResolvedBy) error {
-	return nil
-}
-
-func (m *scannerMockStore) ConflictCount(context.Context, string) (int, error) { return 0, nil }
-
-func (m *scannerMockStore) RecordStaleFile(context.Context, *StaleRecord) error { return nil }
-
-func (m *scannerMockStore) ListStaleFiles(context.Context) ([]*StaleRecord, error) { return nil, nil }
-
-func (m *scannerMockStore) RemoveStaleFile(context.Context, string) error { return nil }
-
-func (m *scannerMockStore) SaveUploadSession(context.Context, *UploadSessionRecord) error { return nil }
-
-func (m *scannerMockStore) GetUploadSession(context.Context, string) (*UploadSessionRecord, error) {
-	return nil, nil
-}
-
-func (m *scannerMockStore) DeleteUploadSession(context.Context, string) error { return nil }
-
-func (m *scannerMockStore) ListExpiredSessions(context.Context, int64) ([]*UploadSessionRecord, error) {
-	return nil, nil
-}
-
-func (m *scannerMockStore) GetConfigSnapshot(context.Context, string) (string, error) { return "", nil }
-
-func (m *scannerMockStore) SaveConfigSnapshot(context.Context, string, string) error { return nil }
-
-func (m *scannerMockStore) Checkpoint() error { return nil }
-
-func (m *scannerMockStore) Close() error { return nil }
 
 // --- Mock Filter ---
 
@@ -177,7 +108,7 @@ func hashContent(content string) string {
 }
 
 // testScanner creates a Scanner with a test logger that writes to t.Log.
-func testScanner(t *testing.T, store Store, filter Filter, skipSymlinks bool) *Scanner {
+func testScanner(t *testing.T, store ScannerStore, filter Filter, skipSymlinks bool) *Scanner {
 	t.Helper()
 	return NewScanner(store, filter, skipSymlinks, testLogger(t))
 }
