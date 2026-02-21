@@ -489,11 +489,16 @@ func upsertItemArgs(item *Item) []any {
 // --- Item CRUD methods ---
 
 // GetItem retrieves a single item by drive and item ID.
-// Returns sql.ErrNoRows if not found.
+// Returns (nil, nil) if no item exists — callers (delta processor, executor)
+// use the nil item to distinguish "new item" from "existing item".
 func (s *SQLiteStore) GetItem(ctx context.Context, driveID, itemID string) (*Item, error) {
 	s.logger.Debug("getting item", "drive_id", driveID, "item_id", itemID)
 
 	item, err := scanItem(s.itemStmts.get.QueryRowContext(ctx, driveID, itemID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("get item %s/%s: %w", driveID, itemID, err)
 	}
@@ -650,7 +655,7 @@ func (s *SQLiteStore) walkParentChain(ctx context.Context, driveID, itemID strin
 
 	for {
 		item, err := s.GetItem(ctx, currentDriveID, currentItemID)
-		if err != nil {
+		if err != nil || item == nil {
 			// B-022: parent not found — signal orphan with nil.
 			s.logger.Debug("parent not found during path walk",
 				"drive_id", currentDriveID, "item_id", currentItemID)

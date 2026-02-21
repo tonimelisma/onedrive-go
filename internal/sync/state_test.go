@@ -75,8 +75,9 @@ func TestGetItem(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("not found", func(t *testing.T) {
-		_, err := store.GetItem(ctx, "d1", "missing")
-		assert.ErrorIs(t, err, sql.ErrNoRows)
+		item, err := store.GetItem(ctx, "d1", "missing")
+		assert.NoError(t, err)
+		assert.Nil(t, item)
 	})
 
 	t.Run("found after upsert", func(t *testing.T) {
@@ -327,8 +328,9 @@ func TestCleanupTombstones(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), deleted, "only the old tombstone should be cleaned")
 
-	_, err = store.GetItem(ctx, "d1", "old1")
-	assert.ErrorIs(t, err, sql.ErrNoRows)
+	old, getErr := store.GetItem(ctx, "d1", "old1")
+	assert.NoError(t, getErr)
+	assert.Nil(t, old, "old tombstone should be purged")
 
 	_, err = store.GetItem(ctx, "d1", "new1")
 	assert.NoError(t, err)
