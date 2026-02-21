@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -541,10 +542,16 @@ func (s *SQLiteStore) ListChildren(ctx context.Context, driveID, parentID string
 }
 
 // GetItemByPath returns the first non-deleted item matching the given path.
+// Returns (nil, nil) if no item exists at the path — callers (scanner, executor)
+// use the nil item to distinguish "new file" from "known file".
 func (s *SQLiteStore) GetItemByPath(ctx context.Context, path string) (*Item, error) {
 	s.logger.Debug("getting item by path", "path", path)
 
 	item, err := scanItem(s.itemStmts.getByPath.QueryRowContext(ctx, path))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("get item by path %q: %w", path, err)
 	}

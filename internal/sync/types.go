@@ -384,7 +384,15 @@ type ActionError struct {
 
 // SyncReport summarizes the results of executing an action plan.
 // Counters only reflect successfully completed actions.
+// Timing fields are set by the engine; zero values are correct when the
+// report comes from the executor directly (no engine wrapper).
 type SyncReport struct {
+	// Engine-level metadata (set by Engine.RunOnce, zero when executor-only)
+	StartedAt   int64
+	CompletedAt int64
+	Mode        SyncMode
+	DryRun      bool
+
 	FoldersCreated  int
 	Moved           int
 	Downloaded      int

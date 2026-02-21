@@ -172,8 +172,9 @@ func TestGetItemByPath(t *testing.T) {
 	})
 
 	t.Run("not found", func(t *testing.T) {
-		_, err := store.GetItemByPath(ctx, "nonexistent")
-		assert.ErrorIs(t, err, sql.ErrNoRows)
+		item, err := store.GetItemByPath(ctx, "nonexistent")
+		assert.NoError(t, err)
+		assert.Nil(t, item)
 	})
 }
 
