@@ -327,6 +327,37 @@ func TestOrganization_Error(t *testing.T) {
 	assert.ErrorIs(t, err, ErrUnauthorized)
 }
 
+func TestDrives_DecodeError(t *testing.T) {
+	// Verify that Drives returns a decode error when the server returns
+	// 200 with invalid JSON.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{not valid json`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.Drives(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decoding drives response")
+}
+
+func TestDrives_Unauthorized(t *testing.T) {
+	// Verify that Drives returns ErrUnauthorized on 401.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("request-id", "req-drives-401")
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `{"error":{"code":"InvalidAuthenticationToken"}}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.Drives(context.Background())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrUnauthorized)
+}
+
 func TestToDrive_NilQuota(t *testing.T) {
 	dr := &driveResponse{
 		ID:        "d2",
