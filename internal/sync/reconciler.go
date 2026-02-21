@@ -45,14 +45,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, mode SyncMode) (*ActionPlan,
 		return nil, fmt.Errorf("list active items: %w", err)
 	}
 
-	// Check delta completeness for deletion safety (S2).
-	// We use a single drive ID from the first item; multi-drive reconciliation
-	// would iterate per drive. For now we check the first item's drive.
-	deltaComplete, driveID, err := r.checkDeltaCompleteness(ctx, items)
-	if err != nil {
-		return nil, err
-	}
-
 	plan := &ActionPlan{}
 
 	// Detect local moves before classifying individual items.
@@ -68,7 +60,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, mode SyncMode) (*ActionPlan,
 			continue
 		}
 
-		actions := r.reconcileItem(item, mode, deltaComplete, driveID)
+		actions := r.reconcileItem(item, mode)
 		appendActions(plan, actions)
 	}
 
@@ -94,41 +86,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, mode SyncMode) (*ActionPlan,
 	return plan, nil
 }
 
-// checkDeltaCompleteness returns whether the delta fetch is complete for the
-// items' drive. If items span multiple drives this returns the first drive's
-// completeness status. An error is returned only for store failures.
-func (r *Reconciler) checkDeltaCompleteness(ctx context.Context, items []*Item) (bool, string, error) {
-	if len(items) == 0 {
-		return true, "", nil
-	}
-
-	driveID := items[0].DriveID
-
-	complete, err := r.store.IsDeltaComplete(ctx, driveID)
-	if err != nil {
-		return false, driveID, fmt.Errorf("check delta completeness: %w", err)
-	}
-
-	if !complete {
-		r.logger.Warn("delta incomplete, skipping remote-tombstone deletions (S2)", "driveID", driveID)
-	}
-
-	return complete, driveID, nil
-}
-
 // reconcileItem classifies a single item and returns the resulting actions.
-func (r *Reconciler) reconcileItem(item *Item, mode SyncMode, deltaComplete bool, driveID string) []Action {
+func (r *Reconciler) reconcileItem(item *Item, mode SyncMode) []Action {
 	if item.ItemType == ItemTypeFolder || item.ItemType == ItemTypeRoot {
-		return r.reconcileFolder(item, mode, deltaComplete)
+		return r.reconcileFolder(item, mode)
 	}
 
-	return r.reconcileFile(item, mode, deltaComplete, driveID)
+	return r.reconcileFile(item, mode)
 }
 
 // --- File reconciliation ---
 
 // reconcileFile implements the 14-row file decision matrix from sync-algorithm.md §5.2.
-func (r *Reconciler) reconcileFile(item *Item, mode SyncMode, deltaComplete bool, _ string) []Action {
+func (r *Reconciler) reconcileFile(item *Item, mode SyncMode) []Action {
 	localChanged := detectLocalChange(item)
 	remoteChanged := detectRemoteChange(item)
 
@@ -153,12 +123,12 @@ func (r *Reconciler) reconcileFile(item *Item, mode SyncMode, deltaComplete bool
 		"syncedHash", item.SyncedHash,
 	)
 
-	return r.applyFileMatrix(item, localChanged, remoteChanged, synced, deltaComplete)
+	return r.applyFileMatrix(item, localChanged, remoteChanged, synced)
 }
 
 // applyFileMatrix maps the (localChanged, remoteChanged, synced) triple to actions.
 func (r *Reconciler) applyFileMatrix(
-	item *Item, localChanged, remoteChanged, synced, deltaComplete bool,
+	item *Item, localChanged, remoteChanged, synced bool,
 ) []Action {
 	localPresent := item.LocalHash != ""
 	remotePresent := item.QuickXorHash != "" && !item.IsDeleted
@@ -174,11 +144,10 @@ func (r *Reconciler) applyFileMatrix(
 		return a
 	}
 
-	// Handle remote-tombstone rows (F8, F9) with S2 guard.
+	// Handle remote-tombstone rows (F8, F9).
 	// classifyRemoteTombstone returns (actions, handled). When handled is true,
-	// the tombstone case applies and we return the actions (which may be nil
-	// when the delta is incomplete — meaning "do nothing for this item").
-	if a, handled := r.classifyRemoteTombstone(item, localChanged, synced, deltaComplete); handled {
+	// the tombstone case applies and we return the actions.
+	if a, handled := r.classifyRemoteTombstone(item, localChanged, synced); handled {
 		return a
 	}
 
@@ -206,19 +175,14 @@ func (r *Reconciler) classifyLocalDeletion(item *Item, remoteChanged, synced boo
 }
 
 // classifyRemoteTombstone handles F8 (local delete) and F9 (edit-delete conflict) when
-// the remote item was tombstoned. S2 guard: skip if delta is incomplete.
-// Returns (actions, true) when the tombstone case applies (actions may be nil when
-// delta is incomplete), or (nil, false) when the item is not a tombstone case.
+// the remote item was tombstoned. The safety checker (S2) handles delta-completeness
+// filtering — the reconciler always emits the action and lets the safety layer decide.
+// Returns (actions, true) when the tombstone case applies, or (nil, false) when it does not.
 func (r *Reconciler) classifyRemoteTombstone(
-	item *Item, localChanged, synced, deltaComplete bool,
+	item *Item, localChanged, synced bool,
 ) ([]Action, bool) {
 	if !item.IsDeleted || !synced {
 		return nil, false
-	}
-
-	if !deltaComplete {
-		r.logger.Debug("F8/F9: skipped (delta incomplete, S2)", "path", item.Path)
-		return nil, true // Tombstone case applies, but action is suppressed.
 	}
 
 	if !localChanged {
@@ -290,7 +254,7 @@ func (r *Reconciler) classifyBothChanged(item *Item, synced bool) []Action {
 // reconcileFolder implements the 7-row folder decision matrix (sync-algorithm.md §5.2).
 // The state classification is extracted into folderState to keep cyclomatic complexity
 // within linter limits.
-func (r *Reconciler) reconcileFolder(item *Item, mode SyncMode, deltaComplete bool) []Action {
+func (r *Reconciler) reconcileFolder(item *Item, mode SyncMode) []Action {
 	fs := newFolderState(item)
 
 	// D1: Both exist, was synced → no action.
@@ -298,7 +262,7 @@ func (r *Reconciler) reconcileFolder(item *Item, mode SyncMode, deltaComplete bo
 		return nil
 	}
 
-	return r.dispatchFolder(item, fs, mode, deltaComplete)
+	return r.dispatchFolder(item, fs, mode)
 }
 
 // folderState holds precomputed booleans for folder reconciliation.
@@ -320,7 +284,7 @@ func newFolderState(item *Item) folderState {
 
 // dispatchFolder handles D2-D6 folder rows (D1 is filtered before this call).
 func (r *Reconciler) dispatchFolder(
-	item *Item, fs folderState, mode SyncMode, deltaComplete bool,
+	item *Item, fs folderState, mode SyncMode,
 ) []Action {
 	switch {
 	// D2: Both exist, not synced → adopt.
@@ -333,7 +297,7 @@ func (r *Reconciler) dispatchFolder(
 
 	// D4: Exists locally, tombstoned remotely → delete locally.
 	case fs.localExists && fs.tombstoned && fs.synced:
-		return r.folderDeleteLocal(item, mode, deltaComplete)
+		return r.folderDeleteLocal(item, mode)
 
 	// D5: Exists locally, missing remotely, not synced → create remotely.
 	case fs.localExists && !fs.remoteExists && !fs.synced:
@@ -368,15 +332,14 @@ func (r *Reconciler) folderCreateLocal(item *Item, mode SyncMode) []Action {
 }
 
 // folderDeleteLocal handles D4: exists locally, tombstoned remotely → rmdir.
-func (r *Reconciler) folderDeleteLocal(item *Item, mode SyncMode, deltaComplete bool) []Action {
+// Delta-completeness filtering is handled by the safety checker (S2), not here.
+func (r *Reconciler) folderDeleteLocal(item *Item, mode SyncMode) []Action {
 	if mode == SyncUploadOnly {
 		return nil
 	}
-	if !deltaComplete {
-		r.logger.Debug("D4: skipped (delta incomplete, S2)", "path", item.Path)
-		return nil
-	}
+
 	r.logger.Debug("D4: delete folder locally", "path", item.Path)
+
 	return []Action{r.localDeleteAction(item)}
 }
 

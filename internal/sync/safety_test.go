@@ -258,6 +258,35 @@ func TestSafety_S2_DeltaCheckError(t *testing.T) {
 	assert.Contains(t, err.Error(), "S2")
 }
 
+func TestSafety_S2_MultiDriveMixedCompleteness(t *testing.T) {
+	t.Parallel()
+
+	store := newSafetyMockStore()
+	// driveA is complete, driveB is incomplete.
+	store.deltaComplete["driveA"] = true
+	store.deltaComplete["driveB"] = false
+	sc := safetyChecker(t, store)
+
+	plan := &ActionPlan{
+		LocalDeletes: []Action{
+			{Type: ActionLocalDelete, DriveID: "driveA", Path: "a1.txt", ItemID: "a1", Item: safetyItem("hash")},
+			{Type: ActionLocalDelete, DriveID: "driveA", Path: "a2.txt", ItemID: "a2", Item: safetyItem("hash")},
+			{Type: ActionLocalDelete, DriveID: "driveB", Path: "b1.txt", ItemID: "b1", Item: safetyItem("hash")},
+			{Type: ActionLocalDelete, DriveID: "driveB", Path: "b2.txt", ItemID: "b2", Item: safetyItem("hash")},
+		},
+	}
+
+	result, err := sc.Check(context.Background(), plan, false, false)
+	require.NoError(t, err)
+
+	// Only driveA's deletes should remain; driveB's should be removed.
+	require.Len(t, result.LocalDeletes, 2, "only driveA deletes should remain")
+
+	for _, action := range result.LocalDeletes {
+		assert.Equal(t, "driveA", action.DriveID, "remaining deletes must all be from driveA")
+	}
+}
+
 // --- S3: Atomic file writes ---
 
 func TestSafety_S3_DownloadPartialPath(t *testing.T) {
@@ -460,6 +489,33 @@ func TestSafety_S5_BigDeleteZeroDeletes(t *testing.T) {
 
 	_, err := sc.Check(context.Background(), plan, false, false)
 	require.NoError(t, err, "zero deletes should never trigger big-delete check")
+}
+
+func TestSafety_S5_BigDeleteAtExactThreshold(t *testing.T) {
+	t.Parallel()
+
+	store := newSafetyMockStore()
+	// 20 active items, threshold is 10 items.
+	for i := range 20 {
+		store.items = append(store.items, &Item{ItemID: string(rune('A' + i))})
+	}
+
+	store.deltaComplete["d"] = true
+	sc := safetyChecker(t, store)
+
+	// 10 local deletes — exactly at threshold, not above.
+	// The spec uses ">" (strictly greater), so exactly-at-threshold should NOT trigger.
+	var deletes []Action
+	for range 10 {
+		deletes = append(deletes, Action{
+			Type: ActionLocalDelete, DriveID: "d", Item: safetyItem("hash"),
+		})
+	}
+
+	plan := &ActionPlan{LocalDeletes: deletes}
+
+	_, err := sc.Check(context.Background(), plan, false, false)
+	require.NoError(t, err, "exactly-at-threshold (10 of 10) should not trigger big-delete block")
 }
 
 // --- S6: Disk space check ---
