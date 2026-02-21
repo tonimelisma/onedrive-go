@@ -16,7 +16,7 @@ func getDiskSpace(path string) (uint64, error) {
 	}
 
 	// Bsize is int64 on Linux — always non-negative from the kernel.
-	bsize := uint64(stat.Bsize) //nolint:gosec // kernel guarantees non-negative block size
+	bsize := uint64(stat.Bsize) // kernel guarantees non-negative block size
 
 	return stat.Bavail * bsize, nil
 }
