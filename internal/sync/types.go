@@ -235,8 +235,12 @@ type ItemClient interface {
 type TransferClient interface {
 	Download(ctx context.Context, driveID, itemID string, w io.Writer) (int64, error)
 	SimpleUpload(ctx context.Context, driveID, parentID, name string, r io.Reader, size int64) (*graph.Item, error)
-	CreateUploadSession(ctx context.Context, driveID, parentID, name string, mtime time.Time) (*graph.UploadSession, error)
-	UploadChunk(ctx context.Context, uploadURL string, r io.Reader, offset, length, totalSize int64) (*graph.Item, error)
+	// CreateUploadSession creates a resumable upload session. size is required for the
+	// Content-Length header and chunk range calculations.
+	CreateUploadSession(ctx context.Context, driveID, parentID, name string, size int64, mtime time.Time) (*graph.UploadSession, error)
+	// UploadChunk uploads a chunk via an existing upload session. Returns the final Item
+	// on the last chunk (200/201), nil for intermediate chunks (202).
+	UploadChunk(ctx context.Context, session *graph.UploadSession, chunk io.Reader, offset, length, total int64) (*graph.Item, error)
 }
 
 // ReconcilerStore is the subset of Store used by Reconciler.
@@ -324,6 +328,60 @@ type Store interface {
 	// Maintenance
 	Checkpoint() error
 	Close() error
+}
+
+// ExecutorStore is the subset of Store used by Executor.
+// Follows the narrow-interface pattern: each component accepts only what it needs.
+type ExecutorStore interface {
+	GetItem(ctx context.Context, driveID, itemID string) (*Item, error)
+	// GetItemByPath looks up an item by its materialized local path.
+	// Needed by executeMove to resolve the new parent's ItemID from the destination path.
+	GetItemByPath(ctx context.Context, path string) (*Item, error)
+	UpsertItem(ctx context.Context, item *Item) error
+	MarkDeleted(ctx context.Context, driveID, itemID string, deletedAt int64) error
+	MaterializePath(ctx context.Context, driveID, itemID string) (string, error)
+	CascadePathUpdate(ctx context.Context, oldPrefix, newPrefix string) error
+	RecordConflict(ctx context.Context, record *ConflictRecord) error
+	Checkpoint() error
+}
+
+// ErrorTier classifies execution errors by recovery strategy (architecture.md section 7).
+type ErrorTier int
+
+const (
+	// ErrorFatal causes the entire sync to abort immediately.
+	ErrorFatal ErrorTier = iota
+	// ErrorRetryable should be retried with exponential backoff (handled by engine in 4.10).
+	ErrorRetryable
+	// ErrorSkip logs a warning and continues to the next action.
+	ErrorSkip
+	// ErrorDeferred queues the action for the next sync cycle.
+	ErrorDeferred
+)
+
+// ActionError records a failed action with its error and classification.
+type ActionError struct {
+	Action Action
+	Err    error
+	Tier   ErrorTier
+}
+
+// SyncReport summarizes the results of executing an action plan.
+// Counters only reflect successfully completed actions.
+type SyncReport struct {
+	FoldersCreated  int
+	Moved           int
+	Downloaded      int
+	BytesDownloaded int64
+	Uploaded        int
+	BytesUploaded   int64
+	LocalDeleted    int
+	RemoteDeleted   int
+	Conflicts       int
+	SyncedUpdates   int
+	Cleanups        int
+	Skipped         int
+	Errors          []ActionError
 }
 
 // Filter determines whether a file or directory should be included in sync.
