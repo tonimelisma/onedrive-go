@@ -19,12 +19,29 @@ Detailed per-increment metrics from earlier phases archived in [docs/archive/met
 | Phase 4 Wave 2 (4.5-4.6) | 2 | 1 | 4 | +2.5% (total) |
 | Post-Wave 2 Top-Up | 2 | 0 | 2 | +0.0% (total) |
 | Pre-4.7 Coverage Hardening | 2 | 1 | 2 | +1.1% (total) |
+| Pre-4.7 Foundation Cleanup | 0 | 1 | 0 | 0.0% (no change) |
 
 *\* Review not performed — process gap. Subsequent increments will have accurate top-up counts.*
 
 ---
 
 ## Latest Increment
+
+### Pre-4.7 Foundation Cleanup — 2026-02-20
+
+| Metric | Value |
+|--------|-------|
+| **Agent count** | 0 (orchestrator-only) |
+| **Wave count** | 1 |
+| **PR count** | 1 (#55) |
+| **Coverage before** | 78.5% (total), 91.7% (sync) |
+| **Coverage after** | 78.5% (total), 91.7% (sync) |
+| **Top-up fix count** | 1 (safetyListErrorStore unused-embed linter fix) |
+| **Agent deviation count** | 0 |
+| **CI failures** | 0 |
+| **Wall-clock time** | ~20 min |
+
+---
 
 ### Pre-4.7 Coverage Hardening — 2026-02-20
 

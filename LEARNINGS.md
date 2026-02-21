@@ -287,6 +287,12 @@ Login must work before any config file exists. `PersistentPreRunE` skips `loadCo
 ### Error injection pattern for mock stores
 Add `error` fields to mock stores (e.g., `deleteDeltaErr`, `upsertItemErr`). Check at the top of the mock method before real logic. Zero-value (nil) = no error, so existing tests are unaffected. This pattern scales well across delta, scanner, reconciler, and safety mocks.
 
+### Interface segregation eliminates mock stub boilerplate
+Define narrow consumer-specific interfaces (e.g., `ReconcilerStore`, `SafetyStore`, `ScannerStore`, `DeltaStore`) so each consumer accepts only the methods it needs. Keep the monolithic `Store` for the implementation. Mocks shrink from 31 stubs to 1-9 real methods. ~250 lines removed across 4 test files in this project. When a helper struct overrides ALL embedded struct methods, remove the embedding — `golangci-lint unused` catches this.
+
+### matchesSkipPattern as method vs. package function
+Package-level functions cannot use injected loggers. If a filter function needs to log warnings, make it a method on the struct holding the logger. Call sites change from `func(name, patterns)` to `f.func(name, patterns)` — minor but enables correct logger routing in tests.
+
 ### modernc.org/sqlite Close() is idempotent
 Calling `db.Close()` twice does not error with the pure-Go SQLite driver. To test "store is unusable after close", test that subsequent queries fail, not that Close returns an error.
 
