@@ -532,3 +532,26 @@ Darwin uses `syscall.Statfs` directly; Linux needs `golang.org/x/sys/unix.Statfs
 - **Suggested improvements**: None specific to safety checker.
 - **Cross-package concerns**: `NewSafetyConfig` in `types.go` changed to return pointer. Callers (future reconciler/engine) must accept `*config.SafetyConfig`.
 - **Code smells noticed**: None significant. The seven safety checks are well-separated into individual methods.
+
+---
+
+## 26. Reconciler (Phase 4.5)
+
+### Per-side enrichment guard uses mtime, not separate hash columns
+The design docs describe per-side hash baselines where `currentLocalHash != item.LocalHash` detects local changes. In practice, the scanner writes LocalHash to the same field each cycle and the reconciler sees the final value. The actual enrichment guard compares `LocalHash != SyncedHash` with a mtime-based fallback: if `LocalMtime <= LastSyncedAt`, the file was not modified since sync, so any hash difference is from enrichment. This is simpler than adding `SyncedLocalHash`/`SyncedRemoteHash` columns.
+
+### Tombstone skip must be distinguished from "not a tombstone"
+When `classifyRemoteTombstone` returns nil because delta is incomplete (S2 safety), the caller must NOT fall through to `classifyStandardChange`. A nil return is ambiguous: it could mean "not a tombstone case" or "tombstone case, but suppressed". Solution: return a `([]Action, bool)` tuple where `handled=true` means "this IS a tombstone case, use these actions (which may be nil)". Without this, incomplete-delta tombstoned items get misclassified as F5 conflicts.
+
+### gocyclo counts conditions across helper call chains
+Extracting helpers from a high-complexity function does not always reduce the linter's cyclomatic complexity count if the original function still has many branches. The effective strategy is to (a) extract the classification logic into a pure function that returns an enum or struct, then (b) use a simple switch on the result. For folders, precomputing a `folderState` struct and dispatching on it via `dispatchFolder` brought the complexity under the limit.
+
+### reconcilerMockStore prefix pattern works
+Following the §24.1 learning, naming the mock `reconcilerMockStore` (not `mockStore`) avoided all symbol collisions with delta_test.go's `mockStore`. The `testWriter` type from delta_test.go was safely reused since it's in the same package.
+
+- **Pivots**: Changed `classifyRemoteTombstone` from returning `[]Action` to `([]Action, bool)` after test failure (F9 skip with incomplete delta was falling through to F5 conflict). Refactored folder reconciliation three times to satisfy gocyclo (enum approach, then struct approach, finally settling on `folderState` + `dispatchFolder`).
+- **Issues found**: None pre-existing.
+- **Linter surprises**: (1) `gocyclo` at limit 15 is strict for decision matrices — the 14-row file matrix naturally has many branches. Decomposition into `classifyLocalDeletion`, `classifyRemoteTombstone`, `classifyStandardChange`, `classifyBothChanged` was necessary. (2) `exhaustive` linter catches missing enum cases even for internal-only types. (3) `staticcheck S1011` prefers `append(slice, other...)` over range-loop append.
+- **Suggested improvements**: The `NewPath` field on `FolderCreate` actions encoding "local" vs "remote" as a string is a code smell — consider a dedicated `FolderCreateSide` enum.
+- **Cross-package concerns**: None. The reconciler only depends on Store and types from the same package.
+- **Code smells noticed**: (1) The `folderCreateAction` using `NewPath` as a "local"/"remote" discriminator is stringly-typed. (2) `dispatchFolder` default branch is unreachable but required by exhaustive checking patterns.
