@@ -8,7 +8,7 @@ Currently: Working CLI OneDrive client with discovery-based auth, account manage
 
 ## Current Phase
 
-**Phases 1, 2, 3, 3.5, 4.1-4.8 complete.** All Phase 1 increments done (Graph API + CLI auth + file ops). Phase 2 complete (CI scaffold, E2E round-trip, E2E edge cases). Phase 3 complete (config integration). Phase 3.5 complete (alignment: profiles → drives migration). Phase 4.1-4.8 complete (sync engine: state store, delta processor, scanner, filter, reconciler, safety checks, executor, conflict handler). Login is now discovery-based: device code auth → API discovery → auto-create config. Users can `login`, `logout`, `whoami`, `status`, `drive add`, `drive remove`, `ls`, `get`, `put`, `rm`, `mkdir`, `stat`. CLI loads config via `PersistentPreRunE` with four-layer override: defaults -> file -> env -> CLI flags. Auth and account management commands skip config loading. See [docs/roadmap.md](docs/roadmap.md).
+**Phases 1, 2, 3, 3.5, 4.1-4.9 complete.** All Phase 1 increments done (Graph API + CLI auth + file ops). Phase 2 complete (CI scaffold, E2E round-trip, E2E edge cases). Phase 3 complete (config integration). Phase 3.5 complete (alignment: profiles → drives migration). Phase 4.1-4.9 complete (sync engine: state store, delta processor, scanner, filter, reconciler, safety checks, executor, conflict handler, transfer pipeline). Login is now discovery-based: device code auth → API discovery → auto-create config. Users can `login`, `logout`, `whoami`, `status`, `drive add`, `drive remove`, `ls`, `get`, `put`, `rm`, `mkdir`, `stat`. CLI loads config via `PersistentPreRunE` with four-layer override: defaults -> file -> env -> CLI flags. Auth and account management commands skip config loading. See [docs/roadmap.md](docs/roadmap.md).
 
 ## Architecture Overview
 
@@ -52,7 +52,7 @@ Currently: Working CLI OneDrive client with discovery-based auth, account manage
 - **`e2e/`** — E2E test suite (`//go:build e2e`): builds binary, exercises full round-trip against live OneDrive
 
 ### In progress (Phase 4)
-- **`internal/sync/`** — Sync engine through 4.8 complete: SQLite state store, delta processor, local scanner, filter engine, reconciler (14+7 decision matrix), safety checks (S1-S7), executor (sequential dispatch, 9 phases, error classification), conflict handler (ConflictType tagging, keep-both resolution, timestamped conflict copies). ~265 tests, 91.2% coverage. Next: transfer pipeline (4.9), engine wiring (4.10), CLI commands (4.11-4.12)
+- **`internal/sync/`** — Sync engine through 4.9 complete: SQLite state store, delta processor, local scanner, filter engine, reconciler (14+7 decision matrix), safety checks (S1-S7), executor (9 phases, error classification, configurable chunk size), conflict handler (ConflictType tagging, keep-both resolution, timestamped conflict copies), transfer pipeline (TransferManager with errgroup worker pools, BandwidthLimiter with token bucket rate limiting, 5 transfer orderings). ~291 tests, 91.4% coverage. Next: engine wiring (4.10), CLI commands (4.11-4.12)
 
 ## Documentation Index
 

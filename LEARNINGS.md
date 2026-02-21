@@ -122,7 +122,7 @@ Catches near-identical method pairs and structural patterns. Solutions: extract 
 
 ### gocritic
 - **rangeValCopy**: Use `for i := range items` with `items[i]` when struct > ~128 bytes. `graph.Item` is 264 bytes, `Drive` is 144 bytes, `FilterConfig` is 112 bytes.
-- **hugeParam**: `toml.MetaData` (96 bytes), `SafetyConfig` (88 bytes) — pass by pointer.
+- **hugeParam**: `toml.MetaData` (96 bytes), `SafetyConfig` (88 bytes), `sync.Action` (>128 bytes) — pass by pointer.
 - **emptyStringTest**: Prefers `name != ""` over `len(name) > 0`.
 - **sprintfQuotedString**: Use `%q` instead of `"\"%s\""`.
 
@@ -322,6 +322,12 @@ Calling `db.Close()` twice does not error with the pure-Go SQLite driver. To tes
 - **Use UTC for user-facing timestamps.** `generateConflictPath` initially used `time.Now().Format(...)` (local time). The spec says UTC. Local time causes cross-timezone naming inconsistency. Always use `time.Now().UTC()` for deterministic, portable timestamps.
 - **Consolidate `NowNano()` calls.** Multiple calls in a single function produce slightly different timestamps for related fields (ID, DetectedAt, MarkDeleted). Use a single `now := NowNano()` for consistency.
 - **Post-merge code review catches bugs that DOD gates miss.** Line-by-line review found 2 correctness bugs (RemoteMtime, UTC) that build, test, lint all passed — the bugs were semantic, not syntactic. Mandatory review is not optional.
+
+### Transfer pipeline
+- **`rate.Limiter.WaitN` rejects n > burst.** When reading/writing large buffers, a single `WaitN(ctx, n)` call can exceed the burst size and fail immediately. Fix: loop in burst-sized chunks with a `waitN` helper function. This applies to any token-bucket limiter with large I/O buffers.
+- **Mock stores need mutexes for parallel worker pool tests.** Sequential executor tests pass fine with unsynchronized mocks, but parallel `TransferManager` dispatch creates data races on mock slice appends and map writes. Always add `sync.Mutex` to mock stores when tests exercise concurrent access paths.
+- **Context-aware mock delays for cancellation tests.** `time.Sleep(delay)` ignores context cancellation — mock operations must use `select { case <-time.After(d): case <-ctx.Done(): return ctx.Err() }` to test context propagation through worker pools.
+- **Bandwidth throttle tests need data > burst size.** With `burstMultiplier = 2`, a 1000 bytes/sec limiter has burst 2000. Test data must exceed burst (e.g., 4000 bytes) to observe actual throttling delays.
 
 ---
 

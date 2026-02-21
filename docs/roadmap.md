@@ -256,7 +256,7 @@
 | ~~4.6~~ | ~~sync/ safety checks (S1-S7, big-delete protection, dry-run)~~ **DONE** |
 | ~~4.7~~ | ~~sync/ executor (dispatch actions, update state, error classification)~~ **DONE** |
 | ~~4.8~~ | ~~sync/ conflict handler (classify F5/F9/F11, keep-both, timestamped conflict copies)~~ **DONE** |
-| 4.9 | sync/ transfer (download pipeline, upload pipeline, worker pools, bandwidth) |
+| ~~4.9~~ | ~~sync/ transfer (download pipeline, upload pipeline, worker pools, bandwidth)~~ **DONE** |
 | 4.10 | sync/ engine (RunOnce: wire delta->scan->reconcile->safety->execute) |
 | 4.11 | cmd/ sync: sync command (one-shot, --download-only, --upload-only, --dry-run) |
 | 4.12 | cmd/ conflicts: conflicts list, resolve, verify |
@@ -369,17 +369,15 @@ Phase 4 increments are organized into waves to enable parallelism and allow re-p
 - `handleLocalDeleteConflict` (S4 backup) refactored to use `generateConflictPath`
 - **Actual**: PR #57. 17 new tests in conflict_test.go, reconciler/executor tests updated. sync/ 91.2% coverage, 0 lint issues.
 
-### 4.9: Transfer pipeline — `internal/sync/transfer.go`
+### 4.9: Transfer pipeline — `internal/sync/transfer.go` ✅
 
-- Worker pools: downloads, uploads, hash checkers (configurable pool sizes, default 8 each)
-- Download pipeline: fetch -> write to `.partial` file -> hash verify (QuickXorHash) -> atomic rename
-- Upload pipeline: simple upload (<4MB) or resumable upload (>=4MB) -> verify response hash
-- Streaming hash via io.TeeReader (no double read)
-- Token bucket bandwidth limiter with time-of-day scheduling
-- Disk space check before download
-- Graceful shutdown: drain queues, wait for in-flight
-- **Acceptance**: `go test ./internal/sync/...` passes including concurrency tests
-- **Inputs**: architecture.md section 3.3, configuration.md section 7, sync-algorithm.md section 9
+- TransferManager dispatches downloads/uploads through bounded errgroup worker pools
+- BandwidthLimiter (golang.org/x/time/rate) wraps io.Reader/Writer with shared token bucket
+- 5 transfer orderings: default, size_asc, size_desc, name_asc, name_desc
+- Executor extended: `*config.TransfersConfig` param, `SetTransferManager` setter, configurable chunkSize
+- Sequential fallback when no TransferManager is set (all 36 existing tests unchanged)
+- Deferred: hash checker pools (scanner concern), time-of-day bandwidth schedule (Phase 5.3), disk space check (engine 4.10)
+- **Actual**: PR #59. 26 new tests in bandwidth_test.go + transfer_test.go. sync/ 91.4% coverage, 0 lint issues.
 
 ### 4.10: Engine — RunOnce — `internal/sync/engine.go`
 
@@ -451,6 +449,7 @@ Phase 4 increments are organized into waves to enable parallelism and allow re-p
 - Graceful shutdown: SIGINT/SIGTERM -> finish current cycle -> exit
 - SIGHUP -> reload config (re-reads config each cycle, picks up new/removed drives)
 - RPC via Unix domain socket for runtime control (status, force sync, pause/resume)
+- Wire time-of-day bandwidth schedule: BandwidthLimiter already supports static limits (4.9); add schedule goroutine that adjusts the rate.Limiter rate based on `bandwidth_schedule` config and wall-clock time
 - **Acceptance**: Integration test: start watch -> create file -> verify sync triggered -> stop
 - **Inputs**: sync-algorithm.md section 11, configuration.md section 14, accounts.md §13
 
