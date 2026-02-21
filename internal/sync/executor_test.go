@@ -1429,6 +1429,101 @@ func TestExecutor_Execute_WithTransferManager(t *testing.T) {
 
 // --- Chunk size config tests ---
 
+// TestExecutor_LocalDelete_ConflictRenameFails verifies that when a local delete triggers
+// a conflict backup (hash mismatch) but the rename fails (e.g., parent directory is read-only),
+// the error is classified as skip-tier and reported without aborting the sync.
+func TestExecutor_LocalDelete_ConflictRenameFails(t *testing.T) {
+	syncRoot := t.TempDir()
+
+	// Create file inside a subdirectory so we can make the directory read-only.
+	subDir := filepath.Join(syncRoot, "sub")
+	require.NoError(t, os.MkdirAll(subDir, 0o755))
+
+	content := []byte("locally modified content")
+	localPath := filepath.Join(subDir, "file.txt")
+	require.NoError(t, os.WriteFile(localPath, content, 0o644))
+
+	// Make sub/ read-only so os.Rename fails when trying to create the conflict copy.
+	require.NoError(t, os.Chmod(subDir, 0o555))
+
+	t.Cleanup(func() {
+		// Restore permissions so t.TempDir cleanup can remove the directory.
+		os.Chmod(subDir, 0o755)
+	})
+
+	exec, store, _, _ := newTestExecutor(t, syncRoot)
+
+	action := Action{
+		Type:    ActionLocalDelete,
+		DriveID: "d1",
+		ItemID:  "item-id",
+		Path:    "sub/file.txt",
+		Item: &Item{
+			DriveID:    "d1",
+			ItemID:     "item-id",
+			SyncedHash: "AAAAAAAAAAAAAAAAAAAAAAAAAAAA=", // mismatch triggers conflict path
+		},
+	}
+
+	plan := &ActionPlan{LocalDeletes: []Action{action}}
+	report, err := exec.Execute(context.Background(), plan)
+
+	// Skip-tier error: the sync continues but this action is recorded as skipped.
+	require.NoError(t, err)
+	assert.Equal(t, 0, report.LocalDeleted)
+	assert.Equal(t, 1, report.Skipped)
+	require.Len(t, report.Errors, 1)
+	assert.Contains(t, report.Errors[0].Err.Error(), "backup conflict file")
+
+	// No conflict should have been recorded since the rename failed before RecordConflict.
+	assert.Empty(t, store.recordConflicts)
+}
+
+// TestExecutor_LocalDelete_RecordConflictFails verifies that when a local delete triggers
+// a conflict backup and the rename succeeds, but RecordConflict returns a DB error,
+// the error is classified as skip-tier and reported.
+func TestExecutor_LocalDelete_RecordConflictFails(t *testing.T) {
+	syncRoot := t.TempDir()
+
+	content := []byte("locally modified for conflict")
+	localPath := filepath.Join(syncRoot, "conflict-record.txt")
+	require.NoError(t, os.WriteFile(localPath, content, 0o644))
+
+	exec, store, _, _ := newTestExecutor(t, syncRoot)
+	store.conflictErr = fmt.Errorf("db write failed")
+
+	action := Action{
+		Type:    ActionLocalDelete,
+		DriveID: "d1",
+		ItemID:  "item-id",
+		Path:    "conflict-record.txt",
+		Item: &Item{
+			DriveID:    "d1",
+			ItemID:     "item-id",
+			SyncedHash: "AAAAAAAAAAAAAAAAAAAAAAAAAAAA=", // mismatch triggers conflict path
+		},
+	}
+
+	plan := &ActionPlan{LocalDeletes: []Action{action}}
+	report, err := exec.Execute(context.Background(), plan)
+
+	// Skip-tier error: rename succeeded but RecordConflict failed.
+	require.NoError(t, err)
+	assert.Equal(t, 0, report.LocalDeleted)
+	assert.Equal(t, 1, report.Skipped)
+	require.Len(t, report.Errors, 1)
+	assert.Contains(t, report.Errors[0].Err.Error(), "record delete conflict")
+
+	// Original file should be gone (renamed to conflict copy).
+	_, statErr := os.Stat(localPath)
+	assert.True(t, os.IsNotExist(statErr))
+
+	// Conflict copy should exist on disk even though DB recording failed.
+	matches, globErr := filepath.Glob(filepath.Join(syncRoot, "conflict-record.conflict-*.txt"))
+	require.NoError(t, globErr)
+	assert.Len(t, matches, 1, "conflict copy should exist despite DB failure")
+}
+
 func TestNewExecutor_ChunkSize_Default(t *testing.T) {
 	store := newExecutorMockStore()
 	exec := NewExecutor(store, &executorMockItems{}, &executorMockTransfer{}, "/tmp", nil, nil, testLogger(t))
