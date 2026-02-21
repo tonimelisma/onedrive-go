@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1008,6 +1009,113 @@ func TestDetectFolderOrphans_UpsertError(t *testing.T) {
 	err := scanner.Scan(context.Background(), root)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "folder orphan detection failed")
+}
+
+// --- Mock DirEntry/FileInfo for validateEntry tests ---
+// APFS normalizes filenames, so we cannot create real files with invalid UTF-8 on macOS.
+// These mocks let us exercise validateEntry's guards without touching the filesystem.
+
+// scannerMockFileInfo implements os.FileInfo with configurable name and size.
+type scannerMockFileInfo struct {
+	name string
+	size int64
+}
+
+func (fi *scannerMockFileInfo) Name() string      { return fi.name }
+func (fi *scannerMockFileInfo) Size() int64       { return fi.size }
+func (fi *scannerMockFileInfo) Mode() os.FileMode { return 0o644 }
+func (fi *scannerMockFileInfo) ModTime() time.Time {
+	return time.Now()
+}
+
+func (fi *scannerMockFileInfo) IsDir() bool { return false }
+func (fi *scannerMockFileInfo) Sys() any    { return nil }
+
+// scannerMockDirEntry implements os.DirEntry, delegating to scannerMockFileInfo.
+type scannerMockDirEntry struct {
+	name    string
+	isDir   bool
+	info    os.FileInfo
+	infoErr error
+}
+
+func (de *scannerMockDirEntry) Name() string               { return de.name }
+func (de *scannerMockDirEntry) IsDir() bool                { return de.isDir }
+func (de *scannerMockDirEntry) Type() os.FileMode          { return 0 }
+func (de *scannerMockDirEntry) Info() (os.FileInfo, error) { return de.info, de.infoErr }
+
+// --- validateEntry edge-case tests ---
+
+// TestValidateEntry_InvalidUTF8 verifies that validateEntry rejects filenames
+// containing invalid UTF-8 byte sequences. We use mock types because macOS APFS
+// normalizes filenames, making it impossible to create truly invalid names on disk.
+func TestValidateEntry_InvalidUTF8(t *testing.T) {
+	t.Parallel()
+
+	badName := "file\xff\xfe.txt"
+	entry := &scannerMockDirEntry{
+		name: badName,
+		info: &scannerMockFileInfo{name: badName, size: 0},
+	}
+
+	scanner := testScanner(t, newScannerMockStore(), newMockFilter(), true)
+
+	err := scanner.validateEntry(badName, badName, entry)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid utf8")
+}
+
+// TestValidateEntry_PathTooLong verifies that validateEntry rejects entries whose
+// relative path exceeds maxPathChars (400 characters, the OneDrive limit).
+func TestValidateEntry_PathTooLong(t *testing.T) {
+	t.Parallel()
+
+	name := "ok.txt"
+	// Build a relPath that exceeds maxPathChars (400)
+	longPath := ""
+	for len(longPath) <= maxPathChars {
+		longPath += "abcdefghijklmnopqrstu/"
+	}
+	longPath += name
+
+	entry := &scannerMockDirEntry{
+		name: name,
+		info: &scannerMockFileInfo{name: name, size: 0},
+	}
+
+	scanner := testScanner(t, newScannerMockStore(), newMockFilter(), true)
+
+	err := scanner.validateEntry(name, longPath, entry)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "path too long")
+}
+
+// TestScan_HandleNewFile_HashFailure verifies that scanner skips (logs and continues)
+// when it cannot compute a hash for a new file (e.g., unreadable due to permissions).
+// The file should NOT appear in the store because hashing is required for new files.
+func TestScan_HandleNewFile_HashFailure(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+
+	// Create a file then make it unreadable so computeHash fails.
+	filePath := writeFile(t, root, "unreadable.txt", "secret")
+	require.NoError(t, os.Chmod(filePath, 0o000))
+
+	t.Cleanup(func() {
+		// Restore permissions so t.TempDir cleanup can remove the file.
+		os.Chmod(filePath, 0o644)
+	})
+
+	store := newScannerMockStore()
+	scanner := testScanner(t, store, newMockFilter(), true)
+
+	// Scan should succeed overall — hash failures are logged and skipped, not fatal.
+	err := scanner.Scan(context.Background(), root)
+	require.NoError(t, err)
+
+	// The unreadable file should NOT be tracked: hashing failed, so handleNewFile returned nil.
+	assert.Nil(t, store.items["unreadable.txt"], "unreadable file should not be stored")
+	assert.Empty(t, store.upserted, "no items should have been upserted")
 }
 
 func TestProcessDirectoryEntry_StoreLookupError(t *testing.T) {
