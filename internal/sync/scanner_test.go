@@ -23,6 +23,11 @@ type scannerMockStore struct {
 	syncedItems    []*Item
 	allActiveItems []*Item // returned by ListAllActiveItems for folder orphan detection
 	upserted       []*Item // tracks all upserted items
+
+	// Error injection for testing error paths
+	listAllActiveErr error
+	upsertItemErr    error
+	getItemByPathErr error
 }
 
 func newScannerMockStore() *scannerMockStore {
@@ -30,6 +35,10 @@ func newScannerMockStore() *scannerMockStore {
 }
 
 func (m *scannerMockStore) GetItemByPath(_ context.Context, path string) (*Item, error) {
+	if m.getItemByPathErr != nil {
+		return nil, m.getItemByPathErr
+	}
+
 	item, ok := m.items[path]
 	if !ok {
 		return nil, nil
@@ -40,6 +49,10 @@ func (m *scannerMockStore) GetItemByPath(_ context.Context, path string) (*Item,
 }
 
 func (m *scannerMockStore) UpsertItem(_ context.Context, item *Item) error {
+	if m.upsertItemErr != nil {
+		return m.upsertItemErr
+	}
+
 	cp := *item
 	m.items[item.Path] = &cp
 	m.upserted = append(m.upserted, &cp)
@@ -61,6 +74,10 @@ func (m *scannerMockStore) ListChildren(context.Context, string, string) ([]*Ite
 }
 
 func (m *scannerMockStore) ListAllActiveItems(context.Context) ([]*Item, error) {
+	if m.listAllActiveErr != nil {
+		return nil, m.listAllActiveErr
+	}
+
 	return m.allActiveItems, nil
 }
 
@@ -984,4 +1001,98 @@ func TestScan_DirectoryTracking_FolderBoundaryWithReconciler(t *testing.T) {
 	// remoteExists = !IsDeleted && ItemID != "" → true
 	assert.False(t, item.IsDeleted)
 	assert.NotEmpty(t, item.ItemID)
+}
+
+// --- Error path tests for detectFolderOrphans and processDirectoryEntry ---
+
+func TestDetectFolderOrphans_ListActiveError(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+
+	store := newScannerMockStore()
+	store.listAllActiveErr = errors.New("db read error")
+
+	scanner := testScanner(t, store, newMockFilter(), true)
+
+	err := scanner.Scan(context.Background(), root)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "folder orphan detection failed")
+}
+
+func TestDetectFolderOrphans_ContextCancel(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+
+	// Populate active folder items so detectFolderOrphans has work to do.
+	// The folder has LocalMtime set and was NOT visited during walk,
+	// but the context is canceled before iteration proceeds.
+	mtime := Int64Ptr(NowNano())
+	folderItem := &Item{
+		Path:       "ghost-folder",
+		Name:       "ghost-folder",
+		ItemType:   ItemTypeFolder,
+		ItemID:     "folder-id",
+		LocalMtime: mtime,
+	}
+
+	store := newScannerMockStore()
+	store.allActiveItems = []*Item{folderItem}
+
+	scanner := testScanner(t, store, newMockFilter(), true)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Let the walk complete (empty root), then cancel before folder orphan detection loops.
+	// Since the walk is empty, it will finish quickly; the cancel happens before
+	// detectFolderOrphans iterates through items. We cancel before calling Scan
+	// so the context check in detectFolderOrphans catches it.
+	cancel()
+
+	err := scanner.Scan(ctx, root)
+	assert.Error(t, err)
+}
+
+func TestDetectFolderOrphans_UpsertError(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	// Do NOT create "orphaned-dir" on disk — it should be detected as orphan.
+
+	mtime := Int64Ptr(NowNano())
+	folderItem := &Item{
+		Path:       "orphaned-dir",
+		Name:       "orphaned-dir",
+		ItemType:   ItemTypeFolder,
+		ItemID:     "folder-id",
+		LocalMtime: mtime,
+	}
+
+	store := newScannerMockStore()
+	store.items["orphaned-dir"] = folderItem
+	store.allActiveItems = []*Item{folderItem}
+	// UpsertItem will fail when the scanner tries to clear LocalMtime on the orphan.
+	store.upsertItemErr = errors.New("write error")
+
+	scanner := testScanner(t, store, newMockFilter(), true)
+
+	err := scanner.Scan(context.Background(), root)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "folder orphan detection failed")
+}
+
+func TestProcessDirectoryEntry_StoreLookupError(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+
+	// Create a real directory so the scanner walk reaches processDirectoryEntry.
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "testdir"), 0o755))
+	writeFile(t, root, "testdir/file.txt", "data")
+
+	store := newScannerMockStore()
+	store.getItemByPathErr = errors.New("db corruption")
+
+	scanner := testScanner(t, store, newMockFilter(), true)
+
+	err := scanner.Scan(context.Background(), root)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "store lookup")
 }
