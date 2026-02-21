@@ -214,6 +214,42 @@ func TestListSyncedItems(t *testing.T) {
 	assert.Equal(t, "s1", items[0].ItemID)
 }
 
+func TestListItemsForReconciliation(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	// Active item — should be returned.
+	active := makeTestItem("d1", "a1", "d1", "root1", "active.txt", ItemTypeFile)
+	active.LocalHash = "aaa"
+	require.NoError(t, store.UpsertItem(ctx, active))
+
+	// Tombstoned + synced — should be returned (reconciler needs F8/F9 visibility).
+	tombSynced := makeTestItem("d1", "ts1", "d1", "root1", "tomb-synced.txt", ItemTypeFile)
+	tombSynced.SyncedHash = "bbb"
+	require.NoError(t, store.UpsertItem(ctx, tombSynced))
+	require.NoError(t, store.MarkDeleted(ctx, "d1", "ts1", NowNano()))
+
+	// Tombstoned + unsynced — should NOT be returned.
+	tombUnsynced := makeTestItem("d1", "tu1", "d1", "root1", "tomb-unsynced.txt", ItemTypeFile)
+	require.NoError(t, store.UpsertItem(ctx, tombUnsynced))
+	require.NoError(t, store.MarkDeleted(ctx, "d1", "tu1", NowNano()))
+
+	items, err := store.ListItemsForReconciliation(ctx)
+	require.NoError(t, err)
+
+	// Should include active + tombstoned-synced, but not tombstoned-unsynced.
+	assert.Len(t, items, 2)
+
+	ids := make(map[string]bool)
+	for _, it := range items {
+		ids[it.ItemID] = true
+	}
+
+	assert.True(t, ids["a1"], "active item should be included")
+	assert.True(t, ids["ts1"], "tombstoned synced item should be included")
+	assert.False(t, ids["tu1"], "tombstoned unsynced item should be excluded")
+}
+
 func TestBatchUpsert(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

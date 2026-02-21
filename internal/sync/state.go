@@ -44,7 +44,8 @@ type SQLiteStore struct {
 
 // Statement groups to avoid a flat list of 25+ fields.
 type itemStatements struct {
-	get, upsert, markDeleted, deleteByKey, listChildren, getByPath, listAllActive, listSynced *sql.Stmt
+	get, upsert, markDeleted, deleteByKey, listChildren, getByPath *sql.Stmt
+	listAllActive, listForReconciliation, listSynced               *sql.Stmt
 }
 
 type deltaStatements struct {
@@ -241,6 +242,13 @@ const (
 	sqlListAllActive = `SELECT ` + sqlItemColumns +
 		` FROM items WHERE is_deleted = 0`
 
+	// sqlListForReconciliation includes active items plus tombstoned items that
+	// were previously synced. The reconciler needs to see tombstones to classify
+	// F8 (remote delete → local delete) and F9 (edit-delete conflict) paths.
+	// Non-synced tombstones are excluded — the reconciler can't classify them (B-051).
+	sqlListForReconciliation = `SELECT ` + sqlItemColumns +
+		` FROM items WHERE is_deleted = 0 OR (is_deleted = 1 AND synced_hash != '')`
+
 	sqlListSynced = `SELECT ` + sqlItemColumns +
 		` FROM items WHERE synced_hash != '' AND is_deleted = 0`
 )
@@ -384,6 +392,7 @@ func (s *SQLiteStore) prepareItemStmts(ctx context.Context) error {
 		{&s.itemStmts.listChildren, sqlListChildren, "listChildren"},
 		{&s.itemStmts.getByPath, sqlGetItemByPath, "getItemByPath"},
 		{&s.itemStmts.listAllActive, sqlListAllActive, "listAllActive"},
+		{&s.itemStmts.listForReconciliation, sqlListForReconciliation, "listForReconciliation"},
 		{&s.itemStmts.listSynced, sqlListSynced, "listSynced"},
 	})
 }
@@ -588,6 +597,23 @@ func (s *SQLiteStore) ListAllActiveItems(ctx context.Context) ([]*Item, error) {
 	rows, err := s.itemStmts.listAllActive.QueryContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list active items: %w", err)
+	}
+	defer rows.Close()
+
+	return scanItemRows(rows)
+}
+
+// ListItemsForReconciliation returns all active items plus tombstoned items
+// that were previously synced. The reconciler needs tombstone visibility to
+// classify F8 (remote delete → local delete) and F9 (edit-delete conflict)
+// paths. Non-synced tombstones are excluded — they are irrelevant to the
+// reconciler because it cannot determine their prior state (B-051).
+func (s *SQLiteStore) ListItemsForReconciliation(ctx context.Context) ([]*Item, error) {
+	s.logger.Debug("listing items for reconciliation")
+
+	rows, err := s.itemStmts.listForReconciliation.QueryContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list items for reconciliation: %w", err)
 	}
 	defer rows.Close()
 
@@ -1162,7 +1188,7 @@ func (s *SQLiteStore) closeStatements() error {
 	stmts := []*sql.Stmt{
 		s.itemStmts.get, s.itemStmts.upsert, s.itemStmts.markDeleted,
 		s.itemStmts.deleteByKey, s.itemStmts.listChildren, s.itemStmts.getByPath,
-		s.itemStmts.listAllActive, s.itemStmts.listSynced,
+		s.itemStmts.listAllActive, s.itemStmts.listForReconciliation, s.itemStmts.listSynced,
 		s.deltaStmts.getToken, s.deltaStmts.saveToken,
 		s.deltaStmts.deleteToken, s.deltaStmts.setComplete,
 		s.deltaStmts.isComplete,

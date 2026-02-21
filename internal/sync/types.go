@@ -261,7 +261,11 @@ type TransferClient interface {
 
 // ReconcilerStore is the subset of Store used by Reconciler.
 type ReconcilerStore interface {
-	ListAllActiveItems(ctx context.Context) ([]*Item, error)
+	// ListItemsForReconciliation returns all active items plus tombstoned items
+	// that were previously synced (synced_hash != ''). This allows the reconciler
+	// to classify F8 (remote delete → local delete) and F9 (edit-delete conflict)
+	// paths, which require visibility into tombstoned items (B-051).
+	ListItemsForReconciliation(ctx context.Context) ([]*Item, error)
 }
 
 // SafetyStore is the subset of Store used by SafetyChecker.
@@ -304,6 +308,7 @@ type Store interface {
 	ListChildren(ctx context.Context, driveID, parentID string) ([]*Item, error)
 	GetItemByPath(ctx context.Context, path string) (*Item, error)
 	ListAllActiveItems(ctx context.Context) ([]*Item, error)
+	ListItemsForReconciliation(ctx context.Context) ([]*Item, error)
 	ListSyncedItems(ctx context.Context) ([]*Item, error)
 	BatchUpsert(ctx context.Context, items []*Item) error
 

@@ -750,44 +750,6 @@ func TestClose_WaitsForRunOnce(t *testing.T) {
 	assert.True(t, runOnceFinished.Load(), "RunOnce should have completed before Close returned")
 }
 
-// --- B-050: populateDriveID tests ---
-
-func TestPopulateDriveID(t *testing.T) {
-	eng, _, _ := newTestEngine(t)
-
-	plan := &ActionPlan{
-		Uploads: []Action{
-			{DriveID: "", Path: "new.txt", Item: &Item{DriveID: "", ItemID: ""}},
-			{DriveID: "existing-drive", Path: "old.txt", Item: &Item{DriveID: "existing-drive", ItemID: "i1"}},
-		},
-		FolderCreates: []Action{
-			{DriveID: "", Path: "newdir", Item: &Item{DriveID: ""}},
-		},
-		Downloads: []Action{
-			{DriveID: "test-drive-id", Path: "remote.txt", Item: &Item{DriveID: "test-drive-id"}},
-		},
-	}
-
-	eng.populateDriveID(plan)
-
-	// Empty action DriveIDs should be filled with engine's driveID.
-	assert.Equal(t, "test-drive-id", plan.Uploads[0].DriveID)
-	// Item DriveID is NOT modified — the executor needs the original DB key
-	// to clean up stale scanner rows (B-050).
-	assert.Equal(t, "", plan.Uploads[0].Item.DriveID)
-
-	// Non-empty DriveIDs should be preserved.
-	assert.Equal(t, "existing-drive", plan.Uploads[1].DriveID)
-	assert.Equal(t, "existing-drive", plan.Uploads[1].Item.DriveID)
-
-	// Folder creates.
-	assert.Equal(t, "test-drive-id", plan.FolderCreates[0].DriveID)
-	assert.Equal(t, "", plan.FolderCreates[0].Item.DriveID) // Same: not modified
-
-	// Already set DriveIDs untouched.
-	assert.Equal(t, "test-drive-id", plan.Downloads[0].DriveID)
-}
-
 // TestRunOnce_Upload_NoStaleRow is a multi-cycle regression test for B-050.
 // Cycle 1: a local file triggers upload; after upload the stale scanner row must be removed.
 // Cycle 2: re-running should produce zero uploads (no duplicate from stale row).
@@ -892,13 +854,71 @@ func TestRunOnce_FolderCreate_EndToEnd(t *testing.T) {
 	assert.True(t, info.IsDir())
 }
 
-// NOTE: TestRunOnce_LocalDelete_EndToEnd removed — the reconciler's F8 path
-// (remote tombstone → local delete) is unreachable through the real engine because
-// ListAllActiveItems filters is_deleted=0, and MarkDeleted sets is_deleted=1.
-// After the delta processor tombstones an item, the reconciler never sees it.
-// F8/F9 are covered by reconciler_test.go (mock store), but the engine-level
-// wiring cannot be tested without changing the query to include tombstoned items.
-// Tracked as B-051 in BACKLOG.md.
+// TestRunOnce_LocalDelete_EndToEnd verifies F8: a tombstoned item (marked deleted
+// by delta processor) triggers local file deletion through the full engine pipeline.
+// This was previously unreachable (B-051) because ListAllActiveItems excluded
+// tombstoned items. The new ListItemsForReconciliation query makes this path work.
+func TestRunOnce_LocalDelete_EndToEnd(t *testing.T) {
+	eng, _, store := newTestEngine(t)
+	ctx := context.Background()
+	now := NowNano()
+
+	root := &Item{
+		DriveID:   "test-drive-id",
+		ItemID:    "root",
+		Name:      "root",
+		ItemType:  ItemTypeRoot,
+		Path:      "",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	require.NoError(t, store.UpsertItem(ctx, root))
+	require.NoError(t, store.SetDeltaComplete(ctx, "test-drive-id", true))
+
+	// Seed a synced item that the delta processor has tombstoned.
+	size := int64(100)
+	hash := "AAAAAAAAAAAAAAAAAAAAAA=="
+	item := &Item{
+		DriveID:       "test-drive-id",
+		ItemID:        "local-del-item",
+		ParentDriveID: "test-drive-id",
+		ParentID:      "root",
+		Name:          "todelete.txt",
+		ItemType:      ItemTypeFile,
+		Path:          "todelete.txt",
+		Size:          &size,
+		QuickXorHash:  hash,
+		RemoteMtime:   &now,
+		SyncedSize:    &size,
+		SyncedMtime:   &now,
+		SyncedHash:    hash,
+		LastSyncedAt:  &now,
+		LocalSize:     &size,
+		LocalMtime:    &now,
+		LocalHash:     hash,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	require.NoError(t, store.UpsertItem(ctx, item))
+
+	// Tombstone the item (as if the delta processor did it).
+	require.NoError(t, store.MarkDeleted(ctx, "test-drive-id", "local-del-item", now))
+
+	// Create the local file so the executor can delete it.
+	localPath := filepath.Join(eng.syncRoot, "todelete.txt")
+	require.NoError(t, os.WriteFile(localPath, []byte("delete me"), 0o644))
+
+	// Run download-only: scanner is skipped, reconciler sees the tombstoned item
+	// via ListItemsForReconciliation, classifies as F8, executor deletes locally.
+	report, err := eng.RunOnce(ctx, SyncDownloadOnly, SyncOptions{})
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, report.LocalDeleted)
+
+	// Verify file is gone from disk.
+	_, statErr := os.Stat(localPath)
+	assert.True(t, os.IsNotExist(statErr), "local file should have been deleted")
+}
 
 // TestRunOnce_RemoteDelete_EndToEnd seeds a synced item with no local file and
 // runs upload-only to verify a remote delete is triggered.

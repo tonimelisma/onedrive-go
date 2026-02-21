@@ -81,7 +81,7 @@ func NewEngine(
 	e := &Engine{
 		store:                  store,
 		delta:                  NewDeltaProcessor(graphClient, store, logger),
-		scanner:                NewScanner(store, filterEngine, resolved.SkipSymlinks, logger),
+		scanner:                NewScanner(resolved.DriveID, store, filterEngine, resolved.SkipSymlinks, logger),
 		reconciler:             NewReconciler(store, logger),
 		safety:                 NewSafetyChecker(store, safetyCfg, resolved.SyncDir, logger),
 		executor:               NewExecutor(store, graphClient, graphClient, resolved.SyncDir, safetyCfg, &resolved.TransfersConfig, logger),
@@ -139,11 +139,6 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts SyncOptions) (
 	}
 
 	e.logger.Info("engine: reconciliation complete", "total_actions", plan.TotalActions())
-
-	// Inject drive ID into scanner-originated actions (B-050).
-	// Scanner items have empty DriveID because the scanner is a local-filesystem
-	// component. The engine is the correct injection point.
-	e.populateDriveID(plan)
 
 	// Phase 4: Safety check.
 	plan, err = e.safety.Check(ctx, plan, opts.Force, opts.DryRun)
@@ -237,33 +232,6 @@ func (e *Engine) cleanupTombstones(ctx context.Context) {
 
 	if cleaned > 0 {
 		e.logger.Info("engine: tombstones cleaned", "count", cleaned)
-	}
-}
-
-// populateDriveID sets the engine's drive ID on actions and items where
-// DriveID is empty. Scanner-created items lack drive identity because the
-// scanner is a local-filesystem component. The engine injects it here,
-// after reconciliation but before safety checks and execution (B-050).
-func (e *Engine) populateDriveID(plan *ActionPlan) {
-	allSlices := []*[]Action{
-		&plan.FolderCreates, &plan.Moves,
-		&plan.Downloads, &plan.Uploads,
-		&plan.LocalDeletes, &plan.RemoteDeletes,
-		&plan.Conflicts, &plan.SyncedUpdates, &plan.Cleanups,
-	}
-	for _, slice := range allSlices {
-		for i := range *slice {
-			a := &(*slice)[i]
-			if a.DriveID == "" {
-				a.DriveID = e.driveID
-			}
-
-			// Do NOT set a.Item.DriveID here. The item's DriveID must
-			// reflect the actual DB key so the executor can capture the
-			// pre-mutation key and delete the stale scanner row (B-050).
-			// The executor injects action.DriveID into the item after
-			// capturing the old key.
-		}
 	}
 }
 

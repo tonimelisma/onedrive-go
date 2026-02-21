@@ -33,12 +33,14 @@ type Scanner struct {
 	store        ScannerStore
 	filter       Filter
 	logger       *slog.Logger
+	driveID      string // injected by engine; set on new items so the reconciler can build correct actions
 	skipSymlinks bool
 	visited      map[string]bool // DB paths visited during current scan (for orphan detection)
 }
 
 // NewScanner creates a Scanner with the given dependencies.
-func NewScanner(store ScannerStore, filter Filter, skipSymlinks bool, logger *slog.Logger) *Scanner {
+// driveID is set on new items so the reconciler can build actions with correct drive identity.
+func NewScanner(driveID string, store ScannerStore, filter Filter, skipSymlinks bool, logger *slog.Logger) *Scanner {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -47,6 +49,7 @@ func NewScanner(store ScannerStore, filter Filter, skipSymlinks bool, logger *sl
 		store:        store,
 		filter:       filter,
 		logger:       logger,
+		driveID:      driveID,
 		skipSymlinks: skipSymlinks,
 	}
 }
@@ -199,6 +202,7 @@ func (s *Scanner) upsertDirectoryItem(ctx context.Context, relPath string, exist
 func (s *Scanner) handleNewDirectory(ctx context.Context, relPath string) error {
 	now := NowNano()
 	item := &Item{
+		DriveID:    s.driveID,
 		Path:       relPath,
 		Name:       filepath.Base(relPath),
 		ItemType:   ItemTypeFolder,
@@ -330,6 +334,7 @@ func (s *Scanner) handleNewFile(ctx context.Context, fullPath, relPath string, i
 
 	now := NowNano()
 	item := &Item{
+		DriveID:    s.driveID,
 		Path:       relPath,
 		Name:       filepath.Base(relPath),
 		ItemType:   ItemTypeFile,

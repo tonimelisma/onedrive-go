@@ -261,12 +261,6 @@ func (e *Executor) executeFolderCreate(ctx context.Context, action *Action) erro
 	oldDriveID := action.Item.DriveID
 	oldItemID := action.Item.ItemID
 
-	// Inject the engine's DriveID into the item for the upsert. This must
-	// happen AFTER capturing the old key (scanner rows have DriveID="").
-	if action.Item.DriveID == "" {
-		action.Item.DriveID = action.DriveID
-	}
-
 	created, err := e.items.CreateFolder(ctx, action.DriveID, action.Item.ParentID, action.Item.Name)
 	if err != nil {
 		return fmt.Errorf("executor: create remote folder %s: %w", action.Path, err)
@@ -475,12 +469,6 @@ func (e *Executor) updateUploadState(
 	// after the upsert creates a new row with the server-assigned ID.
 	oldDriveID := action.Item.DriveID
 	oldItemID := action.Item.ItemID
-
-	// Inject the engine's DriveID into the item for the upsert. This must
-	// happen AFTER capturing the old key (scanner rows have DriveID="").
-	if action.Item.DriveID == "" {
-		action.Item.DriveID = action.DriveID
-	}
 
 	if uploaded != nil {
 		action.Item.ItemID = uploaded.ID
