@@ -83,10 +83,15 @@ jobs:
             DRIVE_ID=$(go run . whoami --json --drive "$drive" | jq -r '.drives[0].id')
             echo "Drive ID: ${DRIVE_ID}"
 
-            echo "=== Running integration tests for: ${drive} ==="
+            echo "=== Running graph integration tests for: ${drive} ==="
             ONEDRIVE_TEST_DRIVE="$drive" \
               ONEDRIVE_TEST_DRIVE_ID="$DRIVE_ID" \
               go test -tags=integration -race -v -timeout=5m ./internal/graph/...
+
+            echo "=== Running sync integration tests for: ${drive} ==="
+            ONEDRIVE_TEST_DRIVE="$drive" \
+              ONEDRIVE_TEST_DRIVE_ID="$DRIVE_ID" \
+              go test -tags=integration -race -v -timeout=5m ./internal/sync/...
           done
 
       - name: Run E2E tests
