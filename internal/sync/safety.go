@@ -108,9 +108,11 @@ func (sc *SafetyChecker) Check(
 	return plan, nil
 }
 
-// filterBySyncedHash removes actions whose Item is nil or has an empty SyncedHash.
-// Used by both S1 (remote deletes) and S4 (local deletes) — the invariant is the
-// same: only items with a confirmed synced baseline may be deleted.
+// filterBySyncedHash is the plan-time pre-check for S1/S4: it removes delete actions
+// whose Item is nil or has an empty SyncedHash. This pre-check ensures only items with a
+// confirmed synced baseline may be deleted. It is distinct from the execution-time
+// hash-before-delete check (S4), where the executor verifies that the local file's current
+// content hash still matches SyncedHash before actually deleting.
 func filterBySyncedHash(logger *slog.Logger, invariant string, actions []Action) []Action {
 	var kept []Action
 

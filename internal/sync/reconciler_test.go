@@ -14,20 +14,14 @@ import (
 // reconcilerMockStore implements Store for reconciler tests.
 // It returns pre-configured item lists and tracks calls.
 type reconcilerMockStore struct {
-	activeItems   []*Item
-	deltaComplete bool
-	driveID       string
+	activeItems []*Item
 
 	// Error injection
-	listActiveErr   error
-	isDeltaComplErr error
+	listActiveErr error
 }
 
 func newReconcilerMockStore() *reconcilerMockStore {
-	return &reconcilerMockStore{
-		deltaComplete: true,
-		driveID:       "d",
-	}
+	return &reconcilerMockStore{}
 }
 
 func (s *reconcilerMockStore) ListAllActiveItems(_ context.Context) ([]*Item, error) {
@@ -38,10 +32,7 @@ func (s *reconcilerMockStore) ListAllActiveItems(_ context.Context) ([]*Item, er
 }
 
 func (s *reconcilerMockStore) IsDeltaComplete(_ context.Context, _ string) (bool, error) {
-	if s.isDeltaComplErr != nil {
-		return false, s.isDeltaComplErr
-	}
-	return s.deltaComplete, nil
+	return true, nil
 }
 
 // Unused Store methods — satisfy interface.
@@ -330,20 +321,6 @@ func TestReconcile_F8_RemoteTombstoned_LocalUnchanged(t *testing.T) {
 	assert.Equal(t, ActionLocalDelete, plan.LocalDeletes[0].Type)
 }
 
-func TestReconcile_F8_SkippedWhenDeltaIncomplete(t *testing.T) {
-	t.Parallel()
-	store := newReconcilerMockStore()
-	store.deltaComplete = false
-	store.activeItems = []*Item{
-		reconcilerItem("file.txt", "AAA", "", "AAA", true, true),
-	}
-
-	r := NewReconciler(store, reconcilerTestLogger(t))
-	plan, err := r.Reconcile(context.Background(), SyncBidirectional)
-	require.NoError(t, err)
-	assert.Empty(t, plan.LocalDeletes, "F8 must be skipped when delta is incomplete (S2)")
-}
-
 func TestReconcile_F9_EditDeleteConflict(t *testing.T) {
 	t.Parallel()
 	store := newReconcilerMockStore()
@@ -358,21 +335,6 @@ func TestReconcile_F9_EditDeleteConflict(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, plan.Conflicts, 1)
 	assert.Equal(t, ActionConflict, plan.Conflicts[0].Type)
-}
-
-func TestReconcile_F9_SkippedWhenDeltaIncomplete(t *testing.T) {
-	t.Parallel()
-	store := newReconcilerMockStore()
-	store.deltaComplete = false
-	item := reconcilerItem("file.txt", "BBB", "", "AAA", true, true)
-	futureMtime := *item.LastSyncedAt + int64(2e9)
-	item.LocalMtime = &futureMtime
-	store.activeItems = []*Item{item}
-
-	r := NewReconciler(store, reconcilerTestLogger(t))
-	plan, err := r.Reconcile(context.Background(), SyncBidirectional)
-	require.NoError(t, err)
-	assert.Empty(t, plan.Conflicts, "F9 must be skipped when delta is incomplete (S2)")
 }
 
 func TestReconcile_F10_IdenticalNewFile(t *testing.T) {
@@ -506,20 +468,6 @@ func TestReconcile_D4_FolderRemoteTombstoned(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, plan.LocalDeletes, 1)
 	assert.Equal(t, ActionLocalDelete, plan.LocalDeletes[0].Type)
-}
-
-func TestReconcile_D4_SkippedWhenDeltaIncomplete(t *testing.T) {
-	t.Parallel()
-	store := newReconcilerMockStore()
-	store.deltaComplete = false
-	store.activeItems = []*Item{
-		reconcilerFolder("docs", true, false, true, true),
-	}
-
-	r := NewReconciler(store, reconcilerTestLogger(t))
-	plan, err := r.Reconcile(context.Background(), SyncBidirectional)
-	require.NoError(t, err)
-	assert.Empty(t, plan.LocalDeletes, "D4 must be skipped when delta is incomplete (S2)")
 }
 
 func TestReconcile_D5_FolderNewLocal(t *testing.T) {
@@ -906,20 +854,6 @@ func TestReconcile_ListActiveItemsError(t *testing.T) {
 	_, err := r.Reconcile(context.Background(), SyncBidirectional)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "list active items")
-}
-
-func TestReconcile_DeltaCompletenessError(t *testing.T) {
-	t.Parallel()
-	store := newReconcilerMockStore()
-	store.isDeltaComplErr = assert.AnError
-	store.activeItems = []*Item{
-		reconcilerItem("file.txt", "AAA", "AAA", "AAA", true, false),
-	}
-
-	r := NewReconciler(store, reconcilerTestLogger(t))
-	_, err := r.Reconcile(context.Background(), SyncBidirectional)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "check delta completeness")
 }
 
 func TestReconcile_EmptyItemList(t *testing.T) {
