@@ -139,9 +139,14 @@ linters:
     gosec:
       excludes:
         - G104
+        - G115  # integer overflow: false positive on intentional truncation (quickxorhash)
         - G204
         - G304
         - G307
+        - G602  # slice bounds: false positive on backwards iteration (quickxorhash)
+        - G703  # path traversal taint: false positive on safe temp-dir rename patterns
+        - G704  # SSRF taint: false positive on Graph API HTTP client calls
+        - G705  # XSS taint: false positive on stderr format strings
 
     lll:
       line-length: 140

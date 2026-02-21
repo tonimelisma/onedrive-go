@@ -307,7 +307,7 @@ func (sc *SafetyChecker) checkS6DiskSpace(plan *ActionPlan, dryRun bool) error {
 	}
 
 	// Cap available to int64 max to prevent overflow when converting from uint64.
-	availableI64 := int64(min(available, uint64(math.MaxInt64))) //nolint:gosec // capped to prevent overflow
+	availableI64 := int64(min(available, uint64(math.MaxInt64))) // capped at MaxInt64 to prevent overflow
 
 	remainingAfterDownloads := availableI64 - totalDownloadSize
 	if remainingAfterDownloads < minFreeBytes {
