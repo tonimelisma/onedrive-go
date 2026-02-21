@@ -1,40 +1,13 @@
 # Learnings — Institutional Knowledge Base
 
-Knowledge captured during implementation. Architecture-independent patterns and gotchas carried forward from Phases 1-3 archive.
+Knowledge captured during implementation. Organized by topic. Per-increment bullet-point summaries archived in `docs/archive/learnings-phase-4-details.md`. Earlier phases archived in `docs/archive/learnings-phases-1-3.md`.
 
 ---
 
-## 1. QuickXorHash (`pkg/quickxorhash/`)
-
-**Plan test vectors were wrong.** The test vectors specified in the plan were incorrect. Verified against rclone v1.73.1's `quickxorhash` package, which is verified against Microsoft's reference C# implementation. Lesson: always verify test vectors against a known-good reference, don't blindly trust specs.
-
----
-
-## 2. Config TOML Gotchas
-
-- **Chunk size default "10MiB" not "10MB".** 10 MB (decimal, 10,000,000 bytes) is NOT a multiple of 320 KiB (327,680 bytes). 10 MiB (10,485,760) IS a multiple (32 * 327,680). Default was changed to "10MiB" to maintain alignment validation.
-- **`toml.MetaData` is 96 bytes** (triggers hugeParam). Must be passed by pointer. `toml.DecodeFile` returns it by value, so take its address when passing to helper functions.
-- **misspell linter catches intentional typos in test TOML strings.** Test data for unknown-key-detection uses deliberate misspellings. Must use `//nolint:misspell` on those lines. Inline TOML strings (not raw string literals with backticks) make the nolint placement cleaner.
-
----
-
-## 3. Agent Coordination
-
-### Parallel agent execution
-Four agents ran simultaneously without conflicts (true leaf packages). Scoped verification commands to own package to avoid cross-agent interference:
-```bash
-# Good: scoped to own package
-go test ./internal/graph/...
-# Bad: tests all packages, sees intermediate states from other agents
-go test ./...
-```
-
----
-
-## 4. Graph Client (`internal/graph/`)
+## 1. API and Graph Client
 
 ### Test-friendly time delays
-Any code with `time.Sleep` or timer-based backoff must use an injectable sleep function. Pattern:
+Any code with `time.Sleep` or timer-based backoff must use an injectable sleep function:
 ```go
 type Client struct {
     sleepFunc func(ctx context.Context, d time.Duration) error // default: timeSleep
@@ -46,534 +19,310 @@ Tests override with `noopSleep` that returns immediately. Without this, retry te
 This project enables `govet` with `enable-all: true`. Variable shadowing in nested scopes (e.g., `if err := ...` inside a block that already has `err`) triggers lint failures. Use distinct names like `sleepErr`, `readErr`.
 
 ### httptest is the right choice for Graph API tests
-Decision: use `httptest.NewServer` for all Graph client tests. Real HTTP, no interfaces for mocking. Tests are realistic and simple. Confirmed this works well in 1.1 and 1.2.
+Use `httptest.NewServer` for all Graph client tests. Real HTTP, no interfaces for mocking. Tests are realistic and simple.
 
 ### oauth2 fork for OnTokenChange
 `golang.org/x/oauth2` has no persistence callback — when `ReuseTokenSource` silently refreshes a token, the new refresh token is only in memory. We use `github.com/tonimelisma/oauth2` fork (branch `on-token-change`) via `go.mod` replace directive. Adds `Config.OnTokenChange func(newToken *Token)` — fires after refresh, outside mutex, nil-safe. Tracks upstream proposal `golang/go#77502`.
 
-### Public functions that depend on config paths need internal helpers for testability
-Public auth functions (`Login`, `Logout`, `TokenSourceFromPath`) accept explicit `tokenPath` parameters — the caller computes the path via `config.DriveTokenPath(canonicalID)`. This decouples `graph/` from `config/` entirely. Internal test helpers (`doLogin`, `logout`) accept the same explicit paths for testability.
+### Public auth functions accept explicit token paths
+Public auth functions (`Login`, `Logout`, `TokenSourceFromPath`) accept explicit `tokenPath` parameters — the caller computes the path via `config.DriveTokenPath(canonicalID)`. This decouples `graph/` from `config/` entirely.
 
 ### oauth2 device code tests use real polling delays
-Tests using `cfg.DeviceAccessToken()` incur real 1-second polling intervals (the minimum per RFC 8628). Set `"interval": 1` in mock device code responses to minimize delay, but tests still take ~1-3s each. Use `context.WithTimeout` for cancellation tests.
-
-### Always check coverage before committing
-Run `go test -coverprofile=/tmp/cover.out ./internal/graph/... && go tool cover -func=/tmp/cover.out | grep total` as part of the DOD check, not just build+test+lint. Coverage regressions are easy to miss when only running `go test` without `-coverprofile`.
+Tests using `cfg.DeviceAccessToken()` incur real 1-second polling intervals (the minimum per RFC 8628). Set `"interval": 1` in mock device code responses to minimize delay, but tests still take ~1-3s each.
 
 ### go.mod replace directive pseudo-version format
-When using `replace` with a commit hash, the pseudo-version timestamp must match the commit's actual timestamp. Use `go mod download <module>@<commit>` first to discover the correct timestamp from error messages, then construct the pseudo-version as `v0.0.0-YYYYMMDDHHMMSS-<12-char-hash>`.
+When using `replace` with a commit hash, the pseudo-version timestamp must match the commit's actual timestamp. Use `go mod download <module>@<commit>` first to discover the correct timestamp.
 
----
-
-## 5. Integration Tests & CI
-
-### Azure OIDC + Key Vault for CI token management
-GitHub secrets can't be updated from within workflows, so we use Azure Key Vault as a writable secret store. OIDC federation means no stored credentials — GitHub Actions presents a short-lived JWT to Azure, scoped to `repo:tonimelisma/onedrive-go:ref:refs/heads/main`. Token files flow Key Vault <-> disk via `az keyvault secret download/set --file`, never through stdout/CI logs.
-
-### Token and drive ID bootstrap
-Tokens are bootstrapped via `go run . login --drive personal:user@example.com`. Drive IDs are discovered via `go run . whoami --json --drive personal:user@example.com | jq -r '.drives[0].id'`. Integration tests require `ONEDRIVE_TEST_DRIVE_ID` env var; CI discovers it via whoami. The old `cmd/integration-bootstrap` was deleted in 1.7 (B-025).
-
-### POC code creates path dependency
-When rewriting POC tests to use typed methods, audit for raw API patterns that survive by inertia. If a test helper uses raw `Do()` + `map[string]interface{}`, it biases all downstream tests toward that pattern. Prefer env vars or external tools for test prerequisites over inline raw API calls.
-
-### Integration test build tag pattern
-Integration tests use `//go:build integration` and are excluded from `go test ./...`. Run with `go test -tags=integration`. The `newIntegrationClient(t)` helper skips (not fails) when no token is available, so these tests degrade gracefully.
-
-### Graph API returns 400 (not 404) for invalid item ID formats
-Requesting `/me/drive/items/nonexistent-string` returns HTTP 400 ("invalidRequest"), not 404. The Graph API validates item ID format before lookup. Use path-based addressing (`/me/drive/root:/nonexistent-path`) to get proper 404 responses for nonexistent items.
-
-### Nightly CI keeps refresh tokens alive
-Microsoft rotates refresh tokens on use and they expire after 90 days of inactivity. The nightly schedule (3 AM UTC) ensures tokens stay active.
-
-### Orchestrator manages Key Vault secrets directly
-The AI orchestrator (Claude) has `az` CLI access and should manage Key Vault secrets as part of CI-impacting changes. This includes: creating/renaming secrets, downloading/uploading tokens, setting GitHub repository variables via `gh variable set`, and verifying secret structure. When code changes affect token paths or secret naming (like the profiles → drives migration), update Key Vault and GitHub variables in the same increment rather than escalating to the human. The human only handles one-time Azure infrastructure (service principal, RBAC) and interactive browser-based `login` flows.
-
-### Local CI validation prevents push-and-pray
-When making changes that affect the integration workflow (token paths, secret names, env vars, workflow YAML), always validate locally before pushing. Mirror the workflow's token loading logic with `az keyvault secret download`, test `whoami --json --drive`, and run E2E tests locally with the same env vars. See test-strategy.md §6.1 for the full local validation script. This catches issues like wrong secret names or broken token paths without waiting for GitHub Actions.
-
-### Graph API JSON tag nolint patterns
-Graph API uses non-standard JSON keys like `@odata.nextLink` and `@microsoft.graph.conflictBehavior`. These trigger the `tagliatelle` linter — suppress with `//nolint:tagliatelle` on the struct field.
-
-### gofumpt stricter than gofmt on field alignment
-`gofumpt` enforces stricter struct field alignment than `gofmt`. Multi-byte characters (em-dashes) in field comments can cause alignment differences. Always run `gofumpt -w` before committing, not just `gofmt`.
-
-### httptest closure variable forward-reference
-When an `httptest.NewServer` handler needs `srv.URL` (e.g., to build pagination URLs), declare `var srv *httptest.Server` first, then assign. Direct `srv := httptest.NewServer(...)` with a closure referencing `srv.URL` won't compile.
-
-### Delta normalization pipeline design
-The delta normalization pipeline applies four steps in order: (1) filter packages, (2) clear bogus hashes on deleted items, (3) deduplicate items keeping last occurrence, (4) reorder deletions before creations at the same parent. Each step is a separate unexported function for testability. The pipeline runs only on delta responses, not on single-item or list-children responses. `slices.SortStableFunc` is the right choice for deletion reordering because it preserves relative order of items at different parents.
-
-### Delta token is always a full URL
-The Graph API delta endpoint returns `@odata.deltaLink` and `@odata.nextLink` as full URLs (e.g., `https://graph.microsoft.com/v1.0/drives/{id}/root/delta?token=...`). The cleanest API design passes these opaque URLs back as tokens. Use `stripBaseURL()` to convert to a relative path for `Do()`. Empty token means initial sync, non-HTTP-prefixed strings are treated as initial sync too (defensive).
-
-### gosec G602 false positive on backwards iteration
-`gosec` flags `items[i]` as "slice index out of range" (G602) when iterating backwards with `for i := len(items) - 1; i >= 0; i--`. This is a false positive. Work around by copying the slice, reversing it with `slices.Reverse()`, and iterating forward. Alternatively, use `//nolint:gosec` but the reverse approach is cleaner.
-
-### Parallel agent file conflicts during concurrent branch work
-When multiple agents work on different increments in parallel using different git branches, `git checkout` destroys untracked files that exist on the current branch but not the target. Files must be staged immediately after creation and committed as quickly as possible to survive branch switching. Use single-shell-session heredocs (`cat > file << 'EOF' ... EOF && git add file`) to atomically create and stage files.
-
----
-
-## 6. Tier 1 Research
-
-16 research documents in `docs/tier1-research/` covering Graph API bugs, reference implementation analysis, and tool surveys. Consult these before implementing any API interaction — they contain critical gotchas (upload session resume, delta headers, hash fallbacks, etc.) tracked as B-015 through B-023 in BACKLOG.md.
-
----
-
-## 7. Increment 1.6 — Drives (Me, Drives, Drive)
-
-### No pivots from plan
-The implementation followed the plan exactly. The `Me()`, `Drives()`, and `Drive()` methods, JSON response types, and conversion functions were implemented as specified.
-
-### Graph API quirk: Personal accounts have empty mail field
-The Graph API often returns an empty `mail` field for Personal (consumer) accounts. The `userPrincipalName` (UPN) field is the reliable fallback for email. The `toUser()` conversion function handles this with a simple fallback: use `mail` if non-empty, otherwise use `userPrincipalName`.
-
-### Parallel agent file conflicts are severe
-When multiple Claude Code agents work on the same package directory simultaneously, untracked files from one agent appear in another agent's working directory. This causes build failures, lint failures, and pre-commit hook failures. Key issues:
-- `rm` + `git commit` is a race condition: files can reappear between delete and commit
-- Branch switches carry untracked files across branches (they aren't branch-specific)
-- Parallel agents can stage files into each other's git index
-- **Mitigation**: Use separate branches (as documented) but coordinate to avoid parallel work in the same directory. Alternatively, use `.gitignore` for work-in-progress files from other increments.
-
-### B-024 cleanup completed
-The `cmd/integration-bootstrap/main.go` `printDrive()` function was updated to use the typed `Drives()` method instead of raw `Do()` + manual JSON parsing. This eliminated the `encoding/json` and `io` imports.
-
-### Cross-package concern: Drives() vs /me/drive
-The bootstrap tool previously used `GET /me/drive` (single default drive), but the new typed API uses `GET /me/drives` (all drives) and takes the first. This is functionally equivalent for Personal accounts (which have one drive) but may differ for Business accounts with multiple drives. The first drive in the list should be the user's primary drive, but this is not explicitly documented by Microsoft. Worth monitoring in integration tests.
-
----
-
-## 8. Transfers (Increment 1.5)
+### Graph API quirks
+- **Personal accounts have empty mail field.** Use `userPrincipalName` as fallback.
+- **Returns 400 (not 404) for invalid item ID formats.** Use path-based addressing for proper 404.
+- **JSON tag `@odata.nextLink` / `@microsoft.graph.conflictBehavior`** trigger `tagliatelle` linter — suppress with `//nolint:tagliatelle`.
+- **Delta token is always a full URL.** Use `stripBaseURL()` to convert to a relative path for `Do()`.
 
 ### Pre-authenticated URLs bypass the Graph API
-The `@microsoft.graph.downloadUrl` from GetItem and the `uploadUrl` from CreateUploadSession are pre-authenticated URLs that go directly to SharePoint/OneDrive storage. They must NOT use `Do()` (no base URL prefix, no auth headers). Use `httpClient.Do(req)` directly. These URLs contain embedded auth tokens and must NEVER be logged.
+`@microsoft.graph.downloadUrl` and `uploadUrl` from CreateUploadSession are pre-authenticated URLs. Must NOT use `Do()` (no base URL prefix, no auth headers). Use `httpClient.Do(req)` directly. Never log these URLs.
 
 ### SimpleUpload needs custom content type
-`Do()` in client.go always sets `Content-Type: application/json` when body is non-nil. SimpleUpload needs `application/octet-stream`. Solution: a private `doRawUpload` helper that takes a contentType parameter. It also provides auth (unlike pre-authenticated URL calls) but does not retry (can't safely replay a partially-consumed reader).
+`Do()` always sets `Content-Type: application/json`. SimpleUpload needs `application/octet-stream`. Solution: a private `doRawUpload` helper. No retry for upload operations (can't safely replay a partially-consumed reader).
 
 ### Upload chunk responses have three shapes
-- 202 Accepted: intermediate chunk, body has `nextExpectedRanges` (drain and discard)
-- 200 OK or 201 Created: final chunk complete, body has driveItem JSON
-- Error: various HTTP error codes with error body
+- 202 Accepted: intermediate chunk (drain and discard body)
+- 200/201: final chunk complete (body has driveItem JSON)
+- Error: various HTTP error codes
 
-Use a `switch resp.StatusCode` to handle all three cases cleanly.
+### Delta normalization pipeline
+Four steps in order: (1) filter packages, (2) clear bogus hashes on deleted items, (3) deduplicate keeping last occurrence, (4) reorder deletions before creations. Each step is a separate unexported function. `slices.SortStableFunc` preserves relative order.
 
-### URL encoding in file paths
-When building upload paths like `/drives/{driveID}/items/{parentID}:/{name}:/content`, be careful with filenames containing URL-special characters. `%s` as a filename causes `net/http` to reject the URL as an invalid escape sequence. Test with valid filenames only.
+### URL encoding in Graph API paths
+Path segments must be individually URL-encoded. `encodePathSegments()` splits on `/`, encodes each with `url.PathEscape`, and reassembles. In httptest, use `r.RequestURI` (not `r.URL.RawPath`) to verify encoding.
 
-### No retry for upload operations
-Retrying a `SimpleUpload` or `UploadChunk` with a partially-consumed `io.Reader` would silently send incomplete data. The `doRawUpload` helper deliberately does not implement retry. For resumable uploads, the caller should use `UploadChunk` with fresh readers for each chunk.
-
----
-
-## 9. CLI (Increments 1.7-1.8 + E2E 2.2)
-
-### gochecknoinits forbids init() functions
-The golangci-lint config enables `gochecknoinits`. Cobra CLI patterns that use `init()` to register commands and flags won't pass lint. Use constructor functions instead: `newRootCmd()` builds the root, calls `newLoginCmd()` etc. This is actually better — testable, no package-level mutable state.
-
-### Cobra transitive dependency: mousetrap
-Cobra depends on `github.com/inconshreveable/mousetrap` (Windows-only, detects "launched from Explorer"). Must be added to the depguard allow list alongside cobra and pflag. Always check transitive deps when adding new dependencies.
-
-### graph.Item is 264 bytes — avoid range value copies
-`gocritic:rangeValCopy` flags `for _, item := range items` when the struct is large. Use `for i := range items` with `items[i]` instead. This applies to any struct over ~128 bytes.
-
-### dupl linter catches near-identical method pairs
-`GetItem`/`GetItemByPath` and `ListChildren`/`ListChildrenByPath` had identical fetch+decode logic differing only in URL construction. The `dupl` linter flagged this. Solution: extract shared helpers (`fetchItem`, `fetchAllChildren`) that take the URL as a parameter.
-
-### CLI output conventions
-Status/error messages go to stderr (`fmt.Fprintf(os.Stderr, ...)`). Structured data output (JSON, tables) goes to stdout. This allows piping `onedrive-go ls --json / | jq ...` while still seeing status messages.
-
-### E2E test pattern: build once, run as subprocess
-E2E tests build the binary in `TestMain` to a temp dir, then run it via `os/exec` in each test. The binary path and drive are package-level vars set in `TestMain`. Tests use `t.Cleanup` for teardown of remote resources.
-
-### Recursive mkdir with 409 Conflict handling
-When creating nested folders, walk path segments and create each. If CreateFolder returns 409 (Conflict), the folder already exists — resolve it by path and continue with its ID as the parent. Track the `builtPath` as you go to enable path-based resolution.
-
----
-
-## 10. Config Phase 3
-
-### errWriter pattern for multi-write formatting
-When a function makes many `fmt.Fprintf` calls (e.g., rendering config sections), each creates an uncoverable error branch. Solution: the `errWriter` pattern — wrap `io.Writer`, capture the first error, subsequent writes are no-ops. One `failWriter` test covers all error paths. Used in `show.go`.
-
-### cmd.Flags().Changed() for pflag default disambiguation
-pflag's default value is indistinguishable from an explicit `--flag=defaultValue` at the value level. Use `cmd.Flags().Changed("flag")` to detect whether the user actually passed the flag. Used in `root.go` for `--drive` to distinguish "not specified" from an explicitly specified drive selector.
-
-### CLIOverrides pointer fields for nil-vs-zero-value
-`CLIOverrides` uses `*string` / `*bool` for optional flags. `nil` means "not specified by user" (use config/env value), while `&false` means "user explicitly set to false" (override config). Without pointers, `--dry-run=false` would be indistinguishable from not passing `--dry-run`.
-
-### Synthetic default drive for zero-config UX
-When no config file exists, `ResolveDrive()` creates a synthetic default drive with `SyncDir: "~/OneDrive"`. This means CLI commands work out-of-the-box without creating a config file first.
-
-### File extraction is zero-risk refactoring
-Extracting functions from oversized files (unknown.go from load.go, size.go from validate.go) is purely mechanical — move functions + their tests to new files, no logic changes. If tests pass before and after, the refactor is correct. Good way to reduce file size without introducing bugs.
-
-### Always wait for integration tests after merge
-Unit tests passing is NOT sufficient to declare an increment done. The `integration.yml` workflow runs `--drive personal:user@example.com` against real OneDrive — this caught a regression in the old profile system where `Resolve()` always created a synthetic profile, breaking CI. **DOD now requires waiting for integration tests to pass on main before proceeding.** (PR #21 fix)
-
----
-
-## 11. Config Rewrite — Profiles → Drives (Increment 4.x)
-
-### BurntSushi/toml embedded struct field promotion works without tags
-BurntSushi/toml natively promotes embedded struct fields for decoding. No `toml:",squash"` tag needed (that's a mapstructure concept). Just embed the struct directly:
-```go
-type Config struct {
-    FilterConfig      // flat TOML keys map to FilterConfig fields
-    TransfersConfig   // etc.
-    Drives map[string]Drive `toml:"-"` // custom two-pass parsing
-}
-```
-
-### Two-pass TOML decode for mixed-key configs
-When a TOML file has flat global keys and quoted table sections (drive IDs with `:` and `@`), a single `toml.Decode` can't handle both. Solution: Pass 1 decodes globals into embedded structs (TOML library reports drive sections as "undecoded"). Pass 2 decodes into `map[string]any`, extracts keys containing `:` as drive sections, and converts each via re-encode/decode through `mapToDrive()`.
-
-### staticcheck QF1008 is aggressive about embedded field selectors
-With embedded structs, `cfg.FilterConfig.SkipDotfiles` and `cfg.SkipDotfiles` are equivalent. staticcheck's QF1008 flags the explicit form. Use the short (promoted) form everywhere for consistency, even in tests. This affects both source and test code.
-
-### gocritic rangeValCopy and hugeParam with Drive struct (144 bytes)
-The `Drive` struct with its string fields and slice pointers hits the 128-byte threshold. Must use index-based iteration (`for id := range cfg.Drives { cfg.Drives[id] }`) and pointer parameters to avoid lint failures.
-
-### Pre-commit hook runs full-repo lint
-The `.githooks/pre-commit` hook runs `golangci-lint run` on the entire repo, not just the changed package. When a config package rewrite removes types used by `graph/` or `cmd/`, the hook fails even though the config package itself is clean. Use `--no-verify` for cross-package refactors where another agent handles the callers. This is the expected pattern for parallel agent work.
-
-### Drive key validation in two-pass decode
-Unknown keys in drive sections can't be caught by `toml.MetaData.Undecoded()` since drive sections are parsed via raw map. Must validate drive keys explicitly with `checkDriveUnknownKeys()` during Pass 2. This provides the same "did you mean?" experience for typos in drive sections.
-
-### Cross-package impact of config rewrite
-The config rewrite changes these public APIs that callers depend on:
-- `Config.Profiles` → `Config.Drives` (map key changes from arbitrary names to canonical IDs)
-- `Config.Filter/Transfers/...` → embedded `Config.FilterConfig/TransfersConfig/...` (field access changes)
-- `Resolve()` → `ResolveDrive()` (different return type and selection logic)
-- `ResolvedProfile` → `ResolvedDrive` (different field names, no AccountType/ApplicationID/AzureAD fields)
-- `ProfileTokenPath()` → `DriveTokenPath()` (takes canonical ID, not profile name)
-- `ProfileDBPath()` → `DriveStatePath()` (takes canonical ID, not profile name)
-- `CLIOverrides.Profile/SyncDir` → `CLIOverrides.Drive/Account`
-- `EnvOverrides.Profile/SyncDir` → `EnvOverrides.Drive`
-- `RenderEffective()` removed entirely (show.go deleted)
-
----
-
-## 12. CLI and Graph/Auth — Profiles → Drives Migration (Increment 3.5)
-
-### Graph/auth decoupling from config
-The `internal/graph/` package no longer imports `internal/config/`. All public auth functions (`Login`, `TokenSourceFromPath`, `Logout`) now accept a `tokenPath string` parameter instead of a profile name. The caller (CLI layer) is responsible for computing the token path via `config.DriveTokenPath(canonicalID)`. This makes graph/ independently testable and eliminates a dependency cycle risk.
-
-Previously: `graph.Login(ctx, "personal", display, logger)` → graph calls `config.ProfileTokenPath("personal")` internally.
-Now: `graph.Login(ctx, "/home/user/.local/share/onedrive-go/token_personal_user@example.com.json", display, logger)`.
-
-### Auth command bootstrapping problem
-Login must work before any config file or drive section exists (it's how users get started). But `PersistentPreRunE` calls `config.ResolveDrive()` which fails with "no drives configured" when there's no config file. Solution: skip `loadConfig()` for auth commands (login, logout, whoami) in `PersistentPreRunE` via a `switch cmd.Name()` check. Auth commands derive their token path directly from the `--drive` flag.
-
-### CI token path migration
-The CI workflow (`integration.yml`) changed from profile-based (`~/.config/onedrive-go/tokens/{profile}.json`) to drive-based (`~/.local/share/onedrive-go/token_{type}_{email}.json`) token paths. Key changes:
-- `ONEDRIVE_TEST_PROFILES` → `ONEDRIVE_TEST_DRIVES` (comma-separated canonical IDs)
-- Token file derivation: `sed 's/:/_/'` on the canonical ID for the filename
-- Key Vault secret names: `sed 's/[:@.]/-/g'` on the canonical ID for Azure naming compliance
-- Data directory changed from `~/.config/onedrive-go/tokens/` to `~/.local/share/onedrive-go/`
-
-### staticcheck QF1008 with ResolvedDrive embedded structs
-`ResolvedDrive` embeds `LoggingConfig`, `FilterConfig`, etc. Using `resolvedCfg.LoggingConfig.LogLevel` triggers QF1008 ("could remove embedded field from selector"). Must use the promoted form `resolvedCfg.LogLevel`. This is consistent with the config package rewrite learning about embedded field promotion.
-
-### config show command removed
-The `config show` command (config_cmd.go) was deleted entirely. `config.RenderEffective()` was removed in the config rewrite. If a config inspection command is needed in the future, it would work differently with the new drive-based config model.
-
-### Drive struct (graph.Drive) range iteration
-The `whoamiDrive` construction loop uses `for _, d := range drives` because `graph.Drive` is small enough (~100 bytes) to not trigger `rangeValCopy`. If Drive grows significantly, switch to index-based iteration.
-
----
-
-## 13. Pre-Phase 4 Docs (B-027, B-029)
-
-- **Pivots**: None (doc-only increment)
-- **Issues found**: None
-- **Linter surprises**: N/A (no code changes)
-- **Suggested improvements**: None
-- **Cross-package concerns**: None. The conflict resolution UX design (interactive + batch) is consistent with existing CLI patterns (--json for machine output, --dry-run for previewing). The resolution actions table in sync-algorithm.md §7.4 maps cleanly to the executor (4.7) and conflict handler (4.8) interfaces that will be implemented in Phase 4.
-- **Code smells noticed**: None
-
----
-
-## 14. Config File Write Operations
-
-### findSectionEnd must exclude next section's preamble
-When finding the end of a TOML section for deletion, blank lines and comments between the last key-value line and the next section header belong to the NEXT section, not the current one. The initial implementation naively included everything up to the next `["` header, which deleted comments belonging to the subsequent section. Fix: walk backwards from the next header to skip blank/comment lines.
-
-### gocritic sprintfQuotedString prefers %q
-`fmt.Sprintf("[\"%s\"]", id)` triggers `sprintfQuotedString`. Use `fmt.Sprintf("[%q]", id)` instead. `%q` produces the same output (`"personal:toni@outlook.com"`) and is idiomatic Go.
-
-### unparam catches single-value parameters
-`atomicWriteFile(path, data, perm)` where `perm` is always `configFilePermissions` triggers `unparam`. When a parameter always receives the same value, the linter suggests removing it and using the constant directly. This is correct for internal helpers.
-
-### Atomic writes: temp file in same directory, then rename
-`os.Rename` is atomic on POSIX when source and target are on the same filesystem. Creating the temp file in the same directory as the target guarantees this. The `succeeded` flag pattern with deferred cleanup handles all error paths without OS-level error injection in tests.
-
----
-
-## 15. E2E Edge Case Tests (Increment 2.3)
-
-### No pivots from plan
-The implementation followed the plan exactly. All four subtests (large file, unicode, spaces, concurrent) were implemented as specified.
-
-### t.Fatalf cannot be called from non-test goroutines
-Go's `testing.T.Fatalf` calls `runtime.Goexit()` which panics when called from a goroutine that is not the test goroutine. The `runCLI` helper uses `t.Fatalf`, so concurrent upload tests must use `exec.Command` directly with error channels instead of `runCLI`. This is the correct pattern for any test that needs parallelism.
-
-### Deterministic large file data for corruption detection
-Using `byte(i % 251)` (prime modulus) generates a repeating pattern that covers all 251 distinct byte values. This is better than random data because it's deterministic (no seed management) and better than all-zeros because it catches offset/truncation bugs where a zero-filled region would silently match.
-
-### E2E test decomposition avoids funlen
-Even though test files are exempt from `funlen`, decomposing the `TestE2E_EdgeCases` parent into helper functions (`testLargeFileUploadDownload`, `testUnicodeFilename`, etc.) improves readability and follows the existing project pattern of focused, single-purpose functions.
-
-### Build tag isolation is reliable
-Files with `//go:build e2e` are completely excluded from `go build ./...` and `go test ./...`. The compilation check `go test -tags e2e -c -o /dev/null ./e2e/...` catches syntax/type errors without requiring live API access. This two-tier verification (compile without API, run with API) is the right pattern for E2E tests.
-
-## 16. Upload Session Resume and fileSystemInfo (B-015, B-016)
-
-### fileSystemInfo prevents double-versioning on upload
-When uploading via `CreateUploadSession`, OneDrive sets `lastModifiedDateTime` to the server-side receipt time, not the local file's modification time. Including `fileSystemInfo` in the upload session request preserves local timestamps. Use `omitempty` on the pointer field so zero-value `mtime` produces a clean JSON body with no `fileSystemInfo` key.
-
-### 416 Range Not Satisfiable is a recoverable condition
-A 416 from an upload chunk means the server's byte ranges disagree with what the client sent. The correct response is to call `QueryUploadSession` (GET on the session URL) to discover `nextExpectedRanges` and resume from there. This is not a terminal error — it's the API's way of telling the client to re-sync its upload offset.
-
-### Upload session URLs are pre-authenticated
-Upload session URLs (for chunks, queries, and cancellations) include embedded auth tokens. No `Authorization` header should be sent — these requests bypass the normal auth flow. The `httpClient.Do` path (not `c.Do`) is the correct choice for all session URL requests.
-
-### Extract shared parsing logic into helpers
-`parseUploadSessionResponse` was extracted from `CreateUploadSession` to share the response parsing logic. This keeps methods focused and allows future callers (e.g., session refresh) to reuse the same parsing without duplication.
-
----
-
-## 17. Foundation Hardening — Graph Package (Agent A)
-
-### Retry body consumption bug was real and subtle
-The `doRetry` loop reused an `io.Reader` body across retries. After the first request consumed the body, subsequent retries sent empty POST/PATCH payloads. The fix is to seek the body to offset 0 before each attempt. All callers already use `bytes.NewReader` (which implements `io.Seeker`), so the fix is backward-compatible. The `rewindBody` helper was extracted to keep `doRetry` under the cyclomatic complexity limit.
-
-### Extracting helpers from doRetry to satisfy linter limits
-Adding the body-rewind check pushed `doRetry` over both `gocyclo` (16 > 15) and `funlen` (104 > 100) limits. Two helpers were extracted: `rewindBody()` for the seek logic and `terminalError()` for building `GraphError` and logging the final failure. This is a recurring pattern: any change to a near-limit function requires extracting helpers rather than just adding code inline.
+### Retry body consumption bug
+The `doRetry` loop reused an `io.Reader` body across retries. Fix: seek the body to offset 0 before each attempt. The `rewindBody` helper was extracted to keep `doRetry` under complexity limits.
 
 ### JSON dot-notation tags never work in encoding/json
-The `driveItemResponse.MimeType` field had `json:"file.mimeType"` — Go's `encoding/json` does not support dot notation in struct tags. The field was never populated; the actual MIME type came from `d.File.MimeType` via the nested `fileFacet` struct. Dead fields with misleading tags are a maintenance hazard.
+`json:"file.mimeType"` does not support dot notation — the field was never populated. Dead fields with misleading tags are a maintenance hazard.
 
-### URL encoding in Graph API path-based operations
-Path segments interpolated into Graph API URLs must be individually URL-encoded. Characters like `#`, `?`, `%`, and spaces in filenames break the URL if interpolated raw. The `encodePathSegments()` helper splits on `/`, encodes each segment with `url.PathEscape`, and reassembles. For single segments (upload name), `url.PathEscape` is used directly.
+### Upload session resume and fileSystemInfo
+- `fileSystemInfo` in upload session requests preserves local timestamps (prevents double-versioning).
+- 416 Range Not Satisfiable is recoverable — call `QueryUploadSession` to discover `nextExpectedRanges`.
+- Upload session URLs are pre-authenticated (no `Authorization` header).
 
-### httptest RequestURI vs URL.RawPath for verifying encoding
-When testing URL encoding with `httptest.Server`, `r.URL.RawPath` is empty unless Go's URL parser needed it (i.e., when the decoded path differs from the raw path AND the path can be parsed without it). Use `r.RequestURI` instead — it preserves the raw percent-encoded path as sent over the wire.
+### httptest closure variable forward-reference
+When an `httptest.NewServer` handler needs `srv.URL`, declare `var srv *httptest.Server` first, then assign. Direct assignment with a closure referencing `srv.URL` won't compile.
 
-### Package-level var (not const) for test-overridable guards
-The `maxDeltaPages` guard needed to be overridable in tests (testing 10000 HTTP calls is too slow). Using `var` instead of `const` with a `//nolint:gochecknoglobals` annotation is the pragmatic choice. Tests save/restore the original value with `defer`.
+### Package-level var for test-overridable guards
+`maxDeltaPages` uses `var` instead of `const` with `//nolint:gochecknoglobals` to allow test overrides. Tests save/restore the original value with `defer`.
 
-- **Pivots**: Extracted `terminalError` helper (not in plan) to satisfy `funlen` lint after `rewindBody` extraction pushed `doRetry` over the limit. Changed test from `r.URL.RawPath` to `r.RequestURI` for URL encoding verification.
-- **Issues found**: `driveItemResponse.MimeType` was a dead field with a non-functional JSON tag (dot notation). Removed as planned.
-- **Linter surprises**: Adding 4 lines to `doRetry` (already at 100 lines) triggered both `gocyclo` and `funlen`. Required extracting two helpers instead of one.
-- **Suggested improvements**: None specific to graph package.
-- **Cross-package concerns**: URL encoding fix affects CLI callers that construct paths for `GetItemByPath`/`ListChildrenByPath` — they should not pre-encode paths now (double-encoding). Currently CLI passes raw user input which is correct.
-- **Code smells noticed**: The `doRetry` function was already at the lint limit before this change — any future additions will require further decomposition. The `rewindBody` seek-error branch is practically untestable (no easy way to make `bytes.NewReader.Seek` fail).
+### gosec G602 false positive on backwards iteration
+`gosec` flags `items[i]` as "slice index out of range" when iterating backwards. Work around by copying, reversing with `slices.Reverse()`, and iterating forward.
 
 ---
 
-## 18. CLI Command Hardening (Foundation Hardening Increment)
-### SplitN limit must account for SharePoint canonical IDs
-SharePoint canonical IDs have the form `"sharepoint:alice@contoso.com:marketing:Docs"` — four colon-separated segments. Using `SplitN(id, ":", 2)` incorrectly yields `"alice@contoso.com:marketing:Docs"` as the email. Fix: use limit 3, which splits into `["sharepoint", "alice@contoso.com", "marketing:Docs"]`, making `parts[1]` always the clean email. This was a data-loss bug — SharePoint drives were invisible to account grouping in `drivesForAccount`, `groupDrivesByAccount`, and `uniqueAccounts`.
+## 2. Filesystem and Platform
 
-### mnd linter ignores small numbers (0-3, common HTTP codes)
-The `.golangci.yml` `ignored-numbers` list includes `'2'`, so `if len(parts) < 2` does not need `//nolint:mnd`. The `nolintlint` linter (which checks nolint directives are actually used) catches unnecessary directives.
-
-### cmd.CommandPath() is safer than cmd.Name() for skip lists
-`cmd.Name()` returns just the leaf command name (e.g., `"add"`), which risks collisions with future subcommands under different parents (e.g., `sync add` vs. `drive add`). `cmd.CommandPath()` returns the full path (e.g., `"onedrive-go drive add"`), making skip list entries explicit and collision-proof.
-
-### Dead struct fields create false expectations
-`statusAccount.OrgName` was declared and conditionally checked in `printStatusText`, but never populated anywhere. This created the illusion that org names would appear in status output. Removing dead fields prevents future contributors from writing code that depends on always-empty values.
-
-### Upload session cancellation on chunk failure
-When `UploadChunk` fails, the upload session should be canceled to free server-side resources. Use `context.Background()` for the cancel call since the original context may already be done. This is a best-effort operation — log but don't fail on cancel errors.
-
-- **Pivots**: None. All seven fixes (C1-C7) were implemented as planned. C8 was correctly skipped per plan.
-- **Issues found**: The `//nolint:mnd` directive on `< 2` comparisons was unnecessary because `2` is in the ignored-numbers list. Caught by `nolintlint`.
-- **Linter surprises**: `nolintlint` catching unnecessary `//nolint:mnd` — reminder to check the ignored-numbers list before adding nolint directives.
-- **Suggested improvements**: None outside scope.
-- **Cross-package concerns**: C8 (DefaultSyncDir signature change) depends on Agent B. The orchestrator will handle the call site update in top-up work after Agent B merges.
-- **Code smells noticed**: (1) `drive.go` previously imported `errors` and `os` only for the duplicated purge logic — removing the duplication also cleaned up imports. (2) The `findTokenFallback` function probes the filesystem, which makes it harder to test in isolation without creating actual files. An interface-based approach would be cleaner but over-engineered for this use case.
-
----
-
-## 19. Config Hardening (Foundation Hardening Increment)
-
-- **Pivots**: None. All six fixes implemented exactly as planned.
-- **Issues found**: `DriveStatePath` accepted empty strings and strings without colons, producing invalid state file paths like `state_.db`. This could cause issues if a caller passed an invalid canonical ID. Now matches `DriveTokenPath` validation.
-- **Linter surprises**: None. All fixes passed lint on first try.
-- **Suggested improvements**: The `atomicWriteFile` fsync error path and close error path are not covered by tests (64% function coverage). OS-level error injection would be needed to test these. Consider an interface-based approach for the file handle if this becomes a concern.
-- **Cross-package concerns**: The `DefaultSyncDir` signature change (removing unused email parameter) requires Agent C to update the call site in `auth.go:277`. The build will fail at the repo level until Agent C makes the corresponding change.
-- **Code smells noticed**: (1) `parseSizeNumber` uses `int64(n * float64(multiplier))` which loses precision for very large sizes near the int64 boundary — acceptable for practical file sizes but technically imprecise. (2) The `knownGlobalKeys`/`knownDriveKeys` maps and their list counterparts are package-level mutable state (slices), though they are initialized once and never modified after init.
-
-
----
-
-
----
-
-## 20. SQLite State Store (Phase 4.1)
-
-### Pivots
-- **Skipped golang-migrate.** The `golang-migrate/migrate` sqlite driver has compatibility issues with `modernc.org/sqlite` (pure Go driver registers as "sqlite" not "sqlite3"). Implemented a simple 30-line migration runner using `embed.FS` + `PRAGMA user_version` instead. Simpler, no extra dependency, fully sufficient for sequential numbered migrations.
-
-### Issues Found
-- **noctx linter is aggressive.** Even `db.Exec()` for PRAGMAs and `db.Prepare()` need `ExecContext`/`PrepareContext` variants. Every database call must use the Context variant — no exceptions.
-- **dupl linter catches structural patterns.** Four-statement prepare helpers with identical structure (if-err-return, if-err-return, ..., last-assign-check) trigger dupl. Solved with a generic `prepareAll()` helper using a `stmtDef` slice pattern.
-- **unparam catches always-nil error returns.** `walkParentChain` returned `([]string, error)` but error was always nil (B-022 returns nil slice instead of error). Changed to return only `[]string`.
-- **gosec G101 false positive.** SQL variable named `sqlGetDeltaToken` triggers "potential hardcoded credentials" because of the word "token". Fixed with `//nolint:gosec` comment.
-
-### Linter Surprises
-- SQL string constants easily exceed 140 chars. Must use multi-line string concatenation (`const sqlGetItem = "SELECT " + sqlItemColumns + " FROM ..."`) or raw string newlines.
-- `goconst` applies to test files too (unlike `mnd`, `funlen`, `dupl`). Cannot use the same string literal twice even in tests.
-
-### Suggested Improvements
-- Consider adding a `DB()` accessor on `SQLiteStore` for advanced use cases (VACUUM, ANALYZE).
-- The `closeStatements` method could be generated or use reflection, but explicit is fine for 25 statements.
-- `Checkpoint()` currently uses `context.Background()`. Consider accepting a context parameter if callers need cancellation.
-
-### Cross-Package Concerns
-- `modernc.org/sqlite` pulls in significant transitive deps (libc, memory, mathutil, bigfft). All were pre-approved in `.golangci.yml` depguard.
-- The `Store` interface in `types.go` is large (30+ methods). May benefit from interface segregation in future if consumers only need subsets.
-
-### Code Smells
-- None significant. The prepared statement grouping into sub-structs (`itemStatements`, `deltaStatements`, etc.) keeps the main struct manageable. The generic `prepareAll()` helper eliminates all duplication.
-
----
-
-## 21. Delta Processor (Phase 4.2)
-
-- **Pivots**: Originally implemented HTTP 410 recovery via recursive `FetchAndApply` call. This caused the outer `FetchAndApply` to overwrite `deltaComplete=true` with `false` after the recursive call succeeded. Pivoted to sentinel error (`errDeltaTokenExpired`) with retry loop in the caller — simpler, no recursion, correct state management.
-- **Issues found**: The swap-based in-place partition for `reorderDeletions` is not stable — it reorders non-deleted items. The Graph API guarantees parent-before-child ordering within a page, which an unstable partition breaks. Switched to two-pass stable partition (allocates a temporary slice, preserves relative ordering within deleted and non-deleted groups).
-- **Linter surprises**: None. `gofumpt` required reformatting struct alignment in test mock fields and multi-line struct literals in test data. The `mnd` linter is exempt for test files per `.golangci.yml` exclusion rules.
-- **Suggested improvements**: Coverage is 88.9%. The uncovered paths are error returns from `store.MaterializePath`, `store.CascadePathUpdate`, `store.SaveDeltaToken`, and secondary error paths in `handleFetchError` (DeleteDeltaToken/SetDeltaComplete failures). These could be covered with error injection in the mock store, but the paths are straightforward `fmt.Errorf` wrapping.
-- **Cross-package concerns**: The `DeltaProcessor` depends on the `Store` interface defined in `types.go` (Agent A's domain). The mock store in tests implements the full interface with panics on unused methods. If Agent A changes the `Store` interface, the mock must be updated.
-- **Code smells noticed**: (1) The `convertGraphItem` function sets `Size = Int64Ptr(0)` for non-deleted items with zero size, which is technically a valid file size (empty file) but could be confused with "missing data" in other contexts. The nullable `Size` field semantics need clear documentation. (2) `NowNano()` is called from within the processor (non-injectable), making tests time-sensitive for exact timestamp assertions — tests use `Greater(t, ..., 0)` instead of exact matching, which is fine.
-
----
-
-## 22. Local Scanner (Phase 4.3)
-
-### NFC normalization must use separate filesystem and DB paths
-On macOS (APFS), the filesystem normalizes filenames transparently, so NFC and NFD lookups resolve to the same file. On Linux (ext4), filenames are stored as exact bytes. When the scanner NFC-normalizes an NFD filename for the DB path and then uses that NFC path for `os.Stat()`, the stat fails on Linux because the file is at the NFD path. Fix: thread two separate paths through the walk — `fsRelPath` (original filesystem bytes for I/O) and `dbRelPath` (NFC-normalized for database storage). Also track visited DB paths during the walk so orphan detection doesn't produce false positives from NFC/NFD mismatches.
+### NFC normalization requires separate filesystem and DB paths
+On macOS (APFS), NFC and NFD lookups resolve to the same file. On Linux (ext4), filenames are stored as exact bytes. Thread two separate paths: `fsRelPath` (original bytes for I/O) and `dbRelPath` (NFC-normalized for database). Track visited DB paths during walks to avoid false positive orphan detection.
 
 ### Mtime fast-path requires nil-check on stored LocalMtime
-When an existing item has a nil `LocalMtime` (e.g., after a DB migration or incomplete initial sync), comparing `TruncateToSeconds(nil)` would panic. The scanner checks for nil before the fast-path comparison, falling through to the slow path (hash computation) when mtime is unavailable.
+When an existing item has nil `LocalMtime` (e.g., after DB migration), comparing `TruncateToSeconds(nil)` would panic. Check for nil before the fast-path comparison.
 
 ### DirEntry.Info() can fail independently of ReadDir
-`os.ReadDir` returns `DirEntry` values that defer their `Info()` call. The `Info()` call can fail even though `ReadDir` succeeded (e.g., file deleted between readdir and stat). The scanner handles this as a skip-and-warn rather than a fatal error.
+`os.ReadDir` returns `DirEntry` values that defer their `Info()` call. Handle as skip-and-warn rather than fatal error.
 
 ### os.ReadDir vs filepath.Walk for scanner control
-Using `os.ReadDir` + manual recursion (instead of `filepath.Walk` or `filepath.WalkDir`) gives the scanner full control over entry ordering, filter short-circuiting, and error handling per-directory. This enables skipping entire subtrees when a directory is filtered, without walking into them first.
+Manual `os.ReadDir` + recursion gives full control over entry ordering, filter short-circuiting, and error handling per-directory. Enables skipping entire subtrees without walking into them.
 
-- **Pivots**: NFC normalization approach changed from single-path to dual-path (fsRelPath/dbRelPath) after Linux CI failure. Original approach used NFC path for both I/O and DB, which failed on Linux ext4 where NFD bytes are stored as-is.
-- **Issues found**: staticcheck caught an unused `segments` slice append in a test — fixed by removing the variable.
-- **Linter surprises**: The `nilnil` return pattern for "skip this entry" in `resolveSymlink` required a `//nolint:nilnil` directive. This is the idiomatic pattern when a function returns `(value, error)` and both nil means "nothing to do, no error."
-- **Suggested improvements**: (1) The scanner currently runs single-threaded; section 4.4 describes a checker pool for parallel hash computation that would be a future enhancement. (2) Directory tracking (section 4.5) is not yet implemented — directories are walked but not stored as items.
-- **Cross-package concerns**: None. The scanner only depends on Store and Filter interfaces, which other agents are implementing concurrently.
-- **Code smells noticed**: (1) The `validateEntry` function does both filtering and validation in one pass, which means the filter is consulted even for entries that would fail name validation. The order is intentional (filter first for performance) but could be surprising. (2) The `oneDriveReservedNames` map is package-level mutable state (though initialized once and never modified).
-
----
-
-## 23. Filter Engine (Phase 4.4)
-- **Pivots**: `config.parseSize` is unexported so had to duplicate size parsing logic locally rather than modifying config package (owned by Agent E). This duplication should be resolved post-merge by exporting `ParseSize`.
-- **Issues found**: (1) "." path component was rejected by OneDrive name validation (trailing dot check). Fixed by skipping "." and ".." in component validation. (2) Path length tests used single-component paths that hit the 255-byte name limit before the 400-char path limit. Fixed by using multi-component paths. (3) `FilterConfig` is 112 bytes — gocritic `hugeParam` required passing by pointer.
-- **Linter surprises**: `gocritic:emptyStringTest` prefers `name != ""` over `len(name) > 0`. `gocritic:hugeParam` triggers at 112 bytes for `FilterConfig` struct, requiring pointer parameter.
-- **Suggested improvements**: Export `config.parseSize` to eliminate duplication between config and sync packages. Consider a shared `nameutil` package if name validation logic is needed by multiple consumers.
-- **Cross-package concerns**: The `NewFilterEngine` constructor accepts `*config.FilterConfig` — callers must pass a pointer. The `types.go` `NewFilterConfig` helper already returns `config.FilterConfig` by value, so callers will need `&sync.NewFilterConfig(resolved)` or the helper should return a pointer.
-- **Code smells noticed**: (1) Size parsing duplication between `config/size.go` and `sync/filter.go` — same algorithm, different constant names to avoid conflicts. (2) The `matchesSkipPattern` function uses package-level `slog.Warn` instead of the engine's logger, because it's a standalone function. Consider making it a method.
-
----
-
-## 24. Wave 1 Orchestration Learnings (Phase 4)
-
-### Test symbol collisions between same-package agents
-When multiple agents create `*_test.go` files in the same Go package, symbol redeclarations cause build failures after merge. Wave 1's scanner_test.go redeclared `mockStore`, `testLogger`, and `TestIsValidOneDriveName` from delta_test.go and filter_test.go — requiring 8 post-merge fixes and 3 rebases.
-
-**Fix**: Orchestrator MUST (1) list existing test symbols in agent prompts, (2) assign unique prefixes per agent (e.g., `reconcilerMockStore`), (3) instruct agents to reuse shared helpers like `testLogger(t)` from existing test files. Added to orchestration.md §2.2 and parallel-agents.md.
-
-### Plan merge order to minimize rebase churn
-The scanner PR was rebased 3 times as other PRs merged. With 5 parallel agents, the last-to-merge PR bears all the conflict burden.
-
-**Fix**: When agents have no file conflicts, merge whichever finishes first. When agents do have potential test conflicts (same package), plan which one defines shared infrastructure and merge it first.
-
-### Export shared utilities in Wave 0
-Agent D (Filter) duplicated `config.parseSize` because it's unexported, and Agent D couldn't modify config files (owned by Agent E). This created 67 lines of duplicated code.
-
-**Fix**: Export shared utilities in Wave 0 (the shared foundation pass on main) before launching agents. If two agents might need the same function, make it available upfront.
-
-### Plan NFC/NFD normalization upfront for cross-platform code
-Agent C (Scanner) had a late pivot from single-path to dual-path NFC normalization after Linux CI failure. This was foreseeable — the plan should have specified dual-path threading from the start.
-
-**Fix**: For any code that touches filesystem paths AND a database, the plan must explicitly specify how platform-specific path encoding is handled. On macOS (APFS), NFC/NFD are transparent. On Linux (ext4), they are distinct byte sequences.
-
----
-
-## 25. Safety Checks (Phase 4.6)
-
-### dupl linter catches structural patterns across safety invariants
-S1 (remote delete guard) and S4 (hash-before-delete guard) have identical structure: filter actions by SyncedHash presence. The `dupl` linter (threshold 100 lines) flags this. Solution: extract a shared `filterBySyncedHash` function parameterized by invariant name for log messages. This pattern will recur whenever multiple safety checks share the same filtering logic.
-
-### SafetyConfig is 88 bytes — exceeds gocritic hugeParam threshold
-`config.SafetyConfig` with its string fields and int fields totals 88 bytes, exceeding the ~128-byte gocritic threshold would be fine but the actual threshold is lower. Must pass by pointer to `NewSafetyChecker`. Updated `NewSafetyConfig` helper in `types.go` to return `*config.SafetyConfig` for consistency.
-
-### Injectable statfsFunc requires default mock in test helpers
-Safety tests that don't specifically test disk space (S6) still run through the full `Check()` method, which calls `getDiskSpace` on a path that may not exist ("/tmp/sync"). The `safetyChecker` test helper must inject a default mock `statfsFunc` returning ample space. Only S6-specific tests override it with controlled values. Without this, tests fail with "no such file or directory" on the real syscall.
-
-### uint64 to int64 overflow in disk space comparison
-`getDiskSpace` returns `uint64` (from syscall) but download sizes are `int64`. Direct `int64(available)` triggers gosec G115 (integer overflow). Solution: cap `available` at `math.MaxInt64` before conversion. In practice, no filesystem has more than 9.2 exabytes available, but the guard satisfies the linter without nolint.
-
-### Platform-specific build tags for disk space
-Darwin uses `syscall.Statfs` directly; Linux needs `golang.org/x/sys/unix.Statfs` because the syscall package has inconsistent field types across architectures. Both use `Bavail` (available to unprivileged users), NOT `Bfree` (total free including root-reserved blocks). `golang.org/x/sys` was already a transitive dependency.
-
-- **Pivots**: Extracted `filterBySyncedHash` to deduplicate S1/S4 (not in plan). Extracted `handleBigDeleteViolation` and `handleDiskSpaceViolation` to keep `checkS5BigDelete` and `checkS6DiskSpace` under funlen limit. Changed `SafetyConfig` from value to pointer parameter after gocritic hugeParam.
-- **Issues found**: None beyond lint issues.
-- **Linter surprises**: `dupl` catching S1/S4 pattern overlap, `gocritic:hugeParam` on SafetyConfig (88 bytes), `gosec:G115` on uint64->int64 conversion.
-- **Suggested improvements**: None specific to safety checker.
-- **Cross-package concerns**: `NewSafetyConfig` in `types.go` changed to return pointer. Callers (future reconciler/engine) must accept `*config.SafetyConfig`.
-- **Code smells noticed**: None significant. The seven safety checks are well-separated into individual methods.
-
----
-
-## 26. Reconciler (Phase 4.5)
-
-### Per-side enrichment guard uses mtime, not separate hash columns
-The design docs describe per-side hash baselines where `currentLocalHash != item.LocalHash` detects local changes. In practice, the scanner writes LocalHash to the same field each cycle and the reconciler sees the final value. The actual enrichment guard compares `LocalHash != SyncedHash` with a mtime-based fallback: if `LocalMtime <= LastSyncedAt`, the file was not modified since sync, so any hash difference is from enrichment. This is simpler than adding `SyncedLocalHash`/`SyncedRemoteHash` columns.
-
-### Tombstone skip must be distinguished from "not a tombstone"
-When `classifyRemoteTombstone` returns nil because delta is incomplete (S2 safety), the caller must NOT fall through to `classifyStandardChange`. A nil return is ambiguous: it could mean "not a tombstone case" or "tombstone case, but suppressed". Solution: return a `([]Action, bool)` tuple where `handled=true` means "this IS a tombstone case, use these actions (which may be nil)". Without this, incomplete-delta tombstoned items get misclassified as F5 conflicts.
-
-### gocyclo counts conditions across helper call chains
-Extracting helpers from a high-complexity function does not always reduce the linter's cyclomatic complexity count if the original function still has many branches. The effective strategy is to (a) extract the classification logic into a pure function that returns an enum or struct, then (b) use a simple switch on the result. For folders, precomputing a `folderState` struct and dispatching on it via `dispatchFolder` brought the complexity under the limit.
-
-### reconcilerMockStore prefix pattern works
-Following the §24.1 learning, naming the mock `reconcilerMockStore` (not `mockStore`) avoided all symbol collisions with delta_test.go's `mockStore`. The `testWriter` type from delta_test.go was safely reused since it's in the same package.
-
-- **Pivots**: Changed `classifyRemoteTombstone` from returning `[]Action` to `([]Action, bool)` after test failure (F9 skip with incomplete delta was falling through to F5 conflict). Refactored folder reconciliation three times to satisfy gocyclo (enum approach, then struct approach, finally settling on `folderState` + `dispatchFolder`).
-- **Issues found**: None pre-existing.
-- **Linter surprises**: (1) `gocyclo` at limit 15 is strict for decision matrices — the 14-row file matrix naturally has many branches. Decomposition into `classifyLocalDeletion`, `classifyRemoteTombstone`, `classifyStandardChange`, `classifyBothChanged` was necessary. (2) `exhaustive` linter catches missing enum cases even for internal-only types. (3) `staticcheck S1011` prefers `append(slice, other...)` over range-loop append.
-- **Suggested improvements**: The `NewPath` field on `FolderCreate` actions encoding "local" vs "remote" as a string is a code smell — consider a dedicated `FolderCreateSide` enum.
-- **Cross-package concerns**: None. The reconciler only depends on Store and types from the same package.
-- **Code smells noticed**: (1) The `folderCreateAction` using `NewPath` as a "local"/"remote" discriminator is stringly-typed. (2) `dispatchFolder` default branch is unreachable but required by exhaustive checking patterns.
-
----
-
-## 27. Post-Wave 2 Top-Up: Foundation Alignment Fixes
-
-### S2 belongs in the safety checker, not the reconciler (SRP)
-The reconciler's original `checkDeltaCompleteness` checked only `items[0].DriveID` — a single-drive assumption that's buggy in multi-drive scenarios. The safety checker already had a correct per-drive implementation at `safety.go:144-193`. Duplicating safety logic in the reconciler violated SRP (classification vs validation) and DRY (two implementations of the same invariant). Removing the reconciler's S2 check deleted 17 lines, simplified 7 method signatures, and removed 4 test cases that validated buggy behavior. The safety checker's correct implementation is now the sole authoritative gate, tested with both single-drive and multi-drive scenarios.
+### Deterministic large file data for corruption detection
+`byte(i % 251)` (prime modulus) generates a repeating pattern covering 251 distinct byte values. Better than random (deterministic) and better than zeros (catches offset/truncation bugs).
 
 ### Directory tracking uses LocalMtime as existence proxy
-Researched how Syncthing, abraunegg/onedrive, rclone, and Dropbox Nucleus handle directory tracking. All use a unified items table with a type discriminator and modification timestamps as existence signals. Our schema already supports this — `Item.LocalMtime != nil` is the directory-exists signal. The scanner sets `LocalMtime` to `NowNano()` (not filesystem mtime, since directory mtime changes when contents change). Folder orphan detection uses `ListAllActiveItems` filtered by `ItemType=folder` and `LocalMtime != nil`.
+All reference implementations (Syncthing, abraunegg/onedrive, rclone, Dropbox Nucleus) use a unified items table with type discriminator and modification timestamps. `Item.LocalMtime != nil` is the directory-exists signal. Scanner sets `LocalMtime` to `NowNano()` (not filesystem mtime).
 
-### FolderCreateSide enum eliminates stringly-typed encoding
-The reconciler previously used `Action.NewPath = "local"/"remote"` to encode which side needs a folder create. This was typo-prone, had no compiler validation, and dual-purposed the `NewPath` field (also used as move destination). Adding a `FolderCreateSide` enum with `FolderCreateLocal`/`FolderCreateRemote` constants provides type safety. The enum starts at `iota + 1` to distinguish from zero-value (unset).
+### Platform-specific build tags for disk space
+Darwin uses `syscall.Statfs` directly; Linux needs `golang.org/x/sys/unix.Statfs`. Both use `Bavail` (available to unprivileged users), NOT `Bfree`.
 
-### Agent subagent_type must be `general-purpose` for code changes
-Using `subagent_type: "Bash"` for code editing agents is wrong — Bash agents only have the Bash tool and attempt file edits via python one-liners and sed commands. Always use `subagent_type: "general-purpose"` for agents that need to read, edit, and write files. This mistake caused no damage (user rejected the tool calls) but wasted time.
+---
+
+## 3. Linter Patterns
+
+### mnd (magic number detector)
+Every number needs a named constant; tests are exempt. The `.golangci.yml` `ignored-numbers` list includes `'2'`, so `if len(parts) < 2` doesn't need `//nolint:mnd`. The `nolintlint` linter catches unnecessary directives.
+
+### funlen (100 lines / 50 statements)
+Decompose into small helpers. Near-limit functions require extracting helpers for any future additions rather than adding code inline.
+
+### dupl (duplicate detection)
+Catches near-identical method pairs and structural patterns. Solutions: extract shared helpers (e.g., `fetchItem`, `fetchAllChildren`, `filterBySyncedHash`) parameterized by the varying part.
+
+### gocritic
+- **rangeValCopy**: Use `for i := range items` with `items[i]` when struct > ~128 bytes. `graph.Item` is 264 bytes, `Drive` is 144 bytes, `FilterConfig` is 112 bytes.
+- **hugeParam**: `toml.MetaData` (96 bytes), `SafetyConfig` (88 bytes) — pass by pointer.
+- **emptyStringTest**: Prefers `name != ""` over `len(name) > 0`.
+- **sprintfQuotedString**: Use `%q` instead of `"\"%s\""`.
+
+### staticcheck QF1008 (embedded field selectors)
+With embedded structs, `cfg.FilterConfig.SkipDotfiles` and `cfg.SkipDotfiles` are equivalent. Use the short (promoted) form everywhere.
+
+### unparam (unused parameters)
+When a parameter always receives the same value, the linter suggests removing it. Correct for internal helpers.
+
+### gocyclo (cyclomatic complexity limit 15)
+Strict for decision matrices. Strategy: extract classification logic into a pure function returning an enum/struct, then dispatch with a simple switch.
+
+### gosec G101 (potential hardcoded credentials)
+SQL variable named `sqlGetDeltaToken` triggers false positive. Fix with `//nolint:gosec`.
+
+### gosec G115 (integer overflow)
+`uint64` to `int64` — cap at `math.MaxInt64` before conversion.
+
+### nilnil return pattern
+Returning `(nil, nil)` for "skip this entry" requires `//nolint:nilnil`. Idiomatic when both nil means "nothing to do, no error."
+
+### goconst applies to test files
+Unlike `mnd`, `funlen`, `dupl` — `goconst` flags repeated string literals even in tests.
+
+### gofumpt stricter than gofmt
+Enforces stricter struct field alignment. Multi-byte characters in comments can cause differences. Always run `gofumpt -w` before committing.
+
+---
+
+## 4. Testing Patterns
+
+### QuickXorHash test vectors
+Plan test vectors were wrong. Always verify against a known-good reference (rclone v1.73.1), don't blindly trust specs.
+
+### Scoped test verification
+```bash
+# Good: scoped to own package
+go test ./internal/graph/...
+# Bad: sees intermediate states from other agents
+go test ./...
+```
+
+### E2E test pattern: build once, run as subprocess
+Build the binary in `TestMain` to a temp dir, run via `os/exec` in each test. Use `t.Cleanup` for teardown.
+
+### t.Fatalf cannot be called from non-test goroutines
+`testing.T.Fatalf` calls `runtime.Goexit()` which panics from a non-test goroutine. Use `exec.Command` directly with error channels for concurrent tests.
+
+### Build tag isolation
+Files with `//go:build e2e` are completely excluded from `go build ./...`. Two-tier verification: compile without API, run with API.
+
+### Always check coverage before committing
+Run `go test -coverprofile` as part of DOD check, not just build+test+lint.
+
+### E2E test decomposition
+Even though test files are exempt from `funlen`, decompose into helper functions for readability.
+
+### Recursive mkdir with 409 Conflict handling
+Walk path segments, create each. If CreateFolder returns 409, resolve by path and continue with its ID as parent.
+
+---
+
+## 5. Config and TOML
+
+### Chunk size default "10MiB" not "10MB"
+10 MB (10,000,000 bytes) is NOT a multiple of 320 KiB. 10 MiB (10,485,760) IS a multiple (32 * 327,680).
+
+### `toml.MetaData` is 96 bytes
+Triggers hugeParam. Pass by pointer. `toml.DecodeFile` returns it by value, so take its address.
+
+### misspell linter catches intentional typos in test TOML
+Use `//nolint:misspell` on lines with deliberate misspellings for unknown-key-detection tests.
+
+### BurntSushi/toml embedded struct field promotion
+Works without tags. No `toml:",squash"` needed (that's mapstructure). Just embed directly.
+
+### Two-pass TOML decode for mixed-key configs
+Pass 1 decodes globals into embedded structs. Pass 2 decodes into `map[string]any`, extracts keys containing `:` as drive sections, converts via re-encode/decode through `mapToDrive()`.
+
+### Drive key validation in two-pass decode
+Unknown keys in drive sections can't be caught by `toml.MetaData.Undecoded()`. Must validate explicitly with `checkDriveUnknownKeys()`.
+
+### errWriter pattern for multi-write formatting
+Wrap `io.Writer`, capture first error, subsequent writes are no-ops. One `failWriter` test covers all error paths.
+
+### cmd.Flags().Changed() for pflag default disambiguation
+Use `cmd.Flags().Changed("flag")` to detect whether the user actually passed the flag vs. relying on default value.
+
+### CLIOverrides pointer fields for nil-vs-zero-value
+`*string` / `*bool` — `nil` means "not specified", `&false` means "user explicitly set to false".
+
+### Synthetic default drive for zero-config UX
+When no config file exists, `ResolveDrive()` creates a synthetic default drive with `SyncDir: "~/OneDrive"`.
+
+### findSectionEnd must exclude next section's preamble
+Blank lines and comments between the last key-value line and the next section header belong to the NEXT section. Walk backwards from the next header to skip them.
+
+### Atomic writes: temp file in same directory, then rename
+`os.Rename` is atomic on POSIX when source and target are on the same filesystem. `succeeded` flag with deferred cleanup handles all error paths.
+
+### Cross-package impact of config rewrite
+Key API changes: `Config.Profiles` → `Config.Drives`, `Resolve()` → `ResolveDrive()`, `ProfileTokenPath()` → `DriveTokenPath()`, `ProfileDBPath()` → `DriveStatePath()`. `config show` command removed entirely.
+
+---
+
+## 6. CI and Integration
+
+### Azure OIDC + Key Vault for CI token management
+GitHub secrets can't be updated from workflows, so we use Azure Key Vault. OIDC federation means no stored credentials — GitHub Actions presents a short-lived JWT scoped to `repo:tonimelisma/onedrive-go:ref:refs/heads/main`. Token files flow via `az keyvault secret download/set --file`, never through stdout/CI logs.
+
+### Token and drive ID bootstrap
+Tokens bootstrapped via `go run . login --drive personal:user@example.com`. Drive IDs discovered via `go run . whoami --json`. Integration tests require `ONEDRIVE_TEST_DRIVE_ID` env var.
+
+### Integration test build tag pattern
+`//go:build integration` excluded from `go test ./...`. The `newIntegrationClient(t)` helper skips (not fails) when no token is available.
+
+### Nightly CI keeps refresh tokens alive
+Microsoft rotates refresh tokens on use and they expire after 90 days of inactivity. Nightly schedule (3 AM UTC) keeps them active.
+
+### Orchestrator manages Key Vault secrets directly
+The AI orchestrator has `az` CLI access for creating/renaming secrets, downloading/uploading tokens, setting GitHub variables. The human only handles one-time Azure infrastructure and interactive browser-based flows.
+
+### Local CI validation prevents push-and-pray
+Mirror the workflow's token loading logic with `az keyvault secret download`, test `whoami --json --drive`, run E2E tests locally. See test-strategy.md §6.1.
+
+### CI token path migration (profiles → drives)
+`ONEDRIVE_TEST_PROFILES` → `ONEDRIVE_TEST_DRIVES`. Token file: `sed 's/:/_/'`. Key Vault secret: `sed 's/[:@.]/-/g'`. Data dir: `~/.config/onedrive-go/tokens/` → `~/.local/share/onedrive-go/`.
+
+### Auth command bootstrapping problem
+Login must work before any config file exists. `PersistentPreRunE` skips `loadConfig()` for auth commands via `switch cmd.Name()`. Auth commands derive token path from `--drive` flag.
+
+---
+
+## 7. Sync Engine
+
+### SQLite state store
+- **Skipped golang-migrate.** Simple 30-line migration runner using `embed.FS` + `PRAGMA user_version` instead. Simpler, no dependency.
+- **noctx linter.** Every database call must use Context variants — even PRAGMAs.
+- **dupl linter.** Solved with generic `prepareAll()` helper using `stmtDef` slice pattern.
+- **SQL string constants easily exceed 140 chars.** Use multi-line concatenation.
+
+### Delta processor
+- **HTTP 410 recovery.** Sentinel error (`errDeltaTokenExpired`) with retry loop — not recursion (which overwrites `deltaComplete` state).
+- **Stable partition for reorderDeletions.** Swap-based in-place partition breaks parent-before-child ordering. Two-pass stable partition preserves relative order.
+- **`convertGraphItem` sets `Size = Int64Ptr(0)` for empty files.** Nullable `Size` semantics need clear documentation.
+
+### Scanner
+- **`validateEntry` does both filtering and validation in one pass.** Filter first for performance, but could be surprising.
+- **`oneDriveReservedNames` is package-level mutable state** (though initialized once and never modified).
+
+### Filter engine
+- **Duplicated `config.parseSize`** because it's unexported. Should be exported to eliminate duplication.
+- **"." path component rejected by OneDrive name validation.** Fixed by skipping "." and ".." in component validation.
+- **`matchesSkipPattern` uses package-level `slog.Warn`** instead of engine's logger (standalone function). Consider making it a method.
+
+### Reconciler
+- **Tombstone skip must be distinguished from "not a tombstone".** Return `([]Action, bool)` tuple where `handled=true` means "this IS a tombstone case."
+- **Per-side enrichment guard uses mtime, not separate hash columns.** Compares `LocalHash != SyncedHash` with mtime-based fallback: if `LocalMtime <= LastSyncedAt`, hash difference is from enrichment.
+- **FolderCreateSide enum eliminates stringly-typed encoding.** `iota + 1` distinguishes from zero-value (unset).
+- **`reconcilerMockStore` prefix pattern works.** Avoids symbol collisions with delta_test.go's `mockStore`.
+
+### Safety checks
+- **`filterBySyncedHash` extracted to deduplicate S1/S4.** Parameterized by invariant name for log messages.
+- **Injectable `statfsFunc` requires default mock in test helpers.** Tests not specifically testing S6 need a mock returning ample space.
+- **uint64 to int64 overflow.** Cap at `math.MaxInt64` before conversion.
+- **S2 belongs in the safety checker, not the reconciler (SRP).** Reconciler's `checkDeltaCompleteness` was buggy (single-drive assumption). Safety checker has correct per-drive implementation.
+
+---
+
+## 8. Agent Coordination
+
+### Scoped verification prevents cross-agent interference
+Four agents ran simultaneously without conflicts (true leaf packages). Scope tests to own package.
+
+### Test symbol collisions between same-package agents
+Wave 1's scanner_test.go redeclared `mockStore`, `testLogger`, and `TestIsValidOneDriveName` — requiring 8 post-merge fixes. Fix: (1) list existing test symbols in prompts, (2) assign unique prefixes (e.g., `reconcilerMockStore`), (3) reuse shared helpers.
+
+### Plan merge order to minimize rebase churn
+The last-to-merge PR bears all conflict burden. Merge agents defining shared infrastructure first.
+
+### Export shared utilities in Wave 0
+Agent D duplicated `config.parseSize` because it's unexported. Export shared utilities before launching agents.
+
+### Plan NFC/NFD normalization upfront
+Agent C had a late pivot to dual-path NFC after Linux CI failure. The plan should specify dual-path threading from the start for any code touching filesystem paths AND a database.
+
+### Parallel agent file conflicts
+`git checkout` destroys untracked files. Files must be staged immediately after creation. Use worktrees for isolation.
 
 ### Agents must commit LEARNINGS.md updates
-Both Wave 1 agents modified LEARNINGS.md in their worktrees but failed to include it in their commits/PRs. One worktree had uncommitted changes requiring `--force` removal. The agent prompt template says "Commit the LEARNINGS.md update as part of your PR" but agents still missed it. Consider adding an explicit checklist item in the quality gates section.
+Both Wave 1 agents modified LEARNINGS.md but failed to include it in their commits. Consider explicit checklist item in quality gates.
+
+### Agent subagent_type must be `general-purpose` for code changes
+`subagent_type: "Bash"` only has the Bash tool. Always use `general-purpose` for agents that need to read, edit, and write files.
 
 ### Pre-commit hook failures with golangci-lint version upgrades
-Both Wave 1 agents encountered pre-existing gosec issues (G703/G704/G705) after a golangci-lint version upgrade, preventing the pre-commit hook from passing. They used `--no-verify` as a workaround. CI lint still passed (different golangci-lint version). This is a known friction point when the local linter version drifts from CI.
+Agents encountered pre-existing gosec issues after version upgrade. Used `--no-verify` as workaround. CI lint still passed (different version).
+
+### cmd.CommandPath() is safer than cmd.Name() for skip lists
+`cmd.Name()` returns just the leaf name (e.g., `"add"`), risking collisions. `cmd.CommandPath()` returns full path (e.g., `"onedrive-go drive add"`).
+
+### CLI output conventions
+Status/error messages to stderr. Structured data (JSON, tables) to stdout. Allows piping.
+
+### gochecknoinits forbids init() functions
+Use constructor functions instead: `newRootCmd()`. Actually better — testable, no package-level mutable state.
+
+### Cobra transitive dependency: mousetrap
+Must be added to depguard allow list alongside cobra and pflag. Always check transitive deps.

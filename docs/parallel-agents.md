@@ -126,11 +126,8 @@ git push --force-with-lease
 
 ## Definition of Done (DOD)
 
-After your task is complete:
+Run the DOD Quick Check from CLAUDE.md, then:
 
-- [ ] `go build ./...` passes
-- [ ] `go test -race ./...` passes
-- [ ] `golangci-lint run` passes
 - [ ] Committed with descriptive message
 - [ ] Pushed to feature branch
 - [ ] PR created with `gh pr create`
@@ -181,26 +178,15 @@ To minimize conflicts, assign agents to **non-overlapping areas**:
 
 ### Test Symbol Collisions in Same-Package Agents
 
-When multiple agents create `*_test.go` files in the **same Go package**, they share the test namespace. Symbol redeclarations (duplicate `mockStore`, `testLogger`, etc.) cause build failures when branches merge.
+See orchestration.md §2.2 for the full prevention rules. Key pattern — embed for extension:
 
-**Prevention rules:**
-
-1. **Unique mock prefixes**: Each agent MUST prefix mock types with its component name:
-   - `reconcilerMockStore`, `safetyMockStore` (not just `mockStore`)
-   - `newReconcilerMockStore()`, `newSafetyMockStore()` (not `newMockStore()`)
-
-2. **Reuse existing helpers**: If `testLogger(t)` or `mockStore` already exists in a package test file, use it — do NOT redefine it. The orchestrator must list existing test symbols in the agent prompt.
-
-3. **Embed for extension**: If you need different mock behavior, embed the existing mock:
-   ```go
-   type reconcilerMockStore struct {
-       mockStore // embed the existing mock from delta_test.go
-   }
-   // Override only the methods you need different behavior for
-   func (s *reconcilerMockStore) ListAllActiveItems(...) { ... }
-   ```
-
-This was learned after Wave 1 Phase 4, where scanner_test.go redeclared `mockStore`, `testLogger`, and `TestIsValidOneDriveName` from delta_test.go and filter_test.go, requiring 8 post-merge fixes.
+```go
+type reconcilerMockStore struct {
+    mockStore // embed the existing mock from delta_test.go
+}
+// Override only the methods you need different behavior for
+func (s *reconcilerMockStore) ListAllActiveItems(...) { ... }
+```
 
 ## Troubleshooting
 

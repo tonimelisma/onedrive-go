@@ -157,78 +157,40 @@ mock and override specific methods, or use a uniquely-prefixed
 name like `<component>MockStore`.]
 
 ### Quality Gates
-Before committing, you MUST verify ALL of:
-1. `go build ./...` — zero errors
-2. `go test -race ./[package]/...` — all pass (scoped to YOUR package)
-3. `golangci-lint run` — zero issues
-4. `gofumpt -w .` and `goimports -local github.com/tonimelisma/onedrive-go -w .`
-5. Coverage: `go test -coverprofile=/tmp/cover.out ./[package]/... &&
-   go tool cover -func=/tmp/cover.out | grep total`
+Run the DOD Quick Check from CLAUDE.md before committing.
 
 ### PR and Merge
-[Create PR with gh pr create, then run poll-and-merge.sh]
+Create PR with `gh pr create`. Merge with `./scripts/poll-and-merge.sh <pr_number>`.
 
 ### Wrap-Up Requirements (MANDATORY — DO NOT SKIP)
 
-Before reporting completion, you MUST do ALL of the following.
-Failure to complete these steps means your task is NOT done.
-
 #### A. Update LEARNINGS.md
-Append to LEARNINGS.md with a new subsection under the appropriate
-section heading. Include ALL of the following categories. If a
-category has nothing to report, write "None" — do not skip it.
+Append substantive entries under the appropriate topic section.
+No rigid categories — write what matters. Skip if nothing is worth recording.
 
-- **Pivots**: Any deviation from this plan — what changed and why
-- **Issues found**: Bugs, code smells, architectural concerns
-- **Linter surprises**: Unexpected linter behavior or workarounds
-- **Suggested improvements**: Things you noticed but didn't fix
-  (out of scope for this task)
-- **Cross-package concerns**: Anything affecting other packages or
-  future work
-- **Code smells noticed**: In your own code AND in existing code
-  you read. Even if you can't fix them. List each one.
+#### B. Final Report
+Your final message MUST answer these four questions in depth:
 
-Commit the LEARNINGS.md update as part of your PR.
+**1. What should the next person who touches this code know?**
+Code-level observations, gotchas, things you're not proud of, things that
+surprised you. No "None" — if straightforward, one sentence explaining why.
 
-#### B. Decision Log
-List every decision you made that was NOT specified in the plan.
-Even small ones. "I named this function X because Y." "I chose to
-handle this error with Z because W." The orchestrator needs this
-to understand your reasoning after your context expires.
+**2. What did you notice in existing code you read?**
+Code smells, patterns that feel wrong, things that need refactoring — in code
+you READ, not just code you wrote. One sentence minimum.
 
-#### C. Final Summary Report
-Your final message back to the orchestrator MUST include ALL of:
+**3. Where are you least confident?**
+Specific files, functions, or test gaps. Be concrete (e.g.,
+"filter.go:matchesSkipPattern uses package-level slog.Warn instead of
+engine's logger"). One sentence minimum.
 
-1. **What was built**: Files created/modified, test counts,
-   new dependencies added
-2. **Quality metrics**: Coverage % (before and after), lint status,
-   build status
-3. **Confidence ratings**: Rate your confidence 1-5 for each major
-   area of your work (e.g., "happy path: 5/5, error handling: 3/5,
-   edge cases: 2/5"). Be honest — this helps prioritize review.
-4. **Risk flags**: Anything you're uncertain about, anything that
-   felt wrong, anything you'd want a second pair of eyes on.
-   Use red/yellow/green per area.
-5. **Architecture observations**: Does the current architecture
-   feel right for this component? Any friction or awkwardness?
-   Any coupling that concerns you?
-6. **Code quality concerns**: Anything that feels like tech debt?
-   Code you're not proud of? Patterns that feel forced by the
-   linter rather than genuinely good?
-7. **Test gaps**: What edge cases are NOT covered? What would break
-   if someone changed the code carelessly? What would you test
-   "if you had more time"?
-8. **Process observations**: What was hard about this task? What
-   info was missing from the plan? What would make it easier?
-9. **Re-envisioning**: If you were designing this component from
-   scratch knowing what you know now, would you build it the same
-   way? What would you change about the architecture, API surface,
-   package structure, or test approach?
-
-DO NOT just report "done, all tests pass." The orchestrator needs
-your observations to make informed decisions. Your perspective from
-inside the implementation is invaluable and cannot be reconstructed
-after your context expires.
+**4. Re-envisioning: Does what you built make sense big-picture?**
+Step back from the micro details. Is the overall architecture right? Is this
+component in the right package? Does the way it connects to the rest of the
+system feel natural? If you were starting the whole project from scratch,
+would you build it this way? Think macro — not just your implementation but
+the whole system. Call out anything forced by earlier decisions rather than
+genuinely good. One sentence minimum.
 ```
 
 ### 2.2 Test Symbol Collision Prevention (MANDATORY)
@@ -325,10 +287,8 @@ This phase is MANDATORY. The orchestrator must complete ALL steps before present
 
 For each agent:
 
-- Read their final summary (all 9 points from the template)
+- Read their answers to the four wrap-up questions
 - Read their LEARNINGS.md entries
-- Read their decision log
-- Note: confidence ratings, risk flags, architecture observations, code quality concerns
 - Note: any agent-to-agent contradictions or overlapping concerns
 
 ### 3.2 Code Review (Line-by-Line)
@@ -399,120 +359,53 @@ Update `docs/metrics.md` with data from this increment (see Metrics section belo
 
 ### 3.7 Git Cleanup (MANDATORY)
 
-After all PRs are merged, the repo must be fully clean. This is not optional.
-
-1. **Delete merged local branches**: `git branch -D <branch>` for every branch except `main`
-2. **Delete merged remote branches**: `git push origin --delete <branch>` for every merged branch
-3. **Remove worktrees**: `git worktree remove <path>` for every worktree except main
-4. **Prune remote refs**: `git fetch --prune`
-5. **Verify no stashes**: `git stash list` (must be empty)
-6. **Remove coordination files**: Delete PLAN_LEFT.md or any other temporary coordination files
-7. **Verify no open PRs**: `gh pr list --state open` (must be empty)
-8. **Verify no orphaned directories**: Check for `onedrive-go-*` directories on disk
-
-Run the DOD Cleanup Check (see CLAUDE.md) and confirm the output matches expectations before declaring the increment done.
+Run the DOD Cleanup Check from CLAUDE.md. Confirm only `main` exists
+locally, only `origin/main` remotely, no stashes, no open PRs, no orphaned dirs.
 
 ---
 
 ## Phase 4: Increment Report & Retrospective
 
-Present to the human in chat. This is the primary deliverable of the wrap-up process. It must be comprehensive — the human should understand everything that happened, everything that was decided, and everything that needs attention.
+Present to the human in chat. The human should understand everything that happened, everything that was decided, and everything that needs attention.
 
 ### 4.1 Executive Summary
 
-Brief overview (3-5 sentences): what was built, how many agents, how many PRs, overall quality assessment.
+3-5 sentences: what was built, agents/PRs, quality assessment.
 
-### 4.2 Agent Scorecards
+### 4.2 Agent Reports + Orchestrator Assessment
 
-For EACH agent, present:
+For each agent, present their answers to the four wrap-up questions quoted directly — do not summarize. The user wants to read the agents' own words.
 
-| Criterion | Rating (1-5) | Notes |
-|-----------|:---:|-------|
-| **Correctness** | | Error handling, edge cases, security |
-| **Test quality** | | Coverage, assertions, edge case coverage |
-| **Code style** | | Naming, structure, idiomatic Go |
-| **Logging** | | Sufficient structured logging at all paths |
-| **Documentation** | | Comments explain why, LEARNINGS.md updated |
-| **Plan adherence** | | Followed plan vs. deviated |
-| **Communication** | | Quality of final summary, decision log |
+After each agent's quotes, the orchestrator adds their own assessment: agreement, disagreement, things the agent missed, things found in code review that the agent didn't flag. Professional judgment, not a scorecard.
 
-Include the agent's own confidence ratings and risk flags alongside your assessment.
-
-### 4.3 Agent Observations (Raw + Synthesized)
-
-Present the agents' actual observations:
-
-> **Agent A said**: "[direct quote of their architecture/quality/process observations]"
-> **Agent B said**: "[direct quote]"
-
-Then synthesize: "Taken together, agents observed X. This suggests Y. I recommend Z."
-
-### 4.4 Top-Up Work Report
-
-For every fix the orchestrator made after agent review:
+### 4.3 Top-Up Work
 
 | File | What Changed | Why |
 |------|-------------|-----|
-| `files.go:42` | Added error wrapping | Agent returned bare error, inconsistent with codebase |
-| `items_test.go` | Added edge case test | Agent's tests didn't cover empty input |
 
-### 4.5 Orchestrator Self-Assessment
+### 4.4 Code Changes Summary
 
-The orchestrator rates their own work on this increment:
-
-| Criterion | Rating (1-5) | Notes |
-|-----------|:---:|-------|
-| **Plan quality** | | Were agents well-directed? Did they have what they needed? |
-| **Parallelization** | | Was work split optimally? |
-| **Agent prompts** | | Did agents understand expectations? |
-| **Review thoroughness** | | Did I catch everything? |
-| **Top-up quality** | | Were my fixes correct and complete? |
-| **Communication** | | Did I keep the human informed? |
-
-### 4.6 Code Changes Summary
-
-For each file created or significantly modified in this increment:
-
+For each file created or significantly modified:
 - What the file does (one line)
 - Key functions/types it exposes
 - How it connects to the rest of the system
 
-### 4.7 Retrospective
+### 4.5 Retrospective
 
-1. **What went well** — specific examples
-2. **What went wrong** — specific examples with root causes
-3. **What to change** — concrete actions with owners (not "we should try to...")
-4. **Metrics comparison** — coverage change, deviation count
+1. What went well — specific examples
+2. What went wrong — specific examples with root causes
+3. What to change — concrete actions
+4. Orchestrator self-assessment — what I did well, what I missed, what I'd change next time
+5. Metrics — coverage change, top-up count, deviation count
 
-### 4.8 Re-Envisioning Check
+### 4.6 Re-Envisioning
 
-Drawing on BOTH agent observations and orchestrator review:
+Drawing on agent re-envisioning answers (question 4) and orchestrator review: architecture, roadmap, process, test strategy, technical debt.
 
-- **Architecture**: Are package boundaries still right? Any coupling creep?
-- **Roadmap**: Is the increment ordering still optimal? Should we re-prioritize?
-- **Process**: Should we change how we plan/execute/review?
-- **Test strategy**: Are we testing the right things at the right level?
-- **Technical debt**: What debt did we accumulate? Is it acceptable?
-
-### 4.9 Action Items
-
-Every action item gets a BACKLOG ID:
+### 4.7 Action Items
 
 | ID | Action | Priority | Owner |
 |----|--------|----------|-------|
-| B-0XX | [specific action] | P1/P2/P3 | Next increment / specific phase |
-
-### 4.10 Changelog Entry
-
-Human-readable summary suitable for release notes:
-
-```
-## [Increment X.Y] — [Date]
-- Added: [feature]
-- Changed: [modification]
-- Fixed: [bug fix]
-- Removed: [deprecated item]
-```
 
 ---
 
@@ -534,71 +427,28 @@ Maintained in `docs/metrics.md`. Updated after every increment.
 | **CI failures** | Number of CI failures during the increment |
 | **Wall-clock time** | Approximate total time from plan approval to retrospective |
 
-### Per-Agent Metrics (within each increment)
-
-| Metric | Description |
-|--------|-------------|
-| **Test count** | Number of test cases written |
-| **Coverage** | Package-scoped coverage % |
-| **Scorecard avg** | Average of 7 scorecard ratings (1-5) |
-| **Confidence avg** | Average of agent's self-reported confidence ratings |
-| **Deviation count** | Number of plan deviations |
-| **LEARNINGS entries** | Number of learnings documented |
-
 ---
 
 ## Quick Reference Checklist
 
-Use this checklist for every increment. Check off each item.
-
 ### Planning
-- [ ] Intent confirmed with human
-- [ ] Research summary presented (BACKLOG, LEARNINGS, existing code)
-- [ ] Alternatives presented for significant decisions
-- [ ] Non-goals section written
-- [ ] Test strategy defined
-- [ ] Parallelization analysis complete (waves, file conflicts, worktrees)
-- [ ] CI impact analysis complete (if applicable — secret names, GitHub vars, minimal-environment check)
-- [ ] Risk register written
-- [ ] Definition of Ready met
-- [ ] Plan approved by human
-- [ ] Decision log written
+- [ ] Intent confirmed, non-goals written, plan approved by human
+- [ ] Parallelization analysis: waves, file conflicts, worktrees
+- [ ] CI impact analysis (if applicable)
+- [ ] Agent prompts use template from section 2.1
 
 ### Execution
-- [ ] Pre-launch briefing shown to human (agent summary, files, conflicts)
-- [ ] Agent task prompts use FULL template (especially Wrap-Up Requirements)
-- [ ] Agents launched with milestone update commitment
-- [ ] Milestone updates provided during execution
-- [ ] Non-trivial issues escalated to human during execution
-- [ ] Worktrees cleaned up after each wave
-- [ ] All PRs merged, main CI green
-- [ ] Integration tests (`integration.yml`) pass on main after merge — WAIT for this before proceeding
+- [ ] Pre-launch briefing shown to human
+- [ ] Milestone updates provided (PR created, CI status, merged)
+- [ ] All PRs merged, CI green on main (including integration.yml)
 
 ### Post-Agent Review
-- [ ] All agent final summaries read (all 9 points)
-- [ ] All agent LEARNINGS.md entries read
-- [ ] All agent decision logs reviewed
-- [ ] Line-by-line code review performed on every new/modified file
-- [ ] Top-up issues identified and FIXED (not deferred)
-- [ ] LEARNINGS.md consolidated
-- [ ] BACKLOG.md updated (closed items + new discoveries with IDs)
-- [ ] roadmap.md updated with actuals
-- [ ] Metrics updated in docs/metrics.md
-- [ ] CLAUDE.md updated
-- [ ] If CI-impacting: Key Vault secrets and GitHub variables updated
-- [ ] If CI-impacting: `scripts/validate-ci-locally.sh` run successfully (or equivalent manual validation)
-- [ ] If CI-impacting: test-strategy.md §6.1 and §10.x still match actual workflow YAML
+- [ ] All agent reports read (four questions)
+- [ ] Line-by-line code review of every new/modified file
+- [ ] Top-up work completed before retrospective
+- [ ] LEARNINGS, BACKLOG, roadmap, CLAUDE.md updated
+- [ ] Git cleanup complete (DOD Cleanup Check passes)
 
-### Increment Report & Retrospective
-- [ ] Executive summary written
-- [ ] Agent scorecards completed (all 7 criteria rated)
-- [ ] Agent observations presented (raw quotes + synthesis)
-- [ ] Top-up work report presented (file, change, why)
-- [ ] Orchestrator self-assessment completed
-- [ ] Code changes summarized
-- [ ] Retrospective: well / wrong / change with specifics
-- [ ] Metrics comparison: coverage change, deviation count
-- [ ] Re-envisioning check performed (architecture, roadmap, process, tests, debt)
+### Retrospective
+- [ ] Increment report delivered to human (sections 4.1-4.7)
 - [ ] Action items captured in BACKLOG with IDs
-- [ ] Changelog entry written
-- [ ] **Git cleanup**: merged branches deleted (local+remote), worktrees removed, refs pruned, no stashes, no open PRs, no orphaned dirs

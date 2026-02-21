@@ -91,13 +91,13 @@ Currently: Working CLI OneDrive client with discovery-based auth, account manage
 6. Check Definition of Ready before launching agents
 
 **Execution**:
-1. Agent task prompts MUST use the template from orchestration.md (includes 9-point final summary, decision log, confidence ratings, risk flags, code smell register)
+1. Agent task prompts MUST use the template from orchestration.md (includes four focused wrap-up questions)
 2. Show pre-launch briefing to human (agent summary, files, conflicts)
 3. Provide milestone updates during execution (PR created, CI passed, merged, etc.)
 4. Escalate non-trivial issues to human — do NOT decide autonomously
 
 **Post-Agent Review** (MANDATORY — not optional):
-1. Read all agent reports (9-point summaries, LEARNINGS.md, decision logs)
+1. Read all agent reports (four wrap-up questions, LEARNINGS.md entries)
 2. Line-by-line code review of every new/modified file
 3. Top-up work: fix issues BEFORE presenting retrospective
 4. Consolidate learnings, update BACKLOG, roadmap, CLAUDE.md
@@ -105,13 +105,12 @@ Currently: Working CLI OneDrive client with discovery-based auth, account manage
 
 **Increment Report** (presented to human in chat):
 1. Executive summary
-2. Agent scorecards (7 criteria, rated 1-5) + orchestrator self-assessment
-3. Agent observations (raw quotes + synthesis)
-4. Top-up work report (file, change, why)
-5. Code changes summary
-6. Retrospective (well/wrong/change) + metrics comparison
-7. Re-envisioning check drawing on agent perspectives
-8. Action items with BACKLOG IDs + changelog entry
+2. Agent reports + orchestrator assessment (raw quotes + narrative judgment)
+3. Top-up work report (file, change, why)
+4. Code changes summary
+5. Retrospective (well/wrong/change) + orchestrator self-assessment + metrics
+6. Re-envisioning check drawing on agent perspectives
+7. Action items with BACKLOG IDs
 
 **Context preservation**: Commit frequently with descriptive messages. Document decisions in commit messages. After each increment, consolidate learnings into LEARNINGS.md and CLAUDE.md.
 
@@ -228,20 +227,9 @@ CI must never be broken. Work is not done until CI passes.
 
 ## Worktree Workflow
 
-Source code changes require a worktree + PR. Doc-only changes (`.md`, CLAUDE.md, LEARNINGS.md, BACKLOG.md) push directly to main.
+Source code changes require a worktree + PR. Doc-only changes push directly to main.
 
-| Type | Format | Example |
-|------|--------|---------|
-| **Branch** | `<type>/<task-name>` | `feat/cli-auth`, `fix/delta-pagination` |
-| **Worktree** | `onedrive-go-<type>-<task>` | `onedrive-go-feat-cli-auth` |
-
-**Types:** `feat`, `fix`, `refactor`, `test`, `docs`, `chore`
-
-**Setup:** `git worktree add ../onedrive-go-<type>-<task> -b <type>/<task> main` — then work entirely inside the worktree directory.
-
-**Cleanup:** After merge, `git worktree remove` + `git branch -D`. Never `--force` — inspect first.
-
-See [docs/parallel-agents.md](docs/parallel-agents.md) for the full guide.
+Branch format: `<type>/<task-name>` (e.g., `feat/cli-auth`). Worktree: `onedrive-go-<type>-<task>`. Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`. See [docs/parallel-agents.md](docs/parallel-agents.md) for the full guide.
 
 ## Self-Maintenance Rule
 
