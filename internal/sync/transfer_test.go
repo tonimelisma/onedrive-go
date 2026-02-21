@@ -58,11 +58,15 @@ func (m *transferMockTransfer) Download(ctx context.Context, _, _ string, w io.W
 	return int64(n), err
 }
 
-func (m *transferMockTransfer) SimpleUpload(_ context.Context, _, _, _ string, r io.Reader, _ int64) (*graph.Item, error) {
+func (m *transferMockTransfer) SimpleUpload(ctx context.Context, _, _, _ string, r io.Reader, _ int64) (*graph.Item, error) {
 	m.uploadCalls.Add(1)
 
 	if m.uploadDelay > 0 {
-		time.Sleep(m.uploadDelay)
+		select {
+		case <-time.After(m.uploadDelay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 
 	if m.uploadErr != nil {

@@ -1347,3 +1347,111 @@ func TestExecutor_Integration_Download(t *testing.T) {
 	assert.Equal(t, int64(len(content)), *updated.LocalSize)
 	assert.NotNil(t, updated.LastSyncedAt)
 }
+
+// --- Transfer pipeline integration (SetTransferManager + Execute) ---
+
+// TestExecutor_Execute_WithTransferManager verifies that Execute() dispatches
+// downloads and uploads through the TransferManager pool when SetTransferManager is called.
+// This covers the `if e.transferMgr != nil` branches in Execute().
+func TestExecutor_Execute_WithTransferManager(t *testing.T) {
+	syncRoot := t.TempDir()
+
+	dlContent := []byte("pool download content")
+	ulContent := []byte("pool upload content")
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "upload.txt"), ulContent, 0o644))
+
+	exec, store, _, transfer := newTestExecutor(t, syncRoot)
+	transfer.downloadContent = dlContent
+
+	// Wire TransferManager with 2 download workers and 2 upload workers.
+	cfg := &config.TransfersConfig{
+		ParallelDownloads: 2,
+		ParallelUploads:   2,
+		BandwidthLimit:    "0",
+	}
+
+	tm, err := NewTransferManager(exec, cfg, testLogger(t))
+	require.NoError(t, err)
+	defer tm.Close()
+
+	exec.SetTransferManager(tm)
+
+	dlHash := executorHash(dlContent)
+	dlSize := int64(len(dlContent))
+
+	plan := &ActionPlan{
+		Downloads: []Action{{
+			Type:    ActionDownload,
+			DriveID: "d1",
+			ItemID:  "dl-item",
+			Path:    "downloaded.txt",
+			Item: &Item{
+				DriveID:      "d1",
+				ItemID:       "dl-item",
+				Name:         "downloaded.txt",
+				QuickXorHash: dlHash,
+				Size:         &dlSize,
+				RemoteMtime:  Int64Ptr(NowNano()),
+				ItemType:     ItemTypeFile,
+			},
+		}},
+		Uploads: []Action{{
+			Type:    ActionUpload,
+			DriveID: "d1",
+			ItemID:  "ul-item",
+			Path:    "upload.txt",
+			Item: &Item{
+				DriveID:  "d1",
+				ItemID:   "ul-item",
+				ParentID: "parent",
+				Name:     "upload.txt",
+				ItemType: ItemTypeFile,
+			},
+		}},
+	}
+
+	report, err := exec.Execute(context.Background(), plan)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.Downloaded)
+	assert.Equal(t, int64(len(dlContent)), report.BytesDownloaded)
+	assert.Equal(t, 1, report.Uploaded)
+	assert.Equal(t, int64(len(ulContent)), report.BytesUploaded)
+
+	// Verify files on disk.
+	got, readErr := os.ReadFile(filepath.Join(syncRoot, "downloaded.txt"))
+	require.NoError(t, readErr)
+	assert.Equal(t, dlContent, got)
+
+	// Verify DB state was updated for both operations.
+	assert.GreaterOrEqual(t, len(store.upsertCalls), 2)
+}
+
+// --- Chunk size config tests ---
+
+func TestNewExecutor_ChunkSize_Default(t *testing.T) {
+	store := newExecutorMockStore()
+	exec := NewExecutor(store, &executorMockItems{}, &executorMockTransfer{}, "/tmp", nil, nil, testLogger(t))
+	assert.Equal(t, int64(uploadChunkSize), exec.chunkSize)
+}
+
+func TestNewExecutor_ChunkSize_FromConfig(t *testing.T) {
+	store := newExecutorMockStore()
+	cfg := &config.TransfersConfig{ChunkSize: "5MiB"}
+	exec := NewExecutor(store, &executorMockItems{}, &executorMockTransfer{}, "/tmp", nil, cfg, testLogger(t))
+	assert.Equal(t, int64(5_242_880), exec.chunkSize)
+}
+
+func TestNewExecutor_ChunkSize_EmptyFallback(t *testing.T) {
+	store := newExecutorMockStore()
+	cfg := &config.TransfersConfig{ChunkSize: ""}
+	exec := NewExecutor(store, &executorMockItems{}, &executorMockTransfer{}, "/tmp", nil, cfg, testLogger(t))
+	assert.Equal(t, int64(uploadChunkSize), exec.chunkSize)
+}
+
+func TestNewExecutor_ChunkSize_InvalidFallback(t *testing.T) {
+	store := newExecutorMockStore()
+	cfg := &config.TransfersConfig{ChunkSize: "garbage"}
+	exec := NewExecutor(store, &executorMockItems{}, &executorMockTransfer{}, "/tmp", nil, cfg, testLogger(t))
+	assert.Equal(t, int64(uploadChunkSize), exec.chunkSize, "invalid chunk size should fall back to default")
+}
