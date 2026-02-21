@@ -144,8 +144,8 @@ SQL variable named `sqlGetDeltaToken` triggers false positive. Fix with `//nolin
 ### nilnil return pattern
 Returning `(nil, nil)` for "skip this entry" requires `//nolint:nilnil`. Idiomatic when both nil means "nothing to do, no error."
 
-### goconst applies to test files
-Unlike `mnd`, `funlen`, `dupl` -- `goconst` flags repeated string literals even in tests.
+### goconst applies to test files and counts cross-file
+Unlike `mnd`, `funlen`, `dupl` -- `goconst` flags repeated string literals even in tests. It counts across all files in a package, so adding `"file.txt"` in `state_test.go` can trigger goconst for an existing occurrence in `delta_test.go`. Use unique filenames in each test file to avoid cross-file constant warnings.
 
 ### handleChunkResponse can be tested with crafted *http.Response
 For error paths that don't depend on the HTTP transport (drain errors on 202/416), construct an `*http.Response` directly with a custom `Body` instead of using httptest. This is simpler and avoids server setup for paths that are purely about response body processing.
@@ -298,6 +298,9 @@ Package-level functions cannot use injected loggers. If a filter function needs 
 
 ### modernc.org/sqlite Close() is idempotent
 Calling `db.Close()` twice does not error with the pure-Go SQLite driver. To test "store is unusable after close", test that subsequent queries fail, not that Close returns an error.
+
+### Always use errors.Is for sentinel error checks
+`err == sql.ErrNoRows` works today but breaks if any middleware wraps the error. Use `errors.Is(err, sql.ErrNoRows)` consistently. When adding new query methods, follow the existing pattern (check GetItem/GetItemByPath) rather than the raw `==` comparison.
 
 ### applyMigration naming convention
 `applyMigration` constructs filenames with `migrations/%06d_initial_schema.up.sql`. Only version 1 has a migration file. Future versions will need additional embedded SQL files with matching names.

@@ -757,7 +757,7 @@ func (s *SQLiteStore) GetDeltaToken(ctx context.Context, driveID string) (string
 	var token string
 
 	err := s.deltaStmts.getToken.QueryRowContext(ctx, driveID).Scan(&token)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
 
@@ -817,7 +817,7 @@ func (s *SQLiteStore) IsDeltaComplete(ctx context.Context, driveID string) (bool
 	var complete int
 
 	err := s.deltaStmts.isComplete.QueryRowContext(ctx, driveID).Scan(&complete)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 
@@ -1008,6 +1008,8 @@ func (s *SQLiteStore) SaveUploadSession(ctx context.Context, record *UploadSessi
 }
 
 // GetUploadSession retrieves a single upload session by ID.
+// Returns (nil, nil) if no session exists — callers use the nil session
+// to distinguish "no resumable upload" from "found session".
 func (s *SQLiteStore) GetUploadSession(ctx context.Context, id string) (*UploadSessionRecord, error) {
 	s.logger.Debug("getting upload session", "id", id)
 
@@ -1018,6 +1020,10 @@ func (s *SQLiteStore) GetUploadSession(ctx context.Context, id string) (*UploadS
 		&r.SessionURL, &r.Expiry, &r.BytesUploaded,
 		&r.TotalSize, &r.CreatedAt,
 	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil //nolint:nilnil // nil session means "not found", matching GetItem/GetItemByPath pattern
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("get upload session %s: %w", id, err)
 	}
@@ -1081,7 +1087,7 @@ func (s *SQLiteStore) GetConfigSnapshot(ctx context.Context, key string) (string
 	var value string
 
 	err := s.configStmts.get.QueryRowContext(ctx, key).Scan(&value)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
 
