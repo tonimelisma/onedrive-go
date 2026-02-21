@@ -20,12 +20,31 @@ Detailed per-increment metrics from earlier phases archived in [docs/archive/met
 | Post-Wave 2 Top-Up | 2 | 0 | 2 | +0.0% (total) |
 | Pre-4.7 Coverage Hardening | 2 | 1 | 2 | +1.1% (total) |
 | Pre-4.7 Foundation Cleanup | 0 | 1 | 0 | 0.0% (no change) |
+| Phase 4.8 Conflict Handler | 0 | 2 | 1 | +0.0% (sync 91.3%→91.2%) |
 
 *\* Review not performed — process gap. Subsequent increments will have accurate top-up counts.*
 
 ---
 
 ## Latest Increment
+
+### Phase 4.8: Conflict Handler — 2026-02-21
+
+| Metric | Value |
+|--------|-------|
+| **Agent count** | 0 (orchestrator-only) |
+| **Wave count** | 1 |
+| **PR count** | 1 (#57) |
+| **Coverage before** | 79.3% (total), 91.3% (sync) |
+| **Coverage after** | 79.5% (total), 91.2% (sync) |
+| **Top-up fix count** | 2 (dotfile handling for generateConflictPath; dogsled + exhaustive lint fixes) |
+| **Agent deviation count** | 1 (Go's filepath.Ext behavior for dotfiles differs from plan assumption — required conflictStemExt helper) |
+| **CI failures** | 0 |
+| **Wall-clock time** | ~30 min |
+| **New tests** | 17 (conflict_test.go) + updated reconciler/executor tests |
+| **Lines changed** | +713 / -30 |
+
+---
 
 ### Phase 4.7: Executor — 2026-02-20
 

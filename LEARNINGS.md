@@ -83,6 +83,9 @@ When an `httptest.NewServer` handler needs `srv.URL`, declare `var srv *httptest
 
 ## 2. Filesystem and Platform
 
+### filepath.Ext(".bashrc") returns ".bashrc", not ""
+Go's `filepath.Ext` returns the suffix from the LAST dot in the last path element. For dotfiles like `.bashrc`, the only dot is at position 0, so the entire name (`.bashrc`) is treated as the extension and the stem is empty. This causes conflict copy naming to produce `.conflict-TIMESTAMP.bashrc` instead of `.bashrc.conflict-TIMESTAMP`. Fix: detect when `base[0] == '.'` and `strings.Count(base, ".") == 1`, then treat extension as empty and use the full name as stem. Extract a `conflictStemExt` helper for this logic.
+
 ### NFC normalization requires separate filesystem and DB paths
 On macOS (APFS), NFC and NFD lookups resolve to the same file. On Linux (ext4), filenames are stored as exact bytes. Thread two separate paths: `fsRelPath` (original bytes for I/O) and `dbRelPath` (NFC-normalized for database). Track visited DB paths during walks to avoid false positive orphan detection.
 

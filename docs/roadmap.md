@@ -255,7 +255,7 @@
 | ~~4.5~~ | ~~sync/ reconciler (F1-F14, D1-D7 decision matrix, move detection)~~ **DONE** |
 | ~~4.6~~ | ~~sync/ safety checks (S1-S7, big-delete protection, dry-run)~~ **DONE** |
 | ~~4.7~~ | ~~sync/ executor (dispatch actions, update state, error classification)~~ **DONE** |
-| 4.8 | sync/ conflict handler (detect, classify, keep-both resolution, ledger) |
+| ~~4.8~~ | ~~sync/ conflict handler (classify F5/F9/F11, keep-both, timestamped conflict copies)~~ **DONE** |
 | 4.9 | sync/ transfer (download pipeline, upload pipeline, worker pools, bandwidth) |
 | 4.10 | sync/ engine (RunOnce: wire delta->scan->reconcile->safety->execute) |
 | 4.11 | cmd/ sync: sync command (one-shot, --download-only, --upload-only, --dry-run) |
@@ -359,14 +359,15 @@ Phase 4 increments are organized into waves to enable parallelism and allow re-p
 - **Actual**: PR #56. Coverage: 91.3% (sync), 79.3% (total)
 - **Inputs**: sync-algorithm.md section 9, architecture.md section 7
 
-### 4.8: Conflict handler — `internal/sync/conflict.go`
+### 4.8: Conflict handler — `internal/sync/conflict.go` ✅
 
-- Detect conflict types: edit-edit, edit-delete, delete-edit, create-create, type change
-- False conflict detection: both sides modified but content identical -> silent resolve
-- Keep-both resolution: rename loser with `.conflict-{timestamp}` suffix, download remote as original name
-- Record in conflict ledger with full context (both versions, timestamps, hashes)
-- **Acceptance**: `go test` passes with one test per conflict type
-- **Inputs**: sync-algorithm.md section 7
+- `ConflictType` (in-memory): `edit_edit` (F5), `edit_delete` (F9), `create_create` (F11)
+- Reconciler tags each `ActionConflict` with correct type at decision-matrix call sites
+- `ConflictHandler.Resolve`: edit-edit/create-create → rename local to `<stem>.conflict-YYYYMMDD-HHMMSS<ext>` + download sub-action; edit-delete → upload sub-action (re-upload local)
+- `generateConflictPath`: timestamp naming with collision avoidance, correct dotfile handling
+- `executeConflict` wires handler → record `keep_both` → dispatch sub-actions
+- `handleLocalDeleteConflict` (S4 backup) refactored to use `generateConflictPath`
+- **Actual**: PR #57. 17 new tests in conflict_test.go, reconciler/executor tests updated. sync/ 91.2% coverage, 0 lint issues.
 
 ### 4.9: Transfer pipeline — `internal/sync/transfer.go`
 
