@@ -11,6 +11,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// --- NewConflictHandler tests ---
+
+func TestNewConflictHandler_NilLogger(t *testing.T) {
+	h := NewConflictHandler("/tmp/sync", nil)
+	require.NotNil(t, h)
+	require.NotNil(t, h.logger, "nil logger should be replaced with slog.Default()")
+}
+
 // --- generateConflictPath tests ---
 
 func TestGenerateConflictPath_RegularFile(t *testing.T) {
@@ -130,9 +138,12 @@ func TestConflictHandler_Resolve_EditEdit(t *testing.T) {
 	_, statErr := os.Stat(filepath.Join(syncRoot, "file.txt"))
 	assert.True(t, os.IsNotExist(statErr), "original file should be gone after rename")
 
-	// Conflict copy exists.
+	// Conflict copy exists and contains original content.
 	matches, _ := filepath.Glob(filepath.Join(syncRoot, "file.conflict-*.txt"))
-	assert.Len(t, matches, 1, "expected one conflict copy")
+	require.Len(t, matches, 1, "expected one conflict copy")
+	got, readErr := os.ReadFile(matches[0])
+	require.NoError(t, readErr)
+	assert.Equal(t, []byte("local"), got, "conflict copy should preserve original content")
 }
 
 func TestConflictHandler_Resolve_CreateCreate(t *testing.T) {

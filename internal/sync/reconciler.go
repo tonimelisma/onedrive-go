@@ -556,13 +556,14 @@ func (r *Reconciler) conflictAction(item *Item, conflictType ConflictType) Actio
 		Path:    item.Path,
 		Item:    item,
 		ConflictInfo: &ConflictRecord{
-			DriveID:    item.DriveID,
-			ItemID:     item.ItemID,
-			Path:       item.Path,
-			LocalHash:  item.LocalHash,
-			RemoteHash: item.QuickXorHash,
-			LocalMtime: item.LocalMtime,
-			Type:       conflictType,
+			DriveID:     item.DriveID,
+			ItemID:      item.ItemID,
+			Path:        item.Path,
+			LocalHash:   item.LocalHash,
+			RemoteHash:  item.QuickXorHash,
+			LocalMtime:  item.LocalMtime,
+			RemoteMtime: item.RemoteMtime,
+			Type:        conflictType,
 		},
 	}
 }

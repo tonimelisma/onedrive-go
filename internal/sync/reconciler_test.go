@@ -72,6 +72,12 @@ func reconcilerItem(
 		item.LocalMtime = &mt
 	}
 
+	// Set RemoteMtime when remote data exists.
+	if remoteHash != "" {
+		rmt := NowNano()
+		item.RemoteMtime = &rmt
+	}
+
 	return item
 }
 
@@ -190,6 +196,7 @@ func TestReconcile_F5_Conflict(t *testing.T) {
 	assert.Equal(t, "BBB", plan.Conflicts[0].ConflictInfo.LocalHash)
 	assert.Equal(t, "CCC", plan.Conflicts[0].ConflictInfo.RemoteHash)
 	assert.Equal(t, ConflictEditEdit, plan.Conflicts[0].ConflictInfo.Type)
+	assert.NotNil(t, plan.Conflicts[0].ConflictInfo.RemoteMtime, "F5: RemoteMtime should be populated")
 }
 
 func TestReconcile_F6_LocalDeleted_RemoteUnchanged(t *testing.T) {
@@ -253,6 +260,7 @@ func TestReconcile_F9_EditDeleteConflict(t *testing.T) {
 	assert.Equal(t, ActionConflict, plan.Conflicts[0].Type)
 	require.NotNil(t, plan.Conflicts[0].ConflictInfo)
 	assert.Equal(t, ConflictEditDelete, plan.Conflicts[0].ConflictInfo.Type)
+	assert.Nil(t, plan.Conflicts[0].ConflictInfo.RemoteMtime, "F9: RemoteMtime nil for tombstoned item")
 }
 
 func TestReconcile_F10_IdenticalNewFile(t *testing.T) {
@@ -285,6 +293,7 @@ func TestReconcile_F11_CreateCreateConflict(t *testing.T) {
 	assert.Equal(t, ActionConflict, plan.Conflicts[0].Type)
 	require.NotNil(t, plan.Conflicts[0].ConflictInfo)
 	assert.Equal(t, ConflictCreateCreate, plan.Conflicts[0].ConflictInfo.Type)
+	assert.NotNil(t, plan.Conflicts[0].ConflictInfo.RemoteMtime, "F11: RemoteMtime should be populated")
 }
 
 func TestReconcile_F12_NewLocalFile(t *testing.T) {

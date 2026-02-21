@@ -172,7 +172,7 @@ func buildConflictRecord(action *Action, now int64, resolvedBy *ConflictResolved
 // If all candidates are taken, the base (no suffix) path is returned as a fallback.
 func generateConflictPath(originalPath string) string {
 	stem, ext := conflictStemExt(originalPath)
-	ts := time.Now().Format("20060102-150405")
+	ts := time.Now().UTC().Format("20060102-150405")
 
 	base := stem + ".conflict-" + ts + ext
 	if _, err := os.Stat(base); os.IsNotExist(err) {
