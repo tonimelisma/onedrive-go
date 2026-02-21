@@ -17,7 +17,7 @@ type reconcilerMockStore struct {
 	reconciliationItems []*Item
 
 	// Error injection
-	listActiveErr error
+	listReconciliationErr error
 }
 
 func newReconcilerMockStore() *reconcilerMockStore {
@@ -25,8 +25,8 @@ func newReconcilerMockStore() *reconcilerMockStore {
 }
 
 func (s *reconcilerMockStore) ListItemsForReconciliation(_ context.Context) ([]*Item, error) {
-	if s.listActiveErr != nil {
-		return nil, s.listActiveErr
+	if s.listReconciliationErr != nil {
+		return nil, s.listReconciliationErr
 	}
 	return s.reconciliationItems, nil
 }
@@ -777,7 +777,7 @@ func TestReconcile_Enrichment_UserSavesSameContent(t *testing.T) {
 func TestReconcile_ListActiveItemsError(t *testing.T) {
 	t.Parallel()
 	store := newReconcilerMockStore()
-	store.listActiveErr = assert.AnError
+	store.listReconciliationErr = assert.AnError
 
 	r := NewReconciler(store, reconcilerTestLogger(t))
 	_, err := r.Reconcile(context.Background(), SyncBidirectional)
