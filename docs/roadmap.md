@@ -248,12 +248,12 @@
 
 | Increment | Description |
 |-----------|-------------|
-| 4.1 | sync/ SQLite state store (schema, migrations, items CRUD, checkpoints) |
-| 4.2 | sync/ delta processor (fetches graph.Delta, stores as sync.Records) |
-| 4.3 | sync/ local scanner (filesystem walk, hash computation, filter evaluation) |
-| 4.4 | sync/ filter engine (three-layer cascade, .odignore, reuse existing logic) |
-| 4.5 | sync/ reconciler (F1-F14, D1-D7 decision matrix, move detection) |
-| 4.6 | sync/ safety checks (S1-S7, big-delete protection, dry-run) |
+| ~~4.1~~ | ~~sync/ SQLite state store (schema, migrations, items CRUD, checkpoints)~~ **DONE** |
+| ~~4.2~~ | ~~sync/ delta processor (fetches graph.Delta, stores as sync.Records)~~ **DONE** |
+| ~~4.3~~ | ~~sync/ local scanner (filesystem walk, hash computation, filter evaluation)~~ **DONE** |
+| ~~4.4~~ | ~~sync/ filter engine (three-layer cascade, .odignore, reuse existing logic)~~ **DONE** |
+| ~~4.5~~ | ~~sync/ reconciler (F1-F14, D1-D7 decision matrix, move detection)~~ **DONE** |
+| ~~4.6~~ | ~~sync/ safety checks (S1-S7, big-delete protection, dry-run)~~ **DONE** |
 | 4.7 | sync/ executor (dispatch actions, update state, error classification) |
 | 4.8 | sync/ conflict handler (detect, classify, keep-both resolution, ledger) |
 | 4.9 | sync/ transfer (download pipeline, upload pipeline, worker pools, bandwidth) |

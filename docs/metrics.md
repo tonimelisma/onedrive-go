@@ -79,8 +79,102 @@ Tracking quantitative metrics across increments to spot trends and improve proce
 | Phase 3.5 (3.5.2) | 4 | 7 | 3 | -1.6% (total) |
 | Phase 4.1 (3.5.2+4.1) | 6 | 2 | 2 | -2.5% (total) |
 | Foundation Hardening | 3 | 1 | 0 | +0.4% (total) |
+| Phase 4 Wave 1 (4.1-4.4+B-040) | 5 | 8 | 5 | +5.2% (total) |
+| Phase 4 Wave 2 (4.5-4.6) | 2 | 1 | 4 | +2.5% (total) |
 
 *\* Review not performed — process gap. Subsequent increments will have accurate top-up counts.*
+
+---
+
+### Phase 4 Wave 2: Reconciler + Safety (4.5-4.6) — 2026-02-21
+
+| Metric | Value |
+|--------|-------|
+| **Agent count** | 2 (F: reconciler, G: safety checks) |
+| **Wave count** | 1 (both parallel — zero file conflicts) |
+| **PR count** | 2 (#47, #48) |
+| **Coverage before** | 74.9% (total), 88.9% (sync) |
+| **Coverage after** | 77.4% (total), 90.3% (sync) |
+| **Top-up fix count** | 1 (LEARNINGS.md conflict resolution during rebase) |
+| **Agent deviation count** | 4 (Agent F: 2 refactors for gocyclo; Agent G: filterBySyncedHash extraction, SafetyConfig pointer) |
+| **CI failures** | 1 (PR #48 rebase needed after PR #47 merge — LEARNINGS.md conflict) |
+| **Wall-clock time** | ~1.5 hours |
+| **Backlog items created** | 0 |
+
+*Note: Sync package coverage increased from 88.9% to 90.3%. Total coverage increased from 74.9% to 77.4%. Both agents achieved high individual file coverage (reconciler ~98%, safety ~97.5%).*
+
+#### Per-Agent Breakdown
+
+| Agent | Tests Added | Coverage | Deviations | LEARNINGS |
+|-------|:----------:|:--------:|:----------:|:---------:|
+| F (reconciler) | 46 | 90.3% (sync) | 2 (gocyclo refactors) | Section 26 |
+| G (safety) | 33 | 90.3% (sync) | 2 (filterBySyncedHash, SafetyConfig pointer) | Section 25 |
+
+#### Agent Scorecards
+
+**Agent F (Reconciler)**
+
+| Criterion | Rating | Notes |
+|-----------|:------:|-------|
+| Correctness | 5 | All 14 file rows (F1-F14) and 7 folder rows (D1-D7) correctly implemented |
+| Test quality | 5 | 46 tests: per-row tests, enrichment scenarios, mode filtering, move detection, ordering |
+| Code style | 5 | Clean decomposition: classifyLocalDeletion/RemoteTombstone/StandardChange/BothChanged |
+| Logging | 5 | Every decision row logged with item details and action type |
+| Documentation | 5 | LEARNINGS section 26, full 9-point summary with confidence ratings |
+| Plan adherence | 4 | 2 gocyclo-driven refactors (expected for decision matrix complexity) |
+| Communication | 5 | Full 9-point summary, code smell register, re-envisioning observations |
+
+**Agent G (Safety Checks)**
+
+| Criterion | Rating | Notes |
+|-----------|:------:|-------|
+| Correctness | 5 | All 7 safety invariants (S1-S7) correctly implemented |
+| Test quality | 5 | 33 tests: per-invariant, edge cases, dry-run, force flag, error injection |
+| Code style | 5 | Clean injectable statfsFunc, platform-specific build tags |
+| Logging | 5 | Every safety check logged, violations logged with context |
+| Documentation | 5 | LEARNINGS section 25, full 9-point summary with confidence ratings |
+| Plan adherence | 4 | 2 deviations: filterBySyncedHash extraction (dupl), SafetyConfig pointer (gocritic) |
+| Communication | 5 | Full 9-point summary, platform-specific CI issues documented |
+
+#### Orchestrator Self-Assessment
+
+| Criterion | Rating | Notes |
+|-----------|:------:|-------|
+| Planning quality | 5 | Clean 2-agent wave, zero file conflicts, correct merge order planned |
+| Agent prompt clarity | 5 | Both agents followed plan closely, symbol collision prevention worked perfectly |
+| Review thoroughness | 5 | Line-by-line review of all 8 files (2600+ lines), types.go diff reviewed |
+| Top-up effectiveness | 4 | Only 1 top-up needed (LEARNINGS.md conflict resolution) |
+| Documentation updates | 5 | roadmap, metrics, CLAUDE.md updated |
+| Escalation discipline | 5 | No autonomous non-trivial decisions |
+
+---
+
+### Phase 4 Wave 1: Sync Engine Foundation (4.1-4.4 + B-040) — 2026-02-21
+
+| Metric | Value |
+|--------|-------|
+| **Agent count** | 5 (A: state store, B: delta processor, C: scanner, D: filter, E: config logger) |
+| **Wave count** | 1 (all 5 parallel — types.go + migrations defined in Wave 0) |
+| **PR count** | 5 (#41, #42, #43, #44, #45) + 1 retro actions (#46) |
+| **Coverage before** | 69.7% (total) |
+| **Coverage after** | 74.9% (total), 88.9% (sync) |
+| **Top-up fix count** | 8 (symbol collisions: 5 renames, 2 removals, 1 ParseSize export) |
+| **Agent deviation count** | 5 (A: skipped golang-migrate; C: dual-path NFC; D: duplicated parseSize; E: no functional changes) |
+| **CI failures** | 3 (symbol collisions required rebases for scanner PR) |
+| **Wall-clock time** | ~3 hours |
+| **Backlog items created** | 2 (B-042, B-043) |
+
+*Note: The sync package was created from scratch in this wave. 5 agents ran in parallel after Wave 0 established shared types and migrations on main. Symbol collision prevention (per orchestration.md §2.2) was not yet in place, causing 8 post-merge fixes.*
+
+#### Per-Agent Breakdown
+
+| Agent | Tests Added | Coverage | Deviations | LEARNINGS |
+|-------|:----------:|:--------:|:----------:|:---------:|
+| A (state store) | 63 | 88.9% (sync) | 1 (skipped golang-migrate) | Section 20 |
+| B (delta processor) | 20 | 88.9% (sync) | 0 | Section 21 |
+| C (scanner) | 37 | 88.9% (sync) | 1 (dual-path NFC) | Section 22 |
+| D (filter) | 37 | 88.9% (sync) | 1 (duplicated parseSize) | Section 23 |
+| E (config logger) | 4 | 94.8% (config) | 0 | N/A |
 
 ---
 
