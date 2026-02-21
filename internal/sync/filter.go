@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
-	"strconv"
 	"strings"
 	gosync "sync"
 
@@ -76,7 +75,7 @@ func NewFilterEngine(cfg *config.FilterConfig, syncRoot string, logger *slog.Log
 		"ignore_marker", cfg.IgnoreMarker,
 	)
 
-	maxBytes, err := parseSizeFilter(cfg.MaxFileSize)
+	maxBytes, err := config.ParseSize(cfg.MaxFileSize)
 	if err != nil {
 		return nil, fmt.Errorf("invalid max_file_size %q: %w", cfg.MaxFileSize, err)
 	}
@@ -406,84 +405,4 @@ func isValidPath(path string) (bool, string) {
 	}
 
 	return true, ""
-}
-
-// Size multiplier constants for parseSizeFilter (decimal / SI).
-// Duplicated from config package because config.parseSize is unexported.
-const (
-	filterKilobyte = 1000
-	filterMegabyte = 1000 * filterKilobyte
-	filterGigabyte = 1000 * filterMegabyte
-	filterTerabyte = 1000 * filterGigabyte
-)
-
-// Size multiplier constants (binary / IEC).
-const (
-	filterKibibyte = 1024
-	filterMebibyte = 1024 * filterKibibyte
-	filterGibibyte = 1024 * filterMebibyte
-	filterTebibyte = 1024 * filterGibibyte
-)
-
-// parseSizeFilter converts a human-readable size string (e.g., "50GB", "10MiB") to bytes.
-// Returns 0 for empty string or "0" (meaning no limit).
-// This duplicates config.parseSize because that function is unexported;
-// exporting it would require modifying config package files owned by Agent E.
-func parseSizeFilter(s string) (int64, error) {
-	if s == "" || s == "0" {
-		return 0, nil
-	}
-
-	s = strings.TrimSpace(s)
-	upper := strings.ToUpper(s)
-
-	suffixes := []struct {
-		suffix     string
-		multiplier int64
-	}{
-		{"TIB", filterTebibyte},
-		{"GIB", filterGibibyte},
-		{"MIB", filterMebibyte},
-		{"KIB", filterKibibyte},
-		{"TB", filterTerabyte},
-		{"GB", filterGigabyte},
-		{"MB", filterMegabyte},
-		{"KB", filterKilobyte},
-		{"B", 1},
-	}
-
-	for _, sf := range suffixes {
-		if strings.HasSuffix(upper, sf.suffix) {
-			numStr := strings.TrimSpace(s[:len(s)-len(sf.suffix)])
-
-			return parseSizeNumber(numStr, sf.multiplier)
-		}
-	}
-
-	// No suffix: treat as raw bytes.
-	n, err := strconv.ParseInt(s, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("invalid size %q: %w", s, err)
-	}
-
-	if n < 0 {
-		return 0, fmt.Errorf("invalid size %q: must be non-negative", s)
-	}
-
-	return n, nil
-}
-
-// parseSizeNumber parses the numeric portion of a size string and applies the multiplier.
-func parseSizeNumber(numStr string, multiplier int64) (int64, error) {
-	n, err := strconv.ParseFloat(numStr, 64)
-	if err != nil {
-		return 0, fmt.Errorf("invalid size number %q: %w", numStr, err)
-	}
-
-	result := int64(n * float64(multiplier))
-	if result < 0 {
-		return 0, fmt.Errorf("invalid size: must be non-negative")
-	}
-
-	return result, nil
 }
