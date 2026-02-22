@@ -256,12 +256,18 @@ func (e *Executor) executeFolderCreate(ctx context.Context, action *Action) erro
 		return fmt.Errorf("executor: remote folder create for %s has nil item", action.Path)
 	}
 
+	// Resolve remote parent ID — new local folders from the scanner have empty ParentID.
+	parentID, err := e.resolveParentID(ctx, action)
+	if err != nil {
+		return err
+	}
+
 	// B-050: Capture pre-create key so we can delete the stale scanner row
 	// after the upsert creates a new row with the server-assigned ID.
 	oldDriveID := action.Item.DriveID
 	oldItemID := action.Item.ItemID
 
-	created, err := e.items.CreateFolder(ctx, action.DriveID, action.Item.ParentID, action.Item.Name)
+	created, err := e.items.CreateFolder(ctx, action.DriveID, parentID, action.Item.Name)
 	if err != nil {
 		return fmt.Errorf("executor: create remote folder %s: %w", action.Path, err)
 	}
@@ -433,15 +439,21 @@ func (e *Executor) executeUpload(ctx context.Context, action *Action) (int64, er
 	mtime := stat.ModTime()
 	hasher := quickxorhash.New()
 
-	e.logger.Info("executor: upload", "path", action.Path, "size", size)
+	// Resolve remote parent ID — new local files from the scanner have empty ParentID.
+	parentID, err := e.resolveParentID(ctx, action)
+	if err != nil {
+		return 0, err
+	}
+
+	e.logger.Info("executor: upload", "path", action.Path, "size", size, "parent_id", parentID)
 
 	var uploaded *graph.Item
 	if size <= simpleUploadMax {
 		tee := io.TeeReader(f, hasher)
 		r := wrapReader(e.bandwidthLimiter, ctx, tee)
-		uploaded, err = e.transfer.SimpleUpload(ctx, action.DriveID, action.Item.ParentID, action.Item.Name, r, size)
+		uploaded, err = e.transfer.SimpleUpload(ctx, action.DriveID, parentID, action.Item.Name, r, size)
 	} else {
-		uploaded, err = e.uploadChunked(ctx, action.DriveID, action.Item.ParentID, action.Item.Name, f, size, mtime, hasher)
+		uploaded, err = e.uploadChunked(ctx, action.DriveID, parentID, action.Item.Name, f, size, mtime, hasher)
 	}
 
 	if err != nil {
@@ -656,6 +668,38 @@ func (e *Executor) executeCleanup(ctx context.Context, action *Action) error {
 	e.logger.Debug("executor: cleanup", "path", action.Path, "item_id", action.ItemID)
 
 	return e.store.MarkDeleted(ctx, action.DriveID, action.ItemID, NowNano())
+}
+
+// resolveParentID looks up the parent folder's remote ItemID from the state database.
+// New local files from the scanner have empty ParentID because the scanner only
+// knows the local path, not the remote ID. The parent folder's ID is available
+// in the DB after the folder_creates phase runs (which precedes uploads).
+func (e *Executor) resolveParentID(ctx context.Context, action *Action) (string, error) {
+	if action.Item.ParentID != "" {
+		return action.Item.ParentID, nil
+	}
+
+	parentPath := filepath.Dir(action.Path)
+	if parentPath == "." {
+		parentPath = ""
+	}
+
+	parent, err := e.store.GetItemByPath(ctx, parentPath)
+	if err != nil {
+		return "", fmt.Errorf("executor: resolve parent for %s: %w", action.Path, err)
+	}
+
+	if parent == nil {
+		return "", fmt.Errorf("executor: parent folder %q not found in DB for %s", parentPath, action.Path)
+	}
+
+	e.logger.Debug("executor: resolved parent ID",
+		"path", action.Path,
+		"parent_path", parentPath,
+		"parent_id", parent.ItemID,
+	)
+
+	return parent.ItemID, nil
 }
 
 // --- Upload helpers ---

@@ -363,8 +363,12 @@ func convertGraphItem(gItem *graph.Item, driveID string) *Item {
 		item.DriveID = driveID
 	}
 
-	// Classify item type.
+	// Classify item type. Root detection uses the Graph API's root facet
+	// (present only on the top-most drive item) so that MaterializePath
+	// terminates without prepending the root's name to every path.
 	switch {
+	case gItem.IsFolder && gItem.IsRoot:
+		item.ItemType = ItemTypeRoot
 	case gItem.IsFolder:
 		item.ItemType = ItemTypeFolder
 	default:

@@ -604,6 +604,65 @@ func TestToItem_EmptyTimestamp(t *testing.T) {
 	assert.InDelta(t, time.Now().Unix(), item.ModifiedAt.Unix(), 5)
 }
 
+func TestToItem_RootFacet(t *testing.T) {
+	dir := &driveItemResponse{
+		ID:                   "root-item",
+		Name:                 "root",
+		CreatedDateTime:      "2024-01-01T00:00:00Z",
+		LastModifiedDateTime: "2024-01-01T00:00:00Z",
+		ParentReference:      &parentRef{ID: "", DriveID: "d"},
+		Folder:               &folderFacet{ChildCount: 5},
+		Root:                 ptrRawMsg(json.RawMessage(`{}`)),
+	}
+
+	item := dir.toItem(testNoopLogger())
+	assert.True(t, item.IsRoot, "root facet should set IsRoot")
+	assert.True(t, item.IsFolder, "root is also a folder")
+	assert.Equal(t, 5, item.ChildCount)
+}
+
+func TestToItem_NonRootFolder(t *testing.T) {
+	dir := &driveItemResponse{
+		ID:                   "folder-1",
+		Name:                 "Documents",
+		CreatedDateTime:      "2024-01-01T00:00:00Z",
+		LastModifiedDateTime: "2024-01-01T00:00:00Z",
+		ParentReference:      &parentRef{ID: "root-id", DriveID: "d"},
+		Folder:               &folderFacet{ChildCount: 3},
+		// Root is nil — not a root folder.
+	}
+
+	item := dir.toItem(testNoopLogger())
+	assert.False(t, item.IsRoot, "non-root folder should not have IsRoot")
+	assert.True(t, item.IsFolder)
+}
+
+func TestGetItem_RootItem(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{
+			"id": "root-id",
+			"name": "root",
+			"size": 0,
+			"createdDateTime": "2024-01-01T00:00:00Z",
+			"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+			"parentReference": {"id": "", "driveId": "d"},
+			"folder": {"childCount": 10},
+			"root": {}
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	item, err := client.GetItem(context.Background(), "d", "root")
+	require.NoError(t, err)
+
+	assert.True(t, item.IsRoot, "root facet should be detected from API response")
+	assert.True(t, item.IsFolder)
+	assert.Equal(t, 10, item.ChildCount)
+}
+
 func TestToItem_FileWithNilHashes(t *testing.T) {
 	dir := &driveItemResponse{
 		ID:                   "item-no-hash",
@@ -633,6 +692,11 @@ func TestStripBaseURL(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "does not match base URL")
 	})
+}
+
+// ptrRawMsg returns a pointer to a json.RawMessage, for test struct literals.
+func ptrRawMsg(m json.RawMessage) *json.RawMessage {
+	return &m
 }
 
 // testNoopLogger returns a logger that discards output, for unit tests that

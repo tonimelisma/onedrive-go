@@ -758,6 +758,39 @@ func TestConvertGraphItem_Folder(t *testing.T) {
 	assert.Equal(t, ItemTypeFolder, item.ItemType)
 }
 
+func TestConvertGraphItem_RootFolder(t *testing.T) {
+	gItem := &graph.Item{
+		ID:       "root-id",
+		Name:     "root",
+		DriveID:  "d",
+		ParentID: "",
+		IsFolder: true,
+		IsRoot:   true,
+	}
+
+	item := convertGraphItem(gItem, "d")
+	require.NotNil(t, item)
+	assert.Equal(t, ItemTypeRoot, item.ItemType, "root folder should be classified as ItemTypeRoot")
+}
+
+func TestConvertGraphItem_RootVsRegularFolder(t *testing.T) {
+	// Root folder: both IsFolder and IsRoot are true.
+	root := convertGraphItem(&graph.Item{
+		ID: "root-id", Name: "root", DriveID: "d",
+		IsFolder: true, IsRoot: true,
+	}, "d")
+	require.NotNil(t, root)
+	assert.Equal(t, ItemTypeRoot, root.ItemType)
+
+	// Regular folder: only IsFolder is true.
+	folder := convertGraphItem(&graph.Item{
+		ID: "folder-id", Name: "Documents", DriveID: "d", ParentID: "root-id",
+		IsFolder: true, IsRoot: false,
+	}, "d")
+	require.NotNil(t, folder)
+	assert.Equal(t, ItemTypeFolder, folder.ItemType)
+}
+
 func TestConvertGraphItem_Package_ReturnsNil(t *testing.T) {
 	gItem := &graph.Item{
 		ID:        "pkg-1",

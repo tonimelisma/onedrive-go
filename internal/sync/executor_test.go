@@ -623,6 +623,117 @@ func TestExecutor_Download_FatalError_Abort(t *testing.T) {
 
 // --- Upload tests ---
 
+// --- resolveParentID tests ---
+
+func TestExecutor_ResolveParentID_AlreadySet(t *testing.T) {
+	exec, store, _, _ := newTestExecutor(t, t.TempDir())
+	_ = store // not needed for this test case
+
+	action := &Action{
+		Path: "some/file.txt",
+		Item: &Item{ParentID: "known-parent"},
+	}
+
+	parentID, err := exec.resolveParentID(context.Background(), action)
+	require.NoError(t, err)
+	assert.Equal(t, "known-parent", parentID, "should return existing ParentID")
+}
+
+func TestExecutor_ResolveParentID_LookupFromDB(t *testing.T) {
+	exec, store, _, _ := newTestExecutor(t, t.TempDir())
+
+	// Pre-populate the store with the parent folder.
+	store.pathItems["some"] = &Item{ItemID: "parent-from-db", DriveID: "d1"}
+
+	action := &Action{
+		Path: "some/file.txt",
+		Item: &Item{ParentID: ""},
+	}
+
+	parentID, err := exec.resolveParentID(context.Background(), action)
+	require.NoError(t, err)
+	assert.Equal(t, "parent-from-db", parentID, "should resolve from DB when ParentID is empty")
+}
+
+func TestExecutor_ResolveParentID_RootLevel(t *testing.T) {
+	exec, store, _, _ := newTestExecutor(t, t.TempDir())
+
+	// Root-level file: filepath.Dir("file.txt") = ".", which maps to "" path.
+	store.pathItems[""] = &Item{ItemID: "root-item-id", DriveID: "d1"}
+
+	action := &Action{
+		Path: "file.txt",
+		Item: &Item{ParentID: ""},
+	}
+
+	parentID, err := exec.resolveParentID(context.Background(), action)
+	require.NoError(t, err)
+	assert.Equal(t, "root-item-id", parentID, "root-level files should resolve parent from empty path")
+}
+
+func TestExecutor_ResolveParentID_ParentNotFound(t *testing.T) {
+	exec, store, _, _ := newTestExecutor(t, t.TempDir())
+	_ = store // empty store — parent won't be found
+
+	action := &Action{
+		Path: "missing-parent/file.txt",
+		Item: &Item{ParentID: ""},
+	}
+
+	_, err := exec.resolveParentID(context.Background(), action)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parent folder")
+	assert.Contains(t, err.Error(), "not found in DB")
+}
+
+func TestExecutor_ResolveParentID_DBError(t *testing.T) {
+	exec, store, _, _ := newTestExecutor(t, t.TempDir())
+
+	store.getItemByPathErr = errors.New("db error")
+
+	action := &Action{
+		Path: "some/file.txt",
+		Item: &Item{ParentID: ""},
+	}
+
+	_, err := exec.resolveParentID(context.Background(), action)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "resolve parent")
+}
+
+func TestExecutor_Upload_ResolvesEmptyParentID(t *testing.T) {
+	syncRoot := t.TempDir()
+
+	content := []byte("file with empty parentID")
+	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "docs"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "docs", "new.txt"), content, 0o644))
+
+	exec, store, _, _ := newTestExecutor(t, syncRoot)
+
+	// Pre-populate parent folder in DB so resolveParentID can find it.
+	store.pathItems["docs"] = &Item{ItemID: "docs-folder-id", DriveID: "d1"}
+
+	action := Action{
+		Type:    ActionUpload,
+		DriveID: "d1",
+		ItemID:  "new-item",
+		Path:    "docs/new.txt",
+		Item: &Item{
+			DriveID:  "d1",
+			ItemID:   "new-item",
+			ParentID: "", // Empty — scanner-created item.
+			Name:     "new.txt",
+			ItemType: ItemTypeFile,
+		},
+	}
+
+	plan := &ActionPlan{Uploads: []Action{action}}
+	report, err := exec.Execute(context.Background(), plan)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.Uploaded, "upload should succeed with resolved ParentID")
+}
+
 func TestExecutor_Upload_Simple(t *testing.T) {
 	syncRoot := t.TempDir()
 

@@ -29,10 +29,10 @@ func TestSyncE2E_InitialDownload(t *testing.T) {
 
 	report := env.runSyncJSON()
 
-	// All 3 files should exist locally with correct content.
-	assert.Equal(t, "alpha content", string(env.readLocal("alpha.txt")))
-	assert.Equal(t, "bravo content", string(env.readLocal("bravo.txt")))
-	assert.Equal(t, "charlie content", string(env.readLocal("subdir/charlie.txt")))
+	// All 3 files should exist locally under the test folder with correct content.
+	assert.Equal(t, "alpha content", string(env.readLocal(env.testPath("alpha.txt"))))
+	assert.Equal(t, "bravo content", string(env.readLocal(env.testPath("bravo.txt"))))
+	assert.Equal(t, "charlie content", string(env.readLocal(env.testPath("subdir/charlie.txt"))))
 
 	// JSON report should reflect downloads.
 	assert.GreaterOrEqual(t, report.Downloaded, 3, "expected at least 3 downloads")
@@ -43,9 +43,10 @@ func TestSyncE2E_InitialDownload(t *testing.T) {
 func TestSyncE2E_InitialUpload(t *testing.T) {
 	env := newSyncEnv(t, syncEnvOpts{})
 
-	env.writeLocal("uno.txt", "uno content")
-	env.writeLocal("dos.txt", "dos content")
-	env.writeLocal("tres.txt", "tres content")
+	// Write files under the test folder so they upload to the correct remote path.
+	env.writeLocal(env.testPath("uno.txt"), "uno content")
+	env.writeLocal(env.testPath("dos.txt"), "dos content")
+	env.writeLocal(env.testPath("tres.txt"), "tres content")
 
 	report := env.runSyncJSON()
 
@@ -62,14 +63,14 @@ func TestSyncE2E_BidirectionalMerge(t *testing.T) {
 
 	// One file remote-only, one file local-only.
 	env.putRemote("from-remote.txt", "remote data")
-	env.writeLocal("from-local.txt", "local data")
+	env.writeLocal(env.testPath("from-local.txt"), "local data")
 	env.sleep()
 
 	report := env.runSyncJSON()
 
 	// Both files should exist on both sides.
-	assert.True(t, env.localExists("from-remote.txt"), "remote file should be downloaded locally")
-	assert.Equal(t, "remote data", string(env.readLocal("from-remote.txt")))
+	assert.True(t, env.localExists(env.testPath("from-remote.txt")), "remote file should be downloaded locally")
+	assert.Equal(t, "remote data", string(env.readLocal(env.testPath("from-remote.txt"))))
 
 	remoteListing := env.lsRemote("")
 	assert.Contains(t, remoteListing, "from-local.txt", "local file should be uploaded remotely")
@@ -82,7 +83,7 @@ func TestSyncE2E_AlreadyInSync(t *testing.T) {
 	env := newSyncEnv(t, syncEnvOpts{})
 
 	// Establish baseline.
-	env.writeLocal("synced-file.txt", "synced content")
+	env.writeLocal(env.testPath("synced-file.txt"), "synced content")
 	env.runSync()
 
 	// Second sync with no changes.
@@ -101,7 +102,7 @@ func TestSyncE2E_MultipleCycles(t *testing.T) {
 	env := newSyncEnv(t, syncEnvOpts{})
 
 	// Cycle 1: upload a local file.
-	env.writeLocal("cycle-file-1.txt", "cycle one")
+	env.writeLocal(env.testPath("cycle-file-1.txt"), "cycle one")
 	r1 := env.runSyncJSON()
 	assert.GreaterOrEqual(t, r1.Uploaded, 1)
 
@@ -110,10 +111,10 @@ func TestSyncE2E_MultipleCycles(t *testing.T) {
 	env.sleep()
 	r2 := env.runSyncJSON()
 	assert.GreaterOrEqual(t, r2.Downloaded, 1)
-	assert.Equal(t, "cycle two", string(env.readLocal("cycle-file-2.txt")))
+	assert.Equal(t, "cycle two", string(env.readLocal(env.testPath("cycle-file-2.txt"))))
 
 	// Cycle 3: edit a local file.
-	env.writeLocal("cycle-file-1.txt", "cycle one updated")
+	env.writeLocal(env.testPath("cycle-file-1.txt"), "cycle one updated")
 	r3 := env.runSyncJSON()
 	assert.GreaterOrEqual(t, r3.Uploaded, 1)
 
@@ -131,11 +132,11 @@ func TestSyncE2E_IncrementalAddLocal(t *testing.T) {
 	env := newSyncEnv(t, syncEnvOpts{})
 
 	// Baseline.
-	env.writeLocal("baseline-a.txt", "baseline a")
+	env.writeLocal(env.testPath("baseline-a.txt"), "baseline a")
 	env.runSync()
 
 	// Add a new local file.
-	env.writeLocal("added-b.txt", "added b")
+	env.writeLocal(env.testPath("added-b.txt"), "added b")
 	report := env.runSyncJSON()
 
 	assert.Equal(t, 1, report.Uploaded)
@@ -147,7 +148,7 @@ func TestSyncE2E_IncrementalAddRemote(t *testing.T) {
 	env := newSyncEnv(t, syncEnvOpts{})
 
 	// Baseline.
-	env.writeLocal("baseline-c.txt", "baseline c")
+	env.writeLocal(env.testPath("baseline-c.txt"), "baseline c")
 	env.runSync()
 
 	// Add a new remote file.
@@ -156,18 +157,18 @@ func TestSyncE2E_IncrementalAddRemote(t *testing.T) {
 
 	report := env.runSyncJSON()
 	assert.Equal(t, 1, report.Downloaded)
-	assert.Equal(t, "added d", string(env.readLocal("added-d.txt")))
+	assert.Equal(t, "added d", string(env.readLocal(env.testPath("added-d.txt"))))
 }
 
 func TestSyncE2E_IncrementalEditLocal(t *testing.T) {
 	env := newSyncEnv(t, syncEnvOpts{})
 
 	// Baseline with version 1.
-	env.writeLocal("editable.txt", "version 1")
+	env.writeLocal(env.testPath("editable.txt"), "version 1")
 	env.runSync()
 
 	// Edit locally to version 2.
-	env.writeLocal("editable.txt", "version 2")
+	env.writeLocal(env.testPath("editable.txt"), "version 2")
 	report := env.runSyncJSON()
 
 	assert.Equal(t, 1, report.Uploaded)
@@ -186,7 +187,7 @@ func TestSyncE2E_IncrementalEditRemote(t *testing.T) {
 	env := newSyncEnv(t, syncEnvOpts{})
 
 	// Baseline with version 1.
-	env.writeLocal("remote-editable.txt", "version 1")
+	env.writeLocal(env.testPath("remote-editable.txt"), "version 1")
 	env.runSync()
 
 	// Edit remotely to version 2.
@@ -195,7 +196,7 @@ func TestSyncE2E_IncrementalEditRemote(t *testing.T) {
 
 	report := env.runSyncJSON()
 	assert.Equal(t, 1, report.Downloaded)
-	assert.Equal(t, "version 2", string(env.readLocal("remote-editable.txt")))
+	assert.Equal(t, "version 2", string(env.readLocal(env.testPath("remote-editable.txt"))))
 }
 
 // =============================================================================
@@ -206,7 +207,7 @@ func TestSyncE2E_DeleteLocalFile(t *testing.T) {
 	env := newSyncEnv(t, syncEnvOpts{})
 
 	// Baseline: sync a file to both sides.
-	env.writeLocal("delete-me.txt", "will be deleted")
+	env.writeLocal(env.testPath("delete-me.txt"), "will be deleted")
 	env.runSync()
 
 	// Verify it exists remotely.
@@ -214,7 +215,7 @@ func TestSyncE2E_DeleteLocalFile(t *testing.T) {
 	assert.Contains(t, listing, "delete-me.txt")
 
 	// Delete locally.
-	env.removeLocal("delete-me.txt")
+	env.removeLocal(env.testPath("delete-me.txt"))
 	report := env.runSyncJSON()
 
 	assert.Equal(t, 1, report.RemoteDeleted)
@@ -228,7 +229,7 @@ func TestSyncE2E_DeleteRemoteFile(t *testing.T) {
 	env := newSyncEnv(t, syncEnvOpts{})
 
 	// Baseline: sync a file to both sides.
-	env.writeLocal("remote-delete-me.txt", "will be deleted remotely")
+	env.writeLocal(env.testPath("remote-delete-me.txt"), "will be deleted remotely")
 	env.runSync()
 
 	// Delete remotely.
@@ -237,18 +238,18 @@ func TestSyncE2E_DeleteRemoteFile(t *testing.T) {
 
 	report := env.runSyncJSON()
 	assert.Equal(t, 1, report.LocalDeleted)
-	assert.False(t, env.localExists("remote-delete-me.txt"), "local file should be deleted")
+	assert.False(t, env.localExists(env.testPath("remote-delete-me.txt")), "local file should be deleted")
 }
 
 func TestSyncE2E_DeleteLocalFolder(t *testing.T) {
 	env := newSyncEnv(t, syncEnvOpts{})
 
 	// Baseline: sync a folder with a file.
-	env.writeLocal("del-folder/nested-file.txt", "nested content")
+	env.writeLocal(env.testPath("del-folder/nested-file.txt"), "nested content")
 	env.runSync()
 
 	// Delete the folder locally.
-	env.removeLocal("del-folder")
+	env.removeLocal(env.testPath("del-folder"))
 	report := env.runSyncJSON()
 
 	// Should delete both the file and folder remotely.
@@ -259,9 +260,9 @@ func TestSyncE2E_DeleteRemoteFolder(t *testing.T) {
 	env := newSyncEnv(t, syncEnvOpts{})
 
 	// Baseline: sync a folder with a file.
-	env.writeLocal("remote-del-folder/remote-nested.txt", "nested remote")
+	env.writeLocal(env.testPath("remote-del-folder/remote-nested.txt"), "nested remote")
 	env.runSync()
-	assert.True(t, env.localExists("remote-del-folder/remote-nested.txt"))
+	assert.True(t, env.localExists(env.testPath("remote-del-folder/remote-nested.txt")))
 
 	// Delete the folder remotely.
 	env.rmRemote("remote-del-folder")
@@ -269,7 +270,7 @@ func TestSyncE2E_DeleteRemoteFolder(t *testing.T) {
 
 	report := env.runSyncJSON()
 	assert.GreaterOrEqual(t, report.LocalDeleted, 1)
-	assert.False(t, env.localExists("remote-del-folder/remote-nested.txt"), "local nested file should be deleted")
+	assert.False(t, env.localExists(env.testPath("remote-del-folder/remote-nested.txt")), "local nested file should be deleted")
 }
 
 // =============================================================================
@@ -280,11 +281,11 @@ func TestSyncE2E_EditEditConflict(t *testing.T) {
 	env := newSyncEnv(t, syncEnvOpts{})
 
 	// Baseline.
-	env.writeLocal("conflict-edit.txt", "original content")
+	env.writeLocal(env.testPath("conflict-edit.txt"), "original content")
 	env.runSync()
 
 	// Edit on both sides with different content.
-	env.writeLocal("conflict-edit.txt", "local edit version")
+	env.writeLocal(env.testPath("conflict-edit.txt"), "local edit version")
 	env.putRemote("conflict-edit.txt", "remote edit version")
 	env.sleep()
 
@@ -292,10 +293,10 @@ func TestSyncE2E_EditEditConflict(t *testing.T) {
 	assert.Equal(t, 1, report.Conflicts)
 
 	// Remote version wins in the main file.
-	assert.Equal(t, "remote edit version", string(env.readLocal("conflict-edit.txt")))
+	assert.Equal(t, "remote edit version", string(env.readLocal(env.testPath("conflict-edit.txt"))))
 
 	// Local version should be preserved in a conflict copy.
-	conflictPath := env.findConflictFile("conflict-edit.txt")
+	conflictPath := env.findConflictFile(env.testPath("conflict-edit.txt"))
 	assert.NotEmpty(t, conflictPath, "expected a .conflict-* file for local version")
 
 	if conflictPath != "" {
@@ -311,7 +312,7 @@ func TestSyncE2E_CreateCreateConflict(t *testing.T) {
 	env.runSync()
 
 	// Create same file on both sides with different content.
-	env.writeLocal("create-conflict.txt", "local create version")
+	env.writeLocal(env.testPath("create-conflict.txt"), "local create version")
 	env.putRemote("create-conflict.txt", "remote create version")
 	env.sleep()
 
@@ -319,10 +320,10 @@ func TestSyncE2E_CreateCreateConflict(t *testing.T) {
 	assert.Equal(t, 1, report.Conflicts)
 
 	// Remote version wins in the main file.
-	assert.Equal(t, "remote create version", string(env.readLocal("create-conflict.txt")))
+	assert.Equal(t, "remote create version", string(env.readLocal(env.testPath("create-conflict.txt"))))
 
 	// Local version preserved in conflict copy.
-	conflictPath := env.findConflictFile("create-conflict.txt")
+	conflictPath := env.findConflictFile(env.testPath("create-conflict.txt"))
 	assert.NotEmpty(t, conflictPath, "expected a .conflict-* file")
 }
 
@@ -330,11 +331,11 @@ func TestSyncE2E_EditDeleteConflict(t *testing.T) {
 	env := newSyncEnv(t, syncEnvOpts{})
 
 	// Baseline.
-	env.writeLocal("edit-del-conflict.txt", "original for edit-delete")
+	env.writeLocal(env.testPath("edit-del-conflict.txt"), "original for edit-delete")
 	env.runSync()
 
 	// Edit locally, delete remotely.
-	env.writeLocal("edit-del-conflict.txt", "local edit for conflict")
+	env.writeLocal(env.testPath("edit-del-conflict.txt"), "local edit for conflict")
 	env.rmRemote("edit-del-conflict.txt")
 	env.sleep()
 
@@ -342,18 +343,18 @@ func TestSyncE2E_EditDeleteConflict(t *testing.T) {
 	assert.Equal(t, 1, report.Conflicts)
 
 	// Local version should survive (re-uploaded).
-	assert.True(t, env.localExists("edit-del-conflict.txt"), "local file should still exist")
+	assert.True(t, env.localExists(env.testPath("edit-del-conflict.txt")), "local file should still exist")
 }
 
 func TestSyncE2E_FalseConflict(t *testing.T) {
 	env := newSyncEnv(t, syncEnvOpts{})
 
 	// Baseline.
-	env.writeLocal("false-conflict.txt", "original false conflict")
+	env.writeLocal(env.testPath("false-conflict.txt"), "original false conflict")
 	env.runSync()
 
 	// Both sides converge to the same content.
-	env.writeLocal("false-conflict.txt", "converged content")
+	env.writeLocal(env.testPath("false-conflict.txt"), "converged content")
 	env.putRemote("false-conflict.txt", "converged content")
 	env.sleep()
 
@@ -361,10 +362,10 @@ func TestSyncE2E_FalseConflict(t *testing.T) {
 
 	// False conflict: hashes match, so no conflict is reported.
 	assert.Equal(t, 0, report.Conflicts)
-	assert.Equal(t, "converged content", string(env.readLocal("false-conflict.txt")))
+	assert.Equal(t, "converged content", string(env.readLocal(env.testPath("false-conflict.txt"))))
 
 	// No conflict file should exist.
-	conflictPath := env.findConflictFile("false-conflict.txt")
+	conflictPath := env.findConflictFile(env.testPath("false-conflict.txt"))
 	assert.Empty(t, conflictPath, "no conflict file expected for false conflict")
 }
 
@@ -376,13 +377,13 @@ func TestSyncE2E_DownloadOnly(t *testing.T) {
 	env := newSyncEnv(t, syncEnvOpts{})
 
 	env.putRemote("dl-only-remote.txt", "download only content")
-	env.writeLocal("dl-only-local.txt", "upload should not happen")
+	env.writeLocal(env.testPath("dl-only-local.txt"), "upload should not happen")
 	env.sleep()
 
 	report := env.runSyncJSON("--download-only")
 
 	// Remote file should be downloaded.
-	assert.True(t, env.localExists("dl-only-remote.txt"))
+	assert.True(t, env.localExists(env.testPath("dl-only-remote.txt")))
 	assert.GreaterOrEqual(t, report.Downloaded, 1)
 
 	// Local file should NOT be uploaded.
@@ -395,7 +396,7 @@ func TestSyncE2E_UploadOnly(t *testing.T) {
 	env := newSyncEnv(t, syncEnvOpts{})
 
 	env.putRemote("ul-only-remote.txt", "should not be downloaded")
-	env.writeLocal("ul-only-local.txt", "upload only content")
+	env.writeLocal(env.testPath("ul-only-local.txt"), "upload only content")
 	env.sleep()
 
 	report := env.runSyncJSON("--upload-only")
@@ -406,14 +407,14 @@ func TestSyncE2E_UploadOnly(t *testing.T) {
 	assert.GreaterOrEqual(t, report.Uploaded, 1)
 
 	// Remote file should NOT be downloaded.
-	assert.False(t, env.localExists("ul-only-remote.txt"))
+	assert.False(t, env.localExists(env.testPath("ul-only-remote.txt")))
 	assert.Equal(t, "upload-only", report.Mode)
 }
 
 func TestSyncE2E_DryRun(t *testing.T) {
 	env := newSyncEnv(t, syncEnvOpts{})
 
-	env.writeLocal("dry-run-file.txt", "dry run content")
+	env.writeLocal(env.testPath("dry-run-file.txt"), "dry run content")
 
 	report := env.runSyncJSON("--dry-run")
 
@@ -434,12 +435,12 @@ func TestSyncE2E_DryRunNoSideEffects(t *testing.T) {
 
 	// Dry run should not download.
 	env.runSync("--dry-run")
-	assert.False(t, env.localExists("dry-no-effect.txt"), "dry run should not download files")
+	assert.False(t, env.localExists(env.testPath("dry-no-effect.txt")), "dry run should not download files")
 
 	// Real sync should download.
 	env.runSync()
-	assert.True(t, env.localExists("dry-no-effect.txt"), "real sync should download files")
-	assert.Equal(t, "dry run no side effects", string(env.readLocal("dry-no-effect.txt")))
+	assert.True(t, env.localExists(env.testPath("dry-no-effect.txt")), "real sync should download files")
+	assert.Equal(t, "dry run no side effects", string(env.readLocal(env.testPath("dry-no-effect.txt"))))
 }
 
 // =============================================================================
@@ -453,7 +454,7 @@ func TestSyncE2E_NewLocalFolder(t *testing.T) {
 	env.runSync()
 
 	// Create folder with file locally.
-	env.writeLocal("new-local-dir/inside.txt", "inside local dir")
+	env.writeLocal(env.testPath("new-local-dir/inside.txt"), "inside local dir")
 	report := env.runSyncJSON()
 
 	assert.GreaterOrEqual(t, report.FoldersCreated, 1)
@@ -478,14 +479,14 @@ func TestSyncE2E_NewRemoteFolder(t *testing.T) {
 	assert.GreaterOrEqual(t, report.FoldersCreated, 1)
 	assert.GreaterOrEqual(t, report.Downloaded, 1)
 
-	assert.True(t, env.localExists("new-remote-dir/inside-remote.txt"))
-	assert.Equal(t, "inside remote dir", string(env.readLocal("new-remote-dir/inside-remote.txt")))
+	assert.True(t, env.localExists(env.testPath("new-remote-dir/inside-remote.txt")))
+	assert.Equal(t, "inside remote dir", string(env.readLocal(env.testPath("new-remote-dir/inside-remote.txt"))))
 }
 
 func TestSyncE2E_DeepNesting(t *testing.T) {
 	env := newSyncEnv(t, syncEnvOpts{})
 
-	env.writeLocal("level-a/level-b/level-c/level-d/deep-file.txt", "deep nesting content")
+	env.writeLocal(env.testPath("level-a/level-b/level-c/level-d/deep-file.txt"), "deep nesting content")
 	report := env.runSyncJSON()
 
 	assert.GreaterOrEqual(t, report.FoldersCreated, 4, "expected 4 levels of folders created")
@@ -503,7 +504,7 @@ func TestSyncE2E_DeepNesting(t *testing.T) {
 func TestSyncE2E_NosyncGuard(t *testing.T) {
 	env := newSyncEnv(t, syncEnvOpts{})
 
-	// Create a .nosync guard file in the sync directory.
+	// Create a .nosync guard file at the sync root (NOT under testPath).
 	env.writeLocal(".nosync", "")
 
 	output := env.runSyncExpectError()
@@ -518,13 +519,13 @@ func TestSyncE2E_BigDeleteBlocked(t *testing.T) {
 
 	// Create and sync 15 files to establish baseline.
 	for i := range 15 {
-		env.writeLocal(fmt.Sprintf("bulk-file-%02d.txt", i), fmt.Sprintf("bulk content %d", i))
+		env.writeLocal(env.testPath(fmt.Sprintf("bulk-file-%02d.txt", i)), fmt.Sprintf("bulk content %d", i))
 	}
 	env.runSync()
 
 	// Delete all files locally.
 	for i := range 15 {
-		env.removeLocal(fmt.Sprintf("bulk-file-%02d.txt", i))
+		env.removeLocal(env.testPath(fmt.Sprintf("bulk-file-%02d.txt", i)))
 	}
 
 	// Sync without --force should fail.
@@ -544,13 +545,13 @@ func TestSyncE2E_BigDeleteForce(t *testing.T) {
 
 	// Create and sync 15 files.
 	for i := range 15 {
-		env.writeLocal(fmt.Sprintf("force-bulk-%02d.txt", i), fmt.Sprintf("force content %d", i))
+		env.writeLocal(env.testPath(fmt.Sprintf("force-bulk-%02d.txt", i)), fmt.Sprintf("force content %d", i))
 	}
 	env.runSync()
 
 	// Delete all files locally.
 	for i := range 15 {
-		env.removeLocal(fmt.Sprintf("force-bulk-%02d.txt", i))
+		env.removeLocal(env.testPath(fmt.Sprintf("force-bulk-%02d.txt", i)))
 	}
 
 	// Sync with --force should succeed.
@@ -565,8 +566,8 @@ func TestSyncE2E_BigDeleteForce(t *testing.T) {
 func TestSyncE2E_SkipDotfiles(t *testing.T) {
 	env := newSyncEnv(t, syncEnvOpts{skipDotfiles: true})
 
-	env.writeLocal(".hidden-file", "should be skipped")
-	env.writeLocal("visible-file.txt", "should be synced")
+	env.writeLocal(env.testPath(".hidden-file"), "should be skipped")
+	env.writeLocal(env.testPath("visible-file.txt"), "should be synced")
 
 	env.runSync()
 
@@ -578,8 +579,8 @@ func TestSyncE2E_SkipDotfiles(t *testing.T) {
 func TestSyncE2E_SkipFilesPattern(t *testing.T) {
 	env := newSyncEnv(t, syncEnvOpts{skipFiles: []string{"*.log"}})
 
-	env.writeLocal("application.log", "log data should be skipped")
-	env.writeLocal("data-file.txt", "data should be synced")
+	env.writeLocal(env.testPath("application.log"), "log data should be skipped")
+	env.writeLocal(env.testPath("data-file.txt"), "data should be synced")
 
 	env.runSync()
 
@@ -591,8 +592,8 @@ func TestSyncE2E_SkipFilesPattern(t *testing.T) {
 func TestSyncE2E_SkipDirsPattern(t *testing.T) {
 	env := newSyncEnv(t, syncEnvOpts{skipDirs: []string{"node_modules"}})
 
-	env.writeLocal("node_modules/package.json", "npm package should be skipped")
-	env.writeLocal("src/main.go", "source should be synced")
+	env.writeLocal(env.testPath("node_modules/package.json"), "npm package should be skipped")
+	env.writeLocal(env.testPath("src/main.go"), "source should be synced")
 
 	env.runSync()
 
@@ -615,20 +616,14 @@ func TestSyncE2E_LargeFile(t *testing.T) {
 		data[i] = byte(i % 251) // deterministic pattern for corruption detection
 	}
 
-	env.writeLocalBytes("large-sync-file.bin", data)
+	env.writeLocalBytes(env.testPath("large-sync-file.bin"), data)
 	env.runSync()
 
 	// Verify it exists remotely.
 	listing := env.lsRemote("")
 	assert.Contains(t, listing, "large-sync-file.bin")
 
-	// Download via sync to a fresh env to verify round-trip integrity.
-	// Instead, just delete locally and re-sync to download it back.
-	env.removeLocal("large-sync-file.bin")
-
-	// Need to update the state DB to reflect the local deletion.
-	// Running sync again will detect local delete and propagate it remotely (F6).
-	// Instead, let's verify content by downloading directly.
+	// Download via CLI to verify round-trip integrity.
 	tmpDir := t.TempDir()
 	downloadPath := filepath.Join(tmpDir, "large-sync-file.bin")
 	runCLI(t, "get", env.remoteDir+"/large-sync-file.bin", downloadPath)
@@ -641,7 +636,7 @@ func TestSyncE2E_LargeFile(t *testing.T) {
 func TestSyncE2E_UnicodeFilenames(t *testing.T) {
 	env := newSyncEnv(t, syncEnvOpts{})
 
-	env.writeLocal("日本語テスト.txt", "unicode sync content")
+	env.writeLocal(env.testPath("日本語テスト.txt"), "unicode sync content")
 	env.runSync()
 
 	// Verify remotely.
@@ -661,7 +656,7 @@ func TestSyncE2E_UnicodeFilenames(t *testing.T) {
 func TestSyncE2E_SpacesInFilenames(t *testing.T) {
 	env := newSyncEnv(t, syncEnvOpts{})
 
-	env.writeLocal("my test file.txt", "spaces sync content")
+	env.writeLocal(env.testPath("my test file.txt"), "spaces sync content")
 	env.runSync()
 
 	// Verify remotely.
@@ -686,7 +681,7 @@ func TestSyncE2E_JSONOutputFormat(t *testing.T) {
 	env := newSyncEnv(t, syncEnvOpts{})
 
 	// Create a file to trigger at least one action.
-	env.writeLocal("json-format-test.txt", "json format test")
+	env.writeLocal(env.testPath("json-format-test.txt"), "json format test")
 
 	report := env.runSyncJSON()
 
@@ -701,7 +696,7 @@ func TestSyncE2E_JSONOutputFormat(t *testing.T) {
 func TestSyncE2E_QuietMode(t *testing.T) {
 	env := newSyncEnv(t, syncEnvOpts{})
 
-	env.writeLocal("quiet-mode-file.txt", "quiet mode test")
+	env.writeLocal(env.testPath("quiet-mode-file.txt"), "quiet mode test")
 
 	// --quiet is a root persistent flag; Cobra handles it after the subcommand.
 	_, stderr, err := env.runSyncRaw("--quiet")
@@ -716,7 +711,7 @@ func TestSyncE2E_ExitCodeOnErrors(t *testing.T) {
 	// We can verify the JSON+exit-code interaction by running --json with
 	// a scenario that produces errors, or simply verify a clean run exits 0.
 
-	env.writeLocal("exit-code-test.txt", "exit code verification")
+	env.writeLocal(env.testPath("exit-code-test.txt"), "exit code verification")
 
 	// Clean sync should exit 0.
 	_, _, err := env.runSyncRaw("--json")
