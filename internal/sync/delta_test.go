@@ -203,8 +203,9 @@ func (w *testWriter) Write(p []byte) (int, error) {
 
 func TestFetchAndApply_SinglePage(t *testing.T) {
 	store := newMockStore()
-	store.materializeResults["d/item-1"] = "docs/file1.txt"
-	store.materializeResults["d/item-2"] = "docs/folder1"
+	// buildNewItemPath calls MaterializePath with the *parent* ID, then appends
+	// the item's name. Both items have ParentID "root".
+	store.materializeResults["d/root"] = "docs"
 
 	fetcher := newMockFetcher(&graph.DeltaPage{
 		Items: []graph.Item{
@@ -371,7 +372,8 @@ func TestFetchAndApply_DeletedItem_AlreadyTombstoned(t *testing.T) {
 
 func TestFetchAndApply_NewItem(t *testing.T) {
 	store := newMockStore()
-	store.materializeResults["d/item-1"] = "documents/report.docx"
+	// buildNewItemPath calls MaterializePath on the parent, then appends item name.
+	store.materializeResults["d/docs-folder"] = "documents"
 
 	fetcher := newMockFetcher(&graph.DeltaPage{
 		Items: []graph.Item{
@@ -833,6 +835,63 @@ func TestConvertGraphItem_ZeroModifiedAt(t *testing.T) {
 	item := convertGraphItem(gItem, "d")
 	require.NotNil(t, item)
 	assert.Nil(t, item.RemoteMtime, "zero ModifiedAt should result in nil RemoteMtime")
+}
+
+// --- buildNewItemPath tests ---
+
+func TestBuildNewItemPath_RootItem(t *testing.T) {
+	store := newMockStore()
+	dp := NewDeltaProcessor(nil, store, testLogger(t))
+
+	item := &Item{DriveID: "d", ItemID: "root-id", Name: "root", ItemType: ItemTypeRoot}
+	path, err := dp.buildNewItemPath(context.Background(), item)
+	require.NoError(t, err)
+	assert.Equal(t, "", path, "root items should have empty path")
+}
+
+func TestBuildNewItemPath_EmptyParentID(t *testing.T) {
+	store := newMockStore()
+	dp := NewDeltaProcessor(nil, store, testLogger(t))
+
+	item := &Item{DriveID: "d", ItemID: "item-1", Name: "file.txt", ItemType: ItemTypeFile, ParentID: ""}
+	path, err := dp.buildNewItemPath(context.Background(), item)
+	require.NoError(t, err)
+	assert.Equal(t, "file.txt", path, "items with no parent should use just their name")
+}
+
+func TestBuildNewItemPath_ParentIsRoot(t *testing.T) {
+	store := newMockStore()
+	// Root's MaterializePath returns "" (empty path).
+	store.materializeResults["d/root-id"] = ""
+	dp := NewDeltaProcessor(nil, store, testLogger(t))
+
+	item := &Item{DriveID: "d", ItemID: "item-1", Name: "file.txt", ItemType: ItemTypeFile, ParentID: "root-id", ParentDriveID: "d"}
+	path, err := dp.buildNewItemPath(context.Background(), item)
+	require.NoError(t, err)
+	assert.Equal(t, "file.txt", path, "child of root should have just the file name")
+}
+
+func TestBuildNewItemPath_NestedItem(t *testing.T) {
+	store := newMockStore()
+	store.materializeResults["d/folder-id"] = "Documents/Work"
+	dp := NewDeltaProcessor(nil, store, testLogger(t))
+
+	item := &Item{DriveID: "d", ItemID: "item-1", Name: "report.pdf", ItemType: ItemTypeFile, ParentID: "folder-id", ParentDriveID: "d"}
+	path, err := dp.buildNewItemPath(context.Background(), item)
+	require.NoError(t, err)
+	assert.Equal(t, "Documents/Work/report.pdf", path)
+}
+
+func TestBuildNewItemPath_FallbackDriveID(t *testing.T) {
+	store := newMockStore()
+	store.materializeResults["d/parent-id"] = "shared"
+	dp := NewDeltaProcessor(nil, store, testLogger(t))
+
+	// ParentDriveID is empty — should fall back to item's own DriveID.
+	item := &Item{DriveID: "d", ItemID: "item-1", Name: "file.txt", ItemType: ItemTypeFile, ParentID: "parent-id", ParentDriveID: ""}
+	path, err := dp.buildNewItemPath(context.Background(), item)
+	require.NoError(t, err)
+	assert.Equal(t, "shared/file.txt", path)
 }
 
 func TestReorderDeletions(t *testing.T) {

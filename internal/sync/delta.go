@@ -244,11 +244,13 @@ func (dp *DeltaProcessor) applyDeletion(ctx context.Context, existing, incoming 
 }
 
 // applyNewItem handles an item that does not exist in the state database.
-// Materializes the path from the parent chain and inserts.
+// Builds the path from the parent chain (since the item itself is not yet
+// in the DB, we can't use MaterializePath which walks from the item's own
+// record). Root items get path ""; other items get parentPath/name.
 func (dp *DeltaProcessor) applyNewItem(ctx context.Context, item *Item) error {
-	path, err := dp.store.MaterializePath(ctx, item.DriveID, item.ItemID)
+	path, err := dp.buildNewItemPath(ctx, item)
 	if err != nil {
-		return fmt.Errorf("materialize path for new item: %w", err)
+		return fmt.Errorf("build path for new item: %w", err)
 	}
 
 	item.Path = path
@@ -260,6 +262,39 @@ func (dp *DeltaProcessor) applyNewItem(ctx context.Context, item *Item) error {
 	)
 
 	return dp.store.UpsertItem(ctx, item)
+}
+
+// buildNewItemPath computes the path for a new item that is not yet in the DB.
+// Root items return "". Other items materialize the parent's path and append
+// their own name. Returns "" if the parent is an orphan (B-022).
+func (dp *DeltaProcessor) buildNewItemPath(ctx context.Context, item *Item) (string, error) {
+	if item.ItemType == ItemTypeRoot {
+		return "", nil
+	}
+
+	if item.ParentID == "" {
+		// No parent reference — treat as root-level item.
+		return item.Name, nil
+	}
+
+	// Use the item's own DriveID as fallback when ParentDriveID is empty
+	// (same-drive items from the delta API don't always have ParentDriveID set).
+	parentDriveID := item.ParentDriveID
+	if parentDriveID == "" {
+		parentDriveID = item.DriveID
+	}
+
+	parentPath, err := dp.store.MaterializePath(ctx, parentDriveID, item.ParentID)
+	if err != nil {
+		return "", err
+	}
+
+	// Empty parentPath means parent is root or orphan — either way, just use name.
+	if parentPath == "" {
+		return item.Name, nil
+	}
+
+	return parentPath + "/" + item.Name, nil
 }
 
 // applyResurrection handles a previously-tombstoned item that reappears
