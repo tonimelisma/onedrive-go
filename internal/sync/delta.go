@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
@@ -390,9 +391,13 @@ func convertGraphItem(gItem *graph.Item, driveID string) *Item {
 		UpdatedAt:     NowNano(),
 	}
 
-	// Use drive ID from the graph item if present, otherwise use the
-	// drive ID passed by the caller (the drive being synced).
-	if gItem.DriveID != "" {
+	// Use the canonical drive ID from the caller for same-drive items.
+	// The Graph API returns lowercase hex drive IDs (e.g., "bd50cf43646e28e6")
+	// while the config may use uppercase ("BD50CF43646E28E6"). SQLite TEXT
+	// primary keys are case-sensitive, so mixing cases creates duplicate rows
+	// for the same item. Only use the API's drive ID for cross-drive references
+	// (shared items from a different drive).
+	if gItem.DriveID != "" && !strings.EqualFold(gItem.DriveID, driveID) {
 		item.DriveID = gItem.DriveID
 	} else {
 		item.DriveID = driveID

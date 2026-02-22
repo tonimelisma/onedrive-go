@@ -837,6 +837,59 @@ func TestConvertGraphItem_ZeroModifiedAt(t *testing.T) {
 	assert.Nil(t, item.RemoteMtime, "zero ModifiedAt should result in nil RemoteMtime")
 }
 
+// --- DriveID case normalization tests ---
+
+// testCanonicalDriveID is the canonical (uppercase) drive ID used by config/engine.
+const testCanonicalDriveID = "BD50CF43646E28E6"
+
+func TestConvertGraphItem_DriveID_CaseNormalization(t *testing.T) {
+	// Graph API returns lowercase DriveID for same-drive items.
+	// The converter should use the canonical (caller-provided) ID.
+	gItem := &graph.Item{
+		ID:      "item-1",
+		Name:    "file.txt",
+		DriveID: "bd50cf43646e28e6", // lowercase from Graph API
+		Size:    100,
+	}
+
+	item := convertGraphItem(gItem, testCanonicalDriveID)
+	require.NotNil(t, item)
+	assert.Equal(t, testCanonicalDriveID, item.DriveID,
+		"same-drive items should use canonical DriveID, not API's lowercase version")
+}
+
+func TestConvertGraphItem_DriveID_CrossDrivePreserved(t *testing.T) {
+	crossDriveID := "AABBCCDD11223344"
+
+	// Cross-drive items (shared from a different drive) should keep the API's ID.
+	gItem := &graph.Item{
+		ID:      "item-1",
+		Name:    "shared.txt",
+		DriveID: crossDriveID, // different drive entirely
+		Size:    100,
+	}
+
+	item := convertGraphItem(gItem, testCanonicalDriveID)
+	require.NotNil(t, item)
+	assert.Equal(t, crossDriveID, item.DriveID,
+		"cross-drive items should preserve the API's DriveID")
+}
+
+func TestConvertGraphItem_DriveID_EmptyFallsBackToCanonical(t *testing.T) {
+	// Items without a DriveID (common for same-drive delta responses)
+	// should use the canonical ID.
+	gItem := &graph.Item{
+		ID:   "item-1",
+		Name: "file.txt",
+		Size: 100,
+	}
+
+	item := convertGraphItem(gItem, testCanonicalDriveID)
+	require.NotNil(t, item)
+	assert.Equal(t, testCanonicalDriveID, item.DriveID,
+		"items without DriveID should use canonical ID")
+}
+
 // --- buildNewItemPath tests ---
 
 func TestBuildNewItemPath_RootItem(t *testing.T) {

@@ -203,6 +203,7 @@ func (s *Scanner) handleNewDirectory(ctx context.Context, relPath string) error 
 	now := NowNano()
 	item := &Item{
 		DriveID:    s.driveID,
+		ItemID:     localItemID(relPath),
 		Path:       relPath,
 		Name:       filepath.Base(relPath),
 		ItemType:   ItemTypeFolder,
@@ -335,6 +336,7 @@ func (s *Scanner) handleNewFile(ctx context.Context, fullPath, relPath string, i
 	now := NowNano()
 	item := &Item{
 		DriveID:    s.driveID,
+		ItemID:     localItemID(relPath),
 		Path:       relPath,
 		Name:       filepath.Base(relPath),
 		ItemType:   ItemTypeFile,
@@ -511,6 +513,15 @@ func computeHash(path string) (string, error) {
 	}
 
 	return base64.StdEncoding.EncodeToString(h.Sum(nil)), nil
+}
+
+// localItemID generates a unique temporary ItemID for scanner-created items.
+// The "local:" prefix prevents collision with server-assigned IDs (which use
+// the drive's hex ID prefix, e.g., "BD50CF43646E28E6!sXXX"). The path suffix
+// makes each ID unique within a drive. The executor replaces this with the
+// server-assigned ID on upload (B-050 cleanup).
+func localItemID(relPath string) string {
+	return "local:" + relPath
 }
 
 // joinRelPath builds a relative path from a parent and child component.
