@@ -313,6 +313,9 @@ sync_dir = "~/OneDrive"
 }
 
 func TestResolveDrive_NoDrives_Error(t *testing.T) {
+	// Override HOME so token discovery finds nothing on disk.
+	t.Setenv("HOME", t.TempDir())
+
 	path := writeTestConfig(t, `log_level = "debug"`)
 	_, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path},
@@ -320,7 +323,7 @@ func TestResolveDrive_NoDrives_Error(t *testing.T) {
 		testLogger(t),
 	)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no drives configured")
+	assert.Contains(t, err.Error(), "no accounts")
 }
 
 func TestResolveDrive_MultipleDrives_NoDriveFlag_Error(t *testing.T) {
@@ -437,13 +440,16 @@ func TestResolveDrive_InvalidConfigFile(t *testing.T) {
 }
 
 func TestResolveDrive_NoConfigFile(t *testing.T) {
+	// Override HOME so token discovery finds nothing on disk.
+	t.Setenv("HOME", t.TempDir())
+
 	_, err := ResolveDrive(
 		EnvOverrides{ConfigPath: "/nonexistent/config.toml"},
 		CLIOverrides{},
 		testLogger(t),
 	)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no drives configured")
+	assert.Contains(t, err.Error(), "no accounts")
 }
 
 func TestResolveDrive_PerDriveOverridesApplied(t *testing.T) {
