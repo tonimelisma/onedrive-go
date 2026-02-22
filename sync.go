@@ -12,16 +12,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
-// nanosToMillis converts nanoseconds to milliseconds for human-readable durations.
-const nanosToMillis = 1_000_000
-
-// Sync mode names for display output.
-const (
-	modeNameBidirectional = "bidirectional"
-	modeNameDownloadOnly  = "download-only"
-	modeNameUploadOnly    = "upload-only"
-)
-
 func newSyncCmd() *cobra.Command {
 	var flagDownloadOnly, flagUploadOnly, flagDryRun, flagForce, flagWatch bool
 
@@ -69,7 +59,7 @@ func runSync(ctx context.Context, downloadOnly, uploadOnly, dryRun, force, watch
 		return err
 	}
 
-	logger.Info("sync: starting", "mode", syncModeName(mode), "dry_run", dryRun, "force", force)
+	logger.Info("sync: starting", "mode", mode, "dry_run", dryRun, "force", force)
 
 	statePath := config.DriveStatePath(resolvedCfg.CanonicalID)
 	if statePath == "" {
@@ -99,10 +89,12 @@ func runSync(ctx context.Context, downloadOnly, uploadOnly, dryRun, force, watch
 	}
 
 	if flagJSON {
-		return printSyncJSON(report)
+		if err := printSyncJSON(report); err != nil {
+			return err
+		}
+	} else {
+		printSyncText(report)
 	}
-
-	printSyncText(report)
 
 	if len(report.Errors) > 0 {
 		return fmt.Errorf("sync completed with %d errors", len(report.Errors))
@@ -111,45 +103,25 @@ func runSync(ctx context.Context, downloadOnly, uploadOnly, dryRun, force, watch
 	return nil
 }
 
-// syncModeName returns a human-readable name for a SyncMode value.
-func syncModeName(mode sync.SyncMode) string {
-	switch mode {
-	case sync.SyncBidirectional:
-		return modeNameBidirectional
-	case sync.SyncDownloadOnly:
-		return modeNameDownloadOnly
-	case sync.SyncUploadOnly:
-		return modeNameUploadOnly
-	}
-
-	return modeNameBidirectional
-}
-
 func printSyncText(report *sync.SyncReport) {
-	durationMs := (report.CompletedAt - report.StartedAt) / nanosToMillis
-
-	totalChanges := report.Downloaded + report.Uploaded + report.FoldersCreated +
-		report.Moved + report.LocalDeleted + report.RemoteDeleted
+	durationMs := report.DurationMs()
 
 	if report.DryRun {
 		printDryRunText(report, durationMs)
 		return
 	}
 
-	if totalChanges == 0 && report.Conflicts == 0 && len(report.Errors) == 0 {
+	if report.TotalChanges() == 0 && report.Conflicts == 0 && len(report.Errors) == 0 {
 		statusf("Already in sync.\n")
 		return
 	}
 
-	statusf("Sync complete (%s, %dms)\n", syncModeName(report.Mode), durationMs)
+	statusf("Sync complete (%s, %dms)\n", report.Mode, durationMs)
 	printSyncCountsText(report)
 }
 
 func printDryRunText(report *sync.SyncReport, durationMs int64) {
-	totalChanges := report.Downloaded + report.Uploaded + report.FoldersCreated +
-		report.Moved + report.LocalDeleted + report.RemoteDeleted
-
-	if totalChanges == 0 && report.Conflicts == 0 {
+	if report.TotalChanges() == 0 && report.Conflicts == 0 {
 		statusf("Dry run complete (%dms) — already in sync.\n", durationMs)
 		return
 	}
@@ -212,8 +184,6 @@ type syncJSONError struct {
 }
 
 func printSyncJSON(report *sync.SyncReport) error {
-	durationMs := (report.CompletedAt - report.StartedAt) / nanosToMillis
-
 	errs := make([]syncJSONError, 0, len(report.Errors))
 	for i := range report.Errors {
 		errs = append(errs, syncJSONError{
@@ -223,9 +193,9 @@ func printSyncJSON(report *sync.SyncReport) error {
 	}
 
 	out := syncJSONOutput{
-		Mode:           syncModeName(report.Mode),
+		Mode:           report.Mode.String(),
 		DryRun:         report.DryRun,
-		DurationMs:     durationMs,
+		DurationMs:     report.DurationMs(),
 		FoldersCreated: report.FoldersCreated,
 		Downloaded:     report.Downloaded,
 		BytesDown:      report.BytesDownloaded,

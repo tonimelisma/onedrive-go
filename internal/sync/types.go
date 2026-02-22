@@ -183,6 +183,29 @@ const (
 	SyncUploadOnly
 )
 
+// Sync mode display names (goconst: each string must appear only once).
+const (
+	syncModeBidirectionalName = "bidirectional"
+	syncModeDownloadOnlyName  = "download-only"
+	syncModeUploadOnlyName    = "upload-only"
+)
+
+// String returns a human-readable name for a SyncMode value.
+// slog uses this automatically for structured log fields, so engine and
+// reconciler logs render "bidirectional" instead of "0".
+func (m SyncMode) String() string {
+	switch m {
+	case SyncBidirectional:
+		return syncModeBidirectionalName
+	case SyncDownloadOnly:
+		return syncModeDownloadOnlyName
+	case SyncUploadOnly:
+		return syncModeUploadOnlyName
+	}
+
+	return syncModeBidirectionalName
+}
+
 // Action represents a single planned operation produced by the reconciler.
 type Action struct {
 	Type         ActionType
@@ -413,6 +436,20 @@ type SyncReport struct {
 	Cleanups        int
 	Skipped         int
 	Errors          []ActionError
+}
+
+// TotalChanges returns the sum of all change counters (downloads, uploads,
+// folder creates, moves, and deletes). Excludes conflicts, synced updates,
+// cleanups, and errors — those are informational, not changes.
+func (r *SyncReport) TotalChanges() int {
+	return r.Downloaded + r.Uploaded + r.FoldersCreated +
+		r.Moved + r.LocalDeleted + r.RemoteDeleted
+}
+
+// DurationMs returns the sync duration in milliseconds, computed from
+// StartedAt and CompletedAt timestamps (Unix nanoseconds).
+func (r *SyncReport) DurationMs() int64 {
+	return (r.CompletedAt - r.StartedAt) / nanosecondsPerMillisecond
 }
 
 // Filter determines whether a file or directory should be included in sync.
