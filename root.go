@@ -22,6 +22,7 @@ var (
 	flagDrive      string
 	flagJSON       bool
 	flagVerbose    bool
+	flagDebug      bool
 	flagQuiet      bool
 )
 
@@ -86,8 +87,11 @@ func newRootCmd() *cobra.Command {
 	cmd.PersistentFlags().StringVar(&flagAccount, "account", "", "account for auth commands (e.g., user@example.com)")
 	cmd.PersistentFlags().StringVar(&flagDrive, "drive", "", "drive selector (canonical ID, alias, or partial match)")
 	cmd.PersistentFlags().BoolVar(&flagJSON, "json", false, "output in JSON format")
-	cmd.PersistentFlags().BoolVarP(&flagVerbose, "verbose", "v", false, "enable debug logging")
+	cmd.PersistentFlags().BoolVarP(&flagVerbose, "verbose", "v", false, "show detailed output")
+	cmd.PersistentFlags().BoolVar(&flagDebug, "debug", false, "enable debug logging (HTTP requests, config resolution)")
 	cmd.PersistentFlags().BoolVarP(&flagQuiet, "quiet", "q", false, "suppress informational output")
+
+	cmd.MarkFlagsMutuallyExclusive("verbose", "debug", "quiet")
 
 	// Register subcommands.
 	cmd.AddCommand(newLoginCmd())
@@ -110,7 +114,7 @@ func newRootCmd() *cobra.Command {
 // chain and stores the result in resolvedCfg for use by subcommands.
 func loadConfig(cmd *cobra.Command) error {
 	// Bootstrap logger derived from CLI flags only (resolvedCfg doesn't exist yet).
-	// Logs config resolution inputs and outputs at Debug level so --verbose
+	// Logs config resolution inputs and outputs at Debug level so --debug
 	// reveals what config path, drive selector, and env overrides are in play.
 	logger := bootstrapLogger()
 
@@ -149,11 +153,16 @@ func loadConfig(cmd *cobra.Command) error {
 }
 
 // bootstrapLogger creates a minimal logger from CLI flags before resolvedCfg
-// exists. Only --verbose and --quiet are considered (no config-file log level).
+// exists. Only --verbose, --debug, and --quiet are considered (no config-file
+// log level). The flags are mutually exclusive (enforced by Cobra).
 func bootstrapLogger() *slog.Logger {
-	level := slog.LevelInfo
+	level := slog.LevelWarn
 
 	if flagVerbose {
+		level = slog.LevelInfo
+	}
+
+	if flagDebug {
 		level = slog.LevelDebug
 	}
 
@@ -165,18 +174,19 @@ func bootstrapLogger() *slog.Logger {
 }
 
 // buildLogger creates an slog.Logger configured by the resolved config and
-// CLI flags. Config-file log level provides the baseline; --verbose and
-// --quiet override it because CLI flags always win.
+// CLI flags. Config-file log level provides the baseline; --verbose, --debug,
+// and --quiet override it because CLI flags always win. The flags are mutually
+// exclusive (enforced by Cobra).
 func buildLogger() *slog.Logger {
-	level := slog.LevelInfo
+	level := slog.LevelWarn
 
 	// Config-based log level (lower priority than CLI flags).
 	if resolvedCfg != nil {
 		switch resolvedCfg.LogLevel {
 		case "debug":
 			level = slog.LevelDebug
-		case "warn":
-			level = slog.LevelWarn
+		case "info":
+			level = slog.LevelInfo
 		case "error":
 			level = slog.LevelError
 		}
@@ -184,6 +194,10 @@ func buildLogger() *slog.Logger {
 
 	// CLI flags override config (highest priority).
 	if flagVerbose {
+		level = slog.LevelInfo
+	}
+
+	if flagDebug {
 		level = slog.LevelDebug
 	}
 
