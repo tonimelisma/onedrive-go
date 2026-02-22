@@ -38,6 +38,8 @@ type ResolvedDrive struct {
 // matchDrive selects a drive from the config by selector string. The matching
 // precedence is: exact canonical ID > alias > partial canonical ID substring.
 // If selector is empty, auto-selects when exactly one drive is configured.
+// When no drives are configured and no selector is given, falls back to
+// token discovery on disk (see DiscoverTokens).
 func matchDrive(cfg *Config, selector string, logger *slog.Logger) (string, Drive, error) {
 	if len(cfg.Drives) == 0 {
 		// If the selector looks like a canonical ID (contains ":"), allow
@@ -49,7 +51,13 @@ func matchDrive(cfg *Config, selector string, logger *slog.Logger) (string, Driv
 			return selector, Drive{}, nil
 		}
 
-		return "", Drive{}, fmt.Errorf("no drives configured — run 'onedrive-go login' to get started")
+		// Non-canonical selector with no drives — can't match against anything.
+		if selector != "" {
+			return "", Drive{}, fmt.Errorf("no drives configured — run 'onedrive-go login' to get started")
+		}
+
+		// No selector and no config — discover tokens on disk.
+		return matchDiscoveredTokens(logger)
 	}
 
 	if selector == "" {
@@ -185,6 +193,81 @@ func expandTilde(path string) string {
 	}
 
 	return filepath.Join(home, path[2:])
+}
+
+// matchDiscoveredTokens auto-selects a drive from token files found on disk.
+// This enables the zero-config experience: login → ls works without a config file.
+func matchDiscoveredTokens(logger *slog.Logger) (string, Drive, error) {
+	tokens := DiscoverTokens(logger)
+
+	switch len(tokens) {
+	case 0:
+		return "", Drive{}, fmt.Errorf("no accounts — run 'onedrive-go login' to get started")
+	case 1:
+		logger.Debug("auto-selected single discovered token", "canonical_id", tokens[0])
+
+		return tokens[0], Drive{}, nil
+	default:
+		return "", Drive{}, fmt.Errorf(
+			"multiple accounts found — specify with --drive:\n  %s",
+			strings.Join(tokens, "\n  "))
+	}
+}
+
+// DiscoverTokens lists token files in the default data directory and returns
+// canonical drive IDs extracted from filenames. Token files follow the naming
+// convention: token_{type}_{email}.json (e.g., token_personal_user@example.com.json).
+// This enables zero-config drive discovery when no config file exists.
+func DiscoverTokens(logger *slog.Logger) []string {
+	return discoverTokensIn(DefaultDataDir(), logger)
+}
+
+// discoverTokensIn scans dir for token files and extracts canonical IDs.
+// Files that don't match the token naming convention are silently skipped.
+func discoverTokensIn(dir string, logger *slog.Logger) []string {
+	if dir == "" {
+		return nil
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		logger.Debug("cannot read data directory for token discovery", "dir", dir, "error", err)
+
+		return nil
+	}
+
+	var ids []string
+
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+
+		name := e.Name()
+		if !strings.HasPrefix(name, "token_") || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+
+		// Strip "token_" prefix and ".json" suffix, then split on first "_"
+		// to recover {type}:{email}. Emails may contain underscores, so only
+		// the first underscore separates type from email.
+		inner := strings.TrimPrefix(name, "token_")
+		inner = strings.TrimSuffix(inner, ".json")
+
+		parts := strings.SplitN(inner, "_", driveTypeParts)
+		if len(parts) < driveTypeParts || parts[0] == "" || parts[1] == "" {
+			logger.Debug("skipping malformed token filename", "name", name)
+
+			continue
+		}
+
+		ids = append(ids, parts[0]+":"+parts[1])
+	}
+
+	sort.Strings(ids)
+	logger.Debug("token discovery complete", "dir", dir, "count", len(ids))
+
+	return ids
 }
 
 // DriveTokenPath returns the token file path for a canonical drive ID.

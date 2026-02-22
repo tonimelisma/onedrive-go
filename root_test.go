@@ -13,6 +13,13 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 )
 
+// Global flag reset pattern: newRootCmd() binds flags via StringVar/BoolVar,
+// which reset the global flag variables to their zero values. Tests must either:
+//   - Set globals AFTER newRootCmd() returns (direct function tests), or
+//   - Use cmd.SetArgs() + cmd.Execute() to let Cobra parse flags (integration tests).
+//
+// Setting a global before newRootCmd() and expecting it to survive is a bug.
+
 // --- bootstrapLogger tests ---
 
 func TestBootstrapLogger_Default(t *testing.T) {

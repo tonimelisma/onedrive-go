@@ -33,12 +33,15 @@ func TestMatchDrive_MultipleDrives_NoSelector_Error(t *testing.T) {
 	assert.Contains(t, err.Error(), "multiple drives")
 }
 
-func TestMatchDrive_NoDrives_Error(t *testing.T) {
+func TestMatchDrive_NoDrives_NoSelector_NoTokens(t *testing.T) {
+	// Override HOME so DiscoverTokens finds no real tokens on disk.
+	t.Setenv("HOME", t.TempDir())
+
 	cfg := DefaultConfig()
 
 	_, _, err := matchDrive(cfg, "", testLogger(t))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no drives configured")
+	assert.Contains(t, err.Error(), "no accounts")
 }
 
 func TestMatchDrive_NoDrives_CanonicalSelector(t *testing.T) {
@@ -53,7 +56,8 @@ func TestMatchDrive_NoDrives_CanonicalSelector(t *testing.T) {
 }
 
 func TestMatchDrive_NoDrives_NonCanonicalSelector_Error(t *testing.T) {
-	// A non-canonical selector (no ":") should still fail when no drives configured.
+	// A non-canonical selector (no ":") with no drives can't match anything —
+	// token discovery only applies when no selector is given.
 	cfg := DefaultConfig()
 
 	_, _, err := matchDrive(cfg, "home", testLogger(t))
@@ -405,4 +409,131 @@ alias = "work"
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "business:alice@contoso.com", resolved.CanonicalID)
+}
+
+// --- discoverTokensIn ---
+
+func TestDiscoverTokensIn_EmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	ids := discoverTokensIn(dir, testLogger(t))
+	assert.Empty(t, ids)
+}
+
+func TestDiscoverTokensIn_EmptyPath(t *testing.T) {
+	ids := discoverTokensIn("", testLogger(t))
+	assert.Nil(t, ids)
+}
+
+func TestDiscoverTokensIn_NonexistentDir(t *testing.T) {
+	ids := discoverTokensIn("/nonexistent/path", testLogger(t))
+	assert.Nil(t, ids)
+}
+
+func TestDiscoverTokensIn_OneToken(t *testing.T) {
+	dir := t.TempDir()
+	writeTokenFile(t, dir, "token_personal_user@example.com.json")
+
+	ids := discoverTokensIn(dir, testLogger(t))
+	require.Len(t, ids, 1)
+	assert.Equal(t, "personal:user@example.com", ids[0])
+}
+
+func TestDiscoverTokensIn_TwoTokens_Sorted(t *testing.T) {
+	dir := t.TempDir()
+	writeTokenFile(t, dir, "token_personal_zack@example.com.json")
+	writeTokenFile(t, dir, "token_business_alice@contoso.com.json")
+
+	ids := discoverTokensIn(dir, testLogger(t))
+	require.Len(t, ids, 2)
+	// Should be sorted alphabetically.
+	assert.Equal(t, "business:alice@contoso.com", ids[0])
+	assert.Equal(t, "personal:zack@example.com", ids[1])
+}
+
+func TestDiscoverTokensIn_IgnoresNonTokenFiles(t *testing.T) {
+	dir := t.TempDir()
+	writeTokenFile(t, dir, "token_personal_user@example.com.json")
+	writeTokenFile(t, dir, "state_personal_user@example.com.db")
+	writeTokenFile(t, dir, "config.toml")
+	writeTokenFile(t, dir, "random.json")
+
+	ids := discoverTokensIn(dir, testLogger(t))
+	require.Len(t, ids, 1)
+	assert.Equal(t, "personal:user@example.com", ids[0])
+}
+
+func TestDiscoverTokensIn_SkipsMalformed(t *testing.T) {
+	dir := t.TempDir()
+	writeTokenFile(t, dir, "token_personal_user@example.com.json") // valid
+	writeTokenFile(t, dir, "token_.json")                          // empty inner
+	writeTokenFile(t, dir, "token_nounderscore.json")              // no type/email separator
+
+	ids := discoverTokensIn(dir, testLogger(t))
+	require.Len(t, ids, 1)
+	assert.Equal(t, "personal:user@example.com", ids[0])
+}
+
+func TestDiscoverTokensIn_IgnoresDirectories(t *testing.T) {
+	dir := t.TempDir()
+	writeTokenFile(t, dir, "token_personal_user@example.com.json")
+
+	// Create a subdirectory that matches the token naming pattern.
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "token_personal_dir@example.com.json"), 0o755))
+
+	ids := discoverTokensIn(dir, testLogger(t))
+	require.Len(t, ids, 1)
+	assert.Equal(t, "personal:user@example.com", ids[0])
+}
+
+// --- matchDrive with token discovery ---
+
+func TestMatchDrive_NoDrives_NoSelector_OneToken(t *testing.T) {
+	dataDir := setTestDataDir(t)
+	writeTokenFile(t, dataDir, "token_personal_user@example.com.json")
+
+	cfg := DefaultConfig()
+
+	id, _, err := matchDrive(cfg, "", testLogger(t))
+	require.NoError(t, err)
+	assert.Equal(t, "personal:user@example.com", id)
+}
+
+func TestMatchDrive_NoDrives_NoSelector_MultipleTokens(t *testing.T) {
+	dataDir := setTestDataDir(t)
+	writeTokenFile(t, dataDir, "token_personal_user@example.com.json")
+	writeTokenFile(t, dataDir, "token_business_alice@contoso.com.json")
+
+	cfg := DefaultConfig()
+
+	_, _, err := matchDrive(cfg, "", testLogger(t))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "multiple accounts found")
+	assert.Contains(t, err.Error(), "personal:user@example.com")
+	assert.Contains(t, err.Error(), "business:alice@contoso.com")
+}
+
+// --- test helpers ---
+
+// writeTokenFile creates an empty file with the given name in dir.
+func writeTokenFile(t *testing.T, dir, name string) {
+	t.Helper()
+
+	err := os.WriteFile(filepath.Join(dir, name), []byte("{}"), 0o600)
+	require.NoError(t, err)
+}
+
+// setTestDataDir overrides HOME so DefaultDataDir() returns a temp directory,
+// creates that directory, and returns its path. This isolates token discovery
+// tests from real tokens on the developer's machine.
+func setTestDataDir(t *testing.T) string {
+	t.Helper()
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// DefaultDataDir() derives from HOME — create the expected directory structure.
+	dataDir := DefaultDataDir()
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	return dataDir
 }
