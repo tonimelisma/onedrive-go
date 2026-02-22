@@ -917,3 +917,32 @@ func TestDeleteItemByKey_Nonexistent(t *testing.T) {
 	err := store.DeleteItemByKey(ctx, "d1", "nonexistent")
 	assert.NoError(t, err)
 }
+
+// --- Regression tests for PR #72 fixes ---
+
+// TestMaterializePath_EmptyParentDriveID_FallsBackToDriveID verifies that
+// walkParentChain uses the item's own DriveID as fallback when ParentDriveID
+// is empty. Without this fallback, the parent lookup uses an empty drive ID
+// and fails to find the parent, returning an orphan (empty path).
+func TestMaterializePath_EmptyParentDriveID_FallsBackToDriveID(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	// Root with DriveID "d1".
+	root := makeTestItem("d1", "root1", "", "", "root", ItemTypeRoot)
+	require.NoError(t, store.UpsertItem(ctx, root))
+
+	// Folder with DriveID "d1" but EMPTY ParentDriveID.
+	// Same-drive items from the delta API sometimes omit ParentDriveID.
+	folder := makeTestItem("d1", "folder1", "", "root1", "Documents", ItemTypeFolder)
+	require.NoError(t, store.UpsertItem(ctx, folder))
+
+	// File under the folder, also with empty ParentDriveID.
+	file := makeTestItem("d1", "file1", "", "folder1", "report.pdf", ItemTypeFile)
+	require.NoError(t, store.UpsertItem(ctx, file))
+
+	path, err := store.MaterializePath(ctx, "d1", "file1")
+	require.NoError(t, err)
+	assert.Equal(t, "Documents/report.pdf", path,
+		"should resolve correctly using DriveID fallback when ParentDriveID is empty")
+}

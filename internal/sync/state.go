@@ -727,7 +727,14 @@ func (s *SQLiteStore) walkParentChain(ctx context.Context, driveID, itemID strin
 			break
 		}
 
+		// Use item's own DriveID as fallback when ParentDriveID is empty.
+		// Same-drive items from the delta API don't always populate ParentDriveID,
+		// matching the fallback in buildNewItemPath.
 		currentDriveID = item.ParentDriveID
+		if currentDriveID == "" {
+			currentDriveID = item.DriveID
+		}
+
 		currentItemID = item.ParentID
 	}
 

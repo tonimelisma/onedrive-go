@@ -335,7 +335,11 @@ func (dp *DeltaProcessor) applyUpdate(ctx context.Context, existing, incoming *I
 	existing.UpdatedAt = NowNano()
 
 	// Detect move or rename: parent or name changed.
-	if incoming.ParentID != oldParentID || incoming.Name != oldName {
+	// Guard: only trigger when oldParentID is non-empty. Scanner-created items
+	// have empty ParentID (the scanner doesn't know remote parent IDs). The
+	// first delta after upload fills in the real ParentID — that's not an actual
+	// move, just backfilling missing metadata.
+	if oldParentID != "" && (incoming.ParentID != oldParentID || incoming.Name != oldName) {
 		return dp.applyMoveOrRename(ctx, existing, oldPath)
 	}
 
@@ -343,11 +347,13 @@ func (dp *DeltaProcessor) applyUpdate(ctx context.Context, existing, incoming *I
 }
 
 // applyMoveOrRename re-materializes the path after a parent or name change
-// and cascades path updates for folder moves.
+// and cascades path updates for folder moves. Uses buildNewItemPath (which reads
+// the in-memory item's already-updated ParentID/Name) rather than MaterializePath
+// (which would read stale parent references from the DB before the upsert).
 func (dp *DeltaProcessor) applyMoveOrRename(ctx context.Context, existing *Item, oldPath string) error {
-	newPath, err := dp.store.MaterializePath(ctx, existing.DriveID, existing.ItemID)
+	newPath, err := dp.buildNewItemPath(ctx, existing)
 	if err != nil {
-		return fmt.Errorf("materialize path for moved item: %w", err)
+		return fmt.Errorf("build path for moved item: %w", err)
 	}
 
 	existing.Path = newPath
@@ -378,17 +384,16 @@ func convertGraphItem(gItem *graph.Item, driveID string) *Item {
 	}
 
 	item := &Item{
-		ItemID:        gItem.ID,
-		Name:          gItem.Name,
-		ParentID:      gItem.ParentID,
-		ParentDriveID: gItem.ParentDriveID,
-		ETag:          gItem.ETag,
-		CTag:          gItem.CTag,
-		QuickXorHash:  gItem.QuickXorHash,
-		SHA256Hash:    gItem.SHA256Hash,
-		IsDeleted:     gItem.IsDeleted,
-		CreatedAt:     NowNano(),
-		UpdatedAt:     NowNano(),
+		ItemID:       gItem.ID,
+		Name:         gItem.Name,
+		ParentID:     gItem.ParentID,
+		ETag:         gItem.ETag,
+		CTag:         gItem.CTag,
+		QuickXorHash: gItem.QuickXorHash,
+		SHA256Hash:   gItem.SHA256Hash,
+		IsDeleted:    gItem.IsDeleted,
+		CreatedAt:    NowNano(),
+		UpdatedAt:    NowNano(),
 	}
 
 	// Use the canonical drive ID from the caller for same-drive items.
@@ -401,6 +406,16 @@ func convertGraphItem(gItem *graph.Item, driveID string) *Item {
 		item.DriveID = gItem.DriveID
 	} else {
 		item.DriveID = driveID
+	}
+
+	// Normalize ParentDriveID the same way: if it matches the canonical
+	// drive ID case-insensitively, use the canonical form. Without this,
+	// MaterializePath lookups fail because the parent was stored with the
+	// canonical case but the child references it with the API's lowercase hex.
+	if gItem.ParentDriveID != "" && strings.EqualFold(gItem.ParentDriveID, driveID) {
+		item.ParentDriveID = driveID
+	} else {
+		item.ParentDriveID = gItem.ParentDriveID
 	}
 
 	// Classify item type. Root detection uses the Graph API's root facet
