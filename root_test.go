@@ -272,8 +272,9 @@ func TestNewRootCmd_PersistentFlags(t *testing.T) {
 func TestNewRootCmd_MutualExclusivity(t *testing.T) {
 	// Cobra enforces mutual exclusivity during Execute(). Verify that
 	// combining --verbose/--debug/--quiet produces an error.
-	// Uses "ls" as a valid subcommand — the mutual exclusivity check fires
-	// before RunE, so ls never actually runs.
+	// Uses "status" because it's in skipConfigCommands, so PersistentPreRunE
+	// is a no-op. This avoids loadConfig failures on CI (no config file)
+	// masking the mutual exclusivity error.
 	pairs := [][]string{
 		{"--verbose", "--debug"},
 		{"--verbose", "--quiet"},
@@ -283,7 +284,7 @@ func TestNewRootCmd_MutualExclusivity(t *testing.T) {
 	for _, flags := range pairs {
 		t.Run(flags[0]+"_"+flags[1], func(t *testing.T) {
 			cmd := newRootCmd()
-			cmd.SetArgs(append(flags, "ls"))
+			cmd.SetArgs(append(flags, "status"))
 
 			err := cmd.Execute()
 			require.Error(t, err)
