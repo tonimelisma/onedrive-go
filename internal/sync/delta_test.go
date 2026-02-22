@@ -475,7 +475,8 @@ func TestFetchAndApply_MoveRename(t *testing.T) {
 		DriveID: "d", ItemID: "item-1", Name: "old-name.txt",
 		ItemType: ItemTypeFile, ParentID: "folder-a", Path: "folder-a/old-name.txt",
 	}
-	store.materializeResults["d/item-1"] = "folder-b/new-name.txt"
+	// buildNewItemPath resolves the parent's path, not the item's own path.
+	store.materializeResults["d/folder-b"] = "folder-b"
 
 	fetcher := newMockFetcher(&graph.DeltaPage{
 		Items: []graph.Item{
@@ -504,7 +505,8 @@ func TestFetchAndApply_FolderMove_CascadesPath(t *testing.T) {
 		DriveID: "d", ItemID: "folder-1", Name: "myfolder",
 		ItemType: ItemTypeFolder, ParentID: "root", Path: "myfolder",
 	}
-	store.materializeResults["d/folder-1"] = "archive/myfolder"
+	// buildNewItemPath resolves the parent's path, not the item's own path.
+	store.materializeResults["d/archive-folder"] = "archive"
 
 	fetcher := newMockFetcher(&graph.DeltaPage{
 		Items: []graph.Item{
@@ -1208,4 +1210,86 @@ func TestFetchAndApply_DeletionReorderedBeforeCreation(t *testing.T) {
 	assert.Equal(t, "item-1", store.markDeletedCalls[0].ItemID)
 	require.Len(t, store.upsertCalls, 1)
 	assert.Equal(t, "item-2", store.upsertCalls[0].ItemID)
+}
+
+// --- Regression tests for PR #72 fixes ---
+
+// TestConvertGraphItem_ParentDriveID_Normalized verifies that ParentDriveID
+// is normalized to the canonical case when it matches the caller's driveID
+// case-insensitively. Without this, MaterializePath lookups fail because
+// the parent was stored with canonical case but the child references it
+// with the API's lowercase hex.
+func TestConvertGraphItem_ParentDriveID_Normalized(t *testing.T) {
+	canonical := "BD50CF43646E28E6"
+
+	tests := []struct {
+		name              string
+		apiParentDriveID  string
+		wantParentDriveID string
+	}{
+		{"lowercase matches canonical", "bd50cf43646e28e6", canonical},
+		{"uppercase matches canonical", "BD50CF43646E28E6", canonical},
+		{"mixed case matches canonical", "Bd50cf43646e28E6", canonical},
+		{"different drive preserved as-is", "AABB11223344", "AABB11223344"},
+		{"empty preserved as empty", "", ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gItem := &graph.Item{
+				ID:            "item-1",
+				Name:          "test.txt",
+				ParentID:      "parent-1",
+				ParentDriveID: tc.apiParentDriveID,
+				Size:          42,
+			}
+
+			item := convertGraphItem(gItem, canonical)
+			require.NotNil(t, item)
+			assert.Equal(t, tc.wantParentDriveID, item.ParentDriveID)
+		})
+	}
+}
+
+// TestApplyUpdate_EmptyOldParentID_NoFalseMove verifies that when an existing
+// item has empty ParentID (from scanner), the delta update fills in the real
+// ParentID without triggering a false move/rename detection.
+func TestApplyUpdate_EmptyOldParentID_NoFalseMove(t *testing.T) {
+	store := newMockStore()
+
+	// Existing item from scanner: has empty ParentID.
+	store.items["d/item-1"] = &Item{
+		DriveID:  "d",
+		ItemID:   "item-1",
+		Name:     "test.txt",
+		ItemType: ItemTypeFile,
+		ParentID: "", // Scanner doesn't know the remote parent.
+		Path:     "folder/test.txt",
+	}
+
+	// Delta update fills in the real ParentID.
+	fetcher := newMockFetcher(&graph.DeltaPage{
+		Items: []graph.Item{
+			{
+				ID: "item-1", Name: "test.txt", DriveID: "d",
+				ParentID:   "real-parent-id",
+				Size:       42,
+				ModifiedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+			},
+		},
+		DeltaLink: "token:done",
+	})
+
+	dp := NewDeltaProcessor(fetcher, store, testLogger(t))
+	err := dp.FetchAndApply(context.Background(), "d")
+	require.NoError(t, err)
+
+	// Should be a normal update (upsert), not a move.
+	require.Len(t, store.upsertCalls, 1)
+	item := store.upsertCalls[0]
+	assert.Equal(t, "real-parent-id", item.ParentID)
+	// Path should remain unchanged (no false move).
+	assert.Equal(t, "folder/test.txt", item.Path)
+	// No cascade path updates should have been triggered.
+	assert.Empty(t, store.cascadeCalls)
 }

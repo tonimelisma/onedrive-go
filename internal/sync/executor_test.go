@@ -1795,3 +1795,144 @@ func TestDispatchPhase_ErrorRetryable_RecordedAsSkipped(t *testing.T) {
 	require.Len(t, report.Errors, 1)
 	assert.Equal(t, ErrorRetryable, report.Errors[0].Tier)
 }
+
+// --- Regression tests for PR #72 fixes ---
+
+// TestUpload_BackfillsParentID verifies that after upload, the item's ParentID
+// and ParentDriveID are backfilled from the API response. Without this, the next
+// delta cycle sees a ParentID change and triggers a false move detection.
+func TestUpload_BackfillsParentID(t *testing.T) {
+	syncRoot := t.TempDir()
+	store := newExecutorMockStore()
+
+	// Root entry for resolveParentID fallback (file is at root level).
+	store.pathItems[""] = &Item{
+		DriveID:  "d1",
+		ItemID:   "root-id",
+		ItemType: ItemTypeRoot,
+	}
+
+	mockTransfer := &executorMockTransfer{
+		uploadedItem: &graph.Item{
+			ID:            "server-item-id",
+			ETag:          "etag-1",
+			CTag:          "ctag-1",
+			ParentID:      "server-parent-id",
+			ParentDriveID: "server-drive-id",
+		},
+	}
+
+	exec := NewExecutor(store, nil, mockTransfer, syncRoot, &config.SafetyConfig{}, nil, nil)
+
+	// Write a local file to upload.
+	localPath := filepath.Join(syncRoot, "test-file.txt")
+	require.NoError(t, os.WriteFile(localPath, []byte("content"), 0o644))
+
+	action := Action{
+		Type:    ActionUpload,
+		DriveID: "d1",
+		ItemID:  "local:test-file.txt",
+		Path:    "test-file.txt",
+		Item: &Item{
+			DriveID:  "d1",
+			ItemID:   "local:test-file.txt",
+			Name:     "test-file.txt",
+			ItemType: ItemTypeFile,
+			// ParentID intentionally empty (scanner-created).
+		},
+	}
+
+	plan := &ActionPlan{Uploads: []Action{action}}
+	report, err := exec.Execute(context.Background(), plan)
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.Uploaded)
+
+	// Verify ParentID was backfilled from the API response.
+	require.Len(t, store.upsertCalls, 1)
+	upserted := store.upsertCalls[0]
+	assert.Equal(t, "server-item-id", upserted.ItemID)
+	assert.Equal(t, "server-parent-id", upserted.ParentID, "ParentID should be backfilled from upload response")
+	assert.Equal(t, "server-drive-id", upserted.ParentDriveID, "ParentDriveID should be backfilled from upload response")
+}
+
+// TestResolveParentID_RejectsLocalPrefix verifies that resolveParentID falls
+// through to the path-based lookup when the item has a "local:" prefixed ParentID,
+// preventing HTTP 400 errors from the Graph API.
+func TestResolveParentID_RejectsLocalPrefix(t *testing.T) {
+	syncRoot := t.TempDir()
+	store := newExecutorMockStore()
+
+	// Set up a parent folder in the path-based lookup.
+	store.pathItems["subfolder"] = &Item{
+		DriveID:  "d1",
+		ItemID:   "real-parent-id",
+		Name:     "subfolder",
+		ItemType: ItemTypeFolder,
+	}
+
+	exec := NewExecutor(store, nil, nil, syncRoot, &config.SafetyConfig{}, nil, nil)
+
+	action := &Action{
+		DriveID: "d1",
+		Path:    "subfolder/file.txt",
+		Item: &Item{
+			DriveID:  "d1",
+			ParentID: "local:subfolder", // scanner-generated, not valid for API
+		},
+	}
+
+	parentID, err := exec.resolveParentID(context.Background(), action)
+	require.NoError(t, err)
+	assert.Equal(t, "real-parent-id", parentID, "should resolve via path lookup, not use local: prefix")
+}
+
+// TestFolderCreate_BackfillsParentID verifies that after creating a remote folder,
+// the item's ParentID and ParentDriveID are backfilled from the API response.
+func TestFolderCreate_BackfillsParentID(t *testing.T) {
+	syncRoot := t.TempDir()
+	store := newExecutorMockStore()
+
+	// Set up parent in path-based lookup for resolveParentID.
+	store.pathItems[""] = &Item{
+		DriveID:  "d1",
+		ItemID:   "root-id",
+		ItemType: ItemTypeRoot,
+	}
+
+	mockItems := &executorMockItems{
+		createFolderResult: &graph.Item{
+			ID:            "server-folder-id",
+			ETag:          "etag-1",
+			CTag:          "ctag-1",
+			ParentID:      "root-id",
+			ParentDriveID: "d1",
+		},
+	}
+
+	exec := NewExecutor(store, mockItems, nil, syncRoot, &config.SafetyConfig{}, nil, nil)
+
+	action := Action{
+		Type:       ActionFolderCreate,
+		DriveID:    "d1",
+		ItemID:     "local:newfolder",
+		Path:       "newfolder",
+		CreateSide: FolderCreateRemote,
+		Item: &Item{
+			DriveID:  "d1",
+			ItemID:   "local:newfolder",
+			Name:     "newfolder",
+			ItemType: ItemTypeFolder,
+		},
+	}
+
+	plan := &ActionPlan{FolderCreates: []Action{action}}
+	report, err := exec.Execute(context.Background(), plan)
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.FoldersCreated)
+
+	// Verify ParentID backfilled.
+	require.Len(t, store.upsertCalls, 1)
+	upserted := store.upsertCalls[0]
+	assert.Equal(t, "server-folder-id", upserted.ItemID)
+	assert.Equal(t, "root-id", upserted.ParentID, "ParentID should be backfilled from create response")
+}

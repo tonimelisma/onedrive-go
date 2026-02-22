@@ -1146,3 +1146,50 @@ func TestAppendActions_AllTypes(t *testing.T) {
 	assert.Len(t, plan.SyncedUpdates, 1)
 	assert.Len(t, plan.Cleanups, 1)
 }
+
+// --- Regression tests for PR #72 fixes ---
+
+// TestIsLocalItemID verifies the helper distinguishes scanner-generated IDs
+// from server-assigned IDs.
+func TestIsLocalItemID(t *testing.T) {
+	assert.True(t, isLocalItemID("local:folder/file.txt"))
+	assert.True(t, isLocalItemID("local:"))
+	assert.False(t, isLocalItemID("BD50CF43646E28E6!s12345"))
+	assert.False(t, isLocalItemID(""))
+	assert.False(t, isLocalItemID("LOCAL:uppercase")) // case-sensitive prefix
+}
+
+// TestFolderState_LocalOnlyWithLocalID_NotRemoteExists verifies that a folder
+// with a scanner-generated "local:" ItemID is classified as NOT existing remotely.
+// Without this fix, such folders would be classified as D2 (adopt) instead of
+// D5 (create remotely), causing uploads with invalid parent IDs.
+func TestFolderState_LocalOnlyWithLocalID_NotRemoteExists(t *testing.T) {
+	item := &Item{
+		DriveID:    "d",
+		ItemID:     "local:projects/subfolder",
+		Name:       "subfolder",
+		ItemType:   ItemTypeFolder,
+		LocalMtime: Int64Ptr(1234567890),
+	}
+
+	fs := newFolderState(item)
+	assert.True(t, fs.localExists, "folder has local state")
+	assert.False(t, fs.remoteExists, "local: ID should not count as remote")
+	assert.False(t, fs.synced, "never synced")
+}
+
+// TestFolderState_ServerID_RemoteExists verifies that a folder with a real
+// server-assigned ItemID is correctly classified as existing remotely.
+func TestFolderState_ServerID_RemoteExists(t *testing.T) {
+	item := &Item{
+		DriveID:    "d",
+		ItemID:     "BD50CF43646E28E6!s12345",
+		Name:       "subfolder",
+		ItemType:   ItemTypeFolder,
+		LocalMtime: Int64Ptr(1234567890),
+	}
+
+	fs := newFolderState(item)
+	assert.True(t, fs.localExists)
+	assert.True(t, fs.remoteExists, "real server ID → remote exists")
+}

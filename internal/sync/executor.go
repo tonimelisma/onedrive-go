@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
@@ -275,6 +276,16 @@ func (e *Executor) executeFolderCreate(ctx context.Context, action *Action) erro
 	action.Item.ItemID = created.ID
 	action.Item.ETag = created.ETag
 	action.Item.CTag = created.CTag
+
+	// Backfill parent references from the API response, same as uploads.
+	if created.ParentID != "" {
+		action.Item.ParentID = created.ParentID
+	}
+
+	if created.ParentDriveID != "" {
+		action.Item.ParentDriveID = created.ParentDriveID
+	}
+
 	action.Item.UpdatedAt = NowNano()
 
 	if err := e.store.UpsertItem(ctx, action.Item); err != nil {
@@ -486,6 +497,17 @@ func (e *Executor) updateUploadState(
 		action.Item.ItemID = uploaded.ID
 		action.Item.ETag = uploaded.ETag
 		action.Item.CTag = uploaded.CTag
+
+		// Backfill parent references from the API response. Scanner-created
+		// items have empty ParentID/ParentDriveID — without this, the next
+		// delta cycle sees a ParentID change and triggers a false move.
+		if uploaded.ParentID != "" {
+			action.Item.ParentID = uploaded.ParentID
+		}
+
+		if uploaded.ParentDriveID != "" {
+			action.Item.ParentDriveID = uploaded.ParentDriveID
+		}
 	}
 
 	action.Item.SyncedSize = Int64Ptr(size)
@@ -675,7 +697,9 @@ func (e *Executor) executeCleanup(ctx context.Context, action *Action) error {
 // knows the local path, not the remote ID. The parent folder's ID is available
 // in the DB after the folder_creates phase runs (which precedes uploads).
 func (e *Executor) resolveParentID(ctx context.Context, action *Action) (string, error) {
-	if action.Item.ParentID != "" {
+	// Only use ParentID if it's a real server-assigned ID. Scanner-generated
+	// "local:" IDs would cause HTTP 400 from the Graph API.
+	if action.Item.ParentID != "" && !strings.HasPrefix(action.Item.ParentID, "local:") {
 		return action.Item.ParentID, nil
 	}
 
