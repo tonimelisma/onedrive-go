@@ -1193,3 +1193,56 @@ func TestFolderState_ServerID_RemoteExists(t *testing.T) {
 	assert.True(t, fs.localExists)
 	assert.True(t, fs.remoteExists, "real server ID → remote exists")
 }
+
+// TestDetectLocalChange_SameSecondEdit verifies that a file modified in the
+// same second as the last sync is correctly detected as changed. Regression
+// test for the enrichment guard using <= instead of < at second precision,
+// which suppressed real edits when the modification happened within the same
+// second as the sync completion.
+func TestDetectLocalChange_SameSecondEdit(t *testing.T) {
+	t.Parallel()
+
+	// Simulate: file synced at T, then modified at T+500ms (same second).
+	syncTime := int64(1_700_000_000_000_000_000)  // exact second boundary
+	editMtime := int64(1_700_000_000_500_000_000) // +500ms, same second
+
+	item := &Item{
+		DriveID:      "d",
+		ItemID:       "item-1",
+		Path:         "file.txt",
+		ItemType:     ItemTypeFile,
+		LocalHash:    "NEW_HASH",
+		SyncedHash:   "OLD_HASH",
+		LocalMtime:   Int64Ptr(editMtime),
+		LastSyncedAt: Int64Ptr(syncTime),
+	}
+
+	assert.True(t, detectLocalChange(item),
+		"file modified in the same second as sync should be detected as changed")
+}
+
+// TestDetectLocalChange_EnrichmentGuard verifies that the enrichment guard
+// still suppresses false changes when the file mtime is strictly before the
+// sync time (file was not touched on disk after sync).
+func TestDetectLocalChange_EnrichmentGuard(t *testing.T) {
+	t.Parallel()
+
+	// Simulate: file scanned at T-2s, synced at T. Hashes differ due to
+	// enrichment, but the file hasn't been touched since sync.
+	syncTime := int64(1_700_000_002_000_000_000)
+	scanMtime := int64(1_700_000_000_000_000_000) // 2 seconds before sync
+
+	item := &Item{
+		DriveID:      "d",
+		ItemID:       "item-1",
+		Path:         "file.txt",
+		ItemType:     ItemTypeFile,
+		LocalHash:    "LOCAL_HASH",
+		SyncedHash:   "SYNCED_HASH",
+		LocalMtime:   Int64Ptr(scanMtime),
+		LastSyncedAt: Int64Ptr(syncTime),
+	}
+
+	assert.False(t, detectLocalChange(item),
+		"file not modified since sync should be suppressed by enrichment guard")
+}
