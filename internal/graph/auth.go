@@ -2,11 +2,15 @@ package graph
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -16,7 +20,7 @@ import (
 )
 
 // Azure AD application registered for onedrive-go (public client, multi-tenant + personal).
-const defaultClientID = "6f6f82bc-3154-4a0b-b399-316ab64594d0"
+const defaultClientID = "8efac532-bbe7-4bc5-919c-1443ccab860a"
 
 // tokenFilePerms restricts token files to owner-only read/write.
 const tokenFilePerms = 0o600
@@ -106,6 +110,263 @@ func doLogin(
 	src := cfg.TokenSource(ctx, tok)
 
 	return &tokenBridge{src: src, logger: logger}, nil
+}
+
+// stateTokenBytes is the number of random bytes for the OAuth2 state parameter.
+const stateTokenBytes = 16
+
+// callbackPath is the HTTP path the OAuth2 redirect hits on the local server.
+// Root path ensures exact match with the registered "http://localhost" redirect
+// URI — Microsoft's v2.0 endpoint allows any port but requires path match.
+const callbackPath = "/"
+
+// shutdownTimeout is how long to wait for the callback server to drain.
+const shutdownTimeout = 5 * time.Second
+
+// callbackResult carries the authorization code or error from the callback handler.
+type callbackResult struct {
+	code string
+	err  error
+}
+
+// LoginWithBrowser performs the authorization code + PKCE flow:
+//  1. Binds a localhost HTTP server on a random port
+//  2. Opens the browser to Microsoft's authorization endpoint
+//  3. Receives the callback with the authorization code
+//  4. Exchanges the code for tokens using PKCE
+//  5. Saves the token to disk at tokenPath
+//  6. Returns a TokenSource for use with Client
+//
+// openURL is called with the authorization URL; the CLI uses it to launch the
+// default browser. If openURL returns an error, the URL is printed to stderr
+// so the user can open it manually.
+//
+// The caller is responsible for computing tokenPath (via config.DriveTokenPath).
+// This decouples graph/ from config/ — graph/ has no config import.
+func LoginWithBrowser(
+	ctx context.Context,
+	tokenPath string,
+	openURL func(string) error,
+	logger *slog.Logger,
+) (TokenSource, error) {
+	cfg := oauthConfig(tokenPath, logger)
+
+	return doAuthCodeLogin(ctx, tokenPath, cfg, openURL, logger)
+}
+
+// doAuthCodeLogin implements the authorization code + PKCE flow. Accepts a
+// pre-built oauth2.Config so tests can inject a mock endpoint.
+func doAuthCodeLogin(
+	ctx context.Context,
+	tokenPath string,
+	cfg *oauth2.Config,
+	openURL func(string) error,
+	logger *slog.Logger,
+) (TokenSource, error) {
+	logger.Info("starting browser auth flow (authorization code + PKCE)",
+		slog.String("path", tokenPath),
+	)
+
+	// Start the localhost callback server.
+	resultCh := make(chan callbackResult, 1)
+	mux := http.NewServeMux()
+
+	srv, port, err := startCallbackServer(ctx, mux, resultCh, logger)
+	if err != nil {
+		return nil, err
+	}
+
+	defer shutdownCallbackServer(srv)
+
+	// Configure redirect URL with the actual port. No path suffix — must match
+	// the registered "http://localhost" URI exactly (port is ignored by v2.0).
+	cfg.RedirectURL = fmt.Sprintf("http://localhost:%d", port)
+
+	// Generate PKCE verifier and random state, build auth URL.
+	verifier := oauth2.GenerateVerifier()
+
+	state, err := generateState()
+	if err != nil {
+		return nil, fmt.Errorf("graph: generating state token: %w", err)
+	}
+
+	// Register the callback handler now that we know the state.
+	registerCallbackHandler(mux, state, resultCh)
+
+	authURL := cfg.AuthCodeURL(state,
+		oauth2.AccessTypeOffline,
+		oauth2.S256ChallengeOption(verifier),
+	)
+
+	// Open the browser and wait for callback.
+	launchBrowser(authURL, openURL, logger)
+
+	code, err := waitForCallback(ctx, resultCh)
+	if err != nil {
+		return nil, err
+	}
+
+	// Exchange and save.
+	return exchangeAndSave(ctx, cfg, tokenPath, code, verifier, logger)
+}
+
+// startCallbackServer binds to 127.0.0.1:0 and starts an HTTP server with the
+// given mux. Returns the server, the port, and any error.
+func startCallbackServer(
+	ctx context.Context,
+	mux *http.ServeMux,
+	resultCh chan<- callbackResult,
+	logger *slog.Logger,
+) (*http.Server, int, error) {
+	lc := net.ListenConfig{}
+
+	listener, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, 0, fmt.Errorf("graph: binding localhost listener: %w", err)
+	}
+
+	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
+	if !ok {
+		listener.Close()
+		return nil, 0, fmt.Errorf("graph: listener address is not TCP")
+	}
+
+	port := tcpAddr.Port
+	logger.Info("callback server listening", slog.Int("port", port))
+
+	srv := &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: shutdownTimeout,
+	}
+
+	go func() {
+		if serveErr := srv.Serve(listener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			resultCh <- callbackResult{err: fmt.Errorf("graph: callback server error: %w", serveErr)}
+		}
+	}()
+
+	return srv, port, nil
+}
+
+// registerCallbackHandler adds the callback route to the mux.
+// Must be called before the browser redirects back.
+func registerCallbackHandler(mux *http.ServeMux, state string, resultCh chan<- callbackResult) {
+	mux.HandleFunc("GET "+callbackPath, func(w http.ResponseWriter, r *http.Request) {
+		handleOAuthCallback(w, r, state, resultCh)
+	})
+}
+
+// handleOAuthCallback validates the state, extracts the code, and sends the result.
+func handleOAuthCallback(w http.ResponseWriter, r *http.Request, state string, resultCh chan<- callbackResult) {
+	// Validate state to prevent CSRF.
+	if r.URL.Query().Get("state") != state {
+		http.Error(w, "Invalid state parameter", http.StatusBadRequest)
+		resultCh <- callbackResult{err: fmt.Errorf("graph: OAuth2 state mismatch (possible CSRF)")}
+
+		return
+	}
+
+	// Check for error from the authorization server.
+	if errParam := r.URL.Query().Get("error"); errParam != "" {
+		desc := r.URL.Query().Get("error_description")
+		http.Error(w, "Authorization failed: "+errParam, http.StatusBadRequest)
+		resultCh <- callbackResult{err: fmt.Errorf("graph: authorization failed: %s: %s", errParam, desc)}
+
+		return
+	}
+
+	code := r.URL.Query().Get("code")
+	if code == "" {
+		http.Error(w, "Missing authorization code", http.StatusBadRequest)
+		resultCh <- callbackResult{err: fmt.Errorf("graph: callback missing authorization code")}
+
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprint(w, "<html><body><h1>Authentication successful</h1>"+
+		"<p>You can close this window and return to the terminal.</p></body></html>")
+	resultCh <- callbackResult{code: code}
+}
+
+// shutdownCallbackServer gracefully shuts down the callback HTTP server.
+func shutdownCallbackServer(srv *http.Server) {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		// Best-effort shutdown — log but don't propagate since we're in a defer.
+		slog.Default().Warn("callback server shutdown error", slog.String("error", err.Error()))
+	}
+}
+
+// launchBrowser attempts to open the auth URL. If it fails, prints the URL
+// to stderr as a fallback so the user can copy-paste it.
+func launchBrowser(authURL string, openURL func(string) error, logger *slog.Logger) {
+	logger.Info("opening browser for authorization")
+
+	if openErr := openURL(authURL); openErr != nil {
+		logger.Warn("failed to open browser, printing URL",
+			slog.String("error", openErr.Error()),
+		)
+
+		fmt.Fprintf(os.Stderr, "Open this URL in your browser:\n%s\n", authURL)
+	}
+}
+
+// waitForCallback blocks until the callback fires or the context is canceled.
+func waitForCallback(ctx context.Context, resultCh <-chan callbackResult) (string, error) {
+	select {
+	case result := <-resultCh:
+		if result.err != nil {
+			return "", result.err
+		}
+
+		return result.code, nil
+	case <-ctx.Done():
+		return "", fmt.Errorf("graph: browser auth canceled: %w", ctx.Err())
+	}
+}
+
+// exchangeAndSave exchanges the auth code for a token and persists it.
+func exchangeAndSave(
+	ctx context.Context,
+	cfg *oauth2.Config,
+	tokenPath, code, verifier string,
+	logger *slog.Logger,
+) (TokenSource, error) {
+	logger.Info("received authorization code, exchanging for token")
+
+	tok, err := cfg.Exchange(ctx, code, oauth2.VerifierOption(verifier))
+	if err != nil {
+		return nil, fmt.Errorf("graph: token exchange failed: %w", err)
+	}
+
+	logger.Info("token exchange successful", slog.Time("expiry", tok.Expiry))
+
+	if saveErr := saveToken(tokenPath, tok); saveErr != nil {
+		return nil, fmt.Errorf("graph: saving token: %w", saveErr)
+	}
+
+	logger.Info("browser login successful",
+		slog.String("path", tokenPath),
+		slog.Time("expiry", tok.Expiry),
+	)
+
+	src := cfg.TokenSource(ctx, tok)
+
+	return &tokenBridge{src: src, logger: logger}, nil
+}
+
+// generateState produces a cryptographically random hex string for the OAuth2
+// state parameter. Using crypto/rand prevents CSRF attacks.
+func generateState() (string, error) {
+	b := make([]byte, stateTokenBytes)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+
+	return hex.EncodeToString(b), nil
 }
 
 // TokenSourceFromPath loads a saved token from the given path and returns a

@@ -3,10 +3,12 @@ package graph
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -587,4 +589,292 @@ func TestLogin_Success(t *testing.T) {
 	tok, tokenErr := ts.Token()
 	require.NoError(t, tokenErr)
 	assert.Equal(t, "test-access-token", tok)
+}
+
+// --- Authorization Code + PKCE Flow Tests ---
+
+// newMockAuthCodeServer creates a test server that handles authorization + token
+// endpoints for the auth code flow. The authorize endpoint redirects to the
+// callback URL with the code and state. tokenHandler controls the token endpoint.
+func newMockAuthCodeServer(t *testing.T, tokenHandler http.HandlerFunc) *oauth2.Endpoint {
+	t.Helper()
+
+	mux := http.NewServeMux()
+
+	// Authorization endpoint: redirects to the callback URL with code + state.
+	mux.HandleFunc("GET /authorize", func(w http.ResponseWriter, r *http.Request) {
+		redirectURI := r.URL.Query().Get("redirect_uri")
+		state := r.URL.Query().Get("state")
+		// Return the code via redirect to the callback server.
+		callback := redirectURI + "?code=test-auth-code&state=" + url.QueryEscape(state)
+		http.Redirect(w, r, callback, http.StatusFound)
+	})
+
+	handler := tokenHandler
+	if handler == nil {
+		handler = func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(testTokenJSON))
+		}
+	}
+
+	mux.HandleFunc("POST /token", handler)
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	return &oauth2.Endpoint{
+		AuthURL:  srv.URL + "/authorize",
+		TokenURL: srv.URL + "/token",
+	}
+}
+
+// testAuthCodeConfig builds a test config for auth code flow.
+func testAuthCodeConfig(t *testing.T, tokenPath string, endpoint *oauth2.Endpoint) *oauth2.Config {
+	t.Helper()
+
+	cfg := oauthConfig(tokenPath, slog.Default())
+	cfg.Endpoint = *endpoint
+
+	return cfg
+}
+
+// simulateBrowserCallback acts as the browser: fetches the auth URL which
+// redirects to the localhost callback server, delivering the code.
+func simulateBrowserCallback(t *testing.T) func(string) error {
+	t.Helper()
+
+	// Use an HTTP client that doesn't follow redirects automatically — we need
+	// to follow the redirect ourselves to hit the localhost callback server.
+	client := &http.Client{
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	return func(authURL string) error {
+		// Step 1: Hit the authorize endpoint.
+		resp, err := client.Get(authURL) //nolint:noctx // test helper, no context needed
+		if err != nil {
+			t.Fatalf("failed to hit authorize endpoint: %v", err)
+		}
+		resp.Body.Close()
+
+		// Step 2: Follow the redirect to the localhost callback.
+		location := resp.Header.Get("Location")
+		require.NotEmpty(t, location, "authorize endpoint must redirect")
+
+		callbackResp, err := http.Get(location) //nolint:noctx // test helper, no context needed
+		if err != nil {
+			t.Fatalf("failed to hit callback: %v", err)
+		}
+		callbackResp.Body.Close()
+
+		return nil
+	}
+}
+
+func TestDoAuthCodeLogin_Success(t *testing.T) {
+	endpoint := newMockAuthCodeServer(t, nil)
+	tmpDir := t.TempDir()
+	tokenPath := filepath.Join(tmpDir, "tokens", "authcode.json")
+
+	cfg := testAuthCodeConfig(t, tokenPath, endpoint)
+	openURL := simulateBrowserCallback(t)
+
+	ts, err := doAuthCodeLogin(context.Background(), tokenPath, cfg, openURL, slog.Default())
+	require.NoError(t, err)
+	require.NotNil(t, ts)
+
+	// Verify token was saved to disk.
+	loaded, loadErr := loadToken(tokenPath)
+	require.NoError(t, loadErr)
+	require.NotNil(t, loaded)
+	assert.Equal(t, "test-access-token", loaded.AccessToken)
+	assert.Equal(t, "test-refresh-token", loaded.RefreshToken)
+
+	// Verify the returned TokenSource works.
+	tok, tokenErr := ts.Token()
+	require.NoError(t, tokenErr)
+	assert.Equal(t, "test-access-token", tok)
+}
+
+func TestDoAuthCodeLogin_InvalidState(t *testing.T) {
+	// Set up a server that returns a mismatched state value.
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /authorize", func(w http.ResponseWriter, r *http.Request) {
+		redirectURI := r.URL.Query().Get("redirect_uri")
+		// Return a WRONG state value to simulate CSRF.
+		callback := redirectURI + "?code=test-auth-code&state=wrong-state-value"
+		http.Redirect(w, r, callback, http.StatusFound)
+	})
+	mux.HandleFunc("POST /token", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(testTokenJSON))
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	endpoint := &oauth2.Endpoint{
+		AuthURL:  srv.URL + "/authorize",
+		TokenURL: srv.URL + "/token",
+	}
+
+	tmpDir := t.TempDir()
+	tokenPath := filepath.Join(tmpDir, "tokens", "csrf.json")
+	cfg := testAuthCodeConfig(t, tokenPath, endpoint)
+	openURL := simulateBrowserCallback(t)
+
+	_, err := doAuthCodeLogin(context.Background(), tokenPath, cfg, openURL, slog.Default())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "state mismatch")
+}
+
+func TestDoAuthCodeLogin_ContextCancel(t *testing.T) {
+	// Set up a server that never redirects — simulates user not completing auth.
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /authorize", func(w http.ResponseWriter, _ *http.Request) {
+		// Don't redirect — just return 200. The callback never fires.
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("POST /token", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(testTokenJSON))
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	endpoint := &oauth2.Endpoint{
+		AuthURL:  srv.URL + "/authorize",
+		TokenURL: srv.URL + "/token",
+	}
+
+	tmpDir := t.TempDir()
+	tokenPath := filepath.Join(tmpDir, "tokens", "cancel.json")
+	cfg := testAuthCodeConfig(t, tokenPath, endpoint)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	openURL := func(authURL string) error {
+		// Just hit the authorize endpoint but don't follow redirects.
+		resp, err := http.Get(authURL) //nolint:noctx // test helper
+		if err == nil {
+			resp.Body.Close()
+		}
+
+		return nil
+	}
+
+	_, err := doAuthCodeLogin(ctx, tokenPath, cfg, openURL, slog.Default())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "browser auth canceled")
+}
+
+func TestDoAuthCodeLogin_MissingCode(t *testing.T) {
+	// Server redirects without a code parameter.
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /authorize", func(w http.ResponseWriter, r *http.Request) {
+		redirectURI := r.URL.Query().Get("redirect_uri")
+		state := r.URL.Query().Get("state")
+		// Redirect without a code — just state.
+		callback := redirectURI + "?state=" + url.QueryEscape(state)
+		http.Redirect(w, r, callback, http.StatusFound)
+	})
+	mux.HandleFunc("POST /token", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(testTokenJSON))
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	endpoint := &oauth2.Endpoint{
+		AuthURL:  srv.URL + "/authorize",
+		TokenURL: srv.URL + "/token",
+	}
+
+	tmpDir := t.TempDir()
+	tokenPath := filepath.Join(tmpDir, "tokens", "nocode.json")
+	cfg := testAuthCodeConfig(t, tokenPath, endpoint)
+	openURL := simulateBrowserCallback(t)
+
+	_, err := doAuthCodeLogin(context.Background(), tokenPath, cfg, openURL, slog.Default())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing authorization code")
+}
+
+func TestDoAuthCodeLogin_ExchangeError(t *testing.T) {
+	// Token endpoint returns an error on exchange.
+	endpoint := newMockAuthCodeServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"invalid_grant","error_description":"code expired"}`))
+	})
+
+	tmpDir := t.TempDir()
+	tokenPath := filepath.Join(tmpDir, "tokens", "exchange-fail.json")
+	cfg := testAuthCodeConfig(t, tokenPath, endpoint)
+	openURL := simulateBrowserCallback(t)
+
+	_, err := doAuthCodeLogin(context.Background(), tokenPath, cfg, openURL, slog.Default())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "token exchange failed")
+}
+
+func TestDoAuthCodeLogin_SaveError(t *testing.T) {
+	// Token exchange succeeds but saving fails.
+	endpoint := newMockAuthCodeServer(t, nil)
+	tmpDir := t.TempDir()
+
+	// Create a file where the tokens directory should be, so MkdirAll fails.
+	blocker := filepath.Join(tmpDir, "blocked")
+	require.NoError(t, os.WriteFile(blocker, []byte("x"), tokenFilePerms))
+
+	tokenPath := filepath.Join(blocker, "tokens", "test.json")
+	cfg := testAuthCodeConfig(t, tokenPath, endpoint)
+	openURL := simulateBrowserCallback(t)
+
+	_, err := doAuthCodeLogin(context.Background(), tokenPath, cfg, openURL, slog.Default())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "saving token")
+}
+
+func TestDoAuthCodeLogin_OpenURLFails(t *testing.T) {
+	// openURL returns an error — should fall back to printing the URL
+	// and still complete the flow if the callback eventually fires.
+	endpoint := newMockAuthCodeServer(t, nil)
+	tmpDir := t.TempDir()
+	tokenPath := filepath.Join(tmpDir, "tokens", "fallback.json")
+
+	cfg := testAuthCodeConfig(t, tokenPath, endpoint)
+
+	// openURL fails, but we still need to simulate the browser hitting the
+	// callback. Parse the auth URL and do the redirect manually.
+	browserSim := simulateBrowserCallback(t)
+	openURL := func(authURL string) error {
+		// Simulate browser callback in background despite the "error".
+		go browserSim(authURL)
+		return fmt.Errorf("browser open failed")
+	}
+
+	ts, err := doAuthCodeLogin(context.Background(), tokenPath, cfg, openURL, slog.Default())
+	require.NoError(t, err)
+	require.NotNil(t, ts)
+
+	tok, tokenErr := ts.Token()
+	require.NoError(t, tokenErr)
+	assert.Equal(t, "test-access-token", tok)
+}
+
+func TestGenerateState(t *testing.T) {
+	state1, err := generateState()
+	require.NoError(t, err)
+	assert.Len(t, state1, stateTokenBytes*2) // hex encoding doubles the length
+
+	state2, err := generateState()
+	require.NoError(t, err)
+	assert.NotEqual(t, state1, state2, "consecutive states should differ")
 }

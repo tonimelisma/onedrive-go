@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -25,15 +27,23 @@ const pendingTokenFile = ".token-pending.json"
 const tokenDirPerms = 0o700
 
 func newLoginCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "login",
-		Short: "Authenticate with OneDrive using device code flow",
-		Long: `Authenticate with OneDrive using the device code flow.
+		Short: "Authenticate with OneDrive",
+		Long: `Authenticate with OneDrive using the device code flow (default) or browser-based
+authorization code flow (--browser).
 
 Discovers your account type (personal/business) and organization automatically.
-Creates or updates the config file with the new drive section.`,
+Creates or updates the config file with the new drive section.
+
+The --browser flag opens your default browser for authentication, which can be
+useful when the device code flow is blocked by organizational policies.`,
 		RunE: runLogin,
 	}
+
+	cmd.Flags().Bool("browser", false, "use browser-based auth (authorization code + PKCE) instead of device code")
+
+	return cmd
 }
 
 func newLogoutCmd() *cobra.Command {
@@ -100,7 +110,7 @@ func driveTypeFromCanonicalID(id string) string {
 // findTokenFallback tries personal and business canonical ID prefixes
 // and returns whichever one has a token file on disk. Falls back to
 // "personal:" if neither exists, since personal is the most common case.
-// Logs the probe results so --verbose reveals which token path was selected.
+// Logs the probe results so --debug reveals which token path was selected.
 func findTokenFallback(account string, logger *slog.Logger) string {
 	personalID := "personal:" + account
 
@@ -136,23 +146,55 @@ func pendingTokenPath() string {
 	return filepath.Join(config.DefaultDataDir(), pendingTokenFile)
 }
 
+// openBrowser attempts to open a URL in the user's default browser.
+// Uses "open" on macOS and "xdg-open" on Linux. Returns an error if the
+// browser command fails or the platform is unsupported.
+func openBrowser(rawURL string) error {
+	ctx := context.Background()
+
+	var cmd *exec.Cmd
+
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.CommandContext(ctx, "open", rawURL)
+	case "linux":
+		cmd = exec.CommandContext(ctx, "xdg-open", rawURL)
+	default:
+		return fmt.Errorf("unsupported platform %s: open the URL manually", runtime.GOOS)
+	}
+
+	return cmd.Start()
+}
+
 // runLogin implements the discovery-based login flow per accounts.md section 9:
 // device code auth -> /me -> /me/drive -> /me/organization -> construct canonical ID -> config.
-func runLogin(_ *cobra.Command, _ []string) error {
+func runLogin(cmd *cobra.Command, _ []string) error {
 	logger := buildLogger()
 	ctx := context.Background()
 
-	logger.Info("login started")
+	useBrowser, err := cmd.Flags().GetBool("browser")
+	if err != nil {
+		return fmt.Errorf("reading --browser flag: %w", err)
+	}
 
-	// Step 1: Device code auth with a temporary token path. The real token path
+	logger.Info("login started", slog.Bool("browser", useBrowser))
+
+	// Step 1: Authenticate with a temporary token path. The real token path
 	// depends on the canonical ID, which we discover after authentication.
 	tempPath := pendingTokenPath()
 
-	ts, err := graph.Login(ctx, tempPath, func(da graph.DeviceAuth) {
-		// Device code prompts must always be visible -- not suppressed by --quiet.
-		fmt.Fprintf(os.Stderr, "To sign in, visit: %s\n", da.VerificationURI)
-		fmt.Fprintf(os.Stderr, "Enter code: %s\n", da.UserCode)
-	}, logger)
+	var ts graph.TokenSource
+
+	if useBrowser {
+		ts, err = graph.LoginWithBrowser(ctx, tempPath, openBrowser, logger)
+	} else {
+		ts, err = graph.Login(ctx, tempPath, func(da graph.DeviceAuth) {
+			// Device code prompts must always be visible -- not suppressed by --quiet.
+			fmt.Fprintf(os.Stderr, "To sign in, visit: %s\n", da.VerificationURI)
+			fmt.Fprintf(os.Stderr, "Enter code: %s\n", da.UserCode)
+		}, logger)
+	}
+
 	if err != nil {
 		// Clean up the pending token on auth failure.
 		os.Remove(tempPath)

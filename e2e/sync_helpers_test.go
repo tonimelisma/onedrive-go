@@ -128,7 +128,7 @@ func newSyncEnv(t *testing.T, opts syncEnvOpts) *syncEnv {
 func (env *syncEnv) runSyncRaw(args ...string) (string, string, error) {
 	env.t.Helper()
 
-	fullArgs := []string{"--config", env.configPath, "--drive", drive, "sync"}
+	fullArgs := []string{"--config", env.configPath, "--drive", drive, "--verbose", "sync"}
 	fullArgs = append(fullArgs, args...)
 
 	cmd := exec.Command(binaryPath, fullArgs...)
@@ -139,6 +139,11 @@ func (env *syncEnv) runSyncRaw(args ...string) (string, string, error) {
 	cmd.Stderr = &stderr
 
 	err := cmd.Run()
+
+	// Always log stderr so debug output appears in go test -v, even for passing tests.
+	if stderrStr := stderr.String(); stderrStr != "" {
+		env.t.Logf("sync stderr:\n%s", stderrStr)
+	}
 
 	return stdout.String(), stderr.String(), err
 }
