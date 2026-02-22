@@ -65,6 +65,7 @@ type driveItemResponse struct {
 	ParentReference      *parentRef       `json:"parentReference"`
 	File                 *fileFacet       `json:"file"`
 	Folder               *folderFacet     `json:"folder"`
+	Root                 *json.RawMessage `json:"root"`
 	Deleted              *json.RawMessage `json:"deleted"`
 	Package              *json.RawMessage `json:"package"`
 	DownloadURL          string           `json:"@microsoft.graph.downloadUrl"` //nolint:tagliatelle // Graph API annotation key
@@ -119,6 +120,7 @@ func (d *driveItemResponse) toItem(logger *slog.Logger) Item {
 		ETag:        d.ETag,
 		CTag:        d.CTag,
 		IsFolder:    d.Folder != nil,
+		IsRoot:      d.Root != nil,
 		IsDeleted:   d.Deleted != nil,
 		IsPackage:   d.Package != nil,
 		ChildCount:  ChildCountUnknown,

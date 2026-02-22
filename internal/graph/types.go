@@ -17,6 +17,7 @@ type Item struct {
 	ETag          string
 	CTag          string
 	IsFolder      bool
+	IsRoot        bool // drive root folder (root facet present in API response)
 	IsDeleted     bool
 	IsPackage     bool // OneNote packages — sync should skip these
 	MimeType      string

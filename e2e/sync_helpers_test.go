@@ -299,6 +299,14 @@ func (env *syncEnv) findConflictFile(relPath string) string {
 	return ""
 }
 
+// testPath returns a path relative to the sync root that maps to the test's
+// remote folder. The sync engine maps the entire drive root to syncDir, so
+// remote path /sync-e2e-NNN/foo.txt appears locally at syncDir/sync-e2e-NNN/foo.txt.
+// Use this for all local operations on test files to get correct path mapping.
+func (env *syncEnv) testPath(relPath string) string {
+	return filepath.Join(strings.TrimPrefix(env.remoteDir, "/"), relPath)
+}
+
 // sleep pauses briefly to allow remote changes to propagate through the delta API.
 func (env *syncEnv) sleep() {
 	time.Sleep(deltaSleepDuration)
