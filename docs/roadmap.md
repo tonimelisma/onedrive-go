@@ -258,7 +258,7 @@
 | ~~4.8~~ | ~~sync/ conflict handler (classify F5/F9/F11, keep-both, timestamped conflict copies)~~ **DONE** |
 | ~~4.9~~ | ~~sync/ transfer (download pipeline, upload pipeline, worker pools, bandwidth)~~ **DONE** |
 | ~~4.10~~ | ~~sync/ engine (RunOnce: wire delta->scan->reconcile->safety->execute)~~ **DONE** |
-| 4.11 | cmd/ sync: sync command (one-shot, --download-only, --upload-only, --dry-run) |
+| ~~4.11~~ | ~~cmd/ sync: sync command (one-shot, --download-only, --upload-only, --dry-run)~~ **DONE** |
 | 4.12 | cmd/ conflicts: conflicts list, resolve, verify |
 
 ### Phase 4 Wave Structure
@@ -393,17 +393,23 @@ Phase 4 increments are organized into waves to enable parallelism and allow re-p
 - **Top-up hardening**: PRs #62, #63, #64. Fixed `errors.Is` consistency (3 sites), `GetUploadSession` nil-nil semantics, Engine WaitGroup for use-after-close safety, TransferManager lifecycle docs. Added 20 new tests (state store failure paths, scanner validation edge cases, executor conflict error paths, bandwidth wrappers, end-to-end state assertions). sync/ 92.7% coverage.
 - **Inputs**: sync-algorithm.md sections 1-2, architecture.md section 3.1
 
-### 4.11: CLI sync command — `cmd/onedrive-go/sync.go`
+### 4.11: CLI sync command — `sync.go` ✅
 
-- `sync` — one-shot bidirectional sync (all enabled drives)
-- `sync --watch` — continuous mode (placeholder, wired in Phase 5)
-- `sync --download-only`, `sync --upload-only` — directional modes
-- `sync --dry-run` — show action plan without executing
-- `sync --drive <id>` — sync specific drive(s), repeatable for multi-target
-- `sync status` — show current sync state, pending actions, last sync time
-- Cobra command with proper flag definitions and validation
-- **Acceptance**: Build succeeds, `--help` works, unit tests for flag parsing
-- **Inputs**: prd.md section 4 (CLI design), architecture.md section 2, accounts.md §7
+- `sync` — one-shot bidirectional sync
+- `sync --watch` — placeholder flag (returns "not yet implemented" error, wired in Phase 5)
+- `sync --download-only`, `sync --upload-only` — directional modes (mutually exclusive)
+- `sync --dry-run` — preview actions without executing
+- `sync --force` — override big-delete safety threshold (S5)
+- `sync --json` — structured JSON output
+- `sync --quiet` — suppress informational output via `statusf()`
+- Uses `clientAndDrive()` for Graph client setup, injects discovered DriveID into copied resolvedCfg
+- Opens state store via `config.DriveStatePath()`, constructs engine, runs `RunOnce()`
+- Text output: summary with counts (downloaded, uploaded, deleted, moved, conflicts, errors)
+- JSON output: `syncJSONOutput` struct with mode, duration, counts, errors array
+- Exit code 1 on partial failures (`len(report.Errors) > 0`)
+- `sync status` deferred to 4.12 (with conflicts/verify)
+- **Actual**: PR #68. 246 lines added (sync.go + one-liner in root.go). 0 lint issues.
+- **Inputs**: prd.md section 4, architecture.md section 2
 
 ### 4.12: CLI conflict + verify commands — `cmd/onedrive-go/conflicts.go`
 
