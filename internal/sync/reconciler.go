@@ -388,10 +388,14 @@ func detectLocalChange(item *Item) bool {
 	}
 
 	// Hash differs. Could be a real edit or enrichment divergence.
-	// If local mtime has not advanced past last sync time, the file was not
-	// touched on disk → the difference is from enrichment.
+	// If local mtime is strictly before the last sync time (at second precision),
+	// the file was not touched on disk → the difference is from enrichment.
+	// Using strict < (not <=) because the scanner runs before the executor in the
+	// pipeline, so unmodified files always have LocalMtime < LastSyncedAt. A file
+	// modified in the same second as the sync must be treated as changed; using <=
+	// would suppress real edits when the user modifies a file immediately after sync.
 	if item.LocalMtime != nil && item.LastSyncedAt != nil {
-		if TruncateToSeconds(*item.LocalMtime) <= TruncateToSeconds(*item.LastSyncedAt) {
+		if TruncateToSeconds(*item.LocalMtime) < TruncateToSeconds(*item.LastSyncedAt) {
 			return false // Enrichment-stable: file unchanged since sync.
 		}
 	}

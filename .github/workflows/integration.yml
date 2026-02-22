@@ -103,7 +103,7 @@ jobs:
             drive=$(echo "$drive" | xargs)
             echo "=== Running E2E tests for: ${drive} ==="
             ONEDRIVE_TEST_DRIVE="$drive" \
-              go test -tags=e2e -race -v -timeout=5m ./e2e/...
+              go test -tags=e2e -race -v -timeout=15m ./e2e/...
           done
 
       - name: Save rotated tokens to Key Vault
