@@ -101,6 +101,7 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newRmCmd())
 	cmd.AddCommand(newMkdirCmd())
 	cmd.AddCommand(newStatCmd())
+	cmd.AddCommand(newSyncCmd())
 
 	return cmd
 }
