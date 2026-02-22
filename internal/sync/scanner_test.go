@@ -147,6 +147,63 @@ func TestScan_BasicFiles(t *testing.T) {
 	assert.Equal(t, hashContent("binary data"), item2.LocalHash)
 }
 
+func TestScan_NewFiles_UniqueItemIDs(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeFile(t, root, "alpha.txt", "alpha")
+	writeFile(t, root, "bravo.txt", "bravo")
+	writeFile(t, root, "charlie.txt", "charlie")
+
+	store := newScannerMockStore()
+	scanner := testScanner(t, store, newMockFilter(), true)
+
+	err := scanner.Scan(context.Background(), root)
+	require.NoError(t, err)
+
+	// Each new file must have a unique ItemID to prevent PK collisions
+	// in the real SQLite store (PK = drive_id, item_id).
+	assert.Len(t, store.upserted, 3)
+
+	ids := make(map[string]bool)
+	for _, item := range store.upserted {
+		assert.NotEmpty(t, item.ItemID, "scanner-created items must have non-empty ItemID")
+		assert.False(t, ids[item.ItemID], "duplicate ItemID: %s", item.ItemID)
+		ids[item.ItemID] = true
+	}
+}
+
+func TestScan_NewDirectory_HasUniqueItemID(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "subdir"), 0o755))
+	writeFile(t, root, "subdir/file.txt", "content")
+
+	store := newScannerMockStore()
+	scanner := testScanner(t, store, newMockFilter(), true)
+
+	err := scanner.Scan(context.Background(), root)
+	require.NoError(t, err)
+
+	dirItem := store.items["subdir"]
+	require.NotNil(t, dirItem)
+	assert.NotEmpty(t, dirItem.ItemID, "scanner-created directory must have non-empty ItemID")
+	assert.Equal(t, "local:subdir", dirItem.ItemID, "directory ItemID should use local: prefix")
+
+	fileItem := store.items["subdir/file.txt"]
+	require.NotNil(t, fileItem)
+	assert.Equal(t, "local:subdir/file.txt", fileItem.ItemID)
+
+	assert.NotEqual(t, dirItem.ItemID, fileItem.ItemID, "directory and file ItemIDs must differ")
+}
+
+func TestLocalItemID(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "local:docs/readme.md", localItemID("docs/readme.md"))
+	assert.Equal(t, "local:file.txt", localItemID("file.txt"))
+	assert.Equal(t, "local:a/b/c/d.txt", localItemID("a/b/c/d.txt"))
+}
+
 func TestScan_NosyncGuard(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
