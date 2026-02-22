@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -20,10 +21,11 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
-// Named constants for pragma values (mnd linter).
+// Named constants for pragma values and filesystem permissions (mnd linter).
 const (
 	walJournalSizeLimit = 67108864 // 64 MiB WAL journal size limit
 	schemaVersion       = 1        // current expected schema version
+	dbDirPermissions    = 0o700    // owner-only access for state database directory
 )
 
 // SQLiteStore implements the Store interface using an embedded SQLite database
@@ -72,6 +74,15 @@ type configStatements struct {
 // migrations, and preparing all repeated statements. Use ":memory:" for tests.
 func NewStore(dbPath string, logger *slog.Logger) (*SQLiteStore, error) {
 	logger.Info("opening sync state database", "path", dbPath)
+
+	// Ensure the parent directory exists before opening the database.
+	// Without this, SQLite fails with a cryptic error when the data dir is missing.
+	// Follows the same pattern as graph/auth.go token persistence (MkdirAll before write).
+	if dbPath != ":memory:" {
+		if err := os.MkdirAll(filepath.Dir(dbPath), dbDirPermissions); err != nil {
+			return nil, fmt.Errorf("create database directory: %w", err)
+		}
+	}
 
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
