@@ -48,7 +48,7 @@ Currently: Working CLI OneDrive client with discovery-based auth, account manage
 - **`pkg/quickxorhash/`** — QuickXorHash algorithm (hash.Hash interface) — complete
 - **`internal/config/`** — TOML configuration with flat global settings and per-drive sections, validation, XDG paths, four-layer override chain (`ResolveDrive()`), cross-field validation (`ValidateResolved()`), drive matching (exact/alias/partial), token/state path derivation (`DriveTokenPath()`, `DriveStatePath()`) — 95.1% coverage
 - **`internal/graph/`** — Graph API client: HTTP transport, auth (token path-based, no config import), retry, rate limiting, items CRUD, delta+normalization (incl. URL-decode + Prefer header), download/upload transfers (incl. session resume + fileSystemInfo), drives/user, path-based item resolution — feature-complete (94.2% coverage)
-- **Root package** — Cobra CLI: login (discovery-based), logout, whoami, status, drive add/remove, ls, get, put, rm, mkdir, stat, sync (root.go, auth.go, files.go, sync.go, format.go, status.go, drive.go). Global flags: `--account`, `--drive`, `--config`, `--json`, `--verbose`, `--quiet`
+- **Root package** — Cobra CLI: login (discovery-based), logout, whoami, status, drive add/remove, ls, get, put, rm, mkdir, stat, sync (root.go, auth.go, files.go, sync.go, format.go, status.go, drive.go). Global flags: `--account`, `--drive`, `--config`, `--json`, `--verbose`, `--debug`, `--quiet`
 - **`e2e/`** — E2E test suite (`//go:build e2e`): builds binary, exercises full round-trip against live OneDrive
 
 ### In progress (Phase 4)
@@ -126,23 +126,24 @@ Currently: Working CLI OneDrive client with discovery-based auth, account manage
 Every change must pass ALL gates before committing:
 
 1. **Build**: `go build ./...` — zero errors
-2. **Unit tests**: `go test ./...` — all pass
-3. **Lint**: `golangci-lint run` — zero issues
-4. **Format**: `gofumpt` and `goimports -local github.com/tonimelisma/onedrive-go` applied
-5. **Coverage**: New/modified code must have tests. Never decrease coverage.
-6. **Logging review**: Review new/modified code for sufficient logging. Every public function entry, every state transition, every error path must have a log line. See Logging Standard below.
-7. **Comment review**: Review new/modified code for sufficient comments explaining *why*. See Comment Convention below.
-8. **Docs**: CLAUDE.md documentation index is current. All doc links are valid.
-9. **Git clean**: Working tree is clean after commit. No uncommitted changes left behind.
-10. **Git cleanup**: After merging PRs, delete merged branches (local and remote), remove worktrees (`git worktree remove`), prune remote refs (`git fetch --prune`), verify no stashes (`git stash list`), remove coordination files (e.g., PLAN_LEFT.md). Verify: only `main` branch exists locally, only `origin/main` remotely, no open PRs, no orphaned worktree directories on disk. This is not optional — the repo must be fully clean before declaring an increment done.
-11. **CI verification**: After merging PRs, wait for ALL CI workflows (both `ci.yml` and `integration.yml`) to pass before declaring the increment done. Integration tests catch regressions that unit tests miss (e.g., config changes breaking `--drive` in CI). Never skip this step.
-12. **CI infrastructure**: If the increment changed anything affecting CI (token paths, secret naming, env vars, workflow YAML), verify that Key Vault secrets and GitHub variables are updated, and run `scripts/validate-ci-locally.sh` before pushing. See [docs/design/test-strategy.md §6.1](docs/design/test-strategy.md) and [docs/orchestration.md §1.4](docs/orchestration.md).
-13. **Retrospective**: After each increment, conduct a brief retro covering: what went well, what could be improved, and what to change going forward. Capture actionable improvements in `LEARNINGS.md`. This applies to the increment as a whole, not to every individual commit.
-14. **Re-envisioning check**: After each increment, step back and consider the project from a blank slate. Ask: "If I were starting this today, knowing everything I know now, would I build the same thing?" Evaluate architecture, package boundaries, API design, roadmap ordering, and testing strategy. If something feels stale or constrained by earlier decisions, flag it. Don't just follow the roadmap — challenge it. Propose concrete changes if warranted, or explicitly confirm the current direction is still correct. This check prevents path dependency from accumulating across increments.
+2. **Unit tests**: `go test -race ./...` — all pass
+3. **E2E tests**: `ONEDRIVE_TEST_DRIVE="personal:toni@outlook.com" go test -tags=e2e -race -v -timeout=15m ./e2e/...` — all pass. E2E tests run the real binary against live OneDrive and catch integration-seam bugs that unit tests miss. Never push before running these locally.
+4. **Lint**: `golangci-lint run` — zero issues
+5. **Format**: `gofumpt` and `goimports -local github.com/tonimelisma/onedrive-go` applied
+6. **Coverage**: New/modified code must have tests. Never decrease coverage.
+7. **Logging review**: Review new/modified code for sufficient logging. Every public function entry, every state transition, every error path must have a log line. See Logging Standard below.
+8. **Comment review**: Review new/modified code for sufficient comments explaining *why*. See Comment Convention below.
+9. **Docs**: CLAUDE.md documentation index is current. All doc links are valid.
+10. **Git clean**: Working tree is clean after commit. No uncommitted changes left behind.
+11. **Git cleanup**: After merging PRs, delete merged branches (local and remote), remove worktrees (`git worktree remove`), prune remote refs (`git fetch --prune`), verify no stashes (`git stash list`), remove coordination files (e.g., PLAN_LEFT.md). Verify: only `main` branch exists locally, only `origin/main` remotely, no open PRs, no orphaned worktree directories on disk. This is not optional — the repo must be fully clean before declaring an increment done.
+12. **CI verification**: After merging PRs, wait for ALL CI workflows (both `ci.yml` and `integration.yml`) to pass before declaring the increment done. Integration tests catch regressions that unit tests miss (e.g., config changes breaking `--drive` in CI). Never skip this step.
+13. **CI infrastructure**: If the increment changed anything affecting CI (token paths, secret naming, env vars, workflow YAML), verify that Key Vault secrets and GitHub variables are updated, and run `scripts/validate-ci-locally.sh` before pushing. See [docs/design/test-strategy.md §6.1](docs/design/test-strategy.md) and [docs/orchestration.md §1.4](docs/orchestration.md).
+14. **Retrospective**: After each increment, conduct a brief retro covering: what went well, what could be improved, and what to change going forward. Capture actionable improvements in `LEARNINGS.md`. This applies to the increment as a whole, not to every individual commit.
+15. **Re-envisioning check**: After each increment, step back and consider the project from a blank slate. Ask: "If I were starting this today, knowing everything I know now, would I build the same thing?" Evaluate architecture, package boundaries, API design, roadmap ordering, and testing strategy. If something feels stale or constrained by earlier decisions, flag it. Don't just follow the roadmap — challenge it. Propose concrete changes if warranted, or explicitly confirm the current direction is still correct. This check prevents path dependency from accumulating across increments.
 
 ### DOD Quick Check
 ```bash
-go build ./... && go test -race -coverprofile=/tmp/cover.out ./... && golangci-lint run && go tool cover -func=/tmp/cover.out | grep total && echo "ALL GATES PASS"
+go build ./... && go test -race -coverprofile=/tmp/cover.out ./... && ONEDRIVE_TEST_DRIVE="personal:toni@outlook.com" go test -tags=e2e -race -v -timeout=15m ./e2e/... && golangci-lint run && go tool cover -func=/tmp/cover.out | grep total && echo "ALL GATES PASS"
 ```
 
 ### DOD Cleanup Check (after increment)

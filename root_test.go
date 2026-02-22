@@ -13,38 +13,109 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 )
 
+// --- bootstrapLogger tests ---
+
+func TestBootstrapLogger_Default(t *testing.T) {
+	oldVerbose := flagVerbose
+	oldDebug := flagDebug
+	oldQuiet := flagQuiet
+
+	t.Cleanup(func() {
+		flagVerbose = oldVerbose
+		flagDebug = oldDebug
+		flagQuiet = oldQuiet
+	})
+
+	flagVerbose = false
+	flagDebug = false
+	flagQuiet = false
+
+	logger := bootstrapLogger()
+
+	// Default level is Warn.
+	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelWarn))
+	assert.False(t, logger.Handler().Enabled(context.Background(), slog.LevelInfo))
+}
+
+func TestBootstrapLogger_Verbose(t *testing.T) {
+	oldVerbose := flagVerbose
+	oldDebug := flagDebug
+	oldQuiet := flagQuiet
+
+	t.Cleanup(func() {
+		flagVerbose = oldVerbose
+		flagDebug = oldDebug
+		flagQuiet = oldQuiet
+	})
+
+	flagVerbose = true
+	flagDebug = false
+	flagQuiet = false
+
+	logger := bootstrapLogger()
+
+	// --verbose sets Info.
+	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelInfo))
+	assert.False(t, logger.Handler().Enabled(context.Background(), slog.LevelDebug))
+}
+
+func TestBootstrapLogger_Debug(t *testing.T) {
+	oldVerbose := flagVerbose
+	oldDebug := flagDebug
+	oldQuiet := flagQuiet
+
+	t.Cleanup(func() {
+		flagVerbose = oldVerbose
+		flagDebug = oldDebug
+		flagQuiet = oldQuiet
+	})
+
+	flagVerbose = false
+	flagDebug = true
+	flagQuiet = false
+
+	logger := bootstrapLogger()
+
+	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelDebug))
+}
+
 // --- buildLogger tests ---
 
 func TestBuildLogger_Default(t *testing.T) {
 	oldCfg := resolvedCfg
 	oldVerbose := flagVerbose
+	oldDebug := flagDebug
 	oldQuiet := flagQuiet
 
 	t.Cleanup(func() {
 		resolvedCfg = oldCfg
 		flagVerbose = oldVerbose
+		flagDebug = oldDebug
 		flagQuiet = oldQuiet
 	})
 
 	resolvedCfg = nil
 	flagVerbose = false
+	flagDebug = false
 	flagQuiet = false
 
 	logger := buildLogger()
 
-	// Default level is Info: Info enabled, Debug not.
-	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelInfo))
-	assert.False(t, logger.Handler().Enabled(context.Background(), slog.LevelDebug))
+	// Default level is Warn: Warn enabled, Info not.
+	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelWarn))
+	assert.False(t, logger.Handler().Enabled(context.Background(), slog.LevelInfo))
 }
 
 func TestBuildLogger_ConfigDebug(t *testing.T) {
 	oldCfg := resolvedCfg
 	oldVerbose := flagVerbose
+	oldDebug := flagDebug
 	oldQuiet := flagQuiet
 
 	t.Cleanup(func() {
 		resolvedCfg = oldCfg
 		flagVerbose = oldVerbose
+		flagDebug = oldDebug
 		flagQuiet = oldQuiet
 	})
 
@@ -52,6 +123,7 @@ func TestBuildLogger_ConfigDebug(t *testing.T) {
 		LoggingConfig: config.LoggingConfig{LogLevel: "debug"},
 	}
 	flagVerbose = false
+	flagDebug = false
 	flagQuiet = false
 
 	logger := buildLogger()
@@ -62,40 +134,48 @@ func TestBuildLogger_ConfigDebug(t *testing.T) {
 func TestBuildLogger_VerboseOverrides(t *testing.T) {
 	oldCfg := resolvedCfg
 	oldVerbose := flagVerbose
+	oldDebug := flagDebug
 	oldQuiet := flagQuiet
 
 	t.Cleanup(func() {
 		resolvedCfg = oldCfg
 		flagVerbose = oldVerbose
+		flagDebug = oldDebug
 		flagQuiet = oldQuiet
 	})
 
-	// Config says warn, but --verbose should override to debug.
+	// Config says error, but --verbose should override to Info.
 	resolvedCfg = &config.ResolvedDrive{
-		LoggingConfig: config.LoggingConfig{LogLevel: "warn"},
+		LoggingConfig: config.LoggingConfig{LogLevel: "error"},
 	}
 	flagVerbose = true
+	flagDebug = false
 	flagQuiet = false
 
 	logger := buildLogger()
 
-	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelDebug))
+	// --verbose enables Info level, but not Debug.
+	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelInfo))
+	assert.False(t, logger.Handler().Enabled(context.Background(), slog.LevelDebug))
 }
 
 func TestBuildLogger_QuietOverrides(t *testing.T) {
 	oldCfg := resolvedCfg
 	oldVerbose := flagVerbose
+	oldDebug := flagDebug
 	oldQuiet := flagQuiet
 
 	t.Cleanup(func() {
 		resolvedCfg = oldCfg
 		flagVerbose = oldVerbose
+		flagDebug = oldDebug
 		flagQuiet = oldQuiet
 	})
 
-	// Even with verbose set, quiet wins (it is checked last).
+	// --quiet sets Error level.
 	resolvedCfg = nil
-	flagVerbose = true
+	flagVerbose = false
+	flagDebug = false
 	flagQuiet = true
 
 	logger := buildLogger()
@@ -103,6 +183,59 @@ func TestBuildLogger_QuietOverrides(t *testing.T) {
 	// Error is enabled, but warn should not be.
 	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelError))
 	assert.False(t, logger.Handler().Enabled(context.Background(), slog.LevelWarn))
+}
+
+func TestBuildLogger_DebugOverrides(t *testing.T) {
+	oldCfg := resolvedCfg
+	oldVerbose := flagVerbose
+	oldDebug := flagDebug
+	oldQuiet := flagQuiet
+
+	t.Cleanup(func() {
+		resolvedCfg = oldCfg
+		flagVerbose = oldVerbose
+		flagDebug = oldDebug
+		flagQuiet = oldQuiet
+	})
+
+	// Config says error, but --debug should override to Debug.
+	resolvedCfg = &config.ResolvedDrive{
+		LoggingConfig: config.LoggingConfig{LogLevel: "error"},
+	}
+	flagVerbose = false
+	flagDebug = true
+	flagQuiet = false
+
+	logger := buildLogger()
+
+	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelDebug))
+}
+
+func TestBuildLogger_ConfigInfo(t *testing.T) {
+	oldCfg := resolvedCfg
+	oldVerbose := flagVerbose
+	oldDebug := flagDebug
+	oldQuiet := flagQuiet
+
+	t.Cleanup(func() {
+		resolvedCfg = oldCfg
+		flagVerbose = oldVerbose
+		flagDebug = oldDebug
+		flagQuiet = oldQuiet
+	})
+
+	// Config log_level = "info" should set Info level.
+	resolvedCfg = &config.ResolvedDrive{
+		LoggingConfig: config.LoggingConfig{LogLevel: "info"},
+	}
+	flagVerbose = false
+	flagDebug = false
+	flagQuiet = false
+
+	logger := buildLogger()
+
+	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelInfo))
+	assert.False(t, logger.Handler().Enabled(context.Background(), slog.LevelDebug))
 }
 
 // --- Cobra structure tests ---
@@ -129,10 +262,34 @@ func TestNewRootCmd_Subcommands(t *testing.T) {
 func TestNewRootCmd_PersistentFlags(t *testing.T) {
 	cmd := newRootCmd()
 
-	expectedFlags := []string{"config", "account", "drive", "json", "verbose", "quiet"}
+	expectedFlags := []string{"config", "account", "drive", "json", "verbose", "debug", "quiet"}
 	for _, name := range expectedFlags {
 		flag := cmd.PersistentFlags().Lookup(name)
 		assert.NotNil(t, flag, "expected persistent flag %q not found", name)
+	}
+}
+
+func TestNewRootCmd_MutualExclusivity(t *testing.T) {
+	// Cobra enforces mutual exclusivity during Execute(). Verify that
+	// combining --verbose/--debug/--quiet produces an error.
+	// Uses "status" because it's in skipConfigCommands, so PersistentPreRunE
+	// is a no-op. This avoids loadConfig failures on CI (no config file)
+	// masking the mutual exclusivity error.
+	pairs := [][]string{
+		{"--verbose", "--debug"},
+		{"--verbose", "--quiet"},
+		{"--debug", "--quiet"},
+	}
+
+	for _, flags := range pairs {
+		t.Run(flags[0]+"_"+flags[1], func(t *testing.T) {
+			cmd := newRootCmd()
+			cmd.SetArgs(append(flags, "status"))
+
+			err := cmd.Execute()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "none of the others can be")
+		})
 	}
 }
 
@@ -282,7 +439,8 @@ func TestLoadConfig_MissingFile_ZeroConfig(t *testing.T) {
 	})
 
 	tmpDir := t.TempDir()
-	flagConfigPath = filepath.Join(tmpDir, "nonexistent.toml")
+	// Save config path before newRootCmd(), which resets flagConfigPath to "".
+	cfgPath := filepath.Join(tmpDir, "nonexistent.toml")
 
 	// Zero-config mode: no config file, but --drive is set with a canonical ID.
 	// The resolver allows this because the selector contains ":" (canonical format),
@@ -290,7 +448,7 @@ func TestLoadConfig_MissingFile_ZeroConfig(t *testing.T) {
 	// We use Execute with the ls subcommand so Cobra properly merges persistent
 	// flags and marks --drive as changed -- matching real CLI invocation.
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--drive", "personal:zeroconfig@example.com", "--config", flagConfigPath, "ls"})
+	cmd.SetArgs([]string{"--drive", "personal:zeroconfig@example.com", "--config", cfgPath, "ls"})
 
 	// ls will fail (no token), but PersistentPreRunE should succeed and populate resolvedCfg.
 	_ = cmd.Execute()
