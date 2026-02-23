@@ -19,11 +19,14 @@ type mockDeltaPage struct {
 }
 
 type mockDeltaFetcher struct {
-	pages []mockDeltaPage
-	calls int
+	pages    []mockDeltaPage
+	calls    int
+	driveIDs []string // records driveID passed to each Delta call
 }
 
-func (m *mockDeltaFetcher) Delta(_ context.Context, _, _ string) (*graph.DeltaPage, error) {
+func (m *mockDeltaFetcher) Delta(_ context.Context, driveID, _ string) (*graph.DeltaPage, error) {
+	m.driveIDs = append(m.driveIDs, driveID)
+
 	if m.calls >= len(m.pages) {
 		return nil, errors.New("mock: no more pages configured")
 	}
@@ -630,6 +633,15 @@ func TestFullDelta_DriveIDNormalization(t *testing.T) {
 	if events[0].DriveID != want {
 		t.Errorf("DriveID = %q, want %q", events[0].DriveID, want)
 	}
+
+	// Verify the fetcher was called with the normalized driveID, not the raw one.
+	if len(fetcher.driveIDs) != 1 {
+		t.Fatalf("fetcher called %d times, want 1", len(fetcher.driveIDs))
+	}
+
+	if fetcher.driveIDs[0] != want {
+		t.Errorf("fetcher received driveID = %q, want %q (normalized)", fetcher.driveIDs[0], want)
+	}
 }
 
 func TestFullDelta_NFCNormalization(t *testing.T) {
@@ -899,5 +911,147 @@ func TestToUnixNano(t *testing.T) {
 
 	if got := toUnixNano(time.Time{}); got != 0 {
 		t.Errorf("toUnixNano(zero) = %d, want 0", got)
+	}
+}
+
+func TestFullDelta_OrphanedItem(t *testing.T) {
+	t.Parallel()
+
+	// Item whose parent is not in the inflight map or baseline.
+	// Observer should warn and return a partial path (just the item name).
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{{
+			page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "f1", Name: "orphan.txt", ParentID: "unknown-parent", DriveID: testDriveID},
+				},
+				DeltaLink: "delta-link",
+			},
+		}},
+	}
+
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), testDriveID, testLogger(t))
+	events, _, err := obs.FullDelta(context.Background(), "")
+	if err != nil {
+		t.Fatalf("FullDelta: %v", err)
+	}
+
+	if len(events) != 1 {
+		t.Fatalf("len(events) = %d, want 1", len(events))
+	}
+
+	// Orphaned item gets a partial path: just its own name.
+	if events[0].Path != "orphan.txt" {
+		t.Errorf("Path = %q, want %q (partial path for orphan)", events[0].Path, "orphan.txt")
+	}
+
+	if events[0].Type != ChangeCreate {
+		t.Errorf("Type = %v, want ChangeCreate", events[0].Type)
+	}
+}
+
+func TestFullDelta_DeletedItem_NotInBaseline(t *testing.T) {
+	t.Parallel()
+
+	// Item created and deleted between syncs — appears as deleted in delta
+	// but has no baseline entry. Observer should produce an event with empty path.
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{{
+			page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "f1", Name: "ephemeral.txt", DriveID: testDriveID, IsDeleted: true},
+				},
+				DeltaLink: "delta-link",
+			},
+		}},
+	}
+
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), testDriveID, testLogger(t))
+	events, _, err := obs.FullDelta(context.Background(), "token")
+	if err != nil {
+		t.Fatalf("FullDelta: %v", err)
+	}
+
+	if len(events) != 1 {
+		t.Fatalf("len(events) = %d, want 1", len(events))
+	}
+
+	e := events[0]
+	if e.Type != ChangeDelete {
+		t.Errorf("Type = %v, want ChangeDelete", e.Type)
+	}
+
+	// No baseline entry — path is empty.
+	if e.Path != "" {
+		t.Errorf("Path = %q, want empty (no baseline entry)", e.Path)
+	}
+
+	// Name is still available from the delta item itself.
+	if e.Name != "ephemeral.txt" {
+		t.Errorf("Name = %q, want %q", e.Name, "ephemeral.txt")
+	}
+}
+
+func TestFullDelta_RenameInPlace(t *testing.T) {
+	t.Parallel()
+
+	// File renamed within the same parent folder (same parent, new name).
+	baseline := baselineWith(
+		&BaselineEntry{
+			Path: "docs", DriveID: testDriveID, ItemID: "folder1",
+			ParentID: "root", ItemType: ItemTypeFolder,
+		},
+		&BaselineEntry{
+			Path: "docs/old-name.txt", DriveID: testDriveID, ItemID: "f1",
+			ParentID: "folder1", ItemType: ItemTypeFile,
+		},
+	)
+
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{{
+			page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: testDriveID},
+					// Same parent (folder1), different name.
+					{ID: "f1", Name: "new-name.txt", ParentID: "folder1", DriveID: testDriveID},
+				},
+				DeltaLink: "delta-link",
+			},
+		}},
+	}
+
+	obs := NewRemoteObserver(fetcher, baseline, testDriveID, testLogger(t))
+	events, _, err := obs.FullDelta(context.Background(), "token")
+	if err != nil {
+		t.Fatalf("FullDelta: %v", err)
+	}
+
+	var renameEvent *ChangeEvent
+	for i := range events {
+		if events[i].ItemID == "f1" {
+			renameEvent = &events[i]
+
+			break
+		}
+	}
+
+	if renameEvent == nil {
+		t.Fatal("rename event not found")
+	}
+
+	if renameEvent.Type != ChangeMove {
+		t.Errorf("Type = %v, want ChangeMove", renameEvent.Type)
+	}
+
+	if renameEvent.Path != "docs/new-name.txt" {
+		t.Errorf("Path = %q, want %q", renameEvent.Path, "docs/new-name.txt")
+	}
+
+	if renameEvent.OldPath != "docs/old-name.txt" {
+		t.Errorf("OldPath = %q, want %q", renameEvent.OldPath, "docs/old-name.txt")
+	}
+
+	if renameEvent.Name != "new-name.txt" {
+		t.Errorf("Name = %q, want %q", renameEvent.Name, "new-name.txt")
 	}
 }
