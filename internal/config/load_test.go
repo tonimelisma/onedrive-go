@@ -216,7 +216,7 @@ alias = "home"
 	require.NoError(t, err)
 	require.Len(t, cfg.Drives, 1)
 
-	d := cfg.Drives["personal:toni@outlook.com"]
+	d := cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")]
 	assert.Equal(t, "~/OneDrive", d.SyncDir)
 	assert.Equal(t, "home", d.Alias)
 	assert.Equal(t, "debug", cfg.LogLevel)
@@ -239,11 +239,11 @@ skip_dirs = ["node_modules", ".git", "vendor"]
 	require.NoError(t, err)
 	require.Len(t, cfg.Drives, 2)
 
-	personal := cfg.Drives["personal:toni@outlook.com"]
+	personal := cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")]
 	assert.Equal(t, "~/OneDrive", personal.SyncDir)
 	assert.Equal(t, "home", personal.Alias)
 
-	business := cfg.Drives["business:alice@contoso.com"]
+	business := cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")]
 	assert.Equal(t, "~/OneDrive - Contoso", business.SyncDir)
 	assert.Equal(t, "work", business.Alias)
 	assert.Equal(t, []string{"node_modules", ".git", "vendor"}, business.SkipDirs)
@@ -265,7 +265,7 @@ poll_interval = "10m"
 	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 
-	d := cfg.Drives["personal:toni@outlook.com"]
+	d := cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")]
 	assert.Equal(t, "~/OneDrive", d.SyncDir)
 	assert.Equal(t, "home", d.Alias)
 	require.NotNil(t, d.Enabled)
@@ -289,7 +289,7 @@ enabled = false
 	require.NoError(t, err)
 	require.Len(t, cfg.Drives, 1)
 
-	d := cfg.Drives["sharepoint:alice@contoso.com:marketing:Documents"]
+	d := cfg.Drives[driveid.MustCanonicalID("sharepoint:alice@contoso.com:marketing:Documents")]
 	assert.Equal(t, "~/Contoso/Marketing", d.SyncDir)
 	require.NotNil(t, d.Enabled)
 	assert.False(t, *d.Enabled)

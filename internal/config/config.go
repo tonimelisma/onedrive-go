@@ -7,10 +7,15 @@
 // names containing ":" for drive configuration (e.g. ["personal:user@example.com"]).
 package config
 
+import (
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
+)
+
 // Config is the top-level configuration structure. Global settings live in
 // embedded sub-structs, which BurntSushi/toml promotes to flat TOML keys.
 // Drive sections use quoted headers containing ":" and are parsed in a
-// separate decode pass.
+// separate decode pass. Map keys are validated CanonicalIDs — invalid keys
+// are rejected at parse time.
 type Config struct {
 	FilterConfig
 	TransfersConfig
@@ -18,7 +23,7 @@ type Config struct {
 	SyncConfig
 	LoggingConfig
 	NetworkConfig
-	Drives map[string]Drive `toml:"-"` // parsed via two-pass decode, keyed by canonical ID
+	Drives map[driveid.CanonicalID]Drive `toml:"-"` // parsed via two-pass decode, keyed by canonical ID
 }
 
 // FilterConfig controls which files and directories are included in sync.
