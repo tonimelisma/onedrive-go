@@ -456,6 +456,7 @@ func classifyFolderNoBaseline(view *PathView, mode SyncMode) []Action {
 func remoteStateFromEvent(ev *ChangeEvent) *RemoteState {
 	return &RemoteState{
 		ItemID:    ev.ItemID,
+		DriveID:   ev.DriveID,
 		ParentID:  ev.ParentID,
 		Name:      ev.Name,
 		ItemType:  ev.ItemType,
@@ -558,8 +559,15 @@ func resolveItemType(view *PathView) ItemType {
 }
 
 // makeAction constructs an Action with type, path, and IDs populated from
-// the PathView. Uses Remote for ItemID (since RemoteState has it), and
-// Baseline for DriveID (since RemoteState does not carry DriveID).
+// the PathView.
+//
+// DriveID propagation contract:
+//   - Remote.DriveID is authoritative for cross-drive items (shared folders
+//     from Drive A appearing in Drive B's delta carry Drive A's DriveID).
+//   - Baseline.DriveID is the fallback for items with no remote observation.
+//   - Empty DriveID for new local items (EF13, ED5) — the executor fills
+//     this from its per-drive Engine context before making API calls.
+//   - Empty ItemID for new items — assigned by the API on creation.
 func makeAction(actionType ActionType, view *PathView) Action {
 	a := Action{
 		Type: actionType,
@@ -567,18 +575,24 @@ func makeAction(actionType ActionType, view *PathView) Action {
 		View: view,
 	}
 
-	// Remote provides ItemID; DriveID is not available on RemoteState.
+	// Remote provides ItemID and DriveID.
 	if view.Remote != nil {
 		a.ItemID = view.Remote.ItemID
 	}
 
-	// Baseline provides DriveID and a fallback ItemID.
-	if view.Baseline != nil {
-		a.DriveID = view.Baseline.DriveID
+	// DriveID: prefer Remote (handles cross-drive items correctly),
+	// fall back to Baseline (for items with no remote observation).
+	if view.Remote != nil && view.Remote.DriveID != "" {
+		a.DriveID = view.Remote.DriveID
+	}
 
-		if a.ItemID == "" {
-			a.ItemID = view.Baseline.ItemID
-		}
+	if a.DriveID == "" && view.Baseline != nil {
+		a.DriveID = view.Baseline.DriveID
+	}
+
+	// Baseline provides a fallback ItemID when Remote is absent.
+	if a.ItemID == "" && view.Baseline != nil {
+		a.ItemID = view.Baseline.ItemID
 	}
 
 	return a

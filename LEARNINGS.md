@@ -282,6 +282,12 @@ The `strings.HasSuffix` loop checks suffixes in declaration order. `.db-wal` and
 ### Planner decision matrix: localDeleted implies localChanged
 When splitting the EF1-EF10 file decision matrix into switch cases, `localDeleted` (baseline exists but Local is nil) always implies `localChanged` (detectLocalChange returns true when Local is nil). This means a catch-all case like `localChanged && remoteChanged && hasRemote` will match both EF5 (edit-edit conflict, local present) and EF7 (local deleted, remote modified). The fix: add `!localDeleted` to EF4/EF5/EF9 cases, or evaluate `localDeleted` cases first. This is a subtle ordering bug that manifests as conflicts instead of downloads.
 
+### Spec pseudocode ordering != implementation ordering
+The sync-algorithm.md §7.3 pseudocode had EF3 (`localChanged && !remoteChanged`) before EF6 (`localDeleted && !remoteChanged`), but `localDeleted` implies `localChanged` (detectLocalChange returns true when Local is nil). In Go's `switch`, the first matching case wins, so EF3 would steal EF6's matches. The implementation correctly checks `localDeleted` cases first via sub-functions. Always update the spec when the implementation deviates — spec and code must agree on case ordering.
+
+### RemoteState must carry DriveID for cross-drive correctness
+Shared folder items from Drive A in Drive B's delta carry Drive A's DriveID. If RemoteState omits DriveID, new cross-drive items get empty DriveID in Actions, breaking executor API calls (404 or wrong-item operations). DriveID and ItemID are the two halves of Graph API item identity (`/drives/{driveID}/items/{itemID}`). The planner's DriveID propagation: Remote.DriveID wins (cross-drive), Baseline.DriveID is fallback (no remote observation), empty for new local items (executor fills from context).
+
 ### Worktree branch point matters for parallel agents
 When a worktree is created from `main` via the EnterWorktree tool but the active development branch is `clean-slate`, the worktree will have old code (e.g., the deleted batch-pipeline sync engine). The fix is `git reset --hard origin/clean-slate` after worktree creation. Save any new files to /tmp first, reset, then restore. This cost one debugging cycle in 4v2.5.
 

@@ -42,6 +42,7 @@ func TestClassifyFile_EF1_Unchanged(t *testing.T) {
 					ItemType: ItemTypeFile,
 					Hash:     "hashA",
 					ItemID:   "item1",
+					DriveID:  testDriveID,
 				},
 			},
 			LocalEvents: []ChangeEvent{
@@ -90,6 +91,7 @@ func TestClassifyFile_EF2_RemoteModified(t *testing.T) {
 					ItemType: ItemTypeFile,
 					Hash:     "hashB",
 					ItemID:   "item1",
+					DriveID:  testDriveID,
 				},
 			},
 		},
@@ -175,6 +177,7 @@ func TestClassifyFile_EF4_ConvergentEdit(t *testing.T) {
 					ItemType: ItemTypeFile,
 					Hash:     "hashC",
 					ItemID:   "item1",
+					DriveID:  testDriveID,
 				},
 			},
 			LocalEvents: []ChangeEvent{
@@ -223,6 +226,7 @@ func TestClassifyFile_EF5_EditEditConflict(t *testing.T) {
 					ItemType: ItemTypeFile,
 					Hash:     "hashB",
 					ItemID:   "item1",
+					DriveID:  testDriveID,
 				},
 			},
 			LocalEvents: []ChangeEvent{
@@ -312,6 +316,7 @@ func TestClassifyFile_EF7_LocalDeleteRemoteModified(t *testing.T) {
 					ItemType: ItemTypeFile,
 					Hash:     "hashB",
 					ItemID:   "item1",
+					DriveID:  testDriveID,
 				},
 			},
 			LocalEvents: []ChangeEvent{
@@ -359,6 +364,7 @@ func TestClassifyFile_EF8_RemoteDeleted(t *testing.T) {
 					Path:      "planner-test.txt",
 					ItemType:  ItemTypeFile,
 					ItemID:    "item1",
+					DriveID:   testDriveID,
 					IsDeleted: true,
 				},
 			},
@@ -398,6 +404,7 @@ func TestClassifyFile_EF9_EditDeleteConflict(t *testing.T) {
 					Path:      "planner-test.txt",
 					ItemType:  ItemTypeFile,
 					ItemID:    "item1",
+					DriveID:   testDriveID,
 					IsDeleted: true,
 				},
 			},
@@ -450,6 +457,7 @@ func TestClassifyFile_EF10_BothDeleted(t *testing.T) {
 					Path:      "planner-test.txt",
 					ItemType:  ItemTypeFile,
 					ItemID:    "item1",
+					DriveID:   testDriveID,
 					IsDeleted: true,
 				},
 			},
@@ -498,6 +506,7 @@ func TestClassifyFile_EF11_ConvergentCreate(t *testing.T) {
 					ItemType: ItemTypeFile,
 					Hash:     "hashX",
 					ItemID:   "item2",
+					DriveID:  testDriveID,
 				},
 			},
 			LocalEvents: []ChangeEvent{
@@ -537,6 +546,7 @@ func TestClassifyFile_EF12_CreateCreateConflict(t *testing.T) {
 					ItemType: ItemTypeFile,
 					Hash:     "hashX",
 					ItemID:   "item2",
+					DriveID:  testDriveID,
 				},
 			},
 			LocalEvents: []ChangeEvent{
@@ -609,6 +619,7 @@ func TestClassifyFile_EF14_NewRemote(t *testing.T) {
 					ItemType: ItemTypeFile,
 					Hash:     "hashR",
 					ItemID:   "item3",
+					DriveID:  testDriveID,
 				},
 			},
 		},
@@ -968,6 +979,7 @@ func TestDetectMoves_RemoteMove(t *testing.T) {
 					ItemType: ItemTypeFile,
 					Hash:     "hashM",
 					ItemID:   "item5",
+					DriveID:  testDriveID,
 				},
 			},
 		},
@@ -1808,6 +1820,86 @@ func TestPlan_FullScenario(t *testing.T) {
 	// ED3 = 1 folder create.
 	if len(plan.FolderCreates) != 1 {
 		t.Errorf("expected 1 folder create, got %d", len(plan.FolderCreates))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// DriveID Propagation Tests
+// ---------------------------------------------------------------------------
+
+func TestMakeAction_CrossDriveItem(t *testing.T) {
+	// When Remote has DriveID "drive-A" and Baseline has DriveID "drive-B",
+	// the Action should get "drive-A" (Remote wins for cross-drive items).
+	view := &PathView{
+		Path: "shared/cross-drive-file.txt",
+		Remote: &RemoteState{
+			ItemID:   "item-from-drive-a",
+			DriveID:  "000000000000000a",
+			ItemType: ItemTypeFile,
+		},
+		Baseline: &BaselineEntry{
+			Path:    "shared/cross-drive-file.txt",
+			DriveID: "000000000000000b",
+			ItemID:  "item-from-drive-a",
+		},
+	}
+
+	action := makeAction(ActionDownload, view)
+
+	if action.DriveID != "000000000000000a" {
+		t.Errorf("expected DriveID from Remote %q, got %q", "000000000000000a", action.DriveID)
+	}
+
+	if action.ItemID != "item-from-drive-a" {
+		t.Errorf("expected ItemID %q, got %q", "item-from-drive-a", action.ItemID)
+	}
+}
+
+func TestMakeAction_NewLocalItem(t *testing.T) {
+	// When both Remote and Baseline are nil (new local-only file, EF13),
+	// Action.DriveID should be empty — the executor fills from context.
+	view := &PathView{
+		Path: "new-local-file.txt",
+		Local: &LocalState{
+			Name:     "new-local-file.txt",
+			ItemType: ItemTypeFile,
+			Size:     100,
+			Hash:     "hashLocal",
+		},
+	}
+
+	action := makeAction(ActionUpload, view)
+
+	if action.DriveID != "" {
+		t.Errorf("expected empty DriveID for new local item, got %q", action.DriveID)
+	}
+
+	if action.ItemID != "" {
+		t.Errorf("expected empty ItemID for new local item, got %q", action.ItemID)
+	}
+}
+
+func TestMakeAction_BaselineFallbackDriveID(t *testing.T) {
+	// When Remote has no DriveID (empty) but Baseline has one,
+	// the Action should get Baseline's DriveID.
+	view := &PathView{
+		Path: "baseline-fallback.txt",
+		Remote: &RemoteState{
+			ItemID:   "item-fallback",
+			DriveID:  "", // no DriveID from remote
+			ItemType: ItemTypeFile,
+		},
+		Baseline: &BaselineEntry{
+			Path:    "baseline-fallback.txt",
+			DriveID: testDriveID,
+			ItemID:  "item-fallback",
+		},
+	}
+
+	action := makeAction(ActionDownload, view)
+
+	if action.DriveID != testDriveID {
+		t.Errorf("expected DriveID from Baseline %q, got %q", testDriveID, action.DriveID)
 	}
 }
 

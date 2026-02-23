@@ -253,6 +253,7 @@ type PathChanges struct {
 // the Graph API delta response.
 type RemoteState struct {
 	ItemID    string
+	DriveID   string // normalized (lowercase, zero-padded to 16 chars)
 	ParentID  string
 	Name      string
 	ItemType  ItemType
