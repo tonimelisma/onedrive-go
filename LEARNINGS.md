@@ -260,8 +260,8 @@ Tokens bootstrapped via `go run . login --drive personal:user@example.com`. Driv
 ### Nightly CI keeps refresh tokens alive
 Microsoft rotates refresh tokens on use and they expire after 90 days of inactivity. Nightly schedule (3 AM UTC) keeps them active.
 
-### Orchestrator manages Key Vault secrets directly
-The AI orchestrator has `az` CLI access for creating/renaming secrets, downloading/uploading tokens, setting GitHub variables. The human only handles one-time Azure infrastructure and interactive browser-based flows.
+### Key Vault secrets are managed via az CLI
+Use `az` CLI for creating/renaming secrets, downloading/uploading tokens, and `gh variable set` for GitHub variables. The human only handles one-time Azure infrastructure and interactive browser-based flows.
 
 ### Local CI validation prevents push-and-pray
 Mirror the workflow's token loading logic with `az keyvault secret download`, test `whoami --json --drive`, run E2E tests locally. See test-strategy.md §6.1.
@@ -306,8 +306,8 @@ Shared folder items from Drive A in Drive B's delta carry Drive A's DriveID. If 
 ### Type-safe drive identity (`internal/driveid`) prevents normalization bugs
 Microsoft provides zero stability guarantees for drive ID format. Personal accounts return 13-char hex, business accounts return `b!` + base64. abraunegg/onedrive (D-lang) had production crashes, FK violations, and database corruption from unnormalized DriveIDs. The `driveid.ID` type normalizes on construction (lowercase + zero-pad to 16 chars for short IDs) and is used as struct fields, method parameters, and SQL values across `graph/`, `sync/`, and `config/`. `driveid.ItemKey` replaces ad-hoc `driveID+":"+itemID` string concatenation (was in 6+ places). `driveid.CanonicalID` validates config-level drive identifiers (format: "type:email") and absorbs parsing logic that was scattered across `auth.go` and `config/validate_drive.go`. Zero external dependencies — leaf package.
 
-### Worktree branch point matters for parallel agents
-When a worktree is created from `main` via the EnterWorktree tool but the active development branch is `clean-slate`, the worktree will have old code (e.g., the deleted batch-pipeline sync engine). The fix is `git reset --hard origin/clean-slate` after worktree creation. Save any new files to /tmp first, reset, then restore. This cost one debugging cycle in 4v2.5.
+### Worktree branch point matters
+When a worktree is created from `main` via the EnterWorktree tool but the active development branch is `clean-slate`, the worktree will have old code (e.g., the deleted batch-pipeline sync engine). The fix is `git reset --hard origin/clean-slate` after worktree creation. Save any new files to /tmp first, reset, then restore.
 
 ### Move detection must preserve views for reused paths
 When a remote move A→B happens and a new item appears at A in the same delta, `detectRemoteMoves` must not delete A from views. If the old path has a new item (Remote.IsDeleted=false from a ChangeCreate after the synthetic delete), clear Baseline and Local instead of deleting — so the new item classifies correctly (EF14 for files, ED3 for folders) rather than conflicting against the moved item's stale baseline.
