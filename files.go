@@ -106,7 +106,7 @@ func splitParentAndName(path string) (string, string) {
 func clientAndDrive(ctx context.Context) (*graph.Client, driveid.ID, *slog.Logger, error) {
 	logger := buildLogger()
 
-	tokenPath := config.DriveTokenPath(resolvedCfg.CanonicalID.String())
+	tokenPath := config.DriveTokenPath(resolvedCfg.CanonicalID)
 	if tokenPath == "" {
 		return nil, driveid.ID{}, nil, fmt.Errorf("cannot determine token path for drive %q", resolvedCfg.CanonicalID)
 	}

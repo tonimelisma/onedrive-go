@@ -11,6 +11,7 @@
 package driveid
 
 import (
+	"database/sql"
 	"database/sql/driver"
 	"encoding"
 	"fmt"
@@ -31,8 +32,13 @@ type ID struct {
 
 // New creates a normalized ID from a raw API drive identifier. Applies
 // lowercase and left-pads short IDs (< 16 chars) with zeros. Empty input
-// produces a 16-zero ID — callers should check IsZero() when that matters.
+// returns the zero ID (ID{}), which is the single representation for
+// "absent/unknown". Callers can check IsZero() when that matters.
 func New(raw string) ID {
+	if raw == "" {
+		return ID{}
+	}
+
 	lower := strings.ToLower(raw)
 	if len(lower) >= idMinLength {
 		return ID{value: lower}
@@ -104,4 +110,5 @@ var (
 	_ encoding.TextUnmarshaler = (*ID)(nil)
 	_ fmt.Stringer             = ID{}
 	_ driver.Valuer            = ID{}
+	_ sql.Scanner              = (*ID)(nil)
 )

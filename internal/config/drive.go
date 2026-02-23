@@ -314,22 +314,14 @@ func discoverTokensIn(dir string, logger *slog.Logger) []driveid.CanonicalID {
 //
 //	"personal:toni@outlook.com" -> "{dataDir}/token_personal_toni@outlook.com.json"
 //	"sharepoint:alice@contoso.com:marketing:Docs" -> "{dataDir}/token_business_alice@contoso.com.json"
-//
-// Accepts a string param for backward compatibility; future cleanup will
-// accept driveid.CanonicalID directly.
-func DriveTokenPath(canonicalID string) string {
+func DriveTokenPath(canonicalID driveid.CanonicalID) string {
 	dataDir := DefaultDataDir()
-	if dataDir == "" {
-		return ""
-	}
-
-	cid, err := driveid.NewCanonicalID(canonicalID)
-	if err != nil {
+	if dataDir == "" || canonicalID.IsZero() {
 		return ""
 	}
 
 	// TokenCanonicalID() maps SharePoint → business (shared OAuth session).
-	tokenCID := cid.TokenCanonicalID()
+	tokenCID := canonicalID.TokenCanonicalID()
 	sanitized := tokenCID.DriveType() + "_" + tokenCID.Email()
 
 	return filepath.Join(dataDir, "token_"+sanitized+".json")
@@ -341,21 +333,13 @@ func DriveTokenPath(canonicalID string) string {
 //
 //	"personal:toni@outlook.com" -> "{dataDir}/state_personal_toni@outlook.com.db"
 //	"sharepoint:alice@contoso.com:marketing:Docs" -> "{dataDir}/state_sharepoint_alice@contoso.com_marketing_Docs.db"
-//
-// Accepts a string param for backward compatibility; future cleanup will
-// accept driveid.CanonicalID directly.
-func DriveStatePath(canonicalID string) string {
+func DriveStatePath(canonicalID driveid.CanonicalID) string {
 	dataDir := DefaultDataDir()
-	if dataDir == "" {
+	if dataDir == "" || canonicalID.IsZero() {
 		return ""
 	}
 
-	// Validate via driveid — ensures proper "type:email" format.
-	if _, err := driveid.NewCanonicalID(canonicalID); err != nil {
-		return ""
-	}
-
-	sanitized := strings.ReplaceAll(canonicalID, ":", "_")
+	sanitized := strings.ReplaceAll(canonicalID.String(), ":", "_")
 
 	return filepath.Join(dataDir, "state_"+sanitized+".db")
 }
