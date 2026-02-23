@@ -339,3 +339,15 @@ No production sync tool (rsync, rclone, Syncthing, abraunegg/onedrive, Unison, G
 ### Upload-only mode for testing big-delete scenarios
 Testing big-delete protection with bidirectional mode and no local files causes the planner to classify items as cleanup (EF10) rather than deletes (EF8/EF6), because both observers see the items as missing. Fix: use `SyncUploadOnly` with no local files — the local observer sees baseline entries missing, produces `ChangeDelete`, planner classifies as EF6 → `ActionRemoteDelete`. 20 RemoteDeletes on 20 baseline entries = 100% > 50% threshold → `ErrBigDeleteTriggered`.
 
+### driveid.ID implements sql.Scanner — scan directly
+`driveid.ID` implements `database/sql.Scanner` interface. When scanning conflict rows (or any row containing a drive ID), scan directly into `&c.DriveID` rather than using an intermediate string variable with `driveid.New()`. Confirmed by the existing `scanBaselineRow` pattern in baseline.go.
+
+### exitAfterDefer lint: extract helper to scope defer correctly
+`golangci-lint` flags `os.Exit(1)` after `defer mgr.Close()` because the deferred close won't run. Fix: extract the logic into a helper function (e.g., `loadAndVerify`) where `defer` runs normally, then call `os.Exit` in the outer function based on the helper's return value.
+
+### replace_all can modify const definitions self-referentially
+When using `replace_all` to replace a string literal (e.g., `"keep_both"`) with a constant name (`resolutionKeepBoth`), it also replaces the string literal inside the constant's own definition, creating `resolutionKeepBoth = resolutionKeepBoth` (init cycle). Always exclude constant definitions from bulk replacements, or apply replacements manually.
+
+### E2E sync tests need per-test config files
+Sync operates on the entire drive root, so E2E tests create a fresh temp sync dir + temp TOML config file per test. The `writeSyncConfig` helper generates a minimal config with the test drive section and sync_dir pointing to the temp dir. This isolates test files from the drive's existing content.
+
