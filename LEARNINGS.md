@@ -333,3 +333,9 @@ Don't wrap outcomes in an intermediate struct with an index field (`indexedOutco
 ### mtime+size fast path is the industry standard for change detection
 No production sync tool (rsync, rclone, Syncthing, abraunegg/onedrive, Unison, Git) hashes every file on every scan. They all use mtime+size as a fast path and only hash when metadata differs. For a 50K-file sync root, always-hashing reads ~5 GB per cycle vs sub-second stat-only checks. The racily-clean guard (force hash when mtime is within 1 second of scan start) handles the edge case where a file was modified in the same clock tick as the last sync — Git's well-documented "racily clean" problem.
 
+### goconst flags semantically different constants with same string value
+`strRoot` (ItemType serialization) and `"root"` (Graph API parent ID for top-level items) share the same string value but have different semantics. The linter counts all occurrences across the package. Fix: add a dedicated constant (`graphRootID`) with a comment explaining the distinction. General rule: when goconst fires on a repeated string, check whether the occurrences share semantics — if not, add separate named constants with distinguishing comments.
+
+### Upload-only mode for testing big-delete scenarios
+Testing big-delete protection with bidirectional mode and no local files causes the planner to classify items as cleanup (EF10) rather than deletes (EF8/EF6), because both observers see the items as missing. Fix: use `SyncUploadOnly` with no local files — the local observer sees baseline entries missing, produces `ChangeDelete`, planner classifies as EF6 → `ActionRemoteDelete`. 20 RemoteDeletes on 20 baseline entries = 100% > 50% threshold → `ErrBigDeleteTriggered`.
+
