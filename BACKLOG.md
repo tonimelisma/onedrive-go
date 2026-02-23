@@ -31,6 +31,11 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 | B-008 | Spec inconsistency: chunk_size units (MB vs MiB) | P2 | `docs/design/` | configuration.md says "10MB" default but requires 320 KiB multiples. Clarify spec. |
 | B-031 | Profile and optimize performance | P3 | all | After feature-complete: CPU/memory/I/O profiling with `pprof`. |
 | B-032 | Like-for-like performance benchmarks vs rclone and abraunegg | P3 | benchmarks | Reproducible benchmark suite comparing sync performance. |
+| B-060 | Add `ResolveDrives()` for multi-drive sync | P1 | `internal/config/` | `ResolveDrive()` returns one drive. `sync` (all enabled) and `sync --drive a --drive b` need `ResolveDrives()` returning `[]*ResolvedDrive`. Required for 4v2.7 engine wiring. |
+| B-061 | Shared `graph.Client` per token file for multi-drive | P2 | `internal/sync/` | Multiple drives sharing an account (business + SharePoint) should share one `graph.Client` (same token, same rate limit tracking). Engine wiring (4v2.7) should create one Client per unique token path, not per drive. |
+| B-062 | Global worker pool cap for multi-drive sync | P2 | `internal/sync/` | Per-drive pools (8 dl + 8 ul + 8 hash) multiply with concurrent drives. 5 drives = 120 I/O goroutines. Need global cap or per-drive reduction when multiple drives active. Decision for 4v2.6 (executor) or 4v2.7 (engine wiring). |
+| B-063 | Per-tenant rate limit coordination | P3 | `internal/graph/` | Multiple drives under same tenant share Graph API rate limits. Current per-client 429 retry works but isn't optimal. Shared rate limiter per-tenant would be better. Not critical for MVP. |
+| B-064 | Baseline memory scaling for many drives | P3 | `internal/sync/` | Each drive loads full baseline into memory (~19 MB per 100K files). Additive across drives. 5 drives × 100K = ~95 MB baselines alone. Monitor during profiling (B-031). Lazy loading if needed. |
 
 ## Event-Driven Pivot (Phase 4 v2)
 

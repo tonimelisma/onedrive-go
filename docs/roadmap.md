@@ -204,8 +204,14 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 - Dry-run: stops at step 7, returns action counts without side effects (genuinely zero side effects)
 - Context-based cancellation at every stage
 - Integration tests with real SQLite: full round-trip from delta events through baseline commit
+- **Multi-drive orchestration** (B-060, B-061, B-062):
+  - Add `ResolveDrives()` to `internal/config/` — returns `[]*ResolvedDrive` for all enabled drives (or `--drive` selections)
+  - One `graph.Client` per unique token file — SharePoint drives sharing a business token share the same client (same rate limit tracking, thread-safe `oauth2.TokenSource`)
+  - One goroutine per drive, each with its own `BaselineManager` (separate DB), observers, planner, executor
+  - Worker pool sizing: per-drive pools with global cap to prevent I/O saturation across many concurrent drives
+  - Error isolation: failure in one drive doesn't block others, per-drive error reporting
 - **Acceptance**: `go test ./internal/sync/...` passes, integration test verifies baseline state after RunOnce
-- **Inputs**: [event-driven-rationale.md](design/event-driven-rationale.md) Parts 2, 10 (Phase 5)
+- **Inputs**: [event-driven-rationale.md](design/event-driven-rationale.md) Parts 2, 10 (Phase 5), [accounts.md](design/accounts.md) §13
 
 ### 4v2.8: CLI Integration + Sync E2E
 
