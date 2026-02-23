@@ -117,6 +117,7 @@ func (b *Buffer) addLocked(ev *ChangeEvent) {
 			Type:      ChangeDelete,
 			Path:      ev.OldPath,
 			ItemID:    ev.ItemID,
+			ParentID:  ev.ParentID,
 			DriveID:   ev.DriveID,
 			ItemType:  ev.ItemType,
 			Name:      path.Base(ev.OldPath),

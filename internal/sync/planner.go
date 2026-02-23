@@ -182,9 +182,21 @@ func detectRemoteMoves(views map[string]*PathView, changes []PathChanges) []Acti
 
 			actions = append(actions, action)
 
-			// Remove both old and new paths from classification.
+			// Always remove the new path (fully handled by move action).
 			delete(views, ev.Path)
-			delete(views, ev.OldPath)
+
+			// Only remove old path if no new item appeared there.
+			// If a new item exists (Remote.IsDeleted=false from a ChangeCreate
+			// after the synthetic delete), keep it in views but clear Baseline
+			// and Local so it classifies as a new item (EF14/ED3), not a
+			// conflict against the moved item's stale baseline.
+			oldView := views[ev.OldPath]
+			if oldView == nil || (oldView.Remote != nil && oldView.Remote.IsDeleted) {
+				delete(views, ev.OldPath)
+			} else {
+				oldView.Baseline = nil
+				oldView.Local = nil
+			}
 		}
 	}
 
@@ -670,13 +682,31 @@ func orderPlan(plan *ActionPlan) {
 	})
 
 	// Local deletes: deepest first so children are removed before parents.
+	// At same depth: files before folders (a folder cannot be deleted
+	// until sibling files at the same depth are deleted first).
 	sort.SliceStable(plan.LocalDeletes, func(i, j int) bool {
-		return pathDepth(plan.LocalDeletes[i].Path) > pathDepth(plan.LocalDeletes[j].Path)
+		di, dj := pathDepth(plan.LocalDeletes[i].Path), pathDepth(plan.LocalDeletes[j].Path)
+		if di != dj {
+			return di > dj
+		}
+
+		ti := resolveItemType(plan.LocalDeletes[i].View)
+		tj := resolveItemType(plan.LocalDeletes[j].View)
+
+		return ti < tj // ItemTypeFile(0) < ItemTypeFolder(1)
 	})
 
-	// Remote deletes: same depth-first ordering as local deletes.
+	// Remote deletes: same depth-first + files-before-folders ordering.
 	sort.SliceStable(plan.RemoteDeletes, func(i, j int) bool {
-		return pathDepth(plan.RemoteDeletes[i].Path) > pathDepth(plan.RemoteDeletes[j].Path)
+		di, dj := pathDepth(plan.RemoteDeletes[i].Path), pathDepth(plan.RemoteDeletes[j].Path)
+		if di != dj {
+			return di > dj
+		}
+
+		ti := resolveItemType(plan.RemoteDeletes[i].View)
+		tj := resolveItemType(plan.RemoteDeletes[j].View)
+
+		return ti < tj // ItemTypeFile(0) < ItemTypeFolder(1)
 	})
 }
 

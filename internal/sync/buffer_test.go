@@ -196,6 +196,7 @@ func TestBuffer_MoveDualKeying(t *testing.T) {
 		OldPath:  "buffer-old-folder/moved.txt",
 		Name:     "moved.txt",
 		ItemID:   "buf-m1",
+		ParentID: "buf-parent-1",
 		DriveID:  testDriveID,
 		ItemType: ItemTypeFile,
 	})
@@ -248,6 +249,10 @@ func TestBuffer_MoveDualKeying(t *testing.T) {
 
 	if synth.DriveID != testDriveID {
 		t.Errorf("synthetic DriveID = %q, want %q", synth.DriveID, testDriveID)
+	}
+
+	if synth.ParentID != "buf-parent-1" {
+		t.Errorf("synthetic ParentID = %q, want %q", synth.ParentID, "buf-parent-1")
 	}
 
 	if synth.ItemType != ItemTypeFile {

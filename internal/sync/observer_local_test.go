@@ -218,6 +218,7 @@ func TestFullScan_DeletedFile(t *testing.T) {
 	baseline := baselineWith(&BaselineEntry{
 		Path: "gone.txt", DriveID: "d", ItemID: "i1",
 		ItemType: ItemTypeFile, LocalHash: "some-hash",
+		Size: 42, Mtime: 1234567890,
 	})
 
 	obs := NewLocalObserver(baseline, testLogger(t))
@@ -245,6 +246,15 @@ func TestFullScan_DeletedFile(t *testing.T) {
 
 	if ev.Name != "gone.txt" {
 		t.Errorf("Name = %q, want %q", ev.Name, "gone.txt")
+	}
+
+	// Size and Mtime should be populated from baseline.
+	if ev.Size != 42 {
+		t.Errorf("Size = %d, want 42", ev.Size)
+	}
+
+	if ev.Mtime != 1234567890 {
+		t.Errorf("Mtime = %d, want 1234567890", ev.Mtime)
 	}
 }
 

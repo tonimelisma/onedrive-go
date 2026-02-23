@@ -200,6 +200,17 @@ func (s FolderCreateSide) String() string {
 // ChangeEvent is an immutable observation of a change, produced by observers
 // and consumed by the change buffer and planner. Never stored in the database
 // (except optionally in the change journal for debugging).
+//
+// Per-observer field contract:
+//
+//	RemoteObserver populates: all fields (ItemID, ParentID, DriveID, ETag,
+//	  CTag, Hash, Size, Mtime). For ChangeDelete: Hash is empty; Size/Mtime
+//	  from API response.
+//	LocalObserver populates: Path, Name, ItemType, Size, Hash, Mtime,
+//	  IsDeleted. Never sets: ItemID, ParentID, DriveID, ETag, CTag.
+//	  For ChangeDelete: Hash is empty; Size/Mtime from baseline entry.
+//	Buffer synthetic deletes: Source, Type, Path, ItemID, ParentID, DriveID,
+//	  ItemType, Name, IsDeleted. No Size/Hash/Mtime (move context only).
 type ChangeEvent struct {
 	Source    ChangeSource
 	Type      ChangeType
