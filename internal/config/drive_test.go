@@ -17,7 +17,7 @@ import (
 
 func TestMatchDrive_SingleDrive_AutoSelect(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Drives["personal:toni@outlook.com"] = Drive{SyncDir: "~/OneDrive"}
+	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive"}
 
 	id, d, err := matchDrive(cfg, "", testLogger(t))
 	require.NoError(t, err)
@@ -27,8 +27,8 @@ func TestMatchDrive_SingleDrive_AutoSelect(t *testing.T) {
 
 func TestMatchDrive_MultipleDrives_NoSelector_Error(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Drives["personal:toni@outlook.com"] = Drive{SyncDir: "~/OneDrive"}
-	cfg.Drives["business:alice@contoso.com"] = Drive{SyncDir: "~/Work"}
+	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive"}
+	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{SyncDir: "~/Work"}
 
 	_, _, err := matchDrive(cfg, "", testLogger(t))
 	require.Error(t, err)
@@ -69,8 +69,8 @@ func TestMatchDrive_NoDrives_NonCanonicalSelector_Error(t *testing.T) {
 
 func TestMatchDrive_ExactCanonicalID(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Drives["personal:toni@outlook.com"] = Drive{SyncDir: "~/OneDrive"}
-	cfg.Drives["business:alice@contoso.com"] = Drive{SyncDir: "~/Work"}
+	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive"}
+	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{SyncDir: "~/Work"}
 
 	id, _, err := matchDrive(cfg, "personal:toni@outlook.com", testLogger(t))
 	require.NoError(t, err)
@@ -79,8 +79,8 @@ func TestMatchDrive_ExactCanonicalID(t *testing.T) {
 
 func TestMatchDrive_AliasMatch(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Drives["personal:toni@outlook.com"] = Drive{SyncDir: "~/OneDrive", Alias: "home"}
-	cfg.Drives["business:alice@contoso.com"] = Drive{SyncDir: "~/Work", Alias: "work"}
+	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive", Alias: "home"}
+	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{SyncDir: "~/Work", Alias: "work"}
 
 	id, _, err := matchDrive(cfg, "work", testLogger(t))
 	require.NoError(t, err)
@@ -89,8 +89,8 @@ func TestMatchDrive_AliasMatch(t *testing.T) {
 
 func TestMatchDrive_PartialMatch(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Drives["personal:toni@outlook.com"] = Drive{SyncDir: "~/OneDrive"}
-	cfg.Drives["business:alice@contoso.com"] = Drive{SyncDir: "~/Work"}
+	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive"}
+	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{SyncDir: "~/Work"}
 
 	id, _, err := matchDrive(cfg, "toni", testLogger(t))
 	require.NoError(t, err)
@@ -99,8 +99,8 @@ func TestMatchDrive_PartialMatch(t *testing.T) {
 
 func TestMatchDrive_AmbiguousPartialMatch_Error(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Drives["personal:user@example.com"] = Drive{SyncDir: "~/OneDrive"}
-	cfg.Drives["business:user@example.com"] = Drive{SyncDir: "~/Work"}
+	cfg.Drives[driveid.MustCanonicalID("personal:user@example.com")] = Drive{SyncDir: "~/OneDrive"}
+	cfg.Drives[driveid.MustCanonicalID("business:user@example.com")] = Drive{SyncDir: "~/Work"}
 
 	_, _, err := matchDrive(cfg, "user@example.com", testLogger(t))
 	require.Error(t, err)
@@ -109,7 +109,7 @@ func TestMatchDrive_AmbiguousPartialMatch_Error(t *testing.T) {
 
 func TestMatchDrive_NoMatch_Error(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Drives["personal:toni@outlook.com"] = Drive{SyncDir: "~/OneDrive"}
+	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive"}
 
 	_, _, err := matchDrive(cfg, "nonexistent", testLogger(t))
 	require.Error(t, err)
@@ -342,8 +342,8 @@ skip_dirs = ["vendor"]
 	assert.Equal(t, "debug", cfg.LogLevel)
 
 	require.Len(t, cfg.Drives, 2)
-	assert.Equal(t, "home", cfg.Drives["personal:toni@outlook.com"].Alias)
-	assert.Equal(t, "work", cfg.Drives["business:alice@contoso.com"].Alias)
+	assert.Equal(t, "home", cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")].Alias)
+	assert.Equal(t, "work", cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")].Alias)
 }
 
 func TestResolveDrive_FullIntegration(t *testing.T) {

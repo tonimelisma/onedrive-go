@@ -6,8 +6,9 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// validateDrives checks all drive-level constraints: canonical ID format,
-// required fields, per-drive setting validity, and sync_dir uniqueness.
+// validateDrives checks all drive-level constraints: required fields,
+// per-drive setting validity, and sync_dir uniqueness. Canonical ID format
+// is already validated at parse time (decodeDriveSections).
 func validateDrives(cfg *Config) []error {
 	if len(cfg.Drives) == 0 {
 		return nil // no drives is valid (user hasn't logged in yet)
@@ -26,26 +27,23 @@ func validateDrives(cfg *Config) []error {
 }
 
 // validateSingleDrive validates one drive's fields and checks sync_dir uniqueness.
-func validateSingleDrive(id string, drive *Drive, syncDirs map[string]string) []error {
+// The canonical ID format is guaranteed valid by parse-time validation.
+func validateSingleDrive(id driveid.CanonicalID, drive *Drive, syncDirs map[string]string) []error {
 	var errs []error
 
-	if _, err := driveid.NewCanonicalID(id); err != nil {
-		errs = append(errs, fmt.Errorf("drive ID %q: %w", id, err))
-
-		return errs
-	}
+	idStr := id.String()
 
 	if drive.SyncDir == "" {
-		errs = append(errs, fmt.Errorf("drive %q: sync_dir is required", id))
+		errs = append(errs, fmt.Errorf("drive %q: sync_dir is required", idStr))
 	}
 
 	if drive.PollInterval != "" {
 		if err := validateDuration("poll_interval", drive.PollInterval, minPollInterval); err != nil {
-			errs = append(errs, fmt.Errorf("drive %q: %w", id, err))
+			errs = append(errs, fmt.Errorf("drive %q: %w", idStr, err))
 		}
 	}
 
-	errs = append(errs, checkDriveSyncDirUniqueness(id, drive, syncDirs)...)
+	errs = append(errs, checkDriveSyncDirUniqueness(idStr, drive, syncDirs)...)
 
 	return errs
 }
