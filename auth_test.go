@@ -13,53 +13,13 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-func TestEmailFromCanonicalString(t *testing.T) {
-	tests := []struct {
-		id   string
-		want string
-	}{
-		{"personal:toni@outlook.com", "toni@outlook.com"},
-		{"business:alice@contoso.com", "alice@contoso.com"},
-		// SharePoint IDs have extra colon-separated segments after the email.
-		{"sharepoint:alice@contoso.com:marketing:Docs", "alice@contoso.com"},
-		{"nocolon", "nocolon"},
-		{"", ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.id, func(t *testing.T) {
-			got := emailFromCanonicalString(tt.id)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
-func TestDriveTypeFromCanonicalString(t *testing.T) {
-	tests := []struct {
-		id   string
-		want string
-	}{
-		{"personal:toni@outlook.com", "personal"},
-		{"business:alice@contoso.com", "business"},
-		{"sharepoint:alice@contoso.com:marketing:Docs", "sharepoint"},
-		{"nocolon", "nocolon"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.id, func(t *testing.T) {
-			got := driveTypeFromCanonicalString(tt.id)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
 func TestUniqueAccounts(t *testing.T) {
 	cfg := &config.Config{
-		Drives: map[string]config.Drive{
-			"personal:alice@example.com":   {},
-			"business:alice@example.com":   {},
-			"personal:bob@example.com":     {},
-			"business:charlie@example.com": {},
+		Drives: map[driveid.CanonicalID]config.Drive{
+			driveid.MustCanonicalID("personal:alice@example.com"):   {},
+			driveid.MustCanonicalID("business:alice@example.com"):   {},
+			driveid.MustCanonicalID("personal:bob@example.com"):     {},
+			driveid.MustCanonicalID("business:charlie@example.com"): {},
 		},
 	}
 
@@ -76,25 +36,28 @@ func TestCanonicalIDForToken(t *testing.T) {
 	tests := []struct {
 		name     string
 		account  string
-		driveIDs []string
+		driveIDs []driveid.CanonicalID
 		want     string
 	}{
 		{
 			"personal drive",
 			"alice@example.com",
-			[]string{"personal:alice@example.com"},
+			[]driveid.CanonicalID{driveid.MustCanonicalID("personal:alice@example.com")},
 			"personal:alice@example.com",
 		},
 		{
 			"business preferred over sharepoint",
 			"alice@contoso.com",
-			[]string{"sharepoint:alice@contoso.com:site:lib", "business:alice@contoso.com"},
+			[]driveid.CanonicalID{
+				driveid.MustCanonicalID("sharepoint:alice@contoso.com:site:lib"),
+				driveid.MustCanonicalID("business:alice@contoso.com"),
+			},
 			"business:alice@contoso.com",
 		},
 		{
 			"all sharepoint falls back to business prefix",
 			"alice@contoso.com",
-			[]string{"sharepoint:alice@contoso.com:site:lib"},
+			[]driveid.CanonicalID{driveid.MustCanonicalID("sharepoint:alice@contoso.com:site:lib")},
 			"business:alice@contoso.com",
 		},
 		{
@@ -115,22 +78,20 @@ func TestCanonicalIDForToken(t *testing.T) {
 
 func TestDrivesForAccount(t *testing.T) {
 	cfg := &config.Config{
-		Drives: map[string]config.Drive{
-			"personal:alice@example.com":                  {},
-			"business:alice@example.com":                  {},
-			"sharepoint:alice@example.com:marketing:Docs": {},
-			"personal:bob@example.com":                    {},
+		Drives: map[driveid.CanonicalID]config.Drive{
+			driveid.MustCanonicalID("personal:alice@example.com"):                  {},
+			driveid.MustCanonicalID("business:alice@example.com"):                  {},
+			driveid.MustCanonicalID("sharepoint:alice@example.com:marketing:Docs"): {},
+			driveid.MustCanonicalID("personal:bob@example.com"):                    {},
 		},
 	}
 
-	// With the fixed SplitN limit 3, SharePoint IDs now correctly extract the
-	// email, so all three of alice's drives are returned.
 	drives := drivesForAccount(cfg, "alice@example.com")
 
 	assert.Len(t, drives, 3)
-	assert.Contains(t, drives, "personal:alice@example.com")
-	assert.Contains(t, drives, "business:alice@example.com")
-	assert.Contains(t, drives, "sharepoint:alice@example.com:marketing:Docs")
+	assert.Contains(t, drives, driveid.MustCanonicalID("personal:alice@example.com"))
+	assert.Contains(t, drives, driveid.MustCanonicalID("business:alice@example.com"))
+	assert.Contains(t, drives, driveid.MustCanonicalID("sharepoint:alice@example.com:marketing:Docs"))
 }
 
 func TestFindTokenFallback(t *testing.T) {

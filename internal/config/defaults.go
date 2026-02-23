@@ -1,5 +1,9 @@
 package config
 
+import (
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
+)
+
 // Default values for configuration options. These represent the "layer 0"
 // of the four-layer override chain and are chosen to be safe, reasonable
 // starting points that work for most users without any config file.
@@ -42,7 +46,7 @@ func DefaultConfig() *Config {
 		SyncConfig:      defaultSyncConfig(),
 		LoggingConfig:   defaultLoggingConfig(),
 		NetworkConfig:   defaultNetworkConfig(),
-		Drives:          make(map[string]Drive),
+		Drives:          make(map[driveid.CanonicalID]Drive),
 	}
 }
 

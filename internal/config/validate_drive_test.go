@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 func TestValidateDrives_NoDrives_Valid(t *testing.T) {
@@ -17,7 +19,7 @@ func TestValidateDrives_NoDrives_Valid(t *testing.T) {
 
 func TestValidateDrives_ValidDrive(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Drives["personal:toni@outlook.com"] = Drive{SyncDir: "~/OneDrive"}
+	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive"}
 
 	err := Validate(cfg)
 	assert.NoError(t, err)
@@ -25,8 +27,8 @@ func TestValidateDrives_ValidDrive(t *testing.T) {
 
 func TestValidateDrives_MultipleDrives_Valid(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Drives["personal:toni@outlook.com"] = Drive{SyncDir: "~/OneDrive"}
-	cfg.Drives["business:alice@contoso.com"] = Drive{SyncDir: "~/Work"}
+	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive"}
+	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{SyncDir: "~/Work"}
 
 	err := Validate(cfg)
 	assert.NoError(t, err)
@@ -34,7 +36,7 @@ func TestValidateDrives_MultipleDrives_Valid(t *testing.T) {
 
 func TestValidateDrives_MissingSyncDir(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Drives["personal:toni@outlook.com"] = Drive{}
+	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{}
 
 	err := Validate(cfg)
 	require.Error(t, err)
@@ -43,7 +45,7 @@ func TestValidateDrives_MissingSyncDir(t *testing.T) {
 
 func TestValidateDrives_InvalidPollInterval(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Drives["personal:toni@outlook.com"] = Drive{
+	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{
 		SyncDir:      "~/OneDrive",
 		PollInterval: "1m", // too short (min 5m)
 	}
@@ -55,7 +57,7 @@ func TestValidateDrives_InvalidPollInterval(t *testing.T) {
 
 func TestValidateDrives_ValidPollInterval(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Drives["personal:toni@outlook.com"] = Drive{
+	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{
 		SyncDir:      "~/OneDrive",
 		PollInterval: "10m",
 	}
@@ -66,8 +68,8 @@ func TestValidateDrives_ValidPollInterval(t *testing.T) {
 
 func TestValidateDrives_DuplicateSyncDir(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Drives["personal:toni@outlook.com"] = Drive{SyncDir: "~/OneDrive"}
-	cfg.Drives["business:alice@contoso.com"] = Drive{SyncDir: "~/OneDrive"}
+	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive"}
+	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{SyncDir: "~/OneDrive"}
 
 	err := Validate(cfg)
 	require.Error(t, err)
@@ -79,8 +81,8 @@ func TestValidateDrives_DuplicateSyncDirTildeExpanded(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := DefaultConfig()
-	cfg.Drives["personal:toni@outlook.com"] = Drive{SyncDir: "~/OneDrive"}
-	cfg.Drives["business:alice@contoso.com"] = Drive{SyncDir: filepath.Join(home, "OneDrive")}
+	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive"}
+	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{SyncDir: filepath.Join(home, "OneDrive")}
 
 	err = Validate(cfg)
 	require.Error(t, err)
@@ -89,7 +91,7 @@ func TestValidateDrives_DuplicateSyncDirTildeExpanded(t *testing.T) {
 
 func TestValidateDrives_SharePointDrive_Valid(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Drives["sharepoint:alice@contoso.com:marketing:Documents"] = Drive{
+	cfg.Drives[driveid.MustCanonicalID("sharepoint:alice@contoso.com:marketing:Documents")] = Drive{
 		SyncDir: "~/Marketing",
 	}
 
@@ -97,11 +99,15 @@ func TestValidateDrives_SharePointDrive_Valid(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestValidateDrives_InvalidCanonicalID(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.Drives["invalid-no-colon"] = Drive{SyncDir: "~/OneDrive"}
-
-	err := Validate(cfg)
+func TestValidateDrives_InvalidCanonicalID_RejectedAtParseTime(t *testing.T) {
+	// Invalid canonical IDs are now rejected at parse time (decodeDriveSections),
+	// not at validation time. This test verifies that the TOML load path catches them.
+	// The key must contain ":" to be recognized as a drive section.
+	path := writeTestConfig(t, `
+["badtype:user@example.com"]
+sync_dir = "~/OneDrive"
+`)
+	_, err := Load(path, testLogger(t))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "type:email")
+	assert.Contains(t, err.Error(), "invalid canonical ID")
 }

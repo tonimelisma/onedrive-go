@@ -71,29 +71,6 @@ func newWhoamiCmd() *cobra.Command {
 	}
 }
 
-// emailFromCanonicalString extracts the email from a raw canonical ID string.
-// Callers pass config map keys (already validated). Falls back to returning
-// the input if parsing fails, matching the old behavior.
-func emailFromCanonicalString(id string) string {
-	cid, err := driveid.NewCanonicalID(id)
-	if err != nil {
-		return id
-	}
-
-	return cid.Email()
-}
-
-// driveTypeFromCanonicalString extracts the drive type from a raw canonical ID string.
-// Falls back to returning the input if parsing fails.
-func driveTypeFromCanonicalString(id string) string {
-	cid, err := driveid.NewCanonicalID(id)
-	if err != nil {
-		return id
-	}
-
-	return cid.DriveType()
-}
-
 // findTokenFallback tries personal and business canonical ID prefixes
 // and returns whichever one has a token file on disk. Falls back to
 // "personal:" if neither exists, since personal is the most common case.
@@ -202,7 +179,7 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	if finalTokenPath == "" {
 		os.Remove(tempPath)
 
-		return fmt.Errorf("cannot determine token path for drive %q", canonicalID)
+		return fmt.Errorf("cannot determine token path for drive %q", canonicalID.String())
 	}
 
 	if moveErr := moveToken(tempPath, finalTokenPath); moveErr != nil {
@@ -210,26 +187,23 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Step 6: Check if this is a re-login (drive already exists in config).
-	canonicalStr := canonicalID.String()
 	email := canonicalID.Email()
 	cfgPath := resolveLoginConfigPath()
 
-	isRelogin, err := driveExistsInConfig(cfgPath, canonicalStr)
+	isRelogin, err := driveExistsInConfig(cfgPath, canonicalID)
 	if err != nil {
 		logger.Debug("config check failed, treating as new login", "error", err)
 	}
 
 	if isRelogin {
-		logger.Info("re-login detected, token refreshed", "canonical_id", canonicalStr)
+		logger.Info("re-login detected, token refreshed", "canonical_id", canonicalID.String())
 		fmt.Printf("Token refreshed for %s.\n", email)
 
 		return nil
 	}
 
 	// Step 7: Create or update config with the new drive section.
-	driveType := canonicalID.DriveType()
-
-	return writeLoginConfig(cfgPath, canonicalStr, driveType, email, orgName, logger)
+	return writeLoginConfig(cfgPath, canonicalID, orgName, logger)
 }
 
 // discoverAccount calls /me, /me/drive, and /me/organization to build the
@@ -320,7 +294,7 @@ func resolveLoginConfigPath() string {
 }
 
 // driveExistsInConfig checks whether a canonical ID already exists in the config file.
-func driveExistsInConfig(cfgPath, canonicalID string) (bool, error) {
+func driveExistsInConfig(cfgPath string, canonicalID driveid.CanonicalID) (bool, error) {
 	cfg, err := config.LoadOrDefault(cfgPath, slog.Default())
 	if err != nil {
 		return false, err
@@ -354,11 +328,14 @@ func collectExistingSyncDirs(cfgPath string, logger *slog.Logger) []string {
 
 // writeLoginConfig creates or appends to the config file with a new drive section,
 // and prints the appropriate login success message.
-func writeLoginConfig(cfgPath, canonicalID, driveType, email, orgName string, logger *slog.Logger) error {
+func writeLoginConfig(cfgPath string, canonicalID driveid.CanonicalID, orgName string, logger *slog.Logger) error {
+	driveType := canonicalID.DriveType()
+	email := canonicalID.Email()
+
 	existingDirs := collectExistingSyncDirs(cfgPath, logger)
 	syncDir := config.DefaultSyncDir(driveType, orgName, existingDirs)
 
-	logger.Info("writing config", "config_path", cfgPath, "canonical_id", canonicalID, "sync_dir", syncDir)
+	logger.Info("writing config", "config_path", cfgPath, "canonical_id", canonicalID.String(), "sync_dir", syncDir)
 
 	// Check if config file exists to decide create vs. append.
 	if _, err := os.Stat(cfgPath); errors.Is(err, os.ErrNotExist) {
@@ -371,7 +348,7 @@ func writeLoginConfig(cfgPath, canonicalID, driveType, email, orgName string, lo
 		}
 	}
 
-	printLoginSuccess(driveType, email, orgName, canonicalID, syncDir)
+	printLoginSuccess(driveType, email, orgName, canonicalID.String(), syncDir)
 
 	return nil
 }
@@ -460,7 +437,7 @@ func uniqueAccounts(cfg *config.Config) []string {
 	var accounts []string
 
 	for id := range cfg.Drives {
-		email := emailFromCanonicalString(id)
+		email := id.Email()
 		if !seen[email] {
 			seen[email] = true
 			accounts = append(accounts, email)
@@ -511,11 +488,11 @@ func executeLogout(cfg *config.Config, cfgPath, account string, purge bool, logg
 }
 
 // drivesForAccount returns all canonical IDs whose email matches the given account.
-func drivesForAccount(cfg *config.Config, account string) []string {
-	var ids []string
+func drivesForAccount(cfg *config.Config, account string) []driveid.CanonicalID {
+	var ids []driveid.CanonicalID
 
 	for id := range cfg.Drives {
-		if emailFromCanonicalString(id) == account {
+		if id.Email() == account {
 			ids = append(ids, id)
 		}
 	}
@@ -526,13 +503,8 @@ func drivesForAccount(cfg *config.Config, account string) []string {
 // canonicalIDForToken picks a canonical ID to use for token path derivation.
 // SharePoint drives share the business token, so we prefer a non-sharepoint ID.
 // Uses driveid.TokenCanonicalID() to handle the SharePoint→business mapping.
-func canonicalIDForToken(account string, driveIDs []string) driveid.CanonicalID {
-	for _, id := range driveIDs {
-		cid, err := driveid.NewCanonicalID(id)
-		if err != nil {
-			continue
-		}
-
+func canonicalIDForToken(account string, driveIDs []driveid.CanonicalID) driveid.CanonicalID {
+	for _, cid := range driveIDs {
 		if !cid.IsSharePoint() {
 			return cid
 		}
@@ -552,7 +524,7 @@ func canonicalIDForToken(account string, driveIDs []string) driveid.CanonicalID 
 }
 
 // printAffectedDrives lists drives that can no longer sync after logout.
-func printAffectedDrives(cfg *config.Config, affected []string) {
+func printAffectedDrives(cfg *config.Config, affected []driveid.CanonicalID) {
 	if len(affected) == 0 {
 		return
 	}
@@ -561,7 +533,7 @@ func printAffectedDrives(cfg *config.Config, affected []string) {
 
 	for _, id := range affected {
 		syncDir := cfg.Drives[id].SyncDir
-		fmt.Printf("  %s (%s)\n", id, syncDir)
+		fmt.Printf("  %s (%s)\n", id.String(), syncDir)
 	}
 }
 
@@ -577,7 +549,7 @@ func purgeSingleDrive(cfgPath string, canonicalID driveid.CanonicalID, logger *s
 		}
 	}
 
-	if err := config.DeleteDriveSection(cfgPath, canonicalID.String()); err != nil {
+	if err := config.DeleteDriveSection(cfgPath, canonicalID); err != nil {
 		return fmt.Errorf("deleting drive section: %w", err)
 	}
 
@@ -586,21 +558,14 @@ func purgeSingleDrive(cfgPath string, canonicalID driveid.CanonicalID, logger *s
 
 // purgeAccountDrives removes drive config sections and state databases for
 // all affected drives. Token deletion is already handled before this call.
-func purgeAccountDrives(cfgPath string, affected []string, logger *slog.Logger) {
+func purgeAccountDrives(cfgPath string, affected []driveid.CanonicalID, logger *slog.Logger) {
 	fmt.Println()
 
-	for _, id := range affected {
-		cid, err := driveid.NewCanonicalID(id)
-		if err != nil {
-			logger.Warn("skipping purge for invalid drive ID", "drive", id, "error", err)
-
-			continue
-		}
-
+	for _, cid := range affected {
 		if err := purgeSingleDrive(cfgPath, cid, logger); err != nil {
-			logger.Warn("failed to purge drive", "drive", id, "error", err)
+			logger.Warn("failed to purge drive", "drive", cid.String(), "error", err)
 		} else {
-			fmt.Printf("Purged config and state for %s.\n", id)
+			fmt.Printf("Purged config and state for %s.\n", cid.String())
 		}
 	}
 }
@@ -631,22 +596,17 @@ func runWhoami(_ *cobra.Command, _ []string) error {
 
 	// Determine which drive to query. If --drive is set, use it directly.
 	// Otherwise try to auto-select from config.
-	canonicalIDStr, err := resolveWhoamiDrive()
+	cid, err := resolveWhoamiDrive()
 	if err != nil {
 		return err
 	}
 
-	cid, cidErr := driveid.NewCanonicalID(canonicalIDStr)
-	if cidErr != nil {
-		return fmt.Errorf("invalid drive ID %q: %w", canonicalIDStr, cidErr)
-	}
-
 	tokenPath := config.DriveTokenPath(cid)
 	if tokenPath == "" {
-		return fmt.Errorf("cannot determine token path for drive %q", canonicalIDStr)
+		return fmt.Errorf("cannot determine token path for drive %q", cid.String())
 	}
 
-	logger.Debug("whoami", "drive", canonicalIDStr, "token_path", tokenPath)
+	logger.Debug("whoami", "drive", cid.String(), "token_path", tokenPath)
 
 	ts, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
 	if err != nil {
@@ -680,20 +640,25 @@ func runWhoami(_ *cobra.Command, _ []string) error {
 
 // resolveWhoamiDrive determines the canonical ID for whoami. Uses --drive if
 // set, otherwise loads config and auto-selects when exactly one drive exists.
-func resolveWhoamiDrive() (string, error) {
+func resolveWhoamiDrive() (driveid.CanonicalID, error) {
 	if flagDrive != "" {
-		return flagDrive, nil
+		cid, err := driveid.NewCanonicalID(flagDrive)
+		if err != nil {
+			return driveid.CanonicalID{}, fmt.Errorf("invalid drive ID %q: %w", flagDrive, err)
+		}
+
+		return cid, nil
 	}
 
 	cfgPath := resolveLoginConfigPath()
 
 	cfg, err := config.LoadOrDefault(cfgPath, slog.Default())
 	if err != nil {
-		return "", fmt.Errorf("loading config: %w", err)
+		return driveid.CanonicalID{}, fmt.Errorf("loading config: %w", err)
 	}
 
 	if len(cfg.Drives) == 0 {
-		return "", fmt.Errorf("no accounts configured — run 'onedrive-go login' to get started")
+		return driveid.CanonicalID{}, fmt.Errorf("no accounts configured — run 'onedrive-go login' to get started")
 	}
 
 	if len(cfg.Drives) == 1 {
@@ -705,10 +670,10 @@ func resolveWhoamiDrive() (string, error) {
 	// Multiple drives — need explicit selection.
 	var ids []string
 	for id := range cfg.Drives {
-		ids = append(ids, id)
+		ids = append(ids, id.String())
 	}
 
-	return "", fmt.Errorf(
+	return driveid.CanonicalID{}, fmt.Errorf(
 		"multiple drives configured — specify with --drive:\n  %s",
 		strings.Join(ids, "\n  "),
 	)

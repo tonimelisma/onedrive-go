@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 func TestDriveState_Enabled(t *testing.T) {
@@ -33,11 +34,11 @@ func TestDriveState_PausedOverridesNoToken(t *testing.T) {
 
 func TestGroupDrivesByAccount(t *testing.T) {
 	cfg := &config.Config{
-		Drives: map[string]config.Drive{
-			"personal:alice@example.com":   {},
-			"business:alice@example.com":   {},
-			"personal:bob@example.com":     {},
-			"business:charlie@example.com": {},
+		Drives: map[driveid.CanonicalID]config.Drive{
+			driveid.MustCanonicalID("personal:alice@example.com"):   {},
+			driveid.MustCanonicalID("business:alice@example.com"):   {},
+			driveid.MustCanonicalID("personal:bob@example.com"):     {},
+			driveid.MustCanonicalID("business:charlie@example.com"): {},
 		},
 	}
 
@@ -56,13 +57,13 @@ func TestGroupDrivesByAccount(t *testing.T) {
 }
 
 func TestGroupDrivesByAccount_WithSharePoint(t *testing.T) {
-	// With the fixed email extraction, SharePoint drives are now grouped
-	// under the same account as personal/business drives.
+	// With typed CanonicalID keys, SharePoint drives are grouped
+	// under the same account as personal/business drives via .Email().
 	cfg := &config.Config{
-		Drives: map[string]config.Drive{
-			"business:alice@contoso.com":                    {},
-			"sharepoint:alice@contoso.com:marketing:Docs":   {},
-			"sharepoint:alice@contoso.com:engineering:Wiki": {},
+		Drives: map[driveid.CanonicalID]config.Drive{
+			driveid.MustCanonicalID("business:alice@contoso.com"):                    {},
+			driveid.MustCanonicalID("sharepoint:alice@contoso.com:marketing:Docs"):   {},
+			driveid.MustCanonicalID("sharepoint:alice@contoso.com:engineering:Wiki"): {},
 		},
 	}
 
@@ -76,7 +77,7 @@ func TestGroupDrivesByAccount_WithSharePoint(t *testing.T) {
 
 func TestGroupDrivesByAccount_Empty(t *testing.T) {
 	cfg := &config.Config{
-		Drives: map[string]config.Drive{},
+		Drives: map[driveid.CanonicalID]config.Drive{},
 	}
 
 	grouped, order := groupDrivesByAccount(cfg)

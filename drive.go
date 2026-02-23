@@ -80,32 +80,38 @@ func runDriveAdd(_ *cobra.Command, _ []string) error {
 }
 
 // resumeSpecificDrive enables a specific drive by setting enabled = true.
-func resumeSpecificDrive(cfgPath string, cfg *config.Config, driveID string, logger *slog.Logger) error {
-	d, exists := cfg.Drives[driveID]
+// The driveSelector is raw user input that gets resolved to a CanonicalID.
+func resumeSpecificDrive(cfgPath string, cfg *config.Config, driveSelector string, logger *slog.Logger) error {
+	cid, err := driveid.NewCanonicalID(driveSelector)
+	if err != nil {
+		return fmt.Errorf("invalid drive ID %q: %w", driveSelector, err)
+	}
+
+	d, exists := cfg.Drives[cid]
 	if !exists {
-		return fmt.Errorf("drive %q not found in config", driveID)
+		return fmt.Errorf("drive %q not found in config", driveSelector)
 	}
 
 	if d.Enabled == nil || *d.Enabled {
-		fmt.Printf("Drive %s is already enabled.\n", driveID)
+		fmt.Printf("Drive %s is already enabled.\n", cid.String())
 
 		return nil
 	}
 
-	logger.Info("resuming drive", "drive", driveID)
+	logger.Info("resuming drive", "drive", cid.String())
 
-	if err := config.SetDriveKey(cfgPath, driveID, "enabled", "true"); err != nil {
+	if err := config.SetDriveKey(cfgPath, cid, "enabled", "true"); err != nil {
 		return fmt.Errorf("enabling drive: %w", err)
 	}
 
-	fmt.Printf("Resumed drive %s (%s).\n", driveID, d.SyncDir)
+	fmt.Printf("Resumed drive %s (%s).\n", cid.String(), d.SyncDir)
 
 	return nil
 }
 
 // listPausedDrives prints all paused drives, or a message if none are paused.
 func listPausedDrives(cfg *config.Config) error {
-	var paused []string
+	var paused []driveid.CanonicalID
 
 	for id := range cfg.Drives {
 		d := cfg.Drives[id]
@@ -124,7 +130,7 @@ func listPausedDrives(cfg *config.Config) error {
 	fmt.Println("Paused drives (use --drive to resume):")
 
 	for _, id := range paused {
-		fmt.Printf("  %s (%s)\n", id, cfg.Drives[id].SyncDir)
+		fmt.Printf("  %s (%s)\n", id.String(), cfg.Drives[id].SyncDir)
 	}
 
 	return nil
@@ -149,47 +155,48 @@ func runDriveRemove(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	d, exists := cfg.Drives[flagDrive]
+	cid, cidErr := driveid.NewCanonicalID(flagDrive)
+	if cidErr != nil {
+		return fmt.Errorf("invalid drive ID %q: %w", flagDrive, cidErr)
+	}
+
+	d, exists := cfg.Drives[cid]
 	if !exists {
 		return fmt.Errorf("drive %q not found in config", flagDrive)
 	}
 
-	logger.Info("removing drive", "drive", flagDrive, "purge", purge)
+	logger.Info("removing drive", "drive", cid.String(), "purge", purge)
 
 	if purge {
-		return purgeDrive(cfgPath, flagDrive, logger)
+		return purgeDrive(cfgPath, cid, logger)
 	}
 
-	return pauseDrive(cfgPath, flagDrive, d.SyncDir)
+	return pauseDrive(cfgPath, cid, d.SyncDir)
 }
 
 // pauseDrive sets enabled = false for the drive, preserving all data.
-func pauseDrive(cfgPath, driveID, syncDir string) error {
+func pauseDrive(cfgPath string, driveID driveid.CanonicalID, syncDir string) error {
 	if err := config.SetDriveKey(cfgPath, driveID, "enabled", "false"); err != nil {
 		return fmt.Errorf("pausing drive: %w", err)
 	}
 
-	fmt.Printf("Paused drive %s.\n", driveID)
-	fmt.Printf("Config, token, and state database kept for %s.\n", driveID)
+	idStr := driveID.String()
+	fmt.Printf("Paused drive %s.\n", idStr)
+	fmt.Printf("Config, token, and state database kept for %s.\n", idStr)
 	fmt.Printf("Sync directory untouched: %s\n", syncDir)
-	fmt.Println("Run 'onedrive-go drive add --drive " + driveID + "' to resume.")
+	fmt.Println("Run 'onedrive-go drive add --drive " + idStr + "' to resume.")
 
 	return nil
 }
 
 // purgeDrive deletes the config section and state database for a drive.
 // The token is NOT deleted here — it may be shared with other drives (SharePoint).
-func purgeDrive(cfgPath, driveID string, logger *slog.Logger) error {
-	cid, err := driveid.NewCanonicalID(driveID)
-	if err != nil {
-		return fmt.Errorf("invalid drive ID %q: %w", driveID, err)
-	}
-
-	if err := purgeSingleDrive(cfgPath, cid, logger); err != nil {
+func purgeDrive(cfgPath string, driveID driveid.CanonicalID, logger *slog.Logger) error {
+	if err := purgeSingleDrive(cfgPath, driveID, logger); err != nil {
 		return err
 	}
 
-	fmt.Printf("Purged config and state for %s.\n", driveID)
+	fmt.Printf("Purged config and state for %s.\n", driveID.String())
 	fmt.Println("Sync directory untouched — delete manually if desired.")
 
 	return nil

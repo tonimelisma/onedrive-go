@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -82,7 +83,9 @@ func buildStatusAccounts(cfg *config.Config, logger *slog.Logger) []statusAccoun
 
 	for _, email := range order {
 		driveIDs := grouped[email]
-		sort.Strings(driveIDs)
+		sort.Slice(driveIDs, func(i, j int) bool {
+			return driveIDs[i].String() < driveIDs[j].String()
+		})
 
 		acct := buildSingleAccountStatus(cfg, email, driveIDs, logger)
 		accounts = append(accounts, acct)
@@ -93,12 +96,12 @@ func buildStatusAccounts(cfg *config.Config, logger *slog.Logger) []statusAccoun
 
 // groupDrivesByAccount collects drive IDs keyed by account email and returns
 // a stable ordering of unique emails.
-func groupDrivesByAccount(cfg *config.Config) (map[string][]string, []string) {
-	grouped := make(map[string][]string)
+func groupDrivesByAccount(cfg *config.Config) (map[string][]driveid.CanonicalID, []string) {
+	grouped := make(map[string][]driveid.CanonicalID)
 	var order []string
 
 	for id := range cfg.Drives {
-		email := emailFromCanonicalString(id)
+		email := id.Email()
 		if _, seen := grouped[email]; !seen {
 			order = append(order, email)
 		}
@@ -113,7 +116,7 @@ func groupDrivesByAccount(cfg *config.Config) (map[string][]string, []string) {
 
 // buildSingleAccountStatus builds the status for one account and its drives.
 func buildSingleAccountStatus(
-	cfg *config.Config, email string, driveIDs []string, logger *slog.Logger,
+	cfg *config.Config, email string, driveIDs []driveid.CanonicalID, logger *slog.Logger,
 ) statusAccount {
 	acct := statusAccount{
 		Email:  email,
@@ -121,8 +124,8 @@ func buildSingleAccountStatus(
 	}
 
 	// Derive drive type from the first non-sharepoint drive.
-	for _, id := range driveIDs {
-		dt := driveTypeFromCanonicalString(id)
+	for _, cid := range driveIDs {
+		dt := cid.DriveType()
 		if dt != "sharepoint" {
 			acct.DriveType = dt
 
@@ -131,19 +134,19 @@ func buildSingleAccountStatus(
 	}
 
 	if acct.DriveType == "" && len(driveIDs) > 0 {
-		acct.DriveType = driveTypeFromCanonicalString(driveIDs[0])
+		acct.DriveType = driveIDs[0].DriveType()
 	}
 
 	// Check token validity for this account.
 	acct.TokenState = checkTokenState(email, driveIDs, logger)
 
 	// Build drive status entries.
-	for _, id := range driveIDs {
-		d := cfg.Drives[id]
+	for _, cid := range driveIDs {
+		d := cfg.Drives[cid]
 		state := driveState(&d, acct.TokenState)
 
 		acct.Drives = append(acct.Drives, statusDrive{
-			CanonicalID: id,
+			CanonicalID: cid.String(),
 			SyncDir:     d.SyncDir,
 			State:       state,
 		})
@@ -154,7 +157,7 @@ func buildSingleAccountStatus(
 
 // checkTokenState determines whether a valid token exists for the given account.
 // Returns "valid", "expired", or "missing".
-func checkTokenState(account string, driveIDs []string, logger *slog.Logger) string {
+func checkTokenState(account string, driveIDs []driveid.CanonicalID, logger *slog.Logger) string {
 	tokenID := canonicalIDForToken(account, driveIDs)
 	if tokenID.IsZero() {
 		// No drives in config — probe the filesystem for an existing token.

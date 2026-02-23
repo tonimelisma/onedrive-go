@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // Load reads and parses a TOML config file using a two-pass decode, validates
@@ -66,6 +68,12 @@ func decodeDriveSections(data []byte, cfg *Config) error {
 			continue // not a drive section
 		}
 
+		// Validate canonical ID at parse time (fail fast).
+		cid, cidErr := driveid.NewCanonicalID(key)
+		if cidErr != nil {
+			return fmt.Errorf("drive section [%q]: invalid canonical ID: %w", key, cidErr)
+		}
+
 		driveMap, ok := val.(map[string]any)
 		if !ok {
 			return fmt.Errorf("drive section [%q] must be a table", key)
@@ -80,7 +88,7 @@ func decodeDriveSections(data []byte, cfg *Config) error {
 			return fmt.Errorf("drive section [%q]: %w", key, err)
 		}
 
-		cfg.Drives[key] = drive
+		cfg.Drives[cid] = drive
 	}
 
 	return nil

@@ -75,14 +75,9 @@ func matchDrive(cfg *Config, selector string, logger *slog.Logger) (driveid.Cano
 func matchSingleDrive(cfg *Config, logger *slog.Logger) (driveid.CanonicalID, Drive, error) {
 	if len(cfg.Drives) == 1 {
 		for id := range cfg.Drives {
-			logger.Debug("auto-selected single drive", "canonical_id", id)
+			logger.Debug("auto-selected single drive", "canonical_id", id.String())
 
-			cid, err := driveid.NewCanonicalID(id)
-			if err != nil {
-				return driveid.CanonicalID{}, Drive{}, fmt.Errorf("invalid canonical ID in config: %w", err)
-			}
-
-			return cid, cfg.Drives[id], nil
+			return id, cfg.Drives[id], nil
 		}
 	}
 
@@ -91,29 +86,22 @@ func matchSingleDrive(cfg *Config, logger *slog.Logger) (driveid.CanonicalID, Dr
 
 // matchBySelector finds a drive by exact ID, alias, or partial substring match.
 func matchBySelector(cfg *Config, selector string, logger *slog.Logger) (driveid.CanonicalID, Drive, error) {
-	// Exact canonical ID match
-	if d, ok := cfg.Drives[selector]; ok {
-		logger.Debug("drive matched by exact canonical ID", "canonical_id", selector)
+	// Exact canonical ID match — try parsing the selector as a CanonicalID
+	// and looking it up directly in the typed map.
+	if selectorCID, err := driveid.NewCanonicalID(selector); err == nil {
+		if d, ok := cfg.Drives[selectorCID]; ok {
+			logger.Debug("drive matched by exact canonical ID", "canonical_id", selector)
 
-		cid, err := driveid.NewCanonicalID(selector)
-		if err != nil {
-			return driveid.CanonicalID{}, Drive{}, fmt.Errorf("invalid canonical ID in config: %w", err)
+			return selectorCID, d, nil
 		}
-
-		return cid, d, nil
 	}
 
 	// Alias match
 	for id := range cfg.Drives {
 		if cfg.Drives[id].Alias == selector {
-			logger.Debug("drive matched by alias", "alias", selector, "canonical_id", id)
+			logger.Debug("drive matched by alias", "alias", selector, "canonical_id", id.String())
 
-			cid, err := driveid.NewCanonicalID(id)
-			if err != nil {
-				return driveid.CanonicalID{}, Drive{}, fmt.Errorf("invalid canonical ID in config: %w", err)
-			}
-
-			return cid, cfg.Drives[id], nil
+			return id, cfg.Drives[id], nil
 		}
 	}
 
@@ -122,30 +110,30 @@ func matchBySelector(cfg *Config, selector string, logger *slog.Logger) (driveid
 
 // matchPartial finds drives whose canonical ID contains the selector as a substring.
 func matchPartial(cfg *Config, selector string, logger *slog.Logger) (driveid.CanonicalID, Drive, error) {
-	var matches []string
+	var matches []driveid.CanonicalID
 
 	for id := range cfg.Drives {
-		if strings.Contains(id, selector) {
+		if strings.Contains(id.String(), selector) {
 			matches = append(matches, id)
 		}
 	}
 
 	if len(matches) == 1 {
-		logger.Debug("drive matched by partial substring", "selector", selector, "canonical_id", matches[0])
+		logger.Debug("drive matched by partial substring", "selector", selector, "canonical_id", matches[0].String())
 
-		cid, err := driveid.NewCanonicalID(matches[0])
-		if err != nil {
-			return driveid.CanonicalID{}, Drive{}, fmt.Errorf("invalid canonical ID in config: %w", err)
-		}
-
-		return cid, cfg.Drives[matches[0]], nil
+		return matches[0], cfg.Drives[matches[0]], nil
 	}
 
 	if len(matches) > 1 {
-		slices.Sort(matches)
+		strs := make([]string, 0, len(matches))
+		for _, m := range matches {
+			strs = append(strs, m.String())
+		}
+
+		slices.Sort(strs)
 
 		return driveid.CanonicalID{}, Drive{}, fmt.Errorf("ambiguous drive selector %q matches: %s",
-			selector, strings.Join(matches, ", "))
+			selector, strings.Join(strs, ", "))
 	}
 
 	return driveid.CanonicalID{}, Drive{}, fmt.Errorf("no drive matching %q", selector)

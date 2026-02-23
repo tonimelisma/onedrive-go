@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // configFilePermissions is the standard permission mode for config files.
@@ -70,14 +72,14 @@ func driveSection(canonicalID, syncDir string) string {
 // and appends a drive section. Used on first login when no config file exists.
 // The write is atomic (temp file + rename) and parent directories are created
 // as needed.
-func CreateConfigWithDrive(path, canonicalID, syncDir string) error {
+func CreateConfigWithDrive(path string, canonicalID driveid.CanonicalID, syncDir string) error {
 	slog.Info("creating config file with drive",
 		"path", path,
-		"canonical_id", canonicalID,
+		"canonical_id", canonicalID.String(),
 		"sync_dir", syncDir,
 	)
 
-	content := configTemplate + driveSection(canonicalID, syncDir)
+	content := configTemplate + driveSection(canonicalID.String(), syncDir)
 
 	return atomicWriteFile(path, []byte(content))
 }
@@ -85,10 +87,10 @@ func CreateConfigWithDrive(path, canonicalID, syncDir string) error {
 // AppendDriveSection appends a new drive section at the end of an existing
 // config file. Used by subsequent logins and `drive add`. The write is atomic
 // to avoid partial writes on crash.
-func AppendDriveSection(path, canonicalID, syncDir string) error {
+func AppendDriveSection(path string, canonicalID driveid.CanonicalID, syncDir string) error {
 	slog.Info("appending drive section to config",
 		"path", path,
-		"canonical_id", canonicalID,
+		"canonical_id", canonicalID.String(),
 		"sync_dir", syncDir,
 	)
 
@@ -105,7 +107,7 @@ func AppendDriveSection(path, canonicalID, syncDir string) error {
 		content += "\n"
 	}
 
-	content += driveSection(canonicalID, syncDir)
+	content += driveSection(canonicalID.String(), syncDir)
 
 	return atomicWriteFile(path, []byte(content))
 }
@@ -117,10 +119,10 @@ func AppendDriveSection(path, canonicalID, syncDir string) error {
 //
 // Value formatting: booleans ("true"/"false") are written without quotes;
 // all other values are written as quoted strings.
-func SetDriveKey(path, canonicalID, key, value string) error {
+func SetDriveKey(path string, canonicalID driveid.CanonicalID, key, value string) error {
 	slog.Info("setting drive key in config",
 		"path", path,
-		"canonical_id", canonicalID,
+		"canonical_id", canonicalID.String(),
 		"key", key,
 		"value", value,
 	)
@@ -132,9 +134,9 @@ func SetDriveKey(path, canonicalID, key, value string) error {
 
 	lines := strings.Split(string(data), "\n")
 
-	headerLine, sectionStart := findSectionHeader(lines, canonicalID)
+	headerLine, sectionStart := findSectionHeader(lines, canonicalID.String())
 	if sectionStart < 0 {
-		return fmt.Errorf("drive section %q not found in config", canonicalID)
+		return fmt.Errorf("drive section %q not found in config", canonicalID.String())
 	}
 
 	formattedValue := formatTOMLValue(value)
@@ -149,10 +151,10 @@ func SetDriveKey(path, canonicalID, key, value string) error {
 // config file. Also removes blank lines immediately preceding the section
 // header for clean formatting. Used by `drive remove --purge` and
 // `logout --purge`.
-func DeleteDriveSection(path, canonicalID string) error {
+func DeleteDriveSection(path string, canonicalID driveid.CanonicalID) error {
 	slog.Info("deleting drive section from config",
 		"path", path,
-		"canonical_id", canonicalID,
+		"canonical_id", canonicalID.String(),
 	)
 
 	data, err := os.ReadFile(path)
@@ -162,9 +164,9 @@ func DeleteDriveSection(path, canonicalID string) error {
 
 	lines := strings.Split(string(data), "\n")
 
-	headerLine, sectionStart := findSectionHeader(lines, canonicalID)
+	headerLine, sectionStart := findSectionHeader(lines, canonicalID.String())
 	if sectionStart < 0 {
-		return fmt.Errorf("drive section %q not found in config", canonicalID)
+		return fmt.Errorf("drive section %q not found in config", canonicalID.String())
 	}
 
 	sectionEnd := findSectionEnd(lines, sectionStart)
