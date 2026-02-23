@@ -344,8 +344,23 @@ func (e *Engine) resolveKeepRemote(ctx context.Context, c *ConflictRecord) error
 }
 
 // resolveTransfer executes a single transfer (upload or download) for conflict
-// resolution and commits the result to the baseline.
+// resolution and commits the result to the baseline. Initializes executor
+// state because resolveTransfer can be called outside of Execute().
 func (e *Engine) resolveTransfer(ctx context.Context, c *ConflictRecord, actionType ActionType) error {
+	// Ensure executor state is initialized (resolveParentID needs these).
+	if e.executor.createdFolders == nil {
+		e.executor.createdFolders = make(map[string]string)
+	}
+
+	if e.executor.baseline == nil {
+		bl, err := e.baseline.Load(ctx)
+		if err != nil {
+			return fmt.Errorf("sync: loading baseline for resolve: %w", err)
+		}
+
+		e.executor.baseline = bl
+	}
+
 	action := &Action{
 		Type:    actionType,
 		DriveID: c.DriveID,
