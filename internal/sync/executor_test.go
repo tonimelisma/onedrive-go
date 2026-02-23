@@ -1504,3 +1504,311 @@ func TestWithRetry_NoRetryOnSkip(t *testing.T) {
 		t.Errorf("expected 1 call (no retry), got %d", calls)
 	}
 }
+
+// Fix 8: Test retry exhaustion — all attempts return retryable error.
+func TestWithRetry_ExhaustsRetries(t *testing.T) {
+	t.Parallel()
+
+	e, _ := newTestExecutor(t, &executorMockItemClient{}, &executorMockTransferClient{})
+
+	calls := 0
+	err := e.withRetry(context.Background(), "exhaust", func() error {
+		calls++
+		return graph.ErrThrottled
+	})
+
+	if !errors.Is(err, graph.ErrThrottled) {
+		t.Errorf("expected ErrThrottled, got %v", err)
+	}
+
+	// executorMaxRetries=3 → 1 initial + 3 retries = 4 total.
+	if calls != executorMaxRetries+1 {
+		t.Errorf("expected %d calls, got %d", executorMaxRetries+1, calls)
+	}
+}
+
+// Fix 9: Test conflict download-failure restore path.
+func TestExecutor_Conflict_DownloadFails_RestoresLocal(t *testing.T) {
+	t.Parallel()
+
+	transfers := &executorMockTransferClient{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
+			return 0, graph.ErrForbidden
+		},
+	}
+
+	e, syncRoot := newTestExecutor(t, &executorMockItemClient{}, transfers)
+	e.baseline = emptyBaseline()
+	e.createdFolders = make(map[string]string)
+
+	originalContent := "precious local data"
+	writeExecTestFile(t, syncRoot, "exec-restore.txt", originalContent)
+
+	action := &Action{
+		Type:    ActionConflict,
+		Path:    "exec-restore.txt",
+		ItemID:  "item1",
+		DriveID: driveid.New(testDriveID),
+		View: &PathView{
+			Remote: &RemoteState{ItemID: "item1", ParentID: "root"},
+		},
+		ConflictInfo: &ConflictRecord{ConflictType: "edit_edit"},
+	}
+
+	o := e.executeConflict(context.Background(), action)
+	requireOutcomeFailure(t, o)
+
+	// Original file should be restored after download failure.
+	data, err := os.ReadFile(filepath.Join(syncRoot, "exec-restore.txt"))
+	if err != nil {
+		t.Fatalf("original file should have been restored: %v", err)
+	}
+
+	if string(data) != originalContent {
+		t.Errorf("expected restored content %q, got %q", originalContent, string(data))
+	}
+}
+
+// Fix 10: Test executeRemoteMove API error.
+func TestExecutor_RemoteMove_Error(t *testing.T) {
+	t.Parallel()
+
+	items := &executorMockItemClient{
+		moveItemFn: func(_ context.Context, _ driveid.ID, _, _, _ string) (*graph.Item, error) {
+			return nil, graph.ErrForbidden
+		},
+	}
+
+	e, _ := newTestExecutor(t, items, &executorMockTransferClient{})
+	e.baseline = emptyBaseline()
+	e.createdFolders = make(map[string]string)
+
+	action := &Action{
+		Type:    ActionRemoteMove,
+		Path:    "original.txt",
+		NewPath: "renamed.txt",
+		ItemID:  "item1",
+		DriveID: driveid.New(testDriveID),
+		View:    &PathView{Path: "original.txt"},
+	}
+
+	o := e.executeMove(context.Background(), action)
+	requireOutcomeFailure(t, o)
+
+	if !errors.Is(o.Error, graph.ErrForbidden) {
+		t.Errorf("expected ErrForbidden in outcome error, got %v", o.Error)
+	}
+}
+
+// Fix 11: Test moveOutcome View field propagation.
+func TestExecutor_LocalMove_ViewFields(t *testing.T) {
+	t.Parallel()
+
+	e, syncRoot := newTestExecutor(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	e.baseline = emptyBaseline()
+	e.createdFolders = make(map[string]string)
+
+	writeExecTestFile(t, syncRoot, "exec-src.txt", "content")
+
+	action := &Action{
+		Type:    ActionLocalMove,
+		Path:    "exec-src.txt",
+		NewPath: "exec-dst.txt",
+		ItemID:  "item1",
+		DriveID: driveid.New(testDriveID),
+		View: &PathView{
+			Path: "exec-src.txt",
+			Remote: &RemoteState{
+				Hash:     "remotehash",
+				Size:     42,
+				ETag:     "etag-move",
+				ItemType: ItemTypeFile,
+			},
+			Local: &LocalState{
+				Hash:  "localhash",
+				Mtime: 9876543210,
+			},
+		},
+	}
+
+	o := e.executeMove(context.Background(), action)
+	requireOutcomeSuccess(t, o)
+
+	if o.RemoteHash != "remotehash" {
+		t.Errorf("expected RemoteHash=remotehash, got %s", o.RemoteHash)
+	}
+
+	if o.Size != 42 {
+		t.Errorf("expected Size=42, got %d", o.Size)
+	}
+
+	if o.ETag != "etag-move" {
+		t.Errorf("expected ETag=etag-move, got %s", o.ETag)
+	}
+
+	if o.LocalHash != "localhash" {
+		t.Errorf("expected LocalHash=localhash, got %s", o.LocalHash)
+	}
+
+	if o.Mtime != 9876543210 {
+		t.Errorf("expected Mtime=9876543210, got %d", o.Mtime)
+	}
+
+	if o.ItemType != ItemTypeFile {
+		t.Errorf("expected ItemType=file, got %s", o.ItemType)
+	}
+}
+
+// Fix 12: Test multi-chunk upload (>1 chunk exercised).
+func TestExecutor_Upload_MultiChunkLoop(t *testing.T) {
+	t.Parallel()
+
+	session := &graph.UploadSession{UploadURL: "https://upload.example.com"}
+	var capturedOffsets []int64
+
+	transfers := &executorMockTransferClient{
+		createUploadSessionFn: func(_ context.Context, _ driveid.ID, _, _ string, _ int64, _ time.Time) (*graph.UploadSession, error) {
+			return session, nil
+		},
+		uploadChunkFn: func(_ context.Context, _ *graph.UploadSession, chunk io.Reader, offset, length, total int64) (*graph.Item, error) {
+			capturedOffsets = append(capturedOffsets, offset)
+			io.Copy(io.Discard, chunk)
+
+			if offset+length >= total {
+				return &graph.Item{ID: "multi-chunk1", ETag: "mc1", QuickXorHash: "h1"}, nil
+			}
+
+			return nil, nil
+		},
+	}
+
+	e, syncRoot := newTestExecutor(t, &executorMockItemClient{}, transfers)
+	e.baseline = emptyBaseline()
+	e.createdFolders = make(map[string]string)
+
+	// 25 MiB file → 3 chunks at 10 MiB each (10, 10, 5).
+	bigContent := strings.Repeat("x", 25*1024*1024)
+	writeExecTestFile(t, syncRoot, "exec-multi-chunk.bin", bigContent)
+
+	action := &Action{
+		Type: ActionUpload,
+		Path: "exec-multi-chunk.bin",
+		View: &PathView{Path: "exec-multi-chunk.bin"},
+	}
+
+	o := e.executeUpload(context.Background(), action)
+	requireOutcomeSuccess(t, o)
+
+	if len(capturedOffsets) != 3 {
+		t.Fatalf("expected 3 chunks, got %d", len(capturedOffsets))
+	}
+
+	expectedOffsets := []int64{0, 10 * 1024 * 1024, 20 * 1024 * 1024}
+	for i, expected := range expectedOffsets {
+		if capturedOffsets[i] != expected {
+			t.Errorf("chunk %d: expected offset %d, got %d", i, expected, capturedOffsets[i])
+		}
+	}
+}
+
+// Fix 13: Test timeSleepExec context cancellation.
+func TestTimeSleepExec_ContextCanceled(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := timeSleepExec(ctx, 10*time.Second)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got %v", err)
+	}
+}
+
+// Fix 13: Test timeSleepExec completes normally.
+func TestTimeSleepExec_Completes(t *testing.T) {
+	t.Parallel()
+
+	err := timeSleepExec(context.Background(), 1*time.Millisecond)
+	if err != nil {
+		t.Errorf("expected nil, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ItemType propagation tests (Fixes 3, 4, 5)
+// ---------------------------------------------------------------------------
+
+func TestExecutor_DeleteOutcome_FolderType(t *testing.T) {
+	t.Parallel()
+
+	e, _ := newTestExecutor(t, &executorMockItemClient{
+		deleteItemFn: func(_ context.Context, _ driveid.ID, _ string) error { return nil },
+	}, &executorMockTransferClient{})
+	e.baseline = emptyBaseline()
+	e.createdFolders = make(map[string]string)
+
+	action := &Action{
+		Type:    ActionRemoteDelete,
+		Path:    "exec-folder-del",
+		ItemID:  "folder1",
+		DriveID: driveid.New(testDriveID),
+		View: &PathView{
+			Baseline: &BaselineEntry{ItemType: ItemTypeFolder},
+		},
+	}
+
+	o := e.executeRemoteDelete(context.Background(), action)
+	requireOutcomeSuccess(t, o)
+
+	if o.ItemType != ItemTypeFolder {
+		t.Errorf("expected ItemType=folder, got %s", o.ItemType)
+	}
+}
+
+func TestExecutor_Cleanup_FolderType(t *testing.T) {
+	t.Parallel()
+
+	e, _ := newTestExecutor(t, &executorMockItemClient{}, &executorMockTransferClient{})
+
+	action := &Action{
+		Type:    ActionCleanup,
+		Path:    "exec-cleanup-folder",
+		ItemID:  "folder1",
+		DriveID: driveid.New(testDriveID),
+		View: &PathView{
+			Baseline: &BaselineEntry{ItemType: ItemTypeFolder},
+		},
+	}
+
+	o := e.executeCleanup(action)
+	requireOutcomeSuccess(t, o)
+
+	if o.ItemType != ItemTypeFolder {
+		t.Errorf("expected ItemType=folder, got %s", o.ItemType)
+	}
+}
+
+func TestExecutor_SyncedUpdate_BaselineFallback(t *testing.T) {
+	t.Parallel()
+
+	e, _ := newTestExecutor(t, &executorMockItemClient{}, &executorMockTransferClient{})
+
+	// No Remote, only Baseline with folder type.
+	action := &Action{
+		Type:    ActionUpdateSynced,
+		Path:    "exec-synced-folder",
+		ItemID:  "folder1",
+		DriveID: driveid.New(testDriveID),
+		View: &PathView{
+			Baseline: &BaselineEntry{ItemType: ItemTypeFolder},
+			Local:    &LocalState{Hash: "lh", Mtime: 123},
+		},
+	}
+
+	o := e.executeSyncedUpdate(action)
+	requireOutcomeSuccess(t, o)
+
+	if o.ItemType != ItemTypeFolder {
+		t.Errorf("expected ItemType=folder from baseline fallback, got %s", o.ItemType)
+	}
+}

@@ -202,7 +202,14 @@ func (e *Executor) createRemoteFolder(ctx context.Context, action *Action) Outco
 	driveID := e.resolveDriveID(action)
 	name := filepath.Base(action.Path)
 
-	item, err := e.items.CreateFolder(ctx, driveID, parentID, name)
+	var item *graph.Item
+
+	err = e.withRetry(ctx, "create folder "+action.Path, func() error {
+		var createErr error
+		item, createErr = e.items.CreateFolder(ctx, driveID, parentID, name)
+
+		return createErr
+	})
 	if err != nil {
 		return e.failedOutcome(action, ActionFolderCreate, fmt.Errorf("creating remote folder %s: %w", action.Path, err))
 	}
@@ -267,7 +274,14 @@ func (e *Executor) executeRemoteMove(ctx context.Context, action *Action) Outcom
 
 	newName := filepath.Base(action.NewPath)
 
-	item, err := e.items.MoveItem(ctx, driveID, action.ItemID, newParentID, newName)
+	var item *graph.Item
+
+	err = e.withRetry(ctx, "remote move "+action.Path, func() error {
+		var moveErr error
+		item, moveErr = e.items.MoveItem(ctx, driveID, action.ItemID, newParentID, newName)
+
+		return moveErr
+	})
 	if err != nil {
 		return e.failedOutcome(action, ActionRemoteMove, fmt.Errorf("moving %s -> %s: %w", action.Path, action.NewPath, err))
 	}
@@ -309,6 +323,11 @@ func (e *Executor) executeSyncedUpdate(action *Action) Outcome {
 			o.LocalHash = action.View.Local.Hash
 			o.Mtime = action.View.Local.Mtime
 		}
+
+		// Fall back to baseline ItemType when Remote is absent or had zero value.
+		if o.ItemType == ItemTypeFile && action.View.Baseline != nil && action.View.Baseline.ItemType != ItemTypeFile {
+			o.ItemType = action.View.Baseline.ItemType
+		}
 	}
 
 	return o
@@ -317,17 +336,39 @@ func (e *Executor) executeSyncedUpdate(action *Action) Outcome {
 // executeCleanup signals baseline removal without I/O.
 func (e *Executor) executeCleanup(action *Action) Outcome {
 	return Outcome{
-		Action:  ActionCleanup,
-		Success: true,
-		Path:    action.Path,
-		DriveID: e.resolveDriveID(action),
-		ItemID:  action.ItemID,
+		Action:   ActionCleanup,
+		Success:  true,
+		Path:     action.Path,
+		DriveID:  e.resolveDriveID(action),
+		ItemID:   action.ItemID,
+		ItemType: resolveActionItemType(action),
 	}
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// resolveActionItemType extracts ItemType from the action's View, skipping
+// zero values (ItemTypeFile) to find the actual type. Checks Remote → Baseline
+// → Local, defaulting to ItemTypeFile if all are zero or View is nil.
+func resolveActionItemType(action *Action) ItemType {
+	if action.View != nil {
+		if action.View.Remote != nil && action.View.Remote.ItemType != ItemTypeFile {
+			return action.View.Remote.ItemType
+		}
+
+		if action.View.Baseline != nil && action.View.Baseline.ItemType != ItemTypeFile {
+			return action.View.Baseline.ItemType
+		}
+
+		if action.View.Local != nil && action.View.Local.ItemType != ItemTypeFile {
+			return action.View.Local.ItemType
+		}
+	}
+
+	return ItemTypeFile
+}
 
 // resolveParentID determines the remote parent ID for a given relative path.
 // Checks createdFolders first (for items under newly-created folders), then
@@ -401,7 +442,7 @@ func (e *Executor) executeParallel(
 
 	// Collect all results in order.
 	for i := range results {
-		// Skip zero-value results from goroutines that never ran.
+		// Skip zero-value results from goroutines canceled before they started.
 		if results[i].Path != "" || results[i].Success {
 			*outcomes = append(*outcomes, results[i])
 		}

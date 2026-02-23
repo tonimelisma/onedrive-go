@@ -324,6 +324,9 @@ When a `GraphError` wraps a sentinel error (e.g., `{StatusCode: 507, Err: ErrSer
 ### dupl linter triggers on mock structs matching interface signatures
 A test mock struct with function fields that mirror an interface's method signatures can trigger the `dupl` linter. The fix: reorder the mock's fields to break the token pattern match. Simpler than `//nolint:dupl` which must be on the file reported (often the interface declaration in production code, not the test).
 
+### defer f.Close() conflicts with explicit close in multi-path functions
+When a function has two exit paths that both call `f.Close()` explicitly (error path: close + cleanup; success path: close + error check), adding `defer f.Close()` causes a double-close. `downloadToPartial` had this bug: defer on line 94, explicit close on lines 102 (error) and 108 (success). Remove the defer and add a comment explaining why. Safe on Linux/macOS (POSIX close is idempotent for the fd, but the fd number could be reused by another goroutine between the two closes — technically a race).
+
 ### Executor parallel worker pool uses []Outcome directly
 Don't wrap outcomes in an intermediate struct with an index field (`indexedOutcome{idx, out}`). Since the results slice is pre-allocated with `make([]Outcome, len(actions))` and indexed by goroutine-local `i`, the index is implicit. The extra struct is dead code.
 

@@ -91,14 +91,14 @@ func (e *Executor) downloadToPartial(
 	if err != nil {
 		return "", 0, fmt.Errorf("creating partial file %s: %w", partialPath, err)
 	}
-	defer f.Close()
+
+	// No defer f.Close() — both exit paths close explicitly to avoid double-close.
 
 	h := quickxorhash.New()
 	w := io.MultiWriter(f, h)
 
 	size, err := e.transfers.Download(ctx, driveID, action.ItemID, w)
 	if err != nil {
-		// Clean up partial file on download failure.
 		f.Close()
 		os.Remove(partialPath)
 
