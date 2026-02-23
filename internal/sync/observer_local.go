@@ -299,6 +299,8 @@ func (o *LocalObserver) detectDeletions(observed map[string]bool) []ChangeEvent 
 			Path:      path,
 			Name:      filepath.Base(path),
 			ItemType:  entry.ItemType,
+			Size:      entry.Size,
+			Mtime:     entry.Mtime,
 			IsDeleted: true,
 		})
 	}

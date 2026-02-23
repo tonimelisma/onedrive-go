@@ -209,14 +209,14 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 - Executor returns `[]Outcome` for each completed action
 - Each action execution returns an `Outcome` (action type, path, success/failure, resulting hashes, error if any)
 - Transfer pipeline produces outcomes via callback: download/upload workers call `func(Outcome)` on completion
-- Worker pools reused from 4.9 transfer pipeline (errgroup, bandwidth limiting)
+- Worker pools with errgroup, bandwidth limiting
 - Download: `.partial` + QuickXorHash verify + atomic rename + mtime restore (S3)
 - Upload: SimpleUpload (<4 MiB) or chunked session with hash verification
 - Local delete: S4 hash-before-delete guard using `action.View.Baseline.LocalHash`
 - Remote delete: 404 treated as success
-- Conflict resolution: keep-both with timestamped conflict copies (reused from 4.8)
+- Conflict resolution: keep-both with timestamped conflict copies
 - Retry logic inside executor: exponential backoff before producing final outcome (fixes B-048)
-- Error classification: fatal vs retryable vs skip (reused from 4.7)
+- Error classification: fatal vs retryable vs skip
 - Executor operates on `PathView` context — no database queries
 - Tests with mock graph client, real filesystem for downloads, all error paths
 - **Acceptance**: `go test ./internal/sync/...` passes
