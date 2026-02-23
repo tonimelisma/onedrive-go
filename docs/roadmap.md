@@ -108,17 +108,21 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 - 25 tests, 82.5% coverage. Dependencies: modernc.org/sqlite, goose/v3, google/uuid
 - **Acceptance**: All tests pass, baseline round-trip with real SQLite. PR #78.
 
-### 4v2.2: Remote Observer
+### 4v2.2: Remote Observer — DONE
 
 **Produce typed `ChangeEvent` values from Graph API delta responses.**
 
-- `RemoteObserver.FullDelta(ctx, driveID, deltaToken) -> ([]ChangeEvent, newDeltaToken, error)`
-- `convertToChangeEvent`: graph.Item -> ChangeEvent with all normalization (driveID lowering, URL-decode, Prefer header, dedup, reorder deletions)
-- Path materialization: build full paths from delta items using baseline for known parents + in-flight parent map for new parents in current delta
-- Move detection at observation level: delta items with `parentReference` changes produce `ChangeMoved` events with both old path (from baseline) and new path
-- No DB access — pure transformation from API response to typed events
-- Tests with mock graph client returning multi-page deltas, edge cases (resync/410, cross-drive parents, deleted items without paths)
-- **Acceptance**: `go test ./internal/sync/...` passes, observer produces correct events for all delta scenarios
+- `RemoteObserver` struct with `FullDelta(ctx, savedToken) -> ([]ChangeEvent, newDeltaToken, error)`
+- Internal pagination loop with max-pages guard (10000)
+- Path materialization via in-flight parent map + baseline lookup with depth guard (256)
+- Change classification: create/modify/delete/move using baseline comparison
+- NFC normalization (`golang.org/x/text/unicode/norm`), driveID zero-padding (16-char), hash selection (QuickXorHash preferred, SHA256 fallback)
+- Move detection: materialized path vs baseline path comparison
+- Business API: deleted items with missing Name recovered from baseline
+- Root items registered in inflight (for children's path materialization) but skipped as events
+- `ErrDeltaExpired` sentinel for HTTP 410 (delta token expired)
+- 23 test cases with mock DeltaFetcher, 86.4% coverage. PR #80.
+- **Acceptance**: All tests pass, observer produces correct events for all delta scenarios
 - **Inputs**: [event-driven-rationale.md](design/event-driven-rationale.md) Parts 5.1, 10 (Phase 2)
 
 ### 4v2.3: Local Observer

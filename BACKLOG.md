@@ -41,7 +41,6 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 
 | ID | Title | Priority | Package | Notes |
 |----|-------|----------|---------|-------|
-| B-059 | Implement Phase 4v2.2: Remote Observer | P1 | `internal/sync/` | Delta fetch -> ChangeEvent[]. See roadmap.md. |
 | B-058 | Re-enable sync E2E tests in CI after Increment 8 | P2 | CI | Part of 4v2.8. Wire new engine to CLI, write sync E2E tests, re-enable in CI. |
 
 ### Closed
@@ -53,3 +52,4 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 | B-056 | Remove `tombstone_retention_days` from config package | **Done** — Completed as part of Increment 0 (B-055). |
 | B-057 | Remove sync integration test line from `integration.yml` | **Done** — Completed as part of Increment 0 (B-055). |
 | B-053 | Implement Phase 4v2.1: Types + Baseline Schema + BaselineManager | **Done** — PR #78. types.go, migrations, baseline.go, 25 tests, 82.5% coverage. |
+| B-059 | Implement Phase 4v2.2: Remote Observer | **Done** — PR #80. observer_remote.go, 23 tests, 86.4% coverage. |
