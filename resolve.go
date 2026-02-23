@@ -66,7 +66,7 @@ func runResolve(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--all and a specific conflict argument are mutually exclusive")
 	}
 
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	// keep_both doesn't need graph client — just DB update.
 	if resolution == resolutionKeepBoth {

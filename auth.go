@@ -134,7 +134,7 @@ func openBrowser(rawURL string) error {
 // device code auth -> /me -> /me/drive -> /me/organization -> construct canonical ID -> config.
 func runLogin(cmd *cobra.Command, _ []string) error {
 	logger := buildLogger()
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	useBrowser, err := cmd.Flags().GetBool("browser")
 	if err != nil {
@@ -590,9 +590,9 @@ type whoamiDrive struct {
 	QuotaTotal int64  `json:"quota_total"`
 }
 
-func runWhoami(_ *cobra.Command, _ []string) error {
+func runWhoami(cmd *cobra.Command, _ []string) error {
 	logger := buildLogger()
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	// Determine which drive to query. If --drive is set, use it directly.
 	// Otherwise try to auto-select from config.

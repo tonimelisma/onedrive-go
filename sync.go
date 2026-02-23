@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -44,7 +43,7 @@ func runSync(cmd *cobra.Command, _ []string) error {
 
 	mode := syncModeFromFlags(cmd)
 
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	client, driveID, logger, err := clientAndDrive(ctx)
 	if err != nil {
