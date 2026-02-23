@@ -12,11 +12,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 )
 
-// Tests for constructCanonicalID, accountEmailFromCanonicalID, and
-// driveTypeFromCanonicalID have been removed — those functions were absorbed
-// into internal/driveid (Construct, Email, DriveType). See
-// internal/driveid/canonical_test.go for equivalent coverage.
-
 func TestEmailFromCanonicalString(t *testing.T) {
 	tests := []struct {
 		id   string

@@ -90,6 +90,11 @@ cmd/onedrive-go/                    # CLI (Cobra commands)
   drive.go                          # drive add, drive remove
 
 internal/
+  driveid/                          # Type-safe drive identifiers (leaf package, stdlib-only)
+    id.go                           # ID type: normalized API drive identifier (lowercase + zero-pad)
+    canonical.go                    # CanonicalID type: config-level "type:email" identifier
+    itemkey.go                      # ItemKey type: composite (DriveID, ItemID) map key
+
   graph/                            # Graph API client -- ALL API interaction + quirk handling
     client.go                       # Client struct, HTTP transport, retry, rate limiting
     auth.go                         # Device code + browser PKCE flow, token refresh
@@ -306,7 +311,7 @@ type ChangeEvent struct {
     OldPath  string         // for moves only
     ItemID   string         // server-assigned (remote only; empty for local)
     ParentID string         // server parent ID (remote only)
-    DriveID  string         // normalized (lowercase, zero-padded to 16 chars)
+    DriveID  driveid.ID     // normalized (lowercase, zero-padded to 16 chars)
     ItemType ItemType       // file, folder, root
     Name     string         // URL-decoded, NFC-normalized
     Size     int64
@@ -325,7 +330,7 @@ The confirmed synced state of a single path. The ONLY durable per-item state in 
 ```go
 type BaselineEntry struct {
     Path       string
-    DriveID    string
+    DriveID    driveid.ID
     ItemID     string
     ParentID   string
     ItemType   ItemType
@@ -351,6 +356,7 @@ type PathView struct {
 }
 
 type RemoteState struct {
+    DriveID                driveid.ID
     ItemID, ParentID, Name string
     ItemType               ItemType
     Size                   int64
@@ -379,8 +385,8 @@ type Outcome struct {
     Success      bool
     Error        error
     Path         string
-    OldPath      string     // for moves
-    DriveID      string
+    OldPath      string       // for moves
+    DriveID      driveid.ID
     ItemID       string     // from API response after upload
     ParentID     string
     ItemType     ItemType
@@ -413,7 +419,7 @@ const (
 
 type Action struct {
     Type         ActionType
-    DriveID      string
+    DriveID      driveid.ID
     ItemID       string
     Path         string
     NewPath      string           // for moves
@@ -443,21 +449,21 @@ Defined in `sync/`, satisfied by `*graph.Client`:
 
 ```go
 type DeltaFetcher interface {
-    Delta(ctx context.Context, driveID, token string) (*graph.DeltaPage, error)
+    Delta(ctx context.Context, driveID driveid.ID, token string) (*graph.DeltaPage, error)
 }
 
 type ItemClient interface {
-    GetItem(ctx context.Context, driveID, itemID string) (*graph.Item, error)
-    ListChildren(ctx context.Context, driveID, itemID string) ([]graph.Item, error)
-    CreateFolder(ctx context.Context, driveID, parentID, name string) (*graph.Item, error)
-    MoveItem(ctx context.Context, driveID, itemID, newParentID, newName string) (*graph.Item, error)
-    DeleteItem(ctx context.Context, driveID, itemID string) error
+    GetItem(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
+    ListChildren(ctx context.Context, driveID driveid.ID, itemID string) ([]graph.Item, error)
+    CreateFolder(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error)
+    MoveItem(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string) (*graph.Item, error)
+    DeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error
 }
 
 type TransferClient interface {
-    Download(ctx context.Context, driveID, itemID string, w io.Writer) (int64, error)
-    SimpleUpload(ctx context.Context, driveID, parentID, name string, r io.Reader, size int64) (*graph.Item, error)
-    CreateUploadSession(ctx context.Context, driveID, parentID, name string, size int64, mtime time.Time) (*graph.UploadSession, error)
+    Download(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error)
+    SimpleUpload(ctx context.Context, driveID driveid.ID, parentID, name string, r io.Reader, size int64) (*graph.Item, error)
+    CreateUploadSession(ctx context.Context, driveID driveid.ID, parentID, name string, size int64, mtime time.Time) (*graph.UploadSession, error)
     UploadChunk(ctx context.Context, session *graph.UploadSession, chunk io.Reader, offset, length, total int64) (*graph.Item, error)
 }
 ```

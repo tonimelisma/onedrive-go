@@ -194,7 +194,7 @@ type ChangeEvent struct {
     OldPath  string       // previous path (for moves only)
     ItemID   string       // server-assigned ID (remote events only; empty for local)
     ParentID string       // server parent ID (remote events only)
-    DriveID  string       // normalized drive ID (lowercase, zero-padded to 16 chars)
+    DriveID  driveid.ID   // normalized drive ID (lowercase, zero-padded to 16 chars)
     ItemType ItemType     // file, folder, root
     Name     string       // filename component (URL-decoded, NFC-normalized)
     Size     int64
@@ -214,7 +214,7 @@ type ChangeEvent struct {
 // is ephemeral (rebuilt from API or filesystem each cycle).
 type BaselineEntry struct {
     Path       string
-    DriveID    string
+    DriveID    driveid.ID
     ItemID     string
     ParentID   string
     ItemType   ItemType
@@ -302,7 +302,7 @@ type Outcome struct {
 
     Path       string
     OldPath    string     // for moves: the path being vacated
-    DriveID    string
+    DriveID    driveid.ID
     ItemID     string     // server-assigned (from API response after upload)
     ParentID   string
     ItemType   ItemType
@@ -340,7 +340,7 @@ const (
 
 type Action struct {
     Type         ActionType
-    DriveID      string
+    DriveID      driveid.ID
     ItemID       string
     Path         string
     NewPath      string           // for moves
@@ -633,7 +633,7 @@ The remote observer produces `ChangeEvent` values from the Graph API. It has two
 type RemoteObserver struct {
     client   DeltaFetcher
     baseline *Baseline    // read-only reference for path materialization
-    driveID  string
+    driveID  driveid.ID
     logger   *slog.Logger
 }
 
@@ -1781,7 +1781,7 @@ func (m *BaselineManager) Commit(
     ctx context.Context,
     outcomes []Outcome,
     deltaToken string,
-    driveID string,
+    driveID driveid.ID,
 ) error {
     tx, err := m.db.BeginTx(ctx, nil)
     if err != nil { return err }
@@ -1884,7 +1884,7 @@ type Engine struct {
     executor    *Executor
     baselineMgr *BaselineManager
 
-    driveID     string
+    driveID     driveid.ID
     syncRoot    string
     mode        SyncMode
     config      *config.ResolvedDrive

@@ -97,9 +97,6 @@ func TestValidateDrives_SharePointDrive_Valid(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// validateCanonicalID tests have moved to internal/driveid/canonical_test.go
-// since the function was absorbed by driveid.NewCanonicalID().
-
 func TestValidateDrives_InvalidCanonicalID(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Drives["invalid-no-colon"] = Drive{SyncDir: "~/OneDrive"}

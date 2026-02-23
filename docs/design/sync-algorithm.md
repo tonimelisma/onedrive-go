@@ -129,7 +129,7 @@ type ChangeEvent struct {
     OldPath  string         // for moves only
     ItemID   string         // server-assigned (remote only; empty for local)
     ParentID string         // server parent ID (remote only)
-    DriveID  string         // normalized (lowercase, zero-padded to 16 chars)
+    DriveID  driveid.ID     // normalized (lowercase, zero-padded to 16 chars)
     ItemType ItemType       // file, folder, root
     Name     string         // URL-decoded, NFC-normalized
     Size     int64
@@ -146,7 +146,7 @@ type ChangeEvent struct {
 ```go
 type Action struct {
     Type         ActionType
-    DriveID      string
+    DriveID      driveid.ID
     ItemID       string
     Path         string
     NewPath      string           // for moves
@@ -953,7 +953,7 @@ type Outcome struct {
     Error        error
     Path         string
     OldPath      string     // for moves
-    DriveID      string
+    DriveID      driveid.ID
     ItemID       string     // from API response after upload
     ParentID     string
     ItemType     ItemType
@@ -1161,7 +1161,7 @@ func (m *BaselineManager) Commit(
     ctx context.Context,
     outcomes []Outcome,
     deltaToken string,
-    driveID string,
+    driveID driveid.ID,
 ) error
 ```
 
@@ -1229,7 +1229,7 @@ CREATE INDEX idx_baseline_parent ON baseline(parent_id);
 ```go
 type BaselineEntry struct {
     Path       string
-    DriveID    string
+    DriveID    driveid.ID
     ItemID     string
     ParentID   string
     ItemType   ItemType    // file, folder, root

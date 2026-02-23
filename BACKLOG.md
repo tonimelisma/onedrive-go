@@ -41,6 +41,8 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 | B-070 | Add ParentID to Action struct | P2 | `internal/sync/` | Executor will need ParentID for folder creation (API requires parent ID) and move operations. Currently derivable from Path + baseline, but should be explicit. Evaluate during 4v2.6 design. |
 | B-071 | ConflictRecord missing Name field | P3 | `internal/sync/` | UX convenience for conflict reporting. `path.Base(Path)` suffices but Name from the PathView is cleaner. |
 | B-072 | ED1-ED8 missing folder-delete-to-remote (folder EF6) | P2 | `internal/sync/` | Clarifies B-069: when `hasBaseline && !hasLocal && hasRemote && !remoteDeleted`, folders fall to ED4 (recreate locally) instead of propagating the local deletion remotely. Intentional for safety but undocumented. |
+| B-073 | DriveTokenPath/DriveStatePath should accept `driveid.CanonicalID` | P3 | `internal/config/` | Both functions still take `string` params because many callers (especially in `cmd/`) pass raw strings. Should accept `driveid.CanonicalID` directly after all callers are migrated. |
+| B-074 | Drive identity verification at Engine startup | P2 | `internal/sync/` | Engine (4v2.7) should verify that the configured `driveid.ID` matches the API-reported drive ID at sync start. Catches stale config, renamed drives, or ID format changes. |
 
 ## Event-Driven Pivot (Phase 4 v2)
 
