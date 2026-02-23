@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/spf13/cobra"
+
+	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 func newSyncCmd() *cobra.Command {
@@ -14,12 +18,9 @@ func newSyncCmd() *cobra.Command {
 
 By default, sync is bidirectional. Use --download-only or --upload-only for
 one-way sync. Use --dry-run to preview what would happen without making changes.`,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return fmt.Errorf("sync engine not yet implemented (Phase 4v2)")
-		},
+		RunE: runSync,
 	}
 
-	// Flags preserved for forward compatibility with the event-driven engine.
 	cmd.Flags().Bool("download-only", false, "only download remote changes")
 	cmd.Flags().Bool("upload-only", false, "only upload local changes")
 	cmd.Flags().Bool("dry-run", false, "preview sync actions without executing")
@@ -29,4 +30,152 @@ one-way sync. Use --dry-run to preview what would happen without making changes.
 	cmd.MarkFlagsMutuallyExclusive("download-only", "upload-only")
 
 	return cmd
+}
+
+func runSync(cmd *cobra.Command, _ []string) error {
+	watch, err := cmd.Flags().GetBool("watch")
+	if err != nil {
+		return err
+	}
+
+	if watch {
+		return fmt.Errorf("continuous sync not yet implemented (Phase 5)")
+	}
+
+	mode := syncModeFromFlags(cmd)
+
+	ctx := context.Background()
+
+	client, driveID, logger, err := clientAndDrive(ctx)
+	if err != nil {
+		return err
+	}
+
+	syncDir := resolvedCfg.SyncDir
+	if syncDir == "" {
+		return fmt.Errorf("sync_dir not configured — set it in the config file or add a drive with 'onedrive-go drive add'")
+	}
+
+	dbPath := config.DriveStatePath(resolvedCfg.CanonicalID)
+	if dbPath == "" {
+		return fmt.Errorf("cannot determine state DB path for drive %q", resolvedCfg.CanonicalID)
+	}
+
+	engine, err := sync.NewEngine(&sync.EngineConfig{
+		DBPath:    dbPath,
+		SyncRoot:  syncDir,
+		DriveID:   driveID,
+		Fetcher:   client,
+		Items:     client,
+		Transfers: client,
+		Logger:    logger,
+	})
+	if err != nil {
+		return err
+	}
+	defer engine.Close()
+
+	dryRun, err := cmd.Flags().GetBool("dry-run")
+	if err != nil {
+		return err
+	}
+
+	force, err := cmd.Flags().GetBool("force")
+	if err != nil {
+		return err
+	}
+
+	report, err := engine.RunOnce(ctx, mode, sync.RunOpts{
+		DryRun: dryRun,
+		Force:  force,
+	})
+
+	if report != nil {
+		printSyncReport(report)
+	}
+
+	return err
+}
+
+// syncModeFromFlags determines the SyncMode from CLI flags.
+// Panics on programmer error (flag not registered) — these are Cobra invariants.
+func syncModeFromFlags(cmd *cobra.Command) sync.SyncMode {
+	downloadOnly := cmd.Flags().Changed("download-only")
+	if downloadOnly {
+		return sync.SyncDownloadOnly
+	}
+
+	uploadOnly := cmd.Flags().Changed("upload-only")
+	if uploadOnly {
+		return sync.SyncUploadOnly
+	}
+
+	return sync.SyncBidirectional
+}
+
+// printSyncReport formats and prints the sync report to stderr.
+func printSyncReport(r *sync.SyncReport) {
+	if r.DryRun {
+		statusf("Dry run — no changes applied\n")
+	}
+
+	statusf("Mode: %s\n", r.Mode)
+	statusf("Duration: %s\n", r.Duration)
+
+	total := r.FolderCreates + r.Moves + r.Downloads + r.Uploads +
+		r.LocalDeletes + r.RemoteDeletes + r.Conflicts +
+		r.SyncedUpdates + r.Cleanups
+
+	if total == 0 {
+		statusf("No changes detected\n")
+		return
+	}
+
+	statusf("\nPlan:\n")
+
+	if r.FolderCreates > 0 {
+		statusf("  Folder creates: %d\n", r.FolderCreates)
+	}
+
+	if r.Moves > 0 {
+		statusf("  Moves:          %d\n", r.Moves)
+	}
+
+	if r.Downloads > 0 {
+		statusf("  Downloads:      %d\n", r.Downloads)
+	}
+
+	if r.Uploads > 0 {
+		statusf("  Uploads:        %d\n", r.Uploads)
+	}
+
+	if r.LocalDeletes > 0 {
+		statusf("  Local deletes:  %d\n", r.LocalDeletes)
+	}
+
+	if r.RemoteDeletes > 0 {
+		statusf("  Remote deletes: %d\n", r.RemoteDeletes)
+	}
+
+	if r.Conflicts > 0 {
+		statusf("  Conflicts:      %d\n", r.Conflicts)
+	}
+
+	if r.SyncedUpdates > 0 {
+		statusf("  Synced updates: %d\n", r.SyncedUpdates)
+	}
+
+	if r.Cleanups > 0 {
+		statusf("  Cleanups:       %d\n", r.Cleanups)
+	}
+
+	if !r.DryRun {
+		statusf("\nResults:\n")
+		statusf("  Succeeded: %d\n", r.Succeeded)
+		statusf("  Failed:    %d\n", r.Failed)
+
+		for _, e := range r.Errors {
+			statusf("  Error:     %v\n", e)
+		}
+	}
 }
