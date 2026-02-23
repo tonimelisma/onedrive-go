@@ -105,6 +105,12 @@ func (b *Buffer) addLocked(ev *ChangeEvent) {
 
 	// Move dual-keying: ensure the old path enters the planner so
 	// stale baseline entries get cleaned up (no orphaned records).
+	//
+	// Currently only RemoteObserver produces ChangeMove events (from
+	// delta's parentReference changes). LocalObserver detects moves via
+	// hash correlation in the planner, not ChangeMove events. This
+	// dual-keying is forward-compatible for Phase 5 (watch mode) when
+	// LocalObserver.Watch() may detect renames via inotify/FSEvents.
 	if ev.Type == ChangeMove && ev.OldPath != "" {
 		synthetic := ChangeEvent{
 			Source:    ev.Source,
