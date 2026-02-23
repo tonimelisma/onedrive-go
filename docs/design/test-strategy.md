@@ -41,7 +41,7 @@ Guiding principles:
 ```
               ┌─────────┐
               │  E2E    │  Live OneDrive API, real filesystem
-              │ (slow)  │  Merge-to-clean-slate + nightly
+              │ (slow)  │  Merge-to-main + nightly
              ┌┴─────────┴┐
              │ Integration │  Mock HTTP, real SQLite, real filter engine
              │  (medium)   │  Every PR
@@ -710,7 +710,7 @@ E2E tests run against a live OneDrive account. They use `//go:build e2e` tags an
 
 | Account Type | Environment | Frequency | Status |
 |-------------|-------------|-----------|--------|
-| Personal (free) | CI (GitHub Actions) | Every merge to clean-slate + nightly | MVP |
+| Personal (free) | CI (GitHub Actions) | Every merge to main + nightly | MVP |
 | Business | CI (GitHub Actions) | Nightly | Backlog — add after core E2E is stable (~$5/month for M365 Business Basic) |
 | SharePoint | CI (GitHub Actions) | Nightly | Backlog — same M365 subscription covers SharePoint |
 
@@ -721,7 +721,7 @@ All three account types will run in CI. Personal is free and runs from day one. 
 CI credentials use **Azure Key Vault + OIDC federation** for OAuth refresh token storage. OIDC means GitHub Actions authenticates to Azure without any stored credentials — the trust is federated via short-lived JWTs.
 
 Setup:
-1. Azure OIDC service principal (`onedrive-go-ci-github-oidc`) with federated credentials scoped to `repo:tonimelisma/onedrive-go:ref:refs/heads/main` and `repo:tonimelisma/onedrive-go:ref:refs/heads/clean-slate`
+1. Azure OIDC service principal (`onedrive-go-ci-github-oidc`) with federated credentials scoped to `repo:tonimelisma/onedrive-go:ref:refs/heads/main`
 2. Azure Key Vault (`kv-onedrivego-ci`) with RBAC authorization; SP has "Key Vault Secrets Officer" role
 3. GitHub repository variables: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_KEY_VAULT_NAME`, `ONEDRIVE_TEST_DRIVES` (non-sensitive identifiers)
 4. CI loads tokens via `az keyvault secret download --file` (token never in stdout/logs)
@@ -764,7 +764,7 @@ When tokens expire completely (90 days of inactivity), re-bootstrap using the sa
 
 **Who manages secrets**: The AI orchestrator (Claude) has `az` CLI access and **should** manage Key Vault secrets directly. This includes creating, updating, rotating, and verifying secrets — not just human-only operations. When CI changes affect token paths or secret naming, the orchestrator should update Key Vault secrets and GitHub variables as part of the same increment, then verify CI passes before declaring done. The human only needs to intervene for one-time Azure infrastructure setup (service principal, RBAC, federated credentials) and interactive `login` flows that require a browser.
 
-**CI auth failure handling**: If the integration job fails authentication, it prints re-bootstrap instructions. Integration tests run only on push to main/clean-slate, nightly, and manual dispatch — never on PRs.
+**CI auth failure handling**: If the integration job fails authentication, it prints re-bootstrap instructions. Integration tests run only on push to main, nightly, and manual dispatch — never on PRs.
 
 **Local CI validation** (before pushing changes that affect CI):
 
@@ -1278,7 +1278,7 @@ Each of the 12+ known API quirks has a regression test using realistic API respo
 
 ### 10.1 Pipeline Overview
 
-Three parallel jobs run on every PR push. E2E tests run only on merge to clean-slate and nightly.
+Three parallel jobs run on every PR push. E2E tests run only on merge to main and nightly.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -1318,11 +1318,11 @@ Phase 2 introduces E2E CI **before** the sync engine is built. This is deliberat
 - Concurrent operations (parallel uploads/downloads via worker pool)
 - Token refresh mid-operation (access token expires during upload session)
 
-**CI infrastructure**: GitHub Actions with Azure Key Vault + OIDC federation for OneDrive API tokens (details in §6.1). Integration tests run on push to main/clean-slate + nightly, not on PRs.
+**CI infrastructure**: GitHub Actions with Azure Key Vault + OIDC federation for OneDrive API tokens (details in §6.1). Integration tests run on push to main + nightly, not on PRs.
 
 ### 10.3 Job 1: Lint + Build + Unit Tests
 
-Runs on every PR push and every commit to main/clean-slate.
+Runs on every PR push and every commit to main.
 
 ```yaml
 job1-lint-build-unit:
@@ -1408,7 +1408,7 @@ job2-integration-chaos:
 
 ### 10.5 Job 3: E2E Tests
 
-E2E tests run in the same workflow as integration tests (`.github/workflows/integration.yml`), not a separate job. They share the same Azure OIDC + Key Vault credential flow. Runs on push to main/clean-slate, nightly schedule, and manual dispatch.
+E2E tests run in the same workflow as integration tests (`.github/workflows/integration.yml`), not a separate job. They share the same Azure OIDC + Key Vault credential flow. Runs on push to main, nightly schedule, and manual dispatch.
 
 ```yaml
 # E2E tests run after integration tests in integration.yml

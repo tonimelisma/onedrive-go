@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, clean-slate]
+    branches: [main]
   pull_request:
-    branches: [clean-slate]
+    branches: [main]
 
 permissions:
   contents: read
