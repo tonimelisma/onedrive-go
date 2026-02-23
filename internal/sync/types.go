@@ -311,6 +311,21 @@ type ConflictRecord struct {
 	RemoteMtime  int64
 }
 
+// VerifyResult describes the verification status of a single file.
+type VerifyResult struct {
+	Path     string `json:"path"`
+	Status   string `json:"status"` // "ok", "missing", "hash_mismatch", "size_mismatch"
+	Expected string `json:"expected,omitempty"`
+	Actual   string `json:"actual,omitempty"`
+}
+
+// VerifyReport summarizes a full-tree hash verification of local files
+// against the baseline database.
+type VerifyReport struct {
+	Verified   int            `json:"verified"`
+	Mismatches []VerifyResult `json:"mismatches,omitempty"`
+}
+
 // Action is an instruction for the executor, produced by the planner.
 type Action struct {
 	Type         ActionType
