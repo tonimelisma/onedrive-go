@@ -310,20 +310,20 @@ func (e *Engine) ResolveConflict(ctx context.Context, conflictID, resolution str
 	}
 
 	switch resolution {
-	case "keep_both":
+	case ResolutionKeepBoth:
 		// DB-only — executor already saved both copies during sync.
 		return e.baseline.ResolveConflict(ctx, c.ID, resolution)
 
-	case "keep_local":
+	case ResolutionKeepLocal:
 		if err := e.resolveKeepLocal(ctx, c); err != nil {
-			return fmt.Errorf("sync: resolving conflict %s (keep_local): %w", c.ID, err)
+			return fmt.Errorf("sync: resolving conflict %s (%s): %w", c.ID, ResolutionKeepLocal, err)
 		}
 
 		return e.baseline.ResolveConflict(ctx, c.ID, resolution)
 
-	case "keep_remote":
+	case ResolutionKeepRemote:
 		if err := e.resolveKeepRemote(ctx, c); err != nil {
-			return fmt.Errorf("sync: resolving conflict %s (keep_remote): %w", c.ID, err)
+			return fmt.Errorf("sync: resolving conflict %s (%s): %w", c.ID, ResolutionKeepRemote, err)
 		}
 
 		return e.baseline.ResolveConflict(ctx, c.ID, resolution)

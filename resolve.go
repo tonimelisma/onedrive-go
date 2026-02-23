@@ -10,11 +10,11 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
-// Resolution strategy constants.
+// Resolution strategy aliases (re-export from sync package for CLI use).
 const (
-	resolutionKeepLocal  = "keep_local"
-	resolutionKeepRemote = "keep_remote"
-	resolutionKeepBoth   = "keep_both"
+	resolutionKeepLocal  = sync.ResolutionKeepLocal
+	resolutionKeepRemote = sync.ResolutionKeepRemote
+	resolutionKeepBoth   = sync.ResolutionKeepBoth
 )
 
 func newResolveCmd() *cobra.Command {

@@ -887,7 +887,7 @@ func TestListConflicts_OnlyUnresolved(t *testing.T) {
 	ctx := context.Background()
 
 	// Resolve the first conflict.
-	if err := mgr.ResolveConflict(ctx, id, "keep_both"); err != nil {
+	if err := mgr.ResolveConflict(ctx, id, ResolutionKeepBoth); err != nil {
 		t.Fatalf("ResolveConflict: %v", err)
 	}
 
@@ -972,7 +972,7 @@ func TestResolveConflict(t *testing.T) {
 	id := seedConflict(t, mgr, "resolve-me.txt", "edit_edit")
 	ctx := context.Background()
 
-	if err := mgr.ResolveConflict(ctx, id, "keep_local"); err != nil {
+	if err := mgr.ResolveConflict(ctx, id, ResolutionKeepLocal); err != nil {
 		t.Fatalf("ResolveConflict: %v", err)
 	}
 
@@ -987,8 +987,8 @@ func TestResolveConflict(t *testing.T) {
 		t.Fatalf("querying conflict: %v", err)
 	}
 
-	if resolution != "keep_local" {
-		t.Errorf("resolution = %q, want %q", resolution, "keep_local")
+	if resolution != ResolutionKeepLocal {
+		t.Errorf("resolution = %q, want %q", resolution, ResolutionKeepLocal)
 	}
 
 	if resolvedBy != "user" {
@@ -1010,12 +1010,12 @@ func TestResolveConflict_AlreadyResolved(t *testing.T) {
 	ctx := context.Background()
 
 	// First resolve succeeds.
-	if err := mgr.ResolveConflict(ctx, id, "keep_both"); err != nil {
+	if err := mgr.ResolveConflict(ctx, id, ResolutionKeepBoth); err != nil {
 		t.Fatalf("first ResolveConflict: %v", err)
 	}
 
 	// Second resolve fails (already resolved).
-	err := mgr.ResolveConflict(ctx, id, "keep_local")
+	err := mgr.ResolveConflict(ctx, id, ResolutionKeepLocal)
 	if err == nil {
 		t.Fatal("expected error for already-resolved conflict, got nil")
 	}

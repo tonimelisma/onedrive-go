@@ -819,7 +819,7 @@ func TestResolveConflict_KeepBoth(t *testing.T) {
 	}
 
 	// Resolve as keep_both.
-	if resolveErr := eng.ResolveConflict(ctx, conflicts[0].ID, "keep_both"); resolveErr != nil {
+	if resolveErr := eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepBoth); resolveErr != nil {
 		t.Fatalf("ResolveConflict: %v", resolveErr)
 	}
 
@@ -846,7 +846,7 @@ func TestResolveConflict_NotFound(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	ctx := context.Background()
 
-	err := eng.ResolveConflict(ctx, "nonexistent-id", "keep_both")
+	err := eng.ResolveConflict(ctx, "nonexistent-id", ResolutionKeepBoth)
 	if err == nil {
 		t.Fatal("expected error for nonexistent conflict, got nil")
 	}

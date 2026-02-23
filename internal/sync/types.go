@@ -27,6 +27,13 @@ const (
 	strRoot   = "root"
 )
 
+// Resolution strategy constants for conflict resolution.
+const (
+	ResolutionKeepLocal  = "keep_local"
+	ResolutionKeepRemote = "keep_remote"
+	ResolutionKeepBoth   = "keep_both"
+)
+
 // ChangeSource identifies the origin of a change event.
 type ChangeSource int
 
