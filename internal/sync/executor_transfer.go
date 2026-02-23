@@ -106,6 +106,8 @@ func (e *Executor) downloadToPartial(
 	}
 
 	if err := f.Close(); err != nil {
+		os.Remove(partialPath)
+
 		return "", 0, fmt.Errorf("closing partial file %s: %w", partialPath, err)
 	}
 
