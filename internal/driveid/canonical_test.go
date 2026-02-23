@@ -244,3 +244,69 @@ func TestCanonicalID_IsZero(t *testing.T) {
 		t.Error("non-zero CanonicalID should not be zero")
 	}
 }
+
+func TestCanonicalID_MarshalText(t *testing.T) {
+	cid := MustCanonicalID("personal:user@example.com")
+
+	data, err := cid.MarshalText()
+	if err != nil {
+		t.Fatalf("MarshalText() error: %v", err)
+	}
+
+	if string(data) != "personal:user@example.com" {
+		t.Errorf("MarshalText() = %q, want %q", string(data), "personal:user@example.com")
+	}
+}
+
+func TestCanonicalID_MarshalText_Zero(t *testing.T) {
+	var cid CanonicalID
+
+	data, err := cid.MarshalText()
+	if err != nil {
+		t.Fatalf("MarshalText() error: %v", err)
+	}
+
+	if string(data) != "" {
+		t.Errorf("zero CanonicalID.MarshalText() = %q, want empty", string(data))
+	}
+}
+
+func TestCanonicalID_UnmarshalText(t *testing.T) {
+	var cid CanonicalID
+
+	err := cid.UnmarshalText([]byte("business:alice@contoso.com"))
+	if err != nil {
+		t.Fatalf("UnmarshalText() error: %v", err)
+	}
+
+	if cid.String() != "business:alice@contoso.com" {
+		t.Errorf("UnmarshalText result = %q, want %q", cid.String(), "business:alice@contoso.com")
+	}
+}
+
+func TestCanonicalID_UnmarshalText_Invalid(t *testing.T) {
+	var cid CanonicalID
+
+	err := cid.UnmarshalText([]byte("invalid"))
+	if err == nil {
+		t.Error("UnmarshalText(\"invalid\") should return error")
+	}
+}
+
+func TestCanonicalID_TextRoundTrip(t *testing.T) {
+	original := MustCanonicalID("sharepoint:alice@contoso.com:marketing:Docs")
+
+	data, err := original.MarshalText()
+	if err != nil {
+		t.Fatalf("MarshalText() error: %v", err)
+	}
+
+	var restored CanonicalID
+	if err := restored.UnmarshalText(data); err != nil {
+		t.Fatalf("UnmarshalText() error: %v", err)
+	}
+
+	if original.String() != restored.String() {
+		t.Errorf("round-trip failed: original=%q, restored=%q", original.String(), restored.String())
+	}
+}

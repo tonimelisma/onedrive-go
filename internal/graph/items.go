@@ -131,6 +131,11 @@ func (d *driveItemResponse) toItem(logger *slog.Logger) Item {
 
 	// Normalize DriveID via driveid.New — lowercase + zero-pad for short IDs.
 	// Graph API returns inconsistent casing across endpoints (see docs/tier1-research/).
+	//
+	// Both DriveID and ParentDriveID come from parentReference.driveId — the
+	// Graph API only provides one drive identifier per item. For same-drive
+	// items these are always equal. Cross-drive resolution (e.g. shared items)
+	// happens at a higher layer (sync's resolveParentDriveID).
 	if d.ParentReference != nil {
 		item.DriveID = driveid.New(d.ParentReference.DriveID)
 		item.ParentID = d.ParentReference.ID

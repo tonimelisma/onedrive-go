@@ -90,7 +90,7 @@ func TestFullDelta_NewFiles(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), testDriveID, testLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 	events, token, err := obs.FullDelta(context.Background(), "")
 	if err != nil {
 		t.Fatalf("FullDelta: %v", err)
@@ -156,7 +156,7 @@ func TestFullDelta_ModifiedFile(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, baseline, testDriveID, testLogger(t))
+	obs := NewRemoteObserver(fetcher, baseline, driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "prev-token")
 	if err != nil {
 		t.Fatalf("FullDelta: %v", err)
@@ -209,7 +209,7 @@ func TestFullDelta_DeletedFile(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, baseline, testDriveID, testLogger(t))
+	obs := NewRemoteObserver(fetcher, baseline, driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "token")
 	if err != nil {
 		t.Fatalf("FullDelta: %v", err)
@@ -264,7 +264,7 @@ func TestFullDelta_MovedFile(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, baseline, testDriveID, testLogger(t))
+	obs := NewRemoteObserver(fetcher, baseline, driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "token")
 	if err != nil {
 		t.Fatalf("FullDelta: %v", err)
@@ -321,7 +321,7 @@ func TestFullDelta_MultiPage(t *testing.T) {
 		},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), testDriveID, testLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 	events, token, err := obs.FullDelta(context.Background(), "")
 	if err != nil {
 		t.Fatalf("FullDelta: %v", err)
@@ -352,7 +352,7 @@ func TestFullDelta_EmptyDelta(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), testDriveID, testLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 	events, token, err := obs.FullDelta(context.Background(), "prev-token")
 	if err != nil {
 		t.Fatalf("FullDelta: %v", err)
@@ -376,7 +376,7 @@ func TestFullDelta_DeltaExpired(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), testDriveID, testLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 	_, _, err := obs.FullDelta(context.Background(), "expired-token")
 
 	if !errors.Is(err, ErrDeltaExpired) {
@@ -394,7 +394,7 @@ func TestFullDelta_FetchError(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), testDriveID, testLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 	_, _, err := obs.FullDelta(context.Background(), "token")
 
 	if err == nil {
@@ -420,7 +420,7 @@ func TestFullDelta_SkipsRootItem(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), testDriveID, testLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "")
 	if err != nil {
 		t.Fatalf("FullDelta: %v", err)
@@ -457,7 +457,7 @@ func TestFullDelta_PathMaterialization_InFlight(t *testing.T) {
 		},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), testDriveID, testLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "")
 	if err != nil {
 		t.Fatalf("FullDelta: %v", err)
@@ -501,7 +501,7 @@ func TestFullDelta_PathMaterialization_Baseline(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, baseline, testDriveID, testLogger(t))
+	obs := NewRemoteObserver(fetcher, baseline, driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "token")
 	if err != nil {
 		t.Fatalf("FullDelta: %v", err)
@@ -539,7 +539,7 @@ func TestFullDelta_PathMaterialization_Mixed(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, baseline, testDriveID, testLogger(t))
+	obs := NewRemoteObserver(fetcher, baseline, driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "token")
 	if err != nil {
 		t.Fatalf("FullDelta: %v", err)
@@ -583,7 +583,7 @@ func TestFullDelta_DeletedItem_MissingName(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, baseline, testDriveID, testLogger(t))
+	obs := NewRemoteObserver(fetcher, baseline, driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "token")
 	if err != nil {
 		t.Fatalf("FullDelta: %v", err)
@@ -620,7 +620,7 @@ func TestFullDelta_DriveIDNormalization(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), rawDriveID, testLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(rawDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "")
 	if err != nil {
 		t.Fatalf("FullDelta: %v", err)
@@ -665,7 +665,7 @@ func TestFullDelta_NFCNormalization(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), testDriveID, testLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "")
 	if err != nil {
 		t.Fatalf("FullDelta: %v", err)
@@ -710,7 +710,7 @@ func TestFullDelta_HashSelection(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), testDriveID, testLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "")
 	if err != nil {
 		t.Fatalf("FullDelta: %v", err)
@@ -750,7 +750,7 @@ func TestFullDelta_TimestampConversion(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), testDriveID, testLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "")
 	if err != nil {
 		t.Fatalf("FullDelta: %v", err)
@@ -776,7 +776,7 @@ func TestFullDelta_FolderEvent(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), testDriveID, testLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "")
 	if err != nil {
 		t.Fatalf("FullDelta: %v", err)
@@ -807,7 +807,7 @@ func TestFullDelta_ContextCanceled(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), testDriveID, testLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 	_, _, err := obs.FullDelta(ctx, "token")
 
 	if err == nil {
@@ -836,7 +836,7 @@ func TestDriveIDNormalization(t *testing.T) {
 		{"uppercase", "ABC123DEF4567890", "abc123def4567890"},
 		{"15-char uppercase", "ABC123DEF456789", "0abc123def456789"},
 		{"already normalized", "0000000000000001", "0000000000000001"},
-		{"empty", "", "0000000000000000"},
+		{"empty", "", ""},
 	}
 
 	for _, tt := range tests {
@@ -931,7 +931,7 @@ func TestFullDelta_OrphanedItem(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), testDriveID, testLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "")
 	if err != nil {
 		t.Fatalf("FullDelta: %v", err)
@@ -967,7 +967,7 @@ func TestFullDelta_DeletedItem_NotInBaseline(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), testDriveID, testLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "token")
 	if err != nil {
 		t.Fatalf("FullDelta: %v", err)
@@ -1021,7 +1021,7 @@ func TestFullDelta_RenameInPlace(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, baseline, testDriveID, testLogger(t))
+	obs := NewRemoteObserver(fetcher, baseline, driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "token")
 	if err != nil {
 		t.Fatalf("FullDelta: %v", err)

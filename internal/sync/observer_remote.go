@@ -48,12 +48,12 @@ type RemoteObserver struct {
 
 // NewRemoteObserver creates a RemoteObserver for the given drive. The
 // baseline must be a loaded Baseline (from BaselineManager.Load); it is
-// read-only during observation. The driveID is normalized on construction.
-func NewRemoteObserver(fetcher DeltaFetcher, baseline *Baseline, driveID string, logger *slog.Logger) *RemoteObserver {
+// read-only during observation. The caller must pass a normalized driveid.ID.
+func NewRemoteObserver(fetcher DeltaFetcher, baseline *Baseline, driveID driveid.ID, logger *slog.Logger) *RemoteObserver {
 	return &RemoteObserver{
 		fetcher:  fetcher,
 		baseline: baseline,
-		driveID:  driveid.New(driveID),
+		driveID:  driveID,
 		logger:   logger,
 	}
 }

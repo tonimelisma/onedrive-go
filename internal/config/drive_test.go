@@ -245,32 +245,32 @@ func TestExpandTilde(t *testing.T) {
 // --- DriveTokenPath ---
 
 func TestDriveTokenPath_Personal(t *testing.T) {
-	path := DriveTokenPath("personal:toni@outlook.com")
+	path := DriveTokenPath(driveid.MustCanonicalID("personal:toni@outlook.com"))
 	assert.NotEmpty(t, path)
 	assert.Contains(t, path, "token_personal_toni@outlook.com.json")
 }
 
 func TestDriveTokenPath_Business(t *testing.T) {
-	path := DriveTokenPath("business:alice@contoso.com")
+	path := DriveTokenPath(driveid.MustCanonicalID("business:alice@contoso.com"))
 	assert.NotEmpty(t, path)
 	assert.Contains(t, path, "token_business_alice@contoso.com.json")
 }
 
 func TestDriveTokenPath_SharePoint_SharesBusinessToken(t *testing.T) {
-	path := DriveTokenPath("sharepoint:alice@contoso.com:marketing:Docs")
+	path := DriveTokenPath(driveid.MustCanonicalID("sharepoint:alice@contoso.com:marketing:Docs"))
 	assert.NotEmpty(t, path)
 	// SharePoint drives share the business token.
 	assert.Contains(t, path, "token_business_alice@contoso.com.json")
 	assert.NotContains(t, path, "sharepoint")
 }
 
-func TestDriveTokenPath_InvalidID(t *testing.T) {
-	path := DriveTokenPath("invalid-no-colon")
+func TestDriveTokenPath_ZeroID(t *testing.T) {
+	path := DriveTokenPath(driveid.CanonicalID{})
 	assert.Empty(t, path)
 }
 
 func TestDriveTokenPath_PlatformSpecific(t *testing.T) {
-	path := DriveTokenPath("personal:toni@outlook.com")
+	path := DriveTokenPath(driveid.MustCanonicalID("personal:toni@outlook.com"))
 
 	switch runtime.GOOS {
 	case platformDarwin:
@@ -283,38 +283,32 @@ func TestDriveTokenPath_PlatformSpecific(t *testing.T) {
 // --- DriveStatePath ---
 
 func TestDriveStatePath_Personal(t *testing.T) {
-	path := DriveStatePath("personal:toni@outlook.com")
+	path := DriveStatePath(driveid.MustCanonicalID("personal:toni@outlook.com"))
 	assert.NotEmpty(t, path)
 	assert.Contains(t, path, "state_personal_toni@outlook.com.db")
 }
 
 func TestDriveStatePath_Business(t *testing.T) {
-	path := DriveStatePath("business:alice@contoso.com")
+	path := DriveStatePath(driveid.MustCanonicalID("business:alice@contoso.com"))
 	assert.NotEmpty(t, path)
 	assert.Contains(t, path, "state_business_alice@contoso.com.db")
 }
 
 func TestDriveStatePath_SharePoint(t *testing.T) {
-	path := DriveStatePath("sharepoint:alice@contoso.com:marketing:Docs")
+	path := DriveStatePath(driveid.MustCanonicalID("sharepoint:alice@contoso.com:marketing:Docs"))
 	assert.NotEmpty(t, path)
 	// All colons replaced with underscores.
 	assert.Contains(t, path, "state_sharepoint_alice@contoso.com_marketing_Docs.db")
 }
 
-func TestDriveStatePath_EmptyID(t *testing.T) {
-	// Empty canonical ID should return empty, matching DriveTokenPath behavior.
-	path := DriveStatePath("")
-	assert.Empty(t, path)
-}
-
-func TestDriveStatePath_NoColon(t *testing.T) {
-	// Canonical IDs must contain ":" — bare strings are rejected.
-	path := DriveStatePath("nocolon")
+func TestDriveStatePath_ZeroID(t *testing.T) {
+	// Zero canonical ID should return empty, matching DriveTokenPath behavior.
+	path := DriveStatePath(driveid.CanonicalID{})
 	assert.Empty(t, path)
 }
 
 func TestDriveStatePath_PlatformSpecific(t *testing.T) {
-	path := DriveStatePath("personal:toni@outlook.com")
+	path := DriveStatePath(driveid.MustCanonicalID("personal:toni@outlook.com"))
 
 	switch runtime.GOOS {
 	case platformDarwin:

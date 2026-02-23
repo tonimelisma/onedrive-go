@@ -98,8 +98,8 @@ func driveTypeFromCanonicalString(id string) string {
 // and returns whichever one has a token file on disk. Falls back to
 // "personal:" if neither exists, since personal is the most common case.
 // Logs the probe results so --debug reveals which token path was selected.
-func findTokenFallback(account string, logger *slog.Logger) string {
-	personalID := "personal:" + account
+func findTokenFallback(account string, logger *slog.Logger) driveid.CanonicalID {
+	personalID := driveid.MustCanonicalID("personal:" + account)
 
 	personalPath := config.DriveTokenPath(personalID)
 	if personalPath != "" {
@@ -110,7 +110,7 @@ func findTokenFallback(account string, logger *slog.Logger) string {
 		}
 	}
 
-	businessID := "business:" + account
+	businessID := driveid.MustCanonicalID("business:" + account)
 
 	businessPath := config.DriveTokenPath(businessID)
 	if businessPath != "" {
@@ -210,37 +210,38 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Step 6: Check if this is a re-login (drive already exists in config).
-	email := emailFromCanonicalString(canonicalID)
+	canonicalStr := canonicalID.String()
+	email := canonicalID.Email()
 	cfgPath := resolveLoginConfigPath()
 
-	isRelogin, err := driveExistsInConfig(cfgPath, canonicalID)
+	isRelogin, err := driveExistsInConfig(cfgPath, canonicalStr)
 	if err != nil {
 		logger.Debug("config check failed, treating as new login", "error", err)
 	}
 
 	if isRelogin {
-		logger.Info("re-login detected, token refreshed", "canonical_id", canonicalID)
+		logger.Info("re-login detected, token refreshed", "canonical_id", canonicalStr)
 		fmt.Printf("Token refreshed for %s.\n", email)
 
 		return nil
 	}
 
 	// Step 7: Create or update config with the new drive section.
-	driveType := driveTypeFromCanonicalString(canonicalID)
+	driveType := canonicalID.DriveType()
 
-	return writeLoginConfig(cfgPath, canonicalID, driveType, email, orgName, logger)
+	return writeLoginConfig(cfgPath, canonicalStr, driveType, email, orgName, logger)
 }
 
 // discoverAccount calls /me, /me/drive, and /me/organization to build the
 // canonical drive ID and extract the organization name. Returns the canonical
 // ID and org display name.
-func discoverAccount(ctx context.Context, ts graph.TokenSource, logger *slog.Logger) (string, string, error) {
+func discoverAccount(ctx context.Context, ts graph.TokenSource, logger *slog.Logger) (driveid.CanonicalID, string, error) {
 	client := graph.NewClient(graph.DefaultBaseURL, defaultHTTPClient(), ts, logger)
 
 	// GET /me -> email, user GUID
 	user, err := client.Me(ctx)
 	if err != nil {
-		return "", "", fmt.Errorf("fetching user profile: %w", err)
+		return driveid.CanonicalID{}, "", fmt.Errorf("fetching user profile: %w", err)
 	}
 
 	logger.Info("discovered user", "email", user.Email, "display_name", user.DisplayName)
@@ -248,11 +249,11 @@ func discoverAccount(ctx context.Context, ts graph.TokenSource, logger *slog.Log
 	// GET /me/drives -> driveType (personal, business)
 	drives, err := client.Drives(ctx)
 	if err != nil {
-		return "", "", fmt.Errorf("listing drives: %w", err)
+		return driveid.CanonicalID{}, "", fmt.Errorf("listing drives: %w", err)
 	}
 
 	if len(drives) == 0 {
-		return "", "", fmt.Errorf("no drives found for this account")
+		return driveid.CanonicalID{}, "", fmt.Errorf("no drives found for this account")
 	}
 
 	driveType := drives[0].DriveType
@@ -281,13 +282,12 @@ func discoverAccount(ctx context.Context, ts graph.TokenSource, logger *slog.Log
 
 	cid, err := driveid.Construct(driveType, user.Email)
 	if err != nil {
-		return "", "", fmt.Errorf("constructing canonical ID: %w", err)
+		return driveid.CanonicalID{}, "", fmt.Errorf("constructing canonical ID: %w", err)
 	}
 
-	canonicalID := cid.String()
-	logger.Info("constructed canonical ID", "canonical_id", canonicalID)
+	logger.Info("constructed canonical ID", "canonical_id", cid.String())
 
-	return canonicalID, orgName, nil
+	return cid, orgName, nil
 }
 
 // moveToken renames the pending token file to its final canonical path.
@@ -479,7 +479,7 @@ func executeLogout(cfg *config.Config, cfgPath, account string, purge bool, logg
 	// Determine canonical ID for the token path. We need any drive ID with this
 	// account email to derive the token path (all drives for one account share a token).
 	tokenCanonicalID := canonicalIDForToken(account, affected)
-	if tokenCanonicalID == "" {
+	if tokenCanonicalID.IsZero() {
 		// No drives in config — probe the filesystem for an existing token.
 		tokenCanonicalID = findTokenFallback(account, logger)
 	}
@@ -526,7 +526,7 @@ func drivesForAccount(cfg *config.Config, account string) []string {
 // canonicalIDForToken picks a canonical ID to use for token path derivation.
 // SharePoint drives share the business token, so we prefer a non-sharepoint ID.
 // Uses driveid.TokenCanonicalID() to handle the SharePoint→business mapping.
-func canonicalIDForToken(account string, driveIDs []string) string {
+func canonicalIDForToken(account string, driveIDs []string) driveid.CanonicalID {
 	for _, id := range driveIDs {
 		cid, err := driveid.NewCanonicalID(id)
 		if err != nil {
@@ -534,7 +534,7 @@ func canonicalIDForToken(account string, driveIDs []string) string {
 		}
 
 		if !cid.IsSharePoint() {
-			return id
+			return cid
 		}
 	}
 
@@ -542,13 +542,13 @@ func canonicalIDForToken(account string, driveIDs []string) string {
 	if len(driveIDs) > 0 {
 		cid, err := driveid.Construct("business", account)
 		if err != nil {
-			return ""
+			return driveid.CanonicalID{}
 		}
 
-		return cid.String()
+		return cid
 	}
 
-	return ""
+	return driveid.CanonicalID{}
 }
 
 // printAffectedDrives lists drives that can no longer sync after logout.
@@ -567,7 +567,7 @@ func printAffectedDrives(cfg *config.Config, affected []string) {
 
 // purgeSingleDrive removes the state database and config section for one drive.
 // Token deletion is handled separately since tokens may be shared (SharePoint).
-func purgeSingleDrive(cfgPath, canonicalID string, logger *slog.Logger) error {
+func purgeSingleDrive(cfgPath string, canonicalID driveid.CanonicalID, logger *slog.Logger) error {
 	statePath := config.DriveStatePath(canonicalID)
 	if statePath != "" {
 		if err := os.Remove(statePath); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -577,7 +577,7 @@ func purgeSingleDrive(cfgPath, canonicalID string, logger *slog.Logger) error {
 		}
 	}
 
-	if err := config.DeleteDriveSection(cfgPath, canonicalID); err != nil {
+	if err := config.DeleteDriveSection(cfgPath, canonicalID.String()); err != nil {
 		return fmt.Errorf("deleting drive section: %w", err)
 	}
 
@@ -590,7 +590,14 @@ func purgeAccountDrives(cfgPath string, affected []string, logger *slog.Logger) 
 	fmt.Println()
 
 	for _, id := range affected {
-		if err := purgeSingleDrive(cfgPath, id, logger); err != nil {
+		cid, err := driveid.NewCanonicalID(id)
+		if err != nil {
+			logger.Warn("skipping purge for invalid drive ID", "drive", id, "error", err)
+
+			continue
+		}
+
+		if err := purgeSingleDrive(cfgPath, cid, logger); err != nil {
 			logger.Warn("failed to purge drive", "drive", id, "error", err)
 		} else {
 			fmt.Printf("Purged config and state for %s.\n", id)
@@ -624,17 +631,22 @@ func runWhoami(_ *cobra.Command, _ []string) error {
 
 	// Determine which drive to query. If --drive is set, use it directly.
 	// Otherwise try to auto-select from config.
-	canonicalID, err := resolveWhoamiDrive()
+	canonicalIDStr, err := resolveWhoamiDrive()
 	if err != nil {
 		return err
 	}
 
-	tokenPath := config.DriveTokenPath(canonicalID)
-	if tokenPath == "" {
-		return fmt.Errorf("cannot determine token path for drive %q", canonicalID)
+	cid, cidErr := driveid.NewCanonicalID(canonicalIDStr)
+	if cidErr != nil {
+		return fmt.Errorf("invalid drive ID %q: %w", canonicalIDStr, cidErr)
 	}
 
-	logger.Debug("whoami", "drive", canonicalID, "token_path", tokenPath)
+	tokenPath := config.DriveTokenPath(cid)
+	if tokenPath == "" {
+		return fmt.Errorf("cannot determine token path for drive %q", canonicalIDStr)
+	}
+
+	logger.Debug("whoami", "drive", canonicalIDStr, "token_path", tokenPath)
 
 	ts, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
 	if err != nil {
