@@ -104,6 +104,9 @@ Darwin uses `syscall.Statfs` directly; Linux needs `golang.org/x/sys/unix.Statfs
 ### APFS prevents creating filenames with invalid UTF-8
 macOS APFS normalizes filenames and rejects invalid byte sequences. To test UTF-8 validation guards in scanner's `validateEntry`, use mock `os.DirEntry`/`os.FileInfo` types rather than real filesystem operations.
 
+### Plan NFC/NFD normalization upfront
+Dual-path NFC should be specified from the start for any code touching filesystem paths AND a database.
+
 ---
 
 ## 3. Linter Patterns
@@ -152,6 +155,12 @@ For error paths that don't depend on the HTTP transport, construct an `*http.Res
 
 ### gofumpt stricter than gofmt
 Enforces stricter struct field alignment. Multi-byte characters in comments can cause differences. Always run `gofumpt -w` before committing.
+
+### gochecknoinits forbids init() functions
+Use constructor functions instead: `newRootCmd()`. Testable, no package-level mutable state.
+
+### Cobra transitive dependency: mousetrap
+Must be added to depguard allow list alongside cobra and pflag. Always check transitive deps.
 
 ---
 
@@ -228,6 +237,12 @@ Blank lines and comments between the last key-value line and the next section he
 
 ### Cross-package impact of config rewrite
 Key API changes: `Config.Profiles` -> `Config.Drives`, `Resolve()` -> `ResolveDrive()`, `ProfileTokenPath()` -> `DriveTokenPath()`, `ProfileDBPath()` -> `DriveStatePath()`. `config show` command removed entirely.
+
+### cmd.CommandPath() is safer than cmd.Name() for skip lists
+`cmd.Name()` returns just the leaf name (e.g., `"add"`), risking collisions. `cmd.CommandPath()` returns full path (e.g., `"onedrive-go drive add"`).
+
+### CLI output conventions
+Status/error messages to stderr. Structured data (JSON, tables) to stdout. Allows piping.
 
 ---
 
@@ -306,42 +321,3 @@ A Go `switch` with 10 case arms easily exceeds gocyclo's complexity threshold of
 ### mtime+size fast path is the industry standard for change detection
 No production sync tool (rsync, rclone, Syncthing, abraunegg/onedrive, Unison, Git) hashes every file on every scan. They all use mtime+size as a fast path and only hash when metadata differs. For a 50K-file sync root, always-hashing reads ~5 GB per cycle vs sub-second stat-only checks. The racily-clean guard (force hash when mtime is within 1 second of scan start) handles the edge case where a file was modified in the same clock tick as the last sync — Git's well-documented "racily clean" problem.
 
----
-
-## 8. Agent Coordination
-
-### Scoped verification prevents cross-agent interference
-Four agents ran simultaneously without conflicts (true leaf packages). Scope tests to own package.
-
-### Test symbol collisions between same-package agents
-Multiple agents in the same package can redeclare test helpers. Fix: (1) list existing test symbols in prompts, (2) assign unique prefixes, (3) reuse shared helpers.
-
-### Plan merge order to minimize rebase churn
-The last-to-merge PR bears all conflict burden. Merge agents defining shared infrastructure first.
-
-### Export shared utilities in Wave 0
-Agents working in parallel may need the same utility. Export shared utilities before launching agents.
-
-### Plan NFC/NFD normalization upfront
-Dual-path NFC should be specified from the start for any code touching filesystem paths AND a database.
-
-### Parallel agent file conflicts
-`git checkout` destroys untracked files. Files must be staged immediately after creation. Use worktrees for isolation.
-
-### Agents must commit LEARNINGS.md updates
-Agents modifying LEARNINGS.md must include it in their commits. Explicit checklist item in quality gates.
-
-### Agent subagent_type must be `general-purpose` for code changes
-`subagent_type: "Bash"` only has the Bash tool. Always use `general-purpose` for agents that need to read, edit, and write files.
-
-### cmd.CommandPath() is safer than cmd.Name() for skip lists
-`cmd.Name()` returns just the leaf name (e.g., `"add"`), risking collisions. `cmd.CommandPath()` returns full path (e.g., `"onedrive-go drive add"`).
-
-### CLI output conventions
-Status/error messages to stderr. Structured data (JSON, tables) to stdout. Allows piping.
-
-### gochecknoinits forbids init() functions
-Use constructor functions instead: `newRootCmd()`. Testable, no package-level mutable state.
-
-### Cobra transitive dependency: mousetrap
-Must be added to depguard allow list alongside cobra and pflag. Always check transitive deps.

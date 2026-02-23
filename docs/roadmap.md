@@ -8,7 +8,7 @@
 
 ## Principles
 
-- Each increment is completable by a single agent in one session
+- Each increment is completable in one focused session
 - Each increment has clear acceptance criteria (build + test + lint pass)
 - Each increment is a focused, well-scoped unit of work
 - Design docs in `docs/design/` are the spec — use plan mode before each increment for file-level planning
@@ -123,22 +123,7 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 - `ErrDeltaExpired` sentinel for HTTP 410 (delta token expired)
 - 23 test cases with mock DeltaFetcher, 86.4% coverage. PR #80.
 - **Inputs**: [event-driven-rationale.md](design/event-driven-rationale.md) Parts 5.1, 10 (Phase 2)
-- **DOD**:
-  - [x] Build: `go build ./...` zero errors
-  - [x] Unit tests: `go test -race ./...` all pass
-  - [x] E2E tests: all pass
-  - [x] Lint: `golangci-lint run` zero issues
-  - [x] Format: `gofumpt` + `goimports` applied
-  - [x] Coverage: 86.4% (up from 82.5%)
-  - [x] Logging review: FullDelta start/complete, root skip (Debug), orphaned items (Warn)
-  - [x] Comment review: all structs, functions, constants, edge cases documented
-  - [x] Docs: CLAUDE.md, roadmap.md, BACKLOG.md updated
-  - [x] Git clean: working tree clean after commit
-  - [x] Git cleanup: branch deleted, remote pruned, no stashes/worktrees/open PRs
-  - [x] CI verification: ci.yml (build-and-test) + integration.yml both green post-merge
-  - [x] CI infrastructure: N/A (no CI changes)
-  - [x] Retrospective: graph.Item pointer lesson, gofumpt-before-lint lesson captured in LEARNINGS.md §7
-  - [x] Re-envisioning: architecture confirmed sound, no roadmap changes warranted
+- **DOD**: All gates passed. 86.4% coverage (up from 82.5%).
 
 ### 4v2.3: Local Observer — DONE
 
@@ -157,22 +142,7 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 - No DB access — compares against in-memory `*Baseline` snapshot
 - 34 tests with real temp dirs (`t.TempDir()`), 88.0% sync coverage (up from 86.4%). PR #82, #83.
 - **Inputs**: [event-driven-rationale.md](design/event-driven-rationale.md) Parts 5.2, 10 (Phase 2)
-- **DOD**:
-  - [x] Build: `go build ./...` zero errors
-  - [x] Unit tests: `go test -race ./...` all pass
-  - [x] E2E tests: all pass
-  - [x] Lint: `golangci-lint run` zero issues
-  - [x] Format: `gofumpt` + `goimports` applied
-  - [x] Coverage: 88.0% (up from 86.4%)
-  - [x] Logging review: FullScan start/complete (Info), nosync guard (Warn), walk errors (Warn), stat failures (Warn), hash failures (Warn), skipped entries (Debug), deletion detection summary (Debug)
-  - [x] Comment review: all structs, functions, constants, edge cases documented; misleading "order matters" comment fixed
-  - [x] Docs: CLAUDE.md, roadmap.md, BACKLOG.md, LEARNINGS.md updated
-  - [x] Git clean: working tree clean after commit
-  - [x] Git cleanup: branch deleted, remote pruned, no stashes/worktrees/open PRs
-  - [x] CI verification: ci.yml (build-and-test) + integration.yml both green post-merge
-  - [x] CI infrastructure: N/A (no CI changes)
-  - [x] Retrospective: DOD process discipline lesson captured in LEARNINGS.md §7
-  - [x] Re-envisioning: architecture confirmed sound, Wave 2 progressing well
+- **DOD**: All gates passed. 88.0% coverage (up from 86.4%).
 
 ### 4v2.4: Change Buffer — DONE
 
@@ -193,7 +163,7 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 
 - `Planner.Plan(changes []PathChanges, baseline *Baseline, mode SyncMode, config *SafetyConfig) (*ActionPlan, error)`
 - 5-step pipeline: `buildPathViews` → `detectMoves` (remote + local hash correlation) → `classifyPathView` (EF1-EF14 file, ED1-ED8 folder) → `orderPlan` (folder creates top-down, deletes bottom-up) → `bigDeleteTriggered` (S5 safety)
-- `SafetyConfig` + `DefaultSafetyConfig()` + `ErrBigDeleteTriggered` defined in planner.go (avoids types.go contention with parallel agents)
+- `SafetyConfig` + `DefaultSafetyConfig()` + `ErrBigDeleteTriggered` defined in planner.go (avoids types.go contention during parallel development)
 - File classification split into sub-functions (`classifyFileWithBaseline`/`classifyFileNoBaseline`) to stay under funlen/gocyclo limits
 - Move detection: remote moves from `ChangeMove` events, local moves via hash correlation with unique-match constraint (ambiguous cases fall through to delete+create)
 - SyncMode filtering: download-only suppresses uploads, upload-only suppresses downloads
@@ -378,6 +348,6 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 | 6 | 5 | Packaging + release | FUTURE |
 | **Total** | **47** | | |
 
-Each increment: independently testable, completable by a single agent. Phase 4 v2 count (9, including Increment 0) replaces the original Phase 4 v1 count (11) — the superseded increments are historical record only.
+Each increment: independently testable, completable in one focused session. Phase 4 v2 count (9, including Increment 0) replaces the original Phase 4 v1 count (11).
 
 **Key architectural difference**: Phase 4 v1 used the database as the coordination mechanism (scanner and delta write eagerly, reconciler reads). Phase 4 v2 uses typed events as the coordination mechanism (observers produce events, planner operates as a pure function, executor produces outcomes, baseline manager commits atomically). Same decision matrix, same safety invariants, fundamentally different data flow.
