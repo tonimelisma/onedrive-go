@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -235,7 +236,7 @@ func (o *RemoteObserver) materializePath(
 
 		// Baseline shortcut: prepend this item's full stored path.
 		if entry, ok := o.baseline.ByID[parentKey]; ok && entry.Path != "" {
-			reverseStrings(segments)
+			slices.Reverse(segments)
 
 			return entry.Path + "/" + strings.Join(segments, "/")
 		}
@@ -250,7 +251,7 @@ func (o *RemoteObserver) materializePath(
 		break
 	}
 
-	reverseStrings(segments)
+	slices.Reverse(segments)
 
 	return strings.Join(segments, "/")
 }
@@ -327,11 +328,4 @@ func normalizeDriveID(id string) string {
 // each name segment individually, not to joined paths.
 func nfcNormalize(s string) string {
 	return norm.NFC.String(s)
-}
-
-// reverseStrings reverses a slice of strings in place.
-func reverseStrings(s []string) {
-	for i, j := 0, len(s)-1; i < j; i, j = i+1, j-1 {
-		s[i], s[j] = s[j], s[i]
-	}
 }
