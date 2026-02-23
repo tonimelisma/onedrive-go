@@ -34,6 +34,7 @@ type engineMockClient struct {
 	simpleUploadFn        func(ctx context.Context, driveID driveid.ID, parentID, name string, r io.Reader, size int64) (*graph.Item, error)
 	createUploadSessionFn func(ctx context.Context, driveID driveid.ID, parentID, name string, size int64, mtime time.Time) (*graph.UploadSession, error)
 	uploadChunkFn         func(ctx context.Context, session *graph.UploadSession, chunk io.Reader, offset, length, total int64) (*graph.Item, error)
+	cancelUploadSessionFn func(ctx context.Context, session *graph.UploadSession) error
 }
 
 func (m *engineMockClient) Delta(ctx context.Context, driveID driveid.ID, token string) (*graph.DeltaPage, error) {
@@ -122,6 +123,14 @@ func (m *engineMockClient) UploadChunk(ctx context.Context, session *graph.Uploa
 	}
 
 	return nil, fmt.Errorf("UploadChunk not mocked")
+}
+
+func (m *engineMockClient) CancelUploadSession(ctx context.Context, session *graph.UploadSession) error {
+	if m.cancelUploadSessionFn != nil {
+		return m.cancelUploadSessionFn(ctx, session)
+	}
+
+	return nil
 }
 
 // ---------------------------------------------------------------------------
