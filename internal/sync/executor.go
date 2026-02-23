@@ -20,6 +20,10 @@ import (
 // Worker pool size for parallel download/upload phases.
 const workerPoolSize = 8
 
+// graphRootID is the Graph API parent reference for top-level items.
+// Distinct from strRoot in types.go which serializes the ItemTypeRoot enum.
+const graphRootID = "root"
+
 // Retry parameters for executor-level retries (separate from graph client retries).
 const (
 	executorMaxRetries = 3
@@ -378,7 +382,7 @@ func (e *Executor) resolveParentID(relPath string) (string, error) {
 
 	// Top-level item: parent is root.
 	if parentDir == "." || parentDir == "" {
-		return "root", nil
+		return graphRootID, nil
 	}
 
 	// Normalize to forward slashes for map lookups.
