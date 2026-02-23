@@ -4,11 +4,11 @@
 
 **onedrive-go** — a fast, safe, and well-tested OneDrive CLI and sync client in Go. Unix-style file operations (`ls`, `get`, `put`) plus robust bidirectional sync with conflict tracking. Targets Linux and macOS. MIT licensed.
 
-Currently: Working CLI OneDrive client with discovery-based auth, account management, file ops, config integration. "Pragmatic Flat" architecture (4 active packages — `internal/sync/` deleted in Phase 4v2 Increment 0). Event-driven sync engine designed; implementation starts with 4v2.1. See [docs/design/event-driven-rationale.md](docs/design/event-driven-rationale.md).
+Currently: Working CLI OneDrive client with discovery-based auth, account management, file ops, config integration. "Pragmatic Flat" architecture (5 active packages). Event-driven sync engine foundation in place (4v2.1: types, baseline schema, BaselineManager). See [docs/design/event-driven-rationale.md](docs/design/event-driven-rationale.md).
 
 ## Current Phase
 
-**Phases 1, 2, 3, 3.5 complete. Phase 4v2 Increment 0 (clean slate) complete. Next: 4v2.1-4v2.8.** Old batch-pipeline sync engine deleted (~16,655 lines). `sync` command returns "not yet implemented" stub. `tombstone_retention_days` removed from config. All development now happens on `clean-slate` branch (`main` is read-only safety net). Login is discovery-based: device code auth -> API discovery -> auto-create config. Users can `login`, `logout`, `whoami`, `status`, `drive add`, `drive remove`, `ls`, `get`, `put`, `rm`, `mkdir`, `stat`, `sync`. CLI loads config via `PersistentPreRunE` with four-layer override: defaults -> file -> env -> CLI flags. Auth and account management commands skip config loading. See [docs/roadmap.md](docs/roadmap.md).
+**Phases 1, 2, 3, 3.5 complete. Phase 4v2 Increments 0-1 complete. Next: 4v2.2-4v2.8.** Old batch-pipeline sync engine deleted. `sync` command returns "not yet implemented" stub. `internal/sync/` rebuilt with foundation types, SQLite baseline schema (goose migrations), and BaselineManager. All development happens on `clean-slate` branch (`main` is read-only safety net). See [docs/roadmap.md](docs/roadmap.md).
 
 ## Architecture Overview
 
@@ -51,8 +51,10 @@ Currently: Working CLI OneDrive client with discovery-based auth, account manage
 - **Root package** — Cobra CLI: login (discovery-based, browser+device code), logout, whoami, status, drive add/remove, ls, get, put, rm, mkdir, stat, sync (root.go, auth.go, files.go, sync.go, format.go, status.go, drive.go). Global flags: `--account`, `--drive`, `--config`, `--json`, `--verbose`, `--debug`, `--quiet`
 - **`e2e/`** — E2E test suite (`//go:build e2e`): builds binary, exercises full round-trip against live OneDrive
 
-### Next (Phase 4 v2 — Event-Driven Sync Engine)
-- **`internal/sync/`** — Deleted in Increment 0. Will be rebuilt from scratch with event-driven components: Remote Observer (delta -> ChangeEvent[]), Local Observer (FS -> ChangeEvent[]), Change Buffer (debounce, dedup, batch), Planner (pure function: events + baseline -> ActionPlan, EF1-EF14 file matrix, ED1-ED8 folder matrix), Executor (actions -> Outcomes), Baseline Manager (sole DB writer, atomic commit). See [docs/design/architecture.md](docs/design/architecture.md)
+- **`internal/sync/`** — Event-driven sync engine (4v2.1 complete). Types (ChangeEvent, BaselineEntry, PathView, Action, ActionPlan, Outcome), consumer-defined interfaces (DeltaFetcher, ItemClient, TransferClient satisfied by `*graph.Client`), SQLite baseline schema (7 tables via goose migrations), BaselineManager (sole DB writer: Load, Commit, GetDeltaToken). Dependencies: `modernc.org/sqlite`, `goose/v3`. 82.5% coverage.
+
+### Next (Phase 4 v2.2-4v2.8 — Event-Driven Sync Engine)
+- Remote Observer (delta -> ChangeEvent[]), Local Observer (FS -> ChangeEvent[]), Change Buffer (debounce, dedup, batch), Planner (pure function: events + baseline -> ActionPlan, EF1-EF14 file matrix, ED1-ED8 folder matrix), Executor (actions -> Outcomes), Engine wiring, CLI integration. See [docs/design/architecture.md](docs/design/architecture.md)
 
 ## Documentation Index
 

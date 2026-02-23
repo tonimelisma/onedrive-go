@@ -98,18 +98,15 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 - Added Azure OIDC federated credential for `clean-slate` branch
 - **Acceptance**: Build passes, all non-sync tests pass, `sync` command returns clear "not yet implemented" message
 
-### 4v2.1: Types + Baseline Schema + BaselineManager
+### 4v2.1: Types + Baseline Schema + BaselineManager — DONE
 
 **Foundation types and persistence layer.**
 
-- Replace stub `types.go` from Increment 0 with full type definitions: `ChangeEvent` (side, kind, item ID, path, hash, size, mtime, parent, move info), `BaselineEntry` (item ID, path, local hash, remote hash, size, mtime, etag), `PathView` (path + remote state + local state + baseline), `RemoteState`, `LocalState`, `Outcome` (action, path, success/failure, new hashes)
-- Baseline table DDL: `baseline` table (fresh schema, no migration from old `items` table)
-- Schema migration infrastructure for baseline table creation
-- `BaselineManager.Load()`: read baseline into memory cache (~20 MB for 100K items steady-state)
-- `BaselineManager.Commit(outcomes, newDeltaToken)`: atomic transaction — apply outcomes to baseline + save delta token in single SQLite transaction (ensures token and baseline are always consistent)
-- Comprehensive tests for type conversions and baseline CRUD
-- **Acceptance**: `go test ./internal/sync/...` passes, baseline round-trip with real SQLite
-- **Inputs**: [event-driven-rationale.md](design/event-driven-rationale.md) Parts 3, 4, 10 (Phase 1)
+- All type definitions: enums (ChangeSource, ChangeType, ItemType, SyncMode, ActionType, FolderCreateSide), core structs (ChangeEvent, BaselineEntry, Baseline, PathView, RemoteState, LocalState, ConflictRecord, Action, ActionPlan, Outcome), consumer-defined interfaces (DeltaFetcher, ItemClient, TransferClient)
+- SQLite baseline schema via goose migrations: 7 tables (baseline, delta_tokens, conflicts, stale_files, upload_sessions, change_journal, config_snapshots) + 4 indexes
+- BaselineManager: sole DB writer with WAL mode via DSN pragmas, atomic Commit (outcomes + delta token), Load (ByPath + ByID maps), GetDeltaToken, injectable nowFunc for deterministic tests
+- 25 tests, 82.5% coverage. Dependencies: modernc.org/sqlite, goose/v3, google/uuid
+- **Acceptance**: All tests pass, baseline round-trip with real SQLite. PR #78.
 
 ### 4v2.2: Remote Observer
 
