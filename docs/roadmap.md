@@ -172,24 +172,24 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 - **Acceptance**: Build passes, all tests pass (race detector), lint clean, 91.2% sync coverage, 100% decision matrix coverage
 - **Inputs**: [event-driven-rationale.md](design/event-driven-rationale.md) Parts 6, 7, 10 (Phase 3), [sync-algorithm.md](design/sync-algorithm.md) section 5
 
-### 4v2.6: Executor
+### 4v2.6: Executor — DONE
 
 **Execute actions, produce outcomes — no DB writes.**
 
-- Executor returns `[]Outcome` for each completed action
-- Each action execution returns an `Outcome` (action type, path, success/failure, resulting hashes, error if any)
-- Transfer pipeline produces outcomes via callback: download/upload workers call `func(Outcome)` on completion
-- Worker pools with errgroup, bandwidth limiting
+- `Executor` struct with `Execute(ctx, plan, baseline) -> ([]Outcome, error)` — nine-phase execution
+- Nine phases in order: folder creates → moves → downloads → uploads → local deletes → remote deletes → conflicts → synced updates → cleanups
+- Parallel worker pool (`errgroup`, 8 workers) for downloads and uploads
 - Download: `.partial` + QuickXorHash verify + atomic rename + mtime restore (S3)
-- Upload: SimpleUpload (<4 MiB) or chunked session with hash verification
-- Local delete: S4 hash-before-delete guard using `action.View.Baseline.LocalHash`
-- Remote delete: 404 treated as success
-- Conflict resolution: keep-both with timestamped conflict copies
-- Retry logic inside executor: exponential backoff before producing final outcome (fixes B-048)
-- Error classification: fatal vs retryable vs skip
-- Executor operates on `PathView` context — no database queries
-- Tests with mock graph client, real filesystem for downloads, all error paths
-- **Acceptance**: All DOD gates (CLAUDE.md §Quality Gates). Additionally: mock graph client tests, real filesystem download tests, all error paths covered.
+- Upload: SimpleUpload (<4 MiB) or chunked session (10 MiB chunks) with hash verification
+- Local delete: S4 hash-before-delete guard using `action.View.Baseline.LocalHash`, conflict copy on mismatch
+- Remote delete: 404 treated as success, retry with backoff on transient errors
+- Conflict resolution: keep_both with timestamped conflict copies, restore on download failure
+- Error classification: fatal (401, 507, context.Canceled) / retryable (429, 5xx, 408, 412, 509) / skip (everything else)
+- Executor-level retry: exponential backoff (1s base, 2x, max 3 retries, 25% jitter)
+- B-068: fills zero DriveID from per-drive context for new local items
+- `resolveParentID`: createdFolders → baseline → "root" chain
+- 35+ tests with mock graph client, real filesystem, all action types. PR #90.
+- **Acceptance**: All DOD gates passed. 77.2% total coverage (up from 76.3%), sync package at 88.8%.
 - **Inputs**: [event-driven-rationale.md](design/event-driven-rationale.md) Parts 5.5, 10 (Phase 4)
 
 ### 4v2.7: Engine Wiring + RunOnce
@@ -242,7 +242,7 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 
 **Wave 3**: 4v2.4 (change buffer) + 4v2.5 (planner) — DONE. Implemented in parallel (zero file conflicts). Buffer groups events by path; Planner converts events + baseline into ActionPlan.
 
-**Wave 4**: 4v2.6 (executor) — depends on planner output (action plan). NEXT.
+**Wave 4**: 4v2.6 (executor) — DONE. Depends on planner output (action plan).
 
 **Wave 5**: 4v2.7 (engine wiring) + 4v2.8 (CLI + sync E2E) — sequential, wires everything together.
 
