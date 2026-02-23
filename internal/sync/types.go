@@ -10,6 +10,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -214,11 +215,11 @@ func (s FolderCreateSide) String() string {
 type ChangeEvent struct {
 	Source    ChangeSource
 	Type      ChangeType
-	Path      string // NFC-normalized, relative to sync root
-	OldPath   string // for moves only
-	ItemID    string // server-assigned (remote only; empty for local)
-	ParentID  string // server parent ID (remote only)
-	DriveID   string // normalized (lowercase, zero-padded to 16 chars)
+	Path      string     // NFC-normalized, relative to sync root
+	OldPath   string     // for moves only
+	ItemID    string     // server-assigned (remote only; empty for local)
+	ParentID  string     // server parent ID (remote only)
+	DriveID   driveid.ID // normalized (lowercase, zero-padded to 16 chars)
 	ItemType  ItemType
 	Name      string // URL-decoded, NFC-normalized
 	Size      int64
@@ -233,7 +234,7 @@ type ChangeEvent struct {
 // This is the ONLY durable per-item state in the system.
 type BaselineEntry struct {
 	Path       string
-	DriveID    string
+	DriveID    driveid.ID
 	ItemID     string
 	ParentID   string
 	ItemType   ItemType
@@ -249,7 +250,7 @@ type BaselineEntry struct {
 // dual-key access by path (primary) and by item ID (for move detection).
 type Baseline struct {
 	ByPath map[string]*BaselineEntry
-	ByID   map[string]*BaselineEntry // keyed by "driveID:itemID"
+	ByID   map[driveid.ItemKey]*BaselineEntry // keyed by (driveID, itemID) pair
 }
 
 // PathChanges groups all change events for a single path, separating
@@ -264,7 +265,7 @@ type PathChanges struct {
 // the Graph API delta response.
 type RemoteState struct {
 	ItemID    string
-	DriveID   string // normalized (lowercase, zero-padded to 16 chars)
+	DriveID   driveid.ID // normalized (lowercase, zero-padded to 16 chars)
 	ParentID  string
 	Name      string
 	ItemType  ItemType
@@ -299,7 +300,7 @@ type PathView struct {
 // ConflictRecord holds metadata about a detected conflict.
 type ConflictRecord struct {
 	ID           string
-	DriveID      string
+	DriveID      driveid.ID
 	ItemID       string
 	Path         string
 	ConflictType string // "edit_edit", "edit_delete", "create_create"
@@ -313,7 +314,7 @@ type ConflictRecord struct {
 // Action is an instruction for the executor, produced by the planner.
 type Action struct {
 	Type         ActionType
-	DriveID      string
+	DriveID      driveid.ID
 	ItemID       string
 	Path         string
 	NewPath      string           // for moves
@@ -345,7 +346,7 @@ type Outcome struct {
 	Error        error
 	Path         string
 	OldPath      string // for moves
-	DriveID      string
+	DriveID      driveid.ID
 	ItemID       string // from API response after upload
 	ParentID     string
 	ItemType     ItemType
@@ -363,22 +364,24 @@ type Outcome struct {
 
 // DeltaFetcher fetches a page of delta changes from the Graph API.
 type DeltaFetcher interface {
-	Delta(ctx context.Context, driveID, token string) (*graph.DeltaPage, error)
+	Delta(ctx context.Context, driveID driveid.ID, token string) (*graph.DeltaPage, error)
 }
 
 // ItemClient provides CRUD operations on drive items.
 type ItemClient interface {
-	GetItem(ctx context.Context, driveID, itemID string) (*graph.Item, error)
-	ListChildren(ctx context.Context, driveID, parentID string) ([]graph.Item, error)
-	CreateFolder(ctx context.Context, driveID, parentID, name string) (*graph.Item, error)
-	MoveItem(ctx context.Context, driveID, itemID, newParentID, newName string) (*graph.Item, error)
-	DeleteItem(ctx context.Context, driveID, itemID string) error
+	GetItem(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
+	ListChildren(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
+	CreateFolder(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error)
+	MoveItem(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string) (*graph.Item, error)
+	DeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error
 }
 
 // TransferClient provides file transfer operations.
 type TransferClient interface {
-	Download(ctx context.Context, driveID, itemID string, w io.Writer) (int64, error)
-	SimpleUpload(ctx context.Context, driveID, parentID, name string, r io.Reader, size int64) (*graph.Item, error)
-	CreateUploadSession(ctx context.Context, driveID, parentID, name string, size int64, mtime time.Time) (*graph.UploadSession, error)
+	Download(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error)
+	SimpleUpload(ctx context.Context, driveID driveid.ID, parentID, name string, r io.Reader, size int64) (*graph.Item, error)
+	CreateUploadSession(
+		ctx context.Context, driveID driveid.ID, parentID, name string, size int64, mtime time.Time,
+	) (*graph.UploadSession, error)
 	UploadChunk(ctx context.Context, session *graph.UploadSession, chunk io.Reader, offset, length, total int64) (*graph.Item, error)
 }

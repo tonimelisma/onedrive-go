@@ -1,6 +1,10 @@
 package graph
 
-import "time"
+import (
+	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
+)
 
 // ChildCountUnknown indicates the child count was not present in the API response.
 const ChildCountUnknown = -1
@@ -10,9 +14,9 @@ const ChildCountUnknown = -1
 type Item struct {
 	ID            string
 	Name          string
-	DriveID       string // normalized: lowercase (Graph API casing is inconsistent)
+	DriveID       driveid.ID // normalized: lowercase, zero-padded (Graph API casing is inconsistent)
 	ParentID      string
-	ParentDriveID string // drive containing parent (for cross-drive references)
+	ParentDriveID driveid.ID // drive containing parent (for cross-drive references)
 	Size          int64
 	ETag          string
 	CTag          string
@@ -46,7 +50,7 @@ type User struct {
 
 // Drive represents a OneDrive drive.
 type Drive struct {
-	ID         string
+	ID         driveid.ID
 	Name       string
 	DriveType  string // "personal", "business", "documentLibrary"
 	OwnerName  string

@@ -142,9 +142,9 @@ func loadConfig(cmd *cobra.Command) error {
 	}
 
 	logger.Debug("config resolved",
-		slog.String("canonical_id", resolved.CanonicalID),
+		slog.String("canonical_id", resolved.CanonicalID.String()),
 		slog.String("sync_dir", resolved.SyncDir),
-		slog.String("drive_id", resolved.DriveID),
+		slog.String("drive_id", resolved.DriveID.String()),
 	)
 
 	resolvedCfg = resolved

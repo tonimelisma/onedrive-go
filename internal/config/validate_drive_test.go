@@ -97,40 +97,8 @@ func TestValidateDrives_SharePointDrive_Valid(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// --- validateCanonicalID ---
-
-func TestValidateCanonicalID_Valid(t *testing.T) {
-	tests := []string{
-		"personal:toni@outlook.com",
-		"business:alice@contoso.com",
-		"sharepoint:alice@contoso.com:marketing:Documents",
-	}
-
-	for _, id := range tests {
-		t.Run(id, func(t *testing.T) {
-			err := validateCanonicalID(id)
-			assert.NoError(t, err)
-		})
-	}
-}
-
-func TestValidateCanonicalID_MissingColon(t *testing.T) {
-	err := validateCanonicalID("personal-toni-outlook.com")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "must contain ':'")
-}
-
-func TestValidateCanonicalID_UnknownType(t *testing.T) {
-	err := validateCanonicalID("enterprise:toni@outlook.com")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown type")
-}
-
-func TestValidateCanonicalID_EmptyEmail(t *testing.T) {
-	err := validateCanonicalID("personal:")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "email part cannot be empty")
-}
+// validateCanonicalID tests have moved to internal/driveid/canonical_test.go
+// since the function was absorbed by driveid.NewCanonicalID().
 
 func TestValidateDrives_InvalidCanonicalID(t *testing.T) {
 	cfg := DefaultConfig()
@@ -138,5 +106,5 @@ func TestValidateDrives_InvalidCanonicalID(t *testing.T) {
 
 	err := Validate(cfg)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "must contain ':'")
+	assert.Contains(t, err.Error(), "type:email")
 }

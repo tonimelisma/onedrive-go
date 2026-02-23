@@ -8,7 +8,10 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 func TestMe_Success(t *testing.T) {
@@ -123,14 +126,14 @@ func TestDrives_Success(t *testing.T) {
 
 	require.Len(t, drives, 2)
 
-	assert.Equal(t, "drive-1", drives[0].ID)
+	assert.Equal(t, driveid.New("drive-1"), drives[0].ID)
 	assert.Equal(t, "OneDrive", drives[0].Name)
 	assert.Equal(t, "personal", drives[0].DriveType)
 	assert.Equal(t, "Test User", drives[0].OwnerName)
 	assert.Equal(t, int64(1073741824), drives[0].QuotaUsed)
 	assert.Equal(t, int64(5368709120), drives[0].QuotaTotal)
 
-	assert.Equal(t, "drive-2", drives[1].ID)
+	assert.Equal(t, driveid.New("drive-2"), drives[1].ID)
 	assert.Equal(t, "SharePoint Docs", drives[1].Name)
 	assert.Equal(t, "documentLibrary", drives[1].DriveType)
 	assert.Equal(t, "SharePoint", drives[1].OwnerName)
@@ -156,7 +159,7 @@ func TestDrives_Empty(t *testing.T) {
 func TestDrive_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
-		assert.Equal(t, "/drives/drive-abc", r.URL.Path)
+		assert.Equal(t, "/drives/0000000drive-abc", r.URL.Path)
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -178,10 +181,10 @@ func TestDrive_Success(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	drive, err := client.Drive(context.Background(), "drive-abc")
+	drive, err := client.Drive(context.Background(), driveid.New("drive-abc"))
 	require.NoError(t, err)
 
-	assert.Equal(t, "drive-abc", drive.ID)
+	assert.Equal(t, driveid.New("drive-abc"), drive.ID)
 	assert.Equal(t, "My Drive", drive.Name)
 	assert.Equal(t, "business", drive.DriveType)
 	assert.Equal(t, "Business User", drive.OwnerName)
@@ -198,7 +201,7 @@ func TestDrive_NotFound(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	_, err := client.Drive(context.Background(), "nonexistent-drive")
+	_, err := client.Drive(context.Background(), driveid.New("nonexistent-drive"))
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrNotFound)
 }
@@ -217,10 +220,10 @@ func TestDrive_NilOwnerAndQuota(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	drive, err := client.Drive(context.Background(), "drive-minimal")
+	drive, err := client.Drive(context.Background(), driveid.New("drive-minimal"))
 	require.NoError(t, err)
 
-	assert.Equal(t, "drive-minimal", drive.ID)
+	assert.Equal(t, driveid.New("drive-minimal"), drive.ID)
 	assert.Equal(t, "Minimal Drive", drive.Name)
 	assert.Equal(t, "personal", drive.DriveType)
 	assert.Empty(t, drive.OwnerName)

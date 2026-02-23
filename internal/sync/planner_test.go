@@ -2,6 +2,8 @@ package sync
 
 import (
 	"testing"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // ---------------------------------------------------------------------------
@@ -42,7 +44,7 @@ func TestClassifyFile_EF1_Unchanged(t *testing.T) {
 					ItemType: ItemTypeFile,
 					Hash:     "hashA",
 					ItemID:   "item1",
-					DriveID:  testDriveID,
+					DriveID:  driveid.New(testDriveID),
 				},
 			},
 			LocalEvents: []ChangeEvent{
@@ -59,7 +61,7 @@ func TestClassifyFile_EF1_Unchanged(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path:       "planner-test.txt",
-		DriveID:    testDriveID,
+		DriveID:    driveid.New(testDriveID),
 		ItemID:     "item1",
 		ItemType:   ItemTypeFile,
 		LocalHash:  "hashA",
@@ -91,7 +93,7 @@ func TestClassifyFile_EF2_RemoteModified(t *testing.T) {
 					ItemType: ItemTypeFile,
 					Hash:     "hashB",
 					ItemID:   "item1",
-					DriveID:  testDriveID,
+					DriveID:  driveid.New(testDriveID),
 				},
 			},
 		},
@@ -99,7 +101,7 @@ func TestClassifyFile_EF2_RemoteModified(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path:       "planner-test.txt",
-		DriveID:    testDriveID,
+		DriveID:    driveid.New(testDriveID),
 		ItemID:     "item1",
 		ItemType:   ItemTypeFile,
 		LocalHash:  "hashA",
@@ -141,7 +143,7 @@ func TestClassifyFile_EF3_LocalModified(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path:       "planner-test.txt",
-		DriveID:    testDriveID,
+		DriveID:    driveid.New(testDriveID),
 		ItemID:     "item1",
 		ItemType:   ItemTypeFile,
 		LocalHash:  "hashA",
@@ -177,7 +179,7 @@ func TestClassifyFile_EF4_ConvergentEdit(t *testing.T) {
 					ItemType: ItemTypeFile,
 					Hash:     "hashC",
 					ItemID:   "item1",
-					DriveID:  testDriveID,
+					DriveID:  driveid.New(testDriveID),
 				},
 			},
 			LocalEvents: []ChangeEvent{
@@ -194,7 +196,7 @@ func TestClassifyFile_EF4_ConvergentEdit(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path:       "planner-test.txt",
-		DriveID:    testDriveID,
+		DriveID:    driveid.New(testDriveID),
 		ItemID:     "item1",
 		ItemType:   ItemTypeFile,
 		LocalHash:  "hashA",
@@ -226,7 +228,7 @@ func TestClassifyFile_EF5_EditEditConflict(t *testing.T) {
 					ItemType: ItemTypeFile,
 					Hash:     "hashB",
 					ItemID:   "item1",
-					DriveID:  testDriveID,
+					DriveID:  driveid.New(testDriveID),
 				},
 			},
 			LocalEvents: []ChangeEvent{
@@ -243,7 +245,7 @@ func TestClassifyFile_EF5_EditEditConflict(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path:       "planner-test.txt",
-		DriveID:    testDriveID,
+		DriveID:    driveid.New(testDriveID),
 		ItemID:     "item1",
 		ItemType:   ItemTypeFile,
 		LocalHash:  "hashA",
@@ -284,7 +286,7 @@ func TestClassifyFile_EF6_LocalDeleteRemoteUnchanged(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path:       "planner-test.txt",
-		DriveID:    testDriveID,
+		DriveID:    driveid.New(testDriveID),
 		ItemID:     "item1",
 		ItemType:   ItemTypeFile,
 		LocalHash:  "hashA",
@@ -316,7 +318,7 @@ func TestClassifyFile_EF7_LocalDeleteRemoteModified(t *testing.T) {
 					ItemType: ItemTypeFile,
 					Hash:     "hashB",
 					ItemID:   "item1",
-					DriveID:  testDriveID,
+					DriveID:  driveid.New(testDriveID),
 				},
 			},
 			LocalEvents: []ChangeEvent{
@@ -332,7 +334,7 @@ func TestClassifyFile_EF7_LocalDeleteRemoteModified(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path:       "planner-test.txt",
-		DriveID:    testDriveID,
+		DriveID:    driveid.New(testDriveID),
 		ItemID:     "item1",
 		ItemType:   ItemTypeFile,
 		LocalHash:  "hashA",
@@ -364,7 +366,7 @@ func TestClassifyFile_EF8_RemoteDeleted(t *testing.T) {
 					Path:      "planner-test.txt",
 					ItemType:  ItemTypeFile,
 					ItemID:    "item1",
-					DriveID:   testDriveID,
+					DriveID:   driveid.New(testDriveID),
 					IsDeleted: true,
 				},
 			},
@@ -373,7 +375,7 @@ func TestClassifyFile_EF8_RemoteDeleted(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path:       "planner-test.txt",
-		DriveID:    testDriveID,
+		DriveID:    driveid.New(testDriveID),
 		ItemID:     "item1",
 		ItemType:   ItemTypeFile,
 		LocalHash:  "hashA",
@@ -404,7 +406,7 @@ func TestClassifyFile_EF9_EditDeleteConflict(t *testing.T) {
 					Path:      "planner-test.txt",
 					ItemType:  ItemTypeFile,
 					ItemID:    "item1",
-					DriveID:   testDriveID,
+					DriveID:   driveid.New(testDriveID),
 					IsDeleted: true,
 				},
 			},
@@ -422,7 +424,7 @@ func TestClassifyFile_EF9_EditDeleteConflict(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path:       "planner-test.txt",
-		DriveID:    testDriveID,
+		DriveID:    driveid.New(testDriveID),
 		ItemID:     "item1",
 		ItemType:   ItemTypeFile,
 		LocalHash:  "hashA",
@@ -457,7 +459,7 @@ func TestClassifyFile_EF10_BothDeleted(t *testing.T) {
 					Path:      "planner-test.txt",
 					ItemType:  ItemTypeFile,
 					ItemID:    "item1",
-					DriveID:   testDriveID,
+					DriveID:   driveid.New(testDriveID),
 					IsDeleted: true,
 				},
 			},
@@ -474,7 +476,7 @@ func TestClassifyFile_EF10_BothDeleted(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path:       "planner-test.txt",
-		DriveID:    testDriveID,
+		DriveID:    driveid.New(testDriveID),
 		ItemID:     "item1",
 		ItemType:   ItemTypeFile,
 		LocalHash:  "hashA",
@@ -506,7 +508,7 @@ func TestClassifyFile_EF11_ConvergentCreate(t *testing.T) {
 					ItemType: ItemTypeFile,
 					Hash:     "hashX",
 					ItemID:   "item2",
-					DriveID:  testDriveID,
+					DriveID:  driveid.New(testDriveID),
 				},
 			},
 			LocalEvents: []ChangeEvent{
@@ -546,7 +548,7 @@ func TestClassifyFile_EF12_CreateCreateConflict(t *testing.T) {
 					ItemType: ItemTypeFile,
 					Hash:     "hashX",
 					ItemID:   "item2",
-					DriveID:  testDriveID,
+					DriveID:  driveid.New(testDriveID),
 				},
 			},
 			LocalEvents: []ChangeEvent{
@@ -619,7 +621,7 @@ func TestClassifyFile_EF14_NewRemote(t *testing.T) {
 					ItemType: ItemTypeFile,
 					Hash:     "hashR",
 					ItemID:   "item3",
-					DriveID:  testDriveID,
+					DriveID:  driveid.New(testDriveID),
 				},
 			},
 		},
@@ -668,7 +670,7 @@ func TestClassifyFolder_ED1_InSync(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path:     "docs/planner-dir",
-		DriveID:  testDriveID,
+		DriveID:  driveid.New(testDriveID),
 		ItemID:   "folder1",
 		ItemType: ItemTypeFolder,
 	})
@@ -782,7 +784,7 @@ func TestClassifyFolder_ED4_RecreateLocal(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path:     "docs/planner-dir",
-		DriveID:  testDriveID,
+		DriveID:  driveid.New(testDriveID),
 		ItemID:   "folder1",
 		ItemType: ItemTypeFolder,
 	})
@@ -863,7 +865,7 @@ func TestClassifyFolder_ED6_RemoteDeletedFolder(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path:     "docs/planner-dir",
-		DriveID:  testDriveID,
+		DriveID:  driveid.New(testDriveID),
 		ItemID:   "folder1",
 		ItemType: ItemTypeFolder,
 	})
@@ -908,7 +910,7 @@ func TestClassifyFolder_ED7_BothGone(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path:     "docs/planner-dir",
-		DriveID:  testDriveID,
+		DriveID:  driveid.New(testDriveID),
 		ItemID:   "folder1",
 		ItemType: ItemTypeFolder,
 	})
@@ -944,7 +946,7 @@ func TestClassifyFolder_ED8_Cleanup(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path:     "docs/planner-dir",
-		DriveID:  testDriveID,
+		DriveID:  driveid.New(testDriveID),
 		ItemID:   "folder1",
 		ItemType: ItemTypeFolder,
 	})
@@ -979,7 +981,7 @@ func TestDetectMoves_RemoteMove(t *testing.T) {
 					ItemType: ItemTypeFile,
 					Hash:     "hashM",
 					ItemID:   "item5",
-					DriveID:  testDriveID,
+					DriveID:  driveid.New(testDriveID),
 				},
 			},
 		},
@@ -987,7 +989,7 @@ func TestDetectMoves_RemoteMove(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path:       "docs/planner-original.txt",
-		DriveID:    testDriveID,
+		DriveID:    driveid.New(testDriveID),
 		ItemID:     "item5",
 		ItemType:   ItemTypeFile,
 		LocalHash:  "hashM",
@@ -1049,7 +1051,7 @@ func TestDetectMoves_LocalMoveByHash(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path:       "planner-old-loc.txt",
-		DriveID:    testDriveID,
+		DriveID:    driveid.New(testDriveID),
 		ItemID:     "item6",
 		ItemType:   ItemTypeFile,
 		LocalHash:  "hashMove",
@@ -1123,7 +1125,7 @@ func TestDetectMoves_LocalMoveAmbiguous(t *testing.T) {
 	baseline := baselineWith(
 		&BaselineEntry{
 			Path:       "planner-dup-a.txt",
-			DriveID:    testDriveID,
+			DriveID:    driveid.New(testDriveID),
 			ItemID:     "itemA",
 			ItemType:   ItemTypeFile,
 			LocalHash:  "hashDup",
@@ -1131,7 +1133,7 @@ func TestDetectMoves_LocalMoveAmbiguous(t *testing.T) {
 		},
 		&BaselineEntry{
 			Path:       "planner-dup-b.txt",
-			DriveID:    testDriveID,
+			DriveID:    driveid.New(testDriveID),
 			ItemID:     "itemB",
 			ItemType:   ItemTypeFile,
 			LocalHash:  "hashDup",
@@ -1187,7 +1189,7 @@ func TestDetectMoves_MovedPathsExcluded(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path:       "planner-src-excl.txt",
-		DriveID:    testDriveID,
+		DriveID:    driveid.New(testDriveID),
 		ItemID:     "item7",
 		ItemType:   ItemTypeFile,
 		LocalHash:  "hashExcl",
@@ -1236,7 +1238,7 @@ func TestBigDelete_BelowMinItems(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path:       "planner-safe-del.txt",
-		DriveID:    testDriveID,
+		DriveID:    driveid.New(testDriveID),
 		ItemID:     "item8",
 		ItemType:   ItemTypeFile,
 		LocalHash:  "hashS",
@@ -1267,7 +1269,7 @@ func TestBigDelete_ExceedsMaxCount(t *testing.T) {
 		itemID := "bdi-" + string(rune('a'+i))
 		entries = append(entries, &BaselineEntry{
 			Path:       p,
-			DriveID:    testDriveID,
+			DriveID:    driveid.New(testDriveID),
 			ItemID:     itemID,
 			ItemType:   ItemTypeFile,
 			LocalHash:  "hashBD",
@@ -1320,7 +1322,7 @@ func TestBigDelete_ExceedsPercent(t *testing.T) {
 		itemID := "pct-" + string(rune('a'+i))
 		entries = append(entries, &BaselineEntry{
 			Path:       p,
-			DriveID:    testDriveID,
+			DriveID:    driveid.New(testDriveID),
 			ItemID:     itemID,
 			ItemType:   ItemTypeFile,
 			LocalHash:  "hashPCT",
@@ -1372,7 +1374,7 @@ func TestBigDelete_NoTrigger(t *testing.T) {
 		itemID := "safe-" + string(rune('a'+i))
 		entries = append(entries, &BaselineEntry{
 			Path:       p,
-			DriveID:    testDriveID,
+			DriveID:    driveid.New(testDriveID),
 			ItemID:     itemID,
 			ItemType:   ItemTypeFile,
 			LocalHash:  "hashSafe",
@@ -1453,7 +1455,7 @@ func TestPlan_DownloadOnly_SuppressesUploads(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path:       "planner-dl-only.txt",
-		DriveID:    testDriveID,
+		DriveID:    driveid.New(testDriveID),
 		ItemID:     "item9",
 		ItemType:   ItemTypeFile,
 		LocalHash:  "hashOld",
@@ -1492,7 +1494,7 @@ func TestPlan_UploadOnly_SuppressesDownloads(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path:       "planner-ul-only.txt",
-		DriveID:    testDriveID,
+		DriveID:    driveid.New(testDriveID),
 		ItemID:     "item10",
 		ItemType:   ItemTypeFile,
 		LocalHash:  "hashOld",
@@ -1654,15 +1656,15 @@ func TestOrderPlan_DeletesBottomUp(t *testing.T) {
 
 	baseline := baselineWith(
 		&BaselineEntry{
-			Path: "x/planner-del-shallow.txt", DriveID: testDriveID, ItemID: "d1",
+			Path: "x/planner-del-shallow.txt", DriveID: driveid.New(testDriveID), ItemID: "d1",
 			ItemType: ItemTypeFile, LocalHash: "hashD", RemoteHash: "hashD",
 		},
 		&BaselineEntry{
-			Path: "x/y/z/planner-del-deep.txt", DriveID: testDriveID, ItemID: "d2",
+			Path: "x/y/z/planner-del-deep.txt", DriveID: driveid.New(testDriveID), ItemID: "d2",
 			ItemType: ItemTypeFile, LocalHash: "hashD", RemoteHash: "hashD",
 		},
 		&BaselineEntry{
-			Path: "x/y/planner-del-mid.txt", DriveID: testDriveID, ItemID: "d3",
+			Path: "x/y/planner-del-mid.txt", DriveID: driveid.New(testDriveID), ItemID: "d3",
 			ItemType: ItemTypeFile, LocalHash: "hashD", RemoteHash: "hashD",
 		},
 	)
@@ -1793,11 +1795,11 @@ func TestPlan_FullScenario(t *testing.T) {
 
 	baseline := baselineWith(
 		&BaselineEntry{
-			Path: "planner-full/remote-mod.txt", DriveID: testDriveID, ItemID: "full1",
+			Path: "planner-full/remote-mod.txt", DriveID: driveid.New(testDriveID), ItemID: "full1",
 			ItemType: ItemTypeFile, LocalHash: "hashOld1", RemoteHash: "hashOld1",
 		},
 		&BaselineEntry{
-			Path: "planner-full/local-mod.txt", DriveID: testDriveID, ItemID: "full2",
+			Path: "planner-full/local-mod.txt", DriveID: driveid.New(testDriveID), ItemID: "full2",
 			ItemType: ItemTypeFile, LocalHash: "hashOld2", RemoteHash: "hashOld2",
 		},
 	)
@@ -1834,20 +1836,20 @@ func TestMakeAction_CrossDriveItem(t *testing.T) {
 		Path: "shared/cross-drive-file.txt",
 		Remote: &RemoteState{
 			ItemID:   "item-from-drive-a",
-			DriveID:  "000000000000000a",
+			DriveID:  driveid.New("000000000000000a"),
 			ItemType: ItemTypeFile,
 		},
 		Baseline: &BaselineEntry{
 			Path:    "shared/cross-drive-file.txt",
-			DriveID: "000000000000000b",
+			DriveID: driveid.New("000000000000000b"),
 			ItemID:  "item-from-drive-a",
 		},
 	}
 
 	action := makeAction(ActionDownload, view)
 
-	if action.DriveID != "000000000000000a" {
-		t.Errorf("expected DriveID from Remote %q, got %q", "000000000000000a", action.DriveID)
+	if !action.DriveID.Equal(driveid.New("000000000000000a")) {
+		t.Errorf("expected DriveID from Remote %q, got %q", driveid.New("000000000000000a"), action.DriveID)
 	}
 
 	if action.ItemID != "item-from-drive-a" {
@@ -1870,8 +1872,8 @@ func TestMakeAction_NewLocalItem(t *testing.T) {
 
 	action := makeAction(ActionUpload, view)
 
-	if action.DriveID != "" {
-		t.Errorf("expected empty DriveID for new local item, got %q", action.DriveID)
+	if !action.DriveID.IsZero() {
+		t.Errorf("expected zero DriveID for new local item, got %q", action.DriveID)
 	}
 
 	if action.ItemID != "" {
@@ -1886,20 +1888,20 @@ func TestMakeAction_BaselineFallbackDriveID(t *testing.T) {
 		Path: "baseline-fallback.txt",
 		Remote: &RemoteState{
 			ItemID:   "item-fallback",
-			DriveID:  "", // no DriveID from remote
 			ItemType: ItemTypeFile,
+			// DriveID zero value — no DriveID from remote
 		},
 		Baseline: &BaselineEntry{
 			Path:    "baseline-fallback.txt",
-			DriveID: testDriveID,
+			DriveID: driveid.New(testDriveID),
 			ItemID:  "item-fallback",
 		},
 	}
 
 	action := makeAction(ActionDownload, view)
 
-	if action.DriveID != testDriveID {
-		t.Errorf("expected DriveID from Baseline %q, got %q", testDriveID, action.DriveID)
+	if !action.DriveID.Equal(driveid.New(testDriveID)) {
+		t.Errorf("expected DriveID from Baseline %q, got %q", driveid.New(testDriveID), action.DriveID)
 	}
 }
 
@@ -2019,7 +2021,7 @@ func TestDetectMoves_RemoteMoveOldPathReused(t *testing.T) {
 					ItemType: ItemTypeFile,
 					Hash:     "hashOriginal",
 					ItemID:   "item-original",
-					DriveID:  testDriveID,
+					DriveID:  driveid.New(testDriveID),
 				},
 			},
 		},
@@ -2032,7 +2034,7 @@ func TestDetectMoves_RemoteMoveOldPathReused(t *testing.T) {
 					Type:      ChangeDelete,
 					Path:      "planner-reused-path.txt",
 					ItemID:    "item-original",
-					DriveID:   testDriveID,
+					DriveID:   driveid.New(testDriveID),
 					ItemType:  ItemTypeFile,
 					IsDeleted: true,
 				},
@@ -2042,7 +2044,7 @@ func TestDetectMoves_RemoteMoveOldPathReused(t *testing.T) {
 					Type:     ChangeCreate,
 					Path:     "planner-reused-path.txt",
 					ItemID:   "item-new-at-old",
-					DriveID:  testDriveID,
+					DriveID:  driveid.New(testDriveID),
 					ItemType: ItemTypeFile,
 					Hash:     "hashNewFile",
 				},
@@ -2052,7 +2054,7 @@ func TestDetectMoves_RemoteMoveOldPathReused(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path:       "planner-reused-path.txt",
-		DriveID:    testDriveID,
+		DriveID:    driveid.New(testDriveID),
 		ItemID:     "item-original",
 		ItemType:   ItemTypeFile,
 		LocalHash:  "hashOriginal",
@@ -2099,7 +2101,7 @@ func TestDetectMoves_RemoteMoveOldPathReusedFolder(t *testing.T) {
 					OldPath:  "planner-reused-folder",
 					ItemType: ItemTypeFolder,
 					ItemID:   "folder-original",
-					DriveID:  testDriveID,
+					DriveID:  driveid.New(testDriveID),
 				},
 			},
 		},
@@ -2111,7 +2113,7 @@ func TestDetectMoves_RemoteMoveOldPathReusedFolder(t *testing.T) {
 					Type:      ChangeDelete,
 					Path:      "planner-reused-folder",
 					ItemID:    "folder-original",
-					DriveID:   testDriveID,
+					DriveID:   driveid.New(testDriveID),
 					ItemType:  ItemTypeFolder,
 					IsDeleted: true,
 				},
@@ -2120,7 +2122,7 @@ func TestDetectMoves_RemoteMoveOldPathReusedFolder(t *testing.T) {
 					Type:     ChangeCreate,
 					Path:     "planner-reused-folder",
 					ItemID:   "folder-new-at-old",
-					DriveID:  testDriveID,
+					DriveID:  driveid.New(testDriveID),
 					ItemType: ItemTypeFolder,
 				},
 			},
@@ -2129,7 +2131,7 @@ func TestDetectMoves_RemoteMoveOldPathReusedFolder(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path:     "planner-reused-folder",
-		DriveID:  testDriveID,
+		DriveID:  driveid.New(testDriveID),
 		ItemID:   "folder-original",
 		ItemType: ItemTypeFolder,
 	})
@@ -2188,11 +2190,11 @@ func TestOrderPlan_DeletesFilesBeforeFoldersAtSameDepth(t *testing.T) {
 
 	baseline := baselineWith(
 		&BaselineEntry{
-			Path: "x/planner-del-folder", DriveID: testDriveID, ItemID: "df1",
+			Path: "x/planner-del-folder", DriveID: driveid.New(testDriveID), ItemID: "df1",
 			ItemType: ItemTypeFolder,
 		},
 		&BaselineEntry{
-			Path: "x/planner-del-file.txt", DriveID: testDriveID, ItemID: "df2",
+			Path: "x/planner-del-file.txt", DriveID: driveid.New(testDriveID), ItemID: "df2",
 			ItemType: ItemTypeFile, LocalHash: "hashDF", RemoteHash: "hashDF",
 		},
 	)

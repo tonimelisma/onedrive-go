@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -70,41 +71,27 @@ func newWhoamiCmd() *cobra.Command {
 	}
 }
 
-// constructCanonicalID builds a canonical drive identifier from the drive type
-// and user email. The format is "type:email" (e.g. "personal:user@example.com").
-func constructCanonicalID(driveType, email string) string {
-	return driveType + ":" + email
-}
-
-// canonicalIDParts is the maximum split limit for parsing canonical IDs.
-// Using SplitN with limit 3 splits "type:email:rest" into at most 3 parts,
-// ensuring the email (parts[1]) is extracted cleanly even for SharePoint IDs
-// like "sharepoint:alice@contoso.com:marketing:Docs".
-const canonicalIDParts = 3
-
-// accountEmailFromCanonicalID extracts the email portion from a canonical ID.
-// For "personal:user@example.com" returns "user@example.com".
-// For "sharepoint:alice@contoso.com:marketing:Docs" returns "alice@contoso.com".
-// Returns the input unchanged if no colon separator is found.
-func accountEmailFromCanonicalID(id string) string {
-	parts := strings.SplitN(id, ":", canonicalIDParts)
-	if len(parts) < 2 {
+// emailFromCanonicalString extracts the email from a raw canonical ID string.
+// Callers pass config map keys (already validated). Falls back to returning
+// the input if parsing fails, matching the old behavior.
+func emailFromCanonicalString(id string) string {
+	cid, err := driveid.NewCanonicalID(id)
+	if err != nil {
 		return id
 	}
 
-	return parts[1]
+	return cid.Email()
 }
 
-// driveTypeFromCanonicalID extracts the type portion from a canonical ID.
-// For "personal:user@example.com" returns "personal".
-// Returns the input unchanged if no colon separator is found.
-func driveTypeFromCanonicalID(id string) string {
-	parts := strings.SplitN(id, ":", canonicalIDParts)
-	if len(parts) < 2 {
+// driveTypeFromCanonicalString extracts the drive type from a raw canonical ID string.
+// Falls back to returning the input if parsing fails.
+func driveTypeFromCanonicalString(id string) string {
+	cid, err := driveid.NewCanonicalID(id)
+	if err != nil {
 		return id
 	}
 
-	return parts[0]
+	return cid.DriveType()
 }
 
 // findTokenFallback tries personal and business canonical ID prefixes
@@ -223,7 +210,7 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Step 6: Check if this is a re-login (drive already exists in config).
-	email := accountEmailFromCanonicalID(canonicalID)
+	email := emailFromCanonicalString(canonicalID)
 	cfgPath := resolveLoginConfigPath()
 
 	isRelogin, err := driveExistsInConfig(cfgPath, canonicalID)
@@ -239,7 +226,7 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Step 7: Create or update config with the new drive section.
-	driveType := driveTypeFromCanonicalID(canonicalID)
+	driveType := driveTypeFromCanonicalString(canonicalID)
 
 	return writeLoginConfig(cfgPath, canonicalID, driveType, email, orgName, logger)
 }
@@ -292,7 +279,12 @@ func discoverAccount(ctx context.Context, ts graph.TokenSource, logger *slog.Log
 		logger.Info("discovered organization", "org_name", orgName)
 	}
 
-	canonicalID := constructCanonicalID(driveType, user.Email)
+	cid, err := driveid.Construct(driveType, user.Email)
+	if err != nil {
+		return "", "", fmt.Errorf("constructing canonical ID: %w", err)
+	}
+
+	canonicalID := cid.String()
 	logger.Info("constructed canonical ID", "canonical_id", canonicalID)
 
 	return canonicalID, orgName, nil
@@ -468,7 +460,7 @@ func uniqueAccounts(cfg *config.Config) []string {
 	var accounts []string
 
 	for id := range cfg.Drives {
-		email := accountEmailFromCanonicalID(id)
+		email := emailFromCanonicalString(id)
 		if !seen[email] {
 			seen[email] = true
 			accounts = append(accounts, email)
@@ -523,7 +515,7 @@ func drivesForAccount(cfg *config.Config, account string) []string {
 	var ids []string
 
 	for id := range cfg.Drives {
-		if accountEmailFromCanonicalID(id) == account {
+		if emailFromCanonicalString(id) == account {
 			ids = append(ids, id)
 		}
 	}
@@ -533,16 +525,27 @@ func drivesForAccount(cfg *config.Config, account string) []string {
 
 // canonicalIDForToken picks a canonical ID to use for token path derivation.
 // SharePoint drives share the business token, so we prefer a non-sharepoint ID.
+// Uses driveid.TokenCanonicalID() to handle the SharePoint→business mapping.
 func canonicalIDForToken(account string, driveIDs []string) string {
 	for _, id := range driveIDs {
-		if !strings.HasPrefix(id, "sharepoint:") {
+		cid, err := driveid.NewCanonicalID(id)
+		if err != nil {
+			continue
+		}
+
+		if !cid.IsSharePoint() {
 			return id
 		}
 	}
 
 	// All drives are SharePoint — derive the business token ID.
 	if len(driveIDs) > 0 {
-		return "business:" + account
+		cid, err := driveid.Construct("business", account)
+		if err != nil {
+			return ""
+		}
+
+		return cid.String()
 	}
 
 	return ""
@@ -564,8 +567,8 @@ func printAffectedDrives(cfg *config.Config, affected []string) {
 
 // purgeSingleDrive removes the state database and config section for one drive.
 // Token deletion is handled separately since tokens may be shared (SharePoint).
-func purgeSingleDrive(cfgPath, driveID string, logger *slog.Logger) error {
-	statePath := config.DriveStatePath(driveID)
+func purgeSingleDrive(cfgPath, canonicalID string, logger *slog.Logger) error {
+	statePath := config.DriveStatePath(canonicalID)
 	if statePath != "" {
 		if err := os.Remove(statePath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			logger.Warn("failed to remove state database", "path", statePath, "error", err)
@@ -574,7 +577,7 @@ func purgeSingleDrive(cfgPath, driveID string, logger *slog.Logger) error {
 		}
 	}
 
-	if err := config.DeleteDriveSection(cfgPath, driveID); err != nil {
+	if err := config.DeleteDriveSection(cfgPath, canonicalID); err != nil {
 		return fmt.Errorf("deleting drive section: %w", err)
 	}
 
@@ -711,7 +714,7 @@ func printWhoamiJSON(user *graph.User, drives []graph.Drive) error {
 
 	for i := range drives {
 		out.Drives = append(out.Drives, whoamiDrive{
-			ID:         drives[i].ID,
+			ID:         drives[i].ID.String(),
 			Name:       drives[i].Name,
 			DriveType:  drives[i].DriveType,
 			QuotaUsed:  drives[i].QuotaUsed,

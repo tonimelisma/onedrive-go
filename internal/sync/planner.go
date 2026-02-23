@@ -594,11 +594,11 @@ func makeAction(actionType ActionType, view *PathView) Action {
 
 	// DriveID: prefer Remote (handles cross-drive items correctly),
 	// fall back to Baseline (for items with no remote observation).
-	if view.Remote != nil && view.Remote.DriveID != "" {
+	if view.Remote != nil && !view.Remote.DriveID.IsZero() {
 		a.DriveID = view.Remote.DriveID
 	}
 
-	if a.DriveID == "" && view.Baseline != nil {
+	if a.DriveID.IsZero() && view.Baseline != nil {
 		a.DriveID = view.Baseline.DriveID
 	}
 

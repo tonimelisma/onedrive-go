@@ -288,6 +288,9 @@ The sync-algorithm.md §7.3 pseudocode had EF3 (`localChanged && !remoteChanged`
 ### RemoteState must carry DriveID for cross-drive correctness
 Shared folder items from Drive A in Drive B's delta carry Drive A's DriveID. If RemoteState omits DriveID, new cross-drive items get empty DriveID in Actions, breaking executor API calls (404 or wrong-item operations). DriveID and ItemID are the two halves of Graph API item identity (`/drives/{driveID}/items/{itemID}`). The planner's DriveID propagation: Remote.DriveID wins (cross-drive), Baseline.DriveID is fallback (no remote observation), empty for new local items (executor fills from context).
 
+### Type-safe drive identity (`internal/driveid`) prevents normalization bugs
+Microsoft provides zero stability guarantees for drive ID format. Personal accounts return 13-char hex, business accounts return `b!` + base64. abraunegg/onedrive (D-lang) had production crashes, FK violations, and database corruption from unnormalized DriveIDs. The `driveid.ID` type normalizes on construction (lowercase + zero-pad to 16 chars for short IDs) and is used as struct fields, method parameters, and SQL values across `graph/`, `sync/`, and `config/`. `driveid.ItemKey` replaces ad-hoc `driveID+":"+itemID` string concatenation (was in 6+ places). `driveid.CanonicalID` validates config-level drive identifiers (format: "type:email") and absorbs parsing logic that was scattered across `auth.go` and `config/validate_drive.go`. Zero external dependencies — leaf package.
+
 ### Worktree branch point matters for parallel agents
 When a worktree is created from `main` via the EnterWorktree tool but the active development branch is `clean-slate`, the worktree will have old code (e.g., the deleted batch-pipeline sync engine). The fix is `git reset --hard origin/clean-slate` after worktree creation. Save any new files to /tmp first, reset, then restore. This cost one debugging cycle in 4v2.5.
 

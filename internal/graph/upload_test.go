@@ -14,7 +14,10 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // errorReadCloser is an io.ReadCloser that always returns an error from Read.
@@ -34,7 +37,7 @@ func TestSimpleUpload_Success(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPut, r.Method)
-		assert.Equal(t, "/drives/d/items/parent:/upload.txt:/content", r.URL.Path)
+		assert.Equal(t, "/drives/000000000000000d/items/parent:/upload.txt:/content", r.URL.Path)
 
 		body, err := io.ReadAll(r.Body)
 		require.NoError(t, err)
@@ -56,7 +59,7 @@ func TestSimpleUpload_Success(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	item, err := client.SimpleUpload(
-		context.Background(), "d", "parent", "upload.txt",
+		context.Background(), driveid.New("d"), "parent", "upload.txt",
 		strings.NewReader(content), int64(len(content)),
 	)
 	require.NoError(t, err)
@@ -88,7 +91,7 @@ func TestSimpleUpload_ContentType(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	_, err := client.SimpleUpload(
-		context.Background(), "d", "p", "binary.dat",
+		context.Background(), driveid.New("d"), "p", "binary.dat",
 		strings.NewReader("data"), 4,
 	)
 	require.NoError(t, err)
@@ -104,7 +107,7 @@ func TestSimpleUpload_Error(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	_, err := client.SimpleUpload(
-		context.Background(), "d", "p", "forbidden.txt",
+		context.Background(), driveid.New("d"), "p", "forbidden.txt",
 		strings.NewReader("data"), 4,
 	)
 	require.Error(t, err)
@@ -116,7 +119,7 @@ func TestSimpleUpload_TokenError(t *testing.T) {
 	client.sleepFunc = noopSleep
 
 	_, err := client.SimpleUpload(
-		context.Background(), "d", "p", "file.txt",
+		context.Background(), driveid.New("d"), "p", "file.txt",
 		strings.NewReader("data"), 4,
 	)
 	require.Error(t, err)
@@ -128,7 +131,7 @@ func TestSimpleUpload_NetworkError(t *testing.T) {
 	client.sleepFunc = noopSleep
 
 	_, err := client.SimpleUpload(
-		context.Background(), "d", "p", "file.txt",
+		context.Background(), driveid.New("d"), "p", "file.txt",
 		strings.NewReader("data"), 4,
 	)
 	require.Error(t, err)
@@ -144,7 +147,7 @@ func TestSimpleUpload_DecodeError(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	_, err := client.SimpleUpload(
-		context.Background(), "d", "p", "file.txt",
+		context.Background(), driveid.New("d"), "p", "file.txt",
 		strings.NewReader("data"), 4,
 	)
 	require.Error(t, err)
@@ -171,7 +174,7 @@ func TestCreateUploadSession_Success(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	session, err := client.CreateUploadSession(
-		context.Background(), "d", "parent", "large-file.bin", 10485760, time.Time{},
+		context.Background(), driveid.New("d"), "parent", "large-file.bin", 10485760, time.Time{},
 	)
 	require.NoError(t, err)
 
@@ -194,7 +197,7 @@ func TestCreateUploadSession_InvalidExpiration(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	session, err := client.CreateUploadSession(
-		context.Background(), "d", "parent", "file.bin", 1024, time.Time{},
+		context.Background(), driveid.New("d"), "parent", "file.bin", 1024, time.Time{},
 	)
 	require.NoError(t, err)
 
@@ -212,7 +215,7 @@ func TestCreateUploadSession_APIError(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	_, err := client.CreateUploadSession(
-		context.Background(), "d", "parent", "file.bin", 1024, time.Time{},
+		context.Background(), driveid.New("d"), "parent", "file.bin", 1024, time.Time{},
 	)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrForbidden)
@@ -228,7 +231,7 @@ func TestCreateUploadSession_DecodeError(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	_, err := client.CreateUploadSession(
-		context.Background(), "d", "parent", "file.bin", 1024, time.Time{},
+		context.Background(), driveid.New("d"), "parent", "file.bin", 1024, time.Time{},
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "decoding upload session response")
@@ -458,7 +461,7 @@ func TestCreateUploadSession_WithFileSystemInfo(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	session, err := client.CreateUploadSession(
-		context.Background(), "d", "parent", "timestamped.bin", 5242880, mtime,
+		context.Background(), driveid.New("d"), "parent", "timestamped.bin", 5242880, mtime,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "https://upload.example.com/session/fsi", session.UploadURL)
@@ -485,7 +488,7 @@ func TestCreateUploadSession_WithoutFileSystemInfo(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	session, err := client.CreateUploadSession(
-		context.Background(), "d", "parent", "no-timestamp.bin", 5242880, time.Time{},
+		context.Background(), driveid.New("d"), "parent", "no-timestamp.bin", 5242880, time.Time{},
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "https://upload.example.com/session/nofsi", session.UploadURL)

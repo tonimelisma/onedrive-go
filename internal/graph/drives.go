@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // userResponse mirrors the Graph API /me JSON response.
@@ -65,7 +67,7 @@ type drivesListResponse struct {
 // Nil-safe for optional owner and quota facets.
 func (d *driveResponse) toDrive() Drive {
 	drive := Drive{
-		ID:        d.ID,
+		ID:        driveid.New(d.ID),
 		Name:      d.Name,
 		DriveType: d.DriveType,
 	}
@@ -146,9 +148,9 @@ func (c *Client) Drives(ctx context.Context) ([]Drive, error) {
 }
 
 // Drive returns a specific drive by ID.
-func (c *Client) Drive(ctx context.Context, driveID string) (*Drive, error) {
+func (c *Client) Drive(ctx context.Context, driveID driveid.ID) (*Drive, error) {
 	c.logger.Info("fetching drive",
-		slog.String("drive_id", driveID),
+		slog.String("drive_id", driveID.String()),
 	)
 
 	path := fmt.Sprintf("/drives/%s", driveID)
@@ -167,7 +169,7 @@ func (c *Client) Drive(ctx context.Context, driveID string) (*Drive, error) {
 	drive := dr.toDrive()
 
 	c.logger.Debug("fetched drive",
-		slog.String("id", drive.ID),
+		slog.String("id", drive.ID.String()),
 		slog.String("name", drive.Name),
 		slog.String("drive_type", drive.DriveType),
 	)

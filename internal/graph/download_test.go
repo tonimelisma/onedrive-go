@@ -10,7 +10,10 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // errorWriter is an io.Writer that always returns an error.
@@ -33,7 +36,7 @@ func TestDownload_Success(t *testing.T) {
 	defer downloadSrv.Close()
 
 	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/drives/d/items/item-1", r.URL.Path)
+		assert.Equal(t, "/drives/000000000000000d/items/item-1", r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, `{
@@ -51,7 +54,7 @@ func TestDownload_Success(t *testing.T) {
 
 	client := newTestClient(t, graphSrv.URL)
 	var buf bytes.Buffer
-	n, err := client.Download(context.Background(), "d", "item-1", &buf)
+	n, err := client.Download(context.Background(), driveid.New("d"), "item-1", &buf)
 	require.NoError(t, err)
 	assert.Equal(t, fileContent, buf.String())
 	assert.Equal(t, int64(len(fileContent)), n)
@@ -74,7 +77,7 @@ func TestDownload_EmptyDownloadURL(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	var buf bytes.Buffer
-	_, err := client.Download(context.Background(), "d", "folder-1", &buf)
+	_, err := client.Download(context.Background(), driveid.New("d"), "folder-1", &buf)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrNoDownloadURL)
 }
@@ -89,7 +92,7 @@ func TestDownload_ItemNotFound(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	var buf bytes.Buffer
-	_, err := client.Download(context.Background(), "d", "nonexistent", &buf)
+	_, err := client.Download(context.Background(), driveid.New("d"), "nonexistent", &buf)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrNotFound)
 }
@@ -118,7 +121,7 @@ func TestDownload_VerifyBytesWritten(t *testing.T) {
 
 	client := newTestClient(t, graphSrv.URL)
 	var buf bytes.Buffer
-	n, err := client.Download(context.Background(), "d", "item-2", &buf)
+	n, err := client.Download(context.Background(), driveid.New("d"), "item-2", &buf)
 	require.NoError(t, err)
 	assert.Equal(t, int64(len(content)), n)
 	assert.Equal(t, len(content), buf.Len())
@@ -146,7 +149,7 @@ func TestDownload_ServerError(t *testing.T) {
 
 	client := newTestClient(t, graphSrv.URL)
 	var buf bytes.Buffer
-	_, err := client.Download(context.Background(), "d", "item-3", &buf)
+	_, err := client.Download(context.Background(), driveid.New("d"), "item-3", &buf)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "status 500")
 }
@@ -168,7 +171,7 @@ func TestDownload_NetworkError(t *testing.T) {
 
 	client := newTestClient(t, graphSrv.URL)
 	var buf bytes.Buffer
-	_, err := client.Download(context.Background(), "d", "item-net", &buf)
+	_, err := client.Download(context.Background(), driveid.New("d"), "item-net", &buf)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "download request failed")
 }
@@ -196,7 +199,7 @@ func TestDownloadFromURL_WriterError(t *testing.T) {
 	defer graphSrv.Close()
 
 	client := newTestClient(t, graphSrv.URL)
-	_, err := client.Download(context.Background(), "d", "item-ew", errorWriter{})
+	_, err := client.Download(context.Background(), driveid.New("d"), "item-ew", errorWriter{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "streaming download content")
 }
@@ -226,6 +229,6 @@ func TestDownload_NoAuthOnPreAuthURL(t *testing.T) {
 
 	client := newTestClient(t, graphSrv.URL)
 	var buf bytes.Buffer
-	_, err := client.Download(context.Background(), "d", "item-4", &buf)
+	_, err := client.Download(context.Background(), driveid.New("d"), "item-4", &buf)
 	require.NoError(t, err)
 }

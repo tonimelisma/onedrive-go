@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -21,10 +22,10 @@ type mockDeltaPage struct {
 type mockDeltaFetcher struct {
 	pages    []mockDeltaPage
 	calls    int
-	driveIDs []string // records driveID passed to each Delta call
+	driveIDs []driveid.ID // records driveID passed to each Delta call
 }
 
-func (m *mockDeltaFetcher) Delta(_ context.Context, driveID, _ string) (*graph.DeltaPage, error) {
+func (m *mockDeltaFetcher) Delta(_ context.Context, driveID driveid.ID, _ string) (*graph.DeltaPage, error) {
 	m.driveIDs = append(m.driveIDs, driveID)
 
 	if m.calls >= len(m.pages) {
@@ -45,17 +46,17 @@ func (m *mockDeltaFetcher) Delta(_ context.Context, driveID, _ string) (*graph.D
 func emptyBaseline() *Baseline {
 	return &Baseline{
 		ByPath: make(map[string]*BaselineEntry),
-		ByID:   make(map[string]*BaselineEntry),
+		ByID:   make(map[driveid.ItemKey]*BaselineEntry),
 	}
 }
 
 // baselineWith creates a Baseline pre-populated with the given entries.
-// Each entry is keyed by both Path and "DriveID:ItemID".
+// Each entry is keyed by both Path and ItemKey(DriveID, ItemID).
 func baselineWith(entries ...*BaselineEntry) *Baseline {
 	b := emptyBaseline()
 	for _, e := range entries {
 		b.ByPath[e.Path] = e
-		b.ByID[e.DriveID+":"+e.ItemID] = e
+		b.ByID[driveid.NewItemKey(e.DriveID, e.ItemID)] = e
 	}
 
 	return b
@@ -74,13 +75,13 @@ func TestFullDelta_NewFiles(t *testing.T) {
 		pages: []mockDeltaPage{{
 			page: &graph.DeltaPage{
 				Items: []graph.Item{
-					{ID: "root", IsRoot: true, DriveID: testDriveID},
+					{ID: "root", IsRoot: true, DriveID: driveid.New(testDriveID)},
 					{
-						ID: "f1", Name: "hello.txt", ParentID: "root", DriveID: testDriveID, Size: 100,
+						ID: "f1", Name: "hello.txt", ParentID: "root", DriveID: driveid.New(testDriveID), Size: 100,
 						QuickXorHash: "qxh1", ModifiedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 					},
 					{
-						ID: "f2", Name: "world.txt", ParentID: "root", DriveID: testDriveID, Size: 200,
+						ID: "f2", Name: "world.txt", ParentID: "root", DriveID: driveid.New(testDriveID), Size: 200,
 						QuickXorHash: "qxh2", ModifiedAt: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
 					},
 				},
@@ -135,7 +136,7 @@ func TestFullDelta_ModifiedFile(t *testing.T) {
 	t.Parallel()
 
 	baseline := baselineWith(&BaselineEntry{
-		Path: "docs/readme.md", DriveID: testDriveID, ItemID: "f1",
+		Path: "docs/readme.md", DriveID: driveid.New(testDriveID), ItemID: "f1",
 		ParentID: "folder1", ItemType: ItemTypeFile, RemoteHash: "old-hash",
 	})
 
@@ -143,10 +144,10 @@ func TestFullDelta_ModifiedFile(t *testing.T) {
 		pages: []mockDeltaPage{{
 			page: &graph.DeltaPage{
 				Items: []graph.Item{
-					{ID: "root", IsRoot: true, DriveID: testDriveID},
-					{ID: "folder1", Name: "docs", ParentID: "root", DriveID: testDriveID, IsFolder: true},
+					{ID: "root", IsRoot: true, DriveID: driveid.New(testDriveID)},
+					{ID: "folder1", Name: "docs", ParentID: "root", DriveID: driveid.New(testDriveID), IsFolder: true},
 					{
-						ID: "f1", Name: "readme.md", ParentID: "folder1", DriveID: testDriveID,
+						ID: "f1", Name: "readme.md", ParentID: "folder1", DriveID: driveid.New(testDriveID),
 						QuickXorHash: "new-hash", Size: 512,
 					},
 				},
@@ -193,7 +194,7 @@ func TestFullDelta_DeletedFile(t *testing.T) {
 	t.Parallel()
 
 	baseline := baselineWith(&BaselineEntry{
-		Path: "photos/cat.jpg", DriveID: testDriveID, ItemID: "f1",
+		Path: "photos/cat.jpg", DriveID: driveid.New(testDriveID), ItemID: "f1",
 		ItemType: ItemTypeFile,
 	})
 
@@ -201,7 +202,7 @@ func TestFullDelta_DeletedFile(t *testing.T) {
 		pages: []mockDeltaPage{{
 			page: &graph.DeltaPage{
 				Items: []graph.Item{
-					{ID: "f1", Name: "cat.jpg", DriveID: testDriveID, IsDeleted: true},
+					{ID: "f1", Name: "cat.jpg", DriveID: driveid.New(testDriveID), IsDeleted: true},
 				},
 				DeltaLink: "delta-link",
 			},
@@ -237,15 +238,15 @@ func TestFullDelta_MovedFile(t *testing.T) {
 
 	baseline := baselineWith(
 		&BaselineEntry{
-			Path: "old-folder", DriveID: testDriveID, ItemID: "folder-old",
+			Path: "old-folder", DriveID: driveid.New(testDriveID), ItemID: "folder-old",
 			ParentID: "root", ItemType: ItemTypeFolder,
 		},
 		&BaselineEntry{
-			Path: "old-folder/doc.txt", DriveID: testDriveID, ItemID: "f1",
+			Path: "old-folder/doc.txt", DriveID: driveid.New(testDriveID), ItemID: "f1",
 			ParentID: "folder-old", ItemType: ItemTypeFile,
 		},
 		&BaselineEntry{
-			Path: "new-folder", DriveID: testDriveID, ItemID: "folder-new",
+			Path: "new-folder", DriveID: driveid.New(testDriveID), ItemID: "folder-new",
 			ParentID: "root", ItemType: ItemTypeFolder,
 		},
 	)
@@ -254,9 +255,9 @@ func TestFullDelta_MovedFile(t *testing.T) {
 		pages: []mockDeltaPage{{
 			page: &graph.DeltaPage{
 				Items: []graph.Item{
-					{ID: "root", IsRoot: true, DriveID: testDriveID},
+					{ID: "root", IsRoot: true, DriveID: driveid.New(testDriveID)},
 					// File moved from old-folder to new-folder.
-					{ID: "f1", Name: "doc.txt", ParentID: "folder-new", DriveID: testDriveID},
+					{ID: "f1", Name: "doc.txt", ParentID: "folder-new", DriveID: driveid.New(testDriveID)},
 				},
 				DeltaLink: "delta-link",
 			},
@@ -303,8 +304,8 @@ func TestFullDelta_MultiPage(t *testing.T) {
 			{
 				page: &graph.DeltaPage{
 					Items: []graph.Item{
-						{ID: "root", IsRoot: true, DriveID: testDriveID},
-						{ID: "f1", Name: "a.txt", ParentID: "root", DriveID: testDriveID},
+						{ID: "root", IsRoot: true, DriveID: driveid.New(testDriveID)},
+						{ID: "f1", Name: "a.txt", ParentID: "root", DriveID: driveid.New(testDriveID)},
 					},
 					NextLink: "next-page-url",
 				},
@@ -312,7 +313,7 @@ func TestFullDelta_MultiPage(t *testing.T) {
 			{
 				page: &graph.DeltaPage{
 					Items: []graph.Item{
-						{ID: "f2", Name: "b.txt", ParentID: "root", DriveID: testDriveID},
+						{ID: "f2", Name: "b.txt", ParentID: "root", DriveID: driveid.New(testDriveID)},
 					},
 					DeltaLink: "final-delta-link",
 				},
@@ -412,7 +413,7 @@ func TestFullDelta_SkipsRootItem(t *testing.T) {
 		pages: []mockDeltaPage{{
 			page: &graph.DeltaPage{
 				Items: []graph.Item{
-					{ID: "root", IsRoot: true, DriveID: testDriveID, Name: "root"},
+					{ID: "root", IsRoot: true, DriveID: driveid.New(testDriveID), Name: "root"},
 				},
 				DeltaLink: "delta-link",
 			},
@@ -439,8 +440,8 @@ func TestFullDelta_PathMaterialization_InFlight(t *testing.T) {
 			{
 				page: &graph.DeltaPage{
 					Items: []graph.Item{
-						{ID: "root", IsRoot: true, DriveID: testDriveID},
-						{ID: "d1", Name: "Documents", ParentID: "root", DriveID: testDriveID, IsFolder: true},
+						{ID: "root", IsRoot: true, DriveID: driveid.New(testDriveID)},
+						{ID: "d1", Name: "Documents", ParentID: "root", DriveID: driveid.New(testDriveID), IsFolder: true},
 					},
 					NextLink: "next-page",
 				},
@@ -448,7 +449,7 @@ func TestFullDelta_PathMaterialization_InFlight(t *testing.T) {
 			{
 				page: &graph.DeltaPage{
 					Items: []graph.Item{
-						{ID: "f1", Name: "report.pdf", ParentID: "d1", DriveID: testDriveID},
+						{ID: "f1", Name: "report.pdf", ParentID: "d1", DriveID: driveid.New(testDriveID)},
 					},
 					DeltaLink: "delta-link",
 				},
@@ -485,7 +486,7 @@ func TestFullDelta_PathMaterialization_Baseline(t *testing.T) {
 	t.Parallel()
 
 	baseline := baselineWith(&BaselineEntry{
-		Path: "Projects/GoApp", DriveID: testDriveID, ItemID: "folder1",
+		Path: "Projects/GoApp", DriveID: driveid.New(testDriveID), ItemID: "folder1",
 		ParentID: "root", ItemType: ItemTypeFolder,
 	})
 
@@ -493,7 +494,7 @@ func TestFullDelta_PathMaterialization_Baseline(t *testing.T) {
 		pages: []mockDeltaPage{{
 			page: &graph.DeltaPage{
 				Items: []graph.Item{
-					{ID: "f1", Name: "main.go", ParentID: "folder1", DriveID: testDriveID},
+					{ID: "f1", Name: "main.go", ParentID: "folder1", DriveID: driveid.New(testDriveID)},
 				},
 				DeltaLink: "delta-link",
 			},
@@ -520,7 +521,7 @@ func TestFullDelta_PathMaterialization_Mixed(t *testing.T) {
 
 	// Existing folder in baseline, new subfolder in inflight.
 	baseline := baselineWith(&BaselineEntry{
-		Path: "Documents", DriveID: testDriveID, ItemID: "docs",
+		Path: "Documents", DriveID: driveid.New(testDriveID), ItemID: "docs",
 		ParentID: "root", ItemType: ItemTypeFolder,
 	})
 
@@ -529,9 +530,9 @@ func TestFullDelta_PathMaterialization_Mixed(t *testing.T) {
 			page: &graph.DeltaPage{
 				Items: []graph.Item{
 					// New subfolder under existing Documents.
-					{ID: "sub1", Name: "Reports", ParentID: "docs", DriveID: testDriveID, IsFolder: true},
+					{ID: "sub1", Name: "Reports", ParentID: "docs", DriveID: driveid.New(testDriveID), IsFolder: true},
 					// New file under new subfolder.
-					{ID: "f1", Name: "q1.pdf", ParentID: "sub1", DriveID: testDriveID},
+					{ID: "f1", Name: "q1.pdf", ParentID: "sub1", DriveID: driveid.New(testDriveID)},
 				},
 				DeltaLink: "delta-link",
 			},
@@ -566,7 +567,7 @@ func TestFullDelta_DeletedItem_MissingName(t *testing.T) {
 	t.Parallel()
 
 	baseline := baselineWith(&BaselineEntry{
-		Path: "work/budget.xlsx", DriveID: testDriveID, ItemID: "f1",
+		Path: "work/budget.xlsx", DriveID: driveid.New(testDriveID), ItemID: "f1",
 		ItemType: ItemTypeFile,
 	})
 
@@ -575,7 +576,7 @@ func TestFullDelta_DeletedItem_MissingName(t *testing.T) {
 			page: &graph.DeltaPage{
 				Items: []graph.Item{
 					// Business API: deleted item with empty Name.
-					{ID: "f1", Name: "", DriveID: testDriveID, IsDeleted: true},
+					{ID: "f1", Name: "", DriveID: driveid.New(testDriveID), IsDeleted: true},
 				},
 				DeltaLink: "delta-link",
 			},
@@ -611,8 +612,8 @@ func TestFullDelta_DriveIDNormalization(t *testing.T) {
 		pages: []mockDeltaPage{{
 			page: &graph.DeltaPage{
 				Items: []graph.Item{
-					{ID: "root", IsRoot: true, DriveID: rawDriveID},
-					{ID: "f1", Name: "test.txt", ParentID: "root", DriveID: rawDriveID},
+					{ID: "root", IsRoot: true, DriveID: driveid.New(rawDriveID)},
+					{ID: "f1", Name: "test.txt", ParentID: "root", DriveID: driveid.New(rawDriveID)},
 				},
 				DeltaLink: "delta-link",
 			},
@@ -629,8 +630,8 @@ func TestFullDelta_DriveIDNormalization(t *testing.T) {
 		t.Fatalf("len(events) = %d, want 1", len(events))
 	}
 
-	want := "0abc123def456789" // lowercased + zero-padded to 16
-	if events[0].DriveID != want {
+	want := driveid.New("0abc123def456789") // lowercased + zero-padded to 16
+	if !events[0].DriveID.Equal(want) {
 		t.Errorf("DriveID = %q, want %q", events[0].DriveID, want)
 	}
 
@@ -639,7 +640,7 @@ func TestFullDelta_DriveIDNormalization(t *testing.T) {
 		t.Fatalf("fetcher called %d times, want 1", len(fetcher.driveIDs))
 	}
 
-	if fetcher.driveIDs[0] != want {
+	if !fetcher.driveIDs[0].Equal(want) {
 		t.Errorf("fetcher received driveID = %q, want %q (normalized)", fetcher.driveIDs[0], want)
 	}
 }
@@ -656,8 +657,8 @@ func TestFullDelta_NFCNormalization(t *testing.T) {
 		pages: []mockDeltaPage{{
 			page: &graph.DeltaPage{
 				Items: []graph.Item{
-					{ID: "root", IsRoot: true, DriveID: testDriveID},
-					{ID: "f1", Name: nfd, ParentID: "root", DriveID: testDriveID},
+					{ID: "root", IsRoot: true, DriveID: driveid.New(testDriveID)},
+					{ID: "f1", Name: nfd, ParentID: "root", DriveID: driveid.New(testDriveID)},
 				},
 				DeltaLink: "delta-link",
 			},
@@ -690,19 +691,19 @@ func TestFullDelta_HashSelection(t *testing.T) {
 		pages: []mockDeltaPage{{
 			page: &graph.DeltaPage{
 				Items: []graph.Item{
-					{ID: "root", IsRoot: true, DriveID: testDriveID},
+					{ID: "root", IsRoot: true, DriveID: driveid.New(testDriveID)},
 					// QuickXorHash preferred.
 					{
-						ID: "f1", Name: "a.txt", ParentID: "root", DriveID: testDriveID,
+						ID: "f1", Name: "a.txt", ParentID: "root", DriveID: driveid.New(testDriveID),
 						QuickXorHash: "qxh", SHA256Hash: "sha",
 					},
 					// SHA256 fallback.
 					{
-						ID: "f2", Name: "b.txt", ParentID: "root", DriveID: testDriveID,
+						ID: "f2", Name: "b.txt", ParentID: "root", DriveID: driveid.New(testDriveID),
 						SHA256Hash: "sha-only",
 					},
 					// Neither.
-					{ID: "f3", Name: "c.txt", ParentID: "root", DriveID: testDriveID},
+					{ID: "f3", Name: "c.txt", ParentID: "root", DriveID: driveid.New(testDriveID)},
 				},
 				DeltaLink: "delta-link",
 			},
@@ -741,8 +742,8 @@ func TestFullDelta_TimestampConversion(t *testing.T) {
 		pages: []mockDeltaPage{{
 			page: &graph.DeltaPage{
 				Items: []graph.Item{
-					{ID: "root", IsRoot: true, DriveID: testDriveID},
-					{ID: "f1", Name: "test.txt", ParentID: "root", DriveID: testDriveID, ModifiedAt: ts},
+					{ID: "root", IsRoot: true, DriveID: driveid.New(testDriveID)},
+					{ID: "f1", Name: "test.txt", ParentID: "root", DriveID: driveid.New(testDriveID), ModifiedAt: ts},
 				},
 				DeltaLink: "delta-link",
 			},
@@ -767,8 +768,8 @@ func TestFullDelta_FolderEvent(t *testing.T) {
 		pages: []mockDeltaPage{{
 			page: &graph.DeltaPage{
 				Items: []graph.Item{
-					{ID: "root", IsRoot: true, DriveID: testDriveID},
-					{ID: "d1", Name: "Photos", ParentID: "root", DriveID: testDriveID, IsFolder: true},
+					{ID: "root", IsRoot: true, DriveID: driveid.New(testDriveID)},
+					{ID: "d1", Name: "Photos", ParentID: "root", DriveID: driveid.New(testDriveID), IsFolder: true},
 				},
 				DeltaLink: "delta-link",
 			},
@@ -822,7 +823,7 @@ func TestFullDelta_ContextCanceled(t *testing.T) {
 // Unit tests for helper functions
 // ---------------------------------------------------------------------------
 
-func TestNormalizeDriveID(t *testing.T) {
+func TestDriveIDNormalization(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -842,9 +843,9 @@ func TestNormalizeDriveID(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := normalizeDriveID(tt.in)
-			if got != tt.want {
-				t.Errorf("normalizeDriveID(%q) = %q, want %q", tt.in, got, tt.want)
+			got := driveid.New(tt.in)
+			if got.String() != tt.want {
+				t.Errorf("driveid.New(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
 	}
@@ -923,7 +924,7 @@ func TestFullDelta_OrphanedItem(t *testing.T) {
 		pages: []mockDeltaPage{{
 			page: &graph.DeltaPage{
 				Items: []graph.Item{
-					{ID: "f1", Name: "orphan.txt", ParentID: "unknown-parent", DriveID: testDriveID},
+					{ID: "f1", Name: "orphan.txt", ParentID: "unknown-parent", DriveID: driveid.New(testDriveID)},
 				},
 				DeltaLink: "delta-link",
 			},
@@ -959,7 +960,7 @@ func TestFullDelta_DeletedItem_NotInBaseline(t *testing.T) {
 		pages: []mockDeltaPage{{
 			page: &graph.DeltaPage{
 				Items: []graph.Item{
-					{ID: "f1", Name: "ephemeral.txt", DriveID: testDriveID, IsDeleted: true},
+					{ID: "f1", Name: "ephemeral.txt", DriveID: driveid.New(testDriveID), IsDeleted: true},
 				},
 				DeltaLink: "delta-link",
 			},
@@ -998,11 +999,11 @@ func TestFullDelta_RenameInPlace(t *testing.T) {
 	// File renamed within the same parent folder (same parent, new name).
 	baseline := baselineWith(
 		&BaselineEntry{
-			Path: "docs", DriveID: testDriveID, ItemID: "folder1",
+			Path: "docs", DriveID: driveid.New(testDriveID), ItemID: "folder1",
 			ParentID: "root", ItemType: ItemTypeFolder,
 		},
 		&BaselineEntry{
-			Path: "docs/old-name.txt", DriveID: testDriveID, ItemID: "f1",
+			Path: "docs/old-name.txt", DriveID: driveid.New(testDriveID), ItemID: "f1",
 			ParentID: "folder1", ItemType: ItemTypeFile,
 		},
 	)
@@ -1011,9 +1012,9 @@ func TestFullDelta_RenameInPlace(t *testing.T) {
 		pages: []mockDeltaPage{{
 			page: &graph.DeltaPage{
 				Items: []graph.Item{
-					{ID: "root", IsRoot: true, DriveID: testDriveID},
+					{ID: "root", IsRoot: true, DriveID: driveid.New(testDriveID)},
 					// Same parent (folder1), different name.
-					{ID: "f1", Name: "new-name.txt", ParentID: "folder1", DriveID: testDriveID},
+					{ID: "f1", Name: "new-name.txt", ParentID: "folder1", DriveID: driveid.New(testDriveID)},
 				},
 				DeltaLink: "delta-link",
 			},

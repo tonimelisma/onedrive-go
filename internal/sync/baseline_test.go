@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // testLogger returns a debug-level logger that writes to t.Log,
@@ -152,7 +154,7 @@ func TestCommit_Download(t *testing.T) {
 		Action:     ActionDownload,
 		Success:    true,
 		Path:       "docs/readme.md",
-		DriveID:    "drive1",
+		DriveID:    driveid.New("drive1"),
 		ItemID:     "item1",
 		ParentID:   "parent1",
 		ItemType:   ItemTypeFile,
@@ -173,8 +175,8 @@ func TestCommit_Download(t *testing.T) {
 		t.Fatal("baseline entry not found for docs/readme.md")
 	}
 
-	if entry.DriveID != "drive1" {
-		t.Errorf("DriveID = %q, want %q", entry.DriveID, "drive1")
+	if !entry.DriveID.Equal(driveid.New("drive1")) {
+		t.Errorf("DriveID = %q, want %q", entry.DriveID, driveid.New("drive1"))
 	}
 
 	if entry.ItemID != "item1" {
@@ -203,7 +205,7 @@ func TestCommit_Upload(t *testing.T) {
 		Action:     ActionUpload,
 		Success:    true,
 		Path:       "photos/cat.jpg",
-		DriveID:    "drive2",
+		DriveID:    driveid.New("drive2"),
 		ItemID:     "item2",
 		ParentID:   "parent2",
 		ItemType:   ItemTypeFile,
@@ -247,7 +249,7 @@ func TestCommit_FolderCreate(t *testing.T) {
 		Action:   ActionFolderCreate,
 		Success:  true,
 		Path:     "Documents/Reports",
-		DriveID:  "drive1",
+		DriveID:  driveid.New("drive1"),
 		ItemID:   "folder1",
 		ParentID: "root",
 		ItemType: ItemTypeFolder,
@@ -291,7 +293,7 @@ func TestCommit_UpdateSynced(t *testing.T) {
 		Action:     ActionDownload,
 		Success:    true,
 		Path:       "file.txt",
-		DriveID:    "d",
+		DriveID:    driveid.New("d"),
 		ItemID:     "i",
 		ItemType:   ItemTypeFile,
 		LocalHash:  "h1",
@@ -339,7 +341,7 @@ func TestCommit_LocalDelete(t *testing.T) {
 	// Create, then delete.
 	create := []Outcome{{
 		Action: ActionDownload, Success: true,
-		Path: "delete-me.txt", DriveID: "d", ItemID: "i",
+		Path: "delete-me.txt", DriveID: driveid.New("d"), ItemID: "i",
 		ItemType: ItemTypeFile, LocalHash: "h", RemoteHash: "h",
 		Size: 50, Mtime: 1,
 	}}
@@ -373,7 +375,7 @@ func TestCommit_RemoteDelete(t *testing.T) {
 
 	create := []Outcome{{
 		Action: ActionDownload, Success: true,
-		Path: "remote-del.txt", DriveID: "d", ItemID: "i",
+		Path: "remote-del.txt", DriveID: driveid.New("d"), ItemID: "i",
 		ItemType: ItemTypeFile, LocalHash: "h", RemoteHash: "h",
 		Size: 50, Mtime: 1,
 	}}
@@ -407,7 +409,7 @@ func TestCommit_Cleanup(t *testing.T) {
 
 	create := []Outcome{{
 		Action: ActionDownload, Success: true,
-		Path: "cleanup.txt", DriveID: "d", ItemID: "i",
+		Path: "cleanup.txt", DriveID: driveid.New("d"), ItemID: "i",
 		ItemType: ItemTypeFile, LocalHash: "h", RemoteHash: "h",
 		Size: 50, Mtime: 1,
 	}}
@@ -441,7 +443,7 @@ func TestCommit_Move(t *testing.T) {
 	// Create original entry.
 	create := []Outcome{{
 		Action: ActionDownload, Success: true,
-		Path: "old/path.txt", DriveID: "d", ItemID: "i", ParentID: "p",
+		Path: "old/path.txt", DriveID: driveid.New("d"), ItemID: "i", ParentID: "p",
 		ItemType: ItemTypeFile, LocalHash: "h", RemoteHash: "h",
 		Size: 100, Mtime: 1,
 	}}
@@ -454,7 +456,7 @@ func TestCommit_Move(t *testing.T) {
 	move := []Outcome{{
 		Action: ActionLocalMove, Success: true,
 		Path: "new/path.txt", OldPath: "old/path.txt",
-		DriveID: "d", ItemID: "i", ParentID: "p2",
+		DriveID: driveid.New("d"), ItemID: "i", ParentID: "p2",
 		ItemType: ItemTypeFile, LocalHash: "h", RemoteHash: "h",
 		Size: 100, Mtime: 1,
 	}}
@@ -490,7 +492,7 @@ func TestCommit_Conflict(t *testing.T) {
 		Action:       ActionConflict,
 		Success:      true,
 		Path:         "conflict.txt",
-		DriveID:      "d",
+		DriveID:      driveid.New("d"),
 		ItemID:       "i",
 		ItemType:     ItemTypeFile,
 		LocalHash:    "local-h",
@@ -543,7 +545,7 @@ func TestCommit_SkipsFailedOutcomes(t *testing.T) {
 		Action:  ActionDownload,
 		Success: false, // should be skipped
 		Path:    "should-not-exist.txt",
-		DriveID: "d", ItemID: "i", ItemType: ItemTypeFile,
+		DriveID: driveid.New("d"), ItemID: "i", ItemType: ItemTypeFile,
 		LocalHash: "h", RemoteHash: "h", Size: 100,
 	}}
 
@@ -574,7 +576,7 @@ func TestCommit_DeltaToken(t *testing.T) {
 	// Commit with a delta token.
 	outcomes := []Outcome{{
 		Action: ActionDownload, Success: true,
-		Path: "f.txt", DriveID: "d", ItemID: "i", ItemType: ItemTypeFile,
+		Path: "f.txt", DriveID: driveid.New("d"), ItemID: "i", ItemType: ItemTypeFile,
 		LocalHash: "h", RemoteHash: "h", Size: 10, Mtime: 1,
 	}}
 
@@ -604,7 +606,7 @@ func TestCommit_DeltaTokenUpdate(t *testing.T) {
 
 	outcomes := []Outcome{{
 		Action: ActionDownload, Success: true,
-		Path: "f.txt", DriveID: "d", ItemID: "i", ItemType: ItemTypeFile,
+		Path: "f.txt", DriveID: driveid.New("d"), ItemID: "i", ItemType: ItemTypeFile,
 		LocalHash: "h", RemoteHash: "h", Size: 10, Mtime: 1,
 	}}
 
@@ -643,7 +645,7 @@ func TestCommit_SyncedAtFromNowFunc(t *testing.T) {
 
 	outcomes := []Outcome{{
 		Action: ActionDownload, Success: true,
-		Path: "f.txt", DriveID: "d", ItemID: "i", ItemType: ItemTypeFile,
+		Path: "f.txt", DriveID: driveid.New("d"), ItemID: "i", ItemType: ItemTypeFile,
 		LocalHash: "h", RemoteHash: "h", Size: 10, Mtime: 999,
 	}}
 
@@ -674,7 +676,7 @@ func TestCommit_RefreshesCache(t *testing.T) {
 
 	outcomes := []Outcome{{
 		Action: ActionDownload, Success: true,
-		Path: "f.txt", DriveID: "d", ItemID: "i", ItemType: ItemTypeFile,
+		Path: "f.txt", DriveID: driveid.New("d"), ItemID: "i", ItemType: ItemTypeFile,
 		LocalHash: "h", RemoteHash: "h", Size: 10, Mtime: 1,
 	}}
 
@@ -719,7 +721,7 @@ func TestGetDeltaToken_AfterCommit(t *testing.T) {
 
 	outcomes := []Outcome{{
 		Action: ActionDownload, Success: true,
-		Path: "f.txt", DriveID: "mydrv", ItemID: "i", ItemType: ItemTypeFile,
+		Path: "f.txt", DriveID: driveid.New("mydrv"), ItemID: "i", ItemType: ItemTypeFile,
 		LocalHash: "h", RemoteHash: "h", Size: 10, Mtime: 1,
 	}}
 

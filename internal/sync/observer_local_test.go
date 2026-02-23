@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
 
@@ -158,7 +159,7 @@ func TestFullScan_ModifiedFile(t *testing.T) {
 	writeTestFile(t, dir, "doc.txt", "updated content")
 
 	baseline := baselineWith(&BaselineEntry{
-		Path: "doc.txt", DriveID: "d", ItemID: "i1",
+		Path: "doc.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: ItemTypeFile, LocalHash: hashContent(t, "original content"),
 	})
 
@@ -194,7 +195,7 @@ func TestFullScan_UnchangedFile(t *testing.T) {
 	writeTestFile(t, dir, "stable.txt", content)
 
 	baseline := baselineWith(&BaselineEntry{
-		Path: "stable.txt", DriveID: "d", ItemID: "i1",
+		Path: "stable.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: ItemTypeFile, LocalHash: hashContent(t, content),
 	})
 
@@ -216,7 +217,7 @@ func TestFullScan_DeletedFile(t *testing.T) {
 	// File is in baseline but NOT on disk.
 
 	baseline := baselineWith(&BaselineEntry{
-		Path: "gone.txt", DriveID: "d", ItemID: "i1",
+		Path: "gone.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: ItemTypeFile, LocalHash: "some-hash",
 		Size: 42, Mtime: 1234567890,
 	})
@@ -264,7 +265,7 @@ func TestFullScan_DeletedFolder(t *testing.T) {
 	dir := t.TempDir()
 
 	baseline := baselineWith(&BaselineEntry{
-		Path: "old-folder", DriveID: "d", ItemID: "f1",
+		Path: "old-folder", DriveID: driveid.New("d"), ItemID: "f1",
 		ItemType: ItemTypeFolder,
 	})
 
@@ -297,7 +298,7 @@ func TestFullScan_MtimeChangeNoContentChange(t *testing.T) {
 
 	// Baseline has a different mtime but the same hash.
 	baseline := baselineWith(&BaselineEntry{
-		Path: "stable.txt", DriveID: "d", ItemID: "i1",
+		Path: "stable.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: ItemTypeFile, LocalHash: hashContent(t, content),
 		Mtime: 999, // intentionally different from actual file mtime
 	})
@@ -333,7 +334,7 @@ func TestFullScan_MtimeSizeFastPath(t *testing.T) {
 
 	// Baseline matches file's actual mtime, size, and hash — fast path should skip hashing.
 	baseline := baselineWith(&BaselineEntry{
-		Path: "cached.txt", DriveID: "d", ItemID: "i1",
+		Path: "cached.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: ItemTypeFile, LocalHash: hashContent(t, content),
 		Size: info.Size(), Mtime: info.ModTime().UnixNano(),
 	})
@@ -367,7 +368,7 @@ func TestFullScan_RacilyCleanForcesHash(t *testing.T) {
 
 	// Baseline has same mtime and size but different hash.
 	baseline := baselineWith(&BaselineEntry{
-		Path: "racy.txt", DriveID: "d", ItemID: "i1",
+		Path: "racy.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: ItemTypeFile, LocalHash: hashContent(t, baselineContent),
 		Size: info.Size(), Mtime: info.ModTime().UnixNano(),
 	})
@@ -413,7 +414,7 @@ func TestFullScan_SizeChangeForcesHash(t *testing.T) {
 
 	// Baseline has same mtime but different size — should force hash.
 	baseline := baselineWith(&BaselineEntry{
-		Path: "grown.txt", DriveID: "d", ItemID: "i1",
+		Path: "grown.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: ItemTypeFile, LocalHash: hashContent(t, "short"),
 		Size: 5, Mtime: info.ModTime().UnixNano(),
 	})
@@ -683,15 +684,15 @@ func TestFullScan_MixedChanges(t *testing.T) {
 
 	baseline := baselineWith(
 		&BaselineEntry{
-			Path: "modified.txt", DriveID: "d", ItemID: "i1",
+			Path: "modified.txt", DriveID: driveid.New("d"), ItemID: "i1",
 			ItemType: ItemTypeFile, LocalHash: hashContent(t, "original content"),
 		},
 		&BaselineEntry{
-			Path: "unchanged.txt", DriveID: "d", ItemID: "i2",
+			Path: "unchanged.txt", DriveID: driveid.New("d"), ItemID: "i2",
 			ItemType: ItemTypeFile, LocalHash: hashContent(t, "same content"),
 		},
 		&BaselineEntry{
-			Path: "deleted.txt", DriveID: "d", ItemID: "i3",
+			Path: "deleted.txt", DriveID: driveid.New("d"), ItemID: "i3",
 			ItemType: ItemTypeFile, LocalHash: "some-hash",
 		},
 	)

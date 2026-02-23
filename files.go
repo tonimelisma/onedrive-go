@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -102,41 +103,41 @@ func splitParentAndName(path string) (string, string) {
 // clientAndDrive loads a saved token using the resolved config's canonical ID,
 // creates a Graph client, and discovers the user's primary drive ID.
 // Returns the client, drive ID, and logger for callers that need to log.
-func clientAndDrive(ctx context.Context) (*graph.Client, string, *slog.Logger, error) {
+func clientAndDrive(ctx context.Context) (*graph.Client, driveid.ID, *slog.Logger, error) {
 	logger := buildLogger()
 
-	tokenPath := config.DriveTokenPath(resolvedCfg.CanonicalID)
+	tokenPath := config.DriveTokenPath(resolvedCfg.CanonicalID.String())
 	if tokenPath == "" {
-		return nil, "", nil, fmt.Errorf("cannot determine token path for drive %q", resolvedCfg.CanonicalID)
+		return nil, driveid.ID{}, nil, fmt.Errorf("cannot determine token path for drive %q", resolvedCfg.CanonicalID)
 	}
 
 	ts, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
 	if err != nil {
 		if errors.Is(err, graph.ErrNotLoggedIn) {
-			return nil, "", nil, fmt.Errorf("not logged in — run 'onedrive-go login' first")
+			return nil, driveid.ID{}, nil, fmt.Errorf("not logged in — run 'onedrive-go login' first")
 		}
 
-		return nil, "", nil, err
+		return nil, driveid.ID{}, nil, err
 	}
 
 	client := graph.NewClient(graph.DefaultBaseURL, defaultHTTPClient(), ts, logger)
 
 	// Skip the Drives() API call when the drive ID is already known from config.
-	if resolvedCfg.DriveID != "" {
-		logger.Debug("using configured drive ID", "drive_id", resolvedCfg.DriveID)
+	if !resolvedCfg.DriveID.IsZero() {
+		logger.Debug("using configured drive ID", "drive_id", resolvedCfg.DriveID.String())
 		return client, resolvedCfg.DriveID, logger, nil
 	}
 
 	drives, err := client.Drives(ctx)
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("discovering drive: %w", err)
+		return nil, driveid.ID{}, nil, fmt.Errorf("discovering drive: %w", err)
 	}
 
 	if len(drives) == 0 {
-		return nil, "", nil, fmt.Errorf("no drives found for this account")
+		return nil, driveid.ID{}, nil, fmt.Errorf("no drives found for this account")
 	}
 
-	logger.Debug("discovered primary drive", "drive_id", drives[0].ID)
+	logger.Debug("discovered primary drive", "drive_id", drives[0].ID.String())
 
 	return client, drives[0].ID, logger, nil
 }
@@ -145,7 +146,7 @@ func clientAndDrive(ctx context.Context) (*graph.Client, string, *slog.Logger, e
 // For root (""), uses GetItem with "root". Otherwise uses GetItemByPath.
 // Note: "/" normalizes to "" via cleanRemotePath, so callers can pass either
 // "/" or "" to mean root. This is intentional — the CLI defaults to "/".
-func resolveItem(ctx context.Context, client *graph.Client, driveID, remotePath string) (*graph.Item, error) {
+func resolveItem(ctx context.Context, client *graph.Client, driveID driveid.ID, remotePath string) (*graph.Item, error) {
 	clean := cleanRemotePath(remotePath)
 	if clean == "" {
 		return client.GetItem(ctx, driveID, "root")
@@ -156,7 +157,7 @@ func resolveItem(ctx context.Context, client *graph.Client, driveID, remotePath 
 
 // listItems lists children of a remote path.
 // For root (""), uses ListChildren with "root". Otherwise uses ListChildrenByPath.
-func listItems(ctx context.Context, client *graph.Client, driveID, remotePath string) ([]graph.Item, error) {
+func listItems(ctx context.Context, client *graph.Client, driveID driveid.ID, remotePath string) ([]graph.Item, error) {
 	clean := cleanRemotePath(remotePath)
 	if clean == "" {
 		return client.ListChildren(ctx, driveID, "root")
@@ -370,7 +371,7 @@ func runPut(_ *cobra.Command, args []string) error {
 
 func doChunkedUpload(
 	ctx context.Context, client *graph.Client,
-	driveID, parentID, name string,
+	driveID driveid.ID, parentID, name string,
 	r io.ReaderAt, total int64, mtime time.Time, logger *slog.Logger,
 ) error {
 	session, err := client.CreateUploadSession(ctx, driveID, parentID, name, total, mtime)

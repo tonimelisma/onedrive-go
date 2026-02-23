@@ -10,6 +10,8 @@ import (
 	"github.com/google/uuid"
 	// Pure-Go SQLite driver (no CGO).
 	_ "modernc.org/sqlite"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // SQL statements for baseline operations.
@@ -105,7 +107,7 @@ func (m *BaselineManager) Load(ctx context.Context) (*Baseline, error) {
 
 	b := &Baseline{
 		ByPath: make(map[string]*BaselineEntry),
-		ByID:   make(map[string]*BaselineEntry),
+		ByID:   make(map[driveid.ItemKey]*BaselineEntry),
 	}
 
 	for rows.Next() {
@@ -115,7 +117,7 @@ func (m *BaselineManager) Load(ctx context.Context) (*Baseline, error) {
 		}
 
 		b.ByPath[entry.Path] = entry
-		b.ByID[entry.DriveID+":"+entry.ItemID] = entry
+		b.ByID[driveid.NewItemKey(entry.DriveID, entry.ItemID)] = entry
 	}
 
 	if err := rows.Err(); err != nil {

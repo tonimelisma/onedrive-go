@@ -23,7 +23,7 @@ Architectural and design decisions for onedrive-go. Referenced from [CLAUDE.md](
 
 ## Original Decisions (still valid)
 
-- **"Pragmatic Flat" architecture**: 5 packages (`cmd/onedrive-go/`, `internal/graph/`, `internal/sync/`, `internal/config/`, `pkg/quickxorhash/`), consumer-defined interfaces
+- **"Pragmatic Flat" architecture**: 6 packages (`cmd/onedrive-go/`, `internal/driveid/`, `internal/graph/`, `internal/sync/`, `internal/config/`, `pkg/quickxorhash/`), consumer-defined interfaces
 - **CLI-first development order**: Build a working CLI tool (Phase 1) before building the sync engine (Phase 4)
 - **graph/ is internal/**: `internal/graph/` not `pkg/graph/` (SDK carveout deferred)
 - **Binary name**: `onedrive-go` (discoverable in apt, doesn't conflict with abraunegg)
