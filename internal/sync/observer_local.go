@@ -54,6 +54,8 @@ func (o *LocalObserver) FullScan(ctx context.Context, syncRoot string) ([]Change
 
 	// Guard: abort if .nosync file is present (sync dir may be unmounted).
 	if _, err := os.Stat(filepath.Join(syncRoot, nosyncFileName)); err == nil {
+		o.logger.Warn("nosync guard file detected, aborting scan",
+			slog.String("sync_root", syncRoot))
 		return nil, ErrNosyncGuard
 	}
 
@@ -71,6 +73,12 @@ func (o *LocalObserver) FullScan(ctx context.Context, syncRoot string) ([]Change
 
 	deletions := o.detectDeletions(observed)
 	events = append(events, deletions...)
+
+	o.logger.Debug("deletion detection complete",
+		slog.Int("deletions", len(deletions)),
+		slog.Int("baseline_entries", len(o.baseline.ByPath)),
+		slog.Int("observed", len(observed)),
+	)
 
 	o.logger.Info("local observer completed full scan",
 		slog.Int("events", len(events)),
@@ -314,10 +322,11 @@ func isAlwaysExcluded(name string) bool {
 }
 
 // alwaysExcludedSuffixes lists file extensions that are unsafe to sync.
+// SQLite files (.db, .db-wal, .db-shm) corrupt if synced mid-transaction.
 var alwaysExcludedSuffixes = []string{
 	".partial", ".tmp", ".swp", ".crdownload",
-	".db-wal", ".db-shm", // SQLite auxiliary files (order matters: check before .db)
-	".db", // SQLite database files
+	".db-wal", ".db-shm",
+	".db",
 }
 
 // isValidOneDriveName returns true if the name can be synced to OneDrive.
