@@ -219,7 +219,7 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 - Error classification: fatal vs retryable vs skip
 - Executor operates on `PathView` context — no database queries
 - Tests with mock graph client, real filesystem for downloads, all error paths
-- **Acceptance**: `go test ./internal/sync/...` passes
+- **Acceptance**: All DOD gates (CLAUDE.md §Definition of Done). Additionally: mock graph client tests, real filesystem download tests, all error paths covered.
 - **Inputs**: [event-driven-rationale.md](design/event-driven-rationale.md) Parts 5.5, 10 (Phase 4)
 
 ### 4v2.7: Engine Wiring + RunOnce
@@ -246,7 +246,7 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
   - One goroutine per drive, each with its own `BaselineManager` (separate DB), observers, planner, executor
   - Worker pool sizing: per-drive pools with global cap to prevent I/O saturation across many concurrent drives
   - Error isolation: failure in one drive doesn't block others, per-drive error reporting
-- **Acceptance**: `go test ./internal/sync/...` passes, integration test verifies baseline state after RunOnce
+- **Acceptance**: All DOD gates (CLAUDE.md §Definition of Done). Additionally: integration test verifies baseline state after RunOnce.
 - **Inputs**: [event-driven-rationale.md](design/event-driven-rationale.md) Parts 2, 10 (Phase 5), [accounts.md](design/accounts.md) §13
 
 ### 4v2.8: CLI Integration + Sync E2E
@@ -259,7 +259,7 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 - `resolve` command: interactive conflict resolution (keep local, keep remote, keep both)
 - `verify` command: full-tree hash verification (compare local vs remote vs baseline)
 - All commands support `--drive` and `--json` flags
-- **Acceptance**: Build succeeds, all unit tests pass, all E2E tests pass, `golangci-lint` clean, CI green
+- **Acceptance**: All DOD gates (CLAUDE.md §Definition of Done). Additionally: sync E2E tests pass against live OneDrive, CI green.
 - **Inputs**: [prd.md](design/prd.md) section 4, [event-driven-rationale.md](design/event-driven-rationale.md) Part 10 (Phase 5)
 
 ### Wave Structure
@@ -295,7 +295,7 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 - Produces `ChangeEvent` stream into change buffer
 - Automatic reconnection with exponential backoff on errors
 - WebSocket upgrade deferred to post-v1 (requires Graph API subscription management)
-- **Acceptance**: Integration test — start watch, create remote file, verify event produced
+- **Acceptance**: All DOD gates (CLAUDE.md §Definition of Done). Additionally: integration test — start watch, create remote file, verify event produced.
 
 ### 5.2: LocalObserver.Watch()
 
@@ -303,7 +303,7 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 - Filter: ignore `.partial` files, temp files, OS metadata
 - Produces `ChangeEvent` stream into change buffer
 - Network filesystem detection: fall back to periodic full scan if inotify unreliable
-- **Acceptance**: Test with real temp dir — create/modify/delete files, verify events produced
+- **Acceptance**: All DOD gates (CLAUDE.md §Definition of Done). Additionally: test with real temp dir — create/modify/delete files, verify events produced.
 
 ### 5.3: Engine.RunWatch()
 
@@ -311,27 +311,27 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 - Same code path as RunOnce (one-shot = "observe everything, flush immediately"; watch = "observe incrementally, flush on debounce")
 - Periodic full scan (configurable, default every 12 hours) as safety net
 - Time-of-day bandwidth schedule: adjust rate limiter based on config and wall-clock time
-- **Acceptance**: Integration test — start watch, create file, verify sync cycle triggered
+- **Acceptance**: All DOD gates (CLAUDE.md §Definition of Done). Additionally: integration test — start watch, create file, verify sync cycle triggered.
 
 ### 5.4: Pause/Resume
 
 - `Engine.Pause()`: stop executor, continue accumulating events in buffer
 - `Engine.Resume()`: flush buffer, process accumulated events
 - RPC via Unix domain socket for runtime control
-- **Acceptance**: Test — pause, create files, resume, verify all changes synced
+- **Acceptance**: All DOD gates (CLAUDE.md §Definition of Done). Additionally: test — pause, create files, resume, verify all changes synced.
 
 ### 5.5: SIGHUP Config Reload + Stale File Detection
 
 - SIGHUP handler: re-read config file, apply changes to running engine
 - Detect stale `.partial` files from interrupted previous runs, clean up
 - Filter changes applied immediately (hot reload without restart)
-- **Acceptance**: Test — change config, send SIGHUP, verify new settings active
+- **Acceptance**: All DOD gates (CLAUDE.md §Definition of Done). Additionally: test — change config, send SIGHUP, verify new settings active.
 
 ### 5.6: Graceful Shutdown
 
 - Two-signal protocol: first SIGINT/SIGTERM drains current batch and commits checkpoint; second signal exits immediately
 - WAL mode ensures SQLite consistency even on immediate exit
-- **Acceptance**: Test — start sync, send signal mid-cycle, verify clean shutdown and baseline consistency
+- **Acceptance**: All DOD gates (CLAUDE.md §Definition of Done). Additionally: test — start sync, send signal mid-cycle, verify clean shutdown and baseline consistency.
 
 ---
 
