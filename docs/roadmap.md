@@ -122,8 +122,23 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 - Root items registered in inflight (for children's path materialization) but skipped as events
 - `ErrDeltaExpired` sentinel for HTTP 410 (delta token expired)
 - 23 test cases with mock DeltaFetcher, 86.4% coverage. PR #80.
-- **Acceptance**: All tests pass, observer produces correct events for all delta scenarios
 - **Inputs**: [event-driven-rationale.md](design/event-driven-rationale.md) Parts 5.1, 10 (Phase 2)
+- **DOD**:
+  - [x] Build: `go build ./...` zero errors
+  - [x] Unit tests: `go test -race ./...` all pass
+  - [x] E2E tests: all pass
+  - [x] Lint: `golangci-lint run` zero issues
+  - [x] Format: `gofumpt` + `goimports` applied
+  - [x] Coverage: 86.4% (up from 82.5%)
+  - [x] Logging review: FullDelta start/complete, root skip (Debug), orphaned items (Warn)
+  - [x] Comment review: all structs, functions, constants, edge cases documented
+  - [x] Docs: CLAUDE.md, roadmap.md, BACKLOG.md updated
+  - [x] Git clean: working tree clean after commit
+  - [x] Git cleanup: branch deleted, remote pruned, no stashes/worktrees/open PRs
+  - [x] CI verification: ci.yml (build-and-test) + integration.yml both green post-merge
+  - [x] CI infrastructure: N/A (no CI changes)
+  - [x] Retrospective: graph.Item pointer lesson, gofumpt-before-lint lesson captured in LEARNINGS.md §7
+  - [x] Re-envisioning: architecture confirmed sound, no roadmap changes warranted
 
 ### 4v2.3: Local Observer
 

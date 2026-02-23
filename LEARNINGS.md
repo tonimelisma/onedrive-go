@@ -267,7 +267,11 @@ Refresh tokens are bound to the OAuth client ID that obtained them. If the Azure
 
 ## 7. Event-Driven Sync Engine (Option E)
 
-*Learnings from Phase 4 v2 implementation will be added here as increments are completed.*
+### graph.Item is 264 bytes — always pass by pointer
+The `gocritic` `hugeParam` lint catches this (already documented in §3 under `rangeValCopy`), but it's easy to forget when writing new code that accepts `graph.Item` as a parameter. In 4v2.2, all three methods (`processItem`, `classifyAndConvert`, `materializePath`) and standalone helpers (`classifyItemType`, `selectHash`, `resolveParentDriveID`) were initially written with value parameters and had to be refactored to pointer. Check LEARNINGS §3 gocritic section before writing any function that takes graph types.
+
+### Run gofumpt before first lint check
+Running `golangci-lint run` before `gofumpt -w` wastes a cycle fixing formatting issues that gofumpt would have caught. Always format before linting.
 
 ---
 
