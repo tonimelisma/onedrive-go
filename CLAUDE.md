@@ -124,8 +124,9 @@ After all planned commits for the increment:
 1. Read every new/modified file line by line against the code review checklist in [docs/workflow.md](docs/workflow.md)
 2. For each issue found: fix it now, commit (with quality gates), return to step 1
 3. If an issue cannot be fixed because it depends on future functionality, add it to BACKLOG.md with an ID
-4. Repeat until a complete review pass finds zero actionable issues
-5. Only then proceed to the lifecycle gates below
+4. For every bug fix, gotcha, or subtle issue discovered during top-up: write a regression test that would catch it if it recurred
+5. Repeat until a complete review pass finds zero actionable issues
+6. Only then proceed to the lifecycle gates below
 
 "Good enough" is not a stopping criterion. The stopping criterion is: a complete review pass with no actionable findings.
 
