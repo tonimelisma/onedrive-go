@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/google/uuid"
 	// Pure-Go SQLite driver (no CGO).
 	_ "modernc.org/sqlite"
 )
@@ -299,9 +300,9 @@ func commitMove(ctx context.Context, tx *sql.Tx, o *Outcome, syncedAt int64) err
 	return commitUpsert(ctx, tx, o, syncedAt)
 }
 
-// commitConflict inserts a conflict record and upserts the baseline entry.
+// commitConflict inserts a conflict record for later resolution.
 func commitConflict(ctx context.Context, tx *sql.Tx, o *Outcome, syncedAt int64) error {
-	conflictID := fmt.Sprintf("conflict-%s-%d", o.Path, syncedAt)
+	conflictID := uuid.New().String()
 
 	_, err := tx.ExecContext(ctx, sqlInsertConflict,
 		conflictID, o.DriveID,
