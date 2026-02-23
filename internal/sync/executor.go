@@ -382,17 +382,12 @@ func (e *Executor) executeParallel(
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(workerPoolSize)
 
-	type indexedOutcome struct {
-		idx int
-		out Outcome
-	}
-
-	results := make([]indexedOutcome, len(actions))
+	results := make([]Outcome, len(actions))
 
 	for i := range actions {
 		g.Go(func() error {
 			out := fn(gctx, &actions[i])
-			results[i] = indexedOutcome{idx: i, out: out}
+			results[i] = out
 
 			if !out.Success && out.Error != nil && classifyError(out.Error) == errClassFatal {
 				return out.Error
@@ -407,8 +402,8 @@ func (e *Executor) executeParallel(
 	// Collect all results in order.
 	for i := range results {
 		// Skip zero-value results from goroutines that never ran.
-		if results[i].out.Path != "" || results[i].out.Success {
-			*outcomes = append(*outcomes, results[i].out)
+		if results[i].Path != "" || results[i].Success {
+			*outcomes = append(*outcomes, results[i])
 		}
 	}
 
