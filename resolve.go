@@ -150,21 +150,26 @@ func resolveAllKeepBoth(ctx context.Context, mgr *sync.BaselineManager, dryRun b
 }
 
 func resolveSingleKeepBoth(ctx context.Context, mgr *sync.BaselineManager, idOrPath string, dryRun bool) error {
-	c, err := mgr.GetConflict(ctx, idOrPath)
+	conflicts, err := mgr.ListConflicts(ctx)
 	if err != nil {
 		return err
 	}
 
+	target := findConflict(conflicts, idOrPath)
+	if target == nil {
+		return fmt.Errorf("conflict not found: %s", idOrPath)
+	}
+
 	if dryRun {
-		statusf("Would resolve %s (%s) as keep_both\n", c.Path, c.ID[:conflictIDPrefixLen])
+		statusf("Would resolve %s (%s) as keep_both\n", target.Path, target.ID[:conflictIDPrefixLen])
 		return nil
 	}
 
-	if err := mgr.ResolveConflict(ctx, c.ID, resolutionKeepBoth); err != nil {
+	if err := mgr.ResolveConflict(ctx, target.ID, resolutionKeepBoth); err != nil {
 		return err
 	}
 
-	statusf("Resolved %s as keep_both\n", c.Path)
+	statusf("Resolved %s as keep_both\n", target.Path)
 
 	return nil
 }
@@ -245,23 +250,7 @@ func resolveSingleWithEngine(ctx context.Context, engine *sync.Engine, idOrPath,
 		return err
 	}
 
-	// Find the matching conflict.
-	var target *sync.ConflictRecord
-
-	for i := range conflicts {
-		c := &conflicts[i]
-		if c.ID == idOrPath || c.Path == idOrPath {
-			target = c
-			break
-		}
-
-		// Also match by ID prefix.
-		if len(c.ID) >= len(idOrPath) && c.ID[:len(idOrPath)] == idOrPath {
-			target = c
-			break
-		}
-	}
-
+	target := findConflict(conflicts, idOrPath)
 	if target == nil {
 		return fmt.Errorf("conflict not found: %s", idOrPath)
 	}
@@ -276,6 +265,23 @@ func resolveSingleWithEngine(ctx context.Context, engine *sync.Engine, idOrPath,
 	}
 
 	statusf("Resolved %s as %s\n", target.Path, resolution)
+
+	return nil
+}
+
+// findConflict searches a conflict list by exact ID, exact path, or ID prefix.
+func findConflict(conflicts []sync.ConflictRecord, idOrPath string) *sync.ConflictRecord {
+	for i := range conflicts {
+		c := &conflicts[i]
+		if c.ID == idOrPath || c.Path == idOrPath {
+			return c
+		}
+
+		// Also match by ID prefix.
+		if len(c.ID) >= len(idOrPath) && c.ID[:len(idOrPath)] == idOrPath {
+			return c
+		}
+	}
 
 	return nil
 }
