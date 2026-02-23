@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-**Phases 1-3.5 complete. Phase 4v2 Increments 0-6 complete. Next: 4v2.7-4v2.8.** All development on `main` branch. See [docs/roadmap.md](docs/roadmap.md).
+**Phases 1-3.5 complete. Phase 4v2 Increments 0-7 complete. Next: 4v2.8.** All development on `main` branch. See [docs/roadmap.md](docs/roadmap.md).
 
 ## Architecture Overview
 
@@ -52,7 +52,7 @@
 - **`internal/driveid/`** — Type-safe drive identity: ID, CanonicalID, ItemKey — 98.3% coverage
 - **`internal/config/`** — TOML config, drive sections, XDG paths, four-layer override chain — 94.6% coverage
 - **`internal/graph/`** — Graph API client: auth, retry, items CRUD, delta, transfers — 93.0% coverage
-- **`internal/sync/`** — Event-driven sync: types, baseline, observers, buffer, planner, executor — 90.3% coverage
+- **`internal/sync/`** — Event-driven sync: types, baseline, observers, buffer, planner, executor, engine — 90.7% coverage
 - **Root package** — Cobra CLI: login, logout, whoami, status, drive, ls, get, put, rm, mkdir, stat, sync
 - **`e2e/`** — E2E test suite against live OneDrive
 

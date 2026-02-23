@@ -192,7 +192,7 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 - **Acceptance**: All DOD gates passed. 77.2% total coverage (up from 76.3%), sync package at 88.8%.
 - **Inputs**: [event-driven-rationale.md](design/event-driven-rationale.md) Parts 5.5, 10 (Phase 4)
 
-### 4v2.7: Engine Wiring + RunOnce
+### 4v2.7: Engine Wiring + RunOnce — DONE
 
 **Wire all components into the full sync pipeline.**
 
@@ -210,20 +210,16 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 - Dry-run: stops at step 7, returns action counts without side effects (genuinely zero side effects)
 - Context-based cancellation at every stage
 - Integration tests with real SQLite: full round-trip from delta events through baseline commit
-- **Multi-drive orchestration** (B-060, B-061, B-062):
-  - Add `ResolveDrives()` to `internal/config/` — returns `[]*ResolvedDrive` for all enabled drives (or `--drive` selections)
-  - One `graph.Client` per unique token file — SharePoint drives sharing a business token share the same client (same rate limit tracking, thread-safe `oauth2.TokenSource`)
-  - One goroutine per drive, each with its own `BaselineManager` (separate DB), observers, planner, executor
-  - Worker pool sizing: per-drive pools with global cap to prevent I/O saturation across many concurrent drives
-  - Error isolation: failure in one drive doesn't block others, per-drive error reporting
-- **Acceptance**: All DOD gates (CLAUDE.md §Quality Gates). Additionally: integration test verifies baseline state after RunOnce.
+- CLI `sync` command wired to real Engine (replaced Phase 4v2 stub)
+- **Multi-drive orchestration** (B-060, B-061, B-062) deferred to Phase 5
+- **Acceptance**: All DOD gates passed. 76.6% total coverage, sync package at 90.7%.
 - **Inputs**: [event-driven-rationale.md](design/event-driven-rationale.md) Parts 2, 10 (Phase 5), [accounts.md](design/accounts.md) §13
 
 ### 4v2.8: CLI Integration + Sync E2E
 
-**Wire the new engine to the CLI and prove it works end-to-end.**
+**Prove the sync engine works end-to-end and add remaining CLI commands.**
 
-- Wire `sync.go` to new `Engine` API (replace "not yet implemented" stub from Inc 0 with real engine constructor)
+- CLI `sync` wiring done in 4v2.7; this increment adds E2E tests and remaining commands
 - E2E test updates: write new sync E2E tests against new engine, re-enable sync tests in CI (`integration.yml`)
 - `conflicts` command: list unresolved conflicts from baseline (table or JSON)
 - `resolve` command: interactive conflict resolution (keep local, keep remote, keep both)
