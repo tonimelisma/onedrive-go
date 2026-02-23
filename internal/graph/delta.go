@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // deltaPreferHeader requests that the Graph API include remote/shared items
@@ -40,14 +42,14 @@ var maxDeltaPages = 10000 //nolint:gochecknoglobals // test-overridable guard
 // previous DeltaPage — these are full URLs that get converted to paths.
 // Returns a DeltaPage with normalized items, and either NextLink (more pages)
 // or DeltaLink (done). HTTP 410 (Gone) means the token has expired — returns ErrGone.
-func (c *Client) Delta(ctx context.Context, driveID, token string) (*DeltaPage, error) {
+func (c *Client) Delta(ctx context.Context, driveID driveid.ID, token string) (*DeltaPage, error) {
 	path, err := c.buildDeltaPath(driveID, token)
 	if err != nil {
 		return nil, err
 	}
 
 	c.logger.Info("fetching delta page",
-		slog.String("drive_id", driveID),
+		slog.String("drive_id", driveID.String()),
 		slog.Bool("initial_sync", token == ""),
 	)
 
@@ -88,7 +90,7 @@ func (c *Client) Delta(ctx context.Context, driveID, token string) (*DeltaPage, 
 // buildDeltaPath constructs the API path for a delta request.
 // Empty token means initial sync; non-empty token is a full URL from a
 // previous response that gets stripped to a relative path.
-func (c *Client) buildDeltaPath(driveID, token string) (string, error) {
+func (c *Client) buildDeltaPath(driveID driveid.ID, token string) (string, error) {
 	if token == "" || !strings.HasPrefix(token, deltaHTTPPrefix) {
 		return fmt.Sprintf("/drives/%s/root/delta", driveID), nil
 	}
@@ -104,9 +106,9 @@ func (c *Client) buildDeltaPath(driveID, token string) (string, error) {
 // DeltaAll fetches all pages of delta changes and returns the combined items
 // and the new delta token for the next sync cycle.
 // On success, the returned token is always a non-empty DeltaLink.
-func (c *Client) DeltaAll(ctx context.Context, driveID, token string) ([]Item, string, error) {
+func (c *Client) DeltaAll(ctx context.Context, driveID driveid.ID, token string) ([]Item, string, error) {
 	c.logger.Info("starting full delta enumeration",
-		slog.String("drive_id", driveID),
+		slog.String("drive_id", driveID.String()),
 		slog.Bool("initial_sync", token == ""),
 	)
 
@@ -132,7 +134,7 @@ func (c *Client) DeltaAll(ctx context.Context, driveID, token string) ([]Item, s
 		// DeltaLink means we have consumed all pages — done.
 		if dp.DeltaLink != "" {
 			c.logger.Info("full delta enumeration complete",
-				slog.String("drive_id", driveID),
+				slog.String("drive_id", driveID.String()),
 				slog.Int("total_items", len(allItems)),
 				slog.Int("pages", page),
 			)
@@ -154,7 +156,7 @@ func (c *Client) DeltaAll(ctx context.Context, driveID, token string) ([]Item, s
 
 		// Neither link present — unexpected, but treat as complete with empty token.
 		c.logger.Warn("delta response has neither nextLink nor deltaLink",
-			slog.String("drive_id", driveID),
+			slog.String("drive_id", driveID.String()),
 			slog.Int("page", page),
 		)
 

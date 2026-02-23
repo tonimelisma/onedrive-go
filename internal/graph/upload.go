@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // chunkAlignment is the required alignment for upload chunk sizes (320 KiB).
@@ -52,10 +54,10 @@ type uploadSessionStatusResponse struct {
 // For larger files, use CreateUploadSession + UploadChunk.
 // The content is sent with application/octet-stream content type.
 func (c *Client) SimpleUpload(
-	ctx context.Context, driveID, parentID, name string, r io.Reader, size int64,
+	ctx context.Context, driveID driveid.ID, parentID, name string, r io.Reader, size int64,
 ) (*Item, error) {
 	c.logger.Info("simple upload",
-		slog.String("drive_id", driveID),
+		slog.String("drive_id", driveID.String()),
 		slog.String("parent_id", parentID),
 		slog.String("name", name),
 		slog.Int64("size", size),
@@ -84,10 +86,10 @@ func (c *Client) SimpleUpload(
 // When mtime is non-zero, fileSystemInfo is included in the request to
 // preserve the local modification timestamp on the server.
 func (c *Client) CreateUploadSession(
-	ctx context.Context, driveID, parentID, name string, size int64, mtime time.Time,
+	ctx context.Context, driveID driveid.ID, parentID, name string, size int64, mtime time.Time,
 ) (*UploadSession, error) {
 	c.logger.Info("creating upload session",
-		slog.String("drive_id", driveID),
+		slog.String("drive_id", driveID.String()),
 		slog.String("parent_id", parentID),
 		slog.String("name", name),
 		slog.Int64("size", size),

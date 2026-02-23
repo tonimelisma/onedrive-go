@@ -2,15 +2,9 @@ package config
 
 import (
 	"fmt"
-	"strings"
-)
 
-// validDriveTypes enumerates accepted drive type prefixes in canonical IDs.
-var validDriveTypes = map[string]bool{
-	"personal":   true,
-	"business":   true,
-	"sharepoint": true,
-}
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
+)
 
 // validateDrives checks all drive-level constraints: canonical ID format,
 // required fields, per-drive setting validity, and sync_dir uniqueness.
@@ -35,8 +29,8 @@ func validateDrives(cfg *Config) []error {
 func validateSingleDrive(id string, drive *Drive, syncDirs map[string]string) []error {
 	var errs []error
 
-	if err := validateCanonicalID(id); err != nil {
-		errs = append(errs, err)
+	if _, err := driveid.NewCanonicalID(id); err != nil {
+		errs = append(errs, fmt.Errorf("drive ID %q: %w", id, err))
 
 		return errs
 	}
@@ -54,26 +48,6 @@ func validateSingleDrive(id string, drive *Drive, syncDirs map[string]string) []
 	errs = append(errs, checkDriveSyncDirUniqueness(id, drive, syncDirs)...)
 
 	return errs
-}
-
-// validateCanonicalID checks that a drive ID follows the "type:email" format
-// with a valid drive type prefix.
-func validateCanonicalID(id string) error {
-	parts := strings.SplitN(id, ":", driveTypeParts)
-	if len(parts) < driveTypeParts {
-		return fmt.Errorf("drive ID %q: must contain ':' (format: type:email)", id)
-	}
-
-	driveType := parts[0]
-	if !validDriveTypes[driveType] {
-		return fmt.Errorf("drive ID %q: unknown type %q (must be personal, business, or sharepoint)", id, driveType)
-	}
-
-	if parts[1] == "" {
-		return fmt.Errorf("drive ID %q: email part cannot be empty", id)
-	}
-
-	return nil
 }
 
 // checkDriveSyncDirUniqueness ensures no two drives share the same expanded sync_dir.

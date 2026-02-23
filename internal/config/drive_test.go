@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // --- matchDrive ---
@@ -19,7 +21,7 @@ func TestMatchDrive_SingleDrive_AutoSelect(t *testing.T) {
 
 	id, d, err := matchDrive(cfg, "", testLogger(t))
 	require.NoError(t, err)
-	assert.Equal(t, "personal:toni@outlook.com", id)
+	assert.Equal(t, driveid.MustCanonicalID("personal:toni@outlook.com"), id)
 	assert.Equal(t, "~/OneDrive", d.SyncDir)
 }
 
@@ -52,7 +54,7 @@ func TestMatchDrive_NoDrives_CanonicalSelector(t *testing.T) {
 
 	id, _, err := matchDrive(cfg, "personal:toni@outlook.com", testLogger(t))
 	require.NoError(t, err)
-	assert.Equal(t, "personal:toni@outlook.com", id)
+	assert.Equal(t, driveid.MustCanonicalID("personal:toni@outlook.com"), id)
 }
 
 func TestMatchDrive_NoDrives_NonCanonicalSelector_Error(t *testing.T) {
@@ -72,7 +74,7 @@ func TestMatchDrive_ExactCanonicalID(t *testing.T) {
 
 	id, _, err := matchDrive(cfg, "personal:toni@outlook.com", testLogger(t))
 	require.NoError(t, err)
-	assert.Equal(t, "personal:toni@outlook.com", id)
+	assert.Equal(t, driveid.MustCanonicalID("personal:toni@outlook.com"), id)
 }
 
 func TestMatchDrive_AliasMatch(t *testing.T) {
@@ -82,7 +84,7 @@ func TestMatchDrive_AliasMatch(t *testing.T) {
 
 	id, _, err := matchDrive(cfg, "work", testLogger(t))
 	require.NoError(t, err)
-	assert.Equal(t, "business:alice@contoso.com", id)
+	assert.Equal(t, driveid.MustCanonicalID("business:alice@contoso.com"), id)
 }
 
 func TestMatchDrive_PartialMatch(t *testing.T) {
@@ -92,7 +94,7 @@ func TestMatchDrive_PartialMatch(t *testing.T) {
 
 	id, _, err := matchDrive(cfg, "toni", testLogger(t))
 	require.NoError(t, err)
-	assert.Equal(t, "personal:toni@outlook.com", id)
+	assert.Equal(t, driveid.MustCanonicalID("personal:toni@outlook.com"), id)
 }
 
 func TestMatchDrive_AmbiguousPartialMatch_Error(t *testing.T) {
@@ -122,9 +124,9 @@ func TestBuildResolvedDrive_GlobalDefaults(t *testing.T) {
 	cfg.LogLevel = "debug"
 
 	drive := &Drive{SyncDir: "~/OneDrive"}
-	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive, testLogger(t))
+	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("personal:toni@outlook.com"), drive, testLogger(t))
 
-	assert.Equal(t, "personal:toni@outlook.com", resolved.CanonicalID)
+	assert.Equal(t, driveid.MustCanonicalID("personal:toni@outlook.com"), resolved.CanonicalID)
 	assert.True(t, resolved.Enabled)
 	assert.True(t, resolved.SkipDotfiles)
 	assert.Equal(t, "debug", resolved.LogLevel)
@@ -135,7 +137,7 @@ func TestBuildResolvedDrive_EnabledDefault(t *testing.T) {
 	cfg := DefaultConfig()
 	drive := &Drive{SyncDir: "~/OneDrive"}
 
-	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive, testLogger(t))
+	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("personal:toni@outlook.com"), drive, testLogger(t))
 	assert.True(t, resolved.Enabled, "Enabled should default to true when nil")
 }
 
@@ -144,7 +146,7 @@ func TestBuildResolvedDrive_EnabledExplicitFalse(t *testing.T) {
 	enabled := false
 	drive := &Drive{SyncDir: "~/OneDrive", Enabled: &enabled}
 
-	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive, testLogger(t))
+	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("personal:toni@outlook.com"), drive, testLogger(t))
 	assert.False(t, resolved.Enabled)
 }
 
@@ -153,7 +155,7 @@ func TestBuildResolvedDrive_EnabledExplicitTrue(t *testing.T) {
 	enabled := true
 	drive := &Drive{SyncDir: "~/OneDrive", Enabled: &enabled}
 
-	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive, testLogger(t))
+	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("personal:toni@outlook.com"), drive, testLogger(t))
 	assert.True(t, resolved.Enabled)
 }
 
@@ -171,7 +173,7 @@ func TestBuildResolvedDrive_PerDriveOverrides(t *testing.T) {
 		PollInterval: "10m",
 	}
 
-	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive, testLogger(t))
+	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("personal:toni@outlook.com"), drive, testLogger(t))
 
 	assert.True(t, resolved.SkipDotfiles)
 	assert.Equal(t, []string{"vendor"}, resolved.SkipDirs)
@@ -183,7 +185,7 @@ func TestBuildResolvedDrive_RemotePathDefault(t *testing.T) {
 	cfg := DefaultConfig()
 	drive := &Drive{SyncDir: "~/OneDrive"}
 
-	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive, testLogger(t))
+	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("personal:toni@outlook.com"), drive, testLogger(t))
 	assert.Equal(t, "/", resolved.RemotePath)
 }
 
@@ -191,7 +193,7 @@ func TestBuildResolvedDrive_RemotePathExplicit(t *testing.T) {
 	cfg := DefaultConfig()
 	drive := &Drive{SyncDir: "~/OneDrive", RemotePath: "/Documents"}
 
-	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive, testLogger(t))
+	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("personal:toni@outlook.com"), drive, testLogger(t))
 	assert.Equal(t, "/Documents", resolved.RemotePath)
 }
 
@@ -199,7 +201,7 @@ func TestBuildResolvedDrive_TildeExpanded(t *testing.T) {
 	cfg := DefaultConfig()
 	drive := &Drive{SyncDir: "~/OneDrive"}
 
-	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive, testLogger(t))
+	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("personal:toni@outlook.com"), drive, testLogger(t))
 
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
@@ -211,7 +213,7 @@ func TestBuildResolvedDrive_AbsolutePathPreserved(t *testing.T) {
 	cfg := DefaultConfig()
 	drive := &Drive{SyncDir: "/absolute/path/OneDrive"}
 
-	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive, testLogger(t))
+	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("personal:toni@outlook.com"), drive, testLogger(t))
 	assert.Equal(t, "/absolute/path/OneDrive", resolved.SyncDir)
 }
 
@@ -223,9 +225,9 @@ func TestBuildResolvedDrive_AliasAndDriveID(t *testing.T) {
 		DriveID: "abc123",
 	}
 
-	resolved := buildResolvedDrive(cfg, "personal:toni@outlook.com", drive, testLogger(t))
+	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("personal:toni@outlook.com"), drive, testLogger(t))
 	assert.Equal(t, "home", resolved.Alias)
-	assert.Equal(t, "abc123", resolved.DriveID)
+	assert.Equal(t, driveid.New("abc123"), resolved.DriveID)
 }
 
 // --- expandTilde ---
@@ -408,7 +410,7 @@ alias = "work"
 		testLogger(t),
 	)
 	require.NoError(t, err)
-	assert.Equal(t, "business:alice@contoso.com", resolved.CanonicalID)
+	assert.Equal(t, driveid.MustCanonicalID("business:alice@contoso.com"), resolved.CanonicalID)
 }
 
 // --- discoverTokensIn ---
@@ -435,7 +437,7 @@ func TestDiscoverTokensIn_OneToken(t *testing.T) {
 
 	ids := discoverTokensIn(dir, testLogger(t))
 	require.Len(t, ids, 1)
-	assert.Equal(t, "personal:user@example.com", ids[0])
+	assert.Equal(t, driveid.MustCanonicalID("personal:user@example.com"), ids[0])
 }
 
 func TestDiscoverTokensIn_TwoTokens_Sorted(t *testing.T) {
@@ -446,8 +448,8 @@ func TestDiscoverTokensIn_TwoTokens_Sorted(t *testing.T) {
 	ids := discoverTokensIn(dir, testLogger(t))
 	require.Len(t, ids, 2)
 	// Should be sorted alphabetically.
-	assert.Equal(t, "business:alice@contoso.com", ids[0])
-	assert.Equal(t, "personal:zack@example.com", ids[1])
+	assert.Equal(t, driveid.MustCanonicalID("business:alice@contoso.com"), ids[0])
+	assert.Equal(t, driveid.MustCanonicalID("personal:zack@example.com"), ids[1])
 }
 
 func TestDiscoverTokensIn_IgnoresNonTokenFiles(t *testing.T) {
@@ -459,7 +461,7 @@ func TestDiscoverTokensIn_IgnoresNonTokenFiles(t *testing.T) {
 
 	ids := discoverTokensIn(dir, testLogger(t))
 	require.Len(t, ids, 1)
-	assert.Equal(t, "personal:user@example.com", ids[0])
+	assert.Equal(t, driveid.MustCanonicalID("personal:user@example.com"), ids[0])
 }
 
 func TestDiscoverTokensIn_SkipsMalformed(t *testing.T) {
@@ -470,7 +472,7 @@ func TestDiscoverTokensIn_SkipsMalformed(t *testing.T) {
 
 	ids := discoverTokensIn(dir, testLogger(t))
 	require.Len(t, ids, 1)
-	assert.Equal(t, "personal:user@example.com", ids[0])
+	assert.Equal(t, driveid.MustCanonicalID("personal:user@example.com"), ids[0])
 }
 
 func TestDiscoverTokensIn_IgnoresDirectories(t *testing.T) {
@@ -482,7 +484,7 @@ func TestDiscoverTokensIn_IgnoresDirectories(t *testing.T) {
 
 	ids := discoverTokensIn(dir, testLogger(t))
 	require.Len(t, ids, 1)
-	assert.Equal(t, "personal:user@example.com", ids[0])
+	assert.Equal(t, driveid.MustCanonicalID("personal:user@example.com"), ids[0])
 }
 
 // --- matchDrive with token discovery ---
@@ -495,7 +497,7 @@ func TestMatchDrive_NoDrives_NoSelector_OneToken(t *testing.T) {
 
 	id, _, err := matchDrive(cfg, "", testLogger(t))
 	require.NoError(t, err)
-	assert.Equal(t, "personal:user@example.com", id)
+	assert.Equal(t, driveid.MustCanonicalID("personal:user@example.com"), id)
 }
 
 func TestMatchDrive_NoDrives_NoSelector_MultipleTokens(t *testing.T) {

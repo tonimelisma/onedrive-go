@@ -1,31 +1,30 @@
 package config
 
 import (
+	"cmp"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // Default remote path when none is specified.
 const defaultRemotePath = "/"
 
-// driveTypeParts is the minimum number of colon-separated parts in a
-// canonical drive ID (type:email).
-const driveTypeParts = 2
-
 // ResolvedDrive contains drive fields plus effective config sections after
 // merging global defaults with per-drive overrides and CLI/env flags. This
 // is the final product consumed by the CLI and sync engine.
 type ResolvedDrive struct {
-	CanonicalID string
+	CanonicalID driveid.CanonicalID
 	Alias       string
 	Enabled     bool
 	SyncDir     string // absolute path after tilde expansion
 	RemotePath  string
-	DriveID     string
+	DriveID     driveid.ID
 
 	FilterConfig
 	TransfersConfig
@@ -40,7 +39,7 @@ type ResolvedDrive struct {
 // If selector is empty, auto-selects when exactly one drive is configured.
 // When no drives are configured and no selector is given, falls back to
 // token discovery on disk (see DiscoverTokens).
-func matchDrive(cfg *Config, selector string, logger *slog.Logger) (string, Drive, error) {
+func matchDrive(cfg *Config, selector string, logger *slog.Logger) (driveid.CanonicalID, Drive, error) {
 	if len(cfg.Drives) == 0 {
 		// If the selector looks like a canonical ID (contains ":"), allow
 		// zero-config usage. This supports CLI-only workflows where --drive
@@ -48,12 +47,17 @@ func matchDrive(cfg *Config, selector string, logger *slog.Logger) (string, Driv
 		if strings.Contains(selector, ":") {
 			logger.Debug("zero-config mode: using selector as canonical ID", "selector", selector)
 
-			return selector, Drive{}, nil
+			cid, err := driveid.NewCanonicalID(selector)
+			if err != nil {
+				return driveid.CanonicalID{}, Drive{}, fmt.Errorf("invalid drive selector: %w", err)
+			}
+
+			return cid, Drive{}, nil
 		}
 
 		// Non-canonical selector with no drives — can't match against anything.
 		if selector != "" {
-			return "", Drive{}, fmt.Errorf("no drives configured — run 'onedrive-go login' to get started")
+			return driveid.CanonicalID{}, Drive{}, fmt.Errorf("no drives configured — run 'onedrive-go login' to get started")
 		}
 
 		// No selector and no config — discover tokens on disk.
@@ -68,25 +72,35 @@ func matchDrive(cfg *Config, selector string, logger *slog.Logger) (string, Driv
 }
 
 // matchSingleDrive auto-selects when exactly one drive is configured.
-func matchSingleDrive(cfg *Config, logger *slog.Logger) (string, Drive, error) {
+func matchSingleDrive(cfg *Config, logger *slog.Logger) (driveid.CanonicalID, Drive, error) {
 	if len(cfg.Drives) == 1 {
 		for id := range cfg.Drives {
 			logger.Debug("auto-selected single drive", "canonical_id", id)
 
-			return id, cfg.Drives[id], nil
+			cid, err := driveid.NewCanonicalID(id)
+			if err != nil {
+				return driveid.CanonicalID{}, Drive{}, fmt.Errorf("invalid canonical ID in config: %w", err)
+			}
+
+			return cid, cfg.Drives[id], nil
 		}
 	}
 
-	return "", Drive{}, fmt.Errorf("multiple drives configured — specify with --drive")
+	return driveid.CanonicalID{}, Drive{}, fmt.Errorf("multiple drives configured — specify with --drive")
 }
 
 // matchBySelector finds a drive by exact ID, alias, or partial substring match.
-func matchBySelector(cfg *Config, selector string, logger *slog.Logger) (string, Drive, error) {
+func matchBySelector(cfg *Config, selector string, logger *slog.Logger) (driveid.CanonicalID, Drive, error) {
 	// Exact canonical ID match
 	if d, ok := cfg.Drives[selector]; ok {
 		logger.Debug("drive matched by exact canonical ID", "canonical_id", selector)
 
-		return selector, d, nil
+		cid, err := driveid.NewCanonicalID(selector)
+		if err != nil {
+			return driveid.CanonicalID{}, Drive{}, fmt.Errorf("invalid canonical ID in config: %w", err)
+		}
+
+		return cid, d, nil
 	}
 
 	// Alias match
@@ -94,7 +108,12 @@ func matchBySelector(cfg *Config, selector string, logger *slog.Logger) (string,
 		if cfg.Drives[id].Alias == selector {
 			logger.Debug("drive matched by alias", "alias", selector, "canonical_id", id)
 
-			return id, cfg.Drives[id], nil
+			cid, err := driveid.NewCanonicalID(id)
+			if err != nil {
+				return driveid.CanonicalID{}, Drive{}, fmt.Errorf("invalid canonical ID in config: %w", err)
+			}
+
+			return cid, cfg.Drives[id], nil
 		}
 	}
 
@@ -102,7 +121,7 @@ func matchBySelector(cfg *Config, selector string, logger *slog.Logger) (string,
 }
 
 // matchPartial finds drives whose canonical ID contains the selector as a substring.
-func matchPartial(cfg *Config, selector string, logger *slog.Logger) (string, Drive, error) {
+func matchPartial(cfg *Config, selector string, logger *slog.Logger) (driveid.CanonicalID, Drive, error) {
 	var matches []string
 
 	for id := range cfg.Drives {
@@ -114,29 +133,34 @@ func matchPartial(cfg *Config, selector string, logger *slog.Logger) (string, Dr
 	if len(matches) == 1 {
 		logger.Debug("drive matched by partial substring", "selector", selector, "canonical_id", matches[0])
 
-		return matches[0], cfg.Drives[matches[0]], nil
+		cid, err := driveid.NewCanonicalID(matches[0])
+		if err != nil {
+			return driveid.CanonicalID{}, Drive{}, fmt.Errorf("invalid canonical ID in config: %w", err)
+		}
+
+		return cid, cfg.Drives[matches[0]], nil
 	}
 
 	if len(matches) > 1 {
-		sort.Strings(matches)
+		slices.Sort(matches)
 
-		return "", Drive{}, fmt.Errorf("ambiguous drive selector %q matches: %s",
+		return driveid.CanonicalID{}, Drive{}, fmt.Errorf("ambiguous drive selector %q matches: %s",
 			selector, strings.Join(matches, ", "))
 	}
 
-	return "", Drive{}, fmt.Errorf("no drive matching %q", selector)
+	return driveid.CanonicalID{}, Drive{}, fmt.Errorf("no drive matching %q", selector)
 }
 
 // buildResolvedDrive creates a ResolvedDrive by starting with global config
 // values and applying per-drive overrides for fields that the drive specifies.
-func buildResolvedDrive(cfg *Config, canonicalID string, drive *Drive, logger *slog.Logger) *ResolvedDrive {
+func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Drive, logger *slog.Logger) *ResolvedDrive {
 	resolved := &ResolvedDrive{
 		CanonicalID:     canonicalID,
 		Alias:           drive.Alias,
 		Enabled:         drive.Enabled == nil || *drive.Enabled, // default true
 		SyncDir:         expandTilde(drive.SyncDir),
 		RemotePath:      drive.RemotePath,
-		DriveID:         drive.DriveID,
+		DriveID:         driveid.New(drive.DriveID),
 		FilterConfig:    cfg.FilterConfig,
 		TransfersConfig: cfg.TransfersConfig,
 		SafetyConfig:    cfg.SafetyConfig,
@@ -197,20 +221,25 @@ func expandTilde(path string) string {
 
 // matchDiscoveredTokens auto-selects a drive from token files found on disk.
 // This enables the zero-config experience: login → ls works without a config file.
-func matchDiscoveredTokens(logger *slog.Logger) (string, Drive, error) {
+func matchDiscoveredTokens(logger *slog.Logger) (driveid.CanonicalID, Drive, error) {
 	tokens := DiscoverTokens(logger)
 
 	switch len(tokens) {
 	case 0:
-		return "", Drive{}, fmt.Errorf("no accounts — run 'onedrive-go login' to get started")
+		return driveid.CanonicalID{}, Drive{}, fmt.Errorf("no accounts — run 'onedrive-go login' to get started")
 	case 1:
-		logger.Debug("auto-selected single discovered token", "canonical_id", tokens[0])
+		logger.Debug("auto-selected single discovered token", "canonical_id", tokens[0].String())
 
 		return tokens[0], Drive{}, nil
 	default:
-		return "", Drive{}, fmt.Errorf(
+		strs := make([]string, 0, len(tokens))
+		for _, t := range tokens {
+			strs = append(strs, t.String())
+		}
+
+		return driveid.CanonicalID{}, Drive{}, fmt.Errorf(
 			"multiple accounts found — specify with --drive:\n  %s",
-			strings.Join(tokens, "\n  "))
+			strings.Join(strs, "\n  "))
 	}
 }
 
@@ -218,13 +247,13 @@ func matchDiscoveredTokens(logger *slog.Logger) (string, Drive, error) {
 // canonical drive IDs extracted from filenames. Token files follow the naming
 // convention: token_{type}_{email}.json (e.g., token_personal_user@example.com.json).
 // This enables zero-config drive discovery when no config file exists.
-func DiscoverTokens(logger *slog.Logger) []string {
+func DiscoverTokens(logger *slog.Logger) []driveid.CanonicalID {
 	return discoverTokensIn(DefaultDataDir(), logger)
 }
 
 // discoverTokensIn scans dir for token files and extracts canonical IDs.
 // Files that don't match the token naming convention are silently skipped.
-func discoverTokensIn(dir string, logger *slog.Logger) []string {
+func discoverTokensIn(dir string, logger *slog.Logger) []driveid.CanonicalID {
 	if dir == "" {
 		return nil
 	}
@@ -236,7 +265,7 @@ func discoverTokensIn(dir string, logger *slog.Logger) []string {
 		return nil
 	}
 
-	var ids []string
+	var ids []driveid.CanonicalID
 
 	for _, e := range entries {
 		if e.IsDir() {
@@ -254,17 +283,26 @@ func discoverTokensIn(dir string, logger *slog.Logger) []string {
 		inner := strings.TrimPrefix(name, "token_")
 		inner = strings.TrimSuffix(inner, ".json")
 
-		parts := strings.SplitN(inner, "_", driveTypeParts)
-		if len(parts) < driveTypeParts || parts[0] == "" || parts[1] == "" {
+		parts := strings.SplitN(inner, "_", 2)
+		if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
 			logger.Debug("skipping malformed token filename", "name", name)
 
 			continue
 		}
 
-		ids = append(ids, parts[0]+":"+parts[1])
+		cid, err := driveid.Construct(parts[0], parts[1])
+		if err != nil {
+			logger.Debug("skipping token with invalid drive type", "name", name, "error", err)
+
+			continue
+		}
+
+		ids = append(ids, cid)
 	}
 
-	sort.Strings(ids)
+	slices.SortFunc(ids, func(a, b driveid.CanonicalID) int {
+		return cmp.Compare(a.String(), b.String())
+	})
 	logger.Debug("token discovery complete", "dir", dir, "count", len(ids))
 
 	return ids
@@ -276,26 +314,23 @@ func discoverTokensIn(dir string, logger *slog.Logger) []string {
 //
 //	"personal:toni@outlook.com" -> "{dataDir}/token_personal_toni@outlook.com.json"
 //	"sharepoint:alice@contoso.com:marketing:Docs" -> "{dataDir}/token_business_alice@contoso.com.json"
+//
+// Accepts a string param for backward compatibility; future cleanup will
+// accept driveid.CanonicalID directly.
 func DriveTokenPath(canonicalID string) string {
 	dataDir := DefaultDataDir()
 	if dataDir == "" {
 		return ""
 	}
 
-	parts := strings.SplitN(canonicalID, ":", driveTypeParts+1)
-	if len(parts) < driveTypeParts {
+	cid, err := driveid.NewCanonicalID(canonicalID)
+	if err != nil {
 		return ""
 	}
 
-	driveType := parts[0]
-	email := parts[1]
-
-	// SharePoint drives share the business token (same user, same OAuth session).
-	if driveType == "sharepoint" {
-		driveType = "business"
-	}
-
-	sanitized := driveType + "_" + email
+	// TokenCanonicalID() maps SharePoint → business (shared OAuth session).
+	tokenCID := cid.TokenCanonicalID()
+	sanitized := tokenCID.DriveType() + "_" + tokenCID.Email()
 
 	return filepath.Join(dataDir, "token_"+sanitized+".json")
 }
@@ -306,15 +341,17 @@ func DriveTokenPath(canonicalID string) string {
 //
 //	"personal:toni@outlook.com" -> "{dataDir}/state_personal_toni@outlook.com.db"
 //	"sharepoint:alice@contoso.com:marketing:Docs" -> "{dataDir}/state_sharepoint_alice@contoso.com_marketing_Docs.db"
+//
+// Accepts a string param for backward compatibility; future cleanup will
+// accept driveid.CanonicalID directly.
 func DriveStatePath(canonicalID string) string {
 	dataDir := DefaultDataDir()
 	if dataDir == "" {
 		return ""
 	}
 
-	// Validate canonical ID format — must be non-empty and contain ":"
-	// to match DriveTokenPath's validation behavior.
-	if canonicalID == "" || !strings.Contains(canonicalID, ":") {
+	// Validate via driveid — ensures proper "type:email" format.
+	if _, err := driveid.NewCanonicalID(canonicalID); err != nil {
 		return ""
 	}
 

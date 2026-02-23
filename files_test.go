@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -156,7 +157,7 @@ func TestPrintWhoamiText(t *testing.T) {
 
 	drives := []graph.Drive{
 		{
-			ID:         "drive-abc",
+			ID:         driveid.New("drive-abc"),
 			Name:       "OneDrive",
 			DriveType:  "personal",
 			QuotaUsed:  1073741824, // 1 GB

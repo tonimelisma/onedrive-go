@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // listChildrenPageSize is the $top value for ListChildren requests.
@@ -127,12 +129,12 @@ func (d *driveItemResponse) toItem(logger *slog.Logger) Item {
 		DownloadURL: d.DownloadURL,
 	}
 
-	// Normalize DriveID to lowercase — Graph API returns inconsistent casing
-	// for drive IDs across endpoints (see docs/tier1-research/).
+	// Normalize DriveID via driveid.New — lowercase + zero-pad for short IDs.
+	// Graph API returns inconsistent casing across endpoints (see docs/tier1-research/).
 	if d.ParentReference != nil {
-		item.DriveID = strings.ToLower(d.ParentReference.DriveID)
+		item.DriveID = driveid.New(d.ParentReference.DriveID)
 		item.ParentID = d.ParentReference.ID
-		item.ParentDriveID = strings.ToLower(d.ParentReference.DriveID)
+		item.ParentDriveID = driveid.New(d.ParentReference.DriveID)
 	}
 
 	// Folder child count
@@ -253,9 +255,9 @@ func (c *Client) fetchAllChildren(
 }
 
 // GetItem retrieves a single drive item by ID.
-func (c *Client) GetItem(ctx context.Context, driveID, itemID string) (*Item, error) {
+func (c *Client) GetItem(ctx context.Context, driveID driveid.ID, itemID string) (*Item, error) {
 	c.logger.Info("getting item",
-		slog.String("drive_id", driveID),
+		slog.String("drive_id", driveID.String()),
 		slog.String("item_id", itemID),
 	)
 
@@ -266,13 +268,13 @@ func (c *Client) GetItem(ctx context.Context, driveID, itemID string) (*Item, er
 // The path must NOT have a leading slash and must not be empty — these are caller
 // bugs that produce malformed API URLs. Returns ErrInvalidPath for both cases.
 // For root, callers should use GetItem with itemID "root" instead.
-func (c *Client) GetItemByPath(ctx context.Context, driveID, remotePath string) (*Item, error) {
+func (c *Client) GetItemByPath(ctx context.Context, driveID driveid.ID, remotePath string) (*Item, error) {
 	if err := validateRemotePath(remotePath); err != nil {
 		return nil, err
 	}
 
 	c.logger.Info("getting item by path",
-		slog.String("drive_id", driveID),
+		slog.String("drive_id", driveID.String()),
 		slog.String("path", remotePath),
 	)
 
@@ -280,14 +282,14 @@ func (c *Client) GetItemByPath(ctx context.Context, driveID, remotePath string) 
 }
 
 // ListChildren returns all children of a folder, handling pagination automatically.
-func (c *Client) ListChildren(ctx context.Context, driveID, parentID string) ([]Item, error) {
+func (c *Client) ListChildren(ctx context.Context, driveID driveid.ID, parentID string) ([]Item, error) {
 	return c.fetchAllChildren(
 		ctx,
 		fmt.Sprintf("/drives/%s/items/%s/children?$top=%d", driveID, parentID, listChildrenPageSize),
 		"listing children",
 		"listed children complete",
 		[]slog.Attr{
-			slog.String("drive_id", driveID),
+			slog.String("drive_id", driveID.String()),
 			slog.String("parent_id", parentID),
 		},
 	)
@@ -297,7 +299,7 @@ func (c *Client) ListChildren(ctx context.Context, driveID, parentID string) ([]
 // handling pagination automatically. The path must NOT have a leading slash and
 // must not be empty — returns ErrInvalidPath for both cases.
 // For root, callers should use ListChildren with parentID "root" instead.
-func (c *Client) ListChildrenByPath(ctx context.Context, driveID, remotePath string) ([]Item, error) {
+func (c *Client) ListChildrenByPath(ctx context.Context, driveID driveid.ID, remotePath string) ([]Item, error) {
 	if err := validateRemotePath(remotePath); err != nil {
 		return nil, err
 	}
@@ -308,7 +310,7 @@ func (c *Client) ListChildrenByPath(ctx context.Context, driveID, remotePath str
 		"listing children by path",
 		"listed children by path complete",
 		[]slog.Attr{
-			slog.String("drive_id", driveID),
+			slog.String("drive_id", driveID.String()),
 			slog.String("remote_path", remotePath),
 		},
 	)
@@ -364,9 +366,9 @@ func (c *Client) stripBaseURL(fullURL string) (string, error) {
 
 // CreateFolder creates a new folder under the given parent.
 // Uses conflictBehavior "fail" — returns ErrConflict (409) on name collision.
-func (c *Client) CreateFolder(ctx context.Context, driveID, parentID, name string) (*Item, error) {
+func (c *Client) CreateFolder(ctx context.Context, driveID driveid.ID, parentID, name string) (*Item, error) {
 	c.logger.Info("creating folder",
-		slog.String("drive_id", driveID),
+		slog.String("drive_id", driveID.String()),
 		slog.String("parent_id", parentID),
 		slog.String("name", name),
 	)
@@ -405,13 +407,13 @@ func (c *Client) CreateFolder(ctx context.Context, driveID, parentID, name strin
 var ErrMoveNoChanges = errors.New("graph: MoveItem requires at least one of newParentID or newName")
 
 // MoveItem moves and/or renames an item. At least one of newParentID or newName must be non-empty.
-func (c *Client) MoveItem(ctx context.Context, driveID, itemID, newParentID, newName string) (*Item, error) {
+func (c *Client) MoveItem(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string) (*Item, error) {
 	if newParentID == "" && newName == "" {
 		return nil, ErrMoveNoChanges
 	}
 
 	c.logger.Info("moving item",
-		slog.String("drive_id", driveID),
+		slog.String("drive_id", driveID.String()),
 		slog.String("item_id", itemID),
 		slog.String("new_parent_id", newParentID),
 		slog.String("new_name", newName),
@@ -450,9 +452,9 @@ func (c *Client) MoveItem(ctx context.Context, driveID, itemID, newParentID, new
 }
 
 // DeleteItem deletes a drive item. Returns nil on success (HTTP 204).
-func (c *Client) DeleteItem(ctx context.Context, driveID, itemID string) error {
+func (c *Client) DeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error {
 	c.logger.Info("deleting item",
-		slog.String("drive_id", driveID),
+		slog.String("drive_id", driveID.String()),
 		slog.String("item_id", itemID),
 	)
 

@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // testLogger returns a debug-level logger that writes to t.Log, ensuring all
@@ -306,7 +308,7 @@ sync_dir = "~/OneDrive"
 		testLogger(t),
 	)
 	require.NoError(t, err)
-	assert.Equal(t, "personal:toni@outlook.com", resolved.CanonicalID)
+	assert.Equal(t, driveid.MustCanonicalID("personal:toni@outlook.com"), resolved.CanonicalID)
 	assert.Contains(t, resolved.SyncDir, "OneDrive")
 }
 
@@ -357,7 +359,7 @@ alias = "work"
 		testLogger(t),
 	)
 	require.NoError(t, err)
-	assert.Equal(t, "business:alice@contoso.com", resolved.CanonicalID)
+	assert.Equal(t, driveid.MustCanonicalID("business:alice@contoso.com"), resolved.CanonicalID)
 }
 
 func TestResolveDrive_EnvDriveSelector(t *testing.T) {
@@ -376,7 +378,7 @@ alias = "work"
 		testLogger(t),
 	)
 	require.NoError(t, err)
-	assert.Equal(t, "personal:toni@outlook.com", resolved.CanonicalID)
+	assert.Equal(t, driveid.MustCanonicalID("personal:toni@outlook.com"), resolved.CanonicalID)
 }
 
 func TestResolveDrive_CLIDriveOverridesEnv(t *testing.T) {
@@ -395,7 +397,7 @@ alias = "work"
 		testLogger(t),
 	)
 	require.NoError(t, err)
-	assert.Equal(t, "business:alice@contoso.com", resolved.CanonicalID)
+	assert.Equal(t, driveid.MustCanonicalID("business:alice@contoso.com"), resolved.CanonicalID)
 }
 
 func TestResolveDrive_CLIConfigPathOverridesEnv(t *testing.T) {
@@ -409,7 +411,7 @@ sync_dir = "~/OneDrive"
 		testLogger(t),
 	)
 	require.NoError(t, err)
-	assert.Equal(t, "personal:toni@outlook.com", resolved.CanonicalID)
+	assert.Equal(t, driveid.MustCanonicalID("personal:toni@outlook.com"), resolved.CanonicalID)
 }
 
 func TestResolveDrive_CLIDryRunOverride(t *testing.T) {

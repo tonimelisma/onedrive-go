@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 const (
@@ -81,7 +82,7 @@ func newIntegrationClient(t *testing.T) *Client {
 // driveIDForTest reads the test drive ID from ONEDRIVE_TEST_DRIVE_ID.
 // Skips the test if not set. Populated by bootstrap tool (--print-drive-id)
 // or CI workflow.
-func driveIDForTest(t *testing.T) string {
+func driveIDForTest(t *testing.T) driveid.ID {
 	t.Helper()
 
 	id := os.Getenv(driveIDEnvVar)
@@ -89,7 +90,7 @@ func driveIDForTest(t *testing.T) string {
 		t.Skipf("%s not set -- run: onedrive-go whoami --json --drive <canonical-id>", driveIDEnvVar)
 	}
 
-	return id
+	return driveid.New(id)
 }
 
 // TestIntegration_GetItem verifies GetItem returns a properly normalized Item
@@ -108,9 +109,9 @@ func TestIntegration_GetItem(t *testing.T) {
 	assert.NotEmpty(t, item.Name, "root item name should be non-empty")
 	assert.True(t, item.IsFolder, "root should be a folder")
 	// DriveID normalization: must be lowercase regardless of what the API returns.
-	assert.Equal(t, strings.ToLower(item.DriveID), item.DriveID, "DriveID should be lowercase")
+	assert.Equal(t, strings.ToLower(item.DriveID.String()), item.DriveID.String(), "DriveID should be lowercase")
 
-	t.Logf("root item: id=%s name=%s driveID=%s isFolder=%v", item.ID, item.Name, item.DriveID, item.IsFolder)
+	t.Logf("root item: id=%s name=%s driveID=%s isFolder=%v", item.ID, item.Name, item.DriveID.String(), item.IsFolder)
 }
 
 // TestIntegration_ListChildren verifies ListChildren returns items for the drive root.

@@ -98,7 +98,7 @@ func groupDrivesByAccount(cfg *config.Config) (map[string][]string, []string) {
 	var order []string
 
 	for id := range cfg.Drives {
-		email := accountEmailFromCanonicalID(id)
+		email := emailFromCanonicalString(id)
 		if _, seen := grouped[email]; !seen {
 			order = append(order, email)
 		}
@@ -122,7 +122,7 @@ func buildSingleAccountStatus(
 
 	// Derive drive type from the first non-sharepoint drive.
 	for _, id := range driveIDs {
-		dt := driveTypeFromCanonicalID(id)
+		dt := driveTypeFromCanonicalString(id)
 		if dt != "sharepoint" {
 			acct.DriveType = dt
 
@@ -131,7 +131,7 @@ func buildSingleAccountStatus(
 	}
 
 	if acct.DriveType == "" && len(driveIDs) > 0 {
-		acct.DriveType = driveTypeFromCanonicalID(driveIDs[0])
+		acct.DriveType = driveTypeFromCanonicalString(driveIDs[0])
 	}
 
 	// Check token validity for this account.

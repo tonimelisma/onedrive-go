@@ -12,6 +12,7 @@ import (
 
 	"golang.org/x/text/unicode/norm"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -21,7 +22,6 @@ var ErrDeltaExpired = errors.New("sync: delta token expired (resync required)")
 
 // Constants for the remote observer (satisfy mnd linter).
 const (
-	driveIDMinLength = 16
 	maxObserverPages = 10000
 	maxPathDepth     = 256
 )
@@ -32,7 +32,7 @@ const (
 type inflightParent struct {
 	name          string
 	parentID      string
-	parentDriveID string // drive containing this item's parent
+	parentDriveID driveid.ID // drive containing this item's parent
 	isRoot        bool
 }
 
@@ -42,7 +42,7 @@ type inflightParent struct {
 type RemoteObserver struct {
 	fetcher  DeltaFetcher
 	baseline *Baseline
-	driveID  string
+	driveID  driveid.ID
 	logger   *slog.Logger
 }
 
@@ -53,7 +53,7 @@ func NewRemoteObserver(fetcher DeltaFetcher, baseline *Baseline, driveID string,
 	return &RemoteObserver{
 		fetcher:  fetcher,
 		baseline: baseline,
-		driveID:  normalizeDriveID(driveID),
+		driveID:  driveid.New(driveID),
 		logger:   logger,
 	}
 }
@@ -62,12 +62,12 @@ func NewRemoteObserver(fetcher DeltaFetcher, baseline *Baseline, driveID string,
 // plus the new delta token (DeltaLink URL) for the next sync cycle.
 func (o *RemoteObserver) FullDelta(ctx context.Context, savedToken string) ([]ChangeEvent, string, error) {
 	o.logger.Info("remote observer starting delta enumeration",
-		slog.String("drive_id", o.driveID),
+		slog.String("drive_id", o.driveID.String()),
 		slog.Bool("has_token", savedToken != ""),
 	)
 
 	var events []ChangeEvent
-	inflight := make(map[string]inflightParent)
+	inflight := make(map[driveid.ItemKey]inflightParent)
 	token := savedToken
 
 	for page := 0; page < maxObserverPages; page++ {
@@ -97,7 +97,7 @@ func (o *RemoteObserver) FullDelta(ctx context.Context, savedToken string) ([]Ch
 // Returns done=true with the DeltaLink when the final page is reached, or
 // done=false with NextLink for continued pagination.
 func (o *RemoteObserver) fetchPage(
-	ctx context.Context, token string, page int, inflight map[string]inflightParent,
+	ctx context.Context, token string, page int, inflight map[driveid.ItemKey]inflightParent,
 ) ([]ChangeEvent, string, bool, error) {
 	dp, err := o.fetcher.Delta(ctx, o.driveID, token)
 	if err != nil {
@@ -129,12 +129,12 @@ func (o *RemoteObserver) fetchPage(
 // processItem converts a single graph.Item into a ChangeEvent, registering
 // it in the inflight parent map for path materialization. Returns nil for
 // root items (structural, not content changes).
-func (o *RemoteObserver) processItem(item *graph.Item, inflight map[string]inflightParent) *ChangeEvent {
+func (o *RemoteObserver) processItem(item *graph.Item, inflight map[driveid.ItemKey]inflightParent) *ChangeEvent {
 	itemDriveID := o.resolveItemDriveID(item)
 
 	// Register in inflight map before classification so children in the
 	// same batch can materialize paths through this item.
-	key := itemDriveID + ":" + item.ID
+	key := driveid.NewItemKey(itemDriveID, item.ID)
 	inflight[key] = inflightParent{
 		name:          nfcNormalize(item.Name),
 		parentID:      item.ParentID,
@@ -153,10 +153,10 @@ func (o *RemoteObserver) processItem(item *graph.Item, inflight map[string]infli
 
 // classifyAndConvert classifies the change type and builds a ChangeEvent.
 func (o *RemoteObserver) classifyAndConvert(
-	item *graph.Item, inflight map[string]inflightParent, itemDriveID string,
+	item *graph.Item, inflight map[driveid.ItemKey]inflightParent, itemDriveID driveid.ID,
 ) *ChangeEvent {
 	name := nfcNormalize(item.Name)
-	baselineKey := itemDriveID + ":" + item.ID
+	baselineKey := driveid.NewItemKey(itemDriveID, item.ID)
 	existing := o.baseline.ByID[baselineKey]
 
 	ev := ChangeEvent{
@@ -208,7 +208,7 @@ func (o *RemoteObserver) classifyAndConvert(
 // then the baseline. Stops at the drive root or when a baseline entry
 // provides a shortcut.
 func (o *RemoteObserver) materializePath(
-	item *graph.Item, inflight map[string]inflightParent, itemDriveID string,
+	item *graph.Item, inflight map[driveid.ItemKey]inflightParent, itemDriveID driveid.ID,
 ) string {
 	segments := []string{nfcNormalize(item.Name)}
 	parentDriveID := resolveParentDriveID(item, itemDriveID)
@@ -219,7 +219,7 @@ func (o *RemoteObserver) materializePath(
 			break
 		}
 
-		parentKey := parentDriveID + ":" + parentID
+		parentKey := driveid.NewItemKey(parentDriveID, parentID)
 
 		// Check inflight map first (items from current delta batch).
 		if p, ok := inflight[parentKey]; ok {
@@ -245,7 +245,7 @@ func (o *RemoteObserver) materializePath(
 		o.logger.Warn("orphaned item: parent not found in inflight or baseline",
 			slog.String("item_id", item.ID),
 			slog.String("parent_id", parentID),
-			slog.String("parent_drive_id", parentDriveID),
+			slog.String("parent_drive_id", parentDriveID.String()),
 		)
 
 		break
@@ -258,19 +258,19 @@ func (o *RemoteObserver) materializePath(
 
 // resolveItemDriveID returns the normalized driveID for an item, falling
 // back to the observer's driveID when the item's DriveID is empty.
-func (o *RemoteObserver) resolveItemDriveID(item *graph.Item) string {
-	if item.DriveID == "" {
+func (o *RemoteObserver) resolveItemDriveID(item *graph.Item) driveid.ID {
+	if item.DriveID.IsZero() {
 		return o.driveID
 	}
 
-	return normalizeDriveID(item.DriveID)
+	return item.DriveID
 }
 
 // resolveParentDriveID returns the normalized driveID for the parent of an
 // item, handling cross-drive references (e.g. shared items).
-func resolveParentDriveID(item *graph.Item, itemDriveID string) string {
-	if item.ParentDriveID != "" {
-		return normalizeDriveID(item.ParentDriveID)
+func resolveParentDriveID(item *graph.Item, itemDriveID driveid.ID) driveid.ID {
+	if !item.ParentDriveID.IsZero() {
+		return item.ParentDriveID
 	}
 
 	return itemDriveID
@@ -310,18 +310,6 @@ func toUnixNano(t time.Time) int64 {
 	}
 
 	return t.UnixNano()
-}
-
-// normalizeDriveID lowercases and left-pads to 16 characters. Idempotent.
-// Handles the documented API bug where Personal accounts sometimes return
-// 15-character drive IDs.
-func normalizeDriveID(id string) string {
-	lower := strings.ToLower(id)
-	if len(lower) >= driveIDMinLength {
-		return lower
-	}
-
-	return strings.Repeat("0", driveIDMinLength-len(lower)) + lower
 }
 
 // nfcNormalize applies Unicode NFC normalization to a string. Applied to

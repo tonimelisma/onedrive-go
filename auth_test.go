@@ -12,26 +12,12 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 )
 
-func TestConstructCanonicalID(t *testing.T) {
-	tests := []struct {
-		driveType string
-		email     string
-		want      string
-	}{
-		{"personal", "toni@outlook.com", "personal:toni@outlook.com"},
-		{"business", "alice@contoso.com", "business:alice@contoso.com"},
-		{"documentLibrary", "bob@example.org", "documentLibrary:bob@example.org"},
-	}
+// Tests for constructCanonicalID, accountEmailFromCanonicalID, and
+// driveTypeFromCanonicalID have been removed — those functions were absorbed
+// into internal/driveid (Construct, Email, DriveType). See
+// internal/driveid/canonical_test.go for equivalent coverage.
 
-	for _, tt := range tests {
-		t.Run(tt.want, func(t *testing.T) {
-			got := constructCanonicalID(tt.driveType, tt.email)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
-func TestAccountEmailFromCanonicalID(t *testing.T) {
+func TestEmailFromCanonicalString(t *testing.T) {
 	tests := []struct {
 		id   string
 		want string
@@ -39,7 +25,6 @@ func TestAccountEmailFromCanonicalID(t *testing.T) {
 		{"personal:toni@outlook.com", "toni@outlook.com"},
 		{"business:alice@contoso.com", "alice@contoso.com"},
 		// SharePoint IDs have extra colon-separated segments after the email.
-		// SplitN with limit 3 ensures parts[1] is just the email.
 		{"sharepoint:alice@contoso.com:marketing:Docs", "alice@contoso.com"},
 		{"nocolon", "nocolon"},
 		{"", ""},
@@ -47,13 +32,13 @@ func TestAccountEmailFromCanonicalID(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.id, func(t *testing.T) {
-			got := accountEmailFromCanonicalID(tt.id)
+			got := emailFromCanonicalString(tt.id)
 			assert.Equal(t, tt.want, got)
 		})
 	}
 }
 
-func TestDriveTypeFromCanonicalID(t *testing.T) {
+func TestDriveTypeFromCanonicalString(t *testing.T) {
 	tests := []struct {
 		id   string
 		want string
@@ -66,7 +51,7 @@ func TestDriveTypeFromCanonicalID(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.id, func(t *testing.T) {
-			got := driveTypeFromCanonicalID(tt.id)
+			got := driveTypeFromCanonicalString(tt.id)
 			assert.Equal(t, tt.want, got)
 		})
 	}

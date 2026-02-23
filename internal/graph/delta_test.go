@@ -9,7 +9,10 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 func TestDelta_SendsPreferHeader(t *testing.T) {
@@ -24,7 +27,7 @@ func TestDelta_SendsPreferHeader(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	_, err := client.Delta(context.Background(), "d", "")
+	_, err := client.Delta(context.Background(), driveid.New("d"), "")
 	require.NoError(t, err)
 }
 
@@ -33,7 +36,7 @@ func TestDelta_SinglePage(t *testing.T) {
 
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
-		assert.Equal(t, "/drives/d/root/delta", r.URL.Path)
+		assert.Equal(t, "/drives/000000000000000d/root/delta", r.URL.Path)
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -42,13 +45,13 @@ func TestDelta_SinglePage(t *testing.T) {
 				{"id":"item-1","name":"file1.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root","driveId":"d"},"file":{"mimeType":"text/plain"}},
 				{"id":"item-2","name":"folder1","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root","driveId":"d"},"folder":{"childCount":3}}
 			],
-			"@odata.deltaLink": "%s/drives/d/root/delta?token=newtoken123"
+			"@odata.deltaLink": "%s/drives/000000000000000d/root/delta?token=newtoken123"
 		}`, srv.URL)
 	}))
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	page, err := client.Delta(context.Background(), "d", "")
+	page, err := client.Delta(context.Background(), driveid.New("d"), "")
 	require.NoError(t, err)
 
 	assert.Len(t, page.Items, 2)
@@ -87,14 +90,14 @@ func TestDelta_MultiPage(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 
-	page1, err := client.Delta(context.Background(), "d", "")
+	page1, err := client.Delta(context.Background(), driveid.New("d"), "")
 	require.NoError(t, err)
 	assert.Len(t, page1.Items, 1)
 	assert.Equal(t, "item-1", page1.Items[0].ID)
 	assert.NotEmpty(t, page1.NextLink)
 	assert.Empty(t, page1.DeltaLink)
 
-	page2, err := client.Delta(context.Background(), "d", page1.NextLink)
+	page2, err := client.Delta(context.Background(), driveid.New("d"), page1.NextLink)
 	require.NoError(t, err)
 	assert.Len(t, page2.Items, 1)
 	assert.Equal(t, "item-2", page2.Items[0].ID)
@@ -104,7 +107,7 @@ func TestDelta_MultiPage(t *testing.T) {
 
 func TestDelta_EmptyToken(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/drives/test-drive/root/delta", r.URL.Path)
+		assert.Equal(t, "/drives/000000test-drive/root/delta", r.URL.Path)
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -113,7 +116,7 @@ func TestDelta_EmptyToken(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	page, err := client.Delta(context.Background(), "test-drive", "")
+	page, err := client.Delta(context.Background(), driveid.New("test-drive"), "")
 	require.NoError(t, err)
 
 	assert.Empty(t, page.Items)
@@ -140,7 +143,7 @@ func TestDelta_WithToken(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	token := srv.URL + "/drives/d/root/delta?token=prevtoken123"
-	page, err := client.Delta(context.Background(), "d", token)
+	page, err := client.Delta(context.Background(), driveid.New("d"), token)
 	require.NoError(t, err)
 
 	assert.Len(t, page.Items, 1)
@@ -156,7 +159,7 @@ func TestDelta_Gone(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	_, err := client.Delta(context.Background(), "d", "")
+	_, err := client.Delta(context.Background(), driveid.New("d"), "")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrGone)
 }
@@ -175,7 +178,7 @@ func TestDelta_EmptyPage(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	page, err := client.Delta(context.Background(), "d", "")
+	page, err := client.Delta(context.Background(), driveid.New("d"), "")
 	require.NoError(t, err)
 
 	assert.Empty(t, page.Items)
@@ -199,7 +202,7 @@ func TestDelta_NormalizesPackages(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	page, err := client.Delta(context.Background(), "d", "")
+	page, err := client.Delta(context.Background(), driveid.New("d"), "")
 	require.NoError(t, err)
 
 	assert.Len(t, page.Items, 1)
@@ -209,7 +212,7 @@ func TestDelta_NormalizesPackages(t *testing.T) {
 func TestDelta_InvalidTokenURL(t *testing.T) {
 	client := newTestClient(t, "http://localhost:1234")
 
-	_, err := client.Delta(context.Background(), "d", "http://evil.example.com/drives/d/root/delta?token=bad")
+	_, err := client.Delta(context.Background(), driveid.New("d"), "http://evil.example.com/drives/d/root/delta?token=bad")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "does not match base URL")
 }
@@ -231,7 +234,7 @@ func TestDeltaAll_SinglePage(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	items, token, err := client.DeltaAll(context.Background(), "d", "")
+	items, token, err := client.DeltaAll(context.Background(), driveid.New("d"), "")
 	require.NoError(t, err)
 
 	assert.Len(t, items, 2)
@@ -277,7 +280,7 @@ func TestDeltaAll_MultiPage(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	items, token, err := client.DeltaAll(context.Background(), "d", "")
+	items, token, err := client.DeltaAll(context.Background(), driveid.New("d"), "")
 	require.NoError(t, err)
 
 	assert.Len(t, items, 3)
@@ -297,7 +300,7 @@ func TestDeltaAll_GoneError(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	_, _, err := client.DeltaAll(context.Background(), "d", "")
+	_, _, err := client.DeltaAll(context.Background(), driveid.New("d"), "")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrGone)
 }
@@ -324,7 +327,7 @@ func TestDeltaAll_MaxPages(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	_, _, err := client.DeltaAll(context.Background(), "d", "")
+	_, _, err := client.DeltaAll(context.Background(), driveid.New("d"), "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exceeded")
 	assert.Contains(t, err.Error(), "3")
@@ -332,21 +335,21 @@ func TestDeltaAll_MaxPages(t *testing.T) {
 
 func TestBuildDeltaPath_EmptyToken(t *testing.T) {
 	client := newTestClient(t, "http://localhost")
-	path, err := client.buildDeltaPath("my-drive", "")
+	path, err := client.buildDeltaPath(driveid.New("my-drive"), "")
 	require.NoError(t, err)
-	assert.Equal(t, "/drives/my-drive/root/delta", path)
+	assert.Equal(t, "/drives/00000000my-drive/root/delta", path)
 }
 
 func TestBuildDeltaPath_NonHTTPToken(t *testing.T) {
 	client := newTestClient(t, "http://localhost")
-	path, err := client.buildDeltaPath("my-drive", "not-a-url")
+	path, err := client.buildDeltaPath(driveid.New("my-drive"), "not-a-url")
 	require.NoError(t, err)
-	assert.Equal(t, "/drives/my-drive/root/delta", path)
+	assert.Equal(t, "/drives/00000000my-drive/root/delta", path)
 }
 
 func TestBuildDeltaPath_FullURLToken(t *testing.T) {
 	client := newTestClient(t, "http://localhost")
-	path, err := client.buildDeltaPath("d", "http://localhost/drives/d/root/delta?token=abc")
+	path, err := client.buildDeltaPath(driveid.New("d"), "http://localhost/drives/000000000000000d/root/delta?token=abc")
 	require.NoError(t, err)
-	assert.Equal(t, "/drives/d/root/delta?token=abc", path)
+	assert.Equal(t, "/drives/000000000000000d/root/delta?token=abc", path)
 }

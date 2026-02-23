@@ -7,6 +7,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // ErrNoDownloadURL is returned when a drive item has no pre-authenticated download URL.
@@ -17,9 +19,9 @@ var ErrNoDownloadURL = errors.New("graph: item has no download URL")
 // It first fetches the item metadata to obtain the pre-authenticated download URL,
 // then streams the content directly from that URL (bypassing the Graph API).
 // Returns the number of bytes written.
-func (c *Client) Download(ctx context.Context, driveID, itemID string, w io.Writer) (int64, error) {
+func (c *Client) Download(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error) {
 	c.logger.Info("downloading item",
-		slog.String("drive_id", driveID),
+		slog.String("drive_id", driveID.String()),
 		slog.String("item_id", itemID),
 	)
 
@@ -32,7 +34,7 @@ func (c *Client) Download(ctx context.Context, driveID, itemID string, w io.Writ
 		// Warn, not Error: this is expected for folders, OneNote packages, and
 		// zero-byte files — not a terminal failure requiring investigation.
 		c.logger.Warn("item has no download URL",
-			slog.String("drive_id", driveID),
+			slog.String("drive_id", driveID.String()),
 			slog.String("item_id", itemID),
 			slog.Bool("is_folder", item.IsFolder),
 			slog.Bool("is_package", item.IsPackage),
@@ -47,7 +49,7 @@ func (c *Client) Download(ctx context.Context, driveID, itemID string, w io.Writ
 	}
 
 	c.logger.Debug("download complete",
-		slog.String("drive_id", driveID),
+		slog.String("drive_id", driveID.String()),
 		slog.String("item_id", itemID),
 		slog.Int64("bytes_written", n),
 	)

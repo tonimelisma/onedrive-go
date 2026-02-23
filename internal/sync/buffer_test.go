@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // findPathChanges returns the PathChanges entry with the given path,
@@ -28,7 +30,7 @@ func TestBuffer_AddSingle(t *testing.T) {
 		Path:     "buffer-notes.txt",
 		Name:     "buffer-notes.txt",
 		ItemID:   "buf-item-1",
-		DriveID:  testDriveID,
+		DriveID:  driveid.New(testDriveID),
 		ItemType: ItemTypeFile,
 		Size:     256,
 		Hash:     "buf-hash-1",
@@ -64,12 +66,12 @@ func TestBuffer_AddMultiplePaths(t *testing.T) {
 	buf.Add(&ChangeEvent{
 		Source: SourceRemote, Type: ChangeCreate,
 		Path: "buffer-alpha.txt", Name: "buffer-alpha.txt",
-		ItemID: "buf-a1", DriveID: testDriveID, ItemType: ItemTypeFile,
+		ItemID: "buf-a1", DriveID: driveid.New(testDriveID), ItemType: ItemTypeFile,
 	})
 	buf.Add(&ChangeEvent{
 		Source: SourceLocal, Type: ChangeModify,
 		Path: "buffer-beta.csv", Name: "buffer-beta.csv",
-		ItemID: "", DriveID: "", ItemType: ItemTypeFile,
+		ItemID: "", ItemType: ItemTypeFile,
 	})
 
 	result := buf.FlushImmediate()
@@ -103,12 +105,12 @@ func TestBuffer_AddSamePathRemote(t *testing.T) {
 	buf.Add(&ChangeEvent{
 		Source: SourceRemote, Type: ChangeCreate,
 		Path: "docs/buffer-report.pdf", Name: "buffer-report.pdf",
-		ItemID: "buf-r1", DriveID: testDriveID, ItemType: ItemTypeFile,
+		ItemID: "buf-r1", DriveID: driveid.New(testDriveID), ItemType: ItemTypeFile,
 	})
 	buf.Add(&ChangeEvent{
 		Source: SourceRemote, Type: ChangeModify,
 		Path: "docs/buffer-report.pdf", Name: "buffer-report.pdf",
-		ItemID: "buf-r1", DriveID: testDriveID, ItemType: ItemTypeFile,
+		ItemID: "buf-r1", DriveID: driveid.New(testDriveID), ItemType: ItemTypeFile,
 	})
 
 	result := buf.FlushImmediate()
@@ -162,7 +164,7 @@ func TestBuffer_AddMixedSources(t *testing.T) {
 	buf.Add(&ChangeEvent{
 		Source: SourceRemote, Type: ChangeModify,
 		Path: "buffer-shared.docx", Name: "buffer-shared.docx",
-		ItemID: "buf-s1", DriveID: testDriveID, ItemType: ItemTypeFile,
+		ItemID: "buf-s1", DriveID: driveid.New(testDriveID), ItemType: ItemTypeFile,
 	})
 	buf.Add(&ChangeEvent{
 		Source: SourceLocal, Type: ChangeModify,
@@ -197,7 +199,7 @@ func TestBuffer_MoveDualKeying(t *testing.T) {
 		Name:     "moved.txt",
 		ItemID:   "buf-m1",
 		ParentID: "buf-parent-1",
-		DriveID:  testDriveID,
+		DriveID:  driveid.New(testDriveID),
 		ItemType: ItemTypeFile,
 	})
 
@@ -247,8 +249,8 @@ func TestBuffer_MoveDualKeying(t *testing.T) {
 		t.Errorf("synthetic Name = %q, want %q", synth.Name, "moved.txt")
 	}
 
-	if synth.DriveID != testDriveID {
-		t.Errorf("synthetic DriveID = %q, want %q", synth.DriveID, testDriveID)
+	if !synth.DriveID.Equal(driveid.New(testDriveID)) {
+		t.Errorf("synthetic DriveID = %q, want %q", synth.DriveID, driveid.New(testDriveID))
 	}
 
 	if synth.ParentID != "buf-parent-1" {
@@ -271,7 +273,7 @@ func TestBuffer_MoveNoOldPath(t *testing.T) {
 		OldPath:  "", // no old path known
 		Name:     "file.txt",
 		ItemID:   "buf-no-old-1",
-		DriveID:  testDriveID,
+		DriveID:  driveid.New(testDriveID),
 		ItemType: ItemTypeFile,
 	})
 
@@ -295,7 +297,7 @@ func TestBuffer_AddAll(t *testing.T) {
 		{
 			Source: SourceRemote, Type: ChangeCreate,
 			Path: "buffer-batch-a.txt", Name: "buffer-batch-a.txt",
-			ItemID: "buf-ba1", DriveID: testDriveID, ItemType: ItemTypeFile,
+			ItemID: "buf-ba1", DriveID: driveid.New(testDriveID), ItemType: ItemTypeFile,
 		},
 		{
 			Source: SourceLocal, Type: ChangeCreate,
@@ -305,7 +307,7 @@ func TestBuffer_AddAll(t *testing.T) {
 		{
 			Source: SourceRemote, Type: ChangeModify,
 			Path: "buffer-batch-a.txt", Name: "buffer-batch-a.txt",
-			ItemID: "buf-ba1", DriveID: testDriveID, ItemType: ItemTypeFile,
+			ItemID: "buf-ba1", DriveID: driveid.New(testDriveID), ItemType: ItemTypeFile,
 		},
 	}
 
@@ -348,7 +350,7 @@ func TestBuffer_AddAllWithMoves(t *testing.T) {
 		{
 			Source: SourceRemote, Type: ChangeCreate,
 			Path: "buffer-mv-unrelated.txt", Name: "buffer-mv-unrelated.txt",
-			ItemID: "buf-unr1", DriveID: testDriveID, ItemType: ItemTypeFile,
+			ItemID: "buf-unr1", DriveID: driveid.New(testDriveID), ItemType: ItemTypeFile,
 		},
 	}
 
@@ -392,7 +394,7 @@ func TestBuffer_FlushClears(t *testing.T) {
 	buf.Add(&ChangeEvent{
 		Source: SourceRemote, Type: ChangeCreate,
 		Path: "buffer-cleartest.txt", Name: "buffer-cleartest.txt",
-		ItemID: "buf-ct1", DriveID: testDriveID, ItemType: ItemTypeFile,
+		ItemID: "buf-ct1", DriveID: driveid.New(testDriveID), ItemType: ItemTypeFile,
 	})
 
 	first := buf.FlushImmediate()
@@ -425,7 +427,7 @@ func TestBuffer_FlushSorted(t *testing.T) {
 		buf.Add(&ChangeEvent{
 			Source: SourceRemote, Type: ChangeCreate,
 			Path: p, Name: p,
-			ItemID: "buf-sort-" + p, DriveID: testDriveID, ItemType: ItemTypeFile,
+			ItemID: "buf-sort-" + p, DriveID: driveid.New(testDriveID), ItemType: ItemTypeFile,
 		})
 	}
 
@@ -459,7 +461,7 @@ func TestBuffer_Len(t *testing.T) {
 	buf.Add(&ChangeEvent{
 		Source: SourceRemote, Type: ChangeCreate,
 		Path: "buffer-len-one.txt", Name: "buffer-len-one.txt",
-		ItemID: "buf-l1", DriveID: testDriveID, ItemType: ItemTypeFile,
+		ItemID: "buf-l1", DriveID: driveid.New(testDriveID), ItemType: ItemTypeFile,
 	})
 
 	if buf.Len() != 1 {

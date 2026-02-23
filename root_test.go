@@ -433,7 +433,7 @@ sync_dir = "` + tmpDir + `/OneDrive"
 	require.NoError(t, err)
 	require.NotNil(t, resolvedCfg)
 
-	assert.Equal(t, "personal:test@example.com", resolvedCfg.CanonicalID)
+	assert.Equal(t, "personal:test@example.com", resolvedCfg.CanonicalID.String())
 }
 
 func TestLoadConfig_MissingFile_ZeroConfig(t *testing.T) {
@@ -461,5 +461,5 @@ func TestLoadConfig_MissingFile_ZeroConfig(t *testing.T) {
 	_ = cmd.Execute()
 
 	require.NotNil(t, resolvedCfg)
-	assert.Equal(t, "personal:zeroconfig@example.com", resolvedCfg.CanonicalID)
+	assert.Equal(t, "personal:zeroconfig@example.com", resolvedCfg.CanonicalID.String())
 }

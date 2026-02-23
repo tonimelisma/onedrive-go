@@ -4,7 +4,7 @@
 
 **onedrive-go** — a fast, safe, and well-tested OneDrive CLI and sync client in Go. Unix-style file operations (`ls`, `get`, `put`) plus robust bidirectional sync with conflict tracking. Targets Linux and macOS. MIT licensed.
 
-Currently: Working CLI OneDrive client with discovery-based auth, account management, file ops, config integration. "Pragmatic Flat" architecture (5 active packages). Event-driven sync engine in progress (4v2.1: types, baseline schema, BaselineManager; 4v2.2: Remote Observer; 4v2.3: Local Observer). See [docs/design/event-driven-rationale.md](docs/design/event-driven-rationale.md).
+Currently: Working CLI OneDrive client with discovery-based auth, account management, file ops, config integration. "Pragmatic Flat" architecture (6 active packages). Event-driven sync engine in progress (4v2.1: types, baseline schema, BaselineManager; 4v2.2: Remote Observer; 4v2.3: Local Observer). See [docs/design/event-driven-rationale.md](docs/design/event-driven-rationale.md).
 
 ## Current Phase
 
@@ -26,32 +26,39 @@ Currently: Working CLI OneDrive client with discovery-based auth, account manage
 │   Graph API client   │             │  engine, observers, buffer,  │
 │   + quirk handling   │             │  planner, executor, baseline │
 │   + auth             │             │  filter, transfer, conflict  │
-└──────────────────────┘             └──────────────┬───────────────┘
-                                                    │
-                                     ┌──────────────┴───────────────┐
-                                     │       internal/config/       │
-                                     │       TOML + drives          │
-                                     └──────────────────────────────┘
-
-           ┌────────────────┐
-           │ pkg/           │
-           │ quickxorhash/  │
-           │ (vendored)     │
-           └────────────────┘
+└─────────┬────────────┘             └──────────────┬───────────────┘
+          │                                         │
+          │          ┌──────────────────────┐       │
+          ├─────────►│  internal/driveid/   │◄──────┤
+          │          │  ID, CanonicalID,    │       │
+          │          │  ItemKey (leaf pkg)  │       │
+          │          └──────────┬───────────┘       │
+          │                     ▲                   │
+          │          ┌──────────┴───────────┐       │
+          │          │  internal/config/    │◄──────┘
+          │          │  TOML + drives       │
+          │          └─────────────────────-┘
+          │
+          │          ┌────────────────┐
+          └─────────►│ pkg/           │
+                     │ quickxorhash/  │
+                     │ (vendored)     │
+                     └────────────────┘
 ```
 
-**Dependency direction**: `cmd/` -> `internal/*` -> `pkg/*`. No cycles. `cmd/` uses `graph/` directly for CLI file operations and `sync/` for sync operations. `sync/` depends on `graph/` for API access and `config/` for settings. `pkg/quickxorhash/` is a leaf utility used by `sync/` and `graph/`. `internal/graph/` handles all API quirks internally -- callers never see raw API data. `internal/graph/` does NOT import `internal/config/` — callers pass token paths directly.
+**Dependency direction**: `cmd/` -> `internal/*` -> `pkg/*`. No cycles. `cmd/` uses `graph/` directly for CLI file operations and `sync/` for sync operations. `sync/` depends on `graph/` for API access and `config/` for settings. `internal/driveid/` is a leaf package (stdlib only) used by `graph/`, `sync/`, `config/`, and `cmd/`. `pkg/quickxorhash/` is a leaf utility used by `sync/` and `graph/`. `internal/graph/` handles all API quirks internally -- callers never see raw API data. `internal/graph/` does NOT import `internal/config/` — callers pass token paths directly.
 
 ## Package Layout
 
-### Active packages
+### Active packages (6)
 - **`pkg/quickxorhash/`** — QuickXorHash algorithm (hash.Hash interface) — complete
-- **`internal/config/`** — TOML configuration with flat global settings and per-drive sections, validation, XDG paths, four-layer override chain (`ResolveDrive()`), cross-field validation (`ValidateResolved()`), drive matching (exact/alias/partial), token/state path derivation (`DriveTokenPath()`, `DriveStatePath()`), token-based drive discovery (`DiscoverTokens()`) — 95.4% coverage
-- **`internal/graph/`** — Graph API client: HTTP transport, auth (token path-based, no config import; device code + browser-based PKCE login), retry, rate limiting, items CRUD, delta+normalization (incl. URL-decode + Prefer header), download/upload transfers (incl. session resume + fileSystemInfo), drives/user, path-based item resolution — feature-complete (94.2% coverage)
+- **`internal/driveid/`** — Type-safe drive identity: `ID` (normalized API drive identifier, lowercase + zero-pad), `CanonicalID` (config-level "type:email" identifier with validation), `ItemKey` (composite DriveID+ItemID map key). Implements `sql.Scanner`/`driver.Valuer` for SQLite, `encoding.TextMarshaler`/`TextUnmarshaler`. Zero external deps — 98.1% coverage
+- **`internal/config/`** — TOML configuration with flat global settings and per-drive sections, validation (via `driveid.NewCanonicalID`), XDG paths, four-layer override chain (`ResolveDrive()`), cross-field validation (`ValidateResolved()`), drive matching (exact/alias/partial), token/state path derivation (`DriveTokenPath()`, `DriveStatePath()`), token-based drive discovery (`DiscoverTokens()`) — 94.3% coverage
+- **`internal/graph/`** — Graph API client: HTTP transport, auth (token path-based, no config import; device code + browser-based PKCE login), retry, rate limiting, items CRUD, delta+normalization (incl. URL-decode + Prefer header), download/upload transfers (incl. session resume + fileSystemInfo), drives/user, path-based item resolution — feature-complete (93.0% coverage)
 - **Root package** — Cobra CLI: login (discovery-based, browser+device code), logout, whoami, status, drive add/remove, ls, get, put, rm, mkdir, stat, sync (root.go, auth.go, files.go, sync.go, format.go, status.go, drive.go). Global flags: `--account`, `--drive`, `--config`, `--json`, `--verbose`, `--debug`, `--quiet`
 - **`e2e/`** — E2E test suite (`//go:build e2e`): builds binary, exercises full round-trip against live OneDrive
 
-- **`internal/sync/`** — Event-driven sync engine (4v2.1-5 complete). Types (ChangeEvent, BaselineEntry, PathView, Action, ActionPlan, Outcome), consumer-defined interfaces (DeltaFetcher, ItemClient, TransferClient satisfied by `*graph.Client`), SQLite baseline schema (7 tables via goose migrations), BaselineManager (sole DB writer: Load, Commit, GetDeltaToken), RemoteObserver (delta pagination → []ChangeEvent with path materialization, change classification, NFC normalization, driveID zero-padding, hash selection, ErrDeltaExpired sentinel), LocalObserver (FS walk → []ChangeEvent with mtime+size fast path, racily-clean guard, QuickXorHash, name validation, always-excluded patterns, .nosync guard, symlink skip, ErrNosyncGuard sentinel), Buffer (thread-safe event grouping by path, move dual-keying with synthetic deletes, FlushImmediate for one-shot mode), Planner (pure function: []PathChanges + *Baseline → *ActionPlan; EF1-EF14 file matrix, ED1-ED8 folder matrix, remote+local move detection, big-delete safety S5, mode filtering, depth-ordered actions). Dependencies: `modernc.org/sqlite`, `goose/v3`, `golang.org/x/text`. 91.2% coverage.
+- **`internal/sync/`** — Event-driven sync engine (4v2.1-5 complete). Types (ChangeEvent, BaselineEntry, PathView, Action, ActionPlan, Outcome), consumer-defined interfaces (DeltaFetcher, ItemClient, TransferClient satisfied by `*graph.Client`), SQLite baseline schema (7 tables via goose migrations), BaselineManager (sole DB writer: Load, Commit, GetDeltaToken), RemoteObserver (delta pagination → []ChangeEvent with path materialization, change classification, NFC normalization, hash selection, ErrDeltaExpired sentinel), LocalObserver (FS walk → []ChangeEvent with mtime+size fast path, racily-clean guard, QuickXorHash, name validation, always-excluded patterns, .nosync guard, symlink skip, ErrNosyncGuard sentinel), Buffer (thread-safe event grouping by path, move dual-keying with synthetic deletes, FlushImmediate for one-shot mode), Planner (pure function: []PathChanges + *Baseline → *ActionPlan; EF1-EF14 file matrix, ED1-ED8 folder matrix, remote+local move detection, big-delete safety S5, mode filtering, depth-ordered actions). Dependencies: `modernc.org/sqlite`, `goose/v3`, `golang.org/x/text`. 91.2% coverage.
 
 ### Next (Phase 4v2.4-4v2.8 — Event-Driven Sync Engine)
 - Change Buffer (debounce, dedup, batch), Planner (pure function: events + baseline -> ActionPlan, EF1-EF14 file matrix, ED1-ED8 folder matrix), Executor (actions -> Outcomes), Engine wiring, CLI integration. See [docs/design/architecture.md](docs/design/architecture.md)
@@ -206,7 +213,7 @@ Common golangci-lint rules that require specific patterns:
 
 ## Key Decisions
 
-See [docs/design/decisions.md](docs/design/decisions.md) for the full list. Highlights: 5-package "Pragmatic Flat" architecture, event-driven sync (Option E), delete-first strategy (old sync code deleted before new code is written — zero path dependency), CLI-first development order, TOML config, SQLite sync DB, MIT license, Linux + macOS.
+See [docs/design/decisions.md](docs/design/decisions.md) for the full list. Highlights: 6-package "Pragmatic Flat" architecture, event-driven sync (Option E), delete-first strategy (old sync code deleted before new code is written — zero path dependency), CLI-first development order, TOML config, SQLite sync DB, MIT license, Linux + macOS.
 
 ## Code Quality Standards
 
