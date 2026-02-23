@@ -279,6 +279,15 @@ In 4v2.3, gates 7 (logging review), 8 (comment review), 9 (docs update), 14 (ret
 ### alwaysExcludedSuffixes order: `.db-wal`/`.db-shm` before `.db`
 The `strings.HasSuffix` loop checks suffixes in declaration order. `.db-wal` and `.db-shm` must appear before `.db` in the slice, otherwise `.db` would match first and the longer suffixes would never be reached. This is a correctness constraint, not just style.
 
+### Planner decision matrix: localDeleted implies localChanged
+When splitting the EF1-EF10 file decision matrix into switch cases, `localDeleted` (baseline exists but Local is nil) always implies `localChanged` (detectLocalChange returns true when Local is nil). This means a catch-all case like `localChanged && remoteChanged && hasRemote` will match both EF5 (edit-edit conflict, local present) and EF7 (local deleted, remote modified). The fix: add `!localDeleted` to EF4/EF5/EF9 cases, or evaluate `localDeleted` cases first. This is a subtle ordering bug that manifests as conflicts instead of downloads.
+
+### Worktree branch point matters for parallel agents
+When a worktree is created from `main` via the EnterWorktree tool but the active development branch is `clean-slate`, the worktree will have old code (e.g., the deleted batch-pipeline sync engine). The fix is `git reset --hard origin/clean-slate` after worktree creation. Save any new files to /tmp first, reset, then restore. This cost one debugging cycle in 4v2.5.
+
+### Split switch statements to keep gocyclo under 15
+A Go `switch` with 10 case arms easily exceeds gocyclo's complexity threshold of 15. The pattern: split by a discriminating boolean (e.g., `localDeleted` vs not, `hasBaseline` vs not) into two smaller functions. Each sub-function handles half the cases with much lower complexity. Used successfully for both `classifyFileWithFlags` (28→split into 3 functions) and `classifyFolder` (32→split into 3 functions).
+
 ### mtime+size fast path is the industry standard for change detection
 No production sync tool (rsync, rclone, Syncthing, abraunegg/onedrive, Unison, Git) hashes every file on every scan. They all use mtime+size as a fast path and only hash when metadata differs. For a 50K-file sync root, always-hashing reads ~5 GB per cycle vs sub-second stat-only checks. The racily-clean guard (force hash when mtime is within 1 second of scan start) handles the edge case where a file was modified in the same clock tick as the last sync — Git's well-documented "racily clean" problem.
 
