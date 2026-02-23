@@ -688,6 +688,11 @@ func classifyFile(v PathView, mode SyncMode) []Action {
     remoteDeleted := v.Remote != nil && v.Remote.IsDeleted
     localDeleted := hasBaseline && !hasLocal
 
+    // ORDERING CONSTRAINT: localDeleted implies localChanged (detectLocalChange
+    // returns true when Local is nil). localDeleted cases (EF6, EF7, EF10) must
+    // be checked before the general localChanged cases (EF3, EF4, EF5, EF9) to
+    // avoid EF3 stealing EF6's matches. The implementation splits these into
+    // separate sub-functions for the same reason.
     switch {
     // --- Baseline exists (previously synced) ---
     case hasBaseline && !localChanged && !remoteChanged:
@@ -696,6 +701,17 @@ func classifyFile(v PathView, mode SyncMode) []Action {
     case hasBaseline && !localChanged && remoteChanged && hasRemote:
         return []Action{{Type: ActionDownload}} // EF2
 
+    // Local deleted cases (must precede general localChanged cases).
+    case hasBaseline && localDeleted && !remoteChanged && !remoteDeleted:
+        return []Action{{Type: ActionRemoteDelete}} // EF6
+
+    case hasBaseline && localDeleted && remoteChanged && hasRemote:
+        return []Action{{Type: ActionDownload}} // EF7: remote wins
+
+    case hasBaseline && localDeleted && remoteDeleted:
+        return []Action{{Type: ActionCleanup}} // EF10
+
+    // Local modified (not deleted) cases.
     case hasBaseline && localChanged && !remoteChanged:
         return []Action{{Type: ActionUpload}} // EF3
 
@@ -705,20 +721,11 @@ func classifyFile(v PathView, mode SyncMode) []Action {
         }
         return []Action{{Type: ActionConflict}} // EF5: divergent
 
-    case hasBaseline && localDeleted && !remoteChanged && !remoteDeleted:
-        return []Action{{Type: ActionRemoteDelete}} // EF6
-
-    case hasBaseline && localDeleted && remoteChanged && hasRemote:
-        return []Action{{Type: ActionDownload}} // EF7: remote wins
-
     case hasBaseline && !localChanged && remoteDeleted:
         return []Action{{Type: ActionLocalDelete}} // EF8
 
     case hasBaseline && localChanged && remoteDeleted:
         return []Action{{Type: ActionConflict}} // EF9: edit-delete
-
-    case hasBaseline && localDeleted && remoteDeleted:
-        return []Action{{Type: ActionCleanup}} // EF10
 
     // --- No baseline (never synced) ---
     case !hasBaseline && hasLocal && hasRemote:

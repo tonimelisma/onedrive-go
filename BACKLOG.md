@@ -36,6 +36,8 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 | B-062 | Global worker pool cap for multi-drive sync | P2 | `internal/sync/` | Per-drive pools (8 dl + 8 ul + 8 hash) multiply with concurrent drives. 5 drives = 120 I/O goroutines. Need global cap or per-drive reduction when multiple drives active. Decision for 4v2.6 (executor) or 4v2.7 (engine wiring). |
 | B-063 | Per-tenant rate limit coordination | P3 | `internal/graph/` | Multiple drives under same tenant share Graph API rate limits. Current per-client 429 retry works but isn't optimal. Shared rate limiter per-tenant would be better. Not critical for MVP. |
 | B-064 | Baseline memory scaling for many drives | P3 | `internal/sync/` | Each drive loads full baseline into memory (~19 MB per 100K files). Additive across drives. 5 drives × 100K = ~95 MB baselines alone. Monitor during profiling (B-031). Lazy loading if needed. |
+| B-068 | Executor must fill empty DriveID for new local items | P1 | `internal/sync/` | For EF13/ED5 (new local file/folder upload), Action.DriveID is empty because the item has no remote observation and no baseline. The executor must fill DriveID from its per-drive Engine context before making API calls. Add assertion. |
+| B-069 | Handle locally-deleted folder with no remote delta event | P2 | `internal/sync/` | When a folder is locally deleted but has no remote delta event (unchanged since last token), the planner falls to ED8 (cleanup) instead of propagating deletion remotely. No folder equivalent of EF6. In incremental sync, this orphans the remote folder. |
 
 ## Event-Driven Pivot (Phase 4 v2)
 

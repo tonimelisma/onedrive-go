@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 )
@@ -480,6 +481,58 @@ func TestBuffer_Len(t *testing.T) {
 
 	if buf.Len() != 2 {
 		t.Errorf("Len() after new-path add = %d, want 2", buf.Len())
+	}
+}
+
+func TestBuffer_ThreadSafety_DifferentPaths(t *testing.T) {
+	// Exercises concurrent map insertions to distinct paths (the existing
+	// TestBuffer_ThreadSafety only tests concurrent appends to one path).
+	t.Parallel()
+
+	buf := NewBuffer(testLogger(t))
+
+	goroutines := 10
+	eventsPerGoroutine := 50
+
+	var wg sync.WaitGroup
+
+	wg.Add(goroutines)
+
+	for g := range goroutines {
+		go func(id int) {
+			defer wg.Done()
+
+			for i := range eventsPerGoroutine {
+				// Path includes goroutine ID and event index for uniqueness.
+				p := fmt.Sprintf("buffer-mt-g%d-e%d.txt", id, i)
+				buf.Add(&ChangeEvent{
+					Source:   SourceRemote,
+					Type:     ChangeCreate,
+					Path:     p,
+					Name:     p,
+					ItemType: ItemTypeFile,
+					Size:     int64(id*eventsPerGoroutine + i),
+				})
+			}
+		}(g)
+	}
+
+	wg.Wait()
+
+	result := buf.FlushImmediate()
+
+	// Each goroutine adds 50 events to unique paths (goroutine ID + event index).
+	wantPaths := goroutines * eventsPerGoroutine
+	if len(result) != wantPaths {
+		t.Errorf("len(result) = %d, want %d", len(result), wantPaths)
+	}
+
+	// Validate each path has exactly 1 event.
+	for _, pc := range result {
+		total := len(pc.RemoteEvents) + len(pc.LocalEvents)
+		if total != 1 {
+			t.Errorf("path %q has %d events, want 1", pc.Path, total)
+		}
 	}
 }
 
