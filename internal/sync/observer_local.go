@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
@@ -61,8 +62,9 @@ func (o *LocalObserver) FullScan(ctx context.Context, syncRoot string) ([]Change
 
 	var events []ChangeEvent
 	observed := make(map[string]bool)
+	scanStartNano := time.Now().UnixNano()
 
-	walkFn := o.makeWalkFunc(ctx, syncRoot, observed, &events)
+	walkFn := o.makeWalkFunc(ctx, syncRoot, observed, &events, scanStartNano)
 	if err := filepath.WalkDir(syncRoot, walkFn); err != nil {
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("sync: local scan canceled: %w", ctx.Err())
@@ -92,6 +94,7 @@ func (o *LocalObserver) FullScan(ctx context.Context, syncRoot string) ([]Change
 // against the baseline and appends change events.
 func (o *LocalObserver) makeWalkFunc(
 	ctx context.Context, syncRoot string, observed map[string]bool, events *[]ChangeEvent,
+	scanStartNano int64,
 ) fs.WalkDirFunc {
 	return func(fsPath string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -133,7 +136,7 @@ func (o *LocalObserver) makeWalkFunc(
 			return skipEntry(d)
 		}
 
-		return o.processEntry(fsPath, dbRelPath, name, d, observed, events)
+		return o.processEntry(fsPath, dbRelPath, name, d, observed, events, scanStartNano)
 	}
 }
 
@@ -141,6 +144,7 @@ func (o *LocalObserver) makeWalkFunc(
 // the local change against the baseline.
 func (o *LocalObserver) processEntry(
 	fsPath, dbRelPath, name string, d fs.DirEntry, observed map[string]bool, events *[]ChangeEvent,
+	scanStartNano int64,
 ) error {
 	info, err := d.Info()
 	if err != nil {
@@ -152,7 +156,7 @@ func (o *LocalObserver) processEntry(
 
 	observed[dbRelPath] = true
 
-	ev, err := o.classifyLocalChange(fsPath, dbRelPath, name, d, info)
+	ev, err := o.classifyLocalChange(fsPath, dbRelPath, name, d, info, scanStartNano)
 	if err != nil {
 		return err
 	}
@@ -168,6 +172,7 @@ func (o *LocalObserver) processEntry(
 // by comparing it against the baseline.
 func (o *LocalObserver) classifyLocalChange(
 	fsPath, dbRelPath, name string, d fs.DirEntry, info fs.FileInfo,
+	scanStartNano int64,
 ) (*ChangeEvent, error) {
 	existing := o.baseline.ByPath[dbRelPath]
 
@@ -182,7 +187,7 @@ func (o *LocalObserver) classifyLocalChange(
 		return nil, nil
 	}
 
-	return o.classifyFileChange(fsPath, dbRelPath, name, info, existing)
+	return o.classifyFileChange(fsPath, dbRelPath, name, info, existing, scanStartNano)
 }
 
 // buildCreateEvent constructs a ChangeCreate event for a new local entry.
@@ -215,21 +220,47 @@ func (o *LocalObserver) buildCreateEvent(
 }
 
 // classifyFileChange compares a file against its baseline entry to detect
-// content modifications. Always hashes for correctness (mtime optimization
-// deferred to B-031 profiling).
+// content modifications. Uses mtime+size as a fast path — only computes
+// the content hash when metadata suggests a change. This is the industry
+// standard (rsync, rclone, Syncthing, Git all use this pattern). Includes
+// a racily-clean guard: files whose mtime is within 1 second of scan
+// start are always hashed, because they may have been modified in the
+// same clock tick as the last sync (Git's "racily clean" problem).
 func (o *LocalObserver) classifyFileChange(
 	fsPath, dbRelPath, name string, info fs.FileInfo, base *BaselineEntry,
+	scanStartNano int64,
 ) (*ChangeEvent, error) {
+	currentMtime := info.ModTime().UnixNano()
+	currentSize := info.Size()
+
+	// Fast path: skip hashing when size and mtime both match the baseline.
+	if currentSize == base.Size && currentMtime == base.Mtime {
+		// Racily-clean guard: if the file's mtime is within 1 second of
+		// scan start, the file may have been modified in the same clock
+		// tick as the last sync. Force a hash check to be safe.
+		if scanStartNano-currentMtime >= nanosPerSecond {
+			o.logger.Debug("fast path: mtime+size match, skipping hash",
+				slog.String("path", dbRelPath))
+
+			return nil, nil //nolint:nilnil
+		}
+
+		o.logger.Debug("racily clean file, forcing hash check",
+			slog.String("path", dbRelPath))
+	}
+
+	// Slow path: metadata differs (or racily clean) — compute hash.
 	hash, err := computeQuickXorHash(fsPath)
 	if err != nil {
 		o.logger.Warn("hash computation failed, skipping file",
 			slog.String("path", dbRelPath), slog.String("error", err.Error()))
-		return nil, nil
+
+		return nil, nil //nolint:nilnil
 	}
 
-	// Hash matches baseline — file is unchanged regardless of mtime.
+	// Hash matches baseline — file is unchanged despite metadata difference.
 	if hash == base.LocalHash {
-		return nil, nil
+		return nil, nil //nolint:nilnil
 	}
 
 	return &ChangeEvent{
@@ -238,9 +269,9 @@ func (o *LocalObserver) classifyFileChange(
 		Path:     dbRelPath,
 		Name:     name,
 		ItemType: ItemTypeFile,
-		Size:     info.Size(),
+		Size:     currentSize,
 		Hash:     hash,
-		Mtime:    info.ModTime().UnixNano(),
+		Mtime:    currentMtime,
 	}, nil
 }
 
@@ -437,8 +468,8 @@ func skipEntry(d fs.DirEntry) error {
 }
 
 // truncateToSeconds truncates nanosecond-precision time to second precision.
-// For future mtime optimization where remote timestamps have only second
-// precision (deferred to B-031).
+// Available for cross-platform mtime comparison where remote timestamps
+// have coarser granularity (e.g., 1-second resolution on some backends).
 func truncateToSeconds(nanos int64) int64 {
 	return (nanos / nanosPerSecond) * nanosPerSecond
 }

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
@@ -299,6 +300,126 @@ func TestFullScan_MtimeChangeNoContentChange(t *testing.T) {
 
 	if len(events) != 0 {
 		t.Errorf("len(events) = %d, want 0 (mtime change only, hash matches)", len(events))
+	}
+}
+
+func TestFullScan_MtimeSizeFastPath(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	content := "fast path content"
+	writeTestFile(t, dir, "cached.txt", content)
+
+	// Set mtime to 1 hour ago so it's well outside the racily-clean window.
+	oldTime := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(filepath.Join(dir, "cached.txt"), oldTime, oldTime); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	info, err := os.Stat(filepath.Join(dir, "cached.txt"))
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+
+	// Baseline matches file's actual mtime, size, and hash — fast path should skip hashing.
+	baseline := baselineWith(&BaselineEntry{
+		Path: "cached.txt", DriveID: "d", ItemID: "i1",
+		ItemType: ItemTypeFile, LocalHash: hashContent(t, content),
+		Size: info.Size(), Mtime: info.ModTime().UnixNano(),
+	})
+
+	obs := NewLocalObserver(baseline, testLogger(t))
+	events, err := obs.FullScan(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("FullScan: %v", err)
+	}
+
+	if len(events) != 0 {
+		t.Errorf("len(events) = %d, want 0 (fast path should skip unchanged file)", len(events))
+	}
+}
+
+func TestFullScan_RacilyCleanForcesHash(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	// File content differs from baseline hash, but mtime+size will match.
+	// Since the file was just created, mtime is within 1 second of scan start,
+	// so the racily-clean guard should force a hash check and detect the change.
+	actualContent := "actual_xx"
+	baselineContent := "baseline_"
+	writeTestFile(t, dir, "racy.txt", actualContent)
+
+	info, err := os.Stat(filepath.Join(dir, "racy.txt"))
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+
+	// Baseline has same mtime and size but different hash.
+	baseline := baselineWith(&BaselineEntry{
+		Path: "racy.txt", DriveID: "d", ItemID: "i1",
+		ItemType: ItemTypeFile, LocalHash: hashContent(t, baselineContent),
+		Size: info.Size(), Mtime: info.ModTime().UnixNano(),
+	})
+
+	obs := NewLocalObserver(baseline, testLogger(t))
+	events, err := obs.FullScan(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("FullScan: %v", err)
+	}
+
+	// Racily-clean guard should force hash, detect the mismatch → ChangeModify.
+	if len(events) != 1 {
+		t.Fatalf("len(events) = %d, want 1 (racily clean should force hash)", len(events))
+	}
+
+	ev := events[0]
+	if ev.Type != ChangeModify {
+		t.Errorf("Type = %v, want ChangeModify", ev.Type)
+	}
+
+	if ev.Hash != hashContent(t, actualContent) {
+		t.Errorf("Hash = %q, want %q", ev.Hash, hashContent(t, actualContent))
+	}
+}
+
+func TestFullScan_SizeChangeForcesHash(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	content := "new longer content"
+	writeTestFile(t, dir, "grown.txt", content)
+
+	// Set mtime to 1 hour ago.
+	oldTime := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(filepath.Join(dir, "grown.txt"), oldTime, oldTime); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	info, err := os.Stat(filepath.Join(dir, "grown.txt"))
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+
+	// Baseline has same mtime but different size — should force hash.
+	baseline := baselineWith(&BaselineEntry{
+		Path: "grown.txt", DriveID: "d", ItemID: "i1",
+		ItemType: ItemTypeFile, LocalHash: hashContent(t, "short"),
+		Size: 5, Mtime: info.ModTime().UnixNano(),
+	})
+
+	obs := NewLocalObserver(baseline, testLogger(t))
+	events, err := obs.FullScan(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("FullScan: %v", err)
+	}
+
+	if len(events) != 1 {
+		t.Fatalf("len(events) = %d, want 1 (size change should force hash)", len(events))
+	}
+
+	if events[0].Type != ChangeModify {
+		t.Errorf("Type = %v, want ChangeModify", events[0].Type)
 	}
 }
 
