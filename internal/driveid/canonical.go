@@ -1,6 +1,7 @@
 package driveid
 
 import (
+	"encoding"
 	"fmt"
 	"strings"
 )
@@ -11,11 +12,16 @@ import (
 // like "sharepoint:alice@contoso.com:marketing:Docs".
 const canonicalSplitLimit = 3
 
-// ValidDriveTypes enumerates accepted drive type prefixes in canonical IDs.
-var ValidDriveTypes = map[string]bool{
+// validDriveTypes enumerates accepted drive type prefixes in canonical IDs.
+var validDriveTypes = map[string]bool{
 	"personal":   true,
 	"business":   true,
 	"sharepoint": true,
+}
+
+// IsValidDriveType reports whether the given string is a valid drive type prefix.
+func IsValidDriveType(t string) bool {
+	return validDriveTypes[t]
 }
 
 // CanonicalID is a config-level drive identifier with the format
@@ -36,7 +42,7 @@ func NewCanonicalID(raw string) (CanonicalID, error) {
 	}
 
 	driveType := parts[0]
-	if !ValidDriveTypes[driveType] {
+	if !validDriveTypes[driveType] {
 		return CanonicalID{}, fmt.Errorf(
 			"driveid: canonical ID %q has unknown type %q (must be personal, business, or sharepoint)", raw, driveType)
 	}
@@ -45,7 +51,8 @@ func NewCanonicalID(raw string) (CanonicalID, error) {
 }
 
 // MustCanonicalID is like NewCanonicalID but panics on invalid input.
-// Use in tests and initialization code where the value is known-good.
+// It panics if the format is invalid (no colon, unknown type, or empty email).
+// Use only in tests and initialization code where the value is known-good.
 func MustCanonicalID(raw string) CanonicalID {
 	cid, err := NewCanonicalID(raw)
 	if err != nil {
@@ -92,10 +99,8 @@ func (c CanonicalID) Email() string {
 		return ""
 	}
 
+	// Valid CanonicalIDs always have at least 2 parts (enforced by NewCanonicalID).
 	parts := strings.SplitN(c.value, ":", canonicalSplitLimit)
-	if len(parts) < 2 {
-		return ""
-	}
 
 	return parts[1]
 }
@@ -103,6 +108,24 @@ func (c CanonicalID) Email() string {
 // IsSharePoint reports whether this is a SharePoint drive.
 func (c CanonicalID) IsSharePoint() bool {
 	return c.DriveType() == "sharepoint"
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (c CanonicalID) MarshalText() ([]byte, error) {
+	return []byte(c.value), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler. The input is validated
+// just like NewCanonicalID().
+func (c *CanonicalID) UnmarshalText(text []byte) error {
+	cid, err := NewCanonicalID(string(text))
+	if err != nil {
+		return err
+	}
+
+	*c = cid
+
+	return nil
 }
 
 // TokenCanonicalID returns the canonical ID to use for token path derivation.
@@ -116,3 +139,10 @@ func (c CanonicalID) TokenCanonicalID() CanonicalID {
 	// SharePoint drives share the business account's token.
 	return CanonicalID{value: "business:" + c.Email()}
 }
+
+// Compile-time interface assertions.
+var (
+	_ encoding.TextMarshaler   = CanonicalID{}
+	_ encoding.TextUnmarshaler = (*CanonicalID)(nil)
+	_ fmt.Stringer             = CanonicalID{}
+)

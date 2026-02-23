@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 func TestEmailFromCanonicalString(t *testing.T) {
@@ -97,7 +98,7 @@ func TestCanonicalIDForToken(t *testing.T) {
 			"business:alice@contoso.com",
 		},
 		{
-			"empty returns empty",
+			"empty returns zero",
 			"nobody@example.com",
 			nil,
 			"",
@@ -107,7 +108,7 @@ func TestCanonicalIDForToken(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := canonicalIDForToken(tt.account, tt.driveIDs)
-			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.want, got.String())
 		})
 	}
 }
@@ -140,12 +141,12 @@ func TestFindTokenFallback(t *testing.T) {
 
 	// With no token files on disk, should default to personal.
 	got := findTokenFallback("nobody@example.com", slog.Default())
-	assert.Equal(t, "personal:nobody@example.com", got)
+	assert.Equal(t, driveid.MustCanonicalID("personal:nobody@example.com"), got)
 }
 
 func TestFindTokenFallback_PersonalExists(t *testing.T) {
 	// Create a temp directory and a file matching the personal token path.
-	personalID := "personal:test-fallback@example.com"
+	personalID := driveid.MustCanonicalID("personal:test-fallback@example.com")
 	personalPath := config.DriveTokenPath(personalID)
 
 	if personalPath == "" {
@@ -165,7 +166,7 @@ func TestFindTokenFallback_PersonalExists(t *testing.T) {
 
 func TestFindTokenFallback_BusinessExists(t *testing.T) {
 	// Create only a business token file — should return business prefix.
-	businessID := "business:test-fallback-biz@example.com"
+	businessID := driveid.MustCanonicalID("business:test-fallback-biz@example.com")
 	businessPath := config.DriveTokenPath(businessID)
 
 	if businessPath == "" {
