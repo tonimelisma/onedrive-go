@@ -174,33 +174,32 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
   - [x] Retrospective: DOD process discipline lesson captured in LEARNINGS.md §7
   - [x] Re-envisioning: architecture confirmed sound, Wave 2 progressing well
 
-### 4v2.4: Change Buffer
+### 4v2.4: Change Buffer — DONE
 
 **Debounce, dedup, and batch events for the planner.**
 
-- `ChangeBuffer` struct with configurable debounce window (default 2 seconds)
-- `Add(event)`: accumulate events, dedup by path (keep latest per path per side)
-- Move event dual-keying: a move produces events at both old path (synthetic delete) and new path (create/modify), ensuring the planner sees both sides
-- `Flush() -> []ChangeEvent`: return deduplicated, batched events after debounce window expires
-- `FlushImmediate() -> []ChangeEvent`: bypass debounce for one-shot mode (RunOnce collects all events, then flushes immediately)
-- Backpressure: if executor is still running, buffer continues accumulating (for watch mode)
-- Tests for debounce timing, dedup correctness, move dual-keying, flush modes
-- **Acceptance**: `go test ./internal/sync/...` passes
+- `Buffer` struct with thread-safe `Add(*ChangeEvent)`, `AddAll([]ChangeEvent)`, `FlushImmediate() []PathChanges`, `Len() int`
+- Move event dual-keying: a move produces events at both old path (synthetic delete) and new path, ensuring the planner sees both sides
+- `FlushImmediate()` returns `[]PathChanges` sorted by path (deterministic), clears buffer. Timer-based debounce deferred to Phase 5.
+- `Add` takes `*ChangeEvent` (not value) due to gocritic hugeParam (~192 bytes)
+- `AddAll` takes single lock for entire batch (performance for one-shot mode with thousands of events)
+- 14 test cases including thread safety with race detector (20 goroutines × 50 events). PR #84.
+- **Acceptance**: Build passes, all tests pass (race detector), lint clean, 91.2% sync coverage
 - **Inputs**: [event-driven-rationale.md](design/event-driven-rationale.md) Parts 5.3, 10 (Phase 2)
 
-### 4v2.5: Planner
+### 4v2.5: Planner — DONE
 
 **Pure-function reconciliation: events + baseline -> action plan.**
 
-- `buildPathViews(events, baseline) -> []PathView`: merge change events with baseline entries to build the three-way view (remote state, local state, baseline) for each affected path
-- `classifyFile(view PathView) -> Action`: implement all 14 file decision rows (EF1-EF14) from the reorganized decision matrix
-- `classifyFolder(view PathView) -> Action`: implement all 8 folder decision rows (ED1-ED8) with existence-based reconciliation (no hash check for folders)
-- `detectMoves(views []PathView, baseline) -> []PathView`: remote moves from `ChangeMoved` events; local moves via hash correlation (file disappears at path A, appears at path B with same hash)
-- Filter application: `Filter.ShouldSync()` called during classification, not during observation — ensures symmetric filtering of both remote and local items
-- Safety checks as pure functions: `bigDeleteTriggered(plan, baseline, config) bool` for S5, baseline-nil checks for S1, all operating on typed data structures instead of DB queries
-- Action ordering: folders before files for creates, files before folders for deletes, moves before creates
-- Exhaustive table-driven tests: one test case per matrix cell (14 file + 8 folder = 22 minimum), plus move detection, filter symmetry, safety check edge cases
-- **Acceptance**: `go test ./internal/sync/...` passes with 100% decision matrix coverage
+- `Planner.Plan(changes []PathChanges, baseline *Baseline, mode SyncMode, config *SafetyConfig) (*ActionPlan, error)`
+- 5-step pipeline: `buildPathViews` → `detectMoves` (remote + local hash correlation) → `classifyPathView` (EF1-EF14 file, ED1-ED8 folder) → `orderPlan` (folder creates top-down, deletes bottom-up) → `bigDeleteTriggered` (S5 safety)
+- `SafetyConfig` + `DefaultSafetyConfig()` + `ErrBigDeleteTriggered` defined in planner.go (avoids types.go contention with parallel agents)
+- File classification split into sub-functions (`classifyFileWithBaseline`/`classifyFileNoBaseline`) to stay under funlen/gocyclo limits
+- Move detection: remote moves from `ChangeMove` events, local moves via hash correlation with unique-match constraint (ambiguous cases fall through to delete+create)
+- SyncMode filtering: download-only suppresses uploads, upload-only suppresses downloads
+- When no local events but baseline exists, derives `LocalState` from baseline (unchanged file)
+- 43 test cases: 14 file matrix, 8 folder matrix, 4 move detection, 4 big-delete safety, 4 mode filtering, 2 ordering, 3 integration, plus helper tests. PR #85.
+- **Acceptance**: Build passes, all tests pass (race detector), lint clean, 91.2% sync coverage, 100% decision matrix coverage
 - **Inputs**: [event-driven-rationale.md](design/event-driven-rationale.md) Parts 6, 7, 10 (Phase 3), [sync-algorithm.md](design/sync-algorithm.md) section 5
 
 ### 4v2.6: Executor
@@ -269,15 +268,13 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 
 **Wave 1**: 4v2.1 (types + baseline) — foundation types that everything depends on.
 
-**Wave 2**: 4v2.2 (remote observer) + 4v2.3 (local observer) + 4v2.4 (change buffer) — independent of each other, all depend on types from 4v2.1. Can run in parallel with up to three agents.
+**Wave 2**: 4v2.2 (remote observer) + 4v2.3 (local observer) — DONE. Independent of each other, both depend on types from 4v2.1.
 
-**Wave 3**: 4v2.5 (planner) — depends on all Wave 2 outputs (events feed into planner).
+**Wave 3**: 4v2.4 (change buffer) + 4v2.5 (planner) — DONE. Implemented in parallel (zero file conflicts). Buffer groups events by path; Planner converts events + baseline into ActionPlan.
 
-**Wave 4**: 4v2.6 (executor) — depends on planner output (action plan).
+**Wave 4**: 4v2.6 (executor) — depends on planner output (action plan). NEXT.
 
 **Wave 5**: 4v2.7 (engine wiring) + 4v2.8 (CLI + sync E2E) — sequential, wires everything together.
-
-Re-plan after Wave 2 completes. Real implementation experience may shift boundaries.
 
 ---
 
