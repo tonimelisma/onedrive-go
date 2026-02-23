@@ -67,6 +67,7 @@ linters:
             - github.com/spf13/cobra
             - github.com/spf13/pflag
             - github.com/inconshreveable/mousetrap
+            - golang.org/x/text
             - golang.org/x/time
             - modernc.org/sqlite
             - modernc.org/libc
