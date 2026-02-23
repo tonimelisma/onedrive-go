@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-**Phases 1-3.5 complete. Phase 4v2 Increments 0-6 complete. Next: 4v2.7-4v2.8.** All development on `clean-slate` branch (`main` is read-only safety net). See [docs/roadmap.md](docs/roadmap.md).
+**Phases 1-3.5 complete. Phase 4v2 Increments 0-6 complete. Next: 4v2.7-4v2.8.** All development on `main` branch. See [docs/roadmap.md](docs/roadmap.md).
 
 ## Architecture Overview
 
@@ -113,7 +113,7 @@ gofumpt -w . && goimports -local github.com/tonimelisma/onedrive-go -w . && go b
 echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r && echo "=== Worktrees ===" && git worktree list && echo "=== Stashes ===" && git stash list && echo "=== Open PRs ===" && gh pr list --state open && echo "=== Status ===" && git status
 ```
 
-Expected: `main` and `clean-slate` local branches. Only `origin/main` and `origin/clean-slate` remote. One worktree. No stashes, no open PRs, clean status.
+Expected: `main` local branch only. Only `origin/main` remote. One worktree. No stashes, no open PRs, clean status.
 
 ## Per-Increment Lifecycle
 
@@ -166,9 +166,9 @@ Idiomatic Go: functions do one thing, accept interfaces / return structs (consum
 CI must never be broken. Work is not done until CI passes.
 
 - **Code changes require PRs.** Create a branch, push, open a PR, let CI run.
-- **Doc-only changes push directly to clean-slate.** No PR needed.
+- **Doc-only changes push directly to main.** No PR needed.
 - **Workflow**: `ci.yml` runs build + test (race detector) + lint on every push/PR
-- **Integration tests**: `integration.yml` runs against real Graph API on push to main/clean-slate + nightly
+- **Integration tests**: `integration.yml` runs against real Graph API on push to main + nightly
 - **E2E tests**: Same workflow, builds binary, exercises full CLI round-trip
 - **Merge**: `./scripts/poll-and-merge.sh <pr_number>` — polls checks, merges when green
 - **Pre-commit hook**: `.githooks/pre-commit` runs `golangci-lint run` before every commit
@@ -176,7 +176,7 @@ CI must never be broken. Work is not done until CI passes.
 
 ## Worktree Workflow
 
-Source code changes require a worktree + PR targeting `clean-slate`. Doc-only changes push directly to `clean-slate`. `main` is read-only (safety net).
+Source code changes require a worktree + PR targeting `main`. Doc-only changes push directly to `main`.
 
 Branch format: `<type>/<task-name>` (e.g., `feat/cli-auth`). Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`.
 

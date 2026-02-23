@@ -71,14 +71,14 @@ is_transient_error() {
     return 1
 }
 
-# Wait for the post-merge push workflow on clean-slate and report its result.
+# Wait for the post-merge push workflow on main and report its result.
 # Args: $1 = PR number (for reporting), $2 = merge commit SHA
 wait_for_post_merge_workflow() {
     local pr="$1"
     local merge_sha="$2"
 
     echo ""
-    echo "Waiting for post-merge push workflow on clean-slate (PR #${pr}, commit ${merge_sha:0:7})..."
+    echo "Waiting for post-merge push workflow on main (PR #${pr}, commit ${merge_sha:0:7})..."
 
     # Give GitHub a few seconds to trigger the push workflow
     sleep 5
@@ -87,8 +87,8 @@ wait_for_post_merge_workflow() {
     local retries=0
     local run_id=""
     while [ $retries -lt 12 ]; do
-        # List recent push workflow runs on clean-slate, find one matching our commit
-        run_id=$(gh run list --branch clean-slate --event push --limit 5 --json databaseId,headSha,status \
+        # List recent push workflow runs on main, find one matching our commit
+        run_id=$(gh run list --branch main --event push --limit 5 --json databaseId,headSha,status \
             -q ".[] | select(.headSha == \"${merge_sha}\") | .databaseId" 2>/dev/null | head -1)
 
         if [ -n "$run_id" ]; then
@@ -102,12 +102,12 @@ wait_for_post_merge_workflow() {
 
     if [ -z "$run_id" ]; then
         echo "  WARNING: Could not find push workflow for commit ${merge_sha:0:7}."
-        echo "  Falling back to most recent push workflow on clean-slate..."
-        run_id=$(gh run list --branch clean-slate --event push --limit 1 --json databaseId -q '.[0].databaseId' 2>/dev/null)
+        echo "  Falling back to most recent push workflow on main..."
+        run_id=$(gh run list --branch main --event push --limit 1 --json databaseId -q '.[0].databaseId' 2>/dev/null)
     fi
 
     if [ -z "$run_id" ]; then
-        echo "  ERROR: No push workflow found on clean-slate at all."
+        echo "  ERROR: No push workflow found on main at all."
         POST_MERGE_FAILED_PRS+=("$pr")
         return
     fi
