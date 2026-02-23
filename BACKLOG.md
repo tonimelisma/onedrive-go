@@ -41,7 +41,6 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 | B-070 | Add ParentID to Action struct | P2 | `internal/sync/` | Executor will need ParentID for folder creation (API requires parent ID) and move operations. Currently derivable from Path + baseline, but should be explicit. Evaluate during 4v2.6 design. |
 | B-071 | ConflictRecord missing Name field | P3 | `internal/sync/` | UX convenience for conflict reporting. `path.Base(Path)` suffices but Name from the PathView is cleaner. |
 | B-072 | ED1-ED8 missing folder-delete-to-remote (folder EF6) | P2 | `internal/sync/` | Clarifies B-069: when `hasBaseline && !hasLocal && hasRemote && !remoteDeleted`, folders fall to ED4 (recreate locally) instead of propagating the local deletion remotely. Intentional for safety but undocumented. |
-| B-073 | DriveTokenPath/DriveStatePath should accept `driveid.CanonicalID` | P3 | `internal/config/` | Both functions still take `string` params because many callers (especially in `cmd/`) pass raw strings. Should accept `driveid.CanonicalID` directly after all callers are migrated. |
 | B-074 | Drive identity verification at Engine startup | P2 | `internal/sync/` | Engine (4v2.7) should verify that the configured `driveid.ID` matches the API-reported drive ID at sync start. Catches stale config, renamed drives, or ID format changes. |
 
 ## Event-Driven Pivot (Phase 4 v2)
@@ -63,3 +62,4 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 | B-065 | Implement Phase 4v2.3: Local Observer | **Done** — PR #82. observer_local.go (FullScan, name validation, always-excluded, QuickXorHash), 31 tests with real temp dirs, 87.7% coverage. |
 | B-066 | Implement Phase 4v2.4: Change Buffer | **Done** — PR #84. buffer.go (thread-safe Add/AddAll/FlushImmediate, move dual-keying), 14 tests with race detector, 91.2% coverage. |
 | B-067 | Implement Phase 4v2.5: Planner | **Done** — PR #85. planner.go (5-step pipeline, EF1-EF14 + ED1-ED8 decision matrices, move detection, big-delete safety), 43 tests, 91.2% coverage. |
+| B-073 | DriveTokenPath/DriveStatePath should accept `driveid.CanonicalID` | **Done** — Both functions now accept `driveid.CanonicalID`. All callers migrated: `auth.go` helper chain (`discoverAccount`, `findTokenFallback`, `canonicalIDForToken`, `purgeSingleDrive`), `files.go`, `status.go`, `drive.go`, `integration_test.go`. |

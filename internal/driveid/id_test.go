@@ -12,9 +12,9 @@ func TestNew(t *testing.T) {
 		want string
 	}{
 		{
-			name: "empty string produces 16 zeros",
+			name: "empty string produces zero ID",
 			raw:  "",
-			want: "0000000000000000",
+			want: "",
 		},
 		{
 			name: "15-char personal ID gets zero-padded",
@@ -220,4 +220,40 @@ func TestID_RoundTrip(t *testing.T) {
 // the interface assertion in id.go, but we exercise it here to be thorough).
 func TestID_DriverValuer(t *testing.T) {
 	var _ driver.Valuer = ID{}
+}
+
+func TestNew_EmptyEqualsZeroValue(t *testing.T) {
+	// New("") must produce the same ID as the zero value ID{}.
+	// This ensures a single zero representation — no identity split.
+	if !New("").Equal(ID{}) {
+		t.Error("New(\"\") must equal ID{}")
+	}
+
+	if !New("").IsZero() {
+		t.Error("New(\"\") must be zero")
+	}
+}
+
+func TestID_EmptyString_SQLRoundTrip(t *testing.T) {
+	// Verify SQL roundtrip: New("") → Value() → Scan() → Equal(New("")).
+	original := New("")
+
+	val, err := original.Value()
+	if err != nil {
+		t.Fatalf("Value() error: %v", err)
+	}
+
+	// Zero ID writes nil to SQL.
+	if val != nil {
+		t.Fatalf("Value() = %v, want nil for zero ID", val)
+	}
+
+	var restored ID
+	if err := restored.Scan(val); err != nil {
+		t.Fatalf("Scan() error: %v", err)
+	}
+
+	if !original.Equal(restored) {
+		t.Errorf("round-trip failed: original=%q, restored=%q", original.String(), restored.String())
+	}
 }

@@ -60,7 +60,9 @@ func newIntegrationClient(t *testing.T) *Client {
 	ctx := context.Background()
 	logger := testLogger(t)
 
-	tokenPath := config.DriveTokenPath(drive)
+	cid := driveid.MustCanonicalID(drive)
+
+	tokenPath := config.DriveTokenPath(cid)
 	if tokenPath == "" {
 		t.Fatalf("cannot determine token path for drive %q", drive)
 	}

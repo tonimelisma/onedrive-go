@@ -156,7 +156,7 @@ func buildSingleAccountStatus(
 // Returns "valid", "expired", or "missing".
 func checkTokenState(account string, driveIDs []string, logger *slog.Logger) string {
 	tokenID := canonicalIDForToken(account, driveIDs)
-	if tokenID == "" {
+	if tokenID.IsZero() {
 		// No drives in config — probe the filesystem for an existing token.
 		tokenID = findTokenFallback(account, logger)
 	}

@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 func newDriveCmd() *cobra.Command {
@@ -179,7 +180,12 @@ func pauseDrive(cfgPath, driveID, syncDir string) error {
 // purgeDrive deletes the config section and state database for a drive.
 // The token is NOT deleted here — it may be shared with other drives (SharePoint).
 func purgeDrive(cfgPath, driveID string, logger *slog.Logger) error {
-	if err := purgeSingleDrive(cfgPath, driveID, logger); err != nil {
+	cid, err := driveid.NewCanonicalID(driveID)
+	if err != nil {
+		return fmt.Errorf("invalid drive ID %q: %w", driveID, err)
+	}
+
+	if err := purgeSingleDrive(cfgPath, cid, logger); err != nil {
 		return err
 	}
 
