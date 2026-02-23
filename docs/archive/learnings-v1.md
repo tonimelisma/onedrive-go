@@ -1,0 +1,397 @@
+# Learnings — Institutional Knowledge Base
+
+Knowledge captured during implementation. Organized by topic. Per-increment bullet-point summaries archived in `docs/archive/learnings-phase-4-details.md`. Earlier phases archived in `docs/archive/learnings-phases-1-3.md`.
+
+---
+
+## 1. API and Graph Client
+
+### Test-friendly time delays
+Any code with `time.Sleep` or timer-based backoff must use an injectable sleep function:
+```go
+type Client struct {
+    sleepFunc func(ctx context.Context, d time.Duration) error // default: timeSleep
+}
+```
+Tests override with `noopSleep` that returns immediately. Without this, retry tests took 70s instead of 1.4s.
+
+### govet shadow checks are strict
+This project enables `govet` with `enable-all: true`. Variable shadowing in nested scopes (e.g., `if err := ...` inside a block that already has `err`) triggers lint failures. Use distinct names like `sleepErr`, `readErr`.
+
+### httptest is the right choice for Graph API tests
+Use `httptest.NewServer` for all Graph client tests. Real HTTP, no interfaces for mocking. Tests are realistic and simple.
+
+### oauth2 fork for OnTokenChange
+`golang.org/x/oauth2` has no persistence callback — when `ReuseTokenSource` silently refreshes a token, the new refresh token is only in memory. We use `github.com/tonimelisma/oauth2` fork (branch `on-token-change`) via `go.mod` replace directive. Adds `Config.OnTokenChange func(newToken *Token)` — fires after refresh, outside mutex, nil-safe. Tracks upstream proposal `golang/go#77502`.
+
+### Public auth functions accept explicit token paths
+Public auth functions (`Login`, `Logout`, `TokenSourceFromPath`) accept explicit `tokenPath` parameters — the caller computes the path via `config.DriveTokenPath(canonicalID)`. This decouples `graph/` from `config/` entirely.
+
+### oauth2 device code tests use real polling delays
+Tests using `cfg.DeviceAccessToken()` incur real 1-second polling intervals (the minimum per RFC 8628). Set `"interval": 1` in mock device code responses to minimize delay, but tests still take ~1-3s each.
+
+### go.mod replace directive pseudo-version format
+When using `replace` with a commit hash, the pseudo-version timestamp must match the commit's actual timestamp. Use `go mod download <module>@<commit>` first to discover the correct timestamp.
+
+### Graph API quirks
+- **Personal accounts have empty mail field.** Use `userPrincipalName` as fallback.
+- **Returns 400 (not 404) for invalid item ID formats.** Use path-based addressing for proper 404.
+- **JSON tag `@odata.nextLink` / `@microsoft.graph.conflictBehavior`** trigger `tagliatelle` linter — suppress with `//nolint:tagliatelle`.
+- **Delta token is always a full URL.** Use `stripBaseURL()` to convert to a relative path for `Do()`.
+
+### Pre-authenticated URLs bypass the Graph API
+`@microsoft.graph.downloadUrl` and `uploadUrl` from CreateUploadSession are pre-authenticated URLs. Must NOT use `Do()` (no base URL prefix, no auth headers). Use `httpClient.Do(req)` directly. Never log these URLs.
+
+### SimpleUpload needs custom content type
+`Do()` always sets `Content-Type: application/json`. SimpleUpload needs `application/octet-stream`. Solution: a private `doRawUpload` helper. No retry for upload operations (can't safely replay a partially-consumed reader).
+
+### Upload chunk responses have three shapes
+- 202 Accepted: intermediate chunk (drain and discard body)
+- 200/201: final chunk complete (body has driveItem JSON)
+- Error: various HTTP error codes
+
+### rewindBody is called before every attempt, not just retries
+`doRetry` calls `rewindBody` at the top of the loop, which means the first attempt also rewinds. Testing "rewind fails on retry" requires a seeker that succeeds on the first Seek but fails on subsequent ones -- a simple always-failing seeker will fail before any HTTP call is made.
+
+### Delta normalization pipeline
+Four steps in order: (1) filter packages, (2) clear bogus hashes on deleted items, (3) deduplicate keeping last occurrence, (4) reorder deletions before creations. Each step is a separate unexported function. `slices.SortStableFunc` preserves relative order.
+
+### URL encoding in Graph API paths
+Path segments must be individually URL-encoded. `encodePathSegments()` splits on `/`, encodes each with `url.PathEscape`, and reassembles. In httptest, use `r.RequestURI` (not `r.URL.RawPath`) to verify encoding.
+
+### Retry body consumption bug
+The `doRetry` loop reused an `io.Reader` body across retries. Fix: seek the body to offset 0 before each attempt. The `rewindBody` helper was extracted to keep `doRetry` under complexity limits.
+
+### JSON dot-notation tags never work in encoding/json
+`json:"file.mimeType"` does not support dot notation — the field was never populated. Dead fields with misleading tags are a maintenance hazard.
+
+### Upload session resume and fileSystemInfo
+- `fileSystemInfo` in upload session requests preserves local timestamps (prevents double-versioning).
+- 416 Range Not Satisfiable is recoverable — call `QueryUploadSession` to discover `nextExpectedRanges`.
+- Upload session URLs are pre-authenticated (no `Authorization` header).
+
+### httptest closure variable forward-reference
+When an `httptest.NewServer` handler needs `srv.URL`, declare `var srv *httptest.Server` first, then assign. Direct assignment with a closure referencing `srv.URL` won't compile.
+
+### Package-level var for test-overridable guards
+`maxDeltaPages` uses `var` instead of `const` with `//nolint:gochecknoglobals` to allow test overrides. Tests save/restore the original value with `defer`.
+
+### gosec G602 false positive on backwards iteration
+`gosec` flags `items[i]` as "slice index out of range" when iterating backwards. Work around by copying, reversing with `slices.Reverse()`, and iterating forward.
+
+---
+
+## 2. Filesystem and Platform
+
+### filepath.Ext(".bashrc") returns ".bashrc", not ""
+Go's `filepath.Ext` returns the suffix from the LAST dot in the last path element. For dotfiles like `.bashrc`, the only dot is at position 0, so the entire name (`.bashrc`) is treated as the extension and the stem is empty. This causes conflict copy naming to produce `.conflict-TIMESTAMP.bashrc` instead of `.bashrc.conflict-TIMESTAMP`. Fix: detect when `base[0] == '.'` and `strings.Count(base, ".") == 1`, then treat extension as empty and use the full name as stem. Extract a `conflictStemExt` helper for this logic.
+
+### NFC normalization requires separate filesystem and DB paths
+On macOS (APFS), NFC and NFD lookups resolve to the same file. On Linux (ext4), filenames are stored as exact bytes. Thread two separate paths: `fsRelPath` (original bytes for I/O) and `dbRelPath` (NFC-normalized for database). Track visited DB paths during walks to avoid false positive orphan detection.
+
+### Mtime fast-path requires nil-check on stored LocalMtime
+When an existing item has nil `LocalMtime` (e.g., after DB migration), comparing `TruncateToSeconds(nil)` would panic. Check for nil before the fast-path comparison.
+
+### DirEntry.Info() can fail independently of ReadDir
+`os.ReadDir` returns `DirEntry` values that defer their `Info()` call. Handle as skip-and-warn rather than fatal error.
+
+### os.ReadDir vs filepath.Walk for scanner control
+Manual `os.ReadDir` + recursion gives full control over entry ordering, filter short-circuiting, and error handling per-directory. Enables skipping entire subtrees without walking into them.
+
+### Deterministic large file data for corruption detection
+`byte(i % 251)` (prime modulus) generates a repeating pattern covering 251 distinct byte values. Better than random (deterministic) and better than zeros (catches offset/truncation bugs).
+
+### Directory tracking uses LocalMtime as existence proxy
+All reference implementations (Syncthing, abraunegg/onedrive, rclone, Dropbox Nucleus) use a unified items table with type discriminator and modification timestamps. `Item.LocalMtime != nil` is the directory-exists signal. Scanner sets `LocalMtime` to `NowNano()` (not filesystem mtime).
+
+### Platform-specific build tags for disk space
+Darwin uses `syscall.Statfs` directly; Linux needs `golang.org/x/sys/unix.Statfs`. Both use `Bavail` (available to unprivileged users), NOT `Bfree`.
+
+### APFS prevents creating filenames with invalid UTF-8
+macOS APFS normalizes filenames and rejects invalid byte sequences. To test UTF-8 validation guards in scanner's `validateEntry`, use mock `os.DirEntry`/`os.FileInfo` types rather than real filesystem operations.
+
+---
+
+## 3. Linter Patterns
+
+### mnd (magic number detector)
+Every number needs a named constant; tests are exempt. The `.golangci.yml` `ignored-numbers` list includes `'2'`, so `if len(parts) < 2` doesn't need `//nolint:mnd`. The `nolintlint` linter catches unnecessary directives.
+
+### funlen (100 lines / 50 statements)
+Decompose into small helpers. Near-limit functions require extracting helpers for any future additions rather than adding code inline.
+
+### dupl (duplicate detection)
+Catches near-identical method pairs and structural patterns. Solutions: extract shared helpers (e.g., `fetchItem`, `fetchAllChildren`, `filterBySyncedHash`) parameterized by the varying part.
+
+### gocritic
+- **rangeValCopy**: Use `for i := range items` with `items[i]` when struct > ~128 bytes. `graph.Item` is 264 bytes, `Drive` is 144 bytes, `FilterConfig` is 112 bytes.
+- **hugeParam**: `toml.MetaData` (96 bytes), `SafetyConfig` (88 bytes), `sync.Action` (>128 bytes) — pass by pointer.
+- **emptyStringTest**: Prefers `name != ""` over `len(name) > 0`.
+- **sprintfQuotedString**: Use `%q` instead of `"\"%s\""`.
+
+### staticcheck QF1008 (embedded field selectors)
+With embedded structs, `cfg.FilterConfig.SkipDotfiles` and `cfg.SkipDotfiles` are equivalent. Use the short (promoted) form everywhere.
+
+### unparam (unused parameters)
+When a parameter always receives the same value, the linter suggests removing it. Correct for internal helpers.
+
+### gocyclo (cyclomatic complexity limit 15)
+Strict for decision matrices. Strategy: extract classification logic into a pure function returning an enum/struct, then dispatch with a simple switch.
+
+### gosec G101 (potential hardcoded credentials)
+SQL variable named `sqlGetDeltaToken` triggers false positive. Fix with `//nolint:gosec`.
+
+### gosec G115 (integer overflow)
+`uint64` to `int64` — cap at `math.MaxInt64` before conversion.
+
+### nilnil return pattern
+Returning `(nil, nil)` for "skip this entry" requires `//nolint:nilnil`. Idiomatic when both nil means "nothing to do, no error."
+
+### errcheck is disabled in test files
+`.golangci.yml` excludes `errcheck` from `_test.go` files. Do NOT add `//nolint:errcheck` in tests — the `nolintlint` linter will reject it as an unnecessary directive.
+
+### goconst applies to test files and counts cross-file
+Unlike `mnd`, `funlen`, `dupl` -- `goconst` flags repeated string literals even in tests. It counts across all files in a package, so adding `"file.txt"` in `state_test.go` can trigger goconst for an existing occurrence in `delta_test.go`. Use unique filenames in each test file to avoid cross-file constant warnings.
+
+### handleChunkResponse can be tested with crafted *http.Response
+For error paths that don't depend on the HTTP transport (drain errors on 202/416), construct an `*http.Response` directly with a custom `Body` instead of using httptest. This is simpler and avoids server setup for paths that are purely about response body processing.
+
+### gofumpt stricter than gofmt
+Enforces stricter struct field alignment. Multi-byte characters in comments can cause differences. Always run `gofumpt -w` before committing.
+
+---
+
+## 4. Testing Patterns
+
+### QuickXorHash test vectors
+Plan test vectors were wrong. Always verify against a known-good reference (rclone v1.73.1), don't blindly trust specs.
+
+### Scoped test verification
+```bash
+# Good: scoped to own package
+go test ./internal/graph/...
+# Bad: sees intermediate states from other agents
+go test ./...
+```
+
+### E2E test pattern: build once, run as subprocess
+Build the binary in `TestMain` to a temp dir, run via `os/exec` in each test. Use `t.Cleanup` for teardown.
+
+### t.Fatalf cannot be called from non-test goroutines
+`testing.T.Fatalf` calls `runtime.Goexit()` which panics from a non-test goroutine. Use `exec.Command` directly with error channels for concurrent tests.
+
+### Build tag isolation
+Files with `//go:build e2e` are completely excluded from `go build ./...`. Two-tier verification: compile without API, run with API.
+
+### Always check coverage before committing
+Run `go test -coverprofile` as part of DOD check, not just build+test+lint.
+
+### E2E test decomposition
+Even though test files are exempt from `funlen`, decompose into helper functions for readability.
+
+### Recursive mkdir with 409 Conflict handling
+Walk path segments, create each. If CreateFolder returns 409, resolve by path and continue with its ID as parent.
+
+---
+
+## 5. Config and TOML
+
+### Chunk size default "10MiB" not "10MB"
+10 MB (10,000,000 bytes) is NOT a multiple of 320 KiB. 10 MiB (10,485,760) IS a multiple (32 * 327,680).
+
+### `toml.MetaData` is 96 bytes
+Triggers hugeParam. Pass by pointer. `toml.DecodeFile` returns it by value, so take its address.
+
+### misspell linter catches intentional typos in test TOML
+Use `//nolint:misspell` on lines with deliberate misspellings for unknown-key-detection tests.
+
+### BurntSushi/toml embedded struct field promotion
+Works without tags. No `toml:",squash"` needed (that's mapstructure). Just embed directly.
+
+### Two-pass TOML decode for mixed-key configs
+Pass 1 decodes globals into embedded structs. Pass 2 decodes into `map[string]any`, extracts keys containing `:` as drive sections, converts via re-encode/decode through `mapToDrive()`.
+
+### Drive key validation in two-pass decode
+Unknown keys in drive sections can't be caught by `toml.MetaData.Undecoded()`. Must validate explicitly with `checkDriveUnknownKeys()`.
+
+### errWriter pattern for multi-write formatting
+Wrap `io.Writer`, capture first error, subsequent writes are no-ops. One `failWriter` test covers all error paths.
+
+### cmd.Flags().Changed() for pflag default disambiguation
+Use `cmd.Flags().Changed("flag")` to detect whether the user actually passed the flag vs. relying on default value.
+
+### CLIOverrides pointer fields for nil-vs-zero-value
+`*string` / `*bool` — `nil` means "not specified", `&false` means "user explicitly set to false".
+
+### Synthetic default drive for zero-config UX
+When no config file exists, `ResolveDrive()` creates a synthetic default drive with `SyncDir: "~/OneDrive"`.
+
+### findSectionEnd must exclude next section's preamble
+Blank lines and comments between the last key-value line and the next section header belong to the NEXT section. Walk backwards from the next header to skip them.
+
+### Atomic writes: temp file in same directory, then rename
+`os.Rename` is atomic on POSIX when source and target are on the same filesystem. `succeeded` flag with deferred cleanup handles all error paths.
+
+### Cross-package impact of config rewrite
+Key API changes: `Config.Profiles` → `Config.Drives`, `Resolve()` → `ResolveDrive()`, `ProfileTokenPath()` → `DriveTokenPath()`, `ProfileDBPath()` → `DriveStatePath()`. `config show` command removed entirely.
+
+---
+
+## 6. CI and Integration
+
+### Azure OIDC + Key Vault for CI token management
+GitHub secrets can't be updated from workflows, so we use Azure Key Vault. OIDC federation means no stored credentials — GitHub Actions presents a short-lived JWT scoped to `repo:tonimelisma/onedrive-go:ref:refs/heads/main`. Token files flow via `az keyvault secret download/set --file`, never through stdout/CI logs.
+
+### Token and drive ID bootstrap
+Tokens bootstrapped via `go run . login --drive personal:user@example.com`. Drive IDs discovered via `go run . whoami --json`. Integration tests require `ONEDRIVE_TEST_DRIVE_ID` env var.
+
+### Integration test build tag pattern
+`//go:build integration` excluded from `go test ./...`. The `newIntegrationClient(t)` helper skips (not fails) when no token is available.
+
+### Nightly CI keeps refresh tokens alive
+Microsoft rotates refresh tokens on use and they expire after 90 days of inactivity. Nightly schedule (3 AM UTC) keeps them active.
+
+### Orchestrator manages Key Vault secrets directly
+The AI orchestrator has `az` CLI access for creating/renaming secrets, downloading/uploading tokens, setting GitHub variables. The human only handles one-time Azure infrastructure and interactive browser-based flows.
+
+### Local CI validation prevents push-and-pray
+Mirror the workflow's token loading logic with `az keyvault secret download`, test `whoami --json --drive`, run E2E tests locally. See test-strategy.md §6.1.
+
+### CI token path migration (profiles → drives)
+`ONEDRIVE_TEST_PROFILES` → `ONEDRIVE_TEST_DRIVES`. Token file: `sed 's/:/_/'`. Key Vault secret: `sed 's/[:@.]/-/g'`. Data dir: `~/.config/onedrive-go/tokens/` → `~/.local/share/onedrive-go/`.
+
+### Auth command bootstrapping problem
+Login must work before any config file exists. `PersistentPreRunE` skips `loadConfig()` for auth commands via `switch cmd.Name()`. Auth commands derive token path from `--drive` flag.
+
+### OAuth app ID must be consistent across source, tokens, and Key Vault
+Refresh tokens are bound to the OAuth client ID that obtained them. If the Azure AD app registration is deleted and re-created (new client ID), all three must be updated in lockstep: (1) `defaultClientID` in source code, (2) token files on disk (re-login required), (3) tokens in Key Vault. A stale client ID in any layer causes `AADSTS700016: Application not found`. The `AZURE_CLIENT_ID` GitHub variable is for OIDC federation (CI → Azure), NOT the OneDrive OAuth app — don't confuse them.
+
+### Token discovery enables zero-config CLI experience
+`DiscoverTokens()` scans the data dir for `token_*.json` files and extracts canonical IDs from filenames. `matchDrive()` falls back to this when no config file exists and no `--drive` flag is given. One token → auto-select. Multiple → prompt with list. This makes `login` → `ls /` work without creating a config file.
+
+---
+
+## 7. Sync Engine
+
+### SQLite state store
+- **Skipped golang-migrate.** Simple 30-line migration runner using `embed.FS` + `PRAGMA user_version` instead. Simpler, no dependency.
+- **noctx linter.** Every database call must use Context variants — even PRAGMAs.
+- **dupl linter.** Solved with generic `prepareAll()` helper using `stmtDef` slice pattern.
+- **SQL string constants easily exceed 140 chars.** Use multi-line concatenation.
+
+### Delta processor
+- **HTTP 410 recovery.** Sentinel error (`errDeltaTokenExpired`) with retry loop — not recursion (which overwrites `deltaComplete` state).
+- **Stable partition for reorderDeletions.** Swap-based in-place partition breaks parent-before-child ordering. Two-pass stable partition preserves relative order.
+- **`convertGraphItem` sets `Size = Int64Ptr(0)` for empty files.** Nullable `Size` semantics need clear documentation.
+
+### Scanner
+- **`validateEntry` does both filtering and validation in one pass.** Filter first for performance, but could be surprising.
+- **`oneDriveReservedNames` is package-level mutable state** (though initialized once and never modified).
+
+### Filter engine
+- **Duplicated `config.parseSize`** because it's unexported. Should be exported to eliminate duplication.
+- **"." path component rejected by OneDrive name validation.** Fixed by skipping "." and ".." in component validation.
+- **`matchesSkipPattern` uses package-level `slog.Warn`** instead of engine's logger (standalone function). Consider making it a method.
+
+### Reconciler
+- **Tombstone skip must be distinguished from "not a tombstone".** Return `([]Action, bool)` tuple where `handled=true` means "this IS a tombstone case."
+- **Per-side enrichment guard uses mtime, not separate hash columns.** Compares `LocalHash != SyncedHash` with mtime-based fallback: if `LocalMtime <= LastSyncedAt`, hash difference is from enrichment.
+- **FolderCreateSide enum eliminates stringly-typed encoding.** `iota + 1` distinguishes from zero-value (unset).
+- **`reconcilerMockStore` prefix pattern works.** Avoids symbol collisions with delta_test.go's `mockStore`.
+
+### Error injection pattern for mock stores
+Add `error` fields to mock stores (e.g., `deleteDeltaErr`, `upsertItemErr`). Check at the top of the mock method before real logic. Zero-value (nil) = no error, so existing tests are unaffected. This pattern scales well across delta, scanner, reconciler, and safety mocks.
+
+### Interface segregation eliminates mock stub boilerplate
+Define narrow consumer-specific interfaces (e.g., `ReconcilerStore`, `SafetyStore`, `ScannerStore`, `DeltaStore`) so each consumer accepts only the methods it needs. Keep the monolithic `Store` for the implementation. Mocks shrink from 31 stubs to 1-9 real methods. ~250 lines removed across 4 test files in this project. When a helper struct overrides ALL embedded struct methods, remove the embedding — `golangci-lint unused` catches this.
+
+### matchesSkipPattern as method vs. package function
+Package-level functions cannot use injected loggers. If a filter function needs to log warnings, make it a method on the struct holding the logger. Call sites change from `func(name, patterns)` to `f.func(name, patterns)` — minor but enables correct logger routing in tests.
+
+### modernc.org/sqlite Close() is idempotent
+Calling `db.Close()` twice does not error with the pure-Go SQLite driver. To test "store is unusable after close", test that subsequent queries fail, not that Close returns an error.
+
+### Always use errors.Is for sentinel error checks
+`err == sql.ErrNoRows` works today but breaks if any middleware wraps the error. Use `errors.Is(err, sql.ErrNoRows)` consistently. When adding new query methods, follow the existing pattern (check GetItem/GetItemByPath) rather than the raw `==` comparison.
+
+### applyMigration naming convention
+`applyMigration` constructs filenames with `migrations/%06d_initial_schema.up.sql`. Only version 1 has a migration file. Future versions will need additional embedded SQL files with matching names.
+
+### Safety checks
+- **`filterBySyncedHash` extracted to deduplicate S1/S4.** Parameterized by invariant name for log messages.
+- **Injectable `statfsFunc` requires default mock in test helpers.** Tests not specifically testing S6 need a mock returning ample space.
+- **uint64 to int64 overflow.** Cap at `math.MaxInt64` before conversion.
+- **S2 belongs in the safety checker, not the reconciler (SRP).** Reconciler's `checkDeltaCompleteness` was buggy (single-drive assumption). Safety checker has correct per-drive implementation.
+
+### Executor
+- **`dispatchPhase` helper eliminates `dupl` linter hits across 9 phase runners.** All phase runners have structurally identical error-routing loops; a single `dispatchPhase(ctx, report, actions, label, handler, onSuccess)` helper deduplicates them. Downloads/uploads accumulate bytes via closure (`if err == nil { r.BytesDownloaded += n }`).
+- **Interface forward declarations must be validated against real implementations.** `TransferClient` in `types.go` had two signature mismatches with actual `graph.Client` methods — a bug only caught when wiring the executor. Validate interfaces against the real type before writing consumers.
+- **`GetItemByPath` needed by move handler but missing from planned `ExecutorStore`.** Narrow interface definitions should be derived from actual handler method calls, not just design-doc reading. The move handler needs parent lookup by path to resolve `newParentID`.
+- **`io.TeeReader` for concurrent hashing and upload.** Wrap the file reader once: `tee := io.TeeReader(file, hasher)`. Each `UploadChunk` call reads from `io.LimitReader(tee, chunkSize)`, feeding both the upload and the hasher in a single pass. No second file read needed.
+- **S4 hash-before-delete is a runtime check, not just plan-time.** The safety checker filters out items with no `SyncedHash` at plan time. The executor re-hashes the actual file at execution time to catch modifications that happened after planning. Both checks are necessary.
+- **Checkpoint failure should log a warning, not be silently discarded.** The original `_ = e.store.Checkpoint()` pattern was flagged by `errcheck`. Changed to `if err := ...; err != nil { logger.Warn(...) }` — non-fatal but visible.
+- **errcheck linter flags `_ = expr` on error returns.** Use `if err := expr; err != nil { logger.Warn(...) }` for best-effort operations, or `//nolint:errcheck` with a comment for truly unhandleable errors (e.g., defer cleanup).
+
+### Conflict handler
+- **Action constructors must populate ALL spec-required fields.** `conflictAction` initially omitted `RemoteMtime` — a data completeness bug that would have caused incomplete conflict records. Spec compliance requires field-by-field review of pseudocode against the implementation.
+- **Use UTC for user-facing timestamps.** `generateConflictPath` initially used `time.Now().Format(...)` (local time). The spec says UTC. Local time causes cross-timezone naming inconsistency. Always use `time.Now().UTC()` for deterministic, portable timestamps.
+- **Consolidate `NowNano()` calls.** Multiple calls in a single function produce slightly different timestamps for related fields (ID, DetectedAt, MarkDeleted). Use a single `now := NowNano()` for consistency.
+- **Post-merge code review catches bugs that DOD gates miss.** Line-by-line review found 2 correctness bugs (RemoteMtime, UTC) that build, test, lint all passed — the bugs were semantic, not syntactic. Mandatory review is not optional.
+
+### Transfer pipeline
+- **`rate.Limiter.WaitN` rejects n > burst.** When reading/writing large buffers, a single `WaitN(ctx, n)` call can exceed the burst size and fail immediately. Fix: loop in burst-sized chunks with a `waitN` helper function. This applies to any token-bucket limiter with large I/O buffers.
+- **Mock stores need mutexes for parallel worker pool tests.** Sequential executor tests pass fine with unsynchronized mocks, but parallel `TransferManager` dispatch creates data races on mock slice appends and map writes. Always add `sync.Mutex` to mock stores when tests exercise concurrent access paths.
+- **Context-aware mock delays for cancellation tests.** `time.Sleep(delay)` ignores context cancellation — mock operations must use `select { case <-time.After(d): case <-ctx.Done(): return ctx.Err() }` to test context propagation through worker pools.
+- **Bandwidth throttle tests need data > burst size.** With `burstMultiplier = 2`, a 1000 bytes/sec limiter has burst 2000. Test data must exceed burst (e.g., 4000 bytes) to observe actual throttling delays.
+
+### Engine wiring
+- **Mock vs real store mismatch on not-found semantics.** All sync component mocks returned `(nil, nil)` for not-found items, but `SQLiteStore.GetItem` and `GetItemByPath` returned wrapped `sql.ErrNoRows`. Bug only exposed when engine wired real components. Fix: intercept `sql.ErrNoRows` in the store to return `(nil, nil)`. **Lesson:** integration tests against real implementations catch contract mismatches that unit tests with mocks miss. Always test with real stores, not just mocks, for at least one end-to-end scenario.
+- **Composite interface pattern for Graph client.** `GraphClient` combines `DeltaFetcher + ItemClient + TransferClient`. `*graph.Client` satisfies it without adapter. A single mock struct (`engineMockGraph`) implements all three, simplifying test setup.
+- **CI lint can fail transiently due to schema download timeouts.** `golangci-lint config verify` fetches a JSON schema from the internet. Network timeouts cause CI failures unrelated to code. Mitigation: re-run the workflow.
+- **`walkParentChain` must check both `err != nil` and `item == nil`.** After `GetItem` was changed to return `(nil, nil)` for not-found, callers that only checked `err != nil` would dereference nil items. Always check both return values from functions with `(T, error)` that use nil-means-not-found semantics.
+- **Upload dual-row bug (B-050, fixed).** Scanner creates items with empty `DriveID`/`ItemID`. After upload, `updateUploadState` sets `ItemID = uploaded.ID` — but the `ON CONFLICT(drive_id, item_id)` key mismatches, creating a second row. **Fix:** `populateDriveID()` injects `action.DriveID` (not `item.DriveID`) so the executor can capture the original DB key, upsert the new row, then `DeleteItemByKey()` the stale one. **Key insight:** when injecting identity into shared item pointers, preserve the original DB key for cleanup — don't modify the item before the executor captures the pre-mutation state.
+- **Reconciler F8/F9 unreachable through real engine (B-051, fixed).** `ListAllActiveItems` filters `is_deleted=0`, but `MarkDeleted` sets `is_deleted=1`. After delta processing, tombstoned items disappeared from the reconciler's view. **Fix:** new `ListItemsForReconciliation` query includes active items plus tombstoned items with `synced_hash != ''` (previously synced). SafetyChecker and Scanner still use `ListAllActiveItems` — tombstones would inflate S5 ratio and create false orphans. The query filter `synced_hash != ''` is the key discriminator: non-synced tombstones are irrelevant to the reconciler.
+- **Scanner DriveID injection eliminates fragile invariant.** B-050 fix used `populateDriveID` to inject engine's DriveID into scanner-created actions, with a comment-only invariant: "must NOT set item.DriveID." Refactored: scanner now receives `driveID` at construction and sets it on new items directly. This is safe because the scanner already writes to a drive-specific store and receives a drive-specific syncRoot. Eliminates `populateDriveID` entirely, removes executor DriveID injection blocks, and makes the data flow match delta-originated items.
+
+---
+
+## 8. Agent Coordination
+
+### Scoped verification prevents cross-agent interference
+Four agents ran simultaneously without conflicts (true leaf packages). Scope tests to own package.
+
+### Test symbol collisions between same-package agents
+Wave 1's scanner_test.go redeclared `mockStore`, `testLogger`, and `TestIsValidOneDriveName` — requiring 8 post-merge fixes. Fix: (1) list existing test symbols in prompts, (2) assign unique prefixes (e.g., `reconcilerMockStore`), (3) reuse shared helpers.
+
+### Plan merge order to minimize rebase churn
+The last-to-merge PR bears all conflict burden. Merge agents defining shared infrastructure first.
+
+### Export shared utilities in Wave 0
+Agent D duplicated `config.parseSize` because it's unexported. Export shared utilities before launching agents.
+
+### Plan NFC/NFD normalization upfront
+Agent C had a late pivot to dual-path NFC after Linux CI failure. The plan should specify dual-path threading from the start for any code touching filesystem paths AND a database.
+
+### Parallel agent file conflicts
+`git checkout` destroys untracked files. Files must be staged immediately after creation. Use worktrees for isolation.
+
+### Agents must commit LEARNINGS.md updates
+Both Wave 1 agents modified LEARNINGS.md but failed to include it in their commits. Consider explicit checklist item in quality gates.
+
+### Agent subagent_type must be `general-purpose` for code changes
+`subagent_type: "Bash"` only has the Bash tool. Always use `general-purpose` for agents that need to read, edit, and write files.
+
+### Pre-commit hook failures with golangci-lint version upgrades
+Agents encountered pre-existing gosec issues after version upgrade. Used `--no-verify` as workaround. CI lint still passed (different version).
+
+### cmd.CommandPath() is safer than cmd.Name() for skip lists
+`cmd.Name()` returns just the leaf name (e.g., `"add"`), risking collisions. `cmd.CommandPath()` returns full path (e.g., `"onedrive-go drive add"`).
+
+### CLI output conventions
+Status/error messages to stderr. Structured data (JSON, tables) to stdout. Allows piping.
+
+### gochecknoinits forbids init() functions
+Use constructor functions instead: `newRootCmd()`. Actually better — testable, no package-level mutable state.
+
+### Cobra transitive dependency: mousetrap
+Must be added to depguard allow list alongside cobra and pflag. Always check transitive deps.

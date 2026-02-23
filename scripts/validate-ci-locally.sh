@@ -33,7 +33,7 @@ else
     DRIVE=$(gh variable get ONEDRIVE_TEST_DRIVES 2>/dev/null | cut -d',' -f1 | xargs) || true
     if [ -z "$DRIVE" ]; then
         echo "ERROR: No drive specified. Pass a canonical drive ID or set ONEDRIVE_TEST_DRIVES."
-        echo "Usage: $0 personal:toni@outlook.com"
+        echo "Usage: $0 personal:testitesti18@outlook.com"
         exit 1
     fi
 fi
