@@ -1,0 +1,150 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [main, clean-slate]
+  schedule:
+    - cron: '0 3 * * *' # 3 AM UTC daily — keeps refresh token alive
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # OIDC federation with Azure
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    # Skip entirely on forks (no OIDC trust)
+    if: vars.AZURE_CLIENT_ID != ''
+    env:
+      ONEDRIVE_TEST_DRIVES: ${{ vars.ONEDRIVE_TEST_DRIVES || 'personal:test@example.com' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build ./...
+
+      - name: Azure OIDC login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Load tokens from Key Vault
+        run: |
+          set -euo pipefail
+          IFS=',' read -ra DRIVES <<< "$ONEDRIVE_TEST_DRIVES"
+          DATA_DIR="$HOME/.local/share/onedrive-go"
+          mkdir -p "$DATA_DIR"
+
+          for drive in "${DRIVES[@]}"; do
+            drive=$(echo "$drive" | xargs) # trim whitespace
+
+            # Derive token filename: replace ":" with "_" to get filesystem-safe name.
+            # e.g., "personal:user@outlook.com" -> "token_personal_user@outlook.com.json"
+            sanitized=$(echo "$drive" | sed 's/:/_/')
+            token_file="token_${sanitized}.json"
+            token_path="${DATA_DIR}/${token_file}"
+
+            # Derive Key Vault secret name: replace ":" and "@" with "-" for Azure naming.
+            # e.g., "personal:user@outlook.com" -> "onedrive-oauth-token-personal-user-outlook-com"
+            secret_name="onedrive-oauth-token-$(echo "$drive" | sed 's/[:@.]/-/g')"
+
+            echo "Loading token for drive: ${drive} (secret: ${secret_name})"
+            az keyvault secret download \
+              --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
+              --name "$secret_name" \
+              --file "$token_path" \
+              --encoding utf-8
+
+            # Validate token structure
+            if ! jq -e '.refresh_token' "$token_path" > /dev/null 2>&1; then
+              echo "::error::Token for drive '${drive}' is missing refresh_token field"
+              exit 1
+            fi
+
+            echo "Token loaded for drive: ${drive} -> ${token_path}"
+          done
+
+      - name: Run integration tests
+        run: |
+          set -euo pipefail
+          IFS=',' read -ra DRIVES <<< "$ONEDRIVE_TEST_DRIVES"
+
+          for drive in "${DRIVES[@]}"; do
+            drive=$(echo "$drive" | xargs)
+            echo "=== Discovering drive ID for: ${drive} ==="
+            DRIVE_ID=$(go run . whoami --json --drive "$drive" | jq -r '.drives[0].id')
+            echo "Drive ID: ${DRIVE_ID}"
+
+            echo "=== Running graph integration tests for: ${drive} ==="
+            ONEDRIVE_TEST_DRIVE="$drive" \
+              ONEDRIVE_TEST_DRIVE_ID="$DRIVE_ID" \
+              go test -tags=integration -race -v -timeout=5m ./internal/graph/...
+
+            # Sync integration tests removed (Phase 4v2 Increment 0: old sync engine deleted).
+            # Re-enable in 4v2.8 after new event-driven engine is wired.
+          done
+
+      # TODO: Re-enable E2E tests after fixing token/login prerequisites.
+      # - name: Run E2E tests
+      #   run: |
+      #     set -euo pipefail
+      #     IFS=',' read -ra DRIVES <<< "$ONEDRIVE_TEST_DRIVES"
+      #
+      #     for drive in "${DRIVES[@]}"; do
+      #       drive=$(echo "$drive" | xargs)
+      #       echo "=== Running E2E tests for: ${drive} ==="
+      #       ONEDRIVE_TEST_DRIVE="$drive" \
+      #         go test -tags=e2e -race -v -timeout=15m ./e2e/...
+      #     done
+
+      - name: Save rotated tokens to Key Vault
+        if: always()
+        run: |
+          set -euo pipefail
+          IFS=',' read -ra DRIVES <<< "$ONEDRIVE_TEST_DRIVES"
+          DATA_DIR="$HOME/.local/share/onedrive-go"
+
+          for drive in "${DRIVES[@]}"; do
+            drive=$(echo "$drive" | xargs)
+
+            # Same derivation as the load step.
+            sanitized=$(echo "$drive" | sed 's/:/_/')
+            token_file="token_${sanitized}.json"
+            token_path="${DATA_DIR}/${token_file}"
+            secret_name="onedrive-oauth-token-$(echo "$drive" | sed 's/[:@.]/-/g')"
+
+            if [ ! -f "$token_path" ]; then
+              echo "::warning::Token file missing for drive '${drive}' — skipping save"
+              continue
+            fi
+
+            # Reject corrupted files before overwriting Key Vault
+            if ! jq -e '.refresh_token' "$token_path" > /dev/null 2>&1; then
+              echo "::warning::Token for drive '${drive}' has no refresh_token — skipping save"
+              continue
+            fi
+
+            echo "Saving rotated token for drive: ${drive}"
+            az keyvault secret set \
+              --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
+              --name "$secret_name" \
+              --file "$token_path" \
+              --content-type "application/json" \
+              --output none
+          done
+
+      - name: Auth failure guidance
+        if: failure()
+        run: |
+          echo "::warning::Integration test auth may have failed."
+          echo "::warning::If the refresh token has expired (90 days idle), re-bootstrap:"
+          echo "::warning::  1. onedrive-go login --drive personal:user@example.com"
+          echo "::warning::  2. az keyvault secret set --vault-name ${{ vars.AZURE_KEY_VAULT_NAME }} --name onedrive-oauth-token-personal-user-example-com --file <token-path> --content-type application/json"

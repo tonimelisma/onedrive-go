@@ -1,0 +1,46 @@
+#!/bin/bash
+
+# Auto-copy files listed in .worktreeinclude when creating a new worktree.
+# Git calls post-checkout with a null previous ref on worktree creation.
+# Forward-compatible with Claude Code Desktop which reads .worktreeinclude natively.
+
+prev_ref="$1"
+
+# Only run on worktree creation (previous ref is null)
+if [ "$prev_ref" != "0000000000000000000000000000000000000000" ]; then
+    exit 0
+fi
+
+# Find the main worktree (source of files to copy)
+main_worktree="$(dirname "$(git rev-parse --git-common-dir)")"
+current_dir="$(pwd)"
+
+# Don't copy if we ARE the main worktree
+if [ "$main_worktree" = "$current_dir" ]; then
+    exit 0
+fi
+
+include_file="$main_worktree/.worktreeinclude"
+if [ ! -f "$include_file" ]; then
+    exit 0
+fi
+
+echo "post-checkout: Copying files from .worktreeinclude..."
+
+while IFS= read -r file || [ -n "$file" ]; do
+    # Skip empty lines and comments
+    file="$(echo "$file" | xargs)"
+    [ -z "$file" ] && continue
+    [[ "$file" == \#* ]] && continue
+
+    src="$main_worktree/$file"
+    dst="$current_dir/$file"
+
+    if [ -e "$src" ]; then
+        mkdir -p "$(dirname "$dst")"
+        cp -r "$src" "$dst"
+        echo "  Copied $file"
+    else
+        echo "  Skipped $file (not found in main worktree)"
+    fi
+done < "$include_file"

@@ -1,0 +1,9 @@
+#!/bin/bash
+# Git pre-commit hook: runs lint before every commit.
+# Install: git config core.hooksPath .githooks
+
+set -euo pipefail
+
+echo "pre-commit: running golangci-lint..."
+golangci-lint run
+echo "pre-commit: lint passed"
