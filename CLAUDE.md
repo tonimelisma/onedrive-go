@@ -52,7 +52,7 @@
 - **`internal/driveid/`** — Type-safe drive identity: ID, CanonicalID, ItemKey — 98.3% coverage
 - **`internal/config/`** — TOML config, drive sections, XDG paths, four-layer override chain — 94.6% coverage
 - **`internal/graph/`** — Graph API client: auth, retry, items CRUD, delta, transfers — 93.0% coverage
-- **`internal/sync/`** — Event-driven sync: types, baseline, observers, buffer, planner, executor — 88.8% coverage
+- **`internal/sync/`** — Event-driven sync: types, baseline, observers, buffer, planner, executor — 90.3% coverage
 - **Root package** — Cobra CLI: login, logout, whoami, status, drive, ls, get, put, rm, mkdir, stat, sync
 - **`e2e/`** — E2E test suite against live OneDrive
 
