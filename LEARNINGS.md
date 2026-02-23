@@ -291,6 +291,12 @@ Shared folder items from Drive A in Drive B's delta carry Drive A's DriveID. If 
 ### Worktree branch point matters for parallel agents
 When a worktree is created from `main` via the EnterWorktree tool but the active development branch is `clean-slate`, the worktree will have old code (e.g., the deleted batch-pipeline sync engine). The fix is `git reset --hard origin/clean-slate` after worktree creation. Save any new files to /tmp first, reset, then restore. This cost one debugging cycle in 4v2.5.
 
+### Move detection must preserve views for reused paths
+When a remote move A→B happens and a new item appears at A in the same delta, `detectRemoteMoves` must not delete A from views. If the old path has a new item (Remote.IsDeleted=false from a ChangeCreate after the synthetic delete), clear Baseline and Local instead of deleting — so the new item classifies correctly (EF14 for files, ED3 for folders) rather than conflicting against the moved item's stale baseline.
+
+### Delete ordering: files before folders at same depth
+Depth-first ordering (deepest first for deletes, shallowest first for creates) is necessary but not sufficient. At the same depth level, files must be deleted before folders. A folder at depth N cannot be deleted until sibling files at depth N are removed first. Use `resolveItemType` as a tiebreaker in the sort comparator: `ItemTypeFile(0) < ItemTypeFolder(1)`.
+
 ### Split switch statements to keep gocyclo under 15
 A Go `switch` with 10 case arms easily exceeds gocyclo's complexity threshold of 15. The pattern: split by a discriminating boolean (e.g., `localDeleted` vs not, `hasBaseline` vs not) into two smaller functions. Each sub-function handles half the cases with much lower complexity. Used successfully for both `classifyFileWithFlags` (28→split into 3 functions) and `classifyFolder` (32→split into 3 functions).
 

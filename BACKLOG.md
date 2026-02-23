@@ -38,6 +38,9 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 | B-064 | Baseline memory scaling for many drives | P3 | `internal/sync/` | Each drive loads full baseline into memory (~19 MB per 100K files). Additive across drives. 5 drives × 100K = ~95 MB baselines alone. Monitor during profiling (B-031). Lazy loading if needed. |
 | B-068 | Executor must fill empty DriveID for new local items | P1 | `internal/sync/` | For EF13/ED5 (new local file/folder upload), Action.DriveID is empty because the item has no remote observation and no baseline. The executor must fill DriveID from its per-drive Engine context before making API calls. Add assertion. |
 | B-069 | Handle locally-deleted folder with no remote delta event | P2 | `internal/sync/` | When a folder is locally deleted but has no remote delta event (unchanged since last token), the planner falls to ED8 (cleanup) instead of propagating deletion remotely. No folder equivalent of EF6. In incremental sync, this orphans the remote folder. |
+| B-070 | Add ParentID to Action struct | P2 | `internal/sync/` | Executor will need ParentID for folder creation (API requires parent ID) and move operations. Currently derivable from Path + baseline, but should be explicit. Evaluate during 4v2.6 design. |
+| B-071 | ConflictRecord missing Name field | P3 | `internal/sync/` | UX convenience for conflict reporting. `path.Base(Path)` suffices but Name from the PathView is cleaner. |
+| B-072 | ED1-ED8 missing folder-delete-to-remote (folder EF6) | P2 | `internal/sync/` | Clarifies B-069: when `hasBaseline && !hasLocal && hasRemote && !remoteDeleted`, folders fall to ED4 (recreate locally) instead of propagating the local deletion remotely. Intentional for safety but undocumented. |
 
 ## Event-Driven Pivot (Phase 4 v2)
 

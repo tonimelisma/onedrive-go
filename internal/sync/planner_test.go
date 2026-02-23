@@ -1994,3 +1994,224 @@ func TestDetectRemoteChange(t *testing.T) {
 		t.Error("expected remote change when remote is deleted")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Move Detection: Old Path Reused
+// ---------------------------------------------------------------------------
+
+func TestDetectMoves_RemoteMoveOldPathReused(t *testing.T) {
+	// Scenario: File at A moved to B, new file created at A in the same delta.
+	// Buffer produces:
+	//   PathChanges for B: [ChangeMove(A→B)]
+	//   PathChanges for A: [synthetic_delete, ChangeCreate(new item)]
+	// The planner must produce 1 move + 1 download (not lose the new file at A).
+	planner := NewPlanner(testLogger(t))
+
+	changes := []PathChanges{
+		{
+			Path: "planner-moved-dest.txt",
+			RemoteEvents: []ChangeEvent{
+				{
+					Source:   SourceRemote,
+					Type:     ChangeMove,
+					Path:     "planner-moved-dest.txt",
+					OldPath:  "planner-reused-path.txt",
+					ItemType: ItemTypeFile,
+					Hash:     "hashOriginal",
+					ItemID:   "item-original",
+					DriveID:  testDriveID,
+				},
+			},
+		},
+		{
+			Path: "planner-reused-path.txt",
+			RemoteEvents: []ChangeEvent{
+				// Synthetic delete from the buffer's move dual-keying.
+				{
+					Source:    SourceRemote,
+					Type:      ChangeDelete,
+					Path:      "planner-reused-path.txt",
+					ItemID:    "item-original",
+					DriveID:   testDriveID,
+					ItemType:  ItemTypeFile,
+					IsDeleted: true,
+				},
+				// New file created at the old path.
+				{
+					Source:   SourceRemote,
+					Type:     ChangeCreate,
+					Path:     "planner-reused-path.txt",
+					ItemID:   "item-new-at-old",
+					DriveID:  testDriveID,
+					ItemType: ItemTypeFile,
+					Hash:     "hashNewFile",
+				},
+			},
+		},
+	}
+
+	baseline := baselineWith(&BaselineEntry{
+		Path:       "planner-reused-path.txt",
+		DriveID:    testDriveID,
+		ItemID:     "item-original",
+		ItemType:   ItemTypeFile,
+		LocalHash:  "hashOriginal",
+		RemoteHash: "hashOriginal",
+	})
+
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	if err != nil {
+		t.Fatalf("Plan() error: %v", err)
+	}
+
+	if len(plan.Moves) != 1 {
+		t.Fatalf("expected 1 move, got %d", len(plan.Moves))
+	}
+
+	move := plan.Moves[0]
+	if move.Path != "planner-reused-path.txt" || move.NewPath != "planner-moved-dest.txt" {
+		t.Errorf("move: %q → %q, want planner-reused-path.txt → planner-moved-dest.txt",
+			move.Path, move.NewPath)
+	}
+
+	// The new file at the old path should produce a download (EF14).
+	if len(plan.Downloads) != 1 {
+		t.Fatalf("expected 1 download for new file at reused path, got %d", len(plan.Downloads))
+	}
+
+	if plan.Downloads[0].Path != "planner-reused-path.txt" {
+		t.Errorf("download path = %q, want %q", plan.Downloads[0].Path, "planner-reused-path.txt")
+	}
+}
+
+func TestDetectMoves_RemoteMoveOldPathReusedFolder(t *testing.T) {
+	// Same scenario as above but a new folder at the old path instead of a file.
+	planner := NewPlanner(testLogger(t))
+
+	changes := []PathChanges{
+		{
+			Path: "planner-moved-folder-dest",
+			RemoteEvents: []ChangeEvent{
+				{
+					Source:   SourceRemote,
+					Type:     ChangeMove,
+					Path:     "planner-moved-folder-dest",
+					OldPath:  "planner-reused-folder",
+					ItemType: ItemTypeFolder,
+					ItemID:   "folder-original",
+					DriveID:  testDriveID,
+				},
+			},
+		},
+		{
+			Path: "planner-reused-folder",
+			RemoteEvents: []ChangeEvent{
+				{
+					Source:    SourceRemote,
+					Type:      ChangeDelete,
+					Path:      "planner-reused-folder",
+					ItemID:    "folder-original",
+					DriveID:   testDriveID,
+					ItemType:  ItemTypeFolder,
+					IsDeleted: true,
+				},
+				{
+					Source:   SourceRemote,
+					Type:     ChangeCreate,
+					Path:     "planner-reused-folder",
+					ItemID:   "folder-new-at-old",
+					DriveID:  testDriveID,
+					ItemType: ItemTypeFolder,
+				},
+			},
+		},
+	}
+
+	baseline := baselineWith(&BaselineEntry{
+		Path:     "planner-reused-folder",
+		DriveID:  testDriveID,
+		ItemID:   "folder-original",
+		ItemType: ItemTypeFolder,
+	})
+
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	if err != nil {
+		t.Fatalf("Plan() error: %v", err)
+	}
+
+	if len(plan.Moves) != 1 {
+		t.Fatalf("expected 1 move, got %d", len(plan.Moves))
+	}
+
+	// The new folder at the old path should produce a folder create (ED3).
+	if len(plan.FolderCreates) != 1 {
+		t.Fatalf("expected 1 folder create for new folder at reused path, got %d", len(plan.FolderCreates))
+	}
+
+	if plan.FolderCreates[0].Path != "planner-reused-folder" {
+		t.Errorf("folder create path = %q, want %q", plan.FolderCreates[0].Path, "planner-reused-folder")
+	}
+
+	if plan.FolderCreates[0].CreateSide != CreateLocal {
+		t.Errorf("folder create side = %v, want CreateLocal", plan.FolderCreates[0].CreateSide)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Delete Ordering: Files Before Folders at Same Depth
+// ---------------------------------------------------------------------------
+
+func TestOrderPlan_DeletesFilesBeforeFoldersAtSameDepth(t *testing.T) {
+	// At the same depth, files should be ordered before folders.
+	planner := NewPlanner(testLogger(t))
+
+	changes := []PathChanges{
+		{
+			Path: "x/planner-del-folder",
+			RemoteEvents: []ChangeEvent{
+				{
+					Source: SourceRemote, Type: ChangeDelete, Path: "x/planner-del-folder",
+					ItemType: ItemTypeFolder, ItemID: "df1", IsDeleted: true,
+				},
+			},
+		},
+		{
+			Path: "x/planner-del-file.txt",
+			RemoteEvents: []ChangeEvent{
+				{
+					Source: SourceRemote, Type: ChangeDelete, Path: "x/planner-del-file.txt",
+					ItemType: ItemTypeFile, ItemID: "df2", IsDeleted: true,
+				},
+			},
+		},
+	}
+
+	baseline := baselineWith(
+		&BaselineEntry{
+			Path: "x/planner-del-folder", DriveID: testDriveID, ItemID: "df1",
+			ItemType: ItemTypeFolder,
+		},
+		&BaselineEntry{
+			Path: "x/planner-del-file.txt", DriveID: testDriveID, ItemID: "df2",
+			ItemType: ItemTypeFile, LocalHash: "hashDF", RemoteHash: "hashDF",
+		},
+	)
+
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	if err != nil {
+		t.Fatalf("Plan() error: %v", err)
+	}
+
+	if len(plan.LocalDeletes) != 2 {
+		t.Fatalf("expected 2 local deletes, got %d", len(plan.LocalDeletes))
+	}
+
+	// File should come before folder at the same depth.
+	if plan.LocalDeletes[0].Path != "x/planner-del-file.txt" {
+		t.Errorf("first delete should be file, got %q", plan.LocalDeletes[0].Path)
+	}
+
+	if plan.LocalDeletes[1].Path != "x/planner-del-folder" {
+		t.Errorf("second delete should be folder, got %q", plan.LocalDeletes[1].Path)
+	}
+}
