@@ -27,6 +27,13 @@ const (
 	strRoot   = "root"
 )
 
+// Resolution strategy constants for conflict resolution.
+const (
+	ResolutionKeepLocal  = "keep_local"
+	ResolutionKeepRemote = "keep_remote"
+	ResolutionKeepBoth   = "keep_both"
+)
+
 // ChangeSource identifies the origin of a change event.
 type ChangeSource int
 
@@ -309,6 +316,21 @@ type ConflictRecord struct {
 	RemoteHash   string
 	LocalMtime   int64
 	RemoteMtime  int64
+}
+
+// VerifyResult describes the verification status of a single file.
+type VerifyResult struct {
+	Path     string `json:"path"`
+	Status   string `json:"status"` // "ok", "missing", "hash_mismatch", "size_mismatch"
+	Expected string `json:"expected,omitempty"`
+	Actual   string `json:"actual,omitempty"`
+}
+
+// VerifyReport summarizes a full-tree hash verification of local files
+// against the baseline database.
+type VerifyReport struct {
+	Verified   int            `json:"verified"`
+	Mismatches []VerifyResult `json:"mismatches,omitempty"`
 }
 
 // Action is an instruction for the executor, produced by the planner.

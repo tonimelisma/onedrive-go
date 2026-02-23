@@ -772,3 +772,145 @@ func TestResolveSafetyConfig_Force(t *testing.T) {
 		t.Errorf("BigDeleteMaxCount = %d, want %d", cfg.BigDeleteMaxCount, forceSafetyMax)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Conflict resolution tests
+// ---------------------------------------------------------------------------
+
+func TestResolveConflict_KeepBoth(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems(nil, "token-1"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	ctx := context.Background()
+
+	// Seed a conflict.
+	outcomes := []Outcome{{
+		Action:       ActionConflict,
+		Success:      true,
+		Path:         "conflict-file.txt",
+		DriveID:      driveID,
+		ItemID:       "item-c",
+		ItemType:     ItemTypeFile,
+		LocalHash:    "local-h",
+		RemoteHash:   "remote-h",
+		ConflictType: "edit_edit",
+	}}
+
+	if err := eng.baseline.Commit(ctx, outcomes, "", engineTestDriveID); err != nil {
+		t.Fatalf("seeding conflict: %v", err)
+	}
+
+	// Get conflict ID.
+	conflicts, err := eng.ListConflicts(ctx)
+	if err != nil {
+		t.Fatalf("ListConflicts: %v", err)
+	}
+
+	if len(conflicts) != 1 {
+		t.Fatalf("expected 1 conflict, got %d", len(conflicts))
+	}
+
+	// Resolve as keep_both.
+	if resolveErr := eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepBoth); resolveErr != nil {
+		t.Fatalf("ResolveConflict: %v", resolveErr)
+	}
+
+	// Verify it's no longer unresolved.
+	remaining, err := eng.ListConflicts(ctx)
+	if err != nil {
+		t.Fatalf("ListConflicts after resolve: %v", err)
+	}
+
+	if len(remaining) != 0 {
+		t.Errorf("expected 0 unresolved conflicts, got %d", len(remaining))
+	}
+}
+
+func TestResolveConflict_NotFound(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems(nil, "token-1"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	ctx := context.Background()
+
+	err := eng.ResolveConflict(ctx, "nonexistent-id", ResolutionKeepBoth)
+	if err == nil {
+		t.Fatal("expected error for nonexistent conflict, got nil")
+	}
+}
+
+func TestResolveConflict_UnknownStrategy(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems(nil, "token-1"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	ctx := context.Background()
+
+	// Seed a conflict.
+	outcomes := []Outcome{{
+		Action:       ActionConflict,
+		Success:      true,
+		Path:         "bad-strategy.txt",
+		DriveID:      driveID,
+		ItemID:       "item-x",
+		ItemType:     ItemTypeFile,
+		ConflictType: "edit_edit",
+	}}
+
+	if err := eng.baseline.Commit(ctx, outcomes, "", engineTestDriveID); err != nil {
+		t.Fatalf("seeding conflict: %v", err)
+	}
+
+	conflicts, err := eng.ListConflicts(ctx)
+	if err != nil {
+		t.Fatalf("ListConflicts: %v", err)
+	}
+
+	err = eng.ResolveConflict(ctx, conflicts[0].ID, "invalid_strategy")
+	if err == nil {
+		t.Fatal("expected error for unknown strategy, got nil")
+	}
+}
+
+func TestListConflicts_Engine(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems(nil, "token-1"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	ctx := context.Background()
+
+	// Empty initially.
+	conflicts, err := eng.ListConflicts(ctx)
+	if err != nil {
+		t.Fatalf("ListConflicts: %v", err)
+	}
+
+	if len(conflicts) != 0 {
+		t.Errorf("expected 0 conflicts, got %d", len(conflicts))
+	}
+}

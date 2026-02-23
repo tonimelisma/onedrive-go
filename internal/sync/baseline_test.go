@@ -791,6 +791,236 @@ func TestLoad_NullableFields(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Conflict query + resolve tests
+// ---------------------------------------------------------------------------
+
+// seedConflict inserts a conflict via Commit and returns its UUID.
+func seedConflict(t *testing.T, mgr *BaselineManager, path, conflictType string) string {
+	t.Helper()
+
+	ctx := context.Background()
+
+	outcomes := []Outcome{{
+		Action:       ActionConflict,
+		Success:      true,
+		Path:         path,
+		DriveID:      driveid.New("d"),
+		ItemID:       "item-" + path,
+		ItemType:     ItemTypeFile,
+		LocalHash:    "local-h",
+		RemoteHash:   "remote-h",
+		ConflictType: conflictType,
+	}}
+
+	if err := mgr.Commit(ctx, outcomes, "", "d"); err != nil {
+		t.Fatalf("seedConflict(%s): %v", path, err)
+	}
+
+	// Retrieve the UUID.
+	var id string
+
+	err := mgr.db.QueryRowContext(ctx,
+		"SELECT id FROM conflicts WHERE path = ? ORDER BY detected_at DESC LIMIT 1", path,
+	).Scan(&id)
+	if err != nil {
+		t.Fatalf("retrieving conflict ID for %s: %v", path, err)
+	}
+
+	return id
+}
+
+func TestListConflicts_Empty(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	conflicts, err := mgr.ListConflicts(ctx)
+	if err != nil {
+		t.Fatalf("ListConflicts: %v", err)
+	}
+
+	if len(conflicts) != 0 {
+		t.Errorf("expected 0 conflicts, got %d", len(conflicts))
+	}
+}
+
+func TestListConflicts_WithConflicts(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+
+	seedConflict(t, mgr, "a.txt", "edit_edit")
+	seedConflict(t, mgr, "b.txt", "edit_delete")
+
+	ctx := context.Background()
+
+	conflicts, err := mgr.ListConflicts(ctx)
+	if err != nil {
+		t.Fatalf("ListConflicts: %v", err)
+	}
+
+	if len(conflicts) != 2 {
+		t.Fatalf("expected 2 conflicts, got %d", len(conflicts))
+	}
+
+	if conflicts[0].Path != "a.txt" {
+		t.Errorf("first conflict path = %q, want %q", conflicts[0].Path, "a.txt")
+	}
+
+	if conflicts[1].Path != "b.txt" {
+		t.Errorf("second conflict path = %q, want %q", conflicts[1].Path, "b.txt")
+	}
+}
+
+func TestListConflicts_OnlyUnresolved(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+
+	id := seedConflict(t, mgr, "resolved.txt", "edit_edit")
+	seedConflict(t, mgr, "pending.txt", "edit_edit")
+
+	ctx := context.Background()
+
+	// Resolve the first conflict.
+	if err := mgr.ResolveConflict(ctx, id, ResolutionKeepBoth); err != nil {
+		t.Fatalf("ResolveConflict: %v", err)
+	}
+
+	conflicts, err := mgr.ListConflicts(ctx)
+	if err != nil {
+		t.Fatalf("ListConflicts: %v", err)
+	}
+
+	if len(conflicts) != 1 {
+		t.Fatalf("expected 1 unresolved conflict, got %d", len(conflicts))
+	}
+
+	if conflicts[0].Path != "pending.txt" {
+		t.Errorf("conflict path = %q, want %q", conflicts[0].Path, "pending.txt")
+	}
+}
+
+func TestGetConflict_ByID(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+
+	id := seedConflict(t, mgr, "lookup.txt", "create_create")
+	ctx := context.Background()
+
+	c, err := mgr.GetConflict(ctx, id)
+	if err != nil {
+		t.Fatalf("GetConflict by ID: %v", err)
+	}
+
+	if c.ID != id {
+		t.Errorf("ID = %q, want %q", c.ID, id)
+	}
+
+	if c.Path != "lookup.txt" {
+		t.Errorf("Path = %q, want %q", c.Path, "lookup.txt")
+	}
+
+	if c.ConflictType != "create_create" {
+		t.Errorf("ConflictType = %q, want %q", c.ConflictType, "create_create")
+	}
+}
+
+func TestGetConflict_ByPath(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+
+	seedConflict(t, mgr, "bypath.txt", "edit_edit")
+	ctx := context.Background()
+
+	c, err := mgr.GetConflict(ctx, "bypath.txt")
+	if err != nil {
+		t.Fatalf("GetConflict by path: %v", err)
+	}
+
+	if c.Path != "bypath.txt" {
+		t.Errorf("Path = %q, want %q", c.Path, "bypath.txt")
+	}
+}
+
+func TestGetConflict_NotFound(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	_, err := mgr.GetConflict(ctx, "nonexistent")
+	if err == nil {
+		t.Fatal("expected error for nonexistent conflict, got nil")
+	}
+}
+
+func TestResolveConflict(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+
+	id := seedConflict(t, mgr, "resolve-me.txt", "edit_edit")
+	ctx := context.Background()
+
+	if err := mgr.ResolveConflict(ctx, id, ResolutionKeepLocal); err != nil {
+		t.Fatalf("ResolveConflict: %v", err)
+	}
+
+	// Verify resolution was recorded.
+	var resolution, resolvedBy string
+	var resolvedAt int64
+
+	err := mgr.db.QueryRowContext(ctx,
+		"SELECT resolution, resolved_at, resolved_by FROM conflicts WHERE id = ?", id,
+	).Scan(&resolution, &resolvedAt, &resolvedBy)
+	if err != nil {
+		t.Fatalf("querying conflict: %v", err)
+	}
+
+	if resolution != ResolutionKeepLocal {
+		t.Errorf("resolution = %q, want %q", resolution, ResolutionKeepLocal)
+	}
+
+	if resolvedBy != "user" {
+		t.Errorf("resolved_by = %q, want %q", resolvedBy, "user")
+	}
+
+	if resolvedAt == 0 {
+		t.Error("resolved_at should be non-zero")
+	}
+}
+
+func TestResolveConflict_AlreadyResolved(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+
+	id := seedConflict(t, mgr, "double-resolve.txt", "edit_edit")
+	ctx := context.Background()
+
+	// First resolve succeeds.
+	if err := mgr.ResolveConflict(ctx, id, ResolutionKeepBoth); err != nil {
+		t.Fatalf("first ResolveConflict: %v", err)
+	}
+
+	// Second resolve fails (already resolved).
+	err := mgr.ResolveConflict(ctx, id, ResolutionKeepLocal)
+	if err == nil {
+		t.Fatal("expected error for already-resolved conflict, got nil")
+	}
+}
+
 func TestMigrations_Idempotent(t *testing.T) {
 	t.Parallel()
 

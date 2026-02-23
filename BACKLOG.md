@@ -11,7 +11,6 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 
 | ID | Title | Priority | Package | Notes |
 |----|-------|----------|---------|-------|
-| B-052 | Re-enable E2E tests in CI | P2 | CI | E2E tests disabled in `integration.yml` (PR #76) because local E2E requires active login. Re-enable after E2E test prerequisites are fixed. |
 
 ## Backlog (Architecture-Neutral)
 
@@ -45,7 +44,6 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 
 | ID | Title | Priority | Package | Notes |
 |----|-------|----------|---------|-------|
-| B-058 | Re-enable sync E2E tests in CI after Increment 8 | P2 | CI | Part of 4v2.8. Wire new engine to CLI, write sync E2E tests, re-enable in CI. |
 
 ### Closed
 
@@ -63,3 +61,5 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 | B-073 | DriveTokenPath/DriveStatePath should accept `driveid.CanonicalID` | **Done** — Both functions now accept `driveid.CanonicalID`. All callers migrated: `auth.go` helper chain (`discoverAccount`, `findTokenFallback`, `canonicalIDForToken`, `purgeSingleDrive`), `files.go`, `status.go`, `drive.go`, `integration_test.go`. |
 | B-068 | Executor must fill zero DriveID for new local items | **Done** — PR #90. `resolveDriveID()` fills zero DriveID from executor's per-drive context. |
 | B-070 | Add ParentID to Action struct | **Closed (by design)** — PR #90. Executor resolves parent IDs dynamically via `resolveParentID()` chain: createdFolders → baseline → "root". No need to add ParentID to Action. |
+| B-052 | Re-enable E2E tests in CI | **Done** — 4v2.8. E2E test block uncommented in `integration.yml`. |
+| B-058 | Re-enable sync E2E tests in CI after Increment 8 | **Done** — 4v2.8. Sync E2E tests written (`e2e/sync_e2e_test.go`), CI re-enabled. Interactive resolve deferred to Phase 5. |

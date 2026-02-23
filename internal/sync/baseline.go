@@ -50,6 +50,24 @@ const (
 		ON CONFLICT(drive_id) DO UPDATE SET
 		 token = excluded.token,
 		 updated_at = excluded.updated_at`
+
+	sqlListConflicts = `SELECT id, drive_id, item_id, path, conflict_type,
+		detected_at, local_hash, remote_hash, local_mtime, remote_mtime
+		FROM conflicts WHERE resolution = 'unresolved'
+		ORDER BY detected_at`
+
+	sqlGetConflictByID = `SELECT id, drive_id, item_id, path, conflict_type,
+		detected_at, local_hash, remote_hash, local_mtime, remote_mtime
+		FROM conflicts WHERE id = ?`
+
+	sqlGetConflictByPath = `SELECT id, drive_id, item_id, path, conflict_type,
+		detected_at, local_hash, remote_hash, local_mtime, remote_mtime
+		FROM conflicts WHERE path = ? AND resolution = 'unresolved'
+		ORDER BY detected_at DESC LIMIT 1`
+
+	sqlResolveConflict = `UPDATE conflicts
+		SET resolution = ?, resolved_at = ?, resolved_by = 'user'
+		WHERE id = ? AND resolution = 'unresolved'`
 )
 
 // BaselineManager is the sole writer to the sync database. It loads the
@@ -333,6 +351,159 @@ func (m *BaselineManager) saveDeltaToken(
 	}
 
 	return nil
+}
+
+// ListConflicts returns all unresolved conflicts ordered by detection time.
+func (m *BaselineManager) ListConflicts(ctx context.Context) ([]ConflictRecord, error) {
+	rows, err := m.db.QueryContext(ctx, sqlListConflicts)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing conflicts: %w", err)
+	}
+	defer rows.Close()
+
+	var conflicts []ConflictRecord
+
+	for rows.Next() {
+		c, err := scanConflictRow(rows)
+		if err != nil {
+			return nil, err
+		}
+
+		conflicts = append(conflicts, *c)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sync: iterating conflict rows: %w", err)
+	}
+
+	return conflicts, nil
+}
+
+// GetConflict looks up a conflict by UUID or path. Tries ID first, falls
+// back to path (most recent unresolved conflict for that path).
+func (m *BaselineManager) GetConflict(ctx context.Context, idOrPath string) (*ConflictRecord, error) {
+	// Try by ID first.
+	row := m.db.QueryRowContext(ctx, sqlGetConflictByID, idOrPath)
+
+	c, err := scanConflictRowSingle(row)
+	if err == nil {
+		return c, nil
+	}
+
+	if err != sql.ErrNoRows {
+		return nil, fmt.Errorf("sync: getting conflict by ID %q: %w", idOrPath, err)
+	}
+
+	// Fall back to path lookup.
+	row = m.db.QueryRowContext(ctx, sqlGetConflictByPath, idOrPath)
+
+	c, err = scanConflictRowSingle(row)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("sync: conflict not found for %q", idOrPath)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("sync: getting conflict by path %q: %w", idOrPath, err)
+	}
+
+	return c, nil
+}
+
+// ResolveConflict marks a conflict as resolved with the given resolution
+// strategy. Only updates unresolved conflicts (idempotent-safe).
+func (m *BaselineManager) ResolveConflict(ctx context.Context, id, resolution string) error {
+	resolvedAt := m.nowFunc().UnixNano()
+
+	result, err := m.db.ExecContext(ctx, sqlResolveConflict, resolution, resolvedAt, id)
+	if err != nil {
+		return fmt.Errorf("sync: resolving conflict %s: %w", id, err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("sync: checking rows affected for conflict %s: %w", id, err)
+	}
+
+	if rows == 0 {
+		return fmt.Errorf("sync: conflict %s not found or already resolved", id)
+	}
+
+	m.logger.Info("conflict resolved",
+		slog.String("id", id),
+		slog.String("resolution", resolution),
+	)
+
+	return nil
+}
+
+// scanConflictRow scans a single row from a *sql.Rows result set into
+// a ConflictRecord, handling nullable columns.
+func scanConflictRow(rows *sql.Rows) (*ConflictRecord, error) {
+	var (
+		c           ConflictRecord
+		itemID      sql.NullString
+		localHash   sql.NullString
+		remoteHash  sql.NullString
+		localMtime  sql.NullInt64
+		remoteMtime sql.NullInt64
+	)
+
+	err := rows.Scan(
+		&c.ID, &c.DriveID, &itemID, &c.Path, &c.ConflictType,
+		&c.DetectedAt, &localHash, &remoteHash, &localMtime, &remoteMtime,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("sync: scanning conflict row: %w", err)
+	}
+
+	c.ItemID = itemID.String
+	c.LocalHash = localHash.String
+	c.RemoteHash = remoteHash.String
+
+	if localMtime.Valid {
+		c.LocalMtime = localMtime.Int64
+	}
+
+	if remoteMtime.Valid {
+		c.RemoteMtime = remoteMtime.Int64
+	}
+
+	return &c, nil
+}
+
+// scanConflictRowSingle scans a single row from a *sql.Row result,
+// handling nullable columns. Returns sql.ErrNoRows if no row found.
+func scanConflictRowSingle(row *sql.Row) (*ConflictRecord, error) {
+	var (
+		c           ConflictRecord
+		itemID      sql.NullString
+		localHash   sql.NullString
+		remoteHash  sql.NullString
+		localMtime  sql.NullInt64
+		remoteMtime sql.NullInt64
+	)
+
+	err := row.Scan(
+		&c.ID, &c.DriveID, &itemID, &c.Path, &c.ConflictType,
+		&c.DetectedAt, &localHash, &remoteHash, &localMtime, &remoteMtime,
+	)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // caller wraps with context
+	}
+
+	c.ItemID = itemID.String
+	c.LocalHash = localHash.String
+	c.RemoteHash = remoteHash.String
+
+	if localMtime.Valid {
+		c.LocalMtime = localMtime.Int64
+	}
+
+	if remoteMtime.Valid {
+		c.RemoteMtime = remoteMtime.Int64
+	}
+
+	return &c, nil
 }
 
 // Close closes the underlying database connection.

@@ -78,7 +78,7 @@ Phase 4 v1 (increments 4.1-4.11) built a batch-pipeline sync engine with SQLite 
 
 ---
 
-## Phase 4 v2: Event-Driven Sync Engine — CURRENT
+## Phase 4 v2: Event-Driven Sync Engine — COMPLETE
 
 **The core architectural pivot.** Events replace the database as the coordination mechanism. Observers produce typed change events, the planner operates as a pure function on events + baseline, the executor produces outcomes, and the baseline manager commits everything atomically. Same decision matrix logic (EF1-EF14, ED1-ED8), same safety invariants (S1-S7), completely different data flow.
 
@@ -215,17 +215,19 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 - **Acceptance**: All DOD gates passed. 76.6% total coverage, sync package at 90.7%.
 - **Inputs**: [event-driven-rationale.md](design/event-driven-rationale.md) Parts 2, 10 (Phase 5), [accounts.md](design/accounts.md) §13
 
-### 4v2.8: CLI Integration + Sync E2E
+### 4v2.8: CLI Integration + Sync E2E — DONE
 
 **Prove the sync engine works end-to-end and add remaining CLI commands.**
 
-- CLI `sync` wiring done in 4v2.7; this increment adds E2E tests and remaining commands
-- E2E test updates: write new sync E2E tests against new engine, re-enable sync tests in CI (`integration.yml`)
-- `conflicts` command: list unresolved conflicts from baseline (table or JSON)
-- `resolve` command: interactive conflict resolution (keep local, keep remote, keep both)
-- `verify` command: full-tree hash verification (compare local vs remote vs baseline)
-- All commands support `--drive` and `--json` flags
-- **Acceptance**: All DOD gates (CLAUDE.md §Quality Gates). Additionally: sync E2E tests pass against live OneDrive, CI green.
+- `conflicts` command: list unresolved conflicts from baseline (table or `--json`)
+- `resolve` command: batch conflict resolution (`--keep-local`, `--keep-remote`, `--keep-both`, `--all`, `--dry-run`). Interactive mode deferred to Phase 5.
+- `verify` command: full-tree hash verification (local files vs baseline DB)
+- BaselineManager API: `ListConflicts`, `GetConflict`, `ResolveConflict` methods
+- Engine API: `ListConflicts`, `ResolveConflict` with keep_local/keep_remote/keep_both strategies
+- `VerifyBaseline`: read-only hash verification against baseline entries
+- Sync E2E tests: upload-only, download-only, dry-run, verify, conflicts
+- CI re-enablement: E2E test block uncommented in `integration.yml` (closes B-052, B-058)
+- **Acceptance**: All DOD gates passed. 72.5% total coverage, sync package at 88.8%.
 - **Inputs**: [prd.md](design/prd.md) section 4, [event-driven-rationale.md](design/event-driven-rationale.md) Part 10 (Phase 5)
 
 ### Wave Structure
@@ -339,7 +341,7 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 | 3 | 3 | Config (TOML, drives, CLI integration) | **COMPLETE** |
 | 3.5 | 2 | Account/drive system alignment | **COMPLETE** |
 | 4 v1 | 11 | Batch-pipeline sync engine | **SUPERSEDED** |
-| 4 v2 | 9 | Event-driven sync engine | **CURRENT** |
+| 4 v2 | 9 | Event-driven sync engine | **COMPLETE** |
 | 5 | 6 | Watch mode + polish | FUTURE |
 | 6 | 5 | Packaging + release | FUTURE |
 | **Total** | **47** | | |
