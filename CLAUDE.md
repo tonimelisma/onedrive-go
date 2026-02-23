@@ -4,11 +4,11 @@
 
 **onedrive-go** — a fast, safe, and well-tested OneDrive CLI and sync client in Go. Unix-style file operations (`ls`, `get`, `put`) plus robust bidirectional sync with conflict tracking. Targets Linux and macOS. MIT licensed.
 
-Currently: Working CLI OneDrive client with discovery-based auth, account management, file ops, config integration. "Pragmatic Flat" architecture (5 active packages). Event-driven sync engine in progress (4v2.1: types, baseline schema, BaselineManager; 4v2.2: Remote Observer). See [docs/design/event-driven-rationale.md](docs/design/event-driven-rationale.md).
+Currently: Working CLI OneDrive client with discovery-based auth, account management, file ops, config integration. "Pragmatic Flat" architecture (5 active packages). Event-driven sync engine in progress (4v2.1: types, baseline schema, BaselineManager; 4v2.2: Remote Observer; 4v2.3: Local Observer). See [docs/design/event-driven-rationale.md](docs/design/event-driven-rationale.md).
 
 ## Current Phase
 
-**Phases 1, 2, 3, 3.5 complete. Phase 4v2 Increments 0-2 complete. Next: 4v2.3-4v2.8.** Old batch-pipeline sync engine deleted. `sync` command returns "not yet implemented" stub. `internal/sync/` rebuilt with foundation types, SQLite baseline schema (goose migrations), BaselineManager, and Remote Observer (delta → ChangeEvent[] with path materialization, NFC normalization, driveID zero-padding). All development happens on `clean-slate` branch (`main` is read-only safety net). See [docs/roadmap.md](docs/roadmap.md).
+**Phases 1, 2, 3, 3.5 complete. Phase 4v2 Increments 0-3 complete. Next: 4v2.4-4v2.8.** Old batch-pipeline sync engine deleted. `sync` command returns "not yet implemented" stub. `internal/sync/` rebuilt with foundation types, SQLite baseline schema (goose migrations), BaselineManager, Remote Observer (delta → ChangeEvent[]), and Local Observer (FS walk → ChangeEvent[]). All development happens on `clean-slate` branch (`main` is read-only safety net). See [docs/roadmap.md](docs/roadmap.md).
 
 ## Architecture Overview
 
@@ -51,10 +51,10 @@ Currently: Working CLI OneDrive client with discovery-based auth, account manage
 - **Root package** — Cobra CLI: login (discovery-based, browser+device code), logout, whoami, status, drive add/remove, ls, get, put, rm, mkdir, stat, sync (root.go, auth.go, files.go, sync.go, format.go, status.go, drive.go). Global flags: `--account`, `--drive`, `--config`, `--json`, `--verbose`, `--debug`, `--quiet`
 - **`e2e/`** — E2E test suite (`//go:build e2e`): builds binary, exercises full round-trip against live OneDrive
 
-- **`internal/sync/`** — Event-driven sync engine (4v2.1-2 complete). Types (ChangeEvent, BaselineEntry, PathView, Action, ActionPlan, Outcome), consumer-defined interfaces (DeltaFetcher, ItemClient, TransferClient satisfied by `*graph.Client`), SQLite baseline schema (7 tables via goose migrations), BaselineManager (sole DB writer: Load, Commit, GetDeltaToken), RemoteObserver (delta pagination → []ChangeEvent with path materialization, change classification, NFC normalization, driveID zero-padding, hash selection, ErrDeltaExpired sentinel). Dependencies: `modernc.org/sqlite`, `goose/v3`, `golang.org/x/text`. 86.4% coverage.
+- **`internal/sync/`** — Event-driven sync engine (4v2.1-3 complete). Types (ChangeEvent, BaselineEntry, PathView, Action, ActionPlan, Outcome), consumer-defined interfaces (DeltaFetcher, ItemClient, TransferClient satisfied by `*graph.Client`), SQLite baseline schema (7 tables via goose migrations), BaselineManager (sole DB writer: Load, Commit, GetDeltaToken), RemoteObserver (delta pagination → []ChangeEvent with path materialization, change classification, NFC normalization, driveID zero-padding, hash selection, ErrDeltaExpired sentinel), LocalObserver (FS walk → []ChangeEvent with QuickXorHash, name validation, always-excluded patterns, .nosync guard, symlink skip, ErrNosyncGuard sentinel). Dependencies: `modernc.org/sqlite`, `goose/v3`, `golang.org/x/text`. 87.7% coverage.
 
-### Next (Phase 4 v2.2-4v2.8 — Event-Driven Sync Engine)
-- Remote Observer (delta -> ChangeEvent[]), Local Observer (FS -> ChangeEvent[]), Change Buffer (debounce, dedup, batch), Planner (pure function: events + baseline -> ActionPlan, EF1-EF14 file matrix, ED1-ED8 folder matrix), Executor (actions -> Outcomes), Engine wiring, CLI integration. See [docs/design/architecture.md](docs/design/architecture.md)
+### Next (Phase 4v2.4-4v2.8 — Event-Driven Sync Engine)
+- Change Buffer (debounce, dedup, batch), Planner (pure function: events + baseline -> ActionPlan, EF1-EF14 file matrix, ED1-ED8 folder matrix), Executor (actions -> Outcomes), Engine wiring, CLI integration. See [docs/design/architecture.md](docs/design/architecture.md)
 
 ## Documentation Index
 

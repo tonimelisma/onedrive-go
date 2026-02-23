@@ -140,21 +140,39 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
   - [x] Retrospective: graph.Item pointer lesson, gofumpt-before-lint lesson captured in LEARNINGS.md §7
   - [x] Re-envisioning: architecture confirmed sound, no roadmap changes warranted
 
-### 4v2.3: Local Observer
+### 4v2.3: Local Observer — DONE
 
 **Produce typed `ChangeEvent` values from local filesystem state.**
 
-- `LocalObserver.FullScan(ctx, syncDir, baseline) -> ([]ChangeEvent, error)`
-- Walk filesystem tree, compare against baseline to classify: new (no baseline entry), modified (mtime or hash differs), deleted (baseline entry exists, file gone), unchanged (skip)
-- NFC/NFD dual-path threading: store both normalized and raw paths for macOS compatibility
-- `.nosync` guard: detect `.nosync` file in sync dir, abort scan with clear error (S2 protection)
-- Symlink handling: skip symlinks with warning (OneDrive does not support symlinks)
-- OneDrive name validation: reject illegal characters, reserved names, trailing dots/spaces
-- Racily-clean mtime guard: if mtime is within 1 second of scan time, force hash recomputation (file may still be being written)
-- No DB access — compares against in-memory baseline snapshot
-- Tests with real temp dirs, all edge cases (dotfiles, symlinks, racily-clean, Unicode)
-- **Acceptance**: `go test ./internal/sync/...` passes, observer produces correct events for all local scenarios
+- `LocalObserver` struct with `FullScan(ctx, syncRoot) -> ([]ChangeEvent, error)`
+- `filepath.WalkDir` with baseline comparison to classify: create (no baseline entry), modify (hash differs), delete (baseline entry exists, not on disk), unchanged (skip)
+- NFC normalization via `nfcNormalize()` (shared with RemoteObserver) applied to paths and names
+- `.nosync` guard: `ErrNosyncGuard` sentinel error when `.nosync` file present (S2 protection)
+- Symlink handling: skip symlinks silently (OneDrive does not support symlinks)
+- OneDrive name validation: reserved names (CON/PRN/AUX/NUL/COM0-9/LPT0-9), `.lock`, `desktop.ini`, `~$` prefix, `_vti_` substring, invalid chars (`"*:<>?/\|`), trailing dot/space, leading space, >255 chars
+- Always-excluded patterns: `.partial`, `.tmp`, `.swp`, `.crdownload`, `.db`/`.db-wal`/`.db-shm` (SQLite corruption safety)
+- QuickXorHash content hashing via streaming `io.Copy` (constant memory), base64-encoded
+- Always-hash strategy (correctness-first; mtime skip optimization deferred to B-031 profiling)
+- Folder mtime changes ignored (noise — contained files generate their own events)
+- No DB access — compares against in-memory `*Baseline` snapshot
+- 31 tests with real temp dirs (`t.TempDir()`), 87.7% sync coverage (up from 86.4%). PR #82.
 - **Inputs**: [event-driven-rationale.md](design/event-driven-rationale.md) Parts 5.2, 10 (Phase 2)
+- **DOD**:
+  - [x] Build: `go build ./...` zero errors
+  - [x] Unit tests: `go test -race ./...` all pass
+  - [x] E2E tests: all pass
+  - [x] Lint: `golangci-lint run` zero issues
+  - [x] Format: `gofumpt` + `goimports` applied
+  - [x] Coverage: 87.7% (up from 86.4%)
+  - [x] Logging review: FullScan start/complete (Info), nosync guard (Warn), walk errors (Warn), stat failures (Warn), hash failures (Warn), skipped entries (Debug), deletion detection summary (Debug)
+  - [x] Comment review: all structs, functions, constants, edge cases documented; misleading "order matters" comment fixed
+  - [x] Docs: CLAUDE.md, roadmap.md, BACKLOG.md, LEARNINGS.md updated
+  - [x] Git clean: working tree clean after commit
+  - [x] Git cleanup: branch deleted, remote pruned, no stashes/worktrees/open PRs
+  - [x] CI verification: ci.yml (build-and-test) + integration.yml both green post-merge
+  - [x] CI infrastructure: N/A (no CI changes)
+  - [x] Retrospective: DOD process discipline lesson captured in LEARNINGS.md §7
+  - [x] Re-envisioning: architecture confirmed sound, Wave 2 progressing well
 
 ### 4v2.4: Change Buffer
 

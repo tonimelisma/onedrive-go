@@ -273,6 +273,12 @@ The `gocritic` `hugeParam` lint catches this (already documented in §3 under `r
 ### Run gofumpt before first lint check
 Running `golangci-lint run` before `gofumpt -w` wastes a cycle fixing formatting issues that gofumpt would have caught. Always format before linting.
 
+### DOD gates are not optional — complete ALL 15 before declaring done
+In 4v2.3, gates 7 (logging review), 8 (comment review), 9 (docs update), 14 (retrospective), and 15 (re-envisioning) were initially skipped. The logging review caught two missing log lines (nosync guard Warn, deletion detection Debug summary) and the comment review caught a misleading "order matters" comment. These are exactly the kind of issues the gates exist to catch. Never shortcut the DOD checklist — the mechanical gates (build/test/lint) are necessary but not sufficient.
+
+### alwaysExcludedSuffixes order: `.db-wal`/`.db-shm` before `.db`
+The `strings.HasSuffix` loop checks suffixes in declaration order. `.db-wal` and `.db-shm` must appear before `.db` in the slice, otherwise `.db` would match first and the longer suffixes would never be reached. This is a correctness constraint, not just style.
+
 ---
 
 ## 8. Agent Coordination

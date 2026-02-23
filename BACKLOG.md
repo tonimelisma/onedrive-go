@@ -53,3 +53,4 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 | B-057 | Remove sync integration test line from `integration.yml` | **Done** — Completed as part of Increment 0 (B-055). |
 | B-053 | Implement Phase 4v2.1: Types + Baseline Schema + BaselineManager | **Done** — PR #78. types.go, migrations, baseline.go, 25 tests, 82.5% coverage. |
 | B-059 | Implement Phase 4v2.2: Remote Observer | **Done** — PR #80. observer_remote.go, 23 tests, 86.4% coverage. |
+| B-065 | Implement Phase 4v2.3: Local Observer | **Done** — PR #82. observer_local.go (FullScan, name validation, always-excluded, QuickXorHash), 31 tests with real temp dirs, 87.7% coverage. |
