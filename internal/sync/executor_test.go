@@ -73,6 +73,7 @@ type executorMockTransferClient struct {
 	downloadFn            func(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error)
 	createUploadSessionFn func(ctx context.Context, driveID driveid.ID, parentID, name string, size int64, mtime time.Time) (*graph.UploadSession, error)
 	uploadChunkFn         func(ctx context.Context, session *graph.UploadSession, chunk io.Reader, offset, length, total int64) (*graph.Item, error)
+	cancelUploadSessionFn func(ctx context.Context, session *graph.UploadSession) error
 }
 
 func (m *executorMockTransferClient) Download(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error) {
@@ -105,6 +106,14 @@ func (m *executorMockTransferClient) UploadChunk(ctx context.Context, session *g
 	}
 
 	return nil, fmt.Errorf("UploadChunk not mocked")
+}
+
+func (m *executorMockTransferClient) CancelUploadSession(ctx context.Context, session *graph.UploadSession) error {
+	if m.cancelUploadSessionFn != nil {
+		return m.cancelUploadSessionFn(ctx, session)
+	}
+
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -1810,5 +1819,46 @@ func TestExecutor_SyncedUpdate_BaselineFallback(t *testing.T) {
 
 	if o.ItemType != ItemTypeFolder {
 		t.Errorf("expected ItemType=folder from baseline fallback, got %s", o.ItemType)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Upload session cancel tests
+// ---------------------------------------------------------------------------
+
+func TestExecutor_Upload_Chunked_SessionCanceledOnOpenError(t *testing.T) {
+	t.Parallel()
+
+	session := &graph.UploadSession{UploadURL: "https://upload.example.com"}
+	sessionCanceled := false
+
+	transfers := &executorMockTransferClient{
+		createUploadSessionFn: func(_ context.Context, _ driveid.ID, _, _ string, _ int64, _ time.Time) (*graph.UploadSession, error) {
+			return session, nil
+		},
+		cancelUploadSessionFn: func(_ context.Context, s *graph.UploadSession) error {
+			if s.UploadURL != session.UploadURL {
+				t.Errorf("cancel called with wrong session URL: %s", s.UploadURL)
+			}
+
+			sessionCanceled = true
+
+			return nil
+		},
+	}
+
+	e, _ := newTestExecutor(t, &executorMockItemClient{}, transfers)
+	driveID := driveid.New(testDriveID)
+
+	// Call chunkedUpload directly with a non-existent path so os.Open fails
+	// after CreateUploadSession succeeds.
+	_, err := e.chunkedUpload(context.Background(), driveID, "root", "ghost.bin",
+		"/nonexistent/path/ghost.bin", 5*1024*1024, time.Now())
+	if err == nil {
+		t.Fatal("expected error from chunkedUpload with non-existent file")
+	}
+
+	if !sessionCanceled {
+		t.Error("expected CancelUploadSession to be called when os.Open fails after session creation")
 	}
 }
