@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // testLogger returns a debug-level logger that writes to t.Log,
@@ -500,14 +502,18 @@ func TestCommit_Conflict(t *testing.T) {
 		t.Fatalf("Commit: %v", err)
 	}
 
-	// Verify conflict row was inserted.
-	var conflictPath, conflictType, resolution string
+	// Verify conflict row was inserted with a valid UUID.
+	var id, conflictPath, conflictType, resolution string
 
 	err := mgr.db.QueryRowContext(ctx,
-		"SELECT path, conflict_type, resolution FROM conflicts LIMIT 1",
-	).Scan(&conflictPath, &conflictType, &resolution)
+		"SELECT id, path, conflict_type, resolution FROM conflicts LIMIT 1",
+	).Scan(&id, &conflictPath, &conflictType, &resolution)
 	if err != nil {
 		t.Fatalf("querying conflicts: %v", err)
+	}
+
+	if _, uuidErr := uuid.Parse(id); uuidErr != nil {
+		t.Errorf("conflict id = %q, not a valid UUID: %v", id, uuidErr)
 	}
 
 	if conflictPath != "conflict.txt" {
