@@ -4,7 +4,7 @@
 
 **onedrive-go** — a fast, safe, and well-tested OneDrive CLI and sync client in Go. Unix-style file operations (`ls`, `get`, `put`) plus robust bidirectional sync with conflict tracking. Targets Linux and macOS. MIT licensed.
 
-Currently: Working CLI OneDrive client with discovery-based auth, account management, file ops, config integration. "Pragmatic Flat" architecture (6 active packages). Event-driven sync engine in progress (4v2.1: types, baseline schema, BaselineManager; 4v2.2: Remote Observer; 4v2.3: Local Observer). See [docs/design/event-driven-rationale.md](docs/design/event-driven-rationale.md).
+Currently: Working CLI OneDrive client with discovery-based auth, account management, file ops, config integration. "Pragmatic Flat" architecture (6 active packages). Event-driven sync engine in progress (4v2.1-5 complete: types, baseline, observers, buffer, planner). Type-safe drive identity via `internal/driveid/`. See [docs/design/event-driven-rationale.md](docs/design/event-driven-rationale.md).
 
 ## Current Phase
 
@@ -60,8 +60,8 @@ Currently: Working CLI OneDrive client with discovery-based auth, account manage
 
 - **`internal/sync/`** — Event-driven sync engine (4v2.1-5 complete). Types (ChangeEvent, BaselineEntry, PathView, Action, ActionPlan, Outcome), consumer-defined interfaces (DeltaFetcher, ItemClient, TransferClient satisfied by `*graph.Client`), SQLite baseline schema (7 tables via goose migrations), BaselineManager (sole DB writer: Load, Commit, GetDeltaToken), RemoteObserver (delta pagination → []ChangeEvent with path materialization, change classification, NFC normalization, hash selection, ErrDeltaExpired sentinel), LocalObserver (FS walk → []ChangeEvent with mtime+size fast path, racily-clean guard, QuickXorHash, name validation, always-excluded patterns, .nosync guard, symlink skip, ErrNosyncGuard sentinel), Buffer (thread-safe event grouping by path, move dual-keying with synthetic deletes, FlushImmediate for one-shot mode), Planner (pure function: []PathChanges + *Baseline → *ActionPlan; EF1-EF14 file matrix, ED1-ED8 folder matrix, remote+local move detection, big-delete safety S5, mode filtering, depth-ordered actions). Dependencies: `modernc.org/sqlite`, `goose/v3`, `golang.org/x/text`. 91.2% coverage.
 
-### Next (Phase 4v2.4-4v2.8 — Event-Driven Sync Engine)
-- Change Buffer (debounce, dedup, batch), Planner (pure function: events + baseline -> ActionPlan, EF1-EF14 file matrix, ED1-ED8 folder matrix), Executor (actions -> Outcomes), Engine wiring, CLI integration. See [docs/design/architecture.md](docs/design/architecture.md)
+### Next (Phase 4v2.6-4v2.8 — Event-Driven Sync Engine)
+- Executor (actions -> Outcomes), Engine wiring, CLI integration. See [docs/design/architecture.md](docs/design/architecture.md)
 
 ## Documentation Index
 

@@ -28,7 +28,7 @@ type CanonicalID struct {
 
 // NewCanonicalID parses and validates a raw canonical ID string. Returns
 // an error if the format is invalid (no colon separator, unknown type prefix,
-// or empty email). Absorbs validateCanonicalID() from config/validate_drive.go.
+// or empty email).
 func NewCanonicalID(raw string) (CanonicalID, error) {
 	parts := strings.SplitN(raw, ":", canonicalSplitLimit)
 	if len(parts) < 2 || parts[1] == "" {
@@ -57,7 +57,6 @@ func MustCanonicalID(raw string) CanonicalID {
 
 // Construct builds a canonical ID from separate drive type and email parts.
 // Returns an error if the resulting ID is invalid.
-// Absorbs constructCanonicalID() from auth.go.
 func Construct(driveType, email string) (CanonicalID, error) {
 	return NewCanonicalID(driveType + ":" + email)
 }
@@ -74,7 +73,6 @@ func (c CanonicalID) IsZero() bool {
 
 // DriveType returns the type prefix (e.g., "personal", "business", "sharepoint").
 // Returns empty string for zero-value CanonicalID.
-// Absorbs driveTypeFromCanonicalID() from auth.go.
 func (c CanonicalID) DriveType() string {
 	if c.value == "" {
 		return ""
@@ -89,7 +87,6 @@ func (c CanonicalID) DriveType() string {
 // For "personal:user@example.com" returns "user@example.com".
 // For "sharepoint:alice@contoso.com:marketing:Docs" returns "alice@contoso.com".
 // Returns empty string for zero-value CanonicalID.
-// Absorbs accountEmailFromCanonicalID() from auth.go.
 func (c CanonicalID) Email() string {
 	if c.value == "" {
 		return ""
