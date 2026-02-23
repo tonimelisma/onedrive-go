@@ -152,10 +152,10 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 - OneDrive name validation: reserved names (CON/PRN/AUX/NUL/COM0-9/LPT0-9), `.lock`, `desktop.ini`, `~$` prefix, `_vti_` substring, invalid chars (`"*:<>?/\|`), trailing dot/space, leading space, >255 chars
 - Always-excluded patterns: `.partial`, `.tmp`, `.swp`, `.crdownload`, `.db`/`.db-wal`/`.db-shm` (SQLite corruption safety)
 - QuickXorHash content hashing via streaming `io.Copy` (constant memory), base64-encoded
-- Always-hash strategy (correctness-first; mtime skip optimization deferred to B-031 profiling)
+- mtime+size fast path: skip hashing when both match baseline (industry standard: rsync, rclone, Syncthing, Git). Racily-clean guard forces hash when mtime is within 1 second of scan start. PR #83.
 - Folder mtime changes ignored (noise — contained files generate their own events)
 - No DB access — compares against in-memory `*Baseline` snapshot
-- 31 tests with real temp dirs (`t.TempDir()`), 87.7% sync coverage (up from 86.4%). PR #82.
+- 34 tests with real temp dirs (`t.TempDir()`), 88.0% sync coverage (up from 86.4%). PR #82, #83.
 - **Inputs**: [event-driven-rationale.md](design/event-driven-rationale.md) Parts 5.2, 10 (Phase 2)
 - **DOD**:
   - [x] Build: `go build ./...` zero errors
@@ -163,7 +163,7 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
   - [x] E2E tests: all pass
   - [x] Lint: `golangci-lint run` zero issues
   - [x] Format: `gofumpt` + `goimports` applied
-  - [x] Coverage: 87.7% (up from 86.4%)
+  - [x] Coverage: 88.0% (up from 86.4%)
   - [x] Logging review: FullScan start/complete (Info), nosync guard (Warn), walk errors (Warn), stat failures (Warn), hash failures (Warn), skipped entries (Debug), deletion detection summary (Debug)
   - [x] Comment review: all structs, functions, constants, edge cases documented; misleading "order matters" comment fixed
   - [x] Docs: CLAUDE.md, roadmap.md, BACKLOG.md, LEARNINGS.md updated

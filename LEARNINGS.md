@@ -279,6 +279,9 @@ In 4v2.3, gates 7 (logging review), 8 (comment review), 9 (docs update), 14 (ret
 ### alwaysExcludedSuffixes order: `.db-wal`/`.db-shm` before `.db`
 The `strings.HasSuffix` loop checks suffixes in declaration order. `.db-wal` and `.db-shm` must appear before `.db` in the slice, otherwise `.db` would match first and the longer suffixes would never be reached. This is a correctness constraint, not just style.
 
+### mtime+size fast path is the industry standard for change detection
+No production sync tool (rsync, rclone, Syncthing, abraunegg/onedrive, Unison, Git) hashes every file on every scan. They all use mtime+size as a fast path and only hash when metadata differs. For a 50K-file sync root, always-hashing reads ~5 GB per cycle vs sub-second stat-only checks. The racily-clean guard (force hash when mtime is within 1 second of scan start) handles the edge case where a file was modified in the same clock tick as the last sync — Git's well-documented "racily clean" problem.
+
 ---
 
 ## 8. Agent Coordination
