@@ -294,6 +294,80 @@ func (e *Engine) resolveSafetyConfig(opts RunOpts) *SafetyConfig {
 	return DefaultSafetyConfig()
 }
 
+// ListConflicts returns all unresolved conflicts from the database.
+func (e *Engine) ListConflicts(ctx context.Context) ([]ConflictRecord, error) {
+	return e.baseline.ListConflicts(ctx)
+}
+
+// ResolveConflict resolves a single conflict by ID. For keep_both, this is
+// a DB-only update. For keep_local, the local file is uploaded to overwrite
+// the remote. For keep_remote, the remote file is downloaded to overwrite
+// the local. The conflict record and baseline are updated atomically.
+func (e *Engine) ResolveConflict(ctx context.Context, conflictID, resolution string) error {
+	c, err := e.baseline.GetConflict(ctx, conflictID)
+	if err != nil {
+		return err
+	}
+
+	switch resolution {
+	case "keep_both":
+		// DB-only — executor already saved both copies during sync.
+		return e.baseline.ResolveConflict(ctx, c.ID, resolution)
+
+	case "keep_local":
+		if err := e.resolveKeepLocal(ctx, c); err != nil {
+			return fmt.Errorf("sync: resolving conflict %s (keep_local): %w", c.ID, err)
+		}
+
+		return e.baseline.ResolveConflict(ctx, c.ID, resolution)
+
+	case "keep_remote":
+		if err := e.resolveKeepRemote(ctx, c); err != nil {
+			return fmt.Errorf("sync: resolving conflict %s (keep_remote): %w", c.ID, err)
+		}
+
+		return e.baseline.ResolveConflict(ctx, c.ID, resolution)
+
+	default:
+		return fmt.Errorf("sync: unknown resolution strategy %q", resolution)
+	}
+}
+
+// resolveKeepLocal uploads the local file to overwrite the remote version.
+func (e *Engine) resolveKeepLocal(ctx context.Context, c *ConflictRecord) error {
+	return e.resolveTransfer(ctx, c, ActionUpload)
+}
+
+// resolveKeepRemote downloads the remote file to overwrite the local version.
+func (e *Engine) resolveKeepRemote(ctx context.Context, c *ConflictRecord) error {
+	return e.resolveTransfer(ctx, c, ActionDownload)
+}
+
+// resolveTransfer executes a single transfer (upload or download) for conflict
+// resolution and commits the result to the baseline.
+func (e *Engine) resolveTransfer(ctx context.Context, c *ConflictRecord, actionType ActionType) error {
+	action := &Action{
+		Type:    actionType,
+		DriveID: c.DriveID,
+		ItemID:  c.ItemID,
+		Path:    c.Path,
+		View:    &PathView{Path: c.Path},
+	}
+
+	var outcome Outcome
+	if actionType == ActionUpload {
+		outcome = e.executor.executeUpload(ctx, action)
+	} else {
+		outcome = e.executor.executeDownload(ctx, action)
+	}
+
+	if !outcome.Success {
+		return fmt.Errorf("transfer failed: %w", outcome.Error)
+	}
+
+	return e.baseline.Commit(ctx, []Outcome{outcome}, "", e.driveID.String())
+}
+
 // classifyOutcomes counts successes and failures in an Outcome slice,
 // collecting non-nil errors from failed outcomes.
 func classifyOutcomes(outcomes []Outcome) (succeeded, failed int, errs []error) {
