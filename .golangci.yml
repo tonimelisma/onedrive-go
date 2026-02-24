@@ -217,10 +217,13 @@ linters:
           - bodyclose
           - errcheck
       # E2E tests use exec.Command for CLI invocations — context not needed
-      # (timeouts are enforced by go test -timeout).
+      # (timeouts are enforced by go test -timeout). Shared helpers appear
+      # unused under -tags=e2e but are consumed by sync_full_test.go under
+      # -tags=e2e,e2e_full.
       - path: e2e/
         linters:
           - noctx
+          - unused
       - path: main\.go
         linters:
           - gocritic
