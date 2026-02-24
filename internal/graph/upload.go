@@ -14,13 +14,20 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// chunkAlignment is the required alignment for upload chunk sizes (320 KiB).
+// ChunkAlignment is the required alignment for upload chunk sizes (320 KiB).
 // All chunks except the final one must be a multiple of this value.
-const chunkAlignment = 320 * 1024
+const ChunkAlignment = 320 * 1024
 
-// simpleUploadMaxSize is the maximum file size for simple (single-request) upload (4 MB).
+// SimpleUploadMaxSize is the maximum file size for simple (single-request) upload (4 MiB).
 // Files larger than this must use resumable upload sessions.
-const simpleUploadMaxSize = 4 * 1024 * 1024
+const SimpleUploadMaxSize = 4 * 1024 * 1024
+
+// ChunkedUploadChunkSize is the chunk size for resumable uploads (10 MiB, aligned to 320 KiB).
+const ChunkedUploadChunkSize = 10 * 1024 * 1024
+
+// ProgressFunc is a callback invoked after each chunk upload completes.
+// bytesUploaded is cumulative; totalBytes is the full file size.
+type ProgressFunc func(bytesUploaded, totalBytes int64)
 
 // Upload session request/response types for Graph API JSON serialization.
 type createUploadSessionRequest struct {
@@ -368,6 +375,86 @@ func (c *Client) QueryUploadSession(
 	)
 
 	return status, nil
+}
+
+// Upload uploads a file to OneDrive, automatically choosing simple upload for
+// files up to 4 MiB or chunked (resumable) upload for larger files. The session
+// lifecycle (create, chunk loop, cancel-on-error) is fully encapsulated.
+// content must be an io.ReaderAt so that retries can re-read from arbitrary offsets.
+// progress may be nil if no progress reporting is needed.
+func (c *Client) Upload(
+	ctx context.Context, driveID driveid.ID, parentID, name string,
+	content io.ReaderAt, size int64, mtime time.Time, progress ProgressFunc,
+) (*Item, error) {
+	if size <= SimpleUploadMaxSize {
+		r := io.NewSectionReader(content, 0, size)
+
+		return c.SimpleUpload(ctx, driveID, parentID, name, r, size)
+	}
+
+	return c.chunkedUploadEncapsulated(ctx, driveID, parentID, name, content, size, mtime, progress)
+}
+
+// chunkedUploadEncapsulated creates an upload session, uploads all chunks,
+// and cancels the session on any error. Fully encapsulates session lifecycle.
+func (c *Client) chunkedUploadEncapsulated(
+	ctx context.Context, driveID driveid.ID, parentID, name string,
+	content io.ReaderAt, size int64, mtime time.Time, progress ProgressFunc,
+) (*Item, error) {
+	session, err := c.CreateUploadSession(ctx, driveID, parentID, name, size, mtime)
+	if err != nil {
+		return nil, err
+	}
+
+	item, err := c.uploadAllChunks(ctx, session, content, size, progress)
+	if err != nil {
+		// Best-effort cancel — use background context since ctx may be canceled.
+		cancelErr := c.CancelUploadSession(context.Background(), session)
+		if cancelErr != nil {
+			c.logger.Warn("failed to cancel upload session after error",
+				slog.String("error", cancelErr.Error()),
+			)
+		}
+
+		return nil, err
+	}
+
+	return item, nil
+}
+
+// uploadAllChunks uploads all chunks of a file to an upload session.
+// Returns the completed Item from the final chunk response.
+func (c *Client) uploadAllChunks(
+	ctx context.Context, session *UploadSession,
+	content io.ReaderAt, size int64, progress ProgressFunc,
+) (*Item, error) {
+	var lastItem *Item
+
+	for offset := int64(0); offset < size; {
+		chunkSize := int64(ChunkedUploadChunkSize)
+		if offset+chunkSize > size {
+			chunkSize = size - offset
+		}
+
+		chunk := io.NewSectionReader(content, offset, chunkSize)
+
+		item, err := c.UploadChunk(ctx, session, chunk, offset, chunkSize, size)
+		if err != nil {
+			return nil, fmt.Errorf("graph: uploading chunk at offset %d: %w", offset, err)
+		}
+
+		offset += chunkSize
+
+		if progress != nil {
+			progress(offset, size)
+		}
+
+		if item != nil {
+			lastItem = item
+		}
+	}
+
+	return lastItem, nil
 }
 
 // parseUploadSessionResponse parses the HTTP response from CreateUploadSession.
