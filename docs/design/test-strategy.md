@@ -97,31 +97,38 @@ Build tags control which tests run in which context:
 
 ### 2.2 Mock Generation
 
-The project uses **consumer-defined interfaces** instead of provider-defined interfaces. The `internal/sync/` package defines 3 narrow interfaces over the concrete `graph.Client` struct, solely to enable mock testing. The CLI (`cmd/onedrive-go/`) uses `graph.Client` directly — no mocks needed for CLI integration tests.
+The project uses **consumer-defined interfaces** instead of provider-defined interfaces. The `internal/sync/` package defines 4 narrow interfaces over the concrete `graph.Client` struct, solely to enable mock testing. The CLI (`cmd/onedrive-go/`) uses `graph.Client` directly — no mocks needed for CLI integration tests.
 
 Mocks are generated from these consumer-defined interfaces using `moq`:
 
 ```go
-//go:generate moq -out mock_graph_test.go . DeltaFetcher ItemClient TransferClient
+//go:generate moq -out mock_graph_test.go . DeltaFetcher ItemClient Downloader Uploader
 
 // Consumer-defined interfaces in internal/sync/ — narrow slices of graph.Client
 type DeltaFetcher interface {
-    Delta(ctx context.Context, driveID, token string) ([]graph.Item, string, error)
+    Delta(ctx context.Context, driveID driveid.ID, token string) (*graph.DeltaPage, error)
 }
 
 type ItemClient interface {
-    GetItem(ctx context.Context, driveID, itemID string) (graph.Item, error)
-    ListChildren(ctx context.Context, driveID, itemID string) ([]graph.Item, error)
-    CreateFolder(ctx context.Context, driveID, parentID, name string) (graph.Item, error)
-    MoveItem(ctx context.Context, driveID, itemID, newParentID, newName string) (graph.Item, error)
-    DeleteItem(ctx context.Context, driveID, itemID string) error
+    GetItem(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
+    ListChildren(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
+    CreateFolder(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error)
+    MoveItem(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string) (*graph.Item, error)
+    DeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error
 }
 
-type TransferClient interface {
-    Download(ctx context.Context, driveID, itemID string, w io.Writer) error
-    SimpleUpload(ctx context.Context, driveID, parentID, name string, r io.Reader) (graph.Item, error)
-    CreateUploadSession(ctx context.Context, driveID, parentID, name string, size int64) (string, error)
-    UploadChunk(ctx context.Context, uploadURL string, offset, total int64, chunk io.Reader) (graph.Item, error)
+// Downloader streams a remote file by item ID.
+type Downloader interface {
+    Download(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error)
+}
+
+// Uploader uploads a local file, encapsulating the simple-vs-chunked decision
+// and upload session lifecycle. content must be an io.ReaderAt for retry safety.
+type Uploader interface {
+    Upload(
+        ctx context.Context, driveID driveid.ID, parentID, name string,
+        content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc,
+    ) (*graph.Item, error)
 }
 ```
 
@@ -133,7 +140,8 @@ type TransferClient interface {
 |-----------|-----------|------------|---------|
 | `DeltaFetcher` | `internal/sync` | `graph.Client` | Remote observer |
 | `ItemClient` | `internal/sync` | `graph.Client` | Executor (folder create, move, delete), observer |
-| `TransferClient` | `internal/sync` | `graph.Client` | Executor (downloads, uploads) |
+| `Downloader` | `internal/sync` | `graph.Client` | Executor (downloads) |
+| `Uploader` | `internal/sync` | `graph.Client` | Executor (uploads) |
 
 Each interface exists solely to enable mock testing — the concrete `graph.Client` struct implements all of them implicitly.
 
@@ -1105,7 +1113,7 @@ Benchmarks run in CI Job 1 using `go test -bench`. Results are stored and compar
 | `BenchmarkFilterEvaluate_Complex` | 1 path against 50 patterns + .odignore with negation |
 | `BenchmarkFilterEvaluate_10KPaths` | 10,000 paths against complex filter set |
 | `BenchmarkSQLite_BaselineCommit_1` | Single baseline entry commit latency |
-| `BenchmarkSQLite_BaselineCommit_500` | 500-entry batch commit in one transaction |
+| `BenchmarkSQLite_BaselineCommit_500` | 500 sequential per-action commits |
 | `BenchmarkSQLite_BaselineGet_Indexed` | Lookup by (drive_id, item_id) primary key |
 | `BenchmarkSQLite_ListByParent` | List children of a folder (indexed query) |
 | `BenchmarkSQLite_PathMaterialization` | Recompute path for item at depth 10 |
@@ -1287,7 +1295,7 @@ Three parallel jobs run on every PR push. E2E tests run only on merge to main an
 
 ### 10.2 E2E-First CI Strategy
 
-Phase 2 introduces E2E CI **before** the sync engine is built. This is deliberate: the CLI commands (`ls`, `get`, `put`, `rm`) exercise `internal/graph/` against the live API, catching real-world quirks early. The sync engine (Phase 4 v2) builds on a Graph API client that has already been validated end-to-end.
+Phase 2 introduces E2E CI **before** the sync engine is built. This is deliberate: the CLI commands (`ls`, `get`, `put`, `rm`) exercise `internal/graph/` against the live API, catching real-world quirks early. The sync engine builds on a Graph API client that has already been validated end-to-end.
 
 **Phase 2 E2E scope** (pre-sync-engine):
 - **Login**: OAuth device code flow completes, tokens stored, refresh works
@@ -1512,7 +1520,7 @@ internal/
 │   ├── filter_test.go
 │   ├── transfer.go               # Transfer pipeline
 │   ├── transfer_test.go
-│   ├── interfaces.go             # Consumer-defined interfaces (3: DeltaFetcher, ItemClient, TransferClient)
+│   ├── interfaces.go             # Consumer-defined interfaces (4: DeltaFetcher, ItemClient, Downloader, Uploader)
 │   ├── mock_graph_test.go        # Generated mocks (moq) for graph interfaces
 │   ├── migrations/
 │   │   ├── 000001_initial_schema.sql
@@ -1816,7 +1824,7 @@ var edgeCaseFileTree = map[string]string{
 
 | # | Decision | Rationale |
 |---|----------|-----------|
-| D1 | Generated mocks (moq) from consumer-defined interfaces | Type-safe, auto-regenerated on interface change, CI verifies freshness. 3 narrow interfaces in sync/ (DeltaFetcher, ItemClient, TransferClient) instead of 17+ provider-defined. CLI uses graph.Client directly — no mocks needed. |
+| D1 | Generated mocks (moq) from consumer-defined interfaces | Type-safe, auto-regenerated on interface change, CI verifies freshness. 4 narrow interfaces in sync/ (DeltaFetcher, ItemClient, Downloader, Uploader) instead of 17+ provider-defined. CLI uses graph.Client directly — no mocks needed. |
 | D2 | Personal E2E from day one, Business/SharePoint E2E in backlog | Personal accounts are free. Business/SharePoint share one M365 Business Basic subscription (~$5/month) and will be added to nightly CI once the core E2E suite is stable. Until then, account-specific quirks are covered by unit tests with realistic fixtures. |
 | D3 | Property-based testing applied broadly | Algorithm properties (convergence, idempotence) catch classes of bugs that table-driven tests miss. Parsing properties prevent panics on unexpected input. Broad application catches more bugs. |
 | D4 | 80% overall / 90%+ core coverage targets | 80% catches most regressions without encouraging test-for-coverage-sake. 90%+ for sync core reflects that this code manages user data and correctness is critical. |
@@ -1837,7 +1845,7 @@ Every constraint from [architecture.md](architecture.md) is traced:
 
 | Architecture Constraint | Implementation |
 |------------------------|----------------|
-| `internal/sync/` defines 3 consumer-defined interfaces (DeltaFetcher, ItemClient, TransferClient) over `graph.Client` for mock testing | §2.2 Mock Generation — moq generates mocks from consumer-defined interfaces in sync/ |
+| `internal/sync/` defines 4 consumer-defined interfaces (DeltaFetcher, ItemClient, Downloader, Uploader) over `graph.Client` for mock testing | §2.2 Mock Generation — moq generates mocks from consumer-defined interfaces in sync/ |
 | E2E tests must cover all three account types | §6.2 Core E2E (Personal in CI), §6.3 Account-specific (Business + SharePoint nightly) |
 | Must test API quirk handling in `internal/graph/` with known-bad inputs | §3.1 API quirk handling tests (13 quirk tests), §9.2 API Quirk Regression Tests (15 fixtures) |
 | Must test conflict detection and resolution | §3.1 Conflict Detection (6 conflict types), §6.2 E2E conflict test, Appendix A.3 |
