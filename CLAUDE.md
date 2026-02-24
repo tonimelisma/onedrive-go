@@ -125,7 +125,7 @@ echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r 
 
 ## Current Phase
 
-**Phases 1-3.5 complete. Phase 4v2 complete (Increments 0-8). Next: Phase 5 (watch mode).** All development on `main` branch. See [docs/roadmap.md](docs/roadmap.md).
+**Phases 1-4 complete. Next: Phase 5 (watch mode).** All development on `main` branch. See [docs/roadmap.md](docs/roadmap.md).
 
 ## Architecture Overview
 
@@ -192,7 +192,7 @@ echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r 
 | [docs/design/decisions.md](docs/design/decisions.md) | Architectural and design decisions |
 | [docs/design/accounts.md](docs/design/accounts.md) | Account and drive system design |
 | [docs/design/event-driven-rationale.md](docs/design/event-driven-rationale.md) | Option E architectural decision record |
-| [docs/design/concurrent-execution.md](docs/design/concurrent-execution.md) | Phase 5 concurrent execution redesign |
+| [docs/design/concurrent-execution.md](docs/design/concurrent-execution.md) | Execution architecture |
 | [docs/archive/](docs/archive/) | Historical docs |
 | [docs/tier1-research/](docs/tier1-research/) | 16 Tier 1 research docs |
 

@@ -23,8 +23,8 @@ The database is a checkpoint, not a coordination mechanism.
 
 | Table | Purpose | Mutability |
 |---|---|---|
-| `baseline` | Confirmed synced state per path | Updated atomically after execution |
-| `delta_tokens` | Graph API delta cursor per drive | Updated in the same transaction as baseline |
+| `baseline` | Confirmed synced state per path | Updated per-action as each transfer completes |
+| `delta_tokens` | Graph API delta cursor per drive | Committed when all actions for a cycle complete |
 | `conflicts` | Conflict ledger with resolution history | Append on detection, update on resolution |
 | `stale_files` | Files excluded by filter changes | Append on detection, remove on user action |
 | `upload_sessions` | Crash recovery for large uploads | Created pre-upload, removed post-upload |
@@ -32,16 +32,18 @@ The database is a checkpoint, not a coordination mechanism.
 | `config_snapshots` | Filter change detection | Updated on config load |
 | `schema_migrations` | Schema version tracking | Updated on startup |
 
-**8 tables.** The dominant table (`baseline`) has 11 columns.
+**9 tables.** The dominant table (`baseline`) has 11 columns.
 
 ### Single Writer: BaselineManager
 
 All database writes flow through the `BaselineManager`. The observers (remote
 and local) produce change events. The planner produces an action plan. The
 executor produces outcomes. Only the `BaselineManager` applies outcomes to the
-database, in a single atomic transaction at the end of each cycle. Because all
-database writes go through the single `BaselineManager`, there is never more
-than one writer, avoiding `SQLITE_BUSY` errors by construction.
+database. Each completed action is committed individually --- a per-action
+atomic transaction updates the baseline and the action ledger status together.
+The delta token is committed separately when all actions for a cycle complete.
+Because all database writes go through the single `BaselineManager`, there is
+never more than one writer, avoiding `SQLITE_BUSY` errors by construction.
 
 ---
 
@@ -106,10 +108,12 @@ On first run with a new drive:
 ### Crash Recovery
 
 SQLite WAL mode ensures the database is always in a consistent state after a
-crash. On restart, the sync engine loads the baseline and re-fetches from the
-last saved delta token. Because the delta token and baseline updates are
-committed in the same transaction, they are always consistent with each other.
-At most one cycle's worth of work is repeated.
+crash. On restart, the sync engine loads the baseline and checks the action
+queue ledger for pending or in-flight actions. Completed actions are already
+committed to baseline individually. Remaining actions are loaded from the
+ledger and resumed without full re-observation. The delta token for any
+incomplete cycle has not been advanced, so the same delta can be re-fetched
+if needed (idempotent).
 
 ---
 
@@ -152,9 +156,8 @@ CREATE TABLE baseline (
 );
 ```
 
-**11 columns.** Compared to the prior batch-pipeline `items` table (26 columns), this
-eliminates 15 columns by storing only confirmed synced state. Two columns from the
-original 13-column design were also removed during first-principles review:
+**11 columns.** The baseline stores only confirmed synced state. Two columns
+evaluated during first-principles design were excluded:
 
 - **`name`**: Redundant with `filepath.Base(path)`. Eliminating it removes a
   consistency invariant that could silently break.
@@ -214,11 +217,11 @@ CREATE TABLE delta_tokens (
 );
 ```
 
-**Critical property**: The delta token is saved in the same transaction as
-baseline updates. Never separately. If the process crashes after execution but
-before commit, the token is not advanced, and the same delta page is re-fetched
-on restart (idempotent). This transactional coupling is what makes crash
-recovery correct.
+**Critical property**: The delta token is committed only when all actions for a
+cycle are done. Individual per-action commits update the baseline but do not
+advance the delta token. If the process crashes mid-cycle, the token is not
+advanced, and the same delta is re-fetched on restart (idempotent). Already-
+completed actions are detected as convergent by the planner (EF4/EF11).
 
 On HTTP 410 (token expired), the sync engine deletes the token and falls back
 to full enumeration.
@@ -334,7 +337,94 @@ on the next sync cycle.
 
 ---
 
-## 8. Change Journal
+## 8. Action Queue (Execution Ledger)
+
+The persistent execution ledger tracks all planned actions through their
+lifecycle. Each row represents a single action from the planner's output.
+The ledger provides crash recovery (resume from exact state), upload session
+tracking, progress reporting, and post-mortem debugging.
+
+```sql
+CREATE TABLE action_queue (
+    id           INTEGER PRIMARY KEY,
+    cycle_id     TEXT    NOT NULL,                -- groups actions from one planning pass
+    action_type  TEXT    NOT NULL CHECK(action_type IN (
+                     'download', 'upload', 'local_delete', 'remote_delete',
+                     'local_move', 'remote_move', 'folder_create',
+                     'conflict', 'update_synced', 'cleanup'
+                 )),
+    path         TEXT    NOT NULL,                -- target path (relative to sync root)
+    old_path     TEXT,                            -- for moves: source path
+    status       TEXT    NOT NULL DEFAULT 'pending'
+                         CHECK(status IN ('pending', 'claimed', 'done', 'failed', 'canceled')),
+    depends_on   TEXT,                            -- JSON array of action IDs
+    drive_id     TEXT,                            -- normalized drive ID
+    item_id      TEXT,                            -- server-assigned item ID
+    parent_id    TEXT,                            -- server parent ID
+    hash         TEXT,                            -- expected content hash
+    size         INTEGER,                         -- file size in bytes
+    mtime        INTEGER,                         -- expected mtime (Unix nanoseconds)
+    session_url  TEXT,                            -- upload session URL for resume
+    bytes_done   INTEGER NOT NULL DEFAULT 0,      -- transfer progress (bytes)
+    claimed_at   INTEGER,                         -- when a worker claimed this action
+    completed_at INTEGER,                         -- when the action finished
+    error_msg    TEXT                             -- error description for failed actions
+);
+
+CREATE INDEX idx_action_queue_status ON action_queue(status);
+CREATE INDEX idx_action_queue_cycle ON action_queue(cycle_id);
+CREATE INDEX idx_action_queue_path ON action_queue(path);
+```
+
+### Status Lifecycle
+
+```
+pending  --[worker claims]--> claimed  --[success]--> done
+                                |
+                                +------[failure]--> failed
+                                |
+                                +------[canceled]--> canceled
+
+On restart:
+  claimed (stale) --[reclaim after timeout]--> pending
+```
+
+- **pending**: Waiting for dependencies to be satisfied and a worker to claim.
+- **claimed**: A worker is actively executing. `claimed_at` records when.
+- **done**: Completed successfully. Baseline updated in the same transaction.
+- **failed**: Failed after all retries. Error in `error_msg`.
+- **canceled**: Superseded (e.g., file changed while upload was in-flight).
+
+### Crash Recovery
+
+On restart, the ledger is the source of truth: `done` actions are already in
+baseline, `pending` actions are loaded into the dependency tracker,
+`claimed` actions are reclaimed to `pending` after a stale timeout (default
+30 minutes). For uploads with `session_url`: the upload session endpoint is
+queried to determine resume point. For downloads: the `.partial` file size
+determines the resume offset via HTTP `Range` header.
+
+### Per-Action Commit
+
+Each completed action is committed in a single SQLite transaction that spans
+both the baseline and the ledger:
+
+```sql
+BEGIN;
+  INSERT OR REPLACE INTO baseline (...) VALUES (...);
+  UPDATE action_queue SET status = 'done', completed_at = ? WHERE id = ?;
+COMMIT;
+```
+
+The delta token is committed separately when all actions for a `cycle_id`
+reach `done` status.
+
+See [concurrent-execution.md](concurrent-execution.md) for the full execution
+architecture specification.
+
+---
+
+## 9. Change Journal
 
 An optional append-only table that records every change event observed during
 sync cycles. Provides a full audit trail for debugging sync issues in
@@ -364,7 +454,7 @@ journal` command (future).
 
 ---
 
-## 9. Config Snapshots
+## 10. Config Snapshots
 
 Detects configuration changes that require stale file tracking. When filter
 patterns, sync paths, or other filter-affecting settings change, the sync
@@ -380,9 +470,9 @@ CREATE TABLE config_snapshots (
 
 ---
 
-## 10. Indexes and Performance
+## 11. Indexes and Performance
 
-### Primary Indexes
+### 11.1 Primary Indexes
 
 ```sql
 -- Move detection: look up baseline entry by server-assigned item_id
@@ -407,7 +497,7 @@ CREATE INDEX idx_journal_timestamp ON change_journal(timestamp);
 | `idx_journal_path ON change_journal(path)` | Excessive write amplification on a high-volume append-only table. When debugging a specific file, filter by timestamp first (indexed), then by path within the bounded result set. |
 | `idx_journal_cycle ON change_journal(cycle_id)` | Same concern. Cycle-based queries are rare and can use the timestamp index (cycles are time-bounded). If needed later, add via migration. |
 
-### Performance Guidelines
+### 11.2 Performance Guidelines
 
 **WAL checkpointing**: The `BaselineManager` performs a WAL checkpoint after
 each commit transaction. Because all writes happen in a single transaction per
@@ -420,10 +510,10 @@ VACUUM is expensive and provides minimal benefit under steady-state use.
 for the lifetime of the database connection. This avoids re-parsing SQL on
 every call.
 
-**Batch operations**: The `BaselineManager.Commit()` applies all outcomes in a
-single transaction, minimizing fsync overhead. A typical cycle with 500
-changed files produces one transaction with 500 INSERT/UPDATE/DELETE
-statements.
+**Per-action commits**: The `BaselineManager` commits each completed action
+individually. Each per-action transaction updates the baseline and the action
+ledger status together, minimizing fsync overhead per commit while ensuring
+incremental progress is durable.
 
 **Path-prefix queries**: The baseline table's PRIMARY KEY on `path` supports
 efficient prefix matching for queries like `SELECT * FROM baseline WHERE path
@@ -433,7 +523,7 @@ additional index is needed.
 
 ---
 
-## 11. Three-Way Merge Data Flow
+## 12. Three-Way Merge Data Flow
 
 The planner constructs a `PathView` for each changed path by combining the
 in-memory baseline snapshot with change events. This `PathView` is the input
@@ -505,12 +595,12 @@ state. The `BaselineManager` applies it:
 - **False conflict**: Update the baseline row's hashes, size, and mtime to
   the converged values.
 
-All outcomes are applied in a single transaction together with the new delta
-token.
+Each outcome is committed individually as actions complete. The delta token
+is committed separately when all actions for a cycle are done.
 
 ---
 
-## 12. Conventions
+## 13. Conventions
 
 ### SQLite Pragmas
 
@@ -690,6 +780,36 @@ CREATE TABLE config_snapshots (
 );
 
 -- ============================================================
+-- Execution ledger
+-- ============================================================
+
+CREATE TABLE action_queue (
+    id           INTEGER PRIMARY KEY,
+    cycle_id     TEXT    NOT NULL,
+    action_type  TEXT    NOT NULL CHECK(action_type IN (
+                     'download', 'upload', 'local_delete', 'remote_delete',
+                     'local_move', 'remote_move', 'folder_create',
+                     'conflict', 'update_synced', 'cleanup'
+                 )),
+    path         TEXT    NOT NULL,
+    old_path     TEXT,
+    status       TEXT    NOT NULL DEFAULT 'pending'
+                         CHECK(status IN ('pending', 'claimed', 'done', 'failed', 'canceled')),
+    depends_on   TEXT,
+    drive_id     TEXT,
+    item_id      TEXT,
+    parent_id    TEXT,
+    hash         TEXT,
+    size         INTEGER,
+    mtime        INTEGER,
+    session_url  TEXT,
+    bytes_done   INTEGER NOT NULL DEFAULT 0,
+    claimed_at   INTEGER,
+    completed_at INTEGER,
+    error_msg    TEXT
+);
+
+-- ============================================================
 -- Indexes
 -- ============================================================
 
@@ -697,4 +817,7 @@ CREATE UNIQUE INDEX idx_baseline_item ON baseline(drive_id, item_id);
 CREATE INDEX idx_baseline_parent ON baseline(parent_id);
 CREATE INDEX idx_conflicts_resolution ON conflicts(resolution);
 CREATE INDEX idx_journal_timestamp ON change_journal(timestamp);
+CREATE INDEX idx_action_queue_status ON action_queue(status);
+CREATE INDEX idx_action_queue_cycle ON action_queue(cycle_id);
+CREATE INDEX idx_action_queue_path ON action_queue(path);
 ```
