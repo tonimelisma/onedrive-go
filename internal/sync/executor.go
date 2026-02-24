@@ -414,7 +414,7 @@ func (e *Executor) resolveParentID(relPath string) (string, error) {
 	}
 
 	// Check baseline.
-	if entry, ok := e.baseline.ByPath[parentDir]; ok {
+	if entry, ok := e.baseline.GetByPath(parentDir); ok {
 		return entry.ItemID, nil
 	}
 

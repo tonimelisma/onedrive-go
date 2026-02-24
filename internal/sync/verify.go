@@ -23,14 +23,21 @@ const (
 func VerifyBaseline(ctx context.Context, bl *Baseline, syncRoot string, logger *slog.Logger) (*VerifyReport, error) {
 	report := &VerifyReport{}
 
-	for relPath, entry := range bl.ByPath {
+	var ctxErr error
+
+	bl.ForEachPath(func(relPath string, entry *BaselineEntry) {
+		if ctxErr != nil {
+			return
+		}
+
 		if ctx.Err() != nil {
-			return nil, fmt.Errorf("sync: verify canceled: %w", ctx.Err())
+			ctxErr = fmt.Errorf("sync: verify canceled: %w", ctx.Err())
+			return
 		}
 
 		// Skip folders and root entries — no content hash to verify.
 		if entry.ItemType != ItemTypeFile {
-			continue
+			return
 		}
 
 		absPath := filepath.Join(syncRoot, relPath)
@@ -41,6 +48,10 @@ func VerifyBaseline(ctx context.Context, bl *Baseline, syncRoot string, logger *
 		} else {
 			report.Mismatches = append(report.Mismatches, result)
 		}
+	})
+
+	if ctxErr != nil {
+		return nil, ctxErr
 	}
 
 	return report, nil

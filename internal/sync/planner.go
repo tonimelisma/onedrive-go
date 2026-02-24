@@ -57,7 +57,7 @@ func (p *Planner) Plan(
 ) (*ActionPlan, error) {
 	p.logger.Info("planning sync actions",
 		slog.Int("changes", len(changes)),
-		slog.Int("baseline_entries", len(baseline.ByPath)),
+		slog.Int("baseline_entries", baseline.Len()),
 		slog.String("mode", mode.String()),
 	)
 
@@ -82,7 +82,7 @@ func (p *Planner) Plan(
 		deleteCount := len(plan.LocalDeletes) + len(plan.RemoteDeletes)
 		p.logger.Warn("big-delete protection triggered",
 			slog.Int("delete_count", deleteCount),
-			slog.Int("baseline_count", len(baseline.ByPath)),
+			slog.Int("baseline_count", baseline.Len()),
 			slog.Int("max_count", config.BigDeleteMaxCount),
 			slog.Float64("max_percent", config.BigDeleteMaxPercent),
 		)
@@ -128,7 +128,7 @@ func buildPathViews(changes []PathChanges, baseline *Baseline) map[string]*PathV
 		}
 
 		// Baseline lookup.
-		view.Baseline = baseline.ByPath[pc.Path]
+		view.Baseline, _ = baseline.GetByPath(pc.Path)
 
 		// If there are no local events but a baseline exists, derive local
 		// state from baseline — the item is unchanged on disk.
@@ -730,7 +730,7 @@ func orderPlan(plan *ActionPlan) {
 // safety thresholds defined in the config.
 func bigDeleteTriggered(plan *ActionPlan, baseline *Baseline, config *SafetyConfig) bool {
 	deleteCount := len(plan.LocalDeletes) + len(plan.RemoteDeletes)
-	baselineCount := len(baseline.ByPath)
+	baselineCount := baseline.Len()
 
 	// Below minimum items threshold — big-delete check does not apply.
 	if baselineCount < config.BigDeleteMinItems {

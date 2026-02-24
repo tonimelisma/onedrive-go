@@ -3,8 +3,10 @@ package sync
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log/slog"
 	"path/filepath"
+	stdsync "sync"
 	"testing"
 	"time"
 
@@ -1273,5 +1275,228 @@ func TestListAllConflicts(t *testing.T) {
 
 	if !found {
 		t.Error("resolved-file.txt not found in ListAllConflicts results")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Locked accessor tests (Baseline.GetByPath, GetByID, Put, Delete, Len, ForEachPath)
+// ---------------------------------------------------------------------------
+
+func TestBaseline_GetByPath(t *testing.T) {
+	t.Parallel()
+
+	b := &Baseline{
+		ByPath: map[string]*BaselineEntry{
+			"docs/readme.md": {Path: "docs/readme.md", ItemID: "item1", DriveID: driveid.New("d1")},
+		},
+		ByID: make(map[driveid.ItemKey]*BaselineEntry),
+	}
+
+	entry, ok := b.GetByPath("docs/readme.md")
+	if !ok {
+		t.Fatal("expected entry for docs/readme.md")
+	}
+
+	if entry.ItemID != "item1" {
+		t.Errorf("ItemID = %q, want %q", entry.ItemID, "item1")
+	}
+
+	_, ok = b.GetByPath("nonexistent")
+	if ok {
+		t.Error("expected false for nonexistent path")
+	}
+}
+
+func TestBaseline_GetByID(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New("d1")
+	key := driveid.NewItemKey(driveID, "item1")
+	entry := &BaselineEntry{Path: "test.txt", ItemID: "item1", DriveID: driveID}
+
+	b := &Baseline{
+		ByPath: make(map[string]*BaselineEntry),
+		ByID:   map[driveid.ItemKey]*BaselineEntry{key: entry},
+	}
+
+	got, ok := b.GetByID(key)
+	if !ok {
+		t.Fatal("expected entry for key")
+	}
+
+	if got.Path != "test.txt" {
+		t.Errorf("Path = %q, want %q", got.Path, "test.txt")
+	}
+
+	missingKey := driveid.NewItemKey(driveID, "nonexistent")
+	_, ok = b.GetByID(missingKey)
+	if ok {
+		t.Error("expected false for nonexistent key")
+	}
+}
+
+func TestBaseline_Put(t *testing.T) {
+	t.Parallel()
+
+	b := &Baseline{
+		ByPath: make(map[string]*BaselineEntry),
+		ByID:   make(map[driveid.ItemKey]*BaselineEntry),
+	}
+
+	entry := &BaselineEntry{
+		Path:    "new/file.txt",
+		DriveID: driveid.New("d1"),
+		ItemID:  "item-new",
+	}
+
+	b.Put(entry)
+
+	got, ok := b.GetByPath("new/file.txt")
+	if !ok {
+		t.Fatal("entry not found after Put")
+	}
+
+	if got.ItemID != "item-new" {
+		t.Errorf("ItemID = %q, want %q", got.ItemID, "item-new")
+	}
+
+	key := driveid.NewItemKey(driveid.New("d1"), "item-new")
+	gotByID, ok := b.GetByID(key)
+	if !ok {
+		t.Fatal("entry not found by ID after Put")
+	}
+
+	if gotByID.Path != "new/file.txt" {
+		t.Errorf("Path = %q, want %q", gotByID.Path, "new/file.txt")
+	}
+}
+
+func TestBaseline_Delete(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New("d1")
+	entry := &BaselineEntry{Path: "delete-me.txt", DriveID: driveID, ItemID: "item-del"}
+	key := driveid.NewItemKey(driveID, "item-del")
+
+	b := &Baseline{
+		ByPath: map[string]*BaselineEntry{"delete-me.txt": entry},
+		ByID:   map[driveid.ItemKey]*BaselineEntry{key: entry},
+	}
+
+	b.Delete("delete-me.txt")
+
+	if _, ok := b.GetByPath("delete-me.txt"); ok {
+		t.Error("entry still exists after Delete")
+	}
+
+	if _, ok := b.GetByID(key); ok {
+		t.Error("entry still exists in ByID after Delete")
+	}
+
+	// Deleting nonexistent path should not panic.
+	b.Delete("nonexistent")
+}
+
+func TestBaseline_Len(t *testing.T) {
+	t.Parallel()
+
+	b := &Baseline{
+		ByPath: map[string]*BaselineEntry{
+			"a.txt": {Path: "a.txt"},
+			"b.txt": {Path: "b.txt"},
+		},
+		ByID: make(map[driveid.ItemKey]*BaselineEntry),
+	}
+
+	if b.Len() != 2 {
+		t.Errorf("Len() = %d, want 2", b.Len())
+	}
+}
+
+func TestBaseline_ForEachPath(t *testing.T) {
+	t.Parallel()
+
+	b := &Baseline{
+		ByPath: map[string]*BaselineEntry{
+			"a.txt": {Path: "a.txt", ItemID: "i1"},
+			"b.txt": {Path: "b.txt", ItemID: "i2"},
+		},
+		ByID: make(map[driveid.ItemKey]*BaselineEntry),
+	}
+
+	paths := make(map[string]bool)
+	b.ForEachPath(func(path string, entry *BaselineEntry) {
+		paths[path] = true
+	})
+
+	if len(paths) != 2 {
+		t.Errorf("ForEachPath visited %d entries, want 2", len(paths))
+	}
+
+	if !paths["a.txt"] || !paths["b.txt"] {
+		t.Error("ForEachPath did not visit all entries")
+	}
+}
+
+func TestBaseline_ConcurrentAccess(t *testing.T) {
+	t.Parallel()
+
+	b := &Baseline{
+		ByPath: make(map[string]*BaselineEntry),
+		ByID:   make(map[driveid.ItemKey]*BaselineEntry),
+	}
+
+	// Seed some entries.
+	for i := range 100 {
+		entry := &BaselineEntry{
+			Path:    fmt.Sprintf("file%03d.txt", i),
+			DriveID: driveid.New("d1"),
+			ItemID:  fmt.Sprintf("item-%03d", i),
+		}
+		b.Put(entry)
+	}
+
+	var wg stdsync.WaitGroup
+
+	// Concurrent readers.
+	for range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range 100 {
+				b.GetByPath(fmt.Sprintf("file%03d.txt", j))
+				b.Len()
+			}
+		}()
+	}
+
+	// Concurrent writers.
+	for i := range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			entry := &BaselineEntry{
+				Path:    fmt.Sprintf("concurrent%d.txt", i),
+				DriveID: driveid.New("d1"),
+				ItemID:  fmt.Sprintf("concurrent-item-%d", i),
+			}
+			b.Put(entry)
+		}()
+	}
+
+	// Concurrent ForEachPath.
+	for range 5 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			b.ForEachPath(func(_ string, _ *BaselineEntry) {})
+		}()
+	}
+
+	wg.Wait()
+
+	// Baseline should have at least original + concurrent entries.
+	if b.Len() < 100 {
+		t.Errorf("Len() = %d, want >= 100", b.Len())
 	}
 }

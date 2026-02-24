@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	stdsync "sync"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -269,9 +270,79 @@ type BaselineEntry struct {
 
 // Baseline is the in-memory container for all baseline entries, providing
 // dual-key access by path (primary) and by item ID (for move detection).
+// Maps remain public for test setup convenience; production code MUST use
+// the locked accessor methods (GetByPath, GetByID, Put, Delete, Len,
+// ForEachPath) which hold mu during access.
 type Baseline struct {
+	mu     stdsync.RWMutex
 	ByPath map[string]*BaselineEntry
 	ByID   map[driveid.ItemKey]*BaselineEntry // keyed by (driveID, itemID) pair
+}
+
+// GetByPath returns the baseline entry for the given relative path.
+// Thread-safe: holds a read lock during access.
+func (b *Baseline) GetByPath(path string) (*BaselineEntry, bool) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	entry, ok := b.ByPath[path]
+
+	return entry, ok
+}
+
+// GetByID returns the baseline entry for the given (driveID, itemID) pair.
+// Thread-safe: holds a read lock during access.
+func (b *Baseline) GetByID(key driveid.ItemKey) (*BaselineEntry, bool) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	entry, ok := b.ByID[key]
+
+	return entry, ok
+}
+
+// Put inserts or updates a baseline entry in both maps.
+// Thread-safe: holds a write lock during access.
+func (b *Baseline) Put(entry *BaselineEntry) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.ByPath[entry.Path] = entry
+	b.ByID[driveid.NewItemKey(entry.DriveID, entry.ItemID)] = entry
+}
+
+// Delete removes a baseline entry from both maps by path.
+// Thread-safe: holds a write lock during access.
+func (b *Baseline) Delete(path string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if entry, ok := b.ByPath[path]; ok {
+		delete(b.ByID, driveid.NewItemKey(entry.DriveID, entry.ItemID))
+	}
+
+	delete(b.ByPath, path)
+}
+
+// Len returns the number of entries in the baseline.
+// Thread-safe: holds a read lock during access.
+func (b *Baseline) Len() int {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	return len(b.ByPath)
+}
+
+// ForEachPath calls fn for every (path, entry) pair in the baseline.
+// The read lock is held for the entire iteration — fn must not call
+// any Baseline methods (deadlock). Suitable for read-only observers.
+func (b *Baseline) ForEachPath(fn func(string, *BaselineEntry)) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	for path, entry := range b.ByPath {
+		fn(path, entry)
+	}
 }
 
 // PathChanges groups all change events for a single path, separating
