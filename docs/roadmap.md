@@ -246,76 +246,328 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 
 ---
 
-## Phase 5: Watch Mode + Polish — FUTURE
+## Phase 5: Concurrent Execution + Watch Mode
 
-> **ARCHITECTURAL NOTE — Phase 5 requires a new concurrency design.**
+> **CLEAN SLATE INVARIANT**: When Phase 5 is complete, the codebase must appear as if it was written from scratch for the concurrent execution architecture. No vestiges of sequential phase execution, batch commits, or phase-ordered action plans will remain in the code. The ActionPlan contains actions with explicit dependency edges. The executor dispatches via a dependency tracker, not phase loops. Per-action atomic commits preserve incremental progress. The ONLY execution model visible in the code is the DAG-based concurrent model described in `docs/design/concurrent-execution.md`.
+
+| Increment | Description | Wave |
+|-----------|-------------|------|
+| 5.0 | Restructure ActionPlan — flat list + dependency DAG | 0: Foundation |
+| 5.1 | Persistent ledger (`action_queue` table) | 0: Foundation |
+| 5.2 | In-memory dependency tracker | 1: Core Pivot |
+| 5.3 | Lane-based workers + DAG-based engine | 1: Core Pivot |
+| 5.4 | Continuous observer `Watch()` methods + debounced buffer | 2: Watch Mode |
+| 5.5 | `Engine.RunWatch()` + continuous pipeline | 2: Watch Mode |
+| 5.6 | Graceful shutdown + crash recovery from ledger | 3: Operational Polish |
+| 5.7 | Pause/resume + SIGHUP config reload + final cleanup | 3: Operational Polish |
+
+### Codebase Analysis: Keep / Adapt / Delete
+
+This analysis categorizes every part of the codebase by its relationship to the new architecture. Future agents must consult this section to understand what to touch and what to leave alone.
+
+#### KEEP AS-IS (architecture-neutral, no changes needed)
+
+| Package | Files | Reason |
+|---------|-------|--------|
+| `internal/graph/` | 19 .go files | Pure HTTP client, auth, retry. Zero sync dependencies. |
+| `internal/config/` | 21 .go files | TOML config, XDG paths, drive sections. Zero sync dependencies. |
+| `internal/driveid/` | 6 .go files | Type-safe IDs. Leaf package (stdlib only). |
+| `pkg/quickxorhash/` | 2 .go files | Hash algorithm. Zero dependencies. |
+| CLI commands | `files.go`, `auth.go`, `drive.go`, `format.go`, `root.go`, `main.go` | Call graph.Client directly, no sync engine coupling. |
+
+#### KEEP AS-IS (sync package, per-action logic is architecture-neutral)
+
+| File | What it does | Why it stays |
+|------|-------------|--------------|
+| `observer_remote.go` | `RemoteObserver.FullDelta()` → `[]ChangeEvent` | Pure observation. No execution model coupling. `Watch()` added in 5.4. |
+| `observer_local.go` | `LocalObserver.FullScan()` → `[]ChangeEvent` | Pure observation. No execution model coupling. `Watch()` added in 5.4. |
+| `buffer.go` | `Buffer` with `Add/AddAll/FlushImmediate` | Thread-safe event grouping. Debounce added in 5.4. |
+| `verify.go` | `VerifyBaseline` — read-only hash check | Pure utility. |
+| `migrations.go` | Goose migration infrastructure + embed | Schema management unchanged. |
+| `executor_transfer.go` | `executeDownload()`, `executeUpload()` | Self-contained per-action functions. Called by workers instead of phase loops. |
+| `executor_delete.go` | `executeLocalDelete()`, `executeRemoteDelete()` | Self-contained per-action functions. |
+| `executor_conflict.go` | `executeConflict()`, `executeEditDeleteConflict()` | Self-contained per-action functions. |
+
+#### ADAPT (keep logic, change structure)
+
+| File | Current state | What changes |
+|------|--------------|--------------|
+| `types.go` | `ActionPlan` has 9 ordered slices (`FolderCreates`, `Moves`, `Downloads`, etc.) | Replace with flat `Actions []Action` + `Deps [][]int` dependency adjacency list + `CycleID`. Most other types unchanged. |
+| `planner.go` | `appendActions()` routes to 9 slices. `orderPlan()` sorts slices. | Replace with flat append + `buildDependencies()` for DAG edges. Decision matrix logic (EF1-EF14, ED1-ED8) completely unchanged. |
+| `executor.go` | 9-phase `Execute()` method. `executeParallel()` for downloads/uploads. | DELETE `Execute()` and `executeParallel()`. KEEP all per-action helpers, `ExecutorConfig`/`Executor`/`NewExecution` pattern, retry/error classification. `createdFolders` map gets mutex for concurrent access. |
+| `baseline.go` | `Commit(ctx, []Outcome, deltaToken, driveID)` — batch model. | Replace with `CommitOutcome(ctx, outcome, ledgerID)` + `CommitDeltaToken(ctx, token, driveID)`. Remove batch `Commit()`. Incremental cache update instead of full reload. |
+| `engine.go` | `RunOnce()` — 9-step sequential pipeline. No `RunWatch()`. | Rewrite `RunOnce()` for ledger+tracker+worker model. Add `RunWatch()` for continuous mode. |
+| CLI `sync.go` | Creates `Engine`, calls `RunOnce()`. `--watch` returns "not implemented". | Wire `--watch` to `RunWatch()`. |
+
+#### ADD (new components)
+
+| File | Purpose |
+|------|---------|
+| `ledger.go` | Persistent `action_queue` table: WriteActions, Claim, Complete, Fail, Cancel, LoadPending, ReclaimStale. |
+| `tracker.go` | In-memory dependency tracker: DAG, ready channel dispatch, interactive/bulk lane routing, bounded capacity, cancellation. |
+| `worker.go` | Lane-based worker pool: interactive + bulk + shared overflow workers, per-action commits. |
+| `migrations/00002_action_queue.sql` | `CREATE TABLE action_queue` + indexes per `concurrent-execution.md` §3. |
+
+#### DELETE (old architecture artifacts removed during Phase 5)
+
+| What | Where | Why |
+|------|-------|-----|
+| `Execute(ctx, plan *ActionPlan) ([]Outcome, error)` | `executor.go` | 9-phase dispatch loop → workers pull from tracker |
+| `executeParallel()` | `executor.go` | errgroup pool for phases 3-4 → lane-based workers |
+| `Commit(ctx, []Outcome, deltaToken, driveID)` | `baseline.go` | Batch commit → per-action `CommitOutcome()` |
+| `executeAndCommit()` | `engine.go` | Sequential execute-then-commit glue |
+| `workerPoolSize = 8` constant | `executor.go` | Fixed pool → configurable lane workers |
+| 9-slice `ActionPlan` struct | `types.go` | Phase-ordered slices → flat list + dependency DAG |
+| `appendActions()`, `orderPlan()` | `planner.go` | Slice routing/sorting → flat append + `buildDependencies()` |
+
+**Legacy Architecture Reference**: See [`docs/design/legacy-sequential-architecture.md`](design/legacy-sequential-architecture.md) for detailed documentation of every old-architecture pattern, its rationale, and grep commands to verify removal. This document is the definitive reference for the clean-slate invariant.
+
+---
+
+### CI and Testing Strategy
+
+> **CI GREEN AT EVERY INCREMENT.** Both `ci.yml` and `integration.yml` pass after every increment merges. No temporary CI disablement, no skipped E2E tests, no "will fix in next increment."
 >
-> The Phase 4v2 `RunOnce` pipeline is fully sequential: observe remote → observe local → buffer → plan → execute (downloads → uploads → deletes) → commit. Each phase blocks until complete. This is correct and simple for one-shot `sync`, but fundamentally unsuitable for watch mode:
+> **E2E sync tests pass throughout.** `sync_e2e_test.go` and `sync_full_test.go` test external CLI behavior — they run `onedrive-go sync` and check files appear locally/remotely. Internal execution model changes; external behavior does not. These tests are the migration's safety net.
 >
-> - **A multi-GB upload blocks change detection.** An 8-hour upload holds one of 8 worker slots. No new sync cycle can start until the entire execute phase finishes — meaning hours of blindness to new local and remote changes.
-> - **Downloads block uploads.** Phase 3 (downloads) must complete before Phase 4 (uploads) starts. A slow download delays all pending uploads.
-> - **Ctrl-C loses all upload progress.** Interrupted chunked uploads restart from byte 0 on the next sync (no session resume, no partial file retention for downloads — see B-085).
-> - **Users perceive the tool as stuck.** Seven workers idle while one grinds through a large file. No new changes sync. No feedback.
+> **Unit tests rewritten in the same increment that changes the code they test.** No increment leaves tests referencing deleted code. No increment introduces code without tests.
 >
-> Watch mode must decouple these concerns into concurrent subsystems:
-> 1. **Observer goroutines** — continuously detect remote (polling delta) and local (FS events) changes, independent of transfer state
-> 2. **Transfer queue** — a persistent, prioritized queue of pending downloads and uploads that drains independently of observation
-> 3. **Baseline commits** — incremental (per-completed-transfer) rather than batch (per-sync-cycle), so progress is never lost
->
-> The increment descriptions below are carried forward from the original Phase 5 plan and **do not yet reflect this architectural requirement**. They will be redesigned during Phase 5 planning. The current `RunOnce` pipeline will likely remain as the `sync` (one-shot) code path, while `sync --watch` gets the new concurrent architecture.
+> **Dead code verification at every increment.** Each increment's Code Retirement section lists grep patterns. Zero hits required before merge. See [`docs/design/legacy-sequential-architecture.md`](design/legacy-sequential-architecture.md) for the full pattern detection reference.
 
-| Increment | Description |
-|-----------|-------------|
-| 5.1 | `RemoteObserver.Watch()` — polling-based (delta every N seconds) |
-| 5.2 | `LocalObserver.Watch()` — rjeczalik/notify for cross-platform FS events |
-| 5.3 | `Engine.RunWatch()` — event loop with change buffer |
-| 5.4 | Pause/resume — buffer accumulates while executor is paused |
-| 5.5 | SIGHUP config reload + stale file detection |
-| 5.6 | Graceful shutdown — two-signal protocol (first: drain + checkpoint, second: immediate exit) |
+---
 
-### 5.1: RemoteObserver.Watch()
+### Wave 0 — Foundation (no behavior change, types and persistence)
 
-- Polling-based delta fetch at configurable interval (default 5 minutes)
-- Produces `ChangeEvent` stream into change buffer
-- Automatic reconnection with exponential backoff on errors
-- WebSocket upgrade deferred to post-v1 (requires Graph API subscription management)
-- **Acceptance**: All DOD gates (CLAUDE.md §Quality Gates). Additionally: integration test — start watch, create remote file, verify event produced.
+#### 5.0: Restructure ActionPlan — flat list + dependency DAG
 
-### 5.2: LocalObserver.Watch()
+**Goal**: Replace the 9-slice `ActionPlan` with a flat action list + explicit dependency edges. Planner output changes shape; decision logic identical.
 
-- rjeczalik/notify integration for cross-platform FS events (inotify on Linux, FSEvents on macOS)
-- Filter: ignore `.partial` files, temp files, OS metadata
-- Produces `ChangeEvent` stream into change buffer
-- Network filesystem detection: fall back to periodic full scan if inotify unreliable
-- **Acceptance**: All DOD gates (CLAUDE.md §Quality Gates). Additionally: test with real temp dir — create/modify/delete files, verify events produced.
+**1. New Code:**
+- `buildDependencies()` in `planner.go` — constructs `[][]int` DAG edges:
+  - Parent-before-child edges for folder creates
+  - Children-before-parent-delete edges
+  - Move-target-parent edges
+- `topoSort()` in `executor.go` — Kahn's algorithm bridge for `Execute()`
 
-### 5.3: Engine.RunWatch()
+**2. Code Adaptation:**
+- `types.go`: `ActionPlan` → flat `Actions []Action` + `Deps [][]int` + `CycleID`
+- `planner.go`: classification functions unchanged; action append becomes direct `append(plan.Actions, action)`
+- `executor.go`: `Execute()` walks actions in topological order (bridge — deleted in 5.3); `executeParallel()` still batches transfers within topo walk
+- `engine.go`: `buildReport()` counts `plan.Actions` by type
 
-- Event loop: wait for change buffer flush, run planner + executor, commit baseline
-- Same code path as RunOnce (one-shot = "observe everything, flush immediately"; watch = "observe incrementally, flush on debounce")
-- Periodic full scan (configurable, default every 12 hours) as safety net
-- Time-of-day bandwidth schedule: adjust rate limiter based on config and wall-clock time
-- **Acceptance**: All DOD gates (CLAUDE.md §Quality Gates). Additionally: integration test — start watch, create file, verify sync cycle triggered.
+**3. Code Retirement:**
+- DELETE `appendActions()` from `planner.go`
+- DELETE `orderPlan()` from `planner.go`
+- DELETE 9 slice fields from `ActionPlan` in `types.go`
+- Verify: `grep -rn "plan\.Downloads\|plan\.Uploads\|plan\.FolderCreates\|appendActions\|orderPlan" internal/sync/` → 0 hits in non-test `.go` files
 
-### 5.4: Pause/Resume
+**4. CI and Testing:**
+- `planner_test.go`: all 43 tests rewritten — `len(plan.Downloads)` → helper `actionsOfType(plan, ActionDownload)`. New dependency edge tests.
+- `executor_test.go`: ActionPlan construction updated for flat structure. Per-action tests unchanged.
+- `engine_test.go`: report assertions unchanged (SyncReport fields same), plan construction updated.
+- E2E: unchanged — external behavior identical. Both CI workflows green.
 
-- `Engine.Pause()`: stop executor, continue accumulating events in buffer
-- `Engine.Resume()`: flush buffer, process accumulated events
-- RPC via Unix domain socket for runtime control
-- **Acceptance**: All DOD gates (CLAUDE.md §Quality Gates). Additionally: test — pause, create files, resume, verify all changes synced.
+---
 
-### 5.5: SIGHUP Config Reload + Stale File Detection
+#### 5.1: Persistent ledger (action_queue table)
 
-- SIGHUP handler: re-read config file, apply changes to running engine
-- Detect stale `.partial` files from interrupted previous runs, clean up
-- Filter changes applied immediately (hot reload without restart)
-- **Acceptance**: All DOD gates (CLAUDE.md §Quality Gates). Additionally: test — change config, send SIGHUP, verify new settings active.
+**Goal**: Add `action_queue` SQLite table and `Ledger` type. No behavior change yet — ledger exists but engine doesn't use it.
 
-### 5.6: Graceful Shutdown
+**1. New Code:**
+- `migrations/00002_action_queue.sql` per `concurrent-execution.md` §3
+- `ledger.go`: `Ledger` struct (shares same `*sql.DB` as BaselineManager)
+  - `WriteActions(ctx, plan *ActionPlan) error` — INSERT all actions as `pending`
+  - `Claim(ctx, actionID) error` — status → `claimed`
+  - `Complete(ctx, actionID) error` — status → `done`
+  - `Fail(ctx, actionID, errMsg) error` — status → `failed`
+  - `Cancel(ctx, actionID) error` — status → `canceled`
+  - `LoadPending(ctx, cycleID) ([]LedgerRow, error)`
+  - `ReclaimStale(ctx, timeout) (int, error)`
+- `baseline.go`: `CommitOutcome(ctx, outcome, ledgerID) error` — per-action atomic: baseline upsert + ledger status in same tx
+- `baseline.go`: `CommitDeltaToken(ctx, token, driveID) error` — separate delta token commit
 
-- Two-signal protocol: first SIGINT/SIGTERM drains current batch and commits checkpoint; second signal exits immediately
-- WAL mode ensures SQLite consistency even on immediate exit
-- **Acceptance**: All DOD gates (CLAUDE.md §Quality Gates). Additionally: test — start sync, send signal mid-cycle, verify clean shutdown and baseline consistency.
+**2. Code Adaptation:**
+- `migrations.go`: embed includes new migration
+- `baseline.go`: gains `Ledger` field (shared `*sql.DB`)
+
+**3. Code Retirement:**
+- None — batch `Commit()` still used by engine. Retired in 5.3.
+
+**4. CI and Testing:**
+- New `ledger_test.go`: round-trip, LoadPending, ReclaimStale, concurrent access
+- `baseline_test.go`: new CommitOutcome/CommitDeltaToken tests. Existing batch Commit tests unchanged.
+- E2E: unchanged. Both CI workflows green.
+
+---
+
+### Wave 1 — Core Architecture Pivot
+
+#### 5.2: In-memory dependency tracker
+
+**Goal**: Build the tracker that dispatches dependency-satisfied actions to lane channels.
+
+**1. New Code:**
+- `tracker.go`: `DepTracker` struct per `concurrent-execution.md` §4
+  - `Add(action, ledgerID, deps)` — insert, dispatch if no deps
+  - `Complete(id) error` — mark done, decrement dependents' counters, dispatch newly ready
+  - `Cancel(path)` — cancel in-flight action by path
+  - `Interactive() <-chan *trackedAction` — interactive lane channel
+  - `Bulk() <-chan *trackedAction` — bulk lane channel
+  - Lane routing: files < 10 MB + folder ops + deletes → interactive; files ≥ 10 MB → bulk
+  - Bounded capacity (configurable, default 10K), signaling refill when below threshold
+
+**2. Code Adaptation:**
+- None
+
+**3. Code Retirement:**
+- None
+
+**4. CI and Testing:**
+- New `tracker_test.go`: dependency chains, lane routing, bounded capacity, concurrent access with `-race`, cancellation
+- E2E: unchanged. Both CI workflows green.
+
+---
+
+#### 5.3: Lane-based workers + DAG-based engine (THE PIVOT)
+
+**THE CORE ARCHITECTURAL PIVOT.** After this increment, the old execution model is gone from the code.
+
+**1. New Code:**
+- `worker.go`: `WorkerPool` struct
+  - `NewWorkerPool(cfg, tracker, baseline, ledger, workerCounts) *WorkerPool`
+  - `Start(ctx)` — spawn interactive, bulk, and shared overflow workers
+  - `Wait()` — block until all actions complete
+  - `Stop()` — cancel workers, drain
+  - Each worker: pull from tracker channel → `NewExecution()` → dispatch → `CommitOutcome()` → `tracker.Complete()`
+
+**2. Code Adaptation:**
+- `executor.go`: add `sync.Mutex` to `createdFolders`. All per-action functions unchanged — called by workers.
+- `engine.go`: `RunOnce()` rewritten for ledger→tracker→worker pipeline:
+  1. Load baseline
+  2. Check ledger for pending actions from crashed cycle (crash recovery)
+  3. Observe remote/local (unchanged)
+  4. Buffer and flush (unchanged)
+  5. Plan (unchanged — returns flat Actions + Deps)
+  6. Write actions to ledger
+  7. Populate tracker from ledger
+  8. Start worker pool → per-action commits happen inside workers
+  9. Wait for all actions to complete
+  10. Commit delta token
+- CLI `sync.go`: SyncReport population from worker pool stats
+
+**3. Code Retirement:**
+- DELETE `Execute()`, `executeParallel()`, `workerPoolSize`, `topoSort()` from `executor.go`
+- DELETE `executeAndCommit()` from `engine.go`
+- DELETE batch `Commit()` from `baseline.go`
+- Verify: `grep -rn "executeParallel\|workerPoolSize\|executeAndCommit\|func.*Execute.*ActionPlan\|\.Commit(ctx.*\[\]Outcome" internal/sync/` → 0 hits in non-test `.go` files
+
+**4. CI and Testing:**
+- `executor_test.go`: DELETE tests calling `Execute(plan)`. KEEP per-action function tests. Add concurrency test with `-race`.
+- `engine_test.go`: REWRITE for ledger→tracker→worker pipeline. Same scenarios, different internal flow.
+- `baseline_test.go`: DELETE batch `Commit()` tests.
+- New `worker_test.go`: lifecycle, per-action commit, error handling, lane assignment.
+- **E2E sync tests: MUST PASS UNCHANGED.** Primary safety net — external behavior preserved.
+- Both CI workflows green.
+
+---
+
+### Wave 2 — Watch Mode
+
+#### 5.4: Continuous observer Watch() methods + debounced buffer
+
+**Goal**: Add `Watch()` to both observers and debounce to buffer.
+
+**1. New Code:**
+- `observer_remote.go`: `Watch(ctx, savedToken, events chan<- ChangeEvent, interval time.Duration) error` — polling loop with backoff
+- `observer_local.go`: `Watch(ctx, syncRoot, events chan<- ChangeEvent) error` — via `rjeczalik/notify` for inotify/FSEvents, periodic full scan as safety net
+- `buffer.go`: `FlushDebounced(ctx, debounce time.Duration) <-chan []PathChanges`
+
+**2. Code Adaptation:**
+- `go.mod`/`go.sum`: add `github.com/rjeczalik/notify`
+
+**3. Code Retirement:**
+- None — `FullDelta()`/`FullScan()` remain for one-shot mode
+
+**4. CI and Testing:**
+- New observer watch tests (mock time, mock notify), buffer debounce tests
+- E2E: unchanged. Both CI workflows green.
+
+---
+
+#### 5.5: RunWatch() + continuous pipeline
+
+**Goal**: Wire continuous observers into the engine. `sync --watch` works.
+
+**1. New Code:**
+- `engine.go`: `RunWatch(ctx, mode, opts) error` —
+  1. Load baseline, check ledger for crash recovery
+  2. Start worker pool (persistent — survives across planning passes)
+  3. Start remote observer `Watch` (if not upload-only)
+  4. Start local observer `Watch` (if not download-only)
+  5. Loop: wait for buffer flush → plan → deduplicate against tracker → write to ledger → add to tracker
+  6. Delta token management per cycle
+  7. Action cancellation for stale in-flight actions when new events arrive
+
+**2. Code Adaptation:**
+- CLI `sync.go`: `--watch` wired to `RunWatch()`
+
+**3. Code Retirement:**
+- DELETE "not implemented" watch stub
+- Verify: `grep -rn "not.*implemented" sync.go` → 0 hits for watch
+
+**4. CI and Testing:**
+- New engine watch tests with mock observers
+- New E2E watch test (`e2e` tag): start watch, make change, verify sync, stop (short timeout)
+- Both CI workflows green.
+
+---
+
+### Wave 3 — Operational Polish
+
+#### 5.6: Graceful shutdown + crash recovery from ledger
+
+**Goal**: Two-signal shutdown, ledger-based crash resume.
+
+**1. New Code:**
+- Two-signal shutdown: first SIGINT stops observers, drains workers; second exits immediately
+- Crash recovery: `LoadPending` → `ReclaimStale` → resume execution on startup
+- Upload session resume via `session_url` in ledger
+
+**2. Code Adaptation:**
+- `worker.go`: context cancellation, periodic `bytes_done` update
+- CLI `sync.go`: signal handler
+
+**3. Code Retirement:**
+- None
+
+**4. CI and Testing:**
+- Crash recovery test (write actions to ledger, simulate crash, verify resume)
+- Shutdown test (send SIGINT, verify graceful drain)
+- E2E: unchanged. Both CI workflows green.
+
+---
+
+#### 5.7: Pause/resume + SIGHUP config reload + final cleanup
+
+**Goal**: Complete Phase 5 feature set. Ensure clean slate.
+
+**1. New Code:**
+- `engine.go`: `Pause()` / `Resume()` — pause workers, continue collecting events, resume drains buffer
+- SIGHUP handler: reload config
+- Stale `.partial` file cleanup on startup
+
+**2. Code Adaptation:**
+- None
+
+**3. Code Retirement:**
+- Final sweep — run ALL grep patterns from [`docs/design/legacy-sequential-architecture.md`](design/legacy-sequential-architecture.md) §9
+- Any hits are bugs — fix before merge
+
+**4. CI and Testing:**
+- Pause/resume test, SIGHUP test
+- Add permanent regression test that runs grep sweep and fails on match
+- Docs updated: CLAUDE.md (current phase → Phase 6), BACKLOG.md (close items), LEARNINGS.md
+- Both CI workflows green. Full DOD checklist.
 
 ---
 
@@ -358,10 +610,10 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 | 3.5 | 2 | Account/drive system alignment | **COMPLETE** |
 | 4 v1 | 11 | Batch-pipeline sync engine | **SUPERSEDED** |
 | 4 v2 | 9 | Event-driven sync engine | **COMPLETE** |
-| 5 | 6 | Watch mode + polish | FUTURE |
+| 5 | 8 | Concurrent execution + watch mode | FUTURE |
 | 6 | 5 | Packaging + release | FUTURE |
-| **Total** | **47** | | |
+| **Total** | **49** | | |
 
-Each increment: independently testable, completable in one focused session. Phase 4 v2 count (9, including Increment 0) replaces the original Phase 4 v1 count (11).
+Each increment: independently testable, completable in one focused session. Phase 4 v2 count (9, including Increment 0) replaces the original Phase 4 v1 count (11). Phase 5 count (8, increments 5.0-5.7) replaces the original sketch (6).
 
-**Key architectural difference**: Phase 4 v1 used the database as the coordination mechanism (scanner and delta write eagerly, reconciler reads). Phase 4 v2 uses typed events as the coordination mechanism (observers produce events, planner operates as a pure function, executor produces outcomes, baseline manager commits atomically). Same decision matrix, same safety invariants, fundamentally different data flow.
+**Key architectural difference**: Phase 4 v1 used the database as the coordination mechanism (scanner and delta write eagerly, reconciler reads). Phase 4 v2 uses typed events as the coordination mechanism (observers produce events, planner operates as a pure function, executor produces outcomes, baseline manager commits atomically). Phase 5 replaces the sequential executor with a DAG-based concurrent execution model (persistent ledger + in-memory dependency tracker + lane-based workers + per-action commits). Same decision matrix, same safety invariants, fundamentally different execution model.
