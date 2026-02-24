@@ -98,9 +98,18 @@ jobs:
           for drive in "${DRIVES[@]}"; do
             drive=$(echo "$drive" | xargs)
             echo "=== Running E2E tests for: ${drive} ==="
+            E2E_LOG_DIR=/tmp/e2e-debug-logs \
             ONEDRIVE_TEST_DRIVE="$drive" \
               go test -tags=e2e -race -v -timeout=15m ./e2e/...
           done
+
+      - name: Upload E2E debug logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-debug-logs
+          path: /tmp/e2e-debug-logs/
+          retention-days: 7
 
       - name: Save rotated tokens to Key Vault
         if: always()

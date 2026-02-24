@@ -120,18 +120,18 @@ func (m *executorMockTransferClient) CancelUploadSession(ctx context.Context, se
 // Test helpers
 // ---------------------------------------------------------------------------
 
-func newTestExecutor(t *testing.T, items *executorMockItemClient, transfers *executorMockTransferClient) (*Executor, string) {
+func newTestExecutorConfig(t *testing.T, items *executorMockItemClient, transfers *executorMockTransferClient) (*ExecutorConfig, string) {
 	t.Helper()
 
 	syncRoot := t.TempDir()
 	driveID := driveid.New(testDriveID)
 	logger := testLogger(t)
 
-	e := NewExecutor(items, transfers, syncRoot, driveID, logger)
-	e.nowFunc = func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) }
-	e.sleepFunc = func(_ context.Context, _ time.Duration) error { return nil }
+	cfg := NewExecutorConfig(items, transfers, syncRoot, driveID, logger)
+	cfg.nowFunc = func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) }
+	cfg.sleepFunc = func(_ context.Context, _ time.Duration) error { return nil }
 
-	return e, syncRoot
+	return cfg, syncRoot
 }
 
 func writeExecTestFile(t *testing.T, dir, relPath, content string) string {
@@ -172,9 +172,8 @@ func requireOutcomeFailure(t *testing.T, o Outcome) {
 func TestExecutor_CreateLocalFolder(t *testing.T) {
 	t.Parallel()
 
-	e, syncRoot := newTestExecutor(t, &executorMockItemClient{}, &executorMockTransferClient{})
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:       ActionFolderCreate,
@@ -215,9 +214,8 @@ func TestExecutor_CreateRemoteFolder(t *testing.T) {
 		},
 	}
 
-	e, _ := newTestExecutor(t, items, &executorMockTransferClient{})
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockTransferClient{})
+	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:       ActionFolderCreate,
@@ -247,9 +245,8 @@ func TestExecutor_CreateRemoteFolder_Error(t *testing.T) {
 		},
 	}
 
-	e, _ := newTestExecutor(t, items, &executorMockTransferClient{})
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockTransferClient{})
+	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:       ActionFolderCreate,
@@ -269,9 +266,8 @@ func TestExecutor_CreateRemoteFolder_Error(t *testing.T) {
 func TestExecutor_LocalMove(t *testing.T) {
 	t.Parallel()
 
-	e, syncRoot := newTestExecutor(t, &executorMockItemClient{}, &executorMockTransferClient{})
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "old-name.txt", "content")
 
@@ -297,9 +293,8 @@ func TestExecutor_LocalMove(t *testing.T) {
 func TestExecutor_LocalMove_SourceMissing(t *testing.T) {
 	t.Parallel()
 
-	e, _ := newTestExecutor(t, &executorMockItemClient{}, &executorMockTransferClient{})
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionLocalMove,
@@ -325,9 +320,8 @@ func TestExecutor_RemoteMove(t *testing.T) {
 		},
 	}
 
-	e, _ := newTestExecutor(t, items, &executorMockTransferClient{})
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockTransferClient{})
+	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionRemoteMove,
@@ -366,9 +360,8 @@ func TestExecutor_Download_Success(t *testing.T) {
 		},
 	}
 
-	e, syncRoot := newTestExecutor(t, &executorMockItemClient{}, transfers)
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionDownload,
@@ -416,9 +409,8 @@ func TestExecutor_Download_APIError(t *testing.T) {
 		},
 	}
 
-	e, _ := newTestExecutor(t, &executorMockItemClient{}, transfers)
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionDownload,
@@ -442,9 +434,8 @@ func TestExecutor_Download_ParentDirCreated(t *testing.T) {
 		},
 	}
 
-	e, syncRoot := newTestExecutor(t, &executorMockItemClient{}, transfers)
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionDownload,
@@ -471,9 +462,8 @@ func TestExecutor_Download_ZeroByte(t *testing.T) {
 		},
 	}
 
-	e, syncRoot := newTestExecutor(t, &executorMockItemClient{}, transfers)
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionDownload,
@@ -513,9 +503,8 @@ func TestExecutor_Upload_SimpleSuccess(t *testing.T) {
 		},
 	}
 
-	e, syncRoot := newTestExecutor(t, &executorMockItemClient{}, transfers)
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-small.txt", "hello")
 
@@ -550,9 +539,9 @@ func TestExecutor_Upload_ParentFromCreatedFolders(t *testing.T) {
 		},
 	}
 
-	e, syncRoot := newTestExecutor(t, &executorMockItemClient{}, transfers)
-	e.baseline = emptyBaseline()
-	e.createdFolders = map[string]string{"newdir": "created-folder-id"}
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	e := NewExecution(cfg, emptyBaseline())
+	e.createdFolders["newdir"] = "created-folder-id"
 
 	writeExecTestFile(t, syncRoot, "newdir/exec-readme.txt", "hi")
 
@@ -582,14 +571,13 @@ func TestExecutor_Upload_ParentFromBaseline(t *testing.T) {
 		},
 	}
 
-	e, syncRoot := newTestExecutor(t, &executorMockItemClient{}, transfers)
-	e.baseline = baselineWith(&BaselineEntry{
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	e := NewExecution(cfg, baselineWith(&BaselineEntry{
 		Path:     "exec-existing-dir",
 		ItemID:   "baseline-folder-id",
 		DriveID:  driveid.New(testDriveID),
 		ItemType: ItemTypeFolder,
-	})
-	e.createdFolders = make(map[string]string)
+	}))
 
 	writeExecTestFile(t, syncRoot, "exec-existing-dir/exec-doc.txt", "content")
 
@@ -619,9 +607,8 @@ func TestExecutor_Upload_B068_ZeroDriveIDFilled(t *testing.T) {
 		},
 	}
 
-	e, syncRoot := newTestExecutor(t, &executorMockItemClient{}, transfers)
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-new-file.txt", "data")
 
@@ -661,9 +648,8 @@ func TestExecutor_Upload_ChunkedSuccess(t *testing.T) {
 		},
 	}
 
-	e, syncRoot := newTestExecutor(t, &executorMockItemClient{}, transfers)
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	e := NewExecution(cfg, emptyBaseline())
 
 	// Create a file > 4 MiB to trigger chunked upload.
 	bigContent := strings.Repeat("x", 5*1024*1024) // 5 MiB
@@ -690,9 +676,8 @@ func TestExecutor_Upload_ChunkedSuccess(t *testing.T) {
 func TestExecutor_LocalDelete_HashMatch(t *testing.T) {
 	t.Parallel()
 
-	e, syncRoot := newTestExecutor(t, &executorMockItemClient{}, &executorMockTransferClient{})
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	e := NewExecution(cfg, emptyBaseline())
 
 	absPath := writeExecTestFile(t, syncRoot, "exec-delete-me.txt", "content")
 
@@ -721,9 +706,8 @@ func TestExecutor_LocalDelete_HashMatch(t *testing.T) {
 func TestExecutor_LocalDelete_HashMismatch_ConflictCopy(t *testing.T) {
 	t.Parallel()
 
-	e, syncRoot := newTestExecutor(t, &executorMockItemClient{}, &executorMockTransferClient{})
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-modified.txt", "new content")
 
@@ -762,9 +746,8 @@ func TestExecutor_LocalDelete_HashMismatch_ConflictCopy(t *testing.T) {
 func TestExecutor_LocalDelete_AlreadyGone(t *testing.T) {
 	t.Parallel()
 
-	e, _ := newTestExecutor(t, &executorMockItemClient{}, &executorMockTransferClient{})
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:   ActionLocalDelete,
@@ -780,9 +763,8 @@ func TestExecutor_LocalDelete_AlreadyGone(t *testing.T) {
 func TestExecutor_LocalDelete_FolderEmpty(t *testing.T) {
 	t.Parallel()
 
-	e, syncRoot := newTestExecutor(t, &executorMockItemClient{}, &executorMockTransferClient{})
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	e := NewExecution(cfg, emptyBaseline())
 
 	if err := os.MkdirAll(filepath.Join(syncRoot, "exec-empty-dir"), 0o755); err != nil {
 		t.Fatal(err)
@@ -806,9 +788,8 @@ func TestExecutor_LocalDelete_FolderEmpty(t *testing.T) {
 func TestExecutor_LocalDelete_FolderNotEmpty(t *testing.T) {
 	t.Parallel()
 
-	e, syncRoot := newTestExecutor(t, &executorMockItemClient{}, &executorMockTransferClient{})
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-non-empty-dir/child.txt", "data")
 
@@ -840,9 +821,8 @@ func TestExecutor_RemoteDelete_Success(t *testing.T) {
 		},
 	}
 
-	e, _ := newTestExecutor(t, items, &executorMockTransferClient{})
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockTransferClient{})
+	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionRemoteDelete,
@@ -865,9 +845,8 @@ func TestExecutor_RemoteDelete_404IsSuccess(t *testing.T) {
 		},
 	}
 
-	e, _ := newTestExecutor(t, items, &executorMockTransferClient{})
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockTransferClient{})
+	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionRemoteDelete,
@@ -890,9 +869,8 @@ func TestExecutor_RemoteDelete_403Skip(t *testing.T) {
 		},
 	}
 
-	e, _ := newTestExecutor(t, items, &executorMockTransferClient{})
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockTransferClient{})
+	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionRemoteDelete,
@@ -920,9 +898,8 @@ func TestExecutor_Conflict_EditEdit_KeepBoth(t *testing.T) {
 		},
 	}
 
-	e, syncRoot := newTestExecutor(t, &executorMockItemClient{}, transfers)
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-conflict.txt", "local version")
 
@@ -986,9 +963,8 @@ func TestExecutor_Conflict_EditDelete(t *testing.T) {
 		},
 	}
 
-	e, syncRoot := newTestExecutor(t, &executorMockItemClient{}, transfers)
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	e := NewExecution(cfg, emptyBaseline())
 
 	// Local file doesn't exist (edit-delete conflict).
 	action := &Action{
@@ -1062,7 +1038,8 @@ func TestConflictCopyPath_MultiDot(t *testing.T) {
 func TestExecutor_SyncedUpdate(t *testing.T) {
 	t.Parallel()
 
-	e, _ := newTestExecutor(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionUpdateSynced,
@@ -1112,7 +1089,8 @@ func TestExecutor_SyncedUpdate(t *testing.T) {
 func TestExecutor_Cleanup(t *testing.T) {
 	t.Parallel()
 
-	e, _ := newTestExecutor(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionCleanup,
@@ -1187,14 +1165,14 @@ func TestClassifyError(t *testing.T) {
 func TestResolveParentID(t *testing.T) {
 	t.Parallel()
 
-	e, _ := newTestExecutor(t, &executorMockItemClient{}, &executorMockTransferClient{})
-	e.baseline = baselineWith(&BaselineEntry{
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	e := NewExecution(cfg, baselineWith(&BaselineEntry{
 		Path:     "exec-existing-folder",
 		ItemID:   "folder-id-from-baseline",
 		DriveID:  driveid.New(testDriveID),
 		ItemType: ItemTypeFolder,
-	})
-	e.createdFolders = map[string]string{"exec-new-folder": "folder-id-from-created"}
+	}))
+	e.createdFolders["exec-new-folder"] = "folder-id-from-created"
 
 	tests := []struct {
 		name       string
@@ -1246,9 +1224,8 @@ func TestExecutor_Parallel_Completion(t *testing.T) {
 		},
 	}
 
-	e, _ := newTestExecutor(t, &executorMockItemClient{}, transfers)
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	e := NewExecution(cfg, emptyBaseline())
 
 	actions := make([]Action, 16)
 	for i := range actions {
@@ -1286,9 +1263,8 @@ func TestExecutor_Parallel_FatalCancelsPool(t *testing.T) {
 		},
 	}
 
-	e, _ := newTestExecutor(t, &executorMockItemClient{}, transfers)
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	e := NewExecution(cfg, emptyBaseline())
 
 	actions := make([]Action, 4)
 	for i := range actions {
@@ -1336,7 +1312,8 @@ func TestExecute_MultiPhasePlan(t *testing.T) {
 		},
 	}
 
-	e, _ := newTestExecutor(t, items, transfers)
+	cfg, _ := newTestExecutorConfig(t, items, transfers)
+	e := NewExecution(cfg, emptyBaseline())
 
 	plan := &ActionPlan{
 		FolderCreates: []Action{
@@ -1359,7 +1336,7 @@ func TestExecute_MultiPhasePlan(t *testing.T) {
 		},
 	}
 
-	outcomes, err := e.Execute(context.Background(), plan, emptyBaseline())
+	outcomes, err := e.Execute(context.Background(), plan)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -1384,9 +1361,10 @@ func TestExecute_MultiPhasePlan(t *testing.T) {
 func TestExecute_EmptyPlan(t *testing.T) {
 	t.Parallel()
 
-	e, _ := newTestExecutor(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	e := NewExecution(cfg, emptyBaseline())
 
-	outcomes, err := e.Execute(context.Background(), &ActionPlan{}, emptyBaseline())
+	outcomes, err := e.Execute(context.Background(), &ActionPlan{})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -1399,7 +1377,8 @@ func TestExecute_EmptyPlan(t *testing.T) {
 func TestExecute_ContextCancellation(t *testing.T) {
 	t.Parallel()
 
-	e, _ := newTestExecutor(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	e := NewExecution(cfg, emptyBaseline())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -1410,7 +1389,7 @@ func TestExecute_ContextCancellation(t *testing.T) {
 		},
 	}
 
-	_, err := e.Execute(ctx, plan, emptyBaseline())
+	_, err := e.Execute(ctx, plan)
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("expected context.Canceled, got %v", err)
 	}
@@ -1455,7 +1434,8 @@ func TestConflictStemExt(t *testing.T) {
 func TestWithRetry_Succeeds(t *testing.T) {
 	t.Parallel()
 
-	e, _ := newTestExecutor(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	e := NewExecution(cfg, emptyBaseline())
 
 	calls := 0
 	err := e.withRetry(context.Background(), "test-op", func() error {
@@ -1474,7 +1454,8 @@ func TestWithRetry_Succeeds(t *testing.T) {
 func TestWithRetry_RetriesOnTransient(t *testing.T) {
 	t.Parallel()
 
-	e, _ := newTestExecutor(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	e := NewExecution(cfg, emptyBaseline())
 
 	calls := 0
 	err := e.withRetry(context.Background(), "test-retry", func() error {
@@ -1497,7 +1478,8 @@ func TestWithRetry_RetriesOnTransient(t *testing.T) {
 func TestWithRetry_NoRetryOnSkip(t *testing.T) {
 	t.Parallel()
 
-	e, _ := newTestExecutor(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	e := NewExecution(cfg, emptyBaseline())
 
 	calls := 0
 	err := e.withRetry(context.Background(), "test-skip", func() error {
@@ -1518,7 +1500,8 @@ func TestWithRetry_NoRetryOnSkip(t *testing.T) {
 func TestWithRetry_ExhaustsRetries(t *testing.T) {
 	t.Parallel()
 
-	e, _ := newTestExecutor(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	e := NewExecution(cfg, emptyBaseline())
 
 	calls := 0
 	err := e.withRetry(context.Background(), "exhaust", func() error {
@@ -1546,9 +1529,8 @@ func TestExecutor_Conflict_DownloadFails_RestoresLocal(t *testing.T) {
 		},
 	}
 
-	e, syncRoot := newTestExecutor(t, &executorMockItemClient{}, transfers)
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	e := NewExecution(cfg, emptyBaseline())
 
 	originalContent := "precious local data"
 	writeExecTestFile(t, syncRoot, "exec-restore.txt", originalContent)
@@ -1588,9 +1570,8 @@ func TestExecutor_RemoteMove_Error(t *testing.T) {
 		},
 	}
 
-	e, _ := newTestExecutor(t, items, &executorMockTransferClient{})
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockTransferClient{})
+	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionRemoteMove,
@@ -1613,9 +1594,8 @@ func TestExecutor_RemoteMove_Error(t *testing.T) {
 func TestExecutor_LocalMove_ViewFields(t *testing.T) {
 	t.Parallel()
 
-	e, syncRoot := newTestExecutor(t, &executorMockItemClient{}, &executorMockTransferClient{})
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-src.txt", "content")
 
@@ -1691,9 +1671,8 @@ func TestExecutor_Upload_MultiChunkLoop(t *testing.T) {
 		},
 	}
 
-	e, syncRoot := newTestExecutor(t, &executorMockItemClient{}, transfers)
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	e := NewExecution(cfg, emptyBaseline())
 
 	// 25 MiB file → 3 chunks at 10 MiB each (10, 10, 5).
 	bigContent := strings.Repeat("x", 25*1024*1024)
@@ -1750,11 +1729,10 @@ func TestTimeSleepExec_Completes(t *testing.T) {
 func TestExecutor_DeleteOutcome_FolderType(t *testing.T) {
 	t.Parallel()
 
-	e, _ := newTestExecutor(t, &executorMockItemClient{
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{
 		deleteItemFn: func(_ context.Context, _ driveid.ID, _ string) error { return nil },
 	}, &executorMockTransferClient{})
-	e.baseline = emptyBaseline()
-	e.createdFolders = make(map[string]string)
+	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionRemoteDelete,
@@ -1777,7 +1755,8 @@ func TestExecutor_DeleteOutcome_FolderType(t *testing.T) {
 func TestExecutor_Cleanup_FolderType(t *testing.T) {
 	t.Parallel()
 
-	e, _ := newTestExecutor(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionCleanup,
@@ -1800,7 +1779,8 @@ func TestExecutor_Cleanup_FolderType(t *testing.T) {
 func TestExecutor_SyncedUpdate_BaselineFallback(t *testing.T) {
 	t.Parallel()
 
-	e, _ := newTestExecutor(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	e := NewExecution(cfg, emptyBaseline())
 
 	// No Remote, only Baseline with folder type.
 	action := &Action{
@@ -1847,7 +1827,8 @@ func TestExecutor_Upload_Chunked_SessionCanceledOnOpenError(t *testing.T) {
 		},
 	}
 
-	e, _ := newTestExecutor(t, &executorMockItemClient{}, transfers)
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	e := NewExecution(cfg, emptyBaseline())
 	driveID := driveid.New(testDriveID)
 
 	// Call chunkedUpload directly with a non-existent path so os.Open fails
