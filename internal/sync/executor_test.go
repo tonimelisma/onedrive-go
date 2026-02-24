@@ -205,10 +205,6 @@ func TestExecutor_CreateRemoteFolder(t *testing.T) {
 	if o.ItemID != "new-folder-id" {
 		t.Errorf("expected item_id=new-folder-id, got %s", o.ItemID)
 	}
-
-	if e.createdFolders["photos"] != "new-folder-id" {
-		t.Error("createdFolders not updated")
-	}
 }
 
 func TestExecutor_CreateRemoteFolder_Error(t *testing.T) {
@@ -499,38 +495,6 @@ func TestExecutor_Upload_SimpleSuccess(t *testing.T) {
 
 	if o.ParentID != "root" {
 		t.Errorf("expected parent_id=root, got %s", o.ParentID)
-	}
-}
-
-func TestExecutor_Upload_ParentFromCreatedFolders(t *testing.T) {
-	t.Parallel()
-
-	var capturedParentID string
-
-	ul := &executorMockUploader{
-		uploadFn: func(_ context.Context, _ driveid.ID, parentID, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
-			capturedParentID = parentID
-			return &graph.Item{ID: "uploaded2", ETag: "e2"}, nil
-		},
-	}
-
-	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
-	e := NewExecution(cfg, emptyBaseline())
-	e.createdFolders["newdir"] = "created-folder-id"
-
-	writeExecTestFile(t, syncRoot, "newdir/exec-readme.txt", "hi")
-
-	action := &Action{
-		Type: ActionUpload,
-		Path: "newdir/exec-readme.txt",
-		View: &PathView{Path: "newdir/exec-readme.txt"},
-	}
-
-	o := e.executeUpload(context.Background(), action)
-	requireOutcomeSuccess(t, o)
-
-	if capturedParentID != "created-folder-id" {
-		t.Errorf("expected parent from createdFolders, got %s", capturedParentID)
 	}
 }
 
@@ -1157,7 +1121,7 @@ func TestClassifyError(t *testing.T) {
 // Parent ID resolution tests
 // ---------------------------------------------------------------------------
 
-func TestResolveParentID(t *testing.T) {
+func TestExecutor_ResolveParentID_Baseline(t *testing.T) {
 	t.Parallel()
 
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
@@ -1167,7 +1131,6 @@ func TestResolveParentID(t *testing.T) {
 		DriveID:  driveid.New(testDriveID),
 		ItemType: ItemTypeFolder,
 	}))
-	e.createdFolders["exec-new-folder"] = "folder-id-from-created"
 
 	tests := []struct {
 		name       string
@@ -1176,7 +1139,6 @@ func TestResolveParentID(t *testing.T) {
 		expectErr  bool
 	}{
 		{"root level", "exec-file.txt", "root", false},
-		{"from createdFolders", "exec-new-folder/child.txt", "folder-id-from-created", false},
 		{"from baseline", "exec-existing-folder/child.txt", "folder-id-from-baseline", false},
 		{"unknown parent", "exec-unknown/child.txt", "", true},
 	}
@@ -1202,191 +1164,6 @@ func TestResolveParentID(t *testing.T) {
 				t.Errorf("expected %s, got %s", tt.expectedID, id)
 			}
 		})
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Worker pool tests
-// ---------------------------------------------------------------------------
-
-func TestExecutor_Parallel_Completion(t *testing.T) {
-	t.Parallel()
-
-	dl := &executorMockDownloader{
-		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
-			n, err := w.Write([]byte("data"))
-			return int64(n), err
-		},
-	}
-
-	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
-
-	actions := make([]Action, 16)
-	for i := range actions {
-		actions[i] = Action{
-			Type:    ActionDownload,
-			Path:    fmt.Sprintf("exec-pool-%d.txt", i),
-			ItemID:  fmt.Sprintf("item%d", i),
-			DriveID: driveid.New(testDriveID),
-			View:    &PathView{Remote: &RemoteState{}},
-		}
-	}
-
-	var outcomes []Outcome
-
-	err := e.executeParallel(context.Background(), actions, e.executeDownload, &outcomes)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(outcomes) != 16 {
-		t.Errorf("expected 16 outcomes, got %d", len(outcomes))
-	}
-}
-
-func TestExecutor_Parallel_FatalCancelsPool(t *testing.T) {
-	t.Parallel()
-
-	dl := &executorMockDownloader{
-		downloadFn: func(_ context.Context, _ driveid.ID, itemID string, _ io.Writer) (int64, error) {
-			if itemID == "item0" {
-				return 0, graph.ErrUnauthorized
-			}
-
-			return 0, nil
-		},
-	}
-
-	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
-
-	actions := make([]Action, 4)
-	for i := range actions {
-		actions[i] = Action{
-			Type:    ActionDownload,
-			Path:    fmt.Sprintf("exec-fatal-%d.txt", i),
-			ItemID:  fmt.Sprintf("item%d", i),
-			DriveID: driveid.New(testDriveID),
-			View:    &PathView{Remote: &RemoteState{}},
-		}
-	}
-
-	var outcomes []Outcome
-
-	err := e.executeParallel(context.Background(), actions, e.executeDownload, &outcomes)
-	if err == nil {
-		t.Fatal("expected fatal error to propagate")
-	}
-
-	if !errors.Is(err, graph.ErrUnauthorized) {
-		t.Errorf("expected ErrUnauthorized, got %v", err)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Execute() integration tests
-// ---------------------------------------------------------------------------
-
-func TestExecute_MultiPhasePlan(t *testing.T) {
-	t.Parallel()
-
-	items := &executorMockItemClient{
-		createFolderFn: func(_ context.Context, _ driveid.ID, _, _ string) (*graph.Item, error) {
-			return &graph.Item{ID: "folder1", ETag: "fe1"}, nil
-		},
-		deleteItemFn: func(_ context.Context, _ driveid.ID, _ string) error {
-			return nil
-		},
-	}
-
-	dl := &executorMockDownloader{
-		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
-			n, err := w.Write([]byte("content"))
-			return int64(n), err
-		},
-	}
-
-	cfg, _ := newTestExecutorConfig(t, items, dl, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
-
-	plan := &ActionPlan{
-		FolderCreates: []Action{
-			{Type: ActionFolderCreate, Path: "exec-newdir", CreateSide: CreateRemote, View: &PathView{Path: "exec-newdir"}},
-		},
-		Downloads: []Action{
-			{Type: ActionDownload, Path: "exec-dl.txt", ItemID: "i1", DriveID: driveid.New(testDriveID), View: &PathView{Remote: &RemoteState{}}},
-		},
-		RemoteDeletes: []Action{
-			{Type: ActionRemoteDelete, Path: "exec-del.txt", ItemID: "i2", DriveID: driveid.New(testDriveID), View: &PathView{}},
-		},
-		SyncedUpdates: []Action{
-			{Type: ActionUpdateSynced, Path: "exec-synced.txt", ItemID: "i3", DriveID: driveid.New(testDriveID), View: &PathView{
-				Remote: &RemoteState{Hash: "h1", ItemType: ItemTypeFile},
-				Local:  &LocalState{Hash: "h1"},
-			}},
-		},
-		Cleanups: []Action{
-			{Type: ActionCleanup, Path: "exec-cleaned.txt", ItemID: "i4", DriveID: driveid.New(testDriveID)},
-		},
-	}
-
-	outcomes, err := e.Execute(context.Background(), plan)
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-
-	// 1 folder create + 1 download + 1 remote delete + 1 synced update + 1 cleanup = 5
-	if len(outcomes) != 5 {
-		t.Errorf("expected 5 outcomes, got %d", len(outcomes))
-	}
-
-	successCount := 0
-	for _, o := range outcomes {
-		if o.Success {
-			successCount++
-		}
-	}
-
-	if successCount != 5 {
-		t.Errorf("expected 5 successes, got %d", successCount)
-	}
-}
-
-func TestExecute_EmptyPlan(t *testing.T) {
-	t.Parallel()
-
-	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
-
-	outcomes, err := e.Execute(context.Background(), &ActionPlan{})
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-
-	if len(outcomes) != 0 {
-		t.Errorf("expected 0 outcomes, got %d", len(outcomes))
-	}
-}
-
-func TestExecute_ContextCancellation(t *testing.T) {
-	t.Parallel()
-
-	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	plan := &ActionPlan{
-		Downloads: []Action{
-			{Type: ActionDownload, Path: "exec-wont-run.txt", ItemID: "i1", DriveID: driveid.New(testDriveID), View: &PathView{Remote: &RemoteState{}}},
-		},
-	}
-
-	_, err := e.Execute(ctx, plan)
-	if !errors.Is(err, context.Canceled) {
-		t.Errorf("expected context.Canceled, got %v", err)
 	}
 }
 

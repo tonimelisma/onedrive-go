@@ -190,6 +190,24 @@ func writeLocalFile(t *testing.T, syncRoot, relPath, content string) {
 	}
 }
 
+// seedBaseline commits outcomes and an optional delta token to the baseline,
+// using the per-outcome CommitOutcome API (the old batch Commit was removed).
+func seedBaseline(t *testing.T, mgr *BaselineManager, ctx context.Context, outcomes []Outcome, deltaToken string) {
+	t.Helper()
+
+	for i := range outcomes {
+		if err := mgr.CommitOutcome(ctx, &outcomes[i], 0); err != nil {
+			t.Fatalf("seed CommitOutcome[%d]: %v", i, err)
+		}
+	}
+
+	if deltaToken != "" {
+		if err := mgr.CommitDeltaToken(ctx, deltaToken, engineTestDriveID); err != nil {
+			t.Fatalf("seed CommitDeltaToken: %v", err)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -432,9 +450,7 @@ func TestRunOnce_BigDelete_WithoutForce(t *testing.T) {
 		}
 	}
 
-	if err := eng.baseline.Commit(ctx, seedOutcomes, "old-token", engineTestDriveID); err != nil {
-		t.Fatalf("seeding baseline: %v", err)
-	}
+	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "old-token")
 
 	_, err := eng.RunOnce(ctx, SyncUploadOnly, RunOpts{})
 	if !errors.Is(err, ErrBigDeleteTriggered) {
@@ -468,9 +484,7 @@ func TestRunOnce_BigDelete_WithForce(t *testing.T) {
 		}
 	}
 
-	if err := eng.baseline.Commit(ctx, seedOutcomes, "old-token", engineTestDriveID); err != nil {
-		t.Fatalf("seeding baseline: %v", err)
-	}
+	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "old-token")
 
 	report, err := eng.RunOnce(ctx, SyncUploadOnly, RunOpts{Force: true})
 	if err != nil {
@@ -515,21 +529,25 @@ func TestRunOnce_ExecutorPartialFailure(t *testing.T) {
 	ctx := context.Background()
 
 	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOpts{})
-
-	// Should return an error due to context cancellation in executor.
-	if err == nil {
-		t.Fatal("expected error from partial failure, got nil")
+	// DAG executor handles individual failures gracefully — RunOnce succeeds
+	// but reports the failure in Stats.
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
 	}
 
-	// But partial outcomes should be committed — at least 1 succeeded.
+	// At least 1 succeeded and at least 1 failed.
 	if report.Succeeded < 1 {
-		t.Errorf("succeeded = %d, want >= 1 (partial outcomes should be committed)", report.Succeeded)
+		t.Errorf("succeeded = %d, want >= 1", report.Succeeded)
+	}
+
+	if report.Failed < 1 {
+		t.Errorf("failed = %d, want >= 1", report.Failed)
 	}
 
 	// Verify the successful file is in baseline.
-	bl, err := eng.baseline.Load(ctx)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
+	bl, loadErr := eng.baseline.Load(ctx)
+	if loadErr != nil {
+		t.Fatalf("Load: %v", loadErr)
 	}
 
 	if _, ok := bl.ByPath["good.txt"]; !ok {
@@ -698,9 +716,7 @@ func TestRunOnce_DeltaExpired_AutoRetry(t *testing.T) {
 		DriveID: driveID,
 		ItemID:  "seed-1",
 	}}
-	if err := eng.baseline.Commit(ctx, seedOutcomes, "stale-token", engineTestDriveID); err != nil {
-		t.Fatalf("seeding: %v", err)
-	}
+	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "stale-token")
 
 	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOpts{})
 	if err != nil {
@@ -716,31 +732,6 @@ func TestRunOnce_DeltaExpired_AutoRetry(t *testing.T) {
 	total := report.Downloads + report.Uploads
 	if total != 0 {
 		t.Errorf("downloads+uploads = %d, want 0", total)
-	}
-}
-
-func TestClassifyOutcomes(t *testing.T) {
-	t.Parallel()
-
-	outcomes := []Outcome{
-		{Success: true, Path: "a.txt"},
-		{Success: false, Path: "b.txt", Error: fmt.Errorf("download failed")},
-		{Success: true, Path: "c.txt"},
-		{Success: false, Path: "d.txt", Error: nil}, // failed without error
-	}
-
-	succeeded, failed, errs := classifyOutcomes(outcomes)
-
-	if succeeded != 2 {
-		t.Errorf("succeeded = %d, want 2", succeeded)
-	}
-
-	if failed != 2 {
-		t.Errorf("failed = %d, want 2", failed)
-	}
-
-	if len(errs) != 1 {
-		t.Errorf("len(errs) = %d, want 1 (only non-nil errors)", len(errs))
 	}
 }
 
@@ -802,9 +793,7 @@ func TestResolveConflict_KeepBoth(t *testing.T) {
 		ConflictType: "edit_edit",
 	}}
 
-	if err := eng.baseline.Commit(ctx, outcomes, "", engineTestDriveID); err != nil {
-		t.Fatalf("seeding conflict: %v", err)
-	}
+	seedBaseline(t, eng.baseline, ctx, outcomes, "")
 
 	// Get conflict ID.
 	conflicts, err := eng.ListConflicts(ctx)
@@ -875,9 +864,7 @@ func TestResolveConflict_UnknownStrategy(t *testing.T) {
 		ConflictType: "edit_edit",
 	}}
 
-	if err := eng.baseline.Commit(ctx, outcomes, "", engineTestDriveID); err != nil {
-		t.Fatalf("seeding conflict: %v", err)
-	}
+	seedBaseline(t, eng.baseline, ctx, outcomes, "")
 
 	conflicts, err := eng.ListConflicts(ctx)
 	if err != nil {
@@ -949,9 +936,7 @@ func TestResolveConflict_KeepLocal(t *testing.T) {
 		ConflictType: "edit_edit",
 	}}
 
-	if err := eng.baseline.Commit(ctx, outcomes, "", engineTestDriveID); err != nil {
-		t.Fatalf("seeding conflict: %v", err)
-	}
+	seedBaseline(t, eng.baseline, ctx, outcomes, "")
 
 	// Write the local file that will be uploaded.
 	writeLocalFile(t, syncRoot, "keep-local.txt", "local")
@@ -1013,9 +998,7 @@ func TestResolveConflict_KeepRemote(t *testing.T) {
 		ConflictType: "edit_edit",
 	}}
 
-	if err := eng.baseline.Commit(ctx, outcomes, "", engineTestDriveID); err != nil {
-		t.Fatalf("seeding conflict: %v", err)
-	}
+	seedBaseline(t, eng.baseline, ctx, outcomes, "")
 
 	conflicts, err := eng.ListConflicts(ctx)
 	if err != nil {
@@ -1076,9 +1059,7 @@ func TestResolveConflict_KeepLocal_TransferFails(t *testing.T) {
 		ConflictType: "edit_edit",
 	}}
 
-	if err := eng.baseline.Commit(ctx, outcomes, "", engineTestDriveID); err != nil {
-		t.Fatalf("seeding conflict: %v", err)
-	}
+	seedBaseline(t, eng.baseline, ctx, outcomes, "")
 
 	// Write the local file that would be uploaded.
 	writeLocalFile(t, syncRoot, "fail-upload.txt", "local-data")

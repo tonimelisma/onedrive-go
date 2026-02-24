@@ -227,47 +227,6 @@ func (m *BaselineManager) GetDeltaToken(ctx context.Context, driveID string) (st
 	return token, nil
 }
 
-// Commit atomically applies all successful outcomes and saves the delta
-// token in a single transaction. After commit, the in-memory baseline
-// cache is refreshed.
-func (m *BaselineManager) Commit(ctx context.Context, outcomes []Outcome, deltaToken, driveID string) error {
-	tx, err := m.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("sync: beginning commit transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	syncedAt := m.nowFunc().UnixNano()
-
-	if err := m.applyOutcomes(ctx, tx, outcomes, syncedAt); err != nil {
-		return err
-	}
-
-	if deltaToken != "" {
-		if err := m.saveDeltaToken(ctx, tx, driveID, deltaToken, syncedAt); err != nil {
-			return err
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing transaction: %w", err)
-	}
-
-	m.logger.Info("baseline committed",
-		slog.Int("outcomes", len(outcomes)),
-		slog.String("drive_id", driveID),
-	)
-
-	// Invalidate cache and refresh from DB after commit.
-	m.baseline = nil
-
-	if _, err := m.Load(ctx); err != nil {
-		return fmt.Errorf("sync: refreshing baseline after commit: %w", err)
-	}
-
-	return nil
-}
-
 // CommitOutcome atomically applies a single outcome to the baseline and
 // marks the corresponding ledger action as done — all in one SQLite
 // transaction. After the DB write, the in-memory baseline cache is updated
@@ -410,38 +369,6 @@ func (m *BaselineManager) CommitDeltaToken(ctx context.Context, token, driveID s
 	m.logger.Debug("delta token committed",
 		slog.String("drive_id", driveID),
 	)
-
-	return nil
-}
-
-// applyOutcomes iterates through outcomes and dispatches each to the
-// appropriate commit helper based on action type.
-func (m *BaselineManager) applyOutcomes(
-	ctx context.Context, tx *sql.Tx, outcomes []Outcome, syncedAt int64,
-) error {
-	for i := range outcomes {
-		o := &outcomes[i]
-		if !o.Success {
-			continue
-		}
-
-		var err error
-
-		switch o.Action {
-		case ActionDownload, ActionUpload, ActionFolderCreate, ActionUpdateSynced:
-			err = commitUpsert(ctx, tx, o, syncedAt)
-		case ActionLocalDelete, ActionRemoteDelete, ActionCleanup:
-			err = commitDelete(ctx, tx, o.Path)
-		case ActionLocalMove, ActionRemoteMove:
-			err = commitMove(ctx, tx, o, syncedAt)
-		case ActionConflict:
-			err = commitConflict(ctx, tx, o, syncedAt)
-		}
-
-		if err != nil {
-			return err
-		}
-	}
 
 	return nil
 }

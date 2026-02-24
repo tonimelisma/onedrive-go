@@ -443,19 +443,13 @@ type Action struct {
 	ConflictInfo *ConflictRecord
 }
 
-// ActionPlan contains 9 ordered slices of actions, executed in sequence
-// by the executor. The ordering ensures correctness (e.g., folder creates
-// before file downloads, depth-first for deletes).
+// ActionPlan contains a flat list of actions with explicit dependency edges.
+// The Deps adjacency list encodes ordering constraints (parent-before-child,
+// children-before-parent-delete, move-target-parent).
 type ActionPlan struct {
-	FolderCreates []Action
-	Moves         []Action
-	Downloads     []Action
-	Uploads       []Action
-	LocalDeletes  []Action
-	RemoteDeletes []Action
-	Conflicts     []Action
-	SyncedUpdates []Action
-	Cleanups      []Action
+	Actions []Action // flat list of all actions
+	Deps    [][]int  // Deps[i] = indices that action i depends on
+	CycleID string   // UUID grouping actions from one planning pass
 }
 
 // Outcome is the result of executing a single action. Self-contained —

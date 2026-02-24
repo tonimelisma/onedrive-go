@@ -37,6 +37,16 @@ func (w *testLogWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// commitAll is a test helper that commits outcomes one by one via CommitOutcome.
+func commitAll(t *testing.T, mgr *BaselineManager, ctx context.Context, outcomes []Outcome) {
+	t.Helper()
+	for i := range outcomes {
+		if err := mgr.CommitOutcome(ctx, &outcomes[i], 0); err != nil {
+			t.Fatalf("CommitOutcome[%d]: %v", i, err)
+		}
+	}
+}
+
 // newTestManager creates a BaselineManager backed by a temp directory,
 // registering cleanup with t.Cleanup.
 func newTestManager(t *testing.T) *BaselineManager {
@@ -167,10 +177,7 @@ func TestCommit_Download(t *testing.T) {
 		ETag:       "etag1",
 	}}
 
-	err := mgr.Commit(ctx, outcomes, "", "drive1")
-	if err != nil {
-		t.Fatalf("Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, outcomes)
 
 	entry := mgr.baseline.ByPath["docs/readme.md"]
 	if entry == nil {
@@ -218,10 +225,7 @@ func TestCommit_Upload(t *testing.T) {
 		ETag:       "etag2",
 	}}
 
-	err := mgr.Commit(ctx, outcomes, "", "drive2")
-	if err != nil {
-		t.Fatalf("Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, outcomes)
 
 	entry := mgr.baseline.ByPath["photos/cat.jpg"]
 	if entry == nil {
@@ -257,10 +261,7 @@ func TestCommit_FolderCreate(t *testing.T) {
 		ItemType: ItemTypeFolder,
 	}}
 
-	err := mgr.Commit(ctx, outcomes, "", "drive1")
-	if err != nil {
-		t.Fatalf("Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, outcomes)
 
 	entry := mgr.baseline.ByPath["Documents/Reports"]
 	if entry == nil {
@@ -304,9 +305,7 @@ func TestCommit_UpdateSynced(t *testing.T) {
 		Mtime:      t1.UnixNano(),
 	}}
 
-	if err := mgr.Commit(ctx, outcomes, "", "d"); err != nil {
-		t.Fatalf("first Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, outcomes)
 
 	// Second commit: convergent edit updates synced_at.
 	t2 := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
@@ -316,9 +315,7 @@ func TestCommit_UpdateSynced(t *testing.T) {
 	outcomes[0].LocalHash = "h2"
 	outcomes[0].RemoteHash = "h2"
 
-	if err := mgr.Commit(ctx, outcomes, "", "d"); err != nil {
-		t.Fatalf("second Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, outcomes)
 
 	entry := mgr.baseline.ByPath["file.txt"]
 	if entry.SyncedAt != t2.UnixNano() {
@@ -348,17 +345,13 @@ func TestCommit_LocalDelete(t *testing.T) {
 		Size: 50, Mtime: 1,
 	}}
 
-	if err := mgr.Commit(ctx, create, "", "d"); err != nil {
-		t.Fatalf("create Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, create)
 
 	del := []Outcome{{
 		Action: ActionLocalDelete, Success: true, Path: "delete-me.txt",
 	}}
 
-	if err := mgr.Commit(ctx, del, "", "d"); err != nil {
-		t.Fatalf("delete Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, del)
 
 	if mgr.baseline.ByPath["delete-me.txt"] != nil {
 		t.Error("entry still exists after local delete")
@@ -382,17 +375,13 @@ func TestCommit_RemoteDelete(t *testing.T) {
 		Size: 50, Mtime: 1,
 	}}
 
-	if err := mgr.Commit(ctx, create, "", "d"); err != nil {
-		t.Fatalf("create Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, create)
 
 	del := []Outcome{{
 		Action: ActionRemoteDelete, Success: true, Path: "remote-del.txt",
 	}}
 
-	if err := mgr.Commit(ctx, del, "", "d"); err != nil {
-		t.Fatalf("delete Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, del)
 
 	if mgr.baseline.ByPath["remote-del.txt"] != nil {
 		t.Error("entry still exists after remote delete")
@@ -416,17 +405,13 @@ func TestCommit_Cleanup(t *testing.T) {
 		Size: 50, Mtime: 1,
 	}}
 
-	if err := mgr.Commit(ctx, create, "", "d"); err != nil {
-		t.Fatalf("create Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, create)
 
 	cleanup := []Outcome{{
 		Action: ActionCleanup, Success: true, Path: "cleanup.txt",
 	}}
 
-	if err := mgr.Commit(ctx, cleanup, "", "d"); err != nil {
-		t.Fatalf("cleanup Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, cleanup)
 
 	if mgr.baseline.ByPath["cleanup.txt"] != nil {
 		t.Error("entry still exists after cleanup")
@@ -450,9 +435,7 @@ func TestCommit_Move(t *testing.T) {
 		Size: 100, Mtime: 1,
 	}}
 
-	if err := mgr.Commit(ctx, create, "", "d"); err != nil {
-		t.Fatalf("create Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, create)
 
 	// Move to new path.
 	move := []Outcome{{
@@ -463,9 +446,7 @@ func TestCommit_Move(t *testing.T) {
 		Size: 100, Mtime: 1,
 	}}
 
-	if err := mgr.Commit(ctx, move, "", "d"); err != nil {
-		t.Fatalf("move Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, move)
 
 	if mgr.baseline.ByPath["old/path.txt"] != nil {
 		t.Error("old path still exists after move")
@@ -502,9 +483,7 @@ func TestCommit_Conflict(t *testing.T) {
 		ConflictType: "edit_edit",
 	}}
 
-	if err := mgr.Commit(ctx, outcomes, "", "d"); err != nil {
-		t.Fatalf("Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, outcomes)
 
 	// Verify conflict row was inserted with a valid UUID.
 	var id, conflictPath, conflictType, resolution string
@@ -551,9 +530,7 @@ func TestCommit_SkipsFailedOutcomes(t *testing.T) {
 		LocalHash: "h", RemoteHash: "h", Size: 100,
 	}}
 
-	if err := mgr.Commit(ctx, outcomes, "", "d"); err != nil {
-		t.Fatalf("Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, outcomes)
 
 	b, err := mgr.Load(ctx)
 	if err != nil {
@@ -582,8 +559,10 @@ func TestCommit_DeltaToken(t *testing.T) {
 		LocalHash: "h", RemoteHash: "h", Size: 10, Mtime: 1,
 	}}
 
-	if err := mgr.Commit(ctx, outcomes, "token-abc", "d"); err != nil {
-		t.Fatalf("Commit: %v", err)
+	commitAll(t, mgr, ctx, outcomes)
+
+	if err := mgr.CommitDeltaToken(ctx, "token-abc", "d"); err != nil {
+		t.Fatalf("CommitDeltaToken: %v", err)
 	}
 
 	token, err := mgr.GetDeltaToken(ctx, "d")
@@ -613,16 +592,20 @@ func TestCommit_DeltaTokenUpdate(t *testing.T) {
 	}}
 
 	// First commit with token.
-	if err := mgr.Commit(ctx, outcomes, "token-1", "d"); err != nil {
-		t.Fatalf("first Commit: %v", err)
+	commitAll(t, mgr, ctx, outcomes)
+
+	if err := mgr.CommitDeltaToken(ctx, "token-1", "d"); err != nil {
+		t.Fatalf("first CommitDeltaToken: %v", err)
 	}
 
 	// Second commit updates token.
 	outcomes[0].LocalHash = "h2"
 	outcomes[0].RemoteHash = "h2"
 
-	if err := mgr.Commit(ctx, outcomes, "token-2", "d"); err != nil {
-		t.Fatalf("second Commit: %v", err)
+	commitAll(t, mgr, ctx, outcomes)
+
+	if err := mgr.CommitDeltaToken(ctx, "token-2", "d"); err != nil {
+		t.Fatalf("second CommitDeltaToken: %v", err)
 	}
 
 	token, err := mgr.GetDeltaToken(ctx, "d")
@@ -651,9 +634,7 @@ func TestCommit_SyncedAtFromNowFunc(t *testing.T) {
 		LocalHash: "h", RemoteHash: "h", Size: 10, Mtime: 999,
 	}}
 
-	if err := mgr.Commit(ctx, outcomes, "", "d"); err != nil {
-		t.Fatalf("Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, outcomes)
 
 	entry := mgr.baseline.ByPath["f.txt"]
 	if entry.SyncedAt != fixedTime.UnixNano() {
@@ -682,9 +663,7 @@ func TestCommit_RefreshesCache(t *testing.T) {
 		LocalHash: "h", RemoteHash: "h", Size: 10, Mtime: 1,
 	}}
 
-	if err := mgr.Commit(ctx, outcomes, "", "d"); err != nil {
-		t.Fatalf("Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, outcomes)
 
 	if mgr.baseline == nil {
 		t.Fatal("baseline should be populated after Commit")
@@ -727,8 +706,10 @@ func TestGetDeltaToken_AfterCommit(t *testing.T) {
 		LocalHash: "h", RemoteHash: "h", Size: 10, Mtime: 1,
 	}}
 
-	if err := mgr.Commit(ctx, outcomes, "saved-token", "mydrv"); err != nil {
-		t.Fatalf("Commit: %v", err)
+	commitAll(t, mgr, ctx, outcomes)
+
+	if err := mgr.CommitDeltaToken(ctx, "saved-token", "mydrv"); err != nil {
+		t.Fatalf("CommitDeltaToken: %v", err)
 	}
 
 	token, err := mgr.GetDeltaToken(ctx, "mydrv")
@@ -797,7 +778,7 @@ func TestLoad_NullableFields(t *testing.T) {
 // Conflict query + resolve tests
 // ---------------------------------------------------------------------------
 
-// seedConflict inserts a conflict via Commit and returns its UUID.
+// seedConflict inserts a conflict via CommitOutcome and returns its UUID.
 func seedConflict(t *testing.T, mgr *BaselineManager, path, conflictType string) string {
 	t.Helper()
 
@@ -815,9 +796,7 @@ func seedConflict(t *testing.T, mgr *BaselineManager, path, conflictType string)
 		ConflictType: conflictType,
 	}}
 
-	if err := mgr.Commit(ctx, outcomes, "", "d"); err != nil {
-		t.Fatalf("seedConflict(%s): %v", path, err)
-	}
+	commitAll(t, mgr, ctx, outcomes)
 
 	// Retrieve the UUID.
 	var id string
@@ -1037,9 +1016,7 @@ func TestLoad_ReturnsCachedBaseline(t *testing.T) {
 		LocalHash: "h", RemoteHash: "h", Size: 10, Mtime: 1,
 	}}
 
-	if err := mgr.Commit(ctx, outcomes, "", "d"); err != nil {
-		t.Fatalf("Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, outcomes)
 
 	// First Load returns the cached baseline from Commit's refresh.
 	b1, err := mgr.Load(ctx)
@@ -1076,9 +1053,7 @@ func TestLoad_CacheInvalidatedByCommit(t *testing.T) {
 		LocalHash: "h1", RemoteHash: "h1", Size: 10, Mtime: 1,
 	}}
 
-	if err := mgr.Commit(ctx, outcomes, "", "d"); err != nil {
-		t.Fatalf("first Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, outcomes)
 
 	b1, err := mgr.Load(ctx)
 	if err != nil {
@@ -1096,9 +1071,7 @@ func TestLoad_CacheInvalidatedByCommit(t *testing.T) {
 		LocalHash: "h2", RemoteHash: "h2", Size: 20, Mtime: 2,
 	}}
 
-	if commitErr := mgr.Commit(ctx, outcomes2, "", "d"); commitErr != nil {
-		t.Fatalf("second Commit: %v", commitErr)
-	}
+	commitAll(t, mgr, ctx, outcomes2)
 
 	b2, loadErr := mgr.Load(ctx)
 	if loadErr != nil {
@@ -1168,9 +1141,7 @@ func TestCommitConflict_AutoResolved(t *testing.T) {
 		ResolvedBy:   "auto",
 	}}
 
-	if err := mgr.Commit(ctx, outcomes, "", "d"); err != nil {
-		t.Fatalf("Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, outcomes)
 
 	// Verify conflict row was inserted as already resolved.
 	var resolution, resolvedBy string

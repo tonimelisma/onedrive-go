@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"runtime"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -61,6 +62,7 @@ type SyncReport struct {
 // Single-drive only; multi-drive orchestration is deferred to Phase 5.
 type Engine struct {
 	baseline *BaselineManager
+	ledger   *Ledger
 	planner  *Planner
 	execCfg  *ExecutorConfig
 	fetcher  DeltaFetcher
@@ -78,9 +80,11 @@ func NewEngine(cfg *EngineConfig) (*Engine, error) {
 	}
 
 	execCfg := NewExecutorConfig(cfg.Items, cfg.Downloads, cfg.Uploads, cfg.SyncRoot, cfg.DriveID, cfg.Logger)
+	ledger := NewLedger(bm.DB(), cfg.Logger)
 
 	return &Engine{
 		baseline: bm,
+		ledger:   ledger,
 		planner:  NewPlanner(cfg.Logger),
 		execCfg:  execCfg,
 		fetcher:  cfg.Fetcher,
@@ -95,16 +99,16 @@ func (e *Engine) Close() error {
 	return e.baseline.Close()
 }
 
-// RunOnce executes a single sync cycle with 9 steps:
+// RunOnce executes a single sync cycle:
 //  1. Load baseline
 //  2. Observe remote (skip if upload-only)
 //  3. Observe local (skip if download-only)
 //  4. Buffer and flush changes
 //  5. Early return if no changes
-//  6. Plan actions
+//  6. Plan actions (flat list + dependency edges)
 //  7. Return early if dry-run
-//  8. Execute plan
-//  9. Commit outcomes and delta token
+//  8. Write actions to ledger, build tracker, start worker pool
+//  9. Wait for completion, commit delta token
 func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*SyncReport, error) {
 	start := time.Now()
 
@@ -170,7 +174,8 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 	}
 
 	// Step 7: Build report from plan counts.
-	report := buildReport(plan, mode, opts)
+	counts := countByType(plan.Actions)
+	report := buildReportFromCounts(counts, mode, opts)
 
 	if opts.DryRun {
 		report.Duration = time.Since(start)
@@ -182,10 +187,9 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 		return report, nil
 	}
 
-	// Steps 8-9: Execute and commit.
-	if err := e.executeAndCommit(ctx, plan, bl, deltaToken, report); err != nil {
-		report.Duration = time.Since(start)
-		return report, err
+	// Steps 8-9: Execute plan and commit delta token.
+	if execErr := e.executePlan(ctx, plan, deltaToken, report); execErr != nil {
+		return report, execErr
 	}
 
 	report.Duration = time.Since(start)
@@ -199,47 +203,56 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 	return report, nil
 }
 
-// buildReport populates a SyncReport with plan counts.
-func buildReport(plan *ActionPlan, mode SyncMode, opts RunOpts) *SyncReport {
+// executePlan writes actions to the ledger, populates the dependency tracker,
+// runs the worker pool, and commits the delta token after completion.
+func (e *Engine) executePlan(
+	ctx context.Context, plan *ActionPlan, deltaToken string, report *SyncReport,
+) error {
+	ids, writeErr := e.ledger.WriteActions(ctx, plan.Actions, plan.Deps, plan.CycleID)
+	if writeErr != nil {
+		return fmt.Errorf("sync: writing actions to ledger: %w", writeErr)
+	}
+
+	tracker := NewDepTracker(len(plan.Actions), len(plan.Actions))
+
+	for i := range plan.Actions {
+		var depIDs []int64
+		for _, depIdx := range plan.Deps[i] {
+			depIDs = append(depIDs, ids[depIdx])
+		}
+
+		tracker.Add(&plan.Actions[i], ids[i], depIDs)
+	}
+
+	pool := NewWorkerPool(e.execCfg, tracker, e.baseline, e.ledger, e.logger)
+	pool.Start(ctx, runtime.NumCPU())
+	pool.Wait()
+	pool.Stop()
+
+	if commitErr := e.baseline.CommitDeltaToken(ctx, deltaToken, e.driveID.String()); commitErr != nil {
+		e.logger.Error("failed to commit delta token", slog.String("error", commitErr.Error()))
+	}
+
+	report.Succeeded, report.Failed, report.Errors = pool.Stats()
+
+	return nil
+}
+
+// buildReportFromCounts populates a SyncReport with plan counts.
+func buildReportFromCounts(counts map[ActionType]int, mode SyncMode, opts RunOpts) *SyncReport {
 	return &SyncReport{
 		Mode:          mode,
 		DryRun:        opts.DryRun,
-		FolderCreates: len(plan.FolderCreates),
-		Moves:         len(plan.Moves),
-		Downloads:     len(plan.Downloads),
-		Uploads:       len(plan.Uploads),
-		LocalDeletes:  len(plan.LocalDeletes),
-		RemoteDeletes: len(plan.RemoteDeletes),
-		Conflicts:     len(plan.Conflicts),
-		SyncedUpdates: len(plan.SyncedUpdates),
-		Cleanups:      len(plan.Cleanups),
+		FolderCreates: counts[ActionFolderCreate],
+		Moves:         counts[ActionLocalMove] + counts[ActionRemoteMove],
+		Downloads:     counts[ActionDownload],
+		Uploads:       counts[ActionUpload],
+		LocalDeletes:  counts[ActionLocalDelete],
+		RemoteDeletes: counts[ActionRemoteDelete],
+		Conflicts:     counts[ActionConflict],
+		SyncedUpdates: counts[ActionUpdateSynced],
+		Cleanups:      counts[ActionCleanup],
 	}
-}
-
-// executeAndCommit runs the executor and commits outcomes atomically.
-// Partial outcomes are committed even on executor fatal error.
-func (e *Engine) executeAndCommit(
-	ctx context.Context, plan *ActionPlan, bl *Baseline, deltaToken string, report *SyncReport,
-) error {
-	exec := NewExecution(e.execCfg, bl)
-	outcomes, execErr := exec.Execute(ctx, plan)
-	report.Succeeded, report.Failed, report.Errors = classifyOutcomes(outcomes)
-
-	if len(outcomes) > 0 {
-		if commitErr := e.baseline.Commit(ctx, outcomes, deltaToken, e.driveID.String()); commitErr != nil {
-			if execErr != nil {
-				return fmt.Errorf("sync: commit failed after execution error: commit=%w, exec=%w", commitErr, execErr)
-			}
-
-			return fmt.Errorf("sync: committing outcomes: %w", commitErr)
-		}
-	}
-
-	if execErr != nil {
-		return fmt.Errorf("sync: execution error (partial outcomes committed): %w", execErr)
-	}
-
-	return nil
 }
 
 // observeRemote fetches delta changes from the Graph API. Automatically
@@ -352,8 +365,8 @@ func (e *Engine) resolveKeepRemote(ctx context.Context, c *ConflictRecord) error
 }
 
 // resolveTransfer executes a single transfer (upload or download) for conflict
-// resolution and commits the result to the baseline. Creates a fresh executor
-// per call — no lazy initialization needed.
+// resolution and commits the result to the baseline. Uses CommitOutcome with
+// ledgerID=0 (no ledger action for manual conflict resolution).
 func (e *Engine) resolveTransfer(ctx context.Context, c *ConflictRecord, actionType ActionType) error {
 	bl, err := e.baseline.Load(ctx)
 	if err != nil {
@@ -381,23 +394,5 @@ func (e *Engine) resolveTransfer(ctx context.Context, c *ConflictRecord, actionT
 		return fmt.Errorf("transfer failed: %w", outcome.Error)
 	}
 
-	return e.baseline.Commit(ctx, []Outcome{outcome}, "", e.driveID.String())
-}
-
-// classifyOutcomes counts successes and failures in an Outcome slice,
-// collecting non-nil errors from failed outcomes.
-func classifyOutcomes(outcomes []Outcome) (succeeded, failed int, errs []error) {
-	for i := range outcomes {
-		if outcomes[i].Success {
-			succeeded++
-		} else {
-			failed++
-
-			if outcomes[i].Error != nil {
-				errs = append(errs, outcomes[i].Error)
-			}
-		}
-	}
-
-	return succeeded, failed, errs
+	return e.baseline.CommitOutcome(ctx, &outcome, 0)
 }
