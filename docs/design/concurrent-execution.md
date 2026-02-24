@@ -98,7 +98,8 @@ These are existing architectural decisions that the execution layer respects:
 - **`io.ReaderAt` for retry-safe uploads.** `SectionReader`s from the same file
   handle make retries safe without re-opening the file.
 - **Cache-through baseline loading.** `BaselineManager.Load()` returns cached
-  baseline. `Commit()` invalidates and reloads.
+  baseline. `CommitOutcome()` incrementally patches the in-memory cache via
+  `updateBaselineCache()`.
 
 ### 1.5 PRD Requirements Traceability
 

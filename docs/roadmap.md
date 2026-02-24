@@ -258,6 +258,13 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 | 5.3 | Graceful shutdown + crash recovery from ledger | 2: Operational Polish |
 | 5.4 | Pause/resume + SIGHUP config reload + final cleanup | 2: Operational Polish |
 
+> **Ordering note (from architectural review, 2026-02-24):** Crash recovery
+> (5.3) should land before or alongside watch mode (5.1/5.2). A long-running
+> daemon writes pending actions to `action_queue`; without crash recovery,
+> a process death leaves orphaned ledger state. The increment numbering reflects
+> logical grouping, not strict execution order. When work begins, implement
+> resilience (5.3) first, then continuous observers (5.1) and pipeline (5.2).
+
 ### 5.0: DAG-based Concurrent Execution Engine — DONE
 
 **Replace 9-phase sequential executor with flat action list + dependency DAG + concurrent workers.**

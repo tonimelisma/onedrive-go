@@ -39,6 +39,11 @@ type DepTracker struct {
 }
 
 // NewDepTracker creates a tracker with the given channel buffer sizes.
+// Current callers pass len(plan.Actions) for both buffers, so dispatch()
+// never blocks. When bounded channels are introduced for watch mode
+// (concurrent-execution.md §10.2 refill loop), dispatch must be decoupled
+// from Complete() to prevent worker deadlock — a worker blocked on a full
+// channel inside Complete() cannot drain the channel it's blocking on.
 func NewDepTracker(interactiveBuf, bulkBuf int, logger *slog.Logger) *DepTracker {
 	return &DepTracker{
 		actions:     make(map[int64]*TrackedAction),
