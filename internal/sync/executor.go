@@ -46,7 +46,8 @@ const (
 // coupling and enable Phase 5 thread safety.
 type ExecutorConfig struct {
 	items     ItemClient
-	transfers TransferClient
+	downloads Downloader
+	uploads   Uploader
 	syncRoot  string     // absolute path to local sync directory
 	driveID   driveid.ID // per-drive context (B-068)
 	logger    *slog.Logger
@@ -72,11 +73,13 @@ type Executor struct {
 // NewExecutorConfig creates an immutable executor configuration bound to a
 // specific drive and sync root. Use NewExecution to create per-call executors.
 func NewExecutorConfig(
-	items ItemClient, transfers TransferClient, syncRoot string, driveID driveid.ID, logger *slog.Logger,
+	items ItemClient, downloads Downloader, uploads Uploader,
+	syncRoot string, driveID driveid.ID, logger *slog.Logger,
 ) *ExecutorConfig {
 	return &ExecutorConfig{
 		items:     items,
-		transfers: transfers,
+		downloads: downloads,
+		uploads:   uploads,
 		syncRoot:  syncRoot,
 		driveID:   driveID,
 		logger:    logger,

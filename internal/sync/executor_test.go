@@ -67,16 +67,11 @@ func (m *executorMockItemClient) DeleteItem(ctx context.Context, driveID driveid
 	return fmt.Errorf("DeleteItem not mocked")
 }
 
-type executorMockTransferClient struct {
-	// Reorder vs TransferClient to avoid dupl false positive.
-	simpleUploadFn        func(ctx context.Context, driveID driveid.ID, parentID, name string, r io.Reader, size int64) (*graph.Item, error)
-	downloadFn            func(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error)
-	createUploadSessionFn func(ctx context.Context, driveID driveid.ID, parentID, name string, size int64, mtime time.Time) (*graph.UploadSession, error)
-	uploadChunkFn         func(ctx context.Context, session *graph.UploadSession, chunk io.Reader, offset, length, total int64) (*graph.Item, error)
-	cancelUploadSessionFn func(ctx context.Context, session *graph.UploadSession) error
+type executorMockDownloader struct {
+	downloadFn func(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error)
 }
 
-func (m *executorMockTransferClient) Download(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error) {
+func (m *executorMockDownloader) Download(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error) {
 	if m.downloadFn != nil {
 		return m.downloadFn(ctx, driveID, itemID, w)
 	}
@@ -84,50 +79,30 @@ func (m *executorMockTransferClient) Download(ctx context.Context, driveID drive
 	return 0, fmt.Errorf("Download not mocked")
 }
 
-func (m *executorMockTransferClient) SimpleUpload(ctx context.Context, driveID driveid.ID, parentID, name string, r io.Reader, size int64) (*graph.Item, error) {
-	if m.simpleUploadFn != nil {
-		return m.simpleUploadFn(ctx, driveID, parentID, name, r, size)
-	}
-
-	return nil, fmt.Errorf("SimpleUpload not mocked")
+type executorMockUploader struct {
+	uploadFn func(ctx context.Context, driveID driveid.ID, parentID, name string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error)
 }
 
-func (m *executorMockTransferClient) CreateUploadSession(ctx context.Context, driveID driveid.ID, parentID, name string, size int64, mtime time.Time) (*graph.UploadSession, error) {
-	if m.createUploadSessionFn != nil {
-		return m.createUploadSessionFn(ctx, driveID, parentID, name, size, mtime)
+func (m *executorMockUploader) Upload(ctx context.Context, driveID driveid.ID, parentID, name string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error) {
+	if m.uploadFn != nil {
+		return m.uploadFn(ctx, driveID, parentID, name, content, size, mtime, progress)
 	}
 
-	return nil, fmt.Errorf("CreateUploadSession not mocked")
-}
-
-func (m *executorMockTransferClient) UploadChunk(ctx context.Context, session *graph.UploadSession, chunk io.Reader, offset, length, total int64) (*graph.Item, error) {
-	if m.uploadChunkFn != nil {
-		return m.uploadChunkFn(ctx, session, chunk, offset, length, total)
-	}
-
-	return nil, fmt.Errorf("UploadChunk not mocked")
-}
-
-func (m *executorMockTransferClient) CancelUploadSession(ctx context.Context, session *graph.UploadSession) error {
-	if m.cancelUploadSessionFn != nil {
-		return m.cancelUploadSessionFn(ctx, session)
-	}
-
-	return nil
+	return nil, fmt.Errorf("Upload not mocked")
 }
 
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
 
-func newTestExecutorConfig(t *testing.T, items *executorMockItemClient, transfers *executorMockTransferClient) (*ExecutorConfig, string) {
+func newTestExecutorConfig(t *testing.T, items *executorMockItemClient, dl *executorMockDownloader, ul *executorMockUploader) (*ExecutorConfig, string) {
 	t.Helper()
 
 	syncRoot := t.TempDir()
 	driveID := driveid.New(testDriveID)
 	logger := testLogger(t)
 
-	cfg := NewExecutorConfig(items, transfers, syncRoot, driveID, logger)
+	cfg := NewExecutorConfig(items, dl, ul, syncRoot, driveID, logger)
 	cfg.nowFunc = func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) }
 	cfg.sleepFunc = func(_ context.Context, _ time.Duration) error { return nil }
 
@@ -172,7 +147,7 @@ func requireOutcomeFailure(t *testing.T, o Outcome) {
 func TestExecutor_CreateLocalFolder(t *testing.T) {
 	t.Parallel()
 
-	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
@@ -214,7 +189,7 @@ func TestExecutor_CreateRemoteFolder(t *testing.T) {
 		},
 	}
 
-	cfg, _ := newTestExecutorConfig(t, items, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
@@ -245,7 +220,7 @@ func TestExecutor_CreateRemoteFolder_Error(t *testing.T) {
 		},
 	}
 
-	cfg, _ := newTestExecutorConfig(t, items, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
@@ -266,7 +241,7 @@ func TestExecutor_CreateRemoteFolder_Error(t *testing.T) {
 func TestExecutor_LocalMove(t *testing.T) {
 	t.Parallel()
 
-	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "old-name.txt", "content")
@@ -293,7 +268,7 @@ func TestExecutor_LocalMove(t *testing.T) {
 func TestExecutor_LocalMove_SourceMissing(t *testing.T) {
 	t.Parallel()
 
-	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
@@ -320,7 +295,7 @@ func TestExecutor_RemoteMove(t *testing.T) {
 		},
 	}
 
-	cfg, _ := newTestExecutorConfig(t, items, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
@@ -353,14 +328,14 @@ func TestExecutor_Download_Success(t *testing.T) {
 
 	execFileContent := "hello world"
 
-	transfers := &executorMockTransferClient{
+	dl := &executorMockDownloader{
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
 			n, err := w.Write([]byte(execFileContent))
 			return int64(n), err
 		},
 	}
 
-	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
@@ -403,13 +378,13 @@ func TestExecutor_Download_Success(t *testing.T) {
 func TestExecutor_Download_APIError(t *testing.T) {
 	t.Parallel()
 
-	transfers := &executorMockTransferClient{
+	dl := &executorMockDownloader{
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
 			return 0, graph.ErrForbidden
 		},
 	}
 
-	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
@@ -427,14 +402,14 @@ func TestExecutor_Download_APIError(t *testing.T) {
 func TestExecutor_Download_ParentDirCreated(t *testing.T) {
 	t.Parallel()
 
-	transfers := &executorMockTransferClient{
+	dl := &executorMockDownloader{
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
 			n, err := w.Write([]byte("data"))
 			return int64(n), err
 		},
 	}
 
-	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
@@ -456,13 +431,13 @@ func TestExecutor_Download_ParentDirCreated(t *testing.T) {
 func TestExecutor_Download_ZeroByte(t *testing.T) {
 	t.Parallel()
 
-	transfers := &executorMockTransferClient{
+	dl := &executorMockDownloader{
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
 			return 0, nil
 		},
 	}
 
-	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
@@ -493,8 +468,8 @@ func TestExecutor_Download_ZeroByte(t *testing.T) {
 func TestExecutor_Upload_SimpleSuccess(t *testing.T) {
 	t.Parallel()
 
-	transfers := &executorMockTransferClient{
-		simpleUploadFn: func(_ context.Context, _ driveid.ID, parentID, name string, _ io.Reader, _ int64) (*graph.Item, error) {
+	ul := &executorMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, parentID, name string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 			if parentID != "root" || name != "exec-small.txt" {
 				t.Errorf("unexpected args: parentID=%s name=%s", parentID, name)
 			}
@@ -503,7 +478,7 @@ func TestExecutor_Upload_SimpleSuccess(t *testing.T) {
 		},
 	}
 
-	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
 	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-small.txt", "hello")
@@ -532,14 +507,14 @@ func TestExecutor_Upload_ParentFromCreatedFolders(t *testing.T) {
 
 	var capturedParentID string
 
-	transfers := &executorMockTransferClient{
-		simpleUploadFn: func(_ context.Context, _ driveid.ID, parentID, _ string, _ io.Reader, _ int64) (*graph.Item, error) {
+	ul := &executorMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, parentID, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 			capturedParentID = parentID
 			return &graph.Item{ID: "uploaded2", ETag: "e2"}, nil
 		},
 	}
 
-	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
 	e := NewExecution(cfg, emptyBaseline())
 	e.createdFolders["newdir"] = "created-folder-id"
 
@@ -564,14 +539,14 @@ func TestExecutor_Upload_ParentFromBaseline(t *testing.T) {
 
 	var capturedParentID string
 
-	transfers := &executorMockTransferClient{
-		simpleUploadFn: func(_ context.Context, _ driveid.ID, parentID, _ string, _ io.Reader, _ int64) (*graph.Item, error) {
+	ul := &executorMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, parentID, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 			capturedParentID = parentID
 			return &graph.Item{ID: "uploaded3", ETag: "e3"}, nil
 		},
 	}
 
-	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
 	e := NewExecution(cfg, baselineWith(&BaselineEntry{
 		Path:     "exec-existing-dir",
 		ItemID:   "baseline-folder-id",
@@ -600,14 +575,14 @@ func TestExecutor_Upload_B068_ZeroDriveIDFilled(t *testing.T) {
 
 	var capturedDriveID driveid.ID
 
-	transfers := &executorMockTransferClient{
-		simpleUploadFn: func(_ context.Context, driveID driveid.ID, _, _ string, _ io.Reader, _ int64) (*graph.Item, error) {
+	ul := &executorMockUploader{
+		uploadFn: func(_ context.Context, driveID driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 			capturedDriveID = driveID
 			return &graph.Item{ID: "up1"}, nil
 		},
 	}
 
-	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
 	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-new-file.txt", "data")
@@ -628,30 +603,19 @@ func TestExecutor_Upload_B068_ZeroDriveIDFilled(t *testing.T) {
 	}
 }
 
-func TestExecutor_Upload_ChunkedSuccess(t *testing.T) {
+func TestExecutor_Upload_LargeFileSuccess(t *testing.T) {
 	t.Parallel()
 
-	session := &graph.UploadSession{UploadURL: "https://upload.example.com"}
-
-	transfers := &executorMockTransferClient{
-		createUploadSessionFn: func(_ context.Context, _ driveid.ID, _, _ string, _ int64, _ time.Time) (*graph.UploadSession, error) {
-			return session, nil
-		},
-		uploadChunkFn: func(_ context.Context, _ *graph.UploadSession, chunk io.Reader, offset, length, total int64) (*graph.Item, error) {
-			io.Copy(io.Discard, chunk)
-
-			if offset+length >= total {
-				return &graph.Item{ID: "chunked1", ETag: "ce1", QuickXorHash: "hash1"}, nil
-			}
-
-			return nil, nil
+	ul := &executorMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _ string, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			return &graph.Item{ID: "chunked1", ETag: "ce1", QuickXorHash: "hash1"}, nil
 		},
 	}
 
-	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
 	e := NewExecution(cfg, emptyBaseline())
 
-	// Create a file > 4 MiB to trigger chunked upload.
+	// Create a file > 4 MiB to exercise Upload for large files.
 	bigContent := strings.Repeat("x", 5*1024*1024) // 5 MiB
 	writeExecTestFile(t, syncRoot, "exec-big-file.bin", bigContent)
 
@@ -676,7 +640,7 @@ func TestExecutor_Upload_ChunkedSuccess(t *testing.T) {
 func TestExecutor_LocalDelete_HashMatch(t *testing.T) {
 	t.Parallel()
 
-	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	absPath := writeExecTestFile(t, syncRoot, "exec-delete-me.txt", "content")
@@ -706,7 +670,7 @@ func TestExecutor_LocalDelete_HashMatch(t *testing.T) {
 func TestExecutor_LocalDelete_HashMismatch_ConflictCopy(t *testing.T) {
 	t.Parallel()
 
-	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-modified.txt", "new content")
@@ -746,7 +710,7 @@ func TestExecutor_LocalDelete_HashMismatch_ConflictCopy(t *testing.T) {
 func TestExecutor_LocalDelete_AlreadyGone(t *testing.T) {
 	t.Parallel()
 
-	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
@@ -763,7 +727,7 @@ func TestExecutor_LocalDelete_AlreadyGone(t *testing.T) {
 func TestExecutor_LocalDelete_FolderEmpty(t *testing.T) {
 	t.Parallel()
 
-	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	if err := os.MkdirAll(filepath.Join(syncRoot, "exec-empty-dir"), 0o755); err != nil {
@@ -788,7 +752,7 @@ func TestExecutor_LocalDelete_FolderEmpty(t *testing.T) {
 func TestExecutor_LocalDelete_FolderNotEmpty(t *testing.T) {
 	t.Parallel()
 
-	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-non-empty-dir/child.txt", "data")
@@ -821,7 +785,7 @@ func TestExecutor_RemoteDelete_Success(t *testing.T) {
 		},
 	}
 
-	cfg, _ := newTestExecutorConfig(t, items, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
@@ -845,7 +809,7 @@ func TestExecutor_RemoteDelete_404IsSuccess(t *testing.T) {
 		},
 	}
 
-	cfg, _ := newTestExecutorConfig(t, items, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
@@ -869,7 +833,7 @@ func TestExecutor_RemoteDelete_403Skip(t *testing.T) {
 		},
 	}
 
-	cfg, _ := newTestExecutorConfig(t, items, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
@@ -891,14 +855,14 @@ func TestExecutor_RemoteDelete_403Skip(t *testing.T) {
 func TestExecutor_Conflict_EditEdit_KeepBoth(t *testing.T) {
 	t.Parallel()
 
-	transfers := &executorMockTransferClient{
+	dl := &executorMockDownloader{
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
 			n, err := w.Write([]byte("remote version"))
 			return int64(n), err
 		},
 	}
 
-	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-conflict.txt", "local version")
@@ -956,14 +920,14 @@ func TestExecutor_Conflict_EditEdit_KeepBoth(t *testing.T) {
 func TestExecutor_Conflict_EditDelete(t *testing.T) {
 	t.Parallel()
 
-	transfers := &executorMockTransferClient{
+	dl := &executorMockDownloader{
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
 			n, err := w.Write([]byte("remote"))
 			return int64(n), err
 		},
 	}
 
-	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	// Local file doesn't exist (edit-delete conflict).
@@ -1038,7 +1002,7 @@ func TestConflictCopyPath_MultiDot(t *testing.T) {
 func TestExecutor_SyncedUpdate(t *testing.T) {
 	t.Parallel()
 
-	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
@@ -1089,7 +1053,7 @@ func TestExecutor_SyncedUpdate(t *testing.T) {
 func TestExecutor_Cleanup(t *testing.T) {
 	t.Parallel()
 
-	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
@@ -1165,7 +1129,7 @@ func TestClassifyError(t *testing.T) {
 func TestResolveParentID(t *testing.T) {
 	t.Parallel()
 
-	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, baselineWith(&BaselineEntry{
 		Path:     "exec-existing-folder",
 		ItemID:   "folder-id-from-baseline",
@@ -1217,14 +1181,14 @@ func TestResolveParentID(t *testing.T) {
 func TestExecutor_Parallel_Completion(t *testing.T) {
 	t.Parallel()
 
-	transfers := &executorMockTransferClient{
+	dl := &executorMockDownloader{
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
 			n, err := w.Write([]byte("data"))
 			return int64(n), err
 		},
 	}
 
-	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	actions := make([]Action, 16)
@@ -1253,7 +1217,7 @@ func TestExecutor_Parallel_Completion(t *testing.T) {
 func TestExecutor_Parallel_FatalCancelsPool(t *testing.T) {
 	t.Parallel()
 
-	transfers := &executorMockTransferClient{
+	dl := &executorMockDownloader{
 		downloadFn: func(_ context.Context, _ driveid.ID, itemID string, _ io.Writer) (int64, error) {
 			if itemID == "item0" {
 				return 0, graph.ErrUnauthorized
@@ -1263,7 +1227,7 @@ func TestExecutor_Parallel_FatalCancelsPool(t *testing.T) {
 		},
 	}
 
-	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	actions := make([]Action, 4)
@@ -1305,14 +1269,14 @@ func TestExecute_MultiPhasePlan(t *testing.T) {
 		},
 	}
 
-	transfers := &executorMockTransferClient{
+	dl := &executorMockDownloader{
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
 			n, err := w.Write([]byte("content"))
 			return int64(n), err
 		},
 	}
 
-	cfg, _ := newTestExecutorConfig(t, items, transfers)
+	cfg, _ := newTestExecutorConfig(t, items, dl, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	plan := &ActionPlan{
@@ -1361,7 +1325,7 @@ func TestExecute_MultiPhasePlan(t *testing.T) {
 func TestExecute_EmptyPlan(t *testing.T) {
 	t.Parallel()
 
-	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	outcomes, err := e.Execute(context.Background(), &ActionPlan{})
@@ -1377,7 +1341,7 @@ func TestExecute_EmptyPlan(t *testing.T) {
 func TestExecute_ContextCancellation(t *testing.T) {
 	t.Parallel()
 
-	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1434,7 +1398,7 @@ func TestConflictStemExt(t *testing.T) {
 func TestWithRetry_Succeeds(t *testing.T) {
 	t.Parallel()
 
-	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	calls := 0
@@ -1454,7 +1418,7 @@ func TestWithRetry_Succeeds(t *testing.T) {
 func TestWithRetry_RetriesOnTransient(t *testing.T) {
 	t.Parallel()
 
-	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	calls := 0
@@ -1478,7 +1442,7 @@ func TestWithRetry_RetriesOnTransient(t *testing.T) {
 func TestWithRetry_NoRetryOnSkip(t *testing.T) {
 	t.Parallel()
 
-	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	calls := 0
@@ -1500,7 +1464,7 @@ func TestWithRetry_NoRetryOnSkip(t *testing.T) {
 func TestWithRetry_ExhaustsRetries(t *testing.T) {
 	t.Parallel()
 
-	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	calls := 0
@@ -1523,13 +1487,13 @@ func TestWithRetry_ExhaustsRetries(t *testing.T) {
 func TestExecutor_Conflict_DownloadFails_RestoresLocal(t *testing.T) {
 	t.Parallel()
 
-	transfers := &executorMockTransferClient{
+	dl := &executorMockDownloader{
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
 			return 0, graph.ErrForbidden
 		},
 	}
 
-	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	originalContent := "precious local data"
@@ -1570,7 +1534,7 @@ func TestExecutor_RemoteMove_Error(t *testing.T) {
 		},
 	}
 
-	cfg, _ := newTestExecutorConfig(t, items, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
@@ -1594,7 +1558,7 @@ func TestExecutor_RemoteMove_Error(t *testing.T) {
 func TestExecutor_LocalMove_ViewFields(t *testing.T) {
 	t.Parallel()
 
-	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-src.txt", "content")
@@ -1648,34 +1612,25 @@ func TestExecutor_LocalMove_ViewFields(t *testing.T) {
 	}
 }
 
-// Fix 12: Test multi-chunk upload (>1 chunk exercised).
-func TestExecutor_Upload_MultiChunkLoop(t *testing.T) {
+// Fix 12: Test large-file upload delegates to Uploader with correct size.
+func TestExecutor_Upload_LargeFileSizePassedToUploader(t *testing.T) {
 	t.Parallel()
 
-	session := &graph.UploadSession{UploadURL: "https://upload.example.com"}
-	var capturedOffsets []int64
+	var capturedSize int64
 
-	transfers := &executorMockTransferClient{
-		createUploadSessionFn: func(_ context.Context, _ driveid.ID, _, _ string, _ int64, _ time.Time) (*graph.UploadSession, error) {
-			return session, nil
-		},
-		uploadChunkFn: func(_ context.Context, _ *graph.UploadSession, chunk io.Reader, offset, length, total int64) (*graph.Item, error) {
-			capturedOffsets = append(capturedOffsets, offset)
-			io.Copy(io.Discard, chunk)
-
-			if offset+length >= total {
-				return &graph.Item{ID: "multi-chunk1", ETag: "mc1", QuickXorHash: "h1"}, nil
-			}
-
-			return nil, nil
+	ul := &executorMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, size int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			capturedSize = size
+			return &graph.Item{ID: "multi-chunk1", ETag: "mc1", QuickXorHash: "h1"}, nil
 		},
 	}
 
-	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
 	e := NewExecution(cfg, emptyBaseline())
 
-	// 25 MiB file → 3 chunks at 10 MiB each (10, 10, 5).
-	bigContent := strings.Repeat("x", 25*1024*1024)
+	// 25 MiB file — Uploader receives the exact size.
+	expectedSize := int64(25 * 1024 * 1024)
+	bigContent := strings.Repeat("x", int(expectedSize))
 	writeExecTestFile(t, syncRoot, "exec-multi-chunk.bin", bigContent)
 
 	action := &Action{
@@ -1687,15 +1642,8 @@ func TestExecutor_Upload_MultiChunkLoop(t *testing.T) {
 	o := e.executeUpload(context.Background(), action)
 	requireOutcomeSuccess(t, o)
 
-	if len(capturedOffsets) != 3 {
-		t.Fatalf("expected 3 chunks, got %d", len(capturedOffsets))
-	}
-
-	expectedOffsets := []int64{0, 10 * 1024 * 1024, 20 * 1024 * 1024}
-	for i, expected := range expectedOffsets {
-		if capturedOffsets[i] != expected {
-			t.Errorf("chunk %d: expected offset %d, got %d", i, expected, capturedOffsets[i])
-		}
+	if capturedSize != expectedSize {
+		t.Errorf("expected size=%d, got %d", expectedSize, capturedSize)
 	}
 }
 
@@ -1731,7 +1679,7 @@ func TestExecutor_DeleteOutcome_FolderType(t *testing.T) {
 
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{
 		deleteItemFn: func(_ context.Context, _ driveid.ID, _ string) error { return nil },
-	}, &executorMockTransferClient{})
+	}, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
@@ -1755,7 +1703,7 @@ func TestExecutor_DeleteOutcome_FolderType(t *testing.T) {
 func TestExecutor_Cleanup_FolderType(t *testing.T) {
 	t.Parallel()
 
-	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
@@ -1779,7 +1727,7 @@ func TestExecutor_Cleanup_FolderType(t *testing.T) {
 func TestExecutor_SyncedUpdate_BaselineFallback(t *testing.T) {
 	t.Parallel()
 
-	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockTransferClient{})
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
 	// No Remote, only Baseline with folder type.
@@ -1799,47 +1747,5 @@ func TestExecutor_SyncedUpdate_BaselineFallback(t *testing.T) {
 
 	if o.ItemType != ItemTypeFolder {
 		t.Errorf("expected ItemType=folder from baseline fallback, got %s", o.ItemType)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Upload session cancel tests
-// ---------------------------------------------------------------------------
-
-func TestExecutor_Upload_Chunked_SessionCanceledOnOpenError(t *testing.T) {
-	t.Parallel()
-
-	session := &graph.UploadSession{UploadURL: "https://upload.example.com"}
-	sessionCanceled := false
-
-	transfers := &executorMockTransferClient{
-		createUploadSessionFn: func(_ context.Context, _ driveid.ID, _, _ string, _ int64, _ time.Time) (*graph.UploadSession, error) {
-			return session, nil
-		},
-		cancelUploadSessionFn: func(_ context.Context, s *graph.UploadSession) error {
-			if s.UploadURL != session.UploadURL {
-				t.Errorf("cancel called with wrong session URL: %s", s.UploadURL)
-			}
-
-			sessionCanceled = true
-
-			return nil
-		},
-	}
-
-	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, transfers)
-	e := NewExecution(cfg, emptyBaseline())
-	driveID := driveid.New(testDriveID)
-
-	// Call chunkedUpload directly with a non-existent path so os.Open fails
-	// after CreateUploadSession succeeds.
-	_, err := e.chunkedUpload(context.Background(), driveID, "root", "ghost.bin",
-		"/nonexistent/path/ghost.bin", 5*1024*1024, time.Now())
-	if err == nil {
-		t.Fatal("expected error from chunkedUpload with non-existent file")
-	}
-
-	if !sessionCanceled {
-		t.Error("expected CancelUploadSession to be called when os.Open fails after session creation")
 	}
 }

@@ -18,12 +18,13 @@ const forceSafetyMax = math.MaxInt32
 // EngineConfig holds the options for NewEngine. Uses a struct because
 // seven fields is too many for positional parameters.
 type EngineConfig struct {
-	DBPath    string         // path to the SQLite state database
-	SyncRoot  string         // absolute path to the local sync directory
-	DriveID   driveid.ID     // normalized drive identifier
-	Fetcher   DeltaFetcher   // satisfied by *graph.Client
-	Items     ItemClient     // satisfied by *graph.Client
-	Transfers TransferClient // satisfied by *graph.Client
+	DBPath    string       // path to the SQLite state database
+	SyncRoot  string       // absolute path to the local sync directory
+	DriveID   driveid.ID   // normalized drive identifier
+	Fetcher   DeltaFetcher // satisfied by *graph.Client
+	Items     ItemClient   // satisfied by *graph.Client
+	Downloads Downloader   // satisfied by *graph.Client
+	Uploads   Uploader     // satisfied by *graph.Client
 	Logger    *slog.Logger
 }
 
@@ -76,7 +77,7 @@ func NewEngine(cfg *EngineConfig) (*Engine, error) {
 		return nil, fmt.Errorf("sync: creating engine: %w", err)
 	}
 
-	execCfg := NewExecutorConfig(cfg.Items, cfg.Transfers, cfg.SyncRoot, cfg.DriveID, cfg.Logger)
+	execCfg := NewExecutorConfig(cfg.Items, cfg.Downloads, cfg.Uploads, cfg.SyncRoot, cfg.DriveID, cfg.Logger)
 
 	return &Engine{
 		baseline: bm,
