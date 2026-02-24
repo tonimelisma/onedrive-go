@@ -5,10 +5,12 @@
 package sync
 
 import (
+	"context"
 	"log/slog"
 	"path"
 	"sort"
 	"sync"
+	"time"
 )
 
 // Buffer collects ChangeEvents from both observers and groups them
@@ -17,6 +19,7 @@ import (
 type Buffer struct {
 	mu      sync.Mutex
 	pending map[string]*PathChanges
+	notify  chan struct{} // signaled on Add/AddAll when FlushDebounced is active; nil otherwise
 	logger  *slog.Logger
 }
 
@@ -89,6 +92,87 @@ func (b *Buffer) Len() int {
 	return len(b.pending)
 }
 
+// FlushDebounced returns a channel that emits batches of PathChanges after
+// a debounce window elapses with no new events. Each batch is equivalent to
+// calling FlushImmediate(). The debounce timer resets every time Add() or
+// AddAll() is called. The output channel is closed when the context is
+// canceled; any remaining events are drained in a final batch.
+func (b *Buffer) FlushDebounced(ctx context.Context, debounce time.Duration) <-chan []PathChanges {
+	out := make(chan []PathChanges, 1)
+
+	b.mu.Lock()
+	b.notify = make(chan struct{}, 1)
+	b.mu.Unlock()
+
+	go b.debounceLoop(ctx, debounce, out)
+
+	return out
+}
+
+// debounceLoop is the goroutine driving FlushDebounced. It waits for new-event
+// signals, resets the debounce timer, and flushes when the timer expires.
+func (b *Buffer) debounceLoop(ctx context.Context, debounce time.Duration, out chan<- []PathChanges) {
+	defer close(out)
+
+	timer := time.NewTimer(debounce)
+	timer.Stop() // start idle — no events yet
+	defer timer.Stop()
+
+	timerActive := false
+
+	for {
+		select {
+		case <-ctx.Done():
+			// Drain remaining events.
+			if batch := b.FlushImmediate(); batch != nil {
+				out <- batch
+			}
+
+			return
+
+		case _, ok := <-b.notify:
+			if !ok {
+				return
+			}
+
+			// New event arrived — reset the debounce timer.
+			if !timer.Stop() && timerActive {
+				<-timer.C
+			}
+
+			timer.Reset(debounce)
+			timerActive = true
+
+		case <-timer.C:
+			timerActive = false
+
+			if batch := b.FlushImmediate(); batch != nil {
+				select {
+				case out <- batch:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}
+}
+
+// signalNew sends a non-blocking notification to the debounce goroutine.
+// Called from addLocked while the mutex is held. The notify channel is nil
+// until FlushDebounced() is called, so one-shot mode (FlushImmediate only)
+// pays no cost.
+func (b *Buffer) signalNew() {
+	if b.notify == nil {
+		return
+	}
+
+	select {
+	case b.notify <- struct{}{}:
+	default:
+		// Already signaled — debounce goroutine hasn't consumed yet.
+	}
+}
+
 // addLocked is the internal add logic called while the mutex is held.
 // It routes the event to the correct PathChanges entry and handles
 // move dual-keying: a ChangeMove with OldPath produces a synthetic
@@ -132,6 +216,8 @@ func (b *Buffer) addLocked(ev *ChangeEvent) {
 			"source", ev.Source.String(),
 		)
 	}
+
+	b.signalNew()
 }
 
 // getOrCreate returns the PathChanges for the given path, creating it

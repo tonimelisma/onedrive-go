@@ -253,7 +253,7 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 | Increment | Description | Wave |
 |-----------|-------------|------|
 | 5.0 | DAG-based concurrent execution engine | 0: The Pivot — **DONE** |
-| 5.1 | Continuous observer `Watch()` methods + debounced buffer | 1: Watch Mode |
+| 5.1 | Continuous observer `Watch()` methods + debounced buffer | 1: Watch Mode — **DONE** |
 | 5.2 | `Engine.RunWatch()` + continuous pipeline | 1: Watch Mode |
 | 5.3 | Graceful shutdown + crash recovery from ledger | 2: Operational Polish |
 | 5.4 | Pause/resume + SIGHUP config reload + final cleanup | 2: Operational Polish |
@@ -494,24 +494,18 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 ### Wave 1 — Watch Mode
 
-#### 5.1: Continuous observer Watch() methods + debounced buffer
+#### 5.1: Continuous observer Watch() methods + debounced buffer — DONE
 
 **Goal**: Add `Watch()` to both observers and debounce to buffer.
 
-**1. New Code:**
-- `observer_remote.go`: `Watch(ctx, savedToken, events chan<- ChangeEvent, interval time.Duration) error` — polling loop with backoff
-- `observer_local.go`: `Watch(ctx, syncRoot, events chan<- ChangeEvent) error` — via `rjeczalik/notify` for inotify/FSEvents, periodic full scan as safety net
-- `buffer.go`: `FlushDebounced(ctx, debounce time.Duration) <-chan []PathChanges`
-
-**2. Code Adaptation:**
-- `go.mod`/`go.sum`: add `github.com/rjeczalik/notify`
-
-**3. Code Retirement:**
-- None — `FullDelta()`/`FullScan()` remain for one-shot mode
-
-**4. CI and Testing:**
-- New observer watch tests (mock time, mock notify), buffer debounce tests
-- E2E: unchanged. Both CI workflows green.
+- `RemoteObserver.Watch()`: continuous delta polling loop with exponential backoff (5s initial, 2× multiplier, capped at poll interval). `CurrentDeltaToken()` thread-safe accessor for engine integration. `ErrDeltaExpired` (410) resets token for full resync. Injectable `sleepFunc` for test control.
+- `LocalObserver.Watch()`: fsnotify-based filesystem event monitoring + periodic safety scan (5 min). `FsWatcher` interface for testability. Recursive directory watch setup via `addWatchesRecursive()`. Classify events vs baseline for change type (create/modify/delete). New directory watches added dynamically.
+- `Buffer.FlushDebounced()`: debounce-timer-based batching via output channel. Timer resets on each `Add()`/`AddAll()`. Final drain on context cancellation. Non-blocking `signalNew()` notification from `addLocked()`.
+- B-095 fixed: `DepTracker.byPath` cleaned up in `Complete()` and `CancelByPath()`.
+- Dependency: `github.com/fsnotify/fsnotify` v1.9.0 (chosen over `rjeczalik/notify` — actively maintained, de facto standard, used by Hugo/Docker/Kubernetes).
+- `FullDelta()`/`FullScan()`/`FlushImmediate()` remain unchanged for one-shot mode.
+- 17 new tests: 5 remote watch, 7 local watch, 5 buffer debounce. All pass with `-race`.
+- **Acceptance**: All DOD gates passed. Both CI workflows green.
 
 ---
 

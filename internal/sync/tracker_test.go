@@ -367,6 +367,96 @@ func TestDepTracker_ConcurrentAddAndComplete(t *testing.T) {
 	}
 }
 
+// TestDepTracker_CompleteCleansByPath verifies that Complete() removes the
+// byPath entry so a subsequent CancelByPath on the same path is a no-op.
+// Regression test for B-095: stale byPath entries in long-lived trackers.
+func TestDepTracker_CompleteCleansByPath(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, 10, testLogger(t))
+
+	dt.Add(&Action{
+		Type: ActionDownload, Path: "file.txt",
+		DriveID: driveid.New("d"), ItemID: "i1",
+	}, 1, nil)
+
+	<-dt.Interactive()
+	dt.Complete(1)
+
+	// After Complete, CancelByPath should be a no-op (byPath entry removed).
+	// Verify by adding a new action at the same path — if byPath was NOT
+	// cleaned, CancelByPath would have stale reference to action 1.
+	dt.Add(&Action{
+		Type: ActionUpload, Path: "file.txt",
+		DriveID: driveid.New("d"), ItemID: "i2",
+	}, 2, nil)
+
+	ta := <-dt.Interactive()
+
+	// Set up cancel on the new action.
+	ctx, cancel := context.WithCancel(context.Background())
+	ta.Cancel = cancel
+
+	// CancelByPath should cancel action 2 (the new one), not be a no-op
+	// from a stale action 1 entry.
+	dt.CancelByPath("file.txt")
+
+	select {
+	case <-ctx.Done():
+		// Success — the new action's context was canceled.
+	case <-time.After(time.Second):
+		t.Fatal("CancelByPath should cancel the new action, not be a no-op")
+	}
+}
+
+// TestDepTracker_CancelByPathCleansUp verifies that CancelByPath removes
+// the byPath entry so a subsequent Add at the same path gets a fresh entry.
+// Regression test for B-095.
+func TestDepTracker_CancelByPathCleansUp(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, 10, testLogger(t))
+
+	dt.Add(&Action{
+		Type: ActionDownload, Path: "cancel-me.txt",
+		DriveID: driveid.New("d"), ItemID: "i1",
+	}, 1, nil)
+
+	ta := <-dt.Interactive()
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	ta.Cancel = cancel1
+
+	dt.CancelByPath("cancel-me.txt")
+
+	// Verify action 1 was canceled.
+	select {
+	case <-ctx1.Done():
+		// Good.
+	case <-time.After(time.Second):
+		t.Fatal("action 1 context should have been canceled")
+	}
+
+	// Add a new action at the same path. If byPath was cleaned, this works
+	// correctly — CancelByPath on the new action should cancel action 2.
+	dt.Add(&Action{
+		Type: ActionUpload, Path: "cancel-me.txt",
+		DriveID: driveid.New("d"), ItemID: "i2",
+	}, 2, nil)
+
+	ta2 := <-dt.Interactive()
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	ta2.Cancel = cancel2
+
+	dt.CancelByPath("cancel-me.txt")
+
+	select {
+	case <-ctx2.Done():
+		// Success — action 2's context was canceled.
+	case <-time.After(time.Second):
+		t.Fatal("action 2 context should have been canceled")
+	}
+}
+
 func TestDepTracker_SkipCompletedDeps(t *testing.T) {
 	t.Parallel()
 

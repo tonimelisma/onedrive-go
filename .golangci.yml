@@ -75,6 +75,7 @@ linters:
             - modernc.org/memory
             - github.com/pressly/goose/v3
             - github.com/google/uuid
+            - github.com/fsnotify/fsnotify
             - golang.org/x/sync
 
     gocyclo:
