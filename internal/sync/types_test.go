@@ -108,7 +108,8 @@ func TestEnumStrings_NonEmpty(t *testing.T) {
 // Interface satisfaction checks — compile-time verification that
 // *graph.Client implements the consumer-defined interfaces.
 var (
-	_ DeltaFetcher   = (*graph.Client)(nil)
-	_ ItemClient     = (*graph.Client)(nil)
-	_ TransferClient = (*graph.Client)(nil)
+	_ DeltaFetcher = (*graph.Client)(nil)
+	_ ItemClient   = (*graph.Client)(nil)
+	_ Downloader   = (*graph.Client)(nil)
+	_ Uploader     = (*graph.Client)(nil)
 )

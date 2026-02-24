@@ -15,7 +15,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Composite mock implementing DeltaFetcher + ItemClient + TransferClient
+// Composite mock implementing DeltaFetcher + ItemClient + Downloader + Uploader
 // ---------------------------------------------------------------------------
 
 type engineMockClient struct {
@@ -29,12 +29,11 @@ type engineMockClient struct {
 	moveItemFn     func(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string) (*graph.Item, error)
 	deleteItemFn   func(ctx context.Context, driveID driveid.ID, itemID string) error
 
-	// TransferClient
-	downloadFn            func(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error)
-	simpleUploadFn        func(ctx context.Context, driveID driveid.ID, parentID, name string, r io.Reader, size int64) (*graph.Item, error)
-	createUploadSessionFn func(ctx context.Context, driveID driveid.ID, parentID, name string, size int64, mtime time.Time) (*graph.UploadSession, error)
-	uploadChunkFn         func(ctx context.Context, session *graph.UploadSession, chunk io.Reader, offset, length, total int64) (*graph.Item, error)
-	cancelUploadSessionFn func(ctx context.Context, session *graph.UploadSession) error
+	// Downloader
+	downloadFn func(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error)
+
+	// Uploader
+	uploadFn func(ctx context.Context, driveID driveid.ID, parentID, name string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error)
 }
 
 func (m *engineMockClient) Delta(ctx context.Context, driveID driveid.ID, token string) (*graph.DeltaPage, error) {
@@ -96,9 +95,9 @@ func (m *engineMockClient) Download(ctx context.Context, driveID driveid.ID, ite
 	return int64(n), err
 }
 
-func (m *engineMockClient) SimpleUpload(ctx context.Context, driveID driveid.ID, parentID, name string, r io.Reader, size int64) (*graph.Item, error) {
-	if m.simpleUploadFn != nil {
-		return m.simpleUploadFn(ctx, driveID, parentID, name, r, size)
+func (m *engineMockClient) Upload(ctx context.Context, driveID driveid.ID, parentID, name string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error) {
+	if m.uploadFn != nil {
+		return m.uploadFn(ctx, driveID, parentID, name, content, size, mtime, progress)
 	}
 
 	return &graph.Item{
@@ -107,30 +106,6 @@ func (m *engineMockClient) SimpleUpload(ctx context.Context, driveID driveid.ID,
 		Size:         size,
 		QuickXorHash: "abc123hash",
 	}, nil
-}
-
-func (m *engineMockClient) CreateUploadSession(ctx context.Context, driveID driveid.ID, parentID, name string, size int64, mtime time.Time) (*graph.UploadSession, error) {
-	if m.createUploadSessionFn != nil {
-		return m.createUploadSessionFn(ctx, driveID, parentID, name, size, mtime)
-	}
-
-	return nil, fmt.Errorf("CreateUploadSession not mocked")
-}
-
-func (m *engineMockClient) UploadChunk(ctx context.Context, session *graph.UploadSession, chunk io.Reader, offset, length, total int64) (*graph.Item, error) {
-	if m.uploadChunkFn != nil {
-		return m.uploadChunkFn(ctx, session, chunk, offset, length, total)
-	}
-
-	return nil, fmt.Errorf("UploadChunk not mocked")
-}
-
-func (m *engineMockClient) CancelUploadSession(ctx context.Context, session *graph.UploadSession) error {
-	if m.cancelUploadSessionFn != nil {
-		return m.cancelUploadSessionFn(ctx, session)
-	}
-
-	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -161,7 +136,8 @@ func newTestEngine(t *testing.T, mock *engineMockClient) (*Engine, string) {
 		DriveID:   driveID,
 		Fetcher:   mock,
 		Items:     mock,
-		Transfers: mock,
+		Downloads: mock,
+		Uploads:   mock,
 		Logger:    logger,
 	})
 	if err != nil {
@@ -313,7 +289,7 @@ func TestRunOnce_Bidirectional_FullCycle(t *testing.T) {
 			n, err := w.Write([]byte("remote-content"))
 			return int64(n), err
 		},
-		simpleUploadFn: func(_ context.Context, _ driveid.ID, _ string, name string, _ io.Reader, _ int64) (*graph.Item, error) {
+		uploadFn: func(_ context.Context, _ driveid.ID, _ string, name string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 			return &graph.Item{
 				ID: "uploaded-id", Name: name, Size: 13, QuickXorHash: "localhash1",
 			}, nil
@@ -668,7 +644,8 @@ func TestNewEngine_InvalidDBPath(t *testing.T) {
 		DriveID:   driveid.New(engineTestDriveID),
 		Fetcher:   &engineMockClient{},
 		Items:     &engineMockClient{},
-		Transfers: &engineMockClient{},
+		Downloads: &engineMockClient{},
+		Uploads:   &engineMockClient{},
 		Logger:    logger,
 	})
 
@@ -931,7 +908,7 @@ func TestResolveConflict_KeepLocal(t *testing.T) {
 	uploadCalled := false
 
 	mock := &engineMockClient{
-		simpleUploadFn: func(_ context.Context, _ driveid.ID, parentID, name string, _ io.Reader, _ int64) (*graph.Item, error) {
+		uploadFn: func(_ context.Context, _ driveid.ID, parentID, name string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 			uploadCalled = true
 
 			return &graph.Item{
@@ -981,7 +958,7 @@ func TestResolveConflict_KeepLocal(t *testing.T) {
 	}
 
 	if !uploadCalled {
-		t.Error("expected SimpleUpload to be called for keep_local resolution")
+		t.Error("expected Upload to be called for keep_local resolution")
 	}
 
 	// Conflict should be resolved.
@@ -1068,7 +1045,7 @@ func TestResolveConflict_KeepLocal_TransferFails(t *testing.T) {
 	driveID := driveid.New(engineTestDriveID)
 
 	mock := &engineMockClient{
-		simpleUploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.Reader, _ int64) (*graph.Item, error) {
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 			return nil, fmt.Errorf("upload failed: network error")
 		},
 	}
