@@ -86,16 +86,11 @@ func (l *Ledger) WriteActions(
 			depsJSON = sql.NullString{String: string(b), Valid: true}
 		}
 
-		// For move actions, the Action struct uses Path=source and
-		// NewPath=destination. The ledger schema follows the spec where
-		// path=destination and old_path=source, so we swap them.
+		// Action.Path is the canonical path (destination for moves),
+		// Action.OldPath is the source (moves only). No swap needed —
+		// matches the ledger schema directly (path=destination, old_path=source).
 		pathVal := a.Path
-		oldPathVal := a.NewPath
-
-		if a.Type == ActionLocalMove || a.Type == ActionRemoteMove {
-			pathVal = a.NewPath // destination → path column
-			oldPathVal = a.Path // source → old_path column
-		}
+		oldPathVal := a.OldPath
 
 		result, execErr := stmt.ExecContext(ctx, cycleID,
 			a.Type.String(), pathVal, nullString(oldPathVal), depsJSON,

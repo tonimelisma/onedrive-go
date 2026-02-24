@@ -329,8 +329,8 @@ func TestLedger_MovePathColumns(t *testing.T) {
 	actions := []Action{
 		{
 			Type:    ActionLocalMove,
-			Path:    "old/location.txt", // source (where it was)
-			NewPath: "new/location.txt", // destination (where it moved to)
+			Path:    "new/location.txt", // destination (where it moved to)
+			OldPath: "old/location.txt", // source (where it was)
 			DriveID: driveid.New("d1"),
 			ItemID:  "move-id",
 		},
