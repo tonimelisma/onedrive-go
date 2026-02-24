@@ -1,9 +1,11 @@
 package sync
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
@@ -594,5 +596,215 @@ func TestBuffer_ThreadSafety(t *testing.T) {
 
 	if totalEvents != wantTotal {
 		t.Errorf("total events = %d, want %d", totalEvents, wantTotal)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// FlushDebounced tests
+// ---------------------------------------------------------------------------
+
+func TestFlushDebounced_SingleBatch(t *testing.T) {
+	t.Parallel()
+
+	buf := NewBuffer(testLogger(t))
+	ctx, cancel := context.WithCancel(context.Background())
+
+	debounce := 50 * time.Millisecond
+	out := buf.FlushDebounced(ctx, debounce)
+
+	// Add events, then wait for the debounce to flush.
+	buf.Add(&ChangeEvent{
+		Source: SourceRemote, Type: ChangeCreate,
+		Path: "debounce-a.txt", Name: "debounce-a.txt",
+		ItemID: "d1", DriveID: driveid.New(testDriveID), ItemType: ItemTypeFile,
+	})
+	buf.Add(&ChangeEvent{
+		Source: SourceLocal, Type: ChangeCreate,
+		Path: "debounce-b.txt", Name: "debounce-b.txt",
+		ItemType: ItemTypeFile,
+	})
+
+	select {
+	case batch := <-out:
+		if len(batch) != 2 {
+			t.Errorf("batch len = %d, want 2", len(batch))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for debounced batch")
+	}
+
+	cancel()
+	// Drain channel to ensure debounce goroutine exits before test ends.
+	for range out {
+	}
+}
+
+func TestFlushDebounced_MultipleWaves(t *testing.T) {
+	t.Parallel()
+
+	buf := NewBuffer(testLogger(t))
+	ctx, cancel := context.WithCancel(context.Background())
+
+	debounce := 50 * time.Millisecond
+	out := buf.FlushDebounced(ctx, debounce)
+
+	// Wave 1.
+	buf.Add(&ChangeEvent{
+		Source: SourceRemote, Type: ChangeCreate,
+		Path: "wave1.txt", Name: "wave1.txt",
+		ItemID: "w1", DriveID: driveid.New(testDriveID), ItemType: ItemTypeFile,
+	})
+
+	select {
+	case batch := <-out:
+		if len(batch) != 1 {
+			t.Errorf("wave 1 batch len = %d, want 1", len(batch))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for wave 1")
+	}
+
+	// Wave 2.
+	buf.Add(&ChangeEvent{
+		Source: SourceLocal, Type: ChangeModify,
+		Path: "wave2.txt", Name: "wave2.txt",
+		ItemType: ItemTypeFile,
+	})
+
+	select {
+	case batch := <-out:
+		if len(batch) != 1 {
+			t.Errorf("wave 2 batch len = %d, want 1", len(batch))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for wave 2")
+	}
+
+	cancel()
+	for range out {
+	}
+}
+
+func TestFlushDebounced_DebounceResets(t *testing.T) {
+	t.Parallel()
+
+	buf := NewBuffer(testLogger(t))
+	ctx, cancel := context.WithCancel(context.Background())
+
+	debounce := 100 * time.Millisecond
+	out := buf.FlushDebounced(ctx, debounce)
+
+	// Add first event.
+	buf.Add(&ChangeEvent{
+		Source: SourceRemote, Type: ChangeCreate,
+		Path: "reset-first.txt", Name: "reset-first.txt",
+		ItemID: "r1", DriveID: driveid.New(testDriveID), ItemType: ItemTypeFile,
+	})
+
+	// Wait less than debounce, then add second event — timer should reset.
+	time.Sleep(50 * time.Millisecond)
+	buf.Add(&ChangeEvent{
+		Source: SourceLocal, Type: ChangeCreate,
+		Path: "reset-second.txt", Name: "reset-second.txt",
+		ItemType: ItemTypeFile,
+	})
+
+	// Both events should arrive in a single batch.
+	select {
+	case batch := <-out:
+		if len(batch) != 2 {
+			t.Errorf("batch len = %d, want 2 (debounce should have combined)", len(batch))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for debounced batch")
+	}
+
+	cancel()
+	for range out {
+	}
+}
+
+func TestFlushDebounced_ContextCancel(t *testing.T) {
+	t.Parallel()
+
+	buf := NewBuffer(testLogger(t))
+	ctx, cancel := context.WithCancel(context.Background())
+
+	debounce := time.Hour // never fires naturally
+	out := buf.FlushDebounced(ctx, debounce)
+
+	// Add an event, then cancel before debounce expires.
+	buf.Add(&ChangeEvent{
+		Source: SourceRemote, Type: ChangeCreate,
+		Path: "cancel-drain.txt", Name: "cancel-drain.txt",
+		ItemID: "cd1", DriveID: driveid.New(testDriveID), ItemType: ItemTypeFile,
+	})
+
+	time.Sleep(20 * time.Millisecond) // let the signal propagate
+	cancel()
+
+	// The final drain should deliver the event.
+	var gotBatch bool
+
+	for batch := range out {
+		if len(batch) > 0 {
+			gotBatch = true
+		}
+	}
+
+	if !gotBatch {
+		t.Error("expected a final drain batch on context cancel")
+	}
+}
+
+func TestFlushDebounced_ConcurrentAddAndFlush(t *testing.T) {
+	t.Parallel()
+
+	buf := NewBuffer(testLogger(t))
+	ctx, cancel := context.WithCancel(context.Background())
+
+	debounce := 30 * time.Millisecond
+	out := buf.FlushDebounced(ctx, debounce)
+
+	// Concurrently add events from multiple goroutines.
+	var wg sync.WaitGroup
+	goroutines := 5
+	eventsPerGoroutine := 10
+
+	wg.Add(goroutines)
+
+	for g := range goroutines {
+		go func(id int) {
+			defer wg.Done()
+
+			for i := range eventsPerGoroutine {
+				buf.Add(&ChangeEvent{
+					Source:   SourceRemote,
+					Type:     ChangeCreate,
+					Path:     fmt.Sprintf("concurrent-g%d-e%d.txt", id, i),
+					Name:     fmt.Sprintf("concurrent-g%d-e%d.txt", id, i),
+					ItemType: ItemTypeFile,
+				})
+			}
+		}(g)
+	}
+
+	wg.Wait()
+
+	// Collect all batches until we have all events.
+	totalPaths := 0
+	timeout := time.After(5 * time.Second)
+
+	for totalPaths < goroutines*eventsPerGoroutine {
+		select {
+		case batch := <-out:
+			totalPaths += len(batch)
+		case <-timeout:
+			t.Fatalf("timeout: got %d paths, want %d", totalPaths, goroutines*eventsPerGoroutine)
+		}
+	}
+
+	cancel()
+	for range out {
 	}
 }

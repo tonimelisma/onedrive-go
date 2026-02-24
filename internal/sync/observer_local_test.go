@@ -737,6 +737,293 @@ func TestFullScan_MixedChanges(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Watch tests
+// ---------------------------------------------------------------------------
+
+func TestWatch_DetectsFileCreate(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, dir, events)
+	}()
+
+	// Let the watcher settle, then create a file.
+	time.Sleep(100 * time.Millisecond)
+	writeTestFile(t, dir, "new-file.txt", "hello watch")
+
+	var ev ChangeEvent
+	select {
+	case ev = <-events:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("timeout waiting for create event")
+	}
+
+	cancel()
+	<-done
+
+	if ev.Type != ChangeCreate {
+		t.Errorf("Type = %v, want ChangeCreate", ev.Type)
+	}
+
+	if ev.Path != "new-file.txt" {
+		t.Errorf("Path = %q, want %q", ev.Path, "new-file.txt")
+	}
+
+	if ev.Source != SourceLocal {
+		t.Errorf("Source = %v, want SourceLocal", ev.Source)
+	}
+
+	if ev.Hash == "" {
+		t.Error("Hash should be non-empty for a file create")
+	}
+}
+
+func TestWatch_DetectsFileModify(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeTestFile(t, dir, "existing.txt", "original")
+	existingHash := hashContent(t, "original")
+
+	baseline := baselineWith(&BaselineEntry{
+		Path: "existing.txt", DriveID: driveid.New("d"), ItemID: "i1",
+		ItemType: ItemTypeFile, LocalHash: existingHash,
+	})
+
+	obs := NewLocalObserver(baseline, testLogger(t))
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, dir, events)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Modify the file.
+	if err := os.WriteFile(filepath.Join(dir, "existing.txt"), []byte("modified"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var ev ChangeEvent
+	select {
+	case ev = <-events:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("timeout waiting for modify event")
+	}
+
+	cancel()
+	<-done
+
+	if ev.Type != ChangeModify {
+		t.Errorf("Type = %v, want ChangeModify", ev.Type)
+	}
+
+	if ev.Path != "existing.txt" {
+		t.Errorf("Path = %q, want %q", ev.Path, "existing.txt")
+	}
+
+	if ev.Hash != hashContent(t, "modified") {
+		t.Errorf("Hash = %q, want %q", ev.Hash, hashContent(t, "modified"))
+	}
+}
+
+func TestWatch_DetectsFileDelete(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeTestFile(t, dir, "doomed.txt", "goodbye")
+
+	baseline := baselineWith(&BaselineEntry{
+		Path: "doomed.txt", DriveID: driveid.New("d"), ItemID: "i1",
+		ItemType: ItemTypeFile,
+	})
+
+	obs := NewLocalObserver(baseline, testLogger(t))
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, dir, events)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	if err := os.Remove(filepath.Join(dir, "doomed.txt")); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+
+	var ev ChangeEvent
+	select {
+	case ev = <-events:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("timeout waiting for delete event")
+	}
+
+	cancel()
+	<-done
+
+	if ev.Type != ChangeDelete {
+		t.Errorf("Type = %v, want ChangeDelete", ev.Type)
+	}
+
+	if ev.Path != "doomed.txt" {
+		t.Errorf("Path = %q, want %q", ev.Path, "doomed.txt")
+	}
+
+	if !ev.IsDeleted {
+		t.Error("IsDeleted = false, want true")
+	}
+}
+
+func TestWatch_IgnoresExcludedFiles(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, dir, events)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Create an excluded file — should not produce an event.
+	writeTestFile(t, dir, "temp.tmp", "temporary")
+
+	// Then create a valid file — should produce an event.
+	time.Sleep(50 * time.Millisecond)
+	writeTestFile(t, dir, "valid.txt", "keep")
+
+	var ev ChangeEvent
+	select {
+	case ev = <-events:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("timeout waiting for any event")
+	}
+
+	cancel()
+	<-done
+
+	if ev.Path != "valid.txt" {
+		t.Errorf("Path = %q, want %q (excluded file should be ignored)", ev.Path, "valid.txt")
+	}
+}
+
+func TestWatch_NosyncGuard(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeTestFile(t, dir, ".nosync", "")
+
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	events := make(chan ChangeEvent, 10)
+
+	err := obs.Watch(context.Background(), dir, events)
+	if !errors.Is(err, ErrNosyncGuard) {
+		t.Errorf("err = %v, want ErrNosyncGuard", err)
+	}
+}
+
+func TestWatch_NewDirectoryWatched(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+
+	events := make(chan ChangeEvent, 20)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, dir, events)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Create a subdirectory and a file inside it.
+	subDir := filepath.Join(dir, "subdir")
+	if err := os.Mkdir(subDir, 0o755); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+
+	// Give the watcher time to add the new directory watch.
+	time.Sleep(200 * time.Millisecond)
+
+	writeTestFile(t, dir, "subdir/inner.txt", "nested")
+
+	// Collect events until we find the file inside the subdirectory.
+	var foundInnerFile bool
+
+	timeout := time.After(5 * time.Second)
+
+	for !foundInnerFile {
+		select {
+		case ev := <-events:
+			if ev.Path == "subdir/inner.txt" {
+				foundInnerFile = true
+			}
+		case <-timeout:
+			cancel()
+			<-done
+			t.Fatal("timeout waiting for inner file event")
+		}
+	}
+
+	cancel()
+	<-done
+
+	if !foundInnerFile {
+		t.Error("inner file event not received")
+	}
+}
+
+func TestLocalWatch_ContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, dir, events)
+	}()
+
+	// Let the watcher start, then cancel.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Watch returned %v, want nil", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Watch did not return after context cancellation")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Unit tests for helper functions
 // ---------------------------------------------------------------------------
 

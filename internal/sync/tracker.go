@@ -120,6 +120,10 @@ func (dt *DepTracker) Complete(ledgerID int64) {
 	// to the same slice in Phase 5.1+ (watch mode overlapping cycles).
 	dependents := make([]*TrackedAction, len(ta.dependents))
 	copy(dependents, ta.dependents)
+
+	// Clean up byPath so long-lived trackers (watch mode) don't cancel
+	// the wrong action if the same path appears in a subsequent cycle.
+	delete(dt.byPath, ta.Action.Path)
 	dt.mu.Unlock()
 
 	for _, dep := range dependents {
@@ -134,9 +138,14 @@ func (dt *DepTracker) Complete(ledgerID int64) {
 }
 
 // CancelByPath cancels the in-flight action for the given path, if any.
+// Removes the byPath entry so long-lived trackers don't cancel the wrong
+// action if the same path is re-added in a subsequent cycle.
 func (dt *DepTracker) CancelByPath(path string) {
 	dt.mu.Lock()
 	ta, ok := dt.byPath[path]
+	if ok {
+		delete(dt.byPath, path)
+	}
 	dt.mu.Unlock()
 
 	if ok && ta.Cancel != nil {

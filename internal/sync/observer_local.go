@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
+
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
 
@@ -26,22 +28,55 @@ const (
 	nanosPerSecond         = 1_000_000_000
 	maxComponentLength     = 255
 	deviceNameWithDigitLen = 4 // COM0-COM9, LPT0-LPT9 have exactly 4 characters
+	safetyScanInterval     = 5 * time.Minute
 )
+
+// FsWatcher abstracts filesystem event monitoring. Satisfied by
+// *fsnotify.Watcher; tests inject a mock implementation.
+type FsWatcher interface {
+	Add(name string) error
+	Remove(name string) error
+	Close() error
+	Events() <-chan fsnotify.Event
+	Errors() <-chan error
+}
+
+// fsnotifyWrapper adapts *fsnotify.Watcher to the FsWatcher interface.
+// fsnotify exposes Events and Errors as public fields, not methods.
+type fsnotifyWrapper struct {
+	w *fsnotify.Watcher
+}
+
+func (fw *fsnotifyWrapper) Add(name string) error         { return fw.w.Add(name) }
+func (fw *fsnotifyWrapper) Remove(name string) error      { return fw.w.Remove(name) }
+func (fw *fsnotifyWrapper) Close() error                  { return fw.w.Close() }
+func (fw *fsnotifyWrapper) Events() <-chan fsnotify.Event { return fw.w.Events }
+func (fw *fsnotifyWrapper) Errors() <-chan error          { return fw.w.Errors }
 
 // LocalObserver walks the local filesystem and produces []ChangeEvent by
 // comparing each entry against the in-memory baseline. Stateless — syncRoot
 // is a parameter of FullScan, allowing reuse across cycles.
 type LocalObserver struct {
-	baseline *Baseline
-	logger   *slog.Logger
+	baseline       *Baseline
+	logger         *slog.Logger
+	watcherFactory func() (FsWatcher, error)
+	sleepFunc      func(ctx context.Context, d time.Duration) error
 }
 
 // NewLocalObserver creates a LocalObserver. The baseline must be loaded (from
 // BaselineManager.Load); it is read-only during observation.
 func NewLocalObserver(baseline *Baseline, logger *slog.Logger) *LocalObserver {
 	return &LocalObserver{
-		baseline: baseline,
-		logger:   logger,
+		baseline:  baseline,
+		logger:    logger,
+		sleepFunc: timeSleep,
+		watcherFactory: func() (FsWatcher, error) {
+			w, err := fsnotify.NewWatcher()
+			if err != nil {
+				return nil, err
+			}
+			return &fsnotifyWrapper{w: w}, nil
+		},
 	}
 }
 
@@ -88,6 +123,283 @@ func (o *LocalObserver) FullScan(ctx context.Context, syncRoot string) ([]Change
 	)
 
 	return events, nil
+}
+
+// Watch monitors the local filesystem for changes using fsnotify and sends
+// events to the provided channel. It blocks until the context is canceled,
+// returning nil. A periodic safety scan (every 5 minutes) catches any events
+// that fsnotify may miss (e.g., during brief watcher gaps or platform edge
+// cases). Returns ErrNosyncGuard if the .nosync guard file is present.
+func (o *LocalObserver) Watch(ctx context.Context, syncRoot string, events chan<- ChangeEvent) error {
+	o.logger.Info("local observer starting watch",
+		slog.String("sync_root", syncRoot),
+	)
+
+	// Guard: abort if .nosync file is present.
+	if _, err := os.Stat(filepath.Join(syncRoot, nosyncFileName)); err == nil {
+		o.logger.Warn("nosync guard file detected, aborting watch",
+			slog.String("sync_root", syncRoot))
+
+		return ErrNosyncGuard
+	}
+
+	watcher, err := o.watcherFactory()
+	if err != nil {
+		return fmt.Errorf("sync: creating filesystem watcher: %w", err)
+	}
+	defer watcher.Close()
+
+	// Walk the sync root to add watches on all existing directories.
+	if walkErr := o.addWatchesRecursive(watcher, syncRoot); walkErr != nil {
+		return fmt.Errorf("sync: adding initial watches: %w", walkErr)
+	}
+
+	return o.watchLoop(ctx, watcher, syncRoot, events)
+}
+
+// addWatchesRecursive walks the sync root and adds a watch on every directory.
+func (o *LocalObserver) addWatchesRecursive(watcher FsWatcher, syncRoot string) error {
+	return filepath.WalkDir(syncRoot, func(fsPath string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			o.logger.Warn("walk error during watch setup",
+				slog.String("path", fsPath), slog.String("error", walkErr.Error()))
+
+			return skipEntry(d)
+		}
+
+		if !d.IsDir() {
+			return nil
+		}
+
+		name := d.Name()
+		if fsPath != syncRoot && (isAlwaysExcluded(name) || !isValidOneDriveName(name)) {
+			return filepath.SkipDir
+		}
+
+		if addErr := watcher.Add(fsPath); addErr != nil {
+			o.logger.Warn("failed to add watch",
+				slog.String("path", fsPath), slog.String("error", addErr.Error()))
+		}
+
+		return nil
+	})
+}
+
+// watchLoop is the main select loop for Watch(). It processes fsnotify events,
+// watcher errors, safety scan ticks, and context cancellation.
+func (o *LocalObserver) watchLoop(
+	ctx context.Context, watcher FsWatcher, syncRoot string, events chan<- ChangeEvent,
+) error {
+	safetyTicker := time.NewTicker(safetyScanInterval)
+	defer safetyTicker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+
+		case fsEvent, ok := <-watcher.Events():
+			if !ok {
+				return nil
+			}
+
+			o.handleFsEvent(ctx, fsEvent, watcher, syncRoot, events)
+
+		case watchErr, ok := <-watcher.Errors():
+			if !ok {
+				return nil
+			}
+
+			o.logger.Warn("filesystem watcher error",
+				slog.String("error", watchErr.Error()))
+
+		case <-safetyTicker.C:
+			o.runSafetyScan(ctx, syncRoot, events)
+		}
+	}
+}
+
+// handleFsEvent processes a single fsnotify event and sends the appropriate
+// ChangeEvent to the output channel.
+func (o *LocalObserver) handleFsEvent(
+	ctx context.Context, fsEvent fsnotify.Event, watcher FsWatcher,
+	syncRoot string, events chan<- ChangeEvent,
+) {
+	// Ignore chmod events — mode changes are not synced.
+	if fsEvent.Has(fsnotify.Chmod) && !fsEvent.Has(fsnotify.Create) && !fsEvent.Has(fsnotify.Write) {
+		return
+	}
+
+	relPath, err := filepath.Rel(syncRoot, fsEvent.Name)
+	if err != nil {
+		o.logger.Warn("failed to compute relative path",
+			slog.String("path", fsEvent.Name), slog.String("error", err.Error()))
+
+		return
+	}
+
+	dbRelPath := nfcNormalize(filepath.ToSlash(relPath))
+	name := nfcNormalize(filepath.Base(fsEvent.Name))
+
+	if isAlwaysExcluded(name) || !isValidOneDriveName(name) {
+		return
+	}
+
+	switch {
+	case fsEvent.Has(fsnotify.Create):
+		o.handleCreate(ctx, fsEvent.Name, dbRelPath, name, watcher, events)
+
+	case fsEvent.Has(fsnotify.Write):
+		o.handleWrite(ctx, fsEvent.Name, dbRelPath, name, events)
+
+	case fsEvent.Has(fsnotify.Remove) || fsEvent.Has(fsnotify.Rename):
+		o.handleDelete(ctx, dbRelPath, name, events)
+	}
+}
+
+// handleCreate processes a Create event: stat, hash (files), add watch (dirs).
+func (o *LocalObserver) handleCreate(
+	ctx context.Context, fsPath, dbRelPath, name string,
+	watcher FsWatcher, events chan<- ChangeEvent,
+) {
+	info, err := os.Stat(fsPath)
+	if err != nil {
+		// File may have been removed immediately after creation.
+		o.logger.Debug("stat failed for created path",
+			slog.String("path", dbRelPath), slog.String("error", err.Error()))
+
+		return
+	}
+
+	ev := ChangeEvent{
+		Source: SourceLocal,
+		Type:   ChangeCreate,
+		Path:   dbRelPath,
+		Name:   name,
+		Size:   info.Size(),
+		Mtime:  info.ModTime().UnixNano(),
+	}
+
+	if info.IsDir() {
+		ev.ItemType = ItemTypeFolder
+
+		if addErr := watcher.Add(fsPath); addErr != nil {
+			o.logger.Warn("failed to add watch on new directory",
+				slog.String("path", dbRelPath), slog.String("error", addErr.Error()))
+		}
+	} else {
+		ev.ItemType = ItemTypeFile
+
+		hash, hashErr := computeQuickXorHash(fsPath)
+		if hashErr != nil {
+			o.logger.Warn("hash failed for new file",
+				slog.String("path", dbRelPath), slog.String("error", hashErr.Error()))
+
+			return
+		}
+
+		ev.Hash = hash
+	}
+
+	select {
+	case events <- ev:
+	case <-ctx.Done():
+	}
+}
+
+// handleWrite processes a Write event: classify against baseline.
+func (o *LocalObserver) handleWrite(
+	ctx context.Context, fsPath, dbRelPath, name string, events chan<- ChangeEvent,
+) {
+	info, err := os.Stat(fsPath)
+	if err != nil {
+		o.logger.Debug("stat failed for modified path",
+			slog.String("path", dbRelPath), slog.String("error", err.Error()))
+
+		return
+	}
+
+	// Ignore directory write events — folder mtime changes are noise.
+	if info.IsDir() {
+		return
+	}
+
+	hash, err := computeQuickXorHash(fsPath)
+	if err != nil {
+		o.logger.Warn("hash failed for modified file",
+			slog.String("path", dbRelPath), slog.String("error", err.Error()))
+
+		return
+	}
+
+	// Check baseline — if hash matches, the write was a no-op.
+	if existing, ok := o.baseline.GetByPath(dbRelPath); ok && existing.LocalHash == hash {
+		return
+	}
+
+	ev := ChangeEvent{
+		Source:   SourceLocal,
+		Type:     ChangeModify,
+		Path:     dbRelPath,
+		Name:     name,
+		ItemType: ItemTypeFile,
+		Size:     info.Size(),
+		Hash:     hash,
+		Mtime:    info.ModTime().UnixNano(),
+	}
+
+	select {
+	case events <- ev:
+	case <-ctx.Done():
+	}
+}
+
+// handleDelete processes a Remove/Rename event.
+func (o *LocalObserver) handleDelete(
+	ctx context.Context, dbRelPath, name string, events chan<- ChangeEvent,
+) {
+	itemType := ItemTypeFile
+
+	if existing, ok := o.baseline.GetByPath(dbRelPath); ok {
+		itemType = existing.ItemType
+	}
+
+	ev := ChangeEvent{
+		Source:    SourceLocal,
+		Type:      ChangeDelete,
+		Path:      dbRelPath,
+		Name:      name,
+		ItemType:  itemType,
+		IsDeleted: true,
+	}
+
+	select {
+	case events <- ev:
+	case <-ctx.Done():
+	}
+}
+
+// runSafetyScan performs a full filesystem scan as a safety net, sending any
+// detected changes to the events channel. This catches events that fsnotify
+// may have missed.
+func (o *LocalObserver) runSafetyScan(ctx context.Context, syncRoot string, events chan<- ChangeEvent) {
+	o.logger.Debug("running safety scan")
+
+	scanEvents, err := o.FullScan(ctx, syncRoot)
+	if err != nil {
+		o.logger.Warn("safety scan failed", slog.String("error", err.Error()))
+		return
+	}
+
+	for i := range scanEvents {
+		select {
+		case events <- scanEvents[i]:
+		case <-ctx.Done():
+			return
+		}
+	}
+
+	o.logger.Debug("safety scan complete", slog.Int("events", len(scanEvents)))
 }
 
 // makeWalkFunc returns a WalkDirFunc that classifies filesystem entries

@@ -8,6 +8,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	stdsync "sync"
 	"time"
 
 	"golang.org/x/text/unicode/norm"
@@ -22,8 +23,11 @@ var ErrDeltaExpired = errors.New("sync: delta token expired (resync required)")
 
 // Constants for the remote observer (satisfy mnd linter).
 const (
-	maxObserverPages = 10000
-	maxPathDepth     = 256
+	maxObserverPages      = 10000
+	maxPathDepth          = 256
+	initialWatchBackoff   = 5 * time.Second
+	backoffMultiplier     = 2
+	maxConsecutiveBackoff = 10 // cap prevents overflow; 5s * 2^10 = 5120s > any interval
 )
 
 // inflightParent tracks a non-root item seen in the current delta batch,
@@ -40,10 +44,15 @@ type inflightParent struct {
 // It handles pagination, path materialization, change classification, and
 // normalization (NFC, driveID zero-padding).
 type RemoteObserver struct {
-	fetcher  DeltaFetcher
-	baseline *Baseline
-	driveID  driveid.ID
-	logger   *slog.Logger
+	fetcher   DeltaFetcher
+	baseline  *Baseline
+	driveID   driveid.ID
+	logger    *slog.Logger
+	sleepFunc func(ctx context.Context, d time.Duration) error
+
+	// mu protects deltaToken for concurrent reads via CurrentDeltaToken().
+	mu         stdsync.Mutex
+	deltaToken string
 }
 
 // NewRemoteObserver creates a RemoteObserver for the given drive. The
@@ -51,10 +60,11 @@ type RemoteObserver struct {
 // read-only during observation. The caller must pass a normalized driveid.ID.
 func NewRemoteObserver(fetcher DeltaFetcher, baseline *Baseline, driveID driveid.ID, logger *slog.Logger) *RemoteObserver {
 	return &RemoteObserver{
-		fetcher:  fetcher,
-		baseline: baseline,
-		driveID:  driveID,
-		logger:   logger,
+		fetcher:   fetcher,
+		baseline:  baseline,
+		driveID:   driveID,
+		logger:    logger,
+		sleepFunc: timeSleep,
 	}
 }
 
@@ -91,6 +101,128 @@ func (o *RemoteObserver) FullDelta(ctx context.Context, savedToken string) ([]Ch
 	}
 
 	return nil, "", fmt.Errorf("sync: exceeded maximum page count (%d)", maxObserverPages)
+}
+
+// Watch continuously polls for remote delta changes and sends events to the
+// provided channel. It blocks until the context is canceled, returning nil.
+// On transient errors, it applies exponential backoff (starting at 5s, capped
+// at the poll interval). On ErrDeltaExpired (410), it resets the token and
+// retries with a full resync. The delta token is tracked internally — use
+// CurrentDeltaToken() to read the latest value.
+func (o *RemoteObserver) Watch(ctx context.Context, savedToken string, events chan<- ChangeEvent, interval time.Duration) error {
+	o.setDeltaToken(savedToken)
+
+	o.logger.Info("remote observer starting watch loop",
+		slog.String("drive_id", o.driveID.String()),
+		slog.Duration("interval", interval),
+		slog.Bool("has_token", savedToken != ""),
+	)
+
+	backoff := initialWatchBackoff
+	consecutiveErrors := 0
+
+	for {
+		token := o.CurrentDeltaToken()
+
+		polledEvents, newToken, err := o.FullDelta(ctx, token)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+
+			sleepDur := backoff
+			backoff, consecutiveErrors = o.advanceBackoff(err, backoff, consecutiveErrors, interval)
+
+			if sleepErr := o.sleepFunc(ctx, sleepDur); sleepErr != nil {
+				return nil
+			}
+
+			continue
+		}
+
+		// Successful poll — send events, advance token, reset backoff.
+		for i := range polledEvents {
+			select {
+			case events <- polledEvents[i]:
+			case <-ctx.Done():
+				return nil
+			}
+		}
+
+		o.setDeltaToken(newToken)
+
+		backoff = initialWatchBackoff
+		consecutiveErrors = 0
+
+		// Wait for the next poll interval.
+		if sleepErr := o.sleepFunc(ctx, interval); sleepErr != nil {
+			return nil
+		}
+	}
+}
+
+// advanceBackoff processes a poll error, advancing the backoff for the next
+// retry. The caller sleeps with the CURRENT backoff before calling this.
+// Returns the updated backoff duration and consecutive error count.
+func (o *RemoteObserver) advanceBackoff(
+	err error, backoff time.Duration, consecutiveErrors int, interval time.Duration,
+) (time.Duration, int) {
+	if errors.Is(err, ErrDeltaExpired) {
+		o.logger.Warn("delta token expired during watch, resetting for full resync")
+		o.setDeltaToken("")
+
+		return initialWatchBackoff, 0
+	}
+
+	consecutiveErrors++
+
+	o.logger.Warn("remote watch poll failed, backing off",
+		slog.String("error", err.Error()),
+		slog.Duration("backoff", backoff),
+		slog.Int("consecutive_errors", consecutiveErrors),
+	)
+
+	nextBackoff := backoff * backoffMultiplier
+	if nextBackoff > interval {
+		nextBackoff = interval
+	}
+
+	if consecutiveErrors > maxConsecutiveBackoff {
+		nextBackoff = interval
+	}
+
+	return nextBackoff, consecutiveErrors
+}
+
+// CurrentDeltaToken returns the latest delta token observed by Watch().
+// Thread-safe — can be called from any goroutine while Watch() is running.
+func (o *RemoteObserver) CurrentDeltaToken() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	return o.deltaToken
+}
+
+// setDeltaToken updates the internal delta token under the mutex.
+func (o *RemoteObserver) setDeltaToken(token string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	o.deltaToken = token
+}
+
+// timeSleep waits for the given duration or until the context is canceled.
+// Same pattern as graph.Client.sleepFunc.
+func timeSleep(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // fetchPage fetches a single delta page, processes items, and returns events.

@@ -993,6 +993,262 @@ func TestFullDelta_DeletedItem_NotInBaseline(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Watch tests
+// ---------------------------------------------------------------------------
+
+// noopSleep immediately returns nil. Tests use this to skip real delays.
+func noopSleep(_ context.Context, _ time.Duration) error {
+	return nil
+}
+
+// sequentialFetcher returns a different DeltaPage for each call, allowing
+// tests to script multi-poll watch scenarios.
+type sequentialFetcher struct {
+	pages []mockDeltaPage
+	calls int
+}
+
+func (f *sequentialFetcher) Delta(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+	if f.calls >= len(f.pages) {
+		return nil, errors.New("mock: no more pages configured")
+	}
+
+	p := f.pages[f.calls]
+	f.calls++
+
+	return p.page, p.err
+}
+
+func TestWatch_PollsAtInterval(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &sequentialFetcher{
+		pages: []mockDeltaPage{
+			{page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveid.New(testDriveID)},
+					{ID: "f1", Name: "a.txt", ParentID: "root", DriveID: driveid.New(testDriveID)},
+				},
+				DeltaLink: "token-1",
+			}},
+			{page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "f2", Name: "b.txt", ParentID: "root", DriveID: driveid.New(testDriveID)},
+				},
+				DeltaLink: "token-2",
+			}},
+		},
+	}
+
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
+	obs.sleepFunc = noopSleep
+
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go func() {
+		// Wait for at least 2 events then cancel.
+		received := 0
+		for range events {
+			received++
+			if received >= 2 {
+				cancel()
+				return
+			}
+		}
+	}()
+
+	err := obs.Watch(ctx, "", events, time.Millisecond)
+	if err != nil {
+		t.Fatalf("Watch returned error: %v", err)
+	}
+
+	if fetcher.calls < 2 {
+		t.Errorf("fetcher called %d times, want >= 2", fetcher.calls)
+	}
+
+	if obs.CurrentDeltaToken() == "" {
+		t.Error("delta token should be non-empty after successful polls")
+	}
+}
+
+func TestWatch_BackoffOnError(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &sequentialFetcher{
+		pages: []mockDeltaPage{
+			{err: errors.New("transient network error")},
+			{err: errors.New("transient network error")},
+			{page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveid.New(testDriveID)},
+					{ID: "f1", Name: "ok.txt", ParentID: "root", DriveID: driveid.New(testDriveID)},
+				},
+				DeltaLink: "recovered-token",
+			}},
+		},
+	}
+
+	var sleepDurations []time.Duration
+
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
+	obs.sleepFunc = func(_ context.Context, d time.Duration) error {
+		sleepDurations = append(sleepDurations, d)
+		return nil
+	}
+
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go func() {
+		<-events // wait for the successful event
+		cancel()
+	}()
+
+	err := obs.Watch(ctx, "", events, time.Minute)
+	if err != nil {
+		t.Fatalf("Watch returned error: %v", err)
+	}
+
+	// First sleep should be 5s (initial backoff), second should be 10s (doubled).
+	if len(sleepDurations) < 2 {
+		t.Fatalf("sleep called %d times, want >= 2 (for backoff)", len(sleepDurations))
+	}
+
+	if sleepDurations[0] != initialWatchBackoff {
+		t.Errorf("first backoff = %v, want %v", sleepDurations[0], initialWatchBackoff)
+	}
+
+	if sleepDurations[1] != initialWatchBackoff*backoffMultiplier {
+		t.Errorf("second backoff = %v, want %v", sleepDurations[1], initialWatchBackoff*backoffMultiplier)
+	}
+}
+
+func TestWatch_DeltaExpiredResets(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &sequentialFetcher{
+		pages: []mockDeltaPage{
+			// First call: delta expired.
+			{err: graph.ErrGone},
+			// Second call (after reset): success with full data.
+			{page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveid.New(testDriveID)},
+					{ID: "f1", Name: "resync.txt", ParentID: "root", DriveID: driveid.New(testDriveID)},
+				},
+				DeltaLink: "new-full-token",
+			}},
+		},
+	}
+
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
+	obs.sleepFunc = noopSleep
+
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go func() {
+		<-events // wait for the resync event
+		cancel()
+	}()
+
+	err := obs.Watch(ctx, "old-expired-token", events, time.Millisecond)
+	if err != nil {
+		t.Fatalf("Watch returned error: %v", err)
+	}
+
+	// After delta expired, token should have been reset to "" for resync,
+	// then updated to the new token from the successful full resync.
+	if obs.CurrentDeltaToken() != "new-full-token" {
+		t.Errorf("token = %q, want %q", obs.CurrentDeltaToken(), "new-full-token")
+	}
+}
+
+func TestWatch_ContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	// Fetcher that always succeeds with empty delta (no events to send).
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{{
+			page: &graph.DeltaPage{DeltaLink: "token"},
+		}},
+	}
+
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
+	obs.sleepFunc = func(ctx context.Context, _ time.Duration) error {
+		// Block until canceled.
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, "", events, time.Hour)
+	}()
+
+	// Let the first poll complete, then cancel.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Watch returned %v, want nil", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Watch did not return after context cancellation")
+	}
+}
+
+func TestWatch_CurrentDeltaToken(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &sequentialFetcher{
+		pages: []mockDeltaPage{
+			{page: &graph.DeltaPage{DeltaLink: "token-after-poll-1"}},
+			{page: &graph.DeltaPage{DeltaLink: "token-after-poll-2"}},
+		},
+	}
+
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
+	obs.sleepFunc = noopSleep
+
+	// Before Watch starts, token is empty.
+	if obs.CurrentDeltaToken() != "" {
+		t.Errorf("initial token = %q, want empty", obs.CurrentDeltaToken())
+	}
+
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	pollCount := 0
+	origSleep := obs.sleepFunc
+	obs.sleepFunc = func(ctx context.Context, d time.Duration) error {
+		pollCount++
+		if pollCount >= 2 {
+			cancel()
+			return ctx.Err()
+		}
+		return origSleep(ctx, d)
+	}
+
+	err := obs.Watch(ctx, "initial-token", events, time.Millisecond)
+	if err != nil {
+		t.Fatalf("Watch returned error: %v", err)
+	}
+
+	// Token should have been updated by successful polls.
+	token := obs.CurrentDeltaToken()
+	if token != "token-after-poll-1" && token != "token-after-poll-2" {
+		t.Errorf("token = %q, want one of the poll tokens", token)
+	}
+}
+
 func TestFullDelta_RenameInPlace(t *testing.T) {
 	t.Parallel()
 
