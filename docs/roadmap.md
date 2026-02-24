@@ -248,6 +248,22 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 
 ## Phase 5: Watch Mode + Polish — FUTURE
 
+> **ARCHITECTURAL NOTE — Phase 5 requires a new concurrency design.**
+>
+> The Phase 4v2 `RunOnce` pipeline is fully sequential: observe remote → observe local → buffer → plan → execute (downloads → uploads → deletes) → commit. Each phase blocks until complete. This is correct and simple for one-shot `sync`, but fundamentally unsuitable for watch mode:
+>
+> - **A multi-GB upload blocks change detection.** An 8-hour upload holds one of 8 worker slots. No new sync cycle can start until the entire execute phase finishes — meaning hours of blindness to new local and remote changes.
+> - **Downloads block uploads.** Phase 3 (downloads) must complete before Phase 4 (uploads) starts. A slow download delays all pending uploads.
+> - **Ctrl-C loses all upload progress.** Interrupted chunked uploads restart from byte 0 on the next sync (no session resume, no partial file retention for downloads — see B-085).
+> - **Users perceive the tool as stuck.** Seven workers idle while one grinds through a large file. No new changes sync. No feedback.
+>
+> Watch mode must decouple these concerns into concurrent subsystems:
+> 1. **Observer goroutines** — continuously detect remote (polling delta) and local (FS events) changes, independent of transfer state
+> 2. **Transfer queue** — a persistent, prioritized queue of pending downloads and uploads that drains independently of observation
+> 3. **Baseline commits** — incremental (per-completed-transfer) rather than batch (per-sync-cycle), so progress is never lost
+>
+> The increment descriptions below are carried forward from the original Phase 5 plan and **do not yet reflect this architectural requirement**. They will be redesigned during Phase 5 planning. The current `RunOnce` pipeline will likely remain as the `sync` (one-shot) code path, while `sync --watch` gets the new concurrent architecture.
+
 | Increment | Description |
 |-----------|-------------|
 | 5.1 | `RemoteObserver.Watch()` — polling-based (delta every N seconds) |
