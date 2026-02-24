@@ -308,6 +308,9 @@ grep -rn "appendActions\|orderPlan" internal/sync/
 
 # SyncReport from plan slices
 grep -rn "len(plan\." internal/sync/
+
+# Per-executor createdFolders map (replaced by incremental baseline updates)
+grep -rn "createdFolders" internal/sync/
 ```
 
 **Interpreting results**: During migration (increments 5.0-5.2), some patterns
@@ -321,7 +324,7 @@ test *calls* a deleted function.
 
 ```bash
 grep -rn \
-  "plan\.FolderCreates\|plan\.Moves\|plan\.Downloads\|plan\.Uploads\|plan\.LocalDeletes\|plan\.RemoteDeletes\|plan\.Conflicts\|plan\.SyncedUpdates\|plan\.Cleanups\|executeParallel\|workerPoolSize\|executeAndCommit\|appendActions\|orderPlan\|len(plan\." \
+  "plan\.FolderCreates\|plan\.Moves\|plan\.Downloads\|plan\.Uploads\|plan\.LocalDeletes\|plan\.RemoteDeletes\|plan\.Conflicts\|plan\.SyncedUpdates\|plan\.Cleanups\|executeParallel\|workerPoolSize\|executeAndCommit\|appendActions\|orderPlan\|len(plan\.\|createdFolders" \
   internal/sync/ \
   --include="*.go" \
   --exclude="*_test.go" \
@@ -347,5 +350,5 @@ in [concurrent-execution.md](concurrent-execution.md).
 | Batch `Commit(ctx, []Outcome, deltaToken, driveID)` | `baseline.go` | `CommitOutcome(ctx, outcome, ledgerID)` per action + `CommitDeltaToken(ctx, token, driveID)` | §3 Persistent Ledger |
 | `executeAndCommit()` — execute-then-commit glue | `engine.go` | Workers commit individually after each action | §5 Workers |
 | `buildReport()` with `len(plan.FolderCreates)` etc. | `engine.go` | Count from `plan.Actions` filtered by `ActionType` | §2 Action Plan |
-| `createdFolders` map (no mutex) | `executor.go` | `createdFolders` map with `sync.Mutex` | §5 Workers |
+| `createdFolders` map (no mutex) | `executor.go` | Eliminated — `CommitOutcome()` updates `Baseline.ByPath` incrementally (under `RWMutex`), so `resolveParentID()` finds newly-created folders in the baseline | §3 Persistent Ledger, §5 Workers |
 | No watch mode (`--watch` returns "not implemented") | `engine.go` / CLI `sync.go` | `RunWatch()` with continuous observers + persistent workers | §6 Watch Mode |
