@@ -405,4 +405,11 @@ A single `buildDependencies()` function that handles all edge types (parent fold
 ### resolveItemType needs nil guard for defensive safety
 `resolveItemType(view *PathView)` is called from `buildDependencies()` where `action.View` should always be non-nil (set by `makeAction()`), but defensive coding requires a nil guard. Default to `ItemTypeFile` when view is nil — consistent with the existing default at the end of the function.
 
+### fsnotify/fsnotify over rjeczalik/notify for filesystem watching
+The roadmap originally specified `rjeczalik/notify`, but `fsnotify/fsnotify` v1.9.0 was chosen instead: actively maintained (April 2025 release, 10.6k stars), de facto standard (Hugo, Docker, Kubernetes, Syncthing), and `rjeczalik/notify` is effectively unmaintained (last release Jan 2023). Per-directory watches are fine because we already walk the tree in `FullScan()` and track directories in baseline. The periodic safety scan catches any platform edge cases.
 
+### Debounce goroutine cleanup in tests
+When using `FlushDebounced()` in tests, always cancel the context AND drain the output channel (`for range out {}`) before the test returns. The debounce goroutine calls `FlushImmediate()` on ctx.Done which logs — if the test's `*testing.T` is already done, this panics with "Log in goroutine after test completed". The `defer cancel()` pattern alone is insufficient; explicit drain is required.
+
+### Watch() method sleepFunc pattern
+Both `RemoteObserver.Watch()` and `LocalObserver.Watch()` use injectable `sleepFunc func(ctx context.Context, d time.Duration) error` for test control. Default is `timeSleep()` which uses `time.NewTimer` + `select` on ctx.Done. Tests inject `noopSleep()` that returns immediately. Same pattern as `graph.Client.sleepFunc`.
