@@ -21,11 +21,21 @@ import (
 
 // String constants for enum serialization (shared by String() and Parse*).
 const (
-	strRemote = "remote"
-	strLocal  = "local"
-	strFile   = "file"
-	strFolder = "folder"
-	strRoot   = "root"
+	strRemote       = "remote"
+	strLocal        = "local"
+	strFile         = "file"
+	strFolder       = "folder"
+	strRoot         = "root"
+	strDownload     = "download"
+	strUpload       = "upload"
+	strLocalDelete  = "local_delete"
+	strRemoteDelete = "remote_delete"
+	strLocalMove    = "local_move"
+	strRemoteMove   = "remote_move"
+	strFolderCreate = "folder_create"
+	strConflict     = "conflict"
+	strUpdateSynced = "update_synced"
+	strCleanup      = "cleanup"
 )
 
 // Resolution strategy constants for conflict resolution.
@@ -173,25 +183,25 @@ const (
 func (a ActionType) String() string {
 	switch a {
 	case ActionDownload:
-		return "download"
+		return strDownload
 	case ActionUpload:
-		return "upload"
+		return strUpload
 	case ActionLocalDelete:
-		return "local_delete"
+		return strLocalDelete
 	case ActionRemoteDelete:
-		return "remote_delete"
+		return strRemoteDelete
 	case ActionLocalMove:
-		return "local_move"
+		return strLocalMove
 	case ActionRemoteMove:
-		return "remote_move"
+		return strRemoteMove
 	case ActionFolderCreate:
-		return "folder_create"
+		return strFolderCreate
 	case ActionConflict:
-		return "conflict"
+		return strConflict
 	case ActionUpdateSynced:
-		return "update_synced"
+		return strUpdateSynced
 	case ActionCleanup:
-		return "cleanup"
+		return strCleanup
 	default:
 		return fmt.Sprintf("ActionType(%d)", int(a))
 	}

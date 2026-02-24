@@ -574,6 +574,12 @@ func scanConflictRowSingle(row *sql.Row) (*ConflictRecord, error) {
 	return &c, nil
 }
 
+// DB returns the underlying database connection for sharing with other
+// components (e.g., Ledger) that need to participate in the same database.
+func (m *BaselineManager) DB() *sql.DB {
+	return m.db
+}
+
 // Close closes the underlying database connection.
 func (m *BaselineManager) Close() error {
 	return m.db.Close()
