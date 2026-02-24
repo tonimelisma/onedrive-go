@@ -148,7 +148,7 @@ func TestE2E_Sync_UploadOnly(t *testing.T) {
 	})
 
 	// Run sync --upload-only.
-	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--upload-only")
+	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
 	assert.Contains(t, stderr, "Mode: upload-only")
 
 	// Verify file appeared remotely.
@@ -186,7 +186,7 @@ func TestE2E_Sync_DownloadOnly(t *testing.T) {
 	})
 
 	// Run sync --download-only.
-	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--download-only")
+	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--download-only", "--force")
 	assert.Contains(t, stderr, "Mode: download-only")
 
 	// Verify file appeared locally.
@@ -214,7 +214,7 @@ func TestE2E_Sync_DryRun(t *testing.T) {
 	})
 
 	// Run sync --dry-run --upload-only.
-	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--dry-run")
+	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--dry-run", "--force")
 	assert.Contains(t, stderr, "Dry run")
 
 	// Verify file was NOT uploaded.
@@ -240,7 +240,7 @@ func TestE2E_Sync_Verify(t *testing.T) {
 	})
 
 	// Sync to establish baseline.
-	runCLIWithConfig(t, cfgPath, "sync", "--upload-only")
+	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
 
 	// Run verify.
 	stdout, _, verifyErr := runCLIWithConfigAllowError(t, cfgPath, "verify")
