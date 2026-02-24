@@ -216,6 +216,11 @@ linters:
           - gosec
           - bodyclose
           - errcheck
+      # E2E tests use exec.Command for CLI invocations — context not needed
+      # (timeouts are enforced by go test -timeout).
+      - path: e2e/
+        linters:
+          - noctx
       - path: main\.go
         linters:
           - gocritic
