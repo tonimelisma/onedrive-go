@@ -242,7 +242,10 @@ func (c *Client) terminalError(
 			slog.Int("attempts", attempt+1),
 		)
 	} else {
-		c.logger.Warn("request failed",
+		// Non-retried failures are logged at DEBUG — the HTTP layer lacks context
+		// to judge severity. Callers decide: e.g. DELETE 404 is success, GET 404
+		// is an error the caller will report.
+		c.logger.Debug("request failed",
 			slog.String("method", method),
 			slog.String("path", path),
 			slog.Int("status", statusCode),
@@ -353,7 +356,7 @@ func (c *Client) preAuthTerminalError(
 			slog.Int("attempts", attempt+1),
 		)
 	} else {
-		c.logger.Warn("pre-auth request failed",
+		c.logger.Debug("pre-auth request failed",
 			slog.String("desc", desc),
 			slog.Int("status", statusCode),
 			slog.String("request_id", reqID),

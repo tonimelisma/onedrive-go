@@ -418,7 +418,7 @@ func TestE2E_Sync_EditDeleteConflict(t *testing.T) {
 	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--force")
 
 	// Step 6: Sync succeeded (auto-resolved, no failures).
-	assert.NotContains(t, stderr, "Failed:")
+	assert.Contains(t, stderr, "Failed:    0")
 
 	// Step 7: Local file preserved with modified content.
 	data, err := os.ReadFile(fragileFile)

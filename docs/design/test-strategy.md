@@ -73,7 +73,8 @@ Build tags control which tests run in which context:
 |-----|---------|----------|
 | (none) | Unit tests | Always (`go test ./...`) |
 | `integration` | Integration tests (mock HTTP, real DB) | CI Job 2, local on demand |
-| `e2e` | Live OneDrive API tests | CI Job 3, merge + nightly |
+| `e2e` | Fast E2E — live OneDrive API tests | Every DoD gate, CI on push to main |
+| `e2e,e2e_full` | Full E2E — includes slow tests (large files, bidirectional sync, edge cases) | Nightly CI, manual, pre-release |
 | `chaos` | Fault injection tests | CI Job 2 |
 | `stress` | Long-running performance tests | Nightly only |
 | `benchmark` | Go benchmarks | CI Job 1 (tracked, not gated) |
@@ -768,36 +769,20 @@ When tokens expire completely (90 days of inactivity), re-bootstrap using the sa
 
 **Local CI validation** (before pushing changes that affect CI):
 
-When changing token paths, secret naming, environment variables, or workflow logic, validate locally before pushing to avoid push-and-pray cycles:
+When changing token paths, secret naming, environment variables, or workflow logic, use `scripts/validate-ci-locally.sh` to validate locally before pushing:
 
 ```bash
-# 1. Verify az CLI is logged in and can access the vault
-az keyvault secret list --vault-name kv-onedrivego-ci --query "[].name" -o tsv
+# Mirrors integration.yml exactly: downloads token from Key Vault, runs
+# integration + E2E tests, saves rotated token back.
+# Prerequisites: az CLI logged in, gh CLI authenticated, go, jq.
+./scripts/validate-ci-locally.sh [DRIVE]
 
-# 2. Verify the secret exists with the expected name
-DRIVE="personal:testitesti18@outlook.com"
-SECRET_NAME="onedrive-oauth-token-$(echo "$DRIVE" | sed 's/[:@.]/-/g')"
-az keyvault secret show --vault-name kv-onedrivego-ci --name "$SECRET_NAME" --query "name" -o tsv
-
-# 3. Download token locally and validate structure
-TOKEN_FILE="/tmp/ci-token-test.json"
-az keyvault secret download --vault-name kv-onedrivego-ci --name "$SECRET_NAME" --file "$TOKEN_FILE" --encoding utf-8
-jq -e '.refresh_token' "$TOKEN_FILE" > /dev/null && echo "Token valid" || echo "Token INVALID"
-
-# 4. Verify the token works with the CLI (same as CI does)
-DATA_DIR="$HOME/.local/share/onedrive-go"
-SANITIZED=$(echo "$DRIVE" | sed 's/:/_/')
-cp "$TOKEN_FILE" "$DATA_DIR/token_${SANITIZED}.json"
-go run . whoami --json --drive "$DRIVE" | jq '.drives[0].id'
-
-# 5. Verify E2E tests pass locally (same as CI)
-ONEDRIVE_TEST_DRIVE="$DRIVE" go test -tags=e2e -race -v -timeout=5m ./e2e/...
-
-# 6. Clean up temp file
-rm -f "$TOKEN_FILE"
+# Examples:
+./scripts/validate-ci-locally.sh                                      # auto-detects from ONEDRIVE_TEST_DRIVES or gh variable
+./scripts/validate-ci-locally.sh personal:testitesti18@outlook.com    # explicit drive
 ```
 
-This local validation mirrors the CI workflow exactly and catches issues like wrong secret names, missing tokens, or broken token paths before they reach GitHub Actions.
+The script performs all 9 steps of the CI workflow locally (derive names, verify Azure access, download token, validate structure, install token, whoami, integration tests, E2E tests, save rotated token back). This catches issues like wrong secret names, missing tokens, or broken token paths before they reach GitHub Actions.
 
 **Test isolation**: Each test creates a timestamped directory on OneDrive (`/onedrive-go-e2e-test-20260217-143052-{random}/`) and cleans it up on teardown. Tests run serially to avoid rate limiting.
 

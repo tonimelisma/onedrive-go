@@ -22,3 +22,7 @@ onedrive-go
 
 # Claude Code local settings
 .claude/
+
+# E2E debug logs
+.e2e-logs/
+e2e/.e2e-logs/
