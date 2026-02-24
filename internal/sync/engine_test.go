@@ -805,6 +805,57 @@ func TestRunOnce_EmptyPlan_NoPanic(t *testing.T) {
 	}
 }
 
+// TestRunOnce_DeltaTokenNotCommittedOnFailure verifies that when some actions
+// fail, the delta token is NOT advanced. This ensures the items that failed
+// are re-observed on the next sync cycle. Regression test for: unconditional
+// CommitDeltaToken after pool.Wait() (spec violation per §13.1).
+func TestRunOnce_DeltaTokenNotCommittedOnFailure(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+				{
+					ID: "f1", Name: "will-fail.txt", ParentID: "root",
+					DriveID: driveID, Size: 10, QuickXorHash: "hash1",
+				},
+			}, "should-not-be-saved"), nil
+		},
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
+			return 0, fmt.Errorf("simulated network error")
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	ctx := context.Background()
+
+	// Seed a known delta token so we can verify it's preserved.
+	seedBaseline(t, eng.baseline, ctx, nil, "old-token")
+
+	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOpts{})
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	if report.Failed < 1 {
+		t.Fatalf("failed = %d, want >= 1", report.Failed)
+	}
+
+	// The delta token should NOT have been advanced — it should still be
+	// the old value we seeded.
+	token, tokenErr := eng.baseline.GetDeltaToken(ctx, engineTestDriveID)
+	if tokenErr != nil {
+		t.Fatalf("GetDeltaToken: %v", tokenErr)
+	}
+
+	if token != "old-token" {
+		t.Errorf("delta token = %q, want %q (should not advance on failure)", token, "old-token")
+	}
+}
+
 func TestResolveSafetyConfig_Default(t *testing.T) {
 	t.Parallel()
 

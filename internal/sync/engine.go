@@ -223,7 +223,7 @@ func (e *Engine) executePlan(
 		return fmt.Errorf("sync: writing actions to ledger: %w", writeErr)
 	}
 
-	tracker := NewDepTracker(len(plan.Actions), len(plan.Actions))
+	tracker := NewDepTracker(len(plan.Actions), len(plan.Actions), e.logger)
 
 	for i := range plan.Actions {
 		var depIDs []int64
@@ -239,11 +239,23 @@ func (e *Engine) executePlan(
 	pool.Wait()
 	pool.Stop()
 
-	if commitErr := e.baseline.CommitDeltaToken(ctx, deltaToken, e.driveID.String()); commitErr != nil {
-		e.logger.Error("failed to commit delta token", slog.String("error", commitErr.Error()))
-	}
-
 	report.Succeeded, report.Failed, report.Errors = pool.Stats()
+
+	// Only advance the delta token when the entire cycle succeeded. If any
+	// action failed, the token stays at the previous value so the next sync
+	// re-observes the items that failed. This matches the spec requirement
+	// that the token is committed only when all actions reach "done"
+	// (concurrent-execution.md §13.1). When multi-cycle overlap lands
+	// (Phase 5.3), this guard should be refined to per-cycle tracking.
+	if report.Failed == 0 {
+		if commitErr := e.baseline.CommitDeltaToken(ctx, deltaToken, e.driveID.String()); commitErr != nil {
+			e.logger.Error("failed to commit delta token", slog.String("error", commitErr.Error()))
+		}
+	} else {
+		e.logger.Warn("skipping delta token commit due to failed actions",
+			slog.Int("failed", report.Failed),
+		)
+	}
 
 	return nil
 }

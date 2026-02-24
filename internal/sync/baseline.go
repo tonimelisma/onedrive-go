@@ -126,9 +126,10 @@ func NewBaselineManager(dbPath string, logger *slog.Logger) (*BaselineManager, e
 
 // Load reads the entire baseline table into memory, populating ByPath and
 // ByID maps. The result is cached on the manager — subsequent calls return
-// the cached baseline without querying the database. The cache is refreshed
-// by Commit() (which calls Load internally after each transaction). This is
-// safe because BaselineManager exclusively owns the database (sole-writer
+// the cached baseline without querying the database. The cache is kept
+// consistent by CommitOutcome(), which incrementally patches the in-memory
+// maps via updateBaselineCache() after each transaction. This is safe
+// because BaselineManager exclusively owns the database (sole-writer
 // pattern with SetMaxOpenConns(1)).
 func (m *BaselineManager) Load(ctx context.Context) (*Baseline, error) {
 	if m.baseline != nil {

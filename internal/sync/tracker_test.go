@@ -12,7 +12,7 @@ import (
 func TestDepTracker_NoDeps(t *testing.T) {
 	t.Parallel()
 
-	dt := NewDepTracker(10, 10)
+	dt := NewDepTracker(10, 10, testLogger(t))
 
 	dt.Add(&Action{
 		Type: ActionFolderCreate, Path: "dir",
@@ -32,7 +32,7 @@ func TestDepTracker_NoDeps(t *testing.T) {
 func TestDepTracker_DependencyChain(t *testing.T) {
 	t.Parallel()
 
-	dt := NewDepTracker(10, 10)
+	dt := NewDepTracker(10, 10, testLogger(t))
 
 	// Action 1: no deps.
 	dt.Add(&Action{
@@ -80,7 +80,7 @@ func TestDepTracker_DependencyChain(t *testing.T) {
 func TestDepTracker_BulkLane(t *testing.T) {
 	t.Parallel()
 
-	dt := NewDepTracker(10, 10)
+	dt := NewDepTracker(10, 10, testLogger(t))
 
 	// Large download (above threshold) should go to bulk.
 	dt.Add(&Action{
@@ -104,7 +104,7 @@ func TestDepTracker_BulkLane(t *testing.T) {
 func TestDepTracker_SmallTransferInteractive(t *testing.T) {
 	t.Parallel()
 
-	dt := NewDepTracker(10, 10)
+	dt := NewDepTracker(10, 10, testLogger(t))
 
 	// Small upload (below threshold) should go to interactive.
 	dt.Add(&Action{
@@ -128,7 +128,7 @@ func TestDepTracker_SmallTransferInteractive(t *testing.T) {
 func TestDepTracker_NonTransferAlwaysInteractive(t *testing.T) {
 	t.Parallel()
 
-	dt := NewDepTracker(10, 10)
+	dt := NewDepTracker(10, 10, testLogger(t))
 
 	// Delete action should always go to interactive regardless of view.
 	dt.Add(&Action{
@@ -149,7 +149,7 @@ func TestDepTracker_NonTransferAlwaysInteractive(t *testing.T) {
 func TestDepTracker_DoneSignal(t *testing.T) {
 	t.Parallel()
 
-	dt := NewDepTracker(10, 10)
+	dt := NewDepTracker(10, 10, testLogger(t))
 
 	dt.Add(&Action{
 		Type: ActionFolderCreate, Path: "a",
@@ -178,7 +178,7 @@ func TestDepTracker_DoneSignal(t *testing.T) {
 func TestDepTracker_CancelByPath(t *testing.T) {
 	t.Parallel()
 
-	dt := NewDepTracker(10, 10)
+	dt := NewDepTracker(10, 10, testLogger(t))
 
 	dt.Add(&Action{
 		Type: ActionDownload, Path: "cancel-me.txt",
@@ -204,7 +204,7 @@ func TestDepTracker_CancelByPath(t *testing.T) {
 func TestDepTracker_ConcurrentComplete(t *testing.T) {
 	t.Parallel()
 
-	dt := NewDepTracker(100, 100)
+	dt := NewDepTracker(100, 100, testLogger(t))
 
 	// Fan-out: action 0 has no deps; actions 1-49 depend on action 0.
 	dt.Add(&Action{
@@ -251,19 +251,54 @@ func TestDepTracker_ConcurrentComplete(t *testing.T) {
 	}
 }
 
+// TestDepTracker_CompleteUnknownID verifies that calling Complete() with an
+// unknown ledger ID logs a warning and still increments the completed counter.
+// This is a defensive guard against deadlock if the tracker/ledger population
+// has a subtle bug. Regression test for: silent return without incrementing
+// completed → done channel never closed → deadlock.
 func TestDepTracker_CompleteUnknownID(t *testing.T) {
 	t.Parallel()
 
-	dt := NewDepTracker(10, 10)
+	dt := NewDepTracker(10, 10, testLogger(t))
 
-	// Should not panic on unknown ID.
+	// Add one real action so total=1.
+	dt.Add(&Action{
+		Type: ActionFolderCreate, Path: "real",
+		DriveID: driveid.New("d"), ItemID: "i1",
+	}, 1, nil)
+
+	// Drain the dispatched action.
+	<-dt.Interactive()
+
+	// Complete with an unknown ID — should log a warning and increment
+	// completed. Since total=1 (from Add) and this increments completed to 1,
+	// the done channel closes. This verifies the unknown-ID path still
+	// advances the completion counter.
+	dt.Complete(999)
+
+	select {
+	case <-dt.Done():
+		// Success — the unknown-ID completion still incremented the counter.
+	case <-time.After(time.Second):
+		t.Fatal("done channel not closed after Complete with unknown ID — deadlock risk")
+	}
+}
+
+// TestDepTracker_CompleteUnknownID_NoPanic verifies the basic no-panic case
+// with zero tracked actions.
+func TestDepTracker_CompleteUnknownID_NoPanic(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, 10, testLogger(t))
+
+	// Should not panic on unknown ID with zero total.
 	dt.Complete(999)
 }
 
 func TestDepTracker_SkipCompletedDeps(t *testing.T) {
 	t.Parallel()
 
-	dt := NewDepTracker(10, 10)
+	dt := NewDepTracker(10, 10, testLogger(t))
 
 	// Action 2 depends on action 1, but action 1 is not added to the tracker
 	// (simulating it was already completed before tracker was populated).
