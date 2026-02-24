@@ -166,13 +166,13 @@ func listItems(ctx context.Context, client *graph.Client, driveID driveid.ID, re
 	return client.ListChildrenByPath(ctx, driveID, clean)
 }
 
-func runLs(_ *cobra.Command, args []string) error {
+func runLs(cmd *cobra.Command, args []string) error {
 	remotePath := "/"
 	if len(args) > 0 {
 		remotePath = args[0]
 	}
 
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	client, driveID, logger, err := clientAndDrive(ctx)
 	if err != nil {
@@ -247,9 +247,9 @@ func printItemsTable(items []graph.Item) {
 	printTable(os.Stdout, headers, rows)
 }
 
-func runGet(_ *cobra.Command, args []string) error {
+func runGet(cmd *cobra.Command, args []string) error {
 	remotePath := args[0]
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	client, driveID, logger, err := clientAndDrive(ctx)
 	if err != nil {
@@ -313,9 +313,9 @@ func runGet(_ *cobra.Command, args []string) error {
 	return nil
 }
 
-func runPut(_ *cobra.Command, args []string) error {
+func runPut(cmd *cobra.Command, args []string) error {
 	localPath := args[0]
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	fi, err := os.Stat(localPath)
 	if err != nil {
@@ -414,9 +414,9 @@ type rmJSONOutput struct {
 	Deleted string `json:"deleted"`
 }
 
-func runRm(_ *cobra.Command, args []string) error {
+func runRm(cmd *cobra.Command, args []string) error {
 	remotePath := args[0]
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	client, driveID, logger, err := clientAndDrive(ctx)
 	if err != nil {
@@ -454,13 +454,13 @@ type mkdirJSONOutput struct {
 	ID      string `json:"id"`
 }
 
-func runMkdir(_ *cobra.Command, args []string) error {
+func runMkdir(cmd *cobra.Command, args []string) error {
 	remotePath := cleanRemotePath(args[0])
 	if remotePath == "" {
 		return fmt.Errorf("cannot create root folder")
 	}
 
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	client, driveID, logger, err := clientAndDrive(ctx)
 	if err != nil {
@@ -515,9 +515,9 @@ func runMkdir(_ *cobra.Command, args []string) error {
 	return nil
 }
 
-func runStat(_ *cobra.Command, args []string) error {
+func runStat(cmd *cobra.Command, args []string) error {
 	remotePath := args[0]
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	client, driveID, logger, err := clientAndDrive(ctx)
 	if err != nil {

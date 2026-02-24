@@ -106,6 +106,8 @@ func (e *Executor) downloadToPartial(
 	}
 
 	if err := f.Close(); err != nil {
+		os.Remove(partialPath)
+
 		return "", 0, fmt.Errorf("closing partial file %s: %w", partialPath, err)
 	}
 
@@ -244,11 +246,21 @@ func (e *Executor) chunkedUpload(
 
 	f, err := os.Open(localPath)
 	if err != nil {
+		// Cancel the server-side session to avoid leaking it until expiry.
+		e.cancelSession(session)
+
 		return nil, fmt.Errorf("opening %s for chunked upload: %w", localPath, err)
 	}
 	defer f.Close()
 
-	return e.uploadChunks(ctx, session, f, size)
+	item, uploadErr := e.uploadChunks(ctx, session, f, size)
+	if uploadErr != nil {
+		e.cancelSession(session)
+
+		return nil, uploadErr
+	}
+
+	return item, nil
 }
 
 // uploadChunks sends file data in chunks and returns the completed Item.
@@ -279,4 +291,13 @@ func (e *Executor) uploadChunks(
 	}
 
 	return nil, fmt.Errorf("sync: upload completed all chunks but received no final item")
+}
+
+// cancelSession makes a best-effort attempt to cancel a server-side upload
+// session. Uses context.Background because the original context may already
+// be canceled (which is often why we're canceling the session).
+func (e *Executor) cancelSession(session *graph.UploadSession) {
+	if err := e.transfers.CancelUploadSession(context.Background(), session); err != nil {
+		e.logger.Warn("failed to cancel upload session", slog.String("error", err.Error()))
+	}
 }

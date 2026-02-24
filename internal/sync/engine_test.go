@@ -34,6 +34,7 @@ type engineMockClient struct {
 	simpleUploadFn        func(ctx context.Context, driveID driveid.ID, parentID, name string, r io.Reader, size int64) (*graph.Item, error)
 	createUploadSessionFn func(ctx context.Context, driveID driveid.ID, parentID, name string, size int64, mtime time.Time) (*graph.UploadSession, error)
 	uploadChunkFn         func(ctx context.Context, session *graph.UploadSession, chunk io.Reader, offset, length, total int64) (*graph.Item, error)
+	cancelUploadSessionFn func(ctx context.Context, session *graph.UploadSession) error
 }
 
 func (m *engineMockClient) Delta(ctx context.Context, driveID driveid.ID, token string) (*graph.DeltaPage, error) {
@@ -122,6 +123,14 @@ func (m *engineMockClient) UploadChunk(ctx context.Context, session *graph.Uploa
 	}
 
 	return nil, fmt.Errorf("UploadChunk not mocked")
+}
+
+func (m *engineMockClient) CancelUploadSession(ctx context.Context, session *graph.UploadSession) error {
+	if m.cancelUploadSessionFn != nil {
+		return m.cancelUploadSessionFn(ctx, session)
+	}
+
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -912,5 +921,200 @@ func TestListConflicts_Engine(t *testing.T) {
 
 	if len(conflicts) != 0 {
 		t.Errorf("expected 0 conflicts, got %d", len(conflicts))
+	}
+}
+
+func TestResolveConflict_KeepLocal(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	uploadCalled := false
+
+	mock := &engineMockClient{
+		simpleUploadFn: func(_ context.Context, _ driveid.ID, parentID, name string, _ io.Reader, _ int64) (*graph.Item, error) {
+			uploadCalled = true
+
+			return &graph.Item{
+				ID:           "uploaded-resolve",
+				Name:         name,
+				ETag:         "etag-resolved",
+				QuickXorHash: "resolve-hash",
+				Size:         5,
+			}, nil
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := context.Background()
+
+	// Seed a conflict.
+	outcomes := []Outcome{{
+		Action:       ActionConflict,
+		Success:      true,
+		Path:         "keep-local.txt",
+		DriveID:      driveID,
+		ItemID:       "item-kl",
+		ItemType:     ItemTypeFile,
+		LocalHash:    "local-h",
+		RemoteHash:   "remote-h",
+		ConflictType: "edit_edit",
+	}}
+
+	if err := eng.baseline.Commit(ctx, outcomes, "", engineTestDriveID); err != nil {
+		t.Fatalf("seeding conflict: %v", err)
+	}
+
+	// Write the local file that will be uploaded.
+	writeLocalFile(t, syncRoot, "keep-local.txt", "local")
+
+	conflicts, err := eng.ListConflicts(ctx)
+	if err != nil {
+		t.Fatalf("ListConflicts: %v", err)
+	}
+
+	if len(conflicts) != 1 {
+		t.Fatalf("expected 1 conflict, got %d", len(conflicts))
+	}
+
+	if resolveErr := eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepLocal); resolveErr != nil {
+		t.Fatalf("ResolveConflict: %v", resolveErr)
+	}
+
+	if !uploadCalled {
+		t.Error("expected SimpleUpload to be called for keep_local resolution")
+	}
+
+	// Conflict should be resolved.
+	remaining, err := eng.ListConflicts(ctx)
+	if err != nil {
+		t.Fatalf("ListConflicts after resolve: %v", err)
+	}
+
+	if len(remaining) != 0 {
+		t.Errorf("expected 0 unresolved conflicts, got %d", len(remaining))
+	}
+}
+
+func TestResolveConflict_KeepRemote(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	downloadContent := "remote-version"
+
+	mock := &engineMockClient{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			n, writeErr := w.Write([]byte(downloadContent))
+			return int64(n), writeErr
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := context.Background()
+
+	// Seed a conflict.
+	outcomes := []Outcome{{
+		Action:       ActionConflict,
+		Success:      true,
+		Path:         "keep-remote.txt",
+		DriveID:      driveID,
+		ItemID:       "item-kr",
+		ItemType:     ItemTypeFile,
+		LocalHash:    "local-h",
+		RemoteHash:   "remote-h",
+		ConflictType: "edit_edit",
+	}}
+
+	if err := eng.baseline.Commit(ctx, outcomes, "", engineTestDriveID); err != nil {
+		t.Fatalf("seeding conflict: %v", err)
+	}
+
+	conflicts, err := eng.ListConflicts(ctx)
+	if err != nil {
+		t.Fatalf("ListConflicts: %v", err)
+	}
+
+	if len(conflicts) != 1 {
+		t.Fatalf("expected 1 conflict, got %d", len(conflicts))
+	}
+
+	if resolveErr := eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepRemote); resolveErr != nil {
+		t.Fatalf("ResolveConflict: %v", resolveErr)
+	}
+
+	// Conflict should be resolved.
+	remaining, err := eng.ListConflicts(ctx)
+	if err != nil {
+		t.Fatalf("ListConflicts after resolve: %v", err)
+	}
+
+	if len(remaining) != 0 {
+		t.Errorf("expected 0 unresolved conflicts, got %d", len(remaining))
+	}
+
+	// Verify the local file has remote content.
+	data, readErr := os.ReadFile(filepath.Join(syncRoot, "keep-remote.txt"))
+	if readErr != nil {
+		t.Fatalf("reading resolved file: %v", readErr)
+	}
+
+	if string(data) != downloadContent {
+		t.Errorf("expected %q, got %q", downloadContent, string(data))
+	}
+}
+
+func TestResolveConflict_KeepLocal_TransferFails(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	mock := &engineMockClient{
+		simpleUploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.Reader, _ int64) (*graph.Item, error) {
+			return nil, fmt.Errorf("upload failed: network error")
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := context.Background()
+
+	// Seed a conflict.
+	outcomes := []Outcome{{
+		Action:       ActionConflict,
+		Success:      true,
+		Path:         "fail-upload.txt",
+		DriveID:      driveID,
+		ItemID:       "item-fu",
+		ItemType:     ItemTypeFile,
+		ConflictType: "edit_edit",
+	}}
+
+	if err := eng.baseline.Commit(ctx, outcomes, "", engineTestDriveID); err != nil {
+		t.Fatalf("seeding conflict: %v", err)
+	}
+
+	// Write the local file that would be uploaded.
+	writeLocalFile(t, syncRoot, "fail-upload.txt", "local-data")
+
+	conflicts, err := eng.ListConflicts(ctx)
+	if err != nil {
+		t.Fatalf("ListConflicts: %v", err)
+	}
+
+	if len(conflicts) != 1 {
+		t.Fatalf("expected 1 conflict, got %d", len(conflicts))
+	}
+
+	resolveErr := eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepLocal)
+	if resolveErr == nil {
+		t.Fatal("expected error from failed upload, got nil")
+	}
+
+	// Conflict should remain unresolved.
+	remaining, err := eng.ListConflicts(ctx)
+	if err != nil {
+		t.Fatalf("ListConflicts after failed resolve: %v", err)
+	}
+
+	if len(remaining) != 1 {
+		t.Errorf("expected 1 unresolved conflict, got %d", len(remaining))
 	}
 }
