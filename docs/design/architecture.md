@@ -59,15 +59,15 @@
             │   Executor     │    <-- executes actions against API + filesystem
             │                │    --> produces Outcomes
             │  * Downloads   │
-            │  * Uploads     │    <-- worker pools (parallel)
+            │  * Uploads     │    <-- lane-based workers (parallel)
             │  * Deletes     │
-            │  * Moves       │    <-- sequential (ordering constraints)
+            │  * Moves       │    <-- dependency-ordered (DAG)
             │  * Conflicts   │
             └────────┬───────┘
                      ▼
             ┌────────────────┐
-            │   Baseline     │    <-- applies Outcomes atomically to DB
-            │   Manager      │    <-- saves delta token in same transaction
+            │   Baseline     │    <-- commits each Outcome per-action
+            │   Manager      │    <-- saves delta token when cycle complete
             │                │    <-- optionally writes to change journal
             └────────────────┘
 ```
@@ -243,19 +243,10 @@ See [event-driven-rationale.md](event-driven-rationale.md) Parts 5.4-5.7 for ful
 
 Takes an `ActionPlan` and executes it against the API and filesystem. Produces `[]Outcome` -- never writes to the database.
 
-**Execution phases** (ordered for correctness):
-1. Folder creates (sequential, top-down by depth)
-2. Moves (sequential -- ordering matters for nested moves)
-3. Downloads (parallel via worker pool)
-4. Uploads (parallel via worker pool)
-5. Local deletes (sequential, files first, then folders bottom-up)
-6. Remote deletes (sequential)
-7. Conflicts (sequential)
-8. Synced updates (batch -- no I/O)
-9. Cleanups (batch)
+**DAG execution with dependency tracking**: Actions are dispatched based on dependency satisfaction, not fixed phase ordering. The planner emits explicit dependency edges: parent folder must exist before child operations, children must be removed before parent folder deletion, move target parent must exist. All action types are eligible to run concurrently when their dependencies are met. A persistent ledger (`action_queue` table) tracks action lifecycle; an in-memory dependency tracker provides instant dispatch when dependencies are satisfied. Lane-based worker dispatch routes small files and folder operations to an interactive lane and large transfers to a bulk lane, with a shared overflow pool ensuring fairness. See [concurrent-execution.md](concurrent-execution.md) for the full execution architecture.
 
 **Key properties**:
-- Database writes happen only in the BaselineManager after execution completes, cleanly separating execution from persistence
+- Database writes happen only in the BaselineManager, committing each action outcome individually as workers complete transfers
 - Workers collect Outcomes via a mutex-protected callback
 - Each Outcome is self-contained: has everything the baseline manager needs
 - Retries happen INSIDE the executor with exponential backoff before producing the final Outcome
@@ -268,17 +259,18 @@ See [event-driven-rationale.md](event-driven-rationale.md) Part 5.8 for full imp
 
 ### 3.7 Baseline Manager (`baseline.go`)
 
-The **sole writer** to the database. Loads the baseline at cycle start and commits outcomes at cycle end.
+The **sole writer** to the database. Loads the baseline at cycle start and commits each outcome as its action completes.
 
 **Key properties**:
 - Single writer -- all database concurrency concerns are structurally avoided
-- Atomic transaction: all outcomes + delta token commit together or none do
-- After commit, the in-memory baseline cache is refreshed for the next cycle
-- Delta token is NEVER saved separately from the baseline
+- Per-action atomic transaction: each outcome + ledger status update commit together. Delta token committed separately when all actions for a cycle complete.
+- After each commit, the in-memory baseline cache is updated for consistency
+- Delta token is committed only when all cycle actions are done
 
 **Operations**:
 - `Load()`: Reads entire baseline table into memory (`Baseline.ByPath` + `Baseline.ByID` maps)
-- `Commit(outcomes, deltaToken, driveID)`: Applies all successful outcomes and saves delta token in a single transaction
+- `CommitOutcome(outcome, ledgerID)`: Applies a single successful outcome and marks the ledger action as done in the same transaction
+- `CommitDeltaToken(token, driveID)`: Saves the delta token when all cycle actions are complete
 - `GetDeltaToken()`: Returns saved delta token for a drive
 
 See [event-driven-rationale.md](event-driven-rationale.md) Part 5.9 for full implementation details.
@@ -492,23 +484,27 @@ cmd/onedrive-go/  -->  graph.Client  -->  Microsoft Graph API
 1. BaselineManager.Load()           -> Baseline (from DB, cached in memory)
 2. RemoteObserver.FullDelta()       -> []ChangeEvent (remote)
 3. LocalObserver.FullScan()         -> []ChangeEvent (local)
+   (steps 2-3 run concurrently)
 4. ChangeBuffer.AddAll() + Flush()  -> []PathChanges (batched by path)
-5. Planner.Plan()                   -> ActionPlan (pure function)
-6. Executor.Execute()               -> []Outcome (I/O)
-7. BaselineManager.Commit()         -> atomic DB transaction
+5. Planner.Plan()                   -> ActionPlan with dependency DAG
+6. Write actions to persistent ledger
+7. Populate dependency tracker from ledger
+8. Workers execute concurrently     -> per-action baseline commits
+9. All actions complete             -> commit delta token
 ```
 
 ### 5.3 Watch Mode
 
 ```
 1. BaselineManager.Load()           -> Baseline (from DB, cached in memory)
-2. RemoteObserver.Watch()           -> streams ChangeEvents (poll/WebSocket)
-3. LocalObserver.Watch()            -> streams ChangeEvents (inotify/FSEvents)
-4. ChangeBuffer debounces (2s)      -> []PathChanges (only changed paths)
-5. Planner.Plan()                   -> ActionPlan (only for changed paths)
-6. Executor.Execute()               -> []Outcome
-7. BaselineManager.Commit()         -> incremental baseline update
-8. Go to step 4 (loop on buffer ready)
+2. RemoteObserver.Watch()           -> continuous ChangeEvent stream
+3. LocalObserver.Watch()            -> continuous ChangeEvent stream
+4. ChangeBuffer debounces (2s)      -> []PathChanges
+5. Planner.Plan()                   -> ActionPlan (incremental)
+6. Deduplicate against in-flight actions, write to ledger, add to tracker
+7. Workers drain continuously       -> per-action baseline commits
+8. Observers and workers run independently
+9. Loop from step 4 on buffer ready
 ```
 
 ### 5.4 Dry-Run (Zero Side Effects)
@@ -526,12 +522,14 @@ No database writes occur before the executor runs, so dry-run has genuinely zero
 Pause:
   - Observers continue running (collecting events)
   - ChangeBuffer continues accepting events
-  - Planner/Executor do NOT run
+  - Workers stop pulling from tracker (paused flag)
+  - In-flight actions complete normally (graceful pause)
   - Events accumulate in the buffer
 
 Resume:
   - Flush buffer (potentially large batch)
-  - Plan + Execute + Commit
+  - Plan -> write to ledger -> tracker dispatches
+  - Workers resume pulling from tracker
   - Normal watch loop resumes
 
 High-water mark: if buffer exceeds 100K events during pause,
@@ -560,40 +558,41 @@ Memory bounded to ~50 MB even for 500K-item drives. For maximum speed, parallel 
 
 ### 6.1 Database Writer
 
-**Sole writer**: Only the `BaselineManager` writes to the database, running sequentially after execution completes. No concurrent write contention during sync.
+**Sole writer**: Only the `BaselineManager` writes to the database, committing each action outcome individually as workers complete transfers. All commits are serialized through the single writer. No concurrent write contention during sync.
 
 **Concurrent readers**: SQLite WAL mode enables `status`, `conflicts`, and `verify` commands to read while sync writes.
 
-### 6.2 Worker Pools
+### 6.2 Worker Lanes
 
-Three independent worker pools for parallel transfers:
+Workers are organized into two lanes with reserved capacity plus a shared overflow pool, ensuring fairness between small and large operations:
 
-| Pool | Default Workers | Purpose |
-|------|----------------|---------|
-| Downloads | 8 | File downloads from OneDrive |
-| Uploads | 8 | File uploads to OneDrive |
-| Checkers | 8 | Local hash computation for change detection |
+| Lane | Reserved Workers | Purpose |
+|------|-----------------|---------|
+| Interactive | 2 minimum | Small files (<10 MB), folder ops, deletes, moves |
+| Bulk | 2 minimum | Large file transfers (>=10 MB) |
+| Shared | remaining (default 12) | Dynamically assigned; interactive priority |
+| Checkers | 8 (separate) | Local hash computation for change detection |
 
-Worker pools use `errgroup` for goroutine management. Each worker gets its own context derived from the sync run's root context.
+Total lane workers = `parallel_downloads + parallel_uploads` (default 16). Shared workers prefer the interactive lane, ensuring small file changes get picked up immediately even when all bulk workers are busy with large transfers. The checker pool remains separate (CPU-bound, runs during observation, not execution). See [concurrent-execution.md](concurrent-execution.md) section 6 for details.
 
 ### 6.3 Context Tree
 
-One root context per sync run. Cancellation propagates to all stages:
+One root context per sync run. Workers are persistent goroutines pulling from tracker channels, not phase-scoped. Cancellation propagates to all stages:
 
 ```
 rootCtx
 |-- remoteObserverCtx
 |-- localObserverCtx
-|-- executorCtx
-    |-- downloadWorker[0..N]
-    |-- uploadWorker[0..N]
-    +-- checkWorker[0..N]
+|-- trackerCtx
+    |-- interactiveWorker[0..M]
+    |-- bulkWorker[0..N]
+    +-- sharedWorker[0..K]
 ```
 
 ### 6.4 Graceful Shutdown
 
-- **First signal** (SIGINT/SIGTERM): Cancel root context. In-flight transfers finish up to a configurable timeout. Baseline + delta token checkpoint saved. Exit cleanly.
-- **Second signal**: Immediate cancellation. No checkpoint save. SQLite WAL ensures DB consistency.
+- **First signal** (SIGINT/SIGTERM): Cancel root context. In-flight transfers finish up to a configurable timeout. Completed actions already committed to baseline individually. Persistent ledger preserves in-flight action state. Upload sessions and partial download progress resume on restart. Exit cleanly.
+- **Second signal**: Immediate cancellation. No checkpoint save. SQLite WAL ensures DB consistency. Ledger still preserves action state for resume on next start.
 - **SIGHUP**: Reload configuration. Re-initialize filter engine and bandwidth limiter. Detect stale files from filter changes. Continue running.
 
 ---
@@ -638,7 +637,8 @@ Per-side hashes (`local_hash`, `remote_hash`) handle SharePoint enrichment nativ
 
 | Table | Purpose | Writer |
 |---|---|---|
-| `delta_tokens` | Delta cursor per drive | BaselineManager (same txn as baseline) |
+| `delta_tokens` | Delta cursor per drive | BaselineManager (when all cycle actions done) |
+| `action_queue` | Execution ledger (action lifecycle, crash recovery, progress) | BaselineManager (per-action commits) |
 | `conflicts` | Conflict ledger with resolution tracking | BaselineManager |
 | `stale_files` | Filter-change tracking | BaselineManager |
 | `upload_sessions` | Crash recovery for large uploads | Executor (pre-upload) + BaselineManager (post-upload) |
@@ -646,7 +646,7 @@ Per-side hashes (`local_hash`, `remote_hash`) handle SharePoint enrichment nativ
 | `config_snapshots` | Filter change detection | Engine (on config load) |
 | `schema_migrations` | Schema version tracking | Engine (on startup) |
 
-**Critical property**: The delta token is saved in the same transaction as baseline updates. Never separately. If the process crashes after execution but before commit, the token is not advanced and the same delta is re-fetched (idempotent).
+**Critical property**: The delta token is committed only when all actions for a cycle are done. Individual per-action commits update the baseline and ledger status but do not advance the delta token. If the process crashes mid-cycle, the token is not advanced and the same delta is re-fetched (idempotent).
 
 See [data-model.md](data-model.md) for complete schema definitions.
 
@@ -663,11 +663,11 @@ The baseline serves as the "old state" for move detection -- it is read-only dur
 | Crash Point | Recovery |
 |---|---|
 | During Load/FetchRemote/ScanLocal/Plan | No state changed. Re-run cycle. |
-| During Execute | Some actions completed on disk/API. Baseline NOT updated. Delta token NOT advanced. Re-run cycle: Local Observer sees completed downloads, planner produces EF4/EF11 (convergent -> update synced). No duplicate downloads. |
-| During Commit | SQLite transaction: either commits or rolls back. If rolled back: same as "during Execute." |
-| During Watch (between cycles) | Events re-observed by watchers. Debounce/dedup handles redundancy. |
+| During Execute | Completed actions already committed to baseline individually. Remaining actions in ledger with pending/claimed status. On restart: load ledger, reclaim stale claims, resume execution. No full re-observation needed. |
+| During per-action commit | SQLite transaction: both baseline and ledger update or neither. If rolled back: action remains claimed, reclaimed on restart. |
+| During Watch (between cycles) | Events re-observed by watchers. Debounce/dedup handles redundancy. Completed actions persist in baseline. |
 
-Upload sessions are persisted BEFORE upload begins. On crash recovery: check expiry, resume valid sessions, delete expired ones.
+Upload sessions are persisted BEFORE upload begins and tracked in the ledger's `session_url` column. On crash recovery: check expiry, resume valid sessions from `bytes_done` offset, discard expired ones. Downloads resume via `.partial` file size + HTTP `Range` header.
 
 ---
 
@@ -885,7 +885,7 @@ Sustained ~20 MB. Processes individual change batches, not full snapshots. Memor
 |---|---|---|
 | E1 | Events are the coordination mechanism, not the database | Supports both one-shot and continuous watch mode. Clean separation between observation, planning, and execution. |
 | E2 | Baseline is the only durable per-item state | Remote/local observations are ephemeral. Only confirmed sync state needs persistence. |
-| E3 | Delta token commits with baseline (same transaction) | Prevents token-advancement-without-execution crash bug. |
+| E3 | Delta token committed only after all cycle actions complete | Prevents token-advancement-without-execution crash bug. Per-action commits preserve completed work. |
 | E4 | Per-side hash baselines (`local_hash`, `remote_hash`) | Handles SharePoint enrichment natively without special code paths. |
 | E5 | Local observations keyed by path | Baseline maps paths to server IDs. Clean separation of local filesystem identity from server identity. |
 | E6 | Deletions remove the baseline row | Baseline stores confirmed synced state. Deletion events are ephemeral observations. |
@@ -904,3 +904,7 @@ Sustained ~20 MB. Processes individual change batches, not full snapshots. Memor
 | E19 | Two-signal graceful shutdown | First: drain + checkpoint. Second: immediate exit. WAL ensures consistency. |
 | E20 | Filter applied in Planner, not observers | Symmetric filtering of remote AND local items. Hot-reloadable without restarting observers. |
 | E21 | Conflict copies use timestamp naming | `file.conflict-YYYYMMDD-HHMMSS.ext`. Self-documenting, shorter than hostname-based. |
+| E22 | Per-action commits replace batch commits | Incremental progress: each completed action is immediately durable. No work lost on crash. Delta token committed separately when all cycle actions done. |
+| E23 | Persistent ledger for execution state | `action_queue` table provides crash resume, upload session tracking, progress reporting, and post-mortem debuggability. |
+| E24 | In-memory dependency tracker for scheduling | Zero dispatch latency when dependencies are satisfied. Lane-based fairness. Per-action cancellation via `context.CancelFunc`. |
+| E25 | Lane-based workers (interactive + bulk) | Fairness between small and large transfers. Reserved capacity per lane prevents starvation. Shared overflow pool maximizes utilization. |

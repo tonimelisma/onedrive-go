@@ -1,9 +1,9 @@
 # Sync Algorithm Specification
 
-> **ZERO PATH DEPENDENCY**: This document describes the Option E event-driven
-> architecture, designed from first principles. The system is NOT an evolution
-> of the prior batch-pipeline sync engine. See
-> [event-driven-rationale.md](event-driven-rationale.md) for the full rationale.
+> This document specifies the complete synchronization algorithm for
+> onedrive-go. See [event-driven-rationale.md](event-driven-rationale.md) for
+> the architectural rationale and [concurrent-execution.md](concurrent-execution.md)
+> for the execution architecture.
 
 ---
 
@@ -235,15 +235,15 @@ These interfaces follow the Go convention of consumer-defined contracts: the `sy
             │   Executor     │    <-- executes actions against API + filesystem
             │                │    --> produces Outcomes
             │  * Downloads   │
-            │  * Uploads     │    <-- worker pools (parallel)
+            │  * Uploads     │    <-- lane-based workers (parallel)
             │  * Deletes     │
-            │  * Moves       │    <-- sequential (ordering constraints)
+            │  * Moves       │    <-- dependency-ordered (DAG)
             │  * Conflicts   │
             └────────┬───────┘
                      ▼
             ┌────────────────┐
-            │   Baseline     │    <-- applies Outcomes atomically to DB
-            │   Manager      │    <-- saves delta token in same transaction
+            │   Baseline     │    <-- commits each Outcome per-action
+            │   Manager      │    <-- saves delta token when cycle complete
             │                │    <-- optionally writes to change journal
             └────────────────┘
 ```
@@ -253,8 +253,8 @@ Each component has a single responsibility and a clean contract:
 - **Observers** produce `[]ChangeEvent` -- they never write to the database.
 - **Change Buffer** groups events by path into `[]PathChanges` -- thread-safe, debounced.
 - **Planner** is a pure function: `([]PathChanges, *Baseline, SyncMode, SafetyConfig) -> *ActionPlan` -- no I/O.
-- **Executor** produces `[]Outcome` -- it executes against the API and filesystem but never writes to the database.
-- **Baseline Manager** is the sole database writer -- it applies outcomes atomically.
+- **Executor** produces `Outcome` per action -- it executes against the API and filesystem but never writes to the database.
+- **Baseline Manager** is the sole database writer -- it commits each outcome individually via per-action atomic transactions.
 
 ### 2.2 Component Interaction Summary
 
@@ -264,10 +264,13 @@ Each component has a single responsibility and a clean contract:
 1. BaselineManager.Load()           -> Baseline (from DB, cached in memory)
 2. RemoteObserver.FullDelta()       -> []ChangeEvent (remote)
 3. LocalObserver.FullScan()         -> []ChangeEvent (local)
+   (steps 2-3 run concurrently)
 4. ChangeBuffer.AddAll() + Flush()  -> []PathChanges (batched by path)
-5. Planner.Plan()                   -> ActionPlan (pure function)
-6. Executor.Execute()               -> []Outcome (I/O)
-7. BaselineManager.Commit()         -> atomic DB transaction
+5. Planner.Plan()                   -> ActionPlan with dependency DAG
+6. Write actions to persistent ledger
+7. Populate dependency tracker from ledger
+8. Workers execute concurrently     -> per-action baseline commits
+9. All actions complete             -> commit delta token
 ```
 
 **Watch Mode** (continuous sync):
@@ -924,23 +927,25 @@ Default `MinFreeSpace` is 1 GB. If insufficient space is available:
 
 The executor takes an `ActionPlan` and carries it out against the Graph API and the local filesystem. It produces `[]Outcome` -- self-contained result records that carry everything the baseline manager needs. The executor never writes to the database.
 
-### 9.1 Nine Execution Phases (Ordered)
+### 9.1 DAG Execution with Dependency Tracking
 
-Actions are executed in a strict phase order to ensure correctness:
+Actions are dispatched based on dependency satisfaction, not fixed phase ordering. The planner emits explicit dependency edges:
 
-| Phase | Action Type | Execution Mode | Rationale |
-|-------|------------|----------------|-----------|
-| **1** | Folder creates | Sequential, top-down by depth | Parent folders must exist before child files. |
-| **2** | Moves | Sequential | Ordering matters for nested moves (parent must move before children). |
-| **3** | Downloads | Parallel (worker pool) | Independent operations, safe to parallelize. |
-| **4** | Uploads | Parallel (worker pool) | Independent operations, safe to parallelize. |
-| **5** | Local deletes | Sequential, files first, then folders bottom-up | A folder cannot be removed until all its children are removed. |
-| **6** | Remote deletes | Sequential | API rate limiting makes parallelism less beneficial. |
-| **7** | Conflicts | Sequential | Conflict resolution may involve user-facing file creation. |
-| **8** | Synced updates | Batch (no I/O) | Baseline-only updates for convergent edits/creates (EF4, EF11, ED2). No API calls or filesystem operations needed. |
-| **9** | Cleanups | Batch (no I/O) | Baseline entry removals for paths deleted on both sides (EF10, ED7). |
+| Dependency Type | Rule | Example |
+|----------------|------|---------|
+| **Parent-before-child** | Parent folder must exist before child operations | `upload /A/B/f.txt` depends on `mkdir /A/B` |
+| **Children-before-parent-delete** | All children must be removed before parent folder deletion | `rmdir /A` depends on `delete /A/file1.txt` |
+| **Move target parent** | Move target parent folder must exist | `move /X -> /A/Z` depends on `mkdir /A` |
 
-Worker pools use `errgroup` for goroutine management. Default pool sizes: 8 download workers, 8 upload workers, 8 hash checker workers (all configurable).
+Actions whose parent folders already exist in the baseline have no dependencies and are immediately ready for execution. All action types (downloads, uploads, folder creates, deletes, moves, conflicts) are eligible to run concurrently when their dependencies are met. There are no artificial barriers between action types --- a download to `/A/x.txt` and an upload from `/B/y.txt` run in parallel if they have no dependency relationship.
+
+**Persistent ledger**: Actions are written to the `action_queue` table before execution begins. The ledger tracks the full lifecycle (pending -> claimed -> done/failed/canceled) and provides crash recovery, upload session URLs, and progress tracking.
+
+**In-memory dependency tracker**: A bounded working window (default 10K actions) provides instant dispatch when dependencies are satisfied. When action X completes, the tracker immediately dispatches any action Y whose last remaining dependency was X. No polling.
+
+**Lane-based worker dispatch**: Ready actions are routed to an interactive lane (small files, folder ops, deletes, moves) or a bulk lane (large transfers) with reserved workers per lane and a shared overflow pool. See [concurrent-execution.md](concurrent-execution.md) sections 4-6 for details.
+
+**Per-action commits**: Each completed action is committed to baseline individually in a single SQLite transaction that also updates the ledger status. The delta token is committed separately when all cycle actions complete.
 
 ### 9.2 Outcome Production
 
@@ -1074,14 +1079,14 @@ Used for small files and zero-byte files. Zero-byte files ALWAYS use simple uplo
 4. **Hashes differ**: File was modified after the last sync -- the user made changes that haven't been synced. Instead of deleting, create a conflict copy to preserve the user's work.
 5. `config.UseLocalTrash`: Controls whether local deletes use the OS trash (FreeDesktop on Linux, Finder trash on macOS) or permanently remove files.
 
-**Folder deletion**: Folders are deleted bottom-up (deepest first) in Phase 5. Before deleting a local folder, the executor verifies it is empty. If the folder contains unexpected files (e.g., new files created after the scan but before execution), the delete is skipped and deferred to the next cycle.
+**Folder deletion**: Folders are deleted bottom-up (deepest first), enforced by dependency edges. Before deleting a local folder, the executor verifies it is empty. If the folder contains unexpected files (e.g., new files created after the scan but before execution), the delete is skipped and deferred to the next cycle.
 
 **Move execution details**:
 
 - **ActionLocalMove**: Rename the local file/folder from `action.Path` to `action.NewPath`. Uses `os.Rename` which is atomic on the same filesystem. If source and destination are on different filesystems, falls back to copy + delete.
 - **ActionRemoteMove**: Call the `MoveItem` API to rename the item on the server. The API call specifies the new parent ID and new name. On success, the Outcome carries both `OldPath` and `Path` for the baseline manager to update.
 
-**Conflict execution** (Phase 7):
+**Conflict execution**:
 
 For each conflict action, the executor applies the configured resolution strategy:
 
@@ -1094,7 +1099,7 @@ For each conflict action, the executor applies the configured resolution strateg
 
 Conflict copies use timestamp-based naming: `document.conflict-20260222-143052.pdf`. This format is self-documenting (the user can see when the conflict was detected) and shorter than hostname-based naming schemes.
 
-**Synced update execution** (Phase 8):
+**Synced update execution**:
 
 Synced updates (EF4, EF11, ED2) require no I/O. The executor produces an Outcome populated from the PathView's remote and local state:
 
@@ -1105,27 +1110,20 @@ Synced updates (EF4, EF11, ED2) require no I/O. The executor produces an Outcome
 
 **Transfer pipeline**:
 
-The executor delegates transfer operations to a `TransferManager` that manages worker pools:
+The executor delegates transfer operations to lane-based workers managed by the dependency tracker:
 
-| Pool | Default Workers | Purpose |
-|------|----------------|---------|
-| Downloads | 8 | File downloads from OneDrive |
-| Uploads | 8 | File uploads to OneDrive |
-| Checkers | 8 | Local hash computation for change detection |
+| Lane | Reserved Workers | Purpose |
+|------|-----------------|---------|
+| Interactive | 2 minimum | Small files (<10 MB), folder ops, deletes, moves |
+| Bulk | 2 minimum | Large file transfers (>=10 MB) |
+| Shared | remaining (default 12) | Dynamically assigned; interactive priority |
+| Checkers | 8 (separate pool) | Local hash computation for change detection |
 
-Worker pools use `errgroup` for goroutine lifecycle management. Each worker receives its own context derived from the executor's root context. Canceling the root context propagates to all workers.
+Workers are persistent goroutines pulling from tracker channels. Each worker receives its own context for per-action cancellation. Canceling the root context propagates to all workers.
 
-**Bandwidth limiting**: A token-bucket rate limiter optionally caps total transfer bandwidth (configured via `bandwidth_limit`). The limiter is shared across all download and upload workers, preventing any single worker from consuming the entire allowance.
+**Bandwidth limiting**: A token-bucket rate limiter optionally caps total transfer bandwidth (configured via `bandwidth_limit`). The limiter is shared across all download and upload workers, preventing any single worker from consuming the entire allowance. Scheduled throttling supports time-of-day rules.
 
-**Transfer ordering**: Downloads and uploads within each pool are processed in the order they appear in the action plan (which is depth-sorted). Five ordering strategies are available:
-
-| Strategy | Description |
-|----------|-------------|
-| `none` | Process in plan order (default) |
-| `size_asc` | Smallest files first (maximizes file count throughput) |
-| `size_desc` | Largest files first (maximizes byte throughput) |
-| `name_asc` | Alphabetical order (predictable for testing) |
-| `depth_asc` | Shallowest paths first (matches natural directory traversal) |
+**Dispatch order**: Actions are dispatched as their dependencies are satisfied. Within a lane, the tracker's ready channel provides FIFO ordering. The dependency DAG naturally ensures correctness (parents before children, children before parent deletes) without requiring explicit sorting.
 
 ---
 
@@ -1154,33 +1152,38 @@ type Baseline struct {
 
 The baseline is loaded once at cycle start and treated as read-only by all components during the pipeline. Observers, buffer, planner, and executor all reference the same frozen snapshot. This ensures consistency: no component sees partially-updated state.
 
-### 10.2 Commit (Outcomes + Delta Token, Atomic Transaction)
+### 10.2 Commit (Per-Action Atomic Transactions)
 
-```go
-func (m *BaselineManager) Commit(
-    ctx context.Context,
-    outcomes []Outcome,
-    deltaToken string,
-    driveID driveid.ID,
-) error
+Each completed action is committed individually in a **per-action atomic SQLite transaction** that updates both the baseline and the action ledger:
+
+```sql
+BEGIN;
+  -- Baseline update (varies by action type)
+  INSERT OR REPLACE INTO baseline (...) VALUES (...);
+  -- Ledger status update
+  UPDATE action_queue SET status = 'done', completed_at = ? WHERE id = ?;
+COMMIT;
 ```
 
-Applies all successful outcomes to the baseline table and saves the delta token in a **single atomic SQLite transaction**:
+**Per-action commit operations by type**:
+- **Download, Upload, UpdateSynced, FolderCreate**: `INSERT ... ON CONFLICT(path) DO UPDATE` into the `baseline` table. All 11 columns are written from the Outcome fields. Ledger marked `done`.
+- **LocalMove, RemoteMove**: `DELETE` the old path entry, then `INSERT` the new path entry. Ledger marked `done`.
+- **LocalDelete, RemoteDelete, Cleanup**: `DELETE FROM baseline WHERE path = ?`. Ledger marked `done`.
+- **Conflict**: `INSERT INTO conflicts` ledger. If keep-both resolution created files, also update baseline for the new paths. Ledger marked `done`.
 
-1. **Begin transaction**.
-2. For each Outcome with `Success == true`:
-   - **Download, Upload, UpdateSynced, FolderCreate**: `INSERT ... ON CONFLICT(path) DO UPDATE` into the `baseline` table. All 11 columns are written from the Outcome fields.
-   - **LocalMove, RemoteMove**: `DELETE` the old path entry, then `INSERT` the new path entry.
-   - **LocalDelete, RemoteDelete, Cleanup**: `DELETE FROM baseline WHERE path = ?`.
-   - **Conflict**: `INSERT INTO conflicts` ledger. If keep-both resolution created files, also update baseline for the new paths.
-3. **Save delta token**: `INSERT ... ON CONFLICT(drive_id) DO UPDATE` into the `delta_tokens` table.
-4. **Optionally write to change journal**: Append entries to the `change_journal` table for debugging.
-5. **Commit transaction**.
-6. **Refresh in-memory cache**: Re-load the baseline for the next cycle (in watch mode).
+**Delta token commit**: The delta token is committed in a **separate transaction** when all actions for a cycle reach `done` status:
 
-**Critical property**: The delta token is saved in the same transaction as baseline updates. If the process crashes after execution but before commit, the token is not advanced. On restart, the same delta is re-fetched (idempotent). This guarantees that the baseline and delta token are always in sync.
+```sql
+BEGIN;
+  INSERT OR REPLACE INTO delta_tokens (drive_id, token, updated_at) VALUES (?, ?, ?);
+COMMIT;
+```
 
-**Failed Outcomes** (where `Success == false`) are silently skipped. Their corresponding items retain their current baseline state and will be retried on the next sync cycle.
+This is safe because all per-action commits have already made the baseline consistent. The token commit is the final step that "seals" the cycle.
+
+**Crash recovery**: If the process crashes mid-cycle, individual per-action commits are already durable in the baseline. The delta token has not been advanced, so the same delta can be re-fetched on restart. The planner detects already-committed actions as convergent (EF4/EF11) and skips them. Remaining actions are loaded from the ledger and resumed.
+
+**Failed Outcomes** (where `Success == false`) are marked `failed` in the ledger. Their corresponding items retain their current baseline state and will be retried on the next sync cycle.
 
 **Baseline table schema**:
 
@@ -1363,31 +1366,41 @@ In watch mode, the engine runs two background observers concurrently:
 Both observer goroutines emit events to the same change buffer. If local and remote changes arrive within the same debounce window, they are processed together in a single batch.
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                    Engine.RunWatch                    │
-│                                                       │
-│  ┌──────────┐   ┌──────────┐   ┌──────────────────┐ │
-│  │ Remote   │   │ Local    │   │ Config Reload    │ │
-│  │ Observer │   │ Observer │   │ (SIGHUP)         │ │
-│  │ goroutine│   │ goroutine│   │                  │ │
-│  └────┬─────┘   └────┬─────┘   └────┬─────────────┘ │
-│       │ emit()       │ emit()       │                │
-│       └──────┬───────┘              │                │
-│              ▼                      │                │
-│  ┌───────────────────┐              │                │
-│  │  Change Buffer    │              │                │
-│  │  (2s debounce)    │              │                │
-│  └────────┬──────────┘              │                │
-│           │ Ready()                 │                │
-│           ▼                         ▼                │
-│  ┌─────────────────────────────────────────────────┐ │
-│  │ select {                                        │ │
-│  │   case <-buffer.Ready():  -> Plan + Execute     │ │
-│  │   case <-configReload:    -> Re-init filters    │ │
-│  │   case <-ctx.Done():      -> GracefulShutdown   │ │
-│  │ }                                               │ │
-│  └─────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                        Engine.RunWatch                            │
+│                                                                    │
+│  ┌──────────┐   ┌──────────┐                                     │
+│  │ Remote   │   │ Local    │   ┌──────────────────┐              │
+│  │ Observer │   │ Observer │   │ Config Reload    │              │
+│  │ goroutine│   │ goroutine│   │ (SIGHUP)         │              │
+│  └────┬─────┘   └────┬─────┘   └────┬─────────────┘              │
+│       │ emit()       │ emit()       │                             │
+│       └──────┬───────┘              │                             │
+│              ▼                      │                             │
+│  ┌───────────────────┐              │                             │
+│  │  Change Buffer    │              │                             │
+│  │  (2s debounce)    │              │                             │
+│  └────────┬──────────┘              │                             │
+│           │ Ready()                 │                             │
+│           ▼                         ▼                             │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │ select {                                                    │ │
+│  │   case <-buffer.Ready():  -> Plan + Ledger + Tracker        │ │
+│  │   case <-configReload:    -> Re-init filters                │ │
+│  │   case <-ctx.Done():      -> GracefulShutdown               │ │
+│  │ }                                                           │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                    │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  Workers (persistent, always running)                        │ │
+│  │    interactiveWorker[0..M] <-- tracker.interactive channel   │ │
+│  │    bulkWorker[0..N]        <-- tracker.bulk channel          │ │
+│  │    sharedWorker[0..K]      <-- both channels                 │ │
+│  │                                                               │ │
+│  │    on completion: per-action commit (baseline + ledger)       │ │
+│  │    tracker.Complete(id) -> dispatch newly ready actions       │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ### 12.2 Debounce Intervals
@@ -1402,14 +1415,14 @@ The default debounce window is 2 seconds. After the last event arrives, the buff
 | **File created and deleted within window** | Both events arrive; final state is "absent"; planner produces no action |
 | **Large copy operation** (many files) | Events accumulate in buffer; processed as one batch when debounce fires |
 
-### 12.3 Same Pipeline as One-Shot
+### 12.3 Same Infrastructure, Different Event Sources
 
-Watch mode and one-shot mode share the exact same planner, executor, and baseline manager. The only difference is the event source:
+Watch mode and one-shot mode share the same planner, tracker, workers, and baseline manager. The difference is in how events arrive and how the pipeline flows:
 
-- **One-shot**: `FullDelta` + `FullScan` produce a complete snapshot. All events are processed in a single batch.
-- **Watch mode**: `Watch` goroutines produce incremental events. Events are processed in small batches as the debounce window fires.
+- **One-shot**: `FullDelta` + `FullScan` produce a complete snapshot. All events are planned at once, all actions loaded into the ledger and tracker at once, workers drain the full batch.
+- **Watch mode**: `Watch` goroutines produce incremental events. Events arrive in small batches as the debounce window fires. New actions are added incrementally to the ledger and tracker while workers are already draining previous batches. Observers and workers run independently.
 
-This design means that every code path exercised in one-shot mode is also exercised in watch mode. There are no watch-mode-only code paths that could harbor untested bugs.
+The same tracker and per-action commit infrastructure serves both modes. This means that every code path exercised in one-shot mode is also exercised in watch mode. There are no watch-mode-only code paths that could harbor untested bugs.
 
 **Graceful shutdown** (two-signal protocol):
 
@@ -1433,7 +1446,7 @@ This design means that every code path exercised in one-shot mode is also exerci
 
 **Pause/Resume** (watch mode only):
 
-When paused, observers continue running and the buffer accumulates events. When resumed, the buffer flushes all accumulated events as a single large batch. If the buffer exceeds a high-water mark (100K events) during an extended pause, the engine collapses to a "full sync on resume" flag to avoid excessive memory consumption.
+When paused, observers continue running and the buffer accumulates events. Workers stop pulling from the tracker (paused flag). In-flight actions complete normally. When resumed, the buffer flushes all accumulated events, the planner generates new actions, they are written to the ledger and tracker, and workers resume pulling. If the buffer exceeds a high-water mark (100K events) during an extended pause, the engine collapses to a "full sync on resume" flag to avoid excessive memory consumption.
 
 **Context tree** (watch mode goroutine hierarchy):
 
@@ -1441,13 +1454,13 @@ When paused, observers continue running and the buffer accumulates events. When 
 rootCtx (Engine.RunWatch)
 |-- remoteObserverCtx
 |-- localObserverCtx
-|-- executorCtx (per cycle)
-    |-- downloadWorker[0..N]
-    |-- uploadWorker[0..N]
-    +-- checkWorker[0..N]
+|-- trackerCtx
+    |-- interactiveWorker[0..M]
+    |-- bulkWorker[0..N]
+    +-- sharedWorker[0..K]
 ```
 
-Canceling `rootCtx` propagates to all goroutines, triggering graceful shutdown.
+Workers are persistent goroutines pulling from tracker channels, not scoped to individual planning passes. Canceling `rootCtx` propagates to all goroutines, triggering graceful shutdown.
 
 **Platform considerations for watch mode**:
 
@@ -1487,17 +1500,18 @@ The event-driven architecture provides natural crash recovery because the baseli
 | During `RemoteObserver.FullDelta()` | Nothing (events are in-memory) | Re-run cycle. Delta re-fetched from saved token. |
 | During `LocalObserver.FullScan()` | Nothing (events are in-memory) | Re-run cycle. Filesystem re-scanned. |
 | During `Planner.Plan()` | Nothing (pure function) | Re-run cycle. |
-| During `Executor.Execute()` | Some files downloaded/uploaded on disk/API. Baseline NOT updated. Delta token NOT advanced. | Re-run cycle. Delta returns same changes (token not advanced). Local Observer sees completed downloads. Planner classifies already-completed items as EF4 (convergent edit) or EF11 (convergent create) -- both resolve to "update synced" with no data transfer. |
-| During `BaselineManager.Commit()` | SQLite transaction: either commits or rolls back | If rolled back: same as "during Execute." If committed: success. |
-| During watch mode (between cycles) | Buffer has pending events | Events re-observed by the watchers. Debounce/dedup handles redundancy. |
+| During execution | Completed actions already committed to baseline individually. Remaining actions in ledger with pending/claimed status. | On restart: load ledger, reclaim stale claims (claimed_at older than timeout), resume execution. No full re-observation needed. Delta token not advanced (committed only when all cycle actions done). |
+| During per-action commit | SQLite transaction: both baseline and ledger update or neither | If rolled back: action remains claimed, reclaimed on restart. If committed: action is durable. |
+| During watch mode (between cycles) | Buffer has pending events. Completed actions in baseline. | Events re-observed by the watchers. Debounce/dedup handles redundancy. Completed actions persist. |
 
-**Worst-case scenario**: A 30-minute initial sync crashes at minute 29 during execution. All 29 minutes of downloads are on disk but the baseline is not updated. On restart:
+**Worst-case scenario**: A 30-minute initial sync crashes at minute 29 during execution. 29 minutes of completed transfers are already committed to baseline individually. On restart:
 
-1. Full delta is re-fetched (same token -- not advanced).
-2. Local Observer sees the downloaded files.
-3. Planner quickly classifies them as EF4/EF11 (both sides have identical content -- update synced).
-4. Commit writes the baseline.
-5. Time wasted: a few minutes of re-classification, not 29 minutes of re-downloading.
+1. Load ledger: remaining actions with pending/claimed status are loaded into the tracker.
+2. Reclaim stale claims (actions stuck in `claimed` past timeout).
+3. For uploads with `session_url`: query upload session endpoint, resume from `bytes_done`.
+4. For downloads: check `.partial` file size, resume via HTTP `Range` header.
+5. Workers resume executing remaining actions. No re-downloading of completed transfers.
+6. Time wasted: seconds to load ledger and reclaim, not 29 minutes of re-downloading.
 
 ### 13.3 Upload Session Persistence
 
@@ -1520,11 +1534,11 @@ CREATE TABLE upload_sessions (
 
 Session persistence is the one exception to the "baseline manager is the sole writer" rule. The executor writes to `upload_sessions` BEFORE starting a chunked upload (to enable crash recovery). The baseline manager deletes the session row when the upload outcome is committed.
 
-**Delta token integrity**: The delta token is NEVER saved independently of the baseline. It is included in the same atomic transaction as baseline updates. This guarantees:
+**Delta token integrity**: The delta token is committed only when all actions for a cycle reach `done` status. Individual per-action commits update the baseline but do not advance the delta token. This guarantees:
 
-- If execution succeeds but commit fails: token not advanced, same delta re-fetched.
-- If execution partially succeeds: only successfully completed items are committed. The token advances to cover those items. Remaining items appear in the next delta.
-- If the process crashes during execution: no commit happened, no token advanced. Full replay. Already-completed transfers are detected as convergent (EF4/EF11).
+- If the process crashes mid-cycle: completed actions are already in baseline (committed individually). The delta token has not been advanced, so the same delta can be re-fetched. The planner detects already-committed actions as convergent (EF4/EF11) and skips them. Remaining actions are loaded from the ledger and resumed.
+- If all actions complete but the token commit fails: all outcomes are in baseline. The token commit is retried on restart.
+- Upload sessions with `session_url` in the ledger can be resumed from `bytes_done` offset. Downloads resume via `.partial` file size + HTTP `Range` header.
 
 ---
 

@@ -1,21 +1,25 @@
-# Architectural Strategy: Alternative E — Event-Driven Architecture with Change Journal
+# Architectural Rationale: Event-Driven Design
 
 **Date**: 2026-02-22
-**Decision**: Alternative E selected as the long-term target architecture.
-**Rationale**: No users, no launch, unlimited engineering effort. Build for the long-term product vision. Mission-critical data management — one chance to get it right.
+
+This document explains the architectural rationale for the event-driven design
+of onedrive-go's sync engine. It covers why event-driven processing was chosen
+over alternative approaches and provides detailed component design specifications.
 
 ---
 
 ## Part 1: First Principles
 
-### 1.1 Why Not A, B, C, or D?
+### 1.1 Why Event-Driven Over Alternatives
 
-| Alternative | What it is | Why it's not enough |
+During the design phase, several architectural approaches were evaluated:
+
+| Alternative | What it is | Why event-driven is better |
 |---|---|---|
-| **A: Surgical Repair** | Patch the seams between modules | Preserves the root cause: shared mutable database as coordination mechanism. `local:` ID lifecycle remains. Dual-row class is mitigated, not eliminated. |
-| **B: Three-Table Split** | Split the `items` table into `remote_state`, `local_state`, `synced_baseline` | Still uses the database as the coordination mechanism. Delta and scanner still write eagerly. Dry-run still has side effects. Three tables means three writers fighting for SQLite. |
-| **C: Deferred Persistence** | In-memory reconciliation with deferred writes | Good data flow, but no answer for continuous mode (`sync --watch`). Rebuilds full snapshots on every trigger. Not designed for incremental processing. |
-| **D: Pure Snapshot Pipeline** | Sync cycle as a pure function: `(Baseline, API, FS) → NewBaseline` | Correct for one-shot mode. But `sync --watch` (the PRD's "what you put in a systemd unit file") would require rebuilding full snapshots on every inotify event. Wasteful and high-latency for the continuous mode that production users will run 24/7. |
+| **A: Shared Mutable DB** | Pipeline stages coordinate via shared database rows | Using the database as a coordination mechanism creates ordering dependencies, concurrent write conflicts, and side effects during planning. Event-driven eliminates all database writes until the final commit. |
+| **B: Multi-Table Split** | Separate tables for remote state, local state, and synced baseline | Multiple tables means multiple writers competing for SQLite. Dry-run has side effects because observation writes to the database. Event-driven keeps observations ephemeral. |
+| **C: Deferred Persistence** | In-memory reconciliation with deferred writes | Good data flow, but rebuilds full snapshots on every trigger. Not designed for incremental processing in continuous mode (`sync --watch`). |
+| **D: Pure Snapshot Pipeline** | Sync cycle as a pure function: `(Baseline, API, FS) -> NewBaseline` | Correct for one-shot mode. But `sync --watch` (the PRD's "what you put in a systemd unit file") would require rebuilding full snapshots on every inotify event. Wasteful and high-latency for the continuous mode that production users run 24/7. |
 
 ### 1.2 What the Product Vision Demands
 
@@ -31,18 +35,21 @@ From the PRD:
 
 An architecture designed for batch processing (A through D) treats `--watch` as "run one-shot in a loop." An architecture designed for event-driven processing treats one-shot as "collect all events, then process them as a batch." The latter is the correct generalization.
 
-### 1.3 The Six Fault Lines (Recap)
+### 1.3 Anti-Patterns Avoided by Event-Driven Design
 
-All six trace to one root cause: **the database is the coordination mechanism between pipeline stages**.
+Using the database as a coordination mechanism between pipeline stages creates
+six categories of failure:
 
-1. **Tombstone split**: Scanner and delta fight over shared mutable DB rows
-2. **`local:` ID lifecycle**: Scanner invents fake IDs because it writes to an item_id-keyed table
-3. **SQLITE_BUSY**: Concurrent workers write to DB during execution
-4. **Incomplete folder lifecycle**: `isSynced()` depends on hash fields that folders don't have
-5. **Pipeline phase ordering**: Intermediate DB writes create ordering dependencies
-6. **Asymmetric filter application**: Filter only runs in the scanner, not on remote items
+1. **Tombstone split**: Observation and deletion tracking competing over shared mutable rows
+2. **Synthetic ID lifecycle**: Observers inventing fake IDs because they write to an item_id-keyed table
+3. **SQLITE_BUSY**: Concurrent workers writing to DB during execution
+4. **Incomplete lifecycle predicates**: `isSynced()` predicates depending on hash fields that folders don't have
+5. **Pipeline phase ordering**: Intermediate DB writes creating ordering dependencies between stages
+6. **Asymmetric filter application**: Filter running only in one observer, not applied symmetrically
 
-Alternative E eliminates all six by removing the database from the coordination path entirely.
+The event-driven design eliminates all six by removing the database from the
+coordination path entirely. Observers produce ephemeral events, the planner
+is a pure function, and only the BaselineManager writes to the database.
 
 ### 1.4 Industry Precedent
 
@@ -93,15 +100,15 @@ Alternative E draws from all four: Dropbox's event journal, Syncthing's continuo
             │   Executor     │    ← executes actions against API + filesystem
             │                │    → produces Outcomes
             │  • Downloads   │
-            │  • Uploads     │    ← worker pools (parallel)
+            │  • Uploads     │    ← lane-based workers (parallel)
             │  • Deletes     │
-            │  • Moves       │    ← sequential (ordering constraints)
+            │  • Moves       │    ← dependency-ordered (DAG)
             │  • Conflicts   │
             └────────┬───────┘
                      ▼
             ┌────────────────┐
-            │   Baseline     │    ← applies Outcomes atomically to DB
-            │   Manager      │    ← saves delta token in same transaction
+            │   Baseline     │    ← commits each Outcome per-action
+            │   Manager      │    ← saves delta token when cycle complete
             │                │    ← optionally writes to change journal
             └────────────────┘
 ```
@@ -320,7 +327,7 @@ type Outcome struct {
 
 ### 3.6 Action Types (Unchanged)
 
-The action types and ActionPlan structure remain the same as the current design — they're well-designed:
+The action types and ActionPlan structure are well-designed:
 
 ```go
 type ActionType int
@@ -366,7 +373,7 @@ Note: `Action.View` replaces `Action.Item`. The action carries the full `PathVie
 
 ### 3.7 Consumer-Defined Interfaces (Graph Client)
 
-These are unchanged from the current design — they're clean and correct:
+Consumer-defined interfaces for the Graph client:
 
 ```go
 type DeltaFetcher interface {
@@ -460,7 +467,7 @@ CREATE TABLE delta_tokens (
 );
 ```
 
-**Critical property**: The delta token is saved in the same transaction as baseline updates. Never separately. If the process crashes after execution but before commit, the token is not advanced, and the same delta is re-fetched (idempotent).
+**Critical property**: The delta token is committed only after all actions for a cycle have been individually committed to baseline. If the process crashes before the delta token commit, the token is not advanced, and the same delta is re-fetched (idempotent). Per-action baseline commits ensure completed work is never lost.
 
 ### 4.3 Conflict Ledger
 
@@ -571,7 +578,7 @@ CREATE TABLE schema_migrations (
 );
 ```
 
-Tracks applied schema versions. Migration infrastructure from the current implementation is reused.
+Tracks applied schema versions.
 
 ### 4.9 SQLite Pragmas
 
@@ -596,7 +603,7 @@ All timestamps are stored as INTEGER Unix nanoseconds (UTC). Validation rules:
 | Fractional seconds from OneDrive | Truncated to whole seconds for comparison |
 | Local filesystem nanoseconds | Stored at full precision for fast-check |
 
-**Racily-clean problem**: If a file is modified within the same second as the last sync, the mtime fast-check is ambiguous. Solution: when `truncateToSeconds(localMtime) == truncateToSeconds(baselineMtime)`, always compute the content hash to verify. This is the same approach as the enrichment guard in the current implementation but generalized.
+**Racily-clean problem**: If a file is modified within the same second as the last sync, the mtime fast-check is ambiguous. Solution: when `truncateToSeconds(localMtime) == truncateToSeconds(baselineMtime)`, always compute the content hash to verify. This is the standard approach (documented in Git's index design) generalized for sync.
 
 ### 4.11 Path Conventions
 
@@ -749,7 +756,7 @@ func (o *RemoteObserver) materializePath(event ChangeEvent) string {
 **Key properties**:
 - Produces `[]ChangeEvent`, not database writes
 - Path materialization uses the baseline (read-only) + in-flight parent tracking
-- Normalization (driveID casing, missing fields, timestamps) happens here, same as current `delta.go`
+- Normalization (driveID casing, missing fields, timestamps) happens here, at the observer boundary
 - The same code works for both one-shot and watch mode
 
 **API quirk handling in `convertToChangeEvent`** (all handled in the observer, invisible to downstream):
@@ -1189,8 +1196,8 @@ func (p *Planner) Plan(
         }
 
         // Apply filter SYMMETRICALLY to both remote-only and local-only items.
-        // This fixes Fault Line 6: in the current architecture, filters only run
-        // in the scanner. Here, the planner applies the three-layer filter cascade
+        // Symmetric filtering: filters run on both local and remote items.
+        // The planner applies the three-layer filter cascade
         // (sync_paths → config patterns → .odignore) to all items uniformly.
         // Monotonic exclusion: each layer can only exclude more, never include back.
         if view.Remote != nil && view.Local == nil && view.Baseline == nil {
@@ -1374,8 +1381,8 @@ func (p *Planner) buildPathViews(changes []PathChanges, baseline *Baseline) []Pa
 
 ### 5.5 Decision Matrix (File Classification)
 
-E uses the same reconciliation logic as the current F1-F14/D1-D7 matrix from
-sync-algorithm.md, but reorganized to reflect E's three-way `PathView` inputs.
+The reconciliation logic uses the EF1-EF14/ED1-ED8 decision matrix specified in
+sync-algorithm.md, operating on three-way `PathView` inputs.
 Moves (F13/F14 in the spec) are handled separately in `detectMoves` above and
 are excluded before this function runs. The numbering below is E's own — the
 mapping table shows correspondence.
@@ -1545,9 +1552,7 @@ func (p *Planner) classifyFolder(v PathView, mode SyncMode) []Action {
 }
 ```
 
-**Why ED1 is now reachable for folders**: In the current architecture, `isSynced()` checks `SyncedHash != "" || LastSyncedAt != nil`. Folders have no hash, and `executeSyncedUpdate` never sets `LastSyncedAt` for folders. So `isSynced()` always returns false, and all folders loop through D2 (adopt) every cycle, producing spurious DB writes.
-
-In E, `hasBaseline` is simply `v.Baseline != nil`. If a folder was previously synced and has a baseline entry, ED1 fires. No hash check. No special folder handling. The bug is structurally eliminated.
+**Why ED1 works correctly**: `hasBaseline` is simply `v.Baseline != nil`. If a folder was previously synced and has a baseline entry, ED1 fires. No hash check. No special folder handling. This avoids the common anti-pattern where synced-state predicates depend on hash fields that folders don't have, which would cause all folders to loop through adopt (ED2) every cycle.
 
 ### 5.7 Change Detection
 
@@ -1593,7 +1598,7 @@ func (p *Planner) detectRemoteChange(v PathView) bool {
 
 ### 5.8 Executor
 
-The executor takes an ActionPlan and executes it against the API and filesystem. It produces Outcomes, not database writes.
+The executor takes actions from the dependency tracker and executes them against the API and filesystem. Each action produces an Outcome that the baseline manager commits individually.
 
 ```go
 type Executor struct {
@@ -1601,82 +1606,45 @@ type Executor struct {
     syncRoot    string
     safetyCfg   *config.SafetyConfig
     transferCfg *config.TransfersConfig
-    transferMgr *TransferManager
     logger      *slog.Logger
 }
 
-func (e *Executor) Execute(ctx context.Context, plan *ActionPlan) ([]Outcome, error) {
-    var outcomes []Outcome
-    var mu sync.Mutex
-
-    collectOutcome := func(o Outcome) {
-        mu.Lock()
-        outcomes = append(outcomes, o)
-        mu.Unlock()
+// Workers pull dependency-satisfied actions from the tracker.
+// All action types run concurrently when their dependencies are met.
+func (e *Executor) executeAction(ctx context.Context, action Action) Outcome {
+    switch action.Type {
+    case ActionFolderCreate:
+        return e.executeFolderCreate(ctx, action)
+    case ActionLocalMove, ActionRemoteMove:
+        // Moves produce Outcome with OldPath + Path for baseline update
+        return e.executeMove(ctx, action)
+    case ActionDownload:
+        // .partial temp file → hash verify → atomic rename
+        return e.executeDownload(ctx, action)
+    case ActionUpload:
+        // ≤4MB simple PUT, >4MB resumable upload session
+        return e.executeUpload(ctx, action)
+    case ActionLocalDelete:
+        return e.executeLocalDelete(ctx, action)
+    case ActionRemoteDelete:
+        // Hash-before-delete safety check (S4)
+        return e.executeRemoteDelete(ctx, action)
+    case ActionConflict:
+        return e.executeConflict(ctx, action)
+    case ActionSyncedUpdate:
+        // No I/O — just baseline metadata update
+        return e.executeSyncedUpdate(action)
+    case ActionCleanup:
+        return Outcome{Action: ActionCleanup, Success: true, Path: action.Path}
     }
-
-    // Phase 1: Folder creates (sequential, top-down by depth)
-    for _, action := range plan.FolderCreates {
-        outcome := e.executeFolderCreate(ctx, action)
-        collectOutcome(outcome)
-    }
-
-    // Phase 2: Moves (sequential — ordering matters for nested moves)
-    // ActionLocalMove: rename local file/folder from action.Path to action.NewPath
-    // ActionRemoteMove: call MoveItem API to rename on server
-    // Both produce Outcome with OldPath + Path for baseline update
-    for _, action := range plan.Moves {
-        outcome := e.executeMove(ctx, action)
-        collectOutcome(outcome)
-    }
-
-    // Phase 3: Downloads (parallel via worker pool)
-    e.transferMgr.ExecuteDownloads(ctx, plan.Downloads, collectOutcome)
-
-    // Phase 4: Uploads (parallel via worker pool)
-    e.transferMgr.ExecuteUploads(ctx, plan.Uploads, collectOutcome)
-
-    // Phase 5: Local deletes (sequential, files first, then folders bottom-up)
-    for _, action := range plan.LocalDeletes {
-        outcome := e.executeLocalDelete(ctx, action)
-        collectOutcome(outcome)
-    }
-
-    // Phase 6: Remote deletes (sequential)
-    for _, action := range plan.RemoteDeletes {
-        outcome := e.executeRemoteDelete(ctx, action)
-        collectOutcome(outcome)
-    }
-
-    // Phase 7: Conflicts (sequential)
-    for _, action := range plan.Conflicts {
-        outcome := e.executeConflict(ctx, action)
-        collectOutcome(outcome)
-    }
-
-    // Phase 8: Synced updates (batch — no I/O, just baseline updates)
-    for _, action := range plan.SyncedUpdates {
-        outcome := e.executeSyncedUpdate(action)
-        collectOutcome(outcome)
-    }
-
-    // Phase 9: Cleanups (batch)
-    for _, action := range plan.Cleanups {
-        collectOutcome(Outcome{
-            Action:  ActionCleanup,
-            Success: true,
-            Path:    action.Path,
-        })
-    }
-
-    return outcomes, nil
+    return Outcome{Action: action.Type, Success: false, Path: action.Path}
 }
 ```
 
 **Key properties**:
-- No database writes. Workers collect Outcomes via a mutex-protected slice.
-- SQLITE_BUSY is structurally impossible: no DB writes happen during execution.
-- The `collectOutcome` callback is safe for concurrent use by worker pool goroutines.
+- No database writes during execution. Each worker produces an Outcome.
+- SQLITE_BUSY is structurally impossible: the baseline manager is the sole DB writer, committing each outcome individually via per-action atomic transactions.
+- Dependency ordering is enforced by the tracker, not by the executor. Parent folders are created before child operations; children are deleted before parent folders.
 - Each outcome is self-contained: it has everything the baseline manager needs.
 
 **Error classification in Outcomes** (four-tier model from architecture.md):
@@ -1775,13 +1743,12 @@ func (m *BaselineManager) Load(ctx context.Context) (*Baseline, error) {
     return baseline, nil
 }
 
-// Commit applies outcomes to the baseline table and saves the delta token,
-// all in a single atomic transaction.
-func (m *BaselineManager) Commit(
+// CommitOutcome applies a single completed action to the baseline and marks
+// the ledger action as done, in one atomic transaction.
+func (m *BaselineManager) CommitOutcome(
     ctx context.Context,
-    outcomes []Outcome,
-    deltaToken string,
-    driveID driveid.ID,
+    outcome Outcome,
+    ledgerActionID int64,
 ) error {
     tx, err := m.db.BeginTx(ctx, nil)
     if err != nil { return err }
@@ -1789,87 +1756,80 @@ func (m *BaselineManager) Commit(
 
     now := time.Now().UnixNano()
 
-    for _, o := range outcomes {
-        if !o.Success { continue }
-
-        switch o.Action {
-        case ActionDownload, ActionUpload, ActionUpdateSynced, ActionFolderCreate:
-            _, err = tx.ExecContext(ctx,
-                `INSERT INTO baseline
-                    (path, drive_id, item_id, parent_id, item_type,
-                     local_hash, remote_hash, size, mtime, synced_at, etag)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                 ON CONFLICT(path) DO UPDATE SET
-                    drive_id=excluded.drive_id, item_id=excluded.item_id,
-                    parent_id=excluded.parent_id,
-                    item_type=excluded.item_type,
-                    local_hash=excluded.local_hash, remote_hash=excluded.remote_hash,
-                    size=excluded.size, mtime=excluded.mtime,
-                    synced_at=excluded.synced_at,
-                    etag=excluded.etag`,
-                o.Path, o.DriveID, o.ItemID, o.ParentID, o.ItemType,
-                o.LocalHash, o.RemoteHash, o.Size, o.Mtime, now, o.ETag)
-
-        case ActionLocalMove, ActionRemoteMove:
-            // Move = delete old path entry + insert at new path.
-            _, err = tx.ExecContext(ctx,
-                `DELETE FROM baseline WHERE path = ?`, o.OldPath)
-            if err != nil { return fmt.Errorf("commit move delete for %s: %w", o.OldPath, err) }
-            _, err = tx.ExecContext(ctx,
-                `INSERT INTO baseline
-                    (path, drive_id, item_id, parent_id, item_type,
-                     local_hash, remote_hash, size, mtime, synced_at, etag)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                o.Path, o.DriveID, o.ItemID, o.ParentID, o.ItemType,
-                o.LocalHash, o.RemoteHash, o.Size, o.Mtime, now, o.ETag)
-
-        case ActionLocalDelete, ActionRemoteDelete, ActionCleanup:
-            _, err = tx.ExecContext(ctx,
-                `DELETE FROM baseline WHERE path = ?`, o.Path)
-
-        case ActionConflict:
-            // Record conflict in ledger
-            _, err = tx.ExecContext(ctx,
-                `INSERT INTO conflicts (id, drive_id, item_id, path, conflict_type,
-                    detected_at, local_hash, remote_hash, resolution)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'unresolved')`,
-                generateID(), o.DriveID, o.ItemID, o.Path, o.ConflictType,
-                now, o.LocalHash, o.RemoteHash)
-            // Also update baseline if keep-both resolution created files
-            // (handled by conflict executor)
-        }
-
-        if err != nil { return fmt.Errorf("commit outcome for %s: %w", o.Path, err) }
-    }
-
-    // Save delta token in the same transaction
-    if deltaToken != "" {
+    switch outcome.Action {
+    case ActionDownload, ActionUpload, ActionUpdateSynced, ActionFolderCreate:
         _, err = tx.ExecContext(ctx,
-            `INSERT INTO delta_tokens (drive_id, token, updated_at)
-             VALUES (?, ?, ?)
-             ON CONFLICT(drive_id) DO UPDATE SET token=excluded.token, updated_at=excluded.updated_at`,
-            driveID, deltaToken, now)
-        if err != nil { return fmt.Errorf("save delta token: %w", err) }
+            `INSERT INTO baseline
+                (path, drive_id, item_id, parent_id, item_type,
+                 local_hash, remote_hash, size, mtime, synced_at, etag)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(path) DO UPDATE SET
+                drive_id=excluded.drive_id, item_id=excluded.item_id,
+                parent_id=excluded.parent_id,
+                item_type=excluded.item_type,
+                local_hash=excluded.local_hash, remote_hash=excluded.remote_hash,
+                size=excluded.size, mtime=excluded.mtime,
+                synced_at=excluded.synced_at,
+                etag=excluded.etag`,
+            outcome.Path, outcome.DriveID, outcome.ItemID, outcome.ParentID,
+            outcome.ItemType, outcome.LocalHash, outcome.RemoteHash,
+            outcome.Size, outcome.Mtime, now, outcome.ETag)
+
+    case ActionLocalMove, ActionRemoteMove:
+        _, err = tx.ExecContext(ctx,
+            `DELETE FROM baseline WHERE path = ?`, outcome.OldPath)
+        if err != nil { return fmt.Errorf("commit move delete for %s: %w", outcome.OldPath, err) }
+        _, err = tx.ExecContext(ctx,
+            `INSERT INTO baseline
+                (path, drive_id, item_id, parent_id, item_type,
+                 local_hash, remote_hash, size, mtime, synced_at, etag)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            outcome.Path, outcome.DriveID, outcome.ItemID, outcome.ParentID,
+            outcome.ItemType, outcome.LocalHash, outcome.RemoteHash,
+            outcome.Size, outcome.Mtime, now, outcome.ETag)
+
+    case ActionLocalDelete, ActionRemoteDelete, ActionCleanup:
+        _, err = tx.ExecContext(ctx,
+            `DELETE FROM baseline WHERE path = ?`, outcome.Path)
+
+    case ActionConflict:
+        _, err = tx.ExecContext(ctx,
+            `INSERT INTO conflicts (id, drive_id, item_id, path, conflict_type,
+                detected_at, local_hash, remote_hash, resolution)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'unresolved')`,
+            generateID(), outcome.DriveID, outcome.ItemID, outcome.Path,
+            outcome.ConflictType, now, outcome.LocalHash, outcome.RemoteHash)
     }
+    if err != nil { return fmt.Errorf("commit outcome for %s: %w", outcome.Path, err) }
 
-    // Optionally write to change journal (for debugging)
-    // ... append journal entries ...
+    // Mark ledger action as done in the same transaction
+    _, err = tx.ExecContext(ctx,
+        `UPDATE action_queue SET status = 'done', completed_at = ? WHERE id = ?`,
+        now, ledgerActionID)
+    if err != nil { return fmt.Errorf("mark action done: %w", err) }
 
-    if err := tx.Commit(); err != nil {
-        return fmt.Errorf("commit transaction: %w", err)
-    }
+    return tx.Commit()
+}
 
-    // Refresh in-memory cache
-    m.cached, err = m.Load(ctx)
+// CommitDeltaToken saves the delta token after all cycle actions complete.
+func (m *BaselineManager) CommitDeltaToken(
+    ctx context.Context,
+    deltaToken string,
+    driveID driveid.ID,
+) error {
+    _, err := m.db.ExecContext(ctx,
+        `INSERT INTO delta_tokens (drive_id, token, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(drive_id) DO UPDATE SET token=excluded.token, updated_at=excluded.updated_at`,
+        driveID, deltaToken, time.Now().UnixNano())
     return err
 }
 ```
 
 **Key properties**:
 - Single writer to the database (no concurrency issues)
-- Atomic transaction: all outcomes + delta token commit together or none do
-- After commit, the in-memory baseline is refreshed for the next cycle
-- The delta token is NEVER saved separately from the baseline. If the process crashes during execution, the token is not advanced.
+- Per-action atomic transaction: baseline update + ledger status update commit together or neither does
+- Delta token committed separately only after all cycle actions reach `done` status. If the process crashes mid-cycle, completed actions are preserved in baseline and the token is not advanced — the same delta is re-fetched (idempotent), and already-committed actions produce convergent classifications (EF4/EF11).
 
 ### 5.10 Engine (Orchestrator)
 
@@ -2010,18 +1970,18 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode) error {
 
 ## Part 6: How E Addresses Each Fault Line
 
-| # | Fault Line | Current Root Cause | E's Solution |
+| # | Fault Line | Anti-Pattern (DB-Coordinated) | Event-Driven Solution |
 |---|---|---|---|
 | 1 | **Tombstone split** | Scanner and delta fight over shared mutable DB rows. Scanner creates `local:` rows when it can't see tombstoned rows. | Remote and local observers produce independent event streams. Neither touches the database. The planner sees both events for the same path in a single `PathChanges` struct. No DB rows to conflict. Structurally impossible. |
 | 2 | **`local:` ID lifecycle** | Scanner invents `local:` prefixed IDs because it writes to an `(drive_id, item_id)`-keyed table. Every module must handle the fake IDs. | `LocalEntry` and `ChangeEvent` from local source have no `ItemID` field (it's empty). Local changes are keyed by path. The baseline maps paths to item IDs. After upload, the real server ID comes from the API response and goes into the Outcome → baseline commit. No temporary IDs ever exist. |
-| 3 | **SQLITE_BUSY** | Concurrent transfer workers write to DB via `store.UpsertItem`. Without `busy_timeout`, concurrent writes return SQLITE_BUSY immediately. | No DB writes during execution. Transfer workers produce Outcomes (in-memory structs). A mutex protects the outcomes slice — Go mutex, not SQLite. The baseline manager is the sole DB writer, running sequentially after execution completes. |
+| 3 | **SQLITE_BUSY** | Concurrent transfer workers write to DB via `store.UpsertItem`. Without `busy_timeout`, concurrent writes return SQLITE_BUSY immediately. | No DB writes during execution. Transfer workers produce Outcomes (in-memory structs). The baseline manager is the sole DB writer — each completed action commits its outcome individually via per-action atomic transactions. Single-writer pattern eliminates SQLITE_BUSY entirely. |
 | 4 | **Folder lifecycle** | `isSynced()` checks `SyncedHash != ""` which is always empty for folders. `executeSyncedUpdate` never sets `LastSyncedAt` for folders. D1 is dead code. | `hasBaseline` is `v.Baseline != nil`. If a folder has a baseline entry, it was synced. No hash check. ED1 fires correctly for all synced folders. The bug is structurally eliminated by the type system. |
-| 5 | **Phase ordering** | Delta writes to DB in Phase 1, scanner writes in Phase 2, both before reconciliation in Phase 3. Dry-run writes 24+ items and a delta token to DB. | No intermediate DB writes. Delta produces events. Scanner produces events. Planner operates on events + baseline (read-only). Dry-run stops before execution. Zero side effects in any phase before Execute. |
+| 5 | **Stage ordering** | Delta writes to DB in stage 1, scanner writes in stage 2, both before reconciliation in stage 3. Dry-run writes 24+ items and a delta token to DB. | No intermediate DB writes. Delta produces events. Scanner produces events. Planner operates on events + baseline (read-only). Dry-run stops before execution. Zero side effects in any pipeline stage before Execute. |
 | 6 | **Filter asymmetry** | Filter only runs in the scanner (`scanner.go:250`). Remote items from delta are never filtered. | The planner applies the filter to both remote-only items (new downloads) and local-only items (new uploads) symmetrically. The filter is checked in the classification step, not in the observation step. |
 
 ### 6.1 Move Detection Without Tombstones
 
-The current design uses 30-day tombstones in the `items` table for remote move detection: when the delta reports an item deleted at path A and appearing at path B with the same item ID, the tombstone at A provides the "old path" signal.
+A common alternative design uses tombstones (soft-deleted rows) in the database for remote move detection: when the delta reports an item deleted at path A and appearing at path B with the same item ID, the tombstone at A provides the "old path" signal. The event-driven design avoids tombstones entirely:
 
 In Alternative E, tombstones are eliminated from the baseline. Move detection works through a three-component pipeline:
 
@@ -2035,9 +1995,9 @@ No tombstone needed because the baseline IS the "old state" — it hasn't been u
 **Local moves** — Planner hash-based correlation:
 1. The Local Observer emits a `ChangeDelete` event at the old path (baseline entry exists, file absent) and a `ChangeCreate` event at the new path (no baseline, new file present).
 2. The Planner's `detectMoves` function correlates these: a locally-deleted item whose `baseline.LocalHash` matches a locally-created item's hash (unique match constraint) is combined into a single `ActionRemoteMove` (tell the server about the rename).
-3. Same as current design, but comparing against in-memory data instead of DB queries.
+3. Correlation happens against in-memory data, not DB queries.
 
-**Why tombstones were needed before but not now**: In the current architecture, the delta processor eagerly writes to the DB. A deletion tombstones the row, and a creation at a new path creates a new row. The reconciler must look at the tombstoned row to see the "old" state. In E, the delta produces events against a frozen baseline — the baseline entry at the old path is still there, providing the "before" view naturally.
+**Why tombstones are unnecessary**: In an architecture where the delta processor eagerly writes to the DB, a deletion tombstones the row, and a creation at a new path creates a new row --- the reconciler must look at the tombstoned row to see the "old" state. In the event-driven design, the delta produces events against a frozen baseline --- the baseline entry at the old path is still there, providing the "before" view naturally. No tombstones, no retention, no cleanup.
 
 ---
 
@@ -2138,7 +2098,7 @@ Exceeds the 100 MB target. Mitigation: batch processing during initial sync. Pro
 
 ## Part 9: What Gets Reused
 
-**Important**: The delete-first strategy (Increment 0) deletes all old `internal/sync/` code before building the new engine. The "reuse" described below is **conceptual** — design patterns, algorithms, and architectural insights carry forward into freshly written code. No old sync code is adapted or refactored in place.
+**Note**: The percentages below describe how much of each component's *design logic* draws from well-established sync patterns (Dropbox Nucleus, Syncthing, rsync, Git). All code is written from first principles.
 
 ### Packages retained as-is
 
@@ -2152,7 +2112,7 @@ Exceeds the 100 MB target. Mitigation: batch processing during initial sync. Pro
 
 ### Design patterns carried forward into new code
 
-These percentages describe how much of each new component's *design logic* draws from patterns proven in the old engine. The code itself is written from scratch.
+These percentages describe how much of each component's *design logic* draws from established sync patterns.
 
 | Design pattern | Influence | How it informs new code |
 |---|---|---|
@@ -2168,12 +2128,12 @@ These percentages describe how much of each new component's *design logic* draws
 
 ## Part 10: Implementation Sequence
 
-**Note**: This is a high-level sequence. The authoritative implementation plan is in [roadmap.md](../../docs/roadmap.md) (Phase 4 v2, increments 4v2.0-4v2.8). All old sync code is deleted in Increment 0 (clean slate); everything below is written from scratch.
+**Note**: This is a high-level implementation sequence. The authoritative implementation plan is in [roadmap.md](../../docs/roadmap.md).
 
 ### Phase 1: Foundation (1-2 increments)
 
 1. Define all new types: `ChangeEvent`, `BaselineEntry`, `PathView`, `RemoteState`, `LocalState`, `Outcome`
-2. Create fresh `baseline` table schema (no migration from old `items` table — app has no users)
+2. Create `baseline` table schema
 3. Implement `BaselineManager.Load()` and `BaselineManager.Commit()`
 4. Write comprehensive tests for type conversions and baseline CRUD
 
@@ -2251,7 +2211,7 @@ These percentages describe how much of each new component's *design logic* draws
 |---|---|---|
 | E1 | Events are the coordination mechanism, not the database | Eliminates all shared-mutable-state bugs. Enables watch mode. |
 | E2 | Baseline is the only durable per-item state | Remote and local observations are ephemeral — rebuilt each cycle. Only confirmed sync state needs persistence. |
-| E3 | Delta token commits with baseline | Prevents token-advancement-without-execution crash bug. |
+| E3 | Delta token committed only after all cycle actions complete | Prevents token-advancement-without-execution crash bug. Per-action commits preserve completed work. |
 | E4 | Per-side hash baselines (`local_hash`, `remote_hash`) | Handles SharePoint enrichment natively without special code paths. |
 | E5 | No `local:` IDs | Local observations are keyed by path. Remote observations have server IDs. The baseline maps between them. |
 | E6 | No tombstones in baseline | Baseline only stores confirmed synced state. Deletions remove the row. Remote tombstones are events, not persistent state. |
@@ -2267,7 +2227,7 @@ These percentages describe how much of each new component's *design logic* draws
 | E16 | Retries happen inside the executor, not after | Fixes B-048 (retryable errors silently abandoned). The executor retries with exponential backoff before producing the final Outcome. Failed Outcomes mean "gave up after max retries." |
 | E17 | No tombstones — baseline IS the "old state" | Remote move detection compares delta events against the frozen baseline. The baseline entry at the old path provides the "before" view naturally. Eliminates tombstone management, retention, cleanup. |
 | E18 | Batch processing for large initial syncs | Process in 50K-item batches with intermediate baseline commits. Bounds memory to ~50 MB even for 500K-item drives. |
-| E19 | Two-signal graceful shutdown | First signal: drain + checkpoint. Second signal: immediate exit. WAL ensures consistency. Same protocol as current architecture. |
+| E19 | Two-signal graceful shutdown | First signal: drain + checkpoint. Second signal: immediate exit. WAL ensures consistency. |
 | E20 | Filter applied in Planner, not observers | Filters are checked during classification, not during observation. This ensures both remote AND local items are filtered symmetrically (fixes Fault Line 6) and that filter changes can be hot-reloaded without restarting observers. |
 | E21 | Conflict copies use timestamp naming | `file.conflict-YYYYMMDD-HHMMSS.ext` — self-documenting, shorter than hostname-based. |
 
@@ -2299,7 +2259,7 @@ These are explicitly NOT part of Alternative E:
 1. **Event sourcing as the primary data model**: The change journal is a debugging aid, not the source of truth. The baseline table is the source of truth. We are not building a CQRS system.
 2. **Distributed sync**: E is designed for a single process syncing one or more drives. It does not address multi-device coordination (that's the Graph API's job).
 3. **Sub-file delta transfers**: The Graph API operates on whole files. Block-level transfers are not supported.
-4. **Backward compatibility with the current `items` table**: Clean break. No users, no migration. Old table deleted in Increment 0.
+4. **Table design**: Clean-slate design. The `baseline` table stores only confirmed synced state (11 columns). No legacy compatibility constraints.
 5. **Real-time streaming reconciliation**: Events are batched (debounce window), not processed individually. This is simpler and avoids race conditions.
 
 ---
@@ -2308,7 +2268,7 @@ These are explicitly NOT part of Alternative E:
 
 The seven safety invariants from the architecture spec are preserved in E, but their implementation is cleaner because they operate on typed data structures rather than DB queries.
 
-| ID | Invariant | Current Implementation | E's Implementation |
+| ID | Invariant | Anti-Pattern (DB-Coordinated) | Event-Driven Implementation |
 |----|-----------|----------------------|-------------------|
 | **S1** | Never delete remote on local absence without synced base | Orphan detection checks `synced_hash IS NOT NULL` in DB query | Planner checks `view.Baseline != nil` before emitting `ActionRemoteDelete`. If no baseline exists, the item was never synced — local absence is not a deletion signal. Structurally enforced by type system: `PathView.Baseline == nil` means "never synced." |
 | **S2** | Never process deletions from incomplete enumeration | Delta token saved only after complete response (all pages through deltaLink) | Same: Remote Observer returns the new delta token alongside events. The token is only passed to Commit after execution succeeds. Additionally, the `.nosync` guard fires in the Local Observer before any events are produced. |
@@ -2318,7 +2278,7 @@ The seven safety invariants from the architecture spec are preserved in E, but t
 | **S6** | Disk space check before downloads | Executor checks `min_free_space` before each download | Executor checks available disk space against `config.MinFreeSpace` (default 1GB) before downloading. If insufficient, the download is skipped with a warning and produces a failed Outcome. |
 | **S7** | Never upload partial/temp files | Scanner's filter excludes `.partial`, `.tmp`, `.swp`, etc. | Local Observer's filter excludes the same patterns. Additionally, the Planner applies filters symmetrically (Fault Line 6 fix), so remote items matching these patterns are also filtered. |
 
-**Key improvement in E**: Safety invariants S1 and S5 are now pure functions in the Planner, testable without a database. In the current design, the SafetyChecker queries the DB for total item counts — in E, it computes directly from `len(baseline.ByPath)` and `len(plan.LocalDeletes) + len(plan.RemoteDeletes)`.
+**Key advantage**: Safety invariants S1 and S5 are pure functions in the Planner, testable without a database. The planner computes directly from `len(baseline.ByPath)` and `len(plan.LocalDeletes) + len(plan.RemoteDeletes)` --- no DB queries needed.
 
 ---
 
@@ -2343,7 +2303,7 @@ Commit error → abort cycle (DB failure)
 
 ### 16.2 Retry Strategy Within Executor
 
-Retries happen INSIDE the executor, before producing the Outcome. This fixes B-048 (retryable errors silently abandoned in current implementation).
+Retries happen INSIDE the executor, before producing the Outcome. This ensures retryable errors are never silently abandoned.
 
 ```go
 func (e *Executor) executeWithRetry(ctx context.Context, op func() (*Outcome, error)) Outcome {
@@ -2998,10 +2958,10 @@ The full pipeline (`RunOnce`) is tested with a real SQLite database and mock Gra
 
 Alternative E addresses or resolves these open BACKLOG items:
 
-| BACKLOG ID | Issue | E's Resolution |
+| BACKLOG ID | Issue | Resolution |
 |---|---|---|
 | **B-048** | `ErrorRetryable` treated as `ErrorSkip` in `dispatchPhase` | Fixed: retries happen inside executor with exponential backoff before producing Outcome (Part 16) |
-| **B-046** | `ConflictRecord.RemoteHash` always holds QuickXorHash; needs DB migration | Clean break: E's conflict table uses explicit `local_hash`/`remote_hash` naming. No ambiguity. |
+| **B-046** | `ConflictRecord.RemoteHash` always holds QuickXorHash; ambiguous naming | Clean break: the conflict table uses explicit `local_hash`/`remote_hash` naming. No ambiguity. |
 | **B-049** | Graph mock `GetItem` returns `(nil, nil)` but real client returns `(nil, ErrNotFound)` | Observers produce events — mock returns `graph.DeltaPage` fixtures, not individual items. Mock surface area reduced. |
 | **B-030** | Review whether `internal/graph/` should be split | E does NOT affect `internal/graph/`. 100% reused as-is. |
 | **B-036** | Extract CLI service layer for testability | E improves this: `Engine.RunOnce` and `Engine.RunWatch` are clean entry points. CLI layer becomes thinner. |
