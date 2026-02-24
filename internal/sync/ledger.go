@@ -45,6 +45,13 @@ func NewLedger(db *sql.DB, logger *slog.Logger) *Ledger {
 // WriteActions inserts all actions as pending rows in a single transaction,
 // encoding dependency indices as a JSON array in depends_on. Returns the
 // database IDs of the inserted rows (in the same order as actions).
+//
+// NOTE: The depends_on column stores planner-assigned indices (0-based
+// positions in the actions slice), NOT ledger IDs. The in-memory DepTracker
+// maps indices → ledger IDs before building the dependency graph. For crash
+// recovery (Phase 5.3), the mapping is deterministic: all actions in a cycle
+// are inserted in a single transaction with sequential IDs, so
+// ledgerID = firstID + index.
 func (l *Ledger) WriteActions(
 	ctx context.Context, actions []Action, deps [][]int, cycleID string,
 ) ([]int64, error) {
@@ -79,8 +86,19 @@ func (l *Ledger) WriteActions(
 			depsJSON = sql.NullString{String: string(b), Valid: true}
 		}
 
+		// For move actions, the Action struct uses Path=source and
+		// NewPath=destination. The ledger schema follows the spec where
+		// path=destination and old_path=source, so we swap them.
+		pathVal := a.Path
+		oldPathVal := a.NewPath
+
+		if a.Type == ActionLocalMove || a.Type == ActionRemoteMove {
+			pathVal = a.NewPath // destination → path column
+			oldPathVal = a.Path // source → old_path column
+		}
+
 		result, execErr := stmt.ExecContext(ctx, cycleID,
-			a.Type.String(), a.Path, nullString(a.NewPath), depsJSON,
+			a.Type.String(), pathVal, nullString(oldPathVal), depsJSON,
 			nullString(a.DriveID.String()), nullString(a.ItemID),
 			resolveParentIDFromView(a),
 			resolveHashFromView(a),
@@ -330,8 +348,16 @@ func resolveParentIDFromView(a *Action) string {
 	return ""
 }
 
-// resolveHashFromView extracts the remote hash from the action's view.
+// resolveHashFromView extracts a hash from the action's view. For uploads,
+// the local hash is preferred (Remote may be nil for new files). For all
+// other action types, remote hash is preferred.
 func resolveHashFromView(a *Action) string {
+	if a.Type == ActionUpload {
+		if a.View != nil && a.View.Local != nil && a.View.Local.Hash != "" {
+			return a.View.Local.Hash
+		}
+	}
+
 	if a.View != nil && a.View.Remote != nil {
 		return a.View.Remote.Hash
 	}
