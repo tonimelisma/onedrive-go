@@ -388,11 +388,18 @@ type ItemClient interface {
     DeleteItem(ctx context.Context, driveID, itemID string) error
 }
 
-type TransferClient interface {
-    Download(ctx context.Context, driveID, itemID string, w io.Writer) (int64, error)
-    SimpleUpload(ctx context.Context, driveID, parentID, name string, r io.Reader, size int64) (*graph.Item, error)
-    CreateUploadSession(ctx context.Context, driveID, parentID, name string, size int64, mtime time.Time) (*graph.UploadSession, error)
-    UploadChunk(ctx context.Context, session *graph.UploadSession, chunk io.Reader, offset, length, total int64) (*graph.Item, error)
+// Downloader streams a remote file by item ID.
+type Downloader interface {
+    Download(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error)
+}
+
+// Uploader uploads a local file, encapsulating the simple-vs-chunked decision
+// and upload session lifecycle. content must be an io.ReaderAt for retry safety.
+type Uploader interface {
+    Upload(
+        ctx context.Context, driveID driveid.ID, parentID, name string,
+        content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc,
+    ) (*graph.Item, error)
 }
 ```
 
