@@ -131,8 +131,10 @@ func (c *Client) CreateUploadSession(
 // Returns the completed Item on the final chunk (201/200), nil for intermediate chunks (202).
 // offset is the byte offset, length is the chunk size, total is the full file size.
 // The session URL is pre-authenticated, so no Authorization header is sent.
+// chunk must be an io.ReaderAt — each retry creates a fresh SectionReader to avoid
+// racing with the HTTP transport's writeLoop goroutine from a previous attempt.
 func (c *Client) UploadChunk(
-	ctx context.Context, session *UploadSession, chunk io.Reader,
+	ctx context.Context, session *UploadSession, chunk io.ReaderAt,
 	offset, length, total int64,
 ) (*Item, error) {
 	c.logger.Debug("uploading chunk",
@@ -143,23 +145,25 @@ func (c *Client) UploadChunk(
 
 	contentRange := fmt.Sprintf("bytes %d-%d/%d", offset, offset+length-1, total)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, session.UploadURL, chunk)
+	resp, err := c.doPreAuthRetry(ctx, "upload chunk", func() (*http.Request, error) {
+		// Fresh SectionReader per attempt — io.ReaderAt.ReadAt is goroutine-safe,
+		// so no race with a previous attempt's transport writeLoop goroutine.
+		reader := io.NewSectionReader(chunk, 0, length)
+
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPut, session.UploadURL, reader)
+		if reqErr != nil {
+			return nil, fmt.Errorf("graph: creating chunk upload request: %w", reqErr)
+		}
+
+		req.Header.Set("Content-Range", contentRange)
+		req.Header.Set("Content-Type", "application/octet-stream")
+		req.Header.Set("User-Agent", userAgent)
+		req.ContentLength = length
+
+		return req, nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("graph: creating chunk upload request: %w", err)
-	}
-
-	req.Header.Set("Content-Range", contentRange)
-	req.Header.Set("Content-Type", "application/octet-stream")
-	req.Header.Set("User-Agent", userAgent)
-	req.ContentLength = length
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		c.logger.Error("chunk upload request failed",
-			slog.String("error", err.Error()),
-		)
-
-		return nil, fmt.Errorf("graph: chunk upload request failed: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
@@ -167,6 +171,9 @@ func (c *Client) UploadChunk(
 }
 
 // handleChunkResponse processes the HTTP response from an upload chunk request.
+// doPreAuthRetry guarantees only 2xx responses reach this function — non-2xx
+// (including 416 Range Not Satisfiable) are handled by doPreAuthRetry and
+// returned as *GraphError with appropriate sentinels (e.g., ErrRangeNotSatisfiable).
 // 202 Accepted means intermediate chunk; 200/201 means upload complete with item data.
 func (c *Client) handleChunkResponse(resp *http.Response) (*Item, error) {
 	switch resp.StatusCode {
@@ -196,24 +203,14 @@ func (c *Client) handleChunkResponse(resp *http.Response) (*Item, error) {
 
 		return &item, nil
 
-	case http.StatusRequestedRangeNotSatisfiable:
-		// 416 means the server has different byte ranges than what we sent.
-		// Callers should use QueryUploadSession to discover accepted ranges.
-		if _, drainErr := io.Copy(io.Discard, resp.Body); drainErr != nil {
-			return nil, fmt.Errorf("graph: draining 416 response body: %w", drainErr)
-		}
-
-		c.logger.Warn("upload chunk returned 416 Range Not Satisfiable")
-
-		return nil, ErrRangeNotSatisfiable
-
 	default:
+		// Unexpected 2xx status (e.g., 204, 206). doPreAuthRetry filters non-2xx.
 		body, _ := io.ReadAll(resp.Body) //nolint:errcheck // best-effort read for error message
-		c.logger.Error("chunk upload failed",
+		c.logger.Error("chunk upload returned unexpected 2xx status",
 			slog.Int("status", resp.StatusCode),
 		)
 
-		return nil, fmt.Errorf("graph: chunk upload failed with status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("graph: chunk upload unexpected status %d: %s", resp.StatusCode, string(body))
 	}
 }
 
@@ -222,20 +219,18 @@ func (c *Client) handleChunkResponse(resp *http.Response) (*Item, error) {
 func (c *Client) CancelUploadSession(ctx context.Context, session *UploadSession) error {
 	c.logger.Info("canceling upload session")
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, session.UploadURL, http.NoBody)
+	resp, err := c.doPreAuthRetry(ctx, "cancel upload session", func() (*http.Request, error) {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodDelete, session.UploadURL, http.NoBody)
+		if reqErr != nil {
+			return nil, fmt.Errorf("graph: creating cancel session request: %w", reqErr)
+		}
+
+		req.Header.Set("User-Agent", userAgent)
+
+		return req, nil
+	})
 	if err != nil {
-		return fmt.Errorf("graph: creating cancel session request: %w", err)
-	}
-
-	req.Header.Set("User-Agent", userAgent)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		c.logger.Error("cancel upload session request failed",
-			slog.String("error", err.Error()),
-		)
-
-		return fmt.Errorf("graph: cancel upload session request failed: %w", err)
+		return err
 	}
 	defer resp.Body.Close()
 
@@ -321,35 +316,23 @@ func (c *Client) QueryUploadSession(
 ) (*UploadSessionStatus, error) {
 	c.logger.Info("querying upload session status")
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, session.UploadURL, http.NoBody)
+	resp, err := c.doPreAuthRetry(ctx, "query upload session", func() (*http.Request, error) {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, session.UploadURL, http.NoBody)
+		if reqErr != nil {
+			return nil, fmt.Errorf("graph: creating query session request: %w", reqErr)
+		}
+
+		req.Header.Set("User-Agent", userAgent)
+
+		return req, nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("graph: creating query session request: %w", err)
-	}
-
-	req.Header.Set("User-Agent", userAgent)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		c.logger.Error("query upload session request failed",
-			slog.String("error", err.Error()),
-		)
-
-		return nil, fmt.Errorf("graph: query upload session request failed: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body) //nolint:errcheck // best-effort read for error message
-
-		sentinel := classifyStatus(resp.StatusCode)
-
-		return nil, &GraphError{
-			StatusCode: resp.StatusCode,
-			RequestID:  resp.Header.Get("request-id"),
-			Message:    string(body),
-			Err:        sentinel,
-		}
-	}
+	// doPreAuthRetry guarantees 2xx here. QueryUploadSession expects exactly 200.
+	// Other 2xx codes are unexpected but not worth failing on.
 
 	var ssr uploadSessionStatusResponse
 	if decErr := json.NewDecoder(resp.Body).Decode(&ssr); decErr != nil {
@@ -389,7 +372,24 @@ func (c *Client) Upload(
 	if size <= SimpleUploadMaxSize {
 		r := io.NewSectionReader(content, 0, size)
 
-		return c.SimpleUpload(ctx, driveID, parentID, name, r, size)
+		item, err := c.SimpleUpload(ctx, driveID, parentID, name, r, size)
+		if err != nil {
+			return nil, err
+		}
+
+		// Simple upload (PUT /content) cannot include fileSystemInfo in the
+		// request body. Post-upload PATCH preserves local mtime on the server,
+		// preventing mtime mismatch on the next sync cycle.
+		if !mtime.IsZero() {
+			patched, patchErr := c.UpdateFileSystemInfo(ctx, driveID, item.ID, mtime)
+			if patchErr != nil {
+				return nil, fmt.Errorf("graph: setting mtime after simple upload: %w", patchErr)
+			}
+
+			return patched, nil
+		}
+
+		return item, nil
 	}
 
 	return c.chunkedUploadEncapsulated(ctx, driveID, parentID, name, content, size, mtime, progress)

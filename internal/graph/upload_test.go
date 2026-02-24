@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -370,7 +371,8 @@ func TestUploadChunk_ServerError(t *testing.T) {
 		0, 4, 4,
 	)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "status 500")
+	// 500 is retryable; after exhausting retries, doPreAuthRetry returns *GraphError.
+	assert.ErrorIs(t, err, ErrServerError)
 }
 
 func TestUploadChunk_ContextCanceled(t *testing.T) {
@@ -416,7 +418,8 @@ func TestCancelUploadSession_Error(t *testing.T) {
 
 	err := client.CancelUploadSession(context.Background(), session)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "status 404")
+	// 404 is non-retryable; doPreAuthRetry returns *GraphError with ErrNotFound.
+	assert.ErrorIs(t, err, ErrNotFound)
 }
 
 func TestCancelUploadSession_ContextCanceled(t *testing.T) {
@@ -566,7 +569,8 @@ func TestQueryUploadSession_NetworkError(t *testing.T) {
 
 	_, err := client.QueryUploadSession(context.Background(), session)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "query upload session request failed")
+	// doPreAuthRetry retries network errors, then returns "failed after N retries".
+	assert.Contains(t, err.Error(), "failed after 5 retries")
 }
 
 func TestHandleChunkResponse_FinalDecodeError(t *testing.T) {
@@ -605,21 +609,6 @@ func TestHandleChunkResponse_IntermediateDrainError(t *testing.T) {
 	_, err := client.handleChunkResponse(resp)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "draining chunk response body")
-}
-
-func TestHandleChunkResponse_416DrainError(t *testing.T) {
-	// Verify that handleChunkResponse returns a drain error when the 416
-	// response body fails to read during drain.
-	client := newTestClient(t, "http://unused")
-
-	resp := &http.Response{
-		StatusCode: http.StatusRequestedRangeNotSatisfiable,
-		Body:       errorReadCloser{},
-	}
-
-	_, err := client.handleChunkResponse(resp)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "draining 416 response body")
 }
 
 func TestQueryUploadSession_DecodeError(t *testing.T) {
@@ -701,6 +690,146 @@ func TestUpload_SimpleForSmallFile(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "simple-item-id", item.ID)
 	assert.Equal(t, "small.txt", item.Name)
+}
+
+func TestUpload_SimplePreservesMtime(t *testing.T) {
+	// When mtime is non-zero, Upload() should call UpdateFileSystemInfo
+	// after the simple upload to preserve local mtime on the server.
+	content := []byte("small mtime file")
+	mtime := time.Date(2024, 7, 10, 9, 0, 0, 0, time.UTC)
+
+	var patchCalled bool
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.Method == http.MethodPut {
+			// Simple upload — return item.
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprintf(w, `{
+				"id": "mtime-item",
+				"name": "mtime.txt",
+				"size": %d,
+				"createdDateTime": "2024-06-01T12:00:00Z",
+				"lastModifiedDateTime": "2024-06-01T12:00:00Z",
+				"parentReference": {"id": "parent", "driveId": "d"},
+				"file": {"mimeType": "text/plain"}
+			}`, len(content))
+
+			return
+		}
+
+		if r.Method == http.MethodPatch {
+			// UpdateFileSystemInfo PATCH.
+			patchCalled = true
+
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			assert.Contains(t, string(body), `"lastModifiedDateTime":"2024-07-10T09:00:00Z"`)
+			assert.Equal(t, "/drives/000000000000000d/items/mtime-item", r.URL.Path)
+
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{
+				"id": "mtime-item",
+				"name": "mtime.txt",
+				"size": %d,
+				"createdDateTime": "2024-06-01T12:00:00Z",
+				"lastModifiedDateTime": "2024-07-10T09:00:00Z",
+				"parentReference": {"id": "parent", "driveId": "d"},
+				"file": {"mimeType": "text/plain"}
+			}`, len(content))
+
+			return
+		}
+
+		t.Errorf("unexpected method: %s", r.Method)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	item, err := client.Upload(
+		context.Background(), driveid.New("d"), "parent", "mtime.txt",
+		bytes.NewReader(content), int64(len(content)), mtime, nil,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "mtime-item", item.ID)
+	assert.True(t, patchCalled, "UpdateFileSystemInfo should be called for non-zero mtime")
+	assert.Equal(t, 2024, item.ModifiedAt.Year())
+	assert.Equal(t, time.July, item.ModifiedAt.Month())
+}
+
+func TestUpload_SimpleSkipsPatchForZeroMtime(t *testing.T) {
+	// When mtime is zero, Upload() should NOT call UpdateFileSystemInfo.
+	content := []byte("no mtime file")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			t.Error("PATCH should not be called when mtime is zero")
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprintf(w, `{
+			"id": "no-mtime-item",
+			"name": "no-mtime.txt",
+			"size": %d,
+			"createdDateTime": "2024-06-01T12:00:00Z",
+			"lastModifiedDateTime": "2024-06-01T12:00:00Z",
+			"parentReference": {"id": "parent", "driveId": "d"},
+			"file": {"mimeType": "text/plain"}
+		}`, len(content))
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	item, err := client.Upload(
+		context.Background(), driveid.New("d"), "parent", "no-mtime.txt",
+		bytes.NewReader(content), int64(len(content)), time.Time{}, nil,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "no-mtime-item", item.ID)
+}
+
+func TestUpload_SimpleMtimePatchFailure(t *testing.T) {
+	// When the PATCH fails after simple upload, Upload() should return an error.
+	content := []byte("patch-fail")
+	mtime := time.Date(2024, 7, 10, 9, 0, 0, 0, time.UTC)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.Method == http.MethodPut {
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprintf(w, `{
+				"id": "patch-fail-item",
+				"name": "fail.txt",
+				"size": %d,
+				"createdDateTime": "2024-06-01T12:00:00Z",
+				"lastModifiedDateTime": "2024-06-01T12:00:00Z",
+				"parentReference": {"id": "parent", "driveId": "d"},
+				"file": {"mimeType": "text/plain"}
+			}`, len(content))
+
+			return
+		}
+
+		if r.Method == http.MethodPatch {
+			w.Header().Set("request-id", "req-patch-fail")
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, `{"error":"server error"}`)
+
+			return
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.Upload(
+		context.Background(), driveid.New("d"), "parent", "fail.txt",
+		bytes.NewReader(content), int64(len(content)), mtime, nil,
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "setting mtime after simple upload")
 }
 
 func TestUpload_ChunkedForLargeFile(t *testing.T) {
@@ -921,4 +1050,111 @@ func TestUpload_NilProgress(t *testing.T) {
 func TestUpload_ChunkedUploadChunkSize(t *testing.T) {
 	assert.Equal(t, 10*1024*1024, ChunkedUploadChunkSize)
 	assert.Equal(t, 0, ChunkedUploadChunkSize%ChunkAlignment, "chunk size must be aligned to 320 KiB")
+}
+
+// --- Pre-auth retry tests for upload operations ---
+
+func TestUploadChunk_RetriesOn503(t *testing.T) {
+	var calls atomic.Int32
+
+	chunkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := calls.Add(1)
+
+		// Verify body is re-read on each attempt.
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		assert.Equal(t, 4, len(body), "retry attempt %d should have full body", n)
+
+		if n <= 2 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+
+		w.WriteHeader(http.StatusAccepted)
+		fmt.Fprint(w, `{}`)
+	}))
+	defer chunkSrv.Close()
+
+	client := newTestClient(t, "http://unused")
+	session := &UploadSession{UploadURL: chunkSrv.URL + "/upload"}
+
+	item, err := client.UploadChunk(
+		context.Background(), session,
+		strings.NewReader("data"),
+		0, 4, 8,
+	)
+	require.NoError(t, err)
+	assert.Nil(t, item, "intermediate chunk should return nil item")
+	assert.Equal(t, int32(3), calls.Load())
+}
+
+func TestCancelUploadSession_Unexpected2xx(t *testing.T) {
+	// doPreAuthRetry passes through any 2xx, but CancelUploadSession expects 204.
+	// If the server returns 200, the explicit 204 check should fail.
+	chunkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"unexpected":"response"}`))
+	}))
+	defer chunkSrv.Close()
+
+	client := newTestClient(t, "http://unused")
+	session := &UploadSession{UploadURL: chunkSrv.URL + "/session"}
+
+	err := client.CancelUploadSession(context.Background(), session)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "status 200")
+}
+
+func TestCancelUploadSession_RetriesOn503(t *testing.T) {
+	var calls atomic.Int32
+
+	chunkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodDelete, r.Method)
+
+		n := calls.Add(1)
+		if n <= 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer chunkSrv.Close()
+
+	client := newTestClient(t, "http://unused")
+	session := &UploadSession{UploadURL: chunkSrv.URL + "/session"}
+
+	err := client.CancelUploadSession(context.Background(), session)
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), calls.Load())
+}
+
+func TestQueryUploadSession_RetriesOn429(t *testing.T) {
+	var calls atomic.Int32
+
+	sessionSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		n := calls.Add(1)
+		if n <= 1 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{
+			"uploadUrl": "https://upload.example.com/session/retry",
+			"expirationDateTime": "2024-12-31T23:59:59Z",
+			"nextExpectedRanges": ["0-"]
+		}`)
+	}))
+	defer sessionSrv.Close()
+
+	client := newTestClient(t, "http://unused")
+	session := &UploadSession{UploadURL: sessionSrv.URL + "/session"}
+
+	status, err := client.QueryUploadSession(context.Background(), session)
+	require.NoError(t, err)
+	assert.Equal(t, "https://upload.example.com/session/retry", status.UploadURL)
+	assert.Equal(t, int32(2), calls.Load())
 }

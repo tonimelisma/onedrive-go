@@ -616,3 +616,248 @@ func TestDoRetry_NetworkError_MaxRetries(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed after 5 retries")
 }
+
+// --- doPreAuthRetry tests ---
+
+func TestDoPreAuthRetry_SuccessFirstTry(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify no Authorization header is sent.
+		assert.Empty(t, r.Header.Get("Authorization"))
+		assert.Equal(t, userAgent, r.Header.Get("User-Agent"))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`ok`))
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, "http://unused")
+
+	resp, err := client.doPreAuthRetry(context.Background(), "test op", func() (*http.Request, error) {
+		req, reqErr := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/test", http.NoBody)
+		if reqErr != nil {
+			return nil, reqErr
+		}
+
+		req.Header.Set("User-Agent", userAgent)
+
+		return req, nil
+	})
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestDoPreAuthRetry_NetworkRetry(t *testing.T) {
+	// Verify that network errors trigger retries. Use a factory that switches
+	// from an unreachable address to a working server after the first attempt.
+	var attempts atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`ok`))
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, "http://unused")
+
+	resp, err := client.doPreAuthRetry(context.Background(), "net retry", func() (*http.Request, error) {
+		n := attempts.Add(1)
+
+		target := "http://127.0.0.1:1/unreachable"
+		if n > 1 {
+			target = srv.URL + "/ok"
+		}
+
+		return http.NewRequestWithContext(context.Background(), http.MethodGet, target, http.NoBody)
+	})
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, int32(2), attempts.Load(), "should succeed on second attempt")
+}
+
+func TestDoPreAuthRetry_503Retry(t *testing.T) {
+	var calls atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		n := calls.Add(1)
+		if n <= 2 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`ok`))
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, "http://unused")
+
+	resp, err := client.doPreAuthRetry(context.Background(), "503 retry", func() (*http.Request, error) {
+		return http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/test", http.NoBody)
+	})
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, int32(3), calls.Load())
+}
+
+func TestDoPreAuthRetry_429WithRetryAfter(t *testing.T) {
+	var calls atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		n := calls.Add(1)
+		if n <= 1 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`ok`))
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, "http://unused")
+
+	resp, err := client.doPreAuthRetry(context.Background(), "429 retry", func() (*http.Request, error) {
+		return http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/test", http.NoBody)
+	})
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, int32(2), calls.Load())
+}
+
+func TestDoPreAuthRetry_MaxRetriesExhausted(t *testing.T) {
+	var calls atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, "http://unused")
+
+	_, err := client.doPreAuthRetry(context.Background(), "exhaust", func() (*http.Request, error) {
+		return http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/fail", http.NoBody)
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrServerError)
+
+	// 1 initial + 5 retries = 6 total attempts.
+	assert.Equal(t, int32(6), calls.Load())
+}
+
+func TestDoPreAuthRetry_ContextCancellation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	client := newTestClient(t, "http://unused")
+
+	_, err := client.doPreAuthRetry(ctx, "cancel test", func() (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/test", http.NoBody)
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
+func TestDoPreAuthRetry_NonRetryable4xx(t *testing.T) {
+	var calls atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Header().Set("request-id", "test-req-id")
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, "http://unused")
+
+	_, err := client.doPreAuthRetry(context.Background(), "404 test", func() (*http.Request, error) {
+		return http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/missing", http.NoBody)
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNotFound)
+
+	var graphErr *GraphError
+	require.ErrorAs(t, err, &graphErr)
+	assert.Equal(t, "test-req-id", graphErr.RequestID)
+
+	// No retries for non-retryable 4xx.
+	assert.Equal(t, int32(1), calls.Load())
+}
+
+func TestDoPreAuthRetry_MakeReqError(t *testing.T) {
+	client := newTestClient(t, "http://unused")
+
+	_, err := client.doPreAuthRetry(context.Background(), "bad factory", func() (*http.Request, error) {
+		return nil, errors.New("factory failed")
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "factory failed")
+}
+
+func TestDoPreAuthRetry_NetworkMaxRetries(t *testing.T) {
+	client := NewClient("http://localhost", http.DefaultClient, staticToken("tok"), slog.Default())
+	client.sleepFunc = noopSleep
+
+	_, err := client.doPreAuthRetry(context.Background(), "net exhaust", func() (*http.Request, error) {
+		return http.NewRequestWithContext(context.Background(), http.MethodGet, "http://127.0.0.1:1/unreachable", http.NoBody)
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed after 5 retries")
+}
+
+func TestDoPreAuthRetry_ContextCancelDuringHTTPBackoff(t *testing.T) {
+	// Verify that context cancellation during the backoff sleep after a retryable
+	// HTTP error (503) is detected and returned.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	client := newTestClient(t, "http://unused")
+	// Override sleepFunc to cancel context on first backoff.
+	client.sleepFunc = func(_ context.Context, _ time.Duration) error {
+		cancel()
+
+		return context.Canceled
+	}
+
+	_, err := client.doPreAuthRetry(ctx, "cancel during backoff", func() (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/fail", http.NoBody)
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
+func TestDoPreAuthRetry_ContextCancelDuringNetworkBackoff(t *testing.T) {
+	// Verify that context cancellation during the backoff sleep after a network
+	// error is detected and returned.
+	ctx, cancel := context.WithCancel(context.Background())
+
+	client := NewClient("http://localhost", http.DefaultClient, staticToken("tok"), slog.Default())
+	client.sleepFunc = func(_ context.Context, _ time.Duration) error {
+		cancel()
+
+		return context.Canceled
+	}
+
+	_, err := client.doPreAuthRetry(ctx, "cancel during net backoff", func() (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:1/unreachable", http.NoBody)
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+}
