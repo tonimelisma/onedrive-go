@@ -11,14 +11,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"golang.org/x/sync/errgroup"
-
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
-
-// Worker pool size for parallel download/upload phases.
-const workerPoolSize = 8
 
 // graphRootID is the Graph API parent reference for top-level items.
 // Distinct from strRoot in types.go which serializes the ItemTypeRoot enum.
@@ -58,16 +53,12 @@ type ExecutorConfig struct {
 	sleepFunc func(ctx context.Context, d time.Duration) error
 }
 
-// Executor takes an ActionPlan and executes each action against the Graph API
-// and local filesystem, producing []Outcome. It never writes to the database.
-// Created fresh per Execute() call via NewExecution — mutable state is always
-// initialized, eliminating nil-map panics and temporal coupling.
+// Executor executes individual actions against the Graph API and local
+// filesystem, producing Outcomes. Created per-action via NewExecution.
+// Thread-safe: all mutable state is per-call, no shared mutation.
 type Executor struct {
 	*ExecutorConfig
-
-	// Mutable state per Execute() call — always initialized by NewExecution.
-	baseline       *Baseline
-	createdFolders map[string]string // relative path -> remote item ID
+	baseline *Baseline
 }
 
 // NewExecutorConfig creates an immutable executor configuration bound to a
@@ -89,101 +80,13 @@ func NewExecutorConfig(
 	}
 }
 
-// NewExecution creates an ephemeral Executor for a single Execute() call.
-// Both mutable fields are always initialized, preventing nil-map panics.
+// NewExecution creates an ephemeral Executor for a single action execution.
+// Baseline is used for parent ID resolution (thread-safe via locked accessors).
 func NewExecution(cfg *ExecutorConfig, bl *Baseline) *Executor {
 	return &Executor{
 		ExecutorConfig: cfg,
 		baseline:       bl,
-		createdFolders: make(map[string]string),
 	}
-}
-
-// Execute runs all nine phases of the action plan in order and returns
-// the collected outcomes. Context cancellation stops between phases.
-func (e *Executor) Execute(ctx context.Context, plan *ActionPlan) ([]Outcome, error) {
-	e.logger.Info("executor starting",
-		slog.Int("folder_creates", len(plan.FolderCreates)),
-		slog.Int("moves", len(plan.Moves)),
-		slog.Int("downloads", len(plan.Downloads)),
-		slog.Int("uploads", len(plan.Uploads)),
-		slog.Int("local_deletes", len(plan.LocalDeletes)),
-		slog.Int("remote_deletes", len(plan.RemoteDeletes)),
-		slog.Int("conflicts", len(plan.Conflicts)),
-		slog.Int("synced_updates", len(plan.SyncedUpdates)),
-		slog.Int("cleanups", len(plan.Cleanups)),
-	)
-
-	var outcomes []Outcome
-
-	// Phase 1: Folder creates (sequential — parent before child).
-	for i := range plan.FolderCreates {
-		if ctx.Err() != nil {
-			return outcomes, ctx.Err()
-		}
-
-		outcomes = append(outcomes, e.executeFolderCreate(ctx, &plan.FolderCreates[i]))
-	}
-
-	// Phase 2: Moves (sequential — order matters for renames).
-	for i := range plan.Moves {
-		if ctx.Err() != nil {
-			return outcomes, ctx.Err()
-		}
-
-		outcomes = append(outcomes, e.executeMove(ctx, &plan.Moves[i]))
-	}
-
-	// Phase 3: Downloads (parallel worker pool).
-	if err := e.executeParallel(ctx, plan.Downloads, e.executeDownload, &outcomes); err != nil {
-		return outcomes, err
-	}
-
-	// Phase 4: Uploads (parallel worker pool).
-	if err := e.executeParallel(ctx, plan.Uploads, e.executeUpload, &outcomes); err != nil {
-		return outcomes, err
-	}
-
-	// Phase 5: Local deletes (sequential — depth-first order from planner).
-	for i := range plan.LocalDeletes {
-		if ctx.Err() != nil {
-			return outcomes, ctx.Err()
-		}
-
-		outcomes = append(outcomes, e.executeLocalDelete(ctx, &plan.LocalDeletes[i]))
-	}
-
-	// Phase 6: Remote deletes (sequential).
-	for i := range plan.RemoteDeletes {
-		if ctx.Err() != nil {
-			return outcomes, ctx.Err()
-		}
-
-		outcomes = append(outcomes, e.executeRemoteDelete(ctx, &plan.RemoteDeletes[i]))
-	}
-
-	// Phase 7: Conflicts (sequential).
-	for i := range plan.Conflicts {
-		if ctx.Err() != nil {
-			return outcomes, ctx.Err()
-		}
-
-		outcomes = append(outcomes, e.executeConflict(ctx, &plan.Conflicts[i]))
-	}
-
-	// Phase 8: Synced updates (no I/O).
-	for i := range plan.SyncedUpdates {
-		outcomes = append(outcomes, e.executeSyncedUpdate(&plan.SyncedUpdates[i]))
-	}
-
-	// Phase 9: Cleanups (no I/O).
-	for i := range plan.Cleanups {
-		outcomes = append(outcomes, e.executeCleanup(&plan.Cleanups[i]))
-	}
-
-	e.logger.Info("executor complete", slog.Int("outcomes", len(outcomes)))
-
-	return outcomes, nil
 }
 
 // executeFolderCreate dispatches to local or remote folder creation.
@@ -216,7 +119,9 @@ func (e *Executor) createLocalFolder(action *Action) Outcome {
 	return e.folderOutcome(action)
 }
 
-// createRemoteFolder creates a folder on OneDrive and records its ID.
+// createRemoteFolder creates a folder on OneDrive. The DAG guarantees parent
+// folder creates complete before children, so resolveParentID finds the parent
+// in the baseline (committed by CommitOutcome before tracker.Complete).
 func (e *Executor) createRemoteFolder(ctx context.Context, action *Action) Outcome {
 	parentID, err := e.resolveParentID(action.Path)
 	if err != nil {
@@ -237,9 +142,6 @@ func (e *Executor) createRemoteFolder(ctx context.Context, action *Action) Outco
 	if err != nil {
 		return e.failedOutcome(action, ActionFolderCreate, fmt.Errorf("creating remote folder %s: %w", action.Path, err))
 	}
-
-	// Track for later phases (uploads need parent IDs).
-	e.createdFolders[action.Path] = item.ID
 
 	e.logger.Debug("created remote folder",
 		slog.String("path", action.Path),
@@ -395,8 +297,8 @@ func resolveActionItemType(action *Action) ItemType {
 }
 
 // resolveParentID determines the remote parent ID for a given relative path.
-// Checks createdFolders first (for items under newly-created folders), then
-// baseline, then falls back to "root" for top-level items.
+// Checks baseline (which includes items committed by earlier DAG actions),
+// then falls back to "root" for top-level items.
 func (e *Executor) resolveParentID(relPath string) (string, error) {
 	parentDir := filepath.Dir(relPath)
 
@@ -408,17 +310,12 @@ func (e *Executor) resolveParentID(relPath string) (string, error) {
 	// Normalize to forward slashes for map lookups.
 	parentDir = filepath.ToSlash(parentDir)
 
-	// Check recently-created folders first.
-	if id, ok := e.createdFolders[parentDir]; ok {
-		return id, nil
-	}
-
-	// Check baseline.
-	if entry, ok := e.baseline.ByPath[parentDir]; ok {
+	// Check baseline (DAG edges ensure parent folder creates commit before children).
+	if entry, ok := e.baseline.GetByPath(parentDir); ok {
 		return entry.ItemID, nil
 	}
 
-	return "", fmt.Errorf("sync: cannot resolve parent ID for %s (parent %s not in baseline or createdFolders)", relPath, parentDir)
+	return "", fmt.Errorf("sync: cannot resolve parent ID for %s (parent %s not in baseline)", relPath, parentDir)
 }
 
 // resolveDriveID returns the action's DriveID if set, otherwise the
@@ -429,50 +326,6 @@ func (e *Executor) resolveDriveID(action *Action) driveid.ID {
 	}
 
 	return e.driveID
-}
-
-// executeParallel runs actions concurrently with a bounded worker pool.
-// Fatal errors cancel the pool; other errors are collected in outcomes.
-func (e *Executor) executeParallel(
-	ctx context.Context, actions []Action, fn func(context.Context, *Action) Outcome, outcomes *[]Outcome,
-) error {
-	if len(actions) == 0 {
-		return nil
-	}
-
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(workerPoolSize)
-
-	results := make([]Outcome, len(actions))
-
-	for i := range actions {
-		g.Go(func() error {
-			out := fn(gctx, &actions[i])
-			results[i] = out
-
-			if !out.Success && out.Error != nil && classifyError(out.Error) == errClassFatal {
-				return out.Error
-			}
-
-			return nil
-		})
-	}
-
-	err := g.Wait()
-
-	// Collect all results in order.
-	for i := range results {
-		// Skip zero-value results from goroutines canceled before they started.
-		if results[i].Path != "" || results[i].Success {
-			*outcomes = append(*outcomes, results[i])
-		}
-	}
-
-	return err
 }
 
 // classifyError determines whether an error is fatal, retryable, or skippable.

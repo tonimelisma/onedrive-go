@@ -3,8 +3,10 @@ package sync
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log/slog"
 	"path/filepath"
+	stdsync "sync"
 	"testing"
 	"time"
 
@@ -33,6 +35,16 @@ func (w *testLogWriter) Write(p []byte) (int, error) {
 	w.t.Log(string(p))
 
 	return len(p), nil
+}
+
+// commitAll is a test helper that commits outcomes one by one via CommitOutcome.
+func commitAll(t *testing.T, mgr *BaselineManager, ctx context.Context, outcomes []Outcome) {
+	t.Helper()
+	for i := range outcomes {
+		if err := mgr.CommitOutcome(ctx, &outcomes[i], 0); err != nil {
+			t.Fatalf("CommitOutcome[%d]: %v", i, err)
+		}
+	}
 }
 
 // newTestManager creates a BaselineManager backed by a temp directory,
@@ -165,10 +177,7 @@ func TestCommit_Download(t *testing.T) {
 		ETag:       "etag1",
 	}}
 
-	err := mgr.Commit(ctx, outcomes, "", "drive1")
-	if err != nil {
-		t.Fatalf("Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, outcomes)
 
 	entry := mgr.baseline.ByPath["docs/readme.md"]
 	if entry == nil {
@@ -216,10 +225,7 @@ func TestCommit_Upload(t *testing.T) {
 		ETag:       "etag2",
 	}}
 
-	err := mgr.Commit(ctx, outcomes, "", "drive2")
-	if err != nil {
-		t.Fatalf("Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, outcomes)
 
 	entry := mgr.baseline.ByPath["photos/cat.jpg"]
 	if entry == nil {
@@ -255,10 +261,7 @@ func TestCommit_FolderCreate(t *testing.T) {
 		ItemType: ItemTypeFolder,
 	}}
 
-	err := mgr.Commit(ctx, outcomes, "", "drive1")
-	if err != nil {
-		t.Fatalf("Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, outcomes)
 
 	entry := mgr.baseline.ByPath["Documents/Reports"]
 	if entry == nil {
@@ -302,9 +305,7 @@ func TestCommit_UpdateSynced(t *testing.T) {
 		Mtime:      t1.UnixNano(),
 	}}
 
-	if err := mgr.Commit(ctx, outcomes, "", "d"); err != nil {
-		t.Fatalf("first Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, outcomes)
 
 	// Second commit: convergent edit updates synced_at.
 	t2 := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
@@ -314,9 +315,7 @@ func TestCommit_UpdateSynced(t *testing.T) {
 	outcomes[0].LocalHash = "h2"
 	outcomes[0].RemoteHash = "h2"
 
-	if err := mgr.Commit(ctx, outcomes, "", "d"); err != nil {
-		t.Fatalf("second Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, outcomes)
 
 	entry := mgr.baseline.ByPath["file.txt"]
 	if entry.SyncedAt != t2.UnixNano() {
@@ -346,17 +345,13 @@ func TestCommit_LocalDelete(t *testing.T) {
 		Size: 50, Mtime: 1,
 	}}
 
-	if err := mgr.Commit(ctx, create, "", "d"); err != nil {
-		t.Fatalf("create Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, create)
 
 	del := []Outcome{{
 		Action: ActionLocalDelete, Success: true, Path: "delete-me.txt",
 	}}
 
-	if err := mgr.Commit(ctx, del, "", "d"); err != nil {
-		t.Fatalf("delete Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, del)
 
 	if mgr.baseline.ByPath["delete-me.txt"] != nil {
 		t.Error("entry still exists after local delete")
@@ -380,17 +375,13 @@ func TestCommit_RemoteDelete(t *testing.T) {
 		Size: 50, Mtime: 1,
 	}}
 
-	if err := mgr.Commit(ctx, create, "", "d"); err != nil {
-		t.Fatalf("create Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, create)
 
 	del := []Outcome{{
 		Action: ActionRemoteDelete, Success: true, Path: "remote-del.txt",
 	}}
 
-	if err := mgr.Commit(ctx, del, "", "d"); err != nil {
-		t.Fatalf("delete Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, del)
 
 	if mgr.baseline.ByPath["remote-del.txt"] != nil {
 		t.Error("entry still exists after remote delete")
@@ -414,17 +405,13 @@ func TestCommit_Cleanup(t *testing.T) {
 		Size: 50, Mtime: 1,
 	}}
 
-	if err := mgr.Commit(ctx, create, "", "d"); err != nil {
-		t.Fatalf("create Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, create)
 
 	cleanup := []Outcome{{
 		Action: ActionCleanup, Success: true, Path: "cleanup.txt",
 	}}
 
-	if err := mgr.Commit(ctx, cleanup, "", "d"); err != nil {
-		t.Fatalf("cleanup Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, cleanup)
 
 	if mgr.baseline.ByPath["cleanup.txt"] != nil {
 		t.Error("entry still exists after cleanup")
@@ -448,9 +435,7 @@ func TestCommit_Move(t *testing.T) {
 		Size: 100, Mtime: 1,
 	}}
 
-	if err := mgr.Commit(ctx, create, "", "d"); err != nil {
-		t.Fatalf("create Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, create)
 
 	// Move to new path.
 	move := []Outcome{{
@@ -461,9 +446,7 @@ func TestCommit_Move(t *testing.T) {
 		Size: 100, Mtime: 1,
 	}}
 
-	if err := mgr.Commit(ctx, move, "", "d"); err != nil {
-		t.Fatalf("move Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, move)
 
 	if mgr.baseline.ByPath["old/path.txt"] != nil {
 		t.Error("old path still exists after move")
@@ -500,9 +483,7 @@ func TestCommit_Conflict(t *testing.T) {
 		ConflictType: "edit_edit",
 	}}
 
-	if err := mgr.Commit(ctx, outcomes, "", "d"); err != nil {
-		t.Fatalf("Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, outcomes)
 
 	// Verify conflict row was inserted with a valid UUID.
 	var id, conflictPath, conflictType, resolution string
@@ -549,9 +530,7 @@ func TestCommit_SkipsFailedOutcomes(t *testing.T) {
 		LocalHash: "h", RemoteHash: "h", Size: 100,
 	}}
 
-	if err := mgr.Commit(ctx, outcomes, "", "d"); err != nil {
-		t.Fatalf("Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, outcomes)
 
 	b, err := mgr.Load(ctx)
 	if err != nil {
@@ -580,8 +559,10 @@ func TestCommit_DeltaToken(t *testing.T) {
 		LocalHash: "h", RemoteHash: "h", Size: 10, Mtime: 1,
 	}}
 
-	if err := mgr.Commit(ctx, outcomes, "token-abc", "d"); err != nil {
-		t.Fatalf("Commit: %v", err)
+	commitAll(t, mgr, ctx, outcomes)
+
+	if err := mgr.CommitDeltaToken(ctx, "token-abc", "d"); err != nil {
+		t.Fatalf("CommitDeltaToken: %v", err)
 	}
 
 	token, err := mgr.GetDeltaToken(ctx, "d")
@@ -611,16 +592,20 @@ func TestCommit_DeltaTokenUpdate(t *testing.T) {
 	}}
 
 	// First commit with token.
-	if err := mgr.Commit(ctx, outcomes, "token-1", "d"); err != nil {
-		t.Fatalf("first Commit: %v", err)
+	commitAll(t, mgr, ctx, outcomes)
+
+	if err := mgr.CommitDeltaToken(ctx, "token-1", "d"); err != nil {
+		t.Fatalf("first CommitDeltaToken: %v", err)
 	}
 
 	// Second commit updates token.
 	outcomes[0].LocalHash = "h2"
 	outcomes[0].RemoteHash = "h2"
 
-	if err := mgr.Commit(ctx, outcomes, "token-2", "d"); err != nil {
-		t.Fatalf("second Commit: %v", err)
+	commitAll(t, mgr, ctx, outcomes)
+
+	if err := mgr.CommitDeltaToken(ctx, "token-2", "d"); err != nil {
+		t.Fatalf("second CommitDeltaToken: %v", err)
 	}
 
 	token, err := mgr.GetDeltaToken(ctx, "d")
@@ -649,9 +634,7 @@ func TestCommit_SyncedAtFromNowFunc(t *testing.T) {
 		LocalHash: "h", RemoteHash: "h", Size: 10, Mtime: 999,
 	}}
 
-	if err := mgr.Commit(ctx, outcomes, "", "d"); err != nil {
-		t.Fatalf("Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, outcomes)
 
 	entry := mgr.baseline.ByPath["f.txt"]
 	if entry.SyncedAt != fixedTime.UnixNano() {
@@ -680,9 +663,7 @@ func TestCommit_RefreshesCache(t *testing.T) {
 		LocalHash: "h", RemoteHash: "h", Size: 10, Mtime: 1,
 	}}
 
-	if err := mgr.Commit(ctx, outcomes, "", "d"); err != nil {
-		t.Fatalf("Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, outcomes)
 
 	if mgr.baseline == nil {
 		t.Fatal("baseline should be populated after Commit")
@@ -725,8 +706,10 @@ func TestGetDeltaToken_AfterCommit(t *testing.T) {
 		LocalHash: "h", RemoteHash: "h", Size: 10, Mtime: 1,
 	}}
 
-	if err := mgr.Commit(ctx, outcomes, "saved-token", "mydrv"); err != nil {
-		t.Fatalf("Commit: %v", err)
+	commitAll(t, mgr, ctx, outcomes)
+
+	if err := mgr.CommitDeltaToken(ctx, "saved-token", "mydrv"); err != nil {
+		t.Fatalf("CommitDeltaToken: %v", err)
 	}
 
 	token, err := mgr.GetDeltaToken(ctx, "mydrv")
@@ -795,7 +778,7 @@ func TestLoad_NullableFields(t *testing.T) {
 // Conflict query + resolve tests
 // ---------------------------------------------------------------------------
 
-// seedConflict inserts a conflict via Commit and returns its UUID.
+// seedConflict inserts a conflict via CommitOutcome and returns its UUID.
 func seedConflict(t *testing.T, mgr *BaselineManager, path, conflictType string) string {
 	t.Helper()
 
@@ -813,9 +796,7 @@ func seedConflict(t *testing.T, mgr *BaselineManager, path, conflictType string)
 		ConflictType: conflictType,
 	}}
 
-	if err := mgr.Commit(ctx, outcomes, "", "d"); err != nil {
-		t.Fatalf("seedConflict(%s): %v", path, err)
-	}
+	commitAll(t, mgr, ctx, outcomes)
 
 	// Retrieve the UUID.
 	var id string
@@ -1035,9 +1016,7 @@ func TestLoad_ReturnsCachedBaseline(t *testing.T) {
 		LocalHash: "h", RemoteHash: "h", Size: 10, Mtime: 1,
 	}}
 
-	if err := mgr.Commit(ctx, outcomes, "", "d"); err != nil {
-		t.Fatalf("Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, outcomes)
 
 	// First Load returns the cached baseline from Commit's refresh.
 	b1, err := mgr.Load(ctx)
@@ -1074,9 +1053,7 @@ func TestLoad_CacheInvalidatedByCommit(t *testing.T) {
 		LocalHash: "h1", RemoteHash: "h1", Size: 10, Mtime: 1,
 	}}
 
-	if err := mgr.Commit(ctx, outcomes, "", "d"); err != nil {
-		t.Fatalf("first Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, outcomes)
 
 	b1, err := mgr.Load(ctx)
 	if err != nil {
@@ -1094,9 +1071,7 @@ func TestLoad_CacheInvalidatedByCommit(t *testing.T) {
 		LocalHash: "h2", RemoteHash: "h2", Size: 20, Mtime: 2,
 	}}
 
-	if commitErr := mgr.Commit(ctx, outcomes2, "", "d"); commitErr != nil {
-		t.Fatalf("second Commit: %v", commitErr)
-	}
+	commitAll(t, mgr, ctx, outcomes2)
 
 	b2, loadErr := mgr.Load(ctx)
 	if loadErr != nil {
@@ -1166,9 +1141,7 @@ func TestCommitConflict_AutoResolved(t *testing.T) {
 		ResolvedBy:   "auto",
 	}}
 
-	if err := mgr.Commit(ctx, outcomes, "", "d"); err != nil {
-		t.Fatalf("Commit: %v", err)
-	}
+	commitAll(t, mgr, ctx, outcomes)
 
 	// Verify conflict row was inserted as already resolved.
 	var resolution, resolvedBy string
@@ -1273,5 +1246,650 @@ func TestListAllConflicts(t *testing.T) {
 
 	if !found {
 		t.Error("resolved-file.txt not found in ListAllConflicts results")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// CommitOutcome tests
+// ---------------------------------------------------------------------------
+
+func TestCommitOutcome_Download(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	fixedTime := time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC)
+	mgr.nowFunc = func() time.Time { return fixedTime }
+
+	outcome := Outcome{
+		Action:     ActionDownload,
+		Success:    true,
+		Path:       "co-download.txt",
+		DriveID:    driveid.New("d"),
+		ItemID:     "i1",
+		ParentID:   "p1",
+		ItemType:   ItemTypeFile,
+		LocalHash:  "lh",
+		RemoteHash: "rh",
+		Size:       512,
+		Mtime:      fixedTime.UnixNano(),
+		ETag:       "etag1",
+	}
+
+	if err := mgr.CommitOutcome(ctx, &outcome, 0); err != nil {
+		t.Fatalf("CommitOutcome: %v", err)
+	}
+
+	entry, ok := mgr.baseline.GetByPath("co-download.txt")
+	if !ok {
+		t.Fatal("baseline entry not found")
+	}
+
+	if entry.ItemID != "i1" {
+		t.Errorf("ItemID = %q, want %q", entry.ItemID, "i1")
+	}
+
+	if entry.LocalHash != "lh" {
+		t.Errorf("LocalHash = %q, want %q", entry.LocalHash, "lh")
+	}
+
+	if entry.SyncedAt != fixedTime.UnixNano() {
+		t.Errorf("SyncedAt = %d, want %d", entry.SyncedAt, fixedTime.UnixNano())
+	}
+}
+
+func TestCommitOutcome_Upload(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
+
+	outcome := Outcome{
+		Action:     ActionUpload,
+		Success:    true,
+		Path:       "co-upload.txt",
+		DriveID:    driveid.New("d"),
+		ItemID:     "i2",
+		ItemType:   ItemTypeFile,
+		LocalHash:  "h",
+		RemoteHash: "h",
+		Size:       256,
+	}
+
+	if err := mgr.CommitOutcome(ctx, &outcome, 0); err != nil {
+		t.Fatalf("CommitOutcome: %v", err)
+	}
+
+	entry, ok := mgr.baseline.GetByPath("co-upload.txt")
+	if !ok {
+		t.Fatal("baseline entry not found")
+	}
+
+	if entry.ItemID != "i2" {
+		t.Errorf("ItemID = %q, want %q", entry.ItemID, "i2")
+	}
+}
+
+func TestCommitOutcome_Delete(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
+
+	// Seed an entry first.
+	seed := Outcome{
+		Action: ActionDownload, Success: true,
+		Path: "co-delete.txt", DriveID: driveid.New("d"), ItemID: "i",
+		ItemType: ItemTypeFile, LocalHash: "h", RemoteHash: "h", Size: 10,
+	}
+
+	if err := mgr.CommitOutcome(ctx, &seed, 0); err != nil {
+		t.Fatalf("seed CommitOutcome: %v", err)
+	}
+
+	del := Outcome{Action: ActionLocalDelete, Success: true, Path: "co-delete.txt"}
+
+	if err := mgr.CommitOutcome(ctx, &del, 0); err != nil {
+		t.Fatalf("delete CommitOutcome: %v", err)
+	}
+
+	if _, ok := mgr.baseline.GetByPath("co-delete.txt"); ok {
+		t.Error("entry still exists after delete")
+	}
+}
+
+func TestCommitOutcome_Move(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
+
+	// Seed original entry.
+	seed := Outcome{
+		Action: ActionDownload, Success: true,
+		Path: "old/move.txt", DriveID: driveid.New("d"), ItemID: "i", ParentID: "p1",
+		ItemType: ItemTypeFile, LocalHash: "h", RemoteHash: "h", Size: 10,
+	}
+
+	if err := mgr.CommitOutcome(ctx, &seed, 0); err != nil {
+		t.Fatalf("seed CommitOutcome: %v", err)
+	}
+
+	move := Outcome{
+		Action: ActionLocalMove, Success: true,
+		Path: "new/move.txt", OldPath: "old/move.txt",
+		DriveID: driveid.New("d"), ItemID: "i", ParentID: "p2",
+		ItemType: ItemTypeFile, LocalHash: "h", RemoteHash: "h", Size: 10,
+	}
+
+	if err := mgr.CommitOutcome(ctx, &move, 0); err != nil {
+		t.Fatalf("move CommitOutcome: %v", err)
+	}
+
+	if _, ok := mgr.baseline.GetByPath("old/move.txt"); ok {
+		t.Error("old path still exists after move")
+	}
+
+	entry, ok := mgr.baseline.GetByPath("new/move.txt")
+	if !ok {
+		t.Fatal("new path not found after move")
+	}
+
+	if entry.ParentID != "p2" {
+		t.Errorf("ParentID = %q, want %q", entry.ParentID, "p2")
+	}
+}
+
+func TestCommitOutcome_Conflict_AutoResolved(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
+
+	outcome := Outcome{
+		Action:       ActionConflict,
+		Success:      true,
+		Path:         "co-conflict.txt",
+		DriveID:      driveid.New("d"),
+		ItemID:       "new-item",
+		ItemType:     ItemTypeFile,
+		LocalHash:    "lh",
+		RemoteHash:   "rh",
+		ConflictType: ConflictEditEdit,
+		ResolvedBy:   ResolvedByAuto,
+	}
+
+	if err := mgr.CommitOutcome(ctx, &outcome, 0); err != nil {
+		t.Fatalf("CommitOutcome: %v", err)
+	}
+
+	// Auto-resolved conflict should update baseline.
+	entry, ok := mgr.baseline.GetByPath("co-conflict.txt")
+	if !ok {
+		t.Fatal("baseline entry not found for auto-resolved conflict")
+	}
+
+	if entry.ItemID != "new-item" {
+		t.Errorf("ItemID = %q, want %q", entry.ItemID, "new-item")
+	}
+
+	// Conflict row should exist.
+	var resolution string
+
+	err := mgr.db.QueryRowContext(ctx,
+		"SELECT resolution FROM conflicts WHERE path = ?", "co-conflict.txt",
+	).Scan(&resolution)
+	if err != nil {
+		t.Fatalf("querying conflict: %v", err)
+	}
+
+	if resolution != ResolutionKeepLocal {
+		t.Errorf("resolution = %q, want %q", resolution, ResolutionKeepLocal)
+	}
+}
+
+func TestCommitOutcome_Conflict_Unresolved(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
+
+	outcome := Outcome{
+		Action:       ActionConflict,
+		Success:      true,
+		Path:         "co-unresolved.txt",
+		DriveID:      driveid.New("d"),
+		ItemID:       "i",
+		ItemType:     ItemTypeFile,
+		ConflictType: ConflictEditEdit,
+	}
+
+	if err := mgr.CommitOutcome(ctx, &outcome, 0); err != nil {
+		t.Fatalf("CommitOutcome: %v", err)
+	}
+
+	// Unresolved conflict should NOT update baseline.
+	if _, ok := mgr.baseline.GetByPath("co-unresolved.txt"); ok {
+		t.Error("baseline entry should not exist for unresolved conflict")
+	}
+}
+
+func TestCommitOutcome_WithLedger(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
+
+	ledger := NewLedger(mgr.DB(), testLogger(t))
+
+	actions := []Action{
+		{Type: ActionDownload, Path: "ledger-outcome.txt", DriveID: driveid.New("d"), ItemID: "i"},
+	}
+
+	ids, writeErr := ledger.WriteActions(ctx, actions, nil, "cycle-co")
+	if writeErr != nil {
+		t.Fatalf("WriteActions: %v", writeErr)
+	}
+
+	claimErr := ledger.Claim(ctx, ids[0])
+	if claimErr != nil {
+		t.Fatalf("Claim: %v", claimErr)
+	}
+
+	outcome := Outcome{
+		Action: ActionDownload, Success: true,
+		Path: "ledger-outcome.txt", DriveID: driveid.New("d"), ItemID: "i",
+		ItemType: ItemTypeFile, LocalHash: "h", RemoteHash: "h", Size: 10,
+	}
+
+	if err := mgr.CommitOutcome(ctx, &outcome, ids[0]); err != nil {
+		t.Fatalf("CommitOutcome: %v", err)
+	}
+
+	// Verify ledger action is done.
+	var status string
+
+	dbErr := mgr.db.QueryRowContext(ctx,
+		"SELECT status FROM action_queue WHERE id = ?", ids[0],
+	).Scan(&status)
+	if dbErr != nil {
+		t.Fatalf("querying action_queue: %v", dbErr)
+	}
+
+	if status != "done" {
+		t.Errorf("ledger status = %q, want %q", status, "done")
+	}
+
+	// Baseline should also be updated.
+	if _, ok := mgr.baseline.GetByPath("ledger-outcome.txt"); !ok {
+		t.Error("baseline entry not found")
+	}
+}
+
+func TestCommitOutcome_SkipsFailedOutcome(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	outcome := Outcome{
+		Action:  ActionDownload,
+		Success: false,
+		Path:    "should-not-exist.txt",
+	}
+
+	if err := mgr.CommitOutcome(ctx, &outcome, 0); err != nil {
+		t.Fatalf("CommitOutcome: %v", err)
+	}
+
+	if mgr.baseline != nil {
+		if _, ok := mgr.baseline.GetByPath("should-not-exist.txt"); ok {
+			t.Error("failed outcome should not create baseline entry")
+		}
+	}
+}
+
+func TestCommitOutcome_FolderCreate(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
+
+	outcome := Outcome{
+		Action:   ActionFolderCreate,
+		Success:  true,
+		Path:     "Documents/Reports",
+		DriveID:  driveid.New("d"),
+		ItemID:   "folder-id",
+		ParentID: "root",
+		ItemType: ItemTypeFolder,
+	}
+
+	if err := mgr.CommitOutcome(ctx, &outcome, 0); err != nil {
+		t.Fatalf("CommitOutcome: %v", err)
+	}
+
+	entry, ok := mgr.baseline.GetByPath("Documents/Reports")
+	if !ok {
+		t.Fatal("folder entry not found")
+	}
+
+	if entry.ItemType != ItemTypeFolder {
+		t.Errorf("ItemType = %v, want Folder", entry.ItemType)
+	}
+
+	if entry.ItemID != "folder-id" {
+		t.Errorf("ItemID = %q, want %q", entry.ItemID, "folder-id")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// CommitDeltaToken tests
+// ---------------------------------------------------------------------------
+
+func TestCommitDeltaToken(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
+
+	if err := mgr.CommitDeltaToken(ctx, "token-abc", "d"); err != nil {
+		t.Fatalf("CommitDeltaToken: %v", err)
+	}
+
+	token, err := mgr.GetDeltaToken(ctx, "d")
+	if err != nil {
+		t.Fatalf("GetDeltaToken: %v", err)
+	}
+
+	if token != "token-abc" {
+		t.Errorf("token = %q, want %q", token, "token-abc")
+	}
+}
+
+func TestCommitDeltaToken_Update(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
+
+	if err := mgr.CommitDeltaToken(ctx, "token-1", "d"); err != nil {
+		t.Fatalf("first CommitDeltaToken: %v", err)
+	}
+
+	if err := mgr.CommitDeltaToken(ctx, "token-2", "d"); err != nil {
+		t.Fatalf("second CommitDeltaToken: %v", err)
+	}
+
+	token, err := mgr.GetDeltaToken(ctx, "d")
+	if err != nil {
+		t.Fatalf("GetDeltaToken: %v", err)
+	}
+
+	if token != "token-2" {
+		t.Errorf("token = %q, want %q", token, "token-2")
+	}
+}
+
+func TestCommitDeltaToken_EmptyIsNoop(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	// Empty token should be a no-op.
+	if err := mgr.CommitDeltaToken(ctx, "", "d"); err != nil {
+		t.Fatalf("CommitDeltaToken: %v", err)
+	}
+
+	token, err := mgr.GetDeltaToken(ctx, "d")
+	if err != nil {
+		t.Fatalf("GetDeltaToken: %v", err)
+	}
+
+	if token != "" {
+		t.Errorf("token = %q, want empty", token)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Locked accessor tests (Baseline.GetByPath, GetByID, Put, Delete, Len, ForEachPath)
+// ---------------------------------------------------------------------------
+
+func TestBaseline_GetByPath(t *testing.T) {
+	t.Parallel()
+
+	b := &Baseline{
+		ByPath: map[string]*BaselineEntry{
+			"docs/readme.md": {Path: "docs/readme.md", ItemID: "item1", DriveID: driveid.New("d1")},
+		},
+		ByID: make(map[driveid.ItemKey]*BaselineEntry),
+	}
+
+	entry, ok := b.GetByPath("docs/readme.md")
+	if !ok {
+		t.Fatal("expected entry for docs/readme.md")
+	}
+
+	if entry.ItemID != "item1" {
+		t.Errorf("ItemID = %q, want %q", entry.ItemID, "item1")
+	}
+
+	_, ok = b.GetByPath("nonexistent")
+	if ok {
+		t.Error("expected false for nonexistent path")
+	}
+}
+
+func TestBaseline_GetByID(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New("d1")
+	key := driveid.NewItemKey(driveID, "item1")
+	entry := &BaselineEntry{Path: "test.txt", ItemID: "item1", DriveID: driveID}
+
+	b := &Baseline{
+		ByPath: make(map[string]*BaselineEntry),
+		ByID:   map[driveid.ItemKey]*BaselineEntry{key: entry},
+	}
+
+	got, ok := b.GetByID(key)
+	if !ok {
+		t.Fatal("expected entry for key")
+	}
+
+	if got.Path != "test.txt" {
+		t.Errorf("Path = %q, want %q", got.Path, "test.txt")
+	}
+
+	missingKey := driveid.NewItemKey(driveID, "nonexistent")
+	_, ok = b.GetByID(missingKey)
+	if ok {
+		t.Error("expected false for nonexistent key")
+	}
+}
+
+func TestBaseline_Put(t *testing.T) {
+	t.Parallel()
+
+	b := &Baseline{
+		ByPath: make(map[string]*BaselineEntry),
+		ByID:   make(map[driveid.ItemKey]*BaselineEntry),
+	}
+
+	entry := &BaselineEntry{
+		Path:    "new/file.txt",
+		DriveID: driveid.New("d1"),
+		ItemID:  "item-new",
+	}
+
+	b.Put(entry)
+
+	got, ok := b.GetByPath("new/file.txt")
+	if !ok {
+		t.Fatal("entry not found after Put")
+	}
+
+	if got.ItemID != "item-new" {
+		t.Errorf("ItemID = %q, want %q", got.ItemID, "item-new")
+	}
+
+	key := driveid.NewItemKey(driveid.New("d1"), "item-new")
+	gotByID, ok := b.GetByID(key)
+	if !ok {
+		t.Fatal("entry not found by ID after Put")
+	}
+
+	if gotByID.Path != "new/file.txt" {
+		t.Errorf("Path = %q, want %q", gotByID.Path, "new/file.txt")
+	}
+}
+
+func TestBaseline_Delete(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New("d1")
+	entry := &BaselineEntry{Path: "delete-me.txt", DriveID: driveID, ItemID: "item-del"}
+	key := driveid.NewItemKey(driveID, "item-del")
+
+	b := &Baseline{
+		ByPath: map[string]*BaselineEntry{"delete-me.txt": entry},
+		ByID:   map[driveid.ItemKey]*BaselineEntry{key: entry},
+	}
+
+	b.Delete("delete-me.txt")
+
+	if _, ok := b.GetByPath("delete-me.txt"); ok {
+		t.Error("entry still exists after Delete")
+	}
+
+	if _, ok := b.GetByID(key); ok {
+		t.Error("entry still exists in ByID after Delete")
+	}
+
+	// Deleting nonexistent path should not panic.
+	b.Delete("nonexistent")
+}
+
+func TestBaseline_Len(t *testing.T) {
+	t.Parallel()
+
+	b := &Baseline{
+		ByPath: map[string]*BaselineEntry{
+			"a.txt": {Path: "a.txt"},
+			"b.txt": {Path: "b.txt"},
+		},
+		ByID: make(map[driveid.ItemKey]*BaselineEntry),
+	}
+
+	if b.Len() != 2 {
+		t.Errorf("Len() = %d, want 2", b.Len())
+	}
+}
+
+func TestBaseline_ForEachPath(t *testing.T) {
+	t.Parallel()
+
+	b := &Baseline{
+		ByPath: map[string]*BaselineEntry{
+			"a.txt": {Path: "a.txt", ItemID: "i1"},
+			"b.txt": {Path: "b.txt", ItemID: "i2"},
+		},
+		ByID: make(map[driveid.ItemKey]*BaselineEntry),
+	}
+
+	paths := make(map[string]bool)
+	b.ForEachPath(func(path string, entry *BaselineEntry) {
+		paths[path] = true
+	})
+
+	if len(paths) != 2 {
+		t.Errorf("ForEachPath visited %d entries, want 2", len(paths))
+	}
+
+	if !paths["a.txt"] || !paths["b.txt"] {
+		t.Error("ForEachPath did not visit all entries")
+	}
+}
+
+func TestBaseline_ConcurrentAccess(t *testing.T) {
+	t.Parallel()
+
+	b := &Baseline{
+		ByPath: make(map[string]*BaselineEntry),
+		ByID:   make(map[driveid.ItemKey]*BaselineEntry),
+	}
+
+	// Seed some entries.
+	for i := range 100 {
+		entry := &BaselineEntry{
+			Path:    fmt.Sprintf("file%03d.txt", i),
+			DriveID: driveid.New("d1"),
+			ItemID:  fmt.Sprintf("item-%03d", i),
+		}
+		b.Put(entry)
+	}
+
+	var wg stdsync.WaitGroup
+
+	// Concurrent readers.
+	for range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range 100 {
+				b.GetByPath(fmt.Sprintf("file%03d.txt", j))
+				b.Len()
+			}
+		}()
+	}
+
+	// Concurrent writers.
+	for i := range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			entry := &BaselineEntry{
+				Path:    fmt.Sprintf("concurrent%d.txt", i),
+				DriveID: driveid.New("d1"),
+				ItemID:  fmt.Sprintf("concurrent-item-%d", i),
+			}
+			b.Put(entry)
+		}()
+	}
+
+	// Concurrent ForEachPath.
+	for range 5 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			b.ForEachPath(func(_ string, _ *BaselineEntry) {})
+		}()
+	}
+
+	wg.Wait()
+
+	// Baseline should have at least original + concurrent entries.
+	if b.Len() < 100 {
+		t.Errorf("Len() = %d, want >= 100", b.Len())
 	}
 }
