@@ -390,3 +390,18 @@ parallel to the file path, with `localDeleted` as an explicit boolean.
 ### Auto-resolved conflicts need baseline upsert in commitConflict
 When `commitConflict()` handles an auto-resolved outcome, it must also call `commitUpsert()` to update the baseline. Without this, the next sync cycle would see the file as untracked (no baseline entry) and try to upload it again, creating a re-detection loop.
 
+### DAG edges replace createdFolders — commit-before-dispatch contract
+The old `createdFolders` map was a per-Executor hack to track folder IDs before baseline commit. With DAG edges, the dependency system guarantees: parent folder create action completes → `CommitOutcome()` calls `baseline.Put()` → child action dispatched → `resolveParentID()` finds parent via `GetByPath()`. The contract: a worker MUST call `CommitOutcome()` BEFORE `tracker.Complete()`. This ordering is critical — reversing them causes a race where the child dispatches before the parent's baseline entry exists.
+
+### DAG worker pool: individual failures don't propagate as RunOnce errors
+The old sequential executor returned a fatal error if context was canceled during `executeParallel()`. The DAG worker pool handles individual action failures gracefully — they increment `report.Failed` and collect errors in `report.Errors`, but `RunOnce()` itself returns nil. Tests must check `report.Failed >= 1` rather than `err != nil`. Only ledger write failures or baseline load failures propagate as RunOnce errors.
+
+### Large atomic refactors: build additive commits first
+The 7-commit strategy (5 additive commits building new code, 1 atomic pivot commit, 1 cleanup) worked well. Commits 1-5 were purely additive — new types, new functions, new files — all compiling and tested. Commit 6 was then primarily deletion + wiring, not new logic. This made the "big bang" commit manageable despite touching 10 files. Key insight: the ratio should be ~80% additive, ~20% pivot.
+
+### buildDependencies cyclomatic complexity: extract per-edge-type helpers
+A single `buildDependencies()` function that handles all edge types (parent folder dep, child delete dep, move target dep) easily exceeds gocyclo's limit of 15. Extract one helper per edge type: `addParentFolderDep()`, `addChildDeleteDeps()`, `addMoveTargetDep()`. Each is a pure function taking the deps slice and returning the updated slice.
+
+### resolveItemType needs nil guard for defensive safety
+`resolveItemType(view *PathView)` is called from `buildDependencies()` where `action.View` should always be non-nil (set by `makeAction()`), but defensive coding requires a nil guard. Default to `ItemTypeFile` when view is nil — consistent with the existing default at the end of the function.
+

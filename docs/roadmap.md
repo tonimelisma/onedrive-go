@@ -252,11 +252,29 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 
 | Increment | Description | Wave |
 |-----------|-------------|------|
-| 5.0 | DAG-based concurrent execution engine | 0: The Pivot |
+| 5.0 | DAG-based concurrent execution engine | 0: The Pivot — **DONE** |
 | 5.1 | Continuous observer `Watch()` methods + debounced buffer | 1: Watch Mode |
 | 5.2 | `Engine.RunWatch()` + continuous pipeline | 1: Watch Mode |
 | 5.3 | Graceful shutdown + crash recovery from ledger | 2: Operational Polish |
 | 5.4 | Pause/resume + SIGHUP config reload + final cleanup | 2: Operational Polish |
+
+### 5.0: DAG-based Concurrent Execution Engine — DONE
+
+**Replace 9-phase sequential executor with flat action list + dependency DAG + concurrent workers.**
+
+- `ActionPlan` struct: 9 named slices → flat `Actions []Action` + `Deps [][]int` + `CycleID string`
+- `buildDependencies()`: explicit DAG edges (parent-folder-before-child, child-delete-before-parent, move-target-parent)
+- `Ledger` (new): persistent `action_queue` table for crash recovery — WriteActions, Claim, Complete, Fail, Cancel
+- `DepTracker` (new): in-memory dependency graph, dispatches ready actions to interactive/bulk channels
+- `WorkerPool` (new): lane-based workers (reserved interactive + reserved bulk + shared overflow), per-action commits
+- `Baseline` gains `sync.RWMutex` + locked accessors (`GetByPath`, `GetByID`, `Put`, `Delete`, `Len`, `ForEachPath`) — B-089
+- `CommitOutcome()` + `CommitDeltaToken()`: per-action atomic baseline + ledger commit, replacing batch `Commit()` — B-091
+- `createdFolders` eliminated: DAG edges guarantee folder create committed to baseline before child dispatched — B-090
+- `resolveParentID()`: baseline-only lookup (dropped `createdFolders` branch)
+- Deleted: `Execute()`, `executeParallel()`, `Commit()`, `applyOutcomes()`, `executeAndCommit()`, `buildReport()`, `classifyOutcomes()`, `orderPlan()`, `appendActions()`, `createdFolders`, `workerPoolSize` constant
+- Net -416 lines. All E2E tests pass unchanged. 74.2% total coverage, 88.9% sync package.
+- Closes B-089, B-090, B-091.
+- **Acceptance**: All DOD gates passed. Both CI workflows green.
 
 ### Codebase Analysis: Keep / Adapt / Delete
 
