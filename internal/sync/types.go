@@ -406,4 +406,5 @@ type TransferClient interface {
 		ctx context.Context, driveID driveid.ID, parentID, name string, size int64, mtime time.Time,
 	) (*graph.UploadSession, error)
 	UploadChunk(ctx context.Context, session *graph.UploadSession, chunk io.Reader, offset, length, total int64) (*graph.Item, error)
+	CancelUploadSession(ctx context.Context, session *graph.UploadSession) error
 }

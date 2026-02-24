@@ -351,3 +351,12 @@ When using `replace_all` to replace a string literal (e.g., `"keep_both"`) with 
 ### E2E sync tests need per-test config files
 Sync operates on the entire drive root, so E2E tests create a fresh temp sync dir + temp TOML config file per test. The `writeSyncConfig` helper generates a minimal config with the test drive section and sync_dir pointing to the temp dir. This isolates test files from the drive's existing content.
 
+### Upload session leak pattern: always cancel on failure
+When `CreateUploadSession` succeeds, ANY subsequent failure (file open, chunk upload) must cancel the session. Server-side upload sessions persist until expiry (~15 minutes) and count against quotas. Use `context.Background()` for the cancel call because the original context may already be canceled (which is often why we're canceling). Extract a `cancelSession` helper to avoid repeating the pattern.
+
+### context.Background() vs cmd.Context() in CLI commands
+CLI command handlers should use `cmd.Context()` instead of `context.Background()` so Ctrl+C signal propagation works. Cobra sets up the context with signal handling. Exception: upload session cancel paths intentionally use `context.Background()` because the cancel must succeed even when the original context is done. Helper functions that don't receive `cmd` (e.g., `openBrowser` callback, deep status helpers) can keep `context.Background()`.
+
+### Executor state initialization for out-of-band operations
+`Executor.Execute()` initializes `baseline` and `createdFolders`, but operations called outside `Execute()` (like `resolveTransfer` from conflict resolution) must initialize these themselves. Lazy initialization guard: check for nil and load from DB if needed. Top-level files work without initialization (resolveParentID returns "root" without map access), but nested files would panic on nil map.
+
