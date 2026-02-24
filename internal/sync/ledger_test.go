@@ -316,6 +316,146 @@ func TestLedger_LastCycleID(t *testing.T) {
 	}
 }
 
+// TestLedger_MovePathColumns verifies that move actions store
+// destination in the 'path' column and source in the 'old_path' column,
+// matching the ledger spec (concurrent-execution.md).
+// Regression test for: path and old_path were swapped for move actions.
+func TestLedger_MovePathColumns(t *testing.T) {
+	t.Parallel()
+
+	ledger := newTestLedger(t)
+	ctx := context.Background()
+
+	actions := []Action{
+		{
+			Type:    ActionLocalMove,
+			Path:    "old/location.txt", // source (where it was)
+			NewPath: "new/location.txt", // destination (where it moved to)
+			DriveID: driveid.New("d1"),
+			ItemID:  "move-id",
+		},
+	}
+
+	ids, err := ledger.WriteActions(ctx, actions, nil, "cycle-move")
+	if err != nil {
+		t.Fatalf("WriteActions: %v", err)
+	}
+
+	rows, err := ledger.LoadPending(ctx, "cycle-move")
+	if err != nil {
+		t.Fatalf("LoadPending: %v", err)
+	}
+
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(rows))
+	}
+
+	row := rows[0]
+	if row.ID != ids[0] {
+		t.Errorf("row ID = %d, want %d", row.ID, ids[0])
+	}
+
+	// Per spec: path column = destination, old_path column = source.
+	if row.Path != "new/location.txt" {
+		t.Errorf("path = %q, want %q (destination)", row.Path, "new/location.txt")
+	}
+
+	if row.OldPath != "old/location.txt" {
+		t.Errorf("old_path = %q, want %q (source)", row.OldPath, "old/location.txt")
+	}
+}
+
+// TestLedger_UploadHashFromLocal verifies that upload actions store the
+// local hash (not empty) in the ledger's hash column.
+// Regression test for: resolveHashFromView only checked Remote, returning
+// empty for uploads where Remote is nil.
+func TestLedger_UploadHashFromLocal(t *testing.T) {
+	t.Parallel()
+
+	ledger := newTestLedger(t)
+	ctx := context.Background()
+
+	actions := []Action{
+		{
+			Type:    ActionUpload,
+			Path:    "local-file.txt",
+			DriveID: driveid.New("d1"),
+			ItemID:  "upload-id",
+			View: &PathView{
+				Local: &LocalState{
+					Hash: "local-quickxor-hash",
+					Size: 42,
+				},
+				// Remote is nil — this is a new upload.
+			},
+		},
+	}
+
+	_, err := ledger.WriteActions(ctx, actions, nil, "cycle-upload-hash")
+	if err != nil {
+		t.Fatalf("WriteActions: %v", err)
+	}
+
+	rows, err := ledger.LoadPending(ctx, "cycle-upload-hash")
+	if err != nil {
+		t.Fatalf("LoadPending: %v", err)
+	}
+
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(rows))
+	}
+
+	if rows[0].Hash != "local-quickxor-hash" {
+		t.Errorf("hash = %q, want %q", rows[0].Hash, "local-quickxor-hash")
+	}
+}
+
+// TestLedger_DownloadHashFromRemote verifies that non-upload actions still
+// prefer the remote hash (unchanged behavior).
+func TestLedger_DownloadHashFromRemote(t *testing.T) {
+	t.Parallel()
+
+	ledger := newTestLedger(t)
+	ctx := context.Background()
+
+	actions := []Action{
+		{
+			Type:    ActionDownload,
+			Path:    "remote-file.txt",
+			DriveID: driveid.New("d1"),
+			ItemID:  "dl-id",
+			View: &PathView{
+				Remote: &RemoteState{
+					Hash: "remote-quickxor-hash",
+					Size: 100,
+				},
+				Local: &LocalState{
+					Hash: "old-local-hash",
+					Size: 50,
+				},
+			},
+		},
+	}
+
+	_, err := ledger.WriteActions(ctx, actions, nil, "cycle-dl-hash")
+	if err != nil {
+		t.Fatalf("WriteActions: %v", err)
+	}
+
+	rows, err := ledger.LoadPending(ctx, "cycle-dl-hash")
+	if err != nil {
+		t.Fatalf("LoadPending: %v", err)
+	}
+
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(rows))
+	}
+
+	if rows[0].Hash != "remote-quickxor-hash" {
+		t.Errorf("hash = %q, want %q", rows[0].Hash, "remote-quickxor-hash")
+	}
+}
+
 func TestParseActionType(t *testing.T) {
 	t.Parallel()
 

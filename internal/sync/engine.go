@@ -208,6 +208,16 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 func (e *Engine) executePlan(
 	ctx context.Context, plan *ActionPlan, deltaToken string, report *SyncReport,
 ) error {
+	// Guard: changes existed but all classified to no-op actions, producing
+	// an empty plan. Commit the delta token and return — no work to do.
+	if len(plan.Actions) == 0 {
+		if commitErr := e.baseline.CommitDeltaToken(ctx, deltaToken, e.driveID.String()); commitErr != nil {
+			e.logger.Error("failed to commit delta token", slog.String("error", commitErr.Error()))
+		}
+
+		return nil
+	}
+
 	ids, writeErr := e.ledger.WriteActions(ctx, plan.Actions, plan.Deps, plan.CycleID)
 	if writeErr != nil {
 		return fmt.Errorf("sync: writing actions to ledger: %w", writeErr)

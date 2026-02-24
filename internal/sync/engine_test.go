@@ -735,6 +735,76 @@ func TestRunOnce_DeltaExpired_AutoRetry(t *testing.T) {
 	}
 }
 
+// TestRunOnce_EmptyPlan_NoPanic verifies that when changes exist but all
+// classify to no-op actions (producing an empty plan), the engine does not
+// deadlock. Regression test for: empty plan caused NewDepTracker with total=0,
+// Done() channel never closed, pool.Wait() blocked forever.
+func TestRunOnce_EmptyPlan_NoPanic(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	// Seed a baseline entry that matches the delta response exactly.
+	// The planner will see no diff → all changes classify to EF1/ED1 (no-op)
+	// → empty action plan.
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+				{
+					ID: "f1", Name: "unchanged.txt", ParentID: "root",
+					DriveID: driveID, Size: 5, QuickXorHash: "matchhash",
+				},
+			}, "token-empty"), nil
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := context.Background()
+
+	// Seed baseline so the file appears as already synced with matching hash.
+	seedOutcomes := []Outcome{{
+		Action:     ActionDownload,
+		Success:    true,
+		Path:       "unchanged.txt",
+		DriveID:    driveID,
+		ItemID:     "f1",
+		ItemType:   ItemTypeFile,
+		RemoteHash: "matchhash",
+		LocalHash:  "matchhash",
+		Size:       5,
+	}}
+	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "old-token")
+
+	// Write a matching local file so the local observer also sees no change.
+	writeLocalFile(t, syncRoot, "unchanged.txt", "hello")
+
+	// This should complete without deadlock — use a timeout to detect hangs.
+	done := make(chan struct{})
+	var report *SyncReport
+	var runErr error
+
+	go func() {
+		report, runErr = eng.RunOnce(ctx, SyncBidirectional, RunOpts{})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Good — completed.
+	case <-time.After(10 * time.Second):
+		t.Fatal("RunOnce deadlocked on empty action plan")
+	}
+
+	if runErr != nil {
+		t.Fatalf("RunOnce: %v", runErr)
+	}
+
+	if report.Failed != 0 {
+		t.Errorf("failed = %d, want 0", report.Failed)
+	}
+}
+
 func TestResolveSafetyConfig_Default(t *testing.T) {
 	t.Parallel()
 

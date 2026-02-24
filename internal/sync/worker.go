@@ -134,13 +134,31 @@ func (wp *WorkerPool) worker(ctx context.Context, primary, secondary <-chan *Tra
 	for {
 		var ta *TrackedAction
 
-		select {
-		case <-ctx.Done():
-			return
-		case <-wp.tracker.Done():
-			return
-		case ta = <-primary:
-		case ta = <-secondary:
+		// For shared workers (both channels non-nil), prefer interactive
+		// over bulk to minimize latency for small/metadata actions.
+		if primary != nil && secondary != nil {
+			select {
+			case ta = <-primary:
+			default:
+				select {
+				case <-ctx.Done():
+					return
+				case <-wp.tracker.Done():
+					return
+				case ta = <-primary:
+				case ta = <-secondary:
+				}
+			}
+		} else {
+			// Reserved worker — single channel.
+			select {
+			case <-ctx.Done():
+				return
+			case <-wp.tracker.Done():
+				return
+			case ta = <-primary:
+			case ta = <-secondary:
+			}
 		}
 
 		if ta == nil {
@@ -203,6 +221,9 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 		wp.succeeded.Add(1)
 	} else {
 		wp.recordFailure(outcome.Error)
+		wp.failAndComplete(actionCtx, ta, outcome.Error.Error())
+
+		return
 	}
 
 	// Signal completion to dispatch dependents.

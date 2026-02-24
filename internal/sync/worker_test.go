@@ -370,3 +370,69 @@ func TestWorkerPool_Stats(t *testing.T) {
 		t.Errorf("succeeded = %d, want >= 1", succeeded)
 	}
 }
+
+// TestWorkerPool_FailedOutcome_MarksLedgerFailed verifies that when an action
+// execution fails, the worker marks the ledger row as "failed" (not "claimed").
+// Regression test for: worker never called failAndComplete for execution failures.
+func TestWorkerPool_FailedOutcome_MarksLedgerFailed(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, ledger, _ := newWorkerTestSetup(t)
+	ctx := context.Background()
+
+	// Configure a download mock that always fails.
+	cfg.downloads = &workerMockDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
+			return 0, fmt.Errorf("simulated download failure")
+		},
+	}
+
+	actions := []Action{
+		{
+			Type:    ActionDownload,
+			Path:    "fail-me.txt",
+			DriveID: driveid.New("0000000000000001"),
+			ItemID:  "fail-id",
+			View: &PathView{
+				Remote: &RemoteState{
+					ItemID:  "fail-id",
+					DriveID: driveid.New("0000000000000001"),
+					Size:    10,
+					Hash:    "somehash",
+				},
+			},
+		},
+	}
+
+	ids, writeErr := ledger.WriteActions(ctx, actions, nil, "cycle-fail-ledger")
+	if writeErr != nil {
+		t.Fatalf("WriteActions: %v", writeErr)
+	}
+
+	tracker := NewDepTracker(10, 10)
+	tracker.Add(&actions[0], ids[0], nil)
+
+	pool := NewWorkerPool(cfg, tracker, mgr, ledger, testLogger(t))
+	pool.Start(ctx, 4)
+	pool.Wait()
+	pool.Stop()
+
+	succeeded, failed, errs := pool.Stats()
+	if succeeded != 0 {
+		t.Errorf("succeeded = %d, want 0", succeeded)
+	}
+
+	if failed < 1 {
+		t.Errorf("failed = %d, want >= 1; errors: %v", failed, errs)
+	}
+
+	// The ledger row should NOT be pending (it was claimed+failed, not stuck as claimed).
+	pending, countErr := ledger.CountPendingForCycle(ctx, "cycle-fail-ledger")
+	if countErr != nil {
+		t.Fatalf("CountPending: %v", countErr)
+	}
+
+	if pending != 0 {
+		t.Errorf("pending = %d, want 0 (failed action should be marked as failed, not stuck as claimed)", pending)
+	}
+}
