@@ -387,9 +387,9 @@ func TestE2E_Sync_EditEditConflict_ResolveKeepRemote(t *testing.T) {
 	assert.Contains(t, stdout, "Verified")
 }
 
-// TestE2E_Sync_EditDeleteConflict exercises EF9 (edit-delete conflict).
-// When the remote file is deleted, the conflict executor cannot download it
-// (404). The action fails gracefully and the local file is preserved.
+// TestE2E_Sync_EditDeleteConflict exercises EF9 (edit-delete conflict)
+// auto-resolve: local edit wins. The modified local file is uploaded to
+// re-create the remote, and a resolved conflict is recorded in history.
 func TestE2E_Sync_EditDeleteConflict(t *testing.T) {
 	registerLogDump(t)
 
@@ -414,25 +414,97 @@ func TestE2E_Sync_EditDeleteConflict(t *testing.T) {
 	// Step 4: Delete remote.
 	runCLI(t, "rm", "/"+testFolder+"/fragile.txt")
 
-	// Step 5: Bidirectional sync — planner detects conflict, executor fails to
-	// download the deleted remote file (404).
+	// Step 5: Bidirectional sync — edit-delete auto-resolved by uploading local.
 	_, stderr := runCLIWithConfig(t, cfgPath, "sync")
 
-	// Step 6: Planner detected the conflict (Plan section).
-	assert.Contains(t, stderr, "Conflicts:")
+	// Step 6: Sync succeeded (auto-resolved, no failures).
+	assert.NotContains(t, stderr, "Failed:")
 
-	// Step 7: Executor reports failure (download 404).
-	assert.Contains(t, stderr, "Failed:")
-
-	// Step 8: Local file is preserved with modified content (restored from
-	// conflict copy after the failed download attempt).
+	// Step 7: Local file preserved with modified content.
 	data, err := os.ReadFile(fragileFile)
 	require.NoError(t, err)
 	assert.Equal(t, "locally modified precious data", string(data))
 
-	// Step 9: No conflict record exists (action failed, nothing committed).
-	stdout, _ := runCLIWithConfig(t, cfgPath, "conflicts")
+	// Step 8: Remote file re-created.
+	stdout, _ := runCLI(t, "ls", "/"+testFolder)
+	assert.Contains(t, stdout, "fragile.txt")
+
+	// Step 9: Remote has the local content.
+	remoteContent := getRemoteFile(t, "/"+testFolder+"/fragile.txt")
+	assert.Equal(t, "locally modified precious data", remoteContent)
+
+	// Step 10: Conflict history shows auto-resolved entry.
+	stdout, _ = runCLIWithConfig(t, cfgPath, "conflicts", "--history")
+	assert.Contains(t, stdout, "fragile.txt")
+	assert.Contains(t, stdout, "edit_delete")
+	assert.Contains(t, stdout, "keep_local")
+	assert.Contains(t, stdout, "auto")
+
+	// Step 11: No unresolved conflicts.
+	stdout, _ = runCLIWithConfig(t, cfgPath, "conflicts")
 	assert.Contains(t, stdout, "No unresolved conflicts")
+
+	// Step 12: Verify passes.
+	stdout, _ = runCLIWithConfig(t, cfgPath, "verify")
+	assert.Contains(t, stdout, "Verified")
+}
+
+// TestE2E_Sync_ResolveAll exercises 'resolve --all --keep-remote' with
+// multiple edit-edit conflicts.
+func TestE2E_Sync_ResolveAll(t *testing.T) {
+	registerLogDump(t)
+
+	syncDir := t.TempDir()
+	cfgPath := writeSyncConfig(t, syncDir)
+	testFolder := fmt.Sprintf("e2e-sync-resall-%d", time.Now().UnixNano())
+
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
+
+	// Step 1: Create two local files.
+	localDir := filepath.Join(syncDir, testFolder)
+	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "a.txt"), []byte("a-original"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "b.txt"), []byte("b-original"), 0o644))
+
+	// Step 2: Upload baseline.
+	runCLIWithConfig(t, cfgPath, "sync", "--upload-only")
+
+	// Step 3: Modify both sides with different content.
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "a.txt"), []byte("a-local-edit"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "b.txt"), []byte("b-local-edit"), 0o644))
+	putRemoteFile(t, "/"+testFolder+"/a.txt", "a-remote-edit")
+	putRemoteFile(t, "/"+testFolder+"/b.txt", "b-remote-edit")
+
+	// Step 4: Bidirectional sync — 2 edit-edit conflicts.
+	_, stderr := runCLIWithConfig(t, cfgPath, "sync")
+	assert.Contains(t, stderr, "Conflicts:")
+
+	// Step 5: List conflicts — both present.
+	stdout, _ := runCLIWithConfig(t, cfgPath, "conflicts")
+	assert.Contains(t, stdout, "a.txt")
+	assert.Contains(t, stdout, "b.txt")
+	assert.Contains(t, stdout, "edit_edit")
+
+	// Step 6: Resolve --all --keep-remote.
+	_, stderr = runCLIWithConfig(t, cfgPath, "resolve", "--all", "--keep-remote")
+	assert.Contains(t, stderr, "Resolved")
+
+	// Step 7: No unresolved conflicts.
+	stdout, _ = runCLIWithConfig(t, cfgPath, "conflicts")
+	assert.Contains(t, stdout, "No unresolved conflicts")
+
+	// Step 8: Local files have remote content.
+	aData, err := os.ReadFile(filepath.Join(localDir, "a.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "a-remote-edit", string(aData))
+
+	bData, err := os.ReadFile(filepath.Join(localDir, "b.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "b-remote-edit", string(bData))
+
+	// Step 9: Verify passes.
+	stdout, _ = runCLIWithConfig(t, cfgPath, "verify")
+	assert.Contains(t, stdout, "Verified")
 }
 
 // TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal exercises EF12

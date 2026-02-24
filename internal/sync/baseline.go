@@ -42,8 +42,9 @@ const (
 
 	sqlInsertConflict = `INSERT INTO conflicts
 		(id, drive_id, item_id, path, conflict_type, detected_at,
-		 local_hash, remote_hash, local_mtime, remote_mtime, resolution)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unresolved')`
+		 local_hash, remote_hash, local_mtime, remote_mtime,
+		 resolution, resolved_at, resolved_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	sqlUpsertDeltaToken = `INSERT INTO delta_tokens (drive_id, token, updated_at)
 		VALUES (?, ?, ?)
@@ -52,16 +53,25 @@ const (
 		 updated_at = excluded.updated_at`
 
 	sqlListConflicts = `SELECT id, drive_id, item_id, path, conflict_type,
-		detected_at, local_hash, remote_hash, local_mtime, remote_mtime
+		detected_at, local_hash, remote_hash, local_mtime, remote_mtime,
+		resolution, resolved_at, resolved_by
 		FROM conflicts WHERE resolution = 'unresolved'
 		ORDER BY detected_at`
 
+	sqlListAllConflicts = `SELECT id, drive_id, item_id, path, conflict_type,
+		detected_at, local_hash, remote_hash, local_mtime, remote_mtime,
+		resolution, resolved_at, resolved_by
+		FROM conflicts
+		ORDER BY detected_at DESC`
+
 	sqlGetConflictByID = `SELECT id, drive_id, item_id, path, conflict_type,
-		detected_at, local_hash, remote_hash, local_mtime, remote_mtime
+		detected_at, local_hash, remote_hash, local_mtime, remote_mtime,
+		resolution, resolved_at, resolved_by
 		FROM conflicts WHERE id = ?`
 
 	sqlGetConflictByPath = `SELECT id, drive_id, item_id, path, conflict_type,
-		detected_at, local_hash, remote_hash, local_mtime, remote_mtime
+		detected_at, local_hash, remote_hash, local_mtime, remote_mtime,
+		resolution, resolved_at, resolved_by
 		FROM conflicts WHERE path = ? AND resolution = 'unresolved'
 		ORDER BY detected_at DESC LIMIT 1`
 
@@ -115,8 +125,16 @@ func NewBaselineManager(dbPath string, logger *slog.Logger) (*BaselineManager, e
 }
 
 // Load reads the entire baseline table into memory, populating ByPath and
-// ByID maps. The result is cached on the manager for use during the cycle.
+// ByID maps. The result is cached on the manager — subsequent calls return
+// the cached baseline without querying the database. The cache is refreshed
+// by Commit() (which calls Load internally after each transaction). This is
+// safe because BaselineManager exclusively owns the database (sole-writer
+// pattern with SetMaxOpenConns(1)).
 func (m *BaselineManager) Load(ctx context.Context) (*Baseline, error) {
+	if m.baseline != nil {
+		return m.baseline, nil
+	}
+
 	rows, err := m.db.QueryContext(ctx, sqlLoadBaseline)
 	if err != nil {
 		return nil, fmt.Errorf("sync: loading baseline: %w", err)
@@ -240,7 +258,9 @@ func (m *BaselineManager) Commit(ctx context.Context, outcomes []Outcome, deltaT
 		slog.String("drive_id", driveID),
 	)
 
-	// Refresh the in-memory cache after commit.
+	// Invalidate cache and refresh from DB after commit.
+	m.baseline = nil
+
 	if _, err := m.Load(ctx); err != nil {
 		return fmt.Errorf("sync: refreshing baseline after commit: %w", err)
 	}
@@ -320,9 +340,21 @@ func commitMove(ctx context.Context, tx *sql.Tx, o *Outcome, syncedAt int64) err
 	return commitUpsert(ctx, tx, o, syncedAt)
 }
 
-// commitConflict inserts a conflict record for later resolution.
+// commitConflict inserts a conflict record. Auto-resolved conflicts
+// (Outcome.ResolvedBy == ResolvedByAuto) are inserted as already resolved, and
+// the baseline is updated (the upload created a new remote item).
 func commitConflict(ctx context.Context, tx *sql.Tx, o *Outcome, syncedAt int64) error {
 	conflictID := uuid.New().String()
+
+	resolution := ResolutionUnresolved
+	var resolvedAt sql.NullInt64
+	var resolvedBy sql.NullString
+
+	if o.ResolvedBy == ResolvedByAuto {
+		resolution = ResolutionKeepLocal
+		resolvedAt = sql.NullInt64{Int64: syncedAt, Valid: true}
+		resolvedBy = sql.NullString{String: ResolvedByAuto, Valid: true}
+	}
 
 	_, err := tx.ExecContext(ctx, sqlInsertConflict,
 		conflictID, o.DriveID,
@@ -332,9 +364,18 @@ func commitConflict(ctx context.Context, tx *sql.Tx, o *Outcome, syncedAt int64)
 		nullString(o.RemoteHash),
 		nullInt64(o.Mtime),
 		nullInt64(0), // remote_mtime not available in Outcome
+		resolution, resolvedAt, resolvedBy,
 	)
 	if err != nil {
 		return fmt.Errorf("sync: inserting conflict for %s: %w", o.Path, err)
+	}
+
+	// Auto-resolved conflicts also update the baseline (the upload created
+	// a new remote item that should be tracked).
+	if o.ResolvedBy == ResolvedByAuto {
+		if upsertErr := commitUpsert(ctx, tx, o, syncedAt); upsertErr != nil {
+			return upsertErr
+		}
 	}
 
 	return nil
@@ -355,9 +396,20 @@ func (m *BaselineManager) saveDeltaToken(
 
 // ListConflicts returns all unresolved conflicts ordered by detection time.
 func (m *BaselineManager) ListConflicts(ctx context.Context) ([]ConflictRecord, error) {
-	rows, err := m.db.QueryContext(ctx, sqlListConflicts)
+	return m.queryConflicts(ctx, sqlListConflicts)
+}
+
+// ListAllConflicts returns all conflicts (resolved and unresolved) ordered
+// by detection time descending. Used by 'conflicts --history'.
+func (m *BaselineManager) ListAllConflicts(ctx context.Context) ([]ConflictRecord, error) {
+	return m.queryConflicts(ctx, sqlListAllConflicts)
+}
+
+// queryConflicts executes a conflict query and scans the results.
+func (m *BaselineManager) queryConflicts(ctx context.Context, query string) ([]ConflictRecord, error) {
+	rows, err := m.db.QueryContext(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("sync: listing conflicts: %w", err)
+		return nil, fmt.Errorf("sync: querying conflicts: %w", err)
 	}
 	defer rows.Close()
 
@@ -446,11 +498,14 @@ func scanConflictRow(rows *sql.Rows) (*ConflictRecord, error) {
 		remoteHash  sql.NullString
 		localMtime  sql.NullInt64
 		remoteMtime sql.NullInt64
+		resolvedAt  sql.NullInt64
+		resolvedBy  sql.NullString
 	)
 
 	err := rows.Scan(
 		&c.ID, &c.DriveID, &itemID, &c.Path, &c.ConflictType,
 		&c.DetectedAt, &localHash, &remoteHash, &localMtime, &remoteMtime,
+		&c.Resolution, &resolvedAt, &resolvedBy,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("sync: scanning conflict row: %w", err)
@@ -459,6 +514,7 @@ func scanConflictRow(rows *sql.Rows) (*ConflictRecord, error) {
 	c.ItemID = itemID.String
 	c.LocalHash = localHash.String
 	c.RemoteHash = remoteHash.String
+	c.ResolvedBy = resolvedBy.String
 
 	if localMtime.Valid {
 		c.LocalMtime = localMtime.Int64
@@ -466,6 +522,10 @@ func scanConflictRow(rows *sql.Rows) (*ConflictRecord, error) {
 
 	if remoteMtime.Valid {
 		c.RemoteMtime = remoteMtime.Int64
+	}
+
+	if resolvedAt.Valid {
+		c.ResolvedAt = resolvedAt.Int64
 	}
 
 	return &c, nil
@@ -481,11 +541,14 @@ func scanConflictRowSingle(row *sql.Row) (*ConflictRecord, error) {
 		remoteHash  sql.NullString
 		localMtime  sql.NullInt64
 		remoteMtime sql.NullInt64
+		resolvedAt  sql.NullInt64
+		resolvedBy  sql.NullString
 	)
 
 	err := row.Scan(
 		&c.ID, &c.DriveID, &itemID, &c.Path, &c.ConflictType,
 		&c.DetectedAt, &localHash, &remoteHash, &localMtime, &remoteMtime,
+		&c.Resolution, &resolvedAt, &resolvedBy,
 	)
 	if err != nil {
 		return nil, err //nolint:wrapcheck // caller wraps with context
@@ -494,6 +557,7 @@ func scanConflictRowSingle(row *sql.Row) (*ConflictRecord, error) {
 	c.ItemID = itemID.String
 	c.LocalHash = localHash.String
 	c.RemoteHash = remoteHash.String
+	c.ResolvedBy = resolvedBy.String
 
 	if localMtime.Valid {
 		c.LocalMtime = localMtime.Int64
@@ -501,6 +565,10 @@ func scanConflictRowSingle(row *sql.Row) (*ConflictRecord, error) {
 
 	if remoteMtime.Valid {
 		c.RemoteMtime = remoteMtime.Int64
+	}
+
+	if resolvedAt.Valid {
+		c.ResolvedAt = resolvedAt.Int64
 	}
 
 	return &c, nil

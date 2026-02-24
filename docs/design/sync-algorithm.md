@@ -774,7 +774,7 @@ Folders use existence-based reconciliation. A folder is "in sync" when `Baseline
 | **ED5** | exists | absent | none | create remotely | New local folder. Create it remotely. |
 | **ED6** | exists | deleted | exists | delete locally | Remote deleted a previously-synced folder. Propagate deletion locally. |
 | **ED7** | absent | deleted | exists | cleanup | Previously synced folder is gone from both sides. Remove baseline entry. |
-| **ED8** | absent | absent | exists | cleanup | Folder disappeared from both sides. Remove baseline entry. |
+| **ED8** | absent | unchanged | exists | remote delete | Locally deleted, remote unchanged. Propagate deletion remotely. |
 
 **Why existence-based**: Folders have no content to hash. `Baseline != nil` is sufficient to determine "was synced." This is enforced by the type system: `PathView.Baseline` is either a pointer to a `BaselineEntry` or nil.
 
@@ -938,7 +938,7 @@ Actions are executed in a strict phase order to ensure correctness:
 | **6** | Remote deletes | Sequential | API rate limiting makes parallelism less beneficial. |
 | **7** | Conflicts | Sequential | Conflict resolution may involve user-facing file creation. |
 | **8** | Synced updates | Batch (no I/O) | Baseline-only updates for convergent edits/creates (EF4, EF11, ED2). No API calls or filesystem operations needed. |
-| **9** | Cleanups | Batch (no I/O) | Baseline entry removals for paths deleted on both sides (EF10, ED7, ED8). |
+| **9** | Cleanups | Batch (no I/O) | Baseline entry removals for paths deleted on both sides (EF10, ED7). |
 
 Worker pools use `errgroup` for goroutine management. Default pool sizes: 8 download workers, 8 upload workers, 8 hash checker workers (all configurable).
 

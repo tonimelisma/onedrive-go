@@ -174,9 +174,22 @@ func (e *Executor) executeUpload(ctx context.Context, action *Action) Outcome {
 
 	var item *graph.Item
 
+	progress := func(uploaded, total int64) {
+		e.logger.Debug("upload progress",
+			slog.String("path", action.Path),
+			slog.Int64("uploaded", uploaded),
+			slog.Int64("total", total),
+		)
+	}
+
+	// Retry wraps the full Upload() call. On retry of a chunked upload, this
+	// restarts the session from scratch. Acceptable because: (1) io.ReaderAt
+	// allows re-reading from offset 0, (2) Graph API auto-cleans abandoned
+	// sessions, (3) executor-level retry is rare (graph client retries
+	// 429/5xx internally). Session resume tracked as B-037.
 	uploadErr := e.withRetry(ctx, "upload "+action.Path, func() error {
 		var retryErr error
-		item, retryErr = e.uploads.Upload(ctx, driveID, parentID, name, f, size, mtime, nil)
+		item, retryErr = e.uploads.Upload(ctx, driveID, parentID, name, f, size, mtime, progress)
 
 		return retryErr
 	})

@@ -11,9 +11,16 @@ import (
 	"time"
 )
 
-// executeConflict handles keep_both conflict resolution: rename local to
-// a timestamped conflict copy, then download remote to the original path.
+// executeConflict handles conflict resolution. For edit-delete conflicts,
+// the modified local version wins automatically (industry consensus). For
+// all others, keep_both: rename local to a conflict copy, download remote.
 func (e *Executor) executeConflict(ctx context.Context, action *Action) Outcome {
+	// Edit-delete: local was modified, remote was deleted. Upload local file
+	// to re-create remote, record as auto-resolved. No conflict copy needed.
+	if action.ConflictInfo != nil && action.ConflictInfo.ConflictType == ConflictEditDelete {
+		return e.executeEditDeleteConflict(ctx, action)
+	}
+
 	absPath := filepath.Join(e.syncRoot, action.Path)
 
 	// Step 1: Rename local to conflict copy (if it exists).
@@ -22,7 +29,7 @@ func (e *Executor) executeConflict(ctx context.Context, action *Action) Outcome 
 
 	if err := os.Rename(absPath, conflictPath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			// Edit-delete conflict: local file is gone, skip rename.
+			// Local file absent — skip rename, proceed to download.
 			localExists = false
 		} else {
 			return e.failedOutcome(action, ActionConflict,
@@ -61,6 +68,31 @@ func (e *Executor) executeConflict(ctx context.Context, action *Action) Outcome 
 	if action.ConflictInfo != nil {
 		o.ConflictType = action.ConflictInfo.ConflictType
 	}
+
+	return o
+}
+
+// executeEditDeleteConflict auto-resolves edit-delete conflicts by uploading
+// the locally modified file to re-create it on the remote side. The local
+// version wins automatically — industry consensus (rclone, Dropbox, Google
+// Drive, OneDrive official, abraunegg).
+func (e *Executor) executeEditDeleteConflict(ctx context.Context, action *Action) Outcome {
+	e.logger.Info("auto-resolving edit-delete conflict: local edit wins",
+		slog.String("path", action.Path),
+	)
+
+	uploadOutcome := e.executeUpload(ctx, action)
+	if !uploadOutcome.Success {
+		return e.failedOutcome(action, ActionConflict,
+			fmt.Errorf("uploading local during edit-delete auto-resolve for %s: %w",
+				action.Path, uploadOutcome.Error))
+	}
+
+	// Build conflict outcome from the upload result.
+	o := uploadOutcome
+	o.Action = ActionConflict
+	o.ConflictType = ConflictEditDelete
+	o.ResolvedBy = ResolvedByAuto
 
 	return o
 }
