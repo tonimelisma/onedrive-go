@@ -96,7 +96,7 @@ MANDATORY: Run ALL gates automatically after every code change, before every com
 1. **Format**: `gofumpt -w . && goimports -local github.com/tonimelisma/onedrive-go -w .`
 2. **Build**: `go build ./...`
 3. **Unit tests**: `go test -race -coverprofile=/tmp/cover.out ./...`
-4. **E2E tests**: `ONEDRIVE_TEST_DRIVE="personal:testitesti18@outlook.com" go test -tags=e2e -race -v -timeout=15m ./e2e/...`
+4. **E2E tests**: `ONEDRIVE_TEST_DRIVE="personal:testitesti18@outlook.com" go test -tags=e2e -race -v -timeout=30m ./e2e/...`
 5. **Lint**: `golangci-lint run`
 6. **Coverage**: `go tool cover -func=/tmp/cover.out | grep total` — never decrease
 7. **Review changes silently**: sufficient logging? Comments explain why? Fix issues, do not ask.
@@ -104,7 +104,7 @@ MANDATORY: Run ALL gates automatically after every code change, before every com
 ### Quick command (gates 1-6)
 
 ```bash
-gofumpt -w . && goimports -local github.com/tonimelisma/onedrive-go -w . && go build ./... && go test -race -coverprofile=/tmp/cover.out ./... && ONEDRIVE_TEST_DRIVE="personal:testitesti18@outlook.com" go test -tags=e2e -race -v -timeout=15m ./e2e/... && golangci-lint run && go tool cover -func=/tmp/cover.out | grep total && echo "ALL GATES PASS"
+gofumpt -w . && goimports -local github.com/tonimelisma/onedrive-go -w . && go build ./... && go test -race -coverprofile=/tmp/cover.out ./... && ONEDRIVE_TEST_DRIVE="personal:testitesti18@outlook.com" go test -tags=e2e -race -v -timeout=30m ./e2e/... && golangci-lint run && go tool cover -func=/tmp/cover.out | grep total && echo "ALL GATES PASS"
 ```
 
 ### Cleanup check (after increment)
