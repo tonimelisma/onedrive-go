@@ -109,9 +109,9 @@ Work is done in increments. After each increment, run through this entire checkl
     - **Architecture re-envisioning**: If you were starting from a blank slate, would you build it the same way? Propose any dramatic architectural changes if a better design is apparent
     - **Unfixed items**: Anything you were unable to address in this increment (with BACKLOG IDs for deferred items)
 
-Quick command (gates 1-5):
+Quick command (gates 1-6):
 ```bash
-gofumpt -w . && goimports -local github.com/tonimelisma/onedrive-go -w . && go build ./... && go test -race -coverprofile=/tmp/cover.out ./... && golangci-lint run && go tool cover -func=/tmp/cover.out | grep total && echo "ALL GATES PASS"
+gofumpt -w . && goimports -local github.com/tonimelisma/onedrive-go -w . && go build ./... && go test -race -coverprofile=/tmp/cover.out ./... && golangci-lint run && go tool cover -func=/tmp/cover.out | grep total && ONEDRIVE_TEST_DRIVE="personal:testitesti18@outlook.com" go test -tags=e2e -race -v -timeout=10m ./e2e/... && echo "ALL GATES PASS"
 ```
 
 Cleanup check:
@@ -192,6 +192,7 @@ echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r 
 | [docs/design/decisions.md](docs/design/decisions.md) | Architectural and design decisions |
 | [docs/design/accounts.md](docs/design/accounts.md) | Account and drive system design |
 | [docs/design/event-driven-rationale.md](docs/design/event-driven-rationale.md) | Option E architectural decision record |
+| [docs/design/concurrent-execution.md](docs/design/concurrent-execution.md) | Phase 5 concurrent execution redesign |
 | [docs/archive/](docs/archive/) | Historical docs |
 | [docs/tier1-research/](docs/tier1-research/) | 16 Tier 1 research docs |
 
@@ -199,9 +200,6 @@ echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r 
 
 **This CLAUDE.md is the single source of truth for working on this codebase.** After major changes (new packages, CLI commands, docs, dependencies, or architectural shifts), update this file. Keep it concise — link to detailed docs rather than duplicating content. Every linked doc must exist; remove stale links.
 
-## Appendix: Full E2E Tests
+## E2E Testing
 
-Run manually or nightly — not part of routine DoD:
-```bash
-ONEDRIVE_TEST_DRIVE="personal:testitesti18@outlook.com" go test -tags=e2e,e2e_full -race -v -timeout=30m ./e2e/...
-```
+E2E tests run against a live OneDrive account (`testitesti18@outlook.com`). A valid OAuth token already exists on the local dev machine. The token auto-refreshes on use. For full E2E details (credentials, CI setup, bootstrapping, tiers), see [docs/design/test-strategy.md §6](docs/design/test-strategy.md#6-e2e-test-strategy).
