@@ -436,8 +436,8 @@ type Action struct {
 	Type         ActionType
 	DriveID      driveid.ID
 	ItemID       string
-	Path         string
-	NewPath      string           // for moves
+	Path         string           // canonical path (destination for moves)
+	OldPath      string           // source path (moves only)
 	CreateSide   FolderCreateSide // for folder creates
 	View         *PathView        // full three-way context
 	ConflictInfo *ConflictRecord
