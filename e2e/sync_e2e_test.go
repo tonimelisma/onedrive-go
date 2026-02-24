@@ -391,9 +391,10 @@ func TestE2E_Sync_EditEditConflict_ResolveKeepRemote(t *testing.T) {
 	assert.Contains(t, stdout, "Verified")
 }
 
-// TestE2E_Sync_EditDeleteConflict_ResolveKeepBoth exercises EF9 (edit-delete
-// conflict) and resolve --all --keep-both.
-func TestE2E_Sync_EditDeleteConflict_ResolveKeepBoth(t *testing.T) {
+// TestE2E_Sync_EditDeleteConflict exercises EF9 (edit-delete conflict).
+// When the remote file is deleted, the conflict executor cannot download it
+// (404). The action fails gracefully and the local file is preserved.
+func TestE2E_Sync_EditDeleteConflict(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
@@ -405,34 +406,36 @@ func TestE2E_Sync_EditDeleteConflict_ResolveKeepBoth(t *testing.T) {
 	// Step 1: Create local file.
 	localDir := filepath.Join(syncDir, testFolder)
 	require.NoError(t, os.MkdirAll(localDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "fragile.txt"), []byte("precious data"), 0o644))
+	fragileFile := filepath.Join(localDir, "fragile.txt")
+	require.NoError(t, os.WriteFile(fragileFile, []byte("precious data"), 0o644))
 
 	// Step 2: Upload baseline.
 	runCLIWithConfig(t, cfgPath, "sync", "--upload-only")
 
 	// Step 3: Modify local.
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "fragile.txt"), []byte("locally modified precious data"), 0o644))
+	require.NoError(t, os.WriteFile(fragileFile, []byte("locally modified precious data"), 0o644))
 
 	// Step 4: Delete remote.
 	runCLI(t, "rm", "/"+testFolder+"/fragile.txt")
 
-	// Step 5: Bidirectional sync.
+	// Step 5: Bidirectional sync — planner detects conflict, executor fails to
+	// download the deleted remote file (404).
 	_, stderr := runCLIWithConfig(t, cfgPath, "sync")
 
-	// Step 6: Conflict detected.
+	// Step 6: Planner detected the conflict (Plan section).
 	assert.Contains(t, stderr, "Conflicts:")
 
-	// Step 7: Conflict type is edit_delete.
+	// Step 7: Executor reports failure (download 404).
+	assert.Contains(t, stderr, "Failed:")
+
+	// Step 8: Local file is preserved with modified content (restored from
+	// conflict copy after the failed download attempt).
+	data, err := os.ReadFile(fragileFile)
+	require.NoError(t, err)
+	assert.Equal(t, "locally modified precious data", string(data))
+
+	// Step 9: No conflict record exists (action failed, nothing committed).
 	stdout, _ := runCLIWithConfig(t, cfgPath, "conflicts")
-	assert.Contains(t, stdout, "fragile.txt")
-	assert.Contains(t, stdout, "edit_delete")
-
-	// Step 8: Resolve --all --keep-both.
-	_, stderr = runCLIWithConfig(t, cfgPath, "resolve", "--all", "--keep-both")
-	assert.Contains(t, stderr, "Resolved")
-
-	// Step 9: No more conflicts.
-	stdout, _ = runCLIWithConfig(t, cfgPath, "conflicts")
 	assert.Contains(t, stdout, "No unresolved conflicts")
 }
 

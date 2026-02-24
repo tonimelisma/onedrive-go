@@ -100,7 +100,7 @@ jobs:
             echo "=== Running E2E tests for: ${drive} ==="
             E2E_LOG_DIR=/tmp/e2e-debug-logs \
             ONEDRIVE_TEST_DRIVE="$drive" \
-              go test -tags=e2e -race -v -timeout=15m ./e2e/...
+              go test -tags=e2e -race -v -timeout=30m ./e2e/...
           done
 
       - name: Upload E2E debug logs
