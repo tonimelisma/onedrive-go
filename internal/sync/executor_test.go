@@ -244,9 +244,9 @@ func TestExecutor_LocalMove(t *testing.T) {
 
 	action := &Action{
 		Type:    ActionLocalMove,
-		Path:    "old-name.txt",
-		NewPath: "new-name.txt",
-		View:    &PathView{Path: "old-name.txt"},
+		Path:    "new-name.txt",
+		OldPath: "old-name.txt",
+		View:    &PathView{Path: "new-name.txt"},
 	}
 
 	o := e.executeMove(context.Background(), action)
@@ -269,9 +269,9 @@ func TestExecutor_LocalMove_SourceMissing(t *testing.T) {
 
 	action := &Action{
 		Type:    ActionLocalMove,
-		Path:    "nonexistent.txt",
-		NewPath: "target.txt",
-		View:    &PathView{Path: "nonexistent.txt"},
+		Path:    "target.txt",
+		OldPath: "nonexistent.txt",
+		View:    &PathView{Path: "target.txt"},
 	}
 
 	o := e.executeMove(context.Background(), action)
@@ -296,11 +296,11 @@ func TestExecutor_RemoteMove(t *testing.T) {
 
 	action := &Action{
 		Type:    ActionRemoteMove,
-		Path:    "original.txt",
-		NewPath: "renamed.txt",
+		Path:    "renamed.txt",
+		OldPath: "original.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(testDriveID),
-		View:    &PathView{Path: "original.txt"},
+		View:    &PathView{Path: "renamed.txt"},
 	}
 
 	o := e.executeMove(context.Background(), action)
@@ -1347,11 +1347,11 @@ func TestExecutor_RemoteMove_Error(t *testing.T) {
 
 	action := &Action{
 		Type:    ActionRemoteMove,
-		Path:    "original.txt",
-		NewPath: "renamed.txt",
+		Path:    "renamed.txt",
+		OldPath: "original.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(testDriveID),
-		View:    &PathView{Path: "original.txt"},
+		View:    &PathView{Path: "renamed.txt"},
 	}
 
 	o := e.executeMove(context.Background(), action)
@@ -1373,12 +1373,12 @@ func TestExecutor_LocalMove_ViewFields(t *testing.T) {
 
 	action := &Action{
 		Type:    ActionLocalMove,
-		Path:    "exec-src.txt",
-		NewPath: "exec-dst.txt",
+		Path:    "exec-dst.txt",
+		OldPath: "exec-src.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(testDriveID),
 		View: &PathView{
-			Path: "exec-src.txt",
+			Path: "exec-dst.txt",
 			Remote: &RemoteState{
 				Hash:     "remotehash",
 				Size:     42,

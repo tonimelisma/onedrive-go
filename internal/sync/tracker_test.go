@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"fmt"
 	stdsync "sync"
 	"testing"
 	"time"
@@ -293,6 +294,77 @@ func TestDepTracker_CompleteUnknownID_NoPanic(t *testing.T) {
 
 	// Should not panic on unknown ID with zero total.
 	dt.Complete(999)
+}
+
+// TestDepTracker_ConcurrentAddAndComplete verifies that Complete() safely
+// copies the dependents slice before iterating, preventing a data race with
+// Add() appending to the same slice. Under -race this would fail if
+// Complete() iterated the original slice without copying.
+// Regression test for: Complete() read ta.dependents under lock, released
+// lock, then iterated — racing with Add() appending to the same slice.
+func TestDepTracker_ConcurrentAddAndComplete(t *testing.T) {
+	t.Parallel()
+
+	// Use large buffer to prevent dispatch blocking during the race window.
+	dt := NewDepTracker(200, 200, testLogger(t))
+
+	// Root action with no deps — will be completed while Add appends dependents.
+	dt.Add(&Action{
+		Type: ActionFolderCreate, Path: "root",
+		DriveID: driveid.New("d"), ItemID: "i0",
+	}, 0, nil)
+
+	// Seed some initial dependents so Complete has a non-empty slice to iterate.
+	for i := int64(1); i <= 20; i++ {
+		dt.Add(&Action{
+			Type: ActionDownload, Path: fmt.Sprintf("file-%d", i),
+			DriveID: driveid.New("d"), ItemID: fmt.Sprintf("i%d", i),
+		}, i, []int64{0})
+	}
+
+	// Concurrently: Complete root (iterates dependents) while Add
+	// appends more dependents to the root action's dependents slice.
+	// Under -race, a data race on the slice would be detected here.
+	var wg stdsync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		<-dt.Interactive() // drain root
+		dt.Complete(0)
+	}()
+
+	go func() {
+		defer wg.Done()
+		for i := int64(21); i <= 40; i++ {
+			dt.Add(&Action{
+				Type: ActionDownload, Path: fmt.Sprintf("file-%d", i),
+				DriveID: driveid.New("d"), ItemID: fmt.Sprintf("i%d", i),
+			}, i, []int64{0})
+		}
+	}()
+
+	wg.Wait()
+
+	// Drain whatever was dispatched (at least the initial 20 dependents).
+	// Actions added after Complete's copy won't be dispatched — that's by
+	// design (the tracker is populated before workers start in RunOnce).
+	drained := 0
+
+	for {
+		select {
+		case ta := <-dt.Interactive():
+			dt.Complete(ta.LedgerID)
+			drained++
+		case <-time.After(200 * time.Millisecond):
+			// No more actions to drain.
+			if drained < 20 {
+				t.Fatalf("expected at least 20 dispatched actions, got %d", drained)
+			}
+
+			return
+		}
+	}
 }
 
 func TestDepTracker_SkipCompletedDeps(t *testing.T) {

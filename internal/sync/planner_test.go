@@ -1191,12 +1191,12 @@ func TestDetectMoves_RemoteMove(t *testing.T) {
 		t.Errorf("expected ActionLocalMove, got %v", move.Type)
 	}
 
-	if move.Path != "docs/planner-original.txt" {
-		t.Errorf("expected old path 'docs/planner-original.txt', got %q", move.Path)
+	if move.Path != "docs/planner-renamed.txt" {
+		t.Errorf("expected destination 'docs/planner-renamed.txt', got %q", move.Path)
 	}
 
-	if move.NewPath != "docs/planner-renamed.txt" {
-		t.Errorf("expected new path 'docs/planner-renamed.txt', got %q", move.NewPath)
+	if move.OldPath != "docs/planner-original.txt" {
+		t.Errorf("expected source 'docs/planner-original.txt', got %q", move.OldPath)
 	}
 }
 
@@ -1254,12 +1254,12 @@ func TestDetectMoves_LocalMoveByHash(t *testing.T) {
 		t.Errorf("expected ActionRemoteMove, got %v", move.Type)
 	}
 
-	if move.Path != "planner-old-loc.txt" {
-		t.Errorf("expected old path 'planner-old-loc.txt', got %q", move.Path)
+	if move.Path != "planner-new-loc.txt" {
+		t.Errorf("expected destination 'planner-new-loc.txt', got %q", move.Path)
 	}
 
-	if move.NewPath != "planner-new-loc.txt" {
-		t.Errorf("expected new path 'planner-new-loc.txt', got %q", move.NewPath)
+	if move.OldPath != "planner-old-loc.txt" {
+		t.Errorf("expected source 'planner-old-loc.txt', got %q", move.OldPath)
 	}
 }
 
@@ -2252,9 +2252,9 @@ func TestDetectMoves_RemoteMoveOldPathReused(t *testing.T) {
 	}
 
 	move := allMoves[0]
-	if move.Path != "planner-reused-path.txt" || move.NewPath != "planner-moved-dest.txt" {
+	if move.OldPath != "planner-reused-path.txt" || move.Path != "planner-moved-dest.txt" {
 		t.Errorf("move: %q → %q, want planner-reused-path.txt → planner-moved-dest.txt",
-			move.Path, move.NewPath)
+			move.OldPath, move.Path)
 	}
 
 	// The new file at the old path should produce a download (EF14).

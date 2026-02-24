@@ -350,7 +350,7 @@ type Action struct {
     DriveID      driveid.ID
     ItemID       string
     Path         string
-    NewPath      string           // for moves
+    OldPath      string           // source path (moves only)
     CreateSide   FolderCreateSide // for folder creates
     View         *PathView        // full three-way context (replaces *Item)
     ConflictInfo *ConflictRecord
@@ -1261,8 +1261,8 @@ func (p *Planner) detectMoves(
             }
             ms.add(Action{
                 Type:    ActionLocalMove,
-                Path:    event.OldPath,
-                NewPath: event.Path,
+                Path:    event.Path,
+                OldPath: event.OldPath,
                 ItemID:  event.ItemID,
                 DriveID: event.DriveID,
                 View:    viewForPath(views, event.Path),
@@ -1309,8 +1309,8 @@ func (p *Planner) detectMoves(
         if dst, ok := created[hash]; ok {
             ms.add(Action{
                 Type:    ActionRemoteMove,
-                Path:    src.Path,
-                NewPath: dst.Path,
+                Path:    dst.Path,
+                OldPath: src.Path,
                 ItemID:  src.Baseline.ItemID,
                 DriveID: src.Baseline.DriveID,
                 View:    &dst,

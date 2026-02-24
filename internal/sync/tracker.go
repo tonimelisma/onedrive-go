@@ -33,7 +33,7 @@ type DepTracker struct {
 	interactive chan *TrackedAction
 	bulk        chan *TrackedAction
 	done        chan struct{} // closed when all actions complete
-	total       int32
+	total       atomic.Int32
 	completed   atomic.Int32
 	logger      *slog.Logger
 }
@@ -65,7 +65,7 @@ func (dt *DepTracker) Add(action *Action, ledgerID int64, depIDs []int64) {
 
 	dt.actions[ledgerID] = ta
 	dt.byPath[action.Path] = ta
-	dt.total++
+	dt.total.Add(1)
 
 	var depsRemaining int32
 
@@ -104,14 +104,17 @@ func (dt *DepTracker) Complete(ledgerID int64) {
 			slog.Int64("ledger_id", ledgerID),
 		)
 
-		if dt.completed.Add(1) == dt.total {
+		if dt.completed.Add(1) == dt.total.Load() {
 			close(dt.done)
 		}
 
 		return
 	}
 
-	dependents := ta.dependents
+	// Copy dependents under the lock to prevent races with Add() appending
+	// to the same slice in Phase 5.1+ (watch mode overlapping cycles).
+	dependents := make([]*TrackedAction, len(ta.dependents))
+	copy(dependents, ta.dependents)
 	dt.mu.Unlock()
 
 	for _, dep := range dependents {
@@ -120,7 +123,7 @@ func (dt *DepTracker) Complete(ledgerID int64) {
 		}
 	}
 
-	if dt.completed.Add(1) == dt.total {
+	if dt.completed.Add(1) == dt.total.Load() {
 		close(dt.done)
 	}
 }

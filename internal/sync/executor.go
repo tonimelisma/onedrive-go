@@ -172,19 +172,19 @@ func (e *Executor) executeMove(ctx context.Context, action *Action) Outcome {
 
 // executeLocalMove renames a local file/folder.
 func (e *Executor) executeLocalMove(action *Action) Outcome {
-	oldAbs := filepath.Join(e.syncRoot, action.Path)
-	newAbs := filepath.Join(e.syncRoot, action.NewPath)
+	oldAbs := filepath.Join(e.syncRoot, action.OldPath)
+	newAbs := filepath.Join(e.syncRoot, action.Path)
 
 	// Ensure parent directory exists.
 	if err := os.MkdirAll(filepath.Dir(newAbs), 0o755); err != nil { //nolint:mnd // standard dir perms
-		return e.failedOutcome(action, ActionLocalMove, fmt.Errorf("creating parent for move target %s: %w", action.NewPath, err))
+		return e.failedOutcome(action, ActionLocalMove, fmt.Errorf("creating parent for move target %s: %w", action.Path, err))
 	}
 
 	if err := os.Rename(oldAbs, newAbs); err != nil {
-		return e.failedOutcome(action, ActionLocalMove, fmt.Errorf("renaming %s -> %s: %w", action.Path, action.NewPath, err))
+		return e.failedOutcome(action, ActionLocalMove, fmt.Errorf("renaming %s -> %s: %w", action.OldPath, action.Path, err))
 	}
 
-	e.logger.Debug("local move complete", slog.String("from", action.Path), slog.String("to", action.NewPath))
+	e.logger.Debug("local move complete", slog.String("from", action.OldPath), slog.String("to", action.Path))
 
 	return e.moveOutcome(action)
 }
@@ -193,28 +193,28 @@ func (e *Executor) executeLocalMove(action *Action) Outcome {
 func (e *Executor) executeRemoteMove(ctx context.Context, action *Action) Outcome {
 	driveID := e.resolveDriveID(action)
 
-	newParentID, err := e.resolveParentID(action.NewPath)
+	newParentID, err := e.resolveParentID(action.Path)
 	if err != nil {
 		return e.failedOutcome(action, ActionRemoteMove, err)
 	}
 
-	newName := filepath.Base(action.NewPath)
+	newName := filepath.Base(action.Path)
 
 	var item *graph.Item
 
-	err = e.withRetry(ctx, "remote move "+action.Path, func() error {
+	err = e.withRetry(ctx, "remote move "+action.OldPath, func() error {
 		var moveErr error
 		item, moveErr = e.items.MoveItem(ctx, driveID, action.ItemID, newParentID, newName)
 
 		return moveErr
 	})
 	if err != nil {
-		return e.failedOutcome(action, ActionRemoteMove, fmt.Errorf("moving %s -> %s: %w", action.Path, action.NewPath, err))
+		return e.failedOutcome(action, ActionRemoteMove, fmt.Errorf("moving %s -> %s: %w", action.OldPath, action.Path, err))
 	}
 
 	e.logger.Debug("remote move complete",
-		slog.String("from", action.Path),
-		slog.String("to", action.NewPath),
+		slog.String("from", action.OldPath),
+		slog.String("to", action.Path),
 		slog.String("item_id", item.ID),
 	)
 
@@ -462,8 +462,8 @@ func (e *Executor) moveOutcome(action *Action) Outcome {
 	o := Outcome{
 		Action:  action.Type,
 		Success: true,
-		Path:    action.NewPath,
-		OldPath: action.Path,
+		Path:    action.Path,
+		OldPath: action.OldPath,
 		DriveID: e.resolveDriveID(action),
 		ItemID:  action.ItemID,
 	}

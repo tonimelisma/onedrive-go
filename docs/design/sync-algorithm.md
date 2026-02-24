@@ -149,7 +149,7 @@ type Action struct {
     DriveID      driveid.ID
     ItemID       string
     Path         string
-    NewPath      string           // for moves
+    OldPath      string           // source path (moves only)
     CreateSide   FolderCreateSide // for folder creates
     View         *PathView        // full three-way context
     ConflictInfo *ConflictRecord  // for conflict actions
@@ -1090,7 +1090,7 @@ Used for small files and zero-byte files. Zero-byte files ALWAYS use simple uplo
 
 **Move execution details**:
 
-- **ActionLocalMove**: Rename the local file/folder from `action.Path` to `action.NewPath`. Uses `os.Rename` which is atomic on the same filesystem. If source and destination are on different filesystems, falls back to copy + delete.
+- **ActionLocalMove**: Rename the local file/folder from `action.OldPath` (source) to `action.Path` (destination). Uses `os.Rename` which is atomic on the same filesystem. If source and destination are on different filesystems, falls back to copy + delete.
 - **ActionRemoteMove**: Call the `MoveItem` API to rename the item on the server. The API call specifies the new parent ID and new name. On success, the Outcome carries both `OldPath` and `Path` for the baseline manager to update.
 
 **Conflict execution**:

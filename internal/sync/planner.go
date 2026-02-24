@@ -187,8 +187,8 @@ func detectRemoteMoves(views map[string]*PathView, changes []PathChanges) []Acti
 			}
 
 			action := makeAction(ActionLocalMove, view)
-			action.Path = ev.OldPath
-			action.NewPath = ev.Path
+			action.OldPath = ev.OldPath
+			// action.Path is already ev.Path (destination) via makeAction.
 
 			actions = append(actions, action)
 
@@ -250,8 +250,8 @@ func detectLocalMoves(views map[string]*PathView) []Action {
 		view := views[deletePath]
 
 		action := makeAction(ActionRemoteMove, view)
-		action.Path = deletePath
-		action.NewPath = createPath
+		action.OldPath = deletePath
+		action.Path = createPath
 
 		actions = append(actions, action)
 
@@ -744,13 +744,17 @@ func addChildDeleteDeps(deps []int, idx int, a *Action, deleteIdx map[string]int
 	return deps
 }
 
-// addMoveTargetDep adds a dependency on a folder create for the move target parent.
+// addMoveTargetDep adds a dependency on a folder create for the move source parent.
+// NOTE: After the Action.Path=destination convention change, this is effectively
+// a no-op because the source parent always pre-exists (the file is there). The
+// destination parent dependency is already handled by addParentFolderDep
+// (Action.Path is the destination for moves). Kept for defensive completeness.
 func addMoveTargetDep(deps []int, a *Action, folderCreateIdx map[string]int) []int {
 	if a.Type != ActionLocalMove && a.Type != ActionRemoteMove {
 		return deps
 	}
 
-	targetParent := filepath.Dir(a.NewPath)
+	targetParent := filepath.Dir(a.OldPath)
 	if targetParent == "." || targetParent == "" {
 		return deps
 	}
