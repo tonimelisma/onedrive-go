@@ -707,6 +707,82 @@ func testNoopLogger() *slog.Logger {
 	return slog.Default()
 }
 
+// --- UpdateFileSystemInfo tests ---
+
+func TestUpdateFileSystemInfo_Success(t *testing.T) {
+	mtime := time.Date(2024, 8, 15, 14, 30, 0, 0, time.UTC)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPatch, r.Method)
+		assert.Equal(t, "/drives/000000000000000d/items/item-fsi", r.URL.Path)
+
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+
+		bodyStr := string(body)
+		assert.Contains(t, bodyStr, `"lastModifiedDateTime":"2024-08-15T14:30:00Z"`)
+		assert.Contains(t, bodyStr, `"fileSystemInfo"`)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{
+			"id": "item-fsi",
+			"name": "patched.txt",
+			"size": 100,
+			"createdDateTime": "2024-01-01T00:00:00Z",
+			"lastModifiedDateTime": "2024-08-15T14:30:00Z",
+			"parentReference": {"id": "parent", "driveId": "d"},
+			"file": {"mimeType": "text/plain"}
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	item, err := client.UpdateFileSystemInfo(
+		context.Background(), driveid.New("d"), "item-fsi", mtime,
+	)
+	require.NoError(t, err)
+
+	assert.Equal(t, "item-fsi", item.ID)
+	assert.Equal(t, "patched.txt", item.Name)
+	assert.Equal(t, 2024, item.ModifiedAt.Year())
+	assert.Equal(t, time.August, item.ModifiedAt.Month())
+}
+
+func TestUpdateFileSystemInfo_DecodeError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{not valid json`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.UpdateFileSystemInfo(
+		context.Background(), driveid.New("d"), "item-decode",
+		time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decoding fileSystemInfo response")
+}
+
+func TestUpdateFileSystemInfo_NotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("request-id", "req-fsi-404")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"error":{"code":"itemNotFound"}}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.UpdateFileSystemInfo(
+		context.Background(), driveid.New("d"), "nonexistent",
+		time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+	)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
 // --- GetItemByPath tests ---
 
 func TestGetItemByPath_Success(t *testing.T) {

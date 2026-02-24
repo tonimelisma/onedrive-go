@@ -60,42 +60,32 @@ func (c *Client) Download(ctx context.Context, driveID driveid.ID, itemID string
 // downloadFromURL streams content from a pre-authenticated URL directly to the writer.
 // The URL is pre-authenticated by the Graph API, so no Authorization header is needed.
 // The URL itself is never logged because it contains embedded auth tokens (architecture.md section 9.2).
-func (c *Client) downloadFromURL(ctx context.Context, url string, w io.Writer) (int64, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+// Only the HTTP request/response cycle is retried; streaming (io.Copy) happens after
+// doPreAuthRetry returns, so partial-stream failures are handled by the caller.
+func (c *Client) downloadFromURL(ctx context.Context, downloadURL string, w io.Writer) (int64, error) {
+	resp, err := c.doPreAuthRetry(ctx, "download", func() (*http.Request, error) {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, http.NoBody)
+		if reqErr != nil {
+			return nil, fmt.Errorf("graph: creating download request: %w", reqErr)
+		}
+
+		req.Header.Set("User-Agent", userAgent)
+
+		return req, nil
+	})
 	if err != nil {
-		return 0, fmt.Errorf("graph: creating download request: %w", err)
-	}
-
-	req.Header.Set("User-Agent", userAgent)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		c.logger.Error("download request failed",
-			slog.String("error", err.Error()),
-		)
-
-		return 0, fmt.Errorf("graph: download request failed: %w", err)
+		return 0, err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		c.logger.Error("download returned non-200 status",
-			slog.Int("status", resp.StatusCode),
-			slog.Int64("content_length", resp.ContentLength),
-			slog.String("content_type", resp.Header.Get("Content-Type")),
-		)
-
-		return 0, fmt.Errorf("graph: download failed with status %d", resp.StatusCode)
-	}
-
-	n, err := io.Copy(w, resp.Body)
-	if err != nil {
+	n, copyErr := io.Copy(w, resp.Body)
+	if copyErr != nil {
 		c.logger.Error("streaming download content failed",
-			slog.String("error", err.Error()),
+			slog.String("error", copyErr.Error()),
 			slog.Int64("bytes_before_error", n),
 		)
 
-		return n, fmt.Errorf("graph: streaming download content: %w", err)
+		return n, fmt.Errorf("graph: streaming download content: %w", copyErr)
 	}
 
 	return n, nil
