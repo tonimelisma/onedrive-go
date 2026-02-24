@@ -454,6 +454,10 @@ func (c *Client) uploadAllChunks(
 		}
 	}
 
+	if lastItem == nil {
+		return nil, fmt.Errorf("graph: upload completed all chunks but received no final item")
+	}
+
 	return lastItem, nil
 }
 
