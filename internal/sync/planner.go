@@ -4,8 +4,10 @@ import (
 	"errors"
 	"log/slog"
 	"path"
-	"sort"
+	"path/filepath"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 // SafetyConfig controls big-delete protection thresholds.
@@ -57,32 +59,39 @@ func (p *Planner) Plan(
 ) (*ActionPlan, error) {
 	p.logger.Info("planning sync actions",
 		slog.Int("changes", len(changes)),
-		slog.Int("baseline_entries", len(baseline.ByPath)),
+		slog.Int("baseline_entries", baseline.Len()),
 		slog.String("mode", mode.String()),
 	)
 
 	views := buildPathViews(changes, baseline)
-	plan := &ActionPlan{}
+
+	var allActions []Action
 
 	// Step 1: detect and extract moves before per-path classification.
-	moveActions := detectMoves(views, changes)
-	appendActions(plan, moveActions)
+	allActions = append(allActions, detectMoves(views, changes)...)
 
 	// Step 2: classify each remaining path.
 	for _, view := range views {
-		actions := classifyPathView(view, mode)
-		appendActions(plan, actions)
+		allActions = append(allActions, classifyPathView(view, mode)...)
 	}
 
-	// Step 3: order the plan (folder creates top-down, deletes bottom-up).
-	orderPlan(plan)
+	// Step 3: build dependency edges.
+	deps := buildDependencies(allActions)
+
+	plan := &ActionPlan{
+		Actions: allActions,
+		Deps:    deps,
+		CycleID: uuid.New().String(),
+	}
 
 	// Step 4: safety check for big deletes.
-	if bigDeleteTriggered(plan, baseline, config) {
-		deleteCount := len(plan.LocalDeletes) + len(plan.RemoteDeletes)
+	counts := countByType(plan.Actions)
+	deleteCount := counts[ActionLocalDelete] + counts[ActionRemoteDelete]
+
+	if bigDeleteTriggered(deleteCount, baseline, config) {
 		p.logger.Warn("big-delete protection triggered",
 			slog.Int("delete_count", deleteCount),
-			slog.Int("baseline_count", len(baseline.ByPath)),
+			slog.Int("baseline_count", baseline.Len()),
 			slog.Int("max_count", config.BigDeleteMaxCount),
 			slog.Float64("max_percent", config.BigDeleteMaxPercent),
 		)
@@ -91,15 +100,16 @@ func (p *Planner) Plan(
 	}
 
 	p.logger.Info("plan complete",
-		slog.Int("folder_creates", len(plan.FolderCreates)),
-		slog.Int("moves", len(plan.Moves)),
-		slog.Int("downloads", len(plan.Downloads)),
-		slog.Int("uploads", len(plan.Uploads)),
-		slog.Int("local_deletes", len(plan.LocalDeletes)),
-		slog.Int("remote_deletes", len(plan.RemoteDeletes)),
-		slog.Int("conflicts", len(plan.Conflicts)),
-		slog.Int("synced_updates", len(plan.SyncedUpdates)),
-		slog.Int("cleanups", len(plan.Cleanups)),
+		slog.Int("total_actions", len(plan.Actions)),
+		slog.Int("folder_creates", counts[ActionFolderCreate]),
+		slog.Int("moves", counts[ActionLocalMove]+counts[ActionRemoteMove]),
+		slog.Int("downloads", counts[ActionDownload]),
+		slog.Int("uploads", counts[ActionUpload]),
+		slog.Int("local_deletes", counts[ActionLocalDelete]),
+		slog.Int("remote_deletes", counts[ActionRemoteDelete]),
+		slog.Int("conflicts", counts[ActionConflict]),
+		slog.Int("synced_updates", counts[ActionUpdateSynced]),
+		slog.Int("cleanups", counts[ActionCleanup]),
 	)
 
 	return plan, nil
@@ -128,7 +138,7 @@ func buildPathViews(changes []PathChanges, baseline *Baseline) map[string]*PathV
 		}
 
 		// Baseline lookup.
-		view.Baseline = baseline.ByPath[pc.Path]
+		view.Baseline, _ = baseline.GetByPath(pc.Path)
 
 		// If there are no local events but a baseline exists, derive local
 		// state from baseline — the item is unchanged on disk.
@@ -571,6 +581,10 @@ func detectRemoteChange(view *PathView) bool {
 // resolveItemType determines the item type by checking Remote, Local,
 // then Baseline. Defaults to ItemTypeFile if none provide a type.
 func resolveItemType(view *PathView) ItemType {
+	if view == nil {
+		return ItemTypeFile
+	}
+
 	if view.Remote != nil {
 		return view.Remote.ItemType
 	}
@@ -661,76 +675,122 @@ func makeFolderCreate(view *PathView, side FolderCreateSide) Action {
 	return a
 }
 
-// appendActions routes each action to the correct slice in the ActionPlan.
-func appendActions(plan *ActionPlan, actions []Action) {
-	for i := range actions {
-		a := &actions[i]
+// buildDependencies computes dependency edges for a flat action list.
+// Returns deps where deps[i] contains the indices that action i depends on.
+// Rules: (1) folder create before any action in that subtree,
+// (2) child delete/cleanup before parent folder delete,
+// (3) move target parent must exist first.
+func buildDependencies(actions []Action) [][]int {
+	deps := make([][]int, len(actions))
 
-		switch a.Type {
-		case ActionFolderCreate:
-			plan.FolderCreates = append(plan.FolderCreates, *a)
-		case ActionDownload:
-			plan.Downloads = append(plan.Downloads, *a)
-		case ActionUpload:
-			plan.Uploads = append(plan.Uploads, *a)
-		case ActionLocalDelete:
-			plan.LocalDeletes = append(plan.LocalDeletes, *a)
-		case ActionRemoteDelete:
-			plan.RemoteDeletes = append(plan.RemoteDeletes, *a)
-		case ActionLocalMove, ActionRemoteMove:
-			plan.Moves = append(plan.Moves, *a)
-		case ActionConflict:
-			plan.Conflicts = append(plan.Conflicts, *a)
-		case ActionUpdateSynced:
-			plan.SyncedUpdates = append(plan.SyncedUpdates, *a)
-		case ActionCleanup:
-			plan.Cleanups = append(plan.Cleanups, *a)
+	// Index folder creates by path for quick lookup.
+	folderCreateIdx := make(map[string]int)
+	// Index all deletes by path for child→parent edges.
+	deleteIdx := make(map[string]int)
+
+	for i := range actions {
+		if actions[i].Type == ActionFolderCreate {
+			folderCreateIdx[actions[i].Path] = i
+		}
+
+		if actions[i].Type == ActionLocalDelete || actions[i].Type == ActionRemoteDelete || actions[i].Type == ActionCleanup {
+			deleteIdx[actions[i].Path] = i
 		}
 	}
+
+	for i := range actions {
+		deps[i] = addParentFolderDep(deps[i], i, &actions[i], folderCreateIdx)
+		deps[i] = addChildDeleteDeps(deps[i], i, &actions[i], deleteIdx)
+		deps[i] = addMoveTargetDep(deps[i], &actions[i], folderCreateIdx)
+	}
+
+	return deps
 }
 
-// orderPlan sorts action slices for correct execution order: folder
-// creates shallowest-first (top-down), deletes deepest-first (bottom-up).
-func orderPlan(plan *ActionPlan) {
-	// Folder creates: shallowest first so parent dirs exist before children.
-	sort.SliceStable(plan.FolderCreates, func(i, j int) bool {
-		return pathDepth(plan.FolderCreates[i].Path) < pathDepth(plan.FolderCreates[j].Path)
-	})
+// addParentFolderDep adds a dependency on a parent folder create if present.
+func addParentFolderDep(deps []int, idx int, a *Action, folderCreateIdx map[string]int) []int {
+	parentDir := filepath.Dir(a.Path)
+	if parentDir == "." || parentDir == "" {
+		return deps
+	}
 
-	// Local deletes: deepest first so children are removed before parents.
-	// At same depth: files before folders (a folder cannot be deleted
-	// until sibling files at the same depth are deleted first).
-	sort.SliceStable(plan.LocalDeletes, func(i, j int) bool {
-		di, dj := pathDepth(plan.LocalDeletes[i].Path), pathDepth(plan.LocalDeletes[j].Path)
-		if di != dj {
-			return di > dj
+	parentDir = filepath.ToSlash(parentDir)
+
+	if fcIdx, ok := folderCreateIdx[parentDir]; ok && fcIdx != idx {
+		deps = append(deps, fcIdx)
+	}
+
+	return deps
+}
+
+// addChildDeleteDeps makes folder deletes depend on child deletes at deeper paths.
+func addChildDeleteDeps(deps []int, idx int, a *Action, deleteIdx map[string]int) []int {
+	if a.Type != ActionLocalDelete && a.Type != ActionRemoteDelete {
+		return deps
+	}
+
+	if resolveItemType(a.View) != ItemTypeFolder {
+		return deps
+	}
+
+	prefix := a.Path + "/"
+
+	for childPath, childIdx := range deleteIdx {
+		if childIdx != idx && strings.HasPrefix(childPath, prefix) {
+			deps = append(deps, childIdx)
 		}
+	}
 
-		ti := resolveItemType(plan.LocalDeletes[i].View)
-		tj := resolveItemType(plan.LocalDeletes[j].View)
+	return deps
+}
 
-		return ti < tj // ItemTypeFile(0) < ItemTypeFolder(1)
-	})
+// addMoveTargetDep adds a dependency on a folder create for the move target parent.
+func addMoveTargetDep(deps []int, a *Action, folderCreateIdx map[string]int) []int {
+	if a.Type != ActionLocalMove && a.Type != ActionRemoteMove {
+		return deps
+	}
 
-	// Remote deletes: same depth-first + files-before-folders ordering.
-	sort.SliceStable(plan.RemoteDeletes, func(i, j int) bool {
-		di, dj := pathDepth(plan.RemoteDeletes[i].Path), pathDepth(plan.RemoteDeletes[j].Path)
-		if di != dj {
-			return di > dj
+	targetParent := filepath.Dir(a.NewPath)
+	if targetParent == "." || targetParent == "" {
+		return deps
+	}
+
+	targetParent = filepath.ToSlash(targetParent)
+
+	if fcIdx, ok := folderCreateIdx[targetParent]; ok {
+		deps = append(deps, fcIdx)
+	}
+
+	return deps
+}
+
+// countByType counts actions grouped by ActionType.
+func countByType(actions []Action) map[ActionType]int {
+	counts := make(map[ActionType]int)
+	for i := range actions {
+		counts[actions[i].Type]++
+	}
+
+	return counts
+}
+
+// ActionsOfType filters a flat action list to a single type.
+func ActionsOfType(actions []Action, t ActionType) []Action {
+	var result []Action
+
+	for i := range actions {
+		if actions[i].Type == t {
+			result = append(result, actions[i])
 		}
+	}
 
-		ti := resolveItemType(plan.RemoteDeletes[i].View)
-		tj := resolveItemType(plan.RemoteDeletes[j].View)
-
-		return ti < tj // ItemTypeFile(0) < ItemTypeFolder(1)
-	})
+	return result
 }
 
 // bigDeleteTriggered returns true if the planned deletions exceed the
 // safety thresholds defined in the config.
-func bigDeleteTriggered(plan *ActionPlan, baseline *Baseline, config *SafetyConfig) bool {
-	deleteCount := len(plan.LocalDeletes) + len(plan.RemoteDeletes)
-	baselineCount := len(baseline.ByPath)
+func bigDeleteTriggered(deleteCount int, baseline *Baseline, config *SafetyConfig) bool {
+	baselineCount := baseline.Len()
 
 	// Below minimum items threshold — big-delete check does not apply.
 	if baselineCount < config.BigDeleteMinItems {
@@ -744,14 +804,4 @@ func bigDeleteTriggered(plan *ActionPlan, baseline *Baseline, config *SafetyConf
 	percentage := float64(deleteCount) / float64(baselineCount) * percentMultiplier
 
 	return percentage > config.BigDeleteMaxPercent
-}
-
-// pathDepth counts the number of "/" separators in a path.
-// Empty string and root-level names return 0.
-func pathDepth(p string) int {
-	if p == "" {
-		return 0
-	}
-
-	return strings.Count(p, "/")
 }

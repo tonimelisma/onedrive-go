@@ -50,7 +50,7 @@ func NewLocalObserver(baseline *Baseline, logger *slog.Logger) *LocalObserver {
 func (o *LocalObserver) FullScan(ctx context.Context, syncRoot string) ([]ChangeEvent, error) {
 	o.logger.Info("local observer starting full scan",
 		slog.String("sync_root", syncRoot),
-		slog.Int("baseline_entries", len(o.baseline.ByPath)),
+		slog.Int("baseline_entries", o.baseline.Len()),
 	)
 
 	// Guard: abort if .nosync file is present (sync dir may be unmounted).
@@ -78,7 +78,7 @@ func (o *LocalObserver) FullScan(ctx context.Context, syncRoot string) ([]Change
 
 	o.logger.Debug("deletion detection complete",
 		slog.Int("deletions", len(deletions)),
-		slog.Int("baseline_entries", len(o.baseline.ByPath)),
+		slog.Int("baseline_entries", o.baseline.Len()),
 		slog.Int("observed", len(observed)),
 	)
 
@@ -174,7 +174,7 @@ func (o *LocalObserver) classifyLocalChange(
 	fsPath, dbRelPath, name string, d fs.DirEntry, info fs.FileInfo,
 	scanStartNano int64,
 ) (*ChangeEvent, error) {
-	existing := o.baseline.ByPath[dbRelPath]
+	existing, _ := o.baseline.GetByPath(dbRelPath)
 
 	// No baseline entry — this is a new item.
 	if existing == nil {
@@ -280,17 +280,17 @@ func (o *LocalObserver) classifyFileChange(
 func (o *LocalObserver) detectDeletions(observed map[string]bool) []ChangeEvent {
 	var events []ChangeEvent
 
-	for path, entry := range o.baseline.ByPath {
+	o.baseline.ForEachPath(func(path string, entry *BaselineEntry) {
 		if path == "" {
-			continue
+			return
 		}
 
 		if entry.ItemType == ItemTypeRoot {
-			continue
+			return
 		}
 
 		if observed[path] {
-			continue
+			return
 		}
 
 		events = append(events, ChangeEvent{
@@ -303,7 +303,7 @@ func (o *LocalObserver) detectDeletions(observed map[string]bool) []ChangeEvent 
 			Mtime:     entry.Mtime,
 			IsDeleted: true,
 		})
-	}
+	})
 
 	return events
 }

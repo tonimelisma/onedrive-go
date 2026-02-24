@@ -157,7 +157,7 @@ func (o *RemoteObserver) classifyAndConvert(
 ) *ChangeEvent {
 	name := nfcNormalize(item.Name)
 	baselineKey := driveid.NewItemKey(itemDriveID, item.ID)
-	existing := o.baseline.ByID[baselineKey]
+	existing, _ := o.baseline.GetByID(baselineKey)
 
 	ev := ChangeEvent{
 		Source:    SourceRemote,
@@ -235,7 +235,7 @@ func (o *RemoteObserver) materializePath(
 		}
 
 		// Baseline shortcut: prepend this item's full stored path.
-		if entry, ok := o.baseline.ByID[parentKey]; ok && entry.Path != "" {
+		if entry, ok := o.baseline.GetByID(parentKey); ok && entry.Path != "" {
 			slices.Reverse(segments)
 
 			return entry.Path + "/" + strings.Join(segments, "/")

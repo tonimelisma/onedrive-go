@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	stdsync "sync"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -20,11 +21,21 @@ import (
 
 // String constants for enum serialization (shared by String() and Parse*).
 const (
-	strRemote = "remote"
-	strLocal  = "local"
-	strFile   = "file"
-	strFolder = "folder"
-	strRoot   = "root"
+	strRemote       = "remote"
+	strLocal        = "local"
+	strFile         = "file"
+	strFolder       = "folder"
+	strRoot         = "root"
+	strDownload     = "download"
+	strUpload       = "upload"
+	strLocalDelete  = "local_delete"
+	strRemoteDelete = "remote_delete"
+	strLocalMove    = "local_move"
+	strRemoteMove   = "remote_move"
+	strFolderCreate = "folder_create"
+	strConflict     = "conflict"
+	strUpdateSynced = "update_synced"
+	strCleanup      = "cleanup"
 )
 
 // Resolution strategy constants for conflict resolution.
@@ -172,25 +183,25 @@ const (
 func (a ActionType) String() string {
 	switch a {
 	case ActionDownload:
-		return "download"
+		return strDownload
 	case ActionUpload:
-		return "upload"
+		return strUpload
 	case ActionLocalDelete:
-		return "local_delete"
+		return strLocalDelete
 	case ActionRemoteDelete:
-		return "remote_delete"
+		return strRemoteDelete
 	case ActionLocalMove:
-		return "local_move"
+		return strLocalMove
 	case ActionRemoteMove:
-		return "remote_move"
+		return strRemoteMove
 	case ActionFolderCreate:
-		return "folder_create"
+		return strFolderCreate
 	case ActionConflict:
-		return "conflict"
+		return strConflict
 	case ActionUpdateSynced:
-		return "update_synced"
+		return strUpdateSynced
 	case ActionCleanup:
-		return "cleanup"
+		return strCleanup
 	default:
 		return fmt.Sprintf("ActionType(%d)", int(a))
 	}
@@ -269,9 +280,79 @@ type BaselineEntry struct {
 
 // Baseline is the in-memory container for all baseline entries, providing
 // dual-key access by path (primary) and by item ID (for move detection).
+// Maps remain public for test setup convenience; production code MUST use
+// the locked accessor methods (GetByPath, GetByID, Put, Delete, Len,
+// ForEachPath) which hold mu during access.
 type Baseline struct {
+	mu     stdsync.RWMutex
 	ByPath map[string]*BaselineEntry
 	ByID   map[driveid.ItemKey]*BaselineEntry // keyed by (driveID, itemID) pair
+}
+
+// GetByPath returns the baseline entry for the given relative path.
+// Thread-safe: holds a read lock during access.
+func (b *Baseline) GetByPath(path string) (*BaselineEntry, bool) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	entry, ok := b.ByPath[path]
+
+	return entry, ok
+}
+
+// GetByID returns the baseline entry for the given (driveID, itemID) pair.
+// Thread-safe: holds a read lock during access.
+func (b *Baseline) GetByID(key driveid.ItemKey) (*BaselineEntry, bool) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	entry, ok := b.ByID[key]
+
+	return entry, ok
+}
+
+// Put inserts or updates a baseline entry in both maps.
+// Thread-safe: holds a write lock during access.
+func (b *Baseline) Put(entry *BaselineEntry) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.ByPath[entry.Path] = entry
+	b.ByID[driveid.NewItemKey(entry.DriveID, entry.ItemID)] = entry
+}
+
+// Delete removes a baseline entry from both maps by path.
+// Thread-safe: holds a write lock during access.
+func (b *Baseline) Delete(path string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if entry, ok := b.ByPath[path]; ok {
+		delete(b.ByID, driveid.NewItemKey(entry.DriveID, entry.ItemID))
+	}
+
+	delete(b.ByPath, path)
+}
+
+// Len returns the number of entries in the baseline.
+// Thread-safe: holds a read lock during access.
+func (b *Baseline) Len() int {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	return len(b.ByPath)
+}
+
+// ForEachPath calls fn for every (path, entry) pair in the baseline.
+// The read lock is held for the entire iteration — fn must not call
+// any Baseline methods (deadlock). Suitable for read-only observers.
+func (b *Baseline) ForEachPath(fn func(string, *BaselineEntry)) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	for path, entry := range b.ByPath {
+		fn(path, entry)
+	}
 }
 
 // PathChanges groups all change events for a single path, separating
@@ -362,19 +443,13 @@ type Action struct {
 	ConflictInfo *ConflictRecord
 }
 
-// ActionPlan contains 9 ordered slices of actions, executed in sequence
-// by the executor. The ordering ensures correctness (e.g., folder creates
-// before file downloads, depth-first for deletes).
+// ActionPlan contains a flat list of actions with explicit dependency edges.
+// The Deps adjacency list encodes ordering constraints (parent-before-child,
+// children-before-parent-delete, move-target-parent).
 type ActionPlan struct {
-	FolderCreates []Action
-	Moves         []Action
-	Downloads     []Action
-	Uploads       []Action
-	LocalDeletes  []Action
-	RemoteDeletes []Action
-	Conflicts     []Action
-	SyncedUpdates []Action
-	Cleanups      []Action
+	Actions []Action // flat list of all actions
+	Deps    [][]int  // Deps[i] = indices that action i depends on
+	CycleID string   // UUID grouping actions from one planning pass
 }
 
 // Outcome is the result of executing a single action. Self-contained —

@@ -125,7 +125,7 @@ echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r 
 
 ## Current Phase
 
-**Phases 1-4 complete. Next: Phase 5 (watch mode).** All development on `main` branch. See [docs/roadmap.md](docs/roadmap.md).
+**Phases 1-4 complete. Phase 5.0 (DAG-based concurrent execution) complete. Next: Phase 5.1 (watch mode observers).** See [docs/roadmap.md](docs/roadmap.md).
 
 ## Architecture Overview
 
@@ -142,7 +142,7 @@ echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r 
 │   internal/graph/    │◄────────────│       internal/sync/         │
 │   Graph API client   │             │  engine, observers, buffer,  │
 │   + quirk handling   │             │  planner, executor, baseline │
-│   + auth             │             │  filter, transfer, conflict  │
+│   + auth             │             │  ledger, tracker, workers    │
 └─────────┬────────────┘             └──────────────┬───────────────┘
           │                                         │
           │          ┌──────────────────────┐       │
@@ -171,7 +171,7 @@ echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r 
 - **`internal/driveid/`** — Type-safe drive identity: ID, CanonicalID, ItemKey
 - **`internal/config/`** — TOML config, drive sections, XDG paths, four-layer override chain
 - **`internal/graph/`** — Graph API client: auth, retry, items CRUD, delta, transfers
-- **`internal/sync/`** — Event-driven sync: types, baseline, observers, buffer, planner, executor, engine, verify
+- **`internal/sync/`** — Event-driven sync: types, baseline, observers, buffer, planner, executor, ledger, tracker, workers, engine, verify
 - **Root package** — Cobra CLI: login, logout, whoami, status, drive, ls, get, put, rm, mkdir, stat, sync, conflicts, resolve, verify
 - **`e2e/`** — E2E test suite against live OneDrive
 
@@ -193,6 +193,7 @@ echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r 
 | [docs/design/accounts.md](docs/design/accounts.md) | Account and drive system design |
 | [docs/design/event-driven-rationale.md](docs/design/event-driven-rationale.md) | Option E architectural decision record |
 | [docs/design/concurrent-execution.md](docs/design/concurrent-execution.md) | Execution architecture |
+| [docs/design/legacy-sequential-architecture.md](docs/design/legacy-sequential-architecture.md) | Old 9-phase architecture reference (migration guide) |
 | [docs/archive/](docs/archive/) | Historical docs |
 | [docs/tier1-research/](docs/tier1-research/) | 16 Tier 1 research docs |
 
