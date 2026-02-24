@@ -158,18 +158,27 @@ func (d *driveItemResponse) toItem(logger *slog.Logger) Item {
 		}
 	}
 
-	// Timestamps — validate and fallback to now if invalid
-	item.CreatedAt = parseTimestamp(d.CreatedDateTime, "createdDateTime", d.ID, logger)
-	item.ModifiedAt = parseTimestamp(d.LastModifiedDateTime, "lastModifiedDateTime", d.ID, logger)
+	// Timestamps — validate and fallback to now if invalid.
+	// Deleted items routinely have empty timestamps (known OneDrive API behavior),
+	// so we log at DEBUG instead of WARN to avoid noise.
+	item.CreatedAt = parseTimestamp(d.CreatedDateTime, "createdDateTime", d.ID, item.IsDeleted, logger)
+	item.ModifiedAt = parseTimestamp(d.LastModifiedDateTime, "lastModifiedDateTime", d.ID, item.IsDeleted, logger)
 
 	return item
 }
 
 // parseTimestamp parses an RFC3339 timestamp and validates the year range.
 // Invalid or out-of-range timestamps are replaced with time.Now().UTC() and logged.
-func parseTimestamp(raw, field, itemID string, logger *slog.Logger) time.Time {
+// For deleted items, anomalies are logged at DEBUG (expected API behavior);
+// for live items, they're logged at WARN (genuinely unexpected).
+func parseTimestamp(raw, field, itemID string, isDeleted bool, logger *slog.Logger) time.Time {
+	logFunc := logger.Warn
+	if isDeleted {
+		logFunc = logger.Debug
+	}
+
 	if raw == "" {
-		logger.Warn("empty timestamp, using current time",
+		logFunc("empty timestamp, using current time",
 			slog.String("field", field),
 			slog.String("item_id", itemID),
 		)
@@ -179,7 +188,7 @@ func parseTimestamp(raw, field, itemID string, logger *slog.Logger) time.Time {
 
 	t, err := time.Parse(time.RFC3339, raw)
 	if err != nil {
-		logger.Warn("invalid timestamp, using current time",
+		logFunc("invalid timestamp, using current time",
 			slog.String("field", field),
 			slog.String("item_id", itemID),
 			slog.String("raw", raw),
@@ -190,7 +199,7 @@ func parseTimestamp(raw, field, itemID string, logger *slog.Logger) time.Time {
 	}
 
 	if t.Year() < minValidYear || t.Year() > maxValidYear {
-		logger.Warn("timestamp out of valid range, using current time",
+		logFunc("timestamp out of valid range, using current time",
 			slog.String("field", field),
 			slog.String("item_id", itemID),
 			slog.String("raw", raw),
