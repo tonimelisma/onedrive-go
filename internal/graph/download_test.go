@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -151,7 +152,8 @@ func TestDownload_ServerError(t *testing.T) {
 	var buf bytes.Buffer
 	_, err := client.Download(context.Background(), driveid.New("d"), "item-3", &buf)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "status 500")
+	// 500 is retryable; doPreAuthRetry exhausts retries, returns *GraphError.
+	assert.ErrorIs(t, err, ErrServerError)
 }
 
 func TestDownload_NetworkError(t *testing.T) {
@@ -173,7 +175,8 @@ func TestDownload_NetworkError(t *testing.T) {
 	var buf bytes.Buffer
 	_, err := client.Download(context.Background(), driveid.New("d"), "item-net", &buf)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "download request failed")
+	// doPreAuthRetry retries network errors, then returns "failed after N retries".
+	assert.Contains(t, err.Error(), "failed after 5 retries")
 }
 
 func TestDownloadFromURL_WriterError(t *testing.T) {
@@ -231,4 +234,42 @@ func TestDownload_NoAuthOnPreAuthURL(t *testing.T) {
 	var buf bytes.Buffer
 	_, err := client.Download(context.Background(), driveid.New("d"), "item-4", &buf)
 	require.NoError(t, err)
+}
+
+func TestDownload_RetriesOn503(t *testing.T) {
+	var dlCalls atomic.Int32
+
+	dlSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		n := dlCalls.Add(1)
+		if n <= 2 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("retry success"))
+	}))
+	defer dlSrv.Close()
+
+	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `{
+			"id": "item-retry", "name": "retry.txt",
+			"createdDateTime": "2024-01-01T00:00:00Z",
+			"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+			"parentReference": {"id": "p", "driveId": "d"},
+			"file": {"mimeType": "text/plain"},
+			"@microsoft.graph.downloadUrl": %q
+		}`, dlSrv.URL+"/dl")
+	}))
+	defer graphSrv.Close()
+
+	client := newTestClient(t, graphSrv.URL)
+	var buf bytes.Buffer
+	n, err := client.Download(context.Background(), driveid.New("d"), "item-retry", &buf)
+	require.NoError(t, err)
+	assert.Equal(t, "retry success", buf.String())
+	assert.Equal(t, int64(len("retry success")), n)
+	assert.Equal(t, int32(3), dlCalls.Load())
 }

@@ -253,6 +253,116 @@ func (c *Client) terminalError(
 	return graphErr
 }
 
+// doPreAuthRetry executes HTTP requests against pre-authenticated URLs with
+// retry on transient failures (network errors, 429, 5xx). The makeReq function
+// is called on each attempt to create a fresh request, enabling body re-reads.
+// No Authorization header is added — the URL itself is pre-authenticated.
+//
+// On success (2xx), returns the response for the caller to interpret.
+// On non-retryable error or retry exhaustion, returns *GraphError (matching doRetry).
+func (c *Client) doPreAuthRetry(
+	ctx context.Context, desc string, makeReq func() (*http.Request, error),
+) (*http.Response, error) {
+	var attempt int
+
+	for {
+		req, err := makeReq()
+		if err != nil {
+			return nil, err
+		}
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, fmt.Errorf("graph: %s canceled: %w", desc, ctx.Err())
+			}
+
+			if attempt < maxRetries {
+				backoff := c.calcBackoff(attempt)
+				c.logger.Warn("retrying pre-auth request after network error",
+					slog.String("desc", desc),
+					slog.Int("attempt", attempt+1),
+					slog.Duration("backoff", backoff),
+					slog.String("error", err.Error()),
+				)
+
+				if sleepErr := c.sleepFunc(ctx, backoff); sleepErr != nil {
+					return nil, fmt.Errorf("graph: %s canceled: %w", desc, sleepErr)
+				}
+
+				attempt++
+
+				continue
+			}
+
+			return nil, fmt.Errorf("graph: %s failed after %d retries: %w", desc, maxRetries, err)
+		}
+
+		if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+			return resp, nil
+		}
+
+		errBody, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if readErr != nil {
+			errBody = []byte("(failed to read response body)")
+		}
+
+		reqID := resp.Header.Get("request-id")
+
+		if isRetryable(resp.StatusCode) && attempt < maxRetries {
+			backoff := c.retryBackoff(resp, attempt)
+			c.logger.Warn("retrying pre-auth request after HTTP error",
+				slog.String("desc", desc),
+				slog.Int("status", resp.StatusCode),
+				slog.Int("attempt", attempt+1),
+				slog.Duration("backoff", backoff),
+			)
+
+			if sleepErr := c.sleepFunc(ctx, backoff); sleepErr != nil {
+				return nil, fmt.Errorf("graph: %s canceled: %w", desc, sleepErr)
+			}
+
+			attempt++
+
+			continue
+		}
+
+		return nil, c.preAuthTerminalError(desc, resp.StatusCode, reqID, errBody, attempt)
+	}
+}
+
+// preAuthTerminalError builds a GraphError and logs the final failure for pre-auth URLs.
+// Mirrors terminalError but uses desc instead of method+path.
+func (c *Client) preAuthTerminalError(
+	desc string, statusCode int, reqID string, body []byte, attempt int,
+) *GraphError {
+	graphErr := &GraphError{
+		StatusCode: statusCode,
+		RequestID:  reqID,
+		Message:    string(body),
+		Err:        classifyStatus(statusCode),
+	}
+
+	if attempt > 0 {
+		c.logger.Error("pre-auth request failed after retries",
+			slog.String("desc", desc),
+			slog.Int("status", statusCode),
+			slog.String("request_id", reqID),
+			slog.Int("attempts", attempt+1),
+		)
+	} else {
+		c.logger.Warn("pre-auth request failed",
+			slog.String("desc", desc),
+			slog.Int("status", statusCode),
+			slog.String("request_id", reqID),
+		)
+	}
+
+	return graphErr
+}
+
 // retryBackoff returns the backoff duration for a retryable response.
 // For 429 (throttled), the Graph API's Retry-After header takes precedence
 // over calculated backoff — ignoring it risks extended throttling.

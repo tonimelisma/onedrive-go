@@ -5,13 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -19,13 +17,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
-
-// maxSimpleUploadSize is the threshold for simple vs chunked upload (4 MB).
-// Defined locally to avoid exporting the internal/graph constant.
-const maxSimpleUploadSize = 4 * 1024 * 1024
-
-// chunkSize is the upload chunk size for resumable uploads (10 MB, aligned to 320 KiB).
-const chunkSize = 10 * 1024 * 1024
 
 func newLsCmd() *cobra.Command {
 	return &cobra.Command{
@@ -353,58 +344,17 @@ func runPut(cmd *cobra.Command, args []string) error {
 	}
 	defer f.Close()
 
-	if fi.Size() <= maxSimpleUploadSize {
-		_, err = client.SimpleUpload(ctx, driveID, parentItem.ID, name, f, fi.Size())
-	} else {
-		err = doChunkedUpload(ctx, client, driveID, parentItem.ID, name, f, fi.Size(), fi.ModTime(), logger)
+	progress := func(uploaded, total int64) {
+		statusf("Uploading: %s / %s\n", formatSize(uploaded), formatSize(total))
 	}
 
+	_, err = client.Upload(ctx, driveID, parentItem.ID, name, f, fi.Size(), fi.ModTime(), progress)
 	if err != nil {
 		return fmt.Errorf("uploading %q: %w", remotePath, err)
 	}
 
 	logger.Debug("upload complete", "remote_path", remotePath, "size", fi.Size())
 	statusf("Uploaded %s (%s)\n", remotePath, formatSize(fi.Size()))
-
-	return nil
-}
-
-func doChunkedUpload(
-	ctx context.Context, client *graph.Client,
-	driveID driveid.ID, parentID, name string,
-	r io.ReaderAt, total int64, mtime time.Time, logger *slog.Logger,
-) error {
-	session, err := client.CreateUploadSession(ctx, driveID, parentID, name, total, mtime)
-	if err != nil {
-		return err
-	}
-
-	var offset int64
-	for offset < total {
-		length := int64(chunkSize)
-		if offset+length > total {
-			length = total - offset
-		}
-
-		chunk := io.NewSectionReader(r, offset, length)
-
-		_, chunkErr := client.UploadChunk(ctx, session, chunk, offset, length, total)
-		if chunkErr != nil {
-			// Best-effort cancel — use background context since the original may be done.
-			cancelCtx := context.Background()
-			if cancelErr := client.CancelUploadSession(cancelCtx, session); cancelErr != nil {
-				logger.Warn("failed to cancel upload session after chunk error",
-					"error", cancelErr.Error())
-			}
-
-			return chunkErr
-		}
-
-		offset += length
-
-		logger.Debug("chunk uploaded", "offset", offset, "total", total)
-		statusf("Uploading: %s / %s\n", formatSize(offset), formatSize(total))
-	}
 
 	return nil
 }

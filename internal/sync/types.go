@@ -32,6 +32,20 @@ const (
 	ResolutionKeepLocal  = "keep_local"
 	ResolutionKeepRemote = "keep_remote"
 	ResolutionKeepBoth   = "keep_both"
+	ResolutionUnresolved = "unresolved"
+)
+
+// Conflict type constants.
+const (
+	ConflictEditEdit     = "edit_edit"
+	ConflictEditDelete   = "edit_delete"
+	ConflictCreateCreate = "create_create"
+)
+
+// ResolvedBy constants for conflict resolution attribution.
+const (
+	ResolvedByAuto = "auto"
+	ResolvedByUser = "user"
 )
 
 // ChangeSource identifies the origin of a change event.
@@ -310,12 +324,15 @@ type ConflictRecord struct {
 	DriveID      driveid.ID
 	ItemID       string
 	Path         string
-	ConflictType string // "edit_edit", "edit_delete", "create_create"
+	ConflictType string // ConflictEditEdit, ConflictEditDelete, ConflictCreateCreate
 	DetectedAt   int64
 	LocalHash    string
 	RemoteHash   string
 	LocalMtime   int64
 	RemoteMtime  int64
+	Resolution   string // ResolutionUnresolved, ResolutionKeepLocal, ResolutionKeepRemote, ResolutionKeepBoth
+	ResolvedAt   int64  // 0 if unresolved
+	ResolvedBy   string // ResolvedByUser, ResolvedByAuto, or "" if unresolved
 }
 
 // VerifyResult describes the verification status of a single file.
@@ -377,7 +394,8 @@ type Outcome struct {
 	Size         int64
 	Mtime        int64 // local mtime at sync time
 	ETag         string
-	ConflictType string // "edit_edit", "edit_delete", "create_create" (conflicts only)
+	ConflictType string // ConflictEditDelete etc. (conflicts only)
+	ResolvedBy   string // ResolvedByAuto for auto-resolved conflicts, "" otherwise
 }
 
 // ---------------------------------------------------------------------------
@@ -398,13 +416,16 @@ type ItemClient interface {
 	DeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error
 }
 
-// TransferClient provides file transfer operations.
-type TransferClient interface {
+// Downloader streams a remote file by item ID.
+type Downloader interface {
 	Download(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error)
-	SimpleUpload(ctx context.Context, driveID driveid.ID, parentID, name string, r io.Reader, size int64) (*graph.Item, error)
-	CreateUploadSession(
-		ctx context.Context, driveID driveid.ID, parentID, name string, size int64, mtime time.Time,
-	) (*graph.UploadSession, error)
-	UploadChunk(ctx context.Context, session *graph.UploadSession, chunk io.Reader, offset, length, total int64) (*graph.Item, error)
-	CancelUploadSession(ctx context.Context, session *graph.UploadSession) error
+}
+
+// Uploader uploads a local file, encapsulating the simple-vs-chunked decision
+// and upload session lifecycle. content must be an io.ReaderAt for retry safety.
+type Uploader interface {
+	Upload(
+		ctx context.Context, driveID driveid.ID, parentID, name string,
+		content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc,
+	) (*graph.Item, error)
 }

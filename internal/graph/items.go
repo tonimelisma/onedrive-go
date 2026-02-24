@@ -456,6 +456,53 @@ func (c *Client) MoveItem(ctx context.Context, driveID driveid.ID, itemID, newPa
 	return &item, nil
 }
 
+// updateFileSystemInfoRequest is the JSON body for PATCH requests that set
+// fileSystemInfo timestamps. Reuses the fileSystemInfo type from upload.go.
+type updateFileSystemInfoRequest struct {
+	FileSystemInfo *fileSystemInfo `json:"fileSystemInfo"`
+}
+
+// UpdateFileSystemInfo sets the lastModifiedDateTime on a remote item via PATCH.
+// Used after simple upload (which cannot include metadata in the PUT body) to
+// preserve local mtime on the server. Returns the patched item.
+func (c *Client) UpdateFileSystemInfo(
+	ctx context.Context, driveID driveid.ID, itemID string, mtime time.Time,
+) (*Item, error) {
+	c.logger.Debug("updating fileSystemInfo",
+		slog.String("drive_id", driveID.String()),
+		slog.String("item_id", itemID),
+		slog.Time("mtime", mtime),
+	)
+
+	path := fmt.Sprintf("/drives/%s/items/%s", driveID, itemID)
+
+	reqBody := updateFileSystemInfoRequest{
+		FileSystemInfo: &fileSystemInfo{
+			LastModifiedDateTime: mtime.UTC().Format(time.RFC3339),
+		},
+	}
+
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("graph: marshaling fileSystemInfo request: %w", err)
+	}
+
+	resp, err := c.Do(ctx, http.MethodPatch, path, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var dir driveItemResponse
+	if err := json.NewDecoder(resp.Body).Decode(&dir); err != nil {
+		return nil, fmt.Errorf("graph: decoding fileSystemInfo response: %w", err)
+	}
+
+	item := dir.toItem(c.logger)
+
+	return &item, nil
+}
+
 // DeleteItem deletes a drive item. Returns nil on success (HTTP 204).
 func (c *Client) DeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error {
 	c.logger.Info("deleting item",

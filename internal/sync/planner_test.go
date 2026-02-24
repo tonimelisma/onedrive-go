@@ -925,9 +925,9 @@ func TestClassifyFolder_ED7_BothGone(t *testing.T) {
 	}
 }
 
-func TestClassifyFolder_ED8_Cleanup(t *testing.T) {
-	// ED8: baseline exists, no remote, local absent → cleanup.
-	// No remote events means Remote is nil. Local delete means Local is nil.
+func TestClassifyFolder_ED8_PropagateRemoteDelete(t *testing.T) {
+	// ED8: baseline exists, no remote events (unchanged), local deleted → propagate delete remotely.
+	// This is the folder equivalent of EF6 (file: locally deleted, remote unchanged).
 	planner := NewPlanner(testLogger(t))
 
 	changes := []PathChanges{
@@ -956,8 +956,161 @@ func TestClassifyFolder_ED8_Cleanup(t *testing.T) {
 		t.Fatalf("Plan() error: %v", err)
 	}
 
-	if len(plan.Cleanups) != 1 {
-		t.Fatalf("ED8: expected 1 cleanup, got %d", len(plan.Cleanups))
+	if len(plan.RemoteDeletes) != 1 {
+		t.Fatalf("ED8: expected 1 remote delete, got %d", len(plan.RemoteDeletes))
+	}
+
+	if plan.RemoteDeletes[0].Path != "docs/planner-dir" {
+		t.Errorf("ED8: expected path docs/planner-dir, got %s", plan.RemoteDeletes[0].Path)
+	}
+
+	if plan.RemoteDeletes[0].ItemID != "folder1" {
+		t.Errorf("ED8: expected ItemID folder1, got %s", plan.RemoteDeletes[0].ItemID)
+	}
+
+	if plan.RemoteDeletes[0].DriveID != driveid.New(testDriveID) {
+		t.Errorf("ED8: expected DriveID %v, got %v", driveid.New(testDriveID), plan.RemoteDeletes[0].DriveID)
+	}
+}
+
+func TestClassifyFolder_ED8_DownloadOnly(t *testing.T) {
+	// ED8 + SyncDownloadOnly: local deleted, no remote events, baseline exists.
+	// Download-only zeroes localDeleted → falls through to no action.
+	planner := NewPlanner(testLogger(t))
+
+	changes := []PathChanges{
+		{
+			Path: "docs/planner-dir-dl",
+			LocalEvents: []ChangeEvent{
+				{
+					Source:   SourceLocal,
+					Type:     ChangeDelete,
+					Path:     "docs/planner-dir-dl",
+					ItemType: ItemTypeFolder,
+				},
+			},
+		},
+	}
+
+	baseline := baselineWith(&BaselineEntry{
+		Path:     "docs/planner-dir-dl",
+		DriveID:  driveid.New(testDriveID),
+		ItemID:   "folder2",
+		ItemType: ItemTypeFolder,
+	})
+
+	plan, err := planner.Plan(changes, baseline, SyncDownloadOnly, DefaultSafetyConfig())
+	if err != nil {
+		t.Fatalf("Plan() error: %v", err)
+	}
+
+	if got := countActions(plan); got != 0 {
+		t.Errorf("ED8 download-only: expected 0 actions, got %d", got)
+	}
+}
+
+func TestClassifyFolder_ED4_UploadOnly(t *testing.T) {
+	// ED4 + SyncUploadOnly: local deleted, remote exists, baseline exists.
+	// Upload-only: engine doesn't produce remote events, so hasRemote is false.
+	// This test verifies the planner's defense in depth — if remote events
+	// did arrive in upload-only mode, ED4 would not create locally.
+	planner := NewPlanner(testLogger(t))
+
+	changes := []PathChanges{
+		{
+			Path: "docs/planner-dir-ul4",
+			RemoteEvents: []ChangeEvent{
+				{
+					Source:   SourceRemote,
+					Type:     ChangeModify,
+					Path:     "docs/planner-dir-ul4",
+					ItemType: ItemTypeFolder,
+					ItemID:   "folder3",
+					DriveID:  driveid.New(testDriveID),
+				},
+			},
+			LocalEvents: []ChangeEvent{
+				{
+					Source:   SourceLocal,
+					Type:     ChangeDelete,
+					Path:     "docs/planner-dir-ul4",
+					ItemType: ItemTypeFolder,
+				},
+			},
+		},
+	}
+
+	baseline := baselineWith(&BaselineEntry{
+		Path:     "docs/planner-dir-ul4",
+		DriveID:  driveid.New(testDriveID),
+		ItemID:   "folder3",
+		ItemType: ItemTypeFolder,
+	})
+
+	plan, err := planner.Plan(changes, baseline, SyncUploadOnly, DefaultSafetyConfig())
+	if err != nil {
+		t.Fatalf("Plan() error: %v", err)
+	}
+
+	if len(plan.FolderCreates) != 0 {
+		t.Errorf("ED4 upload-only: expected 0 folder creates, got %d", len(plan.FolderCreates))
+	}
+
+	// Upload-only: local deletion should still propagate remotely (ED8 path).
+	if len(plan.RemoteDeletes) != 1 {
+		t.Errorf("ED4 upload-only: expected 1 remote delete (local deletion propagates), got %d", len(plan.RemoteDeletes))
+	}
+}
+
+func TestClassifyFolder_ED6_UploadOnly(t *testing.T) {
+	// ED6 + SyncUploadOnly: remote deleted, local exists, baseline exists.
+	// Upload-only: engine doesn't produce remote events normally, but if
+	// they did arrive, ED6 should not delete locally.
+	planner := NewPlanner(testLogger(t))
+
+	changes := []PathChanges{
+		{
+			Path: "docs/planner-dir-ul6",
+			RemoteEvents: []ChangeEvent{
+				{
+					Source:    SourceRemote,
+					Type:      ChangeDelete,
+					Path:      "docs/planner-dir-ul6",
+					ItemType:  ItemTypeFolder,
+					ItemID:    "folder4",
+					DriveID:   driveid.New(testDriveID),
+					IsDeleted: true,
+				},
+			},
+			LocalEvents: []ChangeEvent{
+				{
+					Source:   SourceLocal,
+					Type:     ChangeModify,
+					Path:     "docs/planner-dir-ul6",
+					ItemType: ItemTypeFolder,
+				},
+			},
+		},
+	}
+
+	baseline := baselineWith(&BaselineEntry{
+		Path:     "docs/planner-dir-ul6",
+		DriveID:  driveid.New(testDriveID),
+		ItemID:   "folder4",
+		ItemType: ItemTypeFolder,
+	})
+
+	plan, err := planner.Plan(changes, baseline, SyncUploadOnly, DefaultSafetyConfig())
+	if err != nil {
+		t.Fatalf("Plan() error: %v", err)
+	}
+
+	if len(plan.LocalDeletes) != 0 {
+		t.Errorf("ED6 upload-only: expected 0 local deletes, got %d", len(plan.LocalDeletes))
+	}
+
+	if got := countActions(plan); got != 0 {
+		t.Errorf("ED6 upload-only: expected 0 total actions, got %d", got)
 	}
 }
 
