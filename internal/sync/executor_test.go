@@ -917,41 +917,72 @@ func TestExecutor_Conflict_EditEdit_KeepBoth(t *testing.T) {
 	}
 }
 
-func TestExecutor_Conflict_EditDelete(t *testing.T) {
+func TestExecutor_Conflict_EditDelete_AutoResolve(t *testing.T) {
 	t.Parallel()
 
-	dl := &executorMockDownloader{
-		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
-			n, err := w.Write([]byte("remote"))
-			return int64(n), err
+	var uploadCalled bool
+
+	ul := &executorMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _ string, name string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			uploadCalled = true
+
+			return &graph.Item{
+				ID:   "new-item",
+				Name: name,
+				ETag: "etag-new",
+			}, nil
 		},
 	}
 
-	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
 	e := NewExecution(cfg, emptyBaseline())
 
-	// Local file doesn't exist (edit-delete conflict).
+	// Local file exists with modified content (edit-delete: local modified,
+	// remote deleted).
+	writeExecTestFile(t, syncRoot, "exec-ed-file.txt", "locally modified data")
+
 	action := &Action{
 		Type:    ActionConflict,
-		Path:    "exec-gone-local.txt",
-		ItemID:  "item1",
+		Path:    "exec-ed-file.txt",
 		DriveID: driveid.New(testDriveID),
-		View: &PathView{
-			Remote: &RemoteState{ItemID: "item1"},
+		View:    &PathView{Path: "exec-ed-file.txt"},
+		ConflictInfo: &ConflictRecord{
+			ConflictType: "edit_delete",
+			DriveID:      driveid.New(testDriveID),
 		},
-		ConflictInfo: &ConflictRecord{ConflictType: "edit_delete"},
 	}
 
 	o := e.executeConflict(context.Background(), action)
 	requireOutcomeSuccess(t, o)
 
-	data, err := os.ReadFile(filepath.Join(syncRoot, "exec-gone-local.txt"))
+	if !uploadCalled {
+		t.Error("expected upload to be called for edit-delete auto-resolve")
+	}
+
+	if o.Action != ActionConflict {
+		t.Errorf("expected action=conflict, got %s", o.Action)
+	}
+
+	if o.ConflictType != "edit_delete" {
+		t.Errorf("expected conflict_type=edit_delete, got %s", o.ConflictType)
+	}
+
+	if o.ResolvedBy != "auto" {
+		t.Errorf("expected resolved_by=auto, got %q", o.ResolvedBy)
+	}
+
+	if o.ItemID != "new-item" {
+		t.Errorf("expected item_id=new-item, got %s", o.ItemID)
+	}
+
+	// Local file should still exist with original content (not modified by upload).
+	data, err := os.ReadFile(filepath.Join(syncRoot, "exec-ed-file.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if string(data) != "remote" {
-		t.Errorf("expected remote content, got %q", string(data))
+	if string(data) != "locally modified data" {
+		t.Errorf("expected local content preserved, got %q", string(data))
 	}
 }
 

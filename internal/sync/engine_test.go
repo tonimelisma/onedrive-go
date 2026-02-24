@@ -16,7 +16,19 @@ import (
 
 // ---------------------------------------------------------------------------
 // Composite mock implementing DeltaFetcher + ItemClient + Downloader + Uploader
+//
+// Engine requires all 4 interfaces (unlike Executor, which takes them
+// individually), so a single mock is pragmatic here. Executor tests split
+// mocks by interface because each test exercises only 1-2 interfaces.
 // ---------------------------------------------------------------------------
+
+// Compile-time interface satisfaction checks.
+var (
+	_ DeltaFetcher = (*engineMockClient)(nil)
+	_ ItemClient   = (*engineMockClient)(nil)
+	_ Downloader   = (*engineMockClient)(nil)
+	_ Uploader     = (*engineMockClient)(nil)
+)
 
 type engineMockClient struct {
 	// DeltaFetcher

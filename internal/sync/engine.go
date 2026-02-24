@@ -301,6 +301,12 @@ func (e *Engine) ListConflicts(ctx context.Context) ([]ConflictRecord, error) {
 	return e.baseline.ListConflicts(ctx)
 }
 
+// ListAllConflicts returns all conflicts (resolved and unresolved) from the
+// database. Used by 'conflicts --history'.
+func (e *Engine) ListAllConflicts(ctx context.Context) ([]ConflictRecord, error) {
+	return e.baseline.ListAllConflicts(ctx)
+}
+
 // ResolveConflict resolves a single conflict by ID. For keep_both, this is
 // a DB-only update. For keep_local, the local file is uploaded to overwrite
 // the remote. For keep_remote, the remote file is downloaded to overwrite
