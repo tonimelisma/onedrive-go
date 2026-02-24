@@ -100,9 +100,13 @@ MANDATORY: Run ALL gates automatically after every code change, before every com
 5. **Coverage**: `go tool cover -func=/tmp/cover.out | grep total` — never decrease
 6. **Review changes silently**: sufficient logging? Comments explain why? Fix issues, do not ask.
 
-E2E tests are run separately (not part of the automatic quality gates). Run manually when needed:
+E2E tests are run separately (not part of the automatic quality gates). Two tiers:
 ```bash
-ONEDRIVE_TEST_DRIVE="personal:testitesti18@outlook.com" go test -tags=e2e -race -v -timeout=30m ./e2e/...
+# Fast E2E (CLI round-trips + simple sync — runs on every push-to-main):
+ONEDRIVE_TEST_DRIVE="personal:testitesti18@outlook.com" go test -tags=e2e -race -v -timeout=10m ./e2e/...
+
+# Full E2E (+ comprehensive sync, conflicts, big-delete, edge cases — nightly/manual only):
+ONEDRIVE_TEST_DRIVE="personal:testitesti18@outlook.com" go test -tags=e2e,e2e_full -race -v -timeout=30m ./e2e/...
 ```
 
 ### Quick command (gates 1-5)
