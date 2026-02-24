@@ -300,8 +300,8 @@ grep -rn "plan\.FolderCreates\|plan\.Moves\|plan\.Downloads\|plan\.Uploads\|plan
 # 9-phase executor dispatch
 grep -rn "func (e \*Executor) Execute\|executeParallel\|workerPoolSize" internal/sync/
 
-# Batch commit
-grep -rn "\.Commit(ctx.*\[\]Outcome\|executeAndCommit" internal/sync/
+# Batch commit and its internals
+grep -rn "\.Commit(ctx.*\[\]Outcome\|executeAndCommit\|classifyOutcomes\|applyOutcomes" internal/sync/
 
 # Planner routing and sorting helpers
 grep -rn "appendActions\|orderPlan" internal/sync/
@@ -311,20 +311,24 @@ grep -rn "len(plan\." internal/sync/
 
 # Per-executor createdFolders map (replaced by incremental baseline updates)
 grep -rn "createdFolders" internal/sync/
+
+# Batch report builder (replaced by countByType)
+grep -rn "buildReport" internal/sync/
+
+# errgroup import (only used by deleted executeParallel)
+grep -rn "sync/errgroup" internal/sync/
 ```
 
-**Interpreting results**: During migration (increments 5.0-5.2), some patterns
-will still exist. After increment 5.3 (the core pivot), the executor and
-engine patterns should be gone. After increment 5.7 (final cleanup), ALL
-patterns should show 0 hits in non-test `.go` files. Test files may reference
-old patterns in comments or test helpers — this is acceptable as long as no
-test *calls* a deleted function.
+**Interpreting results**: After increment 5.0 (the pivot), ALL patterns should
+show 0 hits in non-test `.go` files. Test files may reference old patterns in
+comments or test helpers — this is acceptable as long as no test *calls* a
+deleted function.
 
 **Full sweep command** (single command for CI/automation):
 
 ```bash
 grep -rn \
-  "plan\.FolderCreates\|plan\.Moves\|plan\.Downloads\|plan\.Uploads\|plan\.LocalDeletes\|plan\.RemoteDeletes\|plan\.Conflicts\|plan\.SyncedUpdates\|plan\.Cleanups\|executeParallel\|workerPoolSize\|executeAndCommit\|appendActions\|orderPlan\|len(plan\.\|createdFolders" \
+  "plan\.FolderCreates\|plan\.Moves\|plan\.Downloads\|plan\.Uploads\|plan\.LocalDeletes\|plan\.RemoteDeletes\|plan\.Conflicts\|plan\.SyncedUpdates\|plan\.Cleanups\|executeParallel\|workerPoolSize\|executeAndCommit\|appendActions\|orderPlan\|len(plan\.\|createdFolders\|classifyOutcomes\|applyOutcomes\|buildReport\|sync/errgroup" \
   internal/sync/ \
   --include="*.go" \
   --exclude="*_test.go" \
@@ -344,11 +348,18 @@ in [concurrent-execution.md](concurrent-execution.md).
 |-------------|----------|-------------|-----------|
 | 9-slice `ActionPlan` (`FolderCreates`, `Downloads`, etc.) | `types.go` | Flat `Actions []Action` + `Deps [][]int` DAG | §2 Action Plan |
 | `appendActions()` — route by type to 9 slices | `planner.go` | Direct `append(plan.Actions, action)` | §2 Action Plan |
-| `orderPlan()` — sort slices by depth | `planner.go` | `buildDependencies()` produces DAG edges | §2 Action Plan |
-| `Execute()` — 9-phase sequential dispatch | `executor.go` | Workers pull from `DepTracker` channels | §4 Dependency Tracker, §5 Workers |
-| `executeParallel()` + `workerPoolSize=8` | `executor.go` | Lane-based `WorkerPool` (interactive + bulk + overflow) | §5 Workers |
-| Batch `Commit(ctx, []Outcome, deltaToken, driveID)` | `baseline.go` | `CommitOutcome(ctx, outcome, ledgerID)` per action + `CommitDeltaToken(ctx, token, driveID)` | §3 Persistent Ledger |
-| `executeAndCommit()` — execute-then-commit glue | `engine.go` | Workers commit individually after each action | §5 Workers |
-| `buildReport()` with `len(plan.FolderCreates)` etc. | `engine.go` | Count from `plan.Actions` filtered by `ActionType` | §2 Action Plan |
-| `createdFolders` map (no mutex) | `executor.go` | Eliminated — `CommitOutcome()` updates `Baseline.ByPath` incrementally (under `RWMutex`), so `resolveParentID()` finds newly-created folders in the baseline | §3 Persistent Ledger, §5 Workers |
-| No watch mode (`--watch` returns "not implemented") | `engine.go` / CLI `sync.go` | `RunWatch()` with continuous observers + persistent workers | §6 Watch Mode |
+| `orderPlan()` — sort slices by depth | `planner.go` | `buildDependencies()` produces DAG edges | §5 Dependency Model |
+| `pathDepth()` — count path separators for sorting | `planner.go` | Eliminated — depth ordering expressed as dependency edges | §5 Dependency Model |
+| `Execute()` — 9-phase sequential dispatch | `executor.go` | Workers pull from `DepTracker` channels | §4 Dependency Tracker, §6 Workers |
+| `executeParallel()` + `workerPoolSize=8` | `executor.go` | Lane-based `WorkerPool` (interactive + bulk + overflow) | §6 Workers |
+| `errgroup` import | `executor.go` | Eliminated — `WorkerPool` uses native goroutines + channels | §6 Workers |
+| Batch `Commit(ctx, []Outcome, deltaToken, driveID)` | `baseline.go` | `CommitOutcome(ctx, outcome, ledgerID)` per action + `CommitDeltaToken(ctx, token, driveID)` | §12 Commit Model |
+| `applyOutcomes()` — iterate `[]Outcome` in batch tx | `baseline.go` | `CommitOutcome()` — single outcome per tx | §12 Commit Model |
+| `executeAndCommit()` — execute-then-commit glue | `engine.go` | Workers commit individually after each action | §6 Workers |
+| `classifyOutcomes()` — count successes/failures in batch | `engine.go` | `WorkerPool` atomic counters incremented per action | §11 Progress Reporting |
+| `buildReport()` with `len(plan.FolderCreates)` etc. | `engine.go` | `countByType(plan)` from flat `plan.Actions` | §2 Action Plan |
+| `createdFolders` map (no mutex) | `executor.go` | Eliminated — `CommitOutcome()` updates `Baseline` incrementally (under `RWMutex`), so `resolveParentID()` finds newly-created folders in the baseline | §12 Commit Model, §6 Workers |
+| `e.createdFolders[action.Path] = item.ID` in `createRemoteFolder` | `executor.go` | Eliminated — worker's `CommitOutcome()` calls `baseline.Put()` instead | §12 Commit Model |
+| Direct `baseline.ByPath[x]` map access (no synchronization) | multiple files | Locked `baseline.GetByPath()` / `baseline.GetByID()` accessors (RWMutex) | §12 Commit Model |
+| `upload_sessions` table | `00001_initial_schema.sql` | `session_url` + `bytes_done` columns on `action_queue` | §3 Persistent Ledger |
+| No watch mode (`--watch` returns "not implemented") | `engine.go` / CLI `sync.go` | `RunWatch()` with continuous observers + persistent workers | §15 Execution Modes |

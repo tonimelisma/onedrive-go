@@ -279,31 +279,39 @@ This analysis categorizes every part of the codebase by its relationship to the 
 | `observer_remote.go` | `RemoteObserver.FullDelta()` → `[]ChangeEvent` | Pure observation. No execution model coupling. `Watch()` added in 5.1. |
 | `observer_local.go` | `LocalObserver.FullScan()` → `[]ChangeEvent` | Pure observation. No execution model coupling. `Watch()` added in 5.1. |
 | `buffer.go` | `Buffer` with `Add/AddAll/FlushImmediate` | Thread-safe event grouping. Debounce added in 5.1. |
-| `verify.go` | `VerifyBaseline` — read-only hash check | Pure utility. |
-| `migrations.go` | Goose migration infrastructure + embed | Schema management unchanged. |
+| `verify.go` | `VerifyBaseline` — read-only hash check | Pure utility. Reads baseline via locked accessors after B-089. |
+| `migrations.go` | Goose migration infrastructure + embed | Schema management unchanged. New migration added in 5.0. |
 | `executor_transfer.go` | `executeDownload()`, `executeUpload()` | Self-contained per-action functions. Called by workers instead of phase loops. |
 | `executor_delete.go` | `executeLocalDelete()`, `executeRemoteDelete()` | Self-contained per-action functions. |
 | `executor_conflict.go` | `executeConflict()`, `executeEditDeleteConflict()` | Self-contained per-action functions. |
+| `executor.go` (helpers) | `executeMove()`, `executeLocalMove()`, `executeRemoteMove()`, `createLocalFolder()`, `executeSyncedUpdate()`, `executeCleanup()`, `resolveActionItemType()`, `resolveDriveID()`, `withRetry()`, `classifyError()`, `calcExecBackoff()`, `failedOutcome()`, `folderOutcome()`, `moveOutcome()`, `downloadOutcome()`, `timeSleepExec()` | Architecture-neutral per-action functions and helpers. Called by workers. |
+| `types.go` (most types) | `ChangeEvent`, `BaselineEntry`, `PathChanges`, `RemoteState`, `LocalState`, `PathView`, `ConflictRecord`, `VerifyResult`, `VerifyReport`, `Action`, `Outcome`, all enums, all interfaces | Architecture-neutral types. Only `ActionPlan` and `Baseline` change. |
+| `engine.go` (conflict resolution) | `ListConflicts()`, `ListAllConflicts()`, `ResolveConflict()`, `resolveKeepLocal()`, `resolveKeepRemote()` | CLI-facing conflict operations. `resolveTransfer()` adapted (B-091). |
+| `engine.go` (observers) | `observeRemote()`, `observeLocal()` | Pure observation wrappers. No execution coupling. |
+| `engine.go` (safety) | `resolveSafetyConfig()` | Config helper. No execution coupling. |
+| `SyncReport` struct | 9 named plan count fields + execution result fields | Architecture-neutral user-facing display counters populated by `countByType()`. Fields stay; population method changes. |
+| CLI `sync.go` (`printSyncReport`) | Formats report for user display | Reads `SyncReport` fields. No internal coupling. |
 
 #### ADAPT (keep logic, change structure)
 
 | File | Current state | What changes |
 |------|--------------|--------------|
-| `types.go` | `ActionPlan` has 9 ordered slices (`FolderCreates`, `Moves`, `Downloads`, etc.) | Replace with flat `Actions []Action` + `Deps [][]int` dependency adjacency list + `CycleID`. Most other types unchanged. |
-| `planner.go` | `appendActions()` routes to 9 slices. `orderPlan()` sorts slices. | Replace with flat append + `buildDependencies()` for DAG edges. Decision matrix logic (EF1-EF14, ED1-ED8) completely unchanged. |
-| `executor.go` | 9-phase `Execute()` method. `executeParallel()` for downloads/uploads. `createdFolders` per-Executor map. | DELETE `Execute()`, `executeParallel()`, `createdFolders`. KEEP all per-action helpers, `ExecutorConfig`/`Executor`/`NewExecution` pattern, retry/error classification. `resolveParentID()` relies on incrementally-updated baseline instead of `createdFolders` (B-090). |
-| `baseline.go` | `Commit(ctx, []Outcome, deltaToken, driveID)` — batch model. Cache invalidated and fully reloaded after commit. | Replace with `CommitOutcome(ctx, outcome, ledgerID)` + `CommitDeltaToken(ctx, token, driveID)`. Remove batch `Commit()`. Incremental in-place cache update under `sync.RWMutex` (B-089). |
-| `engine.go` | `RunOnce()` — 9-step sequential pipeline. No `RunWatch()`. | Rewrite `RunOnce()` for ledger+tracker+worker model. Add `RunWatch()` for continuous mode. |
-| CLI `sync.go` | Creates `Engine`, calls `RunOnce()`. `--watch` returns "not implemented". | Wire `--watch` to `RunWatch()`. |
+| `types.go` (`ActionPlan`) | 9 ordered slices (`FolderCreates`, `Moves`, `Downloads`, etc.) | Replace with flat `Actions []Action` + `Deps [][]int` dependency adjacency list + `CycleID`. |
+| `types.go` (`Baseline`) | Plain struct with public `ByPath`/`ByID` maps, no synchronization | Add `sync.RWMutex` field. All direct map access (`baseline.ByPath[x]`) replaced with locked accessor methods: `GetByPath(path) (*BaselineEntry, bool)` (RLock), `GetByID(key) (*BaselineEntry, bool)` (RLock), `Put(entry)` (Lock), `Delete(path)` (Lock). **This is a cross-cutting change** — touches every file that reads baseline maps: `planner.go` (`buildPathViews`), `executor.go` (`resolveParentID`), `verify.go` (`VerifyBaseline`), `observer_local.go`/`observer_remote.go`, `engine.go` (`resolveTransfer`). |
+| `planner.go` | `appendActions()` routes to 9 slices. `orderPlan()` sorts slices. Logging uses `len(plan.FolderCreates)` etc. `bigDeleteTriggered()` uses `len(plan.LocalDeletes) + len(plan.RemoteDeletes)`. | Replace `appendActions()` with flat append + `buildDependencies()` for DAG edges. Replace `orderPlan()` (deleted). Logging switches to `countByType()`. `bigDeleteTriggered()` counts deletes from `plan.Actions` by type. Decision matrix logic (EF1-EF14, ED1-ED8) completely unchanged. All baseline reads use locked accessors. |
+| `executor.go` | 9-phase `Execute()` method. `executeParallel()` for downloads/uploads. `createdFolders` per-Executor map. `resolveParentID()` checks `createdFolders` first. | DELETE `Execute()`, `executeParallel()`, `createdFolders`. KEEP `ExecutorConfig`/`Executor`/`NewExecution` pattern, retry/error classification. `resolveParentID()` drops `createdFolders` branch, uses only locked baseline accessor (B-090). `createRemoteFolder()` adapted: remove `e.createdFolders[action.Path] = item.ID` write — the worker's `CommitOutcome()` updates baseline incrementally instead. |
+| `baseline.go` | `Commit(ctx, []Outcome, deltaToken, driveID)` — batch model. Cache invalidated and fully reloaded after commit. `NewBaselineManager()` creates and owns `*sql.DB`. | Replace batch `Commit()` with `CommitOutcome(ctx, outcome, ledgerID)` + `CommitDeltaToken(ctx, token, driveID)`. `CommitOutcome()` writes to DB then calls `baseline.Put()`/`baseline.Delete()` under write lock. No cache invalidation/reload — incremental updates only (B-089). `CommitOutcome()` handles empty `ledgerID` gracefully (skip ledger status update) for non-ledger callers like `resolveTransfer()` (B-091). Expose `*sql.DB` accessor (e.g., `DB() *sql.DB`) so `Ledger` can share the same connection. |
+| `engine.go` | `RunOnce()` — 9-step sequential pipeline. `executeAndCommit()` glue. `buildReport()` uses `len(plan.*)`. `resolveTransfer()` calls batch `Commit()`. | Rewrite `RunOnce()` for ledger→tracker→worker pipeline. DELETE `executeAndCommit()`, `buildReport()`. `resolveTransfer()` adapted to call `CommitOutcome()` with empty `ledgerID` (B-091). `NewEngine()` creates both `BaselineManager` and `Ledger` from shared `*sql.DB`. |
+| CLI `sync.go` | Creates `Engine`, calls `RunOnce()`. `--watch` returns "not implemented". | Wire `--watch` to `RunWatch()` (5.2). `SyncReport` populated from `countByType()` and worker pool atomic counters. |
 
 #### ADD (new components)
 
 | File | Purpose |
 |------|---------|
-| `ledger.go` | Persistent `action_queue` table: WriteActions, Claim, Complete, Fail, Cancel, LoadPending, ReclaimStale. |
-| `tracker.go` | In-memory dependency tracker: DAG, ready channel dispatch, interactive/bulk lane routing, bounded capacity, cancellation. |
-| `worker.go` | Lane-based worker pool: interactive + bulk + shared overflow workers, per-action commits. |
-| `migrations/00002_action_queue.sql` | `CREATE TABLE action_queue` + indexes per `concurrent-execution.md` §3. |
+| `ledger.go` | Persistent `action_queue` table: WriteActions, Claim, Complete, Fail, Cancel, LoadPending, ReclaimStale. Shares `*sql.DB` with BaselineManager. |
+| `tracker.go` | In-memory dependency tracker: DAG, ready channel dispatch, interactive/bulk lane routing, bounded capacity, cancellation, refill loop. |
+| `worker.go` | Lane-based worker pool: interactive + bulk + shared overflow workers, per-action commits, atomic success/failure/error counters. |
+| `migrations/00002_action_queue.sql` | `CREATE TABLE action_queue` + indexes per `concurrent-execution.md` §3. Also `DROP TABLE upload_sessions` (subsumed by ledger `session_url` column). |
 
 #### DELETE (old architecture artifacts removed during Phase 5)
 
@@ -313,10 +321,15 @@ This analysis categorizes every part of the codebase by its relationship to the 
 | `executeParallel()` | `executor.go` | errgroup pool for phases 3-4 → lane-based workers |
 | `Commit(ctx, []Outcome, deltaToken, driveID)` | `baseline.go` | Batch commit → per-action `CommitOutcome()` |
 | `executeAndCommit()` | `engine.go` | Sequential execute-then-commit glue |
+| `buildReport()` | `engine.go` | `len(plan.FolderCreates)` etc. → `countByType(plan)` |
+| `classifyOutcomes()` | `engine.go` | Batch outcome classification → worker pool atomic counters |
 | `workerPoolSize = 8` constant | `executor.go` | Fixed pool → configurable lane workers |
+| `golang.org/x/sync/errgroup` import | `executor.go` | errgroup only used by `executeParallel()` |
 | 9-slice `ActionPlan` struct | `types.go` | Phase-ordered slices → flat list + dependency DAG |
 | `appendActions()`, `orderPlan()` | `planner.go` | Slice routing/sorting → flat append + `buildDependencies()` |
 | `createdFolders` map + first branch of `resolveParentID()` | `executor.go` | Per-executor map → incremental baseline updates (B-090) |
+| `e.createdFolders[action.Path] = item.ID` write | `executor.go` (`createRemoteFolder`) | Outcome committed to baseline by worker instead |
+| `upload_sessions` table | `00001_initial_schema.sql` | Subsumed by ledger `session_url`/`bytes_done` columns |
 
 **Legacy Architecture Reference**: See [`docs/design/legacy-sequential-architecture.md`](design/legacy-sequential-architecture.md) for detailed documentation of every old-architecture pattern, its rationale, and grep commands to verify removal. This document is the definitive reference for the clean-slate invariant.
 
@@ -342,7 +355,7 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 **Scope**: ActionPlan restructure + persistent ledger + dependency tracker + lane-based workers + engine rewrite. Everything that touches the execution model changes in this one increment.
 
-**What does NOT change**: Observers (`FullDelta`, `FullScan`), buffer (`FlushImmediate`), planner decision matrix (EF1-EF14, ED1-ED8), per-action executor functions (`executeDownload`, `executeUpload`, `executeLocalDelete`, `executeRemoteDelete`, `executeConflict`, `executeFolderCreate`, `executeSyncedUpdate`, `executeCleanup`), all types except `ActionPlan`, all non-sync packages.
+**What does NOT change**: Observers (`FullDelta`, `FullScan`), buffer (`FlushImmediate`), planner decision matrix (EF1-EF14, ED1-ED8), per-action executor functions (`executeDownload`, `executeUpload`, `executeLocalDelete`, `executeRemoteDelete`, `executeConflict`, `executeEditDeleteConflict`, `executeFolderCreate`/`createLocalFolder`, `executeMove`/`executeLocalMove`/`executeRemoteMove`, `executeSyncedUpdate`, `executeCleanup`), all helper functions (`resolveActionItemType`, `resolveDriveID`, `withRetry`, `classifyError`, `classifyStatusCode`, `calcExecBackoff`, `failedOutcome`, `folderOutcome`, `moveOutcome`, `downloadOutcome`, `conflictCopyPath`, `conflictStemExt`, `timeSleepExec`, `deleteOutcome`, `downloadToPartial`), all types except `ActionPlan` and `Baseline`, all non-sync packages, CLI `printSyncReport()`, `SyncReport` struct fields.
 
 **1. New Code:**
 
@@ -354,9 +367,18 @@ This analysis categorizes every part of the codebase by its relationship to the 
 - `actionsOfType(plan, ActionType) []Action` helper for filtering flat list
 - `countByType(plan) map[ActionType]int` helper for report building
 
+*Baseline locked accessors (B-089, cross-cutting):*
+- `Baseline` struct gains `mu sync.RWMutex` field
+- `GetByPath(path string) (*BaselineEntry, bool)` — acquires RLock
+- `GetByID(key driveid.ItemKey) (*BaselineEntry, bool)` — acquires RLock
+- `Put(entry *BaselineEntry)` — acquires Lock, updates both `ByPath` and `ByID` maps
+- `Delete(path string)` — acquires Lock, removes from both maps
+- `Len() int` — acquires RLock, returns `len(ByPath)` (used by planner logging and big-delete check)
+- All callers that do `baseline.ByPath[x]` migrated to `baseline.GetByPath(x)`. **Affected files**: `planner.go` (`buildPathViews`, `bigDeleteTriggered`), `executor.go` (`resolveParentID`), `verify.go` (`VerifyBaseline`), `observer_local.go` (baseline lookups), `observer_remote.go` (baseline lookups), `engine.go` (`resolveTransfer`). The maps remain public for backward compatibility in tests but production code uses only the locked accessors.
+
 *Persistent ledger (durability layer):*
-- `migrations/00002_action_queue.sql` per `concurrent-execution.md` §3
-- `ledger.go`: `Ledger` struct (shares same `*sql.DB` as BaselineManager)
+- `migrations/00002_action_queue.sql` per `concurrent-execution.md` §3. Also `DROP TABLE IF EXISTS upload_sessions` (subsumed by ledger `session_url` column).
+- `ledger.go`: `Ledger` struct (shares same `*sql.DB` via `BaselineManager.DB()` accessor)
   - `WriteActions(ctx, plan *ActionPlan) error` — INSERT all actions as `pending`
   - `Claim(ctx, actionID) error` — status → `claimed`
   - `Complete(ctx, actionID) error` — status → `done`
@@ -389,49 +411,59 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 **2. Code Adaptation:**
 
-- `types.go`: `ActionPlan` → flat `Actions []Action` + `Deps [][]int` + `CycleID`. All other types unchanged.
-- `planner.go`: classification functions unchanged; `appendActions()` → direct `append(plan.Actions, action)`; `orderPlan()` → `buildDependencies()`
-- `baseline.go` — **concurrent-safe incremental cache** (B-089): `CommitOutcome()` updates `Baseline.ByPath` and `Baseline.ByID` in-place (under `sync.RWMutex`) after each DB write. Workers read the baseline via `resolveParentID()` concurrently. `Baseline` gains a `sync.RWMutex`; readers take `RLock`, writers take `Lock`.
-- `executor.go` — **eliminate `createdFolders` map** (B-090): `resolveParentID()` already checks baseline as a fallback. Since `CommitOutcome()` now updates the baseline incrementally, newly-created folders appear in `Baseline.ByPath` immediately after their action completes. The `createdFolders` map becomes redundant and is deleted. DAG edges guarantee a folder create completes before any child action is dispatched.
+- `types.go`: `ActionPlan` → flat `Actions []Action` + `Deps [][]int` + `CycleID`. `Baseline` struct gains `sync.RWMutex` + locked accessors. All other types unchanged.
+- `planner.go`: classification functions unchanged. `appendActions()` → direct `append(plan.Actions, action)`. `orderPlan()` → `buildDependencies()`. Logging at `Plan()` entry/exit switches from `len(plan.FolderCreates)` to `countByType()`. `bigDeleteTriggered()` counts deletes from `plan.Actions` by type instead of `len(plan.LocalDeletes) + len(plan.RemoteDeletes)`. `buildPathViews()` uses `baseline.GetByPath()` instead of `baseline.ByPath[x]`.
+- `baseline.go` — **concurrent-safe incremental cache** (B-089): `CommitOutcome()` writes to DB then calls `baseline.Put()` or `baseline.Delete()` under the write lock. No cache invalidation/reload. `Load()` still does full DB load on first call (or after explicit invalidation for crash recovery). Expose `DB() *sql.DB` accessor for `Ledger` construction.
+- `executor.go` — **eliminate `createdFolders` map** (B-090): `resolveParentID()` drops its first branch (the `createdFolders` lookup). Since `CommitOutcome()` now updates the baseline incrementally, newly-created folders appear in baseline immediately after their action completes. `resolveParentID()` uses `baseline.GetByPath()` locked accessor. DAG edges guarantee a folder create completes before any child action is dispatched. `createRemoteFolder()` adapted: remove `e.createdFolders[action.Path] = item.ID` write (line 242) — the worker's `CommitOutcome()` handles this. `Executor` struct field `createdFolders` deleted; `NewExecution()` no longer initializes it.
 - `engine.go` — `RunOnce()` rewritten for ledger→tracker→worker pipeline:
   1. Load baseline
-  2. Check ledger for pending actions from crashed cycle
+  2. Check ledger for pending actions from crashed cycle (LoadPending + ReclaimStale)
   3. Observe remote/local (unchanged)
   4. Buffer and flush (unchanged)
   5. Plan (unchanged — returns flat Actions + Deps)
-  6. Write actions to ledger
-  7. Populate tracker from ledger
-  8. Start worker pool → per-action commits happen inside workers
-  9. Wait for all actions to complete
-  10. Commit delta token
-- `engine.go` — **`resolveTransfer()` adaptation** (B-091): change from batch `Commit()` to `CommitOutcome()` with `ledgerID = ""`.
-- `migrations.go`: embed includes new migration
-- CLI `sync.go`: SyncReport population from worker pool atomic counters
+  6. Early return if dry-run (use `countByType()` for report, no ledger/tracker/workers)
+  7. Write actions to ledger
+  8. Populate tracker from ledger
+  9. Start worker pool → per-action commits happen inside workers
+  10. Wait for all actions to complete
+  11. Commit delta token
+  12. Populate SyncReport from worker pool atomic counters
+- `engine.go` — `NewEngine()` creates both `BaselineManager` and `Ledger` from shared `*sql.DB`.
+- `engine.go` — **`resolveTransfer()` adaptation** (B-091): change `e.baseline.Commit(ctx, []Outcome{outcome}, "", e.driveID.String())` to `e.baseline.CommitOutcome(ctx, outcome, "")`. The empty `ledgerID` tells `CommitOutcome()` to skip the ledger status update (no action_queue row exists for manual conflict resolution). `resolveTransfer()` still calls `e.baseline.Load(ctx)` which returns the cached baseline — safe because the RWMutex protects concurrent access.
+- `migrations.go`: embed includes new migration file.
+- CLI `sync.go`: `SyncReport` plan counts populated from `countByType()`. Execution counts (`Succeeded`, `Failed`, `Errors`) populated from `WorkerPool` atomic counters instead of `classifyOutcomes()`.
+- `observer_local.go`, `observer_remote.go`: baseline reads use locked accessors (`baseline.GetByPath()`, `baseline.GetByID()`). Logic unchanged.
+- `verify.go`: `VerifyBaseline()` iterates using `baseline.GetByPath()` or a `baseline.Entries()` iterator method. Logic unchanged.
 
 **3. Code Retirement:**
 - DELETE `Execute()`, `executeParallel()`, `workerPoolSize` from `executor.go`
+- DELETE `golang.org/x/sync/errgroup` import from `executor.go` (only used by `executeParallel()`)
 - DELETE `executeAndCommit()` from `engine.go`
 - DELETE `buildReport()` from `engine.go` (replaced by `countByType`)
-- DELETE batch `Commit()` from `baseline.go`
-- DELETE `appendActions()`, `orderPlan()` from `planner.go`
-- DELETE 9 slice fields from `ActionPlan` in `types.go`
-- DELETE `createdFolders` field from `Executor` and the first branch in `resolveParentID()`
+- DELETE `classifyOutcomes()` from `engine.go` (replaced by worker pool atomic counters)
+- DELETE batch `Commit()` from `baseline.go` (replaced by per-action `CommitOutcome()`)
+- DELETE `applyOutcomes()` from `baseline.go` (internal to batch `Commit()`)
+- DELETE `appendActions()`, `orderPlan()`, `pathDepth()` from `planner.go` (`pathDepth` is only used by `orderPlan`)
+- DELETE 9 slice fields from `ActionPlan` in `types.go` (`FolderCreates`, `Moves`, `Downloads`, `Uploads`, `LocalDeletes`, `RemoteDeletes`, `Conflicts`, `SyncedUpdates`, `Cleanups`)
+- DELETE `ActionPlan` doc comment referencing "9 ordered slices" from `types.go`
+- DELETE `createdFolders` field from `Executor` struct, first branch in `resolveParentID()`, `createdFolders` write in `createRemoteFolder()`
+- DELETE `upload_sessions` table via migration (subsumed by ledger)
 - Verify — run full sweep from [`legacy-sequential-architecture.md`](design/legacy-sequential-architecture.md) §9:
   ```
-  grep -rn "plan\.FolderCreates\|plan\.Downloads\|plan\.Uploads\|appendActions\|orderPlan\|executeParallel\|workerPoolSize\|executeAndCommit\|\.Commit(ctx.*\[\]Outcome\|createdFolders\|len(plan\." internal/sync/ --include="*.go" --exclude="*_test.go"
+  grep -rn "plan\.FolderCreates\|plan\.Downloads\|plan\.Uploads\|plan\.Moves\|plan\.LocalDeletes\|plan\.RemoteDeletes\|plan\.Conflicts\|plan\.SyncedUpdates\|plan\.Cleanups\|appendActions\|orderPlan\|executeParallel\|workerPoolSize\|executeAndCommit\|\.Commit(ctx.*\[\]Outcome\|createdFolders\|len(plan\.\|classifyOutcomes\|applyOutcomes\|buildReport" internal/sync/ --include="*.go" --exclude="*_test.go"
   ```
-  → 0 hits
+  → 0 hits. Also verify no stale doc comments reference "9 phases", "9 slices", or "sequential" in non-legacy-doc production code.
 
 **4. CI and Testing:**
-- `planner_test.go`: all 43 tests rewritten — `len(plan.Downloads)` → `actionsOfType(plan, ActionDownload)`. New dependency edge tests (parent→child, child-delete→parent-delete).
-- `executor_test.go`: DELETE tests calling `Execute(plan)`. KEEP per-action function tests. Add concurrency test with `-race`.
-- `engine_test.go`: REWRITE for ledger→tracker→worker pipeline. Same scenarios, different internal flow.
-- `baseline_test.go`: DELETE batch `Commit()` tests. ADD `CommitOutcome()` concurrent access tests. ADD empty ledgerID test (resolveTransfer path).
-- New `ledger_test.go`: round-trip, LoadPending, ReclaimStale, concurrent access.
-- New `tracker_test.go`: dependency chains, lane routing, bounded capacity, concurrent access with `-race`, cancellation.
-- New `worker_test.go`: lifecycle, per-action commit, error handling, lane assignment. Test that folder create outcomes are visible in baseline to subsequent workers.
-- **E2E sync tests: MUST PASS.** Same actions execute (same per-action functions), same baseline entries written, same files on disk/remote. Execution order is different (more parallel) but results are identical.
-- Both CI workflows green.
+- `planner_test.go`: all 43 tests rewritten — `len(plan.Downloads)` → `actionsOfType(plan, ActionDownload)`. All `baseline.ByPath[x]` direct accesses → `baseline.GetByPath(x)` or direct map access in test-only setup code. New dependency edge tests: parent→child for folder creates, child→parent for deletes, move-target-parent, independent actions get no edges.
+- `executor_test.go`: DELETE tests calling `Execute(plan)`. KEEP per-action function tests (they use `NewExecution()` which still works). Update `resolveParentID` tests to use locked baseline accessors. Verify `createRemoteFolder` no longer writes to `createdFolders`. Add concurrency test with `-race`: two workers calling per-action functions sharing a baseline.
+- `engine_test.go`: REWRITE for ledger→tracker→worker pipeline. Same scenarios (bidirectional sync, download-only, upload-only, dry-run, big-delete), different internal flow. Test `resolveTransfer()` uses `CommitOutcome()` with empty `ledgerID`. Test crash recovery path (pending actions in ledger on startup).
+- `baseline_test.go`: DELETE batch `Commit()` and `applyOutcomes()` tests. ADD `CommitOutcome()` tests: single action, concurrent access under `-race`, empty `ledgerID` (resolveTransfer path), upsert + delete + move + conflict outcome types. ADD `CommitDeltaToken()` test. ADD locked accessor tests (`GetByPath`, `GetByID`, `Put`, `Delete` under concurrent access).
+- New `ledger_test.go`: round-trip (WriteActions → LoadPending), Claim/Complete/Fail/Cancel lifecycle, ReclaimStale after timeout, concurrent access with `-race`, empty cycle.
+- New `tracker_test.go`: dependency chains (parent→child dispatch ordering), lane routing (small file → interactive, large file → bulk), bounded capacity (overflow stays in ledger), concurrent access with `-race`, cancellation (Cancel(path) triggers context cancel on in-flight action), Complete unblocks dependents.
+- New `worker_test.go`: lifecycle (Start/Wait/Stop), per-action commit (verify baseline updated after worker completes folder create, subsequent worker sees it via `resolveParentID`), error handling (failed action updates ledger, doesn't block dependents), lane assignment (interactive vs bulk workers pull from correct channels), atomic counters (Succeeded/Failed incremented correctly).
+- **E2E sync tests: MUST PASS UNCHANGED.** Same actions execute (same per-action functions), same baseline entries written, same files on disk/remote. Execution order is more parallel but results are identical. The `sync_e2e_test.go` and `sync_full_test.go` tests exercise the CLI binary end-to-end — they are the primary safety net for the pivot.
+- Both CI workflows green (`ci.yml` and `integration.yml`).
 
 ---
 
@@ -526,10 +558,12 @@ This analysis categorizes every part of the codebase by its relationship to the 
 **3. Code Retirement:**
 - Final sweep — run ALL grep patterns from [`docs/design/legacy-sequential-architecture.md`](design/legacy-sequential-architecture.md) §9
 - Any hits are bugs — fix before merge
+- Schema audit: verify `stale_files`, `config_snapshots`, `change_journal` tables are either used or dropped. These were forward declarations in the initial schema that may be unreferenced. Drop if unused (migration `00003_cleanup.sql`).
+- Doc comment audit: no production `.go` file (excluding `legacy-sequential-architecture.md`) should reference "9 phases", "9 slices", "sequential execution", or "batch commit" except in historical/explanatory context.
 
 **4. CI and Testing:**
 - Pause/resume test, SIGHUP test
-- Add permanent regression test that runs grep sweep and fails on match
+- Add permanent regression test that runs grep sweep and fails on match (lives in `internal/sync/` with `//go:build !test` or as a `TestCleanSlateInvariant` that runs the grep patterns programmatically)
 - Docs updated: CLAUDE.md (current phase → Phase 6), BACKLOG.md (close items), LEARNINGS.md
 - Both CI workflows green. Full DOD checklist.
 
