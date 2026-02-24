@@ -95,12 +95,27 @@ jobs:
           set -euo pipefail
           IFS=',' read -ra DRIVES <<< "$ONEDRIVE_TEST_DRIVES"
 
+          # Full suite (nightly + manual), fast-only on push.
+          E2E_TAGS="e2e"
+          if [[ "${{ github.event_name }}" != "push" ]]; then
+            E2E_TAGS="e2e,e2e_full"
+          fi
+
           for drive in "${DRIVES[@]}"; do
             drive=$(echo "$drive" | xargs)
-            echo "=== Running E2E tests for: ${drive} ==="
+            echo "=== Running E2E tests for: ${drive} (tags: ${E2E_TAGS}) ==="
+            E2E_LOG_DIR=/tmp/e2e-debug-logs \
             ONEDRIVE_TEST_DRIVE="$drive" \
-              go test -tags=e2e -race -v -timeout=15m ./e2e/...
+              go test -tags="${E2E_TAGS}" -race -v -timeout=30m ./e2e/...
           done
+
+      - name: Upload E2E debug logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-debug-logs
+          path: /tmp/e2e-debug-logs/
+          retention-days: 7
 
       - name: Save rotated tokens to Key Vault
         if: always()

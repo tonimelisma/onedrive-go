@@ -16,6 +16,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// ---------------------------------------------------------------------------
+// Sync test helpers (available under the base e2e tag for both fast and full)
+// ---------------------------------------------------------------------------
+
 // writeSyncConfig creates a minimal TOML config file pointing to the given
 // syncDir for the test drive. Returns the path to the temp config file.
 func writeSyncConfig(t *testing.T, syncDir string) string {
@@ -37,7 +41,12 @@ sync_dir = %q
 func runCLIWithConfig(t *testing.T, cfgPath string, args ...string) (string, string) {
 	t.Helper()
 
-	fullArgs := append([]string{"--config", cfgPath, "--drive", drive}, args...)
+	fullArgs := []string{"--config", cfgPath, "--drive", drive}
+	if shouldAddDebug(args) {
+		fullArgs = append(fullArgs, "--debug")
+	}
+
+	fullArgs = append(fullArgs, args...)
 	cmd := exec.Command(binaryPath, fullArgs...)
 
 	var stdout, stderr bytes.Buffer
@@ -45,6 +54,8 @@ func runCLIWithConfig(t *testing.T, cfgPath string, args ...string) (string, str
 	cmd.Stderr = &stderr
 
 	err := cmd.Run()
+	logCLIExecution(t, fullArgs, stdout.String(), stderr.String())
+
 	if err != nil {
 		t.Fatalf("CLI command %v failed: %v\nstdout: %s\nstderr: %s",
 			args, err, stdout.String(), stderr.String())
@@ -58,7 +69,12 @@ func runCLIWithConfig(t *testing.T, cfgPath string, args ...string) (string, str
 func runCLIWithConfigAllowError(t *testing.T, cfgPath string, args ...string) (string, string, error) {
 	t.Helper()
 
-	fullArgs := append([]string{"--config", cfgPath, "--drive", drive}, args...)
+	fullArgs := []string{"--config", cfgPath, "--drive", drive}
+	if shouldAddDebug(args) {
+		fullArgs = append(fullArgs, "--debug")
+	}
+
+	fullArgs = append(fullArgs, args...)
 	cmd := exec.Command(binaryPath, fullArgs...)
 
 	var stdout, stderr bytes.Buffer
@@ -66,9 +82,53 @@ func runCLIWithConfigAllowError(t *testing.T, cfgPath string, args ...string) (s
 	cmd.Stderr = &stderr
 
 	err := cmd.Run()
+	logCLIExecution(t, fullArgs, stdout.String(), stderr.String())
 
 	return stdout.String(), stderr.String(), err
 }
+
+// putRemoteFile uploads string content to a remote path via a temp file.
+func putRemoteFile(t *testing.T, remotePath, content string) {
+	t.Helper()
+
+	tmpFile, err := os.CreateTemp("", "e2e-put-*")
+	require.NoError(t, err)
+	defer os.Remove(tmpFile.Name())
+
+	_, err = tmpFile.WriteString(content)
+	require.NoError(t, err)
+	require.NoError(t, tmpFile.Close())
+
+	runCLI(t, "put", tmpFile.Name(), remotePath)
+}
+
+// getRemoteFile downloads a remote file and returns its content as a string.
+func getRemoteFile(t *testing.T, remotePath string) string {
+	t.Helper()
+
+	tmpDir := t.TempDir()
+	localPath := filepath.Join(tmpDir, "downloaded")
+
+	runCLI(t, "get", remotePath, localPath)
+
+	data, err := os.ReadFile(localPath)
+	require.NoError(t, err)
+
+	return string(data)
+}
+
+// cleanupRemoteFolder is a best-effort remote cleanup for use in t.Cleanup.
+func cleanupRemoteFolder(t *testing.T, folder string) {
+	t.Helper()
+
+	fullArgs := []string{"--drive", drive, "rm", "/" + folder}
+	cmd := exec.Command(binaryPath, fullArgs...)
+	_ = cmd.Run()
+}
+
+// ---------------------------------------------------------------------------
+// Fast sync tests (run on every CI push under the "e2e" tag)
+// ---------------------------------------------------------------------------
 
 func TestE2E_Sync_UploadOnly(t *testing.T) {
 	syncDir := t.TempDir()

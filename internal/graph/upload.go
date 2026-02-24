@@ -14,13 +14,20 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// chunkAlignment is the required alignment for upload chunk sizes (320 KiB).
+// ChunkAlignment is the required alignment for upload chunk sizes (320 KiB).
 // All chunks except the final one must be a multiple of this value.
-const chunkAlignment = 320 * 1024
+const ChunkAlignment = 320 * 1024
 
-// simpleUploadMaxSize is the maximum file size for simple (single-request) upload (4 MB).
+// SimpleUploadMaxSize is the maximum file size for simple (single-request) upload (4 MiB).
 // Files larger than this must use resumable upload sessions.
-const simpleUploadMaxSize = 4 * 1024 * 1024
+const SimpleUploadMaxSize = 4 * 1024 * 1024
+
+// ChunkedUploadChunkSize is the chunk size for resumable uploads (10 MiB, aligned to 320 KiB).
+const ChunkedUploadChunkSize = 10 * 1024 * 1024
+
+// ProgressFunc is a callback invoked after each chunk upload completes.
+// bytesUploaded is cumulative; totalBytes is the full file size.
+type ProgressFunc func(bytesUploaded, totalBytes int64)
 
 // Upload session request/response types for Graph API JSON serialization.
 type createUploadSessionRequest struct {
@@ -124,8 +131,10 @@ func (c *Client) CreateUploadSession(
 // Returns the completed Item on the final chunk (201/200), nil for intermediate chunks (202).
 // offset is the byte offset, length is the chunk size, total is the full file size.
 // The session URL is pre-authenticated, so no Authorization header is sent.
+// chunk must be an io.ReaderAt — each retry creates a fresh SectionReader to avoid
+// racing with the HTTP transport's writeLoop goroutine from a previous attempt.
 func (c *Client) UploadChunk(
-	ctx context.Context, session *UploadSession, chunk io.Reader,
+	ctx context.Context, session *UploadSession, chunk io.ReaderAt,
 	offset, length, total int64,
 ) (*Item, error) {
 	c.logger.Debug("uploading chunk",
@@ -136,23 +145,25 @@ func (c *Client) UploadChunk(
 
 	contentRange := fmt.Sprintf("bytes %d-%d/%d", offset, offset+length-1, total)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, session.UploadURL, chunk)
+	resp, err := c.doPreAuthRetry(ctx, "upload chunk", func() (*http.Request, error) {
+		// Fresh SectionReader per attempt — io.ReaderAt.ReadAt is goroutine-safe,
+		// so no race with a previous attempt's transport writeLoop goroutine.
+		reader := io.NewSectionReader(chunk, 0, length)
+
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPut, session.UploadURL, reader)
+		if reqErr != nil {
+			return nil, fmt.Errorf("graph: creating chunk upload request: %w", reqErr)
+		}
+
+		req.Header.Set("Content-Range", contentRange)
+		req.Header.Set("Content-Type", "application/octet-stream")
+		req.Header.Set("User-Agent", userAgent)
+		req.ContentLength = length
+
+		return req, nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("graph: creating chunk upload request: %w", err)
-	}
-
-	req.Header.Set("Content-Range", contentRange)
-	req.Header.Set("Content-Type", "application/octet-stream")
-	req.Header.Set("User-Agent", userAgent)
-	req.ContentLength = length
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		c.logger.Error("chunk upload request failed",
-			slog.String("error", err.Error()),
-		)
-
-		return nil, fmt.Errorf("graph: chunk upload request failed: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
@@ -160,6 +171,9 @@ func (c *Client) UploadChunk(
 }
 
 // handleChunkResponse processes the HTTP response from an upload chunk request.
+// doPreAuthRetry guarantees only 2xx responses reach this function — non-2xx
+// (including 416 Range Not Satisfiable) are handled by doPreAuthRetry and
+// returned as *GraphError with appropriate sentinels (e.g., ErrRangeNotSatisfiable).
 // 202 Accepted means intermediate chunk; 200/201 means upload complete with item data.
 func (c *Client) handleChunkResponse(resp *http.Response) (*Item, error) {
 	switch resp.StatusCode {
@@ -189,24 +203,14 @@ func (c *Client) handleChunkResponse(resp *http.Response) (*Item, error) {
 
 		return &item, nil
 
-	case http.StatusRequestedRangeNotSatisfiable:
-		// 416 means the server has different byte ranges than what we sent.
-		// Callers should use QueryUploadSession to discover accepted ranges.
-		if _, drainErr := io.Copy(io.Discard, resp.Body); drainErr != nil {
-			return nil, fmt.Errorf("graph: draining 416 response body: %w", drainErr)
-		}
-
-		c.logger.Warn("upload chunk returned 416 Range Not Satisfiable")
-
-		return nil, ErrRangeNotSatisfiable
-
 	default:
+		// Unexpected 2xx status (e.g., 204, 206). doPreAuthRetry filters non-2xx.
 		body, _ := io.ReadAll(resp.Body) //nolint:errcheck // best-effort read for error message
-		c.logger.Error("chunk upload failed",
+		c.logger.Error("chunk upload returned unexpected 2xx status",
 			slog.Int("status", resp.StatusCode),
 		)
 
-		return nil, fmt.Errorf("graph: chunk upload failed with status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("graph: chunk upload unexpected status %d: %s", resp.StatusCode, string(body))
 	}
 }
 
@@ -215,20 +219,18 @@ func (c *Client) handleChunkResponse(resp *http.Response) (*Item, error) {
 func (c *Client) CancelUploadSession(ctx context.Context, session *UploadSession) error {
 	c.logger.Info("canceling upload session")
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, session.UploadURL, http.NoBody)
+	resp, err := c.doPreAuthRetry(ctx, "cancel upload session", func() (*http.Request, error) {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodDelete, session.UploadURL, http.NoBody)
+		if reqErr != nil {
+			return nil, fmt.Errorf("graph: creating cancel session request: %w", reqErr)
+		}
+
+		req.Header.Set("User-Agent", userAgent)
+
+		return req, nil
+	})
 	if err != nil {
-		return fmt.Errorf("graph: creating cancel session request: %w", err)
-	}
-
-	req.Header.Set("User-Agent", userAgent)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		c.logger.Error("cancel upload session request failed",
-			slog.String("error", err.Error()),
-		)
-
-		return fmt.Errorf("graph: cancel upload session request failed: %w", err)
+		return err
 	}
 	defer resp.Body.Close()
 
@@ -314,35 +316,23 @@ func (c *Client) QueryUploadSession(
 ) (*UploadSessionStatus, error) {
 	c.logger.Info("querying upload session status")
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, session.UploadURL, http.NoBody)
+	resp, err := c.doPreAuthRetry(ctx, "query upload session", func() (*http.Request, error) {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, session.UploadURL, http.NoBody)
+		if reqErr != nil {
+			return nil, fmt.Errorf("graph: creating query session request: %w", reqErr)
+		}
+
+		req.Header.Set("User-Agent", userAgent)
+
+		return req, nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("graph: creating query session request: %w", err)
-	}
-
-	req.Header.Set("User-Agent", userAgent)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		c.logger.Error("query upload session request failed",
-			slog.String("error", err.Error()),
-		)
-
-		return nil, fmt.Errorf("graph: query upload session request failed: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body) //nolint:errcheck // best-effort read for error message
-
-		sentinel := classifyStatus(resp.StatusCode)
-
-		return nil, &GraphError{
-			StatusCode: resp.StatusCode,
-			RequestID:  resp.Header.Get("request-id"),
-			Message:    string(body),
-			Err:        sentinel,
-		}
-	}
+	// doPreAuthRetry guarantees 2xx here. QueryUploadSession expects exactly 200.
+	// Other 2xx codes are unexpected but not worth failing on.
 
 	var ssr uploadSessionStatusResponse
 	if decErr := json.NewDecoder(resp.Body).Decode(&ssr); decErr != nil {
@@ -368,6 +358,107 @@ func (c *Client) QueryUploadSession(
 	)
 
 	return status, nil
+}
+
+// Upload uploads a file to OneDrive, automatically choosing simple upload for
+// files up to 4 MiB or chunked (resumable) upload for larger files. The session
+// lifecycle (create, chunk loop, cancel-on-error) is fully encapsulated.
+// content must be an io.ReaderAt so that retries can re-read from arbitrary offsets.
+// progress may be nil if no progress reporting is needed.
+func (c *Client) Upload(
+	ctx context.Context, driveID driveid.ID, parentID, name string,
+	content io.ReaderAt, size int64, mtime time.Time, progress ProgressFunc,
+) (*Item, error) {
+	if size <= SimpleUploadMaxSize {
+		r := io.NewSectionReader(content, 0, size)
+
+		item, err := c.SimpleUpload(ctx, driveID, parentID, name, r, size)
+		if err != nil {
+			return nil, err
+		}
+
+		// Simple upload (PUT /content) cannot include fileSystemInfo in the
+		// request body. Post-upload PATCH preserves local mtime on the server,
+		// preventing mtime mismatch on the next sync cycle.
+		if !mtime.IsZero() {
+			patched, patchErr := c.UpdateFileSystemInfo(ctx, driveID, item.ID, mtime)
+			if patchErr != nil {
+				return nil, fmt.Errorf("graph: setting mtime after simple upload: %w", patchErr)
+			}
+
+			return patched, nil
+		}
+
+		return item, nil
+	}
+
+	return c.chunkedUploadEncapsulated(ctx, driveID, parentID, name, content, size, mtime, progress)
+}
+
+// chunkedUploadEncapsulated creates an upload session, uploads all chunks,
+// and cancels the session on any error. Fully encapsulates session lifecycle.
+func (c *Client) chunkedUploadEncapsulated(
+	ctx context.Context, driveID driveid.ID, parentID, name string,
+	content io.ReaderAt, size int64, mtime time.Time, progress ProgressFunc,
+) (*Item, error) {
+	session, err := c.CreateUploadSession(ctx, driveID, parentID, name, size, mtime)
+	if err != nil {
+		return nil, err
+	}
+
+	item, err := c.uploadAllChunks(ctx, session, content, size, progress)
+	if err != nil {
+		// Best-effort cancel — use background context since ctx may be canceled.
+		cancelErr := c.CancelUploadSession(context.Background(), session)
+		if cancelErr != nil {
+			c.logger.Warn("failed to cancel upload session after error",
+				slog.String("error", cancelErr.Error()),
+			)
+		}
+
+		return nil, err
+	}
+
+	return item, nil
+}
+
+// uploadAllChunks uploads all chunks of a file to an upload session.
+// Returns the completed Item from the final chunk response.
+func (c *Client) uploadAllChunks(
+	ctx context.Context, session *UploadSession,
+	content io.ReaderAt, size int64, progress ProgressFunc,
+) (*Item, error) {
+	var lastItem *Item
+
+	for offset := int64(0); offset < size; {
+		chunkSize := int64(ChunkedUploadChunkSize)
+		if offset+chunkSize > size {
+			chunkSize = size - offset
+		}
+
+		chunk := io.NewSectionReader(content, offset, chunkSize)
+
+		item, err := c.UploadChunk(ctx, session, chunk, offset, chunkSize, size)
+		if err != nil {
+			return nil, fmt.Errorf("graph: uploading chunk at offset %d: %w", offset, err)
+		}
+
+		offset += chunkSize
+
+		if progress != nil {
+			progress(offset, size)
+		}
+
+		if item != nil {
+			lastItem = item
+		}
+	}
+
+	if lastItem == nil {
+		return nil, fmt.Errorf("graph: upload completed all chunks but received no final item")
+	}
+
+	return lastItem, nil
 }
 
 // parseUploadSessionResponse parses the HTTP response from CreateUploadSession.

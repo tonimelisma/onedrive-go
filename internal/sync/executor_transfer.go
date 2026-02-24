@@ -15,12 +15,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
 
-// Upload size thresholds.
-const (
-	simpleUploadMaxBytes = 4 * 1024 * 1024  // 4 MiB — use simple upload below this
-	chunkedUploadChunk   = 10 * 1024 * 1024 // 10 MiB per chunk
-)
-
 // executeDownload downloads a remote file with S3 safety: write to .partial,
 // verify hash, atomic rename. Warns on hash mismatch (iOS .heic bug).
 func (e *Executor) executeDownload(ctx context.Context, action *Action) Outcome {
@@ -97,7 +91,7 @@ func (e *Executor) downloadToPartial(
 	h := quickxorhash.New()
 	w := io.MultiWriter(f, h)
 
-	size, err := e.transfers.Download(ctx, driveID, action.ItemID, w)
+	size, err := e.downloads.Download(ctx, driveID, action.ItemID, w)
 	if err != nil {
 		f.Close()
 		os.Remove(partialPath)
@@ -145,8 +139,8 @@ func (e *Executor) downloadOutcome(
 	return o
 }
 
-// executeUpload uploads a local file to OneDrive. Uses simple upload for
-// files <= 4 MiB, chunked upload for larger files.
+// executeUpload uploads a local file to OneDrive via the Uploader interface,
+// which encapsulates the simple-vs-chunked decision and session lifecycle.
 func (e *Executor) executeUpload(ctx context.Context, action *Action) Outcome {
 	driveID := e.resolveDriveID(action)
 
@@ -171,21 +165,34 @@ func (e *Executor) executeUpload(ctx context.Context, action *Action) Outcome {
 	size := info.Size()
 	mtime := info.ModTime()
 
-	var item *graph.Item
-	var uploadErr error
+	// Open file — *os.File satisfies io.ReaderAt for retry-safe uploads.
+	f, err := os.Open(localPath)
+	if err != nil {
+		return e.failedOutcome(action, ActionUpload, fmt.Errorf("opening %s for upload: %w", action.Path, err))
+	}
+	defer f.Close()
 
-	if size <= simpleUploadMaxBytes {
-		uploadErr = e.withRetry(ctx, "upload "+action.Path, func() error {
-			item, err = e.simpleUpload(ctx, driveID, parentID, name, localPath, size)
-			return err
-		})
-	} else {
-		uploadErr = e.withRetry(ctx, "upload "+action.Path, func() error {
-			item, err = e.chunkedUpload(ctx, driveID, parentID, name, localPath, size, mtime)
-			return err
-		})
+	var item *graph.Item
+
+	progress := func(uploaded, total int64) {
+		e.logger.Debug("upload progress",
+			slog.String("path", action.Path),
+			slog.Int64("uploaded", uploaded),
+			slog.Int64("total", total),
+		)
 	}
 
+	// Retry wraps the full Upload() call. On retry of a chunked upload, this
+	// restarts the session from scratch. Acceptable because: (1) io.ReaderAt
+	// allows re-reading from offset 0, (2) Graph API auto-cleans abandoned
+	// sessions, (3) executor-level retry is rare (graph client retries
+	// 429/5xx internally). Session resume tracked as B-037.
+	uploadErr := e.withRetry(ctx, "upload "+action.Path, func() error {
+		var retryErr error
+		item, retryErr = e.uploads.Upload(ctx, driveID, parentID, name, f, size, mtime, progress)
+
+		return retryErr
+	})
 	if uploadErr != nil {
 		return e.failedOutcome(action, ActionUpload, uploadErr)
 	}
@@ -219,85 +226,5 @@ func (e *Executor) executeUpload(ctx context.Context, action *Action) Outcome {
 		Size:       size,
 		Mtime:      mtime.UnixNano(),
 		ETag:       item.ETag,
-	}
-}
-
-// simpleUpload performs a single-request upload for small files (<= 4 MiB).
-func (e *Executor) simpleUpload(
-	ctx context.Context, driveID driveid.ID, parentID, name, localPath string, size int64,
-) (*graph.Item, error) {
-	f, err := os.Open(localPath)
-	if err != nil {
-		return nil, fmt.Errorf("opening %s for upload: %w", localPath, err)
-	}
-	defer f.Close()
-
-	return e.transfers.SimpleUpload(ctx, driveID, parentID, name, f, size)
-}
-
-// chunkedUpload performs a resumable upload for large files (> 4 MiB).
-func (e *Executor) chunkedUpload(
-	ctx context.Context, driveID driveid.ID, parentID, name, localPath string, size int64, mtime time.Time,
-) (*graph.Item, error) {
-	session, err := e.transfers.CreateUploadSession(ctx, driveID, parentID, name, size, mtime)
-	if err != nil {
-		return nil, fmt.Errorf("creating upload session for %s: %w", localPath, err)
-	}
-
-	f, err := os.Open(localPath)
-	if err != nil {
-		// Cancel the server-side session to avoid leaking it until expiry.
-		e.cancelSession(session)
-
-		return nil, fmt.Errorf("opening %s for chunked upload: %w", localPath, err)
-	}
-	defer f.Close()
-
-	item, uploadErr := e.uploadChunks(ctx, session, f, size)
-	if uploadErr != nil {
-		e.cancelSession(session)
-
-		return nil, uploadErr
-	}
-
-	return item, nil
-}
-
-// uploadChunks sends file data in chunks and returns the completed Item.
-func (e *Executor) uploadChunks(
-	ctx context.Context, session *graph.UploadSession, f *os.File, total int64,
-) (*graph.Item, error) {
-	var offset int64
-
-	for offset < total {
-		chunkSize := int64(chunkedUploadChunk)
-		if offset+chunkSize > total {
-			chunkSize = total - offset
-		}
-
-		chunk := io.LimitReader(f, chunkSize)
-
-		item, err := e.transfers.UploadChunk(ctx, session, chunk, offset, chunkSize, total)
-		if err != nil {
-			return nil, fmt.Errorf("uploading chunk at offset %d: %w", offset, err)
-		}
-
-		// Final chunk returns the completed item.
-		if item != nil {
-			return item, nil
-		}
-
-		offset += chunkSize
-	}
-
-	return nil, fmt.Errorf("sync: upload completed all chunks but received no final item")
-}
-
-// cancelSession makes a best-effort attempt to cancel a server-side upload
-// session. Uses context.Background because the original context may already
-// be canceled (which is often why we're canceling the session).
-func (e *Executor) cancelSession(session *graph.UploadSession) {
-	if err := e.transfers.CancelUploadSession(context.Background(), session); err != nil {
-		e.logger.Warn("failed to cancel upload session", slog.String("error", err.Error()))
 	}
 }

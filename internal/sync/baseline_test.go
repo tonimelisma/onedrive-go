@@ -1021,6 +1021,93 @@ func TestResolveConflict_AlreadyResolved(t *testing.T) {
 	}
 }
 
+func TestLoad_ReturnsCachedBaseline(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+
+	// Seed a baseline entry.
+	outcomes := []Outcome{{
+		Action: ActionDownload, Success: true,
+		Path: "cached.txt", DriveID: driveid.New("d"), ItemID: "i", ItemType: ItemTypeFile,
+		LocalHash: "h", RemoteHash: "h", Size: 10, Mtime: 1,
+	}}
+
+	if err := mgr.Commit(ctx, outcomes, "", "d"); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	// First Load returns the cached baseline from Commit's refresh.
+	b1, err := mgr.Load(ctx)
+	if err != nil {
+		t.Fatalf("first Load: %v", err)
+	}
+
+	// Second Load should return the same pointer (cached, no DB query).
+	b2, err := mgr.Load(ctx)
+	if err != nil {
+		t.Fatalf("second Load: %v", err)
+	}
+
+	if b1 != b2 {
+		t.Error("second Load returned a different *Baseline; expected cached pointer")
+	}
+
+	if len(b2.ByPath) != 1 {
+		t.Errorf("ByPath has %d entries, want 1", len(b2.ByPath))
+	}
+}
+
+func TestLoad_CacheInvalidatedByCommit(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+
+	// Seed one entry.
+	outcomes := []Outcome{{
+		Action: ActionDownload, Success: true,
+		Path: "first.txt", DriveID: driveid.New("d"), ItemID: "i1", ItemType: ItemTypeFile,
+		LocalHash: "h1", RemoteHash: "h1", Size: 10, Mtime: 1,
+	}}
+
+	if err := mgr.Commit(ctx, outcomes, "", "d"); err != nil {
+		t.Fatalf("first Commit: %v", err)
+	}
+
+	b1, err := mgr.Load(ctx)
+	if err != nil {
+		t.Fatalf("Load after first commit: %v", err)
+	}
+
+	if len(b1.ByPath) != 1 {
+		t.Fatalf("ByPath has %d entries, want 1", len(b1.ByPath))
+	}
+
+	// Commit a second entry — cache should be invalidated and refreshed.
+	outcomes2 := []Outcome{{
+		Action: ActionDownload, Success: true,
+		Path: "second.txt", DriveID: driveid.New("d"), ItemID: "i2", ItemType: ItemTypeFile,
+		LocalHash: "h2", RemoteHash: "h2", Size: 20, Mtime: 2,
+	}}
+
+	if commitErr := mgr.Commit(ctx, outcomes2, "", "d"); commitErr != nil {
+		t.Fatalf("second Commit: %v", commitErr)
+	}
+
+	b2, loadErr := mgr.Load(ctx)
+	if loadErr != nil {
+		t.Fatalf("Load after second commit: %v", loadErr)
+	}
+
+	if len(b2.ByPath) != 2 {
+		t.Errorf("ByPath has %d entries, want 2 (cache should reflect both commits)", len(b2.ByPath))
+	}
+}
+
 func TestMigrations_Idempotent(t *testing.T) {
 	t.Parallel()
 
@@ -1051,5 +1138,140 @@ func TestMigrations_Idempotent(t *testing.T) {
 
 	if b == nil {
 		t.Error("Load returned nil baseline")
+	}
+}
+
+func TestCommitConflict_AutoResolved(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	fixedTime := time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC)
+	mgr.nowFunc = func() time.Time { return fixedTime }
+
+	outcomes := []Outcome{{
+		Action:       ActionConflict,
+		Success:      true,
+		Path:         "auto-resolved.txt",
+		DriveID:      driveid.New("d"),
+		ItemID:       "new-item",
+		ParentID:     "root",
+		ItemType:     ItemTypeFile,
+		LocalHash:    "local-h",
+		RemoteHash:   "remote-h",
+		Size:         512,
+		Mtime:        fixedTime.UnixNano(),
+		ConflictType: "edit_delete",
+		ResolvedBy:   "auto",
+	}}
+
+	if err := mgr.Commit(ctx, outcomes, "", "d"); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	// Verify conflict row was inserted as already resolved.
+	var resolution, resolvedBy string
+	var resolvedAt int64
+
+	err := mgr.db.QueryRowContext(ctx,
+		"SELECT resolution, resolved_at, resolved_by FROM conflicts WHERE path = ?",
+		"auto-resolved.txt",
+	).Scan(&resolution, &resolvedAt, &resolvedBy)
+	if err != nil {
+		t.Fatalf("querying conflict: %v", err)
+	}
+
+	if resolution != ResolutionKeepLocal {
+		t.Errorf("resolution = %q, want %q", resolution, ResolutionKeepLocal)
+	}
+
+	if resolvedBy != "auto" {
+		t.Errorf("resolved_by = %q, want %q", resolvedBy, "auto")
+	}
+
+	if resolvedAt == 0 {
+		t.Error("resolved_at should be non-zero")
+	}
+
+	// Verify baseline was also updated (auto-resolve upserts baseline).
+	entry := mgr.baseline.ByPath["auto-resolved.txt"]
+	if entry == nil {
+		t.Fatal("baseline entry not found for auto-resolved conflict")
+	}
+
+	if entry.ItemID != "new-item" {
+		t.Errorf("ItemID = %q, want %q", entry.ItemID, "new-item")
+	}
+
+	if entry.LocalHash != "local-h" {
+		t.Errorf("LocalHash = %q, want %q", entry.LocalHash, "local-h")
+	}
+}
+
+func TestListAllConflicts(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+
+	// Seed an unresolved conflict.
+	seedConflict(t, mgr, "unresolved.txt", "edit_edit")
+
+	// Seed and resolve a conflict.
+	resolvedID := seedConflict(t, mgr, "resolved-file.txt", "edit_delete")
+	ctx := context.Background()
+
+	if err := mgr.ResolveConflict(ctx, resolvedID, ResolutionKeepLocal); err != nil {
+		t.Fatalf("ResolveConflict: %v", err)
+	}
+
+	// ListConflicts should return only unresolved.
+	unresolved, err := mgr.ListConflicts(ctx)
+	if err != nil {
+		t.Fatalf("ListConflicts: %v", err)
+	}
+
+	if len(unresolved) != 1 {
+		t.Fatalf("ListConflicts: got %d, want 1", len(unresolved))
+	}
+
+	if unresolved[0].Path != "unresolved.txt" {
+		t.Errorf("unresolved path = %q, want %q", unresolved[0].Path, "unresolved.txt")
+	}
+
+	// ListAllConflicts should return both.
+	all, err := mgr.ListAllConflicts(ctx)
+	if err != nil {
+		t.Fatalf("ListAllConflicts: %v", err)
+	}
+
+	if len(all) != 2 {
+		t.Fatalf("ListAllConflicts: got %d, want 2", len(all))
+	}
+
+	// Verify resolution fields are populated.
+	var found bool
+
+	for i := range all {
+		if all[i].Path == "resolved-file.txt" {
+			found = true
+
+			if all[i].Resolution != ResolutionKeepLocal {
+				t.Errorf("resolution = %q, want %q", all[i].Resolution, ResolutionKeepLocal)
+			}
+
+			if all[i].ResolvedBy != "user" {
+				t.Errorf("resolved_by = %q, want %q", all[i].ResolvedBy, "user")
+			}
+
+			if all[i].ResolvedAt == 0 {
+				t.Error("resolved_at should be non-zero")
+			}
+		}
+	}
+
+	if !found {
+		t.Error("resolved-file.txt not found in ListAllConflicts results")
 	}
 }

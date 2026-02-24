@@ -17,15 +17,19 @@ import (
 const conflictIDPrefixLen = 8
 
 func newConflictsCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "conflicts",
 		Short: "List unresolved sync conflicts",
-		Long: `Display all unresolved sync conflicts from the state database.
+		Long: `Display sync conflicts from the state database.
 
-Shows conflicts detected during sync that require user resolution.
-Use 'onedrive-go resolve' to resolve conflicts.`,
+By default shows only unresolved conflicts. Use --history to include
+resolved conflicts. Use 'onedrive-go resolve' to resolve conflicts.`,
 		RunE: runConflicts,
 	}
+
+	cmd.Flags().Bool("history", false, "show all conflicts including resolved ones")
+
+	return cmd
 }
 
 // conflictJSON is the JSON-serializable representation of a conflict.
@@ -36,6 +40,9 @@ type conflictJSON struct {
 	DetectedAt   string `json:"detected_at"`
 	LocalHash    string `json:"local_hash,omitempty"`
 	RemoteHash   string `json:"remote_hash,omitempty"`
+	Resolution   string `json:"resolution"`
+	ResolvedAt   string `json:"resolved_at,omitempty"`
+	ResolvedBy   string `json:"resolved_by,omitempty"`
 }
 
 func runConflicts(cmd *cobra.Command, _ []string) error {
@@ -54,13 +61,29 @@ func runConflicts(cmd *cobra.Command, _ []string) error {
 
 	ctx := cmd.Context()
 
-	conflicts, err := mgr.ListConflicts(ctx)
+	history, err := cmd.Flags().GetBool("history")
+	if err != nil {
+		return err
+	}
+
+	var conflicts []sync.ConflictRecord
+	if history {
+		conflicts, err = mgr.ListAllConflicts(ctx)
+	} else {
+		conflicts, err = mgr.ListConflicts(ctx)
+	}
+
 	if err != nil {
 		return err
 	}
 
 	if len(conflicts) == 0 {
-		fmt.Println("No unresolved conflicts.")
+		if history {
+			fmt.Println("No conflicts in history.")
+		} else {
+			fmt.Println("No unresolved conflicts.")
+		}
+
 		return nil
 	}
 
@@ -68,7 +91,7 @@ func runConflicts(cmd *cobra.Command, _ []string) error {
 		return printConflictsJSON(conflicts)
 	}
 
-	printConflictsTable(conflicts)
+	printConflictsTable(conflicts, history)
 
 	return nil
 }
@@ -77,14 +100,22 @@ func printConflictsJSON(conflicts []sync.ConflictRecord) error {
 	items := make([]conflictJSON, len(conflicts))
 	for i := range conflicts {
 		c := &conflicts[i]
-		items[i] = conflictJSON{
+		cj := conflictJSON{
 			ID:           c.ID,
 			Path:         c.Path,
 			ConflictType: c.ConflictType,
 			DetectedAt:   time.Unix(0, c.DetectedAt).UTC().Format(time.RFC3339),
 			LocalHash:    c.LocalHash,
 			RemoteHash:   c.RemoteHash,
+			Resolution:   c.Resolution,
+			ResolvedBy:   c.ResolvedBy,
 		}
+
+		if c.ResolvedAt != 0 {
+			cj.ResolvedAt = time.Unix(0, c.ResolvedAt).UTC().Format(time.RFC3339)
+		}
+
+		items[i] = cj
 	}
 
 	enc := json.NewEncoder(os.Stdout)
@@ -97,8 +128,14 @@ func printConflictsJSON(conflicts []sync.ConflictRecord) error {
 	return nil
 }
 
-func printConflictsTable(conflicts []sync.ConflictRecord) {
-	headers := []string{"ID", "PATH", "TYPE", "DETECTED"}
+func printConflictsTable(conflicts []sync.ConflictRecord, history bool) {
+	var headers []string
+	if history {
+		headers = []string{"ID", "PATH", "TYPE", "RESOLUTION", "RESOLVED BY", "DETECTED"}
+	} else {
+		headers = []string{"ID", "PATH", "TYPE", "DETECTED"}
+	}
+
 	rows := make([][]string, len(conflicts))
 
 	for i := range conflicts {
@@ -110,7 +147,11 @@ func printConflictsTable(conflicts []sync.ConflictRecord) {
 
 		detected := time.Unix(0, c.DetectedAt).UTC().Format(time.RFC3339)
 
-		rows[i] = []string{idPrefix, c.Path, c.ConflictType, detected}
+		if history {
+			rows[i] = []string{idPrefix, c.Path, c.ConflictType, c.Resolution, c.ResolvedBy, detected}
+		} else {
+			rows[i] = []string{idPrefix, c.Path, c.ConflictType, detected}
+		}
 	}
 
 	printTable(os.Stdout, headers, rows)

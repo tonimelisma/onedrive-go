@@ -70,6 +70,9 @@ The `doRetry` loop reused an `io.Reader` body across retries. Fix: seek the body
 - 416 Range Not Satisfiable is recoverable — call `QueryUploadSession` to discover `nextExpectedRanges`.
 - Upload session URLs are pre-authenticated (no `Authorization` header).
 
+### Simple upload can't set metadata — post-upload PATCH required
+Graph API simple upload (PUT `/content`) sends raw binary — there's no way to include `fileSystemInfo` in the same request. Files ≤4 MiB uploaded via `SimpleUpload` get server receipt timestamps instead of local mtime. Fix: call `UpdateFileSystemInfo` (PATCH `/drives/{id}/items/{id}`) after simple upload when mtime is non-zero. One extra API call per small file, but mtime correctness prevents unnecessary re-evaluation on the next sync cycle.
+
 ### httptest closure variable forward-reference
 When an `httptest.NewServer` handler needs `srv.URL`, declare `var srv *httptest.Server` first, then assign. Direct assignment with a closure referencing `srv.URL` won't compile.
 
@@ -358,5 +361,32 @@ When `CreateUploadSession` succeeds, ANY subsequent failure (file open, chunk up
 CLI command handlers should use `cmd.Context()` instead of `context.Background()` so Ctrl+C signal propagation works. Cobra sets up the context with signal handling. Exception: upload session cancel paths intentionally use `context.Background()` because the cancel must succeed even when the original context is done. Helper functions that don't receive `cmd` (e.g., `openBrowser` callback, deep status helpers) can keep `context.Background()`.
 
 ### Executor state initialization for out-of-band operations
-`Executor.Execute()` initializes `baseline` and `createdFolders`, but operations called outside `Execute()` (like `resolveTransfer` from conflict resolution) must initialize these themselves. Lazy initialization guard: check for nil and load from DB if needed. Top-level files work without initialization (resolveParentID returns "root" without map access), but nested files would panic on nil map.
+`Executor.Execute()` initializes `baseline` and `createdFolders`, but operations called outside `Execute()` (like `resolveTransfer` from conflict resolution) must initialize these themselves. Lazy initialization guard: check for nil and load from DB if needed. Top-level files work without initialization (resolveParentID returns "root" without map access), but nested files would panic on nil map. **Superseded** by ephemeral Executor pattern (B-079): `NewExecution(cfg, bl)` always initializes both fields, making the bug class structurally impossible.
+
+### Encapsulate stateful protocols in the provider, not the consumer
+Upload session lifecycle (create session, loop chunks, cancel on error) was duplicated in both Executor and CLI — both had bugs (session leak B-075, duplicated chunked loops). Fix: encapsulate the entire state machine inside `graph.Client.Upload()`. Consumers call one method; the provider handles simple-vs-chunked routing, session lifecycle, and cleanup. General rule: if a protocol has setup/teardown or multi-step state machines, the package that owns the resource should own the protocol.
+
+### Cache-through pattern for BaselineManager.Load()
+`BaselineManager.Load()` returns cached `*Baseline` if `m.baseline != nil`. `Commit()` invalidates (`m.baseline = nil`) before calling `Load()` to refresh. Safe because `BaselineManager` exclusively owns the DB (sole-writer pattern, `SetMaxOpenConns(1)`). For N conflict resolutions, this turns 2N DB loads into 1 initial load + N Commit refreshes. The Commit refreshes are needed for correctness — subsequent resolves must see prior resolve outcomes in the baseline.
+
+### Ephemeral structs for per-call mutable state prevent temporal coupling
+Executor had temporal coupling: `Execute()` initialized `baseline` and `createdFolders`, but `ResolveConflict` called `resolveTransfer` without a prior `Execute()`, causing nil-map panics (B-077). Fix: split into immutable `ExecutorConfig` (created once) + ephemeral `Executor` (created per call via `NewExecution(cfg, bl)`). The ephemeral struct always initializes all mutable fields at construction. Callers cannot forget to initialize because there is no separate initialization step.
+
+### `io.ReaderAt` enables retry-safe uploads without file re-open
+`*os.File` satisfies `io.ReaderAt` — reads at absolute offsets without affecting the file position. `io.NewSectionReader(content, offset, length)` creates independent readers for each chunk. When `withRetry` retries `Upload()`, the graph-level `Upload()` creates fresh `SectionReader`s from the same `io.ReaderAt`, so retries are safe without re-opening the file. This is why `Upload()` accepts `io.ReaderAt` instead of `io.Reader`.
+
+### Edit-delete conflicts: auto-resolve by uploading local version
+Industry consensus (rclone, Dropbox, Google Drive, OneDrive official, abraunegg): when a file was modified locally but deleted remotely, the modified version wins. Implemented as early detection in `executeConflict()`: if `ConflictType == "edit_delete"`, call `executeUpload()` instead of the keep_both rename-and-download path. The outcome gets `ResolvedBy: "auto"`, and `commitConflict()` inserts the conflict record as already resolved (`resolution: "keep_local"`, `resolved_by: "auto"`) while also upserting the baseline (the upload created a new remote item). Visible via `conflicts --history`.
+
+### Folder classifiers must use upfront mode filtering (B-069)
+The file classifier applies mode filtering upfront (`localChanged = false` for download-only,
+`remoteChanged = false` for upload-only) before the decision matrix. The folder classifier
+originally used per-case filtering (`if mode == X { return nil }` inside switch cases), which
+made it easy to miss a case — ED8 had no mode guard, causing locally-deleted folders to be
+cleaned up instead of propagated to remote. Fix: restructured both folder classifiers
+(`classifyFolderWithBaseline`, `classifyFolderNoBaseline`) to use upfront mode filtering
+parallel to the file path, with `localDeleted` as an explicit boolean.
+
+### Auto-resolved conflicts need baseline upsert in commitConflict
+When `commitConflict()` handles an auto-resolved outcome, it must also call `commitUpsert()` to update the baseline. Without this, the next sync cycle would see the file as untracked (no baseline entry) and try to upload it again, creating a re-detection loop.
 

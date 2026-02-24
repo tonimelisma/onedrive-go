@@ -199,7 +199,8 @@ func resolveWithTransfers(
 		DriveID:   driveID,
 		Fetcher:   client,
 		Items:     client,
-		Transfers: client,
+		Downloads: client,
+		Uploads:   client,
 		Logger:    logger,
 	})
 	if err != nil {

@@ -346,11 +346,11 @@ func classifyFileLocalPresent(
 		if view.Local != nil && view.Local.Hash == view.Remote.Hash {
 			return []Action{makeAction(ActionUpdateSynced, view)} // EF4: convergent edit
 		}
-		return []Action{makeConflictAction(view, "edit_edit")} // EF5
+		return []Action{makeConflictAction(view, ConflictEditEdit)} // EF5
 	case !localChanged && remoteDeleted:
 		return []Action{makeAction(ActionLocalDelete, view)} // EF8
 	case localChanged && remoteDeleted:
-		return []Action{makeConflictAction(view, "edit_delete")} // EF9
+		return []Action{makeConflictAction(view, ConflictEditDelete)} // EF9
 	}
 
 	return nil
@@ -376,7 +376,7 @@ func classifyFileNoBaseline(view *PathView, mode SyncMode) []Action {
 		if view.Local.Hash == view.Remote.Hash {
 			return []Action{makeAction(ActionUpdateSynced, view)} // EF11: convergent create
 		}
-		return []Action{makeConflictAction(view, "create_create")} // EF12
+		return []Action{makeConflictAction(view, ConflictCreateCreate)} // EF12
 
 	case hasLocal && !hasRemote:
 		return []Action{makeAction(ActionUpload, view)} // EF13
@@ -406,28 +406,41 @@ func classifyFolderWithBaseline(view *PathView, mode SyncMode) []Action {
 	hasRemote := view.Remote != nil && !view.Remote.IsDeleted
 	hasLocal := view.Local != nil
 	remoteDeleted := view.Remote != nil && view.Remote.IsDeleted
+	localDeleted := !hasLocal // baseline exists (we're in WithBaseline)
 
+	// Upfront mode filtering — parallel to classifyFileWithBaseline.
+	// Defense in depth: the engine already skips observers for suppressed
+	// sides, but the planner should be self-contained.
+	if mode == SyncDownloadOnly {
+		localDeleted = false
+	}
+
+	if mode == SyncUploadOnly {
+		hasRemote = false
+		remoteDeleted = false
+	}
+
+	return classifyFolderWithFlags(view, localDeleted, hasRemote, remoteDeleted)
+}
+
+// classifyFolderWithFlags implements the ED1, ED4, ED6, ED7, ED8 decision
+// matrix using pre-computed boolean flags.
+func classifyFolderWithFlags(view *PathView, localDeleted, hasRemote, remoteDeleted bool) []Action {
 	switch {
-	case hasLocal && hasRemote:
+	case !localDeleted && hasRemote:
 		return nil // ED1: in sync
 
-	case !hasLocal && hasRemote:
-		if mode == SyncUploadOnly {
-			return nil
-		}
-		return []Action{makeFolderCreate(view, CreateLocal)} // ED4: recreate
+	case localDeleted && hasRemote:
+		return []Action{makeFolderCreate(view, CreateLocal)} // ED4: remote wins
 
-	case hasLocal && remoteDeleted:
-		if mode == SyncUploadOnly {
-			return nil
-		}
+	case !localDeleted && remoteDeleted:
 		return []Action{makeAction(ActionLocalDelete, view)} // ED6
 
-	case !hasLocal && remoteDeleted:
-		return []Action{makeAction(ActionCleanup, view)} // ED7
+	case localDeleted && remoteDeleted:
+		return []Action{makeAction(ActionCleanup, view)} // ED7: both deleted
 
-	case !hasLocal && !hasRemote:
-		return []Action{makeAction(ActionCleanup, view)} // ED8
+	case localDeleted && !hasRemote && !remoteDeleted:
+		return []Action{makeAction(ActionRemoteDelete, view)} // ED8: propagate delete
 	}
 
 	return nil
@@ -440,20 +453,23 @@ func classifyFolderNoBaseline(view *PathView, mode SyncMode) []Action {
 	hasLocal := view.Local != nil
 	remoteDeleted := view.Remote != nil && view.Remote.IsDeleted
 
+	// Upfront mode filtering — parallel to classifyFileNoBaseline.
+	if mode == SyncDownloadOnly {
+		hasLocal = false
+	}
+
+	if mode == SyncUploadOnly {
+		hasRemote = false
+	}
+
 	switch {
 	case hasLocal && hasRemote:
 		return []Action{makeAction(ActionUpdateSynced, view)} // ED2: adopt
 
 	case !hasLocal && hasRemote:
-		if mode == SyncUploadOnly {
-			return nil
-		}
 		return []Action{makeFolderCreate(view, CreateLocal)} // ED3
 
 	case hasLocal && !hasRemote && !remoteDeleted:
-		if mode == SyncDownloadOnly {
-			return nil
-		}
 		return []Action{makeFolderCreate(view, CreateRemote)} // ED5
 	}
 
