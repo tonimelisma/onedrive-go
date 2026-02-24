@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"log/slog"
 	stdsync "sync"
 	"sync/atomic"
 )
@@ -34,16 +35,18 @@ type DepTracker struct {
 	done        chan struct{} // closed when all actions complete
 	total       int32
 	completed   atomic.Int32
+	logger      *slog.Logger
 }
 
 // NewDepTracker creates a tracker with the given channel buffer sizes.
-func NewDepTracker(interactiveBuf, bulkBuf int) *DepTracker {
+func NewDepTracker(interactiveBuf, bulkBuf int, logger *slog.Logger) *DepTracker {
 	return &DepTracker{
 		actions:     make(map[int64]*TrackedAction),
 		byPath:      make(map[string]*TrackedAction),
 		interactive: make(chan *TrackedAction, interactiveBuf),
 		bulk:        make(chan *TrackedAction, bulkBuf),
 		done:        make(chan struct{}),
+		logger:      logger,
 	}
 }
 
@@ -87,11 +90,24 @@ func (dt *DepTracker) Add(action *Action, ledgerID int64, depIDs []int64) {
 // Complete marks an action as done and decrements the depsLeft counter on
 // all dependents. Any dependent that reaches zero is dispatched. When all
 // actions are complete, the done channel is closed.
+//
+// If ledgerID is unknown (not in the tracker), the completed counter is
+// still incremented to prevent deadlock, and a warning is logged. This
+// should never happen in normal operation but guards against subtle bugs
+// in ledger/tracker population.
 func (dt *DepTracker) Complete(ledgerID int64) {
 	dt.mu.Lock()
 	ta, ok := dt.actions[ledgerID]
 	if !ok {
 		dt.mu.Unlock()
+		dt.logger.Warn("tracker: Complete called with unknown ledger ID",
+			slog.Int64("ledger_id", ledgerID),
+		)
+
+		if dt.completed.Add(1) == dt.total {
+			close(dt.done)
+		}
+
 		return
 	}
 
