@@ -61,7 +61,7 @@ type SyncReport struct {
 type Engine struct {
 	baseline *BaselineManager
 	planner  *Planner
-	executor *Executor
+	execCfg  *ExecutorConfig
 	fetcher  DeltaFetcher
 	syncRoot string
 	driveID  driveid.ID
@@ -76,12 +76,12 @@ func NewEngine(cfg *EngineConfig) (*Engine, error) {
 		return nil, fmt.Errorf("sync: creating engine: %w", err)
 	}
 
-	executor := NewExecutor(cfg.Items, cfg.Transfers, cfg.SyncRoot, cfg.DriveID, cfg.Logger)
+	execCfg := NewExecutorConfig(cfg.Items, cfg.Transfers, cfg.SyncRoot, cfg.DriveID, cfg.Logger)
 
 	return &Engine{
 		baseline: bm,
 		planner:  NewPlanner(cfg.Logger),
-		executor: executor,
+		execCfg:  execCfg,
 		fetcher:  cfg.Fetcher,
 		syncRoot: cfg.SyncRoot,
 		driveID:  cfg.DriveID,
@@ -220,7 +220,8 @@ func buildReport(plan *ActionPlan, mode SyncMode, opts RunOpts) *SyncReport {
 func (e *Engine) executeAndCommit(
 	ctx context.Context, plan *ActionPlan, bl *Baseline, deltaToken string, report *SyncReport,
 ) error {
-	outcomes, execErr := e.executor.Execute(ctx, plan, bl)
+	exec := NewExecution(e.execCfg, bl)
+	outcomes, execErr := exec.Execute(ctx, plan)
 	report.Succeeded, report.Failed, report.Errors = classifyOutcomes(outcomes)
 
 	if len(outcomes) > 0 {
@@ -344,22 +345,15 @@ func (e *Engine) resolveKeepRemote(ctx context.Context, c *ConflictRecord) error
 }
 
 // resolveTransfer executes a single transfer (upload or download) for conflict
-// resolution and commits the result to the baseline. Initializes executor
-// state because resolveTransfer can be called outside of Execute().
+// resolution and commits the result to the baseline. Creates a fresh executor
+// per call — no lazy initialization needed.
 func (e *Engine) resolveTransfer(ctx context.Context, c *ConflictRecord, actionType ActionType) error {
-	// Ensure executor state is initialized (resolveParentID needs these).
-	if e.executor.createdFolders == nil {
-		e.executor.createdFolders = make(map[string]string)
+	bl, err := e.baseline.Load(ctx)
+	if err != nil {
+		return fmt.Errorf("sync: loading baseline for resolve: %w", err)
 	}
 
-	if e.executor.baseline == nil {
-		bl, err := e.baseline.Load(ctx)
-		if err != nil {
-			return fmt.Errorf("sync: loading baseline for resolve: %w", err)
-		}
-
-		e.executor.baseline = bl
-	}
+	exec := NewExecution(e.execCfg, bl)
 
 	action := &Action{
 		Type:    actionType,
@@ -371,9 +365,9 @@ func (e *Engine) resolveTransfer(ctx context.Context, c *ConflictRecord, actionT
 
 	var outcome Outcome
 	if actionType == ActionUpload {
-		outcome = e.executor.executeUpload(ctx, action)
+		outcome = exec.executeUpload(ctx, action)
 	} else {
-		outcome = e.executor.executeDownload(ctx, action)
+		outcome = exec.executeDownload(ctx, action)
 	}
 
 	if !outcome.Success {

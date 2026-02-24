@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 var (
 	binaryPath string
 	drive      string
+	logDir     string
 )
 
 func TestMain(m *testing.M) {
@@ -47,6 +49,26 @@ func TestMain(m *testing.M) {
 		drive = "personal:test@example.com"
 	}
 
+	// Set up debug log directory for E2E visibility.
+	if dir := os.Getenv("E2E_LOG_DIR"); dir != "" {
+		if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil {
+			fmt.Fprintf(os.Stderr, "creating E2E log dir: %v\n", mkErr)
+			os.Exit(1)
+		}
+
+		logDir = dir
+	} else {
+		dir, mkErr := os.MkdirTemp("", "onedrive-e2e-logs-*")
+		if mkErr != nil {
+			fmt.Fprintf(os.Stderr, "creating E2E log temp dir: %v\n", mkErr)
+			os.Exit(1)
+		}
+
+		logDir = dir
+	}
+
+	fmt.Fprintf(os.Stderr, "E2E debug logs: %s\n", logDir)
+
 	os.Exit(m.Run())
 }
 
@@ -68,10 +90,72 @@ func findModuleRoot() string {
 	}
 }
 
+// sanitizeTestName replaces characters invalid in filenames.
+func sanitizeTestName(name string) string {
+	return strings.NewReplacer("/", "_", " ", "_", ":", "_").Replace(name)
+}
+
+// shouldAddDebug returns true unless args already contain a mutually exclusive
+// verbosity flag (--quiet, -q, --verbose, -v, --debug).
+func shouldAddDebug(args []string) bool {
+	for _, a := range args {
+		switch a {
+		case "--quiet", "-q", "--verbose", "-v", "--debug":
+			return false
+		}
+	}
+
+	return true
+}
+
+// logCLIExecution appends CLI invocation details to a per-test debug log file.
+func logCLIExecution(t *testing.T, args []string, stdout, stderr string) {
+	t.Helper()
+
+	logPath := filepath.Join(logDir, sanitizeTestName(t.Name())+".log")
+
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Logf("warning: cannot write debug log: %v", err)
+		return
+	}
+	defer f.Close()
+
+	fmt.Fprintf(f, "=== %s ===\n", time.Now().Format(time.RFC3339))
+	fmt.Fprintf(f, "CMD: %s\n", strings.Join(args, " "))
+	fmt.Fprintf(f, "--- STDOUT ---\n%s\n", stdout)
+	fmt.Fprintf(f, "--- STDERR ---\n%s\n\n", stderr)
+}
+
+// registerLogDump registers a cleanup that dumps the debug log on test failure.
+func registerLogDump(t *testing.T) {
+	t.Helper()
+
+	logPath := filepath.Join(logDir, sanitizeTestName(t.Name())+".log")
+
+	t.Cleanup(func() {
+		if t.Failed() {
+			data, err := os.ReadFile(logPath)
+			if err != nil {
+				return
+			}
+
+			t.Logf("=== DEBUG LOG DUMP (%s) ===\n%s", logPath, string(data))
+		} else {
+			t.Logf("debug log: %s", logPath)
+		}
+	})
+}
+
 func runCLI(t *testing.T, args ...string) (string, string) {
 	t.Helper()
 
-	fullArgs := append([]string{"--drive", drive}, args...)
+	fullArgs := []string{"--drive", drive}
+	if shouldAddDebug(args) {
+		fullArgs = append(fullArgs, "--debug")
+	}
+
+	fullArgs = append(fullArgs, args...)
 	cmd := exec.Command(binaryPath, fullArgs...)
 
 	var stdout, stderr bytes.Buffer
@@ -79,6 +163,8 @@ func runCLI(t *testing.T, args ...string) (string, string) {
 	cmd.Stderr = &stderr
 
 	err := cmd.Run()
+	logCLIExecution(t, fullArgs, stdout.String(), stderr.String())
+
 	if err != nil {
 		t.Fatalf("CLI command %v failed: %v\nstdout: %s\nstderr: %s", args, err, stdout.String(), stderr.String())
 	}
@@ -414,7 +500,12 @@ func testConcurrentUploads(t *testing.T, testFolder string) {
 func runCLIExpectError(t *testing.T, args ...string) string {
 	t.Helper()
 
-	fullArgs := append([]string{"--drive", drive}, args...)
+	fullArgs := []string{"--drive", drive}
+	if shouldAddDebug(args) {
+		fullArgs = append(fullArgs, "--debug")
+	}
+
+	fullArgs = append(fullArgs, args...)
 	cmd := exec.Command(binaryPath, fullArgs...)
 
 	var stdout, stderr bytes.Buffer
@@ -422,6 +513,8 @@ func runCLIExpectError(t *testing.T, args ...string) string {
 	cmd.Stderr = &stderr
 
 	err := cmd.Run()
+	logCLIExecution(t, fullArgs, stdout.String(), stderr.String())
+
 	require.Error(t, err, "expected CLI to fail for args %v, but it succeeded\nstdout: %s\nstderr: %s",
 		args, stdout.String(), stderr.String())
 

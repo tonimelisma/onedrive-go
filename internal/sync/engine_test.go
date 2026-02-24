@@ -169,7 +169,7 @@ func newTestEngine(t *testing.T, mock *engineMockClient) (*Engine, string) {
 	}
 
 	// Override executor sleep to be instant in tests.
-	eng.executor.sleepFunc = func(_ context.Context, _ time.Duration) error { return nil }
+	eng.execCfg.sleepFunc = func(_ context.Context, _ time.Duration) error { return nil }
 
 	t.Cleanup(func() {
 		if err := eng.Close(); err != nil {

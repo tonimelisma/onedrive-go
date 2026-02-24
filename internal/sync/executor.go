@@ -41,18 +41,15 @@ const (
 	errClassFatal                     // abort the entire sync cycle
 )
 
-// Executor takes an ActionPlan and executes each action against the Graph API
-// and local filesystem, producing []Outcome. It never writes to the database.
-type Executor struct {
+// ExecutorConfig holds the immutable configuration for creating per-call
+// Executor instances. Separated from mutable state to prevent temporal
+// coupling and enable Phase 5 thread safety.
+type ExecutorConfig struct {
 	items     ItemClient
 	transfers TransferClient
 	syncRoot  string     // absolute path to local sync directory
 	driveID   driveid.ID // per-drive context (B-068)
 	logger    *slog.Logger
-
-	// Mutable state per Execute() call.
-	baseline       *Baseline
-	createdFolders map[string]string // relative path -> remote item ID
 
 	// Injectable for testing.
 	nowFunc   func() time.Time
@@ -60,11 +57,24 @@ type Executor struct {
 	sleepFunc func(ctx context.Context, d time.Duration) error
 }
 
-// NewExecutor creates an Executor bound to a specific drive and sync root.
-func NewExecutor(
+// Executor takes an ActionPlan and executes each action against the Graph API
+// and local filesystem, producing []Outcome. It never writes to the database.
+// Created fresh per Execute() call via NewExecution — mutable state is always
+// initialized, eliminating nil-map panics and temporal coupling.
+type Executor struct {
+	*ExecutorConfig
+
+	// Mutable state per Execute() call — always initialized by NewExecution.
+	baseline       *Baseline
+	createdFolders map[string]string // relative path -> remote item ID
+}
+
+// NewExecutorConfig creates an immutable executor configuration bound to a
+// specific drive and sync root. Use NewExecution to create per-call executors.
+func NewExecutorConfig(
 	items ItemClient, transfers TransferClient, syncRoot string, driveID driveid.ID, logger *slog.Logger,
-) *Executor {
-	return &Executor{
+) *ExecutorConfig {
+	return &ExecutorConfig{
 		items:     items,
 		transfers: transfers,
 		syncRoot:  syncRoot,
@@ -76,12 +86,19 @@ func NewExecutor(
 	}
 }
 
+// NewExecution creates an ephemeral Executor for a single Execute() call.
+// Both mutable fields are always initialized, preventing nil-map panics.
+func NewExecution(cfg *ExecutorConfig, bl *Baseline) *Executor {
+	return &Executor{
+		ExecutorConfig: cfg,
+		baseline:       bl,
+		createdFolders: make(map[string]string),
+	}
+}
+
 // Execute runs all nine phases of the action plan in order and returns
 // the collected outcomes. Context cancellation stops between phases.
-func (e *Executor) Execute(ctx context.Context, plan *ActionPlan, baseline *Baseline) ([]Outcome, error) {
-	e.baseline = baseline
-	e.createdFolders = make(map[string]string)
-
+func (e *Executor) Execute(ctx context.Context, plan *ActionPlan) ([]Outcome, error) {
 	e.logger.Info("executor starting",
 		slog.Int("folder_creates", len(plan.FolderCreates)),
 		slog.Int("moves", len(plan.Moves)),
