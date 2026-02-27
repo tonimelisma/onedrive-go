@@ -71,6 +71,7 @@ type LocalObserver struct {
 	droppedEvents      atomic.Int64                                     // events dropped by trySend due to full channel
 	safetyScanOverride time.Duration                                    // overrides safetyScanInterval; 0 = use constant
 	sleepFunc          func(ctx context.Context, d time.Duration) error // injectable for testing
+	safetyTickFunc     func(d time.Duration) (<-chan time.Time, func()) // injectable for testing; returns tick channel + stop func
 }
 
 // NewLocalObserver creates a LocalObserver. The baseline must be loaded (from
@@ -80,6 +81,10 @@ func NewLocalObserver(baseline *Baseline, logger *slog.Logger) *LocalObserver {
 		baseline:  baseline,
 		logger:    logger,
 		sleepFunc: timeSleep,
+		safetyTickFunc: func(d time.Duration) (<-chan time.Time, func()) {
+			t := time.NewTicker(d)
+			return t.C, t.Stop
+		},
 		watcherFactory: func() (FsWatcher, error) {
 			w, err := fsnotify.NewWatcher()
 			if err != nil {
@@ -107,7 +112,8 @@ func (o *LocalObserver) trySend(ctx context.Context, events chan<- ChangeEvent, 
 }
 
 // DroppedEvents returns the cumulative number of events dropped by trySend
-// due to a full channel. Use ResetDroppedEvents for per-cycle reporting.
+// due to a full channel. Production code uses ResetDroppedEvents for per-cycle
+// reporting; this accessor is retained for tests and diagnostics.
 func (o *LocalObserver) DroppedEvents() int64 {
 	return o.droppedEvents.Load()
 }
