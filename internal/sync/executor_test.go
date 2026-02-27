@@ -1843,11 +1843,11 @@ func TestExecutor_LocalDeleteFolder_TrashSuccess(t *testing.T) {
 // Regression: B-076 — partial file cleaned on download error after write
 // ---------------------------------------------------------------------------
 
-// TestExecutor_Download_PartialFileCleanedOnCloseError verifies that when a
-// download writes bytes successfully but then fails mid-stream, the .partial
-// file is removed. Existing tests cover the API error (no bytes written) and
-// success paths, but not the "write succeeded, then error" variant.
-func TestExecutor_Download_PartialFileCleanedOnCloseError(t *testing.T) {
+// TestExecutor_Download_PartialFileCleanedOnMidStreamError verifies that when a
+// download fails mid-stream after writing some bytes, the .partial file is
+// removed. Existing tests cover the API error (no bytes written) and success
+// paths, but not the "partial write succeeded, then network error" variant.
+func TestExecutor_Download_PartialFileCleanedOnMidStreamError(t *testing.T) {
 	t.Parallel()
 
 	dl := &executorMockDownloader{

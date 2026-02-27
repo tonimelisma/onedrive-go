@@ -305,9 +305,12 @@ func TestE2E_RoundTrip(t *testing.T) {
 	})
 
 	t.Run("whoami_text", func(t *testing.T) {
-		// Run whoami without --json. Output should contain account email and drive type.
+		// Run whoami without --json. Output should contain account email.
 		stdout, _ := runCLI(t, "whoami")
-		assert.Contains(t, stdout, "outlook.com", "whoami text output should contain the account email")
+
+		// Extract email from the drive variable (format: "personal:user@example.com").
+		email := strings.SplitN(drive, ":", 2)[1]
+		assert.Contains(t, stdout, email, "whoami text output should contain the account email")
 	})
 
 	t.Run("status", func(t *testing.T) {
