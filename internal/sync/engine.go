@@ -72,6 +72,7 @@ type Engine struct {
 	driveID   driveid.ID
 	logger    *slog.Logger
 	remoteObs *RemoteObserver // stored during RunWatch for delta token reads
+	localObs  *LocalObserver  // stored during RunWatch for drop counter reads
 }
 
 // NewEngine creates an Engine, initializing the BaselineManager (which opens
@@ -501,6 +502,9 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 			e.processBatch(ctx, batch, bl, mode, safety, tracker)
 
 		case obsErr := <-errs:
+			// Observers return nil on clean context cancellation and non-nil
+			// on genuine failures (e.g., nosync guard, watcher creation error).
+			// RemoteObserver retries indefinitely and only exits on ctx cancel.
 			if obsErr != nil {
 				e.logger.Warn("observer error",
 					slog.String("error", obsErr.Error()),
@@ -574,6 +578,7 @@ func (e *Engine) startObservers(
 	// Local observer (skip for download-only mode).
 	if mode != SyncDownloadOnly {
 		localObs := NewLocalObserver(bl, e.logger)
+		e.localObs = localObs
 
 		obsWg.Add(1)
 		count++
@@ -713,6 +718,16 @@ func (e *Engine) watchCycleCompletion(ctx context.Context, tracker *DepTracker, 
 			e.logger.Error("failed to commit delta token for watch cycle",
 				slog.String("cycle_id", cycleID),
 				slog.String("error", commitErr.Error()),
+			)
+		}
+	}
+
+	// Log dropped local events if backpressure occurred during this cycle.
+	if e.localObs != nil {
+		if dropped := e.localObs.DroppedEvents(); dropped > 0 {
+			e.logger.Warn("local observer dropped events due to channel backpressure",
+				slog.String("cycle_id", cycleID),
+				slog.Int64("total_dropped", dropped),
 			)
 		}
 	}
