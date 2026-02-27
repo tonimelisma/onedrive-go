@@ -942,9 +942,15 @@ func TestFlushDebounced_PanicsOnDoubleCall(t *testing.T) {
 	t.Parallel()
 
 	buf := NewBuffer(testLogger(t))
-	ctx := t.Context()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
 
-	_ = buf.FlushDebounced(ctx, time.Hour)
+	out := buf.FlushDebounced(ctx, time.Hour)
+	defer func() {
+		cancel()
+		for range out {
+		}
+	}()
 
 	defer func() {
 		r := recover()
