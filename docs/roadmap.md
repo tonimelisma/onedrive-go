@@ -509,7 +509,52 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 ---
 
-#### 5.2: RunWatch() + continuous pipeline
+#### 5.2.0: Parallel remote + local observation in RunOnce (B-170)
+
+**Goal**: Overlap network-bound remote observation with disk-bound local observation. Immediate performance win for bidirectional sync.
+
+**Rationale**: Remote observation is network-bound (Graph API). Local observation is disk-bound (readdir + hash). Different I/O resources, zero shared mutable state (both read baseline in read-only mode). Running them concurrently is free parallelism that halves observation time.
+
+**1. New Code:**
+- `engine.go`: `RunOnce` steps 2-3 wrapped in `errgroup.Go()` (both goroutines return events + error, assembled after `g.Wait()`).
+
+**2. Code Adaptation:**
+- None — `observeRemote` and `observeLocal` are already independent methods with no shared mutable state.
+
+**3. Code Retirement:**
+- None
+
+**4. CI and Testing:**
+- Existing tests pass unchanged (observation order is irrelevant to correctness).
+- Both CI workflows green.
+
+---
+
+#### 5.2.1: Parallel FullScan hashing (B-096)
+
+**Goal**: Parallelize the #1 performance bottleneck — sequential file hashing during initial sync.
+
+**Rationale**: `FullScan` walks the filesystem sequentially and hashes each file inline. For initial syncs with no baseline (every file is new → needs hash), hashing is 99.98% of total time (100K files × 1MB avg: walk ~200ms, sequential hash ~15 min, parallel hash with 8 cores ~2 min). The walk itself must stay sequential because disk metadata operations (readdir, Lstat) are I/O-serialized at the hardware level — parallel readdir contends on the same disk queue, and on NFS it actively hurts due to IOPS limits.
+
+**Design**: Walk runs to completion exactly as today, populating the `observed` map and collecting a `[]hashJob` slice for files that need hashing (new files, mtime/size changed, racily clean). Then hash jobs are fanned out to `errgroup.SetLimit(runtime.NumCPU())`. Results are collected into `[]ChangeEvent`. Deletion detection runs after the pool drains. ~30 lines of new code, zero architectural change.
+
+**1. New Code:**
+- `observer_local.go`: `hashJob` struct, parallel hash fan-out in `FullScan` after walk completes.
+
+**2. Code Adaptation:**
+- `go.mod`: re-add `golang.org/x/sync` (for `errgroup.SetLimit`).
+
+**3. Code Retirement:**
+- None
+
+**4. CI and Testing:**
+- New test: `TestFullScan_ParallelHashing` — verify correct results with concurrent hashing.
+- Existing FullScan tests pass unchanged.
+- Both CI workflows green.
+
+---
+
+#### 5.2.2: RunWatch() + continuous pipeline
 
 **Goal**: Wire continuous observers into the engine. `sync --watch` works.
 
@@ -519,13 +564,10 @@ This analysis categorizes every part of the codebase by its relationship to the 
   2. Start worker pool (persistent — survives across planning passes)
   3. Start remote observer `Watch` (if not upload-only)
   4. Start local observer `Watch` (if not download-only)
-  5. Loop: wait for buffer flush → plan → deduplicate against tracker → write to ledger → add to tracker
-  6. Delta token management per cycle
+  5. Loop: wait for buffer flush → plan → deduplicate against tracker (B-122) → write to ledger → add to tracker
+  6. Delta token management per cycle (B-121)
   7. Action cancellation for stale in-flight actions when new events arrive
-
-**Performance notes (from review triage):**
-- **Parallel remote + local observation** — both observers are read-only against baseline. Easy `errgroup` win.
-- **Streaming delta processing** — process each page as it arrives instead of collecting all pages first.
+- Write event coalescing in watch event loop (B-107): per-path debounce timer before hashing, so rapid saves produce one hash job, not ten. This is a watch-mode-only concern — FullScan parallel hashing (5.2.1) is separate and simpler.
 
 **2. Code Adaptation:**
 - CLI `sync.go`: `--watch` wired to `RunWatch()`
@@ -620,7 +662,7 @@ This analysis categorizes every part of the codebase by its relationship to the 
 - Case-insensitive collision detection on Linux (two local files differing only in case)
 - **Sync package decomposition (Option B)** — extract `model/` + `logic/` sub-packages as the sync package grows
 - **Filter engine pre-filter** — shared pre-filter at observer outputs for skip_files/skip_dirs/etc.
-- **Performance**: batched commits, parallel local hashing (B-096), concurrent folder creates ($batch API), pipelined observation→execution
+- **Performance**: batched SQLite commits (B-172, deferred until profiling shows bottleneck), concurrent folder creates via $batch API (B-173), streaming delta processing (B-171), adaptive concurrency/AIMD (B-174), bounded tracker with ledger spillover (B-175)
 
 ---
 
@@ -634,10 +676,10 @@ This analysis categorizes every part of the codebase by its relationship to the 
 | 3.5 | 2 | Account/drive system alignment | **COMPLETE** |
 | 4 v1 | 11 | Batch-pipeline sync engine | **SUPERSEDED** |
 | 4 v2 | 9 | Event-driven sync engine | **COMPLETE** |
-| 5 | 5 | Concurrent execution + watch mode | FUTURE |
+| 5 | 7 | Concurrent execution + watch mode | FUTURE |
 | 6 | 5 | Packaging + release | FUTURE |
-| **Total** | **46** | | |
+| **Total** | **48** | | |
 
-Each increment: independently testable, completable in one focused session. Phase 4 v2 count (9, including Increment 0) replaces the original Phase 4 v1 count (11). Phase 5 count (5, increments 5.0-5.4) replaces the original sketch (6); collapsed from an earlier 8-increment plan after deciding bridge code had negative ROI with no users.
+Each increment: independently testable, completable in one focused session. Phase 4 v2 count (9, including Increment 0) replaces the original Phase 4 v1 count (11). Phase 5 count (7, increments 5.0-5.4 with 5.2 split into 5.2.0/5.2.1/5.2.2) reflects the decision to ship parallel observation and parallel hashing as independent increments before the full RunWatch pipeline.
 
 **Key architectural difference**: Phase 4 v1 used the database as the coordination mechanism (scanner and delta write eagerly, reconciler reads). Phase 4 v2 uses typed events as the coordination mechanism (observers produce events, planner operates as a pure function, executor produces outcomes, baseline manager commits atomically). Phase 5 replaces the sequential executor with a DAG-based concurrent execution model (persistent ledger + in-memory dependency tracker + lane-based workers + per-action commits). Same decision matrix, same safety invariants, fundamentally different execution model.
