@@ -254,7 +254,7 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 |-----------|-------------|------|
 | 5.0 | DAG-based concurrent execution engine | 0: The Pivot — **DONE** |
 | 5.1 | Continuous observer `Watch()` methods + debounced buffer | 1: Watch Mode — **DONE** |
-| 5.2 | `Engine.RunWatch()` + continuous pipeline | 1: Watch Mode |
+| 5.2 | `Engine.RunWatch()` + continuous pipeline | 1: Watch Mode — **DONE** |
 | 5.3 | Graceful shutdown + crash recovery from ledger | 2: Operational Polish |
 | 5.4 | Pause/resume + SIGHUP config reload + final cleanup | 2: Operational Polish |
 
