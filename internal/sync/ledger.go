@@ -344,7 +344,7 @@ const ledgerSelectCols = `SELECT id, cycle_id, action_type, path, old_path, stat
 // and returns the scanned rows. The whereClause is appended after the base
 // SELECT. The desc is used in error messages for debugging.
 func (l *Ledger) queryRows(ctx context.Context, whereClause, desc string, args ...any) ([]LedgerRow, error) {
-	query := ledgerSelectCols + whereClause + ` ORDER BY id` //nolint:gosec // whereClause is always a compile-time constant, never user input
+	query := fmt.Sprintf("%s %s ORDER BY id", ledgerSelectCols, whereClause)
 
 	rows, err := l.db.QueryContext(ctx, query, args...)
 	if err != nil {
