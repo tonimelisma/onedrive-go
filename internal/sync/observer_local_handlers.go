@@ -281,15 +281,13 @@ func (o *LocalObserver) handleWrite(
 
 	hash, err := computeQuickXorHash(fsPath)
 	if err != nil {
-		o.logger.Warn("hash failed for modified file",
+		o.logger.Warn("hash failed for modified file, emitting event with empty hash",
 			slog.String("path", dbRelPath), slog.String("error", err.Error()))
-
-		return
-	}
-
-	// Check baseline — if hash matches, the write was a no-op.
-	if existing, ok := o.baseline.GetByPath(dbRelPath); ok && existing.LocalHash == hash {
-		return
+	} else {
+		// Check baseline — if hash matches, the write was a no-op.
+		if existing, ok := o.baseline.GetByPath(dbRelPath); ok && existing.LocalHash == hash {
+			return
+		}
 	}
 
 	ev := ChangeEvent{

@@ -719,6 +719,68 @@ func TestWatch_HashFailureStillEmitsCreate(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Hash failure modifies with empty hash (B-102) — Watch variant
+// ---------------------------------------------------------------------------
+
+// TestWatch_HashFailureModifyStillEmitsEvent verifies that a Write event for a
+// file whose hash cannot be computed (e.g., write-only permissions) still
+// generates a ChangeModify event with an empty hash instead of being silently
+// dropped (B-102).
+func TestWatch_HashFailureModifyStillEmitsEvent(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("test requires non-root user (root can read all files)")
+	}
+
+	t.Parallel()
+
+	dir := t.TempDir()
+	filePath := writeTestFile(t, dir, "watchable.txt", "original")
+	existingHash := hashContent(t, "original")
+
+	baseline := baselineWith(&BaselineEntry{
+		Path: "watchable.txt", DriveID: driveid.New("d"), ItemID: "i1",
+		ItemType: ItemTypeFile, LocalHash: existingHash,
+	})
+
+	obs := NewLocalObserver(baseline, testLogger(t))
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, dir, events)
+	}()
+
+	// Let the watcher settle.
+	time.Sleep(100 * time.Millisecond)
+
+	// Make file write-only (stat succeeds, hash computation fails).
+	require.NoError(t, os.Chmod(filePath, 0o200))
+	t.Cleanup(func() { _ = os.Chmod(filePath, 0o644) })
+
+	// Write new content — triggers Write event. os.WriteFile opens O_WRONLY
+	// which succeeds with 0o200 permissions.
+	require.NoError(t, os.WriteFile(filePath, []byte("modified"), 0o200))
+
+	var ev ChangeEvent
+
+	select {
+	case ev = <-events:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("timeout waiting for modify event")
+	}
+
+	cancel()
+	<-done
+
+	require.Equal(t, ChangeModify, ev.Type)
+	require.Equal(t, "watchable.txt", ev.Path)
+	require.Equal(t, SourceLocal, ev.Source)
+	require.Empty(t, ev.Hash, "hash should be empty when computation fails")
+}
+
+// ---------------------------------------------------------------------------
 // watchLoop backoff reset tests (B-189)
 // ---------------------------------------------------------------------------
 

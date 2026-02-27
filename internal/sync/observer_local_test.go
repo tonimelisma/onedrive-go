@@ -1226,6 +1226,44 @@ func TestFullScan_HashFailureStillEmitsCreate(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Hash failure modifies with empty hash (B-102) — FullScan variant
+// ---------------------------------------------------------------------------
+
+// TestFullScan_HashFailureModifyStillEmitsEvent verifies that FullScan emits a
+// ChangeModify event with empty hash when hash computation fails for a modified
+// file (B-102). Before the fix, hash failures silently dropped modify events.
+func TestFullScan_HashFailureModifyStillEmitsEvent(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("test requires non-root user (root can read all files)")
+	}
+
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := writeTestFile(t, dir, "unreadable.txt", "modified content")
+
+	// Baseline has a different hash so the slow path (hash check) kicks in.
+	baseline := baselineWith(&BaselineEntry{
+		Path: "unreadable.txt", DriveID: driveid.New("d"), ItemID: "i1",
+		ItemType: ItemTypeFile, LocalHash: hashContent(t, "original content"),
+	})
+
+	// Make file unreadable — stat still succeeds but hash computation fails.
+	require.NoError(t, os.Chmod(path, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
+
+	obs := NewLocalObserver(baseline, testLogger(t))
+	events, err := obs.FullScan(context.Background(), dir)
+	require.NoError(t, err)
+
+	ev := findEvent(events, "unreadable.txt")
+	require.NotNil(t, ev, "unreadable modified file should still produce an event")
+	require.Equal(t, ChangeModify, ev.Type)
+	require.Empty(t, ev.Hash, "hash should be empty when computation fails")
+	require.Equal(t, SourceLocal, ev.Source)
+}
+
+// ---------------------------------------------------------------------------
 // Sync root deletion detection (B-113)
 // ---------------------------------------------------------------------------
 
