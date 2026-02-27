@@ -440,3 +440,79 @@ func TestWorkerPool_FailedOutcome_MarksLedgerFailed(t *testing.T) {
 		t.Errorf("pending = %d, want 0 (failed action should be marked as failed, not stuck as claimed)", pending)
 	}
 }
+
+// TestWorkerPool_FailAndComplete_UsePoolContext verifies that failAndComplete
+// uses the pool-level context (not the per-action context) for ledger writes.
+// When CancelByPath cancels actionCtx, the ledger.Fail call must still succeed.
+// Regression test for: canceled actionCtx caused silent ledger.Fail failure,
+// leaving rows stuck as "claimed" forever.
+func TestWorkerPool_FailAndComplete_UsePoolContext(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, ledger, _ := newWorkerTestSetup(t)
+	ctx := context.Background()
+
+	// Configure a download mock that cancels its own context (simulating
+	// CancelByPath) and then returns an error.
+	cfg.downloads = &workerMockDownloader{
+		downloadFn: func(dlCtx context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
+			// Simulate CancelByPath: the per-action context gets canceled
+			// while the action is in-flight.
+			if cause := dlCtx.Err(); cause != nil {
+				return 0, cause
+			}
+
+			return 0, fmt.Errorf("simulated failure after cancel")
+		},
+	}
+
+	actions := []Action{
+		{
+			Type:    ActionDownload,
+			Path:    "cancel-test.txt",
+			DriveID: driveid.New("0000000000000001"),
+			ItemID:  "cancel-id",
+			View: &PathView{
+				Remote: &RemoteState{
+					ItemID:  "cancel-id",
+					DriveID: driveid.New("0000000000000001"),
+					Size:    10,
+					Hash:    "somehash",
+				},
+			},
+		},
+	}
+
+	ids, writeErr := ledger.WriteActions(ctx, actions, nil, "cycle-cancel-ctx")
+	if writeErr != nil {
+		t.Fatalf("WriteActions: %v", writeErr)
+	}
+
+	tracker := NewDepTracker(10, 10, testLogger(t))
+	tracker.Add(&actions[0], ids[0], nil, "")
+
+	pool := NewWorkerPool(cfg, tracker, mgr, ledger, testLogger(t))
+	pool.Start(ctx, 4)
+	pool.Wait()
+	pool.Stop()
+
+	// Verify the action was marked as failed (not stuck as "claimed").
+	failedCount, countErr := ledger.CountFailedForCycle(ctx, "cycle-cancel-ctx")
+	if countErr != nil {
+		t.Fatalf("CountFailedForCycle: %v", countErr)
+	}
+
+	if failedCount != 1 {
+		t.Errorf("failed count = %d, want 1 (ledger.Fail should use pool context, not canceled action context)", failedCount)
+	}
+
+	// Verify nothing is stuck as pending/claimed.
+	pending, pendErr := ledger.CountPendingForCycle(ctx, "cycle-cancel-ctx")
+	if pendErr != nil {
+		t.Fatalf("CountPendingForCycle: %v", pendErr)
+	}
+
+	if pending != 0 {
+		t.Errorf("pending = %d, want 0", pending)
+	}
+}

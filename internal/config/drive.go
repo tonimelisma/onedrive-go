@@ -23,6 +23,7 @@ type ResolvedDrive struct {
 	Alias       string
 	Enabled     bool
 	SyncDir     string // absolute path after tilde expansion
+	StateDir    string // override for state DB directory (empty = platform default)
 	RemotePath  string
 	DriveID     driveid.ID
 
@@ -32,6 +33,19 @@ type ResolvedDrive struct {
 	SyncConfig
 	LoggingConfig
 	NetworkConfig
+}
+
+// StatePath returns the state DB file path for this drive. When StateDir is
+// set, the DB is placed inside that directory instead of the platform default
+// data directory. This allows E2E tests to use per-test temp dirs for isolation.
+func (rd *ResolvedDrive) StatePath() string {
+	if rd.StateDir != "" {
+		sanitized := strings.ReplaceAll(rd.CanonicalID.String(), ":", "_")
+
+		return filepath.Join(rd.StateDir, "state_"+sanitized+".db")
+	}
+
+	return DriveStatePath(rd.CanonicalID)
 }
 
 // matchDrive selects a drive from the config by selector string. The matching
@@ -147,6 +161,7 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 		Alias:           drive.Alias,
 		Enabled:         drive.Enabled == nil || *drive.Enabled, // default true
 		SyncDir:         expandTilde(drive.SyncDir),
+		StateDir:        expandTilde(drive.StateDir),
 		RemotePath:      drive.RemotePath,
 		DriveID:         driveid.New(drive.DriveID),
 		FilterConfig:    cfg.FilterConfig,

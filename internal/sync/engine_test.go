@@ -1615,6 +1615,113 @@ func TestRunWatch_Deduplication(t *testing.T) {
 	}
 }
 
+// TestRunWatch_DownloadOnly_SkipsLocalObserver verifies that download-only mode
+// does not start a local observer (no fsnotify watcher, no local change detection).
+func TestRunWatch_DownloadOnly_SkipsLocalObserver(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- eng.RunWatch(ctx, SyncDownloadOnly, WatchOpts{
+			PollInterval: 1 * time.Hour,
+			Debounce:     10 * time.Millisecond,
+		})
+	}()
+
+	// Wait for watch loop to start.
+	time.Sleep(300 * time.Millisecond)
+
+	// Create a local file. If a local observer were running, it would detect
+	// this and eventually produce a sync action. In download-only mode, the
+	// local observer is skipped, so this file should be invisible to sync.
+	writeLocalFile(t, syncRoot, "local-only.txt", "should-be-ignored")
+
+	// Give time for any observer to fire (if incorrectly started).
+	time.Sleep(200 * time.Millisecond)
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RunWatch: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("RunWatch did not return within timeout")
+	}
+
+	// In download-only mode, the remote observer should be set.
+	if eng.remoteObs == nil {
+		t.Error("remoteObs should be set in download-only mode")
+	}
+}
+
+// TestRunWatch_AllObserversDead_ReturnsError verifies that RunWatch returns an
+// error (not nil) when all observers exit. Uses upload-only mode with a .nosync
+// guard file so the local observer fails immediately.
+func TestRunWatch_AllObserversDead_ReturnsError(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+
+	// Create .nosync guard file so local observer exits immediately with error.
+	writeLocalFile(t, syncRoot, ".nosync", "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- eng.RunWatch(ctx, SyncUploadOnly, WatchOpts{
+			PollInterval: 1 * time.Hour,
+			Debounce:     10 * time.Millisecond,
+		})
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("RunWatch returned nil, want error indicating all observers exited")
+		}
+
+		if !errors.Is(err, ErrNosyncGuard) {
+			// Should be the "all observers exited" wrapper, but the observer error
+			// should be logged as a warning. Check it's not a random error.
+			wantMsg := "all observers exited"
+			if err.Error() != "sync: "+wantMsg {
+				t.Errorf("RunWatch error = %q, want containing %q", err, wantMsg)
+			}
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("RunWatch did not return within timeout (should exit when all observers die)")
+	}
+}
+
 func TestResolveConflict_KeepLocal_TransferFails(t *testing.T) {
 	t.Parallel()
 

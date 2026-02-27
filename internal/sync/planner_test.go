@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -1607,6 +1608,177 @@ func TestBigDelete_NoTrigger(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, config)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if plan == nil {
+		t.Fatal("expected non-nil plan")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Per-Folder Big Delete Tests
+// ---------------------------------------------------------------------------
+
+func TestBigDelete_PerFolder_EntireFolderDeleted(t *testing.T) {
+	// 1000 items across 10 folders (100 each). Deleting all 100 items in one
+	// folder is 100% of that folder → triggered even though global is only 10%.
+	planner := NewPlanner(testLogger(t))
+
+	var entries []*BaselineEntry
+	var changes []PathChanges
+
+	// Build 10 folders with 100 files each.
+	for folder := 0; folder < 10; folder++ {
+		for file := 0; file < 100; file++ {
+			p := fmt.Sprintf("folder%d/file%d.txt", folder, file)
+			itemID := fmt.Sprintf("item-f%d-%d", folder, file)
+			entries = append(entries, &BaselineEntry{
+				Path:       p,
+				DriveID:    driveid.New(testDriveID),
+				ItemID:     itemID,
+				ItemType:   ItemTypeFile,
+				LocalHash:  "hash",
+				RemoteHash: "hash",
+			})
+		}
+	}
+
+	// Delete all 100 items in folder0.
+	for file := 0; file < 100; file++ {
+		p := fmt.Sprintf("folder0/file%d.txt", file)
+		itemID := fmt.Sprintf("item-f0-%d", file)
+		changes = append(changes, PathChanges{
+			Path: p,
+			RemoteEvents: []ChangeEvent{
+				{
+					Source: SourceRemote, Type: ChangeDelete, Path: p,
+					ItemType: ItemTypeFile, ItemID: itemID, IsDeleted: true,
+				},
+			},
+		})
+	}
+
+	baseline := baselineWith(entries...)
+
+	// Global: 100/1000 = 10%, well below 50%. But folder0: 100/100 = 100%.
+	config := &SafetyConfig{
+		BigDeleteMinItems:   10,
+		BigDeleteMaxCount:   defaultBigDeleteMaxCount,
+		BigDeleteMaxPercent: defaultBigDeleteMaxPercent,
+	}
+
+	_, err := planner.Plan(changes, baseline, SyncBidirectional, config)
+	if err != ErrBigDeleteTriggered {
+		t.Fatalf("expected ErrBigDeleteTriggered (per-folder), got: %v", err)
+	}
+}
+
+func TestBigDelete_PerFolder_SpreadAcrossFolders(t *testing.T) {
+	// 100 deletes spread evenly across 10 folders (10 per folder out of 100).
+	// Per-folder: 10/100 = 10% → NOT triggered.
+	planner := NewPlanner(testLogger(t))
+
+	var entries []*BaselineEntry
+	var changes []PathChanges
+
+	for folder := 0; folder < 10; folder++ {
+		for file := 0; file < 100; file++ {
+			p := fmt.Sprintf("spread%d/file%d.txt", folder, file)
+			itemID := fmt.Sprintf("spread-f%d-%d", folder, file)
+			entries = append(entries, &BaselineEntry{
+				Path:       p,
+				DriveID:    driveid.New(testDriveID),
+				ItemID:     itemID,
+				ItemType:   ItemTypeFile,
+				LocalHash:  "hash",
+				RemoteHash: "hash",
+			})
+		}
+	}
+
+	// Delete 10 items per folder (10%).
+	for folder := 0; folder < 10; folder++ {
+		for file := 0; file < 10; file++ {
+			p := fmt.Sprintf("spread%d/file%d.txt", folder, file)
+			itemID := fmt.Sprintf("spread-f%d-%d", folder, file)
+			changes = append(changes, PathChanges{
+				Path: p,
+				RemoteEvents: []ChangeEvent{
+					{
+						Source: SourceRemote, Type: ChangeDelete, Path: p,
+						ItemType: ItemTypeFile, ItemID: itemID, IsDeleted: true,
+					},
+				},
+			})
+		}
+	}
+
+	baseline := baselineWith(entries...)
+
+	config := &SafetyConfig{
+		BigDeleteMinItems:   10,
+		BigDeleteMaxCount:   defaultBigDeleteMaxCount,
+		BigDeleteMaxPercent: defaultBigDeleteMaxPercent, // 50%
+	}
+
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, config)
+	if err != nil {
+		t.Fatalf("expected no error (deletes spread evenly), got: %v", err)
+	}
+
+	if plan == nil {
+		t.Fatal("expected non-nil plan")
+	}
+}
+
+func TestBigDelete_PerFolder_SmallFolder(t *testing.T) {
+	// A folder with fewer items than BigDeleteMinItems should not trigger
+	// per-folder protection even at 100% deletion.
+	planner := NewPlanner(testLogger(t))
+
+	var entries []*BaselineEntry
+	var changes []PathChanges
+
+	// Small folder: 5 items (below MinItems=10).
+	for i := 0; i < 5; i++ {
+		p := fmt.Sprintf("small/file%d.txt", i)
+		itemID := fmt.Sprintf("small-%d", i)
+		entries = append(entries, &BaselineEntry{
+			Path: p, DriveID: driveid.New(testDriveID), ItemID: itemID,
+			ItemType: ItemTypeFile, LocalHash: "hash", RemoteHash: "hash",
+		})
+		changes = append(changes, PathChanges{
+			Path: p,
+			RemoteEvents: []ChangeEvent{
+				{
+					Source: SourceRemote, Type: ChangeDelete, Path: p,
+					ItemType: ItemTypeFile, ItemID: itemID, IsDeleted: true,
+				},
+			},
+		})
+	}
+
+	// Large folder: 100 items, no deletes (keeps global count low).
+	for i := 0; i < 100; i++ {
+		p := fmt.Sprintf("large/file%d.txt", i)
+		itemID := fmt.Sprintf("large-%d", i)
+		entries = append(entries, &BaselineEntry{
+			Path: p, DriveID: driveid.New(testDriveID), ItemID: itemID,
+			ItemType: ItemTypeFile, LocalHash: "hash", RemoteHash: "hash",
+		})
+	}
+
+	baseline := baselineWith(entries...)
+
+	config := &SafetyConfig{
+		BigDeleteMinItems:   10,
+		BigDeleteMaxCount:   defaultBigDeleteMaxCount,
+		BigDeleteMaxPercent: defaultBigDeleteMaxPercent,
+	}
+
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, config)
+	if err != nil {
+		t.Fatalf("expected no error (small folder below MinItems), got: %v", err)
 	}
 
 	if plan == nil {

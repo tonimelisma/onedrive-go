@@ -71,17 +71,17 @@ func TestS5_BigDeleteThresholdBoundary(t *testing.T) {
 
 	t.Run("at_threshold_blocked", func(t *testing.T) {
 		// 6 deletes out of 10 = 60% > 50% threshold.
-		assert.True(t, bigDeleteTriggered(6, baseline, config))
+		assert.True(t, bigDeleteTriggered(nil, 6, baseline, config))
 	})
 
 	t.Run("below_threshold_allowed", func(t *testing.T) {
 		// 4 deletes out of 10 = 40% < 50% threshold.
-		assert.False(t, bigDeleteTriggered(4, baseline, config))
+		assert.False(t, bigDeleteTriggered(nil, 4, baseline, config))
 	})
 
 	t.Run("exactly_at_threshold_allowed", func(t *testing.T) {
 		// 5 deletes out of 10 = exactly 50% — NOT greater than, so allowed.
-		assert.False(t, bigDeleteTriggered(5, baseline, config))
+		assert.False(t, bigDeleteTriggered(nil, 5, baseline, config))
 	})
 }
 
@@ -104,7 +104,7 @@ func TestS5_BigDeleteMinimumGuard(t *testing.T) {
 	config := DefaultSafetyConfig()
 
 	// 3 deletes out of 5 = 60%, but below minimum items threshold.
-	assert.False(t, bigDeleteTriggered(3, baseline, config),
+	assert.False(t, bigDeleteTriggered(nil, 3, baseline, config),
 		"S5: big-delete should not trigger below minimum items")
 }
 
@@ -130,9 +130,9 @@ func TestS5_BigDeleteMaxCount(t *testing.T) {
 		baseline.Put(entry)
 	}
 
-	assert.True(t, bigDeleteTriggered(11, baseline, config),
+	assert.True(t, bigDeleteTriggered(nil, 11, baseline, config),
 		"S5: should trigger when exceeding max count")
-	assert.False(t, bigDeleteTriggered(10, baseline, config),
+	assert.False(t, bigDeleteTriggered(nil, 10, baseline, config),
 		"S5: should not trigger at exactly max count")
 }
 
