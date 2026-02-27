@@ -749,6 +749,7 @@ func addChildDeleteDeps(deps []int, idx int, a *Action, deleteIdx map[string]int
 // a no-op because the source parent always pre-exists (the file is there). The
 // destination parent dependency is already handled by addParentFolderDep
 // (Action.Path is the destination for moves). Kept for defensive completeness.
+// TODO(B-143): consider removing this function after verifying no edge cases exist.
 func addMoveTargetDep(deps []int, a *Action, folderCreateIdx map[string]int) []int {
 	if a.Type != ActionLocalMove && a.Type != ActionRemoteMove {
 		return deps

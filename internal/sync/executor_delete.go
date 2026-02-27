@@ -35,6 +35,10 @@ func (e *Executor) executeLocalDelete(_ context.Context, action *Action) Outcome
 }
 
 // deleteLocalFolder removes an empty local directory.
+// NOTE: There is an inherent TOCTOU race between ReadDir and Remove — a file
+// could be created between the two calls. This is acceptable because the DAG
+// guarantees child deletes complete before parent folder deletes, and new
+// creations would be caught in the next sync cycle.
 func (e *Executor) deleteLocalFolder(action *Action, absPath string) Outcome {
 	entries, err := os.ReadDir(absPath)
 	if err != nil {
@@ -43,6 +47,17 @@ func (e *Executor) deleteLocalFolder(action *Action, absPath string) Outcome {
 
 	if len(entries) > 0 {
 		return e.failedOutcome(action, ActionLocalDelete, fmt.Errorf("directory %s is not empty (%d entries)", action.Path, len(entries)))
+	}
+
+	// Try trash before permanent delete.
+	if e.trashFunc != nil {
+		if err := e.trashFunc(absPath); err != nil {
+			e.logger.Warn("failed to trash folder, falling back to permanent delete",
+				slog.String("path", action.Path), slog.String("error", err.Error()))
+		} else {
+			e.logger.Debug("moved folder to trash", slog.String("path", action.Path))
+			return e.deleteOutcome(action, ActionLocalDelete)
+		}
 	}
 
 	if err := os.Remove(absPath); err != nil {
@@ -85,6 +100,17 @@ func (e *Executor) deleteLocalFile(action *Action, absPath string) Outcome {
 			)
 
 			// Still mark as success — the baseline entry should be removed.
+			return e.deleteOutcome(action, ActionLocalDelete)
+		}
+	}
+
+	// Try trash before permanent delete.
+	if e.trashFunc != nil {
+		if err := e.trashFunc(absPath); err != nil {
+			e.logger.Warn("failed to trash file, falling back to permanent delete",
+				slog.String("path", action.Path), slog.String("error", err.Error()))
+		} else {
+			e.logger.Debug("moved file to trash", slog.String("path", action.Path))
 			return e.deleteOutcome(action, ActionLocalDelete)
 		}
 	}

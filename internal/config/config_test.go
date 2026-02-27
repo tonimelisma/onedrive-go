@@ -1,6 +1,7 @@
 package config
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -35,7 +36,7 @@ func TestDefaultConfig_AllFieldsPopulated(t *testing.T) {
 	assert.Equal(t, 10, cfg.BigDeleteMinItems)
 	assert.Equal(t, "1GB", cfg.MinFreeSpace)
 	assert.True(t, cfg.UseRecycleBin)
-	assert.True(t, cfg.UseLocalTrash)
+	assert.Equal(t, runtime.GOOS == "darwin", cfg.UseLocalTrash) // platform-specific default
 	assert.False(t, cfg.DisableDownloadValidation)
 	assert.False(t, cfg.DisableUploadValidation)
 	assert.Equal(t, "0700", cfg.SyncDirPermissions)
@@ -44,7 +45,7 @@ func TestDefaultConfig_AllFieldsPopulated(t *testing.T) {
 	// Sync defaults
 	assert.Equal(t, "5m", cfg.PollInterval)
 	assert.Equal(t, 12, cfg.FullscanFrequency)
-	assert.True(t, cfg.Websocket)
+	assert.False(t, cfg.Websocket) // unimplemented — defaults to false
 	assert.Equal(t, "keep_both", cfg.ConflictStrategy)
 	assert.Equal(t, "1h", cfg.ConflictReminderInterval)
 	assert.False(t, cfg.DryRun)

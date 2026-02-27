@@ -46,12 +46,25 @@ func newPutCmd() *cobra.Command {
 }
 
 func newRmCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "rm <path>",
-		Short: "Delete a file or folder",
-		Args:  cobra.ExactArgs(1),
-		RunE:  runRm,
+		Short: "Delete a file or folder (moves to OneDrive recycle bin)",
+		Long: `Delete a file or folder on OneDrive. Items are moved to the OneDrive
+recycle bin by default and can be restored from the OneDrive web interface.
+
+Folder deletion is recursive — all contents will be deleted.
+Use --recursive (-r) to confirm intent when deleting folders.
+
+Use --permanent for permanent deletion (Business/SharePoint accounts only;
+Personal accounts always use the recycle bin).`,
+		Args: cobra.ExactArgs(1),
+		RunE: runRm,
 	}
+
+	cmd.Flags().BoolP("recursive", "r", false, "confirm recursive folder deletion")
+	cmd.Flags().Bool("permanent", false, "permanently delete instead of moving to recycle bin (Business/SharePoint only)")
+
+	return cmd
 }
 
 func newMkdirCmd() *cobra.Command {
@@ -380,11 +393,34 @@ func runRm(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("resolving %q: %w", remotePath, err)
 	}
 
-	if err := client.DeleteItem(ctx, driveID, item.ID); err != nil {
-		return fmt.Errorf("deleting %q: %w", remotePath, err)
+	// Require --recursive for folder deletion (B-156).
+	recursive, err := cmd.Flags().GetBool("recursive")
+	if err != nil {
+		return err
 	}
 
-	logger.Debug("delete complete", "path", remotePath, "item_id", item.ID)
+	if item.IsFolder && !recursive {
+		return fmt.Errorf("cannot delete folder %q without --recursive (-r) flag", remotePath)
+	}
+
+	permanent, err := cmd.Flags().GetBool("permanent")
+	if err != nil {
+		return err
+	}
+
+	if permanent {
+		if err := client.PermanentDeleteItem(ctx, driveID, item.ID); err != nil {
+			return fmt.Errorf("permanently deleting %q: %w", remotePath, err)
+		}
+
+		logger.Debug("permanent delete complete", "path", remotePath, "item_id", item.ID)
+	} else {
+		if err := client.DeleteItem(ctx, driveID, item.ID); err != nil {
+			return fmt.Errorf("deleting %q: %w", remotePath, err)
+		}
+
+		logger.Debug("delete complete", "path", remotePath, "item_id", item.ID)
+	}
 
 	if flagJSON {
 		enc := json.NewEncoder(os.Stdout)
