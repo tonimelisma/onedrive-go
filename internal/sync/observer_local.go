@@ -23,6 +23,10 @@ import (
 // sync root, indicating the sync directory may be unmounted or guarded.
 var ErrNosyncGuard = errors.New("sync: .nosync guard file present (sync dir may be unmounted)")
 
+// ErrSyncRootDeleted is returned when the sync root directory has been deleted
+// or become inaccessible while a watch was running.
+var ErrSyncRootDeleted = errors.New("sync: sync root directory deleted or inaccessible")
+
 // Constants for the local observer (satisfy mnd linter).
 const (
 	nosyncFileName         = ".nosync"
@@ -329,12 +333,11 @@ func (o *LocalObserver) buildCreateEvent(
 	if !d.IsDir() {
 		hash, err := computeQuickXorHash(fsPath)
 		if err != nil {
-			o.logger.Warn("hash computation failed, skipping file",
+			o.logger.Warn("hash computation failed for new file, emitting event with empty hash",
 				slog.String("path", dbRelPath), slog.String("error", err.Error()))
-			return nil, nil
+		} else {
+			ev.Hash = hash
 		}
-
-		ev.Hash = hash
 	}
 
 	return &ev, nil
@@ -453,6 +456,12 @@ func computeQuickXorHash(fsPath string) (string, error) {
 // ---------------------------------------------------------------------------
 // Pure helper functions
 // ---------------------------------------------------------------------------
+
+// syncRootExists returns true if the sync root directory exists and is a directory.
+func syncRootExists(syncRoot string) bool {
+	info, err := os.Stat(syncRoot)
+	return err == nil && info.IsDir()
+}
 
 // isAlwaysExcluded returns true for file patterns that must never be synced.
 // These are S7 safety invariants: partial downloads, editor temporaries,

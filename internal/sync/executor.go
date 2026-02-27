@@ -78,7 +78,7 @@ func NewExecutorConfig(
 		logger:    logger,
 		nowFunc:   time.Now,
 		hashFunc:  computeQuickXorHash,
-		sleepFunc: timeSleepExec,
+		sleepFunc: timeSleep,
 	}
 }
 
@@ -486,17 +486,4 @@ func (e *Executor) moveOutcome(action *Action) Outcome {
 	}
 
 	return o
-}
-
-// timeSleepExec waits for the given duration or until the context is canceled.
-func timeSleepExec(ctx context.Context, d time.Duration) error {
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
 }

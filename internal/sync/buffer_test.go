@@ -852,3 +852,115 @@ func TestBuffer_FlushDebounced_FinalDrainNoDeadlock(t *testing.T) {
 		t.Fatal("debounce goroutine deadlocked on final drain (B-103)")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Buffer max paths tests (B-126)
+// ---------------------------------------------------------------------------
+
+func TestBuffer_MaxPaths_DropsNewPaths(t *testing.T) {
+	t.Parallel()
+
+	buf := NewBuffer(testLogger(t))
+	buf.SetMaxPaths(2)
+
+	buf.Add(&ChangeEvent{
+		Source: SourceRemote, Type: ChangeCreate,
+		Path: "cap-a.txt", Name: "cap-a.txt", ItemType: ItemTypeFile,
+	})
+	buf.Add(&ChangeEvent{
+		Source: SourceRemote, Type: ChangeCreate,
+		Path: "cap-b.txt", Name: "cap-b.txt", ItemType: ItemTypeFile,
+	})
+
+	// Third path should be dropped.
+	buf.Add(&ChangeEvent{
+		Source: SourceRemote, Type: ChangeCreate,
+		Path: "cap-c.txt", Name: "cap-c.txt", ItemType: ItemTypeFile,
+	})
+
+	result := buf.FlushImmediate()
+	if len(result) != 2 {
+		t.Errorf("len(result) = %d, want 2 (third path should be dropped)", len(result))
+	}
+}
+
+func TestBuffer_MaxPaths_AllowsExistingPaths(t *testing.T) {
+	t.Parallel()
+
+	buf := NewBuffer(testLogger(t))
+	buf.SetMaxPaths(1)
+
+	buf.Add(&ChangeEvent{
+		Source: SourceRemote, Type: ChangeCreate,
+		Path: "only.txt", Name: "only.txt", ItemType: ItemTypeFile,
+	})
+
+	// Second event for the same path should be accepted even at capacity.
+	buf.Add(&ChangeEvent{
+		Source: SourceLocal, Type: ChangeModify,
+		Path: "only.txt", Name: "only.txt", ItemType: ItemTypeFile,
+	})
+
+	result := buf.FlushImmediate()
+	if len(result) != 1 {
+		t.Fatalf("len(result) = %d, want 1", len(result))
+	}
+
+	total := len(result[0].RemoteEvents) + len(result[0].LocalEvents)
+	if total != 2 {
+		t.Errorf("total events = %d, want 2 (existing path should accept new events)", total)
+	}
+}
+
+func TestBuffer_MaxPaths_ZeroUnlimited(t *testing.T) {
+	t.Parallel()
+
+	buf := NewBuffer(testLogger(t))
+	buf.SetMaxPaths(0)
+
+	for i := range 100 {
+		buf.Add(&ChangeEvent{
+			Source: SourceRemote, Type: ChangeCreate,
+			Path: fmt.Sprintf("unlimited-%d.txt", i), Name: fmt.Sprintf("unlimited-%d.txt", i),
+			ItemType: ItemTypeFile,
+		})
+	}
+
+	result := buf.FlushImmediate()
+	if len(result) != 100 {
+		t.Errorf("len(result) = %d, want 100 (zero maxPaths = unlimited)", len(result))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// FlushDebounced double-call panic test (B-111)
+// ---------------------------------------------------------------------------
+
+// TestFlushDebounced_PanicsOnDoubleCall verifies that calling FlushDebounced
+// twice on the same Buffer panics (B-111).
+func TestFlushDebounced_PanicsOnDoubleCall(t *testing.T) {
+	t.Parallel()
+
+	buf := NewBuffer(testLogger(t))
+	ctx := t.Context()
+
+	_ = buf.FlushDebounced(ctx, time.Hour)
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic on second FlushDebounced call")
+		}
+
+		msg, ok := r.(string)
+		if !ok {
+			t.Fatalf("expected string panic, got %T: %v", r, r)
+		}
+
+		if msg != "sync: FlushDebounced called twice on the same Buffer" {
+			t.Errorf("unexpected panic message: %s", msg)
+		}
+	}()
+
+	_ = buf.FlushDebounced(ctx, time.Hour)
+}
