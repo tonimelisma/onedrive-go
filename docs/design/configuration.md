@@ -156,7 +156,7 @@ Only two environment variables are supported. They provide drive and path overri
 # parallel_downloads = 8                 # simultaneous download workers (1-16)
 # parallel_uploads = 8                   # simultaneous upload workers (1-16)
 # parallel_checkers = 8                  # simultaneous hash check workers (1-16)
-# chunk_size = "10MB"                    # upload chunk size (320KiB multiples, 10-60MB)
+# chunk_size = "10MiB"                   # upload chunk size (320 KiB multiples, 10-60 MiB)
 # bandwidth_limit = "0"                  # global bandwidth limit (0 = unlimited)
 # transfer_order = "default"             # default, size_asc, size_desc, name_asc, name_desc
 
@@ -365,7 +365,7 @@ All global settings are flat top-level TOML keys. They are organized here by fun
 | `parallel_downloads` | Integer | `8` | Concurrent download workers. Range: 1-16. |
 | `parallel_uploads` | Integer | `8` | Concurrent upload workers. Range: 1-16. |
 | `parallel_checkers` | Integer | `8` | Concurrent hash computation workers. Range: 1-16. |
-| `chunk_size` | String | `"10MB"` | Upload chunk size for resumable sessions. Must be 320 KiB multiple. Range: 10-60 MB. |
+| `chunk_size` | String | `"10MiB"` | Upload chunk size for resumable sessions. Must be a 320 KiB multiple. Range: 10-60 MiB. Uses binary units (1 MiB = 1,048,576 bytes). |
 | `bandwidth_limit` | String | `"0"` | Global bandwidth limit. `"0"` = unlimited. Format: `"5MB/s"`. |
 | `bandwidth_schedule` | Array of tables | `[]` | Time-of-day bandwidth schedule. Overrides `bandwidth_limit` when active. |
 | `transfer_order` | String | `"default"` | Transfer queue order: `default` (FIFO), `size_asc`, `size_desc`, `name_asc`, `name_desc`. |
@@ -853,7 +853,7 @@ If detected, offer to import settings. Warn about running instances to avoid con
 | `parallel_downloads` | 1-16 | - |
 | `parallel_uploads` | 1-16 | - |
 | `parallel_checkers` | 1-16 | - |
-| `chunk_size` | 10-60 MB, 320 KiB multiple | - |
+| `chunk_size` | 10-60 MiB, 320 KiB multiple | - |
 | `bandwidth_limit` | `"0"` or valid rate | - |
 | `big_delete_threshold` | >= 1 | - |
 | `big_delete_percentage` | 1-100 | - |
@@ -991,7 +991,7 @@ Every configuration option in a single reference table.
 | `parallel_downloads` | Global | Integer | `8` | - | No | Download workers |
 | `parallel_uploads` | Global | Integer | `8` | - | No | Upload workers |
 | `parallel_checkers` | Global | Integer | `8` | - | No | Hash check workers |
-| `chunk_size` | Global | String | `"10MB"` | - | No | Upload chunk size |
+| `chunk_size` | Global | String | `"10MiB"` | - | No | Upload chunk size |
 | `bandwidth_limit` | Global | String | `"0"` | - | Yes | Bandwidth limit |
 | `bandwidth_schedule` | Global | Array | `[]` | - | Yes | Time-of-day bandwidth |
 | `transfer_order` | Global | String | `"default"` | - | Yes | Transfer queue order |
@@ -1036,7 +1036,7 @@ Every configuration option in a single reference table.
 | `skip_size` | `max_file_size` | `50` (MB) to `"50MB"` |
 | `threads` | `parallel_downloads` + `parallel_uploads` + `parallel_checkers` | One value to three |
 | `rate_limit` | `bandwidth_limit` | Bytes/s to `"NMB/s"` |
-| `file_fragment_size` | `chunk_size` | `10` (MB) to `"10MB"` |
+| `file_fragment_size` | `chunk_size` | `10` (MB) to `"10MiB"` |
 | `transfer_order` | `transfer_order` | `size_dsc` to `size_desc` |
 | `monitor_interval` | `poll_interval` | `300` (seconds) to `"5m"` |
 | `monitor_fullscan_frequency` | `fullscan_frequency` | Direct |

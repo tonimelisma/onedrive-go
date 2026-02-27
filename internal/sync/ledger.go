@@ -9,6 +9,22 @@ import (
 	"time"
 )
 
+// Package-level API documentation for ledger.go (B-145):
+//
+// Ledger provides crash-recoverable persistence for sync actions via the
+// action_queue SQLite table. It shares a *sql.DB with BaselineManager
+// (sole-writer via SetMaxOpenConns(1)). The lifecycle is:
+//
+//	WriteActions → Claim → Complete/Fail/Cancel
+//
+// WriteActions inserts a batch of actions atomically. Workers call Claim
+// before execution, then Complete or Fail afterward. CancelByPath in the
+// DepTracker calls Cancel on the ledger row. LoadPending + ReclaimStale
+// handle crash recovery (Phase 5.3).
+//
+// All status transitions are enforced: Claim requires "pending", Complete
+// and Fail require "claimed". Cancel can transition from any status.
+
 // Ledger status constants for action_queue.status column.
 const (
 	ledgerStatusPending  = "pending"

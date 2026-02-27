@@ -398,6 +398,11 @@ func (e *Engine) resolveKeepRemote(ctx context.Context, c *ConflictRecord) error
 // resolveTransfer executes a single transfer (upload or download) for conflict
 // resolution and commits the result to the baseline. Uses CommitOutcome with
 // ledgerID=0 (no ledger action for manual conflict resolution).
+//
+// Hash verification is intentionally skipped here (B-153): conflict resolution
+// is a user-initiated override ("keep mine" / "keep theirs") where the intent
+// is to force one side to match the other, not to verify content integrity.
+// The executor's per-action functions already verify hashes for normal syncs.
 func (e *Engine) resolveTransfer(ctx context.Context, c *ConflictRecord, actionType ActionType) error {
 	bl, err := e.baseline.Load(ctx)
 	if err != nil {

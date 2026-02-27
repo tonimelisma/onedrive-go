@@ -175,6 +175,11 @@ func (o *LocalObserver) FullScan(ctx context.Context, syncRoot string) ([]Change
 // returning nil. A periodic safety scan (every 5 minutes) catches any events
 // that fsnotify may miss (e.g., during brief watcher gaps or platform edge
 // cases). Returns ErrNosyncGuard if the .nosync guard file is present.
+//
+// Channel sizing (B-114): The events channel should be buffered (recommended
+// size: 256). An unbuffered channel blocks on every event. If the channel is
+// full, trySend drops the event and increments the drop counter — the safety
+// scan provides eventual consistency for any dropped events.
 func (o *LocalObserver) Watch(ctx context.Context, syncRoot string, events chan<- ChangeEvent) error {
 	o.logger.Info("local observer starting watch",
 		slog.String("sync_root", syncRoot),

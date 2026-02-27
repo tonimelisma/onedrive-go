@@ -102,7 +102,7 @@ Work is done in increments. After each increment, run through this entire checkl
     - `docs/roadmap.md` — check current phase status, update on completion
     - `docs/design/` — update relevant design docs if design changed
 10. [ ] **Push and CI green**: Push branch, open PR, both `ci.yml` and `integration.yml` green. Merge with `./scripts/poll-and-merge.sh <pr_number>`
-11. [ ] **Cleanup**: No leftover branches, no stashes, no open PRs, clean `git status`. Remove the current worktree after merge. Also audit stale worktrees (`git worktree list`) — for each, check if it has uncommitted changes or unpushed commits before removing. Never discard work; if a worktree has unsaved changes, warn the human instead of deleting
+11. [ ] **Cleanup**: Clean `git status`. Remove the current worktree after merge. **NEVER delete other worktrees or branches — even if they appear stale.** Instead, report all other worktrees and branches to the human, including their last commit date (use `git log -1 --format='%ci' <branch>` for each). Let the human decide what to clean up
 12. [ ] **Increment report**: Present to the human:
     - **Process changes**: What you would do differently next time in how the work was planned or executed
     - **Top-up recommendations**: Any remaining codebase improvements you'd make

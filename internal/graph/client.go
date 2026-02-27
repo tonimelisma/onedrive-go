@@ -196,6 +196,10 @@ func (c *Client) doOnce(
 	req.Header.Set("Authorization", "Bearer "+tok)
 	req.Header.Set("User-Agent", c.userAgent)
 
+	// Implicit default: when a body is present, Content-Type is set to
+	// application/json. All Graph API mutation endpoints (PATCH, POST) expect
+	// JSON. Upload endpoints override this via extraHeaders or use pre-auth
+	// URLs that bypass doOnce entirely (B-159).
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

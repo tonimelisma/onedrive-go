@@ -904,3 +904,208 @@ func TestWatchLoop_BackoffEscalatesWithoutReset(t *testing.T) {
 	cancel()
 	<-done
 }
+
+// ---------------------------------------------------------------------------
+// Combined fsnotify event tests (B-108, B-117, B-118)
+// ---------------------------------------------------------------------------
+
+// TestWatchLoop_ChmodCreateCombinedEvent verifies that a combined Chmod|Create
+// fsnotify event (which macOS FSEvents sometimes delivers) is handled as a
+// Create, not filtered out as a pure Chmod (B-108). The filter at
+// handleFsEvent ignores pure Chmod only; combined events must pass through.
+func TestWatchLoop_ChmodCreateCombinedEvent(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeTestFile(t, dir, "combo.txt", "combined event content")
+
+	mockWatcher := newMockFsWatcher()
+	obs := &LocalObserver{
+		baseline:  emptyBaseline(),
+		logger:    testLogger(t),
+		sleepFunc: func(_ context.Context, _ time.Duration) error { return nil },
+		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+			return make(chan time.Time), func() {}
+		},
+		watcherFactory: func() (FsWatcher, error) {
+			return mockWatcher, nil
+		},
+	}
+
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, dir, events)
+	}()
+
+	// Inject a combined Chmod|Create event — macOS FSEvents edge case.
+	mockWatcher.events <- fsnotify.Event{
+		Name: filepath.Join(dir, "combo.txt"),
+		Op:   fsnotify.Chmod | fsnotify.Create,
+	}
+
+	select {
+	case ev := <-events:
+		require.Equal(t, ChangeCreate, ev.Type, "combined Chmod|Create should be handled as Create")
+		require.Equal(t, "combo.txt", ev.Path)
+		require.Equal(t, SourceLocal, ev.Source)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for combined Chmod|Create event")
+	}
+
+	cancel()
+	<-done
+}
+
+// TestWatchLoop_TransientFileCreateDelete verifies that a transient file
+// (created then immediately deleted) does not cause errors when the Remove
+// event arrives for a path that was never observed by the watcher (B-117).
+// On macOS kqueue, rapid Create+Remove can coalesce into just a Remove event.
+// The handler should emit a ChangeDelete with ItemTypeFile (default) and not
+// panic or error, even though the path has no baseline entry.
+func TestWatchLoop_TransientFileCreateDelete(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	mockWatcher := newMockFsWatcher()
+	obs := &LocalObserver{
+		baseline:  emptyBaseline(),
+		logger:    testLogger(t),
+		sleepFunc: func(_ context.Context, _ time.Duration) error { return nil },
+		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+			return make(chan time.Time), func() {}
+		},
+		watcherFactory: func() (FsWatcher, error) {
+			return mockWatcher, nil
+		},
+	}
+
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, dir, events)
+	}()
+
+	// Inject a Remove event for a path that was never created (from the
+	// watcher's perspective). This simulates macOS kqueue coalescing a
+	// rapid Create+Remove into just Remove.
+	mockWatcher.events <- fsnotify.Event{
+		Name: filepath.Join(dir, "transient.txt"),
+		Op:   fsnotify.Remove,
+	}
+
+	select {
+	case ev := <-events:
+		require.Equal(t, ChangeDelete, ev.Type,
+			"transient file delete should produce ChangeDelete")
+		require.Equal(t, "transient.txt", ev.Path)
+		require.Equal(t, ItemTypeFile, ev.ItemType,
+			"unknown path defaults to ItemTypeFile")
+		require.True(t, ev.IsDeleted)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for transient file delete event")
+	}
+
+	cancel()
+	<-done
+}
+
+// TestWatchLoop_MoveOutOfOrderRenameCreate verifies that out-of-order events
+// from a local `mv file.txt dir/file.txt` are handled correctly (B-118).
+// The move produces fsnotify Rename (delete at old path) + Create (at new
+// path). If events arrive out of order (Create before Rename), both should
+// still produce independent ChangeEvents — the planner handles them as
+// separate delete + create operations on independent paths.
+func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	// Create destination directory and the moved file.
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "dest"), 0o755))
+	writeTestFile(t, dir, "dest/moved.txt", "moved content")
+
+	// Baseline has the file at the old path.
+	baseline := baselineWith(&BaselineEntry{
+		Path: "original.txt", DriveID: driveid.New("d"), ItemID: "i1",
+		ItemType: ItemTypeFile, LocalHash: hashContent(t, "moved content"),
+	})
+
+	mockWatcher := newMockFsWatcher()
+	obs := &LocalObserver{
+		baseline:  baseline,
+		logger:    testLogger(t),
+		sleepFunc: func(_ context.Context, _ time.Duration) error { return nil },
+		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+			return make(chan time.Time), func() {}
+		},
+		watcherFactory: func() (FsWatcher, error) {
+			return mockWatcher, nil
+		},
+	}
+
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, dir, events)
+	}()
+
+	// Inject events in REVERSED order: Create at new path before Rename
+	// (delete) at old path. This can happen when fsnotify delivers events
+	// out of kernel queue order.
+	mockWatcher.events <- fsnotify.Event{
+		Name: filepath.Join(dir, "dest", "moved.txt"),
+		Op:   fsnotify.Create,
+	}
+	mockWatcher.events <- fsnotify.Event{
+		Name: filepath.Join(dir, "original.txt"),
+		Op:   fsnotify.Rename,
+	}
+
+	// Collect both events.
+	var collected []ChangeEvent
+	timeout := time.After(5 * time.Second)
+
+	for len(collected) < 2 {
+		select {
+		case ev := <-events:
+			collected = append(collected, ev)
+		case <-timeout:
+			t.Fatalf("timeout: collected only %d events, want 2", len(collected))
+		}
+	}
+
+	cancel()
+	<-done
+
+	// Find the Create and Delete events (order may vary).
+	var createEv, deleteEv *ChangeEvent
+	for i := range collected {
+		switch collected[i].Type { //nolint:exhaustive // only checking the two expected types
+		case ChangeCreate:
+			createEv = &collected[i]
+		case ChangeDelete:
+			deleteEv = &collected[i]
+		}
+	}
+
+	require.NotNil(t, createEv, "should have a ChangeCreate for the new path")
+	require.Equal(t, "dest/moved.txt", createEv.Path)
+	require.Equal(t, SourceLocal, createEv.Source)
+
+	require.NotNil(t, deleteEv, "should have a ChangeDelete for the old path")
+	require.Equal(t, "original.txt", deleteEv.Path)
+	require.True(t, deleteEv.IsDeleted)
+	require.Equal(t, ItemTypeFile, deleteEv.ItemType,
+		"baseline lookup should resolve the item type for the old path")
+}
