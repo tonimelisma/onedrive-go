@@ -1108,3 +1108,135 @@ excessive memory consumption during extended pauses.
    values. The lane model combines downloads and uploads into interactive/bulk
    lanes. Section 6.4 defines the mapping. The PRD keys are preserved for
    backwards compatibility; their sum determines total lane worker count.
+
+---
+
+## 18. Observation-Layer Parallelization
+
+Sections 1–17 cover the **execution** layer (workers, tracker, ledger, lanes).
+This section covers parallelization opportunities in the **observation** layer
+— the pipeline stages that run before the planner.
+
+### 18.1 Parallel Remote + Local Observation (B-170)
+
+Remote observation is network-bound (Graph API delta pagination). Local
+observation is disk-bound (readdir, Lstat, file hashing). These use different
+I/O resources and share no mutable state — both read the baseline in read-only
+mode via `sync.RWMutex`-protected accessors.
+
+In `RunOnce`, steps 2 (remote) and 3 (local) can run concurrently via
+`errgroup.Go()`. This halves observation time for bidirectional sync. In
+`RunWatch`, both observers already run in separate goroutines.
+
+**Implementation:** Wrap `observeRemote` and `observeLocal` in an errgroup.
+Each returns its events + error. Assemble after `g.Wait()`. ~10 lines of
+change, zero architectural impact.
+
+**Why this is safe:** Both methods are pure readers of baseline. Neither writes
+to any shared state. The errgroup provides clean error propagation — if either
+observer fails, the other is canceled via the derived context.
+
+### 18.2 Parallel Hashing in FullScan (B-096)
+
+`FullScan` walks the filesystem and hashes files inline in the `WalkDir`
+callback. For initial syncs with no baseline (mtime+size fast-path cannot skip
+any files), hashing is the dominant cost:
+
+| Operation | Time (100K files, 1MB avg, SSD) | Share |
+|-----------|-------------------------------|-------|
+| Walk (readdir + Lstat) | ~200ms | 0.02% |
+| Baseline lookup + fast-path | ~10ms | <0.01% |
+| Sequential hashing | ~15 min | 99.98% |
+| Parallel hashing (8 cores) | ~2 min | — |
+
+**Design decision: walk stays sequential, hashing fans out.**
+
+The walk must remain sequential because:
+
+1. **Disk metadata serialization.** readdir and Lstat are I/O-bound against the
+   filesystem metadata layer. On a single SSD, parallel readdir calls contend
+   on the same NVMe queue. On NFS, parallel stats actively hurt due to IOPS
+   limits and round-trip latency.
+2. **Consistent `observed` map.** The walk populates a `map[string]bool` of
+   observed paths. Single-writer means no mutex, no races, no bugs.
+3. **Walk is 0.02% of total time.** Even a 10× speedup of the walk saves 180ms
+   on a 15-minute operation.
+
+The hash pool processes files that the walk identified as needing hashes (new
+files, mtime/size changed, racily clean). Hash jobs are embarrassingly
+parallel — each file is independent, and the QuickXorHash computation uses
+`io.Copy` with constant memory.
+
+**Implementation:**
+
+```
+FullScan:
+  Phase 1: Walk (sequential)
+    - readdir + Lstat each entry
+    - classify: skip / folder-event / fast-path-skip / needs-hash
+    - populate observed[path] = true (always, for all non-skipped)
+    - append folder events directly
+    - append hashJob{fsPath, metadata} for files needing hash
+
+  Phase 2: Hash (parallel, errgroup.SetLimit(runtime.NumCPU()))
+    - each goroutine: computeQuickXorHash(job.fsPath)
+    - if hash != baseline.LocalHash → append ChangeEvent
+    - if hash error → log warn, skip file
+
+  Phase 3: Deletion detection (sequential)
+    - observed map vs baseline → delete events
+```
+
+~30 lines of new code. Walk logic, classification logic, deletion detection —
+all unchanged. The only structural change is splitting the hash call out of
+`processEntry` into a deferred parallel phase.
+
+**What we explicitly do NOT do:**
+
+- **Shared long-lived hash pool across FullScan and Watch.** This was
+  considered and rejected. A shared pool adds lifecycle management, channel
+  orchestration, result routing, backpressure, and error propagation complexity
+  across three integration points (FullScan, watch events, safety scan). The
+  FullScan parallel hash is ~30 lines with an errgroup. A shared pool is ~200
+  lines with channels, context management, and shutdown coordination. The
+  complexity is not justified when the simpler approach captures the same
+  performance benefit for FullScan. Watch-mode hashing improvements (B-107) are
+  a separate concern addressed in Phase 5.2.2.
+- **Parallel walk (concurrent directory subtree traversal).** Doesn't help for
+  flat directories. Goroutine explosion for deep trees. Concurrent `observed`
+  map writes need mutex. `filepath.WalkDir` is designed for single-threaded
+  use. Disk I/O serializes anyway.
+- **Streaming walk→hash pipeline.** Over-engineered. Overlapping walk and hash
+  saves ~200ms on a 15-minute operation. Not worth the channel orchestration.
+
+### 18.3 Watch-Mode Observation (Phase 5.2.2)
+
+Watch-mode hashing is a different problem from FullScan hashing. In FullScan,
+you have a batch of files to hash after a walk. In watch mode, you have a
+stream of individual file events arriving asynchronously.
+
+The current watch event loop hashes files inline in `handleCreate` and
+`handleWrite`, blocking the fsnotify event loop. During a burst (e.g., `git
+checkout` producing 500 write events), each blocks for 5–15ms → 2.5–7.5s total
+during which new events queue up in fsnotify's kernel buffer.
+
+Write event coalescing (B-107) addresses this by adding a per-path debounce
+timer before hashing. This is a watch-mode-only concern — it does not affect
+FullScan. The design and implementation of watch-mode hashing improvements will
+be determined during Phase 5.2.2 when `RunWatch()` is built and can be
+profiled under realistic load.
+
+### 18.4 Deferred Optimizations
+
+The following observation-layer optimizations are explicitly deferred until
+profiling demonstrates a bottleneck:
+
+- **Streaming delta pages (B-171).** Processing each page as it arrives
+  overlaps page processing (~1ms) with the next API call (~100–300ms). The
+  savings are ~1ms per page. The memory benefit is real but modest for typical
+  deltas. P3.
+- **Pipelined observation → execution.** Starting execution before observation
+  completes requires partial planning, which can produce incorrect results
+  (e.g., move detection needs to see both the delete and the create). Only
+  viable in watch mode where observation is continuous. Not applicable to
+  RunOnce.
