@@ -57,6 +57,89 @@ func (c *Client) Download(ctx context.Context, driveID driveid.ID, itemID string
 	return n, nil
 }
 
+// DownloadRange streams the content of a drive item starting from a byte offset.
+// Used to resume interrupted downloads from existing .partial files (B-085).
+// If the server ignores the Range header (returns 200 instead of 206), the full
+// content is streamed (caller should handle this case). Returns the number of
+// bytes written.
+func (c *Client) DownloadRange(
+	ctx context.Context, driveID driveid.ID, itemID string, w io.Writer, offset int64,
+) (int64, error) {
+	c.logger.Info("downloading item with range",
+		slog.String("drive_id", driveID.String()),
+		slog.String("item_id", itemID),
+		slog.Int64("offset", offset),
+	)
+
+	item, err := c.GetItem(ctx, driveID, itemID)
+	if err != nil {
+		return 0, fmt.Errorf("graph: getting item for range download: %w", err)
+	}
+
+	if item.DownloadURL == "" {
+		c.logger.Warn("item has no download URL",
+			slog.String("drive_id", driveID.String()),
+			slog.String("item_id", itemID),
+			slog.Bool("is_folder", item.IsFolder),
+			slog.Bool("is_package", item.IsPackage),
+		)
+
+		return 0, ErrNoDownloadURL
+	}
+
+	n, err := c.downloadFromURLWithRange(ctx, item.DownloadURL, w, offset)
+	if err != nil {
+		return 0, err
+	}
+
+	c.logger.Debug("range download complete",
+		slog.String("drive_id", driveID.String()),
+		slog.String("item_id", itemID),
+		slog.Int64("bytes_written", n),
+		slog.Int64("offset", offset),
+	)
+
+	return n, nil
+}
+
+// downloadFromURLWithRange streams content from a pre-authenticated URL with
+// an optional Range header. The URL is pre-authenticated, so no Authorization
+// header is sent. Accepts both 200 (server ignores Range) and 206 (partial).
+func (c *Client) downloadFromURLWithRange(
+	ctx context.Context, downloadURL string, w io.Writer, offset int64,
+) (int64, error) {
+	resp, err := c.doPreAuthRetry(ctx, "range download", func() (*http.Request, error) {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, http.NoBody)
+		if reqErr != nil {
+			return nil, fmt.Errorf("graph: creating range download request: %w", reqErr)
+		}
+
+		req.Header.Set("User-Agent", c.userAgent)
+
+		if offset > 0 {
+			req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
+		}
+
+		return req, nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	n, copyErr := io.Copy(w, resp.Body)
+	if copyErr != nil {
+		c.logger.Error("streaming range download content failed",
+			slog.String("error", copyErr.Error()),
+			slog.Int64("bytes_before_error", n),
+		)
+
+		return n, fmt.Errorf("graph: streaming range download content: %w", copyErr)
+	}
+
+	return n, nil
+}
+
 // downloadFromURL streams content from a pre-authenticated URL directly to the writer.
 // The URL is pre-authenticated by the Graph API, so no Authorization header is needed.
 // The URL itself is never logged because it contains embedded auth tokens (architecture.md section 9.2).

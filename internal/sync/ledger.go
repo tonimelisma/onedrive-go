@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -50,6 +51,7 @@ type LedgerRow struct {
 	Hash       string
 	Size       int64
 	Mtime      int64
+	SessionURL string // upload session URL for resume (B-037)
 	BytesDone  int64
 	ErrorMsg   string
 }
@@ -231,34 +233,17 @@ func (l *Ledger) Cancel(ctx context.Context, id int64) error {
 
 // LoadPending returns all non-terminal (pending or claimed) rows for a cycle.
 func (l *Ledger) LoadPending(ctx context.Context, cycleID string) ([]LedgerRow, error) {
-	rows, err := l.db.QueryContext(ctx,
-		`SELECT id, cycle_id, action_type, path, old_path, status,
-			depends_on, drive_id, item_id, parent_id, hash, size, mtime,
-			bytes_done, error_msg
-		 FROM action_queue
-		 WHERE cycle_id = ? AND status IN ('`+ledgerStatusPending+`', '`+ledgerStatusClaimed+`')
-		 ORDER BY id`, cycleID)
-	if err != nil {
-		return nil, fmt.Errorf("sync: ledger load pending: %w", err)
-	}
-	defer rows.Close()
+	return l.queryRows(ctx,
+		`WHERE cycle_id = ? AND status IN ('`+ledgerStatusPending+`', '`+ledgerStatusClaimed+`')`,
+		"load pending", cycleID)
+}
 
-	var result []LedgerRow
-
-	for rows.Next() {
-		r, scanErr := scanLedgerRow(rows)
-		if scanErr != nil {
-			return nil, scanErr
-		}
-
-		result = append(result, *r)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sync: ledger iterating pending rows: %w", err)
-	}
-
-	return result, nil
+// LoadAllPending returns all non-terminal (pending or claimed) rows across
+// all cycles, ordered by id. Used for crash recovery at engine startup.
+func (l *Ledger) LoadAllPending(ctx context.Context) ([]LedgerRow, error) {
+	return l.queryRows(ctx,
+		`WHERE status IN ('`+ledgerStatusPending+`', '`+ledgerStatusClaimed+`')`,
+		"load all pending")
 }
 
 // ReclaimStale resets claimed actions older than timeout back to pending.
@@ -317,26 +302,95 @@ func (l *Ledger) CountFailedForCycle(ctx context.Context, cycleID string) (int, 
 	return count, nil
 }
 
+// UpdateSessionURL stores the upload session URL for a claimed action.
+// Used for upload session resume after crash recovery (B-037).
+func (l *Ledger) UpdateSessionURL(ctx context.Context, id int64, sessionURL string) error {
+	_, err := l.db.ExecContext(ctx,
+		`UPDATE action_queue SET session_url = ? WHERE id = ?`, sessionURL, id)
+	if err != nil {
+		return fmt.Errorf("sync: ledger update session URL %d: %w", id, err)
+	}
+
+	return nil
+}
+
+// UpdateBytesDone records the cumulative bytes uploaded for a claimed action.
+// Called periodically during chunked uploads for progress tracking.
+func (l *Ledger) UpdateBytesDone(ctx context.Context, id int64, bytesDone int64) error {
+	_, err := l.db.ExecContext(ctx,
+		`UPDATE action_queue SET bytes_done = ? WHERE id = ?`, bytesDone, id)
+	if err != nil {
+		return fmt.Errorf("sync: ledger update bytes done %d: %w", id, err)
+	}
+
+	return nil
+}
+
+// LoadCycleResults returns all terminal (done or failed) rows for a cycle.
+// Used by the engine to record successes/failures for B-123 suppression.
+func (l *Ledger) LoadCycleResults(ctx context.Context, cycleID string) ([]LedgerRow, error) {
+	return l.queryRows(ctx,
+		`WHERE cycle_id = ? AND status IN ('`+ledgerStatusDone+`', '`+ledgerStatusFailed+`')`,
+		"load cycle results", cycleID)
+}
+
+// ledgerSelectCols is the column list shared by all ledger row queries.
+const ledgerSelectCols = `SELECT id, cycle_id, action_type, path, old_path, status,
+	depends_on, drive_id, item_id, parent_id, hash, size, mtime,
+	session_url, bytes_done, error_msg
+ FROM action_queue `
+
+// queryRows executes a parameterized query against the action_queue table
+// and returns the scanned rows. The whereClause is appended after the base
+// SELECT. The desc is used in error messages for debugging.
+func (l *Ledger) queryRows(ctx context.Context, whereClause, desc string, args ...any) ([]LedgerRow, error) {
+	query := ledgerSelectCols + whereClause + ` ORDER BY id` //nolint:gosec // whereClause is always a compile-time constant, never user input
+
+	rows, err := l.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("sync: ledger %s: %w", desc, err)
+	}
+	defer rows.Close()
+
+	var result []LedgerRow
+
+	for rows.Next() {
+		r, scanErr := scanLedgerRow(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+
+		result = append(result, *r)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sync: ledger iterating %s rows: %w", desc, err)
+	}
+
+	return result, nil
+}
+
 // scanLedgerRow scans a single row into a LedgerRow, parsing depends_on JSON.
 func scanLedgerRow(rows *sql.Rows) (*LedgerRow, error) {
 	var (
-		r         LedgerRow
-		oldPath   sql.NullString
-		depsJSON  sql.NullString
-		driveID   sql.NullString
-		itemID    sql.NullString
-		parentID  sql.NullString
-		hash      sql.NullString
-		size      sql.NullInt64
-		mtime     sql.NullInt64
-		bytesDone sql.NullInt64
-		errorMsg  sql.NullString
+		r          LedgerRow
+		oldPath    sql.NullString
+		depsJSON   sql.NullString
+		driveID    sql.NullString
+		itemID     sql.NullString
+		parentID   sql.NullString
+		hash       sql.NullString
+		size       sql.NullInt64
+		mtime      sql.NullInt64
+		sessionURL sql.NullString
+		bytesDone  sql.NullInt64
+		errorMsg   sql.NullString
 	)
 
 	err := rows.Scan(
 		&r.ID, &r.CycleID, &r.ActionType, &r.Path, &oldPath, &r.Status,
 		&depsJSON, &driveID, &itemID, &parentID, &hash, &size, &mtime,
-		&bytesDone, &errorMsg,
+		&sessionURL, &bytesDone, &errorMsg,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("sync: scanning ledger row: %w", err)
@@ -347,6 +401,7 @@ func scanLedgerRow(rows *sql.Rows) (*LedgerRow, error) {
 	r.ItemID = itemID.String
 	r.ParentID = parentID.String
 	r.Hash = hash.String
+	r.SessionURL = sessionURL.String
 	r.ErrorMsg = errorMsg.String
 
 	if size.Valid {
@@ -461,7 +516,7 @@ func (l *Ledger) LastCycleID(ctx context.Context) (string, error) {
 
 	err := l.db.QueryRowContext(ctx,
 		`SELECT cycle_id FROM action_queue ORDER BY id DESC LIMIT 1`).Scan(&cycleID)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
 
