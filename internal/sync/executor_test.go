@@ -787,12 +787,28 @@ func TestExecutor_LocalDelete_HashMismatch_ConflictCopy(t *testing.T) {
 		Path:   "exec-modified.txt",
 		ItemID: "item1",
 		View: &PathView{
-			Baseline: &BaselineEntry{LocalHash: "old-hash-that-wont-match"},
+			Baseline: &BaselineEntry{
+				LocalHash:  "old-hash-that-wont-match",
+				RemoteHash: "baseline-remote-hash",
+			},
 		},
 	}
 
 	o := e.executeLocalDelete(context.Background(), action)
 	requireOutcomeSuccess(t, o)
+
+	// B-133: outcome should be ActionConflict (not ActionLocalDelete) so it's tracked.
+	if o.Action != ActionConflict {
+		t.Errorf("expected ActionConflict, got %s", o.Action)
+	}
+
+	if o.ConflictType != ConflictEditDelete {
+		t.Errorf("expected ConflictEditDelete, got %q", o.ConflictType)
+	}
+
+	if o.RemoteHash != "baseline-remote-hash" {
+		t.Errorf("RemoteHash = %q, want %q", o.RemoteHash, "baseline-remote-hash")
+	}
 
 	// Original should be gone.
 	if _, err := os.Stat(filepath.Join(syncRoot, "exec-modified.txt")); !os.IsNotExist(err) {

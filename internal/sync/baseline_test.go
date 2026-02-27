@@ -1526,6 +1526,72 @@ func TestCommitOutcome_Conflict_Unresolved(t *testing.T) {
 	}
 }
 
+func TestCommitOutcome_EditDeleteConflict_DeletesBaseline(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
+
+	// First, create a baseline entry for the file.
+	setupOutcome := Outcome{
+		Action:   ActionDownload,
+		Success:  true,
+		Path:     "edit-delete-target.txt",
+		DriveID:  driveid.New("d"),
+		ItemID:   "i1",
+		ItemType: ItemTypeFile,
+	}
+	if err := mgr.CommitOutcome(ctx, &setupOutcome, 0); err != nil {
+		t.Fatalf("CommitOutcome (setup): %v", err)
+	}
+
+	// Verify baseline entry exists.
+	if _, ok := mgr.baseline.GetByPath("edit-delete-target.txt"); !ok {
+		t.Fatal("baseline entry should exist after download")
+	}
+
+	// Now commit an unresolved edit-delete conflict (B-133).
+	conflictOutcome := Outcome{
+		Action:       ActionConflict,
+		Success:      true,
+		Path:         "edit-delete-target.txt",
+		DriveID:      driveid.New("d"),
+		ItemID:       "i1",
+		ItemType:     ItemTypeFile,
+		ConflictType: ConflictEditDelete,
+		LocalHash:    "modified-hash",
+		RemoteHash:   "baseline-remote-hash",
+	}
+	if err := mgr.CommitOutcome(ctx, &conflictOutcome, 0); err != nil {
+		t.Fatalf("CommitOutcome (conflict): %v", err)
+	}
+
+	// Baseline entry should be deleted — the original file was renamed to conflict copy.
+	if _, ok := mgr.baseline.GetByPath("edit-delete-target.txt"); ok {
+		t.Error("baseline entry should be deleted for unresolved edit-delete conflict")
+	}
+
+	// Conflict record should exist.
+	var conflictType, resolution string
+
+	err := mgr.db.QueryRowContext(ctx,
+		"SELECT conflict_type, resolution FROM conflicts WHERE path = ?", "edit-delete-target.txt",
+	).Scan(&conflictType, &resolution)
+	if err != nil {
+		t.Fatalf("querying conflict: %v", err)
+	}
+
+	if conflictType != ConflictEditDelete {
+		t.Errorf("conflict_type = %q, want %q", conflictType, ConflictEditDelete)
+	}
+
+	if resolution != ResolutionUnresolved {
+		t.Errorf("resolution = %q, want %q", resolution, ResolutionUnresolved)
+	}
+}
+
 func TestCommitOutcome_WithLedger(t *testing.T) {
 	t.Parallel()
 
