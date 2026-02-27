@@ -7,6 +7,24 @@ import (
 	"sync/atomic"
 )
 
+// Package-level API documentation for tracker.go (B-145):
+//
+// DepTracker is an in-memory dependency graph that dispatches sync actions
+// to lane-based worker channels as their dependencies are satisfied. It is
+// the bridge between the persistent Ledger and the WorkerPool:
+//
+//   - Add(): Insert an action with its ledger ID and dependency IDs.
+//     If all deps are satisfied, the action is dispatched immediately.
+//   - Complete(): Mark an action done, decrement dependents' counters,
+//     and dispatch any dependents that become ready. Advances per-cycle
+//     completion tracking for delta token commits (B-121).
+//   - HasInFlight() / CancelByPath(): Deduplication for watch mode (B-122).
+//   - Interactive() / Bulk(): Lane channels consumed by WorkerPool.
+//   - CycleDone() / CleanupCycle(): Per-cycle lifecycle for watch mode.
+//
+// Two constructors: NewDepTracker (one-shot, Done() fires when all complete)
+// and NewPersistentDepTracker (watch mode, workers exit via ctx cancellation).
+
 // smallFileThreshold is the size boundary for routing actions to the
 // interactive lane (below) vs the bulk lane (at or above).
 const smallFileThreshold = 10 * 1024 * 1024 // 10 MB

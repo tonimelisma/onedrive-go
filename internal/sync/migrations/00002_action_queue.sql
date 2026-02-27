@@ -10,6 +10,10 @@ CREATE TABLE action_queue (
     old_path     TEXT,
     status       TEXT    NOT NULL DEFAULT 'pending'
                  CHECK(status IN ('pending','claimed','done','failed','canceled')),
+    -- JSON array of planner-assigned indices (0-based positions in the actions
+    -- slice), NOT ledger IDs. The DepTracker maps these indices to ledger IDs
+    -- when building the in-memory dependency graph. For crash recovery, the
+    -- mapping is deterministic: sequential IDs within a single-tx insert.
     depends_on   TEXT,
     drive_id     TEXT,
     item_id      TEXT,
