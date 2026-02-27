@@ -65,18 +65,21 @@ func (fw *fsnotifyWrapper) Errors() <-chan error          { return fw.w.Errors }
 // comparing each entry against the in-memory baseline. Stateless — syncRoot
 // is a parameter of FullScan, allowing reuse across cycles.
 type LocalObserver struct {
-	baseline       *Baseline
-	logger         *slog.Logger
-	watcherFactory func() (FsWatcher, error)
-	droppedEvents  atomic.Int64 // events dropped by trySend due to full channel
+	baseline           *Baseline
+	logger             *slog.Logger
+	watcherFactory     func() (FsWatcher, error)
+	droppedEvents      atomic.Int64                                     // events dropped by trySend due to full channel
+	safetyScanOverride time.Duration                                    // overrides safetyScanInterval; 0 = use constant
+	sleepFunc          func(ctx context.Context, d time.Duration) error // injectable for testing
 }
 
 // NewLocalObserver creates a LocalObserver. The baseline must be loaded (from
 // BaselineManager.Load); it is read-only during observation.
 func NewLocalObserver(baseline *Baseline, logger *slog.Logger) *LocalObserver {
 	return &LocalObserver{
-		baseline: baseline,
-		logger:   logger,
+		baseline:  baseline,
+		logger:    logger,
+		sleepFunc: timeSleep,
 		watcherFactory: func() (FsWatcher, error) {
 			w, err := fsnotify.NewWatcher()
 			if err != nil {
@@ -103,11 +106,17 @@ func (o *LocalObserver) trySend(ctx context.Context, events chan<- ChangeEvent, 
 	}
 }
 
-// DroppedEvents returns the number of events dropped by trySend due to a full
-// channel. The safety scan catches dropped events, but a non-zero count
-// indicates backpressure that may warrant investigation.
+// DroppedEvents returns the cumulative number of events dropped by trySend
+// due to a full channel. Use ResetDroppedEvents for per-cycle reporting.
 func (o *LocalObserver) DroppedEvents() int64 {
 	return o.droppedEvents.Load()
+}
+
+// ResetDroppedEvents atomically reads and resets the drop counter to zero.
+// Returns the number of events dropped since the last reset. Used by the
+// engine to log per-cycle drops without double-counting across cycles.
+func (o *LocalObserver) ResetDroppedEvents() int64 {
+	return o.droppedEvents.Swap(0)
 }
 
 // FullScan walks the sync root directory and returns change events for all

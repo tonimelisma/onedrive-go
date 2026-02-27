@@ -722,12 +722,14 @@ func (e *Engine) watchCycleCompletion(ctx context.Context, tracker *DepTracker, 
 		}
 	}
 
-	// Log dropped local events if backpressure occurred during this cycle.
+	// Log and reset dropped local events for this cycle. ResetDroppedEvents
+	// atomically reads and zeros the counter, preventing double-counting
+	// across cycles (B-190).
 	if e.localObs != nil {
-		if dropped := e.localObs.DroppedEvents(); dropped > 0 {
+		if dropped := e.localObs.ResetDroppedEvents(); dropped > 0 {
 			e.logger.Warn("local observer dropped events due to channel backpressure",
 				slog.String("cycle_id", cycleID),
-				slog.Int64("total_dropped", dropped),
+				slog.Int64("dropped_this_cycle", dropped),
 			)
 		}
 	}

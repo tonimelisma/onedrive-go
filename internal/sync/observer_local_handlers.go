@@ -15,7 +15,12 @@ import (
 func (o *LocalObserver) watchLoop(
 	ctx context.Context, watcher FsWatcher, syncRoot string, events chan<- ChangeEvent,
 ) error {
-	safetyTicker := time.NewTicker(safetyScanInterval)
+	scanInterval := safetyScanInterval
+	if o.safetyScanOverride > 0 {
+		scanInterval = o.safetyScanOverride
+	}
+
+	safetyTicker := time.NewTicker(scanInterval)
 	defer safetyTicker.Stop()
 
 	errBackoff := watchErrInitBackoff
@@ -47,7 +52,7 @@ func (o *LocalObserver) watchLoop(
 
 			// Exponential backoff prevents tight loop under sustained errors
 			// (e.g., kernel buffer overflow).
-			if sleepErr := timeSleep(ctx, errBackoff); sleepErr != nil {
+			if sleepErr := o.sleepFunc(ctx, errBackoff); sleepErr != nil {
 				return nil
 			}
 
