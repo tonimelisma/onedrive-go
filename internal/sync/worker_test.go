@@ -522,11 +522,14 @@ func TestWorkerPool_FailAndComplete_UsePoolContext(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline verifies
-// that when action 1 creates a folder and action 2 uploads a file into that
-// folder, the upload resolves its parentID from the baseline (not a transient
-// in-memory map). This is the correct architecture after B-090: each action
-// loads a fresh baseline snapshot, so the folder-create outcome committed by
-// action 1 is visible to action 2 via the baseline.
+// that when action 0 creates a folder and action 1 uploads a file into that
+// folder, the upload resolves its parentID from the baseline.
+//
+// With CreateSide=CreateLocal, the folder already exists remotely; the
+// folder-create action creates it locally via os.MkdirAll and commits a
+// baseline entry whose ItemID comes from action.View.Remote.ItemID (the
+// createFolderFn mock is never called for CreateLocal). The upload action
+// then resolves its parent from this baseline entry.
 func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing.T) {
 	t.Parallel()
 
