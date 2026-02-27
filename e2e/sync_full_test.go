@@ -1035,3 +1035,52 @@ func TestE2E_Sync_VerifyDetectsTampering(t *testing.T) {
 		}
 	}
 }
+
+// TestE2E_Sync_ResolveDryRun exercises resolve --dry-run: shows what would
+// happen without actually resolving the conflict, then resolves for real.
+func TestE2E_Sync_ResolveDryRun(t *testing.T) {
+	registerLogDump(t)
+
+	syncDir := t.TempDir()
+	cfgPath := writeSyncConfig(t, syncDir)
+	testFolder := fmt.Sprintf("e2e-sync-resdry-%d", time.Now().UnixNano())
+
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
+
+	// Step 1: Create local file and upload.
+	localDir := filepath.Join(syncDir, testFolder)
+	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	conflictFile := filepath.Join(localDir, "dryrun-conflict.txt")
+	require.NoError(t, os.WriteFile(conflictFile, []byte("original v1"), 0o644))
+
+	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
+
+	// Step 2: Modify both sides to create edit-edit conflict.
+	require.NoError(t, os.WriteFile(conflictFile, []byte("local edit v2"), 0o644))
+	putRemoteFile(t, "/"+testFolder+"/dryrun-conflict.txt", "remote edit v2")
+
+	// Step 3: Bidirectional sync — should detect conflict.
+	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--force")
+	assert.Contains(t, stderr, "Conflicts:")
+
+	// Step 4: Verify conflict exists.
+	stdout, _ := runCLIWithConfig(t, cfgPath, "conflicts")
+	assert.Contains(t, stdout, "dryrun-conflict.txt")
+	assert.Contains(t, stdout, "edit_edit")
+
+	// Step 5: Resolve --dry-run --keep-local.
+	_, stderr = runCLIWithConfig(t, cfgPath, "resolve", testFolder+"/dryrun-conflict.txt", "--keep-local", "--dry-run")
+	assert.Contains(t, stderr, "Would resolve")
+
+	// Step 6: Conflict should still exist (dry-run didn't resolve it).
+	stdout, _ = runCLIWithConfig(t, cfgPath, "conflicts")
+	assert.Contains(t, stdout, "dryrun-conflict.txt", "conflict should remain after dry-run resolve")
+
+	// Step 7: Resolve for real.
+	_, stderr = runCLIWithConfig(t, cfgPath, "resolve", testFolder+"/dryrun-conflict.txt", "--keep-local")
+	assert.Contains(t, stderr, "Resolved")
+
+	// Step 8: No more conflicts.
+	stdout, _ = runCLIWithConfig(t, cfgPath, "conflicts")
+	assert.Contains(t, stdout, "No unresolved conflicts")
+}

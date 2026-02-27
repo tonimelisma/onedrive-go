@@ -1776,3 +1776,148 @@ func TestResolveConflict_KeepLocal_TransferFails(t *testing.T) {
 		t.Errorf("expected 1 unresolved conflict, got %d", len(remaining))
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Regression: B-091 — resolveTransfer success path commits to baseline
+// ---------------------------------------------------------------------------
+
+// TestResolveConflict_KeepLocal_CommitsToBaseline verifies that after a
+// successful keep_local resolution (upload), the baseline contains an updated
+// entry with the new ItemID and hash from the upload response.
+func TestResolveConflict_KeepLocal_CommitsToBaseline(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	mock := &engineMockClient{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, name string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			return &graph.Item{
+				ID:           "resolved-item-id",
+				Name:         name,
+				ETag:         "etag-resolved",
+				QuickXorHash: "resolved-hash",
+				Size:         13,
+			}, nil
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := context.Background()
+
+	// Seed a conflict.
+	outcomes := []Outcome{{
+		Action:       ActionConflict,
+		Success:      true,
+		Path:         "baseline-commit.txt",
+		DriveID:      driveID,
+		ItemID:       "original-item-id",
+		ItemType:     ItemTypeFile,
+		LocalHash:    "old-local-h",
+		RemoteHash:   "old-remote-h",
+		ConflictType: "edit_edit",
+	}}
+
+	seedBaseline(t, eng.baseline, ctx, outcomes, "")
+
+	// Write the local file that will be uploaded.
+	writeLocalFile(t, syncRoot, "baseline-commit.txt", "resolved local")
+
+	conflicts, err := eng.ListConflicts(ctx)
+	if err != nil {
+		t.Fatalf("ListConflicts: %v", err)
+	}
+
+	if len(conflicts) != 1 {
+		t.Fatalf("expected 1 conflict, got %d", len(conflicts))
+	}
+
+	if resolveErr := eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepLocal); resolveErr != nil {
+		t.Fatalf("ResolveConflict: %v", resolveErr)
+	}
+
+	// Verify the baseline was updated with the new item from the upload.
+	bl, loadErr := eng.baseline.Load(ctx)
+	if loadErr != nil {
+		t.Fatalf("baseline.Load: %v", loadErr)
+	}
+
+	entry, ok := bl.GetByPath("baseline-commit.txt")
+	if !ok {
+		t.Fatal("baseline entry not found after resolve")
+	}
+
+	if entry.ItemID != "resolved-item-id" {
+		t.Errorf("baseline ItemID = %q, want %q", entry.ItemID, "resolved-item-id")
+	}
+
+	if entry.ETag != "etag-resolved" {
+		t.Errorf("baseline ETag = %q, want %q", entry.ETag, "etag-resolved")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Regression: B-077 — resolveTransfer with minimal conflict record (no panic)
+// ---------------------------------------------------------------------------
+
+// TestResolveConflict_KeepLocal_MinimalRecord_NoPanic verifies that calling
+// ResolveConflict with a sparse ConflictRecord (only mandatory fields) does
+// not cause a nil-pointer panic. The original bug was a nil-map panic when
+// called without prior Execute().
+func TestResolveConflict_KeepLocal_MinimalRecord_NoPanic(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	mock := &engineMockClient{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, name string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			return &graph.Item{
+				ID:   "minimal-resolved",
+				Name: name,
+			}, nil
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := context.Background()
+
+	// Seed a conflict with only the mandatory fields — no hashes, no etag.
+	outcomes := []Outcome{{
+		Action:       ActionConflict,
+		Success:      true,
+		Path:         "minimal-conflict.txt",
+		DriveID:      driveID,
+		ItemID:       "item-min",
+		ItemType:     ItemTypeFile,
+		ConflictType: "edit_edit",
+	}}
+
+	seedBaseline(t, eng.baseline, ctx, outcomes, "")
+
+	// Write the local file.
+	writeLocalFile(t, syncRoot, "minimal-conflict.txt", "minimal data")
+
+	conflicts, err := eng.ListConflicts(ctx)
+	if err != nil {
+		t.Fatalf("ListConflicts: %v", err)
+	}
+
+	if len(conflicts) != 1 {
+		t.Fatalf("expected 1 conflict, got %d", len(conflicts))
+	}
+
+	// This must not panic. The original bug was a nil-map access in resolveTransfer.
+	resolveErr := eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepLocal)
+	if resolveErr != nil {
+		t.Fatalf("ResolveConflict: %v", resolveErr)
+	}
+
+	// Verify the conflict is resolved.
+	remaining, err := eng.ListConflicts(ctx)
+	if err != nil {
+		t.Fatalf("ListConflicts after resolve: %v", err)
+	}
+
+	if len(remaining) != 0 {
+		t.Errorf("expected 0 unresolved conflicts, got %d", len(remaining))
+	}
+}

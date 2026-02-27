@@ -1838,3 +1838,105 @@ func TestExecutor_LocalDeleteFolder_TrashSuccess(t *testing.T) {
 		t.Error("trashFunc should have been called for folder")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Regression: B-076 — partial file cleaned on download error after write
+// ---------------------------------------------------------------------------
+
+// TestExecutor_Download_PartialFileCleanedOnCloseError verifies that when a
+// download writes bytes successfully but then fails mid-stream, the .partial
+// file is removed. Existing tests cover the API error (no bytes written) and
+// success paths, but not the "write succeeded, then error" variant.
+func TestExecutor_Download_PartialFileCleanedOnCloseError(t *testing.T) {
+	t.Parallel()
+
+	dl := &executorMockDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			// Write some bytes first (partial content written to disk).
+			n, writeErr := w.Write([]byte("partial data"))
+			if writeErr != nil {
+				return int64(n), writeErr
+			}
+
+			// Fail mid-stream — simulates network error after partial write.
+			return int64(n), fmt.Errorf("connection reset after partial write")
+		},
+	}
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
+	e := NewExecution(cfg, emptyBaseline())
+
+	action := &Action{
+		Type:    ActionDownload,
+		Path:    "partial-cleanup.txt",
+		ItemID:  "item-partial",
+		DriveID: driveid.New(testDriveID),
+		View:    &PathView{Remote: &RemoteState{}},
+	}
+
+	o := e.executeDownload(context.Background(), action)
+	requireOutcomeFailure(t, o)
+
+	// The .partial file must not remain on disk after the error.
+	partialPath := filepath.Join(syncRoot, "partial-cleanup.txt.partial")
+	if _, err := os.Stat(partialPath); !os.IsNotExist(err) {
+		t.Error(".partial file should be cleaned up on download error, but it still exists")
+	}
+
+	// The final file should also not exist.
+	if _, err := os.Stat(filepath.Join(syncRoot, "partial-cleanup.txt")); !os.IsNotExist(err) {
+		t.Error("final file should not exist after failed download")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Regression: B-081 — executor propagates file mtime to Uploader
+// ---------------------------------------------------------------------------
+
+// TestExecutor_Upload_MtimePassedToUploader verifies that executeUpload reads
+// the local file's modification time and passes it to the Uploader.Upload call.
+func TestExecutor_Upload_MtimePassedToUploader(t *testing.T) {
+	t.Parallel()
+
+	var capturedMtime time.Time
+
+	ul := &executorMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, mtime time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			capturedMtime = mtime
+
+			return &graph.Item{ID: "up-mtime", ETag: "e1"}, nil
+		},
+	}
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
+	e := NewExecution(cfg, emptyBaseline())
+
+	// Write a file and set a specific mtime.
+	writeExecTestFile(t, syncRoot, "mtime-test.txt", "mtime content")
+
+	targetMtime := time.Date(2025, 6, 15, 10, 30, 0, 0, time.UTC)
+	absPath := filepath.Join(syncRoot, "mtime-test.txt")
+
+	if err := os.Chtimes(absPath, targetMtime, targetMtime); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	action := &Action{
+		Type: ActionUpload,
+		Path: "mtime-test.txt",
+		View: &PathView{Path: "mtime-test.txt"},
+	}
+
+	o := e.executeUpload(context.Background(), action)
+	requireOutcomeSuccess(t, o)
+
+	// Verify the uploader received the file's mtime.
+	if !capturedMtime.Equal(targetMtime) {
+		t.Errorf("uploader received mtime %v, want %v", capturedMtime, targetMtime)
+	}
+
+	// Verify the outcome also records the mtime.
+	if o.Mtime != targetMtime.UnixNano() {
+		t.Errorf("outcome Mtime = %d, want %d", o.Mtime, targetMtime.UnixNano())
+	}
+}

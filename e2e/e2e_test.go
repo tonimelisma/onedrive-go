@@ -283,6 +283,39 @@ func TestE2E_RoundTrip(t *testing.T) {
 		_, stderr := runCLI(t, "rm", "-r", "/"+testSubfolder)
 		assert.Contains(t, stderr, "Deleted")
 	})
+
+	t.Run("rm_permanent", func(t *testing.T) {
+		// Upload a new file, then rm --permanent.
+		tmpFile, err := os.CreateTemp("", "e2e-perm-*")
+		require.NoError(t, err)
+		defer os.Remove(tmpFile.Name())
+
+		_, err = tmpFile.Write([]byte("permanent delete test\n"))
+		require.NoError(t, err)
+		require.NoError(t, tmpFile.Close())
+
+		permFile := testFolder + "/perm-test.txt"
+		_, stderr := runCLI(t, "put", tmpFile.Name(), "/"+permFile)
+		assert.Contains(t, stderr, "Uploaded")
+
+		// Delete with --permanent flag. On personal accounts, this still moves to
+		// recycle bin (API limitation), but the flag must be accepted without error.
+		_, stderr = runCLI(t, "rm", "--permanent", "/"+permFile)
+		assert.Contains(t, stderr, "Deleted")
+	})
+
+	t.Run("whoami_text", func(t *testing.T) {
+		// Run whoami without --json. Output should contain account email and drive type.
+		stdout, _ := runCLI(t, "whoami")
+		assert.Contains(t, stdout, "outlook.com", "whoami text output should contain the account email")
+	})
+
+	t.Run("status", func(t *testing.T) {
+		// Run status command — should show account info and token state.
+		stdout, _ := runCLI(t, "status")
+		assert.Contains(t, stdout, "Account:", "status should show account header")
+		assert.Contains(t, stdout, "Token:", "status should show token state")
+	})
 }
 
 // TestE2E_ErrorCases verifies that the CLI returns non-zero exit codes
@@ -302,6 +335,23 @@ func TestE2E_ErrorCases(t *testing.T) {
 	t.Run("rm_not_found", func(t *testing.T) {
 		output := runCLIExpectError(t, "rm", "/nonexistent-uuid-path-12345")
 		assert.Contains(t, output, "nonexistent-uuid-path-12345")
+	})
+
+	t.Run("rm_folder_without_recursive", func(t *testing.T) {
+		testFolder := fmt.Sprintf("onedrive-go-e2e-rmfolder-%d", time.Now().UnixNano())
+
+		t.Cleanup(func() {
+			fullArgs := []string{"--drive", drive, "rm", "-r", "/" + testFolder}
+			cmd := exec.Command(binaryPath, fullArgs...)
+			_ = cmd.Run()
+		})
+
+		// Create a folder.
+		runCLI(t, "mkdir", "/"+testFolder)
+
+		// Try to rm without --recursive — should fail.
+		output := runCLIExpectError(t, "rm", "/"+testFolder)
+		assert.Contains(t, output, "recursive")
 	})
 }
 
