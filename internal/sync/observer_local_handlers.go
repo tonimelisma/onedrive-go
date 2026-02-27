@@ -14,12 +14,7 @@ import (
 func (o *LocalObserver) watchLoop(
 	ctx context.Context, watcher FsWatcher, syncRoot string, events chan<- ChangeEvent,
 ) error {
-	scanInterval := safetyScanInterval
-	if o.safetyScanOverride > 0 {
-		scanInterval = o.safetyScanOverride
-	}
-
-	tickCh, tickStop := o.safetyTickFunc(scanInterval)
+	tickCh, tickStop := o.safetyTickFunc(safetyScanInterval)
 	defer tickStop()
 
 	errBackoff := watchErrInitBackoff
