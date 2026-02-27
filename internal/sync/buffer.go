@@ -123,9 +123,16 @@ func (b *Buffer) debounceLoop(ctx context.Context, debounce time.Duration, out c
 	for {
 		select {
 		case <-ctx.Done():
-			// Drain remaining events.
+			// Drain remaining events. Use non-blocking send because
+			// the consumer may have stopped reading (B-103).
 			if batch := b.FlushImmediate(); batch != nil {
-				out <- batch
+				select {
+				case out <- batch:
+				default:
+					b.logger.Warn("final drain discarded: output channel full",
+						slog.Int("paths", len(batch)),
+					)
+				}
 			}
 
 			return

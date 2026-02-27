@@ -808,3 +808,47 @@ func TestFlushDebounced_ConcurrentAddAndFlush(t *testing.T) {
 	for range out {
 	}
 }
+
+// TestBuffer_FlushDebounced_FinalDrainNoDeadlock verifies that canceling the
+// context while the output channel is full does NOT deadlock. Before the B-103
+// fix, the blocking `out <- batch` in debounceLoop would hang because the
+// consumer had already stopped reading. The goroutine must exit within 5s.
+func TestBuffer_FlushDebounced_FinalDrainNoDeadlock(t *testing.T) {
+	t.Parallel()
+
+	buf := NewBuffer(testLogger(t))
+	ctx, cancel := context.WithCancel(context.Background())
+
+	debounce := time.Hour // never fires naturally
+	out := buf.FlushDebounced(ctx, debounce)
+
+	// Add an event so the final drain has something to send.
+	buf.Add(&ChangeEvent{
+		Source: SourceRemote, Type: ChangeCreate,
+		Path: "deadlock-test.txt", Name: "deadlock-test.txt",
+		ItemID: "dl1", DriveID: driveid.New(testDriveID), ItemType: ItemTypeFile,
+	})
+
+	time.Sleep(10 * time.Millisecond) // let the signal propagate
+
+	// Cancel context — the debounce goroutine should exit via the
+	// non-blocking send, discarding the final batch if the channel is full.
+	cancel()
+
+	// The goroutine must exit (channel closed) within 5 seconds.
+	// If the old blocking send were still in place, this would deadlock
+	// when the output channel (capacity 1) was already occupied.
+	done := make(chan struct{})
+	go func() {
+		for range out {
+		}
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Success — goroutine exited cleanly.
+	case <-time.After(5 * time.Second):
+		t.Fatal("debounce goroutine deadlocked on final drain (B-103)")
+	}
+}
