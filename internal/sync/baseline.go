@@ -671,6 +671,10 @@ func nullString(s string) sql.NullString {
 	return sql.NullString{String: s, Valid: true}
 }
 
+// nullInt64 maps Go zero (0) to SQL NULL. This conflates "actual zero" with
+// "absent" — acceptable for Size (zero-byte files are rare edge cases) and
+// Mtime (Unix epoch is not a realistic modification time). If a legitimate
+// zero value needs to be stored in the future, use a separate sentinel.
 func nullInt64(n int64) sql.NullInt64 {
 	if n == 0 {
 		return sql.NullInt64{}

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"math/rand/v2"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -51,6 +52,7 @@ type ExecutorConfig struct {
 	nowFunc   func() time.Time
 	hashFunc  func(filePath string) (string, error)
 	sleepFunc func(ctx context.Context, d time.Duration) error
+	trashFunc func(absPath string) error // nil = permanent delete (os.Remove)
 }
 
 // Executor executes individual actions against the Graph API and local
@@ -363,14 +365,15 @@ func classifyError(err error) errClass {
 // classifyStatusCode maps HTTP status codes to error classes.
 func classifyStatusCode(code int) errClass {
 	switch code {
-	case 401:
+	case http.StatusUnauthorized:
 		return errClassFatal
-	case 507: //nolint:mnd // HTTP 507 Insufficient Storage
+	case http.StatusInsufficientStorage:
 		return errClassFatal
-	case 408, 412, 429, 509: //nolint:mnd // transient HTTP codes
+	case http.StatusRequestTimeout, http.StatusPreconditionFailed,
+		http.StatusTooManyRequests, 509: //nolint:mnd // HTTP 509 Bandwidth Limit Exceeded (no stdlib constant)
 		return errClassRetryable
 	default:
-		if code >= 500 {
+		if code >= http.StatusInternalServerError {
 			return errClassRetryable
 		}
 

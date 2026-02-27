@@ -190,19 +190,19 @@ func (c *Client) Organization(ctx context.Context) (*Organization, error) {
 	}
 	defer resp.Body.Close()
 
-	var or orgResponse
-	if err := json.NewDecoder(resp.Body).Decode(&or); err != nil {
+	var orgResp orgResponse
+	if err := json.NewDecoder(resp.Body).Decode(&orgResp); err != nil {
 		return nil, fmt.Errorf("graph: decoding organization response: %w", err)
 	}
 
 	org := &Organization{}
-	if len(or.Value) > 0 {
-		org.DisplayName = or.Value[0].DisplayName
+	if len(orgResp.Value) > 0 {
+		org.DisplayName = orgResp.Value[0].DisplayName
 	}
 
 	c.logger.Debug("fetched organization",
 		slog.String("display_name", org.DisplayName),
-		slog.Bool("has_org", len(or.Value) > 0),
+		slog.Bool("has_org", len(orgResp.Value) > 0),
 	)
 
 	return org, nil

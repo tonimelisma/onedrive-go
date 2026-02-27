@@ -9,6 +9,15 @@ import (
 	"time"
 )
 
+// Ledger status constants for action_queue.status column.
+const (
+	ledgerStatusPending  = "pending"
+	ledgerStatusClaimed  = "claimed"
+	ledgerStatusDone     = "done"
+	ledgerStatusFailed   = "failed"
+	ledgerStatusCanceled = "canceled"
+)
+
 // LedgerRow represents a single action from the action_queue table,
 // returned by LoadPending for crash recovery.
 type LedgerRow struct {
@@ -65,7 +74,7 @@ func (l *Ledger) WriteActions(
 		`INSERT INTO action_queue
 			(cycle_id, action_type, path, old_path, status, depends_on,
 			 drive_id, item_id, parent_id, hash, size, mtime)
-			VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)`)
+			VALUES (?, ?, ?, ?, '`+ledgerStatusPending+`', ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return nil, fmt.Errorf("sync: ledger prepare: %w", err)
 	}
@@ -129,8 +138,8 @@ func (l *Ledger) Claim(ctx context.Context, id int64) error {
 	now := time.Now().UnixNano()
 
 	result, err := l.db.ExecContext(ctx,
-		`UPDATE action_queue SET status = 'claimed', claimed_at = ?
-		 WHERE id = ? AND status = 'pending'`, now, id)
+		`UPDATE action_queue SET status = '`+ledgerStatusClaimed+`', claimed_at = ?
+		 WHERE id = ? AND status = '`+ledgerStatusPending+`'`, now, id)
 	if err != nil {
 		return fmt.Errorf("sync: ledger claim %d: %w", id, err)
 	}
@@ -141,7 +150,7 @@ func (l *Ledger) Claim(ctx context.Context, id int64) error {
 	}
 
 	if rows == 0 {
-		return fmt.Errorf("sync: ledger claim %d: action not pending", id)
+		return fmt.Errorf("sync: ledger claim %d: action not %s", id, ledgerStatusPending)
 	}
 
 	return nil
@@ -152,8 +161,8 @@ func (l *Ledger) Complete(ctx context.Context, id int64) error {
 	now := time.Now().UnixNano()
 
 	result, err := l.db.ExecContext(ctx,
-		`UPDATE action_queue SET status = 'done', completed_at = ?
-		 WHERE id = ? AND status = 'claimed'`, now, id)
+		`UPDATE action_queue SET status = '`+ledgerStatusDone+`', completed_at = ?
+		 WHERE id = ? AND status = '`+ledgerStatusClaimed+`'`, now, id)
 	if err != nil {
 		return fmt.Errorf("sync: ledger complete %d: %w", id, err)
 	}
@@ -164,7 +173,7 @@ func (l *Ledger) Complete(ctx context.Context, id int64) error {
 	}
 
 	if rows == 0 {
-		return fmt.Errorf("sync: ledger complete %d: action not claimed", id)
+		return fmt.Errorf("sync: ledger complete %d: action not %s", id, ledgerStatusClaimed)
 	}
 
 	return nil
@@ -175,8 +184,8 @@ func (l *Ledger) Fail(ctx context.Context, id int64, errMsg string) error {
 	now := time.Now().UnixNano()
 
 	result, err := l.db.ExecContext(ctx,
-		`UPDATE action_queue SET status = 'failed', completed_at = ?, error_msg = ?
-		 WHERE id = ? AND status = 'claimed'`, now, errMsg, id)
+		`UPDATE action_queue SET status = '`+ledgerStatusFailed+`', completed_at = ?, error_msg = ?
+		 WHERE id = ? AND status = '`+ledgerStatusClaimed+`'`, now, errMsg, id)
 	if err != nil {
 		return fmt.Errorf("sync: ledger fail %d: %w", id, err)
 	}
@@ -187,7 +196,7 @@ func (l *Ledger) Fail(ctx context.Context, id int64, errMsg string) error {
 	}
 
 	if rows == 0 {
-		return fmt.Errorf("sync: ledger fail %d: action not claimed", id)
+		return fmt.Errorf("sync: ledger fail %d: action not %s", id, ledgerStatusClaimed)
 	}
 
 	return nil
@@ -196,7 +205,7 @@ func (l *Ledger) Fail(ctx context.Context, id int64, errMsg string) error {
 // Cancel transitions an action to canceled from any status.
 func (l *Ledger) Cancel(ctx context.Context, id int64) error {
 	_, err := l.db.ExecContext(ctx,
-		`UPDATE action_queue SET status = 'canceled' WHERE id = ?`, id)
+		`UPDATE action_queue SET status = '`+ledgerStatusCanceled+`' WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("sync: ledger cancel %d: %w", id, err)
 	}
@@ -211,7 +220,7 @@ func (l *Ledger) LoadPending(ctx context.Context, cycleID string) ([]LedgerRow, 
 			depends_on, drive_id, item_id, parent_id, hash, size, mtime,
 			bytes_done, error_msg
 		 FROM action_queue
-		 WHERE cycle_id = ? AND status IN ('pending', 'claimed')
+		 WHERE cycle_id = ? AND status IN ('`+ledgerStatusPending+`', '`+ledgerStatusClaimed+`')
 		 ORDER BY id`, cycleID)
 	if err != nil {
 		return nil, fmt.Errorf("sync: ledger load pending: %w", err)
@@ -242,8 +251,8 @@ func (l *Ledger) ReclaimStale(ctx context.Context, timeout time.Duration) (int, 
 	cutoff := time.Now().Add(-timeout).UnixNano()
 
 	result, err := l.db.ExecContext(ctx,
-		`UPDATE action_queue SET status = 'pending', claimed_at = NULL
-		 WHERE status = 'claimed' AND claimed_at < ?`, cutoff)
+		`UPDATE action_queue SET status = '`+ledgerStatusPending+`', claimed_at = NULL
+		 WHERE status = '`+ledgerStatusClaimed+`' AND claimed_at < ?`, cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("sync: ledger reclaim stale: %w", err)
 	}
@@ -269,7 +278,7 @@ func (l *Ledger) CountPendingForCycle(ctx context.Context, cycleID string) (int,
 
 	err := l.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM action_queue
-		 WHERE cycle_id = ? AND status IN ('pending', 'claimed')`, cycleID).Scan(&count)
+		 WHERE cycle_id = ? AND status IN ('`+ledgerStatusPending+`', '`+ledgerStatusClaimed+`')`, cycleID).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("sync: ledger count pending: %w", err)
 	}

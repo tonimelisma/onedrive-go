@@ -523,6 +523,10 @@ This analysis categorizes every part of the codebase by its relationship to the 
   6. Delta token management per cycle
   7. Action cancellation for stale in-flight actions when new events arrive
 
+**Performance notes (from review triage):**
+- **Parallel remote + local observation** — both observers are read-only against baseline. Easy `errgroup` win.
+- **Streaming delta processing** — process each page as it arrives instead of collecting all pages first.
+
 **2. Code Adaptation:**
 - CLI `sync.go`: `--watch` wired to `RunWatch()`
 
@@ -614,6 +618,9 @@ This analysis categorizes every part of the codebase by its relationship to the 
 - Performance profiling and optimization (CPU, memory, I/O hotspots)
 - Like-for-like performance benchmarks against rclone and abraunegg/onedrive
 - Case-insensitive collision detection on Linux (two local files differing only in case)
+- **Sync package decomposition (Option B)** — extract `model/` + `logic/` sub-packages as the sync package grows
+- **Filter engine pre-filter** — shared pre-filter at observer outputs for skip_files/skip_dirs/etc.
+- **Performance**: batched commits, parallel local hashing (B-096), concurrent folder creates ($batch API), pipelined observation→execution
 
 ---
 

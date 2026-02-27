@@ -96,6 +96,10 @@ func (m *engineMockClient) DeleteItem(ctx context.Context, driveID driveid.ID, i
 	return nil
 }
 
+func (m *engineMockClient) PermanentDeleteItem(_ context.Context, _ driveid.ID, _ string) error {
+	return nil
+}
+
 func (m *engineMockClient) Download(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error) {
 	if m.downloadFn != nil {
 		return m.downloadFn(ctx, driveID, itemID, w)

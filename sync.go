@@ -61,14 +61,15 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	}
 
 	engine, err := sync.NewEngine(&sync.EngineConfig{
-		DBPath:    dbPath,
-		SyncRoot:  syncDir,
-		DriveID:   driveID,
-		Fetcher:   client,
-		Items:     client,
-		Downloads: client,
-		Uploads:   client,
-		Logger:    logger,
+		DBPath:        dbPath,
+		SyncRoot:      syncDir,
+		DriveID:       driveID,
+		Fetcher:       client,
+		Items:         client,
+		Downloads:     client,
+		Uploads:       client,
+		Logger:        logger,
+		UseLocalTrash: resolvedCfg.UseLocalTrash,
 	})
 	if err != nil {
 		return err

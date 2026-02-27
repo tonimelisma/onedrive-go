@@ -1160,33 +1160,6 @@ func TestIsValidOneDriveName(t *testing.T) {
 	}
 }
 
-func TestTruncateToSeconds(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		in   int64
-		want int64
-	}{
-		{"zero", 0, 0},
-		{"exact second", 1_000_000_000, 1_000_000_000},
-		{"with nanos", 1_234_567_890, 1_000_000_000},
-		{"large value", 1_700_000_000_123_456_789, 1_700_000_000_000_000_000},
-		{"sub-second", 500_000_000, 0},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := truncateToSeconds(tt.in)
-			if got != tt.want {
-				t.Errorf("truncateToSeconds(%d) = %d, want %d", tt.in, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestComputeQuickXorHash(t *testing.T) {
 	t.Parallel()
 

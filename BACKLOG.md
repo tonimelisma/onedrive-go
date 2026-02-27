@@ -78,6 +78,45 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 | B-128 | Debounce semantics change under load | P3 | `internal/sync/` | `FlushDebounced` output channel has buffer 1. When consumer is busy, debounce blocks on send and the timer stops running. System degrades from "flush N ms after last event" to "flush as fast as consumer can process." |
 | B-129 | LocalObserver.Watch() has no backoff for watcher errors | P2 | `internal/sync/` | fsnotify errors (e.g., kernel buffer overflow) trigger immediate loop and Warn log spam. Needs exponential backoff or circuit breaker to prevent tight log-spam loops under sustained error conditions. |
 | B-130 | FsWatcher interface leaks fsnotify dependency through event type | P3 | `internal/sync/` | `Events()` returns `fsnotify.Event`, coupling tests/mocks to fsnotify types. Should use an abstract event type (path + operation enum) to isolate the dependency and clean up the abstraction boundary. |
+| B-131 | Fix `userAgent` to use binary version constant | P2 | `internal/graph/` | `client.go` hardcodes `"onedrive-go/0.1"` — not linked to the binary's `version` constant. Server logs will always report `0.1`. Also: `NetworkConfig.UserAgent` config field is dead (never wired to client). Either wire it or remove. |
+| B-132 | Fix download hash mismatch: delete `.partial` and retry or fail | P1 | `internal/sync/` | `executeDownload` warns on hash mismatch but renames `.partial` → target with wrong hash, baseline records mismatched local hash. Next scan sees hash differs from baseline's remote hash → re-downloads → infinite loop. Should delete `.partial` and retry, or mark outcome as failed. iOS `.heic` stale-hash case needs a separate code path (accept mismatch for known-stale-hash items). |
+| B-133 | Track conflict copy in conflicts table on delete hash mismatch | P1 | `internal/sync/` | `deleteLocalFile` renames modified file to conflict copy on hash mismatch, then returns success outcome. Baseline entry removed, conflict copy not in conflicts table, not surfaced by `conflicts list`. Silent tracking loss. Should record a `ConflictRecord` or at minimum log at Error. |
+| B-134 | Populate `remote_mtime` in conflict records | P3 | `internal/sync/` | `commitConflict` stores `remote_mtime` as `0` (line 440: `nullInt64(0)` with comment "not available in Outcome"). The mtime is available in `Action.View.Remote.Mtime` at conflict time — thread it through to `Outcome` or populate directly from the action. |
+| B-135 | Promote `fsnotify` to direct dependency in `go.mod` | P2 | root | `github.com/fsnotify/fsnotify` is directly imported in `observer_local.go` but listed as `// indirect` in `go.mod`. If the transitive dependency changes, fsnotify could silently disappear. Fix: `go get github.com/fsnotify/fsnotify@v1.9.0`. |
+| B-136 | Run `go mod tidy` to drop unused `golang.org/x/sync` | P2 | root | `golang.org/x/sync` was used by `executeParallel()` (deleted in Phase 5.0). Still in `go.mod` as indirect. `go mod tidy` should remove it. |
+| B-137 | Validate `sync_dir` for path traversal at config load | P3 | `internal/config/` | Config-supplied paths (`sync_dir`, future `sync_paths`) used for filesystem ops without `..` or symlink-escape validation. Low risk (user-controlled config) but `filepath.Clean` + `filepath.Abs` guard at config load time would be consistent with defensive coding principles. |
+| B-138 | Add upstream sync check for oauth2 fork | P3 | CI | `tonimelisma/oauth2` fork will silently fall behind upstream security patches. Add periodic `go list -m -u` check in CI, or document sync process in `CLAUDE.md` next to the replace directive. |
+| B-139 | Use `http.Status*` constants in `classifyStatusCode` | P3 | `internal/sync/` | `classifyStatusCode` uses raw integers (`401`, `507`, `408`, etc.) with `//nolint:mnd`. `http.StatusUnauthorized`, `http.StatusInsufficientStorage`, etc. would eliminate nolint and be self-documenting. |
+| B-140 | Set `Websocket: false` default until feature is implemented | P2 | `internal/config/` | `defaults.go` sets `Websocket: true` but websocket mode is "Future (Post-v1)". Defaulting unimplemented feature to `true` is misleading. Same for `UseRecycleBin` and `UseLocalTrash` which are `true` but not wired into executor delete logic. |
+| B-141 | Add "not yet implemented" warnings for dead config fields | P2 | `internal/config/` | `SyncPaths`, `SkipFiles`, `SkipDirs`, `SkipDotfiles`, `SkipSymlinks`, `MaxFileSize`, `IgnoreMarker`, `BandwidthSchedule`, `BandwidthLimit`, `Websocket`, `UseRecycleBin`, `UseLocalTrash`, `UserAgent` are validated but silently ignored. Users believe settings take effect. Add comments and/or log warnings during validation. |
+| B-142 | Remove dead `truncateToSeconds` function | P3 | `internal/sync/` | `truncateToSeconds` in `observer_local.go:784` is defined but never called in production or test code. |
+| B-143 | Remove or ticket-ref `addMoveTargetDep` dead code | P3 | `internal/sync/` | `addMoveTargetDep` in `planner.go` is documented as "effectively a no-op" but retained for "defensive completeness." Either remove or add `// TODO(B-XXX)` reference. |
+| B-144 | Update stale design docs post-Phase 5.0 | P2 | `docs/design/` | 6 documented divergences: `architecture.md` wrong filenames + wrong fsnotify lib + dropped `upload_sessions` table, `sync-algorithm.md` old `ActionPlan` shape + old watch mode flow, `concurrent-execution.md` specifies non-existent `CycleManager`. |
+| B-145 | Add `ledger.go`/`tracker.go` API documentation | P3 | `internal/sync/` | New Phase 5.0 components with no counterpart in `docs/design/`. `concurrent-execution.md` specifies them at high level but doesn't serve as API reference. File-level package comments documenting API contracts would suffice. |
+| B-146 | `shutdownCallbackServer`: inject logger instead of `slog.Default()` | P3 | `internal/graph/` | `auth.go:299` uses global logger. |
+| B-147 | `bootstrapLogger`/`buildLogger`: extract shared construction logic | P3 | root | `root.go:158-213` — overlapping logic. |
+| B-148 | `deduplicateItems`: replace reverse-iterate-delete with forward-pass map | P3 | `internal/graph/` | `normalize.go:80-124`. |
+| B-149 | Deduplicate conflict scan logic in `baseline.go` | P3 | `internal/sync/` | `scanConflictRow`/`scanConflictRowSingle` — 80 lines duplicated. |
+| B-150 | Constrain `ConflictType`/`ResolutionStrategy` with validation function | P3 | `internal/sync/` | Unconstrained string aliases. |
+| B-151 | `parseTimestamp`: use `time.Unix(0,0)` sentinel instead of `time.Now()` | P3 | `internal/graph/` | Non-deterministic fallback. |
+| B-152 | `checkTokenState`: use lighter token-read helper instead of full `graph.Client` | P3 | root | `status.go:158-187`. |
+| B-153 | Document hash-verify skip in `resolveTransfer` conflict resolution | P3 | `internal/sync/` | `engine.go:392-420`. |
+| B-154 | Sort map keys in planner for reproducible action order | P3 | `internal/sync/` | Non-deterministic map iteration aids debugging. |
+| B-155 | Conflict copy timestamp: use nanosecond precision | P3 | `internal/sync/` | 1s precision → ambiguous for same-second conflicts. |
+| B-156 | `rm` command: warn that folder deletion is recursive | P2 | root | `files.go:367-400` — silent recursive delete. |
+| B-157 | Add `conflicts --path <path>` filter for per-path conflict history | P3 | root | Only most recent conflict surfaced per path. |
+| B-158 | `DownloadURL`: implement `slog.LogValuer` for compile-time redaction | P3 | `internal/graph/` | "NEVER log" is convention-only. |
+| B-159 | `doOnce`: document implicit `Content-Type: application/json` default | P3 | `internal/graph/` | Undocumented assumption. |
+| B-160 | Drop or document `conflicts.history` column | P3 | `internal/sync/` | Unused column in schema. |
+| B-161 | Add SQL comment for `action_queue.depends_on` encoding | P3 | `internal/sync/` | Planner indices, not ledger IDs. |
+| B-162 | Add `created_at` column to `action_queue` | P3 | `internal/sync/` | Aids watch mode debugging. |
+| B-163 | Add `goose Down` rollback section to migration 00001 | P3 | `internal/sync/` | Only migration without rollback. |
+| B-164 | Parallelize `discoverAccount` API calls | P2 | root | Three sequential independent calls (Me, Org, Drives). |
+| B-165 | Implement local trash support for sync deletes | P2 | `internal/sync/` | Move deleted local files to OS trash instead of permanent delete. macOS: `~/.Trash/`, Linux: opt-in. |
+| B-166 | Add `recycle-bin list` command | P3 | root, `internal/graph/` | Show OneDrive recycle bin contents. |
+| B-167 | Add `recycle-bin empty` command | P3 | root, `internal/graph/` | Permanently delete all recycle bin items. |
+| B-168 | Add `recycle-bin restore` command | P3 | root, `internal/graph/` | Restore items from recycle bin. |
+| B-169 | Wire `UseRecycleBin: false` for permanent remote deletion | P3 | `internal/sync/` | When disabled, sync executor calls `PermanentDeleteItem` instead of `DeleteItem`. Business/SharePoint only. |
 
 ## Event-Driven Pivot (Phase 4 v2)
 
@@ -119,3 +158,11 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 | B-037 | Add chunk upload retry for pre-auth URLs | **Done** — `doPreAuthRetry` method added to `graph.Client`. `UploadChunk` (`io.Reader` → `io.ReaderAt`), `CancelUploadSession`, `QueryUploadSession`, `downloadFromURL` all use it. Retro follow-ups: graph coverage recovered via decode-error test; baseline cache invalidation YAGNI; upload-then-PATCH purity confirmed correct. |
 | B-069 | Handle locally-deleted folder with no remote delta event | **Done** — ED8 changed from ActionCleanup to ActionRemoteDelete. Both folder classifiers restructured with upfront mode filtering parallel to file path. |
 | B-072 | ED1-ED8 missing folder-delete-to-remote (folder EF6) | **Done** — Fixed as part of B-069. ED8 now propagates local folder deletes to remote. |
+| B-135 | Promote `fsnotify` from indirect to direct dependency | **Done** — `go mod tidy` promoted to direct. |
+| B-136 | Run `go mod tidy` to drop unused `golang.org/x/sync` | **Done** — `go mod tidy` run. |
+| B-139 | Use `http.Status*` constants in `classifyStatusCode` | **Done** — Replaced raw integers with `http.StatusUnauthorized`, `http.StatusInsufficientStorage`, etc. |
+| B-140 | Set `Websocket: false` default until feature is implemented | **Done** — Changed to `false`. `UseLocalTrash` now platform-specific (macOS=true, Linux=false). |
+| B-142 | Remove dead `truncateToSeconds` function | **Done** — Removed function and its test. |
+| B-143 | Remove or ticket-ref `addMoveTargetDep` dead code | **Done** — Added `TODO(B-143)` reference to function comment. |
+| B-156 | `rm` command: warn that folder deletion is recursive | **Done** — Added `--recursive` (`-r`) flag required for folder deletion, `--permanent` flag for Business/SharePoint. |
+| B-165 | Implement local trash support for sync deletes | **Done** — Injectable `trashFunc` on `ExecutorConfig`, macOS `~/.Trash/` implementation, fallback to `os.Remove` on error. |

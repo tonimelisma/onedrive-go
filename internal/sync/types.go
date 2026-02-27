@@ -489,6 +489,7 @@ type ItemClient interface {
 	CreateFolder(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error)
 	MoveItem(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string) (*graph.Item, error)
 	DeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error
+	PermanentDeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error
 }
 
 // Downloader streams a remote file by item ID.

@@ -512,6 +512,19 @@ func (c *Client) UpdateFileSystemInfo(
 	return &item, nil
 }
 
+// PermanentDeleteItem permanently deletes a drive item (bypasses the recycle bin).
+// Only supported on Business/SharePoint accounts — Personal accounts return 405.
+// Uses POST /drives/{driveId}/items/{itemId}/permanentDelete.
+func (c *Client) PermanentDeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error {
+	c.logger.Info("permanently deleting item",
+		slog.String("drive_id", driveID.String()),
+		slog.String("item_id", itemID),
+	)
+
+	return c.deleteAndDrain(ctx, http.MethodPost,
+		fmt.Sprintf("/drives/%s/items/%s/permanentDelete", driveID, itemID))
+}
+
 // DeleteItem deletes a drive item. Returns nil on success (HTTP 204).
 func (c *Client) DeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error {
 	c.logger.Info("deleting item",
@@ -519,18 +532,20 @@ func (c *Client) DeleteItem(ctx context.Context, driveID driveid.ID, itemID stri
 		slog.String("item_id", itemID),
 	)
 
-	path := fmt.Sprintf("/drives/%s/items/%s", driveID, itemID)
+	return c.deleteAndDrain(ctx, http.MethodDelete,
+		fmt.Sprintf("/drives/%s/items/%s", driveID, itemID))
+}
 
-	resp, err := c.Do(ctx, http.MethodDelete, path, nil)
+// deleteAndDrain sends a request and drains the response body to reuse the connection.
+func (c *Client) deleteAndDrain(ctx context.Context, method, path string) error {
+	resp, err := c.Do(ctx, method, path, nil)
 	if err != nil {
 		return err
 	}
-
-	// 204 No Content — drain and close to reuse connection.
 	defer resp.Body.Close()
 
 	if _, copyErr := io.Copy(io.Discard, resp.Body); copyErr != nil {
-		return fmt.Errorf("graph: draining delete response body: %w", copyErr)
+		return fmt.Errorf("graph: draining response body: %w", copyErr)
 	}
 
 	return nil
