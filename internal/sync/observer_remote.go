@@ -151,6 +151,10 @@ func (o *RemoteObserver) Watch(ctx context.Context, savedToken string, events ch
 		}
 
 		// Successful poll — send events, advance token, reset backoff.
+		// Blocking send: remote delta events must not be dropped. Unlike local
+		// events (which the safety scan recovers), dropped remote events would
+		// advance the delta token past unprocessed changes — silent data loss
+		// with no recovery mechanism. Backpressure here correctly slows polling.
 		for i := range polledEvents {
 			select {
 			case events <- polledEvents[i]:
@@ -222,7 +226,8 @@ func (o *RemoteObserver) setDeltaToken(token string) {
 }
 
 // timeSleep waits for the given duration or until the context is canceled.
-// Same pattern as graph.Client.sleepFunc.
+// Shared by RemoteObserver, LocalObserver, and ExecutorConfig as the default
+// sleep implementation. Each injects it via their sleepFunc field for testability.
 func timeSleep(ctx context.Context, d time.Duration) error {
 	timer := time.NewTimer(d)
 	defer timer.Stop()
