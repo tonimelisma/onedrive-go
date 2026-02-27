@@ -121,7 +121,7 @@ func getRemoteFile(t *testing.T, remotePath string) string {
 func cleanupRemoteFolder(t *testing.T, folder string) {
 	t.Helper()
 
-	fullArgs := []string{"--drive", drive, "rm", "/" + folder}
+	fullArgs := []string{"--drive", drive, "rm", "-r", "/" + folder}
 	cmd := exec.Command(binaryPath, fullArgs...)
 	_ = cmd.Run()
 }
@@ -142,7 +142,7 @@ func TestE2E_Sync_UploadOnly(t *testing.T) {
 
 	// Cleanup remote after test.
 	t.Cleanup(func() {
-		fullArgs := []string{"--drive", drive, "rm", "/" + testFolder}
+		fullArgs := []string{"--drive", drive, "rm", "-r", "/" + testFolder}
 		cmd := exec.Command(binaryPath, fullArgs...)
 		_ = cmd.Run()
 	})
@@ -180,7 +180,7 @@ func TestE2E_Sync_DownloadOnly(t *testing.T) {
 
 	// Cleanup remote after test.
 	t.Cleanup(func() {
-		fullArgs := []string{"--drive", drive, "rm", "/" + testFolder}
+		fullArgs := []string{"--drive", drive, "rm", "-r", "/" + testFolder}
 		cmd := exec.Command(binaryPath, fullArgs...)
 		_ = cmd.Run()
 	})
@@ -208,7 +208,7 @@ func TestE2E_Sync_DryRun(t *testing.T) {
 
 	// Cleanup remote (should not exist, but best-effort).
 	t.Cleanup(func() {
-		fullArgs := []string{"--drive", drive, "rm", "/" + testFolder}
+		fullArgs := []string{"--drive", drive, "rm", "-r", "/" + testFolder}
 		cmd := exec.Command(binaryPath, fullArgs...)
 		_ = cmd.Run()
 	})
@@ -234,7 +234,7 @@ func TestE2E_Sync_Verify(t *testing.T) {
 
 	// Cleanup remote after test.
 	t.Cleanup(func() {
-		fullArgs := []string{"--drive", drive, "rm", "/" + testFolder}
+		fullArgs := []string{"--drive", drive, "rm", "-r", "/" + testFolder}
 		cmd := exec.Command(binaryPath, fullArgs...)
 		_ = cmd.Run()
 	})

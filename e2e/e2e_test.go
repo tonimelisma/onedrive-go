@@ -208,7 +208,7 @@ func TestE2E_RoundTrip(t *testing.T) {
 	// Cleanup at the end — delete the test folder.
 	t.Cleanup(func() {
 		// Best-effort cleanup — ignore errors.
-		fullArgs := []string{"--drive", drive, "rm", "/" + testFolder}
+		fullArgs := []string{"--drive", drive, "rm", "-r", "/" + testFolder}
 		cmd := exec.Command(binaryPath, fullArgs...)
 		_ = cmd.Run()
 	})
@@ -280,7 +280,7 @@ func TestE2E_RoundTrip(t *testing.T) {
 	})
 
 	t.Run("rm_subfolder", func(t *testing.T) {
-		_, stderr := runCLI(t, "rm", "/"+testSubfolder)
+		_, stderr := runCLI(t, "rm", "-r", "/"+testSubfolder)
 		assert.Contains(t, stderr, "Deleted")
 	})
 }
@@ -347,7 +347,7 @@ func TestE2E_QuietFlag(t *testing.T) {
 
 		// Cleanup at the end.
 		t.Cleanup(func() {
-			fullArgs := []string{"--drive", drive, "rm", "/" + testFolder}
+			fullArgs := []string{"--drive", drive, "rm", "-r", "/" + testFolder}
 			cmd := exec.Command(binaryPath, fullArgs...)
 			_ = cmd.Run()
 		})

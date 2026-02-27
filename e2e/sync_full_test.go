@@ -27,7 +27,7 @@ func TestE2E_EdgeCases(t *testing.T) {
 
 	// Cleanup at the end — delete the test folder (best-effort).
 	t.Cleanup(func() {
-		fullArgs := []string{"--drive", drive, "rm", "/" + testFolder}
+		fullArgs := []string{"--drive", drive, "rm", "-r", "/" + testFolder}
 		cmd := exec.Command(binaryPath, fullArgs...)
 		_ = cmd.Run()
 	})
@@ -618,7 +618,7 @@ func TestE2E_Sync_DeletePropagation(t *testing.T) {
 
 	// ED6: Delete remote folder + file.
 	runCLI(t, "rm", "/"+testFolder+"/sub/nested.txt")
-	runCLI(t, "rm", "/"+testFolder+"/sub")
+	runCLI(t, "rm", "-r", "/"+testFolder+"/sub")
 
 	// Step 4: Bidirectional sync.
 	runCLIWithConfig(t, cfgPath, "sync", "--force")
