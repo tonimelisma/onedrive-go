@@ -462,6 +462,145 @@ func TestExecutor_Download_ZeroByte(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Download hash mismatch tests (B-132)
+// ---------------------------------------------------------------------------
+
+func TestExecutor_Download_HashMismatch_Retries(t *testing.T) {
+	t.Parallel()
+
+	callCount := 0
+
+	dl := &executorMockDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			callCount++
+			// First two attempts return wrong content, third returns correct.
+			if callCount < 3 { //nolint:mnd // test constant
+				n, err := w.Write([]byte("wrong content"))
+				return int64(n), err
+			}
+
+			n, err := w.Write([]byte("hello world"))
+			return int64(n), err
+		},
+	}
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
+	e := NewExecution(cfg, emptyBaseline())
+
+	correctHash := "aCgDG9jwBhDc4Q1yawMZAAAAAAA=" // QuickXorHash of "hello world"
+	action := &Action{
+		Type:    ActionDownload,
+		Path:    "hash-retry.txt",
+		ItemID:  "item1",
+		DriveID: driveid.New(testDriveID),
+		View:    &PathView{Remote: &RemoteState{Hash: correctHash, Mtime: 1}},
+	}
+
+	o := e.executeDownload(context.Background(), action)
+	requireOutcomeSuccess(t, o)
+
+	if callCount != 3 { //nolint:mnd // test assertion
+		t.Errorf("expected 3 download calls, got %d", callCount)
+	}
+
+	if o.LocalHash != correctHash {
+		t.Errorf("LocalHash = %q, want %q", o.LocalHash, correctHash)
+	}
+
+	if o.RemoteHash != correctHash {
+		t.Errorf("RemoteHash = %q, want %q", o.RemoteHash, correctHash)
+	}
+
+	// File should contain correct content.
+	data, err := os.ReadFile(filepath.Join(syncRoot, "hash-retry.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(data) != "hello world" {
+		t.Errorf("file content = %q, want %q", string(data), "hello world")
+	}
+}
+
+func TestExecutor_Download_HashMismatch_Accepted(t *testing.T) {
+	t.Parallel()
+
+	callCount := 0
+
+	dl := &executorMockDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			callCount++
+			// Always return wrong content to exhaust retries.
+			n, err := w.Write([]byte("wrong content"))
+			return int64(n), err
+		},
+	}
+
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
+	e := NewExecution(cfg, emptyBaseline())
+
+	action := &Action{
+		Type:    ActionDownload,
+		Path:    "hash-accept.txt",
+		ItemID:  "item1",
+		DriveID: driveid.New(testDriveID),
+		View:    &PathView{Remote: &RemoteState{Hash: "stale-remote-hash", Mtime: 1}},
+	}
+
+	o := e.executeDownload(context.Background(), action)
+	requireOutcomeSuccess(t, o)
+
+	// All retries exhausted: 1 initial + 2 retries = 3.
+	if callCount != 3 { //nolint:mnd // test assertion
+		t.Errorf("expected 3 download calls, got %d", callCount)
+	}
+
+	// After exhaustion, remoteHash is overridden to localHash to prevent baseline mismatch loop.
+	if o.LocalHash != o.RemoteHash {
+		t.Errorf("expected LocalHash == RemoteHash after exhaustion, got local=%q remote=%q",
+			o.LocalHash, o.RemoteHash)
+	}
+}
+
+func TestExecutor_Download_HashMatch_NoRetry(t *testing.T) {
+	t.Parallel()
+
+	callCount := 0
+	content := "hello world"
+
+	dl := &executorMockDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			callCount++
+			n, err := w.Write([]byte(content))
+			return int64(n), err
+		},
+	}
+
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
+	e := NewExecution(cfg, emptyBaseline())
+
+	correctHash := "aCgDG9jwBhDc4Q1yawMZAAAAAAA="
+	action := &Action{
+		Type:    ActionDownload,
+		Path:    "hash-ok.txt",
+		ItemID:  "item1",
+		DriveID: driveid.New(testDriveID),
+		View:    &PathView{Remote: &RemoteState{Hash: correctHash, Mtime: 1}},
+	}
+
+	o := e.executeDownload(context.Background(), action)
+	requireOutcomeSuccess(t, o)
+
+	if callCount != 1 {
+		t.Errorf("expected 1 download call, got %d", callCount)
+	}
+
+	if o.LocalHash != correctHash {
+		t.Errorf("LocalHash = %q, want %q", o.LocalHash, correctHash)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Upload tests
 // ---------------------------------------------------------------------------
 
