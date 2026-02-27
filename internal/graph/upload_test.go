@@ -74,7 +74,7 @@ func TestSimpleUpload_ContentType(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "application/octet-stream", r.Header.Get("Content-Type"))
 		assert.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
-		assert.Equal(t, userAgent, r.Header.Get("User-Agent"))
+		assert.Equal(t, "test-agent", r.Header.Get("User-Agent"))
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
@@ -116,7 +116,7 @@ func TestSimpleUpload_Error(t *testing.T) {
 }
 
 func TestSimpleUpload_TokenError(t *testing.T) {
-	client := NewClient("http://localhost", http.DefaultClient, failingToken{}, slog.Default())
+	client := NewClient("http://localhost", http.DefaultClient, failingToken{}, slog.Default(), "test-agent")
 	client.sleepFunc = noopSleep
 
 	_, err := client.SimpleUpload(
@@ -128,7 +128,7 @@ func TestSimpleUpload_TokenError(t *testing.T) {
 }
 
 func TestSimpleUpload_NetworkError(t *testing.T) {
-	client := NewClient("http://127.0.0.1:1", http.DefaultClient, staticToken("tok"), slog.Default())
+	client := NewClient("http://127.0.0.1:1", http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent")
 	client.sleepFunc = noopSleep
 
 	_, err := client.SimpleUpload(
@@ -394,7 +394,7 @@ func TestCancelUploadSession_Success(t *testing.T) {
 	chunkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodDelete, r.Method)
 		assert.Empty(t, r.Header.Get("Authorization"))
-		assert.Equal(t, userAgent, r.Header.Get("User-Agent"))
+		assert.Equal(t, "test-agent", r.Header.Get("User-Agent"))
 
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -525,7 +525,7 @@ func TestQueryUploadSession_Success(t *testing.T) {
 	sessionSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
 		assert.Empty(t, r.Header.Get("Authorization"))
-		assert.Equal(t, userAgent, r.Header.Get("User-Agent"))
+		assert.Equal(t, "test-agent", r.Header.Get("User-Agent"))
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)

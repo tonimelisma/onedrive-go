@@ -152,6 +152,8 @@ func loadConfig(cmd *cobra.Command) error {
 
 	resolvedCfg = resolved
 
+	config.WarnUnimplemented(resolved, logger)
+
 	return nil
 }
 

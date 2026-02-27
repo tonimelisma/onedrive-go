@@ -324,6 +324,10 @@ func (m *BaselineManager) updateBaselineCache(o *Outcome, syncedAt int64) {
 	case ActionConflict:
 		if o.ResolvedBy == ResolvedByAuto {
 			m.baseline.Put(outcomeToEntry(o, syncedAt))
+		} else if o.ConflictType == ConflictEditDelete {
+			// Unresolved edit-delete conflict from local delete: the original file
+			// is gone (renamed to conflict copy), so remove the baseline entry.
+			m.baseline.Delete(o.Path)
 		}
 	}
 }
@@ -437,7 +441,7 @@ func commitConflict(ctx context.Context, tx *sql.Tx, o *Outcome, syncedAt int64)
 		nullString(o.LocalHash),
 		nullString(o.RemoteHash),
 		nullInt64(o.Mtime),
-		nullInt64(0), // remote_mtime not available in Outcome
+		nullInt64(o.RemoteMtime),
 		resolution, resolvedAt, resolvedBy,
 	)
 	if err != nil {
@@ -449,6 +453,14 @@ func commitConflict(ctx context.Context, tx *sql.Tx, o *Outcome, syncedAt int64)
 	if o.ResolvedBy == ResolvedByAuto {
 		if upsertErr := commitUpsert(ctx, tx, o, syncedAt); upsertErr != nil {
 			return upsertErr
+		}
+	}
+
+	// Unresolved edit-delete conflict from local delete: the original file is
+	// gone (renamed to conflict copy), so remove the baseline entry (B-133).
+	if o.ResolvedBy == "" && o.ConflictType == ConflictEditDelete {
+		if delErr := commitDelete(ctx, tx, o.Path); delErr != nil {
+			return delErr
 		}
 	}
 

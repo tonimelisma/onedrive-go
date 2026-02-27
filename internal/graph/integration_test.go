@@ -78,7 +78,7 @@ func newIntegrationClient(t *testing.T) *Client {
 	}
 	require.NoError(t, err, "loading token for drive %q", drive)
 
-	return NewClient(DefaultBaseURL, http.DefaultClient, ts, logger)
+	return NewClient(DefaultBaseURL, http.DefaultClient, ts, logger, "onedrive-go/test")
 }
 
 // driveIDForTest reads the test drive ID from ONEDRIVE_TEST_DRIVE_ID.

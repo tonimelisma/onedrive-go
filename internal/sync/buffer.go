@@ -63,7 +63,7 @@ func (b *Buffer) FlushImmediate() []PathChanges {
 	defer b.mu.Unlock()
 
 	if len(b.pending) == 0 {
-		b.logger.Info("buffer flushed", "paths", 0)
+		b.logger.Debug("buffer flushed (empty)")
 		return nil
 	}
 

@@ -210,7 +210,7 @@ func TestDownloadFromURL_WriterError(t *testing.T) {
 func TestDownload_NoAuthOnPreAuthURL(t *testing.T) {
 	dlSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Empty(t, r.Header.Get("Authorization"))
-		assert.Equal(t, userAgent, r.Header.Get("User-Agent"))
+		assert.Equal(t, "test-agent", r.Header.Get("User-Agent"))
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	}))

@@ -60,16 +60,14 @@ type LocalObserver struct {
 	baseline       *Baseline
 	logger         *slog.Logger
 	watcherFactory func() (FsWatcher, error)
-	sleepFunc      func(ctx context.Context, d time.Duration) error
 }
 
 // NewLocalObserver creates a LocalObserver. The baseline must be loaded (from
 // BaselineManager.Load); it is read-only during observation.
 func NewLocalObserver(baseline *Baseline, logger *slog.Logger) *LocalObserver {
 	return &LocalObserver{
-		baseline:  baseline,
-		logger:    logger,
-		sleepFunc: timeSleep,
+		baseline: baseline,
+		logger:   logger,
 		watcherFactory: func() (FsWatcher, error) {
 			w, err := fsnotify.NewWatcher()
 			if err != nil {
