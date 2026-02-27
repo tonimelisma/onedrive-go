@@ -312,7 +312,7 @@ func (o *LocalObserver) classifyLocalChange(
 
 	// No baseline entry — this is a new item.
 	if existing == nil {
-		return o.buildCreateEvent(fsPath, dbRelPath, name, d, info)
+		return o.buildCreateEvent(fsPath, dbRelPath, name, d, info), nil
 	}
 
 	// Existing folder — OS-level mtime changes (e.g. adding a file) are noise;
@@ -327,7 +327,7 @@ func (o *LocalObserver) classifyLocalChange(
 // buildCreateEvent constructs a ChangeCreate event for a new local entry.
 func (o *LocalObserver) buildCreateEvent(
 	fsPath, dbRelPath, name string, d fs.DirEntry, info fs.FileInfo,
-) (*ChangeEvent, error) {
+) *ChangeEvent {
 	ev := ChangeEvent{
 		Source:   SourceLocal,
 		Type:     ChangeCreate,
@@ -349,7 +349,7 @@ func (o *LocalObserver) buildCreateEvent(
 		}
 	}
 
-	return &ev, nil
+	return &ev
 }
 
 // classifyFileChange compares a file against its baseline entry to detect
@@ -385,14 +385,10 @@ func (o *LocalObserver) classifyFileChange(
 	// Slow path: metadata differs (or racily clean) — compute hash.
 	hash, err := computeQuickXorHash(fsPath)
 	if err != nil {
-		o.logger.Warn("hash computation failed, skipping file",
+		o.logger.Warn("hash computation failed for modified file, emitting event with empty hash",
 			slog.String("path", dbRelPath), slog.String("error", err.Error()))
-
-		return nil, nil //nolint:nilnil
-	}
-
-	// Hash matches baseline — file is unchanged despite metadata difference.
-	if hash == base.LocalHash {
+	} else if hash == base.LocalHash {
+		// Hash matches baseline — file is unchanged despite metadata difference.
 		return nil, nil //nolint:nilnil
 	}
 
