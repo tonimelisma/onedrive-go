@@ -1614,24 +1614,24 @@ func TestExecutor_Upload_LargeFileSizePassedToUploader(t *testing.T) {
 	}
 }
 
-// Fix 13: Test timeSleepExec context cancellation.
-func TestTimeSleepExec_ContextCanceled(t *testing.T) {
+// Test timeSleep context cancellation (consolidated from timeSleepExec, B-106).
+func TestTimeSleep_ContextCanceled(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := timeSleepExec(ctx, 10*time.Second)
+	err := timeSleep(ctx, 10*time.Second)
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("expected context.Canceled, got %v", err)
 	}
 }
 
-// Fix 13: Test timeSleepExec completes normally.
-func TestTimeSleepExec_Completes(t *testing.T) {
+// Test timeSleep completes normally (consolidated from timeSleepExec, B-106).
+func TestTimeSleep_Completes(t *testing.T) {
 	t.Parallel()
 
-	err := timeSleepExec(context.Background(), 1*time.Millisecond)
+	err := timeSleep(context.Background(), 1*time.Millisecond)
 	if err != nil {
 		t.Errorf("expected nil, got %v", err)
 	}

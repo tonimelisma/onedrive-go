@@ -51,12 +51,29 @@ func (o *LocalObserver) watchLoop(
 				return nil
 			}
 
+			// After watcher error, check if sync root still exists (B-113).
+			// A deleted root means the watcher is watching nothing.
+			if !syncRootExists(syncRoot) {
+				o.logger.Error("sync root deleted, stopping watch",
+					slog.String("sync_root", syncRoot))
+
+				return ErrSyncRootDeleted
+			}
+
 			errBackoff *= watchErrBackoffMult
 			if errBackoff > watchErrMaxBackoff {
 				errBackoff = watchErrMaxBackoff
 			}
 
 		case <-safetyTicker.C:
+			// Check if sync root still exists before running safety scan (B-113).
+			if !syncRootExists(syncRoot) {
+				o.logger.Error("sync root deleted, stopping watch",
+					slog.String("sync_root", syncRoot))
+
+				return ErrSyncRootDeleted
+			}
+
 			o.runSafetyScan(ctx, syncRoot, events)
 			errBackoff = watchErrInitBackoff
 		}
@@ -103,7 +120,7 @@ func (o *LocalObserver) handleFsEvent(
 		o.handleWrite(ctx, fsEvent.Name, dbRelPath, name, events)
 
 	case fsEvent.Has(fsnotify.Remove) || fsEvent.Has(fsnotify.Rename):
-		o.handleDelete(ctx, dbRelPath, name, events)
+		o.handleDelete(ctx, watcher, syncRoot, dbRelPath, name, events)
 	}
 }
 
@@ -147,13 +164,11 @@ func (o *LocalObserver) handleCreate(
 
 		hash, hashErr := computeQuickXorHash(fsPath)
 		if hashErr != nil {
-			o.logger.Warn("hash failed for new file",
+			o.logger.Warn("hash failed for new file, emitting event with empty hash",
 				slog.String("path", dbRelPath), slog.String("error", hashErr.Error()))
-
-			return
+		} else {
+			ev.Hash = hash
 		}
-
-		ev.Hash = hash
 	}
 
 	o.trySend(ctx, events, &ev)
@@ -217,12 +232,14 @@ func (o *LocalObserver) scanNewDirectory(
 			continue
 		}
 
-		hash, hashErr := computeQuickXorHash(entryFsPath)
-		if hashErr != nil {
-			o.logger.Warn("hash failed during directory scan",
-				slog.String("path", entryRelPath), slog.String("error", hashErr.Error()))
+		var hash string
 
-			continue
+		hashVal, hashErr := computeQuickXorHash(entryFsPath)
+		if hashErr != nil {
+			o.logger.Warn("hash failed during directory scan, emitting event with empty hash",
+				slog.String("path", entryRelPath), slog.String("error", hashErr.Error()))
+		} else {
+			hash = hashVal
 		}
 
 		fileEv := ChangeEvent{
@@ -284,14 +301,29 @@ func (o *LocalObserver) handleWrite(
 	o.trySend(ctx, events, &ev)
 }
 
-// handleDelete processes a Remove/Rename event.
+// handleDelete processes a Remove/Rename event. For directories, also removes
+// the fsnotify watch to prevent resource leaks (macOS/kqueue doesn't auto-clean).
 func (o *LocalObserver) handleDelete(
-	ctx context.Context, dbRelPath, name string, events chan<- ChangeEvent,
+	ctx context.Context, watcher FsWatcher, syncRoot, dbRelPath, name string,
+	events chan<- ChangeEvent,
 ) {
 	itemType := ItemTypeFile
 
 	if existing, ok := o.baseline.GetByPath(dbRelPath); ok {
 		itemType = existing.ItemType
+	}
+
+	// Remove watch for deleted directories to prevent resource leaks (B-112).
+	// Linux inotify auto-cleans, but macOS kqueue may not. Safe to call even
+	// if the watch was already removed (Remove returns a benign error).
+	if itemType == ItemTypeFolder {
+		absPath := filepath.Join(syncRoot, filepath.FromSlash(dbRelPath))
+		if rmErr := watcher.Remove(absPath); rmErr != nil {
+			o.logger.Debug("watch removal for deleted directory",
+				slog.String("path", dbRelPath),
+				slog.String("error", rmErr.Error()),
+			)
+		}
 	}
 
 	ev := ChangeEvent{

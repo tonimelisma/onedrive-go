@@ -890,6 +890,53 @@ func TestWatch_DetectsFileDelete(t *testing.T) {
 	}
 }
 
+// TestWatch_DeleteDirectoryRemovesWatch verifies that deleting a watched
+// directory emits a ChangeDelete event and the watch continues to function
+// normally for other events (B-112).
+func TestWatch_DeleteDirectoryRemovesWatch(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	subDir := filepath.Join(dir, "subdir")
+	require.NoError(t, os.Mkdir(subDir, 0o755))
+
+	baseline := baselineWith(&BaselineEntry{
+		Path: "subdir", DriveID: driveid.New("d"), ItemID: "d1",
+		ItemType: ItemTypeFolder,
+	})
+
+	obs := NewLocalObserver(baseline, testLogger(t))
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, dir, events)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Delete the subdirectory.
+	require.NoError(t, os.Remove(subDir))
+
+	var ev ChangeEvent
+
+	select {
+	case ev = <-events:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("timeout waiting for delete event")
+	}
+
+	cancel()
+	<-done
+
+	require.Equal(t, ChangeDelete, ev.Type)
+	require.Equal(t, "subdir", ev.Path)
+	require.Equal(t, ItemTypeFolder, ev.ItemType)
+	require.True(t, ev.IsDeleted)
+}
+
 func TestWatch_IgnoresExcludedFiles(t *testing.T) {
 	t.Parallel()
 
@@ -1701,6 +1748,142 @@ func TestItemTypeFromDirEntry_Table(t *testing.T) {
 
 			if got != tt.want {
 				t.Errorf("itemTypeFromDirEntry() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Hash failure creates with empty hash (B-102)
+// ---------------------------------------------------------------------------
+
+// TestWatch_HashFailureStillEmitsCreate verifies that a file whose hash cannot
+// be computed (e.g., unreadable) still generates a ChangeCreate event with an
+// empty hash instead of being silently dropped (B-102).
+func TestWatch_HashFailureStillEmitsCreate(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("test requires non-root user (root can read all files)")
+	}
+
+	t.Parallel()
+
+	dir := t.TempDir()
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, dir, events)
+	}()
+
+	// Let the watcher settle, then create an unreadable file.
+	time.Sleep(100 * time.Millisecond)
+	path := writeTestFile(t, dir, "unreadable.txt", "secret")
+	require.NoError(t, os.Chmod(path, 0o000))
+
+	t.Cleanup(func() {
+		// Restore permissions so TempDir cleanup works.
+		_ = os.Chmod(path, 0o644)
+	})
+
+	var ev ChangeEvent
+
+	select {
+	case ev = <-events:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("timeout waiting for create event")
+	}
+
+	cancel()
+	<-done
+
+	require.Equal(t, ChangeCreate, ev.Type)
+	require.Equal(t, "unreadable.txt", ev.Path)
+	require.Equal(t, SourceLocal, ev.Source)
+	require.Empty(t, ev.Hash, "hash should be empty when computation fails")
+}
+
+// TestFullScan_HashFailureStillEmitsCreate verifies that FullScan emits a
+// ChangeCreate event with empty hash when hash computation fails (B-102).
+func TestFullScan_HashFailureStillEmitsCreate(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("test requires non-root user (root can read all files)")
+	}
+
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := writeTestFile(t, dir, "unreadable.txt", "secret")
+	require.NoError(t, os.Chmod(path, 0o000))
+
+	t.Cleanup(func() {
+		_ = os.Chmod(path, 0o644)
+	})
+
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	events, err := obs.FullScan(context.Background(), dir)
+	require.NoError(t, err)
+
+	ev := findEvent(events, "unreadable.txt")
+	require.NotNil(t, ev, "unreadable file should still produce an event")
+	require.Equal(t, ChangeCreate, ev.Type)
+	require.Empty(t, ev.Hash, "hash should be empty when computation fails")
+	require.Equal(t, SourceLocal, ev.Source)
+}
+
+// ---------------------------------------------------------------------------
+// Sync root deletion detection (B-113)
+// ---------------------------------------------------------------------------
+
+func TestSyncRootExists(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		setup func(t *testing.T) string
+		want  bool
+	}{
+		{
+			name: "existing directory",
+			setup: func(t *testing.T) string {
+				t.Helper()
+				return t.TempDir()
+			},
+			want: true,
+		},
+		{
+			name: "nonexistent path",
+			setup: func(t *testing.T) string {
+				t.Helper()
+				return filepath.Join(t.TempDir(), "does-not-exist")
+			},
+			want: false,
+		},
+		{
+			name: "file not directory",
+			setup: func(t *testing.T) string {
+				t.Helper()
+				dir := t.TempDir()
+				p := filepath.Join(dir, "afile")
+				require.NoError(t, os.WriteFile(p, []byte("x"), 0o644))
+				return p
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := tt.setup(t)
+			got := syncRootExists(p)
+
+			if got != tt.want {
+				t.Errorf("syncRootExists(%q) = %v, want %v", p, got, tt.want)
 			}
 		})
 	}

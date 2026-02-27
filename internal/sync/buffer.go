@@ -13,14 +13,20 @@ import (
 	"time"
 )
 
+// defaultBufferMaxPaths is the maximum number of distinct paths the buffer
+// will track before dropping events for new paths. The safety scan provides
+// eventual consistency for any dropped events. Zero means unlimited.
+const defaultBufferMaxPaths = 100_000
+
 // Buffer collects ChangeEvents from both observers and groups them
 // by path into PathChanges values for the planner. All methods are
 // safe for concurrent use.
 type Buffer struct {
-	mu      sync.Mutex
-	pending map[string]*PathChanges
-	notify  chan struct{} // signaled on Add/AddAll when FlushDebounced is active; nil otherwise
-	logger  *slog.Logger
+	mu       sync.Mutex
+	pending  map[string]*PathChanges
+	maxPaths int           // 0 = unlimited
+	notify   chan struct{} // signaled on Add/AddAll when FlushDebounced is active; nil otherwise
+	logger   *slog.Logger
 }
 
 // NewBuffer creates an empty Buffer ready to accept events.
@@ -28,9 +34,19 @@ func NewBuffer(logger *slog.Logger) *Buffer {
 	logger.Debug("buffer created")
 
 	return &Buffer{
-		pending: make(map[string]*PathChanges),
-		logger:  logger,
+		pending:  make(map[string]*PathChanges),
+		maxPaths: defaultBufferMaxPaths,
+		logger:   logger,
 	}
+}
+
+// SetMaxPaths configures the maximum number of distinct paths the buffer
+// will track. Zero means unlimited. Intended for testing.
+func (b *Buffer) SetMaxPaths(n int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.maxPaths = n
 }
 
 // Add appends a single event to the buffer, routing it to the correct
@@ -101,6 +117,11 @@ func (b *Buffer) FlushDebounced(ctx context.Context, debounce time.Duration) <-c
 	out := make(chan []PathChanges, 1)
 
 	b.mu.Lock()
+	if b.notify != nil {
+		b.mu.Unlock()
+		panic("sync: FlushDebounced called twice on the same Buffer")
+	}
+
 	b.notify = make(chan struct{}, 1)
 	b.mu.Unlock()
 
@@ -185,6 +206,18 @@ func (b *Buffer) signalNew() {
 // move dual-keying: a ChangeMove with OldPath produces a synthetic
 // ChangeDelete at the old path so the planner sees both paths.
 func (b *Buffer) addLocked(ev *ChangeEvent) {
+	// Reject events for new paths when at capacity. Events for existing paths
+	// are always accepted (additional events for the same path don't grow memory
+	// significantly). Safety scan provides eventual consistency for dropped events.
+	if _, exists := b.pending[ev.Path]; !exists && b.maxPaths > 0 && len(b.pending) >= b.maxPaths {
+		b.logger.Warn("buffer at capacity, dropping event (safety scan will catch up)",
+			slog.String("path", ev.Path),
+			slog.Int("max_paths", b.maxPaths),
+		)
+
+		return
+	}
+
 	pc := b.getOrCreate(ev.Path)
 	b.routeEvent(pc, ev)
 
