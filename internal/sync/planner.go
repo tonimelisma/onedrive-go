@@ -88,7 +88,7 @@ func (p *Planner) Plan(
 	counts := countByType(plan.Actions)
 	deleteCount := counts[ActionLocalDelete] + counts[ActionRemoteDelete]
 
-	if bigDeleteTriggered(deleteCount, baseline, config) {
+	if bigDeleteTriggered(plan.Actions, deleteCount, baseline, config) {
 		p.logger.Warn("big-delete protection triggered",
 			slog.Int("delete_count", deleteCount),
 			slog.Int("baseline_count", baseline.Len()),
@@ -793,8 +793,21 @@ func ActionsOfType(actions []Action, t ActionType) []Action {
 }
 
 // bigDeleteTriggered returns true if the planned deletions exceed the
-// safety thresholds defined in the config.
-func bigDeleteTriggered(deleteCount int, baseline *Baseline, config *SafetyConfig) bool {
+// safety thresholds defined in the config. Checks both global totals and
+// per-folder ratios — deleting an entire subfolder triggers protection even
+// when the global percentage is below the threshold.
+func bigDeleteTriggered(actions []Action, deleteCount int, baseline *Baseline, config *SafetyConfig) bool {
+	// Global check: entire baseline.
+	if bigDeleteGlobal(deleteCount, baseline, config) {
+		return true
+	}
+
+	// Per-folder check: any single folder with a high deletion ratio.
+	return bigDeletePerFolder(actions, baseline, config)
+}
+
+// bigDeleteGlobal checks the global (whole-baseline) delete thresholds.
+func bigDeleteGlobal(deleteCount int, baseline *Baseline, config *SafetyConfig) bool {
 	baselineCount := baseline.Len()
 
 	// Below minimum items threshold — big-delete check does not apply.
@@ -809,4 +822,46 @@ func bigDeleteTriggered(deleteCount int, baseline *Baseline, config *SafetyConfi
 	percentage := float64(deleteCount) / float64(baselineCount) * percentMultiplier
 
 	return percentage > config.BigDeleteMaxPercent
+}
+
+// bigDeletePerFolder checks per-parent-folder delete ratios. Triggers when
+// any single folder has ≥BigDeleteMaxPercent of its children being deleted
+// AND that folder had ≥BigDeleteMinItems children in the baseline.
+func bigDeletePerFolder(actions []Action, baseline *Baseline, config *SafetyConfig) bool {
+	// Count deletes per parent folder.
+	deletesPerFolder := make(map[string]int)
+
+	for i := range actions {
+		if actions[i].Type == ActionLocalDelete || actions[i].Type == ActionRemoteDelete {
+			parent := filepath.Dir(actions[i].Path)
+			deletesPerFolder[parent]++
+		}
+	}
+
+	if len(deletesPerFolder) == 0 {
+		return false
+	}
+
+	// Count baseline entries per parent folder.
+	baselinePerFolder := make(map[string]int)
+
+	baseline.ForEachPath(func(p string, _ *BaselineEntry) {
+		parent := filepath.Dir(p)
+		baselinePerFolder[parent]++
+	})
+
+	// Check each folder independently.
+	for folder, delCount := range deletesPerFolder {
+		folderTotal := baselinePerFolder[folder]
+		if folderTotal < config.BigDeleteMinItems {
+			continue
+		}
+
+		pct := float64(delCount) / float64(folderTotal) * percentMultiplier
+		if pct > config.BigDeleteMaxPercent {
+			return true
+		}
+	}
+
+	return false
 }

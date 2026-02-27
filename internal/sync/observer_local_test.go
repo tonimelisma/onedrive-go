@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
@@ -995,6 +997,66 @@ func TestWatch_NewDirectoryWatched(t *testing.T) {
 	}
 }
 
+// TestWatch_NewDirectoryPreExistingFiles verifies that files already present
+// in a newly-created directory are detected immediately (not deferred to the
+// next safety scan). Regression test for B-100.
+func TestWatch_NewDirectoryPreExistingFiles(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+
+	events := make(chan ChangeEvent, 30)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, dir, events)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Create a directory with a file already inside it using os.MkdirAll +
+	// os.WriteFile atomically (from the watcher's perspective, the directory
+	// create event fires, and the file is already present when handleCreate
+	// runs scanNewDirectory).
+	subDir := filepath.Join(dir, "pre-populated")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	preExistingFile := filepath.Join(subDir, "already-here.txt")
+	if err := os.WriteFile(preExistingFile, []byte("pre-existing"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Collect events. The file should appear without a separate fsnotify event
+	// because scanNewDirectory picks it up during directory creation handling.
+	var foundPreExisting bool
+
+	timeout := time.After(5 * time.Second)
+
+	for !foundPreExisting {
+		select {
+		case ev := <-events:
+			if ev.Path == "pre-populated/already-here.txt" && ev.Type == ChangeCreate {
+				foundPreExisting = true
+			}
+		case <-timeout:
+			cancel()
+			<-done
+			t.Fatal("timeout waiting for pre-existing file event (B-100)")
+		}
+	}
+
+	cancel()
+	<-done
+
+	if !foundPreExisting {
+		t.Error("pre-existing file in new directory was not detected")
+	}
+}
+
 func TestLocalWatch_ContextCancellation(t *testing.T) {
 	t.Parallel()
 
@@ -1376,6 +1438,63 @@ func TestFullScan_InvalidNameDirSkipsSubtree(t *testing.T) {
 	if findEvent(events, "good.txt") == nil {
 		t.Error("good.txt event not found")
 	}
+}
+
+func TestFullScan_PermissionDenied(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root bypasses permission checks")
+	}
+
+	t.Parallel()
+
+	syncRoot := t.TempDir()
+
+	// Create readable dir with a file.
+	readableDir := filepath.Join(syncRoot, "readable")
+	require.NoError(t, os.MkdirAll(readableDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(readableDir, "file.txt"), []byte("ok"), 0o644))
+
+	// Create unreadable dir.
+	unreadableDir := filepath.Join(syncRoot, "unreadable")
+	require.NoError(t, os.MkdirAll(unreadableDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(unreadableDir, "hidden.txt"), []byte("secret"), 0o644))
+	require.NoError(t, os.Chmod(unreadableDir, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(unreadableDir, 0o755) })
+
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	events, err := obs.FullScan(context.Background(), syncRoot)
+	require.NoError(t, err)
+
+	// Should see events for readable dir + file, but not unreadable contents.
+	paths := eventPaths(events)
+	if !containsPath(paths, "readable/file.txt") {
+		t.Error("expected event for readable/file.txt")
+	}
+
+	if containsPath(paths, "unreadable/hidden.txt") {
+		t.Error("should not have event for unreadable/hidden.txt")
+	}
+}
+
+// eventPaths extracts paths from a slice of ChangeEvents.
+func eventPaths(events []ChangeEvent) []string {
+	paths := make([]string, len(events))
+	for i := range events {
+		paths[i] = events[i].Path
+	}
+
+	return paths
+}
+
+// containsPath checks if a path exists in the paths slice.
+func containsPath(paths []string, target string) bool {
+	for _, p := range paths {
+		if p == target {
+			return true
+		}
+	}
+
+	return false
 }
 
 // mockDirEntry implements fs.DirEntry for unit tests of helper functions.

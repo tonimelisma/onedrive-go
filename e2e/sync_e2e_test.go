@@ -21,15 +21,20 @@ import (
 // ---------------------------------------------------------------------------
 
 // writeSyncConfig creates a minimal TOML config file pointing to the given
-// syncDir for the test drive. Returns the path to the temp config file.
+// syncDir for the test drive. Each test gets its own state_dir (temp directory)
+// to prevent cross-test contamination of the state database.
+// Returns the path to the temp config file.
 func writeSyncConfig(t *testing.T, syncDir string) string {
 	t.Helper()
 
+	// Per-test state directory prevents cross-test DB contamination.
+	stateDir := t.TempDir()
+
 	// The drive variable comes from TestMain (e.g., "personal:testitesti18@outlook.com").
-	// The config format is: ["personal:testitesti18@outlook.com"]\nsync_dir = "/path"
 	content := fmt.Sprintf(`["%s"]
 sync_dir = %q
-`, drive, syncDir)
+state_dir = %q
+`, drive, syncDir, stateDir)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o644))
