@@ -1159,6 +1159,462 @@ func TestResolveConflict_KeepRemote(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// RunWatch tests
+// ---------------------------------------------------------------------------
+
+// TestRunWatch_ContextCancel verifies that canceling the context causes
+// RunWatch to return nil (clean shutdown).
+func TestRunWatch_ContextCancel(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- eng.RunWatch(ctx, SyncBidirectional, WatchOpts{
+			// Use very long intervals so observers don't fire during test.
+			PollInterval: 1 * time.Hour,
+			Debounce:     1 * time.Hour,
+		})
+	}()
+
+	// Give RunWatch time to start (initial sync + observers).
+	time.Sleep(200 * time.Millisecond)
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RunWatch returned error: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("RunWatch did not return within timeout after context cancel")
+	}
+}
+
+// TestRunWatch_UploadOnly_SkipsRemoteObserver verifies that upload-only mode
+// does not start a remote observer (no delta polling).
+func TestRunWatch_UploadOnly_SkipsRemoteObserver(t *testing.T) {
+	t.Parallel()
+
+	deltaCalledAfterInit := 0
+	initDone := make(chan struct{})
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			select {
+			case <-initDone:
+				// After initial sync, any delta call means remote observer started.
+				deltaCalledAfterInit++
+			default:
+			}
+			return deltaPageWithItems(nil, "token-1"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		// Mark init as done just before RunWatch's observer phase.
+		// Since RunWatch calls RunOnce first, the delta call during init is expected.
+		close(initDone)
+		done <- eng.RunWatch(ctx, SyncUploadOnly, WatchOpts{
+			PollInterval: 50 * time.Millisecond,
+			Debounce:     10 * time.Millisecond,
+		})
+	}()
+
+	// Wait for the watch loop to be running.
+	time.Sleep(300 * time.Millisecond)
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RunWatch: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("RunWatch did not return within timeout")
+	}
+
+	// In upload-only mode, no delta calls should happen after initial sync.
+	if deltaCalledAfterInit > 0 {
+		t.Errorf("delta called %d times after init (should be 0 in upload-only mode)", deltaCalledAfterInit)
+	}
+
+	// remoteObs should not be set in upload-only mode.
+	if eng.remoteObs != nil {
+		t.Error("remoteObs should be nil in upload-only mode")
+	}
+}
+
+// TestRunWatch_ProcessBatch_BigDelete verifies that big-delete protection
+// triggers are handled gracefully (batch is skipped, loop continues).
+func TestRunWatch_ProcessBatch_BigDelete(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	ctx := context.Background()
+
+	// Seed a large baseline so that a batch of deletes triggers big-delete.
+	seedOutcomes := make([]Outcome, 20)
+	for i := range 20 {
+		seedOutcomes[i] = Outcome{
+			Action:     ActionDownload,
+			Success:    true,
+			Path:       fmt.Sprintf("file%02d.txt", i),
+			DriveID:    driveID,
+			ItemID:     fmt.Sprintf("item-%02d", i),
+			ItemType:   ItemTypeFile,
+			RemoteHash: fmt.Sprintf("hash%02d", i),
+			LocalHash:  fmt.Sprintf("hash%02d", i),
+			Size:       100,
+		}
+	}
+
+	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "")
+
+	bl, err := eng.baseline.Load(ctx)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Build a batch that would delete all 20 files (100% > threshold).
+	var batch []PathChanges
+	for _, o := range seedOutcomes {
+		batch = append(batch, PathChanges{
+			Path: o.Path,
+			RemoteEvents: []ChangeEvent{{
+				Source:    SourceRemote,
+				Type:      ChangeDelete,
+				Path:      o.Path,
+				IsDeleted: true,
+			}},
+		})
+	}
+
+	tracker := NewPersistentDepTracker(testLogger(t))
+	safety := DefaultSafetyConfig()
+
+	// processBatch should log a warning and return without panicking.
+	eng.processBatch(ctx, batch, bl, SyncBidirectional, safety, tracker)
+
+	// Verify no actions were dispatched (big-delete skipped the batch).
+	select {
+	case ta := <-tracker.Interactive():
+		t.Errorf("unexpected action dispatched: %s", ta.Action.Path)
+	default:
+		// Good — no actions.
+	}
+}
+
+// TestRunWatch_ProcessBatch_EmptyPlan verifies that an empty plan (all
+// changes classify to no-op) is handled gracefully.
+func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	ctx := context.Background()
+
+	// Seed baseline with a synced file.
+	seedOutcomes := []Outcome{{
+		Action:     ActionDownload,
+		Success:    true,
+		Path:       "already-synced.txt",
+		DriveID:    driveID,
+		ItemID:     "item-as",
+		ItemType:   ItemTypeFile,
+		RemoteHash: "samehash",
+		LocalHash:  "samehash",
+		Size:       5,
+	}}
+	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "")
+
+	bl, err := eng.baseline.Load(ctx)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// A "change" that matches baseline exactly → planner produces empty plan.
+	batch := []PathChanges{{
+		Path: "already-synced.txt",
+		RemoteEvents: []ChangeEvent{{
+			Source:  SourceRemote,
+			Type:    ChangeModify,
+			Path:    "already-synced.txt",
+			ItemID:  "item-as",
+			DriveID: driveID,
+			Hash:    "samehash",
+			Size:    5,
+		}},
+	}}
+
+	tracker := NewPersistentDepTracker(testLogger(t))
+	safety := DefaultSafetyConfig()
+
+	// Should return without error or dispatching actions.
+	eng.processBatch(ctx, batch, bl, SyncBidirectional, safety, tracker)
+}
+
+// TestRunWatch_WatchCycleCompletion_CommitsDeltaToken verifies that
+// watchCycleCompletion commits the delta token for a fully-successful cycle.
+func TestRunWatch_WatchCycleCompletion_CommitsDeltaToken(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	ctx := context.Background()
+
+	bl, err := eng.baseline.Load(ctx)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Set up a remote observer and manually set its delta token
+	// (FullDelta returns the token but doesn't store it internally;
+	// setDeltaToken is what Watch uses to persist the latest token).
+	obs := NewRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
+	obs.setDeltaToken("watch-token-v1")
+	eng.remoteObs = obs
+
+	token := obs.CurrentDeltaToken()
+
+	// Create a tracker with a cycle that completes immediately.
+	tracker := NewPersistentDepTracker(testLogger(t))
+	cycleID := "test-cycle-commit"
+
+	action := &Action{
+		Type:    ActionLocalDelete,
+		Path:    "dummy.txt",
+		DriveID: driveID,
+		View:    &PathView{},
+	}
+
+	ids, writeErr := eng.ledger.WriteActions(ctx, []Action{*action}, nil, cycleID)
+	if writeErr != nil {
+		t.Fatalf("WriteActions: %v", writeErr)
+	}
+
+	tracker.Add(action, ids[0], nil, cycleID)
+
+	// Complete the action to trigger CycleDone.
+	tracker.Complete(ids[0])
+
+	// Now call watchCycleCompletion — it should commit the delta token.
+	eng.watchCycleCompletion(ctx, tracker, cycleID)
+
+	// Verify the delta token was committed.
+	savedToken, tokenErr := eng.baseline.GetDeltaToken(ctx, engineTestDriveID)
+	if tokenErr != nil {
+		t.Fatalf("GetDeltaToken: %v", tokenErr)
+	}
+
+	if savedToken != token {
+		t.Errorf("saved token = %q, want %q", savedToken, token)
+	}
+}
+
+// TestRunWatch_WatchCycleCompletion_SkipsOnFailure verifies that
+// watchCycleCompletion does NOT commit the delta token when the cycle
+// has failed actions.
+func TestRunWatch_WatchCycleCompletion_SkipsOnFailure(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	ctx := context.Background()
+
+	// Seed a known delta token.
+	seedBaseline(t, eng.baseline, ctx, nil, "old-token")
+
+	// Set up a remote observer.
+	bl, err := eng.baseline.Load(ctx)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	obs := NewRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
+	eng.remoteObs = obs
+
+	// Call FullDelta to set a new token.
+	_, _, deltaErr := obs.FullDelta(ctx, "")
+	if deltaErr != nil {
+		t.Fatalf("FullDelta: %v", deltaErr)
+	}
+
+	// Create a tracker with a cycle.
+	tracker := NewPersistentDepTracker(testLogger(t))
+	cycleID := "test-cycle-fail"
+
+	action := &Action{
+		Type:    ActionDownload,
+		Path:    "will-fail.txt",
+		DriveID: driveID,
+		ItemID:  "fail-item",
+		View:    &PathView{},
+	}
+
+	ids, writeErr := eng.ledger.WriteActions(ctx, []Action{*action}, nil, cycleID)
+	if writeErr != nil {
+		t.Fatalf("WriteActions: %v", writeErr)
+	}
+
+	tracker.Add(action, ids[0], nil, cycleID)
+
+	// Simulate: claim the action, then fail it in the ledger.
+	if claimErr := eng.ledger.Claim(ctx, ids[0]); claimErr != nil {
+		t.Fatalf("Claim: %v", claimErr)
+	}
+
+	if failErr := eng.ledger.Fail(ctx, ids[0], "simulated failure"); failErr != nil {
+		t.Fatalf("Fail: %v", failErr)
+	}
+
+	// Complete in the tracker to trigger CycleDone.
+	tracker.Complete(ids[0])
+
+	// watchCycleCompletion should detect the failed ledger row.
+	eng.watchCycleCompletion(ctx, tracker, cycleID)
+
+	// Delta token should NOT have been advanced.
+	savedToken, tokenErr := eng.baseline.GetDeltaToken(ctx, engineTestDriveID)
+	if tokenErr != nil {
+		t.Fatalf("GetDeltaToken: %v", tokenErr)
+	}
+
+	if savedToken != "old-token" {
+		t.Errorf("saved token = %q, want %q (should not advance on failure)", savedToken, "old-token")
+	}
+}
+
+// TestRunWatch_Deduplication verifies that processBatch cancels in-flight
+// actions for paths that appear in a new batch (B-122).
+func TestRunWatch_Deduplication(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	ctx := context.Background()
+
+	bl, err := eng.baseline.Load(ctx)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	tracker := NewPersistentDepTracker(testLogger(t))
+	safety := DefaultSafetyConfig()
+
+	// First batch: download a file.
+	batch1 := []PathChanges{{
+		Path: "overlapping.txt",
+		RemoteEvents: []ChangeEvent{{
+			Source:  SourceRemote,
+			Type:    ChangeCreate,
+			Path:    "overlapping.txt",
+			DriveID: driveID,
+			ItemID:  "item-1",
+			Hash:    "hash-v1",
+			Size:    10,
+		}},
+	}}
+
+	eng.processBatch(ctx, batch1, bl, SyncBidirectional, safety, tracker)
+
+	// Verify the action is in-flight.
+	if !tracker.HasInFlight("overlapping.txt") {
+		t.Fatal("expected in-flight action for overlapping.txt after first batch")
+	}
+
+	// Second batch: same path, different content. Should cancel the first.
+	batch2 := []PathChanges{{
+		Path: "overlapping.txt",
+		RemoteEvents: []ChangeEvent{{
+			Source:  SourceRemote,
+			Type:    ChangeModify,
+			Path:    "overlapping.txt",
+			DriveID: driveID,
+			ItemID:  "item-1",
+			Hash:    "hash-v2",
+			Size:    20,
+		}},
+	}}
+
+	eng.processBatch(ctx, batch2, bl, SyncBidirectional, safety, tracker)
+
+	// The second batch should have replaced the first.
+	// We can't easily verify cancellation directly, but we can verify
+	// the path is still tracked (new action replaced old one).
+	if !tracker.HasInFlight("overlapping.txt") {
+		t.Error("expected in-flight action for overlapping.txt after second batch")
+	}
+}
+
 func TestResolveConflict_KeepLocal_TransferFails(t *testing.T) {
 	t.Parallel()
 

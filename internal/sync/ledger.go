@@ -286,6 +286,21 @@ func (l *Ledger) CountPendingForCycle(ctx context.Context, cycleID string) (int,
 	return count, nil
 }
 
+// CountFailedForCycle returns the count of failed actions for a cycle.
+// Used by watchCycleCompletion to decide whether to commit the delta token.
+func (l *Ledger) CountFailedForCycle(ctx context.Context, cycleID string) (int, error) {
+	var count int
+
+	err := l.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM action_queue
+		 WHERE cycle_id = ? AND status = '`+ledgerStatusFailed+`'`, cycleID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("sync: ledger count failed: %w", err)
+	}
+
+	return count, nil
+}
+
 // scanLedgerRow scans a single row into a LedgerRow, parsing depends_on JSON.
 func scanLedgerRow(rows *sql.Rows) (*LedgerRow, error) {
 	var (
