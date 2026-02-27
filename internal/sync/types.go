@@ -468,6 +468,7 @@ type Outcome struct {
 	RemoteHash   string
 	Size         int64
 	Mtime        int64 // local mtime at sync time
+	RemoteMtime  int64 // remote mtime for conflict records
 	ETag         string
 	ConflictType string // ConflictEditDelete etc. (conflicts only)
 	ResolvedBy   string // ResolvedByAuto for auto-resolved conflicts, "" otherwise

@@ -512,6 +512,47 @@ func TestCommit_Conflict(t *testing.T) {
 	}
 }
 
+func TestCommit_Conflict_StoresRemoteMtime(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	fixedTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	mgr.nowFunc = func() time.Time { return fixedTime }
+
+	remoteMtime := int64(1700000000000000000) // non-zero nanosecond timestamp
+	outcomes := []Outcome{{
+		Action:       ActionConflict,
+		Success:      true,
+		Path:         "mtime-test.txt",
+		DriveID:      driveid.New("d"),
+		ItemID:       "i",
+		ItemType:     ItemTypeFile,
+		LocalHash:    "local-h",
+		RemoteHash:   "remote-h",
+		Mtime:        1600000000000000000,
+		RemoteMtime:  remoteMtime,
+		ConflictType: "edit_edit",
+	}}
+
+	commitAll(t, mgr, ctx, outcomes)
+
+	// Verify remote_mtime is stored as non-zero.
+	var storedRemoteMtime sql.NullInt64
+
+	err := mgr.db.QueryRowContext(ctx,
+		"SELECT remote_mtime FROM conflicts WHERE path = ?", "mtime-test.txt",
+	).Scan(&storedRemoteMtime)
+	if err != nil {
+		t.Fatalf("querying conflict remote_mtime: %v", err)
+	}
+
+	if !storedRemoteMtime.Valid || storedRemoteMtime.Int64 != remoteMtime {
+		t.Errorf("remote_mtime = %v, want %d", storedRemoteMtime, remoteMtime)
+	}
+}
+
 func TestCommit_SkipsFailedOutcomes(t *testing.T) {
 	t.Parallel()
 

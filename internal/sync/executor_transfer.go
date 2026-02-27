@@ -130,6 +130,7 @@ func (e *Executor) downloadOutcome(
 		o.ETag = action.View.Remote.ETag
 		o.ParentID = action.View.Remote.ParentID
 		o.Mtime = action.View.Remote.Mtime
+		o.RemoteMtime = action.View.Remote.Mtime
 
 		if remoteHash == "" {
 			o.RemoteHash = action.View.Remote.Hash

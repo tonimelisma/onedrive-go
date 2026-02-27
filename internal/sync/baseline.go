@@ -437,7 +437,7 @@ func commitConflict(ctx context.Context, tx *sql.Tx, o *Outcome, syncedAt int64)
 		nullString(o.LocalHash),
 		nullString(o.RemoteHash),
 		nullInt64(o.Mtime),
-		nullInt64(0), // remote_mtime not available in Outcome
+		nullInt64(o.RemoteMtime),
 		resolution, resolvedAt, resolvedBy,
 	)
 	if err != nil {
