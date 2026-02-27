@@ -65,13 +65,12 @@ func (fw *fsnotifyWrapper) Errors() <-chan error          { return fw.w.Errors }
 // comparing each entry against the in-memory baseline. Stateless — syncRoot
 // is a parameter of FullScan, allowing reuse across cycles.
 type LocalObserver struct {
-	baseline           *Baseline
-	logger             *slog.Logger
-	watcherFactory     func() (FsWatcher, error)
-	droppedEvents      atomic.Int64                                     // events dropped by trySend due to full channel
-	safetyScanOverride time.Duration                                    // overrides safetyScanInterval; 0 = use constant
-	sleepFunc          func(ctx context.Context, d time.Duration) error // injectable for testing
-	safetyTickFunc     func(d time.Duration) (<-chan time.Time, func()) // injectable for testing; returns tick channel + stop func
+	baseline       *Baseline
+	logger         *slog.Logger
+	watcherFactory func() (FsWatcher, error)
+	droppedEvents  atomic.Int64                                     // events dropped by trySend due to full channel
+	sleepFunc      func(ctx context.Context, d time.Duration) error // injectable for testing
+	safetyTickFunc func(d time.Duration) (<-chan time.Time, func()) // injectable for testing; returns tick channel + stop func
 }
 
 // NewLocalObserver creates a LocalObserver. The baseline must be loaded (from

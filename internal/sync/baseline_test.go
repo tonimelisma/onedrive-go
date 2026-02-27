@@ -20,17 +20,38 @@ import (
 func testLogger(t *testing.T) *slog.Logger {
 	t.Helper()
 
-	return slog.New(slog.NewTextHandler(&testLogWriter{t: t}, &slog.HandlerOptions{
+	return slog.New(slog.NewTextHandler(newTestLogWriter(t), &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	}))
 }
 
-// testLogWriter adapts testing.T to io.Writer for slog.
+// testLogWriter adapts testing.T to io.Writer for slog. Uses a done channel
+// to silently discard writes after the test has finished, preventing the race
+// between t.Log() and testing.T's internal cleanup (goroutines spawned during
+// the test may still log after the test function returns).
 type testLogWriter struct {
-	t *testing.T
+	t    *testing.T
+	done chan struct{}
+	once stdsync.Once
+}
+
+func newTestLogWriter(t *testing.T) *testLogWriter {
+	t.Helper()
+
+	w := &testLogWriter{t: t, done: make(chan struct{})}
+	t.Cleanup(func() { w.once.Do(func() { close(w.done) }) })
+
+	return w
 }
 
 func (w *testLogWriter) Write(p []byte) (int, error) {
+	select {
+	case <-w.done:
+		// Test finished — discard to avoid t.Log() race.
+		return len(p), nil
+	default:
+	}
+
 	w.t.Helper()
 	w.t.Log(string(p))
 
