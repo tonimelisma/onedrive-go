@@ -516,3 +516,97 @@ func TestWorkerPool_FailAndComplete_UsePoolContext(t *testing.T) {
 		t.Errorf("pending = %d, want 0", pending)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Regression: B-090 — parent resolution via baseline (no createdFolders map)
+// ---------------------------------------------------------------------------
+
+// TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline verifies
+// that when action 1 creates a folder and action 2 uploads a file into that
+// folder, the upload resolves its parentID from the baseline (not a transient
+// in-memory map). This is the correct architecture after B-090: each action
+// loads a fresh baseline snapshot, so the folder-create outcome committed by
+// action 1 is visible to action 2 via the baseline.
+func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, ledger, syncRoot := newWorkerTestSetup(t)
+	ctx := context.Background()
+
+	var capturedParentID string
+
+	// Override uploader to capture the parentID used.
+	cfg.uploads = &workerMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, parentID, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			capturedParentID = parentID
+
+			return &graph.Item{ID: "uploaded-into-folder", ETag: "e1"}, nil
+		},
+	}
+
+	// Action 0: create folder "Uploads".
+	// Action 1: upload file "Uploads/doc.txt" into that folder.
+	actions := []Action{
+		{
+			Type:       ActionFolderCreate,
+			Path:       "Uploads",
+			DriveID:    driveid.New("0000000000000001"),
+			CreateSide: CreateLocal,
+			View: &PathView{
+				Remote: &RemoteState{
+					ItemID:   "uploads-folder-id",
+					DriveID:  driveid.New("0000000000000001"),
+					ParentID: "root",
+					ItemType: ItemTypeFolder,
+				},
+			},
+		},
+		{
+			Type:    ActionUpload,
+			Path:    "Uploads/doc.txt",
+			DriveID: driveid.New("0000000000000001"),
+			View:    &PathView{Path: "Uploads/doc.txt"},
+		},
+	}
+
+	// Write the local file that will be uploaded.
+	absPath := filepath.Join(syncRoot, "Uploads", "doc.txt")
+	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	if err := os.WriteFile(absPath, []byte("upload content"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	deps := [][]int{{}, {0}} // action 1 depends on action 0
+	ids, writeErr := ledger.WriteActions(ctx, actions, deps, "cycle-wp-b090")
+	if writeErr != nil {
+		t.Fatalf("WriteActions: %v", writeErr)
+	}
+
+	tracker := NewDepTracker(10, 10, testLogger(t))
+	tracker.Add(&actions[0], ids[0], nil, "")
+	tracker.Add(&actions[1], ids[1], []int64{ids[0]}, "")
+
+	pool := NewWorkerPool(cfg, tracker, mgr, ledger, testLogger(t))
+	pool.Start(ctx, 4)
+	pool.Wait()
+	pool.Stop()
+
+	succeeded, failed, errs := pool.Stats()
+	if failed != 0 {
+		t.Errorf("failed = %d, want 0; errors: %v", failed, errs)
+	}
+
+	if succeeded != 2 {
+		t.Errorf("succeeded = %d, want 2", succeeded)
+	}
+
+	// The upload must have resolved its parent from the baseline entry committed
+	// by the folder-create action. For CreateSide=CreateLocal, folderOutcome uses
+	// action.View.Remote.ItemID ("uploads-folder-id") as the baseline ItemID.
+	if capturedParentID != "uploads-folder-id" {
+		t.Errorf("upload parentID = %q, want %q (resolved from baseline after folder create)", capturedParentID, "uploads-folder-id")
+	}
+}
