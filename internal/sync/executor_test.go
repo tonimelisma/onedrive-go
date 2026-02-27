@@ -67,6 +67,10 @@ func (m *executorMockItemClient) DeleteItem(ctx context.Context, driveID driveid
 	return fmt.Errorf("DeleteItem not mocked")
 }
 
+func (m *executorMockItemClient) PermanentDeleteItem(_ context.Context, _ driveid.ID, _ string) error {
+	return fmt.Errorf("PermanentDeleteItem not mocked")
+}
+
 type executorMockDownloader struct {
 	downloadFn func(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error)
 }
@@ -1555,5 +1559,127 @@ func TestExecutor_SyncedUpdate_BaselineFallback(t *testing.T) {
 
 	if o.ItemType != ItemTypeFolder {
 		t.Errorf("expected ItemType=folder from baseline fallback, got %s", o.ItemType)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Local delete with trash tests
+// ---------------------------------------------------------------------------
+
+func TestExecutor_LocalDelete_TrashSuccess(t *testing.T) {
+	t.Parallel()
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+
+	trashCalled := false
+	cfg.trashFunc = func(absPath string) error {
+		trashCalled = true
+		// Simulate successful trash by removing the file.
+		return os.Remove(absPath)
+	}
+
+	e := NewExecution(cfg, emptyBaseline())
+
+	writeExecTestFile(t, syncRoot, "trash-file.txt", "content")
+
+	action := &Action{
+		Type:   ActionLocalDelete,
+		Path:   "trash-file.txt",
+		ItemID: "item1",
+		View:   &PathView{Baseline: &BaselineEntry{}},
+	}
+
+	o := e.executeLocalDelete(context.Background(), action)
+	requireOutcomeSuccess(t, o)
+
+	if !trashCalled {
+		t.Error("trashFunc should have been called")
+	}
+}
+
+func TestExecutor_LocalDelete_TrashFailure_FallsBackToRemove(t *testing.T) {
+	t.Parallel()
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+
+	cfg.trashFunc = func(_ string) error {
+		return fmt.Errorf("trash unavailable")
+	}
+
+	e := NewExecution(cfg, emptyBaseline())
+
+	absPath := writeExecTestFile(t, syncRoot, "trash-fallback.txt", "content")
+
+	action := &Action{
+		Type:   ActionLocalDelete,
+		Path:   "trash-fallback.txt",
+		ItemID: "item1",
+		View:   &PathView{Baseline: &BaselineEntry{}},
+	}
+
+	o := e.executeLocalDelete(context.Background(), action)
+	requireOutcomeSuccess(t, o)
+
+	// File should still be deleted (via os.Remove fallback).
+	if _, err := os.Stat(absPath); !os.IsNotExist(err) {
+		t.Error("file should have been deleted by os.Remove fallback")
+	}
+}
+
+func TestExecutor_LocalDelete_NoTrashFunc_DirectRemove(t *testing.T) {
+	t.Parallel()
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	// trashFunc is nil — should go straight to os.Remove.
+
+	e := NewExecution(cfg, emptyBaseline())
+
+	absPath := writeExecTestFile(t, syncRoot, "no-trash.txt", "content")
+
+	action := &Action{
+		Type:   ActionLocalDelete,
+		Path:   "no-trash.txt",
+		ItemID: "item1",
+		View:   &PathView{Baseline: &BaselineEntry{}},
+	}
+
+	o := e.executeLocalDelete(context.Background(), action)
+	requireOutcomeSuccess(t, o)
+
+	if _, err := os.Stat(absPath); !os.IsNotExist(err) {
+		t.Error("file should have been deleted")
+	}
+}
+
+func TestExecutor_LocalDeleteFolder_TrashSuccess(t *testing.T) {
+	t.Parallel()
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+
+	trashCalled := false
+	cfg.trashFunc = func(absPath string) error {
+		trashCalled = true
+
+		return os.Remove(absPath)
+	}
+
+	e := NewExecution(cfg, emptyBaseline())
+
+	if err := os.MkdirAll(filepath.Join(syncRoot, "trash-dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	action := &Action{
+		Type:   ActionLocalDelete,
+		Path:   "trash-dir",
+		ItemID: "item1",
+		View:   &PathView{},
+	}
+
+	o := e.executeLocalDelete(context.Background(), action)
+	requireOutcomeSuccess(t, o)
+
+	if !trashCalled {
+		t.Error("trashFunc should have been called for folder")
 	}
 }

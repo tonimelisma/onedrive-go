@@ -241,7 +241,13 @@ func (o *LocalObserver) handleFsEvent(
 	dbRelPath := nfcNormalize(filepath.ToSlash(relPath))
 	name := nfcNormalize(filepath.Base(fsEvent.Name))
 
-	if isAlwaysExcluded(name) || !isValidOneDriveName(name) {
+	if isAlwaysExcluded(name) {
+		o.logger.Debug("watch: skipping excluded file", slog.String("name", name), slog.String("path", dbRelPath))
+		return
+	}
+
+	if !isValidOneDriveName(name) {
+		o.logger.Debug("watch: skipping invalid OneDrive name", slog.String("name", name))
 		return
 	}
 
@@ -779,11 +785,4 @@ func skipEntry(d fs.DirEntry) error {
 	}
 
 	return nil
-}
-
-// truncateToSeconds truncates nanosecond-precision time to second precision.
-// Available for cross-platform mtime comparison where remote timestamps
-// have coarser granularity (e.g., 1-second resolution on some backends).
-func truncateToSeconds(nanos int64) int64 {
-	return (nanos / nanosPerSecond) * nanosPerSecond
 }

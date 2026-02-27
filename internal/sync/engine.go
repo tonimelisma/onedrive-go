@@ -19,14 +19,15 @@ const forceSafetyMax = math.MaxInt32
 // EngineConfig holds the options for NewEngine. Uses a struct because
 // seven fields is too many for positional parameters.
 type EngineConfig struct {
-	DBPath    string       // path to the SQLite state database
-	SyncRoot  string       // absolute path to the local sync directory
-	DriveID   driveid.ID   // normalized drive identifier
-	Fetcher   DeltaFetcher // satisfied by *graph.Client
-	Items     ItemClient   // satisfied by *graph.Client
-	Downloads Downloader   // satisfied by *graph.Client
-	Uploads   Uploader     // satisfied by *graph.Client
-	Logger    *slog.Logger
+	DBPath        string       // path to the SQLite state database
+	SyncRoot      string       // absolute path to the local sync directory
+	DriveID       driveid.ID   // normalized drive identifier
+	Fetcher       DeltaFetcher // satisfied by *graph.Client
+	Items         ItemClient   // satisfied by *graph.Client
+	Downloads     Downloader   // satisfied by *graph.Client
+	Uploads       Uploader     // satisfied by *graph.Client
+	Logger        *slog.Logger
+	UseLocalTrash bool // move deleted local files to OS trash instead of permanent delete
 }
 
 // RunOpts holds per-cycle options for RunOnce.
@@ -80,6 +81,11 @@ func NewEngine(cfg *EngineConfig) (*Engine, error) {
 	}
 
 	execCfg := NewExecutorConfig(cfg.Items, cfg.Downloads, cfg.Uploads, cfg.SyncRoot, cfg.DriveID, cfg.Logger)
+
+	if cfg.UseLocalTrash {
+		execCfg.trashFunc = defaultTrashFunc
+	}
+
 	ledger := NewLedger(bm.DB(), cfg.Logger)
 
 	return &Engine{

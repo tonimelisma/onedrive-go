@@ -1,6 +1,8 @@
 package config
 
 import (
+	"runtime"
+
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
@@ -77,17 +79,24 @@ func defaultSafetyConfig() SafetyConfig {
 		BigDeleteMinItems:   defaultBigDeleteMinItems,
 		MinFreeSpace:        defaultMinFreeSpace,
 		UseRecycleBin:       true,
-		UseLocalTrash:       true,
+		UseLocalTrash:       defaultUseLocalTrash(),
 		SyncDirPermissions:  defaultSyncDirPermissions,
 		SyncFilePermissions: defaultSyncFilePermissions,
 	}
+}
+
+// defaultUseLocalTrash returns the platform-specific default for UseLocalTrash.
+// macOS: true — desktop users always have ~/.Trash.
+// Linux: false — servers/NAS/containers typically don't have XDG trash; desktop users opt in.
+func defaultUseLocalTrash() bool {
+	return runtime.GOOS == "darwin"
 }
 
 func defaultSyncConfig() SyncConfig {
 	return SyncConfig{
 		PollInterval:             defaultPollInterval,
 		FullscanFrequency:        defaultFullscanFrequency,
-		Websocket:                true,
+		Websocket:                false, // websocket notification mode is unimplemented
 		ConflictStrategy:         defaultConflictStrategy,
 		ConflictReminderInterval: defaultConflictReminder,
 		VerifyInterval:           defaultVerifyInterval,

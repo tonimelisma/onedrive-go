@@ -65,6 +65,10 @@ func (m *workerMockItemClient) DeleteItem(ctx context.Context, driveID driveid.I
 	return fmt.Errorf("DeleteItem not mocked")
 }
 
+func (m *workerMockItemClient) PermanentDeleteItem(_ context.Context, _ driveid.ID, _ string) error {
+	return fmt.Errorf("PermanentDeleteItem not mocked")
+}
+
 type workerMockDownloader struct {
 	downloadFn func(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error)
 }
