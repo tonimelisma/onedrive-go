@@ -62,14 +62,15 @@ type SyncReport struct {
 // Engine orchestrates a complete sync cycle: observe → plan → execute → commit.
 // Single-drive only; multi-drive orchestration is deferred to Phase 5.
 type Engine struct {
-	baseline *BaselineManager
-	ledger   *Ledger
-	planner  *Planner
-	execCfg  *ExecutorConfig
-	fetcher  DeltaFetcher
-	syncRoot string
-	driveID  driveid.ID
-	logger   *slog.Logger
+	baseline  *BaselineManager
+	ledger    *Ledger
+	planner   *Planner
+	execCfg   *ExecutorConfig
+	fetcher   DeltaFetcher
+	syncRoot  string
+	driveID   driveid.ID
+	logger    *slog.Logger
+	remoteObs *RemoteObserver // stored during RunWatch for delta token reads
 }
 
 // NewEngine creates an Engine, initializing the BaselineManager (which opens
@@ -237,7 +238,7 @@ func (e *Engine) executePlan(
 			depIDs = append(depIDs, ids[depIdx])
 		}
 
-		tracker.Add(&plan.Actions[i], ids[i], depIDs)
+		tracker.Add(&plan.Actions[i], ids[i], depIDs, plan.CycleID)
 	}
 
 	pool := NewWorkerPool(e.execCfg, tracker, e.baseline, e.ledger, e.logger)
@@ -423,4 +424,294 @@ func (e *Engine) resolveTransfer(ctx context.Context, c *ConflictRecord, actionT
 	}
 
 	return e.baseline.CommitOutcome(ctx, &outcome, 0)
+}
+
+// ---------------------------------------------------------------------------
+// Watch mode (Phase 5.2)
+// ---------------------------------------------------------------------------
+
+// Default watch intervals.
+const (
+	defaultPollInterval = 5 * time.Minute
+	defaultDebounce     = 2 * time.Second
+	watchEventBuf       = 256
+)
+
+// WatchOpts holds per-session options for RunWatch.
+type WatchOpts struct {
+	Force        bool
+	PollInterval time.Duration // remote delta polling interval (0 → 5m)
+	Debounce     time.Duration // buffer debounce window (0 → 2s)
+}
+
+// RunWatch runs a continuous sync loop: initial one-shot sync, then
+// watches for remote and local changes, processing them in batches.
+// Blocks until the context is canceled, returning nil on clean shutdown.
+func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) error {
+	e.logger.Info("watch mode starting",
+		slog.String("mode", mode.String()),
+		slog.Bool("force", opts.Force),
+		slog.Duration("poll_interval", e.resolvePollInterval(opts)),
+		slog.Duration("debounce", e.resolveDebounce(opts)),
+	)
+
+	// Step 1: Run initial one-shot sync to establish baseline.
+	_, err := e.RunOnce(ctx, mode, RunOpts{Force: opts.Force})
+	if err != nil {
+		return fmt.Errorf("sync: initial sync failed: %w", err)
+	}
+
+	// Step 2: Load baseline (cached — updated incrementally by CommitOutcome).
+	bl, err := e.baseline.Load(ctx)
+	if err != nil {
+		return fmt.Errorf("sync: loading baseline for watch: %w", err)
+	}
+
+	// Step 3: Create persistent tracker and worker pool.
+	tracker := NewPersistentDepTracker(e.logger)
+	pool := NewWorkerPool(e.execCfg, tracker, e.baseline, e.ledger, e.logger)
+	pool.Start(ctx, runtime.NumCPU())
+
+	defer func() {
+		pool.Stop()
+		e.logger.Info("watch mode stopped")
+	}()
+
+	// Step 4: Create buffer and debounced output.
+	buf := NewBuffer(e.logger)
+	ready := buf.FlushDebounced(ctx, e.resolveDebounce(opts))
+
+	// Step 5: Start observer goroutines.
+	errs := e.startObservers(ctx, bl, mode, buf, opts)
+
+	// Step 6: Main select loop.
+	safety := e.resolveWatchSafetyConfig(opts)
+
+	for {
+		select {
+		case batch, ok := <-ready:
+			if !ok {
+				return nil
+			}
+
+			e.processBatch(ctx, batch, bl, mode, safety, tracker)
+
+		case obsErr := <-errs:
+			if obsErr != nil {
+				e.logger.Warn("observer error",
+					slog.String("error", obsErr.Error()),
+				)
+			}
+
+		case <-ctx.Done():
+			return nil
+		}
+	}
+}
+
+// startObservers launches remote and local observer goroutines that feed
+// events into the buffer. Returns an error channel for observer failures.
+func (e *Engine) startObservers(
+	ctx context.Context, bl *Baseline, mode SyncMode, buf *Buffer, opts WatchOpts,
+) <-chan error {
+	events := make(chan ChangeEvent, watchEventBuf)
+	errs := make(chan error, 2)
+
+	// Bridge goroutine: reads from shared events channel, adds to buffer.
+	go func() {
+		for {
+			select {
+			case ev, ok := <-events:
+				if !ok {
+					return
+				}
+
+				buf.Add(&ev)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	// Remote observer (skip for upload-only mode).
+	if mode != SyncUploadOnly {
+		remoteObs := NewRemoteObserver(e.fetcher, bl, e.driveID, e.logger)
+		e.remoteObs = remoteObs
+
+		savedToken, tokenErr := e.baseline.GetDeltaToken(ctx, e.driveID.String())
+		if tokenErr != nil {
+			e.logger.Warn("failed to get delta token for watch",
+				slog.String("error", tokenErr.Error()),
+			)
+		}
+
+		go func() {
+			errs <- remoteObs.Watch(ctx, savedToken, events, e.resolvePollInterval(opts))
+		}()
+	}
+
+	// Local observer (skip for download-only mode).
+	if mode != SyncDownloadOnly {
+		localObs := NewLocalObserver(bl, e.logger)
+
+		go func() {
+			errs <- localObs.Watch(ctx, e.syncRoot, events)
+		}()
+	}
+
+	return errs
+}
+
+// processBatch plans and dispatches a batch of path changes. On planner
+// error (e.g. big-delete protection), the batch is skipped and the loop
+// continues. In-flight actions for overlapping paths are canceled and
+// replaced (B-122 deduplication).
+func (e *Engine) processBatch(
+	ctx context.Context, batch []PathChanges, bl *Baseline,
+	mode SyncMode, safety *SafetyConfig, tracker *DepTracker,
+) {
+	e.logger.Info("processing watch batch",
+		slog.Int("paths", len(batch)),
+	)
+
+	plan, err := e.planner.Plan(batch, bl, mode, safety)
+	if err != nil {
+		if errors.Is(err, ErrBigDeleteTriggered) {
+			e.logger.Warn("big-delete protection triggered, skipping batch",
+				slog.Int("paths", len(batch)),
+			)
+
+			return
+		}
+
+		e.logger.Error("planner error, skipping batch",
+			slog.String("error", err.Error()),
+		)
+
+		return
+	}
+
+	if len(plan.Actions) == 0 {
+		e.logger.Debug("empty plan for batch, nothing to do")
+		return
+	}
+
+	// B-122: Cancel in-flight actions for paths that appear in this batch.
+	for i := range plan.Actions {
+		if tracker.HasInFlight(plan.Actions[i].Path) {
+			e.logger.Info("canceling in-flight action for updated path",
+				slog.String("path", plan.Actions[i].Path),
+			)
+
+			tracker.CancelByPath(plan.Actions[i].Path)
+		}
+	}
+
+	// Write actions to ledger.
+	ids, writeErr := e.ledger.WriteActions(ctx, plan.Actions, plan.Deps, plan.CycleID)
+	if writeErr != nil {
+		e.logger.Error("failed to write watch batch to ledger",
+			slog.String("error", writeErr.Error()),
+		)
+
+		return
+	}
+
+	// Populate tracker with this cycle's actions.
+	for i := range plan.Actions {
+		var depIDs []int64
+		for _, depIdx := range plan.Deps[i] {
+			depIDs = append(depIDs, ids[depIdx])
+		}
+
+		tracker.Add(&plan.Actions[i], ids[i], depIDs, plan.CycleID)
+	}
+
+	// Spawn cycle completion watcher (B-121: per-cycle delta token tracking).
+	go e.watchCycleCompletion(ctx, tracker, plan.CycleID)
+
+	e.logger.Info("watch batch dispatched",
+		slog.Int("actions", len(plan.Actions)),
+		slog.String("cycle_id", plan.CycleID),
+	)
+}
+
+// watchCycleCompletion waits for all actions in a cycle to complete, then
+// commits the delta token if no failures occurred. This ensures the token
+// is only advanced for fully-successful cycles (B-121).
+func (e *Engine) watchCycleCompletion(ctx context.Context, tracker *DepTracker, cycleID string) {
+	select {
+	case <-tracker.CycleDone(cycleID):
+	case <-ctx.Done():
+		return
+	}
+
+	// Check for failures in this cycle.
+	failed, err := e.ledger.CountFailedForCycle(ctx, cycleID)
+	if err != nil {
+		e.logger.Error("failed to count failed actions for cycle",
+			slog.String("cycle_id", cycleID),
+			slog.String("error", err.Error()),
+		)
+
+		tracker.CleanupCycle(cycleID)
+
+		return
+	}
+
+	if failed > 0 {
+		e.logger.Warn("skipping delta token commit for cycle with failures",
+			slog.String("cycle_id", cycleID),
+			slog.Int("failed", failed),
+		)
+
+		tracker.CleanupCycle(cycleID)
+
+		return
+	}
+
+	// Commit the delta token for this successful cycle.
+	if e.remoteObs != nil {
+		token := e.remoteObs.CurrentDeltaToken()
+		if commitErr := e.baseline.CommitDeltaToken(ctx, token, e.driveID.String()); commitErr != nil {
+			e.logger.Error("failed to commit delta token for watch cycle",
+				slog.String("cycle_id", cycleID),
+				slog.String("error", commitErr.Error()),
+			)
+		}
+	}
+
+	tracker.CleanupCycle(cycleID)
+}
+
+// resolvePollInterval returns the configured poll interval or the default.
+func (e *Engine) resolvePollInterval(opts WatchOpts) time.Duration {
+	if opts.PollInterval > 0 {
+		return opts.PollInterval
+	}
+
+	return defaultPollInterval
+}
+
+// resolveDebounce returns the configured debounce or the default.
+func (e *Engine) resolveDebounce(opts WatchOpts) time.Duration {
+	if opts.Debounce > 0 {
+		return opts.Debounce
+	}
+
+	return defaultDebounce
+}
+
+// resolveWatchSafetyConfig returns the safety config for watch mode.
+// When Force is set, big-delete protection is disabled.
+func (e *Engine) resolveWatchSafetyConfig(opts WatchOpts) *SafetyConfig {
+	if opts.Force {
+		return &SafetyConfig{
+			BigDeleteMinItems:   0,
+			BigDeleteMaxCount:   forceSafetyMax,
+			BigDeleteMaxPercent: float64(forceSafetyMax),
+		}
+	}
+
+	return DefaultSafetyConfig()
 }

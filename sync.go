@@ -24,9 +24,10 @@ one-way sync. Use --dry-run to preview what would happen without making changes.
 	cmd.Flags().Bool("upload-only", false, "only upload local changes")
 	cmd.Flags().Bool("dry-run", false, "preview sync actions without executing")
 	cmd.Flags().Bool("force", false, "override big-delete safety threshold")
-	cmd.Flags().Bool("watch", false, "continuous sync (not yet implemented)")
+	cmd.Flags().Bool("watch", false, "continuously sync changes (watch mode)")
 
 	cmd.MarkFlagsMutuallyExclusive("download-only", "upload-only")
+	cmd.MarkFlagsMutuallyExclusive("dry-run", "watch")
 
 	return cmd
 }
@@ -35,10 +36,6 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	watch, err := cmd.Flags().GetBool("watch")
 	if err != nil {
 		return err
-	}
-
-	if watch {
-		return fmt.Errorf("continuous sync not yet implemented (Phase 5)")
 	}
 
 	mode := syncModeFromFlags(cmd)
@@ -76,12 +73,19 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	}
 	defer engine.Close()
 
-	dryRun, err := cmd.Flags().GetBool("dry-run")
+	force, err := cmd.Flags().GetBool("force")
 	if err != nil {
 		return err
 	}
 
-	force, err := cmd.Flags().GetBool("force")
+	if watch {
+		return engine.RunWatch(ctx, mode, sync.WatchOpts{
+			Force: force,
+			// Zero values use defaults (2s debounce, 5m poll interval).
+		})
+	}
+
+	dryRun, err := cmd.Flags().GetBool("dry-run")
 	if err != nil {
 		return err
 	}

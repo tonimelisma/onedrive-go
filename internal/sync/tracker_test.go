@@ -18,7 +18,7 @@ func TestDepTracker_NoDeps(t *testing.T) {
 	dt.Add(&Action{
 		Type: ActionFolderCreate, Path: "dir",
 		DriveID: driveid.New("d"), ItemID: "i1",
-	}, 1, nil)
+	}, 1, nil, "")
 
 	select {
 	case ta := <-dt.Interactive():
@@ -39,13 +39,13 @@ func TestDepTracker_DependencyChain(t *testing.T) {
 	dt.Add(&Action{
 		Type: ActionFolderCreate, Path: "parent",
 		DriveID: driveid.New("d"), ItemID: "i1",
-	}, 1, nil)
+	}, 1, nil, "")
 
 	// Action 2: depends on action 1.
 	dt.Add(&Action{
 		Type: ActionDownload, Path: "parent/child.txt",
 		DriveID: driveid.New("d"), ItemID: "i2",
-	}, 2, []int64{1})
+	}, 2, []int64{1}, "")
 
 	// Only action 1 should be dispatched.
 	select {
@@ -90,7 +90,7 @@ func TestDepTracker_BulkLane(t *testing.T) {
 		View: &PathView{
 			Remote: &RemoteState{Size: 20 * 1024 * 1024}, // 20 MB
 		},
-	}, 1, nil)
+	}, 1, nil, "")
 
 	select {
 	case ta := <-dt.Bulk():
@@ -114,7 +114,7 @@ func TestDepTracker_SmallTransferInteractive(t *testing.T) {
 		View: &PathView{
 			Local: &LocalState{Size: 100},
 		},
-	}, 1, nil)
+	}, 1, nil, "")
 
 	select {
 	case ta := <-dt.Interactive():
@@ -135,7 +135,7 @@ func TestDepTracker_NonTransferAlwaysInteractive(t *testing.T) {
 	dt.Add(&Action{
 		Type: ActionLocalDelete, Path: "del.txt",
 		DriveID: driveid.New("d"), ItemID: "i1",
-	}, 1, nil)
+	}, 1, nil, "")
 
 	select {
 	case ta := <-dt.Interactive():
@@ -155,12 +155,12 @@ func TestDepTracker_DoneSignal(t *testing.T) {
 	dt.Add(&Action{
 		Type: ActionFolderCreate, Path: "a",
 		DriveID: driveid.New("d"), ItemID: "i1",
-	}, 1, nil)
+	}, 1, nil, "")
 
 	dt.Add(&Action{
 		Type: ActionDownload, Path: "b",
 		DriveID: driveid.New("d"), ItemID: "i2",
-	}, 2, []int64{1})
+	}, 2, []int64{1}, "")
 
 	// Drain interactive.
 	<-dt.Interactive()
@@ -184,7 +184,7 @@ func TestDepTracker_CancelByPath(t *testing.T) {
 	dt.Add(&Action{
 		Type: ActionDownload, Path: "cancel-me.txt",
 		DriveID: driveid.New("d"), ItemID: "i1",
-	}, 1, nil)
+	}, 1, nil, "")
 
 	ta := <-dt.Interactive()
 
@@ -211,13 +211,13 @@ func TestDepTracker_ConcurrentComplete(t *testing.T) {
 	dt.Add(&Action{
 		Type: ActionFolderCreate, Path: "root",
 		DriveID: driveid.New("d"), ItemID: "i0",
-	}, 0, nil)
+	}, 0, nil, "")
 
 	for i := int64(1); i <= 49; i++ {
 		dt.Add(&Action{
 			Type: ActionDownload, Path: "file",
 			DriveID: driveid.New("d"), ItemID: "i",
-		}, i, []int64{0})
+		}, i, []int64{0}, "")
 	}
 
 	// Drain the root action.
@@ -266,7 +266,7 @@ func TestDepTracker_CompleteUnknownID(t *testing.T) {
 	dt.Add(&Action{
 		Type: ActionFolderCreate, Path: "real",
 		DriveID: driveid.New("d"), ItemID: "i1",
-	}, 1, nil)
+	}, 1, nil, "")
 
 	// Drain the dispatched action.
 	<-dt.Interactive()
@@ -312,14 +312,14 @@ func TestDepTracker_ConcurrentAddAndComplete(t *testing.T) {
 	dt.Add(&Action{
 		Type: ActionFolderCreate, Path: "root",
 		DriveID: driveid.New("d"), ItemID: "i0",
-	}, 0, nil)
+	}, 0, nil, "")
 
 	// Seed some initial dependents so Complete has a non-empty slice to iterate.
 	for i := int64(1); i <= 20; i++ {
 		dt.Add(&Action{
 			Type: ActionDownload, Path: fmt.Sprintf("file-%d", i),
 			DriveID: driveid.New("d"), ItemID: fmt.Sprintf("i%d", i),
-		}, i, []int64{0})
+		}, i, []int64{0}, "")
 	}
 
 	// Concurrently: Complete root (iterates dependents) while Add
@@ -340,7 +340,7 @@ func TestDepTracker_ConcurrentAddAndComplete(t *testing.T) {
 			dt.Add(&Action{
 				Type: ActionDownload, Path: fmt.Sprintf("file-%d", i),
 				DriveID: driveid.New("d"), ItemID: fmt.Sprintf("i%d", i),
-			}, i, []int64{0})
+			}, i, []int64{0}, "")
 		}
 	}()
 
@@ -378,7 +378,7 @@ func TestDepTracker_CompleteCleansByPath(t *testing.T) {
 	dt.Add(&Action{
 		Type: ActionDownload, Path: "file.txt",
 		DriveID: driveid.New("d"), ItemID: "i1",
-	}, 1, nil)
+	}, 1, nil, "")
 
 	<-dt.Interactive()
 	dt.Complete(1)
@@ -389,7 +389,7 @@ func TestDepTracker_CompleteCleansByPath(t *testing.T) {
 	dt.Add(&Action{
 		Type: ActionUpload, Path: "file.txt",
 		DriveID: driveid.New("d"), ItemID: "i2",
-	}, 2, nil)
+	}, 2, nil, "")
 
 	ta := <-dt.Interactive()
 
@@ -420,7 +420,7 @@ func TestDepTracker_CancelByPathCleansUp(t *testing.T) {
 	dt.Add(&Action{
 		Type: ActionDownload, Path: "cancel-me.txt",
 		DriveID: driveid.New("d"), ItemID: "i1",
-	}, 1, nil)
+	}, 1, nil, "")
 
 	ta := <-dt.Interactive()
 	ctx1, cancel1 := context.WithCancel(context.Background())
@@ -441,7 +441,7 @@ func TestDepTracker_CancelByPathCleansUp(t *testing.T) {
 	dt.Add(&Action{
 		Type: ActionUpload, Path: "cancel-me.txt",
 		DriveID: driveid.New("d"), ItemID: "i2",
-	}, 2, nil)
+	}, 2, nil, "")
 
 	ta2 := <-dt.Interactive()
 	ctx2, cancel2 := context.WithCancel(context.Background())
@@ -467,7 +467,7 @@ func TestDepTracker_SkipCompletedDeps(t *testing.T) {
 	dt.Add(&Action{
 		Type: ActionDownload, Path: "orphan.txt",
 		DriveID: driveid.New("d"), ItemID: "i2",
-	}, 2, []int64{1})
+	}, 2, []int64{1}, "")
 
 	// Should dispatch immediately since dep 1 is unknown/completed.
 	select {
@@ -477,5 +477,188 @@ func TestDepTracker_SkipCompletedDeps(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for action with unknown dep")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HasInFlight tests (B-122)
+// ---------------------------------------------------------------------------
+
+func TestDepTracker_HasInFlight(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, 10, testLogger(t))
+
+	// No actions — HasInFlight should be false.
+	if dt.HasInFlight("file.txt") {
+		t.Error("HasInFlight returned true for empty tracker")
+	}
+
+	dt.Add(&Action{
+		Type: ActionDownload, Path: "file.txt",
+		DriveID: driveid.New("d"), ItemID: "i1",
+	}, 1, nil, "")
+
+	// Action added — HasInFlight should be true.
+	if !dt.HasInFlight("file.txt") {
+		t.Error("HasInFlight returned false for in-flight path")
+	}
+
+	// Drain and complete the action.
+	<-dt.Interactive()
+	dt.Complete(1)
+
+	// After Complete, HasInFlight should be false (byPath cleaned up).
+	if dt.HasInFlight("file.txt") {
+		t.Error("HasInFlight returned true after Complete")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Persistent mode tests
+// ---------------------------------------------------------------------------
+
+func TestDepTracker_PersistentMode(t *testing.T) {
+	t.Parallel()
+
+	dt := NewPersistentDepTracker(testLogger(t))
+
+	dt.Add(&Action{
+		Type: ActionFolderCreate, Path: "dir",
+		DriveID: driveid.New("d"), ItemID: "i1",
+	}, 1, nil, "")
+
+	<-dt.Interactive()
+	dt.Complete(1)
+
+	// In persistent mode, Done() should NOT fire even though all actions
+	// are complete. Workers exit via context cancellation instead.
+	select {
+	case <-dt.Done():
+		t.Fatal("Done() fired in persistent mode — should never close")
+	case <-time.After(100 * time.Millisecond):
+		// Expected — Done() never fires in persistent mode.
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Per-cycle completion tracking tests (B-121)
+// ---------------------------------------------------------------------------
+
+func TestDepTracker_CycleDone(t *testing.T) {
+	t.Parallel()
+
+	dt := NewPersistentDepTracker(testLogger(t))
+
+	// Cycle A: two actions.
+	dt.Add(&Action{
+		Type: ActionDownload, Path: "a1.txt",
+		DriveID: driveid.New("d"), ItemID: "a1",
+	}, 1, nil, "cycle-a")
+	dt.Add(&Action{
+		Type: ActionDownload, Path: "a2.txt",
+		DriveID: driveid.New("d"), ItemID: "a2",
+	}, 2, nil, "cycle-a")
+
+	// Cycle B: one action.
+	dt.Add(&Action{
+		Type: ActionUpload, Path: "b1.txt",
+		DriveID: driveid.New("d"), ItemID: "b1",
+	}, 3, nil, "cycle-b")
+
+	cycleADone := dt.CycleDone("cycle-a")
+	cycleBDone := dt.CycleDone("cycle-b")
+
+	// Drain all actions.
+	<-dt.Interactive()
+	<-dt.Interactive()
+	<-dt.Interactive()
+
+	// Complete cycle A actions.
+	dt.Complete(1)
+
+	// Cycle A should NOT be done yet (1 of 2 complete).
+	select {
+	case <-cycleADone:
+		t.Fatal("cycle A done too early")
+	case <-time.After(50 * time.Millisecond):
+		// Expected.
+	}
+
+	dt.Complete(2)
+
+	// Now cycle A should be done.
+	select {
+	case <-cycleADone:
+		// Success.
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for cycle A done")
+	}
+
+	// Cycle B should NOT be done yet.
+	select {
+	case <-cycleBDone:
+		t.Fatal("cycle B done before its actions completed")
+	case <-time.After(50 * time.Millisecond):
+		// Expected.
+	}
+
+	dt.Complete(3)
+
+	// Now cycle B should be done.
+	select {
+	case <-cycleBDone:
+		// Success.
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for cycle B done")
+	}
+}
+
+func TestDepTracker_CleanupCycle(t *testing.T) {
+	t.Parallel()
+
+	dt := NewPersistentDepTracker(testLogger(t))
+
+	// Add and complete a cycle.
+	dt.Add(&Action{
+		Type: ActionDownload, Path: "cleanup.txt",
+		DriveID: driveid.New("d"), ItemID: "c1",
+	}, 1, nil, "cycle-cleanup")
+
+	<-dt.Interactive()
+	dt.Complete(1)
+
+	// Wait for cycle done.
+	select {
+	case <-dt.CycleDone("cycle-cleanup"):
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for cycle done")
+	}
+
+	// Cleanup should remove the cycle from the map.
+	dt.CleanupCycle("cycle-cleanup")
+
+	// CycleDone for a cleaned-up cycle should return a closed channel
+	// (unknown cycle → defensive closed channel).
+	select {
+	case <-dt.CycleDone("cycle-cleanup"):
+		// Success — closed channel returns immediately.
+	case <-time.After(time.Second):
+		t.Fatal("CycleDone for cleaned-up cycle should not block")
+	}
+}
+
+func TestDepTracker_CycleDone_UnknownCycle(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, 10, testLogger(t))
+
+	// CycleDone for an unknown cycle should return a closed channel
+	// (defensive: prevents callers from blocking forever).
+	select {
+	case <-dt.CycleDone("nonexistent"):
+		// Success — closed channel returns immediately.
+	case <-time.After(time.Second):
+		t.Fatal("CycleDone for unknown cycle should not block")
 	}
 }

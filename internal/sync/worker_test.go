@@ -166,7 +166,7 @@ func TestWorkerPool_FolderCreate(t *testing.T) {
 	}
 
 	tracker := NewDepTracker(10, 10, testLogger(t))
-	tracker.Add(&actions[0], ids[0], nil)
+	tracker.Add(&actions[0], ids[0], nil, "")
 
 	pool := NewWorkerPool(cfg, tracker, mgr, ledger, testLogger(t))
 	pool.Start(ctx, 4)
@@ -259,8 +259,8 @@ func TestWorkerPool_DependencyChain(t *testing.T) {
 	}
 
 	tracker := NewDepTracker(10, 10, testLogger(t))
-	tracker.Add(&actions[0], ids[0], nil)
-	tracker.Add(&actions[1], ids[1], []int64{ids[0]})
+	tracker.Add(&actions[0], ids[0], nil, "")
+	tracker.Add(&actions[1], ids[1], []int64{ids[0]}, "")
 
 	pool := NewWorkerPool(cfg, tracker, mgr, ledger, testLogger(t))
 	pool.Start(ctx, 4)
@@ -315,7 +315,7 @@ func TestWorkerPool_StopCancelsWork(t *testing.T) {
 	}
 
 	tracker := NewDepTracker(10, 10, testLogger(t))
-	tracker.Add(&actions[0], ids[0], nil)
+	tracker.Add(&actions[0], ids[0], nil, "")
 
 	pool := NewWorkerPool(cfg, tracker, mgr, ledger, testLogger(t))
 	pool.Start(ctx, 4)
@@ -362,7 +362,7 @@ func TestWorkerPool_Stats(t *testing.T) {
 	}
 
 	tracker := NewDepTracker(10, 10, testLogger(t))
-	tracker.Add(&actions[0], ids[0], nil)
+	tracker.Add(&actions[0], ids[0], nil, "")
 
 	pool := NewWorkerPool(cfg, tracker, mgr, ledger, testLogger(t))
 	pool.Start(ctx, 4)
@@ -414,7 +414,7 @@ func TestWorkerPool_FailedOutcome_MarksLedgerFailed(t *testing.T) {
 	}
 
 	tracker := NewDepTracker(10, 10, testLogger(t))
-	tracker.Add(&actions[0], ids[0], nil)
+	tracker.Add(&actions[0], ids[0], nil, "")
 
 	pool := NewWorkerPool(cfg, tracker, mgr, ledger, testLogger(t))
 	pool.Start(ctx, 4)
