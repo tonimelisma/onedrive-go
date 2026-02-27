@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/fsnotify/fsnotify"
 )
@@ -20,8 +19,8 @@ func (o *LocalObserver) watchLoop(
 		scanInterval = o.safetyScanOverride
 	}
 
-	safetyTicker := time.NewTicker(scanInterval)
-	defer safetyTicker.Stop()
+	tickCh, tickStop := o.safetyTickFunc(scanInterval)
+	defer tickStop()
 
 	errBackoff := watchErrInitBackoff
 
@@ -70,7 +69,7 @@ func (o *LocalObserver) watchLoop(
 				errBackoff = watchErrMaxBackoff
 			}
 
-		case <-safetyTicker.C:
+		case <-tickCh:
 			// Check if sync root still exists before running safety scan (B-113).
 			if !syncRootExists(syncRoot) {
 				o.logger.Error("sync root deleted, stopping watch",
