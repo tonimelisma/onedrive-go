@@ -8,7 +8,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
@@ -48,7 +47,7 @@ type conflictJSON struct {
 func runConflicts(cmd *cobra.Command, _ []string) error {
 	logger := buildLogger()
 
-	dbPath := config.DriveStatePath(resolvedCfg.CanonicalID)
+	dbPath := resolvedCfg.StatePath()
 	if dbPath == "" {
 		return fmt.Errorf("cannot determine state DB path for drive %q", resolvedCfg.CanonicalID)
 	}

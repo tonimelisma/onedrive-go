@@ -29,6 +29,9 @@ const (
 	maxComponentLength     = 255
 	deviceNameWithDigitLen = 4 // COM0-COM9, LPT0-LPT9 have exactly 4 characters
 	safetyScanInterval     = 5 * time.Minute
+	watchErrInitBackoff    = 1 * time.Second
+	watchErrMaxBackoff     = 30 * time.Second
+	watchErrBackoffMult    = 2
 )
 
 // FsWatcher abstracts filesystem event monitoring. Satisfied by
@@ -75,6 +78,21 @@ func NewLocalObserver(baseline *Baseline, logger *slog.Logger) *LocalObserver {
 			}
 			return &fsnotifyWrapper{w: w}, nil
 		},
+	}
+}
+
+// trySend sends a ChangeEvent to the events channel without blocking. If the
+// channel is full, the event is dropped and logged at Warn. The safety scan
+// (every 5 minutes) catches any dropped events, providing eventual consistency.
+func (o *LocalObserver) trySend(ctx context.Context, events chan<- ChangeEvent, ev *ChangeEvent) {
+	select {
+	case events <- *ev:
+	case <-ctx.Done():
+	default:
+		o.logger.Warn("event channel full, dropping event (safety scan will catch up)",
+			slog.String("path", ev.Path),
+			slog.String("type", ev.Type.String()),
+		)
 	}
 }
 
@@ -191,6 +209,8 @@ func (o *LocalObserver) watchLoop(
 	safetyTicker := time.NewTicker(safetyScanInterval)
 	defer safetyTicker.Stop()
 
+	errBackoff := watchErrInitBackoff
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -203,13 +223,29 @@ func (o *LocalObserver) watchLoop(
 
 			o.handleFsEvent(ctx, fsEvent, watcher, syncRoot, events)
 
+			// Successful event resets error backoff.
+			errBackoff = watchErrInitBackoff
+
 		case watchErr, ok := <-watcher.Errors():
 			if !ok {
 				return nil
 			}
 
 			o.logger.Warn("filesystem watcher error",
-				slog.String("error", watchErr.Error()))
+				slog.String("error", watchErr.Error()),
+				slog.Duration("backoff", errBackoff),
+			)
+
+			// Exponential backoff prevents tight loop under sustained errors
+			// (e.g., kernel buffer overflow).
+			if sleepErr := timeSleep(ctx, errBackoff); sleepErr != nil {
+				return nil
+			}
+
+			errBackoff *= watchErrBackoffMult
+			if errBackoff > watchErrMaxBackoff {
+				errBackoff = watchErrMaxBackoff
+			}
 
 		case <-safetyTicker.C:
 			o.runSafetyScan(ctx, syncRoot, events)
@@ -291,6 +327,11 @@ func (o *LocalObserver) handleCreate(
 			o.logger.Warn("failed to add watch on new directory",
 				slog.String("path", dbRelPath), slog.String("error", addErr.Error()))
 		}
+
+		// Scan directory contents for files created before the watch was
+		// registered. Duplicates from fsnotify are harmless — the buffer's
+		// per-path deduplication handles them.
+		o.scanNewDirectory(ctx, fsPath, dbRelPath, watcher, events)
 	} else {
 		ev.ItemType = ItemTypeFile
 
@@ -305,9 +346,87 @@ func (o *LocalObserver) handleCreate(
 		ev.Hash = hash
 	}
 
-	select {
-	case events <- ev:
-	case <-ctx.Done():
+	o.trySend(ctx, events, &ev)
+}
+
+// scanNewDirectory walks a newly-created directory and emits ChangeCreate
+// events for any files already present. This catches files created between
+// the directory's creation and the fsnotify watch registration.
+func (o *LocalObserver) scanNewDirectory(
+	ctx context.Context, dirPath, dirRelPath string,
+	watcher FsWatcher, events chan<- ChangeEvent,
+) {
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		o.logger.Debug("scan new directory failed",
+			slog.String("path", dirRelPath), slog.String("error", err.Error()))
+
+		return
+	}
+
+	for _, entry := range entries {
+		if ctx.Err() != nil {
+			return
+		}
+
+		entryName := nfcNormalize(entry.Name())
+		if isAlwaysExcluded(entryName) || !isValidOneDriveName(entryName) {
+			continue
+		}
+
+		entryFsPath := filepath.Join(dirPath, entry.Name())
+		entryRelPath := dirRelPath + "/" + entryName
+
+		// Recurse into subdirectories: add watch and scan contents.
+		if entry.IsDir() {
+			if addErr := watcher.Add(entryFsPath); addErr != nil {
+				o.logger.Warn("failed to add watch on nested directory",
+					slog.String("path", entryRelPath), slog.String("error", addErr.Error()))
+			}
+
+			dirEv := ChangeEvent{
+				Source:   SourceLocal,
+				Type:     ChangeCreate,
+				Path:     entryRelPath,
+				Name:     entryName,
+				ItemType: ItemTypeFolder,
+			}
+
+			o.trySend(ctx, events, &dirEv)
+
+			o.scanNewDirectory(ctx, entryFsPath, entryRelPath, watcher, events)
+
+			continue
+		}
+
+		info, statErr := entry.Info()
+		if statErr != nil {
+			o.logger.Debug("stat failed during directory scan",
+				slog.String("path", entryRelPath), slog.String("error", statErr.Error()))
+
+			continue
+		}
+
+		hash, hashErr := computeQuickXorHash(entryFsPath)
+		if hashErr != nil {
+			o.logger.Warn("hash failed during directory scan",
+				slog.String("path", entryRelPath), slog.String("error", hashErr.Error()))
+
+			continue
+		}
+
+		fileEv := ChangeEvent{
+			Source:   SourceLocal,
+			Type:     ChangeCreate,
+			Path:     entryRelPath,
+			Name:     entryName,
+			ItemType: ItemTypeFile,
+			Size:     info.Size(),
+			Hash:     hash,
+			Mtime:    info.ModTime().UnixNano(),
+		}
+
+		o.trySend(ctx, events, &fileEv)
 	}
 }
 
@@ -352,10 +471,7 @@ func (o *LocalObserver) handleWrite(
 		Mtime:    info.ModTime().UnixNano(),
 	}
 
-	select {
-	case events <- ev:
-	case <-ctx.Done():
-	}
+	o.trySend(ctx, events, &ev)
 }
 
 // handleDelete processes a Remove/Rename event.
@@ -377,10 +493,7 @@ func (o *LocalObserver) handleDelete(
 		IsDeleted: true,
 	}
 
-	select {
-	case events <- ev:
-	case <-ctx.Done():
-	}
+	o.trySend(ctx, events, &ev)
 }
 
 // runSafetyScan performs a full filesystem scan as a safety net, sending any
@@ -396,9 +509,9 @@ func (o *LocalObserver) runSafetyScan(ctx context.Context, syncRoot string, even
 	}
 
 	for i := range scanEvents {
-		select {
-		case events <- scanEvents[i]:
-		case <-ctx.Done():
+		o.trySend(ctx, events, &scanEvents[i])
+
+		if ctx.Err() != nil {
 			return
 		}
 	}

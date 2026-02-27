@@ -5,7 +5,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
@@ -52,7 +51,7 @@ func runSync(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("sync_dir not configured — set it in the config file or add a drive with 'onedrive-go drive add'")
 	}
 
-	dbPath := config.DriveStatePath(resolvedCfg.CanonicalID)
+	dbPath := resolvedCfg.StatePath()
 	if dbPath == "" {
 		return fmt.Errorf("cannot determine state DB path for drive %q", resolvedCfg.CanonicalID)
 	}

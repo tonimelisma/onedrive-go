@@ -196,7 +196,7 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 			slog.String("error", loadErr.Error()),
 		)
 		wp.recordFailure(loadErr)
-		wp.failAndComplete(actionCtx, ta, loadErr.Error())
+		wp.failAndComplete(ctx, ta, loadErr.Error())
 
 		return
 	}
@@ -205,8 +205,10 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 	exec := NewExecution(wp.cfg, bl)
 	outcome := wp.dispatchAction(actionCtx, exec, ta)
 
-	// Commit outcome (baseline + ledger in one transaction).
-	if commitErr := wp.baseline.CommitOutcome(actionCtx, &outcome, ta.LedgerID); commitErr != nil {
+	// Commit outcome (baseline + ledger in one transaction). Uses pool-level
+	// ctx because the action already completed — its outcome should be persisted
+	// even if CancelByPath canceled actionCtx after dispatch returned.
+	if commitErr := wp.baseline.CommitOutcome(ctx, &outcome, ta.LedgerID); commitErr != nil {
 		wp.logger.Error("worker: commit outcome failed",
 			slog.Int64("ledger_id", ta.LedgerID),
 			slog.String("error", commitErr.Error()),
@@ -221,7 +223,7 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 		wp.succeeded.Add(1)
 	} else {
 		wp.recordFailure(outcome.Error)
-		wp.failAndComplete(actionCtx, ta, outcome.Error.Error())
+		wp.failAndComplete(ctx, ta, outcome.Error.Error())
 
 		return
 	}

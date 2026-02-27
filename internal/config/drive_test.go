@@ -318,6 +318,49 @@ func TestDriveStatePath_PlatformSpecific(t *testing.T) {
 	}
 }
 
+// --- StatePath ---
+
+func TestStatePath_DefaultLocation(t *testing.T) {
+	// When StateDir is empty, StatePath falls back to DriveStatePath.
+	resolved := &ResolvedDrive{
+		CanonicalID: driveid.MustCanonicalID("personal:toni@outlook.com"),
+	}
+
+	path := resolved.StatePath()
+	assert.Equal(t, DriveStatePath(resolved.CanonicalID), path)
+}
+
+func TestStatePath_OverrideDir(t *testing.T) {
+	// When StateDir is set, the DB is placed inside that directory.
+	tmpDir := t.TempDir()
+	resolved := &ResolvedDrive{
+		CanonicalID: driveid.MustCanonicalID("personal:toni@outlook.com"),
+		StateDir:    tmpDir,
+	}
+
+	path := resolved.StatePath()
+	assert.Equal(t, filepath.Join(tmpDir, "state_personal_toni@outlook.com.db"), path)
+}
+
+func TestStatePath_SharePoint_ColonsReplaced(t *testing.T) {
+	tmpDir := t.TempDir()
+	resolved := &ResolvedDrive{
+		CanonicalID: driveid.MustCanonicalID("sharepoint:alice@contoso.com:marketing:Docs"),
+		StateDir:    tmpDir,
+	}
+
+	path := resolved.StatePath()
+	assert.Equal(t, filepath.Join(tmpDir, "state_sharepoint_alice@contoso.com_marketing_Docs.db"), path)
+}
+
+func TestBuildResolvedDrive_StateDirPropagated(t *testing.T) {
+	cfg := DefaultConfig()
+	drive := &Drive{SyncDir: "~/OneDrive", StateDir: "/tmp/test-state"}
+
+	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("personal:toni@outlook.com"), drive, testLogger(t))
+	assert.Equal(t, "/tmp/test-state", resolved.StateDir)
+}
+
 // --- Integration: TOML parsing -> resolution ---
 
 func TestLoad_FullConfigWithDrives(t *testing.T) {

@@ -1249,6 +1249,38 @@ func TestWatch_CurrentDeltaToken(t *testing.T) {
 	}
 }
 
+// TestWatch_IntervalClamping verifies that zero/negative poll intervals are
+// clamped to the minimum (30s) instead of causing a tight polling loop.
+func TestWatch_IntervalClamping(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &sequentialFetcher{
+		pages: []mockDeltaPage{
+			{page: &graph.DeltaPage{DeltaLink: "token-1"}},
+		},
+	}
+
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
+
+	// Track what interval the sleep function actually receives.
+	var actualSleepDuration time.Duration
+	obs.sleepFunc = func(_ context.Context, d time.Duration) error {
+		actualSleepDuration = d
+		return errors.New("stop after first sleep")
+	}
+
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Pass zero interval — should be clamped to minPollInterval (30s).
+	_ = obs.Watch(ctx, "", events, 0)
+
+	if actualSleepDuration != minPollInterval {
+		t.Errorf("sleep duration = %v, want %v (clamped from 0)", actualSleepDuration, minPollInterval)
+	}
+}
+
 func TestFullDelta_RenameInPlace(t *testing.T) {
 	t.Parallel()
 

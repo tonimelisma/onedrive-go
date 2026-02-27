@@ -28,6 +28,7 @@ const (
 	initialWatchBackoff   = 5 * time.Second
 	backoffMultiplier     = 2
 	maxConsecutiveBackoff = 10 // cap prevents overflow; 5s * 2^10 = 5120s > any interval
+	minPollInterval       = 30 * time.Second
 )
 
 // inflightParent tracks a non-root item seen in the current delta batch,
@@ -110,6 +111,15 @@ func (o *RemoteObserver) FullDelta(ctx context.Context, savedToken string) ([]Ch
 // retries with a full resync. The delta token is tracked internally — use
 // CurrentDeltaToken() to read the latest value.
 func (o *RemoteObserver) Watch(ctx context.Context, savedToken string, events chan<- ChangeEvent, interval time.Duration) error {
+	if interval < minPollInterval {
+		o.logger.Warn("poll interval below minimum, clamping",
+			slog.Duration("requested", interval),
+			slog.Duration("minimum", minPollInterval),
+		)
+
+		interval = minPollInterval
+	}
+
 	o.setDeltaToken(savedToken)
 
 	o.logger.Info("remote observer starting watch loop",

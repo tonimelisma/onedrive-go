@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"runtime"
+	stdsync "sync"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -461,7 +462,10 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 		return fmt.Errorf("sync: initial sync failed: %w", err)
 	}
 
-	// Step 2: Load baseline (cached — updated incrementally by CommitOutcome).
+	// Step 2: Load baseline. bl is loaded once and reused across all batches.
+	// This is safe because Baseline.Load() returns a cached object that
+	// CommitOutcome() updates in-place under RWMutex — each processBatch
+	// call sees the latest state.
 	bl, err := e.baseline.Load(ctx)
 	if err != nil {
 		return fmt.Errorf("sync: loading baseline for watch: %w", err)
@@ -482,7 +486,7 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 	ready := buf.FlushDebounced(ctx, e.resolveDebounce(opts))
 
 	// Step 5: Start observer goroutines.
-	errs := e.startObservers(ctx, bl, mode, buf, opts)
+	errs, activeObservers := e.startObservers(ctx, bl, mode, buf, opts)
 
 	// Step 6: Main select loop.
 	safety := e.resolveWatchSafetyConfig(opts)
@@ -503,6 +507,12 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 				)
 			}
 
+			activeObservers--
+			if activeObservers == 0 {
+				e.logger.Error("all observers have exited, stopping watch mode")
+				return fmt.Errorf("sync: all observers exited")
+			}
+
 		case <-ctx.Done():
 			return nil
 		}
@@ -510,14 +520,19 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 }
 
 // startObservers launches remote and local observer goroutines that feed
-// events into the buffer. Returns an error channel for observer failures.
+// events into the buffer. Returns an error channel for observer failures and
+// the number of observers started. The events channel is closed automatically
+// when all observers exit, allowing the bridge goroutine to drain cleanly.
 func (e *Engine) startObservers(
 	ctx context.Context, bl *Baseline, mode SyncMode, buf *Buffer, opts WatchOpts,
-) <-chan error {
+) (<-chan error, int) {
 	events := make(chan ChangeEvent, watchEventBuf)
 	errs := make(chan error, 2)
 
+	var obsWg stdsync.WaitGroup
+
 	// Bridge goroutine: reads from shared events channel, adds to buffer.
+	// Exits when events is closed (all observers done) or ctx canceled.
 	go func() {
 		for {
 			select {
@@ -533,6 +548,8 @@ func (e *Engine) startObservers(
 		}
 	}()
 
+	count := 0
+
 	// Remote observer (skip for upload-only mode).
 	if mode != SyncUploadOnly {
 		remoteObs := NewRemoteObserver(e.fetcher, bl, e.driveID, e.logger)
@@ -545,7 +562,11 @@ func (e *Engine) startObservers(
 			)
 		}
 
+		obsWg.Add(1)
+		count++
+
 		go func() {
+			defer obsWg.Done()
 			errs <- remoteObs.Watch(ctx, savedToken, events, e.resolvePollInterval(opts))
 		}()
 	}
@@ -554,12 +575,23 @@ func (e *Engine) startObservers(
 	if mode != SyncDownloadOnly {
 		localObs := NewLocalObserver(bl, e.logger)
 
+		obsWg.Add(1)
+		count++
+
 		go func() {
+			defer obsWg.Done()
 			errs <- localObs.Watch(ctx, e.syncRoot, events)
 		}()
 	}
 
-	return errs
+	// Close events channel when all observers exit so the bridge goroutine
+	// drains remaining events and exits cleanly.
+	go func() {
+		obsWg.Wait()
+		close(events)
+	}()
+
+	return errs, count
 }
 
 // processBatch plans and dispatches a batch of path changes. On planner
@@ -671,6 +703,10 @@ func (e *Engine) watchCycleCompletion(ctx context.Context, tracker *DepTracker, 
 	}
 
 	// Commit the delta token for this successful cycle.
+	// Read the latest delta token, not the one from batch arrival time.
+	// This is safe because delta tokens are monotonically advancing —
+	// a later token always subsumes earlier ones. Using the latest token
+	// avoids re-processing changes that arrived while this cycle executed.
 	if e.remoteObs != nil {
 		token := e.remoteObs.CurrentDeltaToken()
 		if commitErr := e.baseline.CommitDeltaToken(ctx, token, e.driveID.String()); commitErr != nil {

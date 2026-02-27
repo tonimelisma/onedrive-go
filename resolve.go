@@ -6,7 +6,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
@@ -101,7 +100,7 @@ func resolveStrategy(cmd *cobra.Command) (string, error) {
 func resolveKeepBothOnly(ctx context.Context, cmd *cobra.Command, args []string, all, dryRun bool) error {
 	logger := buildLogger()
 
-	dbPath := config.DriveStatePath(resolvedCfg.CanonicalID)
+	dbPath := resolvedCfg.StatePath()
 	if dbPath == "" {
 		return fmt.Errorf("cannot determine state DB path for drive %q", resolvedCfg.CanonicalID)
 	}
@@ -188,7 +187,7 @@ func resolveWithTransfers(
 		return fmt.Errorf("sync_dir not configured")
 	}
 
-	dbPath := config.DriveStatePath(resolvedCfg.CanonicalID)
+	dbPath := resolvedCfg.StatePath()
 	if dbPath == "" {
 		return fmt.Errorf("cannot determine state DB path for drive %q", resolvedCfg.CanonicalID)
 	}
@@ -236,7 +235,8 @@ func resolveAllWithEngine(ctx context.Context, engine *sync.Engine, resolution s
 			continue
 		}
 
-		if err := engine.ResolveConflict(ctx, c.ID, resolution); err != nil {
+		err = engine.ResolveConflict(ctx, c.ID, resolution)
+		if err != nil {
 			return fmt.Errorf("resolving %s: %w", c.Path, err)
 		}
 
@@ -262,7 +262,8 @@ func resolveSingleWithEngine(ctx context.Context, engine *sync.Engine, idOrPath,
 		return nil
 	}
 
-	if err := engine.ResolveConflict(ctx, target.ID, resolution); err != nil {
+	err = engine.ResolveConflict(ctx, target.ID, resolution)
+	if err != nil {
 		return err
 	}
 
