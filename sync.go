@@ -39,7 +39,10 @@ func runSync(cmd *cobra.Command, _ []string) error {
 
 	mode := syncModeFromFlags(cmd)
 
-	ctx := cmd.Context()
+	// Wrap the command context with signal handling: first SIGINT/SIGTERM
+	// triggers graceful shutdown (context cancel → drain in-flight actions),
+	// second signal force-exits. Applies to both one-shot and watch modes.
+	ctx := shutdownContext(cmd.Context(), buildLogger())
 
 	client, driveID, logger, err := clientAndDrive(ctx)
 	if err != nil {
@@ -64,6 +67,7 @@ func runSync(cmd *cobra.Command, _ []string) error {
 		Items:         client,
 		Downloads:     client,
 		Uploads:       client,
+		DriveVerifier: client,
 		Logger:        logger,
 		UseLocalTrash: resolvedCfg.UseLocalTrash,
 	})

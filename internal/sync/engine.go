@@ -20,13 +20,14 @@ const forceSafetyMax = math.MaxInt32
 // EngineConfig holds the options for NewEngine. Uses a struct because
 // seven fields is too many for positional parameters.
 type EngineConfig struct {
-	DBPath        string       // path to the SQLite state database
-	SyncRoot      string       // absolute path to the local sync directory
-	DriveID       driveid.ID   // normalized drive identifier
-	Fetcher       DeltaFetcher // satisfied by *graph.Client
-	Items         ItemClient   // satisfied by *graph.Client
-	Downloads     Downloader   // satisfied by *graph.Client
-	Uploads       Uploader     // satisfied by *graph.Client
+	DBPath        string        // path to the SQLite state database
+	SyncRoot      string        // absolute path to the local sync directory
+	DriveID       driveid.ID    // normalized drive identifier
+	Fetcher       DeltaFetcher  // satisfied by *graph.Client
+	Items         ItemClient    // satisfied by *graph.Client
+	Downloads     Downloader    // satisfied by *graph.Client
+	Uploads       Uploader      // satisfied by *graph.Client
+	DriveVerifier DriveVerifier // optional: verified at startup (B-074); nil skips check
 	Logger        *slog.Logger
 	UseLocalTrash bool // move deleted local files to OS trash instead of permanent delete
 }
@@ -63,16 +64,18 @@ type SyncReport struct {
 // Engine orchestrates a complete sync cycle: observe → plan → execute → commit.
 // Single-drive only; multi-drive orchestration is deferred to Phase 5.
 type Engine struct {
-	baseline  *BaselineManager
-	ledger    *Ledger
-	planner   *Planner
-	execCfg   *ExecutorConfig
-	fetcher   DeltaFetcher
-	syncRoot  string
-	driveID   driveid.ID
-	logger    *slog.Logger
-	remoteObs *RemoteObserver // stored during RunWatch for delta token reads
-	localObs  *LocalObserver  // stored during RunWatch for drop counter reads
+	baseline      *BaselineManager
+	ledger        *Ledger
+	planner       *Planner
+	execCfg       *ExecutorConfig
+	fetcher       DeltaFetcher
+	driveVerifier DriveVerifier   // optional (B-074)
+	failures      *failureTracker // watch mode only (B-123)
+	syncRoot      string
+	driveID       driveid.ID
+	logger        *slog.Logger
+	remoteObs     *RemoteObserver // stored during RunWatch for delta token reads
+	localObs      *LocalObserver  // stored during RunWatch for drop counter reads
 }
 
 // NewEngine creates an Engine, initializing the BaselineManager (which opens
@@ -92,20 +95,45 @@ func NewEngine(cfg *EngineConfig) (*Engine, error) {
 	ledger := NewLedger(bm.DB(), cfg.Logger)
 
 	return &Engine{
-		baseline: bm,
-		ledger:   ledger,
-		planner:  NewPlanner(cfg.Logger),
-		execCfg:  execCfg,
-		fetcher:  cfg.Fetcher,
-		syncRoot: cfg.SyncRoot,
-		driveID:  cfg.DriveID,
-		logger:   cfg.Logger,
+		baseline:      bm,
+		ledger:        ledger,
+		planner:       NewPlanner(cfg.Logger),
+		execCfg:       execCfg,
+		fetcher:       cfg.Fetcher,
+		driveVerifier: cfg.DriveVerifier,
+		syncRoot:      cfg.SyncRoot,
+		driveID:       cfg.DriveID,
+		logger:        cfg.Logger,
 	}, nil
 }
 
 // Close releases resources held by the engine (database connection).
 func (e *Engine) Close() error {
 	return e.baseline.Close()
+}
+
+// verifyDriveIdentity checks that the configured drive ID matches the remote
+// API (B-074). Returns nil if no DriveVerifier is configured (optional check).
+func (e *Engine) verifyDriveIdentity(ctx context.Context) error {
+	if e.driveVerifier == nil {
+		return nil
+	}
+
+	drive, err := e.driveVerifier.Drive(ctx, e.driveID)
+	if err != nil {
+		return fmt.Errorf("sync: verifying drive identity: %w", err)
+	}
+
+	if drive.ID != e.driveID {
+		return fmt.Errorf("sync: drive ID mismatch: configured %s, remote returned %s", e.driveID, drive.ID)
+	}
+
+	e.logger.Info("drive identity verified",
+		slog.String("drive_id", drive.ID.String()),
+		slog.String("drive_type", drive.DriveType),
+	)
+
+	return nil
 }
 
 // RunOnce executes a single sync cycle:
@@ -126,6 +154,11 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 		slog.Bool("dry_run", opts.DryRun),
 		slog.Bool("force", opts.Force),
 	)
+
+	// Step 0: Verify drive identity (B-074).
+	if err := e.verifyDriveIdentity(ctx); err != nil {
+		return nil, err
+	}
 
 	// Step 1: Load baseline.
 	bl, err := e.baseline.Load(ctx)
@@ -434,6 +467,202 @@ func (e *Engine) resolveTransfer(ctx context.Context, c *ConflictRecord, actionT
 }
 
 // ---------------------------------------------------------------------------
+// Crash recovery (Phase 5.3)
+// ---------------------------------------------------------------------------
+
+// staleClaimTimeout is the threshold for reclaiming orphaned actions after
+// a crash. Actions claimed longer than this are assumed abandoned.
+const staleClaimTimeout = 30 * time.Minute
+
+// recoverFromLedger checks for pending or stale-claimed actions left by a
+// previous crash and re-executes them. Returns the number of recovered actions.
+func (e *Engine) recoverFromLedger(ctx context.Context) (int, error) {
+	// Step 1: Reset stale claimed rows back to pending.
+	reclaimed, err := e.ledger.ReclaimStale(ctx, staleClaimTimeout)
+	if err != nil {
+		return 0, fmt.Errorf("sync: reclaiming stale actions: %w", err)
+	}
+
+	if reclaimed > 0 {
+		e.logger.Info("reclaimed stale actions from prior crash",
+			slog.Int("count", reclaimed),
+		)
+	}
+
+	// Step 2: Load all pending actions across all cycles.
+	rows, err := e.ledger.LoadAllPending(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("sync: loading pending actions for recovery: %w", err)
+	}
+
+	if len(rows) == 0 {
+		return 0, nil
+	}
+
+	e.logger.Info("recovering pending actions from prior session",
+		slog.Int("count", len(rows)),
+	)
+
+	// Step 3: Group by cycle and reconstruct actions + dependencies.
+	groups, order := groupRowsByCycle(rows, e.logger)
+
+	// Step 4: Execute each cycle's recovered actions.
+	return e.executeRecoveredCycles(ctx, groups, order)
+}
+
+// recoveryCycleGroup holds reconstructed actions and dependencies for one cycle.
+type recoveryCycleGroup struct {
+	actions []Action
+	ids     []int64
+	deps    [][]int
+	firstID int64
+}
+
+// groupRowsByCycle reconstructs Action objects from ledger rows and groups
+// them by cycle ID. Dependency edges are rebuilt from planner indices.
+func groupRowsByCycle(rows []LedgerRow, logger *slog.Logger) (map[string]*recoveryCycleGroup, []string) {
+	groups := make(map[string]*recoveryCycleGroup)
+	var order []string
+
+	for i := range rows {
+		r := &rows[i]
+
+		actionType, parseErr := ParseActionType(r.ActionType)
+		if parseErr != nil {
+			logger.Warn("skipping unrecognized action type during recovery",
+				slog.Int64("ledger_id", r.ID),
+				slog.String("action_type", r.ActionType),
+			)
+
+			continue
+		}
+
+		action := Action{
+			Type:       actionType,
+			DriveID:    driveid.New(r.DriveID),
+			ItemID:     r.ItemID,
+			Path:       r.Path,
+			OldPath:    r.OldPath,
+			View:       buildSyntheticView(r),
+			LedgerID:   r.ID,
+			SessionURL: r.SessionURL,
+		}
+
+		cg, ok := groups[r.CycleID]
+		if !ok {
+			cg = &recoveryCycleGroup{firstID: r.ID}
+			groups[r.CycleID] = cg
+			order = append(order, r.CycleID)
+		}
+
+		cg.actions = append(cg.actions, action)
+		cg.ids = append(cg.ids, r.ID)
+		cg.deps = append(cg.deps, reconstructDeps(r, cg, logger))
+	}
+
+	return groups, order
+}
+
+// reconstructDeps maps planner-assigned indices in DependsOn to positions
+// in the recovered action list, filtering out already-completed deps.
+func reconstructDeps(r *LedgerRow, cg *recoveryCycleGroup, logger *slog.Logger) []int {
+	var depIndices []int
+
+	for _, depPlannerIdx := range r.DependsOn {
+		depLedgerID := cg.firstID + depPlannerIdx
+
+		found := false
+		for j := range cg.ids {
+			if cg.ids[j] == depLedgerID {
+				depIndices = append(depIndices, j)
+				found = true
+
+				break
+			}
+		}
+
+		if !found {
+			logger.Debug("recovery: dependency already completed",
+				slog.Int64("action_id", r.ID),
+				slog.Int64("dep_id", depLedgerID),
+			)
+		}
+	}
+
+	return depIndices
+}
+
+// executeRecoveredCycles runs the worker pool for each recovered cycle.
+func (e *Engine) executeRecoveredCycles(
+	ctx context.Context, groups map[string]*recoveryCycleGroup, order []string,
+) (int, error) {
+	// Load populates the baseline cache used by worker pool executors. The
+	// returned *Baseline is accessed indirectly through e.execCfg/e.baseline.
+	if _, loadErr := e.baseline.Load(ctx); loadErr != nil {
+		return 0, fmt.Errorf("sync: loading baseline for recovery: %w", loadErr)
+	}
+
+	totalRecovered := 0
+
+	for _, cycleID := range order {
+		cg := groups[cycleID]
+
+		tracker := NewDepTracker(len(cg.actions), len(cg.actions), e.logger)
+
+		for i := range cg.actions {
+			var depIDs []int64
+			for _, depIdx := range cg.deps[i] {
+				depIDs = append(depIDs, cg.ids[depIdx])
+			}
+
+			tracker.Add(&cg.actions[i], cg.ids[i], depIDs, cycleID)
+		}
+
+		pool := NewWorkerPool(e.execCfg, tracker, e.baseline, e.ledger, e.logger)
+		pool.Start(ctx, runtime.NumCPU())
+		pool.Wait()
+		pool.Stop()
+
+		succeeded, failed, errs := pool.Stats()
+
+		e.logger.Info("recovery cycle complete",
+			slog.String("cycle_id", cycleID),
+			slog.Int("succeeded", succeeded),
+			slog.Int("failed", failed),
+		)
+
+		for _, recErr := range errs {
+			e.logger.Warn("recovery action error", slog.String("error", recErr.Error()))
+		}
+
+		totalRecovered += succeeded
+	}
+
+	return totalRecovered, nil
+}
+
+// buildSyntheticView reconstructs a PathView from ledger metadata columns.
+// The ledger stores hash, size, mtime, item_id, parent_id, drive_id — the
+// fields the executor needs for downloads/uploads/folder creates.
+func buildSyntheticView(r *LedgerRow) *PathView {
+	view := &PathView{Path: r.Path}
+
+	// Populate remote state from ledger metadata.
+	if r.ItemID != "" || r.Hash != "" || r.Size > 0 {
+		view.Remote = &RemoteState{
+			ItemID:   r.ItemID,
+			DriveID:  driveid.New(r.DriveID),
+			ParentID: r.ParentID,
+			Hash:     r.Hash,
+			Size:     r.Size,
+			Mtime:    r.Mtime,
+		}
+	}
+
+	return view
+}
+
+// ---------------------------------------------------------------------------
 // Watch mode (Phase 5.2)
 // ---------------------------------------------------------------------------
 
@@ -446,9 +675,10 @@ const (
 
 // WatchOpts holds per-session options for RunWatch.
 type WatchOpts struct {
-	Force        bool
-	PollInterval time.Duration // remote delta polling interval (0 → 5m)
-	Debounce     time.Duration // buffer debounce window (0 → 2s)
+	Force              bool
+	PollInterval       time.Duration // remote delta polling interval (0 → 5m)
+	Debounce           time.Duration // buffer debounce window (0 → 2s)
+	SafetyScanInterval time.Duration // local safety scan interval (0 → 5m) (B-099)
 }
 
 // RunWatch runs a continuous sync loop: initial one-shot sync, then
@@ -461,6 +691,18 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 		slog.Duration("poll_interval", e.resolvePollInterval(opts)),
 		slog.Duration("debounce", e.resolveDebounce(opts)),
 	)
+
+	// Step 0: Recover any pending actions from a prior crash.
+	recovered, recErr := e.recoverFromLedger(ctx)
+	if recErr != nil {
+		return fmt.Errorf("sync: crash recovery failed: %w", recErr)
+	}
+
+	if recovered > 0 {
+		e.logger.Info("crash recovery complete",
+			slog.Int("recovered", recovered),
+		)
+	}
 
 	// Step 1: Run initial one-shot sync to establish baseline.
 	_, err := e.RunOnce(ctx, mode, RunOpts{Force: opts.Force})
@@ -477,12 +719,20 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 		return fmt.Errorf("sync: loading baseline for watch: %w", err)
 	}
 
-	// Step 3: Create persistent tracker and worker pool.
+	// Step 3: Create persistent tracker, failure tracker, and worker pool.
+	e.failures = newFailureTracker(e.logger)
 	tracker := NewPersistentDepTracker(e.logger)
 	pool := NewWorkerPool(e.execCfg, tracker, e.baseline, e.ledger, e.logger)
 	pool.Start(ctx, runtime.NumCPU())
 
 	defer func() {
+		inFlight := tracker.InFlightCount()
+		if inFlight > 0 {
+			e.logger.Info("graceful shutdown: draining in-flight actions",
+				slog.Int("in_flight", inFlight),
+			)
+		}
+
 		pool.Stop()
 		e.logger.Info("watch mode stopped")
 	}()
@@ -583,6 +833,7 @@ func (e *Engine) startObservers(
 	// Local observer (skip for download-only mode).
 	if mode != SyncDownloadOnly {
 		localObs := NewLocalObserver(bl, e.logger)
+		localObs.safetyScanInterval = opts.SafetyScanInterval
 		e.localObs = localObs
 
 		obsWg.Add(1)
@@ -649,6 +900,26 @@ func (e *Engine) processBatch(
 		}
 	}
 
+	// B-123: Build set of suppressed indices for paths that fail repeatedly.
+	suppressed := make(map[int]bool)
+
+	if e.failures != nil {
+		for i := range plan.Actions {
+			if e.failures.shouldSkip(plan.Actions[i].Path) {
+				e.logger.Warn("skipping repeatedly-failing path",
+					slog.String("path", plan.Actions[i].Path),
+				)
+
+				suppressed[i] = true
+			}
+		}
+	}
+
+	if len(suppressed) == len(plan.Actions) {
+		e.logger.Debug("all actions suppressed due to repeated failures")
+		return
+	}
+
 	// Write actions to ledger.
 	ids, writeErr := e.ledger.WriteActions(ctx, plan.Actions, plan.Deps, plan.CycleID)
 	if writeErr != nil {
@@ -659,8 +930,20 @@ func (e *Engine) processBatch(
 		return
 	}
 
-	// Populate tracker with this cycle's actions.
+	// Populate tracker with non-suppressed actions. Suppressed actions are
+	// immediately canceled in the ledger so they don't execute.
 	for i := range plan.Actions {
+		if suppressed[i] {
+			if cancelErr := e.ledger.Cancel(ctx, ids[i]); cancelErr != nil {
+				e.logger.Warn("failed to cancel suppressed action",
+					slog.Int64("id", ids[i]),
+					slog.String("error", cancelErr.Error()),
+				)
+			}
+
+			continue
+		}
+
 		var depIDs []int64
 		for _, depIdx := range plan.Deps[i] {
 			depIDs = append(depIDs, ids[depIdx])
@@ -688,7 +971,9 @@ func (e *Engine) watchCycleCompletion(ctx context.Context, tracker *DepTracker, 
 		return
 	}
 
-	// Check for failures in this cycle.
+	// Check for failures in this cycle and record them for suppression (B-123).
+	e.recordCycleResults(ctx, cycleID)
+
 	failed, err := e.ledger.CountFailedForCycle(ctx, cycleID)
 	if err != nil {
 		e.logger.Error("failed to count failed actions for cycle",
@@ -740,6 +1025,33 @@ func (e *Engine) watchCycleCompletion(ctx context.Context, tracker *DepTracker, 
 	}
 
 	tracker.CleanupCycle(cycleID)
+}
+
+// recordCycleResults examines completed actions in a cycle and records
+// successes/failures in the failure tracker for B-123 suppression.
+func (e *Engine) recordCycleResults(ctx context.Context, cycleID string) {
+	if e.failures == nil {
+		return
+	}
+
+	rows, err := e.ledger.LoadCycleResults(ctx, cycleID)
+	if err != nil {
+		e.logger.Warn("failed to load cycle results for failure tracking",
+			slog.String("cycle_id", cycleID),
+			slog.String("error", err.Error()),
+		)
+
+		return
+	}
+
+	for i := range rows {
+		switch rows[i].Status {
+		case ledgerStatusDone:
+			e.failures.recordSuccess(rows[i].Path)
+		case ledgerStatusFailed:
+			e.failures.recordFailure(rows[i].Path, rows[i].ErrorMsg)
+		}
+	}
 }
 
 // resolvePollInterval returns the configured poll interval or the default.

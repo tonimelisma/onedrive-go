@@ -255,7 +255,7 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 | 5.0 | DAG-based concurrent execution engine | 0: The Pivot — **DONE** |
 | 5.1 | Continuous observer `Watch()` methods + debounced buffer | 1: Watch Mode — **DONE** |
 | 5.2 | `Engine.RunWatch()` + continuous pipeline | 1: Watch Mode — **DONE** |
-| 5.3 | Graceful shutdown + crash recovery from ledger | 2: Operational Polish |
+| 5.3 | Graceful shutdown + crash recovery from ledger | 2: Operational Polish — **DONE** |
 | 5.4 | Pause/resume + SIGHUP config reload + final cleanup | 2: Operational Polish |
 
 > **Ordering note (from architectural review, 2026-02-24):** Crash recovery
@@ -585,26 +585,36 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 ### Wave 2 — Operational Polish
 
-#### 5.3: Graceful shutdown + crash recovery from ledger
+#### 5.3: Graceful shutdown + crash recovery from ledger — DONE
 
-**Goal**: Two-signal shutdown, ledger-based crash resume.
+**Goal**: Two-signal shutdown, ledger-based crash resume, P2 hardening.
 
 **1. New Code:**
-- Two-signal shutdown: first SIGINT stops observers, drains workers; second exits immediately
-- Crash recovery: `LoadPending` → `ReclaimStale` → resume execution on startup
-- Upload session resume via `session_url` in ledger
+- `signal.go`: Two-signal shutdown handler (first SIGINT = graceful drain, second = force exit)
+- `failure_tracker.go`: Repeated failure suppression for watch mode (B-123)
+- `engine.go`: Crash recovery (`recoverFromLedger` → `ReclaimStale` → rebuild deps → re-execute), drive identity verification (B-074), configurable safety scan interval (B-099)
+- `executor_transfer.go`: Resumable downloads from `.partial` files (B-085)
+- `observer_local.go`: Stable hash detection for actively-written files (B-119)
+- `graph/download.go`: `DownloadRange` with HTTP Range header (B-085)
+- `graph/upload.go`: `ResumeUpload` for interrupted chunked uploads (B-037)
+- `ledger.go`: `LoadAllPending`, `UpdateSessionURL`, `UpdateBytesDone`, `LoadCycleResults`
+- `types.go`: `DriveVerifier`, `RangeDownloader`, `SessionResumer` interfaces
 
 **2. Code Adaptation:**
-- `worker.go`: context cancellation, periodic `bytes_done` update
-- CLI `sync.go`: signal handler
+- CLI `sync.go`: Signal handler wired before engine creation
+- `engine.go`: `processBatch` properly cancels suppressed actions in ledger
 
 **3. Code Retirement:**
 - None
 
 **4. CI and Testing:**
-- Crash recovery test (write actions to ledger, simulate crash, verify resume)
-- Shutdown test (send SIGINT, verify graceful drain)
-- E2E: unchanged. Both CI workflows green.
+- `engine_recovery_test.go`: 11 tests (crash recovery, drive verification, cycle results, synthetic view)
+- `failure_tracker_test.go`: 4 tests (threshold, cooldown, success clearing, path independence)
+- `signal_test.go`: 2 tests (signal cancellation, parent cancel)
+- `download_test.go`: 2 tests (range download, no-URL error)
+- `upload_test.go`: 2 tests (resume upload, expired session)
+- `ledger_test.go`: 5 tests (LoadAllPending, UpdateSessionURL, UpdateBytesDone, LoadCycleResults, CountFailed)
+- E2E: unchanged, all pass. 75.2% coverage maintained.
 
 ---
 

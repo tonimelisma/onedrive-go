@@ -1129,6 +1129,84 @@ func TestCancelUploadSession_RetriesOn503(t *testing.T) {
 	assert.Equal(t, int32(2), calls.Load())
 }
 
+func TestResumeUpload_Success(t *testing.T) {
+	totalSize := int64(ChunkedUploadChunkSize + 1024) // just over one chunk
+	resumeOffset := int64(ChunkedUploadChunkSize)     // first chunk already uploaded
+	content := make([]byte, totalSize)
+
+	for i := range content {
+		content[i] = byte(i % 256)
+	}
+
+	chunkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			// QueryUploadSession — return status with resume offset.
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{
+				"uploadUrl": %q,
+				"expirationDateTime": "2025-12-31T23:59:59Z",
+				"nextExpectedRanges": ["%d-"]
+			}`, "http://"+r.Host+r.URL.Path, resumeOffset)
+
+		case http.MethodPut:
+			// Chunk upload — final chunk.
+			body, readErr := io.ReadAll(r.Body)
+			if readErr != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+
+			expectedLen := totalSize - resumeOffset
+			assert.Equal(t, int(expectedLen), len(body))
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, `{
+				"id": "resumed-item",
+				"name": "big.bin",
+				"size": `+fmt.Sprintf("%d", totalSize)+`,
+				"createdDateTime": "2024-01-01T00:00:00Z",
+				"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+				"parentReference": {"id": "parent", "driveId": "d"},
+				"file": {"mimeType": "application/octet-stream"}
+			}`)
+
+		case http.MethodDelete:
+			w.WriteHeader(http.StatusNoContent)
+
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+	defer chunkSrv.Close()
+
+	client := newTestClient(t, "http://unused")
+	session := &UploadSession{UploadURL: chunkSrv.URL + "/upload/session"}
+	reader := bytes.NewReader(content)
+
+	item, err := client.ResumeUpload(context.Background(), session, reader, totalSize, nil)
+	require.NoError(t, err)
+	require.NotNil(t, item)
+	assert.Equal(t, "resumed-item", item.ID)
+}
+
+func TestResumeUpload_SessionExpired(t *testing.T) {
+	sessionSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"error":{"code":"itemNotFound"}}`)
+	}))
+	defer sessionSrv.Close()
+
+	client := newTestClient(t, "http://unused")
+	session := &UploadSession{UploadURL: sessionSrv.URL + "/expired"}
+
+	_, err := client.ResumeUpload(context.Background(), session, bytes.NewReader(nil), 1024, nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrUploadSessionExpired)
+}
+
 func TestQueryUploadSession_RetriesOn429(t *testing.T) {
 	var calls atomic.Int32
 

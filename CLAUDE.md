@@ -125,7 +125,7 @@ echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r 
 
 ## Current Phase
 
-**Phases 1-4 complete. Phase 5.0 (DAG-based concurrent execution), Phase 5.1 (watch mode observers + debounced buffer), and Phase 5.2 (Engine.RunWatch() + continuous pipeline) complete. `sync --watch` is functional. Next: Phase 5.3 (graceful shutdown + crash recovery).** See [docs/roadmap.md](docs/roadmap.md).
+**Phases 1-4 complete. Phase 5.0 (DAG-based concurrent execution), Phase 5.1 (watch mode observers + debounced buffer), Phase 5.2 (Engine.RunWatch() + continuous pipeline), and Phase 5.3 (graceful shutdown + crash recovery + P2 hardening) complete. `sync --watch` is production-grade with two-signal shutdown, crash recovery, resumable transfers, and failure suppression. Next: Phase 5.4 (pause/resume + SIGHUP config reload + final cleanup).** See [docs/roadmap.md](docs/roadmap.md).
 
 ## Architecture Overview
 

@@ -107,12 +107,29 @@ func (e *Executor) executeDownload(ctx context.Context, action *Action) Outcome 
 }
 
 // downloadToPartial streams a remote file to a .partial file while computing
-// QuickXorHash in a single pass. Returns the local hash and size.
+// QuickXorHash in a single pass. If a .partial file already exists and the
+// downloader supports range requests (RangeDownloader), it resumes from the
+// existing file (B-085). The hash always covers the full file from byte 0.
+// Returns the local hash and size.
 func (e *Executor) downloadToPartial(
 	ctx context.Context, action *Action, driveID driveid.ID, targetPath string,
 ) (string, int64, error) {
 	partialPath := targetPath + ".partial"
 
+	// B-085: Check for existing .partial file and attempt resume.
+	if rd, ok := e.downloads.(RangeDownloader); ok {
+		if info, statErr := os.Stat(partialPath); statErr == nil && info.Size() > 0 {
+			return e.resumeDownload(ctx, action, driveID, rd, partialPath, info.Size())
+		}
+	}
+
+	return e.freshDownload(ctx, action, driveID, partialPath)
+}
+
+// freshDownload performs a full download to a new .partial file.
+func (e *Executor) freshDownload(
+	ctx context.Context, action *Action, driveID driveid.ID, partialPath string,
+) (string, int64, error) {
 	f, err := os.Create(partialPath)
 	if err != nil {
 		return "", 0, fmt.Errorf("creating partial file %s: %w", partialPath, err)
@@ -140,6 +157,52 @@ func (e *Executor) downloadToPartial(
 	localHash := base64.StdEncoding.EncodeToString(h.Sum(nil))
 
 	return localHash, size, nil
+}
+
+// resumeDownload appends bytes to an existing .partial file using Range
+// requests, then hashes the complete file from byte 0 (B-085).
+func (e *Executor) resumeDownload(
+	ctx context.Context, action *Action, driveID driveid.ID,
+	rd RangeDownloader, partialPath string, existingSize int64,
+) (string, int64, error) {
+	e.logger.Debug("resuming download from partial file",
+		slog.String("path", action.Path),
+		slog.Int64("existing_bytes", existingSize),
+	)
+
+	f, err := os.OpenFile(partialPath, os.O_APPEND|os.O_WRONLY, 0o644) //nolint:mnd // standard file perms
+	if err != nil {
+		// Fall back to fresh download if we can't open for append.
+		e.logger.Warn("cannot open partial file for resume, starting fresh",
+			slog.String("path", action.Path), slog.String("error", err.Error()))
+		os.Remove(partialPath)
+
+		return e.freshDownload(ctx, action, driveID, partialPath)
+	}
+
+	n, err := rd.DownloadRange(ctx, driveID, action.ItemID, f, existingSize)
+	f.Close()
+
+	if err != nil {
+		// On range download failure, remove partial and fall back to fresh.
+		e.logger.Warn("range download failed, falling back to fresh download",
+			slog.String("path", action.Path), slog.String("error", err.Error()))
+		os.Remove(partialPath)
+
+		return e.freshDownload(ctx, action, driveID, partialPath)
+	}
+
+	totalSize := existingSize + n
+
+	// Hash the complete .partial file from byte 0 — resume appended bytes
+	// but the hash must cover everything for integrity verification.
+	localHash, err := computeQuickXorHash(partialPath)
+	if err != nil {
+		os.Remove(partialPath)
+		return "", 0, fmt.Errorf("hashing resumed partial file %s: %w", partialPath, err)
+	}
+
+	return localHash, totalSize, nil
 }
 
 // downloadOutcome builds a successful Outcome after download.

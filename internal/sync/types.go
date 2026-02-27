@@ -441,6 +441,10 @@ type Action struct {
 	CreateSide   FolderCreateSide // for folder creates
 	View         *PathView        // full three-way context
 	ConflictInfo *ConflictRecord
+
+	// Recovery-only fields: populated when reconstructing actions from ledger.
+	LedgerID   int64  // non-zero for recovered actions
+	SessionURL string // upload session URL for resume (B-037)
 }
 
 // ActionPlan contains a flat list of actions with explicit dependency edges.
@@ -493,6 +497,12 @@ type ItemClient interface {
 	PermanentDeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error
 }
 
+// DriveVerifier verifies that a configured drive ID is reachable and matches
+// the remote API. Used at engine startup to detect stale config (B-074).
+type DriveVerifier interface {
+	Drive(ctx context.Context, driveID driveid.ID) (*graph.Drive, error)
+}
+
 // Downloader streams a remote file by item ID.
 type Downloader interface {
 	Download(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error)
@@ -505,4 +515,23 @@ type Uploader interface {
 		ctx context.Context, driveID driveid.ID, parentID, name string,
 		content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc,
 	) (*graph.Item, error)
+}
+
+// SessionResumer resumes an interrupted upload session. Satisfied by *graph.Client.
+// Type-asserted at runtime to avoid breaking the Uploader interface (B-037).
+type SessionResumer interface {
+	ResumeUpload(
+		ctx context.Context, session *graph.UploadSession,
+		content io.ReaderAt, totalSize int64, progress graph.ProgressFunc,
+	) (*graph.Item, error)
+}
+
+// RangeDownloader downloads a file starting from a byte offset. Satisfied by
+// *graph.Client. Type-asserted at runtime to avoid breaking the Downloader
+// interface (B-085).
+type RangeDownloader interface {
+	DownloadRange(
+		ctx context.Context, driveID driveid.ID, itemID string,
+		w io.Writer, offset int64,
+	) (int64, error)
 }
