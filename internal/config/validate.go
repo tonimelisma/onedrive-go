@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -366,4 +367,46 @@ func validateNetwork(n *NetworkConfig) []error {
 	errs = append(errs, validateDurationMin("data_timeout", n.DataTimeout, minDataTimeout)...)
 
 	return errs
+}
+
+// WarnUnimplemented logs a warning for each config field that is set to a
+// non-default value but is not yet implemented. This prevents users from
+// thinking their settings take effect when they silently don't (B-141).
+func WarnUnimplemented(rd *ResolvedDrive, logger *slog.Logger) {
+	warn := func(field string) {
+		logger.Warn("config field not yet implemented; value will be ignored",
+			slog.String("field", field))
+	}
+
+	if len(rd.SyncPaths) > 0 {
+		warn("sync_paths")
+	}
+
+	if len(rd.SkipFiles) > 0 {
+		warn("skip_files")
+	}
+
+	if len(rd.SkipDirs) > 0 {
+		warn("skip_dirs")
+	}
+
+	if rd.MaxFileSize != "0" && rd.MaxFileSize != defaultMaxFileSize {
+		warn("max_file_size")
+	}
+
+	if rd.BandwidthLimit != "0" && rd.BandwidthLimit != defaultBandwidthLimit {
+		warn("bandwidth_limit")
+	}
+
+	if len(rd.BandwidthSchedule) > 0 {
+		warn("bandwidth_schedule")
+	}
+
+	if rd.Websocket {
+		warn("websocket")
+	}
+
+	if rd.UserAgent != "" {
+		warn("user_agent")
+	}
 }

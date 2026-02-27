@@ -17,12 +17,12 @@ const DefaultBaseURL = "https://graph.microsoft.com/v1.0"
 
 // Per architecture.md §7.2: base 1s, factor 2x, max 60s, ±25% jitter, max 5 retries.
 const (
-	maxRetries     = 5
-	baseBackoff    = 1 * time.Second
-	maxBackoff     = 60 * time.Second
-	backoffFactor  = 2.0
-	jitterFraction = 0.25
-	userAgent      = "onedrive-go/0.1"
+	maxRetries       = 5
+	baseBackoff      = 1 * time.Second
+	maxBackoff       = 60 * time.Second
+	backoffFactor    = 2.0
+	jitterFraction   = 0.25
+	defaultUserAgent = "onedrive-go/dev"
 )
 
 // TokenSource provides OAuth2 bearer tokens.
@@ -40,6 +40,7 @@ type Client struct {
 	httpClient *http.Client
 	token      TokenSource
 	logger     *slog.Logger
+	userAgent  string
 
 	// sleepFunc is called to wait between retries. Defaults to timeSleep.
 	// Tests override this to avoid real delays.
@@ -48,7 +49,8 @@ type Client struct {
 
 // NewClient creates a Graph API client.
 // baseURL is typically "https://graph.microsoft.com/v1.0".
-func NewClient(baseURL string, httpClient *http.Client, token TokenSource, logger *slog.Logger) *Client {
+// userAgent is sent in every request; defaults to "onedrive-go/dev" if empty.
+func NewClient(baseURL string, httpClient *http.Client, token TokenSource, logger *slog.Logger, userAgent string) *Client {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -57,11 +59,16 @@ func NewClient(baseURL string, httpClient *http.Client, token TokenSource, logge
 		httpClient = http.DefaultClient
 	}
 
+	if userAgent == "" {
+		userAgent = defaultUserAgent
+	}
+
 	return &Client{
 		baseURL:    baseURL,
 		httpClient: httpClient,
 		token:      token,
 		logger:     logger,
+		userAgent:  userAgent,
 		sleepFunc:  timeSleep,
 	}
 }
@@ -187,7 +194,7 @@ func (c *Client) doOnce(
 	}
 
 	req.Header.Set("Authorization", "Bearer "+tok)
-	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("User-Agent", c.userAgent)
 
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")

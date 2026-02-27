@@ -512,6 +512,47 @@ func TestCommit_Conflict(t *testing.T) {
 	}
 }
 
+func TestCommit_Conflict_StoresRemoteMtime(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	fixedTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	mgr.nowFunc = func() time.Time { return fixedTime }
+
+	remoteMtime := int64(1700000000000000000) // non-zero nanosecond timestamp
+	outcomes := []Outcome{{
+		Action:       ActionConflict,
+		Success:      true,
+		Path:         "mtime-test.txt",
+		DriveID:      driveid.New("d"),
+		ItemID:       "i",
+		ItemType:     ItemTypeFile,
+		LocalHash:    "local-h",
+		RemoteHash:   "remote-h",
+		Mtime:        1600000000000000000,
+		RemoteMtime:  remoteMtime,
+		ConflictType: "edit_edit",
+	}}
+
+	commitAll(t, mgr, ctx, outcomes)
+
+	// Verify remote_mtime is stored as non-zero.
+	var storedRemoteMtime sql.NullInt64
+
+	err := mgr.db.QueryRowContext(ctx,
+		"SELECT remote_mtime FROM conflicts WHERE path = ?", "mtime-test.txt",
+	).Scan(&storedRemoteMtime)
+	if err != nil {
+		t.Fatalf("querying conflict remote_mtime: %v", err)
+	}
+
+	if !storedRemoteMtime.Valid || storedRemoteMtime.Int64 != remoteMtime {
+		t.Errorf("remote_mtime = %v, want %d", storedRemoteMtime, remoteMtime)
+	}
+}
+
 func TestCommit_SkipsFailedOutcomes(t *testing.T) {
 	t.Parallel()
 
@@ -1482,6 +1523,72 @@ func TestCommitOutcome_Conflict_Unresolved(t *testing.T) {
 	// Unresolved conflict should NOT update baseline.
 	if _, ok := mgr.baseline.GetByPath("co-unresolved.txt"); ok {
 		t.Error("baseline entry should not exist for unresolved conflict")
+	}
+}
+
+func TestCommitOutcome_EditDeleteConflict_DeletesBaseline(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
+
+	// First, create a baseline entry for the file.
+	setupOutcome := Outcome{
+		Action:   ActionDownload,
+		Success:  true,
+		Path:     "edit-delete-target.txt",
+		DriveID:  driveid.New("d"),
+		ItemID:   "i1",
+		ItemType: ItemTypeFile,
+	}
+	if err := mgr.CommitOutcome(ctx, &setupOutcome, 0); err != nil {
+		t.Fatalf("CommitOutcome (setup): %v", err)
+	}
+
+	// Verify baseline entry exists.
+	if _, ok := mgr.baseline.GetByPath("edit-delete-target.txt"); !ok {
+		t.Fatal("baseline entry should exist after download")
+	}
+
+	// Now commit an unresolved edit-delete conflict (B-133).
+	conflictOutcome := Outcome{
+		Action:       ActionConflict,
+		Success:      true,
+		Path:         "edit-delete-target.txt",
+		DriveID:      driveid.New("d"),
+		ItemID:       "i1",
+		ItemType:     ItemTypeFile,
+		ConflictType: ConflictEditDelete,
+		LocalHash:    "modified-hash",
+		RemoteHash:   "baseline-remote-hash",
+	}
+	if err := mgr.CommitOutcome(ctx, &conflictOutcome, 0); err != nil {
+		t.Fatalf("CommitOutcome (conflict): %v", err)
+	}
+
+	// Baseline entry should be deleted — the original file was renamed to conflict copy.
+	if _, ok := mgr.baseline.GetByPath("edit-delete-target.txt"); ok {
+		t.Error("baseline entry should be deleted for unresolved edit-delete conflict")
+	}
+
+	// Conflict record should exist.
+	var conflictType, resolution string
+
+	err := mgr.db.QueryRowContext(ctx,
+		"SELECT conflict_type, resolution FROM conflicts WHERE path = ?", "edit-delete-target.txt",
+	).Scan(&conflictType, &resolution)
+	if err != nil {
+		t.Fatalf("querying conflict: %v", err)
+	}
+
+	if conflictType != ConflictEditDelete {
+		t.Errorf("conflict_type = %q, want %q", conflictType, ConflictEditDelete)
+	}
+
+	if resolution != ResolutionUnresolved {
+		t.Errorf("resolution = %q, want %q", resolution, ResolutionUnresolved)
 	}
 }
 

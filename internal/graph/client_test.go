@@ -76,7 +76,7 @@ func (failingToken) Token() (string, error) {
 func newTestClient(t *testing.T, url string) *Client {
 	t.Helper()
 
-	c := NewClient(url, http.DefaultClient, staticToken("test-token"), slog.Default())
+	c := NewClient(url, http.DefaultClient, staticToken("test-token"), slog.Default(), "test-agent")
 	c.sleepFunc = noopSleep
 
 	return c
@@ -237,7 +237,7 @@ func TestDo_AuthorizationHeader(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewClient(srv.URL, http.DefaultClient, staticToken("my-secret-token"), slog.Default())
+	client := NewClient(srv.URL, http.DefaultClient, staticToken("my-secret-token"), slog.Default(), "test-agent")
 	client.sleepFunc = noopSleep
 
 	resp, err := client.Do(context.Background(), http.MethodGet, "/auth", nil)
@@ -287,7 +287,7 @@ func TestGraphError_Unwrap(t *testing.T) {
 
 func TestDo_UserAgentHeader(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, userAgent, r.Header.Get("User-Agent"))
+		assert.Equal(t, "test-agent", r.Header.Get("User-Agent"))
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
@@ -312,7 +312,7 @@ func TestDo_ContentTypeForBody(t *testing.T) {
 }
 
 func TestDo_TokenError(t *testing.T) {
-	client := NewClient("http://localhost", http.DefaultClient, failingToken{}, slog.Default())
+	client := NewClient("http://localhost", http.DefaultClient, failingToken{}, slog.Default(), "test-agent")
 	client.sleepFunc = noopSleep
 
 	_, err := client.Do(context.Background(), http.MethodGet, "/test", nil)
@@ -374,7 +374,7 @@ func TestClassifyStatus(t *testing.T) {
 
 func TestNewClient_Defaults(t *testing.T) {
 	// Nil logger and httpClient should use defaults, not panic.
-	c := NewClient("http://localhost", nil, staticToken("tok"), nil)
+	c := NewClient("http://localhost", nil, staticToken("tok"), nil, "")
 	assert.NotNil(t, c.httpClient)
 	assert.NotNil(t, c.logger)
 }
@@ -393,7 +393,7 @@ func TestTimeSleep_ContextCancel(t *testing.T) {
 }
 
 func TestCalcBackoff_MaxCap(t *testing.T) {
-	c := NewClient("http://localhost", nil, staticToken("tok"), nil)
+	c := NewClient("http://localhost", nil, staticToken("tok"), nil, "")
 
 	// Attempt 10 produces 1s * 2^10 = 1024s which exceeds maxBackoff (60s).
 	// Verify the result is capped near maxBackoff (±jitter).
@@ -609,7 +609,7 @@ func TestRetryBackoff_MalformedRetryAfter(t *testing.T) {
 func TestDoRetry_NetworkError_MaxRetries(t *testing.T) {
 	// Point the client at an unreachable address and verify that all retries
 	// are exhausted before returning an error.
-	client := NewClient("http://127.0.0.1:1", http.DefaultClient, staticToken("tok"), slog.Default())
+	client := NewClient("http://127.0.0.1:1", http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent")
 	client.sleepFunc = noopSleep
 
 	_, err := client.Do(context.Background(), http.MethodGet, "/unreachable", nil)
@@ -623,7 +623,7 @@ func TestDoPreAuthRetry_SuccessFirstTry(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Verify no Authorization header is sent.
 		assert.Empty(t, r.Header.Get("Authorization"))
-		assert.Equal(t, userAgent, r.Header.Get("User-Agent"))
+		assert.Equal(t, "test-agent", r.Header.Get("User-Agent"))
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`ok`))
 	}))
@@ -637,7 +637,7 @@ func TestDoPreAuthRetry_SuccessFirstTry(t *testing.T) {
 			return nil, reqErr
 		}
 
-		req.Header.Set("User-Agent", userAgent)
+		req.Header.Set("User-Agent", "test-agent")
 
 		return req, nil
 	})
@@ -808,7 +808,7 @@ func TestDoPreAuthRetry_MakeReqError(t *testing.T) {
 }
 
 func TestDoPreAuthRetry_NetworkMaxRetries(t *testing.T) {
-	client := NewClient("http://localhost", http.DefaultClient, staticToken("tok"), slog.Default())
+	client := NewClient("http://localhost", http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent")
 	client.sleepFunc = noopSleep
 
 	_, err := client.doPreAuthRetry(context.Background(), "net exhaust", func() (*http.Request, error) {
@@ -848,7 +848,7 @@ func TestDoPreAuthRetry_ContextCancelDuringNetworkBackoff(t *testing.T) {
 	// error is detected and returned.
 	ctx, cancel := context.WithCancel(context.Background())
 
-	client := NewClient("http://localhost", http.DefaultClient, staticToken("tok"), slog.Default())
+	client := NewClient("http://localhost", http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent")
 	client.sleepFunc = func(_ context.Context, _ time.Duration) error {
 		cancel()
 

@@ -124,7 +124,7 @@ func clientAndDrive(ctx context.Context) (*graph.Client, driveid.ID, *slog.Logge
 		return nil, driveid.ID{}, nil, err
 	}
 
-	client := graph.NewClient(graph.DefaultBaseURL, defaultHTTPClient(), ts, logger)
+	client := graph.NewClient(graph.DefaultBaseURL, defaultHTTPClient(), ts, logger, "onedrive-go/"+version)
 
 	// Skip the Drives() API call when the drive ID is already known from config.
 	if !resolvedCfg.DriveID.IsZero() {

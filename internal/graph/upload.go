@@ -157,7 +157,7 @@ func (c *Client) UploadChunk(
 
 		req.Header.Set("Content-Range", contentRange)
 		req.Header.Set("Content-Type", "application/octet-stream")
-		req.Header.Set("User-Agent", userAgent)
+		req.Header.Set("User-Agent", c.userAgent)
 		req.ContentLength = length
 
 		return req, nil
@@ -225,7 +225,7 @@ func (c *Client) CancelUploadSession(ctx context.Context, session *UploadSession
 			return nil, fmt.Errorf("graph: creating cancel session request: %w", reqErr)
 		}
 
-		req.Header.Set("User-Agent", userAgent)
+		req.Header.Set("User-Agent", c.userAgent)
 
 		return req, nil
 	})
@@ -278,7 +278,7 @@ func (c *Client) doRawUpload(
 
 	req.Header.Set("Authorization", "Bearer "+tok)
 	req.Header.Set("Content-Type", contentType)
-	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("User-Agent", c.userAgent)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -322,7 +322,7 @@ func (c *Client) QueryUploadSession(
 			return nil, fmt.Errorf("graph: creating query session request: %w", reqErr)
 		}
 
-		req.Header.Set("User-Agent", userAgent)
+		req.Header.Set("User-Agent", c.userAgent)
 
 		return req, nil
 	})

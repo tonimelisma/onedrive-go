@@ -939,7 +939,7 @@ func (o *LocalObserver) FullScan(ctx context.Context) ([]ChangeEvent, error) {
 // Watch starts a filesystem watcher that emits change events in real-time.
 // Used by watch mode.
 func (o *LocalObserver) Watch(ctx context.Context, emit func(ChangeEvent)) error {
-    // Use rjeczalik/notify for cross-platform FS events
+    // Use fsnotify/fsnotify for cross-platform FS events
     c := make(chan notify.EventInfo, 256)
     if err := notify.Watch(o.syncRoot+"/...", c, notify.All); err != nil {
         return fmt.Errorf("watch: %w", err)
@@ -2174,7 +2174,7 @@ These percentages describe how much of each component's *design logic* draws fro
 ### Phase 6: Watch Mode (2-3 increments)
 
 20. Implement `RemoteObserver.Watch()` (polling-based, WebSocket later)
-21. Implement `LocalObserver.Watch()` (rjeczalik/notify)
+21. Implement `LocalObserver.Watch()` (fsnotify/fsnotify)
 22. Implement `Engine.RunWatch()` — event loop with buffer
 23. Implement pause/resume (buffer accumulates, executor paused)
 

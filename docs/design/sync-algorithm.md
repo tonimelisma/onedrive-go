@@ -438,7 +438,7 @@ func (o *LocalObserver) FullScan(ctx context.Context) ([]ChangeEvent, error)
 
 ### 4.2 Watch Mode (fsnotify)
 
-Used by continuous sync. Monitors the sync directory for real-time filesystem events using `rjeczalik/notify` (cross-platform: inotify on Linux, FSEvents on macOS).
+Used by continuous sync. Monitors the sync directory for real-time filesystem events using `fsnotify/fsnotify` (cross-platform: inotify on Linux, FSEvents on macOS).
 
 ```go
 func (o *LocalObserver) Watch(ctx context.Context, emit func(ChangeEvent)) error
@@ -1366,7 +1366,7 @@ When no delta token exists, the engine knows this is the first run and activates
 
 In watch mode, the engine runs two background observers concurrently:
 
-**Local Observer** (fsnotify): Uses `rjeczalik/notify` to watch the sync root recursively. Filesystem events (create, modify, delete, rename) are converted to `ChangeEvent` values and emitted to the buffer in real time.
+**Local Observer** (fsnotify): Uses `fsnotify/fsnotify` to watch the sync root recursively. Filesystem events (create, modify, delete, rename) are converted to `ChangeEvent` values and emitted to the buffer in real time.
 
 **Remote Observer** (delta polling): Polls the delta API at a configurable interval (default: 5 minutes via `config.PollInterval`). Each poll calls `FullDelta` and emits any new events to the buffer.
 

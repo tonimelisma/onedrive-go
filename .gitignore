@@ -26,8 +26,3 @@ onedrive-go
 # E2E debug logs
 .e2e-logs/
 e2e/.e2e-logs/
-
-# AI code review artifacts
-*_CODE_REVIEW.md
-*_ARCHITECTURAL_REVIEW.md
-cursor_*.md

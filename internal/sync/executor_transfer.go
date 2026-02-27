@@ -15,8 +15,16 @@ import (
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
 
+// maxHashRetries is the number of additional download attempts when the
+// downloaded content hash doesn't match the remote hash. This is separate from
+// network-level retries (withRetry) because hash mismatches indicate corrupted
+// content, not transport failures. iOS .heic files are a known source of stale
+// remote hashes — after exhausting retries we accept the download to prevent
+// an infinite re-download loop (B-132).
+const maxHashRetries = 2
+
 // executeDownload downloads a remote file with S3 safety: write to .partial,
-// verify hash, atomic rename. Warns on hash mismatch (iOS .heic bug).
+// verify hash with retry, atomic rename.
 func (e *Executor) executeDownload(ctx context.Context, action *Action) Outcome {
 	targetPath := filepath.Join(e.syncRoot, action.Path)
 
@@ -27,31 +35,55 @@ func (e *Executor) executeDownload(ctx context.Context, action *Action) Outcome 
 
 	driveID := e.resolveDriveID(action)
 
-	var localHash string
-	var size int64
-	var dlErr error
-
-	err := e.withRetry(ctx, "download "+action.Path, func() error {
-		localHash, size, dlErr = e.downloadToPartial(ctx, action, driveID, targetPath)
-		return dlErr
-	})
-	if err != nil {
-		return e.failedOutcome(action, ActionDownload, err)
-	}
-
-	// Verify hash if remote provided one.
+	// Extract remote hash before the retry loop so we can compare after each attempt.
 	remoteHash := ""
 	if action.View != nil && action.View.Remote != nil {
 		remoteHash = action.View.Remote.Hash
 	}
 
-	if remoteHash != "" && localHash != remoteHash {
-		// Warn but don't fail — iOS .heic files can have stale hashes.
-		e.logger.Warn("download hash mismatch (proceeding anyway)",
+	var localHash string
+	var size int64
+
+	for attempt := range maxHashRetries + 1 {
+		// Network-level download with retries (handles 429/5xx/transport errors).
+		var dlErr error
+
+		err := e.withRetry(ctx, "download "+action.Path, func() error {
+			localHash, size, dlErr = e.downloadToPartial(ctx, action, driveID, targetPath)
+			return dlErr
+		})
+		if err != nil {
+			return e.failedOutcome(action, ActionDownload, err)
+		}
+
+		// Hash verification — skip if remote didn't provide a hash.
+		if remoteHash == "" || localHash == remoteHash {
+			break
+		}
+
+		if attempt < maxHashRetries {
+			// Mismatch: clean up .partial and retry the download.
+			os.Remove(targetPath + ".partial")
+			e.logger.Warn("download hash mismatch, retrying",
+				slog.String("path", action.Path),
+				slog.Int("attempt", attempt+1),
+				slog.String("local_hash", localHash),
+				slog.String("remote_hash", remoteHash),
+			)
+
+			continue
+		}
+
+		// All hash retries exhausted — accept the download to prevent an infinite
+		// re-download loop. The remote hash is likely stale (iOS .heic files).
+		// Override remoteHash so baseline records matching hashes.
+		e.logger.Warn("download hash mismatch after all retries, accepting download",
 			slog.String("path", action.Path),
 			slog.String("local_hash", localHash),
 			slog.String("remote_hash", remoteHash),
 		)
+
+		remoteHash = localHash
 	}
 
 	// Set mtime from remote on the partial file before atomic rename.
@@ -130,6 +162,7 @@ func (e *Executor) downloadOutcome(
 		o.ETag = action.View.Remote.ETag
 		o.ParentID = action.View.Remote.ParentID
 		o.Mtime = action.View.Remote.Mtime
+		o.RemoteMtime = action.View.Remote.Mtime
 
 		if remoteHash == "" {
 			o.RemoteHash = action.View.Remote.Hash

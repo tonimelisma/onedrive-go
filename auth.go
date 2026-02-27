@@ -210,7 +210,7 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 // canonical drive ID and extract the organization name. Returns the canonical
 // ID and org display name.
 func discoverAccount(ctx context.Context, ts graph.TokenSource, logger *slog.Logger) (driveid.CanonicalID, string, error) {
-	client := graph.NewClient(graph.DefaultBaseURL, defaultHTTPClient(), ts, logger)
+	client := graph.NewClient(graph.DefaultBaseURL, defaultHTTPClient(), ts, logger, "onedrive-go/"+version)
 
 	// GET /me -> email, user GUID
 	user, err := client.Me(ctx)
@@ -617,7 +617,7 @@ func runWhoami(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	client := graph.NewClient(graph.DefaultBaseURL, defaultHTTPClient(), ts, logger)
+	client := graph.NewClient(graph.DefaultBaseURL, defaultHTTPClient(), ts, logger, "onedrive-go/"+version)
 
 	user, err := client.Me(ctx)
 	if err != nil {

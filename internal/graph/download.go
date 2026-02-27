@@ -69,7 +69,7 @@ func (c *Client) downloadFromURL(ctx context.Context, downloadURL string, w io.W
 			return nil, fmt.Errorf("graph: creating download request: %w", reqErr)
 		}
 
-		req.Header.Set("User-Agent", userAgent)
+		req.Header.Set("User-Agent", c.userAgent)
 
 		return req, nil
 	})

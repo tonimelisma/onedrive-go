@@ -94,6 +94,10 @@ func (e *Executor) executeEditDeleteConflict(ctx context.Context, action *Action
 	o.ConflictType = ConflictEditDelete
 	o.ResolvedBy = ResolvedByAuto
 
+	if action.View != nil && action.View.Remote != nil {
+		o.RemoteMtime = action.View.Remote.Mtime
+	}
+
 	return o
 }
 

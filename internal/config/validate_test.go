@@ -1,6 +1,8 @@
 package config
 
 import (
+	"context"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -414,4 +416,96 @@ func TestValidateResolved_EmptySyncDir(t *testing.T) {
 	rd := &ResolvedDrive{SyncDir: ""}
 	err := ValidateResolved(rd)
 	assert.NoError(t, err)
+}
+
+// ---------------------------------------------------------------------------
+// WarnUnimplemented tests (B-141)
+// ---------------------------------------------------------------------------
+
+// testLogHandler captures slog records for assertion.
+type testLogHandler struct {
+	records []slog.Record
+}
+
+func (h *testLogHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+
+func (h *testLogHandler) Handle(_ context.Context, r slog.Record) error {
+	h.records = append(h.records, r)
+	return nil
+}
+
+func (h *testLogHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *testLogHandler) WithGroup(_ string) slog.Handler      { return h }
+
+func (h *testLogHandler) warnedFields() []string {
+	var fields []string
+
+	for _, r := range h.records {
+		if r.Level == slog.LevelWarn {
+			r.Attrs(func(a slog.Attr) bool {
+				if a.Key == "field" {
+					fields = append(fields, a.Value.String())
+				}
+				return true
+			})
+		}
+	}
+
+	return fields
+}
+
+func TestWarnUnimplemented_Defaults_NoWarnings(t *testing.T) {
+	t.Parallel()
+
+	h := &testLogHandler{}
+	logger := slog.New(h)
+
+	cfg := DefaultConfig()
+	rd := &ResolvedDrive{
+		FilterConfig:    cfg.FilterConfig,
+		TransfersConfig: cfg.TransfersConfig,
+		SyncConfig:      cfg.SyncConfig,
+		NetworkConfig:   cfg.NetworkConfig,
+	}
+
+	WarnUnimplemented(rd, logger)
+
+	assert.Empty(t, h.warnedFields(), "default config should not produce warnings")
+}
+
+func TestWarnUnimplemented_NonDefaults_WarnsAll(t *testing.T) {
+	t.Parallel()
+
+	h := &testLogHandler{}
+	logger := slog.New(h)
+
+	cfg := DefaultConfig()
+	rd := &ResolvedDrive{
+		FilterConfig:    cfg.FilterConfig,
+		TransfersConfig: cfg.TransfersConfig,
+		SyncConfig:      cfg.SyncConfig,
+		NetworkConfig:   cfg.NetworkConfig,
+	}
+
+	// Set non-default values for all unimplemented fields.
+	rd.SyncPaths = []string{"/docs"}
+	rd.SkipFiles = []string{"*.tmp"}
+	rd.SkipDirs = []string{".git"}
+	rd.MaxFileSize = "1GB"
+	rd.BandwidthLimit = "10MB"
+	rd.BandwidthSchedule = []BandwidthScheduleEntry{{Time: "08:00", Limit: "5MB"}}
+	rd.Websocket = true
+	rd.UserAgent = "custom"
+
+	WarnUnimplemented(rd, logger)
+
+	warned := h.warnedFields()
+
+	expected := []string{
+		"sync_paths", "skip_files", "skip_dirs", "max_file_size",
+		"bandwidth_limit", "bandwidth_schedule", "websocket", "user_agent",
+	}
+	for _, f := range expected {
+		assert.Contains(t, warned, f, "expected warning for %q", f)
+	}
 }

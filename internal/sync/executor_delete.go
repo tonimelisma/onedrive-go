@@ -31,7 +31,7 @@ func (e *Executor) executeLocalDelete(_ context.Context, action *Action) Outcome
 		return e.deleteLocalFolder(action, absPath)
 	}
 
-	return e.deleteLocalFile(action, absPath)
+	return e.deleteLocalFile(action, absPath, info)
 }
 
 // deleteLocalFolder removes an empty local directory.
@@ -71,11 +71,14 @@ func (e *Executor) deleteLocalFolder(action *Action, absPath string) Outcome {
 
 // deleteLocalFile removes a file after verifying its hash matches baseline.
 // Hash mismatch means the file was modified since the planner ran — rename
-// to conflict copy instead of deleting.
-func (e *Executor) deleteLocalFile(action *Action, absPath string) Outcome {
+// to conflict copy and record as edit-delete conflict (B-133).
+func (e *Executor) deleteLocalFile(action *Action, absPath string, info os.FileInfo) Outcome {
 	baselineHash := ""
+	baselineRemoteHash := ""
+
 	if action.View != nil && action.View.Baseline != nil {
 		baselineHash = action.View.Baseline.LocalHash
+		baselineRemoteHash = action.View.Baseline.RemoteHash
 	}
 
 	// S4 safety: verify hash before delete.
@@ -99,8 +102,26 @@ func (e *Executor) deleteLocalFile(action *Action, absPath string) Outcome {
 				slog.String("conflict_copy", filepath.Base(conflictPath)),
 			)
 
-			// Still mark as success — the baseline entry should be removed.
-			return e.deleteOutcome(action, ActionLocalDelete)
+			// Return a conflict outcome so the conflict is tracked in the
+			// conflicts table and visible via `conflicts list`.
+			var remoteMtime int64
+			if action.View != nil && action.View.Remote != nil {
+				remoteMtime = action.View.Remote.Mtime
+			}
+
+			return Outcome{
+				Action:       ActionConflict,
+				Success:      true,
+				Path:         action.Path,
+				DriveID:      e.resolveDriveID(action),
+				ItemID:       action.ItemID,
+				ItemType:     ItemTypeFile,
+				ConflictType: ConflictEditDelete,
+				LocalHash:    currentHash,
+				RemoteHash:   baselineRemoteHash,
+				Mtime:        info.ModTime().UnixNano(),
+				RemoteMtime:  remoteMtime,
+			}
 		}
 	}
 
