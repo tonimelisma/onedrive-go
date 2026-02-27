@@ -299,6 +299,12 @@ func (dt *DepTracker) CleanupCycle(cycleID string) {
 	delete(dt.cycles, cycleID)
 }
 
+// InFlightCount returns the number of actions currently in the tracker that
+// have not yet completed. Used for shutdown logging.
+func (dt *DepTracker) InFlightCount() int {
+	return int(dt.total.Load() - dt.completed.Load())
+}
+
 // Interactive returns the channel for small/interactive actions.
 func (dt *DepTracker) Interactive() <-chan *TrackedAction {
 	return dt.interactive

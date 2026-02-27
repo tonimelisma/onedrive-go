@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -14,7 +15,12 @@ import (
 func (o *LocalObserver) watchLoop(
 	ctx context.Context, watcher FsWatcher, syncRoot string, events chan<- ChangeEvent,
 ) error {
-	tickCh, tickStop := o.safetyTickFunc(safetyScanInterval)
+	interval := o.safetyScanInterval
+	if interval == 0 {
+		interval = safetyScanInterval
+	}
+
+	tickCh, tickStop := o.safetyTickFunc(interval)
 	defer tickStop()
 
 	errBackoff := watchErrInitBackoff
@@ -161,8 +167,14 @@ func (o *LocalObserver) handleCreate(
 	} else {
 		ev.ItemType = ItemTypeFile
 
-		hash, hashErr := computeQuickXorHash(fsPath)
+		hash, hashErr := computeStableHash(fsPath)
 		if hashErr != nil {
+			if errors.Is(hashErr, errFileChangedDuringHash) {
+				o.logger.Debug("file changed during hashing, skipping (will catch on next event)",
+					slog.String("path", dbRelPath))
+				return
+			}
+
 			o.logger.Warn("hash failed for new file, emitting event with empty hash",
 				slog.String("path", dbRelPath), slog.String("error", hashErr.Error()))
 		} else {
@@ -233,8 +245,14 @@ func (o *LocalObserver) scanNewDirectory(
 
 		var hash string
 
-		hashVal, hashErr := computeQuickXorHash(entryFsPath)
+		hashVal, hashErr := computeStableHash(entryFsPath)
 		if hashErr != nil {
+			if errors.Is(hashErr, errFileChangedDuringHash) {
+				o.logger.Debug("file changed during hashing, skipping (will catch on next event)",
+					slog.String("path", entryRelPath))
+				continue
+			}
+
 			o.logger.Warn("hash failed during directory scan, emitting event with empty hash",
 				slog.String("path", entryRelPath), slog.String("error", hashErr.Error()))
 		} else {
@@ -279,8 +297,14 @@ func (o *LocalObserver) handleWrite(
 		return
 	}
 
-	hash, err := computeQuickXorHash(fsPath)
+	hash, err := computeStableHash(fsPath)
 	if err != nil {
+		if errors.Is(err, errFileChangedDuringHash) {
+			o.logger.Debug("file changed during hashing, skipping (will catch on next event)",
+				slog.String("path", dbRelPath))
+			return
+		}
+
 		o.logger.Warn("hash failed for modified file, emitting event with empty hash",
 			slog.String("path", dbRelPath), slog.String("error", err.Error()))
 	} else {

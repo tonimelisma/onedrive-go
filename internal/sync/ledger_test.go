@@ -456,6 +456,215 @@ func TestLedger_DownloadHashFromRemote(t *testing.T) {
 	}
 }
 
+func TestLedger_LoadAllPending(t *testing.T) {
+	t.Parallel()
+
+	ledger := newTestLedger(t)
+	ctx := context.Background()
+
+	// Insert actions across two cycles.
+	actions1 := []Action{
+		{Type: ActionDownload, Path: "file1.txt", DriveID: driveid.New("d1"), ItemID: "i1"},
+	}
+	actions2 := []Action{
+		{Type: ActionUpload, Path: "file2.txt", DriveID: driveid.New("d1"), ItemID: "i2"},
+	}
+
+	if _, err := ledger.WriteActions(ctx, actions1, nil, "cycle-a"); err != nil {
+		t.Fatalf("WriteActions cycle-a: %v", err)
+	}
+
+	if _, err := ledger.WriteActions(ctx, actions2, nil, "cycle-b"); err != nil {
+		t.Fatalf("WriteActions cycle-b: %v", err)
+	}
+
+	// LoadAllPending should return both.
+	rows, err := ledger.LoadAllPending(ctx)
+	if err != nil {
+		t.Fatalf("LoadAllPending: %v", err)
+	}
+
+	if len(rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(rows))
+	}
+
+	// Verify they come from different cycles.
+	if rows[0].CycleID == rows[1].CycleID {
+		t.Error("expected rows from different cycles")
+	}
+}
+
+func TestLedger_UpdateSessionURL(t *testing.T) {
+	t.Parallel()
+
+	ledger := newTestLedger(t)
+	ctx := context.Background()
+
+	actions := []Action{
+		{Type: ActionUpload, Path: "upload.txt", DriveID: driveid.New("d1"), ItemID: "i1"},
+	}
+
+	ids, err := ledger.WriteActions(ctx, actions, nil, "cycle-session")
+	if err != nil {
+		t.Fatalf("WriteActions: %v", err)
+	}
+
+	// Update session URL.
+	updateErr := ledger.UpdateSessionURL(ctx, ids[0], "https://example.com/session/123")
+	if updateErr != nil {
+		t.Fatalf("UpdateSessionURL: %v", updateErr)
+	}
+
+	// Verify by loading.
+	rows, loadErr := ledger.LoadPending(ctx, "cycle-session")
+	if loadErr != nil {
+		t.Fatalf("LoadPending: %v", loadErr)
+	}
+
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(rows))
+	}
+
+	if rows[0].SessionURL != "https://example.com/session/123" {
+		t.Errorf("session_url = %q, want %q", rows[0].SessionURL, "https://example.com/session/123")
+	}
+}
+
+func TestLedger_UpdateBytesDone(t *testing.T) {
+	t.Parallel()
+
+	ledger := newTestLedger(t)
+	ctx := context.Background()
+
+	actions := []Action{
+		{Type: ActionUpload, Path: "upload.txt", DriveID: driveid.New("d1"), ItemID: "i1"},
+	}
+
+	ids, err := ledger.WriteActions(ctx, actions, nil, "cycle-bytes")
+	if err != nil {
+		t.Fatalf("WriteActions: %v", err)
+	}
+
+	updateErr := ledger.UpdateBytesDone(ctx, ids[0], 524288)
+	if updateErr != nil {
+		t.Fatalf("UpdateBytesDone: %v", updateErr)
+	}
+
+	rows, loadErr := ledger.LoadPending(ctx, "cycle-bytes")
+	if loadErr != nil {
+		t.Fatalf("LoadPending: %v", loadErr)
+	}
+
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(rows))
+	}
+
+	if rows[0].BytesDone != 524288 {
+		t.Errorf("bytes_done = %d, want 524288", rows[0].BytesDone)
+	}
+}
+
+func TestLedger_LoadCycleResults(t *testing.T) {
+	t.Parallel()
+
+	ledger := newTestLedger(t)
+	ctx := context.Background()
+
+	actions := []Action{
+		{Type: ActionDownload, Path: "done.txt", DriveID: driveid.New("d1"), ItemID: "i1"},
+		{Type: ActionUpload, Path: "fail.txt", DriveID: driveid.New("d1"), ItemID: "i2"},
+		{Type: ActionDownload, Path: "pending.txt", DriveID: driveid.New("d1"), ItemID: "i3"},
+	}
+
+	ids, err := ledger.WriteActions(ctx, actions, nil, "cycle-results")
+	if err != nil {
+		t.Fatalf("WriteActions: %v", err)
+	}
+
+	// Complete one, fail one, leave one pending.
+	if claimErr := ledger.Claim(ctx, ids[0]); claimErr != nil {
+		t.Fatalf("Claim: %v", claimErr)
+	}
+
+	if completeErr := ledger.Complete(ctx, ids[0]); completeErr != nil {
+		t.Fatalf("Complete: %v", completeErr)
+	}
+
+	if claimErr := ledger.Claim(ctx, ids[1]); claimErr != nil {
+		t.Fatalf("Claim: %v", claimErr)
+	}
+
+	if failErr := ledger.Fail(ctx, ids[1], "network error"); failErr != nil {
+		t.Fatalf("Fail: %v", failErr)
+	}
+
+	// LoadCycleResults should return only terminal (done + failed), not pending.
+	rows, loadErr := ledger.LoadCycleResults(ctx, "cycle-results")
+	if loadErr != nil {
+		t.Fatalf("LoadCycleResults: %v", loadErr)
+	}
+
+	if len(rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(rows))
+	}
+
+	// Verify statuses.
+	if rows[0].Status != "done" {
+		t.Errorf("row 0 status = %q, want %q", rows[0].Status, "done")
+	}
+
+	if rows[1].Status != "failed" {
+		t.Errorf("row 1 status = %q, want %q", rows[1].Status, "failed")
+	}
+
+	if rows[1].ErrorMsg != "network error" {
+		t.Errorf("row 1 error_msg = %q, want %q", rows[1].ErrorMsg, "network error")
+	}
+}
+
+func TestLedger_CountFailed(t *testing.T) {
+	t.Parallel()
+
+	ledger := newTestLedger(t)
+	ctx := context.Background()
+
+	actions := []Action{
+		{Type: ActionDownload, Path: "ok.txt", DriveID: driveid.New("d1"), ItemID: "i1"},
+		{Type: ActionUpload, Path: "bad.txt", DriveID: driveid.New("d1"), ItemID: "i2"},
+	}
+
+	ids, err := ledger.WriteActions(ctx, actions, nil, "cycle-cfail")
+	if err != nil {
+		t.Fatalf("WriteActions: %v", err)
+	}
+
+	// Complete first, fail second.
+	if claimErr := ledger.Claim(ctx, ids[0]); claimErr != nil {
+		t.Fatalf("Claim: %v", claimErr)
+	}
+
+	if completeErr := ledger.Complete(ctx, ids[0]); completeErr != nil {
+		t.Fatalf("Complete: %v", completeErr)
+	}
+
+	if claimErr := ledger.Claim(ctx, ids[1]); claimErr != nil {
+		t.Fatalf("Claim: %v", claimErr)
+	}
+
+	if failErr := ledger.Fail(ctx, ids[1], "upload timeout"); failErr != nil {
+		t.Fatalf("Fail: %v", failErr)
+	}
+
+	count, countErr := ledger.CountFailedForCycle(ctx, "cycle-cfail")
+	if countErr != nil {
+		t.Fatalf("CountFailedForCycle: %v", countErr)
+	}
+
+	if count != 1 {
+		t.Errorf("count = %d, want 1", count)
+	}
+}
+
 func TestParseActionType(t *testing.T) {
 	t.Parallel()
 

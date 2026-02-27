@@ -236,6 +236,62 @@ func TestDownload_NoAuthOnPreAuthURL(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestDownloadRange_Success(t *testing.T) {
+	fullContent := "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	offset := int64(10)
+
+	dlSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		rangeHdr := r.Header.Get("Range")
+		assert.Equal(t, fmt.Sprintf("bytes=%d-", offset), rangeHdr)
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write([]byte(fullContent[offset:]))
+	}))
+	defer dlSrv.Close()
+
+	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `{
+			"id": "item-range", "name": "range.txt", "size": %d,
+			"createdDateTime": "2024-01-01T00:00:00Z",
+			"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+			"parentReference": {"id": "p", "driveId": "d"},
+			"file": {"mimeType": "text/plain"},
+			"@microsoft.graph.downloadUrl": %q
+		}`, len(fullContent), dlSrv.URL+"/dl")
+	}))
+	defer graphSrv.Close()
+
+	client := newTestClient(t, graphSrv.URL)
+	var buf bytes.Buffer
+	n, err := client.DownloadRange(context.Background(), driveid.New("d"), "item-range", &buf, offset)
+	require.NoError(t, err)
+	assert.Equal(t, fullContent[offset:], buf.String())
+	assert.Equal(t, int64(len(fullContent))-offset, n)
+}
+
+func TestDownloadRange_NoDownloadURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{
+			"id": "folder-r", "name": "Folder",
+			"createdDateTime": "2024-01-01T00:00:00Z",
+			"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+			"parentReference": {"id": "root", "driveId": "d"},
+			"folder": {"childCount": 0}
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	var buf bytes.Buffer
+	_, err := client.DownloadRange(context.Background(), driveid.New("d"), "folder-r", &buf, 100)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNoDownloadURL)
+}
+
 func TestDownload_RetriesOn503(t *testing.T) {
 	var dlCalls atomic.Int32
 

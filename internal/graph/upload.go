@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -456,6 +457,110 @@ func (c *Client) uploadAllChunks(
 
 	if lastItem == nil {
 		return nil, fmt.Errorf("graph: upload completed all chunks but received no final item")
+	}
+
+	return lastItem, nil
+}
+
+// ErrUploadSessionExpired indicates that an upload session is no longer valid
+// (Graph API returned 404). The caller should fall back to a fresh upload.
+var ErrUploadSessionExpired = errors.New("graph: upload session expired")
+
+// ResumeUpload resumes an interrupted chunked upload from where it left off.
+// It queries the session to find the next expected byte offset, then uploads
+// the remaining chunks. Returns ErrUploadSessionExpired if the session is no
+// longer valid (caller should fall back to fresh upload).
+func (c *Client) ResumeUpload(
+	ctx context.Context, session *UploadSession,
+	content io.ReaderAt, totalSize int64, progress ProgressFunc,
+) (*Item, error) {
+	c.logger.Info("attempting to resume upload session")
+
+	status, err := c.QueryUploadSession(ctx, session)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, ErrUploadSessionExpired
+		}
+
+		return nil, fmt.Errorf("graph: querying session for resume: %w", err)
+	}
+
+	// Parse NextExpectedRanges to find the resume offset.
+	// Format: ["0-", "327680-"] — we take the first range's start offset.
+	resumeOffset := int64(0)
+
+	if len(status.NextExpectedRanges) > 0 {
+		rangeStr := status.NextExpectedRanges[0]
+		// Parse "N-" or "N-M" format.
+		dashIdx := 0
+		for i, ch := range rangeStr {
+			if ch == '-' {
+				dashIdx = i
+				break
+			}
+		}
+
+		if dashIdx > 0 {
+			var offset int64
+			if _, scanErr := fmt.Sscanf(rangeStr[:dashIdx], "%d", &offset); scanErr == nil {
+				resumeOffset = offset
+			} else {
+				c.logger.Debug("failed to parse NextExpectedRanges offset",
+					slog.String("range", rangeStr),
+					slog.String("error", scanErr.Error()),
+				)
+			}
+		}
+	}
+
+	c.logger.Info("resuming upload from offset",
+		slog.Int64("offset", resumeOffset),
+		slog.Int64("total", totalSize),
+	)
+
+	// Use the session URL from the status response (may differ from original).
+	resumeSession := &UploadSession{
+		UploadURL:      status.UploadURL,
+		ExpirationTime: status.ExpirationTime,
+	}
+
+	// Upload remaining chunks from the resume offset.
+	var lastItem *Item
+
+	for offset := resumeOffset; offset < totalSize; {
+		chunkSize := int64(ChunkedUploadChunkSize)
+		if offset+chunkSize > totalSize {
+			chunkSize = totalSize - offset
+		}
+
+		chunk := io.NewSectionReader(content, offset, chunkSize)
+
+		item, chunkErr := c.UploadChunk(ctx, resumeSession, chunk, offset, chunkSize, totalSize)
+		if chunkErr != nil {
+			// Best-effort cancel on error.
+			cancelErr := c.CancelUploadSession(context.Background(), resumeSession)
+			if cancelErr != nil {
+				c.logger.Warn("failed to cancel upload session after resume error",
+					slog.String("error", cancelErr.Error()),
+				)
+			}
+
+			return nil, fmt.Errorf("graph: resume upload chunk at offset %d: %w", offset, chunkErr)
+		}
+
+		offset += chunkSize
+
+		if progress != nil {
+			progress(offset, totalSize)
+		}
+
+		if item != nil {
+			lastItem = item
+		}
+	}
+
+	if lastItem == nil {
+		return nil, fmt.Errorf("graph: resume upload completed all chunks but received no final item")
 	}
 
 	return lastItem, nil

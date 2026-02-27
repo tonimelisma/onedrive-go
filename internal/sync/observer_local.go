@@ -65,12 +65,13 @@ func (fw *fsnotifyWrapper) Errors() <-chan error          { return fw.w.Errors }
 // comparing each entry against the in-memory baseline. Stateless — syncRoot
 // is a parameter of FullScan, allowing reuse across cycles.
 type LocalObserver struct {
-	baseline       *Baseline
-	logger         *slog.Logger
-	watcherFactory func() (FsWatcher, error)
-	droppedEvents  atomic.Int64                                     // events dropped by trySend due to full channel
-	sleepFunc      func(ctx context.Context, d time.Duration) error // injectable for testing
-	safetyTickFunc func(d time.Duration) (<-chan time.Time, func()) // injectable for testing; returns tick channel + stop func
+	baseline           *Baseline
+	logger             *slog.Logger
+	watcherFactory     func() (FsWatcher, error)
+	droppedEvents      atomic.Int64                                     // events dropped by trySend due to full channel
+	sleepFunc          func(ctx context.Context, d time.Duration) error // injectable for testing
+	safetyTickFunc     func(d time.Duration) (<-chan time.Time, func()) // injectable for testing; returns tick channel + stop func
+	safetyScanInterval time.Duration                                    // 0 → default (5 minutes); configurable (B-099)
 }
 
 // NewLocalObserver creates a LocalObserver. The baseline must be loaded (from
@@ -450,6 +451,37 @@ func (o *LocalObserver) detectDeletions(observed map[string]bool) []ChangeEvent 
 // ---------------------------------------------------------------------------
 // File hashing
 // ---------------------------------------------------------------------------
+
+// errFileChangedDuringHash is returned when a file's metadata changes between
+// pre-hash stat and post-hash stat, indicating active writing (B-119).
+var errFileChangedDuringHash = errors.New("sync: file changed during hashing")
+
+// computeStableHash hashes a file and verifies it was not modified during the
+// hash operation by comparing pre/post stat results. Returns errFileChangedDuringHash
+// if the file changed (B-119). Callers should skip the event — the next safety
+// scan or fsnotify write event will catch the stable version.
+func computeStableHash(fsPath string) (string, error) {
+	pre, err := os.Stat(fsPath)
+	if err != nil {
+		return "", fmt.Errorf("sync: pre-hash stat %s: %w", fsPath, err)
+	}
+
+	hash, err := computeQuickXorHash(fsPath)
+	if err != nil {
+		return "", err
+	}
+
+	post, err := os.Stat(fsPath)
+	if err != nil {
+		return "", fmt.Errorf("sync: post-hash stat %s: %w", fsPath, err)
+	}
+
+	if pre.Size() != post.Size() || pre.ModTime() != post.ModTime() {
+		return "", errFileChangedDuringHash
+	}
+
+	return hash, nil
+}
 
 // computeQuickXorHash computes the QuickXorHash of a file and returns
 // the base64-encoded digest. Uses streaming I/O (constant memory).
