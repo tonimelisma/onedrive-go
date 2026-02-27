@@ -20,9 +20,14 @@ import (
 // ---------------------------------------------------------------------------
 
 // mockFsWatcher implements FsWatcher with injectable channels for testing.
+// Add() is a no-op — it silently accepts the real directory paths that
+// addWatchesRecursive passes during Watch() startup. This is intentional:
+// the backoff/safety-scan tests only exercise watchLoop event handling,
+// not the watch-setup walk.
 type mockFsWatcher struct {
-	events chan fsnotify.Event
-	errs   chan error
+	events   chan fsnotify.Event
+	errs     chan error
+	closeOne stdsync.Once // idempotent Close prevents panic on double-close
 }
 
 func newMockFsWatcher() *mockFsWatcher {
@@ -34,9 +39,13 @@ func newMockFsWatcher() *mockFsWatcher {
 
 func (m *mockFsWatcher) Add(string) error              { return nil }
 func (m *mockFsWatcher) Remove(string) error           { return nil }
-func (m *mockFsWatcher) Close() error                  { close(m.events); close(m.errs); return nil }
 func (m *mockFsWatcher) Events() <-chan fsnotify.Event { return m.events }
 func (m *mockFsWatcher) Errors() <-chan error          { return m.errs }
+
+func (m *mockFsWatcher) Close() error {
+	m.closeOne.Do(func() { close(m.events); close(m.errs) })
+	return nil
+}
 
 // sleepRecorder captures durations passed to sleepFunc.
 type sleepRecorder struct {
@@ -795,12 +804,15 @@ func TestWatchLoop_BackoffResetsOnSafetyScan(t *testing.T) {
 
 	recorder := newSleepRecorder()
 	mockWatcher := newMockFsWatcher()
+	tickCh := make(chan time.Time, 1)
 
 	obs := &LocalObserver{
-		baseline:           emptyBaseline(),
-		logger:             testLogger(t),
-		safetyScanOverride: 200 * time.Millisecond,
-		sleepFunc:          recorder.sleep,
+		baseline:  emptyBaseline(),
+		logger:    testLogger(t),
+		sleepFunc: recorder.sleep,
+		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+			return tickCh, func() {}
+		},
 		watcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
@@ -823,9 +835,14 @@ func TestWatchLoop_BackoffResetsOnSafetyScan(t *testing.T) {
 	require.Equal(t, watchErrInitBackoff, calls[0],
 		"first error should use initial backoff")
 
-	// Step 2: Wait for the safety scan to fire (200ms override).
+	// Step 2: Fire the safety scan tick deterministically (no time.Sleep).
 	// The safety scan resets errBackoff to watchErrInitBackoff.
-	time.Sleep(300 * time.Millisecond)
+	tickCh <- time.Now()
+
+	// Give watchLoop one iteration to process the tick and reset backoff.
+	// This is a scheduling yield, not a timing dependency — any non-zero
+	// duration suffices for the goroutine to process the channel receive.
+	time.Sleep(10 * time.Millisecond)
 
 	// Step 3: Inject another watcher error → should use initial backoff (1s),
 	// NOT the escalated value (2s), because the safety scan reset it.
@@ -851,10 +868,13 @@ func TestWatchLoop_BackoffEscalatesWithoutReset(t *testing.T) {
 	mockWatcher := newMockFsWatcher()
 
 	obs := &LocalObserver{
-		baseline:           emptyBaseline(),
-		logger:             testLogger(t),
-		safetyScanOverride: 10 * time.Minute, // long enough to never fire
-		sleepFunc:          recorder.sleep,
+		baseline:  emptyBaseline(),
+		logger:    testLogger(t),
+		sleepFunc: recorder.sleep,
+		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+			// Never-firing ticker: no safety scan means backoff keeps escalating.
+			return make(chan time.Time), func() {}
+		},
 		watcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
