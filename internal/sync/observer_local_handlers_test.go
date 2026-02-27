@@ -839,9 +839,10 @@ func TestWatchLoop_BackoffResetsOnSafetyScan(t *testing.T) {
 	// The safety scan resets errBackoff to watchErrInitBackoff.
 	tickCh <- time.Now()
 
-	// Give watchLoop one iteration to process the tick and reset backoff.
-	// This is a scheduling yield, not a timing dependency — any non-zero
-	// duration suffices for the goroutine to process the channel receive.
+	// Give watchLoop time to process the tick before we send the next error.
+	// Without this, both tickCh and errs could be ready in watchLoop's select
+	// simultaneously, and Go would pick non-deterministically — potentially
+	// processing the error before the tick resets the backoff.
 	time.Sleep(10 * time.Millisecond)
 
 	// Step 3: Inject another watcher error → should use initial backoff (1s),

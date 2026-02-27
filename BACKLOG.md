@@ -182,3 +182,5 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 | B-153 | Document hash-verify skip in `resolveTransfer` conflict resolution | **Done** — Added documentation to `resolveTransfer()` in `engine.go`. |
 | B-159 | `doOnce`: document implicit `Content-Type: application/json` default | **Done** — Added documentation to `doOnce()` in `client.go`. |
 | B-161 | Add SQL comment for `action_queue.depends_on` encoding | **Done** — Added SQL comment to `00002_action_queue.sql` migration. |
+| B-196 | Fix inaccurate scheduling-yield comment in backoff reset test | **Done** — Comment described `time.Sleep(10ms)` as "scheduling yield" but the real reason is preventing non-deterministic `select` pick between tick and error channels. |
+| B-197 | Fix goroutine leak in `TestFlushDebounced_PanicsOnDoubleCall` | **Done** — Test discarded `FlushDebounced` output channel and never canceled context, leaking `debounceLoop` goroutine. Added explicit cancel + drain (matching all other `FlushDebounced` tests). Root cause of flaky `testLogWriter` data race. |
