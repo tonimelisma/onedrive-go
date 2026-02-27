@@ -488,14 +488,14 @@ func TestWarnUnimplemented_NonDefaults_WarnsAll(t *testing.T) {
 	}
 
 	// Set non-default values for all unimplemented fields.
-	rd.FilterConfig.SyncPaths = []string{"/docs"}
-	rd.FilterConfig.SkipFiles = []string{"*.tmp"}
-	rd.FilterConfig.SkipDirs = []string{".git"}
-	rd.FilterConfig.MaxFileSize = "1GB"
-	rd.TransfersConfig.BandwidthLimit = "10MB"
-	rd.TransfersConfig.BandwidthSchedule = []BandwidthScheduleEntry{{Time: "08:00", Limit: "5MB"}}
-	rd.SyncConfig.Websocket = true
-	rd.NetworkConfig.UserAgent = "custom"
+	rd.SyncPaths = []string{"/docs"}
+	rd.SkipFiles = []string{"*.tmp"}
+	rd.SkipDirs = []string{".git"}
+	rd.MaxFileSize = "1GB"
+	rd.BandwidthLimit = "10MB"
+	rd.BandwidthSchedule = []BandwidthScheduleEntry{{Time: "08:00", Limit: "5MB"}}
+	rd.Websocket = true
+	rd.UserAgent = "custom"
 
 	WarnUnimplemented(rd, logger)
 

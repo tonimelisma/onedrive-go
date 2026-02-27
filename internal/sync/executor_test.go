@@ -474,7 +474,7 @@ func TestExecutor_Download_HashMismatch_Retries(t *testing.T) {
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
 			callCount++
 			// First two attempts return wrong content, third returns correct.
-			if callCount < 3 { //nolint:mnd // test constant
+			if callCount < 3 {
 				n, err := w.Write([]byte("wrong content"))
 				return int64(n), err
 			}
@@ -499,7 +499,7 @@ func TestExecutor_Download_HashMismatch_Retries(t *testing.T) {
 	o := e.executeDownload(context.Background(), action)
 	requireOutcomeSuccess(t, o)
 
-	if callCount != 3 { //nolint:mnd // test assertion
+	if callCount != 3 {
 		t.Errorf("expected 3 download calls, got %d", callCount)
 	}
 
@@ -551,7 +551,7 @@ func TestExecutor_Download_HashMismatch_Accepted(t *testing.T) {
 	requireOutcomeSuccess(t, o)
 
 	// All retries exhausted: 1 initial + 2 retries = 3.
-	if callCount != 3 { //nolint:mnd // test assertion
+	if callCount != 3 {
 		t.Errorf("expected 3 download calls, got %d", callCount)
 	}
 

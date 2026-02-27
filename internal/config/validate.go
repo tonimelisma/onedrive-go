@@ -378,35 +378,35 @@ func WarnUnimplemented(rd *ResolvedDrive, logger *slog.Logger) {
 			slog.String("field", field))
 	}
 
-	if len(rd.FilterConfig.SyncPaths) > 0 {
+	if len(rd.SyncPaths) > 0 {
 		warn("sync_paths")
 	}
 
-	if len(rd.FilterConfig.SkipFiles) > 0 {
+	if len(rd.SkipFiles) > 0 {
 		warn("skip_files")
 	}
 
-	if len(rd.FilterConfig.SkipDirs) > 0 {
+	if len(rd.SkipDirs) > 0 {
 		warn("skip_dirs")
 	}
 
-	if rd.FilterConfig.MaxFileSize != "0" && rd.FilterConfig.MaxFileSize != defaultMaxFileSize {
+	if rd.MaxFileSize != "0" && rd.MaxFileSize != defaultMaxFileSize {
 		warn("max_file_size")
 	}
 
-	if rd.TransfersConfig.BandwidthLimit != "0" && rd.TransfersConfig.BandwidthLimit != defaultBandwidthLimit {
+	if rd.BandwidthLimit != "0" && rd.BandwidthLimit != defaultBandwidthLimit {
 		warn("bandwidth_limit")
 	}
 
-	if len(rd.TransfersConfig.BandwidthSchedule) > 0 {
+	if len(rd.BandwidthSchedule) > 0 {
 		warn("bandwidth_schedule")
 	}
 
-	if rd.SyncConfig.Websocket {
+	if rd.Websocket {
 		warn("websocket")
 	}
 
-	if rd.NetworkConfig.UserAgent != "" {
+	if rd.UserAgent != "" {
 		warn("user_agent")
 	}
 }
