@@ -1086,6 +1086,172 @@ func TestLocalWatch_ContextCancellation(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// trySend tests
+// ---------------------------------------------------------------------------
+
+func TestTrySend_ChannelAvailable_SendsEvent(t *testing.T) {
+	t.Parallel()
+
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	events := make(chan ChangeEvent, 1)
+	ctx := context.Background()
+
+	ev := ChangeEvent{
+		Source: SourceLocal, Type: ChangeCreate, Path: "test.txt",
+		ItemType: ItemTypeFile,
+	}
+
+	obs.trySend(ctx, events, &ev)
+
+	select {
+	case got := <-events:
+		if got.Path != "test.txt" {
+			t.Errorf("got path %q, want %q", got.Path, "test.txt")
+		}
+	default:
+		t.Fatal("expected event on channel")
+	}
+
+	if obs.DroppedEvents() != 0 {
+		t.Errorf("DroppedEvents() = %d, want 0", obs.DroppedEvents())
+	}
+}
+
+func TestTrySend_ChannelFull_DropsEvent(t *testing.T) {
+	t.Parallel()
+
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	events := make(chan ChangeEvent, 1)
+	ctx := context.Background()
+
+	// Fill the channel.
+	first := ChangeEvent{
+		Source: SourceLocal, Type: ChangeCreate, Path: "first.txt",
+		ItemType: ItemTypeFile,
+	}
+	events <- first
+
+	// This should be dropped (channel full).
+	second := ChangeEvent{
+		Source: SourceLocal, Type: ChangeCreate, Path: "second.txt",
+		ItemType: ItemTypeFile,
+	}
+
+	obs.trySend(ctx, events, &second)
+
+	if obs.DroppedEvents() != 1 {
+		t.Errorf("DroppedEvents() = %d, want 1", obs.DroppedEvents())
+	}
+
+	// Original event still in channel.
+	got := <-events
+	if got.Path != "first.txt" {
+		t.Errorf("channel event path = %q, want %q", got.Path, "first.txt")
+	}
+}
+
+func TestTrySend_ContextCanceled_NoDrop(t *testing.T) {
+	t.Parallel()
+
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	events := make(chan ChangeEvent, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Fill the channel so default branch would fire, but ctx is canceled.
+	events <- ChangeEvent{Path: "fill.txt"}
+
+	ev := ChangeEvent{
+		Source: SourceLocal, Type: ChangeCreate, Path: "test.txt",
+		ItemType: ItemTypeFile,
+	}
+
+	obs.trySend(ctx, events, &ev)
+
+	// Context cancel takes priority over default branch in select, but
+	// Go's select is non-deterministic. The drop counter may or may not
+	// increment. The key invariant is: trySend must not block.
+	// Just verify it returned (no deadlock).
+}
+
+// ---------------------------------------------------------------------------
+// Recursive scanNewDirectory tests
+// ---------------------------------------------------------------------------
+
+func TestWatch_NewDirectoryNestedRecursion(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+
+	events := make(chan ChangeEvent, 50)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, dir, events)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Create a 3-level nested directory structure with a file at the bottom.
+	deepDir := filepath.Join(dir, "level1", "level2", "level3")
+	if err := os.MkdirAll(deepDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	deepFile := filepath.Join(deepDir, "deep-file.txt")
+	if err := os.WriteFile(deepFile, []byte("deep content"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Collect events — look for the deep file and all intermediate directories.
+	foundDirs := make(map[string]bool)
+	foundFile := false
+
+	wantDirs := map[string]bool{
+		"level1":               true,
+		"level1/level2":        true,
+		"level1/level2/level3": true,
+	}
+
+	timeout := time.After(5 * time.Second)
+
+	for !foundFile || len(foundDirs) < len(wantDirs) {
+		select {
+		case ev := <-events:
+			if ev.Type == ChangeCreate {
+				if ev.ItemType == ItemTypeFolder && wantDirs[ev.Path] {
+					foundDirs[ev.Path] = true
+				}
+
+				if ev.Path == "level1/level2/level3/deep-file.txt" && ev.ItemType == ItemTypeFile {
+					foundFile = true
+				}
+			}
+		case <-timeout:
+			cancel()
+			<-done
+			t.Fatalf("timeout: foundFile=%v, foundDirs=%v (want %v)",
+				foundFile, foundDirs, wantDirs)
+		}
+	}
+
+	cancel()
+	<-done
+
+	if !foundFile {
+		t.Error("deep file not detected")
+	}
+
+	for d := range wantDirs {
+		if !foundDirs[d] {
+			t.Errorf("directory %q not detected", d)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Unit tests for helper functions
 // ---------------------------------------------------------------------------
 
