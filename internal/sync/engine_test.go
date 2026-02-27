@@ -1792,11 +1792,11 @@ func TestResolveConflict_KeepLocal_CommitsToBaseline(t *testing.T) {
 	mock := &engineMockClient{
 		uploadFn: func(_ context.Context, _ driveid.ID, _, name string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 			return &graph.Item{
-				ID:           "resolved-item-id",
-				Name:         name,
-				ETag:         "etag-resolved",
-				QuickXorHash: "resolved-hash",
-				Size:         13,
+				ID:   "resolved-item-id",
+				Name: name,
+				ETag: "etag-resolved",
+				// Empty hash = skip server-side verification (consistent with B-153).
+				QuickXorHash: "",
 			}, nil
 		},
 	}
@@ -1852,6 +1852,21 @@ func TestResolveConflict_KeepLocal_CommitsToBaseline(t *testing.T) {
 
 	if entry.ETag != "etag-resolved" {
 		t.Errorf("baseline ETag = %q, want %q", entry.ETag, "etag-resolved")
+	}
+
+	if entry.LocalHash == "" {
+		t.Error("baseline LocalHash should be set (computed from local file)")
+	}
+
+	// RemoteHash comes from the upload response's QuickXorHash, which is empty
+	// in this mock (skip-verification pattern), so it should be empty.
+	if entry.RemoteHash != "" {
+		t.Errorf("baseline RemoteHash = %q, want empty (mock returns no hash)", entry.RemoteHash)
+	}
+
+	// "resolved local" is 14 bytes.
+	if entry.Size != 14 {
+		t.Errorf("baseline Size = %d, want 14", entry.Size)
 	}
 }
 
