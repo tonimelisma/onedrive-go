@@ -77,7 +77,7 @@ Self-review every change against this checklist before considering work done.
 
 ## Branching Workflow
 
-Code changes require a branch + PR targeting `main`. Doc-only changes push directly to `main`.
+Code changes require a worktree (`claude --worktree <name>`), branch + PR targeting `main`. Doc-only changes push directly to `main` without a worktree.
 
 Branch format: `<type>/<task-name>` (e.g., `feat/cli-auth`). Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`.
 
@@ -102,7 +102,7 @@ Work is done in increments. After each increment, run through this entire checkl
     - `docs/roadmap.md` — check current phase status, update on completion
     - `docs/design/` — update relevant design docs if design changed
 10. [ ] **Push and CI green**: Push branch, open PR, both `ci.yml` and `integration.yml` green. Merge with `./scripts/poll-and-merge.sh <pr_number>`
-11. [ ] **Cleanup**: No leftover branches, no stashes, no open PRs, clean `git status`
+11. [ ] **Cleanup**: No leftover branches, no stashes, no open PRs, clean `git status`. Remove the current worktree after merge. Also audit stale worktrees (`git worktree list`) — for each, check if it has uncommitted changes or unpushed commits before removing. Never discard work; if a worktree has unsaved changes, warn the human instead of deleting
 12. [ ] **Increment report**: Present to the human:
     - **Process changes**: What you would do differently next time in how the work was planned or executed
     - **Top-up recommendations**: Any remaining codebase improvements you'd make
@@ -116,7 +116,7 @@ gofumpt -w . && goimports -local github.com/tonimelisma/onedrive-go -w . && go b
 
 Cleanup check:
 ```bash
-echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r && echo "=== Stashes ===" && git stash list && echo "=== Open PRs ===" && gh pr list --state open && echo "=== Status ===" && git status
+echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r && echo "=== Stashes ===" && git stash list && echo "=== Worktrees ===" && git worktree list && echo "=== Open PRs ===" && gh pr list --state open && echo "=== Status ===" && git status
 ```
 
 ## Project Summary
