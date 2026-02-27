@@ -159,7 +159,7 @@ See [event-driven-rationale.md](event-driven-rationale.md) Part 5.1 for full imp
 
 ### 3.3 Local Observer (`observer_local.go`)
 
-Produces `[]ChangeEvent` from the filesystem. Two modes: `FullScan` (one-shot) and `Watch` (inotify/FSEvents via `rjeczalik/notify`).
+Produces `[]ChangeEvent` from the filesystem. Two modes: `FullScan` (one-shot) and `Watch` (inotify/FSEvents via `fsnotify/fsnotify`).
 
 **Key properties**:
 - Output is `[]ChangeEvent` -- never writes to the database
@@ -648,7 +648,7 @@ Per-side hashes (`local_hash`, `remote_hash`) handle SharePoint enrichment nativ
 | `action_queue` | Execution ledger (action lifecycle, crash recovery, progress) | BaselineManager (per-action commits) |
 | `conflicts` | Conflict ledger with resolution tracking | BaselineManager |
 | `stale_files` | Filter-change tracking | BaselineManager |
-| `upload_sessions` | Crash recovery for large uploads | Executor (pre-upload) + BaselineManager (post-upload) |
+| `upload_sessions` | _(Dropped in migration 00002)_ | — |
 | `change_journal` | Debugging audit trail (optional, append-only) | BaselineManager |
 | `config_snapshots` | Filter change detection | Engine (on config load) |
 | `schema_migrations` | Schema version tracking | Engine (on startup) |
