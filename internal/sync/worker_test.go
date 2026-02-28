@@ -98,12 +98,11 @@ func (m *workerMockUploader) Upload(ctx context.Context, driveID driveid.ID, par
 // ---------------------------------------------------------------------------
 
 func newWorkerTestSetup(t *testing.T) (
-	*ExecutorConfig, *BaselineManager, *Ledger, string,
+	*ExecutorConfig, *BaselineManager, string,
 ) {
 	t.Helper()
 
 	mgr := newTestManager(t)
-	ledger := NewLedger(mgr.DB(), testLogger(t))
 
 	syncRoot := t.TempDir()
 	driveID := driveid.New("0000000000000001")
@@ -129,7 +128,7 @@ func newWorkerTestSetup(t *testing.T) (
 	cfg.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 	cfg.sleepFunc = func(_ context.Context, _ time.Duration) error { return nil }
 
-	return cfg, mgr, ledger, syncRoot
+	return cfg, mgr, syncRoot
 }
 
 // ---------------------------------------------------------------------------
@@ -139,7 +138,7 @@ func newWorkerTestSetup(t *testing.T) (
 func TestWorkerPool_FolderCreate(t *testing.T) {
 	t.Parallel()
 
-	cfg, mgr, ledger, syncRoot := newWorkerTestSetup(t)
+	cfg, mgr, syncRoot := newWorkerTestSetup(t)
 	ctx := context.Background()
 
 	actions := []Action{
@@ -160,15 +159,10 @@ func TestWorkerPool_FolderCreate(t *testing.T) {
 		},
 	}
 
-	ids, writeErr := ledger.WriteActions(ctx, actions, nil, "cycle-wp1")
-	if writeErr != nil {
-		t.Fatalf("WriteActions: %v", writeErr)
-	}
-
 	tracker := NewDepTracker(10, 10, testLogger(t))
-	tracker.Add(&actions[0], ids[0], nil, "")
+	tracker.Add(&actions[0], 0, nil, "")
 
-	pool := NewWorkerPool(cfg, tracker, mgr, ledger, testLogger(t))
+	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
 	pool.Start(ctx, 4)
 	pool.Wait()
 	pool.Stop()
@@ -201,22 +195,12 @@ func TestWorkerPool_FolderCreate(t *testing.T) {
 	if _, ok := bl.GetByPath("Documents"); !ok {
 		t.Error("baseline entry not found for Documents")
 	}
-
-	// Verify ledger action is done.
-	pending, countErr := ledger.CountPendingForCycle(ctx, "cycle-wp1")
-	if countErr != nil {
-		t.Fatalf("CountPending: %v", countErr)
-	}
-
-	if pending != 0 {
-		t.Errorf("pending = %d, want 0", pending)
-	}
 }
 
 func TestWorkerPool_DependencyChain(t *testing.T) {
 	t.Parallel()
 
-	cfg, mgr, ledger, syncRoot := newWorkerTestSetup(t)
+	cfg, mgr, syncRoot := newWorkerTestSetup(t)
 	ctx := context.Background()
 
 	// Folder create → then download into that folder.
@@ -252,17 +236,11 @@ func TestWorkerPool_DependencyChain(t *testing.T) {
 		},
 	}
 
-	deps := [][]int{{}, {0}} // action 1 depends on action 0
-	ids, writeErr := ledger.WriteActions(ctx, actions, deps, "cycle-wp2")
-	if writeErr != nil {
-		t.Fatalf("WriteActions: %v", writeErr)
-	}
-
 	tracker := NewDepTracker(10, 10, testLogger(t))
-	tracker.Add(&actions[0], ids[0], nil, "")
-	tracker.Add(&actions[1], ids[1], []int64{ids[0]}, "")
+	tracker.Add(&actions[0], 0, nil, "")
+	tracker.Add(&actions[1], 1, []int64{0}, "")
 
-	pool := NewWorkerPool(cfg, tracker, mgr, ledger, testLogger(t))
+	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
 	pool.Start(ctx, 4)
 	pool.Wait()
 	pool.Stop()
@@ -290,7 +268,7 @@ func TestWorkerPool_DependencyChain(t *testing.T) {
 func TestWorkerPool_StopCancelsWork(t *testing.T) {
 	t.Parallel()
 
-	cfg, mgr, ledger, _ := newWorkerTestSetup(t)
+	cfg, mgr, _ := newWorkerTestSetup(t)
 	ctx := context.Background()
 
 	actions := []Action{
@@ -309,15 +287,10 @@ func TestWorkerPool_StopCancelsWork(t *testing.T) {
 		},
 	}
 
-	ids, writeErr := ledger.WriteActions(ctx, actions, nil, "cycle-wp3")
-	if writeErr != nil {
-		t.Fatalf("WriteActions: %v", writeErr)
-	}
-
 	tracker := NewDepTracker(10, 10, testLogger(t))
-	tracker.Add(&actions[0], ids[0], nil, "")
+	tracker.Add(&actions[0], 0, nil, "")
 
-	pool := NewWorkerPool(cfg, tracker, mgr, ledger, testLogger(t))
+	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
 	pool.Start(ctx, 4)
 
 	// Give workers a moment to pick up the action.
@@ -341,7 +314,7 @@ func TestWorkerPool_StopCancelsWork(t *testing.T) {
 func TestWorkerPool_Stats(t *testing.T) {
 	t.Parallel()
 
-	cfg, mgr, ledger, _ := newWorkerTestSetup(t)
+	cfg, mgr, _ := newWorkerTestSetup(t)
 	ctx := context.Background()
 
 	// Use a delete action against a nonexistent local file — the delete should
@@ -356,15 +329,10 @@ func TestWorkerPool_Stats(t *testing.T) {
 		},
 	}
 
-	ids, writeErr := ledger.WriteActions(ctx, actions, nil, "cycle-wp4")
-	if writeErr != nil {
-		t.Fatalf("WriteActions: %v", writeErr)
-	}
-
 	tracker := NewDepTracker(10, 10, testLogger(t))
-	tracker.Add(&actions[0], ids[0], nil, "")
+	tracker.Add(&actions[0], 0, nil, "")
 
-	pool := NewWorkerPool(cfg, tracker, mgr, ledger, testLogger(t))
+	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
 	pool.Start(ctx, 4)
 	pool.Wait()
 	pool.Stop()
@@ -375,13 +343,12 @@ func TestWorkerPool_Stats(t *testing.T) {
 	}
 }
 
-// TestWorkerPool_FailedOutcome_MarksLedgerFailed verifies that when an action
-// execution fails, the worker marks the ledger row as "failed" (not "claimed").
-// Regression test for: worker never called failAndComplete for execution failures.
-func TestWorkerPool_FailedOutcome_MarksLedgerFailed(t *testing.T) {
+// TestWorkerPool_FailedOutcome verifies that when an action execution fails,
+// the worker reports the failure via Stats() and the result channel.
+func TestWorkerPool_FailedOutcome(t *testing.T) {
 	t.Parallel()
 
-	cfg, mgr, ledger, _ := newWorkerTestSetup(t)
+	cfg, mgr, _ := newWorkerTestSetup(t)
 	ctx := context.Background()
 
 	// Configure a download mock that always fails.
@@ -408,15 +375,10 @@ func TestWorkerPool_FailedOutcome_MarksLedgerFailed(t *testing.T) {
 		},
 	}
 
-	ids, writeErr := ledger.WriteActions(ctx, actions, nil, "cycle-fail-ledger")
-	if writeErr != nil {
-		t.Fatalf("WriteActions: %v", writeErr)
-	}
-
 	tracker := NewDepTracker(10, 10, testLogger(t))
-	tracker.Add(&actions[0], ids[0], nil, "")
+	tracker.Add(&actions[0], 0, nil, "cycle-fail")
 
-	pool := NewWorkerPool(cfg, tracker, mgr, ledger, testLogger(t))
+	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
 	pool.Start(ctx, 4)
 	pool.Wait()
 	pool.Stop()
@@ -430,90 +392,93 @@ func TestWorkerPool_FailedOutcome_MarksLedgerFailed(t *testing.T) {
 		t.Errorf("failed = %d, want >= 1; errors: %v", failed, errs)
 	}
 
-	// The ledger row should NOT be pending (it was claimed+failed, not stuck as claimed).
-	pending, countErr := ledger.CountPendingForCycle(ctx, "cycle-fail-ledger")
-	if countErr != nil {
-		t.Fatalf("CountPending: %v", countErr)
+	// Drain the result channel and verify the failure is reported.
+	var foundFailure bool
+
+	for {
+		select {
+		case r, ok := <-pool.Results():
+			if !ok {
+				goto done
+			}
+
+			if !r.Success && r.Path == "fail-me.txt" {
+				foundFailure = true
+			}
+		default:
+			goto done
+		}
 	}
 
-	if pending != 0 {
-		t.Errorf("pending = %d, want 0 (failed action should be marked as failed, not stuck as claimed)", pending)
+done:
+
+	if !foundFailure {
+		t.Error("expected failure result for fail-me.txt in result channel")
 	}
 }
 
-// TestWorkerPool_FailAndComplete_UsePoolContext verifies that failAndComplete
-// uses the pool-level context (not the per-action context) for ledger writes.
-// When CancelByPath cancels actionCtx, the ledger.Fail call must still succeed.
-// Regression test for: canceled actionCtx caused silent ledger.Fail failure,
-// leaving rows stuck as "claimed" forever.
-func TestWorkerPool_FailAndComplete_UsePoolContext(t *testing.T) {
+// TestWorkerPool_ResultChannel verifies that worker results are reported
+// through the Results channel with correct cycle IDs.
+func TestWorkerPool_ResultChannel(t *testing.T) {
 	t.Parallel()
 
-	cfg, mgr, ledger, _ := newWorkerTestSetup(t)
+	cfg, mgr, _ := newWorkerTestSetup(t)
 	ctx := context.Background()
-
-	// Configure a download mock that cancels its own context (simulating
-	// CancelByPath) and then returns an error.
-	cfg.downloads = &workerMockDownloader{
-		downloadFn: func(dlCtx context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
-			// Simulate CancelByPath: the per-action context gets canceled
-			// while the action is in-flight.
-			if cause := dlCtx.Err(); cause != nil {
-				return 0, cause
-			}
-
-			return 0, fmt.Errorf("simulated failure after cancel")
-		},
-	}
 
 	actions := []Action{
 		{
-			Type:    ActionDownload,
-			Path:    "cancel-test.txt",
+			Type:    ActionLocalDelete,
+			Path:    "result-test.txt",
 			DriveID: driveid.New("0000000000000001"),
-			ItemID:  "cancel-id",
-			View: &PathView{
-				Remote: &RemoteState{
-					ItemID:  "cancel-id",
-					DriveID: driveid.New("0000000000000001"),
-					Size:    10,
-					Hash:    "somehash",
-				},
-			},
+			ItemID:  "del-id",
+			View:    &PathView{},
 		},
 	}
 
-	ids, writeErr := ledger.WriteActions(ctx, actions, nil, "cycle-cancel-ctx")
-	if writeErr != nil {
-		t.Fatalf("WriteActions: %v", writeErr)
-	}
-
 	tracker := NewDepTracker(10, 10, testLogger(t))
-	tracker.Add(&actions[0], ids[0], nil, "")
+	tracker.Add(&actions[0], 42, nil, "test-cycle")
 
-	pool := NewWorkerPool(cfg, tracker, mgr, ledger, testLogger(t))
+	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
 	pool.Start(ctx, 4)
 	pool.Wait()
 	pool.Stop()
 
-	// Verify the action was marked as failed (not stuck as "claimed").
-	failedCount, countErr := ledger.CountFailedForCycle(ctx, "cycle-cancel-ctx")
-	if countErr != nil {
-		t.Fatalf("CountFailedForCycle: %v", countErr)
+	// Read from result channel.
+	var result WorkerResult
+	var found bool
+
+	for {
+		select {
+		case r, ok := <-pool.Results():
+			if !ok {
+				goto check
+			}
+
+			if r.Path == "result-test.txt" {
+				result = r
+				found = true
+			}
+		default:
+			goto check
+		}
 	}
 
-	if failedCount != 1 {
-		t.Errorf("failed count = %d, want 1 (ledger.Fail should use pool context, not canceled action context)", failedCount)
+check:
+
+	if !found {
+		t.Fatal("expected result for result-test.txt in channel")
 	}
 
-	// Verify nothing is stuck as pending/claimed.
-	pending, pendErr := ledger.CountPendingForCycle(ctx, "cycle-cancel-ctx")
-	if pendErr != nil {
-		t.Fatalf("CountPendingForCycle: %v", pendErr)
+	if result.ID != 42 {
+		t.Errorf("result ID = %d, want 42", result.ID)
 	}
 
-	if pending != 0 {
-		t.Errorf("pending = %d, want 0", pending)
+	if result.CycleID != "test-cycle" {
+		t.Errorf("result CycleID = %q, want %q", result.CycleID, "test-cycle")
+	}
+
+	if !result.Success {
+		t.Errorf("result Success = false, want true")
 	}
 }
 
@@ -524,16 +489,10 @@ func TestWorkerPool_FailAndComplete_UsePoolContext(t *testing.T) {
 // TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline verifies
 // that when action 0 creates a folder and action 1 uploads a file into that
 // folder, the upload resolves its parentID from the baseline.
-//
-// With CreateSide=CreateLocal, the folder already exists remotely; the
-// folder-create action creates it locally via os.MkdirAll and commits a
-// baseline entry whose ItemID comes from action.View.Remote.ItemID (the
-// createFolderFn mock is never called for CreateLocal). The upload action
-// then resolves its parent from this baseline entry.
 func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing.T) {
 	t.Parallel()
 
-	cfg, mgr, ledger, syncRoot := newWorkerTestSetup(t)
+	cfg, mgr, syncRoot := newWorkerTestSetup(t)
 	ctx := context.Background()
 
 	var capturedParentID string
@@ -582,17 +541,11 @@ func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	deps := [][]int{{}, {0}} // action 1 depends on action 0
-	ids, writeErr := ledger.WriteActions(ctx, actions, deps, "cycle-wp-b090")
-	if writeErr != nil {
-		t.Fatalf("WriteActions: %v", writeErr)
-	}
-
 	tracker := NewDepTracker(10, 10, testLogger(t))
-	tracker.Add(&actions[0], ids[0], nil, "")
-	tracker.Add(&actions[1], ids[1], []int64{ids[0]}, "")
+	tracker.Add(&actions[0], 0, nil, "")
+	tracker.Add(&actions[1], 1, []int64{0}, "")
 
-	pool := NewWorkerPool(cfg, tracker, mgr, ledger, testLogger(t))
+	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
 	pool.Start(ctx, 4)
 	pool.Wait()
 	pool.Stop()

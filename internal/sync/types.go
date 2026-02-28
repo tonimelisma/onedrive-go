@@ -441,10 +441,6 @@ type Action struct {
 	CreateSide   FolderCreateSide // for folder creates
 	View         *PathView        // full three-way context
 	ConflictInfo *ConflictRecord
-
-	// Recovery-only fields: populated when reconstructing actions from ledger.
-	LedgerID   int64  // non-zero for recovered actions
-	SessionURL string // upload session URL for resume (B-037)
 }
 
 // ActionPlan contains a flat list of actions with explicit dependency edges.
@@ -517,9 +513,20 @@ type Uploader interface {
 	) (*graph.Item, error)
 }
 
-// SessionResumer resumes an interrupted upload session. Satisfied by *graph.Client.
-// Type-asserted at runtime to avoid breaking the Uploader interface (B-037).
-type SessionResumer interface {
+// SessionUploader provides session-based upload methods for resumable transfers.
+// Satisfied by *graph.Client. Type-asserted at runtime to avoid breaking the
+// Uploader interface. When available alongside a SessionStore, the executor
+// uses session-based uploads for large files and persists session state for
+// cross-crash resume.
+type SessionUploader interface {
+	CreateUploadSession(
+		ctx context.Context, driveID driveid.ID, parentID, name string,
+		size int64, mtime time.Time,
+	) (*graph.UploadSession, error)
+	UploadFromSession(
+		ctx context.Context, session *graph.UploadSession,
+		content io.ReaderAt, totalSize int64, progress graph.ProgressFunc,
+	) (*graph.Item, error)
 	ResumeUpload(
 		ctx context.Context, session *graph.UploadSession,
 		content io.ReaderAt, totalSize int64, progress graph.ProgressFunc,

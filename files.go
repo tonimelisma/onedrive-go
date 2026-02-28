@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -16,6 +18,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	isync "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
 
 func newLsCmd() *cobra.Command {
@@ -276,43 +280,109 @@ func runGet(cmd *cobra.Command, args []string) error {
 		localPath = args[1]
 	}
 
-	// Atomic download: write to a temp file in the same directory, then rename.
-	// This prevents partial downloads from leaving corrupt files on disk.
-	dir := filepath.Dir(localPath)
+	partialPath := localPath + ".partial"
 
-	tmp, err := os.CreateTemp(dir, ".download-*.tmp")
-	if err != nil {
-		return fmt.Errorf("creating temp file for download: %w", err)
+	if err := downloadWithResume(ctx, client, driveID, item, partialPath, logger); err != nil {
+		return err
 	}
 
-	tmpPath := tmp.Name()
-
-	// Clean up temp file on any error path.
-	success := false
-	defer func() {
-		if !success {
-			os.Remove(tmpPath)
-		}
-	}()
-
-	n, err := client.Download(ctx, driveID, item.ID, tmp)
-	if err != nil {
-		tmp.Close()
-		return fmt.Errorf("downloading %q: %w", remotePath, err)
+	// Verify hash if remote provides one.
+	if err := verifyDownloadHash(partialPath, item.QuickXorHash, remotePath); err != nil {
+		return err
 	}
 
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("closing temp file: %w", err)
-	}
-
-	if err := os.Rename(tmpPath, localPath); err != nil {
+	// Atomic rename: .partial -> target.
+	if err := os.Rename(partialPath, localPath); err != nil {
 		return fmt.Errorf("renaming download to %q: %w", localPath, err)
 	}
 
-	success = true
+	fi, statErr := os.Stat(localPath)
+	if statErr != nil {
+		return fmt.Errorf("stat after download: %w", statErr)
+	}
 
-	logger.Debug("download complete", "local_path", localPath, "bytes", n)
-	statusf("Downloaded %s (%s)\n", localPath, formatSize(n))
+	logger.Debug("download complete", "local_path", localPath, "bytes", fi.Size())
+	statusf("Downloaded %s (%s)\n", localPath, formatSize(fi.Size()))
+
+	return nil
+}
+
+// downloadWithResume attempts to resume from a .partial file, falling back to
+// a fresh download if resume fails or no partial exists.
+func downloadWithResume(
+	ctx context.Context, client *graph.Client, driveID driveid.ID,
+	item *graph.Item, partialPath string, logger *slog.Logger,
+) error {
+	// Check for existing .partial file for resume.
+	if pi, statErr := os.Stat(partialPath); statErr == nil && pi.Size() > 0 {
+		if tryResumeDownload(ctx, client, driveID, item, partialPath, pi.Size(), logger) {
+			return nil
+		}
+	}
+
+	// Fresh download to .partial file.
+	f, err := os.Create(partialPath)
+	if err != nil {
+		return fmt.Errorf("creating partial file for download: %w", err)
+	}
+
+	_, dlErr := client.Download(ctx, driveID, item.ID, f)
+	f.Close()
+
+	if dlErr != nil {
+		return fmt.Errorf("downloading %q (partial file saved for resume): %w", item.Name, dlErr)
+	}
+
+	return nil
+}
+
+// tryResumeDownload attempts to resume a download from an existing .partial file.
+// Returns true on success; on failure, cleans up and returns false.
+func tryResumeDownload(
+	ctx context.Context, client *graph.Client, driveID driveid.ID,
+	item *graph.Item, partialPath string, existingSize int64, logger *slog.Logger,
+) bool {
+	f, err := os.OpenFile(partialPath, os.O_WRONLY|os.O_APPEND, 0o644) //nolint:mnd // standard file perms
+	if err != nil {
+		os.Remove(partialPath)
+		return false
+	}
+
+	statusf("Resuming download from %s...\n", formatSize(existingSize))
+
+	_, dlErr := client.DownloadRange(ctx, driveID, item.ID, f, existingSize)
+	f.Close()
+
+	if dlErr != nil {
+		logger.Warn("download resume failed, starting fresh",
+			slog.String("path", item.Name),
+			slog.String("error", dlErr.Error()),
+		)
+		os.Remove(partialPath)
+
+		return false
+	}
+
+	return true
+}
+
+// verifyDownloadHash checks the downloaded .partial file against the remote hash.
+// Deletes the partial on mismatch. No-op if remoteHash is empty.
+func verifyDownloadHash(partialPath, remoteHash, remotePath string) error {
+	if remoteHash == "" {
+		return nil
+	}
+
+	localHash, err := hashFileDisk(partialPath)
+	if err != nil {
+		os.Remove(partialPath)
+		return fmt.Errorf("hashing downloaded file: %w", err)
+	}
+
+	if localHash != remoteHash {
+		os.Remove(partialPath)
+		return fmt.Errorf("hash mismatch after download of %q (deleted, try again)", remotePath)
+	}
 
 	return nil
 }
@@ -361,15 +431,114 @@ func runPut(cmd *cobra.Command, args []string) error {
 		statusf("Uploading: %s / %s\n", formatSize(uploaded), formatSize(total))
 	}
 
-	_, err = client.Upload(ctx, driveID, parentItem.ID, name, f, fi.Size(), fi.ModTime(), progress)
-	if err != nil {
-		return fmt.Errorf("uploading %q: %w", remotePath, err)
+	// Small files: simple upload, no resume needed.
+	if fi.Size() <= graph.SimpleUploadMaxSize {
+		_, err = client.Upload(ctx, driveID, parentItem.ID, name, f, fi.Size(), fi.ModTime(), progress)
+		if err != nil {
+			return fmt.Errorf("uploading %q: %w", remotePath, err)
+		}
+
+		logger.Debug("upload complete", "remote_path", remotePath, "size", fi.Size())
+		statusf("Uploaded %s (%s)\n", remotePath, formatSize(fi.Size()))
+
+		return nil
 	}
 
-	logger.Debug("upload complete", "remote_path", remotePath, "size", fi.Size())
+	// Large files: use session store for resume across interruptions.
+	if err := chunkedUploadWithResume(ctx, client, f, driveID, parentItem.ID, name, localPath, remotePath, fi, logger, progress); err != nil {
+		return err
+	}
+
 	statusf("Uploaded %s (%s)\n", remotePath, formatSize(fi.Size()))
 
 	return nil
+}
+
+// chunkedUploadWithResume uploads a large file using session-based resume.
+// Checks for an existing session, attempts resume, and falls back to fresh upload.
+func chunkedUploadWithResume(
+	ctx context.Context, client *graph.Client, f *os.File,
+	driveID driveid.ID, parentID, name, localPath, remotePath string,
+	fi os.FileInfo, logger *slog.Logger, progress graph.ProgressFunc,
+) error {
+	localHash, err := hashFileDisk(localPath)
+	if err != nil {
+		return fmt.Errorf("hashing local file: %w", err)
+	}
+
+	store := isync.NewSessionStore(config.DefaultDataDir(), logger)
+
+	// Attempt resume from existing session.
+	if item, resumed := tryResumeUpload(ctx, client, store, f, driveID, remotePath, localHash, fi.Size(), logger, progress); resumed {
+		logger.Debug("upload resumed successfully", "remote_path", remotePath, "item_id", item.ID)
+		return nil
+	}
+
+	// Fresh chunked upload with session persistence.
+	session, err := client.CreateUploadSession(ctx, driveID, parentID, name, fi.Size(), fi.ModTime())
+	if err != nil {
+		return fmt.Errorf("creating upload session for %q: %w", remotePath, err)
+	}
+
+	if saveErr := store.Save(driveID.String(), remotePath, &isync.SessionRecord{
+		SessionURL: session.UploadURL,
+		FileHash:   localHash,
+		FileSize:   fi.Size(),
+	}); saveErr != nil {
+		logger.Warn("failed to save upload session", slog.String("error", saveErr.Error()))
+	}
+
+	item, err := client.UploadFromSession(ctx, session, f, fi.Size(), progress)
+	if err != nil {
+		return fmt.Errorf("uploading %q (session saved for resume): %w", remotePath, err)
+	}
+
+	if delErr := store.Delete(driveID.String(), remotePath); delErr != nil {
+		logger.Warn("failed to delete session file", slog.String("error", delErr.Error()))
+	}
+
+	logger.Debug("upload complete", "remote_path", remotePath, "item_id", item.ID, "size", fi.Size())
+
+	return nil
+}
+
+// tryResumeUpload attempts to resume an upload from a saved session.
+// Returns the completed item and true on success, or nil and false if resume
+// is not possible (no session, hash mismatch, expired).
+func tryResumeUpload(
+	ctx context.Context, client *graph.Client, store *isync.SessionStore, f *os.File,
+	driveID driveid.ID, remotePath, localHash string, size int64,
+	logger *slog.Logger, progress graph.ProgressFunc,
+) (*graph.Item, bool) {
+	rec, loadErr := store.Load(driveID.String(), remotePath)
+	if loadErr != nil || rec == nil || rec.FileHash != localHash {
+		return nil, false
+	}
+
+	statusf("Resuming upload from saved session...\n")
+
+	session := &graph.UploadSession{UploadURL: rec.SessionURL}
+
+	item, err := client.ResumeUpload(ctx, session, f, size, progress)
+	if err == nil {
+		if delErr := store.Delete(driveID.String(), remotePath); delErr != nil {
+			logger.Warn("failed to delete session file", slog.String("error", delErr.Error()))
+		}
+
+		return item, true
+	}
+
+	if !errors.Is(err, graph.ErrUploadSessionExpired) {
+		logger.Warn("upload resume failed", slog.String("error", err.Error()))
+	} else {
+		logger.Info("upload session expired, creating fresh session")
+	}
+
+	if delErr := store.Delete(driveID.String(), remotePath); delErr != nil {
+		logger.Warn("failed to delete expired session file", slog.String("error", delErr.Error()))
+	}
+
+	return nil, false
 }
 
 // rmJSONOutput is the JSON output schema for the rm command.
@@ -572,4 +741,20 @@ func printStatText(item *graph.Item) {
 	if item.MimeType != "" {
 		fmt.Printf("MIME:     %s\n", item.MimeType)
 	}
+}
+
+// hashFileDisk computes the base64-encoded QuickXorHash of a file on disk.
+func hashFileDisk(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("opening %s for hashing: %w", path, err)
+	}
+	defer f.Close()
+
+	h := quickxorhash.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", fmt.Errorf("hashing %s: %w", path, err)
+	}
+
+	return base64.StdEncoding.EncodeToString(h.Sum(nil)), nil
 }

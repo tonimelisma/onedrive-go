@@ -228,12 +228,10 @@ func (m *BaselineManager) GetDeltaToken(ctx context.Context, driveID string) (st
 	return token, nil
 }
 
-// CommitOutcome atomically applies a single outcome to the baseline and
-// marks the corresponding ledger action as done — all in one SQLite
-// transaction. After the DB write, the in-memory baseline cache is updated
-// incrementally (Put or Delete). If ledgerID is 0, the ledger update is
-// skipped (used by resolveTransfer for manual conflict resolution).
-func (m *BaselineManager) CommitOutcome(ctx context.Context, outcome *Outcome, ledgerID int64) error {
+// CommitOutcome atomically applies a single outcome to the baseline in a
+// SQLite transaction. After the DB write, the in-memory baseline cache is
+// updated incrementally (Put or Delete).
+func (m *BaselineManager) CommitOutcome(ctx context.Context, outcome *Outcome) error {
 	if !outcome.Success {
 		return nil
 	}
@@ -255,12 +253,6 @@ func (m *BaselineManager) CommitOutcome(ctx context.Context, outcome *Outcome, l
 
 	if applyErr := applySingleOutcome(ctx, tx, outcome, syncedAt); applyErr != nil {
 		return applyErr
-	}
-
-	if ledgerID != 0 {
-		if ledgerErr := completeLedgerAction(ctx, tx, ledgerID, syncedAt); ledgerErr != nil {
-			return ledgerErr
-		}
 	}
 
 	if commitErr := tx.Commit(); commitErr != nil {
@@ -287,27 +279,6 @@ func applySingleOutcome(ctx context.Context, tx *sql.Tx, o *Outcome, syncedAt in
 	default:
 		return nil
 	}
-}
-
-// completeLedgerAction marks a ledger action as done within the given transaction.
-func completeLedgerAction(ctx context.Context, tx *sql.Tx, ledgerID, completedAt int64) error {
-	result, err := tx.ExecContext(ctx,
-		`UPDATE action_queue SET status = 'done', completed_at = ?
-		 WHERE id = ? AND status = 'claimed'`, completedAt, ledgerID)
-	if err != nil {
-		return fmt.Errorf("sync: commit outcome ledger update %d: %w", ledgerID, err)
-	}
-
-	rows, rowsErr := result.RowsAffected()
-	if rowsErr != nil {
-		return fmt.Errorf("sync: commit outcome ledger rows affected %d: %w", ledgerID, rowsErr)
-	}
-
-	if rows == 0 {
-		return fmt.Errorf("sync: commit outcome ledger %d: action not claimed", ledgerID)
-	}
-
-	return nil
 }
 
 // updateBaselineCache applies a single outcome to the in-memory baseline,
@@ -350,7 +321,7 @@ func outcomeToEntry(o *Outcome, syncedAt int64) *BaselineEntry {
 }
 
 // CommitDeltaToken persists a delta token in its own transaction, separate
-// from baseline/ledger updates. Used after all actions in a cycle complete.
+// from baseline updates. Used after all actions in a cycle complete.
 func (m *BaselineManager) CommitDeltaToken(ctx context.Context, token, driveID string) error {
 	if token == "" {
 		return nil
@@ -661,7 +632,7 @@ func scanConflictRowSingle(row *sql.Row) (*ConflictRecord, error) {
 }
 
 // DB returns the underlying database connection for sharing with other
-// components (e.g., Ledger) that need to participate in the same database.
+// components that need to participate in the same database.
 func (m *BaselineManager) DB() *sql.DB {
 	return m.db
 }

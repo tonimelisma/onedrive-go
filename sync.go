@@ -5,6 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
@@ -62,6 +63,7 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	engine, err := sync.NewEngine(&sync.EngineConfig{
 		DBPath:        dbPath,
 		SyncRoot:      syncDir,
+		DataDir:       config.DefaultDataDir(),
 		DriveID:       driveID,
 		Fetcher:       client,
 		Items:         client,

@@ -414,14 +414,20 @@ When using `FlushDebounced()` in tests, always cancel the context AND drain the 
 ### Watch() method sleepFunc pattern
 Both `RemoteObserver.Watch()` and `LocalObserver.Watch()` use injectable `sleepFunc func(ctx context.Context, d time.Duration) error` for test control. Default is `timeSleep()` which uses `time.NewTimer` + `select` on ctx.Done. Tests inject `noopSleep()` that returns immediately. Same pattern as `graph.Client.sleepFunc`.
 
-### Crash recovery: synthetic PathView from ledger metadata
-When recovering pending actions after a crash, the executor needs `action.View` for hash, parent ID, mtime. The ledger stores these as metadata columns (hash, size, mtime, item_id, parent_id, drive_id). `buildSyntheticView()` reconstructs a `PathView` from ledger row data. Key invariant: all actions in a cycle are inserted in a single transaction with sequential IDs, so `ledgerID = firstID + plannerIndex` allows dependency reconstruction.
+### Idempotent planner eliminates need for crash recovery ledger
+The planner is idempotent: on restart after crash, delta re-observation produces the same actions. Items completed before crash are in baseline (EF1 no-ops). Items not completed get fresh actions. Transfer resume (the genuinely useful feature) is better served by file-based storage (`.partial` files for downloads, JSON session files for uploads) that works for both CLI and sync engine, independent of any per-drive SQLite database. The ledger added ~1,700 lines for a recovery path that delta re-observation handles for free.
 
 ### Two-signal shutdown pattern
 `shutdownContext(parent, logger)` returns a derived context. First SIGINT/SIGTERM cancels the context (graceful drain). Second signal calls `os.Exit(1)` (force exit). The goroutine listens on `parent.Done()` to self-clean when the parent context is canceled (e.g., normal exit). Channel buffer of 1 is sufficient — the goroutine transitions to the second-signal listener fast enough.
 
-### Failure suppression must cancel in ledger
-When B-123 suppression skips an action in `processBatch`, the action must be explicitly canceled in the ledger. Simply not adding it to the tracker leaves an orphan pending row that would be reclaimed as stale during crash recovery. Cancel immediately after writing to maintain ledger consistency.
-
 ### Runtime interface assertion for optional capabilities
-`RangeDownloader` and `SessionResumer` are optional interfaces checked via runtime type assertion (`e.downloads.(RangeDownloader)`). This avoids breaking the core `Downloader`/`Uploader` interfaces while adding optional capabilities. The executor gracefully falls back when the interface isn't satisfied. Pattern: define narrow interface, type-assert at the call site, fall back to base behavior.
+`RangeDownloader` and `SessionUploader` are optional interfaces checked via runtime type assertion (`e.downloads.(RangeDownloader)`, `e.uploads.(SessionUploader)`). This avoids breaking the core `Downloader`/`Uploader` interfaces while adding optional capabilities. The executor gracefully falls back when the interface isn't satisfied. Pattern: define narrow interface, type-assert at the call site, fall back to base behavior.
+
+### File-based session store with lazy cleanup
+Upload sessions are stored as JSON files keyed by `sha256(driveID + ":" + remotePath)` — remote-scoped because upload sessions are server-side state tied to `(driveID, parentID, name)`. Stale sessions are auto-deleted via a lazy cleanup triggered on `Save()`, throttled to once per hour. The `SessionStore` is shared between CLI `put` and sync engine. Session URLs are pre-authenticated — files are `0600` permissions.
+
+### Optimistic download resume via `.partial` files
+Graph API provides only full-file QuickXorHash — no partial checksums. Download resume is optimistic: trust existing `.partial` bytes, append remaining via `DownloadRange(offset)`, hash complete file from byte 0, verify against remote hash. Same approach as `wget -c`. The `.partial` file IS the state — no sidecar files needed.
+
+### Test race with lazy cleanup goroutines
+`SessionStore.Save()` triggers lazy `CleanStale()` in a goroutine, throttled to once per hour. In tests that call `Save()` then explicitly call `CleanStale()`, the goroutine can race and delete files before the explicit call. Fix: pre-set `store.lastClean = time.Now()` to throttle the goroutine during the test.

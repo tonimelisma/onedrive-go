@@ -462,6 +462,28 @@ func (c *Client) uploadAllChunks(
 	return lastItem, nil
 }
 
+// UploadFromSession uploads all chunks for an existing upload session.
+// Unlike chunkedUploadEncapsulated, the caller manages session creation and
+// persistence. On error, the session is best-effort canceled.
+func (c *Client) UploadFromSession(
+	ctx context.Context, session *UploadSession,
+	content io.ReaderAt, totalSize int64, progress ProgressFunc,
+) (*Item, error) {
+	item, err := c.uploadAllChunks(ctx, session, content, totalSize, progress)
+	if err != nil {
+		cancelErr := c.CancelUploadSession(context.Background(), session)
+		if cancelErr != nil {
+			c.logger.Warn("failed to cancel upload session after error",
+				slog.String("error", cancelErr.Error()),
+			)
+		}
+
+		return nil, err
+	}
+
+	return item, nil
+}
+
 // ErrUploadSessionExpired indicates that an upload session is no longer valid
 // (Graph API returned 404). The caller should fall back to a fresh upload.
 var ErrUploadSessionExpired = errors.New("graph: upload session expired")

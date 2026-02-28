@@ -200,7 +200,7 @@ func seedBaseline(t *testing.T, mgr *BaselineManager, ctx context.Context, outco
 	t.Helper()
 
 	for i := range outcomes {
-		if err := mgr.CommitOutcome(ctx, &outcomes[i], 0); err != nil {
+		if err := mgr.CommitOutcome(ctx, &outcomes[i]); err != nil {
 			t.Fatalf("seed CommitOutcome[%d]: %v", i, err)
 		}
 	}
@@ -1418,9 +1418,7 @@ func TestRunWatch_WatchCycleCompletion_CommitsDeltaToken(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	// Set up a remote observer and manually set its delta token
-	// (FullDelta returns the token but doesn't store it internally;
-	// setDeltaToken is what Watch uses to persist the latest token).
+	// Set up a remote observer and manually set its delta token.
 	obs := NewRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
 	obs.setDeltaToken("watch-token-v1")
 	eng.remoteObs = obs
@@ -1438,15 +1436,15 @@ func TestRunWatch_WatchCycleCompletion_CommitsDeltaToken(t *testing.T) {
 		View:    &PathView{},
 	}
 
-	ids, writeErr := eng.ledger.WriteActions(ctx, []Action{*action}, nil, cycleID)
-	if writeErr != nil {
-		t.Fatalf("WriteActions: %v", writeErr)
-	}
+	tracker.Add(action, 0, nil, cycleID)
 
-	tracker.Add(action, ids[0], nil, cycleID)
+	// No in-memory failures recorded — cycle is successful.
+	eng.cycleFailuresMu.Lock()
+	eng.cycleFailures[cycleID] = 0
+	eng.cycleFailuresMu.Unlock()
 
 	// Complete the action to trigger CycleDone.
-	tracker.Complete(ids[0])
+	tracker.Complete(0)
 
 	// Now call watchCycleCompletion — it should commit the delta token.
 	eng.watchCycleCompletion(ctx, tracker, cycleID)
@@ -1511,26 +1509,17 @@ func TestRunWatch_WatchCycleCompletion_SkipsOnFailure(t *testing.T) {
 		View:    &PathView{},
 	}
 
-	ids, writeErr := eng.ledger.WriteActions(ctx, []Action{*action}, nil, cycleID)
-	if writeErr != nil {
-		t.Fatalf("WriteActions: %v", writeErr)
-	}
+	tracker.Add(action, 0, nil, cycleID)
 
-	tracker.Add(action, ids[0], nil, cycleID)
-
-	// Simulate: claim the action, then fail it in the ledger.
-	if claimErr := eng.ledger.Claim(ctx, ids[0]); claimErr != nil {
-		t.Fatalf("Claim: %v", claimErr)
-	}
-
-	if failErr := eng.ledger.Fail(ctx, ids[0], "simulated failure"); failErr != nil {
-		t.Fatalf("Fail: %v", failErr)
-	}
+	// Record a failure in the in-memory cycle tracker.
+	eng.cycleFailuresMu.Lock()
+	eng.cycleFailures[cycleID] = 1
+	eng.cycleFailuresMu.Unlock()
 
 	// Complete in the tracker to trigger CycleDone.
-	tracker.Complete(ids[0])
+	tracker.Complete(0)
 
-	// watchCycleCompletion should detect the failed ledger row.
+	// watchCycleCompletion should detect the in-memory failure count.
 	eng.watchCycleCompletion(ctx, tracker, cycleID)
 
 	// Delta token should NOT have been advanced.
@@ -1692,12 +1681,9 @@ func TestRunWatch_AllObserversDead_ReturnsError(t *testing.T) {
 	// Create .nosync guard file so local observer exits immediately with error.
 	writeLocalFile(t, syncRoot, ".nosync", "")
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	done := make(chan error, 1)
 	go func() {
-		done <- eng.RunWatch(ctx, SyncUploadOnly, WatchOpts{
+		done <- eng.RunWatch(t.Context(), SyncUploadOnly, WatchOpts{
 			PollInterval: 1 * time.Hour,
 			Debounce:     10 * time.Millisecond,
 		})
