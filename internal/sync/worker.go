@@ -26,7 +26,6 @@ type WorkerPool struct {
 	cfg      *ExecutorConfig
 	tracker  *DepTracker
 	baseline *BaselineManager
-	ledger   *Ledger
 	logger   *slog.Logger
 
 	succeeded atomic.Int32
@@ -34,24 +33,45 @@ type WorkerPool struct {
 	errors    []error
 	errorsMu  stdsync.Mutex
 
+	// results reports per-action outcomes back to the engine for in-memory
+	// cycle result tracking.
+	results chan WorkerResult
+
 	cancel context.CancelFunc
 	wg     stdsync.WaitGroup
 }
 
-// NewWorkerPool creates a pool without starting any workers.
+// WorkerResult reports the outcome of a single action execution. The engine
+// reads these from the Results channel for failure suppression and delta
+// token commit decisions.
+type WorkerResult struct {
+	ID      int64
+	CycleID string
+	Path    string
+	Success bool
+	ErrMsg  string
+}
+
+// NewWorkerPool creates a pool without starting any workers. planSize
+// determines the result channel buffer (use the number of actions in the
+// plan for one-shot mode, or a generous buffer for watch mode).
 func NewWorkerPool(
 	cfg *ExecutorConfig,
 	tracker *DepTracker,
 	baseline *BaselineManager,
-	ledger *Ledger,
 	logger *slog.Logger,
+	planSize int,
 ) *WorkerPool {
+	if planSize < 1 {
+		planSize = 1
+	}
+
 	return &WorkerPool{
 		cfg:      cfg,
 		tracker:  tracker,
 		baseline: baseline,
-		ledger:   ledger,
 		logger:   logger,
+		results:  make(chan WorkerResult, planSize),
 	}
 }
 
@@ -70,9 +90,7 @@ func (wp *WorkerPool) Start(ctx context.Context, total int) {
 	reservedBulk := max(minReserved, total/laneDivisor)
 	shared := total - reservedInteractive - reservedBulk
 
-	if shared < 1 {
-		shared = 1
-	}
+	shared = max(shared, 1)
 
 	// Reserved interactive workers: only read from interactive channel.
 	for range reservedInteractive {
@@ -169,25 +187,13 @@ func (wp *WorkerPool) worker(ctx context.Context, primary, secondary <-chan *Tra
 	}
 }
 
-// executeAction runs a single tracked action: claim, execute, commit, complete.
+// executeAction runs a single tracked action: execute, commit, complete.
 func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 	// Per-action cancellable context.
 	actionCtx, cancel := context.WithCancel(ctx)
 	ta.Cancel = cancel
 
 	defer cancel()
-
-	// Claim in the ledger.
-	if claimErr := wp.ledger.Claim(actionCtx, ta.LedgerID); claimErr != nil {
-		wp.logger.Warn("worker: claim failed",
-			slog.Int64("ledger_id", ta.LedgerID),
-			slog.String("error", claimErr.Error()),
-		)
-		wp.recordFailure(claimErr)
-		wp.tracker.Complete(ta.LedgerID)
-
-		return
-	}
 
 	// Load baseline (cached after first call).
 	bl, loadErr := wp.baseline.Load(actionCtx)
@@ -196,7 +202,8 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 			slog.String("error", loadErr.Error()),
 		)
 		wp.recordFailure(loadErr)
-		wp.failAndComplete(ctx, ta, loadErr.Error())
+		wp.sendResult(ta, false, loadErr.Error())
+		wp.tracker.Complete(ta.ID)
 
 		return
 	}
@@ -205,31 +212,31 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 	exec := NewExecution(wp.cfg, bl)
 	outcome := wp.dispatchAction(actionCtx, exec, ta)
 
-	// Commit outcome (baseline + ledger in one transaction). Uses pool-level
-	// ctx because the action already completed — its outcome should be persisted
-	// even if CancelByPath canceled actionCtx after dispatch returned.
-	if commitErr := wp.baseline.CommitOutcome(ctx, &outcome, ta.LedgerID); commitErr != nil {
+	// Commit outcome to baseline. Uses pool-level ctx because the action
+	// already completed — its outcome should be persisted even if
+	// CancelByPath canceled actionCtx after dispatch returned.
+	if commitErr := wp.baseline.CommitOutcome(ctx, &outcome); commitErr != nil {
 		wp.logger.Error("worker: commit outcome failed",
-			slog.Int64("ledger_id", ta.LedgerID),
+			slog.Int64("id", ta.ID),
 			slog.String("error", commitErr.Error()),
 		)
 		wp.recordFailure(commitErr)
-		wp.tracker.Complete(ta.LedgerID)
+		wp.sendResult(ta, false, commitErr.Error())
+		wp.tracker.Complete(ta.ID)
 
 		return
 	}
 
 	if outcome.Success {
 		wp.succeeded.Add(1)
+		wp.sendResult(ta, true, "")
 	} else {
 		wp.recordFailure(outcome.Error)
-		wp.failAndComplete(ctx, ta, outcome.Error.Error())
-
-		return
+		wp.sendResult(ta, false, outcome.Error.Error())
 	}
 
 	// Signal completion to dispatch dependents.
-	wp.tracker.Complete(ta.LedgerID)
+	wp.tracker.Complete(ta.ID)
 }
 
 // dispatchAction routes a tracked action to the appropriate executor method.
@@ -267,6 +274,13 @@ func (wp *WorkerPool) dispatchAction(
 	}
 }
 
+// Results returns a read-only channel of per-action results. The engine
+// reads from this channel for in-memory cycle result tracking (failure
+// suppression, delta token commit decisions).
+func (wp *WorkerPool) Results() <-chan WorkerResult {
+	return wp.results
+}
+
 // recordFailure atomically appends an error to the pool's error list.
 func (wp *WorkerPool) recordFailure(err error) {
 	if err == nil {
@@ -279,14 +293,22 @@ func (wp *WorkerPool) recordFailure(err error) {
 	wp.errorsMu.Unlock()
 }
 
-// failAndComplete marks a ledger action as failed and signals tracker completion.
-func (wp *WorkerPool) failAndComplete(ctx context.Context, ta *TrackedAction, errMsg string) {
-	if failErr := wp.ledger.Fail(ctx, ta.LedgerID, errMsg); failErr != nil {
-		wp.logger.Warn("worker: ledger fail recording failed",
-			slog.Int64("ledger_id", ta.LedgerID),
-			slog.String("error", failErr.Error()),
-		)
+// sendResult reports a per-action outcome to the results channel. Non-blocking:
+// if the channel is full, the result is dropped (Stats() still has the counts).
+func (wp *WorkerPool) sendResult(ta *TrackedAction, success bool, errMsg string) {
+	r := WorkerResult{
+		ID:      ta.ID,
+		CycleID: ta.CycleID,
+		Path:    ta.Action.Path,
+		Success: success,
+		ErrMsg:  errMsg,
 	}
 
-	wp.tracker.Complete(ta.LedgerID)
+	select {
+	case wp.results <- r:
+	default:
+		wp.logger.Warn("worker: result channel full, dropping result",
+			slog.Int64("id", ta.ID),
+		)
+	}
 }

@@ -10,10 +10,10 @@ import (
 // Package-level API documentation for tracker.go (B-145):
 //
 // DepTracker is an in-memory dependency graph that dispatches sync actions
-// to lane-based worker channels as their dependencies are satisfied. It is
-// the bridge between the persistent Ledger and the WorkerPool:
+// to lane-based worker channels as their dependencies are satisfied. It
+// bridges the planner's ActionPlan and the WorkerPool:
 //
-//   - Add(): Insert an action with its ledger ID and dependency IDs.
+//   - Add(): Insert an action with its sequential ID and dependency IDs.
 //     If all deps are satisfied, the action is dispatched immediately.
 //   - Complete(): Mark an action done, decrement dependents' counters,
 //     and dispatch any dependents that become ready. Advances per-cycle
@@ -33,12 +33,15 @@ const smallFileThreshold = 10 * 1024 * 1024 // 10 MB
 // Large enough to absorb typical watch batches without blocking dispatch.
 const watchChanBuf = 1024
 
-// TrackedAction pairs an Action with its ledger ID and a per-action cancel
-// function. Workers pull TrackedActions from the interactive or bulk channels.
+// TrackedAction pairs an Action with an ID and a per-action cancel function.
+// Workers pull TrackedActions from the interactive or bulk channels. The ID
+// is a sequential counter (assigned by the engine) used as a unique key for
+// the tracker's internal maps.
 type TrackedAction struct {
-	Action   Action
-	LedgerID int64
-	Cancel   context.CancelFunc
+	Action  Action
+	ID      int64
+	CycleID string
+	Cancel  context.CancelFunc
 
 	depsLeft   atomic.Int32
 	dependents []*TrackedAction
@@ -55,11 +58,11 @@ type cycleTracker struct {
 
 // DepTracker is an in-memory dependency graph that dispatches actions to
 // lane-based channels as their dependencies are satisfied. It is populated
-// from ledger rows at cycle start and driven to completion by worker
+// from the planner's ActionPlan and driven to completion by worker
 // Complete() calls.
 type DepTracker struct {
 	mu          stdsync.Mutex
-	actions     map[int64]*TrackedAction // ledger ID → tracked action
+	actions     map[int64]*TrackedAction // sequential ID → tracked action
 	byPath      map[string]*TrackedAction
 	interactive chan *TrackedAction
 	bulk        chan *TrackedAction
@@ -72,15 +75,12 @@ type DepTracker struct {
 	// Per-cycle completion tracking for watch mode (B-121).
 	cyclesMu    stdsync.Mutex
 	cycles      map[string]*cycleTracker
-	cycleLookup map[int64]string // ledger ID → cycle ID
+	cycleLookup map[int64]string // action ID → cycle ID
 }
 
 // NewDepTracker creates a tracker with the given channel buffer sizes.
 // Current callers pass len(plan.Actions) for both buffers, so dispatch()
-// never blocks. When bounded channels are introduced for watch mode
-// (concurrent-execution.md §10.2 refill loop), dispatch must be decoupled
-// from Complete() to prevent worker deadlock — a worker blocked on a full
-// channel inside Complete() cannot drain the channel it's blocking on.
+// never blocks.
 func NewDepTracker(interactiveBuf, bulkBuf int, logger *slog.Logger) *DepTracker {
 	return &DepTracker{
 		actions:     make(map[int64]*TrackedAction),
@@ -118,22 +118,23 @@ func NewPersistentDepTracker(logger *slog.Logger) *DepTracker {
 //
 // cycleID groups the action with a planning cycle for per-cycle completion
 // tracking (B-121). Pass empty string for one-shot mode (no cycle tracking).
-func (dt *DepTracker) Add(action *Action, ledgerID int64, depIDs []int64, cycleID string) {
+func (dt *DepTracker) Add(action *Action, id int64, depIDs []int64, cycleID string) {
 	ta := &TrackedAction{
-		Action:   *action,
-		LedgerID: ledgerID,
+		Action:  *action,
+		ID:      id,
+		CycleID: cycleID,
 	}
 
 	dt.mu.Lock()
 	defer dt.mu.Unlock()
 
-	dt.actions[ledgerID] = ta
+	dt.actions[id] = ta
 	dt.byPath[action.Path] = ta
 	dt.total.Add(1)
 
 	// Register with per-cycle tracker if a cycleID is provided.
 	if cycleID != "" {
-		dt.registerCycleLocked(ledgerID, cycleID)
+		dt.registerCycleLocked(id, cycleID)
 	}
 
 	var depsRemaining int32
@@ -156,9 +157,9 @@ func (dt *DepTracker) Add(action *Action, ledgerID int64, depIDs []int64, cycleI
 	}
 }
 
-// registerCycleLocked registers a ledger ID with a cycle tracker, creating
+// registerCycleLocked registers an action ID with a cycle tracker, creating
 // the cycle tracker if it doesn't exist yet. Must be called with dt.mu held.
-func (dt *DepTracker) registerCycleLocked(ledgerID int64, cycleID string) {
+func (dt *DepTracker) registerCycleLocked(id int64, cycleID string) {
 	dt.cyclesMu.Lock()
 	defer dt.cyclesMu.Unlock()
 
@@ -169,24 +170,24 @@ func (dt *DepTracker) registerCycleLocked(ledgerID int64, cycleID string) {
 	}
 
 	ct.total++
-	dt.cycleLookup[ledgerID] = cycleID
+	dt.cycleLookup[id] = cycleID
 }
 
 // Complete marks an action as done and decrements the depsLeft counter on
 // all dependents. Any dependent that reaches zero is dispatched. When all
 // actions are complete (one-shot mode only), the done channel is closed.
 //
-// If ledgerID is unknown (not in the tracker), the completed counter is
-// still incremented to prevent deadlock, and a warning is logged. This
-// should never happen in normal operation but guards against subtle bugs
-// in ledger/tracker population.
-func (dt *DepTracker) Complete(ledgerID int64) {
+// If id is unknown (not in the tracker), the completed counter is still
+// incremented to prevent deadlock, and a warning is logged. This should
+// never happen in normal operation but guards against subtle bugs in
+// tracker population.
+func (dt *DepTracker) Complete(id int64) {
 	dt.mu.Lock()
-	ta, ok := dt.actions[ledgerID]
+	ta, ok := dt.actions[id]
 	if !ok {
 		dt.mu.Unlock()
-		dt.logger.Warn("tracker: Complete called with unknown ledger ID",
-			slog.Int64("ledger_id", ledgerID),
+		dt.logger.Warn("tracker: Complete called with unknown ID",
+			slog.Int64("id", id),
 		)
 
 		if !dt.persistent && dt.completed.Add(1) == dt.total.Load() {
@@ -213,7 +214,7 @@ func (dt *DepTracker) Complete(ledgerID int64) {
 	}
 
 	// Advance per-cycle tracker.
-	dt.completeCycle(ledgerID)
+	dt.completeCycle(id)
 
 	// In persistent mode, the global done channel never fires — workers
 	// exit via context cancellation instead.
@@ -225,16 +226,16 @@ func (dt *DepTracker) Complete(ledgerID int64) {
 
 // completeCycle advances the per-cycle completion counter. When all actions
 // in a cycle have completed, the cycle's done channel is closed.
-func (dt *DepTracker) completeCycle(ledgerID int64) {
+func (dt *DepTracker) completeCycle(id int64) {
 	dt.cyclesMu.Lock()
 	defer dt.cyclesMu.Unlock()
 
-	cycleID, ok := dt.cycleLookup[ledgerID]
+	cycleID, ok := dt.cycleLookup[id]
 	if !ok {
 		return
 	}
 
-	delete(dt.cycleLookup, ledgerID)
+	delete(dt.cycleLookup, id)
 
 	ct, ok := dt.cycles[cycleID]
 	if !ok {

@@ -618,27 +618,53 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 ---
 
-#### 5.4: Pause/resume + SIGHUP config reload + final cleanup
+#### 5.4: Drop ledger + universal transfer resume — DONE
+
+**Goal**: Remove unnecessary ledger persistence layer. Add file-based transfer resume shared between CLI and sync engine. ~1,500 net lines deleted.
+
+**1. New Code:**
+- `session_store.go`: File-based upload session persistence (JSON files, SHA256-keyed by driveID:remotePath, 7-day TTL)
+- `graph/upload.go`: `UploadFromSession()` method — uploads all chunks for an existing session
+- `config/paths.go`: `UploadSessionDir()` helper
+- `files.go`: Download resume via `.partial` files for CLI `get`, upload session resume for CLI `put`
+- `executor_transfer.go`: `sessionUpload()` — sync engine upload resume via session store + `SessionUploader` interface
+- `engine.go`: Post-sync stale `.partial` file reporting and stale session cleanup
+- `migrations/00003_drop_action_queue.sql`: Drops `action_queue`, `stale_files`, `config_snapshots`, `change_journal`
+
+**2. Code Retirement:**
+- Deleted `ledger.go` (528 lines), `ledger_test.go` (703 lines), `engine_recovery_test.go` (463 lines)
+- Removed crash recovery code from `engine.go` (~160 lines): `recoverFromLedger`, `groupRowsByCycle`, `reconstructDeps`, `executeRecoveredCycles`, `buildSyntheticView`, `recordCycleResults`
+- Removed ledger lifecycle from `worker.go`: claim/fail/complete, `failAndComplete()`
+- Removed `completeLedgerAction()` from `baseline.go`, `ledgerID` param from `CommitOutcome`
+- Removed `LedgerID`, `SessionURL` from `Action` struct
+- Renamed `TrackedAction.LedgerID` to `ID` (sequential counter, no database)
+
+**3. Key Design Decisions:**
+- **Why drop the ledger**: Planner is idempotent — delta re-observation on restart produces same actions. Items completed before crash are in baseline (EF1 no-ops). Transfer resume is better served by file-based storage shared between CLI and sync engine.
+- **Remote-scoped session keys**: `sha256(driveID + ":" + remotePath)` — server invalidates old sessions on new creation, so stale records just produce 404.
+- **Optimistic download resume**: Graph API provides only full-file hashes. Resume appends via `DownloadRange`, then verifies full-file hash. Same approach as `wget -c`.
+
+**4. CI and Testing:**
+- `session_store_test.go`: 10 tests (save/load/delete, corrupt file, overwrite, different keys, clean stale, permissions, deterministic keys, stale partials)
+- Updated `worker_test.go`, `engine_test.go`, `baseline_test.go`, `tracker_test.go` for ledger removal
+- All existing tests pass. E2E pass. Lint clean.
+- Coverage: 72.9% (down from 75.2% due to ~1,200 lines of deleted ledger tests; new code well-covered)
+- Backlog: B-092 done, B-097/B-162/B-175 superseded, B-200/B-201/B-202 created
+
+#### 5.5: Pause/resume + SIGHUP config reload + final cleanup
 
 **Goal**: Complete Phase 5 feature set. Ensure clean slate.
 
 **1. New Code:**
 - `engine.go`: `Pause()` / `Resume()` — pause workers, continue collecting events, resume drains buffer
 - SIGHUP handler: reload config
-- Stale `.partial` file cleanup on startup
 
-**2. Code Adaptation:**
-- None
-
-**3. Code Retirement:**
+**2. Code Retirement:**
 - Final sweep — run ALL grep patterns from [`docs/design/legacy-sequential-architecture.md`](design/legacy-sequential-architecture.md) §9
-- Any hits are bugs — fix before merge
-- Schema audit: verify `stale_files`, `config_snapshots`, `change_journal` tables are either used or dropped. These were forward declarations in the initial schema that may be unreferenced. Drop if unused (migration `00003_cleanup.sql`).
-- Doc comment audit: no production `.go` file (excluding `legacy-sequential-architecture.md`) should reference "9 phases", "9 slices", "sequential execution", or "batch commit" except in historical/explanatory context.
+- Doc comment audit: no production `.go` file should reference "9 phases", "9 slices", "sequential execution", or "batch commit" except in historical/explanatory context.
 
-**4. CI and Testing:**
+**3. CI and Testing:**
 - Pause/resume test, SIGHUP test
-- Add permanent regression test that runs grep sweep and fails on match (lives in `internal/sync/` with `//go:build !test` or as a `TestCleanSlateInvariant` that runs the grep patterns programmatically)
 - Docs updated: CLAUDE.md (current phase → Phase 6), BACKLOG.md (close items), LEARNINGS.md
 - Both CI workflows green. Full DOD checklist.
 

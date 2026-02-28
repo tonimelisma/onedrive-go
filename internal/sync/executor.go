@@ -48,6 +48,11 @@ type ExecutorConfig struct {
 	driveID   driveid.ID // per-drive context (B-068)
 	logger    *slog.Logger
 
+	// sessionStore persists upload session URLs for cross-crash resume.
+	// When non-nil and uploads satisfies SessionUploader, the executor uses
+	// session-based uploads for large files (>SimpleUploadMaxSize).
+	sessionStore *SessionStore
+
 	// Injectable for testing.
 	nowFunc   func() time.Time
 	hashFunc  func(filePath string) (string, error)

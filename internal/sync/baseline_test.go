@@ -62,7 +62,7 @@ func (w *testLogWriter) Write(p []byte) (int, error) {
 func commitAll(t *testing.T, mgr *BaselineManager, ctx context.Context, outcomes []Outcome) {
 	t.Helper()
 	for i := range outcomes {
-		if err := mgr.CommitOutcome(ctx, &outcomes[i], 0); err != nil {
+		if err := mgr.CommitOutcome(ctx, &outcomes[i]); err != nil {
 			t.Fatalf("CommitOutcome[%d]: %v", i, err)
 		}
 	}
@@ -1339,7 +1339,7 @@ func TestCommitOutcome_Download(t *testing.T) {
 		ETag:       "etag1",
 	}
 
-	if err := mgr.CommitOutcome(ctx, &outcome, 0); err != nil {
+	if err := mgr.CommitOutcome(ctx, &outcome); err != nil {
 		t.Fatalf("CommitOutcome: %v", err)
 	}
 
@@ -1381,7 +1381,7 @@ func TestCommitOutcome_Upload(t *testing.T) {
 		Size:       256,
 	}
 
-	if err := mgr.CommitOutcome(ctx, &outcome, 0); err != nil {
+	if err := mgr.CommitOutcome(ctx, &outcome); err != nil {
 		t.Fatalf("CommitOutcome: %v", err)
 	}
 
@@ -1410,13 +1410,13 @@ func TestCommitOutcome_Delete(t *testing.T) {
 		ItemType: ItemTypeFile, LocalHash: "h", RemoteHash: "h", Size: 10,
 	}
 
-	if err := mgr.CommitOutcome(ctx, &seed, 0); err != nil {
+	if err := mgr.CommitOutcome(ctx, &seed); err != nil {
 		t.Fatalf("seed CommitOutcome: %v", err)
 	}
 
 	del := Outcome{Action: ActionLocalDelete, Success: true, Path: "co-delete.txt"}
 
-	if err := mgr.CommitOutcome(ctx, &del, 0); err != nil {
+	if err := mgr.CommitOutcome(ctx, &del); err != nil {
 		t.Fatalf("delete CommitOutcome: %v", err)
 	}
 
@@ -1440,7 +1440,7 @@ func TestCommitOutcome_Move(t *testing.T) {
 		ItemType: ItemTypeFile, LocalHash: "h", RemoteHash: "h", Size: 10,
 	}
 
-	if err := mgr.CommitOutcome(ctx, &seed, 0); err != nil {
+	if err := mgr.CommitOutcome(ctx, &seed); err != nil {
 		t.Fatalf("seed CommitOutcome: %v", err)
 	}
 
@@ -1451,7 +1451,7 @@ func TestCommitOutcome_Move(t *testing.T) {
 		ItemType: ItemTypeFile, LocalHash: "h", RemoteHash: "h", Size: 10,
 	}
 
-	if err := mgr.CommitOutcome(ctx, &move, 0); err != nil {
+	if err := mgr.CommitOutcome(ctx, &move); err != nil {
 		t.Fatalf("move CommitOutcome: %v", err)
 	}
 
@@ -1490,7 +1490,7 @@ func TestCommitOutcome_Conflict_AutoResolved(t *testing.T) {
 		ResolvedBy:   ResolvedByAuto,
 	}
 
-	if err := mgr.CommitOutcome(ctx, &outcome, 0); err != nil {
+	if err := mgr.CommitOutcome(ctx, &outcome); err != nil {
 		t.Fatalf("CommitOutcome: %v", err)
 	}
 
@@ -1537,7 +1537,7 @@ func TestCommitOutcome_Conflict_Unresolved(t *testing.T) {
 		ConflictType: ConflictEditEdit,
 	}
 
-	if err := mgr.CommitOutcome(ctx, &outcome, 0); err != nil {
+	if err := mgr.CommitOutcome(ctx, &outcome); err != nil {
 		t.Fatalf("CommitOutcome: %v", err)
 	}
 
@@ -1564,7 +1564,7 @@ func TestCommitOutcome_EditDeleteConflict_DeletesBaseline(t *testing.T) {
 		ItemID:   "i1",
 		ItemType: ItemTypeFile,
 	}
-	if err := mgr.CommitOutcome(ctx, &setupOutcome, 0); err != nil {
+	if err := mgr.CommitOutcome(ctx, &setupOutcome); err != nil {
 		t.Fatalf("CommitOutcome (setup): %v", err)
 	}
 
@@ -1585,7 +1585,7 @@ func TestCommitOutcome_EditDeleteConflict_DeletesBaseline(t *testing.T) {
 		LocalHash:    "modified-hash",
 		RemoteHash:   "baseline-remote-hash",
 	}
-	if err := mgr.CommitOutcome(ctx, &conflictOutcome, 0); err != nil {
+	if err := mgr.CommitOutcome(ctx, &conflictOutcome); err != nil {
 		t.Fatalf("CommitOutcome (conflict): %v", err)
 	}
 
@@ -1613,60 +1613,6 @@ func TestCommitOutcome_EditDeleteConflict_DeletesBaseline(t *testing.T) {
 	}
 }
 
-func TestCommitOutcome_WithLedger(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestManager(t)
-	ctx := context.Background()
-
-	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
-
-	ledger := NewLedger(mgr.DB(), testLogger(t))
-
-	actions := []Action{
-		{Type: ActionDownload, Path: "ledger-outcome.txt", DriveID: driveid.New("d"), ItemID: "i"},
-	}
-
-	ids, writeErr := ledger.WriteActions(ctx, actions, nil, "cycle-co")
-	if writeErr != nil {
-		t.Fatalf("WriteActions: %v", writeErr)
-	}
-
-	claimErr := ledger.Claim(ctx, ids[0])
-	if claimErr != nil {
-		t.Fatalf("Claim: %v", claimErr)
-	}
-
-	outcome := Outcome{
-		Action: ActionDownload, Success: true,
-		Path: "ledger-outcome.txt", DriveID: driveid.New("d"), ItemID: "i",
-		ItemType: ItemTypeFile, LocalHash: "h", RemoteHash: "h", Size: 10,
-	}
-
-	if err := mgr.CommitOutcome(ctx, &outcome, ids[0]); err != nil {
-		t.Fatalf("CommitOutcome: %v", err)
-	}
-
-	// Verify ledger action is done.
-	var status string
-
-	dbErr := mgr.db.QueryRowContext(ctx,
-		"SELECT status FROM action_queue WHERE id = ?", ids[0],
-	).Scan(&status)
-	if dbErr != nil {
-		t.Fatalf("querying action_queue: %v", dbErr)
-	}
-
-	if status != "done" {
-		t.Errorf("ledger status = %q, want %q", status, "done")
-	}
-
-	// Baseline should also be updated.
-	if _, ok := mgr.baseline.GetByPath("ledger-outcome.txt"); !ok {
-		t.Error("baseline entry not found")
-	}
-}
-
 func TestCommitOutcome_SkipsFailedOutcome(t *testing.T) {
 	t.Parallel()
 
@@ -1679,7 +1625,7 @@ func TestCommitOutcome_SkipsFailedOutcome(t *testing.T) {
 		Path:    "should-not-exist.txt",
 	}
 
-	if err := mgr.CommitOutcome(ctx, &outcome, 0); err != nil {
+	if err := mgr.CommitOutcome(ctx, &outcome); err != nil {
 		t.Fatalf("CommitOutcome: %v", err)
 	}
 
@@ -1708,7 +1654,7 @@ func TestCommitOutcome_FolderCreate(t *testing.T) {
 		ItemType: ItemTypeFolder,
 	}
 
-	if err := mgr.CommitOutcome(ctx, &outcome, 0); err != nil {
+	if err := mgr.CommitOutcome(ctx, &outcome); err != nil {
 		t.Fatalf("CommitOutcome: %v", err)
 	}
 

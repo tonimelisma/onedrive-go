@@ -278,7 +278,7 @@ func (o *LocalObserver) scanNewDirectory(
 //
 // Stale baseline interaction (B-116): handleWrite reads the live baseline
 // (RWMutex-protected, updated in-place by CommitOutcome). If an action is
-// in-flight (committed to ledger but not yet to baseline), the safety scan
+// in-flight (dispatched to workers but not yet committed to baseline), the safety scan
 // may re-emit an event for something already being processed. This is safe:
 // processBatch deduplicates via HasInFlight + CancelByPath (B-122).
 func (o *LocalObserver) handleWrite(
