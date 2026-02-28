@@ -45,7 +45,7 @@ type conflictJSON struct {
 }
 
 func runConflicts(cmd *cobra.Command, _ []string) error {
-	cc := cliContextFrom(cmd.Context())
+	cc := mustCLIContext(cmd.Context())
 
 	dbPath := cc.Cfg.StatePath()
 	if dbPath == "" {

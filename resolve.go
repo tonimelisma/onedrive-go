@@ -99,7 +99,7 @@ func resolveStrategy(cmd *cobra.Command) (string, error) {
 
 // resolveKeepBothOnly handles keep_both resolution which only needs the DB.
 func resolveKeepBothOnly(ctx context.Context, args []string, all, dryRun bool) error {
-	cc := cliContextFrom(ctx)
+	cc := mustCLIContext(ctx)
 
 	dbPath := cc.Cfg.StatePath()
 	if dbPath == "" {
@@ -176,7 +176,7 @@ func resolveSingleKeepBoth(ctx context.Context, mgr *sync.BaselineManager, idOrP
 func resolveWithTransfers(
 	ctx context.Context, args []string, resolution string, all, dryRun bool,
 ) error {
-	cc := cliContextFrom(ctx)
+	cc := mustCLIContext(ctx)
 	logger := cc.Logger
 
 	client, ts, driveID, err := clientAndDrive(ctx, cc)

@@ -18,6 +18,10 @@ const (
 	laneDivisor = 8
 	// minReserved is the minimum reserved workers per lane.
 	minReserved = 2
+	// maxRecordedErrors caps the diagnostic error slice to bound memory in
+	// long-running watch mode. The failed atomic counter remains accurate
+	// regardless of this cap (B-205).
+	maxRecordedErrors = 1000
 )
 
 // WorkerPool spawns goroutines that pull TrackedActions from the DepTracker's
@@ -29,10 +33,11 @@ type WorkerPool struct {
 	baseline *BaselineManager
 	logger   *slog.Logger
 
-	succeeded atomic.Int32
-	failed    atomic.Int32
-	errors    []error
-	errorsMu  stdsync.Mutex
+	succeeded     atomic.Int32
+	failed        atomic.Int32
+	errors        []error
+	errorsMu      stdsync.Mutex
+	droppedErrors atomic.Int64
 
 	// results reports per-action outcomes back to the engine for in-memory
 	// cycle result tracking.
@@ -307,7 +312,10 @@ func (wp *WorkerPool) Results() <-chan WorkerResult {
 	return wp.results
 }
 
-// recordFailure atomically appends an error to the pool's error list.
+// recordFailure atomically increments the failed counter and appends an error
+// to the diagnostic error list. The list is capped at maxRecordedErrors to
+// bound memory in long-running watch mode (B-205). Overflow errors are counted
+// via droppedErrors; the failed counter remains accurate regardless.
 func (wp *WorkerPool) recordFailure(err error) {
 	if err == nil {
 		return
@@ -315,8 +323,20 @@ func (wp *WorkerPool) recordFailure(err error) {
 
 	wp.failed.Add(1)
 	wp.errorsMu.Lock()
-	wp.errors = append(wp.errors, err)
+
+	if len(wp.errors) >= maxRecordedErrors {
+		wp.droppedErrors.Add(1)
+	} else {
+		wp.errors = append(wp.errors, err)
+	}
+
 	wp.errorsMu.Unlock()
+}
+
+// DroppedErrors returns the number of errors that were not recorded because
+// the diagnostic error slice was full (B-205).
+func (wp *WorkerPool) DroppedErrors() int64 {
+	return wp.droppedErrors.Load()
 }
 
 // sendResult reports a per-action outcome to the results channel. Blocks until

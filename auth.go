@@ -492,7 +492,7 @@ func executeLogout(cfg *config.Config, cfgPath, account string, purge bool, logg
 	printAffectedDrives(cfg, affected)
 
 	if purge {
-		purgeAccountDrives(cfgPath, affected, logger)
+		purgeAccountDrives(cfg, cfgPath, affected, logger)
 	} else {
 		fmt.Println("\nState databases and config kept. Run 'onedrive-go login' to re-authenticate.")
 	}
@@ -554,8 +554,9 @@ func printAffectedDrives(cfg *config.Config, affected []driveid.CanonicalID) {
 
 // purgeSingleDrive removes the state database and config section for one drive.
 // Token deletion is handled separately since tokens may be shared (SharePoint).
-func purgeSingleDrive(cfgPath string, canonicalID driveid.CanonicalID, logger *slog.Logger) error {
-	statePath := config.DriveStatePath(canonicalID)
+// stateDir is the per-drive state_dir override (empty uses platform default).
+func purgeSingleDrive(cfgPath string, canonicalID driveid.CanonicalID, stateDir string, logger *slog.Logger) error {
+	statePath := config.DriveStatePathWithOverride(canonicalID, stateDir)
 	if statePath != "" {
 		if err := os.Remove(statePath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			logger.Warn("failed to remove state database", "path", statePath, "error", err)
@@ -573,11 +574,13 @@ func purgeSingleDrive(cfgPath string, canonicalID driveid.CanonicalID, logger *s
 
 // purgeAccountDrives removes drive config sections and state databases for
 // all affected drives. Token deletion is already handled before this call.
-func purgeAccountDrives(cfgPath string, affected []driveid.CanonicalID, logger *slog.Logger) {
+// cfg is needed to read per-drive state_dir overrides (B-193).
+func purgeAccountDrives(cfg *config.Config, cfgPath string, affected []driveid.CanonicalID, logger *slog.Logger) {
 	fmt.Println()
 
 	for _, cid := range affected {
-		if err := purgeSingleDrive(cfgPath, cid, logger); err != nil {
+		stateDir := cfg.Drives[cid].StateDir
+		if err := purgeSingleDrive(cfgPath, cid, stateDir, logger); err != nil {
 			logger.Warn("failed to purge drive", "drive", cid.String(), "error", err)
 		} else {
 			fmt.Printf("Purged config and state for %s.\n", cid.String())

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 )
@@ -39,6 +40,10 @@ func (o *LocalObserver) watchLoop(
 
 			// Successful event resets error backoff.
 			errBackoff = watchErrInitBackoff
+
+		case req := <-o.hashRequests:
+			// Deferred hash from write coalesce timer (B-107).
+			o.hashAndEmit(ctx, req, events)
 
 		case watchErr, ok := <-watcher.Errors():
 			if !ok {
@@ -275,7 +280,10 @@ func (o *LocalObserver) scanNewDirectory(
 	}
 }
 
-// handleWrite processes a Write event: classify against baseline.
+// handleWrite processes a Write event by scheduling a deferred hash after a
+// cooldown period (B-107 write coalescing). Rapid saves (IDE auto-save) trigger
+// multiple Write events per file; coalescing ensures only one hash + emit per
+// quiescence window.
 //
 // Stale baseline interaction (B-116): handleWrite reads the live baseline
 // (RWMutex-protected, updated in-place by CommitOutcome). If an action is
@@ -283,7 +291,7 @@ func (o *LocalObserver) scanNewDirectory(
 // may re-emit an event for something already being processed. This is safe:
 // processBatch deduplicates via HasInFlight + CancelByPath (B-122).
 func (o *LocalObserver) handleWrite(
-	ctx context.Context, fsPath, dbRelPath, name string, events chan<- ChangeEvent,
+	_ context.Context, fsPath, dbRelPath, name string, _ chan<- ChangeEvent,
 ) {
 	info, err := os.Stat(fsPath)
 	if err != nil {
@@ -298,19 +306,75 @@ func (o *LocalObserver) handleWrite(
 		return
 	}
 
-	hash, err := computeStableHash(fsPath)
+	cooldown := o.writeCoalesceCooldown
+	if cooldown == 0 {
+		cooldown = defaultWriteCoalesceCooldown
+	}
+
+	// Cancel existing timer for this path (B-107 coalescing).
+	if timer, ok := o.pendingTimers[dbRelPath]; ok {
+		timer.Stop()
+	}
+
+	// Schedule deferred hash after cooldown. Timer callback sends to
+	// hashRequests channel (non-blocking); watchLoop picks it up via select.
+	req := hashRequest{fsPath: fsPath, dbRelPath: dbRelPath, name: name}
+	o.pendingTimers[dbRelPath] = time.AfterFunc(cooldown, func() {
+		select {
+		case o.hashRequests <- req:
+		default:
+			// Channel full — safety scan will catch up.
+		}
+	})
+}
+
+// hashAndEmit is called from the watchLoop when a write coalesce timer fires.
+// It hashes the file and emits a ChangeModify event if the content differs
+// from the baseline. Runs in the watchLoop goroutine (same thread as handleWrite).
+func (o *LocalObserver) hashAndEmit(ctx context.Context, req hashRequest, events chan<- ChangeEvent) {
+	delete(o.pendingTimers, req.dbRelPath)
+
+	info, err := os.Stat(req.fsPath)
+	if err != nil {
+		o.logger.Debug("stat failed for deferred hash",
+			slog.String("path", req.dbRelPath), slog.String("error", err.Error()))
+
+		return
+	}
+
+	if info.IsDir() {
+		return
+	}
+
+	hash, err := computeStableHash(req.fsPath)
 	if err != nil {
 		if errors.Is(err, errFileChangedDuringHash) {
-			o.logger.Debug("file changed during hashing, skipping (will catch on next event)",
-				slog.String("path", dbRelPath))
+			// File still changing — re-schedule one more time. If another
+			// Write event arrives, handleWrite resets the timer anyway.
+			o.logger.Debug("file changed during deferred hash, re-scheduling",
+				slog.String("path", req.dbRelPath))
+
+			cooldown := o.writeCoalesceCooldown
+			if cooldown == 0 {
+				cooldown = defaultWriteCoalesceCooldown
+			}
+
+			req2 := req // copy for closure
+			o.pendingTimers[req.dbRelPath] = time.AfterFunc(cooldown, func() {
+				select {
+				case o.hashRequests <- req2:
+				default:
+				}
+			})
+
 			return
 		}
 
-		o.logger.Warn("hash failed for modified file, emitting event with empty hash",
-			slog.String("path", dbRelPath), slog.String("error", err.Error()))
+		o.logger.Warn("hash failed for deferred write, emitting with empty hash",
+			slog.String("path", req.dbRelPath), slog.String("error", err.Error()))
 	} else {
 		// Check baseline — if hash matches, the write was a no-op.
-		if existing, ok := o.baseline.GetByPath(dbRelPath); ok && existing.LocalHash == hash {
+		if existing, ok := o.baseline.GetByPath(req.dbRelPath); ok && existing.LocalHash == hash {
 			return
 		}
 	}
@@ -318,8 +382,8 @@ func (o *LocalObserver) handleWrite(
 	ev := ChangeEvent{
 		Source:   SourceLocal,
 		Type:     ChangeModify,
-		Path:     dbRelPath,
-		Name:     name,
+		Path:     req.dbRelPath,
+		Name:     req.name,
 		ItemType: ItemTypeFile,
 		Size:     info.Size(),
 		Hash:     hash,
@@ -335,6 +399,12 @@ func (o *LocalObserver) handleDelete(
 	ctx context.Context, watcher FsWatcher, syncRoot, dbRelPath, name string,
 	events chan<- ChangeEvent,
 ) {
+	// Clean up write coalesce timer for deleted path (B-107).
+	if timer, ok := o.pendingTimers[dbRelPath]; ok {
+		timer.Stop()
+		delete(o.pendingTimers, dbRelPath)
+	}
+
 	itemType := ItemTypeFile
 
 	if existing, ok := o.baseline.GetByPath(dbRelPath); ok {

@@ -180,7 +180,7 @@ func runLs(cmd *cobra.Command, args []string) error {
 	}
 
 	ctx := cmd.Context()
-	cc := cliContextFrom(ctx)
+	cc := mustCLIContext(ctx)
 
 	client, _, driveID, err := clientAndDrive(ctx, cc)
 	if err != nil {
@@ -258,7 +258,7 @@ func printItemsTable(items []graph.Item) {
 func runGet(cmd *cobra.Command, args []string) error {
 	remotePath := args[0]
 	ctx := cmd.Context()
-	cc := cliContextFrom(ctx)
+	cc := mustCLIContext(ctx)
 
 	client, ts, driveID, err := clientAndDrive(ctx, cc)
 	if err != nil {
@@ -326,7 +326,7 @@ func runPut(cmd *cobra.Command, args []string) error {
 		remotePath = args[1]
 	}
 
-	cc := cliContextFrom(ctx)
+	cc := mustCLIContext(ctx)
 
 	client, ts, driveID, err := clientAndDrive(ctx, cc)
 	if err != nil {
@@ -377,7 +377,7 @@ type rmJSONOutput struct {
 func runRm(cmd *cobra.Command, args []string) error {
 	remotePath := args[0]
 	ctx := cmd.Context()
-	cc := cliContextFrom(ctx)
+	cc := mustCLIContext(ctx)
 
 	client, _, driveID, err := clientAndDrive(ctx, cc)
 	if err != nil {
@@ -450,7 +450,7 @@ func runMkdir(cmd *cobra.Command, args []string) error {
 	}
 
 	ctx := cmd.Context()
-	cc := cliContextFrom(ctx)
+	cc := mustCLIContext(ctx)
 
 	client, _, driveID, err := clientAndDrive(ctx, cc)
 	if err != nil {
@@ -513,7 +513,7 @@ func runMkdir(cmd *cobra.Command, args []string) error {
 func runStat(cmd *cobra.Command, args []string) error {
 	remotePath := args[0]
 	ctx := cmd.Context()
-	cc := cliContextFrom(ctx)
+	cc := mustCLIContext(ctx)
 
 	client, _, driveID, err := clientAndDrive(ctx, cc)
 	if err != nil {

@@ -558,6 +558,14 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 		}
 
 		pool.Stop()
+
+		if dropped := pool.DroppedErrors(); dropped > 0 {
+			e.logger.Warn("diagnostic error buffer overflowed",
+				slog.Int64("dropped_errors", dropped),
+				slog.Int("max_recorded", maxRecordedErrors),
+			)
+		}
+
 		e.logger.Info("watch mode stopped")
 	}()
 
