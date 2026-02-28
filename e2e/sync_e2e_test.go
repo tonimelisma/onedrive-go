@@ -156,10 +156,23 @@ func TestE2E_Sync_UploadOnly(t *testing.T) {
 	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
 	assert.Contains(t, stderr, "Mode: upload-only")
 
-	// Verify file appeared remotely using stat (GetItemByPath — immediately
-	// consistent) instead of ls (ListChildrenByPath — eventually consistent).
-	// This fixes intermittent CI failures caused by Graph API index lag.
-	stdout, _ := runCLI(t, "stat", "/"+testFolder+"/upload-test.txt")
+	// Verify file appeared remotely. OneDrive can have brief propagation
+	// delays even for GetItemByPath, so retry a few times before failing.
+	var stdout string
+	remotePath := "/" + testFolder + "/upload-test.txt"
+	for attempt := range 3 {
+		var statErr error
+		stdout, _, statErr = runCLIWithConfigAllowError(t, cfgPath, "stat", remotePath)
+		if statErr == nil {
+			break
+		}
+		if attempt < 2 {
+			t.Logf("stat attempt %d failed (retrying): %v", attempt+1, statErr)
+			time.Sleep(2 * time.Second)
+		} else {
+			t.Fatalf("stat %s failed after 3 attempts: %v", remotePath, statErr)
+		}
+	}
 	assert.Contains(t, stdout, "upload-test.txt")
 }
 

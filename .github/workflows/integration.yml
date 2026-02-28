@@ -3,6 +3,10 @@ name: Integration Tests
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
   schedule:
     - cron: '0 3 * * *' # 3 AM UTC daily — keeps refresh token alive
   workflow_dispatch:
