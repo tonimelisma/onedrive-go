@@ -15,6 +15,16 @@ import (
 // in table output. 8 chars is sufficient for uniqueness in typical use.
 const conflictIDPrefixLen = 8
 
+// truncateID returns at most conflictIDPrefixLen characters of id.
+// Safe for IDs shorter than the prefix length.
+func truncateID(id string) string {
+	if len(id) <= conflictIDPrefixLen {
+		return id
+	}
+
+	return id[:conflictIDPrefixLen]
+}
+
 func newConflictsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "conflicts",
@@ -139,10 +149,7 @@ func printConflictsTable(conflicts []sync.ConflictRecord, history bool) {
 
 	for i := range conflicts {
 		c := &conflicts[i]
-		idPrefix := c.ID
-		if len(idPrefix) > conflictIDPrefixLen {
-			idPrefix = idPrefix[:conflictIDPrefixLen]
-		}
+		idPrefix := truncateID(c.ID)
 
 		detected := time.Unix(0, c.DetectedAt).UTC().Format(time.RFC3339)
 

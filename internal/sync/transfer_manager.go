@@ -81,6 +81,14 @@ func NewTransferManager(
 func (tm *TransferManager) DownloadToFile(
 	ctx context.Context, driveID driveid.ID, itemID, targetPath string, opts DownloadOpts,
 ) (*DownloadResult, error) {
+	if targetPath == "" {
+		return nil, fmt.Errorf("download: target path must not be empty")
+	}
+
+	if itemID == "" {
+		return nil, fmt.Errorf("download: item ID must not be empty")
+	}
+
 	tm.logger.Debug("DownloadToFile",
 		slog.String("drive_id", driveID.String()),
 		slog.String("target", targetPath),
@@ -194,7 +202,7 @@ func (tm *TransferManager) downloadToPartial(
 func (tm *TransferManager) freshDownload(
 	ctx context.Context, driveID driveid.ID, itemID, partialPath string,
 ) (string, int64, error) {
-	f, err := os.Create(partialPath)
+	f, err := os.OpenFile(partialPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600) //nolint:mnd // owner-only file perms
 	if err != nil {
 		return "", 0, fmt.Errorf("creating partial file %s: %w", partialPath, err)
 	}
@@ -289,12 +297,34 @@ func (tm *TransferManager) resumeDownload(
 	return localHash, totalSize, nil
 }
 
+// validateUploadParams checks required upload parameters up front to produce
+// clear error messages instead of confusing downstream failures.
+func validateUploadParams(parentID, name, localPath string) error {
+	if parentID == "" {
+		return fmt.Errorf("upload: parent ID must not be empty")
+	}
+
+	if name == "" {
+		return fmt.Errorf("upload: file name must not be empty")
+	}
+
+	if localPath == "" {
+		return fmt.Errorf("upload: local path must not be empty")
+	}
+
+	return nil
+}
+
 // UploadFile uploads a local file to OneDrive. For large files when a
 // SessionStore and SessionUploader are available, the upload session is
 // persisted for cross-crash resume.
 func (tm *TransferManager) UploadFile(
 	ctx context.Context, driveID driveid.ID, parentID, name, localPath string, opts UploadOpts,
 ) (*UploadResult, error) {
+	if err := validateUploadParams(parentID, name, localPath); err != nil {
+		return nil, err
+	}
+
 	tm.logger.Debug("UploadFile",
 		slog.String("drive_id", driveID.String()),
 		slog.String("path", localPath),
@@ -438,7 +468,9 @@ func (tm *TransferManager) sessionUpload(
 	return item, nil
 }
 
-// deleteSession removes an upload session file, logging on failure.
+// deleteSession removes an upload session file, logging on failure. Callers
+// use a fire-and-forget pattern since session deletion failures are non-fatal
+// (worst case: a stale session file is retried next time).
 func (tm *TransferManager) deleteSession(driveID, remotePath string) {
 	if err := tm.sessionStore.Delete(driveID, remotePath); err != nil {
 		tm.logger.Warn("failed to delete session file",

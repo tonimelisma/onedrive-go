@@ -285,6 +285,10 @@ func (o *LocalObserver) scanNewDirectory(
 // multiple Write events per file; coalescing ensures only one hash + emit per
 // quiescence window.
 //
+// The ctx and events params are unused because B-107 coalescing routes emission
+// through the hashRequests channel → hashAndEmit. The params remain in the
+// signature for dispatch contract parity with handleCreate and handleDelete.
+//
 // Stale baseline interaction (B-116): handleWrite reads the live baseline
 // (RWMutex-protected, updated in-place by CommitOutcome). If an action is
 // in-flight (dispatched to workers but not yet committed to baseline), the safety scan
@@ -348,11 +352,12 @@ func (o *LocalObserver) hashAndEmit(ctx context.Context, req hashRequest, events
 
 	hash, err := computeStableHash(req.fsPath)
 	if err != nil {
-		if errors.Is(err, errFileChangedDuringHash) {
-			// File still changing — re-schedule one more time. If another
-			// Write event arrives, handleWrite resets the timer anyway.
+		if errors.Is(err, errFileChangedDuringHash) && req.retries < maxCoalesceRetries {
+			// File still changing — re-schedule with incremented retry count.
+			// If another Write event arrives, handleWrite resets the timer anyway.
 			o.logger.Debug("file changed during deferred hash, re-scheduling",
-				slog.String("path", req.dbRelPath))
+				slog.String("path", req.dbRelPath),
+				slog.Int("retry", req.retries+1))
 
 			cooldown := o.writeCoalesceCooldown
 			if cooldown == 0 {
@@ -360,6 +365,7 @@ func (o *LocalObserver) hashAndEmit(ctx context.Context, req hashRequest, events
 			}
 
 			req2 := req // copy for closure
+			req2.retries++
 			o.pendingTimers[req.dbRelPath] = time.AfterFunc(cooldown, func() {
 				select {
 				case o.hashRequests <- req2:

@@ -927,3 +927,120 @@ func TestSessionUpload_NonExpiredResumeError_FreshOnRetry(t *testing.T) {
 		t.Errorf("Item.ID = %q, want %q", result.Item.ID, "fresh-retry-item")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Empty-string validation tests
+// ---------------------------------------------------------------------------
+
+func TestDownloadToFile_EmptyTargetPath(t *testing.T) {
+	t.Parallel()
+
+	tm := newTestTM(&tmSimpleDownloader{}, &tmMockUploader{}, nil)
+
+	_, err := tm.DownloadToFile(context.Background(), driveid.New("d1"), "item1", "", DownloadOpts{})
+	if err == nil {
+		t.Fatal("expected error for empty target path, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "target path must not be empty") {
+		t.Errorf("error = %q, want to contain 'target path must not be empty'", err.Error())
+	}
+}
+
+func TestDownloadToFile_EmptyItemID(t *testing.T) {
+	t.Parallel()
+
+	tm := newTestTM(&tmSimpleDownloader{}, &tmMockUploader{}, nil)
+
+	_, err := tm.DownloadToFile(context.Background(), driveid.New("d1"), "", "/tmp/file.txt", DownloadOpts{})
+	if err == nil {
+		t.Fatal("expected error for empty item ID, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "item ID must not be empty") {
+		t.Errorf("error = %q, want to contain 'item ID must not be empty'", err.Error())
+	}
+}
+
+func TestUploadFile_EmptyName(t *testing.T) {
+	t.Parallel()
+
+	tm := newTestTM(&tmSimpleDownloader{}, &tmMockUploader{}, nil)
+
+	_, err := tm.UploadFile(context.Background(), driveid.New("d1"), "parent1", "", "/tmp/file.txt", UploadOpts{})
+	if err == nil {
+		t.Fatal("expected error for empty name, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "file name must not be empty") {
+		t.Errorf("error = %q, want to contain 'file name must not be empty'", err.Error())
+	}
+}
+
+func TestUploadFile_EmptyParentID(t *testing.T) {
+	t.Parallel()
+
+	tm := newTestTM(&tmSimpleDownloader{}, &tmMockUploader{}, nil)
+
+	_, err := tm.UploadFile(context.Background(), driveid.New("d1"), "", "file.txt", "/tmp/file.txt", UploadOpts{})
+	if err == nil {
+		t.Fatal("expected error for empty parent ID, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "parent ID must not be empty") {
+		t.Errorf("error = %q, want to contain 'parent ID must not be empty'", err.Error())
+	}
+}
+
+func TestUploadFile_EmptyLocalPath(t *testing.T) {
+	t.Parallel()
+
+	tm := newTestTM(&tmSimpleDownloader{}, &tmMockUploader{}, nil)
+
+	_, err := tm.UploadFile(context.Background(), driveid.New("d1"), "parent1", "file.txt", "", UploadOpts{})
+	if err == nil {
+		t.Fatal("expected error for empty local path, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "local path must not be empty") {
+		t.Errorf("error = %q, want to contain 'local path must not be empty'", err.Error())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// File permission tests
+// ---------------------------------------------------------------------------
+
+func TestFreshDownload_FilePermissions(t *testing.T) {
+	t.Parallel()
+
+	content := []byte("perms-check")
+	expectedHash := tmHashBytes(content)
+
+	dl := &tmSimpleDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			n, err := w.Write(content)
+			return int64(n), err
+		},
+	}
+
+	tm := newTestTM(dl, &tmMockUploader{}, nil)
+	targetPath := filepath.Join(t.TempDir(), "perm-test.txt")
+
+	_, err := tm.DownloadToFile(context.Background(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+		RemoteHash: expectedHash,
+	})
+	if err != nil {
+		t.Fatalf("DownloadToFile: %v", err)
+	}
+
+	info, statErr := os.Stat(targetPath)
+	if statErr != nil {
+		t.Fatalf("Stat: %v", statErr)
+	}
+
+	perms := info.Mode().Perm()
+	if perms != 0o600 {
+		t.Errorf("file perms = %o, want 600", perms)
+	}
+}
