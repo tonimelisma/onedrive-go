@@ -147,7 +147,7 @@ See [accounts.md §10](accounts.md) for details.
 onedrive-go setup                      # Interactive guided configuration (menu-driven)
 ```
 
-`setup` is the one interactive command for configuration. It covers: viewing drives/settings, changing sync directories, configuring exclusions, setting sync interval and log level, per-drive overrides, and aliases. Everything `setup` does can also be done by editing `config.toml` directly. Power users edit the file.
+`setup` is the one interactive command for configuration. It covers: viewing drives/settings, changing sync directories, configuring exclusions, setting sync interval and log level, per-drive overrides, and display names. Everything `setup` does can also be done by editing `config.toml` directly. Power users edit the file.
 
 There is no `config show` command. Users read the config file directly. `status` shows runtime state. `--debug` shows config resolution at startup.
 
@@ -246,11 +246,12 @@ The RPC API serves CLI and GUI identically — same socket, same endpoints, same
 
 ## 6. Account Types
 
-All three OneDrive account types are supported:
+All four drive types are supported:
 
 - **OneDrive Personal**: Consumer Microsoft accounts
 - **OneDrive Business**: Microsoft 365 / Azure AD work accounts
 - **SharePoint Document Libraries**: Via drive management (one business login grants access to all)
+- **Shared Folders**: Folders shared by other users, synced as separate drives (reuse primary account token)
 
 ### Multi-Account Support
 
@@ -544,7 +545,7 @@ Config is modified by `login`, `drive add`, `drive remove`, and `setup`. Modific
 
 ### Interactive Setup
 
-`onedrive-go setup` is the interactive guided configuration command. It covers all configuration tasks: viewing drives, changing sync directories, managing exclusions, setting poll intervals, log levels, per-drive overrides, and aliases. Unlike `login` (which assumes defaults and tells you what it did), `setup` is menu-driven and lets users change anything.
+`onedrive-go setup` is the interactive guided configuration command. It covers all configuration tasks: viewing drives, changing sync directories, managing exclusions, setting poll intervals, log levels, per-drive overrides, and display names. Unlike `login` (which assumes defaults and tells you what it did), `setup` is menu-driven and lets users change anything.
 
 ### Example Config
 

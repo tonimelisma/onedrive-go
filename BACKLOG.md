@@ -29,22 +29,8 @@ Defensive coding, bug fixes, and test gaps in `internal/sync/`.
 
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
-| B-205 | `WorkerPool.errors` slice grows unbounded in watch mode | **DONE** | Capped at 1000 with `droppedErrors` counter. PR #129. |
-| B-208 | `sessionUpload` non-expired resume error creates infinite retry loop | **DONE** | Delete session on any resume failure. PR #129. |
-| B-204 | Reserved worker receives on nil channel in select | **DONE** | Go nil-channel semantics documented. PR #133. |
-| B-206 | Document `sendResult` lost-result edge case in panic recovery | **DONE** | B-206 comment explaining benign drop. PR #133. |
-| B-209 | `DownloadToFile` doesn't validate empty `targetPath` | **DONE** | Empty-string validation for targetPath and itemID. PR #130. |
-| B-210 | `UploadFile` doesn't validate empty `name` parameter | **DONE** | `validateUploadParams()` for parentID, name, localPath. PR #130. |
-| B-212 | `freshDownload` uses permissive file permissions (`os.Create` = 0666) | **DONE** | `os.OpenFile` with 0o600, matching `resumeDownload`. PR #130. |
-| B-214 | Test: `DownloadToFile` rename failure preserves `.partial` | **DONE** | EISDIR rename failure test. PR #133. |
-| B-215 | Test: `sessionUpload` session save failure still completes upload | **DONE** | Chmod-based save injection. PR #133. |
-| B-216 | Test: `UploadFile` stat failure wraps error correctly | **DONE** | `errors.Is(err, os.ErrNotExist)` verification. PR #133. |
-| B-217 | Test: non-RangeDownloader with existing `.partial` starts fresh | **DONE** | `tmSimpleDownloader` overwrites old partial. PR #133. |
-| B-218 | Test: worker panic recovery records error in `wp.errors` | **DONE** | Enhanced test checks "panic:" in Stats() and WorkerResult. PR #133. |
-| B-219 | Inconsistent hash function usage: direct call vs `tm.hashFunc` | **DONE** | `resumeDownload` switched to `tm.hashFunc`. PR #133. |
 | B-207 | Document intentional `.partial` preservation on rename failure | P4 | Add clarifying comment. |
 | B-211 | `resumeDownload` TOCTOU race between stat and open | P4 | Extremely unlikely. Verify size after open if fixing. |
-| B-220 | `deleteSession` helper swallows errors silently | **DONE** | Improved comment documenting fire-and-forget pattern. PR #130. |
 | B-221 | Add comment explaining Go integer range in hash retry loop | P4 | `range maxRetries + 1` is Go 1.22 syntax, unfamiliar to many. |
 | B-222 | Document `selectHash` cross-file reference in `transfer_manager.go` | P4 | Aid code navigation without IDE. |
 
@@ -56,16 +42,12 @@ Code quality and architecture improvements for the root package.
 |----|-------|----------|-------|
 | B-223 | Extract `DriveSession` type for per-drive resource lifecycle | P1 | Replace `clientAndDrive()`. Prerequisite for multi-drive. |
 | B-224 | Eliminate global flag variables (`flagJSON`, `flagVerbose`, etc.) | P1 | Move to `CLIFlags` struct in `CLIContext`. Eliminates test pollution. |
-| B-225 | Defensive nil guard for `cliContextFrom` | **DONE** | `mustCLIContext()` with clear panic. 10 callers updated. PR #129. |
-| B-226 | Remove `os.Exit(1)` from `runVerify` | **DONE** | Sentinel error `errVerifyMismatch`. PR #129. |
-| B-193 | `purgeSingleDrive` ignores StateDir override | **DONE** | `DriveStatePathWithOverride()` + threaded stateDir. PR #129. |
 | B-227 | Deduplicate sync_dir and StatePath validation across commands | P3 | Extract `RequireSyncDir()` and `RequireStatePath()` on `CLIContext`. |
 | B-228 | `buildLogger` silent fallthrough on unknown log level | P3 | No `default` case. Add warning or normalize input. |
 | B-232 | Test coverage for `loadConfig` error paths | P3 | Invalid TOML, ambiguous drive, wrong context type, unknown log level. |
 | B-036 | Extract CLI service layer for testability | P4 | Root package at 28.1% coverage. Target 50%+. |
 | B-229 | `syncModeFromFlags` uses `Changed` instead of `GetBool` | P4 | Subtle Cobra invariant. Document or fix. |
 | B-230 | `printSyncReport` repetitive formatting | P4 | Extract `printNonZero` helper. |
-| B-231 | `loadAndVerify` separation rationale is stale | **DONE** | Comment updated when B-226 removed `os.Exit`. PR #129. |
 | B-233 | `version` string concatenation in two places | P4 | Minor duplication. Fixed by `DriveSession` (B-223). |
 
 ## Hardening: Graph API
@@ -84,9 +66,7 @@ Improvements to continuous sync reliability in `internal/sync/`.
 
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
-| B-107 | Write event coalescing at observer level | **DONE** | Per-path timer coalescing (500ms cooldown). PR #129. |
 | B-101 | Add timing and resource logging to safety scan | P3 | Elapsed time, files walked, directories scanned. |
-| B-105 | `addWatchesRecursive` has no aggregate failure reporting | **DONE** | Summary Info log with watched/failed counters. PR #130. |
 | B-115 | Test: safety scan + watch producing conflicting change types | P3 | Watch sees Create, safety scan classifies same file as Modify. Planner handles it but no test. |
 | B-120 | Symlinked directories get no watch and no warning | P3 | Log Warn when symlinked directory encountered during watch setup. |
 | B-125 | No health or liveness signal from Watch() goroutines | P4 | Detect stuck/dead observers. Heartbeat or periodic liveness signal. |
@@ -131,6 +111,26 @@ Optimization deferred until profiling shows a bottleneck.
 
 | ID | Title | Resolution |
 |----|-------|------------|
+| B-205 | `WorkerPool.errors` slice grows unbounded in watch mode | **DONE** — Capped at 1000 with `droppedErrors` counter. PR #129. |
+| B-208 | `sessionUpload` non-expired resume error creates infinite retry loop | **DONE** — Delete session on any resume failure. PR #129. |
+| B-204 | Reserved worker receives on nil channel in select | **DONE** — Go nil-channel semantics documented. PR #133. |
+| B-206 | Document `sendResult` lost-result edge case in panic recovery | **DONE** — B-206 comment explaining benign drop. PR #133. |
+| B-209 | `DownloadToFile` doesn't validate empty `targetPath` | **DONE** — Empty-string validation for targetPath and itemID. PR #130. |
+| B-210 | `UploadFile` doesn't validate empty `name` parameter | **DONE** — `validateUploadParams()` for parentID, name, localPath. PR #130. |
+| B-212 | `freshDownload` uses permissive file permissions (`os.Create` = 0666) | **DONE** — `os.OpenFile` with 0o600, matching `resumeDownload`. PR #130. |
+| B-214 | Test: `DownloadToFile` rename failure preserves `.partial` | **DONE** — EISDIR rename failure test. PR #133. |
+| B-215 | Test: `sessionUpload` session save failure still completes upload | **DONE** — Chmod-based save injection. PR #133. |
+| B-216 | Test: `UploadFile` stat failure wraps error correctly | **DONE** — `errors.Is(err, os.ErrNotExist)` verification. PR #133. |
+| B-217 | Test: non-RangeDownloader with existing `.partial` starts fresh | **DONE** — `tmSimpleDownloader` overwrites old partial. PR #133. |
+| B-218 | Test: worker panic recovery records error in `wp.errors` | **DONE** — Enhanced test checks "panic:" in Stats() and WorkerResult. PR #133. |
+| B-219 | Inconsistent hash function usage: direct call vs `tm.hashFunc` | **DONE** — `resumeDownload` switched to `tm.hashFunc`. PR #133. |
+| B-220 | `deleteSession` helper swallows errors silently | **DONE** — Improved comment documenting fire-and-forget pattern. PR #130. |
+| B-225 | Defensive nil guard for `cliContextFrom` | **DONE** — `mustCLIContext()` with clear panic. 10 callers updated. PR #129. |
+| B-226 | Remove `os.Exit(1)` from `runVerify` | **DONE** — Sentinel error `errVerifyMismatch`. PR #129. |
+| B-193 | `purgeSingleDrive` ignores StateDir override | **DONE** — `DriveStatePathWithOverride()` + threaded stateDir. PR #129. |
+| B-231 | `loadAndVerify` separation rationale is stale | **DONE** — Comment updated when B-226 removed `os.Exit`. PR #129. |
+| B-107 | Write event coalescing at observer level | **DONE** — Per-path timer coalescing (500ms cooldown). PR #129. |
+| B-105 | `addWatchesRecursive` has no aggregate failure reporting | **DONE** — Summary Info log with watched/failed counters. PR #130. |
 | B-238 | `hashAndEmit` retry exhaustion lacks distinct log message | **DONE** — Distinguish retry exhaustion from generic hash failure. PR #131. |
 | B-239 | `findConflict` prefix matching without ambiguity check | **DONE** — Two-pass search: exact first, then prefix with ambiguity detection. PR #131. |
 | B-240 | `resolveAllKeepBoth` and `resolveAllWithEngine` duplicate loop | **DONE** — `resolveEachConflict` shared helper. PR #131. |
@@ -148,7 +148,7 @@ Optimization deferred until profiling shows a bottleneck.
 | B-085 | Resumable downloads (Range header) | **DONE** — Phase 5.3. `DownloadRange` + `.partial` resume. |
 | B-096 | Parallel hashing in FullScan | **DONE** — Phase 5.2.1. `errgroup.SetLimit(runtime.NumCPU())`. |
 | B-170 | Parallel remote + local observation in RunOnce | **DONE** — Phase 5.2.0. `errgroup.Go()` for concurrent observation. |
-| B-200 (stale partials) | Stale `.partial` file cleanup command | **DONE** — CLI prints path + resume instructions on Ctrl+C. |
+| B-200a | Stale `.partial` file cleanup command | **DONE** — CLI prints path + resume instructions on Ctrl+C. |
 | B-089 | Baseline concurrent-safe incremental cache | **DONE** — Phase 5.0. `sync.RWMutex` + locked accessors. |
 | B-090 | Eliminate `createdFolders` map | **DONE** — Phase 5.0. DAG edges + incremental baseline. |
 | B-091 | `resolveTransfer()` migrate to `CommitOutcome()` | **DONE** — Phase 5.0. |
