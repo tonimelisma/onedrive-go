@@ -808,6 +808,9 @@ func (e *Engine) processBatch(
 	}
 
 	// Invariant: Planner always builds Deps with len(Actions).
+	// Log-only on violation: processBatch has no SyncReport to populate (unlike
+	// executePlan), and the Error log is the correct signal for this impossible
+	// condition. The batch is safely dropped — the next delta poll re-observes.
 	if len(plan.Actions) != len(plan.Deps) {
 		e.logger.Error("plan invariant violation: Actions/Deps length mismatch",
 			slog.Int("actions", len(plan.Actions)),

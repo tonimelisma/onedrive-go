@@ -245,6 +245,10 @@ func (o *LocalObserver) Watch(ctx context.Context, syncRoot string, events chan<
 
 // cancelPendingTimers stops and clears all pending write coalesce timers.
 // Called on watchLoop exit to prevent timer callbacks sending to a closed channel.
+//
+// Deleting map entries during range iteration is safe in Go — the spec
+// guarantees that entries added during iteration may or may not be visited,
+// and deletion of unvisited entries is well-defined. See go.dev/ref/spec#For_range.
 func (o *LocalObserver) cancelPendingTimers() {
 	for path, timer := range o.pendingTimers {
 		timer.Stop()
@@ -582,8 +586,11 @@ func syncRootExists(syncRoot string) bool {
 // isAlwaysExcluded returns true for file patterns that must never be synced.
 // These are S7 safety invariants: partial downloads, editor temporaries,
 // and SQLite database files (which corrupt if synced mid-transaction).
+//
+// Called on every fsnotify event and every file during FullScan, so we use
+// asciiLower to avoid the heap allocation that strings.ToLower incurs per call.
 func isAlwaysExcluded(name string) bool {
-	lower := strings.ToLower(name)
+	lower := asciiLower(name)
 
 	// Extension-based: partial downloads, editor temps, SQLite files.
 	for _, ext := range alwaysExcludedSuffixes {
@@ -598,6 +605,33 @@ func isAlwaysExcluded(name string) bool {
 	}
 
 	return false
+}
+
+// asciiLower returns s with ASCII uppercase letters converted to lowercase.
+// Unlike strings.ToLower, this avoids heap allocation when s is already
+// lowercase (the common case for filenames). Non-ASCII bytes are passed through
+// unchanged, which is correct for file extension matching.
+func asciiLower(s string) string {
+	for i := range len(s) {
+		if s[i] >= 'A' && s[i] <= 'Z' {
+			// Found an uppercase letter — allocate and convert.
+			buf := make([]byte, len(s))
+			copy(buf, s[:i])
+
+			for j := i; j < len(s); j++ {
+				if s[j] >= 'A' && s[j] <= 'Z' {
+					buf[j] = s[j] + ('a' - 'A')
+				} else {
+					buf[j] = s[j]
+				}
+			}
+
+			return string(buf)
+		}
+	}
+
+	// No uppercase letters found — return the original string (zero alloc).
+	return s
 }
 
 // alwaysExcludedSuffixes lists file extensions that are unsafe to sync.

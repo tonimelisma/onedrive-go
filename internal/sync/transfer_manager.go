@@ -20,6 +20,24 @@ import (
 // when the content hash doesn't match the remote hash.
 const defaultMaxHashRetries = 2
 
+// maxSaneRetries caps MaxHashRetries to prevent integer overflow in the
+// `range maxRetries + 1` loop. Any value above this is almost certainly a bug.
+const maxSaneRetries = 100
+
+// resolveMaxRetries returns the effective max hash retries, applying the
+// default and overflow-safe upper bound.
+func resolveMaxRetries(configured int) int {
+	if configured <= 0 {
+		return defaultMaxHashRetries
+	}
+
+	if configured > maxSaneRetries {
+		return maxSaneRetries
+	}
+
+	return configured
+}
+
 // DownloadOpts configures a single download operation.
 type DownloadOpts struct {
 	RemoteHash     string // expected hash; empty = skip verification
@@ -102,11 +120,7 @@ func (tm *TransferManager) DownloadToFile(
 	}
 
 	partialPath := targetPath + ".partial"
-	maxRetries := opts.MaxHashRetries
-	if maxRetries <= 0 {
-		maxRetries = defaultMaxHashRetries
-	}
-
+	maxRetries := resolveMaxRetries(opts.MaxHashRetries)
 	remoteHash := opts.RemoteHash
 	hashVerified := true
 	var localHash string
@@ -343,6 +357,11 @@ func (tm *TransferManager) UploadFile(
 		return nil, fmt.Errorf("stat %s: %w", localPath, err)
 	}
 
+	// Hash the file first (opens, reads, closes internally). The hash is
+	// needed before upload starts for session record matching. The file is
+	// then re-opened below for the actual upload. This double-open is
+	// intentional: hashing consumes an io.Reader sequentially, while upload
+	// requires io.ReaderAt for random-access (session-based resume).
 	localHash, err := tm.hashFunc(localPath)
 	if err != nil {
 		return nil, fmt.Errorf("hashing %s: %w", localPath, err)

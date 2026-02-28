@@ -248,6 +248,35 @@ func TestAlwaysExcluded_PrefixPatterns(t *testing.T) {
 	}
 }
 
+// TestAsciiLower validates the allocation-free ASCII lowering helper used by
+// isAlwaysExcluded on every fsnotify event and FullScan entry.
+func TestAsciiLower(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"already-lower.txt", "already-lower.txt"},
+		{"ALLCAPS.TXT", "allcaps.txt"},
+		{"MixedCase.Partial", "mixedcase.partial"},
+		{"", ""},
+		{"noext", "noext"},
+		{"café.txt", "café.txt"},       // non-ASCII unchanged
+		{"FILE.DB-WAL", "file.db-wal"}, // matches excluded suffix
+		{"~$Document.docx", "~$document.docx"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			t.Parallel()
+
+			got := asciiLower(tt.input)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 // TestIsValidOneDriveName_MaxLength validates the 255-byte limit.
 func TestIsValidOneDriveName_MaxLength(t *testing.T) {
 	validName := strings.Repeat("a", 255)

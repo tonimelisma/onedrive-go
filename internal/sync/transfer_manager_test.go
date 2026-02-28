@@ -1021,6 +1021,50 @@ func TestUploadFile_EmptyLocalPath(t *testing.T) {
 // File permission tests
 // ---------------------------------------------------------------------------
 
+func TestRemovePartialIfNotCanceled(t *testing.T) {
+	t.Parallel()
+
+	t.Run("removes file when context is active", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "test.partial")
+		if err := os.WriteFile(path, []byte("data"), 0o600); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		removePartialIfNotCanceled(context.Background(), path)
+
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("expected file to be removed, stat err = %v", err)
+		}
+	})
+
+	t.Run("preserves file when context is canceled", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "test.partial")
+		if err := os.WriteFile(path, []byte("data"), 0o600); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		removePartialIfNotCanceled(ctx, path)
+
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("expected file to be preserved, stat err = %v", err)
+		}
+	})
+
+	t.Run("no panic for nonexistent file", func(t *testing.T) {
+		t.Parallel()
+
+		// Should not panic when file doesn't exist.
+		removePartialIfNotCanceled(context.Background(), "/nonexistent/path.partial")
+	})
+}
+
 func TestFreshDownload_FilePermissions(t *testing.T) {
 	t.Parallel()
 
