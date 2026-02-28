@@ -675,40 +675,380 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 **3. CI and Testing:**
 - Pause/resume test, SIGHUP test
-- Docs updated: CLAUDE.md (current phase → Phase 6), BACKLOG.md (close items), LEARNINGS.md
+- Docs updated: CLAUDE.md, BACKLOG.md, LEARNINGS.md
 - Both CI workflows green. Full DOD checklist.
 
 ---
 
-## Phase 6: Packaging + Release — FUTURE
+## Phase 6: CLI Completeness
 
-| Increment | Description |
-|-----------|-------------|
-| 6.1 | CI: full pipeline (unit + integration + E2E + coverage enforcement) |
-| 6.2 | goreleaser: Linux + macOS binaries (amd64 + arm64) |
-| 6.3 | Homebrew tap formula + AUR PKGBUILD |
-| 6.4 | Man page generation from Cobra + README update |
-| 6.5 | `service install/uninstall/status` — systemd/launchd service management |
+**Make every command work properly.** Global flags, recursive operations, and user-facing polish. After this phase, every CLI command specified in the PRD works correctly for single-drive use.
+
+### 6.0: Global output flags — FUTURE
+
+1. `--verbose` / `-v` flag: show individual file operations (download/upload/delete) as they happen. Currently only sync summary is shown. Wire to all commands that produce output.
+2. `--debug` flag: show HTTP request/response details, internal state, config resolution chain. Useful for diagnosing API issues. Wire `slog.LevelDebug` to stderr when set.
+3. `--quiet` / `-q` flag: suppress all output except errors. Essential for service mode (`sync --watch --quiet`). Wire to all commands including `login`, `logout`, `whoami`, `drive` (currently hardcoded `fmt.Printf`).
+4. `--json` flag: machine-readable JSON output for all commands. `login` should emit JSON events per [accounts.md §9](design/accounts.md). `ls`, `status`, `conflicts` should output JSON arrays/objects. `sync` should emit JSON summary.
+5. Refactor output layer: replace direct `fmt.Printf` calls with a `CLIOutput` abstraction that respects `--quiet`, `--verbose`, `--json`. All commands use the same output path.
+
+### 6.1: Recursive file operations — FUTURE
+
+1. `ls` pagination: `ListChildren` returns max 200 items per page. Implement `@odata.nextLink` pagination so `ls` shows all items in large directories. Current behavior silently truncates.
+2. Recursive `get <remote-folder> [local]`: download an entire remote directory tree. Walk remote children recursively via `ListChildren`, create local directory structure, download each file. Respect `--verbose` for per-file progress.
+3. Recursive `put <local-folder> [remote]`: upload an entire local directory tree. Walk local filesystem, create remote folders via `CreateFolder`, upload each file. Skip symlinks.
+4. Recursive `rm <remote-folder>`: delete a remote folder and all contents. Already has `--recursive` flag requirement (B-156 done). Verify it works correctly for deeply nested trees.
+
+### 6.2: Server-side move and copy — FUTURE
+
+1. `mv <source> <destination>`: server-side move/rename via Graph API `MoveItem`. Supports both rename (same parent, new name) and move (different parent). No data transfer — instant for any file size.
+2. `cp <source> <destination>`: server-side copy via Graph API copy endpoint (`POST /items/{id}/copy`). Returns `Location` header for async monitoring. Poll until complete for large files.
+3. Both commands work on files and folders. Both respect `--drive` flag. Both produce `--json` output when requested.
+
+### 6.3: Auth flow improvements — FUTURE
+
+1. `login --browser`: authorization code flow with localhost callback. Opens system browser to Microsoft login page, starts local HTTP server on `http://localhost:<port>/callback` to receive the auth code. Fewer steps than device code for desktop users. Falls back to device code if browser can't open.
+2. `logout --purge`: in addition to deleting the token file (current behavior), also delete the drive's state DB (SQLite baseline) and remove the drive section from `config.toml`. Confirmation prompt before destructive action. `--force` to skip prompt.
+
+### 6.4: Drive selection and account disambiguation — FUTURE
+
+1. `--drive` fuzzy matching: accept canonical ID (`personal:user@example.com`), alias (`work`), or shortest unique prefix (`per` if only one drive starts with "per"). On ambiguity, show all matches with their shortest unique identifiers. See [accounts.md §7](design/accounts.md).
+2. `--account <email>` flag: disambiguate between multiple Microsoft accounts for auth commands (`login`, `logout`, `whoami`). Required when multiple accounts are configured and the command can't determine which one.
+3. `--drive` repeatable: `sync --drive work --drive personal` syncs only those two drives. Without `--drive`, sync all enabled drives.
+
+### 6.5: Transfer progress display — FUTURE
+
+1. Interactive progress bars for `get` and `put`: show filename, size, progress percentage, transfer speed. Use a terminal-aware library (e.g., `github.com/vbauerster/mpb`). Disable when stdout is not a TTY or `--quiet` is set.
+2. `sync` progress output: show per-file progress during sync transfers. Format: `↓ report.pdf  2.3 MB [======>  ] 62%  3.2 MB/s`. Summary line at completion.
+3. Multi-file progress: when multiple transfers are in flight (parallel workers), show concurrent progress lines. Update in place using terminal control sequences.
+
+### 6.6: Structured JSON logging — FUTURE
+
+1. `log_format` config option: `"text"` (default, human-readable) or `"json"` (structured, machine-parseable). JSON format uses `slog.JSONHandler`. Text format uses current `slog.TextHandler`.
+2. When `--quiet` is set and `log_format = "json"`, all output goes to the log file in JSON format. No stderr output except fatal errors. This is what you configure for systemd/launchd service mode.
+3. Log output includes structured fields: `drive`, `action`, `path`, `size`, `duration`, `error` as applicable. No string interpolation in log messages.
+
+### 6.7: Recycle bin commands — FUTURE
+
+1. `recycle-bin list`: show all items in the OneDrive recycle bin for the selected drive. Display name, original location, size, deletion date. Support `--json` output. Uses `GET /me/drive/items/{item-id}/children` on the recycle bin special folder (or `GET /drives/{drive-id}/special/recyclebin/children`).
+2. `recycle-bin empty`: permanently delete all items in the recycle bin. Confirmation prompt. `--force` to skip.
+3. `recycle-bin restore <id|path>`: restore a specific item from the recycle bin to its original location. Uses `POST /drives/{drive-id}/items/{item-id}/restore`.
+
+### 6.8: Conflict path filtering — FUTURE
+
+1. `conflicts --path <path>`: filter conflict list to a specific path or subtree. `conflicts --path /Documents` shows only conflicts under `/Documents`.
+2. `resolve --path <path>`: batch-resolve conflicts only within a path subtree. Combines with existing `--keep-local`, `--keep-remote`, `--keep-both` flags.
 
 ---
 
-## Future (Post-v1)
+## Phase 7: Multi-Drive + Account Management
 
-- WebSocket remote observer (replace polling with Graph API change notifications)
-- Parallel initial enumeration (`/children` enumeration for drives without delta support)
-- Change journal (append-only debugging aid — optional, not the source of truth)
-- Setup wizard (`setup` command for interactive configuration)
-- `migrate` command (abraunegg/rclone config migration)
-- Email change detection (stable user GUID, auto-rename files)
-- FUSE filesystem mount
-- National cloud support (US Gov, Germany, China — `/children` fallback for missing delta API)
-- Sub-drive sync paths (sync a subfolder instead of the entire drive)
-- Performance profiling and optimization (CPU, memory, I/O hotspots)
-- Like-for-like performance benchmarks against rclone and abraunegg/onedrive
-- Case-insensitive collision detection on Linux (two local files differing only in case)
-- **Sync package decomposition (Option B)** — extract `model/` + `logic/` sub-packages as the sync package grows
-- **Filter engine pre-filter** — shared pre-filter at observer outputs for skip_files/skip_dirs/etc.
-- **Performance**: batched SQLite commits (B-172, deferred until profiling shows bottleneck), concurrent folder creates via $batch API (B-173), streaming delta processing (B-171), adaptive concurrency/AIMD (B-174)
+**Single-process multi-drive sync.** After this phase, `sync --watch` syncs all enabled drives simultaneously from a single process. Each drive has its own goroutine, state DB, and sync cycle.
+
+### 7.0: Multi-drive orchestration — FUTURE
+
+1. `ResolveDrives()` in config package: return `[]*ResolvedDrive` for all enabled drives (when no `--drive` flag) or the specified subset. Currently only `ResolveDrive()` exists (single drive).
+2. Shared `graph.Client` per token file: multiple drives sharing the same Microsoft account (e.g., business OneDrive + SharePoint libraries) should share one `graph.Client` instance. Same token, same rate limit tracking, same HTTP connection pool. Create one client per unique token path, not per drive.
+3. Global worker pool cap: per-drive pools (downloads + uploads) multiply with concurrent drives. 5 drives x 16 workers = 80 I/O goroutines. Implement a global cap (e.g., `max_total_workers` config) that subdivides across active drives.
+4. Per-drive goroutine lifecycle: each drive runs its own `Engine.RunOnce()` or `Engine.RunWatch()`. Engine errors are per-drive (one drive failing doesn't stop others). Aggregate status reported to user.
+5. Config hot-reload in watch mode: drives added, removed, or paused in config take effect on the next sync cycle without process restart.
+
+### 7.1: Drive removal — FUTURE
+
+1. `drive remove <drive>`: set `enabled = false` in config. State DB and token preserved. Drive stops syncing on next cycle.
+2. `drive remove --purge <drive>`: permanently delete the drive's state DB and remove its section from `config.toml`. Token file kept if shared with other drives (same account). Confirmation prompt before destructive action.
+3. Text-level config manipulation: modify `config.toml` using line-based text edits (not TOML round-trip serialization) to preserve all user comments. See [accounts.md §4](design/accounts.md).
+
+### 7.2: Status command — FUTURE
+
+1. `status` command: show account/drive hierarchy with per-drive sync state. Format per [accounts.md §12](design/accounts.md): account email, token status (valid/expired/missing), per-drive sync state (last sync time, files synced, errors, unresolved conflicts).
+2. Support `--json` output for scripting and GUI integration.
+3. Show overall health: total drives, enabled/disabled/paused counts, aggregate unresolved conflicts.
+
+### 7.3: Shared drive enumeration — FUTURE
+
+1. Research and implement Graph API endpoints for discovering shared drives: `GET /me/drive/sharedWithMe`, `GET /drives/{drive-id}/items/{item-id}/children` for shared folders. Document which endpoints work for Personal vs Business vs SharePoint.
+2. `drive list` (non-interactive): show all configured drives AND all available drives from the network (requires API call). Distinguish between "configured and syncing", "configured but disabled", and "available but not added".
+
+### 7.4: Shared folder sync — FUTURE
+
+1. Sync shared folders (files/folders shared by other users with "me"): detect shared items via delta API `remoteItem` facet. Map to local paths under a configurable shared folder directory.
+2. Handle shared folder permissions: read-only shares produce download-only behavior for those items. Read-write shares participate in full bidirectional sync.
+3. Personal and Business account support. SharePoint shared libraries already handled by drive-level sync.
+
+---
+
+## Phase 8: WebSocket + Advanced Sync
+
+**Real-time remote observation and advanced sync features.** After this phase, remote changes arrive in near-real-time instead of polling, and the system handles extreme scale gracefully.
+
+### 8.0: WebSocket remote observer — FUTURE
+
+1. Subscribe to Graph API change notifications via WebSocket: `POST /subscriptions` with `changeType: "updated"` on the drive root. Receive push notifications when remote files change.
+2. On notification, trigger immediate delta query (instead of waiting for poll interval). WebSocket is a trigger mechanism, not a data channel — the delta API remains the source of truth.
+3. Automatic fallback to polling when WebSocket connection fails (network issues, unsupported account type). Reconnect with exponential backoff.
+4. `websocket` config option (default `true`): disable WebSocket and use polling only. Some corporate firewalls block WebSocket connections.
+
+### 8.1: Adaptive concurrency (AIMD) — FUTURE
+
+1. AIMD (additive increase, multiplicative decrease) auto-tuning for worker count. Monitor 429 response rate and throughput.
+2. High 429 rate (>5% of requests): halve active workers (multiplicative decrease). Low error rate + high throughput: add one worker (additive increase).
+3. Adapt to workload type: many small files benefit from more workers; few large files benefit from fewer workers with more bandwidth each.
+4. Per-tenant coordination: when multiple drives share the same Microsoft tenant, share the AIMD state so one drive's 429s throttle all drives on that tenant.
+
+### 8.2: Observer backpressure — FUTURE
+
+1. High-water mark on `ChangeBuffer` (default 100K paths). When buffer exceeds threshold, pause observers (stop polling delta API, stop processing fsnotify events).
+2. Resume observers when buffer drains below low-water mark (e.g., 50K paths). Hysteresis prevents rapid pause/resume oscillation.
+3. During pause, fsnotify events queue in the kernel buffer. Safety scan on resume catches anything missed.
+
+### 8.3: Initial sync batching — FUTURE
+
+1. For very large initial syncs (>50K items), process the delta response in batches of 50K items. Plan and execute each batch before loading the next.
+2. Reduces peak memory usage: instead of loading 500K change events into memory at once, process 10 batches of 50K.
+3. Each batch commits its outcomes to baseline before the next batch loads. Crash recovery picks up from the last committed batch.
+
+### 8.4: Action cancellation — FUTURE
+
+1. When a file changes while it's being uploaded (fsnotify Write event for an in-flight upload path), cancel the current upload via `CancelByPath()` and re-queue the file for a new upload with the updated content.
+2. Avoid wasting bandwidth on uploads that will immediately be invalidated. The cancellation triggers context cancellation on the in-flight HTTP request.
+3. Upload session cleanup: canceled chunked uploads should cancel the server-side upload session to free resources.
+
+---
+
+## Phase 9: Operational Hardening
+
+**Make it reliable for always-on deployment.** After this phase, the tool can run as a system service for weeks/months without intervention.
+
+### 9.0: Bandwidth limiting — FUTURE
+
+1. `bandwidth_limit` config option: global bandwidth cap in bytes/sec (e.g., `"10MB/s"`, `"0"` for unlimited). Implemented as a token-bucket rate limiter wrapping all HTTP transfer bodies.
+2. `bandwidth_schedule` config option: time-of-day rules for variable bandwidth. Format: `[{time = "08:00", limit = "5MB/s"}, {time = "18:00", limit = "50MB/s"}, {time = "23:00", limit = "0"}]`. Evaluated on each transfer start.
+3. Bandwidth limit applies to both uploads and downloads combined. Separate per-direction limits are a future enhancement if needed.
+
+### 9.1: Disk space reservation — FUTURE
+
+1. `min_free_space` config option (e.g., `"1GB"`): before starting any download, check available disk space on the target filesystem. Skip the download with a warning if it would leave less than `min_free_space` free.
+2. Check is per-file, not aggregate. A 500 MB download is allowed if 2 GB is free and `min_free_space = "1GB"`, even if 50 more downloads are queued.
+3. Periodic check during watch mode: if disk fills up from non-sync activity, pause downloads until space is available.
+
+### 9.2: Trash integration — FUTURE
+
+1. `use_recycle_bin` config option (default `true`): when sync deletes a remote file, use the OneDrive recycle bin (not permanent delete). When `false`, call `PermanentDeleteItem` API (Business/SharePoint only; Personal always uses recycle bin).
+2. `use_local_trash` config option (default `false`): when sync deletes a local file (because it was deleted remotely), move to OS trash instead of `os.Remove`. macOS: `~/.Trash/`. Linux: FreeDesktop.org Trash spec (`$XDG_DATA_HOME/Trash/`).
+3. Fallback: if trash move fails (permissions, cross-device), fall back to `os.Remove` with a warning.
+
+### 9.3: Conflict reminder notifications — FUTURE
+
+1. In `--watch` mode, periodically remind the user about unresolved conflicts. Default interval: every 6 hours. `conflict_reminder_interval` config option (e.g., `"6h"`, `"0"` to disable).
+2. Reminder format: structured log message with conflict count and `run 'onedrive-go conflicts' to view` guidance.
+3. First reminder fires immediately after a sync cycle that produces new conflicts.
+
+### 9.4: Configurable parallelism — FUTURE
+
+1. `parallel_downloads` config option (default 8): maximum concurrent download workers per drive.
+2. `parallel_uploads` config option (default 8): maximum concurrent upload workers per drive.
+3. `parallel_checkers` config option (default 8): maximum concurrent hash computation workers for local scanning.
+4. Wire to existing `WorkerPool` lane configuration. Validate: minimum 1, maximum 64 per option.
+
+### 9.5: Configurable timeouts — FUTURE
+
+1. `connect_timeout` config option (default `"30s"`): TCP connection timeout for Graph API requests. Currently hardcoded in `http.Client`.
+2. `data_timeout` config option (default `"5m"`): per-request timeout for data transfer. Applies to download/upload HTTP bodies. Currently uses context timeout.
+3. `shutdown_timeout` config option (default `"30s"`): grace period for in-flight transfers when SIGTERM is received. After timeout, force-cancel remaining transfers.
+
+### 9.6: Config validation and log management — FUTURE
+
+1. Unknown config key detection: on startup, if `config.toml` contains keys not in the known schema, log a warning with the unknown key name and suggest the closest valid key using Levenshtein distance (e.g., `"unknown key 'log_levl', did you mean 'log_level'?"`).
+2. `log_retention_days` config option (default 30): automatically delete log files older than N days. Checked once per day in watch mode, or on each one-shot sync start.
+
+### 9.7: Configurable file permissions — FUTURE
+
+1. `sync_file_permissions` config option (default `"0644"`): file mode for downloaded files after atomic rename. Applied via `os.Chmod` after the `.partial` → final rename.
+2. `sync_dir_permissions` config option (default `"0755"`): directory mode for newly created sync directories.
+3. Consistent with the fix in B-212 (freshDownload permissions). These config options override the default.
+
+---
+
+## Phase 10: Filtering
+
+**The tool can sync, but can't filter.** After this phase, users can exclude files and directories from sync using config patterns, per-directory marker files, and selective sync paths.
+
+### 10.0: Config-based filtering — FUTURE
+
+1. `skip_files` config option: glob patterns for files to exclude from sync. Example: `["~*", "*.tmp", "*.partial", ".DS_Store", "Thumbs.db"]`. Matched against filename only (not full path). Applied in both observers (local and remote).
+2. `skip_dirs` config option: glob patterns for directories to exclude. Example: `["node_modules", ".git", "__pycache__"]`. When a directory matches, skip it and all its contents. Applied during local walk and remote delta processing.
+3. `skip_dotfiles` config option (default `false`): when `true`, exclude all files and directories starting with `.` (except `.odignore`).
+4. `max_file_size` config option (e.g., `"50GB"`): skip files larger than N bytes. Log a warning for each skipped file. Checked in both upload and download paths.
+5. Per-drive overrides: each drive section can override global filter settings. Drive-level `skip_dirs` replaces (not merges with) global `skip_dirs`.
+6. Filter evaluation shared between `LocalObserver.FullScan()`, `LocalObserver.Watch()`, and `RemoteObserver.FullDelta()`. Extract a `Filter` type that all three consume.
+
+### 10.1: Per-directory ignore files — FUTURE
+
+1. `.odignore` marker file support: drop a file named `.odignore` (configurable via `ignore_marker` config key) in any directory to control exclusion.
+2. Empty `.odignore` or `.odignore` containing `*`: exclude the entire directory and all contents from sync.
+3. `.odignore` with patterns: gitignore-style pattern matching within that directory. Supports `*.log`, `build/`, `!important.log` (negation). Patterns apply to the directory containing the marker file and its descendants.
+4. `.odignore` files themselves are never synced to OneDrive (always excluded).
+5. Changes to `.odignore` take effect on the next sync cycle in watch mode.
+
+### 10.2: Selective sync paths — FUTURE
+
+1. `sync_paths` per-drive config option: list of remote paths to sync. Example: `["/Documents", "/Photos/Camera Roll", "/Work"]`. Only these paths and their children are synced. Everything else is ignored.
+2. When `sync_paths` is set, the local sync directory mirrors only the specified subtrees. Remote changes outside `sync_paths` are ignored in delta processing.
+3. `sync_paths` interacts with `skip_dirs`/`skip_files`: both filters apply. A file must be within a `sync_path` AND not match any skip pattern to be synced.
+
+### 10.3: Symlink handling — FUTURE
+
+1. Default behavior: follow symlinks during local scan. Sync the target file/directory as if it were a regular file/directory. OneDrive has no concept of symlinks.
+2. `skip_symlinks` config option (default `false`): when `true`, skip all symlinks silently during local scan.
+3. Circular symlink detection: track visited inodes during walk. If a symlink points to an ancestor directory (or creates a cycle), skip it with a warning. Prevent infinite recursion.
+4. Cross-device symlinks: symlinks pointing outside the sync directory are followed. The target content is synced under the symlink's path within the sync tree.
+
+### 10.4: Application-specific exclusions — FUTURE
+
+1. OneNote auto-exclusion: automatically exclude `.one` and `.onetoc2` files from sync. OneNote files can only be edited through the OneNote application and synced through its own mechanism. Syncing them causes corruption. Always excluded regardless of config.
+2. SharePoint enrichment known-type list: maintain a list of file types that SharePoint modifies server-side after upload (PDF metadata, Office document properties, HTML). When a post-upload hash mismatch occurs for these types, accept the server version without flagging a conflict. See [design/sharepoint-enrichment.md](design/sharepoint-enrichment.md).
+
+### 10.5: OS junk file cleanup — FUTURE
+
+1. Configurable auto-delete of OS-generated junk files during sync. `auto_clean_junk` config option (default `false`).
+2. Default junk file list: `.DS_Store`, `Thumbs.db`, `desktop.ini`, `._*` (macOS resource forks), `__MACOSX/` directories.
+3. When enabled: delete matching files from the remote side during upload-direction sync. Do not re-download them if deleted locally. Log each deletion at Debug level.
+4. Junk list extensible via config: `junk_files = [".DS_Store", "Thumbs.db", "*.pyc"]`.
+
+---
+
+## Phase 11: Packaging + Release
+
+**Ship it.** After this phase, users can install onedrive-go via their platform's package manager and run it as a system service.
+
+### 11.0: goreleaser — FUTURE
+
+1. Configure goreleaser for automated binary builds: Linux (amd64, arm64), macOS (amd64, arm64).
+2. Static Go binaries with no runtime dependencies. Single file, copy-and-run.
+3. GitHub Releases: automatic release creation on tag push. Checksums file, changelog from commits.
+4. CI integration: goreleaser runs in GitHub Actions on version tags (`v*`).
+
+### 11.1: Homebrew + AUR — FUTURE
+
+1. Homebrew tap: create `homebrew-onedrive-go` tap repository with a formula. `brew install tonimelisma/onedrive-go/onedrive-go`. Auto-updated on release via goreleaser.
+2. AUR PKGBUILD: Arch Linux user repository package. Build from source (Go required) or download pre-built binary.
+
+### 11.2: .deb + .rpm packages — FUTURE
+
+1. Debian/Ubuntu `.deb` package via goreleaser nfpm integration. Install with `dpkg -i` or from a PPA.
+2. Fedora/RHEL `.rpm` package via goreleaser nfpm integration. Install with `rpm -i` or from a COPR repository.
+3. Both packages include systemd unit file, man page, and default config directory setup.
+
+### 11.3: Docker image — FUTURE
+
+1. Alpine-based multi-arch Docker image (amd64, arm64). Minimal footprint.
+2. Config and data as volumes: `-v ~/.config/onedrive-go:/config -v ~/OneDrive:/data`.
+3. Default entrypoint: `onedrive-go sync --watch --quiet`.
+4. Published to Docker Hub and GitHub Container Registry.
+
+### 11.4: Service management — FUTURE
+
+1. `service install`: generate and install the appropriate service file for the current platform. Linux: systemd user unit (`~/.config/systemd/user/onedrive-go.service`). macOS: launchd plist (`~/Library/LaunchAgents/com.tonimelisma.onedrive-go.plist`).
+2. `service uninstall`: remove the installed service file. Does not delete data or config.
+3. `service status`: show whether the service file is installed, whether the service is enabled, and whether it's currently running. Print native commands for enable/disable/start/stop.
+4. `service install` never auto-enables. It generates the file and prints instructions. The user decides when to enable.
+
+### 11.5: Man page + README — FUTURE
+
+1. Man page generation from Cobra command tree. `onedrive-go(1)` with all commands, flags, and examples. Installed by .deb/.rpm packages.
+2. README update: installation instructions for all package managers, quick start guide, feature overview, comparison with alternatives.
+
+---
+
+## Phase 12: Post-Release
+
+**Interactive CLI, advanced features, and polish.** Added based on user demand after the initial release.
+
+### 12.0: Setup wizard — FUTURE
+
+1. `setup` command: interactive menu-driven configuration. Covers: viewing drives/settings, changing sync directories, configuring exclusions, setting sync interval, log level, per-drive overrides, and aliases.
+2. Everything `setup` does can also be done by editing `config.toml` directly. `setup` is for users who prefer guided configuration.
+3. Text-level config manipulation: edits preserve all user comments in `config.toml`.
+
+### 12.1: Migration tool — FUTURE
+
+1. `migrate` command: auto-detect and import configuration from abraunegg/onedrive or rclone.
+2. abraunegg migration: map `sync_dir`, `skip_dir`/`skip_file`, `skip_dotfiles`, `rate_limit` → `bandwidth_limit`, `threads` → `parallel_downloads`/`parallel_uploads`, `monitor_interval` → `poll_interval`, `sync_list` → `sync_paths`, `classify_as_big_delete` → `big_delete_threshold`.
+3. rclone migration: map remote name → drive alias, `drive_id` → drive section, `drive_type` → auto-detected. Token NOT migrated (different OAuth app ID).
+4. Detect if abraunegg or rclone is currently running/configured and warn about conflicts.
+
+### 12.2: Interactive conflict resolution — FUTURE
+
+1. `resolve` with no batch flags enters interactive mode. Prompts per conflict: `[L]ocal / [R]emote / [B]oth / [S]kip / [Q]uit`. Shows diff information (sizes, dates, hashes) for each conflict.
+2. Interactive mode is the default. Batch flags (`--keep-local`, `--keep-remote`, `--keep-both`, `--all`) bypass interactive mode.
+
+### 12.3: Interactive drive add — FUTURE
+
+1. `drive add` interactive flow: enumerate available SharePoint libraries and paused drives. Present a numbered list. User selects by number. Auto-configure sync directory with collision handling.
+2. Non-interactive mode: `drive add --site marketing --library Documents` for scripting.
+
+### 12.4: SharePoint site search — FUTURE
+
+1. `drive search <term>`: search SharePoint sites by name using `GET /sites?search={term}`. Display matching sites with their document libraries. User can then `drive add` any result.
+
+### 12.5: Share command — FUTURE
+
+1. `share <path>`: generate a shareable link for a remote file or folder. Options: `--type view` (read-only, default), `--type edit` (read-write), `--expiry 7d` (link expiration).
+2. Uses Graph API `POST /drives/{drive-id}/items/{item-id}/createLink`.
+
+### 12.6: RPC control socket — FUTURE
+
+1. `sync --watch` exposes a JSON-over-HTTP API on a Unix domain socket (`$XDG_RUNTIME_DIR/onedrive-go.sock`). Same pattern as Docker, Tailscale, Syncthing.
+2. Polling endpoint: `GET /status` returns JSON and closes. Simple scripts and status bar widgets poll this.
+3. Push endpoint: `GET /events` is an SSE (Server-Sent Events) stream. The connection stays open and pushes events (transfer progress, sync complete, conflict detected, paused/resumed) in real-time. GUIs use this.
+4. The RPC API serves CLI and GUI identically — same socket, same endpoints.
+
+### 12.7: RPC-based pause/resume — FUTURE
+
+1. `pause [duration]` command: talk to running `sync --watch` via control socket. Pause all data transfers. Options: `2h`, `4h`, `8h`, or indefinitely (until `resume`). Observers keep running (collecting events for efficient resume).
+2. `resume` command: resume a paused sync. Buffer is drained immediately.
+3. `sync` while `--watch` is running: delegate to the running process via RPC instead of failing with "database is locked".
+
+### 12.8: TUI interface — FUTURE
+
+1. Interactive terminal UI (like lazygit/lazydocker): real-time sync status across all drives, transfer progress bars, conflict resolution interface, log viewer.
+2. Built on a TUI framework (e.g., `github.com/charmbracelet/bubbletea`). Connects to the RPC socket for real-time updates.
+
+### 12.9: Prometheus metrics — FUTURE
+
+1. Optional `/metrics` HTTP endpoint exposing Prometheus-format metrics: files synced (counter), transfer bytes (counter), active transfers (gauge), sync duration (histogram), conflicts (gauge), errors (counter).
+2. Enabled via `metrics_listen` config option (e.g., `"localhost:9090"`). Disabled by default.
+
+### 12.10: FUSE mount — FUTURE
+
+1. Read-only FUSE mount: `onedrive-go mount <mountpoint>`. Browse OneDrive as a local filesystem. Files downloaded on demand (lazy fetch). Directory listing via `ListChildren` API.
+2. Read-write FUSE mount (later): writes create local cache files that are uploaded asynchronously. Conflict detection on write.
+3. On-demand files: placeholder stubs that fetch content on first read. Saves disk space for large drives.
+
+### 12.11: National cloud support — FUTURE
+
+1. Support Microsoft national cloud deployments: US Government (GCC, GCC High), Germany, China (21Vianet). Different Graph API endpoints and auth endpoints.
+2. `cloud` config option: `"global"` (default), `"us_gov"`, `"us_gov_high"`, `"germany"`, `"china"`.
+3. `/children` fallback: national clouds may not support the delta API. Implement full `/children` traversal as a fallback for change detection. Slower but functional.
+
+### 12.12: Desktop integration — FUTURE
+
+1. Desktop notifications: notify on sync completion, new conflicts, and errors. Linux: libnotify (`notify-send`). macOS: Notification Center via `osascript`.
+2. File manager integration: Nautilus/Dolphin emblems for sync status (synced, syncing, conflict, error). macOS Finder badges via extension.
+
+### 12.13: Advanced sync features — FUTURE
+
+1. Email change detection: Microsoft accounts can change their email address. Detect via stable user GUID (immutable). Auto-rename token files, state DBs, and config sections when email changes.
+2. Sub-drive sync paths: sync a remote subfolder instead of the entire drive root. `sync_root = "/Documents/Work"` in drive config. Only that subtree is synced.
+3. Case-insensitive collision detection on Linux: two local files differing only in case (e.g., `README.md` and `Readme.md`) create a conflict on OneDrive (case-insensitive). Detect and warn before upload.
+
+### 12.14: Testing and benchmarks — FUTURE
+
+1. Like-for-like performance benchmarks against rclone and abraunegg/onedrive. Reproducible benchmark suite: initial sync time, incremental sync time, memory usage, CPU usage at idle.
+2. Property-based tests using `pgregory.net/rapid` for planner invariants (decision matrix completeness, safety guard correctness).
+3. Fuzz targets (`go test -fuzz`) for hash algorithm, filter pattern parsing, TOML config parsing.
+4. Chaos tests (fault injection): network partitions, disk full, permission errors mid-sync. Tagged `chaos` build tag.
 
 ---
 
@@ -723,9 +1063,13 @@ This analysis categorizes every part of the codebase by its relationship to the 
 | 4 v1 | 11 | Batch-pipeline sync engine | **SUPERSEDED** |
 | 4 v2 | 9 | Event-driven sync engine | **COMPLETE** |
 | 5 | 8 | Concurrent execution + watch mode | IN PROGRESS (5.0-5.4.2 done) |
-| 6 | 5 | Packaging + release | FUTURE |
-| **Total** | **49** | | |
+| 6 | 9 | CLI completeness | FUTURE |
+| 7 | 5 | Multi-drive + account management | FUTURE |
+| 8 | 5 | WebSocket + advanced sync | FUTURE |
+| 9 | 8 | Operational hardening | FUTURE |
+| 10 | 6 | Filtering | FUTURE |
+| 11 | 6 | Packaging + release | FUTURE |
+| 12 | 15 | Post-release | FUTURE |
+| **Total** | **98** | | |
 
-Each increment: independently testable, completable in one focused session. Phase 4 v2 count (9, including Increment 0) replaces the original Phase 4 v1 count (11). Phase 5 count (8, increments 5.0-5.4.2 with 5.2 split into 5.2.0/5.2.1/5.2.2 and 5.4 followed by 5.4.2 hardening) reflects the decision to ship parallel observation and parallel hashing as independent increments before the full RunWatch pipeline, and to address hardening before moving to operational features.
-
-**Key architectural difference**: Phase 4 v1 used the database as the coordination mechanism (scanner and delta write eagerly, reconciler reads). Phase 4 v2 uses typed events as the coordination mechanism (observers produce events, planner operates as a pure function, executor produces outcomes, baseline manager commits atomically). Phase 5 replaces the sequential executor with a DAG-based concurrent execution model (in-memory dependency tracker + lane-based workers + per-action commits). Same decision matrix, same safety invariants, fundamentally different execution model.
+Each increment is independently testable and completable in one focused session. Hardening backlog items (defensive coding, test gaps, documentation) are tracked separately in BACKLOG.md and addressed alongside feature work.

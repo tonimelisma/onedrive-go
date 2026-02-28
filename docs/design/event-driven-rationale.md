@@ -120,9 +120,10 @@ Alternative E draws from all four: Dropbox's event journal, Syncthing's continuo
 2. RemoteObserver.FullDelta()       → []ChangeEvent (remote)
 3. LocalObserver.FullScan()         → []ChangeEvent (local)
 4. ChangeBuffer.AddAll() + Flush()  → []PathChanges (batched by path)
-5. Planner.Plan()                   → ActionPlan (pure function)
-6. Executor.Execute()               → []Outcome (I/O)
-7. BaselineManager.Commit()         → atomic DB transaction
+5. Planner.Plan()                   → ActionPlan with dependency DAG
+6. Populate DepTracker with actions and dependency edges
+7. Workers execute concurrently     → per-action baseline commits
+8. All actions complete             → commit delta token
 ```
 
 ### 2.3 Data Flow: Watch Mode
@@ -133,9 +134,10 @@ Alternative E draws from all four: Dropbox's event journal, Syncthing's continuo
 3. LocalObserver.Watch()            → streams ChangeEvents (inotify/FSEvents)
 4. ChangeBuffer debounces (2s)      → []PathChanges (only changed paths)
 5. Planner.Plan()                   → ActionPlan (only for changed paths)
-6. Executor.Execute()               → []Outcome
-7. BaselineManager.Commit()         → incremental baseline update
-8. Go to step 4 (loop on buffer ready)
+6. Populate DepTracker with actions and dependency edges
+7. Workers execute concurrently     → per-action baseline commits
+8. All actions complete             → commit delta token
+9. Go to step 4 (loop on buffer ready)
 ```
 
 ### 2.4 Data Flow: Dry-Run
@@ -318,10 +320,12 @@ type Outcome struct {
     RemoteHash string     // hash of remote content after action
     Size       int64
     Mtime      int64      // local mtime at sync time
+    RemoteMtime int64     // remote mtime for conflict records
 
     ETag       string     // from API response (for conditional operations)
 
     ConflictType string   // for ActionConflict: "edit_edit", "edit_delete", "create_create"
+    ResolvedBy   string   // ResolvedByAuto for auto-resolved conflicts, "" otherwise
 }
 ```
 
@@ -357,15 +361,9 @@ type Action struct {
 }
 
 type ActionPlan struct {
-    FolderCreates []Action
-    Moves         []Action
-    Downloads     []Action
-    Uploads       []Action
-    LocalDeletes  []Action
-    RemoteDeletes []Action
-    Conflicts     []Action
-    SyncedUpdates []Action
-    Cleanups      []Action
+    Actions []Action  // flat list of all actions
+    Deps    [][]int   // Deps[i] = indices that action i depends on
+    CycleID string    // UUID grouping actions from one planning pass
 }
 ```
 
@@ -377,15 +375,20 @@ Consumer-defined interfaces for the Graph client:
 
 ```go
 type DeltaFetcher interface {
-    Delta(ctx context.Context, driveID, token string) (*graph.DeltaPage, error)
+    Delta(ctx context.Context, driveID driveid.ID, token string) (*graph.DeltaPage, error)
 }
 
 type ItemClient interface {
-    GetItem(ctx context.Context, driveID, itemID string) (*graph.Item, error)
-    ListChildren(ctx context.Context, driveID, itemID string) ([]graph.Item, error)
-    CreateFolder(ctx context.Context, driveID, parentID, name string) (*graph.Item, error)
-    MoveItem(ctx context.Context, driveID, itemID, newParentID, newName string) (*graph.Item, error)
-    DeleteItem(ctx context.Context, driveID, itemID string) error
+    GetItem(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
+    ListChildren(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
+    CreateFolder(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error)
+    MoveItem(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string) (*graph.Item, error)
+    DeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error
+    PermanentDeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error
+}
+
+type DriveVerifier interface {
+    Drive(ctx context.Context, driveID driveid.ID) (*graph.Drive, error)
 }
 
 // Downloader streams a remote file by item ID.
@@ -400,6 +403,22 @@ type Uploader interface {
         ctx context.Context, driveID driveid.ID, parentID, name string,
         content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc,
     ) (*graph.Item, error)
+}
+
+// SessionUploader provides session-based upload methods for resumable transfers.
+type SessionUploader interface {
+    CreateUploadSession(ctx context.Context, driveID driveid.ID, parentID, name string,
+        size int64, mtime time.Time) (*graph.UploadSession, error)
+    UploadFromSession(ctx context.Context, session *graph.UploadSession,
+        content io.ReaderAt, totalSize int64, progress graph.ProgressFunc) (*graph.Item, error)
+    ResumeUpload(ctx context.Context, session *graph.UploadSession,
+        content io.ReaderAt, totalSize int64, progress graph.ProgressFunc) (*graph.Item, error)
+}
+
+// RangeDownloader downloads a file starting from a byte offset.
+type RangeDownloader interface {
+    DownloadRange(ctx context.Context, driveID driveid.ID, itemID string,
+        w io.Writer, offset int64) (int64, error)
 }
 ```
 
@@ -461,7 +480,7 @@ What's absent and why:
 | `local_size` / `remote_size` | Same — one confirmed `size`. |
 | `LocalHash` as a separate concept from `SyncedHash` | The baseline stores both `local_hash` and `remote_hash` explicitly. No ambiguity about what `SyncedHash` means. |
 | `created_at` / `updated_at` | Row metadata. The baseline has `synced_at` which serves the same purpose. |
-| `remote_drive_id` / `remote_id` | For shared/remote items. These can be handled as a separate `shared_items` table if needed post-MVP. |
+| `remote_drive_id` / `remote_id` | For shared/remote items. These can be handled as a separate `shared_items` table if needed. |
 | `SHA256Hash` | Opportunistic Business-only field. Can be added to the baseline if needed. |
 
 ### 4.2 Delta Tokens Table
@@ -506,77 +525,22 @@ The `conflict_type` column persists the planner's classification (EF5/EF9/EF12) 
 in the `conflicts` CLI command. The `idx_conflicts_drive` index was removed (redundant — each
 drive has its own DB file, so drive_id is constant across all rows).
 
-### 4.4 Stale Files Tracking
+### 4.4 Upload Sessions (File-Based)
 
-```sql
-CREATE TABLE stale_files (
-    id          TEXT    PRIMARY KEY,
-    path        TEXT    NOT NULL UNIQUE,  -- one entry per path
-    reason      TEXT    NOT NULL,
-    detected_at INTEGER NOT NULL CHECK(detected_at > 0),
-    size        INTEGER
-);
-```
+Upload session persistence is essential for crash recovery of large file uploads. Sessions
+are stored as individual JSON files in the data directory (`{dataDir}/upload-sessions/`),
+not in the database. Each file is named by the SHA256 hash of `driveID:remotePath` and
+contains the upload URL, file hash at session start, file size, and creation timestamp.
 
-Tracks files excluded by filter changes but still present locally. `UNIQUE(path)` prevents
-duplicate entries when the same file becomes stale across multiple config changes.
+On resume, the file's current hash is compared against the stored hash. Mismatches cause
+the session to be discarded (the file will be re-uploaded from scratch on the next cycle).
+Stale sessions (older than 7 days) are cleaned up lazily after each save, throttled to
+once per hour.
 
-### 4.5 Upload Sessions
+File permissions are `0600` (owner read/write only) because session URLs contain
+pre-authenticated upload endpoints.
 
-```sql
-CREATE TABLE upload_sessions (
-    id              TEXT    PRIMARY KEY,
-    drive_id        TEXT    NOT NULL,
-    item_id         TEXT,           -- empty for new file uploads
-    local_path      TEXT    NOT NULL,
-    local_hash      TEXT    NOT NULL,  -- hash at session start (detect mutation on resume)
-    session_url     TEXT    NOT NULL,
-    expiry          INTEGER NOT NULL,
-    bytes_uploaded  INTEGER NOT NULL DEFAULT 0,
-    total_size      INTEGER NOT NULL,
-    created_at      INTEGER NOT NULL CHECK(created_at > 0)
-);
-```
-
-Upload session persistence is essential for crash recovery of large file uploads. The
-`local_hash` column detects local file mutation during the crash window: on resume, the
-file's current hash is compared against the stored hash, and mismatches cause the session
-to be discarded (the file will be re-uploaded from scratch on the next cycle).
-
-### 4.6 Change Journal (Optional, for debugging)
-
-```sql
-CREATE TABLE change_journal (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp   INTEGER NOT NULL,
-    source      TEXT    NOT NULL CHECK(source IN ('remote', 'local')),
-    change_type TEXT    NOT NULL CHECK(change_type IN ('create', 'modify', 'delete', 'move')),
-    path        TEXT    NOT NULL,
-    old_path    TEXT,              -- for moves
-    item_id     TEXT,              -- for remote events
-    hash        TEXT,
-    size        INTEGER,
-    mtime       INTEGER,          -- observed mtime (useful for debugging time-based issues)
-    cycle_id    TEXT               -- groups events from the same sync cycle
-);
-
-CREATE INDEX idx_journal_timestamp ON change_journal(timestamp);
-```
-
-Append-only. Compacted periodically (drop entries older than N days, configurable). Provides a full audit trail of every observation — invaluable for debugging sync issues in production. Only the timestamp index is created; path and cycle queries can filter within time-bounded result sets. Additional indexes can be added via migration if query patterns warrant them.
-
-### 4.7 Config Snapshots
-
-```sql
-CREATE TABLE config_snapshots (
-    key         TEXT    PRIMARY KEY,
-    value       TEXT    NOT NULL
-);
-```
-
-For stale file detection on filter changes. Unchanged.
-
-### 4.8 Schema Migrations
+### 4.5 Schema Migrations
 
 ```sql
 CREATE TABLE schema_migrations (
@@ -587,7 +551,7 @@ CREATE TABLE schema_migrations (
 
 Tracks applied schema versions.
 
-### 4.9 SQLite Pragmas
+### 4.6 SQLite Pragmas
 
 ```sql
 PRAGMA journal_mode = WAL;
@@ -599,7 +563,7 @@ PRAGMA journal_size_limit = 67108864;  -- 64 MiB
 
 Note the addition of `busy_timeout = 5000`. Even though E eliminates concurrent writes during execution (only the baseline manager writes), the busy_timeout is defense-in-depth against any unexpected concurrent access (e.g., `status` command reading while sync writes).
 
-### 4.10 Timestamp Conventions
+### 4.7 Timestamp Conventions
 
 All timestamps are stored as INTEGER Unix nanoseconds (UTC). Validation rules:
 
@@ -612,7 +576,7 @@ All timestamps are stored as INTEGER Unix nanoseconds (UTC). Validation rules:
 
 **Racily-clean problem**: If a file is modified within the same second as the last sync, the mtime fast-check is ambiguous. Solution: when `truncateToSeconds(localMtime) == truncateToSeconds(baselineMtime)`, always compute the content hash to verify. This is the standard approach (documented in Git's index design) generalized for sync.
 
-### 4.11 Path Conventions
+### 4.8 Path Conventions
 
 - All paths are relative to the sync root
 - NFC-normalized (required for macOS APFS compatibility)
@@ -620,20 +584,16 @@ All timestamps are stored as INTEGER Unix nanoseconds (UTC). Validation rules:
 - Forward slash as separator (even on Windows, for DB consistency)
 - No leading or trailing slashes
 
-### 4.12 Total Tables
+### 4.9 Total Tables
 
 | Table | Purpose | Writer |
 |---|---|---|
 | `baseline` | Confirmed synced state per path | BaselineManager only |
 | `delta_tokens` | Delta cursor per drive | BaselineManager only (same txn as baseline) |
 | `conflicts` | Conflict tracking | BaselineManager (on conflict actions) |
-| `stale_files` | Filter-change tracking | BaselineManager |
-| `upload_sessions` | Crash recovery for large uploads | Executor (pre-upload) + BaselineManager (post-upload) |
-| `change_journal` | Debugging audit trail (optional) | BaselineManager (append-only) |
-| `config_snapshots` | Filter change detection | Engine (on config load) |
 | `schema_migrations` | Schema version tracking | Engine (on startup) |
 
-**8 tables total.** The dominant table (`baseline`) has 11 columns — lean and purpose-built for the event-driven architecture.
+**4 database tables** plus a file-based `SessionStore` for upload session persistence. The dominant table (`baseline`) has 11 columns — lean and purpose-built for the event-driven architecture.
 
 ---
 
@@ -1221,13 +1181,13 @@ func (p *Planner) Plan(
         }
 
         actions := p.classifyPathView(view, mode)
-        appendActions(plan, actions)
+        plan.Actions = append(plan.Actions, actions...)
     }
 
-    plan.Moves = append(plan.Moves, moves.actions...)
+    plan.Actions = append(plan.Actions, moves.actions...)
 
-    // Step 4: Order the plan
-    orderPlan(plan)
+    // Step 4: Compute dependency edges
+    plan.Deps = computeDeps(plan.Actions, baseline)
 
     // Step 5: Safety checks (also pure functions)
     plan, err := p.safetyCheck(plan, baseline, config)
@@ -1686,9 +1646,9 @@ func (e *Executor) executeAction(ctx context.Context, action Action) Outcome {
   - Chunk size must be multiple of 320 KiB (default 10 MiB)
   - Zero-byte files ALWAYS use simple upload (sessions require non-empty chunks)
   - Include `fileSystemInfo` in session creation (preserves mtime, avoids double-versioning on Business)
-  - Session persisted to `upload_sessions` table BEFORE starting (for crash recovery)
+  - Session persisted to file-based `SessionStore` BEFORE starting (for crash recovery)
   - Fragment upload URLs are pre-authenticated — do NOT send Authorization header
-  - Session deleted from table on completion
+  - Session deleted from `SessionStore` on completion
 - Post-upload: compare local hash vs server response hash
   - If hashes match: normal Outcome
   - If hashes diverge AND SharePoint library: enrichment detected, store per-side hashes
@@ -2009,27 +1969,26 @@ No tombstone needed because the baseline IS the "old state" — it hasn't been u
 | During `FetchRemote` | Events collected in memory. No DB writes. | Re-run cycle. Delta re-fetched from saved token. |
 | During `ScanLocal` | Events collected in memory. No DB writes. | Re-run cycle. Filesystem re-scanned. |
 | During `Plan` | Pure function. No state. | Re-run cycle. |
-| During `Execute` | Some actions completed on disk/API. Outcomes collected in memory. Baseline NOT updated. Delta token NOT advanced. | Re-run cycle. Delta returns same changes (token not advanced). Scanner sees completed downloads. Planner produces EF4/EF11 (convergent edit/create → update synced) for items that are now identical. No duplicate work. No data loss. |
-| During `Commit` | SQLite transaction. Either commits or rolls back. | If rolled back: same as "during Execute." If committed: success. |
+| During execution | Some actions completed and committed to baseline individually. In-flight actions lost. Delta token NOT advanced. | Re-run cycle. Delta returns same changes (token not advanced). Planner compares delta against updated baseline: already-committed actions appear as convergent (EF4/EF11) and are skipped. Remaining actions re-planned and executed. Upload sessions resumed via SessionStore. No duplicate work. No data loss. |
+| During delta token commit | All per-action commits durable. Token commit may fail. | Token commit retried on restart. All outcomes already in baseline. |
 | During `Watch` (between cycles) | Buffer has pending events. | Events are re-observed by the watchers. Debounce/dedup handles redundancy. |
 
-**Worst case**: A 30-minute initial sync crashes at minute 29 during execution. All 29 minutes of downloads are on disk but the baseline is not updated. On restart, the full delta is re-fetched (same token), the scanner sees the downloaded files, and the planner quickly classifies them as EF4/EF11 (both sides identical → update synced). The commit writes the baseline. Time wasted: a few minutes of re-classification, not 29 minutes of re-downloading.
+**Worst case**: A 30-minute initial sync crashes at minute 29 during execution. 29 minutes of completed transfers are already committed to baseline individually. On restart, the delta token has not been advanced, so the same delta is re-fetched. The idempotent planner compares delta against the updated baseline: already-committed actions appear as convergent (EF4/EF11) and are skipped. Only the remaining actions are re-planned and executed. Time wasted: seconds to re-fetch delta and re-plan, not 29 minutes of re-downloading.
 
 **Mitigation for very large initial syncs**: Batch processing with intermediate baseline commits (same approach as D). After each batch of N items, commit a partial baseline. This bounds the re-work window.
 
-**Upload session resume**: The `upload_sessions` table persists session state BEFORE the upload begins. On crash recovery:
-1. Load all active upload sessions from `upload_sessions` table
-2. Check each session's expiry (`expiry` field, typically 48 hours from creation)
-3. Expired sessions: delete from table, file will be re-uploaded next cycle
-4. Valid sessions: resume from `bytes_uploaded` offset — the API supports this natively
-5. On successful completion: delete session from table, include in Outcomes for baseline commit
+**Upload session resume**: The file-based `SessionStore` persists session state BEFORE the upload begins. On crash recovery:
+1. Load active upload sessions from `SessionStore` (JSON files in data directory)
+2. Check each session's age (sessions older than 7 days are considered stale)
+3. Stale sessions: delete from store, file will be re-uploaded next cycle
+4. Valid sessions: verify local file hash matches stored hash (detect mutation), resume upload
+5. On successful completion: delete session from store, include in Outcomes for baseline commit
 
 **`.partial` file cleanup**: On startup, glob for `**/*.partial` in the sync root and remove them. These are incomplete downloads that are safe to delete — they'll be re-downloaded.
 
-**Delta token integrity**: If the process crashes during execution, the delta token is NOT advanced (it's only saved in the Commit transaction). On restart, the same delta is re-fetched. This is idempotent because:
-- Files already downloaded are found by the scanner and classified as EF4/EF11 (convergent → update synced)
-- Files already uploaded appear in the next delta as new remote items with matching hashes
-- Files partially transferred are cleaned up (partial downloads) or resumed (upload sessions)
+**Delta token integrity**: The delta token is committed only when all actions for a cycle complete. Individual per-action commits update the baseline but do not advance the token. If the process crashes during execution, the token is NOT advanced. On restart, the same delta is re-fetched. This is idempotent because:
+- Already-committed actions appear as convergent (EF4/EF11) and are skipped by the planner
+- Files partially transferred are cleaned up (partial downloads) or resumed (upload sessions via SessionStore)
 
 ---
 
@@ -2155,7 +2114,7 @@ These percentages describe how much of each component's *design logic* draws fro
 ### Phase 4: Executor (1-2 increments)
 
 14. Write executor that produces Outcomes (informed by transfer pipeline patterns)
-15. Worker pools collect Outcomes via callback
+15. Workers report Outcomes via result channel, commit per-action
 16. Executor uses `PathView` context — no database queries
 
 ### Phase 5: Engine Wiring (1 increment)
@@ -2278,7 +2237,7 @@ The seven safety invariants from the architecture spec are preserved in E, but t
 | **S6** | Disk space check before downloads | Executor checks `min_free_space` before each download | Executor checks available disk space against `config.MinFreeSpace` (default 1GB) before downloading. If insufficient, the download is skipped with a warning and produces a failed Outcome. |
 | **S7** | Never upload partial/temp files | Scanner's filter excludes `.partial`, `.tmp`, `.swp`, etc. | Local Observer's filter excludes the same patterns. Additionally, the Planner applies filters symmetrically (Fault Line 6 fix), so remote items matching these patterns are also filtered. |
 
-**Key advantage**: Safety invariants S1 and S5 are pure functions in the Planner, testable without a database. The planner computes directly from `len(baseline.ByPath)` and `len(plan.LocalDeletes) + len(plan.RemoteDeletes)` --- no DB queries needed.
+**Key advantage**: Safety invariants S1 and S5 are pure functions in the Planner, testable without a database. The planner counts delete actions in the flat `plan.Actions` list and compares against `len(baseline.ByPath)` --- no DB queries needed.
 
 ---
 
@@ -2488,7 +2447,7 @@ NOT hot-reloadable (require restart):
 - Worker pool sizes (`parallel_downloads`, `parallel_uploads`, `parallel_checkers`)
 - Network settings
 
-**Filter change → stale file detection**: When SIGHUP changes filter rules, the engine compares the new filter config against `config_snapshots`. Files that were previously included but are now excluded are recorded in the `stale_files` tracking table. The user is warned and can choose to clean them up.
+**Filter change → stale file detection**: When SIGHUP changes filter rules, the engine compares the new filter config against the previous in-memory config. Files that were previously included but are now excluded are detected and the user is warned. Stale files remain on disk and are no longer synced.
 
 ### 18.6 Pause/Resume Detail
 
@@ -2750,23 +2709,24 @@ Engine distributes to components:
 When filter configuration changes (via SIGHUP or between runs):
 
 ```go
-func (e *Engine) detectStaleFiles(ctx context.Context, newFilter Filter) {
-    oldSnapshot := e.loadConfigSnapshot(ctx) // from config_snapshots table
-    newSnapshot := e.buildConfigSnapshot(newFilter)
-
-    if oldSnapshot.Equal(newSnapshot) { return }
+func (e *Engine) detectStaleFiles(ctx context.Context, oldFilter, newFilter Filter) {
+    if oldFilter.Equal(newFilter) { return }
 
     // Walk baseline: find items that pass old filter but fail new filter
+    var staleCount int
     baseline := e.baselineMgr.Cached()
     for path, entry := range baseline.ByPath {
         if !newFilter.ShouldSync(path, entry.ItemType == ItemTypeFolder, entry.Size).Included {
-            e.store.RecordStaleFile(ctx, path, "filter_change", entry.Size)
+            staleCount++
+            e.logger.Warn("stale file: previously synced, now excluded by filter",
+                "path", path, "size", entry.Size)
         }
     }
 
-    e.saveConfigSnapshot(ctx, newSnapshot)
-    e.logger.Warn("stale files detected from filter change",
-        "count", staleCount, "run `onedrive-go stale` to review")
+    if staleCount > 0 {
+        e.logger.Warn("stale files detected from filter change",
+            "count", staleCount)
+    }
 }
 ```
 

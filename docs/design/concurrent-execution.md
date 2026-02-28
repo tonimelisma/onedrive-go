@@ -380,15 +380,15 @@ Workers are organized into two lanes with reserved capacity plus a shared
 overflow pool:
 
 ```
-Total workers: N (configurable, default 16)
+Total workers: N (runtime.NumCPU() or user-configured cap, minimum 4)
 
 Lane: interactive (files < 10 MB, folder ops, deletes, moves, conflicts)
-  Reserved workers: 2 minimum (always available for small ops)
+  Reserved workers: max(2, N/8) (always available for small ops)
 
 Lane: bulk (files >= 10 MB)
-  Reserved workers: 2 minimum (always available for large transfers)
+  Reserved workers: max(2, N/8) (always available for large transfers)
 
-Shared pool: N-4 workers
+Shared pool: N - reserved_interactive - reserved_bulk workers
   Assigned dynamically to whichever lane has work
   Interactive lane has priority for shared workers
 ```
@@ -441,13 +441,12 @@ The PRD specifies three separate configuration keys: `parallel_downloads`,
 `parallel_uploads`, and `parallel_checkers`. The lane-based model unifies
 downloads and uploads into interactive/bulk lanes. The configuration mapping:
 
-| PRD Config Key | Default | Lane Mapping |
+| Config Parameter | Default | Lane Mapping |
 |----------------|---------|-------------|
-| `parallel_downloads` | 8 | Contributes to total worker count |
-| `parallel_uploads` | 8 | Contributes to total worker count |
+| Total lane workers | `runtime.NumCPU()` | Split into interactive, bulk, and shared lanes |
 | `parallel_checkers` | 8 | Separate checker pool (unchanged --- not in lanes) |
 
-Total lane workers = `parallel_downloads + parallel_uploads` (default 16).
+Total lane workers = `runtime.NumCPU()` (minimum 4).
 The checker pool remains separate because hash computation is CPU-bound, not
 I/O-bound, and runs during observation, not execution.
 
@@ -1052,7 +1051,7 @@ all unchanged. The only structural change is splitting the hash call out of
   lines with channels, context management, and shutdown coordination. The
   complexity is not justified when the simpler approach captures the same
   performance benefit for FullScan. Watch-mode hashing improvements (B-107) are
-  a separate concern addressed in Phase 5.2.2.
+  a separate concern.
 - **Parallel walk (concurrent directory subtree traversal).** Doesn't help for
   flat directories. Goroutine explosion for deep trees. Concurrent `observed`
   map writes need mutex. `filepath.WalkDir` is designed for single-threaded
@@ -1060,7 +1059,7 @@ all unchanged. The only structural change is splitting the hash call out of
 - **Streaming walk→hash pipeline.** Over-engineered. Overlapping walk and hash
   saves ~200ms on a 15-minute operation. Not worth the channel orchestration.
 
-### 18.3 Watch-Mode Observation (Phase 5.2.2)
+### 18.3 Watch-Mode Observation
 
 Watch-mode hashing is a different problem from FullScan hashing. In FullScan,
 you have a batch of files to hash after a walk. In watch mode, you have a
@@ -1074,8 +1073,7 @@ during which new events queue up in fsnotify's kernel buffer.
 Write event coalescing (B-107) addresses this by adding a per-path debounce
 timer before hashing. This is a watch-mode-only concern — it does not affect
 FullScan. The design and implementation of watch-mode hashing improvements will
-be determined during Phase 5.2.2 when `RunWatch()` is built and can be
-profiled under realistic load.
+be determined when `RunWatch()` is profiled under realistic load.
 
 ### 18.4 Deferred Optimizations
 
