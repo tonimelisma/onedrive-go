@@ -208,19 +208,24 @@ func TestBuildLogger_ConfigInfo(t *testing.T) {
 	assert.False(t, logger.Handler().Enabled(context.Background(), slog.LevelDebug))
 }
 
-// --- configFromContext tests ---
+// --- cliContextFrom tests ---
 
-func TestConfigFromContext_NilContext(t *testing.T) {
+func TestCliContextFrom_NilContext(t *testing.T) {
 	ctx := context.Background()
-	cfg := configFromContext(ctx)
-	assert.Nil(t, cfg)
+	cc := cliContextFrom(ctx)
+	assert.Nil(t, cc)
 }
 
-func TestConfigFromContext_WithConfig(t *testing.T) {
-	expected := &config.ResolvedDrive{SyncDir: "/test"}
-	ctx := context.WithValue(context.Background(), configContextKey{}, expected)
-	cfg := configFromContext(ctx)
-	assert.Equal(t, expected, cfg)
+func TestCliContextFrom_WithCLIContext(t *testing.T) {
+	expected := &CLIContext{
+		Cfg:    &config.ResolvedDrive{SyncDir: "/test"},
+		Logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+	}
+	ctx := context.WithValue(context.Background(), cliContextKey{}, expected)
+	cc := cliContextFrom(ctx)
+	assert.Equal(t, expected, cc)
+	assert.Equal(t, "/test", cc.Cfg.SyncDir)
+	assert.NotNil(t, cc.Logger)
 }
 
 // --- Cobra structure tests ---
@@ -429,10 +434,11 @@ sync_dir = "` + tmpDir + `/OneDrive"
 	err = loadConfig(cmd)
 	require.NoError(t, err)
 
-	cfg := configFromContext(cmd.Context())
-	require.NotNil(t, cfg)
+	cc := cliContextFrom(cmd.Context())
+	require.NotNil(t, cc)
+	assert.NotNil(t, cc.Logger)
 
-	assert.Equal(t, "personal:test@example.com", cfg.CanonicalID.String())
+	assert.Equal(t, "personal:test@example.com", cc.Cfg.CanonicalID.String())
 }
 
 func TestLoadConfig_MissingFile_ZeroConfig(t *testing.T) {
@@ -461,7 +467,8 @@ func TestLoadConfig_MissingFile_ZeroConfig(t *testing.T) {
 	lsSub, _, err := cmd.Find([]string{"ls"})
 	require.NoError(t, err)
 
-	cfg := configFromContext(lsSub.Context())
-	require.NotNil(t, cfg)
-	assert.Equal(t, "personal:zeroconfig@example.com", cfg.CanonicalID.String())
+	cc := cliContextFrom(lsSub.Context())
+	require.NotNil(t, cc)
+	assert.NotNil(t, cc.Logger)
+	assert.Equal(t, "personal:zeroconfig@example.com", cc.Cfg.CanonicalID.String())
 }

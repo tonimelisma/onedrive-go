@@ -170,13 +170,14 @@ func (o *LocalObserver) handleCreate(
 		hash, hashErr := computeStableHash(fsPath)
 		if hashErr != nil {
 			if errors.Is(hashErr, errFileChangedDuringHash) {
-				o.logger.Debug("file changed during hashing, skipping (will catch on next event)",
+				o.logger.Debug("file metadata still settling, emitting with empty hash",
 					slog.String("path", dbRelPath))
-				return
+				// Fall through: emit with empty hash. Create events have no
+				// guaranteed follow-up unlike Write events (B-203).
+			} else {
+				o.logger.Warn("hash failed for new file, emitting event with empty hash",
+					slog.String("path", dbRelPath), slog.String("error", hashErr.Error()))
 			}
-
-			o.logger.Warn("hash failed for new file, emitting event with empty hash",
-				slog.String("path", dbRelPath), slog.String("error", hashErr.Error()))
 		} else {
 			ev.Hash = hash
 		}
@@ -248,13 +249,13 @@ func (o *LocalObserver) scanNewDirectory(
 		hashVal, hashErr := computeStableHash(entryFsPath)
 		if hashErr != nil {
 			if errors.Is(hashErr, errFileChangedDuringHash) {
-				o.logger.Debug("file changed during hashing, skipping (will catch on next event)",
+				o.logger.Debug("file metadata still settling, emitting with empty hash",
 					slog.String("path", entryRelPath))
-				continue
+				// Fall through: directory scans have no guaranteed follow-up event (B-203).
+			} else {
+				o.logger.Warn("hash failed during directory scan, emitting event with empty hash",
+					slog.String("path", entryRelPath), slog.String("error", hashErr.Error()))
 			}
-
-			o.logger.Warn("hash failed during directory scan, emitting event with empty hash",
-				slog.String("path", entryRelPath), slog.String("error", hashErr.Error()))
 		} else {
 			hash = hashVal
 		}

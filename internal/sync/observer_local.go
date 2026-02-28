@@ -458,8 +458,9 @@ var errFileChangedDuringHash = errors.New("sync: file changed during hashing")
 
 // computeStableHash hashes a file and verifies it was not modified during the
 // hash operation by comparing pre/post stat results. Returns errFileChangedDuringHash
-// if the file changed (B-119). Callers should skip the event — the next safety
-// scan or fsnotify write event will catch the stable version.
+// if the file changed (B-119). Caller-specific handling: handleWrite skips
+// (Write events guarantee a follow-up), handleCreate and scanNewDirectory emit
+// with empty hash (Create events and directory scans have no guaranteed follow-up; B-203).
 func computeStableHash(fsPath string) (string, error) {
 	pre, err := os.Stat(fsPath)
 	if err != nil {
