@@ -20,17 +20,17 @@ Defensive coding, bug fixes, and test gaps in `internal/sync/`.
 |----|-------|----------|-------|
 | B-205 | `WorkerPool.errors` slice grows unbounded in watch mode | **DONE** | Capped at 1000 with `droppedErrors` counter. PR #129. |
 | B-208 | `sessionUpload` non-expired resume error creates infinite retry loop | **DONE** | Delete session on any resume failure. PR #129. |
-| B-204 | Reserved worker receives on nil channel in select | P3 | Works correctly via Go nil-channel semantics. Add comment or refactor. |
-| B-206 | Document `sendResult` lost-result edge case in panic recovery | P3 | Panic during shutdown: result dropped but counters still accurate. Add comment. |
+| B-204 | Reserved worker receives on nil channel in select | **DONE** | Go nil-channel semantics documented. PR #133. |
+| B-206 | Document `sendResult` lost-result edge case in panic recovery | **DONE** | B-206 comment explaining benign drop. PR #133. |
 | B-209 | `DownloadToFile` doesn't validate empty `targetPath` | **DONE** | Empty-string validation for targetPath and itemID. PR #130. |
 | B-210 | `UploadFile` doesn't validate empty `name` parameter | **DONE** | `validateUploadParams()` for parentID, name, localPath. PR #130. |
 | B-212 | `freshDownload` uses permissive file permissions (`os.Create` = 0666) | **DONE** | `os.OpenFile` with 0o600, matching `resumeDownload`. PR #130. |
-| B-214 | Test: `DownloadToFile` rename failure preserves `.partial` | P3 | Verify `.partial` survives and subsequent call resumes. |
-| B-215 | Test: `sessionUpload` session save failure still completes upload | P3 | Mock `SessionStore.Save()` returning error. |
-| B-216 | Test: `UploadFile` stat failure wraps error correctly | P3 | Non-existent path, verify `errors.Is(err, os.ErrNotExist)`. |
-| B-217 | Test: non-RangeDownloader with existing `.partial` starts fresh | P3 | `Downloader`-only mock overwrites existing `.partial`. |
-| B-218 | Test: worker panic recovery records error in `wp.errors` | P3 | Assert panic message in errors slice and `WorkerResult`. |
-| B-219 | Inconsistent hash function usage: direct call vs `tm.hashFunc` | P3 | Download uses `computeQuickXorHash` directly, upload uses injectable `tm.hashFunc`. |
+| B-214 | Test: `DownloadToFile` rename failure preserves `.partial` | **DONE** | EISDIR rename failure test. PR #133. |
+| B-215 | Test: `sessionUpload` session save failure still completes upload | **DONE** | Chmod-based save injection. PR #133. |
+| B-216 | Test: `UploadFile` stat failure wraps error correctly | **DONE** | `errors.Is(err, os.ErrNotExist)` verification. PR #133. |
+| B-217 | Test: non-RangeDownloader with existing `.partial` starts fresh | **DONE** | `tmSimpleDownloader` overwrites old partial. PR #133. |
+| B-218 | Test: worker panic recovery records error in `wp.errors` | **DONE** | Enhanced test checks "panic:" in Stats() and WorkerResult. PR #133. |
+| B-219 | Inconsistent hash function usage: direct call vs `tm.hashFunc` | **DONE** | `resumeDownload` switched to `tm.hashFunc`. PR #133. |
 | B-207 | Document intentional `.partial` preservation on rename failure | P4 | Add clarifying comment. |
 | B-211 | `resumeDownload` TOCTOU race between stat and open | P4 | Extremely unlikely. Verify size after open if fixing. |
 | B-220 | `deleteSession` helper swallows errors silently | **DONE** | Improved comment documenting fire-and-forget pattern. PR #130. |
@@ -259,3 +259,11 @@ Optimization deferred until profiling shows a bottleneck.
 | B-260 | `isAlwaysExcluded` calls `strings.ToLower` allocating on every check | **DONE** — `asciiLower` allocation-free helper. PR #132. |
 | B-261 | `watchLoop` select priority semantics undocumented | **DONE** — Added comment about random priority and safety scan guarantee. PR #132. |
 | B-262 | `removePartialIfNotCanceled` untested | **DONE** — 3 subtests: active context, canceled context, nonexistent file. PR #132. |
+| B-263 | Reserved worker nil channel select semantics undocumented | **DONE** — Added Go spec comment. PR #133. |
+| B-264 | `sendResult` lost-result edge case during shutdown undocumented | **DONE** — Added B-206 comment explaining benign drop. PR #133. |
+| B-265 | Test: `DownloadToFile` rename failure preserves `.partial` | **DONE** — EISDIR rename failure test. PR #133. |
+| B-266 | Test: session save failure still completes upload | **DONE** — Chmod-based save injection. PR #133. |
+| B-267 | Test: `UploadFile` stat failure wraps `os.ErrNotExist` | **DONE** — `errors.Is` chain verification. PR #133. |
+| B-268 | Test: non-RangeDownloader with existing `.partial` starts fresh | **DONE** — `tmSimpleDownloader` overwrites old partial. PR #133. |
+| B-269 | Panic recovery error message not verified in test | **DONE** — Enhanced test checks "panic:" in Stats() and WorkerResult. PR #133. |
+| B-270 | `resumeDownload` uses `computeQuickXorHash` instead of `tm.hashFunc` | **DONE** — Switched to `tm.hashFunc` for consistency. PR #133. |
