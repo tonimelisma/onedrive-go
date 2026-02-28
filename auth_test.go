@@ -195,7 +195,10 @@ sync_dir = "~/Work"
 	assert.Contains(t, dirs, "~/Work")
 }
 
-func TestCollectExistingSyncDirs_SkipsEmptySyncDir(t *testing.T) {
+func TestCollectExistingSyncDirs_IncludesComputedDefault(t *testing.T) {
+	// Drives without explicit sync_dir get a computed default via BaseSyncDir.
+	// The old implementation skipped them — the new one includes them for
+	// accurate collision detection.
 	cfgPath := writeTestAuthConfig(t, `
 ["personal:user@example.com"]
 sync_dir = "~/OneDrive"
@@ -204,7 +207,8 @@ sync_dir = "~/OneDrive"
 `)
 
 	dirs := collectExistingSyncDirs(cfgPath, slog.Default())
-	assert.Equal(t, []string{"~/OneDrive"}, dirs)
+	assert.Contains(t, dirs, "~/OneDrive")
+	assert.Contains(t, dirs, "~/OneDrive - Business")
 }
 
 func TestCollectExistingSyncDirs_NoConfig(t *testing.T) {

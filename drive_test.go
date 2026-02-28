@@ -136,77 +136,9 @@ func TestBuildConfiguredDriveEntries_NoSyncDir_WithTokenMeta(t *testing.T) {
 	assert.Equal(t, "~/OneDrive - Contoso", entries[0].SyncDir)
 }
 
-// --- collectConfigSyncDirs ---
-
-func TestCollectConfigSyncDirs_Empty(t *testing.T) {
-	cfg := config.DefaultConfig()
-	dirs := collectConfigSyncDirs(cfg, driveid.MustCanonicalID("personal:a@b.com"), testDriveLogger(t))
-	assert.Empty(t, dirs)
-}
-
-func TestCollectConfigSyncDirs_ExcludesSelf(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cid := driveid.MustCanonicalID("personal:user@example.com")
-	cfg.Drives[cid] = config.Drive{SyncDir: "~/OneDrive"}
-	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = config.Drive{SyncDir: "~/Work"}
-
-	dirs := collectConfigSyncDirs(cfg, cid, testDriveLogger(t))
-	assert.Equal(t, []string{"~/Work"}, dirs)
-}
-
-func TestCollectConfigSyncDirs_ComputesDefaultForEmptySyncDir(t *testing.T) {
-	setTestDriveHome(t)
-
-	cfg := config.DefaultConfig()
-	cid := driveid.MustCanonicalID("personal:user@example.com")
-	cfg.Drives[cid] = config.Drive{SyncDir: "~/OneDrive"}
-	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = config.Drive{} // no sync_dir
-
-	dirs := collectConfigSyncDirs(cfg, cid, testDriveLogger(t))
-	// Without token meta, business defaults to "~/OneDrive - Business" via BaseSyncDir.
-	assert.Contains(t, dirs, "~/OneDrive - Business")
-}
-
-// --- readDriveTokenMeta ---
-
-func TestReadDriveTokenMeta_NoToken(t *testing.T) {
-	setTestDriveHome(t)
-	cid := driveid.MustCanonicalID("personal:noone@example.com")
-	orgName, displayName := readDriveTokenMeta(cid, testDriveLogger(t))
-	assert.Empty(t, orgName)
-	assert.Empty(t, displayName)
-}
-
-func TestReadDriveTokenMeta_WithMeta(t *testing.T) {
-	setTestDriveHome(t)
-	dataDir := config.DefaultDataDir()
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
-
-	writeTestTokenFile(t, dataDir, "token_personal_user@example.com.json", map[string]string{
-		"org_name":     "My Org",
-		"display_name": "Test User",
-	})
-
-	cid := driveid.MustCanonicalID("personal:user@example.com")
-	orgName, displayName := readDriveTokenMeta(cid, testDriveLogger(t))
-	assert.Equal(t, "My Org", orgName)
-	assert.Equal(t, "Test User", displayName)
-}
-
-func TestReadDriveTokenMeta_InvalidJSON(t *testing.T) {
-	setTestDriveHome(t)
-	dataDir := config.DefaultDataDir()
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
-
-	// Write invalid JSON.
-	tokenPath := filepath.Join(dataDir, "token_personal_user@example.com.json")
-	require.NoError(t, os.WriteFile(tokenPath, []byte("not json"), 0o600))
-
-	cid := driveid.MustCanonicalID("personal:user@example.com")
-	orgName, displayName := readDriveTokenMeta(cid, testDriveLogger(t))
-	assert.Empty(t, orgName)
-	assert.Empty(t, displayName)
-}
+// collectConfigSyncDirs and readDriveTokenMeta were deleted — their logic now
+// lives in config.CollectOtherSyncDirs and config.ReadTokenMetaForSyncDir.
+// Tests for these functions live in internal/config/drive_test.go.
 
 // --- listPausedDrives ---
 
@@ -244,8 +176,6 @@ func TestPrintDriveListText_EmptyBothSections(t *testing.T) {
 }
 
 func TestPrintDriveListText_ConfiguredOnly(t *testing.T) {
-	t.Helper()
-
 	configured := []driveListEntry{
 		{CanonicalID: "personal:user@example.com", SyncDir: "~/OneDrive", State: driveStateReady, Source: "configured"},
 	}
@@ -253,8 +183,6 @@ func TestPrintDriveListText_ConfiguredOnly(t *testing.T) {
 }
 
 func TestPrintDriveListText_AvailableOnly(t *testing.T) {
-	t.Helper()
-
 	available := []driveListEntry{
 		{CanonicalID: "business:user@contoso.com", State: "", Source: "available", SiteName: "Marketing"},
 	}
@@ -262,8 +190,6 @@ func TestPrintDriveListText_AvailableOnly(t *testing.T) {
 }
 
 func TestPrintDriveListText_BothSections(t *testing.T) {
-	t.Helper()
-
 	configured := []driveListEntry{
 		{CanonicalID: "personal:user@example.com", SyncDir: "~/OneDrive", State: driveStateReady, Source: "configured"},
 	}
@@ -274,8 +200,6 @@ func TestPrintDriveListText_BothSections(t *testing.T) {
 }
 
 func TestPrintDriveListText_EmptySyncDir_ShowsNotSet(t *testing.T) {
-	t.Helper()
-
 	configured := []driveListEntry{
 		{CanonicalID: "personal:user@example.com", SyncDir: "", State: driveStateNeedsSetup, Source: "configured"},
 	}
@@ -285,10 +209,39 @@ func TestPrintDriveListText_EmptySyncDir_ShowsNotSet(t *testing.T) {
 // --- printDriveListJSON ---
 
 func TestPrintDriveListJSON_Empty(t *testing.T) {
-	// Redirect stdout to check JSON output.
-	// Just verify it doesn't panic with nil.
 	err := printDriveListJSON(nil, nil)
 	assert.NoError(t, err)
+}
+
+func TestPrintDriveListJSON_VerifyOutput(t *testing.T) {
+	// Capture stdout to verify JSON structure.
+	origStdout := os.Stdout
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+
+	os.Stdout = w
+
+	configured := []driveListEntry{
+		{CanonicalID: "personal:user@example.com", SyncDir: "~/OneDrive", State: driveStateReady, Source: "configured"},
+	}
+	available := []driveListEntry{
+		{CanonicalID: "business:user@contoso.com", Source: "available", SiteName: "Marketing"},
+	}
+
+	writeErr := printDriveListJSON(configured, available)
+	w.Close()
+	os.Stdout = origStdout
+
+	require.NoError(t, writeErr)
+
+	// printDriveListJSON outputs a flat array of all entries.
+	var output []driveListEntry
+	require.NoError(t, json.NewDecoder(r).Decode(&output))
+	require.Len(t, output, 2)
+	assert.Equal(t, "personal:user@example.com", output[0].CanonicalID)
+	assert.Equal(t, "configured", output[0].Source)
+	assert.Equal(t, "business:user@contoso.com", output[1].CanonicalID)
+	assert.Equal(t, "available", output[1].Source)
 }
 
 // --- resumeExistingDrive ---
@@ -386,7 +339,7 @@ func TestPrintDriveSearchJSON_EmptySlice(t *testing.T) {
 
 func TestFindBusinessTokens_NoTokens(t *testing.T) {
 	setTestDriveHome(t)
-	tokens := findBusinessTokens(testDriveLogger(t))
+	tokens := findBusinessTokens("", testDriveLogger(t))
 	assert.Empty(t, tokens)
 }
 
@@ -399,7 +352,7 @@ func TestFindBusinessTokens_HasBusinessToken(t *testing.T) {
 	writeTestTokenFile(t, dataDir, "token_business_alice@contoso.com.json", nil)
 	writeTestTokenFile(t, dataDir, "token_personal_user@example.com.json", nil)
 
-	tokens := findBusinessTokens(testDriveLogger(t))
+	tokens := findBusinessTokens("", testDriveLogger(t))
 	require.Len(t, tokens, 1)
 	assert.Equal(t, "business:alice@contoso.com", tokens[0].String())
 }
@@ -411,7 +364,7 @@ func TestFindBusinessTokens_SkipsPersonal(t *testing.T) {
 
 	writeTestTokenFile(t, dataDir, "token_personal_user@example.com.json", nil)
 
-	tokens := findBusinessTokens(testDriveLogger(t))
+	tokens := findBusinessTokens("", testDriveLogger(t))
 	assert.Empty(t, tokens)
 }
 
@@ -448,10 +401,10 @@ sync_dir = "~/OneDrive"
 	err := pauseDrive(cfgPath, cid, "~/OneDrive")
 	assert.NoError(t, err)
 
-	// Verify enabled = false was written.
+	// Verify enabled = false was written (not just "enabled" present).
 	data, readErr := os.ReadFile(cfgPath)
 	require.NoError(t, readErr)
-	assert.Contains(t, string(data), "enabled")
+	assert.Contains(t, string(data), "enabled = false")
 }
 
 // --- addNewDrive ---
@@ -468,7 +421,7 @@ func TestAddNewDrive_NoToken(t *testing.T) {
 
 	err := addNewDrive(cfgPath, cfg, cid, testDriveLogger(t))
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no token found")
+	assert.Contains(t, err.Error(), "no token file")
 }
 
 func TestAddNewDrive_WithToken(t *testing.T) {
@@ -520,6 +473,7 @@ func writeTestTokenFile(t *testing.T, dir, name string, meta map[string]string) 
 			"access_token":  "test-access-token",
 			"refresh_token": "test-refresh-token",
 			"token_type":    "Bearer",
+			"expiry":        "2099-01-01T00:00:00Z",
 		},
 		"meta": meta,
 	}

@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 // version is set at build time via ldflags.
@@ -42,6 +43,12 @@ const httpClientTimeout = 30 * time.Second
 // defaultHTTPClient returns an HTTP client with a sensible timeout.
 func defaultHTTPClient() *http.Client {
 	return &http.Client{Timeout: httpClientTimeout}
+}
+
+// newGraphClient creates a graph.Client with the standard HTTP client,
+// user-agent, and base URL. Eliminates boilerplate repeated across commands.
+func newGraphClient(ts graph.TokenSource, logger *slog.Logger) *graph.Client {
+	return graph.NewClient(graph.DefaultBaseURL, defaultHTTPClient(), ts, logger, "onedrive-go/"+version)
 }
 
 // skipConfigCommands lists commands that handle config loading themselves,

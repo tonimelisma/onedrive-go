@@ -18,6 +18,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
 // pendingTokenFile is the filename for the temporary token saved during login
@@ -189,7 +190,7 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 
 	// Step 5b: Save metadata to the token file. Every login (including re-login)
 	// refreshes cached metadata so org renames and display name changes propagate.
-	if saveErr := graph.SaveTokenMeta(finalTokenPath, map[string]string{
+	if saveErr := tokenfile.LoadAndMergeMeta(finalTokenPath, map[string]string{
 		"user_id":      user.ID,
 		"display_name": user.DisplayName,
 		"org_name":     orgName,
@@ -224,7 +225,7 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 func discoverAccount(
 	ctx context.Context, ts graph.TokenSource, logger *slog.Logger,
 ) (driveid.CanonicalID, *graph.User, string, error) {
-	client := graph.NewClient(graph.DefaultBaseURL, defaultHTTPClient(), ts, logger, "onedrive-go/"+version)
+	client := newGraphClient(ts, logger)
 
 	// GET /me -> email, user GUID
 	user, err := client.Me(ctx)
@@ -319,8 +320,9 @@ func driveExistsInConfig(cfgPath string, canonicalID driveid.CanonicalID) (bool,
 	return exists, nil
 }
 
-// collectExistingSyncDirs reads the config file and returns all configured sync_dir values.
-// Used for collision detection when picking a default sync directory.
+// collectExistingSyncDirs reads the config file and returns all configured
+// sync_dir values (both explicit and computed defaults). Uses
+// config.CollectOtherSyncDirs with a zero ID to include all drives.
 func collectExistingSyncDirs(cfgPath string, logger *slog.Logger) []string {
 	cfg, err := config.LoadOrDefault(cfgPath, logger)
 	if err != nil {
@@ -330,14 +332,8 @@ func collectExistingSyncDirs(cfgPath string, logger *slog.Logger) []string {
 		return nil
 	}
 
-	dirs := make([]string, 0, len(cfg.Drives))
-	for id := range cfg.Drives {
-		if cfg.Drives[id].SyncDir != "" {
-			dirs = append(dirs, cfg.Drives[id].SyncDir)
-		}
-	}
-
-	return dirs
+	// Zero CanonicalID excludes nothing — collects all drives' sync dirs.
+	return config.CollectOtherSyncDirs(cfg, driveid.CanonicalID{}, logger)
 }
 
 // writeLoginConfig creates or appends to the config file with a new drive section,
@@ -638,7 +634,7 @@ func runWhoami(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	client := graph.NewClient(graph.DefaultBaseURL, defaultHTTPClient(), ts, logger, "onedrive-go/"+version)
+	client := newGraphClient(ts, logger)
 
 	user, err := client.Me(ctx)
 	if err != nil {
