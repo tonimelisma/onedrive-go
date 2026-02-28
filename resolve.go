@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -127,7 +126,7 @@ func resolveEachConflict(
 	resolveFn func(id, resolution string) error,
 ) error {
 	if len(conflicts) == 0 {
-		fmt.Println("No unresolved conflicts.")
+		statusf("No unresolved conflicts.\n")
 		return nil
 	}
 
@@ -160,32 +159,10 @@ func resolveAllKeepBoth(ctx context.Context, mgr *sync.BaselineManager, dryRun b
 }
 
 func resolveSingleKeepBoth(ctx context.Context, mgr *sync.BaselineManager, idOrPath string, dryRun bool) error {
-	conflicts, err := mgr.ListConflicts(ctx)
-	if err != nil {
-		return err
-	}
-
-	target, findErr := findConflict(conflicts, idOrPath)
-	if findErr != nil {
-		return findErr
-	}
-
-	if target == nil {
-		return fmt.Errorf("conflict not found: %s", idOrPath)
-	}
-
-	if dryRun {
-		statusf("Would resolve %s (%s) as keep_both\n", target.Path, truncateID(target.ID))
-		return nil
-	}
-
-	if err := mgr.ResolveConflict(ctx, target.ID, resolutionKeepBoth); err != nil {
-		return err
-	}
-
-	statusf("Resolved %s as keep_both\n", target.Path)
-
-	return nil
+	return resolveSingleConflict(idOrPath, resolutionKeepBoth, dryRun,
+		func() ([]sync.ConflictRecord, error) { return mgr.ListConflicts(ctx) },
+		func(id, resolution string) error { return mgr.ResolveConflict(ctx, id, resolution) },
+	)
 }
 
 // resolveWithTransfers handles keep_local and keep_remote which need graph client.
@@ -249,7 +226,21 @@ func resolveAllWithEngine(ctx context.Context, engine *sync.Engine, resolution s
 }
 
 func resolveSingleWithEngine(ctx context.Context, engine *sync.Engine, idOrPath, resolution string, dryRun bool) error {
-	conflicts, err := engine.ListConflicts(ctx)
+	return resolveSingleConflict(idOrPath, resolution, dryRun,
+		func() ([]sync.ConflictRecord, error) { return engine.ListConflicts(ctx) },
+		func(id, res string) error { return engine.ResolveConflict(ctx, id, res) },
+	)
+}
+
+// resolveSingleConflict finds and resolves a single conflict by ID or path.
+// Extracted to deduplicate resolveSingleKeepBoth and resolveSingleWithEngine.
+// Context is captured by the listFn/resolveFn closures, not passed directly.
+func resolveSingleConflict(
+	idOrPath, resolution string, dryRun bool,
+	listFn func() ([]sync.ConflictRecord, error),
+	resolveFn func(id, resolution string) error,
+) error {
+	conflicts, err := listFn()
 	if err != nil {
 		return err
 	}
@@ -268,8 +259,7 @@ func resolveSingleWithEngine(ctx context.Context, engine *sync.Engine, idOrPath,
 		return nil
 	}
 
-	err = engine.ResolveConflict(ctx, target.ID, resolution)
-	if err != nil {
+	if err := resolveFn(target.ID, resolution); err != nil {
 		return err
 	}
 
@@ -278,13 +268,20 @@ func resolveSingleWithEngine(ctx context.Context, engine *sync.Engine, idOrPath,
 	return nil
 }
 
-// errAmbiguousPrefix is returned when a conflict ID prefix matches multiple
-// conflicts and the user needs to provide a longer prefix.
-var errAmbiguousPrefix = errors.New("ambiguous conflict ID prefix — provide more characters")
+// errAmbiguousPrefix wraps the ambiguous prefix value for diagnostics.
+func errAmbiguousPrefix(prefix string) error {
+	return fmt.Errorf("ambiguous conflict ID prefix %q — provide more characters", prefix)
+}
 
 // findConflict searches a conflict list by exact ID, exact path, or ID prefix.
 // Returns an error if an ID prefix matches multiple conflicts.
 func findConflict(conflicts []sync.ConflictRecord, idOrPath string) (*sync.ConflictRecord, error) {
+	// Empty input would match every ID in the prefix pass (since every
+	// string starts with ""), so reject it early.
+	if idOrPath == "" {
+		return nil, nil
+	}
+
 	// First pass: exact matches (ID or path) take priority.
 	for i := range conflicts {
 		c := &conflicts[i]
@@ -300,7 +297,7 @@ func findConflict(conflicts []sync.ConflictRecord, idOrPath string) (*sync.Confl
 		c := &conflicts[i]
 		if len(c.ID) >= len(idOrPath) && c.ID[:len(idOrPath)] == idOrPath {
 			if match != nil {
-				return nil, errAmbiguousPrefix
+				return nil, errAmbiguousPrefix(idOrPath)
 			}
 
 			match = c
