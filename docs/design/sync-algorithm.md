@@ -425,6 +425,38 @@ The `convertToChangeEvent` function transforms a `graph.Item` into a `ChangeEven
 
 The output is a fully normalized, self-contained `ChangeEvent` that carries all the information downstream components need.
 
+### 3.5 Shortcut Detection and Sub-Delta Tracking
+
+The Remote Observer detects shortcuts (items with a `remoteItem` facet and `folder` type) in the primary delta response. Each shortcut represents a reference to a folder on another drive.
+
+**Shortcut handling in FullDelta:**
+
+1. Primary delta returns items for the user's own drive, including shortcut items
+2. For each shortcut item (has `remoteItem` facet with `folder` type):
+   a. Extract `remoteItem.driveId` and `remoteItem.id`
+   b. Run a folder-scoped delta: `GET /drives/{remoteItem.driveId}/items/{remoteItem.id}/delta`
+   c. Use a separate cached delta token keyed by `(drive_id, scope_id)` where `scope_id = remoteItem.id`
+   d. Map source-drive paths to local paths by prefixing with the shortcut's position in the user's tree
+   e. Emit ChangeEvents with source drive coordinates (`DriveID = remoteItem.driveId`) but local-tree-relative paths
+3. Handle shortcut lifecycle:
+   - New shortcut appears → trigger initial enumeration of the shared folder
+   - Shortcut removed → emit delete events for all items under the shortcut
+   - Shortcut moved → update local path prefix for all items
+
+**Per-shortcut delta tokens** are stored in the `delta_tokens` table with composite primary key `(drive_id, scope_id)`. The primary delta uses `scope_id = ""`.
+
+### 3.6 Personal Vault Exclusion
+
+The Remote Observer excludes Personal Vault items from observation. Vault items are detected via `specialFolder.name == "vault"` in the delta response. When a vault item or any item under the vault folder is encountered:
+
+1. Skip the item — do not emit a ChangeEvent
+2. Log at INFO: "skipping Personal Vault item" with the item path
+3. Never include vault items in baseline, planning, or execution
+
+This exclusion is mandatory because the vault auto-locks after 20 minutes, causing items to appear and disappear from delta responses. Without exclusion, the planner would interpret locked-vault items as remote deletions and delete the user's most sensitive files locally.
+
+The `sync_vault` config option (default `false`) can override this behavior, but a warning is logged when enabled.
+
 ---
 
 ## 4. Local Observer
@@ -1002,6 +1034,8 @@ type Outcome struct {
 
 **Concurrency**: Workers report outcomes through an in-memory result channel. Each worker commits its outcome to the baseline per-action, then reports success/failure to the engine via `WorkerResult` for cycle tracking (failure suppression, delta token commit decisions).
 
+**Cross-drive operations**: Items under shortcuts (shared folder content) target the SOURCE drive for all API operations. The action's `DriveID` field contains `remoteItem.driveId`, not the user's own drive ID. The user's OAuth token has access to the shared content because the sharing permission grants it — the `graph.Client` token is per-account, not per-drive.
+
 ### 9.3 Error Classification (Fatal, Retryable, Skip, Deferred)
 
 The executor classifies errors into four tiers and handles them internally before producing the final Outcome:
@@ -1195,6 +1229,8 @@ COMMIT;
 ```
 
 This is safe because all per-action commits have already made the baseline consistent. The token commit is the final step that "seals" the cycle.
+
+**Composite delta token keys**: Delta tokens use a composite key `(drive_id, scope_id)` to support multiple tokens per configured drive. The primary delta token has `scope_id = ""`. Each shortcut has its own token with `scope_id = remoteItem.id` and `scope_drive = remoteItem.driveId`. All delta tokens for a drive are committed together when a cycle completes.
 
 **Crash recovery via idempotent planner**: If the process crashes mid-cycle, individual per-action commits are already durable in the baseline. The delta token has not been advanced, so the same delta is re-fetched on restart. The planner is idempotent: it compares current state against the updated baseline and detects already-committed actions as convergent (EF4/EF11), skipping them automatically. Remaining actions are re-planned and executed normally.
 

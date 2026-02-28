@@ -678,6 +678,71 @@ This analysis categorizes every part of the codebase by its relationship to the 
 - Docs updated: CLAUDE.md, BACKLOG.md, LEARNINGS.md
 - Both CI workflows green. Full DOD checklist.
 
+#### 5.6: Identity Refactoring + Personal Vault Exclusion
+
+**Goal**: Prepare the identity and config system for multi-drive and shared folder sync. Add Personal Vault exclusion as a safety requirement. All sub-tasks are code changes — identity refactoring must land before shared folder sync (Phase 7).
+
+##### 5.6.1: Personal Vault exclusion
+
+- Detect `specialFolder.name == "vault"` in RemoteObserver, skip items
+- Add `sync_vault` config option (default `false`) with auto-lock warning log
+- Log at INFO when vault items are skipped
+- Must land before sync is used in production
+- **Acceptance**: Vault items never appear in baseline, planning, or execution. `sync_vault = true` overrides with warning.
+
+##### 5.6.2: Add `DriveTypeShared` to `driveid` package
+
+- New constant `DriveTypeShared = "shared"`
+- New struct fields: `sourceDriveID`, `sourceItemID`
+- New constructor: `ConstructShared(email, sourceDriveID, sourceItemID)`
+- New accessors: `IsShared()`, `SourceDriveID()`, `SourceItemID()`
+- Remove `TokenCanonicalID()` method (token resolution is business logic, not identity)
+- Update `validDriveTypes` map, `canonicalIDMaxParts` stays at 4
+- Update `NewCanonicalID()` parser for shared format
+- Update `String()`, `MarshalText()`, `UnmarshalText()`
+- **Acceptance**: Shared drive canonical IDs can be constructed and round-tripped. `grep -rn "TokenCanonicalID()" internal/driveid/` → 0 hits.
+
+##### 5.6.3: Move token resolution to `config` package
+
+- New function: `config.TokenCanonicalID(cid driveid.CanonicalID, cfg *Config) (driveid.CanonicalID, error)`
+- Logic: personal/business → return self; sharepoint → business with same email; shared → find primary drive for email in `cfg.Drives`
+- Update call sites: `drive.go:addNewDrive`, `config/drive.go:DriveTokenPath`, `config/drive.go:ReadTokenMetaForSyncDir`
+- **Acceptance**: All existing tests pass. Token resolution works for all four drive types.
+
+##### 5.6.4: Replace `Alias` with `DisplayName` in config
+
+- `config.Drive` struct: remove `Alias string`, add `DisplayName string` and `Owner string`
+- `config.ResolvedDrive` struct: remove `Alias string`, add `DisplayName string` and `Owner string`
+- Update `MatchDrive()` matching priority: exact canonical → exact display_name (case-insensitive) → substring on canonical, display_name, owner
+- Update `matchBySelector()`: replace alias check with display_name check
+- Update `DefaultSyncDir()` for shared drives: `~/OneDrive-Shared/{display_name}`
+- Update `AppendDriveSection()` to write `display_name` and `owner` TOML fields
+- Display name auto-derivation at drive add:
+  - Personal: email
+  - Business: email
+  - SharePoint: `"site / lib"` with uniqueness escalation to `"site / lib (email)"`
+  - Shared: `"{FirstName}'s {FolderName}"` with escalation
+- Update all test fixtures from alias to display_name
+- **Acceptance**: `grep -rn "\.Alias\b" --include="*.go"` → 0 hits in non-test code. `grep -rn "alias" internal/config/ --include="*.go"` → 0 hits.
+
+##### 5.6.5: Update CLI for display_name
+
+- `drive list` (`drive.go`): show display_name column for configured drives, derive display_name for available drives
+- `drive add` (`drive.go`): substring match against derived display_name, auto-fill display_name/owner/sync_dir
+- `drive remove` (`drive.go`): use `--drive` with display_name matching
+- `status` (`status.go`): show display_name in output
+- `--drive` help text (`root.go`): update to mention display_name matching
+- Error messages: use display_name not canonical ID in user-facing errors
+- **Acceptance**: `--drive "me@outlook.com"` matches personal drive by display_name. All user-facing output shows display_name.
+
+##### 5.6.6: Delta token schema update
+
+- New migration `00004_delta_token_composite_key.sql`
+- `delta_tokens` table: `PRIMARY KEY (drive_id, scope_id)` with `scope_drive TEXT NOT NULL`
+- Primary delta: `scope_id = ""`, `scope_drive = drive_id`
+- Shortcuts: `scope_id = remoteItem.id`, `scope_drive = remoteItem.driveId`
+- **Acceptance**: Migration applies cleanly. Existing single-drive delta tokens preserved with `scope_id = ""`.
+
 ---
 
 ## Phase 6: CLI Completeness
@@ -712,9 +777,9 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 ### 6.4: Drive selection and account disambiguation
 
-1. `--drive` fuzzy matching — **DONE**: `MatchDrive()` in `config/drive.go` matches by exact canonical ID → alias → partial substring. On ambiguity, shows all matching canonical IDs sorted.
+1. `--drive` fuzzy matching — **DONE**: `MatchDrive()` in `config/drive.go` matches by exact canonical ID → exact display_name (case-insensitive) → substring on canonical ID, display_name, or owner. On ambiguity, shows all matching drives sorted.
 2. `--account <email>` flag — **DONE**: persistent flag in `root.go`, used for `drive search` and auth commands to restrict operations to a specific account.
-3. `--drive` repeatable — **FUTURE**: `sync --drive work --drive personal` syncs only those two drives. Without `--drive`, sync all enabled drives.
+3. `--drive` repeatable — **FUTURE**: `sync --drive "me@contoso.com" --drive "me@outlook.com"` syncs only those two drives. Without `--drive`, sync all enabled drives.
 
 ### 6.5: Transfer progress display — FUTURE
 
@@ -741,9 +806,9 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 ---
 
-## Phase 7: Multi-Drive + Account Management
+## Phase 7: Multi-Drive Orchestration + Shared Content Sync
 
-**Single-process multi-drive sync.** After this phase, `sync --watch` syncs all enabled drives simultaneously from a single process. Each drive has its own goroutine, state DB, and sync cycle.
+**Single-process multi-drive sync.** After this phase, `sync --watch` syncs all enabled drives simultaneously from a single process. Each drive has its own goroutine, state DB, and sync cycle. Identity refactoring (four drive types, display_name, token resolution in config) was completed in Phase 5.6.
 
 ### 7.0: Multi-drive orchestration — FUTURE
 
@@ -765,16 +830,20 @@ This analysis categorizes every part of the codebase by its relationship to the 
 2. Support `--json` output — **DONE**: `flagJSON` wired, produces JSON array of account objects.
 3. Show overall health — **FUTURE**: total drives, enabled/disabled/paused counts, aggregate unresolved conflicts.
 
-### 7.3: Shared drive enumeration
+### 7.3: Shared drive enumeration — FUTURE
 
-1. Shared drive discovery — **FUTURE**: Research and implement Graph API endpoints for discovering shared drives: `GET /me/drive/sharedWithMe`, `GET /drives/{drive-id}/items/{item-id}/children` for shared folders. Document which endpoints work for Personal vs Business vs SharePoint.
-2. `drive list` (non-interactive) — **DONE**: shows all configured drives AND available drives from the network (personal drive + SharePoint sites). Distinguishes "configured" vs "available" sources. SharePoint discovery capped at 10 sites; use `drive search` for targeted queries.
+1. Shared drive discovery: integrate `GET /me/drive/sharedWithMe` into `drive list`. Show available shared folders alongside personal/business/SharePoint drives. Derive display names using the identity system from Phase 5.6 (`"{FirstName}'s {FolderName}"` with uniqueness escalation).
+2. `drive list` (non-interactive) — **DONE** for personal/business/SharePoint: shows configured drives AND available drives from the network. **NOT YET DONE** for shared-with-me folders.
+3. `drive add` for shared folders: substring match against derived display names, construct `shared:email:sourceDriveID:sourceItemID` canonical ID, auto-fill display_name/owner/sync_dir.
+4. Shared folders capped at first 10 in `drive list`. More: `... and N more shared folders`.
 
 ### 7.4: Shared folder sync — FUTURE
 
-1. Sync shared folders (files/folders shared by other users with "me"): detect shared items via delta API `remoteItem` facet. Map to local paths under a configurable shared folder directory.
-2. Handle shared folder permissions: read-only shares produce download-only behavior for those items. Read-write shares participate in full bidirectional sync.
-3. Personal and Business account support. SharePoint shared libraries already handled by drive-level sync.
+1. Shortcut detection: detect `remoteItem` facets in primary delta. Per-shortcut delta via `GET /drives/{remoteItem.driveId}/items/{remoteItem.id}/delta`. Path mapping to local tree at shortcut position.
+2. Shortcut lifecycle: new shortcut → initial enumeration; removed shortcut → delete local copies (DP-2); moved shortcut → rename local directory.
+3. Read-only content handling: auto-detect via 403. Summarized errors, not per-file (DP-3).
+4. Shared-with-me drives: full drive infrastructure for standalone shared folders. `drive add`/`remove` by display_name (DP-4).
+5. Personal and Business account support. SharePoint shared libraries already handled by drive-level sync.
 
 ---
 
@@ -975,7 +1044,7 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 1. `migrate` command: auto-detect and import configuration from abraunegg/onedrive or rclone.
 2. abraunegg migration: map `sync_dir`, `skip_dir`/`skip_file`, `skip_dotfiles`, `rate_limit` → `bandwidth_limit`, `threads` → `parallel_downloads`/`parallel_uploads`, `monitor_interval` → `poll_interval`, `sync_list` → `sync_paths`, `classify_as_big_delete` → `big_delete_threshold`.
-3. rclone migration: map remote name → drive alias, `drive_id` → drive section, `drive_type` → auto-detected. Token NOT migrated (different OAuth app ID).
+3. rclone migration: map remote name → drive display_name, `drive_id` → drive section, `drive_type` → auto-detected. Token NOT migrated (different OAuth app ID).
 4. Detect if abraunegg or rclone is currently running/configured and warn about conflicts.
 
 ### 12.2: Interactive conflict resolution — FUTURE

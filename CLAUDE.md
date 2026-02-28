@@ -125,7 +125,7 @@ echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r 
 
 ## Current Phase
 
-**Phases 1-5.4.2 complete. Next: Phase 5.5 (pause/resume + SIGHUP config reload + final cleanup), then Phase 6 (CLI completeness), Phase 7 (multi-drive), Phase 8 (WebSocket + advanced sync), Phase 9 (operational hardening), Phase 10 (filtering), Phase 11 (packaging + release), Phase 12 (post-release).** See [docs/roadmap.md](docs/roadmap.md).
+**Phases 1-5.4.2 complete. Next: Phase 5.5 (pause/resume + SIGHUP config reload + final cleanup), then Phase 5.6 (identity refactoring + Personal Vault exclusion), then Phase 6 (CLI completeness), Phase 7 (multi-drive orchestration + shared content sync), Phase 8 (WebSocket + advanced sync), Phase 9 (operational hardening), Phase 10 (filtering), Phase 11 (packaging + release), Phase 12 (post-release).** See [docs/roadmap.md](docs/roadmap.md).
 
 ## Architecture Overview
 
@@ -155,12 +155,13 @@ echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r 
           │          ┌──────────────────────┐       │
           ├─────────►│  internal/driveid/   │◄──────┤
           │          │  ID, CanonicalID,    │       │
-          │          │  ItemKey (leaf pkg)  │       │
+          │          │  ItemKey (pure ID)   │       │
           │          └──────────┬───────────┘       │
           │                     ▲                   │
           │          ┌──────────┴───────────┐       │
           │          │  internal/config/    │◄──────┘
-          │          │  TOML + drives       │
+          │          │  TOML + drives +     │
+          │          │  TokenCanonicalID()  │
           │          └─────────────────────-┘
           │
           │          ┌────────────────┐
@@ -170,14 +171,14 @@ echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r 
                      └────────────────┘
 ```
 
-**Dependency direction**: `cmd/` -> `internal/*` -> `pkg/*`. No cycles. `internal/driveid/` and `internal/tokenfile/` are leaf packages. Both `graph/` and `config/` import `tokenfile/` for token file I/O. `internal/graph/` does NOT import `internal/config/` — callers pass token paths directly. See [docs/design/architecture.md](docs/design/architecture.md).
+**Dependency direction**: `cmd/` -> `internal/*` -> `pkg/*`. No cycles. `internal/driveid/` and `internal/tokenfile/` are leaf packages. `driveid` is pure identity (no business logic); `config` imports `driveid` and provides `TokenCanonicalID()` for token resolution. Both `graph/` and `config/` import `tokenfile/` for token file I/O. `internal/graph/` does NOT import `internal/config/` — callers pass token paths directly. See [docs/design/architecture.md](docs/design/architecture.md).
 
 ## Package Layout
 
 - **`pkg/quickxorhash/`** — QuickXorHash algorithm (hash.Hash interface)
-- **`internal/driveid/`** — Type-safe drive identity: ID, CanonicalID, ItemKey
+- **`internal/driveid/`** — Type-safe drive identity: ID, CanonicalID, ItemKey. Four drive types (personal, business, sharepoint, shared). Pure identity — no business logic.
 - **`internal/tokenfile/`** — Token file format + I/O (leaf package: stdlib + oauth2 only)
-- **`internal/config/`** — TOML config, drive sections, XDG paths, four-layer override chain
+- **`internal/config/`** — TOML config, drive sections, XDG paths, four-layer override chain, token resolution (`TokenCanonicalID()`)
 - **`internal/graph/`** — Graph API client: auth, retry, items CRUD, delta, transfers
 - **`internal/sync/`** — Event-driven sync: types, baseline, observers, buffer, planner, executor, transfer_manager, tracker, workers, session_store, engine, verify
 - **Root package** — Cobra CLI: login, logout, whoami, status, drive (list/add/remove/search), ls, get, put, rm, mkdir, stat, sync, conflicts, resolve, verify
@@ -199,6 +200,7 @@ echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r 
 | [docs/design/sharepoint-enrichment.md](docs/design/sharepoint-enrichment.md) | SharePoint enrichment design |
 | [docs/design/decisions.md](docs/design/decisions.md) | Architectural and design decisions |
 | [docs/design/accounts.md](docs/design/accounts.md) | Account and drive system design |
+| [docs/design/MULTIDRIVE.md](docs/design/MULTIDRIVE.md) | Multi-drive architecture (shared drives, display_name, vault exclusion) |
 | [docs/design/event-driven-rationale.md](docs/design/event-driven-rationale.md) | Option E architectural decision record |
 | [docs/design/concurrent-execution.md](docs/design/concurrent-execution.md) | Execution architecture |
 | [docs/design/legacy-sequential-architecture.md](docs/design/legacy-sequential-architecture.md) | Old 9-phase architecture reference (migration guide) |

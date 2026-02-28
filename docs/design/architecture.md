@@ -89,9 +89,9 @@ cmd/onedrive-go/                    # CLI (Cobra commands)
   drive.go                          # drive add, drive remove
 
 internal/
-  driveid/                          # Type-safe drive identifiers (leaf package, stdlib-only)
+  driveid/                          # Type-safe drive identity (leaf package, stdlib-only)
     id.go                           # ID type: normalized API drive identifier (lowercase + zero-pad)
-    canonical.go                    # CanonicalID type: config-level "type:email" identifier
+    canonical.go                    # CanonicalID type: config-level "type:email" identifier; four drive types (personal, business, sharepoint, shared)
     itemkey.go                      # ItemKey type: composite (DriveID, ItemID) map key
 
   graph/                            # Graph API client -- ALL API interaction + quirk handling
@@ -129,13 +129,13 @@ internal/
     verify.go                       # Post-sync verification (baseline vs filesystem)
     migrations.go                   # Embedded SQL migration files
 
-  config/                           # TOML config with drives
+  config/                           # TOML config with drives; token resolution for all four drive types
     config.go                       # Config struct, FilterConfig, TransfersConfig, etc.
     load.go                         # LoadOrDefault, TOML parsing
     defaults.go                     # Hardcoded default values
     validate.go                     # Global config validation
     validate_drive.go               # Per-drive config validation
-    drive.go                        # Drive struct, ResolveDrive, matching logic
+    drive.go                        # Drive struct, ResolveDrive, TokenCanonicalID, matching logic
     paths.go                        # XDG paths, data dir derivation
     env.go                          # Environment variable overrides
     write.go                        # Config file creation and text-level manipulation
@@ -146,7 +146,7 @@ pkg/
   quickxorhash/                     # Copied from rclone (BSD-0 license)
 ```
 
-**Dependency rule**: `cmd/` -> `internal/*` -> `pkg/*`. No `internal/` package may import from `cmd/`. No `pkg/` package may import from `internal/`.
+**Dependency rule**: `cmd/` -> `internal/*` -> `pkg/*`. No `internal/` package may import from `cmd/`. No `pkg/` package may import from `internal/`. `driveid` is pure identity (no imports beyond stdlib) — parsing, construction, formatting, and accessors only. `config` imports `driveid` for type safety and provides business logic such as token resolution (`TokenCanonicalID()`).
 
 ---
 
@@ -297,6 +297,8 @@ See [event-driven-rationale.md](event-driven-rationale.md) Part 5.9 for full imp
 Loads, validates, and provides access to TOML configuration. Manages multi-drive configuration with flat global settings and per-drive sections. See [configuration.md](configuration.md) for full specification.
 
 **Key types**: `Config`, `Drive`, `ResolvedDrive`, `ResolveDrive(env, cli)`, `DriveTokenPath()`, `DriveStatePath()`.
+
+**Token resolution**: `TokenCanonicalID()` determines which OAuth token file a drive uses. `shared` and `sharepoint` drives share their account's primary token (the personal or business token of the owning account), so they do not have their own token path.
 
 ### 3.9 QuickXorHash (`pkg/quickxorhash/`)
 
@@ -852,7 +854,7 @@ All known API quirks are handled at the observer boundary, making them invisible
 
 ```
 --account <id>         # Account for auth commands
---drive <selector>     # Drive selector (canonical ID, alias, or partial match)
+--drive <selector>     # Drive selector (canonical ID, display name, or substring match)
 --config <path>        # Override config file location
 --json                 # Machine-readable JSON output (all commands)
 --verbose / -v         # Info-level output

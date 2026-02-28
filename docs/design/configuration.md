@@ -194,14 +194,16 @@ Only two environment variables are supported. They provide drive and path overri
 # Each section name is the canonical drive identifier.
 
 ["personal:toni@outlook.com"]
+display_name = "toni@outlook.com"
 sync_dir = "~/OneDrive"
 
 ["business:alice@contoso.com"]
+display_name = "alice@contoso.com"
 sync_dir = "~/OneDrive - Contoso"
-alias = "work"
 skip_dirs = ["node_modules", ".git", "vendor"]
 
 ["sharepoint:alice@contoso.com:marketing:Documents"]
+display_name = "marketing / Documents"
 sync_dir = "~/Contoso/Marketing - Documents"
 enabled = false
 ```
@@ -257,12 +259,13 @@ For keys that are recognized as abraunegg or rclone option names, a specific mig
 
 ### 3.1 Drive Identification
 
-Each drive is represented as a TOML section with the canonical drive identifier as the section name. The canonical identifier format is `type:email[:site:library]`:
+Each drive is represented as a TOML section with the canonical drive identifier as the section name. The canonical identifier format is `type:email[:site:library]` or `type:email:sourceDriveID:sourceItemID` for shared drives:
 
 ```toml
 ["personal:toni@outlook.com"]
 ["business:alice@contoso.com"]
 ["sharepoint:alice@contoso.com:marketing:Documents"]
+["shared:alice@contoso.com:b!TG9yZW0:01ABCDEF"]
 ```
 
 Drive sections are auto-created by `login` and `drive add`. They can also be manually added. See [accounts.md §2](accounts.md) for the canonical identifier format.
@@ -275,7 +278,9 @@ These fields appear inside drive sections:
 |-------|------|----------|---------|-------------|
 | `sync_dir` | String | Yes | — | Local directory to sync (tilde-expanded). Must be unique across drives. |
 | `enabled` | Boolean | No | `true` | `false` = paused (`drive remove` sets this) |
-| `alias` | String | No | — | Short name for `--drive` (e.g., `"work"`) |
+| `display_name` | String | No | (auto-derived) | Human-facing drive name. Auto-generated at `drive add` time (personal/business: email, SharePoint: "site / lib", shared: "{Name}'s {Folder}"). User-editable. |
+| `owner` | String | No | — | Owner's email address (shared drives only). Auto-filled from sharedWithMe API response. |
+| `sync_vault` | Boolean | No | `false` | Include Personal Vault items in sync. Default excludes vault items due to auto-lock data-loss risk. Enable with caution. |
 | `remote_path` | String | No | `"/"` | Remote subfolder to sync |
 | `drive_id` | String | No | auto | Explicit drive ID (auto-detected for personal/business) |
 | `application_id` | String | No | (built-in) | Custom Azure application ID |
@@ -312,7 +317,28 @@ poll_interval = "10m"                              # overrides global interval
 
 ### 3.4 Token and State Isolation
 
-Each drive has its own state DB file. Token files are per-account (not per-drive) — SharePoint drives share the business account's token.
+Each drive has its own state DB file. Token files are per-account (not per-drive) — SharePoint and shared drives share the token of the associated personal or business account.
+
+**Example showing all four drive types:**
+
+```toml
+["personal:me@outlook.com"]
+display_name = "me@outlook.com"
+sync_dir = "~/OneDrive"
+
+["business:me@contoso.com"]
+display_name = "me@contoso.com"
+sync_dir = "~/OneDrive - Contoso"
+
+["sharepoint:me@contoso.com:Marketing:Documents"]
+display_name = "Marketing / Documents"
+sync_dir = "~/Contoso/Marketing - Documents"
+
+["shared:me@outlook.com:b!TG9yZW0:01ABCDEF"]
+display_name = "Jane's Photos"
+owner = "jane@outlook.com"
+sync_dir = "~/OneDrive-Shared/Jane's Photos"
+```
 
 | File | Naming | Example |
 |------|--------|---------|
@@ -733,7 +759,7 @@ Format: `ISV|<publisher>|<application>/<version>`. Helps Microsoft distinguish I
 | Flag | Type | Description |
 |------|------|-------------|
 | `--account <email>` | String | Select account by email (auth commands: `login`, `logout`) |
-| `--drive <id\|alias>` | String (repeatable) | Select drive by canonical ID, alias, or partial match |
+| `--drive <id\|name>` | String (repeatable) | Select drive by canonical ID, display name, or partial match |
 | `--config <path>` | String | Override config file path |
 | `--json` | Boolean | Machine-readable JSON output |
 | `--verbose` / `-v` | Boolean | Show individual file operations |
@@ -815,7 +841,7 @@ These have no CLI flag equivalent:
 - Set sync interval (`poll_interval`)
 - Set log level
 - Configure per-drive overrides
-- Set aliases
+- Set display names
 
 ### 12.3 Migration During Setup
 
@@ -971,7 +997,9 @@ Every configuration option in a single reference table.
 |--------|-------|------|---------|----------|:----------:|-------------|
 | `sync_dir` | Drive | String | — | - | No | Local sync directory |
 | `enabled` | Drive | Boolean | `true` | - | Yes | Drive enabled for sync |
-| `alias` | Drive | String | `""` | - | Yes | Short name for `--drive` |
+| `display_name` | Drive | String | (auto-derived) | - | Yes | Human-facing drive name |
+| `owner` | Drive | String | `""` | - | No | Owner email for shared drives |
+| `sync_vault` | Drive | Boolean | `false` | - | Yes | Include Personal Vault in sync |
 | `remote_path` | Drive | String | `"/"` | - | No | Remote path to sync |
 | `drive_id` | Drive | String | auto | - | No | Drive ID (required for SharePoint) |
 | `application_id` | Drive | String | (built-in) | - | No | Azure app ID |
@@ -1106,7 +1134,7 @@ Every configuration option in a single reference table.
 
 | rclone Config/Flag | onedrive-go Option | Notes |
 |-------------------|-------------------|-------|
-| Remote name | Drive `alias` | Name becomes alias |
+| Remote name | Drive `display_name` | Name becomes display_name |
 | `type = onedrive` | Validation only | Confirms OneDrive remote |
 | `drive_id` | Drive `drive_id` | Direct |
 | `drive_type = personal` | Auto-detected | Drive type from canonical ID |

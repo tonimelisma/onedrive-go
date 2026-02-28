@@ -9,6 +9,7 @@
 - **Personal OneDrive** — one per personal Microsoft account
 - **OneDrive for Business** — one per business/work account
 - **SharePoint document library** — many per business account (same token)
+- **Shared folders** — folders shared by other users, synced as separate drives
 
 A single business login grants access to the OneDrive for Business drive AND all SharePoint document libraries the user can access. No separate SharePoint authentication.
 
@@ -23,10 +24,9 @@ A single business login grants access to the OneDrive for Business drive AND all
 | 3 | **State DB file** | Data directory | `state_personal_toni@outlook.com.db` |
 | 4 | **Config section** | `config.toml` | `["personal:toni@outlook.com"]` |
 | 5 | **`--account` value** | CLI flag (auth) | `alice@contoso.com` |
-| 5b | **`--drive` value** | CLI flag (drives) | `personal`, `work`, `marketing` |
+| 5b | **`--drive` value** | CLI flag (drives) | `"me@outlook.com"`, `"Jane's Photos"`, `"marketing"` |
 | 6 | **Sync directory** | On disk, in config | `~/OneDrive - Contoso` |
-| 7 | **Alias** | Per-drive config, CLI | `alias = "work"` |
-| 8 | **Display name** | Messages, logs, errors | `toni@outlook.com (personal)` |
+| 7 | **Display name** | Per-drive config, CLI, logs, errors | `display_name = "Jane's Photos"` |
 
 ---
 
@@ -38,6 +38,7 @@ A single business login grants access to the OneDrive for Business drive AND all
 personal:<email>
 business:<email>
 sharepoint:<email>:<site>:<library>
+shared:<email>:<sourceDriveID>:<sourceItemID>
 ```
 
 ### Examples
@@ -47,6 +48,7 @@ personal:toni@outlook.com
 business:alice@contoso.com
 sharepoint:alice@contoso.com:marketing:Documents
 sharepoint:alice@contoso.com:hr:Policies
+shared:me@outlook.com:b!TG9yZW0:01ABCDEF
 ```
 
 ### Rules
@@ -65,6 +67,8 @@ sharepoint:alice@contoso.com:hr:Policies
 | User GUID | Stable identifier | `GET /me` -> `id` (stored for email change detection) |
 | Site name | SharePoint site URL slug | `GET /sites/{id}` -> `name` |
 | Library name | Document library display name | `GET /sites/{id}/drives` -> drive `name` |
+| Source drive ID | Shared-with-me or shortcut | `sharedWithMe` API -> `remoteItem.driveId` |
+| Source item ID | Shared-with-me or shortcut | `sharedWithMe` API -> `remoteItem.id` |
 
 ### Drive type auto-detection
 
@@ -75,6 +79,9 @@ Personal vs business is auto-detected. No `--personal` or `--business` flags nee
 | Consumer endpoint | `personal` | `personal` |
 | Work/school endpoint | `business` | `business` |
 | Work/school endpoint | `documentLibrary` | `sharepoint` |
+| Consumer OR Work/school endpoint | (shared-with-me API) | `shared` |
+
+For shared drives, the canonical ID is opaque to humans — users interact via display names.
 
 ---
 
@@ -101,8 +108,19 @@ All data files in one flat directory. No nested folders. The `:` separator from 
 | `personal:<email>` | `token_personal_<email>.json` | `state_personal_<email>.db` |
 | `business:<email>` | `token_business_<email>.json` | `state_business_<email>.db` |
 | `sharepoint:<email>:<site>:<lib>` | (shares `token_business_<email>.json`) | `state_sharepoint_<email>_<site>_<lib>.db` |
+| `shared:<email>:<did>:<iid>` | (shares primary drive's token) | `state_shared_<email>_<did>_<iid>.db` |
 
 Filenames are always derived FROM the canonical ID in the config file. We never parse filenames to discover drives — config is the source of truth.
+
+Example layout with a shared drive:
+
+```
+~/.local/share/onedrive-go/
+  config.toml
+  token_personal_me@outlook.com.json
+  state_personal_me@outlook.com.db
+  state_shared_me@outlook.com_b!TG9yZW0_01ABCDEF.db
+```
 
 ### Token file format
 
@@ -137,6 +155,8 @@ Every login (including re-login) refreshes both the token AND all cached metadat
 
 SharePoint drives share the OAuth token with the business account (same user, same session, same scopes). Only the state DB is per-drive. `token_business_alice@contoso.com.json` serves both her OneDrive for Business and all her SharePoint drives.
 
+Shared drives share the OAuth token with their primary drive (personal or business). Token resolution is handled by `config.TokenCanonicalID()`, which finds the account type (personal or business) for the email and returns the corresponding token's canonical ID.
+
 ### Platform paths
 
 | Platform | Config | Data + logs |
@@ -165,17 +185,23 @@ poll_interval = "5m"
 # ── Drives (any section with ":" is a drive) ──
 
 ["personal:toni@outlook.com"]
+display_name = "toni@outlook.com"
 sync_dir = "~/OneDrive"
-alias = "home"
 
 ["business:alice@contoso.com"]
+display_name = "alice@contoso.com"
 sync_dir = "~/OneDrive - Contoso"
-alias = "work"
 skip_dirs = ["node_modules", ".git", "vendor"]
 
 ["sharepoint:alice@contoso.com:marketing:Documents"]
+display_name = "Marketing / Documents"
 sync_dir = "~/Contoso/Marketing - Documents"
 enabled = false
+
+["shared:me@outlook.com:b!TG9yZW0:01ABCDEF"]
+display_name = "Jane's Photos"
+owner = "jane@outlook.com"
+sync_dir = "~/OneDrive-Shared/Jane's Photos"
 ```
 
 Quotes around section names are required by TOML because `@` and `:` are not valid bare key characters. This is unavoidable with email-based identifiers.
@@ -197,7 +223,9 @@ Quotes around section names are required by TOML because `@` and `:` are not val
 |---|---|---|---|---|
 | `sync_dir` | string | No | (computed) | Where to sync. Must be unique across drives. Auto-computed from canonical ID + token metadata if omitted. |
 | `enabled` | bool | No | `true` | `false` = paused (drive remove sets this) |
-| `alias` | string | No | — | Short name for `--drive` (e.g., `"work"`) |
+| `display_name` | string | No | (auto-derived) | Human-facing name. Auto-generated at drive add time, user-editable. |
+| `owner` | string | No | — | Owner's email (shared drives only) |
+| `sync_vault` | bool | No | `false` | Include Personal Vault items in sync (dangerous — vault auto-lock can cause local deletes) |
 | `remote_path` | string | No | `"/"` | Remote subfolder to sync |
 | `drive_id` | string | No | auto | Explicit drive ID (auto-detected for personal/business) |
 | `skip_dotfiles` | bool | No | global | Per-drive override |
@@ -264,6 +292,7 @@ On first login, the app writes a complete config from a template string constant
 # Each section name is the canonical drive identifier.
 
 ["personal:toni@outlook.com"]
+display_name = "toni@outlook.com"
 sync_dir = "~/OneDrive"
 ```
 
@@ -330,10 +359,10 @@ Authentication:
   whoami                    Show authenticated accounts
 
 Drive management:
-  drive list                Show configured drives + available drives from network
-  drive add <canonical-id>  Add a new drive or resume a paused one
+  drive list                Show configured drives + available drives from network (including shared-with-me folders)
+  drive add <name>          Add a new drive by display name or canonical ID, or resume a paused one
   drive remove [--purge]    Pause a drive (--purge: delete state DB + config section)
-  drive search <term>       Search SharePoint sites by name
+  drive search <term>       Search SharePoint sites by name (shared-with-me folders discoverable via drive list)
 
 Sync:
   sync                      One-shot bidirectional sync, exits when done
@@ -394,7 +423,7 @@ Migration:
 | Flag | Used on | Type | Description |
 |---|---|---|---|
 | `--account` | `login`, `logout` | string | Select account by email or partial email |
-| `--drive` | Everything else | string (repeatable for sync/status) | Select drive by canonical ID, alias, or partial match |
+| `--drive` | Everything else | string (repeatable for sync/status) | Select drive by canonical ID, display name, or partial match |
 | `--config` | All | string | Config file path override |
 | `--verbose` / `-v` | All | bool | Show individual file operations |
 | `--debug` | All | bool | Show HTTP requests, internal state |
@@ -423,7 +452,7 @@ Migration:
 Two flags for two concepts:
 
 - **`--account`** — identifies a Microsoft account by email. Used on auth commands (`login`, `logout`).
-- **`--drive`** — identifies a specific drive by canonical ID, alias, or partial match. Used on everything else.
+- **`--drive`** — identifies a specific drive by canonical ID, display name, or partial match. Used on everything else.
 
 ### `--account` (auth commands)
 
@@ -439,44 +468,48 @@ onedrive-go logout --account alice                # partial email match (if unam
 
 ### `--drive` (drive commands)
 
-Fuzzy matches against canonical drive IDs and aliases. Resolution order:
+Matches against canonical drive IDs and display names. Resolution order:
 
-1. **Exact canonical match**: `personal:toni@outlook.com` -> direct hit
-2. **Alias match**: `work` -> resolves via `alias = "work"` in config
-3. **Prefix match on type**: `personal` -> matches `personal:toni@outlook.com` (if only one personal drive)
-4. **Email match**: `toni@outlook.com` -> matches if only one drive has this email
-5. **Partial match**: `marketing` -> matches if only one drive contains `marketing`
+1. **Exact canonical ID**: `--drive "personal:me@outlook.com"` -> direct hit
+2. **Exact display_name** (case-insensitive): `--drive "Jane's Photos"` -> matches display_name exactly
+3. **Substring match** on canonical ID, display_name, or owner: `--drive jane`, `--drive personal`, `--drive photos`
 
-Shortest unique match wins. If ambiguous -> error with suggestions showing shortest unique identifiers.
+```bash
+onedrive-go sync --drive "personal:me@outlook.com"   # exact canonical
+onedrive-go sync --drive personal                     # substring on canonical
+onedrive-go sync --drive "Jane's Photos"              # exact display_name
+onedrive-go sync --drive jane                         # substring on display_name/owner
+```
+
+If ambiguous -> error with suggestions showing display names and canonical IDs.
 
 ### Discoverability
 
-Users learn about partial matching through:
+Users learn about matching through:
 
 **After login:**
 ```
-Drive added: personal:toni@outlook.com -> ~/OneDrive
-Use with: --drive personal  or  --drive toni@outlook.com
+Drive added: me@outlook.com -> ~/OneDrive
+Use with: --drive "me@outlook.com"  or  --drive personal
 ```
 
 **In error messages (ambiguous match):**
 ```
 Error: "alice" matches multiple drives:
-  business:alice@contoso.com
-  sharepoint:alice@contoso.com:marketing:Documents
+  me@contoso.com (~/OneDrive - Contoso)
+  Marketing / Documents (~/Contoso/Marketing - Documents)
 
-Try:
-  --drive business       (OneDrive for Business)
-  --drive marketing      (Marketing — Documents)
-  --drive work           (alias for business:alice@contoso.com)
+Try a more specific match:
+  --drive "me@contoso.com"        (OneDrive for Business)
+  --drive "Marketing / Documents" (SharePoint library)
 ```
 
 **In `--help` output:**
 ```
---drive string     Select a drive. Matches shortest unique prefix:
+--drive string     Select a drive. Matches by canonical ID, display name, or substring:
+                     --drive "me@outlook.com"
                      --drive personal
-                     --drive toni@outlook.com
-                     --drive work  (alias)
+                     --drive "Jane's Photos"
 ```
 
 ### Auto-selection (when `--drive` is omitted)
@@ -504,10 +537,10 @@ Try:
 ### Repeatable for multi-target commands
 
 ```bash
-onedrive-go sync                                     # all enabled drives
-onedrive-go sync --drive personal                    # just one
-onedrive-go sync --drive personal --drive work       # two of three
-onedrive-go status --drive work                      # status for one drive
+onedrive-go sync                                                    # all enabled drives
+onedrive-go sync --drive personal                                   # just one (substring)
+onedrive-go sync --drive "me@outlook.com" --drive "me@contoso.com" # two of three
+onedrive-go status --drive "me@contoso.com"                        # status for one drive
 ```
 
 ---
@@ -523,6 +556,7 @@ Following Microsoft's OneDrive client conventions:
 | Personal OneDrive | `~/OneDrive` | Fixed (Microsoft uses `~/OneDrive - Personal` but we simplify for the 90% single-account case) |
 | OneDrive for Business | `~/OneDrive - {OrgName}` | `GET /me/organization` -> `displayName` |
 | SharePoint library | `~/{OrgName}/{SiteName} - {LibraryName}` | Microsoft convention: org as parent dir, site-library as subfolder |
+| Shared folder | `~/OneDrive-Shared/{display_name}` | Derived from shared drive's display_name (e.g., `~/OneDrive-Shared/Jane's Photos`) |
 
 ### Microsoft's actual convention
 
@@ -601,8 +635,8 @@ $ onedrive-go login
 To sign in, visit https://microsoft.com/devicelogin and enter code: ABCD-EFGH
 
 Signed in as toni@outlook.com (personal account).
-Drive added: personal:toni@outlook.com -> ~/OneDrive
-Use with: --drive personal  or  --drive toni@outlook.com
+Drive added: me@outlook.com -> ~/OneDrive
+Use with: --drive "me@outlook.com"  or  --drive personal
 
 Run 'onedrive-go sync' to sync once, or 'sync --watch' for continuous sync.
 Run 'onedrive-go setup' to change settings.
@@ -615,10 +649,10 @@ $ onedrive-go login
 To sign in, visit https://microsoft.com/devicelogin and enter code: WXYZ-1234
 
 Signed in as alice@contoso.com (Contoso Ltd).
-Drive added: business:alice@contoso.com -> ~/OneDrive - Contoso
-Use with: --drive business  or  --drive alice  or  --drive work (alias)
+Drive added: me@contoso.com -> ~/OneDrive - Contoso
+Use with: --drive "me@contoso.com"  or  --drive business
 
-You also have access to SharePoint libraries.
+You also have access to SharePoint libraries and shared folders.
 Run 'onedrive-go drive add' to add them.
 
 Run 'onedrive-go sync' to sync, or 'onedrive-go setup' to change settings.
@@ -667,16 +701,20 @@ Adds a SharePoint library or resumes a paused drive. Does NOT offer new account 
 ```
 $ onedrive-go drive add
 Paused drives:
-  1. business:alice@contoso.com (~/OneDrive - Contoso) — resume
+  1. me@contoso.com (~/OneDrive - Contoso) — resume
 
 SharePoint libraries (using alice@contoso.com):
-  2. Marketing — Documents
-  3. HR — Policies
-  4. Engineering — Wiki
+  2. Marketing / Documents
+  3. HR / Policies
 
-Select (number): 2
-Drive added: sharepoint:alice@contoso.com:marketing:Documents
-  -> ~/Contoso/Marketing - Documents
+Shared with me:
+  4. Jane's Photos       (shared by jane@outlook.com)
+  5. Bob's Project Files  (shared by bob@contoso.com)
+  ... and 3 more shared folders
+
+Select (number): 4
+Drive added: Jane's Photos (shared by jane@outlook.com)
+  -> ~/OneDrive-Shared/Jane's Photos
 
 To add a new Microsoft account, use 'onedrive-go login'.
 ```
@@ -693,15 +731,15 @@ onedrive-go drive add --site marketing --library Documents
 Pauses a drive. Sets `enabled = false` in config. Everything preserved.
 
 ```
-$ onedrive-go drive remove --drive work
-Drive paused: business:alice@contoso.com
+$ onedrive-go drive remove --drive "Jane's Photos"
+Drive paused: Jane's Photos (shared by jane@outlook.com)
   Token: kept
   State database: kept
   Config section: kept (enabled = false)
-  Sync directory (~/OneDrive - Contoso): untouched — your files remain on disk
+  Sync directory (~/OneDrive-Shared/Jane's Photos): untouched — your files remain on disk
 
 Resume with: onedrive-go drive add
-Delete everything: onedrive-go drive remove --drive work --purge
+Delete everything: onedrive-go drive remove --drive "Jane's Photos" --purge
 ```
 
 Works for any drive type — personal, business, or SharePoint.
@@ -773,27 +811,27 @@ Shows all accounts and drives in a hierarchy:
 $ onedrive-go status
 Account: toni@outlook.com (personal)
   Token: valid
-  personal:toni@outlook.com        ~/OneDrive                      synced 2m ago
+  me@outlook.com               ~/OneDrive                      synced 2m ago
 
 Account: alice@contoso.com (Contoso Ltd)
   Token: valid (expires in 45 min)
-  business:alice@contoso.com       ~/OneDrive - Contoso            syncing 42/100
-  sharepoint:...:marketing:Docs    ~/Contoso/Marketing - Documents paused
-  sharepoint:...:hr:Policies       ~/Contoso/HR - Policies         removed (config only)
+  me@contoso.com               ~/OneDrive - Contoso            syncing 42/100
+  Marketing / Documents        ~/Contoso/Marketing - Documents paused
+  Jane's Photos                ~/OneDrive-Shared/Jane's Photos synced 5m ago
 ```
 
-Each account is a section showing token status. Drives listed underneath showing sync dir and state. Paused drives shown as "paused". Removed-but-config-remains drives shown as "removed (config only)."
+Each account is a section showing token status. Drives listed underneath showing display name, sync dir, and state. Paused drives shown as "paused". Removed-but-config-remains drives shown as "removed (config only)."
 
 With `--drive` for detail:
 ```
-$ onedrive-go status --drive work
-business:alice@contoso.com
+$ onedrive-go status --drive "me@contoso.com"
+me@contoso.com (business:alice@contoso.com)
   Sync dir:      ~/OneDrive - Contoso
   Status:        syncing (42/100 files)
   Last sync:     in progress
   Files:         1,234
   Size:          4.2 GB
-  Alias:         work
+  Display name:  me@contoso.com
   Token:         valid (expires in 45 min)
 ```
 
@@ -807,10 +845,10 @@ onedrive-go status --json | jq '.drives[].status'
 ## 13. Multi-Drive Sync
 
 ```bash
-onedrive-go sync                         # all enabled drives, once
-onedrive-go sync --watch                 # continuous (daemon-like)
-onedrive-go sync --drive personal        # just one drive
-onedrive-go sync --drive home --drive work       # two of three
+onedrive-go sync                                            # all enabled drives, once
+onedrive-go sync --watch                                    # continuous (daemon-like)
+onedrive-go sync --drive personal                          # just one drive (substring match)
+onedrive-go sync --drive "me@outlook.com" --drive business  # two of three
 ```
 
 ### Runtime behavior
@@ -899,7 +937,7 @@ Covers:
 - Set sync interval
 - Set log level
 - Configure per-drive overrides
-- Set aliases
+- Edit display names
 
 Everything `setup` does can also be done by editing `config.toml` directly. `setup` is convenience for users who prefer guided configuration. Power users edit the file.
 
@@ -1043,6 +1081,22 @@ Renamed token and state files. Config updated. No re-sync needed.
 Syncing...
 ```
 
+### L: Sync a shared folder
+
+```
+$ onedrive-go drive list
+...
+Available shared folders:
+  Jane's Photos       (shared by jane@outlook.com)
+  Bob's Project Files (shared by bob@contoso.com)
+
+$ onedrive-go drive add "Jane's Photos"
+Drive added: Jane's Photos (shared by jane@outlook.com)
+  -> ~/OneDrive-Shared/Jane's Photos
+
+$ onedrive-go sync  # syncs all enabled drives including shared
+```
+
 ---
 
 ## 17. Edge Cases & Error Messages
@@ -1051,13 +1105,12 @@ Syncing...
 
 ```
 Error: "alice" matches multiple drives:
-  business:alice@contoso.com (~/OneDrive - Contoso)
-  sharepoint:alice@contoso.com:marketing:Documents (~/Contoso/Marketing - Documents)
+  me@contoso.com (~/OneDrive - Contoso)
+  Marketing / Documents (~/Contoso/Marketing - Documents)
 
 Try a more specific match:
-  --drive business       (OneDrive for Business)
-  --drive marketing      (Marketing — Documents)
-  --drive work           (alias for business:alice@contoso.com)
+  --drive "me@contoso.com"        (OneDrive for Business)
+  --drive "Marketing / Documents" (SharePoint library)
 ```
 
 ### Unknown `--drive`
@@ -1066,8 +1119,8 @@ Try a more specific match:
 Error: no drive matching "xyz"
 
 Configured drives:
-  personal:toni@outlook.com     (--drive personal, --drive home)
-  business:alice@contoso.com    (--drive business, --drive work)
+  me@outlook.com     (--drive personal, --drive "me@outlook.com")
+  me@contoso.com     (--drive business, --drive "me@contoso.com")
 ```
 
 ### No accounts
@@ -1086,9 +1139,9 @@ All drives paused. Run 'onedrive-go drive add' to resume a drive.
 
 ```
 Error: multiple drives configured. Specify which:
-  --drive personal     (toni@outlook.com, ~/OneDrive)
-  --drive business     (alice@contoso.com, ~/OneDrive - Contoso)
-  --drive work         (alias for business)
+  --drive "me@outlook.com"   (toni@outlook.com, ~/OneDrive)
+  --drive "me@contoso.com"   (alice@contoso.com, ~/OneDrive - Contoso)
+  --drive "Jane's Photos"    (shared by jane@outlook.com, ~/OneDrive-Shared/Jane's Photos)
 ```
 
 ### Sync dir collision at login
@@ -1132,9 +1185,9 @@ No confirmation prompt. Just does it and reports.
 | 2 | `type:email[:site:library]` with `:` separator | Clean, parseable, unambiguous. |
 | 3 | Flat file layout, `_` replaces `:` | Simpler than nested directories. One directory for all data. |
 | 4 | TOML sections need quotes | Spec requirement — `@` and `:` not valid bare keys. Unavoidable. |
-| 5 | `--account` for auth, `--drive` for drives | Two flags for two concepts. Auth commands match by email. Drive commands match by canonical ID / alias / partial. |
+| 5 | `--account` for auth, `--drive` for drives | Two flags for two concepts. Auth commands match by email. Drive commands match by canonical ID, display name, or substring. |
 | 6 | Shortest unique partial matching | `--drive personal` works. Error messages show shortest options. |
-| 7 | Aliases are per-drive convenience | Optional. Set in config. Resolved during fuzzy matching. |
+| 7 | Display names auto-derived for all drives | Personal/business use email. SharePoint uses "site / lib". Shared uses "{FirstName}'s {FolderName}". User-editable. |
 | 8 | SharePoint shares business token | Same OAuth session. Token per-user, state DB per-drive. |
 | 9 | Microsoft convention for sync dirs | `~/OneDrive`, `~/OneDrive - Org`, `~/Org/Site - Library`. |
 | 10 | Login is interactive (blocks for auth) | Device code by default, `--browser` for auth code flow. Assumes config defaults. No config prompts. |
@@ -1164,6 +1217,13 @@ No confirmation prompt. Just does it and reports.
 | 34 | No `--sync-dir` flag | All drives get sensible defaults from Microsoft conventions. Change via config file or `setup`. |
 | 35 | No `config show` command | Users read config file directly. `status` shows runtime state. `--debug` shows config resolution. |
 | 36 | `127.0.0.1` only for auth callback | `--browser` binds to localhost only. Never `0.0.0.0`. Standard OAuth security practice. |
+| 37 | Personal Vault excluded by default | Lock/unlock cycle creates unsolvable data-loss risk. Detect via `specialFolder.name == "vault"`. Config escape hatch `sync_vault = true`. |
+| 38 | Share revocation deletes local copies | Consistent with "remote deleted → local deleted" behavior. Post-release: add config option for alternative behavior. |
+| 39 | Read-only content auto-detected via 403 | Summarized errors (not per-file). Treat as error, not warning. No proactive permission checking. |
+| 40 | Shared-with-me synced as separate configured drives | Clean isolation. Added/removed via `drive add`/`drive remove`. No modification to user's OneDrive structure. |
+| 41 | Accounts stay implicit | No `[account]` config sections. No identified use case for account-level config. |
+| 42 | Shared canonical ID: `shared:email:sourceDriveID:sourceItemID` | Only `(driveID, itemID)` is guaranteed globally unique and stable across renames/moves. Display names solve readability. |
+| 43 | Individual shared files deferred to post-release | No delta tracking for individual files. Focus on folder/drive sync story first. |
 
 ---
 
@@ -1175,6 +1235,6 @@ No confirmation prompt. Just does it and reports.
 | 2 | SharePoint site discovery UX | `GET /sites?search=*` is search, not list-all. Large tenants have thousands of sites. Need search + pagination in `drive add`. |
 | 3 | `setup` wizard UX | Menu structure, navigation. Design when implementing. |
 | 4 | Personal `mail` field often empty | For personal accounts, `mail` is often null. UPN is ugly. Need to extract actual email from the UPN or from token claims. Current code handles with fallback. |
-| 5 | Config file location | Should config live with data files (one directory) or separate (XDG: `~/.config` vs `~/.local/share`)? |
 | 6 | RPC protocol | Unix socket path, message format (JSON-RPC? gRPC? plain JSON?), auth model for the socket. Design when implementing `sync --watch`. |
 | 7 | Localhost callback port | Fixed port (e.g., 53682 like OneDrive) or dynamic (random available port)? Dynamic is more robust but requires registering `http://localhost` redirect URI without port in Azure AD. |
+| 8 | Shared folder rename detection | If the source owner renames the shared folder, should we auto-update the local directory name? |
