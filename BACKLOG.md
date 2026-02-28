@@ -22,9 +22,9 @@ Defensive coding, bug fixes, and test gaps in `internal/sync/`.
 | B-208 | `sessionUpload` non-expired resume error creates infinite retry loop | **DONE** | Delete session on any resume failure. PR #129. |
 | B-204 | Reserved worker receives on nil channel in select | P3 | Works correctly via Go nil-channel semantics. Add comment or refactor. |
 | B-206 | Document `sendResult` lost-result edge case in panic recovery | P3 | Panic during shutdown: result dropped but counters still accurate. Add comment. |
-| B-209 | `DownloadToFile` doesn't validate empty `targetPath` | P3 | Empty string creates `.partial` in cwd. Add defensive check. |
-| B-210 | `UploadFile` doesn't validate empty `name` parameter | P3 | Same for `parentID`. Add defensive checks. |
-| B-212 | `freshDownload` uses permissive file permissions (`os.Create` = 0666) | P3 | Inconsistent with `resumeDownload` (0o600). Use `os.OpenFile` with 0o600. |
+| B-209 | `DownloadToFile` doesn't validate empty `targetPath` | **DONE** | Empty-string validation for targetPath and itemID. PR #130. |
+| B-210 | `UploadFile` doesn't validate empty `name` parameter | **DONE** | `validateUploadParams()` for parentID, name, localPath. PR #130. |
+| B-212 | `freshDownload` uses permissive file permissions (`os.Create` = 0666) | **DONE** | `os.OpenFile` with 0o600, matching `resumeDownload`. PR #130. |
 | B-214 | Test: `DownloadToFile` rename failure preserves `.partial` | P3 | Verify `.partial` survives and subsequent call resumes. |
 | B-215 | Test: `sessionUpload` session save failure still completes upload | P3 | Mock `SessionStore.Save()` returning error. |
 | B-216 | Test: `UploadFile` stat failure wraps error correctly | P3 | Non-existent path, verify `errors.Is(err, os.ErrNotExist)`. |
@@ -33,7 +33,7 @@ Defensive coding, bug fixes, and test gaps in `internal/sync/`.
 | B-219 | Inconsistent hash function usage: direct call vs `tm.hashFunc` | P3 | Download uses `computeQuickXorHash` directly, upload uses injectable `tm.hashFunc`. |
 | B-207 | Document intentional `.partial` preservation on rename failure | P4 | Add clarifying comment. |
 | B-211 | `resumeDownload` TOCTOU race between stat and open | P4 | Extremely unlikely. Verify size after open if fixing. |
-| B-220 | `deleteSession` helper swallows errors silently | P4 | Return error for testability. |
+| B-220 | `deleteSession` helper swallows errors silently | **DONE** | Improved comment documenting fire-and-forget pattern. PR #130. |
 | B-221 | Add comment explaining Go integer range in hash retry loop | P4 | `range maxRetries + 1` is Go 1.22 syntax, unfamiliar to many. |
 | B-222 | Document `selectHash` cross-file reference in `transfer_manager.go` | P4 | Aid code navigation without IDE. |
 
@@ -75,7 +75,7 @@ Improvements to continuous sync reliability in `internal/sync/`.
 |----|-------|----------|-------|
 | B-107 | Write event coalescing at observer level | **DONE** | Per-path timer coalescing (500ms cooldown). PR #129. |
 | B-101 | Add timing and resource logging to safety scan | P3 | Elapsed time, files walked, directories scanned. |
-| B-105 | `addWatchesRecursive` has no aggregate failure reporting | P3 | Summary log line: "added N/M watches, K failed." |
+| B-105 | `addWatchesRecursive` has no aggregate failure reporting | **DONE** | Summary Info log with watched/failed counters. PR #130. |
 | B-115 | Test: safety scan + watch producing conflicting change types | P3 | Watch sees Create, safety scan classifies same file as Modify. Planner handles it but no test. |
 | B-120 | Symlinked directories get no watch and no warning | P3 | Log Warn when symlinked directory encountered during watch setup. |
 | B-125 | No health or liveness signal from Watch() goroutines | P4 | Detect stuck/dead observers. Heartbeat or periodic liveness signal. |
@@ -230,3 +230,7 @@ Optimization deferred until profiling shows a bottleneck.
 | B-073 | DriveTokenPath/DriveStatePath accept CanonicalID | **DONE**. |
 | B-052 | Re-enable E2E tests in CI | **DONE** — 4v2.8. |
 | B-058 | Re-enable sync E2E tests | **DONE** — 4v2.8. |
+| B-234 | Conflict ID prefix slicing panics on short IDs | **DONE** — `truncateID()` helper, 5 call sites. PR #130. |
+| B-235 | Plan Actions/Deps length invariant not validated | **DONE** — Guard in `executePlan` and `processBatch`. PR #130. |
+| B-236 | `StatePath()` duplicates `DriveStatePathWithOverride` logic | **DONE** — Simplified to delegation. PR #130. |
+| B-237 | `hashAndEmit` infinite retry on `errFileChangedDuringHash` | **DONE** — `maxCoalesceRetries` cap (3 retries). PR #130. |
