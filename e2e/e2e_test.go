@@ -427,7 +427,7 @@ func TestE2E_RoundTrip(t *testing.T) {
 				assert.Contains(t, stderr, "Uploaded")
 
 				_, stderr = mode.run(t, "rm", "--permanent", "/"+permFile)
-				assert.Contains(t, stderr, "Deleted")
+				assert.Contains(t, stderr, "Permanently deleted")
 			})
 
 			t.Run("whoami_text", func(t *testing.T) {

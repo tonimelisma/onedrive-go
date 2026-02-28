@@ -353,7 +353,7 @@ in [concurrent-execution.md](concurrent-execution.md).
 | `Execute()` — 9-phase sequential dispatch | `executor.go` | Workers pull from `DepTracker` channels | §4 Dependency Tracker, §6 Workers |
 | `executeParallel()` + `workerPoolSize=8` | `executor.go` | Lane-based `WorkerPool` (interactive + bulk + overflow) | §6 Workers |
 | `errgroup` import | `executor.go` | Eliminated — `WorkerPool` uses native goroutines + channels | §6 Workers |
-| Batch `Commit(ctx, []Outcome, deltaToken, driveID)` | `baseline.go` | `CommitOutcome(ctx, outcome, ledgerID)` per action + `CommitDeltaToken(ctx, token, driveID)` | §12 Commit Model |
+| Batch `Commit(ctx, []Outcome, deltaToken, driveID)` | `baseline.go` | `CommitOutcome(ctx, outcome)` per action + `CommitDeltaToken(ctx, token, driveID)` | §12 Commit Model |
 | `applyOutcomes()` — iterate `[]Outcome` in batch tx | `baseline.go` | `CommitOutcome()` — single outcome per tx | §12 Commit Model |
 | `executeAndCommit()` — execute-then-commit glue | `engine.go` | Workers commit individually after each action | §6 Workers |
 | `classifyOutcomes()` — count successes/failures in batch | `engine.go` | `WorkerPool` atomic counters incremented per action | §11 Progress Reporting |
@@ -361,5 +361,5 @@ in [concurrent-execution.md](concurrent-execution.md).
 | `createdFolders` map (no mutex) | `executor.go` | Eliminated — `CommitOutcome()` updates `Baseline` incrementally (under `RWMutex`), so `resolveParentID()` finds newly-created folders in the baseline | §12 Commit Model, §6 Workers |
 | `e.createdFolders[action.Path] = item.ID` in `createRemoteFolder` | `executor.go` | Eliminated — worker's `CommitOutcome()` calls `baseline.Put()` instead | §12 Commit Model |
 | Direct `baseline.ByPath[x]` map access (no synchronization) | multiple files | Locked `baseline.GetByPath()` / `baseline.GetByID()` accessors (RWMutex) | §12 Commit Model |
-| `upload_sessions` table | `00001_initial_schema.sql` | `session_url` + `bytes_done` columns on `action_queue` | §3 Persistent Ledger |
+| `upload_sessions` table | `00001_initial_schema.sql` | File-based `SessionStore` | §14 Crash Recovery |
 | No watch mode (`--watch` returns "not implemented") | `engine.go` / CLI `sync.go` | `RunWatch()` with continuous observers + persistent workers | §15 Execution Modes |

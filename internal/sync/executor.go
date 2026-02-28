@@ -53,6 +53,9 @@ type ExecutorConfig struct {
 	// session-based uploads for large files (>SimpleUploadMaxSize).
 	sessionStore *SessionStore
 
+	// transferMgr handles unified download/upload with resume.
+	transferMgr *TransferManager
+
 	// Injectable for testing.
 	nowFunc   func() time.Time
 	hashFunc  func(filePath string) (string, error)
@@ -74,7 +77,7 @@ func NewExecutorConfig(
 	items ItemClient, downloads Downloader, uploads Uploader,
 	syncRoot string, driveID driveid.ID, logger *slog.Logger,
 ) *ExecutorConfig {
-	return &ExecutorConfig{
+	cfg := &ExecutorConfig{
 		items:     items,
 		downloads: downloads,
 		uploads:   uploads,
@@ -85,6 +88,10 @@ func NewExecutorConfig(
 		hashFunc:  computeQuickXorHash,
 		sleepFunc: timeSleep,
 	}
+
+	cfg.transferMgr = NewTransferManager(downloads, uploads, nil, logger)
+
+	return cfg
 }
 
 // NewExecution creates an ephemeral Executor for a single action execution.

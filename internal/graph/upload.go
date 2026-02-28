@@ -429,17 +429,30 @@ func (c *Client) uploadAllChunks(
 	ctx context.Context, session *UploadSession,
 	content io.ReaderAt, size int64, progress ProgressFunc,
 ) (*Item, error) {
+	return c.uploadChunksFrom(ctx, session, content, size, 0, progress)
+}
+
+// uploadChunksFrom uploads chunks starting at startOffset. Shared by
+// uploadAllChunks (startOffset=0) and ResumeUpload (startOffset=resumeOffset).
+func (c *Client) uploadChunksFrom(
+	ctx context.Context, session *UploadSession,
+	content io.ReaderAt, totalSize, startOffset int64, progress ProgressFunc,
+) (*Item, error) {
+	if totalSize == 0 {
+		return nil, fmt.Errorf("graph: cannot upload zero-size file via chunked upload")
+	}
+
 	var lastItem *Item
 
-	for offset := int64(0); offset < size; {
+	for offset := startOffset; offset < totalSize; {
 		chunkSize := int64(ChunkedUploadChunkSize)
-		if offset+chunkSize > size {
-			chunkSize = size - offset
+		if offset+chunkSize > totalSize {
+			chunkSize = totalSize - offset
 		}
 
 		chunk := io.NewSectionReader(content, offset, chunkSize)
 
-		item, err := c.UploadChunk(ctx, session, chunk, offset, chunkSize, size)
+		item, err := c.UploadChunk(ctx, session, chunk, offset, chunkSize, totalSize)
 		if err != nil {
 			return nil, fmt.Errorf("graph: uploading chunk at offset %d: %w", offset, err)
 		}
@@ -447,7 +460,7 @@ func (c *Client) uploadAllChunks(
 		offset += chunkSize
 
 		if progress != nil {
-			progress(offset, size)
+			progress(offset, totalSize)
 		}
 
 		if item != nil {
@@ -463,25 +476,14 @@ func (c *Client) uploadAllChunks(
 }
 
 // UploadFromSession uploads all chunks for an existing upload session.
-// Unlike chunkedUploadEncapsulated, the caller manages session creation and
-// persistence. On error, the session is best-effort canceled.
+// Unlike chunkedUploadEncapsulated, the caller manages session lifecycle
+// including cancellation on permanent failure. This allows callers to persist
+// session state for resume across process restarts.
 func (c *Client) UploadFromSession(
 	ctx context.Context, session *UploadSession,
 	content io.ReaderAt, totalSize int64, progress ProgressFunc,
 ) (*Item, error) {
-	item, err := c.uploadAllChunks(ctx, session, content, totalSize, progress)
-	if err != nil {
-		cancelErr := c.CancelUploadSession(context.Background(), session)
-		if cancelErr != nil {
-			c.logger.Warn("failed to cancel upload session after error",
-				slog.String("error", cancelErr.Error()),
-			)
-		}
-
-		return nil, err
-	}
-
-	return item, nil
+	return c.uploadAllChunks(ctx, session, content, totalSize, progress)
 }
 
 // ErrUploadSessionExpired indicates that an upload session is no longer valid
@@ -492,6 +494,7 @@ var ErrUploadSessionExpired = errors.New("graph: upload session expired")
 // It queries the session to find the next expected byte offset, then uploads
 // the remaining chunks. Returns ErrUploadSessionExpired if the session is no
 // longer valid (caller should fall back to fresh upload).
+// The caller manages session lifecycle including cancellation on permanent failure.
 func (c *Client) ResumeUpload(
 	ctx context.Context, session *UploadSession,
 	content io.ReaderAt, totalSize int64, progress ProgressFunc,
@@ -546,46 +549,7 @@ func (c *Client) ResumeUpload(
 		ExpirationTime: status.ExpirationTime,
 	}
 
-	// Upload remaining chunks from the resume offset.
-	var lastItem *Item
-
-	for offset := resumeOffset; offset < totalSize; {
-		chunkSize := int64(ChunkedUploadChunkSize)
-		if offset+chunkSize > totalSize {
-			chunkSize = totalSize - offset
-		}
-
-		chunk := io.NewSectionReader(content, offset, chunkSize)
-
-		item, chunkErr := c.UploadChunk(ctx, resumeSession, chunk, offset, chunkSize, totalSize)
-		if chunkErr != nil {
-			// Best-effort cancel on error.
-			cancelErr := c.CancelUploadSession(context.Background(), resumeSession)
-			if cancelErr != nil {
-				c.logger.Warn("failed to cancel upload session after resume error",
-					slog.String("error", cancelErr.Error()),
-				)
-			}
-
-			return nil, fmt.Errorf("graph: resume upload chunk at offset %d: %w", offset, chunkErr)
-		}
-
-		offset += chunkSize
-
-		if progress != nil {
-			progress(offset, totalSize)
-		}
-
-		if item != nil {
-			lastItem = item
-		}
-	}
-
-	if lastItem == nil {
-		return nil, fmt.Errorf("graph: resume upload completed all chunks but received no final item")
-	}
-
-	return lastItem, nil
+	return c.uploadChunksFrom(ctx, resumeSession, content, totalSize, resumeOffset, progress)
 }
 
 // parseUploadSessionResponse parses the HTTP response from CreateUploadSession.

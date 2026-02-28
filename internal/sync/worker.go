@@ -125,13 +125,15 @@ func (wp *WorkerPool) Wait() {
 	<-wp.tracker.Done()
 }
 
-// Stop cancels all in-flight work and waits for goroutines to exit.
+// Stop cancels all in-flight work, waits for goroutines to exit, and closes
+// the results channel so consumers (drainWorkerResults) can terminate.
 func (wp *WorkerPool) Stop() {
 	if wp.cancel != nil {
 		wp.cancel()
 	}
 
 	wp.wg.Wait()
+	close(wp.results)
 }
 
 // Stats returns execution counters and any errors collected during execution.
@@ -202,7 +204,7 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 			slog.String("error", loadErr.Error()),
 		)
 		wp.recordFailure(loadErr)
-		wp.sendResult(ta, false, loadErr.Error())
+		wp.sendResult(ctx, ta, false, loadErr.Error())
 		wp.tracker.Complete(ta.ID)
 
 		return
@@ -221,7 +223,7 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 			slog.String("error", commitErr.Error()),
 		)
 		wp.recordFailure(commitErr)
-		wp.sendResult(ta, false, commitErr.Error())
+		wp.sendResult(ctx, ta, false, commitErr.Error())
 		wp.tracker.Complete(ta.ID)
 
 		return
@@ -229,10 +231,10 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 
 	if outcome.Success {
 		wp.succeeded.Add(1)
-		wp.sendResult(ta, true, "")
+		wp.sendResult(ctx, ta, true, "")
 	} else {
 		wp.recordFailure(outcome.Error)
-		wp.sendResult(ta, false, outcome.Error.Error())
+		wp.sendResult(ctx, ta, false, outcome.Error.Error())
 	}
 
 	// Signal completion to dispatch dependents.
@@ -293,9 +295,10 @@ func (wp *WorkerPool) recordFailure(err error) {
 	wp.errorsMu.Unlock()
 }
 
-// sendResult reports a per-action outcome to the results channel. Non-blocking:
-// if the channel is full, the result is dropped (Stats() still has the counts).
-func (wp *WorkerPool) sendResult(ta *TrackedAction, success bool, errMsg string) {
+// sendResult reports a per-action outcome to the results channel. Blocks until
+// the result is sent or the context is canceled. This ensures cycle failure
+// counts are accurate for delta token commit decisions.
+func (wp *WorkerPool) sendResult(ctx context.Context, ta *TrackedAction, success bool, errMsg string) {
 	r := WorkerResult{
 		ID:      ta.ID,
 		CycleID: ta.CycleID,
@@ -306,9 +309,6 @@ func (wp *WorkerPool) sendResult(ta *TrackedAction, success bool, errMsg string)
 
 	select {
 	case wp.results <- r:
-	default:
-		wp.logger.Warn("worker: result channel full, dropping result",
-			slog.Int64("id", ta.ID),
-		)
+	case <-ctx.Done():
 	}
 }

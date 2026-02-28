@@ -406,7 +406,7 @@ When `commitConflict()` handles an auto-resolved outcome, it must also call `com
 The old `createdFolders` map was a per-Executor hack to track folder IDs before baseline commit. With DAG edges, the dependency system guarantees: parent folder create action completes → `CommitOutcome()` calls `baseline.Put()` → child action dispatched → `resolveParentID()` finds parent via `GetByPath()`. The contract: a worker MUST call `CommitOutcome()` BEFORE `tracker.Complete()`. This ordering is critical — reversing them causes a race where the child dispatches before the parent's baseline entry exists.
 
 ### DAG worker pool: individual failures don't propagate as RunOnce errors
-The old sequential executor returned a fatal error if context was canceled during `executeParallel()`. The DAG worker pool handles individual action failures gracefully — they increment `report.Failed` and collect errors in `report.Errors`, but `RunOnce()` itself returns nil. Tests must check `report.Failed >= 1` rather than `err != nil`. Only ledger write failures or baseline load failures propagate as RunOnce errors.
+The old sequential executor returned a fatal error if context was canceled during `executeParallel()`. The DAG worker pool handles individual action failures gracefully — they increment `report.Failed` and collect errors in `report.Errors`, but `RunOnce()` itself returns nil. Tests must check `report.Failed >= 1` rather than `err != nil`. Only baseline load failures propagate as RunOnce errors.
 
 ### Large atomic refactors: build additive commits first
 The 7-commit strategy (5 additive commits building new code, 1 atomic pivot commit, 1 cleanup) worked well. Commits 1-5 were purely additive — new types, new functions, new files — all compiling and tested. Commit 6 was then primarily deletion + wiring, not new logic. This made the "big bang" commit manageable despite touching 10 files. Key insight: the ratio should be ~80% additive, ~20% pivot.
@@ -426,8 +426,8 @@ When using `FlushDebounced()` in tests, always cancel the context AND drain the 
 ### Watch() method sleepFunc pattern
 Both `RemoteObserver.Watch()` and `LocalObserver.Watch()` use injectable `sleepFunc func(ctx context.Context, d time.Duration) error` for test control. Default is `timeSleep()` which uses `time.NewTimer` + `select` on ctx.Done. Tests inject `noopSleep()` that returns immediately. Same pattern as `graph.Client.sleepFunc`.
 
-### Idempotent planner eliminates need for crash recovery ledger
-The planner is idempotent: on restart after crash, delta re-observation produces the same actions. Items completed before crash are in baseline (EF1 no-ops). Items not completed get fresh actions. Transfer resume (the genuinely useful feature) is better served by file-based storage (`.partial` files for downloads, JSON session files for uploads) that works for both CLI and sync engine, independent of any per-drive SQLite database. The ledger added ~1,700 lines for a recovery path that delta re-observation handles for free.
+### Idempotent planner provides free crash recovery
+The planner is idempotent: on restart after crash, delta re-observation produces the same actions. Items completed before crash are in baseline (EF1 no-ops). Items not completed get fresh actions. Transfer resume is served by file-based storage (`.partial` files for downloads, JSON session files for uploads) that works for both CLI and sync engine, independent of any per-drive SQLite database.
 
 ### Two-signal shutdown pattern
 `shutdownContext(parent, logger)` returns a derived context. First SIGINT/SIGTERM cancels the context (graceful drain). Second signal calls `os.Exit(1)` (force exit). The goroutine listens on `parent.Done()` to self-clean when the parent context is canceled (e.g., normal exit). Channel buffer of 1 is sufficient — the goroutine transitions to the second-signal listener fast enough.

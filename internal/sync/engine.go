@@ -99,6 +99,7 @@ func NewEngine(cfg *EngineConfig) (*Engine, error) {
 
 	if cfg.DataDir != "" {
 		execCfg.sessionStore = NewSessionStore(cfg.DataDir, cfg.Logger)
+		execCfg.transferMgr.sessionStore = execCfg.sessionStore
 	}
 
 	return &Engine{
@@ -247,8 +248,9 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 		slog.Int("failed", report.Failed),
 	)
 
-	// Post-sync housekeeping: report stale .partial files and clean old sessions.
-	reportStalePartials(e.syncRoot, stalePartialThreshold, e.logger)
+	// Post-sync housekeeping: report stale .partial files (async to avoid
+	// blocking sync completion) and clean old sessions.
+	go reportStalePartials(e.syncRoot, stalePartialThreshold, e.logger)
 
 	if e.execCfg.sessionStore != nil {
 		if n, cleanErr := e.execCfg.sessionStore.CleanStale(staleSessionAge); cleanErr != nil {
@@ -760,6 +762,8 @@ func (e *Engine) processBatch(
 
 	if len(suppressed) == len(plan.Actions) {
 		e.logger.Debug("all actions suppressed due to repeated failures")
+		// Early return before cycleFailures init and watchCycleCompletion spawn.
+		// No actions dispatched → no results to drain → no cycle to complete.
 		return
 	}
 
@@ -778,6 +782,10 @@ func (e *Engine) processBatch(
 
 		var depIDs []int64
 		for _, depIdx := range plan.Deps[i] {
+			if suppressed[depIdx] {
+				continue // suppressed dep won't be tracked; skip to avoid phantom dependency
+			}
+
 			depIDs = append(depIDs, int64(depIdx))
 		}
 

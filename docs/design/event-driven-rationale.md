@@ -476,7 +476,7 @@ CREATE TABLE delta_tokens (
 
 **Critical property**: The delta token is committed only after all actions for a cycle have been individually committed to baseline. If the process crashes before the delta token commit, the token is not advanced, and the same delta is re-fetched (idempotent). Per-action baseline commits ensure completed work is never lost.
 
-### 4.3 Conflict Ledger
+### 4.3 Conflict Tracking
 
 ```sql
 CREATE TABLE conflicts (
@@ -506,7 +506,7 @@ The `conflict_type` column persists the planner's classification (EF5/EF9/EF12) 
 in the `conflicts` CLI command. The `idx_conflicts_drive` index was removed (redundant — each
 drive has its own DB file, so drive_id is constant across all rows).
 
-### 4.4 Stale Files Ledger
+### 4.4 Stale Files Tracking
 
 ```sql
 CREATE TABLE stale_files (
@@ -626,7 +626,7 @@ All timestamps are stored as INTEGER Unix nanoseconds (UTC). Validation rules:
 |---|---|---|
 | `baseline` | Confirmed synced state per path | BaselineManager only |
 | `delta_tokens` | Delta cursor per drive | BaselineManager only (same txn as baseline) |
-| `conflicts` | Conflict ledger | BaselineManager (on conflict actions) |
+| `conflicts` | Conflict tracking | BaselineManager (on conflict actions) |
 | `stale_files` | Filter-change tracking | BaselineManager |
 | `upload_sessions` | Crash recovery for large uploads | Executor (pre-upload) + BaselineManager (post-upload) |
 | `change_journal` | Debugging audit trail (optional) | BaselineManager (append-only) |
@@ -1750,12 +1750,11 @@ func (m *BaselineManager) Load(ctx context.Context) (*Baseline, error) {
     return baseline, nil
 }
 
-// CommitOutcome applies a single completed action to the baseline and marks
-// the ledger action as done, in one atomic transaction.
+// CommitOutcome applies a single completed action to the baseline in one
+// atomic transaction.
 func (m *BaselineManager) CommitOutcome(
     ctx context.Context,
     outcome Outcome,
-    ledgerActionID int64,
 ) error {
     tx, err := m.db.BeginTx(ctx, nil)
     if err != nil { return err }
@@ -1809,12 +1808,6 @@ func (m *BaselineManager) CommitOutcome(
     }
     if err != nil { return fmt.Errorf("commit outcome for %s: %w", outcome.Path, err) }
 
-    // Mark ledger action as done in the same transaction
-    _, err = tx.ExecContext(ctx,
-        `UPDATE action_queue SET status = 'done', completed_at = ? WHERE id = ?`,
-        now, ledgerActionID)
-    if err != nil { return fmt.Errorf("mark action done: %w", err) }
-
     return tx.Commit()
 }
 
@@ -1835,8 +1828,8 @@ func (m *BaselineManager) CommitDeltaToken(
 
 **Key properties**:
 - Single writer to the database (no concurrency issues)
-- Per-action atomic transaction: baseline update + ledger status update commit together or neither does
-- Delta token committed separately only after all cycle actions reach `done` status. If the process crashes mid-cycle, completed actions are preserved in baseline and the token is not advanced — the same delta is re-fetched (idempotent), and already-committed actions produce convergent classifications (EF4/EF11).
+- Per-action atomic baseline commit: each action's outcome is committed individually, so completed work is never lost
+- Delta token committed separately only after all cycle actions complete. If the process crashes mid-cycle, completed actions are preserved in baseline and the token is not advanced — the same delta is re-fetched (idempotent), and already-committed actions produce convergent classifications (EF4/EF11).
 
 ### 5.10 Engine (Orchestrator)
 
@@ -2495,7 +2488,7 @@ NOT hot-reloadable (require restart):
 - Worker pool sizes (`parallel_downloads`, `parallel_uploads`, `parallel_checkers`)
 - Network settings
 
-**Filter change → stale file detection**: When SIGHUP changes filter rules, the engine compares the new filter config against `config_snapshots`. Files that were previously included but are now excluded are recorded in the `stale_files` ledger. The user is warned and can choose to clean them up.
+**Filter change → stale file detection**: When SIGHUP changes filter rules, the engine compares the new filter config against `config_snapshots`. Files that were previously included but are now excluded are recorded in the `stale_files` tracking table. The user is warned and can choose to clean them up.
 
 ### 18.6 Pause/Resume Detail
 
@@ -2841,7 +2834,7 @@ Properties:
 | **Create-create** (EF12) | New file at same path on both sides, different content | Keep-both: rename local, download remote |
 | **Delete-edit** (EF7) | Local deleted, remote edited | Not a conflict: download remote (remote wins) |
 
-### 24.3 Conflict Ledger Integration
+### 24.3 Conflict Tracking Integration
 
 When the Executor resolves a conflict, it produces TWO outcomes:
 1. The conflict action outcome (recorded in `conflicts` table via BaselineManager)

@@ -357,6 +357,7 @@ func TestWorkerPool_FailedOutcome(t *testing.T) {
 			return 0, fmt.Errorf("simulated download failure")
 		},
 	}
+	cfg.transferMgr = NewTransferManager(cfg.downloads, cfg.uploads, cfg.sessionStore, testLogger(t))
 
 	actions := []Action{
 		{
@@ -505,6 +506,7 @@ func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing
 			return &graph.Item{ID: "uploaded-into-folder", ETag: "e1"}, nil
 		},
 	}
+	cfg.transferMgr = NewTransferManager(cfg.downloads, cfg.uploads, cfg.sessionStore, testLogger(t))
 
 	// Action 0: create folder "Uploads".
 	// Action 1: upload file "Uploads/doc.txt" into that folder.
