@@ -99,11 +99,12 @@ func resolveStrategy(cmd *cobra.Command) (string, error) {
 
 // resolveKeepBothOnly handles keep_both resolution which only needs the DB.
 func resolveKeepBothOnly(ctx context.Context, cmd *cobra.Command, args []string, all, dryRun bool) error {
-	logger := buildLogger()
+	cfg := configFromContext(ctx)
+	logger := buildLogger(cfg)
 
-	dbPath := resolvedCfg.StatePath()
+	dbPath := cfg.StatePath()
 	if dbPath == "" {
-		return fmt.Errorf("cannot determine state DB path for drive %q", resolvedCfg.CanonicalID)
+		return fmt.Errorf("cannot determine state DB path for drive %q", cfg.CanonicalID)
 	}
 
 	mgr, err := sync.NewBaselineManager(dbPath, logger)
@@ -178,20 +179,25 @@ func resolveSingleKeepBoth(ctx context.Context, mgr *sync.BaselineManager, idOrP
 func resolveWithTransfers(
 	ctx context.Context, cmd *cobra.Command, args []string, resolution string, all, dryRun bool,
 ) error {
-	client, driveID, logger, err := clientAndDrive(ctx)
+	cfg := configFromContext(ctx)
+
+	client, ts, driveID, logger, err := clientAndDrive(ctx, cfg)
 	if err != nil {
 		return err
 	}
 
-	syncDir := resolvedCfg.SyncDir
+	syncDir := cfg.SyncDir
 	if syncDir == "" {
 		return fmt.Errorf("sync_dir not configured")
 	}
 
-	dbPath := resolvedCfg.StatePath()
+	dbPath := cfg.StatePath()
 	if dbPath == "" {
-		return fmt.Errorf("cannot determine state DB path for drive %q", resolvedCfg.CanonicalID)
+		return fmt.Errorf("cannot determine state DB path for drive %q", cfg.CanonicalID)
 	}
+
+	// Use transfer client (no timeout) for upload/download operations.
+	transferClient := newTransferGraphClient(ts, logger)
 
 	engine, err := sync.NewEngine(&sync.EngineConfig{
 		DBPath:        dbPath,
@@ -200,10 +206,10 @@ func resolveWithTransfers(
 		DriveID:       driveID,
 		Fetcher:       client,
 		Items:         client,
-		Downloads:     client,
-		Uploads:       client,
+		Downloads:     transferClient,
+		Uploads:       transferClient,
 		Logger:        logger,
-		UseLocalTrash: resolvedCfg.UseLocalTrash,
+		UseLocalTrash: cfg.UseLocalTrash,
 	})
 	if err != nil {
 		return err

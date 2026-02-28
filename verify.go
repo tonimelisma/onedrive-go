@@ -24,16 +24,17 @@ Exit code 0 if all files verify; exit code 1 if any mismatches are found.`,
 }
 
 func runVerify(cmd *cobra.Command, _ []string) error {
-	logger := buildLogger()
+	cfg := configFromContext(cmd.Context())
+	logger := buildLogger(cfg)
 
-	syncDir := resolvedCfg.SyncDir
+	syncDir := cfg.SyncDir
 	if syncDir == "" {
 		return fmt.Errorf("sync_dir not configured — set it in the config file or add a drive with 'onedrive-go drive add'")
 	}
 
-	dbPath := resolvedCfg.StatePath()
+	dbPath := cfg.StatePath()
 	if dbPath == "" {
-		return fmt.Errorf("cannot determine state DB path for drive %q", resolvedCfg.CanonicalID)
+		return fmt.Errorf("cannot determine state DB path for drive %q", cfg.CanonicalID)
 	}
 
 	report, err := loadAndVerify(cmd, dbPath, syncDir, logger)

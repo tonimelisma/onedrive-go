@@ -40,7 +40,8 @@ func newStatusCmd() *cobra.Command {
 
 Shows token validity, sync directory, and enabled/disabled status for each drive.
 Reads from config only — does not discover drives from tokens on disk.`,
-		RunE: runStatus,
+		Annotations: map[string]string{skipConfigAnnotation: "true"},
+		RunE:        runStatus,
 	}
 }
 
@@ -62,7 +63,7 @@ type statusDrive struct {
 }
 
 func runStatus(_ *cobra.Command, _ []string) error {
-	logger := buildLogger()
+	logger := buildLogger(nil)
 	cfgPath := resolveLoginConfigPath()
 
 	cfg, err := config.LoadOrDefault(cfgPath, logger)

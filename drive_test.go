@@ -5,13 +5,17 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/oauth2"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
 // --- command structure ---
@@ -171,22 +175,26 @@ func TestListPausedDrives_Empty(t *testing.T) {
 // --- printDriveListText ---
 
 func TestPrintDriveListText_EmptyBothSections(t *testing.T) {
-	// Should not panic with nil slices.
-	printDriveListText(nil, nil)
+	output := captureStdout(t, func() { printDriveListText(nil, nil) })
+	assert.Contains(t, output, "No drives configured")
 }
 
 func TestPrintDriveListText_ConfiguredOnly(t *testing.T) {
 	configured := []driveListEntry{
 		{CanonicalID: "personal:user@example.com", SyncDir: "~/OneDrive", State: driveStateReady, Source: "configured"},
 	}
-	assert.NotPanics(t, func() { printDriveListText(configured, nil) })
+	output := captureStdout(t, func() { printDriveListText(configured, nil) })
+	assert.Contains(t, output, "Configured drives:")
+	assert.Contains(t, output, "personal:user@example.com")
 }
 
 func TestPrintDriveListText_AvailableOnly(t *testing.T) {
 	available := []driveListEntry{
 		{CanonicalID: "business:user@contoso.com", State: "", Source: "available", SiteName: "Marketing"},
 	}
-	assert.NotPanics(t, func() { printDriveListText(nil, available) })
+	output := captureStdout(t, func() { printDriveListText(nil, available) })
+	assert.Contains(t, output, "Available drives")
+	assert.Contains(t, output, "business:user@contoso.com")
 }
 
 func TestPrintDriveListText_BothSections(t *testing.T) {
@@ -196,14 +204,17 @@ func TestPrintDriveListText_BothSections(t *testing.T) {
 	available := []driveListEntry{
 		{CanonicalID: "business:user@contoso.com", Source: "available"},
 	}
-	assert.NotPanics(t, func() { printDriveListText(configured, available) })
+	output := captureStdout(t, func() { printDriveListText(configured, available) })
+	assert.Contains(t, output, "Configured drives:")
+	assert.Contains(t, output, "Available drives")
 }
 
 func TestPrintDriveListText_EmptySyncDir_ShowsNotSet(t *testing.T) {
 	configured := []driveListEntry{
 		{CanonicalID: "personal:user@example.com", SyncDir: "", State: driveStateNeedsSetup, Source: "configured"},
 	}
-	assert.NotPanics(t, func() { printDriveListText(configured, nil) })
+	output := captureStdout(t, func() { printDriveListText(configured, nil) })
+	assert.Contains(t, output, "(not set)")
 }
 
 // --- printDriveListJSON ---
@@ -234,14 +245,34 @@ func TestPrintDriveListJSON_VerifyOutput(t *testing.T) {
 
 	require.NoError(t, writeErr)
 
-	// printDriveListJSON outputs a flat array of all entries.
-	var output []driveListEntry
+	// printDriveListJSON outputs a structured object with "configured" and "available" arrays.
+	var output driveListJSONOutput
 	require.NoError(t, json.NewDecoder(r).Decode(&output))
-	require.Len(t, output, 2)
-	assert.Equal(t, "personal:user@example.com", output[0].CanonicalID)
-	assert.Equal(t, "configured", output[0].Source)
-	assert.Equal(t, "business:user@contoso.com", output[1].CanonicalID)
-	assert.Equal(t, "available", output[1].Source)
+	require.Len(t, output.Configured, 1)
+	require.Len(t, output.Available, 1)
+	assert.Equal(t, "personal:user@example.com", output.Configured[0].CanonicalID)
+	assert.Equal(t, "configured", output.Configured[0].Source)
+	assert.Equal(t, "business:user@contoso.com", output.Available[0].CanonicalID)
+	assert.Equal(t, "available", output.Available[0].Source)
+}
+
+func TestPrintDriveListJSON_NilSlicesRenderAsEmptyArrays(t *testing.T) {
+	origStdout := os.Stdout
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+
+	os.Stdout = w
+
+	writeErr := printDriveListJSON(nil, nil)
+	w.Close()
+	os.Stdout = origStdout
+
+	require.NoError(t, writeErr)
+
+	var output map[string]json.RawMessage
+	require.NoError(t, json.NewDecoder(r).Decode(&output))
+	assert.Equal(t, "[]", string(output["configured"]))
+	assert.Equal(t, "[]", string(output["available"]))
 }
 
 // --- resumeExistingDrive ---
@@ -250,8 +281,11 @@ func TestResumeExistingDrive_AlreadyEnabled(t *testing.T) {
 	cid := driveid.MustCanonicalID("personal:user@example.com")
 	d := &config.Drive{SyncDir: "~/OneDrive"} // Enabled is nil (defaults to true)
 
-	err := resumeExistingDrive("", cid, d, testDriveLogger(t))
-	assert.NoError(t, err)
+	output := captureStdout(t, func() {
+		err := resumeExistingDrive("", cid, d, testDriveLogger(t))
+		assert.NoError(t, err)
+	})
+	assert.Contains(t, output, "already enabled")
 }
 
 func TestResumeExistingDrive_ExplicitlyEnabled(t *testing.T) {
@@ -259,8 +293,11 @@ func TestResumeExistingDrive_ExplicitlyEnabled(t *testing.T) {
 	enabled := true
 	d := &config.Drive{SyncDir: "~/OneDrive", Enabled: &enabled}
 
-	err := resumeExistingDrive("", cid, d, testDriveLogger(t))
-	assert.NoError(t, err)
+	output := captureStdout(t, func() {
+		err := resumeExistingDrive("", cid, d, testDriveLogger(t))
+		assert.NoError(t, err)
+	})
+	assert.Contains(t, output, "already enabled")
 }
 
 // --- driveListEntry ---
@@ -314,10 +351,31 @@ func TestPrintDriveSearchText_WithResults(t *testing.T) {
 
 func TestPrintDriveSearchText_MultipleSites(t *testing.T) {
 	results := []driveSearchResult{
-		{CanonicalID: "sharepoint:user@contoso.com:hr:Docs", SiteName: "HR", LibraryName: "Docs"},
 		{CanonicalID: "sharepoint:user@contoso.com:marketing:Docs", SiteName: "Marketing", LibraryName: "Docs"},
+		{CanonicalID: "sharepoint:user@contoso.com:hr:Docs", SiteName: "HR", LibraryName: "Docs"},
 	}
-	assert.NotPanics(t, func() { printDriveSearchText(results, "docs") })
+	output := captureStdout(t, func() { printDriveSearchText(results, "docs") })
+	// Verify alphabetical sort: HR should appear before Marketing.
+	hrIdx := strings.Index(output, "HR")
+	mktIdx := strings.Index(output, "Marketing")
+	require.NotEqual(t, -1, hrIdx, "HR should appear in output")
+	require.NotEqual(t, -1, mktIdx, "Marketing should appear in output")
+	assert.Less(t, hrIdx, mktIdx, "HR should appear before Marketing (alphabetical)")
+}
+
+func TestPrintDriveSearchText_DoesNotMutateInput(t *testing.T) {
+	results := []driveSearchResult{
+		{CanonicalID: "sharepoint:user@contoso.com:marketing:Docs", SiteName: "Marketing"},
+		{CanonicalID: "sharepoint:user@contoso.com:hr:Docs", SiteName: "HR"},
+	}
+	// Copy original order.
+	orig0 := results[0].SiteName
+	orig1 := results[1].SiteName
+
+	captureStdout(t, func() { printDriveSearchText(results, "docs") })
+
+	assert.Equal(t, orig0, results[0].SiteName, "input slice should not be mutated")
+	assert.Equal(t, orig1, results[1].SiteName, "input slice should not be mutated")
 }
 
 // --- printDriveSearchJSON ---
@@ -353,6 +411,20 @@ func TestFindBusinessTokens_HasBusinessToken(t *testing.T) {
 	writeTestTokenFile(t, dataDir, "token_personal_user@example.com.json", nil)
 
 	tokens := findBusinessTokens("", testDriveLogger(t))
+	require.Len(t, tokens, 1)
+	assert.Equal(t, "business:alice@contoso.com", tokens[0].String())
+}
+
+func TestFindBusinessTokens_FilterSelectsOne(t *testing.T) {
+	setTestDriveHome(t)
+	dataDir := config.DefaultDataDir()
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	// Two business tokens for different accounts.
+	writeTestTokenFile(t, dataDir, "token_business_alice@contoso.com.json", nil)
+	writeTestTokenFile(t, dataDir, "token_business_bob@fabrikam.com.json", nil)
+
+	tokens := findBusinessTokens("alice@contoso.com", testDriveLogger(t))
 	require.Len(t, tokens, 1)
 	assert.Equal(t, "business:alice@contoso.com", tokens[0].String())
 }
@@ -443,10 +515,12 @@ func TestAddNewDrive_WithToken(t *testing.T) {
 	err := addNewDrive(cfgPath, cfg, cid, testDriveLogger(t))
 	assert.NoError(t, err)
 
-	// Verify config was updated.
+	// Verify config was updated with canonical ID and sync_dir.
 	data, readErr := os.ReadFile(cfgPath)
 	require.NoError(t, readErr)
 	assert.Contains(t, string(data), "personal:user@example.com")
+	assert.Contains(t, string(data), "sync_dir")
+	assert.Contains(t, string(data), "OneDrive")
 }
 
 // --- test helpers ---
@@ -464,21 +538,16 @@ func setTestDriveHome(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 }
 
-// writeTestTokenFile creates a token file with the new format (token + meta).
+// writeTestTokenFile creates a token file using the canonical tokenfile.Save,
+// ensuring test files match the real on-disk format exactly.
 func writeTestTokenFile(t *testing.T, dir, name string, meta map[string]string) {
 	t.Helper()
 
-	tokenFile := map[string]any{
-		"token": map[string]string{
-			"access_token":  "test-access-token",
-			"refresh_token": "test-refresh-token",
-			"token_type":    "Bearer",
-			"expiry":        "2099-01-01T00:00:00Z",
-		},
-		"meta": meta,
+	tok := &oauth2.Token{
+		AccessToken:  "test-access-token",
+		RefreshToken: "test-refresh-token",
+		TokenType:    "Bearer",
+		Expiry:       time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
-
-	data, err := json.Marshal(tokenFile)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, name), data, 0o600))
+	require.NoError(t, tokenfile.Save(filepath.Join(dir, name), tok, meta))
 }

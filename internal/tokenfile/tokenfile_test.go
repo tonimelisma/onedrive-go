@@ -178,6 +178,29 @@ func TestSave_RoundTrip(t *testing.T) {
 	assert.Equal(t, "value", loadedMeta["key"])
 }
 
+func TestLoad_EmptyCredentials(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "token.json")
+
+	// Write a token file with the wrapper but empty credentials.
+	require.NoError(t, os.WriteFile(path, []byte(`{"token":{"token_type":"Bearer"}}`), 0o600))
+
+	tok, meta, err := Load(path)
+	assert.Nil(t, tok)
+	assert.Nil(t, meta)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "empty credentials")
+}
+
+func TestSave_NilToken(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "token.json")
+
+	err := Save(path, nil, nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "refusing to save nil token")
+}
+
 func TestLoadAndMergeMeta_MergesKeys(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "token.json")

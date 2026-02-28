@@ -41,7 +41,8 @@ Creates or updates the config file with the new drive section.
 
 The --browser flag opens your default browser for authentication, which can be
 useful when the device code flow is blocked by organizational policies.`,
-		RunE: runLogin,
+		Annotations: map[string]string{skipConfigAnnotation: "true"},
+		RunE:        runLogin,
 	}
 
 	cmd.Flags().Bool("browser", false, "use browser-based auth (authorization code + PKCE) instead of device code")
@@ -57,7 +58,8 @@ func newLogoutCmd() *cobra.Command {
 
 If only one account is configured, it is selected automatically.
 Otherwise, use --account to specify which account to log out.`,
-		RunE: runLogout,
+		Annotations: map[string]string{skipConfigAnnotation: "true"},
+		RunE:        runLogout,
 	}
 
 	cmd.Flags().Bool("purge", false, "also remove drive config sections and state databases")
@@ -67,9 +69,10 @@ Otherwise, use --account to specify which account to log out.`,
 
 func newWhoamiCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "whoami",
-		Short: "Display the authenticated user and drive info",
-		RunE:  runWhoami,
+		Use:         "whoami",
+		Short:       "Display the authenticated user and drive info",
+		Annotations: map[string]string{skipConfigAnnotation: "true"},
+		RunE:        runWhoami,
 	}
 }
 
@@ -135,7 +138,7 @@ func openBrowser(rawURL string) error {
 // runLogin implements the discovery-based login flow per accounts.md section 9:
 // device code auth -> /me -> /me/drive -> /me/organization -> construct canonical ID -> config.
 func runLogin(cmd *cobra.Command, _ []string) error {
-	logger := buildLogger()
+	logger := buildLogger(nil)
 	ctx := cmd.Context()
 
 	useBrowser, err := cmd.Flags().GetBool("browser")
@@ -326,13 +329,14 @@ func driveExistsInConfig(cfgPath string, canonicalID driveid.CanonicalID) (bool,
 func collectExistingSyncDirs(cfgPath string, logger *slog.Logger) []string {
 	cfg, err := config.LoadOrDefault(cfgPath, logger)
 	if err != nil {
-		logger.Warn("failed to load config for sync dir collision check",
+		logger.Error("sync dir collision detection disabled: failed to load config",
 			"config_path", cfgPath, "error", err)
 
 		return nil
 	}
 
-	// Zero CanonicalID excludes nothing — collects all drives' sync dirs.
+	// Zero CanonicalID means "exclude no drives" — during login we check
+	// against ALL existing sync directories for collision detection.
 	return config.CollectOtherSyncDirs(cfg, driveid.CanonicalID{}, logger)
 }
 
@@ -391,7 +395,7 @@ func printLoginSuccess(driveType, email, orgName, canonicalID, syncDir string) {
 // runLogout removes the authentication token for an account. Identifies the
 // account via --account flag or auto-selects if only one account exists.
 func runLogout(cmd *cobra.Command, _ []string) error {
-	logger := buildLogger()
+	logger := buildLogger(nil)
 
 	purge, err := cmd.Flags().GetBool("purge")
 	if err != nil {
@@ -602,7 +606,7 @@ type whoamiDrive struct {
 }
 
 func runWhoami(cmd *cobra.Command, _ []string) error {
-	logger := buildLogger()
+	logger := buildLogger(nil)
 	ctx := cmd.Context()
 
 	// Delegate drive resolution to config.MatchDrive for consistent behavior.
