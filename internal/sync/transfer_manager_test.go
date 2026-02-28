@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -1063,6 +1064,189 @@ func TestRemovePartialIfNotCanceled(t *testing.T) {
 		// Should not panic when file doesn't exist.
 		removePartialIfNotCanceled(context.Background(), "/nonexistent/path.partial")
 	})
+}
+
+// ---------------------------------------------------------------------------
+// B-214: rename failure preserves .partial for future resume
+// ---------------------------------------------------------------------------
+
+func TestDownloadToFile_RenameFailure_PreservesPartial(t *testing.T) {
+	t.Parallel()
+
+	content := []byte("data-to-preserve")
+	expectedHash := tmHashBytes(content)
+
+	dl := &tmSimpleDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			n, err := w.Write(content)
+			return int64(n), err
+		},
+	}
+
+	tm := newTestTM(dl, &tmMockUploader{}, nil)
+	dir := t.TempDir()
+
+	// Make the target path a directory so os.Rename fails with EISDIR when
+	// trying to rename .partial (a file) over it.
+	targetPath := filepath.Join(dir, "target_is_dir")
+	if err := os.Mkdir(targetPath, 0o700); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+
+	_, err := tm.DownloadToFile(context.Background(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+		RemoteHash: expectedHash,
+	})
+	if err == nil {
+		t.Fatal("expected error from rename, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "renaming partial") {
+		t.Errorf("error = %q, want to contain 'renaming partial'", err.Error())
+	}
+
+	// .partial should still exist with correct content.
+	partialPath := targetPath + ".partial"
+
+	got, readErr := os.ReadFile(partialPath)
+	if readErr != nil {
+		t.Fatalf("expected .partial to be preserved, ReadFile error: %v", readErr)
+	}
+
+	if !bytes.Equal(got, content) {
+		t.Errorf("partial content = %q, want %q", got, content)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// B-215: session save failure still completes upload
+// ---------------------------------------------------------------------------
+
+func TestSessionUpload_SaveFailure_StillCompletes(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewSessionStore(dir, slog.Default())
+
+	// Pre-create the upload-sessions directory so we can make it read-only.
+	if err := os.MkdirAll(store.dir, 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	ul := &tmMockUploader{
+		createUploadSessionFn: func(_ context.Context, _ driveid.ID, _, _ string, _ int64, _ time.Time) (*graph.UploadSession, error) {
+			return &graph.UploadSession{UploadURL: "https://upload.example.com/save-fail"}, nil
+		},
+		uploadFromSessionFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
+			return &graph.Item{ID: "save-fail-ok"}, nil
+		},
+	}
+
+	tm := newTestTM(&tmSimpleDownloader{}, ul, store)
+
+	// Make the store directory read-only so Save fails.
+	if err := os.Chmod(store.dir, 0o444); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+
+	t.Cleanup(func() { os.Chmod(store.dir, 0o700) })
+
+	localPath := filepath.Join(dir, "save-fail.bin")
+	largeData := make([]byte, graph.SimpleUploadMaxSize+1)
+
+	if err := os.WriteFile(localPath, largeData, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	result, err := tm.UploadFile(context.Background(), driveid.New("d1"), "parent1", "save-fail.bin", localPath, UploadOpts{})
+	if err != nil {
+		t.Fatalf("UploadFile should succeed despite Save failure: %v", err)
+	}
+
+	if result.Item.ID != "save-fail-ok" {
+		t.Errorf("Item.ID = %q, want %q", result.Item.ID, "save-fail-ok")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// B-216: UploadFile stat failure wraps error correctly
+// ---------------------------------------------------------------------------
+
+func TestUploadFile_StatFailure_WrapsError(t *testing.T) {
+	t.Parallel()
+
+	tm := newTestTM(&tmSimpleDownloader{}, &tmMockUploader{}, nil)
+
+	_, err := tm.UploadFile(
+		context.Background(), driveid.New("d1"), "parent1", "file.txt",
+		"/nonexistent/path/file.txt", UploadOpts{},
+	)
+	if err == nil {
+		t.Fatal("expected error for nonexistent file, got nil")
+	}
+
+	// Error should wrap os.ErrNotExist and be discoverable via errors.Is.
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expected errors.Is(err, os.ErrNotExist), got: %v", err)
+	}
+
+	// Error should contain "stat" context.
+	if !strings.Contains(err.Error(), "stat") {
+		t.Errorf("error = %q, want to contain 'stat'", err.Error())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// B-217: non-RangeDownloader with existing .partial starts fresh
+// ---------------------------------------------------------------------------
+
+func TestDownloadToFile_SimpleDownloader_OverwritesPartial(t *testing.T) {
+	t.Parallel()
+
+	freshContent := []byte("fresh-content-overwrites")
+	expectedHash := tmHashBytes(freshContent)
+
+	dl := &tmSimpleDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			n, err := w.Write(freshContent)
+			return int64(n), err
+		},
+	}
+
+	tm := newTestTM(dl, &tmMockUploader{}, nil)
+	dir := t.TempDir()
+	targetPath := filepath.Join(dir, "file.txt")
+	partialPath := targetPath + ".partial"
+
+	// Pre-create a .partial file with old content — should be overwritten.
+	if err := os.WriteFile(partialPath, []byte("old-partial-data-that-should-go-away"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	result, err := tm.DownloadToFile(context.Background(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+		RemoteHash: expectedHash,
+	})
+	if err != nil {
+		t.Fatalf("DownloadToFile: %v", err)
+	}
+
+	// Final file should contain fresh content, not concatenated with old.
+	got, readErr := os.ReadFile(targetPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile: %v", readErr)
+	}
+
+	if !bytes.Equal(got, freshContent) {
+		t.Errorf("file content = %q, want %q", got, freshContent)
+	}
+
+	if result.LocalHash != expectedHash {
+		t.Errorf("LocalHash = %q, want %q", result.LocalHash, expectedHash)
+	}
+
+	// .partial should not exist after successful download.
+	if _, statErr := os.Stat(partialPath); !os.IsNotExist(statErr) {
+		t.Errorf("expected .partial to be removed, stat err = %v", statErr)
+	}
 }
 
 func TestFreshDownload_FilePermissions(t *testing.T) {
