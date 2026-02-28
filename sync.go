@@ -39,7 +39,7 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	}
 
 	mode := syncModeFromFlags(cmd)
-	cc := cliContextFrom(cmd.Context())
+	cc := mustCLIContext(cmd.Context())
 	logger := cc.Logger
 
 	// Wrap the command context with signal handling: first SIGINT/SIGTERM

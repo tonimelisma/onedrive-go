@@ -37,7 +37,24 @@ const (
 	watchErrInitBackoff    = 1 * time.Second
 	watchErrMaxBackoff     = 30 * time.Second
 	watchErrBackoffMult    = 2
+
+	// defaultWriteCoalesceCooldown is the per-path quiescence window for
+	// write coalescing (B-107). Multiple Write events within this window are
+	// coalesced into a single hash + emit.
+	defaultWriteCoalesceCooldown = 500 * time.Millisecond
+
+	// hashRequestBufSize is the buffer for the timer → watchLoop channel.
+	// Timer callbacks must not block; 256 handles bursts like `git checkout`.
+	hashRequestBufSize = 256
 )
+
+// hashRequest is sent from timer callbacks to the watchLoop goroutine when a
+// write coalesce timer fires and the file should be hashed (B-107).
+type hashRequest struct {
+	fsPath    string
+	dbRelPath string
+	name      string
+}
 
 // FsWatcher abstracts filesystem event monitoring. Satisfied by
 // *fsnotify.Watcher; tests inject a mock implementation.
@@ -72,6 +89,12 @@ type LocalObserver struct {
 	sleepFunc          func(ctx context.Context, d time.Duration) error // injectable for testing
 	safetyTickFunc     func(d time.Duration) (<-chan time.Time, func()) // injectable for testing; returns tick channel + stop func
 	safetyScanInterval time.Duration                                    // 0 → default (5 minutes); configurable (B-099)
+
+	// Write coalescing fields (B-107). Initialized in Watch(), not the
+	// constructor, since FullScan doesn't use coalescing.
+	writeCoalesceCooldown time.Duration          // 0 → defaultWriteCoalesceCooldown; injectable for tests
+	pendingTimers         map[string]*time.Timer // per-path timers; watchLoop-only (no mutex needed)
+	hashRequests          chan hashRequest       // timer callback → watchLoop
 }
 
 // NewLocalObserver creates a LocalObserver. The baseline must be loaded (from
@@ -199,12 +222,28 @@ func (o *LocalObserver) Watch(ctx context.Context, syncRoot string, events chan<
 	}
 	defer watcher.Close()
 
+	// Initialize write coalescing (B-107). These are watch-only structures;
+	// FullScan doesn't use coalescing.
+	o.pendingTimers = make(map[string]*time.Timer)
+	o.hashRequests = make(chan hashRequest, hashRequestBufSize)
+
+	defer o.cancelPendingTimers()
+
 	// Walk the sync root to add watches on all existing directories.
 	if walkErr := o.addWatchesRecursive(watcher, syncRoot); walkErr != nil {
 		return fmt.Errorf("sync: adding initial watches: %w", walkErr)
 	}
 
 	return o.watchLoop(ctx, watcher, syncRoot, events)
+}
+
+// cancelPendingTimers stops and clears all pending write coalesce timers.
+// Called on watchLoop exit to prevent timer callbacks sending to a closed channel.
+func (o *LocalObserver) cancelPendingTimers() {
+	for path, timer := range o.pendingTimers {
+		timer.Stop()
+		delete(o.pendingTimers, path)
+	}
 }
 
 // addWatchesRecursive walks the sync root and adds a watch on every directory.

@@ -531,7 +531,7 @@ func runDriveRemove(cmd *cobra.Command, _ []string) error {
 	logger.Info("removing drive", "drive", cid.String(), "purge", purge)
 
 	if purge {
-		return purgeDrive(cfgPath, cid, logger)
+		return purgeDrive(cfgPath, cid, d.StateDir, logger)
 	}
 
 	return pauseDrive(cfgPath, cid, d.SyncDir)
@@ -554,8 +554,9 @@ func pauseDrive(cfgPath string, driveID driveid.CanonicalID, syncDir string) err
 
 // purgeDrive deletes the config section and state database for a drive.
 // The token is NOT deleted here — it may be shared with other drives (SharePoint).
-func purgeDrive(cfgPath string, driveID driveid.CanonicalID, logger *slog.Logger) error {
-	if err := purgeSingleDrive(cfgPath, driveID, logger); err != nil {
+// stateDir is the per-drive state_dir override from config (B-193).
+func purgeDrive(cfgPath string, driveID driveid.CanonicalID, stateDir string, logger *slog.Logger) error {
+	if err := purgeSingleDrive(cfgPath, driveID, stateDir, logger); err != nil {
 		return err
 	}
 

@@ -641,3 +641,39 @@ done:
 		t.Error("expected panic failure result for panic-me.txt in result channel")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// B-205: Error cap to bound memory in watch mode
+// ---------------------------------------------------------------------------
+
+func TestWorkerPool_ErrorCap(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, _ := newWorkerTestSetup(t)
+	tracker := NewDepTracker(10, 10, testLogger(t))
+	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
+
+	// Manually call recordFailure more than maxRecordedErrors times.
+	totalErrors := maxRecordedErrors + 500
+	for i := range totalErrors {
+		pool.recordFailure(fmt.Errorf("error %d", i))
+	}
+
+	_, failed, errs := pool.Stats()
+
+	// failed counter should reflect all errors.
+	if failed != totalErrors {
+		t.Errorf("failed = %d, want %d", failed, totalErrors)
+	}
+
+	// Diagnostic error slice should be capped.
+	if len(errs) != maxRecordedErrors {
+		t.Errorf("len(errors) = %d, want %d", len(errs), maxRecordedErrors)
+	}
+
+	// DroppedErrors should reflect the overflow.
+	dropped := pool.DroppedErrors()
+	if dropped != int64(totalErrors-maxRecordedErrors) {
+		t.Errorf("DroppedErrors() = %d, want %d", dropped, totalErrors-maxRecordedErrors)
+	}
+}

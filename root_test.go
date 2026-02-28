@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -471,4 +472,34 @@ func TestLoadConfig_MissingFile_ZeroConfig(t *testing.T) {
 	require.NotNil(t, cc)
 	assert.NotNil(t, cc.Logger)
 	assert.Equal(t, "personal:zeroconfig@example.com", cc.Cfg.CanonicalID.String())
+}
+
+// --- mustCLIContext tests ---
+
+func TestMustCLIContext_Panics(t *testing.T) {
+	assert.PanicsWithValue(t,
+		"BUG: CLIContext not found in context — ensure the command "+
+			"does not skip config loading (no skipConfigAnnotation) or "+
+			"explicitly loads config in its RunE",
+		func() { mustCLIContext(context.Background()) },
+	)
+}
+
+func TestMustCLIContext_Returns(t *testing.T) {
+	expected := &CLIContext{
+		Cfg:    &config.ResolvedDrive{SyncDir: "/must-test"},
+		Logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+	}
+	ctx := context.WithValue(context.Background(), cliContextKey{}, expected)
+	cc := mustCLIContext(ctx)
+	assert.Equal(t, expected, cc)
+	assert.Equal(t, "/must-test", cc.Cfg.SyncDir)
+}
+
+// --- errVerifyMismatch tests ---
+
+func TestErrVerifyMismatch_IsSentinel(t *testing.T) {
+	// Verify the sentinel error is usable with errors.Is.
+	wrapped := fmt.Errorf("wrapped: %w", errVerifyMismatch)
+	assert.ErrorIs(t, wrapped, errVerifyMismatch)
 }

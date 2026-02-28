@@ -1110,3 +1110,364 @@ func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 	require.Equal(t, ItemTypeFile, deleteEv.ItemType,
 		"baseline lookup should resolve the item type for the old path")
 }
+
+// ---------------------------------------------------------------------------
+// Write coalescing tests (B-107)
+// ---------------------------------------------------------------------------
+
+// TestHandleWrite_CoalescesRapidWrites verifies that two Write events for the
+// same path within the cooldown window produce only one hash + one ChangeEvent.
+func TestHandleWrite_CoalescesRapidWrites(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	filePath := writeTestFile(t, dir, "rapid.txt", "v1")
+	existingHash := hashContent(t, "v1")
+
+	baseline := baselineWith(&BaselineEntry{
+		Path: "rapid.txt", DriveID: driveid.New("d"), ItemID: "i1",
+		ItemType: ItemTypeFile, LocalHash: existingHash,
+	})
+
+	mockWatcher := newMockFsWatcher()
+	obs := &LocalObserver{
+		baseline:              baseline,
+		logger:                testLogger(t),
+		writeCoalesceCooldown: 100 * time.Millisecond,
+		sleepFunc:             func(_ context.Context, _ time.Duration) error { return nil },
+		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+			return make(chan time.Time), func() {}
+		},
+		watcherFactory: func() (FsWatcher, error) {
+			return mockWatcher, nil
+		},
+	}
+
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, dir, events)
+	}()
+
+	// Write new content so the hash differs from baseline.
+	require.NoError(t, os.WriteFile(filePath, []byte("v2"), 0o644))
+
+	// Send two rapid Write events (within 100ms cooldown).
+	mockWatcher.events <- fsnotify.Event{
+		Name: filePath, Op: fsnotify.Write,
+	}
+
+	time.Sleep(20 * time.Millisecond)
+
+	mockWatcher.events <- fsnotify.Event{
+		Name: filePath, Op: fsnotify.Write,
+	}
+
+	// Wait for the single coalesced event.
+	select {
+	case ev := <-events:
+		require.Equal(t, ChangeModify, ev.Type)
+		require.Equal(t, "rapid.txt", ev.Path)
+		require.Equal(t, hashContent(t, "v2"), ev.Hash)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for coalesced modify event")
+	}
+
+	// Verify no second event arrives within a reasonable window.
+	select {
+	case ev := <-events:
+		t.Fatalf("unexpected second event: %+v", ev)
+	case <-time.After(300 * time.Millisecond):
+		// Good — only one event.
+	}
+
+	cancel()
+	<-done
+}
+
+// TestHandleWrite_EmitsAfterCooldownExpires verifies that a single Write event
+// produces a ChangeModify event after the cooldown expires.
+func TestHandleWrite_EmitsAfterCooldownExpires(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeTestFile(t, dir, "single.txt", "original")
+	existingHash := hashContent(t, "original")
+
+	baseline := baselineWith(&BaselineEntry{
+		Path: "single.txt", DriveID: driveid.New("d"), ItemID: "i1",
+		ItemType: ItemTypeFile, LocalHash: existingHash,
+	})
+
+	mockWatcher := newMockFsWatcher()
+	obs := &LocalObserver{
+		baseline:              baseline,
+		logger:                testLogger(t),
+		writeCoalesceCooldown: 50 * time.Millisecond,
+		sleepFunc:             func(_ context.Context, _ time.Duration) error { return nil },
+		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+			return make(chan time.Time), func() {}
+		},
+		watcherFactory: func() (FsWatcher, error) {
+			return mockWatcher, nil
+		},
+	}
+
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, dir, events)
+	}()
+
+	// Write new content.
+	filePath := filepath.Join(dir, "single.txt")
+	require.NoError(t, os.WriteFile(filePath, []byte("modified"), 0o644))
+
+	mockWatcher.events <- fsnotify.Event{
+		Name: filePath, Op: fsnotify.Write,
+	}
+
+	select {
+	case ev := <-events:
+		require.Equal(t, ChangeModify, ev.Type)
+		require.Equal(t, "single.txt", ev.Path)
+		require.Equal(t, hashContent(t, "modified"), ev.Hash)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for modify event after cooldown")
+	}
+
+	cancel()
+	<-done
+}
+
+// TestHandleWrite_DifferentPathsNotCoalesced verifies that Write events for
+// different paths are independent — each gets its own timer and emits separately.
+func TestHandleWrite_DifferentPathsNotCoalesced(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeTestFile(t, dir, "fileA.txt", "origA")
+	writeTestFile(t, dir, "fileB.txt", "origB")
+
+	baseline := baselineWith(
+		&BaselineEntry{
+			Path: "fileA.txt", DriveID: driveid.New("d"), ItemID: "a1",
+			ItemType: ItemTypeFile, LocalHash: hashContent(t, "origA"),
+		},
+		&BaselineEntry{
+			Path: "fileB.txt", DriveID: driveid.New("d"), ItemID: "b1",
+			ItemType: ItemTypeFile, LocalHash: hashContent(t, "origB"),
+		},
+	)
+
+	mockWatcher := newMockFsWatcher()
+	obs := &LocalObserver{
+		baseline:              baseline,
+		logger:                testLogger(t),
+		writeCoalesceCooldown: 50 * time.Millisecond,
+		sleepFunc:             func(_ context.Context, _ time.Duration) error { return nil },
+		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+			return make(chan time.Time), func() {}
+		},
+		watcherFactory: func() (FsWatcher, error) {
+			return mockWatcher, nil
+		},
+	}
+
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, dir, events)
+	}()
+
+	// Write new content to both files.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "fileA.txt"), []byte("newA"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "fileB.txt"), []byte("newB"), 0o644))
+
+	// Send Write events for both paths within the same cooldown window.
+	mockWatcher.events <- fsnotify.Event{
+		Name: filepath.Join(dir, "fileA.txt"), Op: fsnotify.Write,
+	}
+	mockWatcher.events <- fsnotify.Event{
+		Name: filepath.Join(dir, "fileB.txt"), Op: fsnotify.Write,
+	}
+
+	// Collect both events.
+	collected := make(map[string]ChangeEvent)
+	timeout := time.After(5 * time.Second)
+
+	for len(collected) < 2 {
+		select {
+		case ev := <-events:
+			if ev.Type == ChangeModify {
+				collected[ev.Path] = ev
+			}
+		case <-timeout:
+			t.Fatalf("timeout: got %d events, want 2", len(collected))
+		}
+	}
+
+	require.Contains(t, collected, "fileA.txt")
+	require.Contains(t, collected, "fileB.txt")
+	require.Equal(t, hashContent(t, "newA"), collected["fileA.txt"].Hash)
+	require.Equal(t, hashContent(t, "newB"), collected["fileB.txt"].Hash)
+
+	cancel()
+	<-done
+}
+
+// TestHandleWrite_DeleteClearsTimer verifies that a Delete event cancels any
+// pending write coalesce timer for the deleted path.
+func TestHandleWrite_DeleteClearsTimer(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	filePath := writeTestFile(t, dir, "doomed.txt", "original")
+	existingHash := hashContent(t, "original")
+
+	baseline := baselineWith(&BaselineEntry{
+		Path: "doomed.txt", DriveID: driveid.New("d"), ItemID: "i1",
+		ItemType: ItemTypeFile, LocalHash: existingHash,
+	})
+
+	mockWatcher := newMockFsWatcher()
+	obs := &LocalObserver{
+		baseline:              baseline,
+		logger:                testLogger(t),
+		writeCoalesceCooldown: 200 * time.Millisecond,
+		sleepFunc:             func(_ context.Context, _ time.Duration) error { return nil },
+		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+			return make(chan time.Time), func() {}
+		},
+		watcherFactory: func() (FsWatcher, error) {
+			return mockWatcher, nil
+		},
+	}
+
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, dir, events)
+	}()
+
+	// Modify and send Write event (starts 200ms timer).
+	require.NoError(t, os.WriteFile(filePath, []byte("modified"), 0o644))
+
+	mockWatcher.events <- fsnotify.Event{
+		Name: filePath, Op: fsnotify.Write,
+	}
+
+	// Give watchLoop time to process the Write event.
+	time.Sleep(20 * time.Millisecond)
+
+	// Delete the file before timer fires.
+	require.NoError(t, os.Remove(filePath))
+
+	mockWatcher.events <- fsnotify.Event{
+		Name: filePath, Op: fsnotify.Remove,
+	}
+
+	// Should get only the Delete event, not a Modify.
+	select {
+	case ev := <-events:
+		require.Equal(t, ChangeDelete, ev.Type, "first event should be Delete")
+		require.Equal(t, "doomed.txt", ev.Path)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for delete event")
+	}
+
+	// Wait past the original timer window — no Modify should appear.
+	select {
+	case ev := <-events:
+		t.Fatalf("unexpected event after delete: %+v", ev)
+	case <-time.After(400 * time.Millisecond):
+		// Good — timer was canceled.
+	}
+
+	cancel()
+	<-done
+}
+
+// TestCancelPendingTimers verifies that all pending timers are cleaned up when
+// the watchLoop exits (context cancellation).
+func TestCancelPendingTimers(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeTestFile(t, dir, "pending1.txt", "data1")
+	writeTestFile(t, dir, "pending2.txt", "data2")
+
+	baseline := baselineWith(
+		&BaselineEntry{
+			Path: "pending1.txt", DriveID: driveid.New("d"), ItemID: "p1",
+			ItemType: ItemTypeFile, LocalHash: hashContent(t, "old1"),
+		},
+		&BaselineEntry{
+			Path: "pending2.txt", DriveID: driveid.New("d"), ItemID: "p2",
+			ItemType: ItemTypeFile, LocalHash: hashContent(t, "old2"),
+		},
+	)
+
+	mockWatcher := newMockFsWatcher()
+	obs := &LocalObserver{
+		baseline:              baseline,
+		logger:                testLogger(t),
+		writeCoalesceCooldown: 5 * time.Second, // very long — timers should NOT fire
+		sleepFunc:             func(_ context.Context, _ time.Duration) error { return nil },
+		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+			return make(chan time.Time), func() {}
+		},
+		watcherFactory: func() (FsWatcher, error) {
+			return mockWatcher, nil
+		},
+	}
+
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, dir, events)
+	}()
+
+	// Send Write events for two paths (creates timers with 5s cooldown).
+	mockWatcher.events <- fsnotify.Event{
+		Name: filepath.Join(dir, "pending1.txt"), Op: fsnotify.Write,
+	}
+	mockWatcher.events <- fsnotify.Event{
+		Name: filepath.Join(dir, "pending2.txt"), Op: fsnotify.Write,
+	}
+
+	// Give watchLoop time to process both events and create timers.
+	time.Sleep(50 * time.Millisecond)
+
+	// Cancel context — should trigger cancelPendingTimers via defer.
+	cancel()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Watch did not return after context cancellation")
+	}
+
+	// Drain any events — there should be none (timers were canceled).
+	select {
+	case ev := <-events:
+		t.Fatalf("unexpected event after cancellation: %+v", ev)
+	default:
+		// Good — no events leaked.
+	}
+}

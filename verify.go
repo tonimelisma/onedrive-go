@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -11,6 +12,10 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/sync"
 )
+
+// errVerifyMismatch is returned when verify finds hash/size mismatches.
+// main() handles this by exiting with code 1 without printing "Error:".
+var errVerifyMismatch = errors.New("verification found mismatches")
 
 func newVerifyCmd() *cobra.Command {
 	return &cobra.Command{
@@ -25,7 +30,7 @@ Exit code 0 if all files verify; exit code 1 if any mismatches are found.`,
 }
 
 func runVerify(cmd *cobra.Command, _ []string) error {
-	cc := cliContextFrom(cmd.Context())
+	cc := mustCLIContext(cmd.Context())
 
 	syncDir := cc.Cfg.SyncDir
 	if syncDir == "" {
@@ -51,14 +56,14 @@ func runVerify(cmd *cobra.Command, _ []string) error {
 	}
 
 	if len(report.Mismatches) > 0 {
-		os.Exit(1)
+		return errVerifyMismatch
 	}
 
 	return nil
 }
 
 // loadAndVerify opens the baseline, loads it, and runs verification.
-// Separated so the defer Close() runs before any os.Exit in the caller.
+// Separated so the defer Close() runs before the caller returns.
 func loadAndVerify(ctx context.Context, dbPath, syncDir string, logger *slog.Logger) (*sync.VerifyReport, error) {
 	mgr, err := sync.NewBaselineManager(dbPath, logger)
 	if err != nil {
