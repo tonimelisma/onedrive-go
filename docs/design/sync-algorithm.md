@@ -58,7 +58,7 @@ The algorithm is designed to be **safe first, correct second, fast third**. Ever
 | **Action plan** | The ordered set of actions (downloads, uploads, deletes, moves, conflict resolutions, baseline updates) produced by the planner. The executor consumes the plan. |
 | **Worker pool** | A set of concurrent goroutines managed by `errgroup`. Separate pools handle downloads, uploads, and hash computation. |
 | **Batch** | A group of `PathChanges` values flushed from the change buffer and processed together by the planner. In one-shot mode, the entire set of observations forms a single batch. In watch mode, each debounce window produces a batch. |
-| **Stale file** | A local file that was synced while a filter rule included it, but a subsequent filter change now excludes it. The file remains on disk but is no longer synced. Tracked in the `stale_files` ledger for user visibility. |
+| **Stale file** | A local file that was synced while a filter rule included it, but a subsequent filter change now excludes it. The file remains on disk but is no longer synced. Tracked in the `stale_files` table for user visibility. |
 | **False conflict** | A situation where both sides independently arrive at the same content (same hash). The planner detects this and classifies it as a convergent edit (EF4) or convergent create (EF11), requiring only a baseline update. |
 | **Big delete** | A safety trigger: when the number of planned delete actions exceeds a configurable threshold (count > 1000 OR percentage > 50% of baseline entries, with a minimum items guard of 10), the sync cycle halts and requires user confirmation. |
 | **ChangeEvent** | An immutable observation of a remote or local change. Produced by observers, consumed by the buffer and planner. Ephemeral -- never persisted to the database (except optionally in the change journal for debugging). |
@@ -274,10 +274,9 @@ Each component has a single responsibility and a clean contract:
    (steps 2-3 run concurrently)
 4. ChangeBuffer.AddAll() + Flush()  -> []PathChanges (batched by path)
 5. Planner.Plan()                   -> ActionPlan with dependency DAG
-6. Write actions to persistent ledger
-7. Populate dependency tracker from ledger
-8. Workers execute concurrently     -> per-action baseline commits
-9. All actions complete             -> commit delta token
+6. Add actions to in-memory DepTracker
+7. Workers execute concurrently     -> per-action baseline commits
+8. All actions complete             -> commit delta token
 ```
 
 **Watch Mode** (continuous sync):
@@ -594,7 +593,7 @@ The planner calls `ShouldSync` during the classification step for items that app
 When filter rules change (e.g., `skip_dotfiles` is enabled after `.dotfiles` were already synced), previously synced files may become excluded. These files are **not automatically deleted**. Instead:
 
 1. The engine compares the current filter configuration against a saved snapshot in the `config_snapshots` table.
-2. Files that were included under the old filter but are excluded under the new filter are recorded in the `stale_files` ledger.
+2. Files that were included under the old filter but are excluded under the new filter are recorded in the `stale_files` table.
 3. The user is warned about stale files and can choose to clean them up.
 
 This approach prevents accidental data loss from filter changes. The user retains control over whether excluded-but-present files should be removed.
@@ -769,7 +768,7 @@ Each action carries a pointer to the full `PathView`, giving the executor comple
 1. The remote version is downloaded to the target path.
 2. The local version is renamed to `<name>.conflict-YYYYMMDD-HHMMSS.<ext>` (timestamp-based naming, self-documenting).
 3. Both files are recorded in the baseline.
-4. The conflict is logged in the `conflicts` ledger with resolution status `unresolved` (or `keep_both` if auto-resolved).
+4. The conflict is logged in the `conflicts` table with resolution status `unresolved` (or `keep_both` if auto-resolved).
 
 ### 7.4 Folder Decision Matrix (ED1-ED8)
 
@@ -946,13 +945,11 @@ Actions are dispatched based on dependency satisfaction, not fixed phase orderin
 
 Actions whose parent folders already exist in the baseline have no dependencies and are immediately ready for execution. All action types (downloads, uploads, folder creates, deletes, moves, conflicts) are eligible to run concurrently when their dependencies are met. There are no artificial barriers between action types --- a download to `/A/x.txt` and an upload from `/B/y.txt` run in parallel if they have no dependency relationship.
 
-**Persistent ledger**: Actions are written to the `action_queue` table before execution begins. The ledger tracks the full lifecycle (pending -> claimed -> done/failed/canceled) and provides crash recovery, upload session URLs, and progress tracking.
-
-**In-memory dependency tracker**: A bounded working window (default 10K actions) provides instant dispatch when dependencies are satisfied. When action X completes, the tracker immediately dispatches any action Y whose last remaining dependency was X. No polling.
+**In-memory dependency tracker (DepTracker)**: Actions are added to the in-memory DepTracker after planning. The DepTracker tracks dependency edges and dispatches ready actions to worker channels. When action X completes, the tracker immediately dispatches any action Y whose last remaining dependency was X. No polling. A bounded working window (default 10K actions) keeps memory usage predictable.
 
 **Lane-based worker dispatch**: Ready actions are routed to an interactive lane (small files, folder ops, deletes, moves) or a bulk lane (large transfers) with reserved workers per lane and a shared overflow pool. See [concurrent-execution.md](concurrent-execution.md) sections 4-6 for details.
 
-**Per-action commits**: Each completed action is committed to baseline individually in a single SQLite transaction that also updates the ledger status. The delta token is committed separately when all cycle actions complete.
+**Per-action commits**: Each completed action is committed to baseline individually in a single SQLite transaction. The delta token is committed separately when all cycle actions complete.
 
 ### 9.2 Outcome Production
 
@@ -1056,10 +1053,10 @@ Used for small files and zero-byte files. Zero-byte files ALWAYS use simple uplo
 **Chunked upload** (files larger than 4 MB):
 
 1. **Create upload session**: Includes `fileSystemInfo` facet with the local `mtime` to preserve timestamps and avoid double-versioning on Business/SharePoint.
-2. **Persist session**: Save session URL, expiry, and progress to the `upload_sessions` table BEFORE starting the upload (for crash recovery).
+2. **Persist session**: Save session URL, expiry, and progress to the file-based SessionStore BEFORE starting the upload (for crash recovery).
 3. **Upload chunks**: Each chunk must be a multiple of 320 KiB (API requirement). Default chunk size: 10 MiB. Fragment upload URLs are pre-authenticated -- do NOT send Authorization header on chunk uploads.
 4. **Complete**: The last chunk upload returns the completed `graph.Item` with server metadata.
-5. **Clean up session**: Delete the session row from `upload_sessions` table.
+5. **Clean up session**: Delete the session from the SessionStore.
 
 **Post-upload hash verification**:
 - Compare local hash against the server response hash.
@@ -1161,24 +1158,22 @@ The baseline is loaded once at cycle start and treated as read-only by all compo
 
 ### 10.2 Commit (Per-Action Atomic Transactions)
 
-Each completed action is committed individually in a **per-action atomic SQLite transaction** that updates both the baseline and the action ledger:
+Each completed action is committed individually in a **per-action atomic SQLite transaction** that updates the baseline:
 
 ```sql
 BEGIN;
   -- Baseline update (varies by action type)
   INSERT OR REPLACE INTO baseline (...) VALUES (...);
-  -- Ledger status update
-  UPDATE action_queue SET status = 'done', completed_at = ? WHERE id = ?;
 COMMIT;
 ```
 
 **Per-action commit operations by type**:
-- **Download, Upload, UpdateSynced, FolderCreate**: `INSERT ... ON CONFLICT(path) DO UPDATE` into the `baseline` table. All 11 columns are written from the Outcome fields. Ledger marked `done`.
-- **LocalMove, RemoteMove**: `DELETE` the old path entry, then `INSERT` the new path entry. Ledger marked `done`.
-- **LocalDelete, RemoteDelete, Cleanup**: `DELETE FROM baseline WHERE path = ?`. Ledger marked `done`.
-- **Conflict**: `INSERT INTO conflicts` ledger. If keep-both resolution created files, also update baseline for the new paths. Ledger marked `done`.
+- **Download, Upload, UpdateSynced, FolderCreate**: `INSERT ... ON CONFLICT(path) DO UPDATE` into the `baseline` table. All 11 columns are written from the Outcome fields.
+- **LocalMove, RemoteMove**: `DELETE` the old path entry, then `INSERT` the new path entry.
+- **LocalDelete, RemoteDelete, Cleanup**: `DELETE FROM baseline WHERE path = ?`.
+- **Conflict**: `INSERT INTO conflicts` table. If keep-both resolution created files, also update baseline for the new paths.
 
-**Delta token commit**: The delta token is committed in a **separate transaction** when all actions for a cycle reach `done` status:
+**Delta token commit**: The delta token is committed in a **separate transaction** when all actions for a cycle complete successfully:
 
 ```sql
 BEGIN;
@@ -1188,9 +1183,9 @@ COMMIT;
 
 This is safe because all per-action commits have already made the baseline consistent. The token commit is the final step that "seals" the cycle.
 
-**Crash recovery**: If the process crashes mid-cycle, individual per-action commits are already durable in the baseline. The delta token has not been advanced, so the same delta can be re-fetched on restart. The planner detects already-committed actions as convergent (EF4/EF11) and skips them. Remaining actions are loaded from the ledger and resumed.
+**Crash recovery via idempotent planner**: If the process crashes mid-cycle, individual per-action commits are already durable in the baseline. The delta token has not been advanced, so the same delta is re-fetched on restart. The planner is idempotent: it compares current state against the updated baseline and detects already-committed actions as convergent (EF4/EF11), skipping them automatically. Remaining actions are re-planned and executed normally.
 
-**Failed Outcomes** (where `Success == false`) are marked `failed` in the ledger. Their corresponding items retain their current baseline state and will be retried on the next sync cycle.
+**Failed Outcomes** (where `Success == false`) are not committed to the baseline. Their corresponding items retain their current baseline state and will be retried on the next sync cycle.
 
 **Baseline table schema**:
 
@@ -1257,9 +1252,9 @@ type BaselineEntry struct {
 | Table | Purpose | Writer |
 |-------|---------|--------|
 | `delta_tokens` | Delta cursor per drive | BaselineManager (same txn as baseline) |
-| `conflicts` | Conflict ledger with resolution tracking | BaselineManager |
+| `conflicts` | Conflict tracking with resolution status | BaselineManager |
 | `stale_files` | Filter-change tracking | BaselineManager |
-| `upload_sessions` | Crash recovery for large uploads | Executor (pre-upload) + BaselineManager (post-upload) |
+| SessionStore (file-based) | Crash recovery for large uploads (JSON files in metadata dir) | Executor (pre-upload) + BaselineManager (post-upload cleanup) |
 | `change_journal` | Debugging audit trail (optional, append-only) | BaselineManager |
 | `config_snapshots` | Filter change detection | Engine (on config load) |
 | `schema_migrations` | Schema version tracking | Engine (on startup) |
@@ -1392,7 +1387,7 @@ Both observer goroutines emit events to the same change buffer. If local and rem
 │           ▼                         ▼                             │
 │  ┌─────────────────────────────────────────────────────────────┐ │
 │  │ select {                                                    │ │
-│  │   case <-buffer.Ready():  -> Plan + Ledger + Tracker        │ │
+│  │   case <-buffer.Ready():  -> Plan + DepTracker dispatch      │ │
 │  │   case <-configReload:    -> Re-init filters                │ │
 │  │   case <-ctx.Done():      -> GracefulShutdown               │ │
 │  │ }                                                           │ │
@@ -1404,7 +1399,7 @@ Both observer goroutines emit events to the same change buffer. If local and rem
 │  │    bulkWorker[0..N]        <-- tracker.bulk channel          │ │
 │  │    sharedWorker[0..K]      <-- both channels                 │ │
 │  │                                                               │ │
-│  │    on completion: per-action commit (baseline + ledger)       │ │
+│  │    on completion: per-action baseline commit                   │ │
 │  │    tracker.Complete(id) -> dispatch newly ready actions       │ │
 │  └─────────────────────────────────────────────────────────────┘ │
 └──────────────────────────────────────────────────────────────────┘
@@ -1426,8 +1421,8 @@ The default debounce window is 2 seconds. After the last event arrives, the buff
 
 Watch mode and one-shot mode share the same planner, tracker, workers, and baseline manager. The difference is in how events arrive and how the pipeline flows:
 
-- **One-shot**: `FullDelta` + `FullScan` produce a complete snapshot. All events are planned at once, all actions loaded into the ledger and tracker at once, workers drain the full batch.
-- **Watch mode**: `Watch` goroutines produce incremental events. Events arrive in small batches as the debounce window fires. New actions are added incrementally to the ledger and tracker while workers are already draining previous batches. Observers and workers run independently.
+- **One-shot**: `FullDelta` + `FullScan` produce a complete snapshot. All events are planned at once, all actions added to the DepTracker at once, workers drain the full batch.
+- **Watch mode**: `Watch` goroutines produce incremental events. Events arrive in small batches as the debounce window fires. New actions are added incrementally to the DepTracker while workers are already draining previous batches. Observers and workers run independently.
 
 The same tracker and per-action commit infrastructure serves both modes. This means that every code path exercised in one-shot mode is also exercised in watch mode. There are no watch-mode-only code paths that could harbor untested bugs.
 
@@ -1453,7 +1448,7 @@ The same tracker and per-action commit infrastructure serves both modes. This me
 
 **Pause/Resume** (watch mode only):
 
-When paused, observers continue running and the buffer accumulates events. Workers stop pulling from the tracker (paused flag). In-flight actions complete normally. When resumed, the buffer flushes all accumulated events, the planner generates new actions, they are written to the ledger and tracker, and workers resume pulling. If the buffer exceeds a high-water mark (100K events) during an extended pause, the engine collapses to a "full sync on resume" flag to avoid excessive memory consumption.
+When paused, observers continue running and the buffer accumulates events. Workers stop pulling from the DepTracker (paused flag). In-flight actions complete normally. When resumed, the buffer flushes all accumulated events, the planner generates new actions, they are added to the DepTracker, and workers resume pulling. If the buffer exceeds a high-water mark (100K events) during an extended pause, the engine collapses to a "full sync on resume" flag to avoid excessive memory consumption.
 
 **Context tree** (watch mode goroutine hierarchy):
 
@@ -1491,13 +1486,13 @@ The event-driven architecture provides natural crash recovery because the baseli
 
 **Incomplete uploads** (simple upload): The API may not have received the file. No local side effects. The file will be re-uploaded in the next cycle.
 
-**Incomplete uploads** (chunked session): Upload sessions are persisted to the `upload_sessions` table BEFORE the upload begins. On crash recovery:
+**Incomplete uploads** (chunked session): Upload sessions are persisted to the file-based SessionStore BEFORE the upload begins. On crash recovery:
 
-1. Load all active upload sessions from the table.
+1. Load all active upload sessions from the SessionStore.
 2. Check each session's expiry (typically 48 hours from creation).
-3. **Expired sessions**: Delete from table. The file will be re-uploaded from scratch in the next cycle.
+3. **Expired sessions**: Delete from SessionStore. The file will be re-uploaded from scratch in the next cycle.
 4. **Valid sessions**: Verify the local file's current hash matches the session's `local_hash`. If it matches, resume from the `bytes_uploaded` offset. If the file was modified since the session started, discard the session and re-upload from scratch. The Graph API supports byte-range continuation natively.
-5. On successful completion: delete the session from the table and include the result in the Outcomes for baseline commit.
+5. On successful completion: delete the session from the SessionStore and include the result in the Outcomes for baseline commit.
 
 ### 13.2 Baseline Consistency Guarantees
 
@@ -1507,45 +1502,40 @@ The event-driven architecture provides natural crash recovery because the baseli
 | During `RemoteObserver.FullDelta()` | Nothing (events are in-memory) | Re-run cycle. Delta re-fetched from saved token. |
 | During `LocalObserver.FullScan()` | Nothing (events are in-memory) | Re-run cycle. Filesystem re-scanned. |
 | During `Planner.Plan()` | Nothing (pure function) | Re-run cycle. |
-| During execution | Completed actions already committed to baseline individually. Remaining actions in ledger with pending/claimed status. | On restart: load ledger, reclaim stale claims (claimed_at older than timeout), resume execution. No full re-observation needed. Delta token not advanced (committed only when all cycle actions done). |
-| During per-action commit | SQLite transaction: both baseline and ledger update or neither | If rolled back: action remains claimed, reclaimed on restart. If committed: action is durable. |
+| During execution | Completed actions already committed to baseline individually. In-memory DepTracker state lost. | On restart: delta token not advanced, so same delta is re-fetched. Idempotent planner detects already-committed actions as convergent (EF4/EF11) and skips them. Remaining actions are re-planned and executed. Upload sessions resumed via SessionStore. |
+| During per-action commit | SQLite transaction: baseline update or nothing | If rolled back: action is re-planned on restart (idempotent). If committed: action is durable. |
 | During watch mode (between cycles) | Buffer has pending events. Completed actions in baseline. | Events re-observed by the watchers. Debounce/dedup handles redundancy. Completed actions persist. |
 
 **Worst-case scenario**: A 30-minute initial sync crashes at minute 29 during execution. 29 minutes of completed transfers are already committed to baseline individually. On restart:
 
-1. Load ledger: remaining actions with pending/claimed status are loaded into the tracker.
-2. Reclaim stale claims (actions stuck in `claimed` past timeout).
-3. For uploads with `session_url`: query upload session endpoint, resume from `bytes_done`.
-4. For downloads: check `.partial` file size, resume via HTTP `Range` header.
-5. Workers resume executing remaining actions. No re-downloading of completed transfers.
-6. Time wasted: seconds to load ledger and reclaim, not 29 minutes of re-downloading.
+1. Delta token has not been advanced, so the same delta is re-fetched.
+2. Idempotent planner compares delta against updated baseline: already-committed actions appear as convergent (EF4/EF11) and are skipped.
+3. Remaining actions are planned and added to the DepTracker.
+4. For uploads with active sessions: the file-based SessionStore provides session URLs; the executor queries the upload endpoint and resumes from `bytes_uploaded` offset.
+5. For downloads: `.partial` files enable resume via HTTP `Range` header.
+6. Workers execute only the remaining actions. No re-downloading of completed transfers.
+7. Time wasted: seconds to re-fetch delta and re-plan, not 29 minutes of re-downloading.
 
 ### 13.3 Upload Session Persistence
 
-The `upload_sessions` table schema:
+Upload sessions are persisted via the file-based **SessionStore**. Each active chunked upload session is stored as a JSON file in the sync metadata directory. The SessionStore tracks:
 
-```sql
-CREATE TABLE upload_sessions (
-    id              TEXT    PRIMARY KEY,
-    drive_id        TEXT    NOT NULL,
-    item_id         TEXT,               -- null for new file uploads (assigned after completion)
-    local_path      TEXT    NOT NULL,    -- source file on local filesystem
-    local_hash      TEXT    NOT NULL,    -- QuickXorHash of local file at session start
-    session_url     TEXT    NOT NULL,    -- pre-authenticated upload URL from Graph API
-    expiry          INTEGER NOT NULL,    -- session expiration (Unix nanoseconds)
-    bytes_uploaded  INTEGER NOT NULL DEFAULT 0,
-    total_size      INTEGER NOT NULL,    -- total file size in bytes
-    created_at      INTEGER NOT NULL CHECK(created_at > 0)  -- Unix nanoseconds
-);
-```
+- `drive_id` -- which drive the upload targets
+- `item_id` -- server-assigned ID (null for new file uploads, assigned after completion)
+- `local_path` -- source file on the local filesystem
+- `local_hash` -- QuickXorHash of the local file at session start (for change detection on resume)
+- `session_url` -- pre-authenticated upload URL from the Graph API
+- `expiry` -- session expiration timestamp
+- `bytes_uploaded` -- progress offset for resume
+- `total_size` -- total file size in bytes
 
-Session persistence is the one exception to the "baseline manager is the sole writer" rule. The executor writes to `upload_sessions` BEFORE starting a chunked upload (to enable crash recovery). The baseline manager deletes the session row when the upload outcome is committed.
+The executor writes to the SessionStore BEFORE starting a chunked upload (to enable crash recovery). The session file is deleted when the upload outcome is committed to baseline.
 
-**Delta token integrity**: The delta token is committed only when all actions for a cycle reach `done` status. Individual per-action commits update the baseline but do not advance the delta token. This guarantees:
+**Delta token integrity**: The delta token is committed only when all actions for a cycle complete successfully. Individual per-action commits update the baseline but do not advance the delta token. This guarantees:
 
-- If the process crashes mid-cycle: completed actions are already in baseline (committed individually). The delta token has not been advanced, so the same delta can be re-fetched. The planner detects already-committed actions as convergent (EF4/EF11) and skips them. Remaining actions are loaded from the ledger and resumed.
+- If the process crashes mid-cycle: completed actions are already in baseline (committed individually). The delta token has not been advanced, so the same delta is re-fetched. The idempotent planner detects already-committed actions as convergent (EF4/EF11) and skips them. Remaining actions are re-planned and executed normally.
 - If all actions complete but the token commit fails: all outcomes are in baseline. The token commit is retried on restart.
-- Upload sessions with `session_url` in the ledger can be resumed from `bytes_done` offset. Downloads resume via `.partial` file size + HTTP `Range` header.
+- Upload sessions are persisted in the file-based SessionStore and can be resumed from `bytes_uploaded` offset. Downloads resume via `.partial` file size + HTTP `Range` header.
 
 ---
 

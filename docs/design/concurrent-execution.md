@@ -4,11 +4,13 @@ This document is the definitive specification for the execution layer of
 onedrive-go's sync engine. It covers how planned actions are scheduled,
 dispatched to workers, committed to the database, and recovered after crashes.
 
-The execution architecture uses a two-layer design: a **persistent ledger**
-(SQLite `action_queue` table) provides durability, crash recovery, and audit
-trail; an **in-memory dependency tracker** provides instant dispatch, lane-based
-fairness, and action cancellation. The ledger stores the full queue on disk.
-The tracker holds a bounded working window in memory.
+The execution architecture uses a two-layer design: an **in-memory dependency
+tracker** (`DepTracker`) provides instant dispatch, lane-based fairness, and
+action cancellation; the **SQLite baseline** provides durability through
+per-action atomic commits. Crash recovery relies on the idempotent planner:
+if the process crashes mid-cycle, the delta token has not advanced, so the same
+delta is re-fetched and the planner detects already-committed actions as
+convergent and skips them.
 
 ---
 
@@ -63,8 +65,7 @@ The tracker holds a bounded working window in memory.
 16. **Testability.** Scheduler, dependency resolver, and commit logic must be
     unit-testable without I/O or network.
 17. **Debuggability.** Inspect the state of every action, see what's blocked
-    and why, replay failures. State should survive process exit for post-mortem
-    analysis.
+    and why, replay failures.
 18. **Extensibility.** Straightforward to add priority scheduling, pause/resume,
     progress bars, upload session resume.
 19. **Invariant simplicity.** Fewer simultaneous invariants = safer. The system
@@ -110,7 +111,7 @@ These are existing architectural decisions that the execution layer respects:
 | PRD SS7 | `--watch` combines with direction flags (e.g., `sync --watch --download-only`) | Section 15.4 --- direction flags skip irrelevant observer |
 | PRD SS7 | Pause/resume: process stays alive, events collected, no transfers, efficient resume | Section 15.7 --- pause/resume walkthrough |
 | PRD SS10 | Parallel transfers (configurable: `parallel_downloads`, `parallel_uploads`, `parallel_checkers`) | Section 6 --- lane-based workers with config mapping |
-| PRD SS10 | Resumable transfers (upload sessions, Range headers, state persisted to disk) | Section 14 --- graceful shutdown, ledger `session_url` |
+| PRD SS10 | Resumable transfers (upload sessions, Range headers, state persisted to disk) | Section 14 --- graceful shutdown, SessionStore |
 | PRD SS10 | Bandwidth limiting with time-of-day scheduling | Section 7 --- token-bucket rate limiter |
 | PRD SS10 | Upload thresholds (<=4MB simple PUT, >4MB resumable, chunk size configurable) | Unchanged --- handled in `graph.Client.Upload()` |
 | PRD SS11 | Big-delete protection, dry-run, recycle bin, disk space reservation, crash recovery | Section 15.5 (dry-run), section 14 (crash recovery), safety in planner |
@@ -127,12 +128,13 @@ The execution layer consists of two complementary components:
 
 | Component | Storage | Purpose | Key Properties |
 |-----------|---------|---------|---------------|
-| **Persistent ledger** | SQLite `action_queue` table | Durability, crash recovery, audit trail, upload session URLs | Survives process exit, unlimited capacity, queryable |
-| **Dependency tracker** | In-memory data structure | Scheduling, dispatch, lane fairness, cancellation | Zero latency, bounded memory, channel-based |
+| **DepTracker** | In-memory data structure | Scheduling, dispatch, lane fairness, cancellation, dependency resolution | Zero latency, bounded memory, channel-based |
+| **Baseline** | SQLite `baseline` table | Durability, crash recovery via idempotent planner, per-action atomic commits | Survives process exit, queryable |
 
-The ledger is the source of truth for what work exists. The tracker is a cached,
-bounded working window that provides instant dispatch when dependencies are
-satisfied.
+The DepTracker is the scheduling engine that determines when actions are ready
+and dispatches them to workers. The baseline is the durable record of what has
+been synced. Crash recovery works through idempotency: uncommitted actions are
+re-planned and re-executed on restart.
 
 ### 2.2 Component Diagram
 
@@ -140,176 +142,68 @@ satisfied.
 Planner --> ActionPlan with dependency DAG
                |
                v
-     +--------------------+       +-----------------------+
-     | Persistent Ledger  |<----->| Dependency Tracker    |
-     | (SQLite action_    |       | (in-memory, bounded)  |
-     |  queue table)      |       |                       |
-     |                    |       | ready channels:       |
-     | * Full action list |       |   interactive []      |
-     | * session_url      |       |   bulk        []      |
-     | * bytes_done       |       |                       |
-     | * crash recovery   |       | * lane dispatch       |
-     +--------------------+       | * cancellation        |
-               ^                  | * dep counting        |
-               |                  +----------+------------+
-               |                             |
-               |              +--------------+--------------+
-               |              v              v              v
-               |          Worker 1       Worker 2       Worker N
-               |          (interactive)  (bulk)         (shared)
-               |              |              |              |
-               |              +--------------+--------------+
-               |                             |
-               +-------- per-action ---------+
-                          commit
-                     (baseline upsert +
-                      ledger status update
-                      in same SQLite tx)
+     +--------------------+
+     | DepTracker          |
+     | (in-memory)         |
+     |                     |
+     | ready channels:     |
+     |   interactive []    |
+     |   bulk        []    |
+     |                     |
+     | * lane dispatch     |
+     | * cancellation      |
+     | * dep counting      |
+     | * cycle tracking    |
+     +----------+----------+
+                |
+     +----------+----------+----------+
+     v          v          v          v
+ Worker 1   Worker 2   Worker 3   Worker N
+ (interactive) (bulk)  (shared)   (shared)
+     |          |          |          |
+     +----------+----------+----------+
+                |
+         WorkerResult channel
+                |
+                v
+     +--------------------+
+     | Engine              |
+     | (drainWorkerResults)|
+     |                     |
+     | per-action commit:  |
+     |   baseline upsert   |
+     |   tracker.Complete() |
+     +--------------------+
 ```
 
 ### 2.3 Startup Sequence
 
 1. Load baseline from database (`BaselineManager.Load()`)
-2. Load pending/claimed actions from ledger into dependency tracker
-3. Reclaim stale claims (actions stuck in `claimed` status past timeout)
-4. Start workers (interactive lane, bulk lane, shared pool)
-5. Start observers (remote, local)
-6. Workers begin draining tracker immediately (resume after crash)
+2. Load SessionStore for any persisted upload sessions
+3. Start workers (interactive lane, bulk lane, shared pool)
+4. Start observers (remote, local)
+5. Workers begin draining tracker immediately
 
 ### 2.4 Execution Flow
 
 1. Observers detect changes, emit `ChangeEvent` values to the change buffer
 2. Buffer debounces (2s) and flushes `[]PathChanges`
 3. Planner produces `ActionPlan` with dependency DAG (pure function)
-4. Actions written to persistent ledger (status=pending)
-5. Actions loaded into dependency tracker (if capacity available)
-6. Tracker dispatches ready actions to worker lanes via channels
-7. Workers execute actions (same per-action logic: downloads, uploads, deletes, moves)
-8. On completion: per-action atomic commit (baseline upsert + ledger status update)
-9. Tracker notified: `Complete(actionID)` decrements dependent counters, dispatches newly ready actions
+4. Actions loaded into DepTracker with dependency edges
+5. Tracker dispatches ready actions to worker lanes via channels
+6. Workers execute actions (same per-action logic: downloads, uploads, deletes, moves)
+7. Workers send `WorkerResult` back through the results channel
+8. Engine's `drainWorkerResults` loop processes each result: per-action atomic commit (baseline upsert) + `tracker.Complete(id)` to unblock dependents
+9. Tracker dispatches newly ready actions as dependencies are satisfied
 10. When all actions for a cycle complete: commit delta token
 
 ---
 
-## 3. Persistent Ledger
+## 3. DepTracker
 
 ### 3.1 Purpose
 
-The ledger provides:
-
-- **Crash recovery**: On restart, read the ledger to know exactly what was
-  pending, what was in-flight, and what completed. No full re-observation needed.
-- **Upload session resume**: The `session_url` column stores the pre-authenticated
-  upload URL. On restart, continue from `bytes_done` offset.
-- **Download resume**: Workers can use HTTP `Range` headers to resume from
-  `.partial` file size.
-- **Audit trail**: `SELECT * FROM action_queue WHERE status != 'done'` shows
-  all pending work. Post-mortem analysis with standard SQLite tools.
-- **Backpressure**: Unlimited disk capacity absorbs planner output without
-  memory pressure.
-
-### 3.2 Schema
-
-```sql
-CREATE TABLE action_queue (
-    id           INTEGER PRIMARY KEY,
-    cycle_id     TEXT    NOT NULL,                -- groups actions from one planning pass
-    action_type  TEXT    NOT NULL CHECK(action_type IN (
-                     'download', 'upload', 'local_delete', 'remote_delete',
-                     'local_move', 'remote_move', 'folder_create',
-                     'conflict', 'update_synced', 'cleanup'
-                 )),
-    path         TEXT    NOT NULL,                -- target path (relative to sync root)
-    old_path     TEXT,                            -- for moves: source path
-    status       TEXT    NOT NULL DEFAULT 'pending'
-                         CHECK(status IN ('pending', 'claimed', 'done', 'failed', 'canceled')),
-    depends_on   TEXT,                            -- JSON array of action IDs
-    drive_id     TEXT,                            -- normalized drive ID
-    item_id      TEXT,                            -- server-assigned item ID
-    parent_id    TEXT,                            -- server parent ID
-    hash         TEXT,                            -- expected content hash
-    size         INTEGER,                         -- file size in bytes
-    mtime        INTEGER,                         -- expected mtime (Unix nanoseconds)
-    session_url  TEXT,                            -- upload session URL for resume
-    bytes_done   INTEGER NOT NULL DEFAULT 0,      -- transfer progress (bytes)
-    claimed_at   INTEGER,                         -- when a worker claimed this action
-    completed_at INTEGER,                         -- when the action finished
-    error_msg    TEXT                             -- error description for failed actions
-);
-
-CREATE INDEX idx_action_queue_status ON action_queue(status);
-CREATE INDEX idx_action_queue_cycle ON action_queue(cycle_id);
-CREATE INDEX idx_action_queue_path ON action_queue(path);
-```
-
-### 3.3 Column Descriptions
-
-| Column | Purpose |
-|--------|---------|
-| `id` | Auto-increment primary key, also used as dependency reference |
-| `cycle_id` | UUID grouping actions from one planning pass. Delta token is committed when all actions for a cycle_id reach `done`. |
-| `action_type` | Maps to `ActionType` enum. Determines which per-action execution function runs. |
-| `path` | Target path for the action. For moves, this is the destination. |
-| `old_path` | Source path for moves. NULL for non-move actions. |
-| `status` | Lifecycle state (see section 3.4). |
-| `depends_on` | JSON array of action IDs that must complete before this action can execute. NULL or `[]` means no dependencies. |
-| `drive_id` | Normalized drive ID for API operations. |
-| `item_id` | Server-assigned item ID. NULL for new uploads (assigned after completion). |
-| `parent_id` | Server parent folder ID. Used by folder creates and uploads. |
-| `hash` | Expected QuickXorHash (base64). For downloads: expected remote hash. For uploads: local file hash. |
-| `size` | File size in bytes. Used for lane routing (interactive vs bulk). |
-| `mtime` | Local modification time at action creation (Unix nanoseconds). |
-| `session_url` | Pre-authenticated upload session URL. Set when chunked upload session is created. Used for crash recovery resume. |
-| `bytes_done` | Bytes transferred so far. Updated periodically during transfers. Used for progress reporting and resume. |
-| `claimed_at` | Timestamp when a worker started this action. Used for stale claim detection. |
-| `completed_at` | Timestamp when the action finished (success or failure). |
-| `error_msg` | Human-readable error for failed actions. NULL on success. |
-
-### 3.4 Status Lifecycle
-
-```
-pending  --[worker claims]--> claimed  --[success]--> done
-                                |
-                                +------[failure]--> failed
-                                |
-                                +------[canceled]--> canceled
-
-On restart:
-  claimed (stale) --[reclaim after timeout]--> pending
-  failed --[retry logic]--> pending (or stays failed after max retries)
-```
-
-- **pending**: Action is in the ledger, waiting for dependencies to be satisfied
-  and a worker to claim it.
-- **claimed**: A worker is actively executing this action. `claimed_at` records
-  when execution started.
-- **done**: Action completed successfully. Baseline updated. Action stays in
-  ledger for audit trail (compacted periodically).
-- **failed**: Action failed after all retries. Error recorded in `error_msg`.
-  May be retried in a future cycle.
-- **canceled**: Action was superseded (e.g., file changed while upload was
-  in-flight). Not retried.
-
-### 3.5 Crash Recovery Semantics
-
-On restart, the ledger is the source of truth:
-
-1. **`done` actions**: Already committed to baseline. No action needed.
-2. **`pending` actions**: Not yet started. Load into tracker and execute.
-3. **`claimed` actions**: Were in-flight when process died. Reclaim to `pending`
-   after stale timeout (default: 30 minutes). For uploads with `session_url`:
-   query the upload session endpoint to determine resume point. For downloads:
-   check `.partial` file size for resume via `Range` header.
-4. **`failed` actions**: Logged for debugging. May be retried in a future cycle.
-5. **`canceled` actions**: Ignored. Already superseded.
-
----
-
-## 4. Dependency Tracker
-
-### 4.1 Purpose
-
-The tracker provides:
+The DepTracker provides:
 
 - **Zero-latency dispatch**: When action X completes and unblocks action Y,
   Y is dispatched to the ready channel immediately (in the same `Complete()`
@@ -317,48 +211,54 @@ The tracker provides:
 - **Lane-based fairness**: Ready actions are routed to interactive or bulk
   channels based on file size and action type.
 - **Action cancellation**: Each in-flight action has a `context.CancelFunc`.
-  Cancellation is instant --- no DB round-trip.
-- **Progress snapshots**: `tracker.Progress()` returns live counts and byte
-  totals with a single mutex acquisition.
+  Cancellation is instant.
+- **Cycle tracking**: Tracks which actions belong to which planning cycle.
+  Signals cycle completion via `CycleDone()` channels.
+- **Progress snapshots**: `InFlightCount()` returns live counts with a single
+  mutex acquisition.
 
-### 4.2 Data Structures
+### 3.2 Data Structures
 
 ```go
 type DepTracker struct {
     mu          sync.Mutex
-    actions     map[ActionID]*trackedAction
+    actions     map[int64]*trackedAction
     byPath      map[string]*trackedAction      // for cancellation by path
     interactive chan *trackedAction             // small files, folder ops, deletes
     bulk        chan *trackedAction             // large file transfers
-    capacity    chan struct{}                   // signals refill loop when space opens
+    cycles      map[string]*cycleState         // cycle completion tracking
+    persistent  bool                           // watch mode: channels stay open
+    logger      *slog.Logger
 }
 
 type trackedAction struct {
-    action     Action
-    ledgerID   int64                           // references action_queue.id
+    action     *Action
+    id         int64
     cancel     context.CancelFunc              // set when worker claims the action
-    deps       []ActionID
     depsLeft   int32                           // atomic counter
-    status     actionStatus                    // pending, claimed, done
     dependents []*trackedAction                // actions waiting on this one
+    cycleID    string
 }
 ```
 
-### 4.3 Operations
+### 3.3 Operations
 
-**Add(action, deps)**: Insert an action into the tracker. If `depsLeft == 0`,
-dispatch to the appropriate ready channel immediately. Otherwise, register as
-a dependent of each dependency.
+**Add(action, id, depIDs, cycleID)**: Insert an action into the tracker. If
+`depsLeft == 0`, dispatch to the appropriate ready channel immediately.
+Otherwise, register as a dependent of each dependency.
 
 **Complete(id)**: Mark action done. For each dependent action, atomically
 decrement `depsLeft`. If any dependent reaches zero, dispatch it to the ready
-channel. Signal the capacity channel to trigger a refill from the ledger.
+channel. Track cycle completion.
 
-**Cancel(path)**: Look up by path. If the action is claimed (in-flight), call
-its `context.CancelFunc` to cancel the worker's context immediately. Update
-status to canceled in both tracker and ledger.
+**CancelByPath(path)**: Look up by path. If the action is in-flight, call
+its `context.CancelFunc` to cancel the worker's context immediately.
 
-### 4.4 Ready Channel Dispatch
+**CycleDone(cycleID)**: Returns a channel that closes when all actions in the
+given cycle have completed. Used by the engine to know when to commit the delta
+token.
+
+### 3.4 Ready Channel Dispatch
 
 When an action becomes ready (all dependencies satisfied), the tracker routes
 it to the appropriate lane channel:
@@ -374,6 +274,31 @@ func (dt *DepTracker) dispatch(ta *trackedAction) {
 ```
 
 Workers pull from their assigned channel. See section 6 for the lane model.
+
+---
+
+## 4. WorkerResult Channel
+
+### 4.1 Purpose
+
+Workers report outcomes back to the engine through a `WorkerResult` channel:
+
+```go
+type WorkerResult struct {
+    ActionID int64
+    CycleID  string
+    Outcome  *Outcome
+    Err      error
+}
+```
+
+The engine's `drainWorkerResults` goroutine reads from this channel and
+processes each result: committing the outcome to the baseline and notifying
+the tracker via `Complete(id)` to unblock dependent actions.
+
+This design keeps workers simple (execute action, send result) and centralizes
+commit logic in the engine. Workers never interact with the baseline or tracker
+directly.
 
 ---
 
@@ -611,11 +536,10 @@ Each tracked action has a `context.CancelFunc` set when a worker claims it:
 
 ```go
 type trackedAction struct {
-    action   Action
+    action   *Action
     cancel   context.CancelFunc  // set when worker claims the action
-    deps     []ActionID
     depsLeft int32
-    status   actionStatus
+    dependents []*trackedAction
 }
 ```
 
@@ -626,82 +550,39 @@ When the observer detects a new change to a file currently being uploaded:
 1. New events flow through the buffer and planner
 2. Pre-dispatch deduplication checks the tracker for in-flight actions on the
    same path
-3. Tracker calls `Cancel(path)`:
+3. Tracker calls `CancelByPath(path)`:
    - Calls `ta.cancel()` to cancel the worker's context immediately
-   - Updates tracker status to `canceled`
-   - Updates ledger row to `canceled`
+   - Removes action from tracker
 4. Worker detects context cancellation, stops transfer, returns partial outcome
-5. Replacement action is written to ledger and added to tracker
-
-One mechanism, not two. The tracker holds the cancel function; the ledger
-records the final status.
+5. Replacement action is added to tracker with the new cycle
 
 ---
 
 ## 10. Backpressure
 
-### 10.1 Bounded Tracker with Ledger Spillover
+### 10.1 Channel-Based Backpressure
 
-The tracker holds a bounded working window. The ledger holds the full queue
-on disk:
+The DepTracker uses buffered channels for the interactive and bulk lanes.
+When channels are full, the `Add()` call blocks until a worker drains an
+action, providing natural backpressure from workers to the planner.
 
-```go
-const maxTrackerSize = 10_000
+For one-shot mode, channels are sized to the plan size. For watch mode,
+`NewPersistentDepTracker` uses default buffer sizes.
 
-func (dt *DepTracker) Add(action Action, deps []ActionID) {
-    if len(dt.actions) >= maxTrackerSize {
-        // Action is already in ledger. Don't load into tracker.
-        // Refill loop will pull it when capacity opens.
-        return
-    }
-    // ... normal add to in-memory tracker
-}
-```
-
-### 10.2 Refill Loop
-
-A background goroutine refills the tracker from the ledger when capacity opens:
-
-```go
-func (dt *DepTracker) refillLoop(db *sql.DB) {
-    for range dt.capacitySignal {
-        rows := queryPendingFromLedger(db, maxTrackerSize - len(dt.actions))
-        for _, row := range rows {
-            dt.addFromLedger(row)
-        }
-    }
-}
-```
-
-Refill triggers when the tracker drops below 50% capacity. Refill fills to 80%
-of `maxTrackerSize`. This provides a comfortable buffer without approaching the
-memory bound.
-
-### 10.3 Memory Analysis
+### 10.2 Memory Analysis
 
 | Component | Count | Memory |
 |-----------|-------|--------|
-| Tracker | 10,000 actions * ~500 bytes | ~5 MB (bounded) |
-| Ledger | On disk | 0 MB (unlimited disk) |
+| Tracker | Actions in current cycle * ~500 bytes | Bounded by plan size |
 | Baseline | 100K items * ~200 bytes | ~19 MB |
-| **Total overhead** | | **~5 MB above baseline** |
+| **Total overhead** | | **Proportional to cycle size** |
 
-A million-file initial sync stores 1M rows in the ledger (disk), loads 10K at
-a time into the tracker (memory), and workers drain them at full speed. No
-memory explosion.
+The planner produces actions for one cycle at a time. In watch mode, cycles
+are small (only changed files). In one-shot mode, the entire plan is loaded
+into memory, but this is bounded by the number of changed files.
 
-### 10.4 Tracker-Ledger Consistency
-
-The tracker is always a subset of the ledger's non-done actions. Invariant
-enforcement:
-
-- **Add**: Always writes to ledger first, then adds to tracker if capacity
-  allows.
-- **Complete/Cancel**: Always updates both tracker and ledger atomically
-  (ledger update is part of the per-action commit transaction).
-- **Startup**: Always rebuilds tracker from ledger (single source of truth).
-- **Refill**: Only adds actions that are `pending` in the ledger and not
-  already in the tracker.
+For initial syncs of very large drives, delta pages are processed in batches
+(see section 15.6), keeping each cycle's action count manageable.
 
 ---
 
@@ -712,31 +593,15 @@ enforcement:
 The tracker provides real-time progress with zero DB overhead:
 
 ```go
-func (dt *DepTracker) Progress() ProgressSnapshot {
-    dt.mu.RLock()
-    defer dt.mu.RUnlock()
-    return ProgressSnapshot{
-        Downloading:    dt.countByStatusAndType(claimed, download),
-        Uploading:      dt.countByStatusAndType(claimed, upload),
-        Waiting:        dt.countByStatus(pending),
-        BytesInFlight:  dt.sumBytesInFlight(),
-    }
+func (dt *DepTracker) InFlightCount() int {
+    dt.mu.Lock()
+    defer dt.mu.Unlock()
+    return len(dt.actions)
 }
 ```
 
-### 11.2 Durable Audit Trail from Ledger
-
-The ledger provides history for post-mortem analysis:
-
-```sql
-SELECT action_type, status, COUNT(*), SUM(bytes_done)
-FROM action_queue
-WHERE cycle_id = ?
-GROUP BY action_type, status
-```
-
-Both are available: live display from the tracker during runtime, audit trail
-from the ledger after process exit.
+The `WorkerResult` channel provides a stream of completed actions that the
+engine can use to update progress displays in real time.
 
 ---
 
@@ -744,42 +609,34 @@ from the ledger after process exit.
 
 ### 12.1 Per-Action Atomic Commits
 
-Each completed action is committed in a single SQLite transaction that spans
-both the baseline and the ledger:
+Each completed action is committed in a single SQLite transaction against the
+baseline:
 
 ```sql
 BEGIN;
   -- Update baseline
   INSERT OR REPLACE INTO baseline (...) VALUES (...);
-  -- Mark action done in ledger
-  UPDATE action_queue SET status = 'done', completed_at = ? WHERE id = ?;
 COMMIT;
 ```
 
-If the transaction fails, neither the baseline nor the ledger is updated. The
-action remains `claimed` and will be retried on restart.
+If the transaction fails, the baseline is not updated. On restart, the
+idempotent planner will re-plan the action.
 
 If the process crashes after the transaction commits but before the tracker is
-notified, the restart loads the ledger and sees the action is `done` --- no
-duplicate execution.
+notified, the restart re-fetches the same delta (token not yet advanced), and
+the planner sees the already-committed item as convergent --- no duplicate
+execution.
 
-### 12.2 Same Database
-
-Both the `action_queue` and `baseline` tables live in the same SQLite database.
-This provides transactional atomicity between baseline updates and ledger status
-updates. Compatible with the existing sole-writer pattern
-(`SetMaxOpenConns(1)`) since baseline writes are already serialized.
-
-### 12.3 Per-Action Commit Operations
+### 12.2 Per-Action Commit Operations
 
 The per-action commit operation depends on the action type:
 
-| Action Type | Baseline Operation | Ledger Operation |
-|-------------|-------------------|-----------------|
-| Download, Upload, UpdateSynced, FolderCreate | `INSERT ... ON CONFLICT(path) DO UPDATE` | `SET status = 'done'` |
-| LocalMove, RemoteMove | `DELETE` old path + `INSERT` new path | `SET status = 'done'` |
-| LocalDelete, RemoteDelete, Cleanup | `DELETE FROM baseline WHERE path = ?` | `SET status = 'done'` |
-| Conflict | `INSERT INTO conflicts` + baseline upsert if applicable | `SET status = 'done'` |
+| Action Type | Baseline Operation |
+|-------------|-------------------|
+| Download, Upload, UpdateSynced, FolderCreate | `INSERT ... ON CONFLICT(path) DO UPDATE` |
+| LocalMove, RemoteMove | `DELETE` old path + `INSERT` new path |
+| LocalDelete, RemoteDelete, Cleanup | `DELETE FROM baseline WHERE path = ?` |
+| Conflict | `INSERT INTO conflicts` + baseline upsert if applicable |
 
 ---
 
@@ -789,14 +646,14 @@ The per-action commit operation depends on the action type:
 
 The delta token is cycle-scoped. Each planning pass produces actions tagged
 with a `cycle_id`. The token for that cycle is committed only when all actions
-with that `cycle_id` reach `done`:
+with that `cycle_id` complete. The DepTracker's `CycleDone(cycleID)` channel
+signals when this occurs:
 
 ```go
-func (cm *CycleManager) OnActionComplete(cycleID string) {
-    remaining := countPendingForCycle(cycleID)
-    if remaining == 0 {
-        commitDeltaToken(cycleID, token)
-    }
+func (e *Engine) waitForCycleCompletion(cycleID string) {
+    <-e.tracker.CycleDone(cycleID)
+    e.baseline.CommitDeltaToken(cycleID, token)
+    e.tracker.CleanupCycle(cycleID)
 }
 ```
 
@@ -828,41 +685,61 @@ cycle.
 
 ---
 
-## 14. Graceful Shutdown
+## 14. Graceful Shutdown and Crash Recovery
 
 ### 14.1 Two-Signal Protocol
 
 | Signal | Action |
 |--------|--------|
-| **First SIGINT/SIGTERM** | Stop accepting new actions from planner. Cancel all in-flight worker contexts. Workers detect cancellation, stop transfers, return partial outcomes. In-flight actions remain `claimed` in ledger. Exit cleanly. |
+| **First SIGINT/SIGTERM** | Stop accepting new actions from planner. Cancel all in-flight worker contexts. Workers detect cancellation, stop transfers, return partial outcomes. Exit cleanly. |
 | **Second SIGINT/SIGTERM** | Immediate cancellation. No cleanup. SQLite WAL ensures DB consistency. |
 | **SIGHUP** | Reload configuration. Re-initialize filter engine and bandwidth limiter. Continue running. |
 
-### 14.2 Ledger State Preservation
+### 14.2 State Preservation on Shutdown
 
 On first signal:
 1. Stop accepting new actions from planner
 2. Cancel all in-flight worker contexts
 3. Workers detect cancellation, stop transfers
-4. In-flight actions remain `claimed` in ledger with `bytes_done` recording
-   progress
-5. Upload sessions with `session_url` can be resumed on restart
-6. Download `.partial` files record download progress for `Range` header resume
+4. Upload sessions are persisted to SessionStore (file-based) for cross-crash
+   resume
+5. Download `.partial` files record download progress for `Range` header resume
+6. Delta token is NOT committed (cycle incomplete), ensuring idempotent
+   re-planning on restart
 
-### 14.3 Upload Resume
+### 14.3 Crash Recovery via Idempotent Planner
 
-The ledger's `session_url` column stores the pre-authenticated upload URL. On
-restart:
+Crash recovery does not require a persistent action queue. Instead:
 
-1. Load claimed upload actions from ledger
-2. Check session expiry (typically 48 hours from creation)
-3. Expired sessions: discard, re-upload from scratch
+1. On restart, `BaselineManager.Load()` loads the baseline (reflects all
+   committed actions)
+2. `GetDeltaToken()` returns the last committed token (pre-crash cycle's token
+   was never committed)
+3. Delta fetch returns the same changes as the crashed cycle
+4. Planner compares changes against the baseline:
+   - Actions that completed before the crash are already in the baseline ---
+     the planner detects them as convergent (EF4/EF11) and skips them
+   - Actions that did not complete are re-planned and re-executed
+5. No duplicate work, no lost work
+
+### 14.4 Upload Resume via SessionStore
+
+The `SessionStore` is a file-based store that persists upload session URLs
+for cross-crash resume:
+
+1. When a chunked upload session is created, the session URL is saved to the
+   SessionStore
+2. On restart, the SessionStore is loaded and checked for valid sessions
+3. Expired sessions (typically 48 hours from creation): discarded, re-upload
+   from scratch
 4. Valid sessions: verify local file hash matches expected hash (detect
    mutation during crash window). If match: query upload session endpoint for
-   accepted byte ranges, resume from `bytes_done`. If hash differs: discard
+   accepted byte ranges, resume from last offset. If hash differs: discard
    session, re-upload from scratch.
+5. After successful upload or discard, the session entry is removed from the
+   SessionStore
 
-### 14.4 Download Resume
+### 14.5 Download Resume
 
 On restart, the `.partial` file's size indicates download progress. The worker
 uses an HTTP `Range` header to resume from the last byte. Hash verification
@@ -884,13 +761,12 @@ End-to-end walkthrough:
 4. `Planner.Plan(changes, baseline, SyncUploadOnly, config)` --- produce
    `ActionPlan` with dependency DAG. Only upload-direction actions emitted
    (uploads, remote folder creates, remote deletes). Downloads suppressed.
-5. Write actions to persistent ledger (status=pending)
-6. Populate dependency tracker from ledger
-7. Workers execute concurrently (uploads, folder creates, remote deletes) ---
+5. Load actions into DepTracker with dependency edges
+6. Workers execute concurrently (uploads, folder creates, remote deletes) ---
    per-action baseline commits as each completes
-8. All actions complete --- commit delta token (none for upload-only, but
+7. All actions complete --- commit delta token (none for upload-only, but
    cycle tracking still applies)
-9. Done. Baseline reflects all uploaded files.
+8. Done. Baseline reflects all uploaded files.
 
 ### 15.2 One-Off Download-Only
 
@@ -903,12 +779,11 @@ End-to-end walkthrough:
 4. `Planner.Plan(changes, baseline, SyncDownloadOnly, config)` --- produce
    `ActionPlan` with dependency DAG. Only download-direction actions emitted
    (downloads, local folder creates, local deletes). Uploads suppressed.
-5. Write actions to persistent ledger
-6. Populate dependency tracker from ledger
-7. Workers execute concurrently (downloads, folder creates, local deletes) ---
+5. Load actions into DepTracker with dependency edges
+6. Workers execute concurrently (downloads, folder creates, local deletes) ---
    per-action baseline commits
-8. All actions complete --- commit delta token
-9. Done. Baseline reflects all downloaded files.
+7. All actions complete --- commit delta token
+8. Done. Baseline reflects all downloaded files.
 
 ### 15.3 One-Off Bidirectional Sync
 
@@ -921,22 +796,20 @@ End-to-end walkthrough:
 4. `Planner.Plan(changes, baseline, SyncBidirectional, config)` --- produce
    `ActionPlan` with dependency DAG. All action types: downloads, uploads,
    folder creates, deletes, moves, conflicts.
-5. Write actions to persistent ledger
-6. Populate dependency tracker from ledger
-7. Workers execute concurrently --- **downloads and uploads run
+5. Load actions into DepTracker with dependency edges
+6. Workers execute concurrently --- **downloads and uploads run
    simultaneously**, no phase barriers. A download to `/A/x.txt` and an upload
    from `/B/y.txt` run in parallel if they have no dependency relationship.
-8. Per-action baseline commits as each action completes
-9. All actions complete --- commit delta token
-10. Done. Baseline reflects full bidirectional sync state.
+7. Per-action baseline commits as each action completes
+8. All actions complete --- commit delta token
+9. Done. Baseline reflects full bidirectional sync state.
 
 ### 15.4 Watch Mode (Continuous)
 
 End-to-end walkthrough:
 
 1. `BaselineManager.Load()` --- load baseline
-2. If pending actions exist in ledger (crash recovery), load into tracker and
-   resume execution immediately
+2. Load SessionStore for any persisted upload sessions (crash recovery)
 3. `RemoteObserver.Watch()` --- continuous delta polling (default 5-min
    interval) or WebSocket subscription. Emits `ChangeEvent` values to buffer.
 4. `LocalObserver.Watch()` --- continuous inotify/FSEvents monitoring. Emits
@@ -947,7 +820,7 @@ End-to-end walkthrough:
 7. `Planner.Plan()` --- incremental `ActionPlan` for changed paths only
 8. Deduplicate against in-flight actions in tracker (by path). If a file is
    already being uploaded, cancel the stale upload (section 9).
-9. Write new actions to ledger, add to tracker
+9. Add new actions to tracker
 10. Workers drain continuously --- per-action baseline commits
 11. Loop from step 6 on next buffer ready signal
 
@@ -966,8 +839,8 @@ version.
 
 ### 15.5 Dry-Run Mode
 
-Steps 1-4 only (observe, buffer, plan). Print `ActionPlan`. No ledger write,
-no execution, no commit. Zero side effects.
+Steps 1-4 only (observe, buffer, plan). Print `ActionPlan`. No execution, no
+commit. Zero side effects.
 
 ```
 1. BaselineManager.Load()
@@ -975,7 +848,7 @@ no execution, no commit. Zero side effects.
 3. ChangeBuffer flush
 4. Planner.Plan() -> ActionPlan
 5. Print plan summary to stdout
-6. STOP. No ledger, no tracker, no workers, no commit.
+6. STOP. No tracker, no workers, no commit.
 ```
 
 Same as PRD SS11 dry-run requirement.
@@ -989,15 +862,14 @@ bounds memory:
 2. Every 50K items:
    a. Flush buffer
    b. Plan (only these items)
-   c. Write actions to ledger
-   d. Load into tracker, workers execute
+   c. Load actions into DepTracker
+   d. Workers execute concurrently
    e. Per-action baseline commits as transfers complete
    f. Commit intermediate delta token (next-link)
 3. After all pages: commit final delta token
 
-The ledger handles backpressure naturally: 50K items produce ~50K actions in
-the ledger (disk), the tracker loads 10K at a time (bounded memory), workers
-drain at full speed.
+Batching keeps each cycle's action count manageable. The tracker holds one
+cycle at a time. Workers drain at full speed.
 
 ### 15.7 Pause/Resume (Watch Mode Only)
 
@@ -1010,9 +882,8 @@ drain at full speed.
 **Resume**:
 1. Flush buffer (potentially large batch of accumulated events)
 2. Plan (incremental)
-3. Write new actions to ledger
-4. Add to tracker
-5. Unpause workers --- they resume pulling from tracker
+3. Add actions to tracker
+4. Unpause workers --- they resume pulling from tracker
 
 **High-water mark**: If >100K events accumulate during pause, collapse to a
 full sync on resume (discard buffer, re-observe everything). This prevents
@@ -1047,10 +918,10 @@ excessive memory consumption during extended pauses.
 
 | Component | Design |
 |-----------|--------|
-| **Executor model** | DAG with dependency tracker --- actions dispatched based on dependency satisfaction |
+| **Executor model** | DAG with DepTracker --- actions dispatched based on dependency satisfaction |
 | **Worker pool** | Unified lane-based pool (interactive + bulk + shared overflow). Checker pool separate. |
-| **Commit model** | Per-action atomic commits (baseline + ledger status in same tx). Delta token committed separately when cycle completes. |
-| **Crash recovery** | Ledger-based exact resume --- pending/claimed actions loaded from ledger, no full re-observation needed |
+| **Commit model** | Per-action atomic commits (baseline upsert). Delta token committed separately when cycle completes. |
+| **Crash recovery** | Idempotent planner --- uncommitted delta token causes same delta to be re-fetched, planner skips already-committed actions |
 | **Context tree** | Persistent workers on tracker channels, surviving across planning passes |
 
 ### 16.3 Component Details
@@ -1058,52 +929,32 @@ excessive memory consumption during extended pauses.
 - **BaselineManager**: Same schema, same sole-writer. `CommitOutcome()` commits
   one outcome per transaction. `CommitDeltaToken()` seals cycle token separately.
   `Load()` and `GetDeltaToken()` unchanged.
-- **Engine orchestration**: One-shot and watch modes both use ledger + tracker.
-  Watch mode uses continuous pipeline with persistent workers.
+- **Engine orchestration**: One-shot and watch modes both use DepTracker +
+  WorkerResult channel. Watch mode uses continuous pipeline with persistent
+  workers.
 - **Executor per-action logic**: download (`.partial` + hash + rename), upload
   (simple vs chunked), delete (hash-before-delete S4), conflict resolution ---
   each action type is self-contained. The executor dispatches by action type;
   the tracker handles scheduling.
-- **Upload session persistence**: The `upload_sessions` table stores detailed
-  session metadata. The `action_queue` ledger tracks `session_url` for
-  execution-level state, enabling crash resume of in-flight uploads.
+- **Upload session persistence**: The `SessionStore` (file-based) stores upload
+  session metadata for cross-crash resume. Session URLs are saved when chunked
+  uploads begin and removed when they complete or are discarded.
 
 ---
 
 ## 17. Open Questions
 
-1. **Tracker-ledger consistency verification.** The tracker is always a subset
-   of the ledger's non-done actions. This invariant should be formally verified
-   in tests --- inject ledger states, rebuild tracker, verify consistency.
-
-2. **Same vs. separate DB for ledger.** Recommended: same DB. Provides
-   transactional atomicity between baseline and ledger. Separate DB would
-   require two-phase reasoning about consistency.
-
-3. **Planner deduplication strategy.** When observers detect new changes
+1. **Planner deduplication strategy.** When observers detect new changes
    mid-execution, the planner runs again. It must not re-emit actions already
-   in the tracker or ledger. Preferred: tracker deduplicates by path (preserves
+   in the tracker. Preferred: tracker deduplicates by path (preserves
    planner purity). Alternative: planner queries tracker state (breaks
    pure-function constraint).
 
-4. **Reclaim timeout for stale claims.** Must be longer than the longest
-   expected transfer. Default: 30 minutes, configurable. Reaper goroutine
-   checks periodically.
-
-5. **One-shot ledger usage.** For crash recovery and upload session resume,
-   one-shot sync also uses the ledger infrastructure. The overhead is minimal
-   (write actions to ledger before executing). One-shot skips the continuous
-   observer loop but otherwise uses the same tracker and worker infrastructure.
-
-6. **Lane size threshold.** Fixed at 10 MB. Provides predictable behavior
+2. **Lane size threshold.** Fixed at 10 MB. Provides predictable behavior
    without requiring tuning. Adaptive threshold (p50 of recent action sizes)
    adds complexity with marginal benefit.
 
-7. **Refill batch size and frequency.** Refill to 80% of `maxTrackerSize` when
-   tracker drops below 50%. A reasonable default that provides comfortable
-   buffer without approaching memory bound.
-
-8. **Config key reconciliation.** PRD specifies `parallel_downloads`,
+3. **Config key reconciliation.** PRD specifies `parallel_downloads`,
    `parallel_uploads`, `parallel_checkers` as three separate configurable
    values. The lane model combines downloads and uploads into interactive/bulk
    lanes. Section 6.4 defines the mapping. The PRD keys are preserved for
@@ -1113,7 +964,7 @@ excessive memory consumption during extended pauses.
 
 ## 18. Observation-Layer Parallelization
 
-Sections 1–17 cover the **execution** layer (workers, tracker, ledger, lanes).
+Sections 1--17 cover the **execution** layer (workers, tracker, lanes).
 This section covers parallelization opportunities in the **observation** layer
 — the pipeline stages that run before the planner.
 

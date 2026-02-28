@@ -599,7 +599,7 @@ When filter rules change, files that were previously synced but are now excluded
 **Behavior**:
 1. Stale files stop syncing (excluded by new filters)
 2. Stale files are NOT auto-deleted (safety invariant)
-3. Each stale file is recorded in a ledger with path, reason, and size
+3. Each stale file is recorded in a tracking table with path, reason, and size
 4. User is nagged at the broadest level (directory, not individual files)
 5. User explicitly disposes via `stale delete` or `stale keep`
 
