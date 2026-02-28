@@ -80,7 +80,13 @@ func (s *SessionStore) Load(driveID, remotePath string) (*SessionRecord, error) 
 			slog.String("path", path),
 			slog.String("error", err.Error()),
 		)
-		os.Remove(path)
+
+		if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
+			s.logger.Warn("failed to remove corrupt session file",
+				slog.String("path", path),
+				slog.String("error", rmErr.Error()),
+			)
+		}
 
 		return nil, nil
 	}
@@ -108,8 +114,15 @@ func (s *SessionStore) Save(driveID, remotePath string, rec *SessionRecord) erro
 	}
 
 	path := s.filePath(driveID, remotePath)
-	if err := os.WriteFile(path, data, sessionFilePerms); err != nil {
-		return fmt.Errorf("writing session file: %w", err)
+	tmpPath := path + ".tmp"
+
+	if err := os.WriteFile(tmpPath, data, sessionFilePerms); err != nil {
+		return fmt.Errorf("writing session temp file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath) // best-effort cleanup
+		return fmt.Errorf("renaming session temp file: %w", err)
 	}
 
 	// Lazy cleanup — non-blocking, errors logged but not propagated.
@@ -179,8 +192,15 @@ func (s *SessionStore) CleanStale(maxAge time.Duration) (int, error) {
 }
 
 // cleanIfDue runs CleanStale if at least cleanThrottle has elapsed since
-// the last run. Thread-safe; no-op if throttled.
+// the last run. Thread-safe; no-op if throttled. Runs in a goroutine so
+// panic recovery prevents crashing the entire process.
 func (s *SessionStore) cleanIfDue() {
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Error("panic in session cleanup", slog.Any("panic", r))
+		}
+	}()
+
 	s.cleanMu.Lock()
 	if time.Since(s.lastClean) < cleanThrottle {
 		s.cleanMu.Unlock()

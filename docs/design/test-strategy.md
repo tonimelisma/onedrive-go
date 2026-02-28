@@ -363,7 +363,7 @@ Every conflict type has a dedicated test:
 
 **Conflict naming**: Verify that conflict files follow the pattern `file.conflict-20260217-143052.ext` with correct timestamp formatting.
 
-**Conflict ledger**: Verify that conflict records are written to the conflicts table with correct fields (local_hash, remote_hash, detected_at, resolution, resolved_by).
+**Conflict tracking**: Verify that conflict records are written to the conflicts table with correct fields (local_hash, remote_hash, detected_at, resolution, resolved_by).
 
 #### Filter Engine (in `internal/sync/`)
 
@@ -678,7 +678,7 @@ These tests run the full sync pipeline — delta fetch through execution — wit
 |------|----------|
 | `TestPipeline_MultiConflict_EditEdit` | 3 files with edit-edit conflicts |
 | `TestPipeline_MultiConflict_MixedTypes` | 1 edit-edit + 1 edit-delete + 1 create-create |
-| `TestPipeline_ConflictLedger_Written` | Conflicts recorded in DB with correct hashes |
+| `TestPipeline_ConflictTracking_Written` | Conflicts recorded in DB with correct hashes |
 
 ### 5.2 Config Integration
 
@@ -688,7 +688,7 @@ These tests run the full sync pipeline — delta fetch through execution — wit
 | `TestConfigIntegration_FilterEngineFromConfig` | Config patterns → sync/ filter engine evaluates correctly |
 | `TestConfigIntegration_CrossDriveValidation` | Two drives with same sync_dir → error |
 | `TestConfigIntegration_HotReload_SIGHUP` | Send SIGHUP → config re-read → filter engine re-init |
-| `TestConfigIntegration_HotReload_StaleFiles` | Filter change → stale files detected → ledger populated |
+| `TestConfigIntegration_HotReload_StaleFiles` | Filter change → stale files detected → table populated |
 | `TestConfigIntegration_HotReload_BandwidthImmediate` | Bandwidth change → transfer manager updated immediately |
 | `TestConfigIntegration_HotReload_NonReloadable` | sync_dir change → error logged, restart required |
 | `TestConfigIntegration_Wizard_Interactive` | Simulated wizard flow → valid config written |
@@ -819,7 +819,7 @@ func setupE2ETest(t *testing.T) (client *Client, remotePath string) {
 | `TestE2E_Upload_NewFile` | Create local file → sync → verify remote exists | Upload path, hash verification, DB updated |
 | `TestE2E_Download_NewFile` | Create remote file via API → sync → verify local | Download path, atomic write, hash match |
 | `TestE2E_Bidirectional` | Create 2 local + 2 remote → sync → both sides complete | All 4 files present on both sides |
-| `TestE2E_Conflict_EditEdit` | Edit same file locally and remotely → sync | Conflict file created, conflict ledger entry |
+| `TestE2E_Conflict_EditEdit` | Edit same file locally and remotely → sync | Conflict file created, conflict tracking entry |
 | `TestE2E_Delete_LocalPropagates` | Sync → delete local file → sync again → verify remote gone | Remote deletion propagated |
 | `TestE2E_Delete_RemotePropagates` | Sync → delete remote file via API → sync again → verify local gone | Local deletion, hash-before-delete |
 | `TestE2E_MoveRename` | Sync → rename local file → sync → verify remote renamed | Move detection, single remote move (not delete+create) |
@@ -961,7 +961,7 @@ func TestChaos_S4_HashBeforeDeleteGuard(t *testing.T) {
         "S4 violation: modified file was deleted despite hash mismatch")
 
     // Verify: conflict file created OR original preserved
-    // Verify: conflict ledger entry created
+    // Verify: conflicts table entry created
     conflicts := store.ListUnresolvedConflicts()
     require.NotEmpty(t, conflicts, "S4: conflict should be recorded")
 }
@@ -1172,7 +1172,7 @@ Stress tests use `//go:build stress` and run only in the nightly CI job. They ve
 | `TestStress_ConcurrentDrives_5` | 5 drives syncing simultaneously | No DB contention, each drive isolated |
 | `TestStress_RapidChanges_1000` | 1,000 filesystem events in 1 second | Debounce coalesces, no event loss |
 | `TestStress_DeltaPages_1000` | Delta response with 1,000 pages | All pages processed, token saved once |
-| `TestStress_ConflictBurst_100` | 100 simultaneous conflicts | All recorded in ledger, no deadlock |
+| `TestStress_ConflictBurst_100` | 100 simultaneous conflicts | All recorded in conflicts table, no deadlock |
 | `TestStress_FilterSet_1000Patterns` | 1,000 skip_files patterns | Filter evaluation < 1ms per path |
 | `TestStress_WALGrowth_Bounded` | 50K writes without explicit checkpoint | WAL stays under journal_size_limit (64MiB) |
 

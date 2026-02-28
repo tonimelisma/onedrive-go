@@ -10,7 +10,7 @@ OneDrive-first, extensible. We solve OneDrive deeply — every API quirk, every 
 
 ### Value Proposition
 
-- **Safe**: Conservative defaults, conflict ledger, big-delete protection, dry-run, never lose user data
+- **Safe**: Conservative defaults, conflict tracking, big-delete protection, dry-run, never lose user data
 - **Fast**: Parallel transfers, parallel checking, efficient delta processing, <100MB memory for 100K files
 - **Tested**: Comprehensive automated E2E tests against live OneDrive, not just unit tests against mocks
 
@@ -295,7 +295,7 @@ All sync modes are flags on the `sync` verb. No separate verbs for direction or 
 
 ### Bidirectional Sync (default)
 
-`onedrive-go sync` — full two-way synchronization. Changes on either side are detected and propagated. Conflicts are detected and tracked in the conflict ledger.
+`onedrive-go sync` — full two-way synchronization. Changes on either side are detected and propagated. Conflicts are detected and tracked in the conflict tracking.
 
 ### Download-Only
 
@@ -348,10 +348,10 @@ A conflict exists when the same file has been modified on both the local filesys
 
 1. The remote version is downloaded with the original filename
 2. The local version is renamed to `<filename>.conflict-<YYYYMMDD-HHMMSS>.<ext>`
-3. The conflict is recorded in the conflict ledger (part of the sync database)
-4. The conflict ledger tracks: file path, conflict timestamp, local hash, remote hash, resolution status
+3. The conflict is recorded in the conflicts table (part of the sync database)
+4. The conflicts table tracks: file path, conflict timestamp, local hash, remote hash, resolution status
 
-### Conflict Ledger
+### Conflict Tracking
 
 Unlike other tools that create conflict files and forget about them, onedrive-go tracks every conflict and ensures the user addresses them:
 
@@ -749,7 +749,7 @@ All 12+ known Microsoft Graph API quirks are handled from day one.
 |--------|--------|-------------|
 | **Scope** | 70+ backends, jack-of-all-trades | OneDrive specialist |
 | **Bidirectional sync** | bisync (experimental, alpha-quality) | First-class, production-grade |
-| **Conflict handling** | 7 configurable strategies, no tracking | Keep-both + conflict ledger with resolution tracking |
+| **Conflict handling** | 7 configurable strategies, no tracking | Keep-both + conflict tracking with resolution tracking |
 | **Shared folders** | Not supported for OneDrive | Supported (post-MVP) |
 | **OneDrive API quirks** | Minimal workarounds | All 12+ known quirks handled |
 | **Real-time sync** | No daemon, no filesystem watching | `sync --watch` with WebSocket + inotify/FSEvents |
@@ -774,7 +774,7 @@ All 12+ known Microsoft Graph API quirks are handled from day one.
 | **Initial sync** | Reports of 16+ hours | Parallel delta + parallel transfers from start |
 | **Config changes** | Require destructive `--resync` | Config re-read each sync cycle, changes take effect automatically |
 | **Filtering** | 7 layers with confusing interactions | Layered but predictable: config -> sync_paths -> .odignore markers |
-| **Conflict handling** | Creates backup files, forgets about them | Conflict ledger with resolution tracking |
+| **Conflict handling** | Creates backup files, forgets about them | Conflict tracking with resolution tracking |
 | **Multi-account** | Separate process per account | Single `sync --watch`, multiple drives |
 | **CLI design** | Monolithic: flags control everything | Unix-style verbs: `ls`, `get`, `put`, `sync` |
 | **GUI integration** | stdout parsing (fragile, one-way) | Control socket API (post-MVP, structured, bidirectional) |
@@ -783,7 +783,7 @@ All 12+ known Microsoft Graph API quirks are handled from day one.
 | **Real-time remote** | WebSocket (v2.5.8+) | WebSocket from day one |
 | **Shared folders** | Supported (complex, fragile) | Post-MVP, designed to be robust |
 | **Dry-run** | Supported | Supported (MVP) |
-| **Safety** | Big-delete, .nosync, recycle bin | Big-delete, .odignore, recycle bin, conflict ledger, disk space reservation |
+| **Safety** | Big-delete, .nosync, recycle bin | Big-delete, .odignore, recycle bin, conflict tracking, disk space reservation |
 | **Packaging** | deb/rpm/AUR/Docker/Homebrew | Same targets, plus static binary |
 | **Testing** | Manual testing, limited CI | Automated E2E tests against live OneDrive |
 | **Dependencies** | D runtime, libcurl, libsqlite3 | Zero runtime dependencies (static Go binary) |
@@ -818,7 +818,7 @@ The minimum to be useful. Start small, add based on demand.
 - [ ] Download-only and upload-only modes
 - [ ] Local filesystem monitoring (inotify / FSEvents)
 - [ ] Remote change detection (WebSocket + polling fallback)
-- [ ] Conflict detection with conflict ledger
+- [ ] Conflict detection with conflict tracking
 - [ ] Filtering: config-based patterns + .odignore marker files + selective sync paths
 - [ ] Parallel transfers (configurable, default 8)
 - [ ] Resumable uploads and downloads

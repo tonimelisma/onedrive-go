@@ -32,7 +32,7 @@ Architectural and design decisions for onedrive-go. Referenced from [CLAUDE.md](
 - **CLI design**: Unix-style verbs (`ls`, `get`, `put`, `sync`) — see PRD
 - **Config format**: TOML (via BurntSushi/toml), flat layout with quoted drive sections
 - **Sync database**: SQLite baseline DB with WAL mode, one DB per drive
-- **Conflict handling**: Keep both + conflict ledger with resolution tracking
+- **Conflict handling**: Keep both + conflict tracking with resolution tracking
 - **Multi-account**: Accounts (auth) and drives (sync) are separate concepts. `--account` for auth commands, `--drive` for everything else. Single config file, single daemon, multiple drives. See [accounts.md](accounts.md) for the full design.
 - **Canonical drive identifiers**: `type:email[:site:library]` format derived from real data (e.g., `personal:toni@outlook.com`, `sharepoint:alice@contoso.com:marketing:Documents`). No arbitrary names. `:` replaced with `_` in filenames.
 - **Transfers**: Parallel (default 8 each for uploads/downloads/checkers), with bandwidth scheduling

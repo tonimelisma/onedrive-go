@@ -243,7 +243,7 @@ See [event-driven-rationale.md](event-driven-rationale.md) Parts 5.4-5.7 for ful
 
 Takes an `ActionPlan` and executes it against the API and filesystem. Produces `[]Outcome` -- never writes to the database.
 
-**DAG execution with dependency tracking**: Actions are dispatched based on dependency satisfaction, not fixed phase ordering. The planner emits explicit dependency edges: parent folder must exist before child operations, children must be removed before parent folder deletion, move target parent must exist. All action types are eligible to run concurrently when their dependencies are met. A persistent ledger (`action_queue` table) tracks action lifecycle; an in-memory dependency tracker provides instant dispatch when dependencies are satisfied. Lane-based worker dispatch routes small files and folder operations to an interactive lane and large transfers to a bulk lane, with a shared overflow pool ensuring fairness. See [concurrent-execution.md](concurrent-execution.md) for the full execution architecture.
+**DAG execution with dependency tracking**: Actions are dispatched based on dependency satisfaction, not fixed phase ordering. The planner emits explicit dependency edges: parent folder must exist before child operations, children must be removed before parent folder deletion, move target parent must exist. All action types are eligible to run concurrently when their dependencies are met. An in-memory DepTracker tracks action dependencies and dispatches ready actions to workers via channels, providing instant dispatch when dependencies are satisfied. Workers report outcomes through an in-memory result channel. Lane-based worker dispatch routes small files and folder operations to an interactive lane and large transfers to a bulk lane, with a shared overflow pool ensuring fairness. See [concurrent-execution.md](concurrent-execution.md) for the full execution architecture.
 
 **Key properties**:
 - Database writes happen only in the BaselineManager, committing each action outcome individually as workers complete transfers
@@ -263,13 +263,13 @@ The **sole writer** to the database. Loads the baseline at cycle start and commi
 
 **Key properties**:
 - Single writer -- all database concurrency concerns are structurally avoided
-- Per-action atomic transaction: each outcome + ledger status update commit together. Delta token committed separately when all actions for a cycle complete.
+- Per-action atomic transaction: each outcome commits the baseline row immediately. Delta token committed separately when all actions for a cycle complete.
 - After each commit, the in-memory baseline cache is updated for consistency
 - Delta token is committed only when all cycle actions are done
 
 **Operations**:
 - `Load()`: Reads entire baseline table into memory (`Baseline.ByPath` + `Baseline.ByID` maps)
-- `CommitOutcome(outcome, ledgerID)`: Applies a single successful outcome and marks the ledger action as done in the same transaction
+- `CommitOutcome(outcome)`: Applies a single successful outcome to the baseline in an atomic transaction
 - `CommitDeltaToken(token, driveID)`: Saves the delta token when all cycle actions are complete
 - `GetDeltaToken()`: Returns saved delta token for a drive
 
@@ -494,10 +494,9 @@ cmd/onedrive-go/  -->  graph.Client  -->  Microsoft Graph API
    (steps 2-3 run concurrently)
 4. ChangeBuffer.AddAll() + Flush()  -> []PathChanges (batched by path)
 5. Planner.Plan()                   -> ActionPlan with dependency DAG
-6. Write actions to persistent ledger
-7. Populate dependency tracker from ledger
-8. Workers execute concurrently     -> per-action baseline commits
-9. All actions complete             -> commit delta token
+6. Populate DepTracker with actions and dependency edges
+7. Workers execute concurrently     -> per-action baseline commits
+8. All actions complete             -> commit delta token
 ```
 
 ### 5.3 Watch Mode
@@ -508,7 +507,7 @@ cmd/onedrive-go/  -->  graph.Client  -->  Microsoft Graph API
 3. LocalObserver.Watch()            -> continuous ChangeEvent stream
 4. ChangeBuffer debounces (2s)      -> []PathChanges
 5. Planner.Plan()                   -> ActionPlan (incremental)
-6. Deduplicate against in-flight actions, write to ledger, add to tracker
+6. Deduplicate against in-flight actions, populate DepTracker
 7. Workers drain continuously       -> per-action baseline commits
 8. Observers and workers run independently
 9. Loop from step 4 on buffer ready
@@ -535,7 +534,7 @@ Pause:
 
 Resume:
   - Flush buffer (potentially large batch)
-  - Plan -> write to ledger -> tracker dispatches
+  - Plan -> populate DepTracker -> workers dispatch
   - Workers resume pulling from tracker
   - Normal watch loop resumes
 
@@ -598,8 +597,8 @@ rootCtx
 
 ### 6.4 Graceful Shutdown
 
-- **First signal** (SIGINT/SIGTERM): Cancel root context. In-flight transfers finish up to a configurable timeout. Completed actions already committed to baseline individually. Persistent ledger preserves in-flight action state. Upload sessions and partial download progress resume on restart. Exit cleanly.
-- **Second signal**: Immediate cancellation. No checkpoint save. SQLite WAL ensures DB consistency. Ledger still preserves action state for resume on next start.
+- **First signal** (SIGINT/SIGTERM): Cancel root context. In-flight transfers finish up to a configurable timeout. Completed actions already committed to baseline individually. Upload sessions persisted in SessionStore for crash resume. Partial downloads resume via `.partial` files. Exit cleanly.
+- **Second signal**: Immediate cancellation. No checkpoint save. SQLite WAL ensures DB consistency. Delta token not advanced, so the idempotent planner re-plans the same delta on restart and skips already-committed actions.
 - **SIGHUP**: Reload configuration. Re-initialize filter engine and bandwidth limiter. Detect stale files from filter changes. Continue running.
 
 ---
@@ -645,15 +644,14 @@ Per-side hashes (`local_hash`, `remote_hash`) handle SharePoint enrichment nativ
 | Table | Purpose | Writer |
 |---|---|---|
 | `delta_tokens` | Delta cursor per drive | BaselineManager (when all cycle actions done) |
-| `action_queue` | Execution ledger (action lifecycle, crash recovery, progress) | BaselineManager (per-action commits) |
-| `conflicts` | Conflict ledger with resolution tracking | BaselineManager |
+| `conflicts` | Conflict tracking with resolution history | BaselineManager |
 | `stale_files` | Filter-change tracking | BaselineManager |
 | `upload_sessions` | _(Dropped in migration 00002)_ | — |
 | `change_journal` | Debugging audit trail (optional, append-only) | BaselineManager |
 | `config_snapshots` | Filter change detection | Engine (on config load) |
 | `schema_migrations` | Schema version tracking | Engine (on startup) |
 
-**Critical property**: The delta token is committed only when all actions for a cycle are done. Individual per-action commits update the baseline and ledger status but do not advance the delta token. If the process crashes mid-cycle, the token is not advanced and the same delta is re-fetched (idempotent).
+**Critical property**: The delta token is committed only when all actions for a cycle are done. Individual per-action commits update the baseline but do not advance the delta token. If the process crashes mid-cycle, the token is not advanced and the same delta is re-fetched. The idempotent planner skips actions whose outcomes are already reflected in the baseline, so no work is duplicated.
 
 See [data-model.md](data-model.md) for complete schema definitions.
 
@@ -670,11 +668,11 @@ The baseline serves as the "old state" for move detection -- it is read-only dur
 | Crash Point | Recovery |
 |---|---|
 | During Load/FetchRemote/ScanLocal/Plan | No state changed. Re-run cycle. |
-| During Execute | Completed actions already committed to baseline individually. Remaining actions in ledger with pending/claimed status. On restart: load ledger, reclaim stale claims, resume execution. No full re-observation needed. |
-| During per-action commit | SQLite transaction: both baseline and ledger update or neither. If rolled back: action remains claimed, reclaimed on restart. |
+| During Execute | Completed actions already committed to baseline individually. Delta token not advanced. On restart: same delta re-fetched, idempotent planner skips already-committed actions, re-plans only incomplete ones. Upload sessions resume via SessionStore; downloads resume via `.partial` files. |
+| During per-action commit | SQLite transaction is atomic: baseline update either commits or rolls back. If rolled back: action treated as incomplete, re-planned on restart via idempotent planner. |
 | During Watch (between cycles) | Events re-observed by watchers. Debounce/dedup handles redundancy. Completed actions persist in baseline. |
 
-Upload sessions are persisted BEFORE upload begins and tracked in the ledger's `session_url` column. On crash recovery: check expiry, resume valid sessions from `bytes_done` offset, discard expired ones. Downloads resume via `.partial` file size + HTTP `Range` header.
+Upload sessions are persisted in the file-based SessionStore BEFORE upload begins. On crash recovery: check expiry, resume valid sessions from the stored byte offset, discard expired ones. Downloads resume via `.partial` file size + HTTP `Range` header.
 
 ---
 
@@ -852,7 +850,7 @@ Item path
 INCLUDED
 ```
 
-The filter is applied in the Planner to both remote and local items symmetrically. When filter rules change, previously-included files that are now excluded are tracked in the stale files ledger (user nagged, never auto-deleted).
+The filter is applied in the Planner to both remote and local items symmetrically. When filter rules change, previously-included files that are now excluded are tracked for user visibility (user nagged, never auto-deleted).
 
 ---
 
@@ -912,6 +910,6 @@ Sustained ~20 MB. Processes individual change batches, not full snapshots. Memor
 | E20 | Filter applied in Planner, not observers | Symmetric filtering of remote AND local items. Hot-reloadable without restarting observers. |
 | E21 | Conflict copies use timestamp naming | `file.conflict-YYYYMMDD-HHMMSS.ext`. Self-documenting, shorter than hostname-based. |
 | E22 | Per-action commits replace batch commits | Incremental progress: each completed action is immediately durable. No work lost on crash. Delta token committed separately when all cycle actions done. |
-| E23 | Persistent ledger for execution state | `action_queue` table provides crash resume, upload session tracking, progress reporting, and post-mortem debuggability. |
+| E23 | Idempotent planner as crash recovery | Delta token not advanced until all actions complete; same delta re-fetched on restart, planner skips already-committed baseline entries. SessionStore persists upload URLs. `.partial` files enable download resume. |
 | E24 | In-memory dependency tracker for scheduling | Zero dispatch latency when dependencies are satisfied. Lane-based fairness. Per-action cancellation via `context.CancelFunc`. |
 | E25 | Lane-based workers (interactive + bulk) | Fairness between small and large transfers. Reserved capacity per lane prevents starvation. Shared overflow pool maximizes utilization. |

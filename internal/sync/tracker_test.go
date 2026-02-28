@@ -648,6 +648,37 @@ func TestDepTracker_CleanupCycle(t *testing.T) {
 	}
 }
 
+// TestDepTracker_SuppressedDepFilteredByEngine verifies that when a dependency
+// index is omitted (because the engine suppressed it), the dependent action
+// dispatches immediately. Before the fix, the engine passed phantom dep IDs
+// for suppressed actions — the tracker silently ignored them, causing dependents
+// to dispatch without waiting for (non-existent) completions.
+func TestDepTracker_SuppressedDepFilteredByEngine(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, 10, testLogger(t))
+
+	// Simulate engine's processBatch: action 0 is suppressed (not added),
+	// action 1 depends on action 0 but the engine filters out the suppressed
+	// dep ID before calling Add.
+	dt.Add(&Action{
+		Type: ActionDownload, Path: "child.txt",
+		DriveID: driveid.New("d"), ItemID: "i2",
+	}, 1, nil, "") // no deps — the suppressed dep was filtered out
+
+	// Action 1 should dispatch immediately (no dependencies).
+	select {
+	case ta := <-dt.Interactive():
+		if ta.ID != 1 {
+			t.Fatalf("expected action 1, got %d", ta.ID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("action with filtered-out suppressed dep should dispatch immediately")
+	}
+
+	dt.Complete(1)
+}
+
 func TestDepTracker_CycleDone_UnknownCycle(t *testing.T) {
 	t.Parallel()
 

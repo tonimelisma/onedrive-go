@@ -25,14 +25,12 @@ The database is a checkpoint, not a coordination mechanism.
 |---|---|---|
 | `baseline` | Confirmed synced state per path | Updated per-action as each transfer completes |
 | `delta_tokens` | Graph API delta cursor per drive | Committed when all actions for a cycle complete |
-| `conflicts` | Conflict ledger with resolution history | Append on detection, update on resolution |
-| `stale_files` | Files excluded by filter changes | Append on detection, remove on user action |
-| `upload_sessions` | Crash recovery for large uploads | Created pre-upload, removed post-upload |
-| `change_journal` | Debugging audit trail (optional) | Append-only, compacted periodically |
-| `config_snapshots` | Filter change detection | Updated on config load |
+| `conflicts` | Conflict tracking with resolution history | Append on detection, update on resolution |
 | `schema_migrations` | Schema version tracking | Updated on startup |
 
-**9 tables.** The dominant table (`baseline`) has 11 columns.
+**4 tables.** The dominant table (`baseline`) has 11 columns. Upload sessions
+are tracked via a file-based `SessionStore` (JSON files in the data directory),
+not in the database.
 
 ### Single Writer: BaselineManager
 
@@ -40,10 +38,10 @@ All database writes flow through the `BaselineManager`. The observers (remote
 and local) produce change events. The planner produces an action plan. The
 executor produces outcomes. Only the `BaselineManager` applies outcomes to the
 database. Each completed action is committed individually --- a per-action
-atomic transaction updates the baseline and the action ledger status together.
-The delta token is committed separately when all actions for a cycle complete.
-Because all database writes go through the single `BaselineManager`, there is
-never more than one writer, avoiding `SQLITE_BUSY` errors by construction.
+atomic transaction updates the baseline row for the affected path. The delta
+token is committed separately when all actions for a cycle complete. Because
+all database writes go through the single `BaselineManager`, there is never
+more than one writer, avoiding `SQLITE_BUSY` errors by construction.
 
 ---
 
@@ -81,7 +79,7 @@ Only the state DB is per-drive.
 
 The database uses WAL (Write-Ahead Logging) mode with `synchronous = FULL` for
 crash-safe durability. WAL mode allows concurrent readers while the single
-`BaselineManager` writer holds the write lock. See section 12 for the full
+`BaselineManager` writer holds the write lock. See section 9 for the full
 pragma list.
 
 ### Migration Strategy
@@ -108,12 +106,14 @@ On first run with a new drive:
 ### Crash Recovery
 
 SQLite WAL mode ensures the database is always in a consistent state after a
-crash. On restart, the sync engine loads the baseline and checks the action
-queue ledger for pending or in-flight actions. Completed actions are already
-committed to baseline individually. Remaining actions are loaded from the
-ledger and resumed without full re-observation. The delta token for any
-incomplete cycle has not been advanced, so the same delta can be re-fetched
-if needed (idempotent).
+crash. On restart, the sync engine loads the baseline and runs a fresh
+observation + planning cycle. Because the delta token for any incomplete cycle
+has not been advanced, the same delta is re-fetched from the Graph API. The
+idempotent planner detects actions that were already completed (their baseline
+rows already reflect the synced state) and skips them, producing only the
+remaining work. Upload sessions for large files are tracked via file-based
+`SessionStore` and can be resumed if the session has not expired and the local
+file has not changed.
 
 ---
 
@@ -228,7 +228,7 @@ to full enumeration.
 
 ---
 
-## 5. Conflict Ledger
+## 5. Conflict Tracking
 
 Per-file conflict tracking. The `history` column stores a JSON array of
 resolution events, keeping a full audit trail without requiring an additional
@@ -286,193 +286,25 @@ CLI command and debugging.
 
 ---
 
-## 6. Stale Files Ledger
+## 6. Upload Sessions (File-Based)
 
-Tracks files that became excluded by filter changes but still exist locally.
-The sync engine **never auto-deletes** stale files --- users must explicitly
-dispose of each via the CLI.
+Resumable upload sessions for large files are tracked via the `SessionStore`,
+which persists session state as individual JSON files in the data directory
+(not in the database). Each session file records the upload URL, byte offset,
+file hash, and expiry. The `SessionStore` provides `Save`, `Load`, `Delete`,
+and `CleanStale` operations with atomic writes (write-to-temp + rename).
 
-```sql
-CREATE TABLE stale_files (
-    id          TEXT    PRIMARY KEY,   -- UUID (RFC 4122)
-    path        TEXT    NOT NULL UNIQUE,  -- local file path (unique: one entry per path)
-    reason      TEXT    NOT NULL,      -- why it became stale (e.g., "excluded by skip_files pattern *.tmp")
-    detected_at INTEGER NOT NULL CHECK(detected_at > 0),  -- Unix nanoseconds
-    size        INTEGER                -- file size in bytes (for display)
-);
-```
-
-The `UNIQUE(path)` constraint prevents duplicate entries when the same file
-becomes stale across multiple config changes. On conflict, the existing row's
-reason and timestamp are updated.
+On startup, expired sessions are cleaned up. Active sessions are resumed only
+if the local file's current hash matches the hash recorded at session start
+(detecting local modifications during the crash window). If the hash differs,
+the session is discarded and the file is re-uploaded from scratch on the next
+sync cycle.
 
 ---
 
-## 7. Upload Sessions
+## 7. Indexes and Performance
 
-Tracks resumable upload sessions for large files. The `session_url` is
-pre-authenticated (no Bearer token needed). Fragments must be 320 KiB
-multiples.
-
-```sql
-CREATE TABLE upload_sessions (
-    id              TEXT    PRIMARY KEY, -- UUID (RFC 4122)
-    drive_id        TEXT    NOT NULL,
-    item_id         TEXT,               -- null for new file uploads (assigned after completion)
-    local_path      TEXT    NOT NULL,    -- source file on local filesystem
-    local_hash      TEXT    NOT NULL,    -- QuickXorHash of local file at session start
-    session_url     TEXT    NOT NULL,    -- pre-authenticated upload URL from Graph API
-    expiry          INTEGER NOT NULL,    -- session expiration (Unix nanoseconds)
-    bytes_uploaded  INTEGER NOT NULL DEFAULT 0,
-    total_size      INTEGER NOT NULL,    -- total file size in bytes
-    created_at      INTEGER NOT NULL CHECK(created_at > 0)  -- Unix nanoseconds
-);
-```
-
-On startup, expired sessions (`expiry < now`) are cleaned up. Active sessions
-are resumed from `bytes_uploaded` only if the local file's current hash matches
-`local_hash` (detecting local modifications during the crash window). If the
-hash differs, the session is discarded and the file is re-uploaded from scratch
-on the next sync cycle.
-
----
-
-## 8. Action Queue (Execution Ledger)
-
-The persistent execution ledger tracks all planned actions through their
-lifecycle. Each row represents a single action from the planner's output.
-The ledger provides crash recovery (resume from exact state), upload session
-tracking, progress reporting, and post-mortem debugging.
-
-```sql
-CREATE TABLE action_queue (
-    id           INTEGER PRIMARY KEY,
-    cycle_id     TEXT    NOT NULL,                -- groups actions from one planning pass
-    action_type  TEXT    NOT NULL CHECK(action_type IN (
-                     'download', 'upload', 'local_delete', 'remote_delete',
-                     'local_move', 'remote_move', 'folder_create',
-                     'conflict', 'update_synced', 'cleanup'
-                 )),
-    path         TEXT    NOT NULL,                -- target path (relative to sync root)
-    old_path     TEXT,                            -- for moves: source path
-    status       TEXT    NOT NULL DEFAULT 'pending'
-                         CHECK(status IN ('pending', 'claimed', 'done', 'failed', 'canceled')),
-    depends_on   TEXT,                            -- JSON array of action IDs
-    drive_id     TEXT,                            -- normalized drive ID
-    item_id      TEXT,                            -- server-assigned item ID
-    parent_id    TEXT,                            -- server parent ID
-    hash         TEXT,                            -- expected content hash
-    size         INTEGER,                         -- file size in bytes
-    mtime        INTEGER,                         -- expected mtime (Unix nanoseconds)
-    session_url  TEXT,                            -- upload session URL for resume
-    bytes_done   INTEGER NOT NULL DEFAULT 0,      -- transfer progress (bytes)
-    claimed_at   INTEGER,                         -- when a worker claimed this action
-    completed_at INTEGER,                         -- when the action finished
-    error_msg    TEXT                             -- error description for failed actions
-);
-
-CREATE INDEX idx_action_queue_status ON action_queue(status);
-CREATE INDEX idx_action_queue_cycle ON action_queue(cycle_id);
-CREATE INDEX idx_action_queue_path ON action_queue(path);
-```
-
-### Status Lifecycle
-
-```
-pending  --[worker claims]--> claimed  --[success]--> done
-                                |
-                                +------[failure]--> failed
-                                |
-                                +------[canceled]--> canceled
-
-On restart:
-  claimed (stale) --[reclaim after timeout]--> pending
-```
-
-- **pending**: Waiting for dependencies to be satisfied and a worker to claim.
-- **claimed**: A worker is actively executing. `claimed_at` records when.
-- **done**: Completed successfully. Baseline updated in the same transaction.
-- **failed**: Failed after all retries. Error in `error_msg`.
-- **canceled**: Superseded (e.g., file changed while upload was in-flight).
-
-### Crash Recovery
-
-On restart, the ledger is the source of truth: `done` actions are already in
-baseline, `pending` actions are loaded into the dependency tracker,
-`claimed` actions are reclaimed to `pending` after a stale timeout (default
-30 minutes). For uploads with `session_url`: the upload session endpoint is
-queried to determine resume point. For downloads: the `.partial` file size
-determines the resume offset via HTTP `Range` header.
-
-### Per-Action Commit
-
-Each completed action is committed in a single SQLite transaction that spans
-both the baseline and the ledger:
-
-```sql
-BEGIN;
-  INSERT OR REPLACE INTO baseline (...) VALUES (...);
-  UPDATE action_queue SET status = 'done', completed_at = ? WHERE id = ?;
-COMMIT;
-```
-
-The delta token is committed separately when all actions for a `cycle_id`
-reach `done` status.
-
-See [concurrent-execution.md](concurrent-execution.md) for the full execution
-architecture specification.
-
----
-
-## 9. Change Journal
-
-An optional append-only table that records every change event observed during
-sync cycles. Provides a full audit trail for debugging sync issues in
-production. Not required for correct operation --- the sync engine works
-identically whether the journal is enabled or disabled.
-
-```sql
-CREATE TABLE change_journal (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp   INTEGER NOT NULL,    -- when the event was observed (Unix nanoseconds)
-    source      TEXT    NOT NULL CHECK(source IN ('remote', 'local')),
-    change_type TEXT    NOT NULL CHECK(change_type IN ('create', 'modify', 'delete', 'move')),
-    path        TEXT    NOT NULL,
-    old_path    TEXT,                -- for moves
-    item_id     TEXT,                -- for remote events
-    hash        TEXT,
-    size        INTEGER,
-    mtime       INTEGER,            -- observed mtime (useful for debugging time-based issues)
-    cycle_id    TEXT                 -- groups events from the same sync cycle
-);
-```
-
-**Compaction**: Entries older than a configurable retention period (default 30
-days) are periodically deleted. The journal is never read during normal sync
-operation --- it exists purely for post-hoc debugging and the `onedrive-go
-journal` command (future).
-
----
-
-## 10. Config Snapshots
-
-Detects configuration changes that require stale file tracking. When filter
-patterns, sync paths, or other filter-affecting settings change, the sync
-engine compares current values against this snapshot to identify newly-stale
-files.
-
-```sql
-CREATE TABLE config_snapshots (
-    key         TEXT    PRIMARY KEY,  -- config key (e.g., "skip_files", "sync_paths")
-    value       TEXT    NOT NULL      -- serialized config value
-);
-```
-
----
-
-## 11. Indexes and Performance
-
-### 11.1 Primary Indexes
+### 7.1 Primary Indexes
 
 ```sql
 -- Move detection: look up baseline entry by server-assigned item_id
@@ -483,9 +315,6 @@ CREATE INDEX idx_baseline_parent ON baseline(parent_id);
 
 -- Conflict filtering by resolution status (for `conflicts` CLI command)
 CREATE INDEX idx_conflicts_resolution ON conflicts(resolution);
-
--- Change journal queries by time range (primary debugging axis)
-CREATE INDEX idx_journal_timestamp ON change_journal(timestamp);
 ```
 
 **Indexes NOT included** (evaluated and rejected during first-principles review):
@@ -494,10 +323,8 @@ CREATE INDEX idx_journal_timestamp ON change_journal(timestamp);
 |-----------|-------------|
 | `idx_baseline_path_prefix ON baseline(path)` | Redundant. `path` is the PRIMARY KEY; SQLite's PK B-tree already supports prefix scans (`LIKE 'prefix/%'`) natively. A separate index doubles write overhead for zero query benefit. |
 | `idx_conflicts_drive ON conflicts(drive_id)` | Redundant. Each drive has its own database file, so `drive_id` is identical for every row. An index on a constant column has no selectivity. |
-| `idx_journal_path ON change_journal(path)` | Excessive write amplification on a high-volume append-only table. When debugging a specific file, filter by timestamp first (indexed), then by path within the bounded result set. |
-| `idx_journal_cycle ON change_journal(cycle_id)` | Same concern. Cycle-based queries are rare and can use the timestamp index (cycles are time-bounded). If needed later, add via migration. |
 
-### 11.2 Performance Guidelines
+### 7.2 Performance Guidelines
 
 **WAL checkpointing**: The `BaselineManager` performs a WAL checkpoint after
 each commit transaction. Because all writes happen in a single transaction per
@@ -511,9 +338,9 @@ for the lifetime of the database connection. This avoids re-parsing SQL on
 every call.
 
 **Per-action commits**: The `BaselineManager` commits each completed action
-individually. Each per-action transaction updates the baseline and the action
-ledger status together, minimizing fsync overhead per commit while ensuring
-incremental progress is durable.
+individually. Each per-action transaction updates the baseline row for the
+affected path, minimizing fsync overhead per commit while ensuring incremental
+progress is durable.
 
 **Path-prefix queries**: The baseline table's PRIMARY KEY on `path` supports
 efficient prefix matching for queries like `SELECT * FROM baseline WHERE path
@@ -523,7 +350,7 @@ additional index is needed.
 
 ---
 
-## 12. Three-Way Merge Data Flow
+## 8. Three-Way Merge Data Flow
 
 The planner constructs a `PathView` for each changed path by combining the
 in-memory baseline snapshot with change events. This `PathView` is the input
@@ -565,7 +392,7 @@ what makes SharePoint enrichment handling correct by construction.
 | No | Yes | -- | Pull: download remote to local |
 | Yes | No | -- | Push: upload local to remote |
 | Yes | Yes | Yes | False conflict: both sides converged. Update baseline. |
-| Yes | Yes | No | **Conflict**: record in conflict ledger, apply resolution policy |
+| Yes | Yes | No | **Conflict**: record in conflicts table, apply resolution policy |
 
 ### False Conflict Detection
 
@@ -600,7 +427,7 @@ is committed separately when all actions for a cycle are done.
 
 ---
 
-## 13. Conventions
+## 9. Conventions
 
 ### SQLite Pragmas
 
@@ -739,76 +566,6 @@ CREATE TABLE conflicts (
     history         TEXT
 );
 
-CREATE TABLE stale_files (
-    id          TEXT    PRIMARY KEY,
-    path        TEXT    NOT NULL UNIQUE,
-    reason      TEXT    NOT NULL,
-    detected_at INTEGER NOT NULL CHECK(detected_at > 0),
-    size        INTEGER
-);
-
-CREATE TABLE upload_sessions (
-    id              TEXT    PRIMARY KEY,
-    drive_id        TEXT    NOT NULL,
-    item_id         TEXT,
-    local_path      TEXT    NOT NULL,
-    local_hash      TEXT    NOT NULL,
-    session_url     TEXT    NOT NULL,
-    expiry          INTEGER NOT NULL,
-    bytes_uploaded  INTEGER NOT NULL DEFAULT 0,
-    total_size      INTEGER NOT NULL,
-    created_at      INTEGER NOT NULL CHECK(created_at > 0)
-);
-
-CREATE TABLE change_journal (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp   INTEGER NOT NULL,
-    source      TEXT    NOT NULL CHECK(source IN ('remote', 'local')),
-    change_type TEXT    NOT NULL CHECK(change_type IN ('create', 'modify', 'delete', 'move')),
-    path        TEXT    NOT NULL,
-    old_path    TEXT,
-    item_id     TEXT,
-    hash        TEXT,
-    size        INTEGER,
-    mtime       INTEGER,
-    cycle_id    TEXT
-);
-
-CREATE TABLE config_snapshots (
-    key         TEXT    PRIMARY KEY,
-    value       TEXT    NOT NULL
-);
-
--- ============================================================
--- Execution ledger
--- ============================================================
-
-CREATE TABLE action_queue (
-    id           INTEGER PRIMARY KEY,
-    cycle_id     TEXT    NOT NULL,
-    action_type  TEXT    NOT NULL CHECK(action_type IN (
-                     'download', 'upload', 'local_delete', 'remote_delete',
-                     'local_move', 'remote_move', 'folder_create',
-                     'conflict', 'update_synced', 'cleanup'
-                 )),
-    path         TEXT    NOT NULL,
-    old_path     TEXT,
-    status       TEXT    NOT NULL DEFAULT 'pending'
-                         CHECK(status IN ('pending', 'claimed', 'done', 'failed', 'canceled')),
-    depends_on   TEXT,
-    drive_id     TEXT,
-    item_id      TEXT,
-    parent_id    TEXT,
-    hash         TEXT,
-    size         INTEGER,
-    mtime        INTEGER,
-    session_url  TEXT,
-    bytes_done   INTEGER NOT NULL DEFAULT 0,
-    claimed_at   INTEGER,
-    completed_at INTEGER,
-    error_msg    TEXT
-);
-
 -- ============================================================
 -- Indexes
 -- ============================================================
@@ -816,8 +573,4 @@ CREATE TABLE action_queue (
 CREATE UNIQUE INDEX idx_baseline_item ON baseline(drive_id, item_id);
 CREATE INDEX idx_baseline_parent ON baseline(parent_id);
 CREATE INDEX idx_conflicts_resolution ON conflicts(resolution);
-CREATE INDEX idx_journal_timestamp ON change_journal(timestamp);
-CREATE INDEX idx_action_queue_status ON action_queue(status);
-CREATE INDEX idx_action_queue_cycle ON action_queue(cycle_id);
-CREATE INDEX idx_action_queue_path ON action_queue(path);
 ```

@@ -1,8 +1,10 @@
 package sync
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	stdsync "sync"
 	"testing"
 	"time"
 )
@@ -437,4 +439,104 @@ func TestReportStalePartials_EmptyDir(t *testing.T) {
 
 	// Should not panic on empty directory.
 	reportStalePartials(dir, 48*time.Hour, testLogger(t))
+}
+
+func TestSessionStore_AtomicSave_NoTmpLeftover(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewSessionStore(dir, testLogger(t))
+
+	// Throttle cleanIfDue to prevent goroutine interference.
+	store.cleanMu.Lock()
+	store.lastClean = time.Now()
+	store.cleanMu.Unlock()
+
+	err := store.Save("drive-1", "/atomic.txt", &SessionRecord{
+		SessionURL: "https://example.com/atomic",
+		FileHash:   "hash",
+		FileSize:   100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify no .tmp files remain after successful save.
+	sessionDir := filepath.Join(dir, sessionSubdir)
+
+	entries, err := os.ReadDir(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, e := range entries {
+		if filepath.Ext(e.Name()) == ".tmp" {
+			t.Errorf("leftover .tmp file: %s", e.Name())
+		}
+	}
+}
+
+func TestSessionStore_ConcurrentSaveLoadDelete(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewSessionStore(dir, testLogger(t))
+
+	// Throttle cleanIfDue to prevent goroutine interference.
+	store.cleanMu.Lock()
+	store.lastClean = time.Now()
+	store.cleanMu.Unlock()
+
+	const workers = 8
+	const iterations = 50
+
+	var wg stdsync.WaitGroup
+
+	for w := range workers {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			drive := fmt.Sprintf("drive-%d", w)
+			path := fmt.Sprintf("/file-%d.txt", w)
+
+			for range iterations {
+				// Save.
+				err := store.Save(drive, path, &SessionRecord{
+					SessionURL: "https://example.com/session",
+					FileHash:   "hash",
+					FileSize:   100,
+				})
+				if err != nil {
+					t.Errorf("Save: %v", err)
+					return
+				}
+
+				// Load.
+				rec, err := store.Load(drive, path)
+				if err != nil {
+					t.Errorf("Load: %v", err)
+					return
+				}
+
+				if rec == nil {
+					// Concurrent delete may have removed it.
+					continue
+				}
+
+				if rec.FileHash != "hash" {
+					t.Errorf("unexpected hash: %q", rec.FileHash)
+				}
+
+				// Delete.
+				if err := store.Delete(drive, path); err != nil {
+					t.Errorf("Delete: %v", err)
+					return
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
 }
