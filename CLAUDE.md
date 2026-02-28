@@ -163,7 +163,7 @@ echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r 
                      └────────────────┘
 ```
 
-**Dependency direction**: `cmd/` -> `internal/*` -> `pkg/*`. No cycles. `internal/driveid/` is a leaf package (stdlib only). `internal/config/` imports `internal/graph/` for `LoadTokenMeta()` (unidirectional, no cycle). See [docs/design/architecture.md](docs/design/architecture.md).
+**Dependency direction**: `cmd/` -> `internal/*` -> `pkg/*`. No cycles. `internal/driveid/` is a leaf package (stdlib only). `internal/graph/` does NOT import `internal/config/` — callers pass token paths directly. See [docs/design/architecture.md](docs/design/architecture.md).
 
 ## Package Layout
 

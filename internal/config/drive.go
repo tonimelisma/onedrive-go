@@ -2,6 +2,7 @@ package config
 
 import (
 	"cmp"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -10,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 // Default remote path when none is specified.
@@ -207,13 +207,17 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 // readTokenMetaForSyncDir reads org_name and display_name from the token file's
 // cached metadata. Returns empty strings if the token file is missing or
 // doesn't contain metadata.
+//
+// Uses a local JSON parser instead of graph.LoadTokenMeta to avoid an
+// import cycle (config → graph → config in integration tests). Only reads
+// the "meta" field — does not validate the OAuth token.
 func readTokenMetaForSyncDir(cid driveid.CanonicalID, logger *slog.Logger) (orgName, displayName string) {
 	tokenPath := DriveTokenPath(cid.TokenCanonicalID())
 	if tokenPath == "" {
 		return "", ""
 	}
 
-	meta, err := graph.LoadTokenMeta(tokenPath)
+	meta, err := readTokenFileMeta(tokenPath)
 	if err != nil {
 		logger.Debug("could not read token meta for sync_dir computation",
 			"canonical_id", cid.String(), "error", err)
@@ -222,6 +226,24 @@ func readTokenMetaForSyncDir(cid driveid.CanonicalID, logger *slog.Logger) (orgN
 	}
 
 	return meta["org_name"], meta["display_name"]
+}
+
+// readTokenFileMeta reads just the "meta" field from a token file.
+// Separate from graph.LoadTokenMeta to avoid a config → graph import cycle.
+func readTokenFileMeta(path string) (map[string]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading token file: %w", err)
+	}
+
+	var parsed struct {
+		Meta map[string]string `json:"meta"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return nil, fmt.Errorf("decoding token file: %w", err)
+	}
+
+	return parsed.Meta, nil
 }
 
 // collectOtherSyncDirs collects sync_dir values from all drives in the config
