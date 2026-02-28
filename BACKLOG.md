@@ -120,6 +120,18 @@ Optimization deferred until profiling shows a bottleneck.
 
 | ID | Title | Resolution |
 |----|-------|------------|
+| B-238 | `hashAndEmit` retry exhaustion lacks distinct log message | **DONE** — Distinguish retry exhaustion from generic hash failure. PR #131. |
+| B-239 | `findConflict` prefix matching without ambiguity check | **DONE** — Two-pass search: exact first, then prefix with ambiguity detection. PR #131. |
+| B-240 | `resolveAllKeepBoth` and `resolveAllWithEngine` duplicate loop | **DONE** — `resolveEachConflict` shared helper. PR #131. |
+| B-241 | `addWatchesRecursive` logs Info unconditionally even on 0 failures | **DONE** — Debug when `failed==0`, Info otherwise. PR #131. |
+| B-242 | `freshDownload`/`resumeDownload` duplicate partial cleanup pattern | **DONE** — `removePartialIfNotCanceled` helper (5 call sites). PR #131. |
+| B-243 | `sessionUpload` parameter named `remotePath` is actually local path | **DONE** — Renamed to `localPath` with documenting comment. PR #131. |
+| B-244 | `DownloadToFile` hash exhaustion silently overrides remoteHash | **DONE** — `HashVerified` field on `DownloadResult`. PR #131. |
+| B-245 | `printConflictsTable`/`printConflictsJSON` no shared field extraction | **DONE** — `formatNanoTimestamp` + `toConflictJSON`. PR #131. |
+| B-246 | `conflictIDPrefixLen = 8` constant lacks "why 8" comment | **DONE** — Added entropy explanation. PR #131. |
+| B-247 | `computeStableHash` double stat undocumented | **DONE** — Added comment explaining intentional pre/post stat. PR #131. |
+| B-248 | `engine.go` plan invariant guard doesn't surface to SyncReport | **DONE** — Sets `report.Failed` and appends to `report.Errors`. PR #131. |
+| B-249 | `transfer_manager_test.go` `fmtappendf` lint suggestion | **DONE** — `fmt.Appendf(nil, ...)` instead of `[]byte(fmt.Sprintf(...))`. PR #131. |
 | B-203 | Flaky `TestWatch_NewDirectoryPreExistingFiles` | **DONE** — Emit with empty hash on `errFileChangedDuringHash`. 100/100 pass. |
 | B-074 | Drive identity verification at Engine startup | **DONE** — Phase 5.3. `verifyDriveIdentity()`. |
 | B-085 | Resumable downloads (Range header) | **DONE** — Phase 5.3. `DownloadRange` + `.partial` resume. |
