@@ -684,20 +684,20 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 **Make every command work properly.** Global flags, recursive operations, and user-facing polish. After this phase, every CLI command specified in the PRD works correctly for single-drive use.
 
-### 6.0: Global output flags — FUTURE
+### 6.0: Global output flags
 
-1. `--verbose` / `-v` flag: show individual file operations (download/upload/delete) as they happen. Currently only sync summary is shown. Wire to all commands that produce output.
-2. `--debug` flag: show HTTP request/response details, internal state, config resolution chain. Useful for diagnosing API issues. Wire `slog.LevelDebug` to stderr when set.
-3. `--quiet` / `-q` flag: suppress all output except errors. Essential for service mode (`sync --watch --quiet`). Wire to all commands including `login`, `logout`, `whoami`, `drive` (currently hardcoded `fmt.Printf`).
-4. `--json` flag: machine-readable JSON output for all commands. `login` should emit JSON events per [accounts.md §9](design/accounts.md). `ls`, `status`, `conflicts` should output JSON arrays/objects. `sync` should emit JSON summary.
-5. Refactor output layer: replace direct `fmt.Printf` calls with a `CLIOutput` abstraction that respects `--quiet`, `--verbose`, `--json`. All commands use the same output path.
+1. `--verbose` / `-v` flag — **DONE**: wired as persistent flag, sets log level to Info.
+2. `--debug` flag — **DONE**: wired as persistent flag, sets log level to Debug.
+3. `--quiet` / `-q` flag — **DONE**: wired as persistent flag, sets log level to Error. Mutually exclusive with `--verbose` and `--debug`.
+4. `--json` flag — **DONE**: wired as persistent flag, used by `ls`, `stat`, `drive list`, `drive remove`, `status`, `verify`, `conflicts`, `whoami`. Not yet wired to `login`, `sync` summary, or `logout`.
+5. Refactor output layer — **FUTURE**: replace direct `fmt.Printf` calls with a `CLIOutput` abstraction that respects `--quiet`, `--verbose`, `--json`. All commands use the same output path.
 
-### 6.1: Recursive file operations — FUTURE
+### 6.1: Recursive file operations
 
-1. `ls` pagination: `ListChildren` returns max 200 items per page. Implement `@odata.nextLink` pagination so `ls` shows all items in large directories. Current behavior silently truncates.
-2. Recursive `get <remote-folder> [local]`: download an entire remote directory tree. Walk remote children recursively via `ListChildren`, create local directory structure, download each file. Respect `--verbose` for per-file progress.
-3. Recursive `put <local-folder> [remote]`: upload an entire local directory tree. Walk local filesystem, create remote folders via `CreateFolder`, upload each file. Skip symlinks.
-4. Recursive `rm <remote-folder>`: delete a remote folder and all contents. Already has `--recursive` flag requirement (B-156 done). Verify it works correctly for deeply nested trees.
+1. `ls` pagination — **DONE**: `ListChildren` supports `@odata.nextLink` pagination (200 items per page).
+2. Recursive `get <remote-folder> [local]` — **FUTURE**: download an entire remote directory tree. Walk remote children recursively via `ListChildren`, create local directory structure, download each file. Respect `--verbose` for per-file progress.
+3. Recursive `put <local-folder> [remote]` — **FUTURE**: upload an entire local directory tree. Walk local filesystem, create remote folders via `CreateFolder`, upload each file. Skip symlinks.
+4. Recursive `rm <remote-folder>` — **DONE**: `--recursive` flag implemented (B-156).
 
 ### 6.2: Server-side move and copy — FUTURE
 
@@ -705,16 +705,16 @@ This analysis categorizes every part of the codebase by its relationship to the 
 2. `cp <source> <destination>`: server-side copy via Graph API copy endpoint (`POST /items/{id}/copy`). Returns `Location` header for async monitoring. Poll until complete for large files.
 3. Both commands work on files and folders. Both respect `--drive` flag. Both produce `--json` output when requested.
 
-### 6.3: Auth flow improvements — FUTURE
+### 6.3: Auth flow improvements — DONE
 
-1. `login --browser`: authorization code flow with localhost callback. Opens system browser to Microsoft login page, starts local HTTP server on `http://localhost:<port>/callback` to receive the auth code. Fewer steps than device code for desktop users. Falls back to device code if browser can't open.
-2. `logout --purge`: in addition to deleting the token file (current behavior), also delete the drive's state DB (SQLite baseline) and remove the drive section from `config.toml`. Confirmation prompt before destructive action. `--force` to skip prompt.
+1. `login --browser` — **DONE**: authorization code flow with PKCE + localhost callback. Opens system browser, starts local HTTP server on `http://localhost:<port>/callback`. Falls back to device code if browser can't open.
+2. `logout --purge` — **DONE**: deletes token file, state DB, and removes drive section from `config.toml`.
 
-### 6.4: Drive selection and account disambiguation — FUTURE
+### 6.4: Drive selection and account disambiguation
 
-1. `--drive` fuzzy matching: accept canonical ID (`personal:user@example.com`), alias (`work`), or shortest unique prefix (`per` if only one drive starts with "per"). On ambiguity, show all matches with their shortest unique identifiers. See [accounts.md §7](design/accounts.md).
-2. `--account <email>` flag: disambiguate between multiple Microsoft accounts for auth commands (`login`, `logout`, `whoami`). Required when multiple accounts are configured and the command can't determine which one.
-3. `--drive` repeatable: `sync --drive work --drive personal` syncs only those two drives. Without `--drive`, sync all enabled drives.
+1. `--drive` fuzzy matching — **DONE**: `MatchDrive()` in `config/drive.go` matches by exact canonical ID → alias → partial substring. On ambiguity, shows all matching canonical IDs sorted.
+2. `--account <email>` flag — **DONE**: persistent flag in `root.go`, used for `drive search` and auth commands to restrict operations to a specific account.
+3. `--drive` repeatable — **FUTURE**: `sync --drive work --drive personal` syncs only those two drives. Without `--drive`, sync all enabled drives.
 
 ### 6.5: Transfer progress display — FUTURE
 
@@ -753,22 +753,22 @@ This analysis categorizes every part of the codebase by its relationship to the 
 4. Per-drive goroutine lifecycle: each drive runs its own `Engine.RunOnce()` or `Engine.RunWatch()`. Engine errors are per-drive (one drive failing doesn't stop others). Aggregate status reported to user.
 5. Config hot-reload in watch mode: drives added, removed, or paused in config take effect on the next sync cycle without process restart.
 
-### 7.1: Drive removal — FUTURE
+### 7.1: Drive removal — DONE
 
-1. `drive remove <drive>`: set `enabled = false` in config. State DB and token preserved. Drive stops syncing on next cycle.
-2. `drive remove --purge <drive>`: permanently delete the drive's state DB and remove its section from `config.toml`. Token file kept if shared with other drives (same account). Confirmation prompt before destructive action.
-3. Text-level config manipulation: modify `config.toml` using line-based text edits (not TOML round-trip serialization) to preserve all user comments. See [accounts.md §4](design/accounts.md).
+1. `drive remove <drive>` — **DONE**: sets `enabled = false` in config via text-level edit. State DB and token preserved.
+2. `drive remove --purge <drive>` — **DONE**: permanently deletes state DB and removes config section. Token preserved if shared with other drives.
+3. Text-level config manipulation — **DONE**: `config/write.go` `DeleteDriveSection()` uses line-based text edits preserving all user comments.
 
-### 7.2: Status command — FUTURE
+### 7.2: Status command
 
-1. `status` command: show account/drive hierarchy with per-drive sync state. Format per [accounts.md §12](design/accounts.md): account email, token status (valid/expired/missing), per-drive sync state (last sync time, files synced, errors, unresolved conflicts).
-2. Support `--json` output for scripting and GUI integration.
-3. Show overall health: total drives, enabled/disabled/paused counts, aggregate unresolved conflicts.
+1. `status` command: show account/drive hierarchy — **DONE**: `status.go` shows account email, display name, org name, token state (valid/expired/missing), per-drive canonical ID, sync dir, and state (ready/paused/no token/needs setup). **Not yet done**: per-drive sync state (last sync time, files synced, errors, unresolved conflicts).
+2. Support `--json` output — **DONE**: `flagJSON` wired, produces JSON array of account objects.
+3. Show overall health — **FUTURE**: total drives, enabled/disabled/paused counts, aggregate unresolved conflicts.
 
-### 7.3: Shared drive enumeration — FUTURE
+### 7.3: Shared drive enumeration
 
-1. Research and implement Graph API endpoints for discovering shared drives: `GET /me/drive/sharedWithMe`, `GET /drives/{drive-id}/items/{item-id}/children` for shared folders. Document which endpoints work for Personal vs Business vs SharePoint.
-2. `drive list` (non-interactive): show all configured drives AND all available drives from the network (requires API call). Distinguish between "configured and syncing", "configured but disabled", and "available but not added".
+1. Shared drive discovery — **FUTURE**: Research and implement Graph API endpoints for discovering shared drives: `GET /me/drive/sharedWithMe`, `GET /drives/{drive-id}/items/{item-id}/children` for shared folders. Document which endpoints work for Personal vs Business vs SharePoint.
+2. `drive list` (non-interactive) — **DONE**: shows all configured drives AND available drives from the network (personal drive + SharePoint sites). Distinguishes "configured" vs "available" sources. SharePoint discovery capped at 10 sites; use `drive search` for targeted queries.
 
 ### 7.4: Shared folder sync — FUTURE
 
@@ -857,10 +857,10 @@ This analysis categorizes every part of the codebase by its relationship to the 
 2. `data_timeout` config option (default `"5m"`): per-request timeout for data transfer. Applies to download/upload HTTP bodies. Currently uses context timeout.
 3. `shutdown_timeout` config option (default `"30s"`): grace period for in-flight transfers when SIGTERM is received. After timeout, force-cancel remaining transfers.
 
-### 9.6: Config validation and log management — FUTURE
+### 9.6: Config validation and log management
 
-1. Unknown config key detection: on startup, if `config.toml` contains keys not in the known schema, log a warning with the unknown key name and suggest the closest valid key using Levenshtein distance (e.g., `"unknown key 'log_levl', did you mean 'log_level'?"`).
-2. `log_retention_days` config option (default 30): automatically delete log files older than N days. Checked once per day in watch mode, or on each one-shot sync start.
+1. Unknown config key detection — **DONE**: `checkUnknownKeys()` in `config/unknown.go` validates both global and per-drive keys on startup. Levenshtein-based "did you mean?" suggestions. Unknown keys are fatal errors. Full test coverage.
+2. `log_retention_days` config option — **FUTURE**: (default 30) automatically delete log files older than N days. Checked once per day in watch mode, or on each one-shot sync start.
 
 ### 9.7: Configurable file permissions — FUTURE
 
@@ -983,14 +983,14 @@ This analysis categorizes every part of the codebase by its relationship to the 
 1. `resolve` with no batch flags enters interactive mode. Prompts per conflict: `[L]ocal / [R]emote / [B]oth / [S]kip / [Q]uit`. Shows diff information (sizes, dates, hashes) for each conflict.
 2. Interactive mode is the default. Batch flags (`--keep-local`, `--keep-remote`, `--keep-both`, `--all`) bypass interactive mode.
 
-### 12.3: Interactive drive add — FUTURE
+### 12.3: Interactive drive add
 
-1. `drive add` interactive flow: enumerate available SharePoint libraries and paused drives. Present a numbered list. User selects by number. Auto-configure sync directory with collision handling.
-2. Non-interactive mode: `drive add --site marketing --library Documents` for scripting.
+1. `drive add` interactive flow — **FUTURE**: enumerate available SharePoint libraries and paused drives. Present a numbered list. User selects by number. Auto-configure sync directory with collision handling.
+2. Non-interactive `drive add` — **DONE**: `drive add <canonical-id>` adds a new drive or resumes a paused one by canonical ID. Without arguments, lists paused drives. **Not yet done**: `--site`/`--library` shorthand flags.
 
-### 12.4: SharePoint site search — FUTURE
+### 12.4: SharePoint site search — DONE
 
-1. `drive search <term>`: search SharePoint sites by name using `GET /sites?search={term}`. Display matching sites with their document libraries. User can then `drive add` any result.
+1. `drive search <term>` — **DONE**: searches SharePoint sites by name via `SearchSites()`. Displays matching sites with document libraries and canonical IDs. Supports `--json` output and `--account` filter. Cap of 50 results per search.
 
 ### 12.5: Share command — FUTURE
 
@@ -1063,13 +1063,13 @@ This analysis categorizes every part of the codebase by its relationship to the 
 | 4 v1 | 11 | Batch-pipeline sync engine | **SUPERSEDED** |
 | 4 v2 | 9 | Event-driven sync engine | **COMPLETE** |
 | 5 | 8 | Concurrent execution + watch mode | IN PROGRESS (5.0-5.4.2 done) |
-| 6 | 9 | CLI completeness | FUTURE |
-| 7 | 5 | Multi-drive + account management | FUTURE |
+| 6 | 9 | CLI completeness | IN PROGRESS (6.3 done; 6.0, 6.1, 6.4 have done items) |
+| 7 | 5 | Multi-drive + account management | IN PROGRESS (7.1 done; 7.2, 7.3 have done items) |
 | 8 | 5 | WebSocket + advanced sync | FUTURE |
-| 9 | 8 | Operational hardening | FUTURE |
+| 9 | 8 | Operational hardening | IN PROGRESS (9.6 item 1 done) |
 | 10 | 6 | Filtering | FUTURE |
 | 11 | 6 | Packaging + release | FUTURE |
-| 12 | 15 | Post-release | FUTURE |
+| 12 | 15 | Post-release | IN PROGRESS (12.4 done; 12.3 item 2 done) |
 | **Total** | **98** | | |
 
 Each increment is independently testable and completable in one focused session. Hardening backlog items (defensive coding, test gaps, documentation) are tracked separately in BACKLOG.md and addressed alongside feature work.
