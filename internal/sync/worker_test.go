@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -612,9 +613,24 @@ func TestWorkerPool_PanicRecovery(t *testing.T) {
 	pool.Stop()
 
 	// If we got here, the panic was recovered — the process didn't crash.
-	_, failed, _ := pool.Stats()
+	_, failed, errs := pool.Stats()
 	if failed < 1 {
 		t.Errorf("failed = %d, want >= 1 (panic should be recorded as failure)", failed)
+	}
+
+	// B-218: verify the error message in wp.errors contains "panic:".
+	var foundPanicError bool
+
+	for _, e := range errs {
+		if e != nil && strings.Contains(e.Error(), "panic:") {
+			foundPanicError = true
+
+			break
+		}
+	}
+
+	if !foundPanicError {
+		t.Errorf("expected error containing 'panic:' in Stats() errors, got %v", errs)
 	}
 
 	// Verify the failure is reported through the result channel.
@@ -628,6 +644,10 @@ func TestWorkerPool_PanicRecovery(t *testing.T) {
 			}
 
 			if !r.Success && r.Path == "panic-me.txt" {
+				if !strings.Contains(r.ErrMsg, "panic:") {
+					t.Errorf("ErrMsg = %q, want to contain 'panic:'", r.ErrMsg)
+				}
+
 				foundPanicResult = true
 			}
 		default:

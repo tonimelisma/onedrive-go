@@ -180,7 +180,10 @@ func (wp *WorkerPool) worker(ctx context.Context, primary, secondary <-chan *Tra
 				}
 			}
 		} else {
-			// Reserved worker — single channel.
+			// Reserved worker — one of primary/secondary is nil. In Go, receiving
+			// on a nil channel blocks forever, so the nil case in the select is
+			// never ready and is safely ignored. This effectively disables the
+			// unused lane without branching.
 			select {
 			case <-ctx.Done():
 				return
@@ -343,6 +346,11 @@ func (wp *WorkerPool) DroppedErrors() int64 {
 // the result is sent or the context is canceled. In one-shot mode the channel
 // is sized to planSize so this never blocks. In watch mode the channel is 4096
 // deep and a drain goroutine reads concurrently (see Engine.drainWorkerResults).
+//
+// If the context is canceled before the result is sent (e.g., during engine
+// shutdown), the WorkerResult is silently dropped. This is benign: callers
+// always call recordFailure() before sendResult, so the failed counter and
+// diagnostic error list remain accurate regardless (B-206).
 func (wp *WorkerPool) sendResult(ctx context.Context, ta *TrackedAction, success bool, errMsg string) {
 	r := WorkerResult{
 		ID:      ta.ID,
