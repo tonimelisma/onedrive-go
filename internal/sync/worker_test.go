@@ -125,6 +125,7 @@ func newWorkerTestSetup(t *testing.T) (
 	ul := &workerMockUploader{}
 
 	cfg := NewExecutorConfig(items, dl, ul, syncRoot, driveID, logger)
+	cfg.transferMgr = NewTransferManager(dl, ul, nil, logger)
 	cfg.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 	cfg.sleepFunc = func(_ context.Context, _ time.Duration) error { return nil }
 
@@ -566,5 +567,77 @@ func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing
 	// action.View.Remote.ItemID ("uploads-folder-id") as the baseline ItemID.
 	if capturedParentID != "uploads-folder-id" {
 		t.Errorf("upload parentID = %q, want %q (resolved from baseline after folder create)", capturedParentID, "uploads-folder-id")
+	}
+}
+
+// TestWorkerPool_PanicRecovery verifies that a panic in action execution
+// doesn't crash the process — the worker recovers, records a failure, and
+// the pool completes normally.
+func TestWorkerPool_PanicRecovery(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, _ := newWorkerTestSetup(t)
+	ctx := context.Background()
+
+	// Configure a download mock that panics.
+	cfg.downloads = &workerMockDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
+			panic("intentional panic for testing")
+		},
+	}
+	cfg.transferMgr = NewTransferManager(cfg.downloads, cfg.uploads, cfg.sessionStore, testLogger(t))
+
+	actions := []Action{
+		{
+			Type:    ActionDownload,
+			Path:    "panic-me.txt",
+			DriveID: driveid.New("0000000000000001"),
+			ItemID:  "panic-id",
+			View: &PathView{
+				Remote: &RemoteState{
+					ItemID:  "panic-id",
+					DriveID: driveid.New("0000000000000001"),
+					Size:    10,
+				},
+			},
+		},
+	}
+
+	tracker := NewDepTracker(10, 10, testLogger(t))
+	tracker.Add(&actions[0], 0, nil, "panic-cycle")
+
+	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
+	pool.Start(ctx, 4)
+	pool.Wait()
+	pool.Stop()
+
+	// If we got here, the panic was recovered — the process didn't crash.
+	_, failed, _ := pool.Stats()
+	if failed < 1 {
+		t.Errorf("failed = %d, want >= 1 (panic should be recorded as failure)", failed)
+	}
+
+	// Verify the failure is reported through the result channel.
+	var foundPanicResult bool
+
+	for {
+		select {
+		case r, ok := <-pool.Results():
+			if !ok {
+				goto done
+			}
+
+			if !r.Success && r.Path == "panic-me.txt" {
+				foundPanicResult = true
+			}
+		default:
+			goto done
+		}
+	}
+
+done:
+
+	if !foundPanicResult {
+		t.Error("expected panic failure result for panic-me.txt in result channel")
 	}
 }
