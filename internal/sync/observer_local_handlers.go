@@ -13,6 +13,12 @@ import (
 
 // watchLoop is the main select loop for Watch(). It processes fsnotify events,
 // watcher errors, safety scan ticks, and context cancellation.
+//
+// Go's select statement picks a random ready case when multiple are ready
+// simultaneously. This means watcher events and safety scan ticks have no
+// guaranteed priority ordering. This is intentional — the safety scan
+// (every 5 minutes) provides eventual consistency for any events missed
+// or dropped by fsnotify, regardless of select scheduling order.
 func (o *LocalObserver) watchLoop(
 	ctx context.Context, watcher FsWatcher, syncRoot string, events chan<- ChangeEvent,
 ) error {
@@ -171,24 +177,32 @@ func (o *LocalObserver) handleCreate(
 		o.scanNewDirectory(ctx, fsPath, dbRelPath, watcher, events)
 	} else {
 		ev.ItemType = ItemTypeFile
-
-		hash, hashErr := computeStableHash(fsPath)
-		if hashErr != nil {
-			if errors.Is(hashErr, errFileChangedDuringHash) {
-				o.logger.Debug("file metadata still settling, emitting with empty hash",
-					slog.String("path", dbRelPath))
-				// Fall through: emit with empty hash. Create events have no
-				// guaranteed follow-up unlike Write events (B-203).
-			} else {
-				o.logger.Warn("hash failed for new file, emitting event with empty hash",
-					slog.String("path", dbRelPath), slog.String("error", hashErr.Error()))
-			}
-		} else {
-			ev.Hash = hash
-		}
+		ev.Hash = o.stableHashOrEmpty(fsPath, dbRelPath)
 	}
 
 	o.trySend(ctx, events, &ev)
+}
+
+// stableHashOrEmpty computes a stable hash for a file, returning an empty
+// string on any failure. Extracted to deduplicate identical hash-failure
+// handling in handleCreate and scanNewDirectory. Both callers emit events
+// with empty hashes on failure because Create events and directory scans
+// have no guaranteed follow-up event (B-203).
+func (o *LocalObserver) stableHashOrEmpty(fsPath, dbRelPath string) string {
+	hash, err := computeStableHash(fsPath)
+	if err != nil {
+		if errors.Is(err, errFileChangedDuringHash) {
+			o.logger.Debug("file metadata still settling, emitting with empty hash",
+				slog.String("path", dbRelPath))
+		} else {
+			o.logger.Warn("hash failed, emitting event with empty hash",
+				slog.String("path", dbRelPath), slog.String("error", err.Error()))
+		}
+
+		return ""
+	}
+
+	return hash
 }
 
 // scanNewDirectory walks a newly-created directory and emits ChangeCreate
@@ -249,22 +263,6 @@ func (o *LocalObserver) scanNewDirectory(
 			continue
 		}
 
-		var hash string
-
-		hashVal, hashErr := computeStableHash(entryFsPath)
-		if hashErr != nil {
-			if errors.Is(hashErr, errFileChangedDuringHash) {
-				o.logger.Debug("file metadata still settling, emitting with empty hash",
-					slog.String("path", entryRelPath))
-				// Fall through: directory scans have no guaranteed follow-up event (B-203).
-			} else {
-				o.logger.Warn("hash failed during directory scan, emitting event with empty hash",
-					slog.String("path", entryRelPath), slog.String("error", hashErr.Error()))
-			}
-		} else {
-			hash = hashVal
-		}
-
 		fileEv := ChangeEvent{
 			Source:   SourceLocal,
 			Type:     ChangeCreate,
@@ -272,7 +270,7 @@ func (o *LocalObserver) scanNewDirectory(
 			Name:     entryName,
 			ItemType: ItemTypeFile,
 			Size:     info.Size(),
-			Hash:     hash,
+			Hash:     o.stableHashOrEmpty(entryFsPath, entryRelPath),
 			Mtime:    info.ModTime().UnixNano(),
 		}
 
@@ -382,6 +380,7 @@ func (o *LocalObserver) hashAndEmit(ctx context.Context, req hashRequest, events
 			o.logger.Warn("hash retries exhausted, emitting with empty hash",
 				slog.String("path", req.dbRelPath),
 				slog.Int("retries", req.retries),
+				slog.Int("max_retries", maxCoalesceRetries),
 			)
 		} else {
 			o.logger.Warn("hash failed for deferred write, emitting with empty hash",
