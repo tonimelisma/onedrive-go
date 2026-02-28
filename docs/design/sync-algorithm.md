@@ -58,10 +58,10 @@ The algorithm is designed to be **safe first, correct second, fast third**. Ever
 | **Action plan** | The ordered set of actions (downloads, uploads, deletes, moves, conflict resolutions, baseline updates) produced by the planner. The executor consumes the plan. |
 | **Worker pool** | A set of concurrent goroutines managed by `errgroup`. Separate pools handle downloads, uploads, and hash computation. |
 | **Batch** | A group of `PathChanges` values flushed from the change buffer and processed together by the planner. In one-shot mode, the entire set of observations forms a single batch. In watch mode, each debounce window produces a batch. |
-| **Stale file** | A local file that was synced while a filter rule included it, but a subsequent filter change now excludes it. The file remains on disk but is no longer synced. Tracked in the `stale_files` table for user visibility. |
+| **Stale file** | A local file that was synced while a filter rule included it, but a subsequent filter change now excludes it. The file remains on disk but is no longer synced. Detected on filter change and logged as a warning. |
 | **False conflict** | A situation where both sides independently arrive at the same content (same hash). The planner detects this and classifies it as a convergent edit (EF4) or convergent create (EF11), requiring only a baseline update. |
 | **Big delete** | A safety trigger: when the number of planned delete actions exceeds a configurable threshold (count > 1000 OR percentage > 50% of baseline entries, with a minimum items guard of 10), the sync cycle halts and requires user confirmation. |
-| **ChangeEvent** | An immutable observation of a remote or local change. Produced by observers, consumed by the buffer and planner. Ephemeral -- never persisted to the database (except optionally in the change journal for debugging). |
+| **ChangeEvent** | An immutable observation of a remote or local change. Produced by observers, consumed by the buffer and planner. Ephemeral -- never persisted to the database. |
 | **PathView** | A three-way view of a single path: current remote state, current local state, and baseline. Constructed by the planner from change events + baseline. Input to the decision matrix. |
 | **Outcome** | The result of executing a single action. Self-contained: carries everything the baseline manager needs to update the database. |
 
@@ -117,7 +117,7 @@ Each pipeline stage works with its own types. The type system makes it impossibl
 | `Baseline` | BaselineManager.Load | Observers, Planner | One cycle (frozen snapshot) |
 | `Action` | Planner | Executor | Ephemeral (one cycle) |
 | `ActionPlan` | Planner | Executor | Ephemeral (one cycle) |
-| `Outcome` | Executor | BaselineManager.Commit | Ephemeral (one cycle) |
+| `Outcome` | Executor | BaselineManager.CommitOutcome | Ephemeral (one cycle) |
 
 **ChangeEvent** carries all information about an observed change:
 
@@ -156,35 +156,37 @@ type Action struct {
 }
 ```
 
-**ActionPlan** groups actions by type for phased execution:
+**ActionPlan** contains a flat list of actions with explicit dependency edges for DAG-based concurrent execution:
 
 ```go
 type ActionPlan struct {
-    FolderCreates []Action
-    Moves         []Action
-    Downloads     []Action
-    Uploads       []Action
-    LocalDeletes  []Action
-    RemoteDeletes []Action
-    Conflicts     []Action
-    SyncedUpdates []Action
-    Cleanups      []Action
+    Actions []Action  // flat list of all actions
+    Deps    [][]int   // Deps[i] = indices that action i depends on
+    CycleID string    // UUID grouping actions from one planning pass
 }
 ```
+
+The `Deps` adjacency list encodes ordering constraints (parent-before-child, children-before-parent-delete, move-target-parent). The `DepTracker` uses `Deps` to dispatch ready actions to workers as their dependencies are satisfied.
 
 **Consumer-defined interfaces** for the Graph API client (defined in `sync/`, satisfied by `*graph.Client`):
 
 ```go
 type DeltaFetcher interface {
-    Delta(ctx context.Context, driveID, token string) (*graph.DeltaPage, error)
+    Delta(ctx context.Context, driveID driveid.ID, token string) (*graph.DeltaPage, error)
 }
 
 type ItemClient interface {
-    GetItem(ctx context.Context, driveID, itemID string) (*graph.Item, error)
-    ListChildren(ctx context.Context, driveID, itemID string) ([]graph.Item, error)
-    CreateFolder(ctx context.Context, driveID, parentID, name string) (*graph.Item, error)
-    MoveItem(ctx context.Context, driveID, itemID, newParentID, newName string) (*graph.Item, error)
-    DeleteItem(ctx context.Context, driveID, itemID string) error
+    GetItem(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
+    ListChildren(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
+    CreateFolder(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error)
+    MoveItem(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string) (*graph.Item, error)
+    DeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error
+    PermanentDeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error
+}
+
+// DriveVerifier verifies that a configured drive ID is reachable.
+type DriveVerifier interface {
+    Drive(ctx context.Context, driveID driveid.ID) (*graph.Drive, error)
 }
 
 // Downloader streams a remote file by item ID.
@@ -199,6 +201,24 @@ type Uploader interface {
         ctx context.Context, driveID driveid.ID, parentID, name string,
         content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc,
     ) (*graph.Item, error)
+}
+
+// SessionUploader provides session-based upload methods for resumable transfers.
+// Type-asserted at runtime to avoid breaking the Uploader interface.
+type SessionUploader interface {
+    CreateUploadSession(ctx context.Context, driveID driveid.ID, parentID, name string,
+        size int64, mtime time.Time) (*graph.UploadSession, error)
+    UploadFromSession(ctx context.Context, session *graph.UploadSession,
+        content io.ReaderAt, totalSize int64, progress graph.ProgressFunc) (*graph.Item, error)
+    ResumeUpload(ctx context.Context, session *graph.UploadSession,
+        content io.ReaderAt, totalSize int64, progress graph.ProgressFunc) (*graph.Item, error)
+}
+
+// RangeDownloader downloads a file starting from a byte offset.
+// Type-asserted at runtime to avoid breaking the Downloader interface.
+type RangeDownloader interface {
+    DownloadRange(ctx context.Context, driveID driveid.ID, itemID string,
+        w io.Writer, offset int64) (int64, error)
 }
 ```
 
@@ -251,7 +271,6 @@ These interfaces follow the Go convention of consumer-defined contracts: the `sy
             ┌────────────────┐
             │   Baseline     │    <-- commits each Outcome per-action
             │   Manager      │    <-- saves delta token when cycle complete
-            │                │    <-- optionally writes to change journal
             └────────────────┘
 ```
 
@@ -260,7 +279,7 @@ Each component has a single responsibility and a clean contract:
 - **Observers** produce `[]ChangeEvent` -- they never write to the database.
 - **Change Buffer** groups events by path into `[]PathChanges` -- thread-safe, debounced.
 - **Planner** is a pure function: `([]PathChanges, *Baseline, SyncMode, SafetyConfig) -> *ActionPlan` -- no I/O.
-- **Executor** produces `Outcome` per action -- it executes against the API and filesystem but never writes to the database.
+- **Workers** execute actions and produce `Outcome` per action. Each outcome is committed to the baseline immediately via `BaselineManager.CommitOutcome()`.
 - **Baseline Manager** is the sole database writer -- it commits each outcome individually via per-action atomic transactions.
 
 ### 2.2 Component Interaction Summary
@@ -287,9 +306,10 @@ Each component has a single responsibility and a clean contract:
 3. LocalObserver.Watch()            -> streams ChangeEvents (inotify / FSEvents)
 4. ChangeBuffer debounces (2s)      -> []PathChanges (only changed paths)
 5. Planner.Plan()                   -> ActionPlan (only for changed paths)
-6. Executor.Execute()               -> []Outcome
-7. BaselineManager.Commit()         -> incremental baseline update
-8. Go to step 4 (loop on buffer ready)
+6. Populate DepTracker with actions and dependency edges
+7. Workers execute concurrently     -> per-action baseline commits
+8. All actions complete             -> commit delta token
+9. Go to step 4 (loop on buffer ready)
 ```
 
 **Dry-Run Mode** (zero side effects):
@@ -592,9 +612,9 @@ The planner calls `ShouldSync` during the classification step for items that app
 
 When filter rules change (e.g., `skip_dotfiles` is enabled after `.dotfiles` were already synced), previously synced files may become excluded. These files are **not automatically deleted**. Instead:
 
-1. The engine compares the current filter configuration against a saved snapshot in the `config_snapshots` table.
-2. Files that were included under the old filter but are excluded under the new filter are recorded in the `stale_files` table.
-3. The user is warned about stale files and can choose to clean them up.
+1. The engine compares the current filter configuration against the previous in-memory config.
+2. Files that were included under the old filter but are excluded under the new filter are detected by walking the baseline.
+3. The user is warned about stale files via log messages. Stale files remain on disk but are no longer synced.
 
 This approach prevents accidental data loss from filter changes. The user retains control over whether excluded-but-present files should be removed.
 
@@ -841,19 +861,17 @@ func detectRemoteChange(v PathView) bool {
 
 This per-side approach handles enrichment natively without any special-case code paths.
 
-### 7.7 Action Ordering
+### 7.7 Action Ordering (Dependency Edges)
 
-The planner orders the action plan to ensure correctness:
+The planner computes explicit dependency edges (`ActionPlan.Deps`) to ensure correctness. Actions run concurrently when their dependencies are satisfied — there are no artificial barriers between action types.
 
-1. **Folder creates**: Sorted by depth (shallowest first, top-down). Parent folders must exist before child files can be placed in them.
-2. **Moves**: Ordered to handle nested moves correctly (parent moves before children).
-3. **Downloads**: No ordering constraint (parallel execution).
-4. **Uploads**: No ordering constraint (parallel execution).
-5. **Local deletes**: Files first, then folders bottom-up (deepest first). A folder cannot be deleted until all its children are deleted.
-6. **Remote deletes**: Same depth-first ordering as local deletes.
-7. **Conflicts**: Processed after transfers complete.
-8. **Synced updates**: Batch operation, no ordering required.
-9. **Cleanups**: Batch operation, no ordering required.
+| Dependency Type | Rule | Example |
+|----------------|------|---------|
+| **Parent-before-child** | Parent folder must exist before child operations | `upload /A/B/f.txt` depends on `mkdir /A/B` |
+| **Children-before-parent-delete** | All children must be removed before parent folder deletion | `rmdir /A` depends on `delete /A/file1.txt` |
+| **Move target parent** | Move target parent folder must exist | `move /X -> /A/Z` depends on `mkdir /A` |
+
+Actions whose parent folders already exist in the baseline have no dependencies and are immediately eligible for execution. All action types (downloads, uploads, folder creates, deletes, moves, conflicts, synced updates, cleanups) can run concurrently when their dependency edges are satisfied.
 
 ---
 
@@ -867,7 +885,7 @@ All safety invariants are implemented as pure functions operating on the `Action
 The planner checks `view.Baseline != nil` before emitting `ActionRemoteDelete`. This is structurally enforced by the decision matrix: EF6 (remote delete) requires `Baseline exists`. Without a baseline entry, the path classification falls to EF13 (new local, absent remote = upload) or produces no action (both absent, no baseline = nothing to do).
 
 **S2 -- Never process deletions from incomplete enumeration**:
-The Remote Observer returns the new delta token alongside events. The engine passes this token to `BaselineManager.Commit()` only after successful execution. If the delta fetch is interrupted (e.g., network failure mid-pagination), no events are produced and no token is advanced. The `.nosync` guard fires in the Local Observer before any events are produced, preventing sync against unmounted volumes.
+The Remote Observer returns the new delta token alongside events. The engine passes this token to `BaselineManager.CommitDeltaToken()` only after all cycle actions complete successfully. If the delta fetch is interrupted (e.g., network failure mid-pagination), no events are produced and no token is advanced. The `.nosync` guard fires in the Local Observer before any events are produced, preventing sync against unmounted volumes.
 
 **S3 -- Atomic file writes for downloads**:
 Implemented in the executor (see Section 9.4).
@@ -888,7 +906,8 @@ The filter cascade excludes temporary file patterns. The planner applies filters
 
 ```go
 func bigDeleteTriggered(plan *ActionPlan, baseline *Baseline, config *SafetyConfig) bool {
-    deleteCount := len(plan.LocalDeletes) + len(plan.RemoteDeletes)
+    // Count delete actions in the flat action list
+    deleteCount := countActionsByType(plan.Actions, ActionLocalDelete, ActionRemoteDelete)
     baselineCount := len(baseline.ByPath)
 
     // Skip check if baseline is too small to be meaningful
@@ -931,7 +950,7 @@ Default `MinFreeSpace` is 1 GB. If insufficient space is available:
 
 ## 9. Executor
 
-The executor takes an `ActionPlan` and carries it out against the Graph API and the local filesystem. It produces `[]Outcome` -- self-contained result records that carry everything the baseline manager needs. The executor never writes to the database.
+The executor takes an `ActionPlan` and dispatches actions to lane-based workers via the DepTracker. Each worker produces an individual `Outcome` — a self-contained result record that carries everything the baseline manager needs. Workers commit each outcome to the baseline per-action.
 
 ### 9.1 DAG Execution with Dependency Tracking
 
@@ -970,8 +989,10 @@ type Outcome struct {
     RemoteHash   string     // hash of remote content after action
     Size         int64
     Mtime        int64      // local mtime at sync time
+    RemoteMtime  int64      // remote mtime for conflict records
     ETag         string
     ConflictType string     // "edit_edit", "edit_delete", "create_create" (conflicts only)
+    ResolvedBy   string     // ResolvedByAuto for auto-resolved conflicts, "" otherwise
 }
 ```
 
@@ -979,15 +1000,7 @@ type Outcome struct {
 
 **Failed Outcomes**: When `Success: false`, the Outcome carries an `Error` explaining the failure. Failed Outcomes are NOT committed to the baseline -- the item retains its current baseline state and will be retried on the next sync cycle.
 
-**Concurrency**: Worker pool goroutines produce Outcomes via a mutex-protected callback function:
-
-```go
-collectOutcome := func(o Outcome) {
-    mu.Lock()
-    outcomes = append(outcomes, o)
-    mu.Unlock()
-}
-```
+**Concurrency**: Workers report outcomes through an in-memory result channel. Each worker commits its outcome to the baseline per-action, then reports success/failure to the engine via `WorkerResult` for cycle tracking (failure suppression, delta token commit decisions).
 
 ### 9.3 Error Classification (Fatal, Retryable, Skip, Deferred)
 
@@ -1118,12 +1131,12 @@ The executor delegates transfer operations to lane-based workers managed by the 
 
 | Lane | Reserved Workers | Purpose |
 |------|-----------------|---------|
-| Interactive | 2 minimum | Small files (<10 MB), folder ops, deletes, moves |
-| Bulk | 2 minimum | Large file transfers (>=10 MB) |
-| Shared | remaining (default 12) | Dynamically assigned; interactive priority |
+| Interactive | max(2, total/8) | Small files (<10 MB), folder ops, deletes, moves |
+| Bulk | max(2, total/8) | Large file transfers (>=10 MB) |
+| Shared | remainder | Dynamically assigned; interactive priority |
 | Checkers | 8 (separate pool) | Local hash computation for change detection |
 
-Workers are persistent goroutines pulling from tracker channels. Each worker receives its own context for per-action cancellation. Canceling the root context propagates to all workers.
+Total lane workers = `runtime.NumCPU()` or user-configured cap (minimum 4). Workers are persistent goroutines pulling from tracker channels. Each worker receives its own context for per-action cancellation. Canceling the root context propagates to all workers.
 
 **Bandwidth limiting**: A token-bucket rate limiter optionally caps total transfer bandwidth (configured via `bandwidth_limit`). The limiter is shared across all download and upload workers, preventing any single worker from consuming the entire allowance. Scheduled throttling supports time-of-day rules.
 
@@ -1253,11 +1266,8 @@ type BaselineEntry struct {
 |-------|---------|--------|
 | `delta_tokens` | Delta cursor per drive | BaselineManager (same txn as baseline) |
 | `conflicts` | Conflict tracking with resolution status | BaselineManager |
-| `stale_files` | Filter-change tracking | BaselineManager |
-| SessionStore (file-based) | Crash recovery for large uploads (JSON files in metadata dir) | Executor (pre-upload) + BaselineManager (post-upload cleanup) |
-| `change_journal` | Debugging audit trail (optional, append-only) | BaselineManager |
-| `config_snapshots` | Filter change detection | Engine (on config load) |
 | `schema_migrations` | Schema version tracking | Engine (on startup) |
+| SessionStore (file-based) | Crash recovery for large uploads (JSON files in data dir) | TransferManager (pre-upload) |
 
 **SQLite configuration**:
 
@@ -1572,7 +1582,7 @@ type SyncReport struct {
 }
 ```
 
-The report is built from the `[]Outcome` slice. For dry-run mode, the report is built from the `ActionPlan` with counts reflecting planned (not executed) actions.
+The report is built from worker pool statistics and `WorkerResult` channel data. For dry-run mode, the report is built from the `ActionPlan` with counts reflecting planned (not executed) actions.
 
 **Output formats**:
 - **Human-readable** (default): Summary line for quick glance, followed by per-action details if `--verbose`.

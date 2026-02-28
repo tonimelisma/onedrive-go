@@ -611,15 +611,15 @@ When filter rules change, files that were previously synced but are now excluded
 
 ### 7.1 Worker Pool Design
 
-Three independent worker pools:
+Lane-based worker pools with a separate checker pool:
 
-| Pool | Default | Max | Purpose |
+| Config Key | Default | Max | Purpose |
 |------|---------|-----|---------|
-| Downloads | 8 | 16 | File downloads |
-| Uploads | 8 | 16 | File uploads |
-| Checkers | 8 | 16 | Local hash computation |
+| `parallel_downloads` | 8 | 16 | Contributes to total lane worker count |
+| `parallel_uploads` | 8 | 16 | Contributes to total lane worker count |
+| `parallel_checkers` | 8 | 16 | Separate pool for local hash computation |
 
-The default of 8 aligns with Microsoft Graph API guidance (5-10 concurrent requests). Values above 16 are rejected.
+Download and upload workers are unified into lane-based pools (interactive lane for small files/metadata ops, bulk lane for large transfers, shared overflow). The checker pool remains separate (CPU-bound, runs during observation). The default of 8 aligns with Microsoft Graph API guidance (5-10 concurrent requests). Values above 16 are rejected.
 
 ### 7.2 Chunk Size Validation
 
@@ -1087,10 +1087,10 @@ Every configuration option in a single reference table.
 | `check_nosync` | Use `.odignore` instead |
 | `create_new_file_version` | SharePoint enrichment handled differently |
 | `force_session_upload` | Always use session upload for files > 4MB |
-| `read_only_auth_scope` | Not supported at MVP |
+| `read_only_auth_scope` | Not currently supported |
 | `use_intune_sso` | Not supported |
 | `sync_root_files` | sync_paths handles this |
-| `sync_business_shared_items` | Post-MVP |
+| `sync_business_shared_items` | Handled via drive management |
 | `webhook_*` | Built-in WebSocket replaces HTTP webhooks |
 | `display_*` / `debug_*` | Use `--verbose`, `--debug`, `--json` |
 | `notify_*` | Desktop notifications not in scope |

@@ -12,216 +12,221 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 | ID | Title | Priority | Package | Notes |
 |----|-------|----------|---------|-------|
 
-## Backlog (Architecture-Neutral)
+## Hardening: Internal Sync
 
-| ID | Title | Priority | Package | Notes |
-|----|-------|----------|---------|-------|
-| B-203 | ~~Flaky `TestWatch_NewDirectoryPreExistingFiles`~~ | ~~P3~~ | `internal/sync/` | **DONE** — `handleCreate` and `scanNewDirectory` now emit with empty hash on `errFileChangedDuringHash` instead of skipping. Create events and directory scans have no guaranteed follow-up, unlike Write events. 100/100 pass with race detector. |
-| B-204 | Reserved worker receives on nil channel in select | P3 | `internal/sync/` | `worker.go` lines 178-187: reserved workers have one of `primary`/`secondary` set to nil. The `select` includes `case ta = <-secondary:` (or `<-primary:`) which receives on a nil channel. A nil channel blocks forever in a `select`, so it *works* correctly — the nil case is never selected. But this is a subtle correctness-by-accident pattern that relies on Go's nil-channel semantics. Future maintainers may not realize this is intentional. Replace with an explicit `if primary != nil` / `if secondary != nil` dispatch pattern, or at minimum add a comment documenting that nil channels are intentionally used to disable a select arm. |
-| B-205 | `WorkerPool.errors` slice grows unbounded in watch mode | P2 | `internal/sync/` | `worker.go` lines 317-319: every action failure appends to `wp.errors` under a mutex with no cap. In a long-running watch mode session (days/weeks) with a flaky network causing repeated transient errors, this slice grows without bound, leaking memory. Fix: cap the errors slice (e.g., keep last 1000 errors via a ring buffer, or truncate on read via `Stats()`). Alternatively, reset the slice periodically (e.g., per cycle in watch mode). The `failed` atomic counter is the authoritative failure count; the errors slice is supplementary diagnostics. |
-| B-206 | Document `sendResult` lost-result edge case in panic recovery | P3 | `internal/sync/` | `worker.go`: `safeExecuteAction`'s panic recovery (line 208) calls `wp.sendResult(ctx, ta, ...)` with the pool-level `ctx`. If the pool is shutting down (`cancel()` was called), `ctx` is already canceled, so the `select` in `sendResult` hits `<-ctx.Done()` and the result is silently dropped — never reaching the engine's drain goroutine. This is acceptable behavior (the pool is shutting down anyway), but deserves an inline comment explaining the trade-off: during shutdown, panic results may be lost from the results channel, but the `wp.failed` counter and `wp.errors` slice still record the failure accurately. |
-| B-207 | Document intentional `.partial` preservation on rename failure | P4 | `internal/sync/` | `transfer_manager.go` line 165: if `os.Rename(partialPath, targetPath)` fails (e.g., cross-device rename, permissions), the `.partial` file is left behind with no explicit cleanup. The next download attempt will find it and attempt resume, which is actually the correct behavior — the downloaded bytes are not wasted. Add a comment documenting this is intentional: "On rename failure, the .partial file is preserved so the next download attempt can resume from it rather than re-downloading from scratch." |
-| B-208 | `sessionUpload` non-expired resume error creates infinite retry loop | P2 | `internal/sync/` | `transfer_manager.go` lines 402-403: if `ResumeUpload` fails with any error other than `ErrUploadSessionExpired`, the function returns the error immediately without deleting the persisted session file. On the next run, the same corrupt/broken session will be loaded and retried, producing the same error — an infinite retry loop across process restarts. Fix: distinguish transient errors (network timeout, 5xx) from permanent errors (4xx other than 404/410). For permanent non-expired errors, delete the session file and fall through to fresh upload creation. For transient errors, keep the session for retry. At minimum, add a retry counter to `SessionRecord` and delete after N consecutive failures. |
-| B-209 | `DownloadToFile` doesn't validate empty `targetPath` | P3 | `internal/sync/` | `transfer_manager.go` line 81: no check that `targetPath` is non-empty. An empty string would cause `filepath.Dir("")` to return `"."`, `os.MkdirAll(".", 0o700)` to succeed silently, and then create a file named `.partial` in the current working directory. The atomic rename would then create a zero-length-named file. While unlikely from production callers (the planner always provides full paths), a defensive `if targetPath == ""` guard at the top of the function with a clear error message is cheap insurance. |
-| B-210 | `UploadFile` doesn't validate empty `name` parameter | P3 | `internal/sync/` | `transfer_manager.go` line 296: no validation that the `name` parameter is non-empty. An empty name would produce a confusing Graph API error (likely 400 Bad Request) deep in the call stack, far from the root cause. Add a defensive check: `if name == "" { return nil, fmt.Errorf("upload name must not be empty") }`. Same for `parentID` — an empty parent ID would also produce a confusing remote error. |
-| B-211 | `resumeDownload` TOCTOU race between stat and open | P4 | `internal/sync/` | `transfer_manager.go`: `downloadToPartial` (line 185) calls `os.Stat(partialPath)` to get `info.Size()`, then passes `existingSize` to `resumeDownload` (line 236), which opens the file at line 242. If the `.partial` file is modified between the stat and the open (e.g., another process, concurrent download), the `existingSize` used for `DownloadRange(offset)` is stale — the Range header requests bytes starting from a wrong offset, potentially producing a corrupt file. Extremely unlikely in practice (partial files are not shared), but fixable: after `os.OpenFile`, verify actual size via `f.Seek(0, io.SeekEnd)` or `f.Stat()` and compare with `existingSize`. If they differ, close, remove, and fall back to fresh download. |
-| B-212 | `freshDownload` uses permissive file permissions (`os.Create` = 0666) | P3 | `internal/sync/` | `transfer_manager.go` line 197: `os.Create(partialPath)` creates the partial file with mode 0666 (before umask). In contrast, `resumeDownload` at line 242 uses `os.OpenFile(..., 0o600)` (owner-only). This inconsistency means fresh downloads get umask-dependent permissions while resumed downloads get explicit owner-only permissions. Since partial files may contain sensitive data (the user's OneDrive content), use `os.OpenFile(partialPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)` instead of `os.Create` for consistency and security. Add `//nolint:mnd` comment for the permission literal. |
-| B-213 | No configurable file permissions for downloaded files | P4 | `internal/sync/` | `transfer_manager.go`: the final downloaded file inherits whatever permissions `os.Create` + umask gave the `.partial` file. There's no way to configure the target file permissions. After the atomic rename, the file permissions are whatever the `.partial` had. Consider adding an optional `FileMode` field to `DownloadOpts` and calling `os.Chmod(targetPath, mode)` after the rename. Default to 0o600 (owner-only) if not specified. This is especially relevant for sync mode where files are created automatically without user intervention. |
-| B-214 | Test: `DownloadToFile` rename failure preserves `.partial` | P3 | `internal/sync/` | No test verifies behavior when `os.Rename(partialPath, targetPath)` fails. Test scenario: create a download where the target path is in a read-only directory (or on a different filesystem for cross-device rename failure). Verify: (1) error is returned with proper wrapping, (2) `.partial` file still exists on disk with correct content, (3) a subsequent `DownloadToFile` call to the same target resumes from the existing `.partial`. Covers the intentional preservation behavior documented in B-207. |
-| B-215 | Test: `sessionUpload` session save failure still completes upload | P3 | `internal/sync/` | `transfer_manager.go` lines 417-426: when `sessionStore.Save()` fails, a Warn is logged but the upload proceeds without session persistence. No test verifies this path. Test scenario: mock `SessionStore` whose `Save()` returns an error. Verify: (1) upload still succeeds and returns a valid `UploadResult`, (2) Warn log is emitted with the save error, (3) no session file exists afterward (since save failed). |
-| B-216 | Test: `UploadFile` stat failure wraps error correctly | P3 | `internal/sync/` | `transfer_manager.go` line 304: `os.Stat(localPath)` failure returns `fmt.Errorf("stat %s: %w", localPath, err)`. No test verifies this error path. Test scenario: call `UploadFile` with a non-existent local path. Verify: (1) error is returned (not nil), (2) error message contains "stat" and the path, (3) `errors.Is(err, os.ErrNotExist)` is true (the original error is properly wrapped). |
-| B-217 | Test: non-RangeDownloader with existing `.partial` starts fresh | P3 | `internal/sync/` | `transfer_manager.go` lines 184-188: when the downloader does NOT implement `RangeDownloader`, the `if rd, ok := tm.downloads.(RangeDownloader)` type assertion fails, and `downloadToPartial` falls straight through to `freshDownload` — ignoring any existing `.partial` file. The `tmSimpleDownloader` mock exists in tests but no test explicitly exercises this path: create a `.partial` file, use a `Downloader`-only (no `RangeDownloader`) mock, verify `freshDownload` is called and the old `.partial` is overwritten. |
-| B-218 | Test: worker panic recovery records error in `wp.errors` | P3 | `internal/sync/` | `TestWorkerPool_PanicRecovery` verifies the pool completes without crashing and the failure is counted, but should also assert: (1) the specific panic message string appears in `wp.Stats()` errors slice, (2) the `WorkerResult` sent to the results channel has `Success: false` and `ErrMsg` containing "panic:", (3) `tracker.Complete(id)` was called (the action's dependents are unblocked despite the panic). |
-| B-219 | Inconsistent hash function usage: direct call vs `tm.hashFunc` | P3 | `internal/sync/` | `transfer_manager.go`: download path calls `computeQuickXorHash(partialPath)` directly at line 280 (`resumeDownload`), while upload path uses `tm.hashFunc(localPath)` at line 309 (`UploadFile`). The `hashFunc` field exists specifically for test injection, but it's only wired for uploads. This means download hashing cannot be overridden in tests — tests must create real files with real hashes. Fix: replace the direct `computeQuickXorHash` call at line 280 with `tm.hashFunc(partialPath)`. Also audit `freshDownload` lines 202-226: the inline `quickxorhash.New()` + `io.MultiWriter` streaming hash cannot easily use `hashFunc` (which takes a file path), but the `resumeDownload` path at line 280 can and should. |
-| B-220 | `deleteSession` helper swallows errors silently | P4 | `internal/sync/` | `transfer_manager.go` lines 440-447: `deleteSession` logs at Warn on failure but never returns the error. This is correct for production (session cleanup failure is non-fatal), but makes testing harder — a test cannot distinguish "session deleted successfully" from "session delete failed" without capturing logs. Consider returning the error and letting callers decide whether to ignore it (production callers already just log). This would enable tests to assert session deletion succeeded without log capture infrastructure. |
-| B-221 | Add comment explaining Go integer range in hash retry loop | P4 | `internal/sync/` | `transfer_manager.go` line 109: `for attempt := range maxRetries + 1` uses Go 1.22 integer range syntax, which is still unfamiliar to many Go developers. The loop iterates `attempt` from 0 to `maxRetries` inclusive, yielding `maxRetries + 1` total attempts. Add a clarifying comment: `// attempt 0..maxRetries inclusive (maxRetries+1 total download attempts)`. Also consider renaming `maxRetries` to make the total attempt count more obvious (e.g., `maxExtraAttempts` with comment "beyond the first attempt"). |
-| B-222 | Document `selectHash` cross-file reference in `transfer_manager.go` | P4 | `internal/sync/` | `transfer_manager.go` line 351: `selectHash(item)` is called but defined in a different file (likely `types.go` or `executor.go`). When reading `transfer_manager.go` in isolation, the function's origin and behavior are unclear. Add a brief comment: `// selectHash is defined in types.go — returns QuickXorHash or SHA256 from graph.Item.` This aids code navigation for developers reading individual files without IDE support. |
-| B-223 | Extract `DriveSession` type for per-drive resource lifecycle | P1 | root | `clientAndDrive()` is a free function that re-creates token source, graph client, and drive ID on every call from 7 handlers. Extract into a `DriveSession` struct with lazy-init methods: `TokenSource(ctx)`, `GraphClient(ctx)`, `TransferClient(ctx)`, `DriveID(ctx)`. Single-goroutine CLI context means nil-check lazy init is safe (no `sync.Once` needed). `CLIContext` holds one `*DriveSession`; future multi-drive daemon creates N sessions. Eliminates `clientAndDrive` entirely, reduces handler boilerplate by 3-5 lines each, and provides the reusable per-drive building block for multi-drive architecture. |
-| B-224 | Eliminate global flag variables (`flagJSON`, `flagVerbose`, etc.) | P1 | root | 7 package-level mutable variables (`flagConfigPath`, `flagAccount`, `flagDrive`, `flagJSON`, `flagVerbose`, `flagDebug`, `flagQuiet`) require save/restore dance in every test (7 copies in `root_test.go`). Move all flags into a `CLIFlags` struct parsed once in `PersistentPreRunE` and stored in `CLIContext`. Every access becomes `cc.Flags.JSON` instead of the global `flagJSON`. Tests construct `CLIContext` directly — no save/restore needed. Eliminates an entire class of test pollution bugs. |
-| B-225 | Defensive nil guard for `cliContextFrom` | P2 | root | `cliContextFrom` returns `nil` when the key isn't in context. Every caller assumes non-nil — `cc.Cfg.SyncDir`, `cc.Logger`, etc. A nil `cc` produces a cryptic nil-pointer panic deep in the handler. Add `MustCLIContext(ctx) *CLIContext` that panics with a clear message ("bug: command missing CLIContext — was skipConfig set incorrectly?"), or add nil checks at the top of every RunE returning a user-friendly error. |
-| B-226 | Remove `os.Exit(1)` from `runVerify` | P2 | root | `runVerify` calls `os.Exit(1)` directly (line 55) when mismatches are found. This bypasses Cobra's error handling, deferred cleanup, and makes the function untestable (kills the test process). Return a sentinel error (`var errVerifyMismatch = errors.New("verification mismatches found")`) and handle the exit code in `main()` or a Cobra `PostRun`. |
-| B-227 | Deduplicate sync_dir and StatePath validation across commands | P3 | root | The sync_dir emptiness check and `StatePath()` emptiness check are duplicated in `runSync`, `runVerify`, and likely `runConflicts` and `runResolve`. Extract into methods on `CLIContext` (or `DriveSession`): `RequireSyncDir() (string, error)` and `RequireStatePath() (string, error)`. Consistent error messages, single place to update guidance text. |
-| B-228 | `buildLogger` silent fallthrough on unknown log level | P3 | root | `buildLogger` switch on `cfg.LogLevel` has cases for "debug", "info", "error" but no case for "warn" and no `default` case. `log_level = "warning"` or `log_level = "WARN"` silently falls back to `slog.LevelWarn` — correct by accident. Add a `default` case that logs a warning about the unrecognized level, or normalize input (lowercase + map "warning" → "warn"). |
-| B-229 | `syncModeFromFlags` uses `Changed` instead of `GetBool` | P4 | root | `syncModeFromFlags` checks `cmd.Flags().Changed("download-only")` which returns true if the flag was set at all, even to `false` (e.g., `--download-only=false`). Should use `GetBool` and check the value, or add a comment explaining why `Changed` is correct here (boolean flags without explicit value default to `true` in Cobra, so `Changed` is technically fine — but it's a subtle invariant that deserves documentation). |
-| B-230 | `printSyncReport` repetitive formatting | P4 | root | Lines 131-196 of `sync.go` — nine nearly identical `if count > 0 { statusf(...) }` blocks with hand-aligned column formatting. Extract a `printNonZero(label string, count int)` helper to cut duplication in half and guarantee consistent alignment. If a new counter is added, the alignment won't drift. |
-| B-231 | `loadAndVerify` separation rationale is stale | P4 | root | Comment says "Separated so the defer Close() runs before any os.Exit in the caller." Once B-226 removes the `os.Exit`, this separation rationale is no longer valid. Either inline back into `runVerify` or update the comment to reflect the actual reason (testability, separation of concerns). |
-| B-232 | Test coverage for `loadConfig` error paths | P3 | root | `root_test.go` tests happy paths but not: (1) `loadConfig` with invalid TOML syntax, (2) `loadConfig` when `ResolveDrive` returns an error (ambiguous drive selector), (3) `cliContextFrom` with wrong type value in context, (4) `buildLogger` with unknown log level string. These are cheap defensive tests. |
-| B-233 | `version` string concatenation in two places | P4 | root | `var version = "dev"` used in `newGraphClient` and `newTransferGraphClient` via `"onedrive-go/"+version`. Minor — if `DriveSession` lazy methods create these clients, the version would be passed once to `DriveSession` instead of repeated at two call sites. |
-| B-033 | Implement accounts.md features | P1 | all | Setup wizard, `drive add`/`drive remove`, fuzzy `--drive` matching, RPC for `sync --watch`, email change detection, `service install`/`uninstall`/`status`, `status` command, `--account` flag, text-level config manipulation, commented-out config defaults on first login. |
-| B-034 | Add --json support for login, logout, drive add/remove | P4 | root | These commands output plain text only. Per accounts.md §9, login should emit JSON events. |
-| B-035 | Add --quiet support for login, logout, whoami, status, drive | P4 | root | Auth/drive commands write to stdout via `fmt.Printf`. File ops use `statusf()` which respects --quiet. Standardize all commands. |
-| B-036 | Extract CLI service layer for testability | P4 | root | Root package at 28.1% coverage. All RunE handlers are untested. Need to extract pure logic from I/O for mock-based testing. Target: 50%+ coverage. |
-| B-020 | SharePoint lock check before upload (HTTP 423) | P2 | `internal/graph/` | Check lock status before uploading to SharePoint. Avoid overwriting co-authored documents. |
-| B-021 | Hash fallback chain for missing hashes | P2 | `internal/graph/` | Some Business/SharePoint files lack any hash. Fall back: QuickXorHash -> SHA256 -> size+eTag+mtime. |
-| B-023 | `/children` fallback when delta incomplete | P3 | `internal/graph/` | National Cloud Deployments don't support `/delta`. Implement `/children` traversal fallback. |
-| B-007 | Cross-drive DriveID handling for shared/remote items | P3 | `internal/graph/` | Verify against real API responses in E2E CI. |
-| B-031 | Profile and optimize performance | P4 | all | After feature-complete: CPU/memory/I/O profiling with `pprof`. |
-| B-032 | Like-for-like performance benchmarks vs rclone and abraunegg | P3 | benchmarks | Reproducible benchmark suite comparing sync performance. |
-| B-060 | Add `ResolveDrives()` for multi-drive sync | P1 | `internal/config/` | `ResolveDrive()` returns one drive. `sync` (all enabled) and `sync --drive a --drive b` need `ResolveDrives()` returning `[]*ResolvedDrive`. Required for 4v2.7 engine wiring. |
-| B-061 | Shared `graph.Client` per token file for multi-drive | P2 | `internal/sync/` | Multiple drives sharing an account (business + SharePoint) should share one `graph.Client` (same token, same rate limit tracking). Engine wiring (4v2.7) should create one Client per unique token path, not per drive. |
-| B-062 | Global worker pool cap for multi-drive sync | P2 | `internal/sync/` | Per-drive pools (8 dl + 8 ul + 8 hash) multiply with concurrent drives. 5 drives = 120 I/O goroutines. Need global cap or per-drive reduction when multiple drives active. Decision for 4v2.6 (executor) or 4v2.7 (engine wiring). |
-| B-063 | Per-tenant rate limit coordination | P4 | `internal/graph/` | Multiple drives under same tenant share Graph API rate limits. Current per-client 429 retry works but isn't optimal. Shared rate limiter per-tenant would be better. Not critical for MVP. |
-| B-064 | Baseline memory scaling for many drives | P4 | `internal/sync/` | Each drive loads full baseline into memory (~19 MB per 100K files). Additive across drives. 5 drives × 100K = ~95 MB baselines alone. Monitor during profiling (B-031). Lazy loading if needed. Also profile DepTracker memory alongside baseline (~12 MB tracker + ~20 MB actions per 100K files). |
-| B-086 | Conflict notification for watch mode | P3 | `internal/sync/` | Phase 5: auto-resolved conflicts should emit events (structured log, desktop notification). |
-| B-087 | Conflict retention/pruning policy | P4 | `internal/sync/` | Resolved conflicts accumulate forever. Add configurable retention (e.g., 90 days) with periodic pruning in Commit(). |
-| B-071 | ConflictRecord missing Name field | P4 | `internal/sync/` | UX convenience for conflict reporting. `path.Base(Path)` suffices but Name from the PathView is cleaner. |
-| B-074 | ~~Drive identity verification at Engine startup~~ | ~~P2~~ | `internal/sync/` | **DONE** — Phase 5.3. `verifyDriveIdentity()` checks configured drive ID matches API at engine startup. `DriveVerifier` interface for testability. |
-| B-085 | ~~Resumable downloads (Range header)~~ | ~~P2~~ | `internal/graph/`, `internal/sync/` | **DONE** — Phase 5.3. `DownloadRange` with HTTP Range header. `downloadToPartial` checks for existing `.partial` files, resumes via `RangeDownloader` interface. Full-file hash verification after resume. |
-| B-088 | Configurable auto-delete of OS junk files (.DS_Store etc.) | P3 | `internal/sync/` | Add configurable option to automatically delete OS-generated junk files during sync (e.g., `.DS_Store`, `Thumbs.db`, `desktop.ini`, `._*` resource forks). Requires research: enumerate all common OS/editor/IDE junk filenames across macOS, Windows, Linux. Consider whether to delete locally, remotely, or both. May overlap with existing always-excluded filter patterns — evaluate unifying into a single configurable exclusion/cleanup system. Reference: `.gitignore` templates, rclone `--delete-excluded`, rsync filter rules. |
-| B-200 | ~~Stale `.partial` file cleanup command~~ | ~~P3~~ | root | **DONE** — CLI `get`/`put` now print the partial file path and resume instructions on Ctrl+C. No cleanup command needed. |
-| B-201 | Upload session resume integration test | P3 | `e2e/` | Verify cross-crash session persistence with a large file upload, Ctrl+C, and re-run. |
-| B-202 | Hash state serialization for download resume | P4 | `internal/sync/` | Save QuickXorHash state alongside `.partial` to skip re-hashing first N bytes on resume. Optimization, not correctness. |
-| B-093 | Adaptive lane routing based on real-time throughput | P3 | `internal/sync/` | `DepTracker.dispatch()` uses a hardcoded 10 MB size threshold to route actions to interactive vs bulk channels. Replace with adaptive routing that adjusts the threshold in real-time based on observed throughput, error rates, and queue depth. Slow connections → lower threshold (more files use bulk). Fast connections → higher threshold (more files use interactive). |
-| B-094 | Configurable worker pool size | P3 | `internal/sync/` | `WorkerPool.Start()` uses `runtime.NumCPU()` as total worker count. Make this configurable per-drive (e.g., TOML `max_workers`). Related to B-062 (global cap for multi-drive) — per-drive config is the building block for global coordination. |
-| B-096 | Parallel hashing in FullScan | P2 | `internal/sync/` | `FullScan()` hashes files sequentially in the `filepath.WalkDir` callback. For initial syncs of large trees with no baseline (mtime fast-path miss), this is the #1 performance bottleneck. Fix: walk runs sequentially as today (readdir+Lstat is I/O-serialized at hardware level, parallel readdir doesn't help), then fan out hash jobs to `errgroup.SetLimit(runtime.NumCPU())`. Walk populates `observed` map and collects `[]hashJob` for files needing hashes. Hash pool processes jobs, results assembled into events. Deletion detection runs after pool drains. ~30 lines of change, zero architectural impact. Phase 5.2.1. |
-| B-098 | ~~Backpressure handling for LocalObserver.Watch() event channel~~ | ~~P2~~ | `internal/sync/` | **FIXED** — Watch hardening. Non-blocking `trySend()` with drop-and-log. Safety scan provides eventual consistency for dropped events. |
-| B-099 | ~~Configurable safety scan interval for Watch()~~ | ~~P2~~ | `internal/sync/` | **DONE** — Phase 5.3. `safetyScanInterval` field on `LocalObserver`, configurable via `WatchOpts.SafetyScanInterval`. Falls back to default 5 min when zero. |
-| B-100 | ~~Scan new directory contents on watch create event~~ | ~~P2~~ | `internal/sync/` | **FIXED** — Watch hardening. `scanNewDirectory()` walks new directories after `watcher.Add()`, emitting events for pre-existing files. Recursive for nested subdirectories. |
-| B-101 | Add timing and resource logging to safety scan | P3 | `internal/sync/` | `runSafetyScan()` only logs Debug entry/exit with event count. Add elapsed time, files walked, and directories scanned to the completion log line so operators can assess safety scan cost and tune the interval. |
-| B-102 | ~~Hash failure silently drops events~~ | ~~P2~~ | `internal/sync/` | **FIXED** — Watch hardening. All hash failure paths now emit events with empty hash instead of dropping: `handleCreate`, `scanNewDirectory`, `buildCreateEvent` (create paths), `handleWrite`, `classifyFileChange` (modify paths). Removed vestigial error return from `buildCreateEvent`. |
-| B-103 | ~~`debounceLoop` final drain can deadlock~~ | ~~P2~~ | `internal/sync/` | **FIXED** — Phase 5.2. Non-blocking select on final drain. |
-| B-105 | `addWatchesRecursive` has no aggregate failure reporting | P3 | `internal/sync/` | If many directories fail to watch (e.g., permissions), each failure logs individually at Warn. No summary. A counter + single log line ("added watches on N/M directories, K failed") at the end would make diagnostics much easier. |
-| B-107 | Write event coalescing at observer level | P2 | `internal/sync/` | `handleWrite` computes a full QuickXorHash on every fsnotify Write event. Rapid saves (e.g., editor auto-save) trigger multiple redundant hash computations. A small per-path cooldown (e.g., 100ms) before hashing would eliminate wasted I/O. The buffer debounce helps downstream but the observer still does expensive work. Separate from B-096 (FullScan parallel hashing) — this is a watch-mode concern. Address during Phase 5.2.2 (RunWatch) when the watch event loop is wired into the engine. |
-| B-109 | ~~`RemoteObserver.Watch()` missing interval validation~~ | ~~P2~~ | `internal/sync/` | **FIXED** — Watch hardening. Intervals below `minPollInterval` (30s) clamped with Warn log. Prevents tight polling loops. |
-| B-111 | ~~Multiple `FlushDebounced()` calls silently break first goroutine~~ | ~~P2~~ | `internal/sync/` | **FIXED** — Watch hardening. `FlushDebounced` now panics with clear message if called twice on the same Buffer. |
-| B-112 | ~~`handleDelete` doesn't remove watches for deleted directories~~ | ~~P3~~ | `internal/sync/` | **FIXED** — Watch hardening. `handleDelete` now receives watcher + syncRoot, calls `watcher.Remove()` for deleted directories. |
-| B-113 | ~~`Watch()` doesn't detect sync root deletion~~ | ~~P2~~ | `internal/sync/` | **FIXED** — Watch hardening. `watchLoop` checks `syncRootExists()` after watcher errors and before safety scans. Returns `ErrSyncRootDeleted` sentinel. |
-| B-115 | Test: safety scan + watch producing conflicting change types for same path | P3 | `internal/sync/` | Watch sees a Create, safety scan 5 min later classifies same file as Modify (because Create was already committed to baseline). Buffer groups both under the same path — planner sees Create + Modify. Planner handles this (latest event wins), but it's an implicit contract with no dedicated test. Add an integration-style test covering this scenario. |
-| B-119 | ~~Hashing actively-written files produces inconsistent state~~ | ~~P2~~ | `internal/sync/` | **DONE** — Phase 5.3. `computeStableHash()` brackets hash computation with pre/post `os.Stat` calls. Returns sentinel error if size or mtime changed during hashing. All hash call sites in `handleCreate`, `handleWrite`, `scanNewDirectory` updated to use stable hash with skip-on-change. |
-| B-120 | Symlinked directories in sync root get no watch and no warning | P3 | `internal/sync/` | `addWatchesRecursive` uses `filepath.WalkDir` which doesn't follow symlinks. `FullScan()` also skips symlinks. Consistent behavior, but if a user symlinks a directory into their sync root expecting it to sync, nothing happens silently. Should log a Warn when a symlinked directory is encountered during watch setup. |
-| B-121 | ~~Delta token and baseline are not atomically consistent~~ | ~~P2~~ | `internal/sync/` | **FIXED** — Phase 5.2. Per-cycle completion tracking via `cycleTracker`. Delta token committed only after all cycle actions succeed. |
-| B-122 | ~~No deduplication between planner output and in-flight tracker actions~~ | ~~P2~~ | `internal/sync/` | **FIXED** — Phase 5.2. `HasInFlight(path)` + `CancelByPath()` in `processBatch()`. |
-| B-123 | ~~Repeated failure suppression missing for watch mode~~ | ~~P3~~ | `internal/sync/` | **DONE** — Phase 5.3. `failureTracker` suppresses paths after 3 failures within 30-min cooldown. Success clears record. Suppressed actions skipped in planner. `recordCycleResults` integrates with cycle completion. |
-| B-124 | ~~Watch() error semantics don't distinguish exit reasons~~ | ~~P2~~ | `internal/sync/` | **CLOSED** — Investigated: asymmetry is harmless. Both observers return `nil` only on ctx cancel (expected). RemoteObserver retries indefinitely; LocalObserver surfaces genuine failures (nosync guard, watcher creation) as non-nil errors. Dead-observer detection handles both cases. Added clarifying comment in engine.go. |
-| B-125 | No health or liveness signal from Watch() goroutines | P4 | `internal/sync/` | Engine starts `Watch()` in goroutines but can't detect if they are healthy, stuck on a channel, or silently dead. Needs heartbeat callback or periodic liveness signal to detect/restart stuck observers. |
-| B-126 | ~~Buffer has no size cap~~ | ~~P2~~ | `internal/sync/` | **FIXED** — Watch hardening. Buffer has `maxPaths` field (default 100K). New paths rejected at capacity with Warn log. Existing paths always accepted. Safety scan provides eventual consistency. |
-| B-127 | No observer-level metrics or counters | P4 | `internal/sync/` | Observers lack counters for events produced, polls, hashes, or dropped fsnotify events. Essential for monitoring and diagnosing degradation in a daemon running for months. Distinct from B-101 (timing). |
-| B-128 | Debounce semantics change under load | P4 | `internal/sync/` | `FlushDebounced` output channel has buffer 1. When consumer is busy, debounce blocks on send and the timer stops running. System degrades from "flush N ms after last event" to "flush as fast as consumer can process." |
-| B-129 | ~~LocalObserver.Watch() has no backoff for watcher errors~~ | ~~P2~~ | `internal/sync/` | **FIXED** — Watch hardening. Exponential backoff (1s→30s, ×2) on watcher errors. Resets on successful event. Prevents tight log-spam loops. |
-| B-138 | Add upstream sync check for oauth2 fork | P3 | CI | `tonimelisma/oauth2` fork will silently fall behind upstream security patches. Add periodic `go list -m -u` check in CI, or document sync process in `CLAUDE.md` next to the replace directive. |
-| B-143 | ~~Remove or ticket-ref `addMoveTargetDep` dead code~~ | ~~P3~~ | `internal/sync/` | **FIXED** — Watch hardening. `addMoveTargetDep` function and its call site removed from `planner.go`. |
-| B-146 | ~~`shutdownCallbackServer`: inject logger instead of `slog.Default()`~~ | ~~P3~~ | `internal/graph/` | **FIXED** — `shutdownCallbackServer` now accepts `*slog.Logger` parameter. |
-| B-147 | ~~`bootstrapLogger`/`buildLogger`: extract shared construction logic~~ | ~~P3~~ | root | **DONE** — Merged into single `buildLogger(cfg *config.ResolvedDrive)`. Pass nil for bootstrap mode. |
-| B-149 | Deduplicate conflict scan logic in `baseline.go` | P3 | `internal/sync/` | `scanConflictRow`/`scanConflictRowSingle` — 80 lines duplicated. |
-| B-154 | Sort map keys in planner for reproducible action order | P4 | `internal/sync/` | Non-deterministic map iteration aids debugging. |
-| B-157 | Add `conflicts --path <path>` filter for per-path conflict history | P3 | root | Only most recent conflict surfaced per path. |
-| B-158 | `DownloadURL`: implement `slog.LogValuer` for compile-time redaction | P4 | `internal/graph/` | "NEVER log" is convention-only. |
-| B-160 | Drop or document `conflicts.history` column | P3 | `internal/sync/` | Unused column in schema. |
-| B-166 | Add `recycle-bin list` command | P4 | root, `internal/graph/` | Show OneDrive recycle bin contents. |
-| B-167 | Add `recycle-bin empty` command | P4 | root, `internal/graph/` | Permanently delete all recycle bin items. |
-| B-168 | Add `recycle-bin restore` command | P4 | root, `internal/graph/` | Restore items from recycle bin. |
-| B-169 | Wire `UseRecycleBin: false` for permanent remote deletion | P4 | `internal/sync/` | When disabled, sync executor calls `PermanentDeleteItem` instead of `DeleteItem`. Business/SharePoint only. |
-| B-170 | Parallel remote + local observation in RunOnce | P2 | `internal/sync/` | Steps 2 (remote delta) and 3 (local scan) in `RunOnce()` are sequential but independent — both read baseline in read-only mode. Use `errgroup.Go()` to run concurrently. Halves observation time for bidirectional sync. Easy win for Phase 5.2. |
-| B-171 | Streaming delta processing (process pages as they arrive) | P4 | `internal/sync/` | `FullDelta()` accumulates all delta pages into `[]ChangeEvent` before returning. Process each page as it arrives — feed events into the buffer while fetching the next page. Reduces memory pressure and improves time-to-first-action for large deltas (thousands of remote changes). Deferred: page processing is ~1ms (path materialization, baseline lookup) vs ~100-300ms API call per page — overlap saves ~1ms per page. Modest win. Revisit when profiling shows it matters. |
-| B-172 | SQLite batched commits for high-throughput workloads | P4 | `internal/sync/` | Every per-action `CommitOutcome()` is a separate SQLite transaction via sole-writer `SetMaxOpenConns(1)`. For high-throughput workloads (many small files), commit latency becomes the ceiling. Accumulate N completed actions and commit in one transaction. Trades crash-recovery granularity for throughput. Deferred: per-action commit is ~0.5ms in WAL mode. The bottleneck is network I/O (uploads/downloads), not SQLite. Batching also breaks the current contract where `tracker.Complete()` is called after commit succeeds. Revisit when profiling shows SQLite is the ceiling. |
-| B-173 | Concurrent folder creates via Graph API `$batch` | P4 | `internal/graph/` | Nested folder hierarchies are serialized by parent→child DAG edges. But sibling folders at the same depth level could be created concurrently via Graph API `$batch` requests (up to 20 operations per batch). Reduces round-trips significantly for deeply nested initial syncs. Deferred: diminishing returns after first sync. Keep P3 until profiling shows folder creation is a bottleneck. |
-| B-174 | Adaptive concurrency (AIMD worker scaling) | P3 | `internal/sync/` | AIMD (additive increase, multiplicative decrease) auto-tuning based on error rates and throughput. High 429 rate → halve active workers. Low error rate + high throughput → add one worker. Many small files → increase workers. Few large files → decrease workers. Designed in `concurrent-execution.md` §8, not implemented. |
-| B-176 | WebSocket push remote observer (replace delta polling) | P3 | `internal/sync/` | Replace periodic delta polling with Graph API change notifications (WebSocket push). Eliminates polling latency entirely — changes arrive in near-real-time. Polling architecture is designed so switching requires changing only the trigger mechanism. Post-v1. |
-| B-182 | ~~Integration test for crash recovery (claimed → pending reclaim)~~ | ~~P2~~ | `internal/sync/` | **DONE** — Phase 5.3. `engine_recovery_test.go`: 11 tests covering no-pending, stale reclaim, terminal ignore, cross-cycle deps, intra-cycle deps, synthetic view construction, drive identity verification, cycle result recording. |
-| B-193 | `purgeSingleDrive` ignores StateDir override | P2 | root | `purgeSingleDrive` uses `config.DriveStatePath()` which returns default state path, not the per-drive `state_dir` override from the TOML section. Requires threading `ResolvedDrive.StatePath()` through the purge flow. |
-| B-198 | Periodic baseline cache consistency check in watch mode | P3 | `internal/sync/` | In-memory `Baseline` is loaded once and patched incrementally by `CommitOutcome`. If a bug causes cache to diverge from SQLite (missed update, partial commit), the planner makes wrong decisions silently. Add a periodic validation: every N cycles (e.g., 100), reload the full baseline from DB and compare with the cached version. Log a warning and force-reload if they diverge. Defensive measure — no known bug, but silent corruption would be catastrophic. |
-| B-199 | ~~Replace global `resolvedCfg` with parameter passing~~ | ~~P3~~ | root | **DONE** — Config passed through Cobra context via `configContextKey{}`. All RunE handlers use `configFromContext(cmd.Context())`. |
-| B-200 | Re-bootstrap CI token for new token format | P1 | CI | Token format changed from bare `oauth2.Token` to `{token: ..., meta: ...}`. Need to re-login locally, then upload new-format token to Key Vault: `onedrive-go login && az keyvault secret set ...`. CI step added to create minimal config.toml. |
-| B-201 | Shared drive enumeration and management | P3 | all | Research required: what are "shared drives"? Which Graph API endpoints enumerate shared items? How do they interact with canonical IDs? See plan step 17 for research questions. |
+Defensive coding, bug fixes, and test gaps in `internal/sync/`.
 
-## Event-Driven Pivot (Phase 4 v2)
+| ID | Title | Priority | Notes |
+|----|-------|----------|-------|
+| B-205 | `WorkerPool.errors` slice grows unbounded in watch mode | P2 | Memory leak. Cap errors slice or use ring buffer. |
+| B-208 | `sessionUpload` non-expired resume error creates infinite retry loop | P2 | Distinguish transient vs permanent errors. Delete session on permanent failure. |
+| B-204 | Reserved worker receives on nil channel in select | P3 | Works correctly via Go nil-channel semantics. Add comment or refactor. |
+| B-206 | Document `sendResult` lost-result edge case in panic recovery | P3 | Panic during shutdown: result dropped but counters still accurate. Add comment. |
+| B-209 | `DownloadToFile` doesn't validate empty `targetPath` | P3 | Empty string creates `.partial` in cwd. Add defensive check. |
+| B-210 | `UploadFile` doesn't validate empty `name` parameter | P3 | Same for `parentID`. Add defensive checks. |
+| B-212 | `freshDownload` uses permissive file permissions (`os.Create` = 0666) | P3 | Inconsistent with `resumeDownload` (0o600). Use `os.OpenFile` with 0o600. |
+| B-214 | Test: `DownloadToFile` rename failure preserves `.partial` | P3 | Verify `.partial` survives and subsequent call resumes. |
+| B-215 | Test: `sessionUpload` session save failure still completes upload | P3 | Mock `SessionStore.Save()` returning error. |
+| B-216 | Test: `UploadFile` stat failure wraps error correctly | P3 | Non-existent path, verify `errors.Is(err, os.ErrNotExist)`. |
+| B-217 | Test: non-RangeDownloader with existing `.partial` starts fresh | P3 | `Downloader`-only mock overwrites existing `.partial`. |
+| B-218 | Test: worker panic recovery records error in `wp.errors` | P3 | Assert panic message in errors slice and `WorkerResult`. |
+| B-219 | Inconsistent hash function usage: direct call vs `tm.hashFunc` | P3 | Download uses `computeQuickXorHash` directly, upload uses injectable `tm.hashFunc`. |
+| B-207 | Document intentional `.partial` preservation on rename failure | P4 | Add clarifying comment. |
+| B-211 | `resumeDownload` TOCTOU race between stat and open | P4 | Extremely unlikely. Verify size after open if fixing. |
+| B-220 | `deleteSession` helper swallows errors silently | P4 | Return error for testability. |
+| B-221 | Add comment explaining Go integer range in hash retry loop | P4 | `range maxRetries + 1` is Go 1.22 syntax, unfamiliar to many. |
+| B-222 | Document `selectHash` cross-file reference in `transfer_manager.go` | P4 | Aid code navigation without IDE. |
 
-| ID | Title | Priority | Package | Notes |
-|----|-------|----------|---------|-------|
+## Hardening: CLI Architecture
 
-### Closed
+Code quality and architecture improvements for the root package.
+
+| ID | Title | Priority | Notes |
+|----|-------|----------|-------|
+| B-223 | Extract `DriveSession` type for per-drive resource lifecycle | P1 | Replace `clientAndDrive()`. Prerequisite for multi-drive. |
+| B-224 | Eliminate global flag variables (`flagJSON`, `flagVerbose`, etc.) | P1 | Move to `CLIFlags` struct in `CLIContext`. Eliminates test pollution. |
+| B-225 | Defensive nil guard for `cliContextFrom` | P2 | Nil `cc` produces cryptic panic. Add `MustCLIContext` or nil checks. |
+| B-226 | Remove `os.Exit(1)` from `runVerify` | P2 | Bypasses Cobra error handling. Return sentinel error instead. |
+| B-193 | `purgeSingleDrive` ignores StateDir override | P2 | Uses default state path, not per-drive `state_dir` from TOML. |
+| B-227 | Deduplicate sync_dir and StatePath validation across commands | P3 | Extract `RequireSyncDir()` and `RequireStatePath()` on `CLIContext`. |
+| B-228 | `buildLogger` silent fallthrough on unknown log level | P3 | No `default` case. Add warning or normalize input. |
+| B-232 | Test coverage for `loadConfig` error paths | P3 | Invalid TOML, ambiguous drive, wrong context type, unknown log level. |
+| B-036 | Extract CLI service layer for testability | P4 | Root package at 28.1% coverage. Target 50%+. |
+| B-229 | `syncModeFromFlags` uses `Changed` instead of `GetBool` | P4 | Subtle Cobra invariant. Document or fix. |
+| B-230 | `printSyncReport` repetitive formatting | P4 | Extract `printNonZero` helper. |
+| B-231 | `loadAndVerify` separation rationale is stale | P4 | Update comment after B-226 removes `os.Exit`. |
+| B-233 | `version` string concatenation in two places | P4 | Minor duplication. Fixed by `DriveSession` (B-223). |
+
+## Hardening: Graph API
+
+Edge cases and correctness for `internal/graph/`.
+
+| ID | Title | Priority | Notes |
+|----|-------|----------|-------|
+| B-020 | SharePoint lock check before upload (HTTP 423) | P2 | Avoid overwriting co-authored documents. |
+| B-021 | Hash fallback chain for missing hashes | P2 | Some Business/SharePoint files lack any hash. Fall back: QuickXorHash → SHA256 → size+eTag+mtime. |
+| B-007 | Cross-drive DriveID handling for shared/remote items | P3 | Verify against real API responses in E2E. |
+
+## Hardening: Watch Mode
+
+Improvements to continuous sync reliability in `internal/sync/`.
+
+| ID | Title | Priority | Notes |
+|----|-------|----------|-------|
+| B-107 | Write event coalescing at observer level | P2 | Per-path cooldown before hashing. Rapid saves trigger redundant hash computations. Phase 5.2.2 scope. |
+| B-101 | Add timing and resource logging to safety scan | P3 | Elapsed time, files walked, directories scanned. |
+| B-105 | `addWatchesRecursive` has no aggregate failure reporting | P3 | Summary log line: "added N/M watches, K failed." |
+| B-115 | Test: safety scan + watch producing conflicting change types | P3 | Watch sees Create, safety scan classifies same file as Modify. Planner handles it but no test. |
+| B-120 | Symlinked directories get no watch and no warning | P3 | Log Warn when symlinked directory encountered during watch setup. |
+| B-125 | No health or liveness signal from Watch() goroutines | P4 | Detect stuck/dead observers. Heartbeat or periodic liveness signal. |
+| B-127 | No observer-level metrics or counters | P4 | Events produced, polls, hashes, dropped events. Essential for long-running daemon. |
+| B-128 | Debounce semantics change under load | P4 | When consumer is busy, debounce blocks and timer stops running. |
+
+## Hardening: Code Quality
+
+Misc improvements across packages.
+
+| ID | Title | Priority | Notes |
+|----|-------|----------|-------|
+| B-138 | Add upstream sync check for oauth2 fork | P3 | `tonimelisma/oauth2` fork may fall behind security patches. CI check or documented process. |
+| B-149 | Deduplicate conflict scan logic in `baseline.go` | P3 | `scanConflictRow`/`scanConflictRowSingle` — 80 lines duplicated. |
+| B-160 | Drop or document `conflicts.history` column | P3 | Unused column in schema. |
+| B-198 | Periodic baseline cache consistency check in watch mode | P3 | Every N cycles, reload from DB and compare with cache. Defensive against silent corruption. |
+| B-071 | ConflictRecord missing Name field | P4 | UX convenience. `path.Base(Path)` suffices. |
+| B-087 | Conflict retention/pruning policy | P4 | Resolved conflicts accumulate forever. Add configurable retention (e.g., 90 days). |
+| B-154 | Sort map keys in planner for reproducible action order | P4 | Non-deterministic map iteration aids debugging. |
+| B-158 | `DownloadURL`: implement `slog.LogValuer` for compile-time redaction | P4 | "NEVER log" is convention-only. |
+
+## Hardening: Performance
+
+Optimization deferred until profiling shows a bottleneck.
+
+| ID | Title | Priority | Notes |
+|----|-------|----------|-------|
+| B-063 | Per-tenant rate limit coordination | P4 | Multiple drives under same tenant share Graph API rate limits. Shared rate limiter per-tenant. |
+| B-064 | Baseline memory scaling for many drives | P4 | ~19 MB per 100K files, additive across drives. Monitor during profiling (B-031). |
+| B-031 | Profile and optimize performance | P4 | CPU/memory/I/O profiling with `pprof`. After feature-complete. |
+| B-171 | Streaming delta processing (process pages as they arrive) | P4 | Reduces memory for large deltas. Modest win (~1ms per page vs ~100-300ms API call). |
+| B-172 | SQLite batched commits for high-throughput workloads | P4 | Per-action commit is ~0.5ms. Bottleneck is network I/O, not SQLite. |
+| B-173 | Concurrent folder creates via Graph API `$batch` | P4 | Sibling folders at same depth. Diminishing returns after first sync. |
+
+## CI / Infrastructure
+
+| ID | Title | Priority | Notes |
+|----|-------|----------|-------|
+| B-200 | Re-bootstrap CI token for new token format | P1 | Token format changed. Re-login locally, upload to Key Vault. |
+
+## Closed
 
 | ID | Title | Resolution |
 |----|-------|------------|
-| B-054 | Remove old `internal/sync/` code after Phase 4v2 complete | **Superseded** — old code removal moved to Increment 0 (B-055), not end of Phase 4v2. |
-| B-055 | Increment 0: Delete old sync code, stub sync command, remove tombstone config, update CI | **Done** — Phase 4v2 Increment 0 complete. Old sync engine deleted, sync.go stubbed, tombstone config removed, CI updated, clean-slate orphan branch created. |
-| B-056 | Remove `tombstone_retention_days` from config package | **Done** — Completed as part of Increment 0 (B-055). |
-| B-057 | Remove sync integration test line from `integration.yml` | **Done** — Completed as part of Increment 0 (B-055). |
-| B-053 | Implement Phase 4v2.1: Types + Baseline Schema + BaselineManager | **Done** — PR #78. types.go, migrations, baseline.go, 25 tests, 82.5% coverage. |
-| B-059 | Implement Phase 4v2.2: Remote Observer | **Done** — PR #80. observer_remote.go, 23 tests, 86.4% coverage. |
-| B-065 | Implement Phase 4v2.3: Local Observer | **Done** — PR #82. observer_local.go (FullScan, name validation, always-excluded, QuickXorHash), 31 tests with real temp dirs, 87.7% coverage. |
-| B-066 | Implement Phase 4v2.4: Change Buffer | **Done** — PR #84. buffer.go (thread-safe Add/AddAll/FlushImmediate, move dual-keying), 14 tests with race detector, 91.2% coverage. |
-| B-067 | Implement Phase 4v2.5: Planner | **Done** — PR #85. planner.go (5-step pipeline, EF1-EF14 + ED1-ED8 decision matrices, move detection, big-delete safety), 43 tests, 91.2% coverage. |
-| B-073 | DriveTokenPath/DriveStatePath should accept `driveid.CanonicalID` | **Done** — Both functions now accept `driveid.CanonicalID`. All callers migrated: `auth.go` helper chain (`discoverAccount`, `findTokenFallback`, `canonicalIDForToken`, `purgeSingleDrive`), `files.go`, `status.go`, `drive.go`, `integration_test.go`. |
-| B-068 | Executor must fill zero DriveID for new local items | **Done** — PR #90. `resolveDriveID()` fills zero DriveID from executor's per-drive context. |
-| B-070 | Add ParentID to Action struct | **Closed (by design)** — PR #90. Executor resolves parent IDs dynamically via `resolveParentID()` chain: createdFolders → baseline → "root". No need to add ParentID to Action. |
-| B-052 | Re-enable E2E tests in CI | **Done** — 4v2.8. E2E test block uncommented in `integration.yml`. |
-| B-058 | Re-enable sync E2E tests in CI after Increment 8 | **Done** — 4v2.8. Sync E2E tests written (`e2e/sync_e2e_test.go`), CI re-enabled. Interactive resolve deferred to Phase 5. |
-| B-075 | Upload session leak in chunkedUpload | **Done** — Hardening. `CreateUploadSession` succeeded but `os.Open`/`uploadChunks` failure paths never canceled the session. Added `CancelUploadSession` to `TransferClient`, `cancelSession` helper, regression test. |
-| B-076 | Partial file leak on f.Close() failure | **Done** — Hardening. `downloadToPartial` left `.partial` file on disk if `f.Close()` failed after successful download. Added `os.Remove(partialPath)` in Close error path. |
-| B-077 | resolveTransfer nil-map panic for conflicts resolved outside Execute() | **Done** — Hardening. `executor.baseline` and `executor.createdFolders` were uninitialized when `resolveTransfer` was called from `ResolveConflict` without a prior `Execute()`. Added lazy initialization guard. |
-| B-078 | TransferClient leaks upload session lifecycle to consumers | **Done** — Refactor. `TransferClient` (5 methods) replaced with `Downloader` (1) + `Uploader` (1). Upload session lifecycle (create/chunk/cancel) encapsulated in `graph.Client.Upload()`. Removed ~170 lines of duplicated state machine code from Executor and CLI. |
-| B-079 | Executor conflates immutable config with per-call mutable state | **Done** — Refactor. Split `Executor` into immutable `ExecutorConfig` + ephemeral `Executor` created per `Execute()` call via `NewExecution()`. Eliminates nil-map panics and temporal coupling. Phase 5 thread-safe. |
-| B-080 | Upload progress callback was nil in executeUpload | **Done** — Hardening. `executeUpload` passed `nil` for progress callback. Added per-upload Debug-level closure with path context. |
-| B-081 | Simple upload doesn't preserve mtime | **Done** — Hardening. Graph API simple upload (PUT /content) can't include `fileSystemInfo`. Added `UpdateFileSystemInfo()` PATCH method, called after simple upload when mtime is non-zero. |
-| B-082 | Baseline Load() queries DB on every call | **Done** — Hardening. `resolveTransfer` called `Load()` per conflict, loading full baseline N times for N conflicts. Added cache-through pattern: `Load()` returns cached `*Baseline` if available, `Commit()` invalidates and refreshes. |
-| B-083 | engineMockClient lacks compile-time interface checks | **Done** — Hardening. Added `var _ Interface = (*engineMockClient)(nil)` for all 4 interfaces + design comment. |
-| B-084 | EF9 edit-delete conflict fails silently (404 download loop) | **Done** — Auto-resolve: local edit wins, uploaded to re-create remote. Conflict recorded as auto-resolved in history. `conflicts --history` shows resolved conflicts. E2E tests updated. |
-| B-089 | Baseline concurrent-safe incremental cache for per-action commits | **Done** — Phase 5.0. `Baseline` gains `sync.RWMutex` + locked accessors (`GetByPath`, `GetByID`, `Put`, `Delete`, `Len`, `ForEachPath`). All production code migrated. Maps remain public for test convenience. |
-| B-090 | Eliminate `createdFolders` map — use incremental baseline instead | **Done** — Phase 5.0. `createdFolders` deleted. DAG edges guarantee parent folder `CommitOutcome` → `Put()` before child dispatch. `resolveParentID()` uses baseline-only lookup. |
-| B-091 | `resolveTransfer()` calls batch `Commit()` — must migrate to `CommitOutcome()` | **Done** — Phase 5.0. `resolveTransfer()` calls `CommitOutcome(ctx, outcome)` for per-action baseline commit. |
-| B-095 | DepTracker.byPath cleanup on action completion | **Done** — Phase 5.1. `Complete()` and `CancelByPath()` now delete `byPath` entries. Regression tests added. |
-| B-037 | Add chunk upload retry for pre-auth URLs | **Done** — `doPreAuthRetry` method added to `graph.Client`. `UploadChunk` (`io.Reader` → `io.ReaderAt`), `CancelUploadSession`, `QueryUploadSession`, `downloadFromURL` all use it. Retro follow-ups: graph coverage recovered via decode-error test; baseline cache invalidation YAGNI; upload-then-PATCH purity confirmed correct. |
-| B-069 | Handle locally-deleted folder with no remote delta event | **Done** — ED8 changed from ActionCleanup to ActionRemoteDelete. Both folder classifiers restructured with upfront mode filtering parallel to file path. |
-| B-072 | ED1-ED8 missing folder-delete-to-remote (folder EF6) | **Done** — Fixed as part of B-069. ED8 now propagates local folder deletes to remote. |
-| B-135 | Promote `fsnotify` from indirect to direct dependency | **Done** — `go mod tidy` promoted to direct. |
-| B-136 | Run `go mod tidy` to drop unused `golang.org/x/sync` | **Done** — `go mod tidy` run. |
-| B-139 | Use `http.Status*` constants in `classifyStatusCode` | **Done** — Replaced raw integers with `http.StatusUnauthorized`, `http.StatusInsufficientStorage`, etc. |
-| B-140 | Set `Websocket: false` default until feature is implemented | **Done** — Changed to `false`. `UseLocalTrash` now platform-specific (macOS=true, Linux=false). |
-| B-142 | Remove dead `truncateToSeconds` function | **Done** — Removed function and its test. |
-| B-143 | Remove or ticket-ref `addMoveTargetDep` dead code | **Done** — Watch hardening. Function and call site fully removed from `planner.go`. |
-| B-156 | `rm` command: warn that folder deletion is recursive | **Done** — Added `--recursive` (`-r`) flag required for folder deletion, `--permanent` flag for Business/SharePoint. |
-| B-165 | Implement local trash support for sync deletes | **Done** — Injectable `trashFunc` on `ExecutorConfig`, macOS `~/.Trash/` implementation, fallback to `os.Remove` on error. |
-| B-104 | `FlushImmediate()` logs Info on empty buffer | **Done** — Changed to Debug log level for empty buffer flush. |
-| B-110 | `LocalObserver.sleepFunc` is dead code | **Done** — Removed `sleepFunc` field and initialization from `LocalObserver`. |
-| B-131 | Fix `userAgent` to use binary version constant | **Done** — Added `userAgent` field to `Client` struct, wired binary `version` from callers. Removed hardcoded constant. |
-| B-132 | Fix download hash mismatch infinite loop | **Done** — Hash-verification retry loop (3 attempts) around network retry. On exhaustion, accepts download with `remoteHash = localHash` to prevent baseline mismatch loop. |
-| B-133 | Track conflict copies in conflicts table | **Done** — `deleteLocalFile` hash-mismatch branch returns `ActionConflict` with `ConflictEditDelete`. Baseline entry deleted for unresolved edit-delete conflicts. |
-| B-134 | Populate `remote_mtime` in conflict records | **Done** — Added `RemoteMtime` field to `Outcome`, populated in download, conflict, and edit-delete paths. `commitConflict` stores actual value. |
-| B-141 | Warn on unimplemented config fields | **Done** — `WarnUnimplemented()` logs Warn for non-default values of unimplemented fields. Wired into config loading. |
-| B-144 | Update stale design docs post-Phase 5.0 | **Done** — Fixed `rjeczalik/notify` → `fsnotify/fsnotify` in 3 design docs. Annotated `upload_sessions` as dropped in migration 00002. |
-| B-103 | `debounceLoop` final drain can deadlock | **Done** — Phase 5.2. Non-blocking select on final drain prevents goroutine leak when consumer stops reading. |
-| B-121 | Delta token and baseline are not atomically consistent | **Done** — Phase 5.2. Per-cycle completion tracking via `cycleTracker`. Delta token committed only after all cycle actions succeed. |
-| B-122 | No deduplication between planner output and in-flight tracker actions | **Done** — Phase 5.2. `HasInFlight(path)` + `CancelByPath()` in `processBatch()`. |
-| B-177 | Canceled-context race in `failAndComplete` | **Done** — Watch hardening. `failAndComplete` now uses pool-level ctx instead of per-action `actionCtx`. Prevents silent failure when `CancelByPath` cancels the action context. |
-| B-178 | `events` channel never closed in `startObservers` | **Done** — Watch hardening. WaitGroup tracks observer goroutines; `close(events)` on completion lets bridge goroutine exit cleanly. |
-| B-179 | No dead-observer detection in watch loop | **Done** — Watch hardening. `startObservers` returns observer count. Main loop decrements on each exit; returns error when all observers dead. |
-| B-180 | Undocumented baseline/token safety invariants | **Done** — Watch hardening. Added inline comments documenting stale-baseline safety (RWMutex in-place update) and delta token monotonicity. |
-| B-181 | Missing `DownloadOnly` observer skip test | **Done** — Watch hardening. Added `TestRunWatch_DownloadOnly_SkipsLocalObserver` mirroring the upload-only test. |
-| B-102 | Hash failure silently drops events | **Done** — Watch hardening. All hash failure paths emit events with empty hash: creates (`handleCreate`, `scanNewDirectory`, `buildCreateEvent`) and modifies (`handleWrite`, `classifyFileChange`). Removed vestigial error return from `buildCreateEvent`. |
-| B-111 | Multiple `FlushDebounced()` calls silently break first goroutine | **Done** — Watch hardening. `FlushDebounced` panics with clear message if called twice on the same Buffer. |
-| B-112 | `handleDelete` doesn't remove watches for deleted directories | **Done** — Watch hardening. `handleDelete` receives watcher + syncRoot, calls `watcher.Remove()` for deleted directories. |
-| B-113 | `Watch()` doesn't detect sync root deletion | **Done** — Watch hardening. `watchLoop` checks `syncRootExists()` after watcher errors and before safety scans. Returns `ErrSyncRootDeleted`. |
-| B-126 | Buffer has no size cap | **Done** — Watch hardening. Buffer has `maxPaths` field (default 100K). New paths rejected at capacity with Warn. Safety scan provides eventual consistency. |
-| B-183 | Dropped-event counter for `trySend` | **Done** — Watch hardening round 2. Added `atomic.Int64` counter + `DroppedEvents()` accessor on `LocalObserver`. Engine logs drops in `watchCycleCompletion`. |
-| B-184 | Reset backoff on successful safety scan | **Done** — Watch hardening round 2. `errBackoff` now resets to `watchErrInitBackoff` after each safety scan tick, not just fsnotify events. |
-| B-185 | Test `trySend` channel-full path | **Done** — Watch hardening round 2. Added `TestTrySend_ChannelFull_DropsEvent`, `TestTrySend_ChannelAvailable_SendsEvent`, `TestTrySend_ContextCanceled_NoDrop`. |
-| B-186 | Test `scanNewDirectory` recursive depth | **Done** — Watch hardening round 2. Added `TestWatch_NewDirectoryNestedRecursion` (3-level dir tree, verifies all intermediate dirs and deep file detected). |
-| B-187 | Split `observer_local.go` into two files | **Done** — Watch hardening round 2. Extracted `watchLoop`, event handlers, and `runSafetyScan` into `observer_local_handlers.go`. Main file: 591 lines, handlers: 335 lines. |
-| B-188 | Split `observer_local_test.go` to mirror source split | **Done** — Watch hardening round 3. Moved Watch, trySend, and recursive scan tests to `observer_local_handlers_test.go`. Original: 1281 lines, new: 627 lines. |
-| B-189 | Test backoff reset on safety scan | **Done** — Watch hardening round 3. Added `TestWatchLoop_BackoffResetsOnSafetyScan` and `TestWatchLoop_BackoffEscalatesWithoutReset`. Made `safetyScanOverride` and `sleepFunc` injectable on `LocalObserver`. |
-| B-190 | Fix cumulative drop counter → per-cycle reset | **Done** — Watch hardening round 3. Added `ResetDroppedEvents()` using `atomic.Int64.Swap(0)`. Engine calls `ResetDroppedEvents()` instead of `DroppedEvents()` in `watchCycleCompletion`. |
-| B-191 | Document intentional blocking sends in `RemoteObserver.Watch` | **Done** — Watch hardening round 3. Added comment explaining why remote delta events use blocking sends (no recovery mechanism for dropped events, unlike local safety scan). |
-| B-192 | Document `timeSleep` cross-file dependency | **Done** — Watch hardening round 3. Made `LocalObserver.sleepFunc` injectable (matching `RemoteObserver` and `ExecutorConfig` patterns). Updated `timeSleep` doc comment to describe shared usage across all three consumers. |
-| B-193 | Make `mockFsWatcher.Close()` idempotent | **Done** — Watch hardening round 3b. Added `sync.Once` to prevent panic on double-close of event/error channels. |
-| B-194 | Make safety scan ticker injectable for deterministic tests | **Done** — Watch hardening round 3b. Added `safetyTickFunc` field to `LocalObserver` (same pattern as `sleepFunc` and `watcherFactory`). Eliminated `time.Sleep(300ms)` timing dependency in `TestWatchLoop_BackoffResetsOnSafetyScan`. |
-| B-195 | Document `DroppedEvents()` and mock watcher `Add()` intent | **Done** — Watch hardening round 3b. Clarified `DroppedEvents()` is retained for tests/diagnostics (production uses `ResetDroppedEvents`). Documented mock `Add()` no-op behavior. |
-| B-008 | Spec inconsistency: chunk_size units (MB vs MiB) | **Done** — Fixed configuration.md: "10MB" → "10MiB" in all 5 locations (TOML example, options table, validation, appendix, migration mapping). |
-| B-108 | No test for combined chmod+create fsnotify event | **Done** — Added `TestWatchLoop_ChmodCreateCombinedEvent` using mock watcher with `Chmod\|Create` combined event. |
-| B-114 | Event channel sizing undocumented in Watch() API | **Done** — Added channel sizing documentation to `Watch()` method in `observer_local.go`. |
-| B-116 | Document stale baseline interaction during watch mode | **Done** — Added stale baseline interaction documentation to `handleWrite()` in `observer_local_handlers.go`. |
-| B-117 | Test: transient file (create then immediate delete) on macOS | **Done** — Added `TestWatchLoop_TransientFileCreateDelete` verifying graceful handling of Remove for never-created path. |
-| B-118 | Test: local move produces out-of-order Rename+Create events | **Done** — Added `TestWatchLoop_MoveOutOfOrderRenameCreate` verifying independent Create + Delete events from reversed delivery. |
-| B-145 | Add `tracker.go` API documentation | **Done** — Added package-level API documentation to `tracker.go`. |
-| B-153 | Document hash-verify skip in `resolveTransfer` conflict resolution | **Done** — Added documentation to `resolveTransfer()` in `engine.go`. |
-| B-159 | `doOnce`: document implicit `Content-Type: application/json` default | **Done** — Added documentation to `doOnce()` in `client.go`. |
-| B-161 | ~~Add SQL comment for `action_queue.depends_on` encoding~~ | **Superseded** — `action_queue` table dropped. |
-| B-196 | Fix inaccurate scheduling-yield comment in backoff reset test | **Done** — Comment described `time.Sleep(10ms)` as "scheduling yield" but the real reason is preventing non-deterministic `select` pick between tick and error channels. |
-| B-197 | Fix goroutine leak in `TestFlushDebounced_PanicsOnDoubleCall` | **Done** — Test discarded `FlushDebounced` output channel and never canceled context, leaking `debounceLoop` goroutine. Added explicit cancel + drain (matching all other `FlushDebounced` tests). Root cause of flaky `testLogWriter` data race. |
-| B-092 | Audit and clean up unused schema tables | **Done** — Phase 5.4. Migration `00003_drop_action_queue.sql` drops `action_queue`, `stale_files`, `config_snapshots`, `change_journal` tables. |
-| B-097 | ~~Action queue compaction for long-running watch mode~~ | **Superseded** — No `action_queue` table. |
-| B-162 | ~~Add `created_at` column to `action_queue`~~ | **Superseded** — `action_queue` table dropped. |
-| B-175 | ~~Bounded DepTracker with spillover~~ | **Superseded** — Tracker memory bound still relevant but no spillover target. |
-| B-198 | Baseline cache consistency check | **Done** — Phase 5.4. Planner idempotency means delta re-observation on restart produces same actions. |
-| B-199 | Eliminate global resolvedCfg | **Done** — Config passed through Cobra context. All RunE handlers use `configFromContext()`. |
-| B-147 | Merge bootstrapLogger/buildLogger | **Done** — Single `buildLogger(cfg)` accepting nil for bootstrap. |
+| B-203 | Flaky `TestWatch_NewDirectoryPreExistingFiles` | **DONE** — Emit with empty hash on `errFileChangedDuringHash`. 100/100 pass. |
+| B-074 | Drive identity verification at Engine startup | **DONE** — Phase 5.3. `verifyDriveIdentity()`. |
+| B-085 | Resumable downloads (Range header) | **DONE** — Phase 5.3. `DownloadRange` + `.partial` resume. |
+| B-096 | Parallel hashing in FullScan | **DONE** — Phase 5.2.1. `errgroup.SetLimit(runtime.NumCPU())`. |
+| B-170 | Parallel remote + local observation in RunOnce | **DONE** — Phase 5.2.0. `errgroup.Go()` for concurrent observation. |
+| B-200 (stale partials) | Stale `.partial` file cleanup command | **DONE** — CLI prints path + resume instructions on Ctrl+C. |
+| B-089 | Baseline concurrent-safe incremental cache | **DONE** — Phase 5.0. `sync.RWMutex` + locked accessors. |
+| B-090 | Eliminate `createdFolders` map | **DONE** — Phase 5.0. DAG edges + incremental baseline. |
+| B-091 | `resolveTransfer()` migrate to `CommitOutcome()` | **DONE** — Phase 5.0. |
+| B-095 | DepTracker.byPath cleanup on completion | **DONE** — Phase 5.1. |
+| B-098 | Backpressure for LocalObserver.Watch() | **DONE** — Non-blocking `trySend()` with drop-and-log. |
+| B-099 | Configurable safety scan interval | **DONE** — Phase 5.3. |
+| B-100 | Scan new directory contents on watch create | **DONE** — `scanNewDirectory()`. |
+| B-102 | Hash failure silently drops events | **DONE** — All paths emit events with empty hash. |
+| B-103 | `debounceLoop` final drain deadlock | **DONE** — Phase 5.2. Non-blocking select. |
+| B-107 (write coalescing) | Write event coalescing — partial | Note: B-107 remains open for observer-level coalescing. Buffer debounce is done. |
+| B-109 | RemoteObserver.Watch() interval validation | **DONE** — Clamp below `minPollInterval` (30s). |
+| B-111 | Multiple `FlushDebounced()` calls break goroutine | **DONE** — Panic on double-call. |
+| B-112 | `handleDelete` doesn't remove watches | **DONE** — `watcher.Remove()` for deleted dirs. |
+| B-113 | `Watch()` doesn't detect sync root deletion | **DONE** — `ErrSyncRootDeleted` sentinel. |
+| B-119 | Hashing actively-written files | **DONE** — Phase 5.3. `computeStableHash()`. |
+| B-121 | Delta token and baseline not atomically consistent | **DONE** — Phase 5.2. `cycleTracker`. |
+| B-122 | No dedup between planner and in-flight tracker | **DONE** — Phase 5.2. `HasInFlight()` + `CancelByPath()`. |
+| B-123 | Repeated failure suppression for watch mode | **DONE** — Phase 5.3. `failureTracker`. |
+| B-124 | Watch() error semantics don't distinguish exit reasons | **CLOSED** — Asymmetry is harmless. Comment added. |
+| B-126 | Buffer has no size cap | **DONE** — `maxPaths` field (default 100K). |
+| B-129 | LocalObserver.Watch() no backoff for watcher errors | **DONE** — Exponential backoff (1s→30s). |
+| B-037 | Chunk upload retry for pre-auth URLs | **DONE** — `doPreAuthRetry`. |
+| B-069 | Locally-deleted folder with no remote delta event | **DONE** — ED8 → ActionRemoteDelete. |
+| B-072 | ED1-ED8 missing folder-delete-to-remote | **DONE** — Part of B-069. |
+| B-075 | Upload session leak in chunkedUpload | **DONE** — `CancelUploadSession`. |
+| B-076 | Partial file leak on f.Close() failure | **DONE** — `os.Remove` in Close error path. |
+| B-077 | resolveTransfer nil-map panic | **DONE** — Lazy initialization guard. |
+| B-078 | TransferClient leaks session lifecycle | **DONE** — `Downloader` + `Uploader` interfaces. |
+| B-079 | Executor conflates config with mutable state | **DONE** — `ExecutorConfig` + ephemeral `Executor`. |
+| B-080 | Upload progress callback was nil | **DONE** — Debug-level closure. |
+| B-081 | Simple upload doesn't preserve mtime | **DONE** — `UpdateFileSystemInfo()` PATCH. |
+| B-082 | Baseline Load() queries DB on every call | **DONE** — Cache-through pattern. |
+| B-083 | engineMockClient lacks interface checks | **DONE** — Compile-time checks added. |
+| B-084 | EF9 edit-delete conflict fails silently | **DONE** — Auto-resolve: local edit wins. |
+| B-092 | Audit and clean up unused schema tables | **DONE** — Phase 5.4. Migration 00003. |
+| B-097 | Action queue compaction | **SUPERSEDED** — No `action_queue` table. |
+| B-104 | `FlushImmediate()` logs Info on empty buffer | **DONE** — Changed to Debug. |
+| B-108 | No test for combined chmod+create event | **DONE** — `TestWatchLoop_ChmodCreateCombinedEvent`. |
+| B-110 | `LocalObserver.sleepFunc` dead code | **DONE** — Removed. |
+| B-114 | Event channel sizing undocumented | **DONE** — Documentation added. |
+| B-116 | Document stale baseline interaction | **DONE** — Comments added. |
+| B-117 | Test: transient file create+delete on macOS | **DONE** — `TestWatchLoop_TransientFileCreateDelete`. |
+| B-118 | Test: local move out-of-order events | **DONE** — `TestWatchLoop_MoveOutOfOrderRenameCreate`. |
+| B-131 | Fix `userAgent` to use version constant | **DONE** — `userAgent` field on `Client`. |
+| B-132 | Fix download hash mismatch infinite loop | **DONE** — 3-attempt retry loop. |
+| B-133 | Track conflict copies in conflicts table | **DONE** — `ActionConflict` with `ConflictEditDelete`. |
+| B-134 | Populate `remote_mtime` in conflict records | **DONE** — `RemoteMtime` field on `Outcome`. |
+| B-135 | Promote `fsnotify` to direct dependency | **DONE** — `go mod tidy`. |
+| B-136 | Drop unused `golang.org/x/sync` | **DONE** — `go mod tidy`. |
+| B-138 (partial) | Use `http.Status*` constants | **DONE** — B-139. |
+| B-140 | Set `Websocket: false` default | **DONE**. |
+| B-141 | Warn on unimplemented config fields | **DONE** — `WarnUnimplemented()`. |
+| B-142 | Remove dead `truncateToSeconds` | **DONE**. |
+| B-143 | Remove `addMoveTargetDep` dead code | **DONE**. |
+| B-144 | Update stale design docs post-Phase 5.0 | **DONE**. |
+| B-145 | Add `tracker.go` API documentation | **DONE**. |
+| B-146 | Inject logger into `shutdownCallbackServer` | **DONE**. |
+| B-147 | Merge bootstrapLogger/buildLogger | **DONE** — Single `buildLogger(cfg)`. |
+| B-149 (partial) | Deduplicate conflict scan | Note: B-149 remains open. |
+| B-153 | Document hash-verify skip in `resolveTransfer` | **DONE**. |
+| B-156 | `rm` command: warn about recursive deletion | **DONE** — `--recursive` flag. |
+| B-159 | Document implicit `Content-Type` default | **DONE**. |
+| B-161 | SQL comment for `action_queue.depends_on` | **SUPERSEDED** — Table dropped. |
+| B-162 | Add `created_at` to `action_queue` | **SUPERSEDED** — Table dropped. |
+| B-165 | Implement local trash support | **DONE** — Injectable `trashFunc`. |
+| B-175 | Bounded DepTracker with spillover | **SUPERSEDED** — No spillover target. |
+| B-177 | Canceled-context race in `failAndComplete` | **DONE** — Pool-level ctx. |
+| B-178 | `events` channel never closed in `startObservers` | **DONE** — WaitGroup + close. |
+| B-179 | No dead-observer detection | **DONE** — Observer count tracking. |
+| B-180 | Undocumented baseline/token safety invariants | **DONE** — Comments added. |
+| B-181 | Missing `DownloadOnly` observer skip test | **DONE**. |
+| B-182 | Integration test for crash recovery | **DONE** — Phase 5.3. 11 tests. |
+| B-183 | Dropped-event counter for `trySend` | **DONE** — `atomic.Int64` + `DroppedEvents()`. |
+| B-184 | Reset backoff on successful safety scan | **DONE**. |
+| B-185 | Test `trySend` channel-full path | **DONE** — 3 tests. |
+| B-186 | Test `scanNewDirectory` recursive depth | **DONE** — 3-level dir tree. |
+| B-187 | Split `observer_local.go` into two files | **DONE** — `observer_local_handlers.go`. |
+| B-188 | Split `observer_local_test.go` | **DONE** — `observer_local_handlers_test.go`. |
+| B-189 | Test backoff reset on safety scan | **DONE** — 2 tests. |
+| B-190 | Fix cumulative drop counter → per-cycle reset | **DONE** — `ResetDroppedEvents()`. |
+| B-191 | Document blocking sends in `RemoteObserver.Watch` | **DONE**. |
+| B-192 | Document `timeSleep` cross-file dependency | **DONE** — Injectable `sleepFunc`. |
+| B-193 (mock) | Make `mockFsWatcher.Close()` idempotent | **DONE** — `sync.Once`. |
+| B-194 | Make safety scan ticker injectable | **DONE** — `safetyTickFunc` field. |
+| B-195 | Document `DroppedEvents()` and mock watcher intent | **DONE**. |
+| B-196 | Fix inaccurate scheduling-yield comment | **DONE**. |
+| B-197 | Fix goroutine leak in double-call test | **DONE** — Cancel + drain. |
+| B-198 (cache) | Baseline cache consistency via idempotent planner | **DONE** — Phase 5.4. Note: B-198 (periodic check in watch mode) remains open as a separate item. |
+| B-199 | Eliminate global resolvedCfg | **DONE** — Context-based config. |
+| B-008 | Spec inconsistency: chunk_size MB vs MiB | **DONE** — Fixed to MiB. |
+| B-054 | Remove old sync code after Phase 4v2 | **SUPERSEDED** — Moved to Increment 0. |
+| B-055 | Increment 0: delete old sync code | **DONE**. |
+| B-056 | Remove `tombstone_retention_days` | **DONE**. |
+| B-057 | Remove sync integration test line | **DONE**. |
+| B-053 | Phase 4v2.1: Types + Baseline | **DONE** — PR #78. |
+| B-059 | Phase 4v2.2: Remote Observer | **DONE** — PR #80. |
+| B-065 | Phase 4v2.3: Local Observer | **DONE** — PR #82. |
+| B-066 | Phase 4v2.4: Change Buffer | **DONE** — PR #84. |
+| B-067 | Phase 4v2.5: Planner | **DONE** — PR #85. |
+| B-068 | Executor must fill zero DriveID | **DONE** — PR #90. |
+| B-070 | Add ParentID to Action struct | **CLOSED (by design)** — Dynamic resolution. |
+| B-073 | DriveTokenPath/DriveStatePath accept CanonicalID | **DONE**. |
+| B-052 | Re-enable E2E tests in CI | **DONE** — 4v2.8. |
+| B-058 | Re-enable sync E2E tests | **DONE** — 4v2.8. |

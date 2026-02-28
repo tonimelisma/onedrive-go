@@ -68,7 +68,6 @@
             ┌────────────────┐
             │   Baseline     │    <-- commits each Outcome per-action
             │   Manager      │    <-- saves delta token when cycle complete
-            │                │    <-- optionally writes to change journal
             └────────────────┘
 ```
 
@@ -112,18 +111,36 @@ internal/
     engine.go                       # Orchestrator (RunOnce, RunWatch, wiring)
     observer_remote.go              # Remote observer: delta fetch / polling -> ChangeEvent[]
     observer_local.go               # Local observer: FS walk / inotify -> ChangeEvent[]
+    observer_local_handlers.go      # Local observer event handlers (create, write, remove, rename)
     buffer.go                       # Change buffer: debounce, dedup, batch by path
     planner.go                      # PURE FUNCTION: events + baseline -> ActionPlan
-    executor.go                     # Actions -> Outcomes, no DB writes
+    executor.go                     # Action dispatch -> Outcomes, no DB writes
+    executor_transfer.go            # Download/upload action execution
+    executor_conflict.go            # Conflict handling actions
+    executor_delete.go              # Delete action execution
     baseline.go                     # Sole DB writer: Load, Commit, schema, migrations
     types.go                        # ChangeEvent, BaselineEntry, PathView, Outcome, etc.
-    filter.go                       # Three-layer filtering (sync_paths, config, .odignore)
-    transfer.go                     # Worker pools, bandwidth limiting, hash verification
-    conflict.go                     # Conflict detection, resolution, keep-both logic
+    transfer_manager.go             # Unified download/upload with resume, hash verification
+    worker.go                       # Lane-based worker pools (interactive/bulk/shared)
+    tracker.go                      # In-memory dependency graph, action dispatch
+    session_store.go                # File-based upload session persistence (JSON)
+    failure_tracker.go              # Watch mode failure suppression
+    trash.go                        # OS trash integration (FreeDesktop.org, macOS)
+    verify.go                       # Post-sync verification (baseline vs filesystem)
+    migrations.go                   # Embedded SQL migration files
 
   config/                           # TOML config with drives
-    config.go                       # Types, loading, validation
+    config.go                       # Config struct, FilterConfig, TransfersConfig, etc.
+    load.go                         # LoadOrDefault, TOML parsing
+    defaults.go                     # Hardcoded default values
+    validate.go                     # Global config validation
+    validate_drive.go               # Per-drive config validation
+    drive.go                        # Drive struct, ResolveDrive, matching logic
     paths.go                        # XDG paths, data dir derivation
+    env.go                          # Environment variable overrides
+    write.go                        # Config file creation and text-level manipulation
+    size.go                         # Human-readable size parsing (e.g., "50GB")
+    unknown.go                      # Unknown key detection for user warnings
 
 pkg/
   quickxorhash/                     # Copied from rclone (BSD-0 license)
@@ -241,13 +258,13 @@ See [event-driven-rationale.md](event-driven-rationale.md) Parts 5.4-5.7 for ful
 
 ### 3.6 Executor (`executor.go`)
 
-Takes an `ActionPlan` and executes it against the API and filesystem. Produces `[]Outcome` -- never writes to the database.
+Takes an `ActionPlan` and dispatches actions to lane-based workers via the DepTracker. Workers produce individual `Outcome` values committed per-action by the BaselineManager.
 
 **DAG execution with dependency tracking**: Actions are dispatched based on dependency satisfaction, not fixed phase ordering. The planner emits explicit dependency edges: parent folder must exist before child operations, children must be removed before parent folder deletion, move target parent must exist. All action types are eligible to run concurrently when their dependencies are met. An in-memory DepTracker tracks action dependencies and dispatches ready actions to workers via channels, providing instant dispatch when dependencies are satisfied. Workers report outcomes through an in-memory result channel. Lane-based worker dispatch routes small files and folder operations to an interactive lane and large transfers to a bulk lane, with a shared overflow pool ensuring fairness. See [concurrent-execution.md](concurrent-execution.md) for the full execution architecture.
 
 **Key properties**:
 - Database writes happen only in the BaselineManager, committing each action outcome individually as workers complete transfers
-- Workers collect Outcomes via a mutex-protected callback
+- Workers report Outcomes through an in-memory result channel
 - Each Outcome is self-contained: has everything the baseline manager needs
 - Retries happen INSIDE the executor with exponential backoff before producing the final Outcome
 
@@ -293,7 +310,7 @@ Each pipeline stage works with its own types. No shared `Item` struct. The type 
 
 ### 4.1 ChangeEvent
 
-Immutable observation of a change. Produced by observers, consumed by the change buffer and planner. Never stored in the database (except optionally in the change journal for debugging).
+Immutable observation of a change. Produced by observers, consumed by the change buffer and planner. Ephemeral — never stored in the database.
 
 ```go
 type ChangeEvent struct {
@@ -369,7 +386,7 @@ type LocalState struct {
 
 ### 4.4 Outcome
 
-Result of executing a single action. Self-contained -- has everything the baseline manager needs to update the database. No DB reads required.
+The result of executing a single action. Self-contained — has everything the BaselineManager needs to update the database.
 
 ```go
 type Outcome struct {
@@ -377,7 +394,7 @@ type Outcome struct {
     Success      bool
     Error        error
     Path         string
-    OldPath      string       // for moves
+    OldPath      string     // for moves
     DriveID      driveid.ID
     ItemID       string     // from API response after upload
     ParentID     string
@@ -386,8 +403,10 @@ type Outcome struct {
     RemoteHash   string
     Size         int64
     Mtime        int64      // local mtime at sync time
+    RemoteMtime  int64      // remote mtime for conflict records
     ETag         string
-    ConflictType string     // "edit_edit", "edit_delete", "create_create" (conflicts only)
+    ConflictType string     // ConflictEditDelete etc. (conflicts only)
+    ResolvedBy   string     // ResolvedByAuto for auto-resolved conflicts, "" otherwise
 }
 ```
 
@@ -421,19 +440,13 @@ type Action struct {
 }
 
 type ActionPlan struct {
-    FolderCreates []Action
-    Moves         []Action
-    Downloads     []Action
-    Uploads       []Action
-    LocalDeletes  []Action
-    RemoteDeletes []Action
-    Conflicts     []Action
-    SyncedUpdates []Action
-    Cleanups      []Action
+    Actions []Action  // flat list of all actions
+    Deps    [][]int   // Deps[i] = indices that action i depends on
+    CycleID string    // UUID grouping actions from one planning pass
 }
 ```
 
-Note: `Action.View` carries the full `PathView` (three-way context) so the executor has complete information about remote, local, and baseline state without querying the database.
+The flat action list with explicit dependency edges enables DAG-based concurrent execution. The `DepTracker` uses `Deps` to dispatch ready actions to workers as their dependencies are satisfied. `Action.View` carries the full `PathView` (three-way context) so the executor has complete information about remote, local, and baseline state without querying the database.
 
 ### 4.6 Consumer-Defined Interfaces (Graph Client)
 
@@ -446,10 +459,17 @@ type DeltaFetcher interface {
 
 type ItemClient interface {
     GetItem(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
-    ListChildren(ctx context.Context, driveID driveid.ID, itemID string) ([]graph.Item, error)
+    ListChildren(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
     CreateFolder(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error)
     MoveItem(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string) (*graph.Item, error)
     DeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error
+    PermanentDeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error
+}
+
+// DriveVerifier verifies that a configured drive ID is reachable and matches
+// the remote API. Used at engine startup to detect stale config.
+type DriveVerifier interface {
+    Drive(ctx context.Context, driveID driveid.ID) (*graph.Drive, error)
 }
 
 // Downloader streams a remote file by item ID.
@@ -464,6 +484,26 @@ type Uploader interface {
         ctx context.Context, driveID driveid.ID, parentID, name string,
         content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc,
     ) (*graph.Item, error)
+}
+
+// SessionUploader provides session-based upload methods for resumable transfers.
+// Type-asserted at runtime to avoid breaking the Uploader interface. When
+// available alongside a SessionStore, the executor uses session-based uploads
+// for large files and persists session state for cross-crash resume.
+type SessionUploader interface {
+    CreateUploadSession(ctx context.Context, driveID driveid.ID, parentID, name string,
+        size int64, mtime time.Time) (*graph.UploadSession, error)
+    UploadFromSession(ctx context.Context, session *graph.UploadSession,
+        content io.ReaderAt, totalSize int64, progress graph.ProgressFunc) (*graph.Item, error)
+    ResumeUpload(ctx context.Context, session *graph.UploadSession,
+        content io.ReaderAt, totalSize int64, progress graph.ProgressFunc) (*graph.Item, error)
+}
+
+// RangeDownloader downloads a file starting from a byte offset. Type-asserted
+// at runtime to avoid breaking the Downloader interface.
+type RangeDownloader interface {
+    DownloadRange(ctx context.Context, driveID driveid.ID, itemID string,
+        w io.Writer, offset int64) (int64, error)
 }
 ```
 
@@ -574,12 +614,12 @@ Workers are organized into two lanes with reserved capacity plus a shared overfl
 
 | Lane | Reserved Workers | Purpose |
 |------|-----------------|---------|
-| Interactive | 2 minimum | Small files (<10 MB), folder ops, deletes, moves |
-| Bulk | 2 minimum | Large file transfers (>=10 MB) |
-| Shared | remaining (default 12) | Dynamically assigned; interactive priority |
+| Interactive | max(2, total/8) | Small files (<10 MB), folder ops, deletes, moves |
+| Bulk | max(2, total/8) | Large file transfers (>=10 MB) |
+| Shared | remainder | Dynamically assigned; interactive priority |
 | Checkers | 8 (separate) | Local hash computation for change detection |
 
-Total lane workers = `parallel_downloads + parallel_uploads` (default 16). Shared workers prefer the interactive lane, ensuring small file changes get picked up immediately even when all bulk workers are busy with large transfers. The checker pool remains separate (CPU-bound, runs during observation, not execution). See [concurrent-execution.md](concurrent-execution.md) section 6 for details.
+Total lane workers = `runtime.NumCPU()` or user-configured cap (minimum 4). Reserved workers per lane = max(2, total/8). Shared workers prefer the interactive lane, ensuring small file changes get picked up immediately even when all bulk workers are busy with large transfers. The checker pool remains separate (CPU-bound, runs during observation, not execution). See [concurrent-execution.md](concurrent-execution.md) section 6 for details.
 
 ### 6.3 Context Tree
 
@@ -645,11 +685,9 @@ Per-side hashes (`local_hash`, `remote_hash`) handle SharePoint enrichment nativ
 |---|---|---|
 | `delta_tokens` | Delta cursor per drive | BaselineManager (when all cycle actions done) |
 | `conflicts` | Conflict tracking with resolution history | BaselineManager |
-| `stale_files` | Filter-change tracking | BaselineManager |
-| `upload_sessions` | _(Dropped in migration 00002)_ | — |
-| `change_journal` | Debugging audit trail (optional, append-only) | BaselineManager |
-| `config_snapshots` | Filter change detection | Engine (on config load) |
 | `schema_migrations` | Schema version tracking | Engine (on startup) |
+
+Upload session persistence uses a file-based `SessionStore` (JSON files in `{dataDir}/upload-sessions/`), not the database.
 
 **Critical property**: The delta token is committed only when all actions for a cycle are done. Individual per-action commits update the baseline but do not advance the delta token. If the process crashes mid-cycle, the token is not advanced and the same delta is re-fetched. The idempotent planner skips actions whose outcomes are already reflected in the baseline, so no work is duplicated.
 
@@ -766,7 +804,7 @@ All known API quirks are handled at the observer boundary, making them invisible
 
 - **Separate token file per drive**: `~/.local/share/onedrive-go/token_{type}_{email}.json` (Linux) or `~/Library/Application Support/onedrive-go/token_{type}_{email}.json` (macOS)
 - File permissions: `0600` (owner read/write only)
-- Keychain integration: post-MVP
+- Keychain integration: planned
 
 ### 10.2 Logging Safety
 

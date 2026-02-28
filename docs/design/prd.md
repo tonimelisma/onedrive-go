@@ -103,7 +103,7 @@ onedrive-go verify                     # Re-hash local files, compare to DB and 
 
 `resolve` supports two modes: **interactive** (prompts per conflict with `[L]ocal / [R]emote / [B]oth / [S]kip / [Q]uit`) and **batch** (flag-driven: `--keep-local`, `--keep-remote`, `--keep-both`, `--all`, `--dry-run`). Interactive mode is the default when no batch flags are passed. See [sync-algorithm.md §7.4](sync-algorithm.md) for full details.
 
-#### Daemon Control (post-MVP, requires RPC)
+#### Daemon Control (requires RPC)
 
 These verbs talk to a running `sync --watch` process over a control socket. They ship when RPC ships. The same RPC API serves both CLI and GUI frontends.
 
@@ -173,7 +173,7 @@ onedrive-go migrate --from rclone      # Explicitly migrate from rclone OneDrive
 
 #### Future Commands (added on demand)
 
-These are not in the MVP. They may be added later based on user requests:
+These may be added later based on user demand:
 
 ```
 cp, mv                                # Server-side copy/move
@@ -213,7 +213,7 @@ find, du, cat, share                   # Utility commands
 
 ## 5. Process Model
 
-### MVP: SQLite Lock, No RPC
+### Default: SQLite Lock, No RPC
 
 The sync database (SQLite) enforces single-writer exclusivity. Only one sync process runs at a time.
 
@@ -224,9 +224,9 @@ The sync database (SQLite) enforces single-writer exclusivity. Only one sync pro
 | `sync` | Yes | Error: database is locked |
 | `status`, `conflicts`, `resolve`, `verify` | Doesn't matter | Read DB directly (SQLite supports concurrent readers) |
 
-There is no RPC, no control socket, no daemon concept at MVP. `sync --watch` is just sync that keeps running. If you want to stop it, Ctrl-C or `systemctl stop`.
+Without RPC, there is no control socket and no daemon concept. `sync --watch` is just sync that keeps running. If you want to stop it, Ctrl-C or `systemctl stop`.
 
-### Post-MVP: RPC for GUI and Daemon Control
+### RPC for GUI and Daemon Control
 
 When RPC is added, `sync --watch` exposes a JSON-over-HTTP API on a Unix domain socket (same pattern as Docker, Tailscale, Syncthing). This enables:
 
@@ -246,9 +246,7 @@ The RPC API serves CLI and GUI identically — same socket, same endpoints, same
 
 ## 6. Account Types
 
-### MVP Scope
-
-All three OneDrive account types supported from day one:
+All three OneDrive account types are supported:
 
 - **OneDrive Personal**: Consumer Microsoft accounts
 - **OneDrive Business**: Microsoft 365 / Azure AD work accounts
@@ -315,7 +313,7 @@ All sync modes are flags on the `sync` verb. No separate verbs for direction or 
 
 `--watch` combines with direction flags: `sync --watch --download-only` is a continuous one-way mirror.
 
-### Pause / Resume (post-MVP, requires RPC)
+### Pause / Resume (requires RPC)
 
 When paused via `onedrive-go pause [duration]`:
 - The process stays alive
@@ -328,7 +326,7 @@ Pause durations: `2h`, `4h`, `8h`, or indefinitely (until `onedrive-go resume`).
 
 ### Dry-Run Mode
 
-`onedrive-go sync --dry-run` previews all operations without executing them. Available for all sync modes. MVP must-have.
+`onedrive-go sync --dry-run` previews all operations without executing them. Available for all sync modes.
 
 ---
 
@@ -432,14 +430,15 @@ ignore_marker = ".odignore"
 
 ### Parallel Transfers
 
-- Configurable parallelism (default: 8 simultaneous transfers)
-- Separate worker pools for uploads, downloads, and checking (like rclone)
-- Transfer count configurable independently:
+- Configurable parallelism (default: `runtime.NumCPU()`, minimum 4 workers)
+- Lane-based worker pools: interactive (small files, folder ops), bulk (large transfers), shared overflow
+- Reserved workers per lane with shared pool preferring interactive for low-latency metadata operations
+- Separate checker pool for local hash computation (CPU-bound, runs during observation)
 
 ```toml
-parallel_downloads = 8
-parallel_uploads = 8
-parallel_checkers = 8
+parallel_downloads = 8  # total lane workers (interactive + bulk + shared)
+parallel_uploads = 8    # total lane workers (shared across download/upload)
+parallel_checkers = 8   # separate pool for hash computation
 ```
 
 ### Resumable Transfers
@@ -660,7 +659,7 @@ With `--quiet`, only errors reach stderr. The log file captures everything:
 {"time":"2026-02-17T10:30:00Z","level":"info","msg":"sync_complete","drive":"personal:toni@outlook.com","downloaded":3,"uploaded":2,"conflicts":1,"duration":"12.4s"}
 ```
 
-### Future: TUI (post-1.0)
+### Future: TUI
 
 Interactive terminal UI (like lazygit/lazydocker) showing:
 - Real-time sync status across all drives
@@ -750,14 +749,14 @@ All 12+ known Microsoft Graph API quirks are handled from day one.
 | **Scope** | 70+ backends, jack-of-all-trades | OneDrive specialist |
 | **Bidirectional sync** | bisync (experimental, alpha-quality) | First-class, production-grade |
 | **Conflict handling** | 7 configurable strategies, no tracking | Keep-both + conflict tracking with resolution tracking |
-| **Shared folders** | Not supported for OneDrive | Supported (post-MVP) |
+| **Shared folders** | Not supported for OneDrive | Supported |
 | **OneDrive API quirks** | Minimal workarounds | All 12+ known quirks handled |
 | **Real-time sync** | No daemon, no filesystem watching | `sync --watch` with WebSocket + inotify/FSEvents |
 | **Setup** | Complex config for OneDrive (client ID, etc.) | `login` auto-configures, `setup` for guided config |
 | **Delta queries** | Only from drive root, no folder-scoped delta | Full delta support with token management |
 | **Multi-account** | Separate remotes in config | Single config, single process, multiple drives |
-| **GUI integration** | HTTP API (rclone rc) | Control socket API (post-MVP, purpose-built) |
-| **FUSE mount** | Excellent (`rclone mount`) | Planned post-MVP |
+| **GUI integration** | HTTP API (rclone rc) | Control socket API (purpose-built) |
+| **FUSE mount** | Excellent (`rclone mount`) | Planned |
 | **Encryption** | Built-in crypt backend | Not a goal (use rclone crypt or OS encryption) |
 
 **When to use rclone instead:** If you need multi-cloud support, FUSE mount today, or client-side encryption. rclone is the Swiss Army knife.
@@ -777,12 +776,12 @@ All 12+ known Microsoft Graph API quirks are handled from day one.
 | **Conflict handling** | Creates backup files, forgets about them | Conflict tracking with resolution tracking |
 | **Multi-account** | Separate process per account | Single `sync --watch`, multiple drives |
 | **CLI design** | Monolithic: flags control everything | Unix-style verbs: `ls`, `get`, `put`, `sync` |
-| **GUI integration** | stdout parsing (fragile, one-way) | Control socket API (post-MVP, structured, bidirectional) |
-| **Pause/resume** | Not supported | Built-in (post-MVP, works from CLI and GUI) |
+| **GUI integration** | stdout parsing (fragile, one-way) | Control socket API (structured, bidirectional) |
+| **Pause/resume** | Not supported | Built-in (works from CLI and GUI) |
 | **Setup** | Manual config file creation | `login` auto-configures, `setup` for guided changes, `migrate` for import |
 | **Real-time remote** | WebSocket (v2.5.8+) | WebSocket from day one |
-| **Shared folders** | Supported (complex, fragile) | Post-MVP, designed to be robust |
-| **Dry-run** | Supported | Supported (MVP) |
+| **Shared folders** | Supported (complex, fragile) | Designed to be robust |
+| **Dry-run** | Supported | Supported |
 | **Safety** | Big-delete, .nosync, recycle bin | Big-delete, .odignore, recycle bin, conflict tracking, disk space reservation |
 | **Packaging** | deb/rpm/AUR/Docker/Homebrew | Same targets, plus static binary |
 | **Testing** | Manual testing, limited CI | Automated E2E tests against live OneDrive |
@@ -795,82 +794,12 @@ All 12+ known Microsoft Graph API quirks are handled from day one.
 
 ---
 
-## 18. Milestones
-
-### MVP (v0.1)
-
-The minimum to be useful. Start small, add based on demand.
-
-**CLI commands:**
-- [ ] `sync` [--watch] [--download-only] [--upload-only] [--dry-run]
-- [ ] `status`, `conflicts`, `resolve`, `verify`
-- [ ] `ls`, `get`, `put`, `rm`, `mkdir`, `stat`
-- [ ] `login` [--browser], `logout` [--purge], `whoami`
-- [ ] `drive add`, `drive remove` [--purge]
-- [ ] `setup`
-- [ ] `service install`, `service uninstall`, `service status`
-- [ ] `migrate` (from abraunegg + rclone, with auto-detection)
-
-**Sync engine:**
-- [ ] SQLite sync database with crash recovery (WAL mode)
-- [ ] Bidirectional sync engine (delta-based)
-- [ ] One-shot and continuous (`--watch`) modes
-- [ ] Download-only and upload-only modes
-- [ ] Local filesystem monitoring (inotify / FSEvents)
-- [ ] Remote change detection (WebSocket + polling fallback)
-- [ ] Conflict detection with conflict tracking
-- [ ] Filtering: config-based patterns + .odignore marker files + selective sync paths
-- [ ] Parallel transfers (configurable, default 8)
-- [ ] Resumable uploads and downloads
-- [ ] Dry-run mode for all sync operations
-- [ ] Big-delete protection
-- [ ] QuickXorHash for content verification
-
-**Infrastructure:**
-- [ ] TOML configuration with flat global keys + drive sections
-- [ ] Personal + Business + SharePoint account support
-- [ ] Multi-drive sync in a single process
-- [ ] All known API quirk workarounds
-- [ ] Structured logging (text interactive, JSON with --quiet)
-- [ ] E2E test suite against live OneDrive
-- [ ] systemd unit file + launchd plist
-- [ ] Docker image
-
-### v0.2: Polish
-
-- [ ] RPC: control socket (Unix domain socket, JSON-over-HTTP)
-- [ ] `pause` / `resume` commands (requires RPC)
-- [ ] `sync` delegates to running `--watch` via RPC (instead of SQLite lock error)
-- [ ] Bandwidth limiting with time-of-day scheduling
-- [ ] Disk space reservation
-- [ ] OS trash integration (FreeDesktop.org, macOS Trash)
-- [ ] Conflict reminder notifications in `--watch` mode
-- [ ] `--json` output for all commands
-
-### v1.0: Production
-
-- [ ] Shared folder sync (Personal + Business)
-- [ ] FUSE mount (read-only initially, then read-write)
-- [ ] TUI interface
-- [ ] Prometheus metrics endpoint
-- [ ] Packaging: deb, rpm, AUR, Homebrew formula
-
-### Someday / Maybe
-
-- [ ] `cp`, `mv`, `find`, `du`, `cat`, `share` commands
-- [ ] On-demand files (FUSE with lazy download)
-- [ ] Desktop notifications (libnotify / macOS Notification Center)
-- [ ] File manager integration (Nautilus, Dolphin sidebar)
-- [ ] National cloud support (US Gov, Germany, China)
-
----
-
-## 19. Explicit Non-Goals
+## 18. Explicit Non-Goals
 
 These are things we deliberately will NOT build:
 
 1. **Multi-cloud backends**: We are not rclone. OneDrive only. The architecture may be extensible but we do not promise or plan other backends.
-2. **GUI application**: We are a CLI tool. GUI frontends can connect to the control socket API (post-MVP), but we don't ship a GUI.
+2. **GUI application**: We are a CLI tool. GUI frontends can connect to the control socket API, but we don't ship a GUI.
 3. **Client-side encryption**: We don't encrypt files before uploading. Use rclone crypt, Cryptomator, or OS-level encryption (LUKS, FileVault).
 4. **Mobile platforms**: No Android, no iOS. Linux and macOS desktop/server only.
 5. **Windows**: Microsoft ships a native OneDrive client for Windows. We don't compete there.
@@ -879,7 +808,7 @@ These are things we deliberately will NOT build:
 
 ---
 
-## 20. Non-Functional Requirements
+## 19. Non-Functional Requirements
 
 | Requirement | Target | Rationale |
 |-------------|--------|-----------|

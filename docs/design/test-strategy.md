@@ -719,7 +719,7 @@ E2E tests run against a live OneDrive account. They use `//go:build e2e` tags an
 
 | Account Type | Environment | Frequency | Status |
 |-------------|-------------|-----------|--------|
-| Personal (free) | CI (GitHub Actions) | Every merge to main + nightly | MVP |
+| Personal (free) | CI (GitHub Actions) | Every merge to main + nightly | Active |
 | Business | CI (GitHub Actions) | Nightly | Backlog — add after core E2E is stable (~$5/month for M365 Business Basic) |
 | SharePoint | CI (GitHub Actions) | Nightly | Backlog — same M365 subscription covers SharePoint |
 
@@ -846,7 +846,7 @@ These tests run in the nightly CI job once Business/SharePoint accounts are prov
 
 ## 7. Chaos & Fault Injection Testing
 
-Chaos tests prove that safety invariants hold under failure conditions. They use `//go:build chaos` tags and run in CI Job 2 alongside integration tests. All chaos tests are MVP — fault injection from day one.
+Chaos tests prove that safety invariants hold under failure conditions. They use `//go:build chaos` tags and run in CI Job 2 alongside integration tests. Fault injection from day one.
 
 ### 7.1 Safety Invariant Chaos Tests
 
@@ -1088,9 +1088,9 @@ func TestChaos_S7_NeverUploadPartialFiles(t *testing.T) {
 
 ### 8.1 Benchmarks (Tracked in CI)
 
-Benchmarks run in CI Job 1 using `go test -bench`. Results are stored and compared across commits. No hard gate — trends are reviewed manually. Hard gates will be added post-MVP once baselines are established.
+Benchmarks run in CI Job 1 using `go test -bench`. Results are stored and compared across commits. No hard gate — trends are reviewed manually. Hard gates will be added once baselines are established.
 
-**NFR benchmarks** (from [prd.md §20](prd.md)):
+**NFR benchmarks** (from [prd.md §19](prd.md)):
 
 | Benchmark | NFR Target | What It Measures |
 |-----------|------------|-----------------|
@@ -1516,11 +1516,14 @@ internal/
 │   ├── observer_local_test.go
 │   ├── buffer.go                 # Change buffer (debounce, dedup)
 │   ├── buffer_test.go
-│   ├── filter.go                 # Filter engine
-│   ├── filter_test.go
-│   ├── transfer.go               # Transfer pipeline
-│   ├── transfer_test.go
-│   ├── interfaces.go             # Consumer-defined interfaces (4: DeltaFetcher, ItemClient, Downloader, Uploader)
+│   ├── transfer_manager.go       # Unified download/upload with resume, hash verification
+│   ├── transfer_manager_test.go
+│   ├── worker.go                 # Lane-based worker pools
+│   ├── worker_test.go
+│   ├── tracker.go                # In-memory dependency graph
+│   ├── tracker_test.go
+│   ├── session_store.go          # File-based upload session persistence
+│   ├── session_store_test.go
 │   ├── mock_graph_test.go        # Generated mocks (moq) for graph interfaces
 │   ├── migrations/
 │   │   ├── 000001_initial_schema.sql
@@ -1829,7 +1832,7 @@ var edgeCaseFileTree = map[string]string{
 | D3 | Property-based testing applied broadly | Algorithm properties (convergence, idempotence) catch classes of bugs that table-driven tests miss. Parsing properties prevent panics on unexpected input. Broad application catches more bugs. |
 | D4 | 80% overall / 90%+ core coverage targets | 80% catches most regressions without encouraging test-for-coverage-sake. 90%+ for sync core reflects that this code manages user data and correctness is critical. |
 | D5 | All chaos tests from day one | The worst known bugs in OneDrive sync tools (data loss, infinite loops) would have been caught by fault injection. Retrofitting chaos tests is harder than building them in. |
-| D6 | Benchmarks tracked but not gated | Hard gates cause CI flake on noisy VMs. Tracking trends with alerting on 50%+ regression catches real problems without false positives. Hard gates post-MVP when baselines are stable. |
+| D6 | Benchmarks tracked but not gated | Hard gates cause CI flake on noisy VMs. Tracking trends with alerting on 50%+ regression catches real problems without false positives. Hard gates when baselines are stable. |
 | D7 | Three parallel CI jobs | Lint+build+unit is fast (~2 min) and catches most issues. Integration+chaos is medium (~3 min) and catches wiring + failure mode bugs. E2E is slow (~10 min) and only needed on merge. Parallelism keeps PR feedback fast. |
 | D8 | Setup/teardown per test, not shared state | Shared test state causes flaky tests, ordering dependencies, and debugging nightmares. Timestamped directories + per-test cleanup ensures isolation and reproducibility. |
 | D9 | Azure Key Vault + OIDC for CI token storage | Secure, no long-lived secrets in GitHub. OIDC federation eliminates PAT rotation. Key Vault provides encrypted storage with auditing. See §6.1. |
