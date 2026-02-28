@@ -21,11 +21,16 @@ import (
 // drive list. Use "drive search" for targeted queries.
 const sharePointSiteLimit = 10
 
+// minColumnWidth is the minimum column width for formatted text output,
+// preventing narrow columns when all entries happen to be short.
+const minColumnWidth = 20
+
 func newDriveCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "drive",
-		Short: "Manage drives (list, add, remove, search)",
-		Long:  "List, add, remove, or search drives in the configuration.",
+		Use:         "drive",
+		Short:       "Manage drives (list, add, remove, search)",
+		Long:        "List, add, remove, or search drives in the configuration.",
+		Annotations: map[string]string{skipConfigAnnotation: "true"},
 	}
 
 	cmd.AddCommand(newDriveListCmd())
@@ -62,7 +67,7 @@ type driveListEntry struct {
 }
 
 func runDriveList(cmd *cobra.Command, _ []string) error {
-	logger := buildLogger()
+	logger := buildLogger(nil)
 	ctx := cmd.Context()
 	cfgPath := resolveLoginConfigPath()
 
@@ -241,15 +246,33 @@ func discoverSharePointDrives(
 	return entries
 }
 
+// driveListJSONOutput is the structured JSON schema for drive list output.
+// Separates configured and available drives into distinct top-level keys,
+// replacing the flat array that required callers to filter by "source" field.
+type driveListJSONOutput struct {
+	Configured []driveListEntry `json:"configured"`
+	Available  []driveListEntry `json:"available"`
+}
+
 func printDriveListJSON(configured, available []driveListEntry) error {
-	all := make([]driveListEntry, 0, len(configured)+len(available))
-	all = append(all, configured...)
-	all = append(all, available...)
+	// Initialize nil slices to empty so JSON renders [] not null.
+	if configured == nil {
+		configured = []driveListEntry{}
+	}
+
+	if available == nil {
+		available = []driveListEntry{}
+	}
+
+	out := driveListJSONOutput{
+		Configured: configured,
+		Available:  available,
+	}
 
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 
-	if err := enc.Encode(all); err != nil {
+	if err := enc.Encode(out); err != nil {
 		return fmt.Errorf("encoding JSON output: %w", err)
 	}
 
@@ -266,7 +289,7 @@ func printDriveListText(configured, available []driveListEntry) {
 	if len(configured) > 0 {
 		fmt.Println("Configured drives:")
 
-		// Compute dynamic column widths from content.
+		// Compute dynamic column widths from content, with minimums for readability.
 		maxID, maxDir := 0, 0
 		for _, e := range configured {
 			if len(e.CanonicalID) > maxID {
@@ -282,6 +305,9 @@ func printDriveListText(configured, available []driveListEntry) {
 				maxDir = len(sd)
 			}
 		}
+
+		maxID = max(maxID, minColumnWidth)
+		maxDir = max(maxDir, minColumnWidth)
 
 		fmtStr := fmt.Sprintf("  %%-%ds  %%-%ds  %%s\n", maxID, maxDir)
 
@@ -331,13 +357,14 @@ Without arguments, lists paused drives that can be resumed.
 Examples:
   onedrive-go drive add personal:user@example.com
   onedrive-go drive add sharepoint:user@contoso.com:marketing:Documents`,
-		RunE: runDriveAdd,
-		Args: cobra.MaximumNArgs(1),
+		Annotations: map[string]string{skipConfigAnnotation: "true"},
+		RunE:        runDriveAdd,
+		Args:        cobra.MaximumNArgs(1),
 	}
 }
 
 func runDriveAdd(_ *cobra.Command, args []string) error {
-	logger := buildLogger()
+	logger := buildLogger(nil)
 	cfgPath := resolveLoginConfigPath()
 
 	cfg, err := config.LoadOrDefault(cfgPath, logger)
@@ -463,7 +490,8 @@ func newDriveRemoveCmd() *cobra.Command {
 The drive's token, state database, config section, and sync directory are preserved.
 With --purge, the config section and state database are deleted.
 The sync directory is never deleted automatically.`,
-		RunE: runDriveRemove,
+		Annotations: map[string]string{skipConfigAnnotation: "true"},
+		RunE:        runDriveRemove,
 	}
 
 	cmd.Flags().Bool("purge", false, "delete config section and state database")
@@ -472,7 +500,7 @@ The sync directory is never deleted automatically.`,
 }
 
 func runDriveRemove(cmd *cobra.Command, _ []string) error {
-	logger := buildLogger()
+	logger := buildLogger(nil)
 
 	if flagDrive == "" {
 		return fmt.Errorf("--drive is required (specify which drive to remove)")
@@ -570,7 +598,7 @@ type driveSearchResult struct {
 const sharePointSearchLimit = 50
 
 func runDriveSearch(cmd *cobra.Command, args []string) error {
-	logger := buildLogger()
+	logger := buildLogger(nil)
 	ctx := cmd.Context()
 	query := args[0]
 
@@ -600,7 +628,9 @@ func runDriveSearch(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// findBusinessTokens returns all business account tokens, filtered by accountFilter if set.
+// findBusinessTokens returns all business account tokens, optionally filtered
+// by accountFilter. When non-empty, accountFilter is matched against the
+// token's email exactly (case-sensitive, not a partial match or canonical ID).
 func findBusinessTokens(accountFilter string, logger *slog.Logger) []driveid.CanonicalID {
 	tokens := config.DiscoverTokens(logger)
 
@@ -691,8 +721,9 @@ func printDriveSearchText(results []driveSearchResult, query string) {
 		return
 	}
 
-	// Sort by site name then library name for stable, grouped output.
-	slices.SortFunc(results, func(a, b driveSearchResult) int {
+	// Sort a copy so the caller's slice is not mutated.
+	sorted := slices.Clone(results)
+	slices.SortFunc(sorted, func(a, b driveSearchResult) int {
 		if c := cmp.Compare(a.SiteName, b.SiteName); c != 0 {
 			return c
 		}
@@ -705,7 +736,7 @@ func printDriveSearchText(results []driveSearchResult, query string) {
 
 	currentSite := ""
 
-	for _, r := range results {
+	for _, r := range sorted {
 		if r.SiteName != currentSite {
 			if currentSite != "" {
 				fmt.Println()

@@ -379,6 +379,12 @@ func TestNewClient_Defaults(t *testing.T) {
 	assert.NotNil(t, c.logger)
 }
 
+func TestNewClient_NilTokenSourcePanics(t *testing.T) {
+	assert.Panics(t, func() {
+		NewClient("http://localhost", nil, nil, nil, "")
+	})
+}
+
 func TestTimeSleep_Completes(t *testing.T) {
 	err := timeSleep(context.Background(), 10*time.Millisecond)
 	assert.NoError(t, err)

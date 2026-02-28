@@ -16,6 +16,7 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 
 | ID | Title | Priority | Package | Notes |
 |----|-------|----------|---------|-------|
+| B-203 | Flaky `TestWatch_NewDirectoryPreExistingFiles` | P3 | `internal/sync/` | `computeStableHash` detects mtime change during hashing and skips the event. On fast machines, the file created by the test is still settling when the watcher fires `scanNewDirectory`. Intermittent failure on macOS APFS. Related to B-100 fix (the feature works, just the test has a race with filesystem settling). |
 | B-033 | Implement accounts.md features | P1 | all | Setup wizard, `drive add`/`drive remove`, fuzzy `--drive` matching, RPC for `sync --watch`, email change detection, `service install`/`uninstall`/`status`, `status` command, `--account` flag, text-level config manipulation, commented-out config defaults on first login. |
 | B-034 | Add --json support for login, logout, drive add/remove | P4 | root | These commands output plain text only. Per accounts.md §9, login should emit JSON events. |
 | B-035 | Add --quiet support for login, logout, whoami, status, drive | P4 | root | Auth/drive commands write to stdout via `fmt.Printf`. File ops use `statusf()` which respects --quiet. Standardize all commands. |
@@ -70,7 +71,7 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 | B-138 | Add upstream sync check for oauth2 fork | P3 | CI | `tonimelisma/oauth2` fork will silently fall behind upstream security patches. Add periodic `go list -m -u` check in CI, or document sync process in `CLAUDE.md` next to the replace directive. |
 | B-143 | ~~Remove or ticket-ref `addMoveTargetDep` dead code~~ | ~~P3~~ | `internal/sync/` | **FIXED** — Watch hardening. `addMoveTargetDep` function and its call site removed from `planner.go`. |
 | B-146 | ~~`shutdownCallbackServer`: inject logger instead of `slog.Default()`~~ | ~~P3~~ | `internal/graph/` | **FIXED** — `shutdownCallbackServer` now accepts `*slog.Logger` parameter. |
-| B-147 | `bootstrapLogger`/`buildLogger`: extract shared construction logic | P3 | root | `root.go:158-213` — overlapping logic. |
+| B-147 | ~~`bootstrapLogger`/`buildLogger`: extract shared construction logic~~ | ~~P3~~ | root | **DONE** — Merged into single `buildLogger(cfg *config.ResolvedDrive)`. Pass nil for bootstrap mode. |
 | B-149 | Deduplicate conflict scan logic in `baseline.go` | P3 | `internal/sync/` | `scanConflictRow`/`scanConflictRowSingle` — 80 lines duplicated. |
 | B-154 | Sort map keys in planner for reproducible action order | P4 | `internal/sync/` | Non-deterministic map iteration aids debugging. |
 | B-157 | Add `conflicts --path <path>` filter for per-path conflict history | P3 | root | Only most recent conflict surfaced per path. |
@@ -89,7 +90,7 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 | B-182 | ~~Integration test for crash recovery (claimed → pending reclaim)~~ | ~~P2~~ | `internal/sync/` | **DONE** — Phase 5.3. `engine_recovery_test.go`: 11 tests covering no-pending, stale reclaim, terminal ignore, cross-cycle deps, intra-cycle deps, synthetic view construction, drive identity verification, cycle result recording. |
 | B-193 | `purgeSingleDrive` ignores StateDir override | P2 | root | `purgeSingleDrive` uses `config.DriveStatePath()` which returns default state path, not the per-drive `state_dir` override from the TOML section. Requires threading `ResolvedDrive.StatePath()` through the purge flow. |
 | B-198 | Periodic baseline cache consistency check in watch mode | P3 | `internal/sync/` | In-memory `Baseline` is loaded once and patched incrementally by `CommitOutcome`. If a bug causes cache to diverge from SQLite (missed update, partial commit), the planner makes wrong decisions silently. Add a periodic validation: every N cycles (e.g., 100), reload the full baseline from DB and compare with the cached version. Log a warning and force-reload if they diverge. Defensive measure — no known bug, but silent corruption would be catastrophic. |
-| B-199 | Replace global `resolvedCfg` with parameter passing | P3 | root | `resolvedCfg` is a package-level mutable variable set in `PersistentPreRunE` and read in `RunE` handlers. Safe only because CLI is single-threaded, but makes testing harder and would break in a client-server model. Pass `ResolvedDrive` as a parameter through the command chain instead. Improves testability and prepares for eventual daemon/RPC architecture. |
+| B-199 | ~~Replace global `resolvedCfg` with parameter passing~~ | ~~P3~~ | root | **DONE** — Config passed through Cobra context via `configContextKey{}`. All RunE handlers use `configFromContext(cmd.Context())`. |
 | B-200 | Re-bootstrap CI token for new token format | P1 | CI | Token format changed from bare `oauth2.Token` to `{token: ..., meta: ...}`. Need to re-login locally, then upload new-format token to Key Vault: `onedrive-go login && az keyvault secret set ...`. CI step added to create minimal config.toml. |
 | B-201 | Shared drive enumeration and management | P3 | all | Research required: what are "shared drives"? Which Graph API endpoints enumerate shared items? How do they interact with canonical IDs? See plan step 17 for research questions. |
 
@@ -192,4 +193,5 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 | B-162 | ~~Add `created_at` column to `action_queue`~~ | **Superseded** — `action_queue` table dropped. |
 | B-175 | ~~Bounded DepTracker with spillover~~ | **Superseded** — Tracker memory bound still relevant but no spillover target. |
 | B-198 | Baseline cache consistency check | **Done** — Phase 5.4. Planner idempotency means delta re-observation on restart produces same actions. |
-| B-199 | Eliminate global resolvedCfg | **Deferred** — Not addressed in this increment. |
+| B-199 | Eliminate global resolvedCfg | **Done** — Config passed through Cobra context. All RunE handlers use `configFromContext()`. |
+| B-147 | Merge bootstrapLogger/buildLogger | **Done** — Single `buildLogger(cfg)` accepting nil for bootstrap. |

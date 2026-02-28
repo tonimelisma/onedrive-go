@@ -51,6 +51,10 @@ type Client struct {
 // baseURL is typically "https://graph.microsoft.com/v1.0".
 // userAgent is sent in every request; defaults to "onedrive-go/dev" if empty.
 func NewClient(baseURL string, httpClient *http.Client, token TokenSource, logger *slog.Logger, userAgent string) *Client {
+	if token == nil {
+		panic("graph.NewClient: token source must not be nil")
+	}
+
 	if logger == nil {
 		logger = slog.Default()
 	}

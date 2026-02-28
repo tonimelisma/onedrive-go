@@ -20,9 +20,9 @@ import (
 //
 // Setting a global before newRootCmd() and expecting it to survive is a bug.
 
-// --- bootstrapLogger tests ---
+// --- buildLogger tests ---
 
-func TestBootstrapLogger_Default(t *testing.T) {
+func TestBuildLogger_Default(t *testing.T) {
 	oldVerbose := flagVerbose
 	oldDebug := flagDebug
 	oldQuiet := flagQuiet
@@ -37,14 +37,15 @@ func TestBootstrapLogger_Default(t *testing.T) {
 	flagDebug = false
 	flagQuiet = false
 
-	logger := bootstrapLogger()
+	// nil config = bootstrap mode (pre-config).
+	logger := buildLogger(nil)
 
 	// Default level is Warn.
 	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelWarn))
 	assert.False(t, logger.Handler().Enabled(context.Background(), slog.LevelInfo))
 }
 
-func TestBootstrapLogger_Verbose(t *testing.T) {
+func TestBuildLogger_Verbose(t *testing.T) {
 	oldVerbose := flagVerbose
 	oldDebug := flagDebug
 	oldQuiet := flagQuiet
@@ -59,14 +60,14 @@ func TestBootstrapLogger_Verbose(t *testing.T) {
 	flagDebug = false
 	flagQuiet = false
 
-	logger := bootstrapLogger()
+	logger := buildLogger(nil)
 
 	// --verbose sets Info.
 	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelInfo))
 	assert.False(t, logger.Handler().Enabled(context.Background(), slog.LevelDebug))
 }
 
-func TestBootstrapLogger_Debug(t *testing.T) {
+func TestBuildLogger_Debug(t *testing.T) {
 	oldVerbose := flagVerbose
 	oldDebug := flagDebug
 	oldQuiet := flagQuiet
@@ -81,85 +82,54 @@ func TestBootstrapLogger_Debug(t *testing.T) {
 	flagDebug = true
 	flagQuiet = false
 
-	logger := bootstrapLogger()
+	logger := buildLogger(nil)
 
 	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelDebug))
 }
 
-// --- buildLogger tests ---
-
-func TestBuildLogger_Default(t *testing.T) {
-	oldCfg := resolvedCfg
-	oldVerbose := flagVerbose
-	oldDebug := flagDebug
-	oldQuiet := flagQuiet
-
-	t.Cleanup(func() {
-		resolvedCfg = oldCfg
-		flagVerbose = oldVerbose
-		flagDebug = oldDebug
-		flagQuiet = oldQuiet
-	})
-
-	resolvedCfg = nil
-	flagVerbose = false
-	flagDebug = false
-	flagQuiet = false
-
-	logger := buildLogger()
-
-	// Default level is Warn: Warn enabled, Info not.
-	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelWarn))
-	assert.False(t, logger.Handler().Enabled(context.Background(), slog.LevelInfo))
-}
-
 func TestBuildLogger_ConfigDebug(t *testing.T) {
-	oldCfg := resolvedCfg
 	oldVerbose := flagVerbose
 	oldDebug := flagDebug
 	oldQuiet := flagQuiet
 
 	t.Cleanup(func() {
-		resolvedCfg = oldCfg
 		flagVerbose = oldVerbose
 		flagDebug = oldDebug
 		flagQuiet = oldQuiet
 	})
 
-	resolvedCfg = &config.ResolvedDrive{
+	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogLevel: "debug"},
 	}
 	flagVerbose = false
 	flagDebug = false
 	flagQuiet = false
 
-	logger := buildLogger()
+	logger := buildLogger(cfg)
 
 	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelDebug))
 }
 
 func TestBuildLogger_VerboseOverrides(t *testing.T) {
-	oldCfg := resolvedCfg
 	oldVerbose := flagVerbose
 	oldDebug := flagDebug
 	oldQuiet := flagQuiet
 
 	t.Cleanup(func() {
-		resolvedCfg = oldCfg
 		flagVerbose = oldVerbose
 		flagDebug = oldDebug
 		flagQuiet = oldQuiet
 	})
 
 	// Config says error, but --verbose should override to Info.
-	resolvedCfg = &config.ResolvedDrive{
+	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogLevel: "error"},
 	}
 	flagVerbose = true
 	flagDebug = false
 	flagQuiet = false
 
-	logger := buildLogger()
+	logger := buildLogger(cfg)
 
 	// --verbose enables Info level, but not Debug.
 	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelInfo))
@@ -167,25 +137,22 @@ func TestBuildLogger_VerboseOverrides(t *testing.T) {
 }
 
 func TestBuildLogger_QuietOverrides(t *testing.T) {
-	oldCfg := resolvedCfg
 	oldVerbose := flagVerbose
 	oldDebug := flagDebug
 	oldQuiet := flagQuiet
 
 	t.Cleanup(func() {
-		resolvedCfg = oldCfg
 		flagVerbose = oldVerbose
 		flagDebug = oldDebug
 		flagQuiet = oldQuiet
 	})
 
 	// --quiet sets Error level.
-	resolvedCfg = nil
 	flagVerbose = false
 	flagDebug = false
 	flagQuiet = true
 
-	logger := buildLogger()
+	logger := buildLogger(nil)
 
 	// Error is enabled, but warn should not be.
 	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelError))
@@ -193,56 +160,67 @@ func TestBuildLogger_QuietOverrides(t *testing.T) {
 }
 
 func TestBuildLogger_DebugOverrides(t *testing.T) {
-	oldCfg := resolvedCfg
 	oldVerbose := flagVerbose
 	oldDebug := flagDebug
 	oldQuiet := flagQuiet
 
 	t.Cleanup(func() {
-		resolvedCfg = oldCfg
 		flagVerbose = oldVerbose
 		flagDebug = oldDebug
 		flagQuiet = oldQuiet
 	})
 
 	// Config says error, but --debug should override to Debug.
-	resolvedCfg = &config.ResolvedDrive{
+	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogLevel: "error"},
 	}
 	flagVerbose = false
 	flagDebug = true
 	flagQuiet = false
 
-	logger := buildLogger()
+	logger := buildLogger(cfg)
 
 	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelDebug))
 }
 
 func TestBuildLogger_ConfigInfo(t *testing.T) {
-	oldCfg := resolvedCfg
 	oldVerbose := flagVerbose
 	oldDebug := flagDebug
 	oldQuiet := flagQuiet
 
 	t.Cleanup(func() {
-		resolvedCfg = oldCfg
 		flagVerbose = oldVerbose
 		flagDebug = oldDebug
 		flagQuiet = oldQuiet
 	})
 
 	// Config log_level = "info" should set Info level.
-	resolvedCfg = &config.ResolvedDrive{
+	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogLevel: "info"},
 	}
 	flagVerbose = false
 	flagDebug = false
 	flagQuiet = false
 
-	logger := buildLogger()
+	logger := buildLogger(cfg)
 
 	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelInfo))
 	assert.False(t, logger.Handler().Enabled(context.Background(), slog.LevelDebug))
+}
+
+// --- configFromContext tests ---
+
+func TestConfigFromContext_NilContext(t *testing.T) {
+	ctx := context.Background()
+	cfg := configFromContext(ctx)
+	assert.Nil(t, cfg)
+}
+
+func TestConfigFromContext_WithConfig(t *testing.T) {
+	expected := &config.ResolvedDrive{SyncDir: "/test"}
+	ctx := context.WithValue(context.Background(), configContextKey{}, expected)
+	cfg := configFromContext(ctx)
+	assert.Equal(t, expected, cfg)
 }
 
 // --- Cobra structure tests ---
@@ -279,7 +257,7 @@ func TestNewRootCmd_PersistentFlags(t *testing.T) {
 func TestNewRootCmd_MutualExclusivity(t *testing.T) {
 	// Cobra enforces mutual exclusivity during Execute(). Verify that
 	// combining --verbose/--debug/--quiet produces an error.
-	// Uses "status" because it's in skipConfigCommands, so PersistentPreRunE
+	// Uses "status" because it has skipConfigAnnotation, so PersistentPreRunE
 	// is a no-op. This avoids loadConfig failures on CI (no config file)
 	// masking the mutual exclusivity error.
 	pairs := [][]string{
@@ -304,8 +282,7 @@ func TestNewRootCmd_AuthSkipsConfig(t *testing.T) {
 	cmd := newRootCmd()
 
 	// Auth and account management commands should pass through PersistentPreRunE
-	// without error, because they skip the four-layer config resolution.
-	// Uses CommandPath() for matching, so we test with the full command paths.
+	// without error, because they have the skipConfigAnnotation.
 	skipCmds := []string{"login", "logout", "whoami", "status"}
 	for _, name := range skipCmds {
 		t.Run(name, func(t *testing.T) {
@@ -345,7 +322,7 @@ func TestNewRootCmd_DriveSubcommands(t *testing.T) {
 func TestNewRootCmd_DriveSubcommandsSkipConfig(t *testing.T) {
 	cmd := newRootCmd()
 
-	// drive, drive add, and drive remove should skip config loading via PersistentPreRunE.
+	// drive, drive add, and drive remove should skip config loading via annotation.
 	driveSubCmds := []struct {
 		args []string
 		name string
@@ -366,20 +343,13 @@ func TestNewRootCmd_DriveSubcommandsSkipConfig(t *testing.T) {
 	}
 }
 
-// --- defaultHTTPClient tests ---
+// --- annotation-based skip config ---
 
-func TestDefaultHTTPClient_HasTimeout(t *testing.T) {
-	client := defaultHTTPClient()
-	assert.Equal(t, httpClientTimeout, client.Timeout)
-}
-
-// --- skipConfigCommands uses CommandPath ---
-
-func TestSkipConfigCommands_UsesCommandPath(t *testing.T) {
+func TestAnnotationBasedSkipConfig(t *testing.T) {
 	cmd := newRootCmd()
 
-	// Verify that all skip commands use full command paths, not bare names.
-	allSkip := [][]string{
+	// All commands that should skip config must have the annotation.
+	skipPaths := [][]string{
 		{"login"},
 		{"logout"},
 		{"whoami"},
@@ -389,29 +359,55 @@ func TestSkipConfigCommands_UsesCommandPath(t *testing.T) {
 		{"drive", "remove"},
 	}
 
-	for _, args := range allSkip {
+	for _, args := range skipPaths {
 		sub, _, err := cmd.Find(args)
 		require.NoError(t, err)
 
-		path := sub.CommandPath()
-		assert.True(t, skipConfigCommands[path],
-			"CommandPath %q should be in skipConfigCommands", path)
+		assert.Equal(t, "true", sub.Annotations[skipConfigAnnotation],
+			"command %q should have skipConfig annotation", sub.CommandPath())
 	}
 
-	// Verify that bare names like "add" or "remove" are NOT in the skip map
-	// (protecting against future subcommand collisions).
-	assert.False(t, skipConfigCommands["add"], "bare 'add' should not be in skipConfigCommands")
-	assert.False(t, skipConfigCommands["remove"], "bare 'remove' should not be in skipConfigCommands")
+	// Commands that require config should NOT have the annotation.
+	configPaths := [][]string{
+		{"ls"},
+		{"get"},
+		{"put"},
+		{"rm"},
+		{"mkdir"},
+		{"stat"},
+		{"sync"},
+		{"conflicts"},
+		{"verify"},
+		{"resolve"},
+	}
+
+	for _, args := range configPaths {
+		sub, _, err := cmd.Find(args)
+		require.NoError(t, err)
+
+		assert.Empty(t, sub.Annotations[skipConfigAnnotation],
+			"command %q should NOT have skipConfig annotation", sub.CommandPath())
+	}
+}
+
+// --- defaultHTTPClient tests ---
+
+func TestDefaultHTTPClient_HasTimeout(t *testing.T) {
+	client := defaultHTTPClient()
+	assert.Equal(t, httpClientTimeout, client.Timeout)
+}
+
+func TestTransferHTTPClient_NoTimeout(t *testing.T) {
+	client := transferHTTPClient()
+	assert.Zero(t, client.Timeout)
 }
 
 // --- loadConfig tests ---
 
 func TestLoadConfig_ValidTOML(t *testing.T) {
-	oldCfg := resolvedCfg
 	oldConfigPath := flagConfigPath
 
 	t.Cleanup(func() {
-		resolvedCfg = oldCfg
 		flagConfigPath = oldConfigPath
 	})
 
@@ -427,21 +423,22 @@ sync_dir = "` + tmpDir + `/OneDrive"
 	require.NoError(t, err)
 
 	cmd := newRootCmd()
+	cmd.SetContext(context.Background())
 	flagConfigPath = cfgFile
 
 	err = loadConfig(cmd)
 	require.NoError(t, err)
-	require.NotNil(t, resolvedCfg)
 
-	assert.Equal(t, "personal:test@example.com", resolvedCfg.CanonicalID.String())
+	cfg := configFromContext(cmd.Context())
+	require.NotNil(t, cfg)
+
+	assert.Equal(t, "personal:test@example.com", cfg.CanonicalID.String())
 }
 
 func TestLoadConfig_MissingFile_ZeroConfig(t *testing.T) {
-	oldCfg := resolvedCfg
 	oldConfigPath := flagConfigPath
 
 	t.Cleanup(func() {
-		resolvedCfg = oldCfg
 		flagConfigPath = oldConfigPath
 	})
 
@@ -457,9 +454,14 @@ func TestLoadConfig_MissingFile_ZeroConfig(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"--drive", "personal:zeroconfig@example.com", "--config", cfgPath, "ls"})
 
-	// ls will fail (no token), but PersistentPreRunE should succeed and populate resolvedCfg.
+	// ls will fail (no token), but PersistentPreRunE should succeed and populate config.
 	_ = cmd.Execute()
 
-	require.NotNil(t, resolvedCfg)
-	assert.Equal(t, "personal:zeroconfig@example.com", resolvedCfg.CanonicalID.String())
+	// After Execute, find the ls subcommand to get its context.
+	lsSub, _, err := cmd.Find([]string{"ls"})
+	require.NoError(t, err)
+
+	cfg := configFromContext(lsSub.Context())
+	require.NotNil(t, cfg)
+	assert.Equal(t, "personal:zeroconfig@example.com", cfg.CanonicalID.String())
 }

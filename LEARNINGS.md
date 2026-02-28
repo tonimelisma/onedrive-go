@@ -259,6 +259,15 @@ Key API changes: `Config.Profiles` -> `Config.Drives`, `Resolve()` -> `ResolveDr
 ### CLI output conventions
 Status/error messages to stderr. Structured data (JSON, tables) to stdout. Allows piping.
 
+### Config through Cobra context, not globals
+`ResolvedDrive` is stored in `cmd.Context()` via `context.WithValue` with an unexported key type (`configContextKey{}`). RunE handlers extract it with `configFromContext(cmd.Context())`. This replaces the old `var resolvedCfg` global, making config flow explicit, testable, and safe for future concurrency.
+
+### Annotation-based config skip
+Commands that skip config loading (login, logout, whoami, status, drive add/remove) use `Annotations: map[string]string{skipConfigAnnotation: "true"}` instead of a fragile name-lookup map. PersistentPreRunE checks `cmd.Annotations[skipConfigAnnotation]`. Self-documenting and auto-maintained as commands are added.
+
+### Separate HTTP clients for metadata vs transfers
+`defaultHTTPClient()` has a 30-second timeout for metadata operations (ls, rm, mkdir, stat). `transferHTTPClient()` has no timeout for large file uploads/downloads — bounded only by context cancellation. Transfer call sites create a second `graph.Client` via `newTransferGraphClient(ts, logger)`.
+
 ---
 
 ## 6. CI and Integration

@@ -1,17 +1,19 @@
 package config
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/oauth2"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
 // --- matchDrive ---
@@ -698,23 +700,18 @@ func writeTokenFile(t *testing.T, dir, name string) {
 	require.NoError(t, err)
 }
 
-// writeTokenFileWithMeta creates a properly formatted token file with metadata.
+// writeTokenFileWithMeta creates a properly formatted token file using
+// tokenfile.Save, ensuring test files match the real on-disk format exactly.
 func writeTokenFileWithMeta(t *testing.T, dir, name string, meta map[string]string) {
 	t.Helper()
 
-	tf := map[string]any{
-		"token": map[string]string{
-			"access_token":  "test-access-token",
-			"refresh_token": "test-refresh-token",
-			"token_type":    "Bearer",
-			"expiry":        "2099-01-01T00:00:00Z",
-		},
-		"meta": meta,
+	tok := &oauth2.Token{
+		AccessToken:  "test-access-token",
+		RefreshToken: "test-refresh-token",
+		TokenType:    "Bearer",
+		Expiry:       time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
-
-	data, err := json.Marshal(tf)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, name), data, 0o600))
+	require.NoError(t, tokenfile.Save(filepath.Join(dir, name), tok, meta))
 }
 
 // setTestDataDir overrides HOME so DefaultDataDir() returns a temp directory,

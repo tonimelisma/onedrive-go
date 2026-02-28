@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -27,14 +28,27 @@ var (
 	flagQuiet      bool
 )
 
-// resolvedCfg holds the effective configuration loaded by PersistentPreRunE.
-// It is available to all subcommands after the root pre-run phase completes.
-// Auth commands and account management commands handle config loading themselves.
-//
-// Thread safety: this global is safe because the CLI is single-threaded —
-// PersistentPreRunE writes it once, then RunE reads it. If the sync engine
-// ever runs commands concurrently, this must be refactored (see B-036).
-var resolvedCfg *config.ResolvedDrive
+// skipConfigAnnotation marks commands that handle config loading themselves.
+// Commands annotated with this key skip the automatic four-layer config
+// resolution in PersistentPreRunE. This replaces the fragile string map
+// (skipConfigCommands) which required manual maintenance when adding commands.
+const skipConfigAnnotation = "skipConfig"
+
+// configContextKey is the context key for passing resolved config from
+// PersistentPreRunE to RunE handlers, replacing the package-level resolvedCfg
+// global. This makes the data flow explicit and testable.
+type configContextKey struct{}
+
+// configFromContext extracts the resolved config from the command's context.
+// Returns nil if no config was loaded (e.g., auth commands that skip config).
+func configFromContext(ctx context.Context) *config.ResolvedDrive {
+	cfg, ok := ctx.Value(configContextKey{}).(*config.ResolvedDrive)
+	if !ok {
+		return nil
+	}
+
+	return cfg
+}
 
 // httpClientTimeout is the default timeout for HTTP requests.
 // Prevents hung connections from blocking CLI commands indefinitely.
@@ -45,25 +59,25 @@ func defaultHTTPClient() *http.Client {
 	return &http.Client{Timeout: httpClientTimeout}
 }
 
+// transferHTTPClient returns an HTTP client with no timeout for
+// upload/download operations. Large file transfers on slow connections
+// can exceed the 30-second default (e.g., 10MB chunks at 100KB/s = 100s).
+// Transfers are bounded by context cancellation instead.
+func transferHTTPClient() *http.Client {
+	return &http.Client{Timeout: 0}
+}
+
 // newGraphClient creates a graph.Client with the standard HTTP client,
 // user-agent, and base URL. Eliminates boilerplate repeated across commands.
 func newGraphClient(ts graph.TokenSource, logger *slog.Logger) *graph.Client {
 	return graph.NewClient(graph.DefaultBaseURL, defaultHTTPClient(), ts, logger, "onedrive-go/"+version)
 }
 
-// skipConfigCommands lists commands that handle config loading themselves,
-// either because they bootstrap config (login) or because they load config
-// directly to avoid the four-layer resolution (logout, whoami, status, drive).
-// Uses CommandPath() for explicit matching, safe against future subcommand collisions
-// (e.g., a hypothetical "sync add" would not accidentally skip config loading).
-var skipConfigCommands = map[string]bool{
-	"onedrive-go login":        true,
-	"onedrive-go logout":       true,
-	"onedrive-go whoami":       true,
-	"onedrive-go status":       true,
-	"onedrive-go drive":        true,
-	"onedrive-go drive add":    true,
-	"onedrive-go drive remove": true,
+// newTransferGraphClient creates a graph.Client without a timeout for
+// upload/download operations. Metadata operations (ls, rm, mkdir, stat,
+// Drives(), Me()) should use newGraphClient with the 30-second timeout.
+func newTransferGraphClient(ts graph.TokenSource, logger *slog.Logger) *graph.Client {
+	return graph.NewClient(graph.DefaultBaseURL, transferHTTPClient(), ts, logger, "onedrive-go/"+version)
 }
 
 // newRootCmd builds and returns the fully-assembled root command with all
@@ -77,12 +91,10 @@ func newRootCmd() *cobra.Command {
 		// Silence Cobra's default error/usage printing — we handle it ourselves.
 		SilenceErrors: true,
 		SilenceUsage:  true,
-		// PersistentPreRunE loads configuration before every command. Auth and
-		// account management commands skip config loading because they handle
-		// config access directly. Login must bootstrap config before it exists;
-		// logout, whoami, status, and drive subcommands load config themselves.
+		// PersistentPreRunE loads configuration before every command. Commands
+		// annotated with skipConfigAnnotation handle config access themselves.
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
-			if skipConfigCommands[cmd.CommandPath()] {
+			if cmd.Annotations[skipConfigAnnotation] == "true" {
 				return nil
 			}
 
@@ -121,12 +133,10 @@ func newRootCmd() *cobra.Command {
 }
 
 // loadConfig resolves the effective configuration from the four-layer override
-// chain and stores the result in resolvedCfg for use by subcommands.
+// chain and stores the result in the command's context for use by subcommands.
 func loadConfig(cmd *cobra.Command) error {
-	// Bootstrap logger derived from CLI flags only (resolvedCfg doesn't exist yet).
-	// Logs config resolution inputs and outputs at Debug level so --debug
-	// reveals what config path, drive selector, and env overrides are in play.
-	logger := bootstrapLogger()
+	// Bootstrap logger derived from CLI flags only (config doesn't exist yet).
+	logger := buildLogger(nil)
 
 	cli := config.CLIOverrides{
 		ConfigPath: flagConfigPath,
@@ -157,44 +167,24 @@ func loadConfig(cmd *cobra.Command) error {
 		slog.String("drive_id", resolved.DriveID.String()),
 	)
 
-	resolvedCfg = resolved
+	cmd.SetContext(context.WithValue(cmd.Context(), configContextKey{}, resolved))
 
-	config.WarnUnimplemented(resolved, logger)
+	config.WarnUnimplemented(resolved, buildLogger(resolved))
 
 	return nil
 }
 
-// bootstrapLogger creates a minimal logger from CLI flags before resolvedCfg
-// exists. Only --verbose, --debug, and --quiet are considered (no config-file
-// log level). The flags are mutually exclusive (enforced by Cobra).
-func bootstrapLogger() *slog.Logger {
-	level := slog.LevelWarn
-
-	if flagVerbose {
-		level = slog.LevelInfo
-	}
-
-	if flagDebug {
-		level = slog.LevelDebug
-	}
-
-	if flagQuiet {
-		level = slog.LevelError
-	}
-
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
-}
-
 // buildLogger creates an slog.Logger configured by the resolved config and
-// CLI flags. Config-file log level provides the baseline; --verbose, --debug,
-// and --quiet override it because CLI flags always win. The flags are mutually
-// exclusive (enforced by Cobra).
-func buildLogger() *slog.Logger {
+// CLI flags. Pass nil for pre-config bootstrap (no config-file log level).
+// Config-file log level provides the baseline; --verbose, --debug, and --quiet
+// override it because CLI flags always win. The flags are mutually exclusive
+// (enforced by Cobra).
+func buildLogger(cfg *config.ResolvedDrive) *slog.Logger {
 	level := slog.LevelWarn
 
 	// Config-based log level (lower priority than CLI flags).
-	if resolvedCfg != nil {
-		switch resolvedCfg.LogLevel {
+	if cfg != nil {
+		switch cfg.LogLevel {
 		case "debug":
 			level = slog.LevelDebug
 		case "info":

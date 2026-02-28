@@ -45,11 +45,12 @@ type conflictJSON struct {
 }
 
 func runConflicts(cmd *cobra.Command, _ []string) error {
-	logger := buildLogger()
+	cfg := configFromContext(cmd.Context())
+	logger := buildLogger(cfg)
 
-	dbPath := resolvedCfg.StatePath()
+	dbPath := cfg.StatePath()
 	if dbPath == "" {
-		return fmt.Errorf("cannot determine state DB path for drive %q", resolvedCfg.CanonicalID)
+		return fmt.Errorf("cannot determine state DB path for drive %q", cfg.CanonicalID)
 	}
 
 	mgr, err := sync.NewBaselineManager(dbPath, logger)
