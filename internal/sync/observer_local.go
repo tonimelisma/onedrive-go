@@ -48,12 +48,18 @@ const (
 	hashRequestBufSize = 256
 )
 
+// maxCoalesceRetries caps the number of re-schedule attempts in hashAndEmit
+// when errFileChangedDuringHash is returned. Prevents infinite retry if a file
+// is being written to continuously.
+const maxCoalesceRetries = 3
+
 // hashRequest is sent from timer callbacks to the watchLoop goroutine when a
 // write coalesce timer fires and the file should be hashed (B-107).
 type hashRequest struct {
 	fsPath    string
 	dbRelPath string
 	name      string
+	retries   int // number of re-schedules already attempted
 }
 
 // FsWatcher abstracts filesystem event monitoring. Satisfied by
@@ -248,7 +254,9 @@ func (o *LocalObserver) cancelPendingTimers() {
 
 // addWatchesRecursive walks the sync root and adds a watch on every directory.
 func (o *LocalObserver) addWatchesRecursive(watcher FsWatcher, syncRoot string) error {
-	return filepath.WalkDir(syncRoot, func(fsPath string, d fs.DirEntry, walkErr error) error {
+	var watched, failed int
+
+	err := filepath.WalkDir(syncRoot, func(fsPath string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			o.logger.Warn("walk error during watch setup",
 				slog.String("path", fsPath), slog.String("error", walkErr.Error()))
@@ -266,12 +274,22 @@ func (o *LocalObserver) addWatchesRecursive(watcher FsWatcher, syncRoot string) 
 		}
 
 		if addErr := watcher.Add(fsPath); addErr != nil {
+			failed++
 			o.logger.Warn("failed to add watch",
 				slog.String("path", fsPath), slog.String("error", addErr.Error()))
+		} else {
+			watched++
 		}
 
 		return nil
 	})
+
+	o.logger.Info("watch setup complete",
+		slog.Int("watches_added", watched),
+		slog.Int("watches_failed", failed),
+	)
+
+	return err
 }
 
 // makeWalkFunc returns a WalkDirFunc that classifies filesystem entries

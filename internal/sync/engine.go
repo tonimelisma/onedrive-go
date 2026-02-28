@@ -295,6 +295,17 @@ func (e *Engine) executePlan(
 		return
 	}
 
+	// Invariant: Planner.Plan() always builds Deps with len(Actions).
+	// Assert here to catch any future regression that breaks this contract.
+	if len(plan.Actions) != len(plan.Deps) {
+		e.logger.Error("plan invariant violation: Actions/Deps length mismatch",
+			slog.Int("actions", len(plan.Actions)),
+			slog.Int("deps", len(plan.Deps)),
+		)
+
+		return
+	}
+
 	tracker := NewDepTracker(len(plan.Actions), len(plan.Actions), e.logger)
 
 	for i := range plan.Actions {
@@ -789,6 +800,16 @@ func (e *Engine) processBatch(
 		e.logger.Debug("all actions suppressed due to repeated failures")
 		// Early return before cycleFailures init and watchCycleCompletion spawn.
 		// No actions dispatched → no results to drain → no cycle to complete.
+		return
+	}
+
+	// Invariant: Planner always builds Deps with len(Actions).
+	if len(plan.Actions) != len(plan.Deps) {
+		e.logger.Error("plan invariant violation: Actions/Deps length mismatch",
+			slog.Int("actions", len(plan.Actions)),
+			slog.Int("deps", len(plan.Deps)),
+		)
+
 		return
 	}
 

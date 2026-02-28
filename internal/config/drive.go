@@ -36,17 +36,11 @@ type ResolvedDrive struct {
 	NetworkConfig
 }
 
-// StatePath returns the state DB file path for this drive. When StateDir is
-// set, the DB is placed inside that directory instead of the platform default
-// data directory. This allows E2E tests to use per-test temp dirs for isolation.
+// StatePath returns the state DB file path for this drive. Delegates to
+// DriveStatePathWithOverride which handles tilde expansion (idempotent
+// since buildResolvedDrive already expands StateDir).
 func (rd *ResolvedDrive) StatePath() string {
-	if rd.StateDir != "" {
-		sanitized := strings.ReplaceAll(rd.CanonicalID.String(), ":", "_")
-
-		return filepath.Join(rd.StateDir, "state_"+sanitized+".db")
-	}
-
-	return DriveStatePath(rd.CanonicalID)
+	return DriveStatePathWithOverride(rd.CanonicalID, rd.StateDir)
 }
 
 // MatchDrive selects a drive from the config by selector string. The matching

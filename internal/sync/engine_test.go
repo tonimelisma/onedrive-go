@@ -1922,3 +1922,31 @@ func TestResolveConflict_KeepLocal_MinimalRecord_NoPanic(t *testing.T) {
 		t.Errorf("expected 0 unresolved conflicts, got %d", len(remaining))
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Plan invariant guard tests
+// ---------------------------------------------------------------------------
+
+// TestExecutePlan_ActionsDepsLengthMismatch verifies that executePlan returns
+// cleanly (no panic) when plan.Actions and plan.Deps have mismatched lengths.
+func TestExecutePlan_ActionsDepsLengthMismatch(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+
+	// Create a plan with mismatched Actions and Deps.
+	plan := &ActionPlan{
+		Actions: []Action{
+			{Type: ActionDownload, Path: "file.txt"},
+			{Type: ActionDownload, Path: "file2.txt"},
+		},
+		Deps:    [][]int{{1}}, // only 1 dep entry for 2 actions
+		CycleID: "test-cycle",
+	}
+
+	report := &SyncReport{}
+
+	// Should return cleanly without panic.
+	eng.executePlan(context.Background(), plan, "", report)
+}
