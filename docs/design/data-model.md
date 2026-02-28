@@ -60,6 +60,9 @@ Examples:
 - `state_personal_toni@outlook.com.db`
 - `state_business_alice@contoso.com.db`
 - `state_sharepoint_alice@contoso.com_marketing_Documents.db`
+- `state_shared_me@outlook.com_b!TG9yZW0_01ABCDEF.db`
+
+Shared drives follow the same pattern — the canonical ID's `:` separators are replaced with `_` in the filename.
 
 See [accounts.md](accounts.md) for the complete file layout.
 
@@ -72,6 +75,8 @@ Token files follow the same naming pattern, stored in the same data directory:
 
 SharePoint drives share the business account's token file (same OAuth session).
 Only the state DB is per-drive.
+
+Shared drives share the token with their primary drive (personal or business). Token resolution is handled by `config.TokenCanonicalID()`, which determines the account type by scanning configured drives for the same email. For example, a shared drive `shared:me@outlook.com:b!TG9yZW0:01ABCDEF` uses `token_personal_me@outlook.com.json` if the user has a personal drive configured.
 
 ### WAL Mode and Durability
 
@@ -132,6 +137,9 @@ CREATE TABLE baseline (
     path            TEXT    PRIMARY KEY,
 
     -- Identity: server-assigned, used for remote operations and move detection
+    -- For items under shortcuts (shared folder content), drive_id stores the
+    -- SOURCE drive's ID (remoteItem.driveId), not the user's own drive ID.
+    -- This is correct — API operations on these items must target the source drive.
     drive_id        TEXT    NOT NULL,    -- normalized: lowercase, zero-padded to 16 chars
     item_id         TEXT    NOT NULL,
     parent_id       TEXT,
@@ -206,16 +214,25 @@ by item ID).
 
 ## 4. Delta Tokens Table
 
-Stores the Graph API delta query cursor per drive. The delta token is a
+Stores the Graph API delta query cursor per drive scope. The delta token is a
 first-class piece of sync state that must be persisted across restarts.
 
 ```sql
 CREATE TABLE delta_tokens (
-    drive_id    TEXT    PRIMARY KEY,
-    token       TEXT    NOT NULL,      -- opaque delta token from Graph API
-    updated_at  INTEGER NOT NULL CHECK(updated_at > 0)  -- last update (Unix nanoseconds)
+    drive_id    TEXT    NOT NULL,     -- the configured drive's normalized ID
+    scope_id    TEXT    NOT NULL,     -- "" for primary, remoteItem.id for shortcuts
+    scope_drive TEXT    NOT NULL,     -- same as drive_id for primary, remoteItem.driveId for shortcuts
+    token       TEXT    NOT NULL,     -- opaque delta token from Graph API
+    updated_at  INTEGER NOT NULL CHECK(updated_at > 0),  -- last update (Unix nanoseconds)
+    PRIMARY KEY (drive_id, scope_id)
 );
 ```
+
+Stores the Graph API delta query cursor per drive scope. Each configured drive
+has at least one delta token (the primary scope with `scope_id = ""`). Drives
+containing shortcuts to shared folders have additional delta tokens — one per
+shortcut, where `scope_id` is the `remoteItem.id` and `scope_drive` is the
+`remoteItem.driveId` from the shortcut's remote reference.
 
 **Critical property**: The delta token is committed only when all actions for a
 cycle are done. Individual per-action commits update the baseline but do not
@@ -538,9 +555,12 @@ CREATE TABLE baseline (
 );
 
 CREATE TABLE delta_tokens (
-    drive_id    TEXT    PRIMARY KEY,
+    drive_id    TEXT    NOT NULL,
+    scope_id    TEXT    NOT NULL,
+    scope_drive TEXT    NOT NULL,
     token       TEXT    NOT NULL,
-    updated_at  INTEGER NOT NULL CHECK(updated_at > 0)
+    updated_at  INTEGER NOT NULL CHECK(updated_at > 0),
+    PRIMARY KEY (drive_id, scope_id)
 );
 
 CREATE TABLE conflicts (

@@ -56,7 +56,7 @@ MIT
 
 Start small. Top-level verbs, no nested subcommands (except `drive` and `service`). Familiar Unix-style names. Scriptable with `--json`. Add commands based on user demand, not speculation.
 
-Two separate flags for two separate concepts: `--account` for authentication commands (identifies a Microsoft account by email), `--drive` for everything else (identifies a drive by canonical ID, alias, or partial match). See [accounts.md §7](accounts.md) for full details.
+Two separate flags for two separate concepts: `--account` for authentication commands (identifies a Microsoft account by email), `--drive` for everything else (identifies a drive by canonical ID, display name, or substring match). See [accounts.md §7](accounts.md) for full details.
 
 ### Command Reference
 
@@ -184,7 +184,7 @@ find, du, cat, share                   # Utility commands
 
 ```
 --account <email>      # Select account by email (auth commands: login, logout)
---drive <id|alias>     # Select drive by canonical ID, alias, or partial match (repeatable for sync/status)
+--drive <id|name>      # Select drive by canonical ID, display name, or substring match (repeatable for sync/status)
 --config <path>        # Override config file location
 --json                 # Machine-readable JSON output
 --verbose / -v         # Show individual file operations
@@ -278,7 +278,7 @@ enabled = false
 CLI usage:
 
 ```
-onedrive-go sync --drive work          # sync one drive (by alias)
+onedrive-go sync --drive "me@contoso.com"  # sync one drive (by display name)
 onedrive-go ls /Documents --drive personal
 onedrive-go sync --watch               # syncs all enabled drives
 ```
@@ -567,8 +567,8 @@ Config is modified by `login`, `drive add`, `drive remove`, and `setup`. Modific
 sync_dir = "~/OneDrive"
 
 ["business:alice@contoso.com"]
+display_name = "alice@contoso.com"
 sync_dir = "~/OneDrive - Contoso"
-alias = "work"
 skip_dirs = ["node_modules", ".git", "vendor"]
 ```
 
@@ -724,7 +724,7 @@ All 12+ known Microsoft Graph API quirks are handled from day one.
 ### From rclone
 
 **What it migrates:**
-- Remote name -> drive alias
+- Remote name -> drive display_name
 - `drive_id` -> drive section `drive_id`
 - `drive_type` -> auto-detected drive type
 - Token -> NOT migrated (different OAuth application ID; must re-authenticate)

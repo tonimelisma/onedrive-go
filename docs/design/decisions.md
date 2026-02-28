@@ -34,14 +34,14 @@ Architectural and design decisions for onedrive-go. Referenced from [CLAUDE.md](
 - **Sync database**: SQLite baseline DB with WAL mode, one DB per drive
 - **Conflict handling**: Keep both + conflict tracking with resolution tracking
 - **Multi-account**: Accounts (auth) and drives (sync) are separate concepts. `--account` for auth commands, `--drive` for everything else. Single config file, single daemon, multiple drives. See [accounts.md](accounts.md) for the full design.
-- **Canonical drive identifiers**: `type:email[:site:library]` format derived from real data (e.g., `personal:toni@outlook.com`, `sharepoint:alice@contoso.com:marketing:Documents`). No arbitrary names. `:` replaced with `_` in filenames.
+- **Canonical drive identifiers**: `type:email[:site:library]` or `shared:email:sourceDriveID:sourceItemID`. Four drive types (personal, business, sharepoint, shared). Derived from real data. `:` replaced with `_` in filenames.
 - **Transfers**: Parallel (default 8 each for uploads/downloads/checkers), with bandwidth scheduling
 - **Real-time**: WebSocket for remote changes, inotify/FSEvents for local
 - **Safety**: Conservative defaults (big-delete protection, dry-run, recycle bin). S1-S7 invariants implemented as pure functions in the Planner.
 - **API quirks**: All 12+ known Graph API quirks handled at the observer boundary (invisible to downstream)
 - **SharePoint enrichment**: Per-side hash baselines, not download-after-upload — see [sharepoint-enrichment.md](sharepoint-enrichment.md)
 - **SharePoint token sharing**: SharePoint drives share OAuth token with the business account (same user, same session). Token per-user, state DB per-drive.
-- **Fuzzy drive matching**: `--drive` resolves via exact canonical ID, alias, type prefix, email, or partial match. Shortest unique match wins. Ambiguous -> error with suggestions.
+- **Drive matching**: `--drive` resolves via exact canonical ID -> exact display_name (case-insensitive) -> substring on canonical ID, display_name, or owner. Ambiguous -> error with suggestions.
 - **Login auto-adds primary drive**: `login` auto-creates config section for the primary drive (personal or business). SharePoint libraries added via `drive add`.
 - **Text-level config manipulation**: Read via TOML parser, write via surgical line-based text edits to preserve comments. No round-trip serialization.
 - **No config show command**: Users read config file directly. `status` shows runtime state. `--debug` shows config resolution.
@@ -52,3 +52,21 @@ Architectural and design decisions for onedrive-go. Referenced from [CLAUDE.md](
 - Go 1.23+, Cobra CLI, golangci-lint v2, 140 char line length, fieldalignment disabled
 
 For the complete account/drive system design, see [accounts.md](accounts.md).
+
+---
+
+## Multi-Drive Architecture Decisions
+
+Resolved during multi-drive design (see [MULTIDRIVE.md](MULTIDRIVE.md) for full context).
+
+| DP | Decision | Rationale |
+|---|---|---|
+| **DP-1: Personal Vault** | Exclude by default. Implement immediately. Config escape hatch `sync_vault = true`. Post-release: explore additional vault functionality. | Lock/unlock cycle creates unsolvable data-loss risk. Safety invariant S1 doesn't protect because baseline entries exist from the unlocked state. |
+| **DP-2: Share revocation** | Delete local copies when a shared folder is revoked or shortcut removed. Post-release: add config option for alternative behavior. | Consistent with "remote deleted -> local deleted" behavior throughout the sync engine. |
+| **DP-3: Read-only content** | Auto-detect via 403 response. Summarized errors (not per-file). Treat as error, not warning. | Simple implementation — no proactive permission checking needed. |
+| **DP-4: Shared-with-me** | Sync as separate configured drives. Post-release, but architecture designed now. Added/removed via `drive add`/`drive remove`. | Clean isolation, no modification to user's OneDrive structure. Each shared drive gets its own state DB, delta token, and sync directory. |
+| **DP-5: Account entities** | Keep implicit. No `[account]` config sections. | No identified use case for account-level config beyond what token files provide. |
+| **DP-6: Shared canonical ID** | `shared:email:sourceDriveID:sourceItemID`. Opaque to users; `display_name` provides human identity. Token resolution via `config.TokenCanonicalID()` (not in `driveid`). | Only `(driveID, itemID)` is guaranteed globally unique and stable across renames. Display names solve readability. Token resolution is business logic, not identity. |
+| **DP-7: Individual shared files** | Deferred to post-release. | No delta tracking for individual files (delta is folder-scoped). Focus on folder/drive sync story first. |
+| **Display names replace aliases** | Every drive gets a `display_name` auto-generated at `drive add` time. Personal/business use email. SharePoint uses "site / lib". Shared uses "{Name}'s {Folder}". User-editable. Used everywhere: CLI output, `--drive` matching, error messages, logs. | One field, one purpose. Email is already unique and human-readable for personal/business. No generic "OneDrive" names. |
+| **Token resolution in config** | `config.TokenCanonicalID()` replaces `CanonicalID.TokenCanonicalID()`. Scans configured drives to determine account type. | Token resolution requires knowledge of all configured drives (business logic). The `driveid` package stays pure identity with no config dependency. |
