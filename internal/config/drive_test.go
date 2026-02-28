@@ -729,3 +729,31 @@ func setTestDataDir(t *testing.T) string {
 
 	return dataDir
 }
+
+// --- DriveStatePathWithOverride (B-193) ---
+
+func TestDriveStatePathWithOverride_WithOverride(t *testing.T) {
+	tmpDir := t.TempDir()
+	cid := driveid.MustCanonicalID("personal:test@example.com")
+
+	path := DriveStatePathWithOverride(cid, tmpDir)
+	assert.Equal(t, filepath.Join(tmpDir, "state_personal_test@example.com.db"), path)
+}
+
+func TestDriveStatePathWithOverride_WithTilde(t *testing.T) {
+	cid := driveid.MustCanonicalID("personal:test@example.com")
+
+	path := DriveStatePathWithOverride(cid, "~/custom-state")
+
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(home, "custom-state", "state_personal_test@example.com.db"), path)
+}
+
+func TestDriveStatePathWithOverride_EmptyFallback(t *testing.T) {
+	cid := driveid.MustCanonicalID("personal:test@example.com")
+
+	// Empty stateDir should fall back to DriveStatePath.
+	path := DriveStatePathWithOverride(cid, "")
+	assert.Equal(t, DriveStatePath(cid), path)
+}

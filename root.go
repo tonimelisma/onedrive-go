@@ -55,6 +55,21 @@ func cliContextFrom(ctx context.Context) *CLIContext {
 	return cc
 }
 
+// mustCLIContext extracts the CLIContext or panics with an actionable message.
+// Use in RunE handlers for commands that require config (no skipConfigAnnotation).
+// Panics are always programmer errors — the command tree should guarantee the
+// context is populated by PersistentPreRunE before RunE executes.
+func mustCLIContext(ctx context.Context) *CLIContext {
+	cc := cliContextFrom(ctx)
+	if cc == nil {
+		panic("BUG: CLIContext not found in context — ensure the command " +
+			"does not skip config loading (no skipConfigAnnotation) or " +
+			"explicitly loads config in its RunE")
+	}
+
+	return cc
+}
+
 // httpClientTimeout is the default timeout for HTTP requests.
 // Prevents hung connections from blocking CLI commands indefinitely.
 const httpClientTimeout = 30 * time.Second

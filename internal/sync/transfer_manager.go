@@ -399,12 +399,14 @@ func (tm *TransferManager) sessionUpload(
 			return item, nil
 		}
 
+		// Delete stale session on any resume failure. Forces fresh session on
+		// next attempt, preventing infinite retry loops (B-208).
+		tm.deleteSession(driveStr, remotePath)
+
 		if !errors.Is(resumeErr, graph.ErrUploadSessionExpired) {
 			return nil, fmt.Errorf("resuming upload of %s: %w", remotePath, resumeErr)
 		}
 
-		// Session expired — fall through to fresh.
-		tm.deleteSession(driveStr, remotePath)
 		tm.logger.Info("upload session expired, creating fresh session", slog.String("path", remotePath))
 	}
 

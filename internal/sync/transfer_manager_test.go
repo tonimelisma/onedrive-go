@@ -798,3 +798,132 @@ func TestTransferManager_ParentDirPerms(t *testing.T) {
 		t.Errorf("parent dir perms = %o, want 700", perms)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// B-208: session delete on any resume failure
+// ---------------------------------------------------------------------------
+
+func TestSessionUpload_NonExpiredResumeError_DeletesSession(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewSessionStore(dir, slog.Default())
+
+	localPath := filepath.Join(dir, "network-err.bin")
+	largeData := make([]byte, graph.SimpleUploadMaxSize+1)
+
+	if err := os.WriteFile(localPath, largeData, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	fileHash, hashErr := computeQuickXorHash(localPath)
+	if hashErr != nil {
+		t.Fatalf("computeQuickXorHash: %v", hashErr)
+	}
+
+	driveStr := driveid.New("d1").String()
+	if saveErr := store.Save(driveStr, localPath, &SessionRecord{
+		SessionURL: "https://upload.example.com/broken",
+		FileHash:   fileHash,
+		FileSize:   int64(len(largeData)),
+	}); saveErr != nil {
+		t.Fatalf("Save: %v", saveErr)
+	}
+
+	ul := &tmMockUploader{
+		resumeUploadFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
+			return nil, fmt.Errorf("network error")
+		},
+	}
+
+	tm := newTestTM(&tmSimpleDownloader{}, ul, store)
+
+	_, err := tm.UploadFile(context.Background(), driveid.New("d1"), "parent1", "network-err.bin", localPath, UploadOpts{})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "network error") {
+		t.Errorf("error = %q, want to contain 'network error'", err.Error())
+	}
+
+	// B-208: session should be deleted even for non-expired errors.
+	rec, loadErr := store.Load(driveStr, localPath)
+	if loadErr != nil {
+		t.Fatalf("Load: %v", loadErr)
+	}
+
+	if rec != nil {
+		t.Error("expected session to be deleted after non-expired resume error")
+	}
+}
+
+func TestSessionUpload_NonExpiredResumeError_FreshOnRetry(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewSessionStore(dir, slog.Default())
+
+	localPath := filepath.Join(dir, "retry.bin")
+	largeData := make([]byte, graph.SimpleUploadMaxSize+1)
+
+	if err := os.WriteFile(localPath, largeData, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	fileHash, hashErr := computeQuickXorHash(localPath)
+	if hashErr != nil {
+		t.Fatalf("computeQuickXorHash: %v", hashErr)
+	}
+
+	driveStr := driveid.New("d1").String()
+	if saveErr := store.Save(driveStr, localPath, &SessionRecord{
+		SessionURL: "https://upload.example.com/broken-retry",
+		FileHash:   fileHash,
+		FileSize:   int64(len(largeData)),
+	}); saveErr != nil {
+		t.Fatalf("Save: %v", saveErr)
+	}
+
+	callCount := 0
+
+	ul := &tmMockUploader{
+		resumeUploadFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
+			callCount++
+			return nil, fmt.Errorf("rate limited")
+		},
+		createUploadSessionFn: func(_ context.Context, _ driveid.ID, _, _ string, _ int64, _ time.Time) (*graph.UploadSession, error) {
+			return &graph.UploadSession{UploadURL: "https://upload.example.com/fresh-retry"}, nil
+		},
+		uploadFromSessionFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
+			return &graph.Item{ID: "fresh-retry-item"}, nil
+		},
+	}
+
+	tm := newTestTM(&tmSimpleDownloader{}, ul, store)
+
+	// First call fails (resume returns non-expired error).
+	_, err := tm.UploadFile(context.Background(), driveid.New("d1"), "parent1", "retry.bin", localPath, UploadOpts{})
+	if err == nil {
+		t.Fatal("expected error on first call, got nil")
+	}
+
+	if callCount != 1 {
+		t.Errorf("resumeUpload call count = %d, want 1", callCount)
+	}
+
+	// Second call should NOT attempt resume (session was deleted), should create fresh.
+	result, err := tm.UploadFile(context.Background(), driveid.New("d1"), "parent1", "retry.bin", localPath, UploadOpts{})
+	if err != nil {
+		t.Fatalf("UploadFile retry: %v", err)
+	}
+
+	// Resume should not be called again (session deleted, so no match).
+	if callCount != 1 {
+		t.Errorf("resumeUpload call count after retry = %d, want 1 (no new resume)", callCount)
+	}
+
+	if result.Item.ID != "fresh-retry-item" {
+		t.Errorf("Item.ID = %q, want %q", result.Item.ID, "fresh-retry-item")
+	}
+}

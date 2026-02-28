@@ -379,6 +379,20 @@ func DriveTokenPath(canonicalID driveid.CanonicalID) string {
 	return filepath.Join(dataDir, "token_"+sanitized+".json")
 }
 
+// DriveStatePathWithOverride returns the state DB path for a drive. When
+// stateDir is non-empty, the DB is placed there (with tilde expansion)
+// instead of the platform default (B-193).
+func DriveStatePathWithOverride(canonicalID driveid.CanonicalID, stateDir string) string {
+	if stateDir != "" {
+		expanded := expandTilde(stateDir)
+		sanitized := strings.ReplaceAll(canonicalID.String(), ":", "_")
+
+		return filepath.Join(expanded, "state_"+sanitized+".db")
+	}
+
+	return DriveStatePath(canonicalID)
+}
+
 // DriveStatePath returns the state DB path for a canonical drive ID.
 // Each drive gets its own state database. The ":" separator in canonical
 // IDs is replaced with "_" for filesystem safety.
