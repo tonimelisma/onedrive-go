@@ -39,6 +39,7 @@ type DownloadResult struct {
 	LocalHash           string
 	Size                int64
 	EffectiveRemoteHash string // remote hash after possible exhaustion override
+	HashVerified        bool   // false when hash retries exhausted and mismatch accepted
 }
 
 // UploadResult reports the outcome of a successful upload.
@@ -107,6 +108,7 @@ func (tm *TransferManager) DownloadToFile(
 	}
 
 	remoteHash := opts.RemoteHash
+	hashVerified := true
 	var localHash string
 	var size int64
 
@@ -147,6 +149,7 @@ func (tm *TransferManager) DownloadToFile(
 		)
 
 		remoteHash = localHash
+		hashVerified = false
 	}
 
 	// Warn if downloaded size doesn't match expected remote size.
@@ -179,7 +182,12 @@ func (tm *TransferManager) DownloadToFile(
 		slog.Int64("size", size),
 	)
 
-	return &DownloadResult{LocalHash: localHash, Size: size, EffectiveRemoteHash: remoteHash}, nil
+	return &DownloadResult{
+		LocalHash:           localHash,
+		Size:                size,
+		EffectiveRemoteHash: remoteHash,
+		HashVerified:        hashVerified,
+	}, nil
 }
 
 // downloadToPartial streams a remote file to a .partial file while computing
@@ -196,6 +204,15 @@ func (tm *TransferManager) downloadToPartial(
 	}
 
 	return tm.freshDownload(ctx, driveID, itemID, partialPath)
+}
+
+// removePartialIfNotCanceled removes a .partial file unless the context was
+// canceled (preserving the partial for future resume). Extracted to deduplicate
+// the identical pattern in freshDownload and resumeDownload.
+func removePartialIfNotCanceled(ctx context.Context, path string) {
+	if ctx.Err() == nil {
+		os.Remove(path)
+	}
 }
 
 // freshDownload performs a full download to a new .partial file.
@@ -218,16 +235,14 @@ func (tm *TransferManager) freshDownload(
 		}
 
 		// Preserve partial on context cancellation so resume can reuse it.
-		if ctx.Err() == nil {
-			os.Remove(partialPath)
-		}
+		removePartialIfNotCanceled(ctx, partialPath)
 
 		return "", 0, fmt.Errorf("downloading to %s: %w", partialPath, err)
 	}
 
 	if err := f.Close(); err != nil {
+		// Close failure is always an error regardless of context — the file is corrupt.
 		os.Remove(partialPath)
-
 		return "", 0, fmt.Errorf("closing partial file %s: %w", partialPath, err)
 	}
 
@@ -252,9 +267,7 @@ func (tm *TransferManager) resumeDownload(
 		tm.logger.Warn("cannot open partial file for resume, starting fresh",
 			slog.String("path", partialPath), slog.String("error", err.Error()))
 
-		if ctx.Err() == nil {
-			os.Remove(partialPath)
-		}
+		removePartialIfNotCanceled(ctx, partialPath)
 
 		return tm.freshDownload(ctx, driveID, itemID, partialPath)
 	}
@@ -265,9 +278,7 @@ func (tm *TransferManager) resumeDownload(
 		tm.logger.Warn("failed to close partial file after range download",
 			slog.String("path", partialPath), slog.String("error", closeErr.Error()))
 
-		if ctx.Err() == nil {
-			os.Remove(partialPath)
-		}
+		removePartialIfNotCanceled(ctx, partialPath)
 
 		return tm.freshDownload(ctx, driveID, itemID, partialPath)
 	}
@@ -276,9 +287,7 @@ func (tm *TransferManager) resumeDownload(
 		tm.logger.Warn("range download failed, falling back to fresh download",
 			slog.String("path", partialPath), slog.String("error", err.Error()))
 
-		if ctx.Err() == nil {
-			os.Remove(partialPath)
-		}
+		removePartialIfNotCanceled(ctx, partialPath)
 
 		return tm.freshDownload(ctx, driveID, itemID, partialPath)
 	}
@@ -287,9 +296,7 @@ func (tm *TransferManager) resumeDownload(
 
 	localHash, err := computeQuickXorHash(partialPath)
 	if err != nil {
-		if ctx.Err() == nil {
-			os.Remove(partialPath)
-		}
+		removePartialIfNotCanceled(ctx, partialPath)
 
 		return "", 0, fmt.Errorf("hashing resumed partial file %s: %w", partialPath, err)
 	}
@@ -397,62 +404,65 @@ func (tm *TransferManager) UploadFile(
 }
 
 // sessionUpload performs a session-based upload with persistence for resume.
+// localPath is the filesystem path of the file being uploaded — used as a
+// session store key and in log messages. (Named "localPath" not "remotePath"
+// because it identifies the local file, not a remote OneDrive path.)
 func (tm *TransferManager) sessionUpload(
 	ctx context.Context, su SessionUploader, content io.ReaderAt,
-	driveID driveid.ID, parentID, name, remotePath, localHash string,
+	driveID driveid.ID, parentID, name, localPath, localHash string,
 	size int64, mtime time.Time, progress graph.ProgressFunc,
 ) (*graph.Item, error) {
 	tm.logger.Debug("sessionUpload",
-		slog.String("path", remotePath),
+		slog.String("path", localPath),
 		slog.Int64("size", size),
 	)
 
 	driveStr := driveID.String()
 
 	// Check for existing session.
-	rec, loadErr := tm.sessionStore.Load(driveStr, remotePath)
+	rec, loadErr := tm.sessionStore.Load(driveStr, localPath)
 	if loadErr != nil {
 		tm.logger.Warn("failed to load upload session",
-			slog.String("path", remotePath),
+			slog.String("path", localPath),
 			slog.String("error", loadErr.Error()),
 		)
 	}
 
 	if rec != nil && rec.FileHash == localHash {
-		tm.logger.Debug("attempting upload session resume", slog.String("path", remotePath))
+		tm.logger.Debug("attempting upload session resume", slog.String("path", localPath))
 
 		session := &graph.UploadSession{UploadURL: rec.SessionURL}
 
 		item, resumeErr := su.ResumeUpload(ctx, session, content, size, progress)
 		if resumeErr == nil {
-			tm.deleteSession(driveStr, remotePath)
+			tm.deleteSession(driveStr, localPath)
 			return item, nil
 		}
 
 		// Delete stale session on any resume failure. Forces fresh session on
 		// next attempt, preventing infinite retry loops (B-208).
-		tm.deleteSession(driveStr, remotePath)
+		tm.deleteSession(driveStr, localPath)
 
 		if !errors.Is(resumeErr, graph.ErrUploadSessionExpired) {
-			return nil, fmt.Errorf("resuming upload of %s: %w", remotePath, resumeErr)
+			return nil, fmt.Errorf("resuming upload of %s: %w", localPath, resumeErr)
 		}
 
-		tm.logger.Info("upload session expired, creating fresh session", slog.String("path", remotePath))
+		tm.logger.Info("upload session expired, creating fresh session", slog.String("path", localPath))
 	}
 
 	// Fresh session-based upload.
 	session, err := su.CreateUploadSession(ctx, driveID, parentID, name, size, mtime)
 	if err != nil {
-		return nil, fmt.Errorf("creating upload session for %s: %w", remotePath, err)
+		return nil, fmt.Errorf("creating upload session for %s: %w", localPath, err)
 	}
 
-	if saveErr := tm.sessionStore.Save(driveStr, remotePath, &SessionRecord{
+	if saveErr := tm.sessionStore.Save(driveStr, localPath, &SessionRecord{
 		SessionURL: session.UploadURL,
 		FileHash:   localHash,
 		FileSize:   size,
 	}); saveErr != nil {
 		tm.logger.Warn("failed to save upload session — resume after crash will not work for this file",
-			slog.String("path", remotePath),
+			slog.String("path", localPath),
 			slog.String("error", saveErr.Error()),
 		)
 	}
@@ -460,10 +470,10 @@ func (tm *TransferManager) sessionUpload(
 	item, err := su.UploadFromSession(ctx, session, content, size, progress)
 	if err != nil {
 		// Session file persists for next retry.
-		return nil, fmt.Errorf("uploading %s: %w", remotePath, err)
+		return nil, fmt.Errorf("uploading %s: %w", localPath, err)
 	}
 
-	tm.deleteSession(driveStr, remotePath)
+	tm.deleteSession(driveStr, localPath)
 
 	return item, nil
 }

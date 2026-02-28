@@ -303,6 +303,10 @@ func (e *Engine) executePlan(
 			slog.Int("deps", len(plan.Deps)),
 		)
 
+		report.Failed = len(plan.Actions)
+		report.Errors = append(report.Errors,
+			fmt.Errorf("plan invariant violation: %d actions but %d deps", len(plan.Actions), len(plan.Deps)))
+
 		return
 	}
 

@@ -164,6 +164,11 @@ func TestTransferManager_FreshDownload_Success(t *testing.T) {
 		t.Errorf("Size = %d, want %d", result.Size, len(content))
 	}
 
+	// HashVerified should be true on successful hash match.
+	if !result.HashVerified {
+		t.Error("HashVerified = false, want true on successful match")
+	}
+
 	got, readErr := os.ReadFile(targetPath)
 	if readErr != nil {
 		t.Fatalf("ReadFile: %v", readErr)
@@ -402,7 +407,7 @@ func TestTransferManager_HashMismatch_Retry(t *testing.T) {
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
 			downloadCount++
 			if downloadCount <= 2 {
-				data := []byte(fmt.Sprintf("wrong-content-%d", downloadCount))
+				data := fmt.Appendf(nil, "wrong-content-%d", downloadCount)
 				n, err := w.Write(data)
 
 				return int64(n), err
@@ -462,6 +467,11 @@ func TestTransferManager_HashExhaustion_Accepts(t *testing.T) {
 	// After exhaustion, EffectiveRemoteHash should match localHash (accepted).
 	if result.EffectiveRemoteHash != result.LocalHash {
 		t.Errorf("EffectiveRemoteHash = %q, want %q (localHash)", result.EffectiveRemoteHash, result.LocalHash)
+	}
+
+	// HashVerified should be false when retries exhausted with mismatch.
+	if result.HashVerified {
+		t.Error("HashVerified = true, want false after exhaustion")
 	}
 }
 
