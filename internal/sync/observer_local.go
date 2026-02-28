@@ -284,7 +284,13 @@ func (o *LocalObserver) addWatchesRecursive(watcher FsWatcher, syncRoot string) 
 		return nil
 	})
 
-	o.logger.Info("watch setup complete",
+	// Use Info when failures occurred (operator needs to know), Debug otherwise.
+	logLevel := slog.LevelDebug
+	if failed > 0 {
+		logLevel = slog.LevelInfo
+	}
+
+	o.logger.Log(context.Background(), logLevel, "watch setup complete",
 		slog.Int("watches_added", watched),
 		slog.Int("watches_failed", failed),
 	)
@@ -518,6 +524,11 @@ var errFileChangedDuringHash = errors.New("sync: file changed during hashing")
 // if the file changed (B-119). Caller-specific handling: handleWrite skips
 // (Write events guarantee a follow-up), handleCreate and scanNewDirectory emit
 // with empty hash (Create events and directory scans have no guaranteed follow-up; B-203).
+//
+// The double os.Stat is intentional: pre-stat captures baseline metadata,
+// post-stat detects changes that occurred during hashing. The caller's earlier
+// stat cannot substitute because time may pass between the caller's stat and
+// the hash operation.
 func computeStableHash(fsPath string) (string, error) {
 	pre, err := os.Stat(fsPath)
 	if err != nil {

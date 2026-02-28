@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -119,12 +120,12 @@ func resolveKeepBothOnly(ctx context.Context, args []string, all, dryRun bool) e
 	return resolveSingleKeepBoth(ctx, mgr, args[0], dryRun)
 }
 
-func resolveAllKeepBoth(ctx context.Context, mgr *sync.BaselineManager, dryRun bool) error {
-	conflicts, err := mgr.ListConflicts(ctx)
-	if err != nil {
-		return err
-	}
-
+// resolveEachConflict iterates conflicts and calls resolveFn for each non-dry-run
+// resolution. Extracted to deduplicate resolveAllKeepBoth and resolveAllWithEngine.
+func resolveEachConflict(
+	conflicts []sync.ConflictRecord, resolution string, dryRun bool,
+	resolveFn func(id, resolution string) error,
+) error {
 	if len(conflicts) == 0 {
 		fmt.Println("No unresolved conflicts.")
 		return nil
@@ -133,18 +134,29 @@ func resolveAllKeepBoth(ctx context.Context, mgr *sync.BaselineManager, dryRun b
 	for i := range conflicts {
 		c := &conflicts[i]
 		if dryRun {
-			statusf("Would resolve %s (%s) as keep_both\n", c.Path, truncateID(c.ID))
+			statusf("Would resolve %s (%s) as %s\n", c.Path, truncateID(c.ID), resolution)
 			continue
 		}
 
-		if err := mgr.ResolveConflict(ctx, c.ID, resolutionKeepBoth); err != nil {
+		if err := resolveFn(c.ID, resolution); err != nil {
 			return fmt.Errorf("resolving %s: %w", c.Path, err)
 		}
 
-		statusf("Resolved %s as keep_both\n", c.Path)
+		statusf("Resolved %s as %s\n", c.Path, resolution)
 	}
 
 	return nil
+}
+
+func resolveAllKeepBoth(ctx context.Context, mgr *sync.BaselineManager, dryRun bool) error {
+	conflicts, err := mgr.ListConflicts(ctx)
+	if err != nil {
+		return err
+	}
+
+	return resolveEachConflict(conflicts, resolutionKeepBoth, dryRun, func(id, resolution string) error {
+		return mgr.ResolveConflict(ctx, id, resolution)
+	})
 }
 
 func resolveSingleKeepBoth(ctx context.Context, mgr *sync.BaselineManager, idOrPath string, dryRun bool) error {
@@ -153,7 +165,11 @@ func resolveSingleKeepBoth(ctx context.Context, mgr *sync.BaselineManager, idOrP
 		return err
 	}
 
-	target := findConflict(conflicts, idOrPath)
+	target, findErr := findConflict(conflicts, idOrPath)
+	if findErr != nil {
+		return findErr
+	}
+
 	if target == nil {
 		return fmt.Errorf("conflict not found: %s", idOrPath)
 	}
@@ -227,27 +243,9 @@ func resolveAllWithEngine(ctx context.Context, engine *sync.Engine, resolution s
 		return err
 	}
 
-	if len(conflicts) == 0 {
-		fmt.Println("No unresolved conflicts.")
-		return nil
-	}
-
-	for i := range conflicts {
-		c := &conflicts[i]
-		if dryRun {
-			statusf("Would resolve %s (%s) as %s\n", c.Path, truncateID(c.ID), resolution)
-			continue
-		}
-
-		err = engine.ResolveConflict(ctx, c.ID, resolution)
-		if err != nil {
-			return fmt.Errorf("resolving %s: %w", c.Path, err)
-		}
-
-		statusf("Resolved %s as %s\n", c.Path, resolution)
-	}
-
-	return nil
+	return resolveEachConflict(conflicts, resolution, dryRun, func(id, res string) error {
+		return engine.ResolveConflict(ctx, id, res)
+	})
 }
 
 func resolveSingleWithEngine(ctx context.Context, engine *sync.Engine, idOrPath, resolution string, dryRun bool) error {
@@ -256,7 +254,11 @@ func resolveSingleWithEngine(ctx context.Context, engine *sync.Engine, idOrPath,
 		return err
 	}
 
-	target := findConflict(conflicts, idOrPath)
+	target, findErr := findConflict(conflicts, idOrPath)
+	if findErr != nil {
+		return findErr
+	}
+
 	if target == nil {
 		return fmt.Errorf("conflict not found: %s", idOrPath)
 	}
@@ -276,19 +278,34 @@ func resolveSingleWithEngine(ctx context.Context, engine *sync.Engine, idOrPath,
 	return nil
 }
 
+// errAmbiguousPrefix is returned when a conflict ID prefix matches multiple
+// conflicts and the user needs to provide a longer prefix.
+var errAmbiguousPrefix = errors.New("ambiguous conflict ID prefix — provide more characters")
+
 // findConflict searches a conflict list by exact ID, exact path, or ID prefix.
-func findConflict(conflicts []sync.ConflictRecord, idOrPath string) *sync.ConflictRecord {
+// Returns an error if an ID prefix matches multiple conflicts.
+func findConflict(conflicts []sync.ConflictRecord, idOrPath string) (*sync.ConflictRecord, error) {
+	// First pass: exact matches (ID or path) take priority.
 	for i := range conflicts {
 		c := &conflicts[i]
 		if c.ID == idOrPath || c.Path == idOrPath {
-			return c
-		}
-
-		// Also match by ID prefix.
-		if len(c.ID) >= len(idOrPath) && c.ID[:len(idOrPath)] == idOrPath {
-			return c
+			return c, nil
 		}
 	}
 
-	return nil
+	// Second pass: prefix match with ambiguity detection.
+	var match *sync.ConflictRecord
+
+	for i := range conflicts {
+		c := &conflicts[i]
+		if len(c.ID) >= len(idOrPath) && c.ID[:len(idOrPath)] == idOrPath {
+			if match != nil {
+				return nil, errAmbiguousPrefix
+			}
+
+			match = c
+		}
+	}
+
+	return match, nil
 }
