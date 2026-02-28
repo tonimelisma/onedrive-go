@@ -2,8 +2,6 @@ package sync
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -31,7 +29,14 @@ func (e *Executor) executeDownload(ctx context.Context, action *Action) Outcome 
 		opts.RemoteSize = action.View.Remote.Size
 	}
 
-	result, err := e.transferMgr.DownloadToFile(ctx, driveID, action.ItemID, targetPath, opts)
+	var result *DownloadResult
+
+	err := e.withRetry(ctx, "download "+action.Path, func() error {
+		var dlErr error
+		result, dlErr = e.transferMgr.DownloadToFile(ctx, driveID, action.ItemID, targetPath, opts)
+
+		return dlErr
+	})
 	if err != nil {
 		return e.failedOutcome(action, ActionDownload, err)
 	}
@@ -83,14 +88,16 @@ func (e *Executor) executeUpload(ctx context.Context, action *Action) Outcome {
 	localPath := filepath.Join(e.syncRoot, action.Path)
 	name := filepath.Base(action.Path)
 
-	result, err := e.transferMgr.UploadFile(ctx, driveID, parentID, name, localPath, UploadOpts{})
+	var result *UploadResult
+
+	err = e.withRetry(ctx, "upload "+action.Path, func() error {
+		var ulErr error
+		result, ulErr = e.transferMgr.UploadFile(ctx, driveID, parentID, name, localPath, UploadOpts{})
+
+		return ulErr
+	})
 	if err != nil {
 		return e.failedOutcome(action, ActionUpload, err)
-	}
-
-	info, statErr := os.Stat(localPath)
-	if statErr != nil {
-		return e.failedOutcome(action, ActionUpload, fmt.Errorf("stat after upload %s: %w", action.Path, statErr))
 	}
 
 	remoteHash := selectHash(result.Item)
@@ -105,8 +112,8 @@ func (e *Executor) executeUpload(ctx context.Context, action *Action) Outcome {
 		ItemType:   ItemTypeFile,
 		LocalHash:  result.LocalHash,
 		RemoteHash: remoteHash,
-		Size:       info.Size(),
-		Mtime:      info.ModTime().UnixNano(),
+		Size:       result.Size,
+		Mtime:      result.Mtime.UnixNano(),
 		ETag:       result.Item.ETag,
 	}
 }

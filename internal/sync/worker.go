@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	stdsync "sync"
 	"sync/atomic"
@@ -71,7 +72,11 @@ func NewWorkerPool(
 		tracker:  tracker,
 		baseline: baseline,
 		logger:   logger,
-		results:  make(chan WorkerResult, planSize),
+		// Buffer sizing contract: one-shot mode uses planSize (equal to
+		// the number of actions, so workers never block). Watch mode uses
+		// watchResultBuf (4096) with a drain goroutine reading results
+		// concurrently, so blocking is unlikely under normal load.
+		results: make(chan WorkerResult, planSize),
 	}
 }
 
@@ -185,8 +190,27 @@ func (wp *WorkerPool) worker(ctx context.Context, primary, secondary <-chan *Tra
 			continue
 		}
 
-		wp.executeAction(ctx, ta)
+		wp.safeExecuteAction(ctx, ta)
 	}
+}
+
+// safeExecuteAction wraps executeAction with panic recovery so a single
+// action panic doesn't crash the entire program.
+func (wp *WorkerPool) safeExecuteAction(ctx context.Context, ta *TrackedAction) {
+	defer func() {
+		if r := recover(); r != nil {
+			wp.logger.Error("worker: panic in action execution",
+				slog.Int64("id", ta.ID),
+				slog.String("path", ta.Action.Path),
+				slog.Any("panic", r),
+			)
+			wp.recordFailure(fmt.Errorf("panic: %v", r))
+			wp.sendResult(ctx, ta, false, fmt.Sprintf("panic: %v", r))
+			wp.tracker.Complete(ta.ID)
+		}
+	}()
+
+	wp.executeAction(ctx, ta)
 }
 
 // executeAction runs a single tracked action: execute, commit, complete.
@@ -296,8 +320,9 @@ func (wp *WorkerPool) recordFailure(err error) {
 }
 
 // sendResult reports a per-action outcome to the results channel. Blocks until
-// the result is sent or the context is canceled. This ensures cycle failure
-// counts are accurate for delta token commit decisions.
+// the result is sent or the context is canceled. In one-shot mode the channel
+// is sized to planSize so this never blocks. In watch mode the channel is 4096
+// deep and a drain goroutine reads concurrently (see Engine.drainWorkerResults).
 func (wp *WorkerPool) sendResult(ctx context.Context, ta *TrackedAction, success bool, errMsg string) {
 	r := WorkerResult{
 		ID:      ta.ID,

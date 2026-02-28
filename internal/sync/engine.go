@@ -97,10 +97,15 @@ func NewEngine(cfg *EngineConfig) (*Engine, error) {
 		execCfg.trashFunc = defaultTrashFunc
 	}
 
+	// Construct sessionStore and TransferManager together so the TM is
+	// immutable after creation (no post-hoc field mutation).
+	var sessionStore *SessionStore
 	if cfg.DataDir != "" {
-		execCfg.sessionStore = NewSessionStore(cfg.DataDir, cfg.Logger)
-		execCfg.transferMgr.sessionStore = execCfg.sessionStore
+		sessionStore = NewSessionStore(cfg.DataDir, cfg.Logger)
+		execCfg.sessionStore = sessionStore
 	}
+
+	execCfg.transferMgr = NewTransferManager(cfg.Downloads, cfg.Uploads, sessionStore, cfg.Logger)
 
 	return &Engine{
 		baseline:      bm,
@@ -248,9 +253,23 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 		slog.Int("failed", report.Failed),
 	)
 
-	// Post-sync housekeeping: report stale .partial files (async to avoid
-	// blocking sync completion) and clean old sessions.
-	go reportStalePartials(e.syncRoot, stalePartialThreshold, e.logger)
+	e.postSyncHousekeeping()
+
+	return report, nil
+}
+
+// postSyncHousekeeping runs non-critical cleanup after a sync cycle:
+// async stale .partial reporting and session file cleanup.
+func (e *Engine) postSyncHousekeeping() {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				e.logger.Error("panic in reportStalePartials", slog.Any("panic", r))
+			}
+		}()
+
+		reportStalePartials(e.syncRoot, stalePartialThreshold, e.logger)
+	}()
 
 	if e.execCfg.sessionStore != nil {
 		if n, cleanErr := e.execCfg.sessionStore.CleanStale(staleSessionAge); cleanErr != nil {
@@ -259,8 +278,6 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 			e.logger.Info("cleaned stale upload sessions", slog.Int("count", n))
 		}
 	}
-
-	return report, nil
 }
 
 // executePlan populates the dependency tracker, runs the worker pool,

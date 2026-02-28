@@ -125,7 +125,7 @@ echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r 
 
 ## Current Phase
 
-**Phases 1-4 complete. Phase 5.0 (DAG-based concurrent execution), Phase 5.1 (watch mode observers + debounced buffer), Phase 5.2 (Engine.RunWatch() + continuous pipeline), Phase 5.3 (graceful shutdown + crash recovery + P2 hardening), and Phase 5.4 (universal transfer resume) complete. Crash recovery relies on idempotent delta re-observation. File-based upload session store + `.partial` download resume shared between CLI and sync engine via unified TransferManager. Next: Phase 5.5 (pause/resume + SIGHUP config reload + final cleanup).** See [docs/roadmap.md](docs/roadmap.md).
+**Phases 1-4 complete. Phase 5.0 (DAG-based concurrent execution), Phase 5.1 (watch mode observers + debounced buffer), Phase 5.2 (Engine.RunWatch() + continuous pipeline), Phase 5.3 (graceful shutdown + crash recovery + P2 hardening), Phase 5.4 (universal transfer resume), and Phase 5.4.2 (TransferManager hardening — 18 defensive fixes) complete. Crash recovery relies on idempotent delta re-observation. File-based upload session store + `.partial` download resume shared between CLI and sync engine via unified TransferManager. Next: Phase 5.5 (pause/resume + SIGHUP config reload + final cleanup).** See [docs/roadmap.md](docs/roadmap.md).
 
 ## Architecture Overview
 
