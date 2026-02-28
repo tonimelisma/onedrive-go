@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -167,7 +168,7 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Step 2-4: Discover account details from the Graph API.
-	canonicalID, orgName, err := discoverAccount(ctx, ts, logger)
+	canonicalID, user, orgName, err := discoverAccount(ctx, ts, logger)
 	if err != nil {
 		os.Remove(tempPath)
 
@@ -186,6 +187,17 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 		return moveErr
 	}
 
+	// Step 5b: Save metadata to the token file. Every login (including re-login)
+	// refreshes cached metadata so org renames and display name changes propagate.
+	if saveErr := graph.SaveTokenMeta(finalTokenPath, map[string]string{
+		"user_id":      user.ID,
+		"display_name": user.DisplayName,
+		"org_name":     orgName,
+		"cached_at":    time.Now().UTC().Format(time.RFC3339),
+	}); saveErr != nil {
+		logger.Warn("failed to save cached metadata", "error", saveErr)
+	}
+
 	// Step 6: Check if this is a re-login (drive already exists in config).
 	email := canonicalID.Email()
 	cfgPath := resolveLoginConfigPath()
@@ -196,26 +208,28 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	}
 
 	if isRelogin {
-		logger.Info("re-login detected, token refreshed", "canonical_id", canonicalID.String())
+		logger.Info("re-login detected, token and metadata refreshed", "canonical_id", canonicalID.String())
 		fmt.Printf("Token refreshed for %s.\n", email)
 
 		return nil
 	}
 
 	// Step 7: Create or update config with the new drive section.
-	return writeLoginConfig(cfgPath, canonicalID, orgName, logger)
+	return writeLoginConfig(cfgPath, canonicalID, user, orgName, logger)
 }
 
 // discoverAccount calls /me, /me/drive, and /me/organization to build the
 // canonical drive ID and extract the organization name. Returns the canonical
-// ID and org display name.
-func discoverAccount(ctx context.Context, ts graph.TokenSource, logger *slog.Logger) (driveid.CanonicalID, string, error) {
+// ID, user profile, and org display name.
+func discoverAccount(
+	ctx context.Context, ts graph.TokenSource, logger *slog.Logger,
+) (driveid.CanonicalID, *graph.User, string, error) {
 	client := graph.NewClient(graph.DefaultBaseURL, defaultHTTPClient(), ts, logger, "onedrive-go/"+version)
 
 	// GET /me -> email, user GUID
 	user, err := client.Me(ctx)
 	if err != nil {
-		return driveid.CanonicalID{}, "", fmt.Errorf("fetching user profile: %w", err)
+		return driveid.CanonicalID{}, nil, "", fmt.Errorf("fetching user profile: %w", err)
 	}
 
 	logger.Info("discovered user", "email", user.Email, "display_name", user.DisplayName)
@@ -223,11 +237,11 @@ func discoverAccount(ctx context.Context, ts graph.TokenSource, logger *slog.Log
 	// GET /me/drives -> driveType (personal, business)
 	drives, err := client.Drives(ctx)
 	if err != nil {
-		return driveid.CanonicalID{}, "", fmt.Errorf("listing drives: %w", err)
+		return driveid.CanonicalID{}, nil, "", fmt.Errorf("listing drives: %w", err)
 	}
 
 	if len(drives) == 0 {
-		return driveid.CanonicalID{}, "", fmt.Errorf("no drives found for this account")
+		return driveid.CanonicalID{}, nil, "", fmt.Errorf("no drives found for this account")
 	}
 
 	driveType := drives[0].DriveType
@@ -256,12 +270,12 @@ func discoverAccount(ctx context.Context, ts graph.TokenSource, logger *slog.Log
 
 	cid, err := driveid.Construct(driveType, user.Email)
 	if err != nil {
-		return driveid.CanonicalID{}, "", fmt.Errorf("constructing canonical ID: %w", err)
+		return driveid.CanonicalID{}, nil, "", fmt.Errorf("constructing canonical ID: %w", err)
 	}
 
 	logger.Info("constructed canonical ID", "canonical_id", cid.String())
 
-	return cid, orgName, nil
+	return cid, user, orgName, nil
 }
 
 // moveToken renames the pending token file to its final canonical path.
@@ -328,12 +342,13 @@ func collectExistingSyncDirs(cfgPath string, logger *slog.Logger) []string {
 
 // writeLoginConfig creates or appends to the config file with a new drive section,
 // and prints the appropriate login success message.
-func writeLoginConfig(cfgPath string, canonicalID driveid.CanonicalID, orgName string, logger *slog.Logger) error {
-	driveType := canonicalID.DriveType()
+func writeLoginConfig(
+	cfgPath string, canonicalID driveid.CanonicalID, user *graph.User, orgName string, logger *slog.Logger,
+) error {
 	email := canonicalID.Email()
 
 	existingDirs := collectExistingSyncDirs(cfgPath, logger)
-	syncDir := config.DefaultSyncDir(driveType, orgName, existingDirs)
+	syncDir := config.DefaultSyncDir(canonicalID, orgName, user.DisplayName, existingDirs)
 
 	logger.Info("writing config", "config_path", cfgPath, "canonical_id", canonicalID.String(), "sync_dir", syncDir)
 
@@ -348,7 +363,7 @@ func writeLoginConfig(cfgPath string, canonicalID driveid.CanonicalID, orgName s
 		}
 	}
 
-	printLoginSuccess(driveType, email, orgName, canonicalID.String(), syncDir)
+	printLoginSuccess(canonicalID.DriveType(), email, orgName, canonicalID.String(), syncDir)
 
 	return nil
 }
@@ -370,7 +385,7 @@ func printLoginSuccess(driveType, email, orgName, canonicalID, syncDir string) {
 		fmt.Printf("Drive added: %s -> %s\n", canonicalID, syncDir)
 		fmt.Println()
 		fmt.Println("You also have access to SharePoint libraries.")
-		fmt.Println("Run 'onedrive-go drive add' to add them.")
+		fmt.Println("Run 'onedrive-go drive search <term>' to find and add them.")
 	default:
 		fmt.Printf("Signed in as %s.\n", email)
 		fmt.Printf("Drive added: %s -> %s\n", canonicalID, syncDir)
@@ -594,9 +609,15 @@ func runWhoami(cmd *cobra.Command, _ []string) error {
 	logger := buildLogger()
 	ctx := cmd.Context()
 
-	// Determine which drive to query. If --drive is set, use it directly.
-	// Otherwise try to auto-select from config.
-	cid, err := resolveWhoamiDrive()
+	// Delegate drive resolution to config.MatchDrive for consistent behavior.
+	cfgPath := resolveLoginConfigPath()
+
+	cfg, err := config.LoadOrDefault(cfgPath, logger)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+
+	cid, _, err := config.MatchDrive(cfg, flagDrive, logger)
 	if err != nil {
 		return err
 	}
@@ -636,47 +657,6 @@ func runWhoami(cmd *cobra.Command, _ []string) error {
 	printWhoamiText(user, drives)
 
 	return nil
-}
-
-// resolveWhoamiDrive determines the canonical ID for whoami. Uses --drive if
-// set, otherwise loads config and auto-selects when exactly one drive exists.
-func resolveWhoamiDrive() (driveid.CanonicalID, error) {
-	if flagDrive != "" {
-		cid, err := driveid.NewCanonicalID(flagDrive)
-		if err != nil {
-			return driveid.CanonicalID{}, fmt.Errorf("invalid drive ID %q: %w", flagDrive, err)
-		}
-
-		return cid, nil
-	}
-
-	cfgPath := resolveLoginConfigPath()
-
-	cfg, err := config.LoadOrDefault(cfgPath, slog.Default())
-	if err != nil {
-		return driveid.CanonicalID{}, fmt.Errorf("loading config: %w", err)
-	}
-
-	if len(cfg.Drives) == 0 {
-		return driveid.CanonicalID{}, fmt.Errorf("no accounts configured — run 'onedrive-go login' to get started")
-	}
-
-	if len(cfg.Drives) == 1 {
-		for id := range cfg.Drives {
-			return id, nil
-		}
-	}
-
-	// Multiple drives — need explicit selection.
-	var ids []string
-	for id := range cfg.Drives {
-		ids = append(ids, id.String())
-	}
-
-	return driveid.CanonicalID{}, fmt.Errorf(
-		"multiple drives configured — specify with --drive:\n  %s",
-		strings.Join(ids, "\n  "),
-	)
 }
 
 func printWhoamiJSON(user *graph.User, drives []graph.Drive) error {

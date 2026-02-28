@@ -34,13 +34,14 @@ func TestValidateDrives_MultipleDrives_Valid(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestValidateDrives_MissingSyncDir(t *testing.T) {
+func TestValidateDrives_EmptySyncDir_Valid(t *testing.T) {
+	// Empty sync_dir is valid — runtime defaults computed in buildResolvedDrive().
+	// This supports zero-config mode and minimal drive sections.
 	cfg := DefaultConfig()
 	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{}
 
 	err := Validate(cfg)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "sync_dir is required")
+	assert.NoError(t, err)
 }
 
 func TestValidateDrives_InvalidPollInterval(t *testing.T) {

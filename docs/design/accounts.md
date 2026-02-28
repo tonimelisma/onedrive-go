@@ -104,6 +104,35 @@ All data files in one flat directory. No nested folders. The `:` separator from 
 
 Filenames are always derived FROM the canonical ID in the config file. We never parse filenames to discover drives — config is the source of truth.
 
+### Token file format
+
+Token files contain the OAuth token AND cached API metadata in a single JSON file:
+
+```json
+{
+  "token": {
+    "access_token": "...",
+    "refresh_token": "...",
+    "token_type": "Bearer",
+    "expiry": "2026-02-27T..."
+  },
+  "meta": {
+    "user_id": "abc123-def456",
+    "display_name": "Alice Smith",
+    "org_name": "Contoso Ltd",
+    "cached_at": "2026-02-27T10:00:00Z"
+  }
+}
+```
+
+Metadata fields:
+- `user_id` — Azure AD user GUID (stable identifier)
+- `display_name` — user's display name (for friendly status output and sync_dir naming)
+- `org_name` — organization name (for business sync_dir computation: `~/OneDrive - {org_name}`)
+- `cached_at` — timestamp of last metadata refresh
+
+Every login (including re-login) refreshes both the token AND all cached metadata. Old bare `oauth2.Token` files (without the `token`/`meta` wrapper) are rejected — re-login is required.
+
 ### SharePoint token sharing
 
 SharePoint drives share the OAuth token with the business account (same user, same session, same scopes). Only the state DB is per-drive. `token_business_alice@contoso.com.json` serves both her OneDrive for Business and all her SharePoint drives.
@@ -166,7 +195,7 @@ Quotes around section names are required by TOML because `@` and `:` are not val
 
 | Key | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `sync_dir` | string | Yes | — | Where to sync. Must be unique across drives. |
+| `sync_dir` | string | No | (computed) | Where to sync. Must be unique across drives. Auto-computed from canonical ID + token metadata if omitted. |
 | `enabled` | bool | No | `true` | `false` = paused (drive remove sets this) |
 | `alias` | string | No | — | Short name for `--drive` (e.g., `"work"`) |
 | `remote_path` | string | No | `"/"` | Remote subfolder to sync |
@@ -301,8 +330,10 @@ Authentication:
   whoami                    Show authenticated accounts
 
 Drive management:
-  drive add                 Add a SharePoint library or resume a paused drive
+  drive list                Show configured drives + available drives from network
+  drive add <canonical-id>  Add a new drive or resume a paused one
   drive remove [--purge]    Pause a drive (--purge: delete state DB + config section)
+  drive search <term>       Search SharePoint sites by name
 
 Sync:
   sync                      One-shot bidirectional sync, exits when done

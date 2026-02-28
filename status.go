@@ -23,23 +23,35 @@ const (
 	tokenStateValid   = "valid"
 )
 
+// Drive state constants for status and drive list display.
+const (
+	driveStateReady      = "ready"
+	driveStatePaused     = "paused"
+	driveStateNoToken    = "no token"
+	driveStateNeedsSetup = "needs setup"
+	syncDirNotSet        = "(not set)"
+)
+
 func newStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
 		Short: "Show all accounts, drives, and token status",
 		Long: `Display the status of all configured accounts and drives.
 
-Shows token validity, sync directory, and enabled/disabled status for each drive.`,
+Shows token validity, sync directory, and enabled/disabled status for each drive.
+Reads from config only — does not discover drives from tokens on disk.`,
 		RunE: runStatus,
 	}
 }
 
 // statusAccount groups drives under a single account email.
 type statusAccount struct {
-	Email      string        `json:"email"`
-	DriveType  string        `json:"drive_type"`
-	TokenState string        `json:"token_state"`
-	Drives     []statusDrive `json:"drives"`
+	Email       string        `json:"email"`
+	DriveType   string        `json:"drive_type"`
+	TokenState  string        `json:"token_state"`
+	DisplayName string        `json:"display_name,omitempty"`
+	OrgName     string        `json:"org_name,omitempty"`
+	Drives      []statusDrive `json:"drives"`
 }
 
 // statusDrive holds status information for a single drive.
@@ -59,7 +71,13 @@ func runStatus(_ *cobra.Command, _ []string) error {
 	}
 
 	if len(cfg.Drives) == 0 {
-		fmt.Println("No accounts configured. Run 'onedrive-go login' to get started.")
+		// Config-mandatory: no drives means check for tokens to provide smart guidance.
+		tokens := config.DiscoverTokens(logger)
+		if len(tokens) > 0 {
+			fmt.Println("No drives configured. Run 'onedrive-go drive add' to add a drive.")
+		} else {
+			fmt.Println("No accounts configured. Run 'onedrive-go login' to get started.")
+		}
 
 		return nil
 	}
@@ -137,17 +155,25 @@ func buildSingleAccountStatus(
 		acct.DriveType = driveIDs[0].DriveType()
 	}
 
+	// Read display name and org name from token metadata.
+	acct.DisplayName, acct.OrgName = readAccountMeta(email, driveIDs, logger)
+
 	// Check token validity for this account.
-	acct.TokenState = checkTokenState(email, driveIDs, logger)
+	acct.TokenState = checkTokenState(context.Background(), email, driveIDs, logger)
 
 	// Build drive status entries.
 	for _, cid := range driveIDs {
 		d := cfg.Drives[cid]
 		state := driveState(&d, acct.TokenState)
 
+		syncDir := d.SyncDir
+		if syncDir == "" {
+			state = driveStateNeedsSetup
+		}
+
 		acct.Drives = append(acct.Drives, statusDrive{
 			CanonicalID: cid.String(),
-			SyncDir:     d.SyncDir,
+			SyncDir:     syncDir,
 			State:       state,
 		})
 	}
@@ -155,9 +181,31 @@ func buildSingleAccountStatus(
 	return acct
 }
 
+// readAccountMeta reads display name and org name from token file metadata.
+func readAccountMeta(account string, driveIDs []driveid.CanonicalID, logger *slog.Logger) (displayName, orgName string) {
+	tokenID := canonicalIDForToken(account, driveIDs)
+	if tokenID.IsZero() {
+		tokenID = findTokenFallback(account, logger)
+	}
+
+	tokenPath := config.DriveTokenPath(tokenID)
+	if tokenPath == "" {
+		return "", ""
+	}
+
+	meta, err := graph.LoadTokenMeta(tokenPath)
+	if err != nil {
+		logger.Debug("could not read token meta for status", "error", err)
+
+		return "", ""
+	}
+
+	return meta["display_name"], meta["org_name"]
+}
+
 // checkTokenState determines whether a valid token exists for the given account.
 // Returns "valid", "expired", or "missing".
-func checkTokenState(account string, driveIDs []driveid.CanonicalID, logger *slog.Logger) string {
+func checkTokenState(ctx context.Context, account string, driveIDs []driveid.CanonicalID, logger *slog.Logger) string {
 	tokenID := canonicalIDForToken(account, driveIDs)
 	if tokenID.IsZero() {
 		// No drives in config — probe the filesystem for an existing token.
@@ -171,8 +219,6 @@ func checkTokenState(account string, driveIDs []driveid.CanonicalID, logger *slo
 
 	// Try loading a token source to check validity. The TokenSourceFromPath call
 	// will detect expired tokens internally.
-	ctx := context.Background()
-
 	_, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
 	if err != nil {
 		if errors.Is(err, graph.ErrNotLoggedIn) {
@@ -189,14 +235,14 @@ func checkTokenState(account string, driveIDs []driveid.CanonicalID, logger *slo
 // enabled flag and token status.
 func driveState(d *config.Drive, tokenState string) string {
 	if d.Enabled != nil && !*d.Enabled {
-		return "paused"
+		return driveStatePaused
 	}
 
 	if tokenState == tokenStateMissing {
-		return "no token"
+		return driveStateNoToken
 	}
 
-	return "ready"
+	return driveStateReady
 }
 
 func printStatusJSON(accounts []statusAccount) error {
@@ -216,11 +262,26 @@ func printStatusText(accounts []statusAccount) {
 			fmt.Println()
 		}
 
-		fmt.Printf("Account: %s (%s)\n", acct.Email, acct.DriveType)
+		label := acct.Email
+		if acct.DisplayName != "" {
+			label = fmt.Sprintf("%s (%s)", acct.DisplayName, acct.Email)
+		}
+
+		fmt.Printf("Account: %s [%s]\n", label, acct.DriveType)
+
+		if acct.OrgName != "" {
+			fmt.Printf("  Org:   %s\n", acct.OrgName)
+		}
+
 		fmt.Printf("  Token: %s\n", acct.TokenState)
 
 		for _, d := range acct.Drives {
-			fmt.Printf("  %-35s %-25s %s\n", d.CanonicalID, d.SyncDir, d.State)
+			syncDir := d.SyncDir
+			if syncDir == "" {
+				syncDir = syncDirNotSet
+			}
+
+			fmt.Printf("  %-35s %-25s %s\n", d.CanonicalID, syncDir, d.State)
 		}
 	}
 }

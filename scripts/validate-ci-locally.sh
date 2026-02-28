@@ -87,12 +87,12 @@ az keyvault secret download \
     --file "$TEMP_TOKEN" \
     --encoding utf-8
 
-if ! jq -e '.refresh_token' "$TEMP_TOKEN" > /dev/null 2>&1; then
-    echo "ERROR: Token is missing refresh_token field"
+if ! jq -e '.token.refresh_token' "$TEMP_TOKEN" > /dev/null 2>&1; then
+    echo "ERROR: Token is missing .token.refresh_token field (may need re-login with new token format)"
     rm -f "$TEMP_TOKEN"
     exit 1
 fi
-echo "Token structure valid (has refresh_token)"
+echo "Token structure valid (has .token.refresh_token)"
 
 # Step 5: Copy to expected location.
 cp "$TEMP_TOKEN" "$TOKEN_PATH"
@@ -125,7 +125,7 @@ ONEDRIVE_TEST_DRIVE="$DRIVE" \
 # Step 9: Save rotated token back (same as CI post-test step).
 echo ""
 echo "--- Saving rotated token back to Key Vault ---"
-if jq -e '.refresh_token' "$TOKEN_PATH" > /dev/null 2>&1; then
+if jq -e '.token.refresh_token' "$TOKEN_PATH" > /dev/null 2>&1; then
     az keyvault secret set \
         --vault-name "$VAULT_NAME" \
         --name "$SECRET_NAME" \

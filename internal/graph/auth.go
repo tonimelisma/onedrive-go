@@ -34,6 +34,14 @@ var defaultScopes = []string{
 	"User.Read",
 }
 
+// tokenFile is the on-disk format for token files. Includes the OAuth token
+// and optional metadata (org name, display name) cached from API responses.
+// Old bare oauth2.Token files are not supported — re-login is required.
+type tokenFile struct {
+	Token *oauth2.Token     `json:"token"`
+	Meta  map[string]string `json:"meta,omitempty"`
+}
+
 // DeviceAuth holds the device code response fields that the CLI displays to the user.
 type DeviceAuth struct {
 	UserCode        string
@@ -59,7 +67,7 @@ func Login(
 	display func(DeviceAuth),
 	logger *slog.Logger,
 ) (TokenSource, error) {
-	cfg := oauthConfig(tokenPath, logger)
+	cfg := oauthConfig(tokenPath, nil, logger)
 
 	return doLogin(ctx, tokenPath, cfg, display, logger)
 }
@@ -98,7 +106,7 @@ func doLogin(
 		slog.Time("expiry", tok.Expiry),
 	)
 
-	if saveErr := saveToken(tokenPath, tok); saveErr != nil {
+	if saveErr := saveToken(tokenPath, tok, nil); saveErr != nil {
 		return nil, fmt.Errorf("graph: saving token: %w", saveErr)
 	}
 
@@ -149,7 +157,7 @@ func LoginWithBrowser(
 	openURL func(string) error,
 	logger *slog.Logger,
 ) (TokenSource, error) {
-	cfg := oauthConfig(tokenPath, logger)
+	cfg := oauthConfig(tokenPath, nil, logger)
 
 	return doAuthCodeLogin(ctx, tokenPath, cfg, openURL, logger)
 }
@@ -344,7 +352,7 @@ func exchangeAndSave(
 
 	logger.Info("token exchange successful", slog.Time("expiry", tok.Expiry))
 
-	if saveErr := saveToken(tokenPath, tok); saveErr != nil {
+	if saveErr := saveToken(tokenPath, tok, nil); saveErr != nil {
 		return nil, fmt.Errorf("graph: saving token: %w", saveErr)
 	}
 
@@ -380,7 +388,7 @@ func generateState() (string, error) {
 // The caller is responsible for computing tokenPath (via config.DriveTokenPath).
 // This decouples graph/ from config/ — graph/ has no config import.
 func TokenSourceFromPath(ctx context.Context, tokenPath string, logger *slog.Logger) (TokenSource, error) {
-	tok, err := loadToken(tokenPath)
+	tok, meta, err := loadToken(tokenPath)
 	if err != nil {
 		return nil, err
 	}
@@ -396,7 +404,7 @@ func TokenSourceFromPath(ctx context.Context, tokenPath string, logger *slog.Log
 		slog.Bool("expired", expired),
 	)
 
-	cfg := oauthConfig(tokenPath, logger)
+	cfg := oauthConfig(tokenPath, meta, logger)
 	src := cfg.TokenSource(ctx, tok)
 
 	return &tokenBridge{src: src, logger: logger}, nil
@@ -429,8 +437,9 @@ func Logout(tokenPath string, logger *slog.Logger) error {
 }
 
 // oauthConfig builds an oauth2.Config with OnTokenChange wired to persist
-// refreshed tokens. This is the key integration with the oauth2 fork.
-func oauthConfig(tokenPath string, logger *slog.Logger) *oauth2.Config {
+// refreshed tokens. meta is captured by the closure so metadata is preserved
+// through silent token refreshes.
+func oauthConfig(tokenPath string, meta map[string]string, logger *slog.Logger) *oauth2.Config {
 	return &oauth2.Config{
 		ClientID: defaultClientID,
 		Scopes:   defaultScopes,
@@ -442,7 +451,7 @@ func oauthConfig(tokenPath string, logger *slog.Logger) *oauth2.Config {
 				slog.Time("new_expiry", tok.Expiry),
 			)
 
-			if err := saveToken(tokenPath, tok); err != nil {
+			if err := saveToken(tokenPath, tok, meta); err != nil {
 				logger.Warn("failed to persist refreshed token",
 					slog.String("path", tokenPath),
 					slog.String("error", err.Error()),
@@ -480,30 +489,38 @@ func (b *tokenBridge) Token() (string, error) {
 	return t.AccessToken, nil
 }
 
-// loadToken reads a saved oauth2.Token from disk.
-// Returns (nil, nil) if the file does not exist.
-func loadToken(path string) (*oauth2.Token, error) {
+// loadToken reads a saved token file from disk. Returns the OAuth token and
+// any cached metadata. Returns (nil, nil, nil) if the file does not exist.
+// Old bare oauth2.Token files (without the "token" wrapper) will fail with
+// "token file missing token field" — re-login is required.
+func loadToken(path string) (*oauth2.Token, map[string]string, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("graph: reading token file: %w", err)
+		return nil, nil, fmt.Errorf("graph: reading token file: %w", err)
 	}
 
-	var tok oauth2.Token
-	if err := json.Unmarshal(data, &tok); err != nil {
-		return nil, fmt.Errorf("graph: decoding token file: %w", err)
+	var tf tokenFile
+	if err := json.Unmarshal(data, &tf); err != nil {
+		return nil, nil, fmt.Errorf("graph: decoding token file: %w", err)
 	}
 
-	return &tok, nil
+	if tf.Token == nil {
+		return nil, nil, fmt.Errorf("graph: token file missing token field (re-login required)")
+	}
+
+	return tf.Token, tf.Meta, nil
 }
 
-// saveToken writes an oauth2.Token to disk atomically (write-to-temp + rename)
+// saveToken writes a token file to disk atomically (write-to-temp + rename)
 // with 0600 permissions. Never logs token values (architecture.md §9.2).
-func saveToken(path string, tok *oauth2.Token) error {
-	data, err := json.MarshalIndent(tok, "", "  ")
+func saveToken(path string, tok *oauth2.Token, meta map[string]string) error {
+	tf := tokenFile{Token: tok, Meta: meta}
+
+	data, err := json.MarshalIndent(tf, "", "  ")
 	if err != nil {
 		return fmt.Errorf("graph: encoding token: %w", err)
 	}
@@ -558,4 +575,36 @@ func saveToken(path string, tok *oauth2.Token) error {
 	success = true
 
 	return nil
+}
+
+// LoadTokenMeta reads just the metadata from a token file.
+// Delegates to the internal loadToken function — single loading code path.
+// Returns nil metadata (not an error) if the file does not exist.
+func LoadTokenMeta(tokenPath string) (map[string]string, error) {
+	_, meta, err := loadToken(tokenPath)
+	return meta, err
+}
+
+// SaveTokenMeta reads the current token, merges new metadata, and saves.
+// New metadata keys overwrite existing ones.
+func SaveTokenMeta(tokenPath string, meta map[string]string) error {
+	tok, existingMeta, err := loadToken(tokenPath)
+	if err != nil {
+		return fmt.Errorf("graph: reading token for metadata update: %w", err)
+	}
+
+	if tok == nil {
+		return fmt.Errorf("graph: no token file at %s", tokenPath)
+	}
+
+	// Merge: new meta keys overwrite existing.
+	if existingMeta == nil {
+		existingMeta = make(map[string]string, len(meta))
+	}
+
+	for k, v := range meta {
+		existingMeta[k] = v
+	}
+
+	return saveToken(tokenPath, tok, existingMeta)
 }
