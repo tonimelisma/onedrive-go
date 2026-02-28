@@ -105,6 +105,18 @@ func linuxCacheDir(home string) string {
 	return filepath.Join(home, ".cache", appName)
 }
 
+// UploadSessionDir returns the directory for persisted upload session files.
+// These are JSON files containing pre-authenticated upload URLs, stored with
+// 0700 directory permissions for security.
+func UploadSessionDir() string {
+	dir := DefaultDataDir()
+	if dir == "" {
+		return ""
+	}
+
+	return filepath.Join(dir, "upload-sessions")
+}
+
 // DefaultConfigPath returns the full path to the default config file.
 // This is used as the fallback when neither ONEDRIVE_GO_CONFIG nor
 // --config is specified.

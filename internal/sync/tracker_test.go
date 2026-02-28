@@ -22,8 +22,8 @@ func TestDepTracker_NoDeps(t *testing.T) {
 
 	select {
 	case ta := <-dt.Interactive():
-		if ta.LedgerID != 1 {
-			t.Errorf("LedgerID = %d, want 1", ta.LedgerID)
+		if ta.ID != 1 {
+			t.Errorf("ID = %d, want 1", ta.ID)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for action on interactive channel")
@@ -50,8 +50,8 @@ func TestDepTracker_DependencyChain(t *testing.T) {
 	// Only action 1 should be dispatched.
 	select {
 	case ta := <-dt.Interactive():
-		if ta.LedgerID != 1 {
-			t.Fatalf("expected action 1, got %d", ta.LedgerID)
+		if ta.ID != 1 {
+			t.Fatalf("expected action 1, got %d", ta.ID)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for action 1")
@@ -60,7 +60,7 @@ func TestDepTracker_DependencyChain(t *testing.T) {
 	// Action 2 should not be dispatched yet.
 	select {
 	case ta := <-dt.Interactive():
-		t.Fatalf("action %d dispatched too early", ta.LedgerID)
+		t.Fatalf("action %d dispatched too early", ta.ID)
 	case <-time.After(50 * time.Millisecond):
 		// Expected — action 2 still blocked.
 	}
@@ -70,8 +70,8 @@ func TestDepTracker_DependencyChain(t *testing.T) {
 
 	select {
 	case ta := <-dt.Interactive():
-		if ta.LedgerID != 2 {
-			t.Fatalf("expected action 2, got %d", ta.LedgerID)
+		if ta.ID != 2 {
+			t.Fatalf("expected action 2, got %d", ta.ID)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for action 2")
@@ -94,8 +94,8 @@ func TestDepTracker_BulkLane(t *testing.T) {
 
 	select {
 	case ta := <-dt.Bulk():
-		if ta.LedgerID != 1 {
-			t.Errorf("LedgerID = %d, want 1", ta.LedgerID)
+		if ta.ID != 1 {
+			t.Errorf("ID = %d, want 1", ta.ID)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for action on bulk channel")
@@ -118,8 +118,8 @@ func TestDepTracker_SmallTransferInteractive(t *testing.T) {
 
 	select {
 	case ta := <-dt.Interactive():
-		if ta.LedgerID != 1 {
-			t.Errorf("LedgerID = %d, want 1", ta.LedgerID)
+		if ta.ID != 1 {
+			t.Errorf("ID = %d, want 1", ta.ID)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for action on interactive channel")
@@ -139,8 +139,8 @@ func TestDepTracker_NonTransferAlwaysInteractive(t *testing.T) {
 
 	select {
 	case ta := <-dt.Interactive():
-		if ta.LedgerID != 1 {
-			t.Errorf("LedgerID = %d, want 1", ta.LedgerID)
+		if ta.ID != 1 {
+			t.Errorf("ID = %d, want 1", ta.ID)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for action on interactive channel")
@@ -235,7 +235,7 @@ func TestDepTracker_ConcurrentComplete(t *testing.T) {
 
 			select {
 			case ta := <-dt.Interactive():
-				dt.Complete(ta.LedgerID)
+				dt.Complete(ta.ID)
 			case <-time.After(5 * time.Second):
 				t.Error("timeout draining dependent action")
 			}
@@ -253,8 +253,8 @@ func TestDepTracker_ConcurrentComplete(t *testing.T) {
 }
 
 // TestDepTracker_CompleteUnknownID verifies that calling Complete() with an
-// unknown ledger ID logs a warning and still increments the completed counter.
-// This is a defensive guard against deadlock if the tracker/ledger population
+// unknown ID logs a warning and still increments the completed counter.
+// This is a defensive guard against deadlock if the tracker population
 // has a subtle bug. Regression test for: silent return without incrementing
 // completed → done channel never closed → deadlock.
 func TestDepTracker_CompleteUnknownID(t *testing.T) {
@@ -354,7 +354,7 @@ func TestDepTracker_ConcurrentAddAndComplete(t *testing.T) {
 	for {
 		select {
 		case ta := <-dt.Interactive():
-			dt.Complete(ta.LedgerID)
+			dt.Complete(ta.ID)
 			drained++
 		case <-time.After(200 * time.Millisecond):
 			// No more actions to drain.
@@ -472,8 +472,8 @@ func TestDepTracker_SkipCompletedDeps(t *testing.T) {
 	// Should dispatch immediately since dep 1 is unknown/completed.
 	select {
 	case ta := <-dt.Interactive():
-		if ta.LedgerID != 2 {
-			t.Errorf("LedgerID = %d, want 2", ta.LedgerID)
+		if ta.ID != 2 {
+			t.Errorf("ID = %d, want 2", ta.ID)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for action with unknown dep")

@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -235,8 +236,9 @@ func (e *Executor) downloadOutcome(
 	return o
 }
 
-// executeUpload uploads a local file to OneDrive via the Uploader interface,
-// which encapsulates the simple-vs-chunked decision and session lifecycle.
+// executeUpload uploads a local file to OneDrive. For large files (>4 MiB),
+// when a SessionStore and SessionUploader are available, the upload session is
+// persisted to disk so it can be resumed after crash/restart.
 func (e *Executor) executeUpload(ctx context.Context, action *Action) Outcome {
 	driveID := e.resolveDriveID(action)
 
@@ -268,8 +270,6 @@ func (e *Executor) executeUpload(ctx context.Context, action *Action) Outcome {
 	}
 	defer f.Close()
 
-	var item *graph.Item
-
 	progress := func(uploaded, total int64) {
 		e.logger.Debug("upload progress",
 			slog.String("path", action.Path),
@@ -278,19 +278,25 @@ func (e *Executor) executeUpload(ctx context.Context, action *Action) Outcome {
 		)
 	}
 
-	// Retry wraps the full Upload() call. On retry of a chunked upload, this
-	// restarts the session from scratch. Acceptable because: (1) io.ReaderAt
-	// allows re-reading from offset 0, (2) Graph API auto-cleans abandoned
-	// sessions, (3) executor-level retry is rare (graph client retries
-	// 429/5xx internally). Session resume tracked as B-037.
-	uploadErr := e.withRetry(ctx, "upload "+action.Path, func() error {
-		var retryErr error
-		item, retryErr = e.uploads.Upload(ctx, driveID, parentID, name, f, size, mtime, progress)
+	// For large files with session store + SessionUploader, use session-based upload.
+	su, hasSU := e.uploads.(SessionUploader)
 
-		return retryErr
-	})
-	if uploadErr != nil {
-		return e.failedOutcome(action, ActionUpload, uploadErr)
+	var item *graph.Item
+
+	if size > graph.SimpleUploadMaxSize && e.sessionStore != nil && hasSU {
+		item, err = e.sessionUpload(ctx, action, su, f, driveID, parentID, name, localHash, size, mtime, progress)
+	} else {
+		// Small files or no session support: use the standard Uploader interface.
+		err = e.withRetry(ctx, "upload "+action.Path, func() error {
+			var retryErr error
+			item, retryErr = e.uploads.Upload(ctx, driveID, parentID, name, f, size, mtime, progress)
+
+			return retryErr
+		})
+	}
+
+	if err != nil {
+		return e.failedOutcome(action, ActionUpload, err)
 	}
 
 	// Post-upload hash verification.
@@ -322,5 +328,77 @@ func (e *Executor) executeUpload(ctx context.Context, action *Action) Outcome {
 		Size:       size,
 		Mtime:      mtime.UnixNano(),
 		ETag:       item.ETag,
+	}
+}
+
+// sessionUpload performs a session-based upload with persistence for resume.
+// Checks the session store for an existing session matching the file hash;
+// if found, attempts resume. Otherwise creates a fresh session.
+func (e *Executor) sessionUpload(
+	ctx context.Context, action *Action, su SessionUploader,
+	content io.ReaderAt, driveID driveid.ID, parentID, name, localHash string,
+	size int64, mtime time.Time, progress graph.ProgressFunc,
+) (*graph.Item, error) {
+	remotePath := action.Path
+	driveStr := driveID.String()
+
+	// Check for existing session.
+	rec, loadErr := e.sessionStore.Load(driveStr, remotePath)
+	if loadErr != nil {
+		e.logger.Warn("failed to load upload session", slog.String("path", remotePath), slog.String("error", loadErr.Error()))
+	}
+
+	if rec != nil && rec.FileHash == localHash {
+		e.logger.Debug("attempting upload session resume", slog.String("path", remotePath))
+
+		session := &graph.UploadSession{UploadURL: rec.SessionURL}
+
+		item, resumeErr := su.ResumeUpload(ctx, session, content, size, progress)
+		if resumeErr == nil {
+			e.deleteSession(driveStr, remotePath)
+			return item, nil
+		}
+
+		if !errors.Is(resumeErr, graph.ErrUploadSessionExpired) {
+			return nil, fmt.Errorf("resuming upload of %s: %w", remotePath, resumeErr)
+		}
+
+		// Session expired — fall through to fresh.
+		e.deleteSession(driveStr, remotePath)
+		e.logger.Info("upload session expired, creating fresh session", slog.String("path", remotePath))
+	}
+
+	// Fresh session-based upload.
+	session, err := su.CreateUploadSession(ctx, driveID, parentID, name, size, mtime)
+	if err != nil {
+		return nil, fmt.Errorf("creating upload session for %s: %w", remotePath, err)
+	}
+
+	if saveErr := e.sessionStore.Save(driveStr, remotePath, &SessionRecord{
+		SessionURL: session.UploadURL,
+		FileHash:   localHash,
+		FileSize:   size,
+	}); saveErr != nil {
+		e.logger.Warn("failed to save upload session", slog.String("path", remotePath), slog.String("error", saveErr.Error()))
+	}
+
+	item, err := su.UploadFromSession(ctx, session, content, size, progress)
+	if err != nil {
+		// Session file persists for next retry.
+		return nil, fmt.Errorf("uploading %s: %w", remotePath, err)
+	}
+
+	e.deleteSession(driveStr, remotePath)
+
+	return item, nil
+}
+
+// deleteSession removes an upload session file, logging on failure.
+func (e *Executor) deleteSession(driveID, remotePath string) {
+	if err := e.sessionStore.Delete(driveID, remotePath); err != nil {
+		e.logger.Warn("failed to delete session file",
+			slog.String("path", remotePath),
+			slog.String("error", err.Error()),
+		)
 	}
 }
