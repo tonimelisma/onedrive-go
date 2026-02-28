@@ -133,7 +133,7 @@ func resolveAllKeepBoth(ctx context.Context, mgr *sync.BaselineManager, dryRun b
 	for i := range conflicts {
 		c := &conflicts[i]
 		if dryRun {
-			statusf("Would resolve %s (%s) as keep_both\n", c.Path, c.ID[:conflictIDPrefixLen])
+			statusf("Would resolve %s (%s) as keep_both\n", c.Path, truncateID(c.ID))
 			continue
 		}
 
@@ -159,7 +159,7 @@ func resolveSingleKeepBoth(ctx context.Context, mgr *sync.BaselineManager, idOrP
 	}
 
 	if dryRun {
-		statusf("Would resolve %s (%s) as keep_both\n", target.Path, target.ID[:conflictIDPrefixLen])
+		statusf("Would resolve %s (%s) as keep_both\n", target.Path, truncateID(target.ID))
 		return nil
 	}
 
@@ -235,7 +235,7 @@ func resolveAllWithEngine(ctx context.Context, engine *sync.Engine, resolution s
 	for i := range conflicts {
 		c := &conflicts[i]
 		if dryRun {
-			statusf("Would resolve %s (%s) as %s\n", c.Path, c.ID[:conflictIDPrefixLen], resolution)
+			statusf("Would resolve %s (%s) as %s\n", c.Path, truncateID(c.ID), resolution)
 			continue
 		}
 
@@ -262,7 +262,7 @@ func resolveSingleWithEngine(ctx context.Context, engine *sync.Engine, idOrPath,
 	}
 
 	if dryRun {
-		statusf("Would resolve %s (%s) as %s\n", target.Path, target.ID[:conflictIDPrefixLen], resolution)
+		statusf("Would resolve %s (%s) as %s\n", target.Path, truncateID(target.ID), resolution)
 		return nil
 	}
 
