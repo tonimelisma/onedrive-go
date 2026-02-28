@@ -308,7 +308,7 @@ func (tm *TransferManager) resumeDownload(
 
 	totalSize := existingSize + n
 
-	localHash, err := computeQuickXorHash(partialPath)
+	localHash, err := tm.hashFunc(partialPath)
 	if err != nil {
 		removePartialIfNotCanceled(ctx, partialPath)
 
