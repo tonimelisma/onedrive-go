@@ -283,6 +283,12 @@ func runGet(cmd *cobra.Command, args []string) error {
 	partialPath := localPath + ".partial"
 
 	if err := downloadWithResume(ctx, client, driveID, item, partialPath, logger); err != nil {
+		// If partial file exists, tell the user so they can re-run to resume.
+		if _, statErr := os.Stat(partialPath); statErr == nil {
+			statusf("Partial download saved: %s\n", partialPath)
+			statusf("Re-run the same command to resume.\n")
+		}
+
 		return err
 	}
 
@@ -330,7 +336,7 @@ func downloadWithResume(
 	f.Close()
 
 	if dlErr != nil {
-		return fmt.Errorf("downloading %q (partial file saved for resume): %w", item.Name, dlErr)
+		return fmt.Errorf("downloading %q: %w", item.Name, dlErr)
 	}
 
 	return nil
@@ -446,6 +452,7 @@ func runPut(cmd *cobra.Command, args []string) error {
 
 	// Large files: use session store for resume across interruptions.
 	if err := chunkedUploadWithResume(ctx, client, f, driveID, parentItem.ID, name, localPath, remotePath, fi, logger, progress); err != nil {
+		statusf("Upload session saved. Re-run the same command to resume.\n")
 		return err
 	}
 
@@ -490,7 +497,7 @@ func chunkedUploadWithResume(
 
 	item, err := client.UploadFromSession(ctx, session, f, fi.Size(), progress)
 	if err != nil {
-		return fmt.Errorf("uploading %q (session saved for resume): %w", remotePath, err)
+		return fmt.Errorf("uploading %q: %w", remotePath, err)
 	}
 
 	if delErr := store.Delete(driveID.String(), remotePath); delErr != nil {
