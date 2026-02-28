@@ -18,8 +18,8 @@ Defensive coding, bug fixes, and test gaps in `internal/sync/`.
 
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
-| B-205 | `WorkerPool.errors` slice grows unbounded in watch mode | P2 | Memory leak. Cap errors slice or use ring buffer. |
-| B-208 | `sessionUpload` non-expired resume error creates infinite retry loop | P2 | Distinguish transient vs permanent errors. Delete session on permanent failure. |
+| B-205 | `WorkerPool.errors` slice grows unbounded in watch mode | **DONE** | Capped at 1000 with `droppedErrors` counter. PR #129. |
+| B-208 | `sessionUpload` non-expired resume error creates infinite retry loop | **DONE** | Delete session on any resume failure. PR #129. |
 | B-204 | Reserved worker receives on nil channel in select | P3 | Works correctly via Go nil-channel semantics. Add comment or refactor. |
 | B-206 | Document `sendResult` lost-result edge case in panic recovery | P3 | Panic during shutdown: result dropped but counters still accurate. Add comment. |
 | B-209 | `DownloadToFile` doesn't validate empty `targetPath` | P3 | Empty string creates `.partial` in cwd. Add defensive check. |
@@ -45,16 +45,16 @@ Code quality and architecture improvements for the root package.
 |----|-------|----------|-------|
 | B-223 | Extract `DriveSession` type for per-drive resource lifecycle | P1 | Replace `clientAndDrive()`. Prerequisite for multi-drive. |
 | B-224 | Eliminate global flag variables (`flagJSON`, `flagVerbose`, etc.) | P1 | Move to `CLIFlags` struct in `CLIContext`. Eliminates test pollution. |
-| B-225 | Defensive nil guard for `cliContextFrom` | P2 | Nil `cc` produces cryptic panic. Add `MustCLIContext` or nil checks. |
-| B-226 | Remove `os.Exit(1)` from `runVerify` | P2 | Bypasses Cobra error handling. Return sentinel error instead. |
-| B-193 | `purgeSingleDrive` ignores StateDir override | P2 | Uses default state path, not per-drive `state_dir` from TOML. |
+| B-225 | Defensive nil guard for `cliContextFrom` | **DONE** | `mustCLIContext()` with clear panic. 10 callers updated. PR #129. |
+| B-226 | Remove `os.Exit(1)` from `runVerify` | **DONE** | Sentinel error `errVerifyMismatch`. PR #129. |
+| B-193 | `purgeSingleDrive` ignores StateDir override | **DONE** | `DriveStatePathWithOverride()` + threaded stateDir. PR #129. |
 | B-227 | Deduplicate sync_dir and StatePath validation across commands | P3 | Extract `RequireSyncDir()` and `RequireStatePath()` on `CLIContext`. |
 | B-228 | `buildLogger` silent fallthrough on unknown log level | P3 | No `default` case. Add warning or normalize input. |
 | B-232 | Test coverage for `loadConfig` error paths | P3 | Invalid TOML, ambiguous drive, wrong context type, unknown log level. |
 | B-036 | Extract CLI service layer for testability | P4 | Root package at 28.1% coverage. Target 50%+. |
 | B-229 | `syncModeFromFlags` uses `Changed` instead of `GetBool` | P4 | Subtle Cobra invariant. Document or fix. |
 | B-230 | `printSyncReport` repetitive formatting | P4 | Extract `printNonZero` helper. |
-| B-231 | `loadAndVerify` separation rationale is stale | P4 | Update comment after B-226 removes `os.Exit`. |
+| B-231 | `loadAndVerify` separation rationale is stale | **DONE** | Comment updated when B-226 removed `os.Exit`. PR #129. |
 | B-233 | `version` string concatenation in two places | P4 | Minor duplication. Fixed by `DriveSession` (B-223). |
 
 ## Hardening: Graph API
@@ -73,7 +73,7 @@ Improvements to continuous sync reliability in `internal/sync/`.
 
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
-| B-107 | Write event coalescing at observer level | P2 | Per-path cooldown before hashing. Rapid saves trigger redundant hash computations. Phase 5.2.2 scope. |
+| B-107 | Write event coalescing at observer level | **DONE** | Per-path timer coalescing (500ms cooldown). PR #129. |
 | B-101 | Add timing and resource logging to safety scan | P3 | Elapsed time, files walked, directories scanned. |
 | B-105 | `addWatchesRecursive` has no aggregate failure reporting | P3 | Summary log line: "added N/M watches, K failed." |
 | B-115 | Test: safety scan + watch producing conflicting change types | P3 | Watch sees Create, safety scan classifies same file as Modify. Planner handles it but no test. |
@@ -135,7 +135,7 @@ Optimization deferred until profiling shows a bottleneck.
 | B-100 | Scan new directory contents on watch create | **DONE** — `scanNewDirectory()`. |
 | B-102 | Hash failure silently drops events | **DONE** — All paths emit events with empty hash. |
 | B-103 | `debounceLoop` final drain deadlock | **DONE** — Phase 5.2. Non-blocking select. |
-| B-107 (write coalescing) | Write event coalescing — partial | Note: B-107 remains open for observer-level coalescing. Buffer debounce is done. |
+| B-107 (write coalescing) | Write event coalescing | **DONE** — Observer-level per-path timer coalescing (500ms). PR #129. |
 | B-109 | RemoteObserver.Watch() interval validation | **DONE** — Clamp below `minPollInterval` (30s). |
 | B-111 | Multiple `FlushDebounced()` calls break goroutine | **DONE** — Panic on double-call. |
 | B-112 | `handleDelete` doesn't remove watches | **DONE** — `watcher.Remove()` for deleted dirs. |
