@@ -12,7 +12,8 @@ import (
 )
 
 // conflictIDPrefixLen is the number of characters to show for the conflict ID
-// in table output. 8 chars is sufficient for uniqueness in typical use.
+// in table output. 8 hex chars = 32 bits of entropy = 4 billion values,
+// sufficient for uniqueness in any realistic conflict set.
 const conflictIDPrefixLen = 8
 
 // truncateID returns at most conflictIDPrefixLen characters of id.
@@ -105,26 +106,35 @@ func runConflicts(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
+// formatNanoTimestamp converts a nanosecond Unix timestamp to an RFC3339 string.
+// Returns empty string for zero timestamps.
+func formatNanoTimestamp(nanos int64) string {
+	if nanos == 0 {
+		return ""
+	}
+
+	return time.Unix(0, nanos).UTC().Format(time.RFC3339)
+}
+
+// toConflictJSON maps a ConflictRecord to its JSON-serializable form.
+func toConflictJSON(c *sync.ConflictRecord) conflictJSON {
+	return conflictJSON{
+		ID:           c.ID,
+		Path:         c.Path,
+		ConflictType: c.ConflictType,
+		DetectedAt:   formatNanoTimestamp(c.DetectedAt),
+		LocalHash:    c.LocalHash,
+		RemoteHash:   c.RemoteHash,
+		Resolution:   c.Resolution,
+		ResolvedBy:   c.ResolvedBy,
+		ResolvedAt:   formatNanoTimestamp(c.ResolvedAt),
+	}
+}
+
 func printConflictsJSON(conflicts []sync.ConflictRecord) error {
 	items := make([]conflictJSON, len(conflicts))
 	for i := range conflicts {
-		c := &conflicts[i]
-		cj := conflictJSON{
-			ID:           c.ID,
-			Path:         c.Path,
-			ConflictType: c.ConflictType,
-			DetectedAt:   time.Unix(0, c.DetectedAt).UTC().Format(time.RFC3339),
-			LocalHash:    c.LocalHash,
-			RemoteHash:   c.RemoteHash,
-			Resolution:   c.Resolution,
-			ResolvedBy:   c.ResolvedBy,
-		}
-
-		if c.ResolvedAt != 0 {
-			cj.ResolvedAt = time.Unix(0, c.ResolvedAt).UTC().Format(time.RFC3339)
-		}
-
-		items[i] = cj
+		items[i] = toConflictJSON(&conflicts[i])
 	}
 
 	enc := json.NewEncoder(os.Stdout)
@@ -150,8 +160,7 @@ func printConflictsTable(conflicts []sync.ConflictRecord, history bool) {
 	for i := range conflicts {
 		c := &conflicts[i]
 		idPrefix := truncateID(c.ID)
-
-		detected := time.Unix(0, c.DetectedAt).UTC().Format(time.RFC3339)
+		detected := formatNanoTimestamp(c.DetectedAt)
 
 		if history {
 			rows[i] = []string{idPrefix, c.Path, c.ConflictType, c.Resolution, c.ResolvedBy, detected}

@@ -376,8 +376,17 @@ func (o *LocalObserver) hashAndEmit(ctx context.Context, req hashRequest, events
 			return
 		}
 
-		o.logger.Warn("hash failed for deferred write, emitting with empty hash",
-			slog.String("path", req.dbRelPath), slog.String("error", err.Error()))
+		// Distinguish retry exhaustion from generic hash failures for
+		// observability — helps diagnose continuously-written files.
+		if errors.Is(err, errFileChangedDuringHash) {
+			o.logger.Warn("hash retries exhausted, emitting with empty hash",
+				slog.String("path", req.dbRelPath),
+				slog.Int("retries", req.retries),
+			)
+		} else {
+			o.logger.Warn("hash failed for deferred write, emitting with empty hash",
+				slog.String("path", req.dbRelPath), slog.String("error", err.Error()))
+		}
 	} else {
 		// Check baseline — if hash matches, the write was a no-op.
 		if existing, ok := o.baseline.GetByPath(req.dbRelPath); ok && existing.LocalHash == hash {

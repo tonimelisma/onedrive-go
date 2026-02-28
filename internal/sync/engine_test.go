@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -1949,4 +1950,17 @@ func TestExecutePlan_ActionsDepsLengthMismatch(t *testing.T) {
 
 	// Should return cleanly without panic.
 	eng.executePlan(context.Background(), plan, "", report)
+
+	// Invariant violation should surface in the report.
+	if report.Failed != len(plan.Actions) {
+		t.Errorf("report.Failed = %d, want %d", report.Failed, len(plan.Actions))
+	}
+
+	if len(report.Errors) != 1 {
+		t.Fatalf("report.Errors length = %d, want 1", len(report.Errors))
+	}
+
+	if !strings.Contains(report.Errors[0].Error(), "invariant violation") {
+		t.Errorf("report.Errors[0] = %q, want to contain 'invariant violation'", report.Errors[0])
+	}
 }
