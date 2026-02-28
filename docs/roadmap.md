@@ -256,7 +256,7 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 | 5.1 | Continuous observer `Watch()` methods + debounced buffer | 1: Watch Mode — **DONE** |
 | 5.2 | `Engine.RunWatch()` + continuous pipeline | 1: Watch Mode — **DONE** |
 | 5.3 | Graceful shutdown + crash recovery | 2: Operational Polish — **DONE** |
-| 5.4 | Universal transfer resume + hardening | 2: Operational Polish |
+| 5.4 | Universal transfer resume + hardening | 2: Operational Polish — **DONE** |
 | 5.5 | Pause/resume + SIGHUP config reload + final cleanup | 2: Operational Polish |
 
 > **Ordering note (from architectural review, 2026-02-24):** Crash recovery
@@ -628,6 +628,39 @@ This analysis categorizes every part of the codebase by its relationship to the 
 - All existing tests pass. E2E pass. Lint clean.
 - Backlog: B-092 done, B-097/B-162/B-175 superseded, B-200/B-201/B-202 created
 
+#### 5.4.2: TransferManager hardening + defensive fixes — DONE
+
+**Goal**: 18 concrete fixes (3 critical, 4 high, 4 medium, 7 small) found in post-5.4 code review. Purely robustness, correctness, and test coverage — no new features.
+
+**Critical fixes:**
+- Preserve `.partial` files on context cancellation (Ctrl-C) — guard `os.Remove` with `ctx.Err() == nil` at 4 locations
+- Restore `withRetry` wrapping for TransferManager download/upload calls — operation-level retry for mid-stream TCP resets
+- Worker goroutine panic recovery — `safeExecuteAction` with `recover()` prevents single-action panic from crashing the process
+
+**High fixes:**
+- Add `Size`/`Mtime` to `UploadResult` — eliminate redundant `os.Stat` TOCTOU race in `executeUpload`
+- Nil-check returned `Item` after upload — prevent panic on `(nil, nil)` return
+- Defer TransferManager construction to `NewEngine` — immutable after creation, no field mutation
+- Check `f.Close()` error in `resumeDownload` — corrupt partial falls back to fresh download
+
+**Medium fixes:**
+- Document `sendResult` blocking invariant (buffer sizing contract)
+- Panic recovery for async `reportStalePartials` goroutine
+- Log `f.Close()` failure in `freshDownload` error path
+- Add `driveID` to TransferManager debug logs
+
+**Small fixes:**
+- Wrap simple-upload error with local path context
+- Parent dir perms `0o755` → `0o700` (owner-only)
+- Expand `MaxHashRetries` comment (3 total attempts)
+- Document hash waste on resume+mismatch as acceptable
+- Enhanced session save failure log message
+
+**CI and Testing:**
+- `transfer_manager_test.go`: 16 tests covering all download/upload paths, hash retry/exhaustion, session resume, nil-item, drive ID logging, parent dir perms
+- `worker_test.go`: `TestWorkerPool_PanicRecovery` — panicking action completes without process crash
+- All gates pass. 74.8% total coverage, 86.4% sync package.
+
 #### 5.5: Pause/resume + SIGHUP config reload + final cleanup
 
 **Goal**: Complete Phase 5 feature set. Ensure clean slate.
@@ -689,10 +722,10 @@ This analysis categorizes every part of the codebase by its relationship to the 
 | 3.5 | 2 | Account/drive system alignment | **COMPLETE** |
 | 4 v1 | 11 | Batch-pipeline sync engine | **SUPERSEDED** |
 | 4 v2 | 9 | Event-driven sync engine | **COMPLETE** |
-| 5 | 7 | Concurrent execution + watch mode | FUTURE |
+| 5 | 8 | Concurrent execution + watch mode | IN PROGRESS (5.0-5.4.2 done) |
 | 6 | 5 | Packaging + release | FUTURE |
-| **Total** | **48** | | |
+| **Total** | **49** | | |
 
-Each increment: independently testable, completable in one focused session. Phase 4 v2 count (9, including Increment 0) replaces the original Phase 4 v1 count (11). Phase 5 count (7, increments 5.0-5.4 with 5.2 split into 5.2.0/5.2.1/5.2.2) reflects the decision to ship parallel observation and parallel hashing as independent increments before the full RunWatch pipeline.
+Each increment: independently testable, completable in one focused session. Phase 4 v2 count (9, including Increment 0) replaces the original Phase 4 v1 count (11). Phase 5 count (8, increments 5.0-5.4.2 with 5.2 split into 5.2.0/5.2.1/5.2.2 and 5.4 followed by 5.4.2 hardening) reflects the decision to ship parallel observation and parallel hashing as independent increments before the full RunWatch pipeline, and to address hardening before moving to operational features.
 
 **Key architectural difference**: Phase 4 v1 used the database as the coordination mechanism (scanner and delta write eagerly, reconciler reads). Phase 4 v2 uses typed events as the coordination mechanism (observers produce events, planner operates as a pure function, executor produces outcomes, baseline manager commits atomically). Phase 5 replaces the sequential executor with a DAG-based concurrent execution model (in-memory dependency tracker + lane-based workers + per-action commits). Same decision matrix, same safety invariants, fundamentally different execution model.

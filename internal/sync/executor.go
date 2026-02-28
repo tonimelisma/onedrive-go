@@ -89,8 +89,6 @@ func NewExecutorConfig(
 		sleepFunc: timeSleep,
 	}
 
-	cfg.transferMgr = NewTransferManager(downloads, uploads, nil, logger)
-
 	return cfg
 }
 

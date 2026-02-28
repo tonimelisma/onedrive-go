@@ -452,3 +452,9 @@ Graph API provides only full-file QuickXorHash — no partial checksums. Downloa
 
 ### Test race with lazy cleanup goroutines
 `SessionStore.Save()` triggers lazy `CleanStale()` in a goroutine, throttled to once per hour. In tests that call `Save()` then explicitly call `CleanStale()`, the goroutine can race and delete files before the explicit call. Fix: pre-set `store.lastClean = time.Now()` to throttle the goroutine during the test.
+
+### Guard partial file cleanup with ctx.Err() check
+When download errors could be caused by context cancellation (Ctrl-C), guard `os.Remove(partialPath)` with `if ctx.Err() == nil`. A 3.9 GB partial of a 4 GB download should survive Ctrl-C for resume. Intentional deletions (hash mismatch retry) should NOT be guarded — corrupted content must be discarded.
+
+### Defer mutable field construction to final assembly point
+TransferManager was constructed in `NewExecutorConfig` with `nil` sessionStore, then `NewEngine` mutated `execCfg.transferMgr.sessionStore`. This couples the engine to internal fields and violates the immutability-after-construction principle. Fix: construct TransferManager in `NewEngine` after all dependencies (including sessionStore) are known. The struct is immutable after creation — no field mutation needed.
