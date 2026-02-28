@@ -235,6 +235,8 @@ Quotes around section names are required by TOML because `@` and `:` are not val
 
 Per-drive settings override globals when specified.
 
+> **Note:** The Go `Drive` struct definition and display_name derivation rules are specified in [MULTIDRIVE.md §2](MULTIDRIVE.md#2-configuration--naming).
+
 ### Auto-creation and modification
 
 Config is auto-created by `login` and modified by `drive add`/`drive remove`:
@@ -635,8 +637,10 @@ $ onedrive-go login
 To sign in, visit https://microsoft.com/devicelogin and enter code: ABCD-EFGH
 
 Signed in as toni@outlook.com (personal account).
-Drive added: me@outlook.com -> ~/OneDrive
-Use with: --drive "me@outlook.com"  or  --drive personal
+Drive added: toni@outlook.com
+  Display name: toni@outlook.com
+  Sync folder:  ~/OneDrive
+  Use with:     --drive "toni@outlook.com"
 
 Run 'onedrive-go sync' to sync once, or 'sync --watch' for continuous sync.
 Run 'onedrive-go setup' to change settings.
@@ -649,8 +653,10 @@ $ onedrive-go login
 To sign in, visit https://microsoft.com/devicelogin and enter code: WXYZ-1234
 
 Signed in as alice@contoso.com (Contoso Ltd).
-Drive added: me@contoso.com -> ~/OneDrive - Contoso
-Use with: --drive "me@contoso.com"  or  --drive business
+Drive added: alice@contoso.com
+  Display name: alice@contoso.com
+  Sync folder:  ~/OneDrive - Contoso
+  Use with:     --drive "alice@contoso.com"
 
 You also have access to SharePoint libraries and shared folders.
 Run 'onedrive-go drive add' to add them.
@@ -669,8 +675,11 @@ $ onedrive-go login
 To sign in, visit https://microsoft.com/devicelogin and enter code: QRST-5678
 
 Signed in as toni@outlook.com (personal account).
-Drive added: personal:toni@outlook.com -> ~/OneDrive - Personal
-  (~/OneDrive already used by business:alice@contoso.com)
+Drive added: personal:toni@outlook.com
+  Display name: toni@outlook.com
+  Sync folder:  ~/OneDrive - Personal
+  Use with:     --drive "toni@outlook.com"
+  Note: ~/OneDrive already used by business:alice@contoso.com
 
 You now have 2 drives. Run 'onedrive-go status' to see all.
 ```
@@ -1148,8 +1157,11 @@ Error: multiple drives configured. Specify which:
 
 ```
 Signed in as toni@outlook.com (personal account).
-Drive added: personal:toni@outlook.com -> ~/OneDrive - Personal
-  (~/OneDrive already used by business:alice@contoso.com)
+Drive added: personal:toni@outlook.com
+  Display name: toni@outlook.com
+  Sync folder:  ~/OneDrive - Personal
+  Use with:     --drive "toni@outlook.com"
+  Note: ~/OneDrive already used by business:alice@contoso.com
 ```
 
 No prompt. Auto-picks alternative and tells the user.

@@ -458,3 +458,22 @@ When download errors could be caused by context cancellation (Ctrl-C), guard `os
 
 ### Defer mutable field construction to final assembly point
 TransferManager was constructed in `NewExecutorConfig` with `nil` sessionStore, then `NewEngine` mutated `execCfg.transferMgr.sessionStore`. This couples the engine to internal fields and violates the immutability-after-construction principle. Fix: construct TransferManager in `NewEngine` after all dependencies (including sessionStore) are known. The struct is immutable after creation — no field mutation needed.
+
+---
+
+## 8. Multi-Drive and Identity Architecture
+
+### Token resolution belongs in config, not identity
+`driveid` is pure identity (parse, format, accessors). `config.TokenCanonicalID(cid, cfg)` handles token sharing rules (SharePoint → business, shared → primary). Requires config context — cannot live in the leaf identity package.
+
+### Display names are the human-facing identity
+Canonical IDs are machine identifiers (`personal:toni@outlook.com`). Display names are auto-derived at `drive add` time: personal/business = email, SharePoint = `"site / lib"`, shared = `"{FirstName}'s {FolderName}"`. User-editable via config. All CLI output and `--drive` matching use display names first.
+
+### Four drive types with different identity components
+Personal/Business: `type:email` (2 parts). SharePoint: `type:email:site:library` (4 parts). Shared: `type:email:sourceDriveID:sourceItemID` (4 parts). Max 4 colon-separated parts. The `driveid.CanonicalID` struct stores parsed fields and validates format on construction.
+
+### Personal Vault must be excluded by default
+`specialFolder.name == "vault"` skipped in RemoteObserver. Vault auto-locks after 20 minutes of inactivity → any locked vault items appear as deleted to delta → phantom deletes propagate locally. `sync_vault = true` escape hatch in per-drive config for users who accept the risk.
+
+### Shortcut-based sync uses per-shortcut delta tokens
+Shared folders appear as shortcuts in the user's drive. Each shortcut has its own delta token with a composite key `(drive_id, scope_id)`. Primary drive: `scope_id = ""`. Shortcuts: `scope_id = remoteItem.id`, `scope_drive = remoteItem.driveId`. The RemoteObserver calls delta once per scope.

@@ -12,6 +12,17 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 | ID | Title | Priority | Package | Notes |
 |----|-------|----------|---------|-------|
 
+## Phase 5.6: Identity Refactoring
+
+| ID | Title | Priority | Notes |
+|----|-------|----------|-------|
+| B-271 | Personal Vault exclusion in RemoteObserver | P1 | Phase 5.6.1. Skip `specialFolder.name == "vault"` items. `sync_vault` escape hatch. |
+| B-272 | Add `DriveTypeShared` to `driveid` package | P1 | Phase 5.6.2. Fourth drive type for shared folders. Update CanonicalID parsing. |
+| B-273 | Move token resolution to `config` package | P1 | Phase 5.6.3. `config.TokenCanonicalID(cid, cfg)` for SharePoint→business, shared→primary token sharing. |
+| B-274 | Replace `Alias` with `DisplayName` in config | P1 | Phase 5.6.4. Auto-derived display names: email, "site / lib", "{Name}'s {Folder}". |
+| B-275 | Update CLI for display_name | P2 | Phase 5.6.5. 3-tier `--drive` matching: display_name > canonical ID > substring. |
+| B-276 | Delta token composite key migration | P2 | Phase 5.6.6. `(drive_id, scope_id)` key for per-shortcut delta tokens. |
+
 ## Hardening: Internal Sync
 
 Defensive coding, bug fixes, and test gaps in `internal/sync/`.

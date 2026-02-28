@@ -723,7 +723,7 @@ E2E tests run against a live OneDrive account. They use `//go:build e2e` tags an
 | Business | CI (GitHub Actions) | Nightly | Backlog — add after core E2E is stable (~$5/month for M365 Business Basic) |
 | SharePoint | CI (GitHub Actions) | Nightly | Backlog — same M365 subscription covers SharePoint |
 
-All three account types will run in CI. Personal is free and runs from day one. Business and SharePoint use the same Microsoft 365 Business Basic subscription (~$5/month) and will be added to the nightly CI job once the Personal E2E suite is stable and the core sync engine is functional. Until then, Business and SharePoint quirks are covered by unit tests with realistic API response fixtures (§3.1 Normalizer, §9.2 API Quirk Regression Tests).
+All four drive types (Personal, Business, SharePoint, Shared) will run in CI. Personal is free and runs from day one. Business and SharePoint use the same Microsoft 365 Business Basic subscription (~$5/month) and will be added to the nightly CI job once the Personal E2E suite is stable and the core sync engine is functional. Shared drives reuse the primary account's token (no separate authentication). Until then, Business, SharePoint, and Shared drive quirks are covered by unit tests with realistic API response fixtures (§3.1 Normalizer, §9.2 API Quirk Regression Tests).
 
 **Credential management**:
 
@@ -841,6 +841,9 @@ These tests run in the nightly CI job once Business/SharePoint accounts are prov
 | `TestE2E_SharePoint_Enrichment` | SharePoint | Upload .pptx → sync → verify per-side baselines prevent spurious actions, no infinite loop | Server-side enrichment handled via per-side hash baselines |
 | `TestE2E_Personal_DriveIdNormalization` | Personal | Sync → verify 15-char driveId handled | Zero-padding normalization |
 | `TestE2E_Personal_HeicHashMismatch` | Personal | Sync .heic file → verify graceful handling | Known iOS API bug |
+| `TestE2E_Shared_FolderSync` | Shared | Add shared folder shortcut → sync → verify items | Shortcut-based delta, cross-drive resolution |
+| `TestE2E_Personal_VaultExclusion` | Personal | Sync with vault items → verify vault skipped | `specialFolder.name == "vault"` detection |
+| `TestE2E_Personal_DisplayNameMatching` | Personal | Use `--drive` with display name → verify resolution | 3-tier `--drive` matching priority |
 
 ---
 
@@ -1849,7 +1852,7 @@ Every constraint from [architecture.md](architecture.md) is traced:
 | Architecture Constraint | Implementation |
 |------------------------|----------------|
 | `internal/sync/` defines 4 consumer-defined interfaces (DeltaFetcher, ItemClient, Downloader, Uploader) over `graph.Client` for mock testing | §2.2 Mock Generation — moq generates mocks from consumer-defined interfaces in sync/ |
-| E2E tests must cover all three account types | §6.2 Core E2E (Personal in CI), §6.3 Account-specific (Business + SharePoint nightly) |
+| E2E tests must cover all four drive types (Personal, Business, SharePoint, Shared) | §6.2 Core E2E (Personal in CI), §6.3 Account-specific (Business + SharePoint + Shared nightly, plus vault exclusion and display name matching) |
 | Must test API quirk handling in `internal/graph/` with known-bad inputs | §3.1 API quirk handling tests (13 quirk tests), §9.2 API Quirk Regression Tests (15 fixtures) |
 | Must test conflict detection and resolution | §3.1 Conflict Detection (6 conflict types), §6.2 E2E conflict test, Appendix A.3 |
 | Must test crash recovery from mid-sync interruption | §5.3 Database Integration (crash recovery tests), §7.4 Database Fault Injection |
