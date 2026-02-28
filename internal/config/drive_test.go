@@ -601,7 +601,7 @@ func TestMatchDrive_NoDrives_NoSelector_NoTokens_SuggestsLogin(t *testing.T) {
 
 func TestCollectOtherSyncDirs_Empty(t *testing.T) {
 	cfg := DefaultConfig()
-	dirs := collectOtherSyncDirs(cfg, driveid.MustCanonicalID("personal:a@b.com"), testLogger(t))
+	dirs := CollectOtherSyncDirs(cfg, driveid.MustCanonicalID("personal:a@b.com"), testLogger(t))
 	assert.Empty(t, dirs)
 }
 
@@ -611,7 +611,7 @@ func TestCollectOtherSyncDirs_ExcludesSelf(t *testing.T) {
 	cfg.Drives[selfID] = Drive{SyncDir: "~/OneDrive"}
 	cfg.Drives[driveid.MustCanonicalID("business:other@contoso.com")] = Drive{SyncDir: "~/Work"}
 
-	dirs := collectOtherSyncDirs(cfg, selfID, testLogger(t))
+	dirs := CollectOtherSyncDirs(cfg, selfID, testLogger(t))
 	assert.Equal(t, []string{"~/Work"}, dirs)
 }
 
@@ -623,7 +623,7 @@ func TestCollectOtherSyncDirs_ComputesBaseForEmptySyncDir(t *testing.T) {
 	cfg.Drives[selfID] = Drive{SyncDir: "~/OneDrive"}
 	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{} // no sync_dir
 
-	dirs := collectOtherSyncDirs(cfg, selfID, testLogger(t))
+	dirs := CollectOtherSyncDirs(cfg, selfID, testLogger(t))
 	// Without token meta, business defaults to "~/OneDrive - Business" via BaseSyncDir.
 	assert.Contains(t, dirs, "~/OneDrive - Business")
 }
@@ -641,7 +641,7 @@ func TestCollectOtherSyncDirs_WithTokenMeta(t *testing.T) {
 	cfg.Drives[selfID] = Drive{SyncDir: "~/OneDrive"}
 	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{} // no sync_dir
 
-	dirs := collectOtherSyncDirs(cfg, selfID, testLogger(t))
+	dirs := CollectOtherSyncDirs(cfg, selfID, testLogger(t))
 	// With org_name from token meta, business resolves to "~/OneDrive - Contoso Ltd".
 	assert.Contains(t, dirs, "~/OneDrive - Contoso Ltd")
 }
@@ -653,7 +653,7 @@ func TestCollectOtherSyncDirs_SkipsEmptyBaseName(t *testing.T) {
 	selfID := driveid.MustCanonicalID("personal:self@example.com")
 	cfg.Drives[selfID] = Drive{SyncDir: "~/OneDrive"}
 
-	dirs := collectOtherSyncDirs(cfg, selfID, testLogger(t))
+	dirs := CollectOtherSyncDirs(cfg, selfID, testLogger(t))
 	assert.Empty(t, dirs)
 }
 
@@ -663,7 +663,7 @@ func TestReadTokenMetaForSyncDir_NoToken(t *testing.T) {
 	setTestDataDir(t)
 
 	cid := driveid.MustCanonicalID("personal:nobody@example.com")
-	orgName, displayName := readTokenMetaForSyncDir(cid, testLogger(t))
+	orgName, displayName := ReadTokenMetaForSyncDir(cid, testLogger(t))
 	assert.Empty(t, orgName)
 	assert.Empty(t, displayName)
 }
@@ -677,13 +677,13 @@ func TestReadTokenMetaForSyncDir_WithMeta(t *testing.T) {
 	})
 
 	cid := driveid.MustCanonicalID("personal:user@example.com")
-	orgName, displayName := readTokenMetaForSyncDir(cid, testLogger(t))
+	orgName, displayName := ReadTokenMetaForSyncDir(cid, testLogger(t))
 	assert.Equal(t, "TestOrg", orgName)
 	assert.Equal(t, "Test User", displayName)
 }
 
 func TestReadTokenMetaForSyncDir_ZeroID(t *testing.T) {
-	orgName, displayName := readTokenMetaForSyncDir(driveid.CanonicalID{}, testLogger(t))
+	orgName, displayName := ReadTokenMetaForSyncDir(driveid.CanonicalID{}, testLogger(t))
 	assert.Empty(t, orgName)
 	assert.Empty(t, displayName)
 }
@@ -707,6 +707,7 @@ func writeTokenFileWithMeta(t *testing.T, dir, name string, meta map[string]stri
 			"access_token":  "test-access-token",
 			"refresh_token": "test-refresh-token",
 			"token_type":    "Bearer",
+			"expiry":        "2099-01-01T00:00:00Z",
 		},
 		"meta": meta,
 	}

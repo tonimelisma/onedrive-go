@@ -28,10 +28,10 @@ Use `httptest.NewServer` for all Graph client tests. Real HTTP, no interfaces fo
 Public auth functions (`Login`, `Logout`, `TokenSourceFromPath`) accept explicit `tokenPath` parameters — the caller computes the path via `config.DriveTokenPath(canonicalID)`. This decouples `graph/` from `config/` entirely.
 
 ### Token file embeds cached API metadata
-Token files wrap the OAuth token in a `tokenFile` struct with a `meta` map for cached metadata (org_name, display_name, user_id). This avoids a separate metadata file and ensures metadata travels with the token. `LoadTokenMeta()` and `SaveTokenMeta()` delegate to the internal `loadToken()` — single loading code path. Old bare `oauth2.Token` files fail with "missing token field" and require re-login.
+Token files wrap the OAuth token in a struct with a `meta` map for cached metadata (org_name, display_name, user_id). This avoids a separate metadata file and ensures metadata travels with the token. The `internal/tokenfile` leaf package (stdlib + oauth2 only) owns the on-disk format and I/O. Both `graph/` and `config/` import `tokenfile/` — no cycle since `tokenfile/` has no project-internal imports. Old bare `oauth2.Token` files fail with "missing token field" and require re-login.
 
-### config imports graph for LoadTokenMeta
-The `config` package imports `graph` for `LoadTokenMeta()` to read org_name/display_name from token files for sync_dir computation. Confirmed safe — unidirectional: `config/` → `graph/`, no cycle since `graph/` → stdlib + oauth2 + `driveid/` (no `config/` import in production code).
+### tokenfile leaf package breaks the graph/config cycle
+Token file I/O lives in `internal/tokenfile/` (depends only on stdlib + oauth2). Both `config/` and `graph/` import it for reading token metadata and saving tokens. This replaces the former `config/ → graph/` dependency for `LoadTokenMeta()`, which had a test-time cycle risk via `graph/integration_test.go → config/`.
 
 ### sync_dir is deterministically computable
 Default sync directories are computed from the canonical ID + cached metadata using a two-level collision scheme: base name → + display_name → + email. `DefaultSyncDir()` is the single entry point. All callers must pass `existingDirs` for accurate collision detection.
