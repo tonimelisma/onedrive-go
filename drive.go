@@ -104,8 +104,8 @@ func buildConfiguredDriveEntries(cfg *config.Config, logger *slog.Logger) []driv
 		syncDir := d.SyncDir
 		if syncDir == "" {
 			// Compute default sync_dir for display.
-			orgName, displayName := readDriveTokenMeta(id, logger)
-			otherDirs := collectConfigSyncDirs(cfg, id, logger)
+			orgName, displayName := config.ReadTokenMetaForSyncDir(id, logger)
+			otherDirs := config.CollectOtherSyncDirs(cfg, id, logger)
 			syncDir = config.DefaultSyncDir(id, orgName, displayName, otherDirs)
 
 			if syncDir == "" {
@@ -126,47 +126,6 @@ func buildConfiguredDriveEntries(cfg *config.Config, logger *slog.Logger) []driv
 	})
 
 	return entries
-}
-
-// readDriveTokenMeta reads org_name and display_name from a drive's token file.
-func readDriveTokenMeta(cid driveid.CanonicalID, logger *slog.Logger) (orgName, displayName string) {
-	tokenPath := config.DriveTokenPath(cid.TokenCanonicalID())
-	if tokenPath == "" {
-		return "", ""
-	}
-
-	meta, err := graph.LoadTokenMeta(tokenPath)
-	if err != nil {
-		logger.Debug("could not read token meta", "canonical_id", cid.String(), "error", err)
-
-		return "", ""
-	}
-
-	return meta["org_name"], meta["display_name"]
-}
-
-// collectConfigSyncDirs collects sync_dir values from all drives in the config
-// except the specified one.
-func collectConfigSyncDirs(cfg *config.Config, excludeID driveid.CanonicalID, logger *slog.Logger) []string {
-	var dirs []string
-
-	for id := range cfg.Drives {
-		if id == excludeID {
-			continue
-		}
-
-		dir := cfg.Drives[id].SyncDir
-		if dir == "" {
-			orgName, _ := readDriveTokenMeta(id, logger)
-			dir = config.BaseSyncDir(id, orgName)
-		}
-
-		if dir != "" {
-			dirs = append(dirs, dir)
-		}
-	}
-
-	return dirs
 }
 
 // discoverAvailableDrives queries the network for all drives accessible via
@@ -192,7 +151,7 @@ func discoverAvailableDrives(ctx context.Context, cfg *config.Config, logger *sl
 			continue
 		}
 
-		client := graph.NewClient(graph.DefaultBaseURL, defaultHTTPClient(), ts, logger, "onedrive-go/"+version)
+		client := newGraphClient(ts, logger)
 
 		// Discover personal/business drives.
 		drives, err := client.Drives(ctx)
@@ -241,7 +200,7 @@ func discoverSharePointDrives(
 ) []driveListEntry {
 	sites, err := client.SearchSites(ctx, "*", sharePointSiteLimit)
 	if err != nil {
-		logger.Debug("SharePoint site search failed", "error", err)
+		logger.Warn("SharePoint site search failed", "error", err)
 
 		return nil
 	}
@@ -307,13 +266,32 @@ func printDriveListText(configured, available []driveListEntry) {
 	if len(configured) > 0 {
 		fmt.Println("Configured drives:")
 
+		// Compute dynamic column widths from content.
+		maxID, maxDir := 0, 0
+		for _, e := range configured {
+			if len(e.CanonicalID) > maxID {
+				maxID = len(e.CanonicalID)
+			}
+
+			sd := e.SyncDir
+			if sd == "" {
+				sd = syncDirNotSet
+			}
+
+			if len(sd) > maxDir {
+				maxDir = len(sd)
+			}
+		}
+
+		fmtStr := fmt.Sprintf("  %%-%ds  %%-%ds  %%s\n", maxID, maxDir)
+
 		for _, e := range configured {
 			syncDir := e.SyncDir
 			if syncDir == "" {
 				syncDir = syncDirNotSet
 			}
 
-			fmt.Printf("  %-40s %-25s %s\n", e.CanonicalID, syncDir, e.State)
+			fmt.Printf(fmtStr, e.CanonicalID, syncDir, e.State)
 		}
 	}
 
@@ -419,29 +397,16 @@ func addNewDrive(cfgPath string, cfg *config.Config, cid driveid.CanonicalID, lo
 	// Verify a token exists for this drive's account.
 	tokenPath := config.DriveTokenPath(cid.TokenCanonicalID())
 	if tokenPath == "" {
-		return fmt.Errorf("no token found for %s — run 'onedrive-go login' first", cid.Email())
+		return fmt.Errorf("cannot determine data directory for %s", cid.Email())
 	}
 
 	if _, err := os.Stat(tokenPath); errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("no token found for %s — run 'onedrive-go login' first", cid.Email())
+		return fmt.Errorf("no token file for %s — run 'onedrive-go login' first", cid.Email())
 	}
 
-	// Compute default sync_dir.
-	orgName, displayName := readDriveTokenMeta(cid, logger)
-
-	existingDirs := make([]string, 0, len(cfg.Drives))
-	for id := range cfg.Drives {
-		dir := cfg.Drives[id].SyncDir
-		if dir == "" {
-			on, _ := readDriveTokenMeta(id, logger)
-			dir = config.BaseSyncDir(id, on)
-		}
-
-		if dir != "" {
-			existingDirs = append(existingDirs, dir)
-		}
-	}
-
+	// Compute default sync_dir using the shared config helpers.
+	orgName, displayName := config.ReadTokenMetaForSyncDir(cid, logger)
+	existingDirs := config.CollectOtherSyncDirs(cfg, cid, logger)
 	syncDir := config.DefaultSyncDir(cid, orgName, displayName, existingDirs)
 	logger.Info("adding drive", "canonical_id", cid.String(), "sync_dir", syncDir)
 
@@ -609,7 +574,7 @@ func runDriveSearch(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	query := args[0]
 
-	businessTokens := findBusinessTokens(logger)
+	businessTokens := findBusinessTokens(flagAccount, logger)
 
 	if len(businessTokens) == 0 {
 		if flagAccount != "" {
@@ -635,14 +600,14 @@ func runDriveSearch(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// findBusinessTokens returns all business account tokens, filtered by --account if set.
-func findBusinessTokens(logger *slog.Logger) []driveid.CanonicalID {
+// findBusinessTokens returns all business account tokens, filtered by accountFilter if set.
+func findBusinessTokens(accountFilter string, logger *slog.Logger) []driveid.CanonicalID {
 	tokens := config.DiscoverTokens(logger)
 
 	var businessTokens []driveid.CanonicalID
 	for _, t := range tokens {
 		if t.DriveType() == driveid.DriveTypeBusiness {
-			if flagAccount == "" || t.Email() == flagAccount {
+			if accountFilter == "" || t.Email() == accountFilter {
 				businessTokens = append(businessTokens, t)
 			}
 		}
@@ -667,7 +632,7 @@ func searchAccountSharePoint(
 		return nil
 	}
 
-	client := graph.NewClient(graph.DefaultBaseURL, defaultHTTPClient(), ts, logger, "onedrive-go/"+version)
+	client := newGraphClient(ts, logger)
 
 	sites, err := client.SearchSites(ctx, query, sharePointSearchLimit)
 	if err != nil {
@@ -725,6 +690,15 @@ func printDriveSearchText(results []driveSearchResult, query string) {
 
 		return
 	}
+
+	// Sort by site name then library name for stable, grouped output.
+	slices.SortFunc(results, func(a, b driveSearchResult) int {
+		if c := cmp.Compare(a.SiteName, b.SiteName); c != 0 {
+			return c
+		}
+
+		return cmp.Compare(a.LibraryName, b.LibraryName)
+	})
 
 	// Group by site for readable output.
 	fmt.Printf("SharePoint sites matching %q:\n", query)

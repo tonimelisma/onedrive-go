@@ -121,7 +121,7 @@ echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r 
 
 ## Project Summary
 
-**onedrive-go** — a fast, safe, and well-tested OneDrive CLI and sync client in Go. Unix-style file operations (`ls`, `get`, `put`) plus robust bidirectional sync with conflict tracking. Targets Linux and macOS. MIT licensed. "Pragmatic Flat" architecture (6 active packages). See [docs/design/event-driven-rationale.md](docs/design/event-driven-rationale.md).
+**onedrive-go** — a fast, safe, and well-tested OneDrive CLI and sync client in Go. Unix-style file operations (`ls`, `get`, `put`) plus robust bidirectional sync with conflict tracking. Targets Linux and macOS. MIT licensed. "Pragmatic Flat" architecture (7 active packages). See [docs/design/event-driven-rationale.md](docs/design/event-driven-rationale.md).
 
 ## Current Phase
 
@@ -145,6 +145,13 @@ echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r 
 │   + auth             │             │  tracker, workers, sessions  │
 └─────────┬────────────┘             └──────────────┬───────────────┘
           │                                         │
+          ├─────────┐                               │
+          │         ▼                               │
+          │  ┌──────────────────────┐               │
+          │  │ internal/tokenfile/  │               │
+          │  │ token I/O (leaf pkg) │               │
+          │  └──────────────────────┘               │
+          │         ▲                               │
           │          ┌──────────────────────┐       │
           ├─────────►│  internal/driveid/   │◄──────┤
           │          │  ID, CanonicalID,    │       │
@@ -163,12 +170,13 @@ echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r 
                      └────────────────┘
 ```
 
-**Dependency direction**: `cmd/` -> `internal/*` -> `pkg/*`. No cycles. `internal/driveid/` is a leaf package (stdlib only). `internal/graph/` does NOT import `internal/config/` — callers pass token paths directly. See [docs/design/architecture.md](docs/design/architecture.md).
+**Dependency direction**: `cmd/` -> `internal/*` -> `pkg/*`. No cycles. `internal/driveid/` and `internal/tokenfile/` are leaf packages. Both `graph/` and `config/` import `tokenfile/` for token file I/O. `internal/graph/` does NOT import `internal/config/` — callers pass token paths directly. See [docs/design/architecture.md](docs/design/architecture.md).
 
 ## Package Layout
 
 - **`pkg/quickxorhash/`** — QuickXorHash algorithm (hash.Hash interface)
 - **`internal/driveid/`** — Type-safe drive identity: ID, CanonicalID, ItemKey
+- **`internal/tokenfile/`** — Token file format + I/O (leaf package: stdlib + oauth2 only)
 - **`internal/config/`** — TOML config, drive sections, XDG paths, four-layer override chain
 - **`internal/graph/`** — Graph API client: auth, retry, items CRUD, delta, transfers
 - **`internal/sync/`** — Event-driven sync: types, baseline, observers, buffer, planner, executor, tracker, workers, session_store, engine, verify

@@ -69,7 +69,7 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 | B-129 | ~~LocalObserver.Watch() has no backoff for watcher errors~~ | ~~P2~~ | `internal/sync/` | **FIXED** — Watch hardening. Exponential backoff (1s→30s, ×2) on watcher errors. Resets on successful event. Prevents tight log-spam loops. |
 | B-138 | Add upstream sync check for oauth2 fork | P3 | CI | `tonimelisma/oauth2` fork will silently fall behind upstream security patches. Add periodic `go list -m -u` check in CI, or document sync process in `CLAUDE.md` next to the replace directive. |
 | B-143 | ~~Remove or ticket-ref `addMoveTargetDep` dead code~~ | ~~P3~~ | `internal/sync/` | **FIXED** — Watch hardening. `addMoveTargetDep` function and its call site removed from `planner.go`. |
-| B-146 | `shutdownCallbackServer`: inject logger instead of `slog.Default()` | P3 | `internal/graph/` | `auth.go:299` uses global logger. |
+| B-146 | ~~`shutdownCallbackServer`: inject logger instead of `slog.Default()`~~ | ~~P3~~ | `internal/graph/` | **FIXED** — `shutdownCallbackServer` now accepts `*slog.Logger` parameter. |
 | B-147 | `bootstrapLogger`/`buildLogger`: extract shared construction logic | P3 | root | `root.go:158-213` — overlapping logic. |
 | B-149 | Deduplicate conflict scan logic in `baseline.go` | P3 | `internal/sync/` | `scanConflictRow`/`scanConflictRowSingle` — 80 lines duplicated. |
 | B-154 | Sort map keys in planner for reproducible action order | P4 | `internal/sync/` | Non-deterministic map iteration aids debugging. |

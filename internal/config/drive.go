@@ -2,7 +2,6 @@ package config
 
 import (
 	"cmp"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -11,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
 // Default remote path when none is specified.
@@ -189,8 +189,8 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 	// Reads org_name from the token file metadata for accurate business
 	// drive naming (e.g., "~/OneDrive - Contoso" instead of "~/OneDrive - Business").
 	if resolved.SyncDir == "" {
-		orgName, displayName := readTokenMetaForSyncDir(canonicalID, logger)
-		otherDirs := collectOtherSyncDirs(cfg, canonicalID, logger)
+		orgName, displayName := ReadTokenMetaForSyncDir(canonicalID, logger)
+		otherDirs := CollectOtherSyncDirs(cfg, canonicalID, logger)
 		resolved.SyncDir = expandTilde(DefaultSyncDir(canonicalID, orgName, displayName, otherDirs))
 		logger.Debug("using default sync_dir",
 			"sync_dir", resolved.SyncDir,
@@ -204,20 +204,17 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 	return resolved
 }
 
-// readTokenMetaForSyncDir reads org_name and display_name from the token file's
+// ReadTokenMetaForSyncDir reads org_name and display_name from the token file's
 // cached metadata. Returns empty strings if the token file is missing or
-// doesn't contain metadata.
-//
-// Uses a local JSON parser instead of graph.LoadTokenMeta to avoid an
-// import cycle (config → graph → config in integration tests). Only reads
-// the "meta" field — does not validate the OAuth token.
-func readTokenMetaForSyncDir(cid driveid.CanonicalID, logger *slog.Logger) (orgName, displayName string) {
+// doesn't contain metadata. Uses tokenfile.ReadMeta (leaf package) to avoid
+// an import cycle with graph.
+func ReadTokenMetaForSyncDir(cid driveid.CanonicalID, logger *slog.Logger) (orgName, displayName string) {
 	tokenPath := DriveTokenPath(cid.TokenCanonicalID())
 	if tokenPath == "" {
 		return "", ""
 	}
 
-	meta, err := readTokenFileMeta(tokenPath)
+	meta, err := tokenfile.ReadMeta(tokenPath)
 	if err != nil {
 		logger.Debug("could not read token meta for sync_dir computation",
 			"canonical_id", cid.String(), "error", err)
@@ -228,28 +225,11 @@ func readTokenMetaForSyncDir(cid driveid.CanonicalID, logger *slog.Logger) (orgN
 	return meta["org_name"], meta["display_name"]
 }
 
-// readTokenFileMeta reads just the "meta" field from a token file.
-// Separate from graph.LoadTokenMeta to avoid a config → graph import cycle.
-func readTokenFileMeta(path string) (map[string]string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("reading token file: %w", err)
-	}
-
-	var parsed struct {
-		Meta map[string]string `json:"meta"`
-	}
-	if err := json.Unmarshal(data, &parsed); err != nil {
-		return nil, fmt.Errorf("decoding token file: %w", err)
-	}
-
-	return parsed.Meta, nil
-}
-
-// collectOtherSyncDirs collects sync_dir values from all drives in the config
+// CollectOtherSyncDirs collects sync_dir values from all drives in the config
 // except the specified one. For drives without explicit sync_dir, computes
 // the base name (without collision cascade) so all potential collisions are detected.
-func collectOtherSyncDirs(cfg *Config, excludeID driveid.CanonicalID, logger *slog.Logger) []string {
+// Pass a zero CanonicalID to include all drives (no exclusion).
+func CollectOtherSyncDirs(cfg *Config, excludeID driveid.CanonicalID, logger *slog.Logger) []string {
 	var dirs []string
 
 	for id := range cfg.Drives {
@@ -260,7 +240,7 @@ func collectOtherSyncDirs(cfg *Config, excludeID driveid.CanonicalID, logger *sl
 		dir := cfg.Drives[id].SyncDir
 		if dir == "" {
 			// Compute base name for this drive (without collision cascade).
-			orgName, _ := readTokenMetaForSyncDir(id, logger)
+			orgName, _ := ReadTokenMetaForSyncDir(id, logger)
 			dir = BaseSyncDir(id, orgName)
 		}
 

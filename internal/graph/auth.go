@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -12,34 +11,21 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"time"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/microsoft"
+
+	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
 // Azure AD application registered for onedrive-go (public client, multi-tenant + personal).
 const defaultClientID = "8efac532-bbe7-4bc5-919c-1443ccab860a"
 
-// tokenFilePerms restricts token files to owner-only read/write.
-const tokenFilePerms = 0o600
-
-// dirPerms is used when creating the tokens directory.
-const dirPerms = 0o700
-
 var defaultScopes = []string{
 	"offline_access",
 	"Files.ReadWrite.All",
 	"User.Read",
-}
-
-// tokenFile is the on-disk format for token files. Includes the OAuth token
-// and optional metadata (org name, display name) cached from API responses.
-// Old bare oauth2.Token files are not supported — re-login is required.
-type tokenFile struct {
-	Token *oauth2.Token     `json:"token"`
-	Meta  map[string]string `json:"meta,omitempty"`
 }
 
 // DeviceAuth holds the device code response fields that the CLI displays to the user.
@@ -106,7 +92,7 @@ func doLogin(
 		slog.Time("expiry", tok.Expiry),
 	)
 
-	if saveErr := saveToken(tokenPath, tok, nil); saveErr != nil {
+	if saveErr := tokenfile.Save(tokenPath, tok, nil); saveErr != nil {
 		return nil, fmt.Errorf("graph: saving token: %w", saveErr)
 	}
 
@@ -184,7 +170,7 @@ func doAuthCodeLogin(
 		return nil, err
 	}
 
-	defer shutdownCallbackServer(srv)
+	defer shutdownCallbackServer(srv, logger)
 
 	// Configure redirect URL with the actual port. No path suffix — must match
 	// the registered "http://localhost" URI exactly (port is ignored by v2.0).
@@ -298,13 +284,15 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request, state string, r
 }
 
 // shutdownCallbackServer gracefully shuts down the callback HTTP server.
-func shutdownCallbackServer(srv *http.Server) {
+// Accepts an explicit logger instead of using slog.Default() so the caller
+// controls logging configuration (B-146).
+func shutdownCallbackServer(srv *http.Server, logger *slog.Logger) {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		// Best-effort shutdown — log but don't propagate since we're in a defer.
-		slog.Default().Warn("callback server shutdown error", slog.String("error", err.Error()))
+		logger.Warn("callback server shutdown error", slog.String("error", err.Error()))
 	}
 }
 
@@ -352,7 +340,7 @@ func exchangeAndSave(
 
 	logger.Info("token exchange successful", slog.Time("expiry", tok.Expiry))
 
-	if saveErr := saveToken(tokenPath, tok, nil); saveErr != nil {
+	if saveErr := tokenfile.Save(tokenPath, tok, nil); saveErr != nil {
 		return nil, fmt.Errorf("graph: saving token: %w", saveErr)
 	}
 
@@ -388,7 +376,7 @@ func generateState() (string, error) {
 // The caller is responsible for computing tokenPath (via config.DriveTokenPath).
 // This decouples graph/ from config/ — graph/ has no config import.
 func TokenSourceFromPath(ctx context.Context, tokenPath string, logger *slog.Logger) (TokenSource, error) {
-	tok, meta, err := loadToken(tokenPath)
+	tok, meta, err := tokenfile.Load(tokenPath)
 	if err != nil {
 		return nil, err
 	}
@@ -451,7 +439,7 @@ func oauthConfig(tokenPath string, meta map[string]string, logger *slog.Logger) 
 				slog.Time("new_expiry", tok.Expiry),
 			)
 
-			if err := saveToken(tokenPath, tok, meta); err != nil {
+			if err := tokenfile.Save(tokenPath, tok, meta); err != nil {
 				logger.Warn("failed to persist refreshed token",
 					slog.String("path", tokenPath),
 					slog.String("error", err.Error()),
@@ -489,122 +477,15 @@ func (b *tokenBridge) Token() (string, error) {
 	return t.AccessToken, nil
 }
 
-// loadToken reads a saved token file from disk. Returns the OAuth token and
-// any cached metadata. Returns (nil, nil, nil) if the file does not exist.
-// Old bare oauth2.Token files (without the "token" wrapper) will fail with
-// "token file missing token field" — re-login is required.
-func loadToken(path string) (*oauth2.Token, map[string]string, error) {
-	data, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil, nil
-	}
-
-	if err != nil {
-		return nil, nil, fmt.Errorf("graph: reading token file: %w", err)
-	}
-
-	var tf tokenFile
-	if err := json.Unmarshal(data, &tf); err != nil {
-		return nil, nil, fmt.Errorf("graph: decoding token file: %w", err)
-	}
-
-	if tf.Token == nil {
-		return nil, nil, fmt.Errorf("graph: token file missing token field (re-login required)")
-	}
-
-	return tf.Token, tf.Meta, nil
-}
-
-// saveToken writes a token file to disk atomically (write-to-temp + rename)
-// with 0600 permissions. Never logs token values (architecture.md §9.2).
-func saveToken(path string, tok *oauth2.Token, meta map[string]string) error {
-	tf := tokenFile{Token: tok, Meta: meta}
-
-	data, err := json.MarshalIndent(tf, "", "  ")
-	if err != nil {
-		return fmt.Errorf("graph: encoding token: %w", err)
-	}
-
-	dir := filepath.Dir(path)
-	if mkErr := os.MkdirAll(dir, dirPerms); mkErr != nil {
-		return fmt.Errorf("graph: creating token directory: %w", mkErr)
-	}
-
-	// Atomic write: temp file in the same directory, then rename.
-	// Same directory guarantees same filesystem for rename(2).
-	tmp, err := os.CreateTemp(dir, ".token-*.tmp")
-	if err != nil {
-		return fmt.Errorf("graph: creating temp file: %w", err)
-	}
-
-	tmpPath := tmp.Name()
-
-	// Clean up temp file on any error path.
-	success := false
-	defer func() {
-		if !success {
-			os.Remove(tmpPath)
-		}
-	}()
-
-	if err := os.Chmod(tmpPath, tokenFilePerms); err != nil {
-		tmp.Close()
-		return fmt.Errorf("graph: setting token file permissions: %w", err)
-	}
-
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return fmt.Errorf("graph: writing token file: %w", err)
-	}
-
-	// Flush to stable storage before rename so a power loss between close and
-	// rename cannot leave an empty or partial token file at the final path.
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return fmt.Errorf("graph: syncing token file: %w", err)
-	}
-
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("graph: closing token file: %w", err)
-	}
-
-	if err := os.Rename(tmpPath, path); err != nil {
-		return fmt.Errorf("graph: renaming token file: %w", err)
-	}
-
-	success = true
-
-	return nil
-}
-
 // LoadTokenMeta reads just the metadata from a token file.
-// Delegates to the internal loadToken function — single loading code path.
+// Delegates to tokenfile.Load — single loading code path.
 // Returns nil metadata (not an error) if the file does not exist.
 func LoadTokenMeta(tokenPath string) (map[string]string, error) {
-	_, meta, err := loadToken(tokenPath)
-	return meta, err
+	return tokenfile.ReadMeta(tokenPath)
 }
 
 // SaveTokenMeta reads the current token, merges new metadata, and saves.
 // New metadata keys overwrite existing ones.
 func SaveTokenMeta(tokenPath string, meta map[string]string) error {
-	tok, existingMeta, err := loadToken(tokenPath)
-	if err != nil {
-		return fmt.Errorf("graph: reading token for metadata update: %w", err)
-	}
-
-	if tok == nil {
-		return fmt.Errorf("graph: no token file at %s", tokenPath)
-	}
-
-	// Merge: new meta keys overwrite existing.
-	if existingMeta == nil {
-		existingMeta = make(map[string]string, len(meta))
-	}
-
-	for k, v := range meta {
-		existingMeta[k] = v
-	}
-
-	return saveToken(tokenPath, tok, existingMeta)
+	return tokenfile.LoadAndMergeMeta(tokenPath, meta)
 }

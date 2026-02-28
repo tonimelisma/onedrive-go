@@ -18,6 +18,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/oauth2"
+
+	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
 // testTokenJSON is the canonical token response for tests.
@@ -102,7 +104,7 @@ func TestDoLogin_Success(t *testing.T) {
 	assert.Equal(t, "https://microsoft.com/devicelogin", displayed.VerificationURI)
 
 	// Verify token was saved to disk.
-	loaded, _, loadErr := loadToken(tokenPath)
+	loaded, _, loadErr := tokenfile.Load(tokenPath)
 	require.NoError(t, loadErr)
 	require.NotNil(t, loaded)
 	assert.Equal(t, "test-access-token", loaded.AccessToken)
@@ -211,10 +213,10 @@ func TestSaveLoadToken_RoundTrip(t *testing.T) {
 		Expiry:       expiry,
 	}
 
-	err := saveToken(path, original, nil)
+	err := tokenfile.Save(path, original, nil)
 	require.NoError(t, err)
 
-	loaded, meta, err := loadToken(path)
+	loaded, meta, err := tokenfile.Load(path)
 	require.NoError(t, err)
 	require.NotNil(t, loaded)
 	assert.Nil(t, meta) // no meta saved
@@ -242,9 +244,9 @@ func TestSaveLoadToken_WithMeta(t *testing.T) {
 		"cached_at":    "2026-02-27T10:00:00Z",
 	}
 
-	require.NoError(t, saveToken(path, tok, meta))
+	require.NoError(t, tokenfile.Save(path, tok, meta))
 
-	loaded, loadedMeta, err := loadToken(path)
+	loaded, loadedMeta, err := tokenfile.Load(path)
 	require.NoError(t, err)
 	require.NotNil(t, loaded)
 	assert.Equal(t, "access-with-meta", loaded.AccessToken)
@@ -265,11 +267,11 @@ func TestLoadToken_OldFormat_Fails(t *testing.T) {
 		"refresh_token": "old-refresh",
 		"token_type": "Bearer"
 	}`
-	require.NoError(t, os.WriteFile(path, []byte(oldToken), tokenFilePerms))
+	require.NoError(t, os.WriteFile(path, []byte(oldToken), tokenfile.FilePerms))
 
-	_, _, err := loadToken(path)
+	_, _, err := tokenfile.Load(path)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "token file missing token field")
+	assert.Contains(t, err.Error(), "missing token field")
 }
 
 func TestSaveToken_Permissions(t *testing.T) {
@@ -277,12 +279,12 @@ func TestSaveToken_Permissions(t *testing.T) {
 	path := filepath.Join(tmpDir, "tokens", "perms.json")
 
 	tok := &oauth2.Token{AccessToken: "secret"}
-	err := saveToken(path, tok, nil)
+	err := tokenfile.Save(path, tok, nil)
 	require.NoError(t, err)
 
 	info, err := os.Stat(path)
 	require.NoError(t, err)
-	assert.Equal(t, fs.FileMode(tokenFilePerms), info.Mode().Perm())
+	assert.Equal(t, fs.FileMode(tokenfile.FilePerms), info.Mode().Perm())
 }
 
 func TestSaveToken_AtomicWrite(t *testing.T) {
@@ -291,14 +293,14 @@ func TestSaveToken_AtomicWrite(t *testing.T) {
 
 	// Write initial token.
 	tok1 := &oauth2.Token{AccessToken: "first", RefreshToken: "r1"}
-	require.NoError(t, saveToken(path, tok1, nil))
+	require.NoError(t, tokenfile.Save(path, tok1, nil))
 
 	// Overwrite with second token.
 	tok2 := &oauth2.Token{AccessToken: "second", RefreshToken: "r2"}
-	require.NoError(t, saveToken(path, tok2, nil))
+	require.NoError(t, tokenfile.Save(path, tok2, nil))
 
 	// Verify the final file has the second token (not corrupted).
-	loaded, _, err := loadToken(path)
+	loaded, _, err := tokenfile.Load(path)
 	require.NoError(t, err)
 	assert.Equal(t, "second", loaded.AccessToken)
 	assert.Equal(t, "r2", loaded.RefreshToken)
@@ -317,16 +319,16 @@ func TestSaveToken_CreatesDirectory(t *testing.T) {
 	path := filepath.Join(tmpDir, "deep", "nested", "token.json")
 
 	tok := &oauth2.Token{AccessToken: "nested"}
-	err := saveToken(path, tok, nil)
+	err := tokenfile.Save(path, tok, nil)
 	require.NoError(t, err)
 
-	loaded, _, err := loadToken(path)
+	loaded, _, err := tokenfile.Load(path)
 	require.NoError(t, err)
 	assert.Equal(t, "nested", loaded.AccessToken)
 }
 
 func TestLoadToken_NoFile(t *testing.T) {
-	tok, meta, err := loadToken(filepath.Join(t.TempDir(), "nonexistent.json"))
+	tok, meta, err := tokenfile.Load(filepath.Join(t.TempDir(), "nonexistent.json"))
 	assert.NoError(t, err)
 	assert.Nil(t, tok)
 	assert.Nil(t, meta)
@@ -336,11 +338,11 @@ func TestLoadToken_InvalidJSON(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "bad.json")
 
-	require.NoError(t, os.WriteFile(path, []byte("not json"), tokenFilePerms))
+	require.NoError(t, os.WriteFile(path, []byte("not json"), tokenfile.FilePerms))
 
-	_, _, err := loadToken(path)
+	_, _, err := tokenfile.Load(path)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "decoding token file")
+	assert.Contains(t, err.Error(), "tokenfile: decoding")
 }
 
 func TestTokenSourceFromPath_NoFile(t *testing.T) {
@@ -360,7 +362,7 @@ func TestTokenSourceFromPath_ValidToken(t *testing.T) {
 		Expiry:       time.Now().Add(time.Hour),
 	}
 
-	require.NoError(t, saveToken(path, tok, nil))
+	require.NoError(t, tokenfile.Save(path, tok, nil))
 
 	ts, err := TokenSourceFromPath(context.Background(), path, slog.Default())
 	require.NoError(t, err)
@@ -376,11 +378,11 @@ func TestTokenSourceFromPath_InvalidJSON(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "corrupt.json")
 
-	require.NoError(t, os.WriteFile(path, []byte("not valid json"), tokenFilePerms))
+	require.NoError(t, os.WriteFile(path, []byte("not valid json"), tokenfile.FilePerms))
 
 	_, err := TokenSourceFromPath(context.Background(), path, slog.Default())
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "decoding token file")
+	assert.Contains(t, err.Error(), "tokenfile: decoding")
 }
 
 func TestLogout_RemovesFile(t *testing.T) {
@@ -389,7 +391,7 @@ func TestLogout_RemovesFile(t *testing.T) {
 
 	// Create a token file to delete.
 	tok := &oauth2.Token{AccessToken: "doomed"}
-	require.NoError(t, saveToken(path, tok, nil))
+	require.NoError(t, tokenfile.Save(path, tok, nil))
 
 	// Verify it exists.
 	_, err := os.Stat(path)
@@ -465,7 +467,7 @@ func TestOAuthConfig_OnTokenChange(t *testing.T) {
 	cfg.OnTokenChange(newTok)
 
 	// Verify the token was persisted to disk with metadata preserved.
-	loaded, loadedMeta, err := loadToken(tokenPath)
+	loaded, loadedMeta, err := tokenfile.Load(tokenPath)
 	require.NoError(t, err)
 	require.NotNil(t, loaded)
 	assert.Equal(t, "refreshed-access", loaded.AccessToken)
@@ -495,7 +497,7 @@ func TestTokenPath_UsesDriveName(t *testing.T) {
 		tok := &oauth2.Token{AccessToken: "tok-" + name}
 		cfg.OnTokenChange(tok)
 
-		loaded, _, err := loadToken(path)
+		loaded, _, err := tokenfile.Load(path)
 		require.NoError(t, err, "token path %s", name)
 		assert.Equal(t, "tok-"+name, loaded.AccessToken, "token path %s", name)
 	}
@@ -508,7 +510,7 @@ func TestDoLogin_SaveError(t *testing.T) {
 
 	// Create a file where the tokens directory should be, so MkdirAll fails.
 	blocker := filepath.Join(tmpDir, "blocked")
-	require.NoError(t, os.WriteFile(blocker, []byte("x"), tokenFilePerms))
+	require.NoError(t, os.WriteFile(blocker, []byte("x"), tokenfile.FilePerms))
 
 	tokenPath := filepath.Join(blocker, "tokens", "test.json")
 	cfg := testOAuthConfig(t, tokenPath, endpoint)
@@ -539,16 +541,16 @@ func TestDoLogin_DeviceAuthError(t *testing.T) {
 func TestSaveToken_CreateTempError(t *testing.T) {
 	tmpDir := t.TempDir()
 	tokDir := filepath.Join(tmpDir, "tokens")
-	require.NoError(t, os.MkdirAll(tokDir, dirPerms))
+	require.NoError(t, os.MkdirAll(tokDir, tokenfile.DirPerms))
 
 	// Make directory read-only so CreateTemp fails.
 	require.NoError(t, os.Chmod(tokDir, 0o555))
-	t.Cleanup(func() { os.Chmod(tokDir, dirPerms) })
+	t.Cleanup(func() { os.Chmod(tokDir, tokenfile.DirPerms) })
 
 	path := filepath.Join(tokDir, "token.json")
 	tok := &oauth2.Token{AccessToken: "fail"}
 
-	err := saveToken(path, tok, nil)
+	err := tokenfile.Save(path, tok, nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "creating temp file")
 }
@@ -557,9 +559,9 @@ func TestLoadToken_ReadError(t *testing.T) {
 	// Reading a directory as a file produces a non-ENOENT error.
 	dir := t.TempDir()
 
-	_, _, err := loadToken(dir)
+	_, _, err := tokenfile.Load(dir)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "reading token file")
+	assert.Contains(t, err.Error(), "tokenfile: reading")
 }
 
 func TestSaveToken_MkdirAllError(t *testing.T) {
@@ -567,14 +569,14 @@ func TestSaveToken_MkdirAllError(t *testing.T) {
 
 	// Create a file where the directory should be, blocking MkdirAll.
 	blocker := filepath.Join(tmpDir, "blocked")
-	require.NoError(t, os.WriteFile(blocker, []byte("x"), tokenFilePerms))
+	require.NoError(t, os.WriteFile(blocker, []byte("x"), tokenfile.FilePerms))
 
 	path := filepath.Join(blocker, "sub", "token.json")
 	tok := &oauth2.Token{AccessToken: "fail"}
 
-	err := saveToken(path, tok, nil)
+	err := tokenfile.Save(path, tok, nil)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "creating token directory")
+	assert.Contains(t, err.Error(), "tokenfile: creating directory")
 }
 
 func TestOAuthConfig_OnTokenChangeError(t *testing.T) {
@@ -582,7 +584,7 @@ func TestOAuthConfig_OnTokenChangeError(t *testing.T) {
 
 	// Create a file where the tokens directory should be, so saveToken fails.
 	blocker := filepath.Join(tmpDir, "blocked")
-	require.NoError(t, os.WriteFile(blocker, []byte("x"), tokenFilePerms))
+	require.NoError(t, os.WriteFile(blocker, []byte("x"), tokenfile.FilePerms))
 
 	tokenPath := filepath.Join(blocker, "sub", "callback.json")
 
@@ -608,7 +610,7 @@ func TestSaveToken_JSONFormat(t *testing.T) {
 		RefreshToken: "rt",
 	}
 
-	require.NoError(t, saveToken(path, tok, nil))
+	require.NoError(t, tokenfile.Save(path, tok, nil))
 
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
@@ -740,7 +742,7 @@ func TestDoAuthCodeLogin_Success(t *testing.T) {
 	require.NotNil(t, ts)
 
 	// Verify token was saved to disk.
-	loaded, _, loadErr := loadToken(tokenPath)
+	loaded, _, loadErr := tokenfile.Load(tokenPath)
 	require.NoError(t, loadErr)
 	require.NotNil(t, loaded)
 	assert.Equal(t, "test-access-token", loaded.AccessToken)
@@ -884,7 +886,7 @@ func TestDoAuthCodeLogin_SaveError(t *testing.T) {
 
 	// Create a file where the tokens directory should be, so MkdirAll fails.
 	blocker := filepath.Join(tmpDir, "blocked")
-	require.NoError(t, os.WriteFile(blocker, []byte("x"), tokenFilePerms))
+	require.NoError(t, os.WriteFile(blocker, []byte("x"), tokenfile.FilePerms))
 
 	tokenPath := filepath.Join(blocker, "tokens", "test.json")
 	cfg := testAuthCodeConfig(t, tokenPath, endpoint)
@@ -940,7 +942,7 @@ func TestLoadTokenMeta_Success(t *testing.T) {
 
 	tok := &oauth2.Token{AccessToken: "at", RefreshToken: "rt"}
 	meta := map[string]string{"org_name": "Contoso", "user_id": "abc123"}
-	require.NoError(t, saveToken(path, tok, meta))
+	require.NoError(t, tokenfile.Save(path, tok, meta))
 
 	loadedMeta, err := LoadTokenMeta(path)
 	require.NoError(t, err)
@@ -961,7 +963,7 @@ func TestSaveTokenMeta_MergesKeys(t *testing.T) {
 
 	tok := &oauth2.Token{AccessToken: "at", RefreshToken: "rt"}
 	initialMeta := map[string]string{"org_name": "Contoso", "user_id": "abc"}
-	require.NoError(t, saveToken(path, tok, initialMeta))
+	require.NoError(t, tokenfile.Save(path, tok, initialMeta))
 
 	// Merge new keys — org_name updated, display_name added.
 	err := SaveTokenMeta(path, map[string]string{
@@ -978,7 +980,7 @@ func TestSaveTokenMeta_MergesKeys(t *testing.T) {
 	assert.Equal(t, "Alice Smith", loadedMeta["display_name"])
 
 	// Verify token was not corrupted.
-	loaded, _, err := loadToken(path)
+	loaded, _, err := tokenfile.Load(path)
 	require.NoError(t, err)
 	assert.Equal(t, "at", loaded.AccessToken)
 	assert.Equal(t, "rt", loaded.RefreshToken)
