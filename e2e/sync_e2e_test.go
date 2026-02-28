@@ -156,8 +156,10 @@ func TestE2E_Sync_UploadOnly(t *testing.T) {
 	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
 	assert.Contains(t, stderr, "Mode: upload-only")
 
-	// Verify file appeared remotely.
-	stdout, _ := runCLI(t, "ls", "/"+testFolder)
+	// Verify file appeared remotely using stat (GetItemByPath — immediately
+	// consistent) instead of ls (ListChildrenByPath — eventually consistent).
+	// This fixes intermittent CI failures caused by Graph API index lag.
+	stdout, _ := runCLI(t, "stat", "/"+testFolder+"/upload-test.txt")
 	assert.Contains(t, stdout, "upload-test.txt")
 }
 

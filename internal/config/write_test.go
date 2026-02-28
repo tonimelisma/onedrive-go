@@ -388,34 +388,109 @@ func TestDeleteDriveSection_FileNotFound(t *testing.T) {
 // --- DefaultSyncDir tests ---
 
 func TestDefaultSyncDir_Personal_NoCollision(t *testing.T) {
-	result := DefaultSyncDir("personal", "", nil)
+	result := DefaultSyncDir(driveid.MustCanonicalID("personal:user@example.com"), "", "", nil)
 	assert.Equal(t, "~/OneDrive", result)
 }
 
-func TestDefaultSyncDir_Personal_WithCollision(t *testing.T) {
+func TestDefaultSyncDir_Personal_WithCollision_DisplayName(t *testing.T) {
 	existing := []string{"~/OneDrive"}
-	result := DefaultSyncDir("personal", "", existing)
-	assert.Equal(t, "~/OneDrive - Personal", result)
+	result := DefaultSyncDir(driveid.MustCanonicalID("personal:user@example.com"), "", "Alice Smith", existing)
+	assert.Equal(t, "~/OneDrive - Alice Smith", result)
+}
+
+func TestDefaultSyncDir_Personal_WithCollision_NoDisplayName(t *testing.T) {
+	// Without display name, falls back to email.
+	existing := []string{"~/OneDrive"}
+	result := DefaultSyncDir(driveid.MustCanonicalID("personal:user@example.com"), "", "", existing)
+	assert.Equal(t, "~/OneDrive - user@example.com", result)
+}
+
+func TestDefaultSyncDir_Personal_WithCollision_DisplayNameAlsoCollides(t *testing.T) {
+	// Both base and displayName collide — falls back to email.
+	existing := []string{"~/OneDrive", "~/OneDrive - Alice Smith"}
+	result := DefaultSyncDir(driveid.MustCanonicalID("personal:user@example.com"), "", "Alice Smith", existing)
+	assert.Equal(t, "~/OneDrive - user@example.com", result)
 }
 
 func TestDefaultSyncDir_Business(t *testing.T) {
-	result := DefaultSyncDir("business", "Contoso", nil)
+	result := DefaultSyncDir(driveid.MustCanonicalID("business:alice@contoso.com"), "Contoso", "", nil)
 	assert.Equal(t, "~/OneDrive - Contoso", result)
 }
 
 func TestDefaultSyncDir_Business_NoOrgName(t *testing.T) {
-	result := DefaultSyncDir("business", "", nil)
+	result := DefaultSyncDir(driveid.MustCanonicalID("business:alice@contoso.com"), "", "", nil)
 	assert.Equal(t, "~/OneDrive - Business", result)
 }
 
-func TestDefaultSyncDir_SharePoint_Empty(t *testing.T) {
-	result := DefaultSyncDir("sharepoint", "Contoso", nil)
-	assert.Equal(t, "", result)
+func TestDefaultSyncDir_Business_SameOrg_Collision(t *testing.T) {
+	existing := []string{"~/OneDrive - Contoso"}
+	result := DefaultSyncDir(driveid.MustCanonicalID("business:bob@contoso.com"), "Contoso", "Bob Smith", existing)
+	assert.Equal(t, "~/OneDrive - Contoso - Bob Smith", result)
 }
 
-func TestDefaultSyncDir_UnknownType_Empty(t *testing.T) {
-	result := DefaultSyncDir("unknown", "", nil)
-	assert.Equal(t, "", result)
+func TestDefaultSyncDir_SharePoint(t *testing.T) {
+	result := DefaultSyncDir(driveid.MustCanonicalID("sharepoint:alice@contoso.com:marketing:Documents"), "", "", nil)
+	assert.Equal(t, "~/SharePoint - marketing - Documents", result)
+}
+
+func TestDefaultSyncDir_SharePoint_MinimalID(t *testing.T) {
+	// SharePoint canonical ID with only email (no site/library) falls back to ~/SharePoint.
+	result := DefaultSyncDir(driveid.MustCanonicalID("sharepoint:alice@contoso.com"), "", "", nil)
+	assert.Equal(t, "~/SharePoint", result)
+}
+
+func TestDefaultSyncDir_SharePoint_Collision(t *testing.T) {
+	existing := []string{"~/SharePoint - marketing - Documents"}
+	result := DefaultSyncDir(
+		driveid.MustCanonicalID("sharepoint:bob@contoso.com:marketing:Documents"),
+		"", "Bob Smith", existing,
+	)
+	assert.Equal(t, "~/SharePoint - marketing - Documents - Bob Smith", result)
+}
+
+// --- SanitizePathComponent tests ---
+
+func TestSanitizePathComponent_Clean(t *testing.T) {
+	assert.Equal(t, "Contoso Ltd", SanitizePathComponent("Contoso Ltd"))
+}
+
+func TestSanitizePathComponent_UnsafeChars(t *testing.T) {
+	assert.Equal(t, "path-with-slashes", SanitizePathComponent("path/with\\slashes"))
+	assert.Equal(t, "file-name-here", SanitizePathComponent("file:name<here"))
+	assert.Equal(t, "pipe-and-question", SanitizePathComponent("pipe|and?question"))
+	assert.Equal(t, "quotes-and-star", SanitizePathComponent(`quotes"and*star`))
+	assert.Equal(t, "angle-brackets", SanitizePathComponent("angle>brackets"))
+}
+
+func TestSanitizePathComponent_Empty(t *testing.T) {
+	assert.Equal(t, "", SanitizePathComponent(""))
+}
+
+// --- BaseSyncDir tests ---
+
+func TestBaseSyncDir_Personal(t *testing.T) {
+	result := BaseSyncDir(driveid.MustCanonicalID("personal:user@example.com"), "")
+	assert.Equal(t, "~/OneDrive", result)
+}
+
+func TestBaseSyncDir_Business_WithOrg(t *testing.T) {
+	result := BaseSyncDir(driveid.MustCanonicalID("business:alice@contoso.com"), "Contoso")
+	assert.Equal(t, "~/OneDrive - Contoso", result)
+}
+
+func TestBaseSyncDir_Business_NoOrg(t *testing.T) {
+	result := BaseSyncDir(driveid.MustCanonicalID("business:alice@contoso.com"), "")
+	assert.Equal(t, "~/OneDrive - Business", result)
+}
+
+func TestBaseSyncDir_SharePoint(t *testing.T) {
+	result := BaseSyncDir(driveid.MustCanonicalID("sharepoint:alice@contoso.com:marketing:Documents"), "")
+	assert.Equal(t, "~/SharePoint - marketing - Documents", result)
+}
+
+func TestBaseSyncDir_SharePoint_NoSiteOrLib(t *testing.T) {
+	result := BaseSyncDir(driveid.MustCanonicalID("sharepoint:alice@contoso.com"), "")
+	assert.Equal(t, "~/SharePoint", result)
 }
 
 // --- Comment preservation tests ---

@@ -151,7 +151,7 @@ func ResolveDrive(env EnvOverrides, cli CLIOverrides, logger *slog.Logger) (*Res
 	)
 
 	// Step 4: match drive.
-	canonicalID, drive, err := matchDrive(cfg, selector, logger)
+	canonicalID, drive, err := MatchDrive(cfg, selector, logger)
 	if err != nil {
 		return nil, err
 	}

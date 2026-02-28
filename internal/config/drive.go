@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 // Default remote path when none is specified.
@@ -48,34 +49,15 @@ func (rd *ResolvedDrive) StatePath() string {
 	return DriveStatePath(rd.CanonicalID)
 }
 
-// matchDrive selects a drive from the config by selector string. The matching
+// MatchDrive selects a drive from the config by selector string. The matching
 // precedence is: exact canonical ID > alias > partial canonical ID substring.
 // If selector is empty, auto-selects when exactly one drive is configured.
-// When no drives are configured and no selector is given, falls back to
-// token discovery on disk (see DiscoverTokens).
-func matchDrive(cfg *Config, selector string, logger *slog.Logger) (driveid.CanonicalID, Drive, error) {
+//
+// When no drives are configured, provides smart error messages: checks for
+// existing tokens on disk and suggests "drive add" or "login" accordingly.
+func MatchDrive(cfg *Config, selector string, logger *slog.Logger) (driveid.CanonicalID, Drive, error) {
 	if len(cfg.Drives) == 0 {
-		// If the selector looks like a canonical ID (contains ":"), allow
-		// zero-config usage. This supports CLI-only workflows where --drive
-		// provides a canonical ID and no config file exists.
-		if strings.Contains(selector, ":") {
-			logger.Debug("zero-config mode: using selector as canonical ID", "selector", selector)
-
-			cid, err := driveid.NewCanonicalID(selector)
-			if err != nil {
-				return driveid.CanonicalID{}, Drive{}, fmt.Errorf("invalid drive selector: %w", err)
-			}
-
-			return cid, Drive{}, nil
-		}
-
-		// Non-canonical selector with no drives — can't match against anything.
-		if selector != "" {
-			return driveid.CanonicalID{}, Drive{}, fmt.Errorf("no drives configured — run 'onedrive-go login' to get started")
-		}
-
-		// No selector and no config — discover tokens on disk.
-		return matchDiscoveredTokens(logger)
+		return matchNoDrives(selector, logger)
 	}
 
 	if selector == "" {
@@ -83,6 +65,33 @@ func matchDrive(cfg *Config, selector string, logger *slog.Logger) (driveid.Cano
 	}
 
 	return matchBySelector(cfg, selector, logger)
+}
+
+// matchNoDrives handles drive matching when no drives are configured.
+// Provides context-aware error messages based on whether tokens exist on disk.
+func matchNoDrives(selector string, logger *slog.Logger) (driveid.CanonicalID, Drive, error) {
+	// If the selector looks like a canonical ID, allow zero-config usage
+	// for CLI workflows where --drive provides a canonical ID directly.
+	if strings.Contains(selector, ":") {
+		logger.Debug("zero-config mode: using selector as canonical ID", "selector", selector)
+
+		cid, err := driveid.NewCanonicalID(selector)
+		if err != nil {
+			return driveid.CanonicalID{}, Drive{}, fmt.Errorf("invalid drive selector: %w", err)
+		}
+
+		return cid, Drive{}, nil
+	}
+
+	// Check for tokens on disk to provide a more helpful error message.
+	tokens := DiscoverTokens(logger)
+	if len(tokens) > 0 {
+		return driveid.CanonicalID{}, Drive{},
+			fmt.Errorf("no drives configured — run 'onedrive-go drive add' to add a drive")
+	}
+
+	return driveid.CanonicalID{}, Drive{},
+		fmt.Errorf("no accounts configured — run 'onedrive-go login' to get started")
 }
 
 // matchSingleDrive auto-selects when exactly one drive is configured.
@@ -176,9 +185,69 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 		resolved.RemotePath = defaultRemotePath
 	}
 
+	// Compute runtime default sync_dir when the drive has none configured.
+	// Reads org_name from the token file metadata for accurate business
+	// drive naming (e.g., "~/OneDrive - Contoso" instead of "~/OneDrive - Business").
+	if resolved.SyncDir == "" {
+		orgName, displayName := readTokenMetaForSyncDir(canonicalID, logger)
+		otherDirs := collectOtherSyncDirs(cfg, canonicalID, logger)
+		resolved.SyncDir = expandTilde(DefaultSyncDir(canonicalID, orgName, displayName, otherDirs))
+		logger.Debug("using default sync_dir",
+			"sync_dir", resolved.SyncDir,
+			"canonical_id", canonicalID.String(),
+			"org_name", orgName,
+		)
+	}
+
 	applyDriveOverrides(resolved, drive, logger)
 
 	return resolved
+}
+
+// readTokenMetaForSyncDir reads org_name and display_name from the token file's
+// cached metadata. Returns empty strings if the token file is missing or
+// doesn't contain metadata.
+func readTokenMetaForSyncDir(cid driveid.CanonicalID, logger *slog.Logger) (orgName, displayName string) {
+	tokenPath := DriveTokenPath(cid.TokenCanonicalID())
+	if tokenPath == "" {
+		return "", ""
+	}
+
+	meta, err := graph.LoadTokenMeta(tokenPath)
+	if err != nil {
+		logger.Debug("could not read token meta for sync_dir computation",
+			"canonical_id", cid.String(), "error", err)
+
+		return "", ""
+	}
+
+	return meta["org_name"], meta["display_name"]
+}
+
+// collectOtherSyncDirs collects sync_dir values from all drives in the config
+// except the specified one. For drives without explicit sync_dir, computes
+// the base name (without collision cascade) so all potential collisions are detected.
+func collectOtherSyncDirs(cfg *Config, excludeID driveid.CanonicalID, logger *slog.Logger) []string {
+	var dirs []string
+
+	for id := range cfg.Drives {
+		if id == excludeID {
+			continue
+		}
+
+		dir := cfg.Drives[id].SyncDir
+		if dir == "" {
+			// Compute base name for this drive (without collision cascade).
+			orgName, _ := readTokenMetaForSyncDir(id, logger)
+			dir = BaseSyncDir(id, orgName)
+		}
+
+		if dir != "" {
+			dirs = append(dirs, dir)
+		}
+	}
+
+	return dirs
 }
 
 // applyDriveOverrides selectively replaces global config values with per-drive
@@ -206,9 +275,9 @@ func applyDriveOverrides(resolved *ResolvedDrive, drive *Drive, logger *slog.Log
 }
 
 // expandTilde replaces a leading "~/" with the user's home directory.
-// If os.UserHomeDir() fails, the path is returned unexpanded. This is safe
-// because ValidateResolved() catches invalid sync_dir paths downstream and
-// will report a clear error to the user.
+// If os.UserHomeDir() fails, the path is returned unexpanded and a debug
+// log is emitted. This is safe because ValidateResolved() catches invalid
+// sync_dir paths downstream and will report a clear error to the user.
 func expandTilde(path string) string {
 	if !strings.HasPrefix(path, "~/") {
 		return path
@@ -216,40 +285,18 @@ func expandTilde(path string) string {
 
 	home, err := os.UserHomeDir()
 	if err != nil {
+		slog.Debug("expandTilde: could not determine home directory", "error", err)
+
 		return path
 	}
 
 	return filepath.Join(home, path[2:])
 }
 
-// matchDiscoveredTokens auto-selects a drive from token files found on disk.
-// This enables the zero-config experience: login → ls works without a config file.
-func matchDiscoveredTokens(logger *slog.Logger) (driveid.CanonicalID, Drive, error) {
-	tokens := DiscoverTokens(logger)
-
-	switch len(tokens) {
-	case 0:
-		return driveid.CanonicalID{}, Drive{}, fmt.Errorf("no accounts — run 'onedrive-go login' to get started")
-	case 1:
-		logger.Debug("auto-selected single discovered token", "canonical_id", tokens[0].String())
-
-		return tokens[0], Drive{}, nil
-	default:
-		strs := make([]string, 0, len(tokens))
-		for _, t := range tokens {
-			strs = append(strs, t.String())
-		}
-
-		return driveid.CanonicalID{}, Drive{}, fmt.Errorf(
-			"multiple accounts found — specify with --drive:\n  %s",
-			strings.Join(strs, "\n  "))
-	}
-}
-
 // DiscoverTokens lists token files in the default data directory and returns
 // canonical drive IDs extracted from filenames. Token files follow the naming
 // convention: token_{type}_{email}.json (e.g., token_personal_user@example.com.json).
-// This enables zero-config drive discovery when no config file exists.
+// Used for smart error messages and drive list.
 func DiscoverTokens(logger *slog.Logger) []driveid.CanonicalID {
 	return discoverTokensIn(DefaultDataDir(), logger)
 }
