@@ -70,11 +70,11 @@ func runResolve(cmd *cobra.Command, args []string) error {
 
 	// keep_both doesn't need graph client — just DB update.
 	if resolution == resolutionKeepBoth {
-		return resolveKeepBothOnly(ctx, cmd, args, resolveAll, dryRun)
+		return resolveKeepBothOnly(ctx, args, resolveAll, dryRun)
 	}
 
 	// keep_local and keep_remote need graph client for transfers.
-	return resolveWithTransfers(ctx, cmd, args, resolution, resolveAll, dryRun)
+	return resolveWithTransfers(ctx, args, resolution, resolveAll, dryRun)
 }
 
 // resolveStrategy returns the chosen resolution string from flags.
@@ -98,22 +98,19 @@ func resolveStrategy(cmd *cobra.Command) (string, error) {
 }
 
 // resolveKeepBothOnly handles keep_both resolution which only needs the DB.
-func resolveKeepBothOnly(ctx context.Context, cmd *cobra.Command, args []string, all, dryRun bool) error {
-	cfg := configFromContext(ctx)
-	logger := buildLogger(cfg)
+func resolveKeepBothOnly(ctx context.Context, args []string, all, dryRun bool) error {
+	cc := cliContextFrom(ctx)
 
-	dbPath := cfg.StatePath()
+	dbPath := cc.Cfg.StatePath()
 	if dbPath == "" {
-		return fmt.Errorf("cannot determine state DB path for drive %q", cfg.CanonicalID)
+		return fmt.Errorf("cannot determine state DB path for drive %q", cc.Cfg.CanonicalID)
 	}
 
-	mgr, err := sync.NewBaselineManager(dbPath, logger)
+	mgr, err := sync.NewBaselineManager(dbPath, cc.Logger)
 	if err != nil {
 		return err
 	}
 	defer mgr.Close()
-
-	_ = cmd // suppress unused warning — consistent signature
 
 	if all {
 		return resolveAllKeepBoth(ctx, mgr, dryRun)
@@ -177,23 +174,24 @@ func resolveSingleKeepBoth(ctx context.Context, mgr *sync.BaselineManager, idOrP
 
 // resolveWithTransfers handles keep_local and keep_remote which need graph client.
 func resolveWithTransfers(
-	ctx context.Context, cmd *cobra.Command, args []string, resolution string, all, dryRun bool,
+	ctx context.Context, args []string, resolution string, all, dryRun bool,
 ) error {
-	cfg := configFromContext(ctx)
+	cc := cliContextFrom(ctx)
+	logger := cc.Logger
 
-	client, ts, driveID, logger, err := clientAndDrive(ctx, cfg)
+	client, ts, driveID, err := clientAndDrive(ctx, cc)
 	if err != nil {
 		return err
 	}
 
-	syncDir := cfg.SyncDir
+	syncDir := cc.Cfg.SyncDir
 	if syncDir == "" {
 		return fmt.Errorf("sync_dir not configured")
 	}
 
-	dbPath := cfg.StatePath()
+	dbPath := cc.Cfg.StatePath()
 	if dbPath == "" {
-		return fmt.Errorf("cannot determine state DB path for drive %q", cfg.CanonicalID)
+		return fmt.Errorf("cannot determine state DB path for drive %q", cc.Cfg.CanonicalID)
 	}
 
 	// Use transfer client (no timeout) for upload/download operations.
@@ -209,14 +207,12 @@ func resolveWithTransfers(
 		Downloads:     transferClient,
 		Uploads:       transferClient,
 		Logger:        logger,
-		UseLocalTrash: cfg.UseLocalTrash,
+		UseLocalTrash: cc.Cfg.UseLocalTrash,
 	})
 	if err != nil {
 		return err
 	}
 	defer engine.Close()
-
-	_ = cmd // suppress unused warning — consistent signature
 
 	if all {
 		return resolveAllWithEngine(ctx, engine, resolution, dryRun)

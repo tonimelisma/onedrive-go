@@ -39,26 +39,27 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	}
 
 	mode := syncModeFromFlags(cmd)
-	cfg := configFromContext(cmd.Context())
+	cc := cliContextFrom(cmd.Context())
+	logger := cc.Logger
 
 	// Wrap the command context with signal handling: first SIGINT/SIGTERM
 	// triggers graceful shutdown (context cancel → drain in-flight actions),
 	// second signal force-exits. Applies to both one-shot and watch modes.
-	ctx := shutdownContext(cmd.Context(), buildLogger(cfg))
+	ctx := shutdownContext(cmd.Context(), logger)
 
-	client, ts, driveID, logger, err := clientAndDrive(ctx, cfg)
+	client, ts, driveID, err := clientAndDrive(ctx, cc)
 	if err != nil {
 		return err
 	}
 
-	syncDir := cfg.SyncDir
+	syncDir := cc.Cfg.SyncDir
 	if syncDir == "" {
 		return fmt.Errorf("sync_dir not configured — set it in the config file or add a drive with 'onedrive-go drive add'")
 	}
 
-	dbPath := cfg.StatePath()
+	dbPath := cc.Cfg.StatePath()
 	if dbPath == "" {
-		return fmt.Errorf("cannot determine state DB path for drive %q", cfg.CanonicalID)
+		return fmt.Errorf("cannot determine state DB path for drive %q", cc.Cfg.CanonicalID)
 	}
 
 	// Use transfer client (no timeout) for download/upload operations.
@@ -75,7 +76,7 @@ func runSync(cmd *cobra.Command, _ []string) error {
 		Uploads:       transferClient,
 		DriveVerifier: client,
 		Logger:        logger,
-		UseLocalTrash: cfg.UseLocalTrash,
+		UseLocalTrash: cc.Cfg.UseLocalTrash,
 	})
 	if err != nil {
 		return err

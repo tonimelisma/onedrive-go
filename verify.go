@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -24,20 +25,19 @@ Exit code 0 if all files verify; exit code 1 if any mismatches are found.`,
 }
 
 func runVerify(cmd *cobra.Command, _ []string) error {
-	cfg := configFromContext(cmd.Context())
-	logger := buildLogger(cfg)
+	cc := cliContextFrom(cmd.Context())
 
-	syncDir := cfg.SyncDir
+	syncDir := cc.Cfg.SyncDir
 	if syncDir == "" {
 		return fmt.Errorf("sync_dir not configured — set it in the config file or add a drive with 'onedrive-go drive add'")
 	}
 
-	dbPath := cfg.StatePath()
+	dbPath := cc.Cfg.StatePath()
 	if dbPath == "" {
-		return fmt.Errorf("cannot determine state DB path for drive %q", cfg.CanonicalID)
+		return fmt.Errorf("cannot determine state DB path for drive %q", cc.Cfg.CanonicalID)
 	}
 
-	report, err := loadAndVerify(cmd, dbPath, syncDir, logger)
+	report, err := loadAndVerify(cmd.Context(), dbPath, syncDir, cc.Logger)
 	if err != nil {
 		return err
 	}
@@ -59,14 +59,12 @@ func runVerify(cmd *cobra.Command, _ []string) error {
 
 // loadAndVerify opens the baseline, loads it, and runs verification.
 // Separated so the defer Close() runs before any os.Exit in the caller.
-func loadAndVerify(cmd *cobra.Command, dbPath, syncDir string, logger *slog.Logger) (*sync.VerifyReport, error) {
+func loadAndVerify(ctx context.Context, dbPath, syncDir string, logger *slog.Logger) (*sync.VerifyReport, error) {
 	mgr, err := sync.NewBaselineManager(dbPath, logger)
 	if err != nil {
 		return nil, err
 	}
 	defer mgr.Close()
-
-	ctx := cmd.Context()
 
 	bl, err := mgr.Load(ctx)
 	if err != nil {

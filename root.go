@@ -34,20 +34,25 @@ var (
 // (skipConfigCommands) which required manual maintenance when adding commands.
 const skipConfigAnnotation = "skipConfig"
 
-// configContextKey is the context key for passing resolved config from
-// PersistentPreRunE to RunE handlers, replacing the package-level resolvedCfg
-// global. This makes the data flow explicit and testable.
-type configContextKey struct{}
+// CLIContext bundles resolved config and logger. Created once in
+// PersistentPreRunE; eliminates redundant buildLogger calls in RunE handlers.
+type CLIContext struct {
+	Cfg    *config.ResolvedDrive
+	Logger *slog.Logger
+}
 
-// configFromContext extracts the resolved config from the command's context.
+// cliContextKey is the context key for CLIContext.
+type cliContextKey struct{}
+
+// cliContextFrom extracts the CLIContext from the command's context.
 // Returns nil if no config was loaded (e.g., auth commands that skip config).
-func configFromContext(ctx context.Context) *config.ResolvedDrive {
-	cfg, ok := ctx.Value(configContextKey{}).(*config.ResolvedDrive)
+func cliContextFrom(ctx context.Context) *CLIContext {
+	cc, ok := ctx.Value(cliContextKey{}).(*CLIContext)
 	if !ok {
 		return nil
 	}
 
-	return cfg
+	return cc
 }
 
 // httpClientTimeout is the default timeout for HTTP requests.
@@ -167,9 +172,18 @@ func loadConfig(cmd *cobra.Command) error {
 		slog.String("drive_id", resolved.DriveID.String()),
 	)
 
-	cmd.SetContext(context.WithValue(cmd.Context(), configContextKey{}, resolved))
+	// Build the final logger incorporating config-file log level.
+	finalLogger := buildLogger(resolved)
+	cc := &CLIContext{Cfg: resolved, Logger: finalLogger}
 
-	config.WarnUnimplemented(resolved, buildLogger(resolved))
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	cmd.SetContext(context.WithValue(ctx, cliContextKey{}, cc))
+
+	config.WarnUnimplemented(resolved, finalLogger)
 
 	return nil
 }
