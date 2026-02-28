@@ -53,6 +53,10 @@ func Load(path string) (*oauth2.Token, map[string]string, error) {
 		return nil, nil, fmt.Errorf("tokenfile: %s missing token field (re-login required)", path)
 	}
 
+	if tf.Token.AccessToken == "" && tf.Token.RefreshToken == "" {
+		return nil, nil, fmt.Errorf("tokenfile: %s has empty credentials (re-login required)", path)
+	}
+
 	return tf.Token, tf.Meta, nil
 }
 
@@ -81,6 +85,10 @@ func ReadMeta(path string) (map[string]string, error) {
 // Save writes a token file to disk atomically (write-to-temp + rename)
 // with 0600 permissions. Never logs token values.
 func Save(path string, tok *oauth2.Token, meta map[string]string) error {
+	if tok == nil {
+		return fmt.Errorf("tokenfile: refusing to save nil token to %s", path)
+	}
+
 	tf := File{Token: tok, Meta: meta}
 
 	data, err := json.MarshalIndent(tf, "", "  ")
