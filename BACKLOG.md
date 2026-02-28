@@ -246,3 +246,16 @@ Optimization deferred until profiling shows a bottleneck.
 | B-235 | Plan Actions/Deps length invariant not validated | **DONE** — Guard in `executePlan` and `processBatch`. PR #130. |
 | B-236 | `StatePath()` duplicates `DriveStatePathWithOverride` logic | **DONE** — Simplified to delegation. PR #130. |
 | B-237 | `hashAndEmit` infinite retry on `errFileChangedDuringHash` | **DONE** — `maxCoalesceRetries` cap (3 retries). PR #130. |
+| B-250 | `findConflict` accepts empty string without early return | **DONE** — Added `idOrPath == ""` guard. PR #132. |
+| B-251 | `resolveSingleKeepBoth`/`resolveSingleWithEngine` duplicate find+resolve logic | **DONE** — Extracted `resolveSingleConflict` shared helper. PR #132. |
+| B-252 | `errAmbiguousPrefix` sentinel error loses the ambiguous prefix value | **DONE** — Changed to function returning `fmt.Errorf` with `%q` prefix. PR #132. |
+| B-253 | `processBatch` invariant guard lacks rationale comment | **DONE** — Added comment explaining why log-only is sufficient. PR #132. |
+| B-254 | `DownloadToFile` hash retry loop overflows on `maxRetries + 1` | **DONE** — `resolveMaxRetries` helper with `maxSaneRetries = 100` cap. PR #132. |
+| B-255 | `handleCreate`/`scanNewDirectory` duplicate hash-failure handling | **DONE** — Extracted `stableHashOrEmpty` method. PR #132. |
+| B-256 | `UploadFile` double file-open pattern undocumented | **DONE** — Added comment explaining intentional stat + open separation. PR #132. |
+| B-257 | `resolveEachConflict` uses `fmt.Println` bypassing `statusf` | **DONE** — Changed to `statusf`. PR #132. |
+| B-258 | `hashAndEmit` exhaustion log lacks retry context | **DONE** — Added `slog.Int("max_retries", maxCoalesceRetries)`. PR #132. |
+| B-259 | `cancelPendingTimers` delete-during-range safety undocumented | **DONE** — Added Go spec comment. PR #132. |
+| B-260 | `isAlwaysExcluded` calls `strings.ToLower` allocating on every check | **DONE** — `asciiLower` allocation-free helper. PR #132. |
+| B-261 | `watchLoop` select priority semantics undocumented | **DONE** — Added comment about random priority and safety scan guarantee. PR #132. |
+| B-262 | `removePartialIfNotCanceled` untested | **DONE** — 3 subtests: active context, canceled context, nonexistent file. PR #132. |
