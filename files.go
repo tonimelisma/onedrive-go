@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -107,24 +106,25 @@ func splitParentAndName(path string) (string, string) {
 
 // clientAndDrive loads a saved token using the resolved config's canonical ID,
 // creates a Graph client, and discovers the user's primary drive ID.
-// Returns the client, token source, drive ID, and logger.
+// Returns the client, token source, and drive ID.
 // The token source is returned separately for callers that need to create
 // a second client (e.g., transfer client with no timeout).
-func clientAndDrive(ctx context.Context, cfg *config.ResolvedDrive) (*graph.Client, graph.TokenSource, driveid.ID, *slog.Logger, error) {
-	logger := buildLogger(cfg)
+func clientAndDrive(ctx context.Context, cc *CLIContext) (*graph.Client, graph.TokenSource, driveid.ID, error) {
+	logger := cc.Logger
+	cfg := cc.Cfg
 
 	tokenPath := config.DriveTokenPath(cfg.CanonicalID)
 	if tokenPath == "" {
-		return nil, nil, driveid.ID{}, nil, fmt.Errorf("cannot determine token path for drive %q", cfg.CanonicalID)
+		return nil, nil, driveid.ID{}, fmt.Errorf("cannot determine token path for drive %q", cfg.CanonicalID)
 	}
 
 	ts, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
 	if err != nil {
 		if errors.Is(err, graph.ErrNotLoggedIn) {
-			return nil, nil, driveid.ID{}, nil, fmt.Errorf("not logged in — run 'onedrive-go login' first")
+			return nil, nil, driveid.ID{}, fmt.Errorf("not logged in — run 'onedrive-go login' first")
 		}
 
-		return nil, nil, driveid.ID{}, nil, err
+		return nil, nil, driveid.ID{}, err
 	}
 
 	client := newGraphClient(ts, logger)
@@ -132,21 +132,21 @@ func clientAndDrive(ctx context.Context, cfg *config.ResolvedDrive) (*graph.Clie
 	// Skip the Drives() API call when the drive ID is already known from config.
 	if !cfg.DriveID.IsZero() {
 		logger.Debug("using configured drive ID", "drive_id", cfg.DriveID.String())
-		return client, ts, cfg.DriveID, logger, nil
+		return client, ts, cfg.DriveID, nil
 	}
 
 	drives, err := client.Drives(ctx)
 	if err != nil {
-		return nil, nil, driveid.ID{}, nil, fmt.Errorf("discovering drive: %w", err)
+		return nil, nil, driveid.ID{}, fmt.Errorf("discovering drive: %w", err)
 	}
 
 	if len(drives) == 0 {
-		return nil, nil, driveid.ID{}, nil, fmt.Errorf("no drives found for this account")
+		return nil, nil, driveid.ID{}, fmt.Errorf("no drives found for this account")
 	}
 
 	logger.Debug("discovered primary drive", "drive_id", drives[0].ID.String())
 
-	return client, ts, drives[0].ID, logger, nil
+	return client, ts, drives[0].ID, nil
 }
 
 // resolveItem resolves a remote path to an Item.
@@ -180,14 +180,14 @@ func runLs(cmd *cobra.Command, args []string) error {
 	}
 
 	ctx := cmd.Context()
-	cfg := configFromContext(ctx)
+	cc := cliContextFrom(ctx)
 
-	client, _, driveID, logger, err := clientAndDrive(ctx, cfg)
+	client, _, driveID, err := clientAndDrive(ctx, cc)
 	if err != nil {
 		return err
 	}
 
-	logger.Debug("ls", "path", remotePath)
+	cc.Logger.Debug("ls", "path", remotePath)
 
 	items, err := listItems(ctx, client, driveID, remotePath)
 	if err != nil {
@@ -258,13 +258,14 @@ func printItemsTable(items []graph.Item) {
 func runGet(cmd *cobra.Command, args []string) error {
 	remotePath := args[0]
 	ctx := cmd.Context()
-	cfg := configFromContext(ctx)
+	cc := cliContextFrom(ctx)
 
-	client, ts, driveID, logger, err := clientAndDrive(ctx, cfg)
+	client, ts, driveID, err := clientAndDrive(ctx, cc)
 	if err != nil {
 		return err
 	}
 
+	logger := cc.Logger
 	logger.Debug("get", "remote_path", remotePath)
 
 	item, err := resolveItem(ctx, client, driveID, remotePath)
@@ -325,13 +326,14 @@ func runPut(cmd *cobra.Command, args []string) error {
 		remotePath = args[1]
 	}
 
-	cfg := configFromContext(ctx)
+	cc := cliContextFrom(ctx)
 
-	client, ts, driveID, logger, err := clientAndDrive(ctx, cfg)
+	client, ts, driveID, err := clientAndDrive(ctx, cc)
 	if err != nil {
 		return err
 	}
 
+	logger := cc.Logger
 	logger.Debug("put", "local_path", localPath, "remote_path", remotePath, "size", fi.Size())
 
 	parentPath, name := splitParentAndName(remotePath)
@@ -375,13 +377,14 @@ type rmJSONOutput struct {
 func runRm(cmd *cobra.Command, args []string) error {
 	remotePath := args[0]
 	ctx := cmd.Context()
-	cfg := configFromContext(ctx)
+	cc := cliContextFrom(ctx)
 
-	client, _, driveID, logger, err := clientAndDrive(ctx, cfg)
+	client, _, driveID, err := clientAndDrive(ctx, cc)
 	if err != nil {
 		return err
 	}
 
+	logger := cc.Logger
 	logger.Debug("rm", "path", remotePath)
 
 	item, err := resolveItem(ctx, client, driveID, remotePath)
@@ -447,13 +450,14 @@ func runMkdir(cmd *cobra.Command, args []string) error {
 	}
 
 	ctx := cmd.Context()
-	cfg := configFromContext(ctx)
+	cc := cliContextFrom(ctx)
 
-	client, _, driveID, logger, err := clientAndDrive(ctx, cfg)
+	client, _, driveID, err := clientAndDrive(ctx, cc)
 	if err != nil {
 		return err
 	}
 
+	logger := cc.Logger
 	logger.Debug("mkdir", "path", remotePath)
 
 	// Walk path segments, creating each missing folder.
@@ -509,14 +513,14 @@ func runMkdir(cmd *cobra.Command, args []string) error {
 func runStat(cmd *cobra.Command, args []string) error {
 	remotePath := args[0]
 	ctx := cmd.Context()
-	cfg := configFromContext(ctx)
+	cc := cliContextFrom(ctx)
 
-	client, _, driveID, logger, err := clientAndDrive(ctx, cfg)
+	client, _, driveID, err := clientAndDrive(ctx, cc)
 	if err != nil {
 		return err
 	}
 
-	logger.Debug("stat", "path", remotePath)
+	cc.Logger.Debug("stat", "path", remotePath)
 
 	item, err := resolveItem(ctx, client, driveID, remotePath)
 	if err != nil {
