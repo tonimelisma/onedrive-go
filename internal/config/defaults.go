@@ -89,7 +89,7 @@ func defaultSafetyConfig() SafetyConfig {
 // macOS: true — desktop users always have ~/.Trash.
 // Linux: false — servers/NAS/containers typically don't have XDG trash; desktop users opt in.
 func defaultUseLocalTrash() bool {
-	return runtime.GOOS == "darwin"
+	return runtime.GOOS == platformDarwin
 }
 
 func defaultSyncConfig() SyncConfig {

@@ -21,10 +21,11 @@ const configDirPermissions = 0o755
 // for drive sections. Used to detect section boundaries in line-based edits.
 const sectionHeaderPrefix = `["`
 
-// Drive type constants used for sync directory defaults.
+// Drive type aliases for readability in this package.
 const (
-	driveTypePersonal = "personal"
-	driveTypeBusiness = "business"
+	driveTypePersonal   = driveid.DriveTypePersonal
+	driveTypeBusiness   = driveid.DriveTypeBusiness
+	driveTypeSharePoint = driveid.DriveTypeSharePoint
 )
 
 // configTemplate is the default config file content written on first login.
@@ -183,47 +184,103 @@ func DeleteDriveSection(path string, canonicalID driveid.CanonicalID) error {
 	return atomicWriteFile(path, []byte(strings.Join(lines, "\n")))
 }
 
-// DefaultSyncDir determines the default sync directory for a drive based on
-// its type, following Microsoft's OneDrive client conventions. existingDirs
-// enables collision detection — pass in the sync_dir values from all existing
-// drives in the config.
+// DefaultSyncDir computes a default sync directory for a drive. Uses a two-level
+// scheme: base name first, disambiguated with display name then email on collision.
+// All callers must pass existingDirs (tilde-expanded or unexpanded) for accurate
+// collision detection.
 //
-// Personal: ~/OneDrive (fall back to ~/OneDrive - Personal if taken).
-// Business: ~/OneDrive - {OrgName}.
-// SharePoint: not implemented yet (returns empty).
-func DefaultSyncDir(driveType, orgName string, existingDirs []string) string {
-	switch driveType {
+// Personal:   ~/OneDrive → ~/OneDrive - {displayName} → ~/OneDrive - {email}
+// Business:   ~/OneDrive - {OrgName} → ~/OneDrive - {OrgName} - {displayName} → + {email}
+//
+//	(~/OneDrive - Business if no org name)
+//
+// SharePoint: ~/SharePoint - {site} - {library} → + {displayName} → + {email}
+func DefaultSyncDir(cid driveid.CanonicalID, orgName, displayName string, existingDirs []string) string {
+	base := BaseSyncDir(cid, orgName)
+	if base == "" {
+		return ""
+	}
+
+	if !containsExpanded(existingDirs, base) {
+		return base
+	}
+
+	// Level 1: disambiguate with display name (friendly).
+	if displayName != "" {
+		withName := base + " - " + SanitizePathComponent(displayName)
+		if !containsExpanded(existingDirs, withName) {
+			return withName
+		}
+	}
+
+	// Level 2: disambiguate with email (guaranteed unique).
+	return base + " - " + cid.Email()
+}
+
+// BaseSyncDir returns the base sync directory name for a drive type, without
+// collision detection. Exported for use by collectOtherSyncDirs which needs
+// the base name without triggering a collision cascade.
+func BaseSyncDir(cid driveid.CanonicalID, orgName string) string {
+	switch cid.DriveType() {
 	case driveTypePersonal:
-		return personalSyncDir(existingDirs)
+		return "~/OneDrive"
 	case driveTypeBusiness:
-		return businessSyncDir(orgName)
+		if orgName != "" {
+			return "~/OneDrive - " + SanitizePathComponent(orgName)
+		}
+
+		return "~/OneDrive - Business"
+	case driveTypeSharePoint:
+		site, lib := cid.Site(), cid.Library()
+		if site != "" && lib != "" {
+			return fmt.Sprintf("~/SharePoint - %s - %s",
+				SanitizePathComponent(site), SanitizePathComponent(lib))
+		}
+
+		return "~/SharePoint"
 	default:
-		// SharePoint and unknown types are not yet implemented.
 		return ""
 	}
 }
 
-// personalSyncDir returns ~/OneDrive unless it collides with an existing
-// sync directory, in which case it falls back to ~/OneDrive - Personal.
-func personalSyncDir(existingDirs []string) string {
-	primary := "~/OneDrive"
+// containsExpanded compares with tilde expansion so
+// "~/OneDrive" matches "/home/user/OneDrive".
+func containsExpanded(dirs []string, candidate string) bool {
+	expanded := expandTilde(candidate)
 
-	for _, dir := range existingDirs {
-		if dir == primary {
-			return "~/OneDrive - Personal"
+	for _, d := range dirs {
+		if expandTilde(d) == expanded {
+			return true
 		}
 	}
 
-	return primary
+	return false
 }
 
-// businessSyncDir returns ~/OneDrive - {OrgName} for business drives.
-func businessSyncDir(orgName string) string {
-	if orgName == "" {
-		return "~/OneDrive - Business"
+// SanitizePathComponent replaces filesystem-unsafe characters with "-".
+// Exported for use by callers that build path components from user data.
+func SanitizePathComponent(s string) string {
+	// Replace: / \ : < > " | ? *
+	replacer := strings.NewReplacer(
+		"/", "-",
+		"\\", "-",
+		":", "-",
+		"<", "-",
+		">", "-",
+		"\"", "-",
+		"|", "-",
+		"?", "-",
+		"*", "-",
+	)
+
+	result := replacer.Replace(s)
+
+	// Collapse consecutive dashes.
+	for strings.Contains(result, "--") {
+		result = strings.ReplaceAll(result, "--", "-")
 	}
 
-	return fmt.Sprintf("~/OneDrive - %s", orgName)
+	return strings.Trim(result, "- ")
 }
 
 // findSectionHeader locates the line index of a drive section header.

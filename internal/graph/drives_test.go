@@ -361,6 +361,165 @@ func TestDrives_Unauthorized(t *testing.T) {
 	assert.ErrorIs(t, err, ErrUnauthorized)
 }
 
+// --- SearchSites tests ---
+
+func TestSearchSites_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Contains(t, r.URL.RawQuery, "search=marketing")
+		assert.Contains(t, r.URL.RawQuery, "$top=10")
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{
+			"value": [
+				{
+					"id": "site-abc-123",
+					"displayName": "Marketing Team",
+					"name": "marketing",
+					"webUrl": "https://contoso.sharepoint.com/sites/marketing"
+				},
+				{
+					"id": "site-def-456",
+					"displayName": "Marketing Archive",
+					"name": "marketing-archive",
+					"webUrl": "https://contoso.sharepoint.com/sites/marketing-archive"
+				}
+			]
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	sites, err := client.SearchSites(context.Background(), "marketing", 10)
+	require.NoError(t, err)
+
+	require.Len(t, sites, 2)
+	assert.Equal(t, "site-abc-123", sites[0].ID)
+	assert.Equal(t, "Marketing Team", sites[0].DisplayName)
+	assert.Equal(t, "marketing", sites[0].Name)
+	assert.Equal(t, "https://contoso.sharepoint.com/sites/marketing", sites[0].WebURL)
+
+	assert.Equal(t, "site-def-456", sites[1].ID)
+	assert.Equal(t, "Marketing Archive", sites[1].DisplayName)
+}
+
+func TestSearchSites_Empty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"value": []}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	sites, err := client.SearchSites(context.Background(), "nonexistent", 10)
+	require.NoError(t, err)
+	assert.Empty(t, sites)
+}
+
+func TestSearchSites_Error(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("request-id", "req-sites-401")
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `{"error":{"code":"InvalidAuthenticationToken"}}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.SearchSites(context.Background(), "test", 10)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrUnauthorized)
+}
+
+// --- SiteDrives tests ---
+
+func TestSiteDrives_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Contains(t, r.URL.Path, "/sites/site-abc-123/drives")
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{
+			"value": [
+				{
+					"id": "lib-1",
+					"name": "Documents",
+					"driveType": "documentLibrary",
+					"quota": {
+						"used": 524288,
+						"total": 1099511627776
+					}
+				},
+				{
+					"id": "lib-2",
+					"name": "Shared Documents",
+					"driveType": "documentLibrary"
+				}
+			]
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	drives, err := client.SiteDrives(context.Background(), "site-abc-123")
+	require.NoError(t, err)
+
+	require.Len(t, drives, 2)
+	assert.Equal(t, driveid.New("lib-1"), drives[0].ID)
+	assert.Equal(t, "Documents", drives[0].Name)
+	assert.Equal(t, "documentLibrary", drives[0].DriveType)
+	assert.Equal(t, int64(524288), drives[0].QuotaUsed)
+
+	assert.Equal(t, driveid.New("lib-2"), drives[1].ID)
+	assert.Equal(t, "Shared Documents", drives[1].Name)
+}
+
+func TestSiteDrives_Empty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"value": []}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	drives, err := client.SiteDrives(context.Background(), "site-empty")
+	require.NoError(t, err)
+	assert.Empty(t, drives)
+}
+
+func TestSiteDrives_Error(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("request-id", "req-sitedrives-403")
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, `{"error":{"code":"accessDenied"}}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.SiteDrives(context.Background(), "site-forbidden")
+	require.Error(t, err)
+}
+
+// --- toSite tests ---
+
+func TestToSite_AllFields(t *testing.T) {
+	sr := &siteResponse{
+		ID:          "site-1",
+		DisplayName: "Marketing",
+		Name:        "marketing",
+		WebURL:      "https://contoso.sharepoint.com/sites/marketing",
+	}
+
+	site := sr.toSite()
+	assert.Equal(t, "site-1", site.ID)
+	assert.Equal(t, "Marketing", site.DisplayName)
+	assert.Equal(t, "marketing", site.Name)
+	assert.Equal(t, "https://contoso.sharepoint.com/sites/marketing", site.WebURL)
+}
+
 func TestToDrive_NilQuota(t *testing.T) {
 	dr := &driveResponse{
 		ID:        "d2",

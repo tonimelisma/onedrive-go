@@ -163,7 +163,7 @@ echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r 
                      └────────────────┘
 ```
 
-**Dependency direction**: `cmd/` -> `internal/*` -> `pkg/*`. No cycles. `internal/driveid/` is a leaf package (stdlib only). `internal/graph/` does NOT import `internal/config/` — callers pass token paths directly. See [docs/design/architecture.md](docs/design/architecture.md).
+**Dependency direction**: `cmd/` -> `internal/*` -> `pkg/*`. No cycles. `internal/driveid/` is a leaf package (stdlib only). `internal/config/` imports `internal/graph/` for `LoadTokenMeta()` (unidirectional, no cycle). See [docs/design/architecture.md](docs/design/architecture.md).
 
 ## Package Layout
 
@@ -172,7 +172,7 @@ echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r 
 - **`internal/config/`** — TOML config, drive sections, XDG paths, four-layer override chain
 - **`internal/graph/`** — Graph API client: auth, retry, items CRUD, delta, transfers
 - **`internal/sync/`** — Event-driven sync: types, baseline, observers, buffer, planner, executor, tracker, workers, session_store, engine, verify
-- **Root package** — Cobra CLI: login, logout, whoami, status, drive, ls, get, put, rm, mkdir, stat, sync, conflicts, resolve, verify
+- **Root package** — Cobra CLI: login, logout, whoami, status, drive (list/add/remove/search), ls, get, put, rm, mkdir, stat, sync, conflicts, resolve, verify
 - **`e2e/`** — E2E test suite against live OneDrive
 
 ## Documentation Index

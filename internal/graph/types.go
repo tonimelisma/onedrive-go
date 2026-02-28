@@ -58,6 +58,14 @@ type Drive struct {
 	QuotaTotal int64
 }
 
+// Site represents a SharePoint site.
+type Site struct {
+	ID          string
+	DisplayName string
+	Name        string // URL slug (used in canonical ID construction)
+	WebURL      string
+}
+
 // Organization represents a user's organizational membership.
 // Personal accounts have no organization; DisplayName is empty.
 type Organization struct {

@@ -64,13 +64,35 @@ jobs:
               --encoding utf-8
 
             # Validate token structure
-            if ! jq -e '.refresh_token' "$token_path" > /dev/null 2>&1; then
-              echo "::error::Token for drive '${drive}' is missing refresh_token field"
+            if ! jq -e '.token.refresh_token' "$token_path" > /dev/null 2>&1; then
+              echo "::error::Token for drive '${drive}' is missing .token.refresh_token (re-login required for new token format)"
               exit 1
             fi
 
             echo "Token loaded for drive: ${drive} -> ${token_path}"
           done
+
+      - name: Create config file for test drives
+        run: |
+          set -euo pipefail
+          IFS=',' read -ra DRIVES <<< "$ONEDRIVE_TEST_DRIVES"
+          CONFIG_DIR="$HOME/.config/onedrive-go"
+          mkdir -p "$CONFIG_DIR"
+          CONFIG_PATH="${CONFIG_DIR}/config.toml"
+
+          # Write minimal config with a section for each drive.
+          # sync_dir is computed at runtime from canonical ID + token metadata.
+          echo "# CI-generated config for integration tests" > "$CONFIG_PATH"
+          for drive in "${DRIVES[@]}"; do
+            drive=$(echo "$drive" | xargs)
+            echo "" >> "$CONFIG_PATH"
+            echo "[\"${drive}\"]" >> "$CONFIG_PATH"
+          done
+
+          echo "Config written: ${CONFIG_PATH}"
+          cat "$CONFIG_PATH"
+        env:
+          ONEDRIVE_TEST_DRIVES: ${{ vars.ONEDRIVE_TEST_DRIVES }}
 
       - name: Run integration tests
         run: |
@@ -139,8 +161,8 @@ jobs:
             fi
 
             # Reject corrupted files before overwriting Key Vault
-            if ! jq -e '.refresh_token' "$token_path" > /dev/null 2>&1; then
-              echo "::warning::Token for drive '${drive}' has no refresh_token — skipping save"
+            if ! jq -e '.token.refresh_token' "$token_path" > /dev/null 2>&1; then
+              echo "::warning::Token for drive '${drive}' has no .token.refresh_token — skipping save"
               continue
             fi
 

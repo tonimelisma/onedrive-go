@@ -11,6 +11,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 func TestUniqueAccounts(t *testing.T) {
@@ -142,6 +143,132 @@ func TestFindTokenFallback_BusinessExists(t *testing.T) {
 
 	got := findTokenFallback("test-fallback-biz@example.com", slog.Default())
 	assert.Equal(t, businessID, got)
+}
+
+// --- driveExistsInConfig ---
+
+func TestDriveExistsInConfig_Found(t *testing.T) {
+	cfgPath := writeTestAuthConfig(t, `
+["personal:user@example.com"]
+sync_dir = "~/OneDrive"
+`)
+
+	exists, err := driveExistsInConfig(cfgPath, driveid.MustCanonicalID("personal:user@example.com"))
+	require.NoError(t, err)
+	assert.True(t, exists)
+}
+
+func TestDriveExistsInConfig_NotFound(t *testing.T) {
+	cfgPath := writeTestAuthConfig(t, `
+["personal:user@example.com"]
+sync_dir = "~/OneDrive"
+`)
+
+	exists, err := driveExistsInConfig(cfgPath, driveid.MustCanonicalID("business:other@contoso.com"))
+	require.NoError(t, err)
+	assert.False(t, exists)
+}
+
+func TestDriveExistsInConfig_NoConfig(t *testing.T) {
+	// Non-existent config should not error — LoadOrDefault returns default.
+	cfgPath := filepath.Join(t.TempDir(), "nonexistent.toml")
+
+	exists, err := driveExistsInConfig(cfgPath, driveid.MustCanonicalID("personal:user@example.com"))
+	require.NoError(t, err)
+	assert.False(t, exists)
+}
+
+// --- collectExistingSyncDirs ---
+
+func TestCollectExistingSyncDirs_ReturnsConfiguredDirs(t *testing.T) {
+	cfgPath := writeTestAuthConfig(t, `
+["personal:user@example.com"]
+sync_dir = "~/OneDrive"
+
+["business:alice@contoso.com"]
+sync_dir = "~/Work"
+`)
+
+	dirs := collectExistingSyncDirs(cfgPath, slog.Default())
+	assert.Len(t, dirs, 2)
+	assert.Contains(t, dirs, "~/OneDrive")
+	assert.Contains(t, dirs, "~/Work")
+}
+
+func TestCollectExistingSyncDirs_SkipsEmptySyncDir(t *testing.T) {
+	cfgPath := writeTestAuthConfig(t, `
+["personal:user@example.com"]
+sync_dir = "~/OneDrive"
+
+["business:alice@contoso.com"]
+`)
+
+	dirs := collectExistingSyncDirs(cfgPath, slog.Default())
+	assert.Equal(t, []string{"~/OneDrive"}, dirs)
+}
+
+func TestCollectExistingSyncDirs_NoConfig(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "nonexistent.toml")
+
+	dirs := collectExistingSyncDirs(cfgPath, slog.Default())
+	assert.Empty(t, dirs)
+}
+
+func TestCollectExistingSyncDirs_InvalidConfig(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "bad.toml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte("invalid[toml"), 0o600))
+
+	dirs := collectExistingSyncDirs(cfgPath, slog.Default())
+	// Should return nil on error (logged but not fatal).
+	assert.Nil(t, dirs)
+}
+
+// --- writeLoginConfig ---
+
+func TestWriteLoginConfig_CreatesNewFile(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+	user := &graph.User{DisplayName: "Test User"}
+
+	err := writeLoginConfig(cfgPath, cid, user, "", slog.Default())
+	require.NoError(t, err)
+
+	// Verify the config file was created.
+	data, readErr := os.ReadFile(cfgPath)
+	require.NoError(t, readErr)
+	assert.Contains(t, string(data), "personal:user@example.com")
+	assert.Contains(t, string(data), "sync_dir")
+}
+
+func TestWriteLoginConfig_AppendsToExisting(t *testing.T) {
+	cfgPath := writeTestAuthConfig(t, `
+["personal:existing@example.com"]
+sync_dir = "~/OneDrive"
+`)
+
+	cid := driveid.MustCanonicalID("business:new@contoso.com")
+	user := &graph.User{DisplayName: "New User"}
+
+	err := writeLoginConfig(cfgPath, cid, user, "Contoso", slog.Default())
+	require.NoError(t, err)
+
+	// Verify both drives exist.
+	data, readErr := os.ReadFile(cfgPath)
+	require.NoError(t, readErr)
+	assert.Contains(t, string(data), "personal:existing@example.com")
+	assert.Contains(t, string(data), "business:new@contoso.com")
+}
+
+// --- test helpers ---
+
+func writeTestAuthConfig(t *testing.T, content string) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o600))
+
+	return cfgPath
 }
 
 func TestPrintLoginSuccess_DoesNotPanic(t *testing.T) {

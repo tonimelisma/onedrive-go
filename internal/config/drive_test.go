@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -19,7 +20,7 @@ func TestMatchDrive_SingleDrive_AutoSelect(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive"}
 
-	id, d, err := matchDrive(cfg, "", testLogger(t))
+	id, d, err := MatchDrive(cfg, "", testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, driveid.MustCanonicalID("personal:toni@outlook.com"), id)
 	assert.Equal(t, "~/OneDrive", d.SyncDir)
@@ -30,7 +31,7 @@ func TestMatchDrive_MultipleDrives_NoSelector_Error(t *testing.T) {
 	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive"}
 	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{SyncDir: "~/Work"}
 
-	_, _, err := matchDrive(cfg, "", testLogger(t))
+	_, _, err := MatchDrive(cfg, "", testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "multiple drives")
 }
@@ -41,7 +42,7 @@ func TestMatchDrive_NoDrives_NoSelector_NoTokens(t *testing.T) {
 
 	cfg := DefaultConfig()
 
-	_, _, err := matchDrive(cfg, "", testLogger(t))
+	_, _, err := MatchDrive(cfg, "", testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no accounts")
 }
@@ -52,19 +53,21 @@ func TestMatchDrive_NoDrives_CanonicalSelector(t *testing.T) {
 	// This supports zero-config CLI usage (e.g., --drive personal:user@example.com).
 	cfg := DefaultConfig()
 
-	id, _, err := matchDrive(cfg, "personal:toni@outlook.com", testLogger(t))
+	id, _, err := MatchDrive(cfg, "personal:toni@outlook.com", testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, driveid.MustCanonicalID("personal:toni@outlook.com"), id)
 }
 
 func TestMatchDrive_NoDrives_NonCanonicalSelector_Error(t *testing.T) {
-	// A non-canonical selector (no ":") with no drives can't match anything —
-	// token discovery only applies when no selector is given.
+	// A non-canonical selector (no ":") with no drives can't match anything.
+	// Override HOME to ensure no tokens on disk.
+	t.Setenv("HOME", t.TempDir())
+
 	cfg := DefaultConfig()
 
-	_, _, err := matchDrive(cfg, "home", testLogger(t))
+	_, _, err := MatchDrive(cfg, "home", testLogger(t))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no drives configured")
+	assert.Contains(t, err.Error(), "login")
 }
 
 func TestMatchDrive_ExactCanonicalID(t *testing.T) {
@@ -72,7 +75,7 @@ func TestMatchDrive_ExactCanonicalID(t *testing.T) {
 	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive"}
 	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{SyncDir: "~/Work"}
 
-	id, _, err := matchDrive(cfg, "personal:toni@outlook.com", testLogger(t))
+	id, _, err := MatchDrive(cfg, "personal:toni@outlook.com", testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, driveid.MustCanonicalID("personal:toni@outlook.com"), id)
 }
@@ -82,7 +85,7 @@ func TestMatchDrive_AliasMatch(t *testing.T) {
 	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive", Alias: "home"}
 	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{SyncDir: "~/Work", Alias: "work"}
 
-	id, _, err := matchDrive(cfg, "work", testLogger(t))
+	id, _, err := MatchDrive(cfg, "work", testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, driveid.MustCanonicalID("business:alice@contoso.com"), id)
 }
@@ -92,7 +95,7 @@ func TestMatchDrive_PartialMatch(t *testing.T) {
 	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive"}
 	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{SyncDir: "~/Work"}
 
-	id, _, err := matchDrive(cfg, "toni", testLogger(t))
+	id, _, err := MatchDrive(cfg, "toni", testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, driveid.MustCanonicalID("personal:toni@outlook.com"), id)
 }
@@ -102,7 +105,7 @@ func TestMatchDrive_AmbiguousPartialMatch_Error(t *testing.T) {
 	cfg.Drives[driveid.MustCanonicalID("personal:user@example.com")] = Drive{SyncDir: "~/OneDrive"}
 	cfg.Drives[driveid.MustCanonicalID("business:user@example.com")] = Drive{SyncDir: "~/Work"}
 
-	_, _, err := matchDrive(cfg, "user@example.com", testLogger(t))
+	_, _, err := MatchDrive(cfg, "user@example.com", testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ambiguous")
 }
@@ -111,7 +114,7 @@ func TestMatchDrive_NoMatch_Error(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive"}
 
-	_, _, err := matchDrive(cfg, "nonexistent", testLogger(t))
+	_, _, err := MatchDrive(cfg, "nonexistent", testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no drive matching")
 }
@@ -228,6 +231,52 @@ func TestBuildResolvedDrive_AliasAndDriveID(t *testing.T) {
 	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("personal:toni@outlook.com"), drive, testLogger(t))
 	assert.Equal(t, "home", resolved.Alias)
 	assert.Equal(t, driveid.New("abc123"), resolved.DriveID)
+}
+
+func TestBuildResolvedDrive_DefaultSyncDir_Personal(t *testing.T) {
+	cfg := DefaultConfig()
+	drive := &Drive{} // no sync_dir
+
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("personal:user@example.com"), drive, testLogger(t))
+	assert.Equal(t, filepath.Join(home, "OneDrive"), resolved.SyncDir)
+}
+
+func TestBuildResolvedDrive_DefaultSyncDir_Business(t *testing.T) {
+	cfg := DefaultConfig()
+	drive := &Drive{} // no sync_dir
+
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("business:alice@contoso.com"), drive, testLogger(t))
+	// orgName is unavailable at runtime, so defaults to "Business".
+	assert.Equal(t, filepath.Join(home, "OneDrive - Business"), resolved.SyncDir)
+}
+
+func TestBuildResolvedDrive_DefaultSyncDir_SharePoint(t *testing.T) {
+	cfg := DefaultConfig()
+	drive := &Drive{} // no sync_dir
+
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("sharepoint:alice@contoso.com:marketing:Documents"), drive, testLogger(t))
+	assert.Equal(t, filepath.Join(home, "SharePoint - marketing - Documents"), resolved.SyncDir)
+}
+
+func TestBuildResolvedDrive_ExplicitSyncDir_NotOverridden(t *testing.T) {
+	cfg := DefaultConfig()
+	drive := &Drive{SyncDir: "~/CustomDir"}
+
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("personal:user@example.com"), drive, testLogger(t))
+	// Explicit sync_dir should NOT be overridden by the default.
+	assert.Equal(t, filepath.Join(home, "CustomDir"), resolved.SyncDir)
 }
 
 // --- expandTilde ---
@@ -524,31 +573,119 @@ func TestDiscoverTokensIn_IgnoresDirectories(t *testing.T) {
 	assert.Equal(t, driveid.MustCanonicalID("personal:user@example.com"), ids[0])
 }
 
-// --- matchDrive with token discovery ---
+// --- MatchDrive smart error messages ---
 
-func TestMatchDrive_NoDrives_NoSelector_OneToken(t *testing.T) {
+func TestMatchDrive_NoDrives_NoSelector_TokensExist_SuggestsDriveAdd(t *testing.T) {
 	dataDir := setTestDataDir(t)
 	writeTokenFile(t, dataDir, "token_personal_user@example.com.json")
 
 	cfg := DefaultConfig()
 
-	id, _, err := matchDrive(cfg, "", testLogger(t))
-	require.NoError(t, err)
-	assert.Equal(t, driveid.MustCanonicalID("personal:user@example.com"), id)
+	_, _, err := MatchDrive(cfg, "", testLogger(t))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "drive add")
 }
 
-func TestMatchDrive_NoDrives_NoSelector_MultipleTokens(t *testing.T) {
-	dataDir := setTestDataDir(t)
-	writeTokenFile(t, dataDir, "token_personal_user@example.com.json")
-	writeTokenFile(t, dataDir, "token_business_alice@contoso.com.json")
+func TestMatchDrive_NoDrives_NoSelector_NoTokens_SuggestsLogin(t *testing.T) {
+	// Override HOME so DiscoverTokens finds no real tokens on disk.
+	setTestDataDir(t) // creates empty data dir
 
 	cfg := DefaultConfig()
 
-	_, _, err := matchDrive(cfg, "", testLogger(t))
+	_, _, err := MatchDrive(cfg, "", testLogger(t))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "multiple accounts found")
-	assert.Contains(t, err.Error(), "personal:user@example.com")
-	assert.Contains(t, err.Error(), "business:alice@contoso.com")
+	assert.Contains(t, err.Error(), "login")
+}
+
+// --- collectOtherSyncDirs ---
+
+func TestCollectOtherSyncDirs_Empty(t *testing.T) {
+	cfg := DefaultConfig()
+	dirs := collectOtherSyncDirs(cfg, driveid.MustCanonicalID("personal:a@b.com"), testLogger(t))
+	assert.Empty(t, dirs)
+}
+
+func TestCollectOtherSyncDirs_ExcludesSelf(t *testing.T) {
+	cfg := DefaultConfig()
+	selfID := driveid.MustCanonicalID("personal:self@example.com")
+	cfg.Drives[selfID] = Drive{SyncDir: "~/OneDrive"}
+	cfg.Drives[driveid.MustCanonicalID("business:other@contoso.com")] = Drive{SyncDir: "~/Work"}
+
+	dirs := collectOtherSyncDirs(cfg, selfID, testLogger(t))
+	assert.Equal(t, []string{"~/Work"}, dirs)
+}
+
+func TestCollectOtherSyncDirs_ComputesBaseForEmptySyncDir(t *testing.T) {
+	setTestDataDir(t) // isolated HOME
+
+	cfg := DefaultConfig()
+	selfID := driveid.MustCanonicalID("personal:self@example.com")
+	cfg.Drives[selfID] = Drive{SyncDir: "~/OneDrive"}
+	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{} // no sync_dir
+
+	dirs := collectOtherSyncDirs(cfg, selfID, testLogger(t))
+	// Without token meta, business defaults to "~/OneDrive - Business" via BaseSyncDir.
+	assert.Contains(t, dirs, "~/OneDrive - Business")
+}
+
+func TestCollectOtherSyncDirs_WithTokenMeta(t *testing.T) {
+	dataDir := setTestDataDir(t)
+
+	// Create a token file with org_name metadata.
+	writeTokenFileWithMeta(t, dataDir, "token_business_alice@contoso.com.json", map[string]string{
+		"org_name": "Contoso Ltd",
+	})
+
+	cfg := DefaultConfig()
+	selfID := driveid.MustCanonicalID("personal:self@example.com")
+	cfg.Drives[selfID] = Drive{SyncDir: "~/OneDrive"}
+	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{} // no sync_dir
+
+	dirs := collectOtherSyncDirs(cfg, selfID, testLogger(t))
+	// With org_name from token meta, business resolves to "~/OneDrive - Contoso Ltd".
+	assert.Contains(t, dirs, "~/OneDrive - Contoso Ltd")
+}
+
+func TestCollectOtherSyncDirs_SkipsEmptyBaseName(t *testing.T) {
+	setTestDataDir(t)
+
+	cfg := DefaultConfig()
+	selfID := driveid.MustCanonicalID("personal:self@example.com")
+	cfg.Drives[selfID] = Drive{SyncDir: "~/OneDrive"}
+
+	dirs := collectOtherSyncDirs(cfg, selfID, testLogger(t))
+	assert.Empty(t, dirs)
+}
+
+// --- readTokenMetaForSyncDir ---
+
+func TestReadTokenMetaForSyncDir_NoToken(t *testing.T) {
+	setTestDataDir(t)
+
+	cid := driveid.MustCanonicalID("personal:nobody@example.com")
+	orgName, displayName := readTokenMetaForSyncDir(cid, testLogger(t))
+	assert.Empty(t, orgName)
+	assert.Empty(t, displayName)
+}
+
+func TestReadTokenMetaForSyncDir_WithMeta(t *testing.T) {
+	dataDir := setTestDataDir(t)
+
+	writeTokenFileWithMeta(t, dataDir, "token_personal_user@example.com.json", map[string]string{
+		"org_name":     "TestOrg",
+		"display_name": "Test User",
+	})
+
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+	orgName, displayName := readTokenMetaForSyncDir(cid, testLogger(t))
+	assert.Equal(t, "TestOrg", orgName)
+	assert.Equal(t, "Test User", displayName)
+}
+
+func TestReadTokenMetaForSyncDir_ZeroID(t *testing.T) {
+	orgName, displayName := readTokenMetaForSyncDir(driveid.CanonicalID{}, testLogger(t))
+	assert.Empty(t, orgName)
+	assert.Empty(t, displayName)
 }
 
 // --- test helpers ---
@@ -559,6 +696,24 @@ func writeTokenFile(t *testing.T, dir, name string) {
 
 	err := os.WriteFile(filepath.Join(dir, name), []byte("{}"), 0o600)
 	require.NoError(t, err)
+}
+
+// writeTokenFileWithMeta creates a properly formatted token file with metadata.
+func writeTokenFileWithMeta(t *testing.T, dir, name string, meta map[string]string) {
+	t.Helper()
+
+	tf := map[string]any{
+		"token": map[string]string{
+			"access_token":  "test-access-token",
+			"refresh_token": "test-refresh-token",
+			"token_type":    "Bearer",
+		},
+		"meta": meta,
+	}
+
+	data, err := json.Marshal(tf)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), data, 0o600))
 }
 
 // setTestDataDir overrides HOME so DefaultDataDir() returns a temp directory,
