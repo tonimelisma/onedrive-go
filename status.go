@@ -58,6 +58,7 @@ type statusAccount struct {
 // statusDrive holds status information for a single drive.
 type statusDrive struct {
 	CanonicalID string `json:"canonical_id"`
+	DisplayName string `json:"display_name,omitempty"`
 	SyncDir     string `json:"sync_dir"`
 	State       string `json:"state"`
 }
@@ -172,8 +173,15 @@ func buildSingleAccountStatus(
 			state = driveStateNeedsSetup
 		}
 
+		// Use explicit display_name from config, falling back to auto-derived.
+		driveDisplayName := d.DisplayName
+		if driveDisplayName == "" {
+			driveDisplayName = config.DefaultDisplayName(cid)
+		}
+
 		acct.Drives = append(acct.Drives, statusDrive{
 			CanonicalID: cid.String(),
+			DisplayName: driveDisplayName,
 			SyncDir:     syncDir,
 			State:       state,
 		})
@@ -282,7 +290,12 @@ func printStatusText(accounts []statusAccount) {
 				syncDir = syncDirNotSet
 			}
 
-			fmt.Printf("  %-35s %-25s %s\n", d.CanonicalID, syncDir, d.State)
+			driveLabel := d.CanonicalID
+			if d.DisplayName != "" && d.DisplayName != d.CanonicalID {
+				driveLabel = fmt.Sprintf("%s (%s)", d.DisplayName, d.CanonicalID)
+			}
+
+			fmt.Printf("  %-50s %-25s %s\n", driveLabel, syncDir, d.State)
 		}
 	}
 }

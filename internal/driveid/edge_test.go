@@ -167,23 +167,6 @@ func TestItemKey_DifferentItemIDNotEqual(t *testing.T) {
 	assert.NotEqual(t, key1, key2)
 }
 
-// TestCanonicalID_SharePointTokenMapping validates that SharePoint
-// canonical IDs map to business for token lookup.
-func TestCanonicalID_SharePointTokenMapping(t *testing.T) {
-	sp := MustCanonicalID("sharepoint:alice@contoso.com:marketing:Docs")
-	assert.True(t, sp.IsSharePoint())
-	assert.Equal(t, "alice@contoso.com", sp.Email())
-
-	tokenID := sp.TokenCanonicalID()
-	assert.Equal(t, "business", tokenID.DriveType())
-	assert.Equal(t, "alice@contoso.com", tokenID.Email())
-	assert.False(t, tokenID.IsSharePoint())
-}
-
-// TestCanonicalID_PersonalTokenMapping verifies that personal drives
-// return themselves as the token canonical ID.
-func TestCanonicalID_PersonalTokenMapping(t *testing.T) {
-	personal := MustCanonicalID("personal:user@example.com")
-	tokenID := personal.TokenCanonicalID()
-	assert.Equal(t, personal, tokenID)
-}
+// TokenCanonicalID() was removed from CanonicalID (B-273).
+// Token resolution now lives in config.TokenCanonicalID(cid, cfg).
+// See internal/config/token_resolution_test.go for SharePoint and personal mapping coverage.

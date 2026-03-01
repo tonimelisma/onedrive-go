@@ -130,6 +130,8 @@ func (tm *TransferManager) DownloadToFile(
 	// If the first attempt was a resume, the resume bytes are wasted — this is
 	// acceptable because hash mismatches are rare and correctness trumps
 	// bandwidth savings.
+	// Go 1.22 range-over-int: `range N` iterates 0..N-1, so `range maxRetries+1`
+	// gives exactly maxRetries+1 iterations (1 initial + maxRetries retries) (B-221).
 	for attempt := range maxRetries + 1 {
 		var err error
 
@@ -186,7 +188,9 @@ func (tm *TransferManager) DownloadToFile(
 		}
 	}
 
-	// Atomic rename: .partial -> target.
+	// Atomic rename: .partial -> target. On failure the .partial file is
+	// intentionally preserved so the next attempt can resume from it rather
+	// than re-downloading the entire file (B-207).
 	if err := os.Rename(partialPath, targetPath); err != nil {
 		return nil, fmt.Errorf("renaming partial to %s: %w", targetPath, err)
 	}
@@ -207,13 +211,27 @@ func (tm *TransferManager) DownloadToFile(
 // downloadToPartial streams a remote file to a .partial file while computing
 // the QuickXorHash. If a .partial file already exists and the downloader
 // supports range requests, it resumes from the existing file.
+//
+// The .partial file is opened before stat to avoid a TOCTOU race where the
+// file could be deleted between stat and open (B-211). If open fails with
+// ErrNotExist, we fall through to a fresh download.
 func (tm *TransferManager) downloadToPartial(
 	ctx context.Context, driveID driveid.ID, itemID, partialPath string,
 ) (string, int64, error) {
-	// Check for existing .partial file and attempt resume.
+	// Attempt resume: open existing .partial, then stat the handle.
 	if rd, ok := tm.downloads.(RangeDownloader); ok {
-		if info, statErr := os.Stat(partialPath); statErr == nil && info.Size() > 0 {
-			return tm.resumeDownload(ctx, driveID, itemID, rd, partialPath, info.Size())
+		f, openErr := os.OpenFile(partialPath, os.O_APPEND|os.O_WRONLY, 0o600) //nolint:mnd // owner-only
+		if openErr == nil {
+			info, statErr := f.Stat()
+			if statErr != nil || info.Size() == 0 {
+				// Empty or unreadable — close and start fresh.
+				f.Close()
+			} else {
+				return tm.resumeDownloadFromFile(ctx, driveID, itemID, rd, f, partialPath, info.Size())
+			}
+		} else if !errors.Is(openErr, os.ErrNotExist) {
+			tm.logger.Warn("cannot open partial file for resume, starting fresh",
+				slog.String("path", partialPath), slog.String("error", openErr.Error()))
 		}
 	}
 
@@ -265,26 +283,17 @@ func (tm *TransferManager) freshDownload(
 	return localHash, size, nil
 }
 
-// resumeDownload appends bytes to an existing .partial file using Range
-// requests, then hashes the complete file from byte 0.
-func (tm *TransferManager) resumeDownload(
+// resumeDownloadFromFile appends bytes to an already-open .partial file using
+// Range requests, then hashes the complete file from byte 0. The caller opens
+// the file and passes it to avoid a TOCTOU race (B-211).
+func (tm *TransferManager) resumeDownloadFromFile(
 	ctx context.Context, driveID driveid.ID, itemID string,
-	rd RangeDownloader, partialPath string, existingSize int64,
+	rd RangeDownloader, f *os.File, partialPath string, existingSize int64,
 ) (string, int64, error) {
 	tm.logger.Debug("resuming download from partial file",
 		slog.String("path", partialPath),
 		slog.Int64("existing_bytes", existingSize),
 	)
-
-	f, err := os.OpenFile(partialPath, os.O_APPEND|os.O_WRONLY, 0o600) //nolint:mnd // owner-only
-	if err != nil {
-		tm.logger.Warn("cannot open partial file for resume, starting fresh",
-			slog.String("path", partialPath), slog.String("error", err.Error()))
-
-		removePartialIfNotCanceled(ctx, partialPath)
-
-		return tm.freshDownload(ctx, driveID, itemID, partialPath)
-	}
 
 	n, err := rd.DownloadRange(ctx, driveID, itemID, f, existingSize)
 
@@ -403,7 +412,8 @@ func (tm *TransferManager) UploadFile(
 		return nil, fmt.Errorf("upload of %s returned nil item", localPath)
 	}
 
-	// Post-upload hash verification.
+	// Post-upload hash verification. selectHash is defined in
+	// observer_remote.go — it picks QuickXorHash > SHA256Hash (B-222).
 	remoteHash := selectHash(item)
 	if remoteHash != "" && localHash != remoteHash {
 		tm.logger.Warn("upload hash mismatch",

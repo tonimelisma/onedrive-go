@@ -288,7 +288,7 @@ func (e *Engine) executePlan(
 	// Guard: changes existed but all classified to no-op actions, producing
 	// an empty plan. Commit the delta token and return — no work to do.
 	if len(plan.Actions) == 0 {
-		if commitErr := e.baseline.CommitDeltaToken(ctx, deltaToken, e.driveID.String()); commitErr != nil {
+		if commitErr := e.baseline.CommitDeltaToken(ctx, deltaToken, e.driveID.String(), "", e.driveID.String()); commitErr != nil {
 			e.logger.Error("failed to commit delta token", slog.String("error", commitErr.Error()))
 		}
 
@@ -334,7 +334,7 @@ func (e *Engine) executePlan(
 	// action failed, the token stays at the previous value so the next sync
 	// re-observes the items that failed.
 	if report.Failed == 0 {
-		if commitErr := e.baseline.CommitDeltaToken(ctx, deltaToken, e.driveID.String()); commitErr != nil {
+		if commitErr := e.baseline.CommitDeltaToken(ctx, deltaToken, e.driveID.String(), "", e.driveID.String()); commitErr != nil {
 			e.logger.Error("failed to commit delta token", slog.String("error", commitErr.Error()))
 		}
 	} else {
@@ -364,7 +364,7 @@ func buildReportFromCounts(counts map[ActionType]int, mode SyncMode, opts RunOpt
 // observeRemote fetches delta changes from the Graph API. Automatically
 // retries with an empty token if ErrDeltaExpired is returned (full resync).
 func (e *Engine) observeRemote(ctx context.Context, bl *Baseline) ([]ChangeEvent, string, error) {
-	savedToken, err := e.baseline.GetDeltaToken(ctx, e.driveID.String())
+	savedToken, err := e.baseline.GetDeltaToken(ctx, e.driveID.String(), "")
 	if err != nil {
 		return nil, "", fmt.Errorf("sync: getting delta token: %w", err)
 	}
@@ -699,7 +699,7 @@ func (e *Engine) startObservers(
 		remoteObs := NewRemoteObserver(e.fetcher, bl, e.driveID, e.logger)
 		e.remoteObs = remoteObs
 
-		savedToken, tokenErr := e.baseline.GetDeltaToken(ctx, e.driveID.String())
+		savedToken, tokenErr := e.baseline.GetDeltaToken(ctx, e.driveID.String(), "")
 		if tokenErr != nil {
 			e.logger.Warn("failed to get delta token for watch",
 				slog.String("error", tokenErr.Error()),
@@ -888,7 +888,7 @@ func (e *Engine) watchCycleCompletion(ctx context.Context, tracker *DepTracker, 
 	// avoids re-processing changes that arrived while this cycle executed.
 	if e.remoteObs != nil {
 		token := e.remoteObs.CurrentDeltaToken()
-		if commitErr := e.baseline.CommitDeltaToken(ctx, token, e.driveID.String()); commitErr != nil {
+		if commitErr := e.baseline.CommitDeltaToken(ctx, token, e.driveID.String(), "", e.driveID.String()); commitErr != nil {
 			e.logger.Error("failed to commit delta token for watch cycle",
 				slog.String("cycle_id", cycleID),
 				slog.String("error", commitErr.Error()),

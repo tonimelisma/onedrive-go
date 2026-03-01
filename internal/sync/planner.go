@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/google/uuid"
@@ -70,9 +71,17 @@ func (p *Planner) Plan(
 	// Step 1: detect and extract moves before per-path classification.
 	allActions = append(allActions, detectMoves(views, changes)...)
 
-	// Step 2: classify each remaining path.
-	for _, view := range views {
-		allActions = append(allActions, classifyPathView(view, mode)...)
+	// Step 2: classify each remaining path. Sort keys for deterministic
+	// action order across runs with identical input (B-154).
+	sortedPaths := make([]string, 0, len(views))
+	for p := range views {
+		sortedPaths = append(sortedPaths, p)
+	}
+
+	sort.Strings(sortedPaths)
+
+	for _, p := range sortedPaths {
+		allActions = append(allActions, classifyPathView(views[p], mode)...)
 	}
 
 	// Step 3: build dependency edges.
@@ -232,9 +241,18 @@ func detectLocalMoves(views map[string]*PathView) []Action {
 		}
 	}
 
+	// Sort hash keys for deterministic move detection order (B-154).
+	sortedHashes := make([]string, 0, len(deletesByHash))
+	for h := range deletesByHash {
+		sortedHashes = append(sortedHashes, h)
+	}
+
+	sort.Strings(sortedHashes)
+
 	var actions []Action
 
-	for hash, delPaths := range deletesByHash {
+	for _, hash := range sortedHashes {
+		delPaths := deletesByHash[hash]
 		crePaths, ok := createsByHash[hash]
 		if !ok {
 			continue
@@ -701,6 +719,8 @@ func buildDependencies(actions []Action) [][]int {
 	for i := range actions {
 		deps[i] = addParentFolderDep(deps[i], i, &actions[i], folderCreateIdx)
 		deps[i] = addChildDeleteDeps(deps[i], i, &actions[i], deleteIdx)
+		// Sort dependency indices for reproducible ordering (B-154).
+		sort.Ints(deps[i])
 	}
 
 	return deps

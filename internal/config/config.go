@@ -111,7 +111,7 @@ type Drive struct {
 	SyncDir      string   `toml:"sync_dir"`
 	Paused       *bool    `toml:"paused,omitempty"`
 	PausedUntil  *string  `toml:"paused_until,omitempty"`
-	Alias        string   `toml:"alias,omitempty"`
+	DisplayName  string   `toml:"display_name,omitempty"`
 	RemotePath   string   `toml:"remote_path,omitempty"`
 	DriveID      string   `toml:"drive_id,omitempty"`
 	SkipDotfiles *bool    `toml:"skip_dotfiles,omitempty"`

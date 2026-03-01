@@ -43,7 +43,7 @@ func (c *Client) Download(ctx context.Context, driveID driveid.ID, itemID string
 		return 0, ErrNoDownloadURL
 	}
 
-	n, err := c.downloadFromURL(ctx, item.DownloadURL, w)
+	n, err := c.downloadFromURL(ctx, string(item.DownloadURL), w)
 	if err != nil {
 		return 0, err
 	}
@@ -87,7 +87,7 @@ func (c *Client) DownloadRange(
 		return 0, ErrNoDownloadURL
 	}
 
-	n, err := c.downloadFromURLWithRange(ctx, item.DownloadURL, w, offset)
+	n, err := c.downloadFromURLWithRange(ctx, string(item.DownloadURL), w, offset)
 	if err != nil {
 		return 0, err
 	}

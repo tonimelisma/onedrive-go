@@ -405,6 +405,7 @@ type ConflictRecord struct {
 	DriveID      driveid.ID
 	ItemID       string
 	Path         string
+	Name         string // derived: path.Base(Path), for display convenience (B-071)
 	ConflictType string // ConflictEditEdit, ConflictEditDelete, ConflictCreateCreate
 	DetectedAt   int64
 	LocalHash    string

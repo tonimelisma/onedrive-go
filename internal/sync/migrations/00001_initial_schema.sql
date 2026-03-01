@@ -44,6 +44,9 @@ CREATE TABLE IF NOT EXISTS conflicts (
                             )),
     resolved_at     INTEGER,
     resolved_by     TEXT    CHECK(resolved_by IN ('user', 'auto') OR resolved_by IS NULL),
+    -- history is currently unused/dormant. Reserved for future resolution
+    -- audit trail (e.g., JSON array of resolution attempts). Not populated
+    -- by any code path; safe to ignore in queries (B-160).
     history         TEXT
 );
 

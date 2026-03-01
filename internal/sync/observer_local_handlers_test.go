@@ -1565,3 +1565,58 @@ func TestHashAndEmit_BaselineMatch_NoEvent(t *testing.T) {
 		// Good — no event for no-op write.
 	}
 }
+
+// TestAddWatchesRecursive_SkipsSymlinks verifies that symlinked directories
+// are skipped during watch setup with a Warn log (B-120).
+func TestAddWatchesRecursive_SkipsSymlinks(t *testing.T) {
+	root := t.TempDir()
+
+	// Create a real directory and a symlink to it.
+	realDir := filepath.Join(root, "realdir")
+	require.NoError(t, os.MkdirAll(realDir, 0o755))
+
+	symlinkDir := filepath.Join(root, "linkdir")
+	require.NoError(t, os.Symlink(realDir, symlinkDir))
+
+	// Track which paths were added to the watcher.
+	tracker := &addTrackingWatcher{
+		events:     make(chan fsnotify.Event, 10),
+		errs:       make(chan error, 10),
+		addedPaths: make(map[string]bool),
+	}
+
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+
+	err := obs.addWatchesRecursive(tracker, root)
+	require.NoError(t, err)
+
+	// The root and realdir should be watched, but NOT the symlink.
+	if !tracker.addedPaths[root] {
+		t.Error("expected root to be watched")
+	}
+
+	if !tracker.addedPaths[realDir] {
+		t.Error("expected realdir to be watched")
+	}
+
+	if tracker.addedPaths[symlinkDir] {
+		t.Error("symlinked directory should NOT be watched")
+	}
+}
+
+// addTrackingWatcher implements FsWatcher and records which paths are added.
+type addTrackingWatcher struct {
+	events     chan fsnotify.Event
+	errs       chan error
+	addedPaths map[string]bool
+}
+
+func (a *addTrackingWatcher) Add(name string) error {
+	a.addedPaths[name] = true
+	return nil
+}
+
+func (a *addTrackingWatcher) Remove(string) error           { return nil }
+func (a *addTrackingWatcher) Close() error                  { return nil }
+func (a *addTrackingWatcher) Events() <-chan fsnotify.Event { return a.events }
+func (a *addTrackingWatcher) Errors() <-chan error          { return a.errs }

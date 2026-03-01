@@ -21,7 +21,7 @@ const defaultRemotePath = "/"
 // is the final product consumed by the CLI and sync engine.
 type ResolvedDrive struct {
 	CanonicalID driveid.CanonicalID
-	Alias       string
+	DisplayName string
 	Paused      bool
 	PausedUntil string // RFC3339 timestamp; empty when not timed
 	SyncDir     string // absolute path after tilde expansion
@@ -42,7 +42,7 @@ func (rd *ResolvedDrive) StatePath() string {
 }
 
 // MatchDrive selects a drive from the config by selector string. The matching
-// precedence is: exact canonical ID > alias > partial canonical ID substring.
+// precedence is: exact canonical ID > display_name > partial canonical ID substring.
 // If selector is empty, auto-selects when exactly one drive is configured.
 //
 // When no drives are configured, provides smart error messages: checks for
@@ -99,7 +99,7 @@ func matchSingleDrive(cfg *Config, logger *slog.Logger) (driveid.CanonicalID, Dr
 	return driveid.CanonicalID{}, Drive{}, fmt.Errorf("multiple drives configured — specify with --drive")
 }
 
-// matchBySelector finds a drive by exact ID, alias, or partial substring match.
+// matchBySelector finds a drive by exact ID, display_name, or partial substring match.
 func matchBySelector(cfg *Config, selector string, logger *slog.Logger) (driveid.CanonicalID, Drive, error) {
 	// Exact canonical ID match — try parsing the selector as a CanonicalID
 	// and looking it up directly in the typed map.
@@ -111,10 +111,10 @@ func matchBySelector(cfg *Config, selector string, logger *slog.Logger) (driveid
 		}
 	}
 
-	// Alias match
+	// Display name match.
 	for id := range cfg.Drives {
-		if cfg.Drives[id].Alias == selector {
-			logger.Debug("drive matched by alias", "alias", selector, "canonical_id", id.String())
+		if cfg.Drives[id].DisplayName == selector {
+			logger.Debug("drive matched by display_name", "display_name", selector, "canonical_id", id.String())
 
 			return id, cfg.Drives[id], nil
 		}
@@ -164,7 +164,7 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 
 	resolved := &ResolvedDrive{
 		CanonicalID:     canonicalID,
-		Alias:           drive.Alias,
+		DisplayName:     drive.DisplayName,
 		Paused:          drive.Paused != nil && *drive.Paused,
 		PausedUntil:     pausedUntil,
 		SyncDir:         expandTilde(drive.SyncDir),
@@ -196,6 +196,15 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 		)
 	}
 
+	// Auto-derive display_name when the user hasn't configured one explicitly.
+	if resolved.DisplayName == "" {
+		resolved.DisplayName = DefaultDisplayName(canonicalID)
+		logger.Debug("using default display_name",
+			"display_name", resolved.DisplayName,
+			"canonical_id", canonicalID.String(),
+		)
+	}
+
 	applyDriveOverrides(resolved, drive, logger)
 
 	return resolved
@@ -206,7 +215,7 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 // doesn't contain metadata. Uses tokenfile.ReadMeta (leaf package) to avoid
 // an import cycle with graph.
 func ReadTokenMetaForSyncDir(cid driveid.CanonicalID, logger *slog.Logger) (orgName, displayName string) {
-	tokenPath := DriveTokenPath(cid.TokenCanonicalID())
+	tokenPath := DriveTokenPath(cid)
 	if tokenPath == "" {
 		return "", ""
 	}
@@ -363,15 +372,25 @@ func discoverTokensIn(dir string, logger *slog.Logger) []driveid.CanonicalID {
 //
 //	"personal:toni@outlook.com" -> "{dataDir}/token_personal_toni@outlook.com.json"
 //	"sharepoint:alice@contoso.com:marketing:Docs" -> "{dataDir}/token_business_alice@contoso.com.json"
+//
+// For shared drives, callers should resolve the token canonical ID first using
+// TokenCanonicalID(cid, cfg) and pass the result to this function.
 func DriveTokenPath(canonicalID driveid.CanonicalID) string {
 	dataDir := DefaultDataDir()
 	if dataDir == "" || canonicalID.IsZero() {
 		return ""
 	}
 
-	// TokenCanonicalID() maps SharePoint → business (shared OAuth session).
-	tokenCID := canonicalID.TokenCanonicalID()
-	sanitized := tokenCID.DriveType() + "_" + tokenCID.Email()
+	// Resolve token identity: SharePoint → business (shared OAuth session).
+	// Personal and business use their own type/email directly.
+	tokenType := canonicalID.DriveType()
+	tokenEmail := canonicalID.Email()
+
+	if canonicalID.IsSharePoint() {
+		tokenType = driveid.DriveTypeBusiness
+	}
+
+	sanitized := tokenType + "_" + tokenEmail
 
 	return filepath.Join(dataDir, "token_"+sanitized+".json")
 }

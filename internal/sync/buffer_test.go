@@ -936,6 +936,137 @@ func TestBuffer_MaxPaths_ZeroUnlimited(t *testing.T) {
 // FlushDebounced double-call panic test (B-111)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// B-115: Conflicting local change types from watch + safety scan
+// ---------------------------------------------------------------------------
+
+// TestBuffer_WatchAndSafetyScanConflictingTypes verifies that when a file
+// watch produces ChangeCreate and a safety scan produces ChangeModify for the
+// same path, the Buffer groups them under the same PathChanges entry. The
+// planner should classify a single action — not duplicate or conflict (B-115).
+func TestBuffer_WatchAndSafetyScanConflictingTypes(t *testing.T) {
+	t.Parallel()
+
+	buf := NewBuffer(testLogger(t))
+
+	// Simulate a file watch event (ChangeCreate) arriving first.
+	buf.Add(&ChangeEvent{
+		Source:   SourceLocal,
+		Type:     ChangeCreate,
+		Path:     "docs/new-file.txt",
+		Name:     "new-file.txt",
+		ItemType: ItemTypeFile,
+		Size:     100,
+		Hash:     "localhash1",
+	})
+
+	// Safety scan sees the same file and reports ChangeModify (different type).
+	buf.Add(&ChangeEvent{
+		Source:   SourceLocal,
+		Type:     ChangeModify,
+		Path:     "docs/new-file.txt",
+		Name:     "new-file.txt",
+		ItemType: ItemTypeFile,
+		Size:     100,
+		Hash:     "localhash1",
+	})
+
+	// Buffer should group both under a single PathChanges entry.
+	result := buf.FlushImmediate()
+	if len(result) != 1 {
+		t.Fatalf("len(result) = %d, want 1 (same path)", len(result))
+	}
+
+	if len(result[0].LocalEvents) != 2 {
+		t.Fatalf("LocalEvents = %d, want 2", len(result[0].LocalEvents))
+	}
+
+	// Planner should produce a single action (upload) for a new local file
+	// with no baseline and no remote state. The planner takes the last local
+	// event (ChangeModify), which gives a non-nil LocalState.
+	planner := NewPlanner(testLogger(t))
+
+	plan, err := planner.Plan(result, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig())
+	if err != nil {
+		t.Fatalf("Plan() error: %v", err)
+	}
+
+	if len(plan.Actions) != 1 {
+		t.Fatalf("actions = %d, want 1 (single upload for local-only file)", len(plan.Actions))
+	}
+
+	if plan.Actions[0].Type != ActionUpload {
+		t.Errorf("action type = %v, want ActionUpload", plan.Actions[0].Type)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// B-128: Debounce semantics under load — slow consumer
+// ---------------------------------------------------------------------------
+
+// TestFlushDebounced_SlowConsumer verifies that when events arrive rapidly
+// while the consumer is slow (not reading from the output channel), events
+// accumulate in the buffer and are delivered as a batch when the consumer
+// unblocks. The blocking send on the output channel is intentional
+// backpressure — it prevents event loss (B-128).
+func TestFlushDebounced_SlowConsumer(t *testing.T) {
+	t.Parallel()
+
+	buf := NewBuffer(testLogger(t))
+	ctx, cancel := context.WithCancel(context.Background())
+
+	debounce := 30 * time.Millisecond
+	out := buf.FlushDebounced(ctx, debounce)
+
+	// Inject first wave — this will flush and fill the output channel (cap 1).
+	buf.Add(&ChangeEvent{
+		Source: SourceLocal, Type: ChangeCreate,
+		Path: "slow-a.txt", Name: "slow-a.txt", ItemType: ItemTypeFile,
+	})
+
+	// Wait for the first batch to be flushed into the channel.
+	time.Sleep(debounce * 3)
+
+	// Inject second wave while the first batch is still unread (slow consumer).
+	// These events accumulate in the buffer because the debounce loop is
+	// blocked trying to send the first batch.
+	for i := range 5 {
+		buf.Add(&ChangeEvent{
+			Source: SourceLocal, Type: ChangeCreate,
+			Path: fmt.Sprintf("slow-b%d.txt", i), Name: fmt.Sprintf("slow-b%d.txt", i),
+			ItemType: ItemTypeFile,
+		})
+	}
+
+	// Now consume the first batch (unblock the debounce loop).
+	select {
+	case batch1 := <-out:
+		if len(batch1) == 0 {
+			t.Fatal("first batch is empty")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for first batch")
+	}
+
+	// The second wave should arrive as an accumulated batch.
+	select {
+	case batch2 := <-out:
+		if len(batch2) != 5 {
+			t.Errorf("second batch len = %d, want 5 (accumulated while consumer was slow)", len(batch2))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for accumulated batch")
+	}
+
+	cancel()
+	for range out {
+	}
+}
+
+// ---------------------------------------------------------------------------
+// FlushDebounced double-call panic test (B-111)
+// ---------------------------------------------------------------------------
+
 // TestFlushDebounced_PanicsOnDoubleCall verifies that calling FlushDebounced
 // twice on the same Buffer panics (B-111).
 func TestFlushDebounced_PanicsOnDoubleCall(t *testing.T) {

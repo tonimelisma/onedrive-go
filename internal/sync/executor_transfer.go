@@ -100,6 +100,7 @@ func (e *Executor) executeUpload(ctx context.Context, action *Action) Outcome {
 		return e.failedOutcome(action, ActionUpload, err)
 	}
 
+	// selectHash is defined in observer_remote.go (B-222).
 	remoteHash := selectHash(result.Item)
 
 	return Outcome{

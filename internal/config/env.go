@@ -17,7 +17,7 @@ const (
 // application in the correct precedence order.
 type EnvOverrides struct {
 	ConfigPath string // ONEDRIVE_GO_CONFIG: override config file path
-	Drive      string // ONEDRIVE_GO_DRIVE: drive selector (canonical ID, alias, or partial match)
+	Drive      string // ONEDRIVE_GO_DRIVE: drive selector (canonical ID, display name, or partial match)
 }
 
 // ReadEnvOverrides reads environment variables and returns any overrides found.

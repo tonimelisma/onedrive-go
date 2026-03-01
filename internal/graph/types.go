@@ -1,10 +1,22 @@
 package graph
 
 import (
+	"log/slog"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
+
+// DownloadURL is a pre-authenticated, ephemeral download URL returned by
+// the Graph API. It implements slog.LogValuer to prevent accidental logging
+// of embedded auth tokens (architecture.md §9.2, B-158).
+type DownloadURL string
+
+// LogValue redacts the URL content when passed to slog, preventing accidental
+// exposure of embedded authentication tokens in log output.
+func (DownloadURL) LogValue() slog.Value {
+	return slog.StringValue("[REDACTED]")
+}
 
 // ChildCountUnknown indicates the child count was not present in the API response.
 const ChildCountUnknown = -1
@@ -12,26 +24,27 @@ const ChildCountUnknown = -1
 // Item represents a OneDrive drive item (file, folder, or package).
 // Fields are normalized from the Graph API response — callers never see raw API data.
 type Item struct {
-	ID            string
-	Name          string
-	DriveID       driveid.ID // normalized: lowercase, zero-padded (Graph API casing is inconsistent)
-	ParentID      string
-	ParentDriveID driveid.ID // drive containing parent (for cross-drive references)
-	Size          int64
-	ETag          string
-	CTag          string
-	IsFolder      bool
-	IsRoot        bool // drive root folder (root facet present in API response)
-	IsDeleted     bool
-	IsPackage     bool // OneNote packages — sync should skip these
-	MimeType      string
-	QuickXorHash  string // base64-encoded
-	SHA1Hash      string // hex (Personal accounts only)
-	SHA256Hash    string // hex (Business accounts, sometimes)
-	CreatedAt     time.Time
-	ModifiedAt    time.Time
-	ChildCount    int    // ChildCountUnknown if not present
-	DownloadURL   string // pre-authenticated, ephemeral; NEVER log (architecture.md §9.2)
+	ID                string
+	Name              string
+	DriveID           driveid.ID // normalized: lowercase, zero-padded (Graph API casing is inconsistent)
+	ParentID          string
+	ParentDriveID     driveid.ID // drive containing parent (for cross-drive references)
+	Size              int64
+	ETag              string
+	CTag              string
+	IsFolder          bool
+	IsRoot            bool // drive root folder (root facet present in API response)
+	IsDeleted         bool
+	IsPackage         bool // OneNote packages — sync should skip these
+	MimeType          string
+	QuickXorHash      string // base64-encoded
+	SHA1Hash          string // hex (Personal accounts only)
+	SHA256Hash        string // hex (Business accounts, sometimes)
+	CreatedAt         time.Time
+	ModifiedAt        time.Time
+	ChildCount        int         // ChildCountUnknown if not present
+	DownloadURL       DownloadURL // pre-authenticated, ephemeral; redacted via LogValue (B-158)
+	SpecialFolderName string      // "vault", "documents", etc.; empty if not a special folder (B-271)
 }
 
 // DeltaPage holds one page of delta query results.

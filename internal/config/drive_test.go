@@ -82,10 +82,10 @@ func TestMatchDrive_ExactCanonicalID(t *testing.T) {
 	assert.Equal(t, driveid.MustCanonicalID("personal:toni@outlook.com"), id)
 }
 
-func TestMatchDrive_AliasMatch(t *testing.T) {
+func TestMatchDrive_DisplayNameMatch(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive", Alias: "home"}
-	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{SyncDir: "~/Work", Alias: "work"}
+	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive", DisplayName: "home"}
+	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{SyncDir: "~/Work", DisplayName: "work"}
 
 	id, _, err := MatchDrive(cfg, "work", testLogger(t))
 	require.NoError(t, err)
@@ -222,16 +222,16 @@ func TestBuildResolvedDrive_AbsolutePathPreserved(t *testing.T) {
 	assert.Equal(t, "/absolute/path/OneDrive", resolved.SyncDir)
 }
 
-func TestBuildResolvedDrive_AliasAndDriveID(t *testing.T) {
+func TestBuildResolvedDrive_DisplayNameAndDriveID(t *testing.T) {
 	cfg := DefaultConfig()
 	drive := &Drive{
-		SyncDir: "~/OneDrive",
-		Alias:   "home",
-		DriveID: "abc123",
+		SyncDir:     "~/OneDrive",
+		DisplayName: "home",
+		DriveID:     "abc123",
 	}
 
 	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("personal:toni@outlook.com"), drive, testLogger(t))
-	assert.Equal(t, "home", resolved.Alias)
+	assert.Equal(t, "home", resolved.DisplayName)
 	assert.Equal(t, driveid.New("abc123"), resolved.DriveID)
 }
 
@@ -400,11 +400,11 @@ log_level = "debug"
 
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
-alias = "home"
+display_name = "home"
 
 ["business:alice@contoso.com"]
 sync_dir = "~/OneDrive-Work"
-alias = "work"
+display_name = "work"
 skip_dotfiles = true
 skip_dirs = ["vendor"]
 `)
@@ -415,8 +415,8 @@ skip_dirs = ["vendor"]
 	assert.Equal(t, "debug", cfg.LogLevel)
 
 	require.Len(t, cfg.Drives, 2)
-	assert.Equal(t, "home", cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")].Alias)
-	assert.Equal(t, "work", cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")].Alias)
+	assert.Equal(t, "home", cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")].DisplayName)
+	assert.Equal(t, "work", cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")].DisplayName)
 }
 
 func TestResolveDrive_FullIntegration(t *testing.T) {
@@ -426,11 +426,11 @@ log_level = "debug"
 
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
-alias = "home"
+display_name = "home"
 
 ["business:alice@contoso.com"]
 sync_dir = "~/OneDrive-Work"
-alias = "work"
+display_name = "work"
 skip_dotfiles = true
 skip_dirs = ["vendor"]
 `)
@@ -464,11 +464,11 @@ func TestResolveDrive_EnvDriveOverride(t *testing.T) {
 	path := writeTestConfig(t, `
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
-alias = "home"
+display_name = "home"
 
 ["business:alice@contoso.com"]
 sync_dir = "~/Work"
-alias = "work"
+display_name = "work"
 `)
 	overrides := ReadEnvOverrides(testLogger(t))
 	resolved, err := ResolveDrive(

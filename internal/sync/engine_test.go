@@ -207,7 +207,7 @@ func seedBaseline(t *testing.T, mgr *BaselineManager, ctx context.Context, outco
 	}
 
 	if deltaToken != "" {
-		if err := mgr.CommitDeltaToken(ctx, deltaToken, engineTestDriveID); err != nil {
+		if err := mgr.CommitDeltaToken(ctx, deltaToken, engineTestDriveID, "", engineTestDriveID); err != nil {
 			t.Fatalf("seed CommitDeltaToken: %v", err)
 		}
 	}
@@ -609,7 +609,7 @@ func TestRunOnce_DeltaTokenPersisted(t *testing.T) {
 	}
 
 	// Verify delta token was saved.
-	token, err := eng.baseline.GetDeltaToken(ctx, engineTestDriveID)
+	token, err := eng.baseline.GetDeltaToken(ctx, engineTestDriveID, "")
 	if err != nil {
 		t.Fatalf("GetDeltaToken: %v", err)
 	}
@@ -851,7 +851,7 @@ func TestRunOnce_DeltaTokenNotCommittedOnFailure(t *testing.T) {
 
 	// The delta token should NOT have been advanced — it should still be
 	// the old value we seeded.
-	token, tokenErr := eng.baseline.GetDeltaToken(ctx, engineTestDriveID)
+	token, tokenErr := eng.baseline.GetDeltaToken(ctx, engineTestDriveID, "")
 	if tokenErr != nil {
 		t.Fatalf("GetDeltaToken: %v", tokenErr)
 	}
@@ -1451,7 +1451,7 @@ func TestRunWatch_WatchCycleCompletion_CommitsDeltaToken(t *testing.T) {
 	eng.watchCycleCompletion(ctx, tracker, cycleID)
 
 	// Verify the delta token was committed.
-	savedToken, tokenErr := eng.baseline.GetDeltaToken(ctx, engineTestDriveID)
+	savedToken, tokenErr := eng.baseline.GetDeltaToken(ctx, engineTestDriveID, "")
 	if tokenErr != nil {
 		t.Fatalf("GetDeltaToken: %v", tokenErr)
 	}
@@ -1524,7 +1524,7 @@ func TestRunWatch_WatchCycleCompletion_SkipsOnFailure(t *testing.T) {
 	eng.watchCycleCompletion(ctx, tracker, cycleID)
 
 	// Delta token should NOT have been advanced.
-	savedToken, tokenErr := eng.baseline.GetDeltaToken(ctx, engineTestDriveID)
+	savedToken, tokenErr := eng.baseline.GetDeltaToken(ctx, engineTestDriveID, "")
 	if tokenErr != nil {
 		t.Fatalf("GetDeltaToken: %v", tokenErr)
 	}
