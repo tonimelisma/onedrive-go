@@ -762,72 +762,11 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 ---
 
-## Phase 6: CLI Completeness
-
-**Make every command work properly.** Global flags, recursive operations, and user-facing polish. After this phase, every CLI command specified in the PRD works correctly for single-drive use.
-
-### 6.0: Global output flags
-
-1. `--verbose` / `-v` flag — **DONE**: wired as persistent flag, sets log level to Info.
-2. `--debug` flag — **DONE**: wired as persistent flag, sets log level to Debug.
-3. `--quiet` / `-q` flag — **DONE**: wired as persistent flag, sets log level to Error. Mutually exclusive with `--verbose` and `--debug`.
-4. `--json` flag — **DONE**: wired as persistent flag, used by `ls`, `stat`, `drive list`, `drive remove`, `status`, `verify`, `conflicts`, `whoami`. Not yet wired to `login`, `sync` summary, or `logout`.
-5. Refactor output layer — **FUTURE**: replace direct `fmt.Printf` calls with a `CLIOutput` abstraction that respects `--quiet`, `--verbose`, `--json`. All commands use the same output path.
-
-### 6.1: Recursive file operations
-
-1. `ls` pagination — **DONE**: `ListChildren` supports `@odata.nextLink` pagination (200 items per page).
-2. Recursive `get <remote-folder> [local]` — **FUTURE**: download an entire remote directory tree. Walk remote children recursively via `ListChildren`, create local directory structure, download each file. Respect `--verbose` for per-file progress.
-3. Recursive `put <local-folder> [remote]` — **FUTURE**: upload an entire local directory tree. Walk local filesystem, create remote folders via `CreateFolder`, upload each file. Skip symlinks.
-4. Recursive `rm <remote-folder>` — **DONE**: `--recursive` flag implemented (B-156).
-
-### 6.2: Server-side move and copy — FUTURE
-
-1. `mv <source> <destination>`: server-side move/rename via Graph API `MoveItem`. Supports both rename (same parent, new name) and move (different parent). No data transfer — instant for any file size.
-2. `cp <source> <destination>`: server-side copy via Graph API copy endpoint (`POST /items/{id}/copy`). Returns `Location` header for async monitoring. Poll until complete for large files.
-3. Both commands work on files and folders. Both respect `--drive` flag. Both produce `--json` output when requested.
-
-### 6.3: Auth flow improvements — DONE
-
-1. `login --browser` — **DONE**: authorization code flow with PKCE + localhost callback. Opens system browser, starts local HTTP server on `http://localhost:<port>/callback`. Falls back to device code if browser can't open.
-2. `logout --purge` — **DONE**: deletes token file, state DB, and removes drive section from `config.toml`.
-
-### 6.4: Drive selection and account disambiguation
-
-1. `--drive` fuzzy matching — **DONE**: `MatchDrive()` in `config/drive.go` matches by exact canonical ID → exact display_name (case-insensitive) → substring on canonical ID, display_name, or owner. On ambiguity, shows all matching drives sorted.
-2. `--account <email>` flag — **DONE**: persistent flag in `root.go`, used for `drive search` and auth commands to restrict operations to a specific account.
-3. `--drive` repeatable — **FUTURE**: `sync --drive "me@contoso.com" --drive "me@outlook.com"` syncs only those two drives. Without `--drive`, sync all non-paused drives.
-
-### 6.5: Transfer progress display — FUTURE
-
-1. Interactive progress bars for `get` and `put`: show filename, size, progress percentage, transfer speed. Use a terminal-aware library (e.g., `github.com/vbauerster/mpb`). Disable when stdout is not a TTY or `--quiet` is set.
-2. `sync` progress output: show per-file progress during sync transfers. Format: `↓ report.pdf  2.3 MB [======>  ] 62%  3.2 MB/s`. Summary line at completion.
-3. Multi-file progress: when multiple transfers are in flight (parallel workers), show concurrent progress lines. Update in place using terminal control sequences.
-
-### 6.6: Structured JSON logging — FUTURE
-
-1. `log_format` config option: `"text"` (default, human-readable) or `"json"` (structured, machine-parseable). JSON format uses `slog.JSONHandler`. Text format uses current `slog.TextHandler`.
-2. When `--quiet` is set and `log_format = "json"`, all output goes to the log file in JSON format. No stderr output except fatal errors. This is what you configure for systemd/launchd service mode.
-3. Log output includes structured fields: `drive`, `action`, `path`, `size`, `duration`, `error` as applicable. No string interpolation in log messages.
-
-### 6.7: Recycle bin commands — FUTURE
-
-1. `recycle-bin list`: show all items in the OneDrive recycle bin for the selected drive. Display name, original location, size, deletion date. Support `--json` output. Uses `GET /me/drive/items/{item-id}/children` on the recycle bin special folder (or `GET /drives/{drive-id}/special/recyclebin/children`).
-2. `recycle-bin empty`: permanently delete all items in the recycle bin. Confirmation prompt. `--force` to skip.
-3. `recycle-bin restore <id|path>`: restore a specific item from the recycle bin to its original location. Uses `POST /drives/{drive-id}/items/{item-id}/restore`.
-
-### 6.8: Conflict path filtering — FUTURE
-
-1. `conflicts --path <path>`: filter conflict list to a specific path or subtree. `conflicts --path /Documents` shows only conflicts under `/Documents`.
-2. `resolve --path <path>`: batch-resolve conflicts only within a path subtree. Combines with existing `--keep-local`, `--keep-remote`, `--keep-both` flags.
-
----
-
-## Phase 7: Multi-Drive Orchestration + Shared Content Sync
+## Phase 6: Multi-Drive Orchestration + Shared Content Sync
 
 **Single-process multi-drive sync.** After this phase, `sync --watch` syncs all non-paused drives simultaneously from a single process. Each drive has its own goroutine, state DB, and sync cycle. Identity refactoring (four drive types, display_name, token resolution in config) was completed in Phase 5.6.
 
-### 7.0: Multi-drive orchestration — FUTURE
+### 6.0: Multi-drive orchestration — FUTURE
 
 > **Architecture resolved**: Architecture A (per-drive goroutine with isolated engines). See [MULTIDRIVE.md §11](../docs/design/MULTIDRIVE.md#11-multi-drive-orchestrator) for full specification including all 10 questions answered. See [concurrent-execution.md §19](../docs/design/concurrent-execution.md#19-multi-drive-worker-budget) for worker budget algorithm.
 
@@ -840,32 +779,93 @@ This analysis categorizes every part of the codebase by its relationship to the 
 5. Per-drive goroutine lifecycle: each drive runs its own `Engine.RunOnce()` or `Engine.RunWatch()`. Panics caught per-drive. 3 consecutive failures → exponential backoff (1m, 5m, 15m, 1h). Other drives unaffected.
 6. Global checker semaphore: `*semaphore.Weighted` shared across all `LocalObserver` instances. Limit auto-detected by storage type (SSD: 8, HDD: 2, unknown: 4) or configurable via `parallel_checkers`.
 
-### 7.1: Drive removal — DONE (refactored in Phase 5.5)
+### 6.1: Drive removal — DONE (refactored in Phase 5.5)
 
 1. `drive remove <drive>` — **DONE**: deletes config section. State DB and token preserved for fast re-add.
 2. `drive remove --purge <drive>` — **DONE**: permanently deletes state DB and removes config section. Token preserved if shared with other drives.
 3. Text-level config manipulation — **DONE**: `config/write.go` `DeleteDriveSection()` uses line-based text edits preserving all user comments.
 
-### 7.2: Status command
+### 6.2: Status command
 
 1. `status` command: show account/drive hierarchy — **DONE**: `status.go` shows account email, display name, org name, token state (valid/expired/missing), per-drive canonical ID, sync dir, and state (ready/paused/no token/needs setup). **Not yet done**: per-drive sync state (last sync time, files synced, errors, unresolved conflicts).
 2. Support `--json` output — **DONE**: `flagJSON` wired, produces JSON array of account objects.
 3. Show overall health — **FUTURE**: total drives, ready/paused/error counts, aggregate unresolved conflicts.
 
-### 7.3: Shared drive enumeration — FUTURE
+### 6.3: Shared drive enumeration — FUTURE
 
 1. Shared drive discovery: integrate `GET /me/drive/sharedWithMe` into `drive list`. Show available shared folders alongside personal/business/SharePoint drives. Derive display names using the identity system from Phase 5.6 (`"{FirstName}'s {FolderName}"` with uniqueness escalation).
 2. `drive list` (non-interactive) — **DONE** for personal/business/SharePoint: shows configured drives AND available drives from the network. **NOT YET DONE** for shared-with-me folders.
 3. `drive add` for shared folders: substring match against derived display names, construct `shared:email:sourceDriveID:sourceItemID` canonical ID, auto-fill display_name/owner/sync_dir.
 4. Shared folders capped at first 10 in `drive list`. More: `... and N more shared folders`.
 
-### 7.4: Shared folder sync — FUTURE
+### 6.4: Shared folder sync — FUTURE
 
 1. Shortcut detection: detect `remoteItem` facets in primary delta. Per-shortcut delta via `GET /drives/{remoteItem.driveId}/items/{remoteItem.id}/delta`. Path mapping to local tree at shortcut position.
 2. Shortcut lifecycle: new shortcut → initial enumeration; removed shortcut → delete local copies (DP-2); moved shortcut → rename local directory.
 3. Read-only content handling: auto-detect via 403. Summarized errors, not per-file (DP-3).
 4. Shared-with-me drives: full drive infrastructure for standalone shared folders. `drive add`/`remove` by display_name (DP-4).
 5. Personal and Business account support. SharePoint shared libraries already handled by drive-level sync.
+
+---
+
+## Phase 7: CLI Completeness
+
+**Make every command work properly.** Global flags, recursive operations, and user-facing polish. After this phase, every CLI command specified in the PRD works correctly for single-drive use.
+
+### 7.0: Global output flags
+
+1. `--verbose` / `-v` flag — **DONE**: wired as persistent flag, sets log level to Info.
+2. `--debug` flag — **DONE**: wired as persistent flag, sets log level to Debug.
+3. `--quiet` / `-q` flag — **DONE**: wired as persistent flag, sets log level to Error. Mutually exclusive with `--verbose` and `--debug`.
+4. `--json` flag — **DONE**: wired as persistent flag, used by `ls`, `stat`, `drive list`, `drive remove`, `status`, `verify`, `conflicts`, `whoami`. Not yet wired to `login`, `sync` summary, or `logout`.
+5. Refactor output layer — **FUTURE**: replace direct `fmt.Printf` calls with a `CLIOutput` abstraction that respects `--quiet`, `--verbose`, `--json`. All commands use the same output path.
+
+### 7.1: Recursive file operations
+
+1. `ls` pagination — **DONE**: `ListChildren` supports `@odata.nextLink` pagination (200 items per page).
+2. Recursive `get <remote-folder> [local]` — **FUTURE**: download an entire remote directory tree. Walk remote children recursively via `ListChildren`, create local directory structure, download each file. Respect `--verbose` for per-file progress.
+3. Recursive `put <local-folder> [remote]` — **FUTURE**: upload an entire local directory tree. Walk local filesystem, create remote folders via `CreateFolder`, upload each file. Skip symlinks.
+4. Recursive `rm <remote-folder>` — **DONE**: `--recursive` flag implemented (B-156).
+
+### 7.2: Server-side move and copy — FUTURE
+
+1. `mv <source> <destination>`: server-side move/rename via Graph API `MoveItem`. Supports both rename (same parent, new name) and move (different parent). No data transfer — instant for any file size.
+2. `cp <source> <destination>`: server-side copy via Graph API copy endpoint (`POST /items/{id}/copy`). Returns `Location` header for async monitoring. Poll until complete for large files.
+3. Both commands work on files and folders. Both respect `--drive` flag. Both produce `--json` output when requested.
+
+### 7.3: Auth flow improvements — DONE
+
+1. `login --browser` — **DONE**: authorization code flow with PKCE + localhost callback. Opens system browser, starts local HTTP server on `http://localhost:<port>/callback`. Falls back to device code if browser can't open.
+2. `logout --purge` — **DONE**: deletes token file, state DB, and removes drive section from `config.toml`.
+
+### 7.4: Drive selection and account disambiguation
+
+1. `--drive` fuzzy matching — **DONE**: `MatchDrive()` in `config/drive.go` matches by exact canonical ID → exact display_name (case-insensitive) → substring on canonical ID, display_name, or owner. On ambiguity, shows all matching drives sorted.
+2. `--account <email>` flag — **DONE**: persistent flag in `root.go`, used for `drive search` and auth commands to restrict operations to a specific account.
+3. `--drive` repeatable — **FUTURE**: `sync --drive "me@contoso.com" --drive "me@outlook.com"` syncs only those two drives. Without `--drive`, sync all non-paused drives.
+
+### 7.5: Transfer progress display — FUTURE
+
+1. Interactive progress bars for `get` and `put`: show filename, size, progress percentage, transfer speed. Use a terminal-aware library (e.g., `github.com/vbauerster/mpb`). Disable when stdout is not a TTY or `--quiet` is set.
+2. `sync` progress output: show per-file progress during sync transfers. Format: `↓ report.pdf  2.3 MB [======>  ] 62%  3.2 MB/s`. Summary line at completion.
+3. Multi-file progress: when multiple transfers are in flight (parallel workers), show concurrent progress lines. Update in place using terminal control sequences.
+
+### 7.6: Structured JSON logging — FUTURE
+
+1. `log_format` config option: `"text"` (default, human-readable) or `"json"` (structured, machine-parseable). JSON format uses `slog.JSONHandler`. Text format uses current `slog.TextHandler`.
+2. When `--quiet` is set and `log_format = "json"`, all output goes to the log file in JSON format. No stderr output except fatal errors. This is what you configure for systemd/launchd service mode.
+3. Log output includes structured fields: `drive`, `action`, `path`, `size`, `duration`, `error` as applicable. No string interpolation in log messages.
+
+### 7.7: Recycle bin commands — FUTURE
+
+1. `recycle-bin list`: show all items in the OneDrive recycle bin for the selected drive. Display name, original location, size, deletion date. Support `--json` output. Uses `GET /me/drive/items/{item-id}/children` on the recycle bin special folder (or `GET /drives/{drive-id}/special/recyclebin/children`).
+2. `recycle-bin empty`: permanently delete all items in the recycle bin. Confirmation prompt. `--force` to skip.
+3. `recycle-bin restore <id|path>`: restore a specific item from the recycle bin to its original location. Uses `POST /drives/{drive-id}/items/{item-id}/restore`.
+
+### 7.8: Conflict path filtering — FUTURE
+
+1. `conflicts --path <path>`: filter conflict list to a specific path or subtree. `conflicts --path /Documents` shows only conflicts under `/Documents`.
+2. `resolve --path <path>`: batch-resolve conflicts only within a path subtree. Combines with existing `--keep-local`, `--keep-remote`, `--keep-both` flags.
 
 ---
 
