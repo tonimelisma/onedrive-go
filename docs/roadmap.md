@@ -693,9 +693,11 @@ This analysis categorizes every part of the codebase by its relationship to the 
 - Docs updated: CLAUDE.md, BACKLOG.md, LEARNINGS.md
 - Both CI workflows green. Full DOD checklist.
 
-#### 5.6: Identity Refactoring + Personal Vault Exclusion
+#### 5.6: Identity Refactoring + Personal Vault Exclusion — **DONE**
 
 **Goal**: Prepare the identity and config system for multi-drive and shared folder sync. Add Personal Vault exclusion as a safety requirement. All sub-tasks are code changes — identity refactoring must land before shared folder sync (Phase 7).
+
+**Completed**: All 6 sub-increments shipped. `DriveTypeShared` added to `driveid`, token resolution moved to `config`, `Alias` replaced with auto-derived `DisplayName`, delta tokens upgraded to composite key `(drive_id, scope_id)`, Personal Vault items excluded from sync. Net: 26 files changed, ~1500 lines added.
 
 ##### 5.6.1: Personal Vault exclusion
 
