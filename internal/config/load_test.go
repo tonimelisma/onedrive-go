@@ -210,7 +210,7 @@ log_level = "debug"
 
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
-alias = "home"
+display_name = "home"
 `)
 	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
@@ -218,7 +218,7 @@ alias = "home"
 
 	d := cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")]
 	assert.Equal(t, "~/OneDrive", d.SyncDir)
-	assert.Equal(t, "home", d.Alias)
+	assert.Equal(t, "home", d.DisplayName)
 	assert.Equal(t, "debug", cfg.LogLevel)
 }
 
@@ -228,11 +228,11 @@ skip_dotfiles = true
 
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
-alias = "home"
+display_name = "home"
 
 ["business:alice@contoso.com"]
 sync_dir = "~/OneDrive - Contoso"
-alias = "work"
+display_name = "work"
 skip_dirs = ["node_modules", ".git", "vendor"]
 `)
 	cfg, err := Load(path, testLogger(t))
@@ -241,11 +241,11 @@ skip_dirs = ["node_modules", ".git", "vendor"]
 
 	personal := cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")]
 	assert.Equal(t, "~/OneDrive", personal.SyncDir)
-	assert.Equal(t, "home", personal.Alias)
+	assert.Equal(t, "home", personal.DisplayName)
 
 	business := cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")]
 	assert.Equal(t, "~/OneDrive - Contoso", business.SyncDir)
-	assert.Equal(t, "work", business.Alias)
+	assert.Equal(t, "work", business.DisplayName)
 	assert.Equal(t, []string{"node_modules", ".git", "vendor"}, business.SkipDirs)
 }
 
@@ -253,7 +253,7 @@ func TestLoad_DriveWithAllFields(t *testing.T) {
 	path := writeTestConfig(t, `
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
-alias = "home"
+display_name = "home"
 paused = true
 remote_path = "/Documents"
 drive_id = "abc123"
@@ -267,7 +267,7 @@ poll_interval = "10m"
 
 	d := cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")]
 	assert.Equal(t, "~/OneDrive", d.SyncDir)
-	assert.Equal(t, "home", d.Alias)
+	assert.Equal(t, "home", d.DisplayName)
 	require.NotNil(t, d.Paused)
 	assert.True(t, *d.Paused)
 	assert.Equal(t, "/Documents", d.RemotePath)
@@ -347,11 +347,11 @@ func TestResolveDrive_CLIDriveSelector(t *testing.T) {
 	path := writeTestConfig(t, `
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
-alias = "home"
+display_name = "home"
 
 ["business:alice@contoso.com"]
 sync_dir = "~/Work"
-alias = "work"
+display_name = "work"
 `)
 	resolved, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path},
@@ -366,11 +366,11 @@ func TestResolveDrive_EnvDriveSelector(t *testing.T) {
 	path := writeTestConfig(t, `
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
-alias = "home"
+display_name = "home"
 
 ["business:alice@contoso.com"]
 sync_dir = "~/Work"
-alias = "work"
+display_name = "work"
 `)
 	resolved, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path, Drive: "home"},
@@ -385,11 +385,11 @@ func TestResolveDrive_CLIDriveOverridesEnv(t *testing.T) {
 	path := writeTestConfig(t, `
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
-alias = "home"
+display_name = "home"
 
 ["business:alice@contoso.com"]
 sync_dir = "~/Work"
-alias = "work"
+display_name = "work"
 `)
 	resolved, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path, Drive: "home"},

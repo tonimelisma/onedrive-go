@@ -152,12 +152,12 @@ func TestSetDriveKey_InsertNewKey(t *testing.T) {
 	err := CreateConfigWithDrive(path, cid, "~/OneDrive")
 	require.NoError(t, err)
 
-	err = SetDriveKey(path, cid, "alias", "home")
+	err = SetDriveKey(path, cid, "display_name", "home")
 	require.NoError(t, err)
 
 	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
-	assert.Equal(t, "home", cfg.Drives[cid].Alias)
+	assert.Equal(t, "home", cfg.Drives[cid].DisplayName)
 }
 
 func TestSetDriveKey_UpdateExistingKey(t *testing.T) {
@@ -170,16 +170,16 @@ func TestSetDriveKey_UpdateExistingKey(t *testing.T) {
 	require.NoError(t, err)
 
 	// First set
-	err = SetDriveKey(path, cid, "alias", "home")
+	err = SetDriveKey(path, cid, "display_name", "home")
 	require.NoError(t, err)
 
 	// Update
-	err = SetDriveKey(path, cid, "alias", "personal")
+	err = SetDriveKey(path, cid, "display_name", "personal")
 	require.NoError(t, err)
 
 	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
-	assert.Equal(t, "personal", cfg.Drives[cid].Alias)
+	assert.Equal(t, "personal", cfg.Drives[cid].DisplayName)
 }
 
 func TestSetDriveKey_BooleanFormatting(t *testing.T) {
@@ -216,12 +216,12 @@ func TestSetDriveKey_StringFormatting(t *testing.T) {
 	err := CreateConfigWithDrive(path, cid, "~/OneDrive")
 	require.NoError(t, err)
 
-	err = SetDriveKey(path, cid, "alias", "work")
+	err = SetDriveKey(path, cid, "display_name", "work")
 	require.NoError(t, err)
 
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
-	assert.Contains(t, string(data), `alias = "work"`)
+	assert.Contains(t, string(data), `display_name = "work"`)
 }
 
 func TestSetDriveKey_RoundTrip(t *testing.T) {
@@ -941,7 +941,7 @@ func TestScenario_SetKeyThenDeleteSection(t *testing.T) {
 	err := CreateConfigWithDrive(path, cid, "~/OneDrive")
 	require.NoError(t, err)
 
-	err = SetDriveKey(path, cid, "alias", "home")
+	err = SetDriveKey(path, cid, "display_name", "home")
 	require.NoError(t, err)
 
 	err = DeleteDriveSection(path, cid)

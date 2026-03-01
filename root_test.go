@@ -422,7 +422,7 @@ func TestLoadConfig_ValidTOML(t *testing.T) {
 
 	// Drive sections use top-level TOML keys with canonical IDs (containing ":").
 	tomlContent := `["personal:test@example.com"]
-alias = "test"
+display_name = "test"
 sync_dir = "` + tmpDir + `/OneDrive"
 `
 	err := os.WriteFile(cfgFile, []byte(tomlContent), 0o600)

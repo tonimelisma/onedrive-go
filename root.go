@@ -124,7 +124,7 @@ func newRootCmd() *cobra.Command {
 
 	cmd.PersistentFlags().StringVar(&flagConfigPath, "config", "", "config file path")
 	cmd.PersistentFlags().StringVar(&flagAccount, "account", "", "account for auth commands (e.g., user@example.com)")
-	cmd.PersistentFlags().StringVar(&flagDrive, "drive", "", "drive selector (canonical ID, alias, or partial match)")
+	cmd.PersistentFlags().StringVar(&flagDrive, "drive", "", "drive selector (canonical ID, display name, or partial match)")
 	cmd.PersistentFlags().BoolVar(&flagJSON, "json", false, "output in JSON format")
 	cmd.PersistentFlags().BoolVarP(&flagVerbose, "verbose", "v", false, "show detailed output")
 	cmd.PersistentFlags().BoolVar(&flagDebug, "debug", false, "enable debug logging (HTTP requests, config resolution)")
