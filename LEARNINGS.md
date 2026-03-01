@@ -512,7 +512,16 @@ Per-request Retry-After + exponential backoff with jitter. No shared gate across
 `PersistentPreRunE` runs two phases for all commands. Phase 1 (always): read Cobra flags into `CLIFlags`, build bootstrap logger, create `CLIContext` with `Flags` + `Logger`. Phase 2 (data commands only, skip via `skipConfigAnnotation`): load config, resolve drive, rebuild logger with config-based log level, populate `Cfg` + `RawConfig`. Auth commands get `CLIContext` with nil `Cfg`/`RawConfig` — they access `cc.Flags.ConfigPath` etc. No global flag variables anywhere.
 
 ### DriveSession replaces clientAndDrive() 4-tuple
-`DriveSession` struct bundles `Client` (30s timeout), `Transfer` (no timeout), `TokenSource`, `DriveID`, and `Resolved`. `NewDriveSession(ctx, resolved, cfg, logger)` handles token resolution (including shared drives via `DriveTokenPath(cid, cfg)`), client creation, and drive discovery. Single constructor replaces boilerplate repeated in 9 call sites.
+`DriveSession` struct bundles `Client` (30s timeout), `Transfer` (no timeout), `DriveID`, and `Resolved`. `NewDriveSession(ctx, resolved, cfg, logger)` handles token resolution (including shared drives via `DriveTokenPath(cid, cfg)`), client creation, and drive discovery. Single constructor replaces boilerplate repeated in 9 call sites. `TokenSource` was removed as dead code — set but never read after construction.
+
+### CfgPath on CLIContext for config file path
+`CLIContext.CfgPath` stores the resolved config file path, computed once in Phase 1 of `PersistentPreRunE` via `config.ResolveConfigPath(env, cli, logger)`. All commands (auth and data) access `cc.CfgPath` instead of recomputing the path. This replaced `resolveLoginConfigPath()` which had a bug — it ignored the `ONEDRIVE_GO_CONFIG` environment variable.
+
+### ResolveDrive returns both resolved drive and raw config
+`config.ResolveDrive()` returns `(*ResolvedDrive, *Config, error)`. The raw `*Config` is needed by `DriveSession` for shared drive token resolution (`TokenCanonicalID(cid, cfg)`). Previously `loadAndResolve` called `LoadOrDefault` twice — once internally in `ResolveDrive`, then again to get the raw config. Now `ResolveDrive` returns both, eliminating the double load.
+
+### newSyncEngine helper for Engine construction
+`newSyncEngine(session, resolved, verifyDrive, logger)` creates a `sync.Engine` from a `DriveSession` and `ResolvedDrive`. Validates syncDir and statePath, builds `EngineConfig`, optionally sets `DriveVerifier`. Used by `sync.go` (verifyDrive=true) and `resolve.go` (verifyDrive=false). Will be reused by 6.0b Orchestrator's per-drive DriveRunner.
 
 ### DriveTypeShared needs explicit handling in every drive-type switch
 `BaseSyncDir()`, `DefaultSyncDir()`, `DriveTokenPath()`, `CollectOtherSyncDirs()` — all need shared drive cases. Missing cases return "" or empty, causing silent failures. Check all type-switch statements when adding new drive types.
