@@ -78,6 +78,7 @@ func TestBuildConfiguredDriveEntries_OneDrive_WithSyncDir(t *testing.T) {
 	entries := buildConfiguredDriveEntries(cfg, testDriveLogger(t))
 	require.Len(t, entries, 1)
 	assert.Equal(t, "personal:user@example.com", entries[0].CanonicalID)
+	assert.Equal(t, "user@example.com", entries[0].DisplayName)
 	assert.Equal(t, "~/OneDrive", entries[0].SyncDir)
 	assert.Equal(t, driveStateReady, entries[0].State)
 	assert.Equal(t, "configured", entries[0].Source)
@@ -195,6 +196,54 @@ func TestPrintDriveListText_BothSections(t *testing.T) {
 	output := captureStdout(t, func() { printDriveListText(configured, available) })
 	assert.Contains(t, output, "Configured drives:")
 	assert.Contains(t, output, "Available drives")
+}
+
+func TestBuildConfiguredDriveEntries_ExplicitDisplayName(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Drives[driveid.MustCanonicalID("personal:user@example.com")] = config.Drive{
+		SyncDir:     "~/OneDrive",
+		DisplayName: "My Personal Drive",
+	}
+
+	entries := buildConfiguredDriveEntries(cfg, testDriveLogger(t))
+	require.Len(t, entries, 1)
+	assert.Equal(t, "My Personal Drive", entries[0].DisplayName)
+}
+
+func TestPrintDriveListText_ShowsDisplayName(t *testing.T) {
+	configured := []driveListEntry{
+		{
+			CanonicalID: "personal:user@example.com",
+			DisplayName: "user@example.com",
+			SyncDir:     "~/OneDrive",
+			State:       driveStateReady,
+			Source:      "configured",
+		},
+	}
+	output := captureStdout(t, func() { printDriveListText(configured, nil) })
+	assert.Contains(t, output, "user@example.com")
+	assert.Contains(t, output, "personal:user@example.com")
+}
+
+func TestDriveLabel_WithDisplayName(t *testing.T) {
+	e := driveListEntry{
+		CanonicalID: "personal:user@example.com",
+		DisplayName: "user@example.com",
+	}
+	assert.Equal(t, "user@example.com (personal:user@example.com)", driveLabel(e))
+}
+
+func TestDriveLabel_WithoutDisplayName(t *testing.T) {
+	e := driveListEntry{CanonicalID: "personal:user@example.com"}
+	assert.Equal(t, "personal:user@example.com", driveLabel(e))
+}
+
+func TestDriveLabel_DisplayNameSameAsCanonicalID(t *testing.T) {
+	e := driveListEntry{
+		CanonicalID: "personal:user@example.com",
+		DisplayName: "personal:user@example.com",
+	}
+	assert.Equal(t, "personal:user@example.com", driveLabel(e))
 }
 
 func TestPrintDriveListText_EmptySyncDir_ShowsNotSet(t *testing.T) {

@@ -59,6 +59,7 @@ for targeted SharePoint queries.`,
 // driveListEntry represents one drive in the list output.
 type driveListEntry struct {
 	CanonicalID string `json:"canonical_id"`
+	DisplayName string `json:"display_name,omitempty"`
 	SyncDir     string `json:"sync_dir,omitempty"`
 	State       string `json:"state"`
 	Source      string `json:"source"` // "configured" or "available"
@@ -118,8 +119,15 @@ func buildConfiguredDriveEntries(cfg *config.Config, logger *slog.Logger) []driv
 			}
 		}
 
+		// Use explicit display_name from config, falling back to auto-derived.
+		displayName := d.DisplayName
+		if displayName == "" {
+			displayName = config.DefaultDisplayName(id)
+		}
+
 		entries = append(entries, driveListEntry{
 			CanonicalID: id.String(),
+			DisplayName: displayName,
 			SyncDir:     syncDir,
 			State:       state,
 			Source:      "configured",
@@ -279,6 +287,17 @@ func printDriveListJSON(configured, available []driveListEntry) error {
 	return nil
 }
 
+// driveLabel returns a human-readable label for a drive list entry.
+// Shows "DisplayName (CanonicalID)" when a display name differs from the
+// canonical ID, otherwise just the canonical ID.
+func driveLabel(e driveListEntry) string {
+	if e.DisplayName != "" && e.DisplayName != e.CanonicalID {
+		return fmt.Sprintf("%s (%s)", e.DisplayName, e.CanonicalID)
+	}
+
+	return e.CanonicalID
+}
+
 func printDriveListText(configured, available []driveListEntry) {
 	if len(configured) == 0 && len(available) == 0 {
 		fmt.Println("No drives configured. Run 'onedrive-go login' to get started.")
@@ -290,10 +309,11 @@ func printDriveListText(configured, available []driveListEntry) {
 		fmt.Println("Configured drives:")
 
 		// Compute dynamic column widths from content, with minimums for readability.
-		maxID, maxDir := 0, 0
+		maxName, maxDir := 0, 0
 		for _, e := range configured {
-			if len(e.CanonicalID) > maxID {
-				maxID = len(e.CanonicalID)
+			label := driveLabel(e)
+			if len(label) > maxName {
+				maxName = len(label)
 			}
 
 			sd := e.SyncDir
@@ -306,10 +326,10 @@ func printDriveListText(configured, available []driveListEntry) {
 			}
 		}
 
-		maxID = max(maxID, minColumnWidth)
+		maxName = max(maxName, minColumnWidth)
 		maxDir = max(maxDir, minColumnWidth)
 
-		fmtStr := fmt.Sprintf("  %%-%ds  %%-%ds  %%s\n", maxID, maxDir)
+		fmtStr := fmt.Sprintf("  %%-%ds  %%-%ds  %%s\n", maxName, maxDir)
 
 		for _, e := range configured {
 			syncDir := e.SyncDir
@@ -317,7 +337,7 @@ func printDriveListText(configured, available []driveListEntry) {
 				syncDir = syncDirNotSet
 			}
 
-			fmt.Printf(fmtStr, e.CanonicalID, syncDir, e.State)
+			fmt.Printf(fmtStr, driveLabel(e), syncDir, e.State)
 		}
 	}
 
@@ -430,7 +450,8 @@ func addNewDrive(cfgPath string, cfg *config.Config, cid driveid.CanonicalID, lo
 		return fmt.Errorf("adding drive to config: %w", err)
 	}
 
-	fmt.Printf("Added drive %s -> %s\n", cid.String(), syncDir)
+	driveDisplayName := config.DefaultDisplayName(cid)
+	fmt.Printf("Added drive %s (%s) -> %s\n", driveDisplayName, cid.String(), syncDir)
 
 	return nil
 }
