@@ -112,6 +112,7 @@ type Drive struct {
 	Paused       *bool    `toml:"paused,omitempty"`
 	PausedUntil  *string  `toml:"paused_until,omitempty"`
 	DisplayName  string   `toml:"display_name,omitempty"`
+	Owner        string   `toml:"owner,omitempty"` // drive owner name; for shared drives: "{Owner}'s {FolderName}"
 	RemotePath   string   `toml:"remote_path,omitempty"`
 	DriveID      string   `toml:"drive_id,omitempty"`
 	SkipDotfiles *bool    `toml:"skip_dotfiles,omitempty"`

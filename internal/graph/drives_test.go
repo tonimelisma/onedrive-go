@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -587,6 +586,34 @@ func TestDrives_NonForbidden_NoRetry(t *testing.T) {
 	assert.Equal(t, 1, attempts, "non-403 errors should not be retried")
 }
 
+func TestToDrive_OwnerEmail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{
+			"value": [{
+				"id": "drive-owner-email",
+				"name": "Shared Drive",
+				"driveType": "personal",
+				"owner": {
+					"user": {
+						"displayName": "Alice",
+						"email": "alice@contoso.com"
+					}
+				}
+			}]
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	drives, err := client.Drives(context.Background())
+	require.NoError(t, err)
+	require.Len(t, drives, 1)
+	assert.Equal(t, "Alice", drives[0].OwnerName)
+	assert.Equal(t, "alice@contoso.com", drives[0].OwnerEmail)
+}
+
 func TestToDrive_NilQuota(t *testing.T) {
 	dr := &driveResponse{
 		ID:        "d2",
@@ -594,7 +621,8 @@ func TestToDrive_NilQuota(t *testing.T) {
 		DriveType: "business",
 		Owner: &ownerFacet{User: struct {
 			DisplayName string `json:"displayName"`
-		}{DisplayName: "Owner"}},
+			Email       string `json:"email"`
+		}{DisplayName: "Owner", Email: "owner@contoso.com"}},
 		Quota: nil,
 	}
 

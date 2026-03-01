@@ -2,6 +2,9 @@ package driveid
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewCanonicalID(t *testing.T) {
@@ -57,63 +60,36 @@ func TestNewCanonicalID(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cid, err := NewCanonicalID(tt.raw)
 			if tt.wantErr {
-				if err == nil {
-					t.Error("expected error, got nil")
-				}
+				require.Error(t, err)
 				return
 			}
 
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			if cid.String() != tt.want {
-				t.Errorf("NewCanonicalID(%q) = %q, want %q", tt.raw, cid.String(), tt.want)
-			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, cid.String())
 		})
 	}
 }
 
 func TestNewCanonicalID_ParseOnceFields(t *testing.T) {
-	// Verify that fields are parsed at construction time and stored.
 	cid, err := NewCanonicalID("sharepoint:alice@contoso.com:marketing:Docs")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	require.NoError(t, err)
 
-	if cid.driveType != "sharepoint" {
-		t.Errorf("driveType = %q, want %q", cid.driveType, "sharepoint")
-	}
-
-	if cid.email != "alice@contoso.com" {
-		t.Errorf("email = %q, want %q", cid.email, "alice@contoso.com")
-	}
-
-	if cid.site != "marketing" {
-		t.Errorf("site = %q, want %q", cid.site, "marketing")
-	}
-
-	if cid.library != "Docs" {
-		t.Errorf("library = %q, want %q", cid.library, "Docs")
-	}
+	assert.Equal(t, "sharepoint", cid.driveType)
+	assert.Equal(t, "alice@contoso.com", cid.email)
+	assert.Equal(t, "marketing", cid.site)
+	assert.Equal(t, "Docs", cid.library)
 }
 
 func TestMustCanonicalID(t *testing.T) {
 	t.Run("valid input", func(t *testing.T) {
 		cid := MustCanonicalID("personal:user@example.com")
-		if cid.String() != "personal:user@example.com" {
-			t.Errorf("MustCanonicalID() = %q, want %q", cid.String(), "personal:user@example.com")
-		}
+		assert.Equal(t, "personal:user@example.com", cid.String())
 	})
 
 	t.Run("invalid input panics", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r == nil {
-				t.Error("expected panic for invalid canonical ID")
-			}
-		}()
-
-		MustCanonicalID("invalid")
+		assert.Panics(t, func() {
+			MustCanonicalID("invalid")
+		})
 	})
 }
 
@@ -149,25 +125,30 @@ func TestConstruct(t *testing.T) {
 			email:     "",
 			wantErr:   true,
 		},
+		{
+			name:      "sharepoint rejected with helpful message",
+			driveType: "sharepoint",
+			email:     "alice@contoso.com",
+			wantErr:   true,
+		},
+		{
+			name:      "shared rejected with helpful message",
+			driveType: "shared",
+			email:     "bob@example.com",
+			wantErr:   true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cid, err := Construct(tt.driveType, tt.email)
 			if tt.wantErr {
-				if err == nil {
-					t.Error("expected error, got nil")
-				}
+				require.Error(t, err)
 				return
 			}
 
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			if cid.String() != tt.want {
-				t.Errorf("Construct(%q, %q) = %q, want %q", tt.driveType, tt.email, cid.String(), tt.want)
-			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, cid.String())
 		})
 	}
 }
@@ -215,19 +196,12 @@ func TestConstructSharePoint(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cid, err := ConstructSharePoint(tt.email, tt.site, tt.library)
 			if tt.wantErr {
-				if err == nil {
-					t.Error("expected error, got nil")
-				}
+				require.Error(t, err)
 				return
 			}
 
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			if cid.String() != tt.want {
-				t.Errorf("ConstructSharePoint() = %q, want %q", cid.String(), tt.want)
-			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, cid.String())
 		})
 	}
 }
@@ -246,9 +220,7 @@ func TestCanonicalID_DriveType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.cid.DriveType(); got != tt.want {
-				t.Errorf("DriveType() = %q, want %q", got, tt.want)
-			}
+			assert.Equal(t, tt.want, tt.cid.DriveType())
 		})
 	}
 }
@@ -271,9 +243,7 @@ func TestCanonicalID_Email(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.cid.Email(); got != tt.want {
-				t.Errorf("Email() = %q, want %q", got, tt.want)
-			}
+			assert.Equal(t, tt.want, tt.cid.Email())
 		})
 	}
 }
@@ -291,9 +261,7 @@ func TestCanonicalID_IsSharePoint(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.cid.IsSharePoint(); got != tt.want {
-				t.Errorf("IsSharePoint() = %v, want %v", got, tt.want)
-			}
+			assert.Equal(t, tt.want, tt.cid.IsSharePoint())
 		})
 	}
 }
@@ -303,62 +271,35 @@ func TestCanonicalID_IsSharePoint(t *testing.T) {
 // See internal/config/token_resolution_test.go for coverage.
 
 func TestCanonicalID_IsZero(t *testing.T) {
-	zero := CanonicalID{}
-	if !zero.IsZero() {
-		t.Error("zero-value CanonicalID should be zero")
-	}
-
-	if MustCanonicalID("personal:user@example.com").IsZero() {
-		t.Error("non-zero CanonicalID should not be zero")
-	}
+	assert.True(t, CanonicalID{}.IsZero())
+	assert.False(t, MustCanonicalID("personal:user@example.com").IsZero())
 }
 
 func TestCanonicalID_MarshalText(t *testing.T) {
 	cid := MustCanonicalID("personal:user@example.com")
-
 	data, err := cid.MarshalText()
-	if err != nil {
-		t.Fatalf("MarshalText() error: %v", err)
-	}
-
-	if string(data) != "personal:user@example.com" {
-		t.Errorf("MarshalText() = %q, want %q", string(data), "personal:user@example.com")
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "personal:user@example.com", string(data))
 }
 
 func TestCanonicalID_MarshalText_Zero(t *testing.T) {
 	var cid CanonicalID
-
 	data, err := cid.MarshalText()
-	if err != nil {
-		t.Fatalf("MarshalText() error: %v", err)
-	}
-
-	if string(data) != "" {
-		t.Errorf("zero CanonicalID.MarshalText() = %q, want empty", string(data))
-	}
+	require.NoError(t, err)
+	assert.Empty(t, string(data))
 }
 
 func TestCanonicalID_UnmarshalText(t *testing.T) {
 	var cid CanonicalID
-
 	err := cid.UnmarshalText([]byte("business:alice@contoso.com"))
-	if err != nil {
-		t.Fatalf("UnmarshalText() error: %v", err)
-	}
-
-	if cid.String() != "business:alice@contoso.com" {
-		t.Errorf("UnmarshalText result = %q, want %q", cid.String(), "business:alice@contoso.com")
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "business:alice@contoso.com", cid.String())
 }
 
 func TestCanonicalID_UnmarshalText_Invalid(t *testing.T) {
 	var cid CanonicalID
-
 	err := cid.UnmarshalText([]byte("invalid"))
-	if err == nil {
-		t.Error("UnmarshalText(\"invalid\") should return error")
-	}
+	require.Error(t, err)
 }
 
 func TestCanonicalID_Site(t *testing.T) {
@@ -376,9 +317,7 @@ func TestCanonicalID_Site(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.cid.Site(); got != tt.want {
-				t.Errorf("Site() = %q, want %q", got, tt.want)
-			}
+			assert.Equal(t, tt.want, tt.cid.Site())
 		})
 	}
 }
@@ -399,9 +338,7 @@ func TestCanonicalID_Library(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.cid.Library(); got != tt.want {
-				t.Errorf("Library() = %q, want %q", got, tt.want)
-			}
+			assert.Equal(t, tt.want, tt.cid.Library())
 		})
 	}
 }
@@ -415,6 +352,7 @@ func TestCanonicalID_TextRoundTrip(t *testing.T) {
 		{"business", "business:alice@contoso.com"},
 		{"sharepoint", "sharepoint:alice@contoso.com:marketing:Docs"},
 		{"sharepoint multi-word library", "sharepoint:alice@contoso.com:hr:Shared Documents"},
+		{"shared", "shared:bob@example.com:d!abc123:item456"},
 	}
 
 	for _, tt := range tests {
@@ -422,42 +360,21 @@ func TestCanonicalID_TextRoundTrip(t *testing.T) {
 			original := MustCanonicalID(tt.raw)
 
 			data, err := original.MarshalText()
-			if err != nil {
-				t.Fatalf("MarshalText() error: %v", err)
-			}
+			require.NoError(t, err)
 
 			var restored CanonicalID
-			if err := restored.UnmarshalText(data); err != nil {
-				t.Fatalf("UnmarshalText() error: %v", err)
-			}
+			require.NoError(t, restored.UnmarshalText(data))
 
-			if original.String() != restored.String() {
-				t.Errorf("round-trip failed: original=%q, restored=%q", original.String(), restored.String())
-			}
-
-			// Also verify parsed fields survive round-trip.
-			if original.DriveType() != restored.DriveType() {
-				t.Errorf("DriveType mismatch: %q vs %q", original.DriveType(), restored.DriveType())
-			}
-
-			if original.Email() != restored.Email() {
-				t.Errorf("Email mismatch: %q vs %q", original.Email(), restored.Email())
-			}
-
-			if original.Site() != restored.Site() {
-				t.Errorf("Site mismatch: %q vs %q", original.Site(), restored.Site())
-			}
-
-			if original.Library() != restored.Library() {
-				t.Errorf("Library mismatch: %q vs %q", original.Library(), restored.Library())
-			}
+			assert.Equal(t, original.String(), restored.String())
+			assert.Equal(t, original.DriveType(), restored.DriveType())
+			assert.Equal(t, original.Email(), restored.Email())
+			assert.Equal(t, original.Site(), restored.Site())
+			assert.Equal(t, original.Library(), restored.Library())
 		})
 	}
 }
 
 func TestCanonicalID_String_ZeroValue(t *testing.T) {
 	var cid CanonicalID
-	if cid.String() != "" {
-		t.Errorf("zero-value String() = %q, want empty", cid.String())
-	}
+	assert.Empty(t, cid.String())
 }

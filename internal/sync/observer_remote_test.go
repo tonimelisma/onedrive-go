@@ -1582,3 +1582,101 @@ func TestFullDelta_PersonalVaultExcluded(t *testing.T) {
 		t.Errorf("event Name = %q, want %q", events[0].Name, "readme.txt")
 	}
 }
+
+// TestFullDelta_VaultChildBeforeParent verifies that vault descendants are
+// correctly skipped even when the Graph API returns the child BEFORE the
+// vault parent in the same delta page. Without two-pass processing, the
+// child's parent is not yet in the inflight map when isDescendantOfVault
+// runs, causing it to be emitted as a normal file — data loss when the
+// vault re-locks (B-281).
+func TestFullDelta_VaultChildBeforeParent(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{{
+			page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveid.New(testDriveID)},
+					// Child appears BEFORE its vault parent — triggers B-281.
+					{
+						ID: "vault-file", Name: "secret.pdf",
+						ParentID: "vault-folder", DriveID: driveid.New(testDriveID),
+						Size: 1024, QuickXorHash: "vhash",
+					},
+					// Vault folder appears after its child.
+					{
+						ID: "vault-folder", Name: "Personal Vault",
+						ParentID: "root", DriveID: driveid.New(testDriveID),
+						IsFolder: true, SpecialFolderName: "vault",
+					},
+					// Normal file outside vault.
+					{
+						ID: "normal-file", Name: "readme.txt",
+						ParentID: "root", DriveID: driveid.New(testDriveID),
+						Size: 256, QuickXorHash: "nhash",
+					},
+				},
+				DeltaLink: "delta-vault-reorder",
+			},
+		}},
+	}
+
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
+
+	events, _, err := obs.FullDelta(t.Context(), "")
+	if err != nil {
+		t.Fatalf("FullDelta: %v", err)
+	}
+
+	// Only the normal file should produce an event — vault child must be
+	// skipped regardless of ordering within the delta page.
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event (vault child skipped despite ordering), got %d", len(events))
+	}
+
+	if events[0].Name != "readme.txt" {
+		t.Errorf("event Name = %q, want %q", events[0].Name, "readme.txt")
+	}
+}
+
+// TestObserverStats_HashesComputed verifies that the HashesComputed counter
+// increments for each item that has a non-empty content hash (B-282).
+func TestObserverStats_HashesComputed(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{{
+			page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveid.New(testDriveID)},
+					{
+						ID: "f1", Name: "hashed.txt", ParentID: "root",
+						DriveID: driveid.New(testDriveID), QuickXorHash: "abc123",
+					},
+					{
+						ID: "f2", Name: "no-hash.txt", ParentID: "root",
+						DriveID: driveid.New(testDriveID),
+						// No hash fields set.
+					},
+					{
+						ID: "f3", Name: "sha256.txt", ParentID: "root",
+						DriveID: driveid.New(testDriveID), SHA256Hash: "deadbeef",
+					},
+				},
+				DeltaLink: "delta-stats",
+			},
+		}},
+	}
+
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
+
+	_, _, err := obs.FullDelta(t.Context(), "")
+	if err != nil {
+		t.Fatalf("FullDelta: %v", err)
+	}
+
+	stats := obs.Stats()
+	if stats.HashesComputed != 2 {
+		t.Errorf("HashesComputed = %d, want 2 (items with hashes)", stats.HashesComputed)
+	}
+}
