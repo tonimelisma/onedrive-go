@@ -22,6 +22,7 @@ const defaultRemotePath = "/"
 type ResolvedDrive struct {
 	CanonicalID driveid.CanonicalID
 	DisplayName string
+	Owner       string // drive owner name; populated for shared drives
 	Paused      bool
 	PausedUntil string // RFC3339 timestamp; empty when not timed
 	SyncDir     string // absolute path after tilde expansion
@@ -113,7 +114,7 @@ func matchBySelector(cfg *Config, selector string, logger *slog.Logger) (driveid
 
 	// Display name match.
 	for id := range cfg.Drives {
-		if cfg.Drives[id].DisplayName == selector {
+		if strings.EqualFold(cfg.Drives[id].DisplayName, selector) {
 			logger.Debug("drive matched by display_name", "display_name", selector, "canonical_id", id.String())
 
 			return id, cfg.Drives[id], nil
@@ -165,6 +166,7 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 	resolved := &ResolvedDrive{
 		CanonicalID:     canonicalID,
 		DisplayName:     drive.DisplayName,
+		Owner:           drive.Owner,
 		Paused:          drive.Paused != nil && *drive.Paused,
 		PausedUntil:     pausedUntil,
 		SyncDir:         expandTilde(drive.SyncDir),
@@ -381,16 +383,16 @@ func DriveTokenPath(canonicalID driveid.CanonicalID) string {
 		return ""
 	}
 
-	// Resolve token identity: SharePoint → business (shared OAuth session).
-	// Personal and business use their own type/email directly.
-	tokenType := canonicalID.DriveType()
-	tokenEmail := canonicalID.Email()
-
-	if canonicalID.IsSharePoint() {
-		tokenType = driveid.DriveTypeBusiness
+	// Resolve token identity via TokenCanonicalID: personal/business use
+	// their own token; SharePoint shares the business token. Shared drives
+	// are not handled here — callers must resolve via TokenCanonicalID(cid, cfg)
+	// first, because shared resolution requires the config.
+	tokenCID, err := TokenCanonicalID(canonicalID, nil)
+	if err != nil {
+		return ""
 	}
 
-	sanitized := tokenType + "_" + tokenEmail
+	sanitized := tokenCID.DriveType() + "_" + tokenCID.Email()
 
 	return filepath.Join(dataDir, "token_"+sanitized+".json")
 }

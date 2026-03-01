@@ -28,6 +28,9 @@ type userResponse struct {
 }
 
 // toUser normalizes a Graph API user response into our User type.
+// Email resolution: prefer `mail` (authoritative for Business accounts),
+// fall back to `userPrincipalName` when mail is empty (Personal accounts).
+// See B-280 for the rationale behind this fallback chain.
 func (u *userResponse) toUser() User {
 	email := u.Mail
 	if email == "" {
@@ -55,6 +58,7 @@ type driveResponse struct {
 type ownerFacet struct {
 	User struct {
 		DisplayName string `json:"displayName"`
+		Email       string `json:"email"`
 	} `json:"user"`
 }
 
@@ -80,6 +84,7 @@ func (d *driveResponse) toDrive() Drive {
 
 	if d.Owner != nil {
 		drive.OwnerName = d.Owner.User.DisplayName
+		drive.OwnerEmail = d.Owner.User.Email
 	}
 
 	if d.Quota != nil {

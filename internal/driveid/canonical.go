@@ -147,6 +147,14 @@ func MustCanonicalID(raw string) CanonicalID {
 // For SharePoint drives, use ConstructSharePoint() instead — it enforces
 // required site and library fields. For shared drives, use ConstructShared().
 func Construct(driveType, email string) (CanonicalID, error) {
+	if driveType == DriveTypeSharePoint {
+		return CanonicalID{}, fmt.Errorf("driveid: use ConstructSharePoint() for SharePoint drives")
+	}
+
+	if driveType == DriveTypeShared {
+		return CanonicalID{}, fmt.Errorf("driveid: use ConstructShared() for shared drives")
+	}
+
 	return NewCanonicalID(driveType + ":" + email)
 }
 

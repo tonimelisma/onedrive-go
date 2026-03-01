@@ -21,11 +21,12 @@ const configDirPermissions = 0o755
 // for drive sections. Used to detect section boundaries in line-based edits.
 const sectionHeaderPrefix = `["`
 
-// Drive type aliases for readability in this package.
+// Drive type aliases for readability.
 const (
 	driveTypePersonal   = driveid.DriveTypePersonal
 	driveTypeBusiness   = driveid.DriveTypeBusiness
 	driveTypeSharePoint = driveid.DriveTypeSharePoint
+	driveTypeShared     = driveid.DriveTypeShared
 )
 
 // configTemplate is the default config file content written on first login.

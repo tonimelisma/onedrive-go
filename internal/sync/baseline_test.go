@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"path/filepath"
 	stdsync "sync"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/pressly/goose/v3"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
@@ -2286,5 +2288,109 @@ func TestCheckCacheConsistency(t *testing.T) {
 
 	if mismatches != 1 {
 		t.Errorf("expected 1 mismatch after DB tampering, got %d", mismatches)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Migration tests
+// ---------------------------------------------------------------------------
+
+func TestMigration00004_CompositeKey(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "mig4.db")
+	logger := testLogger(t)
+
+	dsn := fmt.Sprintf(
+		"file:%s?_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)"+
+			"&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)",
+		dbPath,
+	)
+
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	db.SetMaxOpenConns(1)
+
+	ctx := context.Background()
+
+	// Apply only migrations 1-3 (before composite key migration).
+	subFS, err := fs.Sub(migrationsFS, "migrations")
+	if err != nil {
+		t.Fatalf("creating migration sub-filesystem: %v", err)
+	}
+
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, subFS)
+	if err != nil {
+		t.Fatalf("creating goose provider: %v", err)
+	}
+
+	_, err = provider.UpTo(ctx, 3)
+	if err != nil {
+		t.Fatalf("applying migrations 1-3: %v", err)
+	}
+
+	// Insert a delta token in the old single-key format.
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO delta_tokens (drive_id, token, updated_at) VALUES (?, ?, ?)`,
+		"d!abc123", "old-delta-token", 1700000000)
+	if err != nil {
+		t.Fatalf("inserting pre-migration token: %v", err)
+	}
+
+	// Apply migration 4 (composite key).
+	_, err = provider.UpTo(ctx, 4)
+	if err != nil {
+		t.Fatalf("applying migration 4: %v", err)
+	}
+
+	logger.Info("migration 4 applied, verifying token preservation")
+
+	// Verify the old token was preserved with scope_id = "".
+	var token, scopeID, scopeDrive string
+	err = db.QueryRowContext(ctx,
+		`SELECT token, scope_id, scope_drive FROM delta_tokens WHERE drive_id = ?`,
+		"d!abc123",
+	).Scan(&token, &scopeID, &scopeDrive)
+	if err != nil {
+		t.Fatalf("reading migrated token: %v", err)
+	}
+
+	if token != "old-delta-token" {
+		t.Errorf("token = %q, want %q", token, "old-delta-token")
+	}
+
+	if scopeID != "" {
+		t.Errorf("scope_id = %q, want empty string", scopeID)
+	}
+
+	if scopeDrive != "d!abc123" {
+		t.Errorf("scope_drive = %q, want %q", scopeDrive, "d!abc123")
+	}
+
+	// Verify the new composite key allows a second token for the same
+	// drive_id with a different scope_id (shared folder delta).
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO delta_tokens (drive_id, scope_id, scope_drive, token, updated_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		"d!abc123", "shared-folder-id", "d!other456", "scoped-delta-token", 1700000001)
+	if err != nil {
+		t.Fatalf("inserting scoped token: %v", err)
+	}
+
+	// Both tokens should coexist.
+	var count int
+	err = db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM delta_tokens WHERE drive_id = ?`, "d!abc123",
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("counting tokens: %v", err)
+	}
+
+	if count != 2 {
+		t.Errorf("expected 2 tokens for drive_id, got %d", count)
 	}
 }

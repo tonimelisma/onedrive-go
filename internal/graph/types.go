@@ -58,7 +58,11 @@ type DeltaPage struct {
 type User struct {
 	ID          string
 	DisplayName string
-	Email       string
+	// Email is populated from the Graph API `mail` field, falling back to
+	// `userPrincipalName` when mail is empty (common on Personal accounts
+	// where the mail field is often blank). Business accounts may have
+	// different values for mail vs UPN (B-280).
+	Email string
 }
 
 // Drive represents a OneDrive drive.
@@ -67,6 +71,7 @@ type Drive struct {
 	Name       string
 	DriveType  string // "personal", "business", "documentLibrary"
 	OwnerName  string
+	OwnerEmail string // from owner.user.email; needed for shared drive display names (B-279)
 	QuotaUsed  int64
 	QuotaTotal int64
 }

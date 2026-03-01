@@ -30,6 +30,7 @@ const (
 	backoffMultiplier     = 2
 	maxConsecutiveBackoff = 10 // cap prevents overflow; 5s * 2^10 = 5120s > any interval
 	minPollInterval       = 30 * time.Second
+	specialFolderVault    = "vault" // Graph API personal vault folder name
 )
 
 // inflightParent tracks a non-root item seen in the current delta batch,
@@ -70,6 +71,7 @@ type observerCounters struct {
 	eventsEmitted  atomic.Int64
 	pollsCompleted atomic.Int64
 	errors         atomic.Int64
+	hashesComputed atomic.Int64 // items with non-empty content hash (B-282)
 }
 
 // ObserverStats is a snapshot of observer metrics returned by Stats() (B-127).
@@ -77,6 +79,7 @@ type ObserverStats struct {
 	EventsEmitted  int64
 	PollsCompleted int64
 	Errors         int64
+	HashesComputed int64 // items processed with a content hash (B-282)
 }
 
 // NewRemoteObserver creates a RemoteObserver for the given drive. The
@@ -269,6 +272,7 @@ func (o *RemoteObserver) Stats() ObserverStats {
 		EventsEmitted:  o.stats.eventsEmitted.Load(),
 		PollsCompleted: o.stats.pollsCompleted.Load(),
 		Errors:         o.stats.errors.Load(),
+		HashesComputed: o.stats.hashesComputed.Load(),
 	}
 }
 
@@ -298,6 +302,11 @@ func timeSleep(ctx context.Context, d time.Duration) error {
 // fetchPage fetches a single delta page, processes items, and returns events.
 // Returns done=true with the DeltaLink when the final page is reached, or
 // done=false with NextLink for continued pagination.
+//
+// Two-pass processing (B-281): the Graph API does not guarantee parent-before-
+// child ordering within a delta page. Pass 1 registers ALL items in the
+// inflight map so that pass 2 can correctly classify vault descendants even
+// when the child appears before its vault parent in the response.
 func (o *RemoteObserver) fetchPage(
 	ctx context.Context, token string, page int, inflight map[driveid.ItemKey]inflightParent,
 ) ([]ChangeEvent, string, bool, error) {
@@ -310,9 +319,16 @@ func (o *RemoteObserver) fetchPage(
 		return nil, "", false, fmt.Errorf("sync: fetching delta page %d: %w", page, err)
 	}
 
+	// Pass 1: register all items in inflight so parent-chain walks
+	// in pass 2 see every item regardless of arrival order.
+	for i := range dp.Items {
+		o.registerInflight(&dp.Items[i], inflight)
+	}
+
+	// Pass 2: classify and emit events (inflight map is fully populated).
 	var events []ChangeEvent
 	for i := range dp.Items {
-		if ev := o.processItem(&dp.Items[i], inflight); ev != nil {
+		if ev := o.classifyItem(&dp.Items[i], inflight); ev != nil {
 			events = append(events, *ev)
 		}
 	}
@@ -328,23 +344,26 @@ func (o *RemoteObserver) fetchPage(
 	return events, dp.NextLink, false, nil
 }
 
-// processItem converts a single graph.Item into a ChangeEvent, registering
-// it in the inflight parent map for path materialization. Returns nil for
-// root items (structural, not content changes).
-func (o *RemoteObserver) processItem(item *graph.Item, inflight map[driveid.ItemKey]inflightParent) *ChangeEvent {
+// registerInflight adds an item to the inflight parent map without
+// classification. Called in pass 1 of fetchPage to ensure the full page
+// is registered before any vault/classification checks (B-281).
+func (o *RemoteObserver) registerInflight(item *graph.Item, inflight map[driveid.ItemKey]inflightParent) {
 	itemDriveID := o.resolveItemDriveID(item)
-
-	// Register in inflight map before classification so children in the
-	// same batch can materialize paths through this item.
-	isVault := item.SpecialFolderName == "vault"
 	key := driveid.NewItemKey(itemDriveID, item.ID)
 	inflight[key] = inflightParent{
 		name:          nfcNormalize(item.Name),
 		parentID:      item.ParentID,
 		parentDriveID: resolveParentDriveID(item, itemDriveID),
 		isRoot:        item.IsRoot,
-		isVault:       isVault,
+		isVault:       item.SpecialFolderName == specialFolderVault,
 	}
+}
+
+// classifyItem converts a single graph.Item into a ChangeEvent. Called in
+// pass 2 of fetchPage after all items are registered in inflight. Returns
+// nil for root items and vault descendants (B-271, B-281).
+func (o *RemoteObserver) classifyItem(item *graph.Item, inflight map[driveid.ItemKey]inflightParent) *ChangeEvent {
+	itemDriveID := o.resolveItemDriveID(item)
 
 	if item.IsRoot {
 		o.logger.Debug("skipping root item", slog.String("item_id", item.ID))
@@ -356,6 +375,7 @@ func (o *RemoteObserver) processItem(item *graph.Item, inflight map[driveid.Item
 	// any items whose parent chain includes a vault folder. This prevents
 	// data loss from vault lock/unlock cycles where items appear and
 	// disappear in delta responses.
+	isVault := item.SpecialFolderName == specialFolderVault
 	if isVault || o.isDescendantOfVault(item, inflight, itemDriveID) {
 		o.logger.Info("skipping vault item",
 			slog.String("item_id", item.ID),
@@ -376,6 +396,11 @@ func (o *RemoteObserver) classifyAndConvert(
 	baselineKey := driveid.NewItemKey(itemDriveID, item.ID)
 	existing, _ := o.baseline.GetByID(baselineKey)
 
+	hash := selectHash(item)
+	if hash != "" {
+		o.stats.hashesComputed.Add(1)
+	}
+
 	ev := ChangeEvent{
 		Source:    SourceRemote,
 		ItemID:    item.ID,
@@ -384,7 +409,7 @@ func (o *RemoteObserver) classifyAndConvert(
 		ItemType:  classifyItemType(item),
 		Name:      name,
 		Size:      item.Size,
-		Hash:      selectHash(item),
+		Hash:      hash,
 		Mtime:     toUnixNano(item.ModifiedAt),
 		ETag:      item.ETag,
 		CTag:      item.CTag,
