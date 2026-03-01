@@ -139,6 +139,8 @@ onedrive-go drive remove [--purge]     # Pause a drive (--purge: delete state DB
 
 `drive remove` sets `enabled = false` in config. Everything preserved. `--purge` permanently removes state DB and config section; token kept if shared with other drives.
 
+`drive list` shows `(read-only)` or `(read-write)` permission annotations for shared content (DP-10), giving users proactive visibility into access levels before sync encounters 403 errors.
+
 See [accounts.md §10](accounts.md) for details.
 
 #### Configuration
@@ -260,12 +262,13 @@ A single config file holds multiple drive sections. A single `sync --watch` proc
 ```toml
 # ── Global settings ──
 log_level = "info"
-skip_dotfiles = true
 
 # ── Drives ──
+# Filter settings (skip_dotfiles, skip_dirs, etc.) are per-drive only (DP-8)
 
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
+skip_dotfiles = true
 
 ["business:alice@contoso.com"]
 sync_dir = "~/OneDrive - Contoso"
@@ -367,22 +370,21 @@ This is a differentiating feature. No competing tool does this well.
 
 ### Config-Based Filtering
 
-Global filtering rules as flat top-level TOML keys:
+All filter settings are **per-drive only** — there are no global filter defaults (DP-8). Each drive gets built-in defaults (empty lists, `false`) unless it specifies its own. This prevents confusing inheritance where a global setting unexpectedly affects unrelated drives.
 
 ```toml
-skip_dotfiles = false
-skip_files = ["~*", "*.tmp", "*.partial", ".DS_Store", "Thumbs.db"]
-skip_dirs = ["node_modules", ".git", "__pycache__"]
-ignore_marker = ".odignore"
-max_file_size = "50GB"
-```
+# Filter settings live inside each drive section
+["personal:toni@outlook.com"]
+sync_dir = "~/OneDrive"
+# No filter settings → syncs everything (built-in exclusions still apply)
 
-Per-drive overrides for individual filter settings:
-
-```toml
 ["business:alice@contoso.com"]
 sync_dir = "~/OneDrive - Contoso"
+skip_dotfiles = true
 skip_dirs = ["node_modules", ".git", "vendor"]
+skip_files = ["~*", "*.tmp", "*.partial", ".DS_Store", "Thumbs.db"]
+ignore_marker = ".odignore"
+max_file_size = "50GB"
 ```
 
 ### Inclusion Lists (Selective Sync)
@@ -557,10 +559,9 @@ Config is modified by `login`, `drive add`, `drive remove`, and `setup`. Modific
 # Uncomment and modify to override defaults.
 
 # log_level = "info"
-# skip_dotfiles = false
-# skip_dirs = []
-# skip_files = []
 # poll_interval = "5m"
+
+# Note: filter settings (skip_dotfiles, skip_dirs, etc.) are per-drive only (DP-8)
 
 # ── Drives ──
 

@@ -45,21 +45,14 @@ const configTemplate = `# onedrive-go configuration
 # Log file path (default: platform standard location)
 # log_file = ""
 
-# Skip files and directories starting with "."
-# skip_dotfiles = false
-
-# Directory names to skip everywhere
-# skip_dirs = []
-
-# File name patterns to skip
-# skip_files = []
-
 # Check interval for sync --watch
 # poll_interval = "5m"
 
 # ── Drives ──
 # Added automatically by 'login' and 'drive add'.
 # Each section name is the canonical drive identifier.
+# Filter settings (skip_dotfiles, skip_dirs, skip_files, etc.) are
+# per-drive only — configure them inside each drive section below.
 `
 
 // driveSection generates the TOML text for a new drive section. The blank

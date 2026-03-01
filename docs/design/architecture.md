@@ -637,6 +637,8 @@ rootCtx
     +-- sharedWorker[0..K]
 ```
 
+> **Multi-drive extension**: In multi-drive mode, the context tree extends with a process-level root above the per-drive engines. The orchestrator design (including the exact context hierarchy for multi-drive) is an unresolved design gap — see [MULTIDRIVE.md §11](MULTIDRIVE.md#11-multi-drive-orchestrator-design-gap).
+
 ### 6.4 Graceful Shutdown
 
 - **First signal** (SIGINT/SIGTERM): Cancel root context. In-flight transfers finish up to a configurable timeout. Completed actions already committed to baseline individually. Upload sessions persisted in SessionStore for crash resume. Partial downloads resume via `.partial` files. Exit cleanly.
@@ -891,6 +893,23 @@ INCLUDED
 ```
 
 The filter is applied in the Planner to both remote and local items symmetrically. When filter rules change, previously-included files that are now excluded are tracked for user visibility (user nagged, never auto-deleted).
+
+> **Per-drive only.** All filter settings are per-drive native — there are no global filter defaults. Each drive gets built-in defaults (empty lists, `false`) unless it specifies its own. See [configuration.md §4.2](configuration.md#42-filtering-settings) and [MULTIDRIVE.md §10](MULTIDRIVE.md#10-filter-scoping) (DP-8).
+
+---
+
+## 12. Multi-Drive Architecture
+
+Multi-drive sync is designed around per-drive `Engine` isolation: each configured drive runs its own sync pipeline (observers, buffer, planner, tracker, workers, baseline manager) with its own state DB and delta token(s). The multi-drive architecture is specified in [MULTIDRIVE.md](MULTIDRIVE.md).
+
+**Key properties**:
+
+- **Per-drive Engine isolation**: Each drive has its own `Engine` instance, goroutine, and state DB. One drive's failure does not affect others.
+- **Shared `graph.Client` per token**: Drives sharing the same Microsoft account (e.g., business OneDrive + SharePoint libraries) share one `graph.Client` instance. Same token = same rate limits, same HTTP connection pool.
+- **Global bandwidth limiter**: A process-wide token bucket limits total bandwidth across all drives.
+- **Error isolation**: Per-drive error state is tracked independently. A persistent error on one drive (expired token, corrupted DB) does not stall others.
+
+> **DESIGN GAP**: The multi-drive orchestrator — the component that manages multiple `Engine` instances, allocates workers, coordinates rate limits, and handles SIGHUP-driven config changes — is not yet specified. See [MULTIDRIVE.md §11](MULTIDRIVE.md#11-multi-drive-orchestrator-design-gap) for the full list of open questions to resolve before Phase 7.0 implementation.
 
 ---
 
