@@ -177,16 +177,18 @@ Flat global settings at the top. Drive sections identified by `:` in the section
 ```toml
 # ── Global settings ──
 log_level = "info"
-skip_dotfiles = true
-skip_dirs = ["node_modules", ".git"]
-skip_files = ["*.tmp", "~*"]
 poll_interval = "5m"
+# Note: filter settings (skip_dotfiles, skip_dirs, skip_files, etc.) are
+# per-drive only — configure them inside each drive section below. (DP-8)
 
 # ── Drives (any section with ":" is a drive) ──
 
 ["personal:toni@outlook.com"]
 display_name = "toni@outlook.com"
 sync_dir = "~/OneDrive"
+skip_dotfiles = true
+skip_dirs = ["node_modules", ".git"]
+skip_files = ["*.tmp", "~*"]
 
 ["business:alice@contoso.com"]
 display_name = "alice@contoso.com"
@@ -212,10 +214,9 @@ Quotes around section names are required by TOML because `@` and `:` are not val
 |---|---|---|---|
 | `log_level` | string | `"info"` | Log file verbosity: `debug`, `info`, `warn`, `error` |
 | `log_file` | string | (platform default) | Log file path override |
-| `skip_dotfiles` | bool | `false` | Skip files/dirs starting with `.` |
-| `skip_dirs` | string[] | `[]` | Directory names to skip everywhere |
-| `skip_files` | string[] | `[]` | File name patterns to skip everywhere |
 | `poll_interval` | string | `"5m"` | Check interval for `sync --watch` |
+
+> **Note**: Filter settings (`skip_dotfiles`, `skip_dirs`, `skip_files`, etc.) are per-drive only — there are no global filter defaults. See [MULTIDRIVE.md §10](MULTIDRIVE.md#10-filter-scoping) (DP-8).
 
 ### Per-drive settings
 
@@ -228,12 +229,12 @@ Quotes around section names are required by TOML because `@` and `:` are not val
 | `sync_vault` | bool | No | `false` | Include Personal Vault items in sync (dangerous — vault auto-lock can cause local deletes) |
 | `remote_path` | string | No | `"/"` | Remote subfolder to sync |
 | `drive_id` | string | No | auto | Explicit drive ID (auto-detected for personal/business) |
-| `skip_dotfiles` | bool | No | global | Per-drive override |
-| `skip_dirs` | string[] | No | global | Per-drive override |
-| `skip_files` | string[] | No | global | Per-drive override |
-| `poll_interval` | string | No | global | Per-drive override |
+| `skip_dotfiles` | bool | No | `false` | Skip files/dirs starting with `.` (per-drive native, DP-8) |
+| `skip_dirs` | string[] | No | `[]` | Directory names to skip (per-drive native) |
+| `skip_files` | string[] | No | `[]` | File name patterns to skip (per-drive native) |
+| `poll_interval` | string | No | global | Per-drive override of global poll_interval |
 
-Per-drive settings override globals when specified.
+Filter settings are per-drive native (no global defaults to inherit from). Non-filter per-drive settings override globals when specified.
 
 > **Note:** The Go `Drive` struct definition and display_name derivation rules are specified in [MULTIDRIVE.md §2](MULTIDRIVE.md#2-configuration--naming).
 
@@ -277,20 +278,13 @@ On first login, the app writes a complete config from a template string constant
 # Log file path (default: platform standard location)
 # log_file = ""
 
-# Skip files and directories starting with "."
-# skip_dotfiles = false
-
-# Directory names to skip everywhere
-# skip_dirs = []
-
-# File name patterns to skip
-# skip_files = []
-
 # Check interval for sync --watch
 # poll_interval = "5m"
 
 # ── Drives ──
 # Added automatically by 'login' and 'drive add'.
+# Filter settings (skip_dotfiles, skip_dirs, skip_files, etc.) are
+# per-drive only — configure them inside each drive section below.
 # Each section name is the canonical drive identifier.
 
 ["personal:toni@outlook.com"]
@@ -717,12 +711,12 @@ SharePoint libraries (using alice@contoso.com):
   3. HR / Policies
 
 Shared with me:
-  4. Jane's Photos       (shared by jane@outlook.com)
-  5. Bob's Project Files  (shared by bob@contoso.com)
+  4. Jane's Photos       (shared by jane@outlook.com, read-only)
+  5. Bob's Project Files  (shared by bob@contoso.com, read-write)
   ... and 3 more shared folders
 
 Select (number): 4
-Drive added: Jane's Photos (shared by jane@outlook.com)
+Drive added: Jane's Photos (shared by jane@outlook.com, read-only)
   -> ~/OneDrive-Shared/Jane's Photos
 
 To add a new Microsoft account, use 'onedrive-go login'.
@@ -776,6 +770,22 @@ Drive removed: personal:toni@outlook.com
   Config section: removed
   Sync directory (~/OneDrive): untouched — delete manually if desired
 ```
+
+### Duplicate-source detection (DP-9)
+
+When `drive add` adds a shared folder that is already synced as a shortcut inside the user's primary drive (or vice versa), a warning is displayed:
+
+```
+$ onedrive-go drive add "Jane's Photos"
+Warning: "Jane's Photos" is also synced as a shortcut in your drive
+  (at ~/OneDrive/Jane's Photos). Both will sync independently — this
+  wastes bandwidth and disk. Consider removing one.
+
+Drive added: Jane's Photos (shared by jane@outlook.com, read-only)
+  -> ~/OneDrive-Shared/Jane's Photos
+```
+
+The warning is informational — the add proceeds. The same warning appears at config validation time if the duplicate is detected. See [MULTIDRIVE.md §4](MULTIDRIVE.md#duplicate-source-detection-dp-9).
 
 ---
 
@@ -1096,11 +1106,11 @@ Syncing...
 $ onedrive-go drive list
 ...
 Available shared folders:
-  Jane's Photos       (shared by jane@outlook.com)
-  Bob's Project Files (shared by bob@contoso.com)
+  Jane's Photos       (shared by jane@outlook.com, read-only)
+  Bob's Project Files (shared by bob@contoso.com, read-write)
 
 $ onedrive-go drive add "Jane's Photos"
-Drive added: Jane's Photos (shared by jane@outlook.com)
+Drive added: Jane's Photos (shared by jane@outlook.com, read-only)
   -> ~/OneDrive-Shared/Jane's Photos
 
 $ onedrive-go sync  # syncs all enabled drives including shared

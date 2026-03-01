@@ -145,12 +145,9 @@ Only two environment variables are supported. They provide drive and path overri
 # log_file = ""                          # log file path (empty = platform default)
 
 # ── Filtering ──
-# skip_dotfiles = false                  # skip files/dirs starting with .
-# skip_symlinks = false                  # skip symbolic links (default: follow them)
-# max_file_size = "0"                    # skip files larger than this (0 = no limit)
-# skip_files = []                        # file name patterns to exclude
-# skip_dirs = []                         # directory name patterns to exclude
-# ignore_marker = ".odignore"            # per-directory marker file name
+# NOTE: All filter settings (skip_dotfiles, skip_dirs, skip_files, etc.) are
+# per-drive only. There are no global filter defaults. Configure filters inside
+# each drive section below. See MULTIDRIVE.md §10 (DP-8).
 
 # ── Transfers ──
 # parallel_downloads = 8                 # simultaneous download workers (1-16)
@@ -196,10 +193,17 @@ Only two environment variables are supported. They provide drive and path overri
 ["personal:toni@outlook.com"]
 display_name = "toni@outlook.com"
 sync_dir = "~/OneDrive"
+# Per-drive filter settings (all optional, defaults to sync everything):
+# skip_dotfiles = false
+# skip_dirs = []
+# skip_files = []
+# max_file_size = "0"
+# ignore_marker = ".odignore"
 
 ["business:alice@contoso.com"]
 display_name = "alice@contoso.com"
 sync_dir = "~/OneDrive - Contoso"
+# Filter settings are per-drive native — no global defaults to inherit from
 skip_dirs = ["node_modules", ".git", "vendor"]
 
 ["sharepoint:alice@contoso.com:marketing:Documents"]
@@ -287,31 +291,21 @@ These fields appear inside drive sections:
 | `azure_ad_endpoint` | String | No | `""` | National cloud endpoint: `USL4`, `USL5`, `DE`, `CN` |
 | `azure_tenant_id` | String | No | `""` | Azure AD tenant GUID or domain |
 
-### 3.3 Per-Drive Overrides
+### 3.3 Per-Drive Settings
 
-Drive sections can override individual global settings. Only the following settings are overridable per-drive:
+Drive sections contain two categories of settings (see [§5](#5-per-drive-settings)):
 
-| Setting | Description |
-|---------|-------------|
-| `skip_dotfiles` | Per-drive override of global `skip_dotfiles` |
-| `skip_dirs` | Per-drive override of global `skip_dirs` |
-| `skip_files` | Per-drive override of global `skip_files` |
-| `poll_interval` | Per-drive override of global `poll_interval` |
-| `sync_paths` | Per-drive selective sync paths |
-
-Per-drive overrides **replace** the global value entirely — they do not merge. If a drive section specifies `skip_dirs = ["vendor"]`, the global `skip_dirs` list is NOT merged in. This is a deliberate design choice: merge semantics for arrays are confusing and error-prone. Complete replacement is predictable.
+- **Per-drive native** (filter settings): `skip_dotfiles`, `skip_dirs`, `skip_files`, `max_file_size`, `skip_symlinks`, `ignore_marker`, `sync_paths`. These have no global defaults — each drive gets built-in defaults unless it specifies its own (DP-8).
+- **Global with per-drive override**: `poll_interval`. When specified in a drive section, it **completely replaces** the global value.
 
 **Example:**
 
 ```toml
-# Global defaults
-skip_dirs = ["node_modules", ".git"]
 poll_interval = "5m"
 
-# Work drive overrides
 ["business:alice@contoso.com"]
 sync_dir = "~/OneDrive - Contoso"
-skip_dirs = ["node_modules", ".git", "vendor"]   # replaces global list
+skip_dirs = ["node_modules", ".git", "vendor"]   # per-drive native (no global to inherit from)
 poll_interval = "10m"                              # overrides global interval
 ```
 
@@ -375,14 +369,16 @@ All global settings are flat top-level TOML keys. They are organized here by fun
 
 ### 4.2 Filtering Settings
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `skip_dotfiles` | Boolean | `false` | Skip files/dirs starting with `.` |
-| `skip_symlinks` | Boolean | `false` | Skip symbolic links (default: follow them). Broken and circular symlinks are always skipped. |
-| `max_file_size` | String | `"0"` | Skip files larger than this size. `"0"` = no limit. Format: `"50MB"`, `"1GB"`. |
-| `skip_files` | Array of strings | `[]` | File name patterns to exclude. Case-insensitive. Supports `*` and `?` wildcards. |
-| `skip_dirs` | Array of strings | `[]` | Directory name patterns to exclude. Case-insensitive. Bare name matches anywhere; leading `/` anchors to sync root. |
-| `ignore_marker` | String | `".odignore"` | Per-directory ignore marker file name |
+> **Per-drive only.** All filter settings are per-drive native — they exist only inside drive sections. There are no global filter defaults. Each drive gets built-in defaults (empty lists, `false`) unless it specifies its own. See [MULTIDRIVE.md §10](MULTIDRIVE.md#10-filter-scoping) and DP-8.
+
+| Option | Type | Default | Scope | Description |
+|--------|------|---------|-------|-------------|
+| `skip_dotfiles` | Boolean | `false` | Per-drive | Skip files/dirs starting with `.` |
+| `skip_symlinks` | Boolean | `false` | Per-drive | Skip symbolic links (default: follow them). Broken and circular symlinks are always skipped. |
+| `max_file_size` | String | `"0"` | Per-drive | Skip files larger than this size. `"0"` = no limit. Format: `"50MB"`, `"1GB"`. |
+| `skip_files` | Array of strings | `[]` | Per-drive | File name patterns to exclude. Case-insensitive. Supports `*` and `?` wildcards. |
+| `skip_dirs` | Array of strings | `[]` | Per-drive | Directory name patterns to exclude. Case-insensitive. Bare name matches anywhere; leading `/` anchors to sync root. |
+| `ignore_marker` | String | `".odignore"` | Per-drive | Per-directory ignore marker file name |
 
 ### 4.3 Transfer Settings
 
@@ -476,43 +472,63 @@ Applied globally across all workers via a shared token bucket.
 
 ## 5. Per-Drive Settings
 
-### 5.1 Override Mechanics
+### 5.1 Two Categories
 
-Per-drive settings override global settings for that drive only. A setting specified in a drive section **completely replaces** the global value — no merging.
+Per-drive settings fall into two categories:
 
-```toml
-# Global
-skip_dirs = ["node_modules", ".git"]
+**Per-drive native** (filter settings): These settings exist only inside drive sections. There are no global defaults to inherit from. Each drive gets built-in defaults (empty lists, `false`) unless it specifies its own values. See DP-8.
 
-# This drive gets ONLY ["vendor"] — not ["node_modules", ".git", "vendor"]
-["business:alice@contoso.com"]
-sync_dir = "~/OneDrive - Contoso"
-skip_dirs = ["vendor"]
-```
+| Setting | Category | Rationale |
+|---------|----------|-----------|
+| `skip_dotfiles` | Per-drive native | Different drives have different content |
+| `skip_dirs` | Per-drive native | Different drives need different exclusions |
+| `skip_files` | Per-drive native | Different content types need different exclusions |
+| `max_file_size` | Per-drive native | Different drives have different size needs |
+| `skip_symlinks` | Per-drive native | Different drives may have different symlink policies |
+| `ignore_marker` | Per-drive native | Per-directory marker is drive-specific |
+| `sync_paths` | Per-drive native | Selective sync is inherently per-drive |
+
+**Global with per-drive override** (non-filter settings): These settings have global defaults that can be overridden per-drive. A setting specified in a drive section **completely replaces** the global value — no merging.
+
+| Setting | Rationale |
+|---------|-----------|
+| `poll_interval` | Some drives are more latency-sensitive |
+
+All other global settings (transfers, safety, logging, network) apply uniformly. This keeps the configuration predictable — you don't need to check every drive section to understand how transfers or safety work.
 
 ### 5.2 Resolution Algorithm
 
 ```
 function ResolveSetting(driveID, settingName):
-    if drive section has settingName:
-        return drive section value
+    if settingName is a filter setting:
+        if drive section has settingName:
+            return drive section value
+        else:
+            return built-in default (empty/false)
     else:
-        return global value (or built-in default if global absent)
+        if drive section has settingName:
+            return drive section value
+        else:
+            return global value (or built-in default if global absent)
 ```
 
-### 5.3 Overridable Settings
+### 5.3 Override Example
 
-Only these global settings can be overridden per-drive:
+```toml
+# poll_interval is global with per-drive override
+poll_interval = "5m"
 
-| Setting | Rationale |
-|---------|-----------|
-| `skip_dotfiles` | Different projects have different dotfile needs |
-| `skip_dirs` | Different codebases need different exclusions |
-| `skip_files` | Different content types need different exclusions |
-| `poll_interval` | Some drives are more latency-sensitive |
-| `sync_paths` | Selective sync is inherently per-drive |
+["personal:me@outlook.com"]
+sync_dir = "~/OneDrive"
+# No filter settings → syncs everything (built-in exclusions still apply)
+# poll_interval = global "5m"
 
-All other global settings (transfers, safety, logging, network) apply uniformly. This keeps the configuration predictable — you don't need to check every drive section to understand how transfers or safety work.
+["business:alice@contoso.com"]
+sync_dir = "~/OneDrive - Contoso"
+skip_dirs = ["node_modules", ".git", "vendor"]   # per-drive native
+skip_dotfiles = true                               # per-drive native
+poll_interval = "2m"                               # overrides global
+```
 
 ---
 
@@ -912,8 +928,11 @@ If detected, offer to import settings. Warn about running instances to avoid con
 | `disable_download_validation = true` | Warning: `Download validation disabled. Data integrity cannot be guaranteed.` |
 | `disable_upload_validation = true` | Warning: `Upload validation disabled. Post-upload corruption cannot be detected.` |
 | Multiple drives with same `sync_dir` | `Drives "X" and "Y" have the same sync_dir — this will cause conflicts` |
+| Duplicate shared source across shortcut and standalone drive | Warning: `"X" is synced as both a shortcut and a standalone shared drive — this wastes bandwidth and disk` (DP-9, see [MULTIDRIVE.md §4](MULTIDRIVE.md#duplicate-source-detection-dp-9)) |
 | `bandwidth_schedule` not chronological | Warning: `bandwidth_schedule entries should be in chronological order for clarity` |
 | `big_delete_min_items` > `big_delete_threshold` | Warning: `big_delete_min_items exceeds big_delete_threshold — big-delete protection will never trigger` |
+
+> **Note on inotify watch limits**: The sync engine automatically detects Linux inotify watch limits and falls back to periodic full scan per-drive when watches are exhausted. This is not a config option — it is handled automatically by the engine. See [MULTIDRIVE.md §9](MULTIDRIVE.md#9-operational-constraints) for details.
 
 ### 13.3 Shadow Validation for Filters
 
@@ -1009,13 +1028,13 @@ Every configuration option in a single reference table.
 | `log_file` | Global | String | `""` | - | No | Log file path |
 | `log_format` | Global | String | `"auto"` | - | Yes | Log format |
 | `log_retention_days` | Global | Integer | `30` | - | No | Log file retention |
-| `skip_dotfiles` | Global/Drive | Boolean | `false` | - | Yes | Skip dotfiles |
-| `skip_symlinks` | Global | Boolean | `false` | - | Yes | Skip symlinks |
-| `max_file_size` | Global | String | `"0"` | - | Yes | Max file size |
-| `skip_files` | Global/Drive | Array | `[]` | - | Yes | File exclusion patterns |
-| `skip_dirs` | Global/Drive | Array | `[]` | - | Yes | Dir exclusion patterns |
-| `ignore_marker` | Global | String | `".odignore"` | - | Yes | Ignore marker name |
-| `sync_paths` | Drive | Array | `[]` | - | Yes | Selective sync paths |
+| `skip_dotfiles` | Drive | Boolean | `false` | - | Yes | Skip dotfiles (per-drive native, DP-8) |
+| `skip_symlinks` | Drive | Boolean | `false` | - | Yes | Skip symlinks (per-drive native) |
+| `max_file_size` | Drive | String | `"0"` | - | Yes | Max file size (per-drive native) |
+| `skip_files` | Drive | Array | `[]` | - | Yes | File exclusion patterns (per-drive native) |
+| `skip_dirs` | Drive | Array | `[]` | - | Yes | Dir exclusion patterns (per-drive native) |
+| `ignore_marker` | Drive | String | `".odignore"` | - | Yes | Ignore marker name (per-drive native) |
+| `sync_paths` | Drive | Array | `[]` | - | Yes | Selective sync paths (per-drive native) |
 | `parallel_downloads` | Global | Integer | `8` | - | No | Download workers |
 | `parallel_uploads` | Global | Integer | `8` | - | No | Upload workers |
 | `parallel_checkers` | Global | Integer | `8` | - | No | Hash check workers |

@@ -812,6 +812,8 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 ### 7.0: Multi-drive orchestration — FUTURE
 
+> **Prerequisite**: Resolve all open design questions in [MULTIDRIVE.md §11 (Multi-Drive Orchestrator)](../docs/design/MULTIDRIVE.md#11-multi-drive-orchestrator-design-gap) before implementation begins. That section lists 10 open questions covering orchestrator struct, client pool, worker budget, error isolation, watch lifecycle, aggregate reporting, context tree, bandwidth limiting, rate limit coordination, and checker pool scoping. See also [concurrent-execution.md §19](../docs/design/concurrent-execution.md#19-multi-drive-worker-budget-design-gap) for the worker budget design gap.
+
 1. `ResolveDrives()` in config package: return `[]*ResolvedDrive` for all enabled drives (when no `--drive` flag) or the specified subset. Currently only `ResolveDrive()` exists (single drive).
 2. Shared `graph.Client` per token file: multiple drives sharing the same Microsoft account (e.g., business OneDrive + SharePoint libraries) should share one `graph.Client` instance. Same token, same rate limit tracking, same HTTP connection pool. Create one client per unique token path, not per drive.
 3. Global worker pool cap: per-drive pools (downloads + uploads) multiply with concurrent drives. 5 drives x 16 workers = 80 I/O goroutines. Implement a global cap (e.g., `max_total_workers` config) that subdivides across active drives.

@@ -1089,3 +1089,22 @@ profiling demonstrates a bottleneck:
   (e.g., move detection needs to see both the delete and the create). Only
   viable in watch mode where observation is continuous. Not applicable to
   RunOnce.
+
+---
+
+## 19. Multi-Drive Worker Budget (DESIGN GAP)
+
+> **STATUS: UNRESOLVED DESIGN GAP** — The worker budget algorithm for multi-drive sync must be specified before Phase 7.0 implementation begins.
+
+When multiple drives sync simultaneously, the total worker count across all drives must be bounded to prevent resource exhaustion (5 drives x 16 workers = 80 I/O goroutines). The current single-drive worker model (section 6) allocates interactive/bulk/shared lanes based on a single drive's config. Multi-drive sync needs a global allocation strategy.
+
+### Constraints
+
+- **Global cap needed**: A `max_total_workers` config option (or computed default) must limit the total worker goroutines across all drives.
+- **Minimum per drive**: Each active drive needs a minimum viable allocation (at least 1 interactive + 1 bulk worker) to make progress. If 10 drives are enabled and the global cap is 16, some drives may need to wait.
+- **Checker pool scoping**: The hash checker pool (CPU-bound, `runtime.NumCPU()` workers) should likely be global rather than per-drive, since it competes for CPU cores. Per-drive checker pools would oversubscribe on machines with many drives.
+- **Dynamic reallocation**: When drives complete their sync cycles (one-shot) or enter idle (watch mode, nothing to do), their workers should be available for other drives.
+
+### Open Questions
+
+See [MULTIDRIVE.md §11](MULTIDRIVE.md#11-multi-drive-orchestrator-design-gap) for the full list of orchestrator-level open questions, including worker budget, rate limit coordination, bandwidth limiting, and error isolation.

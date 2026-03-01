@@ -259,18 +259,20 @@ Ambiguity: error with disambiguation guidance.
 ```
 Configured drives:
   me@outlook.com               ~/OneDrive                         ready
-  Jane's Photos                ~/OneDrive-Shared/Jane's Photos    ready
+  Jane's Photos (read-only)    ~/OneDrive-Shared/Jane's Photos    ready
 
 Available drives (not configured):
   me@contoso.com
   Marketing / Documents
-  Bob's Project Files          (shared by bob@contoso.com)
-  Grandma's Recipes            (shared by grandma@outlook.com)
+  Bob's Project Files          (shared by bob@contoso.com, read-write)
+  Grandma's Recipes            (shared by grandma@outlook.com, read-only)
 
 Run 'onedrive-go drive add <name>' to add a drive.
 ```
 
 - Shows display_name for all drives
+- Shared content shows `(read-only)` or `(read-write)` from the permissions facet (DP-10)
+- Permission annotations are informational — the sync engine still auto-detects via 403 (DP-3)
 - Available shared drives capped at first 10. More: `... and N more shared drives`
 - All drive types listed together (personal, business, SharePoint, shared) — no `--shared` flag
 - `drive list --verbose` adds canonical IDs
@@ -409,6 +411,21 @@ The executor already takes `driveID` per action. Items under shortcuts will have
 | Shortcut content changes | Source-drive scoped delta returns changes | Normal sync (download/upload/delete) targeting source drive |
 | Source permissions change | 403 on source-drive operations | Summarized error (not per-file). "3 uploads failed for drive X (read-only share)". Treat as error, not warning. |
 
+### Duplicate-source detection (DP-9)
+
+When the same remote folder is synced through both a shortcut (inside the user's drive) and a standalone shared drive (via `drive add`), the folder is synced twice independently. This is wasteful (double bandwidth, double disk space) but not incorrect — each sync path produces consistent results independently.
+
+Detection: at config validation time and during `drive add`, compare each shortcut's `(remoteItem.driveId, remoteItem.id)` against configured shared drives' `(sourceDriveID, sourceItemID)`. On match, emit a warning:
+
+```
+Warning: "Jane's Photos" is synced as both a shortcut in your drive
+  (at ~/OneDrive/Jane's Photos) and as a standalone shared drive
+  (at ~/OneDrive-Shared/Jane's Photos). This wastes bandwidth and disk.
+  Consider removing one. To suppress this warning: duplicate_source_ok = true
+```
+
+This is a warning, not an error — the user may intentionally want both sync paths for different use cases (e.g., shortcut for online access, standalone drive for backup).
+
 ---
 
 ## 5. "Shared with me" Drives
@@ -470,6 +487,100 @@ All decision points have been resolved.
 | **DP-5: Account entities** | Keep implicit. No `[account]` config sections. | No identified use case for account-level config. |
 | **DP-6: Canonical ID format** | `shared:email:sourceDriveID:sourceItemID`. Opaque to users; display_name provides human identity. Token resolution via config lookup (not in driveid). | Only `(driveID, itemID)` is guaranteed globally unique + stable. Display names solve readability. |
 | **DP-7: Individual shared files** | Deferred to post-release. | No delta tracking for individual files. Focus on folder/drive sync story first. |
+| **DP-8: Filter scoping** | Per-drive only. No global filter defaults. | Different drives have fundamentally different content. Global defaults create confusing inheritance. |
+| **DP-9: Duplicate-source detection** | Warn (not block) when same shared folder synced from multiple places. | No data corruption — just wasted bandwidth/disk. Warning gives visibility. |
+| **DP-10: Permission display** | `drive list` shows `(read-only)` / `(read-write)` for shared content. | Proactive visibility reduces confusion from 403 errors during sync. |
+
+---
+
+## 9. Operational Constraints
+
+### 9.1 Linux inotify Watch Limits
+
+Linux inotify requires one watch per directory. The default kernel limit is 8192 watches (`/proc/sys/fs/inotify/max_user_watches`), though many distributions set it higher (e.g., 65536). Multi-drive sync multiplies the problem — each enabled drive's directory tree consumes watches independently.
+
+**Detection at watch startup**: Before starting inotify watches, the engine reads `/proc/sys/fs/inotify/max_user_watches` and estimates the total watch count from the baseline directory counts across all enabled drives.
+
+**Warning threshold**: If the estimated watch count exceeds 80% of the kernel limit, the engine logs a warning with sysctl instructions:
+
+```
+WARN  inotify watch limit may be insufficient
+  estimated_watches=6800  limit=8192  drives=3
+  Increase with: sudo sysctl fs.inotify.max_user_watches=524288
+  Persist with: echo 'fs.inotify.max_user_watches=524288' | sudo tee -a /etc/sysctl.conf
+```
+
+**Per-drive fallback**: If a drive exhausts available watches (`ENOSPC` from `inotify_add_watch`), that drive falls back to periodic full scan at `poll_interval`. Other drives retain their inotify watches. The fallback is per-drive, not global — one drive running out of watches does not degrade the others.
+
+**No per-drive watch budget**: There is no quota or reservation system for inotify watches. Watches are allocated first-come first-served as drives start up. Drives that exhaust the limit fall back individually.
+
+**macOS**: FSEvents has no per-directory watch limit — this is a Linux-only concern. macOS uses a single event stream per sync root, regardless of directory count.
+
+---
+
+## 10. Filter Scoping
+
+All filter settings (`skip_dirs`, `skip_files`, `skip_dotfiles`, `max_file_size`, `sync_paths`, `ignore_marker`) are **per-drive only**. There are no global filter defaults.
+
+Each drive gets built-in defaults (empty lists, `false`) unless it specifies its own filter values in its config section. A drive with no filter settings syncs everything (subject to built-in exclusions like `.partial` files).
+
+**Rationale** (DP-8): Different drives have fundamentally different content — a personal OneDrive may contain photos and documents, while a business drive has code repositories. Global filter defaults create confusing inheritance: a user adds `skip_dirs = ["node_modules"]` globally, then wonders why their personal drive skips a folder named "node_modules" containing photos. Per-drive-only scoping makes the behavior predictable and self-contained.
+
+**What this means for the config file**:
+
+```toml
+# No global filter settings — these keys exist only inside drive sections.
+
+["personal:me@outlook.com"]
+sync_dir = "~/OneDrive"
+# No filter settings → syncs everything (built-in exclusions still apply)
+
+["business:alice@contoso.com"]
+sync_dir = "~/OneDrive - Contoso"
+skip_dirs = ["node_modules", ".git", "vendor"]
+skip_dotfiles = true
+max_file_size = "100MB"
+```
+
+Non-filter settings (`poll_interval`, `log_level`, transfer settings, safety settings) retain their global-with-per-drive-override semantics. Only filter settings are per-drive native.
+
+---
+
+## 11. Multi-Drive Orchestrator (DESIGN GAP)
+
+> **STATUS: UNRESOLVED DESIGN GAP** — The following questions must be answered before Phase 7.0 implementation begins. This section lists the open questions and constraints, NOT the answers.
+
+The current sync engine (`Engine`) runs a single drive. Multi-drive sync requires an orchestrator that manages multiple engines. The orchestrator design is not yet specified.
+
+### Open questions
+
+1. **Orchestrator struct and lifecycle**: What is the struct, and how does it manage `RunOnce` vs `RunWatch` for multiple drives? Does it own a single `RunWatch` loop that multiplexes drives, or does each drive get its own goroutine with its own `RunWatch`?
+
+2. **ClientPool**: Multiple drives sharing the same Microsoft account (e.g., business OneDrive + SharePoint libraries + shared folders) should share one `graph.Client` instance. Same token file = same rate limits, same HTTP connection pool. How is the pool keyed (by token path?), and who owns the lifecycle?
+
+3. **Worker budget algorithm**: A global cap on total workers is needed to prevent 5 drives x 16 workers = 80 goroutines. How are workers allocated? Options: global pool shared by all drives, per-drive allocation with a global cap, minimum guaranteed workers per drive with overflow. What is the minimum viable per-drive allocation?
+
+4. **Error isolation**: One drive failing (e.g., expired token, network error, corrupted state DB) must not crash or stall other drives. How are per-drive errors surfaced, and what happens when a drive enters a persistent error state?
+
+5. **Watch mode lifecycle**: SIGHUP should support adding, removing, and reconfiguring drives without process restart. How does the orchestrator detect config changes and start/stop individual drive engines?
+
+6. **Aggregate reporting**: How is sync status reported across multiple drives? Single combined `SyncReport`? Per-drive reports? What does `status` show when 3 drives are syncing and 1 is errored?
+
+7. **Context tree structure**: What is the context hierarchy? `process → orchestrator → drive → observers + workers`? How does cancellation propagate (cancel one drive vs cancel all)?
+
+8. **Bandwidth limiting**: A global token bucket shared by all drives is needed. How does it interact with per-drive rate limiting? Does a drive's 429 response throttle only that drive or all drives sharing the same `graph.Client`?
+
+9. **Rate limit coordination**: Drives sharing a `graph.Client` share 429 backoff state. How is this coordinated? The `graph.Client` already handles 429 internally — does this "just work" with a shared client?
+
+10. **Checker pool scoping**: Should the hash checker pool (CPU-bound local hash computation) be global or per-drive? Global avoids oversubscribing CPU cores. Per-drive provides isolation.
+
+### Constraints
+
+- Each drive must have its own state DB (already the case)
+- Each drive must have its own delta token(s) (already the case)
+- Drives sharing a token file MUST share a `graph.Client` (rate limit correctness)
+- The orchestrator must handle drives being added/removed at runtime (SIGHUP)
+- Memory and CPU usage must remain within PRD targets (< 100 MB for 100K files, < 1% CPU idle)
 
 ---
 

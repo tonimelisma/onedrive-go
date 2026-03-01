@@ -604,6 +604,8 @@ This grouping is the key input to the planner. For each path, the planner has th
 
 ## 6. Filtering
 
+> **Per-drive only.** All filter settings (`skip_dirs`, `skip_files`, `skip_dotfiles`, `max_file_size`, `sync_paths`, `ignore_marker`) are per-drive native — there are no global filter defaults. Each drive gets built-in defaults (empty lists, `false`) unless it specifies its own values. See [MULTIDRIVE.md §10](MULTIDRIVE.md#10-filter-scoping) and DP-8 for rationale.
+
 ### 6.1 Symmetric Three-Layer Cascade
 
 The filter engine applies three layers of exclusion rules, evaluated in order. Each layer can only exclude -- a later layer cannot re-include an item excluded by an earlier layer (monotonic exclusion).
@@ -611,7 +613,7 @@ The filter engine applies three layers of exclusion rules, evaluated in order. E
 | Layer | Source | Scope | Examples |
 |-------|--------|-------|----------|
 | **1. sync_paths** | Config: `sync_paths` | Restricts sync to specific subtrees within the drive | `sync_paths = ["/Documents", "/Projects"]` |
-| **2. Config patterns** | Config: `skip_dotfiles`, `skip_dirs`, `skip_files`, `max_file_size` | Global exclusion rules | `skip_dotfiles = true`, `skip_dirs = ["node_modules", ".git"]`, `max_file_size = "100MB"` |
+| **2. Config patterns** | Config: `skip_dotfiles`, `skip_dirs`, `skip_files`, `max_file_size` | Per-drive exclusion rules (no global defaults, DP-8) | `skip_dotfiles = true`, `skip_dirs = ["node_modules", ".git"]`, `max_file_size = "100MB"` |
 | **3. .odignore** | `.odignore` file in sync root (gitignore syntax) | User-defined per-directory rules | `*.log`, `build/`, `*.tmp` |
 
 **Symmetric application**: The filter runs in the planner, not in the observers. This ensures that BOTH remote-only items (new downloads) AND local-only items (new uploads) are filtered through the same cascade. A file excluded by the filter is excluded regardless of which side it appears on.
@@ -1514,9 +1516,25 @@ Workers are persistent goroutines pulling from tracker channels, not scoped to i
 
 | Platform | FS Events | Notes |
 |----------|-----------|-------|
-| **Linux** | inotify | Reliable for local filesystems. Unreliable on NFS/CIFS -- fall back to periodic full scan with configurable interval. Per-user inotify watch limit (`/proc/sys/fs/inotify/max_user_watches`) may need increase for large directories. |
-| **macOS** | FSEvents | Reliable on APFS and HFS+. Events may arrive with NFD-encoded paths -- dual-path normalization handles this. |
+| **Linux** | inotify | Reliable for local filesystems. Unreliable on NFS/CIFS -- fall back to periodic full scan with configurable interval. See inotify watch limits below. |
+| **macOS** | FSEvents | Reliable on APFS and HFS+. Events may arrive with NFD-encoded paths -- dual-path normalization handles this. No per-directory watch limit. |
 | **NFS/network FS** | None reliable | Detected on startup. Warning logged. Engine falls back to periodic full scan (configurable interval, default 5 minutes). |
+
+### 12.4 inotify Watch Limits (Linux)
+
+Linux inotify requires one watch per directory. The default kernel limit is 8192 (`/proc/sys/fs/inotify/max_user_watches`), though many distributions set it higher.
+
+**Detection at startup**: Before starting inotify watches, the engine reads `/proc/sys/fs/inotify/max_user_watches` and estimates the total watch count from the baseline directory counts. For multi-drive sync, the estimate sums across all enabled drives.
+
+**Warning at 80%**: If estimated watches exceed 80% of the limit, the engine logs a warning with sysctl instructions for increasing the limit.
+
+**Per-drive fallback on ENOSPC**: When `inotify_add_watch` returns `ENOSPC` (no watches available), the affected drive falls back to periodic full scan at `poll_interval`. Other drives retain their inotify watches. This is a per-drive decision — one drive exhausting watches does not degrade the others.
+
+**No per-drive budget**: Watches are allocated first-come first-served. No reservation or quota system exists. See [MULTIDRIVE.md §9](MULTIDRIVE.md#9-operational-constraints) for multi-drive implications.
+
+### 12.5 Multi-Drive Watch Mode
+
+In multi-drive sync, each enabled drive runs its own watch loop (observer pair + buffer + planner + worker dispatch). The multi-drive orchestrator manages the lifecycle of these per-drive watch loops. See [MULTIDRIVE.md §11](MULTIDRIVE.md#11-multi-drive-orchestrator-design-gap) for the orchestrator design (currently an unresolved design gap — to be specified before Phase 7.0).
 
 **Idle resource consumption**: In watch mode, CPU usage during idle is proportional to the remote polling interval (one delta API call per interval) plus inotify/FSEvents overhead (near-zero when no files change). Memory usage is the baseline cache (~19 MB for 100K items) plus buffer overhead (~0 when no pending events). The target is < 1% CPU when idle.
 
