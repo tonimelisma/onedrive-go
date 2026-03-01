@@ -498,15 +498,16 @@ func executeLogout(cfg *config.Config, cfgPath, account string, purge bool, logg
 		if err := purgeAccountDrives(cfgPath, affected, logger); err != nil {
 			return fmt.Errorf("purging account drives: %w", err)
 		}
+
+		fmt.Println("Sync directories untouched — your files remain on disk.")
 	} else {
 		if err := removeAccountDriveConfigs(cfgPath, affected, logger); err != nil {
 			return fmt.Errorf("removing drive configs: %w", err)
 		}
 
 		fmt.Println("\nState databases kept. Run 'onedrive-go login' to re-authenticate.")
+		fmt.Println("Sync directories untouched — your files remain on disk.")
 	}
-
-	fmt.Println("Sync directories untouched — your files remain on disk.")
 
 	return nil
 }
