@@ -235,8 +235,8 @@ Config is modified by `login`, `drive add`, `drive remove`, `pause`, `resume`, `
 
 | Operation | When | How |
 |-----------|------|-----|
-| Append drive section | `login`, `drive add` | Append new `["type:email"]` block at end of file (or restore from shadow) |
-| Delete section | `drive remove` | Find section header, delete lines through next header or EOF (moved to shadow) |
+| Append drive section | `login`, `drive add` | Append new `["type:email"]` block at end of file |
+| Delete section | `drive remove` | Find section header, delete lines through next header or EOF |
 | Delete section | `drive remove --purge` | Find section header, delete lines through next header or EOF |
 | Set `paused = true` | `pause` | Find section header, find or insert `paused` key |
 | Remove `paused` | `resume` | Find section header, delete `paused` and `paused_until` lines |
@@ -1007,7 +1007,7 @@ WARN: Config option "sync_dir" changed but requires restart to take effect.
 
 ### 14.4 Drive Section Changes
 
-New drive sections added to config are picked up immediately via fsnotify. Drives with `paused = true` are skipped. Removed sections (moved to shadow files by `drive remove`) stop syncing. This is how `login`, `drive add`, `drive remove`, `pause`, and `resume` work with a running `sync --watch` — they modify config, and the daemon picks it up within milliseconds. No restart needed.
+New drive sections added to config are picked up immediately via fsnotify. Drives with `paused = true` are skipped. Removed sections stop syncing. This is how `login`, `drive add`, `drive remove`, `pause`, and `resume` work with a running `sync --watch` — they modify config, and the daemon picks it up within milliseconds. No restart needed.
 
 ---
 

@@ -663,7 +663,7 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 #### 5.5: Pause/resume + config reload + final cleanup
 
-**Goal**: Complete Phase 5 feature set. Ensure clean slate. Migrate drive lifecycle from `enabled` field to `paused` field + shadow files.
+**Goal**: Complete Phase 5 feature set. Ensure clean slate. Migrate drive lifecycle from `enabled` field to `paused` field.
 
 **1. New Code:**
 - `engine.go`: `Pause()` / `Resume()` — pause workers, continue collecting events, resume drains buffer
@@ -671,17 +671,16 @@ This analysis categorizes every part of the codebase by its relationship to the 
 - `resume` CLI command: removes `paused`/`paused_until` from config section. Without `--drive`, resumes all drives.
 - fsnotify config watcher: `sync --watch` watches `config.toml` for immediate pickup of drive add/remove/pause/resume. Validates config before applying. Invalid config → log warning, keep old config.
 
-**2. Config Migration (`Enabled` → `Paused` + Shadow Files):**
+**2. Config Migration (`Enabled` → `Paused`):**
 - `config.Drive` struct: replace `Enabled *bool` with `Paused *bool` + `PausedUntil *string`
-- Shadow file infrastructure: `ShadowPath()`, `WriteShadow()`, `ReadShadow()`, `DeleteShadow()` in config package. Shadow files use `shadow_{type}_{email}.toml` naming convention.
-- Refactor `drive remove`: move config section to shadow file instead of setting `enabled = false`. Shadow file preserves all settings (sync_dir, display_name, filters, paused state).
-- Refactor `drive add` (re-add): restore from shadow file instead of setting `enabled = true`. All settings round-trip through shadow.
-- Refactor `drive remove --purge`: also delete shadow file (in addition to state DB + config section).
-- Refactor `logout`: move all account's drive sections to shadow files (currently keeps drives in config).
-- Refactor `login` (re-login): auto-restore from shadow file if one exists (seamless logout+login round-trip).
+- Refactor `drive remove`: delete config section instead of setting `enabled = false`. State DB preserved for fast re-add.
+- Refactor `drive add` (re-add): always create fresh config section. If state DB exists, delta sync resumes.
+- Refactor `drive remove --purge`: delete config section + state DB.
+- Refactor `logout`: delete config sections for all account drives (currently keeps drives in config). State DBs preserved.
+- Refactor `login` (re-login): create fresh config section if drive not in config.
 - Timed pause expiry: `sync --watch` checks `paused_until` on each cycle; clears both `paused` and `paused_until` when time passes.
 - Migration: existing `enabled = false` entries in config.toml silently treated as `paused = true` for backward compatibility.
-- See [MULTIDRIVE.md §11.10](design/MULTIDRIVE.md#1110-drive-lifecycle-shadow-files) for full spec.
+- See [MULTIDRIVE.md §11.10](design/MULTIDRIVE.md#1110-drive-lifecycle) for full spec.
 
 **3. Code Retirement:**
 - Delete `Drive.Enabled` field and all references
@@ -690,7 +689,6 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 **4. CI and Testing:**
 - Pause/resume tests (config-based + engine-level)
-- Shadow file round-trip tests (drive remove → drive add restores all settings)
 - fsnotify config reload test
 - Timed pause expiry test
 - Backward compatibility test (`enabled = false` → `paused = true`)
@@ -827,13 +825,13 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 ## Phase 7: Multi-Drive Orchestration + Shared Content Sync
 
-**Single-process multi-drive sync.** After this phase, `sync --watch` syncs all non-paused drives simultaneously from a single process. Each drive has its own goroutine, state DB, and sync cycle. Identity refactoring (four drive types, display_name, token resolution in config) was completed in Phase 5.6. Drive lifecycle uses shadow files (implemented in Phase 5.5).
+**Single-process multi-drive sync.** After this phase, `sync --watch` syncs all non-paused drives simultaneously from a single process. Each drive has its own goroutine, state DB, and sync cycle. Identity refactoring (four drive types, display_name, token resolution in config) was completed in Phase 5.6.
 
 ### 7.0: Multi-drive orchestration — FUTURE
 
 > **Architecture resolved**: Architecture A (per-drive goroutine with isolated engines). See [MULTIDRIVE.md §11](../docs/design/MULTIDRIVE.md#11-multi-drive-orchestrator) for full specification including all 10 questions answered. See [concurrent-execution.md §19](../docs/design/concurrent-execution.md#19-multi-drive-worker-budget) for worker budget algorithm.
 
-> **Prerequisite**: Phase 5.5 (pause/resume + shadow files) must be complete. The `Enabled` → `Paused` migration and shadow file infrastructure are implemented there.
+> **Prerequisite**: Phase 5.5 (pause/resume + config reload) must be complete. The `Enabled` → `Paused` migration is implemented there.
 
 1. `Orchestrator` struct: manages `map[CanonicalID]*DriveRunner`. Each `DriveRunner` wraps an `Engine` with panic recovery and error backoff. ~300 LOC new code, zero changes to Engine/WorkerPool/DepTracker/Executor.
 2. `ResolveDrives()` in config package: return `[]*ResolvedDrive` for all non-paused drives (when no `--drive` flag) or the specified subset. Currently only `ResolveDrive()` exists (single drive).
@@ -842,10 +840,10 @@ This analysis categorizes every part of the codebase by its relationship to the 
 5. Per-drive goroutine lifecycle: each drive runs its own `Engine.RunOnce()` or `Engine.RunWatch()`. Panics caught per-drive. 3 consecutive failures → exponential backoff (1m, 5m, 15m, 1h). Other drives unaffected.
 6. Global checker semaphore: `*semaphore.Weighted` shared across all `LocalObserver` instances. Limit auto-detected by storage type (SSD: 8, HDD: 2, unknown: 4) or configurable via `parallel_checkers`.
 
-### 7.1: Drive removal — DONE (refactored to shadow files in Phase 5.5)
+### 7.1: Drive removal — DONE (refactored in Phase 5.5)
 
-1. `drive remove <drive>` — **DONE**: sets `enabled = false` in config via text-level edit. State DB and token preserved. **Refactored in Phase 5.5**: moves config section to shadow file instead.
-2. `drive remove --purge <drive>` — **DONE**: permanently deletes state DB and removes config section. Token preserved if shared with other drives. **Updated in Phase 5.5**: also deletes shadow file.
+1. `drive remove <drive>` — **DONE**: sets `enabled = false` in config via text-level edit. State DB and token preserved. **Refactored in Phase 5.5**: deletes config section (state DB kept for fast re-add).
+2. `drive remove --purge <drive>` — **DONE**: permanently deletes state DB and removes config section. Token preserved if shared with other drives.
 3. Text-level config manipulation — **DONE**: `config/write.go` `DeleteDriveSection()` uses line-based text edits preserving all user comments.
 
 ### 7.2: Status command
@@ -1078,8 +1076,8 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 ### 12.3: Interactive drive add
 
-1. `drive add` interactive flow — **FUTURE**: enumerate available SharePoint libraries and removed drives (in shadow files). Present a numbered list. User selects by number. Auto-configure sync directory with collision handling.
-2. Non-interactive `drive add` — **DONE**: `drive add <canonical-id>` adds a new drive or restores a removed one from shadow file. Without arguments, lists available drives. **Not yet done**: `--site`/`--library` shorthand flags.
+1. `drive add` interactive flow — **FUTURE**: enumerate available SharePoint libraries and shared folders. Present a numbered list. User selects by number. Auto-configure sync directory with collision handling.
+2. Non-interactive `drive add` — **DONE**: `drive add <canonical-id>` adds a new drive with a fresh config section. If state DB exists from a prior removal, sync resumes from last delta token. Without arguments, lists available drives. **Not yet done**: `--site`/`--library` shorthand flags.
 
 ### 12.4: SharePoint site search — DONE
 
