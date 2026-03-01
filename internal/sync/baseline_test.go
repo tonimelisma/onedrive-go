@@ -1993,7 +1993,8 @@ func TestConflictRecord_NameField(t *testing.T) {
 		RemoteMtime:  200,
 	}
 
-	if err := mgr.CommitOutcome(ctx, outcome); err != nil {
+	err = mgr.CommitOutcome(ctx, outcome)
+	if err != nil {
 		t.Fatalf("CommitOutcome: %v", err)
 	}
 

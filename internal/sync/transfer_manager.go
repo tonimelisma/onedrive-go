@@ -211,13 +211,27 @@ func (tm *TransferManager) DownloadToFile(
 // downloadToPartial streams a remote file to a .partial file while computing
 // the QuickXorHash. If a .partial file already exists and the downloader
 // supports range requests, it resumes from the existing file.
+//
+// The .partial file is opened before stat to avoid a TOCTOU race where the
+// file could be deleted between stat and open (B-211). If open fails with
+// ErrNotExist, we fall through to a fresh download.
 func (tm *TransferManager) downloadToPartial(
 	ctx context.Context, driveID driveid.ID, itemID, partialPath string,
 ) (string, int64, error) {
-	// Check for existing .partial file and attempt resume.
+	// Attempt resume: open existing .partial, then stat the handle.
 	if rd, ok := tm.downloads.(RangeDownloader); ok {
-		if info, statErr := os.Stat(partialPath); statErr == nil && info.Size() > 0 {
-			return tm.resumeDownload(ctx, driveID, itemID, rd, partialPath, info.Size())
+		f, openErr := os.OpenFile(partialPath, os.O_APPEND|os.O_WRONLY, 0o600) //nolint:mnd // owner-only
+		if openErr == nil {
+			info, statErr := f.Stat()
+			if statErr != nil || info.Size() == 0 {
+				// Empty or unreadable — close and start fresh.
+				f.Close()
+			} else {
+				return tm.resumeDownloadFromFile(ctx, driveID, itemID, rd, f, partialPath, info.Size())
+			}
+		} else if !errors.Is(openErr, os.ErrNotExist) {
+			tm.logger.Warn("cannot open partial file for resume, starting fresh",
+				slog.String("path", partialPath), slog.String("error", openErr.Error()))
 		}
 	}
 
@@ -269,26 +283,17 @@ func (tm *TransferManager) freshDownload(
 	return localHash, size, nil
 }
 
-// resumeDownload appends bytes to an existing .partial file using Range
-// requests, then hashes the complete file from byte 0.
-func (tm *TransferManager) resumeDownload(
+// resumeDownloadFromFile appends bytes to an already-open .partial file using
+// Range requests, then hashes the complete file from byte 0. The caller opens
+// the file and passes it to avoid a TOCTOU race (B-211).
+func (tm *TransferManager) resumeDownloadFromFile(
 	ctx context.Context, driveID driveid.ID, itemID string,
-	rd RangeDownloader, partialPath string, existingSize int64,
+	rd RangeDownloader, f *os.File, partialPath string, existingSize int64,
 ) (string, int64, error) {
 	tm.logger.Debug("resuming download from partial file",
 		slog.String("path", partialPath),
 		slog.Int64("existing_bytes", existingSize),
 	)
-
-	f, err := os.OpenFile(partialPath, os.O_APPEND|os.O_WRONLY, 0o600) //nolint:mnd // owner-only
-	if err != nil {
-		tm.logger.Warn("cannot open partial file for resume, starting fresh",
-			slog.String("path", partialPath), slog.String("error", err.Error()))
-
-		removePartialIfNotCanceled(ctx, partialPath)
-
-		return tm.freshDownload(ctx, driveID, itemID, partialPath)
-	}
 
 	n, err := rd.DownloadRange(ctx, driveID, itemID, f, existingSize)
 

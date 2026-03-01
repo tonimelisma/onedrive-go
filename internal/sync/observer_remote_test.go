@@ -1344,3 +1344,47 @@ func TestFullDelta_RenameInPlace(t *testing.T) {
 		t.Errorf("Name = %q, want %q", renameEvent.Name, "new-name.txt")
 	}
 }
+
+// TestSelectHash_FallbackChain verifies the hash priority: QuickXorHash >
+// SHA256Hash > SHA1Hash > empty (B-021).
+func TestSelectHash_FallbackChain(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		item graph.Item
+		want string
+	}{
+		{
+			name: "QuickXorHash preferred",
+			item: graph.Item{QuickXorHash: "qxor", SHA256Hash: "sha256", SHA1Hash: "sha1"},
+			want: "qxor",
+		},
+		{
+			name: "SHA256Hash fallback",
+			item: graph.Item{SHA256Hash: "sha256", SHA1Hash: "sha1"},
+			want: "sha256",
+		},
+		{
+			name: "SHA1Hash fallback",
+			item: graph.Item{SHA1Hash: "sha1"},
+			want: "sha1",
+		},
+		{
+			name: "no hash returns empty",
+			item: graph.Item{},
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := selectHash(&tt.item)
+			if got != tt.want {
+				t.Errorf("selectHash() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

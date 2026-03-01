@@ -439,14 +439,20 @@ func classifyItemType(item *graph.Item) ItemType {
 	}
 }
 
-// selectHash returns QuickXorHash if available, SHA256Hash as fallback,
-// or empty string if neither is present.
+// selectHash returns the best available content hash from the item, preferring
+// QuickXorHash (most common), falling back to SHA256Hash, then SHA1Hash.
+// Returns empty string if no hash is available — the caller must handle
+// hash-less items appropriately (typically skipping verification) (B-021).
 func selectHash(item *graph.Item) string {
 	if item.QuickXorHash != "" {
 		return item.QuickXorHash
 	}
 
-	return item.SHA256Hash
+	if item.SHA256Hash != "" {
+		return item.SHA256Hash
+	}
+
+	return item.SHA1Hash
 }
 
 // toUnixNano converts a time.Time to Unix nanoseconds. Returns 0 for
