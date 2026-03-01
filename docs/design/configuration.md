@@ -150,9 +150,8 @@ Only two environment variables are supported. They provide drive and path overri
 # each drive section below. See MULTIDRIVE.md §10 (DP-8).
 
 # ── Transfers ──
-# parallel_downloads = 8                 # simultaneous download workers (1-16)
-# parallel_uploads = 8                   # simultaneous upload workers (1-16)
-# parallel_checkers = 8                  # simultaneous hash check workers (1-16)
+# transfer_workers = 8                  # concurrent file operations (4-64)
+# check_workers = 4                     # concurrent file hash checks (1-16)
 # chunk_size = "10MiB"                   # upload chunk size (320 KiB multiples, 10-60 MiB)
 # bandwidth_limit = "0"                  # global bandwidth limit (0 = unlimited)
 # transfer_order = "default"             # default, size_asc, size_desc, name_asc, name_desc
@@ -387,9 +386,11 @@ All global settings are flat top-level TOML keys. They are organized here by fun
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `parallel_downloads` | Integer | `8` | Concurrent download workers. Range: 1-16. |
-| `parallel_uploads` | Integer | `8` | Concurrent upload workers. Range: 1-16. |
-| `parallel_checkers` | Integer | `8` | Concurrent hash computation workers. Range: 1-16. |
+| `transfer_workers` | Integer | `8` | Concurrent file operations (downloads, uploads, renames, deletes, mkdirs). Range: 4-64. Internally split into interactive/bulk/shared lanes. |
+| `check_workers` | Integer | `4` | Concurrent file hash checks via semaphore. Range: 1-16. CPU-bound, independent of transfer workers. |
+| `parallel_downloads` | Integer | — | **DEPRECATED.** Superseded by `transfer_workers`. Warn on use. |
+| `parallel_uploads` | Integer | — | **DEPRECATED.** Superseded by `transfer_workers`. Warn on use. |
+| `parallel_checkers` | Integer | — | **DEPRECATED.** Superseded by `check_workers`. Warn on use. |
 | `chunk_size` | String | `"10MiB"` | Upload chunk size for resumable sessions. Must be a 320 KiB multiple. Range: 10-60 MiB. Uses binary units (1 MiB = 1,048,576 bytes). |
 | `bandwidth_limit` | String | `"0"` | Global bandwidth limit. `"0"` = unlimited. Format: `"5MB/s"`. |
 | `bandwidth_schedule` | Array of tables | `[]` | Time-of-day bandwidth schedule. Overrides `bandwidth_limit` when active. |
@@ -656,15 +657,17 @@ When filter rules change, files that were previously synced but are now excluded
 
 ### 7.1 Worker Pool Design
 
-Lane-based worker pools with a separate checker pool:
+Two config keys control all concurrency:
 
-| Config Key | Default | Max | Purpose |
-|------|---------|-----|---------|
-| `parallel_downloads` | 8 | 16 | Contributes to total lane worker count |
-| `parallel_uploads` | 8 | 16 | Contributes to total lane worker count |
-| `parallel_checkers` | 8 | 16 | Separate pool for local hash computation |
+| Key | Default | Range | Description |
+|-----|---------|-------|-------------|
+| `transfer_workers` | 8 | 4-64 | Concurrent file operations. Each worker executes one action at a time (download, upload, rename, delete, mkdir). Internally split into interactive/bulk/shared lanes. |
+| `check_workers` | 4 | 1-16 | Concurrent file hash checks. Controls a semaphore for QuickXorHash computation. CPU-bound, independent of transfer workers. |
+| `parallel_downloads` | — | — | **DEPRECATED**. Superseded by `transfer_workers`. Warn on use. |
+| `parallel_uploads` | — | — | **DEPRECATED**. Superseded by `transfer_workers`. Warn on use. |
+| `parallel_checkers` | — | — | **DEPRECATED**. Superseded by `check_workers`. Warn on use. |
 
-Download and upload workers are unified into lane-based pools (interactive lane for small files/metadata ops, bulk lane for large transfers, shared overflow). The checker pool remains separate (CPU-bound, runs during observation). The default of 8 aligns with Microsoft Graph API guidance (5-10 concurrent requests). Values above 16 are rejected.
+Transfer workers are unified into lane-based pools (interactive lane for small files/metadata ops <10MB, bulk lane for large transfers >=10MB, shared overflow). The checker pool is separate (CPU-bound, runs during observation). In multi-drive mode, the Orchestrator distributes the global `transfer_workers` budget across drives proportionally (see [MULTIDRIVE.md §11.3](MULTIDRIVE.md#113-concurrency-configuration)).
 
 ### 7.2 Chunk Size Validation
 
@@ -895,9 +898,11 @@ If detected, offer to import settings. Warn about running instances to avoid con
 | `skip_dirs` | Valid glob patterns, not `.*` | - |
 | `max_file_size` | Valid size, >= 0 | - |
 | `sync_paths` | Each starts with `/` | - |
-| `parallel_downloads` | 1-16 | - |
-| `parallel_uploads` | 1-16 | - |
-| `parallel_checkers` | 1-16 | - |
+| `transfer_workers` | 4-64 | - |
+| `check_workers` | 1-16 | - |
+| `parallel_downloads` | *(deprecated)* | Warn on use |
+| `parallel_uploads` | *(deprecated)* | Warn on use |
+| `parallel_checkers` | *(deprecated)* | Warn on use |
 | `chunk_size` | 10-60 MiB, 320 KiB multiple | - |
 | `bandwidth_limit` | `"0"` or valid rate | - |
 | `big_delete_threshold` | >= 1 | - |
@@ -983,7 +988,7 @@ if sync_paths entry matches skip_dirs or skip_files:
 | Category | Options | Effect |
 |----------|---------|--------|
 | **Filter** | `skip_files`, `skip_dirs`, `skip_dotfiles`, `skip_symlinks`, `max_file_size`, `sync_paths`, `ignore_marker` | Filter engine re-initialized, stale file detection triggered |
-| **Transfers** | `bandwidth_limit`, `bandwidth_schedule`, `transfer_order` | Bandwidth scheduler updated |
+| **Transfers** | `bandwidth_limit`, `bandwidth_schedule`, `transfer_order`, `transfer_workers`, `check_workers` | Bandwidth scheduler updated; worker changes trigger Orchestrator rebalancing (stop + restart affected DriveRunners) |
 | **Sync** | `poll_interval`, `fullscan_frequency`, `conflict_reminder_interval`, `websocket` | Timers updated |
 | **Logging** | `log_level`, `log_format` | Log output updated immediately |
 | **Safety** | `big_delete_threshold`, `big_delete_percentage`, `big_delete_min_items`, `min_free_space` | Updated for next cycle |
@@ -994,7 +999,7 @@ if sync_paths entry matches skip_dirs or skip_files:
 |----------|---------|--------|
 | **Drive** | `sync_dir`, `drive_id`, `remote_path` | Requires re-initializing watcher and delta token |
 | **Drive** | `application_id`, `azure_ad_endpoint`, `azure_tenant_id` | Requires re-authentication |
-| **Transfers** | `parallel_downloads`, `parallel_uploads`, `parallel_checkers`, `chunk_size` | Worker pools initialized at startup |
+| **Transfers** | `chunk_size` | Upload chunk size set at startup |
 | **Safety** | `sync_dir_permissions`, `sync_file_permissions` | Applied at file creation time |
 | **Network** | `connect_timeout`, `data_timeout`, `force_http_11`, `user_agent` | HTTP client initialized at startup |
 | **Logging** | `log_file`, `log_retention_days` | File handle management |
@@ -1039,9 +1044,11 @@ Every configuration option in a single reference table.
 | `skip_dirs` | Drive | Array | `[]` | - | Yes | Dir exclusion patterns (per-drive native) |
 | `ignore_marker` | Drive | String | `".odignore"` | - | Yes | Ignore marker name (per-drive native) |
 | `sync_paths` | Drive | Array | `[]` | - | Yes | Selective sync paths (per-drive native) |
-| `parallel_downloads` | Global | Integer | `8` | - | No | Download workers |
-| `parallel_uploads` | Global | Integer | `8` | - | No | Upload workers |
-| `parallel_checkers` | Global | Integer | `8` | - | No | Hash check workers |
+| `transfer_workers` | Global | Integer | `8` | - | Yes | Concurrent file operations (4-64). Hot-reload triggers Orchestrator rebalancing. |
+| `check_workers` | Global | Integer | `4` | - | Yes | Concurrent file hash checks (1-16). Hot-reload updates semaphore. |
+| `parallel_downloads` | Global | Integer | — | - | — | **DEPRECATED**. Superseded by `transfer_workers`. Warn on use. |
+| `parallel_uploads` | Global | Integer | — | - | — | **DEPRECATED**. Superseded by `transfer_workers`. Warn on use. |
+| `parallel_checkers` | Global | Integer | — | - | — | **DEPRECATED**. Superseded by `check_workers`. Warn on use. |
 | `chunk_size` | Global | String | `"10MiB"` | - | No | Upload chunk size |
 | `bandwidth_limit` | Global | String | `"0"` | - | Yes | Bandwidth limit |
 | `bandwidth_schedule` | Global | Array | `[]` | - | Yes | Time-of-day bandwidth |
@@ -1085,7 +1092,7 @@ Every configuration option in a single reference table.
 | `skip_dotfiles` | `skip_dotfiles` | Direct |
 | `skip_symlinks` | `skip_symlinks` | Direct |
 | `skip_size` | `max_file_size` | `50` (MB) to `"50MB"` |
-| `threads` | `parallel_downloads` + `parallel_uploads` + `parallel_checkers` | One value to three |
+| `threads` | `transfer_workers` + `check_workers` | One value to two |
 | `rate_limit` | `bandwidth_limit` | Bytes/s to `"NMB/s"` |
 | `file_fragment_size` | `chunk_size` | `10` (MB) to `"10MiB"` |
 | `transfer_order` | `transfer_order` | `size_dsc` to `size_desc` |
@@ -1168,8 +1175,8 @@ Every configuration option in a single reference table.
 | `region = de` | `azure_ad_endpoint = "DE"` | Value mapping |
 | `region = cn` | `azure_ad_endpoint = "CN"` | Value mapping |
 | `token` | (not migrated) | Must re-authenticate |
-| `--transfers N` | `parallel_downloads` + `parallel_uploads` | Split |
-| `--checkers N` | `parallel_checkers` | Direct |
+| `--transfers N` | `transfer_workers` | Direct |
+| `--checkers N` | `check_workers` | Direct |
 | `--bwlimit RATE` | `bandwidth_limit` | Format mapping |
 | `--bwlimit "08:00,5M 18:00,50M"` | `bandwidth_schedule` | Complex mapping |
 | `--exclude PATTERN` | `skip_files` / `skip_dirs` | Pattern analysis |

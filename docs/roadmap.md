@@ -766,18 +766,67 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 **Single-process multi-drive sync.** After this phase, `sync --watch` syncs all non-paused drives simultaneously from a single process. Each drive has its own goroutine, state DB, and sync cycle. Identity refactoring (four drive types, display_name, token resolution in config) was completed in Phase 5.6.
 
-### 6.0: Multi-drive orchestration — FUTURE
+> **Architecture resolved**: Architecture A (per-drive goroutine with isolated engines). See [MULTIDRIVE.md §11](design/MULTIDRIVE.md#11-multi-drive-orchestrator) for full specification. The Orchestrator is ALWAYS used, even for a single drive — no separate single-drive code path.
 
-> **Architecture resolved**: Architecture A (per-drive goroutine with isolated engines). See [MULTIDRIVE.md §11](../docs/design/MULTIDRIVE.md#11-multi-drive-orchestrator) for full specification including all 10 questions answered. See [concurrent-execution.md §19](../docs/design/concurrent-execution.md#19-multi-drive-worker-budget) for worker budget algorithm.
+### Dependency Graph
 
-> **Prerequisite**: Phase 5.5 (pause/resume + config reload) must be complete.
+```
+6.0a ──→ 6.0b ──→ 6.0c ──→ 6.0d
+  │                          │
+  ├── 6.2b                   │
+  │                          │
+  └── 6.4a ─────────────→ 6.4b
 
-1. `Orchestrator` struct: manages `map[CanonicalID]*DriveRunner`. Each `DriveRunner` wraps an `Engine` with panic recovery and error backoff. ~300 LOC new code, zero changes to Engine/WorkerPool/DepTracker/Executor.
-2. `ResolveDrives()` in config package: return `[]*ResolvedDrive` for all non-paused drives (when no `--drive` flag) or the specified subset. Currently only `ResolveDrive()` exists (single drive).
-3. Shared `graph.Client` per token file: `map[tokenPath]*graph.Client` in Orchestrator. Multiple drives on same account share one client. 429 backoff automatically coordinated.
-4. Worker budget: global cap (`max_workers`, default 16), proportional allocation by baseline file count, minimum 4 per drive. Rebalanced on config reload.
-5. Per-drive goroutine lifecycle: each drive runs its own `Engine.RunOnce()` or `Engine.RunWatch()`. Panics caught per-drive. 3 consecutive failures → exponential backoff (1m, 5m, 15m, 1h). Other drives unaffected.
-6. Global checker semaphore: `*semaphore.Weighted` shared across all `LocalObserver` instances. Limit auto-detected by storage type (SSD: 8, HDD: 2, unknown: 4) or configurable via `parallel_checkers`.
+6.1 (DONE)    6.2a (DONE)    6.3 (after 6.0a)
+```
+
+### 6.0a: DriveSession + ResolveDrives + shared drive foundations — FUTURE
+
+Prerequisite refactoring that unblocks all other Phase 6 work.
+
+1. **DriveSession type** (B-223): Extract from `clientAndDrive()` 4-tuple. Struct holding `*graph.Client` (metadata), `*graph.Client` (transfer, no timeout), `graph.TokenSource`, `driveid.ID`, `*config.ResolvedDrive`. Constructor: `NewDriveSession(ctx, resolved, cfg, logger)` handles token resolution via `config.TokenCanonicalID()`, `TokenSourceFromPath()`, Client creation, and DriveID discovery. Replaces 10+ call sites.
+2. **`config.ResolveDrives()`**: New function returning `[]*ResolvedDrive` for all non-paused drives (no selector) or specified subset. Calls `buildResolvedDrive()` + `ValidateResolved()` for each. Sorted by canonical ID for deterministic ordering.
+3. **`BaseSyncDir` for `DriveTypeShared`**: Add case returning `~/OneDrive-Shared/{displayName}`. Requires signature change: `BaseSyncDir(cid, orgName, displayName)`. Fixes `DefaultSyncDir()` and `CollectOtherSyncDirs()` downstream.
+4. **SyncRoot overlap validation**: `checkSyncDirOverlap(cfg)` validates no sync_dir is ancestor/descendant of another. Uses `filepath.Clean` + `HasPrefix` with separator suffix. Called from `validateDrives()` at config load and `Orchestrator.Start()` for runtime defaults.
+5. **`OwnerEmail` on `graph.Drive`** (B-279): **DONE** — Added `OwnerEmail` string field, parses `owner.user.email` from API response.
+6. **`DriveTokenPath` shared case**: Handle `DriveTypeShared` (delegates to `TokenCanonicalID` first).
+
+Acceptance: `clientAndDrive` replaced with DriveSession. `ResolveDrives` returns N drives. Shared drives get correct default sync_dir. Overlapping sync_dirs rejected. All existing tests pass.
+
+### 6.0b: Orchestrator + DriveRunner (always-on) — FUTURE
+
+Core multi-drive runtime. The Orchestrator is ALWAYS used, even for a single drive. No separate single-drive sync code path.
+
+1. **Orchestrator struct** in `internal/sync/`: manages `map[CanonicalID]*DriveRunner`, `map[tokenPath]*graph.Client`, configPath, global check semaphore. New files: `orchestrator.go`, `drive_runner.go`, `orchestrator_test.go`.
+2. **DriveRunner**: wraps Engine with panic recovery (`defer recover`), error backoff (3 consecutive failures → 1m, 5m, 15m, 1h cap). Fields: engine, canonID, resolved, workers, cancel, done chan, lastErr, failures.
+3. **Shared `graph.Client` per token path**: `getOrCreateClient(tokenPath)`. Multiple drives on same account share one Client. 429 handling is per-request (Retry-After + exponential backoff with jitter) — no shared gate needed.
+4. **`Orchestrator.RunOnce(ctx)`**: resolve drives, create DriveRunners, run all via errgroup, aggregate reports.
+5. **Context tree**: `processCtx → orchestratorCtx → driveCtx[i] → Engine[i]`. Independent cancellation per drive.
+6. **sync command rewrite**: Always creates Orchestrator. `--drive` filters which drives. No `--drive` = all non-paused drives. Single drive = one DriveRunner in the Orchestrator, same code path as multi.
+
+Acceptance: sync with 1 or 2 configured drives runs via Orchestrator. One drive failure/panic doesn't affect other. `sync --drive X` produces identical results to old single-drive path.
+
+### 6.0c: Worker budget + daemon mode + config reload — FUTURE
+
+1. **`transfer_workers` config key**: integer, default 8, range 4-64. Sync action workers (downloads, uploads, renames, deletes, mkdirs). Replaces hardcoded `runtime.NumCPU()` in `engine.go`.
+2. **`check_workers` config key**: integer, default 4, range 1-16. Controls `*semaphore.Weighted` for concurrent QuickXorHash in LocalObserver. Global semaphore shared across all drives.
+3. **Deprecate old keys**: `parallel_downloads`, `parallel_uploads`, `parallel_checkers`. Log warning if found in config, ignore values.
+4. **Worker budget algorithm**: globalCap from `config.transfer_workers`. Per-drive: `weight = max(1, baselineFileCount)`, `allocation = max(4, globalCap * weight / totalWeight)`. Scale down if sum > globalCap due to minPerDrive floors. N=1: full globalCap.
+5. **`Orchestrator.RunWatch(ctx)`**: daemon mode. Starts all drive runners in watch mode.
+6. **PID file**: flock-based single-instance guard. `sync --watch` shares same PID file path — only one daemon.
+7. **SIGHUP config reload**: re-read config → diff drives → stop removed → start added → restart continued with changed allocation. WorkerPool doesn't support dynamic resize, so changed-allocation drives are stopped + restarted.
+8. **`--drive` repeatable**: `StringArrayVar`. File-op commands check `len <= 1`. sync accepts multiple. No `--drive` = all non-paused drives.
+
+Acceptance: sync --watch starts daemon with correct worker allocation. SIGHUP adds/removes drives. `transfer_workers` + `check_workers` config respected. PID file prevents duplicates.
+
+### 6.0d: inotify + E2E + second test account — FUTURE
+
+1. **inotify watch limit detection** (Linux only): read `/proc/sys/fs/inotify/max_user_watches`. Warn at 80% threshold. On ENOSPC: that drive falls back to periodic full scan at `poll_interval`. Other drives retain inotify. No per-drive quota.
+2. **Second test account**: Create `testitesti19@outlook.com` (free personal). Bootstrap token locally. Upload to Key Vault. Update `ONEDRIVE_TEST_DRIVES` GitHub variable.
+3. **Multi-drive E2E tests**: New `e2e/orchestrator_e2e_test.go` with build tag `e2e,e2e_full`. Helper: `writeMultiDriveConfig(t, drives, syncDirs)`. Scenarios: SimultaneousSync, Status, PauseResume, OneFails, ConfigReload.
+4. **CI `integration.yml` update**: Add conditional multi-drive E2E step (only when `ONEDRIVE_TEST_DRIVES` contains comma).
+
+Acceptance: E2E with 2 drives passes in CI. inotify warning fires on Linux.
 
 ### 6.1: Drive removal — DONE (refactored in Phase 5.5)
 
@@ -785,26 +834,51 @@ This analysis categorizes every part of the codebase by its relationship to the 
 2. `drive remove --purge <drive>` — **DONE**: permanently deletes state DB and removes config section. Token preserved if shared with other drives.
 3. Text-level config manipulation — **DONE**: `config/write.go` `DeleteDriveSection()` uses line-based text edits preserving all user comments.
 
-### 6.2: Status command
+### 6.2a: Status command (basic) — DONE
 
-1. `status` command: show account/drive hierarchy — **DONE**: `status.go` shows account email, display name, org name, token state (valid/expired/missing), per-drive canonical ID, sync dir, and state (ready/paused/no token/needs setup). **Not yet done**: per-drive sync state (last sync time, files synced, errors, unresolved conflicts).
+1. `status` command: show account/drive hierarchy — **DONE**: `status.go` shows account email, display name, org name, token state (valid/expired/missing), per-drive canonical ID, sync dir, and state (ready/paused/no token/needs setup).
 2. Support `--json` output — **DONE**: `flagJSON` wired, produces JSON array of account objects.
-3. Show overall health — **FUTURE**: total drives, ready/paused/error counts, aggregate unresolved conflicts.
+
+### 6.2b: Status command (sync state) — FUTURE
+
+1. Per-drive sync state in `status` output: last sync time, files synced, errors, unresolved conflicts. Read from per-drive state DBs.
+2. Overall health summary: total drives, ready/paused/error counts, aggregate unresolved conflicts.
+3. In multi-drive mode: `DriveRunner.lastErr` and failures exposed via `Orchestrator.States()` for live display.
+
+Acceptance: status shows per-drive sync state and aggregate health.
 
 ### 6.3: Shared drive enumeration — FUTURE
 
-1. Shared drive discovery: integrate `GET /me/drive/sharedWithMe` into `drive list`. Show available shared folders alongside personal/business/SharePoint drives. Derive display names using the identity system from Phase 5.6 (`"{FirstName}'s {FolderName}"` with uniqueness escalation).
-2. `drive list` (non-interactive) — **DONE** for personal/business/SharePoint: shows configured drives AND available drives from the network. **NOT YET DONE** for shared-with-me folders.
-3. `drive add` for shared folders: substring match against derived display names, construct `shared:email:sourceDriveID:sourceItemID` canonical ID, auto-fill display_name/owner/sync_dir.
-4. Shared folders capped at first 10 in `drive list`. More: `... and N more shared folders`.
+1. **sharedWithMe API**: New `graph.Client` method `SharedWithMe(ctx)` returning shared drive items with owner name, email, folder name, permissions.
+2. **`drive list` integration**: Show shared-with-me folders alongside personal/business/SharePoint. First 10, then "... and N more".
+3. **`drive add` for shared folders**: Substring match against derived display names (`{FirstName}'s {FolderName}` with uniqueness escalation). Construct `shared:email:sourceDriveID:sourceItemID` canonical ID. Auto-fill display_name, owner, sync_dir.
+4. **New graph response types**: `sharedFacet`, `sharedOwner`, `sharedUser` for parsing `owner.user.displayName` and `owner.user.email`.
 
-### 6.4: Shared folder sync — FUTURE
+Acceptance: `drive list` shows shared folders. `drive add` creates shared drive config section with correct canonical ID and display name.
 
-1. Shortcut detection: detect `remoteItem` facets in primary delta. Per-shortcut delta via `GET /drives/{remoteItem.driveId}/items/{remoteItem.id}/delta`. Path mapping to local tree at shortcut position.
-2. Shortcut lifecycle: new shortcut → initial enumeration; removed shortcut → delete local copies (DP-2); moved shortcut → rename local directory.
-3. Read-only content handling: auto-detect via 403. Summarized errors, not per-file (DP-3).
-4. Shared-with-me drives: full drive infrastructure for standalone shared folders. `drive add`/`remove` by display_name (DP-4).
-5. Personal and Business account support. SharePoint shared libraries already handled by drive-level sync.
+### 6.4a: Folder-scoped delta + remoteItem parsing — FUTURE
+
+1. **`graph.Item` new fields**: `RemoteDriveID driveid.ID` (from `remoteItem.parentReference.driveId`), `RemoteItemID string` (from `remoteItem.id`). Populated during delta normalization.
+2. **`remoteItemFacet` type**: Unexported struct for JSON parsing. Fields: ID, ParentReference (*parentRef), Folder (*folderFacet). Parsed in `toItem()` when remoteItem != nil.
+3. **`graph.DeltaFolder()`**: New method for `/drives/{driveID}/items/{folderID}/delta`. Same normalization pipeline as `Delta()`. New `buildFolderDeltaPath()`.
+4. **`graph.DeltaFolderAll()`**: Paginated wrapper like `DeltaAll()`.
+5. **`DeltaFetcher` interface extension**: Add `DeltaFolder(ctx, driveID, folderID, token)` method.
+6. **RemoteObserver shortcut detection**: During primary FullDelta, detect items where `RemoteItemID != "" && IsFolder` → shortcutRef struct.
+7. **Sub-delta orchestration**: For each shortcut, load scope token from `delta_tokens` (`drive_id`, `scope_id=remoteItemID`), call `DeltaFolderAll` on source drive. Non-fatal on failure (other shortcuts sync fine).
+8. **Path mapping**: Sub-delta item paths prefixed with shortcut's local position. E.g., shortcut "Family Photos" + item "2024/vacation.jpg" → "Family Photos/2024/vacation.jpg".
+9. **Scope token management**: Pending scope tokens committed per-scope after cycle completes. Uses existing composite key schema (migration 00004).
+
+Acceptance: folder-scoped delta returns correct ChangeEvents. Delta tokens saved/loaded per scope. Path mapping produces correct local paths. Shortcut detection identifies remoteItem folders.
+
+### 6.4b: Shared folder sync (shortcuts + lifecycle) — FUTURE
+
+1. **Shortcut lifecycle**: New shortcut → initial sub-delta enumeration + create local dir. Removed shortcut → delete local dir recursively + clean scope token + remove baseline entries (DP-2). Moved shortcut → `os.Rename` local dir + update path prefix.
+2. **Cross-drive executor operations**: Sub-delta events have DriveID = source drive. Executor already uses `action.View.Remote.DriveID` for API calls. Same OAuth token grants access to shared content. No executor changes needed for the common case.
+3. **Read-only content handling**: Auto-detect via 403 on upload/delete. Summarized errors, not per-file (DP-3). Mark shortcut as read-only in observer state to avoid repeated 403s.
+4. **Shared-with-me drives**: Full drive infrastructure for standalone shared folders. `drive add`/`remove` by display_name (DP-4).
+5. **Personal and Business account support**: Both account types can have shared content. SharePoint libraries already handled as separate drives.
+
+Acceptance: Shortcuts detected, content synced. Share revocation deletes local copies. Read-only content produces summarized errors. `drive add`/`remove` works for shared drives.
 
 ---
 
@@ -935,12 +1009,9 @@ This analysis categorizes every part of the codebase by its relationship to the 
 2. Reminder format: structured log message with conflict count and `run 'onedrive-go conflicts' to view` guidance.
 3. First reminder fires immediately after a sync cycle that produces new conflicts.
 
-### 9.4: Configurable parallelism — FUTURE
+### 9.4: Configurable parallelism — DONE (moved to Phase 6.0c)
 
-1. `parallel_downloads` config option (default 8): maximum concurrent download workers per drive.
-2. `parallel_uploads` config option (default 8): maximum concurrent upload workers per drive.
-3. `parallel_checkers` config option (default 8): maximum concurrent hash computation workers for local scanning.
-4. Wire to existing `WorkerPool` lane configuration. Validate: minimum 1, maximum 64 per option.
+Moved to Phase 6.0c as `transfer_workers` (default 8, range 4-64) and `check_workers` (default 4, range 1-16). The old `parallel_downloads`, `parallel_uploads`, `parallel_checkers` keys are deprecated.
 
 ### 9.5: Configurable timeouts — FUTURE
 

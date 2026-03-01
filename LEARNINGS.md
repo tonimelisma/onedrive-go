@@ -482,3 +482,31 @@ Personal/Business: `type:email` (2 parts). SharePoint: `type:email:site:library`
 
 ### Shortcut-based sync uses per-shortcut delta tokens
 Shared folders appear as shortcuts in the user's drive. Each shortcut has its own delta token with a composite key `(drive_id, scope_id)`. Primary drive: `scope_id = ""`. Shortcuts: `scope_id = remoteItem.id`, `scope_drive = remoteItem.driveId`. The RemoteObserver calls delta once per scope.
+
+---
+
+## 9. Multi-Drive Orchestration
+
+### Always use Orchestrator, even for single drive
+No separate single-drive sync code path. N=1 means one DriveRunner — same logic, no special case. Overhead for N=1 is negligible (~50ms startup, ~5KB memory). Prevents "works for N=1 but breaks for N=2" class of bugs. Syncthing uses exactly this pattern (central coordinator, per-folder engines).
+
+### Per-drive Engine isolation (zero shared mutable state)
+Each DriveRunner wraps its own Engine with its own observers, buffer, planner, tracker, baseline, and worker pool. A corrupted SQLite DB, expired token, or network error in one drive affects nothing else. Panics caught per-drive with `defer recover`.
+
+### graph.Client sharing is per token path, not per drive
+`map[tokenPath]*graph.Client` in Orchestrator. Multiple drives on the same account (personal + SharePoint libraries) share one Client. Different accounts have different Clients. Thread-safe because `graph.Client` is stateless per-request.
+
+### 429 handled per-request — no shared rate-limit gate
+Per-request Retry-After + exponential backoff with jitter. No shared gate across workers or drives. This is the industry standard (rclone, abraunegg/onedrive). With <=8 workers per drive, thundering herd is minimal. Each worker's jitter desynchronizes retries naturally.
+
+### Two concurrency knobs: transfer_workers and check_workers
+`transfer_workers` (default 8, range 4-64): concurrent file operations (downloads, uploads, renames, deletes, mkdirs). Split internally into interactive/bulk/shared lanes. `check_workers` (default 4, range 1-16): global semaphore for concurrent QuickXorHash computation. CPU-bound, independent of network I/O. Old keys (`parallel_downloads`, `parallel_uploads`, `parallel_checkers`) deprecated.
+
+### Worker budget uses proportional allocation with minPerDrive floor
+`globalCap = config.transfer_workers`. Per-drive: `weight = max(1, baselineFileCount)`, `allocation = max(4, globalCap * weight / totalWeight)`. Scale down if sum > globalCap due to floors. N=1: full globalCap. Rebalanced on SIGHUP when drives change.
+
+### SyncRoot overlap must be validated at both config and runtime
+`checkSyncDirOverlap(cfg)` uses `filepath.Clean` + `strings.HasPrefix` with separator suffix (prevents false match on prefix-named dirs). Called from `validateDrives()` at config load AND `Orchestrator.Start()` for runtime defaults. Symlink resolution is lexical only — known limitation.
+
+### DriveTypeShared needs explicit handling in every drive-type switch
+`BaseSyncDir()`, `DefaultSyncDir()`, `DriveTokenPath()`, `CollectOtherSyncDirs()` — all need shared drive cases. Missing cases return "" or empty, causing silent failures. Check all type-switch statements when adding new drive types.
