@@ -21,7 +21,8 @@ const (
 		local_hash, remote_hash, size, mtime, synced_at, etag
 		FROM baseline`
 
-	sqlGetDeltaToken = `SELECT token FROM delta_tokens WHERE drive_id = ? AND scope_id = ?` //nolint:gosec // G101: "token" is a delta cursor, not credentials
+	//nolint:gosec // G101: "token" is a delta cursor, not credentials.
+	sqlGetDeltaToken = `SELECT token FROM delta_tokens WHERE drive_id = ? AND scope_id = ?`
 
 	sqlUpsertBaseline = `INSERT INTO baseline
 		(path, drive_id, item_id, parent_id, item_type, local_hash, remote_hash,
