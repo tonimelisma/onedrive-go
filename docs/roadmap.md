@@ -990,10 +990,15 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 ### 10.3: Symlink handling — FUTURE
 
+Industry context: the official OneDrive client follows symlinks (syncs target content). rclone and Resilio skip by default. Dropbox removed symlink-following after infinite sync loops in production. Syncthing refuses to follow (security). The abraunegg Linux OneDrive client follows by default with a `skip_symlinks` option. We match the official client's behavior with safety guards.
+
 1. Default behavior: follow symlinks during local scan. Sync the target file/directory as if it were a regular file/directory. OneDrive has no concept of symlinks.
 2. `skip_symlinks` config option (default `false`): when `true`, skip all symlinks silently during local scan.
-3. Circular symlink detection: track visited inodes during walk. If a symlink points to an ancestor directory (or creates a cycle), skip it with a warning. Prevent infinite recursion.
-4. Cross-device symlinks: symlinks pointing outside the sync directory are followed. The target content is synced under the symlink's path within the sync tree.
+3. Circular symlink detection: track visited inodes (`os.Stat` → `sys.Ino`) during directory walk. If a symlink points to an ancestor directory or creates a cycle, skip it with `slog.Warn`. Prevent infinite recursion. Do not rely solely on OS ELOOP limits (rclone's known bug).
+4. Broken symlink handling: if a symlink target does not exist (`os.Stat` returns `os.ErrNotExist`), skip the symlink with `slog.Warn`. Do not crash or propagate the error (abraunegg crash bug precedent).
+5. Cross-device symlinks: symlinks pointing outside the sync directory are followed. The target content is synced under the symlink's path within the sync tree.
+6. Watch mode: `fsnotify` does not deliver events for changes inside symlinked directories. After following a symlinked directory, add an explicit watch on the resolved target path. Log a warning if the watch cannot be added.
+7. Resolves B-120 (symlinked directories get no watch and no warning).
 
 ### 10.4: Application-specific exclusions — FUTURE
 

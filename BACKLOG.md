@@ -35,17 +35,6 @@ Defensive coding and edge cases for `internal/driveid/` and `internal/graph/`.
 | B-281 | Vault parent-chain ordering assumption in RemoteObserver | P2 | `isDescendantOfVault()` assumes parents processed before children in delta. Not contractually guaranteed. Safety-critical. |
 | B-282 | Add `HashesComputed` counter to `ObserverStats` | P4 | Planned in B-127 but may not have been implemented. Useful for perf diagnostics. |
 
-## Hardening: Internal Sync
-
-Defensive coding, bug fixes, and test gaps in `internal/sync/`.
-
-| ID | Title | Priority | Notes |
-|----|-------|----------|-------|
-| B-207 | Document intentional `.partial` preservation on rename failure | P4 | Add clarifying comment. |
-| B-211 | `resumeDownload` TOCTOU race between stat and open | P4 | Extremely unlikely. Verify size after open if fixing. |
-| B-221 | Add comment explaining Go integer range in hash retry loop | P4 | `range maxRetries + 1` is Go 1.22 syntax, unfamiliar to many. |
-| B-222 | Document `selectHash` cross-file reference in `transfer_manager.go` | P4 | Aid code navigation without IDE. |
-
 ## Hardening: CLI Architecture
 
 Code quality and architecture improvements for the root package.
@@ -70,7 +59,7 @@ Edge cases and correctness for `internal/graph/`.
 |----|-------|----------|-------|
 | B-020 | SharePoint lock check before upload (HTTP 423) | P2 | Avoid overwriting co-authored documents. |
 | B-021 | Hash fallback chain for missing hashes | P2 | Some Business/SharePoint files lack any hash. Fall back: QuickXorHash → SHA256 → size+eTag+mtime. |
-| B-007 | Cross-drive DriveID handling for shared/remote items | P3 | Verify against real API responses in E2E. |
+| B-007 | Cross-drive DriveID handling for shared/remote items | P3 | Partially done: `resolveParentDriveID()` handles cross-drive parent chains. Needs exhaustive E2E testing. |
 
 ## Hardening: Watch Mode
 
@@ -80,25 +69,7 @@ Improvements to continuous sync reliability in `internal/sync/`.
 |----|-------|----------|-------|
 | B-101 | Add timing and resource logging to safety scan | P3 | Elapsed time, files walked, directories scanned. |
 | B-115 | Test: safety scan + watch producing conflicting change types | P3 | Watch sees Create, safety scan classifies same file as Modify. Planner handles it but no test. |
-| B-120 | Symlinked directories get no watch and no warning | P3 | Log Warn when symlinked directory encountered during watch setup. |
-| B-125 | No health or liveness signal from Watch() goroutines | P4 | Detect stuck/dead observers. Heartbeat or periodic liveness signal. |
-| B-127 | No observer-level metrics or counters | P4 | Events produced, polls, hashes, dropped events. Essential for long-running daemon. |
-| B-128 | Debounce semantics change under load | P4 | When consumer is busy, debounce blocks and timer stops running. |
-
-## Hardening: Code Quality
-
-Misc improvements across packages.
-
-| ID | Title | Priority | Notes |
-|----|-------|----------|-------|
-| B-138 | Add upstream sync check for oauth2 fork | P3 | `tonimelisma/oauth2` fork may fall behind security patches. CI check or documented process. |
-| B-149 | Deduplicate conflict scan logic in `baseline.go` | P3 | `scanConflictRow`/`scanConflictRowSingle` — 80 lines duplicated. |
-| B-160 | Drop or document `conflicts.history` column | P3 | Unused column in schema. |
-| B-198 | Periodic baseline cache consistency check in watch mode | P3 | Every N cycles, reload from DB and compare with cache. Defensive against silent corruption. |
-| B-071 | ConflictRecord missing Name field | P4 | UX convenience. `path.Base(Path)` suffices. |
-| B-087 | Conflict retention/pruning policy | P4 | Resolved conflicts accumulate forever. Add configurable retention (e.g., 90 days). |
-| B-154 | Sort map keys in planner for reproducible action order | P4 | Non-deterministic map iteration aids debugging. |
-| B-158 | `DownloadURL`: implement `slog.LogValuer` for compile-time redaction | P4 | "NEVER log" is convention-only. |
+| B-128 | Debounce semantics change under load | P4 | Partially addressed: write coalescing implemented (B-107). Full load-testing and documentation still needed. |
 
 ## Hardening: Performance
 
@@ -122,6 +93,21 @@ Optimization deferred until profiling shows a bottleneck.
 
 | ID | Title | Resolution |
 |----|-------|------------|
+| B-207 | Document intentional `.partial` preservation on rename failure | **DONE** — Comment added in `transfer_manager.go` (B-207). PR #139. |
+| B-211 | `resumeDownload` TOCTOU race between stat and open | **DONE** — Open-before-stat pattern eliminates TOCTOU (B-211). PR #139. |
+| B-221 | Add comment explaining Go integer range in hash retry loop | **DONE** — Comment explaining Go 1.22 `range N` syntax (B-221). PR #139. |
+| B-222 | Document `selectHash` cross-file reference in `transfer_manager.go` | **DONE** — Cross-file reference comment (B-222). PR #139. |
+| B-160 | Drop or document `conflicts.history` column | **DONE** — Documented as intentionally dormant/unused (B-160). PR #139. |
+| B-149 | Deduplicate conflict scan logic in `baseline.go` | **DONE** — `conflictScanner` interface, single `scanConflict()` (B-149). PR #139. |
+| B-154 | Sort map keys in planner for reproducible action order | **DONE** — `sort.Strings(sortedPaths)` before classification (B-154). PR #139. |
+| B-071 | ConflictRecord missing Name field | **DONE** — `Name` field derived from `path.Base(Path)` (B-071). PR #139. |
+| B-120 | Symlinked directories get no watch and no warning | **DONE** — `slog.Warn` on symlinked directory in watch setup (B-120). PR #139. |
+| B-125 | No health or liveness signal from Watch() goroutines | **DONE** — `LastActivity()` on both observers (B-125). PR #139. |
+| B-127 | No observer-level metrics or counters | **DONE** — `ObserverStats` struct with `EventsEmitted`, `PollsCompleted`, `Errors` (B-127). PR #139. |
+| B-158 | `DownloadURL`: implement `slog.LogValuer` for compile-time redaction | **DONE** — `LogValue()` returns `[REDACTED]` (B-158). PR #139. |
+| B-087 | Conflict retention/pruning policy | **DONE** — `PruneResolvedConflicts()` with configurable retention (B-087). PR #139. |
+| B-198 | Periodic baseline cache consistency check in watch mode | **DONE** — `CheckCacheConsistency()` report-only verification (B-198). PR #139. |
+| B-138 | Add upstream sync check for oauth2 fork | **DONE** — `scripts/check-oauth2-fork.sh` (B-138). PR #139. |
 | B-277 | E2E polling for Graph API eventual consistency | **DONE** — Polling helpers (`pollCLIContains`, `pollCLIWithConfigContains`, `pollCLISuccess`) replace fatal write-then-read assertions. `Drives()` 403 retry in production code. |
 | B-205 | `WorkerPool.errors` slice grows unbounded in watch mode | **DONE** — Capped at 1000 with `droppedErrors` counter. PR #129. |
 | B-208 | `sessionUpload` non-expired resume error creates infinite retry loop | **DONE** — Delete session on any resume failure. PR #129. |

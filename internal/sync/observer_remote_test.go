@@ -1270,11 +1270,8 @@ func TestWatch_IntervalClamping(t *testing.T) {
 	}
 
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	// Pass zero interval — should be clamped to minPollInterval (30s).
-	_ = obs.Watch(ctx, "", events, 0)
+	_ = obs.Watch(t.Context(), "", events, 0)
 
 	if actualSleepDuration != minPollInterval {
 		t.Errorf("sleep duration = %v, want %v (clamped from 0)", actualSleepDuration, minPollInterval)
