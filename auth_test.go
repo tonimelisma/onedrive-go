@@ -109,7 +109,7 @@ func TestFindTokenFallback(t *testing.T) {
 func TestFindTokenFallback_PersonalExists(t *testing.T) {
 	// Create a temp directory and a file matching the personal token path.
 	personalID := driveid.MustCanonicalID("personal:test-fallback@example.com")
-	personalPath := config.DriveTokenPath(personalID)
+	personalPath := config.DriveTokenPath(personalID, nil)
 
 	if personalPath == "" {
 		t.Skip("cannot determine token path on this platform")
@@ -129,7 +129,7 @@ func TestFindTokenFallback_PersonalExists(t *testing.T) {
 func TestFindTokenFallback_BusinessExists(t *testing.T) {
 	// Create only a business token file — should return business prefix.
 	businessID := driveid.MustCanonicalID("business:test-fallback-biz@example.com")
-	businessPath := config.DriveTokenPath(businessID)
+	businessPath := config.DriveTokenPath(businessID, nil)
 
 	if businessPath == "" {
 		t.Skip("cannot determine token path on this platform")

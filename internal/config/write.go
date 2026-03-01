@@ -216,7 +216,7 @@ func DeleteDriveSection(path string, canonicalID driveid.CanonicalID) error {
 //
 // SharePoint: ~/SharePoint - {site} - {library} → + {displayName} → + {email}
 func DefaultSyncDir(cid driveid.CanonicalID, orgName, displayName string, existingDirs []string) string {
-	base := BaseSyncDir(cid, orgName)
+	base := BaseSyncDir(cid, orgName, displayName)
 	if base == "" {
 		return ""
 	}
@@ -240,7 +240,11 @@ func DefaultSyncDir(cid driveid.CanonicalID, orgName, displayName string, existi
 // BaseSyncDir returns the base sync directory name for a drive type, without
 // collision detection. Exported for use by collectOtherSyncDirs which needs
 // the base name without triggering a collision cascade.
-func BaseSyncDir(cid driveid.CanonicalID, orgName string) string {
+//
+// The displayName parameter is only used for shared drives (to create
+// per-drive subdirectories under ~/OneDrive-Shared/). Personal, business,
+// and SharePoint drives ignore it.
+func BaseSyncDir(cid driveid.CanonicalID, orgName, displayName string) string {
 	switch cid.DriveType() {
 	case driveTypePersonal:
 		return "~/OneDrive"
@@ -258,6 +262,12 @@ func BaseSyncDir(cid driveid.CanonicalID, orgName string) string {
 		}
 
 		return "~/SharePoint"
+	case driveTypeShared:
+		if displayName != "" {
+			return "~/OneDrive-Shared/" + SanitizePathComponent(displayName)
+		}
+
+		return "~/OneDrive-Shared"
 	default:
 		return ""
 	}

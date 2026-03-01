@@ -104,51 +104,6 @@ func splitParentAndName(path string) (string, string) {
 	return clean[:idx], clean[idx+1:]
 }
 
-// clientAndDrive loads a saved token using the resolved config's canonical ID,
-// creates a Graph client, and discovers the user's primary drive ID.
-// Returns the client, token source, and drive ID.
-// The token source is returned separately for callers that need to create
-// a second client (e.g., transfer client with no timeout).
-func clientAndDrive(ctx context.Context, cc *CLIContext) (*graph.Client, graph.TokenSource, driveid.ID, error) {
-	logger := cc.Logger
-	cfg := cc.Cfg
-
-	tokenPath := config.DriveTokenPath(cfg.CanonicalID)
-	if tokenPath == "" {
-		return nil, nil, driveid.ID{}, fmt.Errorf("cannot determine token path for drive %q", cfg.CanonicalID)
-	}
-
-	ts, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
-	if err != nil {
-		if errors.Is(err, graph.ErrNotLoggedIn) {
-			return nil, nil, driveid.ID{}, fmt.Errorf("not logged in — run 'onedrive-go login' first")
-		}
-
-		return nil, nil, driveid.ID{}, err
-	}
-
-	client := newGraphClient(ts, logger)
-
-	// Skip the Drives() API call when the drive ID is already known from config.
-	if !cfg.DriveID.IsZero() {
-		logger.Debug("using configured drive ID", "drive_id", cfg.DriveID.String())
-		return client, ts, cfg.DriveID, nil
-	}
-
-	drives, err := client.Drives(ctx)
-	if err != nil {
-		return nil, nil, driveid.ID{}, fmt.Errorf("discovering drive: %w", err)
-	}
-
-	if len(drives) == 0 {
-		return nil, nil, driveid.ID{}, fmt.Errorf("no drives found for this account")
-	}
-
-	logger.Debug("discovered primary drive", "drive_id", drives[0].ID.String())
-
-	return client, ts, drives[0].ID, nil
-}
-
 // resolveItem resolves a remote path to an Item.
 // For root (""), uses GetItem with "root". Otherwise uses GetItemByPath.
 // Note: "/" normalizes to "" via cleanRemotePath, so callers can pass either
@@ -182,19 +137,19 @@ func runLs(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	cc := mustCLIContext(ctx)
 
-	client, _, driveID, err := clientAndDrive(ctx, cc)
+	session, err := NewDriveSession(ctx, cc.Cfg, cc.RawConfig, cc.Logger)
 	if err != nil {
 		return err
 	}
 
 	cc.Logger.Debug("ls", "path", remotePath)
 
-	items, err := listItems(ctx, client, driveID, remotePath)
+	items, err := listItems(ctx, session.Client, session.DriveID, remotePath)
 	if err != nil {
 		return fmt.Errorf("listing %q: %w", remotePath, err)
 	}
 
-	if flagJSON {
+	if cc.Flags.JSON {
 		return printItemsJSON(items)
 	}
 
@@ -260,7 +215,7 @@ func runGet(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	cc := mustCLIContext(ctx)
 
-	client, ts, driveID, err := clientAndDrive(ctx, cc)
+	session, err := NewDriveSession(ctx, cc.Cfg, cc.RawConfig, cc.Logger)
 	if err != nil {
 		return err
 	}
@@ -268,7 +223,7 @@ func runGet(cmd *cobra.Command, args []string) error {
 	logger := cc.Logger
 	logger.Debug("get", "remote_path", remotePath)
 
-	item, err := resolveItem(ctx, client, driveID, remotePath)
+	item, err := resolveItem(ctx, session.Client, session.DriveID, remotePath)
 	if err != nil {
 		return fmt.Errorf("resolving %q: %w", remotePath, err)
 	}
@@ -282,25 +237,23 @@ func runGet(cmd *cobra.Command, args []string) error {
 		localPath = args[1]
 	}
 
-	// Use transfer client (no timeout) for download/upload operations.
-	transferClient := newTransferGraphClient(ts, logger)
-	tm := isync.NewTransferManager(transferClient, transferClient, nil, logger)
+	tm := isync.NewTransferManager(session.Transfer, session.Transfer, nil, logger)
 
-	result, err := tm.DownloadToFile(ctx, driveID, item.ID, localPath, isync.DownloadOpts{
+	result, err := tm.DownloadToFile(ctx, session.DriveID, item.ID, localPath, isync.DownloadOpts{
 		RemoteHash: item.QuickXorHash,
 	})
 	if err != nil {
 		partialPath := localPath + ".partial"
 		if _, statErr := os.Stat(partialPath); statErr == nil {
-			statusf("Partial download saved: %s\n", partialPath)
-			statusf("Re-run the same command to resume.\n")
+			statusf(cc.Flags.Quiet, "Partial download saved: %s\n", partialPath)
+			statusf(cc.Flags.Quiet, "Re-run the same command to resume.\n")
 		}
 
 		return err
 	}
 
 	logger.Debug("download complete", "local_path", localPath, "bytes", result.Size)
-	statusf("Downloaded %s (%s)\n", localPath, formatSize(result.Size))
+	statusf(cc.Flags.Quiet, "Downloaded %s (%s)\n", localPath, formatSize(result.Size))
 
 	return nil
 }
@@ -328,7 +281,7 @@ func runPut(cmd *cobra.Command, args []string) error {
 
 	cc := mustCLIContext(ctx)
 
-	client, ts, driveID, err := clientAndDrive(ctx, cc)
+	session, err := NewDriveSession(ctx, cc.Cfg, cc.RawConfig, cc.Logger)
 	if err != nil {
 		return err
 	}
@@ -339,21 +292,19 @@ func runPut(cmd *cobra.Command, args []string) error {
 	parentPath, name := splitParentAndName(remotePath)
 
 	// Resolve parent folder ID.
-	parentItem, err := resolveItem(ctx, client, driveID, parentPath)
+	parentItem, err := resolveItem(ctx, session.Client, session.DriveID, parentPath)
 	if err != nil {
 		return fmt.Errorf("resolving parent %q: %w", parentPath, err)
 	}
 
 	progress := func(uploaded, total int64) {
-		statusf("Uploading: %s / %s\n", formatSize(uploaded), formatSize(total))
+		statusf(cc.Flags.Quiet, "Uploading: %s / %s\n", formatSize(uploaded), formatSize(total))
 	}
 
-	// Use transfer client (no timeout) for upload operations.
-	transferClient := newTransferGraphClient(ts, logger)
 	store := isync.NewSessionStore(config.DefaultDataDir(), logger)
-	tm := isync.NewTransferManager(transferClient, transferClient, store, logger)
+	tm := isync.NewTransferManager(session.Transfer, session.Transfer, store, logger)
 
-	result, err := tm.UploadFile(ctx, driveID, parentItem.ID, name, localPath, isync.UploadOpts{
+	result, err := tm.UploadFile(ctx, session.DriveID, parentItem.ID, name, localPath, isync.UploadOpts{
 		Mtime:    fi.ModTime(),
 		Progress: progress,
 	})
@@ -362,7 +313,7 @@ func runPut(cmd *cobra.Command, args []string) error {
 	}
 
 	logger.Debug("upload complete", "remote_path", remotePath, "item_id", result.Item.ID, "size", fi.Size())
-	statusf("Uploaded %s (%s)\n", remotePath, formatSize(fi.Size()))
+	statusf(cc.Flags.Quiet, "Uploaded %s (%s)\n", remotePath, formatSize(fi.Size()))
 
 	return nil
 }
@@ -379,7 +330,7 @@ func runRm(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	cc := mustCLIContext(ctx)
 
-	client, _, driveID, err := clientAndDrive(ctx, cc)
+	session, err := NewDriveSession(ctx, cc.Cfg, cc.RawConfig, cc.Logger)
 	if err != nil {
 		return err
 	}
@@ -387,7 +338,7 @@ func runRm(cmd *cobra.Command, args []string) error {
 	logger := cc.Logger
 	logger.Debug("rm", "path", remotePath)
 
-	item, err := resolveItem(ctx, client, driveID, remotePath)
+	item, err := resolveItem(ctx, session.Client, session.DriveID, remotePath)
 	if err != nil {
 		return fmt.Errorf("resolving %q: %w", remotePath, err)
 	}
@@ -408,20 +359,20 @@ func runRm(cmd *cobra.Command, args []string) error {
 	}
 
 	if permanent {
-		if err := client.PermanentDeleteItem(ctx, driveID, item.ID); err != nil {
+		if err := session.Client.PermanentDeleteItem(ctx, session.DriveID, item.ID); err != nil {
 			return fmt.Errorf("permanently deleting %q: %w", remotePath, err)
 		}
 
 		logger.Debug("permanent delete complete", "path", remotePath, "item_id", item.ID)
 	} else {
-		if err := client.DeleteItem(ctx, driveID, item.ID); err != nil {
+		if err := session.Client.DeleteItem(ctx, session.DriveID, item.ID); err != nil {
 			return fmt.Errorf("deleting %q: %w", remotePath, err)
 		}
 
 		logger.Debug("delete complete", "path", remotePath, "item_id", item.ID)
 	}
 
-	if flagJSON {
+	if cc.Flags.JSON {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 
@@ -429,9 +380,9 @@ func runRm(cmd *cobra.Command, args []string) error {
 	}
 
 	if permanent {
-		statusf("Permanently deleted %s\n", remotePath)
+		statusf(cc.Flags.Quiet, "Permanently deleted %s\n", remotePath)
 	} else {
-		statusf("Deleted %s (moved to recycle bin)\n", remotePath)
+		statusf(cc.Flags.Quiet, "Deleted %s (moved to recycle bin)\n", remotePath)
 	}
 
 	return nil
@@ -452,7 +403,7 @@ func runMkdir(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	cc := mustCLIContext(ctx)
 
-	client, _, driveID, err := clientAndDrive(ctx, cc)
+	session, err := NewDriveSession(ctx, cc.Cfg, cc.RawConfig, cc.Logger)
 	if err != nil {
 		return err
 	}
@@ -476,11 +427,11 @@ func runMkdir(cmd *cobra.Command, args []string) error {
 			builtPath = builtPath + "/" + seg
 		}
 
-		item, createErr := client.CreateFolder(ctx, driveID, parentID, seg)
+		item, createErr := session.Client.CreateFolder(ctx, session.DriveID, parentID, seg)
 		if createErr != nil {
 			// If folder already exists (409 Conflict), resolve it and continue.
 			if errors.Is(createErr, graph.ErrConflict) {
-				existing, resolveErr := resolveItem(ctx, client, driveID, builtPath)
+				existing, resolveErr := resolveItem(ctx, session.Client, session.DriveID, builtPath)
 				if resolveErr != nil {
 					return fmt.Errorf("resolving existing folder %q: %w", seg, resolveErr)
 				}
@@ -498,14 +449,14 @@ func runMkdir(cmd *cobra.Command, args []string) error {
 
 	logger.Debug("mkdir complete", "path", remotePath, "folder_id", parentID)
 
-	if flagJSON {
+	if cc.Flags.JSON {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 
 		return enc.Encode(mkdirJSONOutput{Created: remotePath, ID: parentID})
 	}
 
-	statusf("Created %s\n", remotePath)
+	statusf(cc.Flags.Quiet, "Created %s\n", remotePath)
 
 	return nil
 }
@@ -515,19 +466,19 @@ func runStat(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	cc := mustCLIContext(ctx)
 
-	client, _, driveID, err := clientAndDrive(ctx, cc)
+	session, err := NewDriveSession(ctx, cc.Cfg, cc.RawConfig, cc.Logger)
 	if err != nil {
 		return err
 	}
 
 	cc.Logger.Debug("stat", "path", remotePath)
 
-	item, err := resolveItem(ctx, client, driveID, remotePath)
+	item, err := resolveItem(ctx, session.Client, session.DriveID, remotePath)
 	if err != nil {
 		return fmt.Errorf("resolving %q: %w", remotePath, err)
 	}
 
-	if flagJSON {
+	if cc.Flags.JSON {
 		return printStatJSON(item)
 	}
 

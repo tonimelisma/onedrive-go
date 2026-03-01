@@ -780,18 +780,20 @@ This analysis categorizes every part of the codebase by its relationship to the 
 6.1 (DONE)    6.2a (DONE)    6.3 (after 6.0a)
 ```
 
-### 6.0a: DriveSession + ResolveDrives + shared drive foundations — FUTURE
+### 6.0a: DriveSession + ResolveDrives + shared drive foundations — DONE
 
 Prerequisite refactoring that unblocks all other Phase 6 work.
 
-1. **DriveSession type** (B-223): Extract from `clientAndDrive()` 4-tuple. Struct holding `*graph.Client` (metadata), `*graph.Client` (transfer, no timeout), `graph.TokenSource`, `driveid.ID`, `*config.ResolvedDrive`. Constructor: `NewDriveSession(ctx, resolved, cfg, logger)` handles token resolution via `config.TokenCanonicalID()`, `TokenSourceFromPath()`, Client creation, and DriveID discovery. Replaces 10+ call sites.
-2. **`config.ResolveDrives()`**: New function returning `[]*ResolvedDrive` for all non-paused drives (no selector) or specified subset. Calls `buildResolvedDrive()` + `ValidateResolved()` for each. Sorted by canonical ID for deterministic ordering.
-3. **`BaseSyncDir` for `DriveTypeShared`**: Add case returning `~/OneDrive-Shared/{displayName}`. Requires signature change: `BaseSyncDir(cid, orgName, displayName)`. Fixes `DefaultSyncDir()` and `CollectOtherSyncDirs()` downstream.
-4. **SyncRoot overlap validation**: `checkSyncDirOverlap(cfg)` validates no sync_dir is ancestor/descendant of another. Uses `filepath.Clean` + `HasPrefix` with separator suffix. Called from `validateDrives()` at config load and `Orchestrator.Start()` for runtime defaults.
-5. **`OwnerEmail` on `graph.Drive`** (B-279): **DONE** — Added `OwnerEmail` string field, parses `owner.user.email` from API response.
-6. **`DriveTokenPath` shared case**: Handle `DriveTypeShared` (delegates to `TokenCanonicalID` first).
+1. **DriveSession type** (B-223): **DONE** — `DriveSession` struct with Client (30s timeout), Transfer (no timeout), TokenSource, DriveID, Resolved. `NewDriveSession()` constructor. Replaced 9 `clientAndDrive()` call sites.
+2. **`config.ResolveDrives()`**: **DONE** — Returns `[]*ResolvedDrive` for all non-paused drives or specified subset. Sorted by canonical ID.
+3. **`BaseSyncDir` for `DriveTypeShared`**: **DONE** — Returns `~/OneDrive-Shared/{displayName}`. Signature: `BaseSyncDir(cid, orgName, displayName)`.
+4. **SyncRoot overlap validation**: **DONE** — `checkSyncDirOverlap(cfg)` + `isAncestorOrDescendant()`. Called from `validateDrives()`.
+5. **`OwnerEmail` on `graph.Drive`** (B-279): **DONE** — Added in foundation hardening PR.
+6. **`DriveTokenPath` shared case**: **DONE** — Signature: `DriveTokenPath(cid, cfg)`. Passes cfg to `TokenCanonicalID` for shared drive resolution.
+7. **B-224: Eliminate global flag variables**: **DONE** — Two-phase CLIContext: `CLIFlags` struct + `RawConfig`. Zero global mutable flag state.
+8. **B-283: URL-encode SearchSites query**: **DONE** — `url.QueryEscape(query)` in `SearchSites()`.
 
-Acceptance: `clientAndDrive` replaced with DriveSession. `ResolveDrives` returns N drives. Shared drives get correct default sync_dir. Overlapping sync_dirs rejected. All existing tests pass.
+Acceptance: all criteria met. `clientAndDrive` eliminated. `ResolveDrives` resolves N drives. Shared drives get correct defaults. Overlapping sync_dirs rejected. Coverage 75.1% → 76.3%.
 
 ### 6.0b: Orchestrator + DriveRunner (always-on) — FUTURE
 

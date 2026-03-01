@@ -73,11 +73,6 @@ func TestPrintTable(t *testing.T) {
 
 func TestStatusf(t *testing.T) {
 	t.Run("quiet suppresses output", func(t *testing.T) {
-		old := flagQuiet
-		t.Cleanup(func() { flagQuiet = old })
-
-		flagQuiet = true
-
 		// Capture stderr via pipe to verify nothing is written.
 		oldStderr := os.Stderr
 		r, w, err := os.Pipe()
@@ -87,7 +82,7 @@ func TestStatusf(t *testing.T) {
 
 		t.Cleanup(func() { os.Stderr = oldStderr })
 
-		statusf("should not appear %s", "test")
+		statusf(true, "should not appear %s", "test")
 		w.Close()
 
 		out, err := io.ReadAll(r)
@@ -96,11 +91,6 @@ func TestStatusf(t *testing.T) {
 	})
 
 	t.Run("normal mode writes to stderr", func(t *testing.T) {
-		old := flagQuiet
-		t.Cleanup(func() { flagQuiet = old })
-
-		flagQuiet = false
-
 		oldStderr := os.Stderr
 		r, w, err := os.Pipe()
 		require.NoError(t, err)
@@ -109,7 +99,7 @@ func TestStatusf(t *testing.T) {
 
 		t.Cleanup(func() { os.Stderr = oldStderr })
 
-		statusf("hello %s", "world")
+		statusf(false, "hello %s", "world")
 		w.Close()
 
 		out, err := io.ReadAll(r)

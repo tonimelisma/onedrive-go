@@ -14,32 +14,13 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 )
 
-// Global flag reset pattern: newRootCmd() binds flags via StringVar/BoolVar,
-// which reset the global flag variables to their zero values. Tests must either:
-//   - Set globals AFTER newRootCmd() returns (direct function tests), or
-//   - Use cmd.SetArgs() + cmd.Execute() to let Cobra parse flags (integration tests).
-//
-// Setting a global before newRootCmd() and expecting it to survive is a bug.
-
 // --- buildLogger tests ---
 
 func TestBuildLogger_Default(t *testing.T) {
-	oldVerbose := flagVerbose
-	oldDebug := flagDebug
-	oldQuiet := flagQuiet
-
-	t.Cleanup(func() {
-		flagVerbose = oldVerbose
-		flagDebug = oldDebug
-		flagQuiet = oldQuiet
-	})
-
-	flagVerbose = false
-	flagDebug = false
-	flagQuiet = false
+	flags := CLIFlags{}
 
 	// nil config = bootstrap mode (pre-config).
-	logger := buildLogger(nil)
+	logger := buildLogger(nil, flags)
 
 	// Default level is Warn.
 	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelWarn))
@@ -47,21 +28,9 @@ func TestBuildLogger_Default(t *testing.T) {
 }
 
 func TestBuildLogger_Verbose(t *testing.T) {
-	oldVerbose := flagVerbose
-	oldDebug := flagDebug
-	oldQuiet := flagQuiet
+	flags := CLIFlags{Verbose: true}
 
-	t.Cleanup(func() {
-		flagVerbose = oldVerbose
-		flagDebug = oldDebug
-		flagQuiet = oldQuiet
-	})
-
-	flagVerbose = true
-	flagDebug = false
-	flagQuiet = false
-
-	logger := buildLogger(nil)
+	logger := buildLogger(nil, flags)
 
 	// --verbose sets Info.
 	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelInfo))
@@ -69,68 +38,32 @@ func TestBuildLogger_Verbose(t *testing.T) {
 }
 
 func TestBuildLogger_Debug(t *testing.T) {
-	oldVerbose := flagVerbose
-	oldDebug := flagDebug
-	oldQuiet := flagQuiet
+	flags := CLIFlags{Debug: true}
 
-	t.Cleanup(func() {
-		flagVerbose = oldVerbose
-		flagDebug = oldDebug
-		flagQuiet = oldQuiet
-	})
-
-	flagVerbose = false
-	flagDebug = true
-	flagQuiet = false
-
-	logger := buildLogger(nil)
+	logger := buildLogger(nil, flags)
 
 	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelDebug))
 }
 
 func TestBuildLogger_ConfigDebug(t *testing.T) {
-	oldVerbose := flagVerbose
-	oldDebug := flagDebug
-	oldQuiet := flagQuiet
-
-	t.Cleanup(func() {
-		flagVerbose = oldVerbose
-		flagDebug = oldDebug
-		flagQuiet = oldQuiet
-	})
-
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogLevel: "debug"},
 	}
-	flagVerbose = false
-	flagDebug = false
-	flagQuiet = false
+	flags := CLIFlags{}
 
-	logger := buildLogger(cfg)
+	logger := buildLogger(cfg, flags)
 
 	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelDebug))
 }
 
 func TestBuildLogger_VerboseOverrides(t *testing.T) {
-	oldVerbose := flagVerbose
-	oldDebug := flagDebug
-	oldQuiet := flagQuiet
-
-	t.Cleanup(func() {
-		flagVerbose = oldVerbose
-		flagDebug = oldDebug
-		flagQuiet = oldQuiet
-	})
-
 	// Config says error, but --verbose should override to Info.
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogLevel: "error"},
 	}
-	flagVerbose = true
-	flagDebug = false
-	flagQuiet = false
+	flags := CLIFlags{Verbose: true}
 
-	logger := buildLogger(cfg)
+	logger := buildLogger(cfg, flags)
 
 	// --verbose enables Info level, but not Debug.
 	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelInfo))
@@ -138,22 +71,10 @@ func TestBuildLogger_VerboseOverrides(t *testing.T) {
 }
 
 func TestBuildLogger_QuietOverrides(t *testing.T) {
-	oldVerbose := flagVerbose
-	oldDebug := flagDebug
-	oldQuiet := flagQuiet
-
-	t.Cleanup(func() {
-		flagVerbose = oldVerbose
-		flagDebug = oldDebug
-		flagQuiet = oldQuiet
-	})
-
 	// --quiet sets Error level.
-	flagVerbose = false
-	flagDebug = false
-	flagQuiet = true
+	flags := CLIFlags{Quiet: true}
 
-	logger := buildLogger(nil)
+	logger := buildLogger(nil, flags)
 
 	// Error is enabled, but warn should not be.
 	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelError))
@@ -161,49 +82,25 @@ func TestBuildLogger_QuietOverrides(t *testing.T) {
 }
 
 func TestBuildLogger_DebugOverrides(t *testing.T) {
-	oldVerbose := flagVerbose
-	oldDebug := flagDebug
-	oldQuiet := flagQuiet
-
-	t.Cleanup(func() {
-		flagVerbose = oldVerbose
-		flagDebug = oldDebug
-		flagQuiet = oldQuiet
-	})
-
 	// Config says error, but --debug should override to Debug.
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogLevel: "error"},
 	}
-	flagVerbose = false
-	flagDebug = true
-	flagQuiet = false
+	flags := CLIFlags{Debug: true}
 
-	logger := buildLogger(cfg)
+	logger := buildLogger(cfg, flags)
 
 	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelDebug))
 }
 
 func TestBuildLogger_ConfigInfo(t *testing.T) {
-	oldVerbose := flagVerbose
-	oldDebug := flagDebug
-	oldQuiet := flagQuiet
-
-	t.Cleanup(func() {
-		flagVerbose = oldVerbose
-		flagDebug = oldDebug
-		flagQuiet = oldQuiet
-	})
-
 	// Config log_level = "info" should set Info level.
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogLevel: "info"},
 	}
-	flagVerbose = false
-	flagDebug = false
-	flagQuiet = false
+	flags := CLIFlags{}
 
-	logger := buildLogger(cfg)
+	logger := buildLogger(cfg, flags)
 
 	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelInfo))
 	assert.False(t, logger.Handler().Enabled(context.Background(), slog.LevelDebug))
@@ -263,8 +160,8 @@ func TestNewRootCmd_PersistentFlags(t *testing.T) {
 func TestNewRootCmd_MutualExclusivity(t *testing.T) {
 	// Cobra enforces mutual exclusivity during Execute(). Verify that
 	// combining --verbose/--debug/--quiet produces an error.
-	// Uses "status" because it has skipConfigAnnotation, so PersistentPreRunE
-	// is a no-op. This avoids loadConfig failures on CI (no config file)
+	// Uses "status" because it has skipConfigAnnotation, so Phase 2
+	// is skipped. This avoids loadAndResolve failures on CI (no config file)
 	// masking the mutual exclusivity error.
 	pairs := [][]string{
 		{"--verbose", "--debug"},
@@ -288,15 +185,23 @@ func TestNewRootCmd_AuthSkipsConfig(t *testing.T) {
 	cmd := newRootCmd()
 
 	// Auth and account management commands should pass through PersistentPreRunE
-	// without error, because they have the skipConfigAnnotation.
+	// without error, because they have the skipConfigAnnotation (Phase 2 skipped).
 	skipCmds := []string{"login", "logout", "whoami", "status"}
 	for _, name := range skipCmds {
 		t.Run(name, func(t *testing.T) {
 			sub, _, err := cmd.Find([]string{name})
 			require.NoError(t, err)
 
+			sub.SetContext(context.Background())
+
 			err = cmd.PersistentPreRunE(sub, nil)
 			assert.NoError(t, err, "%s should skip config loading", name)
+
+			// Verify CLIContext is populated (Phase 1 runs for all commands).
+			cc := cliContextFrom(sub.Context())
+			assert.NotNil(t, cc, "CLIContext should be populated for %s", name)
+			assert.NotNil(t, cc.Logger, "Logger should be populated for %s", name)
+			assert.Nil(t, cc.Cfg, "Cfg should be nil for auth command %s", name)
 		})
 	}
 }
@@ -342,6 +247,8 @@ func TestNewRootCmd_DriveSubcommandsSkipConfig(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			sub, _, err := cmd.Find(tc.args)
 			require.NoError(t, err)
+
+			sub.SetContext(context.Background())
 
 			err = cmd.PersistentPreRunE(sub, nil)
 			assert.NoError(t, err, "%s should skip config loading", tc.name)
@@ -408,15 +315,9 @@ func TestTransferHTTPClient_NoTimeout(t *testing.T) {
 	assert.Zero(t, client.Timeout)
 }
 
-// --- loadConfig tests ---
+// --- loadAndResolve tests ---
 
-func TestLoadConfig_ValidTOML(t *testing.T) {
-	oldConfigPath := flagConfigPath
-
-	t.Cleanup(func() {
-		flagConfigPath = oldConfigPath
-	})
-
+func TestLoadAndResolve_ValidTOML(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfgFile := filepath.Join(tmpDir, "config.toml")
 
@@ -428,35 +329,25 @@ sync_dir = "` + tmpDir + `/OneDrive"
 	err := os.WriteFile(cfgFile, []byte(tomlContent), 0o600)
 	require.NoError(t, err)
 
+	flags := CLIFlags{ConfigPath: cfgFile}
+	logger := buildLogger(nil, flags)
+
 	cmd := newRootCmd()
 	cmd.SetContext(context.Background())
-	flagConfigPath = cfgFile
 
-	err = loadConfig(cmd)
+	resolved, rawCfg, err := loadAndResolve(cmd, flags, logger)
 	require.NoError(t, err)
-
-	cc := cliContextFrom(cmd.Context())
-	require.NotNil(t, cc)
-	assert.NotNil(t, cc.Logger)
-
-	assert.Equal(t, "personal:test@example.com", cc.Cfg.CanonicalID.String())
+	assert.NotNil(t, resolved)
+	assert.NotNil(t, rawCfg)
+	assert.Equal(t, "personal:test@example.com", resolved.CanonicalID.String())
 }
 
-func TestLoadConfig_MissingFile_ZeroConfig(t *testing.T) {
-	oldConfigPath := flagConfigPath
-
-	t.Cleanup(func() {
-		flagConfigPath = oldConfigPath
-	})
-
+func TestLoadAndResolve_MissingFile_ZeroConfig(t *testing.T) {
 	tmpDir := t.TempDir()
-	// Save config path before newRootCmd(), which resets flagConfigPath to "".
 	cfgPath := filepath.Join(tmpDir, "nonexistent.toml")
 
 	// Zero-config mode: no config file, but --drive is set with a canonical ID.
-	// The resolver allows this because the selector contains ":" (canonical format),
-	// even when no drives are configured in the file.
-	// We use Execute with the ls subcommand so Cobra properly merges persistent
+	// Uses Execute with the ls subcommand so Cobra properly merges persistent
 	// flags and marks --drive as changed -- matching real CLI invocation.
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"--drive", "personal:zeroconfig@example.com", "--config", cfgPath, "ls"})
@@ -471,6 +362,7 @@ func TestLoadConfig_MissingFile_ZeroConfig(t *testing.T) {
 	cc := cliContextFrom(lsSub.Context())
 	require.NotNil(t, cc)
 	assert.NotNil(t, cc.Logger)
+	assert.NotNil(t, cc.Cfg)
 	assert.Equal(t, "personal:zeroconfig@example.com", cc.Cfg.CanonicalID.String())
 }
 
@@ -494,6 +386,23 @@ func TestMustCLIContext_Returns(t *testing.T) {
 	cc := mustCLIContext(ctx)
 	assert.Equal(t, expected, cc)
 	assert.Equal(t, "/must-test", cc.Cfg.SyncDir)
+}
+
+// --- CLIFlags tests ---
+
+func TestCLIFlags_PopulatedByPersistentPreRunE(t *testing.T) {
+	// Verify that PersistentPreRunE populates CLIFlags for auth commands.
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--verbose", "status"})
+
+	_ = cmd.Execute()
+
+	statusSub, _, err := cmd.Find([]string{"status"})
+	require.NoError(t, err)
+
+	cc := cliContextFrom(statusSub.Context())
+	require.NotNil(t, cc)
+	assert.True(t, cc.Flags.Verbose)
 }
 
 // --- errVerifyMismatch tests ---

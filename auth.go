@@ -86,7 +86,7 @@ func newWhoamiCmd() *cobra.Command {
 func findTokenFallback(account string, logger *slog.Logger) driveid.CanonicalID {
 	personalID := driveid.MustCanonicalID("personal:" + account)
 
-	personalPath := config.DriveTokenPath(personalID)
+	personalPath := config.DriveTokenPath(personalID, nil)
 	if personalPath != "" {
 		if _, err := os.Stat(personalPath); err == nil {
 			logger.Debug("token fallback: found personal token", "path", personalPath)
@@ -97,7 +97,7 @@ func findTokenFallback(account string, logger *slog.Logger) driveid.CanonicalID 
 
 	businessID := driveid.MustCanonicalID("business:" + account)
 
-	businessPath := config.DriveTokenPath(businessID)
+	businessPath := config.DriveTokenPath(businessID, nil)
 	if businessPath != "" {
 		if _, err := os.Stat(businessPath); err == nil {
 			logger.Debug("token fallback: found business token", "path", businessPath)
@@ -141,7 +141,8 @@ func openBrowser(rawURL string) error {
 // runLogin implements the discovery-based login flow per accounts.md section 9:
 // device code auth -> /me -> /me/drive -> /me/organization -> construct canonical ID -> config.
 func runLogin(cmd *cobra.Command, _ []string) error {
-	logger := buildLogger(nil)
+	cc := mustCLIContext(cmd.Context())
+	logger := cc.Logger
 	ctx := cmd.Context()
 
 	useBrowser, err := cmd.Flags().GetBool("browser")
@@ -183,7 +184,7 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Step 5: Move token from temp path to its canonical location.
-	finalTokenPath := config.DriveTokenPath(canonicalID)
+	finalTokenPath := config.DriveTokenPath(canonicalID, nil)
 	if finalTokenPath == "" {
 		os.Remove(tempPath)
 
@@ -207,7 +208,7 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 
 	// Step 6: Check if this is a re-login (drive already exists in config).
 	email := canonicalID.Email()
-	cfgPath := resolveLoginConfigPath()
+	cfgPath := resolveLoginConfigPath(cc.Flags.ConfigPath)
 
 	isRelogin, err := driveExistsInConfig(cfgPath, canonicalID)
 	if err != nil {
@@ -305,10 +306,10 @@ func moveToken(src, dst string) error {
 }
 
 // resolveLoginConfigPath determines which config file path to use for login.
-// Uses --config if set, otherwise the platform default.
-func resolveLoginConfigPath() string {
-	if flagConfigPath != "" {
-		return flagConfigPath
+// Uses the provided configPath if non-empty, otherwise the platform default.
+func resolveLoginConfigPath(configPath string) string {
+	if configPath != "" {
+		return configPath
 	}
 
 	return config.DefaultConfigPath()
@@ -398,14 +399,15 @@ func printLoginSuccess(driveType, email, orgName, canonicalID, syncDir string) {
 // runLogout removes the authentication token for an account. Identifies the
 // account via --account flag or auto-selects if only one account exists.
 func runLogout(cmd *cobra.Command, _ []string) error {
-	logger := buildLogger(nil)
+	cc := mustCLIContext(cmd.Context())
+	logger := cc.Logger
 
 	purge, err := cmd.Flags().GetBool("purge")
 	if err != nil {
 		return fmt.Errorf("reading --purge flag: %w", err)
 	}
 
-	cfgPath := resolveLoginConfigPath()
+	cfgPath := resolveLoginConfigPath(cc.Flags.ConfigPath)
 
 	// Load config to find drives associated with the account.
 	cfg, loadErr := config.LoadOrDefault(cfgPath, logger)
@@ -415,7 +417,7 @@ func runLogout(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Determine which account to log out.
-	account, autoErr := resolveLogoutAccount(cfg)
+	account, autoErr := resolveLogoutAccount(cfg, cc.Flags.Account)
 	if autoErr != nil {
 		return autoErr
 	}
@@ -425,11 +427,11 @@ func runLogout(cmd *cobra.Command, _ []string) error {
 	return executeLogout(cfg, cfgPath, account, purge, logger)
 }
 
-// resolveLogoutAccount determines the account email for logout. Uses --account
-// if provided, otherwise auto-selects when there is exactly one account.
-func resolveLogoutAccount(cfg *config.Config) (string, error) {
-	if flagAccount != "" {
-		return flagAccount, nil
+// resolveLogoutAccount determines the account email for logout. Uses the
+// account flag if provided, otherwise auto-selects when there is exactly one account.
+func resolveLogoutAccount(cfg *config.Config, accountFlag string) (string, error) {
+	if accountFlag != "" {
+		return accountFlag, nil
 	}
 
 	// Collect unique account emails from configured drives.
@@ -479,7 +481,7 @@ func executeLogout(cfg *config.Config, cfgPath, account string, purge bool, logg
 		tokenCanonicalID = findTokenFallback(account, logger)
 	}
 
-	tokenPath := config.DriveTokenPath(tokenCanonicalID)
+	tokenPath := config.DriveTokenPath(tokenCanonicalID, nil)
 	if tokenPath == "" {
 		return fmt.Errorf("cannot determine token path for account %q", account)
 	}
@@ -638,23 +640,24 @@ type whoamiDrive struct {
 }
 
 func runWhoami(cmd *cobra.Command, _ []string) error {
-	logger := buildLogger(nil)
+	cc := mustCLIContext(cmd.Context())
+	logger := cc.Logger
 	ctx := cmd.Context()
 
 	// Delegate drive resolution to config.MatchDrive for consistent behavior.
-	cfgPath := resolveLoginConfigPath()
+	cfgPath := resolveLoginConfigPath(cc.Flags.ConfigPath)
 
 	cfg, err := config.LoadOrDefault(cfgPath, logger)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	cid, _, err := config.MatchDrive(cfg, flagDrive, logger)
+	cid, _, err := config.MatchDrive(cfg, cc.Flags.Drive, logger)
 	if err != nil {
 		return err
 	}
 
-	tokenPath := config.DriveTokenPath(cid)
+	tokenPath := config.DriveTokenPath(cid, nil)
 	if tokenPath == "" {
 		return fmt.Errorf("cannot determine token path for drive %q", cid.String())
 	}
@@ -682,7 +685,7 @@ func runWhoami(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("listing drives: %w", err)
 	}
 
-	if flagJSON {
+	if cc.Flags.JSON {
 		return printWhoamiJSON(user, drives)
 	}
 

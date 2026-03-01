@@ -17,35 +17,42 @@ import (
 // version is set at build time via ldflags.
 var version = "dev"
 
-// Global persistent flags, bound in setupRootCmd().
-var (
-	flagConfigPath string
-	flagAccount    string
-	flagDrive      string
-	flagJSON       bool
-	flagVerbose    bool
-	flagDebug      bool
-	flagQuiet      bool
-)
-
 // skipConfigAnnotation marks commands that handle config loading themselves.
-// Commands annotated with this key skip the automatic four-layer config
-// resolution in PersistentPreRunE. This replaces the fragile string map
-// (skipConfigCommands) which required manual maintenance when adding commands.
+// Commands annotated with this key skip the Phase 2 config resolution in
+// PersistentPreRunE but still get Phase 1 (flags + bootstrap logger).
 const skipConfigAnnotation = "skipConfig"
 
-// CLIContext bundles resolved config and logger. Created once in
-// PersistentPreRunE; eliminates redundant buildLogger calls in RunE handlers.
+// CLIFlags contains parsed CLI flag values. Populated in Phase 1 of
+// PersistentPreRunE from Cobra flag bindings. All commands (including auth)
+// access flags through this struct — no global mutable state.
+type CLIFlags struct {
+	ConfigPath string
+	Account    string
+	Drive      string
+	JSON       bool
+	Verbose    bool
+	Debug      bool
+	Quiet      bool
+}
+
+// CLIContext bundles resolved config, flags, and logger. Created in
+// PersistentPreRunE with two-phase initialization:
+//   - Phase 1 (always): Flags + Logger populated for every command.
+//   - Phase 2 (data commands): Cfg + RawConfig populated after config resolution.
+//
+// Auth commands get CLIContext with Flags + Logger but nil Cfg/RawConfig.
 type CLIContext struct {
-	Cfg    *config.ResolvedDrive
-	Logger *slog.Logger
+	Flags     CLIFlags
+	Logger    *slog.Logger
+	Cfg       *config.ResolvedDrive // nil for auth/account commands
+	RawConfig *config.Config        // nil for auth/account commands
 }
 
 // cliContextKey is the context key for CLIContext.
 type cliContextKey struct{}
 
 // cliContextFrom extracts the CLIContext from the command's context.
-// Returns nil if no config was loaded (e.g., auth commands that skip config).
+// Returns nil if PersistentPreRunE hasn't run yet.
 func cliContextFrom(ctx context.Context) *CLIContext {
 	cc, ok := ctx.Value(cliContextKey{}).(*CLIContext)
 	if !ok {
@@ -103,6 +110,18 @@ func newTransferGraphClient(ts graph.TokenSource, logger *slog.Logger) *graph.Cl
 // newRootCmd builds and returns the fully-assembled root command with all
 // subcommands registered. Called once from main().
 func newRootCmd() *cobra.Command {
+	// Local flag variables — NOT globals. Cobra binds to these; Phase 1 of
+	// PersistentPreRunE copies them into CLIFlags on CLIContext.
+	var (
+		flagConfigPath string
+		flagAccount    string
+		flagDrive      string
+		flagJSON       bool
+		flagVerbose    bool
+		flagDebug      bool
+		flagQuiet      bool
+	)
+
 	cmd := &cobra.Command{
 		Use:     "onedrive-go",
 		Short:   "OneDrive CLI client",
@@ -111,14 +130,47 @@ func newRootCmd() *cobra.Command {
 		// Silence Cobra's default error/usage printing — we handle it ourselves.
 		SilenceErrors: true,
 		SilenceUsage:  true,
-		// PersistentPreRunE loads configuration before every command. Commands
-		// annotated with skipConfigAnnotation handle config access themselves.
+		// PersistentPreRunE runs in two phases for ALL commands:
+		//   Phase 1 (always): read Cobra flags → build CLIFlags → build bootstrap logger
+		//   Phase 2 (data commands only): load config → resolve drive → build final logger
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
-			if cmd.Annotations[skipConfigAnnotation] == "true" {
-				return nil
+			// Phase 1: always populate flags + bootstrap logger.
+			flags := CLIFlags{
+				ConfigPath: flagConfigPath,
+				Account:    flagAccount,
+				Drive:      flagDrive,
+				JSON:       flagJSON,
+				Verbose:    flagVerbose,
+				Debug:      flagDebug,
+				Quiet:      flagQuiet,
+			}
+			logger := buildLogger(nil, flags)
+			cc := &CLIContext{Flags: flags, Logger: logger}
+
+			// Phase 2: load config for data commands.
+			if cmd.Annotations[skipConfigAnnotation] != "true" {
+				resolved, rawCfg, err := loadAndResolve(cmd, flags, logger)
+				if err != nil {
+					return err
+				}
+
+				cc.Cfg = resolved
+				cc.RawConfig = rawCfg
+				cc.Logger = buildLogger(resolved, flags)
 			}
 
-			return loadConfig(cmd)
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+
+			cmd.SetContext(context.WithValue(ctx, cliContextKey{}, cc))
+
+			if cc.Cfg != nil {
+				config.WarnUnimplemented(cc.Cfg, cc.Logger)
+			}
+
+			return nil
 		},
 	}
 
@@ -154,19 +206,17 @@ func newRootCmd() *cobra.Command {
 	return cmd
 }
 
-// loadConfig resolves the effective configuration from the four-layer override
-// chain and stores the result in the command's context for use by subcommands.
-func loadConfig(cmd *cobra.Command) error {
-	// Bootstrap logger derived from CLI flags only (config doesn't exist yet).
-	logger := buildLogger(nil)
-
+// loadAndResolve resolves the effective configuration from the four-layer
+// override chain. Returns the resolved drive config and the raw parsed config
+// (needed by DriveSession for shared drive token resolution).
+func loadAndResolve(cmd *cobra.Command, flags CLIFlags, logger *slog.Logger) (*config.ResolvedDrive, *config.Config, error) {
 	cli := config.CLIOverrides{
-		ConfigPath: flagConfigPath,
+		ConfigPath: flags.ConfigPath,
 	}
 
 	// Only pass --drive to the resolver if the user explicitly set it.
 	if cmd.Flags().Changed("drive") {
-		cli.Drive = flagDrive
+		cli.Drive = flags.Drive
 	}
 
 	env := config.ReadEnvOverrides(logger)
@@ -180,7 +230,7 @@ func loadConfig(cmd *cobra.Command) error {
 
 	resolved, err := config.ResolveDrive(env, cli, logger)
 	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
+		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}
 
 	logger.Debug("config resolved",
@@ -189,20 +239,27 @@ func loadConfig(cmd *cobra.Command) error {
 		slog.String("drive_id", resolved.DriveID.String()),
 	)
 
-	// Build the final logger incorporating config-file log level.
-	finalLogger := buildLogger(resolved)
-	cc := &CLIContext{Cfg: resolved, Logger: finalLogger}
-
-	ctx := cmd.Context()
-	if ctx == nil {
-		ctx = context.Background()
+	// Load the raw config for DriveSession token resolution. Use the same
+	// config path resolution as ResolveDrive (CLI > env > default) to ensure
+	// we read the same file.
+	cfgPath := config.DefaultConfigPath()
+	if env.ConfigPath != "" {
+		cfgPath = env.ConfigPath
 	}
 
-	cmd.SetContext(context.WithValue(ctx, cliContextKey{}, cc))
+	if cli.ConfigPath != "" {
+		cfgPath = cli.ConfigPath
+	}
 
-	config.WarnUnimplemented(resolved, finalLogger)
+	rawCfg, err := config.LoadOrDefault(cfgPath, logger)
+	if err != nil {
+		// Non-fatal: raw config is optional (only needed for shared drives).
+		logger.Debug("could not load raw config for token resolution", "error", err)
 
-	return nil
+		rawCfg = config.DefaultConfig()
+	}
+
+	return resolved, rawCfg, nil
 }
 
 // buildLogger creates an slog.Logger configured by the resolved config and
@@ -210,7 +267,7 @@ func loadConfig(cmd *cobra.Command) error {
 // Config-file log level provides the baseline; --verbose, --debug, and --quiet
 // override it because CLI flags always win. The flags are mutually exclusive
 // (enforced by Cobra).
-func buildLogger(cfg *config.ResolvedDrive) *slog.Logger {
+func buildLogger(cfg *config.ResolvedDrive, flags CLIFlags) *slog.Logger {
 	level := slog.LevelWarn
 
 	// Config-based log level (lower priority than CLI flags).
@@ -232,15 +289,15 @@ func buildLogger(cfg *config.ResolvedDrive) *slog.Logger {
 	}
 
 	// CLI flags override config (highest priority).
-	if flagVerbose {
+	if flags.Verbose {
 		level = slog.LevelInfo
 	}
 
-	if flagDebug {
+	if flags.Debug {
 		level = slog.LevelDebug
 	}
 
-	if flagQuiet {
+	if flags.Quiet {
 		level = slog.LevelError
 	}
 
