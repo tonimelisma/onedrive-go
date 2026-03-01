@@ -456,6 +456,8 @@ func (o *LocalObserver) handleDelete(
 func (o *LocalObserver) runSafetyScan(ctx context.Context, syncRoot string, events chan<- ChangeEvent) {
 	o.logger.Debug("running safety scan")
 
+	start := time.Now()
+
 	scanEvents, err := o.FullScan(ctx, syncRoot)
 	if err != nil {
 		o.logger.Warn("safety scan failed", slog.String("error", err.Error()))
@@ -470,5 +472,11 @@ func (o *LocalObserver) runSafetyScan(ctx context.Context, syncRoot string, even
 		}
 	}
 
-	o.logger.Debug("safety scan complete", slog.Int("events", len(scanEvents)))
+	// Log timing and resource counts for operational visibility (B-101).
+	elapsed := time.Since(start)
+	o.logger.Info("safety scan complete",
+		slog.Duration("elapsed", elapsed),
+		slog.Int("events", len(scanEvents)),
+		slog.Int("baseline_entries", o.baseline.Len()),
+	)
 }

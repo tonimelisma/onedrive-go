@@ -272,6 +272,17 @@ func (o *LocalObserver) addWatchesRecursive(watcher FsWatcher, syncRoot string) 
 			return nil
 		}
 
+		// Symlinked directories cannot be reliably watched (the watcher
+		// follows the real path, not the symlink) and are excluded from
+		// sync. Log a warning so the user knows why the directory is
+		// skipped (B-120).
+		if d.Type()&fs.ModeSymlink != 0 {
+			o.logger.Warn("skipping symlinked directory in watch setup",
+				slog.String("path", fsPath))
+
+			return filepath.SkipDir
+		}
+
 		name := d.Name()
 		if fsPath != syncRoot && (isAlwaysExcluded(name) || !isValidOneDriveName(name)) {
 			return filepath.SkipDir

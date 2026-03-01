@@ -1263,6 +1263,7 @@ func TestClassifyError(t *testing.T) {
 		{"500 via GraphError", &graph.GraphError{StatusCode: 500, Err: graph.ErrServerError}, errClassRetryable},
 		{"502 via GraphError", &graph.GraphError{StatusCode: 502, Err: graph.ErrServerError}, errClassRetryable},
 		{"403 via GraphError", &graph.GraphError{StatusCode: 403, Err: graph.ErrForbidden}, errClassSkip},
+		{"423 locked via GraphError", &graph.GraphError{StatusCode: 423, Err: graph.ErrLocked}, errClassRetryable},
 	}
 
 	for _, tt := range tests {

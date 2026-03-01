@@ -1967,3 +1967,57 @@ func TestBaseline_ConcurrentAccess(t *testing.T) {
 		t.Errorf("Len() = %d, want >= 100", b.Len())
 	}
 }
+
+// TestConflictRecord_NameField verifies that ConflictRecord.Name is populated
+// as path.Base(Path) by the shared scanConflict function (B-071).
+func TestConflictRecord_NameField(t *testing.T) {
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	_, err := mgr.Load(ctx)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Insert a conflict with a nested path.
+	outcome := &Outcome{
+		Action:       ActionConflict,
+		Success:      true,
+		Path:         "docs/notes/readme.md",
+		DriveID:      driveid.New(testDriveID),
+		ItemID:       "item-name-test",
+		ConflictType: ConflictEditEdit,
+		LocalHash:    "localH",
+		RemoteHash:   "remoteH",
+		Mtime:        100,
+		RemoteMtime:  200,
+	}
+
+	if err := mgr.CommitOutcome(ctx, outcome); err != nil {
+		t.Fatalf("CommitOutcome: %v", err)
+	}
+
+	// Verify via ListConflicts.
+	conflicts, err := mgr.ListConflicts(ctx)
+	if err != nil {
+		t.Fatalf("ListConflicts: %v", err)
+	}
+
+	if len(conflicts) != 1 {
+		t.Fatalf("expected 1 conflict, got %d", len(conflicts))
+	}
+
+	if conflicts[0].Name != "readme.md" {
+		t.Errorf("Name = %q, want %q", conflicts[0].Name, "readme.md")
+	}
+
+	// Verify via GetConflict.
+	c, err := mgr.GetConflict(ctx, conflicts[0].ID)
+	if err != nil {
+		t.Fatalf("GetConflict: %v", err)
+	}
+
+	if c.Name != "readme.md" {
+		t.Errorf("GetConflict Name = %q, want %q", c.Name, "readme.md")
+	}
+}

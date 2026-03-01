@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"path"
 	"time"
 
 	"github.com/google/uuid"
@@ -577,6 +578,7 @@ func scanConflict(s conflictScanner) (*ConflictRecord, error) {
 	}
 
 	c.ItemID = itemID.String
+	c.Name = path.Base(c.Path) // derived for display convenience (B-071)
 	c.LocalHash = localHash.String
 	c.RemoteHash = remoteHash.String
 	c.ResolvedBy = resolvedBy.String
