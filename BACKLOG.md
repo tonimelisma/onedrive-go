@@ -46,7 +46,7 @@ Code quality and architecture improvements for the root package. Root package at
 | ~~B-227~~ | ~~Deduplicate sync_dir and StatePath validation across commands~~ | ~~P3~~ | **DONE** — Post-6.0a hardening. `newSyncEngine()` helper validates syncDir/statePath and builds `EngineConfig`. Replaces boilerplate in `sync.go` and `resolve.go`. |
 | ~~B-228~~ | ~~`buildLogger` silent fallthrough on unknown log level~~ | ~~P3~~ | Fixed in Phase 5.5: added `warn` case and `default` with stderr warning. |
 | B-232 | Test coverage for `loadConfig` error paths | P3 | Invalid TOML, ambiguous drive, wrong context type, unknown log level. |
-| B-036 | Extract CLI service layer for testability | P4 | Root package at 35.5% coverage. Target 50%+. |
+| B-036 | Extract CLI service layer for testability | P4 | Root package at 39.9% coverage. Deferred — service layer extraction premature before Orchestrator (Phase 6.0b+). |
 | B-229 | `syncModeFromFlags` uses `Changed` instead of `GetBool` | P4 | Subtle Cobra invariant. Document or fix. |
 | B-230 | `printSyncReport` repetitive formatting | P4 | Extract `printNonZero` helper. |
 | B-233 | `version` string concatenation in two places | P4 | Minor duplication. Fixed by `DriveSession` (B-223). |
@@ -295,3 +295,5 @@ Optimization deferred until profiling shows a bottleneck.
 | B-290 | Export `ResolveConfigPath` + add `CfgPath` to `CLIContext` | **DONE** — Post-6.0a hardening. Single correct config path resolution replaces `resolveLoginConfigPath` (which ignored `ONEDRIVE_GO_CONFIG`). 11 call sites simplified to `cc.CfgPath`. |
 | B-291 | `ResolveDrive` returns `*Config` to eliminate double config load | **DONE** — Post-6.0a hardening. `loadAndResolve` was calling `LoadOrDefault` twice. Now `ResolveDrive` returns both `*ResolvedDrive` and `*Config`. |
 | B-292 | Extract `newSyncEngine` helper for EngineConfig dedup | **DONE** — Post-6.0a hardening. `sync.go` and `resolve.go` had identical 15-line EngineConfig blocks. Extracted to `sync_helpers.go` with validation. |
+| B-293 | `ReadEnvOverrides` double call in PersistentPreRunE | **DONE** — Moved to Phase 1, stored in `CLIContext.Env`, passed to `loadAndResolve`. Post-6.0a hardening round 2. |
+| B-294 | LEARNINGS.md stale `configFromContext` reference | **DONE** — Updated to `cliContextFrom`/`mustCLIContext`/`cliContextKey`. Post-6.0a hardening round 2. |
