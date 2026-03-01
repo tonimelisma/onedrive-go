@@ -85,10 +85,10 @@ func TestBuildConfiguredDriveEntries_OneDrive_WithSyncDir(t *testing.T) {
 
 func TestBuildConfiguredDriveEntries_PausedDrive(t *testing.T) {
 	cfg := config.DefaultConfig()
-	enabled := false
+	paused := true
 	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = config.Drive{
 		SyncDir: "~/OneDrive - Contoso",
-		Enabled: &enabled,
+		Paused:  &paused,
 	}
 
 	entries := buildConfiguredDriveEntries(cfg, testDriveLogger(t))
@@ -144,31 +144,19 @@ func TestBuildConfiguredDriveEntries_NoSyncDir_WithTokenMeta(t *testing.T) {
 // lives in config.CollectOtherSyncDirs and config.ReadTokenMetaForSyncDir.
 // Tests for these functions live in internal/config/drive_test.go.
 
-// --- listPausedDrives ---
+// --- listAvailableDrives ---
 
-func TestListPausedDrives_NoPaused(t *testing.T) {
+func TestListAvailableDrives_Empty(t *testing.T) {
+	cfg := config.DefaultConfig()
+	err := listAvailableDrives(cfg)
+	assert.NoError(t, err)
+}
+
+func TestListAvailableDrives_WithDrives(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Drives[driveid.MustCanonicalID("personal:user@example.com")] = config.Drive{SyncDir: "~/OneDrive"}
 
-	err := listPausedDrives(cfg)
-	assert.NoError(t, err)
-}
-
-func TestListPausedDrives_HasPaused(t *testing.T) {
-	cfg := config.DefaultConfig()
-	enabled := false
-	cfg.Drives[driveid.MustCanonicalID("personal:user@example.com")] = config.Drive{
-		SyncDir: "~/OneDrive",
-		Enabled: &enabled,
-	}
-
-	err := listPausedDrives(cfg)
-	assert.NoError(t, err)
-}
-
-func TestListPausedDrives_Empty(t *testing.T) {
-	cfg := config.DefaultConfig()
-	err := listPausedDrives(cfg)
+	err := listAvailableDrives(cfg)
 	assert.NoError(t, err)
 }
 
@@ -273,31 +261,6 @@ func TestPrintDriveListJSON_NilSlicesRenderAsEmptyArrays(t *testing.T) {
 	require.NoError(t, json.NewDecoder(r).Decode(&output))
 	assert.Equal(t, "[]", string(output["configured"]))
 	assert.Equal(t, "[]", string(output["available"]))
-}
-
-// --- resumeExistingDrive ---
-
-func TestResumeExistingDrive_AlreadyEnabled(t *testing.T) {
-	cid := driveid.MustCanonicalID("personal:user@example.com")
-	d := &config.Drive{SyncDir: "~/OneDrive"} // Enabled is nil (defaults to true)
-
-	output := captureStdout(t, func() {
-		err := resumeExistingDrive("", cid, d, testDriveLogger(t))
-		assert.NoError(t, err)
-	})
-	assert.Contains(t, output, "already enabled")
-}
-
-func TestResumeExistingDrive_ExplicitlyEnabled(t *testing.T) {
-	cid := driveid.MustCanonicalID("personal:user@example.com")
-	enabled := true
-	d := &config.Drive{SyncDir: "~/OneDrive", Enabled: &enabled}
-
-	output := captureStdout(t, func() {
-		err := resumeExistingDrive("", cid, d, testDriveLogger(t))
-		assert.NoError(t, err)
-	})
-	assert.Contains(t, output, "already enabled")
 }
 
 // --- driveListEntry ---
@@ -458,9 +421,9 @@ func TestDriveSearchResult_JSONRoundTrip(t *testing.T) {
 	assert.Equal(t, result, decoded)
 }
 
-// --- pauseDrive ---
+// --- removeDrive ---
 
-func TestPauseDrive_WritesConfig(t *testing.T) {
+func TestRemoveDrive_DeletesConfigSection(t *testing.T) {
 	// Create a config file with a drive.
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")
@@ -470,13 +433,82 @@ sync_dir = "~/OneDrive"
 `), 0o600))
 
 	cid := driveid.MustCanonicalID("personal:user@example.com")
-	err := pauseDrive(cfgPath, cid, "~/OneDrive")
+	err := removeDrive(cfgPath, cid, "~/OneDrive", testDriveLogger(t))
 	assert.NoError(t, err)
 
-	// Verify enabled = false was written (not just "enabled" present).
+	// Verify the drive section was deleted.
 	data, readErr := os.ReadFile(cfgPath)
 	require.NoError(t, readErr)
-	assert.Contains(t, string(data), "enabled = false")
+	assert.NotContains(t, string(data), "personal:user@example.com")
+}
+
+func TestRemoveDrive_DriveNotInConfig(t *testing.T) {
+	// removeDrive should return an error when the drive doesn't exist in config.
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(`
+["personal:user@example.com"]
+sync_dir = "~/OneDrive"
+`), 0o600))
+
+	cid := driveid.MustCanonicalID("business:alice@contoso.com")
+	err := removeDrive(cfgPath, cid, "~/Work", testDriveLogger(t))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "removing drive")
+}
+
+// --- removeAccountDriveConfigs ---
+
+func TestRemoveAccountDriveConfigs_RemovesMultiple(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+
+	// Create config with 2 drives for the same account.
+	require.NoError(t, os.WriteFile(cfgPath, []byte(`
+["business:alice@contoso.com"]
+sync_dir = "~/Work"
+
+["sharepoint:alice@contoso.com:marketing:Documents"]
+sync_dir = "~/Marketing"
+`), 0o600))
+
+	affected := []driveid.CanonicalID{
+		driveid.MustCanonicalID("business:alice@contoso.com"),
+		driveid.MustCanonicalID("sharepoint:alice@contoso.com:marketing:Documents"),
+	}
+
+	removeAccountDriveConfigs(cfgPath, affected, testDriveLogger(t))
+
+	// Reload and verify 0 drives remain.
+	cfg, err := config.Load(cfgPath, testDriveLogger(t))
+	require.NoError(t, err)
+	assert.Empty(t, cfg.Drives)
+}
+
+func TestRemoveAccountDriveConfigs_ContinuesOnError(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+
+	// Config has one drive but we pass a non-existent CID too.
+	require.NoError(t, os.WriteFile(cfgPath, []byte(`
+["personal:user@example.com"]
+sync_dir = "~/OneDrive"
+`), 0o600))
+
+	affected := []driveid.CanonicalID{
+		driveid.MustCanonicalID("business:nobody@example.com"), // doesn't exist
+		driveid.MustCanonicalID("personal:user@example.com"),   // exists
+	}
+
+	// Should not panic; logs warning for the missing one and continues.
+	assert.NotPanics(t, func() {
+		removeAccountDriveConfigs(cfgPath, affected, testDriveLogger(t))
+	})
+
+	// The existing drive should still have been removed.
+	cfg, err := config.Load(cfgPath, testDriveLogger(t))
+	require.NoError(t, err)
+	assert.Empty(t, cfg.Drives)
 }
 
 // --- addNewDrive ---

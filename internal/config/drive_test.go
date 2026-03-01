@@ -132,36 +132,36 @@ func TestBuildResolvedDrive_GlobalDefaults(t *testing.T) {
 	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("personal:toni@outlook.com"), drive, testLogger(t))
 
 	assert.Equal(t, driveid.MustCanonicalID("personal:toni@outlook.com"), resolved.CanonicalID)
-	assert.True(t, resolved.Enabled)
+	assert.False(t, resolved.Paused)
 	assert.True(t, resolved.SkipDotfiles)
 	assert.Equal(t, "debug", resolved.LogLevel)
 	assert.Equal(t, "/", resolved.RemotePath)
 }
 
-func TestBuildResolvedDrive_EnabledDefault(t *testing.T) {
+func TestBuildResolvedDrive_PausedDefault(t *testing.T) {
 	cfg := DefaultConfig()
 	drive := &Drive{SyncDir: "~/OneDrive"}
 
 	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("personal:toni@outlook.com"), drive, testLogger(t))
-	assert.True(t, resolved.Enabled, "Enabled should default to true when nil")
+	assert.False(t, resolved.Paused, "Paused should default to false when nil")
 }
 
-func TestBuildResolvedDrive_EnabledExplicitFalse(t *testing.T) {
+func TestBuildResolvedDrive_PausedExplicitTrue(t *testing.T) {
 	cfg := DefaultConfig()
-	enabled := false
-	drive := &Drive{SyncDir: "~/OneDrive", Enabled: &enabled}
+	paused := true
+	drive := &Drive{SyncDir: "~/OneDrive", Paused: &paused}
 
 	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("personal:toni@outlook.com"), drive, testLogger(t))
-	assert.False(t, resolved.Enabled)
+	assert.True(t, resolved.Paused)
 }
 
-func TestBuildResolvedDrive_EnabledExplicitTrue(t *testing.T) {
+func TestBuildResolvedDrive_PausedExplicitFalse(t *testing.T) {
 	cfg := DefaultConfig()
-	enabled := true
-	drive := &Drive{SyncDir: "~/OneDrive", Enabled: &enabled}
+	paused := false
+	drive := &Drive{SyncDir: "~/OneDrive", Paused: &paused}
 
 	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("personal:toni@outlook.com"), drive, testLogger(t))
-	assert.True(t, resolved.Enabled)
+	assert.False(t, resolved.Paused)
 }
 
 func TestBuildResolvedDrive_PerDriveOverrides(t *testing.T) {

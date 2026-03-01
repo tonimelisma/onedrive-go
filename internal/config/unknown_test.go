@@ -68,7 +68,7 @@ func TestLoad_DriveSection_ValidKeysPass(t *testing.T) {
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
 alias = "home"
-enabled = true
+paused = false
 remote_path = "/"
 drive_id = "abc"
 skip_dotfiles = true

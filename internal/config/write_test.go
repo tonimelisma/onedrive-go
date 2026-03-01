@@ -191,20 +191,20 @@ func TestSetDriveKey_BooleanFormatting(t *testing.T) {
 	err := CreateConfigWithDrive(path, cid, "~/OneDrive")
 	require.NoError(t, err)
 
-	err = SetDriveKey(path, cid, "enabled", "false")
+	err = SetDriveKey(path, cid, "paused", "true")
 	require.NoError(t, err)
 
-	// Verify the raw file content has bare false (not "false")
+	// Verify the raw file content has bare true (not "true")
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
-	assert.Contains(t, string(data), "enabled = false")
-	assert.NotContains(t, string(data), `enabled = "false"`)
+	assert.Contains(t, string(data), "paused = true")
+	assert.NotContains(t, string(data), `paused = "true"`)
 
 	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 	d := cfg.Drives[cid]
-	require.NotNil(t, d.Enabled)
-	assert.False(t, *d.Enabled)
+	require.NotNil(t, d.Paused)
+	assert.True(t, *d.Paused)
 }
 
 func TestSetDriveKey_StringFormatting(t *testing.T) {
@@ -233,14 +233,14 @@ func TestSetDriveKey_RoundTrip(t *testing.T) {
 	err := CreateConfigWithDrive(path, cid, "~/OneDrive")
 	require.NoError(t, err)
 
-	err = SetDriveKey(path, cid, "enabled", "true")
+	err = SetDriveKey(path, cid, "paused", "false")
 	require.NoError(t, err)
 
 	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 	d := cfg.Drives[cid]
-	require.NotNil(t, d.Enabled)
-	assert.True(t, *d.Enabled)
+	require.NotNil(t, d.Paused)
+	assert.False(t, *d.Paused)
 }
 
 func TestSetDriveKey_SectionNotFound(t *testing.T) {
@@ -250,13 +250,13 @@ func TestSetDriveKey_SectionNotFound(t *testing.T) {
 	err := CreateConfigWithDrive(path, driveid.MustCanonicalID("personal:toni@outlook.com"), "~/OneDrive")
 	require.NoError(t, err)
 
-	err = SetDriveKey(path, driveid.MustCanonicalID("business:nobody@example.com"), "enabled", "false")
+	err = SetDriveKey(path, driveid.MustCanonicalID("business:nobody@example.com"), "paused", "true")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }
 
 func TestSetDriveKey_FileNotFound(t *testing.T) {
-	err := SetDriveKey("/nonexistent/config.toml", driveid.MustCanonicalID("personal:test@test.com"), "enabled", "false")
+	err := SetDriveKey("/nonexistent/config.toml", driveid.MustCanonicalID("personal:test@test.com"), "paused", "true")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "reading config file")
 }
@@ -275,7 +275,7 @@ func TestSetDriveKey_MultipleSections(t *testing.T) {
 	require.NoError(t, err)
 
 	// Set key on the second section only
-	err = SetDriveKey(path, businessCID, "enabled", "false")
+	err = SetDriveKey(path, businessCID, "paused", "true")
 	require.NoError(t, err)
 
 	cfg, err := Load(path, testLogger(t))
@@ -283,12 +283,12 @@ func TestSetDriveKey_MultipleSections(t *testing.T) {
 
 	// First section should be unaffected
 	personal := cfg.Drives[personalCID]
-	assert.Nil(t, personal.Enabled) // not set
+	assert.Nil(t, personal.Paused) // not set
 
-	// Second section should have enabled = false
+	// Second section should have paused = true
 	business := cfg.Drives[businessCID]
-	require.NotNil(t, business.Enabled)
-	assert.False(t, *business.Enabled)
+	require.NotNil(t, business.Paused)
+	assert.True(t, *business.Paused)
 }
 
 // --- DeleteDriveSection tests ---
@@ -546,7 +546,7 @@ sync_dir = "~/Work"
 	err := os.WriteFile(path, []byte(content), configFilePermissions)
 	require.NoError(t, err)
 
-	err = SetDriveKey(path, driveid.MustCanonicalID("business:alice@contoso.com"), "enabled", "false")
+	err = SetDriveKey(path, driveid.MustCanonicalID("business:alice@contoso.com"), "paused", "true")
 	require.NoError(t, err)
 
 	result, err := os.ReadFile(path)
@@ -555,7 +555,7 @@ sync_dir = "~/Work"
 
 	assert.Contains(t, resultStr, "# My custom header")
 	assert.Contains(t, resultStr, "# Work drive for office stuff")
-	assert.Contains(t, resultStr, "enabled = false")
+	assert.Contains(t, resultStr, "paused = true")
 }
 
 func TestCommentPreservation_DeleteDriveSection(t *testing.T) {
@@ -750,24 +750,27 @@ func TestScenario_FirstLoginThenSecondLogin(t *testing.T) {
 }
 
 func TestScenario_DriveRemove(t *testing.T) {
-	// Simulates: login, then drive remove (set enabled = false)
+	// Simulates: login, then drive remove (deletes config section)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 
-	cid := driveid.MustCanonicalID("business:alice@contoso.com")
+	personalCID := driveid.MustCanonicalID("personal:toni@outlook.com")
+	businessCID := driveid.MustCanonicalID("business:alice@contoso.com")
 
-	err := CreateConfigWithDrive(path, cid, "~/Work")
+	err := CreateConfigWithDrive(path, personalCID, "~/OneDrive")
 	require.NoError(t, err)
 
-	err = SetDriveKey(path, cid, "enabled", "false")
+	err = AppendDriveSection(path, businessCID, "~/Work")
+	require.NoError(t, err)
+
+	err = DeleteDriveSection(path, businessCID)
 	require.NoError(t, err)
 
 	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
-	d := cfg.Drives[cid]
-	require.NotNil(t, d.Enabled)
-	assert.False(t, *d.Enabled)
-	assert.Equal(t, "~/Work", d.SyncDir) // sync_dir unchanged
+	require.Len(t, cfg.Drives, 1)
+	assert.Contains(t, cfg.Drives, personalCID)
+	assert.NotContains(t, cfg.Drives, businessCID)
 }
 
 func TestScenario_DriveRemovePurge(t *testing.T) {
@@ -861,4 +864,86 @@ func TestSetDriveKey_UpdateSyncDir(t *testing.T) {
 	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, "~/NewDrive", cfg.Drives[cid].SyncDir)
+}
+
+func TestScenario_LogoutRegular(t *testing.T) {
+	// Regular logout (without --purge) deletes config sections but preserves
+	// state DB files on disk.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	personalCID := driveid.MustCanonicalID("personal:toni@outlook.com")
+	businessCID := driveid.MustCanonicalID("business:alice@contoso.com")
+
+	err := CreateConfigWithDrive(path, personalCID, "~/OneDrive")
+	require.NoError(t, err)
+
+	err = AppendDriveSection(path, businessCID, "~/Work")
+	require.NoError(t, err)
+
+	// Simulate state DB files that would exist on disk.
+	stateDB1 := filepath.Join(dir, "state_personal_toni@outlook.com.db")
+	stateDB2 := filepath.Join(dir, "state_business_alice@contoso.com.db")
+	require.NoError(t, os.WriteFile(stateDB1, []byte("fake-state-1"), 0o600))
+	require.NoError(t, os.WriteFile(stateDB2, []byte("fake-state-2"), 0o600))
+
+	// Delete both config sections (simulating regular logout).
+	err = DeleteDriveSection(path, personalCID)
+	require.NoError(t, err)
+
+	err = DeleteDriveSection(path, businessCID)
+	require.NoError(t, err)
+
+	// Verify config has 0 drives.
+	cfg, err := Load(path, testLogger(t))
+	require.NoError(t, err)
+	assert.Empty(t, cfg.Drives)
+
+	// Verify state DB files are still on disk (not deleted by config operations).
+	_, err = os.Stat(stateDB1)
+	assert.NoError(t, err, "state DB for personal drive should still exist")
+	_, err = os.Stat(stateDB2)
+	assert.NoError(t, err, "state DB for business drive should still exist")
+}
+
+func TestScenario_DriveRemoveThenReAdd(t *testing.T) {
+	// Remove a drive then re-add it: the new section should have fresh defaults.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
+
+	// Create config with drive and customize it.
+	err := CreateConfigWithDrive(path, cid, "~/OneDrive")
+	require.NoError(t, err)
+
+	err = SetDriveKey(path, cid, "paused", "true")
+	require.NoError(t, err)
+
+	// Verify paused is set before removal.
+	cfg, err := Load(path, testLogger(t))
+	require.NoError(t, err)
+	require.NotNil(t, cfg.Drives[cid].Paused)
+	assert.True(t, *cfg.Drives[cid].Paused)
+
+	// Remove the drive.
+	err = DeleteDriveSection(path, cid)
+	require.NoError(t, err)
+
+	cfg, err = Load(path, testLogger(t))
+	require.NoError(t, err)
+	assert.Empty(t, cfg.Drives)
+
+	// Re-add the drive with a different sync_dir.
+	err = AppendDriveSection(path, cid, "~/OneDrive-Fresh")
+	require.NoError(t, err)
+
+	// Reload and verify fresh defaults (Paused should be nil, new sync_dir).
+	cfg, err = Load(path, testLogger(t))
+	require.NoError(t, err)
+	require.Len(t, cfg.Drives, 1)
+
+	d := cfg.Drives[cid]
+	assert.Nil(t, d.Paused, "re-added drive should have nil Paused (fresh default)")
+	assert.Equal(t, "~/OneDrive-Fresh", d.SyncDir)
 }
