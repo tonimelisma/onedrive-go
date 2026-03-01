@@ -88,7 +88,7 @@ onedrive-go sync --watch --quiet       # What you put in a systemd unit file
 
 `sync --watch` is just sync that doesn't exit. Run it interactively and you get progress output. Run it from systemd with `--quiet` and it logs to file. Same binary, same code path. There is no separate "daemon" concept.
 
-`sync --watch` watches config.toml via fsnotify. Drives added/removed/paused while running take effect within milliseconds. It idles gracefully with no drives — can be installed as a service before any login.
+`sync --watch` reloads config.toml on SIGHUP. CLI commands write config and send SIGHUP to the daemon via PID file. Drives added/removed/paused while running take effect immediately. It idles gracefully with no drives — can be installed as a service before any login.
 
 #### Sync Status and Conflicts
 
@@ -257,7 +257,7 @@ All four drive types are supported:
 
 ### Multi-Account Support
 
-A single config file holds multiple drive sections. A single `sync --watch` process syncs all non-paused drives simultaneously (each drive in its own goroutine with its own state DB). The daemon watches `config.toml` via fsnotify for immediate config pickup.
+A single config file holds multiple drive sections. A single `sync --watch` process syncs all non-paused drives simultaneously (each drive in its own goroutine with its own state DB). The daemon reloads `config.toml` on SIGHUP for immediate config pickup.
 
 ```toml
 # ── Global settings ──

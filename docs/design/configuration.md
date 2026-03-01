@@ -976,7 +976,7 @@ if sync_paths entry matches skip_dirs or skip_files:
 
 ### 14.1 Overview
 
-`sync --watch` re-reads config on each sync cycle. Changes take effect on the next cycle without restart. For immediate effect, SIGHUP triggers config re-read.
+`sync --watch` reads config on startup and reloads on SIGHUP. CLI commands (`pause`, `resume`, `drive add`, etc.) write config and send SIGHUP to the daemon via PID file, causing immediate reload.
 
 ### 14.2 Hot-Reloadable Options
 
@@ -1007,7 +1007,7 @@ WARN: Config option "sync_dir" changed but requires restart to take effect.
 
 ### 14.4 Drive Section Changes
 
-New drive sections added to config are picked up immediately via fsnotify. Drives with `paused = true` are skipped. Removed sections stop syncing. This is how `login`, `drive add`, `drive remove`, `pause`, and `resume` work with a running `sync --watch` — they modify config, and the daemon picks it up within milliseconds. No restart needed.
+New drive sections added to config are picked up on SIGHUP. Drives with `paused = true` are skipped. Removed sections stop syncing. This is how `login`, `drive add`, `drive remove`, `pause`, and `resume` work with a running `sync --watch` — they modify config and send SIGHUP to the daemon via PID file, causing immediate reload. No restart needed.
 
 ---
 

@@ -1,11 +1,17 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
+	"os"
+	"os/signal"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
@@ -89,10 +95,16 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	}
 
 	if watch {
-		return engine.RunWatch(ctx, mode, sync.WatchOpts{
+		cfgPath := resolveLoginConfigPath()
+
+		return runSyncWatch(ctx, engine, mode, sync.WatchOpts{
 			Force: force,
-			// Zero values use defaults (2s debounce, 5m poll interval).
-		})
+		}, cfgPath, cc.Cfg.CanonicalID, logger)
+	}
+
+	// One-shot mode: reject if paused.
+	if cc.Cfg.Paused {
+		return fmt.Errorf("drive %s is paused — run 'onedrive-go resume' to unpause", cc.Cfg.CanonicalID)
 	}
 
 	dryRun, err := cmd.Flags().GetBool("dry-run")
@@ -192,5 +204,158 @@ func printSyncReport(r *sync.SyncReport) {
 		for _, e := range r.Errors {
 			statusf("  Error:     %v\n", e)
 		}
+	}
+}
+
+// runSyncWatch wraps engine.RunWatch with PID file management, SIGHUP-based
+// config reload, and pause/resume support. On SIGHUP, the current RunWatch
+// session is canceled and the loop re-reads config to check paused state.
+// The engine is reused across RunWatch invocations (safe: BaselineManager
+// holds the DB connection, watch-session-scoped fields are overwritten).
+func runSyncWatch(
+	ctx context.Context, engine *sync.Engine, mode sync.SyncMode,
+	opts sync.WatchOpts, cfgPath string, cid driveid.CanonicalID, logger *slog.Logger,
+) error {
+	// PID file prevents multiple daemons and enables SIGHUP delivery.
+	pidPath := config.PIDFilePath()
+
+	cleanup, err := writePIDFile(pidPath)
+	if err != nil {
+		return err
+	}
+
+	defer cleanup()
+
+	sighup := sighupChannel()
+	defer signal.Stop(sighup)
+
+	for {
+		paused, pausedUntil := checkPausedState(cfgPath, cid, logger)
+
+		if paused {
+			logger.Info("drive paused, waiting for SIGHUP or timed expiry",
+				"canonical_id", cid.String())
+
+			if err := waitForResume(ctx, sighup, cfgPath, cid, pausedUntil, logger); err != nil {
+				return err
+			}
+
+			continue
+		}
+
+		// Create cancellable context for this watch session.
+		watchCtx, cancelWatch := context.WithCancel(ctx)
+
+		// SIGHUP listener: cancels current watch session so the loop
+		// re-reads config (might have changed paused state, etc.).
+		go func() {
+			select {
+			case <-sighup:
+				logger.Info("SIGHUP received, reloading config")
+				cancelWatch()
+			case <-watchCtx.Done():
+			}
+		}()
+
+		watchErr := engine.RunWatch(watchCtx, mode, opts)
+		cancelWatch()
+
+		// Parent shutdown (SIGINT/SIGTERM) — exit cleanly.
+		if ctx.Err() != nil {
+			return nil
+		}
+
+		// RunWatch returned because SIGHUP canceled watchCtx.
+		// Log and loop back to re-check config.
+		if watchErr != nil {
+			logger.Debug("RunWatch exited", "error", watchErr)
+		}
+
+		logger.Info("config reloaded, re-entering watch loop")
+	}
+}
+
+// checkPausedState reads the config file and returns the paused state for the
+// given drive. Returns (false, "") if the drive is not paused or if the config
+// cannot be read.
+func checkPausedState(cfgPath string, cid driveid.CanonicalID, logger *slog.Logger) (paused bool, pausedUntil string) {
+	cfg, err := config.LoadOrDefault(cfgPath, logger)
+	if err != nil {
+		logger.Warn("could not reload config, assuming not paused", "error", err)
+
+		return false, ""
+	}
+
+	d, ok := cfg.Drives[cid]
+	if !ok {
+		logger.Warn("drive not found in config after reload, assuming not paused",
+			"canonical_id", cid.String())
+
+		return false, ""
+	}
+
+	if d.Paused == nil || !*d.Paused {
+		return false, ""
+	}
+
+	var until string
+	if d.PausedUntil != nil {
+		until = *d.PausedUntil
+	}
+
+	return true, until
+}
+
+// waitForResume blocks until one of: SIGHUP received, timed pause expires, or
+// parent context is canceled. When timed pause expires, the daemon clears the
+// paused/paused_until keys from config so restarts don't re-pause.
+func waitForResume(
+	ctx context.Context, sighup <-chan os.Signal, cfgPath string,
+	cid driveid.CanonicalID, pausedUntil string, logger *slog.Logger,
+) error {
+	var timer <-chan time.Time
+
+	if pausedUntil != "" {
+		until, err := time.Parse(time.RFC3339, pausedUntil)
+		if err != nil {
+			logger.Warn("invalid paused_until value, ignoring timer",
+				"paused_until", pausedUntil, "error", err)
+		} else if until.After(time.Now()) {
+			remaining := time.Until(until)
+			logger.Info("timed pause active", "expires_in", remaining.Round(time.Second))
+			timer = time.After(remaining)
+		} else {
+			// Already expired — clear config and return immediately.
+			daemonClearPausedKeys(cfgPath, cid, logger)
+
+			return nil
+		}
+	}
+
+	select {
+	case <-sighup:
+		logger.Info("SIGHUP received while paused, checking config")
+
+		return nil
+	case <-timer:
+		logger.Info("timed pause expired, resuming")
+		daemonClearPausedKeys(cfgPath, cid, logger)
+
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// daemonClearPausedKeys removes paused/paused_until from config when the
+// daemon's timed pause expires. Errors are logged but not fatal — the daemon
+// will re-read config on next loop iteration.
+func daemonClearPausedKeys(cfgPath string, cid driveid.CanonicalID, logger *slog.Logger) {
+	if err := config.DeleteDriveKey(cfgPath, cid, "paused"); err != nil {
+		logger.Warn("could not clear paused key from config", "error", err)
+	}
+
+	if err := config.DeleteDriveKey(cfgPath, cid, "paused_until"); err != nil {
+		logger.Warn("could not clear paused_until key from config", "error", err)
 	}
 }

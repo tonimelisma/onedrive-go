@@ -908,7 +908,7 @@ Multi-drive sync uses **Architecture A (per-drive goroutine with isolated engine
 - **Shared `graph.Client` per token**: Drives sharing the same Microsoft account (e.g., business OneDrive + SharePoint libraries) share one `graph.Client` instance. Same token = same rate limits, same HTTP connection pool. 429 backoff is automatically coordinated.
 - **Global worker budget**: Configurable `max_workers` cap (default 16) with proportional per-drive allocation by baseline file count. Minimum 4 workers per drive. See [concurrent-execution.md §19](concurrent-execution.md#19-multi-drive-worker-budget).
 - **Global bandwidth limiter**: A process-wide token bucket limits total bandwidth across all drives.
-- **Config-as-IPC daemon model**: `sync --watch` watches `config.toml` via fsnotify. CLI commands (`pause`, `resume`, `drive add`, `drive remove`) write to config; the daemon picks up changes within milliseconds. No RPC socket required for Phase 7.0.
+- **SIGHUP-based config reload**: `sync --watch` reloads `config.toml` on SIGHUP. CLI commands (`pause`, `resume`, `drive add`, `drive remove`) write to config and send SIGHUP to the daemon via PID file; the daemon reloads config immediately. No RPC socket required for Phase 7.0.
 - **Simple drive lifecycle**: `drive remove` deletes the config section (state DB kept for fast re-add); `drive add` creates a fresh config section. If state DB exists, delta sync resumes from the last token. `logout` deletes config sections for all account drives.
 
 ---

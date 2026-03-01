@@ -110,6 +110,7 @@ type NetworkConfig struct {
 type Drive struct {
 	SyncDir      string   `toml:"sync_dir"`
 	Paused       *bool    `toml:"paused,omitempty"`
+	PausedUntil  *string  `toml:"paused_until,omitempty"`
 	Alias        string   `toml:"alias,omitempty"`
 	RemotePath   string   `toml:"remote_path,omitempty"`
 	DriveID      string   `toml:"drive_id,omitempty"`
