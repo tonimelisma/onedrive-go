@@ -168,7 +168,7 @@ func (e *Executor) createRemoteFolder(ctx context.Context, action *Action) Outco
 		ItemID:     item.ID,
 		ParentID:   parentID,
 		ItemType:   ItemTypeFolder,
-		RemoteHash: selectHash(item),
+		RemoteHash: selectHash(item), // selectHash: observer_remote.go (B-222)
 		ETag:       item.ETag,
 	}
 }

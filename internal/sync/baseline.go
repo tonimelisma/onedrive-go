@@ -546,7 +546,8 @@ func (m *BaselineManager) ResolveConflict(ctx context.Context, id, resolution st
 }
 
 // scanConflictRow scans a single row from a *sql.Rows result set into
-// a ConflictRecord, handling nullable columns.
+// a ConflictRecord, handling nullable columns. The `history` column is
+// intentionally excluded — it is dormant/unused (B-160).
 func scanConflictRow(rows *sql.Rows) (*ConflictRecord, error) {
 	var (
 		c           ConflictRecord

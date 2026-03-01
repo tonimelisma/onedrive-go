@@ -130,6 +130,8 @@ func (tm *TransferManager) DownloadToFile(
 	// If the first attempt was a resume, the resume bytes are wasted — this is
 	// acceptable because hash mismatches are rare and correctness trumps
 	// bandwidth savings.
+	// Go 1.22 range-over-int: `range N` iterates 0..N-1, so `range maxRetries+1`
+	// gives exactly maxRetries+1 iterations (1 initial + maxRetries retries) (B-221).
 	for attempt := range maxRetries + 1 {
 		var err error
 
@@ -186,7 +188,9 @@ func (tm *TransferManager) DownloadToFile(
 		}
 	}
 
-	// Atomic rename: .partial -> target.
+	// Atomic rename: .partial -> target. On failure the .partial file is
+	// intentionally preserved so the next attempt can resume from it rather
+	// than re-downloading the entire file (B-207).
 	if err := os.Rename(partialPath, targetPath); err != nil {
 		return nil, fmt.Errorf("renaming partial to %s: %w", targetPath, err)
 	}
@@ -403,7 +407,8 @@ func (tm *TransferManager) UploadFile(
 		return nil, fmt.Errorf("upload of %s returned nil item", localPath)
 	}
 
-	// Post-upload hash verification.
+	// Post-upload hash verification. selectHash is defined in
+	// observer_remote.go — it picks QuickXorHash > SHA256Hash (B-222).
 	remoteHash := selectHash(item)
 	if remoteHash != "" && localHash != remoteHash {
 		tm.logger.Warn("upload hash mismatch",
