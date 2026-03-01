@@ -110,7 +110,7 @@ type NetworkConfig struct {
 type Drive struct {
 	SyncDir      string   `toml:"sync_dir"`
 	StateDir     string   `toml:"state_dir,omitempty"` // override state DB directory (default: platform data dir)
-	Enabled      *bool    `toml:"enabled,omitempty"`
+	Paused       *bool    `toml:"paused,omitempty"`
 	Alias        string   `toml:"alias,omitempty"`
 	RemotePath   string   `toml:"remote_path,omitempty"`
 	DriveID      string   `toml:"drive_id,omitempty"`

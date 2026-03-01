@@ -254,7 +254,7 @@ func TestLoad_DriveWithAllFields(t *testing.T) {
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
 alias = "home"
-enabled = false
+paused = true
 remote_path = "/Documents"
 drive_id = "abc123"
 skip_dotfiles = true
@@ -268,8 +268,8 @@ poll_interval = "10m"
 	d := cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")]
 	assert.Equal(t, "~/OneDrive", d.SyncDir)
 	assert.Equal(t, "home", d.Alias)
-	require.NotNil(t, d.Enabled)
-	assert.False(t, *d.Enabled)
+	require.NotNil(t, d.Paused)
+	assert.True(t, *d.Paused)
 	assert.Equal(t, "/Documents", d.RemotePath)
 	assert.Equal(t, "abc123", d.DriveID)
 	require.NotNil(t, d.SkipDotfiles)
@@ -283,7 +283,7 @@ func TestLoad_SharePointDrive(t *testing.T) {
 	path := writeTestConfig(t, `
 ["sharepoint:alice@contoso.com:marketing:Documents"]
 sync_dir = "~/Contoso/Marketing"
-enabled = false
+paused = true
 `)
 	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
@@ -291,8 +291,8 @@ enabled = false
 
 	d := cfg.Drives[driveid.MustCanonicalID("sharepoint:alice@contoso.com:marketing:Documents")]
 	assert.Equal(t, "~/Contoso/Marketing", d.SyncDir)
-	require.NotNil(t, d.Enabled)
-	assert.False(t, *d.Enabled)
+	require.NotNil(t, d.Paused)
+	assert.True(t, *d.Paused)
 }
 
 // --- ResolveDrive tests ---
@@ -509,12 +509,12 @@ func TestLoad_DriveSectionNotTable(t *testing.T) {
 // --- Edge case: unknown key with known parent in bandwidth_schedule ---
 
 func TestLoad_DriveSection_TypeMismatch(t *testing.T) {
-	// A drive section where "enabled" is a string instead of a boolean should
+	// A drive section where "paused" is a string instead of a boolean should
 	// trigger a type-coercion error in mapToDrive during the re-encode/decode cycle.
 	path := writeTestConfig(t, `
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
-enabled = "not-a-bool"
+paused = "not-a-bool"
 `)
 	_, err := Load(path, testLogger(t))
 	require.Error(t, err)

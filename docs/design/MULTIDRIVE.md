@@ -832,18 +832,19 @@ sync_dir = "~/SharedFolder"
 
 After `drive add personal:user@example.com`: fresh config section added with computed default sync_dir. If the state DB still exists, sync resumes from the last delta token.
 
-#### Changes from Today's Implementation
+#### Current Implementation (Phase 5.5)
 
-| Area | Today | New |
-|------|-------|-----|
-| `Drive.Enabled` field | `*bool` in config struct | Replaced by `Paused *bool` + `PausedUntil *string` |
-| `drive remove` | Sets `enabled = false` in config | Deletes config section (state DB kept for fast re-add) |
-| `drive add` (existing) | Sets `enabled = true` | Adds fresh config section |
-| Display state "paused" | Means `enabled = false` | Means `paused = true` (correct semantics) |
-| `logout` | Deletes token, keeps drives in config | Deletes token + config sections |
-| `login` (re-login) | Token refresh only | Token refresh + creates fresh section if needed |
-| Config reload | Per-cycle (up to 5 min delay) | fsnotify on config.toml (immediate, validated) |
-| `pause`/`resume` commands | Not implemented | New commands, write `paused` to config |
+| Area | Behavior |
+|------|----------|
+| `Drive.Paused` field | `*bool` in config struct (replaces old `Enabled`) |
+| `drive remove` | Deletes config section (state DB + token kept for fast re-add) |
+| `drive add` (existing) | Reports "already configured" |
+| Display state "paused" | Means `paused = true` |
+| `logout` | Deletes token + config sections (state DBs kept) |
+| `logout --purge` | Deletes token + config sections + state DBs |
+| `login` (re-login) | Token refresh + creates fresh section if needed |
+| Config reload | Per-cycle (up to 5 min delay); fsnotify planned |
+| `pause`/`resume` commands | Not yet implemented; `paused` field ready |
 
 ### 11.11 CLI Command Categorization
 

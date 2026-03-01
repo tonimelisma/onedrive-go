@@ -671,19 +671,19 @@ This analysis categorizes every part of the codebase by its relationship to the 
 - `resume` CLI command: removes `paused`/`paused_until` from config section. Without `--drive`, resumes all drives.
 - fsnotify config watcher: `sync --watch` watches `config.toml` for immediate pickup of drive add/remove/pause/resume. Validates config before applying. Invalid config → log warning, keep old config.
 
-**2. Config Migration (`Enabled` → `Paused`):**
-- `config.Drive` struct: replace `Enabled *bool` with `Paused *bool` + `PausedUntil *string`
-- Refactor `drive remove`: delete config section instead of setting `enabled = false`. State DB preserved for fast re-add.
-- Refactor `drive add` (re-add): always create fresh config section. If state DB exists, delta sync resumes.
-- Refactor `drive remove --purge`: delete config section + state DB.
-- Refactor `logout`: delete config sections for all account drives (currently keeps drives in config). State DBs preserved.
-- Refactor `login` (re-login): create fresh config section if drive not in config.
-- Timed pause expiry: `sync --watch` checks `paused_until` on each cycle; clears both `paused` and `paused_until` when time passes.
-- Migration: existing `enabled = false` entries in config.toml silently treated as `paused = true` for backward compatibility.
+**2. Config Migration (`Enabled` → `Paused`) — DONE:**
+- ~~`config.Drive` struct: replace `Enabled *bool` with `Paused *bool`~~ ✓
+- ~~Refactor `drive remove`: delete config section instead of setting `enabled = false`~~ ✓
+- ~~Refactor `drive add` (re-add): reports "already configured" if drive exists~~ ✓
+- ~~Refactor `drive remove --purge`: delete config section + state DB~~ ✓ (unchanged, already correct)
+- ~~Refactor `logout`: delete config sections for all account drives~~ ✓
+- `PausedUntil *string` field: deferred to when `pause`/`resume` commands are implemented
+- Timed pause expiry: deferred to when `pause`/`resume` commands are implemented
+- No backward compatibility for old `enabled` field (clean break)
 - See [MULTIDRIVE.md §11.10](design/MULTIDRIVE.md#1110-drive-lifecycle) for full spec.
 
 **3. Code Retirement:**
-- Delete `Drive.Enabled` field and all references
+- ~~Delete `Drive.Enabled` field and all references~~ ✓
 - Final sweep — run ALL grep patterns from [`docs/design/legacy-sequential-architecture.md`](design/legacy-sequential-architecture.md) §9
 - Doc comment audit: no production `.go` file should reference "9 phases", "9 slices", "sequential execution", or "batch commit" except in historical/explanatory context.
 
@@ -831,7 +831,7 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 > **Architecture resolved**: Architecture A (per-drive goroutine with isolated engines). See [MULTIDRIVE.md §11](../docs/design/MULTIDRIVE.md#11-multi-drive-orchestrator) for full specification including all 10 questions answered. See [concurrent-execution.md §19](../docs/design/concurrent-execution.md#19-multi-drive-worker-budget) for worker budget algorithm.
 
-> **Prerequisite**: Phase 5.5 (pause/resume + config reload) must be complete. The `Enabled` → `Paused` migration is implemented there.
+> **Prerequisite**: Phase 5.5 (pause/resume + config reload) must be complete. The `Enabled` → `Paused` migration is done.
 
 1. `Orchestrator` struct: manages `map[CanonicalID]*DriveRunner`. Each `DriveRunner` wraps an `Engine` with panic recovery and error backoff. ~300 LOC new code, zero changes to Engine/WorkerPool/DepTracker/Executor.
 2. `ResolveDrives()` in config package: return `[]*ResolvedDrive` for all non-paused drives (when no `--drive` flag) or the specified subset. Currently only `ResolveDrive()` exists (single drive).

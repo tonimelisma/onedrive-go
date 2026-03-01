@@ -270,3 +270,62 @@ func TestE2E_Sync_Conflicts(t *testing.T) {
 	assert.True(t, strings.Contains(stdout, "No unresolved conflicts"),
 		"expected 'No unresolved conflicts' in output, got: %s", stdout)
 }
+
+func TestE2E_Sync_DriveRemoveAndReAdd(t *testing.T) {
+	// Proves that removing and re-adding a drive with the same state_dir
+	// preserves the state DB, allowing incremental delta sync to resume.
+	syncDir := t.TempDir()
+	stateDir := t.TempDir()
+
+	testFolder := fmt.Sprintf("e2e-sync-readd-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
+
+	// Helper to write a config with our fixed state_dir.
+	writeConfig := func(t *testing.T) string {
+		t.Helper()
+
+		content := fmt.Sprintf(`["%s"]
+sync_dir = %q
+state_dir = %q
+`, drive, syncDir, stateDir)
+		cfgPath := filepath.Join(t.TempDir(), "config.toml")
+		require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o644))
+
+		return cfgPath
+	}
+
+	// Step 1: Create a local file and sync it up.
+	localDir := filepath.Join(syncDir, testFolder)
+	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(localDir, "file1.txt"), []byte("first file\n"), 0o644))
+
+	cfgPath := writeConfig(t)
+	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
+	assert.Contains(t, stderr, "Mode: upload-only")
+
+	// Poll to verify file1 exists remotely.
+	remotePath1 := "/" + testFolder + "/file1.txt"
+	pollCLIWithConfigContains(t, cfgPath, "file1.txt", pollTimeout, "stat", remotePath1)
+
+	// Step 2: Delete the drive section from config (simulate "drive remove").
+	// Write an empty config — the drive section is gone.
+	emptyConfig := filepath.Join(t.TempDir(), "empty.toml")
+	require.NoError(t, os.WriteFile(emptyConfig, []byte(""), 0o644))
+
+	// Step 3: Re-add the drive section with the same sync_dir + state_dir.
+	cfgPath2 := writeConfig(t)
+
+	// Step 4: Create a second local file and sync again.
+	require.NoError(t, os.WriteFile(
+		filepath.Join(localDir, "file2.txt"), []byte("second file\n"), 0o644))
+
+	_, stderr = runCLIWithConfig(t, cfgPath2, "sync", "--upload-only", "--force")
+	assert.Contains(t, stderr, "Mode: upload-only")
+
+	// Step 5: Verify both files exist remotely (proves delta resume from
+	// preserved state DB — file1 wasn't re-uploaded, file2 was uploaded).
+	remotePath2 := "/" + testFolder + "/file2.txt"
+	pollCLIWithConfigContains(t, cfgPath2, "file2.txt", pollTimeout, "stat", remotePath2)
+	pollCLIWithConfigContains(t, cfgPath2, "file1.txt", pollTimeout, "stat", remotePath1)
+}

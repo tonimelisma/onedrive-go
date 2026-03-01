@@ -22,7 +22,7 @@ const defaultRemotePath = "/"
 type ResolvedDrive struct {
 	CanonicalID driveid.CanonicalID
 	Alias       string
-	Enabled     bool
+	Paused      bool
 	SyncDir     string // absolute path after tilde expansion
 	StateDir    string // override for state DB directory (empty = platform default)
 	RemotePath  string
@@ -162,7 +162,7 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 	resolved := &ResolvedDrive{
 		CanonicalID:     canonicalID,
 		Alias:           drive.Alias,
-		Enabled:         drive.Enabled == nil || *drive.Enabled, // default true
+		Paused:          drive.Paused != nil && *drive.Paused,
 		SyncDir:         expandTilde(drive.SyncDir),
 		StateDir:        expandTilde(drive.StateDir),
 		RemotePath:      drive.RemotePath,

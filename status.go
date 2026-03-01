@@ -38,7 +38,7 @@ func newStatusCmd() *cobra.Command {
 		Short: "Show all accounts, drives, and token status",
 		Long: `Display the status of all configured accounts and drives.
 
-Shows token validity, sync directory, and enabled/disabled status for each drive.
+Shows token validity, sync directory, and paused/ready status for each drive.
 Reads from config only — does not discover drives from tokens on disk.`,
 		Annotations: map[string]string{skipConfigAnnotation: "true"},
 		RunE:        runStatus,
@@ -233,9 +233,9 @@ func checkTokenState(ctx context.Context, account string, driveIDs []driveid.Can
 }
 
 // driveState returns the human-readable state for a drive based on its
-// enabled flag and token status.
+// paused flag and token status.
 func driveState(d *config.Drive, tokenState string) string {
-	if d.Enabled != nil && !*d.Enabled {
+	if d.Paused != nil && *d.Paused {
 		return driveStatePaused
 	}
 

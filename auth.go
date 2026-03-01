@@ -53,8 +53,11 @@ useful when the device code flow is blocked by organizational policies.`,
 func newLogoutCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "logout",
-		Short: "Remove saved authentication token",
-		Long: `Remove the saved authentication token for an account.
+		Short: "Remove saved authentication token and drive config",
+		Long: `Remove the saved authentication token and drive config sections for an account.
+State databases are kept so the drive can be re-added without a full re-sync.
+
+With --purge, state databases are also deleted.
 
 If only one account is configured, it is selected automatically.
 Otherwise, use --account to specify which account to log out.`,
@@ -62,7 +65,7 @@ Otherwise, use --account to specify which account to log out.`,
 		RunE:        runLogout,
 	}
 
-	cmd.Flags().Bool("purge", false, "also remove drive config sections and state databases")
+	cmd.Flags().Bool("purge", false, "also delete state databases")
 
 	return cmd
 }
@@ -494,7 +497,8 @@ func executeLogout(cfg *config.Config, cfgPath, account string, purge bool, logg
 	if purge {
 		purgeAccountDrives(cfg, cfgPath, affected, logger)
 	} else {
-		fmt.Println("\nState databases and config kept. Run 'onedrive-go login' to re-authenticate.")
+		removeAccountDriveConfigs(cfgPath, affected, logger)
+		fmt.Println("\nState databases kept. Run 'onedrive-go login' to re-authenticate.")
 	}
 
 	fmt.Println("Sync directories untouched — your files remain on disk.")
@@ -584,6 +588,18 @@ func purgeAccountDrives(cfg *config.Config, cfgPath string, affected []driveid.C
 			logger.Warn("failed to purge drive", "drive", cid.String(), "error", err)
 		} else {
 			fmt.Printf("Purged config and state for %s.\n", cid.String())
+		}
+	}
+}
+
+// removeAccountDriveConfigs deletes config sections for all affected drives
+// without removing state databases. Used by regular logout (without --purge).
+func removeAccountDriveConfigs(cfgPath string, affected []driveid.CanonicalID, logger *slog.Logger) {
+	for _, cid := range affected {
+		if err := config.DeleteDriveSection(cfgPath, cid); err != nil {
+			logger.Warn("failed to remove drive config section", "drive", cid.String(), "error", err)
+		} else {
+			logger.Info("removed drive config section", "drive", cid.String())
 		}
 	}
 }

@@ -223,7 +223,7 @@ Quotes around section names are required by TOML because `@` and `:` are not val
 | Key | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `sync_dir` | string | No | (computed) | Where to sync. Must be unique across drives. Auto-computed from canonical ID + token metadata if omitted. |
-| `paused` | bool | No | `false` | `true` = paused (pause command sets this; replaces old `enabled` field) |
+| `paused` | bool | No | `false` | `true` = paused (pause command sets this) |
 | `paused_until` | string | No | — | RFC3339 timestamp for timed pause expiry (e.g., `2026-02-28T18:00:00Z`) |
 | `display_name` | string | No | (auto-derived) | Human-facing name. Auto-generated at drive add time, user-editable. |
 | `owner` | string | No | — | Owner's email (shared drives only) |

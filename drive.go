@@ -102,7 +102,7 @@ func buildConfiguredDriveEntries(cfg *config.Config, logger *slog.Logger) []driv
 	for id := range cfg.Drives {
 		d := cfg.Drives[id]
 		state := driveStateReady
-		if d.Enabled != nil && !*d.Enabled {
+		if d.Paused != nil && *d.Paused {
 			state = driveStatePaused
 		}
 
@@ -346,13 +346,13 @@ func printDriveListText(configured, available []driveListEntry) {
 func newDriveAddCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "add [canonical-id]",
-		Short: "Add a new drive or resume a paused one",
-		Long: `Add a drive to the configuration by canonical ID, or resume a paused drive.
+		Short: "Add a new drive to the configuration",
+		Long: `Add a drive to the configuration by canonical ID.
 
-If the drive already exists in config and is paused, it is re-enabled.
+If the drive already exists in config, reports it as already configured.
 If the drive is new, it is added with a default sync directory.
 
-Without arguments, lists paused drives that can be resumed.
+Without arguments, lists available drives that can be added.
 
 Examples:
   onedrive-go drive add personal:user@example.com
@@ -384,7 +384,7 @@ func runDriveAdd(_ *cobra.Command, args []string) error {
 	}
 
 	if selector == "" {
-		return listPausedDrives(cfg)
+		return listAvailableDrives(cfg)
 	}
 
 	cid, err := driveid.NewCanonicalID(selector)
@@ -393,30 +393,13 @@ func runDriveAdd(_ *cobra.Command, args []string) error {
 	}
 
 	// Check if the drive already exists in config.
-	if d, exists := cfg.Drives[cid]; exists {
-		return resumeExistingDrive(cfgPath, cid, &d, logger)
-	}
-
-	return addNewDrive(cfgPath, cfg, cid, logger)
-}
-
-// resumeExistingDrive re-enables a paused drive or reports it's already enabled.
-func resumeExistingDrive(cfgPath string, cid driveid.CanonicalID, d *config.Drive, logger *slog.Logger) error {
-	if d.Enabled == nil || *d.Enabled {
-		fmt.Printf("Drive %s is already enabled.\n", cid.String())
+	if _, exists := cfg.Drives[cid]; exists {
+		fmt.Printf("Drive %s is already configured.\n", cid.String())
 
 		return nil
 	}
 
-	logger.Info("resuming drive", "drive", cid.String())
-
-	if err := config.SetDriveKey(cfgPath, cid, "enabled", "true"); err != nil {
-		return fmt.Errorf("enabling drive: %w", err)
-	}
-
-	fmt.Printf("Resumed drive %s (%s).\n", cid.String(), d.SyncDir)
-
-	return nil
+	return addNewDrive(cfgPath, cfg, cid, logger)
 }
 
 // addNewDrive adds a new drive to the config with a computed default sync_dir.
@@ -447,34 +430,11 @@ func addNewDrive(cfgPath string, cfg *config.Config, cid driveid.CanonicalID, lo
 	return nil
 }
 
-// listPausedDrives prints all paused drives, or a message if none are paused.
-func listPausedDrives(cfg *config.Config) error {
-	var paused []driveid.CanonicalID
-
-	for id := range cfg.Drives {
-		d := cfg.Drives[id]
-		if d.Enabled != nil && !*d.Enabled {
-			paused = append(paused, id)
-		}
-	}
-
-	if len(paused) == 0 {
-		fmt.Println("No paused drives to resume.")
-		fmt.Println("Run 'onedrive-go drive add <canonical-id>' to add a new drive.")
-		fmt.Println("Run 'onedrive-go drive list' to see available drives.")
-
-		return nil
-	}
-
-	slices.SortFunc(paused, func(a, b driveid.CanonicalID) int {
-		return cmp.Compare(a.String(), b.String())
-	})
-
-	fmt.Println("Paused drives (specify canonical ID to resume):")
-
-	for _, id := range paused {
-		fmt.Printf("  %s (%s)\n", id.String(), cfg.Drives[id].SyncDir)
-	}
+// listAvailableDrives lists drives that can be added. Shows usage guidance
+// when no canonical ID argument is provided.
+func listAvailableDrives(_ *config.Config) error {
+	fmt.Println("Run 'onedrive-go drive add <canonical-id>' to add a drive.")
+	fmt.Println("Run 'onedrive-go drive list' to see available drives.")
 
 	return nil
 }
@@ -484,17 +444,17 @@ func listPausedDrives(cfg *config.Config) error {
 func newDriveRemoveCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "remove",
-		Short: "Pause or purge a drive",
-		Long: `Pause a drive by setting enabled = false in the config.
+		Short: "Remove a drive from the configuration",
+		Long: `Remove a drive's config section. The token, state database, and sync directory
+are preserved so the drive can be re-added later without data loss.
 
-The drive's token, state database, config section, and sync directory are preserved.
-With --purge, the config section and state database are deleted.
+With --purge, the state database is also deleted.
 The sync directory is never deleted automatically.`,
 		Annotations: map[string]string{skipConfigAnnotation: "true"},
 		RunE:        runDriveRemove,
 	}
 
-	cmd.Flags().Bool("purge", false, "delete config section and state database")
+	cmd.Flags().Bool("purge", false, "also delete the state database")
 
 	return cmd
 }
@@ -534,20 +494,23 @@ func runDriveRemove(cmd *cobra.Command, _ []string) error {
 		return purgeDrive(cfgPath, cid, d.StateDir, logger)
 	}
 
-	return pauseDrive(cfgPath, cid, d.SyncDir)
+	return removeDrive(cfgPath, cid, d.SyncDir, logger)
 }
 
-// pauseDrive sets enabled = false for the drive, preserving all data.
-func pauseDrive(cfgPath string, driveID driveid.CanonicalID, syncDir string) error {
-	if err := config.SetDriveKey(cfgPath, driveID, "enabled", "false"); err != nil {
-		return fmt.Errorf("pausing drive: %w", err)
+// removeDrive deletes the config section for the drive, preserving token,
+// state database, and sync directory.
+func removeDrive(cfgPath string, driveID driveid.CanonicalID, syncDir string, logger *slog.Logger) error {
+	if err := config.DeleteDriveSection(cfgPath, driveID); err != nil {
+		return fmt.Errorf("removing drive: %w", err)
 	}
 
+	logger.Info("removed drive config section", "drive", driveID.String())
+
 	idStr := driveID.String()
-	fmt.Printf("Paused drive %s.\n", idStr)
-	fmt.Printf("Config, token, and state database kept for %s.\n", idStr)
+	fmt.Printf("Removed drive %s from config.\n", idStr)
+	fmt.Printf("Token and state database kept for %s.\n", idStr)
 	fmt.Printf("Sync directory untouched: %s\n", syncDir)
-	fmt.Println("Run 'onedrive-go drive add " + idStr + "' to resume.")
+	fmt.Println("Run 'onedrive-go drive add " + idStr + "' to re-add.")
 
 	return nil
 }
