@@ -1464,3 +1464,72 @@ func TestRemoteObserver_Stats(t *testing.T) {
 		t.Error("PollsCompleted should be > 0 after a successful FullDelta")
 	}
 }
+
+// TestFullDelta_CrossDriveItems verifies path resolution for items that
+// reference a different drive than the observer's primary drive, e.g., shared
+// items where the item's DriveID differs from the observer's driveID (B-007).
+func TestFullDelta_CrossDriveItems(t *testing.T) {
+	t.Parallel()
+
+	primaryDrive := driveid.New("0000000000000001")
+	sharedDrive := driveid.New("0000000000000099")
+
+	// Baseline has the root of the primary drive.
+	baseline := baselineWith(
+		&BaselineEntry{
+			Path: "shared-folder", DriveID: primaryDrive, ItemID: "sf1",
+			ParentID: "root", ItemType: ItemTypeFolder,
+		},
+	)
+
+	// Delta response includes an item from sharedDrive appearing under
+	// the primary drive's folder. The item's DriveID differs from the
+	// observer's driveID, and its ParentDriveID points back to the primary.
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{{
+			page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: primaryDrive},
+					// Cross-drive item: lives on sharedDrive but parent is on primaryDrive.
+					{
+						ID: "shared-f1", Name: "shared-doc.txt",
+						DriveID:       sharedDrive,
+						ParentID:      "sf1",
+						ParentDriveID: primaryDrive,
+						Size:          512,
+						QuickXorHash:  "xhash-shared",
+					},
+				},
+				DeltaLink: "delta-cross-drive",
+			},
+		}},
+	}
+
+	obs := NewRemoteObserver(fetcher, baseline, primaryDrive, testLogger(t))
+
+	events, _, err := obs.FullDelta(t.Context(), "")
+	if err != nil {
+		t.Fatalf("FullDelta: %v", err)
+	}
+
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+
+	ev := events[0]
+
+	// The item should use sharedDrive as its DriveID.
+	if !ev.DriveID.Equal(sharedDrive) {
+		t.Errorf("DriveID = %v, want %v (shared drive)", ev.DriveID, sharedDrive)
+	}
+
+	// Path should be resolved through the primary drive's baseline.
+	if ev.Path != "shared-folder/shared-doc.txt" {
+		t.Errorf("Path = %q, want %q", ev.Path, "shared-folder/shared-doc.txt")
+	}
+
+	// Since the item is new (not in baseline), it should be a Create.
+	if ev.Type != ChangeCreate {
+		t.Errorf("Type = %v, want ChangeCreate", ev.Type)
+	}
+}
