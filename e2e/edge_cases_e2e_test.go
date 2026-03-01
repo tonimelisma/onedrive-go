@@ -74,7 +74,7 @@ func TestE2E_UnicodeFilenameRoundtrip(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
 
 	// Verify it exists remotely via ls (poll for eventual consistency).
-	stdout, _ := pollCLIContains(t, "caf", pollTimeout, "ls", "/"+testFolder)
+	pollCLIContains(t, "caf", pollTimeout, "ls", "/"+testFolder)
 
 	// Download via get and verify content roundtrip.
 	downloadPath := filepath.Join(t.TempDir(), unicodeName)
