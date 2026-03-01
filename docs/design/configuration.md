@@ -209,7 +209,7 @@ skip_dirs = ["node_modules", ".git", "vendor"]
 ["sharepoint:alice@contoso.com:marketing:Documents"]
 display_name = "marketing / Documents"
 sync_dir = "~/Contoso/Marketing - Documents"
-enabled = false
+paused = true
 ```
 
 ### 2.2 Layout
@@ -231,13 +231,15 @@ See [accounts.md §4](accounts.md) for the full template and write operation det
 
 ### 2.4 Write Operations
 
-Config is modified by `login`, `drive add`, `drive remove`, `setup`, and email change detection. All modifications use line-based text edits — never TOML round-trip serialization:
+Config is modified by `login`, `drive add`, `drive remove`, `pause`, `resume`, `setup`, and email change detection. All modifications use line-based text edits — never TOML round-trip serialization:
 
 | Operation | When | How |
 |-----------|------|-----|
-| Append drive section | `login`, `drive add` | Append new `["type:email"]` block at end of file |
-| Set `enabled = false` | `drive remove` | Find section header, find or insert `enabled` key |
+| Append drive section | `login`, `drive add` | Append new `["type:email"]` block at end of file (or restore from shadow) |
+| Delete section | `drive remove` | Find section header, delete lines through next header or EOF (moved to shadow) |
 | Delete section | `drive remove --purge` | Find section header, delete lines through next header or EOF |
+| Set `paused = true` | `pause` | Find section header, find or insert `paused` key |
+| Remove `paused` | `resume` | Find section header, delete `paused` and `paused_until` lines |
 | Rename section header | Email change detection | Find-and-replace one `["old"]` -> `["new"]` line |
 
 User comments survive every operation because no line is touched unless it's the specific target of the edit.
@@ -281,7 +283,8 @@ These fields appear inside drive sections:
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `sync_dir` | String | Yes | — | Local directory to sync (tilde-expanded). Must be unique across drives. |
-| `enabled` | Boolean | No | `true` | `false` = paused (`drive remove` sets this) |
+| `paused` | Boolean | No | `false` | `true` = paused (`pause` command sets this) |
+| `paused_until` | String | No | — | RFC3339 timestamp for timed pause expiry (e.g., `2026-02-28T18:00:00Z`) |
 | `display_name` | String | No | (auto-derived) | Human-facing drive name. Auto-generated at `drive add` time (personal/business: email, SharePoint: "site / lib", shared: "{Name}'s {Folder}"). User-editable. |
 | `owner` | String | No | — | Owner's email address (shared drives only). Auto-filled from sharedWithMe API response. |
 | `sync_vault` | Boolean | No | `false` | Include Personal Vault items in sync. Default excludes vault items due to auto-lock data-loss risk. Enable with caution. |
@@ -1004,7 +1007,7 @@ WARN: Config option "sync_dir" changed but requires restart to take effect.
 
 ### 14.4 Drive Section Changes
 
-New drive sections added to config are picked up on the next sync cycle. Drives with `enabled = false` are skipped. Removed sections stop syncing. This is how `login`, `drive add`, and `drive remove` work with a running `sync --watch` — they modify config, and the service picks it up. No restart needed.
+New drive sections added to config are picked up immediately via fsnotify. Drives with `paused = true` are skipped. Removed sections (moved to shadow files by `drive remove`) stop syncing. This is how `login`, `drive add`, `drive remove`, `pause`, and `resume` work with a running `sync --watch` — they modify config, and the daemon picks it up within milliseconds. No restart needed.
 
 ---
 
@@ -1015,7 +1018,8 @@ Every configuration option in a single reference table.
 | Option | Scope | Type | Default | CLI Flag | Hot-Reload | Description |
 |--------|-------|------|---------|----------|:----------:|-------------|
 | `sync_dir` | Drive | String | — | - | No | Local sync directory |
-| `enabled` | Drive | Boolean | `true` | - | Yes | Drive enabled for sync |
+| `paused` | Drive | Boolean | `false` | - | Yes | Drive paused (not syncing) |
+| `paused_until` | Drive | Datetime | — | - | Yes | Timed pause expiry (RFC 3339) |
 | `display_name` | Drive | String | (auto-derived) | - | Yes | Human-facing drive name |
 | `owner` | Drive | String | `""` | - | No | Owner email for shared drives |
 | `sync_vault` | Drive | Boolean | `false` | - | Yes | Include Personal Vault in sync |
@@ -1194,7 +1198,7 @@ Every configuration option in a single reference table.
 | C14 | No check_nosync option | `.odignore` with `*` achieves same effect, more flexible. |
 | C15 | No webhook configuration | WebSocket (client-initiated) replaces HTTP webhooks. No config needed. |
 | C16 | Worker pool sizes not hot-reloadable | Draining/recreating pools during transfers is error-prone. Restart is simpler. |
-| C17 | `sync --watch` syncs all enabled drives by default | Matches single-service deployment pattern. `--drive` for per-drive. |
+| C17 | `sync --watch` syncs all non-paused drives by default | Matches single-service deployment pattern. `--drive` for per-drive. |
 | C18 | Flat config format — no sub-sections | Not enough settings to justify sections. Simpler to read, write, and manipulate. |
 | C19 | Text-level config manipulation preserving comments | TOML libraries strip comments on round-trip. Line-based edits preserve everything. |
 | C20 | Config auto-created by login, not a separate init command | One command to start (login), not two (init + login). Commented defaults for discovery. |

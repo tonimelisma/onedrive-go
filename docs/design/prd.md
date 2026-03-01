@@ -88,7 +88,7 @@ onedrive-go sync --watch --quiet       # What you put in a systemd unit file
 
 `sync --watch` is just sync that doesn't exit. Run it interactively and you get progress output. Run it from systemd with `--quiet` and it logs to file. Same binary, same code path. There is no separate "daemon" concept.
 
-`sync --watch` re-reads config on each sync cycle. Drives added/removed/paused while running take effect on the next cycle. It idles gracefully with no enabled drives — can be installed as a service before any login.
+`sync --watch` watches config.toml via fsnotify. Drives added/removed/paused while running take effect within milliseconds. It idles gracefully with no drives — can be installed as a service before any login.
 
 #### Sync Status and Conflicts
 
@@ -135,9 +135,9 @@ onedrive-go drive add                  # Add a SharePoint library or resume a pa
 onedrive-go drive remove [--purge]     # Pause a drive (--purge: delete state DB + config section)
 ```
 
-`drive add` is interactive — it shows available SharePoint libraries and paused drives. For non-interactive use: `drive add --site marketing --library Documents`. It does NOT offer new account sign-in — that's what `login` is for.
+`drive add` is interactive — it shows available SharePoint libraries and removed drives (in shadow files). For non-interactive use: `drive add --site marketing --library Documents`. It does NOT offer new account sign-in — that's what `login` is for.
 
-`drive remove` sets `enabled = false` in config. Everything preserved. `--purge` permanently removes state DB and config section; token kept if shared with other drives.
+`drive remove` moves the config section to a shadow file (all settings preserved). `drive add` restores from shadow. `--purge` permanently removes state DB, config section, and shadow file; token kept if shared with other drives. To temporarily stop syncing without removing, use `pause`/`resume`.
 
 `drive list` shows `(read-only)` or `(read-write)` permission annotations for shared content (DP-10), giving users proactive visibility into access levels before sync encounters 403 errors.
 
@@ -257,7 +257,7 @@ All four drive types are supported:
 
 ### Multi-Account Support
 
-A single config file holds multiple drive sections. A single `sync --watch` process syncs all enabled drives simultaneously. Each drive syncs in its own goroutine with its own state DB.
+A single config file holds multiple drive sections. A single `sync --watch` process syncs all non-paused drives simultaneously (each drive in its own goroutine with its own state DB). The daemon watches `config.toml` via fsnotify for immediate config pickup.
 
 ```toml
 # ── Global settings ──
@@ -276,7 +276,7 @@ skip_dirs = ["node_modules", ".git", "vendor"]
 
 ["sharepoint:alice@contoso.com:marketing:Documents"]
 sync_dir = "~/Contoso/Marketing - Documents"
-enabled = false
+paused = true
 ```
 
 CLI usage:
@@ -284,7 +284,7 @@ CLI usage:
 ```
 onedrive-go sync --drive "me@contoso.com"  # sync one drive (by display name)
 onedrive-go ls /Documents --drive personal
-onedrive-go sync --watch               # syncs all enabled drives
+onedrive-go sync --watch               # syncs all non-paused drives
 ```
 
 SharePoint drives share the business account's OAuth token — same user, same session, same scopes. Only the state DB is per-drive.
