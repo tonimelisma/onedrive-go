@@ -125,15 +125,15 @@ echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r 
 
 ## Current Phase
 
-**Phases 1-5.4.2 complete. Next: Phase 5.5 (pause/resume + config reload — see roadmap for spec), then Phase 5.6 (identity refactoring + Personal Vault exclusion, B-271–B-276), then Phase 6 (CLI completeness), Phase 7 (multi-drive orchestration + shared content sync — Architecture A resolved, see MULTIDRIVE.md §11), Phase 8 (WebSocket + advanced sync), Phase 9 (operational hardening), Phase 10 (filtering), Phase 11 (packaging + release), Phase 12 (post-release).** See [docs/roadmap.md](docs/roadmap.md).
+**Phases 1-5.5 complete. Next: Phase 5.6 (identity refactoring + Personal Vault exclusion, B-271–B-276), then Phase 6 (CLI completeness), Phase 7 (multi-drive orchestration + shared content sync — Architecture A resolved, see MULTIDRIVE.md §11), Phase 8 (WebSocket + advanced sync), Phase 9 (operational hardening), Phase 10 (filtering), Phase 11 (packaging + release), Phase 12 (post-release).** See [docs/roadmap.md](docs/roadmap.md).
 
 ## Architecture Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                      cmd/onedrive-go/ (Cobra CLI)                   │
-│  ls, get, put, rm, mkdir, sync, status, conflicts, resolve, login  │
-│  logout, whoami, verify                                            │
+│  ls, get, put, rm, mkdir, sync, pause, resume, status, conflicts,  │
+│  resolve, login, logout, whoami, verify                            │
 └──────────┬───────────────────────────────────────────────────────────┘
            │ file ops (direct API)                 │ sync operations
            │                                       │
@@ -181,7 +181,7 @@ echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r 
 - **`internal/config/`** — TOML config, drive sections, XDG paths, four-layer override chain, token resolution (`TokenCanonicalID()`)
 - **`internal/graph/`** — Graph API client: auth, retry, items CRUD, delta, transfers
 - **`internal/sync/`** — Event-driven sync: types, baseline, observers, buffer, planner, executor, transfer_manager, tracker, workers, session_store, engine, verify
-- **Root package** — Cobra CLI: login, logout, whoami, status, drive (list/add/remove/search), ls, get, put, rm, mkdir, stat, sync, conflicts, resolve, verify
+- **Root package** — Cobra CLI: login, logout, whoami, status, drive (list/add/remove/search), ls, get, put, rm, mkdir, stat, sync, pause, resume, conflicts, resolve, verify
 - **`e2e/`** — E2E test suite against live OneDrive
 
 ## Documentation Index

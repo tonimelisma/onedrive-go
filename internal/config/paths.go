@@ -117,6 +117,18 @@ func UploadSessionDir() string {
 	return filepath.Join(dir, "upload-sessions")
 }
 
+// PIDFilePath returns the path to the daemon PID file. The PID file is used
+// to prevent multiple sync --watch daemons and to deliver SIGHUP for config
+// reload. Located in the data directory alongside state DBs and tokens.
+func PIDFilePath() string {
+	dir := DefaultDataDir()
+	if dir == "" {
+		return ""
+	}
+
+	return filepath.Join(dir, "daemon.pid")
+}
+
 // DefaultConfigPath returns the full path to the default config file.
 // This is used as the fallback when neither ONEDRIVE_GO_CONFIG nor
 // --config is specified.

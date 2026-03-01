@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"os/signal"
 	"syscall"
 	"testing"
 	"time"
@@ -49,5 +50,26 @@ func TestShutdownContext_ParentCancelStopsGoroutine(t *testing.T) {
 		// Expected: context canceled when parent is canceled.
 	case <-time.After(2 * time.Second):
 		t.Fatal("context not canceled within 2 seconds of parent cancel")
+	}
+}
+
+func TestSighupChannel_DeliversSignal(t *testing.T) {
+	t.Parallel()
+
+	ch := sighupChannel()
+	defer signal.Stop(ch)
+
+	// Send SIGHUP to ourselves.
+	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
+		t.Fatalf("failed to send SIGHUP: %v", err)
+	}
+
+	select {
+	case sig := <-ch:
+		if sig != syscall.SIGHUP {
+			t.Fatalf("expected SIGHUP, got %v", sig)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("SIGHUP not received within 2 seconds")
 	}
 }

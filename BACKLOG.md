@@ -43,7 +43,7 @@ Code quality and architecture improvements for the root package.
 | B-223 | Extract `DriveSession` type for per-drive resource lifecycle | P1 | Replace `clientAndDrive()`. Prerequisite for multi-drive. |
 | B-224 | Eliminate global flag variables (`flagJSON`, `flagVerbose`, etc.) | P1 | Move to `CLIFlags` struct in `CLIContext`. Eliminates test pollution. |
 | B-227 | Deduplicate sync_dir and StatePath validation across commands | P3 | Extract `RequireSyncDir()` and `RequireStatePath()` on `CLIContext`. |
-| B-228 | `buildLogger` silent fallthrough on unknown log level | P3 | No `default` case. Add warning or normalize input. |
+| ~~B-228~~ | ~~`buildLogger` silent fallthrough on unknown log level~~ | ~~P3~~ | Fixed in Phase 5.5: added `warn` case and `default` with stderr warning. |
 | B-232 | Test coverage for `loadConfig` error paths | P3 | Invalid TOML, ambiguous drive, wrong context type, unknown log level. |
 | B-036 | Extract CLI service layer for testability | P4 | Root package at 28.1% coverage. Target 50%+. |
 | B-229 | `syncModeFromFlags` uses `Changed` instead of `GetBool` | P4 | Subtle Cobra invariant. Document or fix. |

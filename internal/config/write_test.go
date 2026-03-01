@@ -291,6 +291,110 @@ func TestSetDriveKey_MultipleSections(t *testing.T) {
 	assert.True(t, *business.Paused)
 }
 
+// --- DeleteDriveKey tests ---
+
+func TestDeleteDriveKey_KeyExists(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
+
+	require.NoError(t, CreateConfigWithDrive(path, cid, "~/OneDrive"))
+	require.NoError(t, SetDriveKey(path, cid, "paused", "true"))
+
+	// Verify key exists before deletion.
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "paused = true")
+
+	// Delete the key.
+	require.NoError(t, DeleteDriveKey(path, cid, "paused"))
+
+	data, err = os.ReadFile(path)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "paused")
+
+	// Round-trip: verify the config loads correctly.
+	cfg, err := Load(path, testLogger(t))
+	require.NoError(t, err)
+	d := cfg.Drives[cid]
+	assert.Nil(t, d.Paused)
+}
+
+func TestDeleteDriveKey_KeyAbsent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
+
+	require.NoError(t, CreateConfigWithDrive(path, cid, "~/OneDrive"))
+
+	// Deleting a key that doesn't exist should be idempotent.
+	require.NoError(t, DeleteDriveKey(path, cid, "paused"))
+
+	cfg, err := Load(path, testLogger(t))
+	require.NoError(t, err)
+	d := cfg.Drives[cid]
+	assert.Nil(t, d.Paused)
+}
+
+func TestDeleteDriveKey_SectionNotFound(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
+	otherCID := driveid.MustCanonicalID("personal:other@outlook.com")
+
+	require.NoError(t, CreateConfigWithDrive(path, cid, "~/OneDrive"))
+
+	err := DeleteDriveKey(path, otherCID, "paused")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestDeleteDriveKey_IdempotentDoubleDelete(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
+
+	require.NoError(t, CreateConfigWithDrive(path, cid, "~/OneDrive"))
+	require.NoError(t, SetDriveKey(path, cid, "paused", "true"))
+
+	// Delete twice — second should be no-op.
+	require.NoError(t, DeleteDriveKey(path, cid, "paused"))
+	require.NoError(t, DeleteDriveKey(path, cid, "paused"))
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "paused")
+}
+
+func TestDeleteDriveKey_PausedUntilRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
+
+	require.NoError(t, CreateConfigWithDrive(path, cid, "~/OneDrive"))
+	require.NoError(t, SetDriveKey(path, cid, "paused", "true"))
+	require.NoError(t, SetDriveKey(path, cid, "paused_until", "2026-03-01T00:00:00Z"))
+
+	// Verify both keys load.
+	cfg, err := Load(path, testLogger(t))
+	require.NoError(t, err)
+	d := cfg.Drives[cid]
+	require.NotNil(t, d.Paused)
+	assert.True(t, *d.Paused)
+	require.NotNil(t, d.PausedUntil)
+	assert.Equal(t, "2026-03-01T00:00:00Z", *d.PausedUntil)
+
+	// Delete both keys.
+	require.NoError(t, DeleteDriveKey(path, cid, "paused"))
+	require.NoError(t, DeleteDriveKey(path, cid, "paused_until"))
+
+	cfg, err = Load(path, testLogger(t))
+	require.NoError(t, err)
+	d = cfg.Drives[cid]
+	assert.Nil(t, d.Paused)
+	assert.Nil(t, d.PausedUntil)
+}
+
 // --- DeleteDriveSection tests ---
 
 func TestDeleteDriveSection_DeleteFromMiddle(t *testing.T) {
