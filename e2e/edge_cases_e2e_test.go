@@ -40,9 +40,8 @@ func TestE2E_ZeroByteFileSync(t *testing.T) {
 	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
 	assert.Contains(t, stderr, "Mode: upload-only")
 
-	// Verify it exists remotely.
-	stdout, _ := runCLI(t, "ls", "/"+testFolder)
-	assert.Contains(t, stdout, "empty.txt")
+	// Verify it exists remotely (poll for eventual consistency).
+	pollCLIContains(t, "empty.txt", pollTimeout, "ls", "/"+testFolder)
 
 	// Download via get (bypasses sync state) and verify zero-byte content.
 	downloadPath := filepath.Join(t.TempDir(), "empty-downloaded.txt")
@@ -74,9 +73,8 @@ func TestE2E_UnicodeFilenameRoundtrip(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
 	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
 
-	// Verify it exists remotely via ls.
-	stdout, _ := runCLI(t, "ls", "/"+testFolder)
-	assert.Contains(t, stdout, "caf")
+	// Verify it exists remotely via ls (poll for eventual consistency).
+	stdout, _ := pollCLIContains(t, "caf", pollTimeout, "ls", "/"+testFolder)
 
 	// Download via get and verify content roundtrip.
 	downloadPath := filepath.Join(t.TempDir(), unicodeName)
@@ -112,9 +110,8 @@ func TestE2E_InvalidFilenameRejection(t *testing.T) {
 	assert.Contains(t, stderr, "skipping invalid OneDrive name",
 		"should log warning about invalid filename")
 
-	// Verify only valid.txt appeared remotely.
-	stdout, _ := runCLI(t, "ls", "/"+testFolder)
-	assert.Contains(t, stdout, "valid.txt")
+	// Verify only valid.txt appeared remotely (poll for eventual consistency).
+	stdout, _ := pollCLIContains(t, "valid.txt", pollTimeout, "ls", "/"+testFolder)
 	assert.NotContains(t, stdout, "CON",
 		"invalid filename should not be uploaded")
 }
@@ -146,7 +143,8 @@ func TestE2E_RapidFileChurn(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
 	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
 
-	// Verify final content remotely.
+	// Verify final content remotely (poll for eventual consistency).
+	pollCLIContains(t, "churn.txt", pollTimeout, "ls", "/"+testFolder)
 	remoteContent := getRemoteFile(t, "/"+testFolder+"/churn.txt")
 	assert.Equal(t, finalContent, remoteContent,
 		"final state should be the last written content")

@@ -760,8 +760,8 @@ S1 and S5 are pure functions in the planner, testable without a database or any 
 |-------------|---------------|--------|
 | 400 | Skip | Invalid request |
 | 401 | Fatal (after token refresh) | Auth failure |
-| 403 | Skip | Permission denied, retention policy |
-| 404 | Skip | Item no longer exists |
+| 403 | Skip (retry for `/me/drives`) | Permission denied, retention policy. `Drives()` retries transient 403 (token propagation delay) up to 3 times with backoff. |
+| 404 | Skip | Item no longer exists. Note: path-based queries may return 404 briefly after create/upload due to Graph API eventual consistency (not a true missing item). |
 | 408 | Retryable | Timeout |
 | 410 | Special | Delta token expired -- full re-enumeration |
 | 412 | Retryable | eTag stale, refresh and retry |

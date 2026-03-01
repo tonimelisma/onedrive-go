@@ -110,6 +110,7 @@ Optimization deferred until profiling shows a bottleneck.
 
 | ID | Title | Resolution |
 |----|-------|------------|
+| B-277 | E2E polling for Graph API eventual consistency | **DONE** — Polling helpers (`pollCLIContains`, `pollCLIWithConfigContains`, `pollCLISuccess`) replace fatal write-then-read assertions. `Drives()` 403 retry in production code. |
 | B-205 | `WorkerPool.errors` slice grows unbounded in watch mode | **DONE** — Capped at 1000 with `droppedErrors` counter. PR #129. |
 | B-208 | `sessionUpload` non-expired resume error creates infinite retry loop | **DONE** — Delete session on any resume failure. PR #129. |
 | B-204 | Reserved worker receives on nil channel in select | **DONE** — Go nil-channel semantics documented. PR #133. |

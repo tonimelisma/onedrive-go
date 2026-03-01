@@ -284,6 +284,11 @@ Tokens bootstrapped via `go run . login --drive personal:user@example.com`. Driv
 ### Nightly CI keeps refresh tokens alive
 Microsoft rotates refresh tokens on use and they expire after 90 days of inactivity. Nightly schedule (3 AM UTC) keeps them active.
 
+### Microsoft Graph eventual consistency
+Graph API has two consistency gaps that cause CI failures:
+1. **404 on path-based queries after create/upload**: Items created via `CreateFolder`, `SimpleUpload`, or `Upload` are not immediately visible via `GetItemByPath`, `ListChildrenByPath`, or `DeleteItem`. This is the dominant CI failure cause (~40% of all failures). **Mitigation**: E2E tests use polling helpers (`pollCLIContains`, `pollCLIWithConfigContains`, `pollCLISuccess`) that retry with exponential backoff (500ms→4s cap, 30s timeout) until the item appears.
+2. **Transient 403 on `/me/drives`**: Microsoft returns `accessDenied` during token propagation even with a valid token. Affects the `Drives()` call used during login and drive discovery. **Mitigation**: Production retry in `Drives()` — up to 3 attempts with exponential backoff, retrying only on 403. Uses the existing `calcBackoff` + `sleepFunc` infrastructure.
+
 ### Key Vault secrets are managed via az CLI
 Use `az` CLI for creating/renaming secrets, downloading/uploading tokens, and `gh variable set` for GitHub variables. The human only handles one-time Azure infrastructure and interactive browser-based flows.
 
