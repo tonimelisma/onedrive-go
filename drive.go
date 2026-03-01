@@ -483,18 +483,17 @@ func runDriveRemove(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("invalid drive ID %q: %w", flagDrive, cidErr)
 	}
 
-	d, exists := cfg.Drives[cid]
-	if !exists {
+	if _, exists := cfg.Drives[cid]; !exists {
 		return fmt.Errorf("drive %q not found in config", flagDrive)
 	}
 
 	logger.Info("removing drive", "drive", cid.String(), "purge", purge)
 
 	if purge {
-		return purgeDrive(cfgPath, cid, d.StateDir, logger)
+		return purgeDrive(cfgPath, cid, logger)
 	}
 
-	return removeDrive(cfgPath, cid, d.SyncDir, logger)
+	return removeDrive(cfgPath, cid, cfg.Drives[cid].SyncDir, logger)
 }
 
 // removeDrive deletes the config section for the drive, preserving token,
@@ -517,9 +516,8 @@ func removeDrive(cfgPath string, driveID driveid.CanonicalID, syncDir string, lo
 
 // purgeDrive deletes the config section and state database for a drive.
 // The token is NOT deleted here — it may be shared with other drives (SharePoint).
-// stateDir is the per-drive state_dir override from config (B-193).
-func purgeDrive(cfgPath string, driveID driveid.CanonicalID, stateDir string, logger *slog.Logger) error {
-	if err := purgeSingleDrive(cfgPath, driveID, stateDir, logger); err != nil {
+func purgeDrive(cfgPath string, driveID driveid.CanonicalID, logger *slog.Logger) error {
+	if err := purgeSingleDrive(cfgPath, driveID, logger); err != nil {
 		return err
 	}
 

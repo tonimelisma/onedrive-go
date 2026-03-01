@@ -108,8 +108,7 @@ func AppendDriveSection(path string, canonicalID driveid.CanonicalID, syncDir st
 
 // SetDriveKey finds a drive section by canonical ID and sets a key-value pair.
 // If the key already exists within the section, its line is replaced. If not
-// found, the key is inserted on the line after the section header. Used by
-// `drive remove` to set `enabled = false`.
+// found, the key is inserted on the line after the section header.
 //
 // Value formatting: booleans ("true"/"false") are written without quotes;
 // all other values are written as quoted strings.

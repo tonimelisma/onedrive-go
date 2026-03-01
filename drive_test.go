@@ -457,6 +457,43 @@ sync_dir = "~/OneDrive"
 	assert.Contains(t, err.Error(), "removing drive")
 }
 
+// --- purgeSingleDrive ---
+
+func TestPurgeSingleDrive_DeletesStateDB(t *testing.T) {
+	// Isolate HOME so DriveStatePath uses a temp directory.
+	setTestDriveHome(t)
+	dataDir := config.DefaultDataDir()
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+
+	// Create a fake state DB file at the platform default path.
+	statePath := config.DriveStatePath(cid)
+	require.NotEmpty(t, statePath)
+	require.NoError(t, os.WriteFile(statePath, []byte("fake-db"), 0o600))
+
+	// Create a config file with this drive.
+	cfgDir := t.TempDir()
+	cfgPath := filepath.Join(cfgDir, "config.toml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(`
+["personal:user@example.com"]
+sync_dir = "~/OneDrive"
+`), 0o600))
+
+	// Purge should delete both state DB and config section.
+	err := purgeSingleDrive(cfgPath, cid, testDriveLogger(t))
+	require.NoError(t, err)
+
+	// State DB file should be gone.
+	_, statErr := os.Stat(statePath)
+	assert.True(t, os.IsNotExist(statErr), "state DB should be deleted")
+
+	// Config section should be gone.
+	data, readErr := os.ReadFile(cfgPath)
+	require.NoError(t, readErr)
+	assert.NotContains(t, string(data), "personal:user@example.com")
+}
+
 // --- removeAccountDriveConfigs ---
 
 func TestRemoveAccountDriveConfigs_RemovesMultiple(t *testing.T) {
@@ -477,11 +514,12 @@ sync_dir = "~/Marketing"
 		driveid.MustCanonicalID("sharepoint:alice@contoso.com:marketing:Documents"),
 	}
 
-	removeAccountDriveConfigs(cfgPath, affected, testDriveLogger(t))
+	err := removeAccountDriveConfigs(cfgPath, affected, testDriveLogger(t))
+	require.NoError(t, err)
 
 	// Reload and verify 0 drives remain.
-	cfg, err := config.Load(cfgPath, testDriveLogger(t))
-	require.NoError(t, err)
+	cfg, loadErr := config.Load(cfgPath, testDriveLogger(t))
+	require.NoError(t, loadErr)
 	assert.Empty(t, cfg.Drives)
 }
 
@@ -500,14 +538,14 @@ sync_dir = "~/OneDrive"
 		driveid.MustCanonicalID("personal:user@example.com"),   // exists
 	}
 
-	// Should not panic; logs warning for the missing one and continues.
-	assert.NotPanics(t, func() {
-		removeAccountDriveConfigs(cfgPath, affected, testDriveLogger(t))
-	})
+	// Continues past the missing one, returns error for it.
+	err := removeAccountDriveConfigs(cfgPath, affected, testDriveLogger(t))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "business:nobody@example.com")
 
 	// The existing drive should still have been removed.
-	cfg, err := config.Load(cfgPath, testDriveLogger(t))
-	require.NoError(t, err)
+	cfg, loadErr := config.Load(cfgPath, testDriveLogger(t))
+	require.NoError(t, loadErr)
 	assert.Empty(t, cfg.Drives)
 }
 

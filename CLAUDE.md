@@ -125,7 +125,7 @@ echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r 
 
 ## Current Phase
 
-**Phases 1-5.4.2 complete. Next: Phase 5.5 (pause/resume + config reload + shadow file migration — see roadmap for spec), then Phase 5.6 (identity refactoring + Personal Vault exclusion, B-271–B-276), then Phase 6 (CLI completeness), Phase 7 (multi-drive orchestration + shared content sync — Architecture A resolved, see MULTIDRIVE.md §11), Phase 8 (WebSocket + advanced sync), Phase 9 (operational hardening), Phase 10 (filtering), Phase 11 (packaging + release), Phase 12 (post-release).** See [docs/roadmap.md](docs/roadmap.md).
+**Phases 1-5.4.2 complete. Next: Phase 5.5 (pause/resume + config reload — see roadmap for spec), then Phase 5.6 (identity refactoring + Personal Vault exclusion, B-271–B-276), then Phase 6 (CLI completeness), Phase 7 (multi-drive orchestration + shared content sync — Architecture A resolved, see MULTIDRIVE.md §11), Phase 8 (WebSocket + advanced sync), Phase 9 (operational hardening), Phase 10 (filtering), Phase 11 (packaging + release), Phase 12 (post-release).** See [docs/roadmap.md](docs/roadmap.md).
 
 ## Architecture Overview
 

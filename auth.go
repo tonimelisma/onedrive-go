@@ -495,9 +495,14 @@ func executeLogout(cfg *config.Config, cfgPath, account string, purge bool, logg
 	printAffectedDrives(cfg, affected)
 
 	if purge {
-		purgeAccountDrives(cfg, cfgPath, affected, logger)
+		if err := purgeAccountDrives(cfgPath, affected, logger); err != nil {
+			return fmt.Errorf("purging account drives: %w", err)
+		}
 	} else {
-		removeAccountDriveConfigs(cfgPath, affected, logger)
+		if err := removeAccountDriveConfigs(cfgPath, affected, logger); err != nil {
+			return fmt.Errorf("removing drive configs: %w", err)
+		}
+
 		fmt.Println("\nState databases kept. Run 'onedrive-go login' to re-authenticate.")
 	}
 
@@ -558,9 +563,8 @@ func printAffectedDrives(cfg *config.Config, affected []driveid.CanonicalID) {
 
 // purgeSingleDrive removes the state database and config section for one drive.
 // Token deletion is handled separately since tokens may be shared (SharePoint).
-// stateDir is the per-drive state_dir override (empty uses platform default).
-func purgeSingleDrive(cfgPath string, canonicalID driveid.CanonicalID, stateDir string, logger *slog.Logger) error {
-	statePath := config.DriveStatePathWithOverride(canonicalID, stateDir)
+func purgeSingleDrive(cfgPath string, canonicalID driveid.CanonicalID, logger *slog.Logger) error {
+	statePath := config.DriveStatePath(canonicalID)
 	if statePath != "" {
 		if err := os.Remove(statePath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			logger.Warn("failed to remove state database", "path", statePath, "error", err)
@@ -578,30 +582,38 @@ func purgeSingleDrive(cfgPath string, canonicalID driveid.CanonicalID, stateDir 
 
 // purgeAccountDrives removes drive config sections and state databases for
 // all affected drives. Token deletion is already handled before this call.
-// cfg is needed to read per-drive state_dir overrides (B-193).
-func purgeAccountDrives(cfg *config.Config, cfgPath string, affected []driveid.CanonicalID, logger *slog.Logger) {
+func purgeAccountDrives(cfgPath string, affected []driveid.CanonicalID, logger *slog.Logger) error {
 	fmt.Println()
 
+	var errs []error
+
 	for _, cid := range affected {
-		stateDir := cfg.Drives[cid].StateDir
-		if err := purgeSingleDrive(cfgPath, cid, stateDir, logger); err != nil {
+		if err := purgeSingleDrive(cfgPath, cid, logger); err != nil {
 			logger.Warn("failed to purge drive", "drive", cid.String(), "error", err)
+			errs = append(errs, fmt.Errorf("purging drive %s: %w", cid.String(), err))
 		} else {
 			fmt.Printf("Purged config and state for %s.\n", cid.String())
 		}
 	}
+
+	return errors.Join(errs...)
 }
 
 // removeAccountDriveConfigs deletes config sections for all affected drives
 // without removing state databases. Used by regular logout (without --purge).
-func removeAccountDriveConfigs(cfgPath string, affected []driveid.CanonicalID, logger *slog.Logger) {
+func removeAccountDriveConfigs(cfgPath string, affected []driveid.CanonicalID, logger *slog.Logger) error {
+	var errs []error
+
 	for _, cid := range affected {
 		if err := config.DeleteDriveSection(cfgPath, cid); err != nil {
 			logger.Warn("failed to remove drive config section", "drive", cid.String(), "error", err)
+			errs = append(errs, fmt.Errorf("removing drive %s: %w", cid.String(), err))
 		} else {
 			logger.Info("removed drive config section", "drive", cid.String())
 		}
 	}
+
+	return errors.Join(errs...)
 }
 
 // whoamiOutput is the JSON schema for `whoami --json`.
