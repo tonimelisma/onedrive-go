@@ -520,6 +520,73 @@ func TestToSite_AllFields(t *testing.T) {
 	assert.Equal(t, "https://contoso.sharepoint.com/sites/marketing", site.WebURL)
 }
 
+// --- Drives 403 retry tests ---
+
+func TestDrives_Transient403_Recovers(t *testing.T) {
+	// Microsoft Graph occasionally returns transient 403 on /me/drives
+	// during token propagation. Drives() should retry and succeed.
+	var attempts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		if attempts <= 2 {
+			w.Header().Set("request-id", fmt.Sprintf("req-403-%d", attempts))
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, `{"error":{"code":"accessDenied","message":"Access denied"}}`)
+
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"value": [{"id": "drive-1", "name": "OneDrive", "driveType": "personal"}]}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	drives, err := client.Drives(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, drives, 1)
+	assert.Equal(t, driveid.New("drive-1"), drives[0].ID)
+	assert.Equal(t, 3, attempts, "should have made 3 attempts (2 x 403 + 1 success)")
+}
+
+func TestDrives_Permanent403_ExhaustsRetries(t *testing.T) {
+	// When all attempts return 403, Drives() should return the error.
+	var attempts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		w.Header().Set("request-id", fmt.Sprintf("req-perm-403-%d", attempts))
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, `{"error":{"code":"accessDenied","message":"Access denied"}}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.Drives(context.Background())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrForbidden)
+	assert.Equal(t, 3, attempts, "should have exhausted all 3 attempts")
+}
+
+func TestDrives_NonForbidden_NoRetry(t *testing.T) {
+	// Non-403 errors (e.g. 401) should not be retried.
+	var attempts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		w.Header().Set("request-id", "req-401")
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `{"error":{"code":"InvalidAuthenticationToken"}}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.Drives(context.Background())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrUnauthorized)
+	assert.Equal(t, 1, attempts, "non-403 errors should not be retried")
+}
+
 func TestToDrive_NilQuota(t *testing.T) {
 	dr := &driveResponse{
 		ID:        "d2",

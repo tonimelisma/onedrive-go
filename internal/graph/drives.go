@@ -3,12 +3,18 @@ package graph
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
+
+// driveDiscoveryRetries is the number of extra attempts for transient 403s
+// on /me/drives. Microsoft Graph occasionally returns 403 "accessDenied"
+// during token propagation, even when the token is valid.
+const driveDiscoveryRetries = 3
 
 // userResponse mirrors the Graph API /me JSON response.
 // Unexported — callers use User via toUser() normalization.
@@ -145,9 +151,50 @@ func (c *Client) Me(ctx context.Context) (*User, error) {
 }
 
 // Drives returns all drives accessible to the authenticated user.
+// Retries on transient 403 from /me/drives — Microsoft Graph occasionally
+// returns "accessDenied" during token propagation even with a valid token.
 func (c *Client) Drives(ctx context.Context) ([]Drive, error) {
 	c.logger.Info("listing accessible drives")
 
+	var lastErr error
+
+	for attempt := range driveDiscoveryRetries {
+		drives, err := c.drivesList(ctx)
+		if err == nil {
+			return drives, nil
+		}
+
+		// Only retry on 403 (transient accessDenied during token propagation).
+		var ge *GraphError
+		if !errors.As(err, &ge) || ge.StatusCode != http.StatusForbidden {
+			return nil, err
+		}
+
+		lastErr = err
+
+		// Don't sleep after the last attempt.
+		if attempt >= driveDiscoveryRetries-1 {
+			break
+		}
+
+		backoff := c.calcBackoff(attempt)
+		c.logger.Warn("retrying /me/drives after transient 403",
+			slog.Int("attempt", attempt+1),
+			slog.Int("max_attempts", driveDiscoveryRetries),
+			slog.Duration("backoff", backoff),
+			slog.String("request_id", ge.RequestID),
+		)
+
+		if sleepErr := c.sleepFunc(ctx, backoff); sleepErr != nil {
+			return nil, fmt.Errorf("graph: drives discovery canceled: %w", sleepErr)
+		}
+	}
+
+	return nil, lastErr
+}
+
+// drivesList performs a single GET /me/drives call without retry.
+func (c *Client) drivesList(ctx context.Context) ([]Drive, error) {
 	resp, err := c.Do(ctx, http.MethodGet, "/me/drives", nil)
 	if err != nil {
 		return nil, err

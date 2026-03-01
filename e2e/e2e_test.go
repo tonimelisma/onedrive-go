@@ -154,6 +154,8 @@ type e2eMode struct {
 	name        string
 	run         func(t *testing.T, args ...string) (string, string)
 	expectError func(t *testing.T, args ...string) string
+	// poll retries until stdout contains expected. Returns stdout on success.
+	poll func(t *testing.T, expected string, args ...string) string
 }
 
 // fileOpModes returns both no-config and with-config modes for parametrized tests.
@@ -168,6 +170,11 @@ func fileOpModes(t *testing.T) []e2eMode {
 			name:        "no_config",
 			run:         runCLI,
 			expectError: runCLIExpectError,
+			poll: func(t *testing.T, expected string, args ...string) string {
+				t.Helper()
+				stdout, _ := pollCLIContains(t, expected, pollTimeout, args...)
+				return stdout
+			},
 		},
 		{
 			name: "with_config",
@@ -178,6 +185,11 @@ func fileOpModes(t *testing.T) []e2eMode {
 			expectError: func(t *testing.T, args ...string) string {
 				t.Helper()
 				return runCLIWithConfigExpectError(t, cfgPath, args...)
+			},
+			poll: func(t *testing.T, expected string, args ...string) string {
+				t.Helper()
+				stdout, _ := pollCLIWithConfigContains(t, cfgPath, expected, pollTimeout, args...)
+				return stdout
 			},
 		},
 	}
@@ -311,6 +323,10 @@ func pollCLIContains(
 	}
 }
 
+// pollTimeout is the default timeout for polling helpers waiting on Graph API
+// eventual consistency. 30 seconds covers observed propagation delays.
+const pollTimeout = 30 * time.Second
+
 // pollBackoff returns exponential backoff: 500ms, 1s, 2s, 4s cap.
 func pollBackoff(attempt int) time.Duration {
 	base := 500 * time.Millisecond
@@ -322,6 +338,95 @@ func pollBackoff(attempt int) time.Duration {
 	}
 
 	return d
+}
+
+// pollCLIWithConfigContains retries a CLI command with a config file until
+// stdout contains the expected string or timeout is reached.
+func pollCLIWithConfigContains(
+	t *testing.T, cfgPath, expected string, timeout time.Duration, args ...string,
+) (string, string) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+
+	for attempt := 0; ; attempt++ {
+		stdout, stderr, err := runCLIWithConfigAllowError(t, cfgPath, args...)
+		if err == nil && strings.Contains(stdout, expected) {
+			return stdout, stderr
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("pollCLIWithConfigContains: timed out after %v waiting for %q in output of %v\nlast stdout: %s\nlast stderr: %s",
+				timeout, expected, args, stdout, stderr)
+		}
+
+		time.Sleep(pollBackoff(attempt))
+	}
+}
+
+// pollCLISuccess retries a CLI command until it succeeds (exit 0).
+func pollCLISuccess(t *testing.T, timeout time.Duration, args ...string) (string, string) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+
+	for attempt := 0; ; attempt++ {
+		stdout, stderr, err := runCLIAllowError(t, args...)
+		if err == nil {
+			return stdout, stderr
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("pollCLISuccess: timed out after %v waiting for success of %v\nlast stdout: %s\nlast stderr: %s",
+				timeout, args, stdout, stderr)
+		}
+
+		time.Sleep(pollBackoff(attempt))
+	}
+}
+
+// pollCLIWithConfigSuccess retries a CLI command with a config file until
+// it succeeds (exit 0).
+func pollCLIWithConfigSuccess(t *testing.T, cfgPath string, timeout time.Duration, args ...string) (string, string) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+
+	for attempt := 0; ; attempt++ {
+		stdout, stderr, err := runCLIWithConfigAllowError(t, cfgPath, args...)
+		if err == nil {
+			return stdout, stderr
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("pollCLIWithConfigSuccess: timed out after %v waiting for success of %v\nlast stdout: %s\nlast stderr: %s",
+				timeout, args, stdout, stderr)
+		}
+
+		time.Sleep(pollBackoff(attempt))
+	}
+}
+
+// runCLIAllowError runs the CLI binary and returns the output even on error.
+func runCLIAllowError(t *testing.T, args ...string) (string, string, error) {
+	t.Helper()
+
+	fullArgs := []string{"--drive", drive}
+	if shouldAddDebug(args) {
+		fullArgs = append(fullArgs, "--debug")
+	}
+
+	fullArgs = append(fullArgs, args...)
+	cmd := exec.Command(binaryPath, fullArgs...)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	logCLIExecution(t, fullArgs, stdout.String(), stderr.String())
+
+	return stdout.String(), stderr.String(), err
 }
 
 // --- Parametrized tests ---
@@ -380,14 +485,14 @@ func TestE2E_RoundTrip(t *testing.T) {
 			})
 
 			t.Run("ls_folder", func(t *testing.T) {
-				stdout, _ := mode.run(t, "ls", "/"+testFolder)
-				assert.Contains(t, stdout, "test.txt")
+				// Poll for eventual consistency after put.
+				stdout := mode.poll(t, "test.txt", "ls", "/"+testFolder)
 				assert.Contains(t, stdout, "subfolder")
 			})
 
 			t.Run("stat", func(t *testing.T) {
-				stdout, _ := mode.run(t, "stat", "/"+testFile)
-				assert.Contains(t, stdout, "test.txt")
+				// Poll for eventual consistency after put.
+				stdout := mode.poll(t, "test.txt", "stat", "/"+testFile)
 				assert.Contains(t, stdout, fmt.Sprintf("%d bytes", len(testContent)))
 			})
 
@@ -425,6 +530,9 @@ func TestE2E_RoundTrip(t *testing.T) {
 				permFile := testFolder + "/perm-test.txt"
 				_, stderr := mode.run(t, "put", tmpFile.Name(), "/"+permFile)
 				assert.Contains(t, stderr, "Uploaded")
+
+				// Poll until the file is visible before attempting permanent delete.
+				mode.poll(t, "perm-test.txt", "stat", "/"+permFile)
 
 				_, stderr = mode.run(t, "rm", "--permanent", "/"+permFile)
 				assert.Contains(t, stderr, "Permanently deleted")

@@ -846,6 +846,27 @@ These tests run in the nightly CI job once Business/SharePoint accounts are prov
 | `TestE2E_Personal_VaultExclusion` | Personal | Sync with vault items → verify vault skipped | `specialFolder.name == "vault"` detection |
 | `TestE2E_Personal_DisplayNameMatching` | Personal | Use `--drive` with display name → verify resolution | 3-tier `--drive` matching priority |
 
+### 6.4 Eventual Consistency Polling
+
+Microsoft Graph API has eventual consistency gaps: items created or uploaded via the API may not be immediately visible via path-based queries (`GetItemByPath`, `ListChildrenByPath`). This manifests as 404 errors on read-after-write patterns in E2E tests.
+
+**Polling helpers** (defined in `e2e/e2e_test.go`) replace fatal assertions in write-then-read patterns:
+
+| Helper | Use Case |
+|--------|----------|
+| `pollCLIContains(t, expected, timeout, args...)` | Poll until CLI output contains `expected` string (no config file) |
+| `pollCLIWithConfigContains(t, cfgPath, expected, timeout, args...)` | Same, with custom config file |
+| `pollCLISuccess(t, timeout, args...)` | Poll until CLI exits successfully (no config file) |
+| `pollCLIWithConfigSuccess(t, cfgPath, timeout, args...)` | Same, with custom config file |
+
+All helpers use exponential backoff via `pollBackoff()`: 500ms, 1s, 2s, 4s (capped). Default timeout: 30s (`pollTimeout`).
+
+**When to use polling vs direct assertion**:
+- **Polling**: After any write operation (put, mkdir, sync --upload-only) when the next step reads from the API by path (ls, stat, get, rm)
+- **Direct assertion**: For operations that don't involve a write-then-read gap (e.g., local file checks, sync --download-only reading locally, delta-based operations)
+
+See also: DP-11 in [decisions.md](decisions.md) and LEARNINGS.md §6 "Microsoft Graph eventual consistency".
+
 ---
 
 ## 7. Chaos & Fault Injection Testing
