@@ -29,11 +29,11 @@ Defensive coding and edge cases for `internal/driveid/` and `internal/graph/`.
 
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
-| B-278 | Standardize driveid test style (testify vs stdlib) | P4 | `edge_test.go` uses `testify/assert`, `canonical_test.go` uses stdlib. Pick one. |
-| B-279 | Add `OwnerEmail` field to `graph.Drive` struct | P3 | Needed for shared drive display name derivation (B-274). Graph API provides `shared.owner.user.email`. |
-| B-280 | Document `graph.User.Email` mapping to Graph API field | P4 | Ambiguous: `mail` vs `userPrincipalName`. Business accounts can differ. |
-| B-281 | Vault parent-chain ordering assumption in RemoteObserver | P2 | `isDescendantOfVault()` assumes parents processed before children in delta. Not contractually guaranteed. Safety-critical. |
-| B-282 | Add `HashesComputed` counter to `ObserverStats` | P4 | Planned in B-127 but may not have been implemented. Useful for perf diagnostics. |
+| ~~B-278~~ | ~~Standardize driveid test style (testify vs stdlib)~~ | ~~P4~~ | **DONE** — Converted `canonical_test.go` to testify. Foundation hardening PR. |
+| ~~B-279~~ | ~~Add `OwnerEmail` field to `graph.Drive` struct~~ | ~~P3~~ | **DONE** — Added `OwnerEmail` from `owner.user.email`. Foundation hardening PR. |
+| ~~B-280~~ | ~~Document `graph.User.Email` mapping to Graph API field~~ | ~~P4~~ | **DONE** — Doc comments on `User.Email` and `toUser()`. Foundation hardening PR. |
+| ~~B-281~~ | ~~Vault parent-chain ordering assumption in RemoteObserver~~ | ~~P2~~ | **DONE** — Two-pass delta processing in `fetchPage()`. Safety-critical fix. Foundation hardening PR. |
+| ~~B-282~~ | ~~Add `HashesComputed` counter to `ObserverStats`~~ | ~~P4~~ | **DONE** — Atomic counter in `classifyAndConvert()`. Foundation hardening PR. |
 
 ## Hardening: CLI Architecture
 
@@ -60,6 +60,7 @@ Edge cases and correctness for `internal/graph/`.
 | B-020 | SharePoint lock check before upload (HTTP 423) | P2 | Avoid overwriting co-authored documents. |
 | B-021 | Hash fallback chain for missing hashes | P2 | Some Business/SharePoint files lack any hash. Fall back: QuickXorHash → SHA256 → size+eTag+mtime. |
 | B-007 | Cross-drive DriveID handling for shared/remote items | P3 | Partially done: `resolveParentDriveID()` handles cross-drive parent chains. Needs exhaustive E2E testing. |
+| B-283 | URL-encode query parameter in `SearchSites()` | P3 | `SearchSites` passes raw query to `fmt.Sprintf` URL — spaces/special chars will break the request. Use `url.QueryEscape()`. |
 
 ## Hardening: Watch Mode
 

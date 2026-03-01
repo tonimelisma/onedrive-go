@@ -92,6 +92,20 @@ func TestMatchDrive_DisplayNameMatch(t *testing.T) {
 	assert.Equal(t, driveid.MustCanonicalID("business:alice@contoso.com"), id)
 }
 
+func TestMatchDrive_DisplayNameMatch_CaseInsensitive(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive", DisplayName: "My Drive"}
+
+	id, _, err := MatchDrive(cfg, "my drive", testLogger(t))
+	require.NoError(t, err)
+	assert.Equal(t, driveid.MustCanonicalID("personal:toni@outlook.com"), id)
+
+	// Also match with ALL CAPS.
+	id2, _, err := MatchDrive(cfg, "MY DRIVE", testLogger(t))
+	require.NoError(t, err)
+	assert.Equal(t, driveid.MustCanonicalID("personal:toni@outlook.com"), id2)
+}
+
 func TestMatchDrive_PartialMatch(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive"}
@@ -233,6 +247,17 @@ func TestBuildResolvedDrive_DisplayNameAndDriveID(t *testing.T) {
 	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("personal:toni@outlook.com"), drive, testLogger(t))
 	assert.Equal(t, "home", resolved.DisplayName)
 	assert.Equal(t, driveid.New("abc123"), resolved.DriveID)
+}
+
+func TestBuildResolvedDrive_OwnerField(t *testing.T) {
+	cfg := DefaultConfig()
+	drive := &Drive{
+		SyncDir: "~/OneDrive",
+		Owner:   "Alice Smith",
+	}
+
+	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("personal:toni@outlook.com"), drive, testLogger(t))
+	assert.Equal(t, "Alice Smith", resolved.Owner)
 }
 
 func TestBuildResolvedDrive_DefaultSyncDir_Personal(t *testing.T) {
