@@ -12,11 +12,11 @@ import (
 )
 
 func TestDriveSession_Fields(t *testing.T) {
-	// DriveSession should expose Client, Transfer, TokenSource, DriveID, Resolved.
+	// DriveSession should expose Client, Transfer, DriveID, Resolved.
+	// TokenSource was removed — it was set but never read by any caller.
 	var ds DriveSession
 	assert.Nil(t, ds.Client)
 	assert.Nil(t, ds.Transfer)
-	assert.Nil(t, ds.TokenSource)
 	assert.True(t, ds.DriveID.IsZero())
 	assert.Nil(t, ds.Resolved)
 }
