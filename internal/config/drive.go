@@ -217,7 +217,7 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 // doesn't contain metadata. Uses tokenfile.ReadMeta (leaf package) to avoid
 // an import cycle with graph.
 func ReadTokenMetaForSyncDir(cid driveid.CanonicalID, logger *slog.Logger) (orgName, displayName string) {
-	tokenPath := DriveTokenPath(cid)
+	tokenPath := DriveTokenPath(cid, nil)
 	if tokenPath == "" {
 		return "", ""
 	}
@@ -249,7 +249,7 @@ func CollectOtherSyncDirs(cfg *Config, excludeID driveid.CanonicalID, logger *sl
 		if dir == "" {
 			// Compute base name for this drive (without collision cascade).
 			orgName, _ := ReadTokenMetaForSyncDir(id, logger)
-			dir = BaseSyncDir(id, orgName)
+			dir = BaseSyncDir(id, orgName, cfg.Drives[id].DisplayName)
 		}
 
 		if dir != "" {
@@ -370,24 +370,24 @@ func discoverTokensIn(dir string, logger *slog.Logger) []driveid.CanonicalID {
 
 // DriveTokenPath returns the token file path for a canonical drive ID.
 // SharePoint drives share the business account's token since they use the
-// same OAuth session. For example:
+// same OAuth session. Shared drives piggyback on their primary account's
+// token (personal or business), resolved by scanning cfg.Drives.
 //
-//	"personal:toni@outlook.com" -> "{dataDir}/token_personal_toni@outlook.com.json"
-//	"sharepoint:alice@contoso.com:marketing:Docs" -> "{dataDir}/token_business_alice@contoso.com.json"
+// Examples:
 //
-// For shared drives, callers should resolve the token canonical ID first using
-// TokenCanonicalID(cid, cfg) and pass the result to this function.
-func DriveTokenPath(canonicalID driveid.CanonicalID) string {
+//	"personal:toni@outlook.com"                    -> "{dataDir}/token_personal_toni@outlook.com.json"
+//	"sharepoint:alice@contoso.com:marketing:Docs"  -> "{dataDir}/token_business_alice@contoso.com.json"
+//	"shared:alice@outlook.com:drv123:item456"      -> "{dataDir}/token_personal_alice@outlook.com.json" (with config)
+//
+// The cfg parameter is only required for shared drives. Pass nil for
+// personal, business, and SharePoint drives.
+func DriveTokenPath(canonicalID driveid.CanonicalID, cfg *Config) string {
 	dataDir := DefaultDataDir()
 	if dataDir == "" || canonicalID.IsZero() {
 		return ""
 	}
 
-	// Resolve token identity via TokenCanonicalID: personal/business use
-	// their own token; SharePoint shares the business token. Shared drives
-	// are not handled here — callers must resolve via TokenCanonicalID(cid, cfg)
-	// first, because shared resolution requires the config.
-	tokenCID, err := TokenCanonicalID(canonicalID, nil)
+	tokenCID, err := TokenCanonicalID(canonicalID, cfg)
 	if err != nil {
 		return ""
 	}

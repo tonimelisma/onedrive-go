@@ -63,9 +63,10 @@ type statusDrive struct {
 	State       string `json:"state"`
 }
 
-func runStatus(_ *cobra.Command, _ []string) error {
-	logger := buildLogger(nil)
-	cfgPath := resolveLoginConfigPath()
+func runStatus(cmd *cobra.Command, _ []string) error {
+	cc := mustCLIContext(cmd.Context())
+	logger := cc.Logger
+	cfgPath := resolveLoginConfigPath(cc.Flags.ConfigPath)
 
 	cfg, err := config.LoadOrDefault(cfgPath, logger)
 	if err != nil {
@@ -86,7 +87,7 @@ func runStatus(_ *cobra.Command, _ []string) error {
 
 	accounts := buildStatusAccounts(cfg, logger)
 
-	if flagJSON {
+	if cc.Flags.JSON {
 		return printStatusJSON(accounts)
 	}
 
@@ -197,7 +198,7 @@ func readAccountMeta(account string, driveIDs []driveid.CanonicalID, logger *slo
 		tokenID = findTokenFallback(account, logger)
 	}
 
-	tokenPath := config.DriveTokenPath(tokenID)
+	tokenPath := config.DriveTokenPath(tokenID, nil)
 	if tokenPath == "" {
 		return "", ""
 	}
@@ -221,7 +222,7 @@ func checkTokenState(ctx context.Context, account string, driveIDs []driveid.Can
 		tokenID = findTokenFallback(account, logger)
 	}
 
-	tokenPath := config.DriveTokenPath(tokenID)
+	tokenPath := config.DriveTokenPath(tokenID, nil)
 	if tokenPath == "" {
 		return tokenStateMissing
 	}

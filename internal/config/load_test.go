@@ -533,3 +533,75 @@ bandwidth_schedule = [
 	require.NoError(t, err)
 	require.Len(t, cfg.BandwidthSchedule, 1)
 }
+
+// --- ResolveDrives ---
+
+func TestResolveDrives_AllDrives(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive"}
+	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{SyncDir: "~/Work"}
+
+	resolved, err := ResolveDrives(cfg, nil, false, testLogger(t))
+	require.NoError(t, err)
+	assert.Len(t, resolved, 2)
+}
+
+func TestResolveDrives_FilterBySelector(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive"}
+	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{SyncDir: "~/Work"}
+
+	resolved, err := ResolveDrives(cfg, []string{"personal"}, false, testLogger(t))
+	require.NoError(t, err)
+	require.Len(t, resolved, 1)
+	assert.Equal(t, "personal:toni@outlook.com", resolved[0].CanonicalID.String())
+}
+
+func TestResolveDrives_ExcludesPausedByDefault(t *testing.T) {
+	paused := true
+	cfg := DefaultConfig()
+	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive"}
+	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{
+		SyncDir: "~/Work",
+		Paused:  &paused,
+	}
+
+	resolved, err := ResolveDrives(cfg, nil, false, testLogger(t))
+	require.NoError(t, err)
+	assert.Len(t, resolved, 1)
+	assert.Equal(t, "personal:toni@outlook.com", resolved[0].CanonicalID.String())
+}
+
+func TestResolveDrives_IncludePausedWhenRequested(t *testing.T) {
+	paused := true
+	cfg := DefaultConfig()
+	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive"}
+	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{
+		SyncDir: "~/Work",
+		Paused:  &paused,
+	}
+
+	resolved, err := ResolveDrives(cfg, nil, true, testLogger(t))
+	require.NoError(t, err)
+	assert.Len(t, resolved, 2)
+}
+
+func TestResolveDrives_SortedByCanonicalID(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Drives[driveid.MustCanonicalID("personal:zack@outlook.com")] = Drive{SyncDir: "~/OneDrive"}
+	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{SyncDir: "~/Work"}
+
+	resolved, err := ResolveDrives(cfg, nil, false, testLogger(t))
+	require.NoError(t, err)
+	require.Len(t, resolved, 2)
+	assert.Equal(t, "business:alice@contoso.com", resolved[0].CanonicalID.String())
+	assert.Equal(t, "personal:zack@outlook.com", resolved[1].CanonicalID.String())
+}
+
+func TestResolveDrives_ZeroDrives(t *testing.T) {
+	cfg := DefaultConfig()
+
+	resolved, err := ResolveDrives(cfg, nil, false, testLogger(t))
+	require.NoError(t, err)
+	assert.Empty(t, resolved)
+}

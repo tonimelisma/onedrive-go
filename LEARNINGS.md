@@ -508,5 +508,11 @@ Per-request Retry-After + exponential backoff with jitter. No shared gate across
 ### SyncRoot overlap must be validated at both config and runtime
 `checkSyncDirOverlap(cfg)` uses `filepath.Clean` + `strings.HasPrefix` with separator suffix (prevents false match on prefix-named dirs). Called from `validateDrives()` at config load AND `Orchestrator.Start()` for runtime defaults. Symlink resolution is lexical only — known limitation.
 
+### Two-phase CLIContext initialization
+`PersistentPreRunE` runs two phases for all commands. Phase 1 (always): read Cobra flags into `CLIFlags`, build bootstrap logger, create `CLIContext` with `Flags` + `Logger`. Phase 2 (data commands only, skip via `skipConfigAnnotation`): load config, resolve drive, rebuild logger with config-based log level, populate `Cfg` + `RawConfig`. Auth commands get `CLIContext` with nil `Cfg`/`RawConfig` — they access `cc.Flags.ConfigPath` etc. No global flag variables anywhere.
+
+### DriveSession replaces clientAndDrive() 4-tuple
+`DriveSession` struct bundles `Client` (30s timeout), `Transfer` (no timeout), `TokenSource`, `DriveID`, and `Resolved`. `NewDriveSession(ctx, resolved, cfg, logger)` handles token resolution (including shared drives via `DriveTokenPath(cid, cfg)`), client creation, and drive discovery. Single constructor replaces boilerplate repeated in 9 call sites.
+
 ### DriveTypeShared needs explicit handling in every drive-type switch
 `BaseSyncDir()`, `DefaultSyncDir()`, `DriveTokenPath()`, `CollectOtherSyncDirs()` — all need shared drive cases. Missing cases return "" or empty, causing silent failures. Check all type-switch statements when adding new drive types.

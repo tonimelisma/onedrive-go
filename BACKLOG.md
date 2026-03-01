@@ -37,12 +37,12 @@ Defensive coding and edge cases for `internal/driveid/` and `internal/graph/`.
 
 ## Hardening: CLI Architecture
 
-Code quality and architecture improvements for the root package. Root package is at **35.5% coverage** — the weakest link. B-223 folded into Phase 6.0a. B-224 should open Phase 6 alongside it.
+Code quality and architecture improvements for the root package. Root package at **39.9% coverage** (up from 35.5% after 6.0a).
 
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
-| ~~B-223~~ | ~~Extract `DriveSession` type for per-drive resource lifecycle~~ | ~~P1~~ | **Folded into Phase 6.0a** — DriveSession extraction is roadmap increment 6.0a item 1. |
-| B-224 | Eliminate global flag variables (`flagJSON`, `flagVerbose`, etc.) | P1 | Move to `CLIFlags` struct in `CLIContext`. Eliminates test pollution. **Should open Phase 6.** |
+| ~~B-223~~ | ~~Extract `DriveSession` type for per-drive resource lifecycle~~ | ~~P1~~ | **DONE** — Phase 6.0a. `DriveSession` struct with Client, Transfer, TokenSource, DriveID, Resolved. `NewDriveSession()` constructor. Replaced 9 `clientAndDrive()` call sites. |
+| ~~B-224~~ | ~~Eliminate global flag variables (`flagJSON`, `flagVerbose`, etc.)~~ | ~~P1~~ | **DONE** — Phase 6.0a. Two-phase CLIContext: `CLIFlags` struct populated for all commands (Phase 1), config resolved for data commands (Phase 2). Zero global flag variables. |
 | B-227 | Deduplicate sync_dir and StatePath validation across commands | P3 | Extract `RequireSyncDir()` and `RequireStatePath()` on `CLIContext`. |
 | ~~B-228~~ | ~~`buildLogger` silent fallthrough on unknown log level~~ | ~~P3~~ | Fixed in Phase 5.5: added `warn` case and `default` with stderr warning. |
 | B-232 | Test coverage for `loadConfig` error paths | P3 | Invalid TOML, ambiguous drive, wrong context type, unknown log level. |
@@ -60,7 +60,7 @@ Edge cases and correctness for `internal/graph/`.
 | B-020 | SharePoint lock check before upload (HTTP 423) | P2 | Avoid overwriting co-authored documents. |
 | B-021 | Hash fallback chain for missing hashes | P2 | Some Business/SharePoint files lack any hash. Fall back: QuickXorHash → SHA256 → size+eTag+mtime. |
 | ~~B-007~~ | ~~Cross-drive DriveID handling for shared/remote items~~ | ~~P3~~ | **Folded into Phase 6.4a** — remoteItem parsing and cross-drive DriveID handling is roadmap increment 6.4a. |
-| B-283 | URL-encode query parameter in `SearchSites()` | P2 | `SearchSites` passes raw query to `fmt.Sprintf` URL — spaces/special chars will break the request. Use `url.QueryEscape()`. One-liner fix but needs test. |
+| ~~B-283~~ | ~~URL-encode query parameter in `SearchSites()`~~ | ~~P2~~ | **DONE** — Phase 6.0a. Added `url.QueryEscape(query)` in SearchSites URL construction. |
 
 ## Hardening: Config
 

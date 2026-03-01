@@ -614,6 +614,24 @@ func TestToDrive_OwnerEmail(t *testing.T) {
 	assert.Equal(t, "alice@contoso.com", drives[0].OwnerEmail)
 }
 
+func TestSearchSites_URLEncodesQuery(t *testing.T) {
+	// B-283: Special characters in search queries must be URL-encoded
+	// to prevent malformed Graph API requests.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The query "Sales & Marketing" should be URL-encoded in the request.
+		assert.Contains(t, r.URL.RawQuery, "search=Sales+%26+Marketing")
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"value": []}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.SearchSites(context.Background(), "Sales & Marketing", 10)
+	require.NoError(t, err)
+}
+
 func TestToDrive_NilQuota(t *testing.T) {
 	dr := &driveResponse{
 		ID:        "d2",

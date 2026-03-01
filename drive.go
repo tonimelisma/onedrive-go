@@ -68,9 +68,10 @@ type driveListEntry struct {
 }
 
 func runDriveList(cmd *cobra.Command, _ []string) error {
-	logger := buildLogger(nil)
+	cc := mustCLIContext(cmd.Context())
+	logger := cc.Logger
 	ctx := cmd.Context()
-	cfgPath := resolveLoginConfigPath()
+	cfgPath := resolveLoginConfigPath(cc.Flags.ConfigPath)
 
 	cfg, err := config.LoadOrDefault(cfgPath, logger)
 	if err != nil {
@@ -83,7 +84,7 @@ func runDriveList(cmd *cobra.Command, _ []string) error {
 	// Section 2: available drives from network (best-effort).
 	available := discoverAvailableDrives(ctx, cfg, logger)
 
-	if flagJSON {
+	if cc.Flags.JSON {
 		return printDriveListJSON(configured, available)
 	}
 
@@ -152,7 +153,7 @@ func discoverAvailableDrives(ctx context.Context, cfg *config.Config, logger *sl
 	var entries []driveListEntry
 
 	for _, tokenCID := range tokens {
-		tokenPath := config.DriveTokenPath(tokenCID)
+		tokenPath := config.DriveTokenPath(tokenCID, nil)
 		if tokenPath == "" {
 			continue
 		}
@@ -383,9 +384,10 @@ Examples:
 	}
 }
 
-func runDriveAdd(_ *cobra.Command, args []string) error {
-	logger := buildLogger(nil)
-	cfgPath := resolveLoginConfigPath()
+func runDriveAdd(cmd *cobra.Command, args []string) error {
+	cc := mustCLIContext(cmd.Context())
+	logger := cc.Logger
+	cfgPath := resolveLoginConfigPath(cc.Flags.ConfigPath)
 
 	cfg, err := config.LoadOrDefault(cfgPath, logger)
 	if err != nil {
@@ -399,8 +401,8 @@ func runDriveAdd(_ *cobra.Command, args []string) error {
 	}
 
 	// Also accept --drive for backwards compatibility.
-	if selector == "" && flagDrive != "" {
-		selector = flagDrive
+	if selector == "" && cc.Flags.Drive != "" {
+		selector = cc.Flags.Drive
 	}
 
 	if selector == "" {
@@ -430,7 +432,7 @@ func addNewDrive(cfgPath string, cfg *config.Config, cid driveid.CanonicalID, lo
 		return fmt.Errorf("cannot resolve token for %s: %w", cid.String(), err)
 	}
 
-	tokenPath := config.DriveTokenPath(tokenCID)
+	tokenPath := config.DriveTokenPath(tokenCID, nil)
 	if tokenPath == "" {
 		return fmt.Errorf("cannot determine data directory for %s", cid.Email())
 	}
@@ -486,9 +488,10 @@ The sync directory is never deleted automatically.`,
 }
 
 func runDriveRemove(cmd *cobra.Command, _ []string) error {
-	logger := buildLogger(nil)
+	cc := mustCLIContext(cmd.Context())
+	logger := cc.Logger
 
-	if flagDrive == "" {
+	if cc.Flags.Drive == "" {
 		return fmt.Errorf("--drive is required (specify which drive to remove)")
 	}
 
@@ -497,20 +500,20 @@ func runDriveRemove(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("reading --purge flag: %w", err)
 	}
 
-	cfgPath := resolveLoginConfigPath()
+	cfgPath := resolveLoginConfigPath(cc.Flags.ConfigPath)
 
 	cfg, err := config.LoadOrDefault(cfgPath, logger)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	cid, cidErr := driveid.NewCanonicalID(flagDrive)
+	cid, cidErr := driveid.NewCanonicalID(cc.Flags.Drive)
 	if cidErr != nil {
-		return fmt.Errorf("invalid drive ID %q: %w", flagDrive, cidErr)
+		return fmt.Errorf("invalid drive ID %q: %w", cc.Flags.Drive, cidErr)
 	}
 
 	if _, exists := cfg.Drives[cid]; !exists {
-		return fmt.Errorf("drive %q not found in config", flagDrive)
+		return fmt.Errorf("drive %q not found in config", cc.Flags.Drive)
 	}
 
 	logger.Info("removing drive", "drive", cid.String(), "purge", purge)
@@ -586,15 +589,16 @@ type driveSearchResult struct {
 const sharePointSearchLimit = 50
 
 func runDriveSearch(cmd *cobra.Command, args []string) error {
-	logger := buildLogger(nil)
+	cc := mustCLIContext(cmd.Context())
+	logger := cc.Logger
 	ctx := cmd.Context()
 	query := args[0]
 
-	businessTokens := findBusinessTokens(flagAccount, logger)
+	businessTokens := findBusinessTokens(cc.Flags.Account, logger)
 
 	if len(businessTokens) == 0 {
-		if flagAccount != "" {
-			return fmt.Errorf("no business account found for %s — run 'onedrive-go login' first", flagAccount)
+		if cc.Flags.Account != "" {
+			return fmt.Errorf("no business account found for %s — run 'onedrive-go login' first", cc.Flags.Account)
 		}
 
 		return fmt.Errorf("no business accounts found — SharePoint search requires a business account")
@@ -607,7 +611,7 @@ func runDriveSearch(cmd *cobra.Command, args []string) error {
 		results = append(results, accountResults...)
 	}
 
-	if flagJSON {
+	if cc.Flags.JSON {
 		return printDriveSearchJSON(results)
 	}
 
@@ -638,7 +642,7 @@ func findBusinessTokens(accountFilter string, logger *slog.Logger) []driveid.Can
 func searchAccountSharePoint(
 	ctx context.Context, tokenCID driveid.CanonicalID, query string, logger *slog.Logger,
 ) []driveSearchResult {
-	tokenPath := config.DriveTokenPath(tokenCID)
+	tokenPath := config.DriveTokenPath(tokenCID, nil)
 	if tokenPath == "" {
 		return nil
 	}

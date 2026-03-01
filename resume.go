@@ -26,24 +26,25 @@ Examples:
 	}
 }
 
-func runResume(_ *cobra.Command, _ []string) error {
-	logger := buildLogger(nil)
-	cfgPath := resolveLoginConfigPath()
+func runResume(cmd *cobra.Command, _ []string) error {
+	cc := mustCLIContext(cmd.Context())
+	logger := cc.Logger
+	cfgPath := resolveLoginConfigPath(cc.Flags.ConfigPath)
 
 	cfg, err := config.LoadOrDefault(cfgPath, logger)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	if flagDrive != "" {
-		return resumeSingleDrive(cfgPath, cfg, flagDrive)
+	if cc.Flags.Drive != "" {
+		return resumeSingleDrive(cfgPath, cfg, cc.Flags.Drive, cc.Flags.Quiet)
 	}
 
-	return resumeAllDrives(cfgPath, cfg)
+	return resumeAllDrives(cfgPath, cfg, cc.Flags.Quiet)
 }
 
 // resumeSingleDrive resumes a specific drive by canonical ID.
-func resumeSingleDrive(cfgPath string, cfg *config.Config, selector string) error {
+func resumeSingleDrive(cfgPath string, cfg *config.Config, selector string, quiet bool) error {
 	cid, err := driveid.NewCanonicalID(selector)
 	if err != nil {
 		return fmt.Errorf("invalid drive ID %q: %w", selector, err)
@@ -55,7 +56,7 @@ func resumeSingleDrive(cfgPath string, cfg *config.Config, selector string) erro
 	}
 
 	if d.Paused == nil || !*d.Paused {
-		statusf("Drive %s is not paused\n", cid.String())
+		statusf(quiet, "Drive %s is not paused\n", cid.String())
 
 		return nil
 	}
@@ -64,14 +65,14 @@ func resumeSingleDrive(cfgPath string, cfg *config.Config, selector string) erro
 		return err
 	}
 
-	statusf("Drive %s resumed\n", cid.String())
-	notifyDaemon()
+	statusf(quiet, "Drive %s resumed\n", cid.String())
+	notifyDaemon(quiet)
 
 	return nil
 }
 
 // resumeAllDrives resumes every paused drive in the config.
-func resumeAllDrives(cfgPath string, cfg *config.Config) error {
+func resumeAllDrives(cfgPath string, cfg *config.Config, quiet bool) error {
 	if len(cfg.Drives) == 0 {
 		return fmt.Errorf("no drives configured")
 	}
@@ -88,17 +89,17 @@ func resumeAllDrives(cfgPath string, cfg *config.Config) error {
 			return fmt.Errorf("resuming %s: %w", cid.String(), err)
 		}
 
-		statusf("Drive %s resumed\n", cid.String())
+		statusf(quiet, "Drive %s resumed\n", cid.String())
 		resumed++
 	}
 
 	if resumed == 0 {
-		statusf("No paused drives found\n")
+		statusf(quiet, "No paused drives found\n")
 
 		return nil
 	}
 
-	notifyDaemon()
+	notifyDaemon(quiet)
 
 	return nil
 }

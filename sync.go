@@ -53,7 +53,7 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	// second signal force-exits. Applies to both one-shot and watch modes.
 	ctx := shutdownContext(cmd.Context(), logger)
 
-	client, ts, driveID, err := clientAndDrive(ctx, cc)
+	session, err := NewDriveSession(ctx, cc.Cfg, cc.RawConfig, cc.Logger)
 	if err != nil {
 		return err
 	}
@@ -68,19 +68,16 @@ func runSync(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("cannot determine state DB path for drive %q", cc.Cfg.CanonicalID)
 	}
 
-	// Use transfer client (no timeout) for download/upload operations.
-	transferClient := newTransferGraphClient(ts, logger)
-
 	engine, err := sync.NewEngine(&sync.EngineConfig{
 		DBPath:        dbPath,
 		SyncRoot:      syncDir,
 		DataDir:       config.DefaultDataDir(),
-		DriveID:       driveID,
-		Fetcher:       client,
-		Items:         client,
-		Downloads:     transferClient,
-		Uploads:       transferClient,
-		DriveVerifier: client,
+		DriveID:       session.DriveID,
+		Fetcher:       session.Client,
+		Items:         session.Client,
+		Downloads:     session.Transfer,
+		Uploads:       session.Transfer,
+		DriveVerifier: session.Client,
 		Logger:        logger,
 		UseLocalTrash: cc.Cfg.UseLocalTrash,
 	})
@@ -95,7 +92,7 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	}
 
 	if watch {
-		cfgPath := resolveLoginConfigPath()
+		cfgPath := resolveLoginConfigPath(cc.Flags.ConfigPath)
 
 		return runSyncWatch(ctx, engine, mode, sync.WatchOpts{
 			Force: force,
@@ -118,7 +115,7 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	})
 
 	if report != nil {
-		printSyncReport(report)
+		printSyncReport(report, cc.Flags.Quiet)
 	}
 
 	return err
@@ -141,68 +138,68 @@ func syncModeFromFlags(cmd *cobra.Command) sync.SyncMode {
 }
 
 // printSyncReport formats and prints the sync report to stderr.
-func printSyncReport(r *sync.SyncReport) {
+func printSyncReport(r *sync.SyncReport, quiet bool) {
 	if r.DryRun {
-		statusf("Dry run — no changes applied\n")
+		statusf(quiet, "Dry run — no changes applied\n")
 	}
 
-	statusf("Mode: %s\n", r.Mode)
-	statusf("Duration: %s\n", r.Duration)
+	statusf(quiet, "Mode: %s\n", r.Mode)
+	statusf(quiet, "Duration: %s\n", r.Duration)
 
 	total := r.FolderCreates + r.Moves + r.Downloads + r.Uploads +
 		r.LocalDeletes + r.RemoteDeletes + r.Conflicts +
 		r.SyncedUpdates + r.Cleanups
 
 	if total == 0 {
-		statusf("No changes detected\n")
+		statusf(quiet, "No changes detected\n")
 		return
 	}
 
-	statusf("\nPlan:\n")
+	statusf(quiet, "\nPlan:\n")
 
 	if r.FolderCreates > 0 {
-		statusf("  Folder creates: %d\n", r.FolderCreates)
+		statusf(quiet, "  Folder creates: %d\n", r.FolderCreates)
 	}
 
 	if r.Moves > 0 {
-		statusf("  Moves:          %d\n", r.Moves)
+		statusf(quiet, "  Moves:          %d\n", r.Moves)
 	}
 
 	if r.Downloads > 0 {
-		statusf("  Downloads:      %d\n", r.Downloads)
+		statusf(quiet, "  Downloads:      %d\n", r.Downloads)
 	}
 
 	if r.Uploads > 0 {
-		statusf("  Uploads:        %d\n", r.Uploads)
+		statusf(quiet, "  Uploads:        %d\n", r.Uploads)
 	}
 
 	if r.LocalDeletes > 0 {
-		statusf("  Local deletes:  %d\n", r.LocalDeletes)
+		statusf(quiet, "  Local deletes:  %d\n", r.LocalDeletes)
 	}
 
 	if r.RemoteDeletes > 0 {
-		statusf("  Remote deletes: %d\n", r.RemoteDeletes)
+		statusf(quiet, "  Remote deletes: %d\n", r.RemoteDeletes)
 	}
 
 	if r.Conflicts > 0 {
-		statusf("  Conflicts:      %d\n", r.Conflicts)
+		statusf(quiet, "  Conflicts:      %d\n", r.Conflicts)
 	}
 
 	if r.SyncedUpdates > 0 {
-		statusf("  Synced updates: %d\n", r.SyncedUpdates)
+		statusf(quiet, "  Synced updates: %d\n", r.SyncedUpdates)
 	}
 
 	if r.Cleanups > 0 {
-		statusf("  Cleanups:       %d\n", r.Cleanups)
+		statusf(quiet, "  Cleanups:       %d\n", r.Cleanups)
 	}
 
 	if !r.DryRun {
-		statusf("\nResults:\n")
-		statusf("  Succeeded: %d\n", r.Succeeded)
-		statusf("  Failed:    %d\n", r.Failed)
+		statusf(quiet, "\nResults:\n")
+		statusf(quiet, "  Succeeded: %d\n", r.Succeeded)
+		statusf(quiet, "  Failed:    %d\n", r.Failed)
 
 		for _, e := range r.Errors {
-			statusf("  Error:     %v\n", e)
+			statusf(quiet, "  Error:     %v\n", e)
 		}
 	}
 }

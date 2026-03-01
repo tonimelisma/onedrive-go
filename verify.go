@@ -47,7 +47,7 @@ func runVerify(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	if flagJSON {
+	if cc.Flags.JSON {
 		if err := printVerifyJSON(report); err != nil {
 			return err
 		}

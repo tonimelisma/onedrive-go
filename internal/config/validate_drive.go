@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"path/filepath"
+	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
@@ -22,6 +24,8 @@ func validateDrives(cfg *Config) []error {
 		drive := cfg.Drives[id]
 		errs = append(errs, validateSingleDrive(id, &drive, syncDirs)...)
 	}
+
+	errs = append(errs, checkSyncDirOverlap(syncDirs)...)
 
 	return errs
 }
@@ -62,4 +66,45 @@ func checkDriveSyncDirUniqueness(id string, drive *Drive, seen map[string]string
 	seen[expanded] = id
 
 	return nil
+}
+
+// checkSyncDirOverlap detects ancestor/descendant relationships between sync
+// directories. Two drives whose sync_dirs overlap (one is a parent of the other)
+// would cause file conflicts and duplicate syncing. The syncDirs map contains
+// expanded paths -> canonical IDs, populated by checkDriveSyncDirUniqueness.
+func checkSyncDirOverlap(syncDirs map[string]string) []error {
+	// Collect all expanded paths for pairwise comparison.
+	type entry struct {
+		path string
+		id   string
+	}
+
+	entries := make([]entry, 0, len(syncDirs))
+	for path, id := range syncDirs {
+		entries = append(entries, entry{path: filepath.Clean(path), id: id})
+	}
+
+	var errs []error
+
+	for i := range entries {
+		for j := i + 1; j < len(entries); j++ {
+			if isAncestorOrDescendant(entries[i].path, entries[j].path) {
+				errs = append(errs, fmt.Errorf(
+					"sync_dir overlap: drives %q and %q have nested directories (%s, %s)",
+					entries[i].id, entries[j].id, entries[i].path, entries[j].path))
+			}
+		}
+	}
+
+	return errs
+}
+
+// isAncestorOrDescendant returns true if a is an ancestor of b or b is an
+// ancestor of a. Uses filepath.Separator suffix to avoid false positives from
+// path prefixes (e.g., "/OneDrive" vs "/OneDriveBackup").
+func isAncestorOrDescendant(a, b string) bool {
+	aSlash := a + string(filepath.Separator)
+	bSlash := b + string(filepath.Separator)
+
+	return strings.HasPrefix(bSlash, aSlash) || strings.HasPrefix(aSlash, bSlash)
 }

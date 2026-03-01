@@ -573,28 +573,45 @@ func TestSanitizePathComponent_Empty(t *testing.T) {
 // --- BaseSyncDir tests ---
 
 func TestBaseSyncDir_Personal(t *testing.T) {
-	result := BaseSyncDir(driveid.MustCanonicalID("personal:user@example.com"), "")
+	result := BaseSyncDir(driveid.MustCanonicalID("personal:user@example.com"), "", "")
 	assert.Equal(t, "~/OneDrive", result)
 }
 
 func TestBaseSyncDir_Business_WithOrg(t *testing.T) {
-	result := BaseSyncDir(driveid.MustCanonicalID("business:alice@contoso.com"), "Contoso")
+	result := BaseSyncDir(driveid.MustCanonicalID("business:alice@contoso.com"), "Contoso", "")
 	assert.Equal(t, "~/OneDrive - Contoso", result)
 }
 
 func TestBaseSyncDir_Business_NoOrg(t *testing.T) {
-	result := BaseSyncDir(driveid.MustCanonicalID("business:alice@contoso.com"), "")
+	result := BaseSyncDir(driveid.MustCanonicalID("business:alice@contoso.com"), "", "")
 	assert.Equal(t, "~/OneDrive - Business", result)
 }
 
 func TestBaseSyncDir_SharePoint(t *testing.T) {
-	result := BaseSyncDir(driveid.MustCanonicalID("sharepoint:alice@contoso.com:marketing:Documents"), "")
+	result := BaseSyncDir(driveid.MustCanonicalID("sharepoint:alice@contoso.com:marketing:Documents"), "", "")
 	assert.Equal(t, "~/SharePoint - marketing - Documents", result)
 }
 
 func TestBaseSyncDir_SharePoint_NoSiteOrLib(t *testing.T) {
-	result := BaseSyncDir(driveid.MustCanonicalID("sharepoint:alice@contoso.com"), "")
+	result := BaseSyncDir(driveid.MustCanonicalID("sharepoint:alice@contoso.com"), "", "")
 	assert.Equal(t, "~/SharePoint", result)
+}
+
+func TestBaseSyncDir_Shared_WithDisplayName(t *testing.T) {
+	result := BaseSyncDir(driveid.MustCanonicalID("shared:alice@contoso.com:drv123:item456"), "", "Project Alpha")
+	assert.Equal(t, "~/OneDrive-Shared/Project Alpha", result)
+}
+
+func TestBaseSyncDir_Shared_NoDisplayName(t *testing.T) {
+	result := BaseSyncDir(driveid.MustCanonicalID("shared:alice@contoso.com:drv123:item456"), "", "")
+	assert.Equal(t, "~/OneDrive-Shared", result)
+}
+
+func TestBaseSyncDir_Shared_UnsafeCharsInDisplayName(t *testing.T) {
+	// SanitizePathComponent replaces filesystem-unsafe chars (/ \ : < > " | ? *)
+	// but not ampersand (filesystem-safe).
+	result := BaseSyncDir(driveid.MustCanonicalID("shared:alice@contoso.com:drv123:item456"), "", "Sales & Marketing/Q1")
+	assert.Equal(t, "~/OneDrive-Shared/Sales & Marketing-Q1", result)
 }
 
 // --- Comment preservation tests ---
