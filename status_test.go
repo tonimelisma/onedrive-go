@@ -9,14 +9,14 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-func TestDriveState_Enabled(t *testing.T) {
+func TestDriveState_Ready(t *testing.T) {
 	d := &config.Drive{}
 	assert.Equal(t, "ready", driveState(d, tokenStateValid))
 }
 
 func TestDriveState_Paused(t *testing.T) {
-	enabled := false
-	d := &config.Drive{Enabled: &enabled}
+	paused := true
+	d := &config.Drive{Paused: &paused}
 	assert.Equal(t, "paused", driveState(d, tokenStateValid))
 }
 
@@ -27,8 +27,8 @@ func TestDriveState_NoToken(t *testing.T) {
 
 func TestDriveState_PausedOverridesNoToken(t *testing.T) {
 	// Paused takes priority over no token — the drive is intentionally paused.
-	enabled := false
-	d := &config.Drive{Enabled: &enabled}
+	paused := true
+	d := &config.Drive{Paused: &paused}
 	assert.Equal(t, "paused", driveState(d, tokenStateMissing))
 }
 
