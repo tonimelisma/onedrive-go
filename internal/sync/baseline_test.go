@@ -623,11 +623,11 @@ func TestCommit_DeltaToken(t *testing.T) {
 
 	commitAll(t, mgr, ctx, outcomes)
 
-	if err := mgr.CommitDeltaToken(ctx, "token-abc", "d"); err != nil {
+	if err := mgr.CommitDeltaToken(ctx, "token-abc", "d", "", "d"); err != nil {
 		t.Fatalf("CommitDeltaToken: %v", err)
 	}
 
-	token, err := mgr.GetDeltaToken(ctx, "d")
+	token, err := mgr.GetDeltaToken(ctx, "d", "")
 	if err != nil {
 		t.Fatalf("GetDeltaToken: %v", err)
 	}
@@ -656,7 +656,7 @@ func TestCommit_DeltaTokenUpdate(t *testing.T) {
 	// First commit with token.
 	commitAll(t, mgr, ctx, outcomes)
 
-	if err := mgr.CommitDeltaToken(ctx, "token-1", "d"); err != nil {
+	if err := mgr.CommitDeltaToken(ctx, "token-1", "d", "", "d"); err != nil {
 		t.Fatalf("first CommitDeltaToken: %v", err)
 	}
 
@@ -666,11 +666,11 @@ func TestCommit_DeltaTokenUpdate(t *testing.T) {
 
 	commitAll(t, mgr, ctx, outcomes)
 
-	if err := mgr.CommitDeltaToken(ctx, "token-2", "d"); err != nil {
+	if err := mgr.CommitDeltaToken(ctx, "token-2", "d", "", "d"); err != nil {
 		t.Fatalf("second CommitDeltaToken: %v", err)
 	}
 
-	token, err := mgr.GetDeltaToken(ctx, "d")
+	token, err := mgr.GetDeltaToken(ctx, "d", "")
 	if err != nil {
 		t.Fatalf("GetDeltaToken: %v", err)
 	}
@@ -742,7 +742,7 @@ func TestGetDeltaToken_Empty(t *testing.T) {
 	mgr := newTestManager(t)
 	ctx := context.Background()
 
-	token, err := mgr.GetDeltaToken(ctx, "nonexistent-drive")
+	token, err := mgr.GetDeltaToken(ctx, "nonexistent-drive", "")
 	if err != nil {
 		t.Fatalf("GetDeltaToken: %v", err)
 	}
@@ -770,11 +770,11 @@ func TestGetDeltaToken_AfterCommit(t *testing.T) {
 
 	commitAll(t, mgr, ctx, outcomes)
 
-	if err := mgr.CommitDeltaToken(ctx, "saved-token", "mydrv"); err != nil {
+	if err := mgr.CommitDeltaToken(ctx, "saved-token", "mydrv", "", "mydrv"); err != nil {
 		t.Fatalf("CommitDeltaToken: %v", err)
 	}
 
-	token, err := mgr.GetDeltaToken(ctx, "mydrv")
+	token, err := mgr.GetDeltaToken(ctx, "mydrv", "")
 	if err != nil {
 		t.Fatalf("GetDeltaToken: %v", err)
 	}
@@ -1684,11 +1684,11 @@ func TestCommitDeltaToken(t *testing.T) {
 
 	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 
-	if err := mgr.CommitDeltaToken(ctx, "token-abc", "d"); err != nil {
+	if err := mgr.CommitDeltaToken(ctx, "token-abc", "d", "", "d"); err != nil {
 		t.Fatalf("CommitDeltaToken: %v", err)
 	}
 
-	token, err := mgr.GetDeltaToken(ctx, "d")
+	token, err := mgr.GetDeltaToken(ctx, "d", "")
 	if err != nil {
 		t.Fatalf("GetDeltaToken: %v", err)
 	}
@@ -1706,15 +1706,15 @@ func TestCommitDeltaToken_Update(t *testing.T) {
 
 	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 
-	if err := mgr.CommitDeltaToken(ctx, "token-1", "d"); err != nil {
+	if err := mgr.CommitDeltaToken(ctx, "token-1", "d", "", "d"); err != nil {
 		t.Fatalf("first CommitDeltaToken: %v", err)
 	}
 
-	if err := mgr.CommitDeltaToken(ctx, "token-2", "d"); err != nil {
+	if err := mgr.CommitDeltaToken(ctx, "token-2", "d", "", "d"); err != nil {
 		t.Fatalf("second CommitDeltaToken: %v", err)
 	}
 
-	token, err := mgr.GetDeltaToken(ctx, "d")
+	token, err := mgr.GetDeltaToken(ctx, "d", "")
 	if err != nil {
 		t.Fatalf("GetDeltaToken: %v", err)
 	}
@@ -1731,17 +1731,94 @@ func TestCommitDeltaToken_EmptyIsNoop(t *testing.T) {
 	ctx := context.Background()
 
 	// Empty token should be a no-op.
-	if err := mgr.CommitDeltaToken(ctx, "", "d"); err != nil {
+	if err := mgr.CommitDeltaToken(ctx, "", "d", "", "d"); err != nil {
 		t.Fatalf("CommitDeltaToken: %v", err)
 	}
 
-	token, err := mgr.GetDeltaToken(ctx, "d")
+	token, err := mgr.GetDeltaToken(ctx, "d", "")
 	if err != nil {
 		t.Fatalf("GetDeltaToken: %v", err)
 	}
 
 	if token != "" {
 		t.Errorf("token = %q, want empty", token)
+	}
+}
+
+func TestCommitDeltaToken_CompositeKey_DifferentScopes(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	// Primary delta (scope_id="").
+	if err := mgr.CommitDeltaToken(ctx, "primary-token", "drv1", "", "drv1"); err != nil {
+		t.Fatalf("CommitDeltaToken primary: %v", err)
+	}
+
+	// Shortcut-scoped delta (scope_id=remoteItemID, scope_drive=remoteDriveID).
+	if err := mgr.CommitDeltaToken(ctx, "shortcut-token", "drv1", "item123", "drv2"); err != nil {
+		t.Fatalf("CommitDeltaToken shortcut: %v", err)
+	}
+
+	// Both should be independently retrievable.
+	primary, err := mgr.GetDeltaToken(ctx, "drv1", "")
+	if err != nil {
+		t.Fatalf("GetDeltaToken primary: %v", err)
+	}
+
+	if primary != "primary-token" {
+		t.Errorf("primary token = %q, want %q", primary, "primary-token")
+	}
+
+	shortcut, err := mgr.GetDeltaToken(ctx, "drv1", "item123")
+	if err != nil {
+		t.Fatalf("GetDeltaToken shortcut: %v", err)
+	}
+
+	if shortcut != "shortcut-token" {
+		t.Errorf("shortcut token = %q, want %q", shortcut, "shortcut-token")
+	}
+}
+
+func TestCommitDeltaToken_CompositeKey_UpdatePreservesOtherScopes(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	// Save two scoped tokens.
+	if err := mgr.CommitDeltaToken(ctx, "tok-a", "drv1", "", "drv1"); err != nil {
+		t.Fatalf("CommitDeltaToken: %v", err)
+	}
+
+	if err := mgr.CommitDeltaToken(ctx, "tok-b", "drv1", "scope1", "drv2"); err != nil {
+		t.Fatalf("CommitDeltaToken: %v", err)
+	}
+
+	// Update only the primary.
+	if err := mgr.CommitDeltaToken(ctx, "tok-a-updated", "drv1", "", "drv1"); err != nil {
+		t.Fatalf("CommitDeltaToken update: %v", err)
+	}
+
+	// Primary should be updated.
+	primary, err := mgr.GetDeltaToken(ctx, "drv1", "")
+	if err != nil {
+		t.Fatalf("GetDeltaToken: %v", err)
+	}
+
+	if primary != "tok-a-updated" {
+		t.Errorf("primary = %q, want %q", primary, "tok-a-updated")
+	}
+
+	// Other scope should be unchanged.
+	scoped, err := mgr.GetDeltaToken(ctx, "drv1", "scope1")
+	if err != nil {
+		t.Fatalf("GetDeltaToken: %v", err)
+	}
+
+	if scoped != "tok-b" {
+		t.Errorf("scoped = %q, want %q", scoped, "tok-b")
 	}
 }
 

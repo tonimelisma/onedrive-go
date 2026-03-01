@@ -21,7 +21,7 @@ const (
 		local_hash, remote_hash, size, mtime, synced_at, etag
 		FROM baseline`
 
-	sqlGetDeltaToken = `SELECT token FROM delta_tokens WHERE drive_id = ?` //nolint:gosec // G101: "token" is a delta cursor, not credentials
+	sqlGetDeltaToken = `SELECT token FROM delta_tokens WHERE drive_id = ? AND scope_id = ?` //nolint:gosec // G101: "token" is a delta cursor, not credentials
 
 	sqlUpsertBaseline = `INSERT INTO baseline
 		(path, drive_id, item_id, parent_id, item_type, local_hash, remote_hash,
@@ -47,9 +47,10 @@ const (
 		 resolution, resolved_at, resolved_by)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
-	sqlUpsertDeltaToken = `INSERT INTO delta_tokens (drive_id, token, updated_at)
-		VALUES (?, ?, ?)
-		ON CONFLICT(drive_id) DO UPDATE SET
+	sqlUpsertDeltaToken = `INSERT INTO delta_tokens (drive_id, scope_id, scope_drive, token, updated_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(drive_id, scope_id) DO UPDATE SET
+		 scope_drive = excluded.scope_drive,
 		 token = excluded.token,
 		 updated_at = excluded.updated_at`
 
@@ -212,18 +213,19 @@ func scanBaselineRow(rows *sql.Rows) (*BaselineEntry, error) {
 	return &e, nil
 }
 
-// GetDeltaToken returns the saved delta token for a drive, or empty string
-// if no token has been saved yet.
-func (m *BaselineManager) GetDeltaToken(ctx context.Context, driveID string) (string, error) {
+// GetDeltaToken returns the saved delta token for a drive and scope, or empty
+// string if no token has been saved yet. Use scopeID="" for the primary
+// drive-level delta; use a remoteItem.id for shortcut-scoped deltas.
+func (m *BaselineManager) GetDeltaToken(ctx context.Context, driveID, scopeID string) (string, error) {
 	var token string
 
-	err := m.db.QueryRowContext(ctx, sqlGetDeltaToken, driveID).Scan(&token)
+	err := m.db.QueryRowContext(ctx, sqlGetDeltaToken, driveID, scopeID).Scan(&token)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
 
 	if err != nil {
-		return "", fmt.Errorf("sync: getting delta token for drive %s: %w", driveID, err)
+		return "", fmt.Errorf("sync: getting delta token for drive %s scope %q: %w", driveID, scopeID, err)
 	}
 
 	return token, nil
@@ -323,7 +325,9 @@ func outcomeToEntry(o *Outcome, syncedAt int64) *BaselineEntry {
 
 // CommitDeltaToken persists a delta token in its own transaction, separate
 // from baseline updates. Used after all actions in a cycle complete.
-func (m *BaselineManager) CommitDeltaToken(ctx context.Context, token, driveID string) error {
+// Use scopeID="" and scopeDrive=driveID for the primary drive-level delta.
+// For shortcut-scoped deltas, scopeID=remoteItem.id and scopeDrive=remoteItem.driveId.
+func (m *BaselineManager) CommitDeltaToken(ctx context.Context, token, driveID, scopeID, scopeDrive string) error {
 	if token == "" {
 		return nil
 	}
@@ -335,7 +339,7 @@ func (m *BaselineManager) CommitDeltaToken(ctx context.Context, token, driveID s
 	defer tx.Rollback()
 
 	updatedAt := m.nowFunc().UnixNano()
-	if saveErr := m.saveDeltaToken(ctx, tx, driveID, token, updatedAt); saveErr != nil {
+	if saveErr := m.saveDeltaToken(ctx, tx, driveID, scopeID, scopeDrive, token, updatedAt); saveErr != nil {
 		return saveErr
 	}
 
@@ -345,6 +349,7 @@ func (m *BaselineManager) CommitDeltaToken(ctx context.Context, token, driveID s
 
 	m.logger.Debug("delta token committed",
 		slog.String("drive_id", driveID),
+		slog.String("scope_id", scopeID),
 	)
 
 	return nil
@@ -442,11 +447,11 @@ func commitConflict(ctx context.Context, tx *sql.Tx, o *Outcome, syncedAt int64)
 // saveDeltaToken persists the delta token in the same transaction as
 // baseline updates.
 func (m *BaselineManager) saveDeltaToken(
-	ctx context.Context, tx *sql.Tx, driveID, token string, updatedAt int64,
+	ctx context.Context, tx *sql.Tx, driveID, scopeID, scopeDrive, token string, updatedAt int64,
 ) error {
-	_, err := tx.ExecContext(ctx, sqlUpsertDeltaToken, driveID, token, updatedAt)
+	_, err := tx.ExecContext(ctx, sqlUpsertDeltaToken, driveID, scopeID, scopeDrive, token, updatedAt)
 	if err != nil {
-		return fmt.Errorf("sync: saving delta token for drive %s: %w", driveID, err)
+		return fmt.Errorf("sync: saving delta token for drive %s scope %q: %w", driveID, scopeID, err)
 	}
 
 	return nil
