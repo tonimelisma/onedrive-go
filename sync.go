@@ -92,7 +92,7 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	}
 
 	if watch {
-		cfgPath := resolveLoginConfigPath(cc.Flags.ConfigPath)
+		cfgPath := cc.CfgPath
 
 		return runSyncWatch(ctx, engine, mode, sync.WatchOpts{
 			Force: force,

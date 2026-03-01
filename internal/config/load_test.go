@@ -605,3 +605,37 @@ func TestResolveDrives_ZeroDrives(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, resolved)
 }
+
+// --- ResolveConfigPath tests ---
+
+func TestResolveConfigPath_DefaultWhenEmpty(t *testing.T) {
+	result := ResolveConfigPath(EnvOverrides{}, CLIOverrides{}, testLogger(t))
+	assert.Equal(t, DefaultConfigPath(), result)
+}
+
+func TestResolveConfigPath_EnvOverridesDefault(t *testing.T) {
+	result := ResolveConfigPath(
+		EnvOverrides{ConfigPath: "/env/config.toml"},
+		CLIOverrides{},
+		testLogger(t),
+	)
+	assert.Equal(t, "/env/config.toml", result)
+}
+
+func TestResolveConfigPath_CLIOverridesEnv(t *testing.T) {
+	result := ResolveConfigPath(
+		EnvOverrides{ConfigPath: "/env/config.toml"},
+		CLIOverrides{ConfigPath: "/cli/config.toml"},
+		testLogger(t),
+	)
+	assert.Equal(t, "/cli/config.toml", result)
+}
+
+func TestResolveConfigPath_CLIOverridesDefault(t *testing.T) {
+	result := ResolveConfigPath(
+		EnvOverrides{},
+		CLIOverrides{ConfigPath: "/cli/config.toml"},
+		testLogger(t),
+	)
+	assert.Equal(t, "/cli/config.toml", result)
+}

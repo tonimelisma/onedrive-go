@@ -132,7 +132,7 @@ func LoadOrDefault(path string, logger *slog.Logger) (*Config, error) {
 // It returns a fully resolved and validated drive configuration ready for use.
 func ResolveDrive(env EnvOverrides, cli CLIOverrides, logger *slog.Logger) (*ResolvedDrive, error) {
 	// Step 1: resolve config path (CLI > env > default).
-	cfgPath := resolveConfigPath(env, cli, logger)
+	cfgPath := ResolveConfigPath(env, cli, logger)
 
 	// Step 2: load config file (returns defaults if no file exists).
 	cfg, err := LoadOrDefault(cfgPath, logger)
@@ -235,9 +235,11 @@ func ResolveDrives(cfg *Config, selectors []string, includePaused bool, logger *
 	return resolved, nil
 }
 
-// resolveConfigPath determines the config file path from CLI flags,
-// environment variables, or the platform default.
-func resolveConfigPath(env EnvOverrides, cli CLIOverrides, logger *slog.Logger) string {
+// ResolveConfigPath determines the config file path using the three-layer
+// priority: CLI flag > environment variable > platform default. This is the
+// single correct implementation of config path resolution — all callers
+// (PersistentPreRunE, ResolveDrive, auth commands) should use this.
+func ResolveConfigPath(env EnvOverrides, cli CLIOverrides, logger *slog.Logger) string {
 	cfgPath := DefaultConfigPath()
 	source := "default"
 

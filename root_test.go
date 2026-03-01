@@ -201,6 +201,7 @@ func TestNewRootCmd_AuthSkipsConfig(t *testing.T) {
 			cc := cliContextFrom(sub.Context())
 			assert.NotNil(t, cc, "CLIContext should be populated for %s", name)
 			assert.NotNil(t, cc.Logger, "Logger should be populated for %s", name)
+			assert.NotEmpty(t, cc.CfgPath, "CfgPath should be populated for %s", name)
 			assert.Nil(t, cc.Cfg, "Cfg should be nil for auth command %s", name)
 		})
 	}
