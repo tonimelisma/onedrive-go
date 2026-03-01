@@ -321,32 +321,57 @@ func TestExpandTilde(t *testing.T) {
 // --- DriveTokenPath ---
 
 func TestDriveTokenPath_Personal(t *testing.T) {
-	path := DriveTokenPath(driveid.MustCanonicalID("personal:toni@outlook.com"))
+	path := DriveTokenPath(driveid.MustCanonicalID("personal:toni@outlook.com"), nil)
 	assert.NotEmpty(t, path)
 	assert.Contains(t, path, "token_personal_toni@outlook.com.json")
 }
 
 func TestDriveTokenPath_Business(t *testing.T) {
-	path := DriveTokenPath(driveid.MustCanonicalID("business:alice@contoso.com"))
+	path := DriveTokenPath(driveid.MustCanonicalID("business:alice@contoso.com"), nil)
 	assert.NotEmpty(t, path)
 	assert.Contains(t, path, "token_business_alice@contoso.com.json")
 }
 
 func TestDriveTokenPath_SharePoint_SharesBusinessToken(t *testing.T) {
-	path := DriveTokenPath(driveid.MustCanonicalID("sharepoint:alice@contoso.com:marketing:Docs"))
+	path := DriveTokenPath(driveid.MustCanonicalID("sharepoint:alice@contoso.com:marketing:Docs"), nil)
 	assert.NotEmpty(t, path)
 	// SharePoint drives share the business token.
 	assert.Contains(t, path, "token_business_alice@contoso.com.json")
 	assert.NotContains(t, path, "sharepoint")
 }
 
+func TestDriveTokenPath_Shared_WithConfig(t *testing.T) {
+	// Shared drives piggyback on their primary account's token. When the
+	// config contains a personal drive for the same email, DriveTokenPath
+	// should resolve to the personal token.
+	cfg := &Config{
+		Drives: map[driveid.CanonicalID]Drive{
+			driveid.MustCanonicalID("personal:alice@outlook.com"): {SyncDir: "~/OneDrive"},
+		},
+	}
+	sharedCID := driveid.MustCanonicalID("shared:alice@outlook.com:drv123:item456")
+
+	path := DriveTokenPath(sharedCID, cfg)
+	assert.NotEmpty(t, path)
+	assert.Contains(t, path, "token_personal_alice@outlook.com.json")
+	assert.NotContains(t, path, "shared")
+}
+
+func TestDriveTokenPath_Shared_NilConfig(t *testing.T) {
+	// Without config, shared drives cannot be resolved — return empty.
+	sharedCID := driveid.MustCanonicalID("shared:alice@outlook.com:drv123:item456")
+
+	path := DriveTokenPath(sharedCID, nil)
+	assert.Empty(t, path)
+}
+
 func TestDriveTokenPath_ZeroID(t *testing.T) {
-	path := DriveTokenPath(driveid.CanonicalID{})
+	path := DriveTokenPath(driveid.CanonicalID{}, nil)
 	assert.Empty(t, path)
 }
 
 func TestDriveTokenPath_PlatformSpecific(t *testing.T) {
-	path := DriveTokenPath(driveid.MustCanonicalID("personal:toni@outlook.com"))
+	path := DriveTokenPath(driveid.MustCanonicalID("personal:toni@outlook.com"), nil)
 
 	switch runtime.GOOS {
 	case platformDarwin:

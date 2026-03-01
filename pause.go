@@ -32,26 +32,28 @@ Examples:
 	}
 }
 
-func runPause(_ *cobra.Command, args []string) error {
-	if flagDrive == "" {
+func runPause(cmd *cobra.Command, args []string) error {
+	cc := mustCLIContext(cmd.Context())
+	logger := cc.Logger
+
+	if cc.Flags.Drive == "" {
 		return fmt.Errorf("--drive is required (specify which drive to pause)")
 	}
 
-	logger := buildLogger(nil)
-	cfgPath := resolveLoginConfigPath()
+	cfgPath := resolveLoginConfigPath(cc.Flags.ConfigPath)
 
 	cfg, err := config.LoadOrDefault(cfgPath, logger)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	cid, err := driveid.NewCanonicalID(flagDrive)
+	cid, err := driveid.NewCanonicalID(cc.Flags.Drive)
 	if err != nil {
-		return fmt.Errorf("invalid drive ID %q: %w", flagDrive, err)
+		return fmt.Errorf("invalid drive ID %q: %w", cc.Flags.Drive, err)
 	}
 
 	if _, exists := cfg.Drives[cid]; !exists {
-		return fmt.Errorf("drive %q not found in config", flagDrive)
+		return fmt.Errorf("drive %q not found in config", cc.Flags.Drive)
 	}
 
 	// Set paused = true.
@@ -71,29 +73,29 @@ func runPause(_ *cobra.Command, args []string) error {
 			return fmt.Errorf("setting paused_until: %w", err)
 		}
 
-		statusf("Drive %s paused until %s\n", cid.String(), until)
+		statusf(cc.Flags.Quiet, "Drive %s paused until %s\n", cid.String(), until)
 	} else {
-		statusf("Drive %s paused\n", cid.String())
+		statusf(cc.Flags.Quiet, "Drive %s paused\n", cid.String())
 	}
 
 	// Notify running daemon, if any.
-	notifyDaemon()
+	notifyDaemon(cc.Flags.Quiet)
 
 	return nil
 }
 
 // notifyDaemon attempts to send SIGHUP to a running sync --watch daemon.
 // Non-fatal: if no daemon is running, prints a note instead.
-func notifyDaemon() {
+func notifyDaemon(quiet bool) {
 	pidPath := config.PIDFilePath()
 	if pidPath == "" {
 		return
 	}
 
 	if err := sendSIGHUP(pidPath); err != nil {
-		statusf("Note: %v — changes take effect on next daemon start\n", err)
+		statusf(quiet, "Note: %v — changes take effect on next daemon start\n", err)
 	} else {
-		statusf("Notified running daemon to reload config\n")
+		statusf(quiet, "Notified running daemon to reload config\n")
 	}
 }
 

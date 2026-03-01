@@ -97,7 +97,7 @@ func runConflicts(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 
-	if flagJSON {
+	if cc.Flags.JSON {
 		return printConflictsJSON(conflicts)
 	}
 

@@ -2,10 +2,12 @@ package config
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -169,6 +171,66 @@ func ResolveDrive(env EnvOverrides, cli CLIOverrides, logger *slog.Logger) (*Res
 	if err := ValidateResolved(resolved); err != nil {
 		return nil, fmt.Errorf("config validation: %w", err)
 	}
+
+	return resolved, nil
+}
+
+// ResolveDrives resolves multiple drives from the config, applying global
+// defaults and per-drive overrides. When selectors is non-empty, only drives
+// matching those selectors (via MatchDrive) are included. When includePaused
+// is false, paused drives are excluded. Results are sorted by canonical ID
+// for deterministic ordering.
+func ResolveDrives(cfg *Config, selectors []string, includePaused bool, logger *slog.Logger) ([]*ResolvedDrive, error) {
+	if len(cfg.Drives) == 0 {
+		return nil, nil
+	}
+
+	// Determine which drives to resolve.
+	type candidate struct {
+		cid   driveid.CanonicalID
+		drive Drive
+	}
+
+	var candidates []candidate
+
+	if len(selectors) > 0 {
+		// Filter by selectors — each selector matches one drive.
+		for _, sel := range selectors {
+			cid, drive, err := MatchDrive(cfg, sel, logger)
+			if err != nil {
+				return nil, fmt.Errorf("resolving selector %q: %w", sel, err)
+			}
+
+			candidates = append(candidates, candidate{cid: cid, drive: drive})
+		}
+	} else {
+		// All drives.
+		for id := range cfg.Drives {
+			candidates = append(candidates, candidate{cid: id, drive: cfg.Drives[id]})
+		}
+	}
+
+	var resolved []*ResolvedDrive
+
+	for i := range candidates {
+		rd := buildResolvedDrive(cfg, candidates[i].cid, &candidates[i].drive, logger)
+
+		// Skip paused drives unless explicitly included.
+		if !includePaused && rd.Paused {
+			logger.Debug("skipping paused drive", "canonical_id", candidates[i].cid.String())
+
+			continue
+		}
+
+		resolved = append(resolved, rd)
+	}
+
+	// Sort by canonical ID for deterministic ordering.
+	slices.SortFunc(resolved, func(a, b *ResolvedDrive) int {
+		return cmp.Compare(a.CanonicalID.String(), b.CanonicalID.String())
+	})
+
+	logger.Debug("resolved drives", "count", len(resolved), "total", len(cfg.Drives))
 
 	return resolved, nil
 }

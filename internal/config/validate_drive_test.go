@@ -100,6 +100,57 @@ func TestValidateDrives_SharePointDrive_Valid(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// --- Sync dir overlap tests ---
+
+func TestValidateDrives_ChildIsSubdir_Error(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive"}
+	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{SyncDir: "~/OneDrive/Work"}
+
+	err := Validate(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "overlap")
+}
+
+func TestValidateDrives_ParentIsSubdir_Error(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive/Personal"}
+	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{SyncDir: "~/OneDrive"}
+
+	err := Validate(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "overlap")
+}
+
+func TestValidateDrives_SamePrefixDifferentDir_OK(t *testing.T) {
+	// /OneDrive vs /OneDriveBackup should NOT be flagged as overlapping.
+	cfg := DefaultConfig()
+	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive"}
+	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{SyncDir: "~/OneDriveBackup"}
+
+	err := Validate(cfg)
+	assert.NoError(t, err)
+}
+
+func TestValidateDrives_SiblingDirs_OK(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive"}
+	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{SyncDir: "~/Work"}
+
+	err := Validate(cfg)
+	assert.NoError(t, err)
+}
+
+func TestValidateDrives_EmptySyncDirSkippedForOverlap(t *testing.T) {
+	// Empty sync_dir drives are skipped — no overlap possible.
+	cfg := DefaultConfig()
+	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive"}
+	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{}
+
+	err := Validate(cfg)
+	assert.NoError(t, err)
+}
+
 func TestValidateDrives_InvalidCanonicalID_RejectedAtParseTime(t *testing.T) {
 	// Invalid canonical IDs are now rejected at parse time (decodeDriveSections),
 	// not at validation time. This test verifies that the TOML load path catches them.

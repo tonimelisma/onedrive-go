@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-// statusf prints a status message to stderr unless --quiet is set.
-func statusf(format string, args ...any) {
-	if !flagQuiet {
+// statusf prints a status message to stderr unless quiet mode is set.
+func statusf(quiet bool, format string, args ...any) {
+	if !quiet {
 		fmt.Fprintf(os.Stderr, format, args...)
 	}
 }

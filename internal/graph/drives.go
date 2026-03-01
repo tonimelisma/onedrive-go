@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
@@ -260,7 +261,7 @@ func (c *Client) Drive(ctx context.Context, driveID driveid.ID) (*Drive, error) 
 func (c *Client) SearchSites(ctx context.Context, query string, limit int) ([]Site, error) {
 	c.logger.Info("searching SharePoint sites", slog.String("query", query), slog.Int("limit", limit))
 
-	path := fmt.Sprintf("/sites?search=%s&$top=%d&$select=id,displayName,name,webUrl", query, limit)
+	path := fmt.Sprintf("/sites?search=%s&$top=%d&$select=id,displayName,name,webUrl", url.QueryEscape(query), limit)
 
 	resp, err := c.Do(ctx, http.MethodGet, path, nil)
 	if err != nil {
