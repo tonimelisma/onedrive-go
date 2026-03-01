@@ -523,5 +523,17 @@ Per-request Retry-After + exponential backoff with jitter. No shared gate across
 ### newSyncEngine helper for Engine construction
 `newSyncEngine(session, resolved, verifyDrive, logger)` creates a `sync.Engine` from a `DriveSession` and `ResolvedDrive`. Validates syncDir and statePath, builds `EngineConfig`, optionally sets `DriveVerifier`. Used by `sync.go` (verifyDrive=true) and `resolve.go` (verifyDrive=false). Will be reused by 6.0b Orchestrator's per-drive DriveRunner.
 
+### Orchestrator is the single entry point for sync
+`sync.NewOrchestrator(cfg)` takes `OrchestratorConfig` with raw config, resolved drives, HTTP clients, and logger. `RunOnce(ctx, mode, opts)` resolves tokens, creates clients (pooled by token path), creates engines (via injectable `engineFactory`), and launches `DriveRunner` goroutines. Returns `[]*DriveReport` — RunOnce never errors; per-drive errors are in `DriveReport.Err`. The CLI calls `driveReportsError()` to extract a single error for the exit code.
+
+### sync command skips PersistentPreRunE Phase 2
+`sync` has `skipConfigAnnotation` because it needs multi-drive resolution via `config.ResolveDrives()` instead of single-drive `config.ResolveDrive()`. It loads raw config from `cc.CfgPath` and resolves drives itself. Phase 1 fields (Flags, Logger, CfgPath, Env) are still available. Config-file `log_level` is not applied for sync (CLI flags still work); per-drive loggers are a 6.0c improvement.
+
+### Watch mode bridge (temporary, 6.0c replaces)
+`sync --watch` routes through `runSyncWatchBridge()` which creates a single `DriveSession` + `newSyncEngine` + `runSyncWatch` using the pre-Orchestrator path. Multi-drive watch returns "not yet supported (Phase 6.0c)". The bridge is removed when Orchestrator gains `RunWatch`.
+
+### DriveRunner.run() uses function injection for testability
+`DriveRunner.run(ctx, fn)` accepts `func(ctx) (*SyncReport, error)` instead of calling `engine.RunOnce` directly. The Orchestrator binds `engine.RunOnce(ctx, mode, opts)` to a closure. This enables testing panic recovery without real Engines or SQLite databases.
+
 ### DriveTypeShared needs explicit handling in every drive-type switch
 `BaseSyncDir()`, `DefaultSyncDir()`, `DriveTokenPath()`, `CollectOtherSyncDirs()` — all need shared drive cases. Missing cases return "" or empty, causing silent failures. Check all type-switch statements when adding new drive types.
