@@ -37,14 +37,15 @@ type CLIFlags struct {
 
 // CLIContext bundles resolved config, flags, and logger. Created in
 // PersistentPreRunE with two-phase initialization:
-//   - Phase 1 (always): Flags + Logger + CfgPath populated for every command.
+//   - Phase 1 (always): Flags + Logger + CfgPath + Env populated for every command.
 //   - Phase 2 (data commands): Cfg + RawConfig populated after config resolution.
 //
-// Auth commands get CLIContext with Flags + Logger + CfgPath but nil Cfg/RawConfig.
+// Auth commands get CLIContext with Flags + Logger + CfgPath + Env but nil Cfg/RawConfig.
 type CLIContext struct {
 	Flags     CLIFlags
 	Logger    *slog.Logger
 	CfgPath   string                // resolved config file path (always set)
+	Env       config.EnvOverrides   // env overrides (always set in Phase 1)
 	Cfg       *config.ResolvedDrive // nil for auth/account commands
 	RawConfig *config.Config        // nil for auth/account commands
 }
@@ -132,10 +133,10 @@ func newRootCmd() *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		// PersistentPreRunE runs in two phases for ALL commands:
-		//   Phase 1 (always): read Cobra flags → build CLIFlags → build bootstrap logger
+		//   Phase 1 (always): read Cobra flags → build CLIFlags → read env → build bootstrap logger
 		//   Phase 2 (data commands only): load config → resolve drive → build final logger
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
-			// Phase 1: always populate flags + bootstrap logger + config path.
+			// Phase 1: always populate flags + bootstrap logger + env + config path.
 			flags := CLIFlags{
 				ConfigPath: flagConfigPath,
 				Account:    flagAccount,
@@ -151,11 +152,12 @@ func newRootCmd() *cobra.Command {
 				Flags:   flags,
 				Logger:  logger,
 				CfgPath: config.ResolveConfigPath(env, config.CLIOverrides{ConfigPath: flags.ConfigPath}, logger),
+				Env:     env,
 			}
 
 			// Phase 2: load config for data commands.
 			if cmd.Annotations[skipConfigAnnotation] != "true" {
-				resolved, rawCfg, err := loadAndResolve(cmd, flags, logger)
+				resolved, rawCfg, err := loadAndResolve(cmd, flags, env, logger)
 				if err != nil {
 					return err
 				}
@@ -215,7 +217,9 @@ func newRootCmd() *cobra.Command {
 // loadAndResolve resolves the effective configuration from the four-layer
 // override chain. Returns the resolved drive config and the raw parsed config
 // (needed by DriveSession for shared drive token resolution).
-func loadAndResolve(cmd *cobra.Command, flags CLIFlags, logger *slog.Logger) (*config.ResolvedDrive, *config.Config, error) {
+func loadAndResolve(
+	cmd *cobra.Command, flags CLIFlags, env config.EnvOverrides, logger *slog.Logger,
+) (*config.ResolvedDrive, *config.Config, error) {
 	cli := config.CLIOverrides{
 		ConfigPath: flags.ConfigPath,
 	}
@@ -224,8 +228,6 @@ func loadAndResolve(cmd *cobra.Command, flags CLIFlags, logger *slog.Logger) (*c
 	if cmd.Flags().Changed("drive") {
 		cli.Drive = flags.Drive
 	}
-
-	env := config.ReadEnvOverrides(logger)
 
 	logger.Debug("resolving config",
 		slog.String("config_path", cli.ConfigPath),
