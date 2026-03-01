@@ -23,6 +23,7 @@ type ResolvedDrive struct {
 	CanonicalID driveid.CanonicalID
 	Alias       string
 	Paused      bool
+	PausedUntil string // RFC3339 timestamp; empty when not timed
 	SyncDir     string // absolute path after tilde expansion
 	RemotePath  string
 	DriveID     driveid.ID
@@ -156,10 +157,16 @@ func matchPartial(cfg *Config, selector string, logger *slog.Logger) (driveid.Ca
 // buildResolvedDrive creates a ResolvedDrive by starting with global config
 // values and applying per-drive overrides for fields that the drive specifies.
 func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Drive, logger *slog.Logger) *ResolvedDrive {
+	var pausedUntil string
+	if drive.PausedUntil != nil {
+		pausedUntil = *drive.PausedUntil
+	}
+
 	resolved := &ResolvedDrive{
 		CanonicalID:     canonicalID,
 		Alias:           drive.Alias,
 		Paused:          drive.Paused != nil && *drive.Paused,
+		PausedUntil:     pausedUntil,
 		SyncDir:         expandTilde(drive.SyncDir),
 		RemotePath:      drive.RemotePath,
 		DriveID:         driveid.New(drive.DriveID),

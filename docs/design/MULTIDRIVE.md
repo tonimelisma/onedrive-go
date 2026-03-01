@@ -568,12 +568,12 @@ Orchestrator
 
 ```go
 // Orchestrator manages the lifecycle of multiple DriveRunners.
-// Watches config.toml via fsnotify for immediate config pickup.
+// Reloads config.toml on SIGHUP for immediate config pickup.
 type Orchestrator struct {
     runners      map[driveid.CanonicalID]*DriveRunner
     clients      map[string]*graph.Client  // keyed by token file path
     globalCap    int                       // total worker budget (configurable, default 16)
-    configPath   string                    // path to config.toml (watched via fsnotify)
+    configPath   string                    // path to config.toml (reloaded on SIGHUP)
     logger       *slog.Logger
     mu           sync.Mutex
 }
@@ -608,7 +608,7 @@ For each active drive:
 // but never below minPerDrive.
 ```
 
-A drive with 100K files and 7 shared shortcuts gets ~90% of workers. A drive with 5 files gets 4 workers. Shortcuts don't affect allocation because they're internal to the Engine — the shortcut content is part of the file count. Rebalanced on config reload (fsnotify) when the active drive set changes.
+A drive with 100K files and 7 shared shortcuts gets ~90% of workers. A drive with 5 files gets 4 workers. Shortcuts don't affect allocation because they're internal to the Engine — the shortcut content is part of the file count. Rebalanced on config reload (SIGHUP) when the active drive set changes.
 
 ### 11.4 graph.Client Pooling
 
@@ -630,7 +630,7 @@ Multiple drives on the same account (personal + SharePoint libraries) share one 
 ```
 processCtx (SIGTERM/SIGINT)
 ├── orchestratorCtx
-│   ├── fsnotify watcher (config.toml)
+│   ├── SIGHUP handler (config reload)
 │   ├── driveCtx[0] (cancelable independently)
 │   │   └── Engine[0]
 │   │       ├── observers
@@ -641,7 +641,7 @@ processCtx (SIGTERM/SIGINT)
 │       └── Engine[2]
 ```
 
-Canceling `driveCtx[1]` stops only that drive's Engine (graceful shutdown: drain workers, commit pending). Canceling `orchestratorCtx` stops all drives. Config changes (via fsnotify) cancel and recreate individual driveCtxs as needed.
+Canceling `driveCtx[1]` stops only that drive's Engine (graceful shutdown: drain workers, commit pending). Canceling `orchestratorCtx` stops all drives. Config changes (via SIGHUP) cancel and recreate individual driveCtxs as needed.
 
 ### 11.6 Error Isolation
 
@@ -661,9 +661,9 @@ func (dr *DriveRunner) run(ctx context.Context) {
 
 On persistent error (3 consecutive failures), the DriveRunner enters a backoff state: retry with exponential delay (1m, 5m, 15m, 1h). Other drives continue unaffected.
 
-### 11.7 Config Reload (fsnotify)
+### 11.7 Config Reload (SIGHUP)
 
-The daemon watches `config.toml` via fsnotify for immediate config pickup:
+The daemon reloads `config.toml` on SIGHUP for immediate config pickup:
 
 ```
 1. Re-read and validate config file
@@ -680,7 +680,7 @@ The daemon watches `config.toml` via fsnotify for immediate config pickup:
 3. Rebalance worker allocations across active (non-paused) drives
 ```
 
-CLI commands like `pause`, `resume`, `drive add`, `drive remove` write directly to `config.toml`. The daemon picks up changes within milliseconds via fsnotify. No RPC socket is needed for these operations.
+CLI commands like `pause`, `resume`, `drive add`, `drive remove` write directly to `config.toml` and send SIGHUP to the daemon via PID file. The daemon reloads config immediately. No RPC socket is needed for these operations.
 
 Non-hot-reloadable settings (require daemon restart): `sync_dir`, `max_workers`, network config. Drive presence and `paused` state are immediate.
 
@@ -705,16 +705,16 @@ Status is determined from config (is drive present? is it paused?) + token (does
 
 1. Reads config, creates `graph.Client` pool
 2. Starts DriveRunners for all non-paused drives (or zero if none exist / all paused)
-3. Starts fsnotify watcher on `config.toml`
-4. Enters main loop: select on fsnotify events, SIGTERM/SIGINT
+3. Writes PID file (flock prevents multiple daemons) and registers SIGHUP handler
+4. Enters main loop: select on SIGHUP, SIGTERM/SIGINT, timed pause expiry
 
-The orchestrator can run with zero active DriveRunners — valid state. The daemon stays up, watches config, and starts drives as they appear.
+The orchestrator can run with zero active DriveRunners — valid state. The daemon stays up, listens for SIGHUP, and starts drives as they appear.
 
-**No RPC socket for Phase 7.0.** All control flows through the config file:
-- `pause` → writes `paused = true` to config → fsnotify → daemon stops drive
-- `resume` → removes `paused` from config → fsnotify → daemon starts drive
-- `drive add` → adds section to config → fsnotify → daemon starts drive
-- `drive remove` → removes section from config → fsnotify → daemon stops drive
+**No RPC socket for Phase 7.0.** All control flows through the config file + SIGHUP:
+- `pause` → writes `paused = true` to config → sends SIGHUP → daemon stops drive
+- `resume` → removes `paused` from config → sends SIGHUP → daemon starts drive
+- `drive add` → adds section to config → sends SIGHUP → daemon starts drive
+- `drive remove` → removes section from config → sends SIGHUP → daemon stops drive
 
 ```
 onedrive-go sync --watch
@@ -722,18 +722,18 @@ onedrive-go sync --watch
   ├── Read config → resolve drives
   ├── Create graph.Client pool
   ├── Start DriveRunners for non-paused drives
-  ├── Start fsnotify watcher on config.toml
+  ├── Write PID file, register SIGHUP handler
   │
   ├── select {
-  │     case fsnotify event: → reload()
+  │     case SIGHUP:         → reload config, start/stop drives
   │     case SIGTERM/INT:    → graceful shutdown
   │     case paused_until expires: → clear paused fields, write config
   │   }
   │
-  └── On shutdown: stop all DriveRunners, exit
+  └── On shutdown: stop all DriveRunners, remove PID file, exit
 ```
 
-**Future (Phase 12.6)**: RPC socket can be added for live status data (in-flight action counts, real-time progress, SSE events) that can't be read from config + state DBs. This is additive — config-as-IPC remains the control mechanism.
+**Future (Phase 12.6)**: RPC socket can be added for live status data (in-flight action counts, real-time progress, SSE events) that can't be read from config + state DBs. This is additive — config-as-IPC via SIGHUP remains the control mechanism.
 
 ### 11.10 Drive Lifecycle
 
@@ -803,7 +803,7 @@ When paused, that's the dominant display state. Token issues become visible on r
 
 #### Timed Pause Expiry
 
-When `paused_until` is set, the daemon checks on each sync cycle. When the time passes, the daemon clears both `paused` and `paused_until` from config.toml. The fsnotify-triggered reload then starts the drive.
+When `paused_until` is set, the daemon uses `time.After()` in its pause-wait loop. When the time passes, the daemon clears both `paused` and `paused_until` from config.toml and resumes the drive. If the daemon restarts while timed pause is active, it re-reads config and re-sets the timer.
 
 #### Config File Example
 
@@ -842,14 +842,14 @@ After `drive add personal:user@example.com`: fresh config section added with com
 | `logout` | Deletes token + config sections (state DBs kept) |
 | `logout --purge` | Deletes token + config sections + state DBs |
 | `login` (re-login) | Token refresh + creates fresh section if needed |
-| Config reload | Per-cycle (up to 5 min delay); fsnotify planned |
-| `pause`/`resume` commands | Not yet implemented; `paused` field ready |
+| Config reload | Immediate via SIGHUP from CLI commands |
+| `pause`/`resume` commands | Implemented: writes config + sends SIGHUP to daemon |
 
 ### 11.11 CLI Command Categorization
 
 All CLI commands are standalone — they read/write config, state DBs, and tokens directly. No daemon communication required for Phase 7.0.
 
-**Config-modifying commands** (trigger daemon reload via fsnotify if daemon is running):
+**Config-modifying commands** (trigger daemon reload via SIGHUP if daemon is running):
 
 | Command | Config effect |
 |---------|---------------|
@@ -911,11 +911,11 @@ No overlapping mechanisms: hashing has ONE control (semaphore). Execution has ON
 
 | # | Question | Answer |
 |---|----------|--------|
-| 1 | Orchestrator struct and lifecycle | `Orchestrator` manages `map[CanonicalID]*DriveRunner`. Each DriveRunner owns an Engine. `sync` (one-shot) runs all non-paused drives concurrently and exits. `sync --watch` starts the daemon: watches config.toml via fsnotify, starts/stops DriveRunners as drives are added/removed/paused. |
+| 1 | Orchestrator struct and lifecycle | `Orchestrator` manages `map[CanonicalID]*DriveRunner`. Each DriveRunner owns an Engine. `sync` (one-shot) runs all non-paused drives concurrently and exits. `sync --watch` starts the daemon: reloads config.toml on SIGHUP, starts/stops DriveRunners as drives are added/removed/paused. |
 | 2 | ClientPool | `map[tokenPath]*graph.Client` in Orchestrator. Created once per token path. Shared by reference. Thread-safe. |
 | 3 | Worker budget | Global cap (`max_workers`, default 16), proportional allocation by baseline file count, minimum 4 per drive. Rebalanced on config reload. |
 | 4 | Error isolation | Per-drive goroutine with panic recovery. 3 consecutive failures → exponential backoff. Other drives unaffected. |
-| 5 | Watch mode lifecycle | Daemon watches config.toml via fsnotify. CLI commands write to config → daemon picks up changes within milliseconds. Drive presence controlled by config sections. Paused state persisted in config. |
+| 5 | Watch mode lifecycle | Daemon reloads config.toml on SIGHUP. CLI commands write to config and send SIGHUP via PID file → daemon reloads immediately. Drive presence controlled by config sections. Paused state persisted in config. |
 | 6 | Aggregate reporting | `status` reads config + token files + state DBs directly. Works with or without daemon. Shows: ready/paused/token expired. Removed drives are not shown. |
 | 7 | Context tree | `processCtx → orchestratorCtx → driveCtx[i] → Engine[i]`. Independent cancellation per drive. |
 | 8 | Bandwidth limiting | Global token bucket on shared `http.RoundTripper` across ALL drives. One physical network = one bandwidth limit. |
@@ -937,7 +937,7 @@ Three alternative architectures were evaluated and rejected:
 - Each drive has its own state DB (already the case)
 - Each drive has its own delta token(s) (already the case)
 - Drives sharing a token file MUST share a `graph.Client` (rate limit correctness)
-- The orchestrator handles drives being added/removed at runtime (fsnotify on config.toml)
+- The orchestrator handles drives being added/removed at runtime (SIGHUP config reload)
 - Memory and CPU usage remain within PRD targets (< 100 MB for 100K files, < 1% CPU idle)
 
 ---

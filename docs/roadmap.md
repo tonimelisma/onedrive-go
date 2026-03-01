@@ -666,10 +666,9 @@ This analysis categorizes every part of the codebase by its relationship to the 
 **Goal**: Complete Phase 5 feature set. Ensure clean slate. The `paused` field is the sole drive lifecycle mechanism.
 
 **1. New Code:**
-- `engine.go`: `Pause()` / `Resume()` — pause workers, continue collecting events, resume drains buffer
-- `pause` CLI command: sets `paused = true` in config section (+ optional `paused_until` for timed pause via duration argument, e.g., `pause 2h`)
-- `resume` CLI command: removes `paused`/`paused_until` from config section. Without `--drive`, resumes all drives.
-- fsnotify config watcher: `sync --watch` watches `config.toml` for immediate pickup of drive add/remove/pause/resume. Validates config before applying. Invalid config → log warning, keep old config.
+- `pause` CLI command: sets `paused = true` in config section (+ optional `paused_until` for timed pause via duration argument, e.g., `pause 2h`). Sends SIGHUP to daemon via PID file.
+- `resume` CLI command: removes `paused`/`paused_until` from config section. Without `--drive`, resumes all drives. Sends SIGHUP to daemon via PID file.
+- SIGHUP-based config reload: `sync --watch` reloads config on SIGHUP. CLI commands write config and send SIGHUP to the daemon. PID file with flock prevents multiple daemons.
 
 **2. Config Migration (`Enabled` → `Paused`) — DONE:**
 - ~~`config.Drive` struct: replace `Enabled *bool` with `Paused *bool`~~ ✓
@@ -688,8 +687,8 @@ This analysis categorizes every part of the codebase by its relationship to the 
 - Doc comment audit: no production `.go` file should reference "9 phases", "9 slices", "sequential execution", or "batch commit" except in historical/explanatory context.
 
 **4. CI and Testing:**
-- Pause/resume tests (config-based + engine-level)
-- fsnotify config reload test
+- Pause/resume tests (config-based + CLI-level)
+- SIGHUP config reload test
 - Timed pause expiry test
 - Docs updated: CLAUDE.md, BACKLOG.md, LEARNINGS.md
 - Both CI workflows green. Full DOD checklist.
@@ -1089,7 +1088,7 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 ### 12.6: RPC control socket — FUTURE (optional enhancement)
 
-> **Note**: Phase 7.0 uses config-as-IPC via fsnotify for all control operations (pause, resume, drive add/remove). The RPC socket is an additive enhancement for live status data that can't be read from config + state DBs. Config-as-IPC remains the control mechanism even after RPC is added.
+> **Note**: Phase 7.0 uses config-as-IPC via SIGHUP for all control operations (pause, resume, drive add/remove). CLI commands write config and send SIGHUP to the daemon. The RPC socket is an additive enhancement for live status data that can't be read from config + state DBs. Config-as-IPC remains the control mechanism even after RPC is added.
 
 1. `sync --watch` exposes a JSON-over-HTTP API on a Unix domain socket (`$XDG_RUNTIME_DIR/onedrive-go.sock`). Same pattern as Docker, Tailscale, Syncthing.
 2. Polling endpoint: `GET /status` returns JSON with live data (in-flight action counts, real-time transfer progress, per-drive worker utilization) and closes. Simple scripts and status bar widgets poll this.
@@ -1098,7 +1097,7 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 ### 12.7: RPC-based live sync trigger — FUTURE
 
-> **Note**: Pause/resume is now handled by config-as-IPC (Phase 5.5/7.0). `pause` writes `paused = true` to config; `resume` removes it. Daemon picks up via fsnotify. No RPC needed.
+> **Note**: Pause/resume is now handled by config-as-IPC (Phase 5.5/7.0). `pause` writes `paused = true` to config and sends SIGHUP; `resume` removes it and sends SIGHUP. No RPC needed.
 
 1. `sync` while `--watch` is running: delegate to the running process via RPC to trigger an immediate sync cycle instead of failing with "database is locked".
 2. Force sync: `GET /sync` triggers an immediate delta check for all drives (or `GET /sync?drive=X` for a specific drive) without waiting for `poll_interval`.

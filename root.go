@@ -145,6 +145,8 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newMkdirCmd())
 	cmd.AddCommand(newStatCmd())
 	cmd.AddCommand(newSyncCmd())
+	cmd.AddCommand(newPauseCmd())
+	cmd.AddCommand(newResumeCmd())
 	cmd.AddCommand(newConflictsCmd())
 	cmd.AddCommand(newVerifyCmd())
 	cmd.AddCommand(newResolveCmd())
@@ -218,8 +220,14 @@ func buildLogger(cfg *config.ResolvedDrive) *slog.Logger {
 			level = slog.LevelDebug
 		case "info":
 			level = slog.LevelInfo
+		case "warn":
+			level = slog.LevelWarn
 		case "error":
 			level = slog.LevelError
+		default:
+			if cfg.LogLevel != "" {
+				fmt.Fprintf(os.Stderr, "warning: unknown log level %q, using warn\n", cfg.LogLevel)
+			}
 		}
 	}
 

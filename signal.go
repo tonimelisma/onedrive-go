@@ -8,6 +8,16 @@ import (
 	"syscall"
 )
 
+// sighupChannel creates a channel that receives SIGHUP signals. Used by the
+// sync --watch loop to trigger config reload. Separate from shutdownContext
+// because SIGHUP is a control signal (reload), not a shutdown signal.
+func sighupChannel() chan os.Signal {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGHUP)
+
+	return ch
+}
+
 // shutdownContext returns a context that cancels on the first SIGINT/SIGTERM
 // and force-exits on the second. This gives the engine time to drain in-flight
 // actions on first signal, while allowing the user to force-quit if something

@@ -140,6 +140,33 @@ func SetDriveKey(path string, canonicalID driveid.CanonicalID, key, value string
 	return atomicWriteFile(path, []byte(strings.Join(lines, "\n")))
 }
 
+// DeleteDriveKey removes a single key from a drive section. Idempotent:
+// returns nil if the key does not exist in the section. Used by `resume`
+// to clear `paused` and `paused_until` keys.
+func DeleteDriveKey(path string, canonicalID driveid.CanonicalID, key string) error {
+	slog.Info("deleting drive key from config",
+		"path", path,
+		"canonical_id", canonicalID.String(),
+		"key", key,
+	)
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("reading config file: %w", err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+
+	headerLine, sectionStart := findSectionHeader(lines, canonicalID.String())
+	if sectionStart < 0 {
+		return fmt.Errorf("drive section %q not found in config", canonicalID.String())
+	}
+
+	lines = deleteKeyInSection(lines, headerLine, sectionStart, key)
+
+	return atomicWriteFile(path, []byte(strings.Join(lines, "\n")))
+}
+
 // DeleteDriveSection removes a drive section (header + all keys) from the
 // config file. Also removes blank lines immediately preceding the section
 // header for clean formatting. Used by `drive remove --purge` and
@@ -321,6 +348,23 @@ func findSectionEnd(lines []string, sectionStart int) int {
 	}
 
 	return end
+}
+
+// deleteKeyInSection removes a key line from a section if it exists.
+// Returns the original slice unchanged if the key is not found.
+func deleteKeyInSection(lines []string, headerLine, sectionStart int, key string) []string {
+	sectionEnd := findSectionEnd(lines, sectionStart)
+	keyPrefix := key + " "
+	keyPrefixEq := key + "="
+
+	for i := headerLine + 1; i < sectionEnd; i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(trimmed, keyPrefix) || strings.HasPrefix(trimmed, keyPrefixEq) {
+			return append(lines[:i], lines[i+1:]...)
+		}
+	}
+
+	return lines
 }
 
 // setKeyInSection either replaces an existing key line or inserts a new

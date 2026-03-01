@@ -1264,9 +1264,9 @@ No confirmation prompt. Just does it and reports.
 | 28 | Device code as default auth | Works everywhere (headless, SSH, containers). `--browser` for desktop convenience. Both block. |
 | 29 | `--json` on login for GUI/scripting | Outputs newline-delimited JSON events. GUI reads events, presents code/URL in own UI. CLI is the API. |
 | 30 | Login always via CLI, never RPC | Login requires user interaction. RPC (Phase 12.6) only for live status data. Control flows through config-as-IPC. |
-| 31 | `sync --watch` idles with no drives | Can be installed as service before any login. Picks up new drives via fsnotify. No restart needed. |
+| 31 | `sync --watch` idles with no drives | Can be installed as service before any login. Picks up new drives via SIGHUP config reload. No restart needed. |
 | 32 | File ops work on paused drives | Paused state is a sync concept only. `ls`, `get`, etc. still work — token is valid, drive exists. Removed drives are invisible. |
-| 33b | Config-as-IPC via fsnotify | CLI commands write to config.toml; daemon watches via fsnotify and reacts within milliseconds. No RPC socket needed for Phase 7.0. |
+| 33b | Config-as-IPC via SIGHUP | CLI commands write to config.toml and send SIGHUP to the daemon via PID file. Daemon reloads config immediately. No RPC socket needed for Phase 7.0. |
 | 33c | Simple drive lifecycle | `drive remove` deletes config section (state DB kept for fast re-add). `drive add` creates fresh section. `logout` deletes all account config sections. State DBs provide fast re-sync. |
 | 33 | `service install` never auto-enables | Writes service file only. Prints native commands to enable. User explicitly chooses. |
 | 34 | No `--sync-dir` flag | All drives get sensible defaults from Microsoft conventions. Change via config file or `setup`. |
