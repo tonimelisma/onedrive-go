@@ -81,7 +81,7 @@ func testLargeFileUploadDownload(t *testing.T, testFolder string) {
 	assert.Contains(t, stderr, "Uploaded")
 
 	// Poll for eventual consistency — file may not be visible immediately.
-	stdout, _ := pollCLIContains(t, fmt.Sprintf("%d bytes", fileSize), pollTimeout, "stat", remotePath)
+	pollCLIContains(t, fmt.Sprintf("%d bytes", fileSize), pollTimeout, "stat", remotePath)
 
 	// Download and verify byte-for-byte content integrity.
 	downloadDir := t.TempDir()
@@ -121,7 +121,7 @@ func testUnicodeFilename(t *testing.T, testFolder string) {
 	assert.Contains(t, stderr, "Uploaded")
 
 	// Poll for eventual consistency — file may not be visible immediately.
-	stdout, _ := pollCLIContains(t, remoteName, pollTimeout, "ls", "/"+testFolder)
+	pollCLIContains(t, remoteName, pollTimeout, "ls", "/"+testFolder)
 
 	// Download and verify content.
 	downloadDir := t.TempDir()
@@ -161,7 +161,7 @@ func testSpacesInFilename(t *testing.T, testFolder string) {
 	assert.Contains(t, stderr, "Uploaded")
 
 	// Poll for eventual consistency — file may not be visible immediately.
-	stdout, _ := pollCLIContains(t, remoteName, pollTimeout, "stat", remotePath)
+	pollCLIContains(t, remoteName, pollTimeout, "stat", remotePath)
 
 	// Download and verify content.
 	downloadDir := t.TempDir()
@@ -430,7 +430,7 @@ func TestE2E_Sync_EditDeleteConflict(t *testing.T) {
 	assert.Equal(t, "locally modified precious data", remoteContent)
 
 	// Step 10: Conflict history shows auto-resolved entry.
-	stdout, _ = runCLIWithConfig(t, cfgPath, "conflicts", "--history")
+	stdout, _ := runCLIWithConfig(t, cfgPath, "conflicts", "--history")
 	assert.Contains(t, stdout, "fragile.txt")
 	assert.Contains(t, stdout, "edit_delete")
 	assert.Contains(t, stdout, "keep_local")
@@ -789,7 +789,7 @@ func TestE2E_Sync_UploadOnlyIgnoresRemote(t *testing.T) {
 	assert.Contains(t, stderr, "Mode: upload-only")
 
 	// Step 4: New local file uploaded (EF13, poll for eventual consistency).
-	lsOut, _ := pollCLIContains(t, "new-upload.txt", pollTimeout, "ls", "/"+testFolder)
+	pollCLIContains(t, "new-upload.txt", pollTimeout, "ls", "/"+testFolder)
 
 	// Step 5: Local edit was uploaded (EF3 in upload-only).
 	remoteContent := getRemoteFile(t, "/"+testFolder+"/remote-file.txt")
@@ -863,9 +863,9 @@ func TestE2E_Sync_NestedFolderHierarchy(t *testing.T) {
 	assert.Equal(t, "modified another", remoteAnother)
 
 	// Step 6: Verify.
-	stdout, _ = runCLIWithConfig(t, cfgPath, "verify")
-	assert.Contains(t, stdout, "Verified")
-	assert.Contains(t, stdout, "All files verified successfully.")
+	verifyOut, _ := runCLIWithConfig(t, cfgPath, "verify")
+	assert.Contains(t, verifyOut, "Verified")
+	assert.Contains(t, verifyOut, "All files verified successfully.")
 
 	// Step 7: Re-sync is idempotent.
 	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--force")
