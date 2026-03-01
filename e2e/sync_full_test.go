@@ -80,9 +80,8 @@ func testLargeFileUploadDownload(t *testing.T, testFolder string) {
 	_, stderr := runCLI(t, "put", tmpFile.Name(), remotePath)
 	assert.Contains(t, stderr, "Uploaded")
 
-	// Stat — verify the file size matches.
-	stdout, _ := runCLI(t, "stat", remotePath)
-	assert.Contains(t, stdout, fmt.Sprintf("%d bytes", fileSize))
+	// Poll for eventual consistency — file may not be visible immediately.
+	stdout, _ := pollCLIContains(t, fmt.Sprintf("%d bytes", fileSize), pollTimeout, "stat", remotePath)
 
 	// Download and verify byte-for-byte content integrity.
 	downloadDir := t.TempDir()
@@ -121,9 +120,8 @@ func testUnicodeFilename(t *testing.T, testFolder string) {
 	_, stderr := runCLI(t, "put", tmpFile.Name(), remotePath)
 	assert.Contains(t, stderr, "Uploaded")
 
-	// List the folder and confirm the unicode name appears.
-	stdout, _ := runCLI(t, "ls", "/"+testFolder)
-	assert.Contains(t, stdout, remoteName)
+	// Poll for eventual consistency — file may not be visible immediately.
+	stdout, _ := pollCLIContains(t, remoteName, pollTimeout, "ls", "/"+testFolder)
 
 	// Download and verify content.
 	downloadDir := t.TempDir()
@@ -162,9 +160,8 @@ func testSpacesInFilename(t *testing.T, testFolder string) {
 	_, stderr := runCLI(t, "put", tmpFile.Name(), remotePath)
 	assert.Contains(t, stderr, "Uploaded")
 
-	// Stat — verify the name appears.
-	stdout, _ := runCLI(t, "stat", remotePath)
-	assert.Contains(t, stdout, remoteName)
+	// Poll for eventual consistency — file may not be visible immediately.
+	stdout, _ := pollCLIContains(t, remoteName, pollTimeout, "stat", remotePath)
 
 	// Download and verify content.
 	downloadDir := t.TempDir()
@@ -241,8 +238,9 @@ func testConcurrentUploads(t *testing.T, testFolder string) {
 		require.NoError(t, err)
 	}
 
-	// Verify all files are present in the folder listing.
-	stdout, _ := runCLI(t, "ls", "/"+testFolder)
+	// Poll for eventual consistency — files may not all be visible immediately.
+	// Wait until the last uploaded file appears in the listing.
+	stdout, _ := pollCLIContains(t, files[len(files)-1].remoteName, pollTimeout, "ls", "/"+testFolder)
 	for _, f := range files {
 		assert.Contains(t, stdout, f.remoteName,
 			"expected %s in folder listing", f.remoteName)
@@ -278,9 +276,8 @@ func TestE2E_Sync_BidirectionalMerge(t *testing.T) {
 	// Step 2: Upload-only sync to establish baseline.
 	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
 
-	// Step 3: Assert files exist remotely.
-	stdout, _ := runCLI(t, "ls", "/"+testFolder+"/docs")
-	assert.Contains(t, stdout, "readme.txt")
+	// Step 3: Assert files exist remotely (poll for eventual consistency).
+	stdout, _ := pollCLIContains(t, "readme.txt", pollTimeout, "ls", "/"+testFolder+"/docs")
 	assert.Contains(t, stdout, "notes.txt")
 
 	// Step 4: Create new local folder + file (EF13 + ED5).
@@ -425,9 +422,8 @@ func TestE2E_Sync_EditDeleteConflict(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "locally modified precious data", string(data))
 
-	// Step 8: Remote file re-created.
-	stdout, _ := runCLI(t, "ls", "/"+testFolder)
-	assert.Contains(t, stdout, "fragile.txt")
+	// Step 8: Remote file re-created (poll for eventual consistency).
+	pollCLIContains(t, "fragile.txt", pollTimeout, "ls", "/"+testFolder)
 
 	// Step 9: Remote has the local content.
 	remoteContent := getRemoteFile(t, "/"+testFolder+"/fragile.txt")
@@ -592,9 +588,8 @@ func TestE2E_Sync_DeletePropagation(t *testing.T) {
 	// Step 2: Upload baseline.
 	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
 
-	// Verify all files exist remotely.
-	stdout, _ := runCLI(t, "ls", "/"+testFolder)
-	assert.Contains(t, stdout, "keep.txt")
+	// Verify all files exist remotely (poll for eventual consistency).
+	stdout, _ := pollCLIContains(t, "keep.txt", pollTimeout, "ls", "/"+testFolder)
 	assert.Contains(t, stdout, "del-local.txt")
 	assert.Contains(t, stdout, "del-remote.txt")
 	assert.Contains(t, stdout, "del-both.txt")
@@ -793,9 +788,8 @@ func TestE2E_Sync_UploadOnlyIgnoresRemote(t *testing.T) {
 	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
 	assert.Contains(t, stderr, "Mode: upload-only")
 
-	// Step 4: New local file uploaded (EF13).
-	lsOut, _ := runCLI(t, "ls", "/"+testFolder)
-	assert.Contains(t, lsOut, "new-upload.txt")
+	// Step 4: New local file uploaded (EF13, poll for eventual consistency).
+	lsOut, _ := pollCLIContains(t, "new-upload.txt", pollTimeout, "ls", "/"+testFolder)
 
 	// Step 5: Local edit was uploaded (EF3 in upload-only).
 	remoteContent := getRemoteFile(t, "/"+testFolder+"/remote-file.txt")
@@ -829,9 +823,8 @@ func TestE2E_Sync_NestedFolderHierarchy(t *testing.T) {
 	// Step 2: Upload baseline.
 	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
 
-	// Verify deep files exist remotely.
-	stdout, _ := runCLI(t, "ls", "/"+testFolder+"/a/b/c")
-	assert.Contains(t, stdout, "deep.txt")
+	// Verify deep files exist remotely (poll for eventual consistency).
+	pollCLIContains(t, "deep.txt", pollTimeout, "ls", "/"+testFolder+"/a/b/c")
 
 	// Step 3: Set up mixed changes.
 	// New remote deeper folder.
@@ -921,9 +914,8 @@ func TestE2E_Sync_DryRunNonDestructive(t *testing.T) {
 	// Step 5: Real sync.
 	runCLIWithConfig(t, cfgPath, "sync", "--force")
 
-	// Step 6: All changes applied.
-	lsOut, _ = runCLI(t, "ls", "/"+testFolder)
-	assert.Contains(t, lsOut, "pending-upload.txt", "real sync should upload")
+	// Step 6: All changes applied (poll for eventual consistency).
+	lsOut, _ = pollCLIContains(t, "pending-upload.txt", pollTimeout, "ls", "/"+testFolder)
 	assert.Contains(t, lsOut, "pending-download.txt")
 	assert.NotContains(t, lsOut, "existing.txt", "real sync should propagate delete")
 
