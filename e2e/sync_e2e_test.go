@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -21,20 +22,33 @@ import (
 // ---------------------------------------------------------------------------
 
 // writeSyncConfig creates a minimal TOML config file pointing to the given
-// syncDir for the test drive. Each test gets its own state_dir (temp directory)
-// to prevent cross-test contamination of the state database.
+// syncDir for the test drive. Each test isolates via HOME override so the
+// state database lands in a per-test temp directory. The token file is
+// copied from the real data dir so authentication works under the new HOME.
 // Returns the path to the temp config file.
 func writeSyncConfig(t *testing.T, syncDir string) string {
 	t.Helper()
 
-	// Per-test state directory prevents cross-test DB contamination.
-	stateDir := t.TempDir()
+	// Capture real data dir before overriding HOME.
+	realHome, err := os.UserHomeDir()
+	require.NoError(t, err)
+	realDataDir := e2eDataDir(realHome)
+
+	// Isolate HOME so the state DB lands in a per-test temp directory,
+	// preventing cross-test contamination.
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	// Create the data dir under the temp HOME and copy the token file
+	// so the CLI binary can authenticate.
+	tempDataDir := e2eDataDir(tempHome)
+	require.NoError(t, os.MkdirAll(tempDataDir, 0o755))
+	copyTokenFile(t, realDataDir, tempDataDir)
 
 	// The drive variable comes from TestMain (e.g., "personal:testitesti18@outlook.com").
 	content := fmt.Sprintf(`["%s"]
 sync_dir = %q
-state_dir = %q
-`, drive, syncDir, stateDir)
+`, drive, syncDir)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o644))
@@ -272,22 +286,34 @@ func TestE2E_Sync_Conflicts(t *testing.T) {
 }
 
 func TestE2E_Sync_DriveRemoveAndReAdd(t *testing.T) {
-	// Proves that removing and re-adding a drive with the same state_dir
-	// preserves the state DB, allowing incremental delta sync to resume.
+	// Proves that removing and re-adding a drive preserves the state DB
+	// (via platform default path), allowing incremental delta sync to resume.
 	syncDir := t.TempDir()
-	stateDir := t.TempDir()
+
+	// Capture real data dir before overriding HOME.
+	realHome, err := os.UserHomeDir()
+	require.NoError(t, err)
+	realDataDir := e2eDataDir(realHome)
+
+	// Isolate HOME so all state DBs land in a per-test temp directory.
+	testHome := t.TempDir()
+	t.Setenv("HOME", testHome)
+
+	// Create the data dir and copy the token file.
+	tempDataDir := e2eDataDir(testHome)
+	require.NoError(t, os.MkdirAll(tempDataDir, 0o755))
+	copyTokenFile(t, realDataDir, tempDataDir)
 
 	testFolder := fmt.Sprintf("e2e-sync-readd-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
-	// Helper to write a config with our fixed state_dir.
+	// Helper to write a config — relies on HOME isolation for state DB.
 	writeConfig := func(t *testing.T) string {
 		t.Helper()
 
 		content := fmt.Sprintf(`["%s"]
 sync_dir = %q
-state_dir = %q
-`, drive, syncDir, stateDir)
+`, drive, syncDir)
 		cfgPath := filepath.Join(t.TempDir(), "config.toml")
 		require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o644))
 
@@ -313,7 +339,7 @@ state_dir = %q
 	emptyConfig := filepath.Join(t.TempDir(), "empty.toml")
 	require.NoError(t, os.WriteFile(emptyConfig, []byte(""), 0o644))
 
-	// Step 3: Re-add the drive section with the same sync_dir + state_dir.
+	// Step 3: Re-add the drive section with the same sync_dir.
 	cfgPath2 := writeConfig(t)
 
 	// Step 4: Create a second local file and sync again.
@@ -328,4 +354,37 @@ state_dir = %q
 	remotePath2 := "/" + testFolder + "/file2.txt"
 	pollCLIWithConfigContains(t, cfgPath2, "file2.txt", pollTimeout, "stat", remotePath2)
 	pollCLIWithConfigContains(t, cfgPath2, "file1.txt", pollTimeout, "stat", remotePath1)
+}
+
+// e2eDataDir returns the platform-specific data directory for a given home.
+// Mirrors internal/config.DefaultDataDir() without importing internal packages.
+func e2eDataDir(home string) string {
+	switch runtime.GOOS {
+	case "darwin":
+		return filepath.Join(home, "Library", "Application Support", "onedrive-go")
+	default:
+		return filepath.Join(home, ".local", "share", "onedrive-go")
+	}
+}
+
+// copyTokenFile copies the token file for the test drive from srcDir to dstDir.
+// The drive variable (from TestMain) determines the token filename.
+func copyTokenFile(t *testing.T, srcDir, dstDir string) {
+	t.Helper()
+
+	// Parse "personal:testitesti18@outlook.com" -> "token_personal_testitesti18@outlook.com.json"
+	parts := strings.SplitN(drive, ":", 2)
+	if len(parts) < 2 {
+		t.Fatalf("cannot parse drive %q for token filename", drive)
+	}
+
+	tokenName := "token_" + parts[0] + "_" + parts[1] + ".json"
+	srcPath := filepath.Join(srcDir, tokenName)
+
+	data, err := os.ReadFile(srcPath)
+	if err != nil {
+		t.Fatalf("cannot read token file %s: %v", srcPath, err)
+	}
+
+	require.NoError(t, os.WriteFile(filepath.Join(dstDir, tokenName), data, 0o600))
 }

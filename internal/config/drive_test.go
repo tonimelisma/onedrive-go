@@ -372,7 +372,7 @@ func TestDriveStatePath_PlatformSpecific(t *testing.T) {
 // --- StatePath ---
 
 func TestStatePath_DefaultLocation(t *testing.T) {
-	// When StateDir is empty, StatePath falls back to DriveStatePath.
+	// StatePath delegates to DriveStatePath.
 	resolved := &ResolvedDrive{
 		CanonicalID: driveid.MustCanonicalID("personal:toni@outlook.com"),
 	}
@@ -381,35 +381,14 @@ func TestStatePath_DefaultLocation(t *testing.T) {
 	assert.Equal(t, DriveStatePath(resolved.CanonicalID), path)
 }
 
-func TestStatePath_OverrideDir(t *testing.T) {
-	// When StateDir is set, the DB is placed inside that directory.
-	tmpDir := t.TempDir()
-	resolved := &ResolvedDrive{
-		CanonicalID: driveid.MustCanonicalID("personal:toni@outlook.com"),
-		StateDir:    tmpDir,
-	}
-
-	path := resolved.StatePath()
-	assert.Equal(t, filepath.Join(tmpDir, "state_personal_toni@outlook.com.db"), path)
-}
-
 func TestStatePath_SharePoint_ColonsReplaced(t *testing.T) {
-	tmpDir := t.TempDir()
 	resolved := &ResolvedDrive{
 		CanonicalID: driveid.MustCanonicalID("sharepoint:alice@contoso.com:marketing:Docs"),
-		StateDir:    tmpDir,
 	}
 
 	path := resolved.StatePath()
-	assert.Equal(t, filepath.Join(tmpDir, "state_sharepoint_alice@contoso.com_marketing_Docs.db"), path)
-}
-
-func TestBuildResolvedDrive_StateDirPropagated(t *testing.T) {
-	cfg := DefaultConfig()
-	drive := &Drive{SyncDir: "~/OneDrive", StateDir: "/tmp/test-state"}
-
-	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("personal:toni@outlook.com"), drive, testLogger(t))
-	assert.Equal(t, "/tmp/test-state", resolved.StateDir)
+	assert.Equal(t, DriveStatePath(resolved.CanonicalID), path)
+	assert.Contains(t, path, "state_sharepoint_alice@contoso.com_marketing_Docs.db")
 }
 
 // --- Integration: TOML parsing -> resolution ---
@@ -728,32 +707,4 @@ func setTestDataDir(t *testing.T) string {
 	require.NoError(t, os.MkdirAll(dataDir, 0o755))
 
 	return dataDir
-}
-
-// --- DriveStatePathWithOverride (B-193) ---
-
-func TestDriveStatePathWithOverride_WithOverride(t *testing.T) {
-	tmpDir := t.TempDir()
-	cid := driveid.MustCanonicalID("personal:test@example.com")
-
-	path := DriveStatePathWithOverride(cid, tmpDir)
-	assert.Equal(t, filepath.Join(tmpDir, "state_personal_test@example.com.db"), path)
-}
-
-func TestDriveStatePathWithOverride_WithTilde(t *testing.T) {
-	cid := driveid.MustCanonicalID("personal:test@example.com")
-
-	path := DriveStatePathWithOverride(cid, "~/custom-state")
-
-	home, err := os.UserHomeDir()
-	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(home, "custom-state", "state_personal_test@example.com.db"), path)
-}
-
-func TestDriveStatePathWithOverride_EmptyFallback(t *testing.T) {
-	cid := driveid.MustCanonicalID("personal:test@example.com")
-
-	// Empty stateDir should fall back to DriveStatePath.
-	path := DriveStatePathWithOverride(cid, "")
-	assert.Equal(t, DriveStatePath(cid), path)
 }

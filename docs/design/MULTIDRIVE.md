@@ -206,7 +206,6 @@ This replaces the old `CanonicalID.TokenCanonicalID()` method. The two existing 
 ```go
 type Drive struct {
     SyncDir     string   `toml:"sync_dir"`
-    StateDir    string   `toml:"state_dir,omitempty"`
     Paused      *bool    `toml:"paused,omitempty"`
     PausedUntil *string  `toml:"paused_until,omitempty"` // RFC3339 timestamp for timed pause
     DisplayName string   `toml:"display_name,omitempty"`
