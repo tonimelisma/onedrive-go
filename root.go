@@ -234,7 +234,7 @@ func loadAndResolve(cmd *cobra.Command, flags CLIFlags, logger *slog.Logger) (*c
 		slog.String("env_drive", env.Drive),
 	)
 
-	resolved, err := config.ResolveDrive(env, cli, logger)
+	resolved, rawCfg, err := config.ResolveDrive(env, cli, logger)
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}
@@ -244,26 +244,6 @@ func loadAndResolve(cmd *cobra.Command, flags CLIFlags, logger *slog.Logger) (*c
 		slog.String("sync_dir", resolved.SyncDir),
 		slog.String("drive_id", resolved.DriveID.String()),
 	)
-
-	// Load the raw config for DriveSession token resolution. Use the same
-	// config path resolution as ResolveDrive (CLI > env > default) to ensure
-	// we read the same file.
-	cfgPath := config.DefaultConfigPath()
-	if env.ConfigPath != "" {
-		cfgPath = env.ConfigPath
-	}
-
-	if cli.ConfigPath != "" {
-		cfgPath = cli.ConfigPath
-	}
-
-	rawCfg, err := config.LoadOrDefault(cfgPath, logger)
-	if err != nil {
-		// Non-fatal: raw config is optional (only needed for shared drives).
-		logger.Debug("could not load raw config for token resolution", "error", err)
-
-		rawCfg = config.DefaultConfig()
-	}
 
 	return resolved, rawCfg, nil
 }

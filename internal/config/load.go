@@ -129,15 +129,16 @@ func LoadOrDefault(path string, logger *slog.Logger) (*Config, error) {
 
 // ResolveDrive loads configuration and applies the four-layer override chain:
 // defaults -> config file -> environment variables -> CLI flags.
-// It returns a fully resolved and validated drive configuration ready for use.
-func ResolveDrive(env EnvOverrides, cli CLIOverrides, logger *slog.Logger) (*ResolvedDrive, error) {
+// It returns the fully resolved drive configuration and the raw parsed config
+// (needed by DriveSession for shared drive token resolution).
+func ResolveDrive(env EnvOverrides, cli CLIOverrides, logger *slog.Logger) (*ResolvedDrive, *Config, error) {
 	// Step 1: resolve config path (CLI > env > default).
 	cfgPath := ResolveConfigPath(env, cli, logger)
 
 	// Step 2: load config file (returns defaults if no file exists).
 	cfg, err := LoadOrDefault(cfgPath, logger)
 	if err != nil {
-		return nil, fmt.Errorf("loading config: %w", err)
+		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}
 
 	// Step 3: determine drive selector (CLI > env).
@@ -155,7 +156,7 @@ func ResolveDrive(env EnvOverrides, cli CLIOverrides, logger *slog.Logger) (*Res
 	// Step 4: match drive.
 	canonicalID, drive, err := MatchDrive(cfg, selector, logger)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Step 5: build resolved drive (global + per-drive overrides).
@@ -169,10 +170,10 @@ func ResolveDrive(env EnvOverrides, cli CLIOverrides, logger *slog.Logger) (*Res
 
 	// Step 7: validate the final resolved drive.
 	if err := ValidateResolved(resolved); err != nil {
-		return nil, fmt.Errorf("config validation: %w", err)
+		return nil, nil, fmt.Errorf("config validation: %w", err)
 	}
 
-	return resolved, nil
+	return resolved, cfg, nil
 }
 
 // ResolveDrives resolves multiple drives from the config, applying global
