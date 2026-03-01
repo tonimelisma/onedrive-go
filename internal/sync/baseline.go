@@ -545,10 +545,17 @@ func (m *BaselineManager) ResolveConflict(ctx context.Context, id, resolution st
 	return nil
 }
 
-// scanConflictRow scans a single row from a *sql.Rows result set into
-// a ConflictRecord, handling nullable columns. The `history` column is
-// intentionally excluded — it is dormant/unused (B-160).
-func scanConflictRow(rows *sql.Rows) (*ConflictRecord, error) {
+// conflictScanner abstracts the Scan method shared by *sql.Rows and *sql.Row,
+// allowing a single scan implementation for both multi-row and single-row
+// conflict queries (B-149).
+type conflictScanner interface {
+	Scan(dest ...any) error
+}
+
+// scanConflict scans a single conflict row from any scanner (*sql.Rows or
+// *sql.Row), handling nullable columns. The `history` column is intentionally
+// excluded — it is dormant/unused (B-160).
+func scanConflict(s conflictScanner) (*ConflictRecord, error) {
 	var (
 		c           ConflictRecord
 		itemID      sql.NullString
@@ -560,13 +567,13 @@ func scanConflictRow(rows *sql.Rows) (*ConflictRecord, error) {
 		resolvedBy  sql.NullString
 	)
 
-	err := rows.Scan(
+	err := s.Scan(
 		&c.ID, &c.DriveID, &itemID, &c.Path, &c.ConflictType,
 		&c.DetectedAt, &localHash, &remoteHash, &localMtime, &remoteMtime,
 		&c.Resolution, &resolvedAt, &resolvedBy,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("sync: scanning conflict row: %w", err)
+		return nil, err //nolint:wrapcheck // callers wrap with context
 	}
 
 	c.ItemID = itemID.String
@@ -589,47 +596,21 @@ func scanConflictRow(rows *sql.Rows) (*ConflictRecord, error) {
 	return &c, nil
 }
 
-// scanConflictRowSingle scans a single row from a *sql.Row result,
-// handling nullable columns. Returns sql.ErrNoRows if no row found.
-func scanConflictRowSingle(row *sql.Row) (*ConflictRecord, error) {
-	var (
-		c           ConflictRecord
-		itemID      sql.NullString
-		localHash   sql.NullString
-		remoteHash  sql.NullString
-		localMtime  sql.NullInt64
-		remoteMtime sql.NullInt64
-		resolvedAt  sql.NullInt64
-		resolvedBy  sql.NullString
-	)
-
-	err := row.Scan(
-		&c.ID, &c.DriveID, &itemID, &c.Path, &c.ConflictType,
-		&c.DetectedAt, &localHash, &remoteHash, &localMtime, &remoteMtime,
-		&c.Resolution, &resolvedAt, &resolvedBy,
-	)
+// scanConflictRow scans a conflict from a multi-row result set. Delegates
+// to scanConflict via the conflictScanner interface (B-149).
+func scanConflictRow(rows *sql.Rows) (*ConflictRecord, error) {
+	c, err := scanConflict(rows)
 	if err != nil {
-		return nil, err //nolint:wrapcheck // caller wraps with context
+		return nil, fmt.Errorf("sync: scanning conflict row: %w", err)
 	}
 
-	c.ItemID = itemID.String
-	c.LocalHash = localHash.String
-	c.RemoteHash = remoteHash.String
-	c.ResolvedBy = resolvedBy.String
+	return c, nil
+}
 
-	if localMtime.Valid {
-		c.LocalMtime = localMtime.Int64
-	}
-
-	if remoteMtime.Valid {
-		c.RemoteMtime = remoteMtime.Int64
-	}
-
-	if resolvedAt.Valid {
-		c.ResolvedAt = resolvedAt.Int64
-	}
-
-	return &c, nil
+// scanConflictRowSingle scans a conflict from a single-row result.
+// Returns sql.ErrNoRows transparently for callers that need it (B-149).
+func scanConflictRowSingle(row *sql.Row) (*ConflictRecord, error) {
+	return scanConflict(row)
 }
 
 // DB returns the underlying database connection for sharing with other
