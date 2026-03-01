@@ -1524,7 +1524,7 @@ Workers are persistent goroutines pulling from tracker channels, not scoped to i
 
 Linux inotify requires one watch per directory. The default kernel limit is 8192 (`/proc/sys/fs/inotify/max_user_watches`), though many distributions set it higher.
 
-**Detection at startup**: Before starting inotify watches, the engine reads `/proc/sys/fs/inotify/max_user_watches` and estimates the total watch count from the baseline directory counts. For multi-drive sync, the estimate sums across all enabled drives.
+**Detection at startup**: Before starting inotify watches, the engine reads `/proc/sys/fs/inotify/max_user_watches` and estimates the total watch count from the baseline directory counts. For multi-drive sync, the estimate sums across all non-paused drives.
 
 **Warning at 80%**: If estimated watches exceed 80% of the limit, the engine logs a warning with sysctl instructions for increasing the limit.
 

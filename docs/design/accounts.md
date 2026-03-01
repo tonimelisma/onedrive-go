@@ -710,12 +710,12 @@ The device code flow is inherently two-phase: (1) request code, (2) poll for com
 
 ### `drive add`
 
-Adds a SharePoint library or resumes a paused drive. Does NOT offer new account sign-in — that's what `login` is for.
+Adds a SharePoint library, restores a removed drive from shadow file, or adds a shared folder. Does NOT offer new account sign-in — that's what `login` is for.
 
 ```
 $ onedrive-go drive add
-Paused drives:
-  1. me@contoso.com (~/OneDrive - Contoso) — resume
+Removed drives (restore from shadow):
+  1. me@contoso.com (~/OneDrive - Contoso) — all settings preserved
 
 SharePoint libraries (using alice@contoso.com):
   2. Marketing / Documents
@@ -734,6 +734,8 @@ To add a new Microsoft account, use 'onedrive-go login'.
 ```
 
 `drive add` is the one command that's interactive (SharePoint site/library selection). Everything else assumes defaults.
+
+To temporarily stop syncing a drive without removing it, use `pause` instead.
 
 For non-interactive use (scripts):
 ```bash
