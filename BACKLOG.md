@@ -19,9 +19,9 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 | ~~B-271~~ | ~~Personal Vault exclusion in RemoteObserver~~ | ~~P1~~ | **DONE** — Phase 5.6.1. `SpecialFolderName` field + `isDescendantOfVault()` parent-chain walk. |
 | ~~B-272~~ | ~~Add `DriveTypeShared` to `driveid` package~~ | ~~P1~~ | **DONE** — Phase 5.6.2. Fourth drive type, type-specific field routing, part-count validation, `ConstructShared()`, `Equal()`, predicates, zero-ID fix. |
 | ~~B-273~~ | ~~Move token resolution to `config` package~~ | ~~P1~~ | **DONE** — Phase 5.6.3. `config.TokenCanonicalID(cid, cfg)` in `token_resolution.go`. Removed method from `driveid`. |
-| B-274 | Replace `Alias` with `DisplayName` in config | P1 | Phase 5.6.4. Auto-derived display names: email, "site / lib", "{Name}'s {Folder}". |
-| B-275 | Update CLI for display_name | P2 | Phase 5.6.5. 3-tier `--drive` matching: display_name > canonical ID > substring. |
-| B-276 | Delta token composite key migration | P2 | Phase 5.6.6. `(drive_id, scope_id)` key for per-shortcut delta tokens. |
+| ~~B-274~~ | ~~Replace `Alias` with `DisplayName` in config~~ | ~~P1~~ | **DONE** — Phase 5.6.4. Renamed Alias→DisplayName, auto-derived `DefaultDisplayName()`, wired into `buildResolvedDrive`. |
+| ~~B-275~~ | ~~Update CLI for display_name~~ | ~~P2~~ | **DONE** — Phase 5.6.5. DisplayName in `drive list`, `status`, `drive add` output. `driveLabel()` helper. |
+| ~~B-276~~ | ~~Delta token composite key migration~~ | ~~P2~~ | **DONE** — Phase 5.6.6. Migration 00004, composite PK `(drive_id, scope_id)`, existing tokens preserved. |
 
 ## Hardening: Identity & Types
 
