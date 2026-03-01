@@ -57,20 +57,25 @@ func encodePathSegments(path string) string {
 // driveItemResponse mirrors the Graph API driveItem JSON exactly.
 // Unexported — callers use Item via toItem() normalization.
 type driveItemResponse struct {
-	ID                   string           `json:"id"`
-	Name                 string           `json:"name"`
-	Size                 int64            `json:"size"`
-	ETag                 string           `json:"eTag"`
-	CTag                 string           `json:"cTag"`
-	CreatedDateTime      string           `json:"createdDateTime"`
-	LastModifiedDateTime string           `json:"lastModifiedDateTime"`
-	ParentReference      *parentRef       `json:"parentReference"`
-	File                 *fileFacet       `json:"file"`
-	Folder               *folderFacet     `json:"folder"`
-	Root                 *json.RawMessage `json:"root"`
-	Deleted              *json.RawMessage `json:"deleted"`
-	Package              *json.RawMessage `json:"package"`
-	DownloadURL          string           `json:"@microsoft.graph.downloadUrl"` //nolint:tagliatelle // Graph API annotation key
+	ID                   string              `json:"id"`
+	Name                 string              `json:"name"`
+	Size                 int64               `json:"size"`
+	ETag                 string              `json:"eTag"`
+	CTag                 string              `json:"cTag"`
+	CreatedDateTime      string              `json:"createdDateTime"`
+	LastModifiedDateTime string              `json:"lastModifiedDateTime"`
+	ParentReference      *parentRef          `json:"parentReference"`
+	File                 *fileFacet          `json:"file"`
+	Folder               *folderFacet        `json:"folder"`
+	Root                 *json.RawMessage    `json:"root"`
+	Deleted              *json.RawMessage    `json:"deleted"`
+	Package              *json.RawMessage    `json:"package"`
+	DownloadURL          string              `json:"@microsoft.graph.downloadUrl"` //nolint:tagliatelle // Graph API annotation key
+	SpecialFolder        *specialFolderFacet `json:"specialFolder"`
+}
+
+type specialFolderFacet struct {
+	Name string `json:"name"`
 }
 
 type parentRef struct {
@@ -127,6 +132,10 @@ func (d *driveItemResponse) toItem(logger *slog.Logger) Item {
 		IsPackage:   d.Package != nil,
 		ChildCount:  ChildCountUnknown,
 		DownloadURL: DownloadURL(d.DownloadURL),
+	}
+
+	if d.SpecialFolder != nil {
+		item.SpecialFolderName = d.SpecialFolder.Name
 	}
 
 	// Normalize DriveID via driveid.New — lowercase + zero-pad for short IDs.

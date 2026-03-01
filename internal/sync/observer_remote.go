@@ -40,6 +40,7 @@ type inflightParent struct {
 	parentID      string
 	parentDriveID driveid.ID // drive containing this item's parent
 	isRoot        bool
+	isVault       bool // true for Personal Vault folder (B-271)
 }
 
 // RemoteObserver transforms Graph API delta responses into []ChangeEvent.
@@ -335,16 +336,31 @@ func (o *RemoteObserver) processItem(item *graph.Item, inflight map[driveid.Item
 
 	// Register in inflight map before classification so children in the
 	// same batch can materialize paths through this item.
+	isVault := item.SpecialFolderName == "vault"
 	key := driveid.NewItemKey(itemDriveID, item.ID)
 	inflight[key] = inflightParent{
 		name:          nfcNormalize(item.Name),
 		parentID:      item.ParentID,
 		parentDriveID: resolveParentDriveID(item, itemDriveID),
 		isRoot:        item.IsRoot,
+		isVault:       isVault,
 	}
 
 	if item.IsRoot {
 		o.logger.Debug("skipping root item", slog.String("item_id", item.ID))
+
+		return nil
+	}
+
+	// Personal Vault exclusion (B-271): skip the vault folder itself and
+	// any items whose parent chain includes a vault folder. This prevents
+	// data loss from vault lock/unlock cycles where items appear and
+	// disappear in delta responses.
+	if isVault || o.isDescendantOfVault(item, inflight, itemDriveID) {
+		o.logger.Info("skipping vault item",
+			slog.String("item_id", item.ID),
+			slog.String("name", item.Name),
+		)
 
 		return nil
 	}
@@ -455,6 +471,42 @@ func (o *RemoteObserver) materializePath(
 	slices.Reverse(segments)
 
 	return strings.Join(segments, "/")
+}
+
+// isDescendantOfVault walks the parent chain in the inflight map to check
+// whether any ancestor is a vault folder. Limited to maxPathDepth to prevent
+// infinite loops in malformed data (B-271).
+func (o *RemoteObserver) isDescendantOfVault(
+	item *graph.Item, inflight map[driveid.ItemKey]inflightParent, itemDriveID driveid.ID,
+) bool {
+	parentDriveID := resolveParentDriveID(item, itemDriveID)
+	parentID := item.ParentID
+
+	for depth := 0; depth < maxPathDepth; depth++ {
+		if parentID == "" {
+			return false
+		}
+
+		parentKey := driveid.NewItemKey(parentDriveID, parentID)
+
+		p, ok := inflight[parentKey]
+		if !ok {
+			return false
+		}
+
+		if p.isVault {
+			return true
+		}
+
+		if p.isRoot {
+			return false
+		}
+
+		parentDriveID = p.parentDriveID
+		parentID = p.parentID
+	}
+
+	return false
 }
 
 // resolveItemDriveID returns the normalized driveID for an item, falling

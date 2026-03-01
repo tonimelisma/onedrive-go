@@ -1533,3 +1533,55 @@ func TestFullDelta_CrossDriveItems(t *testing.T) {
 		t.Errorf("Type = %v, want ChangeCreate", ev.Type)
 	}
 }
+
+// TestFullDelta_PersonalVaultExcluded verifies that items with
+// specialFolder.name == "vault" are excluded from delta processing by default,
+// preventing data-loss from vault lock/unlock cycles (B-271).
+func TestFullDelta_PersonalVaultExcluded(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{{
+			page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveid.New(testDriveID)},
+					// Vault folder.
+					{
+						ID: "vault-folder", Name: "Personal Vault",
+						ParentID: "root", DriveID: driveid.New(testDriveID),
+						IsFolder: true, SpecialFolderName: "vault",
+					},
+					// File inside vault.
+					{
+						ID: "vault-file", Name: "secret.pdf",
+						ParentID: "vault-folder", DriveID: driveid.New(testDriveID),
+						Size: 1024, QuickXorHash: "vhash",
+					},
+					// Normal file outside vault.
+					{
+						ID: "normal-file", Name: "readme.txt",
+						ParentID: "root", DriveID: driveid.New(testDriveID),
+						Size: 256, QuickXorHash: "nhash",
+					},
+				},
+				DeltaLink: "delta-vault",
+			},
+		}},
+	}
+
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
+
+	events, _, err := obs.FullDelta(t.Context(), "")
+	if err != nil {
+		t.Fatalf("FullDelta: %v", err)
+	}
+
+	// Only the normal file should produce an event — vault items are excluded.
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event (vault excluded), got %d", len(events))
+	}
+
+	if events[0].Name != "readme.txt" {
+		t.Errorf("event Name = %q, want %q", events[0].Name, "readme.txt")
+	}
+}
