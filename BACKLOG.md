@@ -127,7 +127,6 @@ Optimization deferred until profiling shows a bottleneck.
 | B-220 | `deleteSession` helper swallows errors silently | **DONE** — Improved comment documenting fire-and-forget pattern. PR #130. |
 | B-225 | Defensive nil guard for `cliContextFrom` | **DONE** — `mustCLIContext()` with clear panic. 10 callers updated. PR #129. |
 | B-226 | Remove `os.Exit(1)` from `runVerify` | **DONE** — Sentinel error `errVerifyMismatch`. PR #129. |
-| B-193 | `purgeSingleDrive` ignores StateDir override | **DONE** — `DriveStatePathWithOverride()` + threaded stateDir. PR #129. |
 | B-231 | `loadAndVerify` separation rationale is stale | **DONE** — Comment updated when B-226 removed `os.Exit`. PR #129. |
 | B-107 | Write event coalescing at observer level | **DONE** — Per-path timer coalescing (500ms cooldown). PR #129. |
 | B-105 | `addWatchesRecursive` has no aggregate failure reporting | **DONE** — Summary Info log with watched/failed counters. PR #130. |

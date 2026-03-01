@@ -24,7 +24,6 @@ type ResolvedDrive struct {
 	Alias       string
 	Paused      bool
 	SyncDir     string // absolute path after tilde expansion
-	StateDir    string // override for state DB directory (empty = platform default)
 	RemotePath  string
 	DriveID     driveid.ID
 
@@ -36,11 +35,9 @@ type ResolvedDrive struct {
 	NetworkConfig
 }
 
-// StatePath returns the state DB file path for this drive. Delegates to
-// DriveStatePathWithOverride which handles tilde expansion (idempotent
-// since buildResolvedDrive already expands StateDir).
+// StatePath returns the state DB file path for this drive.
 func (rd *ResolvedDrive) StatePath() string {
-	return DriveStatePathWithOverride(rd.CanonicalID, rd.StateDir)
+	return DriveStatePath(rd.CanonicalID)
 }
 
 // MatchDrive selects a drive from the config by selector string. The matching
@@ -164,7 +161,6 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 		Alias:           drive.Alias,
 		Paused:          drive.Paused != nil && *drive.Paused,
 		SyncDir:         expandTilde(drive.SyncDir),
-		StateDir:        expandTilde(drive.StateDir),
 		RemotePath:      drive.RemotePath,
 		DriveID:         driveid.New(drive.DriveID),
 		FilterConfig:    cfg.FilterConfig,
@@ -371,20 +367,6 @@ func DriveTokenPath(canonicalID driveid.CanonicalID) string {
 	sanitized := tokenCID.DriveType() + "_" + tokenCID.Email()
 
 	return filepath.Join(dataDir, "token_"+sanitized+".json")
-}
-
-// DriveStatePathWithOverride returns the state DB path for a drive. When
-// stateDir is non-empty, the DB is placed there (with tilde expansion)
-// instead of the platform default (B-193).
-func DriveStatePathWithOverride(canonicalID driveid.CanonicalID, stateDir string) string {
-	if stateDir != "" {
-		expanded := expandTilde(stateDir)
-		sanitized := strings.ReplaceAll(canonicalID.String(), ":", "_")
-
-		return filepath.Join(expanded, "state_"+sanitized+".db")
-	}
-
-	return DriveStatePath(canonicalID)
 }
 
 // DriveStatePath returns the state DB path for a canonical drive ID.

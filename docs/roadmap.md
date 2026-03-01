@@ -663,7 +663,7 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 #### 5.5: Pause/resume + config reload + final cleanup
 
-**Goal**: Complete Phase 5 feature set. Ensure clean slate. Migrate drive lifecycle from `enabled` field to `paused` field.
+**Goal**: Complete Phase 5 feature set. Ensure clean slate. The `paused` field is the sole drive lifecycle mechanism.
 
 **1. New Code:**
 - `engine.go`: `Pause()` / `Resume()` — pause workers, continue collecting events, resume drains buffer
@@ -679,7 +679,7 @@ This analysis categorizes every part of the codebase by its relationship to the 
 - ~~Refactor `logout`: delete config sections for all account drives~~ ✓
 - `PausedUntil *string` field: deferred to when `pause`/`resume` commands are implemented
 - Timed pause expiry: deferred to when `pause`/`resume` commands are implemented
-- No backward compatibility for old `enabled` field (clean break)
+- The `paused` field is the only drive lifecycle mechanism
 - See [MULTIDRIVE.md §11.10](design/MULTIDRIVE.md#1110-drive-lifecycle) for full spec.
 
 **3. Code Retirement:**
@@ -691,7 +691,6 @@ This analysis categorizes every part of the codebase by its relationship to the 
 - Pause/resume tests (config-based + engine-level)
 - fsnotify config reload test
 - Timed pause expiry test
-- Backward compatibility test (`enabled = false` → `paused = true`)
 - Docs updated: CLAUDE.md, BACKLOG.md, LEARNINGS.md
 - Both CI workflows green. Full DOD checklist.
 
@@ -831,7 +830,7 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 > **Architecture resolved**: Architecture A (per-drive goroutine with isolated engines). See [MULTIDRIVE.md §11](../docs/design/MULTIDRIVE.md#11-multi-drive-orchestrator) for full specification including all 10 questions answered. See [concurrent-execution.md §19](../docs/design/concurrent-execution.md#19-multi-drive-worker-budget) for worker budget algorithm.
 
-> **Prerequisite**: Phase 5.5 (pause/resume + config reload) must be complete. The `Enabled` → `Paused` migration is done.
+> **Prerequisite**: Phase 5.5 (pause/resume + config reload) must be complete.
 
 1. `Orchestrator` struct: manages `map[CanonicalID]*DriveRunner`. Each `DriveRunner` wraps an `Engine` with panic recovery and error backoff. ~300 LOC new code, zero changes to Engine/WorkerPool/DepTracker/Executor.
 2. `ResolveDrives()` in config package: return `[]*ResolvedDrive` for all non-paused drives (when no `--drive` flag) or the specified subset. Currently only `ResolveDrive()` exists (single drive).
@@ -842,7 +841,7 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 ### 7.1: Drive removal — DONE (refactored in Phase 5.5)
 
-1. `drive remove <drive>` — **DONE**: sets `enabled = false` in config via text-level edit. State DB and token preserved. **Refactored in Phase 5.5**: deletes config section (state DB kept for fast re-add).
+1. `drive remove <drive>` — **DONE**: deletes config section. State DB and token preserved for fast re-add.
 2. `drive remove --purge <drive>` — **DONE**: permanently deletes state DB and removes config section. Token preserved if shared with other drives.
 3. Text-level config manipulation — **DONE**: `config/write.go` `DeleteDriveSection()` uses line-based text edits preserving all user comments.
 

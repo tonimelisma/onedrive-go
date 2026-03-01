@@ -53,7 +53,7 @@ var knownGlobalKeysList = func() []string {
 
 // knownDriveKeys are the valid keys inside a drive section.
 var knownDriveKeys = map[string]bool{
-	"sync_dir": true, "state_dir": true, "paused": true, "alias": true, "remote_path": true,
+	"sync_dir": true, "paused": true, "alias": true, "remote_path": true,
 	"drive_id": true, "skip_dotfiles": true, "skip_dirs": true, "skip_files": true,
 	"poll_interval": true,
 }

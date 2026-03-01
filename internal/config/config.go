@@ -109,7 +109,6 @@ type NetworkConfig struct {
 // "not specified" from "set to zero value").
 type Drive struct {
 	SyncDir      string   `toml:"sync_dir"`
-	StateDir     string   `toml:"state_dir,omitempty"` // override state DB directory (default: platform data dir)
 	Paused       *bool    `toml:"paused,omitempty"`
 	Alias        string   `toml:"alias,omitempty"`
 	RemotePath   string   `toml:"remote_path,omitempty"`
