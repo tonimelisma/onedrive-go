@@ -37,11 +37,11 @@ Defensive coding and edge cases for `internal/driveid/` and `internal/graph/`.
 
 ## Hardening: CLI Architecture
 
-Code quality and architecture improvements for the root package. Root package is at **35.5% coverage** — the weakest link. B-223 and B-224 should be the opening move of Phase 6, not deferred.
+Code quality and architecture improvements for the root package. Root package is at **35.5% coverage** — the weakest link. B-223 folded into Phase 6.0a. B-224 should open Phase 6 alongside it.
 
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
-| B-223 | Extract `DriveSession` type for per-drive resource lifecycle | P1 | Replace `clientAndDrive()`. Prerequisite for multi-drive. **Should open Phase 6.** |
+| ~~B-223~~ | ~~Extract `DriveSession` type for per-drive resource lifecycle~~ | ~~P1~~ | **Folded into Phase 6.0a** — DriveSession extraction is roadmap increment 6.0a item 1. |
 | B-224 | Eliminate global flag variables (`flagJSON`, `flagVerbose`, etc.) | P1 | Move to `CLIFlags` struct in `CLIContext`. Eliminates test pollution. **Should open Phase 6.** |
 | B-227 | Deduplicate sync_dir and StatePath validation across commands | P3 | Extract `RequireSyncDir()` and `RequireStatePath()` on `CLIContext`. |
 | ~~B-228~~ | ~~`buildLogger` silent fallthrough on unknown log level~~ | ~~P3~~ | Fixed in Phase 5.5: added `warn` case and `default` with stderr warning. |
@@ -59,7 +59,7 @@ Edge cases and correctness for `internal/graph/`.
 |----|-------|----------|-------|
 | B-020 | SharePoint lock check before upload (HTTP 423) | P2 | Avoid overwriting co-authored documents. |
 | B-021 | Hash fallback chain for missing hashes | P2 | Some Business/SharePoint files lack any hash. Fall back: QuickXorHash → SHA256 → size+eTag+mtime. |
-| B-007 | Cross-drive DriveID handling for shared/remote items | P3 | Partially done: `resolveParentDriveID()` handles cross-drive parent chains. Needs exhaustive E2E testing. |
+| ~~B-007~~ | ~~Cross-drive DriveID handling for shared/remote items~~ | ~~P3~~ | **Folded into Phase 6.4a** — remoteItem parsing and cross-drive DriveID handling is roadmap increment 6.4a. |
 | B-283 | URL-encode query parameter in `SearchSites()` | P2 | `SearchSites` passes raw query to `fmt.Sprintf` URL — spaces/special chars will break the request. Use `url.QueryEscape()`. One-liner fix but needs test. |
 
 ## Hardening: Config
@@ -67,13 +67,14 @@ Edge cases and correctness for `internal/graph/`.
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
 | B-284 | `write.go` config writer uses fragile line-based TOML editing | P3 | Regex line matching instead of TOML AST. Unusual hand-edited formatting could silently produce wrong results. Consider TOML AST library for writes. |
+| B-287 | Symlink-aware sync_dir overlap warning | P4 | Log warning when `filepath.EvalSymlinks` resolves differently from configured path. Cosmetic safety — lexical overlap check in `checkSyncDirOverlap()` is sufficient for correctness. |
 
 ## Hardening: Test Infrastructure
 
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
 | B-285 | Standardize `baseline_test.go` to testify style | P4 | 2300+ lines of stdlib assertions. `canonical_test.go` was converted (B-278), `baseline_test.go` should follow. Purely cosmetic — do alongside behavioral changes, not standalone. |
-| B-286 | No shared/business drive in E2E test matrix | P3 | All E2E tests run against `personal:testitesti18@outlook.com`. `shared` type and `ConstructShared()` are unit-tested but untested against real Graph API. Phase 7 prerequisite. |
+| B-286 | No shared/business drive in E2E test matrix | P3 | All E2E tests run against `personal:testitesti18@outlook.com`. `shared` type and `ConstructShared()` are unit-tested but untested against real Graph API. Phase 6.0d adds second personal account. |
 
 ## Hardening: Watch Mode
 

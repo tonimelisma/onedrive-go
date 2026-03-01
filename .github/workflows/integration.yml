@@ -135,6 +135,15 @@ jobs:
               go test -tags="${E2E_TAGS}" -race -v -timeout=30m ./e2e/...
           done
 
+      - name: Run multi-drive E2E tests
+        if: contains(env.ONEDRIVE_TEST_DRIVES, ',')
+        run: |
+          set -euo pipefail
+          echo "=== Multi-drive E2E tests ==="
+          ONEDRIVE_TEST_DRIVES_MULTI="$ONEDRIVE_TEST_DRIVES" \
+            go test -tags="e2e,e2e_full" -race -v -timeout=30m \
+            -run "TestE2E_MultiDrive" ./e2e/...
+
       - name: Upload E2E debug logs
         if: failure()
         uses: actions/upload-artifact@v4

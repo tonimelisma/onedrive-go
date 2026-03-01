@@ -1092,55 +1092,32 @@ profiling demonstrates a bottleneck:
 
 ---
 
-## 19. Multi-Drive Worker Budget
+## 19. Worker Pool Sizing
 
-> **STATUS: RESOLVED** — Architecture A (per-drive goroutine with isolated engines) selected. See [MULTIDRIVE.md §11](MULTIDRIVE.md#11-multi-drive-orchestrator) for full specification.
+Total workers per Engine come from the `transfer_workers` config key (default 8, range 4-64). In multi-drive mode, the Orchestrator distributes the global `transfer_workers` budget across drives proportionally (see [MULTIDRIVE.md §11.3](MULTIDRIVE.md#113-concurrency-configuration) for the budget algorithm).
 
-When multiple drives sync simultaneously, the total worker count across all drives is bounded by a global cap to prevent resource exhaustion.
-
-### Worker Budget Algorithm
+Lane distribution (internal, not configurable):
 
 ```
-globalCap = config.MaxWorkers (default: 16, minimum: 4)
-minPerDrive = 4
-
-For each drive in config that is not paused:
-    weight[drive] = max(1, drive.baselineFileCount)
-
-totalWeight = sum(weight[all active drives])
-
-For each active drive:
-    allocated = max(minPerDrive, globalCap * weight[drive] / totalWeight)
-
-// If sum(allocated) > globalCap due to minPerDrive floors, scale down
-// proportionally but never below minPerDrive.
+reservedInteractive = max(2, total/8)
+reservedBulk        = max(2, total/8)
+shared              = total - reservedInteractive - reservedBulk
 ```
 
-Each drive's `WorkerPool.Start(ctx, allocatedWorkers)` receives its allocation. The lane split (interactive/bulk/shared) within each drive follows the existing per-drive model from §6. Rebalanced on config reload when the active drive set changes (drives added, removed, or paused).
+Example with `transfer_workers=8`: 2 interactive + 2 bulk + 4 shared = 8 total.
 
-### Checker Pool (Hash Computation)
-
-The hash checker pool is **global** — a single `*semaphore.Weighted` shared across all `LocalObserver` instances. All drives share the same physical disk(s), so a global permit is the correct scope.
-
-The semaphore limit is auto-detected by storage type at startup:
-- **SSD** (~500MB/s+ sequential): 8 concurrent readers
-- **HDD** (~150MB/s sequential): 2 concurrent readers (avoid seek thrashing)
-- **Unknown/network**: 4 concurrent readers
-
-Detection: `/sys/block/*/queue/rotational` on Linux, heuristics on macOS. Configurable override via `parallel_checkers`.
-
-Future: the semaphore limit itself becomes adaptive (AIMD on observed read throughput). Same single semaphore, dynamically sized — not a new mechanism.
+File hashing concurrency is controlled separately by `check_workers` (default 4) via a `*semaphore.Weighted` in LocalObserver. This is independent of transfer workers because hashing is CPU-bound while transfers are I/O-bound.
 
 ### Concurrency Stage Summary
 
 Each pipeline stage has exactly ONE bottleneck and ONE control mechanism:
 
-| Stage | Bottleneck | Control | Scope | Phase 7.0 |
-|-------|-----------|---------|-------|-----------|
-| Walk | Disk metadata I/O | None (sequential) | Per-drive | — |
-| Hash | Disk read throughput | Global semaphore | Global | Static (auto-detect) |
-| Execution | Network | Worker count per drive | Per-drive | Static proportional budget |
-| DB commits | SQLite write | None (not bottleneck) | Per-drive | — |
-| Memory | Buffer size | Buffer backpressure | Per-drive | None needed |
+| Stage | Bottleneck | Control | Config Key | Scope |
+|-------|-----------|---------|------------|-------|
+| Walk | Disk metadata I/O | None (sequential) | — | Per-drive |
+| Hash | Disk read throughput | Global semaphore | `check_workers` | Global |
+| Execution | Network | Worker count per drive | `transfer_workers` | Per-drive (proportional) |
+| DB commits | SQLite write | None (not bottleneck) | — | Per-drive |
+| Memory | Buffer size | Buffer backpressure | — | Per-drive |
 
-No overlapping mechanisms. Future AIMD adjusts the same control knob (semaphore limit or worker count) that Phase 7.0 sets statically.
+No overlapping mechanisms. Future AIMD adjusts the same control knob (semaphore limit or worker count) that these config keys set statically.

@@ -397,6 +397,52 @@ The Remote Observer needs to:
 6. Handle shortcut appearance (new share accepted) → trigger initial enumeration of the shared folder
 7. Handle shortcut disappearance (share revoked or shortcut removed) → delete local copies
 
+### Folder-Scoped Delta Specification
+
+New `graph.Client` methods:
+
+```go
+DeltaFolder(ctx, driveID, folderID, token) → (*DeltaPage, error)
+DeltaFolderAll(ctx, driveID, folderID, token) → ([]Item, string, error)
+```
+
+URL: `/drives/{driveID}/items/{folderID}/delta`
+Same normalization pipeline as primary `Delta()`.
+
+New `DeltaFetcher` interface method:
+```go
+DeltaFolder(ctx, driveID, folderID, token) → (*DeltaPage, error)
+```
+
+New `graph.Item` fields:
+```go
+RemoteDriveID driveid.ID  // from remoteItem.parentReference.driveId
+RemoteItemID  string      // from remoteItem.id
+```
+
+New graph response types:
+```go
+remoteItemFacet { ID, ParentReference, Folder }
+sharedFacet { Owner { User { DisplayName, Email, ID } } }
+```
+
+**Observer flow for shortcuts**:
+
+1. Primary `FullDelta` — unchanged, but now detects items where `RemoteItemID != "" && IsFolder` → these are shortcuts.
+2. For each shortcut: load scope token from `delta_tokens` table (`drive_id`, `scope_id=remoteItemID`) → call `DeltaFolderAll` on the source drive.
+3. Path mapping: sub-delta paths prefixed with shortcut's local position. E.g., shortcut at "Family Photos" + sub-item "2024/vacation.jpg" → "Family Photos/2024/vacation.jpg".
+4. Sub-delta events get `DriveID` = source drive (not user's drive). Executor targets source drive for API operations.
+5. Scope delta tokens committed per-scope after cycle completes.
+
+**Shortcut lifecycle**:
+
+| Event | Action |
+|-------|--------|
+| New shortcut | Initial sub-delta enumeration, create local dir |
+| Shortcut removed | Delete local dir recursively, clean scope token |
+| Shortcut moved | Rename local dir, update path prefix |
+| Permission revoked (403) | Log summary, keep local, mark read-only |
+
 ### Executor changes
 
 The executor already takes `driveID` per action. Items under shortcuts will have the source drive's ID in their action. Downloads, uploads, and deletes will target the correct drive. The key change: the executor must use the user's OAuth token (which has permission to access the shared content) against a DIFFERENT drive ID than the configured drive. This works with the current `graph.Client` since the token is per-account, not per-drive.
@@ -410,6 +456,24 @@ The executor already takes `driveID` per action. Items under shortcuts will have
 | Shortcut removed | Primary delta shows shortcut as deleted | Delete local copies (consistent with "remote deleted → local deleted"). Post-release: add config option for alternative behavior (keep local). |
 | Shortcut content changes | Source-drive scoped delta returns changes | Normal sync (download/upload/delete) targeting source drive |
 | Source permissions change | 403 on source-drive operations | Summarized error (not per-file). "3 uploads failed for drive X (read-only share)". Treat as error, not warning. |
+
+### DriveTypeShared Code Gaps
+
+| Location | Gap | Fix |
+|----------|-----|-----|
+| `config/write.go` `BaseSyncDir()` | No case for shared, returns "" | Add: `~/OneDrive-Shared/{displayName}` |
+| `config/write.go` `DefaultSyncDir()` | Returns "" when `BaseSyncDir` returns "" | Works once `BaseSyncDir` fixed |
+| `config/drive.go` `CollectOtherSyncDirs()` | Shared drives invisible in collision check | Works once `BaseSyncDir` fixed |
+| `config/display_name.go` | Opaque "Shared (driveID)" placeholder | Acceptable fallback; `drive add` sets real name |
+| `config/drive.go` `DriveTokenPath()` | Only handles personal/business/sharepoint | Add shared case (delegates to `TokenCanonicalID`) |
+| `graph/types.go` `Drive` struct | `OwnerEmail` field added (B-279) | **DONE** — Foundation hardening PR |
+| `graph/types.go` `Item` struct | No `RemoteDriveID`/`RemoteItemID` fields | Add for shortcut detection |
+
+`BaseSyncDir` signature change:
+```
+BaseSyncDir(cid, orgName) → BaseSyncDir(cid, orgName, displayName)
+For shared: returns "~/OneDrive-Shared/" + SanitizePathComponent(displayName)
+```
 
 ### Duplicate-source detection (DP-9)
 
@@ -546,6 +610,26 @@ Non-filter settings (`poll_interval`, `log_level`, transfer settings, safety set
 
 ---
 
+## 10.1 Sync Directory Overlap Prevention
+
+New function: `checkSyncDirOverlap(cfg *Config) []error`
+
+Validates that no `sync_dir` is an ancestor or descendant of another. Uses `filepath.Clean` + `strings.HasPrefix` with separator suffix (prevents `/home/user/OneDrive` matching `/home/user/OneDrive2`).
+
+Called from:
+1. `validateDrives()` at config load time (catches explicit sync_dirs).
+2. `Orchestrator.Start()` after computing runtime defaults (catches derived sync_dirs that weren't in the config file).
+
+**Symlinks**: lexical path check only. No `filepath.EvalSymlinks` (fails for non-existent paths, introduces I/O into config parsing). Document as a known limitation.
+
+Error format:
+```
+sync_dir overlap: ~/OneDrive/personal (personal:user@outlook.com)
+  is inside ~/OneDrive (business:user@contoso.com)
+```
+
+---
+
 ## 11. Multi-Drive Orchestrator
 
 > **STATUS: RESOLVED** — Architecture A (per-drive goroutine with isolated engines) selected after analysis of four candidate architectures. All 10 open questions answered. See §11.11 for alternatives considered.
@@ -572,7 +656,7 @@ Orchestrator
 type Orchestrator struct {
     runners      map[driveid.CanonicalID]*DriveRunner
     clients      map[string]*graph.Client  // keyed by token file path
-    globalCap    int                       // total worker budget (configurable, default 16)
+    globalCap    int                       // total worker budget (transfer_workers, default 8)
     configPath   string                    // path to config.toml (reloaded on SIGHUP)
     logger       *slog.Logger
     mu           sync.Mutex
@@ -590,25 +674,56 @@ type DriveRunner struct {
 }
 ```
 
-### 11.3 Worker Budget Algorithm
+### 11.3 Concurrency Configuration
+
+Two config keys control all concurrency:
+
+```toml
+transfer_workers = 8    # concurrent file operations (default 8, range 4-64)
+check_workers    = 4    # concurrent file hash checks (default 4, range 1-16)
+```
+
+**`transfer_workers`**: Concurrent sync action executors. Each pulls actions from the WorkerPool and executes them: downloads, uploads, renames, deletes, mkdirs. The lane system (interactive/bulk/shared) prioritizes which actions get picked up first — small metadata ops (<10MB) via interactive lane, large transfers (>=10MB) via bulk lane — but this is internal, not configurable.
+
+**`check_workers`**: Controls a global `*semaphore.Weighted` for concurrent QuickXorHash computation in LocalObserver. CPU-bound, independent of network I/O. Currently hashing is synchronous (1 at a time) — this adds concurrency.
+
+**Deprecated keys** (warn on use, ignore values):
+
+| Old Key | Replacement |
+|---------|-------------|
+| `parallel_downloads` | `transfer_workers` |
+| `parallel_uploads` | `transfer_workers` |
+| `parallel_checkers` | `check_workers` |
+
+### 11.3.1 Multi-Drive Transfer Budget
 
 ```
-globalCap = config.MaxWorkers (default: 16, minimum: 4)
+globalCap = config.transfer_workers (default 8)
 minPerDrive = 4
 
-For each drive in config that is not paused:
+For each active (non-paused) drive:
     weight[drive] = max(1, drive.baselineFileCount)
+totalWeight = sum(weights)
+allocation[drive] = max(minPerDrive, globalCap * weight[drive] / totalWeight)
 
-totalWeight = sum(weight[all active drives])
+If sum(allocations) > globalCap due to minPerDrive floors:
+    Scale down drives above minPerDrive proportionally.
+    Never go below minPerDrive.
 
-For each active drive:
-    allocated = max(minPerDrive, globalCap * weight[drive] / totalWeight)
-
-// If sum(allocated) > globalCap due to minPerDrive floors, scale down proportionally
-// but never below minPerDrive.
+Single-drive (N=1): the one drive gets the full globalCap.
 ```
 
 A drive with 100K files and 7 shared shortcuts gets ~90% of workers. A drive with 5 files gets 4 workers. Shortcuts don't affect allocation because they're internal to the Engine — the shortcut content is part of the file count. Rebalanced on config reload (SIGHUP) when the active drive set changes.
+
+`check_workers` is NOT divided across drives. The Orchestrator creates one global `*semaphore.Weighted` and injects it into every LocalObserver instance. All drives share the same hash concurrency limit.
+
+### 11.3.2 Rebalancing on SIGHUP
+
+WorkerPool does NOT support dynamic resizing. On config reload when the active drive set changes or allocations shift:
+
+1. **Stopped drives**: cancel driveCtx, wait for drain, close Engine.
+2. **New drives**: create Engine + DriveRunner with computed allocation.
+3. **Continued drives with changed allocation**: stop and restart with new allocation. Safe because: in-flight actions drain during graceful shutdown, delta token not advanced until all actions succeed, restart is sub-second (create Engine, load cached baseline, start workers).
 
 ### 11.4 graph.Client Pooling
 
@@ -623,7 +738,7 @@ func (o *Orchestrator) getOrCreateClient(tokenPath string) *graph.Client {
 }
 ```
 
-Multiple drives on the same account (personal + SharePoint libraries) share one client. 429 backoff is automatically coordinated because `graph.Client.Do()` handles retry/backoff per-request, and all drives using the same client wait on the same backoff.
+Multiple drives on the same account (personal + SharePoint libraries) share one client. Shared HTTP connection pool and TLS session provide natural coordination. See §11.16 for rate limit handling details.
 
 ### 11.5 Context Tree
 
@@ -659,30 +774,62 @@ func (dr *DriveRunner) run(ctx context.Context) {
 }
 ```
 
-On persistent error (3 consecutive failures), the DriveRunner enters a backoff state: retry with exponential delay (1m, 5m, 15m, 1h). Other drives continue unaffected.
+On persistent error (3 consecutive failures), the DriveRunner enters a backoff state: retry with exponential delay (1m, 5m, 15m, 1h cap). Other drives continue unaffected.
 
-### 11.7 Config Reload (SIGHUP)
+### 11.7 Orchestrator Lifecycle
+
+The Orchestrator is ALWAYS used, even for a single drive. There is no separate single-drive code path.
+
+#### 11.7.1 Startup Sequence
+
+```
+Orchestrator.Start(ctx):
+  1. Load + validate config from configPath. Fatal if unreadable.
+  2. Resolve active drives: all non-paused drives. Zero drives = valid
+     (Orchestrator idles, waits for SIGHUP).
+  3. Create graph.Client pool: one Client per unique token file path.
+     getOrCreateClient(tokenPath) → map[tokenPath]*graph.Client.
+  4. Compute worker budget from config.transfer_workers.
+  5. Create global hash semaphore from config.check_workers.
+  6. For each active drive: resolve token path → get shared Client →
+     NewEngine(EngineConfig{Workers: allocated, ...}) → DriveRunner →
+     start goroutine with driveCtx derived from ctx.
+  7. Log: "orchestrator started: N drives, M workers, K clients"
+```
+
+#### 11.7.2 Shutdown Sequence
+
+```
+Orchestrator.Shutdown(ctx):
+  1. Cancel orchestrator context → propagates to all driveCtxs.
+     Each Engine's RunWatch sees ctx.Done, workers drain gracefully.
+  2. Wait for all DriveRunners to exit (30s timeout per runner).
+  3. Close all Engines (release DB connections).
+  4. Clear maps. Log completion.
+```
+
+#### 11.7.3 Config Reload (SIGHUP)
 
 The daemon reloads `config.toml` on SIGHUP for immediate config pickup:
 
 ```
-1. Re-read and validate config file
-   - Valid → proceed to step 2
-   - Invalid → log warning with parse error, keep old config. No disruption.
-2. Diff against current running drives:
-   - New drives in config: create DriveRunner, allocate workers, start
-   - Drives removed from config: cancel driveCtx, wait for shutdown, remove runner
-   - Drives with paused=true added/changed: stop DriveRunner (or don't start)
-   - Drives with paused removed: start DriveRunner
-   - Hot-reloadable settings changed (filters, display_name): apply in-place
-   - Non-hot-reloadable settings changed (sync_dir): log warning, requires restart
-   - Unchanged drives: keep running
-3. Rebalance worker allocations across active (non-paused) drives
+Orchestrator.Reload():
+  1. Re-read + validate config. Invalid → log warning, keep old, return.
+  2. Resolve new active drive set (non-paused).
+  3. Diff: removed = in runners but not new. added = new but not runners.
+     continued = in both.
+  4. Stop removed drives: cancel, wait, close, delete from map.
+  5. Update Client pool: remove unused, create new.
+  6. Compute new worker budget.
+  7. Continued drives with changed allocation: stop and restart.
+  8. Start new/restarted drives.
+  9. Update hash semaphore if check_workers changed.
+  10. Log: "+N started, -M stopped, K restarted"
 ```
 
 CLI commands like `pause`, `resume`, `drive add`, `drive remove` write directly to `config.toml` and send SIGHUP to the daemon via PID file. The daemon reloads config immediately. No RPC socket is needed for these operations.
 
-Non-hot-reloadable settings (require daemon restart): `sync_dir`, `max_workers`, network config. Drive presence and `paused` state are immediate.
+Non-hot-reloadable settings (require daemon restart): `sync_dir`, network config. Drive presence, `paused` state, `transfer_workers`, and `check_workers` are immediate (drives with changed worker allocation are stopped and restarted).
 
 ### 11.8 Aggregate Reporting
 
@@ -883,21 +1030,68 @@ All CLI commands are standalone — they read/write config, state DBs, and token
 |---------|----------|
 | `sync --watch` | Start daemon. Fail with "already running" if PID lock exists. |
 
-### 11.12 Concurrency Stages and Control Mechanisms
+### 11.12 Sync Command Architecture
+
+The sync command ALWAYS uses the Orchestrator, regardless of how many drives are active. There is no separate single-drive code path.
+
+```
+sync                     → Orchestrator with all non-paused drives
+sync --drive X           → Orchestrator with 1 DriveRunner (drive X)
+sync --drive X --drive Y → Orchestrator with 2 DriveRunners
+sync --watch             → Orchestrator.RunWatch (daemon mode)
+sync --watch --drive X   → Orchestrator.RunWatch with 1 DriveRunner
+```
+
+**Why no separate single-drive path**:
+- One code path to maintain and debug.
+- N=1 means one DriveRunner — same logic, no special case.
+- Overhead: ~50ms startup, ~5KB memory — negligible for I/O-bound sync.
+- Prevents "works for N=1 but breaks for N=2" class of bugs.
+- Syncthing uses exactly this pattern (central coordinator, per-folder engines).
+
+**CLI types**:
+- `CLIContext` (existing): holds one `*ResolvedDrive`. Used by file-op commands (ls, get, put, rm, mkdir, stat) — unchanged.
+- `sync` command: creates Orchestrator directly, does NOT use CLIContext.
+
+**New functions**:
+- `config.ResolveDrives(cfg, selectors, accountFilter, includePaused)` → `[]*ResolvedDrive` — returns all matching non-paused drives.
+- `--drive` becomes `StringArrayVar` (repeatable). File-op commands check `len <= 1`, error if more than one.
+
+### 11.12.1 DriveSession Type (B-223)
+
+Replaces `clientAndDrive()` 4-tuple with a struct:
+
+```go
+type DriveSession struct {
+    Client      *graph.Client
+    Transfer    *graph.Client       // no-timeout for uploads/downloads
+    TokenSource graph.TokenSource
+    DriveID     driveid.ID
+    Resolved    *config.ResolvedDrive
+}
+```
+
+Constructor: `NewDriveSession(ctx, resolved, cfg, logger)`:
+1. Resolve token CID via `config.TokenCanonicalID()`
+2. `DriveTokenPath()` → `TokenSourceFromPath()`
+3. Create both standard and transfer Clients
+4. Discover DriveID if not in config
+
+### 11.13 Concurrency Stages and Control Mechanisms
 
 Each stage of the sync pipeline has exactly ONE bottleneck and exactly ONE control mechanism. No overlapping mechanisms.
 
-| Stage | Bottleneck | Control Mechanism | Scope | Phase 7.0 | Future |
-|-------|-----------|-------------------|-------|-----------|--------|
-| Walk | Disk metadata I/O | None (sequential) | Per-drive | — | — |
-| Hash | Disk read throughput | Global semaphore (`parallel_checkers`) | Global | Static (auto-detect) | Same semaphore, AIMD-sized |
-| Execution | Network (latency + bandwidth) | Worker count per drive | Per-drive | Static proportional budget | AIMD per-account (replaces static) |
-| DB commits | SQLite write | None (not a bottleneck) | Per-drive | — | — |
-| Memory | Buffer size | Buffer backpressure | Per-drive | None needed | High/low water marks |
+| Stage | Bottleneck | Control Mechanism | Config Key | Scope |
+|-------|-----------|-------------------|------------|-------|
+| Walk | Disk metadata I/O | None (sequential) | — | Per-drive |
+| Hash | Disk read throughput | Global semaphore | `check_workers` | Global |
+| Execution | Network (latency + bandwidth) | Worker count per drive | `transfer_workers` | Per-drive (proportional) |
+| DB commits | SQLite write | None (not a bottleneck) | — | Per-drive |
+| Memory | Buffer size | Buffer backpressure | — | Per-drive |
 
-No overlapping mechanisms: hashing has ONE control (semaphore). Execution has ONE control (worker count). Buffer has ONE control (backpressure). They are in different pipeline stages and cannot conflict. Future AIMD is not a new, additional mechanism — it dynamically adjusts the same control knob (semaphore limit or worker count) that Phase 7.0 sets statically.
+No overlapping mechanisms: hashing has ONE control (semaphore via `check_workers`). Execution has ONE control (worker count from `transfer_workers` budget). Buffer has ONE control (backpressure). They are in different pipeline stages and cannot conflict. Future AIMD is not a new, additional mechanism — it dynamically adjusts the same control knob that these config keys set statically.
 
-### 11.13 Resource Sharing (Non-Orchestrator Concerns)
+### 11.14 Resource Sharing (Non-Orchestrator Concerns)
 
 **graph.Client pooling**: `map[tokenPath]*graph.Client` in Orchestrator. Created once per unique token path. Thread-safe (`graph.Client` is stateless per-request).
 
@@ -905,24 +1099,46 @@ No overlapping mechanisms: hashing has ONE control (semaphore). Execution has ON
 
 **Bandwidth limiting**: Global token bucket on shared `http.RoundTripper` (per concurrent-execution.md §7). One physical network = one bandwidth limit, shared across ALL drives regardless of account.
 
-**Checker pool**: Global `*semaphore.Weighted` shared across all `LocalObserver` instances. Limit auto-detected by storage type (SSD: 8, HDD: 2, unknown: 4) or configurable via `parallel_checkers`. Detect storage type at startup via `/sys/block/*/queue/rotational` on Linux, heuristics on macOS.
+**Checker pool**: Global `*semaphore.Weighted` shared across all `LocalObserver` instances. Configurable via `check_workers` (default 4, range 1-16). CPU-bound, independent of transfer workers.
 
-### 11.14 Answers to Open Questions
+### 11.15 Answers to Open Questions
 
 | # | Question | Answer |
 |---|----------|--------|
 | 1 | Orchestrator struct and lifecycle | `Orchestrator` manages `map[CanonicalID]*DriveRunner`. Each DriveRunner owns an Engine. `sync` (one-shot) runs all non-paused drives concurrently and exits. `sync --watch` starts the daemon: reloads config.toml on SIGHUP, starts/stops DriveRunners as drives are added/removed/paused. |
 | 2 | ClientPool | `map[tokenPath]*graph.Client` in Orchestrator. Created once per token path. Shared by reference. Thread-safe. |
-| 3 | Worker budget | Global cap (`max_workers`, default 16), proportional allocation by baseline file count, minimum 4 per drive. Rebalanced on config reload. |
+| 3 | Worker budget | Global cap (`transfer_workers`, default 8), proportional allocation by baseline file count, minimum 4 per drive. Rebalanced on config reload. |
 | 4 | Error isolation | Per-drive goroutine with panic recovery. 3 consecutive failures → exponential backoff. Other drives unaffected. |
 | 5 | Watch mode lifecycle | Daemon reloads config.toml on SIGHUP. CLI commands write to config and send SIGHUP via PID file → daemon reloads immediately. Drive presence controlled by config sections. Paused state persisted in config. |
 | 6 | Aggregate reporting | `status` reads config + token files + state DBs directly. Works with or without daemon. Shows: ready/paused/token expired. Removed drives are not shown. |
 | 7 | Context tree | `processCtx → orchestratorCtx → driveCtx[i] → Engine[i]`. Independent cancellation per drive. |
 | 8 | Bandwidth limiting | Global token bucket on shared `http.RoundTripper` across ALL drives. One physical network = one bandwidth limit. |
 | 9 | Rate limit coordination | 429s are per-account (per OAuth token), NOT global. Handled entirely by `graph.Client`. Drives sharing a token share a client, which handles 429 backoff per-request. |
-| 10 | Checker pool | Global `*semaphore.Weighted` shared across all `LocalObserver` instances. Limit auto-detected by storage type or configurable via `parallel_checkers`. |
+| 10 | Checker pool | Global `*semaphore.Weighted` shared across all `LocalObserver` instances. Configurable via `check_workers` (default 4). |
 
-### 11.15 Alternatives Considered
+### 11.16 Rate Limit Handling
+
+Microsoft Graph throttles at three levels: per-user (3,000 req/5 min), per-app-per-tenant (resource units/min), and per-tenant (resource units/5 min). Different operations cost different resource units (delta=1 RU, CRUD=2 RU, permissions=5 RU).
+
+`graph.Client` handles 429 per-request:
+
+1. On 429: parse `Retry-After` header (integer seconds), sleep, retry.
+2. If no `Retry-After`: exponential backoff (1s base, 2x factor, 60s cap).
+3. 25% jitter on all backoff durations prevents synchronization.
+4. Max 5 retries per request.
+
+This per-request approach is sufficient because:
+
+- With <=8 workers per drive, thundering herd is minimal (at most 7 extra 429 responses before all workers independently back off).
+- Each worker's jitter desynchronizes retries naturally.
+- rclone and abraunegg/onedrive use the same per-request approach.
+- Microsoft's guidance says to honor `Retry-After` and retry — which we do.
+
+Shared `graph.Client` across drives on the same account provides natural coordination: same HTTP connection pool, same TLS session, same retry state per individual request.
+
+There is NO shared rate-limit gate across workers or drives. This is a deliberate design decision — per-request Retry-After handling is sufficient and is the industry standard.
+
+### 11.17 Alternatives Considered
 
 Three alternative architectures were evaluated and rejected:
 

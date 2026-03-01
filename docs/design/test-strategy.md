@@ -867,6 +867,61 @@ All helpers use exponential backoff via `pollBackoff()`: 500ms, 1s, 2s, 4s (capp
 
 See also: DP-11 in [decisions.md](decisions.md) and LEARNINGS.md §6 "Microsoft Graph eventual consistency".
 
+### 6.5 Multi-Drive E2E Tests
+
+Build tag: `e2e,e2e_full` (nightly only).
+
+#### Test Account Strategy
+
+| Account | Type | Purpose | Status |
+|---------|------|---------|--------|
+| testitesti18@outlook.com | Personal (free) | Primary, every CI push | Active |
+| testitesti19@outlook.com | Personal (free) | Second drive for orchestrator tests | Planned |
+| shared folder from 18→19 | Shared | Cross-account shared folder sync | Planned |
+| TBD ($6/mo M365 Business) | Business | Business API quirks | Backlog |
+
+#### Second Account Provisioning Runbook
+
+1. Create free Outlook.com account (`testitesti19@outlook.com`).
+2. Login locally: `go run . login --drive personal:testitesti19@outlook.com`
+3. Upload token to Azure Key Vault:
+   ```bash
+   az keyvault secret set \
+     --vault-name kv-onedrivego-ci \
+     --name onedrive-oauth-token-personal-testitesti19-outlook-com \
+     --file ~/.local/share/onedrive-go/token_personal_testitesti19@outlook.com.json \
+     --content-type application/json
+   ```
+4. Update GitHub variable:
+   ```bash
+   gh variable set ONEDRIVE_TEST_DRIVES \
+     --body "personal:testitesti18@outlook.com,personal:testitesti19@outlook.com"
+   ```
+5. Verify: `./scripts/validate-ci-locally.sh personal:testitesti19@outlook.com`
+
+#### Shared Folder Setup
+
+1. From testitesti18: create folder `shared-e2e-test`, share with testitesti19.
+2. From testitesti19: accept invitation, note driveId + itemId from `GET /me/drive/sharedWithMe`.
+3. Canonical ID: `shared:testitesti19@outlook.com:{driveId}:{itemId}`
+4. No additional token needed — personal token grants access.
+
+#### Test Scenarios
+
+| Test | Drives | Scenario | Verifies |
+|------|--------|----------|----------|
+| `TestE2E_MultiDrive_SimultaneousSync` | 2 | Files on both, run sync | Both synced, no interference |
+| `TestE2E_MultiDrive_Status` | 2 | Run status with 2 drives | Both drives shown correctly |
+| `TestE2E_MultiDrive_PauseResume` | 2 | Pause one, sync | Paused untouched, other synced |
+| `TestE2E_MultiDrive_OneFails` | 2 | Invalidate one token, sync | Failed drive errors, other succeeds |
+| `TestE2E_MultiDrive_ConfigReload` | 2 | Start 1, add 2nd + SIGHUP | New drive picked up |
+
+#### Infrastructure
+
+- New file: `e2e/orchestrator_e2e_test.go`
+- New helper: `writeMultiDriveConfig(t, drives, syncDirs) string`
+- New env var: `ONEDRIVE_TEST_DRIVES_MULTI` (full list for multi-drive tests)
+
 ---
 
 ## 7. Chaos & Fault Injection Testing
