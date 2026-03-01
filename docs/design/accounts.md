@@ -198,7 +198,7 @@ skip_dirs = ["node_modules", ".git", "vendor"]
 ["sharepoint:alice@contoso.com:marketing:Documents"]
 display_name = "Marketing / Documents"
 sync_dir = "~/Contoso/Marketing - Documents"
-enabled = false
+paused = true
 
 ["shared:me@outlook.com:b!TG9yZW0:01ABCDEF"]
 display_name = "Jane's Photos"
@@ -223,7 +223,8 @@ Quotes around section names are required by TOML because `@` and `:` are not val
 | Key | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `sync_dir` | string | No | (computed) | Where to sync. Must be unique across drives. Auto-computed from canonical ID + token metadata if omitted. |
-| `enabled` | bool | No | `true` | `false` = paused (drive remove sets this) |
+| `paused` | bool | No | `false` | `true` = paused (pause command sets this; replaces old `enabled` field) |
+| `paused_until` | string | No | — | RFC3339 timestamp for timed pause expiry (e.g., `2026-02-28T18:00:00Z`) |
 | `display_name` | string | No | (auto-derived) | Human-facing name. Auto-generated at drive add time, user-editable. |
 | `owner` | string | No | — | Owner's email (shared drives only) |
 | `sync_vault` | bool | No | `false` | Include Personal Vault items in sync (dangerous — vault auto-lock can cause local deletes) |
@@ -240,17 +241,21 @@ Filter settings are per-drive native (no global defaults to inherit from). Non-f
 
 ### Auto-creation and modification
 
-Config is auto-created by `login` and modified by `drive add`/`drive remove`:
+Config is auto-created by `login` and modified by `drive add`/`drive remove`/`pause`/`resume`:
 
-- `login` -> creates config with drive section (if new account)
-- `drive add` -> appends drive section
-- `drive remove` -> sets `enabled = false`
-- `drive remove --purge` -> removes section + state DB
-- `logout` -> no config change (only deletes token)
-- `logout --purge` -> removes sections + state DBs for all affected drives
-- `sync --watch` re-reads config each sync cycle; changes take effect on next cycle
+- `login` -> creates config with drive section (if new account). If shadow file exists from prior `logout`, restores from shadow.
+- `drive add` -> restores from shadow file if available, otherwise appends fresh drive section
+- `drive remove` -> moves section to shadow file, removes from config
+- `drive remove --purge` -> removes section + shadow file + state DB
+- `pause` -> sets `paused = true` (+ optional `paused_until`) in config
+- `resume` -> removes `paused` / `paused_until` from config
+- `logout` -> deletes token, moves all account's drive sections to shadow files
+- `logout --purge` -> deletes token, removes sections + shadow files + state DBs for all affected drives
+- `sync --watch` watches config.toml via fsnotify; changes take effect within milliseconds
 
-Manual editing always supported. The tool reads config fresh on each run (or each sync cycle in watch mode).
+Manual editing always supported. The tool reads config fresh on each run. In watch mode, fsnotify provides immediate pickup.
+
+See [MULTIDRIVE.md §11.10](MULTIDRIVE.md#1110-drive-lifecycle-shadow-files) for the full drive lifecycle specification including shadow files, pause/resume, and timed pause expiry.
 
 ### Config file management: text-level manipulation
 
@@ -298,9 +303,11 @@ Each modification is a small, testable function that operates on the file as lin
 
 | Operation | When | How |
 |-----------|------|-----|
-| Append drive section | `login`, `drive add` | Append new `["type:email"]` block at end of file |
-| Set `enabled = false` | `drive remove` | Find section header, find or insert `enabled` key |
+| Append drive section | `login`, `drive add` | Append new `["type:email"]` block at end of file (or restore from shadow) |
+| Delete section | `drive remove` | Find section header, delete lines through next header or EOF (moved to shadow) |
 | Delete section | `drive remove --purge` | Find section header, delete lines through next header or EOF |
+| Set `paused = true` | `pause` | Find section header, find or insert `paused` key |
+| Remove `paused` | `resume` | Find section header, delete `paused` and `paused_until` lines |
 | Rename section header | Email change detection | Find-and-replace one `["old"]` → `["new"]` line |
 
 User comments survive every operation because no line is touched unless it's the specific target of the edit.
@@ -356,9 +363,11 @@ Authentication:
 
 Drive management:
   drive list                Show configured drives + available drives from network (including shared-with-me folders)
-  drive add <name>          Add a new drive by display name or canonical ID, or resume a paused one
-  drive remove [--purge]    Pause a drive (--purge: delete state DB + config section)
+  drive add <name>          Add a new drive by display name or canonical ID (restores from shadow if available)
+  drive remove [--purge]    Remove a drive (moves to shadow; --purge: delete shadow + state DB)
   drive search <term>       Search SharePoint sites by name (shared-with-me folders discoverable via drive list)
+  pause [--drive X] [dur]   Pause sync for a drive or all drives (optional duration, e.g., "2h")
+  resume [--drive X]        Resume a paused drive or all drives
 
 Sync:
   sync                      One-shot bidirectional sync, exits when done
@@ -394,14 +403,16 @@ Migration:
 
 ### What each command affects
 
-| Command | Token | State DB | Config | Sync dir on disk |
-|---|---|---|---|---|
-| `login` | Created | — | Section created | — |
-| `logout` | **Deleted** | Kept | Kept | Untouched |
-| `logout --purge` | **Deleted** | **Deleted** | **Sections removed** | Untouched |
-| `drive add` | — (reuses existing) | — | Section created | — |
-| `drive remove` | Kept | Kept | `enabled = false` | Untouched |
-| `drive remove --purge` | Kept (unless orphaned) | **Deleted** | **Section removed** | Untouched |
+| Command | Token | State DB | Config | Shadow file | Sync dir on disk |
+|---|---|---|---|---|---|
+| `login` | Created | — | Section created (or restored from shadow) | Deleted if existed | — |
+| `logout` | **Deleted** | Kept | **Sections moved to shadow** | Created per drive | Untouched |
+| `logout --purge` | **Deleted** | **Deleted** | **Sections removed** | **Deleted** | Untouched |
+| `drive add` | — (reuses existing) | — | Section created (or restored from shadow) | Deleted if existed | — |
+| `drive remove` | Kept | Kept | **Section moved to shadow** | Created | Untouched |
+| `drive remove --purge` | Kept (unless orphaned) | **Deleted** | **Section removed** | **Deleted** | Untouched |
+| `pause` | — | — | `paused = true` set | — | — |
+| `resume` | — | — | `paused` removed | — | — |
 | `sync` | May refresh | Updated | — | Files synced |
 | `status` | — | Read | Read | — |
 | `conflicts` | — | Read | — | — |
@@ -510,14 +521,14 @@ Try a more specific match:
 
 ### Auto-selection (when `--drive` is omitted)
 
-`enabled = false` is a **sync concept only**. File operations (`ls`, `get`, `put`, `rm`, `mkdir`, `stat`) work on all drives including disabled ones — the token is still valid, the drive still exists.
+Paused state is a **sync concept only**. File operations (`ls`, `get`, `put`, `rm`, `mkdir`, `stat`) work on all drives in config including paused ones — the token is still valid, the drive still exists. Removed drives (in shadow files) are not visible to any command.
 
 **File operations** (single-target):
 
 | State | Behavior |
 |---|---|
 | No accounts (no tokens) | Error: "No accounts. Run: onedrive-go login" |
-| 1 drive (enabled or disabled) | Auto-select |
+| 1 drive (paused or not) | Auto-select |
 | 2+ drives | Error with list of all drives and shortest identifiers |
 
 **Sync** (multi-target):
@@ -525,15 +536,15 @@ Try a more specific match:
 | State | Behavior |
 |---|---|
 | No accounts | Error: "No accounts. Run: onedrive-go login" |
-| Accounts exist, all drives disabled | "All drives paused. Run: onedrive-go drive add" |
-| Some enabled | Sync enabled drives only |
+| Accounts exist, all drives paused | "All drives paused. Run: onedrive-go resume" |
+| Some not paused | Sync non-paused drives only |
 
-**Status**: always shows everything — all accounts, all drives (enabled, disabled, removed).
+**Status**: shows all drives in config (ready, paused, token expired). Removed drives (in shadow files) are not shown.
 
 ### Repeatable for multi-target commands
 
 ```bash
-onedrive-go sync                                                    # all enabled drives
+onedrive-go sync                                                    # all non-paused drives
 onedrive-go sync --drive personal                                   # just one (substring)
 onedrive-go sync --drive "me@outlook.com" --drive "me@contoso.com" # two of three
 onedrive-go status --drive "me@contoso.com"                        # status for one drive
@@ -731,25 +742,25 @@ onedrive-go drive add --site marketing --library Documents
 
 ### `drive remove`
 
-Pauses a drive. Sets `enabled = false` in config. Everything preserved.
+Removes a drive from config. Config section is moved to a shadow file (preserving all settings). Token, state DB, and sync directory are untouched. Re-add with `drive add` to restore all settings from shadow.
 
 ```
 $ onedrive-go drive remove --drive "Jane's Photos"
-Drive paused: Jane's Photos (shared by jane@outlook.com)
+Drive removed: Jane's Photos (shared by jane@outlook.com)
   Token: kept
   State database: kept
-  Config section: kept (enabled = false)
+  Config section: moved to shadow file (all settings preserved)
   Sync directory (~/OneDrive-Shared/Jane's Photos): untouched — your files remain on disk
 
-Resume with: onedrive-go drive add
+Re-add with: onedrive-go drive add "Jane's Photos"
 Delete everything: onedrive-go drive remove --drive "Jane's Photos" --purge
 ```
 
-Works for any drive type — personal, business, or SharePoint.
+Works for any drive type — personal, business, or SharePoint. To temporarily stop sync without removing, use `pause` instead.
 
 ### `drive remove --purge`
 
-Permanently removes the drive's state DB and config section. Token is kept if other drives still use it.
+Permanently removes the drive's state DB, config section, and shadow file. Token is kept if other drives still use it.
 
 ```
 $ onedrive-go drive remove --drive sharepoint:alice:marketing --purge
@@ -757,6 +768,7 @@ Drive removed: sharepoint:alice@contoso.com:marketing:Documents
   Token: kept (still used by business:alice@contoso.com)
   State database: deleted
   Config section: removed
+  Shadow file: deleted
   Sync directory (~/Contoso/Marketing - Documents): untouched — delete manually if desired
 ```
 
@@ -768,6 +780,7 @@ Drive removed: personal:toni@outlook.com
   Token: deleted (no other drives use it)
   State database: deleted
   Config section: removed
+  Shadow file: deleted
   Sync directory (~/OneDrive): untouched — delete manually if desired
 ```
 
@@ -795,14 +808,16 @@ Removes the authentication token for an account. All drives using that token are
 
 ### `logout`
 
+Deletes the token file and moves all account's drive sections to shadow files (preserving all settings for seamless re-login).
+
 ```
 $ onedrive-go logout --account alice@contoso.com
 Token removed for alice@contoso.com.
-Affected drives (can no longer sync):
+Drives moved to shadow (settings preserved for re-login):
   business:alice@contoso.com (~/OneDrive - Contoso)
   sharepoint:alice@contoso.com:marketing:Documents (~/Contoso/Marketing - Documents)
 
-State databases and config kept. Run 'onedrive-go login' to re-authenticate.
+State databases kept. Run 'onedrive-go login' to re-authenticate (drives auto-restored).
 Sync directories untouched — your files remain on disk.
 ```
 
@@ -811,9 +826,9 @@ Sync directories untouched — your files remain on disk.
 ```
 $ onedrive-go logout --account alice@contoso.com --purge
 Token removed for alice@contoso.com.
-Drives removed:
-  business:alice@contoso.com — state DB deleted, config section removed
-  sharepoint:alice@contoso.com:marketing:Documents — state DB deleted, config section removed
+Drives permanently removed:
+  business:alice@contoso.com — state DB deleted, config section removed, shadow deleted
+  sharepoint:alice@contoso.com:marketing:Documents — state DB deleted, config section removed, shadow deleted
 
 Sync directories untouched — delete manually if desired:
   ~/OneDrive - Contoso
@@ -864,40 +879,48 @@ onedrive-go status --json | jq '.drives[].status'
 ## 13. Multi-Drive Sync
 
 ```bash
-onedrive-go sync                                            # all enabled drives, once
-onedrive-go sync --watch                                    # continuous (daemon-like)
+onedrive-go sync                                            # all non-paused drives, once
+onedrive-go sync --watch                                    # continuous (daemon mode)
 onedrive-go sync --drive personal                          # just one drive (substring match)
 onedrive-go sync --drive "me@outlook.com" --drive business  # two of three
 ```
 
 ### Runtime behavior
 
-- Each drive syncs in its own goroutine (single process)
+- Each drive syncs in its own goroutine via `DriveRunner` (single process, per-drive isolation)
 - Each drive locks its own state DB — no contention between drives
-- SharePoint drives share the business token (thread-safe token source)
-- Failure in one drive doesn't block others
+- SharePoint drives share the business token via `graph.Client` pooling (thread-safe)
+- Failure in one drive doesn't block others (panic recovery, exponential backoff)
 - Progress output shows per-drive status
+- Worker budget: global cap (default 16) split proportionally by baseline file count
 
-### `sync --watch` (continuous mode)
+### `sync --watch` (daemon mode)
 
 Runs in the foreground forever. Suitable for systemd/launchd service management.
 
-- Syncs all enabled drives on each cycle (configurable `poll_interval`)
-- **Re-reads config on each cycle.** If a drive is added/removed/paused while running, changes take effect on the next cycle.
-- **Idles gracefully with no enabled drives.** Can be installed as a service before any login — just waits. When a drive is added via `login` or `drive add`, the next cycle picks it up and starts syncing. No restart needed.
-- Token expiration -> log error, skip that drive, continue others
+- Starts the `Orchestrator`, which manages `DriveRunner` instances for all non-paused drives
+- **Watches config.toml via fsnotify.** Changes take effect within milliseconds — no waiting for poll cycle.
+- **Idles gracefully with no drives.** Can be installed as a service before any login — just waits. When a drive is added via `login` or `drive add`, fsnotify picks it up immediately. No restart needed.
+- Token expiration → log error, enter backoff for that drive, continue others
 - No interactive prompts — all output goes to stderr + log file
-- Commands that modify config (`login`, `drive add/remove`) output: "If sync is running, changes take effect on the next sync cycle."
+- Commands that modify config (`login`, `drive add/remove`, `pause`, `resume`) trigger immediate fsnotify reload
 
-### RPC (runtime control)
+### Config-as-IPC (Phase 7.0 control mechanism)
 
-`sync --watch` exposes a Unix domain socket for runtime queries and control:
+All control flows through the config file. CLI commands write to `config.toml`; the daemon watches via fsnotify and reacts:
 
-- **Status queries**: current sync state, progress, errors — same data as `onedrive-go status`
-- **Force sync**: trigger an immediate sync cycle without waiting for `poll_interval`
-- **Pause/resume**: temporarily stop syncing without modifying config
+- `pause` → writes `paused = true` → daemon stops drive within milliseconds
+- `resume` → removes `paused` → daemon starts drive within milliseconds
+- `drive add` → adds section → daemon starts drive
+- `drive remove` → moves section to shadow → daemon stops drive
+- `login` → adds/restores section → daemon starts drive
+- `logout` → moves sections to shadow → daemon stops drives
 
-RPC is **only available when `sync --watch` is running**. Login is always done via the CLI, not via RPC — login requires user interaction (device code or browser). If a token expires while the service is running, it logs an error and tells the user to run `onedrive-go login` in a terminal.
+No RPC socket is needed for Phase 7.0. All CLI commands are standalone — they read/write config, state DBs, and tokens directly. The `status` command works with or without the daemon by reading config + token files + state DBs.
+
+### Future: RPC socket (Phase 12.6)
+
+RPC can be added for live status data (in-flight action counts, real-time progress, SSE events) that can't be read from config + state DBs. This is additive — config-as-IPC remains the control mechanism. Login is always done via the CLI, not via RPC — login requires user interaction (device code or browser).
 
 ### No `--daemon` flag
 
@@ -1037,9 +1060,18 @@ $ onedrive-go sync        -> syncs both
 ### E: Pause and resume a drive
 
 ```
-$ onedrive-go drive remove --drive work  -> enabled=false, everything preserved
+$ onedrive-go pause --drive work           -> paused = true in config, drive still visible in status
 $ onedrive-go sync                         -> only syncs personal
-$ onedrive-go drive add                    -> shows work as resumable -> resume
+$ onedrive-go resume --drive work          -> paused removed from config
+$ onedrive-go sync                         -> syncs both, picks up where it left off
+```
+
+### E2: Remove and re-add a drive
+
+```
+$ onedrive-go drive remove --drive work    -> config section moved to shadow file
+$ onedrive-go sync                         -> only syncs personal
+$ onedrive-go drive add work               -> restored from shadow (all settings preserved)
 $ onedrive-go sync                         -> syncs both, picks up where it left off
 ```
 
@@ -1113,7 +1145,7 @@ $ onedrive-go drive add "Jane's Photos"
 Drive added: Jane's Photos (shared by jane@outlook.com, read-only)
   -> ~/OneDrive-Shared/Jane's Photos
 
-$ onedrive-go sync  # syncs all enabled drives including shared
+$ onedrive-go sync  # syncs all non-paused drives including shared
 ```
 
 ---
@@ -1148,10 +1180,10 @@ Configured drives:
 Error: no accounts. Run 'onedrive-go login' to get started.
 ```
 
-### All drives disabled
+### All drives paused
 
 ```
-All drives paused. Run 'onedrive-go drive add' to resume a drive.
+All drives paused. Run 'onedrive-go resume' to resume syncing.
 ```
 
 ### Multiple drives, single-target command, no `--drive`
@@ -1188,11 +1220,12 @@ No prompt. Auto-picks alternative and tells the user.
 
 ```
 Token removed for alice@contoso.com.
-Affected drives (can no longer sync):
+Drives moved to shadow (settings preserved for re-login):
   business:alice@contoso.com
   sharepoint:alice@contoso.com:marketing:Documents
   sharepoint:alice@contoso.com:hr:Policies
-State databases and config kept. Sync directories untouched.
+State databases kept. Sync directories untouched.
+Run 'onedrive-go login' to re-authenticate (drives auto-restored).
 ```
 
 No confirmation prompt. Just does it and reports.
@@ -1213,17 +1246,18 @@ No confirmation prompt. Just does it and reports.
 | 8 | SharePoint shares business token | Same OAuth session. Token per-user, state DB per-drive. |
 | 9 | Microsoft convention for sync dirs | `~/OneDrive`, `~/OneDrive - Org`, `~/Org/Site - Library`. |
 | 10 | Login is interactive (blocks for auth) | Device code by default, `--browser` for auth code flow. Assumes config defaults. No config prompts. |
-| 11 | Business OneDrive always auto-added | Even if user only wants SharePoint. `drive remove` to pause. |
-| 12 | `drive add` doesn't offer new sign-ins | Tells user to use `login`. Only shows SharePoint + paused drives. |
-| 13 | `drive remove` = pause (`enabled=false`) | Config, state DB, token preserved. `drive add` resumes. |
-| 14 | `drive remove --purge` = permanent | Deletes state DB + config section. Token if orphaned. Sync dir untouched. |
+| 11 | Business OneDrive always auto-added | Even if user only wants SharePoint. `drive remove` to remove, `pause` to pause. |
+| 12 | `drive add` doesn't offer new sign-ins | Tells user to use `login`. Only shows SharePoint + available drives. |
+| 13 | `drive remove` = move to shadow file | Config section moved to shadow (all settings preserved). `drive add` restores. Token, state DB, sync dir untouched. |
+| 13b | `pause`/`resume` = temporary sync stop | Sets `paused = true` in config. Drive stays in config, visible in status. Supports timed pause (`pause 2h`). |
+| 14 | `drive remove --purge` = permanent | Deletes state DB + config section + shadow file. Token if orphaned. Sync dir untouched. |
 | 15 | No interactive prompts except `setup` and `drive add` | No y/n questions. Assume defaults. Tell user what was done. |
 | 16 | Flat config, no sub-sections | Not enough settings. Everything top-level or per-drive. |
 | 17 | `setup` for interactive config | One guided wizard. No `config set` / `exclude add` CLI sprawl. |
 | 18 | Separate console from log file | Flags control console. Config controls file. Independent. |
 | 19 | Log file always active | Platform-default path. Captures info-level by default. |
 | 20 | No `--daemon` flag | `sync --watch` runs in foreground. systemd/launchd handle lifecycle. |
-| 21 | Config re-read each sync cycle | Changes take effect on next cycle. No restart needed. |
+| 21 | Config watched via fsnotify | Changes take effect within milliseconds. No restart needed. CLI commands write to config, daemon reacts. |
 | 22 | `status` shows account/drive hierarchy | Accounts with token status, drives indented with sync state. |
 | 23 | Stable user GUID for email change detection | Auto-rename files on email change. No re-sync needed. |
 | 24 | Guest/B2B uses real email from `mail` field | Users never see ugly UPN. Fallback only if `mail` is empty. |
@@ -1232,9 +1266,11 @@ No confirmation prompt. Just does it and reports.
 | 27 | Commented-out defaults on first start | Config bootstrapped with all global settings as comments. Users discover options without reading docs. Only written once — never regenerated. |
 | 28 | Device code as default auth | Works everywhere (headless, SSH, containers). `--browser` for desktop convenience. Both block. |
 | 29 | `--json` on login for GUI/scripting | Outputs newline-delimited JSON events. GUI reads events, presents code/URL in own UI. CLI is the API. |
-| 30 | Login always via CLI, never RPC | Login requires user interaction. RPC only for `sync --watch` runtime ops (status, force-sync, pause). |
-| 31 | `sync --watch` idles with no drives | Can be installed as service before any login. Picks up new drives on next cycle. No restart needed. |
-| 32 | File ops work on disabled drives | `enabled = false` is a sync concept only. `ls`, `get`, etc. still work — token is valid, drive exists. |
+| 30 | Login always via CLI, never RPC | Login requires user interaction. RPC (Phase 12.6) only for live status data. Control flows through config-as-IPC. |
+| 31 | `sync --watch` idles with no drives | Can be installed as service before any login. Picks up new drives via fsnotify. No restart needed. |
+| 32 | File ops work on paused drives | Paused state is a sync concept only. `ls`, `get`, etc. still work — token is valid, drive exists. Removed drives (in shadow) are invisible. |
+| 33b | Config-as-IPC via fsnotify | CLI commands write to config.toml; daemon watches via fsnotify and reacts within milliseconds. No RPC socket needed for Phase 7.0. |
+| 33c | Shadow files for drive lifecycle | `drive remove` moves config to shadow file. `drive add` restores from shadow. `logout` moves all account drives to shadow. Seamless round-trip. |
 | 33 | `service install` never auto-enables | Writes service file only. Prints native commands to enable. User explicitly chooses. |
 | 34 | No `--sync-dir` flag | All drives get sensible defaults from Microsoft conventions. Change via config file or `setup`. |
 | 35 | No `config show` command | Users read config file directly. `status` shows runtime state. `--debug` shows config resolution. |

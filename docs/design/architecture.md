@@ -637,7 +637,7 @@ rootCtx
     +-- sharedWorker[0..K]
 ```
 
-> **Multi-drive extension**: In multi-drive mode, the context tree extends with a process-level root above the per-drive engines. The orchestrator design (including the exact context hierarchy for multi-drive) is an unresolved design gap — see [MULTIDRIVE.md §11](MULTIDRIVE.md#11-multi-drive-orchestrator-design-gap).
+> **Multi-drive extension**: In multi-drive mode, the context tree extends: `processCtx → orchestratorCtx → driveCtx[i] → Engine[i]`. Each drive has an independently cancelable context. See [MULTIDRIVE.md §11.5](MULTIDRIVE.md#115-context-tree) for the full context hierarchy.
 
 ### 6.4 Graceful Shutdown
 
@@ -900,16 +900,16 @@ The filter is applied in the Planner to both remote and local items symmetricall
 
 ## 12. Multi-Drive Architecture
 
-Multi-drive sync is designed around per-drive `Engine` isolation: each configured drive runs its own sync pipeline (observers, buffer, planner, tracker, workers, baseline manager) with its own state DB and delta token(s). The multi-drive architecture is specified in [MULTIDRIVE.md](MULTIDRIVE.md).
+Multi-drive sync uses **Architecture A (per-drive goroutine with isolated engines)**: each configured drive runs its own sync pipeline (observers, buffer, planner, tracker, workers, baseline manager) with its own state DB and delta token(s). A thin `Orchestrator` manages drive lifecycles, and a `DriveRunner` wraps each `Engine` with error isolation and panic recovery. The full specification is in [MULTIDRIVE.md §11](MULTIDRIVE.md#11-multi-drive-orchestrator).
 
 **Key properties**:
 
-- **Per-drive Engine isolation**: Each drive has its own `Engine` instance, goroutine, and state DB. One drive's failure does not affect others.
-- **Shared `graph.Client` per token**: Drives sharing the same Microsoft account (e.g., business OneDrive + SharePoint libraries) share one `graph.Client` instance. Same token = same rate limits, same HTTP connection pool.
+- **Per-drive Engine isolation**: Each drive has its own `Engine` instance, goroutine, and state DB. One drive's failure does not affect others. Panics are caught per-drive; persistent errors trigger exponential backoff.
+- **Shared `graph.Client` per token**: Drives sharing the same Microsoft account (e.g., business OneDrive + SharePoint libraries) share one `graph.Client` instance. Same token = same rate limits, same HTTP connection pool. 429 backoff is automatically coordinated.
+- **Global worker budget**: Configurable `max_workers` cap (default 16) with proportional per-drive allocation by baseline file count. Minimum 4 workers per drive. See [concurrent-execution.md §19](concurrent-execution.md#19-multi-drive-worker-budget).
 - **Global bandwidth limiter**: A process-wide token bucket limits total bandwidth across all drives.
-- **Error isolation**: Per-drive error state is tracked independently. A persistent error on one drive (expired token, corrupted DB) does not stall others.
-
-> **DESIGN GAP**: The multi-drive orchestrator — the component that manages multiple `Engine` instances, allocates workers, coordinates rate limits, and handles SIGHUP-driven config changes — is not yet specified. See [MULTIDRIVE.md §11](MULTIDRIVE.md#11-multi-drive-orchestrator-design-gap) for the full list of open questions to resolve before Phase 7.0 implementation.
+- **Config-as-IPC daemon model**: `sync --watch` watches `config.toml` via fsnotify. CLI commands (`pause`, `resume`, `drive add`, `drive remove`) write to config; the daemon picks up changes within milliseconds. No RPC socket required for Phase 7.0.
+- **Shadow files for drive lifecycle**: `drive remove` moves config sections to shadow files (preserving all settings); `drive add` restores from shadow. `logout` moves all account drives to shadow. `login` auto-restores from shadow.
 
 ---
 
