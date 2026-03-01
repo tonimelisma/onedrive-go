@@ -105,7 +105,6 @@ Optimization deferred until profiling shows a bottleneck.
 
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
-| B-200 | Re-bootstrap CI token for new token format | P1 | Token format changed. Re-login locally, upload to Key Vault. |
 
 ## Closed
 
@@ -158,7 +157,6 @@ Optimization deferred until profiling shows a bottleneck.
 | B-100 | Scan new directory contents on watch create | **DONE** — `scanNewDirectory()`. |
 | B-102 | Hash failure silently drops events | **DONE** — All paths emit events with empty hash. |
 | B-103 | `debounceLoop` final drain deadlock | **DONE** — Phase 5.2. Non-blocking select. |
-| B-107 (write coalescing) | Write event coalescing | **DONE** — Observer-level per-path timer coalescing (500ms). PR #129. |
 | B-109 | RemoteObserver.Watch() interval validation | **DONE** — Clamp below `minPollInterval` (30s). |
 | B-111 | Multiple `FlushDebounced()` calls break goroutine | **DONE** — Panic on double-call. |
 | B-112 | `handleDelete` doesn't remove watches | **DONE** — `watcher.Remove()` for deleted dirs. |
@@ -278,3 +276,4 @@ Optimization deferred until profiling shows a bottleneck.
 | B-268 | Test: non-RangeDownloader with existing `.partial` starts fresh | **DONE** — `tmSimpleDownloader` overwrites old partial. PR #133. |
 | B-269 | Panic recovery error message not verified in test | **DONE** — Enhanced test checks "panic:" in Stats() and WorkerResult. PR #133. |
 | B-270 | `resumeDownload` uses `computeQuickXorHash` instead of `tm.hashFunc` | **DONE** — Switched to `tm.hashFunc` for consistency. PR #133. |
+| B-200 | Re-bootstrap CI token for new token format | **DONE** — Token format updated, E2E tests passing in CI. |

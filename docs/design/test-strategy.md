@@ -717,11 +717,12 @@ E2E tests run against a live OneDrive account. They use `//go:build e2e` tags an
 
 **Test accounts**:
 
-| Account Type | Environment | Frequency | Status |
+| Drive Type | Environment | Frequency | Status |
 |-------------|-------------|-----------|--------|
 | Personal (free) | CI (GitHub Actions) | Every merge to main + nightly | Active |
 | Business | CI (GitHub Actions) | Nightly | Backlog — add after core E2E is stable (~$5/month for M365 Business Basic) |
 | SharePoint | CI (GitHub Actions) | Nightly | Backlog — same M365 subscription covers SharePoint |
+| Shared | CI (GitHub Actions) | Nightly | Backlog — reuses primary account token, no separate auth needed |
 
 All four drive types (Personal, Business, SharePoint, Shared) will run in CI. Personal is free and runs from day one. Business and SharePoint use the same Microsoft 365 Business Basic subscription (~$5/month) and will be added to the nightly CI job once the Personal E2E suite is stable and the core sync engine is functional. Shared drives reuse the primary account's token (no separate authentication). Until then, Business, SharePoint, and Shared drive quirks are covered by unit tests with realistic API response fixtures (§3.1 Normalizer, §9.2 API Quirk Regression Tests).
 

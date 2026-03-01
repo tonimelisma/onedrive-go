@@ -244,7 +244,7 @@ The RPC API serves CLI and GUI identically — same socket, same endpoints, same
 
 ---
 
-## 6. Account Types
+## 6. Drive Types
 
 All four drive types are supported:
 
