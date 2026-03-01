@@ -202,6 +202,8 @@ func TestNewRootCmd_AuthSkipsConfig(t *testing.T) {
 			assert.NotNil(t, cc, "CLIContext should be populated for %s", name)
 			assert.NotNil(t, cc.Logger, "Logger should be populated for %s", name)
 			assert.NotEmpty(t, cc.CfgPath, "CfgPath should be populated for %s", name)
+			// Env is always populated in Phase 1 (even if both fields are empty).
+			assert.IsType(t, config.EnvOverrides{}, cc.Env, "Env should be populated for %s", name)
 			assert.Nil(t, cc.Cfg, "Cfg should be nil for auth command %s", name)
 		})
 	}
@@ -336,7 +338,7 @@ sync_dir = "` + tmpDir + `/OneDrive"
 	cmd := newRootCmd()
 	cmd.SetContext(context.Background())
 
-	resolved, rawCfg, err := loadAndResolve(cmd, flags, logger)
+	resolved, rawCfg, err := loadAndResolve(cmd, flags, config.EnvOverrides{}, logger)
 	require.NoError(t, err)
 	assert.NotNil(t, resolved)
 	assert.NotNil(t, rawCfg)
