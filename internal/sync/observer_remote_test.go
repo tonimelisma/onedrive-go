@@ -1388,3 +1388,79 @@ func TestSelectHash_FallbackChain(t *testing.T) {
 		})
 	}
 }
+
+// TestRemoteObserver_LastActivity verifies that LastActivity() is updated
+// after a successful FullDelta poll, providing a liveness signal for the
+// engine to detect stalled observers (B-125).
+func TestRemoteObserver_LastActivity(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{{
+			page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveid.New(testDriveID)},
+					{ID: "f1", Name: "test.txt", ParentID: "root", DriveID: driveid.New(testDriveID), Size: 10},
+				},
+				DeltaLink: "delta-link",
+			},
+		}},
+	}
+
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
+
+	// Before any poll, LastActivity should be zero.
+	if got := obs.LastActivity(); !got.IsZero() {
+		t.Errorf("LastActivity before poll = %v, want zero", got)
+	}
+
+	before := time.Now()
+
+	_, _, err := obs.FullDelta(t.Context(), "")
+	if err != nil {
+		t.Fatalf("FullDelta: %v", err)
+	}
+
+	after := time.Now()
+	activity := obs.LastActivity()
+
+	if activity.Before(before) || activity.After(after) {
+		t.Errorf("LastActivity = %v, want between %v and %v", activity, before, after)
+	}
+}
+
+// TestRemoteObserver_Stats verifies that Stats() returns non-zero counters
+// after processing delta events (B-127).
+func TestRemoteObserver_Stats(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{{
+			page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveid.New(testDriveID)},
+					{ID: "f1", Name: "doc.txt", ParentID: "root", DriveID: driveid.New(testDriveID), Size: 10},
+					{ID: "f2", Name: "img.png", ParentID: "root", DriveID: driveid.New(testDriveID), Size: 20},
+				},
+				DeltaLink: "delta-link",
+			},
+		}},
+	}
+
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
+
+	_, _, err := obs.FullDelta(t.Context(), "")
+	if err != nil {
+		t.Fatalf("FullDelta: %v", err)
+	}
+
+	stats := obs.Stats()
+
+	if stats.EventsEmitted == 0 {
+		t.Error("EventsEmitted should be > 0 after processing items")
+	}
+
+	if stats.PollsCompleted == 0 {
+		t.Error("PollsCompleted should be > 0 after a successful FullDelta")
+	}
+}

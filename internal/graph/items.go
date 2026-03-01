@@ -126,7 +126,7 @@ func (d *driveItemResponse) toItem(logger *slog.Logger) Item {
 		IsDeleted:   d.Deleted != nil,
 		IsPackage:   d.Package != nil,
 		ChildCount:  ChildCountUnknown,
-		DownloadURL: d.DownloadURL,
+		DownloadURL: DownloadURL(d.DownloadURL),
 	}
 
 	// Normalize DriveID via driveid.New — lowercase + zero-pad for short IDs.

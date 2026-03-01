@@ -2022,3 +2022,192 @@ func TestConflictRecord_NameField(t *testing.T) {
 		t.Errorf("GetConflict Name = %q, want %q", c.Name, "readme.md")
 	}
 }
+
+// TestPruneResolvedConflicts verifies that PruneResolvedConflicts deletes
+// resolved conflicts older than the retention period while preserving
+// newer resolved and all unresolved conflicts (B-087).
+// setupPruneTestConflicts populates a test manager with three conflicts:
+// - An "old" resolved conflict (detected 120 days ago)
+// - A "new" resolved conflict (detected 10 days ago)
+// - An unresolved conflict (detected 120 days ago)
+// Returns the IDs of the old and new resolved conflicts.
+func setupPruneTestConflicts(t *testing.T, mgr *BaselineManager, ctx context.Context, now time.Time) (oldID, newID string) {
+	t.Helper()
+
+	mgr.nowFunc = func() time.Time { return now.AddDate(0, 0, -120) }
+
+	if err := mgr.CommitOutcome(ctx, &Outcome{
+		Action: ActionConflict, Success: true,
+		Path: "old-resolved.txt", DriveID: driveid.New(testDriveID),
+		ItemID: "item-old", ConflictType: ConflictEditEdit,
+		LocalHash: "lh1", RemoteHash: "rh1", Mtime: 100, RemoteMtime: 200,
+	}); err != nil {
+		t.Fatalf("CommitOutcome (old): %v", err)
+	}
+
+	mgr.nowFunc = func() time.Time { return now.AddDate(0, 0, -100) }
+
+	conflicts, err := mgr.ListConflicts(ctx)
+	if err != nil {
+		t.Fatalf("ListConflicts: %v", err)
+	}
+
+	oldID = conflicts[0].ID
+	err = mgr.ResolveConflict(ctx, oldID, "keep_local")
+	if err != nil {
+		t.Fatalf("ResolveConflict (old): %v", err)
+	}
+
+	mgr.nowFunc = func() time.Time { return now.AddDate(0, 0, -10) }
+
+	err = mgr.CommitOutcome(ctx, &Outcome{
+		Action: ActionConflict, Success: true,
+		Path: "new-resolved.txt", DriveID: driveid.New(testDriveID),
+		ItemID: "item-new", ConflictType: ConflictEditEdit,
+		LocalHash: "lh2", RemoteHash: "rh2", Mtime: 300, RemoteMtime: 400,
+	})
+	if err != nil {
+		t.Fatalf("CommitOutcome (new): %v", err)
+	}
+
+	mgr.nowFunc = func() time.Time { return now.AddDate(0, 0, -5) }
+
+	conflicts, err = mgr.ListConflicts(ctx)
+	if err != nil {
+		t.Fatalf("ListConflicts: %v", err)
+	}
+
+	for _, c := range conflicts {
+		if c.Path == "new-resolved.txt" {
+			newID = c.ID
+		}
+	}
+
+	err = mgr.ResolveConflict(ctx, newID, "keep_remote")
+	if err != nil {
+		t.Fatalf("ResolveConflict (new): %v", err)
+	}
+
+	mgr.nowFunc = func() time.Time { return now.AddDate(0, 0, -120) }
+
+	err = mgr.CommitOutcome(ctx, &Outcome{
+		Action: ActionConflict, Success: true,
+		Path: "unresolved.txt", DriveID: driveid.New(testDriveID),
+		ItemID: "item-unresolved", ConflictType: ConflictEditEdit,
+		LocalHash: "lh3", RemoteHash: "rh3", Mtime: 500, RemoteMtime: 600,
+	})
+	if err != nil {
+		t.Fatalf("CommitOutcome (unresolved): %v", err)
+	}
+
+	return oldID, newID
+}
+
+// TestPruneResolvedConflicts verifies that PruneResolvedConflicts deletes
+// resolved conflicts older than the retention period while preserving
+// newer resolved and all unresolved conflicts (B-087).
+func TestPruneResolvedConflicts(t *testing.T) {
+	mgr := newTestManager(t)
+	ctx := context.Background()
+	now := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
+
+	mgr.nowFunc = func() time.Time { return now }
+
+	if _, err := mgr.Load(ctx); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	oldID, newID := setupPruneTestConflicts(t, mgr, ctx, now)
+
+	mgr.nowFunc = func() time.Time { return now }
+
+	pruned, err := mgr.PruneResolvedConflicts(ctx, 90*24*time.Hour)
+	if err != nil {
+		t.Fatalf("PruneResolvedConflicts: %v", err)
+	}
+
+	if pruned != 1 {
+		t.Errorf("pruned = %d, want 1 (only old resolved)", pruned)
+	}
+
+	// Old resolved should be gone.
+	c, err := mgr.GetConflict(ctx, oldID)
+	if err == nil && c != nil {
+		t.Error("old resolved conflict should have been pruned")
+	}
+
+	// New resolved should still exist.
+	c, err = mgr.GetConflict(ctx, newID)
+	if err != nil {
+		t.Fatalf("new resolved should still exist: %v", err)
+	}
+
+	if c.Resolution != "keep_remote" {
+		t.Errorf("new resolved Resolution = %q, want %q", c.Resolution, "keep_remote")
+	}
+
+	// Unresolved conflict should still exist.
+	unresolved, err := mgr.ListConflicts(ctx)
+	if err != nil {
+		t.Fatalf("ListConflicts (after prune): %v", err)
+	}
+
+	if len(unresolved) != 1 {
+		t.Fatalf("unresolved conflicts = %d, want 1", len(unresolved))
+	}
+
+	if unresolved[0].Path != "unresolved.txt" {
+		t.Errorf("unresolved Path = %q, want %q", unresolved[0].Path, "unresolved.txt")
+	}
+}
+
+// TestCheckCacheConsistency verifies that CheckCacheConsistency detects
+// mismatches between the in-memory baseline cache and the database (B-198).
+func TestCheckCacheConsistency(t *testing.T) {
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	_, err := mgr.Load(ctx)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Insert a baseline entry via CommitOutcome.
+	err = mgr.CommitOutcome(ctx, &Outcome{
+		Action: ActionDownload, Success: true,
+		Path: "consistency-check.txt", DriveID: driveid.New(testDriveID),
+		ItemID: "item-cc", ParentID: "root", ItemType: ItemTypeFile,
+		LocalHash: "hash1", RemoteHash: "hash1",
+		Size: 100, Mtime: 1000,
+	})
+	if err != nil {
+		t.Fatalf("CommitOutcome: %v", err)
+	}
+
+	// Cache and DB should be consistent — no mismatches.
+	mismatches, err := mgr.CheckCacheConsistency(ctx)
+	if err != nil {
+		t.Fatalf("CheckCacheConsistency: %v", err)
+	}
+
+	if mismatches != 0 {
+		t.Errorf("expected 0 mismatches, got %d", mismatches)
+	}
+
+	// Manually corrupt the DB row behind the cache's back.
+	_, err = mgr.DB().ExecContext(ctx,
+		`UPDATE baseline SET local_hash = 'tampered' WHERE path = 'consistency-check.txt'`)
+	if err != nil {
+		t.Fatalf("manual DB update: %v", err)
+	}
+
+	// Now check again — should detect 1 mismatch.
+	mismatches, err = mgr.CheckCacheConsistency(ctx)
+	if err != nil {
+		t.Fatalf("CheckCacheConsistency after tampering: %v", err)
+	}
+
+	if mismatches != 1 {
+		t.Errorf("expected 1 mismatch after DB tampering, got %d", mismatches)
+	}
+}

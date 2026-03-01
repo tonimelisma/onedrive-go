@@ -1,10 +1,22 @@
 package graph
 
 import (
+	"log/slog"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
+
+// DownloadURL is a pre-authenticated, ephemeral download URL returned by
+// the Graph API. It implements slog.LogValuer to prevent accidental logging
+// of embedded auth tokens (architecture.md §9.2, B-158).
+type DownloadURL string
+
+// LogValue redacts the URL content when passed to slog, preventing accidental
+// exposure of embedded authentication tokens in log output.
+func (DownloadURL) LogValue() slog.Value {
+	return slog.StringValue("[REDACTED]")
+}
 
 // ChildCountUnknown indicates the child count was not present in the API response.
 const ChildCountUnknown = -1
@@ -30,8 +42,8 @@ type Item struct {
 	SHA256Hash    string // hex (Business accounts, sometimes)
 	CreatedAt     time.Time
 	ModifiedAt    time.Time
-	ChildCount    int    // ChildCountUnknown if not present
-	DownloadURL   string // pre-authenticated, ephemeral; NEVER log (architecture.md §9.2)
+	ChildCount    int         // ChildCountUnknown if not present
+	DownloadURL   DownloadURL // pre-authenticated, ephemeral; redacted via LogValue (B-158)
 }
 
 // DeltaPage holds one page of delta query results.
