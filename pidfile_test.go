@@ -141,7 +141,9 @@ func TestSendSIGHUP_StalePIDFile(t *testing.T) {
 }
 
 func TestSendSIGHUP_SendsToCurrentProcess(t *testing.T) {
-	t.Parallel()
+	// Not parallel: sends a real SIGHUP to the process. Running in parallel
+	// with other signal tests risks a window where no handler is registered
+	// (between signal.Stop and signal.Notify), which terminates the process.
 
 	// Trap SIGHUP so it doesn't kill the test process.
 	sigCh := make(chan os.Signal, 1)

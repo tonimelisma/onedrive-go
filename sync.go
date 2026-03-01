@@ -207,6 +207,11 @@ func printSyncReport(r *sync.SyncReport) {
 	}
 }
 
+// watchRunner abstracts sync.Engine.RunWatch for testability.
+type watchRunner interface {
+	RunWatch(ctx context.Context, mode sync.SyncMode, opts sync.WatchOpts) error
+}
+
 // runSyncWatch wraps engine.RunWatch with PID file management, SIGHUP-based
 // config reload, and pause/resume support. On SIGHUP, the current RunWatch
 // session is canceled and the loop re-reads config to check paused state.
@@ -229,6 +234,17 @@ func runSyncWatch(
 	sighup := sighupChannel()
 	defer signal.Stop(sighup)
 
+	return watchLoop(ctx, engine, mode, opts, cfgPath, cid, sighup, logger)
+}
+
+// watchLoop is the core watch loop extracted for testability. It re-reads
+// config on each iteration: if paused, blocks in waitForResume; otherwise
+// starts a RunWatch session that can be interrupted by SIGHUP.
+func watchLoop(
+	ctx context.Context, runner watchRunner, mode sync.SyncMode,
+	opts sync.WatchOpts, cfgPath string, cid driveid.CanonicalID,
+	sighup <-chan os.Signal, logger *slog.Logger,
+) error {
 	for {
 		paused, pausedUntil := checkPausedState(cfgPath, cid, logger)
 
@@ -257,7 +273,7 @@ func runSyncWatch(
 			}
 		}()
 
-		watchErr := engine.RunWatch(watchCtx, mode, opts)
+		watchErr := runner.RunWatch(watchCtx, mode, opts)
 		cancelWatch()
 
 		// Parent shutdown (SIGINT/SIGTERM) — exit cleanly.

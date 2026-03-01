@@ -11,7 +11,8 @@ import (
 )
 
 func TestShutdownContext_FirstSignalCancels(t *testing.T) {
-	t.Parallel()
+	// Not parallel: sends a real SIGINT to the process. Running in parallel
+	// with other signal tests risks interference between signal handlers.
 
 	parent, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -54,7 +55,9 @@ func TestShutdownContext_ParentCancelStopsGoroutine(t *testing.T) {
 }
 
 func TestSighupChannel_DeliversSignal(t *testing.T) {
-	t.Parallel()
+	// Not parallel: sends a real SIGHUP to the process. Running in parallel
+	// with other signal tests risks a window where no handler is registered
+	// (between signal.Stop and signal.Notify), which terminates the process.
 
 	ch := sighupChannel()
 	defer signal.Stop(ch)

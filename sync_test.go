@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,7 +14,17 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync"
 )
+
+// mockWatchRunner implements watchRunner for testing watchLoop.
+type mockWatchRunner struct {
+	runWatchFn func(ctx context.Context, mode sync.SyncMode, opts sync.WatchOpts) error
+}
+
+func (m *mockWatchRunner) RunWatch(ctx context.Context, mode sync.SyncMode, opts sync.WatchOpts) error {
+	return m.runWatchFn(ctx, mode, opts)
+}
 
 func testLogger(t *testing.T) *slog.Logger {
 	t.Helper()
@@ -207,4 +218,263 @@ func TestDaemonClearPausedKeys(t *testing.T) {
 	d := cfg.Drives[cid]
 	assert.Nil(t, d.Paused)
 	assert.Nil(t, d.PausedUntil)
+}
+
+// --- watchLoop integration tests ---
+
+// newTestConfig creates a config file with a drive and returns the path and CID.
+func newTestConfig(t *testing.T) (cfgPath string, cid driveid.CanonicalID) {
+	t.Helper()
+
+	dir := t.TempDir()
+	cfgPath = filepath.Join(dir, "config.toml")
+	cid = driveid.MustCanonicalID("personal:test@example.com")
+
+	require.NoError(t, config.CreateConfigWithDrive(cfgPath, cid, "~/OneDrive"))
+
+	return cfgPath, cid
+}
+
+func TestWatchLoop_ParentContextShutdown(t *testing.T) {
+	t.Parallel()
+
+	cfgPath, cid := newTestConfig(t)
+	logger := testLogger(t)
+	sighup := make(chan os.Signal, 1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	runner := &mockWatchRunner{
+		runWatchFn: func(ctx context.Context, _ sync.SyncMode, _ sync.WatchOpts) error {
+			// Block until context is canceled (simulates normal RunWatch).
+			<-ctx.Done()
+
+			return ctx.Err()
+		},
+	}
+
+	// Cancel parent context after RunWatch starts.
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	err := watchLoop(ctx, runner, sync.SyncBidirectional, sync.WatchOpts{}, cfgPath, cid, sighup, logger)
+	assert.NoError(t, err)
+}
+
+func TestWatchLoop_SIGHUPRestartsRunWatch(t *testing.T) {
+	t.Parallel()
+
+	cfgPath, cid := newTestConfig(t)
+	logger := testLogger(t)
+	sighup := make(chan os.Signal, 1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var callCount atomic.Int32
+	// Signal that the second RunWatch call has started.
+	secondCallStarted := make(chan struct{})
+
+	runner := &mockWatchRunner{
+		runWatchFn: func(ctx context.Context, _ sync.SyncMode, _ sync.WatchOpts) error {
+			n := callCount.Add(1)
+			if n == 2 {
+				close(secondCallStarted)
+			}
+
+			<-ctx.Done()
+
+			return ctx.Err()
+		},
+	}
+
+	// Orchestrator goroutine: send SIGHUP after first RunWatch starts,
+	// then cancel parent ctx after second RunWatch starts.
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		sighup <- os.Interrupt // any signal value works
+
+		<-secondCallStarted
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	err := watchLoop(ctx, runner, sync.SyncBidirectional, sync.WatchOpts{}, cfgPath, cid, sighup, logger)
+	assert.NoError(t, err)
+	assert.GreaterOrEqual(t, callCount.Load(), int32(2), "RunWatch should be called at least twice")
+}
+
+func TestWatchLoop_PausedThenSIGHUPResumes(t *testing.T) {
+	t.Parallel()
+
+	cfgPath, cid := newTestConfig(t)
+	logger := testLogger(t)
+	sighup := make(chan os.Signal, 1)
+
+	// Start paused.
+	require.NoError(t, config.SetDriveKey(cfgPath, cid, "paused", "true"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runWatchCalled := make(chan struct{})
+
+	runner := &mockWatchRunner{
+		runWatchFn: func(ctx context.Context, _ sync.SyncMode, _ sync.WatchOpts) error {
+			close(runWatchCalled)
+			<-ctx.Done()
+
+			return ctx.Err()
+		},
+	}
+
+	// Orchestrator: after a short delay, unpause config and send SIGHUP.
+	// Then cancel parent ctx once RunWatch starts.
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+
+		// Remove paused state from config before sending SIGHUP.
+		_ = config.DeleteDriveKey(cfgPath, cid, "paused")
+
+		sighup <- os.Interrupt
+
+		<-runWatchCalled
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	err := watchLoop(ctx, runner, sync.SyncBidirectional, sync.WatchOpts{}, cfgPath, cid, sighup, logger)
+	assert.NoError(t, err)
+
+	// Verify RunWatch was actually called (drive was resumed).
+	select {
+	case <-runWatchCalled:
+		// good
+	default:
+		t.Fatal("RunWatch was never called after resuming")
+	}
+}
+
+func TestWatchLoop_SIGHUPWhilePausedConfigStillPaused(t *testing.T) {
+	t.Parallel()
+
+	cfgPath, cid := newTestConfig(t)
+	logger := testLogger(t)
+	sighup := make(chan os.Signal, 1)
+
+	// Start paused.
+	require.NoError(t, config.SetDriveKey(cfgPath, cid, "paused", "true"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runner := &mockWatchRunner{
+		runWatchFn: func(ctx context.Context, _ sync.SyncMode, _ sync.WatchOpts) error {
+			t.Fatal("RunWatch should not be called while drive is paused")
+
+			return nil
+		},
+	}
+
+	// Send SIGHUP (config still paused) → loop re-checks, still paused →
+	// blocks again in waitForResume → cancel parent ctx.
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		sighup <- os.Interrupt // config still paused, loop re-enters waitForResume
+
+		time.Sleep(100 * time.Millisecond)
+		cancel() // shut down
+	}()
+
+	err := watchLoop(ctx, runner, sync.SyncBidirectional, sync.WatchOpts{}, cfgPath, cid, sighup, logger)
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
+func TestWatchLoop_TimedPauseAutoResumes(t *testing.T) {
+	t.Parallel()
+
+	cfgPath, cid := newTestConfig(t)
+	logger := testLogger(t)
+	sighup := make(chan os.Signal, 1)
+
+	// Start paused with a very short timed pause.
+	require.NoError(t, config.SetDriveKey(cfgPath, cid, "paused", "true"))
+
+	until := time.Now().Add(200 * time.Millisecond).Format(time.RFC3339)
+	require.NoError(t, config.SetDriveKey(cfgPath, cid, "paused_until", until))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runWatchCalled := make(chan struct{})
+
+	runner := &mockWatchRunner{
+		runWatchFn: func(ctx context.Context, _ sync.SyncMode, _ sync.WatchOpts) error {
+			close(runWatchCalled)
+			<-ctx.Done()
+
+			return ctx.Err()
+		},
+	}
+
+	// Cancel parent ctx once RunWatch starts.
+	go func() {
+		<-runWatchCalled
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	err := watchLoop(ctx, runner, sync.SyncBidirectional, sync.WatchOpts{}, cfgPath, cid, sighup, logger)
+	assert.NoError(t, err)
+
+	// Verify paused keys were cleared from config by the daemon.
+	cfg, loadErr := config.LoadOrDefault(cfgPath, logger)
+	require.NoError(t, loadErr)
+	d := cfg.Drives[cid]
+	assert.Nil(t, d.Paused, "paused should be cleared after timed pause expires")
+	assert.Nil(t, d.PausedUntil, "paused_until should be cleared after timed pause expires")
+}
+
+func TestWatchLoop_SIGHUPPausesRunningDrive(t *testing.T) {
+	t.Parallel()
+
+	cfgPath, cid := newTestConfig(t)
+	logger := testLogger(t)
+	sighup := make(chan os.Signal, 1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runWatchStarted := make(chan struct{}, 1)
+
+	runner := &mockWatchRunner{
+		runWatchFn: func(ctx context.Context, _ sync.SyncMode, _ sync.WatchOpts) error {
+			runWatchStarted <- struct{}{}
+			<-ctx.Done()
+
+			return ctx.Err()
+		},
+	}
+
+	// Orchestrator: wait for RunWatch to start, then pause the drive and
+	// send SIGHUP. The loop should re-read config, see paused=true, and
+	// enter waitForResume. Then cancel parent ctx.
+	go func() {
+		<-runWatchStarted
+		time.Sleep(50 * time.Millisecond)
+
+		_ = config.SetDriveKey(cfgPath, cid, "paused", "true")
+		sighup <- os.Interrupt
+
+		// Give the loop time to re-read config and enter waitForResume.
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	err := watchLoop(ctx, runner, sync.SyncBidirectional, sync.WatchOpts{}, cfgPath, cid, sighup, logger)
+	// watchLoop should return context.Canceled from waitForResume since the
+	// drive is now paused and we canceled the parent context.
+	assert.ErrorIs(t, err, context.Canceled)
 }
