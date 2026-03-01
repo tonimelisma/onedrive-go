@@ -12,6 +12,12 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 | ID | Title | Priority | Package | Notes |
 |----|-------|----------|---------|-------|
 
+## Phase 6.0b: Orchestrator + DriveRunner
+
+| ID | Title | Priority | Notes |
+|----|-------|----------|-------|
+| ~~B-295~~ | ~~Orchestrator + DriveRunner — always-on multi-drive runtime~~ | ~~P1~~ | **DONE** — Phase 6.0b. `Orchestrator` in `internal/sync/`, `DriveRunner` with panic recovery, client pooling by token path, `RunOnce`, sync command rewrite with `skipConfigAnnotation`. Watch mode bridge for 6.0c. |
+
 ## Phase 5.6: Identity Refactoring
 
 | ID | Title | Priority | Notes |

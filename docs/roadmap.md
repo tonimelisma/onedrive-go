@@ -795,18 +795,18 @@ Prerequisite refactoring that unblocks all other Phase 6 work.
 
 Acceptance: all criteria met. `clientAndDrive` eliminated. `ResolveDrives` resolves N drives. Shared drives get correct defaults. Overlapping sync_dirs rejected. Coverage 75.1% → 76.3%.
 
-### 6.0b: Orchestrator + DriveRunner (always-on) — FUTURE
+### 6.0b: Orchestrator + DriveRunner (always-on) — DONE
 
-Core multi-drive runtime. The Orchestrator is ALWAYS used, even for a single drive. No separate single-drive sync code path.
+Core multi-drive runtime. The Orchestrator is ALWAYS used, even for a single drive.
 
-1. **Orchestrator struct** in `internal/sync/`: manages `map[CanonicalID]*DriveRunner`, `map[tokenPath]*graph.Client`, configPath, global check semaphore. New files: `orchestrator.go`, `drive_runner.go`, `orchestrator_test.go`.
-2. **DriveRunner**: wraps Engine with panic recovery (`defer recover`), error backoff (3 consecutive failures → 1m, 5m, 15m, 1h cap). Fields: engine, canonID, resolved, workers, cancel, done chan, lastErr, failures.
-3. **Shared `graph.Client` per token path**: `getOrCreateClient(tokenPath)`. Multiple drives on same account share one Client. 429 handling is per-request (Retry-After + exponential backoff with jitter) — no shared gate needed.
-4. **`Orchestrator.RunOnce(ctx)`**: resolve drives, create DriveRunners, run all via errgroup, aggregate reports.
-5. **Context tree**: `processCtx → orchestratorCtx → driveCtx[i] → Engine[i]`. Independent cancellation per drive.
-6. **sync command rewrite**: Always creates Orchestrator. `--drive` filters which drives. No `--drive` = all non-paused drives. Single drive = one DriveRunner in the Orchestrator, same code path as multi.
+1. **Orchestrator struct** in `internal/sync/orchestrator.go`: `OrchestratorConfig`, `clientPair`, injectable `engineFactory` + `tokenSourceFn`. **DONE** — `NewOrchestrator(cfg)` constructor.
+2. **DriveRunner** in `internal/sync/drive_runner.go`: `DriveReport`, `DriveRunner.run()` with `defer recover()`, `backoffDuration()` (3 consecutive failures → 1m, 5m, 15m, 1h cap). **DONE**.
+3. **Shared `graph.Client` per token path**: `getOrCreateClient(tokenPath)` with `map[string]*clientPair` caching. **DONE**.
+4. **`Orchestrator.RunOnce(ctx, mode, opts)`**: resolve tokens, create clients, create engines via factory, launch DriveRunners concurrently, collect reports. **DONE**.
+5. **sync command rewrite**: `skipConfigAnnotation`, loads raw config via `LoadOrDefault`, resolves drives via `ResolveDrives`, creates Orchestrator → `RunOnce` → `printDriveReports`. Watch mode bridge (`runSyncWatchBridge`) routes to existing single-drive path. **DONE**.
+6. **Annotation tests**: `sync` moved to skipConfig list in `TestAnnotationBasedSkipConfig`. **DONE**.
 
-Acceptance: sync with 1 or 2 configured drives runs via Orchestrator. One drive failure/panic doesn't affect other. `sync --drive X` produces identical results to old single-drive path.
+Acceptance: all criteria met. `sync` and `sync --drive X` run through Orchestrator. One drive failure/panic doesn't affect others. Single-drive output identical to previous path. E2E tests pass. Coverage 76.1%.
 
 ### 6.0c: Worker budget + daemon mode + config reload — FUTURE
 

@@ -273,6 +273,7 @@ func TestAnnotationBasedSkipConfig(t *testing.T) {
 		{"drive"},
 		{"drive", "add"},
 		{"drive", "remove"},
+		{"sync"},
 	}
 
 	for _, args := range skipPaths {
@@ -291,7 +292,6 @@ func TestAnnotationBasedSkipConfig(t *testing.T) {
 		{"rm"},
 		{"mkdir"},
 		{"stat"},
-		{"sync"},
 		{"conflicts"},
 		{"verify"},
 		{"resolve"},

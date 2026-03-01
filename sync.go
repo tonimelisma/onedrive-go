@@ -23,7 +23,9 @@ func newSyncCmd() *cobra.Command {
 
 By default, sync is bidirectional. Use --download-only or --upload-only for
 one-way sync. Use --dry-run to preview what would happen without making changes.`,
-		RunE: runSync,
+		// sync handles its own config resolution via ResolveDrives (multi-drive).
+		Annotations: map[string]string{skipConfigAnnotation: "true"},
+		RunE:        runSync,
 	}
 
 	cmd.Flags().Bool("download-only", false, "only download remote changes")
@@ -53,33 +55,37 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	// second signal force-exits. Applies to both one-shot and watch modes.
 	ctx := shutdownContext(cmd.Context(), logger)
 
-	session, err := NewDriveSession(ctx, cc.Cfg, cc.RawConfig, cc.Logger)
-	if err != nil {
-		return err
-	}
-
-	engine, err := newSyncEngine(session, cc.Cfg, true, logger)
-	if err != nil {
-		return err
-	}
-	defer engine.Close()
-
 	force, err := cmd.Flags().GetBool("force")
 	if err != nil {
 		return err
 	}
 
-	if watch {
-		cfgPath := cc.CfgPath
-
-		return runSyncWatch(ctx, engine, mode, sync.WatchOpts{
-			Force: force,
-		}, cfgPath, cc.Cfg.CanonicalID, logger)
+	// Load raw config and resolve drives (sync does its own multi-drive
+	// resolution instead of relying on PersistentPreRunE Phase 2).
+	rawCfg, err := config.LoadOrDefault(cc.CfgPath, logger)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
 	}
 
-	// One-shot mode: reject if paused.
-	if cc.Cfg.Paused {
-		return fmt.Errorf("drive %s is paused — run 'onedrive-go resume' to unpause", cc.Cfg.CanonicalID)
+	var selectors []string
+	if cc.Flags.Drive != "" {
+		selectors = []string{cc.Flags.Drive}
+	}
+
+	if watch {
+		return runSyncWatchBridge(ctx, rawCfg, selectors, mode, sync.WatchOpts{
+			Force: force,
+		}, cc.CfgPath, logger)
+	}
+
+	// One-shot: resolve drives (excludes paused drives).
+	drives, err := config.ResolveDrives(rawCfg, selectors, false, logger)
+	if err != nil {
+		return err
+	}
+
+	if len(drives) == 0 {
+		return fmt.Errorf("no drives to sync — configure a drive with 'onedrive-go drive add' or check paused state")
 	}
 
 	dryRun, err := cmd.Flags().GetBool("dry-run")
@@ -87,16 +93,64 @@ func runSync(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	report, err := engine.RunOnce(ctx, mode, sync.RunOpts{
+	orch := sync.NewOrchestrator(&sync.OrchestratorConfig{
+		Config:       rawCfg,
+		Drives:       drives,
+		ConfigPath:   cc.CfgPath,
+		MetaHTTP:     defaultHTTPClient(),
+		TransferHTTP: transferHTTPClient(),
+		UserAgent:    "onedrive-go/" + version,
+		Logger:       logger,
+	})
+
+	reports, err := orch.RunOnce(ctx, mode, sync.RunOpts{
 		DryRun: dryRun,
 		Force:  force,
 	})
-
-	if report != nil {
-		printSyncReport(report, cc.Flags.Quiet)
+	if err != nil {
+		return err
 	}
 
-	return err
+	printDriveReports(reports, cc.Flags.Quiet)
+
+	return driveReportsError(reports)
+}
+
+// runSyncWatchBridge is the temporary watch mode bridge that routes through
+// the existing single-drive DriveSession → Engine → RunWatch path. Multi-drive
+// watch mode is not yet supported (Phase 6.0c).
+func runSyncWatchBridge(
+	ctx context.Context, rawCfg *config.Config, selectors []string,
+	mode sync.SyncMode, opts sync.WatchOpts, cfgPath string, logger *slog.Logger,
+) error {
+	// Watch mode: resolve drives including paused (watch handles pause/resume).
+	drives, err := config.ResolveDrives(rawCfg, selectors, true, logger)
+	if err != nil {
+		return err
+	}
+
+	if len(drives) == 0 {
+		return fmt.Errorf("no drives configured — run 'onedrive-go drive add' to add a drive")
+	}
+
+	if len(drives) > 1 {
+		return fmt.Errorf("multi-drive watch mode not yet supported (Phase 6.0c) — use --drive to select a single drive")
+	}
+
+	rd := drives[0]
+
+	session, err := NewDriveSession(ctx, rd, rawCfg, logger)
+	if err != nil {
+		return err
+	}
+
+	engine, err := newSyncEngine(session, rd, true, logger)
+	if err != nil {
+		return err
+	}
+	defer engine.Close()
+
+	return runSyncWatch(ctx, engine, mode, opts, cfgPath, rd.CanonicalID, logger)
 }
 
 // syncModeFromFlags determines the SyncMode from CLI flags.
@@ -113,6 +167,57 @@ func syncModeFromFlags(cmd *cobra.Command) sync.SyncMode {
 	}
 
 	return sync.SyncBidirectional
+}
+
+// printDriveReports prints sync reports for all drives. When there's only
+// one drive, the output is identical to the pre-Orchestrator format. For
+// multiple drives, each drive's output is prefixed with a header.
+func printDriveReports(reports []*sync.DriveReport, quiet bool) {
+	multiDrive := len(reports) > 1
+
+	for _, dr := range reports {
+		if multiDrive {
+			statusf(quiet, "\n--- %s ---\n", dr.DisplayName)
+		}
+
+		if dr.Err != nil {
+			statusf(quiet, "Error: %v\n", dr.Err)
+
+			continue
+		}
+
+		if dr.Report != nil {
+			printSyncReport(dr.Report, quiet)
+		}
+	}
+}
+
+// driveReportsError returns an error if any drive report has an error.
+// Returns nil when all drives succeeded.
+func driveReportsError(reports []*sync.DriveReport) error {
+	var firstErr error
+
+	failCount := 0
+
+	for _, dr := range reports {
+		if dr.Err != nil {
+			failCount++
+
+			if firstErr == nil {
+				firstErr = dr.Err
+			}
+		}
+	}
+
+	if failCount == 0 {
+		return nil
+	}
+
+	if len(reports) == 1 {
+		return firstErr
+	}
+
+	return fmt.Errorf("%d of %d drives failed: %w", failCount, len(reports), firstErr)
 }
 
 // printSyncReport formats and prints the sync report to stderr.
