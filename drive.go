@@ -71,7 +71,7 @@ func runDriveList(cmd *cobra.Command, _ []string) error {
 	cc := mustCLIContext(cmd.Context())
 	logger := cc.Logger
 	ctx := cmd.Context()
-	cfgPath := resolveLoginConfigPath(cc.Flags.ConfigPath)
+	cfgPath := cc.CfgPath
 
 	cfg, err := config.LoadOrDefault(cfgPath, logger)
 	if err != nil {
@@ -387,7 +387,7 @@ Examples:
 func runDriveAdd(cmd *cobra.Command, args []string) error {
 	cc := mustCLIContext(cmd.Context())
 	logger := cc.Logger
-	cfgPath := resolveLoginConfigPath(cc.Flags.ConfigPath)
+	cfgPath := cc.CfgPath
 
 	cfg, err := config.LoadOrDefault(cfgPath, logger)
 	if err != nil {
@@ -500,7 +500,7 @@ func runDriveRemove(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("reading --purge flag: %w", err)
 	}
 
-	cfgPath := resolveLoginConfigPath(cc.Flags.ConfigPath)
+	cfgPath := cc.CfgPath
 
 	cfg, err := config.LoadOrDefault(cfgPath, logger)
 	if err != nil {

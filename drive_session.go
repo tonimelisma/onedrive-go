@@ -15,11 +15,10 @@ import (
 // for a single drive. Replaces the ad-hoc clientAndDrive() 4-tuple with a
 // proper type that includes both metadata and transfer clients.
 type DriveSession struct {
-	Client      *graph.Client     // metadata ops (30s timeout)
-	Transfer    *graph.Client     // uploads/downloads (no timeout)
-	TokenSource graph.TokenSource // for callers that need raw token
-	DriveID     driveid.ID
-	Resolved    *config.ResolvedDrive
+	Client   *graph.Client // metadata ops (30s timeout)
+	Transfer *graph.Client // uploads/downloads (no timeout)
+	DriveID  driveid.ID
+	Resolved *config.ResolvedDrive
 }
 
 // NewDriveSession creates a DriveSession from resolved config. It resolves the
@@ -61,10 +60,9 @@ func NewDriveSession(ctx context.Context, resolved *config.ResolvedDrive, cfg *c
 	}
 
 	return &DriveSession{
-		Client:      client,
-		Transfer:    transfer,
-		TokenSource: ts,
-		DriveID:     driveID,
-		Resolved:    resolved,
+		Client:   client,
+		Transfer: transfer,
+		DriveID:  driveID,
+		Resolved: resolved,
 	}, nil
 }
