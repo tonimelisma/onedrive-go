@@ -1092,19 +1092,55 @@ profiling demonstrates a bottleneck:
 
 ---
 
-## 19. Multi-Drive Worker Budget (DESIGN GAP)
+## 19. Multi-Drive Worker Budget
 
-> **STATUS: UNRESOLVED DESIGN GAP** — The worker budget algorithm for multi-drive sync must be specified before Phase 7.0 implementation begins.
+> **STATUS: RESOLVED** — Architecture A (per-drive goroutine with isolated engines) selected. See [MULTIDRIVE.md §11](MULTIDRIVE.md#11-multi-drive-orchestrator) for full specification.
 
-When multiple drives sync simultaneously, the total worker count across all drives must be bounded to prevent resource exhaustion (5 drives x 16 workers = 80 I/O goroutines). The current single-drive worker model (section 6) allocates interactive/bulk/shared lanes based on a single drive's config. Multi-drive sync needs a global allocation strategy.
+When multiple drives sync simultaneously, the total worker count across all drives is bounded by a global cap to prevent resource exhaustion.
 
-### Constraints
+### Worker Budget Algorithm
 
-- **Global cap needed**: A `max_total_workers` config option (or computed default) must limit the total worker goroutines across all drives.
-- **Minimum per drive**: Each active drive needs a minimum viable allocation (at least 1 interactive + 1 bulk worker) to make progress. If 10 drives are enabled and the global cap is 16, some drives may need to wait.
-- **Checker pool scoping**: The hash checker pool (CPU-bound, `runtime.NumCPU()` workers) should likely be global rather than per-drive, since it competes for CPU cores. Per-drive checker pools would oversubscribe on machines with many drives.
-- **Dynamic reallocation**: When drives complete their sync cycles (one-shot) or enter idle (watch mode, nothing to do), their workers should be available for other drives.
+```
+globalCap = config.MaxWorkers (default: 16, minimum: 4)
+minPerDrive = 4
 
-### Open Questions
+For each drive in config that is not paused:
+    weight[drive] = max(1, drive.baselineFileCount)
 
-See [MULTIDRIVE.md §11](MULTIDRIVE.md#11-multi-drive-orchestrator-design-gap) for the full list of orchestrator-level open questions, including worker budget, rate limit coordination, bandwidth limiting, and error isolation.
+totalWeight = sum(weight[all active drives])
+
+For each active drive:
+    allocated = max(minPerDrive, globalCap * weight[drive] / totalWeight)
+
+// If sum(allocated) > globalCap due to minPerDrive floors, scale down
+// proportionally but never below minPerDrive.
+```
+
+Each drive's `WorkerPool.Start(ctx, allocatedWorkers)` receives its allocation. The lane split (interactive/bulk/shared) within each drive follows the existing per-drive model from §6. Rebalanced on config reload when the active drive set changes (drives added, removed, or paused).
+
+### Checker Pool (Hash Computation)
+
+The hash checker pool is **global** — a single `*semaphore.Weighted` shared across all `LocalObserver` instances. All drives share the same physical disk(s), so a global permit is the correct scope.
+
+The semaphore limit is auto-detected by storage type at startup:
+- **SSD** (~500MB/s+ sequential): 8 concurrent readers
+- **HDD** (~150MB/s sequential): 2 concurrent readers (avoid seek thrashing)
+- **Unknown/network**: 4 concurrent readers
+
+Detection: `/sys/block/*/queue/rotational` on Linux, heuristics on macOS. Configurable override via `parallel_checkers`.
+
+Future: the semaphore limit itself becomes adaptive (AIMD on observed read throughput). Same single semaphore, dynamically sized — not a new mechanism.
+
+### Concurrency Stage Summary
+
+Each pipeline stage has exactly ONE bottleneck and ONE control mechanism:
+
+| Stage | Bottleneck | Control | Scope | Phase 7.0 |
+|-------|-----------|---------|-------|-----------|
+| Walk | Disk metadata I/O | None (sequential) | Per-drive | — |
+| Hash | Disk read throughput | Global semaphore | Global | Static (auto-detect) |
+| Execution | Network | Worker count per drive | Per-drive | Static proportional budget |
+| DB commits | SQLite write | None (not bottleneck) | Per-drive | — |
+| Memory | Buffer size | Buffer backpressure | Per-drive | None needed |
+
+No overlapping mechanisms. Future AIMD adjusts the same control knob (semaphore limit or worker count) that Phase 7.0 sets statically.

@@ -661,20 +661,22 @@ This analysis categorizes every part of the codebase by its relationship to the 
 - `worker_test.go`: `TestWorkerPool_PanicRecovery` — panicking action completes without process crash
 - All gates pass. 74.8% total coverage, 86.4% sync package.
 
-#### 5.5: Pause/resume + SIGHUP config reload + final cleanup
+#### 5.5: Pause/resume + config reload + final cleanup
 
 **Goal**: Complete Phase 5 feature set. Ensure clean slate.
 
 **1. New Code:**
 - `engine.go`: `Pause()` / `Resume()` — pause workers, continue collecting events, resume drains buffer
-- SIGHUP handler: reload config
+- Config-based pause/resume: `pause` command sets `paused = true` in config section (+ optional `paused_until` for timed pause). `resume` command removes `paused`/`paused_until`. Config watched via fsnotify in daemon mode — changes take effect within milliseconds. See [MULTIDRIVE.md §11.10](design/MULTIDRIVE.md#1110-drive-lifecycle-shadow-files).
+- fsnotify config watcher: `sync --watch` watches `config.toml` for immediate pickup of drive add/remove/pause/resume. Validates config before applying. Invalid config → log warning, keep old config.
 
 **2. Code Retirement:**
 - Final sweep — run ALL grep patterns from [`docs/design/legacy-sequential-architecture.md`](design/legacy-sequential-architecture.md) §9
 - Doc comment audit: no production `.go` file should reference "9 phases", "9 slices", "sequential execution", or "batch commit" except in historical/explanatory context.
 
 **3. CI and Testing:**
-- Pause/resume test, SIGHUP test
+- Pause/resume test (config-based + engine-level)
+- fsnotify config reload test
 - Docs updated: CLAUDE.md, BACKLOG.md, LEARNINGS.md
 - Both CI workflows green. Full DOD checklist.
 
@@ -812,18 +814,20 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 ### 7.0: Multi-drive orchestration — FUTURE
 
-> **Prerequisite**: Resolve all open design questions in [MULTIDRIVE.md §11 (Multi-Drive Orchestrator)](../docs/design/MULTIDRIVE.md#11-multi-drive-orchestrator-design-gap) before implementation begins. That section lists 10 open questions covering orchestrator struct, client pool, worker budget, error isolation, watch lifecycle, aggregate reporting, context tree, bandwidth limiting, rate limit coordination, and checker pool scoping. See also [concurrent-execution.md §19](../docs/design/concurrent-execution.md#19-multi-drive-worker-budget-design-gap) for the worker budget design gap.
+> **Architecture resolved**: Architecture A (per-drive goroutine with isolated engines). See [MULTIDRIVE.md §11](../docs/design/MULTIDRIVE.md#11-multi-drive-orchestrator) for full specification including all 10 questions answered. See [concurrent-execution.md §19](../docs/design/concurrent-execution.md#19-multi-drive-worker-budget) for worker budget algorithm.
 
-1. `ResolveDrives()` in config package: return `[]*ResolvedDrive` for all enabled drives (when no `--drive` flag) or the specified subset. Currently only `ResolveDrive()` exists (single drive).
-2. Shared `graph.Client` per token file: multiple drives sharing the same Microsoft account (e.g., business OneDrive + SharePoint libraries) should share one `graph.Client` instance. Same token, same rate limit tracking, same HTTP connection pool. Create one client per unique token path, not per drive.
-3. Global worker pool cap: per-drive pools (downloads + uploads) multiply with concurrent drives. 5 drives x 16 workers = 80 I/O goroutines. Implement a global cap (e.g., `max_total_workers` config) that subdivides across active drives.
-4. Per-drive goroutine lifecycle: each drive runs its own `Engine.RunOnce()` or `Engine.RunWatch()`. Engine errors are per-drive (one drive failing doesn't stop others). Aggregate status reported to user.
-5. Config hot-reload in watch mode: drives added, removed, or paused in config take effect on the next sync cycle without process restart.
+1. `Orchestrator` struct: manages `map[CanonicalID]*DriveRunner`. Each `DriveRunner` wraps an `Engine` with panic recovery and error backoff. ~300 LOC new code, zero changes to Engine/WorkerPool/DepTracker/Executor.
+2. `ResolveDrives()` in config package: return `[]*ResolvedDrive` for all non-paused drives (when no `--drive` flag) or the specified subset. Currently only `ResolveDrive()` exists (single drive).
+3. Shared `graph.Client` per token file: `map[tokenPath]*graph.Client` in Orchestrator. Multiple drives on same account share one client. 429 backoff automatically coordinated.
+4. Worker budget: global cap (`max_workers`, default 16), proportional allocation by baseline file count, minimum 4 per drive. Rebalanced on config reload.
+5. Per-drive goroutine lifecycle: each drive runs its own `Engine.RunOnce()` or `Engine.RunWatch()`. Panics caught per-drive. 3 consecutive failures → exponential backoff (1m, 5m, 15m, 1h). Other drives unaffected.
+6. Shadow files for drive lifecycle: `drive remove` moves config section to shadow file. `drive add` restores from shadow. `logout` moves all account drives to shadow. See [MULTIDRIVE.md §11.10](../docs/design/MULTIDRIVE.md#1110-drive-lifecycle-shadow-files).
+7. Global checker semaphore: `*semaphore.Weighted` shared across all `LocalObserver` instances. Limit auto-detected by storage type (SSD: 8, HDD: 2, unknown: 4) or configurable via `parallel_checkers`.
 
-### 7.1: Drive removal — DONE
+### 7.1: Drive removal — DONE (partially; shadow files not yet implemented)
 
-1. `drive remove <drive>` — **DONE**: sets `enabled = false` in config via text-level edit. State DB and token preserved.
-2. `drive remove --purge <drive>` — **DONE**: permanently deletes state DB and removes config section. Token preserved if shared with other drives.
+1. `drive remove <drive>` — **DONE (current)**: sets `enabled = false` in config via text-level edit. State DB and token preserved. **FUTURE**: move config section to shadow file instead (see [MULTIDRIVE.md §11.10](../docs/design/MULTIDRIVE.md#1110-drive-lifecycle-shadow-files)).
+2. `drive remove --purge <drive>` — **DONE**: permanently deletes state DB and removes config section. Token preserved if shared with other drives. **FUTURE**: also delete shadow file.
 3. Text-level config manipulation — **DONE**: `config/write.go` `DeleteDriveSection()` uses line-based text edits preserving all user comments.
 
 ### 7.2: Status command
@@ -1068,18 +1072,21 @@ This analysis categorizes every part of the codebase by its relationship to the 
 1. `share <path>`: generate a shareable link for a remote file or folder. Options: `--type view` (read-only, default), `--type edit` (read-write), `--expiry 7d` (link expiration).
 2. Uses Graph API `POST /drives/{drive-id}/items/{item-id}/createLink`.
 
-### 12.6: RPC control socket — FUTURE
+### 12.6: RPC control socket — FUTURE (optional enhancement)
+
+> **Note**: Phase 7.0 uses config-as-IPC via fsnotify for all control operations (pause, resume, drive add/remove). The RPC socket is an additive enhancement for live status data that can't be read from config + state DBs. Config-as-IPC remains the control mechanism even after RPC is added.
 
 1. `sync --watch` exposes a JSON-over-HTTP API on a Unix domain socket (`$XDG_RUNTIME_DIR/onedrive-go.sock`). Same pattern as Docker, Tailscale, Syncthing.
-2. Polling endpoint: `GET /status` returns JSON and closes. Simple scripts and status bar widgets poll this.
+2. Polling endpoint: `GET /status` returns JSON with live data (in-flight action counts, real-time transfer progress, per-drive worker utilization) and closes. Simple scripts and status bar widgets poll this.
 3. Push endpoint: `GET /events` is an SSE (Server-Sent Events) stream. The connection stays open and pushes events (transfer progress, sync complete, conflict detected, paused/resumed) in real-time. GUIs use this.
 4. The RPC API serves CLI and GUI identically — same socket, same endpoints.
 
-### 12.7: RPC-based pause/resume — FUTURE
+### 12.7: RPC-based live sync trigger — FUTURE
 
-1. `pause [duration]` command: talk to running `sync --watch` via control socket. Pause all data transfers. Options: `2h`, `4h`, `8h`, or indefinitely (until `resume`). Observers keep running (collecting events for efficient resume).
-2. `resume` command: resume a paused sync. Buffer is drained immediately.
-3. `sync` while `--watch` is running: delegate to the running process via RPC instead of failing with "database is locked".
+> **Note**: Pause/resume is now handled by config-as-IPC (Phase 5.5/7.0). `pause` writes `paused = true` to config; `resume` removes it. Daemon picks up via fsnotify. No RPC needed.
+
+1. `sync` while `--watch` is running: delegate to the running process via RPC to trigger an immediate sync cycle instead of failing with "database is locked".
+2. Force sync: `GET /sync` triggers an immediate delta check for all drives (or `GET /sync?drive=X` for a specific drive) without waiting for `poll_interval`.
 
 ### 12.8: TUI interface — FUTURE
 

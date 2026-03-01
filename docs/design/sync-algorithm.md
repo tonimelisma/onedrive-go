@@ -1534,7 +1534,7 @@ Linux inotify requires one watch per directory. The default kernel limit is 8192
 
 ### 12.5 Multi-Drive Watch Mode
 
-In multi-drive sync, each enabled drive runs its own watch loop (observer pair + buffer + planner + worker dispatch). The multi-drive orchestrator manages the lifecycle of these per-drive watch loops. See [MULTIDRIVE.md §11](MULTIDRIVE.md#11-multi-drive-orchestrator-design-gap) for the orchestrator design (currently an unresolved design gap — to be specified before Phase 7.0).
+In multi-drive sync, each non-paused drive runs its own watch loop (observer pair + buffer + planner + worker dispatch) via a `DriveRunner` managed by the `Orchestrator`. The orchestrator watches `config.toml` via fsnotify and starts/stops DriveRunners as drives are added, removed, or paused. See [MULTIDRIVE.md §11](MULTIDRIVE.md#11-multi-drive-orchestrator) for the full orchestrator specification (Architecture A: per-drive goroutine with isolated engines).
 
 **Idle resource consumption**: In watch mode, CPU usage during idle is proportional to the remote polling interval (one delta API call per interval) plus inotify/FSEvents overhead (near-zero when no files change). Memory usage is the baseline cache (~19 MB for 100K items) plus buffer overhead (~0 when no pending events). The target is < 1% CPU when idle.
 

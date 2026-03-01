@@ -1,6 +1,6 @@
 # Multi-Account / Multi-Drive Architecture
 
-> **Status**: All decision points resolved. Ready for implementation.
+> **Status**: All decision points resolved. Orchestrator architecture specified (§11).
 
 ---
 
@@ -207,7 +207,8 @@ This replaces the old `CanonicalID.TokenCanonicalID()` method. The two existing 
 type Drive struct {
     SyncDir     string   `toml:"sync_dir"`
     StateDir    string   `toml:"state_dir,omitempty"`
-    Enabled     *bool    `toml:"enabled,omitempty"`
+    Paused      *bool    `toml:"paused,omitempty"`
+    PausedUntil *string  `toml:"paused_until,omitempty"` // RFC3339 timestamp for timed pause
     DisplayName string   `toml:"display_name,omitempty"`
     Owner       string   `toml:"owner,omitempty"`        // shared drives only: owner's email
     RemotePath  string   `toml:"remote_path,omitempty"`
@@ -307,15 +308,15 @@ onedrive-go drive remove --drive personal             # partial canonical
 
 | Flags | Scope |
 |---|---|
-| No flags | All enabled drives |
-| `--account alice@contoso.com` | All enabled drives under that account |
+| No flags | All non-paused drives |
+| `--account alice@contoso.com` | All non-paused drives under that account |
 | `--drive "Jane's Photos"` | Just that one drive |
 | `--drive work --drive personal` | Those specific drives |
 
 `--download-only` and `--upload-only` are `sync`-command flags that affect the current invocation for whatever drives are in scope. They are not persisted in config. No per-drive sync mode setting exists.
 
 ```bash
-onedrive-go sync --download-only                              # all enabled drives, download-only
+onedrive-go sync --download-only                              # all non-paused drives, download-only
 onedrive-go sync --download-only --drive personal             # one drive, download-only
 onedrive-go sync --download-only --account alice@contoso.com  # all Alice's drives, download-only
 onedrive-go sync --watch --upload-only                        # continuous, all drives, upload-only
@@ -497,9 +498,9 @@ All decision points have been resolved.
 
 ### 9.1 Linux inotify Watch Limits
 
-Linux inotify requires one watch per directory. The default kernel limit is 8192 watches (`/proc/sys/fs/inotify/max_user_watches`), though many distributions set it higher (e.g., 65536). Multi-drive sync multiplies the problem — each enabled drive's directory tree consumes watches independently.
+Linux inotify requires one watch per directory. The default kernel limit is 8192 watches (`/proc/sys/fs/inotify/max_user_watches`), though many distributions set it higher (e.g., 65536). Multi-drive sync multiplies the problem — each non-paused drive's directory tree consumes watches independently.
 
-**Detection at watch startup**: Before starting inotify watches, the engine reads `/proc/sys/fs/inotify/max_user_watches` and estimates the total watch count from the baseline directory counts across all enabled drives.
+**Detection at watch startup**: Before starting inotify watches, the engine reads `/proc/sys/fs/inotify/max_user_watches` and estimates the total watch count from the baseline directory counts across all non-paused drives.
 
 **Warning threshold**: If the estimated watch count exceeds 80% of the kernel limit, the engine logs a warning with sysctl instructions:
 
@@ -546,41 +547,413 @@ Non-filter settings (`poll_interval`, `log_level`, transfer settings, safety set
 
 ---
 
-## 11. Multi-Drive Orchestrator (DESIGN GAP)
+## 11. Multi-Drive Orchestrator
 
-> **STATUS: UNRESOLVED DESIGN GAP** — The following questions must be answered before Phase 7.0 implementation begins. This section lists the open questions and constraints, NOT the answers.
+> **STATUS: RESOLVED** — Architecture A (per-drive goroutine with isolated engines) selected after analysis of four candidate architectures. All 10 open questions answered. See §11.11 for alternatives considered.
 
-The current sync engine (`Engine`) runs a single drive. Multi-drive sync requires an orchestrator that manages multiple engines. The orchestrator design is not yet specified.
+### 11.1 Architecture: Per-Drive Goroutine (Isolated Engines)
 
-### Open questions
+Each drive gets its own goroutine running its own Engine. A thin Orchestrator starts, stops, and monitors them. The proven sync pipeline (Engine, WorkerPool, DepTracker, Executor) stays exactly as-is — zero changes.
 
-1. **Orchestrator struct and lifecycle**: What is the struct, and how does it manage `RunOnce` vs `RunWatch` for multiple drives? Does it own a single `RunWatch` loop that multiplexes drives, or does each drive get its own goroutine with its own `RunWatch`?
+```
+Orchestrator
+├── DriveRunner[0]  →  Engine[0]  →  DepTracker[0] + WorkerPool[0] (N₀ workers)
+├── DriveRunner[1]  →  Engine[1]  →  DepTracker[1] + WorkerPool[1] (N₁ workers)
+└── DriveRunner[2]  →  Engine[2]  →  DepTracker[2] + WorkerPool[2] (N₂ workers)
+     each with own: observers, buffer, planner, tracker, baseline, worker pool
+```
 
-2. **ClientPool**: Multiple drives sharing the same Microsoft account (e.g., business OneDrive + SharePoint libraries + shared folders) should share one `graph.Client` instance. Same token file = same rate limits, same HTTP connection pool. How is the pool keyed (by token path?), and who owns the lifecycle?
+**Why this architecture**: The theoretical advantage of shared worker pools barely matters in practice. ~95% of users have 1 drive (orchestrator invisible). Drives are rarely simultaneously busy — steady state is idle (empty delta responses). When work happens, it's almost always one drive at a time. Proportional allocation solves the real problem (don't dedicate half the workers to a drive with 5 files). Error isolation is critical and free — a corrupted SQLite DB, expired token, or network error in one drive affects nothing else. Architecture C (hybrid with fair scheduler) remains available as a future optimization if simultaneous multi-drive bursts become common.
 
-3. **Worker budget algorithm**: A global cap on total workers is needed to prevent 5 drives x 16 workers = 80 goroutines. How are workers allocated? Options: global pool shared by all drives, per-drive allocation with a global cap, minimum guaranteed workers per drive with overflow. What is the minimum viable per-drive allocation?
+### 11.2 New Types
 
-4. **Error isolation**: One drive failing (e.g., expired token, network error, corrupted state DB) must not crash or stall other drives. How are per-drive errors surfaced, and what happens when a drive enters a persistent error state?
+```go
+// Orchestrator manages the lifecycle of multiple DriveRunners.
+// Watches config.toml via fsnotify for immediate config pickup.
+type Orchestrator struct {
+    runners      map[driveid.CanonicalID]*DriveRunner
+    clients      map[string]*graph.Client  // keyed by token file path
+    globalCap    int                       // total worker budget (configurable, default 16)
+    configPath   string                    // path to config.toml (watched via fsnotify)
+    logger       *slog.Logger
+    mu           sync.Mutex
+}
 
-5. **Watch mode lifecycle**: SIGHUP should support adding, removing, and reconfiguring drives without process restart. How does the orchestrator detect config changes and start/stop individual drive engines?
+// DriveRunner wraps an Engine with lifecycle management.
+type DriveRunner struct {
+    engine     *sync.Engine
+    canonID    driveid.CanonicalID
+    config     *config.ResolvedDrive
+    workers    int                       // allocated workers for this drive
+    cancel     context.CancelFunc
+    err        error                     // last error (for status reporting)
+    logger     *slog.Logger
+}
+```
 
-6. **Aggregate reporting**: How is sync status reported across multiple drives? Single combined `SyncReport`? Per-drive reports? What does `status` show when 3 drives are syncing and 1 is errored?
+### 11.3 Worker Budget Algorithm
 
-7. **Context tree structure**: What is the context hierarchy? `process → orchestrator → drive → observers + workers`? How does cancellation propagate (cancel one drive vs cancel all)?
+```
+globalCap = config.MaxWorkers (default: 16, minimum: 4)
+minPerDrive = 4
 
-8. **Bandwidth limiting**: A global token bucket shared by all drives is needed. How does it interact with per-drive rate limiting? Does a drive's 429 response throttle only that drive or all drives sharing the same `graph.Client`?
+For each drive in config that is not paused:
+    weight[drive] = max(1, drive.baselineFileCount)
 
-9. **Rate limit coordination**: Drives sharing a `graph.Client` share 429 backoff state. How is this coordinated? The `graph.Client` already handles 429 internally — does this "just work" with a shared client?
+totalWeight = sum(weight[all active drives])
 
-10. **Checker pool scoping**: Should the hash checker pool (CPU-bound local hash computation) be global or per-drive? Global avoids oversubscribing CPU cores. Per-drive provides isolation.
+For each active drive:
+    allocated = max(minPerDrive, globalCap * weight[drive] / totalWeight)
+
+// If sum(allocated) > globalCap due to minPerDrive floors, scale down proportionally
+// but never below minPerDrive.
+```
+
+A drive with 100K files and 7 shared shortcuts gets ~90% of workers. A drive with 5 files gets 4 workers. Shortcuts don't affect allocation because they're internal to the Engine — the shortcut content is part of the file count. Rebalanced on config reload (fsnotify) when the active drive set changes.
+
+### 11.4 graph.Client Pooling
+
+```go
+func (o *Orchestrator) getOrCreateClient(tokenPath string) *graph.Client {
+    if client, ok := o.clients[tokenPath]; ok {
+        return client
+    }
+    client := graph.NewClient(baseURL, httpClient, tokenSource, logger, userAgent)
+    o.clients[tokenPath] = client
+    return client
+}
+```
+
+Multiple drives on the same account (personal + SharePoint libraries) share one client. 429 backoff is automatically coordinated because `graph.Client.Do()` handles retry/backoff per-request, and all drives using the same client wait on the same backoff.
+
+### 11.5 Context Tree
+
+```
+processCtx (SIGTERM/SIGINT)
+├── orchestratorCtx
+│   ├── fsnotify watcher (config.toml)
+│   ├── driveCtx[0] (cancelable independently)
+│   │   └── Engine[0]
+│   │       ├── observers
+│   │       └── WorkerPool[0]
+│   ├── driveCtx[1]
+│   │   └── Engine[1]
+│   └── driveCtx[2]
+│       └── Engine[2]
+```
+
+Canceling `driveCtx[1]` stops only that drive's Engine (graceful shutdown: drain workers, commit pending). Canceling `orchestratorCtx` stops all drives. Config changes (via fsnotify) cancel and recreate individual driveCtxs as needed.
+
+### 11.6 Error Isolation
+
+Each DriveRunner catches panics in its goroutine and records the error:
+
+```go
+func (dr *DriveRunner) run(ctx context.Context) {
+    defer func() {
+        if r := recover(); r != nil {
+            dr.err = fmt.Errorf("drive panic: %v", r)
+            dr.logger.Error("drive panicked", slog.Any("recover", r))
+        }
+    }()
+    // ... engine.RunOnce() or engine.RunWatch()
+}
+```
+
+On persistent error (3 consecutive failures), the DriveRunner enters a backoff state: retry with exponential delay (1m, 5m, 15m, 1h). Other drives continue unaffected.
+
+### 11.7 Config Reload (fsnotify)
+
+The daemon watches `config.toml` via fsnotify for immediate config pickup:
+
+```
+1. Re-read and validate config file
+   - Valid → proceed to step 2
+   - Invalid → log warning with parse error, keep old config. No disruption.
+2. Diff against current running drives:
+   - New drives in config: create DriveRunner, allocate workers, start
+   - Drives removed from config: cancel driveCtx, wait for shutdown, remove runner
+   - Drives with paused=true added/changed: stop DriveRunner (or don't start)
+   - Drives with paused removed: start DriveRunner
+   - Hot-reloadable settings changed (filters, display_name): apply in-place
+   - Non-hot-reloadable settings changed (sync_dir): log warning, requires restart
+   - Unchanged drives: keep running
+3. Rebalance worker allocations across active (non-paused) drives
+```
+
+CLI commands like `pause`, `resume`, `drive add`, `drive remove` write directly to `config.toml`. The daemon picks up changes within milliseconds via fsnotify. No RPC socket is needed for these operations.
+
+Non-hot-reloadable settings (require daemon restart): `sync_dir`, `max_workers`, network config. Drive presence and `paused` state are immediate.
+
+### 11.8 Aggregate Reporting
+
+`onedrive-go status` works with or without the daemon by reading config + state DBs directly:
+
+```
+Drives:
+  me@outlook.com              ~/OneDrive           ready (142 files, last sync 2m ago)
+  Jane's Photos (read-only)   ~/OneDrive-Shared    paused
+  me@contoso.com              ~/OneDrive-Contoso   token expired
+
+Summary: 1 ready, 1 paused, 1 error
+```
+
+Status is determined from config (is drive present? is it paused?) + token (does token file exist? is it expired?) + baseline DB (file count, last sync time). No daemon communication needed. Removed drives (in shadow files) are not shown.
+
+### 11.9 Daemon Model (Config-as-IPC)
+
+`sync --watch` is the daemon entry point. It starts the Orchestrator, which:
+
+1. Reads config, creates `graph.Client` pool
+2. Starts DriveRunners for all non-paused drives (or zero if none exist / all paused)
+3. Starts fsnotify watcher on `config.toml`
+4. Enters main loop: select on fsnotify events, SIGTERM/SIGINT
+
+The orchestrator can run with zero active DriveRunners — valid state. The daemon stays up, watches config, and starts drives as they appear.
+
+**No RPC socket for Phase 7.0.** All control flows through the config file:
+- `pause` → writes `paused = true` to config → fsnotify → daemon stops drive
+- `resume` → removes `paused` from config → fsnotify → daemon starts drive
+- `drive add` → adds section to config → fsnotify → daemon starts drive
+- `drive remove` → moves section to shadow → fsnotify → daemon stops drive
+
+```
+onedrive-go sync --watch
+  │
+  ├── Read config → resolve drives
+  ├── Create graph.Client pool
+  ├── Start DriveRunners for non-paused drives
+  ├── Start fsnotify watcher on config.toml
+  │
+  ├── select {
+  │     case fsnotify event: → reload()
+  │     case SIGTERM/INT:    → graceful shutdown
+  │     case paused_until expires: → clear paused fields, write config
+  │   }
+  │
+  └── On shutdown: stop all DriveRunners, exit
+```
+
+**Future (Phase 12.6)**: RPC socket can be added for live status data (in-flight action counts, real-time progress, SSE events) that can't be read from config + state DBs. This is additive — config-as-IPC remains the control mechanism.
+
+### 11.10 Drive Lifecycle: Shadow Files
+
+Two concepts control a drive's lifecycle, each with its own storage location:
+
+| Concept | Question it answers | Controlled by | Stored in |
+|---------|---------------------|---------------|-----------|
+| **Drive exists** | "Is this drive part of my active setup?" | `drive add` / `drive remove` | Presence in `config.toml` vs shadow file |
+| **Drive paused** | "Should this drive sync right now?" | `pause` / `resume` | `paused = true` in config section |
+
+#### Shadow File Storage
+
+When `drive remove` removes a drive section from `config.toml`, it writes that section to a **shadow file** in the data directory:
+
+```
+~/Library/Application Support/onedrive-go/          (macOS)
+  config.toml                                        ← active drives
+  shadow_personal_user@example.com.toml              ← removed drive's config
+  token_personal_user@example.com.json               ← token (untouched)
+  state_personal_user@example.com.db                 ← state DB (untouched)
+```
+
+Shadow files use the same `{prefix}_{type}_{email}.toml` naming convention as tokens and state DBs. One shadow file per drive. Contains the full drive section (sync_dir, paused, display_name, filters — everything).
+
+#### Command Behaviors
+
+**`drive add <canonical-id>`**:
+1. Shadow file exists → restore: read shadow, append section to config.toml, delete shadow. All settings (sync_dir, paused state, display_name, filters) restored.
+2. No shadow → add fresh section with computed default sync_dir.
+
+**`drive remove [--drive X]`**:
+1. Read drive section from config.toml.
+2. Write it to shadow file.
+3. Delete section from config.toml.
+4. Drive disappears from drive list, status, sync. State DB, token, sync directory untouched.
+
+**`drive remove --purge [--drive X]`**:
+1. Delete section from config.toml (if present).
+2. Delete shadow file (if present).
+3. Delete state DB.
+4. Token untouched (may be shared across drives). Sync directory untouched (user's files).
+
+**`pause [--drive X] [duration]`**:
+1. Set `paused = true` in drive's config section.
+2. If duration given, also set `paused_until = 2026-02-28T18:00:00Z`.
+3. Without `--drive`, pause all drives in config.
+
+**`resume [--drive X]`**:
+1. Remove `paused` and `paused_until` from drive's config section.
+2. Without `--drive`, resume all drives.
+
+**`login`**:
+1. Authenticate, save token.
+2. Drive already in config.toml → "Token refreshed." Config untouched.
+3. Drive not in config.toml → check for shadow file. Shadow exists → auto-restore (seamless logout+login round-trip). No shadow → add fresh drive section.
+
+**`logout [--account X]`**:
+1. Delete token file.
+2. For every drive belonging to that account in config.toml: `drive remove` (move to shadow).
+3. State DBs, sync directories untouched. Shadow files preserve everything.
+
+**`logout --purge [--account X]`**:
+1. Delete token file.
+2. For every drive belonging to that account: `drive remove --purge` (delete config section, shadow, state DB).
+3. Sync directories untouched.
+
+#### Drive State Table
+
+| In config? | paused? | Token? | Display | Syncs? | How user got here |
+|------------|---------|--------|---------|--------|-------------------|
+| Yes | No | Valid | ready | Yes | Normal state |
+| Yes | Yes | Valid | paused | No | Ran `pause` |
+| Yes | Yes (timed) | Valid | paused (1h32m left) | No | Ran `pause 2h` |
+| Yes | No | Expired | token expired | No | Token needs refresh |
+| Yes | No | Missing | no token | No | Token deleted externally |
+| No (shadow) | — | — | (not shown) | No | Ran `drive remove` or `logout` |
+| Gone | — | — | (not shown) | No | Ran `--purge` |
+
+When paused, that's the dominant display state. Token issues become visible on resume.
+
+#### Timed Pause Expiry
+
+When `paused_until` is set, the daemon checks on each sync cycle. When the time passes, the daemon clears both `paused` and `paused_until` from config.toml. The fsnotify-triggered reload then starts the drive.
+
+#### Config File Example
+
+User has two drives, personal paused:
+
+```toml
+# onedrive-go configuration
+
+["personal:user@example.com"]
+sync_dir = "~/OneDrive"
+paused = true
+
+["shared:user@example.com:SharedFolder"]
+sync_dir = "~/SharedFolder"
+```
+
+After `drive remove --drive personal:user@example.com`:
+
+```toml
+# onedrive-go configuration
+
+["shared:user@example.com:SharedFolder"]
+sync_dir = "~/SharedFolder"
+```
+
+And in the data directory: `shadow_personal_user@example.com.toml` ← contains sync_dir, paused = true.
+
+After `drive add personal:user@example.com`: section restored from shadow (including `paused = true`), shadow file deleted.
+
+#### Changes from Today's Implementation
+
+| Area | Today | New |
+|------|-------|-----|
+| `Drive.Enabled` field | `*bool` in config struct | Replaced by `Paused *bool` + `PausedUntil *string` |
+| `drive remove` | Sets `enabled = false` in config | Moves section to shadow file, removes from config |
+| `drive add` (existing) | Sets `enabled = true` | Restores from shadow file |
+| Display state "paused" | Means `enabled = false` | Means `paused = true` (correct semantics) |
+| `logout` | Deletes token, keeps drives in config | Deletes token, moves drives to shadow |
+| `login` (re-login) | Token refresh only | Token refresh + restore from shadow if shadow exists |
+| Config reload | Per-cycle (up to 5 min delay) | fsnotify on config.toml (immediate, validated) |
+| `pause`/`resume` commands | Not implemented | New commands, write `paused` to config |
+
+### 11.11 CLI Command Categorization
+
+All CLI commands are standalone — they read/write config, state DBs, and tokens directly. No daemon communication required for Phase 7.0.
+
+**Config-modifying commands** (trigger daemon reload via fsnotify if daemon is running):
+
+| Command | Config effect |
+|---------|---------------|
+| `pause [--drive X] [duration]` | Sets `paused = true` (+ `paused_until`) in config |
+| `resume [--drive X]` | Removes `paused` / `paused_until` from config |
+| `drive add` | Adds section to config (restores from shadow if available) |
+| `drive remove` | Moves section to shadow, removes from config |
+| `login` | Adds drive section (or restores from shadow) if new |
+| `logout` | Moves drive sections to shadow |
+
+**Read-only commands** (work identically with or without daemon):
+
+| Command | Data source |
+|---------|-------------|
+| `status` | Config (drive presence, paused state) + token files (valid/expired/missing) + state DBs (file count, last sync time) |
+| `drive list` | Config (active drives only — shadow drives invisible) |
+| `whoami` | Token files |
+| `conflicts`, `verify` | State DBs |
+
+**Direct API commands** (standalone, short-lived graph.Client):
+
+| Command | Notes |
+|---------|-------|
+| `ls`, `get`, `put`, `rm`, `mkdir`, `stat` | Direct file operations via Graph API |
+| `sync` (one-shot) | Run one sync cycle per drive and exit |
+| `drive search` | Search available drives via Graph API |
+
+**Daemon entry point**:
+
+| Command | Behavior |
+|---------|----------|
+| `sync --watch` | Start daemon. Fail with "already running" if PID lock exists. |
+
+### 11.12 Concurrency Stages and Control Mechanisms
+
+Each stage of the sync pipeline has exactly ONE bottleneck and exactly ONE control mechanism. No overlapping mechanisms.
+
+| Stage | Bottleneck | Control Mechanism | Scope | Phase 7.0 | Future |
+|-------|-----------|-------------------|-------|-----------|--------|
+| Walk | Disk metadata I/O | None (sequential) | Per-drive | — | — |
+| Hash | Disk read throughput | Global semaphore (`parallel_checkers`) | Global | Static (auto-detect) | Same semaphore, AIMD-sized |
+| Execution | Network (latency + bandwidth) | Worker count per drive | Per-drive | Static proportional budget | AIMD per-account (replaces static) |
+| DB commits | SQLite write | None (not a bottleneck) | Per-drive | — | — |
+| Memory | Buffer size | Buffer backpressure | Per-drive | None needed | High/low water marks |
+
+No overlapping mechanisms: hashing has ONE control (semaphore). Execution has ONE control (worker count). Buffer has ONE control (backpressure). They are in different pipeline stages and cannot conflict. Future AIMD is not a new, additional mechanism — it dynamically adjusts the same control knob (semaphore limit or worker count) that Phase 7.0 sets statically.
+
+### 11.13 Resource Sharing (Non-Orchestrator Concerns)
+
+**graph.Client pooling**: `map[tokenPath]*graph.Client` in Orchestrator. Created once per unique token path. Thread-safe (`graph.Client` is stateless per-request).
+
+**429 rate limiting**: Per-account (per OAuth token), NOT global. Handled entirely by `graph.Client` — when a request gets 429 with `Retry-After`, the client sleeps for that duration before retrying. Drives sharing a token share a client, so they naturally wait on the same backoff. Throttled goroutines sleep (~8KB each, no CPU/disk/bandwidth). No orchestrator-level 429 concern.
+
+**Bandwidth limiting**: Global token bucket on shared `http.RoundTripper` (per concurrent-execution.md §7). One physical network = one bandwidth limit, shared across ALL drives regardless of account.
+
+**Checker pool**: Global `*semaphore.Weighted` shared across all `LocalObserver` instances. Limit auto-detected by storage type (SSD: 8, HDD: 2, unknown: 4) or configurable via `parallel_checkers`. Detect storage type at startup via `/sys/block/*/queue/rotational` on Linux, heuristics on macOS.
+
+### 11.14 Answers to Open Questions
+
+| # | Question | Answer |
+|---|----------|--------|
+| 1 | Orchestrator struct and lifecycle | `Orchestrator` manages `map[CanonicalID]*DriveRunner`. Each DriveRunner owns an Engine. `sync` (one-shot) runs all non-paused drives concurrently and exits. `sync --watch` starts the daemon: watches config.toml via fsnotify, starts/stops DriveRunners as drives are added/removed/paused. |
+| 2 | ClientPool | `map[tokenPath]*graph.Client` in Orchestrator. Created once per token path. Shared by reference. Thread-safe. |
+| 3 | Worker budget | Global cap (`max_workers`, default 16), proportional allocation by baseline file count, minimum 4 per drive. Rebalanced on config reload. |
+| 4 | Error isolation | Per-drive goroutine with panic recovery. 3 consecutive failures → exponential backoff. Other drives unaffected. |
+| 5 | Watch mode lifecycle | Daemon watches config.toml via fsnotify. CLI commands write to config → daemon picks up changes within milliseconds. Drive presence controlled by config vs shadow files. Paused state persisted in config. |
+| 6 | Aggregate reporting | `status` reads config + token files + state DBs directly. Works with or without daemon. Shows: ready/paused/token expired. Removed drives (in shadow) are invisible. |
+| 7 | Context tree | `processCtx → orchestratorCtx → driveCtx[i] → Engine[i]`. Independent cancellation per drive. |
+| 8 | Bandwidth limiting | Global token bucket on shared `http.RoundTripper` across ALL drives. One physical network = one bandwidth limit. |
+| 9 | Rate limit coordination | 429s are per-account (per OAuth token), NOT global. Handled entirely by `graph.Client`. Drives sharing a token share a client, which handles 429 backoff per-request. |
+| 10 | Checker pool | Global `*semaphore.Weighted` shared across all `LocalObserver` instances. Limit auto-detected by storage type or configurable via `parallel_checkers`. |
+
+### 11.15 Alternatives Considered
+
+Three alternative architectures were evaluated and rejected:
+
+**Architecture B: Shared Worker Pool (Centralized Execution)** — All drives share a single DepTracker and WorkerPool. Each drive has its own observers, buffer, and planner. Optimal worker utilization but poor error isolation (panic in any worker kills the shared pool), high complexity (Engine must be split into observation+planning vs execution), problematic DepTracker mutex contention, and starvation risk. ~800 LOC new code. Rejected for complexity and error isolation concerns.
+
+**Architecture C: Hybrid (Per-Drive Observation + Shared Execution via Fair Scheduler)** — Each drive has its own DepTracker shard. A FairScheduler multiplexes ready actions from all shards onto a shared WorkerPool. Near-optimal worker utilization, good error isolation (per-drive tracker shards isolate dependency graphs), no DepTracker contention between drives. ~500 LOC new code. Not rejected — available as a future optimization if simultaneous multi-drive bursts become common and Architecture A is measured as the bottleneck.
+
+**Architecture D: Actor Model** — Each component is an actor with its own goroutine and mailbox. Highest theoretical elegance (no shared mutable state, deadlock-free by construction) but unacceptably high complexity (~1000+ LOC, 15-20 message types), poor Go idiom fit, minimal existing code reuse. Rejected for ceremony-to-value ratio.
 
 ### Constraints
 
-- Each drive must have its own state DB (already the case)
-- Each drive must have its own delta token(s) (already the case)
+- Each drive has its own state DB (already the case)
+- Each drive has its own delta token(s) (already the case)
 - Drives sharing a token file MUST share a `graph.Client` (rate limit correctness)
-- The orchestrator must handle drives being added/removed at runtime (SIGHUP)
-- Memory and CPU usage must remain within PRD targets (< 100 MB for 100K files, < 1% CPU idle)
+- The orchestrator handles drives being added/removed at runtime (fsnotify on config.toml)
+- Memory and CPU usage remain within PRD targets (< 100 MB for 100K files, < 1% CPU idle)
 
 ---
 
