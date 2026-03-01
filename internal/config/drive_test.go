@@ -485,7 +485,7 @@ skip_dotfiles = true
 skip_dirs = ["vendor"]
 `)
 	// Resolve work drive: per-drive overrides should apply.
-	resolved, err := ResolveDrive(
+	resolved, _, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path},
 		CLIOverrides{Drive: "work"},
 		testLogger(t),
@@ -496,7 +496,7 @@ skip_dirs = ["vendor"]
 	assert.Equal(t, "debug", resolved.LogLevel)
 
 	// Resolve home drive: uses global settings.
-	resolved, err = ResolveDrive(
+	resolved, _, err = ResolveDrive(
 		EnvOverrides{ConfigPath: path},
 		CLIOverrides{Drive: "home"},
 		testLogger(t),
@@ -521,7 +521,7 @@ sync_dir = "~/Work"
 display_name = "work"
 `)
 	overrides := ReadEnvOverrides(testLogger(t))
-	resolved, err := ResolveDrive(
+	resolved, _, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path, Drive: overrides.Drive},
 		CLIOverrides{},
 		testLogger(t),

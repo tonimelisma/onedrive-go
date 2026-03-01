@@ -302,7 +302,7 @@ func TestResolveDrive_SingleDrive_AutoSelect(t *testing.T) {
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
 `)
-	resolved, err := ResolveDrive(
+	resolved, rawCfg, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path},
 		CLIOverrides{},
 		testLogger(t),
@@ -310,6 +310,8 @@ sync_dir = "~/OneDrive"
 	require.NoError(t, err)
 	assert.Equal(t, driveid.MustCanonicalID("personal:toni@outlook.com"), resolved.CanonicalID)
 	assert.Contains(t, resolved.SyncDir, "OneDrive")
+	assert.NotNil(t, rawCfg, "raw config should be returned alongside resolved drive")
+	assert.Len(t, rawCfg.Drives, 1)
 }
 
 func TestResolveDrive_NoDrives_Error(t *testing.T) {
@@ -317,7 +319,7 @@ func TestResolveDrive_NoDrives_Error(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	path := writeTestConfig(t, `log_level = "debug"`)
-	_, err := ResolveDrive(
+	_, _, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path},
 		CLIOverrides{},
 		testLogger(t),
@@ -334,7 +336,7 @@ sync_dir = "~/OneDrive"
 ["business:alice@contoso.com"]
 sync_dir = "~/Work"
 `)
-	_, err := ResolveDrive(
+	_, _, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path},
 		CLIOverrides{},
 		testLogger(t),
@@ -353,7 +355,7 @@ display_name = "home"
 sync_dir = "~/Work"
 display_name = "work"
 `)
-	resolved, err := ResolveDrive(
+	resolved, _, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path},
 		CLIOverrides{Drive: "work"},
 		testLogger(t),
@@ -372,7 +374,7 @@ display_name = "home"
 sync_dir = "~/Work"
 display_name = "work"
 `)
-	resolved, err := ResolveDrive(
+	resolved, _, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path, Drive: "home"},
 		CLIOverrides{},
 		testLogger(t),
@@ -391,7 +393,7 @@ display_name = "home"
 sync_dir = "~/Work"
 display_name = "work"
 `)
-	resolved, err := ResolveDrive(
+	resolved, _, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path, Drive: "home"},
 		CLIOverrides{Drive: "work"},
 		testLogger(t),
@@ -405,7 +407,7 @@ func TestResolveDrive_CLIConfigPathOverridesEnv(t *testing.T) {
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
 `)
-	resolved, err := ResolveDrive(
+	resolved, _, err := ResolveDrive(
 		EnvOverrides{ConfigPath: "/wrong/path"},
 		CLIOverrides{ConfigPath: path},
 		testLogger(t),
@@ -420,7 +422,7 @@ func TestResolveDrive_CLIDryRunOverride(t *testing.T) {
 sync_dir = "~/OneDrive"
 `)
 	dryRun := true
-	resolved, err := ResolveDrive(
+	resolved, _, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path},
 		CLIOverrides{DryRun: &dryRun},
 		testLogger(t),
@@ -431,7 +433,7 @@ sync_dir = "~/OneDrive"
 
 func TestResolveDrive_InvalidConfigFile(t *testing.T) {
 	path := writeTestConfig(t, `[invalid toml`)
-	_, err := ResolveDrive(
+	_, _, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path},
 		CLIOverrides{},
 		testLogger(t),
@@ -443,7 +445,7 @@ func TestResolveDrive_NoConfigFile(t *testing.T) {
 	// Override HOME so token discovery finds nothing on disk.
 	t.Setenv("HOME", t.TempDir())
 
-	_, err := ResolveDrive(
+	_, _, err := ResolveDrive(
 		EnvOverrides{ConfigPath: "/nonexistent/config.toml"},
 		CLIOverrides{},
 		testLogger(t),
@@ -464,7 +466,7 @@ skip_dirs = ["vendor"]
 skip_files = ["*.log"]
 poll_interval = "10m"
 `)
-	resolved, err := ResolveDrive(
+	resolved, _, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path},
 		CLIOverrides{},
 		testLogger(t),
@@ -485,7 +487,7 @@ log_level = "debug"
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
 `)
-	resolved, err := ResolveDrive(
+	resolved, _, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path},
 		CLIOverrides{},
 		testLogger(t),
@@ -604,4 +606,38 @@ func TestResolveDrives_ZeroDrives(t *testing.T) {
 	resolved, err := ResolveDrives(cfg, nil, false, testLogger(t))
 	require.NoError(t, err)
 	assert.Empty(t, resolved)
+}
+
+// --- ResolveConfigPath tests ---
+
+func TestResolveConfigPath_DefaultWhenEmpty(t *testing.T) {
+	result := ResolveConfigPath(EnvOverrides{}, CLIOverrides{}, testLogger(t))
+	assert.Equal(t, DefaultConfigPath(), result)
+}
+
+func TestResolveConfigPath_EnvOverridesDefault(t *testing.T) {
+	result := ResolveConfigPath(
+		EnvOverrides{ConfigPath: "/env/config.toml"},
+		CLIOverrides{},
+		testLogger(t),
+	)
+	assert.Equal(t, "/env/config.toml", result)
+}
+
+func TestResolveConfigPath_CLIOverridesEnv(t *testing.T) {
+	result := ResolveConfigPath(
+		EnvOverrides{ConfigPath: "/env/config.toml"},
+		CLIOverrides{ConfigPath: "/cli/config.toml"},
+		testLogger(t),
+	)
+	assert.Equal(t, "/cli/config.toml", result)
+}
+
+func TestResolveConfigPath_CLIOverridesDefault(t *testing.T) {
+	result := ResolveConfigPath(
+		EnvOverrides{},
+		CLIOverrides{ConfigPath: "/cli/config.toml"},
+		testLogger(t),
+	)
+	assert.Equal(t, "/cli/config.toml", result)
 }

@@ -29,7 +29,7 @@ Examples:
 func runResume(cmd *cobra.Command, _ []string) error {
 	cc := mustCLIContext(cmd.Context())
 	logger := cc.Logger
-	cfgPath := resolveLoginConfigPath(cc.Flags.ConfigPath)
+	cfgPath := cc.CfgPath
 
 	cfg, err := config.LoadOrDefault(cfgPath, logger)
 	if err != nil {

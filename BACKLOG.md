@@ -41,9 +41,9 @@ Code quality and architecture improvements for the root package. Root package at
 
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
-| ~~B-223~~ | ~~Extract `DriveSession` type for per-drive resource lifecycle~~ | ~~P1~~ | **DONE** — Phase 6.0a. `DriveSession` struct with Client, Transfer, TokenSource, DriveID, Resolved. `NewDriveSession()` constructor. Replaced 9 `clientAndDrive()` call sites. |
+| ~~B-223~~ | ~~Extract `DriveSession` type for per-drive resource lifecycle~~ | ~~P1~~ | **DONE** — Phase 6.0a. `DriveSession` struct with Client, Transfer, DriveID, Resolved. `NewDriveSession()` constructor. Replaced 9 `clientAndDrive()` call sites. `TokenSource` field removed (dead code, post-6.0a hardening). |
 | ~~B-224~~ | ~~Eliminate global flag variables (`flagJSON`, `flagVerbose`, etc.)~~ | ~~P1~~ | **DONE** — Phase 6.0a. Two-phase CLIContext: `CLIFlags` struct populated for all commands (Phase 1), config resolved for data commands (Phase 2). Zero global flag variables. |
-| B-227 | Deduplicate sync_dir and StatePath validation across commands | P3 | Extract `RequireSyncDir()` and `RequireStatePath()` on `CLIContext`. |
+| ~~B-227~~ | ~~Deduplicate sync_dir and StatePath validation across commands~~ | ~~P3~~ | **DONE** — Post-6.0a hardening. `newSyncEngine()` helper validates syncDir/statePath and builds `EngineConfig`. Replaces boilerplate in `sync.go` and `resolve.go`. |
 | ~~B-228~~ | ~~`buildLogger` silent fallthrough on unknown log level~~ | ~~P3~~ | Fixed in Phase 5.5: added `warn` case and `default` with stderr warning. |
 | B-232 | Test coverage for `loadConfig` error paths | P3 | Invalid TOML, ambiguous drive, wrong context type, unknown log level. |
 | B-036 | Extract CLI service layer for testability | P4 | Root package at 35.5% coverage. Target 50%+. |
@@ -67,6 +67,7 @@ Edge cases and correctness for `internal/graph/`.
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
 | B-284 | `write.go` config writer uses fragile line-based TOML editing | P3 | Regex line matching instead of TOML AST. Unusual hand-edited formatting could silently produce wrong results. Consider TOML AST library for writes. |
+| B-288 | `quiet` parameter threading across 11 functions | P4 | 11 functions accept `quiet bool` just to forward to `statusf`. Refactor to `statusWriter` or `cc.Statusf()`. Best done alongside 6.0b Orchestrator when these functions are already being touched. |
 | B-287 | Symlink-aware sync_dir overlap warning | P4 | Log warning when `filepath.EvalSymlinks` resolves differently from configured path. Cosmetic safety — lexical overlap check in `checkSyncDirOverlap()` is sufficient for correctness. |
 
 ## Hardening: Test Infrastructure
@@ -290,3 +291,7 @@ Optimization deferred until profiling shows a bottleneck.
 | B-269 | Panic recovery error message not verified in test | **DONE** — Enhanced test checks "panic:" in Stats() and WorkerResult. PR #133. |
 | B-270 | `resumeDownload` uses `computeQuickXorHash` instead of `tm.hashFunc` | **DONE** — Switched to `tm.hashFunc` for consistency. PR #133. |
 | B-200 | Re-bootstrap CI token for new token format | **DONE** — Token format updated, E2E tests passing in CI. |
+| B-289 | Remove dead `TokenSource` field from `DriveSession` | **DONE** — Post-6.0a hardening. Set but never read by any call site. |
+| B-290 | Export `ResolveConfigPath` + add `CfgPath` to `CLIContext` | **DONE** — Post-6.0a hardening. Single correct config path resolution replaces `resolveLoginConfigPath` (which ignored `ONEDRIVE_GO_CONFIG`). 11 call sites simplified to `cc.CfgPath`. |
+| B-291 | `ResolveDrive` returns `*Config` to eliminate double config load | **DONE** — Post-6.0a hardening. `loadAndResolve` was calling `LoadOrDefault` twice. Now `ResolveDrive` returns both `*ResolvedDrive` and `*Config`. |
+| B-292 | Extract `newSyncEngine` helper for EngineConfig dedup | **DONE** — Post-6.0a hardening. `sync.go` and `resolve.go` had identical 15-line EngineConfig blocks. Extracted to `sync_helpers.go` with validation. |

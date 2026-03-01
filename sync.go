@@ -58,29 +58,7 @@ func runSync(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	syncDir := cc.Cfg.SyncDir
-	if syncDir == "" {
-		return fmt.Errorf("sync_dir not configured — set it in the config file or add a drive with 'onedrive-go drive add'")
-	}
-
-	dbPath := cc.Cfg.StatePath()
-	if dbPath == "" {
-		return fmt.Errorf("cannot determine state DB path for drive %q", cc.Cfg.CanonicalID)
-	}
-
-	engine, err := sync.NewEngine(&sync.EngineConfig{
-		DBPath:        dbPath,
-		SyncRoot:      syncDir,
-		DataDir:       config.DefaultDataDir(),
-		DriveID:       session.DriveID,
-		Fetcher:       session.Client,
-		Items:         session.Client,
-		Downloads:     session.Transfer,
-		Uploads:       session.Transfer,
-		DriveVerifier: session.Client,
-		Logger:        logger,
-		UseLocalTrash: cc.Cfg.UseLocalTrash,
-	})
+	engine, err := newSyncEngine(session, cc.Cfg, true, logger)
 	if err != nil {
 		return err
 	}
@@ -92,7 +70,7 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	}
 
 	if watch {
-		cfgPath := resolveLoginConfigPath(cc.Flags.ConfigPath)
+		cfgPath := cc.CfgPath
 
 		return runSyncWatch(ctx, engine, mode, sync.WatchOpts{
 			Force: force,

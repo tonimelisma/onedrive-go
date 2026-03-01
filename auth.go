@@ -208,7 +208,7 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 
 	// Step 6: Check if this is a re-login (drive already exists in config).
 	email := canonicalID.Email()
-	cfgPath := resolveLoginConfigPath(cc.Flags.ConfigPath)
+	cfgPath := cc.CfgPath
 
 	isRelogin, err := driveExistsInConfig(cfgPath, canonicalID)
 	if err != nil {
@@ -305,16 +305,6 @@ func moveToken(src, dst string) error {
 	return nil
 }
 
-// resolveLoginConfigPath determines which config file path to use for login.
-// Uses the provided configPath if non-empty, otherwise the platform default.
-func resolveLoginConfigPath(configPath string) string {
-	if configPath != "" {
-		return configPath
-	}
-
-	return config.DefaultConfigPath()
-}
-
 // driveExistsInConfig checks whether a canonical ID already exists in the config file.
 func driveExistsInConfig(cfgPath string, canonicalID driveid.CanonicalID) (bool, error) {
 	cfg, err := config.LoadOrDefault(cfgPath, slog.Default())
@@ -407,7 +397,7 @@ func runLogout(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("reading --purge flag: %w", err)
 	}
 
-	cfgPath := resolveLoginConfigPath(cc.Flags.ConfigPath)
+	cfgPath := cc.CfgPath
 
 	// Load config to find drives associated with the account.
 	cfg, loadErr := config.LoadOrDefault(cfgPath, logger)
@@ -645,7 +635,7 @@ func runWhoami(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
 
 	// Delegate drive resolution to config.MatchDrive for consistent behavior.
-	cfgPath := resolveLoginConfigPath(cc.Flags.ConfigPath)
+	cfgPath := cc.CfgPath
 
 	cfg, err := config.LoadOrDefault(cfgPath, logger)
 	if err != nil {

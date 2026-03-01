@@ -40,7 +40,7 @@ func runPause(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--drive is required (specify which drive to pause)")
 	}
 
-	cfgPath := resolveLoginConfigPath(cc.Flags.ConfigPath)
+	cfgPath := cc.CfgPath
 
 	cfg, err := config.LoadOrDefault(cfgPath, logger)
 	if err != nil {
