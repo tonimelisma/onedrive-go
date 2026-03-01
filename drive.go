@@ -405,7 +405,12 @@ func runDriveAdd(_ *cobra.Command, args []string) error {
 // addNewDrive adds a new drive to the config with a computed default sync_dir.
 func addNewDrive(cfgPath string, cfg *config.Config, cid driveid.CanonicalID, logger *slog.Logger) error {
 	// Verify a token exists for this drive's account.
-	tokenPath := config.DriveTokenPath(cid.TokenCanonicalID())
+	tokenCID, err := config.TokenCanonicalID(cid, cfg)
+	if err != nil {
+		return fmt.Errorf("cannot resolve token for %s: %w", cid.String(), err)
+	}
+
+	tokenPath := config.DriveTokenPath(tokenCID)
 	if tokenPath == "" {
 		return fmt.Errorf("cannot determine data directory for %s", cid.Email())
 	}

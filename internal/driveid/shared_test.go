@@ -345,16 +345,8 @@ func TestCanonicalID_SharedFieldIsolation(t *testing.T) {
 	}
 }
 
-func TestCanonicalID_TokenCanonicalID_Shared(t *testing.T) {
-	// Shared drives return self — callers must use config.TokenCanonicalID()
-	// instead once B-273 lands. For now, returning self is the safe default.
-	shared := MustCanonicalID("shared:me@outlook.com:b!TG9yZW0:01ABCDEF")
-	token := shared.TokenCanonicalID()
-
-	if token.String() != "shared:me@outlook.com:b!TG9yZW0:01ABCDEF" {
-		t.Errorf("TokenCanonicalID() = %q, want self for shared (B-273 will change this)", token.String())
-	}
-}
+// TokenCanonicalID() was removed from CanonicalID (B-273).
+// Shared drive token resolution is tested in config/token_resolution_test.go.
 
 func TestID_Equal_ZeroValues(t *testing.T) {
 	// Both are "zero" per IsZero() — they must be Equal.

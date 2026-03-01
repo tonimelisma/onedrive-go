@@ -329,23 +329,6 @@ func (c *CanonicalID) UnmarshalText(text []byte) error {
 	return nil
 }
 
-// TokenCanonicalID returns the canonical ID to use for token path derivation.
-// SharePoint drives share the business OAuth token, so "sharepoint:email:..."
-// returns "business:email". All other types (including shared) return self.
-//
-// TODO(B-273): Move to config.TokenCanonicalID(cid, cfg) — shared drives need
-// config context to determine account type (personal vs business). Until then,
-// shared drives return self, which is incorrect but safe because shared drives
-// are not yet used in production.
-func (c CanonicalID) TokenCanonicalID() CanonicalID {
-	if !c.IsSharePoint() {
-		return c
-	}
-
-	// SharePoint drives share the business account's token.
-	return CanonicalID{driveType: DriveTypeBusiness, email: c.email}
-}
-
 // Compile-time interface assertions.
 var (
 	_ encoding.TextMarshaler   = CanonicalID{}

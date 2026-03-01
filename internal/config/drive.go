@@ -206,7 +206,7 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 // doesn't contain metadata. Uses tokenfile.ReadMeta (leaf package) to avoid
 // an import cycle with graph.
 func ReadTokenMetaForSyncDir(cid driveid.CanonicalID, logger *slog.Logger) (orgName, displayName string) {
-	tokenPath := DriveTokenPath(cid.TokenCanonicalID())
+	tokenPath := DriveTokenPath(cid)
 	if tokenPath == "" {
 		return "", ""
 	}
@@ -363,15 +363,25 @@ func discoverTokensIn(dir string, logger *slog.Logger) []driveid.CanonicalID {
 //
 //	"personal:toni@outlook.com" -> "{dataDir}/token_personal_toni@outlook.com.json"
 //	"sharepoint:alice@contoso.com:marketing:Docs" -> "{dataDir}/token_business_alice@contoso.com.json"
+//
+// For shared drives, callers should resolve the token canonical ID first using
+// TokenCanonicalID(cid, cfg) and pass the result to this function.
 func DriveTokenPath(canonicalID driveid.CanonicalID) string {
 	dataDir := DefaultDataDir()
 	if dataDir == "" || canonicalID.IsZero() {
 		return ""
 	}
 
-	// TokenCanonicalID() maps SharePoint → business (shared OAuth session).
-	tokenCID := canonicalID.TokenCanonicalID()
-	sanitized := tokenCID.DriveType() + "_" + tokenCID.Email()
+	// Resolve token identity: SharePoint → business (shared OAuth session).
+	// Personal and business use their own type/email directly.
+	tokenType := canonicalID.DriveType()
+	tokenEmail := canonicalID.Email()
+
+	if canonicalID.IsSharePoint() {
+		tokenType = driveid.DriveTypeBusiness
+	}
+
+	sanitized := tokenType + "_" + tokenEmail
 
 	return filepath.Join(dataDir, "token_"+sanitized+".json")
 }

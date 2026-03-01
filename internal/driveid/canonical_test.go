@@ -298,30 +298,9 @@ func TestCanonicalID_IsSharePoint(t *testing.T) {
 	}
 }
 
-func TestCanonicalID_TokenCanonicalID(t *testing.T) {
-	tests := []struct {
-		name string
-		cid  CanonicalID
-		want string
-	}{
-		{"personal returns self", MustCanonicalID("personal:user@example.com"), "personal:user@example.com"},
-		{"business returns self", MustCanonicalID("business:alice@contoso.com"), "business:alice@contoso.com"},
-		{
-			"sharepoint returns business",
-			MustCanonicalID("sharepoint:alice@contoso.com:marketing:Docs"),
-			"business:alice@contoso.com",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := tt.cid.TokenCanonicalID()
-			if got.String() != tt.want {
-				t.Errorf("TokenCanonicalID() = %q, want %q", got.String(), tt.want)
-			}
-		})
-	}
-}
+// TokenCanonicalID() was removed from CanonicalID (B-273).
+// Token resolution now lives in config.TokenCanonicalID(cid, cfg).
+// See internal/config/token_resolution_test.go for coverage.
 
 func TestCanonicalID_IsZero(t *testing.T) {
 	zero := CanonicalID{}
