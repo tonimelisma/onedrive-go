@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	stdsync "sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/text/unicode/norm"
@@ -39,6 +40,7 @@ type inflightParent struct {
 	parentID      string
 	parentDriveID driveid.ID // drive containing this item's parent
 	isRoot        bool
+	isVault       bool // true for Personal Vault folder (B-271)
 }
 
 // RemoteObserver transforms Graph API delta responses into []ChangeEvent.
@@ -54,6 +56,27 @@ type RemoteObserver struct {
 	// mu protects deltaToken for concurrent reads via CurrentDeltaToken().
 	mu         stdsync.Mutex
 	deltaToken string
+
+	// lastActivityNano tracks the most recent successful poll time as Unix
+	// nanoseconds. Used by the engine to detect stalled observers (B-125).
+	lastActivityNano atomic.Int64
+
+	// stats tracks observer-level metrics (B-127).
+	stats observerCounters
+}
+
+// observerCounters holds atomic counters for observer metrics (B-127).
+type observerCounters struct {
+	eventsEmitted  atomic.Int64
+	pollsCompleted atomic.Int64
+	errors         atomic.Int64
+}
+
+// ObserverStats is a snapshot of observer metrics returned by Stats() (B-127).
+type ObserverStats struct {
+	EventsEmitted  int64
+	PollsCompleted int64
+	Errors         int64
 }
 
 // NewRemoteObserver creates a RemoteObserver for the given drive. The
@@ -84,12 +107,18 @@ func (o *RemoteObserver) FullDelta(ctx context.Context, savedToken string) ([]Ch
 	for page := 0; page < maxObserverPages; page++ {
 		pageEvents, newToken, done, err := o.fetchPage(ctx, token, page, inflight)
 		if err != nil {
+			o.stats.errors.Add(1)
+
 			return nil, "", err
 		}
 
 		events = append(events, pageEvents...)
 
 		if done {
+			o.recordActivity()
+			o.stats.pollsCompleted.Add(1)
+			o.stats.eventsEmitted.Add(int64(len(events)))
+
 			o.logger.Info("remote observer completed delta enumeration",
 				slog.Int("pages", page+1),
 				slog.Int("events", len(events)),
@@ -217,6 +246,32 @@ func (o *RemoteObserver) CurrentDeltaToken() string {
 	return o.deltaToken
 }
 
+// LastActivity returns the time of the most recent successful poll.
+// Returns zero time if no poll has completed. Thread-safe — can be called
+// from any goroutine while Watch() is running (B-125).
+func (o *RemoteObserver) LastActivity() time.Time {
+	nano := o.lastActivityNano.Load()
+	if nano == 0 {
+		return time.Time{}
+	}
+
+	return time.Unix(0, nano)
+}
+
+// recordActivity updates the liveness timestamp to now.
+func (o *RemoteObserver) recordActivity() {
+	o.lastActivityNano.Store(time.Now().UnixNano())
+}
+
+// Stats returns a snapshot of observer metrics. Thread-safe (B-127).
+func (o *RemoteObserver) Stats() ObserverStats {
+	return ObserverStats{
+		EventsEmitted:  o.stats.eventsEmitted.Load(),
+		PollsCompleted: o.stats.pollsCompleted.Load(),
+		Errors:         o.stats.errors.Load(),
+	}
+}
+
 // setDeltaToken updates the internal delta token under the mutex.
 func (o *RemoteObserver) setDeltaToken(token string) {
 	o.mu.Lock()
@@ -281,16 +336,31 @@ func (o *RemoteObserver) processItem(item *graph.Item, inflight map[driveid.Item
 
 	// Register in inflight map before classification so children in the
 	// same batch can materialize paths through this item.
+	isVault := item.SpecialFolderName == "vault"
 	key := driveid.NewItemKey(itemDriveID, item.ID)
 	inflight[key] = inflightParent{
 		name:          nfcNormalize(item.Name),
 		parentID:      item.ParentID,
 		parentDriveID: resolveParentDriveID(item, itemDriveID),
 		isRoot:        item.IsRoot,
+		isVault:       isVault,
 	}
 
 	if item.IsRoot {
 		o.logger.Debug("skipping root item", slog.String("item_id", item.ID))
+
+		return nil
+	}
+
+	// Personal Vault exclusion (B-271): skip the vault folder itself and
+	// any items whose parent chain includes a vault folder. This prevents
+	// data loss from vault lock/unlock cycles where items appear and
+	// disappear in delta responses.
+	if isVault || o.isDescendantOfVault(item, inflight, itemDriveID) {
+		o.logger.Info("skipping vault item",
+			slog.String("item_id", item.ID),
+			slog.String("name", item.Name),
+		)
 
 		return nil
 	}
@@ -403,6 +473,42 @@ func (o *RemoteObserver) materializePath(
 	return strings.Join(segments, "/")
 }
 
+// isDescendantOfVault walks the parent chain in the inflight map to check
+// whether any ancestor is a vault folder. Limited to maxPathDepth to prevent
+// infinite loops in malformed data (B-271).
+func (o *RemoteObserver) isDescendantOfVault(
+	item *graph.Item, inflight map[driveid.ItemKey]inflightParent, itemDriveID driveid.ID,
+) bool {
+	parentDriveID := resolveParentDriveID(item, itemDriveID)
+	parentID := item.ParentID
+
+	for depth := 0; depth < maxPathDepth; depth++ {
+		if parentID == "" {
+			return false
+		}
+
+		parentKey := driveid.NewItemKey(parentDriveID, parentID)
+
+		p, ok := inflight[parentKey]
+		if !ok {
+			return false
+		}
+
+		if p.isVault {
+			return true
+		}
+
+		if p.isRoot {
+			return false
+		}
+
+		parentDriveID = p.parentDriveID
+		parentID = p.parentID
+	}
+
+	return false
+}
+
 // resolveItemDriveID returns the normalized driveID for an item, falling
 // back to the observer's driveID when the item's DriveID is empty.
 func (o *RemoteObserver) resolveItemDriveID(item *graph.Item) driveid.ID {
@@ -439,14 +545,20 @@ func classifyItemType(item *graph.Item) ItemType {
 	}
 }
 
-// selectHash returns QuickXorHash if available, SHA256Hash as fallback,
-// or empty string if neither is present.
+// selectHash returns the best available content hash from the item, preferring
+// QuickXorHash (most common), falling back to SHA256Hash, then SHA1Hash.
+// Returns empty string if no hash is available — the caller must handle
+// hash-less items appropriately (typically skipping verification) (B-021).
 func selectHash(item *graph.Item) string {
 	if item.QuickXorHash != "" {
 		return item.QuickXorHash
 	}
 
-	return item.SHA256Hash
+	if item.SHA256Hash != "" {
+		return item.SHA256Hash
+	}
+
+	return item.SHA1Hash
 }
 
 // toUnixNano converts a time.Time to Unix nanoseconds. Returns 0 for

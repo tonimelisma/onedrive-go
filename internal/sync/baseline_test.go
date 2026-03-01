@@ -623,11 +623,11 @@ func TestCommit_DeltaToken(t *testing.T) {
 
 	commitAll(t, mgr, ctx, outcomes)
 
-	if err := mgr.CommitDeltaToken(ctx, "token-abc", "d"); err != nil {
+	if err := mgr.CommitDeltaToken(ctx, "token-abc", "d", "", "d"); err != nil {
 		t.Fatalf("CommitDeltaToken: %v", err)
 	}
 
-	token, err := mgr.GetDeltaToken(ctx, "d")
+	token, err := mgr.GetDeltaToken(ctx, "d", "")
 	if err != nil {
 		t.Fatalf("GetDeltaToken: %v", err)
 	}
@@ -656,7 +656,7 @@ func TestCommit_DeltaTokenUpdate(t *testing.T) {
 	// First commit with token.
 	commitAll(t, mgr, ctx, outcomes)
 
-	if err := mgr.CommitDeltaToken(ctx, "token-1", "d"); err != nil {
+	if err := mgr.CommitDeltaToken(ctx, "token-1", "d", "", "d"); err != nil {
 		t.Fatalf("first CommitDeltaToken: %v", err)
 	}
 
@@ -666,11 +666,11 @@ func TestCommit_DeltaTokenUpdate(t *testing.T) {
 
 	commitAll(t, mgr, ctx, outcomes)
 
-	if err := mgr.CommitDeltaToken(ctx, "token-2", "d"); err != nil {
+	if err := mgr.CommitDeltaToken(ctx, "token-2", "d", "", "d"); err != nil {
 		t.Fatalf("second CommitDeltaToken: %v", err)
 	}
 
-	token, err := mgr.GetDeltaToken(ctx, "d")
+	token, err := mgr.GetDeltaToken(ctx, "d", "")
 	if err != nil {
 		t.Fatalf("GetDeltaToken: %v", err)
 	}
@@ -742,7 +742,7 @@ func TestGetDeltaToken_Empty(t *testing.T) {
 	mgr := newTestManager(t)
 	ctx := context.Background()
 
-	token, err := mgr.GetDeltaToken(ctx, "nonexistent-drive")
+	token, err := mgr.GetDeltaToken(ctx, "nonexistent-drive", "")
 	if err != nil {
 		t.Fatalf("GetDeltaToken: %v", err)
 	}
@@ -770,11 +770,11 @@ func TestGetDeltaToken_AfterCommit(t *testing.T) {
 
 	commitAll(t, mgr, ctx, outcomes)
 
-	if err := mgr.CommitDeltaToken(ctx, "saved-token", "mydrv"); err != nil {
+	if err := mgr.CommitDeltaToken(ctx, "saved-token", "mydrv", "", "mydrv"); err != nil {
 		t.Fatalf("CommitDeltaToken: %v", err)
 	}
 
-	token, err := mgr.GetDeltaToken(ctx, "mydrv")
+	token, err := mgr.GetDeltaToken(ctx, "mydrv", "")
 	if err != nil {
 		t.Fatalf("GetDeltaToken: %v", err)
 	}
@@ -1684,11 +1684,11 @@ func TestCommitDeltaToken(t *testing.T) {
 
 	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 
-	if err := mgr.CommitDeltaToken(ctx, "token-abc", "d"); err != nil {
+	if err := mgr.CommitDeltaToken(ctx, "token-abc", "d", "", "d"); err != nil {
 		t.Fatalf("CommitDeltaToken: %v", err)
 	}
 
-	token, err := mgr.GetDeltaToken(ctx, "d")
+	token, err := mgr.GetDeltaToken(ctx, "d", "")
 	if err != nil {
 		t.Fatalf("GetDeltaToken: %v", err)
 	}
@@ -1706,15 +1706,15 @@ func TestCommitDeltaToken_Update(t *testing.T) {
 
 	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 
-	if err := mgr.CommitDeltaToken(ctx, "token-1", "d"); err != nil {
+	if err := mgr.CommitDeltaToken(ctx, "token-1", "d", "", "d"); err != nil {
 		t.Fatalf("first CommitDeltaToken: %v", err)
 	}
 
-	if err := mgr.CommitDeltaToken(ctx, "token-2", "d"); err != nil {
+	if err := mgr.CommitDeltaToken(ctx, "token-2", "d", "", "d"); err != nil {
 		t.Fatalf("second CommitDeltaToken: %v", err)
 	}
 
-	token, err := mgr.GetDeltaToken(ctx, "d")
+	token, err := mgr.GetDeltaToken(ctx, "d", "")
 	if err != nil {
 		t.Fatalf("GetDeltaToken: %v", err)
 	}
@@ -1731,17 +1731,94 @@ func TestCommitDeltaToken_EmptyIsNoop(t *testing.T) {
 	ctx := context.Background()
 
 	// Empty token should be a no-op.
-	if err := mgr.CommitDeltaToken(ctx, "", "d"); err != nil {
+	if err := mgr.CommitDeltaToken(ctx, "", "d", "", "d"); err != nil {
 		t.Fatalf("CommitDeltaToken: %v", err)
 	}
 
-	token, err := mgr.GetDeltaToken(ctx, "d")
+	token, err := mgr.GetDeltaToken(ctx, "d", "")
 	if err != nil {
 		t.Fatalf("GetDeltaToken: %v", err)
 	}
 
 	if token != "" {
 		t.Errorf("token = %q, want empty", token)
+	}
+}
+
+func TestCommitDeltaToken_CompositeKey_DifferentScopes(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	// Primary delta (scope_id="").
+	if err := mgr.CommitDeltaToken(ctx, "primary-token", "drv1", "", "drv1"); err != nil {
+		t.Fatalf("CommitDeltaToken primary: %v", err)
+	}
+
+	// Shortcut-scoped delta (scope_id=remoteItemID, scope_drive=remoteDriveID).
+	if err := mgr.CommitDeltaToken(ctx, "shortcut-token", "drv1", "item123", "drv2"); err != nil {
+		t.Fatalf("CommitDeltaToken shortcut: %v", err)
+	}
+
+	// Both should be independently retrievable.
+	primary, err := mgr.GetDeltaToken(ctx, "drv1", "")
+	if err != nil {
+		t.Fatalf("GetDeltaToken primary: %v", err)
+	}
+
+	if primary != "primary-token" {
+		t.Errorf("primary token = %q, want %q", primary, "primary-token")
+	}
+
+	shortcut, err := mgr.GetDeltaToken(ctx, "drv1", "item123")
+	if err != nil {
+		t.Fatalf("GetDeltaToken shortcut: %v", err)
+	}
+
+	if shortcut != "shortcut-token" {
+		t.Errorf("shortcut token = %q, want %q", shortcut, "shortcut-token")
+	}
+}
+
+func TestCommitDeltaToken_CompositeKey_UpdatePreservesOtherScopes(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	// Save two scoped tokens.
+	if err := mgr.CommitDeltaToken(ctx, "tok-a", "drv1", "", "drv1"); err != nil {
+		t.Fatalf("CommitDeltaToken: %v", err)
+	}
+
+	if err := mgr.CommitDeltaToken(ctx, "tok-b", "drv1", "scope1", "drv2"); err != nil {
+		t.Fatalf("CommitDeltaToken: %v", err)
+	}
+
+	// Update only the primary.
+	if err := mgr.CommitDeltaToken(ctx, "tok-a-updated", "drv1", "", "drv1"); err != nil {
+		t.Fatalf("CommitDeltaToken update: %v", err)
+	}
+
+	// Primary should be updated.
+	primary, err := mgr.GetDeltaToken(ctx, "drv1", "")
+	if err != nil {
+		t.Fatalf("GetDeltaToken: %v", err)
+	}
+
+	if primary != "tok-a-updated" {
+		t.Errorf("primary = %q, want %q", primary, "tok-a-updated")
+	}
+
+	// Other scope should be unchanged.
+	scoped, err := mgr.GetDeltaToken(ctx, "drv1", "scope1")
+	if err != nil {
+		t.Fatalf("GetDeltaToken: %v", err)
+	}
+
+	if scoped != "tok-b" {
+		t.Errorf("scoped = %q, want %q", scoped, "tok-b")
 	}
 }
 
@@ -1965,5 +2042,249 @@ func TestBaseline_ConcurrentAccess(t *testing.T) {
 	// Baseline should have at least original + concurrent entries.
 	if b.Len() < 100 {
 		t.Errorf("Len() = %d, want >= 100", b.Len())
+	}
+}
+
+// TestConflictRecord_NameField verifies that ConflictRecord.Name is populated
+// as path.Base(Path) by the shared scanConflict function (B-071).
+func TestConflictRecord_NameField(t *testing.T) {
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	_, err := mgr.Load(ctx)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Insert a conflict with a nested path.
+	outcome := &Outcome{
+		Action:       ActionConflict,
+		Success:      true,
+		Path:         "docs/notes/readme.md",
+		DriveID:      driveid.New(testDriveID),
+		ItemID:       "item-name-test",
+		ConflictType: ConflictEditEdit,
+		LocalHash:    "localH",
+		RemoteHash:   "remoteH",
+		Mtime:        100,
+		RemoteMtime:  200,
+	}
+
+	err = mgr.CommitOutcome(ctx, outcome)
+	if err != nil {
+		t.Fatalf("CommitOutcome: %v", err)
+	}
+
+	// Verify via ListConflicts.
+	conflicts, err := mgr.ListConflicts(ctx)
+	if err != nil {
+		t.Fatalf("ListConflicts: %v", err)
+	}
+
+	if len(conflicts) != 1 {
+		t.Fatalf("expected 1 conflict, got %d", len(conflicts))
+	}
+
+	if conflicts[0].Name != "readme.md" {
+		t.Errorf("Name = %q, want %q", conflicts[0].Name, "readme.md")
+	}
+
+	// Verify via GetConflict.
+	c, err := mgr.GetConflict(ctx, conflicts[0].ID)
+	if err != nil {
+		t.Fatalf("GetConflict: %v", err)
+	}
+
+	if c.Name != "readme.md" {
+		t.Errorf("GetConflict Name = %q, want %q", c.Name, "readme.md")
+	}
+}
+
+// TestPruneResolvedConflicts verifies that PruneResolvedConflicts deletes
+// resolved conflicts older than the retention period while preserving
+// newer resolved and all unresolved conflicts (B-087).
+// setupPruneTestConflicts populates a test manager with three conflicts:
+// - An "old" resolved conflict (detected 120 days ago)
+// - A "new" resolved conflict (detected 10 days ago)
+// - An unresolved conflict (detected 120 days ago)
+// Returns the IDs of the old and new resolved conflicts.
+func setupPruneTestConflicts(t *testing.T, mgr *BaselineManager, ctx context.Context, now time.Time) (oldID, newID string) {
+	t.Helper()
+
+	mgr.nowFunc = func() time.Time { return now.AddDate(0, 0, -120) }
+
+	if err := mgr.CommitOutcome(ctx, &Outcome{
+		Action: ActionConflict, Success: true,
+		Path: "old-resolved.txt", DriveID: driveid.New(testDriveID),
+		ItemID: "item-old", ConflictType: ConflictEditEdit,
+		LocalHash: "lh1", RemoteHash: "rh1", Mtime: 100, RemoteMtime: 200,
+	}); err != nil {
+		t.Fatalf("CommitOutcome (old): %v", err)
+	}
+
+	mgr.nowFunc = func() time.Time { return now.AddDate(0, 0, -100) }
+
+	conflicts, err := mgr.ListConflicts(ctx)
+	if err != nil {
+		t.Fatalf("ListConflicts: %v", err)
+	}
+
+	oldID = conflicts[0].ID
+	err = mgr.ResolveConflict(ctx, oldID, "keep_local")
+	if err != nil {
+		t.Fatalf("ResolveConflict (old): %v", err)
+	}
+
+	mgr.nowFunc = func() time.Time { return now.AddDate(0, 0, -10) }
+
+	err = mgr.CommitOutcome(ctx, &Outcome{
+		Action: ActionConflict, Success: true,
+		Path: "new-resolved.txt", DriveID: driveid.New(testDriveID),
+		ItemID: "item-new", ConflictType: ConflictEditEdit,
+		LocalHash: "lh2", RemoteHash: "rh2", Mtime: 300, RemoteMtime: 400,
+	})
+	if err != nil {
+		t.Fatalf("CommitOutcome (new): %v", err)
+	}
+
+	mgr.nowFunc = func() time.Time { return now.AddDate(0, 0, -5) }
+
+	conflicts, err = mgr.ListConflicts(ctx)
+	if err != nil {
+		t.Fatalf("ListConflicts: %v", err)
+	}
+
+	for _, c := range conflicts {
+		if c.Path == "new-resolved.txt" {
+			newID = c.ID
+		}
+	}
+
+	err = mgr.ResolveConflict(ctx, newID, "keep_remote")
+	if err != nil {
+		t.Fatalf("ResolveConflict (new): %v", err)
+	}
+
+	mgr.nowFunc = func() time.Time { return now.AddDate(0, 0, -120) }
+
+	err = mgr.CommitOutcome(ctx, &Outcome{
+		Action: ActionConflict, Success: true,
+		Path: "unresolved.txt", DriveID: driveid.New(testDriveID),
+		ItemID: "item-unresolved", ConflictType: ConflictEditEdit,
+		LocalHash: "lh3", RemoteHash: "rh3", Mtime: 500, RemoteMtime: 600,
+	})
+	if err != nil {
+		t.Fatalf("CommitOutcome (unresolved): %v", err)
+	}
+
+	return oldID, newID
+}
+
+// TestPruneResolvedConflicts verifies that PruneResolvedConflicts deletes
+// resolved conflicts older than the retention period while preserving
+// newer resolved and all unresolved conflicts (B-087).
+func TestPruneResolvedConflicts(t *testing.T) {
+	mgr := newTestManager(t)
+	ctx := context.Background()
+	now := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
+
+	mgr.nowFunc = func() time.Time { return now }
+
+	if _, err := mgr.Load(ctx); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	oldID, newID := setupPruneTestConflicts(t, mgr, ctx, now)
+
+	mgr.nowFunc = func() time.Time { return now }
+
+	pruned, err := mgr.PruneResolvedConflicts(ctx, 90*24*time.Hour)
+	if err != nil {
+		t.Fatalf("PruneResolvedConflicts: %v", err)
+	}
+
+	if pruned != 1 {
+		t.Errorf("pruned = %d, want 1 (only old resolved)", pruned)
+	}
+
+	// Old resolved should be gone.
+	c, err := mgr.GetConflict(ctx, oldID)
+	if err == nil && c != nil {
+		t.Error("old resolved conflict should have been pruned")
+	}
+
+	// New resolved should still exist.
+	c, err = mgr.GetConflict(ctx, newID)
+	if err != nil {
+		t.Fatalf("new resolved should still exist: %v", err)
+	}
+
+	if c.Resolution != "keep_remote" {
+		t.Errorf("new resolved Resolution = %q, want %q", c.Resolution, "keep_remote")
+	}
+
+	// Unresolved conflict should still exist.
+	unresolved, err := mgr.ListConflicts(ctx)
+	if err != nil {
+		t.Fatalf("ListConflicts (after prune): %v", err)
+	}
+
+	if len(unresolved) != 1 {
+		t.Fatalf("unresolved conflicts = %d, want 1", len(unresolved))
+	}
+
+	if unresolved[0].Path != "unresolved.txt" {
+		t.Errorf("unresolved Path = %q, want %q", unresolved[0].Path, "unresolved.txt")
+	}
+}
+
+// TestCheckCacheConsistency verifies that CheckCacheConsistency detects
+// mismatches between the in-memory baseline cache and the database (B-198).
+func TestCheckCacheConsistency(t *testing.T) {
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	_, err := mgr.Load(ctx)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Insert a baseline entry via CommitOutcome.
+	err = mgr.CommitOutcome(ctx, &Outcome{
+		Action: ActionDownload, Success: true,
+		Path: "consistency-check.txt", DriveID: driveid.New(testDriveID),
+		ItemID: "item-cc", ParentID: "root", ItemType: ItemTypeFile,
+		LocalHash: "hash1", RemoteHash: "hash1",
+		Size: 100, Mtime: 1000,
+	})
+	if err != nil {
+		t.Fatalf("CommitOutcome: %v", err)
+	}
+
+	// Cache and DB should be consistent — no mismatches.
+	mismatches, err := mgr.CheckCacheConsistency(ctx)
+	if err != nil {
+		t.Fatalf("CheckCacheConsistency: %v", err)
+	}
+
+	if mismatches != 0 {
+		t.Errorf("expected 0 mismatches, got %d", mismatches)
+	}
+
+	// Manually corrupt the DB row behind the cache's back.
+	_, err = mgr.DB().ExecContext(ctx,
+		`UPDATE baseline SET local_hash = 'tampered' WHERE path = 'consistency-check.txt'`)
+	if err != nil {
+		t.Fatalf("manual DB update: %v", err)
+	}
+
+	// Now check again — should detect 1 mismatch.
+	mismatches, err = mgr.CheckCacheConsistency(ctx)
+	if err != nil {
+		t.Fatalf("CheckCacheConsistency after tampering: %v", err)
+	}
+
+	if mismatches != 1 {
+		t.Errorf("expected 1 mismatch after DB tampering, got %d", mismatches)
 	}
 }

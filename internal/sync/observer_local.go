@@ -92,6 +92,7 @@ type LocalObserver struct {
 	logger             *slog.Logger
 	watcherFactory     func() (FsWatcher, error)
 	droppedEvents      atomic.Int64                                     // events dropped by trySend due to full channel
+	lastActivityNano   atomic.Int64                                     // liveness: updated on each event emit (B-125)
 	sleepFunc          func(ctx context.Context, d time.Duration) error // injectable for testing
 	safetyTickFunc     func(d time.Duration) (<-chan time.Time, func()) // injectable for testing; returns tick channel + stop func
 	safetyScanInterval time.Duration                                    // 0 → default (5 minutes); configurable (B-099)
@@ -130,6 +131,7 @@ func NewLocalObserver(baseline *Baseline, logger *slog.Logger) *LocalObserver {
 func (o *LocalObserver) trySend(ctx context.Context, events chan<- ChangeEvent, ev *ChangeEvent) {
 	select {
 	case events <- *ev:
+		o.recordActivity()
 	case <-ctx.Done():
 	default:
 		o.droppedEvents.Add(1)
@@ -152,6 +154,22 @@ func (o *LocalObserver) DroppedEvents() int64 {
 // engine to log per-cycle drops without double-counting across cycles.
 func (o *LocalObserver) ResetDroppedEvents() int64 {
 	return o.droppedEvents.Swap(0)
+}
+
+// LastActivity returns the time of the most recent event emission.
+// Returns zero time if no events have been emitted. Thread-safe (B-125).
+func (o *LocalObserver) LastActivity() time.Time {
+	nano := o.lastActivityNano.Load()
+	if nano == 0 {
+		return time.Time{}
+	}
+
+	return time.Unix(0, nano)
+}
+
+// recordActivity updates the liveness timestamp to now.
+func (o *LocalObserver) recordActivity() {
+	o.lastActivityNano.Store(time.Now().UnixNano())
 }
 
 // FullScan walks the sync root directory and returns change events for all
@@ -195,6 +213,10 @@ func (o *LocalObserver) FullScan(ctx context.Context, syncRoot string) ([]Change
 		slog.Int("events", len(events)),
 		slog.Int("observed", len(observed)),
 	)
+
+	if len(events) > 0 {
+		o.recordActivity()
+	}
 
 	return events, nil
 }
@@ -270,6 +292,17 @@ func (o *LocalObserver) addWatchesRecursive(watcher FsWatcher, syncRoot string) 
 
 		if !d.IsDir() {
 			return nil
+		}
+
+		// Symlinked directories cannot be reliably watched (the watcher
+		// follows the real path, not the symlink) and are excluded from
+		// sync. Log a warning so the user knows why the directory is
+		// skipped (B-120).
+		if d.Type()&fs.ModeSymlink != 0 {
+			o.logger.Warn("skipping symlinked directory in watch setup",
+				slog.String("path", fsPath))
+
+			return filepath.SkipDir
 		}
 
 		name := d.Name()

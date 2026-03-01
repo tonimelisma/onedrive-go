@@ -55,19 +55,19 @@ func TestLoad_TypoInDriveSection_Suggestion(t *testing.T) {
 	path := writeTestConfig(t, `
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
-aliaz = "home"
+dispaly_name = "home"
 `)
 	_, err := Load(path, testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "did you mean")
-	assert.Contains(t, err.Error(), "alias")
+	assert.Contains(t, err.Error(), "display_name")
 }
 
 func TestLoad_DriveSection_ValidKeysPass(t *testing.T) {
 	path := writeTestConfig(t, `
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
-alias = "home"
+display_name = "home"
 paused = false
 remote_path = "/"
 drive_id = "abc"

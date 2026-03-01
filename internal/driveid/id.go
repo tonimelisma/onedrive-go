@@ -57,9 +57,16 @@ func (id ID) IsZero() bool {
 	return id.value == "" || id.value == strings.Repeat("0", idMinLength)
 }
 
-// Equal reports whether two IDs are identical.
+// Equal reports whether two IDs are identical. Both zero-value forms
+// (empty string from ID{} and all-zeros from New("0")) are considered equal.
+// This prevents a subtle bug where two "zero" IDs created via different paths
+// compare as unequal (see New("") vs New("0") vs ID{}).
 func (id ID) Equal(other ID) bool {
-	return id.value == other.value
+	if id.value == other.value {
+		return true
+	}
+
+	return id.IsZero() && other.IsZero()
 }
 
 // MarshalText implements encoding.TextMarshaler.

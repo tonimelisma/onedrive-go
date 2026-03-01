@@ -2582,3 +2582,42 @@ func TestOrderPlan_DeletesFilesBeforeFoldersAtSameDepth(t *testing.T) {
 		t.Error("expected delete for x/planner-del-folder")
 	}
 }
+
+// TestPlan_DeterministicOrder verifies that calling Plan() twice with
+// identical input produces identical action ordering (B-154).
+func TestPlan_DeterministicOrder(t *testing.T) {
+	planner := NewPlanner(testLogger(t))
+	baseline := emptyBaseline()
+
+	// Create multiple paths with no baseline — all produce uploads.
+	changes := []PathChanges{
+		{Path: "z/delta.txt", LocalEvents: []ChangeEvent{{Source: SourceLocal, Type: ChangeCreate, Path: "z/delta.txt", ItemType: ItemTypeFile, Hash: "h4"}}},
+		{Path: "a/alpha.txt", LocalEvents: []ChangeEvent{{Source: SourceLocal, Type: ChangeCreate, Path: "a/alpha.txt", ItemType: ItemTypeFile, Hash: "h1"}}},
+		{Path: "m/beta.txt", LocalEvents: []ChangeEvent{{Source: SourceLocal, Type: ChangeCreate, Path: "m/beta.txt", ItemType: ItemTypeFile, Hash: "h2"}}},
+		{Path: "b/gamma.txt", LocalEvents: []ChangeEvent{{Source: SourceLocal, Type: ChangeCreate, Path: "b/gamma.txt", ItemType: ItemTypeFile, Hash: "h3"}}},
+	}
+
+	plan1, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	if err != nil {
+		t.Fatalf("first Plan() failed: %v", err)
+	}
+
+	plan2, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	if err != nil {
+		t.Fatalf("second Plan() failed: %v", err)
+	}
+
+	if len(plan1.Actions) != len(plan2.Actions) {
+		t.Fatalf("action count mismatch: %d vs %d", len(plan1.Actions), len(plan2.Actions))
+	}
+
+	for i := range plan1.Actions {
+		if plan1.Actions[i].Path != plan2.Actions[i].Path {
+			t.Errorf("action[%d] path mismatch: %q vs %q", i, plan1.Actions[i].Path, plan2.Actions[i].Path)
+		}
+
+		if plan1.Actions[i].Type != plan2.Actions[i].Type {
+			t.Errorf("action[%d] type mismatch: %s vs %s", i, plan1.Actions[i].Type, plan2.Actions[i].Type)
+		}
+	}
+}

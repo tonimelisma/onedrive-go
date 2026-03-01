@@ -97,6 +97,12 @@ linters:
         - whyNoLint
         - wrapperFunc
         - importShadow
+      settings:
+        hugeParam:
+          # CanonicalID is 96 bytes (6 string fields) — an immutable value type
+          # used as map keys and implementing encoding.TextMarshaler. Value
+          # receivers are required; raising from 80 to 128 is appropriate.
+          sizeThreshold: 128
 
     dupl:
       threshold: 100

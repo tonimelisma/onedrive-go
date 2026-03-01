@@ -175,6 +175,11 @@ func (b *Buffer) debounceLoop(ctx context.Context, debounce time.Duration, out c
 			timerActive = false
 
 			if batch := b.FlushImmediate(); batch != nil {
+				// Blocking send is intentional backpressure (B-128). When the
+				// consumer is slow, events accumulate in the buffer rather than
+				// being dropped. This is correct: the debounce timer won't
+				// re-fire until the consumer reads the batch, at which point
+				// the buffer flushes all accumulated events as one batch.
 				select {
 				case out <- batch:
 				case <-ctx.Done():

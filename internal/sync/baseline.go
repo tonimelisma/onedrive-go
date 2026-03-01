@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"path"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,7 +21,8 @@ const (
 		local_hash, remote_hash, size, mtime, synced_at, etag
 		FROM baseline`
 
-	sqlGetDeltaToken = `SELECT token FROM delta_tokens WHERE drive_id = ?` //nolint:gosec // G101: "token" is a delta cursor, not credentials
+	//nolint:gosec // G101: "token" is a delta cursor, not credentials.
+	sqlGetDeltaToken = `SELECT token FROM delta_tokens WHERE drive_id = ? AND scope_id = ?`
 
 	sqlUpsertBaseline = `INSERT INTO baseline
 		(path, drive_id, item_id, parent_id, item_type, local_hash, remote_hash,
@@ -46,9 +48,10 @@ const (
 		 resolution, resolved_at, resolved_by)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
-	sqlUpsertDeltaToken = `INSERT INTO delta_tokens (drive_id, token, updated_at)
-		VALUES (?, ?, ?)
-		ON CONFLICT(drive_id) DO UPDATE SET
+	sqlUpsertDeltaToken = `INSERT INTO delta_tokens (drive_id, scope_id, scope_drive, token, updated_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(drive_id, scope_id) DO UPDATE SET
+		 scope_drive = excluded.scope_drive,
 		 token = excluded.token,
 		 updated_at = excluded.updated_at`
 
@@ -211,18 +214,19 @@ func scanBaselineRow(rows *sql.Rows) (*BaselineEntry, error) {
 	return &e, nil
 }
 
-// GetDeltaToken returns the saved delta token for a drive, or empty string
-// if no token has been saved yet.
-func (m *BaselineManager) GetDeltaToken(ctx context.Context, driveID string) (string, error) {
+// GetDeltaToken returns the saved delta token for a drive and scope, or empty
+// string if no token has been saved yet. Use scopeID="" for the primary
+// drive-level delta; use a remoteItem.id for shortcut-scoped deltas.
+func (m *BaselineManager) GetDeltaToken(ctx context.Context, driveID, scopeID string) (string, error) {
 	var token string
 
-	err := m.db.QueryRowContext(ctx, sqlGetDeltaToken, driveID).Scan(&token)
+	err := m.db.QueryRowContext(ctx, sqlGetDeltaToken, driveID, scopeID).Scan(&token)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
 
 	if err != nil {
-		return "", fmt.Errorf("sync: getting delta token for drive %s: %w", driveID, err)
+		return "", fmt.Errorf("sync: getting delta token for drive %s scope %q: %w", driveID, scopeID, err)
 	}
 
 	return token, nil
@@ -322,7 +326,9 @@ func outcomeToEntry(o *Outcome, syncedAt int64) *BaselineEntry {
 
 // CommitDeltaToken persists a delta token in its own transaction, separate
 // from baseline updates. Used after all actions in a cycle complete.
-func (m *BaselineManager) CommitDeltaToken(ctx context.Context, token, driveID string) error {
+// Use scopeID="" and scopeDrive=driveID for the primary drive-level delta.
+// For shortcut-scoped deltas, scopeID=remoteItem.id and scopeDrive=remoteItem.driveId.
+func (m *BaselineManager) CommitDeltaToken(ctx context.Context, token, driveID, scopeID, scopeDrive string) error {
 	if token == "" {
 		return nil
 	}
@@ -334,7 +340,7 @@ func (m *BaselineManager) CommitDeltaToken(ctx context.Context, token, driveID s
 	defer tx.Rollback()
 
 	updatedAt := m.nowFunc().UnixNano()
-	if saveErr := m.saveDeltaToken(ctx, tx, driveID, token, updatedAt); saveErr != nil {
+	if saveErr := m.saveDeltaToken(ctx, tx, driveID, scopeID, scopeDrive, token, updatedAt); saveErr != nil {
 		return saveErr
 	}
 
@@ -344,6 +350,7 @@ func (m *BaselineManager) CommitDeltaToken(ctx context.Context, token, driveID s
 
 	m.logger.Debug("delta token committed",
 		slog.String("drive_id", driveID),
+		slog.String("scope_id", scopeID),
 	)
 
 	return nil
@@ -441,11 +448,11 @@ func commitConflict(ctx context.Context, tx *sql.Tx, o *Outcome, syncedAt int64)
 // saveDeltaToken persists the delta token in the same transaction as
 // baseline updates.
 func (m *BaselineManager) saveDeltaToken(
-	ctx context.Context, tx *sql.Tx, driveID, token string, updatedAt int64,
+	ctx context.Context, tx *sql.Tx, driveID, scopeID, scopeDrive, token string, updatedAt int64,
 ) error {
-	_, err := tx.ExecContext(ctx, sqlUpsertDeltaToken, driveID, token, updatedAt)
+	_, err := tx.ExecContext(ctx, sqlUpsertDeltaToken, driveID, scopeID, scopeDrive, token, updatedAt)
 	if err != nil {
-		return fmt.Errorf("sync: saving delta token for drive %s: %w", driveID, err)
+		return fmt.Errorf("sync: saving delta token for drive %s scope %q: %w", driveID, scopeID, err)
 	}
 
 	return nil
@@ -545,9 +552,120 @@ func (m *BaselineManager) ResolveConflict(ctx context.Context, id, resolution st
 	return nil
 }
 
-// scanConflictRow scans a single row from a *sql.Rows result set into
-// a ConflictRecord, handling nullable columns.
-func scanConflictRow(rows *sql.Rows) (*ConflictRecord, error) {
+// CheckCacheConsistency reloads baseline entries from the database and compares
+// them with the in-memory cache. Returns the number of mismatches found (report-only,
+// no auto-fix). Intended for periodic verification in watch mode (B-198).
+func (m *BaselineManager) CheckCacheConsistency(ctx context.Context) (int, error) {
+	if m.baseline == nil {
+		return 0, nil
+	}
+
+	rows, err := m.db.QueryContext(ctx, sqlLoadBaseline)
+	if err != nil {
+		return 0, fmt.Errorf("sync: querying baseline for consistency check: %w", err)
+	}
+	defer rows.Close()
+
+	dbEntries := make(map[string]*BaselineEntry)
+
+	for rows.Next() {
+		entry, scanErr := scanBaselineRow(rows)
+		if scanErr != nil {
+			return 0, scanErr
+		}
+
+		dbEntries[entry.Path] = entry
+	}
+
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("sync: iterating baseline rows for consistency check: %w", err)
+	}
+
+	mismatches := 0
+
+	// Check for entries in cache not in DB, or with different values.
+	for p, cached := range m.baseline.ByPath {
+		dbEntry, ok := dbEntries[p]
+		if !ok {
+			m.logger.Warn("cache consistency: entry in cache not in DB",
+				slog.String("path", p),
+			)
+
+			mismatches++
+
+			continue
+		}
+
+		if cached.LocalHash != dbEntry.LocalHash || cached.RemoteHash != dbEntry.RemoteHash ||
+			cached.Size != dbEntry.Size || cached.ItemID != dbEntry.ItemID {
+			m.logger.Warn("cache consistency: field mismatch",
+				slog.String("path", p),
+			)
+
+			mismatches++
+		}
+	}
+
+	// Check for entries in DB not in cache.
+	for p := range dbEntries {
+		if _, ok := m.baseline.ByPath[p]; !ok {
+			m.logger.Warn("cache consistency: entry in DB not in cache",
+				slog.String("path", p),
+			)
+
+			mismatches++
+		}
+	}
+
+	if mismatches > 0 {
+		m.logger.Warn("cache consistency check complete",
+			slog.Int("mismatches", mismatches),
+		)
+	}
+
+	return mismatches, nil
+}
+
+// PruneResolvedConflicts deletes resolved conflicts whose detection time is
+// older than the given retention duration. Unresolved conflicts are never
+// pruned. Returns the number of deleted rows (B-087).
+func (m *BaselineManager) PruneResolvedConflicts(ctx context.Context, retention time.Duration) (int, error) {
+	cutoff := m.nowFunc().Add(-retention).UnixNano()
+
+	result, err := m.db.ExecContext(ctx,
+		`DELETE FROM conflicts WHERE resolution != 'unresolved' AND detected_at < ?`,
+		cutoff,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("sync: pruning resolved conflicts: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("sync: checking pruned conflict count: %w", err)
+	}
+
+	if rows > 0 {
+		m.logger.Info("pruned resolved conflicts",
+			slog.Int64("pruned", rows),
+			slog.Duration("retention", retention),
+		)
+	}
+
+	return int(rows), nil
+}
+
+// conflictScanner abstracts the Scan method shared by *sql.Rows and *sql.Row,
+// allowing a single scan implementation for both multi-row and single-row
+// conflict queries (B-149).
+type conflictScanner interface {
+	Scan(dest ...any) error
+}
+
+// scanConflict scans a single conflict row from any scanner (*sql.Rows or
+// *sql.Row), handling nullable columns. The `history` column is intentionally
+// excluded — it is dormant/unused (B-160).
+func scanConflict(s conflictScanner) (*ConflictRecord, error) {
 	var (
 		c           ConflictRecord
 		itemID      sql.NullString
@@ -559,16 +677,17 @@ func scanConflictRow(rows *sql.Rows) (*ConflictRecord, error) {
 		resolvedBy  sql.NullString
 	)
 
-	err := rows.Scan(
+	err := s.Scan(
 		&c.ID, &c.DriveID, &itemID, &c.Path, &c.ConflictType,
 		&c.DetectedAt, &localHash, &remoteHash, &localMtime, &remoteMtime,
 		&c.Resolution, &resolvedAt, &resolvedBy,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("sync: scanning conflict row: %w", err)
+		return nil, err //nolint:wrapcheck // callers wrap with context
 	}
 
 	c.ItemID = itemID.String
+	c.Name = path.Base(c.Path) // derived for display convenience (B-071)
 	c.LocalHash = localHash.String
 	c.RemoteHash = remoteHash.String
 	c.ResolvedBy = resolvedBy.String
@@ -588,47 +707,21 @@ func scanConflictRow(rows *sql.Rows) (*ConflictRecord, error) {
 	return &c, nil
 }
 
-// scanConflictRowSingle scans a single row from a *sql.Row result,
-// handling nullable columns. Returns sql.ErrNoRows if no row found.
-func scanConflictRowSingle(row *sql.Row) (*ConflictRecord, error) {
-	var (
-		c           ConflictRecord
-		itemID      sql.NullString
-		localHash   sql.NullString
-		remoteHash  sql.NullString
-		localMtime  sql.NullInt64
-		remoteMtime sql.NullInt64
-		resolvedAt  sql.NullInt64
-		resolvedBy  sql.NullString
-	)
-
-	err := row.Scan(
-		&c.ID, &c.DriveID, &itemID, &c.Path, &c.ConflictType,
-		&c.DetectedAt, &localHash, &remoteHash, &localMtime, &remoteMtime,
-		&c.Resolution, &resolvedAt, &resolvedBy,
-	)
+// scanConflictRow scans a conflict from a multi-row result set. Delegates
+// to scanConflict via the conflictScanner interface (B-149).
+func scanConflictRow(rows *sql.Rows) (*ConflictRecord, error) {
+	c, err := scanConflict(rows)
 	if err != nil {
-		return nil, err //nolint:wrapcheck // caller wraps with context
+		return nil, fmt.Errorf("sync: scanning conflict row: %w", err)
 	}
 
-	c.ItemID = itemID.String
-	c.LocalHash = localHash.String
-	c.RemoteHash = remoteHash.String
-	c.ResolvedBy = resolvedBy.String
+	return c, nil
+}
 
-	if localMtime.Valid {
-		c.LocalMtime = localMtime.Int64
-	}
-
-	if remoteMtime.Valid {
-		c.RemoteMtime = remoteMtime.Int64
-	}
-
-	if resolvedAt.Valid {
-		c.ResolvedAt = resolvedAt.Int64
-	}
-
-	return &c, nil
+// scanConflictRowSingle scans a conflict from a single-row result.
+// Returns sql.ErrNoRows transparently for callers that need it (B-149).
+func scanConflictRowSingle(row *sql.Row) (*ConflictRecord, error) {
+	return scanConflict(row)
 }
 
 // DB returns the underlying database connection for sharing with other

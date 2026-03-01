@@ -1282,3 +1282,50 @@ func TestFreshDownload_FilePermissions(t *testing.T) {
 		t.Errorf("file perms = %o, want 600", perms)
 	}
 }
+
+// TestTransferManager_ResumeDownload_PartialDeletedBeforeOpen verifies that
+// when a .partial file is deleted between the existence check and open
+// (TOCTOU race), downloadToPartial falls back to a fresh download (B-211).
+func TestTransferManager_ResumeDownload_PartialDeletedBeforeOpen(t *testing.T) {
+	t.Parallel()
+
+	content := []byte("fresh-download-content")
+	expectedHash := tmHashBytes(content)
+	var freshCalled bool
+
+	dl := &tmMockDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			freshCalled = true
+			n, err := w.Write(content)
+
+			return int64(n), err
+		},
+		// DownloadRange is set so the downloader satisfies RangeDownloader,
+		// but should NOT be called since the .partial doesn't exist.
+		downloadRangeFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer, _ int64) (int64, error) {
+			t.Fatal("DownloadRange should not be called when .partial is absent")
+			return 0, nil
+		},
+	}
+
+	tm := newTestTM(dl, &tmMockUploader{}, nil)
+	dir := t.TempDir()
+	targetPath := filepath.Join(dir, "file.txt")
+
+	// Do NOT create a .partial file — simulates it being deleted before open.
+
+	result, err := tm.DownloadToFile(context.Background(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+		RemoteHash: expectedHash,
+	})
+	if err != nil {
+		t.Fatalf("DownloadToFile: %v", err)
+	}
+
+	if !freshCalled {
+		t.Error("expected fresh download to be called")
+	}
+
+	if result.LocalHash != expectedHash {
+		t.Errorf("LocalHash = %q, want %q", result.LocalHash, expectedHash)
+	}
+}
