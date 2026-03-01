@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-**Phases 1-5.6 complete. Next: Phase 6 (CLI completeness), Phase 7 (multi-drive orchestration + shared content sync — Architecture A resolved, see MULTIDRIVE.md §11), Phase 8 (WebSocket + advanced sync), Phase 9 (operational hardening), Phase 10 (filtering), Phase 11 (packaging + release), Phase 12 (post-release).** See [docs/roadmap.md](docs/roadmap.md).
+**Phases 1-5.6 complete. Next: Phase 6 (multi-drive orchestration + shared content sync — Architecture A resolved, see MULTIDRIVE.md §11), Phase 7 (CLI completeness), Phase 8 (WebSocket + advanced sync), Phase 9 (operational hardening), Phase 10 (filtering), Phase 11 (packaging + release), Phase 12 (post-release).** See [docs/roadmap.md](docs/roadmap.md).
 
 ## Architecture Overview
 
