@@ -135,9 +135,9 @@ onedrive-go drive add                  # Add a SharePoint library or resume a pa
 onedrive-go drive remove [--purge]     # Pause a drive (--purge: delete state DB + config section)
 ```
 
-`drive add` is interactive — it shows available SharePoint libraries and removed drives (in shadow files). For non-interactive use: `drive add --site marketing --library Documents`. It does NOT offer new account sign-in — that's what `login` is for.
+`drive add` is interactive — it shows available SharePoint libraries and shared folders. For non-interactive use: `drive add --site marketing --library Documents`. It does NOT offer new account sign-in — that's what `login` is for.
 
-`drive remove` moves the config section to a shadow file (all settings preserved). `drive add` restores from shadow. `--purge` permanently removes state DB, config section, and shadow file; token kept if shared with other drives. To temporarily stop syncing without removing, use `pause`/`resume`.
+`drive remove` deletes the config section. State DB preserved for fast re-add (delta sync resumes from where it left off). `--purge` also deletes state DB. Token kept if shared with other drives. To temporarily stop syncing without removing, use `pause`/`resume`.
 
 `drive list` shows `(read-only)` or `(read-write)` permission annotations for shared content (DP-10), giving users proactive visibility into access levels before sync encounters 403 errors.
 

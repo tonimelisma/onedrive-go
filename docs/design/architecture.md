@@ -909,7 +909,7 @@ Multi-drive sync uses **Architecture A (per-drive goroutine with isolated engine
 - **Global worker budget**: Configurable `max_workers` cap (default 16) with proportional per-drive allocation by baseline file count. Minimum 4 workers per drive. See [concurrent-execution.md §19](concurrent-execution.md#19-multi-drive-worker-budget).
 - **Global bandwidth limiter**: A process-wide token bucket limits total bandwidth across all drives.
 - **Config-as-IPC daemon model**: `sync --watch` watches `config.toml` via fsnotify. CLI commands (`pause`, `resume`, `drive add`, `drive remove`) write to config; the daemon picks up changes within milliseconds. No RPC socket required for Phase 7.0.
-- **Shadow files for drive lifecycle**: `drive remove` moves config sections to shadow files (preserving all settings); `drive add` restores from shadow. `logout` moves all account drives to shadow. `login` auto-restores from shadow.
+- **Simple drive lifecycle**: `drive remove` deletes the config section (state DB kept for fast re-add); `drive add` creates a fresh config section. If state DB exists, delta sync resumes from the last token. `logout` deletes config sections for all account drives.
 
 ---
 

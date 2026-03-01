@@ -698,7 +698,7 @@ Drives:
 Summary: 1 ready, 1 paused, 1 error
 ```
 
-Status is determined from config (is drive present? is it paused?) + token (does token file exist? is it expired?) + baseline DB (file count, last sync time). No daemon communication needed. Removed drives (in shadow files) are not shown.
+Status is determined from config (is drive present? is it paused?) + token (does token file exist? is it expired?) + baseline DB (file count, last sync time). No daemon communication needed. Removed drives are not shown.
 
 ### 11.9 Daemon Model (Config-as-IPC)
 
@@ -715,7 +715,7 @@ The orchestrator can run with zero active DriveRunners — valid state. The daem
 - `pause` → writes `paused = true` to config → fsnotify → daemon stops drive
 - `resume` → removes `paused` from config → fsnotify → daemon starts drive
 - `drive add` → adds section to config → fsnotify → daemon starts drive
-- `drive remove` → moves section to shadow → fsnotify → daemon stops drive
+- `drive remove` → removes section from config → fsnotify → daemon stops drive
 
 ```
 onedrive-go sync --watch
@@ -736,46 +736,33 @@ onedrive-go sync --watch
 
 **Future (Phase 12.6)**: RPC socket can be added for live status data (in-flight action counts, real-time progress, SSE events) that can't be read from config + state DBs. This is additive — config-as-IPC remains the control mechanism.
 
-### 11.10 Drive Lifecycle: Shadow Files
+### 11.10 Drive Lifecycle
 
 Two concepts control a drive's lifecycle, each with its own storage location:
 
 | Concept | Question it answers | Controlled by | Stored in |
 |---------|---------------------|---------------|-----------|
-| **Drive exists** | "Is this drive part of my active setup?" | `drive add` / `drive remove` | Presence in `config.toml` vs shadow file |
+| **Drive exists** | "Is this drive part of my active setup?" | `drive add` / `drive remove` | Presence in `config.toml` |
 | **Drive paused** | "Should this drive sync right now?" | `pause` / `resume` | `paused = true` in config section |
 
-#### Shadow File Storage
+#### Key Simplification
 
-When `drive remove` removes a drive section from `config.toml`, it writes that section to a **shadow file** in the data directory:
-
-```
-~/Library/Application Support/onedrive-go/          (macOS)
-  config.toml                                        ← active drives
-  shadow_personal_user@example.com.toml              ← removed drive's config
-  token_personal_user@example.com.json               ← token (untouched)
-  state_personal_user@example.com.db                 ← state DB (untouched)
-```
-
-Shadow files use the same `{prefix}_{type}_{email}.toml` naming convention as tokens and state DBs. One shadow file per drive. Contains the full drive section (sync_dir, paused, display_name, filters — everything).
+Drive removal deletes the config section. No shadow files, no config retention. The state DB alone provides fast re-add — when a drive is re-added, delta sync resumes from the last saved token (no full re-sync needed).
 
 #### Command Behaviors
 
 **`drive add <canonical-id>`**:
-1. Shadow file exists → restore: read shadow, append section to config.toml, delete shadow. All settings (sync_dir, paused state, display_name, filters) restored.
-2. No shadow → add fresh section with computed default sync_dir.
+1. Always creates a fresh config section with computed default sync_dir and auto-derived display_name.
+2. If a state DB exists from a prior removal, sync resumes from the last delta token — no full re-sync needed.
 
 **`drive remove [--drive X]`**:
-1. Read drive section from config.toml.
-2. Write it to shadow file.
-3. Delete section from config.toml.
-4. Drive disappears from drive list, status, sync. State DB, token, sync directory untouched.
+1. Delete drive section from config.toml.
+2. Drive disappears from drive list, status, sync. State DB, token, sync directory untouched.
 
 **`drive remove --purge [--drive X]`**:
 1. Delete section from config.toml (if present).
-2. Delete shadow file (if present).
-3. Delete state DB.
-4. Token untouched (may be shared across drives). Sync directory untouched (user's files).
+2. Delete state DB.
+3. Token untouched (may be shared across drives). Sync directory untouched (user's files).
 
 **`pause [--drive X] [duration]`**:
 1. Set `paused = true` in drive's config section.
@@ -789,16 +776,16 @@ Shadow files use the same `{prefix}_{type}_{email}.toml` naming convention as to
 **`login`**:
 1. Authenticate, save token.
 2. Drive already in config.toml → "Token refreshed." Config untouched.
-3. Drive not in config.toml → check for shadow file. Shadow exists → auto-restore (seamless logout+login round-trip). No shadow → add fresh drive section.
+3. Drive not in config.toml → add fresh drive section.
 
 **`logout [--account X]`**:
 1. Delete token file.
-2. For every drive belonging to that account in config.toml: `drive remove` (move to shadow).
-3. State DBs, sync directories untouched. Shadow files preserve everything.
+2. Delete config sections for all drives belonging to that account.
+3. State DBs, sync directories untouched.
 
 **`logout --purge [--account X]`**:
 1. Delete token file.
-2. For every drive belonging to that account: `drive remove --purge` (delete config section, shadow, state DB).
+2. Delete config sections + state DBs for all drives belonging to that account.
 3. Sync directories untouched.
 
 #### Drive State Table
@@ -810,7 +797,7 @@ Shadow files use the same `{prefix}_{type}_{email}.toml` naming convention as to
 | Yes | Yes (timed) | Valid | paused (1h32m left) | No | Ran `pause 2h` |
 | Yes | No | Expired | token expired | No | Token needs refresh |
 | Yes | No | Missing | no token | No | Token deleted externally |
-| No (shadow) | — | — | (not shown) | No | Ran `drive remove` or `logout` |
+| No | — | — | (not shown) | No | Ran `drive remove` or `logout` |
 | Gone | — | — | (not shown) | No | Ran `--purge` |
 
 When paused, that's the dominant display state. Token issues become visible on resume.
@@ -843,20 +830,18 @@ After `drive remove --drive personal:user@example.com`:
 sync_dir = "~/SharedFolder"
 ```
 
-And in the data directory: `shadow_personal_user@example.com.toml` ← contains sync_dir, paused = true.
-
-After `drive add personal:user@example.com`: section restored from shadow (including `paused = true`), shadow file deleted.
+After `drive add personal:user@example.com`: fresh config section added with computed default sync_dir. If the state DB still exists, sync resumes from the last delta token.
 
 #### Changes from Today's Implementation
 
 | Area | Today | New |
 |------|-------|-----|
 | `Drive.Enabled` field | `*bool` in config struct | Replaced by `Paused *bool` + `PausedUntil *string` |
-| `drive remove` | Sets `enabled = false` in config | Moves section to shadow file, removes from config |
-| `drive add` (existing) | Sets `enabled = true` | Restores from shadow file |
+| `drive remove` | Sets `enabled = false` in config | Deletes config section (state DB kept for fast re-add) |
+| `drive add` (existing) | Sets `enabled = true` | Adds fresh config section |
 | Display state "paused" | Means `enabled = false` | Means `paused = true` (correct semantics) |
-| `logout` | Deletes token, keeps drives in config | Deletes token, moves drives to shadow |
-| `login` (re-login) | Token refresh only | Token refresh + restore from shadow if shadow exists |
+| `logout` | Deletes token, keeps drives in config | Deletes token + config sections |
+| `login` (re-login) | Token refresh only | Token refresh + creates fresh section if needed |
 | Config reload | Per-cycle (up to 5 min delay) | fsnotify on config.toml (immediate, validated) |
 | `pause`/`resume` commands | Not implemented | New commands, write `paused` to config |
 
@@ -870,17 +855,17 @@ All CLI commands are standalone — they read/write config, state DBs, and token
 |---------|---------------|
 | `pause [--drive X] [duration]` | Sets `paused = true` (+ `paused_until`) in config |
 | `resume [--drive X]` | Removes `paused` / `paused_until` from config |
-| `drive add` | Adds section to config (restores from shadow if available) |
-| `drive remove` | Moves section to shadow, removes from config |
-| `login` | Adds drive section (or restores from shadow) if new |
-| `logout` | Moves drive sections to shadow |
+| `drive add` | Adds fresh section to config |
+| `drive remove` | Removes section from config |
+| `login` | Adds drive section if new |
+| `logout` | Removes drive sections from config |
 
 **Read-only commands** (work identically with or without daemon):
 
 | Command | Data source |
 |---------|-------------|
 | `status` | Config (drive presence, paused state) + token files (valid/expired/missing) + state DBs (file count, last sync time) |
-| `drive list` | Config (active drives only — shadow drives invisible) |
+| `drive list` | Config (active drives only) |
 | `whoami` | Token files |
 | `conflicts`, `verify` | State DBs |
 
@@ -930,8 +915,8 @@ No overlapping mechanisms: hashing has ONE control (semaphore). Execution has ON
 | 2 | ClientPool | `map[tokenPath]*graph.Client` in Orchestrator. Created once per token path. Shared by reference. Thread-safe. |
 | 3 | Worker budget | Global cap (`max_workers`, default 16), proportional allocation by baseline file count, minimum 4 per drive. Rebalanced on config reload. |
 | 4 | Error isolation | Per-drive goroutine with panic recovery. 3 consecutive failures → exponential backoff. Other drives unaffected. |
-| 5 | Watch mode lifecycle | Daemon watches config.toml via fsnotify. CLI commands write to config → daemon picks up changes within milliseconds. Drive presence controlled by config vs shadow files. Paused state persisted in config. |
-| 6 | Aggregate reporting | `status` reads config + token files + state DBs directly. Works with or without daemon. Shows: ready/paused/token expired. Removed drives (in shadow) are invisible. |
+| 5 | Watch mode lifecycle | Daemon watches config.toml via fsnotify. CLI commands write to config → daemon picks up changes within milliseconds. Drive presence controlled by config sections. Paused state persisted in config. |
+| 6 | Aggregate reporting | `status` reads config + token files + state DBs directly. Works with or without daemon. Shows: ready/paused/token expired. Removed drives are not shown. |
 | 7 | Context tree | `processCtx → orchestratorCtx → driveCtx[i] → Engine[i]`. Independent cancellation per drive. |
 | 8 | Bandwidth limiting | Global token bucket on shared `http.RoundTripper` across ALL drives. One physical network = one bandwidth limit. |
 | 9 | Rate limit coordination | 429s are per-account (per OAuth token), NOT global. Handled entirely by `graph.Client`. Drives sharing a token share a client, which handles 429 backoff per-request. |
