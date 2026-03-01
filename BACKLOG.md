@@ -16,12 +16,24 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
-| B-271 | Personal Vault exclusion in RemoteObserver | P1 | Phase 5.6.1. Skip `specialFolder.name == "vault"` items. `sync_vault` escape hatch. |
-| B-272 | Add `DriveTypeShared` to `driveid` package | P1 | Phase 5.6.2. Fourth drive type for shared folders. Update CanonicalID parsing. |
+| ~~B-271~~ | ~~Personal Vault exclusion in RemoteObserver~~ | ~~P1~~ | **DONE** — Phase 5.6.1. `SpecialFolderName` field + `isDescendantOfVault()` parent-chain walk. |
+| ~~B-272~~ | ~~Add `DriveTypeShared` to `driveid` package~~ | ~~P1~~ | **DONE** — Phase 5.6.2. Fourth drive type, type-specific field routing, part-count validation, `ConstructShared()`, `Equal()`, predicates, zero-ID fix. |
 | B-273 | Move token resolution to `config` package | P1 | Phase 5.6.3. `config.TokenCanonicalID(cid, cfg)` for SharePoint→business, shared→primary token sharing. |
 | B-274 | Replace `Alias` with `DisplayName` in config | P1 | Phase 5.6.4. Auto-derived display names: email, "site / lib", "{Name}'s {Folder}". |
 | B-275 | Update CLI for display_name | P2 | Phase 5.6.5. 3-tier `--drive` matching: display_name > canonical ID > substring. |
 | B-276 | Delta token composite key migration | P2 | Phase 5.6.6. `(drive_id, scope_id)` key for per-shortcut delta tokens. |
+
+## Hardening: Identity & Types
+
+Defensive coding and edge cases for `internal/driveid/` and `internal/graph/`.
+
+| ID | Title | Priority | Notes |
+|----|-------|----------|-------|
+| B-278 | Standardize driveid test style (testify vs stdlib) | P4 | `edge_test.go` uses `testify/assert`, `canonical_test.go` uses stdlib. Pick one. |
+| B-279 | Add `OwnerEmail` field to `graph.Drive` struct | P3 | Needed for shared drive display name derivation (B-274). Graph API provides `shared.owner.user.email`. |
+| B-280 | Document `graph.User.Email` mapping to Graph API field | P4 | Ambiguous: `mail` vs `userPrincipalName`. Business accounts can differ. |
+| B-281 | Vault parent-chain ordering assumption in RemoteObserver | P2 | `isDescendantOfVault()` assumes parents processed before children in delta. Not contractually guaranteed. Safety-critical. |
+| B-282 | Add `HashesComputed` counter to `ObserverStats` | P4 | Planned in B-127 but may not have been implemented. Useful for perf diagnostics. |
 
 ## Hardening: Internal Sync
 
