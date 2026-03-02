@@ -12,7 +12,6 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 | ID | Title | Priority | Package | Notes |
 |----|-------|----------|---------|-------|
 | B-300 | Rename `SessionRecord` JSON tag `"remote_path"` → `"local_path"` | P4 | driveops | Field was renamed to `LocalPath` but JSON tag kept as `"remote_path"` for backward compat. Version field added (PR #154) — migration can detect v0 (old format) vs v1. Migrate: read old key + write new key, then change the tag. |
-| B-301 | Decide `.partial` file auto-deletion policy | P4 | driveops | `ReportStalePartials` currently warns on stale `.partial` files but does not delete them. Auto-deletion would change resume semantics. Discuss whether stale partials (>48h) should be cleaned up automatically or remain warn-only. |
 
 ## Phase 6.0b: Orchestrator + DriveRunner
 
@@ -125,6 +124,7 @@ Optimization deferred until profiling shows a bottleneck.
 
 | ID | Title | Resolution |
 |----|-------|------------|
+| B-301 | Auto-delete `.partial` files after sync | **DONE** — `ReportStalePartials` (warn-only) replaced by `CleanStalePartials` (unconditional delete). After sync completes, `.partial` files are always garbage: successful downloads rename them, failed downloads delete them, Ctrl-C aborts before housekeeping runs. Threshold removed — no age check needed. |
 | B-296 | Config-file `log_level` not applied by sync command | **DONE** — `runSync` rebuilds logger from `rawCfg.LoggingConfig` after loading config. CLI flags still override. Test `TestBuildLogger_FromRawConfigLogLevel` added. |
 | B-207 | Document intentional `.partial` preservation on rename failure | **DONE** — Comment added in `transfer_manager.go` (B-207). PR #139. |
 | B-211 | `resumeDownload` TOCTOU race between stat and open | **DONE** — Open-before-stat pattern eliminates TOCTOU (B-211). PR #139. |

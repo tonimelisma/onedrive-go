@@ -19,12 +19,9 @@ func TestCleanTransferArtifacts_BothPaths(t *testing.T) {
 
 	require.NoError(t, os.MkdirAll(syncRoot, 0o700))
 
-	// Create a stale .partial to exercise ReportStalePartials path.
-	stalePath := filepath.Join(syncRoot, "stale.partial")
-	require.NoError(t, os.WriteFile(stalePath, []byte("x"), 0o644))
-
-	staleTime := time.Now().Add(-72 * time.Hour)
-	require.NoError(t, os.Chtimes(stalePath, staleTime, staleTime))
+	// Create a .partial file to exercise CleanStalePartials path.
+	partialPath := filepath.Join(syncRoot, "stale.partial")
+	require.NoError(t, os.WriteFile(partialPath, []byte("x"), 0o644))
 
 	// Create a session store with an expired session.
 	store := NewSessionStore(dataDir, testLogger(t))
@@ -43,7 +40,11 @@ func TestCleanTransferArtifacts_BothPaths(t *testing.T) {
 	require.NoError(t, os.Chtimes(sessionFile, oldTime, oldTime))
 
 	// Run the unified cleanup.
-	CleanTransferArtifacts(syncRoot, store, 48*time.Hour, 7*24*time.Hour, testLogger(t))
+	CleanTransferArtifacts(syncRoot, store, 7*24*time.Hour, testLogger(t))
+
+	// Verify the .partial file was deleted.
+	_, statErr := os.Stat(partialPath)
+	assert.True(t, os.IsNotExist(statErr), "partial file should have been deleted")
 
 	// Verify the stale session was cleaned.
 	rec, err := store.Load("drive-1", "/old.txt")
@@ -57,5 +58,5 @@ func TestCleanTransferArtifacts_NilSessionStore(t *testing.T) {
 	dir := t.TempDir()
 
 	// Should not panic with nil sessionStore.
-	CleanTransferArtifacts(dir, nil, 48*time.Hour, 7*24*time.Hour, testLogger(t))
+	CleanTransferArtifacts(dir, nil, 7*24*time.Hour, testLogger(t))
 }
