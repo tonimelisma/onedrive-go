@@ -124,6 +124,7 @@ Optimization deferred until profiling shows a bottleneck.
 
 | ID | Title | Resolution |
 |----|-------|------------|
+| B-302 | Post-B-301 housekeeping hardening | **DONE** — (1) Removed `staleSessionAge` parameter from `CleanTransferArtifacts` (always `StaleSessionAge`). (2) Made `postSyncHousekeeping` synchronous — eliminates process-exit race where cleanup goroutine may not complete. (3) Added WalkDir error logging for permission-denied subdirectories. (4) Permission error test added (coverage +0.5%). |
 | B-301 | Auto-delete `.partial` files after sync | **DONE** — `ReportStalePartials` (warn-only) replaced by `CleanStalePartials` (unconditional delete). After sync completes, `.partial` files are always garbage: successful downloads rename them, failed downloads delete them, Ctrl-C aborts before housekeeping runs. Threshold removed — no age check needed. |
 | B-296 | Config-file `log_level` not applied by sync command | **DONE** — `runSync` rebuilds logger from `rawCfg.LoggingConfig` after loading config. CLI flags still override. Test `TestBuildLogger_FromRawConfigLogLevel` added. |
 | B-207 | Document intentional `.partial` preservation on rename failure | **DONE** — Comment added in `transfer_manager.go` (B-207). PR #139. |
