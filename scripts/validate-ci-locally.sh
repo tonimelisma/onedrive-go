@@ -33,7 +33,7 @@ else
     DRIVE=$(gh variable get ONEDRIVE_TEST_DRIVES 2>/dev/null | cut -d',' -f1 | xargs) || true
     if [ -z "$DRIVE" ]; then
         echo "ERROR: No drive specified. Pass a canonical drive ID or set ONEDRIVE_TEST_DRIVES."
-        echo "Usage: $0 personal:testitesti18@outlook.com"
+        echo "Usage: $0 personal:user@example.com"
         exit 1
     fi
 fi
@@ -114,12 +114,14 @@ echo ""
 echo "--- Running integration tests ---"
 ONEDRIVE_TEST_DRIVE="$DRIVE" \
     ONEDRIVE_TEST_DRIVE_ID="$DRIVE_ID" \
+    ONEDRIVE_ALLOWED_TEST_ACCOUNTS="$DRIVE" \
     go test -tags=integration -race -v -timeout=5m ./internal/graph/...
 
 # Step 8: Run E2E tests.
 echo ""
 echo "--- Running E2E tests ---"
 ONEDRIVE_TEST_DRIVE="$DRIVE" \
+    ONEDRIVE_ALLOWED_TEST_ACCOUNTS="$DRIVE" \
     go test -tags=e2e -race -v -timeout=5m ./e2e/...
 
 # Step 9: Save rotated token back (same as CI post-test step).

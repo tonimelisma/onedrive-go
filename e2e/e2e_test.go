@@ -24,6 +24,21 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	// Load .env and validate safety guards before anything else.
+	loadDotEnv()
+
+	drive = os.Getenv("ONEDRIVE_TEST_DRIVE")
+	if drive == "" {
+		fmt.Fprintln(os.Stderr, "FATAL: ONEDRIVE_TEST_DRIVE not set (check .env or env vars)")
+		os.Exit(1)
+	}
+
+	validateAllowlist()
+
+	// Set up directory isolation (must be after drive is set, before binary build).
+	cleanupIsolation := setupIsolation()
+	defer cleanupIsolation()
+
 	// Build binary to temp dir.
 	tmpDir, err := os.MkdirTemp("", "onedrive-e2e-*")
 	if err != nil {
@@ -42,11 +57,6 @@ func TestMain(m *testing.M) {
 	if err := cmd.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "building binary: %v\n", err)
 		os.Exit(1)
-	}
-
-	drive = os.Getenv("ONEDRIVE_TEST_DRIVE")
-	if drive == "" {
-		drive = "personal:test@example.com"
 	}
 
 	// Set up debug log directory for E2E visibility.

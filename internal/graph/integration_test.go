@@ -27,6 +27,16 @@ const (
 	driveIDEnvVar      = "ONEDRIVE_TEST_DRIVE_ID"
 )
 
+func TestMain(m *testing.M) {
+	loadIntegrationDotEnv()
+	validateIntegrationAllowlist()
+
+	cleanup := setupIntegrationIsolation()
+	defer cleanup()
+
+	os.Exit(m.Run())
+}
+
 // testLogger returns an slog.Logger at Debug level that writes to t.Log,
 // so all token and request activity appears in CI output with -v.
 func testLogger(t *testing.T) *slog.Logger {

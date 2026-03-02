@@ -82,7 +82,7 @@ Edge cases and correctness for `internal/graph/`.
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
 | B-285 | Standardize `baseline_test.go` to testify style | P4 | 2300+ lines of stdlib assertions. `canonical_test.go` was converted (B-278), `baseline_test.go` should follow. Purely cosmetic — do alongside behavioral changes, not standalone. |
-| B-286 | No shared/business drive in E2E test matrix | P3 | All E2E tests run against `personal:testitesti18@outlook.com`. `shared` type and `ConstructShared()` are unit-tested but untested against real Graph API. Phase 6.0d adds second personal account. |
+| B-286 | No shared/business drive in E2E test matrix | P3 | All E2E tests run against `personal:user@example.com`. `shared` type and `ConstructShared()` are unit-tested but untested against real Graph API. Phase 6.0d adds second personal account. |
 
 ## Deferred from Phase 6.0c
 

@@ -1,13 +1,17 @@
 # E2E Test Isolation Design
 
+## Status: IMPLEMENTED
+
+Isolation is fully implemented. `TestMain` in both `e2e/` and `internal/graph/` sets up XDG + HOME overrides, copies the token to a temp dir, and validates the account allowlist.
+
 ## Problem
 
-E2E tests on a dev machine share the **same token file, config, and state DB** as production:
+E2E tests on a dev machine must not share the **same token file, config, and state DB** as production:
 
 ```
 ~/.config/onedrive-go/config.toml
-~/.local/share/onedrive-go/token_personal_testitesti18@outlook.com.json
-~/.local/share/onedrive-go/state_personal_testitesti18@outlook.com.db
+~/.local/share/onedrive-go/token_personal_user@example.com.json
+~/.local/share/onedrive-go/state_personal_user@example.com.db
 ```
 
 Risks:
@@ -16,9 +20,23 @@ Risks:
 - **Conflicting mutations**: both daemon and tests mutate the same OneDrive folder
 - **Corruption propagation**: a test bug that corrupts the token or state DB breaks production sync
 
-## Target State
+## Implementation
 
-Each context runs in full isolation:
+### Safety guards (TestMain)
+
+1. **`.env` loading**: `loadDotEnv()` reads `KEY=VALUE` from `.env` at module root (gitignored). CI sets env vars directly.
+2. **Account allowlist**: `validateAllowlist()` crashes if `ONEDRIVE_ALLOWED_TEST_ACCOUNTS` is unset or if `ONEDRIVE_TEST_DRIVE` is not in the list.
+3. **Directory isolation**: `setupIsolation()` overrides `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` to temp directories and copies the token.
+
+### XDG override on all platforms
+
+`internal/config/paths.go` checks XDG env vars first on ALL platforms (not just Linux). This enables test isolation on macOS without platform-specific workarounds.
+
+### Per-test state isolation
+
+Sync tests that need isolated state DBs override `XDG_DATA_HOME` per-test via `t.Setenv()` and copy the token from `testDataDir` (set by TestMain).
+
+### Isolation matrix
 
 | Context | Config | Token | State DB | OneDrive folder | Graph API |
 |---------|--------|-------|----------|-----------------|-----------|
@@ -27,40 +45,13 @@ Each context runs in full isolation:
 | **E2E local** | Temp dir (generated) | **Copy** in temp dir | Temp dir SQLite | Dedicated test folder | Real |
 | **E2E CI** | Temp dir (generated) | Downloaded from Key Vault to temp dir | Temp dir SQLite | Dedicated test folder | Real |
 
-## Changes Required
+### Verification tests
 
-### 1. E2E test harness: isolated XDG override
-
-Set `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, and `XDG_CACHE_HOME` to temp directories on subprocess `exec.Cmd.Env`. Each test run gets its own config, token, and state DB — completely isolated from production.
-
-On macOS, `DefaultDataDir()` and `DefaultConfigDir()` both resolve to `~/Library/Application Support/onedrive-go`. The XDG env vars override this behavior, so setting them works cross-platform.
-
-### 2. E2E token bootstrap: copy, don't share
-
-**Local dev**: The test harness copies the token file from the real XDG data dir into the test's temp data dir. The copy is what gets used and potentially refreshed. The production token continues working because Azure AD refresh tokens for consumer Microsoft accounts are multi-use and long-lived.
-
-**CI**: Already downloads from Azure Key Vault. Target the temp dir instead of a hardcoded path.
-
-**Guideline**: Stop the daemon before running E2E tests on a dev machine to avoid any token refresh races.
-
-### 3. E2E config generation
-
-The test harness generates a minimal `config.toml` in the temp config dir with the test drive section. Already partially implemented — just needs to consistently target the temp dir.
-
-### 4. E2E token metadata bootstrap
-
-After copying the token file, metadata (drive_id, user_id, display_name, org_name) must exist:
-
-- **Local dev**: The source token file already has metadata from the original login. The copy carries it.
-- **CI**: Already calls `whoami --json` and writes metadata via `jq`. No change needed, just target the temp dir.
-
-### 5. State DB
-
-Each test run starts with a fresh state DB in the temp dir. Already correct — no change needed.
-
-### 6. CI workflow
-
-Point downloads and bootstrap steps to temp dirs. Minor path changes in `.github/workflows/integration.yml`.
+`TestIsolation_*` tests verify:
+- `HOME` env var points to temp dir
+- `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` point to temp dirs
+- Token file exists in temp data dir
+- Integration tests: `config.DefaultDataDir()` resolves under temp
 
 ## Unit Test Implications
 

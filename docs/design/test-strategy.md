@@ -736,38 +736,38 @@ Setup:
 3. GitHub repository variables: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_KEY_VAULT_NAME`, `ONEDRIVE_TEST_DRIVES` (non-sensitive identifiers)
 4. CI loads tokens via `az keyvault secret download --file` (token never in stdout/logs)
 5. After tests, CI saves rotated tokens back via `az keyvault secret set --file` (with JSON validation)
-6. Per-drive secrets follow the naming convention: canonical drive ID with `:`, `@`, and `.` replaced by `-`, prefixed with `onedrive-oauth-token-`. E.g., `personal:testitesti18@outlook.com` → `onedrive-oauth-token-personal-testitesti18-outlook-com`
+6. Per-drive secrets follow the naming convention: canonical drive ID with `:`, `@`, and `.` replaced by `-`, prefixed with `onedrive-oauth-token-`. E.g., `personal:user@example.com` → `onedrive-oauth-token-personal-user-outlook-com`
 
 **Key Vault secret naming derivation**:
 ```bash
-# Input: canonical drive ID (e.g., "personal:testitesti18@outlook.com")
+# Input: canonical drive ID (e.g., "personal:user@example.com")
 # Transform: sed 's/[:@.]/-/g'
-# Result: "onedrive-oauth-token-personal-testitesti18-outlook-com"
-echo "onedrive-oauth-token-$(echo 'personal:testitesti18@outlook.com' | sed 's/[:@.]/-/g')"
+# Result: "onedrive-oauth-token-personal-user-outlook-com"
+echo "onedrive-oauth-token-$(echo 'personal:user@example.com' | sed 's/[:@.]/-/g')"
 ```
 
 **Token file naming derivation**:
 ```bash
-# Input: canonical drive ID (e.g., "personal:testitesti18@outlook.com")
+# Input: canonical drive ID (e.g., "personal:user@example.com")
 # Transform: replace first ":" with "_"
-# Result: "token_personal_testitesti18@outlook.com.json"
+# Result: "token_personal_user@example.com.json"
 # Location: ~/.local/share/onedrive-go/
 ```
 
 Token bootstrap (one-time per drive):
 ```bash
 # 1. Login to get a token file
-go run . login --drive personal:testitesti18@outlook.com
+go run . login --drive personal:user@example.com
 
 # 2. Upload token to Key Vault
 az keyvault secret set \
   --vault-name kv-onedrivego-ci \
-  --name onedrive-oauth-token-personal-testitesti18-outlook-com \
-  --file ~/.local/share/onedrive-go/token_personal_testitesti18@outlook.com.json \
+  --name onedrive-oauth-token-personal-user-outlook-com \
+  --file ~/.local/share/onedrive-go/token_personal_user@example.com.json \
   --content-type application/json
 
 # 3. Set the GitHub repository variable
-gh variable set ONEDRIVE_TEST_DRIVES --body "personal:testitesti18@outlook.com"
+gh variable set ONEDRIVE_TEST_DRIVES --body "personal:user@example.com"
 ```
 
 When tokens expire completely (90 days of inactivity), re-bootstrap using the same steps.
@@ -788,7 +788,7 @@ When changing token paths, secret naming, environment variables, or workflow log
 
 # Examples:
 ./scripts/validate-ci-locally.sh                                      # auto-detects from ONEDRIVE_TEST_DRIVES or gh variable
-./scripts/validate-ci-locally.sh personal:testitesti18@outlook.com    # explicit drive
+./scripts/validate-ci-locally.sh personal:user@example.com    # explicit drive
 ```
 
 The script performs all 9 steps of the CI workflow locally (derive names, verify Azure access, download token, validate structure, install token, whoami, integration tests, E2E tests, save rotated token back). This catches issues like wrong secret names, missing tokens, or broken token paths before they reach GitHub Actions.
@@ -875,35 +875,35 @@ Build tag: `e2e,e2e_full` (nightly only).
 
 | Account | Type | Purpose | Status |
 |---------|------|---------|--------|
-| testitesti18@outlook.com | Personal (free) | Primary, every CI push | Active |
-| testitesti19@outlook.com | Personal (free) | Second drive for orchestrator tests | Planned |
+| user@example.com | Personal (free) | Primary, every CI push | Active |
+| user2@example.com | Personal (free) | Second drive for orchestrator tests | Planned |
 | shared folder from 18→19 | Shared | Cross-account shared folder sync | Planned |
 | TBD ($6/mo M365 Business) | Business | Business API quirks | Backlog |
 
 #### Second Account Provisioning Runbook
 
-1. Create free Outlook.com account (`testitesti19@outlook.com`).
-2. Login locally: `go run . login --drive personal:testitesti19@outlook.com`
+1. Create free Outlook.com account (`user2@example.com`).
+2. Login locally: `go run . login --drive personal:user2@example.com`
 3. Upload token to Azure Key Vault:
    ```bash
    az keyvault secret set \
      --vault-name kv-onedrivego-ci \
-     --name onedrive-oauth-token-personal-testitesti19-outlook-com \
-     --file ~/.local/share/onedrive-go/token_personal_testitesti19@outlook.com.json \
+     --name onedrive-oauth-token-personal-user2-outlook-com \
+     --file ~/.local/share/onedrive-go/token_personal_user2@example.com.json \
      --content-type application/json
    ```
 4. Update GitHub variable:
    ```bash
    gh variable set ONEDRIVE_TEST_DRIVES \
-     --body "personal:testitesti18@outlook.com,personal:testitesti19@outlook.com"
+     --body "personal:user@example.com,personal:user2@example.com"
    ```
-5. Verify: `./scripts/validate-ci-locally.sh personal:testitesti19@outlook.com`
+5. Verify: `./scripts/validate-ci-locally.sh personal:user2@example.com`
 
 #### Shared Folder Setup
 
-1. From testitesti18: create folder `shared-e2e-test`, share with testitesti19.
-2. From testitesti19: accept invitation, note driveId + itemId from `GET /me/drive/sharedWithMe`.
-3. Canonical ID: `shared:testitesti19@outlook.com:{driveId}:{itemId}`
+1. From user: create folder `shared-e2e-test`, share with user2.
+2. From user2: accept invitation, note driveId + itemId from `GET /me/drive/sharedWithMe`.
+3. Canonical ID: `shared:user2@example.com:{driveId}:{itemId}`
 4. No additional token needed — personal token grants access.
 
 #### Test Scenarios

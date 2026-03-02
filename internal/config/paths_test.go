@@ -10,8 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-const testHome = "/home/testuser"
-
 func TestDefaultConfigDir_NonEmpty(t *testing.T) {
 	dir := DefaultConfigDir()
 	assert.NotEmpty(t, dir)
@@ -41,6 +39,10 @@ func TestDefaultConfigDir_MacOS(t *testing.T) {
 		t.Skip("macOS-only test")
 	}
 
+	// Unset XDG to test platform fallback.
+	t.Setenv("XDG_CONFIG_HOME", "")
+	os.Unsetenv("XDG_CONFIG_HOME")
+
 	dir := DefaultConfigDir()
 	assert.Contains(t, dir, "Library/Application Support")
 }
@@ -49,6 +51,9 @@ func TestDefaultDataDir_MacOS(t *testing.T) {
 	if runtime.GOOS != platformDarwin {
 		t.Skip("macOS-only test")
 	}
+
+	t.Setenv("XDG_DATA_HOME", "")
+	os.Unsetenv("XDG_DATA_HOME")
 
 	dir := DefaultDataDir()
 	assert.Contains(t, dir, "Library/Application Support")
@@ -59,52 +64,62 @@ func TestDefaultCacheDir_MacOS(t *testing.T) {
 		t.Skip("macOS-only test")
 	}
 
+	t.Setenv("XDG_CACHE_HOME", "")
+	os.Unsetenv("XDG_CACHE_HOME")
+
 	dir := DefaultCacheDir()
 	assert.Contains(t, dir, "Library/Caches")
 }
 
-func TestLinuxConfigDir_XDGOverride(t *testing.T) {
-	xdgDir := "/custom/config"
+// XDG override tests: work on ALL platforms (the whole point of the change).
 
+func TestDefaultConfigDir_XDGOverride(t *testing.T) {
+	xdgDir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdgDir)
-	result := linuxConfigDir(testHome)
+
+	result := DefaultConfigDir()
 	assert.Equal(t, filepath.Join(xdgDir, appName), result)
 }
 
-func TestLinuxConfigDir_DefaultFallback(t *testing.T) {
-	// Unset XDG_CONFIG_HOME to test fallback
+func TestDefaultConfigDir_XDGFallback(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
 	os.Unsetenv("XDG_CONFIG_HOME")
-	result := linuxConfigDir(testHome)
-	assert.Equal(t, filepath.Join(testHome, ".config", appName), result)
+
+	result := DefaultConfigDir()
+	assert.NotEmpty(t, result)
+	assert.Contains(t, result, appName)
 }
 
-func TestLinuxDataDir_XDGOverride(t *testing.T) {
-	xdgDir := "/custom/data"
-
+func TestDefaultDataDir_XDGOverride(t *testing.T) {
+	xdgDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", xdgDir)
-	result := linuxDataDir(testHome)
+
+	result := DefaultDataDir()
 	assert.Equal(t, filepath.Join(xdgDir, appName), result)
 }
 
-func TestLinuxDataDir_DefaultFallback(t *testing.T) {
+func TestDefaultDataDir_XDGFallback(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "")
 	os.Unsetenv("XDG_DATA_HOME")
-	result := linuxDataDir(testHome)
-	assert.Equal(t, filepath.Join(testHome, ".local", "share", appName), result)
+
+	result := DefaultDataDir()
+	assert.NotEmpty(t, result)
+	assert.Contains(t, result, appName)
 }
 
-func TestLinuxCacheDir_XDGOverride(t *testing.T) {
-	xdgDir := "/custom/cache"
-
+func TestDefaultCacheDir_XDGOverride(t *testing.T) {
+	xdgDir := t.TempDir()
 	t.Setenv("XDG_CACHE_HOME", xdgDir)
-	result := linuxCacheDir(testHome)
+
+	result := DefaultCacheDir()
 	assert.Equal(t, filepath.Join(xdgDir, appName), result)
 }
 
-func TestLinuxCacheDir_DefaultFallback(t *testing.T) {
+func TestDefaultCacheDir_XDGFallback(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", "")
 	os.Unsetenv("XDG_CACHE_HOME")
-	result := linuxCacheDir(testHome)
-	assert.Equal(t, filepath.Join(testHome, ".cache", appName), result)
+
+	result := DefaultCacheDir()
+	assert.NotEmpty(t, result)
+	assert.Contains(t, result, appName)
 }
