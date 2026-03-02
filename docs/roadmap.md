@@ -803,7 +803,7 @@ Core multi-drive runtime. The Orchestrator is ALWAYS used, even for a single dri
 2. **DriveRunner** in `internal/sync/drive_runner.go`: `DriveReport`, `DriveRunner.run()` with `defer recover()`, `backoffDuration()` (3 consecutive failures → 1m, 5m, 15m, 1h cap). **DONE**.
 3. **Shared `graph.Client` per token path**: `getOrCreateClient(tokenPath)` with `map[string]*clientPair` caching. **DONE**.
 4. **`Orchestrator.RunOnce(ctx, mode, opts)`**: resolve tokens, create clients, create engines via factory, launch DriveRunners concurrently, collect reports. **DONE**.
-5. **sync command rewrite**: `skipConfigAnnotation`, loads raw config via `LoadOrDefault`, resolves drives via `ResolveDrives`, creates Orchestrator → `RunOnce` → `printDriveReports`. Watch mode bridge (`runSyncWatchBridge`) routes to existing single-drive path. **DONE**.
+5. **sync command rewrite**: `skipConfigAnnotation`, loads raw config via `LoadOrDefault`, resolves drives via `ResolveDrives`, creates Orchestrator → `RunOnce` → `printDriveReports`. Watch mode bridge (`runSyncWatchBridge`) routes to existing single-drive path — **temporary**, eliminated in 6.0c when `Orchestrator.RunWatch` replaces it. **DONE**.
 6. **Annotation tests**: `sync` moved to skipConfig list in `TestAnnotationBasedSkipConfig`. **DONE**.
 
 Acceptance: all criteria met. `sync` and `sync --drive X` run through Orchestrator. One drive failure/panic doesn't affect others. Single-drive output identical to previous path. E2E tests pass. Coverage 76.1%.
@@ -814,12 +814,12 @@ Acceptance: all criteria met. `sync` and `sync --drive X` run through Orchestrat
 2. **`check_workers` config key**: integer, default 4, range 1-16. Controls `*semaphore.Weighted` for concurrent QuickXorHash in LocalObserver. Global semaphore shared across all drives.
 3. **Deprecate old keys**: `parallel_downloads`, `parallel_uploads`, `parallel_checkers`. Log warning if found in config, ignore values.
 4. **Worker budget algorithm**: globalCap from `config.transfer_workers`. Per-drive: `weight = max(1, baselineFileCount)`, `allocation = max(4, globalCap * weight / totalWeight)`. Scale down if sum > globalCap due to minPerDrive floors. N=1: full globalCap.
-5. **`Orchestrator.RunWatch(ctx)`**: daemon mode. Starts all drive runners in watch mode.
+5. **`Orchestrator.RunWatch(ctx)`**: daemon mode. Starts all drive runners in watch mode. **Must eliminate `runSyncWatchBridge` and `newSyncEngine` in `sync.go`** — watch mode routes through the Orchestrator like one-shot does. After this, the Orchestrator is the single entry point for all sync modes (one-shot and watch). No parallel engine construction path. No parallel pre-flight validation path. All error reporting goes through `DriveReport`.
 6. **PID file**: flock-based single-instance guard. `sync --watch` shares same PID file path — only one daemon.
 7. **SIGHUP config reload**: re-read config → diff drives → stop removed → start added → restart continued with changed allocation. WorkerPool doesn't support dynamic resize, so changed-allocation drives are stopped + restarted.
 8. **`--drive` repeatable**: `StringArrayVar`. File-op commands check `len <= 1`. sync accepts multiple. No `--drive` = all non-paused drives.
 
-Acceptance: sync --watch starts daemon with correct worker allocation. SIGHUP adds/removes drives. `transfer_workers` + `check_workers` config respected. PID file prevents duplicates.
+Acceptance: sync --watch starts daemon with correct worker allocation. SIGHUP adds/removes drives. `transfer_workers` + `check_workers` config respected. PID file prevents duplicates. `runSyncWatchBridge`, `newSyncEngine`, and `NewDriveSession` deleted — zero engine construction paths outside the Orchestrator. `grep -rn 'newSyncEngine\|runSyncWatchBridge\|NewDriveSession' *.go` returns 0 hits.
 
 ### 6.0d: inotify + E2E + second test account — FUTURE
 
