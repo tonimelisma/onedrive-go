@@ -8,9 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -1747,6 +1749,88 @@ func TestRunWatch_AllObserversDead_ReturnsError(t *testing.T) {
 		t.Fatal("RunWatch did not return within timeout (should exit when all observers die)")
 	}
 }
+
+// TestRunWatch_WatchLimitExhausted_FallsBackToPolling verifies that when the
+// local observer returns ErrWatchLimitExhausted, the engine does NOT consider
+// the observer dead. Instead it falls back to periodic full scanning and
+// RunWatch continues until the context is canceled.
+func TestRunWatch_WatchLimitExhausted_FallsBackToPolling(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+
+	// Create a subdirectory so the ENOSPC watcher has something to fail on.
+	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "subdir"), 0o755))
+
+	// Inject a watcher factory that returns ENOSPC after the first Add (root).
+	eng.localWatcherFactory = func() (FsWatcher, error) {
+		return newEnospcWatcherForEngine(1), nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- eng.RunWatch(ctx, SyncUploadOnly, WatchOpts{
+			PollInterval: 100 * time.Millisecond, // short for fast test
+			Debounce:     10 * time.Millisecond,
+		})
+	}()
+
+	// Wait long enough for the fallback to trigger at least one full scan.
+	time.Sleep(500 * time.Millisecond)
+
+	cancel()
+
+	select {
+	case err := <-done:
+		// RunWatch should return nil (clean shutdown), NOT an "all observers exited" error.
+		assert.NoError(t, err, "RunWatch should return nil on clean shutdown with fallback polling")
+	case <-time.After(10 * time.Second):
+		t.Fatal("RunWatch did not return within timeout")
+	}
+}
+
+// enospcWatcherForEngine is a mock FsWatcher for engine tests that returns
+// ENOSPC after a configurable number of successful Add calls.
+type enospcWatcherForEngine struct {
+	events    chan fsnotify.Event
+	errs      chan error
+	addCount  int
+	failAfter int
+}
+
+func newEnospcWatcherForEngine(failAfter int) *enospcWatcherForEngine {
+	return &enospcWatcherForEngine{
+		events:    make(chan fsnotify.Event, 10),
+		errs:      make(chan error, 10),
+		failAfter: failAfter,
+	}
+}
+
+func (w *enospcWatcherForEngine) Add(string) error {
+	w.addCount++
+	if w.addCount > w.failAfter {
+		return syscall.ENOSPC
+	}
+
+	return nil
+}
+
+func (w *enospcWatcherForEngine) Remove(string) error           { return nil }
+func (w *enospcWatcherForEngine) Events() <-chan fsnotify.Event { return w.events }
+func (w *enospcWatcherForEngine) Errors() <-chan error          { return w.errs }
+func (w *enospcWatcherForEngine) Close() error                  { return nil }
 
 func TestResolveConflict_KeepLocal_TransferFails(t *testing.T) {
 	t.Parallel()

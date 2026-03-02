@@ -86,6 +86,11 @@ type Engine struct {
 	// watchCycleCompletion for delta token commit decisions.
 	cycleFailuresMu stdsync.Mutex
 	cycleFailures   map[string]int
+
+	// localWatcherFactory overrides the default fsnotify watcher factory
+	// for the local observer. Tests inject a mock factory to simulate
+	// inotify watch limit exhaustion (ENOSPC).
+	localWatcherFactory func() (FsWatcher, error)
 }
 
 // NewEngine creates an Engine, initializing the BaselineManager (which opens
@@ -713,6 +718,11 @@ func (e *Engine) startObservers(
 	if mode != SyncDownloadOnly {
 		localObs := NewLocalObserver(bl, e.logger, e.checkWorkers)
 		localObs.safetyScanInterval = opts.SafetyScanInterval
+
+		if e.localWatcherFactory != nil {
+			localObs.watcherFactory = e.localWatcherFactory
+		}
+
 		e.localObs = localObs
 
 		obsWg.Add(1)
@@ -720,7 +730,20 @@ func (e *Engine) startObservers(
 
 		go func() {
 			defer obsWg.Done()
-			errs <- localObs.Watch(ctx, e.syncRoot, events)
+
+			watchErr := localObs.Watch(ctx, e.syncRoot, events)
+			if errors.Is(watchErr, ErrWatchLimitExhausted) {
+				e.logger.Warn("inotify watch limit exhausted, falling back to periodic full scan",
+					slog.Duration("poll_interval", e.resolvePollInterval(opts)),
+				)
+
+				e.runPeriodicFullScan(ctx, localObs, e.syncRoot, events, e.resolvePollInterval(opts))
+				errs <- nil // clean exit after context cancel
+
+				return
+			}
+
+			errs <- watchErr
 		}()
 	}
 
@@ -732,6 +755,45 @@ func (e *Engine) startObservers(
 	}()
 
 	return errs, count
+}
+
+// runPeriodicFullScan runs periodic full filesystem scans as a fallback when
+// inotify watch limits are exhausted. Blocks until the context is canceled.
+// Each scan's events are forwarded to the events channel via trySend.
+func (e *Engine) runPeriodicFullScan(
+	ctx context.Context, obs *LocalObserver, syncRoot string,
+	events chan<- ChangeEvent, interval time.Duration,
+) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	e.logger.Info("periodic full scan fallback started",
+		slog.Duration("interval", interval),
+	)
+
+	for {
+		select {
+		case <-ticker.C:
+			scanEvents, err := obs.FullScan(ctx, syncRoot)
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+
+				e.logger.Warn("periodic full scan failed",
+					slog.String("error", err.Error()),
+				)
+
+				continue
+			}
+
+			for i := range scanEvents {
+				obs.trySend(ctx, events, &scanEvents[i])
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 // processBatch plans and dispatches a batch of path changes. On planner

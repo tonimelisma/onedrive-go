@@ -22,6 +22,7 @@ import (
 var (
 	binaryPath string
 	drive      string
+	drive2     string // optional second drive for multi-drive E2E tests
 	logDir     string
 )
 
@@ -37,6 +38,14 @@ func TestMain(m *testing.M) {
 	}
 
 	testutil.ValidateAllowlist("ONEDRIVE_TEST_DRIVE")
+
+	// Optional second drive for multi-drive E2E tests. Validated against
+	// allowlist when set; multi-drive tests skip gracefully when empty.
+	drive2 = os.Getenv("ONEDRIVE_TEST_DRIVE_2")
+	if drive2 != "" {
+		testutil.ValidateAllowlist("ONEDRIVE_TEST_DRIVE_2")
+		fmt.Fprintf(os.Stderr, "E2E multi-drive: drive2=%s\n", drive2)
+	}
 
 	// Set up directory isolation (must be after drive is set, before binary build).
 	cleanupIsolation := setupIsolation()

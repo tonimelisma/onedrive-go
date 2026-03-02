@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-**Phases 1-5.6 complete. Phase 6.0a-6.0e done (DriveSession, Orchestrator, daemon mode, worker config, driveops package). Next: 6.0d (inotify + E2E), then Phase 6 shared content (6.3-6.4b).** See [docs/roadmap.md](docs/roadmap.md).
+**Phases 1-5.6 complete. Phase 6.0a-6.0e done (DriveSession, Orchestrator, daemon mode, worker config, driveops package). Phase 6.0d done (inotify watch limit detection, multi-drive E2E, CI dual-token). Next: Phase 6 shared content (6.3-6.4b).** See [docs/roadmap.md](docs/roadmap.md).
 
 ## Architecture Overview
 
