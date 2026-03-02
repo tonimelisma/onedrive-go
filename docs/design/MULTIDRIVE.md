@@ -69,6 +69,26 @@ Shortcuts can be created via API: `POST /drive/root/children` with a `remoteItem
 
 Shortcuts can be removed via API: `DELETE /drive/items/{local-item-id}`.
 
+### Phantom System Drives (Personal Accounts)
+
+Every personal OneDrive account has hidden system drives created by Microsoft for the Photos app. These appear in `GET /me/drives` responses alongside the user's actual OneDrive:
+
+| Drive | Description | ID Format | Accessible? |
+|-------|-------------|-----------|-------------|
+| **Face crops** | "Document List to store face crops and other user specific information" | `b!...` (base64) | **No** — HTTP 400 |
+| **Albums** | "Document library to store albums and album items" | `b!...` (base64) | **No** — HTTP 400 |
+| **OneDrive** | User's actual files | Plain hex user ID | Yes |
+
+Key observations:
+- All report `driveType: "personal"` and identical quota numbers
+- System drives have GUID names (e.g., `C022FB8E-9907-45F9-BF47-A403283F090E`)
+- Created by "System Account" at account provisioning time
+- Hosted on `my.microsoftpersonalcontent.com`
+- Return **HTTP 400 `ObjectHandle is Invalid`** on any item operation (`/children`, `/delta`, etc.)
+- **`GET /me/drives` returns them in non-deterministic order** — the real OneDrive may be first, last, or in the middle
+
+**`GET /me/drive` (singular) always returns the correct primary drive.** This is the only safe way to discover the user's primary drive ID during login. The `PrimaryDrive()` graph client method wraps this endpoint. `Drives()` (plural) is only for display purposes (e.g., `whoami`).
+
 ### Family Sharing
 
 **Not an architectural concept.** Microsoft 365 Family gives each member their own independent OneDrive. There is no shared family drive. "Family sharing" is a UI convenience — typing "Family" in the share dialog auto-completes to family group members. At the API level, it produces the exact same sharing mechanism as sharing with any other person. No family-specific API endpoints or behaviors exist. For our purposes, family sharing is indistinguishable from regular sharing.
