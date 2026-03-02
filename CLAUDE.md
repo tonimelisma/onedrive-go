@@ -71,6 +71,7 @@
 - **`internal/sync/`** — Event-driven sync: types, baseline, observers, buffer, planner, executor, tracker, workers, orchestrator, engine, verify
 - **Root package** — Cobra CLI: login, logout, whoami, status, drive (list/add/remove/search), ls, get, put, rm, mkdir, stat, sync, pause, resume, conflicts, resolve, verify
 - **`e2e/`** — E2E test suite against live OneDrive
+- **`testutil/`** — Shared stdlib-only test helpers (used by both `e2e/` and `internal/graph/` integration tests; NOT under `internal/` so e2e can import it)
 
 ## Engineering Philosophy
 
@@ -121,7 +122,32 @@
 - Table-driven tests where appropriate, with specific assertions (check values, not just "no error")
 - Scope verification to own package: `go test ./internal/graph/...` not `go test ./...`
 
-**E2E tests** run against a live OneDrive account (configured in `.env`). Test account names are never committed — use `.env` (gitignored) or environment variables. Both E2E and integration tests require `ONEDRIVE_ALLOWED_TEST_ACCOUNTS` and `ONEDRIVE_TEST_DRIVE` to be set (crashes without them). Copy `.env.example` to `.env` and fill in your test accounts. For full E2E details (credentials, CI setup, bootstrapping, tiers), see [docs/design/test-strategy.md §6](docs/design/test-strategy.md#6-e2e-test-strategy).
+**E2E & integration tests** run against live OneDrive accounts. Test account names are never committed — use `.env` (gitignored) or environment variables. Both suites require `ONEDRIVE_ALLOWED_TEST_ACCOUNTS` and `ONEDRIVE_TEST_DRIVE` to be set (crashes without them). Copy `.env.example` to `.env` and fill in your test accounts. E2E tests are tiered: `e2e` tag (fast, every CI push) vs `e2e_full` tag (slow, nightly/manual, 30-min timeout).
+
+**Test credential pipeline** (one-time setup, then CI is self-sustaining):
+
+1. **Bootstrap** — run once per test account (interactive, requires browser):
+   ```bash
+   ./scripts/bootstrap-test-credentials.sh   # opens browser for OAuth login
+   ```
+   Creates `.testdata/` with token files and `config.toml`. Run multiple times to add accounts (config accumulates drive sections).
+
+2. **Migrate to CI** — upload `.testdata/` to Azure Key Vault:
+   ```bash
+   az login                                   # if not already logged in
+   ./scripts/migrate-test-data-to-ci.sh       # uploads tokens + config to Key Vault
+   ```
+   Secret naming: `onedrive-cache-<sanitized-drive-id>` for tokens, `onedrive-test-config` for config.
+
+3. **CI pipeline** — fully automatic after migration:
+   - Downloads credentials from Key Vault to `.testdata/` via OIDC
+   - Runs tests with XDG isolation (`.testdata/` → temp dirs)
+   - Saves rotated tokens back to Key Vault (keeps refresh tokens alive)
+   - Nightly cron (10 AM UTC) prevents 90-day token expiry
+
+**Re-bootstrapping** is needed if tokens expire (90 days idle) or Azure Key Vault secrets are purged. Run bootstrap + migrate again.
+
+For full details see [docs/design/test-strategy.md §6](docs/design/test-strategy.md#6-e2e-test-strategy).
 
 **Code quality**: Functions do one thing, accept interfaces / return structs, sentinel errors with `%w` wrapping, no package-level mutable state.
 
