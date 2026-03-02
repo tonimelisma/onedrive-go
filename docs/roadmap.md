@@ -790,7 +790,7 @@ Prerequisite refactoring that unblocks all other Phase 6 work.
 4. **SyncRoot overlap validation**: **DONE** — `checkSyncDirOverlap(cfg)` + `isAncestorOrDescendant()`. Called from `validateDrives()`.
 5. **`OwnerEmail` on `graph.Drive`** (B-279): **DONE** — Added in foundation hardening PR.
 6. **`DriveTokenPath` shared case**: **DONE** — Signature: `DriveTokenPath(cid, cfg)`. Passes cfg to `TokenCanonicalID` for shared drive resolution.
-7. **B-224: Eliminate global flag variables**: **DONE** — Two-phase CLIContext: `CLIFlags` struct + `RawConfig`. Zero global mutable flag state.
+7. **B-224: Eliminate global flag variables**: **DONE** — Two-phase CLIContext: `CLIFlags` struct + `Provider`. Zero global mutable flag state.
 8. **B-283: URL-encode SearchSites query**: **DONE** — `url.QueryEscape(query)` in `SearchSites()`.
 
 Acceptance: all criteria met. `clientAndDrive` eliminated. `ResolveDrives` resolves N drives. Shared drives get correct defaults. Overlapping sync_dirs rejected. Coverage 75.1% → 76.3%.
@@ -826,7 +826,7 @@ Acceptance: `transfer_workers` + `check_workers` config respected. Lanes removed
 
 Extract authenticated drive access, token caching, and transfer operations into `internal/driveops/` package. See [design/driveops.md](design/driveops.md) for full design.
 
-1. **`driveops.SessionProvider`**: caches TokenSources by token file path. Created once (CLI PersistentPreRunE), shared with Orchestrator. Thread-safe `UpdateConfig()` for SIGHUP reload.
+1. **`driveops.SessionProvider`**: caches TokenSources by token file path. Created once (CLI PersistentPreRunE), shared with Orchestrator. Config accessed via shared `*config.Holder` (RWMutex) — SIGHUP reload updates config in one place.
 2. **`driveops.Session`**: replaces `DriveSession`. Wraps Meta + Transfer `*graph.Client` pair with `ResolveItem()`, `ListChildren()`, `CleanRemotePath()`.
 3. **Transfer types moved**: `TransferManager`, `SessionStore`, `Downloader`/`Uploader`/`RangeDownloader`/`SessionUploader` interfaces, `SelectHash`, `ComputeQuickXorHash` — all moved from `internal/sync/` to `internal/driveops/`.
 4. **CLI migration**: all file-op commands use `cc.Provider.Session(ctx, cc.Cfg)`. `newSyncEngine` stays in root (takes `*driveops.Session`).

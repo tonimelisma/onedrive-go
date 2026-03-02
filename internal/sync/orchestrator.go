@@ -27,10 +27,11 @@ type engineFactoryFunc func(cfg *EngineConfig) (engineRunner, error)
 
 // OrchestratorConfig holds the inputs for creating an Orchestrator.
 // The CLI layer populates this from resolved config and HTTP clients.
+// Config and config path are accessed via Holder — a single source of truth
+// shared with SessionProvider. SIGHUP reload updates config in one place.
 type OrchestratorConfig struct {
-	Config     *config.Config
+	Holder     *config.Holder
 	Drives     []*config.ResolvedDrive
-	ConfigPath string                    // for SIGHUP reload
 	Provider   *driveops.SessionProvider // token caching + Session creation
 	Logger     *slog.Logger
 	SIGHUPChan <-chan os.Signal // injectable for tests; nil uses no-op channel
@@ -328,7 +329,7 @@ func (o *Orchestrator) reload(
 	ctx context.Context, mode SyncMode, opts WatchOpts,
 	runners map[driveid.CanonicalID]*watchRunner,
 ) {
-	newCfg, err := config.LoadOrDefault(o.cfg.ConfigPath, o.logger)
+	newCfg, err := config.LoadOrDefault(o.cfg.Holder.Path(), o.logger)
 	if err != nil {
 		o.logger.Warn("config reload failed, keeping current state",
 			slog.String("error", err.Error()),
@@ -406,10 +407,9 @@ func (o *Orchestrator) reload(
 		started++
 	}
 
-	// Update both the Orchestrator's and Provider's config references so
-	// future token path resolution uses the reloaded config.
-	o.cfg.Config = newCfg
-	o.cfg.Provider.UpdateConfig(newCfg)
+	// Single-point config update — both Orchestrator and SessionProvider
+	// read through the shared Holder.
+	o.cfg.Holder.Update(newCfg)
 
 	o.logger.Info("config reload complete",
 		slog.Int("started", started),
@@ -420,7 +420,7 @@ func (o *Orchestrator) reload(
 
 // isDrivePaused checks whether a drive is currently paused in the config.
 func (o *Orchestrator) isDrivePaused(cid driveid.CanonicalID) bool {
-	d, ok := o.cfg.Config.Drives[cid]
+	d, ok := o.cfg.Holder.Config().Drives[cid]
 	if !ok {
 		return false
 	}
@@ -467,11 +467,11 @@ func (o *Orchestrator) clearExpiredPauses(cfg *config.Config) {
 			slog.String("drive", cid.String()),
 		)
 
-		if delErr := config.DeleteDriveKey(o.cfg.ConfigPath, cid, "paused"); delErr != nil {
+		if delErr := config.DeleteDriveKey(o.cfg.Holder.Path(), cid, "paused"); delErr != nil {
 			o.logger.Warn("could not clear paused key", slog.String("error", delErr.Error()))
 		}
 
-		if delErr := config.DeleteDriveKey(o.cfg.ConfigPath, cid, "paused_until"); delErr != nil {
+		if delErr := config.DeleteDriveKey(o.cfg.Holder.Path(), cid, "paused_until"); delErr != nil {
 			o.logger.Warn("could not clear paused_until key", slog.String("error", delErr.Error()))
 		}
 
