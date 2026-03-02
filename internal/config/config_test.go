@@ -22,9 +22,8 @@ func TestDefaultConfig_AllFieldsPopulated(t *testing.T) {
 	assert.Empty(t, cfg.SyncPaths)
 
 	// Transfers defaults
-	assert.Equal(t, 8, cfg.ParallelDownloads)
-	assert.Equal(t, 8, cfg.ParallelUploads)
-	assert.Equal(t, 8, cfg.ParallelCheckers)
+	assert.Equal(t, 8, cfg.TransferWorkers)
+	assert.Equal(t, 4, cfg.CheckWorkers)
 	assert.Equal(t, "10MiB", cfg.ChunkSize)
 	assert.Equal(t, "0", cfg.BandwidthLimit)
 	assert.Equal(t, "default", cfg.TransferOrder)
@@ -81,7 +80,7 @@ func TestConfig_EmbeddedStructPromotion(t *testing.T) {
 
 	// These should compile and work because of struct embedding.
 	assert.Equal(t, false, cfg.SkipDotfiles)
-	assert.Equal(t, 8, cfg.ParallelDownloads)
+	assert.Equal(t, 8, cfg.TransferWorkers)
 	assert.Equal(t, 1000, cfg.BigDeleteThreshold)
 	assert.Equal(t, "5m", cfg.PollInterval)
 	assert.Equal(t, "info", cfg.LogLevel)

@@ -395,9 +395,9 @@ func runDriveAdd(cmd *cobra.Command, args []string) error {
 		selector = args[0]
 	}
 
-	// Also accept --drive for backwards compatibility.
-	if selector == "" && cc.Flags.Drive != "" {
-		selector = cc.Flags.Drive
+	// Also accept --drive.
+	if selector == "" {
+		selector = cc.Flags.SingleDrive()
 	}
 
 	if selector == "" {
@@ -487,7 +487,8 @@ func runDriveRemove(cmd *cobra.Command, _ []string) error {
 	cc := mustCLIContext(cmd.Context())
 	logger := cc.Logger
 
-	if cc.Flags.Drive == "" {
+	driveSelector := cc.Flags.SingleDrive()
+	if driveSelector == "" {
 		return fmt.Errorf("--drive is required (specify which drive to remove)")
 	}
 
@@ -503,13 +504,13 @@ func runDriveRemove(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	cid, cidErr := driveid.NewCanonicalID(cc.Flags.Drive)
+	cid, cidErr := driveid.NewCanonicalID(driveSelector)
 	if cidErr != nil {
-		return fmt.Errorf("invalid drive ID %q: %w", cc.Flags.Drive, cidErr)
+		return fmt.Errorf("invalid drive ID %q: %w", driveSelector, cidErr)
 	}
 
 	if _, exists := cfg.Drives[cid]; !exists {
-		return fmt.Errorf("drive %q not found in config", cc.Flags.Drive)
+		return fmt.Errorf("drive %q not found in config", driveSelector)
 	}
 
 	logger.Info("removing drive", "drive", cid.String(), "purge", purge)

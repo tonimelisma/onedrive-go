@@ -12,9 +12,8 @@ import (
 const (
 	defaultIgnoreMarker        = ".odignore"
 	defaultMaxFileSize         = "50GB"
-	defaultParallelDownloads   = 8
-	defaultParallelUploads     = 8
-	defaultParallelCheckers    = 8
+	defaultTransferWorkers     = 8
+	defaultCheckWorkers        = 4
 	defaultChunkSize           = "10MiB"
 	defaultBandwidthLimit      = "0"
 	defaultTransferOrder       = "default"
@@ -63,12 +62,11 @@ func defaultFilterConfig() FilterConfig {
 
 func defaultTransfersConfig() TransfersConfig {
 	return TransfersConfig{
-		ParallelDownloads: defaultParallelDownloads,
-		ParallelUploads:   defaultParallelUploads,
-		ParallelCheckers:  defaultParallelCheckers,
-		ChunkSize:         defaultChunkSize,
-		BandwidthLimit:    defaultBandwidthLimit,
-		TransferOrder:     defaultTransferOrder,
+		TransferWorkers: defaultTransferWorkers,
+		CheckWorkers:    defaultCheckWorkers,
+		ChunkSize:       defaultChunkSize,
+		BandwidthLimit:  defaultBandwidthLimit,
+		TransferOrder:   defaultTransferOrder,
 	}
 }
 

@@ -28,23 +28,21 @@ Examples:
 
 func runResume(cmd *cobra.Command, _ []string) error {
 	cc := mustCLIContext(cmd.Context())
-	logger := cc.Logger
-	cfgPath := cc.CfgPath
 
-	cfg, err := config.LoadOrDefault(cfgPath, logger)
+	cfg, err := config.LoadOrDefault(cc.CfgPath, cc.Logger)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	if cc.Flags.Drive != "" {
-		return resumeSingleDrive(cfgPath, cfg, cc.Flags.Drive, cc.Flags.Quiet)
+	if driveSelector := cc.Flags.SingleDrive(); driveSelector != "" {
+		return resumeSingleDrive(cc, cfg, driveSelector)
 	}
 
-	return resumeAllDrives(cfgPath, cfg, cc.Flags.Quiet)
+	return resumeAllDrives(cc, cfg)
 }
 
 // resumeSingleDrive resumes a specific drive by canonical ID.
-func resumeSingleDrive(cfgPath string, cfg *config.Config, selector string, quiet bool) error {
+func resumeSingleDrive(cc *CLIContext, cfg *config.Config, selector string) error {
 	cid, err := driveid.NewCanonicalID(selector)
 	if err != nil {
 		return fmt.Errorf("invalid drive ID %q: %w", selector, err)
@@ -56,23 +54,23 @@ func resumeSingleDrive(cfgPath string, cfg *config.Config, selector string, quie
 	}
 
 	if d.Paused == nil || !*d.Paused {
-		statusf(quiet, "Drive %s is not paused\n", cid.String())
+		cc.Statusf("Drive %s is not paused\n", cid.String())
 
 		return nil
 	}
 
-	if err := clearPausedKeys(cfgPath, cid); err != nil {
+	if err := clearPausedKeys(cc.CfgPath, cid); err != nil {
 		return err
 	}
 
-	statusf(quiet, "Drive %s resumed\n", cid.String())
-	notifyDaemon(quiet)
+	cc.Statusf("Drive %s resumed\n", cid.String())
+	notifyDaemon(cc)
 
 	return nil
 }
 
 // resumeAllDrives resumes every paused drive in the config.
-func resumeAllDrives(cfgPath string, cfg *config.Config, quiet bool) error {
+func resumeAllDrives(cc *CLIContext, cfg *config.Config) error {
 	if len(cfg.Drives) == 0 {
 		return fmt.Errorf("no drives configured")
 	}
@@ -85,21 +83,21 @@ func resumeAllDrives(cfgPath string, cfg *config.Config, quiet bool) error {
 			continue
 		}
 
-		if err := clearPausedKeys(cfgPath, cid); err != nil {
+		if err := clearPausedKeys(cc.CfgPath, cid); err != nil {
 			return fmt.Errorf("resuming %s: %w", cid.String(), err)
 		}
 
-		statusf(quiet, "Drive %s resumed\n", cid.String())
+		cc.Statusf("Drive %s resumed\n", cid.String())
 		resumed++
 	}
 
 	if resumed == 0 {
-		statusf(quiet, "No paused drives found\n")
+		cc.Statusf("No paused drives found\n")
 
 		return nil
 	}
 
-	notifyDaemon(quiet)
+	notifyDaemon(cc)
 
 	return nil
 }

@@ -1369,7 +1369,7 @@ func TestRunWatch_ProcessBatch_BigDelete(t *testing.T) {
 
 	// Verify no actions were dispatched (big-delete skipped the batch).
 	select {
-	case ta := <-tracker.Interactive():
+	case ta := <-tracker.Ready():
 		t.Errorf("unexpected action dispatched: %s", ta.Action.Path)
 	default:
 		// Good — no actions.

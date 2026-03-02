@@ -45,6 +45,12 @@ func Load(path string, logger *slog.Logger) (*Config, error) {
 		return nil, err
 	}
 
+	// Warn about deprecated keys (parallel_downloads/uploads/checkers).
+	var rawMap map[string]any
+	if _, decodeErr := toml.Decode(string(data), &rawMap); decodeErr == nil {
+		WarnDeprecatedKeys(rawMap, logger)
+	}
+
 	if err := Validate(cfg); err != nil {
 		return nil, fmt.Errorf("config validation failed: %w", err)
 	}

@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-**Phases 1-5.6 complete. Next: Phase 6 (multi-drive orchestration — sub-increments 6.0a-6.0d + shared content sync 6.3-6.4b, see MULTIDRIVE.md §11), Phase 7 (CLI completeness), Phase 8 (WebSocket), Phase 9 (ops hardening), Phase 10 (filtering), Phase 11 (packaging), Phase 12 (post-release).** See [docs/roadmap.md](docs/roadmap.md).
+**Phases 1-5.6 complete. Phase 6.0a-6.0c done (DriveSession, Orchestrator, daemon mode, worker config). Next: 6.0e (driveops package), then 6.0d (inotify + E2E), then Phase 6 shared content (6.3-6.4b).** See [docs/roadmap.md](docs/roadmap.md).
 
 ## Architecture Overview
 
@@ -183,7 +183,7 @@ After each increment, run through this entire checklist. If something fails, fix
 4. [ ] **Lint**: `golangci-lint run`
 5. [ ] **Coverage**: `go tool cover -func=/tmp/cover.out | grep total` — never decrease
 6. [ ] **Fast E2E**: `ONEDRIVE_TEST_DRIVE="personal:testitesti18@outlook.com" go test -tags=e2e -race -v -timeout=10m ./e2e/...`
-7. [ ] **Top-up loop**: Review the entire increment. Identify anything that could be improved — even minor issues (naming, logging, edge cases, defensive checks, test gaps, comments). Present the full list to the human. Then fix all of them automatically, re-run gates 1-6, and review again. Repeat until a full review pass finds zero issues of any size
+7. [ ] **Top-up loop**: Review the entire increment based on the context you have. Do not read or re-read any files at this stage. Identify anything that could be improved — even minor issues (naming, logging, edge cases, defensive checks, test gaps, comments). Present the full list to the human. Then fix all of them automatically, re-run gates 1-6, and review again. Repeat until a full review pass finds zero issues of any size
 8. [ ] **Docs updated**:
     - `CLAUDE.md` — update if structural changes (new packages, commands, deps)
     - `BACKLOG.md` — check before starting work, update when discovering or fixing issues

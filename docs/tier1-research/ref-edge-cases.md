@@ -174,7 +174,7 @@ The reference implementation includes an `xattr` module for reading and writing 
 
 **Each SharePoint library is a separate drive.** A SharePoint document library has its own drive ID, requiring a separate delta query. The reference implementation requires separate configuration directories and sync directories for each library.
 
-**drive_id changes require resync.** Changing the `drive_id` configuration (e.g., switching to a different SharePoint library) requires a full resynchronization (`--resync`). The database state is invalidated by such a change.
+**Switching drives requires resync.** Switching to a different SharePoint library (a different drive) requires a full resynchronization (`--resync`). The database state is invalidated by such a change.
 
 ### 3.2 Shared Folder Behavior
 
@@ -398,7 +398,6 @@ The refresh token can be shared across Docker containers using the same OneDrive
 ### 8.8 Configuration Changes Require Resync
 
 Many configuration changes invalidate the local database state and require a full resync (`--resync`). These include:
-- Changing `drive_id`
 - Enabling/disabling `sync_business_shared_items`
 - Changing `skip_dir`, `skip_file`, `skip_dotfiles`, `skip_symlinks`, `skip_size`
 - Changing `check_nosync`

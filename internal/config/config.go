@@ -40,10 +40,14 @@ type FilterConfig struct {
 
 // TransfersConfig controls parallel workers, chunk sizes, and bandwidth limits.
 // The chunk_size must be a multiple of 320 KiB per the OneDrive upload API spec.
+//
+// transfer_workers controls the number of concurrent upload/download goroutines.
+// check_workers controls the number of concurrent file hashing goroutines.
+// The old parallel_downloads/uploads/checkers keys are deprecated but still
+// accepted — a warning is logged if they appear in the config file.
 type TransfersConfig struct {
-	ParallelDownloads int                      `toml:"parallel_downloads"`
-	ParallelUploads   int                      `toml:"parallel_uploads"`
-	ParallelCheckers  int                      `toml:"parallel_checkers"`
+	TransferWorkers   int                      `toml:"transfer_workers"`
+	CheckWorkers      int                      `toml:"check_workers"`
 	ChunkSize         string                   `toml:"chunk_size"`
 	BandwidthLimit    string                   `toml:"bandwidth_limit"`
 	BandwidthSchedule []BandwidthScheduleEntry `toml:"bandwidth_schedule"`
@@ -114,7 +118,6 @@ type Drive struct {
 	DisplayName  string   `toml:"display_name,omitempty"`
 	Owner        string   `toml:"owner,omitempty"` // drive owner name; for shared drives: "{Owner}'s {FolderName}"
 	RemotePath   string   `toml:"remote_path,omitempty"`
-	DriveID      string   `toml:"drive_id,omitempty"`
 	SkipDotfiles *bool    `toml:"skip_dotfiles,omitempty"`
 	SkipDirs     []string `toml:"skip_dirs,omitempty"`
 	SkipFiles    []string `toml:"skip_files,omitempty"`
