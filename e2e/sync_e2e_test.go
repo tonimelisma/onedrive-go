@@ -150,6 +150,9 @@ func cleanupRemoteFolder(t *testing.T, folder string) {
 // ---------------------------------------------------------------------------
 
 func TestE2E_Sync_UploadOnly(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
 
@@ -174,6 +177,9 @@ func TestE2E_Sync_UploadOnly(t *testing.T) {
 }
 
 func TestE2E_Sync_DownloadOnly(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
 
@@ -210,6 +216,9 @@ func TestE2E_Sync_DownloadOnly(t *testing.T) {
 }
 
 func TestE2E_Sync_DryRun(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
 
@@ -232,6 +241,9 @@ func TestE2E_Sync_DryRun(t *testing.T) {
 }
 
 func TestE2E_Sync_Verify(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
 
@@ -259,6 +271,9 @@ func TestE2E_Sync_Verify(t *testing.T) {
 }
 
 func TestE2E_Sync_Conflicts(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
 
@@ -270,6 +285,9 @@ func TestE2E_Sync_Conflicts(t *testing.T) {
 }
 
 func TestE2E_Sync_DriveRemoveAndReAdd(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
 	// Proves that removing and re-adding a drive preserves the state DB
 	// (via platform default path), allowing incremental delta sync to resume.
 	syncDir := t.TempDir()

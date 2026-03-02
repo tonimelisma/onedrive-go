@@ -210,6 +210,9 @@ Even though test files are exempt from `funlen`, decompose into helper functions
 ### Recursive mkdir with 409 Conflict handling
 Walk path segments, create each. If CreateFolder returns 409, resolve by path and continue with its ID as parent.
 
+### E2E test parallelization
+All top-level E2E test functions use `t.Parallel()`. File-op tests share the TestMain-level token file (last-write-wins on refresh, safe because Microsoft grants a grace period for old refresh tokens). Sync tests each get their own token copy via `writeSyncConfig`. Run with `-parallel 5` to cap concurrency. The existing `OnTokenChange` callback logs token refreshes at Info level; per-test debug log files (via `registerLogDump`) capture all CLI output for diagnosing any future token rotation issues.
+
 ---
 
 ## 5. Config and TOML

@@ -205,30 +205,40 @@ func verifyIsolation(tempRoot string) {
 // --- Isolation verification tests (belt-and-suspenders with verifyIsolation) ---
 
 func TestIsolation_HomeOverridden(t *testing.T) {
+	t.Parallel()
+
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
 	assert.NotEqual(t, realHomeDir, home, "HOME should be overridden to temp dir")
 }
 
 func TestIsolation_XDGDataDir(t *testing.T) {
+	t.Parallel()
+
 	xdg := os.Getenv("XDG_DATA_HOME")
 	assert.NotEmpty(t, xdg, "XDG_DATA_HOME should be set")
 	assert.NotContains(t, xdg, realHomeDir, "XDG_DATA_HOME should not be under real home")
 }
 
 func TestIsolation_XDGConfigDir(t *testing.T) {
+	t.Parallel()
+
 	xdg := os.Getenv("XDG_CONFIG_HOME")
 	assert.NotEmpty(t, xdg, "XDG_CONFIG_HOME should be set")
 	assert.NotContains(t, xdg, realHomeDir, "XDG_CONFIG_HOME should not be under real home")
 }
 
 func TestIsolation_XDGCacheDir(t *testing.T) {
+	t.Parallel()
+
 	xdg := os.Getenv("XDG_CACHE_HOME")
 	assert.NotEmpty(t, xdg, "XDG_CACHE_HOME should be set")
 	assert.NotContains(t, xdg, realHomeDir, "XDG_CACHE_HOME should not be under real home")
 }
 
 func TestIsolation_TokenInTempDir(t *testing.T) {
+	t.Parallel()
+
 	assert.NotEmpty(t, testDataDir, "testDataDir should be set by TestMain")
 	assert.NotContains(t, testDataDir, realHomeDir,
 		"testDataDir should not be under real home")
@@ -241,6 +251,8 @@ func TestIsolation_TokenInTempDir(t *testing.T) {
 }
 
 func TestIsolation_ConfigInTempDir(t *testing.T) {
+	t.Parallel()
+
 	configDir := os.Getenv("XDG_CONFIG_HOME")
 	require.NotEmpty(t, configDir)
 
@@ -250,6 +262,8 @@ func TestIsolation_ConfigInTempDir(t *testing.T) {
 }
 
 func TestIsolation_CredentialsFromTestdata(t *testing.T) {
+	t.Parallel()
+
 	assert.NotEmpty(t, testCredentialDir, "testCredentialDir should be set by TestMain")
 	assert.True(t, strings.HasSuffix(testCredentialDir, ".testdata"),
 		"credentials should come from .testdata/, got: %s", testCredentialDir)
@@ -260,6 +274,9 @@ func TestIsolation_CredentialsFromTestdata(t *testing.T) {
 // home. Runs `status` with --debug and checks that no production paths leak
 // into the output.
 func TestIsolation_BinaryResolvesTemp(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
 

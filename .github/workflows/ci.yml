@@ -200,7 +200,7 @@ jobs:
 
           echo "=== E2E tests (tags: ${E2E_TAGS}) ==="
           E2E_LOG_DIR=/tmp/e2e-debug-logs \
-            go test -tags="${E2E_TAGS}" -race -v -timeout=30m ./e2e/...
+            go test -tags="${E2E_TAGS}" -race -v -parallel 5 -timeout=30m ./e2e/...
 
       - name: Upload E2E debug logs
         if: failure()
