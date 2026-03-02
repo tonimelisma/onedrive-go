@@ -1,4 +1,4 @@
-package sync
+package driveops
 
 import (
 	"context"
@@ -90,7 +90,7 @@ func NewTransferManager(
 		uploads:      ul,
 		sessionStore: store,
 		logger:       logger,
-		hashFunc:     computeQuickXorHash,
+		hashFunc:     ComputeQuickXorHash,
 	}
 }
 
@@ -412,9 +412,9 @@ func (tm *TransferManager) UploadFile(
 		return nil, fmt.Errorf("upload of %s returned nil item", localPath)
 	}
 
-	// Post-upload hash verification. selectHash is defined in
-	// observer_remote.go — it picks QuickXorHash > SHA256Hash (B-222).
-	remoteHash := selectHash(item)
+	// Post-upload hash verification. SelectHash is defined in
+	// hash.go — it picks QuickXorHash > SHA256Hash (B-222).
+	remoteHash := SelectHash(item)
 	if remoteHash != "" && localHash != remoteHash {
 		tm.logger.Warn("upload hash mismatch",
 			slog.String("path", localPath),

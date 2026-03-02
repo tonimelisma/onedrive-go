@@ -820,18 +820,20 @@ Acceptance: all criteria met. `sync` and `sync --drive X` run through Orchestrat
 8. **`--drive` repeatable**: `StringArrayVar` with `SingleDrive()` helper. File-op commands validate `len <= 1`. sync accepts multiple. **DONE**.
 9. **Backlog fixes**: B-288 (quiet→cc.Statusf), B-232 (loadConfig error path tests), B-229 (document Changed vs GetBool), B-230 (printNonZero helper), CI dedup. **DONE**.
 
-Acceptance: `transfer_workers` + `check_workers` config respected. Lanes removed. `runSyncWatchBridge` eliminated. SIGHUP reload implemented. `--drive` repeatable. `newSyncEngine` and `NewDriveSession` remain (file-op commands still use the DriveSession path — see 6.0e driveops). Worker budget algorithm and per-drive allocation deferred to future increment.
+Acceptance: `transfer_workers` + `check_workers` config respected. Lanes removed. `runSyncWatchBridge` eliminated. SIGHUP reload implemented. `--drive` repeatable. Worker budget algorithm and per-drive allocation deferred to future increment. `DriveSession` eliminated in 6.0e (replaced by `driveops.SessionProvider` + `driveops.Session`).
 
-### 6.0e: `internal/driveops/` package — FUTURE
+### 6.0e: `internal/driveops/` package — DONE
 
-Extract `DriveSession` and `newSyncEngine` into `internal/driveops/` package. See [design/driveops.md](design/driveops.md) for full design. After this, the CLI root package has zero Graph/sync construction logic — all commands use `driveops.NewSession()`.
+Extract authenticated drive access, token caching, and transfer operations into `internal/driveops/` package. See [design/driveops.md](design/driveops.md) for full design.
 
-1. **`driveops.Session`**: replaces `DriveSession` and `newSyncEngine`. Single constructor `NewSession(ctx, rd, cfg, metaHTTP, transferHTTP, userAgent, logger)`.
-2. **CLI migration**: all file-op commands (`ls`, `get`, `put`, `rm`, `mkdir`, `stat`, `conflicts`, `verify`, `resolve`) use `driveops.Session`.
-3. **Orchestrator migration**: `prepareDriveWork` uses `driveops.NewSession` instead of inline client construction.
-4. **Delete**: `DriveSession`, `NewDriveSession`, `newSyncEngine` from root package.
+1. **`driveops.SessionProvider`**: caches TokenSources by token file path. Created once (CLI PersistentPreRunE), shared with Orchestrator. Thread-safe `UpdateConfig()` for SIGHUP reload.
+2. **`driveops.Session`**: replaces `DriveSession`. Wraps Meta + Transfer `*graph.Client` pair with `ResolveItem()`, `ListChildren()`, `CleanRemotePath()`.
+3. **Transfer types moved**: `TransferManager`, `SessionStore`, `Downloader`/`Uploader`/`RangeDownloader`/`SessionUploader` interfaces, `SelectHash`, `ComputeQuickXorHash` — all moved from `internal/sync/` to `internal/driveops/`.
+4. **CLI migration**: all file-op commands use `cc.Provider.Session(ctx, cc.Cfg)`. `newSyncEngine` stays in root (takes `*driveops.Session`).
+5. **Orchestrator migration**: deleted `clientPair`, `getOrCreateClient`, `tokenSourceFn`. Uses `o.cfg.Provider.Session(ctx, rd)`.
+6. **Deleted**: `drive_session.go`, `drive_session_test.go`, `newTransferGraphClient()`.
 
-Acceptance: `grep -rn 'NewDriveSession\|newSyncEngine' *.go` returns 0 hits. All commands use `driveops.Session`. Root package has no `graph.NewClient` calls.
+Acceptance: `grep -rn 'NewDriveSession\|type DriveSession' *.go` → 0 hits. `grep -rn 'clientPair\|getOrCreateClient' internal/sync/orchestrator.go` → 0 hits. `TransferManager` and `SessionStore` live in `internal/driveops/`. Root package has one `graph.NewClient` call (in `newGraphClient`, used by auth/drive commands).
 
 ### 6.0d: inotify + E2E + second test account — FUTURE
 

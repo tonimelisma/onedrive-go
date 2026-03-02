@@ -167,7 +167,7 @@ func resolveSingleKeepBoth(ctx context.Context, cc *CLIContext, mgr *sync.Baseli
 func resolveWithTransfers(
 	ctx context.Context, cc *CLIContext, args []string, resolution string, all, dryRun bool,
 ) error {
-	session, err := NewDriveSession(ctx, cc.Cfg, cc.RawConfig, cc.Logger)
+	session, err := cc.Provider.Session(ctx, cc.Cfg)
 	if err != nil {
 		return err
 	}

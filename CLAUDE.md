@@ -2,11 +2,11 @@
 
 ## Project Summary
 
-**onedrive-go** — a fast, safe, and well-tested OneDrive CLI and sync client in Go. Unix-style file operations (`ls`, `get`, `put`) plus robust bidirectional sync with conflict tracking. Targets Linux and macOS. MIT licensed. "Pragmatic Flat" architecture (7 active packages). See [docs/design/event-driven-rationale.md](docs/design/event-driven-rationale.md).
+**onedrive-go** — a fast, safe, and well-tested OneDrive CLI and sync client in Go. Unix-style file operations (`ls`, `get`, `put`) plus robust bidirectional sync with conflict tracking. Targets Linux and macOS. MIT licensed. "Pragmatic Flat" architecture (8 active packages). See [docs/design/event-driven-rationale.md](docs/design/event-driven-rationale.md).
 
 ## Current Phase
 
-**Phases 1-5.6 complete. Phase 6.0a-6.0c done (DriveSession, Orchestrator, daemon mode, worker config). Next: 6.0e (driveops package), then 6.0d (inotify + E2E), then Phase 6 shared content (6.3-6.4b).** See [docs/roadmap.md](docs/roadmap.md).
+**Phases 1-5.6 complete. Phase 6.0a-6.0e done (DriveSession, Orchestrator, daemon mode, worker config, driveops package). Next: 6.0d (inotify + E2E), then Phase 6 shared content (6.3-6.4b).** See [docs/roadmap.md](docs/roadmap.md).
 
 ## Architecture Overview
 
@@ -16,25 +16,32 @@
 │  ls, get, put, rm, mkdir, sync, pause, resume, status, conflicts,  │
 │  resolve, login, logout, whoami, verify                            │
 └──────────┬───────────────────────────────────────────────────────────┘
-           │ file ops (direct API)                 │ sync operations
+           │ file ops                              │ sync operations
            │                                       │
            ▼                                       ▼
-┌──────────────────────┐             ┌──────────────────────────────┐
-│   internal/graph/    │◄────────────│       internal/sync/         │
-│   Graph API client   │             │  engine, observers, buffer,  │
-│   + quirk handling   │             │  planner, executor, baseline │
-│   + auth             │             │  tracker, workers, sessions  │
-└─────────┬────────────┘             └──────────────┬───────────────┘
-          │                                         │
-          ├─────────┐                               │
-          │         ▼                               │
-          │  ┌──────────────────────┐               │
-          │  │ internal/tokenfile/  │               │
-          │  │ token I/O (leaf pkg) │               │
-          │  └──────────────────────┘               │
-          │         ▲                               │
-          │          ┌──────────────────────┐       │
-          ├─────────►│  internal/driveid/   │◄──────┤
+┌──────────────────────────┐         ┌──────────────────────────────┐
+│  internal/driveops/      │◄────────│       internal/sync/         │
+│  SessionProvider, Session│         │  engine, observers, buffer,  │
+│  TransferManager, hashing│         │  planner, executor, baseline │
+└──────────┬───────────────┘         │  tracker, workers, orch      │
+           │                         └──────────────┬───────────────┘
+           ▼                                        │
+┌──────────────────────┐                            │
+│   internal/graph/    │◄───────────────────────────┘
+│   Graph API client   │
+│   + quirk handling   │
+│   + auth             │
+└─────────┬────────────┘
+          │
+          ├─────────┐
+          │         ▼
+          │  ┌──────────────────────┐
+          │  │ internal/tokenfile/  │
+          │  │ token I/O (leaf pkg) │
+          │  └──────────────────────┘
+          │         ▲
+          │          ┌──────────────────────┐
+          ├─────────►│  internal/driveid/   │◄──────┐
           │          │  ID, CanonicalID,    │       │
           │          │  ItemKey (pure ID)   │       │
           │          └──────────┬───────────┘       │
@@ -52,7 +59,7 @@
                      └────────────────┘
 ```
 
-**Dependency direction**: `cmd/` -> `internal/*` -> `pkg/*`. No cycles. `internal/driveid/` and `internal/tokenfile/` are leaf packages. `driveid` is pure identity (no business logic); `config` imports `driveid` and provides `TokenCanonicalID()` for token resolution. Both `graph/` and `config/` import `tokenfile/` for token file I/O. `internal/graph/` does NOT import `internal/config/` — callers pass token paths directly. See [docs/design/architecture.md](docs/design/architecture.md).
+**Dependency direction**: `cmd/` -> `internal/driveops/` -> `internal/graph/` -> `pkg/*`. `internal/sync/` -> `internal/driveops/`. No cycles. `driveops` does NOT import `sync`. `internal/driveid/` and `internal/tokenfile/` are leaf packages. `driveid` is pure identity (no business logic); `config` imports `driveid` and provides `TokenCanonicalID()` for token resolution. Both `graph/` and `config/` import `tokenfile/` for token file I/O. `internal/graph/` does NOT import `internal/config/` — callers pass token paths directly. See [docs/design/architecture.md](docs/design/architecture.md).
 
 **Packages:**
 - **`pkg/quickxorhash/`** — QuickXorHash algorithm (hash.Hash interface)
@@ -60,7 +67,8 @@
 - **`internal/tokenfile/`** — Token file format + I/O (leaf package: stdlib + oauth2 only)
 - **`internal/config/`** — TOML config, drive sections, XDG paths, four-layer override chain, token resolution (`TokenCanonicalID()`)
 - **`internal/graph/`** — Graph API client: auth, retry, items CRUD, delta, transfers
-- **`internal/sync/`** — Event-driven sync: types, baseline, observers, buffer, planner, executor, transfer_manager, tracker, workers, session_store, engine, verify
+- **`internal/driveops/`** — Authenticated drive access: SessionProvider (token caching), Session (Meta + Transfer clients), TransferManager (download/upload with resume), SessionStore (upload session persistence), transfer interfaces, hash utilities
+- **`internal/sync/`** — Event-driven sync: types, baseline, observers, buffer, planner, executor, tracker, workers, orchestrator, engine, verify
 - **Root package** — Cobra CLI: login, logout, whoami, status, drive (list/add/remove/search), ls, get, put, rm, mkdir, stat, sync, pause, resume, conflicts, resolve, verify
 - **`e2e/`** — E2E test suite against live OneDrive
 

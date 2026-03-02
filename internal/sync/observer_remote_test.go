@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -894,9 +895,9 @@ func TestSelectHash(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := selectHash(&tt.item)
+			got := driveops.SelectHash(&tt.item)
 			if got != tt.want {
-				t.Errorf("selectHash() = %q, want %q", got, tt.want)
+				t.Errorf("SelectHash() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -1378,9 +1379,9 @@ func TestSelectHash_FallbackChain(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := selectHash(&tt.item)
+			got := driveops.SelectHash(&tt.item)
 			if got != tt.want {
-				t.Errorf("selectHash() = %q, want %q", got, tt.want)
+				t.Errorf("SelectHash() = %q, want %q", got, tt.want)
 			}
 		})
 	}
