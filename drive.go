@@ -389,11 +389,6 @@ func runDriveAdd(cmd *cobra.Command, args []string) error {
 	logger := cc.Logger
 	cfgPath := cc.CfgPath
 
-	cfg, err := config.LoadOrDefault(cfgPath, logger)
-	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
-	}
-
 	// If a positional arg is provided, use it as the canonical ID.
 	selector := ""
 	if len(args) > 0 {
@@ -406,7 +401,7 @@ func runDriveAdd(cmd *cobra.Command, args []string) error {
 	}
 
 	if selector == "" {
-		return listAvailableDrives(cfg)
+		return listAvailableDrives()
 	}
 
 	cid, err := driveid.NewCanonicalID(selector)
@@ -414,19 +409,20 @@ func runDriveAdd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid canonical ID %q: %w", selector, err)
 	}
 
-	// Check if the drive already exists in config.
-	if _, exists := cfg.Drives[cid]; exists {
-		fmt.Printf("Drive %s is already configured.\n", cid.String())
-
-		return nil
-	}
-
-	return addNewDrive(cfgPath, cfg, cid, logger)
+	return addNewDrive(cfgPath, cid, logger)
 }
 
 // addNewDrive adds a new drive to the config with a computed default sync_dir.
-func addNewDrive(cfgPath string, cfg *config.Config, cid driveid.CanonicalID, logger *slog.Logger) error {
-	// Verify a token exists for this drive's account.
+// If the drive already exists, reports it as already configured. Token
+// existence is verified as a precondition before writing config.
+func addNewDrive(cfgPath string, cid driveid.CanonicalID, logger *slog.Logger) error {
+	// Verify a token exists for this drive's account. Load config for
+	// token resolution (shared drives may reference a primary account's token).
+	cfg, err := config.LoadOrDefault(cfgPath, logger)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+
 	tokenCID, err := config.TokenCanonicalID(cid, cfg)
 	if err != nil {
 		return fmt.Errorf("cannot resolve token for %s: %w", cid.String(), err)
@@ -437,19 +433,19 @@ func addNewDrive(cfgPath string, cfg *config.Config, cid driveid.CanonicalID, lo
 		return fmt.Errorf("cannot determine data directory for %s", cid.Email())
 	}
 
-	if _, err := os.Stat(tokenPath); errors.Is(err, os.ErrNotExist) {
+	if _, statErr := os.Stat(tokenPath); errors.Is(statErr, os.ErrNotExist) {
 		return fmt.Errorf("no token file for %s — run 'onedrive-go login' first", cid.Email())
 	}
 
-	// Compute default sync_dir using the shared config helpers.
-	meta := config.ReadTokenMeta(cid, logger)
-	existingDirs := config.CollectOtherSyncDirs(cfg, cid, logger)
-	syncDir := config.DefaultSyncDir(cid, meta["org_name"], meta["display_name"], existingDirs)
-	logger.Info("adding drive", "canonical_id", cid.String(), "sync_dir", syncDir)
-
-	// Append to config.
-	if err := config.AppendDriveSection(cfgPath, cid, syncDir); err != nil {
+	syncDir, added, err := config.EnsureDriveInConfig(cfgPath, cid, logger)
+	if err != nil {
 		return fmt.Errorf("adding drive to config: %w", err)
+	}
+
+	if !added {
+		fmt.Printf("Drive %s is already configured.\n", cid.String())
+
+		return nil
 	}
 
 	driveDisplayName := config.DefaultDisplayName(cid)
@@ -460,7 +456,7 @@ func addNewDrive(cfgPath string, cfg *config.Config, cid driveid.CanonicalID, lo
 
 // listAvailableDrives lists drives that can be added. Shows usage guidance
 // when no canonical ID argument is provided.
-func listAvailableDrives(_ *config.Config) error {
+func listAvailableDrives() error {
 	fmt.Println("Run 'onedrive-go drive add <canonical-id>' to add a drive.")
 	fmt.Println("Run 'onedrive-go drive list' to see available drives.")
 
