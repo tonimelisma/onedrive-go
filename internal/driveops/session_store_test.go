@@ -1,6 +1,7 @@
 package driveops
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -22,10 +23,10 @@ func TestSessionStore_SaveLoadDelete(t *testing.T) {
 	store := NewSessionStore(dir, testLogger(t))
 
 	driveID := "drive-1"
-	remotePath := "/docs/report.docx"
+	localPath := "/docs/report.docx"
 
 	// Load from empty store returns nil.
-	rec, err := store.Load(driveID, remotePath)
+	rec, err := store.Load(driveID, localPath)
 	if err != nil {
 		t.Fatalf("Load empty: %v", err)
 	}
@@ -36,7 +37,7 @@ func TestSessionStore_SaveLoadDelete(t *testing.T) {
 
 	// Save a record.
 	now := time.Now().UTC().Truncate(time.Second)
-	err = store.Save(driveID, remotePath, &SessionRecord{
+	err = store.Save(driveID, localPath, &SessionRecord{
 		SessionURL: "https://example.com/upload/abc",
 		FileHash:   "hash123",
 		FileSize:   1024,
@@ -47,7 +48,7 @@ func TestSessionStore_SaveLoadDelete(t *testing.T) {
 	}
 
 	// Load it back.
-	rec, err = store.Load(driveID, remotePath)
+	rec, err = store.Load(driveID, localPath)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -60,8 +61,8 @@ func TestSessionStore_SaveLoadDelete(t *testing.T) {
 		t.Errorf("DriveID = %q, want %q", rec.DriveID, driveID)
 	}
 
-	if rec.RemotePath != remotePath {
-		t.Errorf("RemotePath = %q, want %q", rec.RemotePath, remotePath)
+	if rec.LocalPath != localPath {
+		t.Errorf("LocalPath = %q, want %q", rec.LocalPath, localPath)
 	}
 
 	if rec.SessionURL != "https://example.com/upload/abc" {
@@ -81,13 +82,13 @@ func TestSessionStore_SaveLoadDelete(t *testing.T) {
 	}
 
 	// Delete it.
-	delErr := store.Delete(driveID, remotePath)
+	delErr := store.Delete(driveID, localPath)
 	if delErr != nil {
 		t.Fatalf("Delete: %v", delErr)
 	}
 
 	// Load after delete returns nil.
-	rec, err = store.Load(driveID, remotePath)
+	rec, err = store.Load(driveID, localPath)
 	if err != nil {
 		t.Fatalf("Load after delete: %v", err)
 	}
@@ -116,7 +117,7 @@ func TestSessionStore_CorruptFile(t *testing.T) {
 	store := NewSessionStore(dir, testLogger(t))
 
 	driveID := "drive-1"
-	remotePath := "/corrupt.txt"
+	localPath := "/corrupt.txt"
 
 	// Write a corrupt JSON file at the expected path.
 	sessionDir := filepath.Join(dir, sessionSubdir)
@@ -124,17 +125,17 @@ func TestSessionStore_CorruptFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	key := sessionKey(driveID, remotePath)
+	key := sessionKey(driveID, localPath)
 	corruptPath := filepath.Join(sessionDir, key)
 
 	if err := os.WriteFile(corruptPath, []byte("{not valid json"), sessionFilePerms); err != nil {
 		t.Fatal(err)
 	}
 
-	// Load should return nil (corrupt file deleted).
-	rec, err := store.Load(driveID, remotePath)
-	if err != nil {
-		t.Fatalf("Load corrupt: %v", err)
+	// Load should return ErrCorruptSession (corrupt file deleted).
+	rec, err := store.Load(driveID, localPath)
+	if !errors.Is(err, ErrCorruptSession) {
+		t.Fatalf("Load corrupt: expected ErrCorruptSession, got %v", err)
 	}
 
 	if rec != nil {
@@ -154,10 +155,10 @@ func TestSessionStore_Overwrite(t *testing.T) {
 	store := NewSessionStore(dir, testLogger(t))
 
 	driveID := "drive-1"
-	remotePath := "/overwrite.txt"
+	localPath := "/overwrite.txt"
 
 	// Save first record.
-	err := store.Save(driveID, remotePath, &SessionRecord{
+	err := store.Save(driveID, localPath, &SessionRecord{
 		SessionURL: "https://example.com/old",
 		FileHash:   "old-hash",
 		FileSize:   100,
@@ -167,7 +168,7 @@ func TestSessionStore_Overwrite(t *testing.T) {
 	}
 
 	// Overwrite with new record.
-	err = store.Save(driveID, remotePath, &SessionRecord{
+	err = store.Save(driveID, localPath, &SessionRecord{
 		SessionURL: "https://example.com/new",
 		FileHash:   "new-hash",
 		FileSize:   200,
@@ -177,7 +178,7 @@ func TestSessionStore_Overwrite(t *testing.T) {
 	}
 
 	// Load should return the new record.
-	rec, err := store.Load(driveID, remotePath)
+	rec, err := store.Load(driveID, localPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +198,7 @@ func TestSessionStore_DifferentKeys(t *testing.T) {
 	dir := t.TempDir()
 	store := NewSessionStore(dir, testLogger(t))
 
-	// Two different remote paths should produce different session files.
+	// Two different local paths should produce different session files.
 	err := store.Save("drive-1", "/path-a", &SessionRecord{
 		SessionURL: "https://example.com/a",
 		FileHash:   "hash-a",
@@ -401,6 +402,18 @@ func TestSessionKey_Deterministic(t *testing.T) {
 	key4 := sessionKey("drive-1", "/other/file.txt")
 	if key1 == key4 {
 		t.Error("different paths produced same key")
+	}
+}
+
+func TestSessionKey_NoDelimiterCollision(t *testing.T) {
+	t.Parallel()
+
+	// "a:" + "b" must differ from "a" + ":b" — the length-prefixed format prevents this.
+	key1 := sessionKey("a:", "b")
+	key2 := sessionKey("a", ":b")
+
+	if key1 == key2 {
+		t.Error("delimiter collision: sessionKey(\"a:\", \"b\") == sessionKey(\"a\", \":b\")")
 	}
 }
 

@@ -3,8 +3,10 @@ package driveops
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 
@@ -212,4 +214,106 @@ func TestSessionProvider_TokenSourceError(t *testing.T) {
 	_, err = p.Session(context.Background(), rd)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "disk read failed")
+}
+
+// --- ResolveItem ---
+
+// newTestSession creates a Session backed by an httptest.Server.
+// The handler receives the request path for assertion.
+func newTestSession(t *testing.T, handler http.Handler) *Session {
+	t.Helper()
+
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	client := graph.NewClient(srv.URL, srv.Client(), &stubTokenSource{}, slog.Default(), "test/1.0")
+
+	return &Session{
+		Meta:    client,
+		DriveID: driveid.New("abcdef0123456789"),
+	}
+}
+
+func TestSession_ResolveItem_Root(t *testing.T) {
+	t.Parallel()
+
+	var gotPath string
+
+	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		fmt.Fprintf(w, `{"id":"root-id","name":"root"}`)
+	}))
+
+	item, err := s.ResolveItem(context.Background(), "")
+	require.NoError(t, err)
+	assert.Equal(t, "root-id", item.ID)
+	assert.Equal(t, "/drives/abcdef0123456789/items/root", gotPath)
+}
+
+func TestSession_ResolveItem_Path(t *testing.T) {
+	t.Parallel()
+
+	var gotPath string
+
+	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		fmt.Fprintf(w, `{"id":"doc-id","name":"file.txt"}`)
+	}))
+
+	item, err := s.ResolveItem(context.Background(), "Documents/file.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "doc-id", item.ID)
+	assert.Equal(t, "/drives/abcdef0123456789/root:/Documents/file.txt:", gotPath)
+}
+
+func TestSession_ResolveItem_SlashRoot(t *testing.T) {
+	t.Parallel()
+
+	var gotPath string
+
+	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		fmt.Fprintf(w, `{"id":"root-id","name":"root"}`)
+	}))
+
+	item, err := s.ResolveItem(context.Background(), "/")
+	require.NoError(t, err)
+	assert.Equal(t, "root-id", item.ID)
+	assert.Equal(t, "/drives/abcdef0123456789/items/root", gotPath)
+}
+
+// --- ListChildren ---
+
+func TestSession_ListChildren_Root(t *testing.T) {
+	t.Parallel()
+
+	var gotPath string
+
+	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		fmt.Fprintf(w, `{"value":[{"id":"child1","name":"docs"}]}`)
+	}))
+
+	items, err := s.ListChildren(context.Background(), "")
+	require.NoError(t, err)
+	assert.Len(t, items, 1)
+	assert.Equal(t, "child1", items[0].ID)
+	assert.Contains(t, gotPath, "/drives/abcdef0123456789/items/root/children")
+}
+
+func TestSession_ListChildren_Path(t *testing.T) {
+	t.Parallel()
+
+	var gotPath string
+
+	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		fmt.Fprintf(w, `{"value":[{"id":"child2","name":"report.docx"}]}`)
+	}))
+
+	items, err := s.ListChildren(context.Background(), "Documents")
+	require.NoError(t, err)
+	assert.Len(t, items, 1)
+	assert.Equal(t, "child2", items[0].ID)
+	assert.Contains(t, gotPath, "/drives/abcdef0123456789/root:/Documents:/children")
 }
