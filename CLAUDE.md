@@ -193,6 +193,7 @@ After each increment, run through this entire checklist. If something fails, fix
 9. [ ] **Push and CI green**: Push branch, open PR, both `ci.yml` and `integration.yml` green. Merge with `./scripts/poll-and-merge.sh <pr_number>`
 10. [ ] **Cleanup**: Clean `git status`. Remove the current worktree after merge. **NEVER delete other worktrees or branches — even if they appear stale.** Instead, report all other worktrees and branches to the human, including their last commit date (use `git log -1 --format='%ci' <branch>` for each). Let the human decide what to clean up
 11. [ ] **Increment report**: Present to the human:
+    - **Plan deviations**: For every deviation from the approved plan — what changed, why it changed, what was done instead, and whether the new approach is the long-term solution or a temporary measure that needs follow-up (with BACKLOG IDs for any follow-up)
     - **Process changes**: What you would do differently next time in how the work was planned or executed
     - **Top-up recommendations**: Any remaining codebase improvements you'd make
     - **Architecture re-envisioning**: If you were starting from a blank slate, would you build it the same way? Propose any dramatic architectural changes if a better design is apparent
