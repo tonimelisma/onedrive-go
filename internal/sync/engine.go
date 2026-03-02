@@ -10,24 +10,29 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 )
 
 // forceSafetyMax is the maximum threshold used when --force is set,
 // effectively disabling big-delete protection.
 const forceSafetyMax = math.MaxInt32
 
+// staleSessionAge is used by postSyncHousekeeping for session file cleanup.
+// Mirrors the default in driveops.SessionStore.
+const staleSessionAge = 7 * 24 * time.Hour
+
 // EngineConfig holds the options for NewEngine. Uses a struct because
 // seven fields is too many for positional parameters.
 type EngineConfig struct {
-	DBPath          string        // path to the SQLite state database
-	SyncRoot        string        // absolute path to the local sync directory
-	DataDir         string        // application data directory for session files (optional)
-	DriveID         driveid.ID    // normalized drive identifier
-	Fetcher         DeltaFetcher  // satisfied by *graph.Client
-	Items           ItemClient    // satisfied by *graph.Client
-	Downloads       Downloader    // satisfied by *graph.Client
-	Uploads         Uploader      // satisfied by *graph.Client
-	DriveVerifier   DriveVerifier // optional: verified at startup (B-074); nil skips check
+	DBPath          string              // path to the SQLite state database
+	SyncRoot        string              // absolute path to the local sync directory
+	DataDir         string              // application data directory for session files (optional)
+	DriveID         driveid.ID          // normalized drive identifier
+	Fetcher         DeltaFetcher        // satisfied by *graph.Client
+	Items           ItemClient          // satisfied by *graph.Client
+	Downloads       driveops.Downloader // satisfied by *graph.Client
+	Uploads         driveops.Uploader   // satisfied by *graph.Client
+	DriveVerifier   DriveVerifier       // optional: verified at startup (B-074); nil skips check
 	Logger          *slog.Logger
 	UseLocalTrash   bool // move deleted local files to OS trash instead of permanent delete
 	TransferWorkers int  // goroutine count for the worker pool (0 → minWorkers)
@@ -107,13 +112,13 @@ func NewEngine(cfg *EngineConfig) (*Engine, error) {
 
 	// Construct sessionStore and TransferManager together so the TM is
 	// immutable after creation (no post-hoc field mutation).
-	var sessionStore *SessionStore
+	var sessionStore *driveops.SessionStore
 	if cfg.DataDir != "" {
-		sessionStore = NewSessionStore(cfg.DataDir, cfg.Logger)
+		sessionStore = driveops.NewSessionStore(cfg.DataDir, cfg.Logger)
 		execCfg.sessionStore = sessionStore
 	}
 
-	execCfg.transferMgr = NewTransferManager(cfg.Downloads, cfg.Uploads, sessionStore, cfg.Logger)
+	execCfg.transferMgr = driveops.NewTransferManager(cfg.Downloads, cfg.Uploads, sessionStore, cfg.Logger)
 
 	return &Engine{
 		baseline:        bm,

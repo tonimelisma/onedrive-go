@@ -16,6 +16,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -24,14 +25,15 @@ import (
 func testOrchestratorConfig(t *testing.T, drives ...*config.ResolvedDrive) *OrchestratorConfig {
 	t.Helper()
 
+	cfg := config.DefaultConfig()
+	provider := driveops.NewSessionProvider(cfg, &http.Client{}, &http.Client{}, "test/1.0", slog.Default())
+
 	return &OrchestratorConfig{
-		Config:       config.DefaultConfig(),
-		Drives:       drives,
-		ConfigPath:   "/tmp/test-config.toml",
-		MetaHTTP:     &http.Client{},
-		TransferHTTP: &http.Client{},
-		UserAgent:    "test/1.0",
-		Logger:       slog.Default(),
+		Config:     cfg,
+		Drives:     drives,
+		ConfigPath: "/tmp/test-config.toml",
+		Provider:   provider,
+		Logger:     slog.Default(),
 	}
 }
 
@@ -53,6 +55,11 @@ type stubTokenSource struct{}
 
 func (s *stubTokenSource) Token() (string, error) { return "test-token", nil }
 
+// stubTokenSourceFn returns a TokenSourceFn that always succeeds.
+func stubTokenSourceFn(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
+	return &stubTokenSource{}, nil
+}
+
 // --- NewOrchestrator ---
 
 func TestNewOrchestrator_ReturnsNonNil(t *testing.T) {
@@ -61,7 +68,6 @@ func TestNewOrchestrator_ReturnsNonNil(t *testing.T) {
 
 	require.NotNil(t, orch)
 	assert.Equal(t, cfg, orch.cfg)
-	assert.NotNil(t, orch.clients)
 	assert.NotNil(t, orch.logger)
 }
 
@@ -69,58 +75,8 @@ func TestNewOrchestrator_DefaultFactories(t *testing.T) {
 	cfg := testOrchestratorConfig(t)
 	orch := NewOrchestrator(cfg)
 
-	// engineFactory and tokenSourceFn are set to defaults (non-nil).
+	// engineFactory is set to default (non-nil).
 	assert.NotNil(t, orch.engineFactory)
-	assert.NotNil(t, orch.tokenSourceFn)
-}
-
-// --- getOrCreateClient ---
-
-func TestGetOrCreateClient_SamePathReturnsSamePointer(t *testing.T) {
-	cfg := testOrchestratorConfig(t)
-	orch := NewOrchestrator(cfg)
-	orch.tokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
-		return &stubTokenSource{}, nil
-	}
-
-	pair1, err := orch.getOrCreateClient(context.Background(), "/tmp/token_a.json")
-	require.NoError(t, err)
-	require.NotNil(t, pair1)
-
-	pair2, err := orch.getOrCreateClient(context.Background(), "/tmp/token_a.json")
-	require.NoError(t, err)
-
-	// Same token path should yield the exact same pointer.
-	assert.Same(t, pair1, pair2)
-}
-
-func TestGetOrCreateClient_DifferentPathReturnsDifferentPointer(t *testing.T) {
-	cfg := testOrchestratorConfig(t)
-	orch := NewOrchestrator(cfg)
-	orch.tokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
-		return &stubTokenSource{}, nil
-	}
-
-	pair1, err := orch.getOrCreateClient(context.Background(), "/tmp/token_a.json")
-	require.NoError(t, err)
-
-	pair2, err := orch.getOrCreateClient(context.Background(), "/tmp/token_b.json")
-	require.NoError(t, err)
-
-	assert.NotSame(t, pair1, pair2)
-}
-
-func TestGetOrCreateClient_TokenError(t *testing.T) {
-	cfg := testOrchestratorConfig(t)
-	orch := NewOrchestrator(cfg)
-	orch.tokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
-		return nil, errors.New("not logged in")
-	}
-
-	pair, err := orch.getOrCreateClient(context.Background(), "/tmp/no-token.json")
-	assert.Error(t, err)
-	assert.Nil(t, pair)
-	assert.Contains(t, err.Error(), "not logged in")
 }
 
 // --- RunOnce ---
@@ -136,16 +92,14 @@ func TestRunOnce_ZeroDrives(t *testing.T) {
 func TestRunOnce_OneDrive_Success(t *testing.T) {
 	rd := testResolvedDrive(t, "personal:test@example.com", "Test")
 	cfg := testOrchestratorConfig(t, rd)
-	orch := NewOrchestrator(cfg)
-	orch.tokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
-		return &stubTokenSource{}, nil
-	}
+	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
 	expectedReport := &SyncReport{
 		Mode:      SyncBidirectional,
 		Downloads: 5,
 	}
 
+	orch := NewOrchestrator(cfg)
 	orch.engineFactory = func(_ *EngineConfig) (engineRunner, error) {
 		return &mockEngine{report: expectedReport}, nil
 	}
@@ -163,14 +117,12 @@ func TestRunOnce_TwoDrives_OneFailsOneSucceeds(t *testing.T) {
 	rd1 := testResolvedDrive(t, "personal:fail@example.com", "Failing")
 	rd2 := testResolvedDrive(t, "personal:ok@example.com", "Working")
 	cfg := testOrchestratorConfig(t, rd1, rd2)
-	orch := NewOrchestrator(cfg)
-	orch.tokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
-		return &stubTokenSource{}, nil
-	}
+	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
 	errDelta := errors.New("delta gone")
 	okReport := &SyncReport{Mode: SyncBidirectional, Uploads: 2}
 
+	orch := NewOrchestrator(cfg)
 	orch.engineFactory = func(ecfg *EngineConfig) (engineRunner, error) {
 		if ecfg.SyncRoot == rd1.SyncDir {
 			return &mockEngine{err: errDelta}, nil
@@ -205,13 +157,11 @@ func TestRunOnce_PanicRecovery(t *testing.T) {
 	rd1 := testResolvedDrive(t, "personal:panic@example.com", "Panicking")
 	rd2 := testResolvedDrive(t, "personal:stable@example.com", "Stable")
 	cfg := testOrchestratorConfig(t, rd1, rd2)
-	orch := NewOrchestrator(cfg)
-	orch.tokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
-		return &stubTokenSource{}, nil
-	}
+	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
 	stableReport := &SyncReport{Mode: SyncBidirectional, Downloads: 1}
 
+	orch := NewOrchestrator(cfg)
 	orch.engineFactory = func(ecfg *EngineConfig) (engineRunner, error) {
 		if ecfg.SyncRoot == rd1.SyncDir {
 			return &mockEngine{shouldPanic: true}, nil
@@ -245,14 +195,12 @@ func TestRunOnce_PanicRecovery(t *testing.T) {
 func TestRunOnce_ContextCanceled(t *testing.T) {
 	rd := testResolvedDrive(t, "personal:cancel@example.com", "Cancel")
 	cfg := testOrchestratorConfig(t, rd)
-	orch := NewOrchestrator(cfg)
-	orch.tokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
-		return &stubTokenSource{}, nil
-	}
+	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
+	orch := NewOrchestrator(cfg)
 	orch.engineFactory = func(_ *EngineConfig) (engineRunner, error) {
 		return &mockEngine{err: context.Canceled}, nil
 	}
@@ -265,11 +213,9 @@ func TestRunOnce_ContextCanceled(t *testing.T) {
 func TestRunOnce_EngineFactoryError(t *testing.T) {
 	rd := testResolvedDrive(t, "personal:factory-err@example.com", "FactoryErr")
 	cfg := testOrchestratorConfig(t, rd)
-	orch := NewOrchestrator(cfg)
-	orch.tokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
-		return &stubTokenSource{}, nil
-	}
+	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
+	orch := NewOrchestrator(cfg)
 	orch.engineFactory = func(_ *EngineConfig) (engineRunner, error) {
 		return nil, errors.New("db init failed")
 	}
@@ -283,10 +229,11 @@ func TestRunOnce_EngineFactoryError(t *testing.T) {
 func TestRunOnce_TokenError_ReportsPerDrive(t *testing.T) {
 	rd := testResolvedDrive(t, "personal:notoken@example.com", "NoToken")
 	cfg := testOrchestratorConfig(t, rd)
-	orch := NewOrchestrator(cfg)
-	orch.tokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
+	cfg.Provider.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
 		return nil, errors.New("token file not found")
 	}
+
+	orch := NewOrchestrator(cfg)
 
 	reports := orch.RunOnce(context.Background(), SyncBidirectional, RunOpts{})
 	require.Len(t, reports, 1)
@@ -308,10 +255,9 @@ func TestRunOnce_ZeroDriveID_ReportsError(t *testing.T) {
 	require.True(t, rd.DriveID.IsZero())
 
 	cfg := testOrchestratorConfig(t, rd)
+	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+
 	orch := NewOrchestrator(cfg)
-	orch.tokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
-		return &stubTokenSource{}, nil
-	}
 
 	reports := orch.RunOnce(context.Background(), SyncBidirectional, RunOpts{})
 	require.Len(t, reports, 1)
@@ -362,10 +308,9 @@ func TestOrchestrator_RunWatch_SingleDrive(t *testing.T) {
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	cfg := testOrchestratorConfig(t, rd)
 	cfg.ConfigPath = cfgPath
+	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+
 	orch := NewOrchestrator(cfg)
-	orch.tokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
-		return &stubTokenSource{}, nil
-	}
 
 	watchStarted := make(chan struct{})
 
@@ -410,10 +355,9 @@ func TestOrchestrator_RunWatch_MultiDrive(t *testing.T) {
 	cfgPath := writeTestConfig(t, rd1.CanonicalID, rd2.CanonicalID)
 	cfg := testOrchestratorConfig(t, rd1, rd2)
 	cfg.ConfigPath = cfgPath
+	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+
 	orch := NewOrchestrator(cfg)
-	orch.tokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
-		return &stubTokenSource{}, nil
-	}
 
 	var started atomic.Int32
 
@@ -459,10 +403,9 @@ func TestOrchestrator_Reload_AddDrive(t *testing.T) {
 	cfg := testOrchestratorConfig(t, rd1)
 	cfg.ConfigPath = cfgPath
 	cfg.SIGHUPChan = sighup
+	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+
 	orch := NewOrchestrator(cfg)
-	orch.tokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
-		return &stubTokenSource{}, nil
-	}
 
 	var started atomic.Int32
 
@@ -518,15 +461,14 @@ func TestOrchestrator_Reload_RemoveDrive(t *testing.T) {
 	cfg := testOrchestratorConfig(t, rd1, rd2)
 	cfg.ConfigPath = cfgPath
 	cfg.SIGHUPChan = sighup
+	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+
 	orch := NewOrchestrator(cfg)
-	orch.tokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
-		return &stubTokenSource{}, nil
-	}
 
 	var started atomic.Int32
 	var stopped atomic.Int32
 
-	orch.engineFactory = func(ecfg *EngineConfig) (engineRunner, error) {
+	orch.engineFactory = func(_ *EngineConfig) (engineRunner, error) {
 		return &mockEngine{
 			runWatchFn: func(ctx context.Context, _ SyncMode, _ WatchOpts) error {
 				started.Add(1)
@@ -576,10 +518,9 @@ func TestOrchestrator_Reload_PausedDrive(t *testing.T) {
 	cfg := testOrchestratorConfig(t, rd)
 	cfg.ConfigPath = cfgPath
 	cfg.SIGHUPChan = sighup
+	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+
 	orch := NewOrchestrator(cfg)
-	orch.tokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
-		return &stubTokenSource{}, nil
-	}
 
 	var started atomic.Int32
 	var stopped atomic.Int32
@@ -634,10 +575,9 @@ func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 	cfg := testOrchestratorConfig(t, rd)
 	cfg.ConfigPath = cfgPath
 	cfg.SIGHUPChan = sighup
+	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+
 	orch := NewOrchestrator(cfg)
-	orch.tokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
-		return &stubTokenSource{}, nil
-	}
 
 	var started atomic.Int32
 
@@ -691,10 +631,9 @@ func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
 	cfg := testOrchestratorConfig(t, rd)
 	cfg.ConfigPath = cfgPath
 	cfg.SIGHUPChan = sighup
+	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+
 	orch := NewOrchestrator(cfg)
-	orch.tokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
-		return &stubTokenSource{}, nil
-	}
 
 	var started atomic.Int32
 	var stopped atomic.Int32

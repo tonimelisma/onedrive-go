@@ -48,15 +48,15 @@ Code quality and architecture improvements for the root package. Root package at
 
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
-| ~~B-223~~ | ~~Extract `DriveSession` type for per-drive resource lifecycle~~ | ~~P1~~ | **DONE** — Phase 6.0a. `DriveSession` struct with Client, Transfer, DriveID, Resolved. `NewDriveSession()` constructor. Replaced 9 `clientAndDrive()` call sites. `TokenSource` field removed (dead code, post-6.0a hardening). |
+| ~~B-223~~ | ~~Extract `DriveSession` type for per-drive resource lifecycle~~ | ~~P1~~ | **DONE** — Phase 6.0a (initial), Phase 6.0e (replaced by `driveops.SessionProvider` + `driveops.Session`). `DriveSession` deleted. All commands use `cc.Provider.Session()`. |
 | ~~B-224~~ | ~~Eliminate global flag variables (`flagJSON`, `flagVerbose`, etc.)~~ | ~~P1~~ | **DONE** — Phase 6.0a. Two-phase CLIContext: `CLIFlags` struct populated for all commands (Phase 1), config resolved for data commands (Phase 2). Zero global flag variables. |
 | ~~B-227~~ | ~~Deduplicate sync_dir and StatePath validation across commands~~ | ~~P3~~ | **DONE** — Post-6.0a hardening. `newSyncEngine()` helper validates syncDir/statePath and builds `EngineConfig`. Replaces boilerplate in `sync.go` and `resolve.go`. |
 | ~~B-228~~ | ~~`buildLogger` silent fallthrough on unknown log level~~ | ~~P3~~ | Fixed in Phase 5.5: added `warn` case and `default` with stderr warning. |
 | ~~B-232~~ | ~~Test coverage for `loadConfig` error paths~~ | ~~P3~~ | **DONE** — Phase 6.0c. Tests for invalid TOML, ambiguous drive, unknown log level in `root_test.go`. |
-| B-036 | Extract CLI service layer for testability | P4 | Root package at 39.9% coverage. Deferred — service layer extraction premature before Orchestrator (Phase 6.0b+). |
+| B-036 | Extract CLI service layer for testability | P4 | Root package at 40.1% coverage. Much logic now in `internal/driveops/` (82% coverage). Service layer extraction still deferred. |
 | ~~B-229~~ | ~~`syncModeFromFlags` uses `Changed` instead of `GetBool`~~ | ~~P4~~ | **DONE** — Phase 6.0c. Documented as intentional Cobra pattern in comment. |
 | ~~B-230~~ | ~~`printSyncReport` repetitive formatting~~ | ~~P4~~ | **DONE** — Phase 6.0c. Extracted `printNonZero` helper. |
-| B-233 | `version` string concatenation in two places | P4 | Minor duplication. Fixed by `DriveSession` (B-223). |
+| ~~B-233~~ | ~~`version` string concatenation in two places~~ | ~~P4~~ | **DONE** — Phase 6.0e. `userAgent` now passed to `NewSessionProvider` once; no more per-call concatenation. |
 
 ## Hardening: Graph API
 

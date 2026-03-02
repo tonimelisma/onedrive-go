@@ -2,118 +2,108 @@
 
 ## Problem
 
-The "resolved drive → authenticated Graph API clients" glue logic is duplicated:
+The "resolved drive → authenticated Graph API clients" glue logic was duplicated:
 
-- **`DriveSession`** in the CLI package (`drive_session.go`) — used by file ops (`ls`, `get`, `put`, `rm`, `mkdir`, `stat`) and `resolve`
+- **`DriveSession`** in the CLI package — used by file ops (`ls`, `get`, `put`, etc.)
 - **`Orchestrator.getOrCreateClient`** in `internal/sync/` — used by sync commands
+- **`TransferManager`** and **`SessionStore`** in `internal/sync/` — transfer concerns used by both CLI and sync
 
-Both do the same 4 steps:
-
-1. `config.DriveTokenPath(cid, cfg)` → token file path
-2. `graph.TokenSourceFromPath(ctx, path, logger)` → auto-refreshing auth
-3. `graph.NewClient(...)` × 2 → meta (30s timeout) + transfer (no timeout)
-4. Validate DriveID is non-zero
-
-`DriveSession` lives in the CLI layer, which is architecturally wrong — it's application infrastructure, not presentation logic. File-op commands like `ls` should not need to construct their own authenticated clients.
+All three duplicated the same 4 steps: token path resolution → TokenSource creation → graph.Client construction → DriveID validation.
 
 ## Design Decision
 
-Extract `internal/driveops/` as the single owner of "authenticated access to a drive."
+`internal/driveops/` is the single owner of authenticated drive access, token caching, and transfer operations.
 
 ### Dependency Direction
 
 ```
-cmd/onedrive-go/  →  internal/sync/     →  internal/driveops/  →  internal/graph/
-                  →  internal/driveops/                         →  internal/config/
-                                                                →  internal/driveid/
+cmd/onedrive-go/  →  internal/driveops/  →  internal/graph/
+                  →  internal/sync/      →  internal/driveops/
+                                         →  internal/config/
+                                         →  internal/driveid/
+                                         →  pkg/quickxorhash/
 ```
 
-- `driveops` imports `graph` (creates clients), `config` (resolves token paths), `driveid` (identity types)
-- `sync` imports `driveops` (Orchestrator wraps Session with client caching)
-- CLI imports `driveops` (file ops use Session directly)
+- `driveops` imports `graph`, `config`, `driveid`, `quickxorhash`
+- `sync` imports `driveops` (Orchestrator delegates to SessionProvider)
+- CLI imports `driveops` (file ops use `cc.Provider.Session()`)
+- `driveops` does NOT import `sync` — no cycles
 
 ### Package Contents
 
+**`session.go`** — `SessionProvider` + `Session`:
 ```go
-// internal/driveops/session.go
+type SessionProvider struct {
+    cfg          *config.Config           // guarded by mu
+    TokenSourceFn func(ctx, path, logger) // exported for test injection
+    mu           sync.Mutex
+    tokenCache   map[string]graph.TokenSource
+}
 
-// Session is an authenticated handle to a single drive. It bundles the
-// metadata client (30s timeout), transfer client (no timeout), and the
-// drive's resolved identity. Constructed once per command invocation.
+func (p *SessionProvider) Session(ctx, rd) (*Session, error)
+func (p *SessionProvider) UpdateConfig(cfg)  // SIGHUP reload
+
 type Session struct {
-    Meta     *graph.Client
-    Transfer *graph.Client
+    Meta     *graph.Client  // 30s timeout
+    Transfer *graph.Client  // no timeout
     DriveID  driveid.ID
     Resolved *config.ResolvedDrive
 }
 
-func NewSession(ctx context.Context, rd *config.ResolvedDrive, cfg *config.Config,
-    metaHTTP, transferHTTP *http.Client, userAgent string, logger *slog.Logger,
-) (*Session, error) {
-    tokenPath := config.DriveTokenPath(rd.CanonicalID, cfg)
-    if tokenPath == "" {
-        return nil, fmt.Errorf("cannot determine token path for %s", rd.CanonicalID)
-    }
-
-    ts, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
-    if err != nil {
-        return nil, fmt.Errorf("token error for %s: %w", rd.CanonicalID, err)
-    }
-
-    if rd.DriveID.IsZero() {
-        return nil, fmt.Errorf("drive ID not resolved for %s — re-run 'onedrive-go login'", rd.CanonicalID)
-    }
-
-    meta := graph.NewClient(graph.DefaultBaseURL, metaHTTP, ts, userAgent, logger)
-    transfer := graph.NewClient(graph.DefaultBaseURL, transferHTTP, ts, userAgent, logger)
-
-    return &Session{
-        Meta:     meta,
-        Transfer: transfer,
-        DriveID:  rd.DriveID,
-        Resolved: rd,
-    }, nil
-}
+func (s *Session) ResolveItem(ctx, remotePath) (*graph.Item, error)
+func (s *Session) ListChildren(ctx, remotePath) ([]graph.Item, error)
+func CleanRemotePath(path) string
 ```
+
+**`transfer_manager.go`** — `TransferManager` (download/upload with resume, hash verification)
+
+**`session_store.go`** — `SessionStore` (file-based upload session persistence)
+
+**`interfaces.go`** — `Downloader`, `Uploader`, `RangeDownloader`, `SessionUploader`
+
+**`hash.go`** — `SelectHash`, `ComputeQuickXorHash`
+
+### Token Caching
+
+`SessionProvider` caches `TokenSource`s by token file path. Multiple drives sharing a token path (e.g., personal + SharePoint on same account) share one `TokenSource`, preventing OAuth2 refresh token rotation races (two independent refreshes can invalidate each other's refresh tokens).
+
+The config reference (`p.cfg`) is read under the lock to avoid a data race with `UpdateConfig()` during SIGHUP reload.
+
+### CLI Integration
+
+```go
+// root.go — CLIContext (created in PersistentPreRunE Phase 2)
+type CLIContext struct {
+    Provider *driveops.SessionProvider  // nil for auth/account commands
+}
+
+// files.go — file-op commands
+session, err := cc.Provider.Session(ctx, cc.Cfg)
+items, err := session.ListChildren(ctx, remotePath)
+```
+
+The `sync` command creates its own `SessionProvider` because it uses `skipConfigAnnotation` and handles its own config resolution.
 
 ### Orchestrator Integration
 
-The Orchestrator wraps `driveops.Session` with client caching by token path:
-
 ```go
-// internal/sync/orchestrator.go
-
-func (o *Orchestrator) sessionForDrive(ctx context.Context, rd *config.ResolvedDrive) (*driveops.Session, error) {
-    // Cache check by token path (multiple drives may share a token)
-    // On miss: driveops.NewSession(...)
-    // Cache the Session's clients for reuse
+// OrchestratorConfig
+type OrchestratorConfig struct {
+    Provider *driveops.SessionProvider
+    // ...
 }
+
+// prepareDriveWork
+session, err := o.cfg.Provider.Session(ctx, rd)
+
+// reload — update both config references
+o.cfg.Config = newCfg
+o.cfg.Provider.UpdateConfig(newCfg)
 ```
 
-### Migration
+Tests inject stubs via `cfg.Provider.TokenSourceFn = stubFn`.
 
-| Before | After |
-|--------|-------|
-| `drive_session.go` (CLI) | Deleted → `internal/driveops/session.go` |
-| `drive_session_test.go` (CLI) | Deleted → `internal/driveops/session_test.go` |
-| `sync_helpers.go` (`newSyncEngine`) | Stays for `resolve.go` until resolve is refactored |
-| `files.go`: `NewDriveSession(ctx, cc.Cfg, cc.RawConfig, cc.Logger)` | `driveops.NewSession(ctx, cc.Cfg, cc.RawConfig, metaHTTP, transferHTTP, ua, cc.Logger)` |
-| `resolve.go`: `NewDriveSession(...)` | `driveops.NewSession(...)` |
-| `sync.go` watch bridge: `NewDriveSession(...)` | Deleted — watch routes through Orchestrator |
-| Orchestrator: `getOrCreateClient` + `prepareDriveWork` | Refactored to use `driveops.NewSession` with caching |
+### What Stayed in Root Package
 
-### Future Growth
-
-Natural candidates to migrate into `driveops/`:
-
-- `TransferManager` construction (currently duplicated between `files.go` and `engine.go`)
-- Item/path resolution helpers used by both file ops and sync
-- Common download/upload wrappers
-
-### Why Not Alternatives
-
-- **Keep in CLI**: Semantically wrong — `DriveSession` is application infrastructure, not presentation
-- **Put in `internal/sync/`**: `ls` importing sync is semantically wrong — listing files has nothing to do with syncing
-- **Put in `internal/graph/`**: `graph` doesn't know about config or token paths — it's pure transport
-- **Put in `internal/config/`**: Config reads settings, it doesn't create API clients — wrong responsibility
-- **Orchestrator as universal factory**: Makes `ls` depend on sync orchestration — god object
+- `newSyncEngine()` — creates `sync.EngineConfig` from `*driveops.Session`. Would create import cycle if moved to driveops (needs `sync.EngineConfig`). Only caller: `resolve.go`.
+- `newGraphClient()` — used by auth commands (`login`, `logout`, `whoami`) which need graph.Client without a full Session.

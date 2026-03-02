@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -55,14 +56,15 @@ func (f CLIFlags) SingleDrive() string {
 //   - Phase 1 (always): Flags + Logger + CfgPath + Env populated for every command.
 //   - Phase 2 (data commands): Cfg + RawConfig populated after config resolution.
 //
-// Auth commands get CLIContext with Flags + Logger + CfgPath + Env but nil Cfg/RawConfig.
+// Auth commands get CLIContext with Flags + Logger + CfgPath + Env but nil Cfg/RawConfig/Provider.
 type CLIContext struct {
 	Flags     CLIFlags
 	Logger    *slog.Logger
-	CfgPath   string                // resolved config file path (always set)
-	Env       config.EnvOverrides   // env overrides (always set in Phase 1)
-	Cfg       *config.ResolvedDrive // nil for auth/account commands
-	RawConfig *config.Config        // nil for auth/account commands
+	CfgPath   string                    // resolved config file path (always set)
+	Env       config.EnvOverrides       // env overrides (always set in Phase 1)
+	Cfg       *config.ResolvedDrive     // nil for auth/account commands
+	RawConfig *config.Config            // nil for auth/account commands
+	Provider  *driveops.SessionProvider // nil for auth/account commands; created in Phase 2
 }
 
 // cliContextKey is the context key for CLIContext.
@@ -115,13 +117,6 @@ func transferHTTPClient() *http.Client {
 // user-agent, and base URL. Eliminates boilerplate repeated across commands.
 func newGraphClient(ts graph.TokenSource, logger *slog.Logger) *graph.Client {
 	return graph.NewClient(graph.DefaultBaseURL, defaultHTTPClient(), ts, logger, "onedrive-go/"+version)
-}
-
-// newTransferGraphClient creates a graph.Client without a timeout for
-// upload/download operations. Metadata operations (ls, rm, mkdir, stat,
-// Drives(), Me()) should use newGraphClient with the 30-second timeout.
-func newTransferGraphClient(ts graph.TokenSource, logger *slog.Logger) *graph.Client {
-	return graph.NewClient(graph.DefaultBaseURL, transferHTTPClient(), ts, logger, "onedrive-go/"+version)
 }
 
 // newRootCmd builds and returns the fully-assembled root command with all
@@ -180,6 +175,8 @@ func newRootCmd() *cobra.Command {
 				cc.Cfg = resolved
 				cc.RawConfig = rawCfg
 				cc.Logger = buildLogger(resolved, flags)
+				cc.Provider = driveops.NewSessionProvider(rawCfg,
+					defaultHTTPClient(), transferHTTPClient(), "onedrive-go/"+version, cc.Logger)
 			}
 
 			ctx := cmd.Context()
@@ -232,7 +229,7 @@ func newRootCmd() *cobra.Command {
 
 // loadAndResolve resolves the effective configuration from the four-layer
 // override chain. Returns the resolved drive config and the raw parsed config
-// (needed by DriveSession for shared drive token resolution).
+// (needed by SessionProvider for shared drive token resolution).
 func loadAndResolve(
 	cmd *cobra.Command, flags CLIFlags, env config.EnvOverrides, logger *slog.Logger,
 ) (*config.ResolvedDrive, *config.Config, error) {

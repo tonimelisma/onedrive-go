@@ -493,8 +493,8 @@ No separate single-drive sync code path. N=1 means one DriveRunner — same logi
 ### Per-drive Engine isolation (zero shared mutable state)
 Each DriveRunner wraps its own Engine with its own observers, buffer, planner, tracker, baseline, and worker pool. A corrupted SQLite DB, expired token, or network error in one drive affects nothing else. Panics caught per-drive with `defer recover`.
 
-### graph.Client sharing is per token path, not per drive
-`map[tokenPath]*graph.Client` in Orchestrator. Multiple drives on the same account (personal + SharePoint libraries) share one Client. Different accounts have different Clients. Thread-safe because `graph.Client` is stateless per-request.
+### Token caching is per token path, not per drive
+`driveops.SessionProvider` caches `TokenSource`s by token file path (`map[tokenPath]graph.TokenSource`). Multiple drives on the same account (personal + SharePoint libraries) share one `TokenSource`. Different accounts have different `TokenSource`s. Each `Session()` call creates fresh `graph.Client` instances but reuses the cached `TokenSource`. Thread-safe via mutex.
 
 ### 429 handled per-request — no shared rate-limit gate
 Per-request Retry-After + exponential backoff with jitter. No shared gate across workers or drives. This is the industry standard (rclone, abraunegg/onedrive). With <=8 workers per drive, thundering herd is minimal. Each worker's jitter desynchronizes retries naturally.
@@ -511,8 +511,8 @@ Each Engine gets full `transfer_workers` and `check_workers` from config directl
 ### Two-phase CLIContext initialization
 `PersistentPreRunE` runs two phases for all commands. Phase 1 (always): read Cobra flags into `CLIFlags`, build bootstrap logger, create `CLIContext` with `Flags` + `Logger`. Phase 2 (data commands only, skip via `skipConfigAnnotation`): load config, resolve drive, rebuild logger with config-based log level, populate `Cfg` + `RawConfig`. Auth commands get `CLIContext` with nil `Cfg`/`RawConfig` — they access `cc.Flags.ConfigPath` etc. No global flag variables anywhere.
 
-### DriveSession replaces clientAndDrive() 4-tuple
-`DriveSession` struct bundles `Client` (30s timeout), `Transfer` (no timeout), `DriveID`, and `Resolved`. `NewDriveSession(ctx, resolved, cfg, logger)` handles token resolution (including shared drives via `DriveTokenPath(cid, cfg)`) and client creation. DriveID must be pre-resolved (from token meta or config); zero DriveID returns an error. Single constructor replaces boilerplate repeated in 9 call sites.
+### SessionProvider + Session replace DriveSession
+`driveops.SessionProvider` caches `TokenSource`s by token file path via a mutex-protected map. Multiple drives sharing a token path share one `TokenSource`, preventing OAuth2 refresh token rotation races. `SessionProvider.Session(ctx, rd)` returns a `*driveops.Session` with `Meta` (30s timeout) + `Transfer` (no timeout) clients + `DriveID` + `Resolved`. Created once in `PersistentPreRunE`, stored in `CLIContext.Provider`, shared with the Orchestrator. `UpdateConfig()` replaces the internal config reference for SIGHUP reload (snapshot under lock to avoid data race). The sync command creates its own `SessionProvider` because it uses `skipConfigAnnotation`.
 
 ### CfgPath on CLIContext for config file path
 `CLIContext.CfgPath` stores the resolved config file path, computed once in Phase 1 of `PersistentPreRunE` via `config.ResolveConfigPath(env, cli, logger)`. All commands (auth and data) access `cc.CfgPath` instead of recomputing the path. This replaced `resolveLoginConfigPath()` which had a bug — it ignored the `ONEDRIVE_GO_CONFIG` environment variable.
@@ -521,10 +521,10 @@ Each Engine gets full `transfer_workers` and `check_workers` from config directl
 `config.ResolveDrive()` returns `(*ResolvedDrive, *Config, error)`. The raw `*Config` is needed by `DriveSession` for shared drive token resolution (`TokenCanonicalID(cid, cfg)`). Previously `loadAndResolve` called `LoadOrDefault` twice — once internally in `ResolveDrive`, then again to get the raw config. Now `ResolveDrive` returns both, eliminating the double load.
 
 ### newSyncEngine helper for Engine construction
-`newSyncEngine(session, resolved, verifyDrive, logger)` creates a `sync.Engine` from a `DriveSession` and `ResolvedDrive`. Validates syncDir and statePath, builds `EngineConfig`, optionally sets `DriveVerifier`. Used by `sync.go` (verifyDrive=true) and `resolve.go` (verifyDrive=false). Will be reused by 6.0b Orchestrator's per-drive DriveRunner.
+`newSyncEngine(session, resolved, verifyDrive, logger)` creates a `sync.Engine` from a `*driveops.Session` and `ResolvedDrive`. Validates syncDir and statePath, builds `EngineConfig`, optionally sets `DriveVerifier`. Used by `resolve.go` (verifyDrive=false). The Orchestrator builds `EngineConfig` directly in `buildEngineWork` and `startWatchRunner` rather than going through this helper (to avoid circular dependency: `newSyncEngine` is in the root package, which can't be imported by `internal/sync`).
 
 ### Orchestrator is the single entry point for sync
-`sync.NewOrchestrator(cfg)` takes `OrchestratorConfig` with raw config, resolved drives, HTTP clients, and logger. `RunOnce(ctx, mode, opts)` resolves tokens, creates clients (pooled by token path), creates engines (via injectable `engineFactory`), and launches `DriveRunner` goroutines. Returns `[]*DriveReport` (no error return — per-drive errors are in `DriveReport.Err`). The CLI calls `driveReportsError()` to extract a single error for the exit code.
+`sync.NewOrchestrator(cfg)` takes `OrchestratorConfig` with raw config, resolved drives, `*driveops.SessionProvider`, and logger. `RunOnce(ctx, mode, opts)` calls `Provider.Session(ctx, rd)` for each drive, creates engines (via injectable `engineFactory`), and launches `DriveRunner` goroutines. Returns `[]*DriveReport` (no error return — per-drive errors are in `DriveReport.Err`). The CLI calls `driveReportsError()` to extract a single error for the exit code. Tests inject stubs via `Provider.TokenSourceFn`.
 
 ### DriveID is cached in token metadata at login — NEVER in config
 `discoverAccount()` returns the primary drive ID, which `runLogin()` saves as `drive_id` in the token file metadata via `tokenfile.LoadAndMergeMeta()`. `buildResolvedDrive()` reads it exclusively from token metadata. Drive ID is NEVER stored in the TOML config file — the `Drive` struct has no `DriveID` field. Both the Orchestrator and `NewDriveSession` error on zero DriveID instead of calling `client.Drives()`. `NewEngine` also rejects zero DriveID as defense in depth.

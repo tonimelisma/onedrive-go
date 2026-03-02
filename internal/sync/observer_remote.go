@@ -15,6 +15,7 @@ import (
 	"golang.org/x/text/unicode/norm"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -396,7 +397,7 @@ func (o *RemoteObserver) classifyAndConvert(
 	baselineKey := driveid.NewItemKey(itemDriveID, item.ID)
 	existing, _ := o.baseline.GetByID(baselineKey)
 
-	hash := selectHash(item)
+	hash := driveops.SelectHash(item)
 	if hash != "" {
 		o.stats.hashesComputed.Add(1)
 	}
@@ -568,22 +569,6 @@ func classifyItemType(item *graph.Item) ItemType {
 	default:
 		return ItemTypeFile
 	}
-}
-
-// selectHash returns the best available content hash from the item, preferring
-// QuickXorHash (most common), falling back to SHA256Hash, then SHA1Hash.
-// Returns empty string if no hash is available — the caller must handle
-// hash-less items appropriately (typically skipping verification) (B-021).
-func selectHash(item *graph.Item) string {
-	if item.QuickXorHash != "" {
-		return item.QuickXorHash
-	}
-
-	if item.SHA256Hash != "" {
-		return item.SHA256Hash
-	}
-
-	return item.SHA1Hash
 }
 
 // toUnixNano converts a time.Time to Unix nanoseconds. Returns 0 for
