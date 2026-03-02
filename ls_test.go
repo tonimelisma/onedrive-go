@@ -1,0 +1,63 @@
+package main
+
+import (
+	"io"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/graph"
+)
+
+// captureStdout redirects os.Stdout to a pipe and returns what fn wrote.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+
+	os.Stdout = w
+
+	t.Cleanup(func() { os.Stdout = old })
+
+	fn()
+	w.Close()
+
+	out, err := io.ReadAll(r)
+	require.NoError(t, err)
+
+	return string(out)
+}
+
+func TestPrintItemsTable(t *testing.T) {
+	items := []graph.Item{
+		{
+			Name:       "readme.txt",
+			Size:       1024,
+			IsFolder:   false,
+			ModifiedAt: time.Date(2025, time.January, 15, 10, 30, 0, 0, time.UTC),
+		},
+		{
+			Name:       "docs",
+			Size:       0,
+			IsFolder:   true,
+			ModifiedAt: time.Date(2025, time.February, 1, 9, 0, 0, 0, time.UTC),
+		},
+	}
+
+	output := captureStdout(t, func() {
+		printItemsTable(items)
+	})
+
+	// Headers should be present.
+	assert.Contains(t, output, "NAME")
+	assert.Contains(t, output, "SIZE")
+	assert.Contains(t, output, "MODIFIED")
+	// Folders sort first and get a trailing slash.
+	assert.Contains(t, output, "docs/")
+	assert.Contains(t, output, "readme.txt")
+}

@@ -34,8 +34,14 @@ const StaleSessionAge = 7 * 24 * time.Hour
 // a no-op if called again within this interval.
 const cleanThrottle = 1 * time.Hour
 
+// currentSessionVersion is the schema version written by Save().
+// Zero-value (absent from old JSON files) means "unversioned" — a perfect
+// sentinel for future migrations (e.g., B-300 JSON tag rename).
+const currentSessionVersion = 1
+
 // SessionRecord is the on-disk JSON format for a persisted upload session.
 type SessionRecord struct {
+	Version    int       `json:"version"`
 	DriveID    string    `json:"drive_id"`
 	LocalPath  string    `json:"remote_path"` // JSON key kept as "remote_path" for backward compatibility
 	SessionURL string    `json:"session_url"`
@@ -105,6 +111,7 @@ func (s *SessionStore) Save(driveID, localPath string, rec *SessionRecord) error
 		return fmt.Errorf("creating session dir: %w", err)
 	}
 
+	rec.Version = currentSessionVersion
 	rec.DriveID = driveID
 	rec.LocalPath = localPath
 

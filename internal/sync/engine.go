@@ -76,10 +76,11 @@ type Engine struct {
 	syncRoot        string
 	driveID         driveid.ID
 	logger          *slog.Logger
-	remoteObs       *RemoteObserver // stored during RunWatch for delta token reads
-	localObs        *LocalObserver  // stored during RunWatch for drop counter reads
-	transferWorkers int             // goroutine count for the worker pool
-	checkWorkers    int             // goroutine limit for parallel file hashing
+	remoteObs       *RemoteObserver        // stored during RunWatch for delta token reads
+	localObs        *LocalObserver         // stored during RunWatch for drop counter reads
+	sessionStore    *driveops.SessionStore // for CleanStale() housekeeping
+	transferWorkers int                    // goroutine count for the worker pool
+	checkWorkers    int                    // goroutine limit for parallel file hashing
 
 	// In-memory per-cycle failure counts. Fed by drainWorkerResults, read by
 	// watchCycleCompletion for delta token commit decisions.
@@ -111,7 +112,6 @@ func NewEngine(cfg *EngineConfig) (*Engine, error) {
 	var sessionStore *driveops.SessionStore
 	if cfg.DataDir != "" {
 		sessionStore = driveops.NewSessionStore(cfg.DataDir, cfg.Logger)
-		execCfg.sessionStore = sessionStore
 	}
 
 	execCfg.transferMgr = driveops.NewTransferManager(cfg.Downloads, cfg.Uploads, sessionStore, cfg.Logger)
@@ -122,6 +122,7 @@ func NewEngine(cfg *EngineConfig) (*Engine, error) {
 		execCfg:         execCfg,
 		fetcher:         cfg.Fetcher,
 		driveVerifier:   cfg.DriveVerifier,
+		sessionStore:    sessionStore,
 		syncRoot:        cfg.SyncRoot,
 		driveID:         cfg.DriveID,
 		logger:          cfg.Logger,
@@ -275,20 +276,13 @@ func (e *Engine) postSyncHousekeeping() {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				e.logger.Error("panic in reportStalePartials", slog.Any("panic", r))
+				e.logger.Error("panic in postSyncHousekeeping", slog.Any("panic", r))
 			}
 		}()
 
-		reportStalePartials(e.syncRoot, stalePartialThreshold, e.logger)
+		driveops.CleanTransferArtifacts(e.syncRoot, e.sessionStore,
+			stalePartialThreshold, driveops.StaleSessionAge, e.logger)
 	}()
-
-	if e.execCfg.sessionStore != nil {
-		if n, cleanErr := e.execCfg.sessionStore.CleanStale(driveops.StaleSessionAge); cleanErr != nil {
-			e.logger.Warn("stale session cleanup failed", slog.String("error", cleanErr.Error()))
-		} else if n > 0 {
-			e.logger.Info("cleaned stale upload sessions", slog.Int("count", n))
-		}
-	}
 }
 
 // executePlan populates the dependency tracker, runs the worker pool,

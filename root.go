@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -58,12 +59,13 @@ func (f CLIFlags) SingleDrive() string {
 //
 // Auth commands get CLIContext with Flags + Logger + CfgPath + Env but nil Cfg/Provider.
 type CLIContext struct {
-	Flags    CLIFlags
-	Logger   *slog.Logger
-	CfgPath  string                    // resolved config file path (always set)
-	Env      config.EnvOverrides       // env overrides (always set in Phase 1)
-	Cfg      *config.ResolvedDrive     // nil for auth/account commands
-	Provider *driveops.SessionProvider // nil for auth/account commands; created in Phase 2
+	Flags        CLIFlags
+	Logger       *slog.Logger
+	StatusWriter io.Writer                 // destination for Statusf output (default: os.Stderr)
+	CfgPath      string                    // resolved config file path (always set)
+	Env          config.EnvOverrides       // env overrides (always set in Phase 1)
+	Cfg          *config.ResolvedDrive     // nil for auth/account commands
+	Provider     *driveops.SessionProvider // nil for auth/account commands; created in Phase 2
 }
 
 // cliContextKey is the context key for CLIContext.
@@ -93,6 +95,12 @@ func mustCLIContext(ctx context.Context) *CLIContext {
 	}
 
 	return cc
+}
+
+// Session is a shorthand for cc.Provider.Session(ctx, cc.Cfg).
+// Eliminates 7 identical boilerplate blocks across file operation commands.
+func (cc *CLIContext) Session(ctx context.Context) (*driveops.Session, error) {
+	return cc.Provider.Session(ctx, cc.Cfg)
 }
 
 // httpClientTimeout is the default timeout for HTTP requests.
@@ -158,10 +166,11 @@ func newRootCmd() *cobra.Command {
 			logger := buildLogger(nil, flags)
 			env := config.ReadEnvOverrides(logger)
 			cc := &CLIContext{
-				Flags:   flags,
-				Logger:  logger,
-				CfgPath: config.ResolveConfigPath(env, config.CLIOverrides{ConfigPath: flags.ConfigPath}, logger),
-				Env:     env,
+				Flags:        flags,
+				Logger:       logger,
+				StatusWriter: os.Stderr,
+				CfgPath:      config.ResolveConfigPath(env, config.CLIOverrides{ConfigPath: flags.ConfigPath}, logger),
+				Env:          env,
 			}
 
 			// Phase 2: load config for data commands.

@@ -3,6 +3,7 @@ package driveops
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -13,7 +14,8 @@ import (
 
 func testLogger(t *testing.T) *slog.Logger {
 	t.Helper()
-	return slog.Default()
+
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
 func TestSessionStore_SaveLoadDelete(t *testing.T) {
@@ -95,6 +97,68 @@ func TestSessionStore_SaveLoadDelete(t *testing.T) {
 
 	if rec != nil {
 		t.Fatal("expected nil record after delete")
+	}
+}
+
+func TestSessionStore_VersionField(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewSessionStore(dir, testLogger(t))
+
+	driveID := "drive-ver"
+	localPath := "/docs/versioned.txt"
+
+	// Save sets Version to currentSessionVersion.
+	err := store.Save(driveID, localPath, &SessionRecord{
+		SessionURL: "https://example.com/upload/ver",
+		FileHash:   "vhash",
+		FileSize:   512,
+	})
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	rec, err := store.Load(driveID, localPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if rec.Version != currentSessionVersion {
+		t.Errorf("Version = %d, want %d", rec.Version, currentSessionVersion)
+	}
+}
+
+func TestSessionStore_OldFormatVersionZero(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewSessionStore(dir, testLogger(t))
+
+	// Write a JSON file without the "version" key (simulating old format).
+	driveID := "drive-old"
+	localPath := "/docs/old.txt"
+
+	sessDir := filepath.Join(dir, "upload-sessions")
+	if err := os.MkdirAll(sessDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	oldJSON := `{"drive_id":"drive-old","remote_path":"/docs/old.txt","session_url":"https://old","file_hash":"h","file_size":100,"created_at":"2024-01-01T00:00:00Z"}`
+	fpath := store.filePath(driveID, localPath)
+
+	if err := os.WriteFile(fpath, []byte(oldJSON), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	rec, err := store.Load(driveID, localPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Old format has no "version" key — JSON unmarshal leaves int at zero.
+	if rec.Version != 0 {
+		t.Errorf("Version = %d, want 0 for old format", rec.Version)
 	}
 }
 

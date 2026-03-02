@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -24,7 +25,7 @@ type stubTokenSource struct{}
 func (s *stubTokenSource) Token() (string, error) { return "test-token", nil }
 
 func discardLogger() *slog.Logger {
-	return slog.Default()
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
 // --- CleanRemotePath ---
@@ -145,6 +146,45 @@ func TestSessionProvider_TokenCaching(t *testing.T) {
 
 	// TokenSourceFn should only be called once — second call reuses cache.
 	assert.Equal(t, 1, callCount, "TokenSourceFn should be called exactly once for the same token path")
+}
+
+// --- FlushTokenCache ---
+
+func TestSessionProvider_FlushTokenCache(t *testing.T) {
+	holder := config.NewHolder(config.DefaultConfig(), "")
+	p := NewSessionProvider(holder, &http.Client{}, &http.Client{}, "test/1.0", discardLogger())
+
+	var callCount int
+	p.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
+		callCount++
+		return &stubTokenSource{}, nil
+	}
+
+	cid, err := driveid.NewCanonicalID("personal:flush@example.com")
+	require.NoError(t, err)
+
+	rd := &config.ResolvedDrive{
+		CanonicalID: cid,
+		DriveID:     driveid.New("d-flush"),
+	}
+
+	// First call creates the cached entry.
+	_, err = p.Session(context.Background(), rd)
+	require.NoError(t, err)
+	assert.Equal(t, 1, callCount)
+
+	// Second call reuses cache — no new TokenSourceFn invocation.
+	_, err = p.Session(context.Background(), rd)
+	require.NoError(t, err)
+	assert.Equal(t, 1, callCount)
+
+	// Flush invalidates the cache.
+	p.FlushTokenCache()
+
+	// Third call must re-invoke TokenSourceFn.
+	_, err = p.Session(context.Background(), rd)
+	require.NoError(t, err)
+	assert.Equal(t, 2, callCount, "TokenSourceFn should be re-invoked after FlushTokenCache")
 }
 
 // --- Thread safety ---
@@ -316,4 +356,61 @@ func TestSession_ListChildren_Path(t *testing.T) {
 	assert.Len(t, items, 1)
 	assert.Equal(t, "child2", items[0].ID)
 	assert.Contains(t, gotPath, "/drives/abcdef0123456789/root:/Documents:/children")
+}
+
+// --- Delegation methods ---
+
+func TestSession_DeleteItem(t *testing.T) {
+	t.Parallel()
+
+	var gotMethod, gotPath string
+
+	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	err := s.DeleteItem(context.Background(), "item-to-delete")
+	require.NoError(t, err)
+	assert.Equal(t, http.MethodDelete, gotMethod)
+	assert.Equal(t, "/drives/abcdef0123456789/items/item-to-delete", gotPath)
+}
+
+func TestSession_PermanentDeleteItem(t *testing.T) {
+	t.Parallel()
+
+	var gotMethod, gotPath string
+
+	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	err := s.PermanentDeleteItem(context.Background(), "item-to-perm-delete")
+	require.NoError(t, err)
+	// Graph API permanentDelete uses POST, not DELETE.
+	assert.Equal(t, http.MethodPost, gotMethod)
+	assert.Contains(t, gotPath, "item-to-perm-delete")
+}
+
+func TestSession_CreateFolder(t *testing.T) {
+	t.Parallel()
+
+	var gotMethod, gotPath string
+
+	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprintf(w, `{"id":"new-folder-id","name":"NewFolder"}`)
+	}))
+
+	item, err := s.CreateFolder(context.Background(), "parent-id", "NewFolder")
+	require.NoError(t, err)
+	assert.Equal(t, http.MethodPost, gotMethod)
+	assert.Contains(t, gotPath, "parent-id")
+	assert.Equal(t, "new-folder-id", item.ID)
+	assert.Equal(t, "NewFolder", item.Name)
 }

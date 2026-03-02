@@ -49,10 +49,6 @@ type ExecutorConfig struct {
 	driveID   driveid.ID // per-drive context (B-068)
 	logger    *slog.Logger
 
-	// sessionStore is used by engine.go for CleanStale() housekeeping;
-	// upload session logic is in TransferManager.
-	sessionStore *driveops.SessionStore
-
 	// transferMgr handles unified download/upload with resume.
 	transferMgr *driveops.TransferManager
 

@@ -119,6 +119,17 @@ func (p *SessionProvider) getOrCreateTokenSource(ctx context.Context, tokenPath 
 	return ts, nil
 }
 
+// FlushTokenCache clears the cached TokenSources, forcing the next Session()
+// call to re-read token files from disk. Called during daemon SIGHUP reload
+// to pick up logout/re-login credential changes.
+func (p *SessionProvider) FlushTokenCache() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.tokenCache = make(map[string]graph.TokenSource)
+	p.logger.Info("token cache flushed")
+}
+
 // ResolveItem resolves a remote path to an Item. For root (""), uses GetItem
 // with "root". Otherwise uses GetItemByPath. "/" normalizes to "" via
 // CleanRemotePath, so callers can pass either "/" or "" to mean root.
@@ -140,6 +151,21 @@ func (s *Session) ListChildren(ctx context.Context, remotePath string) ([]graph.
 	}
 
 	return s.Meta.ListChildrenByPath(ctx, s.DriveID, clean)
+}
+
+// DeleteItem moves an item to the recycle bin.
+func (s *Session) DeleteItem(ctx context.Context, itemID string) error {
+	return s.Meta.DeleteItem(ctx, s.DriveID, itemID)
+}
+
+// PermanentDeleteItem permanently deletes an item (Business/SharePoint only).
+func (s *Session) PermanentDeleteItem(ctx context.Context, itemID string) error {
+	return s.Meta.PermanentDeleteItem(ctx, s.DriveID, itemID)
+}
+
+// CreateFolder creates a folder under the given parent.
+func (s *Session) CreateFolder(ctx context.Context, parentID, name string) (*graph.Item, error) {
+	return s.Meta.CreateFolder(ctx, s.DriveID, parentID, name)
 }
 
 // CleanRemotePath strips leading/trailing slashes, returns "" for root.
