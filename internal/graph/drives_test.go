@@ -155,6 +155,57 @@ func TestDrives_Empty(t *testing.T) {
 	assert.Empty(t, drives)
 }
 
+func TestPrimaryDrive_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, "/me/drive", r.URL.Path)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{
+			"id": "f1da660e69bdec82",
+			"name": "OneDrive",
+			"driveType": "personal",
+			"owner": {
+				"user": {
+					"displayName": "Test User",
+					"email": "test@outlook.com"
+				}
+			},
+			"quota": {
+				"used": 1560564,
+				"total": 5368709120
+			}
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	drive, err := client.PrimaryDrive(context.Background())
+	require.NoError(t, err)
+
+	assert.Equal(t, driveid.New("f1da660e69bdec82"), drive.ID)
+	assert.Equal(t, "OneDrive", drive.Name)
+	assert.Equal(t, "personal", drive.DriveType)
+	assert.Equal(t, "Test User", drive.OwnerName)
+	assert.Equal(t, "test@outlook.com", drive.OwnerEmail)
+	assert.Equal(t, int64(1560564), drive.QuotaUsed)
+	assert.Equal(t, int64(5368709120), drive.QuotaTotal)
+}
+
+func TestPrimaryDrive_Error(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("request-id", "req-primary-500")
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, `{"error":{"code":"generalException"}}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.PrimaryDrive(context.Background())
+	require.Error(t, err)
+}
+
 func TestDrive_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)

@@ -11,7 +11,6 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 
 | ID | Title | Priority | Package | Notes |
 |----|-------|----------|---------|-------|
-| B-296 | Config-file `log_level` not applied by sync command | P4 | root | `sync` uses `skipConfigAnnotation` so PersistentPreRunE Phase 2 skips config-driven log level. CLI flags (`--verbose`/`--debug`/`--quiet`) still work. |
 
 ## Phase 6.0b: Orchestrator + DriveRunner
 
@@ -124,6 +123,7 @@ Optimization deferred until profiling shows a bottleneck.
 
 | ID | Title | Resolution |
 |----|-------|------------|
+| B-296 | Config-file `log_level` not applied by sync command | **DONE** — `runSync` rebuilds logger from `rawCfg.LoggingConfig` after loading config. CLI flags still override. Test `TestBuildLogger_FromRawConfigLogLevel` added. |
 | B-207 | Document intentional `.partial` preservation on rename failure | **DONE** — Comment added in `transfer_manager.go` (B-207). PR #139. |
 | B-211 | `resumeDownload` TOCTOU race between stat and open | **DONE** — Open-before-stat pattern eliminates TOCTOU (B-211). PR #139. |
 | B-221 | Add comment explaining Go integer range in hash retry loop | **DONE** — Comment explaining Go 1.22 `range N` syntax (B-221). PR #139. |

@@ -23,6 +23,9 @@ onedrive-go
 # Environment file with test account credentials
 .env
 
+# Test credentials (tokens + config for E2E/integration tests)
+.testdata/
+
 # Claude Code local settings
 .claude/
 

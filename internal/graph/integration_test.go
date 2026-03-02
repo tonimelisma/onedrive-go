@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,23 +19,28 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
+	"github.com/tonimelisma/onedrive-go/testutil"
 )
 
 const (
 	integrationTimeout = 30 * time.Second
-	defaultTestDrive   = "personal:test@example.com"
 	driveEnvVar        = "ONEDRIVE_TEST_DRIVE"
-	driveIDEnvVar      = "ONEDRIVE_TEST_DRIVE_ID"
 )
 
 func TestMain(m *testing.M) {
-	loadIntegrationDotEnv()
-	validateIntegrationAllowlist()
+	// Fallback to "../.." — internal/graph/ is two levels below module root.
+	root := testutil.FindModuleRoot("../..")
+	testutil.LoadDotEnv(filepath.Join(root, ".env"))
+	testutil.ValidateAllowlist(driveEnvVar)
 
 	cleanup := setupIntegrationIsolation()
-	defer cleanup()
 
-	os.Exit(m.Run())
+	// Run tests, then clean up explicitly. os.Exit does not run defers,
+	// so we must call cleanup before exiting to preserve rotated tokens.
+	code := m.Run()
+	cleanup()
+	os.Exit(code)
 }
 
 // testLogger returns an slog.Logger at Debug level that writes to t.Log,
@@ -64,7 +70,7 @@ func newIntegrationClient(t *testing.T) *Client {
 
 	drive := os.Getenv(driveEnvVar)
 	if drive == "" {
-		drive = defaultTestDrive
+		t.Fatal("ONEDRIVE_TEST_DRIVE not set")
 	}
 
 	ctx := context.Background()
@@ -91,16 +97,27 @@ func newIntegrationClient(t *testing.T) *Client {
 	return NewClient(DefaultBaseURL, http.DefaultClient, ts, logger, "onedrive-go/test")
 }
 
-// driveIDForTest reads the test drive ID from ONEDRIVE_TEST_DRIVE_ID.
-// Skips the test if not set. Populated by bootstrap tool (--print-drive-id)
-// or CI workflow.
+// driveIDForTest reads .meta.drive_id from the cache file for the test drive.
+// The cache file is in the isolated data dir (copied from .testdata/ by
+// setupIntegrationIsolation). No env var needed — metadata is in the file.
 func driveIDForTest(t *testing.T) driveid.ID {
 	t.Helper()
 
-	id := os.Getenv(driveIDEnvVar)
-	if id == "" {
-		t.Skipf("%s not set -- run: onedrive-go whoami --json --drive <canonical-id>", driveIDEnvVar)
+	drive := os.Getenv(driveEnvVar)
+	if drive == "" {
+		t.Fatal("ONEDRIVE_TEST_DRIVE not set")
 	}
+
+	cid := driveid.MustCanonicalID(drive)
+	tokenPath := config.DriveTokenPath(cid, nil)
+	require.NotEmpty(t, tokenPath, "cannot determine token path for drive %q", drive)
+
+	meta, err := tokenfile.ReadMeta(tokenPath)
+	require.NoError(t, err, "reading token metadata for drive %q", drive)
+
+	id, ok := meta["drive_id"]
+	require.True(t, ok, "cache file missing .meta.drive_id — re-run scripts/bootstrap-test-credentials.sh")
+	require.NotEmpty(t, id, "cache file has empty .meta.drive_id")
 
 	return driveid.New(id)
 }

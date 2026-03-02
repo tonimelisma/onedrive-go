@@ -15,6 +15,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/testutil"
 )
 
 var (
@@ -25,7 +27,8 @@ var (
 
 func TestMain(m *testing.M) {
 	// Load .env and validate safety guards before anything else.
-	loadDotEnv()
+	root := findModuleRoot()
+	testutil.LoadDotEnv(filepath.Join(root, ".env"))
 
 	drive = os.Getenv("ONEDRIVE_TEST_DRIVE")
 	if drive == "" {
@@ -33,11 +36,10 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	validateAllowlist()
+	testutil.ValidateAllowlist("ONEDRIVE_TEST_DRIVE")
 
 	// Set up directory isolation (must be after drive is set, before binary build).
 	cleanupIsolation := setupIsolation()
-	defer cleanupIsolation()
 
 	// Build binary to temp dir.
 	tmpDir, err := os.MkdirTemp("", "onedrive-e2e-*")
@@ -45,7 +47,6 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "creating temp dir: %v\n", err)
 		os.Exit(1)
 	}
-	defer os.RemoveAll(tmpDir)
 
 	binaryPath = filepath.Join(tmpDir, "onedrive-go")
 
@@ -79,25 +80,18 @@ func TestMain(m *testing.M) {
 
 	fmt.Fprintf(os.Stderr, "E2E debug logs: %s\n", logDir)
 
-	os.Exit(m.Run())
+	// Run tests, then clean up explicitly. os.Exit does not run defers,
+	// so we must call cleanup before exiting to preserve rotated tokens.
+	code := m.Run()
+	cleanupIsolation()
+	os.RemoveAll(tmpDir)
+	os.Exit(code)
 }
 
 // findModuleRoot walks up from the current dir to find go.mod.
 func findModuleRoot() string {
-	dir, _ := os.Getwd()
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		}
-
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			// Fallback to ".." — e2e/ is one level below module root.
-			return ".."
-		}
-
-		dir = parent
-	}
+	// Fallback to ".." — e2e/ is one level below module root.
+	return testutil.FindModuleRoot("..")
 }
 
 // sanitizeTestName replaces characters invalid in filenames.
@@ -190,15 +184,15 @@ func fileOpModes(t *testing.T) []e2eMode {
 			name: "with_config",
 			run: func(t *testing.T, args ...string) (string, string) {
 				t.Helper()
-				return runCLIWithConfig(t, cfgPath, args...)
+				return runCLIWithConfig(t, cfgPath, nil, args...)
 			},
 			expectError: func(t *testing.T, args ...string) string {
 				t.Helper()
-				return runCLIWithConfigExpectError(t, cfgPath, args...)
+				return runCLIWithConfigExpectError(t, cfgPath, nil, args...)
 			},
 			poll: func(t *testing.T, expected string, args ...string) string {
 				t.Helper()
-				stdout, _ := pollCLIWithConfigContains(t, cfgPath, expected, pollTimeout, args...)
+				stdout, _ := pollCLIWithConfigContains(t, cfgPath, nil, expected, pollTimeout, args...)
 				return stdout
 			},
 		},
@@ -218,6 +212,33 @@ func writeMinimalConfig(t *testing.T) string {
 
 // --- CLI execution helpers ---
 
+// makeCmd creates an exec.Cmd for the CLI binary with explicit environment.
+// envOverrides (if non-nil) are applied on top of the current process env,
+// ensuring child processes have deterministic environments regardless of
+// any concurrent env mutations. When nil, the process env is inherited as-is.
+func makeCmd(args []string, envOverrides map[string]string) *exec.Cmd {
+	cmd := exec.Command(binaryPath, args...)
+	if len(envOverrides) > 0 {
+		env := os.Environ()
+		for k, v := range envOverrides {
+			found := false
+			prefix := k + "="
+			for i, e := range env {
+				if strings.HasPrefix(e, prefix) {
+					env[i] = prefix + v
+					found = true
+					break
+				}
+			}
+			if !found {
+				env = append(env, prefix+v)
+			}
+		}
+		cmd.Env = env
+	}
+	return cmd
+}
+
 func runCLI(t *testing.T, args ...string) (string, string) {
 	t.Helper()
 
@@ -227,7 +248,7 @@ func runCLI(t *testing.T, args ...string) (string, string) {
 	}
 
 	fullArgs = append(fullArgs, args...)
-	cmd := exec.Command(binaryPath, fullArgs...)
+	cmd := makeCmd(fullArgs, nil)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -255,7 +276,7 @@ func runCLIExpectError(t *testing.T, args ...string) string {
 	}
 
 	fullArgs = append(fullArgs, args...)
-	cmd := exec.Command(binaryPath, fullArgs...)
+	cmd := makeCmd(fullArgs, nil)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -271,7 +292,8 @@ func runCLIExpectError(t *testing.T, args ...string) string {
 }
 
 // runCLIWithConfigExpectError runs the CLI with a config file and expects failure.
-func runCLIWithConfigExpectError(t *testing.T, cfgPath string, args ...string) string {
+// env overrides (if non-nil) are applied to the child process environment.
+func runCLIWithConfigExpectError(t *testing.T, cfgPath string, env map[string]string, args ...string) string {
 	t.Helper()
 
 	fullArgs := []string{"--config", cfgPath, "--drive", drive}
@@ -280,7 +302,7 @@ func runCLIWithConfigExpectError(t *testing.T, cfgPath string, args ...string) s
 	}
 
 	fullArgs = append(fullArgs, args...)
-	cmd := exec.Command(binaryPath, fullArgs...)
+	cmd := makeCmd(fullArgs, env)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -311,7 +333,7 @@ func pollCLIContains(
 		}
 
 		fullArgs = append(fullArgs, args...)
-		cmd := exec.Command(binaryPath, fullArgs...)
+		cmd := makeCmd(fullArgs, nil)
 
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
@@ -352,15 +374,16 @@ func pollBackoff(attempt int) time.Duration {
 
 // pollCLIWithConfigContains retries a CLI command with a config file until
 // stdout contains the expected string or timeout is reached.
+// env overrides (if non-nil) are applied to the child process environment.
 func pollCLIWithConfigContains(
-	t *testing.T, cfgPath, expected string, timeout time.Duration, args ...string,
+	t *testing.T, cfgPath string, env map[string]string, expected string, timeout time.Duration, args ...string,
 ) (string, string) {
 	t.Helper()
 
 	deadline := time.Now().Add(timeout)
 
 	for attempt := 0; ; attempt++ {
-		stdout, stderr, err := runCLIWithConfigAllowError(t, cfgPath, args...)
+		stdout, stderr, err := runCLIWithConfigAllowError(t, cfgPath, env, args...)
 		if err == nil && strings.Contains(stdout, expected) {
 			return stdout, stderr
 		}
@@ -397,13 +420,14 @@ func pollCLISuccess(t *testing.T, timeout time.Duration, args ...string) (string
 
 // pollCLIWithConfigSuccess retries a CLI command with a config file until
 // it succeeds (exit 0).
-func pollCLIWithConfigSuccess(t *testing.T, cfgPath string, timeout time.Duration, args ...string) (string, string) {
+// env overrides (if non-nil) are applied to the child process environment.
+func pollCLIWithConfigSuccess(t *testing.T, cfgPath string, env map[string]string, timeout time.Duration, args ...string) (string, string) {
 	t.Helper()
 
 	deadline := time.Now().Add(timeout)
 
 	for attempt := 0; ; attempt++ {
-		stdout, stderr, err := runCLIWithConfigAllowError(t, cfgPath, args...)
+		stdout, stderr, err := runCLIWithConfigAllowError(t, cfgPath, env, args...)
 		if err == nil {
 			return stdout, stderr
 		}
@@ -427,7 +451,7 @@ func runCLIAllowError(t *testing.T, args ...string) (string, string, error) {
 	}
 
 	fullArgs = append(fullArgs, args...)
-	cmd := exec.Command(binaryPath, fullArgs...)
+	cmd := makeCmd(fullArgs, nil)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -454,7 +478,7 @@ func TestE2E_RoundTrip(t *testing.T) {
 			// Cleanup at the end — delete the test folder.
 			t.Cleanup(func() {
 				fullArgs := []string{"--drive", drive, "rm", "-r", "/" + testFolder}
-				cmd := exec.Command(binaryPath, fullArgs...)
+				cmd := makeCmd(fullArgs, nil)
 				_ = cmd.Run()
 			})
 
@@ -591,7 +615,7 @@ func TestE2E_ErrorCases(t *testing.T) {
 
 				t.Cleanup(func() {
 					fullArgs := []string{"--drive", drive, "rm", "-r", "/" + testFolder}
-					cmd := exec.Command(binaryPath, fullArgs...)
+					cmd := makeCmd(fullArgs, nil)
 					_ = cmd.Run()
 				})
 
@@ -652,7 +676,7 @@ func TestE2E_QuietFlag(t *testing.T) {
 
 				t.Cleanup(func() {
 					fullArgs := []string{"--drive", drive, "rm", "-r", "/" + testFolder}
-					cmd := exec.Command(binaryPath, fullArgs...)
+					cmd := makeCmd(fullArgs, nil)
 					_ = cmd.Run()
 				})
 

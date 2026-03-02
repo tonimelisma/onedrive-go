@@ -6,7 +6,7 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    - cron: '0 3 * * *' # 3 AM UTC daily — keeps refresh tokens alive
+    - cron: '0 10 * * *' # 10 AM UTC (3 AM PDT) — keeps refresh tokens alive
   workflow_dispatch:
 
 # Cancel stale PR runs; never cancel push/schedule runs.
@@ -59,6 +59,7 @@ jobs:
     if: vars.AZURE_CLIENT_ID != ''
     env:
       ONEDRIVE_TEST_DRIVE: ${{ vars.ONEDRIVE_TEST_DRIVE_INTEGRATION }}
+      ONEDRIVE_ALLOWED_TEST_ACCOUNTS: ${{ vars.ONEDRIVE_ALLOWED_TEST_ACCOUNTS }}
 
     steps:
       - uses: actions/checkout@v4
@@ -77,83 +78,52 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Load token from Key Vault
+      - name: Download credentials to .testdata/
         run: |
           set -euo pipefail
-          DATA_DIR="$HOME/.local/share/onedrive-go"
-          mkdir -p "$DATA_DIR"
+          mkdir -p .testdata
 
-          SANITIZED=$(echo "$ONEDRIVE_TEST_DRIVE" | sed 's/:/_/')
-          TOKEN_FILE="token_${SANITIZED}.json"
-          TOKEN_PATH="${DATA_DIR}/${TOKEN_FILE}"
-          SECRET_NAME="onedrive-oauth-token-$(echo "$ONEDRIVE_TEST_DRIVE" | sed 's/[:@.]/-/g')"
+          # Download config.
+          az keyvault secret download \
+            --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
+            --name "onedrive-test-config" \
+            --file ".testdata/config.toml" \
+            --encoding utf-8
 
-          echo "Loading token for: ${ONEDRIVE_TEST_DRIVE} (secret: ${SECRET_NAME})"
+          # Download cache file for this job's drive.
+          SANITIZED=$(echo "$ONEDRIVE_TEST_DRIVE" | sed 's/[:@._]/-/g')
+          SECRET_NAME="onedrive-cache-${SANITIZED}"
+
+          SANITIZED_FILE=$(echo "$ONEDRIVE_TEST_DRIVE" | sed 's/:/_/')
+          TOKEN_FILE="token_${SANITIZED_FILE}.json"
+
+          echo "Downloading: ${SECRET_NAME} → .testdata/${TOKEN_FILE}"
           az keyvault secret download \
             --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
             --name "$SECRET_NAME" \
-            --file "$TOKEN_PATH" \
+            --file ".testdata/${TOKEN_FILE}" \
             --encoding utf-8
 
-          if ! jq -e '.token.refresh_token' "$TOKEN_PATH" > /dev/null 2>&1; then
-            echo "::error::Token is missing .token.refresh_token"
-            exit 1
-          fi
-
-          echo "Token loaded: ${TOKEN_PATH}"
-
-      - name: Bootstrap token metadata
-        run: |
-          set -euo pipefail
-          DATA_DIR="$HOME/.local/share/onedrive-go"
-
-          WHOAMI_JSON=$(go run . whoami --json --drive "$ONEDRIVE_TEST_DRIVE")
-          DRIVE_ID=$(echo "$WHOAMI_JSON" | jq -r '.drives[0].id')
-          USER_ID=$(echo "$WHOAMI_JSON" | jq -r '.user.id')
-          DISPLAY_NAME=$(echo "$WHOAMI_JSON" | jq -r '.user.display_name')
-
-          SANITIZED=$(echo "$ONEDRIVE_TEST_DRIVE" | sed 's/:/_/')
-          TOKEN_PATH="${DATA_DIR}/token_${SANITIZED}.json"
-
-          jq --arg did "$DRIVE_ID" --arg uid "$USER_ID" --arg dn "$DISPLAY_NAME" \
-            '.meta = (.meta // {}) + {
-              "drive_id": $did,
-              "user_id": $uid,
-              "display_name": $dn,
-              "org_name": "",
-              "cached_at": (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-            }' "$TOKEN_PATH" > "${TOKEN_PATH}.tmp" \
-            && mv "${TOKEN_PATH}.tmp" "$TOKEN_PATH" \
-            && chmod 600 "$TOKEN_PATH"
-
-          echo "drive_id=${DRIVE_ID} user_id=${USER_ID}"
-
-          # Export DRIVE_ID for the test step.
-          echo "ONEDRIVE_TEST_DRIVE_ID=${DRIVE_ID}" >> "$GITHUB_ENV"
+          echo "=== .testdata/ contents ==="
+          ls -la .testdata/
 
       - name: Run integration tests
         run: |
           set -euo pipefail
           echo "=== Integration tests for: ${ONEDRIVE_TEST_DRIVE} ==="
-          ONEDRIVE_ALLOWED_TEST_ACCOUNTS="$ONEDRIVE_TEST_DRIVE" \
-            go test -tags=integration -race -v -timeout=5m ./internal/graph/...
+          go test -tags=integration -race -v -timeout=5m ./internal/graph/...
 
       - name: Save rotated token to Key Vault
         if: always()
         run: |
           set -euo pipefail
-          DATA_DIR="$HOME/.local/share/onedrive-go"
-          SANITIZED=$(echo "$ONEDRIVE_TEST_DRIVE" | sed 's/:/_/')
-          TOKEN_PATH="${DATA_DIR}/token_${SANITIZED}.json"
-          SECRET_NAME="onedrive-oauth-token-$(echo "$ONEDRIVE_TEST_DRIVE" | sed 's/[:@.]/-/g')"
+          SANITIZED_FILE=$(echo "$ONEDRIVE_TEST_DRIVE" | sed 's/:/_/')
+          TOKEN_PATH=".testdata/token_${SANITIZED_FILE}.json"
+          SANITIZED=$(echo "$ONEDRIVE_TEST_DRIVE" | sed 's/[:@._]/-/g')
+          SECRET_NAME="onedrive-cache-${SANITIZED}"
 
           if [ ! -f "$TOKEN_PATH" ]; then
             echo "::warning::Token file missing — skipping save"
-            exit 0
-          fi
-
-          if ! jq -e '.token.refresh_token' "$TOKEN_PATH" > /dev/null 2>&1; then
-            echo "::warning::Token has no .token.refresh_token — skipping save"
             exit 0
           fi
 
@@ -170,6 +140,7 @@ jobs:
     if: vars.AZURE_CLIENT_ID != ''
     env:
       ONEDRIVE_TEST_DRIVE: ${{ vars.ONEDRIVE_TEST_DRIVE_E2E }}
+      ONEDRIVE_ALLOWED_TEST_ACCOUNTS: ${{ vars.ONEDRIVE_ALLOWED_TEST_ACCOUNTS }}
 
     steps:
       - uses: actions/checkout@v4
@@ -188,70 +159,34 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Load token from Key Vault
+      - name: Download credentials to .testdata/
         run: |
           set -euo pipefail
-          DATA_DIR="$HOME/.local/share/onedrive-go"
-          mkdir -p "$DATA_DIR"
+          mkdir -p .testdata
 
-          SANITIZED=$(echo "$ONEDRIVE_TEST_DRIVE" | sed 's/:/_/')
-          TOKEN_FILE="token_${SANITIZED}.json"
-          TOKEN_PATH="${DATA_DIR}/${TOKEN_FILE}"
-          SECRET_NAME="onedrive-oauth-token-$(echo "$ONEDRIVE_TEST_DRIVE" | sed 's/[:@.]/-/g')"
+          # Download config.
+          az keyvault secret download \
+            --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
+            --name "onedrive-test-config" \
+            --file ".testdata/config.toml" \
+            --encoding utf-8
 
-          echo "Loading token for: ${ONEDRIVE_TEST_DRIVE} (secret: ${SECRET_NAME})"
+          # Download cache file for this job's drive.
+          SANITIZED=$(echo "$ONEDRIVE_TEST_DRIVE" | sed 's/[:@._]/-/g')
+          SECRET_NAME="onedrive-cache-${SANITIZED}"
+
+          SANITIZED_FILE=$(echo "$ONEDRIVE_TEST_DRIVE" | sed 's/:/_/')
+          TOKEN_FILE="token_${SANITIZED_FILE}.json"
+
+          echo "Downloading: ${SECRET_NAME} → .testdata/${TOKEN_FILE}"
           az keyvault secret download \
             --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
             --name "$SECRET_NAME" \
-            --file "$TOKEN_PATH" \
+            --file ".testdata/${TOKEN_FILE}" \
             --encoding utf-8
 
-          if ! jq -e '.token.refresh_token' "$TOKEN_PATH" > /dev/null 2>&1; then
-            echo "::error::Token is missing .token.refresh_token"
-            exit 1
-          fi
-
-          echo "Token loaded: ${TOKEN_PATH}"
-
-      - name: Bootstrap token metadata
-        run: |
-          set -euo pipefail
-          DATA_DIR="$HOME/.local/share/onedrive-go"
-
-          WHOAMI_JSON=$(go run . whoami --json --drive "$ONEDRIVE_TEST_DRIVE")
-          DRIVE_ID=$(echo "$WHOAMI_JSON" | jq -r '.drives[0].id')
-          USER_ID=$(echo "$WHOAMI_JSON" | jq -r '.user.id')
-          DISPLAY_NAME=$(echo "$WHOAMI_JSON" | jq -r '.user.display_name')
-
-          SANITIZED=$(echo "$ONEDRIVE_TEST_DRIVE" | sed 's/:/_/')
-          TOKEN_PATH="${DATA_DIR}/token_${SANITIZED}.json"
-
-          jq --arg did "$DRIVE_ID" --arg uid "$USER_ID" --arg dn "$DISPLAY_NAME" \
-            '.meta = (.meta // {}) + {
-              "drive_id": $did,
-              "user_id": $uid,
-              "display_name": $dn,
-              "org_name": "",
-              "cached_at": (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-            }' "$TOKEN_PATH" > "${TOKEN_PATH}.tmp" \
-            && mv "${TOKEN_PATH}.tmp" "$TOKEN_PATH" \
-            && chmod 600 "$TOKEN_PATH"
-
-          echo "drive_id=${DRIVE_ID} user_id=${USER_ID}"
-
-      - name: Create config file
-        run: |
-          set -euo pipefail
-          CONFIG_DIR="$HOME/.config/onedrive-go"
-          mkdir -p "$CONFIG_DIR"
-          CONFIG_PATH="${CONFIG_DIR}/config.toml"
-
-          echo "# CI-generated config" > "$CONFIG_PATH"
-          echo "" >> "$CONFIG_PATH"
-          echo "[\"${ONEDRIVE_TEST_DRIVE}\"]" >> "$CONFIG_PATH"
-
-          echo "Config written: ${CONFIG_PATH}"
-          cat "$CONFIG_PATH"
+          echo "=== .testdata/ contents ==="
+          ls -la .testdata/
 
       - name: Run E2E tests
         run: |
@@ -265,7 +200,6 @@ jobs:
 
           echo "=== E2E tests (tags: ${E2E_TAGS}) ==="
           E2E_LOG_DIR=/tmp/e2e-debug-logs \
-          ONEDRIVE_ALLOWED_TEST_ACCOUNTS="$ONEDRIVE_TEST_DRIVE" \
             go test -tags="${E2E_TAGS}" -race -v -timeout=30m ./e2e/...
 
       - name: Upload E2E debug logs
@@ -280,18 +214,13 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          DATA_DIR="$HOME/.local/share/onedrive-go"
-          SANITIZED=$(echo "$ONEDRIVE_TEST_DRIVE" | sed 's/:/_/')
-          TOKEN_PATH="${DATA_DIR}/token_${SANITIZED}.json"
-          SECRET_NAME="onedrive-oauth-token-$(echo "$ONEDRIVE_TEST_DRIVE" | sed 's/[:@.]/-/g')"
+          SANITIZED_FILE=$(echo "$ONEDRIVE_TEST_DRIVE" | sed 's/:/_/')
+          TOKEN_PATH=".testdata/token_${SANITIZED_FILE}.json"
+          SANITIZED=$(echo "$ONEDRIVE_TEST_DRIVE" | sed 's/[:@._]/-/g')
+          SECRET_NAME="onedrive-cache-${SANITIZED}"
 
           if [ ! -f "$TOKEN_PATH" ]; then
             echo "::warning::Token file missing — skipping save"
-            exit 0
-          fi
-
-          if ! jq -e '.token.refresh_token' "$TOKEN_PATH" > /dev/null 2>&1; then
-            echo "::warning::Token has no .token.refresh_token — skipping save"
             exit 0
           fi
 

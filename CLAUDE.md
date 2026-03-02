@@ -71,6 +71,7 @@
 - **`internal/sync/`** — Event-driven sync: types, baseline, observers, buffer, planner, executor, tracker, workers, orchestrator, engine, verify
 - **Root package** — Cobra CLI: login, logout, whoami, status, drive (list/add/remove/search), ls, get, put, rm, mkdir, stat, sync, pause, resume, conflicts, resolve, verify
 - **`e2e/`** — E2E test suite against live OneDrive
+- **`testutil/`** — Shared stdlib-only test helpers (used by both `e2e/` and `internal/graph/` integration tests; NOT under `internal/` so e2e can import it)
 
 ## Engineering Philosophy
 
@@ -121,7 +122,32 @@
 - Table-driven tests where appropriate, with specific assertions (check values, not just "no error")
 - Scope verification to own package: `go test ./internal/graph/...` not `go test ./...`
 
-**E2E tests** run against a live OneDrive account (configured in `.env`). Test account names are never committed — use `.env` (gitignored) or environment variables. Both E2E and integration tests require `ONEDRIVE_ALLOWED_TEST_ACCOUNTS` and `ONEDRIVE_TEST_DRIVE` to be set (crashes without them). Copy `.env.example` to `.env` and fill in your test accounts. For full E2E details (credentials, CI setup, bootstrapping, tiers), see [docs/design/test-strategy.md §6](docs/design/test-strategy.md#6-e2e-test-strategy).
+**E2E & integration tests** run against live OneDrive accounts. Test account names are never committed — use `.env` (gitignored) or environment variables. Both suites require `ONEDRIVE_ALLOWED_TEST_ACCOUNTS` and `ONEDRIVE_TEST_DRIVE` to be set (crashes without them). Copy `.env.example` to `.env` and fill in your test accounts. E2E tests are tiered: `e2e` tag (fast, every CI push) vs `e2e_full` tag (slow, nightly/manual, 30-min timeout).
+
+**Test credential pipeline** (one-time setup, then CI is self-sustaining):
+
+1. **Bootstrap** — run once per test account (interactive, requires browser):
+   ```bash
+   ./scripts/bootstrap-test-credentials.sh   # opens browser for OAuth login
+   ```
+   Creates `.testdata/` with token files and `config.toml`. Run multiple times to add accounts (config accumulates drive sections).
+
+2. **Migrate to CI** — upload `.testdata/` to Azure Key Vault:
+   ```bash
+   az login                                   # if not already logged in
+   ./scripts/migrate-test-data-to-ci.sh       # uploads tokens + config to Key Vault
+   ```
+   Secret naming: `onedrive-cache-<sanitized-drive-id>` for tokens, `onedrive-test-config` for config.
+
+3. **CI pipeline** — fully automatic after migration:
+   - Downloads credentials from Key Vault to `.testdata/` via OIDC
+   - Runs tests with XDG isolation (`.testdata/` → temp dirs)
+   - Saves rotated tokens back to Key Vault (keeps refresh tokens alive)
+   - Nightly cron (10 AM UTC) prevents 90-day token expiry
+
+**Re-bootstrapping** is needed if tokens expire (90 days idle) or Azure Key Vault secrets are purged. Run bootstrap + migrate again.
+
+For full details see [docs/design/test-strategy.md §6](docs/design/test-strategy.md#6-e2e-test-strategy).
 
 **Code quality**: Functions do one thing, accept interfaces / return structs, sentinel errors with `%w` wrapping, no package-level mutable state.
 
@@ -191,19 +217,18 @@ After each increment, run through this entire checklist. If something fails, fix
 4. [ ] **Lint**: `golangci-lint run`
 5. [ ] **Coverage**: `go tool cover -func=/tmp/cover.out | grep total` — never decrease
 6. [ ] **Fast E2E**: `go test -tags=e2e -race -v -timeout=10m ./e2e/...` (reads `.env` for test accounts)
-7. [ ] **Top-up loop**: Review the entire increment based on the context you have. Do not read or re-read any files at this stage. Identify anything that could be improved — even minor issues (naming, logging, edge cases, defensive checks, test gaps, comments). Present the full list to the human. Then fix all of them automatically, re-run gates 1-6, and review again. Repeat until a full review pass finds zero issues of any size
-8. [ ] **Docs updated**:
+7. [ ] **Docs updated**:
     - `CLAUDE.md` — update if structural changes (new packages, commands, deps)
     - `BACKLOG.md` — check before starting work, update when discovering or fixing issues
     - `LEARNINGS.md` — read for patterns and gotchas, add new institutional knowledge
     - `docs/roadmap.md` — check current phase status, update on completion
     - `docs/design/` — update relevant design docs if design changed
-9. [ ] **Push and CI green**: Push branch, open PR, `ci.yml` green (4 jobs: lint, test, integration, e2e). Merge with `./scripts/poll-and-merge.sh <pr_number>`
-10. [ ] **Cleanup**: Clean `git status`. Remove the current worktree after merge. **NEVER delete other worktrees or branches — even if they appear stale.** Instead, report all other worktrees and branches to the human, including their last commit date (use `git log -1 --format='%ci' <branch>` for each). Let the human decide what to clean up
-11. [ ] **Increment report**: Present to the human:
+8. [ ] **Push and CI green**: Push branch, open PR, `ci.yml` green (4 jobs: lint, test, integration, e2e). Merge with `./scripts/poll-and-merge.sh <pr_number>`
+9. [ ] **Cleanup**: Clean `git status`. Remove the current worktree after merge. **NEVER delete other worktrees or branches — even if they appear stale.** Instead, report all other worktrees and branches to the human, including their last commit date (use `git log -1 --format='%ci' <branch>` for each). Let the human decide what to clean up
+10. [ ] **Increment report**: Present to the human:
     - **Plan deviations**: For every deviation from the approved plan — what changed, why it changed, what was done instead, and whether the new approach is the long-term solution or a temporary measure that needs follow-up (with BACKLOG IDs for any follow-up)
     - **Process changes**: What you would do differently next time in how the work was planned or executed
-    - **Top-up recommendations**: Any remaining codebase improvements you'd make
+    - **Top-up recommendations**: Any remaining codebase improvements you'd make. Don't be coy. Engineering effort is free, and this is mission-critical software. Ensure even small issues are brought up, and don't be coy to suggest more ambitious refactoring.
     - **Architecture re-envisioning**: If you were starting from a blank slate, would you build it the same way? Propose any dramatic architectural changes if a better design is apparent
     - **Unfixed items**: Anything you were unable to address in this increment (with BACKLOG IDs for deferred items)
 

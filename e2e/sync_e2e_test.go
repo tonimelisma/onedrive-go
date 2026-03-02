@@ -6,15 +6,15 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/testutil"
 )
 
 // ---------------------------------------------------------------------------
@@ -24,15 +24,16 @@ import (
 // writeSyncConfig creates a minimal TOML config file pointing to the given
 // syncDir for the test drive. Each test gets per-test state DB isolation via
 // XDG_DATA_HOME override. The token file is copied from TestMain's isolated
-// data dir (testDataDir). Returns the path to the temp config file.
-func writeSyncConfig(t *testing.T, syncDir string) string {
+// data dir (testDataDir). Returns the config path and environment overrides
+// that must be passed to CLI child processes (not set in process env).
+func writeSyncConfig(t *testing.T, syncDir string) (string, map[string]string) {
 	t.Helper()
 
-	// Per-test isolation: override XDG_DATA_HOME so each test gets its own
-	// state DB. Token is copied from TestMain's isolated data dir.
+	// Per-test isolation: each test gets its own XDG_DATA_HOME and HOME so
+	// state DBs don't collide. Env overrides are returned (not set via
+	// t.Setenv) and passed explicitly to child processes via cmd.Env.
 	perTestData := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", perTestData)
-	t.Setenv("HOME", t.TempDir())
+	perTestHome := t.TempDir()
 
 	perTestDataDir := filepath.Join(perTestData, "onedrive-go")
 	require.NoError(t, os.MkdirAll(perTestDataDir, 0o755))
@@ -45,11 +46,17 @@ sync_dir = %q
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o644))
 
-	return cfgPath
+	env := map[string]string{
+		"XDG_DATA_HOME": perTestData,
+		"HOME":          perTestHome,
+	}
+
+	return cfgPath, env
 }
 
 // runCLIWithConfig runs the CLI binary with a custom config file.
-func runCLIWithConfig(t *testing.T, cfgPath string, args ...string) (string, string) {
+// env overrides (if non-nil) are applied to the child process environment.
+func runCLIWithConfig(t *testing.T, cfgPath string, env map[string]string, args ...string) (string, string) {
 	t.Helper()
 
 	fullArgs := []string{"--config", cfgPath, "--drive", drive}
@@ -58,7 +65,7 @@ func runCLIWithConfig(t *testing.T, cfgPath string, args ...string) (string, str
 	}
 
 	fullArgs = append(fullArgs, args...)
-	cmd := exec.Command(binaryPath, fullArgs...)
+	cmd := makeCmd(fullArgs, env)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -77,7 +84,8 @@ func runCLIWithConfig(t *testing.T, cfgPath string, args ...string) (string, str
 
 // runCLIWithConfigAllowError runs the CLI binary with a custom config file
 // and returns the output even on error.
-func runCLIWithConfigAllowError(t *testing.T, cfgPath string, args ...string) (string, string, error) {
+// env overrides (if non-nil) are applied to the child process environment.
+func runCLIWithConfigAllowError(t *testing.T, cfgPath string, env map[string]string, args ...string) (string, string, error) {
 	t.Helper()
 
 	fullArgs := []string{"--config", cfgPath, "--drive", drive}
@@ -86,7 +94,7 @@ func runCLIWithConfigAllowError(t *testing.T, cfgPath string, args ...string) (s
 	}
 
 	fullArgs = append(fullArgs, args...)
-	cmd := exec.Command(binaryPath, fullArgs...)
+	cmd := makeCmd(fullArgs, env)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -133,7 +141,7 @@ func cleanupRemoteFolder(t *testing.T, folder string) {
 	t.Helper()
 
 	fullArgs := []string{"--drive", drive, "rm", "-r", "/" + folder}
-	cmd := exec.Command(binaryPath, fullArgs...)
+	cmd := makeCmd(fullArgs, nil)
 	_ = cmd.Run()
 }
 
@@ -143,7 +151,7 @@ func cleanupRemoteFolder(t *testing.T, folder string) {
 
 func TestE2E_Sync_UploadOnly(t *testing.T) {
 	syncDir := t.TempDir()
-	cfgPath := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfig(t, syncDir)
 
 	// Create unique test folder and files.
 	testFolder := fmt.Sprintf("e2e-sync-up-%d", time.Now().UnixNano())
@@ -152,26 +160,22 @@ func TestE2E_Sync_UploadOnly(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "upload-test.txt"), []byte("sync upload test\n"), 0o644))
 
 	// Cleanup remote after test.
-	t.Cleanup(func() {
-		fullArgs := []string{"--drive", drive, "rm", "-r", "/" + testFolder}
-		cmd := exec.Command(binaryPath, fullArgs...)
-		_ = cmd.Run()
-	})
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Run sync --upload-only.
-	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 	assert.Contains(t, stderr, "Mode: upload-only")
 
 	// Poll for eventual consistency — file may not be immediately visible
 	// via path-based queries after upload.
 	remotePath := "/" + testFolder + "/upload-test.txt"
-	stdout, _ := pollCLIWithConfigContains(t, cfgPath, "upload-test.txt", pollTimeout, "stat", remotePath)
+	stdout, _ := pollCLIWithConfigContains(t, cfgPath, env, "upload-test.txt", pollTimeout, "stat", remotePath)
 	assert.Contains(t, stdout, "upload-test.txt")
 }
 
 func TestE2E_Sync_DownloadOnly(t *testing.T) {
 	syncDir := t.TempDir()
-	cfgPath := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfig(t, syncDir)
 
 	// Create a unique folder + file remotely via put.
 	testFolder := fmt.Sprintf("e2e-sync-dl-%d", time.Now().UnixNano())
@@ -192,14 +196,10 @@ func TestE2E_Sync_DownloadOnly(t *testing.T) {
 	runCLI(t, "put", tmpFile.Name(), remotePath)
 
 	// Cleanup remote after test.
-	t.Cleanup(func() {
-		fullArgs := []string{"--drive", drive, "rm", "-r", "/" + testFolder}
-		cmd := exec.Command(binaryPath, fullArgs...)
-		_ = cmd.Run()
-	})
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Run sync --download-only.
-	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--download-only", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--download-only", "--force")
 	assert.Contains(t, stderr, "Mode: download-only")
 
 	// Verify file appeared locally.
@@ -211,7 +211,7 @@ func TestE2E_Sync_DownloadOnly(t *testing.T) {
 
 func TestE2E_Sync_DryRun(t *testing.T) {
 	syncDir := t.TempDir()
-	cfgPath := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfig(t, syncDir)
 
 	// Create a local file.
 	testFolder := fmt.Sprintf("e2e-sync-dry-%d", time.Now().UnixNano())
@@ -220,14 +220,10 @@ func TestE2E_Sync_DryRun(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "dryrun.txt"), []byte("dry run test\n"), 0o644))
 
 	// Cleanup remote (should not exist, but best-effort).
-	t.Cleanup(func() {
-		fullArgs := []string{"--drive", drive, "rm", "-r", "/" + testFolder}
-		cmd := exec.Command(binaryPath, fullArgs...)
-		_ = cmd.Run()
-	})
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Run sync --dry-run --upload-only.
-	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--dry-run", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--dry-run", "--force")
 	assert.Contains(t, stderr, "Dry run")
 
 	// Verify file was NOT uploaded.
@@ -237,7 +233,7 @@ func TestE2E_Sync_DryRun(t *testing.T) {
 
 func TestE2E_Sync_Verify(t *testing.T) {
 	syncDir := t.TempDir()
-	cfgPath := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfig(t, syncDir)
 
 	// Create and sync a file.
 	testFolder := fmt.Sprintf("e2e-sync-ver-%d", time.Now().UnixNano())
@@ -246,17 +242,13 @@ func TestE2E_Sync_Verify(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "verify-me.txt"), []byte("verify test\n"), 0o644))
 
 	// Cleanup remote after test.
-	t.Cleanup(func() {
-		fullArgs := []string{"--drive", drive, "rm", "-r", "/" + testFolder}
-		cmd := exec.Command(binaryPath, fullArgs...)
-		_ = cmd.Run()
-	})
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Sync to establish baseline.
-	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Run verify.
-	stdout, _, verifyErr := runCLIWithConfigAllowError(t, cfgPath, "verify")
+	stdout, _, verifyErr := runCLIWithConfigAllowError(t, cfgPath, env, "verify")
 
 	// Verify should pass (exit 0) or show verified files.
 	if verifyErr != nil {
@@ -268,10 +260,10 @@ func TestE2E_Sync_Verify(t *testing.T) {
 
 func TestE2E_Sync_Conflicts(t *testing.T) {
 	syncDir := t.TempDir()
-	cfgPath := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfig(t, syncDir)
 
 	// Run conflicts — should show no conflicts on a fresh drive.
-	stdout, _ := runCLIWithConfig(t, cfgPath, "conflicts")
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
 	// Trim whitespace for comparison.
 	assert.True(t, strings.Contains(stdout, "No unresolved conflicts"),
 		"expected 'No unresolved conflicts' in output, got: %s", stdout)
@@ -282,15 +274,19 @@ func TestE2E_Sync_DriveRemoveAndReAdd(t *testing.T) {
 	// (via platform default path), allowing incremental delta sync to resume.
 	syncDir := t.TempDir()
 
-	// Per-test isolation: override XDG_DATA_HOME so this test gets its own
-	// state DB. Token is copied from TestMain's isolated data dir.
+	// Per-test isolation: each child process gets its own XDG_DATA_HOME and
+	// HOME via explicit cmd.Env, avoiding global env mutation.
 	perTestData := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", perTestData)
-	t.Setenv("HOME", t.TempDir())
+	perTestHome := t.TempDir()
 
 	tempDataDir := filepath.Join(perTestData, "onedrive-go")
 	require.NoError(t, os.MkdirAll(tempDataDir, 0o755))
 	copyTokenFile(t, testDataDir, tempDataDir)
+
+	env := map[string]string{
+		"XDG_DATA_HOME": perTestData,
+		"HOME":          perTestHome,
+	}
 
 	testFolder := fmt.Sprintf("e2e-sync-readd-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
@@ -315,12 +311,12 @@ sync_dir = %q
 		filepath.Join(localDir, "file1.txt"), []byte("first file\n"), 0o644))
 
 	cfgPath := writeConfig(t)
-	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 	assert.Contains(t, stderr, "Mode: upload-only")
 
 	// Poll to verify file1 exists remotely.
 	remotePath1 := "/" + testFolder + "/file1.txt"
-	pollCLIWithConfigContains(t, cfgPath, "file1.txt", pollTimeout, "stat", remotePath1)
+	pollCLIWithConfigContains(t, cfgPath, env, "file1.txt", pollTimeout, "stat", remotePath1)
 
 	// Step 2: Delete the drive section from config (simulate "drive remove").
 	// Write an empty config — the drive section is gone.
@@ -334,30 +330,14 @@ sync_dir = %q
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "file2.txt"), []byte("second file\n"), 0o644))
 
-	_, stderr = runCLIWithConfig(t, cfgPath2, "sync", "--upload-only", "--force")
+	_, stderr = runCLIWithConfig(t, cfgPath2, env, "sync", "--upload-only", "--force")
 	assert.Contains(t, stderr, "Mode: upload-only")
 
 	// Step 5: Verify both files exist remotely (proves delta resume from
 	// preserved state DB — file1 wasn't re-uploaded, file2 was uploaded).
 	remotePath2 := "/" + testFolder + "/file2.txt"
-	pollCLIWithConfigContains(t, cfgPath2, "file2.txt", pollTimeout, "stat", remotePath2)
-	pollCLIWithConfigContains(t, cfgPath2, "file1.txt", pollTimeout, "stat", remotePath1)
-}
-
-// e2eDataDir returns the platform-specific data directory for a given home.
-// Mirrors internal/config.DefaultDataDir() without importing internal packages.
-// Checks XDG_DATA_HOME first on all platforms (matching production behavior).
-func e2eDataDir(home string) string {
-	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
-		return filepath.Join(xdg, "onedrive-go")
-	}
-
-	switch runtime.GOOS {
-	case "darwin":
-		return filepath.Join(home, "Library", "Application Support", "onedrive-go")
-	default:
-		return filepath.Join(home, ".local", "share", "onedrive-go")
-	}
+	pollCLIWithConfigContains(t, cfgPath2, env, "file2.txt", pollTimeout, "stat", remotePath2)
+	pollCLIWithConfigContains(t, cfgPath2, env, "file1.txt", pollTimeout, "stat", remotePath1)
 }
 
 // copyTokenFile copies the token file for the test drive from srcDir to dstDir.
@@ -365,19 +345,13 @@ func e2eDataDir(home string) string {
 func copyTokenFile(t *testing.T, srcDir, dstDir string) {
 	t.Helper()
 
-	// Parse "personal:user@example.com" -> "token_personal_user@example.com.json"
-	parts := strings.SplitN(drive, ":", 2)
-	if len(parts) < 2 {
-		t.Fatalf("cannot parse drive %q for token filename", drive)
-	}
-
-	tokenName := "token_" + parts[0] + "_" + parts[1] + ".json"
-	srcPath := filepath.Join(srcDir, tokenName)
+	name := testutil.TokenFileName(drive)
+	srcPath := filepath.Join(srcDir, name)
 
 	data, err := os.ReadFile(srcPath)
 	if err != nil {
 		t.Fatalf("cannot read token file %s: %v", srcPath, err)
 	}
 
-	require.NoError(t, os.WriteFile(filepath.Join(dstDir, tokenName), data, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dstDir, name), data, 0o600))
 }

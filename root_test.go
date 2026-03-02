@@ -485,6 +485,70 @@ func TestCLIContext_Statusf_Normal(t *testing.T) {
 	cc.Statusf("status message: %s\n", "ok")
 }
 
+// --- B-296: sync command log_level fix ---
+
+// TestBuildLogger_FromRawConfigLogLevel verifies the pattern used to apply
+// config-file log_level in the sync command. sync uses skipConfigAnnotation
+// for multi-drive resolution, so Phase 2 logger construction is skipped.
+// runSync rebuilds the logger from rawCfg.LoggingConfig after loading config.
+// This test ensures that a ResolvedDrive with only LoggingConfig populated
+// (and all other fields at zero value) correctly applies the log level.
+func TestBuildLogger_FromRawConfigLogLevel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		logLevel  string
+		wantInfo  bool
+		wantDebug bool
+	}{
+		{
+			name:      "info level",
+			logLevel:  "info",
+			wantInfo:  true,
+			wantDebug: false,
+		},
+		{
+			name:      "debug level",
+			logLevel:  "debug",
+			wantInfo:  true,
+			wantDebug: true,
+		},
+		{
+			name:      "warn level",
+			logLevel:  "warn",
+			wantInfo:  false,
+			wantDebug: false,
+		},
+		{
+			name:      "empty level falls back to warn",
+			logLevel:  "",
+			wantInfo:  false,
+			wantDebug: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Mimic the sync command pattern: only LoggingConfig is populated,
+			// all other ResolvedDrive fields are zero values.
+			rd := &config.ResolvedDrive{
+				LoggingConfig: config.LoggingConfig{LogLevel: tc.logLevel},
+			}
+			logger := buildLogger(rd, CLIFlags{})
+
+			assert.Equal(t, tc.wantInfo,
+				logger.Handler().Enabled(context.Background(), slog.LevelInfo),
+				"Info enabled mismatch for log_level=%q", tc.logLevel)
+			assert.Equal(t, tc.wantDebug,
+				logger.Handler().Enabled(context.Background(), slog.LevelDebug),
+				"Debug enabled mismatch for log_level=%q", tc.logLevel)
+		})
+	}
+}
+
 // --- errVerifyMismatch tests ---
 
 func TestErrVerifyMismatch_IsSentinel(t *testing.T) {

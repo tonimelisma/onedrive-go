@@ -24,7 +24,7 @@ import (
 // and downloaded with correct metadata via the OneDrive API.
 func TestE2E_ZeroByteFileSync(t *testing.T) {
 	syncDir := t.TempDir()
-	cfgPath := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfig(t, syncDir)
 
 	testFolder := fmt.Sprintf("e2e-zero-byte-%d", time.Now().UnixNano())
 	localDir := filepath.Join(syncDir, testFolder)
@@ -36,8 +36,8 @@ func TestE2E_ZeroByteFileSync(t *testing.T) {
 	// Two syncs needed: first creates the remote folder (commits baseline),
 	// second uploads the file (can now resolve parent ID).
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "empty.txt"), []byte{}, 0o644))
-	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
-	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 	assert.Contains(t, stderr, "Mode: upload-only")
 
 	// Verify it exists remotely (poll for eventual consistency).
@@ -56,7 +56,7 @@ func TestE2E_ZeroByteFileSync(t *testing.T) {
 // characters (NFC normalization) survive a full upload-download cycle.
 func TestE2E_UnicodeFilenameRoundtrip(t *testing.T) {
 	syncDir := t.TempDir()
-	cfgPath := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfig(t, syncDir)
 
 	testFolder := fmt.Sprintf("e2e-unicode-%d", time.Now().UnixNano())
 	localDir := filepath.Join(syncDir, testFolder)
@@ -70,8 +70,8 @@ func TestE2E_UnicodeFilenameRoundtrip(t *testing.T) {
 	unicodeName := "café résumé.txt"
 	content := "Unicode content: àéîõü"
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, unicodeName), []byte(content), 0o644))
-	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
-	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Verify it exists remotely via ls (poll for eventual consistency).
 	pollCLIContains(t, "caf", pollTimeout, "ls", "/"+testFolder)
@@ -89,7 +89,7 @@ func TestE2E_UnicodeFilenameRoundtrip(t *testing.T) {
 // are not uploaded and produce warnings.
 func TestE2E_InvalidFilenameRejection(t *testing.T) {
 	syncDir := t.TempDir()
-	cfgPath := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfig(t, syncDir)
 
 	testFolder := fmt.Sprintf("e2e-invalid-name-%d", time.Now().UnixNano())
 	localDir := filepath.Join(syncDir, testFolder)
@@ -103,8 +103,8 @@ func TestE2E_InvalidFilenameRejection(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "CON"), []byte("invalid"), 0o644))
 
 	// Upload — two syncs to ensure folder creation commits before file upload.
-	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
-	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// The debug stderr should mention skipping the invalid name.
 	assert.Contains(t, stderr, "skipping invalid OneDrive name",
@@ -121,7 +121,7 @@ func TestE2E_InvalidFilenameRejection(t *testing.T) {
 // final state after sync.
 func TestE2E_RapidFileChurn(t *testing.T) {
 	syncDir := t.TempDir()
-	cfgPath := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfig(t, syncDir)
 
 	testFolder := fmt.Sprintf("e2e-churn-%d", time.Now().UnixNano())
 	localDir := filepath.Join(syncDir, testFolder)
@@ -140,8 +140,8 @@ func TestE2E_RapidFileChurn(t *testing.T) {
 	require.NoError(t, os.WriteFile(filePath, []byte(finalContent), 0o644))
 
 	// Upload — two syncs to ensure folder creation commits before file upload.
-	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
-	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Verify final content remotely (poll for eventual consistency).
 	pollCLIContains(t, "churn.txt", pollTimeout, "ls", "/"+testFolder)
@@ -167,7 +167,7 @@ func TestE2E_BigDeleteProtection(t *testing.T) {
 // lifecycle: create conflicting files, detect the conflict, resolve it.
 func TestE2E_ConflictDetectionAndResolution(t *testing.T) {
 	syncDir := t.TempDir()
-	cfgPath := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfig(t, syncDir)
 
 	testFolder := fmt.Sprintf("e2e-conflict-%d", time.Now().UnixNano())
 	localDir := filepath.Join(syncDir, testFolder)
@@ -178,7 +178,7 @@ func TestE2E_ConflictDetectionAndResolution(t *testing.T) {
 	// Step 1: Create file and sync to establish baseline.
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "shared.txt"), []byte("original"), 0o644))
-	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Step 2: Modify remote side directly.
 	putRemoteFile(t, "/"+testFolder+"/shared.txt", "remote version")
@@ -188,20 +188,20 @@ func TestE2E_ConflictDetectionAndResolution(t *testing.T) {
 		filepath.Join(localDir, "shared.txt"), []byte("local version"), 0o644))
 
 	// Step 4: Bidirectional sync → should detect conflict.
-	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--force")
 	assert.Contains(t, stderr, "conflict",
 		"sync should report conflict")
 
 	// Step 5: Check conflicts list.
-	stdout, _ := runCLIWithConfig(t, cfgPath, "conflicts")
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
 	assert.Contains(t, stdout, "shared.txt",
 		"conflicts list should include the conflicting file")
 
 	// Step 6: Resolve the conflict.
-	runCLIWithConfig(t, cfgPath, "resolve", testFolder+"/shared.txt", "--keep-local")
+	runCLIWithConfig(t, cfgPath, env, "resolve", testFolder+"/shared.txt", "--keep-local")
 
 	// Step 7: Verify conflict is resolved.
-	stdout, _ = runCLIWithConfig(t, cfgPath, "conflicts")
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
 	assert.NotContains(t, stdout, "shared.txt",
 		"conflicts list should be empty after resolution")
 }

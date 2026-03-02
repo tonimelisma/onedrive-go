@@ -673,6 +673,15 @@ Business OneDrive is **always auto-added**, even if the user only wants SharePoi
 
 SharePoint is mentioned as a tease — use `drive add` to add libraries.
 
+### Implementation: primary drive discovery
+
+Login discovers the primary drive via `GET /me/drive` (singular), **not** from the `GET /me/drives` list. This distinction is critical:
+
+- **`GET /me/drives`** returns **all** drives, including hidden system drives that Microsoft creates on personal accounts for the Photos app (face recognition data, album metadata). These system drives have GUID names, base64-encoded IDs (`b!...`), report `driveType: "personal"`, and return **HTTP 400 "ObjectHandle is Invalid"** when accessed. The order is non-deterministic — the real OneDrive may appear anywhere in the list.
+- **`GET /me/drive`** (singular) always returns the user's actual primary OneDrive.
+
+The `PrimaryDrive()` graph client method wraps `GET /me/drive`. The `Drives()` method (plural, wrapping `GET /me/drives`) is only used for listing all drives in `whoami` output. Never index into `Drives()` results to find the primary drive.
+
 ### Second login (another account)
 
 ```

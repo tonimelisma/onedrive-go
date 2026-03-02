@@ -246,17 +246,17 @@ func discoverAccount(
 
 	logger.Info("discovered user", "email", user.Email, "display_name", user.DisplayName)
 
-	// GET /me/drives -> driveType (personal, business)
-	drives, err := client.Drives(ctx)
+	// GET /me/drive (singular) -> primary drive ID and type.
+	// Must use /me/drive, NOT /me/drives. The /me/drives endpoint returns all
+	// drives including phantom system drives (Photos face crops, album metadata)
+	// that Microsoft creates on personal accounts. These appear in non-deterministic
+	// order and return HTTP 400 "ObjectHandle is Invalid" when accessed.
+	primary, err := client.PrimaryDrive(ctx)
 	if err != nil {
-		return driveid.CanonicalID{}, nil, "", driveid.ID{}, fmt.Errorf("listing drives: %w", err)
+		return driveid.CanonicalID{}, nil, "", driveid.ID{}, fmt.Errorf("fetching primary drive: %w", err)
 	}
 
-	if len(drives) == 0 {
-		return driveid.CanonicalID{}, nil, "", driveid.ID{}, fmt.Errorf("no drives found for this account")
-	}
-
-	driveType := drives[0].DriveType
+	driveType := primary.DriveType
 	logger.Info("discovered drive type", "drive_type", driveType)
 
 	// Warn on unknown drive types — don't block login, but flag it for debugging.
@@ -269,7 +269,7 @@ func discoverAccount(
 			"drive_type", driveType)
 	}
 
-	primaryDriveID := drives[0].ID
+	primaryDriveID := primary.ID
 	logger.Info("discovered primary drive", "drive_id", primaryDriveID.String())
 
 	// GET /me/organization -> org display name (business only)
