@@ -128,6 +128,16 @@ func setupIsolation() func() {
 	)
 	testDataDir = appDataDir
 
+	// Copy second drive's token if configured.
+	if drive2 != "" {
+		tokenName2 := testutil.TokenFileName(drive2)
+		testutil.CopyFile(
+			filepath.Join(testCredentialDir, tokenName2),
+			filepath.Join(appDataDir, tokenName2),
+			0o600,
+		)
+	}
+
 	// Copy config.toml from .testdata/ to isolated config dir.
 	appConfigDir := filepath.Join(tempConfig, "onedrive-go")
 	if mkErr := os.MkdirAll(appConfigDir, 0o755); mkErr != nil {
@@ -147,15 +157,23 @@ func setupIsolation() func() {
 	fmt.Fprintf(os.Stderr, "E2E isolation: HOME=%s XDG_DATA_HOME=%s (credentials from .testdata/)\n", tempHome, tempData)
 
 	return func() {
-		// Preserve rotated token: copy back from temp to .testdata/.
-		rotatedPath := filepath.Join(appDataDir, tokenName)
-		if _, statErr := os.Stat(rotatedPath); statErr == nil {
-			origPath := filepath.Join(testCredentialDir, tokenName)
-			data, readErr := os.ReadFile(rotatedPath)
-			if readErr != nil {
-				fmt.Fprintf(os.Stderr, "WARNING: cannot read rotated token %s: %v\n", rotatedPath, readErr)
-			} else if writeErr := os.WriteFile(origPath, data, 0o600); writeErr != nil {
-				fmt.Fprintf(os.Stderr, "WARNING: cannot write rotated token back to %s: %v\n", origPath, writeErr)
+		// Preserve rotated tokens: copy back from temp to .testdata/.
+		tokenNames := []string{tokenName}
+		if drive2 != "" {
+			tokenNames = append(tokenNames, testutil.TokenFileName(drive2))
+		}
+
+		for _, tok := range tokenNames {
+
+			rotatedPath := filepath.Join(appDataDir, tok)
+			if _, statErr := os.Stat(rotatedPath); statErr == nil {
+				origPath := filepath.Join(testCredentialDir, tok)
+				data, readErr := os.ReadFile(rotatedPath)
+				if readErr != nil {
+					fmt.Fprintf(os.Stderr, "WARNING: cannot read rotated token %s: %v\n", rotatedPath, readErr)
+				} else if writeErr := os.WriteFile(origPath, data, 0o600); writeErr != nil {
+					fmt.Fprintf(os.Stderr, "WARNING: cannot write rotated token back to %s: %v\n", origPath, writeErr)
+				}
 			}
 		}
 

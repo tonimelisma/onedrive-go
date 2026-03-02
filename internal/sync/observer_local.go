@@ -28,6 +28,10 @@ var ErrNosyncGuard = errors.New("sync: .nosync guard file present (sync dir may 
 // or become inaccessible while a watch was running.
 var ErrSyncRootDeleted = errors.New("sync: sync root directory deleted or inaccessible")
 
+// ErrWatchLimitExhausted is returned when the inotify watch limit is
+// exhausted (Linux ENOSPC). The engine falls back to periodic full scans.
+var ErrWatchLimitExhausted = errors.New("sync: inotify watch limit exhausted")
+
 // Constants for the local observer (satisfy mnd linter).
 const (
 	nosyncFileName         = ".nosync"
@@ -179,6 +183,21 @@ func (o *LocalObserver) LastActivity() time.Time {
 // recordActivity updates the liveness timestamp to now.
 func (o *LocalObserver) recordActivity() {
 	o.lastActivityNano.Store(time.Now().UnixNano())
+}
+
+// estimateDirCount returns the estimated number of directories that will need
+// inotify watches. Counts ItemTypeFolder entries in baseline plus one for the
+// sync root itself.
+func (o *LocalObserver) estimateDirCount() int {
+	count := 1 // sync root always needs a watch
+
+	o.baseline.ForEachPath(func(_ string, entry *BaselineEntry) {
+		if entry.ItemType == ItemTypeFolder {
+			count++
+		}
+	})
+
+	return count
 }
 
 // hashJob describes a file that needs hashing during FullScan phase 2.
@@ -373,8 +392,15 @@ func (o *LocalObserver) Watch(ctx context.Context, syncRoot string, events chan<
 
 	defer o.cancelPendingTimers()
 
+	// Pre-flight capacity check (Linux only; no-op on other platforms).
+	checkInotifyCapacity(o.estimateDirCount(), o.logger)
+
 	// Walk the sync root to add watches on all existing directories.
 	if walkErr := o.addWatchesRecursive(watcher, syncRoot); walkErr != nil {
+		if errors.Is(walkErr, ErrWatchLimitExhausted) {
+			return ErrWatchLimitExhausted
+		}
+
 		return fmt.Errorf("sync: adding initial watches: %w", walkErr)
 	}
 
@@ -427,6 +453,15 @@ func (o *LocalObserver) addWatchesRecursive(watcher FsWatcher, syncRoot string) 
 		}
 
 		if addErr := watcher.Add(fsPath); addErr != nil {
+			if isWatchLimitError(addErr) {
+				o.logger.Error("inotify watch limit exhausted",
+					slog.String("path", fsPath),
+					slog.Int("watches_added", watched),
+				)
+
+				return ErrWatchLimitExhausted
+			}
+
 			failed++
 			o.logger.Warn("failed to add watch",
 				slog.String("path", fsPath), slog.String("error", addErr.Error()))

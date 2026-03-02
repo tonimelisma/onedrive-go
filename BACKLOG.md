@@ -82,13 +82,13 @@ Edge cases and correctness for `internal/graph/`.
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
 | B-285 | Standardize `baseline_test.go` to testify style | P4 | 2300+ lines of stdlib assertions. `canonical_test.go` was converted (B-278), `baseline_test.go` should follow. Purely cosmetic — do alongside behavioral changes, not standalone. |
-| B-286 | No shared/business drive in E2E test matrix | P3 | All E2E tests run against `personal:user@example.com`. `shared` type and `ConstructShared()` are unit-tested but untested against real Graph API. Blocked on second test account (Phase 6.0d). |
+| B-286 | No shared/business drive in E2E test matrix | P3 | Second personal account added (6.0d), but all tests are `personal:` type. `shared` type and `ConstructShared()` still untested against real Graph API. Needs shared/business test account. |
 
 ## Deferred from Phase 6.0c
 
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
-| B-299 | E2E tests for daemon mode (Orchestrator.RunWatch) | P3 | Watch bridge removed in 6.0c. Need E2E coverage for multi-drive daemon, SIGHUP reload, pause/resume. Blocked on second test account (Phase 6.0d). |
+| B-299 | E2E tests for daemon mode (Orchestrator.RunWatch) | P3 | Multi-drive E2E infrastructure added in 6.0d (5 orchestrator scenarios). Still need E2E coverage for daemon mode (RunWatch), SIGHUP reload, and pause/resume. No longer blocked on second test account. |
 
 ## Hardening: Watch Mode
 

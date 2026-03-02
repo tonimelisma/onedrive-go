@@ -373,3 +373,139 @@ func copyTokenFile(t *testing.T, srcDir, dstDir string) {
 
 	require.NoError(t, os.WriteFile(filepath.Join(dstDir, name), data, 0o600))
 }
+
+// ---------------------------------------------------------------------------
+// Multi-drive helpers (used by orchestrator_e2e_test.go)
+// ---------------------------------------------------------------------------
+
+// writeMultiDriveConfig creates a TOML config file with both test drives,
+// each pointing to its own sync directory. Both token files are copied to
+// the per-test data directory. Returns config path and environment overrides.
+func writeMultiDriveConfig(t *testing.T, syncDir1, syncDir2 string) (string, map[string]string) {
+	t.Helper()
+	require.NotEmpty(t, drive2, "drive2 must be set for multi-drive tests")
+
+	perTestData := t.TempDir()
+	perTestHome := t.TempDir()
+
+	perTestDataDir := filepath.Join(perTestData, "onedrive-go")
+	require.NoError(t, os.MkdirAll(perTestDataDir, 0o755))
+
+	// Copy both token files.
+	copyTokenFile(t, testDataDir, perTestDataDir)
+	copyTokenFileForDrive(t, testDataDir, perTestDataDir, drive2)
+
+	content := fmt.Sprintf("[%q]\nsync_dir = %q\n\n[%q]\nsync_dir = %q\n",
+		drive, syncDir1, drive2, syncDir2)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o644))
+
+	env := map[string]string{
+		"XDG_DATA_HOME": perTestData,
+		"HOME":          perTestHome,
+	}
+
+	return cfgPath, env
+}
+
+// copyTokenFileForDrive copies the token file for a specific drive ID.
+func copyTokenFileForDrive(t *testing.T, srcDir, dstDir, driveID string) {
+	t.Helper()
+
+	name := testutil.TokenFileName(driveID)
+	srcPath := filepath.Join(srcDir, name)
+
+	data, err := os.ReadFile(srcPath)
+	if err != nil {
+		t.Fatalf("cannot read token file %s: %v", srcPath, err)
+	}
+
+	require.NoError(t, os.WriteFile(filepath.Join(dstDir, name), data, 0o600))
+}
+
+// runCLIWithConfigAllDrives runs the CLI without --drive flag (syncs all drives).
+func runCLIWithConfigAllDrives(t *testing.T, cfgPath string, env map[string]string, args ...string) (string, string) {
+	t.Helper()
+
+	fullArgs := []string{"--config", cfgPath}
+	if shouldAddDebug(args) {
+		fullArgs = append(fullArgs, "--debug")
+	}
+
+	fullArgs = append(fullArgs, args...)
+	cmd := makeCmd(fullArgs, env)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	logCLIExecution(t, fullArgs, stdout.String(), stderr.String())
+
+	if err != nil {
+		t.Fatalf("CLI command %v failed: %v\nstdout: %s\nstderr: %s",
+			args, err, stdout.String(), stderr.String())
+	}
+
+	return stdout.String(), stderr.String()
+}
+
+// runCLIWithConfigAllDrivesAllowError runs the CLI without --drive flag and
+// returns the output even on error.
+func runCLIWithConfigAllDrivesAllowError(t *testing.T, cfgPath string, env map[string]string, args ...string) (string, string, error) {
+	t.Helper()
+
+	fullArgs := []string{"--config", cfgPath}
+	if shouldAddDebug(args) {
+		fullArgs = append(fullArgs, "--debug")
+	}
+
+	fullArgs = append(fullArgs, args...)
+	cmd := makeCmd(fullArgs, env)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	logCLIExecution(t, fullArgs, stdout.String(), stderr.String())
+
+	return stdout.String(), stderr.String(), err
+}
+
+// runCLIWithConfigForDrive runs the CLI with a specific --drive flag.
+func runCLIWithConfigForDrive(t *testing.T, cfgPath string, env map[string]string, driveID string, args ...string) (string, string) {
+	t.Helper()
+
+	fullArgs := []string{"--config", cfgPath, "--drive", driveID}
+	if shouldAddDebug(args) {
+		fullArgs = append(fullArgs, "--debug")
+	}
+
+	fullArgs = append(fullArgs, args...)
+	cmd := makeCmd(fullArgs, env)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	logCLIExecution(t, fullArgs, stdout.String(), stderr.String())
+
+	if err != nil {
+		t.Fatalf("CLI command %v (drive=%s) failed: %v\nstdout: %s\nstderr: %s",
+			args, driveID, err, stdout.String(), stderr.String())
+	}
+
+	return stdout.String(), stderr.String()
+}
+
+// cleanupRemoteFolderForDrive is like cleanupRemoteFolder but for a specific drive.
+func cleanupRemoteFolderForDrive(t *testing.T, driveID, folder string) {
+	t.Helper()
+
+	fullArgs := []string{"--drive", driveID, "rm", "-r", "/" + folder}
+	cmd := makeCmd(fullArgs, nil)
+	_ = cmd.Run()
+}
