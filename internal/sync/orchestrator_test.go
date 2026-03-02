@@ -25,15 +25,14 @@ import (
 func testOrchestratorConfig(t *testing.T, drives ...*config.ResolvedDrive) *OrchestratorConfig {
 	t.Helper()
 
-	cfg := config.DefaultConfig()
-	provider := driveops.NewSessionProvider(cfg, &http.Client{}, &http.Client{}, "test/1.0", slog.Default())
+	holder := config.NewHolder(config.DefaultConfig(), "/tmp/test-config.toml")
+	provider := driveops.NewSessionProvider(holder, &http.Client{}, &http.Client{}, "test/1.0", slog.Default())
 
 	return &OrchestratorConfig{
-		Config:     cfg,
-		Drives:     drives,
-		ConfigPath: "/tmp/test-config.toml",
-		Provider:   provider,
-		Logger:     slog.Default(),
+		Holder:   holder,
+		Drives:   drives,
+		Provider: provider,
+		Logger:   slog.Default(),
 	}
 }
 
@@ -307,7 +306,8 @@ func TestOrchestrator_RunWatch_SingleDrive(t *testing.T) {
 	rd := testResolvedDrive(t, "personal:watch1@example.com", "Watch1")
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	cfg := testOrchestratorConfig(t, rd)
-	cfg.ConfigPath = cfgPath
+	cfg.Holder = config.NewHolder(cfg.Holder.Config(), cfgPath)
+	cfg.Provider = driveops.NewSessionProvider(cfg.Holder, &http.Client{}, &http.Client{}, "test/1.0", slog.Default())
 	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
 	orch := NewOrchestrator(cfg)
@@ -354,7 +354,8 @@ func TestOrchestrator_RunWatch_MultiDrive(t *testing.T) {
 	rd2 := testResolvedDrive(t, "personal:multi2@example.com", "Multi2")
 	cfgPath := writeTestConfig(t, rd1.CanonicalID, rd2.CanonicalID)
 	cfg := testOrchestratorConfig(t, rd1, rd2)
-	cfg.ConfigPath = cfgPath
+	cfg.Holder = config.NewHolder(cfg.Holder.Config(), cfgPath)
+	cfg.Provider = driveops.NewSessionProvider(cfg.Holder, &http.Client{}, &http.Client{}, "test/1.0", slog.Default())
 	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
 	orch := NewOrchestrator(cfg)
@@ -401,7 +402,8 @@ func TestOrchestrator_Reload_AddDrive(t *testing.T) {
 	cfgPath := writeTestConfig(t, rd1.CanonicalID)
 	sighup := make(chan os.Signal, 1)
 	cfg := testOrchestratorConfig(t, rd1)
-	cfg.ConfigPath = cfgPath
+	cfg.Holder = config.NewHolder(cfg.Holder.Config(), cfgPath)
+	cfg.Provider = driveops.NewSessionProvider(cfg.Holder, &http.Client{}, &http.Client{}, "test/1.0", slog.Default())
 	cfg.SIGHUPChan = sighup
 	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
@@ -459,7 +461,8 @@ func TestOrchestrator_Reload_RemoveDrive(t *testing.T) {
 	cfgPath := writeTestConfig(t, rd1.CanonicalID, rd2.CanonicalID)
 	sighup := make(chan os.Signal, 1)
 	cfg := testOrchestratorConfig(t, rd1, rd2)
-	cfg.ConfigPath = cfgPath
+	cfg.Holder = config.NewHolder(cfg.Holder.Config(), cfgPath)
+	cfg.Provider = driveops.NewSessionProvider(cfg.Holder, &http.Client{}, &http.Client{}, "test/1.0", slog.Default())
 	cfg.SIGHUPChan = sighup
 	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
@@ -516,7 +519,8 @@ func TestOrchestrator_Reload_PausedDrive(t *testing.T) {
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	sighup := make(chan os.Signal, 1)
 	cfg := testOrchestratorConfig(t, rd)
-	cfg.ConfigPath = cfgPath
+	cfg.Holder = config.NewHolder(cfg.Holder.Config(), cfgPath)
+	cfg.Provider = driveops.NewSessionProvider(cfg.Holder, &http.Client{}, &http.Client{}, "test/1.0", slog.Default())
 	cfg.SIGHUPChan = sighup
 	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
@@ -573,7 +577,8 @@ func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	sighup := make(chan os.Signal, 1)
 	cfg := testOrchestratorConfig(t, rd)
-	cfg.ConfigPath = cfgPath
+	cfg.Holder = config.NewHolder(cfg.Holder.Config(), cfgPath)
+	cfg.Provider = driveops.NewSessionProvider(cfg.Holder, &http.Client{}, &http.Client{}, "test/1.0", slog.Default())
 	cfg.SIGHUPChan = sighup
 	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
@@ -629,7 +634,8 @@ func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	sighup := make(chan os.Signal, 1)
 	cfg := testOrchestratorConfig(t, rd)
-	cfg.ConfigPath = cfgPath
+	cfg.Holder = config.NewHolder(cfg.Holder.Config(), cfgPath)
+	cfg.Provider = driveops.NewSessionProvider(cfg.Holder, &http.Client{}, &http.Client{}, "test/1.0", slog.Default())
 	cfg.SIGHUPChan = sighup
 	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 

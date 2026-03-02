@@ -175,7 +175,9 @@ func newRootCmd() *cobra.Command {
 				cc.Cfg = resolved
 				cc.RawConfig = rawCfg
 				cc.Logger = buildLogger(resolved, flags)
-				cc.Provider = driveops.NewSessionProvider(rawCfg,
+
+				holder := config.NewHolder(rawCfg, cc.CfgPath)
+				cc.Provider = driveops.NewSessionProvider(holder,
 					defaultHTTPClient(), transferHTTPClient(), "onedrive-go/"+version, cc.Logger)
 			}
 

@@ -94,15 +94,15 @@ func runSync(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	provider := driveops.NewSessionProvider(rawCfg,
+	holder := config.NewHolder(rawCfg, cc.CfgPath)
+	provider := driveops.NewSessionProvider(holder,
 		defaultHTTPClient(), transferHTTPClient(), "onedrive-go/"+version, logger)
 
 	orch := isync.NewOrchestrator(&isync.OrchestratorConfig{
-		Config:     rawCfg,
-		Drives:     drives,
-		ConfigPath: cc.CfgPath,
-		Provider:   provider,
-		Logger:     logger,
+		Holder:   holder,
+		Drives:   drives,
+		Provider: provider,
+		Logger:   logger,
 	})
 
 	reports := orch.RunOnce(ctx, mode, isync.RunOpts{
@@ -141,13 +141,13 @@ func runSyncDaemon(
 	sighup := sighupChannel()
 	defer signal.Stop(sighup)
 
-	provider := driveops.NewSessionProvider(rawCfg,
+	holder := config.NewHolder(rawCfg, cfgPath)
+	provider := driveops.NewSessionProvider(holder,
 		defaultHTTPClient(), transferHTTPClient(), "onedrive-go/"+version, logger)
 
 	orch := isync.NewOrchestrator(&isync.OrchestratorConfig{
-		Config:     rawCfg,
+		Holder:     holder,
 		Drives:     drives,
-		ConfigPath: cfgPath,
 		Provider:   provider,
 		Logger:     logger,
 		SIGHUPChan: sighup,

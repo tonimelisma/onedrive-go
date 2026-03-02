@@ -30,9 +30,10 @@ type Session struct {
 // can invalidate each other's refresh tokens).
 //
 // Created once (in CLI PersistentPreRunE), stored in CLIContext, and shared
-// with the Orchestrator.
+// with the Orchestrator. Config is accessed via a shared *config.Holder so
+// SIGHUP reload updates config in one place for all consumers.
 type SessionProvider struct {
-	cfg          *config.Config
+	holder       *config.Holder
 	metaHTTP     *http.Client
 	transferHTTP *http.Client
 	userAgent    string
@@ -48,11 +49,11 @@ type SessionProvider struct {
 
 // NewSessionProvider creates a SessionProvider with default TokenSourceFn.
 func NewSessionProvider(
-	cfg *config.Config, metaHTTP, transferHTTP *http.Client,
+	holder *config.Holder, metaHTTP, transferHTTP *http.Client,
 	userAgent string, logger *slog.Logger,
 ) *SessionProvider {
 	return &SessionProvider{
-		cfg:           cfg,
+		holder:        holder,
 		metaHTTP:      metaHTTP,
 		transferHTTP:  transferHTTP,
 		userAgent:     userAgent,
@@ -66,10 +67,7 @@ func NewSessionProvider(
 // resolved drive. Token caching ensures drives sharing a token path
 // reuse the same TokenSource.
 func (p *SessionProvider) Session(ctx context.Context, rd *config.ResolvedDrive) (*Session, error) {
-	// Snapshot cfg under the lock to avoid a data race with UpdateConfig.
-	p.mu.Lock()
-	cfg := p.cfg
-	p.mu.Unlock()
+	cfg := p.holder.Config()
 
 	tokenPath := config.DriveTokenPath(rd.CanonicalID, cfg)
 	if tokenPath == "" {
@@ -103,15 +101,6 @@ func (p *SessionProvider) Session(ctx context.Context, rd *config.ResolvedDrive)
 		DriveID:  rd.DriveID,
 		Resolved: rd,
 	}, nil
-}
-
-// UpdateConfig replaces the config reference used for token path resolution.
-// Called by the Orchestrator after SIGHUP config reload.
-func (p *SessionProvider) UpdateConfig(cfg *config.Config) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	p.cfg = cfg
 }
 
 // getOrCreateTokenSource returns a cached TokenSource for the given token
