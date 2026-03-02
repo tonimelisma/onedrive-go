@@ -1,4 +1,4 @@
-package sync
+package driveops
 
 import (
 	"io/fs"
@@ -7,10 +7,10 @@ import (
 	"time"
 )
 
-// reportStalePartials scans syncRoot for .partial files older than threshold
+// ReportStalePartials scans syncRoot for .partial files older than threshold
 // and logs them as warnings. Called after sync completes to alert the user
 // about potentially abandoned downloads.
-func reportStalePartials(syncRoot string, threshold time.Duration, logger *slog.Logger) {
+func ReportStalePartials(syncRoot string, threshold time.Duration, logger *slog.Logger) {
 	var stale []string
 
 	err := filepath.WalkDir(syncRoot, func(path string, d fs.DirEntry, err error) error {
@@ -44,8 +44,9 @@ func reportStalePartials(syncRoot string, threshold time.Duration, logger *slog.
 	}
 
 	if len(stale) > 0 {
-		logger.Warn("stale .partial files found (older than 48h)",
+		logger.Warn("stale .partial files found",
 			slog.Int("count", len(stale)),
+			slog.String("threshold", threshold.String()),
 		)
 
 		for _, p := range stale {

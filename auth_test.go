@@ -11,6 +11,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 func TestUniqueAccounts(t *testing.T) {
@@ -142,6 +143,35 @@ func TestFindTokenFallback_BusinessExists(t *testing.T) {
 
 	got := findTokenFallback("test-fallback-biz@example.com", slog.Default())
 	assert.Equal(t, businessID, got)
+}
+
+func TestPrintWhoamiText(t *testing.T) {
+	user := &graph.User{
+		ID:          "user-789",
+		DisplayName: "Test User",
+		Email:       "test@example.com",
+	}
+
+	drives := []graph.Drive{
+		{
+			ID:         driveid.New("drive-abc"),
+			Name:       "OneDrive",
+			DriveType:  "personal",
+			QuotaUsed:  1073741824, // 1 GB
+			QuotaTotal: 5368709120, // 5 GB
+		},
+	}
+
+	output := captureStdout(t, func() {
+		printWhoamiText(user, drives)
+	})
+
+	assert.Contains(t, output, "Test User")
+	assert.Contains(t, output, "test@example.com")
+	assert.Contains(t, output, "user-789")
+	assert.Contains(t, output, "OneDrive")
+	assert.Contains(t, output, "personal")
+	assert.Contains(t, output, "drive-abc")
 }
 
 func TestPrintLoginSuccess_DoesNotPanic(t *testing.T) {

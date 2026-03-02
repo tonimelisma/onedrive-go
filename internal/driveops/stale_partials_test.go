@@ -1,4 +1,4 @@
-package sync
+package driveops
 
 import (
 	"os"
@@ -35,10 +35,10 @@ func TestReportStalePartials(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Run reportStalePartials — it logs warnings but doesn't return values.
+	// Run ReportStalePartials — it logs warnings but doesn't return values.
 	// We just verify it doesn't panic. A full integration test would capture
 	// slog output, but for now we verify correctness by construction.
-	reportStalePartials(dir, 48*time.Hour, testLogger(t))
+	ReportStalePartials(dir, 48*time.Hour, testLogger(t))
 }
 
 func TestReportStalePartials_EmptyDir(t *testing.T) {
@@ -47,5 +47,5 @@ func TestReportStalePartials_EmptyDir(t *testing.T) {
 	dir := t.TempDir()
 
 	// Should not panic on empty directory.
-	reportStalePartials(dir, 48*time.Hour, testLogger(t))
+	ReportStalePartials(dir, 48*time.Hour, testLogger(t))
 }

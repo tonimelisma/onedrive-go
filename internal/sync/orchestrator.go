@@ -411,6 +411,10 @@ func (o *Orchestrator) reload(
 	// read through the shared Holder.
 	o.cfg.Holder.Update(newCfg)
 
+	// Flush cached token sources so the next Session() call re-reads
+	// token files from disk. Handles logout + re-login between reloads.
+	o.cfg.Provider.FlushTokenCache()
+
 	o.logger.Info("config reload complete",
 		slog.Int("started", started),
 		slog.Int("stopped", stopped),

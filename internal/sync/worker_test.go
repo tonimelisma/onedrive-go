@@ -360,7 +360,7 @@ func TestWorkerPool_FailedOutcome(t *testing.T) {
 			return 0, fmt.Errorf("simulated download failure")
 		},
 	}
-	cfg.transferMgr = driveops.NewTransferManager(cfg.downloads, cfg.uploads, cfg.sessionStore, testLogger(t))
+	cfg.transferMgr = driveops.NewTransferManager(cfg.downloads, cfg.uploads, nil, testLogger(t))
 
 	actions := []Action{
 		{
@@ -509,7 +509,7 @@ func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing
 			return &graph.Item{ID: "uploaded-into-folder", ETag: "e1"}, nil
 		},
 	}
-	cfg.transferMgr = driveops.NewTransferManager(cfg.downloads, cfg.uploads, cfg.sessionStore, testLogger(t))
+	cfg.transferMgr = driveops.NewTransferManager(cfg.downloads, cfg.uploads, nil, testLogger(t))
 
 	// Action 0: create folder "Uploads".
 	// Action 1: upload file "Uploads/doc.txt" into that folder.
@@ -587,7 +587,7 @@ func TestWorkerPool_PanicRecovery(t *testing.T) {
 			panic("intentional panic for testing")
 		},
 	}
-	cfg.transferMgr = driveops.NewTransferManager(cfg.downloads, cfg.uploads, cfg.sessionStore, testLogger(t))
+	cfg.transferMgr = driveops.NewTransferManager(cfg.downloads, cfg.uploads, nil, testLogger(t))
 
 	actions := []Action{
 		{
