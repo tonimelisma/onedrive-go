@@ -20,6 +20,7 @@ func NewHolder(cfg *Config, path string) *Holder {
 }
 
 // Config returns the current config snapshot. Thread-safe (read lock).
+// The returned *Config must not be mutated; use Update() to change config.
 func (h *Holder) Config() *Config {
 	h.mu.RLock()
 	defer h.mu.RUnlock()

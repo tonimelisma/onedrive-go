@@ -3,6 +3,7 @@ package driveops
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -10,6 +11,10 @@ import (
 	"sync"
 	"time"
 )
+
+// ErrCorruptSession is returned when a session file cannot be parsed as JSON.
+// The corrupt file is deleted automatically.
+var ErrCorruptSession = errors.New("corrupt session file")
 
 // sessionSubdir is the subdirectory within the data dir for upload session files.
 const sessionSubdir = "upload-sessions"
@@ -21,9 +26,9 @@ const sessionFilePerms = 0o600
 // sessionDirPerms for the session directory itself.
 const sessionDirPerms = 0o700
 
-// staleSessionAge is the default TTL for upload session files.
+// StaleSessionAge is the default TTL for upload session files.
 // Graph API sessions expire in ~48 hours; 7 days is generous.
-const staleSessionAge = 7 * 24 * time.Hour
+const StaleSessionAge = 7 * 24 * time.Hour
 
 // cleanThrottle prevents excessive directory scans. CleanStale is
 // a no-op if called again within this interval.
@@ -32,7 +37,7 @@ const cleanThrottle = 1 * time.Hour
 // SessionRecord is the on-disk JSON format for a persisted upload session.
 type SessionRecord struct {
 	DriveID    string    `json:"drive_id"`
-	RemotePath string    `json:"remote_path"`
+	LocalPath  string    `json:"remote_path"` // JSON key kept as "remote_path" for backward compatibility
 	SessionURL string    `json:"session_url"`
 	FileHash   string    `json:"file_hash"`
 	FileSize   int64     `json:"file_size"`
@@ -40,7 +45,7 @@ type SessionRecord struct {
 }
 
 // SessionStore manages file-based upload session persistence. Session files
-// are JSON files keyed by sha256(driveID + ":" + remotePath), stored in a
+// are JSON files keyed by sha256(len(driveID):driveID:localPath), stored in a
 // dedicated directory. Thread-safe for concurrent Save/Load/Delete.
 type SessionStore struct {
 	dir    string
@@ -58,10 +63,10 @@ func NewSessionStore(dataDir string, logger *slog.Logger) *SessionStore {
 	}
 }
 
-// Load reads a session record for the given drive and remote path.
+// Load reads a session record for the given drive and local path.
 // Returns nil, nil if no session file exists.
-func (s *SessionStore) Load(driveID, remotePath string) (*SessionRecord, error) {
-	path := s.filePath(driveID, remotePath)
+func (s *SessionStore) Load(driveID, localPath string) (*SessionRecord, error) {
+	path := s.filePath(driveID, localPath)
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -87,7 +92,7 @@ func (s *SessionStore) Load(driveID, remotePath string) (*SessionRecord, error) 
 			)
 		}
 
-		return nil, nil
+		return nil, fmt.Errorf("%w: %w", ErrCorruptSession, err)
 	}
 
 	return &rec, nil
@@ -95,13 +100,13 @@ func (s *SessionStore) Load(driveID, remotePath string) (*SessionRecord, error) 
 
 // Save persists a session record. Creates the session directory if needed.
 // Triggers lazy stale-session cleanup (throttled to once per hour).
-func (s *SessionStore) Save(driveID, remotePath string, rec *SessionRecord) error {
+func (s *SessionStore) Save(driveID, localPath string, rec *SessionRecord) error {
 	if err := os.MkdirAll(s.dir, sessionDirPerms); err != nil {
 		return fmt.Errorf("creating session dir: %w", err)
 	}
 
 	rec.DriveID = driveID
-	rec.RemotePath = remotePath
+	rec.LocalPath = localPath
 
 	if rec.CreatedAt.IsZero() {
 		rec.CreatedAt = time.Now().UTC()
@@ -112,7 +117,7 @@ func (s *SessionStore) Save(driveID, remotePath string, rec *SessionRecord) erro
 		return fmt.Errorf("marshaling session record: %w", err)
 	}
 
-	path := s.filePath(driveID, remotePath)
+	path := s.filePath(driveID, localPath)
 	tmpPath := path + ".tmp"
 
 	if err := os.WriteFile(tmpPath, data, sessionFilePerms); err != nil {
@@ -125,15 +130,22 @@ func (s *SessionStore) Save(driveID, remotePath string, rec *SessionRecord) erro
 	}
 
 	// Lazy cleanup — non-blocking, errors logged but not propagated.
-	go s.cleanIfDue()
+	// Pre-check throttle to avoid spawning a goroutine on every Save.
+	s.cleanMu.Lock()
+	due := time.Since(s.lastClean) >= cleanThrottle
+	s.cleanMu.Unlock()
+
+	if due {
+		go s.cleanIfDue()
+	}
 
 	return nil
 }
 
-// Delete removes the session file for the given drive and remote path.
+// Delete removes the session file for the given drive and local path.
 // No error if the file doesn't exist.
-func (s *SessionStore) Delete(driveID, remotePath string) error {
-	path := s.filePath(driveID, remotePath)
+func (s *SessionStore) Delete(driveID, localPath string) error {
+	path := s.filePath(driveID, localPath)
 
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("deleting session file: %w", err)
@@ -209,7 +221,7 @@ func (s *SessionStore) cleanIfDue() {
 	s.lastClean = time.Now()
 	s.cleanMu.Unlock()
 
-	n, err := s.CleanStale(staleSessionAge)
+	n, err := s.CleanStale(StaleSessionAge)
 	if err != nil {
 		s.logger.Warn("stale session cleanup failed", slog.String("error", err.Error()))
 		return
@@ -220,13 +232,15 @@ func (s *SessionStore) cleanIfDue() {
 	}
 }
 
-// sessionKey produces a deterministic filename for a (driveID, remotePath) pair.
-func sessionKey(driveID, remotePath string) string {
-	h := sha256.Sum256([]byte(driveID + ":" + remotePath))
+// sessionKey produces a deterministic filename for a (driveID, localPath) pair.
+// Uses length-prefixed driveID to prevent hash collisions from delimiter ambiguity
+// (e.g., driveID="a:", localPath="b" vs driveID="a", localPath=":b").
+func sessionKey(driveID, localPath string) string {
+	h := sha256.Sum256(fmt.Appendf(nil, "%d:%s:%s", len(driveID), driveID, localPath))
 	return fmt.Sprintf("%x.json", h)
 }
 
 // filePath returns the absolute path to the session file for the given key.
-func (s *SessionStore) filePath(driveID, remotePath string) string {
-	return filepath.Join(s.dir, sessionKey(driveID, remotePath))
+func (s *SessionStore) filePath(driveID, localPath string) string {
+	return filepath.Join(s.dir, sessionKey(driveID, localPath))
 }

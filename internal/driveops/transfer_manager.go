@@ -41,7 +41,7 @@ func resolveMaxRetries(configured int) int {
 // DownloadOpts configures a single download operation.
 type DownloadOpts struct {
 	RemoteHash     string // expected hash; empty = skip verification
-	RemoteMtime    int64  // nanoseconds; 0 = don't set
+	RemoteMtime    int64  // nanoseconds; 0 = don't set (not Unix epoch)
 	RemoteSize     int64  // expected size; 0 = don't validate
 	MaxHashRetries int    // 0 = use default (2 retries, meaning 3 total download attempts)
 }
@@ -510,10 +510,10 @@ func (tm *TransferManager) sessionUpload(
 // deleteSession removes an upload session file, logging on failure. Callers
 // use a fire-and-forget pattern since session deletion failures are non-fatal
 // (worst case: a stale session file is retried next time).
-func (tm *TransferManager) deleteSession(driveID, remotePath string) {
-	if err := tm.sessionStore.Delete(driveID, remotePath); err != nil {
+func (tm *TransferManager) deleteSession(driveID, localPath string) {
+	if err := tm.sessionStore.Delete(driveID, localPath); err != nil {
 		tm.logger.Warn("failed to delete session file",
-			slog.String("path", remotePath),
+			slog.String("path", localPath),
 			slog.String("error", err.Error()),
 		)
 	}
