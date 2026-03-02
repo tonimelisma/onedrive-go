@@ -41,7 +41,7 @@ func TestCheckPausedState_NotPaused(t *testing.T) {
 	cid := driveid.MustCanonicalID("personal:test@example.com")
 	logger := testLogger(t)
 
-	require.NoError(t, config.CreateConfigWithDrive(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
 
 	paused, pausedUntil := checkPausedState(cfgPath, cid, logger)
 	assert.False(t, paused)
@@ -56,7 +56,7 @@ func TestCheckPausedState_Paused(t *testing.T) {
 	cid := driveid.MustCanonicalID("personal:test@example.com")
 	logger := testLogger(t)
 
-	require.NoError(t, config.CreateConfigWithDrive(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
 	require.NoError(t, config.SetDriveKey(cfgPath, cid, "paused", "true"))
 
 	paused, pausedUntil := checkPausedState(cfgPath, cid, logger)
@@ -72,7 +72,7 @@ func TestCheckPausedState_TimedPause(t *testing.T) {
 	cid := driveid.MustCanonicalID("personal:test@example.com")
 	logger := testLogger(t)
 
-	require.NoError(t, config.CreateConfigWithDrive(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
 	require.NoError(t, config.SetDriveKey(cfgPath, cid, "paused", "true"))
 	require.NoError(t, config.SetDriveKey(cfgPath, cid, "paused_until", "2099-01-01T00:00:00Z"))
 
@@ -101,7 +101,7 @@ func TestCheckPausedState_DriveNotInConfig(t *testing.T) {
 	otherCID := driveid.MustCanonicalID("personal:other@example.com")
 	logger := testLogger(t)
 
-	require.NoError(t, config.CreateConfigWithDrive(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
 
 	// Query for a drive that doesn't exist in config.
 	paused, _ := checkPausedState(cfgPath, otherCID, logger)
@@ -156,7 +156,7 @@ func TestWaitForResume_ExpiredTimerReturnsImmediately(t *testing.T) {
 	cid := driveid.MustCanonicalID("personal:test@example.com")
 	logger := testLogger(t)
 
-	require.NoError(t, config.CreateConfigWithDrive(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
 	require.NoError(t, config.SetDriveKey(cfgPath, cid, "paused", "true"))
 	require.NoError(t, config.SetDriveKey(cfgPath, cid, "paused_until", "2000-01-01T00:00:00Z"))
 
@@ -187,7 +187,7 @@ func TestWaitForResume_TimerExpiry(t *testing.T) {
 	cid := driveid.MustCanonicalID("personal:test@example.com")
 	logger := testLogger(t)
 
-	require.NoError(t, config.CreateConfigWithDrive(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
 	require.NoError(t, config.SetDriveKey(cfgPath, cid, "paused", "true"))
 
 	sighup := make(chan os.Signal, 1)
@@ -208,7 +208,7 @@ func TestDaemonClearPausedKeys(t *testing.T) {
 	cid := driveid.MustCanonicalID("personal:test@example.com")
 	logger := testLogger(t)
 
-	require.NoError(t, config.CreateConfigWithDrive(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
 	require.NoError(t, config.SetDriveKey(cfgPath, cid, "paused", "true"))
 	require.NoError(t, config.SetDriveKey(cfgPath, cid, "paused_until", "2099-01-01T00:00:00Z"))
 
@@ -231,7 +231,7 @@ func newTestConfig(t *testing.T) (cfgPath string, cid driveid.CanonicalID) {
 	cfgPath = filepath.Join(dir, "config.toml")
 	cid = driveid.MustCanonicalID("personal:test@example.com")
 
-	require.NoError(t, config.CreateConfigWithDrive(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
 
 	return cfgPath, cid
 }

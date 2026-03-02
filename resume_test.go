@@ -28,7 +28,7 @@ func TestClearPausedKeys_RemovesBothKeys(t *testing.T) {
 	cid := driveid.MustCanonicalID("personal:test@example.com")
 
 	// Create config with paused drive.
-	err := config.CreateConfigWithDrive(cfgPath, cid, "~/OneDrive")
+	err := config.AppendDriveSection(cfgPath, cid, "~/OneDrive")
 	require.NoError(t, err)
 
 	require.NoError(t, config.SetDriveKey(cfgPath, cid, "paused", "true"))
@@ -57,7 +57,7 @@ func TestClearPausedKeys_IdempotentWhenNoKeys(t *testing.T) {
 	cfgPath := filepath.Join(dir, "config.toml")
 	cid := driveid.MustCanonicalID("personal:test@example.com")
 
-	err := config.CreateConfigWithDrive(cfgPath, cid, "~/OneDrive")
+	err := config.AppendDriveSection(cfgPath, cid, "~/OneDrive")
 	require.NoError(t, err)
 
 	// Clearing on an unpaused drive should succeed (keys don't exist).

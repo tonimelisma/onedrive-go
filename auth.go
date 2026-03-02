@@ -209,24 +209,25 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 		logger.Warn("failed to save cached metadata", "error", saveErr)
 	}
 
-	// Step 6: Check if this is a re-login (drive already exists in config).
+	// Step 6: Ensure drive is in config (idempotent — handles both new login and re-login).
 	email := canonicalID.Email()
 	cfgPath := cc.CfgPath
 
-	isRelogin, err := driveExistsInConfig(cfgPath, canonicalID)
+	syncDir, added, err := config.EnsureDriveInConfig(cfgPath, canonicalID, logger)
 	if err != nil {
-		logger.Debug("config check failed, treating as new login", "error", err)
+		return fmt.Errorf("configuring drive: %w", err)
 	}
 
-	if isRelogin {
+	if !added {
 		logger.Info("re-login detected, token and metadata refreshed", "canonical_id", canonicalID.String())
 		fmt.Printf("Token refreshed for %s.\n", email)
 
 		return nil
 	}
 
-	// Step 7: Create or update config with the new drive section.
-	return writeLoginConfig(cfgPath, canonicalID, user, orgName, logger)
+	printLoginSuccess(canonicalID.DriveType(), email, orgName, canonicalID.String(), syncDir)
+
+	return nil
 }
 
 // discoverAccount calls /me, /me/drive, and /me/organization to build the
@@ -307,63 +308,6 @@ func moveToken(src, dst string) error {
 
 		return fmt.Errorf("moving token to final path: %w", err)
 	}
-
-	return nil
-}
-
-// driveExistsInConfig checks whether a canonical ID already exists in the config file.
-func driveExistsInConfig(cfgPath string, canonicalID driveid.CanonicalID) (bool, error) {
-	cfg, err := config.LoadOrDefault(cfgPath, slog.Default())
-	if err != nil {
-		return false, err
-	}
-
-	_, exists := cfg.Drives[canonicalID]
-
-	return exists, nil
-}
-
-// collectExistingSyncDirs reads the config file and returns all configured
-// sync_dir values (both explicit and computed defaults). Uses
-// config.CollectOtherSyncDirs with a zero ID to include all drives.
-func collectExistingSyncDirs(cfgPath string, logger *slog.Logger) []string {
-	cfg, err := config.LoadOrDefault(cfgPath, logger)
-	if err != nil {
-		logger.Error("sync dir collision detection disabled: failed to load config",
-			"config_path", cfgPath, "error", err)
-
-		return nil
-	}
-
-	// Zero CanonicalID means "exclude no drives" — during login we check
-	// against ALL existing sync directories for collision detection.
-	return config.CollectOtherSyncDirs(cfg, driveid.CanonicalID{}, logger)
-}
-
-// writeLoginConfig creates or appends to the config file with a new drive section,
-// and prints the appropriate login success message.
-func writeLoginConfig(
-	cfgPath string, canonicalID driveid.CanonicalID, user *graph.User, orgName string, logger *slog.Logger,
-) error {
-	email := canonicalID.Email()
-
-	existingDirs := collectExistingSyncDirs(cfgPath, logger)
-	syncDir := config.DefaultSyncDir(canonicalID, orgName, user.DisplayName, existingDirs)
-
-	logger.Info("writing config", "config_path", cfgPath, "canonical_id", canonicalID.String(), "sync_dir", syncDir)
-
-	// Check if config file exists to decide create vs. append.
-	if _, err := os.Stat(cfgPath); errors.Is(err, os.ErrNotExist) {
-		if createErr := config.CreateConfigWithDrive(cfgPath, canonicalID, syncDir); createErr != nil {
-			return fmt.Errorf("creating config: %w", createErr)
-		}
-	} else {
-		if appendErr := config.AppendDriveSection(cfgPath, canonicalID, syncDir); appendErr != nil {
-			return fmt.Errorf("updating config: %w", appendErr)
-		}
-	}
-
-	printLoginSuccess(canonicalID.DriveType(), email, orgName, canonicalID.String(), syncDir)
 
 	return nil
 }
