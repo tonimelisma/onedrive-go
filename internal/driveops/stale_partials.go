@@ -1,17 +1,29 @@
 package driveops
 
 import (
+	"fmt"
 	"io/fs"
 	"log/slog"
+	"os"
 	"path/filepath"
-	"time"
 )
 
-// ReportStalePartials scans syncRoot for .partial files older than threshold
-// and logs them as warnings. Called after sync completes to alert the user
-// about potentially abandoned downloads.
-func ReportStalePartials(syncRoot string, threshold time.Duration, logger *slog.Logger) {
-	var stale []string
+// CleanStalePartials deletes all .partial files found under syncRoot.
+// After a sync cycle completes, any surviving .partial files are guaranteed
+// garbage: successful downloads rename them away, failed downloads delete
+// them via removePartialIfNotCanceled, and context cancellation aborts the
+// sync before this function runs. The only edge case is rename failure
+// (B-207), where re-downloading on the next cycle is acceptable.
+//
+// Follows the CleanStale pattern: per-file errors are logged and skipped,
+// returns (count, scanError). The caller logs a summary.
+func CleanStalePartials(syncRoot string, logger *slog.Logger) (int, error) {
+	// Pre-check: return error for nonexistent root (WalkDir would swallow it).
+	if _, err := os.Stat(syncRoot); err != nil {
+		return 0, fmt.Errorf("scanning for partial files: %w", err)
+	}
+
+	deleted := 0
 
 	err := filepath.WalkDir(syncRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
@@ -22,35 +34,29 @@ func ReportStalePartials(syncRoot string, threshold time.Duration, logger *slog.
 			return nil
 		}
 
-		info, infoErr := d.Info()
-		if infoErr != nil {
+		rel, relErr := filepath.Rel(syncRoot, path)
+		if relErr != nil {
+			rel = path
+		}
+
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			logger.Warn("failed to delete partial file",
+				slog.String("path", rel),
+				slog.String("error", err.Error()),
+			)
+
 			return nil
 		}
 
-		if time.Since(info.ModTime()) > threshold {
-			rel, relErr := filepath.Rel(syncRoot, path)
-			if relErr != nil {
-				rel = path
-			}
+		logger.Info("deleted stale partial file", slog.String("path", rel))
 
-			stale = append(stale, rel)
-		}
+		deleted++
 
 		return nil
 	})
 	if err != nil {
-		logger.Warn("error scanning for stale partials", slog.String("error", err.Error()))
-		return
+		return deleted, fmt.Errorf("scanning for partial files: %w", err)
 	}
 
-	if len(stale) > 0 {
-		logger.Warn("stale .partial files found",
-			slog.Int("count", len(stale)),
-			slog.String("threshold", threshold.String()),
-		)
-
-		for _, p := range stale {
-			logger.Warn("stale partial", slog.String("path", p))
-		}
-	}
+	return deleted, nil
 }
