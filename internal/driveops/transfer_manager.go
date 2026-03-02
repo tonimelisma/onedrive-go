@@ -122,7 +122,7 @@ func (tm *TransferManager) DownloadToFile(
 	partialPath := targetPath + ".partial"
 	maxRetries := resolveMaxRetries(opts.MaxHashRetries)
 	remoteHash := opts.RemoteHash
-	hashVerified := true
+	hashVerified := remoteHash != "" // no verification possible without a remote hash (B-021)
 	var localHash string
 	var size int64
 
@@ -140,8 +140,17 @@ func (tm *TransferManager) DownloadToFile(
 			return nil, err
 		}
 
-		// Hash verification — skip if remote didn't provide a hash.
-		if remoteHash == "" || localHash == remoteHash {
+		// No hash verification possible — remote didn't provide a hash (B-021).
+		if remoteHash == "" {
+			tm.logger.Warn("remote item has no content hash, skipping verification",
+				slog.String("target", targetPath),
+			)
+
+			break
+		}
+
+		// Hash matches — verification succeeded.
+		if localHash == remoteHash {
 			break
 		}
 

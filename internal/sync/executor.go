@@ -375,8 +375,9 @@ func classifyStatusCode(code int) errClass {
 		return errClassFatal
 	case http.StatusInsufficientStorage:
 		return errClassFatal
+	case http.StatusLocked: // HTTP 423: SharePoint co-authoring locks last hours; skip, don't retry (B-020)
+		return errClassSkip
 	case http.StatusRequestTimeout, http.StatusPreconditionFailed,
-		http.StatusLocked,               // HTTP 423: SharePoint co-authoring lock (B-020)
 		http.StatusTooManyRequests, 509: //nolint:mnd // HTTP 509 Bandwidth Limit Exceeded (no stdlib constant)
 		return errClassRetryable
 	default:

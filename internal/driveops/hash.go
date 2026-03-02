@@ -10,10 +10,16 @@ import (
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
 
+// HasHash reports whether the item has at least one content hash.
+// Items without hashes (e.g., some SharePoint files) cannot be hash-verified.
+func HasHash(item *graph.Item) bool {
+	return item.QuickXorHash != "" || item.SHA256Hash != "" || item.SHA1Hash != ""
+}
+
 // SelectHash returns the best available content hash from the item, preferring
-// QuickXorHash (most common), falling back to SHA256Hash, then SHA1Hash.
-// Returns empty string if no hash is available — the caller must handle
-// hash-less items appropriately (typically skipping verification) (B-021).
+// QuickXorHash (most common on all account types), falling back to SHA256Hash,
+// then SHA1Hash. Returns empty string if no hash is available — the caller must
+// handle hash-less items appropriately (typically skipping verification) (B-021).
 func SelectHash(item *graph.Item) string {
 	if item.QuickXorHash != "" {
 		return item.QuickXorHash

@@ -11,7 +11,7 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 
 | ID | Title | Priority | Package | Notes |
 |----|-------|----------|---------|-------|
-| B-300 | Rename `SessionRecord` JSON tag `"remote_path"` → `"local_path"` | P4 | driveops | Field was renamed to `LocalPath` but JSON tag kept as `"remote_path"` for backward compat. Version field added (PR #154) — migration can detect v0 (old format) vs v1. Migrate: read old key + write new key, then change the tag. |
+| ~~B-300~~ | ~~Rename `SessionRecord` JSON tag `"remote_path"` → `"local_path"`~~ | ~~P4~~ | ~~driveops~~ | **DONE** — Bumped `currentSessionVersion` to 2. Custom `UnmarshalJSON` reads both `remote_path` (v0/v1) and `local_path` (v2+). Save writes v2. |
 
 ## Phase 6.0b: Orchestrator + DriveRunner
 
@@ -64,8 +64,8 @@ Edge cases and correctness for `internal/graph/`.
 
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
-| B-020 | SharePoint lock check before upload (HTTP 423) | P2 | Avoid overwriting co-authored documents. |
-| B-021 | Hash fallback chain for missing hashes | P2 | Some Business/SharePoint files lack any hash. Fall back: QuickXorHash → SHA256 → size+eTag+mtime. |
+| ~~B-020~~ | ~~SharePoint lock check before upload (HTTP 423)~~ | ~~P2~~ | **DONE** — Reclassified HTTP 423 (Locked) as `errClassSkip` instead of `errClassRetryable`. SharePoint co-authoring locks last hours; retrying is pointless. Watch mode safety scan re-attempts in 5 min. |
+| ~~B-021~~ | ~~Hash fallback chain for missing hashes~~ | ~~P2~~ | **DONE** — `HasHash()` helper, `HashVerified=false` when remote hash is empty. `SelectHash` covers all account types (QuickXorHash → SHA256 → SHA1). |
 | ~~B-007~~ | ~~Cross-drive DriveID handling for shared/remote items~~ | ~~P3~~ | **Folded into Phase 6.4a** — remoteItem parsing and cross-drive DriveID handling is roadmap increment 6.4a. |
 | ~~B-283~~ | ~~URL-encode query parameter in `SearchSites()`~~ | ~~P2~~ | **DONE** — Phase 6.0a. Added `url.QueryEscape(query)` in SearchSites URL construction. |
 
@@ -73,24 +73,22 @@ Edge cases and correctness for `internal/graph/`.
 
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
-| B-284 | `write.go` config writer uses fragile line-based TOML editing | P3 | Regex line matching instead of TOML AST. Unusual hand-edited formatting could silently produce wrong results. Consider TOML AST library for writes. |
+| B-284 | `write.go` config writer uses fragile line-based TOML editing | P3 | Regex line matching instead of TOML AST. Unusual hand-edited formatting could silently produce wrong results. Consider TOML AST library for writes. Pairs well with next config change. |
 | ~~B-288~~ | ~~`quiet` parameter threading across 11 functions~~ | ~~P4~~ | **DONE** — Phase 6.0c. Added `CLIContext.Statusf()` method. Refactored resume.go, pause.go, resolve.go, sync.go to pass `cc *CLIContext` instead of `quiet bool`. |
-| B-287 | Symlink-aware sync_dir overlap warning | P4 | Log warning when `filepath.EvalSymlinks` resolves differently from configured path. Cosmetic safety — lexical overlap check in `checkSyncDirOverlap()` is sufficient for correctness. |
+| ~~B-287~~ | ~~Symlink-aware sync_dir overlap warning~~ | ~~P4~~ | **DONE** — `checkDriveSyncDirUniqueness` now resolves symlinks via `filepath.EvalSymlinks` before comparing. Falls back to lexical if path doesn't exist yet. |
 
 ## Hardening: Test Infrastructure
 
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
 | B-285 | Standardize `baseline_test.go` to testify style | P4 | 2300+ lines of stdlib assertions. `canonical_test.go` was converted (B-278), `baseline_test.go` should follow. Purely cosmetic — do alongside behavioral changes, not standalone. |
-| B-286 | No shared/business drive in E2E test matrix | P3 | All E2E tests run against `personal:user@example.com`. `shared` type and `ConstructShared()` are unit-tested but untested against real Graph API. Phase 6.0d adds second personal account. |
+| B-286 | No shared/business drive in E2E test matrix | P3 | All E2E tests run against `personal:user@example.com`. `shared` type and `ConstructShared()` are unit-tested but untested against real Graph API. Blocked on second test account (Phase 6.0d). |
 
 ## Deferred from Phase 6.0c
 
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
-| B-297 | Worker budget algorithm for multi-drive allocation | P3 | Each engine currently gets full `transfer_workers`/`check_workers` from config. Proportional allocation by baseline file count deferred. See MULTIDRIVE.md §11.3. |
-| B-298 | Watch-mode parallel hashing | P3 | `hashAndEmit` in watchLoop runs sequentially in the watch goroutine. Needs a hash worker pool for parallelism. FullScan already parallelized (three-phase pattern). |
-| B-299 | E2E tests for daemon mode (Orchestrator.RunWatch) | P3 | Watch bridge removed in 6.0c. Need E2E coverage for multi-drive daemon, SIGHUP reload, pause/resume. |
+| B-299 | E2E tests for daemon mode (Orchestrator.RunWatch) | P3 | Watch bridge removed in 6.0c. Need E2E coverage for multi-drive daemon, SIGHUP reload, pause/resume. Blocked on second test account (Phase 6.0d). |
 
 ## Hardening: Watch Mode
 
@@ -98,9 +96,9 @@ Improvements to continuous sync reliability in `internal/sync/`.
 
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
-| B-101 | Add timing and resource logging to safety scan | P3 | Elapsed time, files walked, directories scanned. |
-| B-115 | Test: safety scan + watch producing conflicting change types | P3 | Watch sees Create, safety scan classifies same file as Modify. Planner handles it but no test. |
-| B-128 | Debounce semantics change under load | P4 | Partially addressed: write coalescing implemented (B-107). Full load-testing and documentation still needed. |
+| ~~B-101~~ | ~~Add timing and resource logging to safety scan~~ | ~~P3~~ | **DONE** — `observer_local_handlers.go:475-481` logs elapsed time, event count, baseline entries. |
+| ~~B-115~~ | ~~Test: safety scan + watch producing conflicting change types~~ | ~~P3~~ | **DONE** — `buffer_test.go:940-994` `TestBuffer_WatchAndSafetyScanConflictingTypes`. |
+| B-128 | Debounce semantics change under load | P4 | Correctness done (write coalescing via B-107). Remaining: load-testing and documentation. |
 
 ## Hardening: Performance
 
@@ -124,6 +122,14 @@ Optimization deferred until profiling shows a bottleneck.
 
 | ID | Title | Resolution |
 |----|-------|------------|
+| B-300 | Rename `SessionRecord` JSON tag `"remote_path"` → `"local_path"` | **DONE** — Bumped `currentSessionVersion` to 2. Custom `UnmarshalJSON` reads both `remote_path` (v0/v1) and `local_path` (v2+). Save writes v2. |
+| B-287 | Symlink-aware sync_dir overlap detection | **DONE** — `checkDriveSyncDirUniqueness` resolves symlinks via `filepath.EvalSymlinks`. Falls back to lexical if path doesn't exist yet. |
+| B-101 | Add timing and resource logging to safety scan | **DONE** — `observer_local_handlers.go:475-481` logs elapsed time, event count, baseline entries. |
+| B-115 | Test: safety scan + watch conflicting change types | **DONE** — `buffer_test.go:940-994` `TestBuffer_WatchAndSafetyScanConflictingTypes`. |
+| B-021 | Hash fallback chain for missing hashes | **DONE** — `HasHash()` helper, `HashVerified=false` when remote hash is empty. |
+| B-020 | SharePoint lock (HTTP 423) reclassification | **DONE** — HTTP 423 reclassified as `errClassSkip` (was `errClassRetryable`). |
+| B-298 | Watch-mode parallel hashing | **Moved to roadmap** — Phase 8.1 alongside B-297 and AIMD. |
+| B-297 | Worker budget algorithm for multi-drive allocation | **Moved to roadmap** — Phase 8.1 (adaptive concurrency + multi-drive worker budget). See MULTIDRIVE.md §11.3. |
 | B-302 | Post-B-301 housekeeping hardening | **DONE** — (1) Removed `staleSessionAge` parameter from `CleanTransferArtifacts` (always `StaleSessionAge`). (2) Made `postSyncHousekeeping` synchronous — eliminates process-exit race where cleanup goroutine may not complete. (3) Added WalkDir error logging for permission-denied subdirectories. (4) Permission error test added (coverage +0.5%). |
 | B-301 | Auto-delete `.partial` files after sync | **DONE** — `ReportStalePartials` (warn-only) replaced by `CleanStalePartials` (unconditional delete). After sync completes, `.partial` files are always garbage: successful downloads rename them, failed downloads delete them, Ctrl-C aborts before housekeeping runs. Threshold removed — no age check needed. |
 | B-296 | Config-file `log_level` not applied by sync command | **DONE** — `runSync` rebuilds logger from `rawCfg.LoggingConfig` after loading config. CLI flags still override. Test `TestBuildLogger_FromRawConfigLogLevel` added. |

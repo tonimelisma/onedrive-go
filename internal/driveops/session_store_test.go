@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -159,6 +160,133 @@ func TestSessionStore_OldFormatVersionZero(t *testing.T) {
 	// Old format has no "version" key — JSON unmarshal leaves int at zero.
 	if rec.Version != 0 {
 		t.Errorf("Version = %d, want 0 for old format", rec.Version)
+	}
+
+	// B-300: LocalPath should be populated from old "remote_path" key.
+	if rec.LocalPath != "/docs/old.txt" {
+		t.Errorf("LocalPath = %q, want %q (migrated from remote_path)", rec.LocalPath, "/docs/old.txt")
+	}
+}
+
+// TestSessionStore_V1ToV2Migration verifies that v1 JSON files with the
+// "remote_path" key are correctly loaded and the LocalPath field is populated (B-300).
+func TestSessionStore_V1ToV2Migration(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewSessionStore(dir, testLogger(t))
+
+	driveID := "drive-v1"
+	localPath := "/docs/migrated.txt"
+
+	sessDir := filepath.Join(dir, "upload-sessions")
+	if err := os.MkdirAll(sessDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	// v1 format: has "version":1 and "remote_path" key.
+	v1JSON := `{"version":1,"drive_id":"drive-v1","remote_path":"/docs/migrated.txt","session_url":"https://v1","file_hash":"vh","file_size":256,"created_at":"2025-06-01T00:00:00Z"}`
+	fpath := store.filePath(driveID, localPath)
+
+	if err := os.WriteFile(fpath, []byte(v1JSON), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	rec, err := store.Load(driveID, localPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if rec.Version != 1 {
+		t.Errorf("Version = %d, want 1", rec.Version)
+	}
+
+	if rec.LocalPath != "/docs/migrated.txt" {
+		t.Errorf("LocalPath = %q, want %q", rec.LocalPath, "/docs/migrated.txt")
+	}
+
+	if rec.SessionURL != "https://v1" {
+		t.Errorf("SessionURL = %q, want %q", rec.SessionURL, "https://v1")
+	}
+}
+
+// TestSessionStore_V2RoundTrip verifies that v2 records with "local_path" key
+// round-trip correctly through Save and Load (B-300).
+func TestSessionStore_V2RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewSessionStore(dir, testLogger(t))
+
+	driveID := "drive-v2"
+	localPath := "/docs/v2file.txt"
+
+	err := store.Save(driveID, localPath, &SessionRecord{
+		SessionURL: "https://v2session",
+		FileHash:   "v2hash",
+		FileSize:   512,
+	})
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	rec, err := store.Load(driveID, localPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if rec.Version != currentSessionVersion {
+		t.Errorf("Version = %d, want %d", rec.Version, currentSessionVersion)
+	}
+
+	if rec.LocalPath != localPath {
+		t.Errorf("LocalPath = %q, want %q", rec.LocalPath, localPath)
+	}
+
+	if rec.SessionURL != "https://v2session" {
+		t.Errorf("SessionURL = %q, want %q", rec.SessionURL, "https://v2session")
+	}
+}
+
+// TestSessionStore_SaveWritesV2JSON verifies that Save writes the v2 JSON tag
+// "local_path" (not the old "remote_path") (B-300).
+func TestSessionStore_SaveWritesV2JSON(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewSessionStore(dir, testLogger(t))
+
+	// Throttle cleanIfDue.
+	store.cleanMu.Lock()
+	store.lastClean = time.Now()
+	store.cleanMu.Unlock()
+
+	driveID := "drive-v2write"
+	localPath := "/docs/written.txt"
+
+	err := store.Save(driveID, localPath, &SessionRecord{
+		SessionURL: "https://write-test",
+		FileHash:   "wh",
+		FileSize:   64,
+	})
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// Read raw JSON to verify key names.
+	fpath := store.filePath(driveID, localPath)
+	data, err := os.ReadFile(fpath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	raw := string(data)
+	if !strings.Contains(raw, `"local_path"`) {
+		t.Errorf("saved JSON should contain \"local_path\" key, got: %s", raw)
+	}
+
+	if strings.Contains(raw, `"remote_path"`) {
+		t.Errorf("saved JSON should NOT contain \"remote_path\" key, got: %s", raw)
 	}
 }
 

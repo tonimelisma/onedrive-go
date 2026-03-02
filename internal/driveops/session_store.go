@@ -35,19 +35,47 @@ const StaleSessionAge = 7 * 24 * time.Hour
 const cleanThrottle = 1 * time.Hour
 
 // currentSessionVersion is the schema version written by Save().
-// Zero-value (absent from old JSON files) means "unversioned" — a perfect
-// sentinel for future migrations (e.g., B-300 JSON tag rename).
-const currentSessionVersion = 1
+// v0: unversioned (no "version" key), uses "remote_path".
+// v1: added "version" field, still uses "remote_path".
+// v2: renamed JSON key "remote_path" → "local_path" (B-300).
+const currentSessionVersion = 2
 
 // SessionRecord is the on-disk JSON format for a persisted upload session.
+// Custom UnmarshalJSON reads both "remote_path" (v0/v1) and "local_path" (v2+).
 type SessionRecord struct {
 	Version    int       `json:"version"`
 	DriveID    string    `json:"drive_id"`
-	LocalPath  string    `json:"remote_path"` // JSON key kept as "remote_path" for backward compatibility
+	LocalPath  string    `json:"local_path"`
 	SessionURL string    `json:"session_url"`
 	FileHash   string    `json:"file_hash"`
 	FileSize   int64     `json:"file_size"`
 	CreatedAt  time.Time `json:"created_at"`
+}
+
+// UnmarshalJSON implements custom unmarshaling to support both the old
+// "remote_path" key (v0/v1) and the new "local_path" key (v2+).
+func (r *SessionRecord) UnmarshalJSON(data []byte) error {
+	// Alias avoids infinite recursion — the alias type has no UnmarshalJSON method.
+	type alias SessionRecord
+
+	// Embed the alias and add the old key as a separate field.
+	var raw struct {
+		alias
+		RemotePath string `json:"remote_path"`
+	}
+
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	*r = SessionRecord(raw.alias)
+
+	// If LocalPath is empty but RemotePath has a value, migrate from old key.
+	if r.LocalPath == "" && raw.RemotePath != "" {
+		r.LocalPath = raw.RemotePath
+	}
+
+	return nil
 }
 
 // SessionStore manages file-based upload session persistence. Session files
