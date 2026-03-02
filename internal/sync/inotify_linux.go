@@ -56,7 +56,7 @@ func checkInotifyCapacity(estimatedDirs int, logger *slog.Logger) {
 		logger.Warn("inotify watch usage near limit — consider increasing",
 			slog.Int("estimated_dirs", estimatedDirs),
 			slog.Int("max_user_watches", limit),
-			slog.String("usage", fmt.Sprintf("%.0f%%", usage*100)),
+			slog.String("usage", fmt.Sprintf("%.0f%%", usage*percentMultiplier)),
 			slog.String("advice", "sudo sysctl -w fs.inotify.max_user_watches=524288"),
 		)
 	}
