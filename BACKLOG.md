@@ -11,6 +11,7 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 
 | ID | Title | Priority | Package | Notes |
 |----|-------|----------|---------|-------|
+| B-296 | Config-file `log_level` not applied by sync command | P4 | root | `sync` uses `skipConfigAnnotation` so PersistentPreRunE Phase 2 skips config-driven log level. CLI flags (`--verbose`/`--debug`/`--quiet`) still work. |
 
 ## Phase 6.0b: Orchestrator + DriveRunner
 

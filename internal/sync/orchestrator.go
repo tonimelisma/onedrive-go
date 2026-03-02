@@ -27,10 +27,6 @@ type engineFactoryFunc func(cfg *EngineConfig) (engineRunner, error)
 // The real implementation calls graph.TokenSourceFromPath; tests inject stubs.
 type tokenSourceFactory func(ctx context.Context, tokenPath string, logger *slog.Logger) (graph.TokenSource, error)
 
-// driveDiscoveryFunc discovers the primary drive ID when ResolvedDrive.DriveID
-// is zero. The real implementation calls client.Drives(ctx); tests inject stubs.
-type driveDiscoveryFunc func(ctx context.Context, client *graph.Client) (driveid.ID, error)
-
 // OrchestratorConfig holds the inputs for creating an Orchestrator.
 // The CLI layer populates this from resolved config and HTTP clients.
 type OrchestratorConfig struct {
@@ -53,17 +49,15 @@ type clientPair struct {
 // Orchestrator manages per-drive sync runners. It is ALWAYS used, even
 // for a single drive — no separate single-drive code path (MULTIDRIVE.md §11.7).
 type Orchestrator struct {
-	cfg              *OrchestratorConfig
-	clients          map[string]*clientPair // keyed by token file path
-	engineFactory    engineFactoryFunc      // injectable for tests
-	tokenSourceFn    tokenSourceFactory     // injectable for tests
-	driveDiscoveryFn driveDiscoveryFunc     // injectable for tests
-	logger           *slog.Logger
+	cfg           *OrchestratorConfig
+	clients       map[string]*clientPair // keyed by token file path
+	engineFactory engineFactoryFunc      // injectable for tests
+	tokenSourceFn tokenSourceFactory     // injectable for tests
+	logger        *slog.Logger
 }
 
 // NewOrchestrator creates an Orchestrator with real Engine and TokenSource
-// factories. Tests override engineFactory, tokenSourceFn, and driveDiscoveryFn
-// after construction.
+// factories. Tests override engineFactory and tokenSourceFn after construction.
 func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 	return &Orchestrator{
 		cfg:     cfg,
@@ -71,30 +65,18 @@ func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 		engineFactory: func(ecfg *EngineConfig) (engineRunner, error) {
 			return NewEngine(ecfg)
 		},
-		tokenSourceFn:    graph.TokenSourceFromPath,
-		driveDiscoveryFn: defaultDriveDiscovery,
-		logger:           cfg.Logger,
+		tokenSourceFn: graph.TokenSourceFromPath,
+		logger:        cfg.Logger,
 	}
-}
-
-// defaultDriveDiscovery discovers the primary drive ID by calling /me/drives.
-// Used when ResolvedDrive.DriveID is zero (config has no drive_id field).
-func defaultDriveDiscovery(ctx context.Context, client *graph.Client) (driveid.ID, error) {
-	drives, err := client.Drives(ctx)
-	if err != nil {
-		return driveid.ID{}, fmt.Errorf("discovering drive: %w", err)
-	}
-
-	if len(drives) == 0 {
-		return driveid.ID{}, fmt.Errorf("no drives found for this account")
-	}
-
-	return drives[0].ID, nil
 }
 
 // getOrCreateClient returns a cached clientPair for the given token path,
 // creating one if it doesn't exist. Multiple drives on the same account
 // share one clientPair (keyed by token path).
+//
+// Not goroutine-safe. Only called from prepareDriveWork, which runs
+// sequentially within RunOnce. If 6.0c introduces concurrent access
+// (e.g., SIGHUP reload during a cycle), add a mutex.
 func (o *Orchestrator) getOrCreateClient(ctx context.Context, tokenPath string) (*clientPair, error) {
 	if pair, ok := o.clients[tokenPath]; ok {
 		return pair, nil
@@ -122,13 +104,12 @@ type driveWork struct {
 
 // RunOnce executes a single sync cycle for all configured drives. Each drive
 // runs in its own goroutine via a DriveRunner with panic recovery. RunOnce
-// itself never returns an error — individual drive errors are captured in
-// the per-drive DriveReport. The caller inspects each report to determine
-// success or failure.
-func (o *Orchestrator) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) ([]*DriveReport, error) {
+// never returns an error — individual drive errors are captured in each
+// DriveReport. The caller inspects reports to determine success or failure.
+func (o *Orchestrator) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) []*DriveReport {
 	drives := o.cfg.Drives
 	if len(drives) == 0 {
-		return nil, nil
+		return nil
 	}
 
 	o.logger.Info("orchestrator starting RunOnce",
@@ -155,7 +136,7 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts)
 
 	o.logger.Info("orchestrator RunOnce complete", slog.Int("reports", len(reports)))
 
-	return reports, nil
+	return reports
 }
 
 // prepareDriveWork resolves tokens, creates clients, and builds engines for
@@ -195,29 +176,18 @@ func (o *Orchestrator) prepareDriveWork(ctx context.Context, mode SyncMode, opts
 			continue
 		}
 
-		// Discover drive ID if not configured (e.g., zero-config mode).
 		driveID := rd.DriveID
 		if driveID.IsZero() {
-			discovered, discoverErr := o.driveDiscoveryFn(ctx, clients.Meta)
-			if discoverErr != nil {
-				capturedErr := discoverErr
-				capturedCID := rd.CanonicalID
+			capturedCID := rd.CanonicalID
 
-				work = append(work, driveWork{
-					runner: &DriveRunner{canonID: rd.CanonicalID, displayName: rd.DisplayName},
-					fn: func(_ context.Context) (*SyncReport, error) {
-						return nil, fmt.Errorf("discovering drive for %s: %w", capturedCID, capturedErr)
-					},
-				})
+			work = append(work, driveWork{
+				runner: &DriveRunner{canonID: rd.CanonicalID, displayName: rd.DisplayName},
+				fn: func(_ context.Context) (*SyncReport, error) {
+					return nil, fmt.Errorf("drive ID not resolved for %s — re-run 'onedrive-go login'", capturedCID)
+				},
+			})
 
-				continue
-			}
-
-			driveID = discovered
-			o.logger.Debug("discovered primary drive",
-				slog.String("drive_id", driveID.String()),
-				slog.String("canonical_id", rd.CanonicalID.String()),
-			)
+			continue
 		}
 
 		w := o.buildEngineWork(rd, driveID, clients, mode, opts)
@@ -260,7 +230,14 @@ func (o *Orchestrator) buildEngineWork(
 	return driveWork{
 		runner: &DriveRunner{canonID: rd.CanonicalID, displayName: rd.DisplayName},
 		fn: func(c context.Context) (*SyncReport, error) {
-			defer engine.Close()
+			defer func() {
+				if closeErr := engine.Close(); closeErr != nil {
+					o.logger.Warn("engine close error",
+						slog.String("drive", rd.CanonicalID.String()),
+						slog.String("error", closeErr.Error()))
+				}
+			}()
+
 			return engine.RunOnce(c, mode, opts)
 		},
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -477,4 +478,104 @@ func TestWatchLoop_SIGHUPPausesRunningDrive(t *testing.T) {
 	// watchLoop should return context.Canceled from waitForResume since the
 	// drive is now paused and we canceled the parent context.
 	assert.ErrorIs(t, err, context.Canceled)
+}
+
+// --- driveReportsError ---
+
+func TestDriveReportsError(t *testing.T) {
+	t.Parallel()
+
+	errDelta := fmt.Errorf("delta expired")
+	errAuth := fmt.Errorf("auth failed")
+
+	tests := []struct {
+		name    string
+		reports []*sync.DriveReport
+		wantNil bool
+		wantMsg string // substring, only checked when wantNil is false
+	}{
+		{
+			name:    "zero reports",
+			reports: nil,
+			wantNil: true,
+		},
+		{
+			name: "one success",
+			reports: []*sync.DriveReport{
+				{Report: &sync.SyncReport{Mode: sync.SyncBidirectional}},
+			},
+			wantNil: true,
+		},
+		{
+			name: "one failure",
+			reports: []*sync.DriveReport{
+				{Err: errDelta},
+			},
+			wantMsg: "delta expired",
+		},
+		{
+			name: "multi-drive mixed",
+			reports: []*sync.DriveReport{
+				{Report: &sync.SyncReport{}},
+				{Err: errDelta},
+			},
+			wantMsg: "1 of 2 drives failed",
+		},
+		{
+			name: "all failures",
+			reports: []*sync.DriveReport{
+				{Err: errDelta},
+				{Err: errAuth},
+			},
+			wantMsg: "2 of 2 drives failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := driveReportsError(tt.reports)
+			if tt.wantNil {
+				assert.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantMsg)
+			}
+		})
+	}
+}
+
+// --- printDriveReports ---
+
+func TestPrintDriveReports_SingleDrive_NoHeader(t *testing.T) {
+	t.Parallel()
+
+	reports := []*sync.DriveReport{
+		{
+			DisplayName: "Personal",
+			Report:      &sync.SyncReport{Mode: sync.SyncBidirectional},
+		},
+	}
+
+	// Should not panic or produce headers for single drive.
+	printDriveReports(reports, true)
+}
+
+func TestPrintDriveReports_MultiDrive_WithError(t *testing.T) {
+	t.Parallel()
+
+	reports := []*sync.DriveReport{
+		{
+			DisplayName: "Personal",
+			Report:      &sync.SyncReport{Mode: sync.SyncBidirectional},
+		},
+		{
+			DisplayName: "Business",
+			Err:         fmt.Errorf("sync failed"),
+		},
+	}
+
+	// Should not panic. Output goes to stderr via statusf.
+	printDriveReports(reports, true)
 }
