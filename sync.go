@@ -85,7 +85,13 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	}
 
 	if len(drives) == 0 {
-		return fmt.Errorf("no drives to sync — configure a drive with 'onedrive-go drive add' or check paused state")
+		// Distinguish "all paused" from "none configured" for a clearer message.
+		allDrives, resolveErr := config.ResolveDrives(rawCfg, selectors, true, logger)
+		if resolveErr == nil && len(allDrives) > 0 {
+			return fmt.Errorf("all drives are paused — run 'onedrive-go resume' to unpause")
+		}
+
+		return fmt.Errorf("no drives configured — run 'onedrive-go drive add' to add a drive")
 	}
 
 	dryRun, err := cmd.Flags().GetBool("dry-run")
@@ -103,13 +109,10 @@ func runSync(cmd *cobra.Command, _ []string) error {
 		Logger:       logger,
 	})
 
-	reports, err := orch.RunOnce(ctx, mode, sync.RunOpts{
+	reports := orch.RunOnce(ctx, mode, sync.RunOpts{
 		DryRun: dryRun,
 		Force:  force,
 	})
-	if err != nil {
-		return err
-	}
 
 	printDriveReports(reports, cc.Flags.Quiet)
 

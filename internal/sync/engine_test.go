@@ -11,6 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
@@ -126,8 +129,17 @@ func (m *engineMockClient) Upload(ctx context.Context, driveID driveid.ID, paren
 }
 
 // ---------------------------------------------------------------------------
-// Test helpers
+// Test helpers (shared across engine, drive_runner, and orchestrator tests)
 // ---------------------------------------------------------------------------
+
+func testCanonicalID(t *testing.T, s string) driveid.CanonicalID {
+	t.Helper()
+
+	cid, err := driveid.NewCanonicalID(s)
+	require.NoError(t, err)
+
+	return cid
+}
 
 const engineTestDriveID = "0000000000000001"
 
@@ -216,6 +228,32 @@ func seedBaseline(t *testing.T, mgr *BaselineManager, ctx context.Context, outco
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+func TestNewEngine_ZeroDriveID_ReturnsError(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	syncRoot := filepath.Join(tmpDir, "sync")
+	require.NoError(t, os.MkdirAll(syncRoot, 0o755))
+
+	mock := &engineMockClient{}
+	logger := testLogger(t)
+
+	_, err := NewEngine(&EngineConfig{
+		DBPath:    dbPath,
+		SyncRoot:  syncRoot,
+		DriveID:   driveid.ID{}, // zero — should be rejected
+		Fetcher:   mock,
+		Items:     mock,
+		Downloads: mock,
+		Uploads:   mock,
+		Logger:    logger,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "non-zero drive ID")
+}
 
 func TestRunOnce_NoChanges(t *testing.T) {
 	t.Parallel()

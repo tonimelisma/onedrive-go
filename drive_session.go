@@ -22,8 +22,9 @@ type DriveSession struct {
 }
 
 // NewDriveSession creates a DriveSession from resolved config. It resolves the
-// token path (supporting shared drives via cfg), loads the token, creates both
-// metadata and transfer clients, and discovers the drive ID if not configured.
+// token path (supporting shared drives via cfg), loads the token, and creates
+// both metadata and transfer clients. DriveID must be pre-resolved (via token
+// meta or config); returns an error if it is zero.
 func NewDriveSession(ctx context.Context, resolved *config.ResolvedDrive, cfg *config.Config, logger *slog.Logger) (*DriveSession, error) {
 	tokenPath := config.DriveTokenPath(resolved.CanonicalID, cfg)
 	if tokenPath == "" {
@@ -44,20 +45,10 @@ func NewDriveSession(ctx context.Context, resolved *config.ResolvedDrive, cfg *c
 
 	driveID := resolved.DriveID
 	if driveID.IsZero() {
-		drives, discoverErr := client.Drives(ctx)
-		if discoverErr != nil {
-			return nil, fmt.Errorf("discovering drive: %w", discoverErr)
-		}
-
-		if len(drives) == 0 {
-			return nil, fmt.Errorf("no drives found for this account")
-		}
-
-		driveID = drives[0].ID
-		logger.Debug("discovered primary drive", "drive_id", driveID.String())
-	} else {
-		logger.Debug("using configured drive ID", "drive_id", driveID.String())
+		return nil, fmt.Errorf("drive ID not resolved for %s — re-run 'onedrive-go login'", resolved.CanonicalID)
 	}
+
+	logger.Debug("using drive ID", "drive_id", driveID.String())
 
 	return &DriveSession{
 		Client:   client,

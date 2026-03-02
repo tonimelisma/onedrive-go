@@ -125,8 +125,7 @@ func TestRunOnce_ZeroDrives(t *testing.T) {
 	cfg := testOrchestratorConfig(t)
 	orch := NewOrchestrator(cfg)
 
-	reports, err := orch.RunOnce(context.Background(), SyncBidirectional, RunOpts{})
-	assert.NoError(t, err)
+	reports := orch.RunOnce(context.Background(), SyncBidirectional, RunOpts{})
 	assert.Empty(t, reports)
 }
 
@@ -147,8 +146,7 @@ func TestRunOnce_OneDrive_Success(t *testing.T) {
 		return &mockEngine{report: expectedReport}, nil
 	}
 
-	reports, err := orch.RunOnce(context.Background(), SyncBidirectional, RunOpts{})
-	assert.NoError(t, err)
+	reports := orch.RunOnce(context.Background(), SyncBidirectional, RunOpts{})
 	require.Len(t, reports, 1)
 	assert.Equal(t, rd.CanonicalID, reports[0].CanonicalID)
 	assert.Equal(t, "Test", reports[0].DisplayName)
@@ -177,9 +175,7 @@ func TestRunOnce_TwoDrives_OneFailsOneSucceeds(t *testing.T) {
 		return &mockEngine{report: okReport}, nil
 	}
 
-	reports, err := orch.RunOnce(context.Background(), SyncBidirectional, RunOpts{})
-	// RunOnce itself does not error — individual drives report their own errors.
-	assert.NoError(t, err)
+	reports := orch.RunOnce(context.Background(), SyncBidirectional, RunOpts{})
 	require.Len(t, reports, 2)
 
 	// Find each drive's report by canonical ID.
@@ -220,8 +216,7 @@ func TestRunOnce_PanicRecovery(t *testing.T) {
 		return &mockEngine{report: stableReport}, nil
 	}
 
-	reports, err := orch.RunOnce(context.Background(), SyncBidirectional, RunOpts{})
-	assert.NoError(t, err)
+	reports := orch.RunOnce(context.Background(), SyncBidirectional, RunOpts{})
 	require.Len(t, reports, 2)
 
 	var panicReport, stableDriveReport *DriveReport
@@ -258,8 +253,7 @@ func TestRunOnce_ContextCanceled(t *testing.T) {
 		return &mockEngine{err: context.Canceled}, nil
 	}
 
-	reports, err := orch.RunOnce(ctx, SyncBidirectional, RunOpts{})
-	assert.NoError(t, err)
+	reports := orch.RunOnce(ctx, SyncBidirectional, RunOpts{})
 	require.Len(t, reports, 1)
 	assert.ErrorIs(t, reports[0].Err, context.Canceled)
 }
@@ -276,8 +270,7 @@ func TestRunOnce_EngineFactoryError(t *testing.T) {
 		return nil, errors.New("db init failed")
 	}
 
-	reports, err := orch.RunOnce(context.Background(), SyncBidirectional, RunOpts{})
-	assert.NoError(t, err)
+	reports := orch.RunOnce(context.Background(), SyncBidirectional, RunOpts{})
 	require.Len(t, reports, 1)
 	assert.Error(t, reports[0].Err)
 	assert.Contains(t, reports[0].Err.Error(), "db init failed")
@@ -291,24 +284,22 @@ func TestRunOnce_TokenError_ReportsPerDrive(t *testing.T) {
 		return nil, errors.New("token file not found")
 	}
 
-	reports, err := orch.RunOnce(context.Background(), SyncBidirectional, RunOpts{})
-	assert.NoError(t, err)
+	reports := orch.RunOnce(context.Background(), SyncBidirectional, RunOpts{})
 	require.Len(t, reports, 1)
 	assert.Error(t, reports[0].Err)
 	assert.Contains(t, reports[0].Err.Error(), "token")
 }
 
-// --- drive discovery ---
+// --- zero DriveID ---
 
-func TestRunOnce_ZeroDriveID_DiscoversPrimary(t *testing.T) {
-	cid := testCanonicalID(t, "personal:discover@example.com")
-	discoveredID := driveid.New("discovered-abc123")
+func TestRunOnce_ZeroDriveID_ReportsError(t *testing.T) {
+	cid := testCanonicalID(t, "personal:zero-id@example.com")
 
 	rd := &config.ResolvedDrive{
 		CanonicalID: cid,
-		DisplayName: "Discover",
+		DisplayName: "ZeroID",
 		SyncDir:     t.TempDir(),
-		// DriveID intentionally zero — triggers discovery.
+		// DriveID intentionally zero — should produce an error, not trigger discovery.
 	}
 	require.True(t, rd.DriveID.IsZero())
 
@@ -317,46 +308,12 @@ func TestRunOnce_ZeroDriveID_DiscoversPrimary(t *testing.T) {
 	orch.tokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
 		return &stubTokenSource{}, nil
 	}
-	orch.driveDiscoveryFn = func(_ context.Context, _ *graph.Client) (driveid.ID, error) {
-		return discoveredID, nil
-	}
 
-	var capturedDriveID driveid.ID
-	orch.engineFactory = func(ecfg *EngineConfig) (engineRunner, error) {
-		capturedDriveID = ecfg.DriveID
-		return &mockEngine{report: &SyncReport{Mode: SyncBidirectional}}, nil
-	}
-
-	reports, err := orch.RunOnce(context.Background(), SyncBidirectional, RunOpts{})
-	assert.NoError(t, err)
-	require.Len(t, reports, 1)
-	assert.NoError(t, reports[0].Err)
-	assert.Equal(t, discoveredID, capturedDriveID)
-}
-
-func TestRunOnce_ZeroDriveID_DiscoveryError(t *testing.T) {
-	cid := testCanonicalID(t, "personal:discover-fail@example.com")
-
-	rd := &config.ResolvedDrive{
-		CanonicalID: cid,
-		DisplayName: "DiscoverFail",
-		SyncDir:     t.TempDir(),
-	}
-
-	cfg := testOrchestratorConfig(t, rd)
-	orch := NewOrchestrator(cfg)
-	orch.tokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
-		return &stubTokenSource{}, nil
-	}
-	orch.driveDiscoveryFn = func(_ context.Context, _ *graph.Client) (driveid.ID, error) {
-		return driveid.ID{}, errors.New("403 accessDenied")
-	}
-
-	reports, err := orch.RunOnce(context.Background(), SyncBidirectional, RunOpts{})
-	assert.NoError(t, err)
+	reports := orch.RunOnce(context.Background(), SyncBidirectional, RunOpts{})
 	require.Len(t, reports, 1)
 	assert.Error(t, reports[0].Err)
-	assert.Contains(t, reports[0].Err.Error(), "discovering drive")
+	assert.Contains(t, reports[0].Err.Error(), "drive ID not resolved")
+	assert.Contains(t, reports[0].Err.Error(), "login")
 }
 
 // --- mockEngine ---

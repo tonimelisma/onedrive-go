@@ -111,9 +111,9 @@ func buildConfiguredDriveEntries(cfg *config.Config, logger *slog.Logger) []driv
 		syncDir := d.SyncDir
 		if syncDir == "" {
 			// Compute default sync_dir for display.
-			orgName, displayName := config.ReadTokenMetaForSyncDir(id, logger)
+			meta := config.ReadTokenMeta(id, logger)
 			otherDirs := config.CollectOtherSyncDirs(cfg, id, logger)
-			syncDir = config.DefaultSyncDir(id, orgName, displayName, otherDirs)
+			syncDir = config.DefaultSyncDir(id, meta["org_name"], meta["display_name"], otherDirs)
 
 			if syncDir == "" {
 				state = driveStateNeedsSetup
@@ -442,9 +442,9 @@ func addNewDrive(cfgPath string, cfg *config.Config, cid driveid.CanonicalID, lo
 	}
 
 	// Compute default sync_dir using the shared config helpers.
-	orgName, displayName := config.ReadTokenMetaForSyncDir(cid, logger)
+	meta := config.ReadTokenMeta(cid, logger)
 	existingDirs := config.CollectOtherSyncDirs(cfg, cid, logger)
-	syncDir := config.DefaultSyncDir(cid, orgName, displayName, existingDirs)
+	syncDir := config.DefaultSyncDir(cid, meta["org_name"], meta["display_name"], existingDirs)
 	logger.Info("adding drive", "canonical_id", cid.String(), "sync_dir", syncDir)
 
 	// Append to config.
