@@ -836,7 +836,7 @@ Acceptance: `grep -rn 'NewDriveSession\|newSyncEngine' *.go` returns 0 hits. All
 ### 6.0d: inotify + E2E + second test account — FUTURE
 
 1. **inotify watch limit detection** (Linux only): read `/proc/sys/fs/inotify/max_user_watches`. Warn at 80% threshold. On ENOSPC: that drive falls back to periodic full scan at `poll_interval`. Other drives retain inotify. No per-drive quota.
-2. **Second test account**: Create `testitesti19@outlook.com` (free personal). Bootstrap token locally. Upload to Key Vault. Update `ONEDRIVE_TEST_DRIVES` GitHub variable.
+2. **Second test account**: Create a second free personal Outlook.com account. Bootstrap token locally. Upload to Key Vault. Update `ONEDRIVE_TEST_DRIVES` GitHub variable.
 3. **Multi-drive E2E tests**: New `e2e/orchestrator_e2e_test.go` with build tag `e2e,e2e_full`. Helper: `writeMultiDriveConfig(t, drives, syncDirs)`. Scenarios: SimultaneousSync, Status, PauseResume, OneFails, ConfigReload.
 4. **CI `integration.yml` update**: Add conditional multi-drive E2E step (only when `ONEDRIVE_TEST_DRIVES` contains comma).
 

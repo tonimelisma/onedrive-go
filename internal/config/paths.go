@@ -19,18 +19,19 @@ const appName = "onedrive-go"
 const configFileName = "config.toml"
 
 // DefaultConfigDir returns the platform-specific directory for config files.
-// On Linux, respects XDG_CONFIG_HOME (defaults to ~/.config/onedrive-go).
-// On macOS, uses ~/Library/Application Support/onedrive-go per Apple guidelines.
-// Other platforms fall back to ~/.config/onedrive-go.
+// XDG_CONFIG_HOME is checked first on ALL platforms (enables test isolation).
+// Fallbacks: Linux ~/.config, macOS ~/Library/Application Support, other ~/.config.
 func DefaultConfigDir() string {
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		return filepath.Join(xdg, appName)
+	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
 
 	switch runtime.GOOS {
-	case platformLinux:
-		return linuxConfigDir(home)
 	case platformDarwin:
 		return filepath.Join(home, "Library", "Application Support", appName)
 	default:
@@ -38,29 +39,21 @@ func DefaultConfigDir() string {
 	}
 }
 
-// linuxConfigDir returns the XDG-compliant config directory for Linux.
-func linuxConfigDir(home string) string {
-	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+// DefaultDataDir returns the platform-specific directory for application data
+// (state databases, logs, tokens).
+// XDG_DATA_HOME is checked first on ALL platforms (enables test isolation).
+// Fallbacks: Linux ~/.local/share, macOS ~/Library/Application Support, other ~/.local/share.
+func DefaultDataDir() string {
+	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
 		return filepath.Join(xdg, appName)
 	}
 
-	return filepath.Join(home, ".config", appName)
-}
-
-// DefaultDataDir returns the platform-specific directory for application data
-// (state databases, logs, tokens).
-// On Linux, respects XDG_DATA_HOME (defaults to ~/.local/share/onedrive-go).
-// On macOS, uses ~/Library/Application Support/onedrive-go (macOS convention
-// collapses config and data into one directory).
-func DefaultDataDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
 
 	switch runtime.GOOS {
-	case platformLinux:
-		return linuxDataDir(home)
 	case platformDarwin:
 		return filepath.Join(home, "Library", "Application Support", appName)
 	default:
@@ -68,41 +61,25 @@ func DefaultDataDir() string {
 	}
 }
 
-// linuxDataDir returns the XDG-compliant data directory for Linux.
-func linuxDataDir(home string) string {
-	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
+// DefaultCacheDir returns the platform-specific directory for cache files.
+// XDG_CACHE_HOME is checked first on ALL platforms (enables test isolation).
+// Fallbacks: Linux ~/.cache, macOS ~/Library/Caches, other ~/.cache.
+func DefaultCacheDir() string {
+	if xdg := os.Getenv("XDG_CACHE_HOME"); xdg != "" {
 		return filepath.Join(xdg, appName)
 	}
 
-	return filepath.Join(home, ".local", "share", appName)
-}
-
-// DefaultCacheDir returns the platform-specific directory for cache files.
-// On Linux, respects XDG_CACHE_HOME (defaults to ~/.cache/onedrive-go).
-// On macOS, uses ~/Library/Caches/onedrive-go per Apple guidelines.
-func DefaultCacheDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
 
 	switch runtime.GOOS {
-	case platformLinux:
-		return linuxCacheDir(home)
 	case platformDarwin:
 		return filepath.Join(home, "Library", "Caches", appName)
 	default:
 		return filepath.Join(home, ".cache", appName)
 	}
-}
-
-// linuxCacheDir returns the XDG-compliant cache directory for Linux.
-func linuxCacheDir(home string) string {
-	if xdg := os.Getenv("XDG_CACHE_HOME"); xdg != "" {
-		return filepath.Join(xdg, appName)
-	}
-
-	return filepath.Join(home, ".cache", appName)
 }
 
 // UploadSessionDir returns the directory for persisted upload session files.

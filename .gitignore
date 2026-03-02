@@ -20,6 +20,9 @@ config.json
 # Binary
 onedrive-go
 
+# Environment file with test account credentials
+.env
+
 # Claude Code local settings
 .claude/
 

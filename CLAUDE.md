@@ -113,7 +113,7 @@
 - Table-driven tests where appropriate, with specific assertions (check values, not just "no error")
 - Scope verification to own package: `go test ./internal/graph/...` not `go test ./...`
 
-**E2E tests** run against a live OneDrive account (`testitesti18@outlook.com`). A valid OAuth token already exists on the local dev machine. The token auto-refreshes on use. For full E2E details (credentials, CI setup, bootstrapping, tiers), see [docs/design/test-strategy.md §6](docs/design/test-strategy.md#6-e2e-test-strategy).
+**E2E tests** run against a live OneDrive account (configured in `.env`). Test account names are never committed — use `.env` (gitignored) or environment variables. Both E2E and integration tests require `ONEDRIVE_ALLOWED_TEST_ACCOUNTS` and `ONEDRIVE_TEST_DRIVE` to be set (crashes without them). Copy `.env.example` to `.env` and fill in your test accounts. For full E2E details (credentials, CI setup, bootstrapping, tiers), see [docs/design/test-strategy.md §6](docs/design/test-strategy.md#6-e2e-test-strategy).
 
 **Code quality**: Functions do one thing, accept interfaces / return structs, sentinel errors with `%w` wrapping, no package-level mutable state.
 
@@ -182,7 +182,7 @@ After each increment, run through this entire checklist. If something fails, fix
 3. [ ] **Unit tests**: `go test -race -coverprofile=/tmp/cover.out ./...`
 4. [ ] **Lint**: `golangci-lint run`
 5. [ ] **Coverage**: `go tool cover -func=/tmp/cover.out | grep total` — never decrease
-6. [ ] **Fast E2E**: `ONEDRIVE_TEST_DRIVE="personal:testitesti18@outlook.com" go test -tags=e2e -race -v -timeout=10m ./e2e/...`
+6. [ ] **Fast E2E**: `go test -tags=e2e -race -v -timeout=10m ./e2e/...` (reads `.env` for test accounts)
 7. [ ] **Top-up loop**: Review the entire increment based on the context you have. Do not read or re-read any files at this stage. Identify anything that could be improved — even minor issues (naming, logging, edge cases, defensive checks, test gaps, comments). Present the full list to the human. Then fix all of them automatically, re-run gates 1-6, and review again. Repeat until a full review pass finds zero issues of any size
 8. [ ] **Docs updated**:
     - `CLAUDE.md` — update if structural changes (new packages, commands, deps)
@@ -190,7 +190,7 @@ After each increment, run through this entire checklist. If something fails, fix
     - `LEARNINGS.md` — read for patterns and gotchas, add new institutional knowledge
     - `docs/roadmap.md` — check current phase status, update on completion
     - `docs/design/` — update relevant design docs if design changed
-9. [ ] **Push and CI green**: Push branch, open PR, both `ci.yml` and `integration.yml` green. Merge with `./scripts/poll-and-merge.sh <pr_number>`
+9. [ ] **Push and CI green**: Push branch, open PR, `ci.yml` green (4 jobs: lint, test, integration, e2e). Merge with `./scripts/poll-and-merge.sh <pr_number>`
 10. [ ] **Cleanup**: Clean `git status`. Remove the current worktree after merge. **NEVER delete other worktrees or branches — even if they appear stale.** Instead, report all other worktrees and branches to the human, including their last commit date (use `git log -1 --format='%ci' <branch>` for each). Let the human decide what to clean up
 11. [ ] **Increment report**: Present to the human:
     - **Plan deviations**: For every deviation from the approved plan — what changed, why it changed, what was done instead, and whether the new approach is the long-term solution or a temporary measure that needs follow-up (with BACKLOG IDs for any follow-up)
@@ -201,7 +201,7 @@ After each increment, run through this entire checklist. If something fails, fix
 
 Quick command (gates 1-6):
 ```bash
-gofumpt -w . && goimports -local github.com/tonimelisma/onedrive-go -w . && go build ./... && go test -race -coverprofile=/tmp/cover.out ./... && golangci-lint run && go tool cover -func=/tmp/cover.out | grep total && ONEDRIVE_TEST_DRIVE="personal:testitesti18@outlook.com" go test -tags=e2e -race -v -timeout=10m ./e2e/... && echo "ALL GATES PASS"
+gofumpt -w . && goimports -local github.com/tonimelisma/onedrive-go -w . && go build ./... && go test -race -coverprofile=/tmp/cover.out ./... && golangci-lint run && go tool cover -func=/tmp/cover.out | grep total && go test -tags=e2e -race -v -timeout=10m ./e2e/... && echo "ALL GATES PASS"
 ```
 
 Cleanup check:

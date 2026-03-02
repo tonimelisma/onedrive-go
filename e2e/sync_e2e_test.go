@@ -22,30 +22,22 @@ import (
 // ---------------------------------------------------------------------------
 
 // writeSyncConfig creates a minimal TOML config file pointing to the given
-// syncDir for the test drive. Each test isolates via HOME override so the
-// state database lands in a per-test temp directory. The token file is
-// copied from the real data dir so authentication works under the new HOME.
-// Returns the path to the temp config file.
+// syncDir for the test drive. Each test gets per-test state DB isolation via
+// XDG_DATA_HOME override. The token file is copied from TestMain's isolated
+// data dir (testDataDir). Returns the path to the temp config file.
 func writeSyncConfig(t *testing.T, syncDir string) string {
 	t.Helper()
 
-	// Capture real data dir before overriding HOME.
-	realHome, err := os.UserHomeDir()
-	require.NoError(t, err)
-	realDataDir := e2eDataDir(realHome)
+	// Per-test isolation: override XDG_DATA_HOME so each test gets its own
+	// state DB. Token is copied from TestMain's isolated data dir.
+	perTestData := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", perTestData)
+	t.Setenv("HOME", t.TempDir())
 
-	// Isolate HOME so the state DB lands in a per-test temp directory,
-	// preventing cross-test contamination.
-	tempHome := t.TempDir()
-	t.Setenv("HOME", tempHome)
+	perTestDataDir := filepath.Join(perTestData, "onedrive-go")
+	require.NoError(t, os.MkdirAll(perTestDataDir, 0o755))
+	copyTokenFile(t, testDataDir, perTestDataDir)
 
-	// Create the data dir under the temp HOME and copy the token file
-	// so the CLI binary can authenticate.
-	tempDataDir := e2eDataDir(tempHome)
-	require.NoError(t, os.MkdirAll(tempDataDir, 0o755))
-	copyTokenFile(t, realDataDir, tempDataDir)
-
-	// The drive variable comes from TestMain (e.g., "personal:testitesti18@outlook.com").
 	content := fmt.Sprintf(`["%s"]
 sync_dir = %q
 `, drive, syncDir)
@@ -290,19 +282,15 @@ func TestE2E_Sync_DriveRemoveAndReAdd(t *testing.T) {
 	// (via platform default path), allowing incremental delta sync to resume.
 	syncDir := t.TempDir()
 
-	// Capture real data dir before overriding HOME.
-	realHome, err := os.UserHomeDir()
-	require.NoError(t, err)
-	realDataDir := e2eDataDir(realHome)
+	// Per-test isolation: override XDG_DATA_HOME so this test gets its own
+	// state DB. Token is copied from TestMain's isolated data dir.
+	perTestData := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", perTestData)
+	t.Setenv("HOME", t.TempDir())
 
-	// Isolate HOME so all state DBs land in a per-test temp directory.
-	testHome := t.TempDir()
-	t.Setenv("HOME", testHome)
-
-	// Create the data dir and copy the token file.
-	tempDataDir := e2eDataDir(testHome)
+	tempDataDir := filepath.Join(perTestData, "onedrive-go")
 	require.NoError(t, os.MkdirAll(tempDataDir, 0o755))
-	copyTokenFile(t, realDataDir, tempDataDir)
+	copyTokenFile(t, testDataDir, tempDataDir)
 
 	testFolder := fmt.Sprintf("e2e-sync-readd-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
@@ -358,7 +346,12 @@ sync_dir = %q
 
 // e2eDataDir returns the platform-specific data directory for a given home.
 // Mirrors internal/config.DefaultDataDir() without importing internal packages.
+// Checks XDG_DATA_HOME first on all platforms (matching production behavior).
 func e2eDataDir(home string) string {
+	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
+		return filepath.Join(xdg, "onedrive-go")
+	}
+
 	switch runtime.GOOS {
 	case "darwin":
 		return filepath.Join(home, "Library", "Application Support", "onedrive-go")
@@ -372,7 +365,7 @@ func e2eDataDir(home string) string {
 func copyTokenFile(t *testing.T, srcDir, dstDir string) {
 	t.Helper()
 
-	// Parse "personal:testitesti18@outlook.com" -> "token_personal_testitesti18@outlook.com.json"
+	// Parse "personal:user@example.com" -> "token_personal_user@example.com.json"
 	parts := strings.SplitN(drive, ":", 2)
 	if len(parts) < 2 {
 		t.Fatalf("cannot parse drive %q for token filename", drive)
