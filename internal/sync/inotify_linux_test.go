@@ -5,6 +5,7 @@ package sync
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"log/slog"
 	"syscall"
 	"testing"
@@ -51,7 +52,7 @@ func TestIsWatchLimitError_ENOSPC(t *testing.T) {
 	t.Parallel()
 
 	assert.True(t, isWatchLimitError(syscall.ENOSPC))
-	assert.True(t, isWatchLimitError(errors.New("wrapped: "+syscall.ENOSPC.Error())))
+	assert.True(t, isWatchLimitError(fmt.Errorf("wrapped: %w", syscall.ENOSPC)))
 }
 
 func TestIsWatchLimitError_OtherErrors(t *testing.T) {
