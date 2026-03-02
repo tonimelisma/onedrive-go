@@ -478,6 +478,9 @@ Graph API provides only full-file QuickXorHash — no partial checksums. Downloa
 ### Guard partial file cleanup with ctx.Err() check
 When download errors could be caused by context cancellation (Ctrl-C), guard `os.Remove(partialPath)` with `if ctx.Err() == nil`. A 3.9 GB partial of a 4 GB download should survive Ctrl-C for resume. Intentional deletions (hash mismatch retry) should NOT be guarded — corrupted content must be discarded.
 
+### Post-sync `.partial` auto-deletion (B-301)
+`CleanStalePartials` unconditionally deletes all `.partial` files in syncRoot after a sync cycle. No threshold — after sync completes, `.partial` files are always garbage: successful downloads rename them, failed downloads delete them via `removePartialIfNotCanceled`, and Ctrl-C aborts before `postSyncHousekeeping` runs. The only edge case (rename failure, B-207) means re-downloading on next cycle is acceptable. The local observer always-excludes `.partial` (`alwaysExcludedSuffixes`) so they never enter baseline. CLI `get` downloads to user-specified paths (not syncRoot) and is unaffected.
+
 ### Defer mutable field construction to final assembly point
 TransferManager was constructed in `NewExecutorConfig` with `nil` sessionStore, then `NewEngine` mutated `execCfg.transferMgr.sessionStore`. This couples the engine to internal fields and violates the immutability-after-construction principle. Fix: construct TransferManager in `NewEngine` after all dependencies (including sessionStore) are known. The struct is immutable after creation — no field mutation needed.
 

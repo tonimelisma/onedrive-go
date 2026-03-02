@@ -271,7 +271,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 }
 
 // postSyncHousekeeping runs non-critical cleanup after a sync cycle:
-// async stale .partial reporting and session file cleanup.
+// async .partial deletion and session file cleanup.
 func (e *Engine) postSyncHousekeeping() {
 	go func() {
 		defer func() {
@@ -281,7 +281,7 @@ func (e *Engine) postSyncHousekeeping() {
 		}()
 
 		driveops.CleanTransferArtifacts(e.syncRoot, e.sessionStore,
-			stalePartialThreshold, driveops.StaleSessionAge, e.logger)
+			driveops.StaleSessionAge, e.logger)
 	}()
 }
 
@@ -524,9 +524,6 @@ const (
 	// watchResultBuf is the buffer size for the worker result channel in watch
 	// mode. Large enough for typical batches without blocking workers.
 	watchResultBuf = 4096
-	// stalePartialThreshold is the age after which .partial files are reported
-	// as stale at the end of a sync cycle.
-	stalePartialThreshold = 48 * time.Hour
 )
 
 // WatchOpts holds per-session options for RunWatch.
