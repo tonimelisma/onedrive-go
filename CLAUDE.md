@@ -67,7 +67,7 @@
 - **`internal/tokenfile/`** — Token file format + I/O (leaf package: stdlib + oauth2 only)
 - **`internal/config/`** — TOML config, drive sections, XDG paths, four-layer override chain, token resolution (`TokenCanonicalID()`)
 - **`internal/graph/`** — Graph API client: auth, retry, items CRUD, delta, transfers
-- **`internal/driveops/`** — Authenticated drive access: SessionProvider (token caching), Session (Meta + Transfer clients), TransferManager (download/upload with resume), SessionStore (upload session persistence), transfer interfaces, hash utilities
+- **`internal/driveops/`** — Authenticated drive access: SessionProvider (token caching + flush), Session (Meta + Transfer clients + delegation methods), TransferManager (download/upload with resume), SessionStore (upload session persistence + versioning), transfer interfaces, hash utilities, transfer artifact cleanup
 - **`internal/sync/`** — Event-driven sync: types, baseline, observers, buffer, planner, executor, tracker, workers, orchestrator, engine, verify
 - **Root package** — Cobra CLI: login, logout, whoami, status, drive (list/add/remove/search), ls, get, put, rm, mkdir, stat, sync, pause, resume, conflicts, resolve, verify
 - **`e2e/`** — E2E test suite against live OneDrive

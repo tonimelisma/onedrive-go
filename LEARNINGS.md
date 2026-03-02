@@ -50,6 +50,7 @@ When using `replace` with a commit hash, the pseudo-version timestamp must match
 - **Returns 400 (not 404) for invalid item ID formats.** Use path-based addressing for proper 404.
 - **JSON tag `@odata.nextLink` / `@microsoft.graph.conflictBehavior`** trigger `tagliatelle` linter — suppress with `//nolint:tagliatelle`.
 - **Delta token is always a full URL.** Use `stripBaseURL()` to convert to a relative path for `Do()`.
+- **`permanentDelete` uses POST, not DELETE.** The Graph API action endpoint `items/{id}/permanentDelete` is a POST action, not a DELETE. Tests must assert `http.MethodPost`.
 
 ### Pre-authenticated URLs bypass the Graph API
 `@microsoft.graph.downloadUrl` and `uploadUrl` from CreateUploadSession are pre-authenticated URLs. Must NOT use `Do()` (no base URL prefix, no auth headers). Use `httpClient.Do(req)` directly. Never log these URLs.
@@ -470,6 +471,9 @@ Graph API provides only full-file QuickXorHash — no partial checksums. Downloa
 
 ### Test race with lazy cleanup goroutines
 `SessionStore.Save()` triggers lazy `CleanStale()` in a goroutine, throttled to once per hour. In tests that call `Save()` then explicitly call `CleanStale()`, the goroutine can race and delete files before the explicit call. Fix: pre-set `store.lastClean = time.Now()` to throttle the goroutine during the test.
+
+### CleanStale uses file ModTime, not JSON CreatedAt
+`SessionStore.CleanStale()` determines staleness by the file's OS modification time (`os.Stat().ModTime()`), NOT the `CreatedAt` field inside the JSON. Tests that create session files and immediately call `CleanStale()` need to backdate the file with `os.Chtimes()` to simulate age, otherwise the file's ModTime is always "just now."
 
 ### Guard partial file cleanup with ctx.Err() check
 When download errors could be caused by context cancellation (Ctrl-C), guard `os.Remove(partialPath)` with `if ctx.Err() == nil`. A 3.9 GB partial of a 4 GB download should survive Ctrl-C for resume. Intentional deletions (hash mismatch retry) should NOT be guarded — corrupted content must be discarded.

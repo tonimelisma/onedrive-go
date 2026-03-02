@@ -11,8 +11,8 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 
 | ID | Title | Priority | Package | Notes |
 |----|-------|----------|---------|-------|
-| B-296 | Config-file `log_level` not applied by sync command | P4 | root | `sync` uses `skipConfigAnnotation` so PersistentPreRunE Phase 2 skips config-driven log level. CLI flags (`--verbose`/`--debug`/`--quiet`) still work. |
-| B-300 | Rename `SessionRecord` JSON tag `"remote_path"` → `"local_path"` | P4 | driveops | Field was renamed to `LocalPath` but JSON tag kept as `"remote_path"` for backward compat. Migrate existing session files by reading old key + writing new key, then change the tag. |
+| B-300 | Rename `SessionRecord` JSON tag `"remote_path"` → `"local_path"` | P4 | driveops | Field was renamed to `LocalPath` but JSON tag kept as `"remote_path"` for backward compat. Version field added (PR #154) — migration can detect v0 (old format) vs v1. Migrate: read old key + write new key, then change the tag. |
+| B-301 | Decide `.partial` file auto-deletion policy | P4 | driveops | `ReportStalePartials` currently warns on stale `.partial` files but does not delete them. Auto-deletion would change resume semantics. Discuss whether stale partials (>48h) should be cleaned up automatically or remain warn-only. |
 
 ## Phase 6.0b: Orchestrator + DriveRunner
 
