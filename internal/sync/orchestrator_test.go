@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -39,6 +40,7 @@ func testResolvedDrive(t *testing.T, cidStr, displayName string) *config.Resolve
 		CanonicalID: cid,
 		DisplayName: displayName,
 		SyncDir:     t.TempDir(),
+		DriveID:     driveid.New("test-drive-id"),
 	}
 }
 
@@ -294,6 +296,67 @@ func TestRunOnce_TokenError_ReportsPerDrive(t *testing.T) {
 	require.Len(t, reports, 1)
 	assert.Error(t, reports[0].Err)
 	assert.Contains(t, reports[0].Err.Error(), "token")
+}
+
+// --- drive discovery ---
+
+func TestRunOnce_ZeroDriveID_DiscoversPrimary(t *testing.T) {
+	cid := testCanonicalID(t, "personal:discover@example.com")
+	discoveredID := driveid.New("discovered-abc123")
+
+	rd := &config.ResolvedDrive{
+		CanonicalID: cid,
+		DisplayName: "Discover",
+		SyncDir:     t.TempDir(),
+		// DriveID intentionally zero — triggers discovery.
+	}
+	require.True(t, rd.DriveID.IsZero())
+
+	cfg := testOrchestratorConfig(t, rd)
+	orch := NewOrchestrator(cfg)
+	orch.tokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
+		return &stubTokenSource{}, nil
+	}
+	orch.driveDiscoveryFn = func(_ context.Context, _ *graph.Client) (driveid.ID, error) {
+		return discoveredID, nil
+	}
+
+	var capturedDriveID driveid.ID
+	orch.engineFactory = func(ecfg *EngineConfig) (engineRunner, error) {
+		capturedDriveID = ecfg.DriveID
+		return &mockEngine{report: &SyncReport{Mode: SyncBidirectional}}, nil
+	}
+
+	reports, err := orch.RunOnce(context.Background(), SyncBidirectional, RunOpts{})
+	assert.NoError(t, err)
+	require.Len(t, reports, 1)
+	assert.NoError(t, reports[0].Err)
+	assert.Equal(t, discoveredID, capturedDriveID)
+}
+
+func TestRunOnce_ZeroDriveID_DiscoveryError(t *testing.T) {
+	cid := testCanonicalID(t, "personal:discover-fail@example.com")
+
+	rd := &config.ResolvedDrive{
+		CanonicalID: cid,
+		DisplayName: "DiscoverFail",
+		SyncDir:     t.TempDir(),
+	}
+
+	cfg := testOrchestratorConfig(t, rd)
+	orch := NewOrchestrator(cfg)
+	orch.tokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
+		return &stubTokenSource{}, nil
+	}
+	orch.driveDiscoveryFn = func(_ context.Context, _ *graph.Client) (driveid.ID, error) {
+		return driveid.ID{}, errors.New("403 accessDenied")
+	}
+
+	reports, err := orch.RunOnce(context.Background(), SyncBidirectional, RunOpts{})
+	assert.NoError(t, err)
+	require.Len(t, reports, 1)
+	assert.Error(t, reports[0].Err)
+	assert.Contains(t, reports[0].Err.Error(), "discovering drive")
 }
 
 // --- mockEngine ---
