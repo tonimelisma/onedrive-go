@@ -116,8 +116,9 @@ func TestCliContextFrom_NilContext(t *testing.T) {
 
 func TestCliContextFrom_WithCLIContext(t *testing.T) {
 	expected := &CLIContext{
-		Cfg:    &config.ResolvedDrive{SyncDir: "/test"},
-		Logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		Cfg:          &config.ResolvedDrive{SyncDir: "/test"},
+		Logger:       slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		StatusWriter: os.Stderr,
 	}
 	ctx := context.WithValue(context.Background(), cliContextKey{}, expected)
 	cc := cliContextFrom(ctx)
@@ -382,8 +383,9 @@ func TestMustCLIContext_Panics(t *testing.T) {
 
 func TestMustCLIContext_Returns(t *testing.T) {
 	expected := &CLIContext{
-		Cfg:    &config.ResolvedDrive{SyncDir: "/must-test"},
-		Logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		Cfg:          &config.ResolvedDrive{SyncDir: "/must-test"},
+		Logger:       slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		StatusWriter: os.Stderr,
 	}
 	ctx := context.WithValue(context.Background(), cliContextKey{}, expected)
 	cc := mustCLIContext(ctx)
@@ -465,24 +467,6 @@ func TestBuildLogger_UnknownLogLevel(t *testing.T) {
 	// Should fall back to warn level.
 	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelWarn))
 	assert.False(t, logger.Handler().Enabled(context.Background(), slog.LevelInfo))
-}
-
-// --- CLIContext.Statusf tests (B-288) ---
-
-func TestCLIContext_Statusf_Quiet(t *testing.T) {
-	t.Parallel()
-
-	cc := &CLIContext{Flags: CLIFlags{Quiet: true}}
-	// Should not panic. Output suppressed.
-	cc.Statusf("should not appear: %d\n", 42)
-}
-
-func TestCLIContext_Statusf_Normal(t *testing.T) {
-	t.Parallel()
-
-	cc := &CLIContext{Flags: CLIFlags{Quiet: false}}
-	// Should not panic. Output goes to stderr.
-	cc.Statusf("status message: %s\n", "ok")
 }
 
 // --- B-296: sync command log_level fix ---

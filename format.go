@@ -3,15 +3,15 @@ package main
 import (
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"time"
 )
 
-// Statusf prints a status message to stderr unless quiet mode is set.
+// Statusf prints a status message to the StatusWriter (default: stderr)
+// unless quiet mode is set.
 func (cc *CLIContext) Statusf(format string, args ...any) {
 	if !cc.Flags.Quiet {
-		fmt.Fprintf(os.Stderr, format, args...)
+		fmt.Fprintf(cc.StatusWriter, format, args...)
 	}
 }
 

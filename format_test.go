@@ -2,13 +2,10 @@ package main
 
 import (
 	"bytes"
-	"io"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestFormatSize(t *testing.T) {
@@ -73,39 +70,27 @@ func TestPrintTable(t *testing.T) {
 
 func TestStatusf(t *testing.T) {
 	t.Run("quiet suppresses output", func(t *testing.T) {
-		// Capture stderr via pipe to verify nothing is written.
-		oldStderr := os.Stderr
-		r, w, err := os.Pipe()
-		require.NoError(t, err)
+		t.Parallel()
 
-		os.Stderr = w
+		var buf bytes.Buffer
+		cc := &CLIContext{
+			Flags:        CLIFlags{Quiet: true},
+			StatusWriter: &buf,
+		}
 
-		t.Cleanup(func() { os.Stderr = oldStderr })
-
-		cc := &CLIContext{Flags: CLIFlags{Quiet: true}}
 		cc.Statusf("should not appear %s", "test")
-		w.Close()
-
-		out, err := io.ReadAll(r)
-		require.NoError(t, err)
-		assert.Empty(t, string(out))
+		assert.Empty(t, buf.String())
 	})
 
-	t.Run("normal mode writes to stderr", func(t *testing.T) {
-		oldStderr := os.Stderr
-		r, w, err := os.Pipe()
-		require.NoError(t, err)
+	t.Run("normal mode writes to StatusWriter", func(t *testing.T) {
+		t.Parallel()
 
-		os.Stderr = w
+		var buf bytes.Buffer
+		cc := &CLIContext{
+			StatusWriter: &buf,
+		}
 
-		t.Cleanup(func() { os.Stderr = oldStderr })
-
-		cc := &CLIContext{}
 		cc.Statusf("hello %s", "world")
-		w.Close()
-
-		out, err := io.ReadAll(r)
-		require.NoError(t, err)
-		assert.Equal(t, "hello world", string(out))
+		assert.Equal(t, "hello world", buf.String())
 	})
 }
