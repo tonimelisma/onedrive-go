@@ -39,7 +39,7 @@ XDG_DATA_HOME="$TESTDATA/data" \
 XDG_CONFIG_HOME="$TESTDATA/config" \
 XDG_CACHE_HOME="$TESTDATA/cache" \
 HOME="$TESTDATA/home" \
-  go run . login
+  go run . login --browser
 
 # Flatten: move files from subdirs to .testdata/ root.
 # cp (not mv) so existing tokens from prior runs are preserved.
