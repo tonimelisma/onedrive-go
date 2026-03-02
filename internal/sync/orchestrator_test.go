@@ -25,7 +25,16 @@ import (
 func testOrchestratorConfig(t *testing.T, drives ...*config.ResolvedDrive) *OrchestratorConfig {
 	t.Helper()
 
-	holder := config.NewHolder(config.DefaultConfig(), "/tmp/test-config.toml")
+	return testOrchestratorConfigWithPath(t, "/tmp/test-config.toml", drives...)
+}
+
+// testOrchestratorConfigWithPath creates an OrchestratorConfig with a real
+// config path. Use this when the test needs a writable config file (e.g.,
+// SIGHUP reload tests that modify config on disk).
+func testOrchestratorConfigWithPath(t *testing.T, cfgPath string, drives ...*config.ResolvedDrive) *OrchestratorConfig {
+	t.Helper()
+
+	holder := config.NewHolder(config.DefaultConfig(), cfgPath)
 	provider := driveops.NewSessionProvider(holder, &http.Client{}, &http.Client{}, "test/1.0", slog.Default())
 
 	return &OrchestratorConfig{
@@ -305,9 +314,7 @@ func (m *mockEngine) Close() error {
 func TestOrchestrator_RunWatch_SingleDrive(t *testing.T) {
 	rd := testResolvedDrive(t, "personal:watch1@example.com", "Watch1")
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
-	cfg := testOrchestratorConfig(t, rd)
-	cfg.Holder = config.NewHolder(cfg.Holder.Config(), cfgPath)
-	cfg.Provider = driveops.NewSessionProvider(cfg.Holder, &http.Client{}, &http.Client{}, "test/1.0", slog.Default())
+	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
 	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
 	orch := NewOrchestrator(cfg)
@@ -353,9 +360,7 @@ func TestOrchestrator_RunWatch_MultiDrive(t *testing.T) {
 	rd1 := testResolvedDrive(t, "personal:multi1@example.com", "Multi1")
 	rd2 := testResolvedDrive(t, "personal:multi2@example.com", "Multi2")
 	cfgPath := writeTestConfig(t, rd1.CanonicalID, rd2.CanonicalID)
-	cfg := testOrchestratorConfig(t, rd1, rd2)
-	cfg.Holder = config.NewHolder(cfg.Holder.Config(), cfgPath)
-	cfg.Provider = driveops.NewSessionProvider(cfg.Holder, &http.Client{}, &http.Client{}, "test/1.0", slog.Default())
+	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd1, rd2)
 	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
 	orch := NewOrchestrator(cfg)
@@ -401,9 +406,7 @@ func TestOrchestrator_Reload_AddDrive(t *testing.T) {
 	rd1 := testResolvedDrive(t, "personal:existing@example.com", "Existing")
 	cfgPath := writeTestConfig(t, rd1.CanonicalID)
 	sighup := make(chan os.Signal, 1)
-	cfg := testOrchestratorConfig(t, rd1)
-	cfg.Holder = config.NewHolder(cfg.Holder.Config(), cfgPath)
-	cfg.Provider = driveops.NewSessionProvider(cfg.Holder, &http.Client{}, &http.Client{}, "test/1.0", slog.Default())
+	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd1)
 	cfg.SIGHUPChan = sighup
 	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
@@ -460,9 +463,7 @@ func TestOrchestrator_Reload_RemoveDrive(t *testing.T) {
 	rd2 := testResolvedDrive(t, "personal:remove@example.com", "Remove")
 	cfgPath := writeTestConfig(t, rd1.CanonicalID, rd2.CanonicalID)
 	sighup := make(chan os.Signal, 1)
-	cfg := testOrchestratorConfig(t, rd1, rd2)
-	cfg.Holder = config.NewHolder(cfg.Holder.Config(), cfgPath)
-	cfg.Provider = driveops.NewSessionProvider(cfg.Holder, &http.Client{}, &http.Client{}, "test/1.0", slog.Default())
+	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd1, rd2)
 	cfg.SIGHUPChan = sighup
 	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
@@ -518,9 +519,7 @@ func TestOrchestrator_Reload_PausedDrive(t *testing.T) {
 	rd := testResolvedDrive(t, "personal:pausetest@example.com", "PauseTest")
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	sighup := make(chan os.Signal, 1)
-	cfg := testOrchestratorConfig(t, rd)
-	cfg.Holder = config.NewHolder(cfg.Holder.Config(), cfgPath)
-	cfg.Provider = driveops.NewSessionProvider(cfg.Holder, &http.Client{}, &http.Client{}, "test/1.0", slog.Default())
+	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
 	cfg.SIGHUPChan = sighup
 	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
@@ -576,9 +575,7 @@ func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 	rd := testResolvedDrive(t, "personal:invalidcfg@example.com", "InvalidCfg")
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	sighup := make(chan os.Signal, 1)
-	cfg := testOrchestratorConfig(t, rd)
-	cfg.Holder = config.NewHolder(cfg.Holder.Config(), cfgPath)
-	cfg.Provider = driveops.NewSessionProvider(cfg.Holder, &http.Client{}, &http.Client{}, "test/1.0", slog.Default())
+	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
 	cfg.SIGHUPChan = sighup
 	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
@@ -633,9 +630,7 @@ func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
 	rd := testResolvedDrive(t, "personal:timedpause@example.com", "TimedPause")
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	sighup := make(chan os.Signal, 1)
-	cfg := testOrchestratorConfig(t, rd)
-	cfg.Holder = config.NewHolder(cfg.Holder.Config(), cfgPath)
-	cfg.Provider = driveops.NewSessionProvider(cfg.Holder, &http.Client{}, &http.Client{}, "test/1.0", slog.Default())
+	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
 	cfg.SIGHUPChan = sighup
 	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 

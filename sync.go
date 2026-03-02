@@ -68,9 +68,10 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	selectors := cc.Flags.Drive
 
 	if watch {
-		return runSyncDaemon(ctx, rawCfg, selectors, mode, isync.WatchOpts{
+		holder := config.NewHolder(rawCfg, cc.CfgPath)
+		return runSyncDaemon(ctx, holder, selectors, mode, isync.WatchOpts{
 			Force: force,
-		}, cc.CfgPath, logger)
+		}, logger)
 	}
 
 	// One-shot: resolve drives (excludes paused drives).
@@ -119,11 +120,11 @@ func runSync(cmd *cobra.Command, _ []string) error {
 // prevents duplicate daemons. SIGHUP triggers config reload (add/remove/pause
 // drives without restart).
 func runSyncDaemon(
-	ctx context.Context, rawCfg *config.Config, selectors []string,
-	mode isync.SyncMode, opts isync.WatchOpts, cfgPath string, logger *slog.Logger,
+	ctx context.Context, holder *config.Holder, selectors []string,
+	mode isync.SyncMode, opts isync.WatchOpts, logger *slog.Logger,
 ) error {
 	// Include paused drives — Orchestrator handles pause/resume internally.
-	drives, err := config.ResolveDrives(rawCfg, selectors, true, logger)
+	drives, err := config.ResolveDrives(holder.Config(), selectors, true, logger)
 	if err != nil {
 		return err
 	}
@@ -141,7 +142,6 @@ func runSyncDaemon(
 	sighup := sighupChannel()
 	defer signal.Stop(sighup)
 
-	holder := config.NewHolder(rawCfg, cfgPath)
 	provider := driveops.NewSessionProvider(holder,
 		defaultHTTPClient(), transferHTTPClient(), "onedrive-go/"+version, logger)
 

@@ -54,17 +54,16 @@ func (f CLIFlags) SingleDrive() string {
 // CLIContext bundles resolved config, flags, and logger. Created in
 // PersistentPreRunE with two-phase initialization:
 //   - Phase 1 (always): Flags + Logger + CfgPath + Env populated for every command.
-//   - Phase 2 (data commands): Cfg + RawConfig populated after config resolution.
+//   - Phase 2 (data commands): Cfg + Provider populated after config resolution.
 //
-// Auth commands get CLIContext with Flags + Logger + CfgPath + Env but nil Cfg/RawConfig/Provider.
+// Auth commands get CLIContext with Flags + Logger + CfgPath + Env but nil Cfg/Provider.
 type CLIContext struct {
-	Flags     CLIFlags
-	Logger    *slog.Logger
-	CfgPath   string                    // resolved config file path (always set)
-	Env       config.EnvOverrides       // env overrides (always set in Phase 1)
-	Cfg       *config.ResolvedDrive     // nil for auth/account commands
-	RawConfig *config.Config            // nil for auth/account commands
-	Provider  *driveops.SessionProvider // nil for auth/account commands; created in Phase 2
+	Flags    CLIFlags
+	Logger   *slog.Logger
+	CfgPath  string                    // resolved config file path (always set)
+	Env      config.EnvOverrides       // env overrides (always set in Phase 1)
+	Cfg      *config.ResolvedDrive     // nil for auth/account commands
+	Provider *driveops.SessionProvider // nil for auth/account commands; created in Phase 2
 }
 
 // cliContextKey is the context key for CLIContext.
@@ -173,7 +172,6 @@ func newRootCmd() *cobra.Command {
 				}
 
 				cc.Cfg = resolved
-				cc.RawConfig = rawCfg
 				cc.Logger = buildLogger(resolved, flags)
 
 				holder := config.NewHolder(rawCfg, cc.CfgPath)
