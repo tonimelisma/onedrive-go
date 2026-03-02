@@ -84,6 +84,14 @@ Edge cases and correctness for `internal/graph/`.
 | B-285 | Standardize `baseline_test.go` to testify style | P4 | 2300+ lines of stdlib assertions. `canonical_test.go` was converted (B-278), `baseline_test.go` should follow. Purely cosmetic — do alongside behavioral changes, not standalone. |
 | B-286 | No shared/business drive in E2E test matrix | P3 | All E2E tests run against `personal:testitesti18@outlook.com`. `shared` type and `ConstructShared()` are unit-tested but untested against real Graph API. Phase 6.0d adds second personal account. |
 
+## Deferred from Phase 6.0c
+
+| ID | Title | Priority | Notes |
+|----|-------|----------|-------|
+| B-297 | Worker budget algorithm for multi-drive allocation | P3 | Each engine currently gets full `transfer_workers`/`check_workers` from config. Proportional allocation by baseline file count deferred. See MULTIDRIVE.md §11.3. |
+| B-298 | Watch-mode parallel hashing | P3 | `hashAndEmit` in watchLoop runs sequentially in the watch goroutine. Needs a hash worker pool for parallelism. FullScan already parallelized (three-phase pattern). |
+| B-299 | E2E tests for daemon mode (Orchestrator.RunWatch) | P3 | Watch bridge removed in 6.0c. Need E2E coverage for multi-drive daemon, SIGHUP reload, pause/resume. |
+
 ## Hardening: Watch Mode
 
 Improvements to continuous sync reliability in `internal/sync/`.
