@@ -526,6 +526,9 @@ Per-request Retry-After + exponential backoff with jitter. No shared gate across
 ### Orchestrator is the single entry point for sync
 `sync.NewOrchestrator(cfg)` takes `OrchestratorConfig` with raw config, resolved drives, HTTP clients, and logger. `RunOnce(ctx, mode, opts)` resolves tokens, creates clients (pooled by token path), creates engines (via injectable `engineFactory`), and launches `DriveRunner` goroutines. Returns `[]*DriveReport` — RunOnce never errors; per-drive errors are in `DriveReport.Err`. The CLI calls `driveReportsError()` to extract a single error for the exit code.
 
+### DriveID discovery is required in Orchestrator
+When `ResolvedDrive.DriveID` is zero (config has no `drive_id` field — common in zero-config mode), the Orchestrator must discover it via `client.Drives(ctx)` before creating the Engine. The old `DriveSession` path handled this automatically; when we moved to Orchestrator, the discovery was initially missing, causing `/drives//root/delta` (empty drive ID) → HTTP 400 in CI. Injectable `driveDiscoveryFn` enables test isolation.
+
 ### sync command skips PersistentPreRunE Phase 2
 `sync` has `skipConfigAnnotation` because it needs multi-drive resolution via `config.ResolveDrives()` instead of single-drive `config.ResolveDrive()`. It loads raw config from `cc.CfgPath` and resolves drives itself. Phase 1 fields (Flags, Logger, CfgPath, Env) are still available. Config-file `log_level` is not applied for sync (CLI flags still work); per-drive loggers are a 6.0c improvement.
 
