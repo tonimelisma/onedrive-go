@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# validate-ci-locally.sh — Mirror the integration.yml workflow locally.
+# validate-ci-locally.sh — Mirror the ci.yml workflow locally.
 #
 # Use this script before pushing changes that affect CI token paths, secret
 # naming, environment variables, or workflow logic. It catches issues like
@@ -9,7 +9,7 @@
 #   ./scripts/validate-ci-locally.sh [DRIVE]
 #
 # Arguments:
-#   DRIVE  Canonical drive ID (default: from ONEDRIVE_TEST_DRIVES or gh variable)
+#   DRIVE  Canonical drive ID (default: from ONEDRIVE_TEST_DRIVE env var)
 #
 # Prerequisites:
 #   - az CLI logged in (az login)
@@ -25,17 +25,12 @@ DATA_DIR="$HOME/.local/share/onedrive-go"
 # Determine drive ID.
 if [ $# -ge 1 ]; then
     DRIVE="$1"
-elif [ -n "${ONEDRIVE_TEST_DRIVES:-}" ]; then
-    # Take the first drive from comma-separated list.
-    DRIVE=$(echo "$ONEDRIVE_TEST_DRIVES" | cut -d',' -f1 | xargs)
+elif [ -n "${ONEDRIVE_TEST_DRIVE:-}" ]; then
+    DRIVE="$ONEDRIVE_TEST_DRIVE"
 else
-    echo "Fetching ONEDRIVE_TEST_DRIVES from GitHub..."
-    DRIVE=$(gh variable get ONEDRIVE_TEST_DRIVES 2>/dev/null | cut -d',' -f1 | xargs) || true
-    if [ -z "$DRIVE" ]; then
-        echo "ERROR: No drive specified. Pass a canonical drive ID or set ONEDRIVE_TEST_DRIVES."
-        echo "Usage: $0 personal:user@example.com"
-        exit 1
-    fi
+    echo "ERROR: No drive specified. Pass a canonical drive ID or set ONEDRIVE_TEST_DRIVE."
+    echo "Usage: $0 personal:user@example.com"
+    exit 1
 fi
 
 echo "=== Local CI Validation ==="
@@ -44,7 +39,7 @@ echo "Vault:     $VAULT_NAME"
 echo "Data dir:  $DATA_DIR"
 echo ""
 
-# Step 1: Derive names (same logic as integration.yml).
+# Step 1: Derive names (same logic as ci.yml).
 SANITIZED=$(echo "$DRIVE" | sed 's/:/_/')
 TOKEN_FILE="token_${SANITIZED}.json"
 TOKEN_PATH="${DATA_DIR}/${TOKEN_FILE}"
