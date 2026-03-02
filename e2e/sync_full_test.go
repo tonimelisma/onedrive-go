@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -26,11 +25,7 @@ func TestE2E_EdgeCases(t *testing.T) {
 	testFolder := fmt.Sprintf("onedrive-go-e2e-edge-%d", time.Now().UnixNano())
 
 	// Cleanup at the end — delete the test folder (best-effort).
-	t.Cleanup(func() {
-		fullArgs := []string{"--drive", drive, "rm", "-r", "/" + testFolder}
-		cmd := exec.Command(binaryPath, fullArgs...)
-		_ = cmd.Run()
-	})
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Create the test folder first.
 	runCLI(t, "mkdir", "/"+testFolder)
@@ -210,7 +205,7 @@ func testConcurrentUploads(t *testing.T, testFolder string) {
 		}
 	}
 
-	// Upload all files in parallel. We use exec.Command directly instead
+	// Upload all files in parallel. We use makeCmd directly instead
 	// of runCLI because t.Fatalf panics when called from non-test goroutines.
 	errCh := make(chan error, fileCount)
 
@@ -218,7 +213,7 @@ func testConcurrentUploads(t *testing.T, testFolder string) {
 		go func(f testFile) {
 			remotePath := "/" + testFolder + "/" + f.remoteName
 			fullArgs := []string{"--drive", drive, "put", f.localPath, remotePath}
-			cmd := exec.Command(binaryPath, fullArgs...)
+			cmd := makeCmd(fullArgs, nil)
 
 			var stderr bytes.Buffer
 			cmd.Stderr = &stderr
@@ -262,7 +257,7 @@ func TestE2E_Sync_BidirectionalMerge(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfig(t, syncDir)
 	testFolder := fmt.Sprintf("e2e-sync-bidi-%d", time.Now().UnixNano())
 
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
@@ -274,7 +269,7 @@ func TestE2E_Sync_BidirectionalMerge(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(docsDir, "notes.txt"), []byte("notes content"), 0o644))
 
 	// Step 2: Upload-only sync to establish baseline.
-	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Step 3: Assert files exist remotely (poll for eventual consistency).
 	stdout, _ := pollCLIContains(t, "readme.txt", pollTimeout, "ls", "/"+testFolder+"/docs")
@@ -290,7 +285,7 @@ func TestE2E_Sync_BidirectionalMerge(t *testing.T) {
 	putRemoteFile(t, "/"+testFolder+"/data/info.txt", "remote info data")
 
 	// Step 6: Bidirectional sync.
-	runCLIWithConfig(t, cfgPath, "sync", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
 
 	// Step 7: Assert merge results.
 	// stuff.txt uploaded remotely (EF13 + ED5).
@@ -308,12 +303,12 @@ func TestE2E_Sync_BidirectionalMerge(t *testing.T) {
 	assert.Equal(t, "readme content", string(readmeData))
 
 	// Step 8: Verify integrity.
-	stdout, _ = runCLIWithConfig(t, cfgPath, "verify")
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "verify")
 	assert.Contains(t, stdout, "Verified")
 	assert.Contains(t, stdout, "All files verified successfully.")
 
 	// Step 9: Re-sync is idempotent.
-	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--force")
 	assert.Contains(t, stderr, "No changes detected")
 }
 
@@ -323,7 +318,7 @@ func TestE2E_Sync_EditEditConflict_ResolveKeepRemote(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfig(t, syncDir)
 	testFolder := fmt.Sprintf("e2e-sync-ee-%d", time.Now().UnixNano())
 
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
@@ -335,7 +330,7 @@ func TestE2E_Sync_EditEditConflict_ResolveKeepRemote(t *testing.T) {
 	require.NoError(t, os.WriteFile(conflictFile, []byte("original v1"), 0o644))
 
 	// Step 2: Upload-only sync.
-	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Step 3: Modify local.
 	require.NoError(t, os.WriteFile(conflictFile, []byte("local edit v2"), 0o644))
@@ -344,13 +339,13 @@ func TestE2E_Sync_EditEditConflict_ResolveKeepRemote(t *testing.T) {
 	putRemoteFile(t, "/"+testFolder+"/conflict-file.txt", "remote edit v2")
 
 	// Step 5: Bidirectional sync — should detect conflict.
-	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--force")
 
 	// Step 6: Conflict reported in sync output.
 	assert.Contains(t, stderr, "Conflicts:")
 
 	// Step 7: List conflicts — type is edit_edit.
-	stdout, _ := runCLIWithConfig(t, cfgPath, "conflicts")
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
 	assert.Contains(t, stdout, "conflict-file.txt")
 	assert.Contains(t, stdout, "edit_edit")
 
@@ -370,17 +365,17 @@ func TestE2E_Sync_EditEditConflict_ResolveKeepRemote(t *testing.T) {
 	assert.Equal(t, "remote edit v2", string(originalData))
 
 	// Step 11: Resolve --keep-remote.
-	_, stderr = runCLIWithConfig(t, cfgPath, "resolve", testFolder+"/conflict-file.txt", "--keep-remote")
+	_, stderr = runCLIWithConfig(t, cfgPath, env, "resolve", testFolder+"/conflict-file.txt", "--keep-remote")
 
 	// Step 12: Resolved message.
 	assert.Contains(t, stderr, "Resolved")
 
 	// Step 13: No more conflicts.
-	stdout, _ = runCLIWithConfig(t, cfgPath, "conflicts")
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
 	assert.Contains(t, stdout, "No unresolved conflicts")
 
 	// Step 14: Verify passes.
-	stdout, _ = runCLIWithConfig(t, cfgPath, "verify")
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "verify")
 	assert.Contains(t, stdout, "Verified")
 }
 
@@ -391,7 +386,7 @@ func TestE2E_Sync_EditDeleteConflict(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfig(t, syncDir)
 	testFolder := fmt.Sprintf("e2e-sync-ed-%d", time.Now().UnixNano())
 
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
@@ -403,7 +398,7 @@ func TestE2E_Sync_EditDeleteConflict(t *testing.T) {
 	require.NoError(t, os.WriteFile(fragileFile, []byte("precious data"), 0o644))
 
 	// Step 2: Upload baseline.
-	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Step 3: Modify local.
 	require.NoError(t, os.WriteFile(fragileFile, []byte("locally modified precious data"), 0o644))
@@ -412,7 +407,7 @@ func TestE2E_Sync_EditDeleteConflict(t *testing.T) {
 	runCLI(t, "rm", "/"+testFolder+"/fragile.txt")
 
 	// Step 5: Bidirectional sync — edit-delete auto-resolved by uploading local.
-	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--force")
 
 	// Step 6: Sync succeeded (auto-resolved, no failures).
 	assert.Contains(t, stderr, "Failed:    0")
@@ -430,18 +425,18 @@ func TestE2E_Sync_EditDeleteConflict(t *testing.T) {
 	assert.Equal(t, "locally modified precious data", remoteContent)
 
 	// Step 10: Conflict history shows auto-resolved entry.
-	stdout, _ := runCLIWithConfig(t, cfgPath, "conflicts", "--history")
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts", "--history")
 	assert.Contains(t, stdout, "fragile.txt")
 	assert.Contains(t, stdout, "edit_delete")
 	assert.Contains(t, stdout, "keep_local")
 	assert.Contains(t, stdout, "auto")
 
 	// Step 11: No unresolved conflicts.
-	stdout, _ = runCLIWithConfig(t, cfgPath, "conflicts")
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
 	assert.Contains(t, stdout, "No unresolved conflicts")
 
 	// Step 12: Verify passes.
-	stdout, _ = runCLIWithConfig(t, cfgPath, "verify")
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "verify")
 	assert.Contains(t, stdout, "Verified")
 }
 
@@ -451,7 +446,7 @@ func TestE2E_Sync_ResolveAll(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfig(t, syncDir)
 	testFolder := fmt.Sprintf("e2e-sync-resall-%d", time.Now().UnixNano())
 
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
@@ -463,7 +458,7 @@ func TestE2E_Sync_ResolveAll(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "b.txt"), []byte("b-original"), 0o644))
 
 	// Step 2: Upload baseline.
-	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Step 3: Modify both sides with different content.
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "a.txt"), []byte("a-local-edit"), 0o644))
@@ -472,21 +467,21 @@ func TestE2E_Sync_ResolveAll(t *testing.T) {
 	putRemoteFile(t, "/"+testFolder+"/b.txt", "b-remote-edit")
 
 	// Step 4: Bidirectional sync — 2 edit-edit conflicts.
-	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--force")
 	assert.Contains(t, stderr, "Conflicts:")
 
 	// Step 5: List conflicts — both present.
-	stdout, _ := runCLIWithConfig(t, cfgPath, "conflicts")
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
 	assert.Contains(t, stdout, "a.txt")
 	assert.Contains(t, stdout, "b.txt")
 	assert.Contains(t, stdout, "edit_edit")
 
 	// Step 6: Resolve --all --keep-remote.
-	_, stderr = runCLIWithConfig(t, cfgPath, "resolve", "--all", "--keep-remote")
+	_, stderr = runCLIWithConfig(t, cfgPath, env, "resolve", "--all", "--keep-remote")
 	assert.Contains(t, stderr, "Resolved")
 
 	// Step 7: No unresolved conflicts.
-	stdout, _ = runCLIWithConfig(t, cfgPath, "conflicts")
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
 	assert.Contains(t, stdout, "No unresolved conflicts")
 
 	// Step 8: Local files have remote content.
@@ -499,7 +494,7 @@ func TestE2E_Sync_ResolveAll(t *testing.T) {
 	assert.Equal(t, "b-remote-edit", string(bData))
 
 	// Step 9: Verify passes.
-	stdout, _ = runCLIWithConfig(t, cfgPath, "verify")
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "verify")
 	assert.Contains(t, stdout, "Verified")
 }
 
@@ -509,7 +504,7 @@ func TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfig(t, syncDir)
 	testFolder := fmt.Sprintf("e2e-sync-cc-%d", time.Now().UnixNano())
 
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
@@ -526,11 +521,11 @@ func TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal(t *testing.T) {
 	putRemoteFile(t, "/"+testFolder+"/collision.txt", "remote version")
 
 	// Step 4: Bidirectional sync — create-create conflict.
-	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--force")
 	assert.Contains(t, stderr, "Conflicts:")
 
 	// Step 5: Verify conflict type.
-	stdout, _ := runCLIWithConfig(t, cfgPath, "conflicts")
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
 	assert.Contains(t, stdout, "collision.txt")
 	assert.Contains(t, stdout, "create_create")
 
@@ -547,15 +542,15 @@ func TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "collision.txt"), []byte("local version"), 0o644))
 
 	// Step 8: Resolve --keep-local.
-	_, stderr = runCLIWithConfig(t, cfgPath, "resolve", testFolder+"/collision.txt", "--keep-local")
+	_, stderr = runCLIWithConfig(t, cfgPath, env, "resolve", testFolder+"/collision.txt", "--keep-local")
 	assert.Contains(t, stderr, "Resolved")
 
 	// Step 9: No more conflicts.
-	stdout, _ = runCLIWithConfig(t, cfgPath, "conflicts")
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
 	assert.Contains(t, stdout, "No unresolved conflicts")
 
 	// Step 10: Sync to propagate local version upstream.
-	runCLIWithConfig(t, cfgPath, "sync", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
 
 	// Step 11: Remote should now have local version.
 	remoteContent := getRemoteFile(t, "/"+testFolder+"/collision.txt")
@@ -569,7 +564,7 @@ func TestE2E_Sync_DeletePropagation(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfig(t, syncDir)
 	testFolder := fmt.Sprintf("e2e-sync-del-%d", time.Now().UnixNano())
 
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
@@ -586,7 +581,7 @@ func TestE2E_Sync_DeletePropagation(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(subDir, "nested.txt"), []byte("nested content"), 0o644))
 
 	// Step 2: Upload baseline.
-	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Verify all files exist remotely (poll for eventual consistency).
 	stdout, _ := pollCLIContains(t, "keep.txt", pollTimeout, "ls", "/"+testFolder)
@@ -616,7 +611,7 @@ func TestE2E_Sync_DeletePropagation(t *testing.T) {
 	runCLI(t, "rm", "-r", "/"+testFolder+"/sub")
 
 	// Step 4: Bidirectional sync.
-	runCLIWithConfig(t, cfgPath, "sync", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
 
 	// Step 5: Assert results.
 	// EF6: del-local.txt gone remotely.
@@ -646,7 +641,7 @@ func TestE2E_Sync_DeletePropagation(t *testing.T) {
 	assert.Equal(t, "keep me", string(keepData))
 
 	// Step 6: Re-sync is idempotent.
-	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--force")
 	assert.Contains(t, stderr, "No changes detected")
 }
 
@@ -657,7 +652,7 @@ func TestE2E_Sync_BigDeleteProtection(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfig(t, syncDir)
 	testFolder := fmt.Sprintf("e2e-sync-bigdel-%d", time.Now().UnixNano())
 
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
@@ -674,7 +669,7 @@ func TestE2E_Sync_BigDeleteProtection(t *testing.T) {
 	}
 
 	// Step 2: Upload baseline.
-	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Step 3: Delete all 12 files remotely.
 	for i := 1; i <= fileCount; i++ {
@@ -683,7 +678,7 @@ func TestE2E_Sync_BigDeleteProtection(t *testing.T) {
 	}
 
 	// Step 4: Sync without --force — big-delete protection should trigger.
-	_, stderr, syncErr := runCLIWithConfigAllowError(t, cfgPath, "sync")
+	_, stderr, syncErr := runCLIWithConfigAllowError(t, cfgPath, env, "sync")
 	require.Error(t, syncErr, "sync should fail due to big-delete protection")
 	assert.Contains(t, stderr, "big-delete")
 
@@ -695,7 +690,7 @@ func TestE2E_Sync_BigDeleteProtection(t *testing.T) {
 	}
 
 	// Step 6: Sync with --force — should succeed.
-	runCLIWithConfig(t, cfgPath, "sync", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
 
 	// Step 7: All local files should be deleted.
 	for i := 1; i <= fileCount; i++ {
@@ -705,7 +700,7 @@ func TestE2E_Sync_BigDeleteProtection(t *testing.T) {
 	}
 
 	// Step 8: Re-sync is idempotent.
-	_, stderr = runCLIWithConfig(t, cfgPath, "sync")
+	_, stderr = runCLIWithConfig(t, cfgPath, env, "sync")
 	assert.Contains(t, stderr, "No changes detected")
 }
 
@@ -715,7 +710,7 @@ func TestE2E_Sync_DownloadOnlyIgnoresLocal(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfig(t, syncDir)
 	testFolder := fmt.Sprintf("e2e-sync-dlonly-%d", time.Now().UnixNano())
 
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
@@ -725,7 +720,7 @@ func TestE2E_Sync_DownloadOnlyIgnoresLocal(t *testing.T) {
 	require.NoError(t, os.MkdirAll(localDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "shared.txt"), []byte("initial"), 0o644))
 
-	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Step 2: Modify both sides.
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "shared.txt"), []byte("local modification"), 0o644))
@@ -735,7 +730,7 @@ func TestE2E_Sync_DownloadOnlyIgnoresLocal(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "local-new.txt"), []byte("local new file"), 0o644))
 
 	// Step 4: Download-only sync.
-	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--download-only", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--download-only", "--force")
 	assert.Contains(t, stderr, "Mode: download-only")
 
 	// Step 5: Local gets remote version (download-only overwrites local).
@@ -752,7 +747,7 @@ func TestE2E_Sync_DownloadOnlyIgnoresLocal(t *testing.T) {
 	assert.NotContains(t, lsOut, "local-new.txt", "local-new.txt should not be uploaded in download-only mode")
 
 	// Step 7: Verify.
-	stdout, _ := runCLIWithConfig(t, cfgPath, "verify")
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "verify")
 	assert.Contains(t, stdout, "Verified")
 }
 
@@ -762,7 +757,7 @@ func TestE2E_Sync_UploadOnlyIgnoresRemote(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfig(t, syncDir)
 	testFolder := fmt.Sprintf("e2e-sync-uponly-%d", time.Now().UnixNano())
 
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
@@ -771,7 +766,7 @@ func TestE2E_Sync_UploadOnlyIgnoresRemote(t *testing.T) {
 	runCLI(t, "mkdir", "/"+testFolder)
 	putRemoteFile(t, "/"+testFolder+"/remote-file.txt", "from remote")
 
-	runCLIWithConfig(t, cfgPath, "sync", "--download-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--download-only", "--force")
 
 	// Verify local download.
 	localDir := filepath.Join(syncDir, testFolder)
@@ -785,7 +780,7 @@ func TestE2E_Sync_UploadOnlyIgnoresRemote(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "new-upload.txt"), []byte("new upload content"), 0o644))
 
 	// Step 3: Upload-only sync.
-	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 	assert.Contains(t, stderr, "Mode: upload-only")
 
 	// Step 4: New local file uploaded (EF13, poll for eventual consistency).
@@ -807,7 +802,7 @@ func TestE2E_Sync_NestedFolderHierarchy(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfig(t, syncDir)
 	testFolder := fmt.Sprintf("e2e-sync-nested-%d", time.Now().UnixNano())
 
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
@@ -821,7 +816,7 @@ func TestE2E_Sync_NestedFolderHierarchy(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "x", "y", "another.txt"), []byte("another content"), 0o644))
 
 	// Step 2: Upload baseline.
-	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Verify deep files exist remotely (poll for eventual consistency).
 	pollCLIContains(t, "deep.txt", pollTimeout, "ls", "/"+testFolder+"/a/b/c")
@@ -842,7 +837,7 @@ func TestE2E_Sync_NestedFolderHierarchy(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "x", "y", "another.txt"), []byte("modified another"), 0o644))
 
 	// Step 4: Bidirectional sync.
-	runCLIWithConfig(t, cfgPath, "sync", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
 
 	// Step 5: Assert results.
 	// Remote deeper.txt downloaded locally (ED3 + EF14).
@@ -863,12 +858,12 @@ func TestE2E_Sync_NestedFolderHierarchy(t *testing.T) {
 	assert.Equal(t, "modified another", remoteAnother)
 
 	// Step 6: Verify.
-	verifyOut, _ := runCLIWithConfig(t, cfgPath, "verify")
+	verifyOut, _ := runCLIWithConfig(t, cfgPath, env, "verify")
 	assert.Contains(t, verifyOut, "Verified")
 	assert.Contains(t, verifyOut, "All files verified successfully.")
 
 	// Step 7: Re-sync is idempotent.
-	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--force")
 	assert.Contains(t, stderr, "No changes detected")
 }
 
@@ -878,7 +873,7 @@ func TestE2E_Sync_DryRunNonDestructive(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfig(t, syncDir)
 	testFolder := fmt.Sprintf("e2e-sync-dryrun-%d", time.Now().UnixNano())
 
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
@@ -888,7 +883,7 @@ func TestE2E_Sync_DryRunNonDestructive(t *testing.T) {
 	require.NoError(t, os.MkdirAll(localDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "existing.txt"), []byte("existing content"), 0o644))
 
-	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Step 2: Set up pending changes.
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "pending-upload.txt"), []byte("to upload"), 0o644))
@@ -896,7 +891,7 @@ func TestE2E_Sync_DryRunNonDestructive(t *testing.T) {
 	require.NoError(t, os.Remove(filepath.Join(localDir, "existing.txt")))
 
 	// Step 3: Dry-run sync.
-	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--dry-run", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--dry-run", "--force")
 	assert.Contains(t, stderr, "Dry run")
 
 	// Step 4: Verify NO side effects.
@@ -912,7 +907,7 @@ func TestE2E_Sync_DryRunNonDestructive(t *testing.T) {
 	assert.Contains(t, lsOut, "existing.txt", "dry-run should not delete remotely")
 
 	// Step 5: Real sync.
-	runCLIWithConfig(t, cfgPath, "sync", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
 
 	// Step 6: All changes applied (poll for eventual consistency).
 	lsOut, _ = pollCLIContains(t, "pending-upload.txt", pollTimeout, "ls", "/"+testFolder)
@@ -924,7 +919,7 @@ func TestE2E_Sync_DryRunNonDestructive(t *testing.T) {
 	assert.Equal(t, "to download", string(dlData))
 
 	// Step 7: Verify.
-	stdout, _ := runCLIWithConfig(t, cfgPath, "verify")
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "verify")
 	assert.Contains(t, stdout, "Verified")
 	assert.Contains(t, stdout, "All files verified successfully.")
 }
@@ -935,7 +930,7 @@ func TestE2E_Sync_ConvergentEdit(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfig(t, syncDir)
 	testFolder := fmt.Sprintf("e2e-sync-conv-%d", time.Now().UnixNano())
 
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
@@ -945,7 +940,7 @@ func TestE2E_Sync_ConvergentEdit(t *testing.T) {
 	require.NoError(t, os.MkdirAll(localDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "converge-edit.txt"), []byte("original"), 0o644))
 
-	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Step 2: Modify both sides to the SAME content (EF4).
 	newContent := "convergent new content"
@@ -958,7 +953,7 @@ func TestE2E_Sync_ConvergentEdit(t *testing.T) {
 	putRemoteFile(t, "/"+testFolder+"/converge-create.txt", freshContent)
 
 	// Step 4: Bidirectional sync — convergent detection.
-	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--force")
 
 	// Convergent updates detected (no data transfer needed).
 	assert.Contains(t, stderr, "Synced updates:")
@@ -968,7 +963,7 @@ func TestE2E_Sync_ConvergentEdit(t *testing.T) {
 	assert.NotContains(t, stderr, "Uploads:")
 
 	// Step 5: Verify.
-	stdout, _ := runCLIWithConfig(t, cfgPath, "verify")
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "verify")
 	assert.Contains(t, stdout, "Verified")
 	assert.Contains(t, stdout, "All files verified successfully.")
 }
@@ -979,7 +974,7 @@ func TestE2E_Sync_VerifyDetectsTampering(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfig(t, syncDir)
 	testFolder := fmt.Sprintf("e2e-sync-tamp-%d", time.Now().UnixNano())
 
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
@@ -991,10 +986,10 @@ func TestE2E_Sync_VerifyDetectsTampering(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "tampered.txt"), []byte("original content"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "missing.txt"), []byte("will be removed"), 0o644))
 
-	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Step 2: Verify all good initially.
-	stdout, _ := runCLIWithConfig(t, cfgPath, "verify")
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "verify")
 	assert.Contains(t, stdout, "Verified")
 	assert.Contains(t, stdout, "All files verified successfully.")
 
@@ -1003,7 +998,7 @@ func TestE2E_Sync_VerifyDetectsTampering(t *testing.T) {
 	require.NoError(t, os.Remove(filepath.Join(localDir, "missing.txt")))
 
 	// Step 4: Verify should detect mismatches (exit code ≠ 0).
-	stdout, _, verifyErr := runCLIWithConfigAllowError(t, cfgPath, "verify")
+	stdout, _, verifyErr := runCLIWithConfigAllowError(t, cfgPath, env, "verify")
 	require.Error(t, verifyErr, "verify should fail when local files are tampered")
 
 	// Step 5: Assert mismatch report.
@@ -1034,7 +1029,7 @@ func TestE2E_Sync_ResolveDryRun(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfig(t, syncDir)
 	testFolder := fmt.Sprintf("e2e-sync-resdry-%d", time.Now().UnixNano())
 
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
@@ -1045,34 +1040,34 @@ func TestE2E_Sync_ResolveDryRun(t *testing.T) {
 	conflictFile := filepath.Join(localDir, "dryrun-conflict.txt")
 	require.NoError(t, os.WriteFile(conflictFile, []byte("original v1"), 0o644))
 
-	runCLIWithConfig(t, cfgPath, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Step 2: Modify both sides to create edit-edit conflict.
 	require.NoError(t, os.WriteFile(conflictFile, []byte("local edit v2"), 0o644))
 	putRemoteFile(t, "/"+testFolder+"/dryrun-conflict.txt", "remote edit v2")
 
 	// Step 3: Bidirectional sync — should detect conflict.
-	_, stderr := runCLIWithConfig(t, cfgPath, "sync", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--force")
 	assert.Contains(t, stderr, "Conflicts:")
 
 	// Step 4: Verify conflict exists.
-	stdout, _ := runCLIWithConfig(t, cfgPath, "conflicts")
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
 	assert.Contains(t, stdout, "dryrun-conflict.txt")
 	assert.Contains(t, stdout, "edit_edit")
 
 	// Step 5: Resolve --dry-run --keep-local.
-	_, stderr = runCLIWithConfig(t, cfgPath, "resolve", testFolder+"/dryrun-conflict.txt", "--keep-local", "--dry-run")
+	_, stderr = runCLIWithConfig(t, cfgPath, env, "resolve", testFolder+"/dryrun-conflict.txt", "--keep-local", "--dry-run")
 	assert.Contains(t, stderr, "Would resolve")
 
 	// Step 6: Conflict should still exist (dry-run didn't resolve it).
-	stdout, _ = runCLIWithConfig(t, cfgPath, "conflicts")
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
 	assert.Contains(t, stdout, "dryrun-conflict.txt", "conflict should remain after dry-run resolve")
 
 	// Step 7: Resolve for real.
-	_, stderr = runCLIWithConfig(t, cfgPath, "resolve", testFolder+"/dryrun-conflict.txt", "--keep-local")
+	_, stderr = runCLIWithConfig(t, cfgPath, env, "resolve", testFolder+"/dryrun-conflict.txt", "--keep-local")
 	assert.Contains(t, stderr, "Resolved")
 
 	// Step 8: No more conflicts.
-	stdout, _ = runCLIWithConfig(t, cfgPath, "conflicts")
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
 	assert.Contains(t, stdout, "No unresolved conflicts")
 }

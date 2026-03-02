@@ -224,6 +224,36 @@ func (c *Client) drivesList(ctx context.Context) ([]Drive, error) {
 	return drives, nil
 }
 
+// PrimaryDrive returns the authenticated user's primary OneDrive via GET /me/drive.
+// This is the correct way to discover the user's main drive. Do NOT use Drives()[0]
+// because /me/drives returns phantom system drives (Photos face crops, album
+// metadata) in non-deterministic order on personal accounts. These system drives
+// return HTTP 400 "ObjectHandle is Invalid" when accessed.
+func (c *Client) PrimaryDrive(ctx context.Context) (*Drive, error) {
+	c.logger.Info("fetching primary drive")
+
+	resp, err := c.Do(ctx, http.MethodGet, "/me/drive", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var dr driveResponse
+	if err := json.NewDecoder(resp.Body).Decode(&dr); err != nil {
+		return nil, fmt.Errorf("graph: decoding primary drive response: %w", err)
+	}
+
+	drive := dr.toDrive()
+
+	c.logger.Debug("fetched primary drive",
+		slog.String("id", drive.ID.String()),
+		slog.String("name", drive.Name),
+		slog.String("drive_type", drive.DriveType),
+	)
+
+	return &drive, nil
+}
+
 // Drive returns a specific drive by ID.
 func (c *Client) Drive(ctx context.Context, driveID driveid.ID) (*Drive, error) {
 	c.logger.Info("fetching drive",

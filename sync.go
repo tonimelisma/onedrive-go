@@ -65,6 +65,14 @@ func runSync(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
+	// Rebuild logger now that we have the config-file log_level. CLI flags
+	// still override (--verbose, --debug, --quiet). This mirrors Phase 2
+	// logger construction in PersistentPreRunE, which is skipped for sync
+	// because it uses skipConfigAnnotation to handle multi-drive resolution
+	// itself.
+	logger = buildLogger(&config.ResolvedDrive{LoggingConfig: rawCfg.LoggingConfig}, cc.Flags)
+	cc.Logger = logger
+
 	selectors := cc.Flags.Drive
 
 	if watch {

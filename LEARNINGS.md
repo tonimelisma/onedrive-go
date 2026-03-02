@@ -276,7 +276,7 @@ Commands that skip config loading (login, logout, whoami, status, drive add/remo
 GitHub secrets can't be updated from workflows, so we use Azure Key Vault. OIDC federation means no stored credentials — GitHub Actions presents a short-lived JWT scoped to `repo:tonimelisma/onedrive-go:ref:refs/heads/main`. Token files flow via `az keyvault secret download/set --file`, never through stdout/CI logs.
 
 ### Token and drive ID bootstrap
-Tokens bootstrapped via `go run . login --drive personal:user@example.com`. Drive IDs discovered via `go run . whoami --json`. Integration tests require `ONEDRIVE_TEST_DRIVE_ID` env var.
+Tokens bootstrapped via `scripts/bootstrap-test-credentials.sh` which runs `login` with XDG overrides pointing to `.testdata/`. Drive IDs are cached in token file metadata (`.meta.drive_id`) — no separate env var needed. Integration tests read the drive ID from the cache file via `tokenfile.ReadMeta()`.
 
 ### Integration test build tag pattern
 `//go:build integration` excluded from `go test ./...`. The `newIntegrationClient(t)` helper skips (not fails) when no token is available.
@@ -288,6 +288,16 @@ Microsoft rotates refresh tokens on use and they expire after 90 days of inactiv
 Graph API has two consistency gaps that cause CI failures:
 1. **404 on path-based queries after create/upload**: Items created via `CreateFolder`, `SimpleUpload`, or `Upload` are not immediately visible via `GetItemByPath`, `ListChildrenByPath`, or `DeleteItem`. This is the dominant CI failure cause (~40% of all failures). **Mitigation**: E2E tests use polling helpers (`pollCLIContains`, `pollCLIWithConfigContains`, `pollCLISuccess`) that retry with exponential backoff (500ms→4s cap, 30s timeout) until the item appears.
 2. **Transient 403 on `/me/drives`**: Microsoft returns `accessDenied` during token propagation even with a valid token. Affects the `Drives()` call used during login and drive discovery. **Mitigation**: Production retry in `Drives()` — up to 3 attempts with exponential backoff, retrying only on 403. Uses the existing `calcBackoff` + `sleepFunc` infrastructure.
+
+### Personal accounts have phantom system drives
+Every personal OneDrive account has 2-3 hidden system drives created by Microsoft for the Photos app:
+- **Face crops drive**: `"Document List to store face crops and other user specific information"` — GUID-named (e.g., `C022FB8E-9907-45F9-BF47-A403283F090E`), base64-encoded ID (`b!...`).
+- **Albums drive**: `"Document library to store albums and album items"` — GUID-named (e.g., `AEEE102E-CFF8-4E2A-89C6-03841FF83500`), base64-encoded ID (`b!...`).
+- **Actual OneDrive**: Named `"OneDrive"`, plain hex user ID (e.g., `f1da660e69bdec82`).
+
+All three report `driveType: "personal"` and share the same quota numbers. The system drives are created by "System Account" and return **HTTP 400 `ObjectHandle is Invalid`** when accessed via `/drives/{id}/root/children` or any item operation. `GET /me/drives` returns them in non-deterministic order — the real OneDrive may be first, last, or in the middle.
+
+**Critical**: Always use `GET /me/drive` (singular) for primary drive discovery during login. Never use `drives[0]` from `GET /me/drives`. The `PrimaryDrive()` method exists for this purpose. `Drives()` (plural) is only for `whoami` display and drive type detection where all drives should be listed.
 
 ### Key Vault secrets are managed via az CLI
 Use `az` CLI for creating/renaming secrets, downloading/uploading tokens, and `gh variable set` for GitHub variables. The human only handles one-time Azure infrastructure and interactive browser-based flows.
