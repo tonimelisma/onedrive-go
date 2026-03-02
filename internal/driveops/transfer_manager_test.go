@@ -1325,3 +1325,49 @@ func TestTransferManager_ResumeDownload_PartialDeletedBeforeOpen(t *testing.T) {
 		t.Errorf("LocalHash = %q, want %q", result.LocalHash, expectedHash)
 	}
 }
+
+// TestDownloadToFile_EmptyRemoteHash_HashVerifiedFalse verifies that when
+// the remote item has no hash (common on some SharePoint files), the download
+// succeeds but HashVerified is false (B-021).
+func TestDownloadToFile_EmptyRemoteHash_HashVerifiedFalse(t *testing.T) {
+	t.Parallel()
+
+	content := []byte("no-hash file content")
+
+	dl := &tmSimpleDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			n, err := w.Write(content)
+			return int64(n), err
+		},
+	}
+
+	tm := newTestTM(dl, &tmMockUploader{}, nil)
+	targetPath := filepath.Join(t.TempDir(), "nohash.txt")
+
+	result, err := tm.DownloadToFile(context.Background(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+		RemoteHash: "", // empty — no hash available from remote
+	})
+	if err != nil {
+		t.Fatalf("DownloadToFile: %v", err)
+	}
+
+	// Download should succeed.
+	if result.LocalHash == "" {
+		t.Error("LocalHash should not be empty")
+	}
+
+	// HashVerified should be false — no verification occurred.
+	if result.HashVerified {
+		t.Error("HashVerified = true, want false when remote hash is empty")
+	}
+
+	// File should exist with correct content.
+	got, readErr := os.ReadFile(targetPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile: %v", readErr)
+	}
+
+	if !bytes.Equal(got, content) {
+		t.Error("file content mismatch")
+	}
+}
