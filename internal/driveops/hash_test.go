@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
 
@@ -76,5 +77,32 @@ func TestComputeQuickXorHash_NonexistentFile(t *testing.T) {
 	_, err := ComputeQuickXorHash("/nonexistent/path/file.txt")
 	if err == nil {
 		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestHasHash(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		item *graph.Item
+		want bool
+	}{
+		{"quickxor only", &graph.Item{QuickXorHash: "abc123"}, true},
+		{"sha256 only", &graph.Item{SHA256Hash: "def456"}, true},
+		{"sha1 only", &graph.Item{SHA1Hash: "ghi789"}, true},
+		{"no hashes", &graph.Item{}, false},
+		{"all empty strings", &graph.Item{QuickXorHash: "", SHA256Hash: "", SHA1Hash: ""}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := HasHash(tt.item)
+			if got != tt.want {
+				t.Errorf("HasHash() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

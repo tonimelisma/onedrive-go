@@ -51,12 +51,20 @@ func validateSingleDrive(id driveid.CanonicalID, drive *Drive, syncDirs map[stri
 }
 
 // checkDriveSyncDirUniqueness ensures no two drives share the same expanded sync_dir.
+// Resolves symlinks so that two paths pointing to the same directory are detected (B-287).
+// Falls back to lexical comparison if the path doesn't exist yet.
 func checkDriveSyncDirUniqueness(id string, drive *Drive, seen map[string]string) []error {
 	if drive.SyncDir == "" {
 		return nil
 	}
 
 	expanded := expandTilde(drive.SyncDir)
+
+	// Resolve symlinks so two paths pointing to the same directory are caught.
+	// If the path doesn't exist yet (valid — user may create it later), fall back to lexical.
+	if resolved, err := filepath.EvalSymlinks(expanded); err == nil {
+		expanded = resolved
+	}
 
 	if other, exists := seen[expanded]; exists {
 		return []error{fmt.Errorf(

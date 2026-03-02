@@ -151,6 +151,34 @@ func TestValidateDrives_EmptySyncDirSkippedForOverlap(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestValidateDrives_SymlinkedSyncDir_DetectedAsDuplicate(t *testing.T) {
+	// Two drives pointing to the same directory via a symlink should be detected.
+	dir := t.TempDir()
+	realDir := filepath.Join(dir, "real")
+	linkDir := filepath.Join(dir, "link")
+
+	require.NoError(t, os.MkdirAll(realDir, 0o755))
+	require.NoError(t, os.Symlink(realDir, linkDir))
+
+	cfg := DefaultConfig()
+	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: realDir}
+	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{SyncDir: linkDir}
+
+	err := Validate(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "same sync_dir")
+}
+
+func TestValidateDrives_NonexistentSyncDir_NoPanic(t *testing.T) {
+	// A sync_dir that doesn't exist yet should not panic — falls back to lexical comparison.
+	cfg := DefaultConfig()
+	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "/nonexistent/path/OneDrive"}
+	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{SyncDir: "/other/nonexistent/Work"}
+
+	err := Validate(cfg)
+	assert.NoError(t, err)
+}
+
 func TestValidateDrives_InvalidCanonicalID_RejectedAtParseTime(t *testing.T) {
 	// Invalid canonical IDs are now rejected at parse time (decodeDriveSections),
 	// not at validation time. This test verifies that the TOML load path catches them.

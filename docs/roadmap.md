@@ -970,12 +970,13 @@ Acceptance: Shortcuts detected, content synced. Share revocation deletes local c
 3. Automatic fallback to polling when WebSocket connection fails (network issues, unsupported account type). Reconnect with exponential backoff.
 4. `websocket` config option (default `true`): disable WebSocket and use polling only. Some corporate firewalls block WebSocket connections.
 
-### 8.1: Adaptive concurrency (AIMD) — FUTURE
+### 8.1: Adaptive concurrency + multi-drive worker budget — FUTURE
 
-1. AIMD (additive increase, multiplicative decrease) auto-tuning for worker count. Monitor 429 response rate and throughput.
-2. High 429 rate (>5% of requests): halve active workers (multiplicative decrease). Low error rate + high throughput: add one worker (additive increase).
-3. Adapt to workload type: many small files benefit from more workers; few large files benefit from fewer workers with more bandwidth each.
-4. Per-tenant coordination: when multiple drives share the same Microsoft tenant, share the AIMD state so one drive's 429s throttle all drives on that tenant.
+1. **Multi-drive worker budget** (B-297): Proportional allocation of `transfer_workers` across active drives by baseline file count. Global cap (default 8), minimum 4 per drive, rebalanced on SIGHUP. Currently each drive gets the full global budget — N drives = N × 8 workers. See MULTIDRIVE.md §11.3 for the allocation algorithm spec.
+2. **Watch-mode parallel hashing** (B-298): `hashAndEmit` in watchLoop runs sequentially in the watch goroutine. Needs a hash worker pool for parallelism. FullScan already parallelized (three-phase pattern).
+3. **AIMD auto-tuning**: Additive increase, multiplicative decrease for worker count. Monitor 429 response rate and throughput. High 429 rate (>5% of requests): halve active workers (multiplicative decrease). Low error rate + high throughput: add one worker (additive increase).
+4. Adapt to workload type: many small files benefit from more workers; few large files benefit from fewer workers with more bandwidth each.
+5. Per-tenant coordination: when multiple drives share the same Microsoft tenant, share the AIMD state so one drive's 429s throttle all drives on that tenant.
 
 ### 8.2: Observer backpressure — FUTURE
 
