@@ -5,22 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
-
-func testCanonicalID(t *testing.T, s string) driveid.CanonicalID {
-	t.Helper()
-
-	cid, err := driveid.NewCanonicalID(s)
-	require.NoError(t, err)
-
-	return cid
-}
 
 func TestDriveRunner_Run_Success(t *testing.T) {
 	cid := testCanonicalID(t, "personal:test@example.com")
@@ -119,29 +107,4 @@ func TestDriveRunner_Run_ContextCanceled(t *testing.T) {
 
 	assert.ErrorIs(t, result.Err, context.Canceled)
 	assert.Nil(t, result.Report)
-}
-
-func TestBackoffDuration(t *testing.T) {
-	tests := []struct {
-		name     string
-		failures int
-		want     time.Duration
-	}{
-		{name: "zero failures", failures: 0, want: 0},
-		{name: "one failure", failures: 1, want: 0},
-		{name: "two failures", failures: 2, want: 0},
-		{name: "three failures", failures: 3, want: 1 * time.Minute},
-		{name: "four failures", failures: 4, want: 5 * time.Minute},
-		{name: "five failures", failures: 5, want: 15 * time.Minute},
-		{name: "six failures", failures: 6, want: 1 * time.Hour},
-		{name: "seven failures capped", failures: 7, want: 1 * time.Hour},
-		{name: "hundred failures capped", failures: 100, want: 1 * time.Hour},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := backoffDuration(tt.failures)
-			assert.Equal(t, tt.want, got)
-		})
-	}
 }

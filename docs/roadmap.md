@@ -723,7 +723,7 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 - New function: `config.TokenCanonicalID(cid driveid.CanonicalID, cfg *Config) (driveid.CanonicalID, error)`
 - Logic: personal/business → return self; sharepoint → business with same email; shared → find primary drive for email in `cfg.Drives`
-- Update call sites: `drive.go:addNewDrive`, `config/drive.go:DriveTokenPath`, `config/drive.go:ReadTokenMetaForSyncDir`
+- Update call sites: `drive.go:addNewDrive`, `config/drive.go:DriveTokenPath`, `config/drive.go:ReadTokenMeta`
 - **Acceptance**: All existing tests pass. Token resolution works for all four drive types.
 
 ##### 5.6.4: Replace `Alias` with `DisplayName` in config

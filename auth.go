@@ -176,7 +176,7 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Step 2-4: Discover account details from the Graph API.
-	canonicalID, user, orgName, err := discoverAccount(ctx, ts, logger)
+	canonicalID, user, orgName, primaryDriveID, err := discoverAccount(ctx, ts, logger)
 	if err != nil {
 		os.Remove(tempPath)
 
@@ -197,10 +197,13 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 
 	// Step 5b: Save metadata to the token file. Every login (including re-login)
 	// refreshes cached metadata so org renames and display name changes propagate.
+	// drive_id is cached here to avoid runtime re-discovery (DRY: the Graph API
+	// was already called in discoverAccount).
 	if saveErr := tokenfile.LoadAndMergeMeta(finalTokenPath, map[string]string{
 		"user_id":      user.ID,
 		"display_name": user.DisplayName,
 		"org_name":     orgName,
+		"drive_id":     primaryDriveID.String(),
 		"cached_at":    time.Now().UTC().Format(time.RFC3339),
 	}); saveErr != nil {
 		logger.Warn("failed to save cached metadata", "error", saveErr)
@@ -228,16 +231,16 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 
 // discoverAccount calls /me, /me/drive, and /me/organization to build the
 // canonical drive ID and extract the organization name. Returns the canonical
-// ID, user profile, and org display name.
+// ID, user profile, org display name, and the primary drive's Graph API ID.
 func discoverAccount(
 	ctx context.Context, ts graph.TokenSource, logger *slog.Logger,
-) (driveid.CanonicalID, *graph.User, string, error) {
+) (driveid.CanonicalID, *graph.User, string, driveid.ID, error) {
 	client := newGraphClient(ts, logger)
 
 	// GET /me -> email, user GUID
 	user, err := client.Me(ctx)
 	if err != nil {
-		return driveid.CanonicalID{}, nil, "", fmt.Errorf("fetching user profile: %w", err)
+		return driveid.CanonicalID{}, nil, "", driveid.ID{}, fmt.Errorf("fetching user profile: %w", err)
 	}
 
 	logger.Info("discovered user", "email", user.Email, "display_name", user.DisplayName)
@@ -245,11 +248,11 @@ func discoverAccount(
 	// GET /me/drives -> driveType (personal, business)
 	drives, err := client.Drives(ctx)
 	if err != nil {
-		return driveid.CanonicalID{}, nil, "", fmt.Errorf("listing drives: %w", err)
+		return driveid.CanonicalID{}, nil, "", driveid.ID{}, fmt.Errorf("listing drives: %w", err)
 	}
 
 	if len(drives) == 0 {
-		return driveid.CanonicalID{}, nil, "", fmt.Errorf("no drives found for this account")
+		return driveid.CanonicalID{}, nil, "", driveid.ID{}, fmt.Errorf("no drives found for this account")
 	}
 
 	driveType := drives[0].DriveType
@@ -265,6 +268,9 @@ func discoverAccount(
 			"drive_type", driveType)
 	}
 
+	primaryDriveID := drives[0].ID
+	logger.Info("discovered primary drive", "drive_id", primaryDriveID.String())
+
 	// GET /me/organization -> org display name (business only)
 	var orgName string
 
@@ -278,12 +284,12 @@ func discoverAccount(
 
 	cid, err := driveid.Construct(driveType, user.Email)
 	if err != nil {
-		return driveid.CanonicalID{}, nil, "", fmt.Errorf("constructing canonical ID: %w", err)
+		return driveid.CanonicalID{}, nil, "", driveid.ID{}, fmt.Errorf("constructing canonical ID: %w", err)
 	}
 
 	logger.Info("constructed canonical ID", "canonical_id", cid.String())
 
-	return cid, user, orgName, nil
+	return cid, user, orgName, primaryDriveID, nil
 }
 
 // moveToken renames the pending token file to its final canonical path.

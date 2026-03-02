@@ -84,8 +84,13 @@ type Engine struct {
 }
 
 // NewEngine creates an Engine, initializing the BaselineManager (which opens
-// the SQLite database and runs migrations). Returns an error if DB init fails.
+// the SQLite database and runs migrations). Returns an error if DB init fails
+// or if DriveID is zero (indicates a config/login issue).
 func NewEngine(cfg *EngineConfig) (*Engine, error) {
+	if cfg.DriveID.IsZero() {
+		return nil, fmt.Errorf("sync: engine requires non-zero drive ID")
+	}
+
 	bm, err := NewBaselineManager(cfg.DBPath, cfg.Logger)
 	if err != nil {
 		return nil, fmt.Errorf("sync: creating engine: %w", err)

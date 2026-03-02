@@ -142,7 +142,7 @@ func TestBuildConfiguredDriveEntries_NoSyncDir_WithTokenMeta(t *testing.T) {
 }
 
 // collectConfigSyncDirs and readDriveTokenMeta were deleted — their logic now
-// lives in config.CollectOtherSyncDirs and config.ReadTokenMetaForSyncDir.
+// lives in config.CollectOtherSyncDirs and config.ReadTokenMeta.
 // Tests for these functions live in internal/config/drive_test.go.
 
 // --- listAvailableDrives ---

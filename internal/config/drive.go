@@ -184,17 +184,29 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 		resolved.RemotePath = defaultRemotePath
 	}
 
+	// Read cached token metadata for sync_dir and drive_id resolution.
+	meta := ReadTokenMeta(canonicalID, logger)
+
+	// Populate drive ID from token meta when not set in config. This avoids
+	// runtime re-discovery — the drive ID was cached at login time.
+	if resolved.DriveID.IsZero() && meta["drive_id"] != "" {
+		resolved.DriveID = driveid.New(meta["drive_id"])
+		logger.Debug("resolved drive ID from token metadata",
+			"drive_id", resolved.DriveID.String(),
+			"canonical_id", canonicalID.String(),
+		)
+	}
+
 	// Compute runtime default sync_dir when the drive has none configured.
 	// Reads org_name from the token file metadata for accurate business
 	// drive naming (e.g., "~/OneDrive - Contoso" instead of "~/OneDrive - Business").
 	if resolved.SyncDir == "" {
-		orgName, displayName := ReadTokenMetaForSyncDir(canonicalID, logger)
 		otherDirs := CollectOtherSyncDirs(cfg, canonicalID, logger)
-		resolved.SyncDir = expandTilde(DefaultSyncDir(canonicalID, orgName, displayName, otherDirs))
+		resolved.SyncDir = expandTilde(DefaultSyncDir(canonicalID, meta["org_name"], meta["display_name"], otherDirs))
 		logger.Debug("using default sync_dir",
 			"sync_dir", resolved.SyncDir,
 			"canonical_id", canonicalID.String(),
-			"org_name", orgName,
+			"org_name", meta["org_name"],
 		)
 	}
 
@@ -212,25 +224,25 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 	return resolved
 }
 
-// ReadTokenMetaForSyncDir reads org_name and display_name from the token file's
-// cached metadata. Returns empty strings if the token file is missing or
-// doesn't contain metadata. Uses tokenfile.ReadMeta (leaf package) to avoid
-// an import cycle with graph.
-func ReadTokenMetaForSyncDir(cid driveid.CanonicalID, logger *slog.Logger) (orgName, displayName string) {
+// ReadTokenMeta reads cached metadata from the token file. Returns the full
+// metadata map (org_name, display_name, drive_id, etc.). Returns nil if the
+// token file is missing or doesn't contain metadata. Uses tokenfile.ReadMeta
+// (leaf package) to avoid an import cycle with graph.
+func ReadTokenMeta(cid driveid.CanonicalID, logger *slog.Logger) map[string]string {
 	tokenPath := DriveTokenPath(cid, nil)
 	if tokenPath == "" {
-		return "", ""
+		return nil
 	}
 
 	meta, err := tokenfile.ReadMeta(tokenPath)
 	if err != nil {
-		logger.Debug("could not read token meta for sync_dir computation",
+		logger.Debug("could not read token metadata",
 			"canonical_id", cid.String(), "error", err)
 
-		return "", ""
+		return nil
 	}
 
-	return meta["org_name"], meta["display_name"]
+	return meta
 }
 
 // CollectOtherSyncDirs collects sync_dir values from all drives in the config
@@ -248,8 +260,8 @@ func CollectOtherSyncDirs(cfg *Config, excludeID driveid.CanonicalID, logger *sl
 		dir := cfg.Drives[id].SyncDir
 		if dir == "" {
 			// Compute base name for this drive (without collision cascade).
-			orgName, _ := ReadTokenMetaForSyncDir(id, logger)
-			dir = BaseSyncDir(id, orgName, cfg.Drives[id].DisplayName)
+			meta := ReadTokenMeta(id, logger)
+			dir = BaseSyncDir(id, meta["org_name"], cfg.Drives[id].DisplayName)
 		}
 
 		if dir != "" {

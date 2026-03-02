@@ -688,35 +688,35 @@ func TestCollectOtherSyncDirs_SkipsEmptyBaseName(t *testing.T) {
 	assert.Empty(t, dirs)
 }
 
-// --- readTokenMetaForSyncDir ---
+// --- ReadTokenMeta ---
 
-func TestReadTokenMetaForSyncDir_NoToken(t *testing.T) {
+func TestReadTokenMeta_NoToken(t *testing.T) {
 	setTestDataDir(t)
 
 	cid := driveid.MustCanonicalID("personal:nobody@example.com")
-	orgName, displayName := ReadTokenMetaForSyncDir(cid, testLogger(t))
-	assert.Empty(t, orgName)
-	assert.Empty(t, displayName)
+	meta := ReadTokenMeta(cid, testLogger(t))
+	assert.Nil(t, meta)
 }
 
-func TestReadTokenMetaForSyncDir_WithMeta(t *testing.T) {
+func TestReadTokenMeta_WithMeta(t *testing.T) {
 	dataDir := setTestDataDir(t)
 
 	writeTokenFileWithMeta(t, dataDir, "token_personal_user@example.com.json", map[string]string{
 		"org_name":     "TestOrg",
 		"display_name": "Test User",
+		"drive_id":     "abc123",
 	})
 
 	cid := driveid.MustCanonicalID("personal:user@example.com")
-	orgName, displayName := ReadTokenMetaForSyncDir(cid, testLogger(t))
-	assert.Equal(t, "TestOrg", orgName)
-	assert.Equal(t, "Test User", displayName)
+	meta := ReadTokenMeta(cid, testLogger(t))
+	assert.Equal(t, "TestOrg", meta["org_name"])
+	assert.Equal(t, "Test User", meta["display_name"])
+	assert.Equal(t, "abc123", meta["drive_id"])
 }
 
-func TestReadTokenMetaForSyncDir_ZeroID(t *testing.T) {
-	orgName, displayName := ReadTokenMetaForSyncDir(driveid.CanonicalID{}, testLogger(t))
-	assert.Empty(t, orgName)
-	assert.Empty(t, displayName)
+func TestReadTokenMeta_ZeroID(t *testing.T) {
+	meta := ReadTokenMeta(driveid.CanonicalID{}, testLogger(t))
+	assert.Nil(t, meta)
 }
 
 // --- test helpers ---
