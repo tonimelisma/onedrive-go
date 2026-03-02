@@ -47,7 +47,8 @@ HOME="$TESTDATA/home" \
 cp "$DATA_SUBDIR"/token_*.json "$TESTDATA/" 2>/dev/null || true
 cp "$CONFIG_SUBDIR/config.toml" "$TESTDATA/config.toml" 2>/dev/null || true
 
-# Clean up subdirs.
+# Clean up subdirs. chmod first because go module cache is read-only.
+chmod -R u+w "$TESTDATA/home" 2>/dev/null || true
 rm -rf "$TESTDATA/data" "$TESTDATA/config" "$TESTDATA/cache" "$TESTDATA/home"
 
 echo ""
