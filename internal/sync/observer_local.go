@@ -2,10 +2,8 @@ package sync
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -19,7 +17,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 
-	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 )
 
 // ErrNosyncGuard is returned when a .nosync guard file is present in the
@@ -293,7 +291,7 @@ func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]Change
 				return gCtx.Err()
 			}
 
-			hash, err := computeQuickXorHash(job.fsPath)
+			hash, err := driveops.ComputeQuickXorHash(job.fsPath)
 			if err != nil {
 				o.logger.Warn("hash computation failed, emitting event with empty hash",
 					slog.String("path", job.dbRelPath), slog.String("error", err.Error()))
@@ -670,7 +668,7 @@ func computeStableHash(fsPath string) (string, error) {
 		return "", fmt.Errorf("sync: pre-hash stat %s: %w", fsPath, err)
 	}
 
-	hash, err := computeQuickXorHash(fsPath)
+	hash, err := driveops.ComputeQuickXorHash(fsPath)
 	if err != nil {
 		return "", err
 	}
@@ -685,23 +683,6 @@ func computeStableHash(fsPath string) (string, error) {
 	}
 
 	return hash, nil
-}
-
-// computeQuickXorHash computes the QuickXorHash of a file and returns
-// the base64-encoded digest. Uses streaming I/O (constant memory).
-func computeQuickXorHash(fsPath string) (string, error) {
-	f, err := os.Open(fsPath)
-	if err != nil {
-		return "", fmt.Errorf("sync: opening %s for hashing: %w", fsPath, err)
-	}
-	defer f.Close()
-
-	h := quickxorhash.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", fmt.Errorf("sync: hashing %s: %w", fsPath, err)
-	}
-
-	return base64.StdEncoding.EncodeToString(h.Sum(nil)), nil
 }
 
 // ---------------------------------------------------------------------------

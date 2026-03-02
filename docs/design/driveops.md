@@ -2,7 +2,7 @@
 
 ## Problem
 
-The "resolved drive → authenticated Graph API clients" glue logic was duplicated:
+Prior to this package, the "resolved drive → authenticated Graph API clients" glue logic was duplicated:
 
 - **`DriveSession`** in the CLI package — used by file ops (`ls`, `get`, `put`, etc.)
 - **`Orchestrator.getOrCreateClient`** in `internal/sync/` — used by sync commands

@@ -136,7 +136,7 @@ func LoadOrDefault(path string, logger *slog.Logger) (*Config, error) {
 // ResolveDrive loads configuration and applies the four-layer override chain:
 // defaults -> config file -> environment variables -> CLI flags.
 // It returns the fully resolved drive configuration and the raw parsed config
-// (needed by DriveSession for shared drive token resolution).
+// (needed by driveops.SessionProvider for shared drive token resolution).
 func ResolveDrive(env EnvOverrides, cli CLIOverrides, logger *slog.Logger) (*ResolvedDrive, *Config, error) {
 	// Step 1: resolve config path (CLI > env > default).
 	cfgPath := ResolveConfigPath(env, cli, logger)

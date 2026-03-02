@@ -39,8 +39,8 @@ func writeTestFile(t *testing.T, dir, relPath, content string) string {
 }
 
 // hashContent computes the QuickXorHash of a string, returning the
-// base64-encoded digest. Matches the output of computeQuickXorHash for
-// the same content written to a file.
+// base64-encoded digest. Matches the output of driveops.ComputeQuickXorHash
+// for the same content written to a file.
 func hashContent(t *testing.T, content string) string {
 	t.Helper()
 
@@ -872,54 +872,6 @@ func TestIsValidOneDriveName(t *testing.T) {
 				t.Errorf("isValidOneDriveName(%q) = %v, want %v", tt.in, got, tt.want)
 			}
 		})
-	}
-}
-
-func TestComputeQuickXorHash(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	content := "hello world"
-	path := writeTestFile(t, dir, "test.txt", content)
-
-	hash, err := computeQuickXorHash(path)
-	if err != nil {
-		t.Fatalf("computeQuickXorHash: %v", err)
-	}
-
-	want := hashContent(t, content)
-	if hash != want {
-		t.Errorf("hash = %q, want %q", hash, want)
-	}
-}
-
-func TestComputeQuickXorHash_EmptyFile(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	path := writeTestFile(t, dir, "empty.txt", "")
-
-	hash, err := computeQuickXorHash(path)
-	if err != nil {
-		t.Fatalf("computeQuickXorHash: %v", err)
-	}
-
-	want := hashContent(t, "")
-	if hash != want {
-		t.Errorf("hash = %q, want %q", hash, want)
-	}
-
-	if hash == "" {
-		t.Error("empty file hash should not be empty string")
-	}
-}
-
-func TestComputeQuickXorHash_NonexistentFile(t *testing.T) {
-	t.Parallel()
-
-	_, err := computeQuickXorHash("/nonexistent/path/file.txt")
-	if err == nil {
-		t.Fatal("expected error, got nil")
 	}
 }
 

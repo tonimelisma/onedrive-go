@@ -754,7 +754,7 @@ func TestExecutor_LocalDelete_HashMatch(t *testing.T) {
 
 	absPath := writeExecTestFile(t, syncRoot, "exec-delete-me.txt", "content")
 
-	hash, err := computeQuickXorHash(absPath)
+	hash, err := driveops.ComputeQuickXorHash(absPath)
 	if err != nil {
 		t.Fatal(err)
 	}

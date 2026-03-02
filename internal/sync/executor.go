@@ -40,7 +40,7 @@ const (
 
 // ExecutorConfig holds the immutable configuration for creating per-call
 // Executor instances. Separated from mutable state to prevent temporal
-// coupling and enable Phase 5 thread safety.
+// coupling and enable thread safety.
 type ExecutorConfig struct {
 	items     ItemClient
 	downloads driveops.Downloader
@@ -49,9 +49,8 @@ type ExecutorConfig struct {
 	driveID   driveid.ID // per-drive context (B-068)
 	logger    *slog.Logger
 
-	// sessionStore persists upload session URLs for cross-crash resume.
-	// When non-nil and uploads satisfies SessionUploader, the executor uses
-	// session-based uploads for large files (>SimpleUploadMaxSize).
+	// sessionStore is used by engine.go for CleanStale() housekeeping;
+	// upload session logic is in TransferManager.
 	sessionStore *driveops.SessionStore
 
 	// transferMgr handles unified download/upload with resume.
@@ -86,7 +85,7 @@ func NewExecutorConfig(
 		driveID:   driveID,
 		logger:    logger,
 		nowFunc:   time.Now,
-		hashFunc:  computeQuickXorHash,
+		hashFunc:  driveops.ComputeQuickXorHash,
 		sleepFunc: timeSleep,
 	}
 

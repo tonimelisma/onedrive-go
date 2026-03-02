@@ -28,10 +28,6 @@ type Session struct {
 // on demand. Multiple drives sharing a token path share one TokenSource,
 // preventing OAuth2 refresh token rotation races (two independent refreshes
 // can invalidate each other's refresh tokens).
-//
-// Created once (in CLI PersistentPreRunE), stored in CLIContext, and shared
-// with the Orchestrator. Config is accessed via a shared *config.Holder so
-// SIGHUP reload updates config in one place for all consumers.
 type SessionProvider struct {
 	holder       *config.Holder
 	metaHTTP     *http.Client
@@ -77,7 +73,7 @@ func (p *SessionProvider) Session(ctx context.Context, rd *config.ResolvedDrive)
 	ts, err := p.getOrCreateTokenSource(ctx, tokenPath)
 	if err != nil {
 		if errors.Is(err, graph.ErrNotLoggedIn) {
-			return nil, fmt.Errorf("not logged in — run 'onedrive-go login' first")
+			return nil, fmt.Errorf("not logged in — run 'onedrive-go login' first: %w", err)
 		}
 
 		return nil, err

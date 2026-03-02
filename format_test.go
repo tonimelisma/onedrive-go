@@ -82,7 +82,8 @@ func TestStatusf(t *testing.T) {
 
 		t.Cleanup(func() { os.Stderr = oldStderr })
 
-		statusf(true, "should not appear %s", "test")
+		cc := &CLIContext{Flags: CLIFlags{Quiet: true}}
+		cc.Statusf("should not appear %s", "test")
 		w.Close()
 
 		out, err := io.ReadAll(r)
@@ -99,7 +100,8 @@ func TestStatusf(t *testing.T) {
 
 		t.Cleanup(func() { os.Stderr = oldStderr })
 
-		statusf(false, "hello %s", "world")
+		cc := &CLIContext{}
+		cc.Statusf("hello %s", "world")
 		w.Close()
 
 		out, err := io.ReadAll(r)

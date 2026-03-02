@@ -11,6 +11,8 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 
 | ID | Title | Priority | Package | Notes |
 |----|-------|----------|---------|-------|
+| B-296 | Config-file `log_level` not applied by sync command | P4 | root | `sync` uses `skipConfigAnnotation` so PersistentPreRunE Phase 2 skips config-driven log level. CLI flags (`--verbose`/`--debug`/`--quiet`) still work. |
+| B-300 | Rename `SessionRecord` JSON tag `"remote_path"` → `"local_path"` | P4 | driveops | Field was renamed to `LocalPath` but JSON tag kept as `"remote_path"` for backward compat. Migrate existing session files by reading old key + writing new key, then change the tag. |
 
 ## Phase 6.0b: Orchestrator + DriveRunner
 

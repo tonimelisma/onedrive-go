@@ -214,20 +214,18 @@ func runGet(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		partialPath := localPath + ".partial"
 		if _, statErr := os.Stat(partialPath); statErr == nil {
-			statusf(cc.Flags.Quiet, "Partial download saved: %s\n", partialPath)
-			statusf(cc.Flags.Quiet, "Re-run the same command to resume.\n")
+			cc.Statusf("Partial download saved: %s\n", partialPath)
+			cc.Statusf("Re-run the same command to resume.\n")
 		}
 
 		return err
 	}
 
 	logger.Debug("download complete", "local_path", localPath, "bytes", result.Size)
-	statusf(cc.Flags.Quiet, "Downloaded %s (%s)\n", localPath, formatSize(result.Size))
+	cc.Statusf("Downloaded %s (%s)\n", localPath, formatSize(result.Size))
 
 	return nil
 }
-
-// (download helpers moved to TransferManager in internal/driveops/transfer_manager.go)
 
 func runPut(cmd *cobra.Command, args []string) error {
 	localPath := args[0]
@@ -267,7 +265,7 @@ func runPut(cmd *cobra.Command, args []string) error {
 	}
 
 	progress := func(uploaded, total int64) {
-		statusf(cc.Flags.Quiet, "Uploading: %s / %s\n", formatSize(uploaded), formatSize(total))
+		cc.Statusf("Uploading: %s / %s\n", formatSize(uploaded), formatSize(total))
 	}
 
 	store := driveops.NewSessionStore(config.DefaultDataDir(), logger)
@@ -282,12 +280,10 @@ func runPut(cmd *cobra.Command, args []string) error {
 	}
 
 	logger.Debug("upload complete", "remote_path", remotePath, "item_id", result.Item.ID, "size", fi.Size())
-	statusf(cc.Flags.Quiet, "Uploaded %s (%s)\n", remotePath, formatSize(fi.Size()))
+	cc.Statusf("Uploaded %s (%s)\n", remotePath, formatSize(fi.Size()))
 
 	return nil
 }
-
-// (upload helpers moved to TransferManager in internal/driveops/transfer_manager.go)
 
 // rmJSONOutput is the JSON output schema for the rm command.
 type rmJSONOutput struct {
@@ -349,9 +345,9 @@ func runRm(cmd *cobra.Command, args []string) error {
 	}
 
 	if permanent {
-		statusf(cc.Flags.Quiet, "Permanently deleted %s\n", remotePath)
+		cc.Statusf("Permanently deleted %s\n", remotePath)
 	} else {
-		statusf(cc.Flags.Quiet, "Deleted %s (moved to recycle bin)\n", remotePath)
+		cc.Statusf("Deleted %s (moved to recycle bin)\n", remotePath)
 	}
 
 	return nil
@@ -425,7 +421,7 @@ func runMkdir(cmd *cobra.Command, args []string) error {
 		return enc.Encode(mkdirJSONOutput{Created: remotePath, ID: parentID})
 	}
 
-	statusf(cc.Flags.Quiet, "Created %s\n", remotePath)
+	cc.Statusf("Created %s\n", remotePath)
 
 	return nil
 }
@@ -503,5 +499,3 @@ func printStatText(item *graph.Item) {
 		fmt.Printf("MIME:     %s\n", item.MimeType)
 	}
 }
-
-// (hashFileDisk moved to computeQuickXorHash in internal/sync/observer_local.go)

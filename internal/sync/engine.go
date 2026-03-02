@@ -17,10 +17,6 @@ import (
 // effectively disabling big-delete protection.
 const forceSafetyMax = math.MaxInt32
 
-// staleSessionAge is used by postSyncHousekeeping for session file cleanup.
-// Mirrors the default in driveops.SessionStore.
-const staleSessionAge = 7 * 24 * time.Hour
-
 // EngineConfig holds the options for NewEngine. Uses a struct because
 // seven fields is too many for positional parameters.
 type EngineConfig struct {
@@ -69,7 +65,7 @@ type SyncReport struct {
 }
 
 // Engine orchestrates a complete sync cycle: observe → plan → execute → commit.
-// Single-drive only; multi-drive orchestration is deferred to Phase 5.
+// Single-drive only; multi-drive orchestration is handled by the Orchestrator.
 type Engine struct {
 	baseline        *BaselineManager
 	planner         *Planner
@@ -287,7 +283,7 @@ func (e *Engine) postSyncHousekeeping() {
 	}()
 
 	if e.execCfg.sessionStore != nil {
-		if n, cleanErr := e.execCfg.sessionStore.CleanStale(staleSessionAge); cleanErr != nil {
+		if n, cleanErr := e.execCfg.sessionStore.CleanStale(driveops.StaleSessionAge); cleanErr != nil {
 			e.logger.Warn("stale session cleanup failed", slog.String("error", cleanErr.Error()))
 		} else if n > 0 {
 			e.logger.Info("cleaned stale upload sessions", slog.Int("count", n))
@@ -523,7 +519,7 @@ func (e *Engine) resolveTransfer(ctx context.Context, c *ConflictRecord, actionT
 }
 
 // ---------------------------------------------------------------------------
-// Watch mode (Phase 5.2)
+// Watch mode
 // ---------------------------------------------------------------------------
 
 // Default watch intervals.

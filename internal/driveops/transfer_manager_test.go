@@ -123,11 +123,7 @@ func tmHashBytes(data []byte) string {
 }
 
 func newTestTM(dl Downloader, ul Uploader, store *SessionStore) *TransferManager {
-	tm := NewTransferManager(dl, ul, store, slog.Default())
-	// Override hashFunc to use in-memory computation for test determinism.
-	tm.hashFunc = ComputeQuickXorHash
-
-	return tm
+	return NewTransferManager(dl, ul, store, slog.Default())
 }
 
 // ---------------------------------------------------------------------------

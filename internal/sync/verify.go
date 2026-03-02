@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 )
 
 // Verify status constants (used in VerifyResult.Status).
@@ -96,7 +98,7 @@ func verifyEntry(absPath string, entry *BaselineEntry, logger *slog.Logger) Veri
 		return VerifyResult{Path: entry.Path, Status: VerifyOK}
 	}
 
-	hash, err := computeQuickXorHash(absPath)
+	hash, err := driveops.ComputeQuickXorHash(absPath)
 	if err != nil {
 		logger.Warn("verify: hash failed", slog.String("path", entry.Path), slog.String("error", err.Error()))
 

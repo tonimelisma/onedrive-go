@@ -45,8 +45,6 @@ func (e *Executor) executeDownload(ctx context.Context, action *Action) Outcome 
 	return e.downloadOutcome(action, driveID, result.LocalHash, result.EffectiveRemoteHash, result.Size)
 }
 
-// (download helpers moved to TransferManager in transfer_manager.go)
-
 // downloadOutcome builds a successful Outcome after download.
 func (e *Executor) downloadOutcome(
 	action *Action, driveID driveid.ID, localHash, remoteHash string, size int64,
@@ -119,5 +117,3 @@ func (e *Executor) executeUpload(ctx context.Context, action *Action) Outcome {
 		ETag:       result.Item.ETag,
 	}
 }
-
-// (session upload helpers moved to TransferManager in transfer_manager.go)

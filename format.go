@@ -8,17 +8,11 @@ import (
 	"time"
 )
 
-// statusf prints a status message to stderr unless quiet mode is set.
-func statusf(quiet bool, format string, args ...any) {
-	if !quiet {
+// Statusf prints a status message to stderr unless quiet mode is set.
+func (cc *CLIContext) Statusf(format string, args ...any) {
+	if !cc.Flags.Quiet {
 		fmt.Fprintf(os.Stderr, format, args...)
 	}
-}
-
-// Statusf prints a status message to stderr unless quiet mode is set.
-// Method form of statusf — avoids threading `quiet bool` through call chains.
-func (cc *CLIContext) Statusf(format string, args ...any) {
-	statusf(cc.Flags.Quiet, format, args...)
 }
 
 // Size unit constants for human-readable formatting.
