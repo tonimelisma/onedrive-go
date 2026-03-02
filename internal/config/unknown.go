@@ -20,8 +20,10 @@ var knownGlobalKeys = map[string]bool{
 	"skip_files": true, "skip_dirs": true, "skip_dotfiles": true,
 	"skip_symlinks": true, "max_file_size": true, "sync_paths": true, "ignore_marker": true,
 	// Transfer settings
-	"parallel_downloads": true, "parallel_uploads": true, "parallel_checkers": true,
+	"transfer_workers": true, "check_workers": true,
 	"chunk_size": true, "bandwidth_limit": true, "bandwidth_schedule": true, "transfer_order": true,
+	// Deprecated transfer settings (kept to produce deprecation warning instead of unknown-key error)
+	"parallel_downloads": true, "parallel_uploads": true, "parallel_checkers": true,
 	// Safety settings
 	"big_delete_threshold": true, "big_delete_percentage": true, "big_delete_min_items": true,
 	"min_free_space": true, "use_recycle_bin": true, "use_local_trash": true,
@@ -54,7 +56,7 @@ var knownGlobalKeysList = func() []string {
 // knownDriveKeys are the valid keys inside a drive section.
 var knownDriveKeys = map[string]bool{
 	"sync_dir": true, "paused": true, "paused_until": true, "display_name": true, "owner": true,
-	"remote_path": true, "drive_id": true, "skip_dotfiles": true, "skip_dirs": true,
+	"remote_path": true, "skip_dotfiles": true, "skip_dirs": true,
 	"skip_files": true, "poll_interval": true,
 }
 
@@ -107,20 +109,22 @@ func checkUnknownKeys(md *toml.MetaData) error {
 
 // buildGlobalKeyError creates a descriptive error for an unknown top-level key,
 // optionally suggesting the closest known key. Returns nil if the key is a
-// valid sub-field of a known key (e.g., bandwidth_schedule entries).
+// known key (including deprecated keys that have no struct field but are still
+// accepted) or a valid sub-field of a known key (e.g., bandwidth_schedule entries).
 func buildGlobalKeyError(keyStr string) error {
 	// For nested keys like "bandwidth_schedule.time", extract the leaf.
 	parts := strings.SplitN(keyStr, ".", 2)
 	fieldName := parts[0]
 
-	if len(parts) > 1 {
-		// Nested unknown key — e.g., a sub-field of bandwidth_schedule entries.
-		// These are valid TOML but undecoded because of array-of-tables structure.
-		if knownGlobalKeys[fieldName] {
-			return nil // parent is known, sub-field is expected
-		}
+	// Known key (possibly deprecated — accepted but value ignored).
+	// This handles deprecated keys like parallel_downloads that are in
+	// knownGlobalKeys but no longer have struct fields.
+	if knownGlobalKeys[fieldName] {
+		return nil
 	}
 
+	// Nested unknown keys (sub-fields of bandwidth_schedule, etc.) fall
+	// through to the suggestion path — parent was already checked above.
 	suggestion := closestMatch(fieldName, knownGlobalKeysList)
 	if suggestion != "" {
 		return fmt.Errorf("unknown config key %q — did you mean %q?", fieldName, suggestion)

@@ -11,8 +11,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	stdsync "sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/fsnotify/fsnotify"
 
@@ -84,12 +87,17 @@ func (fw *fsnotifyWrapper) Close() error                  { return fw.w.Close() 
 func (fw *fsnotifyWrapper) Events() <-chan fsnotify.Event { return fw.w.Events }
 func (fw *fsnotifyWrapper) Errors() <-chan error          { return fw.w.Errors }
 
+// defaultCheckWorkers is the default parallel hash goroutine limit when
+// checkWorkers is zero (not configured).
+const defaultCheckWorkers = 4
+
 // LocalObserver walks the local filesystem and produces []ChangeEvent by
 // comparing each entry against the in-memory baseline. Stateless — syncRoot
 // is a parameter of FullScan, allowing reuse across cycles.
 type LocalObserver struct {
 	baseline           *Baseline
 	logger             *slog.Logger
+	checkWorkers       int // parallel hash goroutine limit for FullScan (0 → defaultCheckWorkers)
 	watcherFactory     func() (FsWatcher, error)
 	droppedEvents      atomic.Int64                                     // events dropped by trySend due to full channel
 	lastActivityNano   atomic.Int64                                     // liveness: updated on each event emit (B-125)
@@ -104,13 +112,16 @@ type LocalObserver struct {
 	hashRequests          chan hashRequest       // timer callback → watchLoop
 }
 
-// NewLocalObserver creates a LocalObserver. The baseline must be loaded (from
-// BaselineManager.Load); it is read-only during observation.
-func NewLocalObserver(baseline *Baseline, logger *slog.Logger) *LocalObserver {
+// NewLocalObserver creates a LocalObserver. checkWorkers controls the number
+// of parallel goroutines used for file hashing during FullScan (0 → default 4).
+// The baseline must be loaded (from BaselineManager.Load); it is read-only
+// during observation.
+func NewLocalObserver(baseline *Baseline, logger *slog.Logger, checkWorkers int) *LocalObserver {
 	return &LocalObserver{
-		baseline:  baseline,
-		logger:    logger,
-		sleepFunc: timeSleep,
+		baseline:     baseline,
+		logger:       logger,
+		checkWorkers: checkWorkers,
+		sleepFunc:    timeSleep,
 		safetyTickFunc: func(d time.Duration) (<-chan time.Time, func()) {
 			t := time.NewTicker(d)
 			return t.C, t.Stop
@@ -172,8 +183,33 @@ func (o *LocalObserver) recordActivity() {
 	o.lastActivityNano.Store(time.Now().UnixNano())
 }
 
+// hashJob describes a file that needs hashing during FullScan phase 2.
+type hashJob struct {
+	fsPath    string
+	dbRelPath string
+	name      string
+	size      int64
+	mtime     int64
+	isNew     bool // true for creates, false for modifies
+}
+
+// resolveCheckWorkers returns the effective check worker count.
+func (o *LocalObserver) resolveCheckWorkers() int {
+	if o.checkWorkers > 0 {
+		return o.checkWorkers
+	}
+
+	return defaultCheckWorkers
+}
+
 // FullScan walks the sync root directory and returns change events for all
 // local changes (creates, modifies, deletes) relative to the baseline.
+//
+// Three-phase design:
+//  1. Walk (sequential): collect observed map, emit folder creates, classify
+//     files that need hashing into a hashJob slice.
+//  2. Hash (parallel): errgroup.SetLimit(checkWorkers) hashes files concurrently.
+//  3. Deletion detection (sequential): compare observed vs baseline.
 func (o *LocalObserver) FullScan(ctx context.Context, syncRoot string) ([]ChangeEvent, error) {
 	o.logger.Info("local observer starting full scan",
 		slog.String("sync_root", syncRoot),
@@ -187,11 +223,13 @@ func (o *LocalObserver) FullScan(ctx context.Context, syncRoot string) ([]Change
 		return nil, ErrNosyncGuard
 	}
 
+	// Phase 1: Walk — collect observed paths, folder events, and hash jobs.
 	var events []ChangeEvent
+	var jobs []hashJob
 	observed := make(map[string]bool)
 	scanStartNano := time.Now().UnixNano()
 
-	walkFn := o.makeWalkFunc(ctx, syncRoot, observed, &events, scanStartNano)
+	walkFn := o.makeWalkFunc(ctx, syncRoot, observed, &events, &jobs, scanStartNano)
 	if err := filepath.WalkDir(syncRoot, walkFn); err != nil {
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("sync: local scan canceled: %w", ctx.Err())
@@ -200,6 +238,17 @@ func (o *LocalObserver) FullScan(ctx context.Context, syncRoot string) ([]Change
 		return nil, fmt.Errorf("sync: walking %s: %w", syncRoot, err)
 	}
 
+	// Phase 2: Hash — parallel file hashing.
+	if len(jobs) > 0 {
+		hashEvents, err := o.hashPhase(ctx, jobs)
+		if err != nil {
+			return nil, err
+		}
+
+		events = append(events, hashEvents...)
+	}
+
+	// Phase 3: Deletion detection.
 	deletions := o.detectDeletions(observed)
 	events = append(events, deletions...)
 
@@ -212,10 +261,79 @@ func (o *LocalObserver) FullScan(ctx context.Context, syncRoot string) ([]Change
 	o.logger.Info("local observer completed full scan",
 		slog.Int("events", len(events)),
 		slog.Int("observed", len(observed)),
+		slog.Int("hashed", len(jobs)),
 	)
 
 	if len(events) > 0 {
 		o.recordActivity()
+	}
+
+	return events, nil
+}
+
+// hashPhase runs hash jobs in parallel using errgroup with checkWorkers limit.
+// Returns the resulting change events (creates and modifies with hashes).
+func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]ChangeEvent, error) {
+	workers := o.resolveCheckWorkers()
+
+	o.logger.Debug("starting parallel hash phase",
+		slog.Int("jobs", len(jobs)),
+		slog.Int("workers", workers),
+	)
+
+	var mu stdsync.Mutex
+	var events []ChangeEvent
+
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(workers)
+
+	for _, job := range jobs {
+		g.Go(func() error {
+			if gCtx.Err() != nil {
+				return gCtx.Err()
+			}
+
+			hash, err := computeQuickXorHash(job.fsPath)
+			if err != nil {
+				o.logger.Warn("hash computation failed, emitting event with empty hash",
+					slog.String("path", job.dbRelPath), slog.String("error", err.Error()))
+			}
+
+			// For modifies: check if hash matches baseline (no real change).
+			if !job.isNew && hash != "" {
+				existing, _ := o.baseline.GetByPath(job.dbRelPath)
+				if existing != nil && hash == existing.LocalHash {
+					return nil
+				}
+			}
+
+			changeType := ChangeCreate
+			itemType := ItemTypeFile
+			if !job.isNew {
+				changeType = ChangeModify
+			}
+
+			ev := ChangeEvent{
+				Source:   SourceLocal,
+				Type:     changeType,
+				Path:     job.dbRelPath,
+				Name:     job.name,
+				ItemType: itemType,
+				Size:     job.size,
+				Hash:     hash,
+				Mtime:    job.mtime,
+			}
+
+			mu.Lock()
+			events = append(events, ev)
+			mu.Unlock()
+
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, fmt.Errorf("sync: hash phase: %w", err)
 	}
 
 	return events, nil
@@ -336,10 +454,11 @@ func (o *LocalObserver) addWatchesRecursive(watcher FsWatcher, syncRoot string) 
 }
 
 // makeWalkFunc returns a WalkDirFunc that classifies filesystem entries
-// against the baseline and appends change events.
+// against the baseline. Folder events are appended to events directly.
+// Files that need hashing are appended to jobs for phase 2.
 func (o *LocalObserver) makeWalkFunc(
-	ctx context.Context, syncRoot string, observed map[string]bool, events *[]ChangeEvent,
-	scanStartNano int64,
+	ctx context.Context, syncRoot string, observed map[string]bool,
+	events *[]ChangeEvent, jobs *[]hashJob, scanStartNano int64,
 ) fs.WalkDirFunc {
 	return func(fsPath string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -381,15 +500,16 @@ func (o *LocalObserver) makeWalkFunc(
 			return skipEntry(d)
 		}
 
-		return o.processEntry(fsPath, dbRelPath, name, d, observed, events, scanStartNano)
+		return o.processEntry(fsPath, dbRelPath, name, d, observed, events, jobs, scanStartNano)
 	}
 }
 
 // processEntry reads file info, marks the path as observed, and classifies
-// the local change against the baseline.
+// the local change against the baseline. Folder events are appended to
+// events directly; files that need hashing are appended to jobs for phase 2.
 func (o *LocalObserver) processEntry(
-	fsPath, dbRelPath, name string, d fs.DirEntry, observed map[string]bool, events *[]ChangeEvent,
-	scanStartNano int64,
+	fsPath, dbRelPath, name string, d fs.DirEntry, observed map[string]bool,
+	events *[]ChangeEvent, jobs *[]hashJob, scanStartNano int64,
 ) error {
 	info, err := d.Info()
 	if err != nil {
@@ -401,79 +521,66 @@ func (o *LocalObserver) processEntry(
 
 	observed[dbRelPath] = true
 
-	ev, err := o.classifyLocalChange(fsPath, dbRelPath, name, d, info, scanStartNano)
-	if err != nil {
-		return err
-	}
-
-	if ev != nil {
-		*events = append(*events, *ev)
-	}
-
-	return nil
+	return o.classifyLocalChange(fsPath, dbRelPath, name, d, info, events, jobs, scanStartNano)
 }
 
 // classifyLocalChange determines the change type for a single local entry
-// by comparing it against the baseline.
+// by comparing it against the baseline. Folder events go directly to events;
+// files that need hashing are appended to jobs for the parallel hash phase.
 func (o *LocalObserver) classifyLocalChange(
 	fsPath, dbRelPath, name string, d fs.DirEntry, info fs.FileInfo,
-	scanStartNano int64,
-) (*ChangeEvent, error) {
+	events *[]ChangeEvent, jobs *[]hashJob, scanStartNano int64,
+) error {
 	existing, _ := o.baseline.GetByPath(dbRelPath)
 
 	// No baseline entry — this is a new item.
 	if existing == nil {
-		return o.buildCreateEvent(fsPath, dbRelPath, name, d, info), nil
+		if d.IsDir() {
+			// Folder creates go directly to events (no hashing needed).
+			*events = append(*events, ChangeEvent{
+				Source:   SourceLocal,
+				Type:     ChangeCreate,
+				Path:     dbRelPath,
+				Name:     name,
+				ItemType: ItemTypeFolder,
+				Size:     info.Size(),
+				Mtime:    info.ModTime().UnixNano(),
+			})
+		} else {
+			// New file — needs hashing in phase 2.
+			*jobs = append(*jobs, hashJob{
+				fsPath:    fsPath,
+				dbRelPath: dbRelPath,
+				name:      name,
+				size:      info.Size(),
+				mtime:     info.ModTime().UnixNano(),
+				isNew:     true,
+			})
+		}
+
+		return nil
 	}
 
 	// Existing folder — OS-level mtime changes (e.g. adding a file) are noise;
 	// the contained files generate their own events.
 	if d.IsDir() {
-		return nil, nil
+		return nil
 	}
 
-	return o.classifyFileChange(fsPath, dbRelPath, name, info, existing, scanStartNano)
-}
-
-// buildCreateEvent constructs a ChangeCreate event for a new local entry.
-func (o *LocalObserver) buildCreateEvent(
-	fsPath, dbRelPath, name string, d fs.DirEntry, info fs.FileInfo,
-) *ChangeEvent {
-	ev := ChangeEvent{
-		Source:   SourceLocal,
-		Type:     ChangeCreate,
-		Path:     dbRelPath,
-		Name:     name,
-		ItemType: itemTypeFromDirEntry(d),
-		Size:     info.Size(),
-		Mtime:    info.ModTime().UnixNano(),
-	}
-
-	// Compute hash for files (folders have no content hash).
-	if !d.IsDir() {
-		hash, err := computeQuickXorHash(fsPath)
-		if err != nil {
-			o.logger.Warn("hash computation failed for new file, emitting event with empty hash",
-				slog.String("path", dbRelPath), slog.String("error", err.Error()))
-		} else {
-			ev.Hash = hash
-		}
-	}
-
-	return &ev
+	return o.classifyFileChange(fsPath, dbRelPath, name, info, existing, jobs, scanStartNano)
 }
 
 // classifyFileChange compares a file against its baseline entry to detect
-// content modifications. Uses mtime+size as a fast path — only computes
-// the content hash when metadata suggests a change. This is the industry
-// standard (rsync, rclone, Syncthing, Git all use this pattern). Includes
-// a racily-clean guard: files whose mtime is within 1 second of scan
-// start are always hashed, because they may have been modified in the
-// same clock tick as the last sync (Git's "racily clean" problem).
+// content modifications. Uses mtime+size as a fast path — only adds a hash
+// job when metadata suggests a change. This is the industry standard
+// (rsync, rclone, Syncthing, Git all use this pattern). Includes a
+// racily-clean guard: files whose mtime is within 1 second of scan start
+// are always hashed, because they may have been modified in the same clock
+// tick as the last sync (Git's "racily clean" problem).
 func (o *LocalObserver) classifyFileChange(
 	fsPath, dbRelPath, name string, info fs.FileInfo, base *BaselineEntry,
-	scanStartNano int64,
-) (*ChangeEvent, error) {
+	jobs *[]hashJob, scanStartNano int64,
+) error {
 	currentMtime := info.ModTime().UnixNano()
 	currentSize := info.Size()
 
@@ -486,33 +593,24 @@ func (o *LocalObserver) classifyFileChange(
 			o.logger.Debug("fast path: mtime+size match, skipping hash",
 				slog.String("path", dbRelPath))
 
-			return nil, nil //nolint:nilnil
+			return nil
 		}
 
 		o.logger.Debug("racily clean file, forcing hash check",
 			slog.String("path", dbRelPath))
 	}
 
-	// Slow path: metadata differs (or racily clean) — compute hash.
-	hash, err := computeQuickXorHash(fsPath)
-	if err != nil {
-		o.logger.Warn("hash computation failed for modified file, emitting event with empty hash",
-			slog.String("path", dbRelPath), slog.String("error", err.Error()))
-	} else if hash == base.LocalHash {
-		// Hash matches baseline — file is unchanged despite metadata difference.
-		return nil, nil //nolint:nilnil
-	}
+	// Slow path: metadata differs (or racily clean) — queue for hash phase.
+	*jobs = append(*jobs, hashJob{
+		fsPath:    fsPath,
+		dbRelPath: dbRelPath,
+		name:      name,
+		size:      currentSize,
+		mtime:     currentMtime,
+		isNew:     false,
+	})
 
-	return &ChangeEvent{
-		Source:   SourceLocal,
-		Type:     ChangeModify,
-		Path:     dbRelPath,
-		Name:     name,
-		ItemType: ItemTypeFile,
-		Size:     currentSize,
-		Hash:     hash,
-		Mtime:    currentMtime,
-	}, nil
+	return nil
 }
 
 // detectDeletions finds baseline entries that were not observed during the

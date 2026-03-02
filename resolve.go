@@ -66,17 +66,15 @@ func runResolve(cmd *cobra.Command, args []string) error {
 	}
 
 	ctx := cmd.Context()
-
 	cc := mustCLIContext(ctx)
-	quiet := cc.Flags.Quiet
 
 	// keep_both doesn't need graph client — just DB update.
 	if resolution == resolutionKeepBoth {
-		return resolveKeepBothOnly(ctx, args, resolveAll, dryRun, quiet)
+		return resolveKeepBothOnly(ctx, cc, args, resolveAll, dryRun)
 	}
 
 	// keep_local and keep_remote need graph client for transfers.
-	return resolveWithTransfers(ctx, args, resolution, resolveAll, dryRun, quiet)
+	return resolveWithTransfers(ctx, cc, args, resolution, resolveAll, dryRun)
 }
 
 // resolveStrategy returns the chosen resolution string from flags.
@@ -100,9 +98,7 @@ func resolveStrategy(cmd *cobra.Command) (string, error) {
 }
 
 // resolveKeepBothOnly handles keep_both resolution which only needs the DB.
-func resolveKeepBothOnly(ctx context.Context, args []string, all, dryRun, quiet bool) error {
-	cc := mustCLIContext(ctx)
-
+func resolveKeepBothOnly(ctx context.Context, cc *CLIContext, args []string, all, dryRun bool) error {
 	dbPath := cc.Cfg.StatePath()
 	if dbPath == "" {
 		return fmt.Errorf("cannot determine state DB path for drive %q", cc.Cfg.CanonicalID)
@@ -115,27 +111,27 @@ func resolveKeepBothOnly(ctx context.Context, args []string, all, dryRun, quiet 
 	defer mgr.Close()
 
 	if all {
-		return resolveAllKeepBoth(ctx, mgr, dryRun, quiet)
+		return resolveAllKeepBoth(ctx, cc, mgr, dryRun)
 	}
 
-	return resolveSingleKeepBoth(ctx, mgr, args[0], dryRun, quiet)
+	return resolveSingleKeepBoth(ctx, cc, mgr, args[0], dryRun)
 }
 
 // resolveEachConflict iterates conflicts and calls resolveFn for each non-dry-run
 // resolution. Extracted to deduplicate resolveAllKeepBoth and resolveAllWithEngine.
 func resolveEachConflict(
-	conflicts []sync.ConflictRecord, resolution string, dryRun, quiet bool,
+	cc *CLIContext, conflicts []sync.ConflictRecord, resolution string, dryRun bool,
 	resolveFn func(id, resolution string) error,
 ) error {
 	if len(conflicts) == 0 {
-		statusf(quiet, "No unresolved conflicts.\n")
+		cc.Statusf("No unresolved conflicts.\n")
 		return nil
 	}
 
 	for i := range conflicts {
 		c := &conflicts[i]
 		if dryRun {
-			statusf(quiet, "Would resolve %s (%s) as %s\n", c.Path, truncateID(c.ID), resolution)
+			cc.Statusf("Would resolve %s (%s) as %s\n", c.Path, truncateID(c.ID), resolution)
 			continue
 		}
 
@@ -143,25 +139,25 @@ func resolveEachConflict(
 			return fmt.Errorf("resolving %s: %w", c.Path, err)
 		}
 
-		statusf(quiet, "Resolved %s as %s\n", c.Path, resolution)
+		cc.Statusf("Resolved %s as %s\n", c.Path, resolution)
 	}
 
 	return nil
 }
 
-func resolveAllKeepBoth(ctx context.Context, mgr *sync.BaselineManager, dryRun, quiet bool) error {
+func resolveAllKeepBoth(ctx context.Context, cc *CLIContext, mgr *sync.BaselineManager, dryRun bool) error {
 	conflicts, err := mgr.ListConflicts(ctx)
 	if err != nil {
 		return err
 	}
 
-	return resolveEachConflict(conflicts, resolutionKeepBoth, dryRun, quiet, func(id, resolution string) error {
+	return resolveEachConflict(cc, conflicts, resolutionKeepBoth, dryRun, func(id, resolution string) error {
 		return mgr.ResolveConflict(ctx, id, resolution)
 	})
 }
 
-func resolveSingleKeepBoth(ctx context.Context, mgr *sync.BaselineManager, idOrPath string, dryRun, quiet bool) error {
-	return resolveSingleConflict(idOrPath, resolutionKeepBoth, dryRun, quiet,
+func resolveSingleKeepBoth(ctx context.Context, cc *CLIContext, mgr *sync.BaselineManager, idOrPath string, dryRun bool) error {
+	return resolveSingleConflict(cc, idOrPath, resolutionKeepBoth, dryRun,
 		func() ([]sync.ConflictRecord, error) { return mgr.ListConflicts(ctx) },
 		func(id, resolution string) error { return mgr.ResolveConflict(ctx, id, resolution) },
 	)
@@ -169,42 +165,39 @@ func resolveSingleKeepBoth(ctx context.Context, mgr *sync.BaselineManager, idOrP
 
 // resolveWithTransfers handles keep_local and keep_remote which need graph client.
 func resolveWithTransfers(
-	ctx context.Context, args []string, resolution string, all, dryRun, quiet bool,
+	ctx context.Context, cc *CLIContext, args []string, resolution string, all, dryRun bool,
 ) error {
-	cc := mustCLIContext(ctx)
-	logger := cc.Logger
-
 	session, err := NewDriveSession(ctx, cc.Cfg, cc.RawConfig, cc.Logger)
 	if err != nil {
 		return err
 	}
 
-	engine, err := newSyncEngine(session, cc.Cfg, false, logger)
+	engine, err := newSyncEngine(session, cc.Cfg, false, cc.Logger)
 	if err != nil {
 		return err
 	}
 	defer engine.Close()
 
 	if all {
-		return resolveAllWithEngine(ctx, engine, resolution, dryRun, quiet)
+		return resolveAllWithEngine(ctx, cc, engine, resolution, dryRun)
 	}
 
-	return resolveSingleWithEngine(ctx, engine, args[0], resolution, dryRun, quiet)
+	return resolveSingleWithEngine(ctx, cc, engine, args[0], resolution, dryRun)
 }
 
-func resolveAllWithEngine(ctx context.Context, engine *sync.Engine, resolution string, dryRun, quiet bool) error {
+func resolveAllWithEngine(ctx context.Context, cc *CLIContext, engine *sync.Engine, resolution string, dryRun bool) error {
 	conflicts, err := engine.ListConflicts(ctx)
 	if err != nil {
 		return err
 	}
 
-	return resolveEachConflict(conflicts, resolution, dryRun, quiet, func(id, res string) error {
+	return resolveEachConflict(cc, conflicts, resolution, dryRun, func(id, res string) error {
 		return engine.ResolveConflict(ctx, id, res)
 	})
 }
 
-func resolveSingleWithEngine(ctx context.Context, engine *sync.Engine, idOrPath, resolution string, dryRun, quiet bool) error {
-	return resolveSingleConflict(idOrPath, resolution, dryRun, quiet,
+func resolveSingleWithEngine(ctx context.Context, cc *CLIContext, engine *sync.Engine, idOrPath, resolution string, dryRun bool) error {
+	return resolveSingleConflict(cc, idOrPath, resolution, dryRun,
 		func() ([]sync.ConflictRecord, error) { return engine.ListConflicts(ctx) },
 		func(id, res string) error { return engine.ResolveConflict(ctx, id, res) },
 	)
@@ -214,7 +207,7 @@ func resolveSingleWithEngine(ctx context.Context, engine *sync.Engine, idOrPath,
 // Extracted to deduplicate resolveSingleKeepBoth and resolveSingleWithEngine.
 // Context is captured by the listFn/resolveFn closures, not passed directly.
 func resolveSingleConflict(
-	idOrPath, resolution string, dryRun, quiet bool,
+	cc *CLIContext, idOrPath, resolution string, dryRun bool,
 	listFn func() ([]sync.ConflictRecord, error),
 	resolveFn func(id, resolution string) error,
 ) error {
@@ -233,7 +226,7 @@ func resolveSingleConflict(
 	}
 
 	if dryRun {
-		statusf(quiet, "Would resolve %s (%s) as %s\n", target.Path, truncateID(target.ID), resolution)
+		cc.Statusf("Would resolve %s (%s) as %s\n", target.Path, truncateID(target.ID), resolution)
 		return nil
 	}
 
@@ -241,7 +234,7 @@ func resolveSingleConflict(
 		return err
 	}
 
-	statusf(quiet, "Resolved %s as %s\n", target.Path, resolution)
+	cc.Statusf("Resolved %s as %s\n", target.Path, resolution)
 
 	return nil
 }

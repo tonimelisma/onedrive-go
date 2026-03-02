@@ -52,10 +52,10 @@ Code quality and architecture improvements for the root package. Root package at
 | ~~B-224~~ | ~~Eliminate global flag variables (`flagJSON`, `flagVerbose`, etc.)~~ | ~~P1~~ | **DONE** — Phase 6.0a. Two-phase CLIContext: `CLIFlags` struct populated for all commands (Phase 1), config resolved for data commands (Phase 2). Zero global flag variables. |
 | ~~B-227~~ | ~~Deduplicate sync_dir and StatePath validation across commands~~ | ~~P3~~ | **DONE** — Post-6.0a hardening. `newSyncEngine()` helper validates syncDir/statePath and builds `EngineConfig`. Replaces boilerplate in `sync.go` and `resolve.go`. |
 | ~~B-228~~ | ~~`buildLogger` silent fallthrough on unknown log level~~ | ~~P3~~ | Fixed in Phase 5.5: added `warn` case and `default` with stderr warning. |
-| B-232 | Test coverage for `loadConfig` error paths | P3 | Invalid TOML, ambiguous drive, wrong context type, unknown log level. |
+| ~~B-232~~ | ~~Test coverage for `loadConfig` error paths~~ | ~~P3~~ | **DONE** — Phase 6.0c. Tests for invalid TOML, ambiguous drive, unknown log level in `root_test.go`. |
 | B-036 | Extract CLI service layer for testability | P4 | Root package at 39.9% coverage. Deferred — service layer extraction premature before Orchestrator (Phase 6.0b+). |
-| B-229 | `syncModeFromFlags` uses `Changed` instead of `GetBool` | P4 | Subtle Cobra invariant. Document or fix. |
-| B-230 | `printSyncReport` repetitive formatting | P4 | Extract `printNonZero` helper. |
+| ~~B-229~~ | ~~`syncModeFromFlags` uses `Changed` instead of `GetBool`~~ | ~~P4~~ | **DONE** — Phase 6.0c. Documented as intentional Cobra pattern in comment. |
+| ~~B-230~~ | ~~`printSyncReport` repetitive formatting~~ | ~~P4~~ | **DONE** — Phase 6.0c. Extracted `printNonZero` helper. |
 | B-233 | `version` string concatenation in two places | P4 | Minor duplication. Fixed by `DriveSession` (B-223). |
 
 ## Hardening: Graph API
@@ -74,7 +74,7 @@ Edge cases and correctness for `internal/graph/`.
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
 | B-284 | `write.go` config writer uses fragile line-based TOML editing | P3 | Regex line matching instead of TOML AST. Unusual hand-edited formatting could silently produce wrong results. Consider TOML AST library for writes. |
-| B-288 | `quiet` parameter threading across 11 functions | P4 | 11 functions accept `quiet bool` just to forward to `statusf`. Refactor to `statusWriter` or `cc.Statusf()`. Best done alongside 6.0b Orchestrator when these functions are already being touched. |
+| ~~B-288~~ | ~~`quiet` parameter threading across 11 functions~~ | ~~P4~~ | **DONE** — Phase 6.0c. Added `CLIContext.Statusf()` method. Refactored resume.go, pause.go, resolve.go, sync.go to pass `cc *CLIContext` instead of `quiet bool`. |
 | B-287 | Symlink-aware sync_dir overlap warning | P4 | Log warning when `filepath.EvalSymlinks` resolves differently from configured path. Cosmetic safety — lexical overlap check in `checkSyncDirOverlap()` is sufficient for correctness. |
 
 ## Hardening: Test Infrastructure

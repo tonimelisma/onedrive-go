@@ -500,10 +500,10 @@ Each DriveRunner wraps its own Engine with its own observers, buffer, planner, t
 Per-request Retry-After + exponential backoff with jitter. No shared gate across workers or drives. This is the industry standard (rclone, abraunegg/onedrive). With <=8 workers per drive, thundering herd is minimal. Each worker's jitter desynchronizes retries naturally.
 
 ### Two concurrency knobs: transfer_workers and check_workers
-`transfer_workers` (default 8, range 4-64): concurrent file operations (downloads, uploads, renames, deletes, mkdirs). Split internally into interactive/bulk/shared lanes. `check_workers` (default 4, range 1-16): global semaphore for concurrent QuickXorHash computation. CPU-bound, independent of network I/O. Old keys (`parallel_downloads`, `parallel_uploads`, `parallel_checkers`) deprecated.
+`transfer_workers` (default 8, range 4-64): concurrent file operations (downloads, uploads, renames, deletes, mkdirs). Flat worker pool — lanes were removed in 6.0c (no proven benefit, added complexity). `check_workers` (default 4, range 1-16): `errgroup.SetLimit` for concurrent QuickXorHash computation in FullScan. CPU-bound, independent of network I/O. Old keys (`parallel_downloads`, `parallel_uploads`, `parallel_checkers`) deprecated via `WarnDeprecatedKeys()`.
 
-### Worker budget uses proportional allocation with minPerDrive floor
-`globalCap = config.transfer_workers`. Per-drive: `weight = max(1, baselineFileCount)`, `allocation = max(4, globalCap * weight / totalWeight)`. Scale down if sum > globalCap due to floors. N=1: full globalCap. Rebalanced on SIGHUP when drives change.
+### Worker budget: fixed allocation (budget algorithm deferred)
+Each Engine gets full `transfer_workers` and `check_workers` from config directly. No per-drive budget splitting. Proportional allocation by baseline file count is a future increment.
 
 ### SyncRoot overlap must be validated at both config and runtime
 `checkSyncDirOverlap(cfg)` uses `filepath.Clean` + `strings.HasPrefix` with separator suffix (prevents false match on prefix-named dirs). Called from `validateDrives()` at config load AND `Orchestrator.Start()` for runtime defaults. Symlink resolution is lexical only — known limitation.
@@ -526,17 +526,32 @@ Per-request Retry-After + exponential backoff with jitter. No shared gate across
 ### Orchestrator is the single entry point for sync
 `sync.NewOrchestrator(cfg)` takes `OrchestratorConfig` with raw config, resolved drives, HTTP clients, and logger. `RunOnce(ctx, mode, opts)` resolves tokens, creates clients (pooled by token path), creates engines (via injectable `engineFactory`), and launches `DriveRunner` goroutines. Returns `[]*DriveReport` (no error return — per-drive errors are in `DriveReport.Err`). The CLI calls `driveReportsError()` to extract a single error for the exit code.
 
-### DriveID is cached in token metadata at login
-`discoverAccount()` returns the primary drive ID, which `runLogin()` saves as `drive_id` in the token file metadata. `buildResolvedDrive()` reads it from token meta when the config has no explicit `drive_id`. This eliminates runtime discovery — both the Orchestrator and `NewDriveSession` error on zero DriveID instead of calling `client.Drives()`. `NewEngine` also rejects zero DriveID as defense in depth. Originally the Orchestrator had an injectable `driveDiscoveryFn` for this, but it was removed as unnecessary once caching was in place.
+### DriveID is cached in token metadata at login — NEVER in config
+`discoverAccount()` returns the primary drive ID, which `runLogin()` saves as `drive_id` in the token file metadata via `tokenfile.LoadAndMergeMeta()`. `buildResolvedDrive()` reads it exclusively from token metadata. Drive ID is NEVER stored in the TOML config file — the `Drive` struct has no `DriveID` field. Both the Orchestrator and `NewDriveSession` error on zero DriveID instead of calling `client.Drives()`. `NewEngine` also rejects zero DriveID as defense in depth.
 
 ### sync command skips PersistentPreRunE Phase 2
 `sync` has `skipConfigAnnotation` because it needs multi-drive resolution via `config.ResolveDrives()` instead of single-drive `config.ResolveDrive()`. It loads raw config from `cc.CfgPath` and resolves drives itself. Phase 1 fields (Flags, Logger, CfgPath, Env) are still available. Config-file `log_level` is not applied for sync (CLI flags still work); per-drive loggers are a 6.0c improvement.
 
-### Watch mode bridge (temporary, 6.0c replaces)
-`sync --watch` routes through `runSyncWatchBridge()` which creates a single `DriveSession` + `newSyncEngine` + `runSyncWatch` using the pre-Orchestrator path. Multi-drive watch returns "not yet supported (Phase 6.0c)". The bridge is removed when Orchestrator gains `RunWatch`.
+### Watch mode routes through Orchestrator.RunWatch
+`sync --watch` calls `runSyncDaemon()` which creates an Orchestrator with SIGHUP channel and calls `RunWatch(ctx, mode, opts)`. Each drive gets its own goroutine running `engine.RunWatch()`. SIGHUP triggers `reload()`: re-read config, clear expired timed pauses, diff active drive set, stop removed/paused, start added/resumed. PID file prevents duplicate daemons.
 
 ### DriveRunner.run() uses function injection for testability
 `DriveRunner.run(ctx, fn)` accepts `func(ctx) (*SyncReport, error)` instead of calling `engine.RunOnce` directly. The Orchestrator binds `engine.RunOnce(ctx, mode, opts)` to a closure. This enables testing panic recovery without real Engines or SQLite databases.
+
+### Lane removal rationale
+DepTracker originally dispatched to `interactive` and `bulk` channels, with WorkerPool allocating workers across three lanes (interactive/bulk/shared). This added constants, routing logic, and `isLargeTransfer()`/`actionSize()` helpers with no proven benefit — all actions went through the same workers regardless of size. Removed in 6.0c: single `Ready()` channel, flat worker pool. Lane-based fairness can be re-added later if profiling shows starvation.
+
+### FullScan three-phase pattern
+LocalObserver.FullScan uses three sequential phases: (1) Walk: readdir + Lstat + classify + fast-path skip for unchanged files, (2) Hash: `errgroup.SetLimit(checkWorkers)` for parallel QuickXorHash, (3) Deletion detection: compare observed paths vs baseline. Phases are sequential but phase 2 is internally parallel. This avoids holding file handles during hashing and simplifies error handling.
+
+### SIGHUP reload: pause closes, resume creates
+Pausing a drive means its Engine stops (context canceled). Resume creates a new Engine. No semaphore tricks or in-place state manipulation. The Orchestrator's `reload()` treats it as a simple diff: paused drive disappears from the active set → runner stopped; unpaused drive appears → new runner started.
+
+### 429 is graph.Client-only — never conflate with AIMD
+429 rate limiting is handled entirely within `graph.Client` at the HTTP layer: per-request Retry-After + exponential backoff + jitter, max 5 retries. This is completely independent of worker concurrency management. AIMD (future Phase 8.1) will tune worker count for local resource efficiency (CPU, disk I/O, throughput), not for 429 responses.
+
+### Map value copy bug in range loops
+Go's `for k, v := range m` copies each value. If `v` is a struct with pointer fields and you modify those pointers, the modifications affect the copy only — not the map entry. Must write back: `m[k] = v`. Caught by `gocritic:rangeValCopy` lint. In `clearExpiredPauses`, setting `d.Paused = nil` on a copied `DriveConfig` had no effect until fixed with `cfg.Drives[cid] = d`.
 
 ### DriveTypeShared needs explicit handling in every drive-type switch
 `BaseSyncDir()`, `DefaultSyncDir()`, `DriveTokenPath()`, `CollectOtherSyncDirs()` — all need shared drive cases. Missing cases return "" or empty, causing silent failures. Check all type-switch statements when adding new drive types.

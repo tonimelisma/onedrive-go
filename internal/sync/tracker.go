@@ -10,8 +10,8 @@ import (
 // Package-level API documentation for tracker.go (B-145):
 //
 // DepTracker is an in-memory dependency graph that dispatches sync actions
-// to lane-based worker channels as their dependencies are satisfied. It
-// bridges the planner's ActionPlan and the WorkerPool:
+// to a single ready channel as their dependencies are satisfied. It bridges
+// the planner's ActionPlan and the WorkerPool:
 //
 //   - Add(): Insert an action with its sequential ID and dependency IDs.
 //     If all deps are satisfied, the action is dispatched immediately.
@@ -19,15 +19,11 @@ import (
 //     and dispatch any dependents that become ready. Advances per-cycle
 //     completion tracking for delta token commits (B-121).
 //   - HasInFlight() / CancelByPath(): Deduplication for watch mode (B-122).
-//   - Interactive() / Bulk(): Lane channels consumed by WorkerPool.
+//   - Ready(): Single channel consumed by WorkerPool.
 //   - CycleDone() / CleanupCycle(): Per-cycle lifecycle for watch mode.
 //
 // Two constructors: NewDepTracker (one-shot, Done() fires when all complete)
 // and NewPersistentDepTracker (watch mode, workers exit via ctx cancellation).
-
-// smallFileThreshold is the size boundary for routing actions to the
-// interactive lane (below) vs the bulk lane (at or above).
-const smallFileThreshold = 10 * 1024 * 1024 // 10 MB
 
 // watchChanBuf is the channel buffer size for persistent-mode trackers.
 // Large enough to absorb typical watch batches without blocking dispatch.
@@ -56,21 +52,20 @@ type cycleTracker struct {
 	done      chan struct{}
 }
 
-// DepTracker is an in-memory dependency graph that dispatches actions to
-// lane-based channels as their dependencies are satisfied. It is populated
+// DepTracker is an in-memory dependency graph that dispatches actions to a
+// single ready channel as their dependencies are satisfied. It is populated
 // from the planner's ActionPlan and driven to completion by worker
 // Complete() calls.
 type DepTracker struct {
-	mu          stdsync.Mutex
-	actions     map[int64]*TrackedAction // sequential ID → tracked action
-	byPath      map[string]*TrackedAction
-	interactive chan *TrackedAction
-	bulk        chan *TrackedAction
-	done        chan struct{} // closed when all actions complete (one-shot mode only)
-	total       atomic.Int32
-	completed   atomic.Int32
-	persistent  bool // when true, Done() never fires; workers exit on ctx.Done()
-	logger      *slog.Logger
+	mu         stdsync.Mutex
+	actions    map[int64]*TrackedAction // sequential ID → tracked action
+	byPath     map[string]*TrackedAction
+	ready      chan *TrackedAction
+	done       chan struct{} // closed when all actions complete (one-shot mode only)
+	total      atomic.Int32
+	completed  atomic.Int32
+	persistent bool // when true, Done() never fires; workers exit on ctx.Done()
+	logger     *slog.Logger
 
 	// Per-cycle completion tracking for watch mode (B-121).
 	cyclesMu    stdsync.Mutex
@@ -78,15 +73,13 @@ type DepTracker struct {
 	cycleLookup map[int64]string // action ID → cycle ID
 }
 
-// NewDepTracker creates a tracker with the given channel buffer sizes.
-// Current callers pass len(plan.Actions) for both buffers, so dispatch()
-// never blocks.
-func NewDepTracker(interactiveBuf, bulkBuf int, logger *slog.Logger) *DepTracker {
+// NewDepTracker creates a tracker with the given channel buffer size.
+// Current callers pass len(plan.Actions) so dispatch() never blocks.
+func NewDepTracker(bufSize int, logger *slog.Logger) *DepTracker {
 	return &DepTracker{
 		actions:     make(map[int64]*TrackedAction),
 		byPath:      make(map[string]*TrackedAction),
-		interactive: make(chan *TrackedAction, interactiveBuf),
-		bulk:        make(chan *TrackedAction, bulkBuf),
+		ready:       make(chan *TrackedAction, bufSize),
 		done:        make(chan struct{}),
 		logger:      logger,
 		cycles:      make(map[string]*cycleTracker),
@@ -101,8 +94,7 @@ func NewPersistentDepTracker(logger *slog.Logger) *DepTracker {
 	return &DepTracker{
 		actions:     make(map[int64]*TrackedAction),
 		byPath:      make(map[string]*TrackedAction),
-		interactive: make(chan *TrackedAction, watchChanBuf),
-		bulk:        make(chan *TrackedAction, watchChanBuf),
+		ready:       make(chan *TrackedAction, watchChanBuf),
 		done:        make(chan struct{}),
 		persistent:  true,
 		logger:      logger,
@@ -306,14 +298,9 @@ func (dt *DepTracker) InFlightCount() int {
 	return int(dt.total.Load() - dt.completed.Load())
 }
 
-// Interactive returns the channel for small/interactive actions.
-func (dt *DepTracker) Interactive() <-chan *TrackedAction {
-	return dt.interactive
-}
-
-// Bulk returns the channel for large/bulk transfer actions.
-func (dt *DepTracker) Bulk() <-chan *TrackedAction {
-	return dt.bulk
+// Ready returns the channel for all ready actions.
+func (dt *DepTracker) Ready() <-chan *TrackedAction {
+	return dt.ready
 }
 
 // Done returns a channel that is closed when all tracked actions complete.
@@ -323,42 +310,7 @@ func (dt *DepTracker) Done() <-chan struct{} {
 	return dt.done
 }
 
-// dispatch routes a ready action to the appropriate lane channel based on
-// file size and action type. Non-transfer actions always go to interactive.
+// dispatch sends a ready action to the ready channel.
 func (dt *DepTracker) dispatch(ta *TrackedAction) {
-	if isLargeTransfer(ta) {
-		dt.bulk <- ta
-		return
-	}
-
-	dt.interactive <- ta
-}
-
-// isLargeTransfer returns true if the action is a download or upload with
-// a size at or above the small file threshold.
-func isLargeTransfer(ta *TrackedAction) bool {
-	switch ta.Action.Type { //nolint:exhaustive // only transfers route to bulk
-	case ActionDownload, ActionUpload:
-		return actionSize(ta) >= smallFileThreshold
-	default:
-		return false
-	}
-}
-
-// actionSize extracts the file size from the action's view, preferring
-// remote state for downloads and local state for uploads.
-func actionSize(ta *TrackedAction) int64 {
-	if ta.Action.View == nil {
-		return 0
-	}
-
-	if ta.Action.View.Remote != nil {
-		return ta.Action.View.Remote.Size
-	}
-
-	if ta.Action.View.Local != nil {
-		return ta.Action.View.Local.Size
-	}
-
-	return 0
+	dt.ready <- ta
 }

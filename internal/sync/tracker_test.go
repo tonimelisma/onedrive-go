@@ -13,7 +13,7 @@ import (
 func TestDepTracker_NoDeps(t *testing.T) {
 	t.Parallel()
 
-	dt := NewDepTracker(10, 10, testLogger(t))
+	dt := NewDepTracker(10, testLogger(t))
 
 	dt.Add(&Action{
 		Type: ActionFolderCreate, Path: "dir",
@@ -21,19 +21,19 @@ func TestDepTracker_NoDeps(t *testing.T) {
 	}, 1, nil, "")
 
 	select {
-	case ta := <-dt.Interactive():
+	case ta := <-dt.Ready():
 		if ta.ID != 1 {
 			t.Errorf("ID = %d, want 1", ta.ID)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("timeout waiting for action on interactive channel")
+		t.Fatal("timeout waiting for action on ready channel")
 	}
 }
 
 func TestDepTracker_DependencyChain(t *testing.T) {
 	t.Parallel()
 
-	dt := NewDepTracker(10, 10, testLogger(t))
+	dt := NewDepTracker(10, testLogger(t))
 
 	// Action 1: no deps.
 	dt.Add(&Action{
@@ -49,7 +49,7 @@ func TestDepTracker_DependencyChain(t *testing.T) {
 
 	// Only action 1 should be dispatched.
 	select {
-	case ta := <-dt.Interactive():
+	case ta := <-dt.Ready():
 		if ta.ID != 1 {
 			t.Fatalf("expected action 1, got %d", ta.ID)
 		}
@@ -59,7 +59,7 @@ func TestDepTracker_DependencyChain(t *testing.T) {
 
 	// Action 2 should not be dispatched yet.
 	select {
-	case ta := <-dt.Interactive():
+	case ta := <-dt.Ready():
 		t.Fatalf("action %d dispatched too early", ta.ID)
 	case <-time.After(50 * time.Millisecond):
 		// Expected — action 2 still blocked.
@@ -69,7 +69,7 @@ func TestDepTracker_DependencyChain(t *testing.T) {
 	dt.Complete(1)
 
 	select {
-	case ta := <-dt.Interactive():
+	case ta := <-dt.Ready():
 		if ta.ID != 2 {
 			t.Fatalf("expected action 2, got %d", ta.ID)
 		}
@@ -78,79 +78,10 @@ func TestDepTracker_DependencyChain(t *testing.T) {
 	}
 }
 
-func TestDepTracker_BulkLane(t *testing.T) {
-	t.Parallel()
-
-	dt := NewDepTracker(10, 10, testLogger(t))
-
-	// Large download (above threshold) should go to bulk.
-	dt.Add(&Action{
-		Type: ActionDownload, Path: "big.bin",
-		DriveID: driveid.New("d"), ItemID: "i1",
-		View: &PathView{
-			Remote: &RemoteState{Size: 20 * 1024 * 1024}, // 20 MB
-		},
-	}, 1, nil, "")
-
-	select {
-	case ta := <-dt.Bulk():
-		if ta.ID != 1 {
-			t.Errorf("ID = %d, want 1", ta.ID)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timeout waiting for action on bulk channel")
-	}
-}
-
-func TestDepTracker_SmallTransferInteractive(t *testing.T) {
-	t.Parallel()
-
-	dt := NewDepTracker(10, 10, testLogger(t))
-
-	// Small upload (below threshold) should go to interactive.
-	dt.Add(&Action{
-		Type: ActionUpload, Path: "small.txt",
-		DriveID: driveid.New("d"), ItemID: "i1",
-		View: &PathView{
-			Local: &LocalState{Size: 100},
-		},
-	}, 1, nil, "")
-
-	select {
-	case ta := <-dt.Interactive():
-		if ta.ID != 1 {
-			t.Errorf("ID = %d, want 1", ta.ID)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timeout waiting for action on interactive channel")
-	}
-}
-
-func TestDepTracker_NonTransferAlwaysInteractive(t *testing.T) {
-	t.Parallel()
-
-	dt := NewDepTracker(10, 10, testLogger(t))
-
-	// Delete action should always go to interactive regardless of view.
-	dt.Add(&Action{
-		Type: ActionLocalDelete, Path: "del.txt",
-		DriveID: driveid.New("d"), ItemID: "i1",
-	}, 1, nil, "")
-
-	select {
-	case ta := <-dt.Interactive():
-		if ta.ID != 1 {
-			t.Errorf("ID = %d, want 1", ta.ID)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timeout waiting for action on interactive channel")
-	}
-}
-
 func TestDepTracker_DoneSignal(t *testing.T) {
 	t.Parallel()
 
-	dt := NewDepTracker(10, 10, testLogger(t))
+	dt := NewDepTracker(10, testLogger(t))
 
 	dt.Add(&Action{
 		Type: ActionFolderCreate, Path: "a",
@@ -162,10 +93,10 @@ func TestDepTracker_DoneSignal(t *testing.T) {
 		DriveID: driveid.New("d"), ItemID: "i2",
 	}, 2, []int64{1}, "")
 
-	// Drain interactive.
-	<-dt.Interactive()
+	// Drain ready channel.
+	<-dt.Ready()
 	dt.Complete(1)
-	<-dt.Interactive()
+	<-dt.Ready()
 	dt.Complete(2)
 
 	select {
@@ -179,14 +110,14 @@ func TestDepTracker_DoneSignal(t *testing.T) {
 func TestDepTracker_CancelByPath(t *testing.T) {
 	t.Parallel()
 
-	dt := NewDepTracker(10, 10, testLogger(t))
+	dt := NewDepTracker(10, testLogger(t))
 
 	dt.Add(&Action{
 		Type: ActionDownload, Path: "cancel-me.txt",
 		DriveID: driveid.New("d"), ItemID: "i1",
 	}, 1, nil, "")
 
-	ta := <-dt.Interactive()
+	ta := <-dt.Ready()
 
 	// Simulate a worker setting the cancel func.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -205,7 +136,7 @@ func TestDepTracker_CancelByPath(t *testing.T) {
 func TestDepTracker_ConcurrentComplete(t *testing.T) {
 	t.Parallel()
 
-	dt := NewDepTracker(100, 100, testLogger(t))
+	dt := NewDepTracker(100, testLogger(t))
 
 	// Fan-out: action 0 has no deps; actions 1-49 depend on action 0.
 	dt.Add(&Action{
@@ -221,7 +152,7 @@ func TestDepTracker_ConcurrentComplete(t *testing.T) {
 	}
 
 	// Drain the root action.
-	<-dt.Interactive()
+	<-dt.Ready()
 	dt.Complete(0)
 
 	// Concurrently drain and complete all dependents.
@@ -234,7 +165,7 @@ func TestDepTracker_ConcurrentComplete(t *testing.T) {
 			defer wg.Done()
 
 			select {
-			case ta := <-dt.Interactive():
+			case ta := <-dt.Ready():
 				dt.Complete(ta.ID)
 			case <-time.After(5 * time.Second):
 				t.Error("timeout draining dependent action")
@@ -260,7 +191,7 @@ func TestDepTracker_ConcurrentComplete(t *testing.T) {
 func TestDepTracker_CompleteUnknownID(t *testing.T) {
 	t.Parallel()
 
-	dt := NewDepTracker(10, 10, testLogger(t))
+	dt := NewDepTracker(10, testLogger(t))
 
 	// Add one real action so total=1.
 	dt.Add(&Action{
@@ -269,7 +200,7 @@ func TestDepTracker_CompleteUnknownID(t *testing.T) {
 	}, 1, nil, "")
 
 	// Drain the dispatched action.
-	<-dt.Interactive()
+	<-dt.Ready()
 
 	// Complete with an unknown ID — should log a warning and increment
 	// completed. Since total=1 (from Add) and this increments completed to 1,
@@ -290,7 +221,7 @@ func TestDepTracker_CompleteUnknownID(t *testing.T) {
 func TestDepTracker_CompleteUnknownID_NoPanic(t *testing.T) {
 	t.Parallel()
 
-	dt := NewDepTracker(10, 10, testLogger(t))
+	dt := NewDepTracker(10, testLogger(t))
 
 	// Should not panic on unknown ID with zero total.
 	dt.Complete(999)
@@ -306,7 +237,7 @@ func TestDepTracker_ConcurrentAddAndComplete(t *testing.T) {
 	t.Parallel()
 
 	// Use large buffer to prevent dispatch blocking during the race window.
-	dt := NewDepTracker(200, 200, testLogger(t))
+	dt := NewDepTracker(200, testLogger(t))
 
 	// Root action with no deps — will be completed while Add appends dependents.
 	dt.Add(&Action{
@@ -330,7 +261,7 @@ func TestDepTracker_ConcurrentAddAndComplete(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		<-dt.Interactive() // drain root
+		<-dt.Ready() // drain root
 		dt.Complete(0)
 	}()
 
@@ -353,7 +284,7 @@ func TestDepTracker_ConcurrentAddAndComplete(t *testing.T) {
 
 	for {
 		select {
-		case ta := <-dt.Interactive():
+		case ta := <-dt.Ready():
 			dt.Complete(ta.ID)
 			drained++
 		case <-time.After(200 * time.Millisecond):
@@ -373,14 +304,14 @@ func TestDepTracker_ConcurrentAddAndComplete(t *testing.T) {
 func TestDepTracker_CompleteCleansByPath(t *testing.T) {
 	t.Parallel()
 
-	dt := NewDepTracker(10, 10, testLogger(t))
+	dt := NewDepTracker(10, testLogger(t))
 
 	dt.Add(&Action{
 		Type: ActionDownload, Path: "file.txt",
 		DriveID: driveid.New("d"), ItemID: "i1",
 	}, 1, nil, "")
 
-	<-dt.Interactive()
+	<-dt.Ready()
 	dt.Complete(1)
 
 	// After Complete, CancelByPath should be a no-op (byPath entry removed).
@@ -391,7 +322,7 @@ func TestDepTracker_CompleteCleansByPath(t *testing.T) {
 		DriveID: driveid.New("d"), ItemID: "i2",
 	}, 2, nil, "")
 
-	ta := <-dt.Interactive()
+	ta := <-dt.Ready()
 
 	// Set up cancel on the new action.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -415,14 +346,14 @@ func TestDepTracker_CompleteCleansByPath(t *testing.T) {
 func TestDepTracker_CancelByPathCleansUp(t *testing.T) {
 	t.Parallel()
 
-	dt := NewDepTracker(10, 10, testLogger(t))
+	dt := NewDepTracker(10, testLogger(t))
 
 	dt.Add(&Action{
 		Type: ActionDownload, Path: "cancel-me.txt",
 		DriveID: driveid.New("d"), ItemID: "i1",
 	}, 1, nil, "")
 
-	ta := <-dt.Interactive()
+	ta := <-dt.Ready()
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	ta.Cancel = cancel1
 
@@ -443,7 +374,7 @@ func TestDepTracker_CancelByPathCleansUp(t *testing.T) {
 		DriveID: driveid.New("d"), ItemID: "i2",
 	}, 2, nil, "")
 
-	ta2 := <-dt.Interactive()
+	ta2 := <-dt.Ready()
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	ta2.Cancel = cancel2
 
@@ -460,7 +391,7 @@ func TestDepTracker_CancelByPathCleansUp(t *testing.T) {
 func TestDepTracker_SkipCompletedDeps(t *testing.T) {
 	t.Parallel()
 
-	dt := NewDepTracker(10, 10, testLogger(t))
+	dt := NewDepTracker(10, testLogger(t))
 
 	// Action 2 depends on action 1, but action 1 is not added to the tracker
 	// (simulating it was already completed before tracker was populated).
@@ -471,7 +402,7 @@ func TestDepTracker_SkipCompletedDeps(t *testing.T) {
 
 	// Should dispatch immediately since dep 1 is unknown/completed.
 	select {
-	case ta := <-dt.Interactive():
+	case ta := <-dt.Ready():
 		if ta.ID != 2 {
 			t.Errorf("ID = %d, want 2", ta.ID)
 		}
@@ -487,7 +418,7 @@ func TestDepTracker_SkipCompletedDeps(t *testing.T) {
 func TestDepTracker_HasInFlight(t *testing.T) {
 	t.Parallel()
 
-	dt := NewDepTracker(10, 10, testLogger(t))
+	dt := NewDepTracker(10, testLogger(t))
 
 	// No actions — HasInFlight should be false.
 	if dt.HasInFlight("file.txt") {
@@ -505,7 +436,7 @@ func TestDepTracker_HasInFlight(t *testing.T) {
 	}
 
 	// Drain and complete the action.
-	<-dt.Interactive()
+	<-dt.Ready()
 	dt.Complete(1)
 
 	// After Complete, HasInFlight should be false (byPath cleaned up).
@@ -528,7 +459,7 @@ func TestDepTracker_PersistentMode(t *testing.T) {
 		DriveID: driveid.New("d"), ItemID: "i1",
 	}, 1, nil, "")
 
-	<-dt.Interactive()
+	<-dt.Ready()
 	dt.Complete(1)
 
 	// In persistent mode, Done() should NOT fire even though all actions
@@ -570,9 +501,9 @@ func TestDepTracker_CycleDone(t *testing.T) {
 	cycleBDone := dt.CycleDone("cycle-b")
 
 	// Drain all actions.
-	<-dt.Interactive()
-	<-dt.Interactive()
-	<-dt.Interactive()
+	<-dt.Ready()
+	<-dt.Ready()
+	<-dt.Ready()
 
 	// Complete cycle A actions.
 	dt.Complete(1)
@@ -625,7 +556,7 @@ func TestDepTracker_CleanupCycle(t *testing.T) {
 		DriveID: driveid.New("d"), ItemID: "c1",
 	}, 1, nil, "cycle-cleanup")
 
-	<-dt.Interactive()
+	<-dt.Ready()
 	dt.Complete(1)
 
 	// Wait for cycle done.
@@ -656,7 +587,7 @@ func TestDepTracker_CleanupCycle(t *testing.T) {
 func TestDepTracker_SuppressedDepFilteredByEngine(t *testing.T) {
 	t.Parallel()
 
-	dt := NewDepTracker(10, 10, testLogger(t))
+	dt := NewDepTracker(10, testLogger(t))
 
 	// Simulate engine's processBatch: action 0 is suppressed (not added),
 	// action 1 depends on action 0 but the engine filters out the suppressed
@@ -668,7 +599,7 @@ func TestDepTracker_SuppressedDepFilteredByEngine(t *testing.T) {
 
 	// Action 1 should dispatch immediately (no dependencies).
 	select {
-	case ta := <-dt.Interactive():
+	case ta := <-dt.Ready():
 		if ta.ID != 1 {
 			t.Fatalf("expected action 1, got %d", ta.ID)
 		}
@@ -682,7 +613,7 @@ func TestDepTracker_SuppressedDepFilteredByEngine(t *testing.T) {
 func TestDepTracker_CycleDone_UnknownCycle(t *testing.T) {
 	t.Parallel()
 
-	dt := NewDepTracker(10, 10, testLogger(t))
+	dt := NewDepTracker(10, testLogger(t))
 
 	// CycleDone for an unknown cycle should return a closed channel
 	// (defensive: prevents callers from blocking forever).

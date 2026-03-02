@@ -110,13 +110,13 @@ These are existing architectural decisions that the execution layer respects:
 | PRD SS7 | Watch mode: inotify/FSEvents local, polling/WebSocket remote, 5-min fallback | Section 15.4 --- observers never stop |
 | PRD SS7 | `--watch` combines with direction flags (e.g., `sync --watch --download-only`) | Section 15.4 --- direction flags skip irrelevant observer |
 | PRD SS7 | Pause/resume: process stays alive, events collected, no transfers, efficient resume | Section 15.7 --- pause/resume walkthrough |
-| PRD SS10 | Parallel transfers (configurable: `parallel_downloads`, `parallel_uploads`, `parallel_checkers`) | Section 6 --- lane-based workers with config mapping |
+| PRD SS10 | Parallel transfers (configurable worker count) | Section 6 --- flat worker pool with `transfer_workers` + `check_workers` config |
 | PRD SS10 | Resumable transfers (upload sessions, Range headers, state persisted to disk) | Section 14 --- graceful shutdown, SessionStore |
 | PRD SS10 | Bandwidth limiting with time-of-day scheduling | Section 7 --- token-bucket rate limiter |
 | PRD SS10 | Upload thresholds (<=4MB simple PUT, >4MB resumable, chunk size configurable) | Unchanged --- handled in `graph.Client.Upload()` |
 | PRD SS11 | Big-delete protection, dry-run, recycle bin, disk space reservation, crash recovery | Section 15.5 (dry-run), section 14 (crash recovery), safety in planner |
 | PRD SS13 | Service integration (systemd/launchd) --- `sync --watch` as long-running service | Section 15.4 --- continuous pipeline |
-| PRD SS20 | <100MB for 100K files, <1% CPU idle, <10min initial sync 10K files, zero data loss crash recovery, automatic 429 backoff, graceful network resume | Sections 8, 10, 11, 14 |
+| PRD SS20 | <100MB for 100K files, <1% CPU idle, <10min initial sync 10K files, zero data loss crash recovery, automatic 429 backoff, graceful network resume | Sections 8, 10, 11, 14. Note: "automatic 429 backoff" is implemented in `graph.Client` (per-request Retry-After + exponential backoff), not in the worker/concurrency layer. |
 
 ---
 
@@ -372,91 +372,50 @@ Four actions start immediately in parallel. The fifth waits only for `mkdir /D`.
 
 ---
 
-## 6. Worker Lanes and Fairness
+## 6. Worker Pool
 
-### 6.1 Lane Model
+> **Updated in Phase 6.0c**: Lanes (interactive/bulk/shared) were removed.
+> The original lane model added routing logic, size classification, and
+> reserved-worker allocation with no proven benefit. Profiling showed no
+> starvation between small and large operations. Replaced with a flat pool.
 
-Workers are organized into two lanes with reserved capacity plus a shared
-overflow pool:
+### 6.1 Flat Pool Model
+
+Workers are a flat pool reading from a single `Ready()` channel:
 
 ```
-Total workers: N (runtime.NumCPU() or user-configured cap, minimum 4)
+Total workers: N (from config.transfer_workers, default 8, range 4-64)
 
-Lane: interactive (files < 10 MB, folder ops, deletes, moves, conflicts)
-  Reserved workers: max(2, N/8) (always available for small ops)
-
-Lane: bulk (files >= 10 MB)
-  Reserved workers: max(2, N/8) (always available for large transfers)
-
-Shared pool: N - reserved_interactive - reserved_bulk workers
-  Assigned dynamically to whichever lane has work
-  Interactive lane has priority for shared workers
+All N workers read from tracker.Ready() — no lane routing, no size
+classification, no reserved capacity. Go's channel scheduling provides
+natural fairness.
 ```
 
-### 6.2 Fairness Guarantees
+### 6.2 Config Mapping
 
-- If all N workers are doing 10 GB uploads, 2 workers are reserved for the
-  interactive lane. A small file change gets picked up immediately.
-- If a trillion small files flood the interactive lane, 2 workers are reserved
-  for the bulk lane. Large transfers keep making progress.
-- When one lane is empty, its reserved workers plus all shared workers serve
-  the other lane.
+| Config Key | Default | Range | Description |
+|-----------|---------|-------|-------------|
+| `transfer_workers` | 8 | 4-64 | Concurrent file operations (downloads, uploads, renames, deletes, mkdirs) |
+| `check_workers` | 4 | 1-16 | Concurrent QuickXorHash in LocalObserver FullScan (`errgroup.SetLimit`) |
+
+The old keys (`parallel_downloads`, `parallel_uploads`, `parallel_checkers`)
+are deprecated. If present in config, a warning is logged via
+`WarnDeprecatedKeys()` and the values are ignored.
 
 ### 6.3 Worker Implementation
 
 ```go
-// Reserved interactive workers
-for i := 0; i < reservedInteractive; i++ {
-    go worker(tracker.interactive)
-}
-
-// Reserved bulk workers
-for i := 0; i < reservedBulk; i++ {
-    go worker(tracker.bulk)
-}
-
-// Shared workers: prefer interactive, fall back to bulk
-for i := 0; i < shared; i++ {
-    go func() {
-        for {
-            select {
-            case action := <-tracker.interactive:
-                execute(action)
-            default:
-                select {
-                case action := <-tracker.interactive:
-                    execute(action)
-                case action := <-tracker.bulk:
-                    execute(action)
-                }
-            }
-        }
-    }()
+func (wp *WorkerPool) Start(ctx context.Context, total int) {
+    n := max(minWorkers, total)
+    for i := 0; i < n; i++ {
+        go wp.worker(ctx, tracker.Ready())
+    }
 }
 ```
 
-### 6.4 Config Mapping
-
-The PRD specifies three separate configuration keys: `parallel_downloads`,
-`parallel_uploads`, and `parallel_checkers`. The lane-based model unifies
-downloads and uploads into interactive/bulk lanes. The configuration mapping:
-
-| Config Parameter | Default | Lane Mapping |
-|----------------|---------|-------------|
-| Total lane workers | `runtime.NumCPU()` | Split into interactive, bulk, and shared lanes |
-| `parallel_checkers` | 8 | Separate checker pool (unchanged --- not in lanes) |
-
-Total lane workers = `runtime.NumCPU()` (minimum 4).
-The checker pool remains separate because hash computation is CPU-bound, not
-I/O-bound, and runs during observation, not execution.
-
-The interactive/bulk split and reserved worker counts are derived from the total:
-- Reserved interactive: `max(2, total / 8)`
-- Reserved bulk: `max(2, total / 8)`
-- Shared: `total - reserved_interactive - reserved_bulk`
-
-The size threshold between interactive and bulk lanes is 10 MB (fixed). This
-provides predictable behavior without requiring tuning.
+Each worker reads from the single `Ready()` channel, executes the action,
+and reports results. No lane logic, no priority handling. Lane-based fairness
+can be re-added in a future increment if profiling shows starvation.
 
 ---
 
@@ -918,7 +877,7 @@ excessive memory consumption during extended pauses.
 | Component | Design |
 |-----------|--------|
 | **Executor model** | DAG with DepTracker --- actions dispatched based on dependency satisfaction |
-| **Worker pool** | Unified lane-based pool (interactive + bulk + shared overflow). Checker pool separate. |
+| **Worker pool** | Flat pool (`transfer_workers` goroutines reading from single `Ready()` channel). `check_workers` controls hash parallelism separately. |
 | **Commit model** | Per-action atomic commits (baseline upsert). Delta token committed separately when cycle completes. |
 | **Crash recovery** | Idempotent planner --- uncommitted delta token causes same delta to be re-fetched, planner skips already-committed actions |
 | **Context tree** | Persistent workers on tracker channels, surviving across planning passes |
@@ -1094,19 +1053,13 @@ profiling demonstrates a bottleneck:
 
 ## 19. Worker Pool Sizing
 
-Total workers per Engine come from the `transfer_workers` config key (default 8, range 4-64). In multi-drive mode, the Orchestrator distributes the global `transfer_workers` budget across drives proportionally (see [MULTIDRIVE.md §11.3](MULTIDRIVE.md#113-concurrency-configuration) for the budget algorithm).
+> **Updated in Phase 6.0c**: Lanes removed. Flat pool with config-driven count.
 
-Lane distribution (internal, not configurable):
+Total workers per Engine come from the `transfer_workers` config key (default 8, range 4-64). Each Engine gets the full config value — no per-drive budget splitting (deferred to a future increment).
 
-```
-reservedInteractive = max(2, total/8)
-reservedBulk        = max(2, total/8)
-shared              = total - reservedInteractive - reservedBulk
-```
+All workers read from a single `tracker.Ready()` channel. No lane routing.
 
-Example with `transfer_workers=8`: 2 interactive + 2 bulk + 4 shared = 8 total.
-
-File hashing concurrency is controlled separately by `check_workers` (default 4) via a `*semaphore.Weighted` in LocalObserver. This is independent of transfer workers because hashing is CPU-bound while transfers are I/O-bound.
+File hashing concurrency is controlled separately by `check_workers` (default 4) via `errgroup.SetLimit` in LocalObserver FullScan. This is independent of transfer workers because hashing is CPU-bound while transfers are I/O-bound.
 
 ### Concurrency Stage Summary
 
@@ -1115,9 +1068,9 @@ Each pipeline stage has exactly ONE bottleneck and ONE control mechanism:
 | Stage | Bottleneck | Control | Config Key | Scope |
 |-------|-----------|---------|------------|-------|
 | Walk | Disk metadata I/O | None (sequential) | — | Per-drive |
-| Hash | Disk read throughput | Global semaphore | `check_workers` | Global |
-| Execution | Network | Worker count per drive | `transfer_workers` | Per-drive (proportional) |
+| Hash | Disk read throughput | errgroup limit | `check_workers` | Per-drive |
+| Execution | Network | Worker count per drive | `transfer_workers` | Per-drive |
 | DB commits | SQLite write | None (not bottleneck) | — | Per-drive |
 | Memory | Buffer size | Buffer backpressure | — | Per-drive |
 
-No overlapping mechanisms. Future AIMD adjusts the same control knob (semaphore limit or worker count) that these config keys set statically.
+No overlapping mechanisms. Future AIMD (Phase 8.1) adjusts the same control knob (worker count) that `transfer_workers` sets statically. **429 rate limiting is handled entirely within `graph.Client`** at the HTTP layer — per-request Retry-After + exponential backoff + jitter. AIMD is unrelated to 429; it optimizes for local resource efficiency (throughput, CPU, disk I/O).

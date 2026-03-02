@@ -36,7 +36,8 @@ func runPause(cmd *cobra.Command, args []string) error {
 	cc := mustCLIContext(cmd.Context())
 	logger := cc.Logger
 
-	if cc.Flags.Drive == "" {
+	driveSelector := cc.Flags.SingleDrive()
+	if driveSelector == "" {
 		return fmt.Errorf("--drive is required (specify which drive to pause)")
 	}
 
@@ -47,13 +48,13 @@ func runPause(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	cid, err := driveid.NewCanonicalID(cc.Flags.Drive)
+	cid, err := driveid.NewCanonicalID(driveSelector)
 	if err != nil {
-		return fmt.Errorf("invalid drive ID %q: %w", cc.Flags.Drive, err)
+		return fmt.Errorf("invalid drive ID %q: %w", driveSelector, err)
 	}
 
 	if _, exists := cfg.Drives[cid]; !exists {
-		return fmt.Errorf("drive %q not found in config", cc.Flags.Drive)
+		return fmt.Errorf("drive %q not found in config", driveSelector)
 	}
 
 	// Set paused = true.
@@ -73,29 +74,29 @@ func runPause(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("setting paused_until: %w", err)
 		}
 
-		statusf(cc.Flags.Quiet, "Drive %s paused until %s\n", cid.String(), until)
+		cc.Statusf("Drive %s paused until %s\n", cid.String(), until)
 	} else {
-		statusf(cc.Flags.Quiet, "Drive %s paused\n", cid.String())
+		cc.Statusf("Drive %s paused\n", cid.String())
 	}
 
 	// Notify running daemon, if any.
-	notifyDaemon(cc.Flags.Quiet)
+	notifyDaemon(cc)
 
 	return nil
 }
 
 // notifyDaemon attempts to send SIGHUP to a running sync --watch daemon.
 // Non-fatal: if no daemon is running, prints a note instead.
-func notifyDaemon(quiet bool) {
+func notifyDaemon(cc *CLIContext) {
 	pidPath := config.PIDFilePath()
 	if pidPath == "" {
 		return
 	}
 
 	if err := sendSIGHUP(pidPath); err != nil {
-		statusf(quiet, "Note: %v — changes take effect on next daemon start\n", err)
+		cc.Statusf("Note: %v — changes take effect on next daemon start\n", err)
 	} else {
-		statusf(quiet, "Notified running daemon to reload config\n")
+		cc.Statusf("Notified running daemon to reload config\n")
 	}
 }
 

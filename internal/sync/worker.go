@@ -14,10 +14,6 @@ var errUnknownActionType = errors.New("sync: unknown action type in worker dispa
 const (
 	// minWorkers is the floor for total worker count.
 	minWorkers = 4
-	// laneDivisor is used to compute reserved workers per lane (total/laneDivisor).
-	laneDivisor = 8
-	// minReserved is the minimum reserved workers per lane.
-	minReserved = 2
 	// maxRecordedErrors caps the diagnostic error slice to bound memory in
 	// long-running watch mode. The failed atomic counter remains accurate
 	// regardless of this cap (B-205).
@@ -25,7 +21,7 @@ const (
 )
 
 // WorkerPool spawns goroutines that pull TrackedActions from the DepTracker's
-// lane channels, execute them, commit outcomes, and signal completion back
+// ready channel, execute them, commit outcomes, and signal completion back
 // to the tracker for dependent dispatch.
 type WorkerPool struct {
 	cfg      *ExecutorConfig
@@ -85,10 +81,9 @@ func NewWorkerPool(
 	}
 }
 
-// Start spawns workers divided across interactive (reserved), bulk (reserved),
-// and shared lanes. total is the desired concurrency (typically numCPU or
-// a user-configured cap). Minimum 4 workers to guarantee at least 1 per lane
-// type plus shared.
+// Start spawns a flat pool of goroutines, all reading from the tracker's
+// single ready channel. total is the desired concurrency (typically
+// cfg.TransferWorkers). Minimum 4 workers.
 func (wp *WorkerPool) Start(ctx context.Context, total int) {
 	if total < minWorkers {
 		total = minWorkers
@@ -96,37 +91,14 @@ func (wp *WorkerPool) Start(ctx context.Context, total int) {
 
 	ctx, wp.cancel = context.WithCancel(ctx)
 
-	reservedInteractive := max(minReserved, total/laneDivisor)
-	reservedBulk := max(minReserved, total/laneDivisor)
-	shared := total - reservedInteractive - reservedBulk
-
-	shared = max(shared, 1)
-
-	// Reserved interactive workers: only read from interactive channel.
-	for range reservedInteractive {
+	for range total {
 		wp.wg.Add(1)
 
-		go wp.worker(ctx, wp.tracker.Interactive(), nil)
-	}
-
-	// Reserved bulk workers: only read from bulk channel.
-	for range reservedBulk {
-		wp.wg.Add(1)
-
-		go wp.worker(ctx, nil, wp.tracker.Bulk())
-	}
-
-	// Shared workers: prefer interactive, fall back to bulk.
-	for range shared {
-		wp.wg.Add(1)
-
-		go wp.worker(ctx, wp.tracker.Interactive(), wp.tracker.Bulk())
+		go wp.worker(ctx)
 	}
 
 	wp.logger.Info("worker pool started",
-		slog.Int("interactive", reservedInteractive),
-		slog.Int("bulk", reservedBulk),
-		slog.Int("shared", shared),
+		slog.Int("workers", total),
 	)
 }
 
@@ -156,49 +128,25 @@ func (wp *WorkerPool) Stats() (succeeded, failed int, errors []error) {
 	return int(wp.succeeded.Load()), int(wp.failed.Load()), errs
 }
 
-// worker is the main loop for a single goroutine. It reads from primary
-// and/or secondary channels depending on the lane assignment.
-func (wp *WorkerPool) worker(ctx context.Context, primary, secondary <-chan *TrackedAction) {
+// worker is the main loop for a single goroutine. It reads from the
+// tracker's single ready channel until the context is canceled or all
+// actions are done.
+func (wp *WorkerPool) worker(ctx context.Context) {
 	defer wp.wg.Done()
 
 	for {
-		var ta *TrackedAction
-
-		// For shared workers (both channels non-nil), prefer interactive
-		// over bulk to minimize latency for small/metadata actions.
-		if primary != nil && secondary != nil {
-			select {
-			case ta = <-primary:
-			default:
-				select {
-				case <-ctx.Done():
-					return
-				case <-wp.tracker.Done():
-					return
-				case ta = <-primary:
-				case ta = <-secondary:
-				}
+		select {
+		case <-ctx.Done():
+			return
+		case <-wp.tracker.Done():
+			return
+		case ta := <-wp.tracker.Ready():
+			if ta == nil {
+				continue
 			}
-		} else {
-			// Reserved worker — one of primary/secondary is nil. In Go, receiving
-			// on a nil channel blocks forever, so the nil case in the select is
-			// never ready and is safely ignored. This effectively disables the
-			// unused lane without branching.
-			select {
-			case <-ctx.Done():
-				return
-			case <-wp.tracker.Done():
-				return
-			case ta = <-primary:
-			case ta = <-secondary:
-			}
-		}
 
-		if ta == nil {
-			continue
+			wp.safeExecuteAction(ctx, ta)
 		}
-
-		wp.safeExecuteAction(ctx, ta)
 	}
 }
 

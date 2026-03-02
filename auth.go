@@ -592,7 +592,7 @@ func runWhoami(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	cid, _, err := config.MatchDrive(cfg, cc.Flags.Drive, logger)
+	cid, _, err := config.MatchDrive(cfg, cc.Flags.SingleDrive(), logger)
 	if err != nil {
 		return err
 	}

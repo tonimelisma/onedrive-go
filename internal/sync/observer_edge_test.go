@@ -40,7 +40,7 @@ func TestRacilyClean_SameSecondDetection(t *testing.T) {
 		Mtime:     info.ModTime().UnixNano(),
 	})
 
-	obs := NewLocalObserver(baseline, testLogger(t))
+	obs := NewLocalObserver(baseline, testLogger(t), 0)
 
 	// Immediately scan — the file's mtime is within 1 second of now.
 	events, err := obs.FullScan(context.Background(), syncRoot)
@@ -79,7 +79,7 @@ func TestMtimeChangeWithoutContentChange(t *testing.T) {
 		Mtime:     info.ModTime().UnixNano() - 2*int64(time.Second), // 2 seconds earlier
 	})
 
-	obs := NewLocalObserver(baseline, testLogger(t))
+	obs := NewLocalObserver(baseline, testLogger(t), 0)
 
 	events, err := obs.FullScan(context.Background(), syncRoot)
 	require.NoError(t, err)
@@ -118,7 +118,7 @@ func TestNosyncGuard_PreventsAllSync(t *testing.T) {
 	// Create the .nosync guard file.
 	writeTestFile(t, syncRoot, ".nosync", "")
 
-	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 
 	events, err := obs.FullScan(context.Background(), syncRoot)
 	assert.ErrorIs(t, err, ErrNosyncGuard)

@@ -408,6 +408,83 @@ func TestCLIFlags_PopulatedByPersistentPreRunE(t *testing.T) {
 	assert.True(t, cc.Flags.Verbose)
 }
 
+// --- loadAndResolve error path tests (B-232) ---
+
+func TestLoadAndResolve_InvalidTOML(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfgFile := filepath.Join(tmpDir, "config.toml")
+
+	err := os.WriteFile(cfgFile, []byte("{{invalid toml"), 0o600)
+	require.NoError(t, err)
+
+	flags := CLIFlags{ConfigPath: cfgFile}
+	logger := buildLogger(nil, flags)
+
+	cmd := newRootCmd()
+	cmd.SetContext(context.Background())
+
+	_, _, err = loadAndResolve(cmd, flags, config.EnvOverrides{}, logger)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "loading config")
+}
+
+func TestLoadAndResolve_AmbiguousDrive(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfgFile := filepath.Join(tmpDir, "config.toml")
+
+	// Two drives — no --drive flag → ambiguous.
+	tomlContent := `["personal:alice@example.com"]
+sync_dir = "` + tmpDir + `/one"
+
+["personal:bob@example.com"]
+sync_dir = "` + tmpDir + `/two"
+`
+	err := os.WriteFile(cfgFile, []byte(tomlContent), 0o600)
+	require.NoError(t, err)
+
+	flags := CLIFlags{ConfigPath: cfgFile}
+	logger := buildLogger(nil, flags)
+
+	cmd := newRootCmd()
+	cmd.SetContext(context.Background())
+
+	_, _, err = loadAndResolve(cmd, flags, config.EnvOverrides{}, logger)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "loading config")
+}
+
+func TestBuildLogger_UnknownLogLevel(t *testing.T) {
+	cfg := &config.ResolvedDrive{
+		LoggingConfig: config.LoggingConfig{LogLevel: "bogus"},
+	}
+	flags := CLIFlags{}
+
+	// Captures stderr warning for unknown log level.
+	logger := buildLogger(cfg, flags)
+
+	// Should fall back to warn level.
+	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelWarn))
+	assert.False(t, logger.Handler().Enabled(context.Background(), slog.LevelInfo))
+}
+
+// --- CLIContext.Statusf tests (B-288) ---
+
+func TestCLIContext_Statusf_Quiet(t *testing.T) {
+	t.Parallel()
+
+	cc := &CLIContext{Flags: CLIFlags{Quiet: true}}
+	// Should not panic. Output suppressed.
+	cc.Statusf("should not appear: %d\n", 42)
+}
+
+func TestCLIContext_Statusf_Normal(t *testing.T) {
+	t.Parallel()
+
+	cc := &CLIContext{Flags: CLIFlags{Quiet: false}}
+	// Should not panic. Output goes to stderr.
+	cc.Statusf("status message: %s\n", "ok")
+}
+
 // --- errVerifyMismatch tests ---
 
 func TestErrVerifyMismatch_IsSentinel(t *testing.T) {

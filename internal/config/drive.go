@@ -171,7 +171,6 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 		PausedUntil:     pausedUntil,
 		SyncDir:         expandTilde(drive.SyncDir),
 		RemotePath:      drive.RemotePath,
-		DriveID:         driveid.New(drive.DriveID),
 		FilterConfig:    cfg.FilterConfig,
 		TransfersConfig: cfg.TransfersConfig,
 		SafetyConfig:    cfg.SafetyConfig,
@@ -185,11 +184,11 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 	}
 
 	// Read cached token metadata for sync_dir and drive_id resolution.
+	// Drive ID is NEVER stored in config — it comes exclusively from token
+	// file metadata, cached at login time.
 	meta := ReadTokenMeta(canonicalID, logger)
 
-	// Populate drive ID from token meta when not set in config. This avoids
-	// runtime re-discovery — the drive ID was cached at login time.
-	if resolved.DriveID.IsZero() && meta["drive_id"] != "" {
+	if meta["drive_id"] != "" {
 		resolved.DriveID = driveid.New(meta["drive_id"])
 		logger.Debug("resolved drive ID from token metadata",
 			"drive_id", resolved.DriveID.String(),

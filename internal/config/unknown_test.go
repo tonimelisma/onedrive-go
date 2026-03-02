@@ -70,7 +70,6 @@ sync_dir = "~/OneDrive"
 display_name = "home"
 paused = false
 remote_path = "/"
-drive_id = "abc"
 skip_dotfiles = true
 skip_dirs = ["vendor"]
 skip_files = ["*.log"]

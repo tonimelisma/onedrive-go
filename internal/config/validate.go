@@ -12,8 +12,10 @@ import (
 
 // Validation range constants.
 const (
-	minParallelWorkers = 1
-	maxParallelWorkers = 16
+	minTransferWorkers = 4
+	maxTransferWorkers = 64
+	minCheckWorkers    = 1
+	maxCheckWorkers    = 16
 	minPercentage      = 1
 	maxPercentage      = 100
 	minBigDelete       = 1
@@ -93,23 +95,21 @@ func validateFilter(f *FilterConfig) []error {
 func validateTransfers(t *TransfersConfig) []error {
 	var errs []error
 
-	errs = append(errs, validateWorkerCount("parallel_downloads", t.ParallelDownloads)...)
-	errs = append(errs, validateWorkerCount("parallel_uploads", t.ParallelUploads)...)
-	errs = append(errs, validateWorkerCount("parallel_checkers", t.ParallelCheckers)...)
+	if t.TransferWorkers < minTransferWorkers || t.TransferWorkers > maxTransferWorkers {
+		errs = append(errs, fmt.Errorf("transfer_workers: must be between %d and %d, got %d",
+			minTransferWorkers, maxTransferWorkers, t.TransferWorkers))
+	}
+
+	if t.CheckWorkers < minCheckWorkers || t.CheckWorkers > maxCheckWorkers {
+		errs = append(errs, fmt.Errorf("check_workers: must be between %d and %d, got %d",
+			minCheckWorkers, maxCheckWorkers, t.CheckWorkers))
+	}
+
 	errs = append(errs, validateChunkSize(t.ChunkSize)...)
 	errs = append(errs, validateTransferOrder(t.TransferOrder)...)
 	errs = append(errs, validateBandwidthSchedule(t.BandwidthSchedule)...)
 
 	return errs
-}
-
-func validateWorkerCount(field string, n int) []error {
-	if n < minParallelWorkers || n > maxParallelWorkers {
-		return []error{fmt.Errorf("%s: must be between %d and %d, got %d",
-			field, minParallelWorkers, maxParallelWorkers, n)}
-	}
-
-	return nil
 }
 
 func validateChunkSize(s string) []error {
@@ -367,6 +367,27 @@ func validateNetwork(n *NetworkConfig) []error {
 	errs = append(errs, validateDurationMin("data_timeout", n.DataTimeout, minDataTimeout)...)
 
 	return errs
+}
+
+// deprecatedTransferKeys maps old config key names to their replacements.
+var deprecatedTransferKeys = map[string]string{
+	"parallel_downloads": "transfer_workers",
+	"parallel_uploads":   "transfer_workers",
+	"parallel_checkers":  "check_workers",
+}
+
+// WarnDeprecatedKeys checks raw TOML metadata for deprecated config keys and
+// logs a warning for each one found. The deprecated keys still parse without
+// error (they're in knownGlobalKeys) but their values are silently ignored.
+func WarnDeprecatedKeys(md map[string]any, logger *slog.Logger) {
+	for oldKey, newKey := range deprecatedTransferKeys {
+		if _, ok := md[oldKey]; ok {
+			logger.Warn("deprecated config key (value ignored)",
+				slog.String("key", oldKey),
+				slog.String("replacement", newKey),
+			)
+		}
+	}
 }
 
 // WarnUnimplemented logs a warning for each config field that is set to a

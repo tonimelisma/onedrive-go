@@ -161,7 +161,7 @@ func TestWorkerPool_FolderCreate(t *testing.T) {
 		},
 	}
 
-	tracker := NewDepTracker(10, 10, testLogger(t))
+	tracker := NewDepTracker(10, testLogger(t))
 	tracker.Add(&actions[0], 0, nil, "")
 
 	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
@@ -238,7 +238,7 @@ func TestWorkerPool_DependencyChain(t *testing.T) {
 		},
 	}
 
-	tracker := NewDepTracker(10, 10, testLogger(t))
+	tracker := NewDepTracker(10, testLogger(t))
 	tracker.Add(&actions[0], 0, nil, "")
 	tracker.Add(&actions[1], 1, []int64{0}, "")
 
@@ -289,7 +289,7 @@ func TestWorkerPool_StopCancelsWork(t *testing.T) {
 		},
 	}
 
-	tracker := NewDepTracker(10, 10, testLogger(t))
+	tracker := NewDepTracker(10, testLogger(t))
 	tracker.Add(&actions[0], 0, nil, "")
 
 	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
@@ -331,7 +331,7 @@ func TestWorkerPool_Stats(t *testing.T) {
 		},
 	}
 
-	tracker := NewDepTracker(10, 10, testLogger(t))
+	tracker := NewDepTracker(10, testLogger(t))
 	tracker.Add(&actions[0], 0, nil, "")
 
 	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
@@ -378,7 +378,7 @@ func TestWorkerPool_FailedOutcome(t *testing.T) {
 		},
 	}
 
-	tracker := NewDepTracker(10, 10, testLogger(t))
+	tracker := NewDepTracker(10, testLogger(t))
 	tracker.Add(&actions[0], 0, nil, "cycle-fail")
 
 	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
@@ -438,7 +438,7 @@ func TestWorkerPool_ResultChannel(t *testing.T) {
 		},
 	}
 
-	tracker := NewDepTracker(10, 10, testLogger(t))
+	tracker := NewDepTracker(10, testLogger(t))
 	tracker.Add(&actions[0], 42, nil, "test-cycle")
 
 	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
@@ -545,7 +545,7 @@ func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	tracker := NewDepTracker(10, 10, testLogger(t))
+	tracker := NewDepTracker(10, testLogger(t))
 	tracker.Add(&actions[0], 0, nil, "")
 	tracker.Add(&actions[1], 1, []int64{0}, "")
 
@@ -604,7 +604,7 @@ func TestWorkerPool_PanicRecovery(t *testing.T) {
 		},
 	}
 
-	tracker := NewDepTracker(10, 10, testLogger(t))
+	tracker := NewDepTracker(10, testLogger(t))
 	tracker.Add(&actions[0], 0, nil, "panic-cycle")
 
 	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
@@ -670,7 +670,7 @@ func TestWorkerPool_ErrorCap(t *testing.T) {
 	t.Parallel()
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
-	tracker := NewDepTracker(10, 10, testLogger(t))
+	tracker := NewDepTracker(10, testLogger(t))
 	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
 
 	// Manually call recordFailure more than maxRecordedErrors times.

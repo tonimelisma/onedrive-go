@@ -288,7 +288,6 @@ These fields appear inside drive sections:
 | `owner` | String | No | — | Owner's email address (shared drives only). Auto-filled from sharedWithMe API response. |
 | `sync_vault` | Boolean | No | `false` | Include Personal Vault items in sync. Default excludes vault items due to auto-lock data-loss risk. Enable with caution. |
 | `remote_path` | String | No | `"/"` | Remote subfolder to sync |
-| `drive_id` | String | No | auto | Explicit drive ID (auto-detected for personal/business) |
 | `application_id` | String | No | (built-in) | Custom Azure application ID |
 | `azure_ad_endpoint` | String | No | `""` | National cloud endpoint: `USL4`, `USL5`, `DE`, `CN` |
 | `azure_tenant_id` | String | No | `""` | Azure AD tenant GUID or domain |
@@ -828,7 +827,6 @@ These have no CLI flag equivalent:
 | `application_id` | Rarely changed, per-drive |
 | `azure_ad_endpoint` | Enterprise-only, per-drive |
 | `azure_tenant_id` | Enterprise-only, per-drive |
-| `drive_id` | Set by login/drive add |
 | `remote_path` | Rarely changed |
 | `ignore_marker` | Rarely changed |
 | `bandwidth_schedule` | Complex structure |
@@ -890,7 +888,6 @@ If detected, offer to import settings. Warn about running instances to avoid con
 |--------|-----------|---------|
 | `sync_dir` | Absolute path after tilde expansion, unique across drives | - |
 | `remote_path` | Starts with `/` | - |
-| `drive_id` | Non-empty for SharePoint drives | - |
 | `application_id` | Non-empty when set | - |
 | `azure_ad_endpoint` | `""`, `USL4`, `USL5`, `DE`, `CN` | - |
 | `azure_tenant_id` | Required with `azure_ad_endpoint` | - |
@@ -932,7 +929,6 @@ If detected, offer to import settings. Warn about running instances to avoid con
 | Rule | Error Message |
 |------|--------------|
 | `azure_ad_endpoint` set but `azure_tenant_id` empty | `azure_ad_endpoint requires azure_tenant_id to be set` |
-| `drive_id` empty for SharePoint drive | `SharePoint drives require drive_id` |
 | `disable_download_validation = true` | Warning: `Download validation disabled. Data integrity cannot be guaranteed.` |
 | `disable_upload_validation = true` | Warning: `Upload validation disabled. Post-upload corruption cannot be detected.` |
 | Multiple drives with same `sync_dir` | `Drives "X" and "Y" have the same sync_dir — this will cause conflicts` |
@@ -997,7 +993,7 @@ if sync_paths entry matches skip_dirs or skip_files:
 
 | Category | Options | Reason |
 |----------|---------|--------|
-| **Drive** | `sync_dir`, `drive_id`, `remote_path` | Requires re-initializing watcher and delta token |
+| **Drive** | `sync_dir`, `remote_path` | Requires re-initializing watcher and delta token |
 | **Drive** | `application_id`, `azure_ad_endpoint`, `azure_tenant_id` | Requires re-authentication |
 | **Transfers** | `chunk_size` | Upload chunk size set at startup |
 | **Safety** | `sync_dir_permissions`, `sync_file_permissions` | Applied at file creation time |
@@ -1029,7 +1025,6 @@ Every configuration option in a single reference table.
 | `owner` | Drive | String | `""` | - | No | Owner email for shared drives |
 | `sync_vault` | Drive | Boolean | `false` | - | Yes | Include Personal Vault in sync |
 | `remote_path` | Drive | String | `"/"` | - | No | Remote path to sync |
-| `drive_id` | Drive | String | auto | - | No | Drive ID (required for SharePoint) |
 | `application_id` | Drive | String | (built-in) | - | No | Azure app ID |
 | `azure_ad_endpoint` | Drive | String | `""` | - | No | National cloud endpoint |
 | `azure_tenant_id` | Drive | String | `""` | - | No | Azure AD tenant |
@@ -1113,7 +1108,6 @@ Every configuration option in a single reference table.
 | `application_id` | drive `application_id` | Direct |
 | `azure_ad_endpoint` | drive `azure_ad_endpoint` | Direct |
 | `azure_tenant_id` | drive `azure_tenant_id` | Direct |
-| `drive_id` | drive `drive_id` | Direct |
 | `disable_websocket_support` | `websocket` | Inverted |
 | `sync_list` file | drive `sync_paths` | File to TOML array |
 | `enable_logging` + `log_dir` | `log_file` | Combined (always-on) |
@@ -1166,7 +1160,6 @@ Every configuration option in a single reference table.
 |-------------------|-------------------|-------|
 | Remote name | Drive `display_name` | Name becomes display_name |
 | `type = onedrive` | Validation only | Confirms OneDrive remote |
-| `drive_id` | Drive `drive_id` | Direct |
 | `drive_type = personal` | Auto-detected | Drive type from canonical ID |
 | `drive_type = business` | Auto-detected | Drive type from canonical ID |
 | `drive_type = documentLibrary` | Auto-detected | Drive type from canonical ID |
