@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -63,25 +64,9 @@ func driveSection(canonicalID, syncDir string) string {
 	return fmt.Sprintf("\n[%q]\nsync_dir = %q\n", canonicalID, syncDir)
 }
 
-// CreateConfigWithDrive creates a new config file from the default template
-// and appends a drive section. Used on first login when no config file exists.
-// The write is atomic (temp file + rename) and parent directories are created
-// as needed.
-func CreateConfigWithDrive(path string, canonicalID driveid.CanonicalID, syncDir string) error {
-	slog.Info("creating config file with drive",
-		"path", path,
-		"canonical_id", canonicalID.String(),
-		"sync_dir", syncDir,
-	)
-
-	content := configTemplate + driveSection(canonicalID.String(), syncDir)
-
-	return atomicWriteFile(path, []byte(content))
-}
-
-// AppendDriveSection appends a new drive section at the end of an existing
-// config file. Used by subsequent logins and `drive add`. The write is atomic
-// to avoid partial writes on crash.
+// AppendDriveSection appends a new drive section to a config file. If the file
+// does not exist, it is created from the default template first. Used by login
+// and `drive add`. The write is atomic to avoid partial writes on crash.
 func AppendDriveSection(path string, canonicalID driveid.CanonicalID, syncDir string) error {
 	slog.Info("appending drive section to config",
 		"path", path,
@@ -91,7 +76,14 @@ func AppendDriveSection(path string, canonicalID driveid.CanonicalID, syncDir st
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("reading config file: %w", err)
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("reading config file: %w", err)
+		}
+
+		// File doesn't exist — create from template.
+		content := configTemplate + driveSection(canonicalID.String(), syncDir)
+
+		return atomicWriteFile(path, []byte(content))
 	}
 
 	content := string(data)
@@ -105,6 +97,34 @@ func AppendDriveSection(path string, canonicalID driveid.CanonicalID, syncDir st
 	content += driveSection(canonicalID.String(), syncDir)
 
 	return atomicWriteFile(path, []byte(content))
+}
+
+// EnsureDriveInConfig is the single entry point for adding a drive to the config
+// file. It loads the config (or defaults if missing), checks whether the drive
+// already exists, computes the default sync_dir from token metadata, and writes
+// the drive section. Returns the sync directory, whether a new section was added,
+// and any error. Used by both login and `drive add`.
+func EnsureDriveInConfig(path string, cid driveid.CanonicalID, logger *slog.Logger) (string, bool, error) {
+	cfg, err := LoadOrDefault(path, logger)
+	if err != nil {
+		return "", false, fmt.Errorf("loading config: %w", err)
+	}
+
+	if d, exists := cfg.Drives[cid]; exists {
+		return d.SyncDir, false, nil
+	}
+
+	meta := ReadTokenMeta(cid, logger)
+	existingDirs := CollectOtherSyncDirs(cfg, cid, logger)
+	syncDir := DefaultSyncDir(cid, meta["org_name"], meta["display_name"], existingDirs)
+
+	logger.Info("adding drive to config", "canonical_id", cid.String(), "sync_dir", syncDir)
+
+	if err := AppendDriveSection(path, cid, syncDir); err != nil {
+		return "", false, fmt.Errorf("writing drive config: %w", err)
+	}
+
+	return syncDir, true, nil
 }
 
 // SetDriveKey finds a drive section by canonical ID and sets a key-value pair.

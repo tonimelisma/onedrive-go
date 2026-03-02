@@ -148,16 +148,7 @@ func TestBuildConfiguredDriveEntries_NoSyncDir_WithTokenMeta(t *testing.T) {
 // --- listAvailableDrives ---
 
 func TestListAvailableDrives_Empty(t *testing.T) {
-	cfg := config.DefaultConfig()
-	err := listAvailableDrives(cfg)
-	assert.NoError(t, err)
-}
-
-func TestListAvailableDrives_WithDrives(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.Drives[driveid.MustCanonicalID("personal:user@example.com")] = config.Drive{SyncDir: "~/OneDrive"}
-
-	err := listAvailableDrives(cfg)
+	err := listAvailableDrives()
 	assert.NoError(t, err)
 }
 
@@ -605,12 +596,10 @@ func TestAddNewDrive_NoToken(t *testing.T) {
 
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")
-	require.NoError(t, os.WriteFile(cfgPath, []byte(""), 0o600))
 
-	cfg := config.DefaultConfig()
 	cid := driveid.MustCanonicalID("personal:nobody@example.com")
 
-	err := addNewDrive(cfgPath, cfg, cid, testDriveLogger(t))
+	err := addNewDrive(cfgPath, cid, testDriveLogger(t))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no token file")
 }
@@ -626,12 +615,10 @@ func TestAddNewDrive_WithToken(t *testing.T) {
 
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")
-	require.NoError(t, os.WriteFile(cfgPath, []byte(""), 0o600))
 
-	cfg := config.DefaultConfig()
 	cid := driveid.MustCanonicalID("personal:user@example.com")
 
-	err := addNewDrive(cfgPath, cfg, cid, testDriveLogger(t))
+	err := addNewDrive(cfgPath, cid, testDriveLogger(t))
 	assert.NoError(t, err)
 
 	// Verify config was updated with canonical ID and sync_dir.
