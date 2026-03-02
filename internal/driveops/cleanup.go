@@ -1,9 +1,6 @@
 package driveops
 
-import (
-	"log/slog"
-	"time"
-)
+import "log/slog"
 
 // CleanTransferArtifacts runs non-critical post-sync housekeeping:
 //   - Deletes orphaned .partial files (always garbage after sync completes)
@@ -11,10 +8,7 @@ import (
 //
 // Errors are logged but not propagated — housekeeping should never
 // fail a sync cycle.
-func CleanTransferArtifacts(
-	syncRoot string, sessionStore *SessionStore,
-	staleSessionAge time.Duration, logger *slog.Logger,
-) {
+func CleanTransferArtifacts(syncRoot string, sessionStore *SessionStore, logger *slog.Logger) {
 	if n, err := CleanStalePartials(syncRoot, logger); err != nil {
 		logger.Warn("partial file cleanup failed", slog.String("error", err.Error()))
 	} else if n > 0 {
@@ -22,7 +16,7 @@ func CleanTransferArtifacts(
 	}
 
 	if sessionStore != nil {
-		if n, err := sessionStore.CleanStale(staleSessionAge); err != nil {
+		if n, err := sessionStore.CleanStale(StaleSessionAge); err != nil {
 			logger.Warn("stale session cleanup failed", slog.String("error", err.Error()))
 		} else if n > 0 {
 			logger.Info("cleaned stale upload sessions", slog.Int("count", n))

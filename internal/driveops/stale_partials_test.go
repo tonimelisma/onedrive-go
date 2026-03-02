@@ -93,6 +93,38 @@ func TestCleanStalePartials_MultipleFiles(t *testing.T) {
 	assert.NoError(t, statErr)
 }
 
+func TestCleanStalePartials_PermissionError(t *testing.T) {
+	t.Parallel()
+
+	if os.Getuid() == 0 {
+		t.Skip("test requires non-root user")
+	}
+
+	dir := t.TempDir()
+
+	// Create a restricted subdirectory containing a .partial file.
+	restricted := filepath.Join(dir, "restricted")
+	require.NoError(t, os.MkdirAll(restricted, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(restricted, "hidden.partial"), []byte("x"), 0o644))
+
+	// Create an accessible .partial at the top level.
+	topPartial := filepath.Join(dir, "top.partial")
+	require.NoError(t, os.WriteFile(topPartial, []byte("y"), 0o644))
+
+	// Remove read+execute permission on the subdirectory.
+	require.NoError(t, os.Chmod(restricted, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(restricted, 0o755) })
+
+	// Should still delete the accessible .partial and not panic.
+	n, err := CleanStalePartials(dir, testLogger(t))
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+
+	// Top-level partial deleted.
+	_, statErr := os.Stat(topPartial)
+	assert.True(t, os.IsNotExist(statErr), "accessible partial should have been deleted")
+}
+
 func TestCleanStalePartials_NonexistentDir(t *testing.T) {
 	t.Parallel()
 
