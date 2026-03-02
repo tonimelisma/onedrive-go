@@ -466,10 +466,15 @@ func runCLIAllowError(t *testing.T, args ...string) (string, string, error) {
 // --- Parametrized tests ---
 
 func TestE2E_RoundTrip(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
 	modes := fileOpModes(t)
 
 	for _, mode := range modes {
 		t.Run(mode.name, func(t *testing.T) {
+			t.Parallel()
+
 			testFolder := fmt.Sprintf("onedrive-go-e2e-%s-%d", mode.name, time.Now().UnixNano())
 			testSubfolder := testFolder + "/subfolder"
 			testFile := testFolder + "/test.txt"
@@ -591,10 +596,15 @@ func TestE2E_RoundTrip(t *testing.T) {
 // TestE2E_ErrorCases verifies that the CLI returns non-zero exit codes
 // and meaningful error messages for invalid operations.
 func TestE2E_ErrorCases(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
 	modes := fileOpModes(t)
 
 	for _, mode := range modes {
 		t.Run(mode.name, func(t *testing.T) {
+			t.Parallel()
+
 			t.Run("ls_not_found", func(t *testing.T) {
 				output := mode.expectError(t, "ls", "/nonexistent-uuid-path-12345")
 				assert.Contains(t, output, "nonexistent-uuid-path-12345")
@@ -630,10 +640,15 @@ func TestE2E_ErrorCases(t *testing.T) {
 // TestE2E_JSONOutput validates that --json flags produce well-formed JSON
 // with the expected schema for ls and stat commands.
 func TestE2E_JSONOutput(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
 	modes := fileOpModes(t)
 
 	for _, mode := range modes {
 		t.Run(mode.name, func(t *testing.T) {
+			t.Parallel()
+
 			t.Run("ls_json", func(t *testing.T) {
 				stdout, _ := mode.run(t, "ls", "--json", "/")
 
@@ -666,10 +681,15 @@ func TestE2E_JSONOutput(t *testing.T) {
 // TestE2E_QuietFlag verifies that --quiet suppresses informational output
 // on stderr during file operations.
 func TestE2E_QuietFlag(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
 	modes := fileOpModes(t)
 
 	for _, mode := range modes {
 		t.Run(mode.name, func(t *testing.T) {
+			t.Parallel()
+
 			t.Run("put_quiet_suppresses_output", func(t *testing.T) {
 				testFolder := fmt.Sprintf("onedrive-go-e2e-quiet-%s-%d", mode.name, time.Now().UnixNano())
 				remotePath := "/" + testFolder + "/quiet-test.txt"

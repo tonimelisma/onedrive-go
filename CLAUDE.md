@@ -216,7 +216,7 @@ After each increment, run through this entire checklist. If something fails, fix
 3. [ ] **Unit tests**: `go test -race -coverprofile=/tmp/cover.out ./...`
 4. [ ] **Lint**: `golangci-lint run`
 5. [ ] **Coverage**: `go tool cover -func=/tmp/cover.out | grep total` — never decrease
-6. [ ] **Fast E2E**: `go test -tags=e2e -race -v -timeout=10m ./e2e/...` (reads `.env` for test accounts)
+6. [ ] **Fast E2E**: `go test -tags=e2e -race -v -parallel 5 -timeout=10m ./e2e/...` (reads `.env` for test accounts)
 7. [ ] **Docs updated**:
     - `CLAUDE.md` — update if structural changes (new packages, commands, deps)
     - `BACKLOG.md` — check before starting work, update when discovering or fixing issues
@@ -234,7 +234,7 @@ After each increment, run through this entire checklist. If something fails, fix
 
 Quick command (gates 1-6):
 ```bash
-gofumpt -w . && goimports -local github.com/tonimelisma/onedrive-go -w . && go build ./... && go test -race -coverprofile=/tmp/cover.out ./... && golangci-lint run && go tool cover -func=/tmp/cover.out | grep total && go test -tags=e2e -race -v -timeout=10m ./e2e/... && echo "ALL GATES PASS"
+gofumpt -w . && goimports -local github.com/tonimelisma/onedrive-go -w . && go build ./... && go test -race -coverprofile=/tmp/cover.out ./... && golangci-lint run && go tool cover -func=/tmp/cover.out | grep total && go test -tags=e2e -race -v -parallel 5 -timeout=10m ./e2e/... && echo "ALL GATES PASS"
 ```
 
 Cleanup check:
