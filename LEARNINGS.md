@@ -276,7 +276,7 @@ Commands that skip config loading (login, logout, whoami, status, drive add/remo
 GitHub secrets can't be updated from workflows, so we use Azure Key Vault. OIDC federation means no stored credentials — GitHub Actions presents a short-lived JWT scoped to `repo:tonimelisma/onedrive-go:ref:refs/heads/main`. Token files flow via `az keyvault secret download/set --file`, never through stdout/CI logs.
 
 ### Token and drive ID bootstrap
-Tokens bootstrapped via `go run . login --drive personal:user@example.com`. Drive IDs discovered via `go run . whoami --json`. Integration tests require `ONEDRIVE_TEST_DRIVE_ID` env var.
+Tokens bootstrapped via `scripts/bootstrap-test-credentials.sh` which runs `login` with XDG overrides pointing to `.testdata/`. Drive IDs are cached in token file metadata (`.meta.drive_id`) — no separate env var needed. Integration tests read the drive ID from the cache file via `tokenfile.ReadMeta()`.
 
 ### Integration test build tag pattern
 `//go:build integration` excluded from `go test ./...`. The `newIntegrationClient(t)` helper skips (not fails) when no token is available.

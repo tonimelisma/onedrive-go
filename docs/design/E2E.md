@@ -2,7 +2,7 @@
 
 ## Status: IMPLEMENTED
 
-Isolation is fully implemented. `TestMain` in both `e2e/` and `internal/graph/` sets up XDG + HOME overrides, copies the token to a temp dir, and validates the account allowlist.
+Isolation is fully implemented. `TestMain` in both `e2e/` and `internal/graph/` reads test credentials from `.testdata/` (never from production directories), copies them to temp dirs, and validates isolation with hard crash guards.
 
 ## Problem
 
@@ -20,13 +20,58 @@ Risks:
 - **Conflicting mutations**: both daemon and tests mutate the same OneDrive folder
 - **Corruption propagation**: a test bug that corrupts the token or state DB breaks production sync
 
+## Credential Source: `.testdata/`
+
+All test credentials live in `.testdata/` at the repo root (gitignored):
+
+```
+.testdata/
+├── config.toml                                       # test config (all test drives)
+├── token_personal_testitesti18@outlook.com.json      # cache file (token + metadata)
+└── token_personal_kikkelimies123@outlook.com.json    # cache file (token + metadata)
+```
+
+Created by `scripts/bootstrap-test-credentials.sh`. Never reads from production data directories.
+
+### Bootstrap
+
+```bash
+./scripts/bootstrap-test-credentials.sh   # interactive login → .testdata/
+```
+
+Run once per test account. Config accumulates drive sections across runs.
+
+### CI Setup
+
+CI downloads from Azure Key Vault to `.testdata/` before running tests:
+
+```bash
+./scripts/migrate-test-data-to-ci.sh      # uploads .testdata/ → Key Vault
+```
+
 ## Implementation
 
 ### Safety guards (TestMain)
 
 1. **`.env` loading**: `loadDotEnv()` reads `KEY=VALUE` from `.env` at module root (gitignored). CI sets env vars directly.
 2. **Account allowlist**: `validateAllowlist()` crashes if `ONEDRIVE_ALLOWED_TEST_ACCOUNTS` is unset or if `ONEDRIVE_TEST_DRIVE` is not in the list.
-3. **Directory isolation**: `setupIsolation()` overrides `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` to temp directories and copies the token.
+3. **Directory isolation**: `setupIsolation()`:
+   a. Unsets `ONEDRIVE_GO_CONFIG` and `ONEDRIVE_GO_DRIVE`
+   b. Creates temp dirs for HOME, XDG_DATA_HOME, XDG_CONFIG_HOME, XDG_CACHE_HOME
+   c. Copies cache file from `.testdata/` → temp data dir
+   d. Copies `config.toml` from `.testdata/` → temp config dir
+   e. Overrides all env vars to temp dirs
+   f. **Hard crash guards**: verifies isolation before any tests run
+4. **Token rotation**: cleanup copies rotated cache file back to `.testdata/`
+
+### Hard crash guards
+
+`verifyIsolation()` runs BEFORE `m.Run()`. If any check fails, the process crashes — no tests execute:
+
+- `ONEDRIVE_GO_CONFIG` and `ONEDRIVE_GO_DRIVE` must not be set
+- HOME, XDG_DATA_HOME, XDG_CONFIG_HOME, XDG_CACHE_HOME must point to temp
+- `DefaultDataDir()`, `DefaultConfigDir()`, `DefaultCacheDir()` must resolve under temp
+- `os.UserHomeDir()` must return temp home
 
 ### XDG override on all platforms
 
@@ -36,21 +81,45 @@ Risks:
 
 Sync tests that need isolated state DBs override `XDG_DATA_HOME` per-test via `t.Setenv()` and copy the token from `testDataDir` (set by TestMain).
 
+### Drive ID discovery
+
+Integration tests read `.meta.drive_id` from the cache file instead of requiring `ONEDRIVE_TEST_DRIVE_ID`. The metadata is populated by `login` during bootstrap.
+
 ### Isolation matrix
 
 | Context | Config | Token | State DB | OneDrive folder | Graph API |
 |---------|--------|-------|----------|-----------------|-----------|
 | **Production** | Real XDG config | Real XDG token | Real XDG state DB | User's real files | Real |
 | **Unit tests** | Temp dir or none | None (DriveID hardcoded) | Temp dir SQLite | None (mocked) | Mocked |
-| **E2E local** | Temp dir (generated) | **Copy** in temp dir | Temp dir SQLite | Dedicated test folder | Real |
-| **E2E CI** | Temp dir (generated) | Downloaded from Key Vault to temp dir | Temp dir SQLite | Dedicated test folder | Real |
+| **E2E local** | From `.testdata/` → temp | From `.testdata/` → temp | Fresh per test | Dedicated test folder | Real |
+| **E2E CI** | Key Vault → `.testdata/` → temp | Key Vault → `.testdata/` → temp | Fresh per test | Dedicated test folder | Real |
+
+### Env vars
+
+**Consumed by test code:**
+
+| Var | Required | Purpose |
+|-----|----------|---------|
+| `ONEDRIVE_TEST_DRIVE` | Yes | Canonical drive ID for this test run |
+| `ONEDRIVE_ALLOWED_TEST_ACCOUNTS` | Yes | Comma-separated allowlist; crash if drive not in it |
+
+**GitHub variables (CI only):**
+
+| Var | Purpose |
+|-----|---------|
+| `ONEDRIVE_TEST_DRIVE_INTEGRATION` | Sets `ONEDRIVE_TEST_DRIVE` for integration job |
+| `ONEDRIVE_TEST_DRIVE_E2E` | Sets `ONEDRIVE_TEST_DRIVE` for e2e job |
+| `ONEDRIVE_ALLOWED_TEST_ACCOUNTS` | Sets allowlist for both jobs |
+| `AZURE_CLIENT_ID` / `TENANT_ID` / `SUBSCRIPTION_ID` / `KEY_VAULT_NAME` | Azure OIDC |
 
 ### Verification tests
 
-`TestIsolation_*` tests verify:
+`TestIsolation_*` tests verify (belt-and-suspenders with hard crash guards):
 - `HOME` env var points to temp dir
 - `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` point to temp dirs
 - Token file exists in temp data dir
+- Config file exists in temp config dir
+- Credentials come from `.testdata/`
 - Integration tests: `config.DefaultDataDir()` resolves under temp
 
 ## Unit Test Implications

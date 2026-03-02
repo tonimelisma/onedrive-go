@@ -191,19 +191,18 @@ After each increment, run through this entire checklist. If something fails, fix
 4. [ ] **Lint**: `golangci-lint run`
 5. [ ] **Coverage**: `go tool cover -func=/tmp/cover.out | grep total` — never decrease
 6. [ ] **Fast E2E**: `go test -tags=e2e -race -v -timeout=10m ./e2e/...` (reads `.env` for test accounts)
-7. [ ] **Top-up loop**: Review the entire increment based on the context you have. Do not read or re-read any files at this stage. Identify anything that could be improved — even minor issues (naming, logging, edge cases, defensive checks, test gaps, comments). Present the full list to the human. Then fix all of them automatically, re-run gates 1-6, and review again. Repeat until a full review pass finds zero issues of any size
-8. [ ] **Docs updated**:
+7. [ ] **Docs updated**:
     - `CLAUDE.md` — update if structural changes (new packages, commands, deps)
     - `BACKLOG.md` — check before starting work, update when discovering or fixing issues
     - `LEARNINGS.md` — read for patterns and gotchas, add new institutional knowledge
     - `docs/roadmap.md` — check current phase status, update on completion
     - `docs/design/` — update relevant design docs if design changed
-9. [ ] **Push and CI green**: Push branch, open PR, `ci.yml` green (4 jobs: lint, test, integration, e2e). Merge with `./scripts/poll-and-merge.sh <pr_number>`
-10. [ ] **Cleanup**: Clean `git status`. Remove the current worktree after merge. **NEVER delete other worktrees or branches — even if they appear stale.** Instead, report all other worktrees and branches to the human, including their last commit date (use `git log -1 --format='%ci' <branch>` for each). Let the human decide what to clean up
-11. [ ] **Increment report**: Present to the human:
+8. [ ] **Push and CI green**: Push branch, open PR, `ci.yml` green (4 jobs: lint, test, integration, e2e). Merge with `./scripts/poll-and-merge.sh <pr_number>`
+9. [ ] **Cleanup**: Clean `git status`. Remove the current worktree after merge. **NEVER delete other worktrees or branches — even if they appear stale.** Instead, report all other worktrees and branches to the human, including their last commit date (use `git log -1 --format='%ci' <branch>` for each). Let the human decide what to clean up
+10. [ ] **Increment report**: Present to the human:
     - **Plan deviations**: For every deviation from the approved plan — what changed, why it changed, what was done instead, and whether the new approach is the long-term solution or a temporary measure that needs follow-up (with BACKLOG IDs for any follow-up)
     - **Process changes**: What you would do differently next time in how the work was planned or executed
-    - **Top-up recommendations**: Any remaining codebase improvements you'd make
+    - **Top-up recommendations**: Any remaining codebase improvements you'd make. Don't be coy. Engineering effort is free, and this is mission-critical software. Ensure even small issues are brought up, and don't be coy to suggest more ambitious refactoring.
     - **Architecture re-envisioning**: If you were starting from a blank slate, would you build it the same way? Propose any dramatic architectural changes if a better design is apparent
     - **Unfixed items**: Anything you were unable to address in this increment (with BACKLOG IDs for deferred items)
 

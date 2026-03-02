@@ -3,7 +3,6 @@
 package graph
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,74 +12,47 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
+	"github.com/tonimelisma/onedrive-go/testutil"
 )
 
 // integrationRealHomeDir holds the original HOME directory before TestMain
 // overrides it. Used by isolation tests.
 var integrationRealHomeDir string
 
-// loadIntegrationDotEnv reads KEY=VALUE pairs from .env at the module root.
-func loadIntegrationDotEnv() {
-	root := findIntegrationModuleRoot()
-	path := filepath.Join(root, ".env")
+// integrationTestCredentialDir holds the path to .testdata/.
+var integrationTestCredentialDir string
 
-	f, err := os.Open(path)
+// validateIntegrationTestData checks that .testdata/ has the expected structure.
+// Integration tests CAN import internal packages, so we use tokenfile.ReadMeta().
+func validateIntegrationTestData(credDir, driveID string) {
+	tokenName := testutil.TokenFileName(driveID)
+	tokenPath := filepath.Join(credDir, tokenName)
+
+	meta, err := tokenfile.ReadMeta(tokenPath)
 	if err != nil {
-		return
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		key, value, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-
-		key = strings.TrimSpace(key)
-		value = strings.TrimSpace(value)
-		value = strings.Trim(value, "\"'")
-
-		if os.Getenv(key) == "" {
-			os.Setenv(key, value)
-		}
-	}
-}
-
-// validateIntegrationAllowlist crashes if ONEDRIVE_ALLOWED_TEST_ACCOUNTS is
-// not set or ONEDRIVE_TEST_DRIVE is not in the allowlist.
-func validateIntegrationAllowlist() {
-	allowlist := os.Getenv("ONEDRIVE_ALLOWED_TEST_ACCOUNTS")
-	if allowlist == "" {
-		fmt.Fprintln(os.Stderr, "FATAL: ONEDRIVE_ALLOWED_TEST_ACCOUNTS not set")
-		fmt.Fprintln(os.Stderr, "Set it in .env or as an environment variable.")
+		fmt.Fprintf(os.Stderr, "FATAL: cannot read token metadata from %s: %v\n", tokenPath, err)
+		fmt.Fprintln(os.Stderr, "Re-run scripts/bootstrap-test-credentials.sh.")
 		os.Exit(1)
 	}
 
-	testDrive := os.Getenv(driveEnvVar)
-	if testDrive == "" {
-		fmt.Fprintln(os.Stderr, "FATAL: ONEDRIVE_TEST_DRIVE not set")
+	if id, ok := meta["drive_id"]; !ok || id == "" {
+		fmt.Fprintf(os.Stderr, "FATAL: token file %s missing .meta.drive_id\n", tokenPath)
+		fmt.Fprintln(os.Stderr, "Re-run scripts/bootstrap-test-credentials.sh.")
 		os.Exit(1)
 	}
 
-	for _, a := range strings.Split(allowlist, ",") {
-		if strings.TrimSpace(a) == testDrive {
-			return
-		}
+	configPath := filepath.Join(credDir, "config.toml")
+	if _, statErr := os.Stat(configPath); statErr != nil {
+		fmt.Fprintf(os.Stderr, "FATAL: config.toml not found at %s\n", configPath)
+		fmt.Fprintln(os.Stderr, "Run scripts/bootstrap-test-credentials.sh to create test credentials.")
+		os.Exit(1)
 	}
-
-	fmt.Fprintf(os.Stderr, "FATAL: %s=%q is not in ONEDRIVE_ALLOWED_TEST_ACCOUNTS=%q\n",
-		driveEnvVar, testDrive, allowlist)
-	os.Exit(1)
 }
 
 // setupIntegrationIsolation overrides HOME and XDG directories to temp
-// directories and copies the test token file. Returns a cleanup function.
+// directories, copies the test token and config from .testdata/, and
+// verifies isolation. Returns a cleanup function.
 func setupIntegrationIsolation() func() {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -90,8 +62,16 @@ func setupIntegrationIsolation() func() {
 
 	integrationRealHomeDir = home
 
-	// Capture real data dir before overriding env.
-	realDataDir := config.DefaultDataDir()
+	// Fallback to "../.." — internal/graph/ is two levels below module root.
+	moduleRoot := testutil.FindModuleRoot("../..")
+	integrationTestCredentialDir = testutil.FindTestCredentialDir(moduleRoot)
+
+	drive := os.Getenv(driveEnvVar)
+	validateIntegrationTestData(integrationTestCredentialDir, drive)
+
+	// Unset app-specific env vars that could leak production paths.
+	os.Unsetenv("ONEDRIVE_GO_CONFIG")
+	os.Unsetenv("ONEDRIVE_GO_DRIVE")
 
 	tempRoot, err := os.MkdirTemp("", "onedrive-integration-isolation-*")
 	if err != nil {
@@ -116,63 +96,97 @@ func setupIntegrationIsolation() func() {
 	os.Setenv("XDG_DATA_HOME", tempData)
 	os.Setenv("XDG_CACHE_HOME", tempCache)
 
-	// Copy token file to isolated data dir.
+	// Copy token file from .testdata/ to isolated data dir.
 	appDataDir := filepath.Join(tempData, "onedrive-go")
 	if mkErr := os.MkdirAll(appDataDir, 0o755); mkErr != nil {
 		fmt.Fprintf(os.Stderr, "FATAL: creating app data dir: %v\n", mkErr)
 		os.Exit(1)
 	}
 
-	drive := os.Getenv(driveEnvVar)
-	if drive == "" {
-		drive = defaultTestDrive
-	}
+	tokenName := testutil.TokenFileName(drive)
 
-	copyIntegrationToken(realDataDir, appDataDir, drive)
+	testutil.CopyFile(
+		filepath.Join(integrationTestCredentialDir, tokenName),
+		filepath.Join(appDataDir, tokenName),
+		0o600,
+	)
 
-	fmt.Fprintf(os.Stderr, "Integration isolation: HOME=%s XDG_DATA_HOME=%s\n", tempHome, tempData)
-
-	return func() { os.RemoveAll(tempRoot) }
-}
-
-// copyIntegrationToken copies the token file for the given drive.
-func copyIntegrationToken(srcDir, dstDir, drive string) {
-	parts := strings.SplitN(drive, ":", 2)
-	if len(parts) < 2 {
-		fmt.Fprintf(os.Stderr, "FATAL: cannot parse drive %q for token filename\n", drive)
+	// Copy config.toml from .testdata/ to isolated config dir.
+	appConfigDir := filepath.Join(tempConfig, "onedrive-go")
+	if mkErr := os.MkdirAll(appConfigDir, 0o755); mkErr != nil {
+		fmt.Fprintf(os.Stderr, "FATAL: creating app config dir: %v\n", mkErr)
 		os.Exit(1)
 	}
 
-	tokenName := "token_" + parts[0] + "_" + parts[1] + ".json"
-	srcPath := filepath.Join(srcDir, tokenName)
+	testutil.CopyFile(
+		filepath.Join(integrationTestCredentialDir, "config.toml"),
+		filepath.Join(appConfigDir, "config.toml"),
+		0o644,
+	)
 
-	data, err := os.ReadFile(srcPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "FATAL: cannot read token file %s: %v\n", srcPath, err)
-		fmt.Fprintln(os.Stderr, "Run 'onedrive-go login' first to create a token.")
-		os.Exit(1)
-	}
+	// Hard crash guards: verify isolation BEFORE any tests run.
+	verifyIntegrationIsolation(tempRoot)
 
-	if writeErr := os.WriteFile(filepath.Join(dstDir, tokenName), data, 0o600); writeErr != nil {
-		fmt.Fprintf(os.Stderr, "FATAL: writing token file: %v\n", writeErr)
-		os.Exit(1)
-	}
-}
+	fmt.Fprintf(os.Stderr, "Integration isolation: HOME=%s XDG_DATA_HOME=%s (credentials from .testdata/)\n", tempHome, tempData)
 
-// findIntegrationModuleRoot walks up from CWD to find go.mod.
-func findIntegrationModuleRoot() string {
-	dir, _ := os.Getwd()
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
+	return func() {
+		// Preserve rotated token: copy back from temp to .testdata/.
+		rotatedPath := filepath.Join(appDataDir, tokenName)
+		if _, statErr := os.Stat(rotatedPath); statErr == nil {
+			origPath := filepath.Join(integrationTestCredentialDir, tokenName)
+			data, readErr := os.ReadFile(rotatedPath)
+			if readErr != nil {
+				fmt.Fprintf(os.Stderr, "WARNING: cannot read rotated token %s: %v\n", rotatedPath, readErr)
+			} else if writeErr := os.WriteFile(origPath, data, 0o600); writeErr != nil {
+				fmt.Fprintf(os.Stderr, "WARNING: cannot write rotated token back to %s: %v\n", origPath, writeErr)
+			}
 		}
 
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "../.."
-		}
+		os.RemoveAll(tempRoot)
+	}
+}
 
-		dir = parent
+// verifyIntegrationIsolation hard-crashes if any production path could leak.
+func verifyIntegrationIsolation(tempRoot string) {
+	crash := func(msg string) {
+		fmt.Fprintf(os.Stderr, "FATAL: isolation check failed: %s\n", msg)
+		os.Exit(1)
+	}
+
+	// 1. Production env vars must not be set.
+	if os.Getenv("ONEDRIVE_GO_CONFIG") != "" {
+		crash("ONEDRIVE_GO_CONFIG is set — would leak production config into tests")
+	}
+
+	if os.Getenv("ONEDRIVE_GO_DRIVE") != "" {
+		crash("ONEDRIVE_GO_DRIVE is set — would leak production drive into tests")
+	}
+
+	// 2. All XDG/HOME vars must point to temp.
+	for _, v := range []string{"HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"} {
+		val := os.Getenv(v)
+		if val == "" || !strings.HasPrefix(val, tempRoot) {
+			crash(v + " not overridden to temp dir")
+		}
+	}
+
+	// 3. DefaultDataDir/ConfigDir/CacheDir must resolve under temp.
+	// Integration tests CAN import internal/config.
+	for name, fn := range map[string]func() string{
+		"DefaultDataDir":   config.DefaultDataDir,
+		"DefaultConfigDir": config.DefaultConfigDir,
+		"DefaultCacheDir":  config.DefaultCacheDir,
+	} {
+		dir := fn()
+		if !strings.HasPrefix(dir, tempRoot) {
+			crash(name + " resolves to " + dir + " (not under temp)")
+		}
+	}
+
+	// 4. os.UserHomeDir() must return temp home.
+	homeDir, _ := os.UserHomeDir()
+	if !strings.HasPrefix(homeDir, tempRoot) {
+		crash("UserHomeDir() returns " + homeDir + " (not under temp)")
 	}
 }
 
@@ -197,4 +211,10 @@ func TestIntegration_Isolation_DataDirResolvesToTemp(t *testing.T) {
 	dataDir := config.DefaultDataDir()
 	assert.NotContains(t, dataDir, integrationRealHomeDir,
 		"DefaultDataDir() should resolve under temp, not real home")
+}
+
+func TestIntegration_Isolation_CredentialsFromTestdata(t *testing.T) {
+	assert.NotEmpty(t, integrationTestCredentialDir)
+	assert.True(t, strings.HasSuffix(integrationTestCredentialDir, ".testdata"),
+		"credentials should come from .testdata/, got: %s", integrationTestCredentialDir)
 }
