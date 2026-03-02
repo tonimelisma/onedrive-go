@@ -261,6 +261,7 @@ echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r 
 | [docs/design/MULTIDRIVE.md](docs/design/MULTIDRIVE.md) | Multi-drive architecture (shared drives, display_name, vault exclusion) |
 | [docs/design/event-driven-rationale.md](docs/design/event-driven-rationale.md) | Option E architectural decision record |
 | [docs/design/concurrent-execution.md](docs/design/concurrent-execution.md) | Execution architecture |
+| [docs/design/ci_issues.md](docs/design/ci_issues.md) | Graph API issues & workarounds |
 | [docs/design/legacy-sequential-architecture.md](docs/design/legacy-sequential-architecture.md) | Old 9-phase architecture reference (migration guide) |
 | [docs/archive/](docs/archive/) | Historical docs |
 | [docs/tier1-research/](docs/tier1-research/) | 16 Tier 1 research docs |
