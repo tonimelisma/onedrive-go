@@ -34,14 +34,13 @@ cmd/onedrive-go/  →  internal/driveops/  →  internal/graph/
 **`session.go`** — `SessionProvider` + `Session`:
 ```go
 type SessionProvider struct {
-    cfg          *config.Config           // guarded by mu
-    TokenSourceFn func(ctx, path, logger) // exported for test injection
-    mu           sync.Mutex
-    tokenCache   map[string]graph.TokenSource
+    holder        *config.Holder           // shared config owner
+    TokenSourceFn func(ctx, path, logger)  // exported for test injection
+    mu            sync.Mutex               // protects tokenCache only
+    tokenCache    map[string]graph.TokenSource
 }
 
 func (p *SessionProvider) Session(ctx, rd) (*Session, error)
-func (p *SessionProvider) UpdateConfig(cfg)  // SIGHUP reload
 
 type Session struct {
     Meta     *graph.Client  // 30s timeout
@@ -67,7 +66,7 @@ func CleanRemotePath(path) string
 
 `SessionProvider` caches `TokenSource`s by token file path. Multiple drives sharing a token path (e.g., personal + SharePoint on same account) share one `TokenSource`, preventing OAuth2 refresh token rotation races (two independent refreshes can invalidate each other's refresh tokens).
 
-The config reference (`p.cfg`) is read under the lock to avoid a data race with `UpdateConfig()` during SIGHUP reload.
+Config is accessed via `p.holder.Config()` — the `config.Holder` provides thread-safe read access (RWMutex). SIGHUP reload updates config via `holder.Update(newCfg)` in one place.
 
 ### CLI Integration
 
@@ -89,6 +88,7 @@ The `sync` command creates its own `SessionProvider` because it uses `skipConfig
 ```go
 // OrchestratorConfig
 type OrchestratorConfig struct {
+    Holder   *config.Holder             // shared with SessionProvider
     Provider *driveops.SessionProvider
     // ...
 }
@@ -96,10 +96,11 @@ type OrchestratorConfig struct {
 // prepareDriveWork
 session, err := o.cfg.Provider.Session(ctx, rd)
 
-// reload — update both config references
-o.cfg.Config = newCfg
-o.cfg.Provider.UpdateConfig(newCfg)
+// reload — single-point config update via shared Holder
+o.cfg.Holder.Update(newCfg)
 ```
+
+Both `OrchestratorConfig.Holder` and `SessionProvider.holder` point to the same `*config.Holder` instance. On SIGHUP reload, one `holder.Update(newCfg)` call updates config for all consumers.
 
 Tests inject stubs via `cfg.Provider.TokenSourceFn = stubFn`.
 

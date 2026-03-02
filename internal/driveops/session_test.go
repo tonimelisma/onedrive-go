@@ -50,8 +50,8 @@ func TestCleanRemotePath(t *testing.T) {
 // --- NewSessionProvider ---
 
 func TestNewSessionProvider(t *testing.T) {
-	cfg := config.DefaultConfig()
-	p := NewSessionProvider(cfg, &http.Client{}, &http.Client{}, "test/1.0", discardLogger())
+	holder := config.NewHolder(config.DefaultConfig(), "")
+	p := NewSessionProvider(holder, &http.Client{}, &http.Client{}, "test/1.0", discardLogger())
 
 	require.NotNil(t, p)
 	assert.NotNil(t, p.TokenSourceFn, "default TokenSourceFn should be set")
@@ -60,8 +60,8 @@ func TestNewSessionProvider(t *testing.T) {
 // --- SessionProvider.Session error paths ---
 
 func TestSessionProvider_EmptyTokenPath(t *testing.T) {
-	cfg := config.DefaultConfig()
-	p := NewSessionProvider(cfg, &http.Client{}, &http.Client{}, "test/1.0", discardLogger())
+	holder := config.NewHolder(config.DefaultConfig(), "")
+	p := NewSessionProvider(holder, &http.Client{}, &http.Client{}, "test/1.0", discardLogger())
 
 	resolved := &config.ResolvedDrive{
 		CanonicalID: driveid.CanonicalID{}, // zero value → empty token path
@@ -73,8 +73,8 @@ func TestSessionProvider_EmptyTokenPath(t *testing.T) {
 }
 
 func TestSessionProvider_NotLoggedIn(t *testing.T) {
-	cfg := config.DefaultConfig()
-	p := NewSessionProvider(cfg, &http.Client{}, &http.Client{}, "test/1.0", discardLogger())
+	holder := config.NewHolder(config.DefaultConfig(), "")
+	p := NewSessionProvider(holder, &http.Client{}, &http.Client{}, "test/1.0", discardLogger())
 	p.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
 		return nil, graph.ErrNotLoggedIn
 	}
@@ -93,8 +93,8 @@ func TestSessionProvider_NotLoggedIn(t *testing.T) {
 }
 
 func TestSessionProvider_ZeroDriveID(t *testing.T) {
-	cfg := config.DefaultConfig()
-	p := NewSessionProvider(cfg, &http.Client{}, &http.Client{}, "test/1.0", discardLogger())
+	holder := config.NewHolder(config.DefaultConfig(), "")
+	p := NewSessionProvider(holder, &http.Client{}, &http.Client{}, "test/1.0", discardLogger())
 	p.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
 		return &stubTokenSource{}, nil
 	}
@@ -115,8 +115,8 @@ func TestSessionProvider_ZeroDriveID(t *testing.T) {
 // --- Token caching ---
 
 func TestSessionProvider_TokenCaching(t *testing.T) {
-	cfg := config.DefaultConfig()
-	p := NewSessionProvider(cfg, &http.Client{}, &http.Client{}, "test/1.0", discardLogger())
+	holder := config.NewHolder(config.DefaultConfig(), "")
+	p := NewSessionProvider(holder, &http.Client{}, &http.Client{}, "test/1.0", discardLogger())
 
 	var callCount int
 	ts := &stubTokenSource{}
@@ -148,8 +148,8 @@ func TestSessionProvider_TokenCaching(t *testing.T) {
 // --- Thread safety ---
 
 func TestSessionProvider_ThreadSafety(t *testing.T) {
-	cfg := config.DefaultConfig()
-	p := NewSessionProvider(cfg, &http.Client{}, &http.Client{}, "test/1.0", discardLogger())
+	holder := config.NewHolder(config.DefaultConfig(), "")
+	p := NewSessionProvider(holder, &http.Client{}, &http.Client{}, "test/1.0", discardLogger())
 	p.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
 		return &stubTokenSource{}, nil
 	}
@@ -195,8 +195,8 @@ func TestSession_Fields(t *testing.T) {
 // --- TokenSourceFn error propagation ---
 
 func TestSessionProvider_TokenSourceError(t *testing.T) {
-	cfg := config.DefaultConfig()
-	p := NewSessionProvider(cfg, &http.Client{}, &http.Client{}, "test/1.0", discardLogger())
+	holder := config.NewHolder(config.DefaultConfig(), "")
+	p := NewSessionProvider(holder, &http.Client{}, &http.Client{}, "test/1.0", discardLogger())
 	p.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
 		return nil, errors.New("disk read failed")
 	}
