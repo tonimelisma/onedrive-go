@@ -140,6 +140,7 @@ jobs:
     if: vars.AZURE_CLIENT_ID != ''
     env:
       ONEDRIVE_TEST_DRIVE: ${{ vars.ONEDRIVE_TEST_DRIVE_E2E }}
+      ONEDRIVE_TEST_DRIVE_2: ${{ vars.ONEDRIVE_TEST_DRIVE_E2E_2 }}
       ONEDRIVE_ALLOWED_TEST_ACCOUNTS: ${{ vars.ONEDRIVE_ALLOWED_TEST_ACCOUNTS }}
 
     steps:
@@ -171,19 +172,26 @@ jobs:
             --file ".testdata/config.toml" \
             --encoding utf-8
 
-          # Download cache file for this job's drive.
-          SANITIZED=$(echo "$ONEDRIVE_TEST_DRIVE" | sed 's/[:@._]/-/g')
-          SECRET_NAME="onedrive-cache-${SANITIZED}"
+          # Download token for each configured test drive.
+          for DRIVE_VAR in ONEDRIVE_TEST_DRIVE ONEDRIVE_TEST_DRIVE_2; do
+            DRIVE_VAL="${!DRIVE_VAR:-}"
+            if [ -z "$DRIVE_VAL" ]; then
+              continue
+            fi
 
-          SANITIZED_FILE=$(echo "$ONEDRIVE_TEST_DRIVE" | sed 's/:/_/')
-          TOKEN_FILE="token_${SANITIZED_FILE}.json"
+            SANITIZED=$(echo "$DRIVE_VAL" | sed 's/[:@._]/-/g')
+            SECRET_NAME="onedrive-cache-${SANITIZED}"
 
-          echo "Downloading: ${SECRET_NAME} → .testdata/${TOKEN_FILE}"
-          az keyvault secret download \
-            --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
-            --name "$SECRET_NAME" \
-            --file ".testdata/${TOKEN_FILE}" \
-            --encoding utf-8
+            SANITIZED_FILE=$(echo "$DRIVE_VAL" | sed 's/:/_/')
+            TOKEN_FILE="token_${SANITIZED_FILE}.json"
+
+            echo "Downloading: ${SECRET_NAME} → .testdata/${TOKEN_FILE}"
+            az keyvault secret download \
+              --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
+              --name "$SECRET_NAME" \
+              --file ".testdata/${TOKEN_FILE}" \
+              --encoding utf-8
+          done
 
           echo "=== .testdata/ contents ==="
           ls -la .testdata/
@@ -210,27 +218,34 @@ jobs:
           path: /tmp/e2e-debug-logs/
           retention-days: 7
 
-      - name: Save rotated token to Key Vault
+      - name: Save rotated tokens to Key Vault
         if: always()
         run: |
           set -euo pipefail
-          SANITIZED_FILE=$(echo "$ONEDRIVE_TEST_DRIVE" | sed 's/:/_/')
-          TOKEN_PATH=".testdata/token_${SANITIZED_FILE}.json"
-          SANITIZED=$(echo "$ONEDRIVE_TEST_DRIVE" | sed 's/[:@._]/-/g')
-          SECRET_NAME="onedrive-cache-${SANITIZED}"
+          for DRIVE_VAR in ONEDRIVE_TEST_DRIVE ONEDRIVE_TEST_DRIVE_2; do
+            DRIVE_VAL="${!DRIVE_VAR:-}"
+            if [ -z "$DRIVE_VAL" ]; then
+              continue
+            fi
 
-          if [ ! -f "$TOKEN_PATH" ]; then
-            echo "::warning::Token file missing — skipping save"
-            exit 0
-          fi
+            SANITIZED_FILE=$(echo "$DRIVE_VAL" | sed 's/:/_/')
+            TOKEN_PATH=".testdata/token_${SANITIZED_FILE}.json"
+            SANITIZED=$(echo "$DRIVE_VAL" | sed 's/[:@._]/-/g')
+            SECRET_NAME="onedrive-cache-${SANITIZED}"
 
-          echo "Saving rotated token"
-          az keyvault secret set \
-            --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
-            --name "$SECRET_NAME" \
-            --file "$TOKEN_PATH" \
-            --content-type "application/json" \
-            --output none
+            if [ ! -f "$TOKEN_PATH" ]; then
+              echo "::warning::Token file for ${DRIVE_VAR} missing — skipping save"
+              continue
+            fi
+
+            echo "Saving rotated token for ${DRIVE_VAR}"
+            az keyvault secret set \
+              --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
+              --name "$SECRET_NAME" \
+              --file "$TOKEN_PATH" \
+              --content-type "application/json" \
+              --output none
+          done
 
       - name: Auth failure guidance
         if: failure()

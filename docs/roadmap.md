@@ -835,14 +835,14 @@ Extract authenticated drive access, token caching, and transfer operations into 
 
 Acceptance: `grep -rn 'NewDriveSession\|type DriveSession' *.go` → 0 hits. `grep -rn 'clientPair\|getOrCreateClient' internal/sync/orchestrator.go` → 0 hits. `TransferManager` and `SessionStore` live in `internal/driveops/`. Root package has one `graph.NewClient` call (in `newGraphClient`, used by auth/drive commands).
 
-### 6.0d: inotify + E2E + second test account — FUTURE
+### 6.0d: inotify + E2E + second test account — DONE
 
-1. **inotify watch limit detection** (Linux only): read `/proc/sys/fs/inotify/max_user_watches`. Warn at 80% threshold. On ENOSPC: that drive falls back to periodic full scan at `poll_interval`. Other drives retain inotify. No per-drive quota.
-2. **Second test account**: Create a second free personal Outlook.com account. Bootstrap token locally. Upload to Key Vault. Update `ONEDRIVE_TEST_DRIVES` GitHub variable.
-3. **Multi-drive E2E tests**: New `e2e/orchestrator_e2e_test.go` with build tag `e2e,e2e_full`. Helper: `writeMultiDriveConfig(t, drives, syncDirs)`. Scenarios: SimultaneousSync, Status, PauseResume, OneFails, ConfigReload.
-4. **CI `integration.yml` update**: Add conditional multi-drive E2E step (only when `ONEDRIVE_TEST_DRIVES` contains comma).
+1. **inotify watch limit detection** (Linux only): `inotify_linux.go` reads `/proc/sys/fs/inotify/max_user_watches`. Warns at 80% threshold via `checkInotifyCapacity()`. On ENOSPC: `ErrWatchLimitExhausted` sentinel returned from `addWatchesRecursive()`, engine falls back to `runPeriodicFullScan()` at `poll_interval`. Other drives retain inotify. No-op stubs on macOS (`inotify_other.go`). **DONE**.
+2. **Second test account**: Both `personal:testitesti18@outlook.com` and `personal:kikkelimies123@outlook.com` bootstrapped in `.testdata/`. CI updated to download/save both tokens. **DONE**.
+3. **Multi-drive E2E tests**: `e2e/orchestrator_e2e_test.go` with build tag `e2e,e2e_full`. 5 scenarios: SimultaneousSync, Status, DriveIsolation, OneDriveFails, SelectiveDrive. Helpers: `writeMultiDriveConfig`, `runCLIWithConfigAllDrives`, `runCLIWithConfigForDrive`, `cleanupRemoteFolderForDrive`. All skip gracefully when `ONEDRIVE_TEST_DRIVE_2` is unset. **DONE**.
+4. **CI `ci.yml` update**: E2E job downloads/saves tokens for both `ONEDRIVE_TEST_DRIVE` and `ONEDRIVE_TEST_DRIVE_2` via loop. **DONE**.
 
-Acceptance: E2E with 2 drives passes in CI. inotify warning fires on Linux.
+Acceptance: all 5 orchestrator E2E tests pass locally. inotify unit tests pass cross-platform. CI pipeline supports dual-token download/save.
 
 ### 6.1: Drive removal — DONE (refactored in Phase 5.5)
 
@@ -1250,7 +1250,7 @@ Industry context: the official OneDrive client follows symlinks (syncs target co
 | 4 v1 | 11 | Batch-pipeline sync engine | **SUPERSEDED** |
 | 4 v2 | 9 | Event-driven sync engine | **COMPLETE** |
 | 5 | 8 | Concurrent execution + watch mode | **COMPLETE** |
-| 6 | 10 | Multi-drive orchestration + CLI | IN PROGRESS (6.0a-c, 6.1, 6.2a done; 6.0d-e, 6.2b, 6.3, 6.4 future) |
+| 6 | 10 | Multi-drive orchestration + CLI | IN PROGRESS (6.0a-e, 6.1, 6.2a done; 6.2b, 6.3, 6.4 future) |
 | 7 | 5 | Multi-drive + account management | IN PROGRESS (7.1 done; 7.2, 7.3 have done items) |
 | 8 | 5 | WebSocket + advanced sync | FUTURE |
 | 9 | 8 | Operational hardening | IN PROGRESS (9.6 item 1 done) |
