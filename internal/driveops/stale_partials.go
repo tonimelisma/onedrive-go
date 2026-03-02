@@ -26,7 +26,21 @@ func CleanStalePartials(syncRoot string, logger *slog.Logger) (int, error) {
 	deleted := 0
 
 	err := filepath.WalkDir(syncRoot, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+		if err != nil {
+			rel, relErr := filepath.Rel(syncRoot, path)
+			if relErr != nil {
+				rel = path
+			}
+
+			logger.Warn("skipping path due to error",
+				slog.String("path", rel),
+				slog.String("error", err.Error()),
+			)
+
+			return nil
+		}
+
+		if d.IsDir() {
 			return nil
 		}
 

@@ -271,18 +271,10 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 }
 
 // postSyncHousekeeping runs non-critical cleanup after a sync cycle:
-// async .partial deletion and session file cleanup.
+// .partial deletion and session file cleanup. Synchronous — completes
+// before RunOnce returns to guarantee cleanup on process exit.
 func (e *Engine) postSyncHousekeeping() {
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				e.logger.Error("panic in postSyncHousekeeping", slog.Any("panic", r))
-			}
-		}()
-
-		driveops.CleanTransferArtifacts(e.syncRoot, e.sessionStore,
-			driveops.StaleSessionAge, e.logger)
-	}()
+	driveops.CleanTransferArtifacts(e.syncRoot, e.sessionStore, e.logger)
 }
 
 // executePlan populates the dependency tracker, runs the worker pool,
