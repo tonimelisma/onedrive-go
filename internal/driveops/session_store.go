@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 )
 
@@ -29,10 +28,6 @@ const sessionDirPerms = 0o700
 // StaleSessionAge is the default TTL for upload session files.
 // Graph API sessions expire in ~48 hours; 7 days is generous.
 const StaleSessionAge = 7 * 24 * time.Hour
-
-// cleanThrottle prevents excessive directory scans. CleanStale is
-// a no-op if called again within this interval.
-const cleanThrottle = 1 * time.Hour
 
 // currentSessionVersion is the schema version written by Save().
 // v0: unversioned (no "version" key), uses "remote_path".
@@ -84,9 +79,6 @@ func (r *SessionRecord) UnmarshalJSON(data []byte) error {
 type SessionStore struct {
 	dir    string
 	logger *slog.Logger
-
-	cleanMu   sync.Mutex
-	lastClean time.Time
 }
 
 // NewSessionStore creates a SessionStore rooted at dataDir/upload-sessions.
@@ -133,7 +125,6 @@ func (s *SessionStore) Load(driveID, localPath string) (*SessionRecord, error) {
 }
 
 // Save persists a session record. Creates the session directory if needed.
-// Triggers lazy stale-session cleanup (throttled to once per hour).
 func (s *SessionStore) Save(driveID, localPath string, rec *SessionRecord) error {
 	if err := os.MkdirAll(s.dir, sessionDirPerms); err != nil {
 		return fmt.Errorf("creating session dir: %w", err)
@@ -162,16 +153,6 @@ func (s *SessionStore) Save(driveID, localPath string, rec *SessionRecord) error
 	if err := os.Rename(tmpPath, path); err != nil {
 		os.Remove(tmpPath) // best-effort cleanup
 		return fmt.Errorf("renaming session temp file: %w", err)
-	}
-
-	// Lazy cleanup — non-blocking, errors logged but not propagated.
-	// Pre-check throttle to avoid spawning a goroutine on every Save.
-	s.cleanMu.Lock()
-	due := time.Since(s.lastClean) >= cleanThrottle
-	s.cleanMu.Unlock()
-
-	if due {
-		go s.cleanIfDue()
 	}
 
 	return nil
@@ -235,36 +216,6 @@ func (s *SessionStore) CleanStale(maxAge time.Duration) (int, error) {
 	}
 
 	return deleted, nil
-}
-
-// cleanIfDue runs CleanStale if at least cleanThrottle has elapsed since
-// the last run. Thread-safe; no-op if throttled. Runs in a goroutine so
-// panic recovery prevents crashing the entire process.
-func (s *SessionStore) cleanIfDue() {
-	defer func() {
-		if r := recover(); r != nil {
-			s.logger.Error("panic in session cleanup", slog.Any("panic", r))
-		}
-	}()
-
-	s.cleanMu.Lock()
-	if time.Since(s.lastClean) < cleanThrottle {
-		s.cleanMu.Unlock()
-		return
-	}
-
-	s.lastClean = time.Now()
-	s.cleanMu.Unlock()
-
-	n, err := s.CleanStale(StaleSessionAge)
-	if err != nil {
-		s.logger.Warn("stale session cleanup failed", slog.String("error", err.Error()))
-		return
-	}
-
-	if n > 0 {
-		s.logger.Info("cleaned stale upload sessions", slog.Int("count", n))
-	}
 }
 
 // sessionKey produces a deterministic filename for a (driveID, localPath) pair.

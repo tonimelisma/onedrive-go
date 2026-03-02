@@ -120,19 +120,13 @@ func (tm *TransferManager) DownloadToFile(
 	}
 
 	partialPath := targetPath + ".partial"
-	maxRetries := resolveMaxRetries(opts.MaxHashRetries)
 	remoteHash := opts.RemoteHash
 	hashVerified := remoteHash != "" // no verification possible without a remote hash (B-021)
 	var localHash string
 	var size int64
 
-	// On hash mismatch with retry, we discard and re-download the entire file.
-	// If the first attempt was a resume, the resume bytes are wasted — this is
-	// acceptable because hash mismatches are rare and correctness trumps
-	// bandwidth savings.
-	// Go 1.22 range-over-int: `range N` iterates 0..N-1, so `range maxRetries+1`
-	// gives exactly maxRetries+1 iterations (1 initial + maxRetries retries) (B-221).
-	for attempt := range maxRetries + 1 {
+	// Fast path: no remote hash means no verification — download once, skip retry loop.
+	if remoteHash == "" {
 		var err error
 
 		localHash, size, err = tm.downloadToPartial(ctx, driveID, itemID, partialPath)
@@ -140,41 +134,16 @@ func (tm *TransferManager) DownloadToFile(
 			return nil, err
 		}
 
-		// No hash verification possible — remote didn't provide a hash (B-021).
-		if remoteHash == "" {
-			tm.logger.Warn("remote item has no content hash, skipping verification",
-				slog.String("target", targetPath),
-			)
-
-			break
-		}
-
-		// Hash matches — verification succeeded.
-		if localHash == remoteHash {
-			break
-		}
-
-		if attempt < maxRetries {
-			os.Remove(partialPath)
-			tm.logger.Warn("download hash mismatch, retrying",
-				slog.String("target", targetPath),
-				slog.Int("attempt", attempt+1),
-				slog.String("local_hash", localHash),
-				slog.String("remote_hash", remoteHash),
-			)
-
-			continue
-		}
-
-		// All hash retries exhausted — accept to prevent infinite loop.
-		tm.logger.Warn("download hash mismatch after all retries, accepting download",
+		tm.logger.Warn("remote item has no content hash, skipping verification",
 			slog.String("target", targetPath),
-			slog.String("local_hash", localHash),
-			slog.String("remote_hash", remoteHash),
 		)
-
-		remoteHash = localHash
-		hashVerified = false
+	} else {
+		var err error
+		localHash, size, remoteHash, hashVerified, err = tm.downloadWithHashRetry(
+			ctx, driveID, itemID, partialPath, targetPath, remoteHash, opts.MaxHashRetries)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Warn if downloaded size doesn't match expected remote size.
@@ -215,6 +184,58 @@ func (tm *TransferManager) DownloadToFile(
 		EffectiveRemoteHash: remoteHash,
 		HashVerified:        hashVerified,
 	}, nil
+}
+
+// downloadWithHashRetry downloads a file and retries on hash mismatch. On
+// mismatch we discard and re-download the entire file. If the first attempt
+// was a resume, the resume bytes are wasted — acceptable because mismatches
+// are rare and correctness trumps bandwidth savings.
+func (tm *TransferManager) downloadWithHashRetry(
+	ctx context.Context, driveID driveid.ID, itemID, partialPath, targetPath, remoteHash string,
+	maxHashRetries int,
+) (localHash string, size int64, effectiveRemoteHash string, hashVerified bool, err error) {
+	effectiveRemoteHash = remoteHash
+	hashVerified = true
+
+	// Go 1.22 range-over-int: `range N` iterates 0..N-1, so `range maxRetries+1`
+	// gives exactly maxRetries+1 iterations (1 initial + maxRetries retries) (B-221).
+	maxRetries := resolveMaxRetries(maxHashRetries)
+
+	for attempt := range maxRetries + 1 {
+		localHash, size, err = tm.downloadToPartial(ctx, driveID, itemID, partialPath)
+		if err != nil {
+			return "", 0, "", false, err
+		}
+
+		// Hash matches — verification succeeded.
+		if localHash == effectiveRemoteHash {
+			return localHash, size, effectiveRemoteHash, true, nil
+		}
+
+		if attempt < maxRetries {
+			os.Remove(partialPath)
+			tm.logger.Warn("download hash mismatch, retrying",
+				slog.String("target", targetPath),
+				slog.Int("attempt", attempt+1),
+				slog.String("local_hash", localHash),
+				slog.String("remote_hash", effectiveRemoteHash),
+			)
+
+			continue
+		}
+
+		// All hash retries exhausted — accept to prevent infinite loop.
+		tm.logger.Warn("download hash mismatch after all retries, accepting download",
+			slog.String("target", targetPath),
+			slog.String("local_hash", localHash),
+			slog.String("remote_hash", effectiveRemoteHash),
+		)
+
+		effectiveRemoteHash = localHash
+		hashVerified = false
+	}
+
+	return localHash, size, effectiveRemoteHash, hashVerified, nil
 }
 
 // downloadToPartial streams a remote file to a .partial file while computing

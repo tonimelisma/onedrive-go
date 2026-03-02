@@ -12,8 +12,9 @@ import (
 
 // HasHash reports whether the item has at least one content hash.
 // Items without hashes (e.g., some SharePoint files) cannot be hash-verified.
+// Delegates to SelectHash to avoid duplicating the hash field enumeration.
 func HasHash(item *graph.Item) bool {
-	return item.QuickXorHash != "" || item.SHA256Hash != "" || item.SHA1Hash != ""
+	return SelectHash(item) != ""
 }
 
 // SelectHash returns the best available content hash from the item, preferring

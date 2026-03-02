@@ -82,14 +82,16 @@ func checkDriveSyncDirUniqueness(id string, drive *Drive, seen map[string]string
 // expanded paths -> canonical IDs, populated by checkDriveSyncDirUniqueness.
 func checkSyncDirOverlap(syncDirs map[string]string) []error {
 	// Collect all expanded paths for pairwise comparison.
+	// O(n²) is fine — users typically have <10 drives.
 	type entry struct {
 		path string
 		id   string
 	}
 
+	// Paths are already Clean'd by EvalSymlinks in checkDriveSyncDirUniqueness.
 	entries := make([]entry, 0, len(syncDirs))
 	for path, id := range syncDirs {
-		entries = append(entries, entry{path: filepath.Clean(path), id: id})
+		entries = append(entries, entry{path: path, id: id})
 	}
 
 	var errs []error
