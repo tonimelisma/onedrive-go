@@ -98,6 +98,44 @@ jobs:
         env:
           ONEDRIVE_TEST_DRIVES: ${{ vars.ONEDRIVE_TEST_DRIVES }}
 
+      - name: Bootstrap token metadata
+        run: |
+          set -euo pipefail
+          IFS=',' read -ra DRIVES <<< "$ONEDRIVE_TEST_DRIVES"
+          DATA_DIR="$HOME/.local/share/onedrive-go"
+
+          for drive in "${DRIVES[@]}"; do
+            drive=$(echo "$drive" | xargs)
+            echo "=== Bootstrapping metadata for: ${drive} ==="
+
+            # Discover account info via Graph API (whoami works without drive_id).
+            WHOAMI_JSON=$(go run . whoami --json --drive "$drive")
+            DRIVE_ID=$(echo "$WHOAMI_JSON" | jq -r '.drives[0].id')
+            USER_ID=$(echo "$WHOAMI_JSON" | jq -r '.user.id')
+            DISPLAY_NAME=$(echo "$WHOAMI_JSON" | jq -r '.user.display_name')
+
+            echo "  drive_id: ${DRIVE_ID}"
+            echo "  user_id: ${USER_ID}"
+            echo "  display_name: ${DISPLAY_NAME}"
+
+            # Write metadata to token file (mirrors what 'onedrive-go login' saves).
+            sanitized=$(echo "$drive" | sed 's/:/_/')
+            token_path="${DATA_DIR}/token_${sanitized}.json"
+
+            jq --arg did "$DRIVE_ID" --arg uid "$USER_ID" --arg dn "$DISPLAY_NAME" \
+              '.meta = (.meta // {}) + {
+                "drive_id": $did,
+                "user_id": $uid,
+                "display_name": $dn,
+                "org_name": "",
+                "cached_at": (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+              }' "$token_path" > "${token_path}.tmp" \
+              && mv "${token_path}.tmp" "$token_path" \
+              && chmod 600 "$token_path"
+
+            echo "  Metadata written to ${token_path}"
+          done
+
       - name: Run integration tests
         run: |
           set -euo pipefail
@@ -195,3 +233,5 @@ jobs:
           echo "::warning::If the refresh token has expired (90 days idle), re-bootstrap:"
           echo "::warning::  1. onedrive-go login --drive personal:user@example.com"
           echo "::warning::  2. az keyvault secret set --vault-name ${{ vars.AZURE_KEY_VAULT_NAME }} --name onedrive-oauth-token-personal-user-example-com --file <token-path> --content-type application/json"
+          echo "::warning::The login command caches drive_id and other metadata in the token file."
+          echo "::warning::The 'Bootstrap token metadata' CI step also populates this on each run."
