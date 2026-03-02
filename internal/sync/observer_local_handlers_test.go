@@ -112,7 +112,7 @@ func TestWatch_DetectsFileCreate(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 
 	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -166,7 +166,7 @@ func TestWatch_DetectsFileModify(t *testing.T) {
 		ItemType: ItemTypeFile, LocalHash: existingHash,
 	})
 
-	obs := NewLocalObserver(baseline, testLogger(t))
+	obs := NewLocalObserver(baseline, testLogger(t), 0)
 	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -217,7 +217,7 @@ func TestWatch_DetectsFileDelete(t *testing.T) {
 		ItemType: ItemTypeFile,
 	})
 
-	obs := NewLocalObserver(baseline, testLogger(t))
+	obs := NewLocalObserver(baseline, testLogger(t), 0)
 	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -271,7 +271,7 @@ func TestWatch_DeleteDirectoryRemovesWatch(t *testing.T) {
 		ItemType: ItemTypeFolder,
 	})
 
-	obs := NewLocalObserver(baseline, testLogger(t))
+	obs := NewLocalObserver(baseline, testLogger(t), 0)
 	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -307,7 +307,7 @@ func TestWatch_IgnoresExcludedFiles(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 
 	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -348,7 +348,7 @@ func TestWatch_NosyncGuard(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, dir, ".nosync", "")
 
-	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events := make(chan ChangeEvent, 10)
 
 	err := obs.Watch(context.Background(), dir, events)
@@ -361,7 +361,7 @@ func TestWatch_NewDirectoryWatched(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 
 	events := make(chan ChangeEvent, 20)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -417,7 +417,7 @@ func TestWatch_NewDirectoryPreExistingFiles(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 
 	events := make(chan ChangeEvent, 30)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -474,7 +474,7 @@ func TestLocalWatch_ContextCancellation(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 
 	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -505,7 +505,7 @@ func TestLocalWatch_ContextCancellation(t *testing.T) {
 func TestTrySend_ChannelAvailable_SendsEvent(t *testing.T) {
 	t.Parallel()
 
-	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events := make(chan ChangeEvent, 1)
 	ctx := context.Background()
 
@@ -533,7 +533,7 @@ func TestTrySend_ChannelAvailable_SendsEvent(t *testing.T) {
 func TestTrySend_ChannelFull_DropsEvent(t *testing.T) {
 	t.Parallel()
 
-	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events := make(chan ChangeEvent, 1)
 	ctx := context.Background()
 
@@ -576,7 +576,7 @@ func TestTrySend_ChannelFull_DropsEvent(t *testing.T) {
 func TestTrySend_ContextCanceled_NoDrop(t *testing.T) {
 	t.Parallel()
 
-	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events := make(chan ChangeEvent, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -605,7 +605,7 @@ func TestWatch_NewDirectoryNestedRecursion(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 
 	events := make(chan ChangeEvent, 50)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -689,7 +689,7 @@ func TestWatch_HashFailureStillEmitsCreate(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 
 	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -751,7 +751,7 @@ func TestWatch_HashFailureModifyStillEmitsEvent(t *testing.T) {
 		ItemType: ItemTypeFile, LocalHash: existingHash,
 	})
 
-	obs := NewLocalObserver(baseline, testLogger(t))
+	obs := NewLocalObserver(baseline, testLogger(t), 0)
 	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -1585,7 +1585,7 @@ func TestAddWatchesRecursive_SkipsSymlinks(t *testing.T) {
 		addedPaths: make(map[string]bool),
 	}
 
-	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 
 	err := obs.addWatchesRecursive(tracker, root)
 	require.NoError(t, err)

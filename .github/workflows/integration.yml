@@ -140,12 +140,16 @@ jobs:
         run: |
           set -euo pipefail
           IFS=',' read -ra DRIVES <<< "$ONEDRIVE_TEST_DRIVES"
+          DATA_DIR="$HOME/.local/share/onedrive-go"
 
           for drive in "${DRIVES[@]}"; do
             drive=$(echo "$drive" | xargs)
-            echo "=== Discovering drive ID for: ${drive} ==="
-            DRIVE_ID=$(go run . whoami --json --drive "$drive" | jq -r '.drives[0].id')
-            echo "Drive ID: ${DRIVE_ID}"
+
+            # Read drive_id from token metadata (cached by "Bootstrap token metadata" step).
+            sanitized=$(echo "$drive" | sed 's/:/_/')
+            token_path="${DATA_DIR}/token_${sanitized}.json"
+            DRIVE_ID=$(jq -r '.meta.drive_id' "$token_path")
+            echo "=== Drive ID for ${drive}: ${DRIVE_ID} (from token metadata) ==="
 
             echo "=== Running graph integration tests for: ${drive} ==="
             ONEDRIVE_TEST_DRIVE="$drive" \

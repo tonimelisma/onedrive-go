@@ -24,28 +24,60 @@ func TestValidate_ValidDefaults(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestValidate_ParallelWorkers_BelowMin(t *testing.T) {
+func TestValidate_TransferWorkers_BelowMin(t *testing.T) {
 	cfg := validConfig()
-	cfg.ParallelDownloads = 0
+	cfg.TransferWorkers = 3
 	err := Validate(cfg)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "parallel_downloads")
+	assert.Contains(t, err.Error(), "transfer_workers")
 }
 
-func TestValidate_ParallelWorkers_AboveMax(t *testing.T) {
+func TestValidate_TransferWorkers_AboveMax(t *testing.T) {
 	cfg := validConfig()
-	cfg.ParallelUploads = 17
+	cfg.TransferWorkers = 65
 	err := Validate(cfg)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "parallel_uploads")
+	assert.Contains(t, err.Error(), "transfer_workers")
 }
 
-func TestValidate_ParallelCheckers_BelowMin(t *testing.T) {
+func TestValidate_TransferWorkers_Boundaries(t *testing.T) {
+	// Min boundary (4) passes.
 	cfg := validConfig()
-	cfg.ParallelCheckers = 0
+	cfg.TransferWorkers = 4
+	assert.NoError(t, Validate(cfg))
+
+	// Max boundary (64) passes.
+	cfg = validConfig()
+	cfg.TransferWorkers = 64
+	assert.NoError(t, Validate(cfg))
+}
+
+func TestValidate_CheckWorkers_BelowMin(t *testing.T) {
+	cfg := validConfig()
+	cfg.CheckWorkers = 0
 	err := Validate(cfg)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "parallel_checkers")
+	assert.Contains(t, err.Error(), "check_workers")
+}
+
+func TestValidate_CheckWorkers_AboveMax(t *testing.T) {
+	cfg := validConfig()
+	cfg.CheckWorkers = 17
+	err := Validate(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "check_workers")
+}
+
+func TestValidate_CheckWorkers_Boundaries(t *testing.T) {
+	// Min boundary (1) passes.
+	cfg := validConfig()
+	cfg.CheckWorkers = 1
+	assert.NoError(t, Validate(cfg))
+
+	// Max boundary (16) passes.
+	cfg = validConfig()
+	cfg.CheckWorkers = 16
+	assert.NoError(t, Validate(cfg))
 }
 
 func TestValidate_ChunkSize_TooSmall(t *testing.T) {
@@ -302,8 +334,8 @@ func TestValidate_MinFreeSpace_Invalid(t *testing.T) {
 
 func TestValidate_MultipleErrors(t *testing.T) {
 	cfg := validConfig()
-	cfg.ParallelDownloads = 0
-	cfg.ParallelUploads = 0
+	cfg.TransferWorkers = 0
+	cfg.CheckWorkers = 0
 	cfg.ConflictStrategy = invalidEnumStr
 	cfg.LogLevel = invalidEnumStr
 
@@ -311,8 +343,8 @@ func TestValidate_MultipleErrors(t *testing.T) {
 	require.Error(t, err)
 
 	errStr := err.Error()
-	assert.Contains(t, errStr, "parallel_downloads")
-	assert.Contains(t, errStr, "parallel_uploads")
+	assert.Contains(t, errStr, "transfer_workers")
+	assert.Contains(t, errStr, "check_workers")
 	assert.Contains(t, errStr, "conflict_strategy")
 	assert.Contains(t, errStr, "log_level")
 }
@@ -394,6 +426,57 @@ func TestValidate_BandwidthSchedule_BadTimeFormat(t *testing.T) {
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.True(t, strings.Contains(err.Error(), "time"))
+}
+
+// --- WarnDeprecatedKeys tests ---
+
+func TestWarnDeprecatedKeys_OldKeysPresent(t *testing.T) {
+	t.Parallel()
+
+	h := &testLogHandler{}
+	logger := slog.New(h)
+
+	rawMap := map[string]any{
+		"parallel_downloads": 4,
+		"parallel_uploads":   4,
+		"parallel_checkers":  8,
+	}
+
+	WarnDeprecatedKeys(rawMap, logger)
+
+	// Each deprecated key should produce a warning with "key" attr.
+	var warnedKeys []string
+	for _, r := range h.records {
+		if r.Level == slog.LevelWarn {
+			r.Attrs(func(a slog.Attr) bool {
+				if a.Key == "key" {
+					warnedKeys = append(warnedKeys, a.Value.String())
+				}
+				return true
+			})
+		}
+	}
+
+	assert.Contains(t, warnedKeys, "parallel_downloads")
+	assert.Contains(t, warnedKeys, "parallel_uploads")
+	assert.Contains(t, warnedKeys, "parallel_checkers")
+	assert.Len(t, warnedKeys, 3)
+}
+
+func TestWarnDeprecatedKeys_NoOldKeys(t *testing.T) {
+	t.Parallel()
+
+	h := &testLogHandler{}
+	logger := slog.New(h)
+
+	rawMap := map[string]any{
+		"transfer_workers": 8,
+		"check_workers":    4,
+	}
+
+	WarnDeprecatedKeys(rawMap, logger)
+
+	assert.Empty(t, h.records, "no warnings should be logged for new keys")
 }
 
 // --- ValidateResolved tests ---

@@ -41,9 +41,8 @@ max_file_size = "1GB"
 sync_paths = ["/Documents", "/Photos"]
 ignore_marker = ".syncignore"
 
-parallel_downloads = 4
-parallel_uploads = 4
-parallel_checkers = 4
+transfer_workers = 16
+check_workers = 8
 chunk_size = "20MiB"
 bandwidth_limit = "5MB/s"
 transfer_order = "size_asc"
@@ -91,9 +90,8 @@ force_http_11 = true
 	assert.Equal(t, []string{"/Documents", "/Photos"}, cfg.SyncPaths)
 	assert.Equal(t, ".syncignore", cfg.IgnoreMarker)
 
-	assert.Equal(t, 4, cfg.ParallelDownloads)
-	assert.Equal(t, 4, cfg.ParallelUploads)
-	assert.Equal(t, 4, cfg.ParallelCheckers)
+	assert.Equal(t, 16, cfg.TransferWorkers)
+	assert.Equal(t, 8, cfg.CheckWorkers)
 	assert.Equal(t, "20MiB", cfg.ChunkSize)
 	assert.Equal(t, "5MB/s", cfg.BandwidthLimit)
 	assert.Equal(t, "size_asc", cfg.TransferOrder)
@@ -134,10 +132,39 @@ func TestLoad_MinimalConfig_UsesDefaults(t *testing.T) {
 	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 
-	assert.Equal(t, 8, cfg.ParallelDownloads)
+	assert.Equal(t, 8, cfg.TransferWorkers)
+	assert.Equal(t, 4, cfg.CheckWorkers)
 	assert.Equal(t, "10MiB", cfg.ChunkSize)
 	assert.Equal(t, "info", cfg.LogLevel)
 	assert.Equal(t, "5m", cfg.PollInterval)
+}
+
+func TestLoad_TransferWorkers_Default(t *testing.T) {
+	path := writeTestConfig(t, "")
+	cfg, err := Load(path, testLogger(t))
+	require.NoError(t, err)
+	assert.Equal(t, 8, cfg.TransferWorkers)
+}
+
+func TestLoad_CheckWorkers_Default(t *testing.T) {
+	path := writeTestConfig(t, "")
+	cfg, err := Load(path, testLogger(t))
+	require.NoError(t, err)
+	assert.Equal(t, 4, cfg.CheckWorkers)
+}
+
+func TestLoad_DeprecatedKeys_Warning(t *testing.T) {
+	// Using old parallel_downloads key should load successfully (key is
+	// "known" to avoid unknown-key error) but the value is ignored —
+	// transfer_workers uses its default value. The deprecation warning
+	// is produced by WarnDeprecatedKeys, tested separately.
+	path := writeTestConfig(t, `parallel_downloads = 4`)
+	cfg, err := Load(path, testLogger(t))
+	require.NoError(t, err)
+
+	// The old key's value is NOT mapped to any struct field (field removed).
+	// transfer_workers retains its default value.
+	assert.Equal(t, 8, cfg.TransferWorkers)
 }
 
 func TestLoad_MalformedTOML(t *testing.T) {
@@ -154,7 +181,7 @@ func TestLoad_FileNotFound(t *testing.T) {
 }
 
 func TestLoad_ValidationError(t *testing.T) {
-	path := writeTestConfig(t, `parallel_downloads = 0`)
+	path := writeTestConfig(t, `transfer_workers = 0`)
 	_, err := Load(path, testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "validation failed")
@@ -171,7 +198,7 @@ func TestLoadOrDefault_FileNotFound(t *testing.T) {
 	cfg, err := LoadOrDefault("/nonexistent/path/config.toml", testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, "info", cfg.LogLevel)
-	assert.Equal(t, 8, cfg.ParallelDownloads)
+	assert.Equal(t, 8, cfg.TransferWorkers)
 }
 
 func TestLoad_PartialConfig_UsesDefaults(t *testing.T) {
@@ -180,7 +207,7 @@ func TestLoad_PartialConfig_UsesDefaults(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "warn", cfg.LogLevel)
-	assert.Equal(t, 8, cfg.ParallelDownloads)
+	assert.Equal(t, 8, cfg.TransferWorkers)
 	assert.Equal(t, "5m", cfg.PollInterval)
 	assert.Equal(t, ".odignore", cfg.IgnoreMarker)
 }
@@ -256,7 +283,6 @@ sync_dir = "~/OneDrive"
 display_name = "home"
 paused = true
 remote_path = "/Documents"
-drive_id = "abc123"
 skip_dotfiles = true
 skip_dirs = ["vendor"]
 skip_files = ["*.log"]
@@ -271,7 +297,6 @@ poll_interval = "10m"
 	require.NotNil(t, d.Paused)
 	assert.True(t, *d.Paused)
 	assert.Equal(t, "/Documents", d.RemotePath)
-	assert.Equal(t, "abc123", d.DriveID)
 	require.NotNil(t, d.SkipDotfiles)
 	assert.True(t, *d.SkipDotfiles)
 	assert.Equal(t, []string{"vendor"}, d.SkipDirs)

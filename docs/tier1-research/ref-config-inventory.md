@@ -295,7 +295,6 @@ Verbosity is controlled via CLI:
 | `sync_dir_permissions` | Int (octal) | `700` | No | POSIX permission mode applied to directories created during sync. Value is interpreted as octal (e.g., 700 = `drwx------`). | Important |
 | `sync_file_permissions` | Int (octal) | `600` | No | POSIX permission mode applied to files created during sync. Value is interpreted as octal (e.g., 600 = `-rw-------`). | Important |
 | `disable_permission_set` | Bool | `false` | No | When enabled, the application does not explicitly set permissions on files and directories. Instead, file system permission inheritance is used. Useful for file systems that do not support POSIX permissions. | Nice-to-have |
-| `drive_id` | String | (empty) | No | Specifies a particular OneDrive drive ID to sync. Typically used for SharePoint document library sync. If present in the config file, it must not be empty (fatal error if empty). Changes require `--resync`. | Important |
 
 The config directory path itself is not a config-file option but is determined by:
 - Default: `~/.config/onedrive`

@@ -74,7 +74,7 @@ func TestFullScan_NewFiles(t *testing.T) {
 	writeTestFile(t, dir, "hello.txt", "hello world")
 	writeTestFile(t, dir, "data.csv", "a,b,c")
 
-	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("FullScan: %v", err)
@@ -126,7 +126,7 @@ func TestFullScan_NewFolder(t *testing.T) {
 		t.Fatalf("Mkdir: %v", err)
 	}
 
-	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("FullScan: %v", err)
@@ -165,7 +165,7 @@ func TestFullScan_ModifiedFile(t *testing.T) {
 		ItemType: ItemTypeFile, LocalHash: hashContent(t, "original content"),
 	})
 
-	obs := NewLocalObserver(baseline, testLogger(t))
+	obs := NewLocalObserver(baseline, testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("FullScan: %v", err)
@@ -201,7 +201,7 @@ func TestFullScan_UnchangedFile(t *testing.T) {
 		ItemType: ItemTypeFile, LocalHash: hashContent(t, content),
 	})
 
-	obs := NewLocalObserver(baseline, testLogger(t))
+	obs := NewLocalObserver(baseline, testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("FullScan: %v", err)
@@ -224,7 +224,7 @@ func TestFullScan_DeletedFile(t *testing.T) {
 		Size: 42, Mtime: 1234567890,
 	})
 
-	obs := NewLocalObserver(baseline, testLogger(t))
+	obs := NewLocalObserver(baseline, testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("FullScan: %v", err)
@@ -271,7 +271,7 @@ func TestFullScan_DeletedFolder(t *testing.T) {
 		ItemType: ItemTypeFolder,
 	})
 
-	obs := NewLocalObserver(baseline, testLogger(t))
+	obs := NewLocalObserver(baseline, testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("FullScan: %v", err)
@@ -305,7 +305,7 @@ func TestFullScan_MtimeChangeNoContentChange(t *testing.T) {
 		Mtime: 999, // intentionally different from actual file mtime
 	})
 
-	obs := NewLocalObserver(baseline, testLogger(t))
+	obs := NewLocalObserver(baseline, testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("FullScan: %v", err)
@@ -341,7 +341,7 @@ func TestFullScan_MtimeSizeFastPath(t *testing.T) {
 		Size: info.Size(), Mtime: info.ModTime().UnixNano(),
 	})
 
-	obs := NewLocalObserver(baseline, testLogger(t))
+	obs := NewLocalObserver(baseline, testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("FullScan: %v", err)
@@ -375,7 +375,7 @@ func TestFullScan_RacilyCleanForcesHash(t *testing.T) {
 		Size: info.Size(), Mtime: info.ModTime().UnixNano(),
 	})
 
-	obs := NewLocalObserver(baseline, testLogger(t))
+	obs := NewLocalObserver(baseline, testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("FullScan: %v", err)
@@ -421,7 +421,7 @@ func TestFullScan_SizeChangeForcesHash(t *testing.T) {
 		Size: 5, Mtime: info.ModTime().UnixNano(),
 	})
 
-	obs := NewLocalObserver(baseline, testLogger(t))
+	obs := NewLocalObserver(baseline, testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("FullScan: %v", err)
@@ -442,7 +442,7 @@ func TestFullScan_NosyncGuard(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, dir, ".nosync", "")
 
-	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	_, err := obs.FullScan(context.Background(), dir)
 
 	if !errors.Is(err, ErrNosyncGuard) {
@@ -455,7 +455,7 @@ func TestFullScan_EmptyDir(t *testing.T) {
 
 	dir := t.TempDir()
 
-	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("FullScan: %v", err)
@@ -476,7 +476,7 @@ func TestFullScan_Symlink(t *testing.T) {
 		t.Fatalf("Symlink: %v", err)
 	}
 
-	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("FullScan: %v", err)
@@ -499,7 +499,7 @@ func TestFullScan_InvalidName(t *testing.T) {
 	writeTestFile(t, dir, "CON", "reserved")
 	writeTestFile(t, dir, "valid.txt", "ok")
 
-	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("FullScan: %v", err)
@@ -524,7 +524,7 @@ func TestFullScan_AlwaysExcluded(t *testing.T) {
 	writeTestFile(t, dir, "~backup", "old")
 	writeTestFile(t, dir, "legit.txt", "keep me")
 
-	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("FullScan: %v", err)
@@ -549,7 +549,7 @@ func TestFullScan_ContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	_, err := obs.FullScan(ctx, dir)
 
 	if err == nil {
@@ -572,7 +572,7 @@ func TestFullScan_NFCNormalization(t *testing.T) {
 
 	writeTestFile(t, dir, nfdName, "resume content")
 
-	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("FullScan: %v", err)
@@ -598,7 +598,7 @@ func TestFullScan_NestedDirs(t *testing.T) {
 	writeTestFile(t, dir, "a/b/deep.txt", "deep content")
 	writeTestFile(t, dir, "top.txt", "top content")
 
-	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("FullScan: %v", err)
@@ -640,7 +640,7 @@ func TestFullScan_EmptyFile(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, dir, "empty.txt", "")
 
-	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("FullScan: %v", err)
@@ -699,7 +699,7 @@ func TestFullScan_MixedChanges(t *testing.T) {
 		},
 	)
 
-	obs := NewLocalObserver(baseline, testLogger(t))
+	obs := NewLocalObserver(baseline, testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("FullScan: %v", err)
@@ -1012,7 +1012,7 @@ func TestFullScan_NosyncGuardDir(t *testing.T) {
 		t.Fatalf("Mkdir: %v", err)
 	}
 
-	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	_, err := obs.FullScan(context.Background(), dir)
 
 	if !errors.Is(err, ErrNosyncGuard) {
@@ -1028,7 +1028,7 @@ func TestFullScan_ExcludedDirSkipsSubtree(t *testing.T) {
 	writeTestFile(t, dir, "~excluded/inner.txt", "hidden")
 	writeTestFile(t, dir, "visible.txt", "shown")
 
-	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("FullScan: %v", err)
@@ -1077,7 +1077,7 @@ func TestFullScan_InvalidNameDirSkipsSubtree(t *testing.T) {
 	writeTestFile(t, dir, "bad./child.txt", "child")
 	writeTestFile(t, dir, "good.txt", "good")
 
-	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("FullScan: %v", err)
@@ -1114,7 +1114,7 @@ func TestFullScan_PermissionDenied(t *testing.T) {
 	require.NoError(t, os.Chmod(unreadableDir, 0o000))
 	t.Cleanup(func() { _ = os.Chmod(unreadableDir, 0o755) })
 
-	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), syncRoot)
 	require.NoError(t, err)
 
@@ -1214,7 +1214,7 @@ func TestFullScan_HashFailureStillEmitsCreate(t *testing.T) {
 		_ = os.Chmod(path, 0o644)
 	})
 
-	obs := NewLocalObserver(emptyBaseline(), testLogger(t))
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
 	require.NoError(t, err)
 
@@ -1252,7 +1252,7 @@ func TestFullScan_HashFailureModifyStillEmitsEvent(t *testing.T) {
 	require.NoError(t, os.Chmod(path, 0o000))
 	t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
 
-	obs := NewLocalObserver(baseline, testLogger(t))
+	obs := NewLocalObserver(baseline, testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
 	require.NoError(t, err)
 

@@ -28,11 +28,26 @@ const skipConfigAnnotation = "skipConfig"
 type CLIFlags struct {
 	ConfigPath string
 	Account    string
-	Drive      string
+	Drive      []string
 	JSON       bool
 	Verbose    bool
 	Debug      bool
 	Quiet      bool
+}
+
+// SingleDrive returns the single --drive selector, or "" if none was provided.
+// Panics if multiple --drive values were provided — callers that allow multiple
+// values should use Drive directly.
+func (f CLIFlags) SingleDrive() string {
+	if len(f.Drive) == 0 {
+		return ""
+	}
+
+	if len(f.Drive) > 1 {
+		panic("SingleDrive called with multiple --drive values")
+	}
+
+	return f.Drive[0]
 }
 
 // CLIContext bundles resolved config, flags, and logger. Created in
@@ -117,7 +132,7 @@ func newRootCmd() *cobra.Command {
 	var (
 		flagConfigPath string
 		flagAccount    string
-		flagDrive      string
+		flagDrive      []string
 		flagJSON       bool
 		flagVerbose    bool
 		flagDebug      bool
@@ -184,7 +199,8 @@ func newRootCmd() *cobra.Command {
 
 	cmd.PersistentFlags().StringVar(&flagConfigPath, "config", "", "config file path")
 	cmd.PersistentFlags().StringVar(&flagAccount, "account", "", "account for auth commands (e.g., user@example.com)")
-	cmd.PersistentFlags().StringVar(&flagDrive, "drive", "", "drive selector (canonical ID, display name, or partial match)")
+	cmd.PersistentFlags().StringArrayVar(&flagDrive, "drive", nil,
+		"drive selector (canonical ID, display name, or partial match); repeatable for sync")
 	cmd.PersistentFlags().BoolVar(&flagJSON, "json", false, "output in JSON format")
 	cmd.PersistentFlags().BoolVarP(&flagVerbose, "verbose", "v", false, "show detailed output")
 	cmd.PersistentFlags().BoolVar(&flagDebug, "debug", false, "enable debug logging (HTTP requests, config resolution)")
@@ -225,8 +241,16 @@ func loadAndResolve(
 	}
 
 	// Only pass --drive to the resolver if the user explicitly set it.
+	// Phase 2 resolves a single drive; multiple --drive values are only
+	// valid for the sync command (which handles resolution itself).
 	if cmd.Flags().Changed("drive") {
-		cli.Drive = flags.Drive
+		if len(flags.Drive) > 1 {
+			return nil, nil, fmt.Errorf("--drive can only be specified once for this command (use 'sync' for multi-drive)")
+		}
+
+		if len(flags.Drive) == 1 {
+			cli.Drive = flags.Drive[0]
+		}
 	}
 
 	logger.Debug("resolving config",

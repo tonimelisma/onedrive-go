@@ -808,18 +808,30 @@ Core multi-drive runtime. The Orchestrator is ALWAYS used, even for a single dri
 
 Acceptance: all criteria met. `sync` and `sync --drive X` run through Orchestrator. One drive failure/panic doesn't affect others. Single-drive output identical to previous path. E2E tests pass. Coverage 76.1%.
 
-### 6.0c: Worker budget + daemon mode + config reload — FUTURE
+### 6.0c: Worker budget + daemon mode + config reload — DONE
 
-1. **`transfer_workers` config key**: integer, default 8, range 4-64. Sync action workers (downloads, uploads, renames, deletes, mkdirs). Replaces hardcoded `runtime.NumCPU()` in `engine.go`.
-2. **`check_workers` config key**: integer, default 4, range 1-16. Controls `*semaphore.Weighted` for concurrent QuickXorHash in LocalObserver. Global semaphore shared across all drives.
-3. **Deprecate old keys**: `parallel_downloads`, `parallel_uploads`, `parallel_checkers`. Log warning if found in config, ignore values.
-4. **Worker budget algorithm**: globalCap from `config.transfer_workers`. Per-drive: `weight = max(1, baselineFileCount)`, `allocation = max(4, globalCap * weight / totalWeight)`. Scale down if sum > globalCap due to minPerDrive floors. N=1: full globalCap.
-5. **`Orchestrator.RunWatch(ctx)`**: daemon mode. Starts all drive runners in watch mode. **Must eliminate `runSyncWatchBridge` and `newSyncEngine` in `sync.go`** — watch mode routes through the Orchestrator like one-shot does. After this, the Orchestrator is the single entry point for all sync modes (one-shot and watch). No parallel engine construction path. No parallel pre-flight validation path. All error reporting goes through `DriveReport`.
-6. **PID file**: flock-based single-instance guard. `sync --watch` shares same PID file path — only one daemon.
-7. **SIGHUP config reload**: re-read config → diff drives → stop removed → start added → restart continued with changed allocation. WorkerPool doesn't support dynamic resize, so changed-allocation drives are stopped + restarted.
-8. **`--drive` repeatable**: `StringArrayVar`. File-op commands check `len <= 1`. sync accepts multiple. No `--drive` = all non-paused drives.
+1. **`transfer_workers` config key**: integer, default 8, range 4-64. Sync action workers (downloads, uploads, renames, deletes, mkdirs). Replaces hardcoded `runtime.NumCPU()` in `engine.go`. **DONE**.
+2. **`check_workers` config key**: integer, default 4, range 1-16. Controls `errgroup.SetLimit` for concurrent QuickXorHash in LocalObserver FullScan. **DONE**.
+3. **Deprecate old keys**: `parallel_downloads`, `parallel_uploads`, `parallel_checkers`. Log warning via `WarnDeprecatedKeys()` if found in config, ignore values. **DONE**.
+4. **Lanes removed**: DepTracker and WorkerPool simplified from lane-based (interactive/bulk/shared) to single flat pool. Single `Ready()` channel. **DONE**.
+5. **`Orchestrator.RunWatch(ctx)`**: daemon mode. Starts all drive runners in watch mode. `runSyncWatchBridge` eliminated — watch mode routes through the Orchestrator via `runSyncDaemon`. **DONE**.
+6. **PID file**: flock-based single-instance guard in `runSyncDaemon`. **DONE**.
+7. **SIGHUP config reload**: re-read config → clear expired timed pauses → diff drives → stop removed → start added. **DONE**.
+8. **`--drive` repeatable**: `StringArrayVar` with `SingleDrive()` helper. File-op commands validate `len <= 1`. sync accepts multiple. **DONE**.
+9. **Backlog fixes**: B-288 (quiet→cc.Statusf), B-232 (loadConfig error path tests), B-229 (document Changed vs GetBool), B-230 (printNonZero helper), CI dedup. **DONE**.
 
-Acceptance: sync --watch starts daemon with correct worker allocation. SIGHUP adds/removes drives. `transfer_workers` + `check_workers` config respected. PID file prevents duplicates. `runSyncWatchBridge`, `newSyncEngine`, and `NewDriveSession` deleted — zero engine construction paths outside the Orchestrator. `grep -rn 'newSyncEngine\|runSyncWatchBridge\|NewDriveSession' *.go` returns 0 hits.
+Acceptance: `transfer_workers` + `check_workers` config respected. Lanes removed. `runSyncWatchBridge` eliminated. SIGHUP reload implemented. `--drive` repeatable. `newSyncEngine` and `NewDriveSession` remain (file-op commands still use the DriveSession path — see 6.0e driveops). Worker budget algorithm and per-drive allocation deferred to future increment.
+
+### 6.0e: `internal/driveops/` package — FUTURE
+
+Extract `DriveSession` and `newSyncEngine` into `internal/driveops/` package. See [design/driveops.md](design/driveops.md) for full design. After this, the CLI root package has zero Graph/sync construction logic — all commands use `driveops.NewSession()`.
+
+1. **`driveops.Session`**: replaces `DriveSession` and `newSyncEngine`. Single constructor `NewSession(ctx, rd, cfg, metaHTTP, transferHTTP, userAgent, logger)`.
+2. **CLI migration**: all file-op commands (`ls`, `get`, `put`, `rm`, `mkdir`, `stat`, `conflicts`, `verify`, `resolve`) use `driveops.Session`.
+3. **Orchestrator migration**: `prepareDriveWork` uses `driveops.NewSession` instead of inline client construction.
+4. **Delete**: `DriveSession`, `NewDriveSession`, `newSyncEngine` from root package.
+
+Acceptance: `grep -rn 'NewDriveSession\|newSyncEngine' *.go` returns 0 hits. All commands use `driveops.Session`. Root package has no `graph.NewClient` calls.
 
 ### 6.0d: inotify + E2E + second test account — FUTURE
 
@@ -1234,8 +1246,8 @@ Industry context: the official OneDrive client follows symlinks (syncs target co
 | 3.5 | 2 | Account/drive system alignment | **COMPLETE** |
 | 4 v1 | 11 | Batch-pipeline sync engine | **SUPERSEDED** |
 | 4 v2 | 9 | Event-driven sync engine | **COMPLETE** |
-| 5 | 8 | Concurrent execution + watch mode | IN PROGRESS (5.0-5.4.2 done) |
-| 6 | 9 | CLI completeness | IN PROGRESS (6.3 done; 6.0, 6.1, 6.4 have done items) |
+| 5 | 8 | Concurrent execution + watch mode | **COMPLETE** |
+| 6 | 10 | Multi-drive orchestration + CLI | IN PROGRESS (6.0a-c, 6.1, 6.2a done; 6.0d-e, 6.2b, 6.3, 6.4 future) |
 | 7 | 5 | Multi-drive + account management | IN PROGRESS (7.1 done; 7.2, 7.3 have done items) |
 | 8 | 5 | WebSocket + advanced sync | FUTURE |
 | 9 | 8 | Operational hardening | IN PROGRESS (9.6 item 1 done) |

@@ -236,17 +236,15 @@ func TestBuildResolvedDrive_AbsolutePathPreserved(t *testing.T) {
 	assert.Equal(t, "/absolute/path/OneDrive", resolved.SyncDir)
 }
 
-func TestBuildResolvedDrive_DisplayNameAndDriveID(t *testing.T) {
+func TestBuildResolvedDrive_DisplayName(t *testing.T) {
 	cfg := DefaultConfig()
 	drive := &Drive{
 		SyncDir:     "~/OneDrive",
 		DisplayName: "home",
-		DriveID:     "abc123",
 	}
 
 	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("personal:toni@outlook.com"), drive, testLogger(t))
 	assert.Equal(t, "home", resolved.DisplayName)
-	assert.Equal(t, driveid.New("abc123"), resolved.DriveID)
 }
 
 func TestBuildResolvedDrive_OwnerField(t *testing.T) {

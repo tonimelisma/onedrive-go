@@ -211,7 +211,6 @@ type Drive struct {
     DisplayName string   `toml:"display_name,omitempty"`
     Owner       string   `toml:"owner,omitempty"`        // shared drives only: owner's email
     RemotePath  string   `toml:"remote_path,omitempty"`
-    DriveID     string   `toml:"drive_id,omitempty"`
     // ... per-drive overrides ...
 }
 ```

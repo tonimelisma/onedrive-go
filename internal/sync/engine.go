@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
-	"runtime"
 	stdsync "sync"
 	"time"
 
@@ -20,17 +19,19 @@ const forceSafetyMax = math.MaxInt32
 // EngineConfig holds the options for NewEngine. Uses a struct because
 // seven fields is too many for positional parameters.
 type EngineConfig struct {
-	DBPath        string        // path to the SQLite state database
-	SyncRoot      string        // absolute path to the local sync directory
-	DataDir       string        // application data directory for session files (optional)
-	DriveID       driveid.ID    // normalized drive identifier
-	Fetcher       DeltaFetcher  // satisfied by *graph.Client
-	Items         ItemClient    // satisfied by *graph.Client
-	Downloads     Downloader    // satisfied by *graph.Client
-	Uploads       Uploader      // satisfied by *graph.Client
-	DriveVerifier DriveVerifier // optional: verified at startup (B-074); nil skips check
-	Logger        *slog.Logger
-	UseLocalTrash bool // move deleted local files to OS trash instead of permanent delete
+	DBPath          string        // path to the SQLite state database
+	SyncRoot        string        // absolute path to the local sync directory
+	DataDir         string        // application data directory for session files (optional)
+	DriveID         driveid.ID    // normalized drive identifier
+	Fetcher         DeltaFetcher  // satisfied by *graph.Client
+	Items           ItemClient    // satisfied by *graph.Client
+	Downloads       Downloader    // satisfied by *graph.Client
+	Uploads         Uploader      // satisfied by *graph.Client
+	DriveVerifier   DriveVerifier // optional: verified at startup (B-074); nil skips check
+	Logger          *slog.Logger
+	UseLocalTrash   bool // move deleted local files to OS trash instead of permanent delete
+	TransferWorkers int  // goroutine count for the worker pool (0 → minWorkers)
+	CheckWorkers    int  // goroutine limit for parallel file hashing (0 → 4)
 }
 
 // RunOpts holds per-cycle options for RunOnce.
@@ -65,17 +66,19 @@ type SyncReport struct {
 // Engine orchestrates a complete sync cycle: observe → plan → execute → commit.
 // Single-drive only; multi-drive orchestration is deferred to Phase 5.
 type Engine struct {
-	baseline      *BaselineManager
-	planner       *Planner
-	execCfg       *ExecutorConfig
-	fetcher       DeltaFetcher
-	driveVerifier DriveVerifier   // optional (B-074)
-	failures      *failureTracker // watch mode only (B-123)
-	syncRoot      string
-	driveID       driveid.ID
-	logger        *slog.Logger
-	remoteObs     *RemoteObserver // stored during RunWatch for delta token reads
-	localObs      *LocalObserver  // stored during RunWatch for drop counter reads
+	baseline        *BaselineManager
+	planner         *Planner
+	execCfg         *ExecutorConfig
+	fetcher         DeltaFetcher
+	driveVerifier   DriveVerifier   // optional (B-074)
+	failures        *failureTracker // watch mode only (B-123)
+	syncRoot        string
+	driveID         driveid.ID
+	logger          *slog.Logger
+	remoteObs       *RemoteObserver // stored during RunWatch for delta token reads
+	localObs        *LocalObserver  // stored during RunWatch for drop counter reads
+	transferWorkers int             // goroutine count for the worker pool
+	checkWorkers    int             // goroutine limit for parallel file hashing
 
 	// In-memory per-cycle failure counts. Fed by drainWorkerResults, read by
 	// watchCycleCompletion for delta token commit decisions.
@@ -113,15 +116,17 @@ func NewEngine(cfg *EngineConfig) (*Engine, error) {
 	execCfg.transferMgr = NewTransferManager(cfg.Downloads, cfg.Uploads, sessionStore, cfg.Logger)
 
 	return &Engine{
-		baseline:      bm,
-		planner:       NewPlanner(cfg.Logger),
-		execCfg:       execCfg,
-		fetcher:       cfg.Fetcher,
-		driveVerifier: cfg.DriveVerifier,
-		syncRoot:      cfg.SyncRoot,
-		driveID:       cfg.DriveID,
-		logger:        cfg.Logger,
-		cycleFailures: make(map[string]int),
+		baseline:        bm,
+		planner:         NewPlanner(cfg.Logger),
+		execCfg:         execCfg,
+		fetcher:         cfg.Fetcher,
+		driveVerifier:   cfg.DriveVerifier,
+		syncRoot:        cfg.SyncRoot,
+		driveID:         cfg.DriveID,
+		logger:          cfg.Logger,
+		transferWorkers: cfg.TransferWorkers,
+		checkWorkers:    cfg.CheckWorkers,
+		cycleFailures:   make(map[string]int),
 	}, nil
 }
 
@@ -315,7 +320,7 @@ func (e *Engine) executePlan(
 		return
 	}
 
-	tracker := NewDepTracker(len(plan.Actions), len(plan.Actions), e.logger)
+	tracker := NewDepTracker(len(plan.Actions), e.logger)
 
 	for i := range plan.Actions {
 		id := int64(i)
@@ -329,7 +334,7 @@ func (e *Engine) executePlan(
 	}
 
 	pool := NewWorkerPool(e.execCfg, tracker, e.baseline, e.logger, len(plan.Actions))
-	pool.Start(ctx, runtime.NumCPU())
+	pool.Start(ctx, e.transferWorkers)
 	pool.Wait()
 	pool.Stop()
 
@@ -396,7 +401,7 @@ func (e *Engine) observeRemote(ctx context.Context, bl *Baseline) ([]ChangeEvent
 
 // observeLocal scans the local filesystem for changes.
 func (e *Engine) observeLocal(ctx context.Context, bl *Baseline) ([]ChangeEvent, error) {
-	obs := NewLocalObserver(bl, e.logger)
+	obs := NewLocalObserver(bl, e.logger, e.checkWorkers)
 
 	events, err := obs.FullScan(ctx, e.syncRoot)
 	if err != nil {
@@ -567,7 +572,7 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 	e.failures = newFailureTracker(e.logger)
 	tracker := NewPersistentDepTracker(e.logger)
 	pool := NewWorkerPool(e.execCfg, tracker, e.baseline, e.logger, watchResultBuf)
-	pool.Start(ctx, runtime.NumCPU())
+	pool.Start(ctx, e.transferWorkers)
 
 	defer func() {
 		inFlight := tracker.InFlightCount()
@@ -722,7 +727,7 @@ func (e *Engine) startObservers(
 
 	// Local observer (skip for download-only mode).
 	if mode != SyncDownloadOnly {
-		localObs := NewLocalObserver(bl, e.logger)
+		localObs := NewLocalObserver(bl, e.logger, e.checkWorkers)
 		localObs.safetyScanInterval = opts.SafetyScanInterval
 		e.localObs = localObs
 
