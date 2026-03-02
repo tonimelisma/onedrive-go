@@ -12,6 +12,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_ROOT"
 TESTDATA="$REPO_ROOT/.testdata"
 
 # XDG subdirs (login writes to $XDG_DATA_HOME/onedrive-go/ and
