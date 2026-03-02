@@ -377,6 +377,10 @@ func classifyStatusCode(code int) errClass {
 		return errClassFatal
 	case http.StatusLocked: // HTTP 423: SharePoint co-authoring locks last hours; skip, don't retry (B-020)
 		return errClassSkip
+	// 412 Precondition Failed: Graph API returns this on server-side ETag conflicts
+	// during mutations (e.g., concurrent writes). We don't send If-Match headers,
+	// so 412 only comes from server-side checks. A plain retry succeeds once the
+	// server resolves the transient conflict.
 	case http.StatusRequestTimeout, http.StatusPreconditionFailed,
 		http.StatusTooManyRequests, 509: //nolint:mnd // HTTP 509 Bandwidth Limit Exceeded (no stdlib constant)
 		return errClassRetryable
