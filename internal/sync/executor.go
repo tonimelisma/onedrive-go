@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -42,8 +43,8 @@ const (
 // coupling and enable Phase 5 thread safety.
 type ExecutorConfig struct {
 	items     ItemClient
-	downloads Downloader
-	uploads   Uploader
+	downloads driveops.Downloader
+	uploads   driveops.Uploader
 	syncRoot  string     // absolute path to local sync directory
 	driveID   driveid.ID // per-drive context (B-068)
 	logger    *slog.Logger
@@ -51,10 +52,10 @@ type ExecutorConfig struct {
 	// sessionStore persists upload session URLs for cross-crash resume.
 	// When non-nil and uploads satisfies SessionUploader, the executor uses
 	// session-based uploads for large files (>SimpleUploadMaxSize).
-	sessionStore *SessionStore
+	sessionStore *driveops.SessionStore
 
 	// transferMgr handles unified download/upload with resume.
-	transferMgr *TransferManager
+	transferMgr *driveops.TransferManager
 
 	// Injectable for testing.
 	nowFunc   func() time.Time
@@ -74,7 +75,7 @@ type Executor struct {
 // NewExecutorConfig creates an immutable executor configuration bound to a
 // specific drive and sync root. Use NewExecution to create per-call executors.
 func NewExecutorConfig(
-	items ItemClient, downloads Downloader, uploads Uploader,
+	items ItemClient, downloads driveops.Downloader, uploads driveops.Uploader,
 	syncRoot string, driveID driveid.ID, logger *slog.Logger,
 ) *ExecutorConfig {
 	cfg := &ExecutorConfig{
@@ -168,7 +169,7 @@ func (e *Executor) createRemoteFolder(ctx context.Context, action *Action) Outco
 		ItemID:     item.ID,
 		ParentID:   parentID,
 		ItemType:   ItemTypeFolder,
-		RemoteHash: selectHash(item), // selectHash: observer_remote.go (B-222)
+		RemoteHash: driveops.SelectHash(item), // SelectHash: driveops package (B-222)
 		ETag:       item.ETag,
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 )
 
 // maxHashRetries is the number of additional download attempts when the
@@ -21,7 +22,7 @@ func (e *Executor) executeDownload(ctx context.Context, action *Action) Outcome 
 	targetPath := filepath.Join(e.syncRoot, action.Path)
 	driveID := e.resolveDriveID(action)
 
-	opts := DownloadOpts{MaxHashRetries: maxHashRetries}
+	opts := driveops.DownloadOpts{MaxHashRetries: maxHashRetries}
 
 	if action.View != nil && action.View.Remote != nil {
 		opts.RemoteHash = action.View.Remote.Hash
@@ -29,7 +30,7 @@ func (e *Executor) executeDownload(ctx context.Context, action *Action) Outcome 
 		opts.RemoteSize = action.View.Remote.Size
 	}
 
-	var result *DownloadResult
+	var result *driveops.DownloadResult
 
 	err := e.withRetry(ctx, "download "+action.Path, func() error {
 		var dlErr error
@@ -88,11 +89,11 @@ func (e *Executor) executeUpload(ctx context.Context, action *Action) Outcome {
 	localPath := filepath.Join(e.syncRoot, action.Path)
 	name := filepath.Base(action.Path)
 
-	var result *UploadResult
+	var result *driveops.UploadResult
 
 	err = e.withRetry(ctx, "upload "+action.Path, func() error {
 		var ulErr error
-		result, ulErr = e.transferMgr.UploadFile(ctx, driveID, parentID, name, localPath, UploadOpts{})
+		result, ulErr = e.transferMgr.UploadFile(ctx, driveID, parentID, name, localPath, driveops.UploadOpts{})
 
 		return ulErr
 	})
@@ -100,8 +101,8 @@ func (e *Executor) executeUpload(ctx context.Context, action *Action) Outcome {
 		return e.failedOutcome(action, ActionUpload, err)
 	}
 
-	// selectHash is defined in observer_remote.go (B-222).
-	remoteHash := selectHash(result.Item)
+	// driveops.SelectHash picks the best available hash from the item metadata (B-222).
+	remoteHash := driveops.SelectHash(result.Item)
 
 	return Outcome{
 		Action:     ActionUpload,

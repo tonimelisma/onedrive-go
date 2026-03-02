@@ -8,10 +8,11 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 )
 
 func TestNewSyncEngine_EmptySyncDir(t *testing.T) {
-	session := &DriveSession{DriveID: driveid.New("abc123")}
+	session := &driveops.Session{DriveID: driveid.New("abc123")}
 	resolved := &config.ResolvedDrive{
 		SyncDir:     "",
 		CanonicalID: driveid.MustCanonicalID("personal:test@example.com"),
@@ -24,7 +25,7 @@ func TestNewSyncEngine_EmptySyncDir(t *testing.T) {
 }
 
 func TestNewSyncEngine_EmptyStatePath(t *testing.T) {
-	session := &DriveSession{DriveID: driveid.New("abc123")}
+	session := &driveops.Session{DriveID: driveid.New("abc123")}
 	// A zero CanonicalID produces empty StatePath.
 	resolved := &config.ResolvedDrive{
 		SyncDir:     "/tmp/sync",

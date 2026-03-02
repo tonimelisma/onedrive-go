@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,9 +12,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	isync "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 func newLsCmd() *cobra.Command {
@@ -85,16 +83,11 @@ func newStatCmd() *cobra.Command {
 	}
 }
 
-// cleanRemotePath strips leading/trailing slashes, returns "" for root.
-func cleanRemotePath(path string) string {
-	return strings.Trim(path, "/")
-}
-
 // splitParentAndName splits a remote path into parent path and name.
 // For "foo/bar/baz" returns ("foo/bar", "baz").
 // For "baz" returns ("", "baz").
 func splitParentAndName(path string) (string, string) {
-	clean := cleanRemotePath(path)
+	clean := driveops.CleanRemotePath(path)
 	idx := strings.LastIndex(clean, "/")
 
 	if idx < 0 {
@@ -102,30 +95,6 @@ func splitParentAndName(path string) (string, string) {
 	}
 
 	return clean[:idx], clean[idx+1:]
-}
-
-// resolveItem resolves a remote path to an Item.
-// For root (""), uses GetItem with "root". Otherwise uses GetItemByPath.
-// Note: "/" normalizes to "" via cleanRemotePath, so callers can pass either
-// "/" or "" to mean root. This is intentional — the CLI defaults to "/".
-func resolveItem(ctx context.Context, client *graph.Client, driveID driveid.ID, remotePath string) (*graph.Item, error) {
-	clean := cleanRemotePath(remotePath)
-	if clean == "" {
-		return client.GetItem(ctx, driveID, "root")
-	}
-
-	return client.GetItemByPath(ctx, driveID, clean)
-}
-
-// listItems lists children of a remote path.
-// For root (""), uses ListChildren with "root". Otherwise uses ListChildrenByPath.
-func listItems(ctx context.Context, client *graph.Client, driveID driveid.ID, remotePath string) ([]graph.Item, error) {
-	clean := cleanRemotePath(remotePath)
-	if clean == "" {
-		return client.ListChildren(ctx, driveID, "root")
-	}
-
-	return client.ListChildrenByPath(ctx, driveID, clean)
 }
 
 func runLs(cmd *cobra.Command, args []string) error {
@@ -137,14 +106,14 @@ func runLs(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	cc := mustCLIContext(ctx)
 
-	session, err := NewDriveSession(ctx, cc.Cfg, cc.RawConfig, cc.Logger)
+	session, err := cc.Provider.Session(ctx, cc.Cfg)
 	if err != nil {
 		return err
 	}
 
 	cc.Logger.Debug("ls", "path", remotePath)
 
-	items, err := listItems(ctx, session.Client, session.DriveID, remotePath)
+	items, err := session.ListChildren(ctx, remotePath)
 	if err != nil {
 		return fmt.Errorf("listing %q: %w", remotePath, err)
 	}
@@ -215,7 +184,7 @@ func runGet(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	cc := mustCLIContext(ctx)
 
-	session, err := NewDriveSession(ctx, cc.Cfg, cc.RawConfig, cc.Logger)
+	session, err := cc.Provider.Session(ctx, cc.Cfg)
 	if err != nil {
 		return err
 	}
@@ -223,7 +192,7 @@ func runGet(cmd *cobra.Command, args []string) error {
 	logger := cc.Logger
 	logger.Debug("get", "remote_path", remotePath)
 
-	item, err := resolveItem(ctx, session.Client, session.DriveID, remotePath)
+	item, err := session.ResolveItem(ctx, remotePath)
 	if err != nil {
 		return fmt.Errorf("resolving %q: %w", remotePath, err)
 	}
@@ -237,9 +206,9 @@ func runGet(cmd *cobra.Command, args []string) error {
 		localPath = args[1]
 	}
 
-	tm := isync.NewTransferManager(session.Transfer, session.Transfer, nil, logger)
+	tm := driveops.NewTransferManager(session.Transfer, session.Transfer, nil, logger)
 
-	result, err := tm.DownloadToFile(ctx, session.DriveID, item.ID, localPath, isync.DownloadOpts{
+	result, err := tm.DownloadToFile(ctx, session.DriveID, item.ID, localPath, driveops.DownloadOpts{
 		RemoteHash: item.QuickXorHash,
 	})
 	if err != nil {
@@ -258,7 +227,7 @@ func runGet(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// (download helpers moved to TransferManager in internal/sync/transfer_manager.go)
+// (download helpers moved to TransferManager in internal/driveops/transfer_manager.go)
 
 func runPut(cmd *cobra.Command, args []string) error {
 	localPath := args[0]
@@ -281,7 +250,7 @@ func runPut(cmd *cobra.Command, args []string) error {
 
 	cc := mustCLIContext(ctx)
 
-	session, err := NewDriveSession(ctx, cc.Cfg, cc.RawConfig, cc.Logger)
+	session, err := cc.Provider.Session(ctx, cc.Cfg)
 	if err != nil {
 		return err
 	}
@@ -292,7 +261,7 @@ func runPut(cmd *cobra.Command, args []string) error {
 	parentPath, name := splitParentAndName(remotePath)
 
 	// Resolve parent folder ID.
-	parentItem, err := resolveItem(ctx, session.Client, session.DriveID, parentPath)
+	parentItem, err := session.ResolveItem(ctx, parentPath)
 	if err != nil {
 		return fmt.Errorf("resolving parent %q: %w", parentPath, err)
 	}
@@ -301,10 +270,10 @@ func runPut(cmd *cobra.Command, args []string) error {
 		statusf(cc.Flags.Quiet, "Uploading: %s / %s\n", formatSize(uploaded), formatSize(total))
 	}
 
-	store := isync.NewSessionStore(config.DefaultDataDir(), logger)
-	tm := isync.NewTransferManager(session.Transfer, session.Transfer, store, logger)
+	store := driveops.NewSessionStore(config.DefaultDataDir(), logger)
+	tm := driveops.NewTransferManager(session.Transfer, session.Transfer, store, logger)
 
-	result, err := tm.UploadFile(ctx, session.DriveID, parentItem.ID, name, localPath, isync.UploadOpts{
+	result, err := tm.UploadFile(ctx, session.DriveID, parentItem.ID, name, localPath, driveops.UploadOpts{
 		Mtime:    fi.ModTime(),
 		Progress: progress,
 	})
@@ -318,7 +287,7 @@ func runPut(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// (upload helpers moved to TransferManager in internal/sync/transfer_manager.go)
+// (upload helpers moved to TransferManager in internal/driveops/transfer_manager.go)
 
 // rmJSONOutput is the JSON output schema for the rm command.
 type rmJSONOutput struct {
@@ -330,7 +299,7 @@ func runRm(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	cc := mustCLIContext(ctx)
 
-	session, err := NewDriveSession(ctx, cc.Cfg, cc.RawConfig, cc.Logger)
+	session, err := cc.Provider.Session(ctx, cc.Cfg)
 	if err != nil {
 		return err
 	}
@@ -338,7 +307,7 @@ func runRm(cmd *cobra.Command, args []string) error {
 	logger := cc.Logger
 	logger.Debug("rm", "path", remotePath)
 
-	item, err := resolveItem(ctx, session.Client, session.DriveID, remotePath)
+	item, err := session.ResolveItem(ctx, remotePath)
 	if err != nil {
 		return fmt.Errorf("resolving %q: %w", remotePath, err)
 	}
@@ -359,13 +328,13 @@ func runRm(cmd *cobra.Command, args []string) error {
 	}
 
 	if permanent {
-		if err := session.Client.PermanentDeleteItem(ctx, session.DriveID, item.ID); err != nil {
+		if err := session.Meta.PermanentDeleteItem(ctx, session.DriveID, item.ID); err != nil {
 			return fmt.Errorf("permanently deleting %q: %w", remotePath, err)
 		}
 
 		logger.Debug("permanent delete complete", "path", remotePath, "item_id", item.ID)
 	} else {
-		if err := session.Client.DeleteItem(ctx, session.DriveID, item.ID); err != nil {
+		if err := session.Meta.DeleteItem(ctx, session.DriveID, item.ID); err != nil {
 			return fmt.Errorf("deleting %q: %w", remotePath, err)
 		}
 
@@ -395,7 +364,7 @@ type mkdirJSONOutput struct {
 }
 
 func runMkdir(cmd *cobra.Command, args []string) error {
-	remotePath := cleanRemotePath(args[0])
+	remotePath := driveops.CleanRemotePath(args[0])
 	if remotePath == "" {
 		return fmt.Errorf("cannot create root folder")
 	}
@@ -403,7 +372,7 @@ func runMkdir(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	cc := mustCLIContext(ctx)
 
-	session, err := NewDriveSession(ctx, cc.Cfg, cc.RawConfig, cc.Logger)
+	session, err := cc.Provider.Session(ctx, cc.Cfg)
 	if err != nil {
 		return err
 	}
@@ -427,11 +396,11 @@ func runMkdir(cmd *cobra.Command, args []string) error {
 			builtPath = builtPath + "/" + seg
 		}
 
-		item, createErr := session.Client.CreateFolder(ctx, session.DriveID, parentID, seg)
+		item, createErr := session.Meta.CreateFolder(ctx, session.DriveID, parentID, seg)
 		if createErr != nil {
 			// If folder already exists (409 Conflict), resolve it and continue.
 			if errors.Is(createErr, graph.ErrConflict) {
-				existing, resolveErr := resolveItem(ctx, session.Client, session.DriveID, builtPath)
+				existing, resolveErr := session.ResolveItem(ctx, builtPath)
 				if resolveErr != nil {
 					return fmt.Errorf("resolving existing folder %q: %w", seg, resolveErr)
 				}
@@ -466,14 +435,14 @@ func runStat(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	cc := mustCLIContext(ctx)
 
-	session, err := NewDriveSession(ctx, cc.Cfg, cc.RawConfig, cc.Logger)
+	session, err := cc.Provider.Session(ctx, cc.Cfg)
 	if err != nil {
 		return err
 	}
 
 	cc.Logger.Debug("stat", "path", remotePath)
 
-	item, err := resolveItem(ctx, session.Client, session.DriveID, remotePath)
+	item, err := session.ResolveItem(ctx, remotePath)
 	if err != nil {
 		return fmt.Errorf("resolving %q: %w", remotePath, err)
 	}

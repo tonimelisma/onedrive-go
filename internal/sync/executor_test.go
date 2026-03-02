@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -107,7 +108,7 @@ func newTestExecutorConfig(t *testing.T, items *executorMockItemClient, dl *exec
 	logger := testLogger(t)
 
 	cfg := NewExecutorConfig(items, dl, ul, syncRoot, driveID, logger)
-	cfg.transferMgr = NewTransferManager(dl, ul, nil, logger)
+	cfg.transferMgr = driveops.NewTransferManager(dl, ul, nil, logger)
 	cfg.nowFunc = func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) }
 	cfg.sleepFunc = func(_ context.Context, _ time.Duration) error { return nil }
 

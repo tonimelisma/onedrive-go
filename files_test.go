@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -28,7 +29,7 @@ func TestCleanRemotePath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, cleanRemotePath(tt.path))
+			assert.Equal(t, tt.want, driveops.CleanRemotePath(tt.path))
 		})
 	}
 }

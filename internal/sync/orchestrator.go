@@ -4,14 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	gosync "sync"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 )
 
 // engineRunner is the interface the Orchestrator uses to run sync cycles.
@@ -26,78 +25,36 @@ type engineRunner interface {
 // The real implementation calls NewEngine; tests inject mocks.
 type engineFactoryFunc func(cfg *EngineConfig) (engineRunner, error)
 
-// tokenSourceFactory creates a TokenSource from a token file path.
-// The real implementation calls graph.TokenSourceFromPath; tests inject stubs.
-type tokenSourceFactory func(ctx context.Context, tokenPath string, logger *slog.Logger) (graph.TokenSource, error)
-
 // OrchestratorConfig holds the inputs for creating an Orchestrator.
 // The CLI layer populates this from resolved config and HTTP clients.
 type OrchestratorConfig struct {
-	Config       *config.Config
-	Drives       []*config.ResolvedDrive
-	ConfigPath   string       // for SIGHUP reload
-	MetaHTTP     *http.Client // 30s timeout
-	TransferHTTP *http.Client // no timeout
-	UserAgent    string
-	Logger       *slog.Logger
-	SIGHUPChan   <-chan os.Signal // injectable for tests; nil uses no-op channel
-}
-
-// clientPair holds metadata and transfer Graph API clients for a single
-// token path. Multiple drives on the same account share one clientPair.
-type clientPair struct {
-	Meta     *graph.Client
-	Transfer *graph.Client
+	Config     *config.Config
+	Drives     []*config.ResolvedDrive
+	ConfigPath string                    // for SIGHUP reload
+	Provider   *driveops.SessionProvider // token caching + Session creation
+	Logger     *slog.Logger
+	SIGHUPChan <-chan os.Signal // injectable for tests; nil uses no-op channel
 }
 
 // Orchestrator manages per-drive sync runners. It is ALWAYS used, even
 // for a single drive — no separate single-drive code path (MULTIDRIVE.md §11.7).
 type Orchestrator struct {
 	cfg           *OrchestratorConfig
-	clients       map[string]*clientPair // keyed by token file path
-	engineFactory engineFactoryFunc      // injectable for tests
-	tokenSourceFn tokenSourceFactory     // injectable for tests
+	engineFactory engineFactoryFunc // injectable for tests
 	logger        *slog.Logger
 }
 
-// NewOrchestrator creates an Orchestrator with real Engine and TokenSource
-// factories. Tests override engineFactory and tokenSourceFn after construction.
+// NewOrchestrator creates an Orchestrator with real Engine factory.
+// Token/client caching is handled by the SessionProvider in cfg.Provider.
+// Tests inject stubs via cfg.Provider.TokenSourceFn and engineFactory.
 func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 	return &Orchestrator{
-		cfg:     cfg,
-		clients: make(map[string]*clientPair),
+		cfg: cfg,
 		engineFactory: func(ecfg *EngineConfig) (engineRunner, error) {
 			return NewEngine(ecfg)
 		},
-		tokenSourceFn: graph.TokenSourceFromPath,
-		logger:        cfg.Logger,
+		logger: cfg.Logger,
 	}
-}
-
-// getOrCreateClient returns a cached clientPair for the given token path,
-// creating one if it doesn't exist. Multiple drives on the same account
-// share one clientPair (keyed by token path).
-//
-// Not goroutine-safe. Only called from prepareDriveWork, which runs
-// sequentially within RunOnce. If 6.0c introduces concurrent access
-// (e.g., SIGHUP reload during a cycle), add a mutex.
-func (o *Orchestrator) getOrCreateClient(ctx context.Context, tokenPath string) (*clientPair, error) {
-	if pair, ok := o.clients[tokenPath]; ok {
-		return pair, nil
-	}
-
-	ts, err := o.tokenSourceFn(ctx, tokenPath, o.logger)
-	if err != nil {
-		return nil, fmt.Errorf("loading token %s: %w", tokenPath, err)
-	}
-
-	pair := &clientPair{
-		Meta:     graph.NewClient(graph.DefaultBaseURL, o.cfg.MetaHTTP, ts, o.logger, o.cfg.UserAgent),
-		Transfer: graph.NewClient(graph.DefaultBaseURL, o.cfg.TransferHTTP, ts, o.logger, o.cfg.UserAgent),
-	}
-	o.clients[tokenPath] = pair
-
-	return pair, nil
 }
 
 // driveWork pairs a DriveRunner with the sync function it will execute.
@@ -143,29 +100,15 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts)
 	return reports
 }
 
-// prepareDriveWork resolves tokens, creates clients, and builds engines for
-// each configured drive. Errors are captured as closures that return the error
-// when the DriveRunner executes — no early abort for individual drive failures.
+// prepareDriveWork resolves sessions and builds engines for each configured
+// drive. Errors are captured as closures that return the error when the
+// DriveRunner executes — no early abort for individual drive failures.
 func (o *Orchestrator) prepareDriveWork(ctx context.Context, mode SyncMode, opts RunOpts) []driveWork {
 	drives := o.cfg.Drives
 	work := make([]driveWork, 0, len(drives))
 
 	for _, rd := range drives {
-		tokenPath := config.DriveTokenPath(rd.CanonicalID, o.cfg.Config)
-
-		if tokenPath == "" {
-			capturedCID := rd.CanonicalID
-			work = append(work, driveWork{
-				runner: &DriveRunner{canonID: rd.CanonicalID, displayName: rd.DisplayName},
-				fn: func(_ context.Context) (*SyncReport, error) {
-					return nil, fmt.Errorf("cannot determine token path for drive %s", capturedCID)
-				},
-			})
-
-			continue
-		}
-
-		clients, err := o.getOrCreateClient(ctx, tokenPath)
+		session, err := o.cfg.Provider.Session(ctx, rd)
 		if err != nil {
 			capturedErr := err
 			capturedCID := rd.CanonicalID
@@ -173,28 +116,14 @@ func (o *Orchestrator) prepareDriveWork(ctx context.Context, mode SyncMode, opts
 			work = append(work, driveWork{
 				runner: &DriveRunner{canonID: rd.CanonicalID, displayName: rd.DisplayName},
 				fn: func(_ context.Context) (*SyncReport, error) {
-					return nil, fmt.Errorf("token error for drive %s: %w", capturedCID, capturedErr)
+					return nil, fmt.Errorf("session error for drive %s: %w", capturedCID, capturedErr)
 				},
 			})
 
 			continue
 		}
 
-		driveID := rd.DriveID
-		if driveID.IsZero() {
-			capturedCID := rd.CanonicalID
-
-			work = append(work, driveWork{
-				runner: &DriveRunner{canonID: rd.CanonicalID, displayName: rd.DisplayName},
-				fn: func(_ context.Context) (*SyncReport, error) {
-					return nil, fmt.Errorf("drive ID not resolved for %s — re-run 'onedrive-go login'", capturedCID)
-				},
-			})
-
-			continue
-		}
-
-		w := o.buildEngineWork(rd, driveID, clients, mode, opts)
+		w := o.buildEngineWork(rd, session, mode, opts)
 		work = append(work, w)
 	}
 
@@ -203,20 +132,19 @@ func (o *Orchestrator) prepareDriveWork(ctx context.Context, mode SyncMode, opts
 
 // buildEngineWork creates a driveWork item for a successfully-resolved drive.
 // If engine creation fails, the error is captured and reported at run time.
-// The driveID parameter is the resolved drive ID (either from config or discovered).
 func (o *Orchestrator) buildEngineWork(
-	rd *config.ResolvedDrive, driveID driveid.ID, clients *clientPair, mode SyncMode, opts RunOpts,
+	rd *config.ResolvedDrive, session *driveops.Session, mode SyncMode, opts RunOpts,
 ) driveWork {
 	engine, engineErr := o.engineFactory(&EngineConfig{
 		DBPath:          rd.StatePath(),
 		SyncRoot:        rd.SyncDir,
 		DataDir:         config.DefaultDataDir(),
-		DriveID:         driveID,
-		Fetcher:         clients.Meta,
-		Items:           clients.Meta,
-		Downloads:       clients.Transfer,
-		Uploads:         clients.Transfer,
-		DriveVerifier:   clients.Meta,
+		DriveID:         session.DriveID,
+		Fetcher:         session.Meta,
+		Items:           session.Meta,
+		Downloads:       session.Transfer,
+		Uploads:         session.Transfer,
+		DriveVerifier:   session.Meta,
 		Logger:          o.logger,
 		UseLocalTrash:   rd.UseLocalTrash,
 		TransferWorkers: rd.TransferWorkers,
@@ -339,31 +267,21 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode SyncMode, opts WatchOp
 func (o *Orchestrator) startWatchRunner(
 	ctx context.Context, rd *config.ResolvedDrive, mode SyncMode, opts WatchOpts,
 ) (*watchRunner, error) {
-	tokenPath := config.DriveTokenPath(rd.CanonicalID, o.cfg.Config)
-	if tokenPath == "" {
-		return nil, fmt.Errorf("cannot determine token path for drive %s", rd.CanonicalID)
-	}
-
-	clients, err := o.getOrCreateClient(ctx, tokenPath)
+	session, err := o.cfg.Provider.Session(ctx, rd)
 	if err != nil {
-		return nil, fmt.Errorf("token error for drive %s: %w", rd.CanonicalID, err)
-	}
-
-	driveID := rd.DriveID
-	if driveID.IsZero() {
-		return nil, fmt.Errorf("drive ID not resolved for %s — re-run 'onedrive-go login'", rd.CanonicalID)
+		return nil, fmt.Errorf("session error for drive %s: %w", rd.CanonicalID, err)
 	}
 
 	engine, engineErr := o.engineFactory(&EngineConfig{
 		DBPath:          rd.StatePath(),
 		SyncRoot:        rd.SyncDir,
 		DataDir:         config.DefaultDataDir(),
-		DriveID:         driveID,
-		Fetcher:         clients.Meta,
-		Items:           clients.Meta,
-		Downloads:       clients.Transfer,
-		Uploads:         clients.Transfer,
-		DriveVerifier:   clients.Meta,
+		DriveID:         session.DriveID,
+		Fetcher:         session.Meta,
+		Items:           session.Meta,
+		Downloads:       session.Transfer,
+		Uploads:         session.Transfer,
+		DriveVerifier:   session.Meta,
 		Logger:          o.logger,
 		UseLocalTrash:   rd.UseLocalTrash,
 		TransferWorkers: rd.TransferWorkers,
@@ -488,8 +406,10 @@ func (o *Orchestrator) reload(
 		started++
 	}
 
-	// Update the Orchestrator's config reference for future reloads.
+	// Update both the Orchestrator's and Provider's config references so
+	// future token path resolution uses the reloaded config.
 	o.cfg.Config = newCfg
+	o.cfg.Provider.UpdateConfig(newCfg)
 
 	o.logger.Info("config reload complete",
 		slog.Int("started", started),

@@ -1,4 +1,4 @@
-package sync
+package driveops
 
 import (
 	"bytes"
@@ -125,7 +125,7 @@ func tmHashBytes(data []byte) string {
 func newTestTM(dl Downloader, ul Uploader, store *SessionStore) *TransferManager {
 	tm := NewTransferManager(dl, ul, store, slog.Default())
 	// Override hashFunc to use in-memory computation for test determinism.
-	tm.hashFunc = computeQuickXorHash
+	tm.hashFunc = ComputeQuickXorHash
 
 	return tm
 }
@@ -629,9 +629,9 @@ func TestTransferManager_SessionUpload_Resume(t *testing.T) {
 	}
 
 	// Pre-compute hash to match the session record.
-	fileHash, hashErr := computeQuickXorHash(localPath)
+	fileHash, hashErr := ComputeQuickXorHash(localPath)
 	if hashErr != nil {
-		t.Fatalf("computeQuickXorHash: %v", hashErr)
+		t.Fatalf("ComputeQuickXorHash: %v", hashErr)
 	}
 
 	// Pre-save a session record.
@@ -688,9 +688,9 @@ func TestTransferManager_SessionUpload_ExpiredFallback(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	fileHash, hashErr := computeQuickXorHash(localPath)
+	fileHash, hashErr := ComputeQuickXorHash(localPath)
 	if hashErr != nil {
-		t.Fatalf("computeQuickXorHash: %v", hashErr)
+		t.Fatalf("ComputeQuickXorHash: %v", hashErr)
 	}
 
 	driveStr := driveid.New("d1").String()
@@ -827,9 +827,9 @@ func TestSessionUpload_NonExpiredResumeError_DeletesSession(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	fileHash, hashErr := computeQuickXorHash(localPath)
+	fileHash, hashErr := ComputeQuickXorHash(localPath)
 	if hashErr != nil {
-		t.Fatalf("computeQuickXorHash: %v", hashErr)
+		t.Fatalf("ComputeQuickXorHash: %v", hashErr)
 	}
 
 	driveStr := driveid.New("d1").String()
@@ -882,9 +882,9 @@ func TestSessionUpload_NonExpiredResumeError_FreshOnRetry(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	fileHash, hashErr := computeQuickXorHash(localPath)
+	fileHash, hashErr := ComputeQuickXorHash(localPath)
 	if hashErr != nil {
-		t.Fatalf("computeQuickXorHash: %v", hashErr)
+		t.Fatalf("ComputeQuickXorHash: %v", hashErr)
 	}
 
 	driveStr := driveid.New("d1").String()

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -126,7 +127,7 @@ func newWorkerTestSetup(t *testing.T) (
 	ul := &workerMockUploader{}
 
 	cfg := NewExecutorConfig(items, dl, ul, syncRoot, driveID, logger)
-	cfg.transferMgr = NewTransferManager(dl, ul, nil, logger)
+	cfg.transferMgr = driveops.NewTransferManager(dl, ul, nil, logger)
 	cfg.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 	cfg.sleepFunc = func(_ context.Context, _ time.Duration) error { return nil }
 
@@ -359,7 +360,7 @@ func TestWorkerPool_FailedOutcome(t *testing.T) {
 			return 0, fmt.Errorf("simulated download failure")
 		},
 	}
-	cfg.transferMgr = NewTransferManager(cfg.downloads, cfg.uploads, cfg.sessionStore, testLogger(t))
+	cfg.transferMgr = driveops.NewTransferManager(cfg.downloads, cfg.uploads, cfg.sessionStore, testLogger(t))
 
 	actions := []Action{
 		{
@@ -508,7 +509,7 @@ func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing
 			return &graph.Item{ID: "uploaded-into-folder", ETag: "e1"}, nil
 		},
 	}
-	cfg.transferMgr = NewTransferManager(cfg.downloads, cfg.uploads, cfg.sessionStore, testLogger(t))
+	cfg.transferMgr = driveops.NewTransferManager(cfg.downloads, cfg.uploads, cfg.sessionStore, testLogger(t))
 
 	// Action 0: create folder "Uploads".
 	// Action 1: upload file "Uploads/doc.txt" into that folder.
@@ -586,7 +587,7 @@ func TestWorkerPool_PanicRecovery(t *testing.T) {
 			panic("intentional panic for testing")
 		},
 	}
-	cfg.transferMgr = NewTransferManager(cfg.downloads, cfg.uploads, cfg.sessionStore, testLogger(t))
+	cfg.transferMgr = driveops.NewTransferManager(cfg.downloads, cfg.uploads, cfg.sessionStore, testLogger(t))
 
 	actions := []Action{
 		{

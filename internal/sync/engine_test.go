@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -28,10 +29,10 @@ import (
 
 // Compile-time interface satisfaction checks.
 var (
-	_ DeltaFetcher = (*engineMockClient)(nil)
-	_ ItemClient   = (*engineMockClient)(nil)
-	_ Downloader   = (*engineMockClient)(nil)
-	_ Uploader     = (*engineMockClient)(nil)
+	_ DeltaFetcher        = (*engineMockClient)(nil)
+	_ ItemClient          = (*engineMockClient)(nil)
+	_ driveops.Downloader = (*engineMockClient)(nil)
+	_ driveops.Uploader   = (*engineMockClient)(nil)
 )
 
 type engineMockClient struct {
