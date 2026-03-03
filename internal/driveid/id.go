@@ -23,6 +23,10 @@ import (
 // zero-pad to this length for consistent map keying and database lookups.
 const idMinLength = 16
 
+// zeroIDPadded is the all-zeros string at idMinLength, computed once at
+// package init. Used by IsZero() to avoid re-allocating on every call.
+var zeroIDPadded = strings.Repeat("0", idMinLength)
+
 // ID is a normalized OneDrive API drive identifier. Lowercase and
 // zero-padded to at least 16 characters for short IDs (Personal accounts).
 // The zero value (ID{}) represents an absent or unknown drive ID.
@@ -54,7 +58,7 @@ func (id ID) String() string {
 
 // IsZero reports whether this is the zero-value ID (empty or all zeros).
 func (id ID) IsZero() bool {
-	return id.value == "" || id.value == strings.Repeat("0", idMinLength)
+	return id.value == "" || id.value == zeroIDPadded
 }
 
 // Equal reports whether two IDs are identical. Both zero-value forms
