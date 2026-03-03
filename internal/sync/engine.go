@@ -226,33 +226,11 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 		return nil, fmt.Errorf("sync: loading baseline: %w", err)
 	}
 
-	// Step 2: Observe remote changes.
-	var remoteEvents []ChangeEvent
-	var deltaToken string
-
-	if mode != SyncUploadOnly {
-		remoteEvents, deltaToken, err = e.observeRemote(ctx, bl)
-		if err != nil {
-			return nil, err
-		}
+	// Steps 2-4: Observe remote + local, buffer, and flush.
+	changes, deltaToken, err := e.observeChanges(ctx, bl, mode)
+	if err != nil {
+		return nil, err
 	}
-
-	// Step 3: Observe local changes.
-	var localEvents []ChangeEvent
-
-	if mode != SyncDownloadOnly {
-		localEvents, err = e.observeLocal(ctx, bl)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// Step 4: Buffer and flush.
-	buf := NewBuffer(e.logger)
-	buf.AddAll(remoteEvents)
-	buf.AddAll(localEvents)
-
-	changes := buf.FlushImmediate()
 
 	// Step 5: Early return if no changes.
 	if len(changes) == 0 {
@@ -442,6 +420,41 @@ func (e *Engine) observeLocal(ctx context.Context, bl *Baseline) ([]ChangeEvent,
 	}
 
 	return events, nil
+}
+
+// observeChanges runs remote and local observers based on mode, buffers their
+// events, and returns the flushed change set with the delta token. Extracted
+// from RunOnce to keep each method under ~80 lines.
+func (e *Engine) observeChanges(
+	ctx context.Context, bl *Baseline, mode SyncMode,
+) ([]PathChanges, string, error) {
+	var remoteEvents []ChangeEvent
+
+	var deltaToken string
+
+	var err error
+
+	if mode != SyncUploadOnly {
+		remoteEvents, deltaToken, err = e.observeRemote(ctx, bl)
+		if err != nil {
+			return nil, "", err
+		}
+	}
+
+	var localEvents []ChangeEvent
+
+	if mode != SyncDownloadOnly {
+		localEvents, err = e.observeLocal(ctx, bl)
+		if err != nil {
+			return nil, "", err
+		}
+	}
+
+	buf := NewBuffer(e.logger)
+	buf.AddAll(remoteEvents)
+	buf.AddAll(localEvents)
+
+	return buf.FlushImmediate(), deltaToken, nil
 }
 
 // resolveSafetyConfig returns the appropriate SafetyConfig based on RunOpts.
