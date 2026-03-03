@@ -93,7 +93,7 @@ func TestRunOnce_ZeroDrives(t *testing.T) {
 	cfg := testOrchestratorConfig(t)
 	orch := NewOrchestrator(cfg)
 
-	reports := orch.RunOnce(context.Background(), SyncBidirectional, RunOpts{})
+	reports := orch.RunOnce(t.Context(), SyncBidirectional, RunOpts{})
 	assert.Empty(t, reports)
 }
 
@@ -112,7 +112,7 @@ func TestRunOnce_OneDrive_Success(t *testing.T) {
 		return &mockEngine{report: expectedReport}, nil
 	}
 
-	reports := orch.RunOnce(context.Background(), SyncBidirectional, RunOpts{})
+	reports := orch.RunOnce(t.Context(), SyncBidirectional, RunOpts{})
 	require.Len(t, reports, 1)
 	assert.Equal(t, rd.CanonicalID, reports[0].CanonicalID)
 	assert.Equal(t, "Test", reports[0].DisplayName)
@@ -139,7 +139,7 @@ func TestRunOnce_TwoDrives_OneFailsOneSucceeds(t *testing.T) {
 		return &mockEngine{report: okReport}, nil
 	}
 
-	reports := orch.RunOnce(context.Background(), SyncBidirectional, RunOpts{})
+	reports := orch.RunOnce(t.Context(), SyncBidirectional, RunOpts{})
 	require.Len(t, reports, 2)
 
 	// Find each drive's report by canonical ID.
@@ -178,7 +178,7 @@ func TestRunOnce_PanicRecovery(t *testing.T) {
 		return &mockEngine{report: stableReport}, nil
 	}
 
-	reports := orch.RunOnce(context.Background(), SyncBidirectional, RunOpts{})
+	reports := orch.RunOnce(t.Context(), SyncBidirectional, RunOpts{})
 	require.Len(t, reports, 2)
 
 	var panicReport, stableDriveReport *DriveReport
@@ -205,7 +205,7 @@ func TestRunOnce_ContextCanceled(t *testing.T) {
 	cfg := testOrchestratorConfig(t, rd)
 	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	orch := NewOrchestrator(cfg)
@@ -228,7 +228,7 @@ func TestRunOnce_EngineFactoryError(t *testing.T) {
 		return nil, errors.New("db init failed")
 	}
 
-	reports := orch.RunOnce(context.Background(), SyncBidirectional, RunOpts{})
+	reports := orch.RunOnce(t.Context(), SyncBidirectional, RunOpts{})
 	require.Len(t, reports, 1)
 	assert.Error(t, reports[0].Err)
 	assert.Contains(t, reports[0].Err.Error(), "db init failed")
@@ -243,7 +243,7 @@ func TestRunOnce_TokenError_ReportsPerDrive(t *testing.T) {
 
 	orch := NewOrchestrator(cfg)
 
-	reports := orch.RunOnce(context.Background(), SyncBidirectional, RunOpts{})
+	reports := orch.RunOnce(t.Context(), SyncBidirectional, RunOpts{})
 	require.Len(t, reports, 1)
 	assert.Error(t, reports[0].Err)
 	assert.Contains(t, reports[0].Err.Error(), "token")
@@ -267,7 +267,7 @@ func TestRunOnce_ZeroDriveID_ReportsError(t *testing.T) {
 
 	orch := NewOrchestrator(cfg)
 
-	reports := orch.RunOnce(context.Background(), SyncBidirectional, RunOpts{})
+	reports := orch.RunOnce(t.Context(), SyncBidirectional, RunOpts{})
 	require.Len(t, reports, 1)
 	assert.Error(t, reports[0].Err)
 	assert.Contains(t, reports[0].Err.Error(), "drive ID not resolved")
@@ -331,7 +331,7 @@ func TestOrchestrator_RunWatch_SingleDrive(t *testing.T) {
 		}, nil
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	errCh := make(chan error, 1)
@@ -377,7 +377,7 @@ func TestOrchestrator_RunWatch_MultiDrive(t *testing.T) {
 		}, nil
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	errCh := make(chan error, 1)
@@ -424,7 +424,7 @@ func TestOrchestrator_Reload_AddDrive(t *testing.T) {
 		}, nil
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	errCh := make(chan error, 1)
@@ -483,7 +483,7 @@ func TestOrchestrator_Reload_RemoveDrive(t *testing.T) {
 		}, nil
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	errCh := make(chan error, 1)
@@ -539,7 +539,7 @@ func TestOrchestrator_Reload_PausedDrive(t *testing.T) {
 		}, nil
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	errCh := make(chan error, 1)
@@ -593,7 +593,7 @@ func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 		}, nil
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	errCh := make(chan error, 1)
@@ -650,7 +650,7 @@ func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
 		}, nil
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	errCh := make(chan error, 1)
@@ -695,7 +695,7 @@ func TestOrchestrator_RunWatch_ZeroDrives(t *testing.T) {
 	cfg := testOrchestratorConfig(t)
 	orch := NewOrchestrator(cfg)
 
-	err := orch.RunWatch(context.Background(), SyncBidirectional, WatchOpts{})
+	err := orch.RunWatch(t.Context(), SyncBidirectional, WatchOpts{})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no drives")
 }

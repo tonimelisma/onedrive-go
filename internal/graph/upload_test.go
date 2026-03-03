@@ -60,7 +60,7 @@ func TestSimpleUpload_Success(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	item, err := client.SimpleUpload(
-		context.Background(), driveid.New("d"), "parent", "upload.txt",
+		t.Context(), driveid.New("d"), "parent", "upload.txt",
 		strings.NewReader(content), int64(len(content)),
 	)
 	require.NoError(t, err)
@@ -92,7 +92,7 @@ func TestSimpleUpload_ContentType(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	_, err := client.SimpleUpload(
-		context.Background(), driveid.New("d"), "p", "binary.dat",
+		t.Context(), driveid.New("d"), "p", "binary.dat",
 		strings.NewReader("data"), 4,
 	)
 	require.NoError(t, err)
@@ -108,7 +108,7 @@ func TestSimpleUpload_Error(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	_, err := client.SimpleUpload(
-		context.Background(), driveid.New("d"), "p", "forbidden.txt",
+		t.Context(), driveid.New("d"), "p", "forbidden.txt",
 		strings.NewReader("data"), 4,
 	)
 	require.Error(t, err)
@@ -120,7 +120,7 @@ func TestSimpleUpload_TokenError(t *testing.T) {
 	client.sleepFunc = noopSleep
 
 	_, err := client.SimpleUpload(
-		context.Background(), driveid.New("d"), "p", "file.txt",
+		t.Context(), driveid.New("d"), "p", "file.txt",
 		strings.NewReader("data"), 4,
 	)
 	require.Error(t, err)
@@ -132,7 +132,7 @@ func TestSimpleUpload_NetworkError(t *testing.T) {
 	client.sleepFunc = noopSleep
 
 	_, err := client.SimpleUpload(
-		context.Background(), driveid.New("d"), "p", "file.txt",
+		t.Context(), driveid.New("d"), "p", "file.txt",
 		strings.NewReader("data"), 4,
 	)
 	require.Error(t, err)
@@ -148,7 +148,7 @@ func TestSimpleUpload_DecodeError(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	_, err := client.SimpleUpload(
-		context.Background(), driveid.New("d"), "p", "file.txt",
+		t.Context(), driveid.New("d"), "p", "file.txt",
 		strings.NewReader("data"), 4,
 	)
 	require.Error(t, err)
@@ -175,7 +175,7 @@ func TestCreateUploadSession_Success(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	session, err := client.CreateUploadSession(
-		context.Background(), driveid.New("d"), "parent", "large-file.bin", 10485760, time.Time{},
+		t.Context(), driveid.New("d"), "parent", "large-file.bin", 10485760, time.Time{},
 	)
 	require.NoError(t, err)
 
@@ -198,7 +198,7 @@ func TestCreateUploadSession_InvalidExpiration(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	session, err := client.CreateUploadSession(
-		context.Background(), driveid.New("d"), "parent", "file.bin", 1024, time.Time{},
+		t.Context(), driveid.New("d"), "parent", "file.bin", 1024, time.Time{},
 	)
 	require.NoError(t, err)
 
@@ -216,7 +216,7 @@ func TestCreateUploadSession_APIError(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	_, err := client.CreateUploadSession(
-		context.Background(), driveid.New("d"), "parent", "file.bin", 1024, time.Time{},
+		t.Context(), driveid.New("d"), "parent", "file.bin", 1024, time.Time{},
 	)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrForbidden)
@@ -232,7 +232,7 @@ func TestCreateUploadSession_DecodeError(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	_, err := client.CreateUploadSession(
-		context.Background(), driveid.New("d"), "parent", "file.bin", 1024, time.Time{},
+		t.Context(), driveid.New("d"), "parent", "file.bin", 1024, time.Time{},
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "decoding upload session response")
@@ -254,7 +254,7 @@ func TestUploadChunk_Intermediate(t *testing.T) {
 
 	chunkData := bytes.Repeat([]byte("A"), ChunkAlignment)
 	item, err := client.UploadChunk(
-		context.Background(), session,
+		t.Context(), session,
 		bytes.NewReader(chunkData),
 		0, int64(ChunkAlignment), 2*int64(ChunkAlignment),
 	)
@@ -289,7 +289,7 @@ func TestUploadChunk_Final(t *testing.T) {
 	chunkData := bytes.Repeat([]byte("B"), ChunkAlignment)
 	totalSize := 2 * int64(ChunkAlignment)
 	item, err := client.UploadChunk(
-		context.Background(), session,
+		t.Context(), session,
 		bytes.NewReader(chunkData),
 		int64(ChunkAlignment), int64(ChunkAlignment), totalSize,
 	)
@@ -321,7 +321,7 @@ func TestUploadChunk_FinalWith200(t *testing.T) {
 	session := &UploadSession{UploadURL: chunkSrv.URL + "/upload"}
 
 	item, err := client.UploadChunk(
-		context.Background(), session,
+		t.Context(), session,
 		strings.NewReader("final-data"),
 		0, 10, 10,
 	)
@@ -348,7 +348,7 @@ func TestUploadChunk_ContentRange(t *testing.T) {
 	total := int64(3 * ChunkAlignment)
 
 	_, err := client.UploadChunk(
-		context.Background(), session,
+		t.Context(), session,
 		bytes.NewReader(make([]byte, ChunkAlignment)),
 		offset, length, total,
 	)
@@ -366,7 +366,7 @@ func TestUploadChunk_ServerError(t *testing.T) {
 	session := &UploadSession{UploadURL: chunkSrv.URL + "/upload"}
 
 	_, err := client.UploadChunk(
-		context.Background(), session,
+		t.Context(), session,
 		strings.NewReader("data"),
 		0, 4, 4,
 	)
@@ -379,7 +379,7 @@ func TestUploadChunk_ContextCanceled(t *testing.T) {
 	client := newTestClient(t, "http://unused")
 	session := &UploadSession{UploadURL: "http://127.0.0.1:1/upload"}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	_, err := client.UploadChunk(
@@ -403,7 +403,7 @@ func TestCancelUploadSession_Success(t *testing.T) {
 	client := newTestClient(t, "http://unused")
 	session := &UploadSession{UploadURL: chunkSrv.URL + "/session/abc"}
 
-	err := client.CancelUploadSession(context.Background(), session)
+	err := client.CancelUploadSession(t.Context(), session)
 	require.NoError(t, err)
 }
 
@@ -416,7 +416,7 @@ func TestCancelUploadSession_Error(t *testing.T) {
 	client := newTestClient(t, "http://unused")
 	session := &UploadSession{UploadURL: chunkSrv.URL + "/session/gone"}
 
-	err := client.CancelUploadSession(context.Background(), session)
+	err := client.CancelUploadSession(t.Context(), session)
 	require.Error(t, err)
 	// 404 is non-retryable; doPreAuthRetry returns *GraphError with ErrNotFound.
 	assert.ErrorIs(t, err, ErrNotFound)
@@ -426,7 +426,7 @@ func TestCancelUploadSession_ContextCanceled(t *testing.T) {
 	client := newTestClient(t, "http://unused")
 	session := &UploadSession{UploadURL: "http://127.0.0.1:1/session"}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	err := client.CancelUploadSession(ctx, session)
@@ -464,7 +464,7 @@ func TestCreateUploadSession_WithFileSystemInfo(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	session, err := client.CreateUploadSession(
-		context.Background(), driveid.New("d"), "parent", "timestamped.bin", 5242880, mtime,
+		t.Context(), driveid.New("d"), "parent", "timestamped.bin", 5242880, mtime,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "https://upload.example.com/session/fsi", session.UploadURL)
@@ -491,7 +491,7 @@ func TestCreateUploadSession_WithoutFileSystemInfo(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	session, err := client.CreateUploadSession(
-		context.Background(), driveid.New("d"), "parent", "no-timestamp.bin", 5242880, time.Time{},
+		t.Context(), driveid.New("d"), "parent", "no-timestamp.bin", 5242880, time.Time{},
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "https://upload.example.com/session/nofsi", session.UploadURL)
@@ -508,7 +508,7 @@ func TestUploadChunk_416_RangeNotSatisfiable(t *testing.T) {
 	session := &UploadSession{UploadURL: chunkSrv.URL + "/upload"}
 
 	_, err := client.UploadChunk(
-		context.Background(), session,
+		t.Context(), session,
 		strings.NewReader("data"),
 		0, 4, 4,
 	)
@@ -540,7 +540,7 @@ func TestQueryUploadSession_Success(t *testing.T) {
 	client := newTestClient(t, "http://unused")
 	session := &UploadSession{UploadURL: sessionSrv.URL + "/session"}
 
-	status, err := client.QueryUploadSession(context.Background(), session)
+	status, err := client.QueryUploadSession(t.Context(), session)
 	require.NoError(t, err)
 
 	assert.Equal(t, "https://upload.example.com/session/resume", status.UploadURL)
@@ -558,7 +558,7 @@ func TestQueryUploadSession_Expired(t *testing.T) {
 	client := newTestClient(t, "http://unused")
 	session := &UploadSession{UploadURL: sessionSrv.URL + "/session"}
 
-	_, err := client.QueryUploadSession(context.Background(), session)
+	_, err := client.QueryUploadSession(t.Context(), session)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrNotFound)
 }
@@ -567,7 +567,7 @@ func TestQueryUploadSession_NetworkError(t *testing.T) {
 	client := newTestClient(t, "http://unused")
 	session := &UploadSession{UploadURL: "http://127.0.0.1:1/session"}
 
-	_, err := client.QueryUploadSession(context.Background(), session)
+	_, err := client.QueryUploadSession(t.Context(), session)
 	require.Error(t, err)
 	// doPreAuthRetry retries network errors, then returns "failed after N retries".
 	assert.Contains(t, err.Error(), "failed after 5 retries")
@@ -587,7 +587,7 @@ func TestHandleChunkResponse_FinalDecodeError(t *testing.T) {
 	session := &UploadSession{UploadURL: chunkSrv.URL + "/upload"}
 
 	_, err := client.UploadChunk(
-		context.Background(), session,
+		t.Context(), session,
 		strings.NewReader("final-data"),
 		0, 10, 10,
 	)
@@ -624,7 +624,7 @@ func TestQueryUploadSession_DecodeError(t *testing.T) {
 	client := newTestClient(t, "http://unused")
 	session := &UploadSession{UploadURL: sessionSrv.URL + "/session"}
 
-	_, err := client.QueryUploadSession(context.Background(), session)
+	_, err := client.QueryUploadSession(t.Context(), session)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "decoding session status response")
 }
@@ -646,7 +646,7 @@ func TestQueryUploadSession_InvalidExpiration(t *testing.T) {
 	client := newTestClient(t, "http://unused")
 	session := &UploadSession{UploadURL: sessionSrv.URL + "/session"}
 
-	status, err := client.QueryUploadSession(context.Background(), session)
+	status, err := client.QueryUploadSession(t.Context(), session)
 	require.NoError(t, err)
 
 	assert.Equal(t, "https://upload.example.com/session/inv-exp", status.UploadURL)
@@ -684,7 +684,7 @@ func TestUpload_SimpleForSmallFile(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	item, err := client.Upload(
-		context.Background(), driveid.New("d"), "parent", "small.txt",
+		t.Context(), driveid.New("d"), "parent", "small.txt",
 		bytes.NewReader(content), int64(len(content)), time.Time{}, nil,
 	)
 	require.NoError(t, err)
@@ -748,7 +748,7 @@ func TestUpload_SimplePreservesMtime(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	item, err := client.Upload(
-		context.Background(), driveid.New("d"), "parent", "mtime.txt",
+		t.Context(), driveid.New("d"), "parent", "mtime.txt",
 		bytes.NewReader(content), int64(len(content)), mtime, nil,
 	)
 	require.NoError(t, err)
@@ -783,7 +783,7 @@ func TestUpload_SimpleSkipsPatchForZeroMtime(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	item, err := client.Upload(
-		context.Background(), driveid.New("d"), "parent", "no-mtime.txt",
+		t.Context(), driveid.New("d"), "parent", "no-mtime.txt",
 		bytes.NewReader(content), int64(len(content)), time.Time{}, nil,
 	)
 	require.NoError(t, err)
@@ -825,7 +825,7 @@ func TestUpload_SimpleMtimePatchFailure(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	_, err := client.Upload(
-		context.Background(), driveid.New("d"), "parent", "fail.txt",
+		t.Context(), driveid.New("d"), "parent", "fail.txt",
 		bytes.NewReader(content), int64(len(content)), mtime, nil,
 	)
 	require.Error(t, err)
@@ -892,7 +892,7 @@ func TestUpload_ChunkedForLargeFile(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	item, err := client.Upload(
-		context.Background(), driveid.New("d"), "parent", "large.bin",
+		t.Context(), driveid.New("d"), "parent", "large.bin",
 		bytes.NewReader(content), fileSize, time.Time{}, nil,
 	)
 	require.NoError(t, err)
@@ -935,7 +935,7 @@ func TestUpload_ChunkedCancelsSessionOnError(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	_, err := client.Upload(
-		context.Background(), driveid.New("d"), "parent", "fail.bin",
+		t.Context(), driveid.New("d"), "parent", "fail.bin",
 		bytes.NewReader(content), fileSize, time.Time{}, nil,
 	)
 	require.Error(t, err)
@@ -1004,7 +1004,7 @@ func TestUpload_ProgressCallback(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	item, err := client.Upload(
-		context.Background(), driveid.New("d"), "parent", "progress.bin",
+		t.Context(), driveid.New("d"), "parent", "progress.bin",
 		bytes.NewReader(content), fileSize, time.Time{}, progress,
 	)
 	require.NoError(t, err)
@@ -1040,7 +1040,7 @@ func TestUpload_NilProgress(t *testing.T) {
 
 	// Should not panic with nil progress.
 	item, err := client.Upload(
-		context.Background(), driveid.New("d"), "parent", "nilprog.txt",
+		t.Context(), driveid.New("d"), "parent", "nilprog.txt",
 		bytes.NewReader(content), int64(len(content)), time.Time{}, nil,
 	)
 	require.NoError(t, err)
@@ -1079,7 +1079,7 @@ func TestUploadChunk_RetriesOn503(t *testing.T) {
 	session := &UploadSession{UploadURL: chunkSrv.URL + "/upload"}
 
 	item, err := client.UploadChunk(
-		context.Background(), session,
+		t.Context(), session,
 		strings.NewReader("data"),
 		0, 4, 8,
 	)
@@ -1100,7 +1100,7 @@ func TestCancelUploadSession_Unexpected2xx(t *testing.T) {
 	client := newTestClient(t, "http://unused")
 	session := &UploadSession{UploadURL: chunkSrv.URL + "/session"}
 
-	err := client.CancelUploadSession(context.Background(), session)
+	err := client.CancelUploadSession(t.Context(), session)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "status 200")
 }
@@ -1124,7 +1124,7 @@ func TestCancelUploadSession_RetriesOn503(t *testing.T) {
 	client := newTestClient(t, "http://unused")
 	session := &UploadSession{UploadURL: chunkSrv.URL + "/session"}
 
-	err := client.CancelUploadSession(context.Background(), session)
+	err := client.CancelUploadSession(t.Context(), session)
 	require.NoError(t, err)
 	assert.Equal(t, int32(2), calls.Load())
 }
@@ -1186,7 +1186,7 @@ func TestResumeUpload_Success(t *testing.T) {
 	session := &UploadSession{UploadURL: chunkSrv.URL + "/upload/session"}
 	reader := bytes.NewReader(content)
 
-	item, err := client.ResumeUpload(context.Background(), session, reader, totalSize, nil)
+	item, err := client.ResumeUpload(t.Context(), session, reader, totalSize, nil)
 	require.NoError(t, err)
 	require.NotNil(t, item)
 	assert.Equal(t, "resumed-item", item.ID)
@@ -1202,7 +1202,7 @@ func TestResumeUpload_SessionExpired(t *testing.T) {
 	client := newTestClient(t, "http://unused")
 	session := &UploadSession{UploadURL: sessionSrv.URL + "/expired"}
 
-	_, err := client.ResumeUpload(context.Background(), session, bytes.NewReader(nil), 1024, nil)
+	_, err := client.ResumeUpload(t.Context(), session, bytes.NewReader(nil), 1024, nil)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrUploadSessionExpired)
 }
@@ -1231,7 +1231,7 @@ func TestQueryUploadSession_RetriesOn429(t *testing.T) {
 	client := newTestClient(t, "http://unused")
 	session := &UploadSession{UploadURL: sessionSrv.URL + "/session"}
 
-	status, err := client.QueryUploadSession(context.Background(), session)
+	status, err := client.QueryUploadSession(t.Context(), session)
 	require.NoError(t, err)
 	assert.Equal(t, "https://upload.example.com/session/retry", status.UploadURL)
 	assert.Equal(t, int32(2), calls.Load())

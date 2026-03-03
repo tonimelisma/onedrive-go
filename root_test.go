@@ -23,8 +23,8 @@ func TestBuildLogger_Default(t *testing.T) {
 	logger := buildLogger(nil, flags)
 
 	// Default level is Warn.
-	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelWarn))
-	assert.False(t, logger.Handler().Enabled(context.Background(), slog.LevelInfo))
+	assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelWarn))
+	assert.False(t, logger.Handler().Enabled(t.Context(), slog.LevelInfo))
 }
 
 func TestBuildLogger_Verbose(t *testing.T) {
@@ -33,8 +33,8 @@ func TestBuildLogger_Verbose(t *testing.T) {
 	logger := buildLogger(nil, flags)
 
 	// --verbose sets Info.
-	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelInfo))
-	assert.False(t, logger.Handler().Enabled(context.Background(), slog.LevelDebug))
+	assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelInfo))
+	assert.False(t, logger.Handler().Enabled(t.Context(), slog.LevelDebug))
 }
 
 func TestBuildLogger_Debug(t *testing.T) {
@@ -42,7 +42,7 @@ func TestBuildLogger_Debug(t *testing.T) {
 
 	logger := buildLogger(nil, flags)
 
-	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelDebug))
+	assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelDebug))
 }
 
 func TestBuildLogger_ConfigDebug(t *testing.T) {
@@ -53,7 +53,7 @@ func TestBuildLogger_ConfigDebug(t *testing.T) {
 
 	logger := buildLogger(cfg, flags)
 
-	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelDebug))
+	assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelDebug))
 }
 
 func TestBuildLogger_VerboseOverrides(t *testing.T) {
@@ -66,8 +66,8 @@ func TestBuildLogger_VerboseOverrides(t *testing.T) {
 	logger := buildLogger(cfg, flags)
 
 	// --verbose enables Info level, but not Debug.
-	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelInfo))
-	assert.False(t, logger.Handler().Enabled(context.Background(), slog.LevelDebug))
+	assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelInfo))
+	assert.False(t, logger.Handler().Enabled(t.Context(), slog.LevelDebug))
 }
 
 func TestBuildLogger_QuietOverrides(t *testing.T) {
@@ -77,8 +77,8 @@ func TestBuildLogger_QuietOverrides(t *testing.T) {
 	logger := buildLogger(nil, flags)
 
 	// Error is enabled, but warn should not be.
-	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelError))
-	assert.False(t, logger.Handler().Enabled(context.Background(), slog.LevelWarn))
+	assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelError))
+	assert.False(t, logger.Handler().Enabled(t.Context(), slog.LevelWarn))
 }
 
 func TestBuildLogger_DebugOverrides(t *testing.T) {
@@ -90,7 +90,7 @@ func TestBuildLogger_DebugOverrides(t *testing.T) {
 
 	logger := buildLogger(cfg, flags)
 
-	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelDebug))
+	assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelDebug))
 }
 
 func TestBuildLogger_ConfigInfo(t *testing.T) {
@@ -102,14 +102,14 @@ func TestBuildLogger_ConfigInfo(t *testing.T) {
 
 	logger := buildLogger(cfg, flags)
 
-	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelInfo))
-	assert.False(t, logger.Handler().Enabled(context.Background(), slog.LevelDebug))
+	assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelInfo))
+	assert.False(t, logger.Handler().Enabled(t.Context(), slog.LevelDebug))
 }
 
 // --- cliContextFrom tests ---
 
 func TestCliContextFrom_NilContext(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cc := cliContextFrom(ctx)
 	assert.Nil(t, cc)
 }
@@ -120,7 +120,7 @@ func TestCliContextFrom_WithCLIContext(t *testing.T) {
 		Logger:       slog.New(slog.NewTextHandler(os.Stderr, nil)),
 		StatusWriter: os.Stderr,
 	}
-	ctx := context.WithValue(context.Background(), cliContextKey{}, expected)
+	ctx := context.WithValue(t.Context(), cliContextKey{}, expected)
 	cc := cliContextFrom(ctx)
 	assert.Equal(t, expected, cc)
 	assert.Equal(t, "/test", cc.Cfg.SyncDir)
@@ -193,7 +193,7 @@ func TestNewRootCmd_AuthSkipsConfig(t *testing.T) {
 			sub, _, err := cmd.Find([]string{name})
 			require.NoError(t, err)
 
-			sub.SetContext(context.Background())
+			sub.SetContext(t.Context())
 
 			err = cmd.PersistentPreRunE(sub, nil)
 			assert.NoError(t, err, "%s should skip config loading", name)
@@ -252,7 +252,7 @@ func TestNewRootCmd_DriveSubcommandsSkipConfig(t *testing.T) {
 			sub, _, err := cmd.Find(tc.args)
 			require.NoError(t, err)
 
-			sub.SetContext(context.Background())
+			sub.SetContext(t.Context())
 
 			err = cmd.PersistentPreRunE(sub, nil)
 			assert.NoError(t, err, "%s should skip config loading", tc.name)
@@ -337,7 +337,7 @@ sync_dir = "` + tmpDir + `/OneDrive"
 	logger := buildLogger(nil, flags)
 
 	cmd := newRootCmd()
-	cmd.SetContext(context.Background())
+	cmd.SetContext(t.Context())
 
 	resolved, rawCfg, err := loadAndResolve(cmd, flags, config.EnvOverrides{}, logger)
 	require.NoError(t, err)
@@ -370,7 +370,7 @@ func TestMustCLIContext_Panics(t *testing.T) {
 		"BUG: CLIContext not found in context — ensure the command "+
 			"does not skip config loading (no skipConfigAnnotation) or "+
 			"explicitly loads config in its RunE",
-		func() { mustCLIContext(context.Background()) },
+		func() { mustCLIContext(t.Context()) },
 	)
 }
 
@@ -380,7 +380,7 @@ func TestMustCLIContext_Returns(t *testing.T) {
 		Logger:       slog.New(slog.NewTextHandler(os.Stderr, nil)),
 		StatusWriter: os.Stderr,
 	}
-	ctx := context.WithValue(context.Background(), cliContextKey{}, expected)
+	ctx := context.WithValue(t.Context(), cliContextKey{}, expected)
 	cc := mustCLIContext(ctx)
 	assert.Equal(t, expected, cc)
 	assert.Equal(t, "/must-test", cc.Cfg.SyncDir)
@@ -416,7 +416,7 @@ func TestLoadAndResolve_InvalidTOML(t *testing.T) {
 	logger := buildLogger(nil, flags)
 
 	cmd := newRootCmd()
-	cmd.SetContext(context.Background())
+	cmd.SetContext(t.Context())
 
 	_, _, err = loadAndResolve(cmd, flags, config.EnvOverrides{}, logger)
 	require.Error(t, err)
@@ -441,7 +441,7 @@ sync_dir = "` + tmpDir + `/two"
 	logger := buildLogger(nil, flags)
 
 	cmd := newRootCmd()
-	cmd.SetContext(context.Background())
+	cmd.SetContext(t.Context())
 
 	_, _, err = loadAndResolve(cmd, flags, config.EnvOverrides{}, logger)
 	require.Error(t, err)
@@ -458,8 +458,8 @@ func TestBuildLogger_UnknownLogLevel(t *testing.T) {
 	logger := buildLogger(cfg, flags)
 
 	// Should fall back to warn level.
-	assert.True(t, logger.Handler().Enabled(context.Background(), slog.LevelWarn))
-	assert.False(t, logger.Handler().Enabled(context.Background(), slog.LevelInfo))
+	assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelWarn))
+	assert.False(t, logger.Handler().Enabled(t.Context(), slog.LevelInfo))
 }
 
 // --- B-296: sync command log_level fix ---
@@ -517,10 +517,10 @@ func TestBuildLogger_FromRawConfigLogLevel(t *testing.T) {
 			logger := buildLogger(rd, CLIFlags{})
 
 			assert.Equal(t, tc.wantInfo,
-				logger.Handler().Enabled(context.Background(), slog.LevelInfo),
+				logger.Handler().Enabled(t.Context(), slog.LevelInfo),
 				"Info enabled mismatch for log_level=%q", tc.logLevel)
 			assert.Equal(t, tc.wantDebug,
-				logger.Handler().Enabled(context.Background(), slog.LevelDebug),
+				logger.Handler().Enabled(t.Context(), slog.LevelDebug),
 				"Debug enabled mismatch for log_level=%q", tc.logLevel)
 		})
 	}

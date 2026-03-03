@@ -104,7 +104,7 @@ func TestNewBaselineManager_CreatesDB(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	require.NoError(t, db.PingContext(context.Background()))
+	require.NoError(t, db.PingContext(t.Context()))
 }
 
 func TestNewBaselineManager_WALMode(t *testing.T) {
@@ -114,7 +114,7 @@ func TestNewBaselineManager_WALMode(t *testing.T) {
 
 	var journalMode string
 
-	ctx := context.Background()
+	ctx := t.Context()
 	err := mgr.db.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journalMode)
 	require.NoError(t, err)
 	assert.Equal(t, "wal", journalMode)
@@ -130,7 +130,7 @@ func TestBaselineManager_Close_CheckpointsWAL(t *testing.T) {
 	require.NoError(t, err)
 
 	// Write some data to ensure WAL has content.
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err = mgr.db.ExecContext(ctx,
 		`INSERT INTO baseline (path, drive_id, item_id, parent_id, item_type,
 		 local_hash, remote_hash, size, mtime, synced_at, etag)
@@ -158,7 +158,7 @@ func TestNewBaselineManager_RunsMigrations(t *testing.T) {
 	mgr := newTestManager(t)
 
 	// goose creates a goose_db_version table automatically.
-	ctx := context.Background()
+	ctx := t.Context()
 
 	var count int
 
@@ -173,7 +173,7 @@ func TestLoad_EmptyBaseline(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	b, err := mgr.Load(ctx)
 	require.NoError(t, err)
@@ -185,7 +185,7 @@ func TestCommit_Download(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
 	mgr.nowFunc = func() time.Time { return fixedTime }
@@ -219,7 +219,7 @@ func TestCommit_Upload(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 2, 1, 10, 0, 0, 0, time.UTC)
 	mgr.nowFunc = func() time.Time { return fixedTime }
@@ -251,7 +251,7 @@ func TestCommit_FolderCreate(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mgr.nowFunc = func() time.Time {
 		return time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
@@ -281,7 +281,7 @@ func TestCommit_UpdateSynced(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// First commit: create baseline entry.
 	t1 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -321,7 +321,7 @@ func TestCommit_LocalDelete(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mgr.nowFunc = func() time.Time {
 		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -350,7 +350,7 @@ func TestCommit_RemoteDelete(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mgr.nowFunc = func() time.Time {
 		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -378,7 +378,7 @@ func TestCommit_Cleanup(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mgr.nowFunc = func() time.Time {
 		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -406,7 +406,7 @@ func TestCommit_Move(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	mgr.nowFunc = func() time.Time { return fixedTime }
@@ -443,7 +443,7 @@ func TestCommit_Conflict(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	mgr.nowFunc = func() time.Time { return fixedTime }
@@ -481,7 +481,7 @@ func TestCommit_Conflict_StoresRemoteMtime(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	mgr.nowFunc = func() time.Time { return fixedTime }
@@ -518,7 +518,7 @@ func TestCommit_SkipsFailedOutcomes(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mgr.nowFunc = func() time.Time {
 		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -543,7 +543,7 @@ func TestCommit_DeltaToken(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mgr.nowFunc = func() time.Time {
 		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -569,7 +569,7 @@ func TestCommit_DeltaTokenUpdate(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mgr.nowFunc = func() time.Time {
 		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -601,7 +601,7 @@ func TestCommit_SyncedAtFromNowFunc(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Use a distinctive fixed time to verify nowFunc is used.
 	fixedTime := time.Date(2025, 6, 15, 12, 30, 0, 0, time.UTC)
@@ -623,7 +623,7 @@ func TestCommit_RefreshesCache(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mgr.nowFunc = func() time.Time {
 		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -648,7 +648,7 @@ func TestGetDeltaToken_Empty(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	token, err := mgr.GetDeltaToken(ctx, "nonexistent-drive", "")
 	require.NoError(t, err)
@@ -659,7 +659,7 @@ func TestGetDeltaToken_AfterCommit(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mgr.nowFunc = func() time.Time {
 		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -683,7 +683,7 @@ func TestLoad_NullableFields(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Insert a row with NULL parent_id, hashes, size, mtime, etag directly.
 	_, err := mgr.db.ExecContext(ctx,
@@ -715,7 +715,7 @@ func TestLoad_NullableFields(t *testing.T) {
 func seedConflict(t *testing.T, mgr *BaselineManager, path, conflictType string) string {
 	t.Helper()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	outcomes := []Outcome{{
 		Action:       ActionConflict,
@@ -746,7 +746,7 @@ func TestListConflicts_Empty(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	conflicts, err := mgr.ListConflicts(ctx)
 	require.NoError(t, err)
@@ -762,7 +762,7 @@ func TestListConflicts_WithConflicts(t *testing.T) {
 	seedConflict(t, mgr, "a.txt", "edit_edit")
 	seedConflict(t, mgr, "b.txt", "edit_delete")
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	conflicts, err := mgr.ListConflicts(ctx)
 	require.NoError(t, err)
@@ -780,7 +780,7 @@ func TestListConflicts_OnlyUnresolved(t *testing.T) {
 	id := seedConflict(t, mgr, "resolved.txt", "edit_edit")
 	seedConflict(t, mgr, "pending.txt", "edit_edit")
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Resolve the first conflict.
 	require.NoError(t, mgr.ResolveConflict(ctx, id, ResolutionKeepBoth))
@@ -798,7 +798,7 @@ func TestGetConflict_ByID(t *testing.T) {
 	mgr.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 
 	id := seedConflict(t, mgr, "lookup.txt", "create_create")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	c, err := mgr.GetConflict(ctx, id)
 	require.NoError(t, err)
@@ -814,7 +814,7 @@ func TestGetConflict_ByPath(t *testing.T) {
 	mgr.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 
 	seedConflict(t, mgr, "bypath.txt", "edit_edit")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	c, err := mgr.GetConflict(ctx, "bypath.txt")
 	require.NoError(t, err)
@@ -825,7 +825,7 @@ func TestGetConflict_NotFound(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_, err := mgr.GetConflict(ctx, "nonexistent")
 	require.Error(t, err)
@@ -838,7 +838,7 @@ func TestResolveConflict(t *testing.T) {
 	mgr.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 
 	id := seedConflict(t, mgr, "resolve-me.txt", "edit_edit")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	require.NoError(t, mgr.ResolveConflict(ctx, id, ResolutionKeepLocal))
 
@@ -862,7 +862,7 @@ func TestResolveConflict_AlreadyResolved(t *testing.T) {
 	mgr.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 
 	id := seedConflict(t, mgr, "double-resolve.txt", "edit_edit")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// First resolve succeeds.
 	require.NoError(t, mgr.ResolveConflict(ctx, id, ResolutionKeepBoth))
@@ -876,7 +876,7 @@ func TestLoad_ReturnsCachedBaseline(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	mgr.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 
 	// Seed a baseline entry.
@@ -903,7 +903,7 @@ func TestLoad_CacheInvalidatedByCommit(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	mgr.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 
 	// Seed one entry.
@@ -950,7 +950,7 @@ func TestMigrations_Idempotent(t *testing.T) {
 	defer mgr2.Close()
 
 	// Verify the DB is still functional.
-	ctx := context.Background()
+	ctx := t.Context()
 
 	b, err := mgr2.Load(ctx)
 	require.NoError(t, err)
@@ -961,7 +961,7 @@ func TestCommitConflict_AutoResolved(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC)
 	mgr.nowFunc = func() time.Time { return fixedTime }
@@ -1015,7 +1015,7 @@ func TestListAllConflicts(t *testing.T) {
 
 	// Seed and resolve a conflict.
 	resolvedID := seedConflict(t, mgr, "resolved-file.txt", "edit_delete")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	require.NoError(t, mgr.ResolveConflict(ctx, resolvedID, ResolutionKeepLocal))
 
@@ -1053,7 +1053,7 @@ func TestCommitOutcome_Download(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC)
 	mgr.nowFunc = func() time.Time { return fixedTime }
@@ -1086,7 +1086,7 @@ func TestCommitOutcome_Upload(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 
@@ -1113,7 +1113,7 @@ func TestCommitOutcome_Delete(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 
@@ -1137,7 +1137,7 @@ func TestCommitOutcome_Move(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 
@@ -1170,7 +1170,7 @@ func TestCommitOutcome_Conflict_AutoResolved(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 
@@ -1208,7 +1208,7 @@ func TestCommitOutcome_Conflict_Unresolved(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 
@@ -1233,7 +1233,7 @@ func TestCommitOutcome_EditDeleteConflict_DeletesBaseline(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 
@@ -1285,7 +1285,7 @@ func TestCommitOutcome_SkipsFailedOutcome(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	outcome := Outcome{
 		Action:  ActionDownload,
@@ -1305,7 +1305,7 @@ func TestCommitOutcome_FolderCreate(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 
@@ -1335,7 +1335,7 @@ func TestCommitDeltaToken(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 
@@ -1350,7 +1350,7 @@ func TestCommitDeltaToken_Update(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 
@@ -1366,7 +1366,7 @@ func TestCommitDeltaToken_EmptyIsNoop(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Empty token should be a no-op.
 	require.NoError(t, mgr.CommitDeltaToken(ctx, "", "d", "", "d"))
@@ -1380,7 +1380,7 @@ func TestCommitDeltaToken_CompositeKey_DifferentScopes(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Primary delta (scope_id="").
 	require.NoError(t, mgr.CommitDeltaToken(ctx, "primary-token", "drv1", "", "drv1"))
@@ -1402,7 +1402,7 @@ func TestCommitDeltaToken_CompositeKey_UpdatePreservesOtherScopes(t *testing.T) 
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Save two scoped tokens.
 	require.NoError(t, mgr.CommitDeltaToken(ctx, "tok-a", "drv1", "", "drv1"))
@@ -1615,7 +1615,7 @@ func TestBaseline_ConcurrentAccess(t *testing.T) {
 // as path.Base(Path) by the shared scanConflict function (B-071).
 func TestConflictRecord_NameField(t *testing.T) {
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_, err := mgr.Load(ctx)
 	require.NoError(t, err)
@@ -1715,7 +1715,7 @@ func setupPruneTestConflicts(t *testing.T, mgr *BaselineManager, ctx context.Con
 // newer resolved and all unresolved conflicts (B-087).
 func TestPruneResolvedConflicts(t *testing.T) {
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	now := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
 
 	mgr.nowFunc = func() time.Time { return now }
@@ -1751,7 +1751,7 @@ func TestPruneResolvedConflicts(t *testing.T) {
 // mismatches between the in-memory baseline cache and the database (B-198).
 func TestCheckCacheConsistency(t *testing.T) {
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_, err := mgr.Load(ctx)
 	require.NoError(t, err)
@@ -1803,7 +1803,7 @@ func TestMigration00004_CompositeKey(t *testing.T) {
 
 	db.SetMaxOpenConns(1)
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Apply only migrations 1-3 (before composite key migration).
 	subFS, err := fs.Sub(migrationsFS, "migrations")
@@ -1861,7 +1861,7 @@ func TestWriteSyncMetadata_RoundTrip(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	report := &SyncReport{
 		Duration:  1500 * time.Millisecond,
@@ -1885,7 +1885,7 @@ func TestWriteSyncMetadata_Upsert(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	report1 := &SyncReport{Duration: 1 * time.Second, Succeeded: 10}
 	require.NoError(t, mgr.WriteSyncMetadata(ctx, report1))
@@ -1903,7 +1903,7 @@ func TestWriteSyncMetadata_NoErrors(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	report := &SyncReport{Duration: 500 * time.Millisecond, Succeeded: 5}
 	require.NoError(t, mgr.WriteSyncMetadata(ctx, report))
@@ -1917,7 +1917,7 @@ func TestReadSyncMetadata_EmptyDB(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	meta, err := mgr.ReadSyncMetadata(ctx)
 	require.NoError(t, err)
@@ -1928,7 +1928,7 @@ func TestBaselineEntryCount_Empty(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	count, err := mgr.BaselineEntryCount(ctx)
 	require.NoError(t, err)
@@ -1939,7 +1939,7 @@ func TestBaselineEntryCount_WithEntries(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Commit a download outcome to add a baseline entry.
 	outcome := Outcome{
@@ -1965,7 +1965,7 @@ func TestUnresolvedConflictCount_Empty(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	count, err := mgr.UnresolvedConflictCount(ctx)
 	require.NoError(t, err)

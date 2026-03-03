@@ -147,7 +147,7 @@ func TestWorkerPool_FolderCreate(t *testing.T) {
 	t.Parallel()
 
 	cfg, mgr, syncRoot := newWorkerTestSetup(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	actions := []Action{
 		{
@@ -196,7 +196,7 @@ func TestWorkerPool_DependencyChain(t *testing.T) {
 	t.Parallel()
 
 	cfg, mgr, syncRoot := newWorkerTestSetup(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Folder create → then download into that folder.
 	actions := []Action{
@@ -254,7 +254,7 @@ func TestWorkerPool_StopCancelsWork(t *testing.T) {
 	t.Parallel()
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	actions := []Action{
 		{
@@ -300,7 +300,7 @@ func TestWorkerPool_Stats(t *testing.T) {
 	t.Parallel()
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Use a delete action against a nonexistent local file — the delete should
 	// still succeed (deleteLocalFile succeeds when file doesn't exist).
@@ -332,7 +332,7 @@ func TestWorkerPool_FailedOutcome(t *testing.T) {
 	t.Parallel()
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Configure a download mock that always fails.
 	cfg.downloads = &workerMockDownloader{
@@ -400,7 +400,7 @@ func TestWorkerPool_ResultChannel(t *testing.T) {
 	t.Parallel()
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	actions := []Action{
 		{
@@ -459,7 +459,7 @@ func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing
 	t.Parallel()
 
 	cfg, mgr, syncRoot := newWorkerTestSetup(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	var capturedParentID string
 
@@ -530,7 +530,7 @@ func TestWorkerPool_PanicRecovery(t *testing.T) {
 	t.Parallel()
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Configure a download mock that panics.
 	cfg.downloads = &workerMockDownloader{
