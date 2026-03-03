@@ -34,6 +34,7 @@ type WorkerPool struct {
 	errors        []error
 	errorsMu      stdsync.Mutex
 	droppedErrors atomic.Int64
+	dropWarnOnce  stdsync.Once
 
 	// results reports per-action outcomes back to the engine for in-memory
 	// cycle result tracking.
@@ -277,6 +278,11 @@ func (wp *WorkerPool) recordFailure(err error) {
 
 	if len(wp.errors) >= maxRecordedErrors {
 		wp.droppedErrors.Add(1)
+		wp.dropWarnOnce.Do(func() {
+			wp.logger.Warn("error diagnostic buffer full, subsequent errors will only be counted",
+				slog.Int("cap", maxRecordedErrors),
+			)
+		})
 	} else {
 		wp.errors = append(wp.errors, err)
 	}

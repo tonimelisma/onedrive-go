@@ -34,7 +34,12 @@ func runResume(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	if driveSelector := cc.Flags.SingleDrive(); driveSelector != "" {
+	driveSelector, driveErr := cc.Flags.SingleDrive()
+	if driveErr != nil {
+		return driveErr
+	}
+
+	if driveSelector != "" {
 		return resumeSingleDrive(cc, cfg, driveSelector)
 	}
 

@@ -10,9 +10,11 @@ import (
 // Statusf prints a status message to the StatusWriter (default: stderr)
 // unless quiet mode is set.
 func (cc *CLIContext) Statusf(format string, args ...any) {
-	if !cc.Flags.Quiet {
-		fmt.Fprintf(cc.StatusWriter, format, args...)
+	if cc.StatusWriter == nil || cc.Flags.Quiet {
+		return
 	}
+
+	fmt.Fprintf(cc.StatusWriter, format, args...)
 }
 
 // Size unit constants for human-readable formatting.

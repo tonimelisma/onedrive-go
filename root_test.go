@@ -526,6 +526,29 @@ func TestBuildLogger_FromRawConfigLogLevel(t *testing.T) {
 	}
 }
 
+// --- SingleDrive tests ---
+
+func TestSingleDrive_Empty(t *testing.T) {
+	flags := CLIFlags{}
+	got, err := flags.SingleDrive()
+	assert.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+func TestSingleDrive_One(t *testing.T) {
+	flags := CLIFlags{Drive: []string{"personal:user@example.com"}}
+	got, err := flags.SingleDrive()
+	assert.NoError(t, err)
+	assert.Equal(t, "personal:user@example.com", got)
+}
+
+func TestSingleDrive_Multiple_ReturnsError(t *testing.T) {
+	flags := CLIFlags{Drive: []string{"drive1", "drive2"}}
+	_, err := flags.SingleDrive()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "multiple --drive values")
+}
+
 // --- errVerifyMismatch tests ---
 
 func TestErrVerifyMismatch_IsSentinel(t *testing.T) {
