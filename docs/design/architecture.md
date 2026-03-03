@@ -643,7 +643,7 @@ rootCtx
 
 - **First signal** (SIGINT/SIGTERM): Cancel root context. In-flight transfers finish up to a configurable timeout. Completed actions already committed to baseline individually. Upload sessions persisted in SessionStore for crash resume. Partial downloads resume via `.partial` files. Exit cleanly.
 - **Second signal**: Immediate cancellation. No checkpoint save. SQLite WAL ensures DB consistency. Delta token not advanced, so the idempotent planner re-plans the same delta on restart and skips already-committed actions.
-- **SIGHUP**: Reload configuration. Re-initialize filter engine and bandwidth limiter. Detect stale files from filter changes. Continue running.
+- **SIGHUP**: Reload configuration. Re-initialize filter engine and bandwidth limiter. Continue running.
 
 ---
 
@@ -874,27 +874,38 @@ All known API quirks are handled at the observer boundary, making them invisible
 
 ### 11.5 Filtering
 
-Three-layer monotonic exclusion (each layer can only exclude more, never include back):
+Four-layer monotonic exclusion cascade split across two pipeline stages. Each layer can only exclude more, never include back. See [sync-algorithm.md §6](sync-algorithm.md#6-filtering) for the full specification and [filtering-conflicts.md](filtering-conflicts.md) for the design analysis.
 
 ```
 Item path
   |
   v
-1. sync_paths allowlist     If set, only these paths. Everything else excluded.
+0. Built-in exclusions      Temp files, OS junk, name restrictions, sync DB
+   (Observer-level)          Applied symmetrically in both observers (Layer 0)
   |
   v
-2. Config patterns          skip_files, skip_dirs, skip_dotfiles, max_file_size
+1. sync_paths allowlist      If set, only these paths. Everything else excluded.
+   (Planner-level)
   |
   v
-3. .odignore marker files   Per-directory, gitignore-style patterns
+2. Config patterns           skip_files, skip_dirs, skip_dotfiles, max_file_size
+   (Planner-level)
+  |
+  v
+3. .odignore marker files    Per-directory, gitignore-style patterns
+   (Planner-level)
   |
   v
 INCLUDED
 ```
 
-The filter is applied in the Planner to both remote and local items symmetrically. When filter rules change, previously-included files that are now excluded are tracked for user visibility (user nagged, never auto-deleted).
+**Layer 0** runs in observers for performance — high-volume noise (temp files, editor backups, OS junk) is eliminated at the earliest possible point. Hardcoded, not configurable. Applied symmetrically in both local and remote observers (E20 amendment, see [filtering-conflicts.md FC-1](filtering-conflicts.md#fc-1-remote-observer-has-no-built-in-exclusion-filtering)).
 
-> **Per-drive only.** All filter settings are per-drive native — there are no global filter defaults. Each drive gets built-in defaults (empty lists, `false`) unless it specifies its own. See [configuration.md §4.2](configuration.md#42-filtering-settings) and [MULTIDRIVE.md §10](MULTIDRIVE.md#10-filter-scoping) (DP-8).
+**Layers 1-3** run in the planner for symmetric filtering of remote AND local items and hot-reloadability. This is where E20 applies.
+
+When filter rules change, previously-included files that are now excluded become "stale files" — warned and frozen in baseline, never auto-deleted. See [filtering-conflicts.md FC-9](filtering-conflicts.md#fc-9-stale-files-after-filter-changes).
+
+> **Per-drive only.** All filter settings are per-drive native — there are no global filter defaults. Each drive gets built-in defaults (empty lists, `false`) unless it specifies its own. See [configuration.md §6](configuration.md#6-filtering-options) and [MULTIDRIVE.md §10](MULTIDRIVE.md#10-filter-scoping) (DP-8).
 
 ---
 
@@ -966,7 +977,7 @@ Sustained ~20 MB. Processes individual change batches, not full snapshots. Memor
 | E17 | Baseline serves as "old state" for move detection | Baseline entry at old path provides "before" view naturally during read-only observation. |
 | E18 | Batch processing for large initial syncs | 50K-item batches with intermediate commits. Bounds memory to ~50 MB. |
 | E19 | Two-signal graceful shutdown | First: drain + checkpoint. Second: immediate exit. WAL ensures consistency. |
-| E20 | Filter applied in Planner, not observers | Symmetric filtering of remote AND local items. Hot-reloadable without restarting observers. |
+| E20 | User-configured filters applied in Planner; built-in exclusions in Observers | User-configured filters (Layers 1-3: `sync_paths`, config patterns, `.odignore`) run in the planner for symmetric filtering and hot-reload. Built-in exclusions (Layer 0: temp files, OS junk, name restrictions) run in both observers for performance. See [filtering-conflicts.md FC-4](filtering-conflicts.md#fc-4-filter-in-planner-e20-vs-built-ins-in-observer). |
 | E21 | Conflict copies use timestamp naming | `file.conflict-YYYYMMDD-HHMMSS.ext`. Self-documenting, shorter than hostname-based. |
 | E22 | Per-action commits replace batch commits | Incremental progress: each completed action is immediately durable. No work lost on crash. Delta token committed separately when all cycle actions done. |
 | E23 | Idempotent planner as crash recovery | Delta token not advanced until all actions complete; same delta re-fetched on restart, planner skips already-committed baseline entries. SessionStore persists upload URLs. `.partial` files enable download resume. |

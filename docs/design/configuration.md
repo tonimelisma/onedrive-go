@@ -537,34 +537,58 @@ poll_interval = "2m"                               # overrides global
 
 ## 6. Filtering Options
 
-### 6.1 Three-Layer Cascade
+### 6.1 Four-Layer Cascade
 
-Filtering uses a three-layer cascade where each layer can only exclude more items. A file must pass all three layers to be included in sync. This matches [sync-algorithm §6.1](sync-algorithm.md) and [architecture §11](architecture.md).
+Filtering uses a four-layer cascade split across two pipeline stages. Each layer can only exclude more items — a later layer cannot re-include an item excluded by an earlier layer (monotonic exclusion). This matches [sync-algorithm §6.1](sync-algorithm.md#61-four-layer-cascade) and [architecture §11.5](architecture.md#115-filtering). See [filtering-conflicts.md](filtering-conflicts.md) for the design analysis.
 
 ```
 Item path
   |
   v
 +---------------------+
+| 0. Built-in         |  Temp files, OS junk, name restrictions,
+|    exclusions       |  sync engine DB. Hardcoded, non-overridable.
+|    (Observer-level) |  Applied symmetrically in BOTH observers.
++---------+-----------+
+          | (passes)
+          v
++---------------------+
 | 1. sync_paths       |  If set, only these paths and their children
 |    allowlist         |  are considered. Everything else excluded.
+|    (Planner-level)  |
 +---------+-----------+
           | (passes)
           v
 +---------------------+
 | 2. Config patterns  |  skip_files, skip_dirs, skip_dotfiles,
-|                     |  skip_symlinks, max_file_size
+|    (Planner-level)  |  skip_symlinks, max_file_size
 +---------+-----------+
           | (passes)
           v
 +---------------------+
 | 3. .odignore        |  Per-directory marker files with
 |    marker files     |  gitignore-style patterns
+|    (Planner-level)  |
 +---------+-----------+
           | (passes)
           v
       INCLUDED
 ```
+
+**Layer 0 (built-in exclusions)** runs in both observers before ChangeEvent emission. These are hardcoded safety rules that cannot be overridden by user configuration. Items matching Layer 0 never reach the planner. The full built-in exclusion list:
+
+| Category | Patterns |
+|----------|----------|
+| Temp/editor files (S7) | `.partial`, `.tmp`, `.swp`, `.crdownload`, `~*`, `.~*` |
+| OneDrive name restrictions | `.lock`, `desktop.ini`, `~$*`, reserved names, `_vti_*`, invalid chars |
+| OS junk | `.DS_Store`, `Thumbs.db`, `._*` (macOS resource forks), `__MACOSX/` |
+| Sync engine database | Baseline SQLite file (path-based exclusion) |
+| Guard files | `.nosync` |
+| Ignore marker (Phase 10.1) | Configured `ignore_marker` filename (default `.odignore`) |
+
+See [filtering-conflicts.md FC-2](filtering-conflicts.md#fc-2-built-in-db-exclusion-is-too-aggressive) for why `.db` exclusion is path-based (not suffix-based) and [filtering-conflicts.md FC-5](filtering-conflicts.md#fc-5-built-in-exclusions-vs-future-skip_files-overlap) for the relationship between built-in exclusions and user-configured `skip_files`.
+
+**Layers 1-3** run in the planner for symmetric filtering of both remote and local items. These are user-configurable and hot-reloadable. See sections 6.2-6.4 below.
 
 **Key property**: Each layer can only EXCLUDE more. No layer can include back an item excluded by a previous layer.
 
@@ -622,6 +646,10 @@ Drop an `.odignore` file in any directory to control filtering. Uses **full giti
 
 **Scope**: applies to the containing directory and all descendants. Does NOT affect parent directories. Applied in both directions.
 
+**`.odignore` is never synced** (FC-7): The configured `ignore_marker` filename is added to the built-in exclusion list (Layer 0) and filtered in both observers. Ignore rules are per-device — each machine has independent `.odignore` files. See [filtering-conflicts.md FC-7](filtering-conflicts.md#fc-7-odignore-files--sync-or-not).
+
+**`.odignore` is exempt from `skip_dotfiles`** (FC-6): When `skip_dotfiles = true`, the configured `ignore_marker` filename is exempted from the dotfile check. Otherwise Layer 2 would kill `.odignore` before Layer 3 could process it. See [filtering-conflicts.md FC-6](filtering-conflicts.md#fc-6-odignore-killed-by-skip_dotfiles).
+
 ### 6.5 Name Validation
 
 OneDrive enforces naming restrictions that differ from POSIX. These are always applied and cannot be disabled:
@@ -637,18 +665,18 @@ OneDrive enforces naming restrictions that differ from POSIX. These are always a
 
 Items failing name validation are skipped with a warning log entry.
 
-### 6.6 Stale Files Handling
+**Note on `desktop.ini`** (FC-3): `desktop.ini` is both a name-validation rejection and an OS junk file. The name validation in Layer 0 prevents it from ever being synced, making any Phase 10.5 junk cleanup for this file redundant. See [filtering-conflicts.md FC-3](filtering-conflicts.md#fc-3-desktopini-in-two-exclusion-systems).
 
-When filter rules change, files that were previously synced but are now excluded become "stale." The sync engine detects this by comparing a hash of the current filter config against the stored snapshot.
+### 6.6 Perishable Files
 
-**Behavior**:
-1. Stale files stop syncing (excluded by new filters)
-2. Stale files are NOT auto-deleted (safety invariant)
-3. Each stale file is recorded in a tracking table with path, reason, and size
-4. User is nagged at the broadest level (directory, not individual files)
-5. User explicitly disposes via `stale delete` or `stale keep`
+The `perishable_files` config option (Phase 10) defines user-specified patterns for files that can be silently removed when blocking a parent directory deletion:
 
-**Rationale** (Decision C3): The user added a filter to stop syncing files, not to delete them. Auto-deletion would be surprising. Explicit disposition gives control.
+```toml
+["personal:toni@outlook.com"]
+perishable_files = ["*.pyc", "*.o", "__pycache__/", "node_modules/"]
+```
+
+When a remote folder deletion is synced locally and untracked files remain in the directory, files matching `perishable_files` patterns (plus the built-in disposable list) are silently removed. If ANY remaining file is neither built-in-disposable nor perishable, the directory delete fails with a warning naming the blocking files. See [filtering-conflicts.md FC-12](filtering-conflicts.md#fc-12-non-empty-directory-delete).
 
 ---
 
@@ -983,7 +1011,7 @@ if sync_paths entry matches skip_dirs or skip_files:
 
 | Category | Options | Effect |
 |----------|---------|--------|
-| **Filter** | `skip_files`, `skip_dirs`, `skip_dotfiles`, `skip_symlinks`, `max_file_size`, `sync_paths`, `ignore_marker` | Filter engine re-initialized, stale file detection triggered |
+| **Filter** | `skip_files`, `skip_dirs`, `skip_dotfiles`, `skip_symlinks`, `max_file_size`, `sync_paths`, `ignore_marker` | Filter engine re-initialized |
 | **Transfers** | `bandwidth_limit`, `bandwidth_schedule`, `transfer_order`, `transfer_workers`, `check_workers` | Bandwidth scheduler updated; worker changes trigger Orchestrator rebalancing (stop + restart affected DriveRunners) |
 | **Sync** | `poll_interval`, `fullscan_frequency`, `conflict_reminder_interval`, `websocket` | Timers updated |
 | **Logging** | `log_level`, `log_format` | Log output updated immediately |
