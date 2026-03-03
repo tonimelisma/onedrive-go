@@ -228,18 +228,22 @@ RemoteObserver                    LocalObserver
   │                                  │                         ┌────┴────┐
   │                                  │                      success   failure
   │                                  │                         │         │
-  │                                  │                  CommitOutcome  increment
-  │                                  │                  (baseline +   failure_count
-  │                                  │                   delete from  on remote_state
+  │                                  │                  CommitOutcome  RecordFailure
+  │                                  │                  (baseline +   (increment
+  │                                  │                   conditional  failure_count
+  │                                  │                   delete from  on remote_state)
   │                                  │                   remote_state)     │
-  │                                  │                         │         │
-  Reconciler ◄─────────────────────────────────────────────────┴─────────┘
-  │ (dedicated goroutine)                              NotifySuccess / NotifyFailure
-  │
+  │                                  │                    │    │         │
+  │                                  │                cleared? │         │
+  │                                  │                 yes  no │         │
+  │                                  │                  │    │ │         │
+  Reconciler ◄──────────────────────────────────────────┘    │ ─────────┘
+  │ (dedicated goroutine)                  NotifySuccess      (no notification)
+  │                                                     NotifyFailure
   ├─ On startup: bootstrap from remote_state
   ├─ On failure: schedule retry (immediate or backoff)
   ├─ On success: cancel pending retry
-  ├─ When retry fires: synthesize ChangeEvent → Buffer → normal pipeline
+  ├─ When retry fires: re-read DB → synthesize ChangeEvent → Buffer → normal pipeline
   └─ On shutdown: cancel all pending timers
 ```
 
@@ -289,7 +293,7 @@ type ObservationWriter interface {
 // OutcomeWriter — called by worker goroutines (N concurrent callers).
 // Commits action results to baseline and cleans up remote_state on success.
 type OutcomeWriter interface {
-    CommitOutcome(ctx context.Context, outcome *Outcome) error
+    CommitOutcome(ctx context.Context, outcome *Outcome) (remoteStateCleared bool, err error)
     Load(ctx context.Context) (*Baseline, error)
 }
 
@@ -338,6 +342,8 @@ The engine constructs `SyncStore` and distributes sub-interfaces:
 | Engine | all interfaces (constructs + distributes) | Orchestrator |
 
 **The `DB()` escape hatch is removed.** Today, `BaselineManager.DB()` exposes raw `*sql.DB` so `status.go` can run ad-hoc queries. Under this design, those queries become methods on `StateReader`. No component receives raw database access.
+
+**Multi-drive: no drive_id filtering needed.** Each engine gets its own isolated SQLite database (the orchestrator creates one `SyncStore` per drive via `rd.StatePath()`). All rows in a given `remote_state` table belong to the same drive by construction. `ListUnreconciled()` returns only that drive's rows without a `WHERE drive_id = ?` clause. The `drive_id` column in `remote_state` is useful for verification, debugging, and potential future database consolidation, but is not needed for correctness.
 
 #### Concurrency model
 
@@ -389,9 +395,55 @@ We chose E.
 
 1. **Startup**: loads all unreconciled `remote_state` rows from DB, schedules retries at their `next_retry_at` (or immediately if `next_retry_at` is NULL or in the past)
 2. **Failure notification**: engine calls `NotifyFailure(path, failureCount)`. Fresh failures (count < 3) are scheduled after ~5 seconds. Established failures schedule at `next_retry_at` from the backoff formula
-3. **Success notification**: engine calls `NotifySuccess(path)`. Cancels any pending retry timer
-4. **Retry fires**: re-reads the `remote_state` row from DB (a fresh delta may have updated it), skips if in-flight, synthesizes a ChangeEvent, feeds it into the buffer. Normal pipeline handles the rest
+3. **Success notification**: engine calls `NotifySuccess(path)`. Cancels any pending retry timer. Only called when `remoteStateCleared = true` from CommitOutcome — see [Return value: remoteStateCleared](#return-value-remotestatecleared)
+4. **Retry fires**: re-reads the `remote_state` row from DB (see [Re-read cases](#re-read-cases) below), skips if in-flight, synthesizes a ChangeEvent, feeds it into the buffer. Normal pipeline handles the rest
 5. **Shutdown**: cancels all pending timers, goroutine exits
+
+#### Re-read cases
+
+When a retry timer fires, the reconciler re-reads the `remote_state` row from DB. The row may have changed since the timer was scheduled — a fresh delta may have updated it, or CommitOutcome may have deleted it. Five cases:
+
+| DB state at re-read time | Action | Why |
+|--------------------------|--------|-----|
+| Row gone (CommitOutcome deleted it) | Skip, no-op | Item synced successfully. Timer was stale |
+| Hash changed (fresh delta overwrote) | Synthesize event with **new** hash | Old version irrelevant. Download current version |
+| is_deleted changed (file→deleted or deleted→file) | Synthesize accordingly | Delta delivered new state while retrying old. Honor latest |
+| Item in-flight (`tracker.HasInFlight`) | Skip, reschedule at same backoff | Already being processed. Avoid duplicate work |
+| Unchanged | Synthesize event, dispatch | Normal retry |
+
+All five follow from "use current DB state at timer-fire time." The reconciler never caches — it always re-reads. This makes it correct by construction regardless of intervening events.
+
+#### Synthesized ChangeEvent fields
+
+When the reconciler synthesizes a ChangeEvent from a `remote_state` row:
+
+```go
+ChangeEvent{
+    Source:    SourceRemote,
+    Type:      ChangeModify,    // or ChangeDelete if is_deleted=1
+    Path:      row.Path,
+    ItemID:    row.ItemID,
+    ParentID:  row.ParentID,
+    DriveID:   row.DriveID,
+    ItemType:  row.ItemType,
+    Name:      filepath.Base(row.Path),  // derived, not stored
+    Size:      row.Size,
+    Hash:      row.Hash,
+    Mtime:     row.Mtime,
+    ETag:      row.ETag,
+    CTag:      "",             // not stored, not used by planner
+    IsDeleted: row.IsDeleted,
+}
+```
+
+**Type mapping:**
+- `is_deleted = 0` → `ChangeModify`. The planner checks remote hash vs baseline to decide download vs skip.
+- `is_deleted = 1` → `ChangeDelete`. The planner sees a remote deletion.
+- Never `ChangeMove` — moves are decomposed into delete + create at observation time (CommitObservation writes two rows). Each side has its own `remote_state` row and is retried independently.
+
+**Name:** derived from `filepath.Base(path)`. The path is already NFC-normalized, so `filepath.Base()` gives the correct decoded name. No `name` column needed in the schema.
+
+**CTag:** not stored in `remote_state`, not used by planner or executor. Set to empty string.
 
 #### Go-level interface
 
@@ -447,9 +499,39 @@ For deletions (`is_deleted = 1`): the hash is NULL, so the conditional delete be
 
 `CommitOutcome` already touches `baseline` and `conflicts`. Adding `remote_state` is a natural extension — it commits the outcome of an action, which includes updating all relevant state tables.
 
-### What happens to cycleFailures
+#### Return value: remoteStateCleared
 
-The `cycleFailures` map and `watchCycleCompletion` token-commit logic are deleted entirely. In the current design, these exist to gate token advancement on cycle success. With the token committed at observation time (in `CommitObservation`), there is no longer a concept of "cycle success/failure" controlling the token. Worker results go directly to `CommitOutcome` (on success) or failure-count increment + reconciler notification (on failure). The engine's main loop simplifies: it receives batches from the buffer, dispatches to workers, and processes results. No cycle bookkeeping.
+`CommitOutcome` returns `(remoteStateCleared bool, err error)`. After the conditional DELETE, it checks `sql.Result.RowsAffected()`:
+
+- `RowsAffected == 1` → the remote_state row was deleted → `remoteStateCleared = true`
+- `RowsAffected == 0` → a newer delta updated the row (hash mismatch) → `remoteStateCleared = false`
+
+This boolean propagates through `WorkerResult` to `drainWorkerResults`, which uses it to decide whether to notify the reconciler of success. See [Flow 5](#flow-5-action-success) for the full chain.
+
+*Why not re-query remote_state instead?* An extra `SELECT` after every success is architecturally wasteful and has TOCTOU risk (a new CommitObservation could write a new row between the DELETE and the SELECT). The RowsAffected check is free — the information is already available from the SQL result.
+
+*Why not skip NotifySuccess entirely?* Without success notifications, retry timers for synced items linger until they fire. The reconciler re-reads the DB, finds the row gone, and skips — correct but noisy. With ~tens of items per cycle, this generates unnecessary log churn and delayed no-op retries. The boolean is one field — trivial cost for precise behavior.
+
+### What happens to cycleFailures and cycle machinery
+
+The `cycleFailures` map, `watchCycleCompletion` token-commit logic, and the DepTracker's cycle tracking internals are deleted entirely. These exist to gate token advancement on cycle success. With the token committed at observation time (in `CommitObservation`), there is no concept of "cycle success/failure" controlling the token.
+
+**Removed from DepTracker:**
+- `CycleDone(cycleID)` method — no cycle-gated token commits
+- `CleanupCycle(cycleID)` method — no cycles to clean up
+- `cycles`, `cyclesMu`, `cycleLookup` internal maps — cycle tracking state
+
+**Removed from Engine:**
+- `cycleFailures` map — no per-cycle failure counting
+- `watchCycleCompletion()` goroutine — entire function deleted
+- Per-cycle failure counting in `drainWorkerResults`
+
+**Kept:**
+- `CycleID` field on `TrackedAction`, `WorkerResult`, `ActionPlan` — zero cost, aids logging/debugging and per-batch observability
+
+The DepTracker simplifies to a pure dependency graph: dispatch ready actions, track in-flight state, support `HasInFlight` / `CancelByPath` for B-122 dedup. No cycle lifecycle management.
+
+Worker results flow directly to: `CommitOutcome` (on success) → `RecordFailure` (on failure) → reconciler notifications. The engine's main loop receives batches from the buffer, dispatches to workers, and processes results.
 
 ## Data Flows
 
@@ -547,18 +629,43 @@ Reconciler goroutine (dedicated, long-lived)
 ```
 Worker completes action with Success=true
   │
-  ├─ 1. store.CommitOutcome(outcome)
+  ├─ 1. store.CommitOutcome(outcome) → returns (remoteStateCleared, nil)
   │     → BEGIN TRANSACTION
   │     → Upsert baseline row (or delete for deletions, or move)
   │     → DELETE FROM remote_state WHERE path = ? AND hash IS ?
   │       (conditional — preserves row if a newer delta updated it)
+  │     → Check RowsAffected() → remoteStateCleared
   │     → COMMIT
   │
   ├─ 2. Update in-memory baseline cache
   │
-  └─ 3. WorkerResult{Success: true} → drainWorkerResults
-        → reconciler.NotifySuccess(path) — cancels pending retry
+  └─ 3. WorkerResult{Success: true, RemoteStateCleared: bool} → drainWorkerResults
+        → If remoteStateCleared: reconciler.NotifySuccess(path) — cancel pending retry
+        → If !remoteStateCleared: no notification — a newer version exists in
+          remote_state, and the reconciler's existing timer (or next bootstrap)
+          handles it. See "Stale success with newer remote_state" below.
 ```
+
+#### Stale success with newer remote_state
+
+When a worker downloads R1 successfully but `remote_state` has R2 (from a newer delta), CommitOutcome's conditional delete doesn't match — `remoteStateCleared = false`. The key question: what happens to R2's retry lifecycle?
+
+Timeline:
+```
+1. R1 in-flight (from reconciler or initial delta)
+2. R2 arrives via delta → CommitObservation writes {X, R2, failure_count=0}
+3. R2 enters buffer → B-122 cancels R1 → R2 dispatched
+4a. R2 succeeds → CommitOutcome deletes row → done
+4b. R2 fails → RecordFailure → NotifyFailure → timer scheduled
+5. R1 completion arrives (stale, was already running)
+   → CommitOutcome: remoteStateCleared=false
+   → drainWorkerResults: no reconciler notification
+   → R2's timer (from 4b) is preserved ✓
+```
+
+Without the `remoteStateCleared` check: step 5 would call `NotifySuccess(X)`, canceling R2's timer from step 4b. R2 would sit unsynced until daemon restart (when the reconciler bootstraps from DB). With the check, R2's retry lifecycle is unaffected by R1's stale success.
+
+*Edge case: RecordFailure on canceled R1.* If B-122 cancels R1 but the download was already in progress, the worker may send `Success=false` with `context.Canceled`. RecordFailure increments R2's `failure_count` (path-based, not hash-based). R2 starts with `failure_count=1` despite not having been tried. Impact: one fewer fast retry before backoff — benign (5 seconds of difference). Not worth making RecordFailure hash-aware.
 
 ### Flow 6: Action failure
 
@@ -917,9 +1024,27 @@ During `sync --dry-run`, the observer runs and produces in-memory ChangeEvents (
 
 ### RunOnce (one-shot sync)
 
-RunOnce uses the same code path as RunWatch: writes `remote_state` at observation time, processes events, deletes `remote_state` rows on success. The table is empty before and after a successful one-shot sync.
+RunOnce writes `remote_state` at observation time, processes events, deletes `remote_state` rows on success. The table is empty before and after a successful one-shot sync.
 
-On crash recovery, RunOnce queries unreconciled `remote_state` rows at startup, merging them with the fresh delta poll. One code path for both modes — no conditional logic.
+**No reconciler goroutine.** The reconciler is a watch-mode construct (long-lived, timer-based). RunOnce is a blocking single-cycle call — it runs one pass and exits. Instead, RunOnce queries unreconciled `remote_state` rows directly at startup and merges them into the planning pass:
+
+```
+RunOnce(ctx, mode, opts)
+  ├─ baseline.Load()
+  ├─ observeChanges()
+  │   ├─ observeRemote() + FullDelta → fresh delta events
+  │   ├─ store.ListUnreconciled() → orphaned rows from previous crash/failure  ← NEW
+  │   ├─ Synthesize ChangeEvents from orphaned rows                           ← NEW
+  │   ├─ observeLocal() + FullScan
+  │   └─ buf.AddAll(fresh + orphaned + local).FlushImmediate()
+  ├─ planner.Plan()  [one pass, sees everything]
+  ├─ executePlan()
+  └─ return SyncReport
+```
+
+The buffer deduplicates by path: if a fresh delta event and an orphaned row exist for the same path, the buffer takes the latest (fresh delta wins — it's newer). This is a single query + event synthesis in `observeChanges()`, not a new goroutine or lifecycle.
+
+**Why no reconciler for RunOnce?** RunOnce might finish and exit before any timer-based retries could fire. The reconciler's value is in long-running daemon mode where it schedules retries across multiple poll cycles. For one-shot mode, the next RunOnce invocation serves the same purpose — it queries unreconciled rows on startup.
 
 ### WebSocket (Phase 8)
 
@@ -955,7 +1080,10 @@ Displayed as "X items pending sync" alongside existing "Y unresolved conflicts."
 | `failure_tracker.go` | Replaced by `remote_state` + reconciler |
 | `failure_tracker_test.go` | Tests for deleted component |
 | `cycleFailures` map in engine | Token decoupled from sync success |
-| `watchCycleCompletion` token-commit logic | Token committed at observation time |
+| `watchCycleCompletion` function in engine | Token committed at observation time |
+| `CycleDone()`, `CleanupCycle()` in DepTracker | No cycle-gated token commits |
+| `cycles`, `cyclesMu`, `cycleLookup` in DepTracker | Cycle tracking internals |
+| Per-cycle failure counting in `drainWorkerResults` | No consumer for per-cycle failure data |
 | All existing migrations (00001-00005) | Replaced by single clean schema |
 
 ### What gets added
@@ -980,14 +1108,14 @@ Displayed as "X items pending sync" alongside existing "Y unresolved conflicts."
 | Component | Change |
 |-----------|--------|
 | `engine.go:RunWatch` | Remove failure tracker. Create and start reconciler goroutine. Distribute sub-interfaces |
-| `engine.go:RunOnce` | Reconciler bootstraps from `remote_state` at startup |
+| `engine.go:RunOnce` | Query `ListUnreconciled()` in `observeChanges()`. Synthesize ChangeEvents from orphaned rows. Merge into buffer alongside fresh delta events. No reconciler goroutine |
 | `engine.go:processBatch` | Remove `shouldSkip` suppression logic entirely |
-| `engine.go:drainWorkerResults` | Receives `FailureRecorder`. On failure: `RecordFailure()` + notify reconciler. On success: notify reconciler |
-| `engine.go:watchCycleCompletion` | Remove entirely (no cycle-based token gating) |
-| `worker.go:WorkerResult` | Add `HTTPStatus int` and `ErrorClass string` fields for structured error info |
-| `worker.go:WorkerPool` | Receives `OutcomeWriter` instead of `*BaselineManager` |
+| `engine.go:drainWorkerResults` | Receives `FailureRecorder`. On failure: `RecordFailure()` + `NotifyFailure()`. On success: check `remoteStateCleared` — if true, `NotifySuccess()`; if false, no notification |
+| `tracker.go:DepTracker` | Remove `CycleDone()`, `CleanupCycle()`, and cycle tracking internals (`cycles`, `cyclesMu`, `cycleLookup`). Keep `CycleID` field on `TrackedAction` for observability |
+| `worker.go:WorkerResult` | Add `HTTPStatus int`, `ErrorClass string`, and `RemoteStateCleared bool` fields |
+| `worker.go:WorkerPool` | Receives `OutcomeWriter` instead of `*BaselineManager`. Propagate `remoteStateCleared` from CommitOutcome return to WorkerResult |
 | `observer_remote.go:Watch` | Receives `ObservationWriter`. Call `CommitObservation()` after delta poll, before sending events |
-| `sync_store.go:CommitOutcome` | Add conditional `DELETE FROM remote_state WHERE path = ? AND hash IS ?` in same transaction |
+| `sync_store.go:CommitOutcome` | Return `(remoteStateCleared bool, err error)`. Add conditional `DELETE FROM remote_state WHERE path = ? AND hash IS ?` in same transaction. Check `RowsAffected()` |
 | `status.go` | Receives `StateReader`. Add failure count to output |
 | `root.go` | Register `failures` command |
 
@@ -1006,25 +1134,29 @@ Displayed as "X items pending sync" alongside existing "Y unresolved conflicts."
 **Layer 1: Unit tests** — real SQLite (in-memory), same pattern as `baseline_test.go`.
 - `CommitObservation`: write N events + token, verify rows and token
 - `CommitObservation` with existing rows: INSERT OR REPLACE overwrites stale data, resets `failure_count`
-- `CommitOutcome` with `remote_state` delete: hash match → deleted, hash mismatch → persists, NULL hash (folders) → `IS` works, `is_deleted` row → `NULL IS NULL` works
+- `CommitOutcome` with `remote_state` delete: hash match → `remoteStateCleared=true` + row deleted; hash mismatch → `remoteStateCleared=false` + row persists; NULL hash (folders) → `IS` works; `is_deleted` row → `NULL IS NULL` works
 - Reconciler bootstrap query: correct rows returned, respecting `next_retry_at` and ordering
 - `failure_count` increment: updates `next_retry_at`, `last_error`, `http_status`
 - `failure_count` reset: row deleted on success via `CommitOutcome`
-- Reconciler event synthesis: correct ChangeEvents, skips in-flight, respects backoff
+- Reconciler event synthesis: correct ChangeEvent fields (Type, Name derivation, CTag empty), skips in-flight, respects backoff
+- Reconciler re-read cases: row gone → skip, hash changed → new hash, is_deleted changed → correct type, in-flight → skip + reschedule, unchanged → dispatch
 
 **Layer 2: Integration tests** — real SQLite, mock Graph API.
 - Full cycle: observe → fail → reconcile → succeed
 - Crash recovery: write + "crash" + restart → reconciler bootstraps from DB
-- Conditional delete race (Scenario 4): R1 succeeds but R2 persists
+- Conditional delete race (Scenario 4): R1 succeeds but R2 persists, `remoteStateCleared=false`
+- Stale success: R1 success with `remoteStateCleared=false` does NOT cancel R2's retry timer
 - Backoff escalation: 3+ failures → `next_retry_at` set → respected → success clears
 - Reconciler + fresh delta interaction: fresh delta resets failure_count
+- RunOnce with orphaned rows: `ListUnreconciled()` returns rows from previous crash, merged into planning pass
 
 **Layer 3: Engine tests** — full pipeline with mocks.
 - Token always advances regardless of failures
 - Reconciler schedules retries correctly (timing, backoff)
 - Dry-run: no DB writes
 - Planner works with reconciler-sourced events
-- `cycleFailures` and `watchCycleCompletion` are gone — verify no regressions
+- DepTracker: `CycleDone` / `CleanupCycle` removed, no regressions in dispatch + HasInFlight + CancelByPath
+- `drainWorkerResults`: `remoteStateCleared=true` → NotifySuccess; `remoteStateCleared=false` → no notification
 
 **Layer 4: E2E tests** — live OneDrive, `e2e_full` tag.
 - Reconciliation recovery: upload file, make download fail, fix, verify recovery
@@ -1041,6 +1173,7 @@ This design supersedes:
 - The in-memory failure tracker (`failure_tracker.go`, `failure_tracker_test.go`)
 - The delta token hold-back logic in `watchCycleCompletion`
 - The `cycleFailures` map and cycle success/failure concept
+- The DepTracker cycle tracking machinery (`CycleDone`, `CleanupCycle`, `cycles` map, `cycleLookup` map)
 - The `BaselineManager` name and monolithic API surface
 - The "baseline is the only durable per-item state" axiom
 - The "database stores confirmed synced state and nothing else" axiom
