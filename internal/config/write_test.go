@@ -765,63 +765,112 @@ func TestDriveSection_Format(t *testing.T) {
 	assert.Equal(t, "\n[\"personal:toni@outlook.com\"]\nsync_dir = \"~/OneDrive\"\n", result)
 }
 
-// --- findSectionHeader tests ---
+// --- B-284 edge case tests ---
 
-func TestFindSectionHeader_Found(t *testing.T) {
-	lines := []string{
-		"# comment",
-		`["personal:toni@outlook.com"]`,
-		`sync_dir = "~/OneDrive"`,
-	}
-	headerLine, sectionStart := findSectionHeader(lines, "personal:toni@outlook.com")
-	assert.Equal(t, 1, headerLine)
-	assert.Equal(t, 2, sectionStart)
+func TestSetDriveKey_InlineCommentPreserved(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	content := `["personal:toni@outlook.com"]
+sync_dir = "~/OneDrive"
+paused = true # temporarily paused
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), configFilePermissions))
+
+	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
+	require.NoError(t, SetDriveKey(path, cid, "paused", "false"))
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	resultStr := string(data)
+
+	assert.Contains(t, resultStr, "paused = false # temporarily paused")
 }
 
-func TestFindSectionHeader_NotFound(t *testing.T) {
-	lines := []string{"# comment", `log_level = "info"`}
-	headerLine, sectionStart := findSectionHeader(lines, "personal:toni@outlook.com")
-	assert.Equal(t, -1, headerLine)
-	assert.Equal(t, -1, sectionStart)
+func TestDeleteDriveKey_PausedDoesNotMatchPausedUntil(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	content := `["personal:toni@outlook.com"]
+sync_dir = "~/OneDrive"
+paused_until = "2026-03-01T00:00:00Z"
+paused = true
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), configFilePermissions))
+
+	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
+
+	// Deleting "paused" must NOT delete "paused_until".
+	require.NoError(t, DeleteDriveKey(path, cid, "paused"))
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	resultStr := string(data)
+
+	assert.NotContains(t, resultStr, "paused = true")
+	assert.Contains(t, resultStr, "paused_until")
+
+	cfg, err := Load(path, testLogger(t))
+	require.NoError(t, err)
+	d := cfg.Drives[cid]
+	assert.Nil(t, d.Paused, "paused should be nil after deletion")
+	require.NotNil(t, d.PausedUntil, "paused_until should be preserved")
+	assert.Equal(t, "2026-03-01T00:00:00Z", *d.PausedUntil)
 }
 
-// --- findSectionEnd tests ---
+func TestSetDriveKey_NoSpacesAroundEquals(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
 
-func TestFindSectionEnd_NextSection(t *testing.T) {
-	lines := []string{
-		`["personal:toni@outlook.com"]`,
-		`sync_dir = "~/OneDrive"`,
-		"",
-		`["business:alice@contoso.com"]`,
-		`sync_dir = "~/Work"`,
-	}
-	// Section content ends at line 2 (the blank line before the next header
-	// belongs to the next section's preamble).
-	end := findSectionEnd(lines, 1)
-	assert.Equal(t, 2, end)
+	// Write config with key=value (no spaces around =).
+	content := `["personal:toni@outlook.com"]
+sync_dir="~/OneDrive"
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), configFilePermissions))
+
+	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
+	require.NoError(t, SetDriveKey(path, cid, "sync_dir", "~/NewPath"))
+
+	cfg, err := Load(path, testLogger(t))
+	require.NoError(t, err)
+	assert.Equal(t, "~/NewPath", cfg.Drives[cid].SyncDir)
 }
 
-func TestFindSectionEnd_NextSectionWithComment(t *testing.T) {
-	lines := []string{
-		`["personal:toni@outlook.com"]`,
-		`sync_dir = "~/OneDrive"`,
-		"",
-		"# Business drive",
-		`["business:alice@contoso.com"]`,
-		`sync_dir = "~/Work"`,
-	}
-	// Blank line and comment before next header belong to next section.
-	end := findSectionEnd(lines, 1)
-	assert.Equal(t, 2, end)
+func TestDeleteDriveKey_NoSpacesAroundEquals(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	content := `["personal:toni@outlook.com"]
+sync_dir = "~/OneDrive"
+paused=true
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), configFilePermissions))
+
+	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
+	require.NoError(t, DeleteDriveKey(path, cid, "paused"))
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "paused")
 }
 
-func TestFindSectionEnd_EOF(t *testing.T) {
-	lines := []string{
-		`["personal:toni@outlook.com"]`,
-		`sync_dir = "~/OneDrive"`,
-	}
-	end := findSectionEnd(lines, 1)
-	assert.Equal(t, 2, end)
+func TestSetDriveKey_ValueWithHash(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	content := `["personal:toni@outlook.com"]
+sync_dir = "~/path#with#hash"
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), configFilePermissions))
+
+	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
+	require.NoError(t, SetDriveKey(path, cid, "display_name", "my drive"))
+
+	cfg, err := Load(path, testLogger(t))
+	require.NoError(t, err)
+	// Original value with # should be preserved.
+	assert.Equal(t, "~/path#with#hash", cfg.Drives[cid].SyncDir)
+	assert.Equal(t, "my drive", cfg.Drives[cid].DisplayName)
 }
 
 // --- Integration scenario tests ---
