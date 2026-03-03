@@ -872,6 +872,22 @@ Acceptance: Zero `runCLI`/`runCLIExpectError`/`pollCLIContains` references. `go 
 
 Acceptance: all 5 orchestrator E2E tests pass locally. inotify unit tests pass cross-platform. CI pipeline supports dual-token download/save.
 
+### E2E Test Hardening — DONE (B-306)
+
+42 new `e2e_full` tests across 5 new files + 2 modified files, making the E2E suite exhaustive:
+
+1. **`sync_watch_full_test.go`** (11 tests): Daemon watch mode — remote→local, bidirectional, conflict detection, file modification/deletion, folder creation, multiple files, large file (5 MiB), rapid churn, graceful shutdown, timed pause expiry. `startDaemon` helper. **DONE**.
+2. **`cli_commands_e2e_test.go`** (13 tests): status (after sync, JSON, paused), pause (duration, indefinite), resume (not-paused, all-drives), conflicts (empty, JSON), resolve (keep-both, multiple strategies, not-found), verify (after sync). **DONE**.
+3. **`sync_edge_cases_full_test.go`** (8 tests): Empty dirs, nested deletion, resolve-then-sync (keep-local, keep-remote), .nosync guard, mtime-only change, idempotent re-sync, transfer_workers config. **DONE**.
+4. **`sync_recovery_e2e_test.go`** (3 tests): Delta token persistence, crash recovery idempotency, purge resets state. **DONE**.
+5. **`output_validation_e2e_test.go`** (4 tests): Verify JSON schema, status with no drives, quiet mode, multi-drive report format. **DONE**.
+6. **`orchestrator_e2e_test.go`** (3 new tests): Multi-drive watch simultaneous, drive isolation, paused drive. **DONE**.
+7. **`sync_e2e_test.go`** (5 new helpers): `pollLocalFileExists`, `pollLocalFileContent`, `pollLocalDirGone`, `writeSyncConfigWithOptions`, `writeSyncConfigNoDrive`. **DONE**.
+
+Total E2E test count: 86 (44 existing + 42 new).
+
+Acceptance: `go vet -tags=e2e,e2e_full ./e2e/...` clean. `golangci-lint run` 0 issues. All unit tests pass. Fast E2E pass. Coverage ≥77.9%.
+
 ### 6.1: Drive removal — DONE (refactored in Phase 5.5)
 
 1. `drive remove <drive>` — **DONE**: deletes config section. State DB and token preserved for fast re-add.
