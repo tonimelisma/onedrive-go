@@ -53,7 +53,7 @@ Code quality and architecture improvements for the root package. Root package at
 | ~~B-227~~ | ~~Deduplicate sync_dir and StatePath validation across commands~~ | ~~P3~~ | **DONE** — Post-6.0a hardening. `newSyncEngine()` helper validates syncDir/statePath and builds `EngineConfig`. Replaces boilerplate in `sync.go` and `resolve.go`. |
 | ~~B-228~~ | ~~`buildLogger` silent fallthrough on unknown log level~~ | ~~P3~~ | Fixed in Phase 5.5: added `warn` case and `default` with stderr warning. |
 | ~~B-232~~ | ~~Test coverage for `loadConfig` error paths~~ | ~~P3~~ | **DONE** — Phase 6.0c. Tests for invalid TOML, ambiguous drive, unknown log level in `root_test.go`. |
-| B-036 | Extract CLI service layer for testability | P4 | Root package at 40.1% coverage. Much logic now in `internal/driveops/` (82% coverage). Service layer extraction still deferred. |
+| ~~B-036~~ | ~~Extract CLI service layer for testability~~ | ~~P4~~ | **DONE** — Phase 6.2b. Interfaces `accountMetaReader`, `tokenStateChecker`, `syncStateQuerier` + `buildStatusAccountsWith` testable core. Root package 40.1% → 43.8%. |
 | ~~B-229~~ | ~~`syncModeFromFlags` uses `Changed` instead of `GetBool`~~ | ~~P4~~ | **DONE** — Phase 6.0c. Documented as intentional Cobra pattern in comment. |
 | ~~B-230~~ | ~~`printSyncReport` repetitive formatting~~ | ~~P4~~ | **DONE** — Phase 6.0c. Extracted `printNonZero` helper. |
 | ~~B-233~~ | ~~`version` string concatenation in two places~~ | ~~P4~~ | **DONE** — Phase 6.0e. `userAgent` now passed to `NewSessionProvider` once; no more per-call concatenation. |
@@ -73,7 +73,7 @@ Edge cases and correctness for `internal/graph/`.
 
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
-| B-284 | `write.go` config writer uses fragile line-based TOML editing | P3 | Regex line matching instead of TOML AST. Unusual hand-edited formatting could silently produce wrong results. Consider TOML AST library for writes. Pairs well with next config change. |
+| ~~B-284~~ | ~~`write.go` config writer uses fragile line-based TOML editing~~ | ~~P3~~ | **DONE** — Phase 6.2b. Structured `parsedLine` model replaces prefix matching with exact key comparison. Inline comments preserved. `paused` no longer matches `paused_until`. |
 | ~~B-288~~ | ~~`quiet` parameter threading across 11 functions~~ | ~~P4~~ | **DONE** — Phase 6.0c. Added `CLIContext.Statusf()` method. Refactored resume.go, pause.go, resolve.go, sync.go to pass `cc *CLIContext` instead of `quiet bool`. |
 | ~~B-287~~ | ~~Symlink-aware sync_dir overlap warning~~ | ~~P4~~ | **DONE** — `checkDriveSyncDirUniqueness` now resolves symlinks via `filepath.EvalSymlinks` before comparing. Falls back to lexical if path doesn't exist yet. |
 

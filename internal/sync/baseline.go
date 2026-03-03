@@ -735,6 +735,93 @@ func (m *BaselineManager) Close() error {
 	return m.db.Close()
 }
 
+// WriteSyncMetadata persists sync metadata after a completed RunOnce cycle.
+// Keys: last_sync_time, last_sync_duration_ms, last_sync_error,
+// last_sync_succeeded, last_sync_failed.
+func (m *BaselineManager) WriteSyncMetadata(ctx context.Context, report *SyncReport) error {
+	now := m.nowFunc().UTC().Format(time.RFC3339)
+	durationMS := fmt.Sprintf("%d", report.Duration.Milliseconds())
+	succeeded := fmt.Sprintf("%d", report.Succeeded)
+	failed := fmt.Sprintf("%d", report.Failed)
+
+	syncErr := ""
+	if len(report.Errors) > 0 {
+		syncErr = report.Errors[0].Error()
+	}
+
+	pairs := [][2]string{
+		{"last_sync_time", now},
+		{"last_sync_duration_ms", durationMS},
+		{"last_sync_error", syncErr},
+		{"last_sync_succeeded", succeeded},
+		{"last_sync_failed", failed},
+	}
+
+	tx, err := m.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("sync metadata begin tx: %w", err)
+	}
+	defer tx.Rollback() // rollback after commit is benign
+
+	const upsertSQL = `INSERT INTO sync_metadata (key, value) VALUES (?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+
+	for _, kv := range pairs {
+		if _, err := tx.ExecContext(ctx, upsertSQL, kv[0], kv[1]); err != nil {
+			return fmt.Errorf("sync metadata upsert %s: %w", kv[0], err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// ReadSyncMetadata retrieves all sync metadata key-value pairs.
+// Returns an empty map if the table doesn't exist or has no rows.
+func (m *BaselineManager) ReadSyncMetadata(ctx context.Context) (map[string]string, error) {
+	result := make(map[string]string)
+
+	rows, err := m.db.QueryContext(ctx, `SELECT key, value FROM sync_metadata`)
+	if err != nil {
+		// Table might not exist in pre-migration DBs — return empty map.
+		return result, nil //nolint:nilerr // graceful fallback for old DBs
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, fmt.Errorf("sync metadata scan: %w", err)
+		}
+
+		result[k] = v
+	}
+
+	return result, rows.Err()
+}
+
+// BaselineEntryCount returns the number of entries in the baseline table.
+func (m *BaselineManager) BaselineEntryCount(ctx context.Context) (int, error) {
+	var count int
+	if err := m.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM baseline`).Scan(&count); err != nil {
+		return 0, fmt.Errorf("baseline entry count: %w", err)
+	}
+
+	return count, nil
+}
+
+// UnresolvedConflictCount returns the number of unresolved conflicts.
+func (m *BaselineManager) UnresolvedConflictCount(ctx context.Context) (int, error) {
+	var count int
+
+	err := m.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM conflicts WHERE resolution = 'unresolved'`).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("unresolved conflict count: %w", err)
+	}
+
+	return count, nil
+}
+
 // ---------------------------------------------------------------------------
 // Nullable helpers: empty string / zero int → NULL in SQLite.
 // ---------------------------------------------------------------------------
