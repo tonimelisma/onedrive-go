@@ -182,3 +182,20 @@ func TestWatch_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrWatchLimitExhausted),
 		"Watch should return ErrWatchLimitExhausted, got: %v", err)
 }
+
+// ---------------------------------------------------------------------------
+// FullScan pre-flight check tests
+// ---------------------------------------------------------------------------
+
+func TestFullScan_NonexistentSyncRoot_ReturnsError(t *testing.T) {
+	t.Parallel()
+
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
+	nonexistent := filepath.Join(t.TempDir(), "does-not-exist")
+
+	_, err := obs.FullScan(context.Background(), nonexistent)
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrSyncRootMissing),
+		"FullScan should return ErrSyncRootMissing, got: %v", err)
+}
