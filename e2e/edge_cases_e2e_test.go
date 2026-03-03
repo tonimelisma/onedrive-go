@@ -25,6 +25,7 @@ import (
 func TestE2E_ZeroByteFileSync(t *testing.T) {
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
+	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-zero-byte-%d", time.Now().UnixNano())
 	localDir := filepath.Join(syncDir, testFolder)
@@ -41,11 +42,11 @@ func TestE2E_ZeroByteFileSync(t *testing.T) {
 	assert.Contains(t, stderr, "Mode: upload-only")
 
 	// Verify it exists remotely (poll for eventual consistency).
-	pollCLIContains(t, "empty.txt", pollTimeout, "ls", "/"+testFolder)
+	pollCLIWithConfigContains(t, opsCfgPath, nil, "empty.txt", pollTimeout, "ls", "/"+testFolder)
 
 	// Download via get (bypasses sync state) and verify zero-byte content.
 	downloadPath := filepath.Join(t.TempDir(), "empty-downloaded.txt")
-	runCLI(t, "get", "/"+testFolder+"/empty.txt", downloadPath)
+	runCLIWithConfig(t, opsCfgPath, nil, "get", "/"+testFolder+"/empty.txt", downloadPath)
 
 	info, err := os.Stat(downloadPath)
 	require.NoError(t, err)
@@ -57,6 +58,7 @@ func TestE2E_ZeroByteFileSync(t *testing.T) {
 func TestE2E_UnicodeFilenameRoundtrip(t *testing.T) {
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
+	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-unicode-%d", time.Now().UnixNano())
 	localDir := filepath.Join(syncDir, testFolder)
@@ -74,11 +76,11 @@ func TestE2E_UnicodeFilenameRoundtrip(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Verify it exists remotely via ls (poll for eventual consistency).
-	pollCLIContains(t, "caf", pollTimeout, "ls", "/"+testFolder)
+	pollCLIWithConfigContains(t, opsCfgPath, nil, "caf", pollTimeout, "ls", "/"+testFolder)
 
 	// Download via get and verify content roundtrip.
 	downloadPath := filepath.Join(t.TempDir(), unicodeName)
-	runCLI(t, "get", "/"+testFolder+"/"+unicodeName, downloadPath)
+	runCLIWithConfig(t, opsCfgPath, nil, "get", "/"+testFolder+"/"+unicodeName, downloadPath)
 
 	data, err := os.ReadFile(downloadPath)
 	require.NoError(t, err)
@@ -90,6 +92,7 @@ func TestE2E_UnicodeFilenameRoundtrip(t *testing.T) {
 func TestE2E_InvalidFilenameRejection(t *testing.T) {
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
+	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-invalid-name-%d", time.Now().UnixNano())
 	localDir := filepath.Join(syncDir, testFolder)
@@ -111,7 +114,7 @@ func TestE2E_InvalidFilenameRejection(t *testing.T) {
 		"should log warning about invalid filename")
 
 	// Verify only valid.txt appeared remotely (poll for eventual consistency).
-	stdout, _ := pollCLIContains(t, "valid.txt", pollTimeout, "ls", "/"+testFolder)
+	stdout, _ := pollCLIWithConfigContains(t, opsCfgPath, nil, "valid.txt", pollTimeout, "ls", "/"+testFolder)
 	assert.NotContains(t, stdout, "CON",
 		"invalid filename should not be uploaded")
 }
@@ -122,6 +125,7 @@ func TestE2E_InvalidFilenameRejection(t *testing.T) {
 func TestE2E_RapidFileChurn(t *testing.T) {
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
+	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-churn-%d", time.Now().UnixNano())
 	localDir := filepath.Join(syncDir, testFolder)
@@ -144,8 +148,8 @@ func TestE2E_RapidFileChurn(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Verify final content remotely (poll for eventual consistency).
-	pollCLIContains(t, "churn.txt", pollTimeout, "ls", "/"+testFolder)
-	remoteContent := getRemoteFile(t, "/"+testFolder+"/churn.txt")
+	pollCLIWithConfigContains(t, opsCfgPath, nil, "churn.txt", pollTimeout, "ls", "/"+testFolder)
+	remoteContent := getRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/churn.txt")
 	assert.Equal(t, finalContent, remoteContent,
 		"final state should be the last written content")
 }
@@ -168,6 +172,7 @@ func TestE2E_BigDeleteProtection(t *testing.T) {
 func TestE2E_ConflictDetectionAndResolution(t *testing.T) {
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
+	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-conflict-%d", time.Now().UnixNano())
 	localDir := filepath.Join(syncDir, testFolder)
@@ -181,7 +186,7 @@ func TestE2E_ConflictDetectionAndResolution(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Step 2: Modify remote side directly.
-	putRemoteFile(t, "/"+testFolder+"/shared.txt", "remote version")
+	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/shared.txt", "remote version")
 
 	// Step 3: Modify local side.
 	require.NoError(t, os.WriteFile(

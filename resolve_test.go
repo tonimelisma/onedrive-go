@@ -209,3 +209,55 @@ func TestResolveSingleConflict_NotFound(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "conflict not found")
 }
+
+// --- newResolveCmd ---
+
+func TestNewResolveCmd_Structure(t *testing.T) {
+	t.Parallel()
+
+	cmd := newResolveCmd()
+	assert.Equal(t, "resolve [path-or-id]", cmd.Use)
+
+	for _, flag := range []string{"keep-local", "keep-remote", "keep-both", "all", "dry-run"} {
+		assert.NotNil(t, cmd.Flags().Lookup(flag), "missing flag %q", flag)
+	}
+}
+
+// --- resolveStrategy ---
+
+func TestResolveStrategy(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		flag string
+		want string
+	}{
+		{"keep-local", "keep-local", resolutionKeepLocal},
+		{"keep-remote", "keep-remote", resolutionKeepRemote},
+		{"keep-both", "keep-both", resolutionKeepBoth},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cmd := newResolveCmd()
+			require.NoError(t, cmd.Flags().Set(tt.flag, "true"))
+
+			got, err := resolveStrategy(cmd)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestResolveStrategy_NoFlag(t *testing.T) {
+	t.Parallel()
+
+	cmd := newResolveCmd()
+
+	_, err := resolveStrategy(cmd)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "strategy")
+}
