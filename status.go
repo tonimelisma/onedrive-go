@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -57,10 +59,36 @@ type statusAccount struct {
 
 // statusDrive holds status information for a single drive.
 type statusDrive struct {
-	CanonicalID string `json:"canonical_id"`
-	DisplayName string `json:"display_name,omitempty"`
-	SyncDir     string `json:"sync_dir"`
-	State       string `json:"state"`
+	CanonicalID string         `json:"canonical_id"`
+	DisplayName string         `json:"display_name,omitempty"`
+	SyncDir     string         `json:"sync_dir"`
+	State       string         `json:"state"`
+	SyncState   *syncStateInfo `json:"sync_state,omitempty"`
+}
+
+// syncStateInfo holds sync state for a single drive, queried from the state DB.
+type syncStateInfo struct {
+	LastSyncTime     string `json:"last_sync_time,omitempty"`
+	LastSyncDuration string `json:"last_sync_duration,omitempty"`
+	FileCount        int    `json:"file_count"`
+	Conflicts        int    `json:"unresolved_conflicts"`
+	LastError        string `json:"last_error,omitempty"`
+}
+
+// statusSummary aggregates health info across all drives.
+type statusSummary struct {
+	TotalDrives    int `json:"total_drives"`
+	Ready          int `json:"ready"`
+	Paused         int `json:"paused"`
+	NeedsSetup     int `json:"needs_setup"`
+	NoToken        int `json:"no_token"`
+	TotalConflicts int `json:"total_conflicts"`
+}
+
+// statusOutput wraps the full status response for JSON output.
+type statusOutput struct {
+	Accounts []statusAccount `json:"accounts"`
+	Summary  statusSummary   `json:"summary"`
 }
 
 func runStatus(cmd *cobra.Command, _ []string) error {
@@ -108,6 +136,12 @@ type tokenStateChecker interface {
 	CheckToken(ctx context.Context, account string, driveIDs []driveid.CanonicalID) string
 }
 
+// syncStateQuerier abstracts querying per-drive sync state from state DBs.
+// Enables testing without real SQLite databases on disk.
+type syncStateQuerier interface {
+	QuerySyncState(cid driveid.CanonicalID) *syncStateInfo
+}
+
 // liveAccountMeta reads metadata from actual token files on disk.
 type liveAccountMeta struct {
 	logger *slog.Logger
@@ -126,16 +160,30 @@ func (c *liveTokenChecker) CheckToken(ctx context.Context, account string, drive
 	return checkTokenState(ctx, account, driveIDs, c.logger)
 }
 
+// liveSyncStateQuerier queries per-drive sync state from real state DBs.
+type liveSyncStateQuerier struct {
+	logger *slog.Logger
+}
+
+func (q *liveSyncStateQuerier) QuerySyncState(cid driveid.CanonicalID) *syncStateInfo {
+	statePath := config.DriveStatePath(cid)
+	return querySyncState(statePath, q.logger)
+}
+
 // buildStatusAccounts groups configured drives by account email and checks
 // token validity for each account.
 func buildStatusAccounts(cfg *config.Config, logger *slog.Logger) []statusAccount {
-	return buildStatusAccountsWith(cfg, &liveAccountMeta{logger: logger}, &liveTokenChecker{logger: logger})
+	return buildStatusAccountsWith(cfg,
+		&liveAccountMeta{logger: logger},
+		&liveTokenChecker{logger: logger},
+		&liveSyncStateQuerier{logger: logger},
+	)
 }
 
 // buildStatusAccountsWith is the testable core of buildStatusAccounts.
-// Accepts interfaces for metadata reading and token checking.
+// Accepts interfaces for metadata reading, token checking, and sync state querying.
 func buildStatusAccountsWith(
-	cfg *config.Config, meta accountMetaReader, checker tokenStateChecker,
+	cfg *config.Config, meta accountMetaReader, checker tokenStateChecker, syncQ syncStateQuerier,
 ) []statusAccount {
 	grouped, order := groupDrivesByAccount(cfg)
 	accounts := make([]statusAccount, 0, len(order))
@@ -146,7 +194,7 @@ func buildStatusAccountsWith(
 			return driveIDs[i].String() < driveIDs[j].String()
 		})
 
-		acct := buildSingleAccountStatusWith(cfg, email, driveIDs, meta, checker)
+		acct := buildSingleAccountStatusWith(cfg, email, driveIDs, meta, checker, syncQ)
 		accounts = append(accounts, acct)
 	}
 
@@ -174,10 +222,10 @@ func groupDrivesByAccount(cfg *config.Config) (map[string][]driveid.CanonicalID,
 }
 
 // buildSingleAccountStatusWith builds the status for one account and its drives,
-// using injected interfaces for metadata and token checking.
+// using injected interfaces for metadata, token checking, and sync state querying.
 func buildSingleAccountStatusWith(
 	cfg *config.Config, email string, driveIDs []driveid.CanonicalID,
-	meta accountMetaReader, checker tokenStateChecker,
+	meta accountMetaReader, checker tokenStateChecker, syncQ syncStateQuerier,
 ) statusAccount {
 	acct := statusAccount{
 		Email:  email,
@@ -220,12 +268,19 @@ func buildSingleAccountStatusWith(
 			driveDisplayName = config.DefaultDisplayName(cid)
 		}
 
-		acct.Drives = append(acct.Drives, statusDrive{
+		sd := statusDrive{
 			CanonicalID: cid.String(),
 			DisplayName: driveDisplayName,
 			SyncDir:     syncDir,
 			State:       state,
-		})
+		}
+
+		// Query sync state from state DB (nil if never synced).
+		if syncQ != nil {
+			sd.SyncState = syncQ.QuerySyncState(cid)
+		}
+
+		acct.Drives = append(acct.Drives, sd)
 	}
 
 	return acct
@@ -295,11 +350,102 @@ func driveState(d *config.Drive, tokenState string) string {
 	return driveStateReady
 }
 
+// querySyncState opens a state DB read-only and queries sync metadata, baseline
+// entry count, and unresolved conflict count. Returns nil if the DB doesn't exist
+// (drive never synced) or if an error occurs opening it.
+func querySyncState(statePath string, logger *slog.Logger) *syncStateInfo {
+	if _, err := os.Stat(statePath); err != nil {
+		return nil
+	}
+
+	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(1000)", statePath)
+
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		logger.Debug("could not open state DB for status", slog.String("error", err.Error()), slog.String("path", statePath))
+		return nil
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	info := &syncStateInfo{}
+
+	// Read sync metadata. Table may not exist in pre-migration DBs.
+	rows, err := db.QueryContext(ctx, "SELECT key, value FROM sync_metadata")
+	if err == nil {
+		defer rows.Close()
+
+		for rows.Next() {
+			var k, v string
+			if scanErr := rows.Scan(&k, &v); scanErr == nil {
+				switch k {
+				case "last_sync_time":
+					info.LastSyncTime = v
+				case "last_sync_duration_ms":
+					info.LastSyncDuration = v
+				case "last_sync_error":
+					info.LastError = v
+				}
+			}
+		}
+
+		if rowErr := rows.Err(); rowErr != nil {
+			logger.Debug("error reading sync metadata", slog.String("error", rowErr.Error()))
+		}
+	}
+
+	// Count baseline entries.
+	if scanErr := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM baseline").Scan(&info.FileCount); scanErr != nil {
+		logger.Debug("could not count baseline entries", slog.String("error", scanErr.Error()))
+	}
+
+	// Count unresolved conflicts.
+	conflictSQL := "SELECT COUNT(*) FROM conflicts WHERE resolution = 'unresolved'"
+	if scanErr := db.QueryRowContext(ctx, conflictSQL).Scan(&info.Conflicts); scanErr != nil {
+		logger.Debug("could not count conflicts", slog.String("error", scanErr.Error()))
+	}
+
+	return info
+}
+
+// computeSummary aggregates health information across all status accounts.
+func computeSummary(accounts []statusAccount) statusSummary {
+	var s statusSummary
+
+	for _, acct := range accounts {
+		for _, d := range acct.Drives {
+			s.TotalDrives++
+
+			switch d.State {
+			case driveStateReady:
+				s.Ready++
+			case driveStatePaused:
+				s.Paused++
+			case driveStateNeedsSetup:
+				s.NeedsSetup++
+			case driveStateNoToken:
+				s.NoToken++
+			}
+
+			if d.SyncState != nil {
+				s.TotalConflicts += d.SyncState.Conflicts
+			}
+		}
+	}
+
+	return s
+}
+
 func printStatusJSON(accounts []statusAccount) error {
+	output := statusOutput{
+		Accounts: accounts,
+		Summary:  computeSummary(accounts),
+	}
+
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 
-	if err := enc.Encode(accounts); err != nil {
+	if err := enc.Encode(output); err != nil {
 		return fmt.Errorf("encoding JSON output: %w", err)
 	}
 
@@ -336,7 +482,56 @@ func printStatusText(accounts []statusAccount) {
 				driveLabel = fmt.Sprintf("%s (%s)", d.DisplayName, d.CanonicalID)
 			}
 
-			fmt.Printf("  %-50s %-25s %s\n", driveLabel, syncDir, d.State)
+			fmt.Printf("  %s\n", driveLabel)
+			fmt.Printf("    Sync dir:  %s\n", syncDir)
+			fmt.Printf("    State:     %s\n", d.State)
+
+			if d.SyncState != nil {
+				printSyncStateText(d.SyncState)
+			}
 		}
 	}
+
+	// Print health summary.
+	summary := computeSummary(accounts)
+	fmt.Println()
+	printSummaryText(summary)
+}
+
+func printSyncStateText(ss *syncStateInfo) {
+	if ss.LastSyncTime != "" {
+		fmt.Printf("    Last sync: %s (%d files, %d conflicts)\n",
+			ss.LastSyncTime, ss.FileCount, ss.Conflicts)
+	} else {
+		fmt.Printf("    Last sync: never\n")
+	}
+
+	if ss.LastError != "" {
+		fmt.Printf("    Last error: %s\n", ss.LastError)
+	}
+}
+
+func printSummaryText(s statusSummary) {
+	var parts []string
+
+	if s.Ready > 0 {
+		parts = append(parts, fmt.Sprintf("%d ready", s.Ready))
+	}
+
+	if s.Paused > 0 {
+		parts = append(parts, fmt.Sprintf("%d paused", s.Paused))
+	}
+
+	if s.NeedsSetup > 0 {
+		parts = append(parts, fmt.Sprintf("%d needs setup", s.NeedsSetup))
+	}
+
+	if s.NoToken > 0 {
+		parts = append(parts, fmt.Sprintf("%d no token", s.NoToken))
+	}
+
+	stateStr := strings.Join(parts, ", ")
+
+	fmt.Printf("Summary: %d drives (%s), %d unresolved conflicts\n",
+		s.TotalDrives, stateStr, s.TotalConflicts)
 }

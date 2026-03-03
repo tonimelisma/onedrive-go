@@ -236,11 +236,17 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 			slog.Duration("duration", time.Since(start)),
 		)
 
-		return &SyncReport{
+		report := &SyncReport{
 			Mode:     mode,
 			DryRun:   opts.DryRun,
 			Duration: time.Since(start),
-		}, nil
+		}
+		// Persist sync metadata even when no changes detected.
+		if metaErr := e.baseline.WriteSyncMetadata(ctx, report); metaErr != nil {
+			e.logger.Warn("failed to write sync metadata", slog.String("error", metaErr.Error()))
+		}
+
+		return report, nil
 	}
 
 	// Step 6: Plan actions.
@@ -277,6 +283,11 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 	)
 
 	e.postSyncHousekeeping()
+
+	// Persist sync metadata for status command queries.
+	if metaErr := e.baseline.WriteSyncMetadata(ctx, report); metaErr != nil {
+		e.logger.Warn("failed to write sync metadata", slog.String("error", metaErr.Error()))
+	}
 
 	return report, nil
 }

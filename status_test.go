@@ -2,10 +2,15 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"io"
+	"log/slog"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	_ "modernc.org/sqlite"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -27,6 +32,15 @@ type mockTokenChecker struct {
 }
 
 func (m *mockTokenChecker) CheckToken(_ context.Context, _ string, _ []driveid.CanonicalID) string {
+	return m.state
+}
+
+// mockSyncStateQuerier returns a fixed sync state for all drives.
+type mockSyncStateQuerier struct {
+	state *syncStateInfo
+}
+
+func (m *mockSyncStateQuerier) QuerySyncState(_ driveid.CanonicalID) *syncStateInfo {
 	return m.state
 }
 
@@ -126,6 +140,7 @@ func TestBuildStatusAccountsWith_SingleAccount(t *testing.T) {
 	accounts := buildStatusAccountsWith(cfg,
 		&mockMetaReader{displayName: "Alice", orgName: ""},
 		&mockTokenChecker{state: tokenStateValid},
+		&mockSyncStateQuerier{},
 	)
 
 	require.Len(t, accounts, 1)
@@ -154,6 +169,7 @@ func TestBuildStatusAccountsWith_MultiAccountGrouping(t *testing.T) {
 	accounts := buildStatusAccountsWith(cfg,
 		&mockMetaReader{displayName: "", orgName: ""},
 		&mockTokenChecker{state: tokenStateValid},
+		&mockSyncStateQuerier{},
 	)
 
 	require.Len(t, accounts, 3)
@@ -179,6 +195,7 @@ func TestBuildStatusAccountsWith_MissingToken(t *testing.T) {
 	accounts := buildStatusAccountsWith(cfg,
 		&mockMetaReader{},
 		&mockTokenChecker{state: tokenStateMissing},
+		&mockSyncStateQuerier{},
 	)
 
 	require.Len(t, accounts, 1)
@@ -196,6 +213,7 @@ func TestBuildStatusAccountsWith_ExpiredToken(t *testing.T) {
 	accounts := buildStatusAccountsWith(cfg,
 		&mockMetaReader{},
 		&mockTokenChecker{state: tokenStateExpired},
+		&mockSyncStateQuerier{},
 	)
 
 	require.Len(t, accounts, 1)
@@ -214,6 +232,7 @@ func TestBuildStatusAccountsWith_EmptySyncDir(t *testing.T) {
 	accounts := buildStatusAccountsWith(cfg,
 		&mockMetaReader{},
 		&mockTokenChecker{state: tokenStateValid},
+		&mockSyncStateQuerier{},
 	)
 
 	require.Len(t, accounts, 1)
@@ -232,6 +251,7 @@ func TestBuildStatusAccountsWith_SharePointGrouping(t *testing.T) {
 	accounts := buildStatusAccountsWith(cfg,
 		&mockMetaReader{displayName: "Alice", orgName: "Contoso"},
 		&mockTokenChecker{state: tokenStateValid},
+		&mockSyncStateQuerier{},
 	)
 
 	require.Len(t, accounts, 1)
@@ -255,6 +275,7 @@ func TestBuildStatusAccountsWith_DisplayNameFromConfig(t *testing.T) {
 	accounts := buildStatusAccountsWith(cfg,
 		&mockMetaReader{},
 		&mockTokenChecker{state: tokenStateValid},
+		&mockSyncStateQuerier{},
 	)
 
 	require.Len(t, accounts, 1)
@@ -275,6 +296,7 @@ func TestBuildStatusAccountsWith_PausedOverridesNoToken(t *testing.T) {
 	accounts := buildStatusAccountsWith(cfg,
 		&mockMetaReader{},
 		&mockTokenChecker{state: tokenStateMissing},
+		&mockSyncStateQuerier{},
 	)
 
 	require.Len(t, accounts, 1)
@@ -289,7 +311,211 @@ func TestBuildStatusAccountsWith_EmptyConfig(t *testing.T) {
 	accounts := buildStatusAccountsWith(cfg,
 		&mockMetaReader{},
 		&mockTokenChecker{state: tokenStateValid},
+		&mockSyncStateQuerier{},
 	)
 
 	assert.Empty(t, accounts)
+}
+
+// --- 6.2b: Sync state and health summary tests ---
+
+func TestBuildStatusAccountsWith_SyncStatePopulated(t *testing.T) {
+	cfg := &config.Config{
+		Drives: map[driveid.CanonicalID]config.Drive{
+			driveid.MustCanonicalID("personal:alice@example.com"): {SyncDir: "~/OneDrive"},
+		},
+	}
+
+	syncState := &syncStateInfo{
+		LastSyncTime:     "2026-03-02T10:30:00Z",
+		LastSyncDuration: "1500",
+		FileCount:        45,
+		Conflicts:        2,
+	}
+
+	accounts := buildStatusAccountsWith(cfg,
+		&mockMetaReader{},
+		&mockTokenChecker{state: tokenStateValid},
+		&mockSyncStateQuerier{state: syncState},
+	)
+
+	require.Len(t, accounts, 1)
+	require.Len(t, accounts[0].Drives, 1)
+	require.NotNil(t, accounts[0].Drives[0].SyncState)
+
+	ss := accounts[0].Drives[0].SyncState
+	assert.Equal(t, "2026-03-02T10:30:00Z", ss.LastSyncTime)
+	assert.Equal(t, "1500", ss.LastSyncDuration)
+	assert.Equal(t, 45, ss.FileCount)
+	assert.Equal(t, 2, ss.Conflicts)
+}
+
+func TestBuildStatusAccountsWith_NilSyncState(t *testing.T) {
+	cfg := &config.Config{
+		Drives: map[driveid.CanonicalID]config.Drive{
+			driveid.MustCanonicalID("personal:alice@example.com"): {SyncDir: "~/OneDrive"},
+		},
+	}
+
+	accounts := buildStatusAccountsWith(cfg,
+		&mockMetaReader{},
+		&mockTokenChecker{state: tokenStateValid},
+		&mockSyncStateQuerier{state: nil},
+	)
+
+	require.Len(t, accounts, 1)
+	assert.Nil(t, accounts[0].Drives[0].SyncState)
+}
+
+func TestQuerySyncState_NoDB(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	info := querySyncState("/nonexistent/path/state.db", logger)
+	assert.Nil(t, info)
+}
+
+func TestQuerySyncState_EmptyDB(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "state.db")
+
+	// Create a minimal DB with the required tables.
+	createTestStateDB(t, dbPath)
+
+	info := querySyncState(dbPath, logger)
+	require.NotNil(t, info)
+	assert.Empty(t, info.LastSyncTime)
+	assert.Equal(t, 0, info.FileCount)
+	assert.Equal(t, 0, info.Conflicts)
+}
+
+func TestQuerySyncState_WithMetadata(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "state.db")
+
+	createTestStateDB(t, dbPath)
+
+	// Insert sync metadata.
+	db, err := sql.Open("sqlite", "file:"+dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+
+	ctx := context.Background()
+
+	_, err = db.ExecContext(ctx, `INSERT INTO sync_metadata (key, value) VALUES
+		('last_sync_time', '2026-03-02T10:30:00Z'),
+		('last_sync_duration_ms', '1500'),
+		('last_sync_error', '')`)
+	require.NoError(t, err)
+
+	// Insert a baseline entry.
+	_, err = db.ExecContext(ctx, `INSERT INTO baseline (path, drive_id, item_id, parent_id, item_type, synced_at)
+		VALUES ('/test.txt', 'd!123', 'item1', 'root', 'file', 0)`)
+	require.NoError(t, err)
+
+	// Insert an unresolved conflict.
+	_, err = db.ExecContext(ctx, `INSERT INTO conflicts (id, path, drive_id, item_id, parent_id, item_type, conflict_type, resolution, detected_at)
+		VALUES ('c1', '/conflict.txt', 'd!123', 'item2', 'root', 'file', 'edit_edit', 'unresolved', 0)`)
+	require.NoError(t, err)
+
+	db.Close()
+
+	info := querySyncState(dbPath, logger)
+	require.NotNil(t, info)
+	assert.Equal(t, "2026-03-02T10:30:00Z", info.LastSyncTime)
+	assert.Equal(t, "1500", info.LastSyncDuration)
+	assert.Empty(t, info.LastError)
+	assert.Equal(t, 1, info.FileCount)
+	assert.Equal(t, 1, info.Conflicts)
+}
+
+func TestComputeSummary_Mixed(t *testing.T) {
+	t.Parallel()
+
+	accounts := []statusAccount{
+		{
+			Drives: []statusDrive{
+				{State: driveStateReady, SyncState: &syncStateInfo{Conflicts: 3}},
+				{State: driveStatePaused},
+			},
+		},
+		{
+			Drives: []statusDrive{
+				{State: driveStateNoToken},
+				{State: driveStateNeedsSetup},
+				{State: driveStateReady, SyncState: &syncStateInfo{Conflicts: 1}},
+			},
+		},
+	}
+
+	s := computeSummary(accounts)
+	assert.Equal(t, 5, s.TotalDrives)
+	assert.Equal(t, 2, s.Ready)
+	assert.Equal(t, 1, s.Paused)
+	assert.Equal(t, 1, s.NeedsSetup)
+	assert.Equal(t, 1, s.NoToken)
+	assert.Equal(t, 4, s.TotalConflicts)
+}
+
+func TestComputeSummary_Empty(t *testing.T) {
+	t.Parallel()
+
+	s := computeSummary(nil)
+	assert.Equal(t, 0, s.TotalDrives)
+	assert.Equal(t, 0, s.TotalConflicts)
+}
+
+// createTestStateDB creates a minimal SQLite DB with tables matching the sync schema.
+func createTestStateDB(t *testing.T, dbPath string) {
+	t.Helper()
+
+	db, err := sql.Open("sqlite", "file:"+dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+
+	// Create minimal tables for status queries.
+	_, err = db.ExecContext(context.Background(), `
+		CREATE TABLE IF NOT EXISTS baseline (
+			path TEXT PRIMARY KEY,
+			drive_id TEXT NOT NULL,
+			item_id TEXT NOT NULL,
+			parent_id TEXT NOT NULL,
+			item_type TEXT NOT NULL,
+			size INTEGER,
+			remote_hash TEXT,
+			local_hash TEXT,
+			mtime INTEGER,
+			remote_mtime INTEGER,
+			synced_at INTEGER NOT NULL
+		);
+		CREATE TABLE IF NOT EXISTS conflicts (
+			id TEXT PRIMARY KEY,
+			path TEXT NOT NULL,
+			drive_id TEXT NOT NULL,
+			item_id TEXT NOT NULL,
+			parent_id TEXT NOT NULL,
+			item_type TEXT NOT NULL,
+			conflict_type TEXT NOT NULL,
+			resolution TEXT NOT NULL DEFAULT 'unresolved',
+			detected_at INTEGER NOT NULL,
+			resolved_at INTEGER,
+			resolved_by TEXT,
+			size INTEGER,
+			remote_hash TEXT,
+			mtime INTEGER,
+			remote_mtime INTEGER
+		);
+		CREATE TABLE IF NOT EXISTS sync_metadata (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		);
+	`)
+	require.NoError(t, err)
 }
