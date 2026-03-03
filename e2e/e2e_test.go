@@ -3,7 +3,6 @@
 package e2e
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -160,54 +159,6 @@ func registerLogDump(t *testing.T) {
 	})
 }
 
-// --- e2eMode abstraction for dual-mode testing ---
-
-// e2eMode wraps CLI execution for a specific config mode (no config vs with config).
-type e2eMode struct {
-	name        string
-	run         func(t *testing.T, args ...string) (string, string)
-	expectError func(t *testing.T, args ...string) string
-	// poll retries until stdout contains expected. Returns stdout on success.
-	poll func(t *testing.T, expected string, args ...string) string
-}
-
-// fileOpModes returns both no-config and with-config modes for parametrized tests.
-func fileOpModes(t *testing.T) []e2eMode {
-	t.Helper()
-
-	// with-config mode: minimal config with drive section pointing to a temp state dir.
-	cfgPath := writeMinimalConfig(t)
-
-	return []e2eMode{
-		{
-			name:        "no_config",
-			run:         runCLI,
-			expectError: runCLIExpectError,
-			poll: func(t *testing.T, expected string, args ...string) string {
-				t.Helper()
-				stdout, _ := pollCLIContains(t, expected, pollTimeout, args...)
-				return stdout
-			},
-		},
-		{
-			name: "with_config",
-			run: func(t *testing.T, args ...string) (string, string) {
-				t.Helper()
-				return runCLIWithConfig(t, cfgPath, nil, args...)
-			},
-			expectError: func(t *testing.T, args ...string) string {
-				t.Helper()
-				return runCLIWithConfigExpectError(t, cfgPath, nil, args...)
-			},
-			poll: func(t *testing.T, expected string, args ...string) string {
-				t.Helper()
-				stdout, _ := pollCLIWithConfigContains(t, cfgPath, nil, expected, pollTimeout, args...)
-				return stdout
-			},
-		},
-	}
-}
-
 // writeMinimalConfig writes a config file with drive but no sync_dir (uses defaults).
 func writeMinimalConfig(t *testing.T) string {
 	t.Helper()
@@ -248,58 +199,6 @@ func makeCmd(args []string, envOverrides map[string]string) *exec.Cmd {
 	return cmd
 }
 
-func runCLI(t *testing.T, args ...string) (string, string) {
-	t.Helper()
-
-	fullArgs := []string{"--drive", drive}
-	if shouldAddDebug(args) {
-		fullArgs = append(fullArgs, "--debug")
-	}
-
-	fullArgs = append(fullArgs, args...)
-	cmd := makeCmd(fullArgs, nil)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	logCLIExecution(t, fullArgs, stdout.String(), stderr.String())
-
-	if err != nil {
-		t.Fatalf("CLI command %v failed: %v\nstdout: %s\nstderr: %s", args, err, stdout.String(), stderr.String())
-	}
-
-	return stdout.String(), stderr.String()
-}
-
-// runCLIExpectError runs the CLI binary with the given args and expects a
-// non-zero exit code. It returns the combined stdout+stderr output for
-// assertion. If the command unexpectedly succeeds, it fails the test.
-func runCLIExpectError(t *testing.T, args ...string) string {
-	t.Helper()
-
-	fullArgs := []string{"--drive", drive}
-	if shouldAddDebug(args) {
-		fullArgs = append(fullArgs, "--debug")
-	}
-
-	fullArgs = append(fullArgs, args...)
-	cmd := makeCmd(fullArgs, nil)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	logCLIExecution(t, fullArgs, stdout.String(), stderr.String())
-
-	require.Error(t, err, "expected CLI to fail for args %v, but it succeeded\nstdout: %s\nstderr: %s",
-		args, stdout.String(), stderr.String())
-
-	return stdout.String() + stderr.String()
-}
-
 // runCLIWithConfigExpectError runs the CLI with a config file and expects failure.
 func runCLIWithConfigExpectError(t *testing.T, cfgPath string, env map[string]string, args ...string) string {
 	t.Helper()
@@ -310,44 +209,6 @@ func runCLIWithConfigExpectError(t *testing.T, cfgPath string, env map[string]st
 		args, stdout, stderr)
 
 	return stdout + stderr
-}
-
-// pollCLIContains retries a CLI command until stdout contains the expected
-// string or timeout is reached. Handles Graph API eventual consistency.
-func pollCLIContains(
-	t *testing.T, expected string, timeout time.Duration, args ...string,
-) (string, string) {
-	t.Helper()
-
-	deadline := time.Now().Add(timeout)
-
-	for attempt := 0; ; attempt++ {
-		fullArgs := []string{"--drive", drive}
-		if shouldAddDebug(args) {
-			fullArgs = append(fullArgs, "--debug")
-		}
-
-		fullArgs = append(fullArgs, args...)
-		cmd := makeCmd(fullArgs, nil)
-
-		var stdout, stderr bytes.Buffer
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-
-		err := cmd.Run()
-		logCLIExecution(t, fullArgs, stdout.String(), stderr.String())
-
-		if err == nil && strings.Contains(stdout.String(), expected) {
-			return stdout.String(), stderr.String()
-		}
-
-		if time.Now().After(deadline) {
-			t.Fatalf("pollCLIContains: timed out after %v waiting for %q in output of %v\nlast stdout: %s\nlast stderr: %s",
-				timeout, expected, args, stdout.String(), stderr.String())
-		}
-
-		time.Sleep(pollBackoff(attempt))
-	}
 }
 
 // pollTimeout is the default timeout for polling helpers waiting on Graph API
@@ -392,27 +253,6 @@ func pollCLIWithConfigContains(
 	}
 }
 
-// pollCLISuccess retries a CLI command until it succeeds (exit 0).
-func pollCLISuccess(t *testing.T, timeout time.Duration, args ...string) (string, string) {
-	t.Helper()
-
-	deadline := time.Now().Add(timeout)
-
-	for attempt := 0; ; attempt++ {
-		stdout, stderr, err := runCLIAllowError(t, args...)
-		if err == nil {
-			return stdout, stderr
-		}
-
-		if time.Now().After(deadline) {
-			t.Fatalf("pollCLISuccess: timed out after %v waiting for success of %v\nlast stdout: %s\nlast stderr: %s",
-				timeout, args, stdout, stderr)
-		}
-
-		time.Sleep(pollBackoff(attempt))
-	}
-}
-
 // pollCLIWithConfigSuccess retries a CLI command with a config file until
 // it succeeds (exit 0).
 // env overrides (if non-nil) are applied to the child process environment.
@@ -436,156 +276,128 @@ func pollCLIWithConfigSuccess(t *testing.T, cfgPath string, env map[string]strin
 	}
 }
 
-// runCLIAllowError runs the CLI binary and returns the output even on error.
-func runCLIAllowError(t *testing.T, args ...string) (string, string, error) {
-	t.Helper()
-
-	fullArgs := []string{"--drive", drive}
-	if shouldAddDebug(args) {
-		fullArgs = append(fullArgs, "--debug")
-	}
-
-	fullArgs = append(fullArgs, args...)
-	cmd := makeCmd(fullArgs, nil)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	logCLIExecution(t, fullArgs, stdout.String(), stderr.String())
-
-	return stdout.String(), stderr.String(), err
-}
-
-// --- Parametrized tests ---
+// --- File operation tests ---
 
 func TestE2E_RoundTrip(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
-	modes := fileOpModes(t)
+	cfgPath := writeMinimalConfig(t)
 
-	for _, mode := range modes {
-		t.Run(mode.name, func(t *testing.T) {
-			t.Parallel()
+	testFolder := fmt.Sprintf("onedrive-go-e2e-%d", time.Now().UnixNano())
+	testSubfolder := testFolder + "/subfolder"
+	testFile := testFolder + "/test.txt"
+	testContent := []byte("Hello from onedrive-go E2E test!\n")
 
-			testFolder := fmt.Sprintf("onedrive-go-e2e-%s-%d", mode.name, time.Now().UnixNano())
-			testSubfolder := testFolder + "/subfolder"
-			testFile := testFolder + "/test.txt"
-			testContent := []byte("Hello from onedrive-go E2E test!\n")
+	// Cleanup at the end — delete the test folder.
+	t.Cleanup(func() {
+		fullArgs := []string{"--drive", drive, "rm", "-r", "/" + testFolder}
+		cmd := makeCmd(fullArgs, nil)
+		_ = cmd.Run()
+	})
 
-			// Cleanup at the end — delete the test folder.
-			t.Cleanup(func() {
-				fullArgs := []string{"--drive", drive, "rm", "-r", "/" + testFolder}
-				cmd := makeCmd(fullArgs, nil)
-				_ = cmd.Run()
-			})
+	t.Run("whoami", func(t *testing.T) {
+		stdout, _ := runCLIWithConfig(t, cfgPath, nil, "whoami", "--json")
 
-			t.Run("whoami", func(t *testing.T) {
-				stdout, _ := mode.run(t, "whoami", "--json")
+		var out map[string]interface{}
+		require.NoError(t, json.Unmarshal([]byte(stdout), &out))
+		assert.Contains(t, out, "user")
+		assert.Contains(t, out, "drives")
 
-				var out map[string]interface{}
-				require.NoError(t, json.Unmarshal([]byte(stdout), &out))
-				assert.Contains(t, out, "user")
-				assert.Contains(t, out, "drives")
+		drives, ok := out["drives"].([]interface{})
+		require.True(t, ok)
+		assert.NotEmpty(t, drives)
+	})
 
-				drives, ok := out["drives"].([]interface{})
-				require.True(t, ok)
-				assert.NotEmpty(t, drives)
-			})
+	t.Run("ls_root", func(t *testing.T) {
+		stdout, _ := runCLIWithConfig(t, cfgPath, nil, "ls", "/")
+		assert.Contains(t, stdout, "NAME")
+	})
 
-			t.Run("ls_root", func(t *testing.T) {
-				stdout, _ := mode.run(t, "ls", "/")
-				assert.Contains(t, stdout, "NAME")
-			})
+	t.Run("mkdir", func(t *testing.T) {
+		_, stderr := runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testSubfolder)
+		assert.Contains(t, stderr, "Created")
+	})
 
-			t.Run("mkdir", func(t *testing.T) {
-				_, stderr := mode.run(t, "mkdir", "/"+testSubfolder)
-				assert.Contains(t, stderr, "Created")
-			})
+	t.Run("put", func(t *testing.T) {
+		tmpFile, err := os.CreateTemp("", "e2e-upload-*")
+		require.NoError(t, err)
+		defer os.Remove(tmpFile.Name())
 
-			t.Run("put", func(t *testing.T) {
-				tmpFile, err := os.CreateTemp("", "e2e-upload-*")
-				require.NoError(t, err)
-				defer os.Remove(tmpFile.Name())
+		_, err = tmpFile.Write(testContent)
+		require.NoError(t, err)
+		require.NoError(t, tmpFile.Close())
 
-				_, err = tmpFile.Write(testContent)
-				require.NoError(t, err)
-				require.NoError(t, tmpFile.Close())
+		_, stderr := runCLIWithConfig(t, cfgPath, nil, "put", tmpFile.Name(), "/"+testFile)
+		assert.Contains(t, stderr, "Uploaded")
+	})
 
-				_, stderr := mode.run(t, "put", tmpFile.Name(), "/"+testFile)
-				assert.Contains(t, stderr, "Uploaded")
-			})
+	t.Run("ls_folder", func(t *testing.T) {
+		// Poll for eventual consistency after put.
+		stdout, _ := pollCLIWithConfigContains(t, cfgPath, nil, "test.txt", pollTimeout, "ls", "/"+testFolder)
+		assert.Contains(t, stdout, "subfolder")
+	})
 
-			t.Run("ls_folder", func(t *testing.T) {
-				// Poll for eventual consistency after put.
-				stdout := mode.poll(t, "test.txt", "ls", "/"+testFolder)
-				assert.Contains(t, stdout, "subfolder")
-			})
+	t.Run("stat", func(t *testing.T) {
+		// Poll for eventual consistency after put.
+		stdout, _ := pollCLIWithConfigContains(t, cfgPath, nil, "test.txt", pollTimeout, "stat", "/"+testFile)
+		assert.Contains(t, stdout, fmt.Sprintf("%d bytes", len(testContent)))
+	})
 
-			t.Run("stat", func(t *testing.T) {
-				// Poll for eventual consistency after put.
-				stdout := mode.poll(t, "test.txt", "stat", "/"+testFile)
-				assert.Contains(t, stdout, fmt.Sprintf("%d bytes", len(testContent)))
-			})
+	t.Run("get", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		localPath := filepath.Join(tmpDir, "downloaded.txt")
 
-			t.Run("get", func(t *testing.T) {
-				tmpDir := t.TempDir()
-				localPath := filepath.Join(tmpDir, "downloaded.txt")
+		_, stderr := runCLIWithConfig(t, cfgPath, nil, "get", "/"+testFile, localPath)
+		assert.Contains(t, stderr, "Downloaded")
 
-				_, stderr := mode.run(t, "get", "/"+testFile, localPath)
-				assert.Contains(t, stderr, "Downloaded")
+		downloaded, err := os.ReadFile(localPath)
+		require.NoError(t, err)
+		assert.Equal(t, testContent, downloaded)
+	})
 
-				downloaded, err := os.ReadFile(localPath)
-				require.NoError(t, err)
-				assert.Equal(t, testContent, downloaded)
-			})
+	t.Run("rm_file", func(t *testing.T) {
+		_, stderr := runCLIWithConfig(t, cfgPath, nil, "rm", "/"+testFile)
+		assert.Contains(t, stderr, "Deleted")
+	})
 
-			t.Run("rm_file", func(t *testing.T) {
-				_, stderr := mode.run(t, "rm", "/"+testFile)
-				assert.Contains(t, stderr, "Deleted")
-			})
+	t.Run("rm_subfolder", func(t *testing.T) {
+		_, stderr := runCLIWithConfig(t, cfgPath, nil, "rm", "-r", "/"+testSubfolder)
+		assert.Contains(t, stderr, "Deleted")
+	})
 
-			t.Run("rm_subfolder", func(t *testing.T) {
-				_, stderr := mode.run(t, "rm", "-r", "/"+testSubfolder)
-				assert.Contains(t, stderr, "Deleted")
-			})
+	t.Run("rm_permanent", func(t *testing.T) {
+		tmpFile, err := os.CreateTemp("", "e2e-perm-*")
+		require.NoError(t, err)
+		defer os.Remove(tmpFile.Name())
 
-			t.Run("rm_permanent", func(t *testing.T) {
-				tmpFile, err := os.CreateTemp("", "e2e-perm-*")
-				require.NoError(t, err)
-				defer os.Remove(tmpFile.Name())
+		_, err = tmpFile.Write([]byte("permanent delete test\n"))
+		require.NoError(t, err)
+		require.NoError(t, tmpFile.Close())
 
-				_, err = tmpFile.Write([]byte("permanent delete test\n"))
-				require.NoError(t, err)
-				require.NoError(t, tmpFile.Close())
+		permFile := testFolder + "/perm-test.txt"
+		_, stderr := runCLIWithConfig(t, cfgPath, nil, "put", tmpFile.Name(), "/"+permFile)
+		assert.Contains(t, stderr, "Uploaded")
 
-				permFile := testFolder + "/perm-test.txt"
-				_, stderr := mode.run(t, "put", tmpFile.Name(), "/"+permFile)
-				assert.Contains(t, stderr, "Uploaded")
+		// Poll until the file is visible before attempting permanent delete.
+		pollCLIWithConfigContains(t, cfgPath, nil, "perm-test.txt", pollTimeout, "stat", "/"+permFile)
 
-				// Poll until the file is visible before attempting permanent delete.
-				mode.poll(t, "perm-test.txt", "stat", "/"+permFile)
+		_, stderr = runCLIWithConfig(t, cfgPath, nil, "rm", "--permanent", "/"+permFile)
+		assert.Contains(t, stderr, "Permanently deleted")
+	})
 
-				_, stderr = mode.run(t, "rm", "--permanent", "/"+permFile)
-				assert.Contains(t, stderr, "Permanently deleted")
-			})
+	t.Run("whoami_text", func(t *testing.T) {
+		stdout, _ := runCLIWithConfig(t, cfgPath, nil, "whoami")
 
-			t.Run("whoami_text", func(t *testing.T) {
-				stdout, _ := mode.run(t, "whoami")
+		email := strings.SplitN(drive, ":", 2)[1]
+		assert.Contains(t, stdout, email, "whoami text output should contain the account email")
+	})
 
-				email := strings.SplitN(drive, ":", 2)[1]
-				assert.Contains(t, stdout, email, "whoami text output should contain the account email")
-			})
-
-			t.Run("status", func(t *testing.T) {
-				stdout, _ := mode.run(t, "status")
-				assert.Contains(t, stdout, "Account:", "status should show account header")
-				assert.Contains(t, stdout, "Token:", "status should show token state")
-			})
-		})
-	}
+	t.Run("status", func(t *testing.T) {
+		stdout, _ := runCLIWithConfig(t, cfgPath, nil, "status")
+		assert.Contains(t, stdout, "Account:", "status should show account header")
+		assert.Contains(t, stdout, "Token:", "status should show token state")
+	})
 }
 
 // TestE2E_ErrorCases verifies that the CLI returns non-zero exit codes
@@ -594,42 +406,36 @@ func TestE2E_ErrorCases(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
-	modes := fileOpModes(t)
+	cfgPath := writeMinimalConfig(t)
 
-	for _, mode := range modes {
-		t.Run(mode.name, func(t *testing.T) {
-			t.Parallel()
+	t.Run("ls_not_found", func(t *testing.T) {
+		output := runCLIWithConfigExpectError(t, cfgPath, nil, "ls", "/nonexistent-uuid-path-12345")
+		assert.Contains(t, output, "nonexistent-uuid-path-12345")
+	})
 
-			t.Run("ls_not_found", func(t *testing.T) {
-				output := mode.expectError(t, "ls", "/nonexistent-uuid-path-12345")
-				assert.Contains(t, output, "nonexistent-uuid-path-12345")
-			})
+	t.Run("get_root_is_folder", func(t *testing.T) {
+		output := runCLIWithConfigExpectError(t, cfgPath, nil, "get", "/")
+		assert.Contains(t, output, "folder")
+	})
 
-			t.Run("get_root_is_folder", func(t *testing.T) {
-				output := mode.expectError(t, "get", "/")
-				assert.Contains(t, output, "folder")
-			})
+	t.Run("rm_not_found", func(t *testing.T) {
+		output := runCLIWithConfigExpectError(t, cfgPath, nil, "rm", "/nonexistent-uuid-path-12345")
+		assert.Contains(t, output, "nonexistent-uuid-path-12345")
+	})
 
-			t.Run("rm_not_found", func(t *testing.T) {
-				output := mode.expectError(t, "rm", "/nonexistent-uuid-path-12345")
-				assert.Contains(t, output, "nonexistent-uuid-path-12345")
-			})
+	t.Run("rm_folder_without_recursive", func(t *testing.T) {
+		testFolder := fmt.Sprintf("onedrive-go-e2e-rmfolder-%d", time.Now().UnixNano())
 
-			t.Run("rm_folder_without_recursive", func(t *testing.T) {
-				testFolder := fmt.Sprintf("onedrive-go-e2e-rmfolder-%s-%d", mode.name, time.Now().UnixNano())
-
-				t.Cleanup(func() {
-					fullArgs := []string{"--drive", drive, "rm", "-r", "/" + testFolder}
-					cmd := makeCmd(fullArgs, nil)
-					_ = cmd.Run()
-				})
-
-				mode.run(t, "mkdir", "/"+testFolder)
-				output := mode.expectError(t, "rm", "/"+testFolder)
-				assert.Contains(t, output, "recursive")
-			})
+		t.Cleanup(func() {
+			fullArgs := []string{"--drive", drive, "rm", "-r", "/" + testFolder}
+			cmd := makeCmd(fullArgs, nil)
+			_ = cmd.Run()
 		})
-	}
+
+		runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder)
+		output := runCLIWithConfigExpectError(t, cfgPath, nil, "rm", "/"+testFolder)
+		assert.Contains(t, output, "recursive")
+	})
 }
 
 // TestE2E_JSONOutput validates that --json flags produce well-formed JSON
@@ -638,39 +444,33 @@ func TestE2E_JSONOutput(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
-	modes := fileOpModes(t)
+	cfgPath := writeMinimalConfig(t)
 
-	for _, mode := range modes {
-		t.Run(mode.name, func(t *testing.T) {
-			t.Parallel()
+	t.Run("ls_json", func(t *testing.T) {
+		stdout, _ := runCLIWithConfig(t, cfgPath, nil, "ls", "--json", "/")
 
-			t.Run("ls_json", func(t *testing.T) {
-				stdout, _ := mode.run(t, "ls", "--json", "/")
+		var items []map[string]interface{}
+		require.NoError(t, json.Unmarshal([]byte(stdout), &items),
+			"ls --json output should be valid JSON array, got: %s", stdout)
 
-				var items []map[string]interface{}
-				require.NoError(t, json.Unmarshal([]byte(stdout), &items),
-					"ls --json output should be valid JSON array, got: %s", stdout)
+		require.NotEmpty(t, items, "expected at least one item in root listing")
 
-				require.NotEmpty(t, items, "expected at least one item in root listing")
+		for i, item := range items {
+			assert.Contains(t, item, "name", "item %d missing 'name' key", i)
+			assert.Contains(t, item, "id", "item %d missing 'id' key", i)
+		}
+	})
 
-				for i, item := range items {
-					assert.Contains(t, item, "name", "item %d missing 'name' key", i)
-					assert.Contains(t, item, "id", "item %d missing 'id' key", i)
-				}
-			})
+	t.Run("stat_json", func(t *testing.T) {
+		stdout, _ := runCLIWithConfig(t, cfgPath, nil, "stat", "--json", "/")
 
-			t.Run("stat_json", func(t *testing.T) {
-				stdout, _ := mode.run(t, "stat", "--json", "/")
+		var obj map[string]interface{}
+		require.NoError(t, json.Unmarshal([]byte(stdout), &obj),
+			"stat --json output should be valid JSON object, got: %s", stdout)
 
-				var obj map[string]interface{}
-				require.NoError(t, json.Unmarshal([]byte(stdout), &obj),
-					"stat --json output should be valid JSON object, got: %s", stdout)
-
-				assert.Contains(t, obj, "name", "stat JSON missing 'name' key")
-				assert.Contains(t, obj, "id", "stat JSON missing 'id' key")
-			})
-		})
-	}
+		assert.Contains(t, obj, "name", "stat JSON missing 'name' key")
+		assert.Contains(t, obj, "id", "stat JSON missing 'id' key")
+	})
 }
 
 // TestE2E_QuietFlag verifies that --quiet suppresses informational output
@@ -679,35 +479,29 @@ func TestE2E_QuietFlag(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
-	modes := fileOpModes(t)
+	cfgPath := writeMinimalConfig(t)
 
-	for _, mode := range modes {
-		t.Run(mode.name, func(t *testing.T) {
-			t.Parallel()
+	t.Run("put_quiet_suppresses_output", func(t *testing.T) {
+		testFolder := fmt.Sprintf("onedrive-go-e2e-quiet-%d", time.Now().UnixNano())
+		remotePath := "/" + testFolder + "/quiet-test.txt"
 
-			t.Run("put_quiet_suppresses_output", func(t *testing.T) {
-				testFolder := fmt.Sprintf("onedrive-go-e2e-quiet-%s-%d", mode.name, time.Now().UnixNano())
-				remotePath := "/" + testFolder + "/quiet-test.txt"
-
-				t.Cleanup(func() {
-					fullArgs := []string{"--drive", drive, "rm", "-r", "/" + testFolder}
-					cmd := makeCmd(fullArgs, nil)
-					_ = cmd.Run()
-				})
-
-				mode.run(t, "mkdir", "/"+testFolder)
-
-				tmpFile, err := os.CreateTemp("", "e2e-quiet-*")
-				require.NoError(t, err)
-				defer os.Remove(tmpFile.Name())
-
-				_, err = tmpFile.Write([]byte("quiet test content\n"))
-				require.NoError(t, err)
-				require.NoError(t, tmpFile.Close())
-
-				_, stderr := mode.run(t, "put", "--quiet", tmpFile.Name(), remotePath)
-				assert.Empty(t, stderr, "expected no stderr output with --quiet flag")
-			})
+		t.Cleanup(func() {
+			fullArgs := []string{"--drive", drive, "rm", "-r", "/" + testFolder}
+			cmd := makeCmd(fullArgs, nil)
+			_ = cmd.Run()
 		})
-	}
+
+		runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder)
+
+		tmpFile, err := os.CreateTemp("", "e2e-quiet-*")
+		require.NoError(t, err)
+		defer os.Remove(tmpFile.Name())
+
+		_, err = tmpFile.Write([]byte("quiet test content\n"))
+		require.NoError(t, err)
+		require.NoError(t, tmpFile.Close())
+
+		_, stderr := runCLIWithConfig(t, cfgPath, nil, "put", "--quiet", tmpFile.Name(), remotePath)
+		assert.Empty(t, stderr, "expected no stderr output with --quiet flag")
+	})
 }

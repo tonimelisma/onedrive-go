@@ -88,7 +88,7 @@ Edge cases and correctness for `internal/graph/`.
 
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
-| B-299 | E2E tests for daemon mode (Orchestrator.RunWatch) | P3 | Multi-drive E2E infrastructure added in 6.0d (5 orchestrator scenarios). Still need E2E coverage for daemon mode (RunWatch), SIGHUP reload, and pause/resume. No longer blocked on second test account. |
+| ~~B-299~~ | ~~E2E tests for daemon mode (Orchestrator.RunWatch)~~ | ~~P3~~ | **DONE** (6.0f) — `e2e/sync_watch_e2e_test.go`: `TestE2E_SyncWatch_BasicRoundTrip` + `TestE2E_SyncWatch_PauseResume`. Build tag `e2e,e2e_full`. |
 
 ## Hardening: Watch Mode
 

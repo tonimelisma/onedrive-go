@@ -214,7 +214,7 @@ The nightly run exercises the token (triggering a refresh if needed) and saves t
 
 ## 13. Transient 403 on `/me/drives` (Token Propagation Delay)
 
-**Observed**: CI run #160 post-merge — `GET /me/drives` returned HTTP 403 ("accessDenied") three times in succession, exhausting the retry budget. The token was valid (the preceding `GET /me` returned 200 with user profile data). The failure only affected `with_config/whoami_text`; the identical `no_config/whoami_text` subtest passed in the same run. A re-run passed immediately.
+**Observed**: CI run #160 post-merge — `GET /me/drives` returned HTTP 403 ("accessDenied") three times in succession, exhausting the retry budget. The token was valid (the preceding `GET /me` returned 200 with user profile data). The failure only affected one subtest; a re-run passed immediately.
 
 **Cause**: Microsoft's token propagation infrastructure has an eventual-consistency window. After a fresh OIDC token exchange (or token refresh), the `/me/drives` endpoint may reject the token with 403 before all Graph API backend nodes have received the updated authorization state. The `/me` endpoint (user profile) is more resilient — it operates on a different backend that receives token propagation earlier.
 

@@ -854,10 +854,9 @@ Microsoft Graph API has eventual consistency gaps: items created or uploaded via
 
 | Helper | Use Case |
 |--------|----------|
-| `pollCLIContains(t, expected, timeout, args...)` | Poll until CLI output contains `expected` string (no config file) |
+| `pollCLIContains(t, expected, timeout, args...)` | Poll until CLI output contains `expected` string (auto-creates minimal config) |
 | `pollCLIWithConfigContains(t, cfgPath, expected, timeout, args...)` | Same, with custom config file |
-| `pollCLISuccess(t, timeout, args...)` | Poll until CLI exits successfully (no config file) |
-| `pollCLIWithConfigSuccess(t, cfgPath, timeout, args...)` | Same, with custom config file |
+| `pollCLIWithConfigSuccess(t, cfgPath, timeout, args...)` | Poll until CLI exits successfully, with custom config file |
 
 All helpers use exponential backoff via `pollBackoff()`: 500ms, 1s, 2s, 4s (capped). Default timeout: 30s (`pollTimeout`).
 

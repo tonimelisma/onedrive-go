@@ -36,7 +36,7 @@ func TestValidateDrives_MultipleDrives_Valid(t *testing.T) {
 
 func TestValidateDrives_EmptySyncDir_Valid(t *testing.T) {
 	// Empty sync_dir is valid — runtime defaults computed in buildResolvedDrive().
-	// This supports zero-config mode and minimal drive sections.
+	// This supports minimal drive sections during initial setup.
 	cfg := DefaultConfig()
 	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{}
 

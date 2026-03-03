@@ -33,7 +33,7 @@ func validateDrives(cfg *Config) []error {
 // validateSingleDrive validates one drive's fields and checks sync_dir uniqueness.
 // The canonical ID format is guaranteed valid by parse-time validation.
 // Empty sync_dir is valid — runtime defaults are computed in buildResolvedDrive().
-// This supports zero-config mode and minimal drive sections.
+// This supports minimal drive sections during initial setup.
 func validateSingleDrive(id driveid.CanonicalID, drive *Drive, syncDirs map[string]string) []error {
 	var errs []error
 

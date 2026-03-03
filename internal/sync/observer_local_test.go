@@ -17,6 +17,16 @@ import (
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
 
+// itemTypeFromDirEntry maps a DirEntry to the sync engine's ItemType.
+// Test-only helper — not used in production code.
+func itemTypeFromDirEntry(d fs.DirEntry) ItemType {
+	if d.IsDir() {
+		return ItemTypeFolder
+	}
+
+	return ItemTypeFile
+}
+
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------

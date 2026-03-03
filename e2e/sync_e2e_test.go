@@ -109,6 +109,35 @@ func runCLIWithConfigAllowError(t *testing.T, cfgPath string, env map[string]str
 	return runCLICore(t, cfgPath, env, drive, args...)
 }
 
+// runCLI runs the CLI with an auto-created minimal config. Used by helpers
+// like putRemoteFile and getRemoteFile for remote state setup/teardown.
+func runCLI(t *testing.T, args ...string) (string, string) {
+	t.Helper()
+
+	cfgPath := writeMinimalConfig(t)
+
+	return runCLIWithConfig(t, cfgPath, nil, args...)
+}
+
+// runCLIExpectError runs the CLI with an auto-created config and expects failure.
+func runCLIExpectError(t *testing.T, args ...string) string {
+	t.Helper()
+
+	cfgPath := writeMinimalConfig(t)
+
+	return runCLIWithConfigExpectError(t, cfgPath, nil, args...)
+}
+
+// pollCLIContains retries a CLI command with an auto-created config until
+// stdout contains the expected string or timeout is reached.
+func pollCLIContains(t *testing.T, expected string, timeout time.Duration, args ...string) (string, string) {
+	t.Helper()
+
+	cfgPath := writeMinimalConfig(t)
+
+	return pollCLIWithConfigContains(t, cfgPath, nil, expected, timeout, args...)
+}
+
 // putRemoteFile uploads string content to a remote path via a temp file.
 func putRemoteFile(t *testing.T, remotePath, content string) {
 	t.Helper()

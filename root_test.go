@@ -346,28 +346,18 @@ sync_dir = "` + tmpDir + `/OneDrive"
 	assert.Equal(t, "personal:test@example.com", resolved.CanonicalID.String())
 }
 
-func TestLoadAndResolve_MissingFile_ZeroConfig(t *testing.T) {
+func TestLoadAndResolve_MissingFile_NoDrives_Error(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfgPath := filepath.Join(tmpDir, "nonexistent.toml")
 
-	// Zero-config mode: no config file, but --drive is set with a canonical ID.
-	// Uses Execute with the ls subcommand so Cobra properly merges persistent
-	// flags and marks --drive as changed -- matching real CLI invocation.
+	// No config file and --drive selector: with zero-config removed, this
+	// should error because matchNoDrives always returns an error now.
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"--drive", "personal:zeroconfig@example.com", "--config", cfgPath, "ls"})
 
-	// ls will fail (no token), but PersistentPreRunE should succeed and populate config.
-	_ = cmd.Execute()
-
-	// After Execute, find the ls subcommand to get its context.
-	lsSub, _, err := cmd.Find([]string{"ls"})
-	require.NoError(t, err)
-
-	cc := cliContextFrom(lsSub.Context())
-	require.NotNil(t, cc)
-	assert.NotNil(t, cc.Logger)
-	assert.NotNil(t, cc.Cfg)
-	assert.Equal(t, "personal:zeroconfig@example.com", cc.Cfg.CanonicalID.String())
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no drives configured")
 }
 
 // --- mustCLIContext tests ---

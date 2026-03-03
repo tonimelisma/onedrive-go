@@ -49,15 +49,16 @@ func TestMatchDrive_NoDrives_NoSelector_NoTokens(t *testing.T) {
 	assert.Contains(t, err.Error(), "no accounts")
 }
 
-func TestMatchDrive_NoDrives_CanonicalSelector(t *testing.T) {
-	// When no drives are configured but the selector looks like a canonical ID,
-	// matchDrive should return the selector as the canonical ID with an empty Drive.
-	// This supports zero-config CLI usage (e.g., --drive personal:user@example.com).
+func TestMatchDrive_NoDrives_CanonicalSelector_Error(t *testing.T) {
+	// A canonical ID selector with no drives configured should return an error.
+	// Config is mandatory — users must run "login" and "drive add" first.
+	t.Setenv("HOME", t.TempDir())
+
 	cfg := DefaultConfig()
 
-	id, _, err := MatchDrive(cfg, "personal:toni@outlook.com", testLogger(t))
-	require.NoError(t, err)
-	assert.Equal(t, driveid.MustCanonicalID("personal:toni@outlook.com"), id)
+	_, _, err := MatchDrive(cfg, "personal:toni@outlook.com", testLogger(t))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "login")
 }
 
 func TestMatchDrive_NoDrives_NonCanonicalSelector_Error(t *testing.T) {
