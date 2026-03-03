@@ -115,3 +115,78 @@ func TestPrintDriveReports_MultiDrive_WithError(t *testing.T) {
 	// Should not panic. Output goes to stderr via statusf.
 	printDriveReports(reports, quietCC())
 }
+
+// --- syncModeFromFlags ---
+
+func TestSyncModeFromFlags(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		flag string
+		want sync.SyncMode
+	}{
+		{"default bidirectional", "", sync.SyncBidirectional},
+		{"download-only", "download-only", sync.SyncDownloadOnly},
+		{"upload-only", "upload-only", sync.SyncUploadOnly},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cmd := newSyncCmd()
+			if tt.flag != "" {
+				require.NoError(t, cmd.Flags().Set(tt.flag, "true"))
+			}
+
+			assert.Equal(t, tt.want, syncModeFromFlags(cmd))
+		})
+	}
+}
+
+// --- printNonZero ---
+
+func TestPrintNonZero(t *testing.T) {
+	t.Parallel()
+
+	// n=0 should produce no output; n>0 should produce labeled line.
+	cc := quietCC()
+	printNonZero(cc, "Downloads", 0) // should not panic
+	printNonZero(cc, "Downloads", 5) // should not panic
+}
+
+// --- printSyncReport ---
+
+func TestPrintSyncReport(t *testing.T) {
+	t.Parallel()
+
+	cc := quietCC()
+
+	// Dry-run report.
+	printSyncReport(&sync.SyncReport{DryRun: true, Mode: sync.SyncBidirectional}, cc)
+
+	// No-changes report.
+	printSyncReport(&sync.SyncReport{Mode: sync.SyncUploadOnly}, cc)
+
+	// Full report with results.
+	printSyncReport(&sync.SyncReport{
+		Downloads: 3,
+		Uploads:   2,
+		Succeeded: 5,
+		Mode:      sync.SyncDownloadOnly,
+	}, cc)
+}
+
+// --- newSyncCmd ---
+
+func TestNewSyncCmd_Structure(t *testing.T) {
+	t.Parallel()
+
+	cmd := newSyncCmd()
+	assert.Equal(t, "sync", cmd.Use)
+
+	for _, flag := range []string{"download-only", "upload-only", "dry-run", "force", "watch"} {
+		assert.NotNil(t, cmd.Flags().Lookup(flag), "missing flag %q", flag)
+	}
+}
