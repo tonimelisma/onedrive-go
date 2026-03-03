@@ -3,10 +3,12 @@
 package e2e
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -238,4 +240,227 @@ func TestE2E_Orchestrator_SelectiveDrive(t *testing.T) {
 	cmd := makeCmd(fullArgs, env)
 	statErr := cmd.Run()
 	assert.Error(t, statErr, "drive2's file should not exist remotely (selective sync)")
+}
+
+// ---------------------------------------------------------------------------
+// Multi-drive watch mode tests (daemon mode with multiple drives)
+// ---------------------------------------------------------------------------
+
+// TestE2E_Orchestrator_WatchSimultaneous starts a 2-drive daemon in watch
+// mode, creates files in each sync dir, and verifies both are synced.
+func TestE2E_Orchestrator_WatchSimultaneous(t *testing.T) {
+	requireDrive2(t)
+	registerLogDump(t)
+
+	syncDir1 := t.TempDir()
+	syncDir2 := t.TempDir()
+	cfgPath, env := writeMultiDriveConfig(t, syncDir1, syncDir2)
+	opsCfgPath := writeMinimalConfig(t)
+
+	testFolder1 := fmt.Sprintf("e2e-orchwatch-sim1-%d", time.Now().UnixNano())
+	testFolder2 := fmt.Sprintf("e2e-orchwatch-sim2-%d", time.Now().UnixNano())
+
+	t.Cleanup(func() {
+		cleanupRemoteFolder(t, testFolder1)
+		cleanupRemoteFolderForDrive(t, drive2, testFolder2)
+	})
+
+	// Start 2-drive daemon in upload-only watch mode (no --drive flag).
+	daemonArgs := []string{
+		"--config", cfgPath,
+		"--debug",
+		"sync", "--watch", "--upload-only", "--force",
+	}
+	cmd := makeCmd(daemonArgs, env)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	require.NoError(t, cmd.Start(), "failed to start multi-drive daemon")
+
+	t.Cleanup(func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Signal(syscall.SIGTERM)
+			_ = cmd.Wait()
+		}
+
+		logCLIExecution(t, daemonArgs, stdout.String(), stderr.String())
+	})
+
+	waitForDaemonReady(t, &stderr, 30*time.Second)
+
+	// Create files in each sync dir.
+	localDir1 := filepath.Join(syncDir1, testFolder1)
+	require.NoError(t, os.MkdirAll(localDir1, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(localDir1, "watch-d1.txt"), []byte("watch drive1"), 0o644))
+
+	localDir2 := filepath.Join(syncDir2, testFolder2)
+	require.NoError(t, os.MkdirAll(localDir2, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(localDir2, "watch-d2.txt"), []byte("watch drive2"), 0o644))
+
+	// Poll both remotes until files appear.
+	remotePath1 := "/" + testFolder1 + "/watch-d1.txt"
+	pollCLIWithConfigContains(t, opsCfgPath, nil, "watch-d1.txt", 3*time.Minute, "stat", remotePath1)
+
+	remotePath2 := "/" + testFolder2 + "/watch-d2.txt"
+	pollForDrive2File(t, cfgPath, env, drive2, "watch-d2.txt", 3*time.Minute, "stat", remotePath2)
+
+	// Graceful shutdown.
+	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
+	_ = cmd.Wait()
+}
+
+// TestE2E_Orchestrator_WatchDriveIsolation starts a 2-drive daemon, creates
+// a file only in drive1's sync dir, and verifies it does NOT appear on drive2.
+func TestE2E_Orchestrator_WatchDriveIsolation(t *testing.T) {
+	requireDrive2(t)
+	registerLogDump(t)
+
+	syncDir1 := t.TempDir()
+	syncDir2 := t.TempDir()
+	cfgPath, env := writeMultiDriveConfig(t, syncDir1, syncDir2)
+	opsCfgPath := writeMinimalConfig(t)
+
+	testFolder := fmt.Sprintf("e2e-orchwatch-iso-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
+
+	// Start 2-drive daemon.
+	daemonArgs := []string{
+		"--config", cfgPath,
+		"--debug",
+		"sync", "--watch", "--upload-only", "--force",
+	}
+	cmd := makeCmd(daemonArgs, env)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	require.NoError(t, cmd.Start(), "failed to start daemon")
+
+	t.Cleanup(func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Signal(syscall.SIGTERM)
+			_ = cmd.Wait()
+		}
+
+		logCLIExecution(t, daemonArgs, stdout.String(), stderr.String())
+	})
+
+	waitForDaemonReady(t, &stderr, 30*time.Second)
+
+	// Create file only in drive1's sync dir.
+	localDir1 := filepath.Join(syncDir1, testFolder)
+	require.NoError(t, os.MkdirAll(localDir1, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(localDir1, "isolated.txt"), []byte("drive1 only"), 0o644))
+
+	// Wait for drive1's file to appear remotely.
+	remotePath := "/" + testFolder + "/isolated.txt"
+	pollCLIWithConfigContains(t, opsCfgPath, nil, "isolated.txt", 3*time.Minute, "stat", remotePath)
+
+	// Verify file does NOT appear on drive2.
+	d2Args := []string{"--config", cfgPath, "--drive", drive2, "--debug", "stat", "/" + testFolder + "/isolated.txt"}
+	d2Cmd := makeCmd(d2Args, env)
+	d2Err := d2Cmd.Run()
+	assert.Error(t, d2Err, "file should NOT exist on drive2")
+
+	// Graceful shutdown.
+	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
+	_ = cmd.Wait()
+}
+
+// TestE2E_Orchestrator_WatchPausedDrive starts a 2-drive daemon with drive2
+// paused, creates files in both sync dirs, and verifies only drive1 syncs.
+func TestE2E_Orchestrator_WatchPausedDrive(t *testing.T) {
+	requireDrive2(t)
+	registerLogDump(t)
+
+	syncDir1 := t.TempDir()
+	syncDir2 := t.TempDir()
+
+	// Create config with drive2 paused.
+	perTestData := t.TempDir()
+	perTestHome := t.TempDir()
+
+	perTestDataDir := filepath.Join(perTestData, "onedrive-go")
+	require.NoError(t, os.MkdirAll(perTestDataDir, 0o755))
+
+	copyTokenFile(t, testDataDir, perTestDataDir)
+	copyTokenFileForDrive(t, testDataDir, perTestDataDir, drive2)
+
+	content := fmt.Sprintf("[%q]\nsync_dir = %q\n\n[%q]\nsync_dir = %q\npaused = true\n",
+		drive, syncDir1, drive2, syncDir2)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o644))
+
+	env := map[string]string{
+		"XDG_DATA_HOME": perTestData,
+		"HOME":          perTestHome,
+	}
+
+	opsCfgPath := writeMinimalConfig(t)
+
+	testFolder1 := fmt.Sprintf("e2e-orchwatch-pause1-%d", time.Now().UnixNano())
+	testFolder2 := fmt.Sprintf("e2e-orchwatch-pause2-%d", time.Now().UnixNano())
+
+	t.Cleanup(func() {
+		cleanupRemoteFolder(t, testFolder1)
+		cleanupRemoteFolderForDrive(t, drive2, testFolder2)
+	})
+
+	// Start daemon.
+	daemonArgs := []string{
+		"--config", cfgPath,
+		"--debug",
+		"sync", "--watch", "--upload-only", "--force",
+	}
+	cmd := makeCmd(daemonArgs, env)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	require.NoError(t, cmd.Start(), "failed to start daemon")
+
+	t.Cleanup(func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Signal(syscall.SIGTERM)
+			_ = cmd.Wait()
+		}
+
+		logCLIExecution(t, daemonArgs, stdout.String(), stderr.String())
+	})
+
+	waitForDaemonReady(t, &stderr, 30*time.Second)
+
+	// Create files in both sync dirs.
+	localDir1 := filepath.Join(syncDir1, testFolder1)
+	require.NoError(t, os.MkdirAll(localDir1, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(localDir1, "active.txt"), []byte("active drive"), 0o644))
+
+	localDir2 := filepath.Join(syncDir2, testFolder2)
+	require.NoError(t, os.MkdirAll(localDir2, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(localDir2, "paused.txt"), []byte("paused drive"), 0o644))
+
+	// Verify drive1 syncs.
+	remotePath1 := "/" + testFolder1 + "/active.txt"
+	pollCLIWithConfigContains(t, opsCfgPath, nil, "active.txt", 3*time.Minute, "stat", remotePath1)
+
+	// Wait a bit, then verify drive2 did NOT sync.
+	time.Sleep(10 * time.Second)
+	d2Args := []string{"--config", cfgPath, "--drive", drive2, "--debug", "stat", "/" + testFolder2 + "/paused.txt"}
+	d2Cmd := makeCmd(d2Args, env)
+	d2Err := d2Cmd.Run()
+	assert.Error(t, d2Err, "paused drive2's file should NOT be uploaded")
+
+	// Graceful shutdown.
+	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
+	_ = cmd.Wait()
 }
