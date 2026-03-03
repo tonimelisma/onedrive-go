@@ -38,18 +38,18 @@ type CLIFlags struct {
 }
 
 // SingleDrive returns the single --drive selector, or "" if none was provided.
-// Panics if multiple --drive values were provided — callers that allow multiple
-// values should use Drive directly.
-func (f CLIFlags) SingleDrive() string {
+// Returns an error if multiple --drive values were provided — callers that
+// allow multiple values should use Drive directly.
+func (f CLIFlags) SingleDrive() (string, error) {
 	if len(f.Drive) == 0 {
-		return ""
+		return "", nil
 	}
 
 	if len(f.Drive) > 1 {
-		panic("SingleDrive called with multiple --drive values")
+		return "", fmt.Errorf("multiple --drive values not allowed for this command (use 'sync' for multi-drive)")
 	}
 
-	return f.Drive[0]
+	return f.Drive[0], nil
 }
 
 // CLIContext bundles resolved config, flags, and logger. Created in

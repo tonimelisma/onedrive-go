@@ -36,7 +36,11 @@ func runPause(cmd *cobra.Command, args []string) error {
 	cc := mustCLIContext(cmd.Context())
 	logger := cc.Logger
 
-	driveSelector := cc.Flags.SingleDrive()
+	driveSelector, driveErr := cc.Flags.SingleDrive()
+	if driveErr != nil {
+		return driveErr
+	}
+
 	if driveSelector == "" {
 		return fmt.Errorf("--drive is required (specify which drive to pause)")
 	}

@@ -398,7 +398,11 @@ func runDriveAdd(cmd *cobra.Command, args []string) error {
 
 	// Also accept --drive.
 	if selector == "" {
-		selector = cc.Flags.SingleDrive()
+		var driveErr error
+		selector, driveErr = cc.Flags.SingleDrive()
+		if driveErr != nil {
+			return driveErr
+		}
 	}
 
 	if selector == "" {
@@ -488,7 +492,11 @@ func runDriveRemove(cmd *cobra.Command, _ []string) error {
 	cc := mustCLIContext(cmd.Context())
 	logger := cc.Logger
 
-	driveSelector := cc.Flags.SingleDrive()
+	driveSelector, driveErr := cc.Flags.SingleDrive()
+	if driveErr != nil {
+		return driveErr
+	}
+
 	if driveSelector == "" {
 		return fmt.Errorf("--drive is required (specify which drive to remove)")
 	}
