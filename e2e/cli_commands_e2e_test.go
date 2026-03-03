@@ -389,7 +389,6 @@ func TestE2E_Verify_AfterSync(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "v3.txt"), []byte("verify 3"), 0o644))
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Verify in text mode.
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "verify")

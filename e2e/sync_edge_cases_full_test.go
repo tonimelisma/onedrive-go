@@ -73,8 +73,7 @@ func TestE2E_Sync_NestedDeletion(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "a", "b", "mid.txt"), []byte("mid level"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "a", "b", "c", "deep.txt"), []byte("deep level"), 0o644))
 
-	// Sync upload (two syncs for folder creation + file upload).
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	// Sync upload.
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Verify deep file exists remotely.
@@ -226,7 +225,6 @@ func TestE2E_Sync_MtimeOnlyChange(t *testing.T) {
 	require.NoError(t, os.WriteFile(filePath, []byte("stable content"), 0o644))
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Change only mtime (content stays the same).
 	newTime := time.Now().Add(-24 * time.Hour)
@@ -259,8 +257,7 @@ func TestE2E_Sync_IdempotentReSync(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "c.txt"), []byte("file c"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(subDir, "nested.txt"), []byte("nested content"), 0o644))
 
-	// Sync bidirectional (two syncs for folder creation + file upload).
-	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
+	// Sync bidirectional.
 	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
 
 	// Re-sync — should show no changes.
@@ -295,8 +292,7 @@ func TestE2E_Sync_TransferWorkersConfig(t *testing.T) {
 		))
 	}
 
-	// Sync upload (two syncs for folder creation + file upload).
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	// Sync upload.
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Verify all 5 files exist remotely.

@@ -34,12 +34,8 @@ func TestE2E_ZeroByteFileSync(t *testing.T) {
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Create a zero-byte file locally and upload.
-	// Two syncs needed: first creates the remote folder (commits baseline),
-	// second uploads the file (can now resolve parent ID).
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "empty.txt"), []byte{}, 0o644))
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
-	assert.Contains(t, stderr, "Mode: upload-only")
 
 	// Verify it exists remotely (poll for eventual consistency).
 	pollCLIWithConfigContains(t, opsCfgPath, nil, "empty.txt", pollTimeout, "ls", "/"+testFolder)
@@ -67,12 +63,9 @@ func TestE2E_UnicodeFilenameRoundtrip(t *testing.T) {
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Create file with accented characters and upload.
-	// Two syncs needed: first creates the remote folder (commits baseline),
-	// second uploads the file (can now resolve parent ID).
 	unicodeName := "café résumé.txt"
 	content := "Unicode content: àéîõü"
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, unicodeName), []byte(content), 0o644))
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Verify it exists remotely via ls (poll for eventual consistency).
@@ -105,8 +98,7 @@ func TestE2E_InvalidFilenameRejection(t *testing.T) {
 	// Create an invalid file (CON is a Windows reserved name).
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "CON"), []byte("invalid"), 0o644))
 
-	// Upload — two syncs to ensure folder creation commits before file upload.
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	// Upload.
 	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// The debug stderr should mention skipping the invalid name.
@@ -143,8 +135,7 @@ func TestE2E_RapidFileChurn(t *testing.T) {
 	finalContent := "final version after churn"
 	require.NoError(t, os.WriteFile(filePath, []byte(finalContent), 0o644))
 
-	// Upload — two syncs to ensure folder creation commits before file upload.
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	// Upload.
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Verify final content remotely (poll for eventual consistency).
