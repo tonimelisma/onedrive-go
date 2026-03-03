@@ -212,6 +212,69 @@ The nightly run exercises the token (triggering a refresh if needed) and saves t
 
 ---
 
+## 13. Transient 403 on `/me/drives` (Token Propagation Delay)
+
+**Observed**: CI run #160 post-merge — `GET /me/drives` returned HTTP 403 ("accessDenied") three times in succession, exhausting the retry budget. The token was valid (the preceding `GET /me` returned 200 with user profile data). The failure only affected `with_config/whoami_text`; the identical `no_config/whoami_text` subtest passed in the same run. A re-run passed immediately.
+
+**Cause**: Microsoft's token propagation infrastructure has an eventual-consistency window. After a fresh OIDC token exchange (or token refresh), the `/me/drives` endpoint may reject the token with 403 before all Graph API backend nodes have received the updated authorization state. The `/me` endpoint (user profile) is more resilient — it operates on a different backend that receives token propagation earlier.
+
+This is distinct from a genuine permissions issue (which would fail consistently). The signature is: `/me` succeeds → `/me/drives` returns 403 → retry with the same token eventually succeeds (or doesn't within the retry budget).
+
+**Production workaround** (`internal/graph/drives.go`):
+
+```go
+const driveDiscoveryRetries = 3
+
+func (c *Client) Drives(ctx context.Context) ([]Drive, error) {
+    for attempt := range driveDiscoveryRetries {
+        drives, err := c.drivesList(ctx)
+        if err == nil {
+            return drives, nil
+        }
+        // Only retry on 403 (transient accessDenied during token propagation).
+        var ge *GraphError
+        if !errors.As(err, &ge) || ge.StatusCode != http.StatusForbidden {
+            return nil, err
+        }
+        // ... exponential backoff with jitter ...
+    }
+    return nil, lastErr
+}
+```
+
+The `Drives()` function retries up to 3 times on 403 only, with exponential backoff (1s, 2s, 4s base with ±25% jitter). Non-403 errors fail immediately. Design decision DP-11 (`docs/design/decisions.md`) documents why this retry is domain-specific rather than added to the general retry set — other 403s (permission denied, retention policy) are permanent and should not be retried.
+
+**Test coverage** (`internal/graph/drives_test.go`):
+- `TestDrives_Transient403_Recovers` — simulates 403, 403, 200 (success on 3rd attempt)
+- `TestDrives_Permanent403_ExhaustsRetries` — simulates 403 × 3 (exhausts budget, returns ErrForbidden)
+- `TestDrives_NonForbidden_NoRetry` — simulates 401 (fails immediately, no retry)
+
+**CI evidence**: Run #160 post-merge (run ID 22603739179). The `whoami --text` subcommand calls `client.Drives()` to list all accessible drives (for the human-readable output showing drive details, quota, and type). All 3 retry attempts returned 403. Re-run passed.
+
+**Frequency**: Rare. First observed after dual-token CI setup where both E2E accounts' tokens are refreshed in the same job. The token propagation delay appears more likely when two accounts' tokens are refreshed in quick succession.
+
+---
+
+## 14. GitHub Actions Go Module Cache Corruption
+
+**Observed**: Multiple CI runs (22590221325, 22571687313, 22562639738) show `tar: Cannot open: File exists` errors during the `actions/setup-go` cache restore step. Hundreds of files in the Go toolchain cache (`golang.org/toolchain@v0.0.1-go1.24.4.linux-amd64/`) fail to extract because they already exist on the runner.
+
+**Cause**: The `actions/setup-go@v5` action caches `~/go/pkg/mod` (the Go module cache) between runs. When the GitHub Actions runner image already includes a pre-installed Go toolchain, and the cache was saved from a run that downloaded the same or overlapping toolchain files, the tar extraction step encounters file conflicts. The runner image has the files at the OS level, and the cache also has them — tar can't overwrite.
+
+**Impact**: The tar extraction failure is reported as a **warning** by `actions/setup-go`, not an error. The step completes successfully because the Go toolchain is available from the OS-level installation. Tests still run with the correct Go version. However, GitHub Actions classifies the cache restore step as having annotations (`##[warning]Failed to restore`), which appear in the run summary.
+
+**This is cosmetic** — it does not cause test failures. When these runs fail, it is always due to a separate issue (transient Graph API error, code bug, etc.). The tar warnings are a red herring.
+
+**Workaround**: None needed. The warning is harmless. The Go cache key rotates naturally when `go.sum` changes (cache key includes a hash of `go.sum`). The issue is upstream in `actions/setup-go` and `actions/cache`.
+
+**Evidence**: All affected runs show the pattern:
+```
+##[warning]Failed to restore: "/usr/bin/tar" failed with error: The process '/usr/bin/tar' failed with exit code 2
+```
+In annotations for lint, test, integration, and/or e2e jobs. The actual test pass/fail is independent of this warning.
+
+---
+
 ## Summary: The Normalization Pipeline
 
 All delta responses pass through a 5-stage normalization pipeline (`internal/graph/normalize.go`) before the sync engine sees them:
