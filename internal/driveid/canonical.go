@@ -71,10 +71,18 @@ type CanonicalID struct {
 // an error if the format is invalid (unknown type, empty email, or wrong
 // number of parts for the given type).
 //
-// Part-count rules:
-//   - personal, business: exactly 2 parts (type:email)
-//   - sharepoint: 2-4 parts (type:email[:site[:library]])
-//   - shared: exactly 4 parts (type:email:sourceDriveID:sourceItemID)
+// Validation matrix — allowed part counts and populated fields:
+//
+//	Type        Parts  email  site  library  srcDriveID  srcItemID
+//	──────────  ─────  ─────  ────  ───────  ──────────  ─────────
+//	personal    2      ✓      ·     ·        ·           ·
+//	business    2      ✓      ·     ·        ·           ·
+//	sharepoint  2-4    ✓      opt   opt      ·           ·
+//	shared      4      ✓      ·     ·        ✓           ✓
+//
+// The switch structure (below) is preferred over a table-driven validator
+// because sharepoint accepts a variable number of parts (2-4) while
+// the other types require exact counts.
 func NewCanonicalID(raw string) (CanonicalID, error) {
 	parts := strings.SplitN(raw, ":", canonicalIDMaxParts)
 	if len(parts) < 2 || parts[1] == "" {
