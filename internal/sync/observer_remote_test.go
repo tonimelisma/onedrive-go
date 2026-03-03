@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
@@ -93,44 +96,22 @@ func TestFullDelta_NewFiles(t *testing.T) {
 
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 	events, token, err := obs.FullDelta(context.Background(), "")
-	if err != nil {
-		t.Fatalf("FullDelta: %v", err)
-	}
+	require.NoError(t, err, "FullDelta")
 
-	if token != "https://graph.microsoft.com/delta?token=new-token" {
-		t.Errorf("token = %q, want delta link URL", token)
-	}
+	assert.Equal(t, "https://graph.microsoft.com/delta?token=new-token", token, "token should be delta link URL")
 
-	if len(events) != 2 {
-		t.Fatalf("len(events) = %d, want 2", len(events))
-	}
+	require.Len(t, events, 2)
 
 	// First file.
 	e := events[0]
-	if e.Type != ChangeCreate {
-		t.Errorf("events[0].Type = %v, want ChangeCreate", e.Type)
-	}
-
-	if e.Path != "hello.txt" {
-		t.Errorf("events[0].Path = %q, want %q", e.Path, "hello.txt")
-	}
-
-	if e.Hash != "qxh1" {
-		t.Errorf("events[0].Hash = %q, want %q", e.Hash, "qxh1")
-	}
-
-	if e.Size != 100 {
-		t.Errorf("events[0].Size = %d, want 100", e.Size)
-	}
-
-	if e.Source != SourceRemote {
-		t.Errorf("events[0].Source = %v, want SourceRemote", e.Source)
-	}
+	assert.Equal(t, ChangeCreate, e.Type)
+	assert.Equal(t, "hello.txt", e.Path)
+	assert.Equal(t, "qxh1", e.Hash)
+	assert.Equal(t, int64(100), e.Size)
+	assert.Equal(t, SourceRemote, e.Source)
 
 	// Second file.
-	if events[1].Name != "world.txt" {
-		t.Errorf("events[1].Name = %q, want %q", events[1].Name, "world.txt")
-	}
+	assert.Equal(t, "world.txt", events[1].Name)
 }
 
 func TestFullDelta_ModifiedFile(t *testing.T) {
@@ -159,9 +140,7 @@ func TestFullDelta_ModifiedFile(t *testing.T) {
 
 	obs := NewRemoteObserver(fetcher, baseline, driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "prev-token")
-	if err != nil {
-		t.Fatalf("FullDelta: %v", err)
-	}
+	require.NoError(t, err, "FullDelta")
 
 	// Root and folder produce events too (folder is classified).
 	// Find the file event.
@@ -174,21 +153,10 @@ func TestFullDelta_ModifiedFile(t *testing.T) {
 		}
 	}
 
-	if fileEvent == nil {
-		t.Fatal("file event not found")
-	}
-
-	if fileEvent.Type != ChangeModify {
-		t.Errorf("Type = %v, want ChangeModify", fileEvent.Type)
-	}
-
-	if fileEvent.Path != "docs/readme.md" {
-		t.Errorf("Path = %q, want %q", fileEvent.Path, "docs/readme.md")
-	}
-
-	if fileEvent.Hash != "new-hash" {
-		t.Errorf("Hash = %q, want %q", fileEvent.Hash, "new-hash")
-	}
+	require.NotNil(t, fileEvent, "file event not found")
+	assert.Equal(t, ChangeModify, fileEvent.Type)
+	assert.Equal(t, "docs/readme.md", fileEvent.Path)
+	assert.Equal(t, "new-hash", fileEvent.Hash)
 }
 
 func TestFullDelta_DeletedFile(t *testing.T) {
@@ -212,26 +180,14 @@ func TestFullDelta_DeletedFile(t *testing.T) {
 
 	obs := NewRemoteObserver(fetcher, baseline, driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "token")
-	if err != nil {
-		t.Fatalf("FullDelta: %v", err)
-	}
+	require.NoError(t, err, "FullDelta")
 
-	if len(events) != 1 {
-		t.Fatalf("len(events) = %d, want 1", len(events))
-	}
+	require.Len(t, events, 1)
 
 	e := events[0]
-	if e.Type != ChangeDelete {
-		t.Errorf("Type = %v, want ChangeDelete", e.Type)
-	}
-
-	if !e.IsDeleted {
-		t.Error("IsDeleted = false, want true")
-	}
-
-	if e.Path != "photos/cat.jpg" {
-		t.Errorf("Path = %q, want %q", e.Path, "photos/cat.jpg")
-	}
+	assert.Equal(t, ChangeDelete, e.Type)
+	assert.True(t, e.IsDeleted)
+	assert.Equal(t, "photos/cat.jpg", e.Path)
 }
 
 func TestFullDelta_MovedFile(t *testing.T) {
@@ -267,9 +223,7 @@ func TestFullDelta_MovedFile(t *testing.T) {
 
 	obs := NewRemoteObserver(fetcher, baseline, driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "token")
-	if err != nil {
-		t.Fatalf("FullDelta: %v", err)
-	}
+	require.NoError(t, err, "FullDelta")
 
 	var moveEvent *ChangeEvent
 	for i := range events {
@@ -280,21 +234,10 @@ func TestFullDelta_MovedFile(t *testing.T) {
 		}
 	}
 
-	if moveEvent == nil {
-		t.Fatal("move event not found")
-	}
-
-	if moveEvent.Type != ChangeMove {
-		t.Errorf("Type = %v, want ChangeMove", moveEvent.Type)
-	}
-
-	if moveEvent.Path != "new-folder/doc.txt" {
-		t.Errorf("Path = %q, want %q", moveEvent.Path, "new-folder/doc.txt")
-	}
-
-	if moveEvent.OldPath != "old-folder/doc.txt" {
-		t.Errorf("OldPath = %q, want %q", moveEvent.OldPath, "old-folder/doc.txt")
-	}
+	require.NotNil(t, moveEvent, "move event not found")
+	assert.Equal(t, ChangeMove, moveEvent.Type)
+	assert.Equal(t, "new-folder/doc.txt", moveEvent.Path)
+	assert.Equal(t, "old-folder/doc.txt", moveEvent.OldPath)
 }
 
 func TestFullDelta_MultiPage(t *testing.T) {
@@ -324,21 +267,11 @@ func TestFullDelta_MultiPage(t *testing.T) {
 
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 	events, token, err := obs.FullDelta(context.Background(), "")
-	if err != nil {
-		t.Fatalf("FullDelta: %v", err)
-	}
+	require.NoError(t, err, "FullDelta")
 
-	if len(events) != 2 {
-		t.Fatalf("len(events) = %d, want 2", len(events))
-	}
-
-	if token != "final-delta-link" {
-		t.Errorf("token = %q, want %q", token, "final-delta-link")
-	}
-
-	if fetcher.calls != 2 {
-		t.Errorf("fetcher.calls = %d, want 2", fetcher.calls)
-	}
+	require.Len(t, events, 2)
+	assert.Equal(t, "final-delta-link", token)
+	assert.Equal(t, 2, fetcher.calls)
 }
 
 func TestFullDelta_EmptyDelta(t *testing.T) {
@@ -355,17 +288,10 @@ func TestFullDelta_EmptyDelta(t *testing.T) {
 
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 	events, token, err := obs.FullDelta(context.Background(), "prev-token")
-	if err != nil {
-		t.Fatalf("FullDelta: %v", err)
-	}
+	require.NoError(t, err, "FullDelta")
 
-	if len(events) != 0 {
-		t.Errorf("len(events) = %d, want 0", len(events))
-	}
-
-	if token != "empty-delta-link" {
-		t.Errorf("token = %q, want %q", token, "empty-delta-link")
-	}
+	assert.Empty(t, events)
+	assert.Equal(t, "empty-delta-link", token)
 }
 
 func TestFullDelta_DeltaExpired(t *testing.T) {
@@ -380,9 +306,7 @@ func TestFullDelta_DeltaExpired(t *testing.T) {
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 	_, _, err := obs.FullDelta(context.Background(), "expired-token")
 
-	if !errors.Is(err, ErrDeltaExpired) {
-		t.Errorf("err = %v, want ErrDeltaExpired", err)
-	}
+	assert.ErrorIs(t, err, ErrDeltaExpired)
 }
 
 func TestFullDelta_FetchError(t *testing.T) {
@@ -398,13 +322,8 @@ func TestFullDelta_FetchError(t *testing.T) {
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 	_, _, err := obs.FullDelta(context.Background(), "token")
 
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-
-	if !errors.Is(err, fetchErr) {
-		t.Errorf("err = %v, want wrapped %v", err, fetchErr)
-	}
+	require.Error(t, err, "expected error")
+	assert.ErrorIs(t, err, fetchErr)
 }
 
 func TestFullDelta_SkipsRootItem(t *testing.T) {
@@ -423,13 +342,9 @@ func TestFullDelta_SkipsRootItem(t *testing.T) {
 
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "")
-	if err != nil {
-		t.Fatalf("FullDelta: %v", err)
-	}
+	require.NoError(t, err, "FullDelta")
 
-	if len(events) != 0 {
-		t.Errorf("len(events) = %d, want 0 (root should be skipped)", len(events))
-	}
+	assert.Empty(t, events, "root should be skipped")
 }
 
 func TestFullDelta_PathMaterialization_InFlight(t *testing.T) {
@@ -460,9 +375,7 @@ func TestFullDelta_PathMaterialization_InFlight(t *testing.T) {
 
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "")
-	if err != nil {
-		t.Fatalf("FullDelta: %v", err)
-	}
+	require.NoError(t, err, "FullDelta")
 
 	// Find file event.
 	var fileEvent *ChangeEvent
@@ -474,13 +387,8 @@ func TestFullDelta_PathMaterialization_InFlight(t *testing.T) {
 		}
 	}
 
-	if fileEvent == nil {
-		t.Fatal("file event not found")
-	}
-
-	if fileEvent.Path != "Documents/report.pdf" {
-		t.Errorf("Path = %q, want %q", fileEvent.Path, "Documents/report.pdf")
-	}
+	require.NotNil(t, fileEvent, "file event not found")
+	assert.Equal(t, "Documents/report.pdf", fileEvent.Path)
 }
 
 func TestFullDelta_PathMaterialization_Baseline(t *testing.T) {
@@ -504,17 +412,10 @@ func TestFullDelta_PathMaterialization_Baseline(t *testing.T) {
 
 	obs := NewRemoteObserver(fetcher, baseline, driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "token")
-	if err != nil {
-		t.Fatalf("FullDelta: %v", err)
-	}
+	require.NoError(t, err, "FullDelta")
 
-	if len(events) != 1 {
-		t.Fatalf("len(events) = %d, want 1", len(events))
-	}
-
-	if events[0].Path != "Projects/GoApp/main.go" {
-		t.Errorf("Path = %q, want %q", events[0].Path, "Projects/GoApp/main.go")
-	}
+	require.Len(t, events, 1)
+	assert.Equal(t, "Projects/GoApp/main.go", events[0].Path)
 }
 
 func TestFullDelta_PathMaterialization_Mixed(t *testing.T) {
@@ -542,9 +443,7 @@ func TestFullDelta_PathMaterialization_Mixed(t *testing.T) {
 
 	obs := NewRemoteObserver(fetcher, baseline, driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "token")
-	if err != nil {
-		t.Fatalf("FullDelta: %v", err)
-	}
+	require.NoError(t, err, "FullDelta")
 
 	var fileEvent *ChangeEvent
 	for i := range events {
@@ -555,13 +454,8 @@ func TestFullDelta_PathMaterialization_Mixed(t *testing.T) {
 		}
 	}
 
-	if fileEvent == nil {
-		t.Fatal("file event not found")
-	}
-
-	if fileEvent.Path != "Documents/Reports/q1.pdf" {
-		t.Errorf("Path = %q, want %q", fileEvent.Path, "Documents/Reports/q1.pdf")
-	}
+	require.NotNil(t, fileEvent, "file event not found")
+	assert.Equal(t, "Documents/Reports/q1.pdf", fileEvent.Path)
 }
 
 func TestFullDelta_DeletedItem_MissingName(t *testing.T) {
@@ -586,21 +480,11 @@ func TestFullDelta_DeletedItem_MissingName(t *testing.T) {
 
 	obs := NewRemoteObserver(fetcher, baseline, driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "token")
-	if err != nil {
-		t.Fatalf("FullDelta: %v", err)
-	}
+	require.NoError(t, err, "FullDelta")
 
-	if len(events) != 1 {
-		t.Fatalf("len(events) = %d, want 1", len(events))
-	}
-
-	if events[0].Name != "budget.xlsx" {
-		t.Errorf("Name = %q, want %q (recovered from baseline)", events[0].Name, "budget.xlsx")
-	}
-
-	if events[0].Path != "work/budget.xlsx" {
-		t.Errorf("Path = %q, want %q", events[0].Path, "work/budget.xlsx")
-	}
+	require.Len(t, events, 1)
+	assert.Equal(t, "budget.xlsx", events[0].Name, "recovered from baseline")
+	assert.Equal(t, "work/budget.xlsx", events[0].Path)
 }
 
 func TestFullDelta_DriveIDNormalization(t *testing.T) {
@@ -623,27 +507,16 @@ func TestFullDelta_DriveIDNormalization(t *testing.T) {
 
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(rawDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "")
-	if err != nil {
-		t.Fatalf("FullDelta: %v", err)
-	}
+	require.NoError(t, err, "FullDelta")
 
-	if len(events) != 1 {
-		t.Fatalf("len(events) = %d, want 1", len(events))
-	}
+	require.Len(t, events, 1)
 
 	want := driveid.New("0abc123def456789") // lowercased + zero-padded to 16
-	if !events[0].DriveID.Equal(want) {
-		t.Errorf("DriveID = %q, want %q", events[0].DriveID, want)
-	}
+	assert.True(t, events[0].DriveID.Equal(want), "DriveID = %q, want %q", events[0].DriveID, want)
 
 	// Verify the fetcher was called with the normalized driveID, not the raw one.
-	if len(fetcher.driveIDs) != 1 {
-		t.Fatalf("fetcher called %d times, want 1", len(fetcher.driveIDs))
-	}
-
-	if !fetcher.driveIDs[0].Equal(want) {
-		t.Errorf("fetcher received driveID = %q, want %q (normalized)", fetcher.driveIDs[0], want)
-	}
+	require.Len(t, fetcher.driveIDs, 1, "fetcher call count")
+	assert.True(t, fetcher.driveIDs[0].Equal(want), "fetcher received driveID = %q, want %q (normalized)", fetcher.driveIDs[0], want)
 }
 
 func TestFullDelta_NFCNormalization(t *testing.T) {
@@ -668,21 +541,11 @@ func TestFullDelta_NFCNormalization(t *testing.T) {
 
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "")
-	if err != nil {
-		t.Fatalf("FullDelta: %v", err)
-	}
+	require.NoError(t, err, "FullDelta")
 
-	if len(events) != 1 {
-		t.Fatalf("len(events) = %d, want 1", len(events))
-	}
-
-	if events[0].Name != nfc {
-		t.Errorf("Name = %q, want %q (NFC-normalized)", events[0].Name, nfc)
-	}
-
-	if events[0].Path != nfc {
-		t.Errorf("Path = %q, want %q (NFC-normalized)", events[0].Path, nfc)
-	}
+	require.Len(t, events, 1)
+	assert.Equal(t, nfc, events[0].Name, "NFC-normalized")
+	assert.Equal(t, nfc, events[0].Path, "NFC-normalized")
 }
 
 func TestFullDelta_HashSelection(t *testing.T) {
@@ -713,25 +576,12 @@ func TestFullDelta_HashSelection(t *testing.T) {
 
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "")
-	if err != nil {
-		t.Fatalf("FullDelta: %v", err)
-	}
+	require.NoError(t, err, "FullDelta")
 
-	if len(events) != 3 {
-		t.Fatalf("len(events) = %d, want 3", len(events))
-	}
-
-	if events[0].Hash != "qxh" {
-		t.Errorf("events[0].Hash = %q, want %q (QuickXorHash preferred)", events[0].Hash, "qxh")
-	}
-
-	if events[1].Hash != "sha-only" {
-		t.Errorf("events[1].Hash = %q, want %q (SHA256 fallback)", events[1].Hash, "sha-only")
-	}
-
-	if events[2].Hash != "" {
-		t.Errorf("events[2].Hash = %q, want empty", events[2].Hash)
-	}
+	require.Len(t, events, 3)
+	assert.Equal(t, "qxh", events[0].Hash, "QuickXorHash preferred")
+	assert.Equal(t, "sha-only", events[1].Hash, "SHA256 fallback")
+	assert.Empty(t, events[2].Hash)
 }
 
 func TestFullDelta_TimestampConversion(t *testing.T) {
@@ -753,13 +603,9 @@ func TestFullDelta_TimestampConversion(t *testing.T) {
 
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "")
-	if err != nil {
-		t.Fatalf("FullDelta: %v", err)
-	}
+	require.NoError(t, err, "FullDelta")
 
-	if events[0].Mtime != ts.UnixNano() {
-		t.Errorf("Mtime = %d, want %d", events[0].Mtime, ts.UnixNano())
-	}
+	assert.Equal(t, ts.UnixNano(), events[0].Mtime)
 }
 
 func TestFullDelta_FolderEvent(t *testing.T) {
@@ -779,21 +625,11 @@ func TestFullDelta_FolderEvent(t *testing.T) {
 
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "")
-	if err != nil {
-		t.Fatalf("FullDelta: %v", err)
-	}
+	require.NoError(t, err, "FullDelta")
 
-	if len(events) != 1 {
-		t.Fatalf("len(events) = %d, want 1", len(events))
-	}
-
-	if events[0].ItemType != ItemTypeFolder {
-		t.Errorf("ItemType = %v, want ItemTypeFolder", events[0].ItemType)
-	}
-
-	if events[0].Hash != "" {
-		t.Errorf("Hash = %q, want empty (folders have no hash)", events[0].Hash)
-	}
+	require.Len(t, events, 1)
+	assert.Equal(t, ItemTypeFolder, events[0].ItemType)
+	assert.Empty(t, events[0].Hash, "folders have no hash")
 }
 
 func TestFullDelta_ContextCanceled(t *testing.T) {
@@ -811,13 +647,8 @@ func TestFullDelta_ContextCanceled(t *testing.T) {
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 	_, _, err := obs.FullDelta(ctx, "token")
 
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-
-	if !errors.Is(err, context.Canceled) {
-		t.Errorf("err = %v, want context.Canceled", err)
-	}
+	require.Error(t, err, "expected error")
+	assert.ErrorIs(t, err, context.Canceled)
 }
 
 // ---------------------------------------------------------------------------
@@ -845,9 +676,7 @@ func TestDriveIDNormalization(t *testing.T) {
 			t.Parallel()
 
 			got := driveid.New(tt.in)
-			if got.String() != tt.want {
-				t.Errorf("driveid.New(%q) = %q, want %q", tt.in, got, tt.want)
-			}
+			assert.Equal(t, tt.want, got.String())
 		})
 	}
 }
@@ -871,9 +700,7 @@ func TestClassifyItemType(t *testing.T) {
 			t.Parallel()
 
 			got := classifyItemType(&tt.item)
-			if got != tt.want {
-				t.Errorf("classifyItemType() = %v, want %v", got, tt.want)
-			}
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -896,9 +723,7 @@ func TestSelectHash(t *testing.T) {
 			t.Parallel()
 
 			got := driveops.SelectHash(&tt.item)
-			if got != tt.want {
-				t.Errorf("SelectHash() = %q, want %q", got, tt.want)
-			}
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -907,13 +732,8 @@ func TestToUnixNano(t *testing.T) {
 	t.Parallel()
 
 	ts := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	if got := toUnixNano(ts); got != ts.UnixNano() {
-		t.Errorf("toUnixNano(ts) = %d, want %d", got, ts.UnixNano())
-	}
-
-	if got := toUnixNano(time.Time{}); got != 0 {
-		t.Errorf("toUnixNano(zero) = %d, want 0", got)
-	}
+	assert.Equal(t, ts.UnixNano(), toUnixNano(ts))
+	assert.Equal(t, int64(0), toUnixNano(time.Time{}))
 }
 
 func TestFullDelta_OrphanedItem(t *testing.T) {
@@ -934,22 +754,13 @@ func TestFullDelta_OrphanedItem(t *testing.T) {
 
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "")
-	if err != nil {
-		t.Fatalf("FullDelta: %v", err)
-	}
+	require.NoError(t, err, "FullDelta")
 
-	if len(events) != 1 {
-		t.Fatalf("len(events) = %d, want 1", len(events))
-	}
+	require.Len(t, events, 1)
 
 	// Orphaned item gets a partial path: just its own name.
-	if events[0].Path != "orphan.txt" {
-		t.Errorf("Path = %q, want %q (partial path for orphan)", events[0].Path, "orphan.txt")
-	}
-
-	if events[0].Type != ChangeCreate {
-		t.Errorf("Type = %v, want ChangeCreate", events[0].Type)
-	}
+	assert.Equal(t, "orphan.txt", events[0].Path, "partial path for orphan")
+	assert.Equal(t, ChangeCreate, events[0].Type)
 }
 
 func TestFullDelta_DeletedItem_NotInBaseline(t *testing.T) {
@@ -970,28 +781,18 @@ func TestFullDelta_DeletedItem_NotInBaseline(t *testing.T) {
 
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "token")
-	if err != nil {
-		t.Fatalf("FullDelta: %v", err)
-	}
+	require.NoError(t, err, "FullDelta")
 
-	if len(events) != 1 {
-		t.Fatalf("len(events) = %d, want 1", len(events))
-	}
+	require.Len(t, events, 1)
 
 	e := events[0]
-	if e.Type != ChangeDelete {
-		t.Errorf("Type = %v, want ChangeDelete", e.Type)
-	}
+	assert.Equal(t, ChangeDelete, e.Type)
 
 	// No baseline entry — path is empty.
-	if e.Path != "" {
-		t.Errorf("Path = %q, want empty (no baseline entry)", e.Path)
-	}
+	assert.Empty(t, e.Path, "no baseline entry")
 
 	// Name is still available from the delta item itself.
-	if e.Name != "ephemeral.txt" {
-		t.Errorf("Name = %q, want %q", e.Name, "ephemeral.txt")
-	}
+	assert.Equal(t, "ephemeral.txt", e.Name)
 }
 
 // ---------------------------------------------------------------------------
@@ -1061,17 +862,10 @@ func TestWatch_PollsAtInterval(t *testing.T) {
 	}()
 
 	err := obs.Watch(ctx, "", events, time.Millisecond)
-	if err != nil {
-		t.Fatalf("Watch returned error: %v", err)
-	}
+	require.NoError(t, err, "Watch returned error")
 
-	if fetcher.calls < 2 {
-		t.Errorf("fetcher called %d times, want >= 2", fetcher.calls)
-	}
-
-	if obs.CurrentDeltaToken() == "" {
-		t.Error("delta token should be non-empty after successful polls")
-	}
+	assert.GreaterOrEqual(t, fetcher.calls, 2)
+	assert.NotEmpty(t, obs.CurrentDeltaToken(), "delta token should be non-empty after successful polls")
 }
 
 func TestWatch_BackoffOnError(t *testing.T) {
@@ -1108,22 +902,12 @@ func TestWatch_BackoffOnError(t *testing.T) {
 	}()
 
 	err := obs.Watch(ctx, "", events, time.Minute)
-	if err != nil {
-		t.Fatalf("Watch returned error: %v", err)
-	}
+	require.NoError(t, err, "Watch returned error")
 
 	// First sleep should be 5s (initial backoff), second should be 10s (doubled).
-	if len(sleepDurations) < 2 {
-		t.Fatalf("sleep called %d times, want >= 2 (for backoff)", len(sleepDurations))
-	}
-
-	if sleepDurations[0] != initialWatchBackoff {
-		t.Errorf("first backoff = %v, want %v", sleepDurations[0], initialWatchBackoff)
-	}
-
-	if sleepDurations[1] != initialWatchBackoff*backoffMultiplier {
-		t.Errorf("second backoff = %v, want %v", sleepDurations[1], initialWatchBackoff*backoffMultiplier)
-	}
+	require.GreaterOrEqual(t, len(sleepDurations), 2, "sleep should be called for backoff")
+	assert.Equal(t, initialWatchBackoff, sleepDurations[0])
+	assert.Equal(t, initialWatchBackoff*backoffMultiplier, sleepDurations[1])
 }
 
 func TestWatch_DeltaExpiredResets(t *testing.T) {
@@ -1156,15 +940,11 @@ func TestWatch_DeltaExpiredResets(t *testing.T) {
 	}()
 
 	err := obs.Watch(ctx, "old-expired-token", events, time.Millisecond)
-	if err != nil {
-		t.Fatalf("Watch returned error: %v", err)
-	}
+	require.NoError(t, err, "Watch returned error")
 
 	// After delta expired, token should have been reset to "" for resync,
 	// then updated to the new token from the successful full resync.
-	if obs.CurrentDeltaToken() != "new-full-token" {
-		t.Errorf("token = %q, want %q", obs.CurrentDeltaToken(), "new-full-token")
-	}
+	assert.Equal(t, "new-full-token", obs.CurrentDeltaToken())
 }
 
 func TestWatch_ContextCancellation(t *testing.T) {
@@ -1198,11 +978,9 @@ func TestWatch_ContextCancellation(t *testing.T) {
 
 	select {
 	case err := <-done:
-		if err != nil {
-			t.Errorf("Watch returned %v, want nil", err)
-		}
+		assert.NoError(t, err, "Watch returned error")
 	case <-time.After(5 * time.Second):
-		t.Fatal("Watch did not return after context cancellation")
+		require.Fail(t, "Watch did not return after context cancellation")
 	}
 }
 
@@ -1220,9 +998,7 @@ func TestWatch_CurrentDeltaToken(t *testing.T) {
 	obs.sleepFunc = noopSleep
 
 	// Before Watch starts, token is empty.
-	if obs.CurrentDeltaToken() != "" {
-		t.Errorf("initial token = %q, want empty", obs.CurrentDeltaToken())
-	}
+	assert.Empty(t, obs.CurrentDeltaToken(), "initial token")
 
 	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1239,15 +1015,12 @@ func TestWatch_CurrentDeltaToken(t *testing.T) {
 	}
 
 	err := obs.Watch(ctx, "initial-token", events, time.Millisecond)
-	if err != nil {
-		t.Fatalf("Watch returned error: %v", err)
-	}
+	require.NoError(t, err, "Watch returned error")
 
 	// Token should have been updated by successful polls.
 	token := obs.CurrentDeltaToken()
-	if token != "token-after-poll-1" && token != "token-after-poll-2" {
-		t.Errorf("token = %q, want one of the poll tokens", token)
-	}
+	assert.True(t, token == "token-after-poll-1" || token == "token-after-poll-2",
+		"token = %q, want one of the poll tokens", token)
 }
 
 // TestWatch_IntervalClamping verifies that zero/negative poll intervals are
@@ -1274,9 +1047,7 @@ func TestWatch_IntervalClamping(t *testing.T) {
 	// Pass zero interval — should be clamped to minPollInterval (30s).
 	_ = obs.Watch(t.Context(), "", events, 0)
 
-	if actualSleepDuration != minPollInterval {
-		t.Errorf("sleep duration = %v, want %v (clamped from 0)", actualSleepDuration, minPollInterval)
-	}
+	assert.Equal(t, minPollInterval, actualSleepDuration, "clamped from 0")
 }
 
 func TestFullDelta_RenameInPlace(t *testing.T) {
@@ -1309,9 +1080,7 @@ func TestFullDelta_RenameInPlace(t *testing.T) {
 
 	obs := NewRemoteObserver(fetcher, baseline, driveid.New(testDriveID), testLogger(t))
 	events, _, err := obs.FullDelta(context.Background(), "token")
-	if err != nil {
-		t.Fatalf("FullDelta: %v", err)
-	}
+	require.NoError(t, err, "FullDelta")
 
 	var renameEvent *ChangeEvent
 	for i := range events {
@@ -1322,25 +1091,11 @@ func TestFullDelta_RenameInPlace(t *testing.T) {
 		}
 	}
 
-	if renameEvent == nil {
-		t.Fatal("rename event not found")
-	}
-
-	if renameEvent.Type != ChangeMove {
-		t.Errorf("Type = %v, want ChangeMove", renameEvent.Type)
-	}
-
-	if renameEvent.Path != "docs/new-name.txt" {
-		t.Errorf("Path = %q, want %q", renameEvent.Path, "docs/new-name.txt")
-	}
-
-	if renameEvent.OldPath != "docs/old-name.txt" {
-		t.Errorf("OldPath = %q, want %q", renameEvent.OldPath, "docs/old-name.txt")
-	}
-
-	if renameEvent.Name != "new-name.txt" {
-		t.Errorf("Name = %q, want %q", renameEvent.Name, "new-name.txt")
-	}
+	require.NotNil(t, renameEvent, "rename event not found")
+	assert.Equal(t, ChangeMove, renameEvent.Type)
+	assert.Equal(t, "docs/new-name.txt", renameEvent.Path)
+	assert.Equal(t, "docs/old-name.txt", renameEvent.OldPath)
+	assert.Equal(t, "new-name.txt", renameEvent.Name)
 }
 
 // TestSelectHash_FallbackChain verifies the hash priority: QuickXorHash >
@@ -1380,9 +1135,7 @@ func TestSelectHash_FallbackChain(t *testing.T) {
 			t.Parallel()
 
 			got := driveops.SelectHash(&tt.item)
-			if got != tt.want {
-				t.Errorf("SelectHash() = %q, want %q", got, tt.want)
-			}
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -1408,23 +1161,18 @@ func TestRemoteObserver_LastActivity(t *testing.T) {
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 
 	// Before any poll, LastActivity should be zero.
-	if got := obs.LastActivity(); !got.IsZero() {
-		t.Errorf("LastActivity before poll = %v, want zero", got)
-	}
+	assert.True(t, obs.LastActivity().IsZero(), "LastActivity before poll should be zero")
 
 	before := time.Now()
 
 	_, _, err := obs.FullDelta(t.Context(), "")
-	if err != nil {
-		t.Fatalf("FullDelta: %v", err)
-	}
+	require.NoError(t, err, "FullDelta")
 
 	after := time.Now()
 	activity := obs.LastActivity()
 
-	if activity.Before(before) || activity.After(after) {
-		t.Errorf("LastActivity = %v, want between %v and %v", activity, before, after)
-	}
+	assert.False(t, activity.Before(before), "LastActivity = %v, want >= %v", activity, before)
+	assert.False(t, activity.After(after), "LastActivity = %v, want <= %v", activity, after)
 }
 
 // TestRemoteObserver_Stats verifies that Stats() returns non-zero counters
@@ -1448,19 +1196,12 @@ func TestRemoteObserver_Stats(t *testing.T) {
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 
 	_, _, err := obs.FullDelta(t.Context(), "")
-	if err != nil {
-		t.Fatalf("FullDelta: %v", err)
-	}
+	require.NoError(t, err, "FullDelta")
 
 	stats := obs.Stats()
 
-	if stats.EventsEmitted == 0 {
-		t.Error("EventsEmitted should be > 0 after processing items")
-	}
-
-	if stats.PollsCompleted == 0 {
-		t.Error("PollsCompleted should be > 0 after a successful FullDelta")
-	}
+	assert.NotZero(t, stats.EventsEmitted, "EventsEmitted should be > 0 after processing items")
+	assert.NotZero(t, stats.PollsCompleted, "PollsCompleted should be > 0 after a successful FullDelta")
 }
 
 // TestFullDelta_CrossDriveItems verifies path resolution for items that
@@ -1506,30 +1247,20 @@ func TestFullDelta_CrossDriveItems(t *testing.T) {
 	obs := NewRemoteObserver(fetcher, baseline, primaryDrive, testLogger(t))
 
 	events, _, err := obs.FullDelta(t.Context(), "")
-	if err != nil {
-		t.Fatalf("FullDelta: %v", err)
-	}
+	require.NoError(t, err, "FullDelta")
 
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
+	require.Len(t, events, 1)
 
 	ev := events[0]
 
 	// The item should use sharedDrive as its DriveID.
-	if !ev.DriveID.Equal(sharedDrive) {
-		t.Errorf("DriveID = %v, want %v (shared drive)", ev.DriveID, sharedDrive)
-	}
+	assert.True(t, ev.DriveID.Equal(sharedDrive), "DriveID = %v, want %v (shared drive)", ev.DriveID, sharedDrive)
 
 	// Path should be resolved through the primary drive's baseline.
-	if ev.Path != "shared-folder/shared-doc.txt" {
-		t.Errorf("Path = %q, want %q", ev.Path, "shared-folder/shared-doc.txt")
-	}
+	assert.Equal(t, "shared-folder/shared-doc.txt", ev.Path)
 
 	// Since the item is new (not in baseline), it should be a Create.
-	if ev.Type != ChangeCreate {
-		t.Errorf("Type = %v, want ChangeCreate", ev.Type)
-	}
+	assert.Equal(t, ChangeCreate, ev.Type)
 }
 
 // TestFullDelta_PersonalVaultExcluded verifies that items with
@@ -1570,18 +1301,11 @@ func TestFullDelta_PersonalVaultExcluded(t *testing.T) {
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 
 	events, _, err := obs.FullDelta(t.Context(), "")
-	if err != nil {
-		t.Fatalf("FullDelta: %v", err)
-	}
+	require.NoError(t, err, "FullDelta")
 
 	// Only the normal file should produce an event — vault items are excluded.
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event (vault excluded), got %d", len(events))
-	}
-
-	if events[0].Name != "readme.txt" {
-		t.Errorf("event Name = %q, want %q", events[0].Name, "readme.txt")
-	}
+	require.Len(t, events, 1, "vault excluded")
+	assert.Equal(t, "readme.txt", events[0].Name)
 }
 
 // TestFullDelta_VaultChildBeforeParent verifies that vault descendants are
@@ -1625,19 +1349,12 @@ func TestFullDelta_VaultChildBeforeParent(t *testing.T) {
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 
 	events, _, err := obs.FullDelta(t.Context(), "")
-	if err != nil {
-		t.Fatalf("FullDelta: %v", err)
-	}
+	require.NoError(t, err, "FullDelta")
 
 	// Only the normal file should produce an event — vault child must be
 	// skipped regardless of ordering within the delta page.
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event (vault child skipped despite ordering), got %d", len(events))
-	}
-
-	if events[0].Name != "readme.txt" {
-		t.Errorf("event Name = %q, want %q", events[0].Name, "readme.txt")
-	}
+	require.Len(t, events, 1, "vault child skipped despite ordering")
+	assert.Equal(t, "readme.txt", events[0].Name)
 }
 
 // TestObserverStats_HashesComputed verifies that the HashesComputed counter
@@ -1672,12 +1389,8 @@ func TestObserverStats_HashesComputed(t *testing.T) {
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
 
 	_, _, err := obs.FullDelta(t.Context(), "")
-	if err != nil {
-		t.Fatalf("FullDelta: %v", err)
-	}
+	require.NoError(t, err, "FullDelta")
 
 	stats := obs.Stats()
-	if stats.HashesComputed != 2 {
-		t.Errorf("HashesComputed = %d, want 2 (items with hashes)", stats.HashesComputed)
-	}
+	assert.Equal(t, int64(2), stats.HashesComputed, "items with hashes")
 }

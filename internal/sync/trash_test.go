@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDefaultTrashFunc_NonDarwin(t *testing.T) {
@@ -17,14 +20,10 @@ func TestDefaultTrashFunc_NonDarwin(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "file.txt")
 
-	if err := os.WriteFile(path, []byte("data"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(path, []byte("data"), 0o600))
 
 	err := defaultTrashFunc(path)
-	if err == nil {
-		t.Fatal("expected error on non-darwin platform")
-	}
+	require.Error(t, err, "expected error on non-darwin platform")
 }
 
 func TestMoveToMacOSTrash(t *testing.T) {
@@ -38,19 +37,14 @@ func TestMoveToMacOSTrash(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "trash-test-file.txt")
 
-	if err := os.WriteFile(path, []byte("trash me"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(path, []byte("trash me"), 0o600))
 
 	// Move to trash.
-	if err := moveToMacOSTrash(path); err != nil {
-		t.Fatalf("moveToMacOSTrash: %v", err)
-	}
+	require.NoError(t, moveToMacOSTrash(path))
 
 	// Original should be gone.
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Error("file should have been moved to trash")
-	}
+	_, err := os.Stat(path)
+	assert.True(t, os.IsNotExist(err), "file should have been moved to trash")
 
 	// Clean up from trash.
 	home, _ := os.UserHomeDir()
@@ -66,17 +60,13 @@ func TestMoveToMacOSTrash_NameCollision(t *testing.T) {
 	t.Parallel()
 
 	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	trashDir := filepath.Join(home, ".Trash")
 
 	// Create a file in trash with the same name to force collision handling.
 	collisionPath := filepath.Join(trashDir, "trash-collision-test.txt")
-	if err := os.WriteFile(collisionPath, []byte("existing"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(collisionPath, []byte("existing"), 0o600))
 
 	defer os.Remove(collisionPath)
 
@@ -84,18 +74,12 @@ func TestMoveToMacOSTrash_NameCollision(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "trash-collision-test.txt")
 
-	if err := os.WriteFile(path, []byte("new"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := moveToMacOSTrash(path); err != nil {
-		t.Fatalf("moveToMacOSTrash with collision: %v", err)
-	}
+	require.NoError(t, os.WriteFile(path, []byte("new"), 0o600))
+	require.NoError(t, moveToMacOSTrash(path))
 
 	// Original should be gone.
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Error("file should have been moved to trash")
-	}
+	_, err = os.Stat(path)
+	assert.True(t, os.IsNotExist(err), "file should have been moved to trash")
 
 	// Clean up: the collision file should be "trash-collision-test 2.txt".
 	suffix2 := filepath.Join(trashDir, "trash-collision-test 2.txt")

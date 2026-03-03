@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
@@ -39,26 +42,13 @@ func TestBuffer_AddSingle(t *testing.T) {
 	})
 
 	result := buf.FlushImmediate()
-	if len(result) != 1 {
-		t.Fatalf("len(result) = %d, want 1", len(result))
-	}
+	require.Len(t, result, 1)
 
 	pc := result[0]
-	if pc.Path != "buffer-notes.txt" {
-		t.Errorf("Path = %q, want %q", pc.Path, "buffer-notes.txt")
-	}
-
-	if len(pc.RemoteEvents) != 1 {
-		t.Fatalf("len(RemoteEvents) = %d, want 1", len(pc.RemoteEvents))
-	}
-
-	if pc.RemoteEvents[0].Type != ChangeCreate {
-		t.Errorf("RemoteEvents[0].Type = %v, want ChangeCreate", pc.RemoteEvents[0].Type)
-	}
-
-	if len(pc.LocalEvents) != 0 {
-		t.Errorf("len(LocalEvents) = %d, want 0", len(pc.LocalEvents))
-	}
+	assert.Equal(t, "buffer-notes.txt", pc.Path)
+	require.Len(t, pc.RemoteEvents, 1)
+	assert.Equal(t, ChangeCreate, pc.RemoteEvents[0].Type)
+	assert.Empty(t, pc.LocalEvents)
 }
 
 func TestBuffer_AddMultiplePaths(t *testing.T) {
@@ -77,27 +67,15 @@ func TestBuffer_AddMultiplePaths(t *testing.T) {
 	})
 
 	result := buf.FlushImmediate()
-	if len(result) != 2 {
-		t.Fatalf("len(result) = %d, want 2", len(result))
-	}
+	require.Len(t, result, 2)
 
 	alpha := findPathChanges(result, "buffer-alpha.txt")
-	if alpha == nil {
-		t.Fatal("buffer-alpha.txt not found")
-	}
-
-	if len(alpha.RemoteEvents) != 1 {
-		t.Errorf("alpha RemoteEvents = %d, want 1", len(alpha.RemoteEvents))
-	}
+	require.NotNil(t, alpha, "buffer-alpha.txt not found")
+	assert.Len(t, alpha.RemoteEvents, 1)
 
 	beta := findPathChanges(result, "buffer-beta.csv")
-	if beta == nil {
-		t.Fatal("buffer-beta.csv not found")
-	}
-
-	if len(beta.LocalEvents) != 1 {
-		t.Errorf("beta LocalEvents = %d, want 1", len(beta.LocalEvents))
-	}
+	require.NotNil(t, beta, "buffer-beta.csv not found")
+	assert.Len(t, beta.LocalEvents, 1)
 }
 
 func TestBuffer_AddSamePathRemote(t *testing.T) {
@@ -116,22 +94,12 @@ func TestBuffer_AddSamePathRemote(t *testing.T) {
 	})
 
 	result := buf.FlushImmediate()
-	if len(result) != 1 {
-		t.Fatalf("len(result) = %d, want 1", len(result))
-	}
+	require.Len(t, result, 1)
 
 	pc := result[0]
-	if len(pc.RemoteEvents) != 2 {
-		t.Errorf("RemoteEvents = %d, want 2", len(pc.RemoteEvents))
-	}
-
-	if pc.RemoteEvents[0].Type != ChangeCreate {
-		t.Errorf("RemoteEvents[0].Type = %v, want ChangeCreate", pc.RemoteEvents[0].Type)
-	}
-
-	if pc.RemoteEvents[1].Type != ChangeModify {
-		t.Errorf("RemoteEvents[1].Type = %v, want ChangeModify", pc.RemoteEvents[1].Type)
-	}
+	assert.Len(t, pc.RemoteEvents, 2)
+	assert.Equal(t, ChangeCreate, pc.RemoteEvents[0].Type)
+	assert.Equal(t, ChangeModify, pc.RemoteEvents[1].Type)
 }
 
 func TestBuffer_AddSamePathLocal(t *testing.T) {
@@ -150,13 +118,8 @@ func TestBuffer_AddSamePathLocal(t *testing.T) {
 	})
 
 	result := buf.FlushImmediate()
-	if len(result) != 1 {
-		t.Fatalf("len(result) = %d, want 1", len(result))
-	}
-
-	if len(result[0].LocalEvents) != 2 {
-		t.Errorf("LocalEvents = %d, want 2", len(result[0].LocalEvents))
-	}
+	require.Len(t, result, 1)
+	assert.Len(t, result[0].LocalEvents, 2)
 }
 
 func TestBuffer_AddMixedSources(t *testing.T) {
@@ -175,18 +138,11 @@ func TestBuffer_AddMixedSources(t *testing.T) {
 	})
 
 	result := buf.FlushImmediate()
-	if len(result) != 1 {
-		t.Fatalf("len(result) = %d, want 1", len(result))
-	}
+	require.Len(t, result, 1)
 
 	pc := result[0]
-	if len(pc.RemoteEvents) != 1 {
-		t.Errorf("RemoteEvents = %d, want 1", len(pc.RemoteEvents))
-	}
-
-	if len(pc.LocalEvents) != 1 {
-		t.Errorf("LocalEvents = %d, want 1", len(pc.LocalEvents))
-	}
+	assert.Len(t, pc.RemoteEvents, 1)
+	assert.Len(t, pc.LocalEvents, 1)
 }
 
 func TestBuffer_MoveDualKeying(t *testing.T) {
@@ -208,60 +164,25 @@ func TestBuffer_MoveDualKeying(t *testing.T) {
 	result := buf.FlushImmediate()
 
 	// Two paths: the new location (move) and old location (synthetic delete).
-	if len(result) != 2 {
-		t.Fatalf("len(result) = %d, want 2", len(result))
-	}
+	require.Len(t, result, 2)
 
 	newPC := findPathChanges(result, "buffer-new-folder/moved.txt")
-	if newPC == nil {
-		t.Fatal("new path not found")
-	}
-
-	if len(newPC.RemoteEvents) != 1 {
-		t.Fatalf("new path RemoteEvents = %d, want 1", len(newPC.RemoteEvents))
-	}
-
-	if newPC.RemoteEvents[0].Type != ChangeMove {
-		t.Errorf("new path event Type = %v, want ChangeMove", newPC.RemoteEvents[0].Type)
-	}
+	require.NotNil(t, newPC, "new path not found")
+	require.Len(t, newPC.RemoteEvents, 1)
+	assert.Equal(t, ChangeMove, newPC.RemoteEvents[0].Type)
 
 	oldPC := findPathChanges(result, "buffer-old-folder/moved.txt")
-	if oldPC == nil {
-		t.Fatal("old path not found")
-	}
-
-	if len(oldPC.RemoteEvents) != 1 {
-		t.Fatalf("old path RemoteEvents = %d, want 1", len(oldPC.RemoteEvents))
-	}
+	require.NotNil(t, oldPC, "old path not found")
+	require.Len(t, oldPC.RemoteEvents, 1)
 
 	synth := oldPC.RemoteEvents[0]
-	if synth.Type != ChangeDelete {
-		t.Errorf("synthetic Type = %v, want ChangeDelete", synth.Type)
-	}
-
-	if !synth.IsDeleted {
-		t.Error("synthetic IsDeleted = false, want true")
-	}
-
-	if synth.ItemID != "buf-m1" {
-		t.Errorf("synthetic ItemID = %q, want %q", synth.ItemID, "buf-m1")
-	}
-
-	if synth.Name != "moved.txt" {
-		t.Errorf("synthetic Name = %q, want %q", synth.Name, "moved.txt")
-	}
-
-	if !synth.DriveID.Equal(driveid.New(testDriveID)) {
-		t.Errorf("synthetic DriveID = %q, want %q", synth.DriveID, driveid.New(testDriveID))
-	}
-
-	if synth.ParentID != "buf-parent-1" {
-		t.Errorf("synthetic ParentID = %q, want %q", synth.ParentID, "buf-parent-1")
-	}
-
-	if synth.ItemType != ItemTypeFile {
-		t.Errorf("synthetic ItemType = %v, want ItemTypeFile", synth.ItemType)
-	}
+	assert.Equal(t, ChangeDelete, synth.Type)
+	assert.True(t, synth.IsDeleted)
+	assert.Equal(t, "buf-m1", synth.ItemID)
+	assert.Equal(t, "moved.txt", synth.Name)
+	assert.True(t, synth.DriveID.Equal(driveid.New(testDriveID)))
+	assert.Equal(t, "buf-parent-1", synth.ParentID)
+	assert.Equal(t, ItemTypeFile, synth.ItemType)
 }
 
 func TestBuffer_MoveNoOldPath(t *testing.T) {
@@ -282,13 +203,8 @@ func TestBuffer_MoveNoOldPath(t *testing.T) {
 	result := buf.FlushImmediate()
 
 	// Only the new path — no synthetic delete because OldPath is empty.
-	if len(result) != 1 {
-		t.Fatalf("len(result) = %d, want 1", len(result))
-	}
-
-	if result[0].Path != "buffer-dest/file.txt" {
-		t.Errorf("Path = %q, want %q", result[0].Path, "buffer-dest/file.txt")
-	}
+	require.Len(t, result, 1)
+	assert.Equal(t, "buffer-dest/file.txt", result[0].Path)
 }
 
 func TestBuffer_AddAll(t *testing.T) {
@@ -316,27 +232,15 @@ func TestBuffer_AddAll(t *testing.T) {
 	buf.AddAll(events)
 	result := buf.FlushImmediate()
 
-	if len(result) != 2 {
-		t.Fatalf("len(result) = %d, want 2", len(result))
-	}
+	require.Len(t, result, 2)
 
 	a := findPathChanges(result, "buffer-batch-a.txt")
-	if a == nil {
-		t.Fatal("buffer-batch-a.txt not found")
-	}
-
-	if len(a.RemoteEvents) != 2 {
-		t.Errorf("buffer-batch-a.txt RemoteEvents = %d, want 2", len(a.RemoteEvents))
-	}
+	require.NotNil(t, a, "buffer-batch-a.txt not found")
+	assert.Len(t, a.RemoteEvents, 2)
 
 	b := findPathChanges(result, "buffer-batch-b.txt")
-	if b == nil {
-		t.Fatal("buffer-batch-b.txt not found")
-	}
-
-	if len(b.LocalEvents) != 1 {
-		t.Errorf("buffer-batch-b.txt LocalEvents = %d, want 1", len(b.LocalEvents))
-	}
+	require.NotNil(t, b, "buffer-batch-b.txt not found")
+	assert.Len(t, b.LocalEvents, 1)
 }
 
 func TestBuffer_AddAllWithMoves(t *testing.T) {
@@ -360,22 +264,12 @@ func TestBuffer_AddAllWithMoves(t *testing.T) {
 	result := buf.FlushImmediate()
 
 	// 3 paths: new path, old path (synthetic delete), unrelated.
-	if len(result) != 3 {
-		t.Fatalf("len(result) = %d, want 3", len(result))
-	}
+	require.Len(t, result, 3)
 
 	oldPC := findPathChanges(result, "buffer-mv-old/data.json")
-	if oldPC == nil {
-		t.Fatal("old path not found for move in batch")
-	}
-
-	if len(oldPC.LocalEvents) != 1 {
-		t.Fatalf("old path LocalEvents = %d, want 1", len(oldPC.LocalEvents))
-	}
-
-	if oldPC.LocalEvents[0].Type != ChangeDelete {
-		t.Errorf("old path Type = %v, want ChangeDelete", oldPC.LocalEvents[0].Type)
-	}
+	require.NotNil(t, oldPC, "old path not found for move in batch")
+	require.Len(t, oldPC.LocalEvents, 1)
+	assert.Equal(t, ChangeDelete, oldPC.LocalEvents[0].Type)
 }
 
 func TestBuffer_FlushEmpty(t *testing.T) {
@@ -384,9 +278,7 @@ func TestBuffer_FlushEmpty(t *testing.T) {
 	buf := NewBuffer(testLogger(t))
 	result := buf.FlushImmediate()
 
-	if result != nil {
-		t.Errorf("FlushImmediate() = %v, want nil", result)
-	}
+	assert.Nil(t, result)
 }
 
 func TestBuffer_FlushClears(t *testing.T) {
@@ -400,18 +292,11 @@ func TestBuffer_FlushClears(t *testing.T) {
 	})
 
 	first := buf.FlushImmediate()
-	if len(first) != 1 {
-		t.Fatalf("first flush: len = %d, want 1", len(first))
-	}
+	require.Len(t, first, 1)
 
 	second := buf.FlushImmediate()
-	if second != nil {
-		t.Errorf("second flush: got %v, want nil", second)
-	}
-
-	if buf.Len() != 0 {
-		t.Errorf("Len() = %d, want 0 after flush", buf.Len())
-	}
+	assert.Nil(t, second)
+	assert.Equal(t, 0, buf.Len())
 }
 
 func TestBuffer_FlushSorted(t *testing.T) {
@@ -434,21 +319,11 @@ func TestBuffer_FlushSorted(t *testing.T) {
 	}
 
 	result := buf.FlushImmediate()
-	if len(result) != 3 {
-		t.Fatalf("len(result) = %d, want 3", len(result))
-	}
+	require.Len(t, result, 3)
 
-	if result[0].Path != "aaa/buffer-first.txt" {
-		t.Errorf("result[0].Path = %q, want %q", result[0].Path, "aaa/buffer-first.txt")
-	}
-
-	if result[1].Path != "mmm/buffer-middle.txt" {
-		t.Errorf("result[1].Path = %q, want %q", result[1].Path, "mmm/buffer-middle.txt")
-	}
-
-	if result[2].Path != "zzz/buffer-last.txt" {
-		t.Errorf("result[2].Path = %q, want %q", result[2].Path, "zzz/buffer-last.txt")
-	}
+	assert.Equal(t, "aaa/buffer-first.txt", result[0].Path)
+	assert.Equal(t, "mmm/buffer-middle.txt", result[1].Path)
+	assert.Equal(t, "zzz/buffer-last.txt", result[2].Path)
 }
 
 func TestBuffer_Len(t *testing.T) {
@@ -456,9 +331,7 @@ func TestBuffer_Len(t *testing.T) {
 
 	buf := NewBuffer(testLogger(t))
 
-	if buf.Len() != 0 {
-		t.Errorf("initial Len() = %d, want 0", buf.Len())
-	}
+	assert.Equal(t, 0, buf.Len())
 
 	buf.Add(&ChangeEvent{
 		Source: SourceRemote, Type: ChangeCreate,
@@ -466,9 +339,7 @@ func TestBuffer_Len(t *testing.T) {
 		ItemID: "buf-l1", DriveID: driveid.New(testDriveID), ItemType: ItemTypeFile,
 	})
 
-	if buf.Len() != 1 {
-		t.Errorf("Len() after 1 add = %d, want 1", buf.Len())
-	}
+	assert.Equal(t, 1, buf.Len())
 
 	// Same path again — Len should not increase.
 	buf.Add(&ChangeEvent{
@@ -477,9 +348,7 @@ func TestBuffer_Len(t *testing.T) {
 		ItemType: ItemTypeFile,
 	})
 
-	if buf.Len() != 1 {
-		t.Errorf("Len() after same-path add = %d, want 1", buf.Len())
-	}
+	assert.Equal(t, 1, buf.Len())
 
 	// Different path.
 	buf.Add(&ChangeEvent{
@@ -488,9 +357,7 @@ func TestBuffer_Len(t *testing.T) {
 		ItemType: ItemTypeFile,
 	})
 
-	if buf.Len() != 2 {
-		t.Errorf("Len() after new-path add = %d, want 2", buf.Len())
-	}
+	assert.Equal(t, 2, buf.Len())
 }
 
 func TestBuffer_ThreadSafety_DifferentPaths(t *testing.T) {
@@ -532,16 +399,12 @@ func TestBuffer_ThreadSafety_DifferentPaths(t *testing.T) {
 
 	// Each goroutine adds 50 events to unique paths (goroutine ID + event index).
 	wantPaths := goroutines * eventsPerGoroutine
-	if len(result) != wantPaths {
-		t.Errorf("len(result) = %d, want %d", len(result), wantPaths)
-	}
+	assert.Len(t, result, wantPaths)
 
 	// Validate each path has exactly 1 event.
 	for _, pc := range result {
 		total := len(pc.RemoteEvents) + len(pc.LocalEvents)
-		if total != 1 {
-			t.Errorf("path %q has %d events, want 1", pc.Path, total)
-		}
+		assert.Equal(t, 1, total, "path %q should have exactly 1 event", pc.Path)
 	}
 }
 
@@ -582,21 +445,15 @@ func TestBuffer_ThreadSafety(t *testing.T) {
 	wg.Wait()
 
 	// Verify buffer state is consistent.
-	if buf.Len() != 1 {
-		t.Errorf("Len() = %d, want 1 (all events target same path)", buf.Len())
-	}
+	assert.Equal(t, 1, buf.Len(), "all events target same path")
 
 	result := buf.FlushImmediate()
-	if len(result) != 1 {
-		t.Fatalf("len(result) = %d, want 1", len(result))
-	}
+	require.Len(t, result, 1)
 
 	totalEvents := len(result[0].RemoteEvents) + len(result[0].LocalEvents)
 	wantTotal := goroutines * eventsPerGoroutine
 
-	if totalEvents != wantTotal {
-		t.Errorf("total events = %d, want %d", totalEvents, wantTotal)
-	}
+	assert.Equal(t, wantTotal, totalEvents)
 }
 
 // ---------------------------------------------------------------------------
@@ -626,11 +483,9 @@ func TestFlushDebounced_SingleBatch(t *testing.T) {
 
 	select {
 	case batch := <-out:
-		if len(batch) != 2 {
-			t.Errorf("batch len = %d, want 2", len(batch))
-		}
+		assert.Len(t, batch, 2)
 	case <-time.After(5 * time.Second):
-		t.Fatal("timeout waiting for debounced batch")
+		require.Fail(t, "timeout waiting for debounced batch")
 	}
 
 	cancel()
@@ -657,11 +512,9 @@ func TestFlushDebounced_MultipleWaves(t *testing.T) {
 
 	select {
 	case batch := <-out:
-		if len(batch) != 1 {
-			t.Errorf("wave 1 batch len = %d, want 1", len(batch))
-		}
+		assert.Len(t, batch, 1)
 	case <-time.After(5 * time.Second):
-		t.Fatal("timeout waiting for wave 1")
+		require.Fail(t, "timeout waiting for wave 1")
 	}
 
 	// Wave 2.
@@ -673,11 +526,9 @@ func TestFlushDebounced_MultipleWaves(t *testing.T) {
 
 	select {
 	case batch := <-out:
-		if len(batch) != 1 {
-			t.Errorf("wave 2 batch len = %d, want 1", len(batch))
-		}
+		assert.Len(t, batch, 1)
 	case <-time.After(5 * time.Second):
-		t.Fatal("timeout waiting for wave 2")
+		require.Fail(t, "timeout waiting for wave 2")
 	}
 
 	cancel()
@@ -712,11 +563,9 @@ func TestFlushDebounced_DebounceResets(t *testing.T) {
 	// Both events should arrive in a single batch.
 	select {
 	case batch := <-out:
-		if len(batch) != 2 {
-			t.Errorf("batch len = %d, want 2 (debounce should have combined)", len(batch))
-		}
+		assert.Len(t, batch, 2, "debounce should have combined")
 	case <-time.After(5 * time.Second):
-		t.Fatal("timeout waiting for debounced batch")
+		require.Fail(t, "timeout waiting for debounced batch")
 	}
 
 	cancel()
@@ -752,9 +601,7 @@ func TestFlushDebounced_ContextCancel(t *testing.T) {
 		}
 	}
 
-	if !gotBatch {
-		t.Error("expected a final drain batch on context cancel")
-	}
+	assert.True(t, gotBatch, "expected a final drain batch on context cancel")
 }
 
 func TestFlushDebounced_ConcurrentAddAndFlush(t *testing.T) {
@@ -800,7 +647,7 @@ func TestFlushDebounced_ConcurrentAddAndFlush(t *testing.T) {
 		case batch := <-out:
 			totalPaths += len(batch)
 		case <-timeout:
-			t.Fatalf("timeout: got %d paths, want %d", totalPaths, goroutines*eventsPerGoroutine)
+			require.Fail(t, fmt.Sprintf("timeout: got %d paths, want %d", totalPaths, goroutines*eventsPerGoroutine))
 		}
 	}
 
@@ -849,7 +696,7 @@ func TestBuffer_FlushDebounced_FinalDrainNoDeadlock(t *testing.T) {
 	case <-done:
 		// Success — goroutine exited cleanly.
 	case <-time.After(5 * time.Second):
-		t.Fatal("debounce goroutine deadlocked on final drain (B-103)")
+		require.Fail(t, "debounce goroutine deadlocked on final drain (B-103)")
 	}
 }
 
@@ -879,9 +726,7 @@ func TestBuffer_MaxPaths_DropsNewPaths(t *testing.T) {
 	})
 
 	result := buf.FlushImmediate()
-	if len(result) != 2 {
-		t.Errorf("len(result) = %d, want 2 (third path should be dropped)", len(result))
-	}
+	assert.Len(t, result, 2, "third path should be dropped")
 }
 
 func TestBuffer_MaxPaths_AllowsExistingPaths(t *testing.T) {
@@ -902,14 +747,10 @@ func TestBuffer_MaxPaths_AllowsExistingPaths(t *testing.T) {
 	})
 
 	result := buf.FlushImmediate()
-	if len(result) != 1 {
-		t.Fatalf("len(result) = %d, want 1", len(result))
-	}
+	require.Len(t, result, 1)
 
 	total := len(result[0].RemoteEvents) + len(result[0].LocalEvents)
-	if total != 2 {
-		t.Errorf("total events = %d, want 2 (existing path should accept new events)", total)
-	}
+	assert.Equal(t, 2, total, "existing path should accept new events")
 }
 
 func TestBuffer_MaxPaths_ZeroUnlimited(t *testing.T) {
@@ -927,9 +768,7 @@ func TestBuffer_MaxPaths_ZeroUnlimited(t *testing.T) {
 	}
 
 	result := buf.FlushImmediate()
-	if len(result) != 100 {
-		t.Errorf("len(result) = %d, want 100 (zero maxPaths = unlimited)", len(result))
-	}
+	assert.Len(t, result, 100, "zero maxPaths = unlimited")
 }
 
 // ---------------------------------------------------------------------------
@@ -973,13 +812,8 @@ func TestBuffer_WatchAndSafetyScanConflictingTypes(t *testing.T) {
 
 	// Buffer should group both under a single PathChanges entry.
 	result := buf.FlushImmediate()
-	if len(result) != 1 {
-		t.Fatalf("len(result) = %d, want 1 (same path)", len(result))
-	}
-
-	if len(result[0].LocalEvents) != 2 {
-		t.Fatalf("LocalEvents = %d, want 2", len(result[0].LocalEvents))
-	}
+	require.Len(t, result, 1, "same path")
+	require.Len(t, result[0].LocalEvents, 2)
 
 	// Planner should produce a single action (upload) for a new local file
 	// with no baseline and no remote state. The planner takes the last local
@@ -987,17 +821,9 @@ func TestBuffer_WatchAndSafetyScanConflictingTypes(t *testing.T) {
 	planner := NewPlanner(testLogger(t))
 
 	plan, err := planner.Plan(result, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
-
-	if len(plan.Actions) != 1 {
-		t.Fatalf("actions = %d, want 1 (single upload for local-only file)", len(plan.Actions))
-	}
-
-	if plan.Actions[0].Type != ActionUpload {
-		t.Errorf("action type = %v, want ActionUpload", plan.Actions[0].Type)
-	}
+	require.NoError(t, err, "Plan()")
+	require.Len(t, plan.Actions, 1, "single upload for local-only file")
+	assert.Equal(t, ActionUpload, plan.Actions[0].Type)
 }
 
 // ---------------------------------------------------------------------------
@@ -1041,21 +867,17 @@ func TestFlushDebounced_SlowConsumer(t *testing.T) {
 	// Now consume the first batch (unblock the debounce loop).
 	select {
 	case batch1 := <-out:
-		if len(batch1) == 0 {
-			t.Fatal("first batch is empty")
-		}
+		require.NotEmpty(t, batch1, "first batch is empty")
 	case <-time.After(5 * time.Second):
-		t.Fatal("timeout waiting for first batch")
+		require.Fail(t, "timeout waiting for first batch")
 	}
 
 	// The second wave should arrive as an accumulated batch.
 	select {
 	case batch2 := <-out:
-		if len(batch2) != 5 {
-			t.Errorf("second batch len = %d, want 5 (accumulated while consumer was slow)", len(batch2))
-		}
+		assert.Len(t, batch2, 5, "accumulated while consumer was slow")
 	case <-time.After(5 * time.Second):
-		t.Fatal("timeout waiting for accumulated batch")
+		require.Fail(t, "timeout waiting for accumulated batch")
 	}
 
 	cancel()
@@ -1085,18 +907,11 @@ func TestFlushDebounced_PanicsOnDoubleCall(t *testing.T) {
 
 	defer func() {
 		r := recover()
-		if r == nil {
-			t.Fatal("expected panic on second FlushDebounced call")
-		}
+		require.NotNil(t, r, "expected panic on second FlushDebounced call")
 
 		msg, ok := r.(string)
-		if !ok {
-			t.Fatalf("expected string panic, got %T: %v", r, r)
-		}
-
-		if msg != "sync: FlushDebounced called twice on the same Buffer" {
-			t.Errorf("unexpected panic message: %s", msg)
-		}
+		require.True(t, ok, "expected string panic, got %T: %v", r, r)
+		assert.Equal(t, "sync: FlushDebounced called twice on the same Buffer", msg)
 	}()
 
 	_ = buf.FlushDebounced(ctx, time.Hour)

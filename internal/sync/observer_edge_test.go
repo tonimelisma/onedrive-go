@@ -49,8 +49,9 @@ func TestRacilyClean_SameSecondDetection(t *testing.T) {
 	// The file is UNCHANGED, but the racily-clean guard forces a hash check.
 	// Since the hash matches, no change event should be emitted.
 	for _, ev := range events {
-		if ev.Path == "racily-clean.txt" && ev.Type == ChangeModify {
-			t.Error("racily-clean file with matching hash should not emit ChangeModify")
+		if ev.Path == "racily-clean.txt" {
+			assert.NotEqual(t, ChangeModify, ev.Type,
+				"racily-clean file with matching hash should not emit ChangeModify")
 		}
 	}
 }
@@ -86,8 +87,9 @@ func TestMtimeChangeWithoutContentChange(t *testing.T) {
 
 	// Mtime differs but hash matches → no event should be emitted.
 	for _, ev := range events {
-		if ev.Path == "touched.txt" && ev.Type == ChangeModify {
-			t.Error("mtime change without content change should not emit ChangeModify")
+		if ev.Path == "touched.txt" {
+			assert.NotEqual(t, ChangeModify, ev.Type,
+				"mtime change without content change should not emit ChangeModify")
 		}
 	}
 }

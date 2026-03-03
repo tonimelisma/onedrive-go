@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -89,7 +90,8 @@ func (s *sleepRecorder) waitForCalls(t *testing.T, n int) {
 		select {
 		case <-ch:
 		case <-deadline:
-			t.Fatalf("timeout waiting for %d sleep calls (got %d)", n, count)
+			require.Fail(t, "timeout waiting for sleep calls",
+				"wanted %d sleep calls, got %d", n, count)
 		}
 	}
 }
@@ -131,27 +133,16 @@ func TestWatch_DetectsFileCreate(t *testing.T) {
 	case ev = <-events:
 	case <-time.After(5 * time.Second):
 		cancel()
-		t.Fatal("timeout waiting for create event")
+		require.Fail(t, "timeout waiting for create event")
 	}
 
 	cancel()
 	<-done
 
-	if ev.Type != ChangeCreate {
-		t.Errorf("Type = %v, want ChangeCreate", ev.Type)
-	}
-
-	if ev.Path != "new-file.txt" {
-		t.Errorf("Path = %q, want %q", ev.Path, "new-file.txt")
-	}
-
-	if ev.Source != SourceLocal {
-		t.Errorf("Source = %v, want SourceLocal", ev.Source)
-	}
-
-	if ev.Hash == "" {
-		t.Error("Hash should be non-empty for a file create")
-	}
+	assert.Equal(t, ChangeCreate, ev.Type)
+	assert.Equal(t, "new-file.txt", ev.Path)
+	assert.Equal(t, SourceLocal, ev.Source)
+	assert.NotEmpty(t, ev.Hash, "Hash should be non-empty for a file create")
 }
 
 func TestWatch_DetectsFileModify(t *testing.T) {
@@ -178,32 +169,22 @@ func TestWatch_DetectsFileModify(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Modify the file.
-	if err := os.WriteFile(filepath.Join(dir, "existing.txt"), []byte("modified"), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "existing.txt"), []byte("modified"), 0o644))
 
 	var ev ChangeEvent
 	select {
 	case ev = <-events:
 	case <-time.After(5 * time.Second):
 		cancel()
-		t.Fatal("timeout waiting for modify event")
+		require.Fail(t, "timeout waiting for modify event")
 	}
 
 	cancel()
 	<-done
 
-	if ev.Type != ChangeModify {
-		t.Errorf("Type = %v, want ChangeModify", ev.Type)
-	}
-
-	if ev.Path != "existing.txt" {
-		t.Errorf("Path = %q, want %q", ev.Path, "existing.txt")
-	}
-
-	if ev.Hash != hashContent(t, "modified") {
-		t.Errorf("Hash = %q, want %q", ev.Hash, hashContent(t, "modified"))
-	}
+	assert.Equal(t, ChangeModify, ev.Type)
+	assert.Equal(t, "existing.txt", ev.Path)
+	assert.Equal(t, hashContent(t, "modified"), ev.Hash)
 }
 
 func TestWatch_DetectsFileDelete(t *testing.T) {
@@ -228,32 +209,22 @@ func TestWatch_DetectsFileDelete(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	if err := os.Remove(filepath.Join(dir, "doomed.txt")); err != nil {
-		t.Fatalf("Remove: %v", err)
-	}
+	require.NoError(t, os.Remove(filepath.Join(dir, "doomed.txt")))
 
 	var ev ChangeEvent
 	select {
 	case ev = <-events:
 	case <-time.After(5 * time.Second):
 		cancel()
-		t.Fatal("timeout waiting for delete event")
+		require.Fail(t, "timeout waiting for delete event")
 	}
 
 	cancel()
 	<-done
 
-	if ev.Type != ChangeDelete {
-		t.Errorf("Type = %v, want ChangeDelete", ev.Type)
-	}
-
-	if ev.Path != "doomed.txt" {
-		t.Errorf("Path = %q, want %q", ev.Path, "doomed.txt")
-	}
-
-	if !ev.IsDeleted {
-		t.Error("IsDeleted = false, want true")
-	}
+	assert.Equal(t, ChangeDelete, ev.Type)
+	assert.Equal(t, "doomed.txt", ev.Path)
+	assert.True(t, ev.IsDeleted)
 }
 
 // TestWatch_DeleteDirectoryRemovesWatch verifies that deleting a watched
@@ -291,7 +262,7 @@ func TestWatch_DeleteDirectoryRemovesWatch(t *testing.T) {
 	case ev = <-events:
 	case <-time.After(5 * time.Second):
 		cancel()
-		t.Fatal("timeout waiting for delete event")
+		require.Fail(t, "timeout waiting for delete event")
 	}
 
 	cancel()
@@ -331,15 +302,13 @@ func TestWatch_IgnoresExcludedFiles(t *testing.T) {
 	case ev = <-events:
 	case <-time.After(5 * time.Second):
 		cancel()
-		t.Fatal("timeout waiting for any event")
+		require.Fail(t, "timeout waiting for any event")
 	}
 
 	cancel()
 	<-done
 
-	if ev.Path != "valid.txt" {
-		t.Errorf("Path = %q, want %q (excluded file should be ignored)", ev.Path, "valid.txt")
-	}
+	assert.Equal(t, "valid.txt", ev.Path, "excluded file should be ignored")
 }
 
 func TestWatch_NosyncGuard(t *testing.T) {
@@ -352,9 +321,7 @@ func TestWatch_NosyncGuard(t *testing.T) {
 	events := make(chan ChangeEvent, 10)
 
 	err := obs.Watch(context.Background(), dir, events)
-	if !errors.Is(err, ErrNosyncGuard) {
-		t.Errorf("err = %v, want ErrNosyncGuard", err)
-	}
+	assert.ErrorIs(t, err, ErrNosyncGuard)
 }
 
 func TestWatch_NewDirectoryWatched(t *testing.T) {
@@ -375,9 +342,7 @@ func TestWatch_NewDirectoryWatched(t *testing.T) {
 
 	// Create a subdirectory and a file inside it.
 	subDir := filepath.Join(dir, "subdir")
-	if err := os.Mkdir(subDir, 0o755); err != nil {
-		t.Fatalf("Mkdir: %v", err)
-	}
+	require.NoError(t, os.Mkdir(subDir, 0o755))
 
 	// Give the watcher time to add the new directory watch.
 	time.Sleep(200 * time.Millisecond)
@@ -398,16 +363,14 @@ func TestWatch_NewDirectoryWatched(t *testing.T) {
 		case <-timeout:
 			cancel()
 			<-done
-			t.Fatal("timeout waiting for inner file event")
+			require.Fail(t, "timeout waiting for inner file event")
 		}
 	}
 
 	cancel()
 	<-done
 
-	if !foundInnerFile {
-		t.Error("inner file event not received")
-	}
+	assert.True(t, foundInnerFile, "inner file event not received")
 }
 
 // TestWatch_NewDirectoryPreExistingFiles verifies that files already present
@@ -434,14 +397,10 @@ func TestWatch_NewDirectoryPreExistingFiles(t *testing.T) {
 	// create event fires, and the file is already present when handleCreate
 	// runs scanNewDirectory).
 	subDir := filepath.Join(dir, "pre-populated")
-	if err := os.MkdirAll(subDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
+	require.NoError(t, os.MkdirAll(subDir, 0o755))
 
 	preExistingFile := filepath.Join(subDir, "already-here.txt")
-	if err := os.WriteFile(preExistingFile, []byte("pre-existing"), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	require.NoError(t, os.WriteFile(preExistingFile, []byte("pre-existing"), 0o644))
 
 	// Collect events. The file should appear without a separate fsnotify event
 	// because scanNewDirectory picks it up during directory creation handling.
@@ -458,16 +417,14 @@ func TestWatch_NewDirectoryPreExistingFiles(t *testing.T) {
 		case <-timeout:
 			cancel()
 			<-done
-			t.Fatal("timeout waiting for pre-existing file event (B-100)")
+			require.Fail(t, "timeout waiting for pre-existing file event (B-100)")
 		}
 	}
 
 	cancel()
 	<-done
 
-	if !foundPreExisting {
-		t.Error("pre-existing file in new directory was not detected")
-	}
+	assert.True(t, foundPreExisting, "pre-existing file in new directory was not detected")
 }
 
 func TestLocalWatch_ContextCancellation(t *testing.T) {
@@ -490,11 +447,9 @@ func TestLocalWatch_ContextCancellation(t *testing.T) {
 
 	select {
 	case err := <-done:
-		if err != nil {
-			t.Errorf("Watch returned %v, want nil", err)
-		}
+		assert.NoError(t, err, "Watch should return nil after context cancellation")
 	case <-time.After(5 * time.Second):
-		t.Fatal("Watch did not return after context cancellation")
+		require.Fail(t, "Watch did not return after context cancellation")
 	}
 }
 
@@ -518,16 +473,12 @@ func TestTrySend_ChannelAvailable_SendsEvent(t *testing.T) {
 
 	select {
 	case got := <-events:
-		if got.Path != "test.txt" {
-			t.Errorf("got path %q, want %q", got.Path, "test.txt")
-		}
+		assert.Equal(t, "test.txt", got.Path)
 	default:
-		t.Fatal("expected event on channel")
+		require.Fail(t, "expected event on channel")
 	}
 
-	if obs.DroppedEvents() != 0 {
-		t.Errorf("DroppedEvents() = %d, want 0", obs.DroppedEvents())
-	}
+	assert.Equal(t, int64(0), obs.DroppedEvents())
 }
 
 func TestTrySend_ChannelFull_DropsEvent(t *testing.T) {
@@ -552,25 +503,16 @@ func TestTrySend_ChannelFull_DropsEvent(t *testing.T) {
 
 	obs.trySend(ctx, events, &second)
 
-	if obs.DroppedEvents() != 1 {
-		t.Errorf("DroppedEvents() = %d, want 1", obs.DroppedEvents())
-	}
+	assert.Equal(t, int64(1), obs.DroppedEvents())
 
 	// ResetDroppedEvents returns the count and resets to 0 (B-190).
 	reset := obs.ResetDroppedEvents()
-	if reset != 1 {
-		t.Errorf("ResetDroppedEvents() = %d, want 1", reset)
-	}
-
-	if obs.DroppedEvents() != 0 {
-		t.Errorf("DroppedEvents() after reset = %d, want 0", obs.DroppedEvents())
-	}
+	assert.Equal(t, int64(1), reset)
+	assert.Equal(t, int64(0), obs.DroppedEvents())
 
 	// Original event still in channel.
 	got := <-events
-	if got.Path != "first.txt" {
-		t.Errorf("channel event path = %q, want %q", got.Path, "first.txt")
-	}
+	assert.Equal(t, "first.txt", got.Path)
 }
 
 func TestTrySend_ContextCanceled_NoDrop(t *testing.T) {
@@ -619,14 +561,10 @@ func TestWatch_NewDirectoryNestedRecursion(t *testing.T) {
 
 	// Create a 3-level nested directory structure with a file at the bottom.
 	deepDir := filepath.Join(dir, "level1", "level2", "level3")
-	if err := os.MkdirAll(deepDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
+	require.NoError(t, os.MkdirAll(deepDir, 0o755))
 
 	deepFile := filepath.Join(deepDir, "deep-file.txt")
-	if err := os.WriteFile(deepFile, []byte("deep content"), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	require.NoError(t, os.WriteFile(deepFile, []byte("deep content"), 0o644))
 
 	// Collect events — look for the deep file and all intermediate directories.
 	foundDirs := make(map[string]bool)
@@ -655,22 +593,18 @@ func TestWatch_NewDirectoryNestedRecursion(t *testing.T) {
 		case <-timeout:
 			cancel()
 			<-done
-			t.Fatalf("timeout: foundFile=%v, foundDirs=%v (want %v)",
-				foundFile, foundDirs, wantDirs)
+			require.Fail(t, "timeout",
+				"foundFile=%v, foundDirs=%v (want %v)", foundFile, foundDirs, wantDirs)
 		}
 	}
 
 	cancel()
 	<-done
 
-	if !foundFile {
-		t.Error("deep file not detected")
-	}
+	assert.True(t, foundFile, "deep file not detected")
 
 	for d := range wantDirs {
-		if !foundDirs[d] {
-			t.Errorf("directory %q not detected", d)
-		}
+		assert.True(t, foundDirs[d], "directory %q not detected", d)
 	}
 }
 
@@ -715,7 +649,7 @@ func TestWatch_HashFailureStillEmitsCreate(t *testing.T) {
 	case ev = <-events:
 	case <-time.After(5 * time.Second):
 		cancel()
-		t.Fatal("timeout waiting for create event")
+		require.Fail(t, "timeout waiting for create event")
 	}
 
 	cancel()
@@ -777,7 +711,7 @@ func TestWatch_HashFailureModifyStillEmitsEvent(t *testing.T) {
 	case ev = <-events:
 	case <-time.After(5 * time.Second):
 		cancel()
-		t.Fatal("timeout waiting for modify event")
+		require.Fail(t, "timeout waiting for modify event")
 	}
 
 	cancel()
@@ -954,7 +888,7 @@ func TestWatchLoop_ChmodCreateCombinedEvent(t *testing.T) {
 		require.Equal(t, "combo.txt", ev.Path)
 		require.Equal(t, SourceLocal, ev.Source)
 	case <-time.After(5 * time.Second):
-		t.Fatal("timeout waiting for combined Chmod|Create event")
+		require.Fail(t, "timeout waiting for combined Chmod|Create event")
 	}
 
 	cancel()
@@ -1011,7 +945,7 @@ func TestWatchLoop_TransientFileCreateDelete(t *testing.T) {
 			"unknown path defaults to ItemTypeFile")
 		require.True(t, ev.IsDeleted)
 	case <-time.After(5 * time.Second):
-		t.Fatal("timeout waiting for transient file delete event")
+		require.Fail(t, "timeout waiting for transient file delete event")
 	}
 
 	cancel()
@@ -1082,7 +1016,7 @@ func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 		case ev := <-events:
 			collected = append(collected, ev)
 		case <-timeout:
-			t.Fatalf("timeout: collected only %d events, want 2", len(collected))
+			require.Fail(t, "timeout", "collected only %d events, want 2", len(collected))
 		}
 	}
 
@@ -1173,13 +1107,13 @@ func TestHandleWrite_CoalescesRapidWrites(t *testing.T) {
 		require.Equal(t, "rapid.txt", ev.Path)
 		require.Equal(t, hashContent(t, "v2"), ev.Hash)
 	case <-time.After(5 * time.Second):
-		t.Fatal("timeout waiting for coalesced modify event")
+		require.Fail(t, "timeout waiting for coalesced modify event")
 	}
 
 	// Verify no second event arrives within a reasonable window.
 	select {
 	case ev := <-events:
-		t.Fatalf("unexpected second event: %+v", ev)
+		require.Fail(t, "unexpected second event", "%+v", ev)
 	case <-time.After(300 * time.Millisecond):
 		// Good — only one event.
 	}
@@ -1239,7 +1173,7 @@ func TestHandleWrite_EmitsAfterCooldownExpires(t *testing.T) {
 		require.Equal(t, "single.txt", ev.Path)
 		require.Equal(t, hashContent(t, "modified"), ev.Hash)
 	case <-time.After(5 * time.Second):
-		t.Fatal("timeout waiting for modify event after cooldown")
+		require.Fail(t, "timeout waiting for modify event after cooldown")
 	}
 
 	cancel()
@@ -1312,7 +1246,7 @@ func TestHandleWrite_DifferentPathsNotCoalesced(t *testing.T) {
 				collected[ev.Path] = ev
 			}
 		case <-timeout:
-			t.Fatalf("timeout: got %d events, want 2", len(collected))
+			require.Fail(t, "timeout", "got %d events, want 2", len(collected))
 		}
 	}
 
@@ -1385,13 +1319,13 @@ func TestHandleWrite_DeleteClearsTimer(t *testing.T) {
 		require.Equal(t, ChangeDelete, ev.Type, "first event should be Delete")
 		require.Equal(t, "doomed.txt", ev.Path)
 	case <-time.After(5 * time.Second):
-		t.Fatal("timeout waiting for delete event")
+		require.Fail(t, "timeout waiting for delete event")
 	}
 
 	// Wait past the original timer window — no Modify should appear.
 	select {
 	case ev := <-events:
-		t.Fatalf("unexpected event after delete: %+v", ev)
+		require.Fail(t, "unexpected event after delete", "%+v", ev)
 	case <-time.After(400 * time.Millisecond):
 		// Good — timer was canceled.
 	}
@@ -1460,13 +1394,13 @@ func TestCancelPendingTimers(t *testing.T) {
 	case err := <-done:
 		require.NoError(t, err)
 	case <-time.After(5 * time.Second):
-		t.Fatal("Watch did not return after context cancellation")
+		require.Fail(t, "Watch did not return after context cancellation")
 	}
 
 	// Drain any events — there should be none (timers were canceled).
 	select {
 	case ev := <-events:
-		t.Fatalf("unexpected event after cancellation: %+v", ev)
+		require.Fail(t, "unexpected event after cancellation", "%+v", ev)
 	default:
 		// Good — no events leaked.
 	}
@@ -1519,7 +1453,7 @@ func TestHashAndEmit_RetriesExhausted_EmitsEvent(t *testing.T) {
 		require.Equal(t, "exhausted.txt", ev.Path)
 		require.NotEmpty(t, ev.Hash, "hash should be computed for stable file")
 	case <-time.After(time.Second):
-		t.Fatal("expected event from hashAndEmit, got none")
+		require.Fail(t, "expected event from hashAndEmit, got none")
 	}
 
 	// No timer should be pending — the request should not be re-scheduled.
@@ -1560,7 +1494,7 @@ func TestHashAndEmit_BaselineMatch_NoEvent(t *testing.T) {
 	// No event should be emitted since hash matches baseline.
 	select {
 	case ev := <-events:
-		t.Fatalf("unexpected event for unchanged file: %+v", ev)
+		require.Fail(t, "unexpected event for unchanged file", "%+v", ev)
 	default:
 		// Good — no event for no-op write.
 	}
@@ -1591,17 +1525,9 @@ func TestAddWatchesRecursive_SkipsSymlinks(t *testing.T) {
 	require.NoError(t, err)
 
 	// The root and realdir should be watched, but NOT the symlink.
-	if !tracker.addedPaths[root] {
-		t.Error("expected root to be watched")
-	}
-
-	if !tracker.addedPaths[realDir] {
-		t.Error("expected realdir to be watched")
-	}
-
-	if tracker.addedPaths[symlinkDir] {
-		t.Error("symlinked directory should NOT be watched")
-	}
+	assert.True(t, tracker.addedPaths[root], "expected root to be watched")
+	assert.True(t, tracker.addedPaths[realDir], "expected realdir to be watched")
+	assert.False(t, tracker.addedPaths[symlinkDir], "symlinked directory should NOT be watched")
 }
 
 // addTrackingWatcher implements FsWatcher and records which paths are added.

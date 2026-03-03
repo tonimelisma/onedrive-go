@@ -8,6 +8,9 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestShutdownContext_FirstSignalCancels(t *testing.T) {
@@ -21,15 +24,13 @@ func TestShutdownContext_FirstSignalCancels(t *testing.T) {
 	ctx := shutdownContext(parent, logger)
 
 	// Send SIGINT to ourselves.
-	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
-		t.Fatalf("failed to send SIGINT: %v", err)
-	}
+	require.NoError(t, syscall.Kill(os.Getpid(), syscall.SIGINT), "failed to send SIGINT")
 
 	select {
 	case <-ctx.Done():
 		// Expected: context canceled on first signal.
 	case <-time.After(2 * time.Second):
-		t.Fatal("context not canceled within 2 seconds of SIGINT")
+		require.Fail(t, "context not canceled within 2 seconds of SIGINT")
 	}
 
 	// Clean up: cancel parent to stop the goroutine.
@@ -50,7 +51,7 @@ func TestShutdownContext_ParentCancelStopsGoroutine(t *testing.T) {
 	case <-ctx.Done():
 		// Expected: context canceled when parent is canceled.
 	case <-time.After(2 * time.Second):
-		t.Fatal("context not canceled within 2 seconds of parent cancel")
+		require.Fail(t, "context not canceled within 2 seconds of parent cancel")
 	}
 }
 
@@ -63,16 +64,12 @@ func TestSighupChannel_DeliversSignal(t *testing.T) {
 	defer signal.Stop(ch)
 
 	// Send SIGHUP to ourselves.
-	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
-		t.Fatalf("failed to send SIGHUP: %v", err)
-	}
+	require.NoError(t, syscall.Kill(os.Getpid(), syscall.SIGHUP), "failed to send SIGHUP")
 
 	select {
 	case sig := <-ch:
-		if sig != syscall.SIGHUP {
-			t.Fatalf("expected SIGHUP, got %v", sig)
-		}
+		assert.Equal(t, syscall.SIGHUP, sig)
 	case <-time.After(2 * time.Second):
-		t.Fatal("SIGHUP not received within 2 seconds")
+		require.Fail(t, "SIGHUP not received within 2 seconds")
 	}
 }

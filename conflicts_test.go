@@ -28,9 +28,7 @@ func TestTruncateID(t *testing.T) {
 			t.Parallel()
 
 			got := truncateID(tt.id)
-			if got != tt.want {
-				t.Errorf("truncateID(%q) = %q, want %q", tt.id, got, tt.want)
-			}
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -53,9 +51,7 @@ func TestFormatNanoTimestamp(t *testing.T) {
 			t.Parallel()
 
 			got := formatNanoTimestamp(tt.nanos)
-			if got != tt.want {
-				t.Errorf("formatNanoTimestamp(%d) = %q, want %q", tt.nanos, got, tt.want)
-			}
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }

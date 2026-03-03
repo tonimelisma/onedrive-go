@@ -5,6 +5,9 @@ import (
 	"encoding/base64"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
@@ -47,17 +50,9 @@ func TestVerifyBaseline_AllMatch(t *testing.T) {
 	logger := testLogger(t)
 
 	report, err := VerifyBaseline(ctx, bl, dir, logger)
-	if err != nil {
-		t.Fatalf("VerifyBaseline: %v", err)
-	}
-
-	if report.Verified != 2 {
-		t.Errorf("Verified = %d, want 2", report.Verified)
-	}
-
-	if len(report.Mismatches) != 0 {
-		t.Errorf("expected 0 mismatches, got %d", len(report.Mismatches))
-	}
+	require.NoError(t, err)
+	assert.Equal(t, 2, report.Verified)
+	assert.Empty(t, report.Mismatches)
 }
 
 func TestVerifyBaseline_MissingFile(t *testing.T) {
@@ -79,21 +74,10 @@ func TestVerifyBaseline_MissingFile(t *testing.T) {
 	logger := testLogger(t)
 
 	report, err := VerifyBaseline(ctx, bl, dir, logger)
-	if err != nil {
-		t.Fatalf("VerifyBaseline: %v", err)
-	}
-
-	if report.Verified != 0 {
-		t.Errorf("Verified = %d, want 0", report.Verified)
-	}
-
-	if len(report.Mismatches) != 1 {
-		t.Fatalf("expected 1 mismatch, got %d", len(report.Mismatches))
-	}
-
-	if report.Mismatches[0].Status != VerifyMissing {
-		t.Errorf("Status = %q, want %q", report.Mismatches[0].Status, VerifyMissing)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, 0, report.Verified)
+	require.Len(t, report.Mismatches, 1)
+	assert.Equal(t, VerifyMissing, report.Mismatches[0].Status)
 }
 
 func TestVerifyBaseline_HashMismatch(t *testing.T) {
@@ -118,27 +102,14 @@ func TestVerifyBaseline_HashMismatch(t *testing.T) {
 	logger := testLogger(t)
 
 	report, err := VerifyBaseline(ctx, bl, dir, logger)
-	if err != nil {
-		t.Fatalf("VerifyBaseline: %v", err)
-	}
-
-	if report.Verified != 0 {
-		t.Errorf("Verified = %d, want 0", report.Verified)
-	}
-
-	if len(report.Mismatches) != 1 {
-		t.Fatalf("expected 1 mismatch, got %d", len(report.Mismatches))
-	}
-
-	if report.Mismatches[0].Status != VerifyHashMismatch {
-		t.Errorf("Status = %q, want %q", report.Mismatches[0].Status, VerifyHashMismatch)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, 0, report.Verified)
+	require.Len(t, report.Mismatches, 1)
+	assert.Equal(t, VerifyHashMismatch, report.Mismatches[0].Status)
 
 	// Actual should be the real hash.
 	actualHash := hashBytes(t, []byte(content))
-	if report.Mismatches[0].Actual != actualHash {
-		t.Errorf("Actual = %q, want %q", report.Mismatches[0].Actual, actualHash)
-	}
+	assert.Equal(t, actualHash, report.Mismatches[0].Actual)
 }
 
 func TestVerifyBaseline_EmptyBaseline(t *testing.T) {
@@ -153,17 +124,9 @@ func TestVerifyBaseline_EmptyBaseline(t *testing.T) {
 	logger := testLogger(t)
 
 	report, err := VerifyBaseline(ctx, bl, dir, logger)
-	if err != nil {
-		t.Fatalf("VerifyBaseline: %v", err)
-	}
-
-	if report.Verified != 0 {
-		t.Errorf("Verified = %d, want 0", report.Verified)
-	}
-
-	if len(report.Mismatches) != 0 {
-		t.Errorf("expected 0 mismatches, got %d", len(report.Mismatches))
-	}
+	require.NoError(t, err)
+	assert.Equal(t, 0, report.Verified)
+	assert.Empty(t, report.Mismatches)
 }
 
 func TestVerifyBaseline_SkipsFolders(t *testing.T) {
@@ -192,18 +155,10 @@ func TestVerifyBaseline_SkipsFolders(t *testing.T) {
 	logger := testLogger(t)
 
 	report, err := VerifyBaseline(ctx, bl, dir, logger)
-	if err != nil {
-		t.Fatalf("VerifyBaseline: %v", err)
-	}
-
+	require.NoError(t, err)
 	// Only the file should be verified, not the folder.
-	if report.Verified != 1 {
-		t.Errorf("Verified = %d, want 1", report.Verified)
-	}
-
-	if len(report.Mismatches) != 0 {
-		t.Errorf("expected 0 mismatches, got %d", len(report.Mismatches))
-	}
+	assert.Equal(t, 1, report.Verified)
+	assert.Empty(t, report.Mismatches)
 }
 
 func TestVerifyBaseline_SizeMismatch(t *testing.T) {
@@ -227,15 +182,7 @@ func TestVerifyBaseline_SizeMismatch(t *testing.T) {
 	logger := testLogger(t)
 
 	report, err := VerifyBaseline(ctx, bl, dir, logger)
-	if err != nil {
-		t.Fatalf("VerifyBaseline: %v", err)
-	}
-
-	if len(report.Mismatches) != 1 {
-		t.Fatalf("expected 1 mismatch, got %d", len(report.Mismatches))
-	}
-
-	if report.Mismatches[0].Status != VerifySizeMismatch {
-		t.Errorf("Status = %q, want %q", report.Mismatches[0].Status, VerifySizeMismatch)
-	}
+	require.NoError(t, err)
+	require.Len(t, report.Mismatches, 1)
+	assert.Equal(t, VerifySizeMismatch, report.Mismatches[0].Status)
 }

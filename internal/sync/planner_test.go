@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
@@ -74,13 +77,8 @@ func TestClassifyFile_EF1_Unchanged(t *testing.T) {
 	})
 
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
-
-	if got := countActions(plan); got != 0 {
-		t.Errorf("EF1: expected 0 actions, got %d", got)
-	}
+	require.NoError(t, err, "Plan()")
+	assert.Equal(t, 0, countActions(plan), "EF1")
 }
 
 func TestClassifyFile_EF2_RemoteModified(t *testing.T) {
@@ -114,18 +112,11 @@ func TestClassifyFile_EF2_RemoteModified(t *testing.T) {
 	})
 
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	downloads := ActionsOfType(plan.Actions, ActionDownload)
-	if len(downloads) != 1 {
-		t.Fatalf("EF2: expected 1 download, got %d", len(downloads))
-	}
-
-	if downloads[0].Path != "planner-test.txt" {
-		t.Errorf("EF2: unexpected path %q", downloads[0].Path)
-	}
+	require.Len(t, downloads, 1, "EF2")
+	assert.Equal(t, "planner-test.txt", downloads[0].Path, "EF2")
 }
 
 func TestClassifyFile_EF3_LocalModified(t *testing.T) {
@@ -157,18 +148,11 @@ func TestClassifyFile_EF3_LocalModified(t *testing.T) {
 	})
 
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	uploads := ActionsOfType(plan.Actions, ActionUpload)
-	if len(uploads) != 1 {
-		t.Fatalf("EF3: expected 1 upload, got %d", len(uploads))
-	}
-
-	if uploads[0].Path != "planner-test.txt" {
-		t.Errorf("EF3: unexpected path %q", uploads[0].Path)
-	}
+	require.Len(t, uploads, 1, "EF3")
+	assert.Equal(t, "planner-test.txt", uploads[0].Path, "EF3")
 }
 
 func TestClassifyFile_EF4_ConvergentEdit(t *testing.T) {
@@ -211,14 +195,10 @@ func TestClassifyFile_EF4_ConvergentEdit(t *testing.T) {
 	})
 
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	syncedUpdates := ActionsOfType(plan.Actions, ActionUpdateSynced)
-	if len(syncedUpdates) != 1 {
-		t.Fatalf("EF4: expected 1 synced update, got %d", len(syncedUpdates))
-	}
+	require.Len(t, syncedUpdates, 1, "EF4")
 }
 
 func TestClassifyFile_EF5_EditEditConflict(t *testing.T) {
@@ -261,18 +241,11 @@ func TestClassifyFile_EF5_EditEditConflict(t *testing.T) {
 	})
 
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	conflicts := ActionsOfType(plan.Actions, ActionConflict)
-	if len(conflicts) != 1 {
-		t.Fatalf("EF5: expected 1 conflict, got %d", len(conflicts))
-	}
-
-	if conflicts[0].ConflictInfo.ConflictType != "edit_edit" {
-		t.Errorf("EF5: expected edit_edit conflict, got %q", conflicts[0].ConflictInfo.ConflictType)
-	}
+	require.Len(t, conflicts, 1, "EF5")
+	assert.Equal(t, "edit_edit", conflicts[0].ConflictInfo.ConflictType, "EF5")
 }
 
 func TestClassifyFile_EF6_LocalDeleteRemoteUnchanged(t *testing.T) {
@@ -303,14 +276,10 @@ func TestClassifyFile_EF6_LocalDeleteRemoteUnchanged(t *testing.T) {
 	})
 
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	remoteDeletes := ActionsOfType(plan.Actions, ActionRemoteDelete)
-	if len(remoteDeletes) != 1 {
-		t.Fatalf("EF6: expected 1 remote delete, got %d", len(remoteDeletes))
-	}
+	require.Len(t, remoteDeletes, 1, "EF6")
 }
 
 func TestClassifyFile_EF7_LocalDeleteRemoteModified(t *testing.T) {
@@ -352,14 +321,10 @@ func TestClassifyFile_EF7_LocalDeleteRemoteModified(t *testing.T) {
 	})
 
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	downloads := ActionsOfType(plan.Actions, ActionDownload)
-	if len(downloads) != 1 {
-		t.Fatalf("EF7: expected 1 download, got %d", len(downloads))
-	}
+	require.Len(t, downloads, 1, "EF7")
 }
 
 func TestClassifyFile_EF8_RemoteDeleted(t *testing.T) {
@@ -394,14 +359,10 @@ func TestClassifyFile_EF8_RemoteDeleted(t *testing.T) {
 	})
 
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	localDeletes := ActionsOfType(plan.Actions, ActionLocalDelete)
-	if len(localDeletes) != 1 {
-		t.Fatalf("EF8: expected 1 local delete, got %d", len(localDeletes))
-	}
+	require.Len(t, localDeletes, 1, "EF8")
 }
 
 func TestClassifyFile_EF9_EditDeleteConflict(t *testing.T) {
@@ -444,18 +405,11 @@ func TestClassifyFile_EF9_EditDeleteConflict(t *testing.T) {
 	})
 
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	conflicts := ActionsOfType(plan.Actions, ActionConflict)
-	if len(conflicts) != 1 {
-		t.Fatalf("EF9: expected 1 conflict, got %d", len(conflicts))
-	}
-
-	if conflicts[0].ConflictInfo.ConflictType != "edit_delete" {
-		t.Errorf("EF9: expected edit_delete conflict, got %q", conflicts[0].ConflictInfo.ConflictType)
-	}
+	require.Len(t, conflicts, 1, "EF9")
+	assert.Equal(t, "edit_delete", conflicts[0].ConflictInfo.ConflictType, "EF9")
 }
 
 func TestClassifyFile_EF10_BothDeleted(t *testing.T) {
@@ -497,14 +451,10 @@ func TestClassifyFile_EF10_BothDeleted(t *testing.T) {
 	})
 
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	cleanups := ActionsOfType(plan.Actions, ActionCleanup)
-	if len(cleanups) != 1 {
-		t.Fatalf("EF10: expected 1 cleanup, got %d", len(cleanups))
-	}
+	require.Len(t, cleanups, 1, "EF10")
 }
 
 func TestClassifyFile_EF11_ConvergentCreate(t *testing.T) {
@@ -538,14 +488,10 @@ func TestClassifyFile_EF11_ConvergentCreate(t *testing.T) {
 	}
 
 	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	syncedUpdates := ActionsOfType(plan.Actions, ActionUpdateSynced)
-	if len(syncedUpdates) != 1 {
-		t.Fatalf("EF11: expected 1 synced update, got %d", len(syncedUpdates))
-	}
+	require.Len(t, syncedUpdates, 1, "EF11")
 }
 
 func TestClassifyFile_EF12_CreateCreateConflict(t *testing.T) {
@@ -579,18 +525,11 @@ func TestClassifyFile_EF12_CreateCreateConflict(t *testing.T) {
 	}
 
 	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	conflicts := ActionsOfType(plan.Actions, ActionConflict)
-	if len(conflicts) != 1 {
-		t.Fatalf("EF12: expected 1 conflict, got %d", len(conflicts))
-	}
-
-	if conflicts[0].ConflictInfo.ConflictType != "create_create" {
-		t.Errorf("EF12: expected create_create conflict, got %q", conflicts[0].ConflictInfo.ConflictType)
-	}
+	require.Len(t, conflicts, 1, "EF12")
+	assert.Equal(t, "create_create", conflicts[0].ConflictInfo.ConflictType, "EF12")
 }
 
 func TestClassifyFile_EF13_NewLocal(t *testing.T) {
@@ -613,14 +552,10 @@ func TestClassifyFile_EF13_NewLocal(t *testing.T) {
 	}
 
 	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	uploads := ActionsOfType(plan.Actions, ActionUpload)
-	if len(uploads) != 1 {
-		t.Fatalf("EF13: expected 1 upload, got %d", len(uploads))
-	}
+	require.Len(t, uploads, 1, "EF13")
 }
 
 func TestClassifyFile_EF14_NewRemote(t *testing.T) {
@@ -645,14 +580,10 @@ func TestClassifyFile_EF14_NewRemote(t *testing.T) {
 	}
 
 	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	downloads := ActionsOfType(plan.Actions, ActionDownload)
-	if len(downloads) != 1 {
-		t.Fatalf("EF14: expected 1 download, got %d", len(downloads))
-	}
+	require.Len(t, downloads, 1, "EF14")
 }
 
 // ---------------------------------------------------------------------------
@@ -694,13 +625,9 @@ func TestClassifyFolder_ED1_InSync(t *testing.T) {
 	})
 
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
-	if got := countActions(plan); got != 0 {
-		t.Errorf("ED1: expected 0 actions, got %d", got)
-	}
+	assert.Equal(t, 0, countActions(plan), "ED1")
 }
 
 func TestClassifyFolder_ED2_Adopt(t *testing.T) {
@@ -731,14 +658,10 @@ func TestClassifyFolder_ED2_Adopt(t *testing.T) {
 	}
 
 	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	syncedUpdates := ActionsOfType(plan.Actions, ActionUpdateSynced)
-	if len(syncedUpdates) != 1 {
-		t.Fatalf("ED2: expected 1 synced update, got %d", len(syncedUpdates))
-	}
+	require.Len(t, syncedUpdates, 1, "ED2")
 }
 
 func TestClassifyFolder_ED3_NewRemoteFolder(t *testing.T) {
@@ -761,18 +684,11 @@ func TestClassifyFolder_ED3_NewRemoteFolder(t *testing.T) {
 	}
 
 	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	folderCreates := ActionsOfType(plan.Actions, ActionFolderCreate)
-	if len(folderCreates) != 1 {
-		t.Fatalf("ED3: expected 1 folder create, got %d", len(folderCreates))
-	}
-
-	if folderCreates[0].CreateSide != CreateLocal {
-		t.Errorf("ED3: expected CreateLocal, got %v", folderCreates[0].CreateSide)
-	}
+	require.Len(t, folderCreates, 1, "ED3")
+	assert.Equal(t, CreateLocal, folderCreates[0].CreateSide, "ED3")
 }
 
 func TestClassifyFolder_ED4_RecreateLocal(t *testing.T) {
@@ -810,18 +726,11 @@ func TestClassifyFolder_ED4_RecreateLocal(t *testing.T) {
 	})
 
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	folderCreates := ActionsOfType(plan.Actions, ActionFolderCreate)
-	if len(folderCreates) != 1 {
-		t.Fatalf("ED4: expected 1 folder create, got %d", len(folderCreates))
-	}
-
-	if folderCreates[0].CreateSide != CreateLocal {
-		t.Errorf("ED4: expected CreateLocal, got %v", folderCreates[0].CreateSide)
-	}
+	require.Len(t, folderCreates, 1, "ED4")
+	assert.Equal(t, CreateLocal, folderCreates[0].CreateSide, "ED4")
 }
 
 func TestClassifyFolder_ED5_NewLocalFolder(t *testing.T) {
@@ -843,18 +752,11 @@ func TestClassifyFolder_ED5_NewLocalFolder(t *testing.T) {
 	}
 
 	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	folderCreates := ActionsOfType(plan.Actions, ActionFolderCreate)
-	if len(folderCreates) != 1 {
-		t.Fatalf("ED5: expected 1 folder create, got %d", len(folderCreates))
-	}
-
-	if folderCreates[0].CreateSide != CreateRemote {
-		t.Errorf("ED5: expected CreateRemote, got %v", folderCreates[0].CreateSide)
-	}
+	require.Len(t, folderCreates, 1, "ED5")
+	assert.Equal(t, CreateRemote, folderCreates[0].CreateSide, "ED5")
 }
 
 func TestClassifyFolder_ED6_RemoteDeletedFolder(t *testing.T) {
@@ -893,14 +795,10 @@ func TestClassifyFolder_ED6_RemoteDeletedFolder(t *testing.T) {
 	})
 
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	localDeletes := ActionsOfType(plan.Actions, ActionLocalDelete)
-	if len(localDeletes) != 1 {
-		t.Fatalf("ED6: expected 1 local delete, got %d", len(localDeletes))
-	}
+	require.Len(t, localDeletes, 1, "ED6")
 }
 
 func TestClassifyFolder_ED7_BothGone(t *testing.T) {
@@ -939,14 +837,10 @@ func TestClassifyFolder_ED7_BothGone(t *testing.T) {
 	})
 
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	cleanups := ActionsOfType(plan.Actions, ActionCleanup)
-	if len(cleanups) != 1 {
-		t.Fatalf("ED7: expected 1 cleanup, got %d", len(cleanups))
-	}
+	require.Len(t, cleanups, 1, "ED7")
 }
 
 func TestClassifyFolder_ED8_PropagateRemoteDelete(t *testing.T) {
@@ -976,26 +870,13 @@ func TestClassifyFolder_ED8_PropagateRemoteDelete(t *testing.T) {
 	})
 
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	remoteDeletes := ActionsOfType(plan.Actions, ActionRemoteDelete)
-	if len(remoteDeletes) != 1 {
-		t.Fatalf("ED8: expected 1 remote delete, got %d", len(remoteDeletes))
-	}
-
-	if remoteDeletes[0].Path != "docs/planner-dir" {
-		t.Errorf("ED8: expected path docs/planner-dir, got %s", remoteDeletes[0].Path)
-	}
-
-	if remoteDeletes[0].ItemID != "folder1" {
-		t.Errorf("ED8: expected ItemID folder1, got %s", remoteDeletes[0].ItemID)
-	}
-
-	if remoteDeletes[0].DriveID != driveid.New(testDriveID) {
-		t.Errorf("ED8: expected DriveID %v, got %v", driveid.New(testDriveID), remoteDeletes[0].DriveID)
-	}
+	require.Len(t, remoteDeletes, 1, "ED8")
+	assert.Equal(t, "docs/planner-dir", remoteDeletes[0].Path, "ED8")
+	assert.Equal(t, "folder1", remoteDeletes[0].ItemID, "ED8")
+	assert.Equal(t, driveid.New(testDriveID), remoteDeletes[0].DriveID, "ED8")
 }
 
 func TestClassifyFolder_ED8_DownloadOnly(t *testing.T) {
@@ -1025,13 +906,9 @@ func TestClassifyFolder_ED8_DownloadOnly(t *testing.T) {
 	})
 
 	plan, err := planner.Plan(changes, baseline, SyncDownloadOnly, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
-	if got := countActions(plan); got != 0 {
-		t.Errorf("ED8 download-only: expected 0 actions, got %d", got)
-	}
+	assert.Equal(t, 0, countActions(plan), "ED8 download-only")
 }
 
 func TestClassifyFolder_ED4_UploadOnly(t *testing.T) {
@@ -1073,20 +950,14 @@ func TestClassifyFolder_ED4_UploadOnly(t *testing.T) {
 	})
 
 	plan, err := planner.Plan(changes, baseline, SyncUploadOnly, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	folderCreates := ActionsOfType(plan.Actions, ActionFolderCreate)
-	if len(folderCreates) != 0 {
-		t.Errorf("ED4 upload-only: expected 0 folder creates, got %d", len(folderCreates))
-	}
+	assert.Empty(t, folderCreates, "ED4 upload-only")
 
 	// Upload-only: local deletion should still propagate remotely (ED8 path).
 	remoteDeletes := ActionsOfType(plan.Actions, ActionRemoteDelete)
-	if len(remoteDeletes) != 1 {
-		t.Errorf("ED4 upload-only: expected 1 remote delete (local deletion propagates), got %d", len(remoteDeletes))
-	}
+	assert.Len(t, remoteDeletes, 1, "ED4 upload-only: local deletion propagates")
 }
 
 func TestClassifyFolder_ED6_UploadOnly(t *testing.T) {
@@ -1128,18 +999,11 @@ func TestClassifyFolder_ED6_UploadOnly(t *testing.T) {
 	})
 
 	plan, err := planner.Plan(changes, baseline, SyncUploadOnly, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	localDeletes := ActionsOfType(plan.Actions, ActionLocalDelete)
-	if len(localDeletes) != 0 {
-		t.Errorf("ED6 upload-only: expected 0 local deletes, got %d", len(localDeletes))
-	}
-
-	if got := countActions(plan); got != 0 {
-		t.Errorf("ED6 upload-only: expected 0 total actions, got %d", got)
-	}
+	assert.Empty(t, localDeletes, "ED6 upload-only")
+	assert.Equal(t, 0, countActions(plan), "ED6 upload-only: expected 0 total actions")
 }
 
 // ---------------------------------------------------------------------------
@@ -1178,27 +1042,15 @@ func TestDetectMoves_RemoteMove(t *testing.T) {
 	})
 
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	allMoves := moves(plan)
-	if len(allMoves) != 1 {
-		t.Fatalf("expected 1 move, got %d", len(allMoves))
-	}
+	require.Len(t, allMoves, 1)
 
 	move := allMoves[0]
-	if move.Type != ActionLocalMove {
-		t.Errorf("expected ActionLocalMove, got %v", move.Type)
-	}
-
-	if move.Path != "docs/planner-renamed.txt" {
-		t.Errorf("expected destination 'docs/planner-renamed.txt', got %q", move.Path)
-	}
-
-	if move.OldPath != "docs/planner-original.txt" {
-		t.Errorf("expected source 'docs/planner-original.txt', got %q", move.OldPath)
-	}
+	assert.Equal(t, ActionLocalMove, move.Type)
+	assert.Equal(t, "docs/planner-renamed.txt", move.Path, "destination")
+	assert.Equal(t, "docs/planner-original.txt", move.OldPath, "source")
 }
 
 func TestDetectMoves_LocalMoveByHash(t *testing.T) {
@@ -1241,27 +1093,15 @@ func TestDetectMoves_LocalMoveByHash(t *testing.T) {
 	})
 
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	allMoves := moves(plan)
-	if len(allMoves) != 1 {
-		t.Fatalf("expected 1 move, got %d", len(allMoves))
-	}
+	require.Len(t, allMoves, 1)
 
 	move := allMoves[0]
-	if move.Type != ActionRemoteMove {
-		t.Errorf("expected ActionRemoteMove, got %v", move.Type)
-	}
-
-	if move.Path != "planner-new-loc.txt" {
-		t.Errorf("expected destination 'planner-new-loc.txt', got %q", move.Path)
-	}
-
-	if move.OldPath != "planner-old-loc.txt" {
-		t.Errorf("expected source 'planner-old-loc.txt', got %q", move.OldPath)
-	}
+	assert.Equal(t, ActionRemoteMove, move.Type)
+	assert.Equal(t, "planner-new-loc.txt", move.Path, "destination")
+	assert.Equal(t, "planner-old-loc.txt", move.OldPath, "source")
 }
 
 func TestDetectMoves_LocalMoveAmbiguous(t *testing.T) {
@@ -1325,20 +1165,14 @@ func TestDetectMoves_LocalMoveAmbiguous(t *testing.T) {
 	)
 
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	// No moves — ambiguous hash match.
 	allMoves := moves(plan)
-	if len(allMoves) != 0 {
-		t.Errorf("expected 0 moves for ambiguous case, got %d", len(allMoves))
-	}
+	assert.Empty(t, allMoves, "expected 0 moves for ambiguous case")
 
 	// The paths should still produce separate actions (deletes + upload).
-	if countActions(plan) == 0 {
-		t.Error("expected some actions for unmatched paths, got 0")
-	}
+	assert.NotEqual(t, 0, countActions(plan), "expected some actions for unmatched paths")
 }
 
 func TestDetectMoves_MovedPathsExcluded(t *testing.T) {
@@ -1381,20 +1215,14 @@ func TestDetectMoves_MovedPathsExcluded(t *testing.T) {
 	})
 
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	// Should have exactly 1 move and no other actions.
 	allMoves := moves(plan)
-	if len(allMoves) != 1 {
-		t.Fatalf("expected 1 move, got %d", len(allMoves))
-	}
+	require.Len(t, allMoves, 1)
 
 	nonMoveCount := countActions(plan) - len(allMoves)
-	if nonMoveCount != 0 {
-		t.Errorf("expected 0 non-move actions after move exclusion, got %d", nonMoveCount)
-	}
+	assert.Equal(t, 0, nonMoveCount, "expected 0 non-move actions after move exclusion")
 }
 
 // ---------------------------------------------------------------------------
@@ -1432,13 +1260,8 @@ func TestBigDelete_BelowMinItems(t *testing.T) {
 
 	// 1 item in baseline, 1 delete = 100%, but below MinItems (10).
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("expected no error below MinItems, got: %v", err)
-	}
-
-	if plan == nil {
-		t.Fatal("expected non-nil plan below MinItems")
-	}
+	require.NoError(t, err, "expected no error below MinItems")
+	require.NotNil(t, plan, "expected non-nil plan below MinItems")
 }
 
 func TestBigDelete_ExceedsMaxCount(t *testing.T) {
@@ -1485,13 +1308,7 @@ func TestBigDelete_ExceedsMaxCount(t *testing.T) {
 	}
 
 	_, err := planner.Plan(changes, baseline, SyncBidirectional, config)
-	if err == nil {
-		t.Fatal("expected ErrBigDeleteTriggered, got nil")
-	}
-
-	if err != ErrBigDeleteTriggered {
-		t.Fatalf("expected ErrBigDeleteTriggered, got: %v", err)
-	}
+	require.ErrorIs(t, err, ErrBigDeleteTriggered)
 }
 
 func TestBigDelete_ExceedsPercent(t *testing.T) {
@@ -1542,9 +1359,7 @@ func TestBigDelete_ExceedsPercent(t *testing.T) {
 	}
 
 	_, err := planner.Plan(changes, baseline, SyncBidirectional, config)
-	if err != ErrBigDeleteTriggered {
-		t.Fatalf("expected ErrBigDeleteTriggered, got: %v", err)
-	}
+	require.ErrorIs(t, err, ErrBigDeleteTriggered)
 }
 
 func TestBigDelete_NoTrigger(t *testing.T) {
@@ -1606,13 +1421,8 @@ func TestBigDelete_NoTrigger(t *testing.T) {
 	}
 
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, config)
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
-	}
-
-	if plan == nil {
-		t.Fatal("expected non-nil plan")
-	}
+	require.NoError(t, err)
+	require.NotNil(t, plan)
 }
 
 // ---------------------------------------------------------------------------
@@ -1668,9 +1478,7 @@ func TestBigDelete_PerFolder_EntireFolderDeleted(t *testing.T) {
 	}
 
 	_, err := planner.Plan(changes, baseline, SyncBidirectional, config)
-	if err != ErrBigDeleteTriggered {
-		t.Fatalf("expected ErrBigDeleteTriggered (per-folder), got: %v", err)
-	}
+	require.ErrorIs(t, err, ErrBigDeleteTriggered, "expected per-folder trigger")
 }
 
 func TestBigDelete_PerFolder_SpreadAcrossFolders(t *testing.T) {
@@ -1722,13 +1530,8 @@ func TestBigDelete_PerFolder_SpreadAcrossFolders(t *testing.T) {
 	}
 
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, config)
-	if err != nil {
-		t.Fatalf("expected no error (deletes spread evenly), got: %v", err)
-	}
-
-	if plan == nil {
-		t.Fatal("expected non-nil plan")
-	}
+	require.NoError(t, err, "deletes spread evenly")
+	require.NotNil(t, plan)
 }
 
 func TestBigDelete_PerFolder_SmallFolder(t *testing.T) {
@@ -1777,13 +1580,8 @@ func TestBigDelete_PerFolder_SmallFolder(t *testing.T) {
 	}
 
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, config)
-	if err != nil {
-		t.Fatalf("expected no error (small folder below MinItems), got: %v", err)
-	}
-
-	if plan == nil {
-		t.Fatal("expected non-nil plan")
-	}
+	require.NoError(t, err, "small folder below MinItems")
+	require.NotNil(t, plan)
 }
 
 // ---------------------------------------------------------------------------
@@ -1819,14 +1617,10 @@ func TestPlan_DownloadOnly_SuppressesUploads(t *testing.T) {
 	})
 
 	plan, err := planner.Plan(changes, baseline, SyncDownloadOnly, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	uploads := ActionsOfType(plan.Actions, ActionUpload)
-	if len(uploads) != 0 {
-		t.Errorf("download-only: expected 0 uploads, got %d", len(uploads))
-	}
+	assert.Empty(t, uploads, "download-only: expected 0 uploads")
 }
 
 func TestPlan_UploadOnly_SuppressesDownloads(t *testing.T) {
@@ -1859,14 +1653,10 @@ func TestPlan_UploadOnly_SuppressesDownloads(t *testing.T) {
 	})
 
 	plan, err := planner.Plan(changes, baseline, SyncUploadOnly, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	downloads := ActionsOfType(plan.Actions, ActionDownload)
-	if len(downloads) != 0 {
-		t.Errorf("upload-only: expected 0 downloads, got %d", len(downloads))
-	}
+	assert.Empty(t, downloads, "upload-only: expected 0 downloads")
 }
 
 func TestPlan_DownloadOnly_SuppressesFolderCreateRemote(t *testing.T) {
@@ -1888,14 +1678,10 @@ func TestPlan_DownloadOnly_SuppressesFolderCreateRemote(t *testing.T) {
 	}
 
 	plan, err := planner.Plan(changes, emptyBaseline(), SyncDownloadOnly, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	folderCreates := ActionsOfType(plan.Actions, ActionFolderCreate)
-	if len(folderCreates) != 0 {
-		t.Errorf("download-only: expected 0 folder creates, got %d", len(folderCreates))
-	}
+	assert.Empty(t, folderCreates, "download-only: expected 0 folder creates")
 }
 
 func TestPlan_UploadOnly_SuppressesFolderCreateLocal(t *testing.T) {
@@ -1918,14 +1704,10 @@ func TestPlan_UploadOnly_SuppressesFolderCreateLocal(t *testing.T) {
 	}
 
 	plan, err := planner.Plan(changes, emptyBaseline(), SyncUploadOnly, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	folderCreates := ActionsOfType(plan.Actions, ActionFolderCreate)
-	if len(folderCreates) != 0 {
-		t.Errorf("upload-only: expected 0 folder creates, got %d", len(folderCreates))
-	}
+	assert.Empty(t, folderCreates, "upload-only: expected 0 folder creates")
 }
 
 // ---------------------------------------------------------------------------
@@ -1958,14 +1740,10 @@ func TestOrderPlan_FolderCreatesTopDown(t *testing.T) {
 	}
 
 	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	folderCreates := ActionsOfType(plan.Actions, ActionFolderCreate)
-	if len(folderCreates) != 3 {
-		t.Fatalf("expected 3 folder creates, got %d", len(folderCreates))
-	}
+	require.Len(t, folderCreates, 3)
 
 	// Build a path→index map for the full action list so we can check deps.
 	pathIdx := make(map[string]int)
@@ -2032,14 +1810,10 @@ func TestOrderPlan_DeletesBottomUp(t *testing.T) {
 	)
 
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	localDeletes := ActionsOfType(plan.Actions, ActionLocalDelete)
-	if len(localDeletes) != 3 {
-		t.Fatalf("expected 3 local deletes, got %d", len(localDeletes))
-	}
+	require.Len(t, localDeletes, 3)
 
 	// Verify all 3 delete paths are present (order is non-deterministic in the
 	// flat list — the executor uses Deps to determine execution order).
@@ -2053,9 +1827,7 @@ func TestOrderPlan_DeletesBottomUp(t *testing.T) {
 		"x/y/planner-del-mid.txt",
 		"x/y/z/planner-del-deep.txt",
 	} {
-		if !deletePaths[expected] {
-			t.Errorf("expected delete for path %q not found", expected)
-		}
+		assert.True(t, deletePaths[expected], "expected delete for path %q", expected)
 	}
 }
 
@@ -2068,13 +1840,9 @@ func TestPlan_EmptyChanges(t *testing.T) {
 	planner := NewPlanner(testLogger(t))
 
 	plan, err := planner.Plan(nil, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
-	if got := countActions(plan); got != 0 {
-		t.Errorf("empty changes: expected 0 actions, got %d", got)
-	}
+	assert.Equal(t, 0, countActions(plan), "empty changes: expected 0 actions")
 }
 
 func TestPlan_MixedFileAndFolder(t *testing.T) {
@@ -2100,19 +1868,13 @@ func TestPlan_MixedFileAndFolder(t *testing.T) {
 	}
 
 	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	folderCreates := ActionsOfType(plan.Actions, ActionFolderCreate)
-	if len(folderCreates) != 1 {
-		t.Errorf("expected 1 folder create, got %d", len(folderCreates))
-	}
+	assert.Len(t, folderCreates, 1)
 
 	downloads := ActionsOfType(plan.Actions, ActionDownload)
-	if len(downloads) != 1 {
-		t.Errorf("expected 1 download, got %d", len(downloads))
-	}
+	assert.Len(t, downloads, 1)
 }
 
 func TestPlan_FullScenario(t *testing.T) {
@@ -2174,27 +1936,19 @@ func TestPlan_FullScenario(t *testing.T) {
 	)
 
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	// EF2 + EF14 = 2 downloads.
 	downloads := ActionsOfType(plan.Actions, ActionDownload)
-	if len(downloads) != 2 {
-		t.Errorf("expected 2 downloads, got %d", len(downloads))
-	}
+	assert.Len(t, downloads, 2)
 
 	// EF3 = 1 upload.
 	uploads := ActionsOfType(plan.Actions, ActionUpload)
-	if len(uploads) != 1 {
-		t.Errorf("expected 1 upload, got %d", len(uploads))
-	}
+	assert.Len(t, uploads, 1)
 
 	// ED3 = 1 folder create.
 	folderCreates := ActionsOfType(plan.Actions, ActionFolderCreate)
-	if len(folderCreates) != 1 {
-		t.Errorf("expected 1 folder create, got %d", len(folderCreates))
-	}
+	assert.Len(t, folderCreates, 1)
 }
 
 // ---------------------------------------------------------------------------
@@ -2220,13 +1974,8 @@ func TestMakeAction_CrossDriveItem(t *testing.T) {
 
 	action := makeAction(ActionDownload, view)
 
-	if !action.DriveID.Equal(driveid.New("000000000000000a")) {
-		t.Errorf("expected DriveID from Remote %q, got %q", driveid.New("000000000000000a"), action.DriveID)
-	}
-
-	if action.ItemID != "item-from-drive-a" {
-		t.Errorf("expected ItemID %q, got %q", "item-from-drive-a", action.ItemID)
-	}
+	assert.Equal(t, driveid.New("000000000000000a"), action.DriveID, "DriveID from Remote")
+	assert.Equal(t, "item-from-drive-a", action.ItemID)
 }
 
 func TestMakeAction_NewLocalItem(t *testing.T) {
@@ -2244,13 +1993,8 @@ func TestMakeAction_NewLocalItem(t *testing.T) {
 
 	action := makeAction(ActionUpload, view)
 
-	if !action.DriveID.IsZero() {
-		t.Errorf("expected zero DriveID for new local item, got %q", action.DriveID)
-	}
-
-	if action.ItemID != "" {
-		t.Errorf("expected empty ItemID for new local item, got %q", action.ItemID)
-	}
+	assert.True(t, action.DriveID.IsZero(), "expected zero DriveID for new local item")
+	assert.Empty(t, action.ItemID, "expected empty ItemID for new local item")
 }
 
 func TestMakeAction_BaselineFallbackDriveID(t *testing.T) {
@@ -2272,9 +2016,7 @@ func TestMakeAction_BaselineFallbackDriveID(t *testing.T) {
 
 	action := makeAction(ActionDownload, view)
 
-	if !action.DriveID.Equal(driveid.New(testDriveID)) {
-		t.Errorf("expected DriveID from Baseline %q, got %q", driveid.New(testDriveID), action.DriveID)
-	}
+	assert.Equal(t, driveid.New(testDriveID), action.DriveID, "DriveID from Baseline")
 }
 
 // ---------------------------------------------------------------------------
@@ -2286,32 +2028,24 @@ func TestDetectLocalChange(t *testing.T) {
 	view := &PathView{
 		Local: &LocalState{Hash: "h1"},
 	}
-	if !detectLocalChange(view) {
-		t.Error("expected local change with no baseline and local present")
-	}
+	assert.True(t, detectLocalChange(view), "expected local change with no baseline and local present")
 
 	// No baseline, no local → not changed.
 	view = &PathView{}
-	if detectLocalChange(view) {
-		t.Error("expected no local change with no baseline and no local")
-	}
+	assert.False(t, detectLocalChange(view), "expected no local change with no baseline and no local")
 
 	// Baseline exists, local nil → changed (deleted).
 	view = &PathView{
 		Baseline: &BaselineEntry{ItemType: ItemTypeFile, LocalHash: "h1"},
 	}
-	if !detectLocalChange(view) {
-		t.Error("expected local change when local is nil (deleted)")
-	}
+	assert.True(t, detectLocalChange(view), "expected local change when local is nil (deleted)")
 
 	// Baseline folder → not changed (folders have no hash).
 	view = &PathView{
 		Baseline: &BaselineEntry{ItemType: ItemTypeFolder},
 		Local:    &LocalState{ItemType: ItemTypeFolder},
 	}
-	if detectLocalChange(view) {
-		t.Error("expected no change for folder")
-	}
+	assert.False(t, detectLocalChange(view), "expected no change for folder")
 }
 
 func TestDetectRemoteChange(t *testing.T) {
@@ -2319,34 +2053,26 @@ func TestDetectRemoteChange(t *testing.T) {
 	view := &PathView{
 		Remote: &RemoteState{Hash: "h1"},
 	}
-	if !detectRemoteChange(view) {
-		t.Error("expected remote change with no baseline and remote present")
-	}
+	assert.True(t, detectRemoteChange(view), "expected remote change with no baseline and remote present")
 
 	// No baseline, remote is deleted → not changed (never synced, delete is a no-op).
 	view = &PathView{
 		Remote: &RemoteState{IsDeleted: true},
 	}
-	if detectRemoteChange(view) {
-		t.Error("expected no remote change for deleted item with no baseline")
-	}
+	assert.False(t, detectRemoteChange(view), "expected no remote change for deleted item with no baseline")
 
 	// Baseline exists, remote nil → no change (no observation).
 	view = &PathView{
 		Baseline: &BaselineEntry{ItemType: ItemTypeFile, RemoteHash: "h1"},
 	}
-	if detectRemoteChange(view) {
-		t.Error("expected no remote change when remote is nil")
-	}
+	assert.False(t, detectRemoteChange(view), "expected no remote change when remote is nil")
 
 	// Baseline exists, remote deleted → changed.
 	view = &PathView{
 		Baseline: &BaselineEntry{ItemType: ItemTypeFile, RemoteHash: "h1"},
 		Remote:   &RemoteState{IsDeleted: true},
 	}
-	if !detectRemoteChange(view) {
-		t.Error("expected remote change when remote is deleted")
-	}
+	assert.True(t, detectRemoteChange(view), "expected remote change when remote is deleted")
 }
 
 // ---------------------------------------------------------------------------
@@ -2414,30 +2140,19 @@ func TestDetectMoves_RemoteMoveOldPathReused(t *testing.T) {
 	})
 
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	allMoves := moves(plan)
-	if len(allMoves) != 1 {
-		t.Fatalf("expected 1 move, got %d", len(allMoves))
-	}
+	require.Len(t, allMoves, 1)
 
 	move := allMoves[0]
-	if move.OldPath != "planner-reused-path.txt" || move.Path != "planner-moved-dest.txt" {
-		t.Errorf("move: %q → %q, want planner-reused-path.txt → planner-moved-dest.txt",
-			move.OldPath, move.Path)
-	}
+	assert.Equal(t, "planner-moved-dest.txt", move.Path, "move destination")
+	assert.Equal(t, "planner-reused-path.txt", move.OldPath, "move source")
 
 	// The new file at the old path should produce a download (EF14).
 	downloads := ActionsOfType(plan.Actions, ActionDownload)
-	if len(downloads) != 1 {
-		t.Fatalf("expected 1 download for new file at reused path, got %d", len(downloads))
-	}
-
-	if downloads[0].Path != "planner-reused-path.txt" {
-		t.Errorf("download path = %q, want %q", downloads[0].Path, "planner-reused-path.txt")
-	}
+	require.Len(t, downloads, 1, "expected 1 download for new file at reused path")
+	assert.Equal(t, "planner-reused-path.txt", downloads[0].Path)
 }
 
 func TestDetectMoves_RemoteMoveOldPathReusedFolder(t *testing.T) {
@@ -2491,28 +2206,16 @@ func TestDetectMoves_RemoteMoveOldPathReusedFolder(t *testing.T) {
 	})
 
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	allMoves := moves(plan)
-	if len(allMoves) != 1 {
-		t.Fatalf("expected 1 move, got %d", len(allMoves))
-	}
+	require.Len(t, allMoves, 1)
 
 	// The new folder at the old path should produce a folder create (ED3).
 	folderCreates := ActionsOfType(plan.Actions, ActionFolderCreate)
-	if len(folderCreates) != 1 {
-		t.Fatalf("expected 1 folder create for new folder at reused path, got %d", len(folderCreates))
-	}
-
-	if folderCreates[0].Path != "planner-reused-folder" {
-		t.Errorf("folder create path = %q, want %q", folderCreates[0].Path, "planner-reused-folder")
-	}
-
-	if folderCreates[0].CreateSide != CreateLocal {
-		t.Errorf("folder create side = %v, want CreateLocal", folderCreates[0].CreateSide)
-	}
+	require.Len(t, folderCreates, 1, "expected 1 folder create for new folder at reused path")
+	assert.Equal(t, "planner-reused-folder", folderCreates[0].Path)
+	assert.Equal(t, CreateLocal, folderCreates[0].CreateSide)
 }
 
 // ---------------------------------------------------------------------------
@@ -2558,14 +2261,10 @@ func TestOrderPlan_DeletesFilesBeforeFoldersAtSameDepth(t *testing.T) {
 	)
 
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
+	require.NoError(t, err, "Plan()")
 
 	localDeletes := ActionsOfType(plan.Actions, ActionLocalDelete)
-	if len(localDeletes) != 2 {
-		t.Fatalf("expected 2 local deletes, got %d", len(localDeletes))
-	}
+	require.Len(t, localDeletes, 2)
 
 	// Verify both paths are present (order is non-deterministic in the flat
 	// list — the executor uses Deps to determine execution order).
@@ -2574,13 +2273,8 @@ func TestOrderPlan_DeletesFilesBeforeFoldersAtSameDepth(t *testing.T) {
 		deletePaths[d.Path] = true
 	}
 
-	if !deletePaths["x/planner-del-file.txt"] {
-		t.Error("expected delete for x/planner-del-file.txt")
-	}
-
-	if !deletePaths["x/planner-del-folder"] {
-		t.Error("expected delete for x/planner-del-folder")
-	}
+	assert.True(t, deletePaths["x/planner-del-file.txt"], "expected delete for x/planner-del-file.txt")
+	assert.True(t, deletePaths["x/planner-del-folder"], "expected delete for x/planner-del-folder")
 }
 
 // TestPlan_DeterministicOrder verifies that calling Plan() twice with
@@ -2598,26 +2292,15 @@ func TestPlan_DeterministicOrder(t *testing.T) {
 	}
 
 	plan1, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("first Plan() failed: %v", err)
-	}
+	require.NoError(t, err, "first Plan()")
 
 	plan2, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
-	if err != nil {
-		t.Fatalf("second Plan() failed: %v", err)
-	}
+	require.NoError(t, err, "second Plan()")
 
-	if len(plan1.Actions) != len(plan2.Actions) {
-		t.Fatalf("action count mismatch: %d vs %d", len(plan1.Actions), len(plan2.Actions))
-	}
+	require.Len(t, plan2.Actions, len(plan1.Actions), "action count mismatch")
 
 	for i := range plan1.Actions {
-		if plan1.Actions[i].Path != plan2.Actions[i].Path {
-			t.Errorf("action[%d] path mismatch: %q vs %q", i, plan1.Actions[i].Path, plan2.Actions[i].Path)
-		}
-
-		if plan1.Actions[i].Type != plan2.Actions[i].Type {
-			t.Errorf("action[%d] type mismatch: %s vs %s", i, plan1.Actions[i].Type, plan2.Actions[i].Type)
-		}
+		assert.Equal(t, plan1.Actions[i].Path, plan2.Actions[i].Path, "action[%d] path", i)
+		assert.Equal(t, plan1.Actions[i].Type, plan2.Actions[i].Type, "action[%d] type", i)
 	}
 }

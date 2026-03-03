@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
@@ -171,33 +174,20 @@ func TestWorkerPool_FolderCreate(t *testing.T) {
 	pool.Stop()
 
 	succeeded, failed, errs := pool.Stats()
-	if failed != 0 {
-		t.Errorf("failed = %d, want 0; errors: %v", failed, errs)
-	}
-
-	if succeeded != 1 {
-		t.Errorf("succeeded = %d, want 1", succeeded)
-	}
+	assert.Equal(t, 0, failed, "failed actions; errors: %v", errs)
+	assert.Equal(t, 1, succeeded)
 
 	// Verify directory was created.
 	info, statErr := os.Stat(filepath.Join(syncRoot, "Documents"))
-	if statErr != nil {
-		t.Fatalf("stat Documents: %v", statErr)
-	}
-
-	if !info.IsDir() {
-		t.Error("Documents should be a directory")
-	}
+	require.NoError(t, statErr, "stat Documents")
+	assert.True(t, info.IsDir(), "Documents should be a directory")
 
 	// Verify baseline was updated.
 	bl, loadErr := mgr.Load(ctx)
-	if loadErr != nil {
-		t.Fatalf("Load: %v", loadErr)
-	}
+	require.NoError(t, loadErr)
 
-	if _, ok := bl.GetByPath("Documents"); !ok {
-		t.Error("baseline entry not found for Documents")
-	}
+	_, ok := bl.GetByPath("Documents")
+	assert.True(t, ok, "baseline entry not found for Documents")
 }
 
 func TestWorkerPool_DependencyChain(t *testing.T) {
@@ -249,23 +239,13 @@ func TestWorkerPool_DependencyChain(t *testing.T) {
 	pool.Stop()
 
 	succeeded, failed, errs := pool.Stats()
-	if failed != 0 {
-		t.Errorf("failed = %d, want 0; errors: %v", failed, errs)
-	}
-
-	if succeeded != 2 {
-		t.Errorf("succeeded = %d, want 2", succeeded)
-	}
+	assert.Equal(t, 0, failed, "failed actions; errors: %v", errs)
+	assert.Equal(t, 2, succeeded)
 
 	// Verify file was downloaded.
 	content, readErr := os.ReadFile(filepath.Join(syncRoot, "NewDir/file.txt"))
-	if readErr != nil {
-		t.Fatalf("read file: %v", readErr)
-	}
-
-	if string(content) != "file-content" {
-		t.Errorf("file content = %q, want %q", content, "file-content")
-	}
+	require.NoError(t, readErr, "read file")
+	assert.Equal(t, "file-content", string(content))
 }
 
 func TestWorkerPool_StopCancelsWork(t *testing.T) {
@@ -310,7 +290,7 @@ func TestWorkerPool_StopCancelsWork(t *testing.T) {
 	case <-done:
 		// Success.
 	case <-time.After(5 * time.Second):
-		t.Fatal("Stop() did not return within timeout")
+		require.Fail(t, "Stop() did not return within timeout")
 	}
 }
 
@@ -341,9 +321,7 @@ func TestWorkerPool_Stats(t *testing.T) {
 	pool.Stop()
 
 	succeeded, _, _ := pool.Stats()
-	if succeeded < 1 {
-		t.Errorf("succeeded = %d, want >= 1", succeeded)
-	}
+	assert.GreaterOrEqual(t, succeeded, 1)
 }
 
 // TestWorkerPool_FailedOutcome verifies that when an action execution fails,
@@ -388,13 +366,8 @@ func TestWorkerPool_FailedOutcome(t *testing.T) {
 	pool.Stop()
 
 	succeeded, failed, errs := pool.Stats()
-	if succeeded != 0 {
-		t.Errorf("succeeded = %d, want 0", succeeded)
-	}
-
-	if failed < 1 {
-		t.Errorf("failed = %d, want >= 1; errors: %v", failed, errs)
-	}
+	assert.Equal(t, 0, succeeded)
+	assert.GreaterOrEqual(t, failed, 1, "failed actions; errors: %v", errs)
 
 	// Drain the result channel and verify the failure is reported.
 	var foundFailure bool
@@ -416,9 +389,7 @@ func TestWorkerPool_FailedOutcome(t *testing.T) {
 
 done:
 
-	if !foundFailure {
-		t.Error("expected failure result for fail-me.txt in result channel")
-	}
+	assert.True(t, foundFailure, "expected failure result for fail-me.txt in result channel")
 }
 
 // TestWorkerPool_ResultChannel verifies that worker results are reported
@@ -469,21 +440,10 @@ func TestWorkerPool_ResultChannel(t *testing.T) {
 
 check:
 
-	if !found {
-		t.Fatal("expected result for result-test.txt in channel")
-	}
-
-	if result.ID != 42 {
-		t.Errorf("result ID = %d, want 42", result.ID)
-	}
-
-	if result.CycleID != "test-cycle" {
-		t.Errorf("result CycleID = %q, want %q", result.CycleID, "test-cycle")
-	}
-
-	if !result.Success {
-		t.Errorf("result Success = false, want true")
-	}
+	require.True(t, found, "expected result for result-test.txt in channel")
+	assert.Equal(t, int64(42), result.ID)
+	assert.Equal(t, "test-cycle", result.CycleID)
+	assert.True(t, result.Success)
 }
 
 // ---------------------------------------------------------------------------
@@ -538,13 +498,8 @@ func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing
 
 	// Write the local file that will be uploaded.
 	absPath := filepath.Join(syncRoot, "Uploads", "doc.txt")
-	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-
-	if err := os.WriteFile(absPath, []byte("upload content"), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	require.NoError(t, os.MkdirAll(filepath.Dir(absPath), 0o755))
+	require.NoError(t, os.WriteFile(absPath, []byte("upload content"), 0o644))
 
 	tracker := NewDepTracker(10, testLogger(t))
 	tracker.Add(&actions[0], 0, nil, "")
@@ -556,20 +511,14 @@ func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing
 	pool.Stop()
 
 	succeeded, failed, errs := pool.Stats()
-	if failed != 0 {
-		t.Errorf("failed = %d, want 0; errors: %v", failed, errs)
-	}
-
-	if succeeded != 2 {
-		t.Errorf("succeeded = %d, want 2", succeeded)
-	}
+	assert.Equal(t, 0, failed, "failed actions; errors: %v", errs)
+	assert.Equal(t, 2, succeeded)
 
 	// The upload must have resolved its parent from the baseline entry committed
 	// by the folder-create action. For CreateSide=CreateLocal, folderOutcome uses
 	// action.View.Remote.ItemID ("uploads-folder-id") as the baseline ItemID.
-	if capturedParentID != "uploads-folder-id" {
-		t.Errorf("upload parentID = %q, want %q (resolved from baseline after folder create)", capturedParentID, "uploads-folder-id")
-	}
+	assert.Equal(t, "uploads-folder-id", capturedParentID,
+		"upload parentID should be resolved from baseline after folder create")
 }
 
 // TestWorkerPool_PanicRecovery verifies that a panic in action execution
@@ -615,9 +564,7 @@ func TestWorkerPool_PanicRecovery(t *testing.T) {
 
 	// If we got here, the panic was recovered — the process didn't crash.
 	_, failed, errs := pool.Stats()
-	if failed < 1 {
-		t.Errorf("failed = %d, want >= 1 (panic should be recorded as failure)", failed)
-	}
+	assert.GreaterOrEqual(t, failed, 1, "panic should be recorded as failure")
 
 	// B-218: verify the error message in wp.errors contains "panic:".
 	var foundPanicError bool
@@ -630,9 +577,8 @@ func TestWorkerPool_PanicRecovery(t *testing.T) {
 		}
 	}
 
-	if !foundPanicError {
-		t.Errorf("expected error containing 'panic:' in Stats() errors, got %v", errs)
-	}
+	assert.True(t, foundPanicError,
+		"expected error containing 'panic:' in Stats() errors, got %v", errs)
 
 	// Verify the failure is reported through the result channel.
 	var foundPanicResult bool
@@ -645,10 +591,7 @@ func TestWorkerPool_PanicRecovery(t *testing.T) {
 			}
 
 			if !r.Success && r.Path == "panic-me.txt" {
-				if !strings.Contains(r.ErrMsg, "panic:") {
-					t.Errorf("ErrMsg = %q, want to contain 'panic:'", r.ErrMsg)
-				}
-
+				assert.Contains(t, r.ErrMsg, "panic:")
 				foundPanicResult = true
 			}
 		default:
@@ -658,9 +601,8 @@ func TestWorkerPool_PanicRecovery(t *testing.T) {
 
 done:
 
-	if !foundPanicResult {
-		t.Error("expected panic failure result for panic-me.txt in result channel")
-	}
+	assert.True(t, foundPanicResult,
+		"expected panic failure result for panic-me.txt in result channel")
 }
 
 // ---------------------------------------------------------------------------
@@ -683,18 +625,12 @@ func TestWorkerPool_ErrorCap(t *testing.T) {
 	_, failed, errs := pool.Stats()
 
 	// failed counter should reflect all errors.
-	if failed != totalErrors {
-		t.Errorf("failed = %d, want %d", failed, totalErrors)
-	}
+	assert.Equal(t, totalErrors, failed)
 
 	// Diagnostic error slice should be capped.
-	if len(errs) != maxRecordedErrors {
-		t.Errorf("len(errors) = %d, want %d", len(errs), maxRecordedErrors)
-	}
+	assert.Len(t, errs, maxRecordedErrors)
 
 	// DroppedErrors should reflect the overflow.
 	dropped := pool.DroppedErrors()
-	if dropped != int64(totalErrors-maxRecordedErrors) {
-		t.Errorf("DroppedErrors() = %d, want %d", dropped, totalErrors-maxRecordedErrors)
-	}
+	assert.Equal(t, int64(totalErrors-maxRecordedErrors), dropped)
 }

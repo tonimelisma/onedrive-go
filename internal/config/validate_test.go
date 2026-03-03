@@ -3,7 +3,6 @@ package config
 import (
 	"context"
 	"log/slog"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -425,7 +424,7 @@ func TestValidate_BandwidthSchedule_BadTimeFormat(t *testing.T) {
 	}
 	err := Validate(cfg)
 	require.Error(t, err)
-	assert.True(t, strings.Contains(err.Error(), "time"))
+	assert.Contains(t, err.Error(), "time")
 }
 
 // --- WarnDeprecatedKeys tests ---

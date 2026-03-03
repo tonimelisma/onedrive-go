@@ -5,6 +5,9 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestFailureTracker_SkipsAfterThreshold(t *testing.T) {
@@ -17,20 +20,14 @@ func TestFailureTracker_SkipsAfterThreshold(t *testing.T) {
 
 	// First two failures: should not skip.
 	ft.recordFailure(path, "upload failed: 500")
-	if ft.shouldSkip(path) {
-		t.Fatal("should not skip after 1 failure")
-	}
+	assert.False(t, ft.shouldSkip(path), "should not skip after 1 failure")
 
 	ft.recordFailure(path, "upload failed: 500")
-	if ft.shouldSkip(path) {
-		t.Fatal("should not skip after 2 failures")
-	}
+	assert.False(t, ft.shouldSkip(path), "should not skip after 2 failures")
 
 	// Third failure: threshold reached, should skip.
 	ft.recordFailure(path, "upload failed: 500")
-	if !ft.shouldSkip(path) {
-		t.Fatal("should skip after 3 failures")
-	}
+	assert.True(t, ft.shouldSkip(path), "should skip after 3 failures")
 }
 
 func TestFailureTracker_CooldownResetsCount(t *testing.T) {
@@ -49,16 +46,12 @@ func TestFailureTracker_CooldownResetsCount(t *testing.T) {
 		ft.recordFailure(path, "timeout")
 	}
 
-	if !ft.shouldSkip(path) {
-		t.Fatal("should skip after threshold failures")
-	}
+	require.True(t, ft.shouldSkip(path), "should skip after threshold failures")
 
 	// Advance past cooldown.
 	ft.nowFunc = func() time.Time { return now.Add(failureCooldown + time.Second) }
 
-	if ft.shouldSkip(path) {
-		t.Fatal("should not skip after cooldown expires")
-	}
+	assert.False(t, ft.shouldSkip(path), "should not skip after cooldown expires")
 }
 
 func TestFailureTracker_SuccessClearsRecord(t *testing.T) {
@@ -73,15 +66,11 @@ func TestFailureTracker_SuccessClearsRecord(t *testing.T) {
 		ft.recordFailure(path, "hash mismatch")
 	}
 
-	if !ft.shouldSkip(path) {
-		t.Fatal("should skip after threshold failures")
-	}
+	require.True(t, ft.shouldSkip(path), "should skip after threshold failures")
 
 	ft.recordSuccess(path)
 
-	if ft.shouldSkip(path) {
-		t.Fatal("should not skip after success clears record")
-	}
+	assert.False(t, ft.shouldSkip(path), "should not skip after success clears record")
 }
 
 func TestFailureTracker_DifferentPathsIndependent(t *testing.T) {
@@ -97,11 +86,6 @@ func TestFailureTracker_DifferentPathsIndependent(t *testing.T) {
 		ft.recordFailure(path1, "error")
 	}
 
-	if !ft.shouldSkip(path1) {
-		t.Fatal("path1 should be skipped")
-	}
-
-	if ft.shouldSkip(path2) {
-		t.Fatal("path2 should not be affected by path1 failures")
-	}
+	assert.True(t, ft.shouldSkip(path1), "path1 should be skipped")
+	assert.False(t, ft.shouldSkip(path2), "path2 should not be affected by path1 failures")
 }

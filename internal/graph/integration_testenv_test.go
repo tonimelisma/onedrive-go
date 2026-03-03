@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
@@ -194,9 +195,7 @@ func verifyIntegrationIsolation(tempRoot string) {
 
 func TestIntegration_Isolation_HomeOverridden(t *testing.T) {
 	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatalf("cannot get home dir: %v", err)
-	}
+	require.NoError(t, err, "cannot get home dir")
 
 	assert.NotEqual(t, integrationRealHomeDir, home, "HOME should be overridden")
 }

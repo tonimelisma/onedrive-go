@@ -710,9 +710,7 @@ func simulateBrowserCallback(t *testing.T) func(string) error {
 	return func(authURL string) error {
 		// Step 1: Hit the authorize endpoint.
 		resp, err := client.Get(authURL) //nolint:noctx // test helper, no context needed
-		if err != nil {
-			t.Fatalf("failed to hit authorize endpoint: %v", err)
-		}
+		require.NoError(t, err, "failed to hit authorize endpoint")
 		resp.Body.Close()
 
 		// Step 2: Follow the redirect to the localhost callback.
@@ -720,9 +718,7 @@ func simulateBrowserCallback(t *testing.T) func(string) error {
 		require.NotEmpty(t, location, "authorize endpoint must redirect")
 
 		callbackResp, err := http.Get(location) //nolint:noctx // test helper, no context needed
-		if err != nil {
-			t.Fatalf("failed to hit callback: %v", err)
-		}
+		require.NoError(t, err, "failed to hit callback")
 		callbackResp.Body.Close()
 
 		return nil

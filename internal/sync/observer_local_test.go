@@ -3,7 +3,6 @@ package sync
 import (
 	"context"
 	"encoding/base64"
-	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -11,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -37,13 +37,8 @@ func writeTestFile(t *testing.T, dir, relPath, content string) string {
 	t.Helper()
 
 	fullPath := filepath.Join(dir, relPath)
-	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll(%s): %v", filepath.Dir(fullPath), err)
-	}
-
-	if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
-		t.Fatalf("WriteFile(%s): %v", fullPath, err)
-	}
+	require.NoError(t, os.MkdirAll(filepath.Dir(fullPath), 0o755), "MkdirAll(%s)", filepath.Dir(fullPath))
+	require.NoError(t, os.WriteFile(fullPath, []byte(content), 0o644), "WriteFile(%s)", fullPath)
 
 	return fullPath
 }
@@ -55,9 +50,8 @@ func hashContent(t *testing.T, content string) string {
 	t.Helper()
 
 	h := quickxorhash.New()
-	if _, err := h.Write([]byte(content)); err != nil {
-		t.Fatalf("hash.Write: %v", err)
-	}
+	_, err := h.Write([]byte(content))
+	require.NoError(t, err, "hash.Write")
 
 	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }
@@ -86,82 +80,39 @@ func TestFullScan_NewFiles(t *testing.T) {
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
-	if err != nil {
-		t.Fatalf("FullScan: %v", err)
-	}
+	require.NoError(t, err, "FullScan")
 
-	if len(events) != 2 {
-		t.Fatalf("len(events) = %d, want 2", len(events))
-	}
+	require.Len(t, events, 2)
 
 	ev := findEvent(events, "hello.txt")
-	if ev == nil {
-		t.Fatal("hello.txt event not found")
-	}
+	require.NotNil(t, ev, "hello.txt event not found")
 
-	if ev.Source != SourceLocal {
-		t.Errorf("Source = %v, want SourceLocal", ev.Source)
-	}
-
-	if ev.Type != ChangeCreate {
-		t.Errorf("Type = %v, want ChangeCreate", ev.Type)
-	}
-
-	if ev.Name != "hello.txt" {
-		t.Errorf("Name = %q, want %q", ev.Name, "hello.txt")
-	}
-
-	if ev.Hash != hashContent(t, "hello world") {
-		t.Errorf("Hash = %q, want %q", ev.Hash, hashContent(t, "hello world"))
-	}
-
-	if ev.Size != int64(len("hello world")) {
-		t.Errorf("Size = %d, want %d", ev.Size, len("hello world"))
-	}
-
-	if ev.Mtime == 0 {
-		t.Error("Mtime = 0, want non-zero")
-	}
-
-	if ev.ItemType != ItemTypeFile {
-		t.Errorf("ItemType = %v, want ItemTypeFile", ev.ItemType)
-	}
+	assert.Equal(t, SourceLocal, ev.Source)
+	assert.Equal(t, ChangeCreate, ev.Type)
+	assert.Equal(t, "hello.txt", ev.Name)
+	assert.Equal(t, hashContent(t, "hello world"), ev.Hash)
+	assert.Equal(t, int64(len("hello world")), ev.Size)
+	assert.NotZero(t, ev.Mtime, "Mtime should be non-zero")
+	assert.Equal(t, ItemTypeFile, ev.ItemType)
 }
 
 func TestFullScan_NewFolder(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	if err := os.Mkdir(filepath.Join(dir, "photos"), 0o755); err != nil {
-		t.Fatalf("Mkdir: %v", err)
-	}
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "photos"), 0o755), "Mkdir")
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
-	if err != nil {
-		t.Fatalf("FullScan: %v", err)
-	}
+	require.NoError(t, err, "FullScan")
 
-	if len(events) != 1 {
-		t.Fatalf("len(events) = %d, want 1", len(events))
-	}
+	require.Len(t, events, 1)
 
 	ev := events[0]
-	if ev.Type != ChangeCreate {
-		t.Errorf("Type = %v, want ChangeCreate", ev.Type)
-	}
-
-	if ev.ItemType != ItemTypeFolder {
-		t.Errorf("ItemType = %v, want ItemTypeFolder", ev.ItemType)
-	}
-
-	if ev.Hash != "" {
-		t.Errorf("Hash = %q, want empty (folders have no hash)", ev.Hash)
-	}
-
-	if ev.Path != "photos" {
-		t.Errorf("Path = %q, want %q", ev.Path, "photos")
-	}
+	assert.Equal(t, ChangeCreate, ev.Type)
+	assert.Equal(t, ItemTypeFolder, ev.ItemType)
+	assert.Empty(t, ev.Hash, "folders have no hash")
+	assert.Equal(t, "photos", ev.Path)
 }
 
 func TestFullScan_ModifiedFile(t *testing.T) {
@@ -177,26 +128,14 @@ func TestFullScan_ModifiedFile(t *testing.T) {
 
 	obs := NewLocalObserver(baseline, testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
-	if err != nil {
-		t.Fatalf("FullScan: %v", err)
-	}
+	require.NoError(t, err, "FullScan")
 
-	if len(events) != 1 {
-		t.Fatalf("len(events) = %d, want 1", len(events))
-	}
+	require.Len(t, events, 1)
 
 	ev := events[0]
-	if ev.Type != ChangeModify {
-		t.Errorf("Type = %v, want ChangeModify", ev.Type)
-	}
-
-	if ev.Hash != hashContent(t, "updated content") {
-		t.Errorf("Hash = %q, want %q", ev.Hash, hashContent(t, "updated content"))
-	}
-
-	if ev.Source != SourceLocal {
-		t.Errorf("Source = %v, want SourceLocal", ev.Source)
-	}
+	assert.Equal(t, ChangeModify, ev.Type)
+	assert.Equal(t, hashContent(t, "updated content"), ev.Hash)
+	assert.Equal(t, SourceLocal, ev.Source)
 }
 
 func TestFullScan_UnchangedFile(t *testing.T) {
@@ -213,13 +152,9 @@ func TestFullScan_UnchangedFile(t *testing.T) {
 
 	obs := NewLocalObserver(baseline, testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
-	if err != nil {
-		t.Fatalf("FullScan: %v", err)
-	}
+	require.NoError(t, err, "FullScan")
 
-	if len(events) != 0 {
-		t.Errorf("len(events) = %d, want 0 (file unchanged)", len(events))
-	}
+	assert.Empty(t, events, "file unchanged")
 }
 
 func TestFullScan_DeletedFile(t *testing.T) {
@@ -236,39 +171,19 @@ func TestFullScan_DeletedFile(t *testing.T) {
 
 	obs := NewLocalObserver(baseline, testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
-	if err != nil {
-		t.Fatalf("FullScan: %v", err)
-	}
+	require.NoError(t, err, "FullScan")
 
-	if len(events) != 1 {
-		t.Fatalf("len(events) = %d, want 1", len(events))
-	}
+	require.Len(t, events, 1)
 
 	ev := events[0]
-	if ev.Type != ChangeDelete {
-		t.Errorf("Type = %v, want ChangeDelete", ev.Type)
-	}
-
-	if !ev.IsDeleted {
-		t.Error("IsDeleted = false, want true")
-	}
-
-	if ev.Path != "gone.txt" {
-		t.Errorf("Path = %q, want %q", ev.Path, "gone.txt")
-	}
-
-	if ev.Name != "gone.txt" {
-		t.Errorf("Name = %q, want %q", ev.Name, "gone.txt")
-	}
+	assert.Equal(t, ChangeDelete, ev.Type)
+	assert.True(t, ev.IsDeleted)
+	assert.Equal(t, "gone.txt", ev.Path)
+	assert.Equal(t, "gone.txt", ev.Name)
 
 	// Size and Mtime should be populated from baseline.
-	if ev.Size != 42 {
-		t.Errorf("Size = %d, want 42", ev.Size)
-	}
-
-	if ev.Mtime != 1234567890 {
-		t.Errorf("Mtime = %d, want 1234567890", ev.Mtime)
-	}
+	assert.Equal(t, int64(42), ev.Size)
+	assert.Equal(t, int64(1234567890), ev.Mtime)
 }
 
 func TestFullScan_DeletedFolder(t *testing.T) {
@@ -283,22 +198,13 @@ func TestFullScan_DeletedFolder(t *testing.T) {
 
 	obs := NewLocalObserver(baseline, testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
-	if err != nil {
-		t.Fatalf("FullScan: %v", err)
-	}
+	require.NoError(t, err, "FullScan")
 
-	if len(events) != 1 {
-		t.Fatalf("len(events) = %d, want 1", len(events))
-	}
+	require.Len(t, events, 1)
 
 	ev := events[0]
-	if ev.Type != ChangeDelete {
-		t.Errorf("Type = %v, want ChangeDelete", ev.Type)
-	}
-
-	if ev.ItemType != ItemTypeFolder {
-		t.Errorf("ItemType = %v, want ItemTypeFolder", ev.ItemType)
-	}
+	assert.Equal(t, ChangeDelete, ev.Type)
+	assert.Equal(t, ItemTypeFolder, ev.ItemType)
 }
 
 func TestFullScan_MtimeChangeNoContentChange(t *testing.T) {
@@ -317,13 +223,9 @@ func TestFullScan_MtimeChangeNoContentChange(t *testing.T) {
 
 	obs := NewLocalObserver(baseline, testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
-	if err != nil {
-		t.Fatalf("FullScan: %v", err)
-	}
+	require.NoError(t, err, "FullScan")
 
-	if len(events) != 0 {
-		t.Errorf("len(events) = %d, want 0 (mtime change only, hash matches)", len(events))
-	}
+	assert.Empty(t, events, "mtime change only, hash matches")
 }
 
 func TestFullScan_MtimeSizeFastPath(t *testing.T) {
@@ -335,14 +237,10 @@ func TestFullScan_MtimeSizeFastPath(t *testing.T) {
 
 	// Set mtime to 1 hour ago so it's well outside the racily-clean window.
 	oldTime := time.Now().Add(-time.Hour)
-	if err := os.Chtimes(filepath.Join(dir, "cached.txt"), oldTime, oldTime); err != nil {
-		t.Fatalf("Chtimes: %v", err)
-	}
+	require.NoError(t, os.Chtimes(filepath.Join(dir, "cached.txt"), oldTime, oldTime), "Chtimes")
 
 	info, err := os.Stat(filepath.Join(dir, "cached.txt"))
-	if err != nil {
-		t.Fatalf("Stat: %v", err)
-	}
+	require.NoError(t, err, "Stat")
 
 	// Baseline matches file's actual mtime, size, and hash — fast path should skip hashing.
 	baseline := baselineWith(&BaselineEntry{
@@ -353,13 +251,9 @@ func TestFullScan_MtimeSizeFastPath(t *testing.T) {
 
 	obs := NewLocalObserver(baseline, testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
-	if err != nil {
-		t.Fatalf("FullScan: %v", err)
-	}
+	require.NoError(t, err, "FullScan")
 
-	if len(events) != 0 {
-		t.Errorf("len(events) = %d, want 0 (fast path should skip unchanged file)", len(events))
-	}
+	assert.Empty(t, events, "fast path should skip unchanged file")
 }
 
 func TestFullScan_RacilyCleanForcesHash(t *testing.T) {
@@ -374,9 +268,7 @@ func TestFullScan_RacilyCleanForcesHash(t *testing.T) {
 	writeTestFile(t, dir, "racy.txt", actualContent)
 
 	info, err := os.Stat(filepath.Join(dir, "racy.txt"))
-	if err != nil {
-		t.Fatalf("Stat: %v", err)
-	}
+	require.NoError(t, err, "Stat")
 
 	// Baseline has same mtime and size but different hash.
 	baseline := baselineWith(&BaselineEntry{
@@ -387,23 +279,14 @@ func TestFullScan_RacilyCleanForcesHash(t *testing.T) {
 
 	obs := NewLocalObserver(baseline, testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
-	if err != nil {
-		t.Fatalf("FullScan: %v", err)
-	}
+	require.NoError(t, err, "FullScan")
 
-	// Racily-clean guard should force hash, detect the mismatch → ChangeModify.
-	if len(events) != 1 {
-		t.Fatalf("len(events) = %d, want 1 (racily clean should force hash)", len(events))
-	}
+	// Racily-clean guard should force hash, detect the mismatch -> ChangeModify.
+	require.Len(t, events, 1, "racily clean should force hash")
 
 	ev := events[0]
-	if ev.Type != ChangeModify {
-		t.Errorf("Type = %v, want ChangeModify", ev.Type)
-	}
-
-	if ev.Hash != hashContent(t, actualContent) {
-		t.Errorf("Hash = %q, want %q", ev.Hash, hashContent(t, actualContent))
-	}
+	assert.Equal(t, ChangeModify, ev.Type)
+	assert.Equal(t, hashContent(t, actualContent), ev.Hash)
 }
 
 func TestFullScan_SizeChangeForcesHash(t *testing.T) {
@@ -415,14 +298,10 @@ func TestFullScan_SizeChangeForcesHash(t *testing.T) {
 
 	// Set mtime to 1 hour ago.
 	oldTime := time.Now().Add(-time.Hour)
-	if err := os.Chtimes(filepath.Join(dir, "grown.txt"), oldTime, oldTime); err != nil {
-		t.Fatalf("Chtimes: %v", err)
-	}
+	require.NoError(t, os.Chtimes(filepath.Join(dir, "grown.txt"), oldTime, oldTime), "Chtimes")
 
 	info, err := os.Stat(filepath.Join(dir, "grown.txt"))
-	if err != nil {
-		t.Fatalf("Stat: %v", err)
-	}
+	require.NoError(t, err, "Stat")
 
 	// Baseline has same mtime but different size — should force hash.
 	baseline := baselineWith(&BaselineEntry{
@@ -433,17 +312,10 @@ func TestFullScan_SizeChangeForcesHash(t *testing.T) {
 
 	obs := NewLocalObserver(baseline, testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
-	if err != nil {
-		t.Fatalf("FullScan: %v", err)
-	}
+	require.NoError(t, err, "FullScan")
 
-	if len(events) != 1 {
-		t.Fatalf("len(events) = %d, want 1 (size change should force hash)", len(events))
-	}
-
-	if events[0].Type != ChangeModify {
-		t.Errorf("Type = %v, want ChangeModify", events[0].Type)
-	}
+	require.Len(t, events, 1, "size change should force hash")
+	assert.Equal(t, ChangeModify, events[0].Type)
 }
 
 func TestFullScan_NosyncGuard(t *testing.T) {
@@ -455,9 +327,7 @@ func TestFullScan_NosyncGuard(t *testing.T) {
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	_, err := obs.FullScan(context.Background(), dir)
 
-	if !errors.Is(err, ErrNosyncGuard) {
-		t.Errorf("err = %v, want ErrNosyncGuard", err)
-	}
+	assert.ErrorIs(t, err, ErrNosyncGuard)
 }
 
 func TestFullScan_EmptyDir(t *testing.T) {
@@ -467,13 +337,9 @@ func TestFullScan_EmptyDir(t *testing.T) {
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
-	if err != nil {
-		t.Fatalf("FullScan: %v", err)
-	}
+	require.NoError(t, err, "FullScan")
 
-	if len(events) != 0 {
-		t.Errorf("len(events) = %d, want 0", len(events))
-	}
+	assert.Empty(t, events)
 }
 
 func TestFullScan_Symlink(t *testing.T) {
@@ -482,24 +348,15 @@ func TestFullScan_Symlink(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, dir, "real.txt", "content")
 
-	if err := os.Symlink(filepath.Join(dir, "real.txt"), filepath.Join(dir, "link.txt")); err != nil {
-		t.Fatalf("Symlink: %v", err)
-	}
+	require.NoError(t, os.Symlink(filepath.Join(dir, "real.txt"), filepath.Join(dir, "link.txt")), "Symlink")
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
-	if err != nil {
-		t.Fatalf("FullScan: %v", err)
-	}
+	require.NoError(t, err, "FullScan")
 
 	// Only the real file should produce an event, not the symlink.
-	if len(events) != 1 {
-		t.Fatalf("len(events) = %d, want 1 (symlink should be skipped)", len(events))
-	}
-
-	if events[0].Path != "real.txt" {
-		t.Errorf("Path = %q, want %q", events[0].Path, "real.txt")
-	}
+	require.Len(t, events, 1, "symlink should be skipped")
+	assert.Equal(t, "real.txt", events[0].Path)
 }
 
 func TestFullScan_InvalidName(t *testing.T) {
@@ -511,18 +368,11 @@ func TestFullScan_InvalidName(t *testing.T) {
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
-	if err != nil {
-		t.Fatalf("FullScan: %v", err)
-	}
+	require.NoError(t, err, "FullScan")
 
 	// CON should be skipped; only valid.txt produces an event.
-	if len(events) != 1 {
-		t.Fatalf("len(events) = %d, want 1", len(events))
-	}
-
-	if events[0].Path != "valid.txt" {
-		t.Errorf("Path = %q, want %q", events[0].Path, "valid.txt")
-	}
+	require.Len(t, events, 1)
+	assert.Equal(t, "valid.txt", events[0].Path)
 }
 
 func TestFullScan_AlwaysExcluded(t *testing.T) {
@@ -536,18 +386,11 @@ func TestFullScan_AlwaysExcluded(t *testing.T) {
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
-	if err != nil {
-		t.Fatalf("FullScan: %v", err)
-	}
+	require.NoError(t, err, "FullScan")
 
 	// Only legit.txt should produce an event.
-	if len(events) != 1 {
-		t.Fatalf("len(events) = %d, want 1", len(events))
-	}
-
-	if events[0].Path != "legit.txt" {
-		t.Errorf("Path = %q, want %q", events[0].Path, "legit.txt")
-	}
+	require.Len(t, events, 1)
+	assert.Equal(t, "legit.txt", events[0].Path)
 }
 
 func TestFullScan_ContextCanceled(t *testing.T) {
@@ -562,13 +405,8 @@ func TestFullScan_ContextCanceled(t *testing.T) {
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	_, err := obs.FullScan(ctx, dir)
 
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-
-	if !errors.Is(err, context.Canceled) {
-		t.Errorf("err = %v, want context.Canceled", err)
-	}
+	require.Error(t, err, "expected error")
+	assert.ErrorIs(t, err, context.Canceled)
 }
 
 func TestFullScan_NFCNormalization(t *testing.T) {
@@ -584,21 +422,11 @@ func TestFullScan_NFCNormalization(t *testing.T) {
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
-	if err != nil {
-		t.Fatalf("FullScan: %v", err)
-	}
+	require.NoError(t, err, "FullScan")
 
-	if len(events) != 1 {
-		t.Fatalf("len(events) = %d, want 1", len(events))
-	}
-
-	if events[0].Path != nfcName {
-		t.Errorf("Path = %q, want %q (NFC-normalized)", events[0].Path, nfcName)
-	}
-
-	if events[0].Name != nfcName {
-		t.Errorf("Name = %q, want %q (NFC-normalized)", events[0].Name, nfcName)
-	}
+	require.Len(t, events, 1)
+	assert.Equal(t, nfcName, events[0].Path, "NFC-normalized")
+	assert.Equal(t, nfcName, events[0].Name, "NFC-normalized")
 }
 
 func TestFullScan_NestedDirs(t *testing.T) {
@@ -610,38 +438,22 @@ func TestFullScan_NestedDirs(t *testing.T) {
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
-	if err != nil {
-		t.Fatalf("FullScan: %v", err)
-	}
+	require.NoError(t, err, "FullScan")
 
 	// Expect: folder "a", folder "a/b", file "a/b/deep.txt", file "top.txt".
-	if len(events) != 4 {
-		t.Fatalf("len(events) = %d, want 4", len(events))
-	}
+	require.Len(t, events, 4)
 
 	deepEv := findEvent(events, "a/b/deep.txt")
-	if deepEv == nil {
-		t.Fatal("a/b/deep.txt event not found")
-	}
-
-	if deepEv.Type != ChangeCreate {
-		t.Errorf("Type = %v, want ChangeCreate", deepEv.Type)
-	}
+	require.NotNil(t, deepEv, "a/b/deep.txt event not found")
+	assert.Equal(t, ChangeCreate, deepEv.Type)
 
 	// Verify folder events exist with correct paths.
 	aEv := findEvent(events, "a")
-	if aEv == nil {
-		t.Fatal("folder 'a' event not found")
-	}
-
-	if aEv.ItemType != ItemTypeFolder {
-		t.Errorf("folder 'a' ItemType = %v, want ItemTypeFolder", aEv.ItemType)
-	}
+	require.NotNil(t, aEv, "folder 'a' event not found")
+	assert.Equal(t, ItemTypeFolder, aEv.ItemType)
 
 	abEv := findEvent(events, "a/b")
-	if abEv == nil {
-		t.Fatal("folder 'a/b' event not found")
-	}
+	require.NotNil(t, abEv, "folder 'a/b' event not found")
 }
 
 func TestFullScan_EmptyFile(t *testing.T) {
@@ -652,30 +464,15 @@ func TestFullScan_EmptyFile(t *testing.T) {
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
-	if err != nil {
-		t.Fatalf("FullScan: %v", err)
-	}
+	require.NoError(t, err, "FullScan")
 
-	if len(events) != 1 {
-		t.Fatalf("len(events) = %d, want 1", len(events))
-	}
+	require.Len(t, events, 1)
 
 	ev := events[0]
-	if ev.Type != ChangeCreate {
-		t.Errorf("Type = %v, want ChangeCreate", ev.Type)
-	}
-
-	if ev.Hash == "" {
-		t.Error("Hash is empty, want non-empty hash for empty file")
-	}
-
-	if ev.Hash != hashContent(t, "") {
-		t.Errorf("Hash = %q, want %q", ev.Hash, hashContent(t, ""))
-	}
-
-	if ev.Size != 0 {
-		t.Errorf("Size = %d, want 0", ev.Size)
-	}
+	assert.Equal(t, ChangeCreate, ev.Type)
+	assert.NotEmpty(t, ev.Hash, "want non-empty hash for empty file")
+	assert.Equal(t, hashContent(t, ""), ev.Hash)
+	assert.Equal(t, int64(0), ev.Size)
 }
 
 func TestFullScan_MixedChanges(t *testing.T) {
@@ -711,41 +508,22 @@ func TestFullScan_MixedChanges(t *testing.T) {
 
 	obs := NewLocalObserver(baseline, testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
-	if err != nil {
-		t.Fatalf("FullScan: %v", err)
-	}
+	require.NoError(t, err, "FullScan")
 
 	// 3 events: new, modified, deleted. Unchanged produces no event.
-	if len(events) != 3 {
-		t.Fatalf("len(events) = %d, want 3", len(events))
-	}
+	require.Len(t, events, 3)
 
 	newEv := findEvent(events, "new.txt")
-	if newEv == nil {
-		t.Fatal("new.txt event not found")
-	}
-
-	if newEv.Type != ChangeCreate {
-		t.Errorf("new.txt Type = %v, want ChangeCreate", newEv.Type)
-	}
+	require.NotNil(t, newEv, "new.txt event not found")
+	assert.Equal(t, ChangeCreate, newEv.Type)
 
 	modEv := findEvent(events, "modified.txt")
-	if modEv == nil {
-		t.Fatal("modified.txt event not found")
-	}
-
-	if modEv.Type != ChangeModify {
-		t.Errorf("modified.txt Type = %v, want ChangeModify", modEv.Type)
-	}
+	require.NotNil(t, modEv, "modified.txt event not found")
+	assert.Equal(t, ChangeModify, modEv.Type)
 
 	delEv := findEvent(events, "deleted.txt")
-	if delEv == nil {
-		t.Fatal("deleted.txt event not found")
-	}
-
-	if delEv.Type != ChangeDelete {
-		t.Errorf("deleted.txt Type = %v, want ChangeDelete", delEv.Type)
-	}
+	require.NotNil(t, delEv, "deleted.txt event not found")
+	assert.Equal(t, ChangeDelete, delEv.Type)
 }
 
 // ---------------------------------------------------------------------------
@@ -793,9 +571,7 @@ func TestIsAlwaysExcluded(t *testing.T) {
 			t.Parallel()
 
 			got := isAlwaysExcluded(tt.in)
-			if got != tt.want {
-				t.Errorf("isAlwaysExcluded(%q) = %v, want %v", tt.in, got, tt.want)
-			}
+			assert.Equal(t, tt.want, got, "isAlwaysExcluded(%q)", tt.in)
 		})
 	}
 }
@@ -878,9 +654,7 @@ func TestIsValidOneDriveName(t *testing.T) {
 			t.Parallel()
 
 			got := isValidOneDriveName(tt.in)
-			if got != tt.want {
-				t.Errorf("isValidOneDriveName(%q) = %v, want %v", tt.in, got, tt.want)
-			}
+			assert.Equal(t, tt.want, got, "isValidOneDriveName(%q)", tt.in)
 		})
 	}
 }
@@ -891,23 +665,19 @@ func TestItemTypeFromDirEntry(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, dir, "file.txt", "x")
 
-	if err := os.Mkdir(filepath.Join(dir, "subdir"), 0o755); err != nil {
-		t.Fatalf("Mkdir: %v", err)
-	}
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "subdir"), 0o755), "Mkdir")
 
 	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("ReadDir: %v", err)
-	}
+	require.NoError(t, err, "ReadDir")
 
 	for _, e := range entries {
 		got := itemTypeFromDirEntry(e)
 
 		switch {
-		case e.IsDir() && got != ItemTypeFolder:
-			t.Errorf("%s: got %v, want ItemTypeFolder", e.Name(), got)
-		case !e.IsDir() && got != ItemTypeFile:
-			t.Errorf("%s: got %v, want ItemTypeFile", e.Name(), got)
+		case e.IsDir():
+			assert.Equal(t, ItemTypeFolder, got, "%s should be ItemTypeFolder", e.Name())
+		default:
+			assert.Equal(t, ItemTypeFile, got, "%s should be ItemTypeFile", e.Name())
 		}
 	}
 }
@@ -916,21 +686,15 @@ func TestSkipEntry_Dir(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	if err := os.Mkdir(filepath.Join(dir, "subdir"), 0o755); err != nil {
-		t.Fatalf("Mkdir: %v", err)
-	}
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "subdir"), 0o755), "Mkdir")
 
 	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("ReadDir: %v", err)
-	}
+	require.NoError(t, err, "ReadDir")
 
 	for _, e := range entries {
 		if e.IsDir() {
 			got := skipEntry(e)
-			if !errors.Is(got, filepath.SkipDir) {
-				t.Errorf("skipEntry(dir) = %v, want filepath.SkipDir", got)
-			}
+			assert.ErrorIs(t, got, filepath.SkipDir)
 		}
 	}
 }
@@ -942,16 +706,12 @@ func TestSkipEntry_File(t *testing.T) {
 	writeTestFile(t, dir, "file.txt", "x")
 
 	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("ReadDir: %v", err)
-	}
+	require.NoError(t, err, "ReadDir")
 
 	for _, e := range entries {
 		if !e.IsDir() {
 			got := skipEntry(e)
-			if got != nil {
-				t.Errorf("skipEntry(file) = %v, want nil", got)
-			}
+			assert.NoError(t, got)
 		}
 	}
 }
@@ -960,9 +720,7 @@ func TestSkipEntry_Nil(t *testing.T) {
 	t.Parallel()
 
 	got := skipEntry(nil)
-	if got != nil {
-		t.Errorf("skipEntry(nil) = %v, want nil", got)
-	}
+	assert.NoError(t, got)
 }
 
 func TestFullScan_NosyncGuardDir(t *testing.T) {
@@ -970,16 +728,12 @@ func TestFullScan_NosyncGuardDir(t *testing.T) {
 
 	dir := t.TempDir()
 	// .nosync as a directory should also trigger the guard.
-	if err := os.Mkdir(filepath.Join(dir, ".nosync"), 0o755); err != nil {
-		t.Fatalf("Mkdir: %v", err)
-	}
+	require.NoError(t, os.Mkdir(filepath.Join(dir, ".nosync"), 0o755), "Mkdir")
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	_, err := obs.FullScan(context.Background(), dir)
 
-	if !errors.Is(err, ErrNosyncGuard) {
-		t.Errorf("err = %v, want ErrNosyncGuard", err)
-	}
+	assert.ErrorIs(t, err, ErrNosyncGuard)
 }
 
 func TestFullScan_ExcludedDirSkipsSubtree(t *testing.T) {
@@ -992,18 +746,11 @@ func TestFullScan_ExcludedDirSkipsSubtree(t *testing.T) {
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
-	if err != nil {
-		t.Fatalf("FullScan: %v", err)
-	}
+	require.NoError(t, err, "FullScan")
 
 	// Only visible.txt should appear; ~excluded dir and its contents are skipped.
-	if len(events) != 1 {
-		t.Fatalf("len(events) = %d, want 1", len(events))
-	}
-
-	if events[0].Path != "visible.txt" {
-		t.Errorf("Path = %q, want %q", events[0].Path, "visible.txt")
-	}
+	require.Len(t, events, 1)
+	assert.Equal(t, "visible.txt", events[0].Path)
 }
 
 func TestFullScan_InvalidNameDirSkipsSubtree(t *testing.T) {
@@ -1020,9 +767,7 @@ func TestFullScan_InvalidNameDirSkipsSubtree(t *testing.T) {
 
 	// Verify the directory was actually created with the trailing dot.
 	entries, readErr := os.ReadDir(dir)
-	if readErr != nil {
-		t.Fatalf("ReadDir: %v", readErr)
-	}
+	require.NoError(t, readErr, "ReadDir")
 
 	hasBadDir := false
 
@@ -1041,18 +786,11 @@ func TestFullScan_InvalidNameDirSkipsSubtree(t *testing.T) {
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events, err := obs.FullScan(context.Background(), dir)
-	if err != nil {
-		t.Fatalf("FullScan: %v", err)
-	}
+	require.NoError(t, err, "FullScan")
 
 	// Only good.txt should appear; bad. dir and its contents are skipped.
-	if findEvent(events, "bad./child.txt") != nil {
-		t.Error("child inside invalid-name dir should not produce an event")
-	}
-
-	if findEvent(events, "good.txt") == nil {
-		t.Error("good.txt event not found")
-	}
+	assert.Nil(t, findEvent(events, "bad./child.txt"), "child inside invalid-name dir should not produce an event")
+	assert.NotNil(t, findEvent(events, "good.txt"), "good.txt event not found")
 }
 
 func TestFullScan_PermissionDenied(t *testing.T) {
@@ -1082,13 +820,8 @@ func TestFullScan_PermissionDenied(t *testing.T) {
 
 	// Should see events for readable dir + file, but not unreadable contents.
 	paths := eventPaths(events)
-	if !containsPath(paths, "readable/file.txt") {
-		t.Error("expected event for readable/file.txt")
-	}
-
-	if containsPath(paths, "unreadable/hidden.txt") {
-		t.Error("should not have event for unreadable/hidden.txt")
-	}
+	assert.True(t, containsPath(paths, "readable/file.txt"), "expected event for readable/file.txt")
+	assert.False(t, containsPath(paths, "unreadable/hidden.txt"), "should not have event for unreadable/hidden.txt")
 }
 
 // eventPaths extracts paths from a slice of ChangeEvents.
@@ -1148,15 +881,13 @@ func TestItemTypeFromDirEntry_Table(t *testing.T) {
 			d := mockDirEntry{name: "test", isDir: tt.isDir}
 			got := itemTypeFromDirEntry(d)
 
-			if got != tt.want {
-				t.Errorf("itemTypeFromDirEntry() = %v, want %v", got, tt.want)
-			}
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
 
 // ---------------------------------------------------------------------------
-// Hash failure creates with empty hash (B-102) — FullScan variant
+// Hash failure creates with empty hash (B-102) -- FullScan variant
 // ---------------------------------------------------------------------------
 
 // TestFullScan_HashFailureStillEmitsCreate verifies that FullScan emits a
@@ -1188,7 +919,7 @@ func TestFullScan_HashFailureStillEmitsCreate(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Hash failure modifies with empty hash (B-102) — FullScan variant
+// Hash failure modifies with empty hash (B-102) -- FullScan variant
 // ---------------------------------------------------------------------------
 
 // TestFullScan_HashFailureModifyStillEmitsEvent verifies that FullScan emits a
@@ -1210,7 +941,7 @@ func TestFullScan_HashFailureModifyStillEmitsEvent(t *testing.T) {
 		ItemType: ItemTypeFile, LocalHash: hashContent(t, "original content"),
 	})
 
-	// Make file unreadable — stat still succeeds but hash computation fails.
+	// Make file unreadable -- stat still succeeds but hash computation fails.
 	require.NoError(t, os.Chmod(path, 0o000))
 	t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
 
@@ -1273,9 +1004,7 @@ func TestSyncRootExists(t *testing.T) {
 			p := tt.setup(t)
 			got := syncRootExists(p)
 
-			if got != tt.want {
-				t.Errorf("syncRootExists(%q) = %v, want %v", p, got, tt.want)
-			}
+			assert.Equal(t, tt.want, got, "syncRootExists(%q)", p)
 		})
 	}
 }

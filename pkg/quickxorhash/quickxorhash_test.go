@@ -5,6 +5,9 @@ import (
 	"encoding/base64"
 	"hash"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // decodeBase64 decodes a base64 string or panics.
@@ -12,9 +15,7 @@ func decodeBase64(t *testing.T, s string) []byte {
 	t.Helper()
 
 	b, err := base64.StdEncoding.DecodeString(s)
-	if err != nil {
-		t.Fatalf("failed to decode base64 %q: %v", s, err)
-	}
+	require.NoError(t, err, "failed to decode base64 %q", s)
 
 	return b
 }
@@ -57,17 +58,11 @@ func TestKnownVectors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h := New()
 			_, err := h.Write(tc.input)
-			if err != nil {
-				t.Fatalf("Write error: %v", err)
-			}
+			require.NoError(t, err, "Write error")
 
 			got := h.Sum(nil)
 			want := decodeBase64(t, tc.expect)
-
-			if !bytes.Equal(got, want) {
-				t.Errorf("hash mismatch\n  got:  %s\n  want: %s",
-					base64.StdEncoding.EncodeToString(got), tc.expect)
-			}
+			assert.Equal(t, want, got, "hash mismatch")
 		})
 	}
 }
@@ -86,10 +81,7 @@ func TestIncrementalWrite(t *testing.T) {
 
 	// Verify against rclone reference.
 	want := decodeBase64(t, "h7xr2dbCayZCQYR9KKhlwDuT4UI=")
-	if !bytes.Equal(oneShot, want) {
-		t.Fatalf("one-shot hash mismatch\n  got:  %s\n  want: h7xr2dbCayZCQYR9KKhlwDuT4UI=",
-			base64.StdEncoding.EncodeToString(oneShot))
-	}
+	require.Equal(t, want, oneShot, "one-shot hash mismatch")
 
 	// Hash in varying chunk sizes: 1, 7, 64, 13, 128, then the rest.
 	chunkSizes := []int{1, 7, 64, 13, 128}
@@ -111,10 +103,7 @@ func TestIncrementalWrite(t *testing.T) {
 
 	incremental := h2.Sum(nil)
 
-	if !bytes.Equal(oneShot, incremental) {
-		t.Errorf("incremental write mismatch\n  one-shot:    %x\n  incremental: %x",
-			oneShot, incremental)
-	}
+	assert.Equal(t, oneShot, incremental, "incremental write mismatch")
 }
 
 func TestSingleByteWrites(t *testing.T) {
@@ -132,10 +121,7 @@ func TestSingleByteWrites(t *testing.T) {
 	}
 	byteAtATime := h2.Sum(nil)
 
-	if !bytes.Equal(oneShot, byteAtATime) {
-		t.Errorf("single-byte writes mismatch\n  one-shot:       %x\n  byte-at-a-time: %x",
-			oneShot, byteAtATime)
-	}
+	assert.Equal(t, oneShot, byteAtATime, "single-byte writes mismatch")
 }
 
 func TestReset(t *testing.T) {
@@ -146,9 +132,7 @@ func TestReset(t *testing.T) {
 	helloHash := h.Sum(nil)
 
 	want := decodeBase64(t, "aCgDG9jwBgAAAAAABQAAAAAAAAA=")
-	if !bytes.Equal(helloHash, want) {
-		t.Fatalf("first hash wrong:\n  got:  %x\n  want: %x", helloHash, want)
-	}
+	require.Equal(t, want, helloHash, "first hash wrong")
 
 	// Reset and hash "world".
 	h.Reset()
@@ -156,19 +140,13 @@ func TestReset(t *testing.T) {
 	worldHash := h.Sum(nil)
 
 	// Verify "world" hash is not the same as "hello" hash.
-	if bytes.Equal(worldHash, helloHash) {
-		t.Error("after Reset, hash of 'world' equals hash of 'hello'")
-	}
+	assert.NotEqual(t, helloHash, worldHash, "after Reset, hash of 'world' equals hash of 'hello'")
 
 	// Verify "world" hash matches a fresh computation.
 	h2 := New()
 	_, _ = h2.Write([]byte("world"))
 	freshWorld := h2.Sum(nil)
-
-	if !bytes.Equal(worldHash, freshWorld) {
-		t.Errorf("reset hash mismatch\n  after-reset: %x\n  fresh:       %x",
-			worldHash, freshWorld)
-	}
+	assert.Equal(t, freshWorld, worldHash, "reset hash mismatch")
 }
 
 func TestSumIsNonDestructive(t *testing.T) {
@@ -178,10 +156,7 @@ func TestSumIsNonDestructive(t *testing.T) {
 	sum1 := h.Sum(nil)
 	sum2 := h.Sum(nil)
 
-	if !bytes.Equal(sum1, sum2) {
-		t.Errorf("calling Sum twice gave different results\n  first:  %x\n  second: %x",
-			sum1, sum2)
-	}
+	assert.Equal(t, sum1, sum2, "calling Sum twice gave different results")
 }
 
 func TestSumAppendsToSlice(t *testing.T) {
@@ -191,13 +166,8 @@ func TestSumAppendsToSlice(t *testing.T) {
 	prefix := []byte("PREFIX")
 	result := h.Sum(prefix)
 
-	if !bytes.Equal(result[:len(prefix)], prefix) {
-		t.Error("Sum did not preserve the prefix")
-	}
-
-	if len(result) != len(prefix)+Size {
-		t.Errorf("expected result length %d, got %d", len(prefix)+Size, len(result))
-	}
+	assert.Equal(t, prefix, result[:len(prefix)], "Sum did not preserve the prefix")
+	assert.Len(t, result, len(prefix)+Size)
 }
 
 func TestWriteAfterSum(t *testing.T) {
@@ -209,10 +179,7 @@ func TestWriteAfterSum(t *testing.T) {
 	got := h.Sum(nil)
 
 	want := decodeBase64(t, "aCgDG9jwBhDc4Q1yawMZAAAAAAA=")
-	if !bytes.Equal(got, want) {
-		t.Errorf("Write after Sum produced wrong hash\n  got:  %s\n  want: aCgDG9jwBhDc4Q1yawMZAAAAAAA=",
-			base64.StdEncoding.EncodeToString(got))
-	}
+	assert.Equal(t, want, got, "Write after Sum produced wrong hash")
 }
 
 // Compile-time assertion that *digest satisfies hash.Hash.
@@ -221,13 +188,8 @@ var _ hash.Hash = (*digest)(nil)
 func TestInterfaceCompliance(t *testing.T) {
 	h := New()
 
-	if h.Size() != Size {
-		t.Errorf("Size() = %d, want %d", h.Size(), Size)
-	}
-
-	if h.BlockSize() != BlockSize {
-		t.Errorf("BlockSize() = %d, want %d", h.BlockSize(), BlockSize)
-	}
+	assert.Equal(t, Size, h.Size())
+	assert.Equal(t, BlockSize, h.BlockSize())
 }
 
 func BenchmarkQuickXorHash(b *testing.B) {
