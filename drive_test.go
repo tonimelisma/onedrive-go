@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"log/slog"
 	"os"
@@ -158,15 +159,18 @@ func TestListAvailableDrives_Empty(t *testing.T) {
 // --- printDriveListText ---
 
 func TestPrintDriveListText_EmptyBothSections(t *testing.T) {
-	output := captureStdout(t, func() { printDriveListText(nil, nil) })
-	assert.Contains(t, output, "No drives configured")
+	var buf bytes.Buffer
+	printDriveListText(&buf, nil, nil)
+	assert.Contains(t, buf.String(), "No drives configured")
 }
 
 func TestPrintDriveListText_ConfiguredOnly(t *testing.T) {
 	configured := []driveListEntry{
 		{CanonicalID: "personal:user@example.com", SyncDir: "~/OneDrive", State: driveStateReady, Source: "configured"},
 	}
-	output := captureStdout(t, func() { printDriveListText(configured, nil) })
+	var buf bytes.Buffer
+	printDriveListText(&buf, configured, nil)
+	output := buf.String()
 	assert.Contains(t, output, "Configured drives:")
 	assert.Contains(t, output, "personal:user@example.com")
 }
@@ -175,7 +179,9 @@ func TestPrintDriveListText_AvailableOnly(t *testing.T) {
 	available := []driveListEntry{
 		{CanonicalID: "business:user@contoso.com", State: "", Source: "available", SiteName: "Marketing"},
 	}
-	output := captureStdout(t, func() { printDriveListText(nil, available) })
+	var buf bytes.Buffer
+	printDriveListText(&buf, nil, available)
+	output := buf.String()
 	assert.Contains(t, output, "Available drives")
 	assert.Contains(t, output, "business:user@contoso.com")
 }
@@ -187,7 +193,9 @@ func TestPrintDriveListText_BothSections(t *testing.T) {
 	available := []driveListEntry{
 		{CanonicalID: "business:user@contoso.com", Source: "available"},
 	}
-	output := captureStdout(t, func() { printDriveListText(configured, available) })
+	var buf bytes.Buffer
+	printDriveListText(&buf, configured, available)
+	output := buf.String()
 	assert.Contains(t, output, "Configured drives:")
 	assert.Contains(t, output, "Available drives")
 }
@@ -214,7 +222,9 @@ func TestPrintDriveListText_ShowsDisplayName(t *testing.T) {
 			Source:      "configured",
 		},
 	}
-	output := captureStdout(t, func() { printDriveListText(configured, nil) })
+	var buf bytes.Buffer
+	printDriveListText(&buf, configured, nil)
+	output := buf.String()
 	assert.Contains(t, output, "user@example.com")
 	assert.Contains(t, output, "personal:user@example.com")
 }
@@ -244,25 +254,21 @@ func TestPrintDriveListText_EmptySyncDir_ShowsNotSet(t *testing.T) {
 	configured := []driveListEntry{
 		{CanonicalID: "personal:user@example.com", SyncDir: "", State: driveStateNeedsSetup, Source: "configured"},
 	}
-	output := captureStdout(t, func() { printDriveListText(configured, nil) })
+	var buf bytes.Buffer
+	printDriveListText(&buf, configured, nil)
+	output := buf.String()
 	assert.Contains(t, output, "(not set)")
 }
 
 // --- printDriveListJSON ---
 
 func TestPrintDriveListJSON_Empty(t *testing.T) {
-	err := printDriveListJSON(nil, nil)
+	var buf bytes.Buffer
+	err := printDriveListJSON(&buf, nil, nil)
 	assert.NoError(t, err)
 }
 
 func TestPrintDriveListJSON_VerifyOutput(t *testing.T) {
-	// Capture stdout to verify JSON structure.
-	origStdout := os.Stdout
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-
-	os.Stdout = w
-
 	configured := []driveListEntry{
 		{CanonicalID: "personal:user@example.com", SyncDir: "~/OneDrive", State: driveStateReady, Source: "configured"},
 	}
@@ -270,15 +276,11 @@ func TestPrintDriveListJSON_VerifyOutput(t *testing.T) {
 		{CanonicalID: "business:user@contoso.com", Source: "available", SiteName: "Marketing"},
 	}
 
-	writeErr := printDriveListJSON(configured, available)
-	w.Close()
-	os.Stdout = origStdout
+	var buf bytes.Buffer
+	require.NoError(t, printDriveListJSON(&buf, configured, available))
 
-	require.NoError(t, writeErr)
-
-	// printDriveListJSON outputs a structured object with "configured" and "available" arrays.
 	var output driveListJSONOutput
-	require.NoError(t, json.NewDecoder(r).Decode(&output))
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &output))
 	require.Len(t, output.Configured, 1)
 	require.Len(t, output.Available, 1)
 	assert.Equal(t, "personal:user@example.com", output.Configured[0].CanonicalID)
@@ -288,20 +290,11 @@ func TestPrintDriveListJSON_VerifyOutput(t *testing.T) {
 }
 
 func TestPrintDriveListJSON_NilSlicesRenderAsEmptyArrays(t *testing.T) {
-	origStdout := os.Stdout
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-
-	os.Stdout = w
-
-	writeErr := printDriveListJSON(nil, nil)
-	w.Close()
-	os.Stdout = origStdout
-
-	require.NoError(t, writeErr)
+	var buf bytes.Buffer
+	require.NoError(t, printDriveListJSON(&buf, nil, nil))
 
 	var output map[string]json.RawMessage
-	require.NoError(t, json.NewDecoder(r).Decode(&output))
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &output))
 	assert.Equal(t, "[]", string(output["configured"]))
 	assert.Equal(t, "[]", string(output["available"]))
 }
@@ -344,7 +337,8 @@ func TestDriveListEntry_JSONOmitsEmpty(t *testing.T) {
 
 func TestPrintDriveSearchText_Empty(t *testing.T) {
 	// Should not panic with no results.
-	printDriveSearchText(nil, "test query")
+	var buf bytes.Buffer
+	printDriveSearchText(&buf, nil, "test query")
 }
 
 func TestPrintDriveSearchText_WithResults(t *testing.T) {
@@ -352,7 +346,8 @@ func TestPrintDriveSearchText_WithResults(t *testing.T) {
 		{CanonicalID: "sharepoint:user@contoso.com:marketing:Docs", SiteName: "Marketing", LibraryName: "Docs", WebURL: "https://contoso.sharepoint.com/sites/marketing"},
 		{CanonicalID: "sharepoint:user@contoso.com:marketing:Wiki", SiteName: "Marketing", LibraryName: "Wiki"},
 	}
-	assert.NotPanics(t, func() { printDriveSearchText(results, "marketing") })
+	var buf bytes.Buffer
+	assert.NotPanics(t, func() { printDriveSearchText(&buf, results, "marketing") })
 }
 
 func TestPrintDriveSearchText_MultipleSites(t *testing.T) {
@@ -360,7 +355,9 @@ func TestPrintDriveSearchText_MultipleSites(t *testing.T) {
 		{CanonicalID: "sharepoint:user@contoso.com:marketing:Docs", SiteName: "Marketing", LibraryName: "Docs"},
 		{CanonicalID: "sharepoint:user@contoso.com:hr:Docs", SiteName: "HR", LibraryName: "Docs"},
 	}
-	output := captureStdout(t, func() { printDriveSearchText(results, "docs") })
+	var buf bytes.Buffer
+	printDriveSearchText(&buf, results, "docs")
+	output := buf.String()
 	// Verify alphabetical sort: HR should appear before Marketing.
 	hrIdx := strings.Index(output, "HR")
 	mktIdx := strings.Index(output, "Marketing")
@@ -378,7 +375,8 @@ func TestPrintDriveSearchText_DoesNotMutateInput(t *testing.T) {
 	orig0 := results[0].SiteName
 	orig1 := results[1].SiteName
 
-	captureStdout(t, func() { printDriveSearchText(results, "docs") })
+	var buf bytes.Buffer
+	printDriveSearchText(&buf, results, "docs")
 
 	assert.Equal(t, orig0, results[0].SiteName, "input slice should not be mutated")
 	assert.Equal(t, orig1, results[1].SiteName, "input slice should not be mutated")
@@ -390,12 +388,14 @@ func TestPrintDriveSearchJSON_NoError(t *testing.T) {
 	results := []driveSearchResult{
 		{CanonicalID: "sharepoint:user@contoso.com:marketing:Docs", SiteName: "Marketing", LibraryName: "Docs"},
 	}
-	err := printDriveSearchJSON(results)
+	var buf bytes.Buffer
+	err := printDriveSearchJSON(&buf, results)
 	assert.NoError(t, err)
 }
 
 func TestPrintDriveSearchJSON_EmptySlice(t *testing.T) {
-	err := printDriveSearchJSON([]driveSearchResult{})
+	var buf bytes.Buffer
+	err := printDriveSearchJSON(&buf, []driveSearchResult{})
 	assert.NoError(t, err)
 }
 

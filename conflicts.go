@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -98,10 +99,10 @@ func runConflicts(cmd *cobra.Command, _ []string) error {
 	}
 
 	if cc.Flags.JSON {
-		return printConflictsJSON(conflicts)
+		return printConflictsJSON(os.Stdout, conflicts)
 	}
 
-	printConflictsTable(conflicts, history)
+	printConflictsTable(os.Stdout, conflicts, history)
 
 	return nil
 }
@@ -131,13 +132,13 @@ func toConflictJSON(c *sync.ConflictRecord) conflictJSON {
 	}
 }
 
-func printConflictsJSON(conflicts []sync.ConflictRecord) error {
+func printConflictsJSON(w io.Writer, conflicts []sync.ConflictRecord) error {
 	items := make([]conflictJSON, len(conflicts))
 	for i := range conflicts {
 		items[i] = toConflictJSON(&conflicts[i])
 	}
 
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 
 	if err := enc.Encode(items); err != nil {
@@ -147,7 +148,7 @@ func printConflictsJSON(conflicts []sync.ConflictRecord) error {
 	return nil
 }
 
-func printConflictsTable(conflicts []sync.ConflictRecord, history bool) {
+func printConflictsTable(w io.Writer, conflicts []sync.ConflictRecord, history bool) {
 	var headers []string
 	if history {
 		headers = []string{"ID", "PATH", "TYPE", "RESOLUTION", "RESOLVED BY", "DETECTED"}
@@ -169,5 +170,5 @@ func printConflictsTable(conflicts []sync.ConflictRecord, history bool) {
 		}
 	}
 
-	printTable(os.Stdout, headers, rows)
+	printTable(w, headers, rows)
 }

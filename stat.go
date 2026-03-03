@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -37,10 +38,10 @@ func runStat(cmd *cobra.Command, args []string) error {
 	}
 
 	if cc.Flags.JSON {
-		return printStatJSON(item)
+		return printStatJSON(os.Stdout, item)
 	}
 
-	printStatText(item)
+	printStatText(os.Stdout, item)
 
 	return nil
 }
@@ -57,7 +58,7 @@ type statJSONOutput struct {
 	ETag       string `json:"etag"`
 }
 
-func printStatJSON(item *graph.Item) error {
+func printStatJSON(w io.Writer, item *graph.Item) error {
 	out := statJSONOutput{
 		ID:         item.ID,
 		Name:       item.Name,
@@ -69,26 +70,26 @@ func printStatJSON(item *graph.Item) error {
 		ETag:       item.ETag,
 	}
 
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 
 	return enc.Encode(out)
 }
 
-func printStatText(item *graph.Item) {
+func printStatText(w io.Writer, item *graph.Item) {
 	itemType := "file"
 	if item.IsFolder {
 		itemType = "folder"
 	}
 
-	fmt.Printf("Name:     %s\n", item.Name)
-	fmt.Printf("Type:     %s\n", itemType)
-	fmt.Printf("Size:     %s (%d bytes)\n", formatSize(item.Size), item.Size)
-	fmt.Printf("Modified: %s\n", item.ModifiedAt.Format("2006-01-02 15:04:05 UTC"))
-	fmt.Printf("Created:  %s\n", item.CreatedAt.Format("2006-01-02 15:04:05 UTC"))
-	fmt.Printf("ID:       %s\n", item.ID)
+	fmt.Fprintf(w, "Name:     %s\n", item.Name)
+	fmt.Fprintf(w, "Type:     %s\n", itemType)
+	fmt.Fprintf(w, "Size:     %s (%d bytes)\n", formatSize(item.Size), item.Size)
+	fmt.Fprintf(w, "Modified: %s\n", item.ModifiedAt.Format("2006-01-02 15:04:05 UTC"))
+	fmt.Fprintf(w, "Created:  %s\n", item.CreatedAt.Format("2006-01-02 15:04:05 UTC"))
+	fmt.Fprintf(w, "ID:       %s\n", item.ID)
 
 	if item.MimeType != "" {
-		fmt.Printf("MIME:     %s\n", item.MimeType)
+		fmt.Fprintf(w, "MIME:     %s\n", item.MimeType)
 	}
 }

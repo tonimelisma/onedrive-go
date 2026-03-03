@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 
@@ -42,10 +43,10 @@ func runLs(cmd *cobra.Command, args []string) error {
 	}
 
 	if cc.Flags.JSON {
-		return printItemsJSON(items)
+		return printItemsJSON(os.Stdout, items)
 	}
 
-	printItemsTable(items)
+	printItemsTable(os.Stdout, items)
 
 	return nil
 }
@@ -59,7 +60,7 @@ type lsJSONItem struct {
 	ID         string `json:"id"`
 }
 
-func printItemsJSON(items []graph.Item) error {
+func printItemsJSON(w io.Writer, items []graph.Item) error {
 	out := make([]lsJSONItem, 0, len(items))
 	for i := range items {
 		out = append(out, lsJSONItem{
@@ -71,13 +72,13 @@ func printItemsJSON(items []graph.Item) error {
 		})
 	}
 
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 
 	return enc.Encode(out)
 }
 
-func printItemsTable(items []graph.Item) {
+func printItemsTable(w io.Writer, items []graph.Item) {
 	// Sort: folders first, then alphabetical.
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].IsFolder != items[j].IsFolder {
@@ -99,5 +100,5 @@ func printItemsTable(items []graph.Item) {
 		rows = append(rows, []string{name, formatSize(items[i].Size), formatTime(items[i].ModifiedAt)})
 	}
 
-	printTable(os.Stdout, headers, rows)
+	printTable(w, headers, rows)
 }

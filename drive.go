@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"slices"
@@ -85,10 +86,10 @@ func runDriveList(cmd *cobra.Command, _ []string) error {
 	available := discoverAvailableDrives(ctx, cfg, logger)
 
 	if cc.Flags.JSON {
-		return printDriveListJSON(configured, available)
+		return printDriveListJSON(os.Stdout, configured, available)
 	}
 
-	printDriveListText(configured, available)
+	printDriveListText(os.Stdout, configured, available)
 
 	return nil
 }
@@ -263,7 +264,7 @@ type driveListJSONOutput struct {
 	Available  []driveListEntry `json:"available"`
 }
 
-func printDriveListJSON(configured, available []driveListEntry) error {
+func printDriveListJSON(w io.Writer, configured, available []driveListEntry) error {
 	// Initialize nil slices to empty so JSON renders [] not null.
 	if configured == nil {
 		configured = []driveListEntry{}
@@ -278,7 +279,7 @@ func printDriveListJSON(configured, available []driveListEntry) error {
 		Available:  available,
 	}
 
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 
 	if err := enc.Encode(out); err != nil {
@@ -299,15 +300,15 @@ func driveLabel(e driveListEntry) string {
 	return e.CanonicalID
 }
 
-func printDriveListText(configured, available []driveListEntry) {
+func printDriveListText(w io.Writer, configured, available []driveListEntry) {
 	if len(configured) == 0 && len(available) == 0 {
-		fmt.Println("No drives configured. Run 'onedrive-go login' to get started.")
+		fmt.Fprintln(w, "No drives configured. Run 'onedrive-go login' to get started.")
 
 		return
 	}
 
 	if len(configured) > 0 {
-		fmt.Println("Configured drives:")
+		fmt.Fprintln(w, "Configured drives:")
 
 		// Compute dynamic column widths from content, with minimums for readability.
 		maxName, maxDir := 0, 0
@@ -338,16 +339,16 @@ func printDriveListText(configured, available []driveListEntry) {
 				syncDir = syncDirNotSet
 			}
 
-			fmt.Printf(fmtStr, driveLabel(e), syncDir, e.State)
+			fmt.Fprintf(w, fmtStr, driveLabel(e), syncDir, e.State)
 		}
 	}
 
 	if len(available) > 0 {
 		if len(configured) > 0 {
-			fmt.Println()
+			fmt.Fprintln(w)
 		}
 
-		fmt.Println("Available drives (not configured):")
+		fmt.Fprintln(w, "Available drives (not configured):")
 
 		for _, e := range available {
 			label := ""
@@ -355,10 +356,10 @@ func printDriveListText(configured, available []driveListEntry) {
 				label = fmt.Sprintf(" (%s)", e.SiteName)
 			}
 
-			fmt.Printf("  %s%s\n", e.CanonicalID, label)
+			fmt.Fprintf(w, "  %s%s\n", e.CanonicalID, label)
 		}
 
-		fmt.Println("\nRun 'onedrive-go drive add <canonical-id>' to add a drive.")
+		fmt.Fprintln(w, "\nRun 'onedrive-go drive add <canonical-id>' to add a drive.")
 	}
 }
 
@@ -609,10 +610,10 @@ func runDriveSearch(cmd *cobra.Command, args []string) error {
 	}
 
 	if cc.Flags.JSON {
-		return printDriveSearchJSON(results)
+		return printDriveSearchJSON(os.Stdout, results)
 	}
 
-	printDriveSearchText(results, query)
+	printDriveSearchText(os.Stdout, results, query)
 
 	return nil
 }
@@ -692,8 +693,8 @@ func searchAccountSharePoint(
 	return results
 }
 
-func printDriveSearchJSON(results []driveSearchResult) error {
-	enc := json.NewEncoder(os.Stdout)
+func printDriveSearchJSON(w io.Writer, results []driveSearchResult) error {
+	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 
 	if err := enc.Encode(results); err != nil {
@@ -703,9 +704,9 @@ func printDriveSearchJSON(results []driveSearchResult) error {
 	return nil
 }
 
-func printDriveSearchText(results []driveSearchResult, query string) {
+func printDriveSearchText(w io.Writer, results []driveSearchResult, query string) {
 	if len(results) == 0 {
-		fmt.Printf("No SharePoint sites found matching %q.\n", query)
+		fmt.Fprintf(w, "No SharePoint sites found matching %q.\n", query)
 
 		return
 	}
@@ -721,14 +722,14 @@ func printDriveSearchText(results []driveSearchResult, query string) {
 	})
 
 	// Group by site for readable output.
-	fmt.Printf("SharePoint sites matching %q:\n", query)
+	fmt.Fprintf(w, "SharePoint sites matching %q:\n", query)
 
 	currentSite := ""
 
 	for _, r := range sorted {
 		if r.SiteName != currentSite {
 			if currentSite != "" {
-				fmt.Println()
+				fmt.Fprintln(w)
 			}
 
 			currentSite = r.SiteName
@@ -737,11 +738,11 @@ func printDriveSearchText(results []driveSearchResult, query string) {
 				label = fmt.Sprintf("%s (%s)", r.SiteName, r.WebURL)
 			}
 
-			fmt.Printf("\n  %s\n", label)
+			fmt.Fprintf(w, "\n  %s\n", label)
 		}
 
-		fmt.Printf("    %s\n", r.CanonicalID)
+		fmt.Fprintf(w, "    %s\n", r.CanonicalID)
 	}
 
-	fmt.Printf("\nRun 'onedrive-go drive add <canonical-id>' to add a drive.\n")
+	fmt.Fprintf(w, "\nRun 'onedrive-go drive add <canonical-id>' to add a drive.\n")
 }
