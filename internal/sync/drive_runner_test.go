@@ -23,7 +23,7 @@ func TestDriveRunner_Run_Success(t *testing.T) {
 		Uploads:   2,
 	}
 
-	result := dr.run(context.Background(), func(_ context.Context) (*SyncReport, error) {
+	result := dr.run(t.Context(), func(_ context.Context) (*SyncReport, error) {
 		return report, nil
 	})
 
@@ -44,7 +44,7 @@ func TestDriveRunner_Run_Error(t *testing.T) {
 
 	errSync := errors.New("delta token expired")
 
-	result := dr.run(context.Background(), func(_ context.Context) (*SyncReport, error) {
+	result := dr.run(t.Context(), func(_ context.Context) (*SyncReport, error) {
 		return nil, errSync
 	})
 
@@ -61,7 +61,7 @@ func TestDriveRunner_Run_Panic(t *testing.T) {
 		displayName: "Panic Drive",
 	}
 
-	result := dr.run(context.Background(), func(_ context.Context) (*SyncReport, error) {
+	result := dr.run(t.Context(), func(_ context.Context) (*SyncReport, error) {
 		panic("nil pointer dereference in observer")
 	})
 
@@ -82,7 +82,7 @@ func TestDriveRunner_Run_PanicWithError(t *testing.T) {
 
 	errPanic := fmt.Errorf("some internal error")
 
-	result := dr.run(context.Background(), func(_ context.Context) (*SyncReport, error) {
+	result := dr.run(t.Context(), func(_ context.Context) (*SyncReport, error) {
 		panic(errPanic)
 	})
 
@@ -98,7 +98,7 @@ func TestDriveRunner_Run_ContextCanceled(t *testing.T) {
 		displayName: "Cancel Drive",
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	result := dr.run(ctx, func(c context.Context) (*SyncReport, error) {

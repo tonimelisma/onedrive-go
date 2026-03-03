@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,7 +42,7 @@ func TestRacilyClean_SameSecondDetection(t *testing.T) {
 	obs := NewLocalObserver(baseline, testLogger(t), 0)
 
 	// Immediately scan — the file's mtime is within 1 second of now.
-	events, err := obs.FullScan(context.Background(), syncRoot)
+	events, err := obs.FullScan(t.Context(), syncRoot)
 	require.NoError(t, err)
 
 	// The file is UNCHANGED, but the racily-clean guard forces a hash check.
@@ -82,7 +81,7 @@ func TestMtimeChangeWithoutContentChange(t *testing.T) {
 
 	obs := NewLocalObserver(baseline, testLogger(t), 0)
 
-	events, err := obs.FullScan(context.Background(), syncRoot)
+	events, err := obs.FullScan(t.Context(), syncRoot)
 	require.NoError(t, err)
 
 	// Mtime differs but hash matches → no event should be emitted.
@@ -122,7 +121,7 @@ func TestNosyncGuard_PreventsAllSync(t *testing.T) {
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 
-	events, err := obs.FullScan(context.Background(), syncRoot)
+	events, err := obs.FullScan(t.Context(), syncRoot)
 	assert.ErrorIs(t, err, ErrNosyncGuard)
 	assert.Nil(t, events, ".nosync should prevent all events")
 }

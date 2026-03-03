@@ -2,7 +2,6 @@ package graph
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -55,7 +54,7 @@ func TestDownload_Success(t *testing.T) {
 
 	client := newTestClient(t, graphSrv.URL)
 	var buf bytes.Buffer
-	n, err := client.Download(context.Background(), driveid.New("d"), "item-1", &buf)
+	n, err := client.Download(t.Context(), driveid.New("d"), "item-1", &buf)
 	require.NoError(t, err)
 	assert.Equal(t, fileContent, buf.String())
 	assert.Equal(t, int64(len(fileContent)), n)
@@ -78,7 +77,7 @@ func TestDownload_EmptyDownloadURL(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	var buf bytes.Buffer
-	_, err := client.Download(context.Background(), driveid.New("d"), "folder-1", &buf)
+	_, err := client.Download(t.Context(), driveid.New("d"), "folder-1", &buf)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrNoDownloadURL)
 }
@@ -93,7 +92,7 @@ func TestDownload_ItemNotFound(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	var buf bytes.Buffer
-	_, err := client.Download(context.Background(), driveid.New("d"), "nonexistent", &buf)
+	_, err := client.Download(t.Context(), driveid.New("d"), "nonexistent", &buf)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrNotFound)
 }
@@ -122,7 +121,7 @@ func TestDownload_VerifyBytesWritten(t *testing.T) {
 
 	client := newTestClient(t, graphSrv.URL)
 	var buf bytes.Buffer
-	n, err := client.Download(context.Background(), driveid.New("d"), "item-2", &buf)
+	n, err := client.Download(t.Context(), driveid.New("d"), "item-2", &buf)
 	require.NoError(t, err)
 	assert.Equal(t, int64(len(content)), n)
 	assert.Equal(t, len(content), buf.Len())
@@ -150,7 +149,7 @@ func TestDownload_ServerError(t *testing.T) {
 
 	client := newTestClient(t, graphSrv.URL)
 	var buf bytes.Buffer
-	_, err := client.Download(context.Background(), driveid.New("d"), "item-3", &buf)
+	_, err := client.Download(t.Context(), driveid.New("d"), "item-3", &buf)
 	require.Error(t, err)
 	// 500 is retryable; doPreAuthRetry exhausts retries, returns *GraphError.
 	assert.ErrorIs(t, err, ErrServerError)
@@ -173,7 +172,7 @@ func TestDownload_NetworkError(t *testing.T) {
 
 	client := newTestClient(t, graphSrv.URL)
 	var buf bytes.Buffer
-	_, err := client.Download(context.Background(), driveid.New("d"), "item-net", &buf)
+	_, err := client.Download(t.Context(), driveid.New("d"), "item-net", &buf)
 	require.Error(t, err)
 	// doPreAuthRetry retries network errors, then returns "failed after N retries".
 	assert.Contains(t, err.Error(), "failed after 5 retries")
@@ -202,7 +201,7 @@ func TestDownloadFromURL_WriterError(t *testing.T) {
 	defer graphSrv.Close()
 
 	client := newTestClient(t, graphSrv.URL)
-	_, err := client.Download(context.Background(), driveid.New("d"), "item-ew", errorWriter{})
+	_, err := client.Download(t.Context(), driveid.New("d"), "item-ew", errorWriter{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "streaming download content")
 }
@@ -232,7 +231,7 @@ func TestDownload_NoAuthOnPreAuthURL(t *testing.T) {
 
 	client := newTestClient(t, graphSrv.URL)
 	var buf bytes.Buffer
-	_, err := client.Download(context.Background(), driveid.New("d"), "item-4", &buf)
+	_, err := client.Download(t.Context(), driveid.New("d"), "item-4", &buf)
 	require.NoError(t, err)
 }
 
@@ -265,7 +264,7 @@ func TestDownloadRange_Success(t *testing.T) {
 
 	client := newTestClient(t, graphSrv.URL)
 	var buf bytes.Buffer
-	n, err := client.DownloadRange(context.Background(), driveid.New("d"), "item-range", &buf, offset)
+	n, err := client.DownloadRange(t.Context(), driveid.New("d"), "item-range", &buf, offset)
 	require.NoError(t, err)
 	assert.Equal(t, fullContent[offset:], buf.String())
 	assert.Equal(t, int64(len(fullContent))-offset, n)
@@ -287,7 +286,7 @@ func TestDownloadRange_NoDownloadURL(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	var buf bytes.Buffer
-	_, err := client.DownloadRange(context.Background(), driveid.New("d"), "folder-r", &buf, 100)
+	_, err := client.DownloadRange(t.Context(), driveid.New("d"), "folder-r", &buf, 100)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrNoDownloadURL)
 }
@@ -323,7 +322,7 @@ func TestDownload_RetriesOn503(t *testing.T) {
 
 	client := newTestClient(t, graphSrv.URL)
 	var buf bytes.Buffer
-	n, err := client.Download(context.Background(), driveid.New("d"), "item-retry", &buf)
+	n, err := client.Download(t.Context(), driveid.New("d"), "item-retry", &buf)
 	require.NoError(t, err)
 	assert.Equal(t, "retry success", buf.String())
 	assert.Equal(t, int64(len("retry success")), n)

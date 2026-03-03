@@ -2,7 +2,6 @@ package graph
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -215,8 +214,8 @@ func TestPreAuthURL_NoAuthorizationHeader(t *testing.T) {
 
 	client := newTestClient(t, "http://unused")
 
-	resp, err := client.doPreAuthRetry(context.Background(), "test", func() (*http.Request, error) {
-		req, reqErr := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/download", http.NoBody)
+	resp, err := client.doPreAuthRetry(t.Context(), "test", func() (*http.Request, error) {
+		req, reqErr := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/download", http.NoBody)
 		if reqErr != nil {
 			return nil, reqErr
 		}
@@ -252,7 +251,7 @@ func TestSimpleUpload_OctetStreamContentType(t *testing.T) {
 	client := newTestClient(t, srv.URL)
 	content := bytes.NewReader([]byte("hello"))
 	item, err := client.SimpleUpload(
-		context.Background(), driveid.New("drive1"), "parent1", "test.txt", content, 5,
+		t.Context(), driveid.New("drive1"), "parent1", "test.txt", content, 5,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "item-1", item.ID)
@@ -273,8 +272,8 @@ func TestHandleChunkResponse_Intermediate202(t *testing.T) {
 
 	client := newTestClient(t, "http://unused")
 
-	resp, err := client.doPreAuthRetry(context.Background(), "chunk", func() (*http.Request, error) {
-		return http.NewRequestWithContext(context.Background(), http.MethodPut, srv.URL+"/upload", http.NoBody)
+	resp, err := client.doPreAuthRetry(t.Context(), "chunk", func() (*http.Request, error) {
+		return http.NewRequestWithContext(t.Context(), http.MethodPut, srv.URL+"/upload", http.NoBody)
 	})
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -299,8 +298,8 @@ func TestHandleChunkResponse_Final201(t *testing.T) {
 
 	client := newTestClient(t, "http://unused")
 
-	resp, err := client.doPreAuthRetry(context.Background(), "chunk", func() (*http.Request, error) {
-		return http.NewRequestWithContext(context.Background(), http.MethodPut, srv.URL+"/upload", http.NoBody)
+	resp, err := client.doPreAuthRetry(t.Context(), "chunk", func() (*http.Request, error) {
+		return http.NewRequestWithContext(t.Context(), http.MethodPut, srv.URL+"/upload", http.NoBody)
 	})
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -325,8 +324,8 @@ func TestHandleChunkResponse_Final200(t *testing.T) {
 
 	client := newTestClient(t, "http://unused")
 
-	resp, err := client.doPreAuthRetry(context.Background(), "chunk", func() (*http.Request, error) {
-		return http.NewRequestWithContext(context.Background(), http.MethodPut, srv.URL+"/upload", http.NoBody)
+	resp, err := client.doPreAuthRetry(t.Context(), "chunk", func() (*http.Request, error) {
+		return http.NewRequestWithContext(t.Context(), http.MethodPut, srv.URL+"/upload", http.NoBody)
 	})
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -370,7 +369,7 @@ func TestDelta_HTTP410_TokenExpired(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 
-	_, err := client.Delta(context.Background(), driveid.New("drive1"), "")
+	_, err := client.Delta(t.Context(), driveid.New("drive1"), "")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrGone)
 }
@@ -555,7 +554,7 @@ func TestUpload_SessionCanceledOnChunkError(t *testing.T) {
 	// Use chunkedUploadEncapsulated directly to test session lifecycle.
 	content := bytes.NewReader(make([]byte, 5*1024*1024)) // 5 MiB to force chunked.
 	_, err := client.chunkedUploadEncapsulated(
-		context.Background(),
+		t.Context(),
 		driveid.New("drive1"), "parent1", "big.txt",
 		content, int64(content.Len()), time.Time{}, nil,
 	)
@@ -609,7 +608,7 @@ func TestUpload_SimpleUploadFollowedByMtimePatch(t *testing.T) {
 	content := bytes.NewReader([]byte("small file content"))
 
 	item, err := client.Upload(
-		context.Background(),
+		t.Context(),
 		driveid.New("drive1"), "parent1", "small.txt",
 		content, int64(content.Len()), mtime, nil,
 	)
@@ -643,7 +642,7 @@ func TestUpload_SimpleUploadNoMtime(t *testing.T) {
 	content := bytes.NewReader([]byte("content"))
 
 	_, err := client.Upload(
-		context.Background(),
+		t.Context(),
 		driveid.New("drive1"), "parent1", "test.txt",
 		content, int64(content.Len()), time.Time{}, nil,
 	)
@@ -691,7 +690,7 @@ func TestUploadChunk_ReaderAtEnablesRetrySafe(t *testing.T) {
 	session := &UploadSession{UploadURL: srv.URL + "/upload"}
 	chunk := bytes.NewReader(data)
 
-	item, err := client.UploadChunk(context.Background(), session, chunk, 0, 1024, 1024)
+	item, err := client.UploadChunk(t.Context(), session, chunk, 0, 1024, 1024)
 	require.NoError(t, err)
 	require.NotNil(t, item)
 	assert.Equal(t, int32(2), attempts.Load(), "should have retried once")
@@ -712,7 +711,7 @@ func TestUploadChunk_416_ClassifiedAsRangeError(t *testing.T) {
 	session := &UploadSession{UploadURL: srv.URL + "/upload"}
 	chunk := bytes.NewReader(make([]byte, 1024))
 
-	_, err := client.UploadChunk(context.Background(), session, chunk, 0, 1024, 2048)
+	_, err := client.UploadChunk(t.Context(), session, chunk, 0, 1024, 2048)
 	require.Error(t, err)
 
 	var graphErr *GraphError
@@ -743,7 +742,7 @@ func TestQueryUploadSession_ReturnsNextExpectedRanges(t *testing.T) {
 	client := newTestClient(t, "http://unused")
 	session := &UploadSession{UploadURL: srv.URL + "/upload"}
 
-	status, err := client.QueryUploadSession(context.Background(), session)
+	status, err := client.QueryUploadSession(t.Context(), session)
 	require.NoError(t, err)
 	require.Len(t, status.NextExpectedRanges, 1)
 	assert.Equal(t, "327680-", status.NextExpectedRanges[0])
@@ -764,7 +763,7 @@ func TestDeltaAll_HTTP410_ReturnsGone(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 
-	_, _, err := client.DeltaAll(context.Background(), driveid.New("drive1"), "old-token")
+	_, _, err := client.DeltaAll(t.Context(), driveid.New("drive1"), "old-token")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrGone)
 }

@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -174,7 +173,7 @@ func TestWatch_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 	obs.watcherFactory = func() (FsWatcher, error) { return watcher, nil }
 
 	events := make(chan ChangeEvent, 256)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	err := obs.Watch(ctx, root, events)
 
@@ -193,7 +192,7 @@ func TestFullScan_NonexistentSyncRoot_ReturnsError(t *testing.T) {
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	nonexistent := filepath.Join(t.TempDir(), "does-not-exist")
 
-	_, err := obs.FullScan(context.Background(), nonexistent)
+	_, err := obs.FullScan(t.Context(), nonexistent)
 
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrSyncRootMissing),

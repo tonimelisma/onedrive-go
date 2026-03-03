@@ -93,7 +93,7 @@ func TestDoLogin_Success(t *testing.T) {
 	cfg := testOAuthConfig(t, tokenPath, endpoint)
 
 	var displayed DeviceAuth
-	ts, err := doLogin(context.Background(), tokenPath, cfg, func(da DeviceAuth) {
+	ts, err := doLogin(t.Context(), tokenPath, cfg, func(da DeviceAuth) {
 		displayed = da
 	}, slog.Default())
 	require.NoError(t, err)
@@ -127,7 +127,7 @@ func TestDoLogin_UserDeclined(t *testing.T) {
 	tokenPath := filepath.Join(tmpDir, "tokens", "test.json")
 	cfg := testOAuthConfig(t, tokenPath, endpoint)
 
-	_, err := doLogin(context.Background(), tokenPath, cfg, noopDisplay, slog.Default())
+	_, err := doLogin(t.Context(), tokenPath, cfg, noopDisplay, slog.Default())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "access_denied")
 }
@@ -143,7 +143,7 @@ func TestDoLogin_ExpiredCode(t *testing.T) {
 	tokenPath := filepath.Join(tmpDir, "tokens", "test.json")
 	cfg := testOAuthConfig(t, tokenPath, endpoint)
 
-	_, err := doLogin(context.Background(), tokenPath, cfg, noopDisplay, slog.Default())
+	_, err := doLogin(t.Context(), tokenPath, cfg, noopDisplay, slog.Default())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "expired_token")
 }
@@ -159,7 +159,7 @@ func TestDoLogin_ContextCancel(t *testing.T) {
 	tokenPath := filepath.Join(tmpDir, "tokens", "test.json")
 	cfg := testOAuthConfig(t, tokenPath, endpoint)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
 
 	_, err := doLogin(ctx, tokenPath, cfg, noopDisplay, slog.Default())
@@ -189,7 +189,7 @@ func TestDoLogin_PendingThenSuccess(t *testing.T) {
 	tokenPath := filepath.Join(tmpDir, "tokens", "pending.json")
 	cfg := testOAuthConfig(t, tokenPath, endpoint)
 
-	ts, err := doLogin(context.Background(), tokenPath, cfg, noopDisplay, slog.Default())
+	ts, err := doLogin(t.Context(), tokenPath, cfg, noopDisplay, slog.Default())
 	require.NoError(t, err)
 	require.NotNil(t, ts)
 
@@ -349,7 +349,7 @@ func TestLoadToken_InvalidJSON(t *testing.T) {
 func TestTokenSourceFromPath_NoFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nonexistent.json")
 
-	_, err := TokenSourceFromPath(context.Background(), path, slog.Default())
+	_, err := TokenSourceFromPath(t.Context(), path, slog.Default())
 	assert.ErrorIs(t, err, ErrNotLoggedIn)
 }
 
@@ -371,7 +371,7 @@ func TestTokenSourceFromPath_ValidToken(t *testing.T) {
 
 	require.NoError(t, tokenfile.Save(path, tok, meta))
 
-	ts, err := TokenSourceFromPath(context.Background(), path, slog.Default())
+	ts, err := TokenSourceFromPath(t.Context(), path, slog.Default())
 	require.NoError(t, err)
 	require.NotNil(t, ts)
 
@@ -387,7 +387,7 @@ func TestTokenSourceFromPath_InvalidJSON(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(path, []byte("not valid json"), tokenfile.FilePerms))
 
-	_, err := TokenSourceFromPath(context.Background(), path, slog.Default())
+	_, err := TokenSourceFromPath(t.Context(), path, slog.Default())
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "tokenfile: decoding")
 }
@@ -448,7 +448,7 @@ func TestTokenBridge_Error(t *testing.T) {
 		Endpoint: oauth2.Endpoint{TokenURL: "http://invalid.test/token"},
 	}
 
-	bridge := &tokenBridge{src: cfg.TokenSource(context.Background(), tok), logger: slog.Default()}
+	bridge := &tokenBridge{src: cfg.TokenSource(t.Context(), tok), logger: slog.Default()}
 
 	_, err := bridge.Token()
 	require.Error(t, err)
@@ -528,7 +528,7 @@ func TestDoLogin_SaveError(t *testing.T) {
 	tokenPath := filepath.Join(blocker, "tokens", "test.json")
 	cfg := testOAuthConfig(t, tokenPath, endpoint)
 
-	_, err := doLogin(context.Background(), tokenPath, cfg, noopDisplay, slog.Default())
+	_, err := doLogin(t.Context(), tokenPath, cfg, noopDisplay, slog.Default())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "saving token")
 }
@@ -546,7 +546,7 @@ func TestDoLogin_DeviceAuthError(t *testing.T) {
 		},
 	}
 
-	_, err := doLogin(context.Background(), tokenPath, cfg, noopDisplay, slog.Default())
+	_, err := doLogin(t.Context(), tokenPath, cfg, noopDisplay, slog.Default())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "device auth request failed")
 }
@@ -650,7 +650,7 @@ func TestLogin_Success(t *testing.T) {
 	// oauthConfig internally, we test via doLogin (which is what Login delegates to).
 	cfg := testOAuthConfig(t, tokenPath, endpoint)
 
-	ts, err := doLogin(context.Background(), tokenPath, cfg, noopDisplay, slog.Default())
+	ts, err := doLogin(t.Context(), tokenPath, cfg, noopDisplay, slog.Default())
 	require.NoError(t, err)
 	require.NotNil(t, ts)
 
@@ -746,7 +746,7 @@ func TestDoAuthCodeLogin_Success(t *testing.T) {
 	cfg := testAuthCodeConfig(t, tokenPath, endpoint)
 	openURL := simulateBrowserCallback(t)
 
-	ts, err := doAuthCodeLogin(context.Background(), tokenPath, cfg, openURL, slog.Default())
+	ts, err := doAuthCodeLogin(t.Context(), tokenPath, cfg, openURL, slog.Default())
 	require.NoError(t, err)
 	require.NotNil(t, ts)
 
@@ -790,7 +790,7 @@ func TestDoAuthCodeLogin_InvalidState(t *testing.T) {
 	cfg := testAuthCodeConfig(t, tokenPath, endpoint)
 	openURL := simulateBrowserCallback(t)
 
-	_, err := doAuthCodeLogin(context.Background(), tokenPath, cfg, openURL, slog.Default())
+	_, err := doAuthCodeLogin(t.Context(), tokenPath, cfg, openURL, slog.Default())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "state mismatch")
 }
@@ -819,7 +819,7 @@ func TestDoAuthCodeLogin_ContextCancel(t *testing.T) {
 	tokenPath := filepath.Join(tmpDir, "tokens", "cancel.json")
 	cfg := testAuthCodeConfig(t, tokenPath, endpoint)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 	defer cancel()
 
 	openURL := func(authURL string) error {
@@ -865,7 +865,7 @@ func TestDoAuthCodeLogin_MissingCode(t *testing.T) {
 	cfg := testAuthCodeConfig(t, tokenPath, endpoint)
 	openURL := simulateBrowserCallback(t)
 
-	_, err := doAuthCodeLogin(context.Background(), tokenPath, cfg, openURL, slog.Default())
+	_, err := doAuthCodeLogin(t.Context(), tokenPath, cfg, openURL, slog.Default())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing authorization code")
 }
@@ -883,7 +883,7 @@ func TestDoAuthCodeLogin_ExchangeError(t *testing.T) {
 	cfg := testAuthCodeConfig(t, tokenPath, endpoint)
 	openURL := simulateBrowserCallback(t)
 
-	_, err := doAuthCodeLogin(context.Background(), tokenPath, cfg, openURL, slog.Default())
+	_, err := doAuthCodeLogin(t.Context(), tokenPath, cfg, openURL, slog.Default())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "token exchange failed")
 }
@@ -901,7 +901,7 @@ func TestDoAuthCodeLogin_SaveError(t *testing.T) {
 	cfg := testAuthCodeConfig(t, tokenPath, endpoint)
 	openURL := simulateBrowserCallback(t)
 
-	_, err := doAuthCodeLogin(context.Background(), tokenPath, cfg, openURL, slog.Default())
+	_, err := doAuthCodeLogin(t.Context(), tokenPath, cfg, openURL, slog.Default())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "saving token")
 }
@@ -924,7 +924,7 @@ func TestDoAuthCodeLogin_OpenURLFails(t *testing.T) {
 		return fmt.Errorf("browser open failed")
 	}
 
-	ts, err := doAuthCodeLogin(context.Background(), tokenPath, cfg, openURL, slog.Default())
+	ts, err := doAuthCodeLogin(t.Context(), tokenPath, cfg, openURL, slog.Default())
 	require.NoError(t, err)
 	require.NotNil(t, ts)
 

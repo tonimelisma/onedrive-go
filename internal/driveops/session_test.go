@@ -70,7 +70,7 @@ func TestSessionProvider_EmptyTokenPath(t *testing.T) {
 		CanonicalID: driveid.CanonicalID{}, // zero value → empty token path
 	}
 
-	_, err := p.Session(context.Background(), resolved)
+	_, err := p.Session(t.Context(), resolved)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "token path")
 }
@@ -90,7 +90,7 @@ func TestSessionProvider_NotLoggedIn(t *testing.T) {
 		DriveID:     driveid.New("abc123"),
 	}
 
-	_, err = p.Session(context.Background(), resolved)
+	_, err = p.Session(t.Context(), resolved)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "login")
 }
@@ -110,7 +110,7 @@ func TestSessionProvider_ZeroDriveID(t *testing.T) {
 		// DriveID intentionally zero
 	}
 
-	_, err = p.Session(context.Background(), resolved)
+	_, err = p.Session(t.Context(), resolved)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "drive ID not resolved")
 }
@@ -136,11 +136,11 @@ func TestSessionProvider_TokenCaching(t *testing.T) {
 		DriveID:     driveid.New("d1"),
 	}
 
-	s1, err := p.Session(context.Background(), rd)
+	s1, err := p.Session(t.Context(), rd)
 	require.NoError(t, err)
 	require.NotNil(t, s1)
 
-	s2, err := p.Session(context.Background(), rd)
+	s2, err := p.Session(t.Context(), rd)
 	require.NoError(t, err)
 	require.NotNil(t, s2)
 
@@ -169,12 +169,12 @@ func TestSessionProvider_FlushTokenCache(t *testing.T) {
 	}
 
 	// First call creates the cached entry.
-	_, err = p.Session(context.Background(), rd)
+	_, err = p.Session(t.Context(), rd)
 	require.NoError(t, err)
 	assert.Equal(t, 1, callCount)
 
 	// Second call reuses cache — no new TokenSourceFn invocation.
-	_, err = p.Session(context.Background(), rd)
+	_, err = p.Session(t.Context(), rd)
 	require.NoError(t, err)
 	assert.Equal(t, 1, callCount)
 
@@ -182,7 +182,7 @@ func TestSessionProvider_FlushTokenCache(t *testing.T) {
 	p.FlushTokenCache()
 
 	// Third call must re-invoke TokenSourceFn.
-	_, err = p.Session(context.Background(), rd)
+	_, err = p.Session(t.Context(), rd)
 	require.NoError(t, err)
 	assert.Equal(t, 2, callCount, "TokenSourceFn should be re-invoked after FlushTokenCache")
 }
@@ -213,7 +213,7 @@ func TestSessionProvider_ThreadSafety(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 
-			_, errs[idx] = p.Session(context.Background(), rd)
+			_, errs[idx] = p.Session(t.Context(), rd)
 		}(i)
 	}
 
@@ -251,7 +251,7 @@ func TestSessionProvider_TokenSourceError(t *testing.T) {
 		DriveID:     driveid.New("d-err"),
 	}
 
-	_, err = p.Session(context.Background(), rd)
+	_, err = p.Session(t.Context(), rd)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "disk read failed")
 }
@@ -284,7 +284,7 @@ func TestSession_ResolveItem_Root(t *testing.T) {
 		fmt.Fprintf(w, `{"id":"root-id","name":"root"}`)
 	}))
 
-	item, err := s.ResolveItem(context.Background(), "")
+	item, err := s.ResolveItem(t.Context(), "")
 	require.NoError(t, err)
 	assert.Equal(t, "root-id", item.ID)
 	assert.Equal(t, "/drives/abcdef0123456789/items/root", gotPath)
@@ -300,7 +300,7 @@ func TestSession_ResolveItem_Path(t *testing.T) {
 		fmt.Fprintf(w, `{"id":"doc-id","name":"file.txt"}`)
 	}))
 
-	item, err := s.ResolveItem(context.Background(), "Documents/file.txt")
+	item, err := s.ResolveItem(t.Context(), "Documents/file.txt")
 	require.NoError(t, err)
 	assert.Equal(t, "doc-id", item.ID)
 	assert.Equal(t, "/drives/abcdef0123456789/root:/Documents/file.txt:", gotPath)
@@ -316,7 +316,7 @@ func TestSession_ResolveItem_SlashRoot(t *testing.T) {
 		fmt.Fprintf(w, `{"id":"root-id","name":"root"}`)
 	}))
 
-	item, err := s.ResolveItem(context.Background(), "/")
+	item, err := s.ResolveItem(t.Context(), "/")
 	require.NoError(t, err)
 	assert.Equal(t, "root-id", item.ID)
 	assert.Equal(t, "/drives/abcdef0123456789/items/root", gotPath)
@@ -334,7 +334,7 @@ func TestSession_ListChildren_Root(t *testing.T) {
 		fmt.Fprintf(w, `{"value":[{"id":"child1","name":"docs"}]}`)
 	}))
 
-	items, err := s.ListChildren(context.Background(), "")
+	items, err := s.ListChildren(t.Context(), "")
 	require.NoError(t, err)
 	assert.Len(t, items, 1)
 	assert.Equal(t, "child1", items[0].ID)
@@ -351,7 +351,7 @@ func TestSession_ListChildren_Path(t *testing.T) {
 		fmt.Fprintf(w, `{"value":[{"id":"child2","name":"report.docx"}]}`)
 	}))
 
-	items, err := s.ListChildren(context.Background(), "Documents")
+	items, err := s.ListChildren(t.Context(), "Documents")
 	require.NoError(t, err)
 	assert.Len(t, items, 1)
 	assert.Equal(t, "child2", items[0].ID)
@@ -371,7 +371,7 @@ func TestSession_DeleteItem(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
-	err := s.DeleteItem(context.Background(), "item-to-delete")
+	err := s.DeleteItem(t.Context(), "item-to-delete")
 	require.NoError(t, err)
 	assert.Equal(t, http.MethodDelete, gotMethod)
 	assert.Equal(t, "/drives/abcdef0123456789/items/item-to-delete", gotPath)
@@ -388,7 +388,7 @@ func TestSession_PermanentDeleteItem(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
-	err := s.PermanentDeleteItem(context.Background(), "item-to-perm-delete")
+	err := s.PermanentDeleteItem(t.Context(), "item-to-perm-delete")
 	require.NoError(t, err)
 	// Graph API permanentDelete uses POST, not DELETE.
 	assert.Equal(t, http.MethodPost, gotMethod)
@@ -407,7 +407,7 @@ func TestSession_CreateFolder(t *testing.T) {
 		fmt.Fprintf(w, `{"id":"new-folder-id","name":"NewFolder"}`)
 	}))
 
-	item, err := s.CreateFolder(context.Background(), "parent-id", "NewFolder")
+	item, err := s.CreateFolder(t.Context(), "parent-id", "NewFolder")
 	require.NoError(t, err)
 	assert.Equal(t, http.MethodPost, gotMethod)
 	assert.Contains(t, gotPath, "parent-id")

@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/sync"
 )
@@ -93,4 +96,99 @@ func TestNewConflictsCmd_Structure(t *testing.T) {
 	cmd := newConflictsCmd()
 	assert.Equal(t, "conflicts", cmd.Use)
 	assert.NotNil(t, cmd.Flags().Lookup("history"))
+}
+
+// --- printConflictsJSON ---
+
+func TestPrintConflictsJSON_EmptyList(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	err := printConflictsJSON(&buf, nil)
+	require.NoError(t, err)
+
+	var result []conflictJSON
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &result))
+	assert.Empty(t, result)
+}
+
+func TestPrintConflictsJSON_WithConflicts(t *testing.T) {
+	t.Parallel()
+
+	conflicts := []sync.ConflictRecord{
+		{
+			ID:           "conflict-001",
+			Path:         "/docs/readme.txt",
+			ConflictType: "edit_edit",
+			DetectedAt:   1700000000000000000,
+			LocalHash:    "local-hash",
+			RemoteHash:   "remote-hash",
+		},
+		{
+			ID:           "conflict-002",
+			Path:         "/photos/cat.jpg",
+			ConflictType: "delete_edit",
+			DetectedAt:   1700000001000000000,
+			Resolution:   "keep_local",
+			ResolvedBy:   "user",
+			ResolvedAt:   1700000002000000000,
+		},
+	}
+
+	var buf bytes.Buffer
+	err := printConflictsJSON(&buf, conflicts)
+	require.NoError(t, err)
+
+	var result []conflictJSON
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &result))
+	require.Len(t, result, 2)
+	assert.Equal(t, "conflict-001", result[0].ID)
+	assert.Equal(t, "edit_edit", result[0].ConflictType)
+	assert.Equal(t, "keep_local", result[1].Resolution)
+}
+
+// --- printConflictsTable ---
+
+func TestPrintConflictsTable_Unresolved(t *testing.T) {
+	t.Parallel()
+
+	conflicts := []sync.ConflictRecord{
+		{
+			ID:           "abcdefghijklmnop",
+			Path:         "/test.txt",
+			ConflictType: "edit_edit",
+			DetectedAt:   1700000000000000000,
+		},
+	}
+
+	var buf bytes.Buffer
+	printConflictsTable(&buf, conflicts, false)
+
+	output := buf.String()
+	assert.Contains(t, output, "abcdefgh") // truncated ID
+	assert.Contains(t, output, "/test.txt")
+	assert.Contains(t, output, "edit_edit")
+}
+
+func TestPrintConflictsTable_History(t *testing.T) {
+	t.Parallel()
+
+	conflicts := []sync.ConflictRecord{
+		{
+			ID:           "abcdefghijklmnop",
+			Path:         "/test.txt",
+			ConflictType: "edit_edit",
+			DetectedAt:   1700000000000000000,
+			Resolution:   "keep_local",
+			ResolvedBy:   "user",
+		},
+	}
+
+	var buf bytes.Buffer
+	printConflictsTable(&buf, conflicts, true)
+
+	output := buf.String()
+	assert.Contains(t, output, "RESOLUTION")
+	assert.Contains(t, output, "keep_local")
+	assert.Contains(t, output, "user")
 }

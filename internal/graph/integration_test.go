@@ -71,7 +71,7 @@ func newIntegrationClient(t *testing.T) *Client {
 	drive := os.Getenv(driveEnvVar)
 	require.NotEmpty(t, drive, "ONEDRIVE_TEST_DRIVE not set")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	logger := testLogger(t)
 
 	cid := driveid.MustCanonicalID(drive)
@@ -122,7 +122,7 @@ func TestIntegration_GetItem(t *testing.T) {
 	client := newIntegrationClient(t)
 	driveID := driveIDForTest(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), integrationTimeout)
 	defer cancel()
 
 	item, err := client.GetItem(ctx, driveID, "root")
@@ -142,7 +142,7 @@ func TestIntegration_ListChildren(t *testing.T) {
 	client := newIntegrationClient(t)
 	driveID := driveIDForTest(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), integrationTimeout)
 	defer cancel()
 
 	items, err := client.ListChildren(ctx, driveID, "root")
@@ -165,7 +165,7 @@ func TestIntegration_GetItem_NotFound(t *testing.T) {
 	client := newIntegrationClient(t)
 	driveID := driveIDForTest(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), integrationTimeout)
 	defer cancel()
 
 	_, err := client.GetItem(ctx, driveID, "nonexistent-item-id-that-does-not-exist")
@@ -181,7 +181,7 @@ func TestIntegration_GetItem_NotFound(t *testing.T) {
 func TestIntegration_Me(t *testing.T) {
 	client := newIntegrationClient(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), integrationTimeout)
 	defer cancel()
 
 	user, err := client.Me(ctx)
@@ -197,7 +197,7 @@ func TestIntegration_Me(t *testing.T) {
 func TestIntegration_Drives(t *testing.T) {
 	client := newIntegrationClient(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), integrationTimeout)
 	defer cancel()
 
 	drives, err := client.Drives(ctx)
@@ -219,7 +219,7 @@ func TestIntegration_CreateAndDeleteFolder(t *testing.T) {
 	client := newIntegrationClient(t)
 	driveID := driveIDForTest(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), integrationTimeout)
 	defer cancel()
 
 	folderName := fmt.Sprintf("onedrive-go-test-%d", time.Now().UnixNano())
@@ -232,7 +232,7 @@ func TestIntegration_CreateAndDeleteFolder(t *testing.T) {
 			return
 		}
 
-		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), integrationTimeout)
+		cleanCtx, cleanCancel := context.WithTimeout(t.Context(), integrationTimeout)
 		defer cleanCancel()
 
 		// Best-effort cleanup -- don't fail the test if cleanup fails.

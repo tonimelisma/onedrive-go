@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"encoding/base64"
 	"testing"
 
@@ -46,7 +45,7 @@ func TestVerifyBaseline_AllMatch(t *testing.T) {
 		},
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	logger := testLogger(t)
 
 	report, err := VerifyBaseline(ctx, bl, dir, logger)
@@ -70,7 +69,7 @@ func TestVerifyBaseline_MissingFile(t *testing.T) {
 		},
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	logger := testLogger(t)
 
 	report, err := VerifyBaseline(ctx, bl, dir, logger)
@@ -98,7 +97,7 @@ func TestVerifyBaseline_HashMismatch(t *testing.T) {
 		},
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	logger := testLogger(t)
 
 	report, err := VerifyBaseline(ctx, bl, dir, logger)
@@ -120,7 +119,7 @@ func TestVerifyBaseline_EmptyBaseline(t *testing.T) {
 		ByPath: make(map[string]*BaselineEntry),
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	logger := testLogger(t)
 
 	report, err := VerifyBaseline(ctx, bl, dir, logger)
@@ -151,7 +150,7 @@ func TestVerifyBaseline_SkipsFolders(t *testing.T) {
 		},
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	logger := testLogger(t)
 
 	report, err := VerifyBaseline(ctx, bl, dir, logger)
@@ -178,7 +177,7 @@ func TestVerifyBaseline_SizeMismatch(t *testing.T) {
 		},
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	logger := testLogger(t)
 
 	report, err := VerifyBaseline(ctx, bl, dir, logger)

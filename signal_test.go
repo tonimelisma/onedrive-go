@@ -17,7 +17,7 @@ func TestShutdownContext_FirstSignalCancels(t *testing.T) {
 	// Not parallel: sends a real SIGINT to the process. Running in parallel
 	// with other signal tests risks interference between signal handlers.
 
-	parent, cancel := context.WithCancel(context.Background())
+	parent, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
@@ -40,7 +40,7 @@ func TestShutdownContext_FirstSignalCancels(t *testing.T) {
 func TestShutdownContext_ParentCancelStopsGoroutine(t *testing.T) {
 	t.Parallel()
 
-	parent, cancel := context.WithCancel(context.Background())
+	parent, cancel := context.WithCancel(t.Context())
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	ctx := shutdownContext(parent, logger)
 

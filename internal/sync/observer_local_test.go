@@ -79,7 +79,7 @@ func TestFullScan_NewFiles(t *testing.T) {
 	writeTestFile(t, dir, "data.csv", "a,b,c")
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
-	events, err := obs.FullScan(context.Background(), dir)
+	events, err := obs.FullScan(t.Context(), dir)
 	require.NoError(t, err, "FullScan")
 
 	require.Len(t, events, 2)
@@ -103,7 +103,7 @@ func TestFullScan_NewFolder(t *testing.T) {
 	require.NoError(t, os.Mkdir(filepath.Join(dir, "photos"), 0o755), "Mkdir")
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
-	events, err := obs.FullScan(context.Background(), dir)
+	events, err := obs.FullScan(t.Context(), dir)
 	require.NoError(t, err, "FullScan")
 
 	require.Len(t, events, 1)
@@ -127,7 +127,7 @@ func TestFullScan_ModifiedFile(t *testing.T) {
 	})
 
 	obs := NewLocalObserver(baseline, testLogger(t), 0)
-	events, err := obs.FullScan(context.Background(), dir)
+	events, err := obs.FullScan(t.Context(), dir)
 	require.NoError(t, err, "FullScan")
 
 	require.Len(t, events, 1)
@@ -151,7 +151,7 @@ func TestFullScan_UnchangedFile(t *testing.T) {
 	})
 
 	obs := NewLocalObserver(baseline, testLogger(t), 0)
-	events, err := obs.FullScan(context.Background(), dir)
+	events, err := obs.FullScan(t.Context(), dir)
 	require.NoError(t, err, "FullScan")
 
 	assert.Empty(t, events, "file unchanged")
@@ -170,7 +170,7 @@ func TestFullScan_DeletedFile(t *testing.T) {
 	})
 
 	obs := NewLocalObserver(baseline, testLogger(t), 0)
-	events, err := obs.FullScan(context.Background(), dir)
+	events, err := obs.FullScan(t.Context(), dir)
 	require.NoError(t, err, "FullScan")
 
 	require.Len(t, events, 1)
@@ -197,7 +197,7 @@ func TestFullScan_DeletedFolder(t *testing.T) {
 	})
 
 	obs := NewLocalObserver(baseline, testLogger(t), 0)
-	events, err := obs.FullScan(context.Background(), dir)
+	events, err := obs.FullScan(t.Context(), dir)
 	require.NoError(t, err, "FullScan")
 
 	require.Len(t, events, 1)
@@ -222,7 +222,7 @@ func TestFullScan_MtimeChangeNoContentChange(t *testing.T) {
 	})
 
 	obs := NewLocalObserver(baseline, testLogger(t), 0)
-	events, err := obs.FullScan(context.Background(), dir)
+	events, err := obs.FullScan(t.Context(), dir)
 	require.NoError(t, err, "FullScan")
 
 	assert.Empty(t, events, "mtime change only, hash matches")
@@ -250,7 +250,7 @@ func TestFullScan_MtimeSizeFastPath(t *testing.T) {
 	})
 
 	obs := NewLocalObserver(baseline, testLogger(t), 0)
-	events, err := obs.FullScan(context.Background(), dir)
+	events, err := obs.FullScan(t.Context(), dir)
 	require.NoError(t, err, "FullScan")
 
 	assert.Empty(t, events, "fast path should skip unchanged file")
@@ -278,7 +278,7 @@ func TestFullScan_RacilyCleanForcesHash(t *testing.T) {
 	})
 
 	obs := NewLocalObserver(baseline, testLogger(t), 0)
-	events, err := obs.FullScan(context.Background(), dir)
+	events, err := obs.FullScan(t.Context(), dir)
 	require.NoError(t, err, "FullScan")
 
 	// Racily-clean guard should force hash, detect the mismatch -> ChangeModify.
@@ -311,7 +311,7 @@ func TestFullScan_SizeChangeForcesHash(t *testing.T) {
 	})
 
 	obs := NewLocalObserver(baseline, testLogger(t), 0)
-	events, err := obs.FullScan(context.Background(), dir)
+	events, err := obs.FullScan(t.Context(), dir)
 	require.NoError(t, err, "FullScan")
 
 	require.Len(t, events, 1, "size change should force hash")
@@ -325,7 +325,7 @@ func TestFullScan_NosyncGuard(t *testing.T) {
 	writeTestFile(t, dir, ".nosync", "")
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
-	_, err := obs.FullScan(context.Background(), dir)
+	_, err := obs.FullScan(t.Context(), dir)
 
 	assert.ErrorIs(t, err, ErrNosyncGuard)
 }
@@ -336,7 +336,7 @@ func TestFullScan_EmptyDir(t *testing.T) {
 	dir := t.TempDir()
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
-	events, err := obs.FullScan(context.Background(), dir)
+	events, err := obs.FullScan(t.Context(), dir)
 	require.NoError(t, err, "FullScan")
 
 	assert.Empty(t, events)
@@ -351,7 +351,7 @@ func TestFullScan_Symlink(t *testing.T) {
 	require.NoError(t, os.Symlink(filepath.Join(dir, "real.txt"), filepath.Join(dir, "link.txt")), "Symlink")
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
-	events, err := obs.FullScan(context.Background(), dir)
+	events, err := obs.FullScan(t.Context(), dir)
 	require.NoError(t, err, "FullScan")
 
 	// Only the real file should produce an event, not the symlink.
@@ -367,7 +367,7 @@ func TestFullScan_InvalidName(t *testing.T) {
 	writeTestFile(t, dir, "valid.txt", "ok")
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
-	events, err := obs.FullScan(context.Background(), dir)
+	events, err := obs.FullScan(t.Context(), dir)
 	require.NoError(t, err, "FullScan")
 
 	// CON should be skipped; only valid.txt produces an event.
@@ -385,7 +385,7 @@ func TestFullScan_AlwaysExcluded(t *testing.T) {
 	writeTestFile(t, dir, "legit.txt", "keep me")
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
-	events, err := obs.FullScan(context.Background(), dir)
+	events, err := obs.FullScan(t.Context(), dir)
 	require.NoError(t, err, "FullScan")
 
 	// Only legit.txt should produce an event.
@@ -399,7 +399,7 @@ func TestFullScan_ContextCanceled(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, dir, "file.txt", "content")
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
@@ -421,7 +421,7 @@ func TestFullScan_NFCNormalization(t *testing.T) {
 	writeTestFile(t, dir, nfdName, "resume content")
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
-	events, err := obs.FullScan(context.Background(), dir)
+	events, err := obs.FullScan(t.Context(), dir)
 	require.NoError(t, err, "FullScan")
 
 	require.Len(t, events, 1)
@@ -437,7 +437,7 @@ func TestFullScan_NestedDirs(t *testing.T) {
 	writeTestFile(t, dir, "top.txt", "top content")
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
-	events, err := obs.FullScan(context.Background(), dir)
+	events, err := obs.FullScan(t.Context(), dir)
 	require.NoError(t, err, "FullScan")
 
 	// Expect: folder "a", folder "a/b", file "a/b/deep.txt", file "top.txt".
@@ -463,7 +463,7 @@ func TestFullScan_EmptyFile(t *testing.T) {
 	writeTestFile(t, dir, "empty.txt", "")
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
-	events, err := obs.FullScan(context.Background(), dir)
+	events, err := obs.FullScan(t.Context(), dir)
 	require.NoError(t, err, "FullScan")
 
 	require.Len(t, events, 1)
@@ -507,7 +507,7 @@ func TestFullScan_MixedChanges(t *testing.T) {
 	)
 
 	obs := NewLocalObserver(baseline, testLogger(t), 0)
-	events, err := obs.FullScan(context.Background(), dir)
+	events, err := obs.FullScan(t.Context(), dir)
 	require.NoError(t, err, "FullScan")
 
 	// 3 events: new, modified, deleted. Unchanged produces no event.
@@ -731,7 +731,7 @@ func TestFullScan_NosyncGuardDir(t *testing.T) {
 	require.NoError(t, os.Mkdir(filepath.Join(dir, ".nosync"), 0o755), "Mkdir")
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
-	_, err := obs.FullScan(context.Background(), dir)
+	_, err := obs.FullScan(t.Context(), dir)
 
 	assert.ErrorIs(t, err, ErrNosyncGuard)
 }
@@ -745,7 +745,7 @@ func TestFullScan_ExcludedDirSkipsSubtree(t *testing.T) {
 	writeTestFile(t, dir, "visible.txt", "shown")
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
-	events, err := obs.FullScan(context.Background(), dir)
+	events, err := obs.FullScan(t.Context(), dir)
 	require.NoError(t, err, "FullScan")
 
 	// Only visible.txt should appear; ~excluded dir and its contents are skipped.
@@ -785,7 +785,7 @@ func TestFullScan_InvalidNameDirSkipsSubtree(t *testing.T) {
 	writeTestFile(t, dir, "good.txt", "good")
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
-	events, err := obs.FullScan(context.Background(), dir)
+	events, err := obs.FullScan(t.Context(), dir)
 	require.NoError(t, err, "FullScan")
 
 	// Only good.txt should appear; bad. dir and its contents are skipped.
@@ -815,7 +815,7 @@ func TestFullScan_PermissionDenied(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(unreadableDir, 0o755) })
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
-	events, err := obs.FullScan(context.Background(), syncRoot)
+	events, err := obs.FullScan(t.Context(), syncRoot)
 	require.NoError(t, err)
 
 	// Should see events for readable dir + file, but not unreadable contents.
@@ -908,7 +908,7 @@ func TestFullScan_HashFailureStillEmitsCreate(t *testing.T) {
 	})
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
-	events, err := obs.FullScan(context.Background(), dir)
+	events, err := obs.FullScan(t.Context(), dir)
 	require.NoError(t, err)
 
 	ev := findEvent(events, "unreadable.txt")
@@ -946,7 +946,7 @@ func TestFullScan_HashFailureModifyStillEmitsEvent(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
 
 	obs := NewLocalObserver(baseline, testLogger(t), 0)
-	events, err := obs.FullScan(context.Background(), dir)
+	events, err := obs.FullScan(t.Context(), dir)
 	require.NoError(t, err)
 
 	ev := findEvent(events, "unreadable.txt")

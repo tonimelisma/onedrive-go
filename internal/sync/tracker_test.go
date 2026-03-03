@@ -117,7 +117,7 @@ func TestDepTracker_CancelByPath(t *testing.T) {
 	ta := <-dt.Ready()
 
 	// Simulate a worker setting the cancel func.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	ta.Cancel = cancel
 
 	dt.CancelByPath("cancel-me.txt")
@@ -321,7 +321,7 @@ func TestDepTracker_CompleteCleansByPath(t *testing.T) {
 	ta := <-dt.Ready()
 
 	// Set up cancel on the new action.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	ta.Cancel = cancel
 
 	// CancelByPath should cancel action 2 (the new one), not be a no-op
@@ -350,7 +350,7 @@ func TestDepTracker_CancelByPathCleansUp(t *testing.T) {
 	}, 1, nil, "")
 
 	ta := <-dt.Ready()
-	ctx1, cancel1 := context.WithCancel(context.Background())
+	ctx1, cancel1 := context.WithCancel(t.Context())
 	ta.Cancel = cancel1
 
 	dt.CancelByPath("cancel-me.txt")
@@ -371,7 +371,7 @@ func TestDepTracker_CancelByPathCleansUp(t *testing.T) {
 	}, 2, nil, "")
 
 	ta2 := <-dt.Ready()
-	ctx2, cancel2 := context.WithCancel(context.Background())
+	ctx2, cancel2 := context.WithCancel(t.Context())
 	ta2.Cancel = cancel2
 
 	dt.CancelByPath("cancel-me.txt")

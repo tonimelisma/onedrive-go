@@ -90,7 +90,7 @@ func TestDo_Success(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	resp, err := client.Do(context.Background(), http.MethodGet, "/me", nil)
+	resp, err := client.Do(t.Context(), http.MethodGet, "/me", nil)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -125,7 +125,7 @@ func TestDo_ErrorClassification(t *testing.T) {
 			defer srv.Close()
 
 			client := newTestClient(t, srv.URL)
-			_, err := client.Do(context.Background(), http.MethodGet, "/test", nil)
+			_, err := client.Do(t.Context(), http.MethodGet, "/test", nil)
 			require.Error(t, err)
 			assert.ErrorIs(t, err, tt.sentinel)
 
@@ -154,7 +154,7 @@ func TestDo_RetryOn5xx(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	resp, err := client.Do(context.Background(), http.MethodGet, "/retry", nil)
+	resp, err := client.Do(t.Context(), http.MethodGet, "/retry", nil)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -180,7 +180,7 @@ func TestDo_RetryOn429WithRetryAfter(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	resp, err := client.Do(context.Background(), http.MethodGet, "/throttle", nil)
+	resp, err := client.Do(t.Context(), http.MethodGet, "/throttle", nil)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -198,7 +198,7 @@ func TestDo_MaxRetriesExhausted(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	_, err := client.Do(context.Background(), http.MethodGet, "/fail", nil)
+	_, err := client.Do(t.Context(), http.MethodGet, "/fail", nil)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrServerError)
 
@@ -216,7 +216,7 @@ func TestDo_NoRetryOn4xx(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	_, err := client.Do(context.Background(), http.MethodGet, "/missing", nil)
+	_, err := client.Do(t.Context(), http.MethodGet, "/missing", nil)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrNotFound)
 
@@ -240,7 +240,7 @@ func TestDo_AuthorizationHeader(t *testing.T) {
 	client := NewClient(srv.URL, http.DefaultClient, staticToken("my-secret-token"), slog.Default(), "test-agent")
 	client.sleepFunc = noopSleep
 
-	resp, err := client.Do(context.Background(), http.MethodGet, "/auth", nil)
+	resp, err := client.Do(t.Context(), http.MethodGet, "/auth", nil)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -253,7 +253,7 @@ func TestDo_ContextCancellation(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	client := newTestClient(t, srv.URL)
@@ -293,7 +293,7 @@ func TestDo_UserAgentHeader(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	resp, err := client.Do(context.Background(), http.MethodGet, "/ua", nil)
+	resp, err := client.Do(t.Context(), http.MethodGet, "/ua", nil)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 }
@@ -306,7 +306,7 @@ func TestDo_ContentTypeForBody(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	resp, err := client.Do(context.Background(), http.MethodPost, "/create", strings.NewReader(`{}`))
+	resp, err := client.Do(t.Context(), http.MethodPost, "/create", strings.NewReader(`{}`))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 }
@@ -315,7 +315,7 @@ func TestDo_TokenError(t *testing.T) {
 	client := NewClient("http://localhost", http.DefaultClient, failingToken{}, slog.Default(), "test-agent")
 	client.sleepFunc = noopSleep
 
-	_, err := client.Do(context.Background(), http.MethodGet, "/test", nil)
+	_, err := client.Do(t.Context(), http.MethodGet, "/test", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "token error")
 }
@@ -386,12 +386,12 @@ func TestNewClient_NilTokenSourcePanics(t *testing.T) {
 }
 
 func TestTimeSleep_Completes(t *testing.T) {
-	err := timeSleep(context.Background(), 10*time.Millisecond)
+	err := timeSleep(t.Context(), 10*time.Millisecond)
 	assert.NoError(t, err)
 }
 
 func TestTimeSleep_ContextCancel(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	err := timeSleep(ctx, time.Minute)
@@ -420,7 +420,7 @@ func TestDoWithHeaders_SendsExtraHeaders(t *testing.T) {
 	client := newTestClient(t, srv.URL)
 	headers := http.Header{"Prefer": {"deltashowremoteitemsaliasid"}}
 
-	resp, err := client.DoWithHeaders(context.Background(), http.MethodGet, "/test", nil, headers)
+	resp, err := client.DoWithHeaders(t.Context(), http.MethodGet, "/test", nil, headers)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -435,7 +435,7 @@ func TestDoWithHeaders_NilHeaders(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 
-	resp, err := client.DoWithHeaders(context.Background(), http.MethodGet, "/test", nil, nil)
+	resp, err := client.DoWithHeaders(t.Context(), http.MethodGet, "/test", nil, nil)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -463,7 +463,7 @@ func TestDoWithHeaders_RetriesWithHeaders(t *testing.T) {
 	client := newTestClient(t, srv.URL)
 	headers := http.Header{"Prefer": {"deltashowremoteitemsaliasid"}}
 
-	resp, err := client.DoWithHeaders(context.Background(), http.MethodGet, "/retry", nil, headers)
+	resp, err := client.DoWithHeaders(t.Context(), http.MethodGet, "/retry", nil, headers)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -504,7 +504,7 @@ func TestDo_RetryWithBody(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	resp, err := client.Do(
-		context.Background(),
+		t.Context(),
 		http.MethodPost,
 		"/create",
 		bytes.NewReader([]byte(expectedBody)),
@@ -576,7 +576,7 @@ func TestDoRetry_RewindBodyFailure(t *testing.T) {
 
 	body := &failOnSecondSeeker{data: []byte(`{"key":"value"}`)}
 
-	_, err := client.Do(context.Background(), http.MethodPost, "/test", body)
+	_, err := client.Do(t.Context(), http.MethodPost, "/test", body)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "rewinding request body for retry")
 
@@ -604,7 +604,7 @@ func TestRetryBackoff_MalformedRetryAfter(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	resp, err := client.Do(context.Background(), http.MethodGet, "/throttle", nil)
+	resp, err := client.Do(t.Context(), http.MethodGet, "/throttle", nil)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -618,7 +618,7 @@ func TestDoRetry_NetworkError_MaxRetries(t *testing.T) {
 	client := NewClient("http://127.0.0.1:1", http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent")
 	client.sleepFunc = noopSleep
 
-	_, err := client.Do(context.Background(), http.MethodGet, "/unreachable", nil)
+	_, err := client.Do(t.Context(), http.MethodGet, "/unreachable", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed after 5 retries")
 }
@@ -637,8 +637,8 @@ func TestDoPreAuthRetry_SuccessFirstTry(t *testing.T) {
 
 	client := newTestClient(t, "http://unused")
 
-	resp, err := client.doPreAuthRetry(context.Background(), "test op", func() (*http.Request, error) {
-		req, reqErr := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/test", http.NoBody)
+	resp, err := client.doPreAuthRetry(t.Context(), "test op", func() (*http.Request, error) {
+		req, reqErr := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/test", http.NoBody)
 		if reqErr != nil {
 			return nil, reqErr
 		}
@@ -666,7 +666,7 @@ func TestDoPreAuthRetry_NetworkRetry(t *testing.T) {
 
 	client := newTestClient(t, "http://unused")
 
-	resp, err := client.doPreAuthRetry(context.Background(), "net retry", func() (*http.Request, error) {
+	resp, err := client.doPreAuthRetry(t.Context(), "net retry", func() (*http.Request, error) {
 		n := attempts.Add(1)
 
 		target := "http://127.0.0.1:1/unreachable"
@@ -674,7 +674,7 @@ func TestDoPreAuthRetry_NetworkRetry(t *testing.T) {
 			target = srv.URL + "/ok"
 		}
 
-		return http.NewRequestWithContext(context.Background(), http.MethodGet, target, http.NoBody)
+		return http.NewRequestWithContext(t.Context(), http.MethodGet, target, http.NoBody)
 	})
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -700,8 +700,8 @@ func TestDoPreAuthRetry_503Retry(t *testing.T) {
 
 	client := newTestClient(t, "http://unused")
 
-	resp, err := client.doPreAuthRetry(context.Background(), "503 retry", func() (*http.Request, error) {
-		return http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/test", http.NoBody)
+	resp, err := client.doPreAuthRetry(t.Context(), "503 retry", func() (*http.Request, error) {
+		return http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/test", http.NoBody)
 	})
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -728,8 +728,8 @@ func TestDoPreAuthRetry_429WithRetryAfter(t *testing.T) {
 
 	client := newTestClient(t, "http://unused")
 
-	resp, err := client.doPreAuthRetry(context.Background(), "429 retry", func() (*http.Request, error) {
-		return http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/test", http.NoBody)
+	resp, err := client.doPreAuthRetry(t.Context(), "429 retry", func() (*http.Request, error) {
+		return http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/test", http.NoBody)
 	})
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -749,8 +749,8 @@ func TestDoPreAuthRetry_MaxRetriesExhausted(t *testing.T) {
 
 	client := newTestClient(t, "http://unused")
 
-	_, err := client.doPreAuthRetry(context.Background(), "exhaust", func() (*http.Request, error) {
-		return http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/fail", http.NoBody)
+	_, err := client.doPreAuthRetry(t.Context(), "exhaust", func() (*http.Request, error) {
+		return http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/fail", http.NoBody)
 	})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrServerError)
@@ -765,7 +765,7 @@ func TestDoPreAuthRetry_ContextCancellation(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	client := newTestClient(t, "http://unused")
@@ -789,8 +789,8 @@ func TestDoPreAuthRetry_NonRetryable4xx(t *testing.T) {
 
 	client := newTestClient(t, "http://unused")
 
-	_, err := client.doPreAuthRetry(context.Background(), "404 test", func() (*http.Request, error) {
-		return http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/missing", http.NoBody)
+	_, err := client.doPreAuthRetry(t.Context(), "404 test", func() (*http.Request, error) {
+		return http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/missing", http.NoBody)
 	})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrNotFound)
@@ -806,7 +806,7 @@ func TestDoPreAuthRetry_NonRetryable4xx(t *testing.T) {
 func TestDoPreAuthRetry_MakeReqError(t *testing.T) {
 	client := newTestClient(t, "http://unused")
 
-	_, err := client.doPreAuthRetry(context.Background(), "bad factory", func() (*http.Request, error) {
+	_, err := client.doPreAuthRetry(t.Context(), "bad factory", func() (*http.Request, error) {
 		return nil, errors.New("factory failed")
 	})
 	require.Error(t, err)
@@ -817,8 +817,8 @@ func TestDoPreAuthRetry_NetworkMaxRetries(t *testing.T) {
 	client := NewClient("http://localhost", http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent")
 	client.sleepFunc = noopSleep
 
-	_, err := client.doPreAuthRetry(context.Background(), "net exhaust", func() (*http.Request, error) {
-		return http.NewRequestWithContext(context.Background(), http.MethodGet, "http://127.0.0.1:1/unreachable", http.NoBody)
+	_, err := client.doPreAuthRetry(t.Context(), "net exhaust", func() (*http.Request, error) {
+		return http.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:1/unreachable", http.NoBody)
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed after 5 retries")
@@ -832,7 +832,7 @@ func TestDoPreAuthRetry_ContextCancelDuringHTTPBackoff(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	client := newTestClient(t, "http://unused")
 	// Override sleepFunc to cancel context on first backoff.
@@ -852,7 +852,7 @@ func TestDoPreAuthRetry_ContextCancelDuringHTTPBackoff(t *testing.T) {
 func TestDoPreAuthRetry_ContextCancelDuringNetworkBackoff(t *testing.T) {
 	// Verify that context cancellation during the backoff sleep after a network
 	// error is detected and returned.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	client := NewClient("http://localhost", http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent")
 	client.sleepFunc = func(_ context.Context, _ time.Duration) error {
