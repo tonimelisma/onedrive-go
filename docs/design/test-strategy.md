@@ -494,7 +494,6 @@ Tests for the path construction and cascade update logic ([data-model.md §10](d
 | `TestConfig_Validation_MutuallyExclusive` | download_only + upload_only → error |
 | `TestConfig_Migration_Abraunegg` | abraunegg config.toml → our format |
 | `TestConfig_Migration_Rclone` | rclone.conf OneDrive section → our format |
-| `TestConfig_HotReload_FilterChange` | New filter config → stale files detected |
 | `TestConfig_HotReload_BandwidthImmediate` | Bandwidth schedule change takes effect immediately |
 | `TestConfig_HotReload_NonReloadable` | sync_dir change → restart required error |
 | `TestConfig_MalformedTOML` | Syntax error → clear error message with line number |
@@ -517,8 +516,6 @@ Tests for the path construction and cascade update logic ([data-model.md §10](d
 | `TestDB_Conflict_Resolve` | Resolution updates resolution + resolved_by + resolved_at |
 | `TestDB_Conflict_ListUnresolved` | Only unresolved conflicts returned |
 | `TestDB_Conflict_History` | Resolution history JSON appended |
-| `TestDB_StaleFiles_Create` | Stale file record after filter change |
-| `TestDB_StaleFiles_Dispose` | Mark stale files as kept or deleted |
 | `TestDB_UploadSession_SaveResume` | Upload session round-trip |
 | `TestDB_UploadSession_Expire` | Expired sessions cleaned up |
 | `TestDB_Migration_Forward` | Every migration applies forward cleanly in sequence |
@@ -688,7 +685,6 @@ These tests run the full sync pipeline — delta fetch through execution — wit
 | `TestConfigIntegration_FilterEngineFromConfig` | Config patterns → sync/ filter engine evaluates correctly |
 | `TestConfigIntegration_CrossDriveValidation` | Two drives with same sync_dir → error |
 | `TestConfigIntegration_HotReload_SIGHUP` | Send SIGHUP → config re-read → filter engine re-init |
-| `TestConfigIntegration_HotReload_StaleFiles` | Filter change → stale files detected → table populated |
 | `TestConfigIntegration_HotReload_BandwidthImmediate` | Bandwidth change → transfer manager updated immediately |
 | `TestConfigIntegration_HotReload_NonReloadable` | sync_dir change → error logged, restart required |
 | `TestConfigIntegration_Wizard_Interactive` | Simulated wizard flow → valid config written |
