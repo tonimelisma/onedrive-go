@@ -3,6 +3,8 @@ package config
 import (
 	"context"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -479,6 +481,25 @@ func TestWarnDeprecatedKeys_NoOldKeys(t *testing.T) {
 }
 
 // --- ValidateResolved tests ---
+
+func TestValidateResolved_SyncDirExistsButIsFile(t *testing.T) {
+	// Create a regular file where sync_dir points.
+	f := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(f, []byte("data"), 0o600))
+
+	rd := &ResolvedDrive{SyncDir: f}
+	err := ValidateResolved(rd)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sync_dir")
+	assert.Contains(t, err.Error(), "not a directory")
+}
+
+func TestValidateResolved_SyncDirDoesNotExist_OK(t *testing.T) {
+	// Non-existent path is fine — sync will create it.
+	rd := &ResolvedDrive{SyncDir: filepath.Join(t.TempDir(), "nonexistent")}
+	err := ValidateResolved(rd)
+	assert.NoError(t, err)
+}
 
 func TestValidateResolved_AbsoluteSyncDir(t *testing.T) {
 	rd := &ResolvedDrive{SyncDir: "/absolute/path"}

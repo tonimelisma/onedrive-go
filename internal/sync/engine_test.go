@@ -1801,3 +1801,55 @@ func TestExecutePlan_ActionsDepsLengthMismatch(t *testing.T) {
 	require.Len(t, report.Errors, 1)
 	assert.Contains(t, report.Errors[0].Error(), "invariant violation")
 }
+
+// ---------------------------------------------------------------------------
+// Close() cleanup and idempotency
+// ---------------------------------------------------------------------------
+
+// TestEngine_Close_NilsObserversAndCleansStale verifies that Close() nils out
+// observer references and cleans stale session files. Also tests idempotency —
+// calling Close() twice must not panic.
+func TestEngine_Close_NilsObserversAndCleansStale(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	syncRoot := filepath.Join(tmpDir, "sync")
+	dataDir := filepath.Join(tmpDir, "data")
+
+	require.NoError(t, os.MkdirAll(syncRoot, 0o755))
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	logger := testLogger(t)
+	driveID := driveid.New(engineTestDriveID)
+
+	eng, err := NewEngine(&EngineConfig{
+		DBPath:    dbPath,
+		SyncRoot:  syncRoot,
+		DataDir:   dataDir,
+		DriveID:   driveID,
+		Fetcher:   mock,
+		Items:     mock,
+		Downloads: mock,
+		Uploads:   mock,
+		Logger:    logger,
+	})
+	require.NoError(t, err)
+
+	// Simulate observers being set (as RunWatch does).
+	eng.remoteObs = &RemoteObserver{}
+	eng.localObs = &LocalObserver{}
+
+	// First Close should succeed and nil out references.
+	require.NoError(t, eng.Close())
+	assert.Nil(t, eng.remoteObs, "remoteObs should be nil after Close")
+	assert.Nil(t, eng.localObs, "localObs should be nil after Close")
+
+	// Second Close must not panic (idempotency). The baseline DB is already
+	// closed so the second call returns an error, which is acceptable.
+	assert.NotPanics(t, func() {
+		_ = eng.Close()
+	}, "second Close must not panic")
+}

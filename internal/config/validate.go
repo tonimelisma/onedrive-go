@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -65,6 +66,15 @@ func ValidateResolved(rd *ResolvedDrive) error {
 	// Relative paths would resolve differently depending on cwd.
 	if rd.SyncDir != "" && !filepath.IsAbs(rd.SyncDir) {
 		errs = append(errs, fmt.Errorf("sync_dir: must be absolute after expansion, got %q", rd.SyncDir))
+	}
+
+	// Reject sync_dir that exists on disk but is not a directory. Non-existent
+	// paths are fine — sync creates the directory on first run. We skip
+	// permission checks because they are TOCTOU-racy.
+	if rd.SyncDir != "" {
+		if info, err := os.Stat(rd.SyncDir); err == nil && !info.IsDir() {
+			errs = append(errs, fmt.Errorf("sync_dir: %q exists but is not a directory", rd.SyncDir))
+		}
 	}
 
 	return errors.Join(errs...)

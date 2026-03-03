@@ -293,6 +293,37 @@ func TestSessionStore_DifferentKeys(t *testing.T) {
 	assert.Equal(t, "hash-b", recB.FileHash)
 }
 
+func TestSessionStore_Load_StaleSessionReturnsNil(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewSessionStore(dir, testLogger(t))
+
+	driveID := "drive-stale"
+	localPath := "/docs/old.docx"
+
+	// Save a valid session.
+	require.NoError(t, store.Save(driveID, localPath, &SessionRecord{
+		SessionURL: "https://example.com/upload/stale",
+		FileHash:   "hash-stale",
+		FileSize:   512,
+	}))
+
+	// Age the file beyond StaleSessionAge.
+	sessionPath := store.filePath(driveID, localPath)
+	oldTime := time.Now().Add(-StaleSessionAge - time.Hour)
+	require.NoError(t, os.Chtimes(sessionPath, oldTime, oldTime))
+
+	// Load should return nil (session expired) and delete the file.
+	rec, err := store.Load(driveID, localPath)
+	require.NoError(t, err)
+	assert.Nil(t, rec, "stale session should return nil")
+
+	// File should be deleted.
+	_, statErr := os.Stat(sessionPath)
+	assert.True(t, os.IsNotExist(statErr), "stale session file should be deleted")
+}
+
 func TestSessionStore_CleanStale(t *testing.T) {
 	t.Parallel()
 
