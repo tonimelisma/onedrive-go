@@ -54,41 +54,22 @@ sync_dir = %q
 	return cfgPath, env
 }
 
-// runCLIWithConfig runs the CLI binary with a custom config file.
-// env overrides (if non-nil) are applied to the child process environment.
-func runCLIWithConfig(t *testing.T, cfgPath string, env map[string]string, args ...string) (string, string) {
+// runCLICore is the shared implementation for all config-aware CLI runner
+// helpers. It builds the argument list (optionally adding --config, --drive,
+// and --debug), executes the binary, logs output, and returns stdout, stderr,
+// and the execution error. driveID="" omits --drive (all-drives mode).
+func runCLICore(t *testing.T, cfgPath string, env map[string]string, driveID string, args ...string) (string, string, error) {
 	t.Helper()
 
-	fullArgs := []string{"--config", cfgPath, "--drive", drive}
-	if shouldAddDebug(args) {
-		fullArgs = append(fullArgs, "--debug")
+	var fullArgs []string
+	if cfgPath != "" {
+		fullArgs = append(fullArgs, "--config", cfgPath)
 	}
 
-	fullArgs = append(fullArgs, args...)
-	cmd := makeCmd(fullArgs, env)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	logCLIExecution(t, fullArgs, stdout.String(), stderr.String())
-
-	if err != nil {
-		t.Fatalf("CLI command %v failed: %v\nstdout: %s\nstderr: %s",
-			args, err, stdout.String(), stderr.String())
+	if driveID != "" {
+		fullArgs = append(fullArgs, "--drive", driveID)
 	}
 
-	return stdout.String(), stderr.String()
-}
-
-// runCLIWithConfigAllowError runs the CLI binary with a custom config file
-// and returns the output even on error.
-// env overrides (if non-nil) are applied to the child process environment.
-func runCLIWithConfigAllowError(t *testing.T, cfgPath string, env map[string]string, args ...string) (string, string, error) {
-	t.Helper()
-
-	fullArgs := []string{"--config", cfgPath, "--drive", drive}
 	if shouldAddDebug(args) {
 		fullArgs = append(fullArgs, "--debug")
 	}
@@ -104,6 +85,28 @@ func runCLIWithConfigAllowError(t *testing.T, cfgPath string, env map[string]str
 	logCLIExecution(t, fullArgs, stdout.String(), stderr.String())
 
 	return stdout.String(), stderr.String(), err
+}
+
+// runCLIWithConfig runs the CLI binary with a custom config file.
+// env overrides (if non-nil) are applied to the child process environment.
+func runCLIWithConfig(t *testing.T, cfgPath string, env map[string]string, args ...string) (string, string) {
+	t.Helper()
+
+	stdout, stderr, err := runCLICore(t, cfgPath, env, drive, args...)
+	if err != nil {
+		t.Fatalf("CLI command %v failed: %v\nstdout: %s\nstderr: %s",
+			args, err, stdout, stderr)
+	}
+
+	return stdout, stderr
+}
+
+// runCLIWithConfigAllowError runs the CLI binary with a custom config file
+// and returns the output even on error.
+func runCLIWithConfigAllowError(t *testing.T, cfgPath string, env map[string]string, args ...string) (string, string, error) {
+	t.Helper()
+
+	return runCLICore(t, cfgPath, env, drive, args...)
 }
 
 // putRemoteFile uploads string content to a remote path via a temp file.
@@ -428,27 +431,13 @@ func copyTokenFileForDrive(t *testing.T, srcDir, dstDir, driveID string) {
 func runCLIWithConfigAllDrives(t *testing.T, cfgPath string, env map[string]string, args ...string) (string, string) {
 	t.Helper()
 
-	fullArgs := []string{"--config", cfgPath}
-	if shouldAddDebug(args) {
-		fullArgs = append(fullArgs, "--debug")
-	}
-
-	fullArgs = append(fullArgs, args...)
-	cmd := makeCmd(fullArgs, env)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	logCLIExecution(t, fullArgs, stdout.String(), stderr.String())
-
+	stdout, stderr, err := runCLICore(t, cfgPath, env, "", args...)
 	if err != nil {
 		t.Fatalf("CLI command %v failed: %v\nstdout: %s\nstderr: %s",
-			args, err, stdout.String(), stderr.String())
+			args, err, stdout, stderr)
 	}
 
-	return stdout.String(), stderr.String()
+	return stdout, stderr
 }
 
 // runCLIWithConfigAllDrivesAllowError runs the CLI without --drive flag and
@@ -456,49 +445,20 @@ func runCLIWithConfigAllDrives(t *testing.T, cfgPath string, env map[string]stri
 func runCLIWithConfigAllDrivesAllowError(t *testing.T, cfgPath string, env map[string]string, args ...string) (string, string, error) {
 	t.Helper()
 
-	fullArgs := []string{"--config", cfgPath}
-	if shouldAddDebug(args) {
-		fullArgs = append(fullArgs, "--debug")
-	}
-
-	fullArgs = append(fullArgs, args...)
-	cmd := makeCmd(fullArgs, env)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	logCLIExecution(t, fullArgs, stdout.String(), stderr.String())
-
-	return stdout.String(), stderr.String(), err
+	return runCLICore(t, cfgPath, env, "", args...)
 }
 
 // runCLIWithConfigForDrive runs the CLI with a specific --drive flag.
 func runCLIWithConfigForDrive(t *testing.T, cfgPath string, env map[string]string, driveID string, args ...string) (string, string) {
 	t.Helper()
 
-	fullArgs := []string{"--config", cfgPath, "--drive", driveID}
-	if shouldAddDebug(args) {
-		fullArgs = append(fullArgs, "--debug")
-	}
-
-	fullArgs = append(fullArgs, args...)
-	cmd := makeCmd(fullArgs, env)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	logCLIExecution(t, fullArgs, stdout.String(), stderr.String())
-
+	stdout, stderr, err := runCLICore(t, cfgPath, env, driveID, args...)
 	if err != nil {
 		t.Fatalf("CLI command %v (drive=%s) failed: %v\nstdout: %s\nstderr: %s",
-			args, driveID, err, stdout.String(), stderr.String())
+			args, driveID, err, stdout, stderr)
 	}
 
-	return stdout.String(), stderr.String()
+	return stdout, stderr
 }
 
 // cleanupRemoteFolderForDrive is like cleanupRemoteFolder but for a specific drive.
