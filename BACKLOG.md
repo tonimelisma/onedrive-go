@@ -13,6 +13,14 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 |----|-------|----------|---------|-------|
 | ~~B-300~~ | ~~Rename `SessionRecord` JSON tag `"remote_path"` → `"local_path"`~~ | ~~P4~~ | ~~driveops~~ | **DONE** — Bumped `currentSessionVersion` to 2. Custom `UnmarshalJSON` reads both `remote_path` (v0/v1) and `local_path` (v2+). Save writes v2. |
 
+## CI Reliability Hardening
+
+| ID | Title | Priority | Notes |
+|----|-------|----------|-------|
+| ~~B-303~~ | ~~Token file integrity enforcement~~ | ~~P1~~ | **DONE** — `tokenfile.ValidateMeta()` + `LoadAndValidate()` validate required metadata (`drive_id`, `user_id`, `display_name`, `cached_at`) on both write and read paths. `Save()` rejects incomplete non-nil meta. `TokenSourceFromPath` uses strict validation. `ReadTokenMeta` validates before consuming. Fixes "drive ID not resolved" CI failures. |
+| ~~B-304~~ | ~~WAL checkpoint on BaselineManager.Close()~~ | ~~P2~~ | **DONE** — `PRAGMA wal_checkpoint(TRUNCATE)` before `db.Close()` ensures all WAL data is flushed to the main DB file. Fixes potential cross-process SQLite visibility issues in sync→conflicts command flow. |
+| ~~B-305~~ | ~~E2E edit-delete conflict eventual-consistency guard~~ | ~~P2~~ | **DONE** — Added `pollCLIWithConfigNotContains` helper. `TestE2E_Sync_EditDeleteConflict` now polls for remote delete propagation before running sync. Fixes flaky conflict history assertion. |
+
 ## Phase 6.0b: Orchestrator + DriveRunner
 
 | ID | Title | Priority | Notes |

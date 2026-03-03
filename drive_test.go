@@ -131,6 +131,9 @@ func TestBuildConfiguredDriveEntries_NoSyncDir_WithTokenMeta(t *testing.T) {
 	writeTestTokenFile(t, dataDir, "token_business_alice@contoso.com.json", map[string]string{
 		"org_name":     "Contoso",
 		"display_name": "Alice Smith",
+		"drive_id":     "test-drive-id",
+		"user_id":      "test-user-id",
+		"cached_at":    "2024-01-01T00:00:00Z",
 	})
 
 	cfg := config.DefaultConfig()
@@ -611,6 +614,9 @@ func TestAddNewDrive_WithToken(t *testing.T) {
 
 	writeTestTokenFile(t, dataDir, "token_personal_user@example.com.json", map[string]string{
 		"display_name": "Test User",
+		"drive_id":     "test-drive-id",
+		"user_id":      "test-user-id",
+		"cached_at":    "2024-01-01T00:00:00Z",
 	})
 
 	dir := t.TempDir()

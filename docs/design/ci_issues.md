@@ -327,9 +327,10 @@ Analysis of the last 100 CI runs (as of 2026-03-03) shows 80% pass rate (80 succ
 
 **Key insight**: Only 2 of 20 failures (10%) are caused by code bugs. The remaining 90% are infrastructure issues (Microsoft outages, Azure OIDC transients, CI credential pipeline issues) or Graph API behavioral quirks. The E2E tests are fundamentally sound but operate against an unreliable external dependency.
 
-**Actionable items**:
-- The `TestLoadAndResolve_MissingFile_NoDrives_Error` failure (2 runs) indicates a real test expectation mismatch that should be fixed.
-- The edit-delete conflict history test failure (1 run) may indicate a timing issue in the sync test — the conflict was detected but not persisted to history before the assertion ran.
+**Actionable items (all addressed)**:
+- The `TestLoadAndResolve_MissingFile_NoDrives_Error` failure (2 runs) — **fixed** in commit `39308c7`.
+- The edit-delete conflict history test failure (1 run) — **root cause**: Graph API eventual consistency (remote delete not propagated before sync runs) + SQLite WAL cross-process visibility. **Fix**: (a) added `pollCLIWithConfigNotContains` guard between remote delete and sync in `TestE2E_Sync_EditDeleteConflict`; (b) added `PRAGMA wal_checkpoint(TRUNCATE)` to `BaselineManager.Close()`.
+- The "drive ID not resolved" failure (2 runs) — **root cause**: token file missing mandatory metadata (`drive_id`). **Fix**: defense-in-depth validation via `tokenfile.ValidateMeta()` on both write (`Save()`) and read (`LoadAndValidate()`, `ReadTokenMeta()`) paths. Required keys: `drive_id`, `user_id`, `display_name`, `cached_at`.
 
 ---
 
