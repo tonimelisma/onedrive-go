@@ -2394,3 +2394,184 @@ func TestMigration00004_CompositeKey(t *testing.T) {
 		t.Errorf("expected 2 tokens for drive_id, got %d", count)
 	}
 }
+
+// --- Sync metadata tests (6.2b) ---
+
+func TestWriteSyncMetadata_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	report := &SyncReport{
+		Duration:  1500 * time.Millisecond,
+		Succeeded: 42,
+		Failed:    3,
+		Errors:    []error{fmt.Errorf("some sync error")},
+	}
+
+	err := mgr.WriteSyncMetadata(ctx, report)
+	if err != nil {
+		t.Fatalf("WriteSyncMetadata: %v", err)
+	}
+
+	meta, err := mgr.ReadSyncMetadata(ctx)
+	if err != nil {
+		t.Fatalf("ReadSyncMetadata: %v", err)
+	}
+
+	if meta["last_sync_duration_ms"] != "1500" {
+		t.Errorf("duration = %q, want %q", meta["last_sync_duration_ms"], "1500")
+	}
+
+	if meta["last_sync_succeeded"] != "42" {
+		t.Errorf("succeeded = %q, want %q", meta["last_sync_succeeded"], "42")
+	}
+
+	if meta["last_sync_failed"] != "3" {
+		t.Errorf("failed = %q, want %q", meta["last_sync_failed"], "3")
+	}
+
+	if meta["last_sync_error"] != "some sync error" {
+		t.Errorf("error = %q, want %q", meta["last_sync_error"], "some sync error")
+	}
+
+	if meta["last_sync_time"] == "" {
+		t.Error("last_sync_time should not be empty")
+	}
+}
+
+func TestWriteSyncMetadata_Upsert(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	report1 := &SyncReport{Duration: 1 * time.Second, Succeeded: 10}
+	err := mgr.WriteSyncMetadata(ctx, report1)
+	if err != nil {
+		t.Fatalf("first WriteSyncMetadata: %v", err)
+	}
+
+	report2 := &SyncReport{Duration: 2 * time.Second, Succeeded: 20}
+	err = mgr.WriteSyncMetadata(ctx, report2)
+	if err != nil {
+		t.Fatalf("second WriteSyncMetadata: %v", err)
+	}
+
+	meta, err := mgr.ReadSyncMetadata(ctx)
+	if err != nil {
+		t.Fatalf("ReadSyncMetadata: %v", err)
+	}
+
+	if meta["last_sync_succeeded"] != "20" {
+		t.Errorf("succeeded = %q, want %q (should be from second write)", meta["last_sync_succeeded"], "20")
+	}
+
+	if meta["last_sync_duration_ms"] != "2000" {
+		t.Errorf("duration = %q, want %q", meta["last_sync_duration_ms"], "2000")
+	}
+}
+
+func TestWriteSyncMetadata_NoErrors(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	report := &SyncReport{Duration: 500 * time.Millisecond, Succeeded: 5}
+	err := mgr.WriteSyncMetadata(ctx, report)
+	if err != nil {
+		t.Fatalf("WriteSyncMetadata: %v", err)
+	}
+
+	meta, err := mgr.ReadSyncMetadata(ctx)
+	if err != nil {
+		t.Fatalf("ReadSyncMetadata: %v", err)
+	}
+
+	if meta["last_sync_error"] != "" {
+		t.Errorf("error = %q, want empty", meta["last_sync_error"])
+	}
+}
+
+func TestReadSyncMetadata_EmptyDB(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	meta, err := mgr.ReadSyncMetadata(ctx)
+	if err != nil {
+		t.Fatalf("ReadSyncMetadata: %v", err)
+	}
+
+	if len(meta) != 0 {
+		t.Errorf("expected empty map, got %v", meta)
+	}
+}
+
+func TestBaselineEntryCount_Empty(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	count, err := mgr.BaselineEntryCount(ctx)
+	if err != nil {
+		t.Fatalf("BaselineEntryCount: %v", err)
+	}
+
+	if count != 0 {
+		t.Errorf("count = %d, want 0", count)
+	}
+}
+
+func TestBaselineEntryCount_WithEntries(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	// Commit a download outcome to add a baseline entry.
+	outcome := Outcome{
+		Action:     ActionDownload,
+		Success:    true,
+		Path:       "/test/file.txt",
+		DriveID:    driveid.New("d!123"),
+		ItemID:     "item-1",
+		ParentID:   "parent-1",
+		ItemType:   ItemTypeFile,
+		RemoteHash: "hash123",
+		Size:       1024,
+		Mtime:      time.Now().UnixNano(),
+	}
+	if err := mgr.CommitOutcome(ctx, &outcome); err != nil {
+		t.Fatalf("CommitOutcome: %v", err)
+	}
+
+	count, err := mgr.BaselineEntryCount(ctx)
+	if err != nil {
+		t.Fatalf("BaselineEntryCount: %v", err)
+	}
+
+	if count != 1 {
+		t.Errorf("count = %d, want 1", count)
+	}
+}
+
+func TestUnresolvedConflictCount_Empty(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	count, err := mgr.UnresolvedConflictCount(ctx)
+	if err != nil {
+		t.Fatalf("UnresolvedConflictCount: %v", err)
+	}
+
+	if count != 0 {
+		t.Errorf("count = %d, want 0", count)
+	}
+}

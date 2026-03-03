@@ -866,13 +866,13 @@ Acceptance: all 5 orchestrator E2E tests pass locally. inotify unit tests pass c
 1. `status` command: show account/drive hierarchy — **DONE**: `status.go` shows account email, display name, org name, token state (valid/expired/missing), per-drive canonical ID, sync dir, and state (ready/paused/no token/needs setup).
 2. Support `--json` output — **DONE**: `flagJSON` wired, produces JSON array of account objects.
 
-### 6.2b: Status command (sync state) — FUTURE
+### 6.2b: Status command (sync state) — DONE
 
-1. Per-drive sync state in `status` output: last sync time, files synced, errors, unresolved conflicts. Read from per-drive state DBs.
-2. Overall health summary: total drives, ready/paused/error counts, aggregate unresolved conflicts.
-3. In multi-drive mode: `DriveRunner.lastErr` and failures exposed via `Orchestrator.States()` for live display.
+1. Per-drive sync state in `status` output: last sync time, files synced, errors, unresolved conflicts. Read from per-drive state DBs. — **DONE**: `querySyncState()` opens state DB read-only, queries `sync_metadata` table + baseline/conflict counts. `syncStateInfo` struct in `statusDrive`. Migration 00005 adds `sync_metadata` table. Engine writes metadata after each `RunOnce`.
+2. Overall health summary: total drives, ready/paused/error counts, aggregate unresolved conflicts. — **DONE**: `computeSummary()` aggregates across all drives. Text output prints summary line. JSON wraps accounts in `statusOutput` with `summary` field.
+3. In multi-drive mode: `DriveRunner.lastErr` and failures exposed via `Orchestrator.States()` for live display. — Deferred to Phase 8 (WebSocket/daemon IPC).
 
-Acceptance: status shows per-drive sync state and aggregate health.
+Acceptance: status shows per-drive sync state and aggregate health. Also bundled B-284 (structured TOML line model) and B-036 (CLI service layer interfaces).
 
 ### 6.3: Shared drive enumeration — FUTURE
 
@@ -1261,7 +1261,7 @@ Industry context: the official OneDrive client follows symlinks (syncs target co
 | 4 v1 | 11 | Batch-pipeline sync engine | **SUPERSEDED** |
 | 4 v2 | 9 | Event-driven sync engine | **COMPLETE** |
 | 5 | 8 | Concurrent execution + watch mode | **COMPLETE** |
-| 6 | 10 | Multi-drive orchestration + CLI | IN PROGRESS (6.0a-e, 6.1, 6.2a done; 6.2b, 6.3, 6.4 future) |
+| 6 | 10 | Multi-drive orchestration + CLI | IN PROGRESS (6.0a-e, 6.1, 6.2a-b done; 6.3, 6.4 future) |
 | 7 | 5 | Multi-drive + account management | IN PROGRESS (7.1 done; 7.2, 7.3 have done items) |
 | 8 | 5 | WebSocket + advanced sync | FUTURE |
 | 9 | 8 | Operational hardening | IN PROGRESS (9.6 item 1 done) |

@@ -1,8 +1,15 @@
 package main
 
 import (
+	"bytes"
+	"fmt"
+	"io"
+	"log/slog"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/sync"
 )
@@ -71,4 +78,134 @@ func TestFindConflict(t *testing.T) {
 			}
 		})
 	}
+}
+
+// newTestCLIContext creates a minimal CLIContext for testing resolve helpers.
+func newTestCLIContext(w io.Writer) *CLIContext {
+	return &CLIContext{
+		StatusWriter: w,
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+}
+
+func TestResolveEachConflict_ResolvesAll(t *testing.T) {
+	t.Parallel()
+
+	conflicts := []sync.ConflictRecord{
+		{ID: "id-1", Path: "/foo.txt"},
+		{ID: "id-2", Path: "/bar.txt"},
+	}
+
+	var resolved []string
+	resolveFn := func(id, _ string) error {
+		resolved = append(resolved, id)
+		return nil
+	}
+
+	var buf bytes.Buffer
+	cc := newTestCLIContext(&buf)
+
+	err := resolveEachConflict(cc, conflicts, "keep_both", false, resolveFn)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"id-1", "id-2"}, resolved)
+	assert.Contains(t, buf.String(), "Resolved /foo.txt as keep_both")
+	assert.Contains(t, buf.String(), "Resolved /bar.txt as keep_both")
+}
+
+func TestResolveEachConflict_DryRun(t *testing.T) {
+	t.Parallel()
+
+	conflicts := []sync.ConflictRecord{
+		{ID: "id-1", Path: "/foo.txt"},
+	}
+
+	resolveCalled := false
+	resolveFn := func(_, _ string) error {
+		resolveCalled = true
+		return nil
+	}
+
+	var buf bytes.Buffer
+	cc := newTestCLIContext(&buf)
+
+	err := resolveEachConflict(cc, conflicts, "keep_local", true, resolveFn)
+	require.NoError(t, err)
+
+	assert.False(t, resolveCalled, "resolveFn should not be called in dry-run mode")
+	assert.Contains(t, buf.String(), "Would resolve")
+}
+
+func TestResolveEachConflict_EmptyConflicts(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	cc := newTestCLIContext(&buf)
+
+	err := resolveEachConflict(cc, nil, "keep_both", false, func(_, _ string) error {
+		t.Fatal("should not be called")
+		return nil
+	})
+	require.NoError(t, err)
+
+	assert.Contains(t, buf.String(), "No unresolved conflicts")
+}
+
+func TestResolveEachConflict_ErrorPropagation(t *testing.T) {
+	t.Parallel()
+
+	conflicts := []sync.ConflictRecord{
+		{ID: "id-1", Path: "/foo.txt"},
+	}
+
+	resolveFn := func(_, _ string) error {
+		return fmt.Errorf("db error")
+	}
+
+	var buf bytes.Buffer
+	cc := newTestCLIContext(&buf)
+
+	err := resolveEachConflict(cc, conflicts, "keep_both", false, resolveFn)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "resolving /foo.txt")
+	assert.Contains(t, err.Error(), "db error")
+}
+
+func TestResolveSingleConflict_ExactMatch(t *testing.T) {
+	t.Parallel()
+
+	conflicts := []sync.ConflictRecord{
+		{ID: "id-1", Path: "/foo.txt"},
+		{ID: "id-2", Path: "/bar.txt"},
+	}
+
+	var resolvedID string
+	resolveFn := func(id, _ string) error {
+		resolvedID = id
+		return nil
+	}
+
+	var buf bytes.Buffer
+	cc := newTestCLIContext(&buf)
+
+	err := resolveSingleConflict(cc, "/bar.txt", "keep_local", false,
+		func() ([]sync.ConflictRecord, error) { return conflicts, nil },
+		resolveFn,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "id-2", resolvedID)
+}
+
+func TestResolveSingleConflict_NotFound(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	cc := newTestCLIContext(&buf)
+
+	err := resolveSingleConflict(cc, "nonexistent", "keep_both", false,
+		func() ([]sync.ConflictRecord, error) { return nil, nil },
+		func(_, _ string) error { return nil },
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "conflict not found")
 }
