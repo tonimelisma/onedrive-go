@@ -3,6 +3,9 @@ package sync
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
@@ -20,9 +23,7 @@ func TestItemType_String(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		if got := tt.it.String(); got != tt.want {
-			t.Errorf("ItemType(%d).String() = %q, want %q", int(tt.it), got, tt.want)
-		}
+		assert.Equal(t, tt.want, tt.it.String())
 	}
 }
 
@@ -30,9 +31,7 @@ func TestItemType_StringUnknown(t *testing.T) {
 	t.Parallel()
 
 	got := ItemType(99).String()
-	if got == "" {
-		t.Error("unknown ItemType.String() returned empty string")
-	}
+	assert.NotEmpty(t, got, "unknown ItemType.String() returned empty string")
 }
 
 func TestParseItemType(t *testing.T) {
@@ -49,14 +48,8 @@ func TestParseItemType(t *testing.T) {
 
 	for _, tt := range tests {
 		got, err := ParseItemType(tt.input)
-		if err != nil {
-			t.Errorf("ParseItemType(%q) error: %v", tt.input, err)
-			continue
-		}
-
-		if got != tt.want {
-			t.Errorf("ParseItemType(%q) = %v, want %v", tt.input, got, tt.want)
-		}
+		require.NoError(t, err, "ParseItemType(%q)", tt.input)
+		assert.Equal(t, tt.want, got, "ParseItemType(%q)", tt.input)
 	}
 }
 
@@ -64,9 +57,7 @@ func TestParseItemType_Error(t *testing.T) {
 	t.Parallel()
 
 	_, err := ParseItemType("unknown")
-	if err == nil {
-		t.Error("ParseItemType(\"unknown\") expected error, got nil")
-	}
+	require.Error(t, err, "ParseItemType(\"unknown\") expected error")
 }
 
 func TestEnumStrings_NonEmpty(t *testing.T) {
@@ -100,9 +91,7 @@ func TestEnumStrings_NonEmpty(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		if tt.str == "" {
-			t.Errorf("%s.String() returned empty string", tt.name)
-		}
+		assert.NotEmpty(t, tt.str, "%s.String() returned empty string", tt.name)
 	}
 }
 

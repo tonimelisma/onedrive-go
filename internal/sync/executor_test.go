@@ -11,6 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
@@ -119,13 +122,8 @@ func writeExecTestFile(t *testing.T, dir, relPath, content string) string {
 	t.Helper()
 
 	absPath := filepath.Join(dir, relPath)
-	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := os.WriteFile(absPath, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(filepath.Dir(absPath), 0o755))
+	require.NoError(t, os.WriteFile(absPath, []byte(content), 0o644))
 
 	return absPath
 }
@@ -133,17 +131,13 @@ func writeExecTestFile(t *testing.T, dir, relPath, content string) string {
 func requireOutcomeSuccess(t *testing.T, o Outcome) {
 	t.Helper()
 
-	if !o.Success {
-		t.Fatalf("expected success but got error: %v", o.Error)
-	}
+	require.True(t, o.Success, "expected success but got error: %v", o.Error)
 }
 
 func requireOutcomeFailure(t *testing.T, o Outcome) {
 	t.Helper()
 
-	if o.Success {
-		t.Fatal("expected failure but got success")
-	}
+	require.False(t, o.Success, "expected failure but got success")
 }
 
 // ---------------------------------------------------------------------------
@@ -173,13 +167,8 @@ func TestExecutor_CreateLocalFolder(t *testing.T) {
 	requireOutcomeSuccess(t, o)
 
 	info, err := os.Stat(filepath.Join(syncRoot, "docs/notes"))
-	if err != nil {
-		t.Fatalf("folder not created: %v", err)
-	}
-
-	if !info.IsDir() {
-		t.Fatal("expected directory")
-	}
+	require.NoError(t, err, "folder not created")
+	require.True(t, info.IsDir(), "expected directory")
 }
 
 func TestExecutor_CreateRemoteFolder(t *testing.T) {
@@ -187,9 +176,8 @@ func TestExecutor_CreateRemoteFolder(t *testing.T) {
 
 	items := &executorMockItemClient{
 		createFolderFn: func(_ context.Context, _ driveid.ID, parentID, name string) (*graph.Item, error) {
-			if parentID != "root" || name != "photos" {
-				t.Errorf("unexpected args: parentID=%s name=%s", parentID, name)
-			}
+			assert.Equal(t, "root", parentID, "unexpected parentID")
+			assert.Equal(t, "photos", name, "unexpected name")
 
 			return &graph.Item{ID: "new-folder-id", ETag: "etag1"}, nil
 		},
@@ -208,9 +196,7 @@ func TestExecutor_CreateRemoteFolder(t *testing.T) {
 	o := e.executeFolderCreate(context.Background(), action)
 	requireOutcomeSuccess(t, o)
 
-	if o.ItemID != "new-folder-id" {
-		t.Errorf("expected item_id=new-folder-id, got %s", o.ItemID)
-	}
+	assert.Equal(t, "new-folder-id", o.ItemID)
 }
 
 func TestExecutor_CreateRemoteFolder_Error(t *testing.T) {
@@ -258,13 +244,8 @@ func TestExecutor_LocalMove(t *testing.T) {
 	o := e.executeMove(context.Background(), action)
 	requireOutcomeSuccess(t, o)
 
-	if _, err := os.Stat(filepath.Join(syncRoot, "old-name.txt")); !os.IsNotExist(err) {
-		t.Error("old path still exists")
-	}
-
-	if _, err := os.Stat(filepath.Join(syncRoot, "new-name.txt")); err != nil {
-		t.Error("new path not created")
-	}
+	assert.NoFileExists(t, filepath.Join(syncRoot, "old-name.txt"), "old path still exists")
+	assert.FileExists(t, filepath.Join(syncRoot, "new-name.txt"), "new path not created")
 }
 
 func TestExecutor_LocalMove_SourceMissing(t *testing.T) {
@@ -289,9 +270,9 @@ func TestExecutor_RemoteMove(t *testing.T) {
 
 	items := &executorMockItemClient{
 		moveItemFn: func(_ context.Context, _ driveid.ID, itemID, newParentID, newName string) (*graph.Item, error) {
-			if itemID != "item1" || newParentID != "root" || newName != "renamed.txt" {
-				t.Errorf("unexpected move args: itemID=%s parentID=%s name=%s", itemID, newParentID, newName)
-			}
+			assert.Equal(t, "item1", itemID)
+			assert.Equal(t, "root", newParentID)
+			assert.Equal(t, "renamed.txt", newName)
 
 			return &graph.Item{ID: "item1", ETag: "etag2"}, nil
 		},
@@ -312,13 +293,8 @@ func TestExecutor_RemoteMove(t *testing.T) {
 	o := e.executeMove(context.Background(), action)
 	requireOutcomeSuccess(t, o)
 
-	if o.Path != "renamed.txt" {
-		t.Errorf("expected path=renamed.txt, got %s", o.Path)
-	}
-
-	if o.OldPath != "original.txt" {
-		t.Errorf("expected old_path=original.txt, got %s", o.OldPath)
-	}
+	assert.Equal(t, "renamed.txt", o.Path)
+	assert.Equal(t, "original.txt", o.OldPath)
 }
 
 // ---------------------------------------------------------------------------
@@ -359,22 +335,12 @@ func TestExecutor_Download_Success(t *testing.T) {
 	requireOutcomeSuccess(t, o)
 
 	data, err := os.ReadFile(filepath.Join(syncRoot, "greetings.txt"))
-	if err != nil {
-		t.Fatalf("file not created: %v", err)
-	}
-
-	if string(data) != execFileContent {
-		t.Errorf("expected %q, got %q", execFileContent, string(data))
-	}
+	require.NoError(t, err, "file not created")
+	assert.Equal(t, execFileContent, string(data))
 
 	// Partial file should not exist.
-	if _, err := os.Stat(filepath.Join(syncRoot, "greetings.txt.partial")); !os.IsNotExist(err) {
-		t.Error(".partial file still exists")
-	}
-
-	if o.Size != int64(len(execFileContent)) {
-		t.Errorf("expected size=%d, got %d", len(execFileContent), o.Size)
-	}
+	assert.NoFileExists(t, filepath.Join(syncRoot, "greetings.txt.partial"), ".partial file still exists")
+	assert.Equal(t, int64(len(execFileContent)), o.Size)
 }
 
 func TestExecutor_Download_APIError(t *testing.T) {
@@ -425,9 +391,7 @@ func TestExecutor_Download_ParentDirCreated(t *testing.T) {
 	o := e.executeDownload(context.Background(), action)
 	requireOutcomeSuccess(t, o)
 
-	if _, err := os.Stat(filepath.Join(syncRoot, "deep/nested/dir/exec-dl.txt")); err != nil {
-		t.Fatal("file not created in nested dir")
-	}
+	assert.FileExists(t, filepath.Join(syncRoot, "deep/nested/dir/exec-dl.txt"), "file not created in nested dir")
 }
 
 func TestExecutor_Download_ZeroByte(t *testing.T) {
@@ -454,13 +418,8 @@ func TestExecutor_Download_ZeroByte(t *testing.T) {
 	requireOutcomeSuccess(t, o)
 
 	info, err := os.Stat(filepath.Join(syncRoot, "exec-empty.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if info.Size() != 0 {
-		t.Errorf("expected zero-byte file, got %d bytes", info.Size())
-	}
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), info.Size(), "expected zero-byte file")
 }
 
 // ---------------------------------------------------------------------------
@@ -501,27 +460,14 @@ func TestExecutor_Download_HashMismatch_Retries(t *testing.T) {
 	o := e.executeDownload(context.Background(), action)
 	requireOutcomeSuccess(t, o)
 
-	if callCount != 3 {
-		t.Errorf("expected 3 download calls, got %d", callCount)
-	}
-
-	if o.LocalHash != correctHash {
-		t.Errorf("LocalHash = %q, want %q", o.LocalHash, correctHash)
-	}
-
-	if o.RemoteHash != correctHash {
-		t.Errorf("RemoteHash = %q, want %q", o.RemoteHash, correctHash)
-	}
+	assert.Equal(t, 3, callCount, "expected 3 download calls")
+	assert.Equal(t, correctHash, o.LocalHash)
+	assert.Equal(t, correctHash, o.RemoteHash)
 
 	// File should contain correct content.
 	data, err := os.ReadFile(filepath.Join(syncRoot, "hash-retry.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if string(data) != "hello world" {
-		t.Errorf("file content = %q, want %q", string(data), "hello world")
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "hello world", string(data))
 }
 
 func TestExecutor_Download_HashMismatch_Accepted(t *testing.T) {
@@ -553,15 +499,10 @@ func TestExecutor_Download_HashMismatch_Accepted(t *testing.T) {
 	requireOutcomeSuccess(t, o)
 
 	// All retries exhausted: 1 initial + 2 retries = 3.
-	if callCount != 3 {
-		t.Errorf("expected 3 download calls, got %d", callCount)
-	}
+	assert.Equal(t, 3, callCount, "expected 3 download calls")
 
 	// After exhaustion, remoteHash is overridden to localHash to prevent baseline mismatch loop.
-	if o.LocalHash != o.RemoteHash {
-		t.Errorf("expected LocalHash == RemoteHash after exhaustion, got local=%q remote=%q",
-			o.LocalHash, o.RemoteHash)
-	}
+	assert.Equal(t, o.LocalHash, o.RemoteHash, "LocalHash should equal RemoteHash after exhaustion")
 }
 
 func TestExecutor_Download_HashMatch_NoRetry(t *testing.T) {
@@ -593,13 +534,8 @@ func TestExecutor_Download_HashMatch_NoRetry(t *testing.T) {
 	o := e.executeDownload(context.Background(), action)
 	requireOutcomeSuccess(t, o)
 
-	if callCount != 1 {
-		t.Errorf("expected 1 download call, got %d", callCount)
-	}
-
-	if o.LocalHash != correctHash {
-		t.Errorf("LocalHash = %q, want %q", o.LocalHash, correctHash)
-	}
+	assert.Equal(t, 1, callCount, "expected 1 download call")
+	assert.Equal(t, correctHash, o.LocalHash)
 }
 
 // ---------------------------------------------------------------------------
@@ -611,9 +547,8 @@ func TestExecutor_Upload_SimpleSuccess(t *testing.T) {
 
 	ul := &executorMockUploader{
 		uploadFn: func(_ context.Context, _ driveid.ID, parentID, name string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
-			if parentID != "root" || name != "exec-small.txt" {
-				t.Errorf("unexpected args: parentID=%s name=%s", parentID, name)
-			}
+			assert.Equal(t, "root", parentID)
+			assert.Equal(t, "exec-small.txt", name)
 
 			return &graph.Item{ID: "uploaded1", ETag: "etag1", QuickXorHash: "abc"}, nil
 		},
@@ -634,13 +569,8 @@ func TestExecutor_Upload_SimpleSuccess(t *testing.T) {
 	o := e.executeUpload(context.Background(), action)
 	requireOutcomeSuccess(t, o)
 
-	if o.ItemID != "uploaded1" {
-		t.Errorf("expected item_id=uploaded1, got %s", o.ItemID)
-	}
-
-	if o.ParentID != "root" {
-		t.Errorf("expected parent_id=root, got %s", o.ParentID)
-	}
+	assert.Equal(t, "uploaded1", o.ItemID)
+	assert.Equal(t, "root", o.ParentID)
 }
 
 func TestExecutor_Upload_ParentFromBaseline(t *testing.T) {
@@ -674,9 +604,7 @@ func TestExecutor_Upload_ParentFromBaseline(t *testing.T) {
 	o := e.executeUpload(context.Background(), action)
 	requireOutcomeSuccess(t, o)
 
-	if capturedParentID != "baseline-folder-id" {
-		t.Errorf("expected parent from baseline, got %s", capturedParentID)
-	}
+	assert.Equal(t, "baseline-folder-id", capturedParentID)
 }
 
 func TestExecutor_Upload_B068_ZeroDriveIDFilled(t *testing.T) {
@@ -707,9 +635,7 @@ func TestExecutor_Upload_B068_ZeroDriveIDFilled(t *testing.T) {
 	requireOutcomeSuccess(t, o)
 
 	// Executor should have filled driveID from its own context.
-	if capturedDriveID != driveid.New(testDriveID) {
-		t.Errorf("expected executor driveID, got %s", capturedDriveID)
-	}
+	assert.Equal(t, driveid.New(testDriveID), capturedDriveID)
 }
 
 func TestExecutor_Upload_LargeFileSuccess(t *testing.T) {
@@ -737,9 +663,7 @@ func TestExecutor_Upload_LargeFileSuccess(t *testing.T) {
 	o := e.executeUpload(context.Background(), action)
 	requireOutcomeSuccess(t, o)
 
-	if o.ItemID != "chunked1" {
-		t.Errorf("expected item_id=chunked1, got %s", o.ItemID)
-	}
+	assert.Equal(t, "chunked1", o.ItemID)
 }
 
 // ---------------------------------------------------------------------------
@@ -755,9 +679,7 @@ func TestExecutor_LocalDelete_HashMatch(t *testing.T) {
 	absPath := writeExecTestFile(t, syncRoot, "exec-delete-me.txt", "content")
 
 	hash, err := driveops.ComputeQuickXorHash(absPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	action := &Action{
 		Type:   ActionLocalDelete,
@@ -771,9 +693,8 @@ func TestExecutor_LocalDelete_HashMatch(t *testing.T) {
 	o := e.executeLocalDelete(context.Background(), action)
 	requireOutcomeSuccess(t, o)
 
-	if _, err := os.Stat(absPath); !os.IsNotExist(err) {
-		t.Error("file should have been deleted")
-	}
+	_, statErr := os.Stat(absPath)
+	assert.True(t, os.IsNotExist(statErr), "file should have been deleted")
 }
 
 func TestExecutor_LocalDelete_HashMismatch_ConflictCopy(t *testing.T) {
@@ -800,22 +721,13 @@ func TestExecutor_LocalDelete_HashMismatch_ConflictCopy(t *testing.T) {
 	requireOutcomeSuccess(t, o)
 
 	// B-133: outcome should be ActionConflict (not ActionLocalDelete) so it's tracked.
-	if o.Action != ActionConflict {
-		t.Errorf("expected ActionConflict, got %s", o.Action)
-	}
-
-	if o.ConflictType != ConflictEditDelete {
-		t.Errorf("expected ConflictEditDelete, got %q", o.ConflictType)
-	}
-
-	if o.RemoteHash != "baseline-remote-hash" {
-		t.Errorf("RemoteHash = %q, want %q", o.RemoteHash, "baseline-remote-hash")
-	}
+	assert.Equal(t, ActionConflict, o.Action, "expected ActionConflict")
+	assert.Equal(t, ConflictEditDelete, o.ConflictType, "expected ConflictEditDelete")
+	assert.Equal(t, "baseline-remote-hash", o.RemoteHash)
 
 	// Original should be gone.
-	if _, err := os.Stat(filepath.Join(syncRoot, "exec-modified.txt")); !os.IsNotExist(err) {
-		t.Error("original file should have been renamed")
-	}
+	_, statErr := os.Stat(filepath.Join(syncRoot, "exec-modified.txt"))
+	assert.True(t, os.IsNotExist(statErr), "original file should have been renamed")
 
 	// Conflict copy should exist.
 	entries, _ := os.ReadDir(syncRoot)
@@ -827,9 +739,7 @@ func TestExecutor_LocalDelete_HashMismatch_ConflictCopy(t *testing.T) {
 		}
 	}
 
-	if !found {
-		t.Error("expected conflict copy to be created")
-	}
+	assert.True(t, found, "expected conflict copy to be created")
 }
 
 func TestExecutor_LocalDelete_AlreadyGone(t *testing.T) {
@@ -855,9 +765,7 @@ func TestExecutor_LocalDelete_FolderEmpty(t *testing.T) {
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, emptyBaseline())
 
-	if err := os.MkdirAll(filepath.Join(syncRoot, "exec-empty-dir"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "exec-empty-dir"), 0o755))
 
 	action := &Action{
 		Type:   ActionLocalDelete,
@@ -869,9 +777,8 @@ func TestExecutor_LocalDelete_FolderEmpty(t *testing.T) {
 	o := e.executeLocalDelete(context.Background(), action)
 	requireOutcomeSuccess(t, o)
 
-	if _, err := os.Stat(filepath.Join(syncRoot, "exec-empty-dir")); !os.IsNotExist(err) {
-		t.Error("directory should have been removed")
-	}
+	_, statErr := os.Stat(filepath.Join(syncRoot, "exec-empty-dir"))
+	assert.True(t, os.IsNotExist(statErr), "directory should have been removed")
 }
 
 func TestExecutor_LocalDelete_FolderNotEmpty(t *testing.T) {
@@ -902,9 +809,7 @@ func TestExecutor_RemoteDelete_Success(t *testing.T) {
 
 	items := &executorMockItemClient{
 		deleteItemFn: func(_ context.Context, _ driveid.ID, itemID string) error {
-			if itemID != "item1" {
-				t.Errorf("unexpected itemID: %s", itemID)
-			}
+			assert.Equal(t, "item1", itemID, "unexpected itemID")
 
 			return nil
 		},
@@ -1010,19 +915,12 @@ func TestExecutor_Conflict_EditEdit_KeepBoth(t *testing.T) {
 	o := e.executeConflict(context.Background(), action)
 	requireOutcomeSuccess(t, o)
 
-	if o.ConflictType != "edit_edit" {
-		t.Errorf("expected conflict_type=edit_edit, got %s", o.ConflictType)
-	}
+	assert.Equal(t, "edit_edit", o.ConflictType)
 
 	// Original path should have remote content.
 	data, err := os.ReadFile(filepath.Join(syncRoot, "exec-conflict.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if string(data) != "remote version" {
-		t.Errorf("expected remote content, got %q", string(data))
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "remote version", string(data))
 
 	// Conflict copy should have local content.
 	entries, _ := os.ReadDir(syncRoot)
@@ -1037,9 +935,7 @@ func TestExecutor_Conflict_EditEdit_KeepBoth(t *testing.T) {
 		}
 	}
 
-	if !conflictFound {
-		t.Error("expected conflict copy with local content")
-	}
+	assert.True(t, conflictFound, "expected conflict copy with local content")
 }
 
 func TestExecutor_Conflict_EditDelete_AutoResolve(t *testing.T) {
@@ -1080,35 +976,16 @@ func TestExecutor_Conflict_EditDelete_AutoResolve(t *testing.T) {
 	o := e.executeConflict(context.Background(), action)
 	requireOutcomeSuccess(t, o)
 
-	if !uploadCalled {
-		t.Error("expected upload to be called for edit-delete auto-resolve")
-	}
-
-	if o.Action != ActionConflict {
-		t.Errorf("expected action=conflict, got %s", o.Action)
-	}
-
-	if o.ConflictType != "edit_delete" {
-		t.Errorf("expected conflict_type=edit_delete, got %s", o.ConflictType)
-	}
-
-	if o.ResolvedBy != "auto" {
-		t.Errorf("expected resolved_by=auto, got %q", o.ResolvedBy)
-	}
-
-	if o.ItemID != "new-item" {
-		t.Errorf("expected item_id=new-item, got %s", o.ItemID)
-	}
+	assert.True(t, uploadCalled, "expected upload to be called for edit-delete auto-resolve")
+	assert.Equal(t, ActionConflict, o.Action)
+	assert.Equal(t, "edit_delete", o.ConflictType)
+	assert.Equal(t, "auto", o.ResolvedBy)
+	assert.Equal(t, "new-item", o.ItemID)
 
 	// Local file should still exist with original content (not modified by upload).
 	data, err := os.ReadFile(filepath.Join(syncRoot, "exec-ed-file.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if string(data) != "locally modified data" {
-		t.Errorf("expected local content preserved, got %q", string(data))
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "locally modified data", string(data))
 }
 
 // ---------------------------------------------------------------------------
@@ -1122,9 +999,7 @@ func TestConflictCopyPath_Normal(t *testing.T) {
 	result := conflictCopyPath("/sync/root/exec-file.txt", ts)
 	expected := "/sync/root/exec-file.conflict-20260115-123045.txt"
 
-	if result != expected {
-		t.Errorf("expected %s, got %s", expected, result)
-	}
+	assert.Equal(t, expected, result)
 }
 
 func TestConflictCopyPath_Dotfile(t *testing.T) {
@@ -1134,9 +1009,7 @@ func TestConflictCopyPath_Dotfile(t *testing.T) {
 	result := conflictCopyPath("/sync/root/.bashrc", ts)
 	expected := "/sync/root/.bashrc.conflict-20260115-123045"
 
-	if result != expected {
-		t.Errorf("expected %s, got %s", expected, result)
-	}
+	assert.Equal(t, expected, result)
 }
 
 func TestConflictCopyPath_MultiDot(t *testing.T) {
@@ -1146,9 +1019,7 @@ func TestConflictCopyPath_MultiDot(t *testing.T) {
 	result := conflictCopyPath("/sync/root/archive.tar.gz", ts)
 	expected := "/sync/root/archive.tar.conflict-20260115-123045.gz"
 
-	if result != expected {
-		t.Errorf("expected %s, got %s", expected, result)
-	}
+	assert.Equal(t, expected, result)
 }
 
 // ---------------------------------------------------------------------------
@@ -1185,21 +1056,10 @@ func TestExecutor_SyncedUpdate(t *testing.T) {
 	o := e.executeSyncedUpdate(action)
 	requireOutcomeSuccess(t, o)
 
-	if o.RemoteHash != "hash1" {
-		t.Errorf("expected remote_hash=hash1, got %s", o.RemoteHash)
-	}
-
-	if o.LocalHash != "hash1" {
-		t.Errorf("expected local_hash=hash1, got %s", o.LocalHash)
-	}
-
-	if o.Size != 1024 {
-		t.Errorf("expected size=1024, got %d", o.Size)
-	}
-
-	if o.Mtime != 1234567890 {
-		t.Errorf("expected mtime=1234567890, got %d", o.Mtime)
-	}
+	assert.Equal(t, "hash1", o.RemoteHash)
+	assert.Equal(t, "hash1", o.LocalHash)
+	assert.Equal(t, int64(1024), o.Size)
+	assert.Equal(t, int64(1234567890), o.Mtime)
 }
 
 // ---------------------------------------------------------------------------
@@ -1222,13 +1082,8 @@ func TestExecutor_Cleanup(t *testing.T) {
 	o := e.executeCleanup(action)
 	requireOutcomeSuccess(t, o)
 
-	if o.Action != ActionCleanup {
-		t.Errorf("expected action=cleanup, got %s", o.Action)
-	}
-
-	if o.Path != "exec-ghost.txt" {
-		t.Errorf("expected path=exec-ghost.txt, got %s", o.Path)
-	}
+	assert.Equal(t, ActionCleanup, o.Action)
+	assert.Equal(t, "exec-ghost.txt", o.Path)
 }
 
 // ---------------------------------------------------------------------------
@@ -1272,9 +1127,7 @@ func TestClassifyError(t *testing.T) {
 			t.Parallel()
 
 			got := classifyError(tt.err)
-			if got != tt.expected {
-				t.Errorf("classifyError(%v) = %d, want %d", tt.err, got, tt.expected)
-			}
+			assert.Equal(t, tt.expected, got, "classifyError(%v)", tt.err)
 		})
 	}
 }
@@ -1311,20 +1164,13 @@ func TestExecutor_ResolveParentID_Baseline(t *testing.T) {
 
 			id, err := e.resolveParentID(tt.relPath)
 			if tt.expectErr {
-				if err == nil {
-					t.Error("expected error")
-				}
+				require.Error(t, err)
 
 				return
 			}
 
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			if id != tt.expectedID {
-				t.Errorf("expected %s, got %s", tt.expectedID, id)
-			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.expectedID, id)
 		})
 	}
 }
@@ -1354,9 +1200,8 @@ func TestConflictStemExt(t *testing.T) {
 			t.Parallel()
 
 			stem, ext := conflictStemExt(tt.input)
-			if stem != tt.wantStem || ext != tt.wantExt {
-				t.Errorf("conflictStemExt(%q) = (%q, %q), want (%q, %q)", tt.input, stem, ext, tt.wantStem, tt.wantExt)
-			}
+			assert.Equal(t, tt.wantStem, stem, "stem mismatch for %q", tt.input)
+			assert.Equal(t, tt.wantExt, ext, "ext mismatch for %q", tt.input)
 		})
 	}
 }
@@ -1376,13 +1221,8 @@ func TestWithRetry_Succeeds(t *testing.T) {
 		calls++
 		return nil
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if calls != 1 {
-		t.Errorf("expected 1 call, got %d", calls)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, 1, calls)
 }
 
 func TestWithRetry_RetriesOnTransient(t *testing.T) {
@@ -1400,13 +1240,8 @@ func TestWithRetry_RetriesOnTransient(t *testing.T) {
 
 		return nil
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if calls != 3 {
-		t.Errorf("expected 3 calls, got %d", calls)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, 3, calls)
 }
 
 func TestWithRetry_NoRetryOnSkip(t *testing.T) {
@@ -1421,13 +1256,8 @@ func TestWithRetry_NoRetryOnSkip(t *testing.T) {
 		return graph.ErrForbidden
 	})
 
-	if !errors.Is(err, graph.ErrForbidden) {
-		t.Errorf("expected ErrForbidden, got %v", err)
-	}
-
-	if calls != 1 {
-		t.Errorf("expected 1 call (no retry), got %d", calls)
-	}
+	assert.ErrorIs(t, err, graph.ErrForbidden)
+	assert.Equal(t, 1, calls, "expected 1 call (no retry)")
 }
 
 // Fix 8: Test retry exhaustion — all attempts return retryable error.
@@ -1443,14 +1273,10 @@ func TestWithRetry_ExhaustsRetries(t *testing.T) {
 		return graph.ErrThrottled
 	})
 
-	if !errors.Is(err, graph.ErrThrottled) {
-		t.Errorf("expected ErrThrottled, got %v", err)
-	}
+	assert.ErrorIs(t, err, graph.ErrThrottled)
 
-	// executorMaxRetries=3 → 1 initial + 3 retries = 4 total.
-	if calls != executorMaxRetries+1 {
-		t.Errorf("expected %d calls, got %d", executorMaxRetries+1, calls)
-	}
+	// executorMaxRetries=3 -> 1 initial + 3 retries = 4 total.
+	assert.Equal(t, executorMaxRetries+1, calls)
 }
 
 // Fix 9: Test conflict download-failure restore path.
@@ -1485,13 +1311,8 @@ func TestExecutor_Conflict_DownloadFails_RestoresLocal(t *testing.T) {
 
 	// Original file should be restored after download failure.
 	data, err := os.ReadFile(filepath.Join(syncRoot, "exec-restore.txt"))
-	if err != nil {
-		t.Fatalf("original file should have been restored: %v", err)
-	}
-
-	if string(data) != originalContent {
-		t.Errorf("expected restored content %q, got %q", originalContent, string(data))
-	}
+	require.NoError(t, err, "original file should have been restored")
+	assert.Equal(t, originalContent, string(data))
 }
 
 // Fix 10: Test executeRemoteMove API error.
@@ -1519,9 +1340,7 @@ func TestExecutor_RemoteMove_Error(t *testing.T) {
 	o := e.executeMove(context.Background(), action)
 	requireOutcomeFailure(t, o)
 
-	if !errors.Is(o.Error, graph.ErrForbidden) {
-		t.Errorf("expected ErrForbidden in outcome error, got %v", o.Error)
-	}
+	assert.ErrorIs(t, o.Error, graph.ErrForbidden)
 }
 
 // Fix 11: Test moveOutcome View field propagation.
@@ -1557,29 +1376,12 @@ func TestExecutor_LocalMove_ViewFields(t *testing.T) {
 	o := e.executeMove(context.Background(), action)
 	requireOutcomeSuccess(t, o)
 
-	if o.RemoteHash != "remotehash" {
-		t.Errorf("expected RemoteHash=remotehash, got %s", o.RemoteHash)
-	}
-
-	if o.Size != 42 {
-		t.Errorf("expected Size=42, got %d", o.Size)
-	}
-
-	if o.ETag != "etag-move" {
-		t.Errorf("expected ETag=etag-move, got %s", o.ETag)
-	}
-
-	if o.LocalHash != "localhash" {
-		t.Errorf("expected LocalHash=localhash, got %s", o.LocalHash)
-	}
-
-	if o.Mtime != 9876543210 {
-		t.Errorf("expected Mtime=9876543210, got %d", o.Mtime)
-	}
-
-	if o.ItemType != ItemTypeFile {
-		t.Errorf("expected ItemType=file, got %s", o.ItemType)
-	}
+	assert.Equal(t, "remotehash", o.RemoteHash)
+	assert.Equal(t, int64(42), o.Size)
+	assert.Equal(t, "etag-move", o.ETag)
+	assert.Equal(t, "localhash", o.LocalHash)
+	assert.Equal(t, int64(9876543210), o.Mtime)
+	assert.Equal(t, ItemTypeFile, o.ItemType)
 }
 
 // Fix 12: Test large-file upload delegates to Uploader with correct size.
@@ -1612,9 +1414,7 @@ func TestExecutor_Upload_LargeFileSizePassedToUploader(t *testing.T) {
 	o := e.executeUpload(context.Background(), action)
 	requireOutcomeSuccess(t, o)
 
-	if capturedSize != expectedSize {
-		t.Errorf("expected size=%d, got %d", expectedSize, capturedSize)
-	}
+	assert.Equal(t, expectedSize, capturedSize)
 }
 
 // Test timeSleep context cancellation (consolidated from timeSleepExec, B-106).
@@ -1625,9 +1425,7 @@ func TestTimeSleep_ContextCanceled(t *testing.T) {
 	cancel()
 
 	err := timeSleep(ctx, 10*time.Second)
-	if !errors.Is(err, context.Canceled) {
-		t.Errorf("expected context.Canceled, got %v", err)
-	}
+	assert.ErrorIs(t, err, context.Canceled)
 }
 
 // Test timeSleep completes normally (consolidated from timeSleepExec, B-106).
@@ -1635,9 +1433,7 @@ func TestTimeSleep_Completes(t *testing.T) {
 	t.Parallel()
 
 	err := timeSleep(context.Background(), 1*time.Millisecond)
-	if err != nil {
-		t.Errorf("expected nil, got %v", err)
-	}
+	assert.NoError(t, err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1665,9 +1461,7 @@ func TestExecutor_DeleteOutcome_FolderType(t *testing.T) {
 	o := e.executeRemoteDelete(context.Background(), action)
 	requireOutcomeSuccess(t, o)
 
-	if o.ItemType != ItemTypeFolder {
-		t.Errorf("expected ItemType=folder, got %s", o.ItemType)
-	}
+	assert.Equal(t, ItemTypeFolder, o.ItemType)
 }
 
 func TestExecutor_Cleanup_FolderType(t *testing.T) {
@@ -1689,9 +1483,7 @@ func TestExecutor_Cleanup_FolderType(t *testing.T) {
 	o := e.executeCleanup(action)
 	requireOutcomeSuccess(t, o)
 
-	if o.ItemType != ItemTypeFolder {
-		t.Errorf("expected ItemType=folder, got %s", o.ItemType)
-	}
+	assert.Equal(t, ItemTypeFolder, o.ItemType)
 }
 
 func TestExecutor_SyncedUpdate_BaselineFallback(t *testing.T) {
@@ -1715,9 +1507,7 @@ func TestExecutor_SyncedUpdate_BaselineFallback(t *testing.T) {
 	o := e.executeSyncedUpdate(action)
 	requireOutcomeSuccess(t, o)
 
-	if o.ItemType != ItemTypeFolder {
-		t.Errorf("expected ItemType=folder from baseline fallback, got %s", o.ItemType)
-	}
+	assert.Equal(t, ItemTypeFolder, o.ItemType)
 }
 
 // ---------------------------------------------------------------------------
@@ -1750,9 +1540,7 @@ func TestExecutor_LocalDelete_TrashSuccess(t *testing.T) {
 	o := e.executeLocalDelete(context.Background(), action)
 	requireOutcomeSuccess(t, o)
 
-	if !trashCalled {
-		t.Error("trashFunc should have been called")
-	}
+	assert.True(t, trashCalled, "trashFunc should have been called")
 }
 
 func TestExecutor_LocalDelete_TrashFailure_FallsBackToRemove(t *testing.T) {
@@ -1779,9 +1567,8 @@ func TestExecutor_LocalDelete_TrashFailure_FallsBackToRemove(t *testing.T) {
 	requireOutcomeSuccess(t, o)
 
 	// File should still be deleted (via os.Remove fallback).
-	if _, err := os.Stat(absPath); !os.IsNotExist(err) {
-		t.Error("file should have been deleted by os.Remove fallback")
-	}
+	_, statErr := os.Stat(absPath)
+	assert.True(t, os.IsNotExist(statErr), "file should have been deleted by os.Remove fallback")
 }
 
 func TestExecutor_LocalDelete_NoTrashFunc_DirectRemove(t *testing.T) {
@@ -1804,9 +1591,8 @@ func TestExecutor_LocalDelete_NoTrashFunc_DirectRemove(t *testing.T) {
 	o := e.executeLocalDelete(context.Background(), action)
 	requireOutcomeSuccess(t, o)
 
-	if _, err := os.Stat(absPath); !os.IsNotExist(err) {
-		t.Error("file should have been deleted")
-	}
+	_, statErr := os.Stat(absPath)
+	assert.True(t, os.IsNotExist(statErr), "file should have been deleted")
 }
 
 func TestExecutor_LocalDeleteFolder_TrashSuccess(t *testing.T) {
@@ -1823,9 +1609,7 @@ func TestExecutor_LocalDeleteFolder_TrashSuccess(t *testing.T) {
 
 	e := NewExecution(cfg, emptyBaseline())
 
-	if err := os.MkdirAll(filepath.Join(syncRoot, "trash-dir"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "trash-dir"), 0o755))
 
 	action := &Action{
 		Type:   ActionLocalDelete,
@@ -1837,9 +1621,7 @@ func TestExecutor_LocalDeleteFolder_TrashSuccess(t *testing.T) {
 	o := e.executeLocalDelete(context.Background(), action)
 	requireOutcomeSuccess(t, o)
 
-	if !trashCalled {
-		t.Error("trashFunc should have been called for folder")
-	}
+	assert.True(t, trashCalled, "trashFunc should have been called for folder")
 }
 
 // ---------------------------------------------------------------------------
@@ -1882,14 +1664,12 @@ func TestExecutor_Download_PartialFileCleanedOnMidStreamError(t *testing.T) {
 
 	// The .partial file must not remain on disk after the error.
 	partialPath := filepath.Join(syncRoot, "partial-cleanup.txt.partial")
-	if _, err := os.Stat(partialPath); !os.IsNotExist(err) {
-		t.Error(".partial file should be cleaned up on download error, but it still exists")
-	}
+	_, statErr := os.Stat(partialPath)
+	assert.True(t, os.IsNotExist(statErr), ".partial file should be cleaned up on download error, but it still exists")
 
 	// The final file should also not exist.
-	if _, err := os.Stat(filepath.Join(syncRoot, "partial-cleanup.txt")); !os.IsNotExist(err) {
-		t.Error("final file should not exist after failed download")
-	}
+	_, statErr2 := os.Stat(filepath.Join(syncRoot, "partial-cleanup.txt"))
+	assert.True(t, os.IsNotExist(statErr2), "final file should not exist after failed download")
 }
 
 // ---------------------------------------------------------------------------
@@ -1920,9 +1700,7 @@ func TestExecutor_Upload_MtimePassedToUploader(t *testing.T) {
 	targetMtime := time.Date(2025, 6, 15, 10, 30, 0, 0, time.UTC)
 	absPath := filepath.Join(syncRoot, "mtime-test.txt")
 
-	if err := os.Chtimes(absPath, targetMtime, targetMtime); err != nil {
-		t.Fatalf("Chtimes: %v", err)
-	}
+	require.NoError(t, os.Chtimes(absPath, targetMtime, targetMtime))
 
 	action := &Action{
 		Type: ActionUpload,
@@ -1934,12 +1712,8 @@ func TestExecutor_Upload_MtimePassedToUploader(t *testing.T) {
 	requireOutcomeSuccess(t, o)
 
 	// Verify the uploader received the file's mtime.
-	if !capturedMtime.Equal(targetMtime) {
-		t.Errorf("uploader received mtime %v, want %v", capturedMtime, targetMtime)
-	}
+	assert.True(t, capturedMtime.Equal(targetMtime), "uploader received mtime %v, want %v", capturedMtime, targetMtime)
 
 	// Verify the outcome also records the mtime.
-	if o.Mtime != targetMtime.UnixNano() {
-		t.Errorf("outcome Mtime = %d, want %d", o.Mtime, targetMtime.UnixNano())
-	}
+	assert.Equal(t, targetMtime.UnixNano(), o.Mtime)
 }

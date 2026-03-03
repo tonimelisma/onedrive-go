@@ -343,7 +343,7 @@ func TestOrchestrator_RunWatch_SingleDrive(t *testing.T) {
 	select {
 	case <-watchStarted:
 	case <-time.After(5 * time.Second):
-		t.Fatal("RunWatch did not start in time")
+		require.Fail(t, "RunWatch did not start in time")
 	}
 
 	cancel()
@@ -352,7 +352,7 @@ func TestOrchestrator_RunWatch_SingleDrive(t *testing.T) {
 	case err := <-errCh:
 		assert.NoError(t, err)
 	case <-time.After(5 * time.Second):
-		t.Fatal("RunWatch did not stop in time")
+		require.Fail(t, "RunWatch did not stop in time")
 	}
 }
 
@@ -396,7 +396,7 @@ func TestOrchestrator_RunWatch_MultiDrive(t *testing.T) {
 	case err := <-errCh:
 		assert.NoError(t, err)
 	case <-time.After(5 * time.Second):
-		t.Fatal("RunWatch did not stop in time")
+		require.Fail(t, "RunWatch did not stop in time")
 	}
 }
 
@@ -454,7 +454,7 @@ func TestOrchestrator_Reload_AddDrive(t *testing.T) {
 	case err := <-errCh:
 		assert.NoError(t, err)
 	case <-time.After(5 * time.Second):
-		t.Fatal("RunWatch did not stop in time")
+		require.Fail(t, "RunWatch did not stop in time")
 	}
 }
 
@@ -511,7 +511,7 @@ func TestOrchestrator_Reload_RemoveDrive(t *testing.T) {
 	case err := <-errCh:
 		assert.NoError(t, err)
 	case <-time.After(5 * time.Second):
-		t.Fatal("RunWatch did not stop in time")
+		require.Fail(t, "RunWatch did not stop in time")
 	}
 }
 
@@ -567,7 +567,7 @@ func TestOrchestrator_Reload_PausedDrive(t *testing.T) {
 	case err := <-errCh:
 		assert.NoError(t, err)
 	case <-time.After(5 * time.Second):
-		t.Fatal("RunWatch did not stop in time")
+		require.Fail(t, "RunWatch did not stop in time")
 	}
 }
 
@@ -620,7 +620,7 @@ func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 	case err := <-errCh:
 		assert.NoError(t, err)
 	case <-time.After(5 * time.Second):
-		t.Fatal("RunWatch did not stop in time")
+		require.Fail(t, "RunWatch did not stop in time")
 	}
 }
 
@@ -687,7 +687,7 @@ func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
 	case err := <-errCh:
 		assert.NoError(t, err)
 	case <-time.After(5 * time.Second):
-		t.Fatal("RunWatch did not stop in time")
+		require.Fail(t, "RunWatch did not stop in time")
 	}
 }
 

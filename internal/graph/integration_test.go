@@ -69,9 +69,7 @@ func newIntegrationClient(t *testing.T) *Client {
 	t.Helper()
 
 	drive := os.Getenv(driveEnvVar)
-	if drive == "" {
-		t.Fatal("ONEDRIVE_TEST_DRIVE not set")
-	}
+	require.NotEmpty(t, drive, "ONEDRIVE_TEST_DRIVE not set")
 
 	ctx := context.Background()
 	logger := testLogger(t)
@@ -79,9 +77,7 @@ func newIntegrationClient(t *testing.T) *Client {
 	cid := driveid.MustCanonicalID(drive)
 
 	tokenPath := config.DriveTokenPath(cid, nil)
-	if tokenPath == "" {
-		t.Fatalf("cannot determine token path for drive %q", drive)
-	}
+	require.NotEmpty(t, tokenPath, "cannot determine token path for drive %q", drive)
 
 	logger.Info("loading token for integration test",
 		slog.String("drive", drive),
@@ -104,9 +100,7 @@ func driveIDForTest(t *testing.T) driveid.ID {
 	t.Helper()
 
 	drive := os.Getenv(driveEnvVar)
-	if drive == "" {
-		t.Fatal("ONEDRIVE_TEST_DRIVE not set")
-	}
+	require.NotEmpty(t, drive, "ONEDRIVE_TEST_DRIVE not set")
 
 	cid := driveid.MustCanonicalID(drive)
 	tokenPath := config.DriveTokenPath(cid, nil)

@@ -742,7 +742,7 @@ func TestUpload_SimplePreservesMtime(t *testing.T) {
 			return
 		}
 
-		t.Errorf("unexpected method: %s", r.Method)
+		assert.Failf(t, "unexpected method", "got %s", r.Method)
 	}))
 	defer srv.Close()
 
@@ -764,7 +764,7 @@ func TestUpload_SimpleSkipsPatchForZeroMtime(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPatch {
-			t.Error("PATCH should not be called when mtime is zero")
+			assert.Fail(t, "PATCH should not be called when mtime is zero")
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -845,7 +845,7 @@ func TestUpload_ChunkedForLargeFile(t *testing.T) {
 	chunkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete {
 			// CancelUploadSession — should not be called on success.
-			t.Error("unexpected session cancel")
+			assert.Fail(t, "unexpected session cancel")
 			w.WriteHeader(http.StatusNoContent)
 
 			return

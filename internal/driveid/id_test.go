@@ -3,6 +3,9 @@ package driveid
 import (
 	"database/sql/driver"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNew(t *testing.T) {
@@ -56,9 +59,7 @@ func TestNew(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := New(tt.raw)
-			if got.String() != tt.want {
-				t.Errorf("New(%q) = %q, want %q", tt.raw, got.String(), tt.want)
-			}
+			assert.Equal(t, tt.want, got.String())
 		})
 	}
 }
@@ -77,9 +78,7 @@ func TestID_IsZero(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.id.IsZero(); got != tt.want {
-				t.Errorf("ID{%q}.IsZero() = %v, want %v", tt.id.String(), got, tt.want)
-			}
+			assert.Equal(t, tt.want, tt.id.IsZero())
 		})
 	}
 }
@@ -89,111 +88,71 @@ func TestID_Equal(t *testing.T) {
 	b := New("abc123def4567890")
 	c := New("different1234567")
 
-	if !a.Equal(b) {
-		t.Error("expected case-different IDs to be equal after normalization")
-	}
-
-	if a.Equal(c) {
-		t.Error("expected different IDs to not be equal")
-	}
+	assert.True(t, a.Equal(b), "expected case-different IDs to be equal after normalization")
+	assert.False(t, a.Equal(c), "expected different IDs to not be equal")
 }
 
 func TestID_MarshalText(t *testing.T) {
 	id := New("ABC123DEF4567890")
 
 	data, err := id.MarshalText()
-	if err != nil {
-		t.Fatalf("MarshalText() error: %v", err)
-	}
-
-	if string(data) != "abc123def4567890" {
-		t.Errorf("MarshalText() = %q, want %q", string(data), "abc123def4567890")
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "abc123def4567890", string(data))
 }
 
 func TestID_UnmarshalText(t *testing.T) {
 	var id ID
 
 	err := id.UnmarshalText([]byte("ABC123DEF4567890"))
-	if err != nil {
-		t.Fatalf("UnmarshalText() error: %v", err)
-	}
-
-	if id.String() != "abc123def4567890" {
-		t.Errorf("UnmarshalText result = %q, want %q", id.String(), "abc123def4567890")
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "abc123def4567890", id.String())
 }
 
 func TestID_ScanAndValue(t *testing.T) {
 	t.Run("scan string", func(t *testing.T) {
 		var id ID
-		if err := id.Scan("ABC123def4567890"); err != nil {
-			t.Fatalf("Scan(string) error: %v", err)
-		}
-
-		if id.String() != "abc123def4567890" {
-			t.Errorf("Scan(string) = %q, want %q", id.String(), "abc123def4567890")
-		}
+		err := id.Scan("ABC123def4567890")
+		require.NoError(t, err)
+		assert.Equal(t, "abc123def4567890", id.String())
 	})
 
 	t.Run("scan bytes", func(t *testing.T) {
 		var id ID
-		if err := id.Scan([]byte("ABC123def4567890")); err != nil {
-			t.Fatalf("Scan([]byte) error: %v", err)
-		}
-
-		if id.String() != "abc123def4567890" {
-			t.Errorf("Scan([]byte) = %q, want %q", id.String(), "abc123def4567890")
-		}
+		err := id.Scan([]byte("ABC123def4567890"))
+		require.NoError(t, err)
+		assert.Equal(t, "abc123def4567890", id.String())
 	})
 
 	t.Run("scan nil produces zero ID", func(t *testing.T) {
 		var id ID
-		if err := id.Scan(nil); err != nil {
-			t.Fatalf("Scan(nil) error: %v", err)
-		}
-
-		if !id.IsZero() {
-			t.Errorf("Scan(nil) produced non-zero ID: %q", id.String())
-		}
+		err := id.Scan(nil)
+		require.NoError(t, err)
+		assert.True(t, id.IsZero())
 	})
 
 	t.Run("scan unsupported type returns error", func(t *testing.T) {
 		var id ID
-		if err := id.Scan(42); err == nil {
-			t.Error("Scan(int) should return error")
-		}
+		err := id.Scan(42)
+		assert.Error(t, err)
 	})
 
 	t.Run("zero ID writes nil", func(t *testing.T) {
 		id := ID{}
 
 		val, err := id.Value()
-		if err != nil {
-			t.Fatalf("Value() error: %v", err)
-		}
-
-		if val != nil {
-			t.Errorf("zero ID.Value() = %v, want nil", val)
-		}
+		require.NoError(t, err)
+		assert.Nil(t, val)
 	})
 
 	t.Run("non-zero ID writes string", func(t *testing.T) {
 		id := New("abc123def4567890")
 
 		val, err := id.Value()
-		if err != nil {
-			t.Fatalf("Value() error: %v", err)
-		}
+		require.NoError(t, err)
 
 		s, ok := val.(string)
-		if !ok {
-			t.Fatalf("Value() type = %T, want string", val)
-		}
-
-		if s != "abc123def4567890" {
-			t.Errorf("Value() = %q, want %q", s, "abc123def4567890")
-		}
+		require.True(t, ok, "Value() type = %T, want string", val)
+		assert.Equal(t, "abc123def4567890", s)
 	})
 }
 
@@ -202,18 +161,13 @@ func TestID_RoundTrip(t *testing.T) {
 	original := New("ABC123DEF4567890")
 
 	val, err := original.Value()
-	if err != nil {
-		t.Fatalf("Value() error: %v", err)
-	}
+	require.NoError(t, err)
 
 	var restored ID
-	if err := restored.Scan(val); err != nil {
-		t.Fatalf("Scan() error: %v", err)
-	}
+	err = restored.Scan(val)
+	require.NoError(t, err)
 
-	if !original.Equal(restored) {
-		t.Errorf("round-trip failed: original=%q, restored=%q", original.String(), restored.String())
-	}
+	assert.True(t, original.Equal(restored), "round-trip failed: original=%q, restored=%q", original.String(), restored.String())
 }
 
 // Verify the sql.Scanner compile-time assertion works (it's checked via
@@ -225,13 +179,8 @@ func TestID_DriverValuer(t *testing.T) {
 func TestNew_EmptyEqualsZeroValue(t *testing.T) {
 	// New("") must produce the same ID as the zero value ID{}.
 	// This ensures a single zero representation — no identity split.
-	if !New("").Equal(ID{}) {
-		t.Error("New(\"\") must equal ID{}")
-	}
-
-	if !New("").IsZero() {
-		t.Error("New(\"\") must be zero")
-	}
+	assert.True(t, New("").Equal(ID{}), "New(\"\") must equal ID{}")
+	assert.True(t, New("").IsZero(), "New(\"\") must be zero")
 }
 
 func TestID_EmptyString_SQLRoundTrip(t *testing.T) {
@@ -239,21 +188,14 @@ func TestID_EmptyString_SQLRoundTrip(t *testing.T) {
 	original := New("")
 
 	val, err := original.Value()
-	if err != nil {
-		t.Fatalf("Value() error: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Zero ID writes nil to SQL.
-	if val != nil {
-		t.Fatalf("Value() = %v, want nil for zero ID", val)
-	}
+	require.Nil(t, val, "Value() should be nil for zero ID")
 
 	var restored ID
-	if err := restored.Scan(val); err != nil {
-		t.Fatalf("Scan() error: %v", err)
-	}
+	err = restored.Scan(val)
+	require.NoError(t, err)
 
-	if !original.Equal(restored) {
-		t.Errorf("round-trip failed: original=%q, restored=%q", original.String(), restored.String())
-	}
+	assert.True(t, original.Equal(restored), "round-trip failed: original=%q, restored=%q", original.String(), restored.String())
 }

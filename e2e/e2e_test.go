@@ -245,7 +245,8 @@ func pollCLIWithConfigContains(
 		}
 
 		if time.Now().After(deadline) {
-			t.Fatalf("pollCLIWithConfigContains: timed out after %v waiting for %q in output of %v\nlast stdout: %s\nlast stderr: %s",
+			require.Failf(t, "pollCLIWithConfigContains: timed out",
+				"after %v waiting for %q in output of %v\nlast stdout: %s\nlast stderr: %s",
 				timeout, expected, args, stdout, stderr)
 		}
 
@@ -268,7 +269,8 @@ func pollCLIWithConfigSuccess(t *testing.T, cfgPath string, env map[string]strin
 		}
 
 		if time.Now().After(deadline) {
-			t.Fatalf("pollCLIWithConfigSuccess: timed out after %v waiting for success of %v\nlast stdout: %s\nlast stderr: %s",
+			require.Failf(t, "pollCLIWithConfigSuccess: timed out",
+				"after %v waiting for success of %v\nlast stdout: %s\nlast stderr: %s",
 				timeout, args, stdout, stderr)
 		}
 

@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
@@ -22,11 +25,9 @@ func TestDepTracker_NoDeps(t *testing.T) {
 
 	select {
 	case ta := <-dt.Ready():
-		if ta.ID != 1 {
-			t.Errorf("ID = %d, want 1", ta.ID)
-		}
+		assert.Equal(t, int64(1), ta.ID)
 	case <-time.After(time.Second):
-		t.Fatal("timeout waiting for action on ready channel")
+		require.Fail(t, "timeout waiting for action on ready channel")
 	}
 }
 
@@ -50,17 +51,15 @@ func TestDepTracker_DependencyChain(t *testing.T) {
 	// Only action 1 should be dispatched.
 	select {
 	case ta := <-dt.Ready():
-		if ta.ID != 1 {
-			t.Fatalf("expected action 1, got %d", ta.ID)
-		}
+		require.Equal(t, int64(1), ta.ID, "expected action 1")
 	case <-time.After(time.Second):
-		t.Fatal("timeout waiting for action 1")
+		require.Fail(t, "timeout waiting for action 1")
 	}
 
 	// Action 2 should not be dispatched yet.
 	select {
 	case ta := <-dt.Ready():
-		t.Fatalf("action %d dispatched too early", ta.ID)
+		require.Fail(t, fmt.Sprintf("action %d dispatched too early", ta.ID))
 	case <-time.After(50 * time.Millisecond):
 		// Expected — action 2 still blocked.
 	}
@@ -70,11 +69,9 @@ func TestDepTracker_DependencyChain(t *testing.T) {
 
 	select {
 	case ta := <-dt.Ready():
-		if ta.ID != 2 {
-			t.Fatalf("expected action 2, got %d", ta.ID)
-		}
+		require.Equal(t, int64(2), ta.ID, "expected action 2")
 	case <-time.After(time.Second):
-		t.Fatal("timeout waiting for action 2")
+		require.Fail(t, "timeout waiting for action 2")
 	}
 }
 
@@ -103,7 +100,7 @@ func TestDepTracker_DoneSignal(t *testing.T) {
 	case <-dt.Done():
 		// Success.
 	case <-time.After(time.Second):
-		t.Fatal("timeout waiting for done signal")
+		require.Fail(t, "timeout waiting for done signal")
 	}
 }
 
@@ -129,7 +126,7 @@ func TestDepTracker_CancelByPath(t *testing.T) {
 	case <-ctx.Done():
 		// Context was canceled.
 	case <-time.After(time.Second):
-		t.Fatal("context should have been canceled")
+		require.Fail(t, "context should have been canceled")
 	}
 }
 
@@ -168,7 +165,7 @@ func TestDepTracker_ConcurrentComplete(t *testing.T) {
 			case ta := <-dt.Ready():
 				dt.Complete(ta.ID)
 			case <-time.After(5 * time.Second):
-				t.Error("timeout draining dependent action")
+				assert.Fail(t, "timeout draining dependent action")
 			}
 		}()
 	}
@@ -179,7 +176,7 @@ func TestDepTracker_ConcurrentComplete(t *testing.T) {
 	case <-dt.Done():
 		// All complete.
 	case <-time.After(time.Second):
-		t.Fatal("timeout waiting for done signal")
+		require.Fail(t, "timeout waiting for done signal")
 	}
 }
 
@@ -212,7 +209,7 @@ func TestDepTracker_CompleteUnknownID(t *testing.T) {
 	case <-dt.Done():
 		// Success — the unknown-ID completion still incremented the counter.
 	case <-time.After(time.Second):
-		t.Fatal("done channel not closed after Complete with unknown ID — deadlock risk")
+		require.Fail(t, "done channel not closed after Complete with unknown ID — deadlock risk")
 	}
 }
 
@@ -289,9 +286,8 @@ func TestDepTracker_ConcurrentAddAndComplete(t *testing.T) {
 			drained++
 		case <-time.After(200 * time.Millisecond):
 			// No more actions to drain.
-			if drained < 20 {
-				t.Fatalf("expected at least 20 dispatched actions, got %d", drained)
-			}
+			require.GreaterOrEqual(t, drained, 20,
+				"expected at least 20 dispatched actions")
 
 			return
 		}
@@ -336,7 +332,7 @@ func TestDepTracker_CompleteCleansByPath(t *testing.T) {
 	case <-ctx.Done():
 		// Success — the new action's context was canceled.
 	case <-time.After(time.Second):
-		t.Fatal("CancelByPath should cancel the new action, not be a no-op")
+		require.Fail(t, "CancelByPath should cancel the new action, not be a no-op")
 	}
 }
 
@@ -364,7 +360,7 @@ func TestDepTracker_CancelByPathCleansUp(t *testing.T) {
 	case <-ctx1.Done():
 		// Good.
 	case <-time.After(time.Second):
-		t.Fatal("action 1 context should have been canceled")
+		require.Fail(t, "action 1 context should have been canceled")
 	}
 
 	// Add a new action at the same path. If byPath was cleaned, this works
@@ -384,7 +380,7 @@ func TestDepTracker_CancelByPathCleansUp(t *testing.T) {
 	case <-ctx2.Done():
 		// Success — action 2's context was canceled.
 	case <-time.After(time.Second):
-		t.Fatal("action 2 context should have been canceled")
+		require.Fail(t, "action 2 context should have been canceled")
 	}
 }
 
@@ -403,11 +399,9 @@ func TestDepTracker_SkipCompletedDeps(t *testing.T) {
 	// Should dispatch immediately since dep 1 is unknown/completed.
 	select {
 	case ta := <-dt.Ready():
-		if ta.ID != 2 {
-			t.Errorf("ID = %d, want 2", ta.ID)
-		}
+		assert.Equal(t, int64(2), ta.ID)
 	case <-time.After(time.Second):
-		t.Fatal("timeout waiting for action with unknown dep")
+		require.Fail(t, "timeout waiting for action with unknown dep")
 	}
 }
 
@@ -421,9 +415,7 @@ func TestDepTracker_HasInFlight(t *testing.T) {
 	dt := NewDepTracker(10, testLogger(t))
 
 	// No actions — HasInFlight should be false.
-	if dt.HasInFlight("file.txt") {
-		t.Error("HasInFlight returned true for empty tracker")
-	}
+	assert.False(t, dt.HasInFlight("file.txt"), "HasInFlight returned true for empty tracker")
 
 	dt.Add(&Action{
 		Type: ActionDownload, Path: "file.txt",
@@ -431,18 +423,14 @@ func TestDepTracker_HasInFlight(t *testing.T) {
 	}, 1, nil, "")
 
 	// Action added — HasInFlight should be true.
-	if !dt.HasInFlight("file.txt") {
-		t.Error("HasInFlight returned false for in-flight path")
-	}
+	assert.True(t, dt.HasInFlight("file.txt"), "HasInFlight returned false for in-flight path")
 
 	// Drain and complete the action.
 	<-dt.Ready()
 	dt.Complete(1)
 
 	// After Complete, HasInFlight should be false (byPath cleaned up).
-	if dt.HasInFlight("file.txt") {
-		t.Error("HasInFlight returned true after Complete")
-	}
+	assert.False(t, dt.HasInFlight("file.txt"), "HasInFlight returned true after Complete")
 }
 
 // ---------------------------------------------------------------------------
@@ -466,7 +454,7 @@ func TestDepTracker_PersistentMode(t *testing.T) {
 	// are complete. Workers exit via context cancellation instead.
 	select {
 	case <-dt.Done():
-		t.Fatal("Done() fired in persistent mode — should never close")
+		require.Fail(t, "Done() fired in persistent mode — should never close")
 	case <-time.After(100 * time.Millisecond):
 		// Expected — Done() never fires in persistent mode.
 	}
@@ -511,7 +499,7 @@ func TestDepTracker_CycleDone(t *testing.T) {
 	// Cycle A should NOT be done yet (1 of 2 complete).
 	select {
 	case <-cycleADone:
-		t.Fatal("cycle A done too early")
+		require.Fail(t, "cycle A done too early")
 	case <-time.After(50 * time.Millisecond):
 		// Expected.
 	}
@@ -523,13 +511,13 @@ func TestDepTracker_CycleDone(t *testing.T) {
 	case <-cycleADone:
 		// Success.
 	case <-time.After(time.Second):
-		t.Fatal("timeout waiting for cycle A done")
+		require.Fail(t, "timeout waiting for cycle A done")
 	}
 
 	// Cycle B should NOT be done yet.
 	select {
 	case <-cycleBDone:
-		t.Fatal("cycle B done before its actions completed")
+		require.Fail(t, "cycle B done before its actions completed")
 	case <-time.After(50 * time.Millisecond):
 		// Expected.
 	}
@@ -541,7 +529,7 @@ func TestDepTracker_CycleDone(t *testing.T) {
 	case <-cycleBDone:
 		// Success.
 	case <-time.After(time.Second):
-		t.Fatal("timeout waiting for cycle B done")
+		require.Fail(t, "timeout waiting for cycle B done")
 	}
 }
 
@@ -563,7 +551,7 @@ func TestDepTracker_CleanupCycle(t *testing.T) {
 	select {
 	case <-dt.CycleDone("cycle-cleanup"):
 	case <-time.After(time.Second):
-		t.Fatal("timeout waiting for cycle done")
+		require.Fail(t, "timeout waiting for cycle done")
 	}
 
 	// Cleanup should remove the cycle from the map.
@@ -575,7 +563,7 @@ func TestDepTracker_CleanupCycle(t *testing.T) {
 	case <-dt.CycleDone("cycle-cleanup"):
 		// Success — closed channel returns immediately.
 	case <-time.After(time.Second):
-		t.Fatal("CycleDone for cleaned-up cycle should not block")
+		require.Fail(t, "CycleDone for cleaned-up cycle should not block")
 	}
 }
 
@@ -600,11 +588,9 @@ func TestDepTracker_SuppressedDepFilteredByEngine(t *testing.T) {
 	// Action 1 should dispatch immediately (no dependencies).
 	select {
 	case ta := <-dt.Ready():
-		if ta.ID != 1 {
-			t.Fatalf("expected action 1, got %d", ta.ID)
-		}
+		require.Equal(t, int64(1), ta.ID, "expected action 1")
 	case <-time.After(time.Second):
-		t.Fatal("action with filtered-out suppressed dep should dispatch immediately")
+		require.Fail(t, "action with filtered-out suppressed dep should dispatch immediately")
 	}
 
 	dt.Complete(1)
@@ -621,6 +607,6 @@ func TestDepTracker_CycleDone_UnknownCycle(t *testing.T) {
 	case <-dt.CycleDone("nonexistent"):
 		// Success — closed channel returns immediately.
 	case <-time.After(time.Second):
-		t.Fatal("CycleDone for unknown cycle should not block")
+		require.Fail(t, "CycleDone for unknown cycle should not block")
 	}
 }

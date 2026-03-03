@@ -3,6 +3,8 @@ package sync
 import (
 	"log/slog"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 // Cross-platform smoke tests: verify inotify functions compile and don't panic.
@@ -31,7 +33,5 @@ func TestIsWatchLimitError_NoPanic(t *testing.T) {
 
 	// Must not panic; returns false on non-Linux.
 	result := isWatchLimitError(nil)
-	if result {
-		t.Error("isWatchLimitError(nil) should return false")
-	}
+	assert.False(t, result, "isWatchLimitError(nil) should return false")
 }
