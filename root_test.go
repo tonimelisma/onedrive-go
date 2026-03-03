@@ -350,14 +350,17 @@ func TestLoadAndResolve_MissingFile_NoDrives_Error(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfgPath := filepath.Join(tmpDir, "nonexistent.toml")
 
-	// No config file and --drive selector: with zero-config removed, this
-	// should error because matchNoDrives always returns an error now.
+	// Override HOME so token discovery finds nothing on disk.
+	t.Setenv("HOME", tmpDir)
+
+	// No config file and no tokens: matchNoDrives returns "no accounts
+	// configured" because no tokens exist on disk.
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"--drive", "personal:zeroconfig@example.com", "--config", cfgPath, "ls"})
 
 	err := cmd.Execute()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no drives configured")
+	assert.Contains(t, err.Error(), "no accounts configured")
 }
 
 // --- mustCLIContext tests ---
