@@ -1,6 +1,12 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync"
+)
 
 func TestTruncateID(t *testing.T) {
 	t.Parallel()
@@ -52,4 +58,43 @@ func TestFormatNanoTimestamp(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- toConflictJSON ---
+
+func TestToConflictJSON(t *testing.T) {
+	t.Parallel()
+
+	c := &sync.ConflictRecord{
+		ID:           "abc123",
+		Path:         "/foo.txt",
+		ConflictType: "edit_edit",
+		DetectedAt:   1700000000000000000,
+		LocalHash:    "aaa",
+		RemoteHash:   "bbb",
+		Resolution:   "keep_local",
+		ResolvedBy:   "user",
+		ResolvedAt:   1700000001000000000,
+	}
+
+	j := toConflictJSON(c)
+	assert.Equal(t, "abc123", j.ID)
+	assert.Equal(t, "/foo.txt", j.Path)
+	assert.Equal(t, "edit_edit", j.ConflictType)
+	assert.NotEmpty(t, j.DetectedAt)
+	assert.Equal(t, "aaa", j.LocalHash)
+	assert.Equal(t, "bbb", j.RemoteHash)
+	assert.Equal(t, "keep_local", j.Resolution)
+	assert.Equal(t, "user", j.ResolvedBy)
+	assert.NotEmpty(t, j.ResolvedAt)
+}
+
+// --- newConflictsCmd ---
+
+func TestNewConflictsCmd_Structure(t *testing.T) {
+	t.Parallel()
+
+	cmd := newConflictsCmd()
+	assert.Equal(t, "conflicts", cmd.Use)
+	assert.NotNil(t, cmd.Flags().Lookup("history"))
 }

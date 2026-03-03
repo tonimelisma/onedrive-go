@@ -533,3 +533,35 @@ func TestErrVerifyMismatch_IsSentinel(t *testing.T) {
 	wrapped := fmt.Errorf("wrapped: %w", errVerifyMismatch)
 	assert.ErrorIs(t, wrapped, errVerifyMismatch)
 }
+
+// --- Command structure tests ---
+
+func TestNewGetCmd_Structure(t *testing.T) {
+	t.Parallel()
+
+	cmd := newGetCmd()
+	assert.Equal(t, "get <remote-path> [local-path]", cmd.Use)
+}
+
+func TestNewPutCmd_Structure(t *testing.T) {
+	t.Parallel()
+
+	cmd := newPutCmd()
+	assert.Equal(t, "put <local-path> [remote-path]", cmd.Use)
+}
+
+func TestNewRmCmd_Structure(t *testing.T) {
+	t.Parallel()
+
+	cmd := newRmCmd()
+	assert.Equal(t, "rm <path>", cmd.Use)
+	assert.NotNil(t, cmd.Flags().Lookup("recursive"))
+	assert.NotNil(t, cmd.Flags().Lookup("permanent"))
+}
+
+func TestNewMkdirCmd_Structure(t *testing.T) {
+	t.Parallel()
+
+	cmd := newMkdirCmd()
+	assert.Equal(t, "mkdir <path>", cmd.Use)
+}

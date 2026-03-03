@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
@@ -50,4 +52,37 @@ func TestPrintStatText_Folder(t *testing.T) {
 	assert.Contains(t, output, "folder-456")
 	// MIME should not appear for folders (empty string).
 	assert.NotContains(t, output, "MIME:")
+}
+
+// --- printStatJSON ---
+
+func TestPrintStatJSON(t *testing.T) {
+	item := &graph.Item{
+		ID:         "id1",
+		Name:       "test.txt",
+		Size:       42,
+		ModifiedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		CreatedAt:  time.Date(2023, 12, 1, 0, 0, 0, 0, time.UTC),
+		MimeType:   "text/plain",
+		ETag:       "etag1",
+	}
+
+	out := captureStdout(t, func() {
+		require.NoError(t, printStatJSON(item))
+	})
+
+	var parsed statJSONOutput
+	require.NoError(t, json.Unmarshal([]byte(out), &parsed))
+	assert.Equal(t, "id1", parsed.ID)
+	assert.Equal(t, int64(42), parsed.Size)
+	assert.Equal(t, "text/plain", parsed.MimeType)
+}
+
+// --- newStatCmd ---
+
+func TestNewStatCmd_Structure(t *testing.T) {
+	t.Parallel()
+
+	cmd := newStatCmd()
+	assert.Equal(t, "stat <path>", cmd.Use)
 }

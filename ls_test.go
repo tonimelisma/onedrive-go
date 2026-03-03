@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
 	"os"
 	"testing"
@@ -60,4 +61,33 @@ func TestPrintItemsTable(t *testing.T) {
 	// Folders sort first and get a trailing slash.
 	assert.Contains(t, output, "docs/")
 	assert.Contains(t, output, "readme.txt")
+}
+
+// --- printItemsJSON ---
+
+func TestPrintItemsJSON(t *testing.T) {
+	items := []graph.Item{
+		{Name: "file.txt", Size: 100, ID: "id1", ModifiedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)},
+		{Name: "dir", IsFolder: true, ID: "id2", ModifiedAt: time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)},
+	}
+
+	out := captureStdout(t, func() {
+		require.NoError(t, printItemsJSON(items))
+	})
+
+	assert.Contains(t, out, `"file.txt"`)
+	assert.Contains(t, out, `"id1"`)
+
+	var parsed []lsJSONItem
+	require.NoError(t, json.Unmarshal([]byte(out), &parsed))
+	assert.Len(t, parsed, 2)
+}
+
+// --- newLsCmd ---
+
+func TestNewLsCmd_Structure(t *testing.T) {
+	t.Parallel()
+
+	cmd := newLsCmd()
+	assert.Equal(t, "ls [path]", cmd.Use)
 }

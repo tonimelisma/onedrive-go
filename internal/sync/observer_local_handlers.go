@@ -1,3 +1,16 @@
+// observer_local_handlers.go — Watch-mode event processing for LocalObserver.
+//
+// Contents:
+//   - watchLoop:    main select loop (fsnotify events, errors, safety scan, ctx)
+//   - handleEvent:  fsnotify event → ChangeEvent routing
+//   - handleCreate: new file/dir → hash + emit + recursive watch add
+//   - handleWrite:  file modification → debounced hash + emit
+//   - handleRemove: file/dir removal → emit delete + remove watches
+//   - hashAndEmit:  hash computation with retry + event emission
+//
+// Related files:
+//   - observer_local.go: LocalObserver struct, constructor, Watch() entry point
+//   - scanner.go:         FullScan, walk/hash/filter logic
 package sync
 
 import (

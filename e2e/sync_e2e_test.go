@@ -109,37 +109,10 @@ func runCLIWithConfigAllowError(t *testing.T, cfgPath string, env map[string]str
 	return runCLICore(t, cfgPath, env, drive, args...)
 }
 
-// runCLI runs the CLI with an auto-created minimal config. Used by helpers
-// like putRemoteFile and getRemoteFile for remote state setup/teardown.
-func runCLI(t *testing.T, args ...string) (string, string) {
-	t.Helper()
-
-	cfgPath := writeMinimalConfig(t)
-
-	return runCLIWithConfig(t, cfgPath, nil, args...)
-}
-
-// runCLIExpectError runs the CLI with an auto-created config and expects failure.
-func runCLIExpectError(t *testing.T, args ...string) string {
-	t.Helper()
-
-	cfgPath := writeMinimalConfig(t)
-
-	return runCLIWithConfigExpectError(t, cfgPath, nil, args...)
-}
-
-// pollCLIContains retries a CLI command with an auto-created config until
-// stdout contains the expected string or timeout is reached.
-func pollCLIContains(t *testing.T, expected string, timeout time.Duration, args ...string) (string, string) {
-	t.Helper()
-
-	cfgPath := writeMinimalConfig(t)
-
-	return pollCLIWithConfigContains(t, cfgPath, nil, expected, timeout, args...)
-}
-
 // putRemoteFile uploads string content to a remote path via a temp file.
-func putRemoteFile(t *testing.T, remotePath, content string) {
+// cfgPath must point to a valid config with the drive section; env overrides
+// (if non-nil) are forwarded to the CLI child process.
+func putRemoteFile(t *testing.T, cfgPath string, env map[string]string, remotePath, content string) {
 	t.Helper()
 
 	tmpFile, err := os.CreateTemp("", "e2e-put-*")
@@ -150,17 +123,19 @@ func putRemoteFile(t *testing.T, remotePath, content string) {
 	require.NoError(t, err)
 	require.NoError(t, tmpFile.Close())
 
-	runCLI(t, "put", tmpFile.Name(), remotePath)
+	runCLIWithConfig(t, cfgPath, env, "put", tmpFile.Name(), remotePath)
 }
 
 // getRemoteFile downloads a remote file and returns its content as a string.
-func getRemoteFile(t *testing.T, remotePath string) string {
+// cfgPath must point to a valid config with the drive section; env overrides
+// (if non-nil) are forwarded to the CLI child process.
+func getRemoteFile(t *testing.T, cfgPath string, env map[string]string, remotePath string) string {
 	t.Helper()
 
 	tmpDir := t.TempDir()
 	localPath := filepath.Join(tmpDir, "downloaded")
 
-	runCLI(t, "get", remotePath, localPath)
+	runCLIWithConfig(t, cfgPath, env, "get", remotePath, localPath)
 
 	data, err := os.ReadFile(localPath)
 	require.NoError(t, err)
@@ -214,6 +189,7 @@ func TestE2E_Sync_DownloadOnly(t *testing.T) {
 
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
+	opsCfgPath := writeMinimalConfig(t)
 
 	// Create a unique folder + file remotely via put.
 	testFolder := fmt.Sprintf("e2e-sync-dl-%d", time.Now().UnixNano())
@@ -221,7 +197,7 @@ func TestE2E_Sync_DownloadOnly(t *testing.T) {
 	content := []byte("sync download test\n")
 
 	// Create remote folder + file.
-	runCLI(t, "mkdir", "/"+testFolder)
+	runCLIWithConfig(t, opsCfgPath, nil, "mkdir", "/"+testFolder)
 
 	tmpFile, err := os.CreateTemp("", "e2e-sync-dl-*")
 	require.NoError(t, err)
@@ -231,7 +207,7 @@ func TestE2E_Sync_DownloadOnly(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, tmpFile.Close())
 
-	runCLI(t, "put", tmpFile.Name(), remotePath)
+	runCLIWithConfig(t, opsCfgPath, nil, "put", tmpFile.Name(), remotePath)
 
 	// Cleanup remote after test.
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
@@ -268,7 +244,8 @@ func TestE2E_Sync_DryRun(t *testing.T) {
 	assert.Contains(t, stderr, "Dry run")
 
 	// Verify file was NOT uploaded.
-	output := runCLIExpectError(t, "ls", "/"+testFolder)
+	opsCfgPath := writeMinimalConfig(t)
+	output := runCLIWithConfigExpectError(t, opsCfgPath, nil, "ls", "/"+testFolder)
 	assert.Contains(t, output, testFolder)
 }
 

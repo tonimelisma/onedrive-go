@@ -44,7 +44,7 @@ Defensive coding and edge cases for `internal/driveid/` and `internal/graph/`.
 
 ## Hardening: CLI Architecture
 
-Code quality and architecture improvements for the root package. Root package at **39.9% coverage** (up from 35.5% after 6.0a).
+Code quality and architecture improvements for the root package. Root package at **46.7% coverage** (up from 39.9% after 6.0g root coverage tests).
 
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
@@ -88,7 +88,7 @@ Edge cases and correctness for `internal/graph/`.
 
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
-| ~~B-299~~ | ~~E2E tests for daemon mode (Orchestrator.RunWatch)~~ | ~~P3~~ | **DONE** (6.0f) — `e2e/sync_watch_e2e_test.go`: `TestE2E_SyncWatch_BasicRoundTrip` + `TestE2E_SyncWatch_PauseResume`. Build tag `e2e,e2e_full`. |
+| ~~B-299~~ | ~~E2E tests for daemon mode (Orchestrator.RunWatch)~~ | ~~P3~~ | **DONE** (6.0f+6.0g) — `e2e/sync_watch_e2e_test.go`: `TestE2E_SyncWatch_BasicRoundTrip`, `TestE2E_SyncWatch_PauseResume`, `TestE2E_SyncWatch_SIGHUPReload`. Build tag `e2e,e2e_full`. |
 
 ## Hardening: Watch Mode
 

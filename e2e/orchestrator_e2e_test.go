@@ -108,9 +108,10 @@ func TestE2E_Orchestrator_DriveIsolation(t *testing.T) {
 
 	testFolder := fmt.Sprintf("e2e-orch-iso-%d", time.Now().UnixNano())
 
-	// Upload a file to drive1 only (using runCLI which uses the primary drive).
-	runCLI(t, "mkdir", "/"+testFolder)
-	putRemoteFile(t, "/"+testFolder+"/isolated.txt", "drive1 only\n")
+	// Upload a file to drive1 only.
+	opsCfgPath := writeMinimalConfig(t)
+	runCLIWithConfig(t, opsCfgPath, nil, "mkdir", "/"+testFolder)
+	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/isolated.txt", "drive1 only\n")
 
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 

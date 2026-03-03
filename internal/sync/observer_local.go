@@ -1,3 +1,14 @@
+// observer_local.go — LocalObserver struct definition and watch coordination.
+//
+// Contents:
+//   - LocalObserver struct + NewLocalObserver constructor
+//   - FsWatcher interface + fsnotifyWrapper adapter
+//   - Watch() entry point + addWatchesRecursive
+//   - Event channel management (trySend, DroppedEvents, LastActivity)
+//
+// Related files:
+//   - observer_local_handlers.go: watch event loop + fsnotify event handlers
+//   - scanner.go:                 FullScan, walk/hash/filter logic
 package sync
 
 import (

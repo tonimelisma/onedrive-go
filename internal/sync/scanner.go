@@ -1,3 +1,18 @@
+// scanner.go — Local filesystem scanning for LocalObserver.
+//
+// Contents:
+//   - FullScan:            orchestrates walk + hash phases → []ChangeEvent
+//   - hashPhase:           parallel hash computation for discovered files
+//   - makeWalkFunc:        builds the filepath.WalkDir callback
+//   - classifyLocalChange: compares local state against baseline
+//   - detectDeletions:     finds baseline entries missing from walk
+//   - computeStableHash:   double-stat hash for actively-written files
+//   - isAlwaysExcluded:    OneDrive-incompatible name filtering
+//   - isValidOneDriveName: name validation (reserved names, chars, length)
+//
+// Related files:
+//   - observer_local.go:           LocalObserver struct and Watch() entry point
+//   - observer_local_handlers.go:  watch-mode event handlers
 package sync
 
 import (

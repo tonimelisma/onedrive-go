@@ -28,6 +28,7 @@ func TestE2E_SyncWatch_BasicRoundTrip(t *testing.T) {
 
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
+	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-syncwatch-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
@@ -71,7 +72,7 @@ func TestE2E_SyncWatch_BasicRoundTrip(t *testing.T) {
 
 	// Poll until the file appears remotely.
 	remotePath := "/" + testFolder + "/watch-test.txt"
-	pollCLIContains(t, "watch-test.txt", 3*time.Minute, "stat", remotePath)
+	pollCLIWithConfigContains(t, opsCfgPath, nil, "watch-test.txt", 3*time.Minute, "stat", remotePath)
 
 	// Send SIGTERM for graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
@@ -88,7 +89,7 @@ func TestE2E_SyncWatch_BasicRoundTrip(t *testing.T) {
 	}
 
 	// Verify the file content remotely.
-	remoteContent := getRemoteFile(t, remotePath)
+	remoteContent := getRemoteFile(t, opsCfgPath, nil, remotePath)
 	assert.Equal(t, "created during watch mode\n", remoteContent)
 }
 
@@ -99,6 +100,7 @@ func TestE2E_SyncWatch_PauseResume(t *testing.T) {
 
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
+	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-syncwatch-pr-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
@@ -161,15 +163,174 @@ func TestE2E_SyncWatch_PauseResume(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "resume")
 
 	// Poll until the file appears remotely after resume.
-	pollCLIContains(t, "paused-file.txt", 3*time.Minute, "stat", remotePath)
+	pollCLIWithConfigContains(t, opsCfgPath, nil, "paused-file.txt", 3*time.Minute, "stat", remotePath)
 
 	// Send SIGTERM for graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
 	_ = cmd.Wait()
 
 	// Verify file content.
-	remoteContent := getRemoteFile(t, remotePath)
+	remoteContent := getRemoteFile(t, opsCfgPath, nil, remotePath)
 	assert.Equal(t, "created while paused\n", remoteContent)
+}
+
+// TestE2E_SyncWatch_SIGHUPReload starts a daemon with only drive1, then
+// rewrites the config to add drive2, sends SIGHUP, and verifies that
+// drive2 starts syncing after the reload.
+func TestE2E_SyncWatch_SIGHUPReload(t *testing.T) {
+	requireDrive2(t)
+	registerLogDump(t)
+
+	syncDir1 := t.TempDir()
+	syncDir2 := t.TempDir()
+
+	// Set up per-test isolation with BOTH token files pre-copied.
+	// The daemon needs drive2's token to be present after the reload.
+	perTestData := t.TempDir()
+	perTestHome := t.TempDir()
+
+	perTestDataDir := filepath.Join(perTestData, "onedrive-go")
+	require.NoError(t, os.MkdirAll(perTestDataDir, 0o755))
+
+	copyTokenFile(t, testDataDir, perTestDataDir)
+	copyTokenFileForDrive(t, testDataDir, perTestDataDir, drive2)
+
+	// Write initial config with only drive1.
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	initialCfg := fmt.Sprintf("[%q]\nsync_dir = %q\n", drive, syncDir1)
+	require.NoError(t, os.WriteFile(cfgPath, []byte(initialCfg), 0o644))
+
+	env := map[string]string{
+		"XDG_DATA_HOME": perTestData,
+		"HOME":          perTestHome,
+	}
+
+	opsCfgPath := writeMinimalConfig(t)
+
+	testFolder1 := fmt.Sprintf("e2e-sighup-d1-%d", time.Now().UnixNano())
+	testFolder2 := fmt.Sprintf("e2e-sighup-d2-%d", time.Now().UnixNano())
+
+	t.Cleanup(func() {
+		cleanupRemoteFolder(t, testFolder1)
+		cleanupRemoteFolderForDrive(t, drive2, testFolder2)
+	})
+
+	// Start daemon without --drive (all-drives mode). Initially only drive1.
+	daemonArgs := []string{
+		"--config", cfgPath,
+		"--debug",
+		"sync", "--watch", "--upload-only", "--force",
+	}
+	cmd := makeCmd(daemonArgs, env)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	require.NoError(t, cmd.Start(), "failed to start daemon")
+
+	t.Cleanup(func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Signal(syscall.SIGTERM)
+			_ = cmd.Wait()
+		}
+
+		logCLIExecution(t, daemonArgs, stdout.String(), stderr.String())
+	})
+
+	// Wait for daemon to initialize (drive1 watch setup).
+	waitForDaemonReady(t, &stderr, 30*time.Second)
+
+	// Create a file in drive1's sync dir to verify it works.
+	localDir1 := filepath.Join(syncDir1, testFolder1)
+	require.NoError(t, os.MkdirAll(localDir1, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(localDir1, "before-reload.txt"),
+		[]byte("before reload\n"),
+		0o644,
+	))
+
+	// Poll until drive1's file appears remotely.
+	remotePath1 := "/" + testFolder1 + "/before-reload.txt"
+	pollCLIWithConfigContains(t, opsCfgPath, nil, "before-reload.txt", 3*time.Minute, "stat", remotePath1)
+
+	// Rewrite config to add drive2.
+	updatedCfg := fmt.Sprintf("[%q]\nsync_dir = %q\n\n[%q]\nsync_dir = %q\n",
+		drive, syncDir1, drive2, syncDir2)
+	require.NoError(t, os.WriteFile(cfgPath, []byte(updatedCfg), 0o644))
+
+	// Send SIGHUP to trigger config reload.
+	require.NoError(t, cmd.Process.Signal(syscall.SIGHUP))
+
+	// Wait for config reload to complete.
+	waitForStderrContains(t, &stderr, "config reload complete", 30*time.Second)
+
+	// Create a file in drive2's sync dir.
+	localDir2 := filepath.Join(syncDir2, testFolder2)
+	require.NoError(t, os.MkdirAll(localDir2, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(localDir2, "after-reload.txt"),
+		[]byte("after reload\n"),
+		0o644,
+	))
+
+	// Poll until drive2's file appears remotely.
+	remotePath2 := "/" + testFolder2 + "/after-reload.txt"
+	pollForDrive2File(t, cfgPath, env, drive2, "after-reload.txt", 3*time.Minute, "stat", remotePath2)
+
+	// Send SIGTERM for graceful shutdown.
+	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
+	_ = cmd.Wait()
+
+	// Verify file contents.
+	remoteContent1 := getRemoteFile(t, opsCfgPath, nil, remotePath1)
+	assert.Equal(t, "before reload\n", remoteContent1)
+}
+
+// pollForDrive2File retries a CLI command with a specific drive until stdout
+// contains the expected string or timeout is reached.
+func pollForDrive2File(
+	t *testing.T, cfgPath string, env map[string]string, driveID, expected string,
+	timeout time.Duration, args ...string,
+) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+
+	for attempt := 0; ; attempt++ {
+		stdout, _, err := runCLICore(t, cfgPath, env, driveID, args...)
+		if err == nil && strings.Contains(stdout, expected) {
+			return
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("pollForDrive2File: timed out after %v waiting for %q in drive %s output of %v\nlast stdout: %s",
+				timeout, expected, driveID, args, stdout)
+		}
+
+		time.Sleep(pollBackoff(attempt))
+	}
+}
+
+// waitForStderrContains polls stderr until it contains the target string.
+func waitForStderrContains(t *testing.T, stderr *bytes.Buffer, target string, timeout time.Duration) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+
+	for {
+		if strings.Contains(stderr.String(), target) {
+			t.Logf("found %q in stderr", target)
+			return
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out after %v waiting for %q in stderr\nstderr so far: %s",
+				timeout, target, stderr.String())
+		}
+
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 // waitForDaemonReady polls the daemon's stderr output until it contains
