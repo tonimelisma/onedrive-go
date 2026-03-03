@@ -84,6 +84,14 @@ Every production sync engine separates "knowing about a change" from "having app
 
 Our engine is the only one that ties cursor advancement to sync success, which creates the two-token problem and the cascading bugs around it.
 
+### Work queue vs. remote mirror
+
+Dropbox's SFJ is a **full remote mirror** — it stores the state of every remote file, whether synced or not. Our `remote_state` is a **pending work queue** — rows exist only for items that haven't been synced yet. Once synced, the row is deleted. The baseline is the durable record of synced state.
+
+*Why not a full remote mirror?* Dropbox's SFJ is the authoritative list of "what files exist on the server." Our system doesn't need this — the delta API can re-tell us everything if we reset the token. A full mirror would duplicate the baseline for every synced file (100K+ rows), adding write amplification on every sync for no correctness benefit. The work queue pattern is sufficient: we only need to persist items that are "known but not yet applied."
+
+*Trade-off:* A full mirror would let us answer "what does the remote look like right now?" from local state alone. The work queue can't — we'd need to query the API. This matters for hypothetical features like offline browsing or immediate conflict detection. We don't need these today. If we do later, the migration is additive: keep `remote_state` rows after sync instead of deleting them.
+
 ## The Solution
 
 ### Overview
@@ -168,6 +176,8 @@ CREATE TABLE IF NOT EXISTS remote_state (
 *Alternative considered: preserve failure_count across fresh observations.* If the same path keeps failing with the same error (e.g., 403), resetting to 0 on each fresh delta event means the item goes through the fast-retry phase (1-2 attempts at ~5s) before backing off again. This wastes 2 retries every 5 minutes (the delta poll interval). We accept this: the cost is negligible (2 seconds of work every 5 minutes) and the benefit is real — if the file *has* changed (new version, permissions fixed), we don't want to wait through a long backoff.
 
 **`last_error` and `http_status` for user visibility.** These are metadata for the `failures` CLI command. When the user runs `onedrive-go failures`, showing "HTTP 423: locked" is far more useful than "5 failures." These columns do not affect retry logic.
+
+**No `ctag` or `name` columns.** The `ChangeEvent` struct carries both fields, but neither is used by the planner's decision logic or the executor. CTag is a folder-level content tag — stored in `RemoteState` in memory but never read downstream. Name is derived from `filepath.Base(path)` wherever needed (buffer synthetic deletes, executor outcome construction). Storing unused columns would add write cost to every `CommitObservation` for no benefit. If a future feature needs them, adding columns to an existing table is a trivial migration.
 
 **No additional indexes needed** beyond the primary key. The reconciler's bootstrap query joins `remote_state` (typically 0-100 rows in steady state) against `baseline` (potentially 100K rows) via both PKs. SQLite's optimizer starts from the smaller table. The `next_retry_at` column is queried by the reconciler at startup, but with <100 rows, a full scan is faster than an index lookup.
 
@@ -311,8 +321,8 @@ type StateAdmin interface {
     ResolveConflict(ctx context.Context, id, resolution string) error
     PruneResolvedConflicts(ctx context.Context, retention time.Duration) (int, error)
     WriteSyncMetadata(ctx context.Context, report *SyncReport) error
-    ClearFailure(ctx context.Context, path string) error
-    ClearAllFailures(ctx context.Context) error
+    ResetFailure(ctx context.Context, path string) error     // reset failure_count to 0, not delete
+    ResetAllFailures(ctx context.Context) error              // reset all, not delete
 }
 ```
 
@@ -352,6 +362,8 @@ This writes `remote_state` rows and the delta token in a single transaction. The
 **Why not have the engine mediate?** In watch mode, the observer runs in a goroutine sending events via channel. The engine would need to intercept events, batch them, and write to DB before forwarding — this changes the event pipeline and requires a side channel for batch boundaries. Unnecessary complexity.
 
 **Why not batch across multiple delta polls?** Each poll returns a discrete set of events and a new token. Writing them in one transaction per poll is the natural boundary — it matches the atomicity guarantee we need (never advance the token without recording what we learned). Batching across polls would require tracking which events go with which token, adding complexity for no correctness benefit. The per-poll transaction is typically <10ms for a normal delta response (10-100 items). For initial sync (50K items), it's ~200-500ms — acceptable.
+
+**FullDelta is all-or-nothing.** `FullDelta()` accumulates all pages in memory before returning. If the connection drops mid-pagination, no partial result is returned — the entire fetch fails, no events are emitted, and the delta token is not advanced. The next poll retries from the same token. This means `CommitObservation` always receives a complete batch: every item from the delta response, plus the new token. There is no risk of committing a partial observation. The new token only appears on the final page (`@odata.deltaLink`), so it's impossible to obtain a token without having fetched all preceding items.
 
 ### The reconciler
 
@@ -665,11 +677,15 @@ Documents/locked.xlsx     HTTP 423: locked   423     5      in 20 min
 Photos/restricted.jpg     HTTP 403: forbidden 403    8      in 1 hour
 
 $ onedrive-go failures --clear Documents/locked.xlsx
-Cleared failure record for Documents/locked.xlsx
+Reset failure state for Documents/locked.xlsx (will retry immediately)
 
 $ onedrive-go failures --clear --all
-Cleared 2 failure records
+Reset failure state for 2 items (will retry immediately)
 ```
+
+`--clear` resets `failure_count` to 0 and `next_retry_at` to now — it does NOT delete the `remote_state` row. Deleting the row would lose the knowledge that the remote has a file we haven't synced. Resetting the failure state gives the item a fresh start through the fast-retry path (1-2 attempts at ~5s) without losing the observation.
+
+*Alternative considered: delete the row entirely.* This would mean the sync engine forgets the remote change exists. The item would only be recovered on the next delta poll (if the file hasn't changed, it won't appear), or on delta token expiration (90 days). This is the same data loss the entire design exists to prevent. Resetting is safe; deleting is not.
 
 The underlying query:
 
@@ -699,13 +715,39 @@ Every error that survives the two existing retry layers (graph client: 5 retries
 | 403 Forbidden (download) | `remote_state` row persists | User must fix permissions. Visible in `failures` CLI |
 | Persistent 5xx (download) | `remote_state` row persists | Self-heals when outage ends. Reconciler retries |
 | FS permission (download) | `remote_state` row persists | User must fix local permissions. Visible in `failures` CLI |
-| Non-empty directory delete | `remote_state` shows deletion | Needs separate handling (may become conflict) |
+| Non-empty directory delete | `remote_state` `is_deleted=1` row | Escalated to conflict after threshold. See [Non-empty directory deletes](#non-empty-directory-deletes) |
+| 401 Unauthorized | `remote_state` row persists | Auth must be refreshed externally. See [Global auth failure](#global-auth-failure) |
+| 507 Insufficient Storage | `remote_state` row persists | Disk must be freed externally. Reconciler retries at 1hr cap |
 | 400 Bad Request (upload) | Local file differs from baseline | User must rename file. **Not visible in `failures` CLI** (upload-side gap) |
 | 423 Locked (upload) | Local file differs from baseline | Self-heals when lock released. Natural planner retry |
 | 403 Forbidden (upload) | Local file differs from baseline | User must fix permissions. **Not visible in `failures` CLI** (upload-side gap) |
 | FS read errors (upload) | Local file differs from baseline | User must fix permissions. **Not visible in `failures` CLI** |
 
 The upload-side gaps (marked above) are pre-existing limitations. See [What this design does NOT solve](#what-this-design-does-not-solve).
+
+### Non-empty directory deletes
+
+When delta reports a folder deletion, the executor checks `os.ReadDir()` and fails immediately if the directory is non-empty — classified as `errClassSkip` (non-retryable by the executor). The planner's dependency DAG ensures children are deleted before parents, but dependencies gate on *completion*, not *success*. If a child delete fails (permission denied, TOCTOU race), the parent delete still fires and fails with "directory not empty."
+
+In the new design, the `is_deleted=1` row persists in `remote_state`. The reconciler retries with exponential backoff, capping at 1 hour. But the directory will never become empty through retries alone — it needs the child items to be deleted first.
+
+**Escape hatch: conflict escalation.** After `failure_count` reaches a threshold (e.g., 10 — roughly 5 hours of retries), the reconciler escalates the non-empty directory to a conflict. The conflict record explains the situation: "Remote deleted folder X, but local directory is not empty." The user can resolve by deleting the local contents manually or by choosing to keep the local version.
+
+*Why not just retry forever?* Unlike a 423 lock (which self-heals) or a 5xx (which self-heals), a non-empty directory delete can only succeed if something else changes — the local contents must be removed. Retrying forever wastes work without progress. Conflict escalation makes the situation visible and actionable.
+
+*Why not escalate immediately?* The directory might become empty during normal sync processing — child deletes for the same delta batch may succeed on subsequent retries. The threshold gives the system time to process the full batch before escalating.
+
+### Global auth failure
+
+The current engine treats 401 (Unauthorized) as a fatal error class — it aborts the current action immediately, but does NOT shut down the engine. Other actions in the same batch continue executing. The existing behavior just records the failure and doesn't advance the delta token if any failures occurred.
+
+In the new design, 401 failures are recorded in `remote_state` like any other failure. The reconciler retries them with exponential backoff. If the token is expired globally (not item-specific), every action in the batch fails with 401. This is wasteful but bounded: the reconciler backs off each item independently, converging to 1-hour retry intervals. At steady state, N stuck items generate N seconds of wasted work per hour.
+
+**Detection.** The engine does not need special 401 handling. When `drainWorkerResults` sees a cluster of 401 failures (e.g., >50% of a batch), it logs a prominent warning: `slog.Error("auth failure: most actions in batch failed with 401, refresh token may be expired")`. The user (or daemon monitor) sees this and runs `onedrive-go login` to re-authenticate.
+
+*Why not shut down the engine on 401?* A single 401 on one item doesn't mean global auth failure — it could be a permission issue on a specific SharePoint resource. Shutting down on any 401 would be overly aggressive. The cluster detection (>50% of batch) provides a signal without a hard stop. The reconciler handles recovery either way.
+
+*Why not automatically refresh the token?* Token refresh requires the OAuth refresh token, which lives in the token file. The graph client already handles automatic token refresh via `oauth2.TokenSource`. If the refresh token itself is expired (90-day idle), interactive re-authentication is required — the sync engine cannot do this automatically.
 
 ## Correctness
 
