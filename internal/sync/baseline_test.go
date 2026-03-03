@@ -13,6 +13,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pressly/goose/v3"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
@@ -64,9 +66,7 @@ func (w *testLogWriter) Write(p []byte) (int, error) {
 func commitAll(t *testing.T, mgr *BaselineManager, ctx context.Context, outcomes []Outcome) {
 	t.Helper()
 	for i := range outcomes {
-		if err := mgr.CommitOutcome(ctx, &outcomes[i]); err != nil {
-			t.Fatalf("CommitOutcome[%d]: %v", i, err)
-		}
+		require.NoError(t, mgr.CommitOutcome(ctx, &outcomes[i]), "CommitOutcome[%d]", i)
 	}
 }
 
@@ -79,14 +79,10 @@ func newTestManager(t *testing.T) *BaselineManager {
 	logger := testLogger(t)
 
 	mgr, err := NewBaselineManager(dbPath, logger)
-	if err != nil {
-		t.Fatalf("NewBaselineManager(%q): %v", dbPath, err)
-	}
+	require.NoError(t, err, "NewBaselineManager(%q)", dbPath)
 
 	t.Cleanup(func() {
-		if err := mgr.Close(); err != nil {
-			t.Errorf("Close(): %v", err)
-		}
+		assert.NoError(t, mgr.Close(), "Close()")
 	})
 
 	return mgr
@@ -99,21 +95,15 @@ func TestNewBaselineManager_CreatesDB(t *testing.T) {
 	logger := testLogger(t)
 
 	mgr, err := NewBaselineManager(dbPath, logger)
-	if err != nil {
-		t.Fatalf("NewBaselineManager: %v", err)
-	}
+	require.NoError(t, err)
 	defer mgr.Close()
 
 	// Verify DB file exists by opening a direct connection.
 	db, err := sql.Open("sqlite", "file:"+dbPath)
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
-	}
+	require.NoError(t, err)
 	defer db.Close()
 
-	if err := db.PingContext(context.Background()); err != nil {
-		t.Fatalf("Ping: %v", err)
-	}
+	require.NoError(t, db.PingContext(context.Background()))
 }
 
 func TestNewBaselineManager_WALMode(t *testing.T) {
@@ -125,13 +115,8 @@ func TestNewBaselineManager_WALMode(t *testing.T) {
 
 	ctx := context.Background()
 	err := mgr.db.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journalMode)
-	if err != nil {
-		t.Fatalf("PRAGMA journal_mode: %v", err)
-	}
-
-	if journalMode != "wal" {
-		t.Errorf("journal_mode = %q, want %q", journalMode, "wal")
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "wal", journalMode)
 }
 
 func TestNewBaselineManager_RunsMigrations(t *testing.T) {
@@ -147,13 +132,8 @@ func TestNewBaselineManager_RunsMigrations(t *testing.T) {
 	err := mgr.db.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM goose_db_version WHERE version_id > 0",
 	).Scan(&count)
-	if err != nil {
-		t.Fatalf("querying goose_db_version: %v", err)
-	}
-
-	if count == 0 {
-		t.Error("no migrations applied (goose_db_version has no entries)")
-	}
+	require.NoError(t, err)
+	assert.NotZero(t, count, "no migrations applied (goose_db_version has no entries)")
 }
 
 func TestLoad_EmptyBaseline(t *testing.T) {
@@ -163,17 +143,9 @@ func TestLoad_EmptyBaseline(t *testing.T) {
 	ctx := context.Background()
 
 	b, err := mgr.Load(ctx)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	if len(b.ByPath) != 0 {
-		t.Errorf("ByPath has %d entries, want 0", len(b.ByPath))
-	}
-
-	if len(b.ByID) != 0 {
-		t.Errorf("ByID has %d entries, want 0", len(b.ByID))
-	}
+	require.NoError(t, err)
+	assert.Empty(t, b.ByPath)
+	assert.Empty(t, b.ByID)
 }
 
 func TestCommit_Download(t *testing.T) {
@@ -203,25 +175,11 @@ func TestCommit_Download(t *testing.T) {
 	commitAll(t, mgr, ctx, outcomes)
 
 	entry := mgr.baseline.ByPath["docs/readme.md"]
-	if entry == nil {
-		t.Fatal("baseline entry not found for docs/readme.md")
-	}
-
-	if !entry.DriveID.Equal(driveid.New("drive1")) {
-		t.Errorf("DriveID = %q, want %q", entry.DriveID, driveid.New("drive1"))
-	}
-
-	if entry.ItemID != "item1" {
-		t.Errorf("ItemID = %q, want %q", entry.ItemID, "item1")
-	}
-
-	if entry.LocalHash != "abc123" {
-		t.Errorf("LocalHash = %q, want %q", entry.LocalHash, "abc123")
-	}
-
-	if entry.SyncedAt != fixedTime.UnixNano() {
-		t.Errorf("SyncedAt = %d, want %d", entry.SyncedAt, fixedTime.UnixNano())
-	}
+	require.NotNil(t, entry, "baseline entry not found for docs/readme.md")
+	assert.True(t, entry.DriveID.Equal(driveid.New("drive1")), "DriveID mismatch")
+	assert.Equal(t, "item1", entry.ItemID)
+	assert.Equal(t, "abc123", entry.LocalHash)
+	assert.Equal(t, fixedTime.UnixNano(), entry.SyncedAt)
 }
 
 func TestCommit_Upload(t *testing.T) {
@@ -251,17 +209,9 @@ func TestCommit_Upload(t *testing.T) {
 	commitAll(t, mgr, ctx, outcomes)
 
 	entry := mgr.baseline.ByPath["photos/cat.jpg"]
-	if entry == nil {
-		t.Fatal("baseline entry not found")
-	}
-
-	if entry.LocalHash != "hash-local" {
-		t.Errorf("LocalHash = %q, want %q", entry.LocalHash, "hash-local")
-	}
-
-	if entry.RemoteHash != "hash-remote" {
-		t.Errorf("RemoteHash = %q, want %q", entry.RemoteHash, "hash-remote")
-	}
+	require.NotNil(t, entry, "baseline entry not found")
+	assert.Equal(t, "hash-local", entry.LocalHash)
+	assert.Equal(t, "hash-remote", entry.RemoteHash)
 }
 
 func TestCommit_FolderCreate(t *testing.T) {
@@ -287,22 +237,11 @@ func TestCommit_FolderCreate(t *testing.T) {
 	commitAll(t, mgr, ctx, outcomes)
 
 	entry := mgr.baseline.ByPath["Documents/Reports"]
-	if entry == nil {
-		t.Fatal("folder entry not found")
-	}
-
-	if entry.ItemType != ItemTypeFolder {
-		t.Errorf("ItemType = %v, want Folder", entry.ItemType)
-	}
-
+	require.NotNil(t, entry, "folder entry not found")
+	assert.Equal(t, ItemTypeFolder, entry.ItemType)
 	// Folders have no hash or size.
-	if entry.LocalHash != "" {
-		t.Errorf("LocalHash = %q, want empty", entry.LocalHash)
-	}
-
-	if entry.Size != 0 {
-		t.Errorf("Size = %d, want 0", entry.Size)
-	}
+	assert.Empty(t, entry.LocalHash)
+	assert.Zero(t, entry.Size)
 }
 
 func TestCommit_UpdateSynced(t *testing.T) {
@@ -341,13 +280,8 @@ func TestCommit_UpdateSynced(t *testing.T) {
 	commitAll(t, mgr, ctx, outcomes)
 
 	entry := mgr.baseline.ByPath["file.txt"]
-	if entry.SyncedAt != t2.UnixNano() {
-		t.Errorf("SyncedAt = %d, want %d", entry.SyncedAt, t2.UnixNano())
-	}
-
-	if entry.LocalHash != "h2" {
-		t.Errorf("LocalHash = %q, want %q", entry.LocalHash, "h2")
-	}
+	assert.Equal(t, t2.UnixNano(), entry.SyncedAt)
+	assert.Equal(t, "h2", entry.LocalHash)
 }
 
 func TestCommit_LocalDelete(t *testing.T) {
@@ -376,9 +310,7 @@ func TestCommit_LocalDelete(t *testing.T) {
 
 	commitAll(t, mgr, ctx, del)
 
-	if mgr.baseline.ByPath["delete-me.txt"] != nil {
-		t.Error("entry still exists after local delete")
-	}
+	assert.Nil(t, mgr.baseline.ByPath["delete-me.txt"], "entry still exists after local delete")
 }
 
 func TestCommit_RemoteDelete(t *testing.T) {
@@ -406,9 +338,7 @@ func TestCommit_RemoteDelete(t *testing.T) {
 
 	commitAll(t, mgr, ctx, del)
 
-	if mgr.baseline.ByPath["remote-del.txt"] != nil {
-		t.Error("entry still exists after remote delete")
-	}
+	assert.Nil(t, mgr.baseline.ByPath["remote-del.txt"], "entry still exists after remote delete")
 }
 
 func TestCommit_Cleanup(t *testing.T) {
@@ -436,9 +366,7 @@ func TestCommit_Cleanup(t *testing.T) {
 
 	commitAll(t, mgr, ctx, cleanup)
 
-	if mgr.baseline.ByPath["cleanup.txt"] != nil {
-		t.Error("entry still exists after cleanup")
-	}
+	assert.Nil(t, mgr.baseline.ByPath["cleanup.txt"], "entry still exists after cleanup")
 }
 
 func TestCommit_Move(t *testing.T) {
@@ -471,18 +399,11 @@ func TestCommit_Move(t *testing.T) {
 
 	commitAll(t, mgr, ctx, move)
 
-	if mgr.baseline.ByPath["old/path.txt"] != nil {
-		t.Error("old path still exists after move")
-	}
+	assert.Nil(t, mgr.baseline.ByPath["old/path.txt"], "old path still exists after move")
 
 	entry := mgr.baseline.ByPath["new/path.txt"]
-	if entry == nil {
-		t.Fatal("new path not found after move")
-	}
-
-	if entry.ItemID != "i" {
-		t.Errorf("ItemID = %q, want %q", entry.ItemID, "i")
-	}
+	require.NotNil(t, entry, "new path not found after move")
+	assert.Equal(t, "i", entry.ItemID)
 }
 
 func TestCommit_Conflict(t *testing.T) {
@@ -514,25 +435,13 @@ func TestCommit_Conflict(t *testing.T) {
 	err := mgr.db.QueryRowContext(ctx,
 		"SELECT id, path, conflict_type, resolution FROM conflicts LIMIT 1",
 	).Scan(&id, &conflictPath, &conflictType, &resolution)
-	if err != nil {
-		t.Fatalf("querying conflicts: %v", err)
-	}
+	require.NoError(t, err)
 
-	if _, uuidErr := uuid.Parse(id); uuidErr != nil {
-		t.Errorf("conflict id = %q, not a valid UUID: %v", id, uuidErr)
-	}
-
-	if conflictPath != "conflict.txt" {
-		t.Errorf("path = %q, want %q", conflictPath, "conflict.txt")
-	}
-
-	if conflictType != "edit_edit" {
-		t.Errorf("conflict_type = %q, want %q", conflictType, "edit_edit")
-	}
-
-	if resolution != "unresolved" {
-		t.Errorf("resolution = %q, want %q", resolution, "unresolved")
-	}
+	_, uuidErr := uuid.Parse(id)
+	assert.NoError(t, uuidErr, "conflict id = %q is not a valid UUID", id)
+	assert.Equal(t, "conflict.txt", conflictPath)
+	assert.Equal(t, "edit_edit", conflictType)
+	assert.Equal(t, "unresolved", resolution)
 }
 
 func TestCommit_Conflict_StoresRemoteMtime(t *testing.T) {
@@ -567,13 +476,9 @@ func TestCommit_Conflict_StoresRemoteMtime(t *testing.T) {
 	err := mgr.db.QueryRowContext(ctx,
 		"SELECT remote_mtime FROM conflicts WHERE path = ?", "mtime-test.txt",
 	).Scan(&storedRemoteMtime)
-	if err != nil {
-		t.Fatalf("querying conflict remote_mtime: %v", err)
-	}
-
-	if !storedRemoteMtime.Valid || storedRemoteMtime.Int64 != remoteMtime {
-		t.Errorf("remote_mtime = %v, want %d", storedRemoteMtime, remoteMtime)
-	}
+	require.NoError(t, err)
+	assert.True(t, storedRemoteMtime.Valid, "remote_mtime should be valid")
+	assert.Equal(t, remoteMtime, storedRemoteMtime.Int64)
 }
 
 func TestCommit_SkipsFailedOutcomes(t *testing.T) {
@@ -597,13 +502,8 @@ func TestCommit_SkipsFailedOutcomes(t *testing.T) {
 	commitAll(t, mgr, ctx, outcomes)
 
 	b, err := mgr.Load(ctx)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	if len(b.ByPath) != 0 {
-		t.Errorf("expected empty baseline, got %d entries", len(b.ByPath))
-	}
+	require.NoError(t, err)
+	assert.Empty(t, b.ByPath)
 }
 
 func TestCommit_DeltaToken(t *testing.T) {
@@ -625,18 +525,11 @@ func TestCommit_DeltaToken(t *testing.T) {
 
 	commitAll(t, mgr, ctx, outcomes)
 
-	if err := mgr.CommitDeltaToken(ctx, "token-abc", "d", "", "d"); err != nil {
-		t.Fatalf("CommitDeltaToken: %v", err)
-	}
+	require.NoError(t, mgr.CommitDeltaToken(ctx, "token-abc", "d", "", "d"))
 
 	token, err := mgr.GetDeltaToken(ctx, "d", "")
-	if err != nil {
-		t.Fatalf("GetDeltaToken: %v", err)
-	}
-
-	if token != "token-abc" {
-		t.Errorf("token = %q, want %q", token, "token-abc")
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "token-abc", token)
 }
 
 func TestCommit_DeltaTokenUpdate(t *testing.T) {
@@ -657,29 +550,18 @@ func TestCommit_DeltaTokenUpdate(t *testing.T) {
 
 	// First commit with token.
 	commitAll(t, mgr, ctx, outcomes)
-
-	if err := mgr.CommitDeltaToken(ctx, "token-1", "d", "", "d"); err != nil {
-		t.Fatalf("first CommitDeltaToken: %v", err)
-	}
+	require.NoError(t, mgr.CommitDeltaToken(ctx, "token-1", "d", "", "d"))
 
 	// Second commit updates token.
 	outcomes[0].LocalHash = "h2"
 	outcomes[0].RemoteHash = "h2"
 
 	commitAll(t, mgr, ctx, outcomes)
-
-	if err := mgr.CommitDeltaToken(ctx, "token-2", "d", "", "d"); err != nil {
-		t.Fatalf("second CommitDeltaToken: %v", err)
-	}
+	require.NoError(t, mgr.CommitDeltaToken(ctx, "token-2", "d", "", "d"))
 
 	token, err := mgr.GetDeltaToken(ctx, "d", "")
-	if err != nil {
-		t.Fatalf("GetDeltaToken: %v", err)
-	}
-
-	if token != "token-2" {
-		t.Errorf("token = %q, want %q", token, "token-2")
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "token-2", token)
 }
 
 func TestCommit_SyncedAtFromNowFunc(t *testing.T) {
@@ -701,9 +583,7 @@ func TestCommit_SyncedAtFromNowFunc(t *testing.T) {
 	commitAll(t, mgr, ctx, outcomes)
 
 	entry := mgr.baseline.ByPath["f.txt"]
-	if entry.SyncedAt != fixedTime.UnixNano() {
-		t.Errorf("SyncedAt = %d, want %d (from nowFunc)", entry.SyncedAt, fixedTime.UnixNano())
-	}
+	assert.Equal(t, fixedTime.UnixNano(), entry.SyncedAt)
 }
 
 func TestCommit_RefreshesCache(t *testing.T) {
@@ -717,9 +597,7 @@ func TestCommit_RefreshesCache(t *testing.T) {
 	}
 
 	// Verify baseline is nil before first commit.
-	if mgr.baseline != nil {
-		t.Error("baseline should be nil before first Load/Commit")
-	}
+	assert.Nil(t, mgr.baseline, "baseline should be nil before first Load/Commit")
 
 	outcomes := []Outcome{{
 		Action: ActionDownload, Success: true,
@@ -729,13 +607,8 @@ func TestCommit_RefreshesCache(t *testing.T) {
 
 	commitAll(t, mgr, ctx, outcomes)
 
-	if mgr.baseline == nil {
-		t.Fatal("baseline should be populated after Commit")
-	}
-
-	if len(mgr.baseline.ByPath) != 1 {
-		t.Errorf("ByPath has %d entries, want 1", len(mgr.baseline.ByPath))
-	}
+	require.NotNil(t, mgr.baseline, "baseline should be populated after Commit")
+	assert.Len(t, mgr.baseline.ByPath, 1)
 }
 
 func TestGetDeltaToken_Empty(t *testing.T) {
@@ -745,13 +618,8 @@ func TestGetDeltaToken_Empty(t *testing.T) {
 	ctx := context.Background()
 
 	token, err := mgr.GetDeltaToken(ctx, "nonexistent-drive", "")
-	if err != nil {
-		t.Fatalf("GetDeltaToken: %v", err)
-	}
-
-	if token != "" {
-		t.Errorf("token = %q, want empty string", token)
-	}
+	require.NoError(t, err)
+	assert.Empty(t, token)
 }
 
 func TestGetDeltaToken_AfterCommit(t *testing.T) {
@@ -771,19 +639,11 @@ func TestGetDeltaToken_AfterCommit(t *testing.T) {
 	}}
 
 	commitAll(t, mgr, ctx, outcomes)
-
-	if err := mgr.CommitDeltaToken(ctx, "saved-token", "mydrv", "", "mydrv"); err != nil {
-		t.Fatalf("CommitDeltaToken: %v", err)
-	}
+	require.NoError(t, mgr.CommitDeltaToken(ctx, "saved-token", "mydrv", "", "mydrv"))
 
 	token, err := mgr.GetDeltaToken(ctx, "mydrv", "")
-	if err != nil {
-		t.Fatalf("GetDeltaToken: %v", err)
-	}
-
-	if token != "saved-token" {
-		t.Errorf("token = %q, want %q", token, "saved-token")
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "saved-token", token)
 }
 
 func TestLoad_NullableFields(t *testing.T) {
@@ -799,43 +659,19 @@ func TestLoad_NullableFields(t *testing.T) {
 		 VALUES (?, ?, ?, NULL, ?, NULL, NULL, NULL, NULL, ?, NULL)`,
 		"root", "d", "root-id", "root", time.Now().UnixNano(),
 	)
-	if err != nil {
-		t.Fatalf("direct insert: %v", err)
-	}
+	require.NoError(t, err)
 
 	b, err := mgr.Load(ctx)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	require.NoError(t, err)
 
 	entry := b.ByPath["root"]
-	if entry == nil {
-		t.Fatal("root entry not found")
-	}
-
-	if entry.ParentID != "" {
-		t.Errorf("ParentID = %q, want empty", entry.ParentID)
-	}
-
-	if entry.LocalHash != "" {
-		t.Errorf("LocalHash = %q, want empty", entry.LocalHash)
-	}
-
-	if entry.RemoteHash != "" {
-		t.Errorf("RemoteHash = %q, want empty", entry.RemoteHash)
-	}
-
-	if entry.Size != 0 {
-		t.Errorf("Size = %d, want 0", entry.Size)
-	}
-
-	if entry.Mtime != 0 {
-		t.Errorf("Mtime = %d, want 0", entry.Mtime)
-	}
-
-	if entry.ETag != "" {
-		t.Errorf("ETag = %q, want empty", entry.ETag)
-	}
+	require.NotNil(t, entry, "root entry not found")
+	assert.Empty(t, entry.ParentID)
+	assert.Empty(t, entry.LocalHash)
+	assert.Empty(t, entry.RemoteHash)
+	assert.Zero(t, entry.Size)
+	assert.Zero(t, entry.Mtime)
+	assert.Empty(t, entry.ETag)
 }
 
 // ---------------------------------------------------------------------------
@@ -868,9 +704,7 @@ func seedConflict(t *testing.T, mgr *BaselineManager, path, conflictType string)
 	err := mgr.db.QueryRowContext(ctx,
 		"SELECT id FROM conflicts WHERE path = ? ORDER BY detected_at DESC LIMIT 1", path,
 	).Scan(&id)
-	if err != nil {
-		t.Fatalf("retrieving conflict ID for %s: %v", path, err)
-	}
+	require.NoError(t, err, "retrieving conflict ID for %s", path)
 
 	return id
 }
@@ -882,13 +716,8 @@ func TestListConflicts_Empty(t *testing.T) {
 	ctx := context.Background()
 
 	conflicts, err := mgr.ListConflicts(ctx)
-	if err != nil {
-		t.Fatalf("ListConflicts: %v", err)
-	}
-
-	if len(conflicts) != 0 {
-		t.Errorf("expected 0 conflicts, got %d", len(conflicts))
-	}
+	require.NoError(t, err)
+	assert.Empty(t, conflicts)
 }
 
 func TestListConflicts_WithConflicts(t *testing.T) {
@@ -903,21 +732,10 @@ func TestListConflicts_WithConflicts(t *testing.T) {
 	ctx := context.Background()
 
 	conflicts, err := mgr.ListConflicts(ctx)
-	if err != nil {
-		t.Fatalf("ListConflicts: %v", err)
-	}
-
-	if len(conflicts) != 2 {
-		t.Fatalf("expected 2 conflicts, got %d", len(conflicts))
-	}
-
-	if conflicts[0].Path != "a.txt" {
-		t.Errorf("first conflict path = %q, want %q", conflicts[0].Path, "a.txt")
-	}
-
-	if conflicts[1].Path != "b.txt" {
-		t.Errorf("second conflict path = %q, want %q", conflicts[1].Path, "b.txt")
-	}
+	require.NoError(t, err)
+	require.Len(t, conflicts, 2)
+	assert.Equal(t, "a.txt", conflicts[0].Path)
+	assert.Equal(t, "b.txt", conflicts[1].Path)
 }
 
 func TestListConflicts_OnlyUnresolved(t *testing.T) {
@@ -932,22 +750,12 @@ func TestListConflicts_OnlyUnresolved(t *testing.T) {
 	ctx := context.Background()
 
 	// Resolve the first conflict.
-	if err := mgr.ResolveConflict(ctx, id, ResolutionKeepBoth); err != nil {
-		t.Fatalf("ResolveConflict: %v", err)
-	}
+	require.NoError(t, mgr.ResolveConflict(ctx, id, ResolutionKeepBoth))
 
 	conflicts, err := mgr.ListConflicts(ctx)
-	if err != nil {
-		t.Fatalf("ListConflicts: %v", err)
-	}
-
-	if len(conflicts) != 1 {
-		t.Fatalf("expected 1 unresolved conflict, got %d", len(conflicts))
-	}
-
-	if conflicts[0].Path != "pending.txt" {
-		t.Errorf("conflict path = %q, want %q", conflicts[0].Path, "pending.txt")
-	}
+	require.NoError(t, err)
+	require.Len(t, conflicts, 1)
+	assert.Equal(t, "pending.txt", conflicts[0].Path)
 }
 
 func TestGetConflict_ByID(t *testing.T) {
@@ -960,21 +768,10 @@ func TestGetConflict_ByID(t *testing.T) {
 	ctx := context.Background()
 
 	c, err := mgr.GetConflict(ctx, id)
-	if err != nil {
-		t.Fatalf("GetConflict by ID: %v", err)
-	}
-
-	if c.ID != id {
-		t.Errorf("ID = %q, want %q", c.ID, id)
-	}
-
-	if c.Path != "lookup.txt" {
-		t.Errorf("Path = %q, want %q", c.Path, "lookup.txt")
-	}
-
-	if c.ConflictType != "create_create" {
-		t.Errorf("ConflictType = %q, want %q", c.ConflictType, "create_create")
-	}
+	require.NoError(t, err)
+	assert.Equal(t, id, c.ID)
+	assert.Equal(t, "lookup.txt", c.Path)
+	assert.Equal(t, "create_create", c.ConflictType)
 }
 
 func TestGetConflict_ByPath(t *testing.T) {
@@ -987,13 +784,8 @@ func TestGetConflict_ByPath(t *testing.T) {
 	ctx := context.Background()
 
 	c, err := mgr.GetConflict(ctx, "bypath.txt")
-	if err != nil {
-		t.Fatalf("GetConflict by path: %v", err)
-	}
-
-	if c.Path != "bypath.txt" {
-		t.Errorf("Path = %q, want %q", c.Path, "bypath.txt")
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "bypath.txt", c.Path)
 }
 
 func TestGetConflict_NotFound(t *testing.T) {
@@ -1003,9 +795,7 @@ func TestGetConflict_NotFound(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := mgr.GetConflict(ctx, "nonexistent")
-	if err == nil {
-		t.Fatal("expected error for nonexistent conflict, got nil")
-	}
+	require.Error(t, err)
 }
 
 func TestResolveConflict(t *testing.T) {
@@ -1017,9 +807,7 @@ func TestResolveConflict(t *testing.T) {
 	id := seedConflict(t, mgr, "resolve-me.txt", "edit_edit")
 	ctx := context.Background()
 
-	if err := mgr.ResolveConflict(ctx, id, ResolutionKeepLocal); err != nil {
-		t.Fatalf("ResolveConflict: %v", err)
-	}
+	require.NoError(t, mgr.ResolveConflict(ctx, id, ResolutionKeepLocal))
 
 	// Verify resolution was recorded.
 	var resolution, resolvedBy string
@@ -1028,21 +816,10 @@ func TestResolveConflict(t *testing.T) {
 	err := mgr.db.QueryRowContext(ctx,
 		"SELECT resolution, resolved_at, resolved_by FROM conflicts WHERE id = ?", id,
 	).Scan(&resolution, &resolvedAt, &resolvedBy)
-	if err != nil {
-		t.Fatalf("querying conflict: %v", err)
-	}
-
-	if resolution != ResolutionKeepLocal {
-		t.Errorf("resolution = %q, want %q", resolution, ResolutionKeepLocal)
-	}
-
-	if resolvedBy != "user" {
-		t.Errorf("resolved_by = %q, want %q", resolvedBy, "user")
-	}
-
-	if resolvedAt == 0 {
-		t.Error("resolved_at should be non-zero")
-	}
+	require.NoError(t, err)
+	assert.Equal(t, ResolutionKeepLocal, resolution)
+	assert.Equal(t, "user", resolvedBy)
+	assert.NotZero(t, resolvedAt)
 }
 
 func TestResolveConflict_AlreadyResolved(t *testing.T) {
@@ -1055,15 +832,11 @@ func TestResolveConflict_AlreadyResolved(t *testing.T) {
 	ctx := context.Background()
 
 	// First resolve succeeds.
-	if err := mgr.ResolveConflict(ctx, id, ResolutionKeepBoth); err != nil {
-		t.Fatalf("first ResolveConflict: %v", err)
-	}
+	require.NoError(t, mgr.ResolveConflict(ctx, id, ResolutionKeepBoth))
 
 	// Second resolve fails (already resolved).
 	err := mgr.ResolveConflict(ctx, id, ResolutionKeepLocal)
-	if err == nil {
-		t.Fatal("expected error for already-resolved conflict, got nil")
-	}
+	require.Error(t, err)
 }
 
 func TestLoad_ReturnsCachedBaseline(t *testing.T) {
@@ -1084,23 +857,13 @@ func TestLoad_ReturnsCachedBaseline(t *testing.T) {
 
 	// First Load returns the cached baseline from Commit's refresh.
 	b1, err := mgr.Load(ctx)
-	if err != nil {
-		t.Fatalf("first Load: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Second Load should return the same pointer (cached, no DB query).
 	b2, err := mgr.Load(ctx)
-	if err != nil {
-		t.Fatalf("second Load: %v", err)
-	}
-
-	if b1 != b2 {
-		t.Error("second Load returned a different *Baseline; expected cached pointer")
-	}
-
-	if len(b2.ByPath) != 1 {
-		t.Errorf("ByPath has %d entries, want 1", len(b2.ByPath))
-	}
+	require.NoError(t, err)
+	assert.Same(t, b1, b2, "second Load returned a different *Baseline; expected cached pointer")
+	assert.Len(t, b2.ByPath, 1)
 }
 
 func TestLoad_CacheInvalidatedByCommit(t *testing.T) {
@@ -1120,13 +883,8 @@ func TestLoad_CacheInvalidatedByCommit(t *testing.T) {
 	commitAll(t, mgr, ctx, outcomes)
 
 	b1, err := mgr.Load(ctx)
-	if err != nil {
-		t.Fatalf("Load after first commit: %v", err)
-	}
-
-	if len(b1.ByPath) != 1 {
-		t.Fatalf("ByPath has %d entries, want 1", len(b1.ByPath))
-	}
+	require.NoError(t, err)
+	require.Len(t, b1.ByPath, 1)
 
 	// Commit a second entry — cache should be invalidated and refreshed.
 	outcomes2 := []Outcome{{
@@ -1137,14 +895,9 @@ func TestLoad_CacheInvalidatedByCommit(t *testing.T) {
 
 	commitAll(t, mgr, ctx, outcomes2)
 
-	b2, loadErr := mgr.Load(ctx)
-	if loadErr != nil {
-		t.Fatalf("Load after second commit: %v", loadErr)
-	}
-
-	if len(b2.ByPath) != 2 {
-		t.Errorf("ByPath has %d entries, want 2 (cache should reflect both commits)", len(b2.ByPath))
-	}
+	b2, err := mgr.Load(ctx)
+	require.NoError(t, err)
+	assert.Len(t, b2.ByPath, 2, "cache should reflect both commits")
 }
 
 func TestMigrations_Idempotent(t *testing.T) {
@@ -1155,29 +908,20 @@ func TestMigrations_Idempotent(t *testing.T) {
 
 	// First open: runs migrations.
 	mgr1, err := NewBaselineManager(dbPath, logger)
-	if err != nil {
-		t.Fatalf("first open: %v", err)
-	}
+	require.NoError(t, err)
 	mgr1.Close()
 
 	// Second open: migrations should be a no-op.
 	mgr2, err := NewBaselineManager(dbPath, logger)
-	if err != nil {
-		t.Fatalf("second open: %v", err)
-	}
+	require.NoError(t, err)
 	defer mgr2.Close()
 
 	// Verify the DB is still functional.
 	ctx := context.Background()
 
 	b, err := mgr2.Load(ctx)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	if b == nil {
-		t.Error("Load returned nil baseline")
-	}
+	require.NoError(t, err)
+	assert.NotNil(t, b)
 }
 
 func TestCommitConflict_AutoResolved(t *testing.T) {
@@ -1215,35 +959,16 @@ func TestCommitConflict_AutoResolved(t *testing.T) {
 		"SELECT resolution, resolved_at, resolved_by FROM conflicts WHERE path = ?",
 		"auto-resolved.txt",
 	).Scan(&resolution, &resolvedAt, &resolvedBy)
-	if err != nil {
-		t.Fatalf("querying conflict: %v", err)
-	}
-
-	if resolution != ResolutionKeepLocal {
-		t.Errorf("resolution = %q, want %q", resolution, ResolutionKeepLocal)
-	}
-
-	if resolvedBy != "auto" {
-		t.Errorf("resolved_by = %q, want %q", resolvedBy, "auto")
-	}
-
-	if resolvedAt == 0 {
-		t.Error("resolved_at should be non-zero")
-	}
+	require.NoError(t, err)
+	assert.Equal(t, ResolutionKeepLocal, resolution)
+	assert.Equal(t, "auto", resolvedBy)
+	assert.NotZero(t, resolvedAt)
 
 	// Verify baseline was also updated (auto-resolve upserts baseline).
 	entry := mgr.baseline.ByPath["auto-resolved.txt"]
-	if entry == nil {
-		t.Fatal("baseline entry not found for auto-resolved conflict")
-	}
-
-	if entry.ItemID != "new-item" {
-		t.Errorf("ItemID = %q, want %q", entry.ItemID, "new-item")
-	}
-
-	if entry.LocalHash != "local-h" {
-		t.Errorf("LocalHash = %q, want %q", entry.LocalHash, "local-h")
-	}
+	require.NotNil(t, entry, "baseline entry not found for auto-resolved conflict")
+	assert.Equal(t, "new-item", entry.ItemID)
+	assert.Equal(t, "local-h", entry.LocalHash)
 }
 
 func TestListAllConflicts(t *testing.T) {
@@ -1259,33 +984,18 @@ func TestListAllConflicts(t *testing.T) {
 	resolvedID := seedConflict(t, mgr, "resolved-file.txt", "edit_delete")
 	ctx := context.Background()
 
-	if err := mgr.ResolveConflict(ctx, resolvedID, ResolutionKeepLocal); err != nil {
-		t.Fatalf("ResolveConflict: %v", err)
-	}
+	require.NoError(t, mgr.ResolveConflict(ctx, resolvedID, ResolutionKeepLocal))
 
 	// ListConflicts should return only unresolved.
 	unresolved, err := mgr.ListConflicts(ctx)
-	if err != nil {
-		t.Fatalf("ListConflicts: %v", err)
-	}
-
-	if len(unresolved) != 1 {
-		t.Fatalf("ListConflicts: got %d, want 1", len(unresolved))
-	}
-
-	if unresolved[0].Path != "unresolved.txt" {
-		t.Errorf("unresolved path = %q, want %q", unresolved[0].Path, "unresolved.txt")
-	}
+	require.NoError(t, err)
+	require.Len(t, unresolved, 1)
+	assert.Equal(t, "unresolved.txt", unresolved[0].Path)
 
 	// ListAllConflicts should return both.
 	all, err := mgr.ListAllConflicts(ctx)
-	if err != nil {
-		t.Fatalf("ListAllConflicts: %v", err)
-	}
-
-	if len(all) != 2 {
-		t.Fatalf("ListAllConflicts: got %d, want 2", len(all))
-	}
+	require.NoError(t, err)
+	require.Len(t, all, 2)
 
 	// Verify resolution fields are populated.
 	var found bool
@@ -1293,24 +1003,13 @@ func TestListAllConflicts(t *testing.T) {
 	for i := range all {
 		if all[i].Path == "resolved-file.txt" {
 			found = true
-
-			if all[i].Resolution != ResolutionKeepLocal {
-				t.Errorf("resolution = %q, want %q", all[i].Resolution, ResolutionKeepLocal)
-			}
-
-			if all[i].ResolvedBy != "user" {
-				t.Errorf("resolved_by = %q, want %q", all[i].ResolvedBy, "user")
-			}
-
-			if all[i].ResolvedAt == 0 {
-				t.Error("resolved_at should be non-zero")
-			}
+			assert.Equal(t, ResolutionKeepLocal, all[i].Resolution)
+			assert.Equal(t, "user", all[i].ResolvedBy)
+			assert.NotZero(t, all[i].ResolvedAt)
 		}
 	}
 
-	if !found {
-		t.Error("resolved-file.txt not found in ListAllConflicts results")
-	}
+	assert.True(t, found, "resolved-file.txt not found in ListAllConflicts results")
 }
 
 // ---------------------------------------------------------------------------
@@ -1341,26 +1040,13 @@ func TestCommitOutcome_Download(t *testing.T) {
 		ETag:       "etag1",
 	}
 
-	if err := mgr.CommitOutcome(ctx, &outcome); err != nil {
-		t.Fatalf("CommitOutcome: %v", err)
-	}
+	require.NoError(t, mgr.CommitOutcome(ctx, &outcome))
 
 	entry, ok := mgr.baseline.GetByPath("co-download.txt")
-	if !ok {
-		t.Fatal("baseline entry not found")
-	}
-
-	if entry.ItemID != "i1" {
-		t.Errorf("ItemID = %q, want %q", entry.ItemID, "i1")
-	}
-
-	if entry.LocalHash != "lh" {
-		t.Errorf("LocalHash = %q, want %q", entry.LocalHash, "lh")
-	}
-
-	if entry.SyncedAt != fixedTime.UnixNano() {
-		t.Errorf("SyncedAt = %d, want %d", entry.SyncedAt, fixedTime.UnixNano())
-	}
+	require.True(t, ok, "baseline entry not found")
+	assert.Equal(t, "i1", entry.ItemID)
+	assert.Equal(t, "lh", entry.LocalHash)
+	assert.Equal(t, fixedTime.UnixNano(), entry.SyncedAt)
 }
 
 func TestCommitOutcome_Upload(t *testing.T) {
@@ -1383,18 +1069,11 @@ func TestCommitOutcome_Upload(t *testing.T) {
 		Size:       256,
 	}
 
-	if err := mgr.CommitOutcome(ctx, &outcome); err != nil {
-		t.Fatalf("CommitOutcome: %v", err)
-	}
+	require.NoError(t, mgr.CommitOutcome(ctx, &outcome))
 
 	entry, ok := mgr.baseline.GetByPath("co-upload.txt")
-	if !ok {
-		t.Fatal("baseline entry not found")
-	}
-
-	if entry.ItemID != "i2" {
-		t.Errorf("ItemID = %q, want %q", entry.ItemID, "i2")
-	}
+	require.True(t, ok, "baseline entry not found")
+	assert.Equal(t, "i2", entry.ItemID)
 }
 
 func TestCommitOutcome_Delete(t *testing.T) {
@@ -1412,19 +1091,13 @@ func TestCommitOutcome_Delete(t *testing.T) {
 		ItemType: ItemTypeFile, LocalHash: "h", RemoteHash: "h", Size: 10,
 	}
 
-	if err := mgr.CommitOutcome(ctx, &seed); err != nil {
-		t.Fatalf("seed CommitOutcome: %v", err)
-	}
+	require.NoError(t, mgr.CommitOutcome(ctx, &seed))
 
 	del := Outcome{Action: ActionLocalDelete, Success: true, Path: "co-delete.txt"}
+	require.NoError(t, mgr.CommitOutcome(ctx, &del))
 
-	if err := mgr.CommitOutcome(ctx, &del); err != nil {
-		t.Fatalf("delete CommitOutcome: %v", err)
-	}
-
-	if _, ok := mgr.baseline.GetByPath("co-delete.txt"); ok {
-		t.Error("entry still exists after delete")
-	}
+	_, ok := mgr.baseline.GetByPath("co-delete.txt")
+	assert.False(t, ok, "entry still exists after delete")
 }
 
 func TestCommitOutcome_Move(t *testing.T) {
@@ -1442,9 +1115,7 @@ func TestCommitOutcome_Move(t *testing.T) {
 		ItemType: ItemTypeFile, LocalHash: "h", RemoteHash: "h", Size: 10,
 	}
 
-	if err := mgr.CommitOutcome(ctx, &seed); err != nil {
-		t.Fatalf("seed CommitOutcome: %v", err)
-	}
+	require.NoError(t, mgr.CommitOutcome(ctx, &seed))
 
 	move := Outcome{
 		Action: ActionLocalMove, Success: true,
@@ -1452,23 +1123,14 @@ func TestCommitOutcome_Move(t *testing.T) {
 		DriveID: driveid.New("d"), ItemID: "i", ParentID: "p2",
 		ItemType: ItemTypeFile, LocalHash: "h", RemoteHash: "h", Size: 10,
 	}
+	require.NoError(t, mgr.CommitOutcome(ctx, &move))
 
-	if err := mgr.CommitOutcome(ctx, &move); err != nil {
-		t.Fatalf("move CommitOutcome: %v", err)
-	}
-
-	if _, ok := mgr.baseline.GetByPath("old/move.txt"); ok {
-		t.Error("old path still exists after move")
-	}
+	_, ok := mgr.baseline.GetByPath("old/move.txt")
+	assert.False(t, ok, "old path still exists after move")
 
 	entry, ok := mgr.baseline.GetByPath("new/move.txt")
-	if !ok {
-		t.Fatal("new path not found after move")
-	}
-
-	if entry.ParentID != "p2" {
-		t.Errorf("ParentID = %q, want %q", entry.ParentID, "p2")
-	}
+	require.True(t, ok, "new path not found after move")
+	assert.Equal(t, "p2", entry.ParentID)
 }
 
 func TestCommitOutcome_Conflict_AutoResolved(t *testing.T) {
@@ -1492,19 +1154,12 @@ func TestCommitOutcome_Conflict_AutoResolved(t *testing.T) {
 		ResolvedBy:   ResolvedByAuto,
 	}
 
-	if err := mgr.CommitOutcome(ctx, &outcome); err != nil {
-		t.Fatalf("CommitOutcome: %v", err)
-	}
+	require.NoError(t, mgr.CommitOutcome(ctx, &outcome))
 
 	// Auto-resolved conflict should update baseline.
 	entry, ok := mgr.baseline.GetByPath("co-conflict.txt")
-	if !ok {
-		t.Fatal("baseline entry not found for auto-resolved conflict")
-	}
-
-	if entry.ItemID != "new-item" {
-		t.Errorf("ItemID = %q, want %q", entry.ItemID, "new-item")
-	}
+	require.True(t, ok, "baseline entry not found for auto-resolved conflict")
+	assert.Equal(t, "new-item", entry.ItemID)
 
 	// Conflict row should exist.
 	var resolution string
@@ -1512,13 +1167,8 @@ func TestCommitOutcome_Conflict_AutoResolved(t *testing.T) {
 	err := mgr.db.QueryRowContext(ctx,
 		"SELECT resolution FROM conflicts WHERE path = ?", "co-conflict.txt",
 	).Scan(&resolution)
-	if err != nil {
-		t.Fatalf("querying conflict: %v", err)
-	}
-
-	if resolution != ResolutionKeepLocal {
-		t.Errorf("resolution = %q, want %q", resolution, ResolutionKeepLocal)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, ResolutionKeepLocal, resolution)
 }
 
 func TestCommitOutcome_Conflict_Unresolved(t *testing.T) {
@@ -1539,14 +1189,11 @@ func TestCommitOutcome_Conflict_Unresolved(t *testing.T) {
 		ConflictType: ConflictEditEdit,
 	}
 
-	if err := mgr.CommitOutcome(ctx, &outcome); err != nil {
-		t.Fatalf("CommitOutcome: %v", err)
-	}
+	require.NoError(t, mgr.CommitOutcome(ctx, &outcome))
 
 	// Unresolved conflict should NOT update baseline.
-	if _, ok := mgr.baseline.GetByPath("co-unresolved.txt"); ok {
-		t.Error("baseline entry should not exist for unresolved conflict")
-	}
+	_, ok := mgr.baseline.GetByPath("co-unresolved.txt")
+	assert.False(t, ok, "baseline entry should not exist for unresolved conflict")
 }
 
 func TestCommitOutcome_EditDeleteConflict_DeletesBaseline(t *testing.T) {
@@ -1566,14 +1213,11 @@ func TestCommitOutcome_EditDeleteConflict_DeletesBaseline(t *testing.T) {
 		ItemID:   "i1",
 		ItemType: ItemTypeFile,
 	}
-	if err := mgr.CommitOutcome(ctx, &setupOutcome); err != nil {
-		t.Fatalf("CommitOutcome (setup): %v", err)
-	}
+	require.NoError(t, mgr.CommitOutcome(ctx, &setupOutcome))
 
 	// Verify baseline entry exists.
-	if _, ok := mgr.baseline.GetByPath("edit-delete-target.txt"); !ok {
-		t.Fatal("baseline entry should exist after download")
-	}
+	_, ok := mgr.baseline.GetByPath("edit-delete-target.txt")
+	require.True(t, ok, "baseline entry should exist after download")
 
 	// Now commit an unresolved edit-delete conflict (B-133).
 	conflictOutcome := Outcome{
@@ -1587,14 +1231,11 @@ func TestCommitOutcome_EditDeleteConflict_DeletesBaseline(t *testing.T) {
 		LocalHash:    "modified-hash",
 		RemoteHash:   "baseline-remote-hash",
 	}
-	if err := mgr.CommitOutcome(ctx, &conflictOutcome); err != nil {
-		t.Fatalf("CommitOutcome (conflict): %v", err)
-	}
+	require.NoError(t, mgr.CommitOutcome(ctx, &conflictOutcome))
 
 	// Baseline entry should be deleted — the original file was renamed to conflict copy.
-	if _, ok := mgr.baseline.GetByPath("edit-delete-target.txt"); ok {
-		t.Error("baseline entry should be deleted for unresolved edit-delete conflict")
-	}
+	_, ok = mgr.baseline.GetByPath("edit-delete-target.txt")
+	assert.False(t, ok, "baseline entry should be deleted for unresolved edit-delete conflict")
 
 	// Conflict record should exist.
 	var conflictType, resolution string
@@ -1602,17 +1243,9 @@ func TestCommitOutcome_EditDeleteConflict_DeletesBaseline(t *testing.T) {
 	err := mgr.db.QueryRowContext(ctx,
 		"SELECT conflict_type, resolution FROM conflicts WHERE path = ?", "edit-delete-target.txt",
 	).Scan(&conflictType, &resolution)
-	if err != nil {
-		t.Fatalf("querying conflict: %v", err)
-	}
-
-	if conflictType != ConflictEditDelete {
-		t.Errorf("conflict_type = %q, want %q", conflictType, ConflictEditDelete)
-	}
-
-	if resolution != ResolutionUnresolved {
-		t.Errorf("resolution = %q, want %q", resolution, ResolutionUnresolved)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, ConflictEditDelete, conflictType)
+	assert.Equal(t, ResolutionUnresolved, resolution)
 }
 
 func TestCommitOutcome_SkipsFailedOutcome(t *testing.T) {
@@ -1627,14 +1260,11 @@ func TestCommitOutcome_SkipsFailedOutcome(t *testing.T) {
 		Path:    "should-not-exist.txt",
 	}
 
-	if err := mgr.CommitOutcome(ctx, &outcome); err != nil {
-		t.Fatalf("CommitOutcome: %v", err)
-	}
+	require.NoError(t, mgr.CommitOutcome(ctx, &outcome))
 
 	if mgr.baseline != nil {
-		if _, ok := mgr.baseline.GetByPath("should-not-exist.txt"); ok {
-			t.Error("failed outcome should not create baseline entry")
-		}
+		_, ok := mgr.baseline.GetByPath("should-not-exist.txt")
+		assert.False(t, ok, "failed outcome should not create baseline entry")
 	}
 }
 
@@ -1656,22 +1286,12 @@ func TestCommitOutcome_FolderCreate(t *testing.T) {
 		ItemType: ItemTypeFolder,
 	}
 
-	if err := mgr.CommitOutcome(ctx, &outcome); err != nil {
-		t.Fatalf("CommitOutcome: %v", err)
-	}
+	require.NoError(t, mgr.CommitOutcome(ctx, &outcome))
 
 	entry, ok := mgr.baseline.GetByPath("Documents/Reports")
-	if !ok {
-		t.Fatal("folder entry not found")
-	}
-
-	if entry.ItemType != ItemTypeFolder {
-		t.Errorf("ItemType = %v, want Folder", entry.ItemType)
-	}
-
-	if entry.ItemID != "folder-id" {
-		t.Errorf("ItemID = %q, want %q", entry.ItemID, "folder-id")
-	}
+	require.True(t, ok, "folder entry not found")
+	assert.Equal(t, ItemTypeFolder, entry.ItemType)
+	assert.Equal(t, "folder-id", entry.ItemID)
 }
 
 // ---------------------------------------------------------------------------
@@ -1686,18 +1306,11 @@ func TestCommitDeltaToken(t *testing.T) {
 
 	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 
-	if err := mgr.CommitDeltaToken(ctx, "token-abc", "d", "", "d"); err != nil {
-		t.Fatalf("CommitDeltaToken: %v", err)
-	}
+	require.NoError(t, mgr.CommitDeltaToken(ctx, "token-abc", "d", "", "d"))
 
 	token, err := mgr.GetDeltaToken(ctx, "d", "")
-	if err != nil {
-		t.Fatalf("GetDeltaToken: %v", err)
-	}
-
-	if token != "token-abc" {
-		t.Errorf("token = %q, want %q", token, "token-abc")
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "token-abc", token)
 }
 
 func TestCommitDeltaToken_Update(t *testing.T) {
@@ -1708,22 +1321,12 @@ func TestCommitDeltaToken_Update(t *testing.T) {
 
 	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 
-	if err := mgr.CommitDeltaToken(ctx, "token-1", "d", "", "d"); err != nil {
-		t.Fatalf("first CommitDeltaToken: %v", err)
-	}
-
-	if err := mgr.CommitDeltaToken(ctx, "token-2", "d", "", "d"); err != nil {
-		t.Fatalf("second CommitDeltaToken: %v", err)
-	}
+	require.NoError(t, mgr.CommitDeltaToken(ctx, "token-1", "d", "", "d"))
+	require.NoError(t, mgr.CommitDeltaToken(ctx, "token-2", "d", "", "d"))
 
 	token, err := mgr.GetDeltaToken(ctx, "d", "")
-	if err != nil {
-		t.Fatalf("GetDeltaToken: %v", err)
-	}
-
-	if token != "token-2" {
-		t.Errorf("token = %q, want %q", token, "token-2")
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "token-2", token)
 }
 
 func TestCommitDeltaToken_EmptyIsNoop(t *testing.T) {
@@ -1733,18 +1336,11 @@ func TestCommitDeltaToken_EmptyIsNoop(t *testing.T) {
 	ctx := context.Background()
 
 	// Empty token should be a no-op.
-	if err := mgr.CommitDeltaToken(ctx, "", "d", "", "d"); err != nil {
-		t.Fatalf("CommitDeltaToken: %v", err)
-	}
+	require.NoError(t, mgr.CommitDeltaToken(ctx, "", "d", "", "d"))
 
 	token, err := mgr.GetDeltaToken(ctx, "d", "")
-	if err != nil {
-		t.Fatalf("GetDeltaToken: %v", err)
-	}
-
-	if token != "" {
-		t.Errorf("token = %q, want empty", token)
-	}
+	require.NoError(t, err)
+	assert.Empty(t, token)
 }
 
 func TestCommitDeltaToken_CompositeKey_DifferentScopes(t *testing.T) {
@@ -1754,33 +1350,19 @@ func TestCommitDeltaToken_CompositeKey_DifferentScopes(t *testing.T) {
 	ctx := context.Background()
 
 	// Primary delta (scope_id="").
-	if err := mgr.CommitDeltaToken(ctx, "primary-token", "drv1", "", "drv1"); err != nil {
-		t.Fatalf("CommitDeltaToken primary: %v", err)
-	}
+	require.NoError(t, mgr.CommitDeltaToken(ctx, "primary-token", "drv1", "", "drv1"))
 
 	// Shortcut-scoped delta (scope_id=remoteItemID, scope_drive=remoteDriveID).
-	if err := mgr.CommitDeltaToken(ctx, "shortcut-token", "drv1", "item123", "drv2"); err != nil {
-		t.Fatalf("CommitDeltaToken shortcut: %v", err)
-	}
+	require.NoError(t, mgr.CommitDeltaToken(ctx, "shortcut-token", "drv1", "item123", "drv2"))
 
 	// Both should be independently retrievable.
 	primary, err := mgr.GetDeltaToken(ctx, "drv1", "")
-	if err != nil {
-		t.Fatalf("GetDeltaToken primary: %v", err)
-	}
-
-	if primary != "primary-token" {
-		t.Errorf("primary token = %q, want %q", primary, "primary-token")
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "primary-token", primary)
 
 	shortcut, err := mgr.GetDeltaToken(ctx, "drv1", "item123")
-	if err != nil {
-		t.Fatalf("GetDeltaToken shortcut: %v", err)
-	}
-
-	if shortcut != "shortcut-token" {
-		t.Errorf("shortcut token = %q, want %q", shortcut, "shortcut-token")
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "shortcut-token", shortcut)
 }
 
 func TestCommitDeltaToken_CompositeKey_UpdatePreservesOtherScopes(t *testing.T) {
@@ -1790,38 +1372,21 @@ func TestCommitDeltaToken_CompositeKey_UpdatePreservesOtherScopes(t *testing.T) 
 	ctx := context.Background()
 
 	// Save two scoped tokens.
-	if err := mgr.CommitDeltaToken(ctx, "tok-a", "drv1", "", "drv1"); err != nil {
-		t.Fatalf("CommitDeltaToken: %v", err)
-	}
-
-	if err := mgr.CommitDeltaToken(ctx, "tok-b", "drv1", "scope1", "drv2"); err != nil {
-		t.Fatalf("CommitDeltaToken: %v", err)
-	}
+	require.NoError(t, mgr.CommitDeltaToken(ctx, "tok-a", "drv1", "", "drv1"))
+	require.NoError(t, mgr.CommitDeltaToken(ctx, "tok-b", "drv1", "scope1", "drv2"))
 
 	// Update only the primary.
-	if err := mgr.CommitDeltaToken(ctx, "tok-a-updated", "drv1", "", "drv1"); err != nil {
-		t.Fatalf("CommitDeltaToken update: %v", err)
-	}
+	require.NoError(t, mgr.CommitDeltaToken(ctx, "tok-a-updated", "drv1", "", "drv1"))
 
 	// Primary should be updated.
 	primary, err := mgr.GetDeltaToken(ctx, "drv1", "")
-	if err != nil {
-		t.Fatalf("GetDeltaToken: %v", err)
-	}
-
-	if primary != "tok-a-updated" {
-		t.Errorf("primary = %q, want %q", primary, "tok-a-updated")
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "tok-a-updated", primary)
 
 	// Other scope should be unchanged.
 	scoped, err := mgr.GetDeltaToken(ctx, "drv1", "scope1")
-	if err != nil {
-		t.Fatalf("GetDeltaToken: %v", err)
-	}
-
-	if scoped != "tok-b" {
-		t.Errorf("scoped = %q, want %q", scoped, "tok-b")
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "tok-b", scoped)
 }
 
 // ---------------------------------------------------------------------------
@@ -1839,18 +1404,11 @@ func TestBaseline_GetByPath(t *testing.T) {
 	}
 
 	entry, ok := b.GetByPath("docs/readme.md")
-	if !ok {
-		t.Fatal("expected entry for docs/readme.md")
-	}
-
-	if entry.ItemID != "item1" {
-		t.Errorf("ItemID = %q, want %q", entry.ItemID, "item1")
-	}
+	require.True(t, ok)
+	assert.Equal(t, "item1", entry.ItemID)
 
 	_, ok = b.GetByPath("nonexistent")
-	if ok {
-		t.Error("expected false for nonexistent path")
-	}
+	assert.False(t, ok)
 }
 
 func TestBaseline_GetByID(t *testing.T) {
@@ -1866,19 +1424,12 @@ func TestBaseline_GetByID(t *testing.T) {
 	}
 
 	got, ok := b.GetByID(key)
-	if !ok {
-		t.Fatal("expected entry for key")
-	}
-
-	if got.Path != "test.txt" {
-		t.Errorf("Path = %q, want %q", got.Path, "test.txt")
-	}
+	require.True(t, ok)
+	assert.Equal(t, "test.txt", got.Path)
 
 	missingKey := driveid.NewItemKey(driveID, "nonexistent")
 	_, ok = b.GetByID(missingKey)
-	if ok {
-		t.Error("expected false for nonexistent key")
-	}
+	assert.False(t, ok)
 }
 
 func TestBaseline_Put(t *testing.T) {
@@ -1898,23 +1449,13 @@ func TestBaseline_Put(t *testing.T) {
 	b.Put(entry)
 
 	got, ok := b.GetByPath("new/file.txt")
-	if !ok {
-		t.Fatal("entry not found after Put")
-	}
-
-	if got.ItemID != "item-new" {
-		t.Errorf("ItemID = %q, want %q", got.ItemID, "item-new")
-	}
+	require.True(t, ok, "entry not found after Put")
+	assert.Equal(t, "item-new", got.ItemID)
 
 	key := driveid.NewItemKey(driveid.New("d1"), "item-new")
 	gotByID, ok := b.GetByID(key)
-	if !ok {
-		t.Fatal("entry not found by ID after Put")
-	}
-
-	if gotByID.Path != "new/file.txt" {
-		t.Errorf("Path = %q, want %q", gotByID.Path, "new/file.txt")
-	}
+	require.True(t, ok, "entry not found by ID after Put")
+	assert.Equal(t, "new/file.txt", gotByID.Path)
 }
 
 func TestBaseline_Delete(t *testing.T) {
@@ -1931,13 +1472,11 @@ func TestBaseline_Delete(t *testing.T) {
 
 	b.Delete("delete-me.txt")
 
-	if _, ok := b.GetByPath("delete-me.txt"); ok {
-		t.Error("entry still exists after Delete")
-	}
+	_, ok := b.GetByPath("delete-me.txt")
+	assert.False(t, ok, "entry still exists after Delete")
 
-	if _, ok := b.GetByID(key); ok {
-		t.Error("entry still exists in ByID after Delete")
-	}
+	_, ok = b.GetByID(key)
+	assert.False(t, ok, "entry still exists in ByID after Delete")
 
 	// Deleting nonexistent path should not panic.
 	b.Delete("nonexistent")
@@ -1954,9 +1493,7 @@ func TestBaseline_Len(t *testing.T) {
 		ByID: make(map[driveid.ItemKey]*BaselineEntry),
 	}
 
-	if b.Len() != 2 {
-		t.Errorf("Len() = %d, want 2", b.Len())
-	}
+	assert.Equal(t, 2, b.Len())
 }
 
 func TestBaseline_ForEachPath(t *testing.T) {
@@ -1975,13 +1512,9 @@ func TestBaseline_ForEachPath(t *testing.T) {
 		paths[path] = true
 	})
 
-	if len(paths) != 2 {
-		t.Errorf("ForEachPath visited %d entries, want 2", len(paths))
-	}
-
-	if !paths["a.txt"] || !paths["b.txt"] {
-		t.Error("ForEachPath did not visit all entries")
-	}
+	assert.Len(t, paths, 2)
+	assert.True(t, paths["a.txt"], "ForEachPath did not visit a.txt")
+	assert.True(t, paths["b.txt"], "ForEachPath did not visit b.txt")
 }
 
 func TestBaseline_ConcurrentAccess(t *testing.T) {
@@ -2042,9 +1575,7 @@ func TestBaseline_ConcurrentAccess(t *testing.T) {
 	wg.Wait()
 
 	// Baseline should have at least original + concurrent entries.
-	if b.Len() < 100 {
-		t.Errorf("Len() = %d, want >= 100", b.Len())
-	}
+	assert.GreaterOrEqual(t, b.Len(), 100)
 }
 
 // TestConflictRecord_NameField verifies that ConflictRecord.Name is populated
@@ -2054,9 +1585,7 @@ func TestConflictRecord_NameField(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := mgr.Load(ctx)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Insert a conflict with a nested path.
 	outcome := &Outcome{
@@ -2072,34 +1601,18 @@ func TestConflictRecord_NameField(t *testing.T) {
 		RemoteMtime:  200,
 	}
 
-	err = mgr.CommitOutcome(ctx, outcome)
-	if err != nil {
-		t.Fatalf("CommitOutcome: %v", err)
-	}
+	require.NoError(t, mgr.CommitOutcome(ctx, outcome))
 
 	// Verify via ListConflicts.
 	conflicts, err := mgr.ListConflicts(ctx)
-	if err != nil {
-		t.Fatalf("ListConflicts: %v", err)
-	}
-
-	if len(conflicts) != 1 {
-		t.Fatalf("expected 1 conflict, got %d", len(conflicts))
-	}
-
-	if conflicts[0].Name != "readme.md" {
-		t.Errorf("Name = %q, want %q", conflicts[0].Name, "readme.md")
-	}
+	require.NoError(t, err)
+	require.Len(t, conflicts, 1)
+	assert.Equal(t, "readme.md", conflicts[0].Name)
 
 	// Verify via GetConflict.
 	c, err := mgr.GetConflict(ctx, conflicts[0].ID)
-	if err != nil {
-		t.Fatalf("GetConflict: %v", err)
-	}
-
-	if c.Name != "readme.md" {
-		t.Errorf("GetConflict Name = %q, want %q", c.Name, "readme.md")
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "readme.md", c.Name)
 }
 
 // TestPruneResolvedConflicts verifies that PruneResolvedConflicts deletes
@@ -2115,46 +1628,34 @@ func setupPruneTestConflicts(t *testing.T, mgr *BaselineManager, ctx context.Con
 
 	mgr.nowFunc = func() time.Time { return now.AddDate(0, 0, -120) }
 
-	if err := mgr.CommitOutcome(ctx, &Outcome{
+	require.NoError(t, mgr.CommitOutcome(ctx, &Outcome{
 		Action: ActionConflict, Success: true,
 		Path: "old-resolved.txt", DriveID: driveid.New(testDriveID),
 		ItemID: "item-old", ConflictType: ConflictEditEdit,
 		LocalHash: "lh1", RemoteHash: "rh1", Mtime: 100, RemoteMtime: 200,
-	}); err != nil {
-		t.Fatalf("CommitOutcome (old): %v", err)
-	}
+	}))
 
 	mgr.nowFunc = func() time.Time { return now.AddDate(0, 0, -100) }
 
 	conflicts, err := mgr.ListConflicts(ctx)
-	if err != nil {
-		t.Fatalf("ListConflicts: %v", err)
-	}
+	require.NoError(t, err)
 
 	oldID = conflicts[0].ID
-	err = mgr.ResolveConflict(ctx, oldID, "keep_local")
-	if err != nil {
-		t.Fatalf("ResolveConflict (old): %v", err)
-	}
+	require.NoError(t, mgr.ResolveConflict(ctx, oldID, "keep_local"))
 
 	mgr.nowFunc = func() time.Time { return now.AddDate(0, 0, -10) }
 
-	err = mgr.CommitOutcome(ctx, &Outcome{
+	require.NoError(t, mgr.CommitOutcome(ctx, &Outcome{
 		Action: ActionConflict, Success: true,
 		Path: "new-resolved.txt", DriveID: driveid.New(testDriveID),
 		ItemID: "item-new", ConflictType: ConflictEditEdit,
 		LocalHash: "lh2", RemoteHash: "rh2", Mtime: 300, RemoteMtime: 400,
-	})
-	if err != nil {
-		t.Fatalf("CommitOutcome (new): %v", err)
-	}
+	}))
 
 	mgr.nowFunc = func() time.Time { return now.AddDate(0, 0, -5) }
 
 	conflicts, err = mgr.ListConflicts(ctx)
-	if err != nil {
-		t.Fatalf("ListConflicts: %v", err)
-	}
+	require.NoError(t, err)
 
 	for _, c := range conflicts {
 		if c.Path == "new-resolved.txt" {
@@ -2162,22 +1663,16 @@ func setupPruneTestConflicts(t *testing.T, mgr *BaselineManager, ctx context.Con
 		}
 	}
 
-	err = mgr.ResolveConflict(ctx, newID, "keep_remote")
-	if err != nil {
-		t.Fatalf("ResolveConflict (new): %v", err)
-	}
+	require.NoError(t, mgr.ResolveConflict(ctx, newID, "keep_remote"))
 
 	mgr.nowFunc = func() time.Time { return now.AddDate(0, 0, -120) }
 
-	err = mgr.CommitOutcome(ctx, &Outcome{
+	require.NoError(t, mgr.CommitOutcome(ctx, &Outcome{
 		Action: ActionConflict, Success: true,
 		Path: "unresolved.txt", DriveID: driveid.New(testDriveID),
 		ItemID: "item-unresolved", ConflictType: ConflictEditEdit,
 		LocalHash: "lh3", RemoteHash: "rh3", Mtime: 500, RemoteMtime: 600,
-	})
-	if err != nil {
-		t.Fatalf("CommitOutcome (unresolved): %v", err)
-	}
+	}))
 
 	return oldID, newID
 }
@@ -2192,52 +1687,31 @@ func TestPruneResolvedConflicts(t *testing.T) {
 
 	mgr.nowFunc = func() time.Time { return now }
 
-	if _, err := mgr.Load(ctx); err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	_, err := mgr.Load(ctx)
+	require.NoError(t, err)
 
 	oldID, newID := setupPruneTestConflicts(t, mgr, ctx, now)
 
 	mgr.nowFunc = func() time.Time { return now }
 
 	pruned, err := mgr.PruneResolvedConflicts(ctx, 90*24*time.Hour)
-	if err != nil {
-		t.Fatalf("PruneResolvedConflicts: %v", err)
-	}
-
-	if pruned != 1 {
-		t.Errorf("pruned = %d, want 1 (only old resolved)", pruned)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, 1, pruned, "only old resolved should be pruned")
 
 	// Old resolved should be gone.
 	c, err := mgr.GetConflict(ctx, oldID)
-	if err == nil && c != nil {
-		t.Error("old resolved conflict should have been pruned")
-	}
+	assert.True(t, err != nil || c == nil, "old resolved conflict should have been pruned")
 
 	// New resolved should still exist.
 	c, err = mgr.GetConflict(ctx, newID)
-	if err != nil {
-		t.Fatalf("new resolved should still exist: %v", err)
-	}
-
-	if c.Resolution != "keep_remote" {
-		t.Errorf("new resolved Resolution = %q, want %q", c.Resolution, "keep_remote")
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "keep_remote", c.Resolution)
 
 	// Unresolved conflict should still exist.
 	unresolved, err := mgr.ListConflicts(ctx)
-	if err != nil {
-		t.Fatalf("ListConflicts (after prune): %v", err)
-	}
-
-	if len(unresolved) != 1 {
-		t.Fatalf("unresolved conflicts = %d, want 1", len(unresolved))
-	}
-
-	if unresolved[0].Path != "unresolved.txt" {
-		t.Errorf("unresolved Path = %q, want %q", unresolved[0].Path, "unresolved.txt")
-	}
+	require.NoError(t, err)
+	require.Len(t, unresolved, 1)
+	assert.Equal(t, "unresolved.txt", unresolved[0].Path)
 }
 
 // TestCheckCacheConsistency verifies that CheckCacheConsistency detects
@@ -2247,48 +1721,31 @@ func TestCheckCacheConsistency(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := mgr.Load(ctx)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Insert a baseline entry via CommitOutcome.
-	err = mgr.CommitOutcome(ctx, &Outcome{
+	require.NoError(t, mgr.CommitOutcome(ctx, &Outcome{
 		Action: ActionDownload, Success: true,
 		Path: "consistency-check.txt", DriveID: driveid.New(testDriveID),
 		ItemID: "item-cc", ParentID: "root", ItemType: ItemTypeFile,
 		LocalHash: "hash1", RemoteHash: "hash1",
 		Size: 100, Mtime: 1000,
-	})
-	if err != nil {
-		t.Fatalf("CommitOutcome: %v", err)
-	}
+	}))
 
 	// Cache and DB should be consistent — no mismatches.
 	mismatches, err := mgr.CheckCacheConsistency(ctx)
-	if err != nil {
-		t.Fatalf("CheckCacheConsistency: %v", err)
-	}
-
-	if mismatches != 0 {
-		t.Errorf("expected 0 mismatches, got %d", mismatches)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, 0, mismatches)
 
 	// Manually corrupt the DB row behind the cache's back.
 	_, err = mgr.DB().ExecContext(ctx,
 		`UPDATE baseline SET local_hash = 'tampered' WHERE path = 'consistency-check.txt'`)
-	if err != nil {
-		t.Fatalf("manual DB update: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Now check again — should detect 1 mismatch.
 	mismatches, err = mgr.CheckCacheConsistency(ctx)
-	if err != nil {
-		t.Fatalf("CheckCacheConsistency after tampering: %v", err)
-	}
-
-	if mismatches != 1 {
-		t.Errorf("expected 1 mismatch after DB tampering, got %d", mismatches)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, 1, mismatches)
 }
 
 // ---------------------------------------------------------------------------
@@ -2308,9 +1765,7 @@ func TestMigration00004_CompositeKey(t *testing.T) {
 	)
 
 	db, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
+	require.NoError(t, err)
 	defer db.Close()
 
 	db.SetMaxOpenConns(1)
@@ -2319,33 +1774,23 @@ func TestMigration00004_CompositeKey(t *testing.T) {
 
 	// Apply only migrations 1-3 (before composite key migration).
 	subFS, err := fs.Sub(migrationsFS, "migrations")
-	if err != nil {
-		t.Fatalf("creating migration sub-filesystem: %v", err)
-	}
+	require.NoError(t, err)
 
 	provider, err := goose.NewProvider(goose.DialectSQLite3, db, subFS)
-	if err != nil {
-		t.Fatalf("creating goose provider: %v", err)
-	}
+	require.NoError(t, err)
 
 	_, err = provider.UpTo(ctx, 3)
-	if err != nil {
-		t.Fatalf("applying migrations 1-3: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Insert a delta token in the old single-key format.
 	_, err = db.ExecContext(ctx,
 		`INSERT INTO delta_tokens (drive_id, token, updated_at) VALUES (?, ?, ?)`,
 		"d!abc123", "old-delta-token", 1700000000)
-	if err != nil {
-		t.Fatalf("inserting pre-migration token: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Apply migration 4 (composite key).
 	_, err = provider.UpTo(ctx, 4)
-	if err != nil {
-		t.Fatalf("applying migration 4: %v", err)
-	}
+	require.NoError(t, err)
 
 	logger.Info("migration 4 applied, verifying token preservation")
 
@@ -2355,21 +1800,10 @@ func TestMigration00004_CompositeKey(t *testing.T) {
 		`SELECT token, scope_id, scope_drive FROM delta_tokens WHERE drive_id = ?`,
 		"d!abc123",
 	).Scan(&token, &scopeID, &scopeDrive)
-	if err != nil {
-		t.Fatalf("reading migrated token: %v", err)
-	}
-
-	if token != "old-delta-token" {
-		t.Errorf("token = %q, want %q", token, "old-delta-token")
-	}
-
-	if scopeID != "" {
-		t.Errorf("scope_id = %q, want empty string", scopeID)
-	}
-
-	if scopeDrive != "d!abc123" {
-		t.Errorf("scope_drive = %q, want %q", scopeDrive, "d!abc123")
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "old-delta-token", token)
+	assert.Empty(t, scopeID)
+	assert.Equal(t, "d!abc123", scopeDrive)
 
 	// Verify the new composite key allows a second token for the same
 	// drive_id with a different scope_id (shared folder delta).
@@ -2377,22 +1811,15 @@ func TestMigration00004_CompositeKey(t *testing.T) {
 		`INSERT INTO delta_tokens (drive_id, scope_id, scope_drive, token, updated_at)
 		 VALUES (?, ?, ?, ?, ?)`,
 		"d!abc123", "shared-folder-id", "d!other456", "scoped-delta-token", 1700000001)
-	if err != nil {
-		t.Fatalf("inserting scoped token: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Both tokens should coexist.
 	var count int
 	err = db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM delta_tokens WHERE drive_id = ?`, "d!abc123",
 	).Scan(&count)
-	if err != nil {
-		t.Fatalf("counting tokens: %v", err)
-	}
-
-	if count != 2 {
-		t.Errorf("expected 2 tokens for drive_id, got %d", count)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, 2, count)
 }
 
 // --- Sync metadata tests (6.2b) ---
@@ -2410,35 +1837,15 @@ func TestWriteSyncMetadata_RoundTrip(t *testing.T) {
 		Errors:    []error{fmt.Errorf("some sync error")},
 	}
 
-	err := mgr.WriteSyncMetadata(ctx, report)
-	if err != nil {
-		t.Fatalf("WriteSyncMetadata: %v", err)
-	}
+	require.NoError(t, mgr.WriteSyncMetadata(ctx, report))
 
 	meta, err := mgr.ReadSyncMetadata(ctx)
-	if err != nil {
-		t.Fatalf("ReadSyncMetadata: %v", err)
-	}
-
-	if meta["last_sync_duration_ms"] != "1500" {
-		t.Errorf("duration = %q, want %q", meta["last_sync_duration_ms"], "1500")
-	}
-
-	if meta["last_sync_succeeded"] != "42" {
-		t.Errorf("succeeded = %q, want %q", meta["last_sync_succeeded"], "42")
-	}
-
-	if meta["last_sync_failed"] != "3" {
-		t.Errorf("failed = %q, want %q", meta["last_sync_failed"], "3")
-	}
-
-	if meta["last_sync_error"] != "some sync error" {
-		t.Errorf("error = %q, want %q", meta["last_sync_error"], "some sync error")
-	}
-
-	if meta["last_sync_time"] == "" {
-		t.Error("last_sync_time should not be empty")
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "1500", meta["last_sync_duration_ms"])
+	assert.Equal(t, "42", meta["last_sync_succeeded"])
+	assert.Equal(t, "3", meta["last_sync_failed"])
+	assert.Equal(t, "some sync error", meta["last_sync_error"])
+	assert.NotEmpty(t, meta["last_sync_time"])
 }
 
 func TestWriteSyncMetadata_Upsert(t *testing.T) {
@@ -2448,29 +1855,15 @@ func TestWriteSyncMetadata_Upsert(t *testing.T) {
 	ctx := context.Background()
 
 	report1 := &SyncReport{Duration: 1 * time.Second, Succeeded: 10}
-	err := mgr.WriteSyncMetadata(ctx, report1)
-	if err != nil {
-		t.Fatalf("first WriteSyncMetadata: %v", err)
-	}
+	require.NoError(t, mgr.WriteSyncMetadata(ctx, report1))
 
 	report2 := &SyncReport{Duration: 2 * time.Second, Succeeded: 20}
-	err = mgr.WriteSyncMetadata(ctx, report2)
-	if err != nil {
-		t.Fatalf("second WriteSyncMetadata: %v", err)
-	}
+	require.NoError(t, mgr.WriteSyncMetadata(ctx, report2))
 
 	meta, err := mgr.ReadSyncMetadata(ctx)
-	if err != nil {
-		t.Fatalf("ReadSyncMetadata: %v", err)
-	}
-
-	if meta["last_sync_succeeded"] != "20" {
-		t.Errorf("succeeded = %q, want %q (should be from second write)", meta["last_sync_succeeded"], "20")
-	}
-
-	if meta["last_sync_duration_ms"] != "2000" {
-		t.Errorf("duration = %q, want %q", meta["last_sync_duration_ms"], "2000")
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "20", meta["last_sync_succeeded"], "should be from second write")
+	assert.Equal(t, "2000", meta["last_sync_duration_ms"])
 }
 
 func TestWriteSyncMetadata_NoErrors(t *testing.T) {
@@ -2480,19 +1873,11 @@ func TestWriteSyncMetadata_NoErrors(t *testing.T) {
 	ctx := context.Background()
 
 	report := &SyncReport{Duration: 500 * time.Millisecond, Succeeded: 5}
-	err := mgr.WriteSyncMetadata(ctx, report)
-	if err != nil {
-		t.Fatalf("WriteSyncMetadata: %v", err)
-	}
+	require.NoError(t, mgr.WriteSyncMetadata(ctx, report))
 
 	meta, err := mgr.ReadSyncMetadata(ctx)
-	if err != nil {
-		t.Fatalf("ReadSyncMetadata: %v", err)
-	}
-
-	if meta["last_sync_error"] != "" {
-		t.Errorf("error = %q, want empty", meta["last_sync_error"])
-	}
+	require.NoError(t, err)
+	assert.Empty(t, meta["last_sync_error"])
 }
 
 func TestReadSyncMetadata_EmptyDB(t *testing.T) {
@@ -2502,13 +1887,8 @@ func TestReadSyncMetadata_EmptyDB(t *testing.T) {
 	ctx := context.Background()
 
 	meta, err := mgr.ReadSyncMetadata(ctx)
-	if err != nil {
-		t.Fatalf("ReadSyncMetadata: %v", err)
-	}
-
-	if len(meta) != 0 {
-		t.Errorf("expected empty map, got %v", meta)
-	}
+	require.NoError(t, err)
+	assert.Empty(t, meta)
 }
 
 func TestBaselineEntryCount_Empty(t *testing.T) {
@@ -2518,13 +1898,8 @@ func TestBaselineEntryCount_Empty(t *testing.T) {
 	ctx := context.Background()
 
 	count, err := mgr.BaselineEntryCount(ctx)
-	if err != nil {
-		t.Fatalf("BaselineEntryCount: %v", err)
-	}
-
-	if count != 0 {
-		t.Errorf("count = %d, want 0", count)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
 }
 
 func TestBaselineEntryCount_WithEntries(t *testing.T) {
@@ -2546,18 +1921,11 @@ func TestBaselineEntryCount_WithEntries(t *testing.T) {
 		Size:       1024,
 		Mtime:      time.Now().UnixNano(),
 	}
-	if err := mgr.CommitOutcome(ctx, &outcome); err != nil {
-		t.Fatalf("CommitOutcome: %v", err)
-	}
+	require.NoError(t, mgr.CommitOutcome(ctx, &outcome))
 
 	count, err := mgr.BaselineEntryCount(ctx)
-	if err != nil {
-		t.Fatalf("BaselineEntryCount: %v", err)
-	}
-
-	if count != 1 {
-		t.Errorf("count = %d, want 1", count)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
 }
 
 func TestUnresolvedConflictCount_Empty(t *testing.T) {
@@ -2567,11 +1935,6 @@ func TestUnresolvedConflictCount_Empty(t *testing.T) {
 	ctx := context.Background()
 
 	count, err := mgr.UnresolvedConflictCount(ctx)
-	if err != nil {
-		t.Fatalf("UnresolvedConflictCount: %v", err)
-	}
-
-	if count != 0 {
-		t.Errorf("count = %d, want 0", count)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
 }
