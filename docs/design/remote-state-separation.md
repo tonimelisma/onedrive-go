@@ -1,8 +1,58 @@
-# Remote State Separation
+# Remote State Separation — Architectural Design
 
-## The Problem
+> **Scope**: Design document only. No code changes. This document is the single
+> self-contained reference for the remote state separation architecture —
+> incorporating all analysis, risk assessment, and decisions that previously
+> lived in separate review files.
 
-A bidirectional sync engine has two independent data flows. Each starts with an observation, requires an action to reconcile, and ends with the baseline recording success. The fundamental question is: what happens when the action fails?
+## Table of Contents
+
+1. [Founding Principle](#1-founding-principle)
+2. [The Problem](#2-the-problem)
+3. [Industry Comparison](#3-industry-comparison)
+4. [Architectural Decisions](#4-architectural-decisions)
+5. [Full Remote Mirror](#5-full-remote-mirror)
+6. [ID-Based Primary Key](#6-id-based-primary-key)
+7. [Explicit State Machine](#7-explicit-state-machine)
+8. [Data Flows](#8-data-flows)
+9. [Conflict Scenarios](#9-conflict-scenarios)
+10. [Concurrency Safety Model](#10-concurrency-safety-model)
+11. [CommitObservation Logic](#11-commitobservation-logic)
+12. [Database Access Pattern](#12-database-access-pattern)
+13. [Unified Filtering Architecture](#13-unified-filtering-architecture)
+14. [Upload Failure Tracking](#14-upload-failure-tracking)
+15. [Consolidated Schema](#15-consolidated-schema)
+16. [Single-Timer Reconciler](#16-single-timer-reconciler)
+17. [Error Handling](#17-error-handling)
+18. [Compatibility](#18-compatibility)
+19. [Crash Recovery](#19-crash-recovery)
+20. [Critical Design Invariants](#20-critical-design-invariants)
+21. [Risk Analysis](#21-risk-analysis)
+22. [Assessment Against Existing Architecture](#22-assessment-against-existing-architecture)
+23. [Tier 1 Research Alignment](#23-tier-1-research-alignment)
+24. [Testing Strategy](#24-testing-strategy)
+25. [Migration Path](#25-migration-path)
+26. [Verdict](#26-verdict)
+
+---
+
+## 1. Founding Principle
+
+We are designing from a blank slate. Zero path dependency. If the right answer
+requires rewriting every file in `internal/sync/`, we rewrite every file.
+Engineering effort is free. The only thing that matters is getting the
+architecture right, because this is the foundation everything else builds on —
+multi-drive, WebSocket notifications, filtering, shared content. A wrong
+foundation compounds forever.
+
+---
+
+## 2. The Problem
+
+A bidirectional sync engine has two independent data flows. Each starts with an
+observation, requires an action to reconcile, and ends with the baseline
+recording success. The fundamental question is: what happens when the action
+fails?
 
 ### Remote → Local (downloads)
 
@@ -13,13 +63,49 @@ Delta API tells us   Download the file   Record "local now
 "file X has hash R"  to local disk       matches remote"
 ```
 
-**The observation is ephemeral.** We learn about remote changes by calling the delta API. The API returns changed items and a new cursor token. Once we advance the token, the API will not re-tell us about those items. The knowledge exists only as a `ChangeEvent` struct flowing through the buffer and planner.
+**The observation is ephemeral.** We learn about remote changes by calling the
+delta API. The API returns changed items and a new cursor token. Once we advance
+the token, the API will not re-tell us about those items. The knowledge exists
+only as a `ChangeEvent` struct flowing through the buffer and planner.
 
 If the download succeeds: `CommitOutcome` updates the baseline. Done.
 
-If the download fails: the `ChangeEvent` is gone. `CommitOutcome` is a no-op for failures. The baseline has no record of the remote change. The only way to re-learn about it is to re-poll the delta API with the old token.
+If the download fails: the `ChangeEvent` is gone. `CommitOutcome` is a no-op
+for failures. The baseline has no record of the remote change. The only way to
+re-learn about it is to re-poll the delta API with the old token.
 
-**This is where the current design breaks.** The delta token advances (see [failures.md](failures.md) for the full bug analysis), so the API won't re-deliver the item. The knowledge is permanently lost. No local trace exists — the file simply wasn't downloaded, and neither the baseline nor the filesystem records that anything is missing.
+**This is where the current design breaks.** The delta token advances, so the
+API won't re-deliver the item. The knowledge is permanently lost. No local trace
+exists — the file simply wasn't downloaded, and neither the baseline nor the
+filesystem records that anything is missing.
+
+### The delta token advancement bug
+
+This is not a corner case — it is a **fundamental design flaw** that silently
+loses data in the most common failure scenario. The mechanism:
+
+1. Poll returns items [A,B,C,D,E] + token T'. Observer stores T' in memory.
+2. D fails (423 lock — routine in SharePoint). Cycle has failures. DB token stays at T.
+3. Next poll uses T' (in-memory). Returns [F,G] + token T''. F,G succeed.
+4. Cycle has zero failures. Commits T''. **D is permanently lost.**
+
+The failure tracker (`failure_tracker.go`) was introduced to prevent token
+starvation but *accelerates* the bug: suppressed items don't count as failures,
+so cycles containing them "succeed" and commit the token past the suppressed
+items within the same cycle.
+
+This is not hypothetical. In any SharePoint environment with co-authoring, 423
+locks are routine. Files locked during download that are never modified again
+become silently stale — permanently. The user has no indication anything is
+wrong.
+
+The reference OneDrive client (abraunegg) had the exact same class of bug
+(#3344 — pending download flag cleared on failure, causing the engine to
+interpret the absent file as an intentional local deletion). Every production
+sync engine that has shipped has encountered and solved this problem.
+
+The PRD requires "zero data loss crash recovery." The current architecture
+**violates this requirement.**
 
 ### Local → Remote (uploads)
 
@@ -30,9 +116,10 @@ Filesystem has       Upload the file     Record "remote now
 "file X with hash L" to OneDrive        matches local"
 ```
 
-**The observation is inherent.** The local filesystem IS the durable record. We can re-observe it at any time — via inotify, the safety scan (every 5 minutes), or by the planner comparing local files against baseline on every cycle.
-
-If the upload fails: the file is still on disk. The planner compares local file hash against baseline on the next cycle. They still differ. The planner regenerates the upload action. Natural infinite retry with no special mechanism.
+**The observation is inherent.** The local filesystem IS the durable record. We
+can re-observe it at any time — via inotify, the safety scan, or by the planner
+comparing local files against baseline on every cycle. Upload failures retry
+naturally.
 
 ### The fundamental asymmetry
 
@@ -43,7 +130,10 @@ If the upload fails: the file is still on disk. The planner compares local file 
 | **Re-observation on failure** | Requires token replay OR persistent storage | Free — re-reads filesystem every cycle |
 | **Current retry mechanism** | None (token bug loses the item) | Natural (planner regenerates) |
 
-Uploads work because the planner reconciles from **state** (filesystem vs baseline). Downloads fail because the planner reconciles from **events** (ephemeral ChangeEvents). The fix is to give downloads the same property: reconcile from persistent state, not ephemeral events.
+Uploads work because the planner reconciles from **state** (filesystem vs
+baseline). Downloads fail because the planner reconciles from **events**
+(ephemeral ChangeEvents). The fix is to give downloads the same property:
+reconcile from persistent state, not ephemeral events.
 
 ### Three conflated concerns
 
@@ -55,546 +145,271 @@ The sync engine conflates three things that should be independent:
 | **Remote knowledge** | "What does the remote look like?" | When we learn about a change | Nowhere persistent. Ephemeral ChangeEvent structs |
 | **Synced state** | "What have we successfully synced?" | On action success | `baseline` table |
 
-The delta token currently means both "we've been told about everything up to here" AND "we've synced everything up to here." It should mean only the first. This conflation is the root cause of the delta token advancement bug, the need for the in-memory failure tracker, and the entire "persistent failure tracker" design that was being considered.
-
-### How the in-memory failure tracker makes it worse
-
-The in-memory failure tracker (`failure_tracker.go`) was introduced to prevent "delta token starvation" — a permanently-failing item blocking the token forever. It suppresses items after 3 failures, excluding them from the plan. But this *accelerates* item loss: suppressed items don't count as cycle failures, so cycles containing them "succeed," committing the token past the suppressed items even within the same cycle. The tracker was solving a real problem (starvation) but creating a worse one (faster item loss). See [failures.md §The failure tracker makes it worse](failures.md) for the detailed mechanism.
+The delta token currently means both "we've been told about everything up to
+here" AND "we've synced everything up to here." It should mean only the first.
 
 ### What this design does NOT solve
 
-This document addresses the download/remote-change side of failure handling. Two upload-side gaps remain:
+This document addresses the download/remote-change side of failure handling. Two
+upload-side gaps remain as pre-existing limitations:
 
-1. **No upload backoff.** A permanently-failing upload (e.g., invalid SharePoint filename) is retried every cycle with no delay — wasting one worker's time per cycle. The planner regenerates the action because the file still differs from baseline. There's no mechanism to back off.
-2. **No upload failure visibility.** The user has no way to see that a local file can't be uploaded. The `failures` CLI command (described below) queries `remote_state`, which uploads don't touch.
+1. **No upload backoff.** A permanently-failing upload (e.g., invalid SharePoint
+   filename) is retried every cycle with no delay — wasting one worker's time per
+   cycle. The planner regenerates the action because the file still differs from
+   baseline. The `local_issues` table (§14) addresses this gap.
 
-These are pre-existing gaps. Addressing them requires either extending `remote_state` to track upload failures (adds complexity for something the natural retry already handles) or a separate upload-failure tracking mechanism. Both are deferred — the download-side data loss is the critical bug.
+2. **No upload failure visibility.** The user has no way to see that a local file
+   can't be uploaded. The `issues` CLI command queries both `remote_state` and
+   `local_issues` to surface all stuck items.
 
-## Industry Context
+These were pre-existing gaps. The `local_issues` table designed in §14 resolves
+both.
 
-Every production sync engine separates "knowing about a change" from "having applied it."
+---
 
-**Dropbox (Nucleus)** maintains three separate state stores: Sync File Journal (what the remote looks like), local state (filesystem), and synced state (what was reconciled). The cursor tracks position in the SFJ — observation only. Processing failures do not affect the cursor.
+## 3. Industry Comparison
 
-**abraunegg** (OneDrive Linux client) uses a sequential model: poll → process all → commit token. Token only committed after the entire cycle completes. If processing fails, the token stays stale and the next run re-fetches everything. Correct but slow — one permanently-failing item blocks everything.
+| Engine | Observation Persistence | Token Advancement | Failure Recovery |
+|--------|------------------------|-------------------|------------------|
+| **Dropbox** | Full remote mirror (SFJ) | Always (cursor only) | State discrepancy |
+| **Syncthing** | Sequence numbers per device | N/A (no cursor) | Version vectors |
+| **abraunegg** | Database (partial) | Only on full success | Token replay (starvation) |
+| **rclone bisync** | Listing snapshots | N/A (no cursor) | Full rescan |
+| **Google Drive** | Sequential token | Only on full success | Token replay (starvation) |
+| **Current onedrive-go** | None (ephemeral events) | Broken (advances past failures) | None (data loss) |
+| **Proposed onedrive-go** | Full remote mirror | Always (cursor only) | State discrepancy + reconciler |
 
-**Official OneDrive client** uses an event-driven queue with per-item metadata in a `.dat` file. Internal state tracks per-item sync status independently of the cursor.
+### Dropbox Nucleus — The Gold Standard
 
-**Google Drive** uses a sequential page token model similar to abraunegg.
+Dropbox maintains **three separate trees**: Remote Tree (SFJ — what the server
+says), Local Tree (filesystem), Synced Tree (last committed state / merge base).
+The SFJ cursor is a pure observation cursor — it tracks position in the journal,
+not sync success. Processing failures do not affect the cursor.
 
-Our engine is the only one that ties cursor advancement to sync success, which creates the two-token problem and the cascading bugs around it.
+The `remote_state` table in this design is architecturally equivalent to
+Dropbox's Remote Tree. The proposed design follows Dropbox's core principle
+(separate observation from application) and goes further than the original
+proposal by adopting a full remote mirror rather than a work queue.
 
-### Work queue vs. remote mirror
+### Syncthing — Version Vectors + Sequence Numbers
 
-Dropbox's SFJ is a **full remote mirror** — it stores the state of every remote file, whether synced or not. Our `remote_state` is a **pending work queue** — rows exist only for items that haven't been synced yet. Once synced, the row is deleted. The baseline is the durable record of synced state.
+Syncthing uses monotonically increasing sequence numbers per device. On restart,
+it knows exactly where it was. Syncthing doesn't have our problem because it
+doesn't use a cursor-based delta API. Each device maintains its own version
+vector and sequence counter.
 
-*Why not a full remote mirror?* Dropbox's SFJ is the authoritative list of "what files exist on the server." Our system doesn't need this — the delta API can re-tell us everything if we reset the token. A full mirror would duplicate the baseline for every synced file (100K+ rows), adding write amplification on every sync for no correctness benefit. The work queue pattern is sufficient: we only need to persist items that are "known but not yet applied."
+**Relevance: Moderate.** Different model, but the principle is the same:
+observation state is durable and independent of sync success.
 
-*Trade-off:* A full mirror would let us answer "what does the remote look like right now?" from local state alone. The work queue can't — we'd need to query the API. This matters for hypothetical features like offline browsing or immediate conflict detection. We don't need these today. If we do later, the migration is additive: keep `remote_state` rows after sync instead of deleting them.
+### Reference OneDrive Client (abraunegg)
 
-## The Solution
+Sequential model: poll → process all → commit token. Token only committed after
+the entire cycle completes. Correct but slow — one permanently-failing item
+blocks everything. This is the "starvation" problem.
 
-### Overview
+Bug #3344 showed that clearing the pending flag on failure caused data loss (the
+engine interpreted the missing local file as an intentional deletion).
 
-Add a `remote_state` table that records what we've observed from delta, independently of whether we've synced it. The delta token becomes a pure API cursor that always advances. A dedicated reconciler goroutine watches for unreconciled items and retries them with exponential backoff.
+**The proposed design solves the starvation problem** that the reference client
+suffers from. The reference client's approach (don't advance until everything
+succeeds) is correct but operationally unacceptable.
 
-Three principles:
-1. **Record what we learn immediately.** When delta says "file X has hash R," write that to `remote_state` before attempting any action.
-2. **Always advance the token.** The token is an API cursor — "don't re-send me stuff I already know about." Decouple it completely from sync success.
-3. **Reconcile from state, not events.** Failed items persist in `remote_state`. The reconciler turns them back into pipeline events. No item is ever lost.
+### rclone bisync — Snapshot Comparison
+
+rclone bisync saves full listing snapshots before acting. If interrupted, the
+next run detects inconsistency and can either resync or resume.
+
+**Relevance: Low.** Different model (full listing comparison, not cursor-based
+delta). But the principle holds: the observation is persisted durably before
+action.
+
+### Google Drive — Page Token Model
+
+Sequential page token, similar to abraunegg. Token only advances after complete
+processing. Same starvation risk.
+
+**The proposed design is strictly better** than Google Drive's model for the same
+reason it's better than abraunegg's.
+
+---
+
+## 4. Architectural Decisions
+
+Six foundational decisions shape the entire design:
+
+| # | Decision | Rationale |
+|---|----------|-----------|
+| 1 | **Full remote mirror** (not work queue) | Rows persist for ALL remote items. Enables offline verify, filter-change preview, diagnostic completeness. |
+| 2 | **`(drive_id, item_id)` as PK** (not path) | Matches API identity. Atomic moves. Eliminates path-collision bugs. Dropbox proved this. |
+| 3 | **Explicit `sync_status` state machine** | Prevents abraunegg bug #3344. Every state is named, never inferred. |
+| 4 | **Partitioned interfaces + optimistic concurrency** | Compile-time safety (typed interfaces per writer) + runtime safety (WHERE clause guards). |
+| 5 | **`sync_status` authoritative, DepTracker as read-through cache** | Single source of truth in DB. DepTracker projects DB state into memory for fast lookups + dependency DAG. |
+| 6 | **`computeNewStatus()` pure function** | All 30 CommitObservation state-transition cells handled in Go code (not SQL CASE), fully unit-testable. |
 
 ### Alternatives considered
 
-Four alternative approaches were evaluated:
+**A. Never advance the token until all items succeed (abraunegg model).** Correct
+but slow. One permanently-failing item blocks all new change discovery
+indefinitely. This is "delta token starvation."
 
-**A. Never advance the token until all items succeed (abraunegg model).** Correct but slow. One permanently-failing item (bad filename, revoked permission) blocks all new change discovery indefinitely. This is "delta token starvation" — the very problem the in-memory failure tracker was introduced to solve. The tracker's solution (suppress the item so the cycle "succeeds") then causes item loss. Starvation and item loss are two sides of the same coin when the token conflates cursor position with sync success.
+**B. Periodically do full resyncs.** A full delta response with an empty token
+returns every item in the drive — potentially thousands. Too expensive as the
+primary recovery mechanism.
 
-**B. Periodically do full resyncs.** A full delta response with an empty token returns every item in the drive — potentially thousands. Reasonable as a safety net (e.g., every 24 hours) or as a last resort after 410 Gone, but too expensive as the primary recovery mechanism. It also doesn't help during the 5-minute window between a failure and the next full resync — items are still lost in the interim.
+**C. Accept the data loss (current behavior).** Items lost from delta are
+recovered only if modified again remotely, or on 90-day token expiration.
+Unacceptable.
 
-**C. Accept the data loss (current behavior).** Items lost from delta are recovered only if: (1) modified again remotely, (2) the daemon restarts within the 5-minute window before the token advances (almost never), or (3) the 90-day token expiration triggers a full resync. For enterprise SharePoint environments with frequent 423 locks, this means silently stale files with no user indication.
+**D. Persistent failure tracker with separate `failure_records` table.** Works,
+but duplicates information: the failure record stores the same data we'd need in
+`remote_state`. The failure tracker becomes a shadow copy.
 
-**D. Persistent failure tracker with separate `failure_records` table.** Track failures independently, allow the token to advance, and retry from the failure table. This was the previous design (see `.claude/plans/witty-doodling-whale.md`). It works, but duplicates information: the failure record stores the same path/hash/drive_id that we'd need in `remote_state`. The failure tracker becomes a shadow copy of "what the remote looks like but we haven't synced." Persisting the observation directly in `remote_state` is simpler — the failure state (count, next_retry) lives on the observation row itself. No separate table, no shadow copy, one source of truth for "what does the remote look like."
-
-**E. Persist observed remote state (this design).** The Dropbox model. Records what we learn when we learn it. The delta token is a pure API cursor that always advances. Failed items persist as state discrepancies between `remote_state` and `baseline`. A reconciler retries them. This is the only approach that provides both continuous sync (no starvation) and data integrity (no loss) without duplicating state.
+**E. Persist observed remote state (this design).** The Dropbox model. Records
+what we learn when we learn it. The delta token is a pure API cursor. Failed
+items persist as state discrepancies. This is the only approach that provides
+both continuous sync (no starvation) and data integrity (no loss).
 
 We chose E.
 
-### Addressing the original objections
+---
 
-The `event-driven-rationale.md` (Part 1.1, Alternative B) previously rejected a multi-table approach for three reasons:
+## 5. Full Remote Mirror
 
-1. **"Multiple tables means multiple writers competing for SQLite."** Solved: a single concrete type (`SyncStore`) owns all database access, exposing capability-restricted sub-interfaces to each caller. See [Database access pattern](#database-access-pattern).
+### What changed from original proposal
 
-2. **"Dry-run has side effects because observation writes to the database."** Solved: `remote_state` writes are gated on `!opts.DryRun`. The observer produces in-memory events for dry-run reports but persists nothing. See [Dry-run behavior](#dry-run-behavior).
+The original design used a **work queue**: rows existed only for unsynced items
+and were deleted on sync success. The revised design uses a **full remote
+mirror**: rows persist for ALL remote items. On sync success, the row is marked
+`synced` rather than deleted.
 
-3. **"Event-driven keeps observations ephemeral."** This is the root cause of the bug. Ephemeral observations + advancing token = permanent item loss. The fix is to make remote observations persistent.
+### Why (5 reasons)
 
-The original Alternative B had *both* observers writing state (remote AND local), creating two concurrent writers. This design only persists the remote side — local state is inherently persistent in the filesystem. The planner stays pure: it receives synthesized ChangeEvents through the existing buffer, never reading from the database directly.
+1. **Offline verification**: Compare baseline against `remote_state` without API
+   call.
+2. **Filter-change impact preview**: Diff `remote_state` vs baseline without API
+   round trip.
+3. **Conflict detection completeness**: Planner always sees `Remote != nil` for
+   synced files.
+4. **Diagnostic completeness**: `status --verbose` shows "X remote, Y synced, Z
+   pending, W filtered."
+5. **Future migration safety**: No backfill needed — we just don't delete rows.
 
-### Updated design axiom
+### Steady-state characteristics
 
-The old axiom: "The sync database stores confirmed synced state and nothing else."
+- **Table size**: Same as baseline (~100K rows).
+- **Write amplification**: 1 write (UPDATE) vs 2 writes (INSERT + DELETE) — less
+  I/O than work queue.
+- **Reconciler query**: `WHERE sync_status NOT IN ('synced', 'filtered')` —
+  index on `sync_status`.
 
-The new axiom: **"The database stores confirmed synced state (baseline) and observed remote state (remote_state). Local state is inherently persistent in the filesystem and is not stored. A single concrete type (`SyncStore`) owns all database access, exposing capability-restricted sub-interfaces to each caller."**
+### Risks addressed
 
-A corollary: the delta token is an API cursor, not a sync cursor. It means "don't re-send me stuff I already know about." It does not mean "I've synced everything up to here."
+- **R6** (100K scan): Index on `sync_status` makes reconciler query fast.
+- **R7** (WAL growth): Periodic checkpoint after initial sync, every 30 min, and
+  on shutdown. Hard requirement. New `SyncStore.Checkpoint()` method.
+- **R8** (UPDATE vs DELETE): Conditional UPDATE has identical semantics to
+  conditional DELETE.
 
-## Schema
+---
 
-### The remote_state table
+## 6. ID-Based Primary Key
 
-```sql
-CREATE TABLE IF NOT EXISTS remote_state (
-    path            TEXT    PRIMARY KEY,
-    drive_id        TEXT    NOT NULL,
-    item_id         TEXT    NOT NULL,
-    parent_id       TEXT,
-    item_type       TEXT    NOT NULL CHECK(item_type IN ('file', 'folder', 'root')),
-    hash            TEXT,
-    size            INTEGER,
-    mtime           INTEGER,
-    etag            TEXT,
-    is_deleted      INTEGER NOT NULL DEFAULT 0,
-    observed_at     INTEGER NOT NULL CHECK(observed_at > 0),
-    failure_count   INTEGER NOT NULL DEFAULT 0,
-    next_retry_at   INTEGER,
-    last_error      TEXT,
-    http_status     INTEGER
-);
+### What changed from original proposal
+
+The original design used `path TEXT PRIMARY KEY` on both tables, consistent with
+the existing baseline. The revised design uses
+`PRIMARY KEY (drive_id, item_id)` with `path TEXT NOT NULL UNIQUE`.
+
+### Why (5 reasons)
+
+1. **Dropbox proved it**: Path-based caused their worst data loss bugs. IDs are
+   immutable; paths are derived.
+2. **Move atomicity**: Path-as-PK requires DELETE+INSERT (crash window).
+   ID-as-PK is single UPDATE — atomic.
+3. **Folder rename cascade**: Only renamed folder's row changes — children's
+   `parent_id` unchanged.
+4. **API identity mismatch**: Delta API identifies by ID. Path materialization is
+   lossy — two items can transiently share a path.
+5. **Shared drive identity**: `(drive_id, item_id)` is globally unique; paths
+   may collide across shared drives.
+
+### Code impact analysis
+
+- Buffer, Planner, Executor, Scanner, LocalObserver: all use `GetByPath()` —
+  unchanged (path is UNIQUE).
+- Remote observer: `GetByID()` now uses PRIMARY KEY — faster.
+- CommitOutcome: upsert by ID. Moves become single UPDATE.
+
+### In-memory changes
+
+`ByID` becomes canonical map. `ByPath` remains as secondary index. New
+`DeleteByID(key)`.
+
+### Risks addressed
+
+- **R9** (folder rename cascade): Eager — O(N) writes in same transaction.
+  Stale paths confuse every path-based lookup.
+- **R10** (transient path collision): Atomic transaction + B-281 ordering. Two
+  items transiently sharing a path are handled within the transaction.
+- **R11** (`local_issues` asymmetry): By design — local files have no item ID
+  until uploaded.
+
+---
+
+## 7. Explicit State Machine
+
+### Why
+
+abraunegg bug #3344 — implicit state inference leads to data loss. Explicit
+states are unambiguous.
+
+### Download state machine
+
+```
+UNKNOWN → PENDING_DOWNLOAD → DOWNLOADING → SYNCED
+                  ↑               |
+                  |          (on failure)
+                  |               ↓
+                  ←── DOWNLOAD_FAILED
 ```
 
-### Column design rationale
-
-**`path` as primary key.** Paths are globally unique within the sync root. Even with shared drive shortcuts (where items have a different `drive_id`), the path prefix distinguishes them (e.g., `SharedFolder1/file.txt` vs `SharedFolder2/file.txt`). No `scope_id` column is needed.
-
-**`hash` is nullable.** Folders don't have hashes. The conditional delete in `CommitOutcome` uses SQLite's `IS` operator (`WHERE hash IS ?`) for NULL-safe comparison — `NULL IS NULL` returns `TRUE`.
-
-**`is_deleted` for deletions and moves.** When delta reports a deletion, we write `{path: X, is_deleted: 1}`. For moves (X → Y), the observer writes two rows: `{path: Y, is_deleted: 0}` for the new location and `{path: X, is_deleted: 1}` for the old. This ensures the reconciler sees both sides of a move. Cleanup: when a local delete succeeds, `CommitOutcome` deletes the `is_deleted` row via the same conditional delete (`WHERE path = ? AND hash IS NULL` — deleted items have NULL hash, and `NULL IS NULL` returns TRUE).
-
-**`failure_count` and `next_retry_at` for backoff.** These track retry state directly on the observation row. No separate failure tracking table — when the action succeeds and the row is deleted, the failure history goes with it. A fresh delta observation (INSERT OR REPLACE) resets `failure_count` to 0, giving the item a fresh start if the remote file has changed.
-
-*Alternative considered: preserve failure_count across fresh observations.* If the same path keeps failing with the same error (e.g., 403), resetting to 0 on each fresh delta event means the item goes through the fast-retry phase (1-2 attempts at ~5s) before backing off again. This wastes 2 retries every 5 minutes (the delta poll interval). We accept this: the cost is negligible (2 seconds of work every 5 minutes) and the benefit is real — if the file *has* changed (new version, permissions fixed), we don't want to wait through a long backoff.
-
-**`last_error` and `http_status` for user visibility.** These are metadata for the `failures` CLI command. When the user runs `onedrive-go failures`, showing "HTTP 423: locked" is far more useful than "5 failures." These columns do not affect retry logic.
-
-**No `ctag` or `name` columns.** The `ChangeEvent` struct carries both fields, but neither is used by the planner's decision logic or the executor. CTag is a folder-level content tag — stored in `RemoteState` in memory but never read downstream. Name is derived from `filepath.Base(path)` wherever needed (buffer synthetic deletes, executor outcome construction). Storing unused columns would add write cost to every `CommitObservation` for no benefit. If a future feature needs them, adding columns to an existing table is a trivial migration.
-
-**No additional indexes needed** beyond the primary key. The reconciler's bootstrap query joins `remote_state` (typically 0-100 rows in steady state) against `baseline` (potentially 100K rows) via both PKs. SQLite's optimizer starts from the smaller table. The `next_retry_at` column is queried by the reconciler at startup, but with <100 rows, a full scan is faster than an index lookup.
-
-### What "unreconciled" means
-
-A `remote_state` row is **unreconciled** when the corresponding `baseline` row either doesn't exist or has a different hash. This is the definition used throughout the document:
-
-```sql
-SELECT rs.*
-FROM remote_state rs
-LEFT JOIN baseline b ON rs.path = b.path
-WHERE rs.is_deleted = 0
-  AND (b.remote_hash IS NULL OR b.remote_hash != rs.hash)
-```
-
-For deletion rows (`is_deleted = 1`), "unreconciled" means the baseline row still exists (the local deletion hasn't been committed yet):
-
-```sql
-SELECT rs.*
-FROM remote_state rs
-INNER JOIN baseline b ON rs.path = b.path
-WHERE rs.is_deleted = 1
-```
-
-The state discrepancy between `remote_state` and `baseline` IS the failure record. No separate tracking needed.
-
-### Migration strategy
-
-There are zero current users. All existing migrations (00001-00005) are deleted. A single `00001_initial_schema.sql` creates the final schema: `baseline`, `delta_tokens`, `conflicts`, `sync_metadata`, `remote_state`. Test environments with old databases will fail with a schema mismatch — delete the `.db` file and re-sync.
-
-*Why not keep existing migrations and add 00006?* With zero users, there's no upgrade path to maintain. A single migration is easier to read, and the migration tooling (goose) is simpler when there's only one file. If we had users, we'd add an incremental migration instead.
-
-## Architecture
-
-### How the pieces fit together
-
-```
-RemoteObserver                    LocalObserver
-  │ (polls delta API)                │ (inotify + safety scan)
-  │                                  │
-  ├─ CommitObservation()             │
-  │  (writes remote_state +          │
-  │   advances delta token           │
-  │   via SyncStore)                 │
-  │                                  │
-  ├─ sends ChangeEvents ─────────────┤──→ Buffer ──→ Planner ──→ Workers
-  │                                  │                              │
-  │                                  │                         ┌────┴────┐
-  │                                  │                      success   failure
-  │                                  │                         │         │
-  │                                  │                  CommitOutcome  RecordFailure
-  │                                  │                  (baseline +   (increment
-  │                                  │                   conditional  failure_count
-  │                                  │                   delete from  on remote_state)
-  │                                  │                   remote_state)     │
-  │                                  │                         │         │
-  │                                  │                         └────┬────┘
-  │                                  │                              │
-  Reconciler ◄──────────────────────────────────────── Kick() ─────┘
-  │ (dedicated goroutine, level-triggered)
-  │
-  ├─ On Kick() or 2-min safety sweep:
-  │     Read DB → diff against timer map → adjust timers
-  ├─ On startup: bootstrap from DB (initial reconcile)
-  ├─ When retry fires: re-read DB → synthesize ChangeEvent → Buffer → normal pipeline
-  └─ On shutdown: cancel all pending timers
-```
-
-### Database access pattern
-
-#### The problem with "sole writer"
-
-The current codebase has a `BaselineManager` type that owns all database methods. The design doc previously described this as a "sole-writer pattern" — implying a single goroutine writes to the database. But that's not what happens. Today, multiple goroutines already call `BaselineManager` write methods concurrently:
-
-- **Worker goroutines** (N concurrent) call `CommitOutcome()` — one per completed action
-- **Engine goroutine** calls `CommitDeltaToken()` — at cycle completion
-- **Daemon goroutine** calls `PruneResolvedConflicts()` — periodic maintenance
-
-This design adds more concurrent writers:
-
-- **RemoteObserver goroutine** calls `CommitObservation()` — after each delta poll
-- **drainWorkerResults goroutine** calls `RecordFailure()` — on each action failure
-
-Correctness comes from SQLite WAL mode with a busy timeout, which serializes concurrent write transactions at the database level. The "sole writer" label was describing *API encapsulation* (one type contains all write methods), not *concurrency* (one goroutine does all writes). The distinction matters: someone reading "sole writer" and seeing concurrent goroutine calls would be confused.
-
-#### Sub-interfaces by capability (Option D)
-
-Instead of one type with ~23 methods accessed by everyone, we define sub-interfaces grouped by *who calls them*. A single concrete type (`SyncStore`, renamed from `BaselineManager` to reflect its broader scope) implements all interfaces. Each caller receives only the interface it needs.
-
-Five alternatives were considered:
-
-**A. Status quo + documentation fix.** Keep one type, clarify that "sole writer" means "sole module" not "single goroutine." Rejected: `BaselineManager` grows to ~23 methods — a god object. Every component depends on the full type. No compile-time restriction on who can write what.
-
-**B. Split by table ownership.** Three types, each owning one table (`BaselineStore`, `RemoteStateStore`, `DeltaTokenStore`). Rejected: some operations genuinely need cross-table atomicity (`CommitOutcome` writes `baseline` + deletes `remote_state`; `CommitObservation` writes `remote_state` + `delta_tokens`). A coordinator type that holds all three stores becomes the new god object.
-
-**C. Split by read vs. write.** `SyncStateReader` for all queries, `SyncStateWriter` for all mutations. Rejected: splits related operations. `CommitOutcome` (write) and "is this item in baseline?" (read) are conceptually coupled but live in different types. Harder to reason about invariants.
-
-**D. Sub-interfaces on one concrete type (chosen).** One implementation type, five interfaces grouped by caller identity. Callers receive the narrowest interface they need. Cross-table transactions stay in one place. The type system enforces capability restriction at compile time.
-
-**E. Event-sourced single-writer goroutine.** All state changes flow through a channel to a single writer goroutine. True single-writer — no concurrent DB access. Rejected: adds latency to every write (channel hop), requires back-pressure design, complicates shutdown/drain, and the write volume (~tens of items per 5-minute cycle) doesn't justify the complexity. SQLite WAL handles this trivially.
-
-We chose D.
-
-```go
-// ObservationWriter — called by RemoteObserver goroutine (single caller).
-// Writes observed remote state and advances the delta token atomically.
-type ObservationWriter interface {
-    CommitObservation(ctx context.Context, events []ChangeEvent, newToken string, driveID string) error
-    GetDeltaToken(ctx context.Context, driveID, scopeID string) (string, error)
-}
-
-// OutcomeWriter — called by worker goroutines (N concurrent callers).
-// Commits action results to baseline and cleans up remote_state on success.
-type OutcomeWriter interface {
-    CommitOutcome(ctx context.Context, outcome *Outcome) error
-    Load(ctx context.Context) (*Baseline, error)
-}
-
-// FailureRecorder — called by drainWorkerResults goroutine (single caller).
-// Records failure metadata on remote_state rows.
-type FailureRecorder interface {
-    RecordFailure(ctx context.Context, path, errMsg string, httpStatus int) error
-}
-
-// StateReader — called by reconciler, planner, status, CLI (read-only).
-// All methods are pure reads. Multiple goroutines call concurrently.
-// WAL mode guarantees readers never block (they read from a consistent snapshot).
-type StateReader interface {
-    ListUnreconciled(ctx context.Context) ([]RemoteStateRow, error)
-    FailureCount(ctx context.Context) (int, error)
-    BaselineEntryCount(ctx context.Context) (int, error)
-    UnresolvedConflictCount(ctx context.Context) (int, error)
-    ReadSyncMetadata(ctx context.Context) (map[string]string, error)
-    CheckCacheConsistency(ctx context.Context) (int, error)
-    ListConflicts(ctx context.Context) ([]ConflictRecord, error)
-    ListAllConflicts(ctx context.Context) ([]ConflictRecord, error)
-    GetConflict(ctx context.Context, idOrPath string) (*ConflictRecord, error)
-}
-
-// StateAdmin — called by CLI commands and daemon maintenance.
-// Write operations that don't fit the hot path (user-initiated or periodic).
-type StateAdmin interface {
-    ResolveConflict(ctx context.Context, id, resolution string) error
-    PruneResolvedConflicts(ctx context.Context, retention time.Duration) (int, error)
-    WriteSyncMetadata(ctx context.Context, report *SyncReport) error
-    ResetFailure(ctx context.Context, path string) error     // reset failure_count to 0, not delete
-    ResetAllFailures(ctx context.Context) error              // reset all, not delete
-}
-```
-
-The engine constructs `SyncStore` and distributes sub-interfaces:
-
-| Component | Receives | Why |
-|-----------|----------|-----|
-| RemoteObserver | `ObservationWriter` | Writes observations + reads delta token |
-| Worker pool | `OutcomeWriter` | Commits outcomes + reads baseline cache |
-| drainWorkerResults | `FailureRecorder` | Records failures on action failure |
-| Reconciler | `StateReader` | Reads unreconciled rows for retry scheduling |
-| CLI commands | `StateReader` + `StateAdmin` | Reads for display + admin writes |
-| Engine | all interfaces (constructs + distributes) | Orchestrator |
-
-**The `DB()` escape hatch is removed.** Today, `BaselineManager.DB()` exposes raw `*sql.DB` so `status.go` can run ad-hoc queries. Under this design, those queries become methods on `StateReader`. No component receives raw database access.
-
-**Multi-drive: no drive_id filtering needed.** Each engine gets its own isolated SQLite database (the orchestrator creates one `SyncStore` per drive via `rd.StatePath()`). All rows in a given `remote_state` table belong to the same drive by construction. `ListUnreconciled()` returns only that drive's rows without a `WHERE drive_id = ?` clause. The `drive_id` column in `remote_state` is useful for verification, debugging, and potential future database consolidation, but is not needed for correctness.
-
-#### Concurrency model
-
-The sub-interfaces restrict *capability* — what each caller is allowed to do. They do not restrict *concurrency* — multiple goroutines still call write methods on the same underlying `SyncStore` concurrently.
-
-Concurrency safety comes from SQLite WAL mode with a 5-second busy timeout (`_busy_timeout=5000`). Under WAL, readers never block — they read from a consistent snapshot. Writers serialize: if two goroutines call write methods simultaneously, one completes while the other waits (up to the busy timeout). With the system's write volume (~tens of items per 5-minute cycle), contention is negligible.
-
-This is a deliberate choice. Application-level serialization (e.g., a single-writer goroutine with a channel, as in Option E) would eliminate contention entirely but adds latency and complexity. SQLite WAL is designed for exactly this workload: low-volume concurrent writes from a handful of goroutines in the same process.
-
-#### CommitObservation details
-
-`CommitObservation` is the key new write method on `SyncStore` (exposed via `ObservationWriter`):
-
-```go
-func (s *SyncStore) CommitObservation(ctx context.Context, events []ChangeEvent, newToken string, driveID string) error
-```
-
-This writes `remote_state` rows and the delta token in a single transaction. The `RemoteObserver` calls it after each successful `FullDelta()`, before sending events to the channel. The observer already depends on `*Baseline` for reads; adding an `ObservationWriter` interface is a minor extension.
-
-**Why not have the observer write directly (bypassing SyncStore)?** Two independent types writing to the same database risks SQLITE_BUSY conflicts and makes it impossible to enforce invariants (e.g., "remote_state rows always have a corresponding delta token") across types. Routing all writes through one type keeps the SQL in one place.
-
-**Why not have the engine mediate?** In watch mode, the observer runs in a goroutine sending events via channel. The engine would need to intercept events, batch them, and write to DB before forwarding — this changes the event pipeline and requires a side channel for batch boundaries. Unnecessary complexity.
-
-**Why not batch across multiple delta polls?** Each poll returns a discrete set of events and a new token. Writing them in one transaction per poll is the natural boundary — it matches the atomicity guarantee we need (never advance the token without recording what we learned). Batching across polls would require tracking which events go with which token, adding complexity for no correctness benefit. The per-poll transaction is typically <10ms for a normal delta response (10-100 items). For initial sync (50K items), it's ~200-500ms — acceptable.
-
-**FullDelta is all-or-nothing.** `FullDelta()` accumulates all pages in memory before returning. If the connection drops mid-pagination, no partial result is returned — the entire fetch fails, no events are emitted, and the delta token is not advanced. The next poll retries from the same token. This means `CommitObservation` always receives a complete batch: every item from the delta response, plus the new token. There is no risk of committing a partial observation. The new token only appears on the final page (`@odata.deltaLink`), so it's impossible to obtain a token without having fetched all preceding items.
-
-### The reconciler
-
-The reconciler is a dedicated long-lived goroutine that schedules retries for failed remote-side actions. It closes the gap in the current architecture: "we know the remote changed, the action failed, and now nobody remembers."
-
-#### Why a dedicated goroutine?
-
-Five options were considered for the retry mechanism:
-
-**A. Poll from the observer.** The RemoteObserver queries `remote_state` for unreconciled rows on each delta poll cycle and re-emits them as ChangeEvents. Rejected: observers observe the external world (Graph API, filesystem). Having one also read internal DB state mixes concerns. It also couples retry timing to the delta poll interval — if poll is every 5 minutes, retries happen at 5-minute intervals regardless of backoff schedule.
-
-**B. Timer in the engine's select loop.** Add a `time.Ticker` to the engine's main `select` loop that periodically scans `remote_state` for retry-ready rows. Rejected: the engine's select loop handles buffer readiness and worker results — both are event-driven. A timer-based scan would be the first poll-based mechanism in the loop, breaking the pattern where each long-lived concern owns its goroutine. It also adds up to N minutes of latency to every failure (if the scan runs every 2 minutes, a failure waits up to 2 minutes before first retry) and wastes work scanning when `remote_state` is empty.
-
-**C. Extend the local safety scan.** The local safety scan already walks the filesystem every 5 minutes. It could additionally query `remote_state` for unreconciled rows. Rejected: the safety scan detects *local* discrepancies (missed inotify events). Remote discrepancies are a different concern with different timing requirements (backoff schedule vs fixed 5-minute interval). Coupling them means you can't change one without affecting the other.
-
-**D. Fire-and-forget per-item timers.** On failure, schedule a `time.AfterFunc` for the retry. No central goroutine. Rejected: no way to cancel on shutdown (goroutine leak), no way to bootstrap from DB on startup (who reads the DB?), no centralized logging or rate limiting, no way to skip in-flight items.
-
-**E. Dedicated reconciler goroutine (chosen).** A single long-lived goroutine that receives `Kick()` hints via a 1-buffered channel, reads authoritative state from the DB, maintains a map of pending `time.Timer`s, and synthesizes ChangeEvents when retries fire. Level-triggered: every `reconcile()` pass reads the DB and diffs against the timer map. A 2-minute safety sweep catches anything missed. This matches the architecture: each long-lived concern (delta polling, filesystem watching, reconciliation) owns its goroutine. The reconciler is reactive but DB-driven — it responds to hints, not authoritative notifications.
-
-We chose E.
-
-#### Lifecycle
-
-The reconciler is **level-triggered**, not edge-triggered. It responds to hints ("something changed") by reading the authoritative state from the DB, diffing against its timer map, and adjusting. This follows the Kubernetes controller pattern: notifications are cheap hints, not authoritative state. A stale or lost notification is harmless — the 2-minute safety sweep catches everything.
-
-1. **Startup**: runs an initial `reconcile()` — reads all unreconciled `remote_state` rows from DB, schedules timers at their `next_retry_at` (or immediately if `next_retry_at` is NULL or in the past)
-2. **Kick**: any state change (action success, action failure) triggers `Kick()`. The reconciler reads the DB, finds what changed, and adjusts timers. Rows gone → cancel timer. New/updated rows without timer → schedule. In-flight → skip
-3. **Safety sweep**: every 2 minutes, the reconciler runs `reconcile()` regardless of kicks. This catches any state changes that weren't kicked (e.g., if a Kick was lost due to timing, or a CommitObservation wrote new rows without a kick)
-4. **Retry fires**: re-reads the `remote_state` row from DB (see [Re-read cases](#re-read-cases) below), skips if in-flight, synthesizes a ChangeEvent, feeds it into the buffer. Normal pipeline handles the rest
-5. **Shutdown**: cancels all pending timers, goroutine exits
-
-#### Re-read cases
-
-When a retry timer fires, the reconciler re-reads the `remote_state` row from DB. The row may have changed since the timer was scheduled — a fresh delta may have updated it, or CommitOutcome may have deleted it. Five cases:
-
-| DB state at re-read time | Action | Why |
-|--------------------------|--------|-----|
-| Row gone (CommitOutcome deleted it) | Skip, no-op | Item synced successfully. Timer was stale |
-| Hash changed (fresh delta overwrote) | Synthesize event with **new** hash | Old version irrelevant. Download current version |
-| is_deleted changed (file→deleted or deleted→file) | Synthesize accordingly | Delta delivered new state while retrying old. Honor latest |
-| Item in-flight (`tracker.HasInFlight`) | Skip, reschedule at same backoff | Already being processed. Avoid duplicate work |
-| Unchanged | Synthesize event, dispatch | Normal retry |
-
-All five follow from "use current DB state at timer-fire time." The reconciler never caches — it always re-reads. This makes it correct by construction regardless of intervening events.
-
-#### Synthesized ChangeEvent fields
-
-When the reconciler synthesizes a ChangeEvent from a `remote_state` row:
-
-```go
-ChangeEvent{
-    Source:    SourceRemote,
-    Type:      ChangeModify,    // or ChangeDelete if is_deleted=1
-    Path:      row.Path,
-    ItemID:    row.ItemID,
-    ParentID:  row.ParentID,
-    DriveID:   row.DriveID,
-    ItemType:  row.ItemType,
-    Name:      filepath.Base(row.Path),  // derived, not stored
-    Size:      row.Size,
-    Hash:      row.Hash,
-    Mtime:     row.Mtime,
-    ETag:      row.ETag,
-    CTag:      "",             // not stored, not used by planner
-    IsDeleted: row.IsDeleted,
-}
-```
-
-**Type mapping:**
-- `is_deleted = 0` → `ChangeModify`. The planner checks remote hash vs baseline to decide download vs skip.
-- `is_deleted = 1` → `ChangeDelete`. The planner sees a remote deletion.
-- Never `ChangeMove` — moves are decomposed into delete + create at observation time (CommitObservation writes two rows). Each side has its own `remote_state` row and is retried independently.
-
-**Name:** derived from `filepath.Base(path)`. The path is already NFC-normalized, so `filepath.Base()` gives the correct decoded name. No `name` column needed in the schema.
-
-**CTag:** not stored in `remote_state`, not used by planner or executor. Set to empty string.
-
-#### Go-level interface
-
-```go
-type Reconciler struct {
-    state    StateReader           // read-only view of remote_state + baseline
-    buf      *ChangeBuffer
-    tracker  *InFlightTracker
-    logger   *slog.Logger
-    timers   map[string]*time.Timer // path → pending retry
-    mu       sync.Mutex
-    kickCh   chan struct{}          // 1-buffered, coalesces multiple kicks
-    cancel   context.CancelFunc
-}
-
-func NewReconciler(state StateReader, buf *ChangeBuffer, tracker *InFlightTracker, logger *slog.Logger) *Reconciler
-
-func (r *Reconciler) Start(ctx context.Context) error   // bootstrap + run
-func (r *Reconciler) Kick()                              // hint: "something changed, check the DB"
-func (r *Reconciler) Stop()
-```
-
-**Kick()** is a non-blocking hint. It writes to a 1-buffered channel. If a kick is already pending, the new one coalesces (no-op). Multiple rapid kicks (e.g., 10 workers completing in quick succession) result in one `reconcile()` call.
-
-```go
-func (r *Reconciler) Kick() {
-    select {
-    case r.kickCh <- struct{}{}:
-    default: // already kicked, coalesces
-    }
-}
-```
-
-**The main loop:**
-
-```go
-func (r *Reconciler) run(ctx context.Context) {
-    safety := time.NewTicker(2 * time.Minute)
-    defer safety.Stop()
-
-    r.reconcile(ctx) // bootstrap
-
-    for {
-        select {
-        case <-r.kickCh:
-            r.reconcile(ctx)
-        case <-safety.C:
-            r.reconcile(ctx)
-        case <-ctx.Done():
-            r.cancelAllTimers()
-            return
-        }
-    }
-}
-```
-
-**reconcile()** reads the DB, diffs against its timer map, and adjusts:
-
-```go
-func (r *Reconciler) reconcile(ctx context.Context) {
-    rows, _ := r.state.ListUnreconciled(ctx)
-    current := make(map[string]RemoteStateRow, len(rows))
-    for _, row := range rows {
-        current[row.Path] = row
-    }
-
-    r.mu.Lock()
-    defer r.mu.Unlock()
-
-    // Cancel timers for items that are now synced (row gone)
-    for path, timer := range r.timers {
-        if _, exists := current[path]; !exists {
-            timer.Stop()
-            delete(r.timers, path)
-        }
-    }
-
-    // Schedule timers for unreconciled items that don't have one
-    for path, row := range current {
-        if _, hasTimer := r.timers[path]; hasTimer {
-            continue
-        }
-        if r.tracker.HasInFlight(path) {
-            continue
-        }
-        delay := computeDelay(row)
-        r.scheduleTimer(ctx, path, delay)
-    }
-}
-```
-
-The reconciler receives `StateReader` — a read-only interface. It cannot write to the database. It reads `remote_state` rows to synthesize `ChangeEvent`s and checks in-flight status via the tracker. All writes (failure recording, outcome commits) happen elsewhere in the pipeline.
-
-The engine creates the reconciler and calls `Start()` in a goroutine. Worker results flow through `drainWorkerResults` which calls `RecordFailure()` (on failure) then `Kick()` (always). The `mu` mutex protects the `timers` map — kicks and timer callbacks can race.
-
-#### Robustness
-
-- **Crash recovery**: on startup, bootstraps from `remote_state`. Orphaned rows from before the crash are rescheduled. No items lost
-- **Buffer full**: reconciler blocks on `buf.Add()`. Other retries accumulate and fire when it unblocks. No unbounded queue growth
-- **Fresh delta event for a retrying item**: buffer deduplicates by path. The conditional delete on CommitOutcome ensures correctness regardless of which version was synced
-- **Initial sync with many failures**: if 1000 items fail during initial sync, the reconciler schedules 1000 retries at ~5s. They fire in rapid succession but each goes through `buf.Add()` → debounce → planner, which naturally batches them. The workers process them at their concurrency limit (4 by default). No special rate limiting needed — the pipeline's existing backpressure handles it
-
-#### Logging
-
-- `slog.Info("reconciler started", "pending_retries", count)` — on bootstrap (initial reconcile)
-- `slog.Debug("reconciler: reconcile", "unreconciled", len, "timers_added", n, "timers_canceled", m)` — on each reconcile pass
-- `slog.Debug("reconciler: dispatching retry", "path", path)` — when a retry fires
-- `slog.Warn("reconciler: skipping in-flight item", "path", path)` — when retry fires but item is already being processed
-
-### CommitOutcome expansion
-
-On action success, `CommitOutcome` now also deletes the `remote_state` row in the same transaction as the baseline upsert:
-
-```sql
-DELETE FROM remote_state WHERE path = ? AND hash IS ?
-```
-
-The conditional delete (using `IS` for NULL-safe comparison) is critical. It prevents a successful download of version R1 from deleting a `remote_state` row that has already been updated to R2 by a newer delta poll. If the hashes don't match, the row persists and the reconciler picks it up. See [Scenario 4](#scenario-4-download-succeeds-for-r1-but-remote_state-already-has-r2).
-
-For deletions (`is_deleted = 1`): the hash is NULL, so the conditional delete becomes `WHERE path = ? AND hash IS NULL`. This matches the `is_deleted` row correctly. If a fresh delta event has since re-created the file at the same path (with a non-NULL hash), the conditional delete won't match — the row persists and the new version is downloaded. Correct.
-
-`CommitOutcome` already touches `baseline` and `conflicts`. Adding `remote_state` is a natural extension — it commits the outcome of an action, which includes updating all relevant state tables.
-
-#### No return value change needed
-
-With the level-triggered reconciler, `CommitOutcome` does not need to return whether the `remote_state` row was cleared. The reconciler discovers the state on its next reconcile pass (triggered by the `Kick()` that `drainWorkerResults` sends after every action completion). If the conditional DELETE matched (row gone), the reconciler cancels the timer. If it didn't match (newer version exists), the reconciler keeps/reschedules the timer. No boolean needed.
-
-Optionally, `CommitOutcome` can log at `slog.Debug` level when the conditional DELETE doesn't match, for observability: `slog.Debug("remote_state row persisted (newer version exists)", "path", path)`.
-
-### What happens to cycleFailures and cycle machinery
-
-The `cycleFailures` map, `watchCycleCompletion` token-commit logic, the DepTracker's cycle tracking internals, and `CycleID` itself are all deleted entirely. These exist to gate token advancement on cycle success. With the token committed at observation time (in `CommitObservation`), there is no concept of "cycle success/failure" controlling the token. In the new design, events arrive continuously and batches are debounce windows — there are no "cycles."
-
-**Removed from DepTracker:**
-- `CycleDone(cycleID)` method — no cycle-gated token commits
-- `CleanupCycle(cycleID)` method — no cycles to clean up
-- `cycles`, `cyclesMu`, `cycleLookup` internal maps — cycle tracking state
-
-**Removed from Engine:**
-- `cycleFailures` map — no per-cycle failure counting
-- `watchCycleCompletion()` goroutine — entire function deleted
-- Per-cycle failure counting in `drainWorkerResults`
-
-**Removed from type system:**
-- `CycleID` field on `TrackedAction`, `WorkerResult`, `ActionPlan` — the concept of cycles doesn't exist in the new architecture. Keeping it as a "logging aid" would confuse future readers into thinking cycles are a meaningful concept. Debugging by path + timestamp is sufficient. If per-batch grouping is needed for observability, use the batch timestamp.
-
-The DepTracker simplifies to a pure dependency graph: dispatch ready actions, track in-flight state, support `HasInFlight` / `CancelByPath` for B-122 dedup. No cycle lifecycle management.
-
-Worker results flow directly to: `CommitOutcome` (on success) → `RecordFailure` (on failure) → `Kick()` (always). The engine's main loop receives batches from the buffer, dispatches to workers, and processes results.
-
-## Data Flows
+### `sync_status` values
+
+| Value | Meaning | Transitions to |
+|-------|---------|---------------|
+| `pending_download` | Delta observed, download needed | `downloading`, `synced`, `filtered` |
+| `downloading` | Worker started download | `synced`, `download_failed` |
+| `download_failed` | Failed after retries | `pending_download` (reconciler) |
+| `synced` | Baseline matches remote_state | `pending_download` (new delta), `filtered` |
+| `pending_delete` | Delta observed deletion | `deleting` |
+| `deleting` | Worker started delete | `deleted`, `delete_failed` |
+| `delete_failed` | Delete failed | `pending_delete` (reconciler) |
+| `deleted` | Deletion complete, row kept | (terminal; new delta can resurrect) |
+| `filtered` | Excluded by filter rules | `pending_download` (SIGHUP), `synced` |
+
+### State transition ownership (7 writers)
+
+| Writer | Goroutine | Transition |
+|--------|-----------|------------|
+| CommitObservation | Remote observer → engine | `* → pending_download`, `* → pending_delete` |
+| DepTracker.Add() | Engine (processBatch) | `pending_download → downloading`, `pending_delete → deleting` |
+| CommitOutcome | Worker goroutines | `downloading → synced`, `deleting → deleted` |
+| RecordFailure | Worker or drain goroutine | `downloading → download_failed`, `deleting → delete_failed` |
+| Filter marking | Engine | `pending_download → filtered` |
+| Reconciler | Reconciler goroutine | `download_failed → pending_download`, `delete_failed → pending_delete` |
+| SIGHUP | Signal handler | `filtered → pending_download` |
+
+### Critical invariant
+
+> A `remote_state` row with `sync_status` in (`pending_download`, `downloading`,
+> `download_failed`) means "the remote has this file and we haven't synced it
+> yet." The absence of the corresponding local file means "we haven't downloaded
+> it yet," NOT "the user deleted it locally." No code path may interpret a
+> missing local file + existing pending row as local deletion intent.
+
+---
+
+## 8. Data Flows
 
 Eight data flows through the system. Each is traced step by step.
 
@@ -610,8 +425,8 @@ RemoteObserver.Watch()
   │     → SyncStore performs:
   │       BEGIN TRANSACTION
   │       Write each ChangeEvent to remote_state table
-  │         (INSERT OR REPLACE — path is primary key, latest state wins)
-  │         For moves: also write is_deleted=1 row for old path
+  │         (UPSERT by (drive_id, item_id) — latest state wins)
+  │         For moves: also write pending_delete row for old path
   │       Commit newToken to delta_tokens table
   │       COMMIT
   │     ← Atomic: if we crash between poll and commit, both are lost.
@@ -628,7 +443,11 @@ RemoteObserver.Watch()
         → Calls processBatch()
 ```
 
-The `remote_state` write and token commit are in the same transaction. This is the critical atomicity guarantee: we never advance the token without recording what we learned. If the daemon crashes after the transaction but before events reach the buffer, the events are lost from the pipeline but the `remote_state` rows persist. The reconciler picks them up on restart.
+The `remote_state` write and token commit are in the same transaction. This is
+the critical atomicity guarantee: we never advance the token without recording
+what we learned. If the daemon crashes after the transaction but before events
+reach the buffer, the events are lost from the pipeline but the `remote_state`
+rows persist. The reconciler picks them up on restart.
 
 ### Flow 2: Local filesystem change
 
@@ -645,7 +464,8 @@ inotify/fsevents
   └─ 4. Buffer debounces → planner → workers
 ```
 
-No `remote_state` involvement. Local changes retry naturally because the planner compares filesystem against baseline every cycle.
+No `remote_state` involvement. Local changes retry naturally because the planner
+compares filesystem against baseline every cycle.
 
 ### Flow 3: Local safety scan
 
@@ -660,26 +480,27 @@ Timer (every 5 minutes) in LocalObserver
   └─ 3. Events → buffer → planner → workers
 ```
 
-Catches local changes inotify missed. Does NOT detect remote discrepancies — that's the reconciler's job. The safety scan only sees the local filesystem. A failed download leaves no local trace — the file simply doesn't exist locally, and the baseline has no entry for it.
+Catches local changes inotify missed. Does NOT detect remote discrepancies —
+that's the reconciler's job.
 
 ### Flow 4: Reconciler retry
 
 ```
 Reconciler goroutine (dedicated, long-lived, level-triggered)
   │
-  ├─ On startup: reconcile() — read DB, schedule timers for all unreconciled rows
+  ├─ On startup: reconcile() — read DB, schedule timer for earliest retry
   │
   ├─ On Kick() (from drainWorkerResults after any action completion):
-  │     reconcile() — read DB, diff against timer map:
-  │       Rows gone → cancel timer (item synced)
-  │       New/updated rows without timer → schedule (fresh failure or new observation)
-  │       In-flight items → skip (already being processed)
+  │     reconcile() — read DB, find items where next_retry_at <= now:
+  │       Dispatch ready items via buf.Add()
+  │       Arm timer for next earliest retry
+  │       Skip in-flight items
   │
   ├─ On 2-minute safety sweep:
   │     reconcile() — same as Kick, catches anything missed
   │
-  └─ When a scheduled retry fires:
-        1. Re-read remote_state row from DB (may have been updated by fresh delta)
+  └─ When timer fires:
+        1. Re-read remote_state row from DB (may have changed)
         2. Skip if in-flight (tracker.HasInFlight)
         3. Synthesize ChangeEvent from row
         4. Feed into buffer via buf.Add()
@@ -694,7 +515,9 @@ Worker completes action with Success=true
   ├─ 1. store.CommitOutcome(outcome) → returns error
   │     → BEGIN TRANSACTION
   │     → Upsert baseline row (or delete for deletions, or move)
-  │     → DELETE FROM remote_state WHERE path = ? AND hash IS ?
+  │     → UPDATE remote_state SET sync_status = 'synced'
+  │       WHERE drive_id = ? AND item_id = ? AND sync_status = 'downloading'
+  │         AND hash IS ?
   │       (conditional — preserves row if a newer delta updated it)
   │     → COMMIT
   │
@@ -705,36 +528,38 @@ Worker completes action with Success=true
 ```
 
 The reconciler discovers the outcome on its next `reconcile()` pass:
-- If CommitOutcome's conditional DELETE matched (row gone): reconciler cancels the timer
-- If it didn't match (newer version exists): reconciler keeps/reschedules the timer
-
-No boolean propagation needed. No edge-triggered notifications. The reconciler always reads authoritative DB state.
+- If CommitOutcome's conditional UPDATE matched (`synced`): reconciler sees
+  `synced` status, no action needed.
+- If it didn't match (newer version exists): reconciler sees row still pending,
+  keeps/reschedules timer.
 
 #### Stale success with newer remote_state
 
-When a worker downloads R1 successfully but `remote_state` has R2 (from a newer delta), CommitOutcome's conditional delete doesn't match — the row persists with R2's hash. The reconciler's next `reconcile()` pass sees the row still exists with a timer-worthy state and keeps/reschedules the timer. R2's retry lifecycle is completely unaffected by R1's stale success — the reconciler doesn't even know R1 existed.
-
-This is the key advantage of level-triggered design: there is no notification to get wrong. The reconciler reads the DB and sees "path X has an unreconciled row" — it doesn't care why or what happened before.
-
-*Edge case: RecordFailure on canceled R1.* If B-122 cancels R1 but the download was already in progress, the worker may send `Success=false` with `context.Canceled`. RecordFailure increments R2's `failure_count` (path-based, not hash-based). R2 starts with `failure_count=1` despite not having been tried. Impact: one fewer fast retry before backoff — benign (5 seconds of difference). Not worth making RecordFailure hash-aware.
+When a worker downloads R1 successfully but `remote_state` has R2 (from a newer
+delta), CommitOutcome's conditional update doesn't match — the row stays
+`downloading` with R2's hash. RecordFailure isn't called (the action succeeded
+from the worker's perspective). The reconciler's next pass sees the row still
+needs work and reschedules. R2's retry lifecycle is completely unaffected by R1's
+stale success.
 
 ### Flow 6: Action failure
 
 ```
 Worker completes action with Success=false
   │
-  ├─ 1. CommitOutcome is a no-op (baseline unchanged, remote_state persists)
+  ├─ 1. CommitOutcome is a no-op (baseline unchanged)
   │
-  └─ 2. WorkerResult{Success: false, HTTPStatus: N, ErrMsg: "..."} → drainWorkerResults
-        → UPDATE remote_state SET failure_count = failure_count + 1,
+  └─ 2. WorkerResult{Success: false, HTTPStatus: N, ErrMsg: "..."}
+        → drainWorkerResults
+        → UPDATE remote_state SET
+            sync_status = 'download_failed',
+            failure_count = failure_count + 1,
             next_retry_at = ?, last_error = ?, http_status = ?
-            WHERE path = ?
-        → reconciler.Kick()  // "something changed, check the DB"
+          WHERE drive_id = ? AND item_id = ? AND sync_status = 'downloading'
+        → reconciler.Kick()
         → Log: slog.Warn("action failed", "path", path,
                  "failure_count", count, "http_status", status, "next_retry", t)
 ```
-
-The reconciler's next `reconcile()` pass sees the updated row (incremented `failure_count`, new `next_retry_at`) and schedules a timer accordingly.
 
 ### Flow 7: Daemon startup / restart
 
@@ -745,7 +570,8 @@ Engine.RunOnce() or Engine.RunWatch()
   │     → Always reflects latest successful poll (not sync success)
   │
   ├─ 2. Reconciler.Start() bootstraps from remote_state
-  │     → Queries unreconciled rows (items from before crash)
+  │     → Queries rows with non-terminal sync_status
+  │     → Resets 'downloading' → 'pending_download' (crash recovery)
   │     → Schedules retries per backoff state
   │
   ├─ 3. RemoteObserver.FullDelta(token)
@@ -753,13 +579,14 @@ Engine.RunOnce() or Engine.RunWatch()
   │     → Previously-failed items are NOT in this response
   │
   ├─ 4. CommitObservation writes fresh delta events to remote_state
-  │     → Fresh events overwrite stale rows (INSERT OR REPLACE)
+  │     → Fresh events overwrite stale rows (UPSERT)
   │
   └─ 5. Planner receives both fresh delta events and reconciler retries
         → Normal pipeline: planner → workers → outcomes
 ```
 
-Previously-failed items are recovered from `remote_state`, not from delta replay. No items are ever lost, regardless of how many times the daemon crashes.
+Previously-failed items are recovered from `remote_state`, not from delta
+replay. No items are ever lost, regardless of how many times the daemon crashes.
 
 ### Flow 8: WebSocket notification (future, Phase 8)
 
@@ -767,194 +594,37 @@ Previously-failed items are recovered from `remote_state`, not from delta replay
 WebSocket push → trigger immediate delta poll (Flow 1)
 ```
 
-WebSocket changes exactly one thing: the trigger for Flow 1. Everything downstream is unchanged.
+WebSocket changes exactly one thing: the trigger for Flow 1. Everything
+downstream is unchanged.
 
-## Retry and Backoff
+---
 
-### Tiered retry
+## 9. Conflict Scenarios
 
-The `failure_count` and `next_retry_at` columns on `remote_state` enable tiered retry:
+Ten scenarios proving the design handles every edge case.
 
-| After N failures | Retry delay |
-|------------------|-------------|
-| 1-2 | ~5 seconds (immediate via reconciler) |
-| 3 | 5 min |
-| 4 | 10 min |
-| 5 | 20 min |
-| 6 | 40 min |
-| 7+ | 1 hour (cap) |
-
-Formula: `next_retry_at = last_failed_at + min(5min × 2^(failure_count - 3), 1 hour)`
-
-Items below the threshold (1-2 failures) are likely transient (423 lock released, 5xx outage ended) and retry quickly. Items above the threshold back off exponentially, capping at 1 hour — following Syncthing's model.
-
-### No error classification
-
-The backoff curve is the same for all error types. The HTTP status and error message (`last_error`, `http_status` columns) are metadata for user visibility, not retry logic.
-
-*Alternative considered: different backoff curves for "transient" vs "permanent" errors.* The persistent failure tracker design had an `error_class` column (transient/permanent/unknown) with different backoff schedules: 5min base for transient, 30min base for permanent. We rejected this because:
-- Classification is unreliable. A 403 could be "permanent" (permission revoked) or "transient" (propagation delay after sharing). A 423 is always transient but the duration varies from seconds to hours.
-- A uniform curve that's reasonable for both cases (5min base, 1hr cap) is simpler and correct enough. The worst case is retrying a truly permanent failure at 1-hour intervals — 1 second of wasted work per hour.
-- User visibility (the `failures` CLI) is more valuable than classification. The user can see "HTTP 403: forbidden" and decide whether to fix permissions or wait.
-
-### Fresh observations reset failure state
-
-When a fresh delta event arrives for a path that has a `remote_state` row with high `failure_count`, `CommitObservation` overwrites the row (INSERT OR REPLACE). The new observation carries `failure_count = 0`. This is correct: a new delta event may carry a new file version where the old problem (lock, permission) is gone.
-
-The cost of resetting: 2 extra retries at ~5 seconds each before the backoff kicks in again (if the problem persists). This costs 10 seconds every 5 minutes — negligible — and the benefit is immediate success if the problem was resolved.
-
-### Rate limit impact
-
-**Microsoft Graph rate limits**: ~10 req/s per user, 1,250 RU/min per app per tenant.
-
-| Stuck items | Error type | Steady-state retry rate | Impact |
-|-------------|-----------|------------------------|--------|
-| 1 | 423 (skip) | 1 attempt/hr (~1s) | None |
-| 10 | 423 (skip) | 10 attempts/hr (~10s total) | None |
-| 10 | 5xx (full retry) | 10 attempts/hr (~20 min across 4 workers) | None (spread over 1 hour) |
-| 100 | Mixed | ~100 attempts/hr at cap | Minor — <1% worker capacity |
-
-With backoff, the retry rate converges regardless of how many items are stuck. 100 items at 1-hour cap = 100 seconds of work per hour across 4 workers. Negligible.
-
-### Priority: real events vs retries
-
-Real events naturally take priority:
-1. Real events arrive via the buffer at any time and trigger an immediate planning pass (after 2-second debounce)
-2. Reconciler events also enter the buffer via `buf.Add()`
-3. If both arrive in the same debounce window, the buffer merges by path — the planner sees one PathChanges with the latest state
-4. B-122 path dedup cancels in-flight reconciler actions when a real event arrives for the same path
-
-### Permanently-failing items
-
-Items that never self-heal (bad filename, permanent permission denial) are retried at the 1-hour cap. Each attempt costs ~1 second. At steady state, 10 such items cost 10 seconds per hour — 0.07% of one worker's capacity.
-
-The mitigation is user visibility. The `failures` CLI command shows stuck items:
-
-```
-$ onedrive-go failures
-PATH                      ERROR              STATUS  COUNT  NEXT RETRY
-Documents/locked.xlsx     HTTP 423: locked   423     5      in 20 min
-Photos/restricted.jpg     HTTP 403: forbidden 403    8      in 1 hour
-
-$ onedrive-go failures --clear Documents/locked.xlsx
-Reset failure state for Documents/locked.xlsx (will retry immediately)
-
-$ onedrive-go failures --clear --all
-Reset failure state for 2 items (will retry immediately)
-```
-
-`--clear` resets `failure_count` to 0 and `next_retry_at` to now — it does NOT delete the `remote_state` row. Deleting the row would lose the knowledge that the remote has a file we haven't synced. Resetting the failure state gives the item a fresh start through the fast-retry path (1-2 attempts at ~5s) without losing the observation.
-
-*Alternative considered: delete the row entirely.* This would mean the sync engine forgets the remote change exists. The item would only be recovered on the next delta poll (if the file hasn't changed, it won't appear), or on delta token expiration (90 days). This is the same data loss the entire design exists to prevent. Resetting is safe; deleting is not.
-
-The underlying query:
-
-```sql
-SELECT rs.path, rs.last_error, rs.http_status, rs.failure_count,
-       rs.next_retry_at, rs.observed_at
-FROM remote_state rs
-LEFT JOIN baseline b ON rs.path = b.path
-WHERE rs.is_deleted = 0
-  AND (b.remote_hash IS NULL OR b.remote_hash != rs.hash)
-ORDER BY rs.failure_count DESC
-```
-
-No separate failure tracking table needed. The state discrepancy IS the failure record.
-
-### Dependency between items
-
-Parent folder 403 → all children fail. The planner's DAG ordering handles this — children aren't dispatched until the parent succeeds. The failure only counts once (the parent). When the parent is backed off, children aren't wasted on retries.
-
-## Error Handling
-
-Every error that survives the two existing retry layers (graph client: 5 retries, executor: 3 retries) is handled uniformly by the state discrepancy mechanism. No error classification drives retry strategy. The two retry layers handle transient errors within a single attempt. The state discrepancy handles everything else:
-
-| Error | Where state lives | Recovery |
-|-------|------------------|----------|
-| 423 Locked (download) | `remote_state` row persists | Self-heals when lock released. Reconciler retries |
-| 403 Forbidden (download) | `remote_state` row persists | User must fix permissions. Visible in `failures` CLI |
-| Persistent 5xx (download) | `remote_state` row persists | Self-heals when outage ends. Reconciler retries |
-| FS permission (download) | `remote_state` row persists | User must fix local permissions. Visible in `failures` CLI |
-| Non-empty directory delete | `remote_state` `is_deleted=1` row | Escalated to conflict after threshold. See [Non-empty directory deletes](#non-empty-directory-deletes) |
-| 401 Unauthorized | `remote_state` row persists | Auth must be refreshed externally. See [Global auth failure](#global-auth-failure) |
-| 507 Insufficient Storage | `remote_state` row persists | Disk must be freed externally. Reconciler retries at 1hr cap |
-| 400 Bad Request (upload) | Local file differs from baseline | User must rename file. **Not visible in `failures` CLI** (upload-side gap) |
-| 423 Locked (upload) | Local file differs from baseline | Self-heals when lock released. Natural planner retry |
-| 403 Forbidden (upload) | Local file differs from baseline | User must fix permissions. **Not visible in `failures` CLI** (upload-side gap) |
-| FS read errors (upload) | Local file differs from baseline | User must fix permissions. **Not visible in `failures` CLI** |
-
-The upload-side gaps (marked above) are pre-existing limitations. See [What this design does NOT solve](#what-this-design-does-not-solve).
-
-### Non-empty directory deletes
-
-When delta reports a folder deletion, the executor checks `os.ReadDir()` and fails immediately if the directory is non-empty — classified as `errClassSkip` (non-retryable by the executor). The planner's dependency DAG ensures children are deleted before parents, but dependencies gate on *completion*, not *success*. If a child delete fails (permission denied, TOCTOU race), the parent delete still fires and fails with "directory not empty."
-
-In the new design, the `is_deleted=1` row persists in `remote_state`. The reconciler retries with exponential backoff, capping at 1 hour. But the directory will never become empty through retries alone — it needs the child items to be deleted first.
-
-**Escape hatch: conflict escalation.** After `failure_count` reaches a threshold (e.g., 10 — roughly 5 hours of retries), the reconciler escalates the non-empty directory to a conflict. The conflict record explains the situation: "Remote deleted folder X, but local directory is not empty." The user can resolve by deleting the local contents manually or by choosing to keep the local version.
-
-*Why not just retry forever?* Unlike a 423 lock (which self-heals) or a 5xx (which self-heals), a non-empty directory delete can only succeed if something else changes — the local contents must be removed. Retrying forever wastes work without progress. Conflict escalation makes the situation visible and actionable.
-
-*Why not escalate immediately?* The directory might become empty during normal sync processing — child deletes for the same delta batch may succeed on subsequent retries. The threshold gives the system time to process the full batch before escalating.
-
-### Global auth failure
-
-The current engine treats 401 (Unauthorized) as a fatal error class — it aborts the current action immediately, but does NOT shut down the engine. Other actions in the same batch continue executing. The existing behavior just records the failure and doesn't advance the delta token if any failures occurred.
-
-In the new design, 401 failures are recorded in `remote_state` like any other failure. The reconciler retries them with exponential backoff. If the token is expired globally (not item-specific), every action in the batch fails with 401. This is wasteful but bounded: the reconciler backs off each item independently, converging to 1-hour retry intervals. At steady state, N stuck items generate N seconds of wasted work per hour.
-
-**Detection.** The engine does not need special 401 handling. When `drainWorkerResults` sees a cluster of 401 failures (e.g., >50% of a batch), it logs a prominent warning: `slog.Error("auth failure: most actions in batch failed with 401, refresh token may be expired")`. The user (or daemon monitor) sees this and runs `onedrive-go login` to re-authenticate.
-
-*Why not shut down the engine on 401?* A single 401 on one item doesn't mean global auth failure — it could be a permission issue on a specific SharePoint resource. Shutting down on any 401 would be overly aggressive. The cluster detection (>50% of batch) provides a signal without a hard stop. The reconciler handles recovery either way.
-
-*Why not automatically refresh the token?* Token refresh requires the OAuth refresh token, which lives in the token file. The graph client already handles automatic token refresh via `oauth2.TokenSource`. If the refresh token itself is expired (90-day idle), interactive re-authentication is required — the sync engine cannot do this automatically.
-
-## Correctness
-
-### Race: reconciler retry vs fresh delta event
-
-The reconciler dispatches a retry for path X (hash R1). Meanwhile, a fresh delta poll delivers X with hash R2. Both enter the buffer in the same debounce window.
-
-`buildPathViews` takes the LAST remote event. If the delta event was added after the reconciler event, it wins (correct). In the pathological case where the reconciler event wins, the planner plans a download for R1. It succeeds. `CommitOutcome` tries `DELETE WHERE hash IS R1` but `remote_state` has R2 — the conditional delete doesn't match. The row persists. The reconciler schedules another retry for R2.
-
-**No special handling needed.** The conditional delete is the safety net that makes this correct regardless of event ordering.
-
-### Crash recovery
-
-**Old model**: "On crash, delta token hasn't advanced → re-fetch same delta → re-observe failed items." Works for RunOnce. Broken for RunWatch (token advances past failures within 5 minutes).
-
-**New model**: "Delta token always advances. Failed items persist in `remote_state`. On restart, the reconciler bootstraps from DB and retries them."
-
-**RunOnce edge case**: With the uniform code path, RunOnce commits the token at observation time. If the process crashes mid-execution, the token is committed but actions aren't complete. On restart, RunOnce queries unreconciled `remote_state` rows alongside the fresh delta poll, merging both into the planner. No items lost.
-
-The new model is strictly better for both modes.
-
-### Conflict scenarios
-
-The planner's three-way comparison is unchanged. `PathView` has `Remote` (from delta or `remote_state`), `Local` (from filesystem), and `Baseline` (from synced state). The decision matrix (EF1-EF14) applies exactly as today. What changes: `Remote` can now come from a stored `remote_state` row, not just a fresh delta event.
-
-#### Scenario 1: Simple remote edit, download fails, later succeeds
+### Scenario 1: Simple remote edit, download fails, later succeeds
 
 ```
 Time 0: Delta delivers file X with hash R_new.
-        remote_state: {path: X, hash: R_new}
-        baseline:     {path: X, remote_hash: R_old, local_hash: R_old}
+        remote_state: {item_id: X, hash: R_new, sync_status: pending_download}
+        baseline:     {item_id: X, remote_hash: R_old, local_hash: R_old}
 
         Planner: remoteChanged=true → EF2: download.
-        Download fails (423 locked). failure_count → 1.
+        Download fails (423 locked). sync_status → download_failed. failure_count → 1.
 
 Time 1: Reconciler dispatches retry (~5s later).
         Same PathView. Same decision. Download succeeds.
 
-        CommitOutcome: baseline updated. remote_state deleted.
+        CommitOutcome: baseline updated. sync_status → synced.
         Reconciled.
 ```
 
-#### Scenario 2: Remote edit fails, then user edits locally
+### Scenario 2: Remote edit fails, then user edits locally
 
 ```
 Time 0: Delta delivers X with hash R_new. Download fails.
-        remote_state: {path: X, hash: R_new}
+        remote_state: {hash: R_new, sync_status: download_failed}
 
 Time 1: User edits X locally to hash L_new. inotify fires.
 
@@ -967,7 +637,7 @@ Time 2: Reconciler retry + inotify event merge in buffer.
         No data loss.
 ```
 
-#### Scenario 3: Remote edit fails, remote edits again
+### Scenario 3: Remote edit fails, remote edits again
 
 ```
 Time 0: Delta delivers X with hash R1. Download fails.
@@ -976,20 +646,21 @@ Time 1: Delta delivers X with hash R2.
         New action planned for R2. R1 is superseded — correct.
 ```
 
-#### Scenario 4: Download succeeds for R1 but remote_state already has R2
+### Scenario 4: Download succeeds for R1 but remote_state already has R2
 
 ```
 Time 0: Delta delivers X with hash R1. Download planned.
 Time 1: Delta delivers X with hash R2. remote_state updated to R2.
 Time 2: Download of R1 completes.
         CommitOutcome: baseline=R1.
-        DELETE WHERE hash IS R1 → R1 ≠ R2 → row NOT deleted.
+        UPDATE ... SET sync_status='synced' WHERE hash IS R1
+          → R1 ≠ R2 → 0 rows affected → row NOT updated.
 Time 3: Reconciler retries. Downloads R2. Fully reconciled.
 ```
 
-The conditional delete prevents losing knowledge of R2.
+The conditional update prevents losing knowledge of R2.
 
-#### Scenario 5: Upload fails, then remote changes the same file
+### Scenario 5: Upload fails, then remote changes the same file
 
 ```
 Time 0: User edits X locally to hash L. Upload fails (423).
@@ -1005,10 +676,10 @@ Time 2: Remote=R, Local=L, Baseline=B.
         With remote_state, the conflict is correctly detected.
 ```
 
-#### Scenario 6: Remote delete fails, user creates new file at same path
+### Scenario 6: Remote delete fails, user creates new file at same path
 
 ```
-Time 0: Delta delivers delete for X. remote_state: {is_deleted: 1}.
+Time 0: Delta delivers delete for X. sync_status → pending_delete.
         Local delete fails (permission denied).
 
 Time 1: User creates new file at X with hash L_new.
@@ -1018,22 +689,22 @@ Time 2: Remote=deleted, Local=L_new, Baseline=exists.
         User's file preserved as conflict copy. Correct.
 ```
 
-#### Scenario 7: Remote move fails, then file is edited
+### Scenario 7: Remote move fails, then file is edited
 
 ```
 Time 0: Delta delivers move X → Y.
-        remote_state: {path: Y, ...} + {path: X, is_deleted: 1}.
+        remote_state: {path: Y, pending_download} + {path: X, pending_delete}.
         Local move fails.
 
 Time 1: User edits local file at X.
 
 Time 2: Reconciler dispatches retries.
         Path X: Remote=deleted, Local=modified → EF9 edit-delete conflict.
-        Path Y: Remote=exists, Local=absent → EF11 download.
+        Path Y: Remote=exists, Local=absent → EF14 download.
         Both versions preserved. No data loss.
 ```
 
-#### Scenario 8: Multiple failures compound, then resolve
+### Scenario 8: Multiple failures compound, then resolve
 
 ```
 Time 0: Delta delivers A, B, C, D, E. A, B succeed. C, D, E fail.
@@ -1045,7 +716,7 @@ Time 5: D retried immediately. Succeeds. E backoff expires. Succeeds.
 Final: everything synced. Token advanced freely throughout.
 ```
 
-#### Scenario 9: inotify missed a local edit
+### Scenario 9: inotify missed a local edit
 
 ```
 Time 0: Reconciler retries X. Planner derives Local from baseline. Plans download.
@@ -1055,39 +726,779 @@ Time 2: Worker starts download. S4 safety check: hash local file.
         Remote version downloaded. No data loss.
 ```
 
-The S4 safety check (`executor_transfer.go`) protects against any race between planning and execution, regardless of event source.
+The S4 safety check protects against any race between planning and execution,
+regardless of event source.
 
-#### Scenario 10: Remote delete succeeds
+### Scenario 10: Remote delete succeeds
 
 ```
-Time 0: Delta delivers delete for X. remote_state: {path: X, is_deleted: 1, hash: NULL}.
+Time 0: Delta delivers delete for X.
+        sync_status → pending_delete.
         Planner: EF3 remote-only delete. Local file deleted.
 
 Time 1: CommitOutcome: baseline row deleted.
-        DELETE FROM remote_state WHERE path = X AND hash IS NULL
-        → NULL IS NULL → TRUE → row deleted.
-        Reconciled. Clean state.
+        UPDATE remote_state SET sync_status = 'deleted'
+        WHERE drive_id = ? AND item_id = ? AND sync_status = 'deleting'
+        → Row updated to 'deleted'. Clean state.
 ```
 
-## Compatibility
+---
+
+## 10. Concurrency Safety Model
+
+With 7 goroutines writing `sync_status`, the concurrency model must be explicit.
+This section resolves risks R1-R5.
+
+### 8.1 State Ownership — Partitioned Interfaces + Optimistic Concurrency (R1)
+
+**Three real races traced through code:**
+
+**Race 1** (CommitObservation vs CommitOutcome): Worker finishes download
+(hash=abc), CommitObservation writes new delta (hash=xyz) before CommitOutcome
+runs. Without guards: item marked `synced` with stale hash.
+
+**Race 2** (RecordFailure scope): `drainWorkerResults` calls RecordFailure on a
+different goroutine than the worker's CommitOutcome — potential race.
+
+**Race 3** (Add vs Reconciler): Reconciler resets
+`download_failed → pending_download` while Add() sets
+`pending_download → downloading`. Without guards: reconciler overwrites
+`downloading → pending_download`.
+
+**Solution: Compile-time + runtime safety**
+
+Typed interfaces enforce transition ownership:
+
+```go
+type ObservationWriter interface { SetPendingDownload(...); SetPendingDelete(...) }
+type DispatchWriter interface { SetDownloading(...); SetDeleting(...) }
+type OutcomeWriter interface { SetSynced(...); SetDeleted(...) }
+type FailureWriter interface { SetDownloadFailed(...); SetDeleteFailed(...) }
+```
+
+Every method uses optimistic concurrency WHERE clauses:
+
+```sql
+-- CommitOutcome
+UPDATE remote_state SET sync_status = 'synced'
+WHERE drive_id = ? AND item_id = ? AND sync_status = 'downloading' AND hash IS ?
+
+-- Add() dispatch
+UPDATE remote_state SET sync_status = 'downloading'
+WHERE ... AND sync_status IN ('pending_download', 'download_failed')
+
+-- RecordFailure
+UPDATE remote_state SET sync_status = 'download_failed'
+WHERE ... AND sync_status = 'downloading'
+```
+
+Every method returns `(rowsAffected int64, err error)`. `rowsAffected == 0`
+means lost race — log at Debug, not an error.
+
+**Why both layers**: SQLite serialization (`SetMaxOpenConns(1)`) is necessary
+but NOT sufficient. Two serialized UPDATEs can still produce wrong results if
+the second doesn't check what the first wrote. Consider Race 1: even with
+serialized writes, CommitObservation writes `pending_download` (hash=xyz), then
+CommitOutcome writes `synced` — result is wrong. The WHERE clause is essential.
+
+### 8.2 DepTracker as Read-Through Cache (R2)
+
+**Problem**: DepTracker (in-memory) and `sync_status` (DB) overlap for in-flight
+tracking.
+
+**Solution**: `sync_status` is authoritative. DepTracker becomes a projection of
+DB state:
+
+1. `Add()` sets `downloading` in DB AND adds to in-memory map.
+2. `Complete()` triggers CommitOutcome (`synced` in DB) AND removes from map.
+3. On crash: DepTracker rebuilt from
+   `remote_state WHERE sync_status = 'downloading'`.
+4. B-122 dedup: check in-memory map (fast) — always consistent.
+
+The DB write in Add() is ~0.1ms in WAL mode. Dependency ordering stays purely
+in-memory.
+
+### 8.3 CancelByPath Safety (R3)
+
+CancelByPath doesn't update DB. Three scenarios all handled by optimistic
+concurrency:
+
+1. **Cancel before dispatch**: CommitOutcome's hash check discards stale result.
+2. **Cancel during dispatch**: RecordFailure sets `download_failed` (WHERE
+   matches). New Add() picks up from there.
+3. **Cancel after dispatch**: CommitOutcome's hash check discards stale result
+   (if hash changed) or succeeds (if same).
+
+CancelByPath stays pure in-memory. It's a performance optimization, not a
+correctness mechanism.
+
+### 8.4 Buffer Re-Dispatch (R5)
+
+Reconciler query `WHERE sync_status IN ('pending_download', 'download_failed')`
+naturally excludes `downloading` items. B-122 dedup catches the sub-millisecond
+race. No action needed.
+
+---
+
+## 11. CommitObservation Logic
+
+### The problem (R4 — highest severity)
+
+Delta API re-delivers unchanged items (page-level tokens, sharing changes, 410
+full resync). Naive CommitObservation regresses `synced` items to
+`pending_download`, triggering unnecessary re-downloads.
+
+### Full decision matrix (10 states × 3 conditions = 30 cells)
+
+| Current state | Same hash, not deleted | Different hash, not deleted | Deleted |
+|---|---|---|---|
+| `pending_download` | No change | Update hash (still pending) | → `pending_delete` |
+| `downloading` | No change (let worker finish) | → `pending_download` + cancel | → `pending_delete` + cancel |
+| `download_failed` | → `pending_download` (retry) | → `pending_download` (new version) | → `pending_delete` |
+| `synced` | **No change (critical!)** | → `pending_download` | → `pending_delete` |
+| `pending_delete` | → `pending_download` (restored) | → `pending_download` (restored+changed) | No change |
+| `deleting` | → `pending_download` (restored) | → `pending_download` (restored) | No change (let worker finish) |
+| `delete_failed` | → `pending_download` (restored) | → `pending_download` (restored) | → `pending_delete` (retry) |
+| `deleted` | → `pending_download` (recreated) | → `pending_download` (recreated) | No change |
+| `filtered` | No change | Update hash (stay `filtered`) | → `deleted` |
+| (no row) | → `pending_download` (new) | → `pending_download` (new) | No-op |
+
+**Why filtered items update their hash.** When a filtered item receives a delta
+with a different hash, the status stays `filtered` but the hash, size, mtime,
+and etag columns are updated. This ensures that when SIGHUP later resets
+`filtered → pending_download`, the row contains the current remote hash. Without
+this, CommitOutcome's `WHERE hash IS ?` guard would fail after a successful
+download (the downloaded file's hash wouldn't match the stale hash in
+`remote_state`), orphaning the row in `downloading` state permanently.
+
+### Implementation: `computeNewStatus()` pure function
+
+```go
+func (s *SyncStore) CommitObservation(ctx context.Context, item ObservedItem) error {
+    tx, _ := s.db.BeginTx(ctx, nil)
+    var currentStatus, currentHash string
+    err := tx.QueryRow(
+        "SELECT sync_status, hash FROM remote_state WHERE drive_id=? AND item_id=?",
+        item.DriveID, item.ItemID).Scan(&currentStatus, &currentHash)
+    if err == sql.ErrNoRows {
+        tx.Exec("INSERT INTO remote_state (...) VALUES (..., 'pending_download')")
+    } else {
+        newStatus := computeNewStatus(currentStatus, currentHash, item.Hash, item.IsDeleted)
+        tx.Exec("UPDATE ... SET sync_status=?, hash=?, ... WHERE drive_id=? AND item_id=?",
+            newStatus, item.Hash, ...)
+    }
+    return tx.Commit()
+}
+```
+
+**Why Go code over SQL CASE**: 30 cells. Pure function → table-driven unit test.
+Readable, debuggable, extensible. The extra SELECT per item is negligible
+(~0.05ms in WAL mode).
+
+**Failure count reset**: When `excluded.hash != remote_state.hash`, reset
+`failure_count = 0` and `next_retry_at = NULL`. The file may have changed —
+give it a fresh start.
+
+### CommitObservation transaction details
+
+**Why the observer calls it (not the engine).** In watch mode, the observer runs
+in a goroutine sending events via channel. The engine would need to intercept
+events, batch them, and write to DB before forwarding — this changes the event
+pipeline and requires a side channel for batch boundaries. Unnecessary
+complexity. The observer already depends on `*Baseline` for reads; adding an
+`ObservationWriter` interface is a minor extension.
+
+**Why not batch across multiple delta polls?** Each poll returns a discrete set
+of events and a new token. Writing them in one transaction per poll is the
+natural boundary — it matches the atomicity guarantee we need (never advance the
+token without recording what we learned). Batching across polls would require
+tracking which events go with which token. The per-poll transaction is typically
+<10ms for a normal delta response (10-100 items). For initial sync (50K items),
+it's ~200-500ms — acceptable.
+
+**FullDelta is all-or-nothing.** `FullDelta()` accumulates all pages in memory
+before returning. If the connection drops mid-pagination, no partial result is
+returned — the entire fetch fails, no events are emitted, and the delta token is
+not advanced. The next poll retries from the same token. This means
+`CommitObservation` always receives a complete batch: every item from the delta
+response, plus the new token. There is no risk of committing a partial
+observation. The new token only appears on the final page (`@odata.deltaLink`),
+so it's impossible to obtain a token without having fetched all preceding items.
+
+**Crash window analysis.** If we crash between the delta poll and
+`CommitObservation`, both the events and the new token are lost. The old token is
+replayed on restart, delta re-delivers the same items. `remote_state` writes are
+idempotent (same data rewritten via UPSERT). No data loss. If we crash after
+`CommitObservation` but before events reach the buffer, the events are lost from
+the pipeline but the `remote_state` rows persist. The reconciler picks them up on
+restart.
+
+---
+
+## 12. Database Access Pattern
+
+### The problem with "sole writer"
+
+The current codebase has a `BaselineManager` type that owns all database
+methods. Today, multiple goroutines already call write methods concurrently:
+worker goroutines (N concurrent) call `CommitOutcome()`, the engine goroutine
+calls `CommitDeltaToken()`, the daemon goroutine calls
+`PruneResolvedConflicts()`. This design adds more: `CommitObservation()` from
+the observer, `RecordFailure()` from drain. Correctness comes from SQLite WAL
+mode with busy timeout, not single-writer.
+
+### Alternatives considered for access pattern
+
+**A. Status quo + documentation fix.** Keep one type, clarify "sole writer"
+means "sole module." Rejected: grows to ~23 methods — a god object. No
+compile-time restriction on who writes what.
+
+**B. Split by table ownership.** Three types (`BaselineStore`,
+`RemoteStateStore`, `DeltaTokenStore`). Rejected: some operations need
+cross-table atomicity (`CommitOutcome` writes baseline + updates remote_state;
+`CommitObservation` writes remote_state + delta_tokens). A coordinator type
+becomes the new god object.
+
+**C. Split by read vs. write.** `SyncStateReader` for queries,
+`SyncStateWriter` for mutations. Rejected: splits related operations.
+`CommitOutcome` (write) and "is this item in baseline?" (read) are conceptually
+coupled but live in different types.
+
+**D. Sub-interfaces on one concrete type (chosen).** One implementation type,
+five interfaces grouped by caller identity. Callers receive the narrowest
+interface they need. Cross-table transactions stay in one place. Type system
+enforces capability restriction at compile time.
+
+**E. Event-sourced single-writer goroutine.** All state changes flow through a
+channel to a single writer goroutine. Rejected: adds latency to every write,
+requires back-pressure design, complicates shutdown/drain. Write volume (~tens of
+items per 5-minute cycle) doesn't justify the complexity.
+
+We chose D.
+
+### Alternatives considered for reconciler mechanism
+
+**A. Poll from the observer.** RemoteObserver queries `remote_state` for
+unreconciled rows on each delta poll. Rejected: mixes concerns (observer reads
+internal DB state). Couples retry timing to poll interval.
+
+**B. Timer in the engine's select loop.** Add `time.Ticker` to engine's main
+select. Rejected: breaks the pattern where each long-lived concern owns its
+goroutine. Adds latency (up to N minutes) and wastes work scanning when
+`remote_state` is empty.
+
+**C. Extend the local safety scan.** Walk filesystem + query `remote_state`.
+Rejected: different concern with different timing requirements. Coupling means
+you can't change one without affecting the other.
+
+**D. Fire-and-forget per-item timers.** `time.AfterFunc` on failure. Rejected:
+no cancel on shutdown (goroutine leak), no bootstrap from DB on startup, no
+centralized rate limiting, no way to skip in-flight items.
+
+**E. Dedicated reconciler goroutine (chosen).** Single long-lived goroutine.
+Receives `Kick()` hints via 1-buffered channel, reads authoritative state from
+DB, maintains single timer, synthesizes ChangeEvents when retries fire.
+Level-triggered: every `reconcile()` pass reads DB and adjusts timer. 2-minute
+safety sweep catches anything missed.
+
+We chose E.
+
+### SyncStore sub-interface signatures
+
+```go
+// ObservationWriter — called by RemoteObserver goroutine (single caller).
+// Writes observed remote state and advances the delta token atomically.
+type ObservationWriter interface {
+    CommitObservation(ctx context.Context, events []ChangeEvent, newToken string, driveID string) error
+    GetDeltaToken(ctx context.Context, driveID, scopeID string) (string, error)
+}
+
+// OutcomeWriter — called by worker goroutines (N concurrent callers).
+// Commits action results to baseline and updates remote_state on success.
+type OutcomeWriter interface {
+    CommitOutcome(ctx context.Context, outcome *Outcome) error
+    Load(ctx context.Context) (*Baseline, error)
+}
+
+// FailureRecorder — called by drainWorkerResults goroutine (single caller).
+// Records failure metadata on remote_state rows.
+type FailureRecorder interface {
+    RecordFailure(ctx context.Context, path, errMsg string, httpStatus int) error
+}
+
+// StateReader — called by reconciler, planner, status, CLI (read-only).
+// All methods are pure reads. Multiple goroutines call concurrently.
+// WAL mode guarantees readers never block.
+type StateReader interface {
+    ListUnreconciled(ctx context.Context) ([]RemoteStateRow, error)
+    FailureCount(ctx context.Context) (int, error)
+    BaselineEntryCount(ctx context.Context) (int, error)
+    UnresolvedConflictCount(ctx context.Context) (int, error)
+    ReadSyncMetadata(ctx context.Context) (map[string]string, error)
+    CheckCacheConsistency(ctx context.Context) (int, error)
+    ListConflicts(ctx context.Context) ([]ConflictRecord, error)
+    ListAllConflicts(ctx context.Context) ([]ConflictRecord, error)
+    GetConflict(ctx context.Context, idOrPath string) (*ConflictRecord, error)
+}
+
+// StateAdmin — called by CLI commands and daemon maintenance.
+// Write operations that don't fit the hot path.
+type StateAdmin interface {
+    ResolveConflict(ctx context.Context, id, resolution string) error
+    PruneResolvedConflicts(ctx context.Context, retention time.Duration) (int, error)
+    WriteSyncMetadata(ctx context.Context, report *SyncReport) error
+    ResetFailure(ctx context.Context, path string) error     // reset failure_count, not delete
+    ResetAllFailures(ctx context.Context) error              // reset all, not delete
+}
+```
+
+### Component → interface distribution
+
+| Component | Receives | Why |
+|-----------|----------|-----|
+| RemoteObserver | `ObservationWriter` | Writes observations + reads delta token |
+| Worker pool | `OutcomeWriter` | Commits outcomes + reads baseline cache |
+| drainWorkerResults | `FailureRecorder` | Records failures on action failure |
+| Reconciler | `StateReader` | Reads unreconciled rows for retry scheduling |
+| CLI commands | `StateReader` + `StateAdmin` | Reads for display + admin writes |
+| Engine | all interfaces (constructs + distributes) | Orchestrator |
+
+**The `DB()` escape hatch is removed.** Today, `BaselineManager.DB()` exposes
+raw `*sql.DB` so `status.go` can run ad-hoc queries. Under this design, those
+queries become methods on `StateReader`. No component receives raw database
+access.
+
+### Concurrency model
+
+Sub-interfaces restrict *capability* (what each caller may do). They do not
+restrict *concurrency* (multiple goroutines still call concurrently).
+
+Concurrency safety comes from SQLite WAL mode with a 5-second busy timeout
+(`_busy_timeout=5000`). Under WAL, readers never block — they read from a
+consistent snapshot. Writers serialize: if two goroutines call write methods
+simultaneously, one waits (up to the busy timeout). With the system's write
+volume, contention is negligible.
+
+---
+
+## 13. Unified Filtering Architecture
+
+Single unified `Filter` struct at ALL boundaries. Every competitor uses a single
+mechanism.
+
+```go
+type Filter struct {
+    builtIn   *BuiltInRules     // .partial, .tmp, ~$*, invalid OneDrive names
+    userRules *UserRules         // skip_files, skip_dirs, skip_dotfiles, max_file_size, sync_paths
+    odIgnore  *OdIgnoreCache     // per-directory .odignore (Phase 10)
+}
+
+func (f *Filter) ShouldSync(path string, itemType ItemType, size int64) FilterResult
+```
+
+### Call sites (defense in depth)
+
+| Call site | Purpose | On exclude |
+|-----------|---------|-----------|
+| Remote observer `classifyItem()` | Primary gate | Dropped. Never in `remote_state`. Fixes FC-1. |
+| Local observer (scanner, inotify) | Primary gate | Dropped. Never enters buffer. |
+| Planner | Belt-and-suspenders | Excluded. `remote_state` → `filtered`. |
+| `CommitObservation` pre-check | Defense in depth | Prevents polluting `remote_state`. |
+
+### FC-1 through FC-12 resolutions
+
+All filtering conflicts from [filtering-conflicts.md](filtering-conflicts.md)
+are addressed:
+
+| ID | Issue | Resolution |
+|----|-------|-----------|
+| FC-1 | Remote observer missing built-in filtering | Symmetric filtering in `classifyItem()` |
+| FC-2 | `.db` exclusion too aggressive | Narrow to sync engine DB path |
+| FC-3 | `desktop.ini` dual-system | Document overlap, remove from 10.5 junk list |
+| FC-4 | E20 vs. observer built-ins | Two-tier model, amend E20 |
+| FC-5 | Built-in vs. `skip_files` overlap | Document Layer 0, fix examples |
+| FC-6 | `.odignore` killed by `skip_dotfiles` | Exempt `ignore_marker` from `skip_dotfiles` |
+| FC-7 | `.odignore` sync behavior | Never sync (add to built-ins) |
+| FC-8 | `auto_clean_junk` deletion wars | Exclude junk, don't auto-clean |
+| FC-9 | Stale files after filter changes | Warn and freeze, no delete propagation |
+| FC-10 | `sync_paths` parent traversal | Lightweight baseline entries for parents |
+| FC-11 | `.nosync` vs. remote observer | Document; require remote-side exclusion for future per-dir |
+| FC-12 | Non-empty directory delete | Two-tier disposable + fail-safe |
+
+### Risks addressed
+
+- **R12** (invisible filtered): Correct behavior — `filtered` state deliberate.
+- **R13** (stale local): Correct — warn/freeze (FC-9).
+- **R14** (two-stage filtering): Defense in depth, same `Filter.ShouldSync()`.
+- **R21** (filter performance): Deferred to Phase 10.
+
+---
+
+## 14. Upload Failure Tracking
+
+### Design: `local_issues` table
+
+Upload failure tracking is separate from `remote_state` because uploads are
+locally-driven. Local files have no item ID until uploaded.
+
+### Error classification (17 types)
+
+- **PERMANENT**: invalid filename, path too long, file too large, permission
+  denied.
+- **TRANSIENT**: locked, rate limited, network, eTag, range, server, name
+  conflict.
+- **FATAL**: quota, unauthorized, context canceled.
+- **TRANSPARENT**: token expiry, session expiry (handled by existing retry
+  layers).
+- **WARNING**: hash mismatch (post-upload verification).
+
+### Pre-upload validation (in planner)
+
+1. `Filter.ShouldSync()` — invalid filenames, reserved names.
+2. Path length: `<= 400` bytes (Business) or runes (Personal).
+3. File size: `<= 250 GB`.
+
+Items failing validation → `local_issues` with `permanently_failed`. Surfaced
+via `onedrive-go issues`.
+
+### Upload-side retries
+
+Planner checks `local_issues` for `upload_failed` items where
+`next_retry_at <= now`. Same backoff curve (5s → 5min → 10min → 20min → 40min →
+1hr cap).
+
+---
+
+## 15. Consolidated Schema
+
+### `remote_state` (full mirror + ID PK + explicit state)
+
+```sql
+CREATE TABLE IF NOT EXISTS remote_state (
+    drive_id      TEXT    NOT NULL,
+    item_id       TEXT    NOT NULL,
+    path          TEXT    NOT NULL UNIQUE,
+    parent_id     TEXT,
+    item_type     TEXT    NOT NULL CHECK(item_type IN ('file', 'folder', 'root')),
+    hash          TEXT,
+    size          INTEGER,
+    mtime         INTEGER,
+    etag          TEXT,
+    sync_status   TEXT    NOT NULL DEFAULT 'pending_download'
+                  CHECK(sync_status IN (
+                      'pending_download', 'downloading', 'download_failed',
+                      'synced',
+                      'pending_delete', 'deleting', 'delete_failed', 'deleted',
+                      'filtered')),
+    observed_at   INTEGER NOT NULL CHECK(observed_at > 0),
+    failure_count INTEGER NOT NULL DEFAULT 0,
+    next_retry_at INTEGER,
+    last_error    TEXT,
+    http_status   INTEGER,
+    PRIMARY KEY (drive_id, item_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_remote_state_status
+    ON remote_state(sync_status);
+CREATE INDEX IF NOT EXISTS idx_remote_state_parent
+    ON remote_state(parent_id);
+```
+
+### `baseline` (ID PK)
+
+```sql
+CREATE TABLE IF NOT EXISTS baseline (
+    drive_id    TEXT    NOT NULL,
+    item_id     TEXT    NOT NULL,
+    path        TEXT    NOT NULL UNIQUE,
+    parent_id   TEXT,
+    item_type   TEXT    NOT NULL CHECK(item_type IN ('file', 'folder', 'root')),
+    local_hash  TEXT,
+    remote_hash TEXT,
+    size        INTEGER,
+    mtime       INTEGER,
+    synced_at   INTEGER NOT NULL,
+    etag        TEXT,
+    PRIMARY KEY (drive_id, item_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_baseline_parent
+    ON baseline(parent_id);
+```
+
+### `local_issues` (upload tracking)
+
+```sql
+CREATE TABLE IF NOT EXISTS local_issues (
+    path          TEXT    PRIMARY KEY,
+    issue_type    TEXT    NOT NULL
+                  CHECK(issue_type IN (
+                      'invalid_filename', 'path_too_long', 'file_too_large',
+                      'permission_denied', 'upload_failed', 'quota_exceeded',
+                      'locked', 'sharepoint_restriction')),
+    sync_status   TEXT    NOT NULL DEFAULT 'pending_upload'
+                  CHECK(sync_status IN (
+                      'pending_upload', 'uploading', 'upload_failed',
+                      'permanently_failed', 'resolved')),
+    failure_count INTEGER NOT NULL DEFAULT 0,
+    next_retry_at INTEGER,
+    last_error    TEXT,
+    http_status   INTEGER,
+    first_seen_at INTEGER NOT NULL,
+    last_seen_at  INTEGER NOT NULL,
+    file_size     INTEGER,
+    local_hash    TEXT
+);
+```
+
+### CommitOutcome SQL
+
+- **Download success**:
+  ```sql
+  UPDATE remote_state SET sync_status = 'synced'
+  WHERE drive_id = ? AND item_id = ?
+    AND sync_status = 'downloading' AND hash IS ?
+  ```
+- **Delete success**:
+  ```sql
+  UPDATE remote_state SET sync_status = 'deleted'
+  WHERE drive_id = ? AND item_id = ?
+    AND sync_status = 'deleting'
+  ```
+- **Upload success**:
+  ```sql
+  DELETE FROM local_issues WHERE path = ?
+  ```
+
+---
+
+## 16. Single-Timer Reconciler
+
+### What changed from original proposal
+
+The original design used `map[string]*time.Timer` (per-item, edge-triggered).
+The revised design uses a single `*time.Timer` (level-triggered). Per-item
+timers → 1000 goroutines thundering on `buf.Add()` mutex. Single timer +
+reconcile loop is truly level-triggered.
+
+### Design
+
+```go
+type Reconciler struct {
+    state  StateReader
+    buf    *ChangeBuffer
+    tracker *InFlightTracker
+    logger *slog.Logger
+    mu     sync.Mutex
+    timer  *time.Timer    // single timer; nil when idle
+    kickCh chan struct{}   // 1-buffered, coalesces kicks
+    cancel context.CancelFunc
+}
+```
+
+### How it works
+
+1. `reconcile()` reads all unreconciled rows.
+2. Rows where `next_retry_at <= now` and not in-flight: dispatch via
+   `buf.Add()`.
+3. Remaining rows: arm timer to minimum `next_retry_at`.
+4. Timer callback writes to `kickCh`.
+
+### Three mechanisms
+
+- **`Kick()`** (event-driven): Called after every worker completion.
+  Non-blocking write to 1-buffered channel. Multiple rapid kicks coalesce.
+- **Single timer** (event-driven): Armed to the earliest `next_retry_at`.
+  Callback writes to `kickCh`.
+- **2-minute safety sweep** (backup): Catches anything missed by kicks or
+  timer. Level-triggered — reads DB ground truth.
+
+### Main loop
+
+```go
+func (r *Reconciler) run(ctx context.Context) {
+    safety := time.NewTicker(2 * time.Minute)
+    defer safety.Stop()
+
+    r.reconcile(ctx) // bootstrap
+
+    for {
+        select {
+        case <-r.kickCh:
+            r.reconcile(ctx)
+        case <-safety.C:
+            r.reconcile(ctx)
+        case <-ctx.Done():
+            r.mu.Lock()
+            if r.timer != nil { r.timer.Stop() }
+            r.mu.Unlock()
+            return
+        }
+    }
+}
+```
+
+### Retry backoff
+
+| After N failures | Retry delay |
+|------------------|-------------|
+| 1-2 | ~5 seconds (immediate via reconciler) |
+| 3 | 5 min |
+| 4 | 10 min |
+| 5 | 20 min |
+| 6 | 40 min |
+| 7+ | 1 hour (cap) |
+
+Formula: `next_retry_at = last_failed_at + min(5min × 2^(failure_count - 3), 1 hour)`
+
+No error classification drives retry strategy. The HTTP status and error message
+are metadata for user visibility, not retry logic.
+
+### Re-read cases when timer fires
+
+When a retry timer fires, the reconciler re-reads the `remote_state` row from
+DB. The row may have changed since the timer was scheduled. Five cases:
+
+| DB state at re-read time | Action | Why |
+|--------------------------|--------|-----|
+| Row `synced` (CommitOutcome updated it) | Skip, no-op | Item synced successfully. Timer was stale |
+| Hash changed (fresh delta overwrote) | Synthesize event with **new** hash | Old version irrelevant. Download current version |
+| `pending_delete` (was `pending_download`) | Synthesize delete event | Delta delivered deletion while retrying download |
+| Item in-flight (`tracker.HasInFlight`) | Skip, reschedule at same backoff | Already being processed. Avoid duplicate work |
+| Unchanged | Synthesize event, dispatch | Normal retry |
+
+All five follow from "use current DB state at timer-fire time." The reconciler
+never caches — it always re-reads. Correct by construction regardless of
+intervening events.
+
+### Synthesized ChangeEvent fields
+
+```go
+ChangeEvent{
+    Source:    SourceRemote,
+    Type:      ChangeModify,    // or ChangeDelete if pending_delete
+    Path:      row.Path,
+    ItemID:    row.ItemID,
+    ParentID:  row.ParentID,
+    DriveID:   row.DriveID,
+    ItemType:  row.ItemType,
+    Name:      filepath.Base(row.Path),  // derived, not stored
+    Size:      row.Size,
+    Hash:      row.Hash,
+    Mtime:     row.Mtime,
+    ETag:      row.ETag,
+    CTag:      "",             // not stored, not used by planner
+}
+```
+
+- `pending_delete` → `ChangeDelete`. The planner sees a remote deletion.
+- All other pending states → `ChangeModify`. Planner checks hash vs baseline.
+- Never `ChangeMove` — moves decomposed into delete + create at observation
+  time. Each side retried independently.
+
+### Permanently-failing items
+
+Items that never self-heal are retried at the 1-hour cap. Each attempt costs ~1
+second. At steady state, 10 such items cost 10 seconds per hour — 0.07% of one
+worker's capacity. The `issues` CLI command makes stuck items visible.
+
+### Risks addressed
+
+- **R15** (timer re-arm): Re-arm after pass, Kick catches new items.
+- **R16** (timer vs shutdown): Channel + `ctx.Done()` guard.
+- **R17** (thundering herd): Buffer debounce + worker backpressure.
+
+---
+
+## 17. Error Handling
+
+Every error that survives the two existing retry layers (graph client: 5 retries,
+executor: 3 retries) is handled uniformly by the state discrepancy mechanism. No
+error classification drives retry strategy.
+
+### Error table
+
+| Error | Where state lives | Recovery |
+|-------|------------------|----------|
+| 423 Locked (download) | `remote_state` row persists | Self-heals when lock released. Reconciler retries |
+| 403 Forbidden (download) | `remote_state` row persists | User must fix permissions. Visible in `issues` CLI |
+| Persistent 5xx (download) | `remote_state` row persists | Self-heals when outage ends. Reconciler retries |
+| FS permission (download) | `remote_state` row persists | User must fix local permissions. Visible in `issues` CLI |
+| Non-empty directory delete | `remote_state` `pending_delete` row | Escalated to conflict after threshold. See below |
+| 401 Unauthorized | `remote_state` row persists | Auth must be refreshed externally. See below |
+| 507 Insufficient Storage | `remote_state` row persists | Disk must be freed externally. Reconciler retries at 1hr cap |
+| 400 Bad Request (upload) | `local_issues` row | User must rename file. Visible in `issues` CLI |
+| 423 Locked (upload) | Local file differs from baseline | Self-heals when lock released. Natural planner retry |
+| 403 Forbidden (upload) | Local file differs from baseline | User must fix permissions. Visible in `issues` CLI |
+| FS read errors (upload) | Local file differs from baseline | User must fix permissions. Visible in `issues` CLI |
+
+### Non-empty directory deletes
+
+When delta reports a folder deletion, the executor checks `os.ReadDir()` and
+fails immediately if the directory is non-empty — classified as `errClassSkip`.
+The planner's dependency DAG ensures children are deleted before parents, but
+dependencies gate on *completion*, not *success*.
+
+In the new design, the `pending_delete` row persists. The reconciler retries
+with exponential backoff, capping at 1 hour. But the directory will never become
+empty through retries alone.
+
+**Escape hatch: conflict escalation.** After `failure_count` reaches a threshold
+(e.g., 10 — roughly 5 hours of retries), the reconciler escalates to a conflict.
+The conflict record explains: "Remote deleted folder X, but local directory is
+not empty." The user can resolve by deleting local contents or keeping local
+version.
+
+### Global auth failure
+
+401 failures are recorded in `remote_state` like any other failure. The
+reconciler retries with exponential backoff. If the token is expired globally,
+every action in the batch fails with 401.
+
+**Detection.** When `drainWorkerResults` sees a cluster of 401 failures (>50% of
+a batch), it logs: `slog.Error("auth failure: most actions in batch failed with
+401, refresh token may be expired")`. The user runs `onedrive-go login` to
+re-authenticate.
+
+**Why not shut down on 401?** A single 401 doesn't mean global auth failure — it
+could be a permission issue on a specific SharePoint resource. The cluster
+detection provides signal without a hard stop.
+
+**Why not auto-refresh?** Token refresh requires the OAuth refresh token. The
+graph client already handles automatic refresh via `oauth2.TokenSource`. If the
+refresh token itself is expired (90-day idle), interactive re-authentication is
+required.
+
+---
+
+## 18. Compatibility
 
 ### Dry-run behavior
 
-During `sync --dry-run`, the observer runs and produces in-memory ChangeEvents (needed for the report), but `CommitObservation` is not called — no `remote_state` writes, no token advancement. This matches rclone's precedent and user expectation: "dry-run is read-only." The dry-run gate already exists at `engine.go:266`.
+During `sync --dry-run`, the observer runs and produces in-memory ChangeEvents
+(needed for the report), but `CommitObservation` is not called — no
+`remote_state` writes, no token advancement. This matches rclone's precedent and
+user expectation: "dry-run is read-only." The dry-run gate already exists at
+`engine.go:266`.
 
 ### RunOnce (one-shot sync)
 
-RunOnce writes `remote_state` at observation time, processes events, deletes `remote_state` rows on success. The table is empty before and after a successful one-shot sync.
+RunOnce writes `remote_state` at observation time, processes events, updates
+`remote_state` rows on success. After a successful one-shot sync, all rows are
+`synced`.
 
-**No reconciler goroutine.** The reconciler is a watch-mode construct (long-lived, timer-based). RunOnce is a blocking single-cycle call — it runs one pass and exits. Instead, RunOnce queries unreconciled `remote_state` rows directly at startup and merges them into the planning pass:
+**No reconciler goroutine.** The reconciler is a watch-mode construct
+(long-lived, timer-based). RunOnce is a blocking single-cycle call. Instead,
+RunOnce queries unreconciled `remote_state` rows directly at startup and merges
+them into the planning pass:
 
 ```
 RunOnce(ctx, mode, opts)
   ├─ baseline.Load()
   ├─ observeChanges()
   │   ├─ observeRemote() + FullDelta → fresh delta events
-  │   ├─ store.ListUnreconciled() → orphaned rows from previous crash/failure  ← NEW
-  │   ├─ Synthesize ChangeEvents from orphaned rows                           ← NEW
+  │   ├─ store.ListUnreconciled() → orphaned rows from previous crash/failure
+  │   ├─ Synthesize ChangeEvents from orphaned rows
   │   ├─ observeLocal() + FullScan
   │   └─ buf.AddAll(fresh + orphaned + local).FlushImmediate()
   ├─ planner.Plan()  [one pass, sees everything]
@@ -1095,192 +1506,320 @@ RunOnce(ctx, mode, opts)
   └─ return SyncReport
 ```
 
-The buffer deduplicates by path: if a fresh delta event and an orphaned row exist for the same path, the buffer takes the latest (fresh delta wins — it's newer). This is a single query + event synthesis in `observeChanges()`, not a new goroutine or lifecycle.
+The buffer deduplicates by path: if a fresh delta event and an orphaned row
+exist for the same path, the buffer takes the latest (fresh delta wins). This is
+a single query + event synthesis in `observeChanges()`, not a new goroutine.
 
-**Why no reconciler for RunOnce?** RunOnce might finish and exit before any timer-based retries could fire. The reconciler's value is in long-running daemon mode where it schedules retries across multiple poll cycles. For one-shot mode, the next RunOnce invocation serves the same purpose — it queries unreconciled rows on startup.
+**Why no reconciler for RunOnce?** RunOnce might finish and exit before any
+timer-based retries could fire. The next RunOnce invocation serves the same
+purpose — it queries unreconciled rows on startup. Failed items persist in
+`remote_state` and are retried on the next RunOnce.
+
+### RunWatch (daemon mode)
+
+Events arrive at any rate. `remote_state` gets updated to the latest observed
+values (Graph coalesces intermediate states). Multiple planning passes can
+overlap. Path dedup (B-122) cancels stale in-flight actions. No cycles exist —
+batches are debounce windows.
 
 ### WebSocket (Phase 8)
 
-WebSocket notifications trigger immediate delta polls (Flow 1). Everything downstream — `remote_state` write, token commit, buffer, planner, workers, reconciler — is unchanged.
-
-### Continuous sync
-
-Events arrive at any rate. `remote_state` gets updated to the latest observed values (Graph coalesces intermediate states). Multiple planning passes can overlap. Path dedup (B-122) cancels stale in-flight actions. No cycles exist — batches are debounce windows, not cycles.
+WebSocket notifications trigger immediate delta polls (Flow 1). Everything
+downstream — `remote_state` write, token commit, buffer, planner, workers,
+reconciler — is unchanged.
 
 ### Initial sync
 
-On initial sync (empty token), FullDelta returns all remote items — potentially tens of thousands. All are written to `remote_state` in one transaction (~200-500ms for 50K items with WAL mode, ~10 MB temporary disk). As actions succeed, rows are deleted. After a successful initial sync, the table is empty. No special case needed.
+On initial sync (empty token), FullDelta returns all remote items — potentially
+tens of thousands. All are written to `remote_state` in one transaction
+(~200-500ms for 50K items with WAL mode). As actions succeed, rows transition to
+`synced`. No special case needed.
 
 ### Status command
 
 The `status` command gains a failure count by querying `remote_state`:
 
 ```sql
-SELECT COUNT(*) FROM remote_state rs
-LEFT JOIN baseline b ON rs.path = b.path
-WHERE rs.is_deleted = 0
-  AND (b.remote_hash IS NULL OR b.remote_hash != rs.hash)
+SELECT COUNT(*) FROM remote_state
+WHERE sync_status NOT IN ('synced', 'filtered', 'deleted')
 ```
 
 Displayed as "X items pending sync" alongside existing "Y unresolved conflicts."
 
-## Implementation Plan
+---
 
-### What gets deleted
+## 19. Crash Recovery
 
-| Component | Reason |
-|-----------|--------|
-| `failure_tracker.go` | Replaced by `remote_state` + reconciler |
-| `failure_tracker_test.go` | Tests for deleted component |
-| `cycleFailures` map in engine | Token decoupled from sync success |
-| `watchCycleCompletion` function in engine | Token committed at observation time |
-| `CycleDone()`, `CleanupCycle()` in DepTracker | No cycle-gated token commits |
-| `cycles`, `cyclesMu`, `cycleLookup` in DepTracker | Cycle tracking internals |
-| Per-cycle failure counting in `drainWorkerResults` | No consumer for per-cycle failure data |
-| All existing migrations (00001-00005) | Replaced by single clean schema |
+Explicit state enables unambiguous recovery:
+
+| DB state at restart | Recovery action |
+|----|-----|
+| `downloading` | Check `.partial`. Valid session → resume. Else → reset to `pending_download`. **(R18)** |
+| `deleting` | Check if local file exists. If yes → `pending_delete`. If no → `deleted`. **(R19)** |
+| `pending_download` | Reconciler reschedules. |
+| `download_failed` | Reconciler reschedules per backoff. |
+| `synced` | No action. |
+| `filtered` | No action. |
+| `deleted` | No action. |
+
+**R18 detail** (corrupt `.partial`): On crash recovery with `downloading` state,
+query TransferManager for session state. If session is valid, resume. If session
+expired or invalid, delete `.partial` and reset to `pending_download`. The
+TransferManager already handles session expiry.
+
+**R19 detail** (partial folder delete): The planner's dependency DAG ensures
+children delete before parents. On restart, the reconciler resets the parent to
+`pending_delete`. The planner regenerates the delete action. If remaining
+children still exist, the DAG re-orders correctly. Idempotent.
+
+---
+
+## 20. Critical Design Invariants
+
+1. **Every DB state write uses a WHERE clause checking expected current state.**
+   No blind UPDATEs.
+2. **CommitOutcome includes `AND hash IS ?`** — prevents overwriting newer
+   observation with stale result.
+3. **CommitObservation never regresses `synced → pending_download` when hashes
+   match.**
+4. **Reconciler only dispatches `pending_download` or `download_failed`.** Never
+   `downloading`, `synced`, `filtered`, `deleted`.
+5. **CancelByPath is a performance optimization, not a correctness mechanism.**
+   System is correct even if cancel doesn't fire.
+
+---
+
+## 21. Risk Analysis
+
+All 22 identified risks with severity, resolution, and where resolved:
+
+| Risk | Sev | Category | Decision | §  |
+|------|-----|----------|----------|----|
+| R1: State ownership | Med | State machine | Partitioned interfaces + optimistic concurrency | 10.1 |
+| R2: Dual tracking | Med | State machine | sync_status authoritative, DepTracker as cache | 10.2 |
+| R3: B-122 cancel | Low | State machine | Do nothing — optimistic concurrency handles it | 10.3 |
+| R4: Synced regression | High | State machine | `computeNewStatus()` pure function in Go | 11 |
+| R5: Buffer re-dispatch | Low | State machine | Do nothing — reconciler query + B-122 dedup | 10.4 |
+| R6: 100K row scan | Low | Full mirror | Index on sync_status | 5 |
+| R7: WAL growth | Med | Full mirror | Periodic checkpoint — hard requirement | 5 |
+| R8: UPDATE vs DELETE | Low | Full mirror | Conditional UPDATE identical semantics | 5 |
+| R9: Folder rename cascade | Med | ID-based PK | Eager: O(N) writes in same txn | 6 |
+| R10: Transient path collision | Low | ID-based PK | Atomic txn + B-281 ordering | 6 |
+| R11: local_issues asymmetry | None | Upload | By design — path PK for pre-upload items | 14 |
+| R12: Invisible filtered items | None | Filtering | Correct — `filtered` state deliberate | 13 |
+| R13: Stale local files | None | Filtering | Correct — warn/freeze (FC-9) | 13 |
+| R14: Two-stage filtering | None | Filtering | Defense in depth, same Filter.ShouldSync() | 13 |
+| R15: Timer re-arm | Low | Reconciler | Re-arm after pass, Kick catches new items | 16 |
+| R16: Timer vs shutdown | Low | Reconciler | Channel + ctx.Done() guard | 16 |
+| R17: Thundering herd | Low | Reconciler | Buffer debounce + worker backpressure | 16 |
+| R18: Corrupt .partial | Med | Crash recovery | Session validation → fallback | 19 |
+| R19: Partial folder delete | Low | Crash recovery | Idempotent DAG replay | 19 |
+| R20: Tier 1 coverage gaps | Med | Research | Document scope boundaries | 23 |
+| R21: Filter performance | Low | Filtering | Deferred to Phase 10 | 13 |
+| R22: Event ordering | Med | Buffer | Buffer takes LAST event; conditional updates catch stale | 10.4 |
+
+---
+
+## 22. Assessment Against Existing Architecture
+
+### What survives unchanged
+
+- **Planner**: Pure function, same decision matrix (EF1-EF14, ED1-ED8). Same
+  `PathView` types.
+- **Executor**: Same retry logic, error classification, `Outcome` production.
+- **Buffer**: Same debounce + dedup. Reconciler events enter via `buf.Add()`.
+- **Transfer machinery**: `TransferManager`, `SessionStore`, `.partial` files —
+  all unchanged.
+- **Observers**: `LocalObserver` unchanged. `RemoteObserver` gains
+  `CommitObservation` call.
+- **Safety checks**: S1-S7 in planner, S4 in executor — all unchanged.
+- **B-122 path dedup**: Works the same, now also deduplicates against reconciler
+  events.
+
+### What gets removed
+
+- `failure_tracker.go` (97 lines) — replaced by `remote_state` + reconciler.
+- `CycleID` concept (~50 lines across planner, tracker, worker, types, engine).
+- `watchCycleCompletion` (~40 lines in engine.go).
+- `cycleFailures` map (~15 lines in engine.go).
+- Cycle tracking in DepTracker (`CycleDone`, `CleanupCycle`, `cycles`,
+  `cycleLookup` — ~80 lines).
+- Existing migrations (00001-00005) — replaced by single clean schema.
 
 ### What gets added
 
-| Component | Purpose |
-|-----------|---------|
-| `00001_initial_schema.sql` | Single migration with all tables including `remote_state` |
-| `sync_store.go` | `SyncStore` concrete type with sub-interfaces: `ObservationWriter`, `OutcomeWriter`, `FailureRecorder`, `StateReader`, `StateAdmin` |
-| `reconciler.go` | Level-triggered retry scheduler goroutine: `Kick()` + 2-min safety sweep, reads `StateReader` |
-| `failures.go` (root package) | CLI command: list, clear, JSON output |
-
-### What gets renamed
-
-| Old | New | Reason |
-|-----|-----|--------|
-| `BaselineManager` | `SyncStore` | Manages all sync state (baseline + remote_state + conflicts + tokens), not just baseline |
-| `baseline.go` | `sync_store.go` | File name matches type |
-| `baseline_test.go` | `sync_store_test.go` | File name matches type |
+- `remote_state` table (14 columns, full mirror).
+- `local_issues` table (upload tracking).
+- `SyncStore` (renamed from `BaselineManager`): ~200 lines for
+  CommitObservation, RecordFailure, ListUnreconciled, etc. + typed interfaces.
+- `Reconciler`: ~200 lines.
+- `computeNewStatus()`: ~60 lines (pure function).
+- `issues` CLI command: ~50 lines.
 
 ### What gets modified
 
-| Component | Change |
-|-----------|--------|
-| `engine.go:RunWatch` | Remove failure tracker. Create and start reconciler goroutine. Distribute sub-interfaces |
-| `engine.go:RunOnce` | Query `ListUnreconciled()` in `observeChanges()`. Synthesize ChangeEvents from orphaned rows. Merge into buffer alongside fresh delta events. No reconciler goroutine |
-| `engine.go:processBatch` | Remove `shouldSkip` suppression logic entirely. Remove `CycleID` assignment |
-| `engine.go:drainWorkerResults` | Receives `FailureRecorder` + reconciler. On failure: `RecordFailure()`. Always: `reconciler.Kick()`. No conditional logic, no `remoteStateCleared` checks |
-| `tracker.go:DepTracker` | Remove `CycleDone()`, `CleanupCycle()`, cycle tracking internals (`cycles`, `cyclesMu`, `cycleLookup`), and `CycleID` from `TrackedAction` |
-| `types.go:ActionPlan` | Remove `CycleID` field |
-| `worker.go:WorkerResult` | Add `HTTPStatus int`, `ErrorClass string`. Remove existing `CycleID` field. No `RemoteStateCleared` field |
-| `worker.go:WorkerPool` | Receives `OutcomeWriter` instead of `*BaselineManager` |
-| `observer_remote.go:Watch` | Receives `ObservationWriter`. Call `CommitObservation()` after delta poll, before sending events |
-| `sync_store.go:CommitOutcome` | Keep return type `error`. Add conditional `DELETE FROM remote_state WHERE path = ? AND hash IS ?` in same transaction |
-| `status.go` | Receives `StateReader`. Add failure count to output |
-| `root.go` | Register `failures` command |
+- `engine.go`: Removes cycle machinery, adds reconciler lifecycle, changes
+  `drainWorkerResults`.
+- `baseline.go` → `sync_store.go`: Rename + new methods + ID-based PK.
+- `observer_remote.go`: Add `CommitObservation` call after each delta poll.
+- `tracker.go`: Removal of cycle tracking + Add() writes to DB (Option D).
+- `worker.go`: `WorkerResult` gains `HTTPStatus`, `ErrorClass`. Loses
+  `CycleID`.
 
-### Documents to update
+### Interface migration
 
-| Document | Change |
-|----------|--------|
-| `data-model.md` | Update axiom to include `remote_state`. Add table to schema. Rename `BaselineManager` → `SyncStore` |
-| `concurrent-execution.md` | Update "baseline is only durable per-item state". Document sub-interface distribution |
-| `event-driven-rationale.md` | Update Alternative B notes: adopted for remote side with sub-interface solution for original objections |
-| `LEARNINGS.md` | Add: "delta token is API cursor, not sync cursor" and "in-memory failure suppression + delta token advancement = silent item loss" |
-| `CLAUDE.md` | Add `failures` to CLI command list. Rename `BaselineManager` → `SyncStore` in architecture diagram |
+| Caller | Old type | New type | Interface |
+|--------|----------|----------|-----------|
+| RemoteObserver | `*Baseline` | `ObservationWriter` | CommitObservation, GetDeltaToken |
+| WorkerPool | `*BaselineManager` | `OutcomeWriter` | CommitOutcome, Load |
+| drainWorkerResults | N/A | `FailureRecorder` | RecordFailure |
+| Reconciler | N/A (new) | `StateReader` | ListUnreconciled, etc. |
+| CLI commands | `*BaselineManager` + `DB()` | `StateReader` + `StateAdmin` | Read + admin writes |
+| Engine | all | all | Orchestrator |
 
-### Testing strategy
+---
 
-**Layer 1: Unit tests** — real SQLite (in-memory), same pattern as `baseline_test.go`.
-- `CommitObservation`: write N events + token, verify rows and token
-- `CommitObservation` with existing rows: INSERT OR REPLACE overwrites stale data, resets `failure_count`
-- `CommitOutcome` with `remote_state` delete: hash match → row deleted; hash mismatch → row persists; NULL hash (folders) → `IS` works; `is_deleted` row → `NULL IS NULL` works
-- `ListUnreconciled` query: correct rows returned, respecting `next_retry_at` and ordering
-- `failure_count` increment: updates `next_retry_at`, `last_error`, `http_status`
-- `failure_count` reset: row deleted on success via `CommitOutcome`
-- Reconciler level-triggered behavior: `Kick()` coalesces, reconcile reads DB and diffs timer map, safety sweep fires on schedule
-- Reconciler timer management: new unreconciled row → timer scheduled; row gone → timer canceled; row unchanged with existing timer → no change
-- Reconciler event synthesis: correct ChangeEvent fields (Type, Name derivation, CTag empty), skips in-flight, respects backoff
-- Reconciler re-read cases: row gone → skip, hash changed → new hash, is_deleted changed → correct type, in-flight → skip + reschedule, unchanged → dispatch
+## 23. Tier 1 Research Alignment
 
-**Layer 2: Integration tests** — real SQLite, mock Graph API.
-- Full cycle: observe → fail → Kick → reconcile → timer fires → succeed
-- Crash recovery: write + "crash" + restart → reconciler bootstraps from DB (initial reconcile)
-- Conditional delete race (Scenario 4): R1 succeeds but R2 persists, reconciler keeps R2's timer
-- Stale success: R1 success for stale version, reconciler sees R2 still unreconciled, timer preserved
-- Backoff escalation: 3+ failures → `next_retry_at` set → respected → success clears
-- Reconciler + fresh delta interaction: fresh delta resets failure_count, Kick triggers re-evaluation
-- RunOnce with orphaned rows: `ListUnreconciled()` returns rows from previous crash, merged into planning pass
+### PRD Assessment
 
-**Layer 3: Engine tests** — full pipeline with mocks.
-- Token always advances regardless of failures
-- Reconciler schedules retries correctly (timing, backoff) via level-triggered reconcile
-- Dry-run: no DB writes
-- Planner works with reconciler-sourced events
-- DepTracker: `CycleDone` / `CleanupCycle` / `CycleID` removed, no regressions in dispatch + HasInFlight + CancelByPath
-- `drainWorkerResults`: RecordFailure on failure, Kick always, no conditional logic
+- **"Zero data loss crash recovery"**: Currently violated. Proposed design
+  fulfills it.
+- **RunOnce recovery**: Token committed at observation time.
+  `ListUnreconciled()` recovers orphaned rows.
+- **RunWatch recovery**: `remote_state` persists across crashes. Reconciler
+  bootstraps from DB.
+- **Pause/resume**: Reconciler handles the gap.
+- **`issues` CLI**: New capability — makes persistent failures visible in
+  enterprise environments.
 
-**Layer 4: E2E tests** — live OneDrive, `e2e_full` tag.
-- Reconciliation recovery: upload file, make download fail, fix, verify recovery
-- `failures` CLI: list, clear, JSON output
-- `status` command shows pending sync count
+### Tier 1 Research Recommendations (20 items)
 
-**Layer 5: Property-based tests** — optional, high value.
-- Invariant: for any sequence of operations, every remote item is either in `baseline` (synced) or `remote_state` (pending)
+| # | Recommendation | Status | How Addressed |
+|---|---|---|---|
+| 1 | Three-state sync model | Already exists | `baseline` has `local_hash` + `remote_hash` |
+| 2 | Atomic downloads | Already exists | `.partial` files + atomic rename |
+| 3 | DriveId normalization | Already exists | `driveid.New()` normalizes |
+| 4 | Two-pass delta processing | Already exists | `observer_remote.go` B-281 |
+| 5 | Pending state machine | **Implemented** | Explicit `sync_status` with state machine |
+| 6 | Delta token in same txn | **Core of this design** | `CommitObservation` writes rows + token atomically |
+| 7 | Big-delete protection | Already exists | S5 safety check |
+| 8 | Hash-before-delete guard | Already exists | S4 safety check |
+| 9 | Retry-After compliance | Already exists | `graph.Client` retry logic |
+| 10 | Upload session persistence | Already exists | File-based `SessionStore` |
+| 11 | WAL checkpoint | **Implemented** | Periodic checkpoint after initial sync, every 30min, shutdown |
+| 12 | Circuit breaker | **Implemented** | Per-item backoff (1hr cap) + 401 cluster detection |
+| 13 | PID-based lock validation | Already exists | Daemon PID file |
+| 14 | Token proactive refresh | Already exists | `oauth2.TokenSource` |
+| 15 | ID-based identity as PK | **Implemented** | `(drive_id, item_id)` as PK, `path UNIQUE` |
+| 16 | `deltashowremoteitemsaliasid` | Already exists | Remote observer sends header |
+| 17 | 504 safety | Already exists | Executor: 504 → retryable |
+| 18 | Tombstone/soft-delete | **Implemented** | `sync_status = 'deleted'` in full remote mirror |
+| 19 | Nanosecond timestamps | Deferred | Future optimization phase |
+| 20 | Inode number in database | Deferred | Future fast-check optimization phase |
 
-## What Gets Removed from Current Architecture
+### The blank-slate verdict
 
-This section is a comprehensive inventory of everything that must be deleted during the code migration. No remnants of these concepts should survive.
+From a blank slate, this IS the right architecture:
 
-### Concepts removed
+1. Persist remote observations immediately on receipt ✓
+2. Advance API cursor independently of sync success ✓
+3. Reconcile from persistent state discrepancies ✓
+4. Use level-triggered reconciliation with exponential backoff ✓
+5. Full remote mirror (not work queue) ✓
+6. ID-based primary key (not path-based) ✓
+7. Explicit state machine (not implicit inference) ✓
+8. Partitioned interfaces with optimistic concurrency ✓
+9. Upload failure tracking with pre-validation ✓
+10. Unified filtering architecture ✓
 
-| Concept | Where it lives today | Why it's removed |
-|---------|---------------------|------------------|
-| **Cycles** | `CycleID` on `ActionPlan`, `TrackedAction`, `WorkerResult`; `cycleFailures` map; `watchCycleCompletion`; DepTracker cycle tracking | Events arrive continuously. Batches are debounce windows, not cycles. The delta token is committed at observation time, not gated on cycle success. There is nothing to count per-cycle |
-| **In-memory failure suppression** | `failure_tracker.go`, `shouldSkip()` in `processBatch` | Replaced by `remote_state` persistence + reconciler. Suppression accelerates item loss; the new design never suppresses |
-| **Delta token hold-back** | `watchCycleCompletion` checks `cycleFailures > 0` before committing | Token is committed at observation time in `CommitObservation`. No hold-back needed. The "safety" was illusory — defeated within 5 minutes by the next successful cycle |
-| **Per-cycle failure counting** | `drainWorkerResults` increments `cycleFailures[cycleID]` | No cycles to count failures for. Failures are recorded in `remote_state`. The reconciler handles recovery |
-| **Notification-driven reconciler API** | N/A (not yet implemented, was in earlier design iteration) | The reconciler is level-triggered: `Kick()` + 2-minute safety sweep. No `NotifySuccess(path)` / `NotifyFailure(path, count)`. No edge-triggered notifications that can be stale or lost |
-| **`remoteStateCleared` boolean** | N/A (not yet implemented, was in earlier design iteration) | Existed to decide whether to call `NotifySuccess`. With level-triggered reconciler, no boolean needed — reconciler reads DB state |
-| **`BaselineManager` name** | `baseline.go`, all callers | Renamed to `SyncStore`. The type manages all sync state (baseline + remote_state + conflicts + tokens), not just baseline |
-| **`BaselineManager.DB()` escape hatch** | `baseline.go`, called by `status.go` | Queries become methods on `StateReader`. No raw `*sql.DB` access |
+---
 
-### Files deleted
+## 24. Testing Strategy
 
-| File | Replacement |
-|------|-------------|
-| `failure_tracker.go` | `remote_state` table + reconciler |
-| `failure_tracker_test.go` | Reconciler tests + SyncStore tests |
-| `migrations/00001_*.sql` through `migrations/00005_*.sql` | Single `00001_initial_schema.sql` with all tables |
+### Layer 1: Unit tests (real SQLite, in-memory)
 
-### Functions/methods deleted
+- `CommitObservation`: write N events + token, verify rows and token.
+- `CommitObservation` with existing rows: handle all 30 matrix cells.
+- `CommitOutcome` with `remote_state` update: hash match → `synced`; hash
+  mismatch → row persists; NULL hash → `IS` works.
+- `ListUnreconciled` query: correct rows returned, respecting `next_retry_at`.
+- `RecordFailure`: updates `failure_count`, `next_retry_at`, `last_error`,
+  `http_status`.
+- Reconciler level-triggered behavior: `Kick()` coalesces, reconcile reads DB
+  and diffs timer map.
+- Reconciler re-read cases: row gone → skip, hash changed → new hash, in-flight
+  → skip + reschedule, unchanged → dispatch.
 
-| Function | File | Replacement |
-|----------|------|-------------|
-| `shouldSkip()` call in `processBatch` | `engine.go` | Nothing — all planned actions dispatch unconditionally |
-| `watchCycleCompletion()` | `engine.go` | Nothing — token committed at observation time |
-| `CycleDone(cycleID)` | `tracker.go` | Nothing — no cycles |
-| `CleanupCycle(cycleID)` | `tracker.go` | Nothing — no cycles |
-| Per-cycle failure counting in `drainWorkerResults` | `engine.go` | `RecordFailure()` + `Kick()` |
-| `NewFailureTracker()` | `failure_tracker.go` | `NewReconciler()` |
-| `recordFailure()` / `recordSuccess()` / `shouldSkip()` | `failure_tracker.go` | `SyncStore.RecordFailure()` / `CommitOutcome` conditional DELETE / reconciler |
+### Layer 2: Integration tests (real SQLite, mock Graph API)
 
-### Fields deleted
+- Full cycle: observe → fail → Kick → reconcile → timer fires → succeed.
+- Crash recovery: write + "crash" + restart → reconciler bootstraps from DB.
+- Conditional update race (Scenario 4): R1 succeeds but R2 persists.
+- Backoff escalation: 3+ failures → `next_retry_at` set → respected → success
+  clears.
 
-| Field | Type | Replacement |
-|-------|------|-------------|
-| `CycleID` | `ActionPlan` | None — debug by path + timestamp |
-| `CycleID` | `TrackedAction` | None |
-| `CycleID` | `WorkerResult` | None |
-| `cycleFailures` | `Engine` (map) | None |
-| `cycles`, `cyclesMu`, `cycleLookup` | `DepTracker` (maps) | None |
+### Layer 3: Engine tests (full pipeline with mocks)
 
-### Internal state deleted
+- Token always advances regardless of failures.
+- Reconciler schedules retries correctly.
+- Dry-run: no DB writes.
+- Planner works with reconciler-sourced events.
+- DepTracker: no regressions in dispatch + HasInFlight + CancelByPath.
 
-| State | Where | Replacement |
-|-------|-------|-------------|
-| In-memory failure records (path → count/timestamp) | `failureTracker` | `remote_state` table (persistent) |
-| In-memory delta token (separate from DB token) | `RemoteObserver` | Single token — committed at observation time. No in-memory/DB split |
-| `cycleFailures` map | Engine | None |
-| `suppressed` map in `processBatch` | Engine | None |
+### Layer 4: E2E tests (live OneDrive, `e2e_full` tag)
 
-### Verification checklist for code migration
+- Reconciliation recovery: upload file, make download fail, fix, verify
+  recovery.
+- `issues` CLI: list, clear, JSON output.
+- `status` command shows pending sync count.
 
-After the migration, grep the codebase for these terms. **None should appear** (except in comments explaining the removal or in this design doc):
+### Layer 5: Property-based tests (optional, high value)
+
+- Invariant: for any sequence of operations, every remote item is either in
+  `baseline` (synced) or `remote_state` (pending).
+
+### Layer 6: Stress tests (no Graph API, in-memory SQLite)
+
+1. **1000 simultaneous failures → reconciler convergence**: All fail with 423.
+   Assert correct `sync_status`, `failure_count`, single timer armed.
+2. **Rapid kick/sweep interleaving**: 100 rows, 1000 rapid Kicks, 50% success
+   rate. Assert no races.
+3. **Fresh delta overwrites during retry**: 10 backed-off items, 5 overwritten.
+   Assert `failure_count` reset.
+4. **Conditional update race**: Hash mismatch prevents overwriting newer version.
+   Assert `pending_download` preserved.
+5. **Filter exclusion marking**: 10 items, 5 filtered. After SIGHUP, all
+   re-evaluated.
+6. **Upload pre-validation**: Invalid filenames, paths too long, too large.
+   Assert `local_issues`, no upload actions.
+7. **`computeNewStatus()` exhaustive matrix**: All 30 cells — table-driven test.
+8. **CancelByPath + CommitOutcome race**: 3 scenarios. Assert correct outcome in
+   all cases.
+
+---
+
+## 25. Migration Path
+
+### Database migration
+
+Zero users. All migrations (00001-00005) deleted. Single
+`00001_initial_schema.sql` with all three tables.
+
+### Code removals
+
+```bash
+grep -rn 'CycleID\|CycleDone\|CleanupCycle\|cycleFailures\|cycleLookup\|shouldSkip\|watchCycleCompletion\|failureTracker\|FailureTracker\|failure_tracker\|BaselineManager' \
+    internal/sync/ --include='*.go' | grep -v '_test.go' | grep -v 'design'
+```
+
+Plus: `uuid` import in planner, `cycleTracker` struct, `suppressedPaths`,
+`NewFailureTracker()` call.
+
+### Verification checklist
+
+After migration, grep the codebase for these terms. **None should appear**
+(except in comments explaining the removal or in this design doc):
 
 - `CycleID` / `cycleID` / `cycle_id`
 - `CycleDone` / `CleanupCycle`
@@ -1292,20 +1831,61 @@ After the migration, grep the codebase for these terms. **None should appear** (
 - `remoteStateCleared` / `RemoteStateCleared`
 - `BaselineManager` (renamed to `SyncStore`)
 
+### Documents to update
+
+| Document | Change |
+|----------|--------|
+| `data-model.md` | Update axiom to include `remote_state`. Add table to schema. Rename `BaselineManager` → `SyncStore` |
+| `concurrent-execution.md` | Update "baseline is only durable per-item state". Document sub-interface distribution |
+| `event-driven-rationale.md` | Update Alternative B notes: adopted for remote side with sub-interface solution |
+| `LEARNINGS.md` | Add: "delta token is API cursor, not sync cursor" |
+| `CLAUDE.md` | Add `issues` to CLI command list. Rename `BaselineManager` → `SyncStore` |
+
+---
+
+## 26. Verdict
+
+**This is the right architecture. Implement it.**
+
+The design:
+
+1. **Solves a real, critical bug** — silent data loss in the most common failure
+   scenario.
+2. **Follows industry best practice** — Dropbox's separation of observation from
+   application.
+3. **Is validated by tier 1 research** — addresses the two most critical gaps
+   (#5 pending state, #6 token atomicity).
+4. **Is proportional** — ~500 new lines, ~280 removed, surgical modifications
+   to existing code.
+5. **Doesn't regress any existing capability** — planner, executor, buffer,
+   transfer machinery unchanged.
+6. **Simplifies the architecture** — removes the cycle concept, failure tracker,
+   cycle-gated token commits.
+7. **Enables future features** — multi-drive, WebSocket, filtering,
+   observability all build naturally on this foundation.
+8. **Is the blank-slate answer** — this is what you'd build from scratch.
+
+---
+
 ## Relationship to Existing Documents
 
 This design supersedes:
-- The persistent failure tracker plan (`.claude/plans/witty-doodling-whale.md`)
+
+- The persistent failure tracker plan
 - The in-memory failure tracker (`failure_tracker.go`, `failure_tracker_test.go`)
 - The delta token hold-back logic in `watchCycleCompletion`
 - The `cycleFailures` map and cycle success/failure concept
-- The DepTracker cycle tracking machinery (`CycleDone`, `CleanupCycle`, `cycles` map, `cycleLookup` map)
+- The DepTracker cycle tracking machinery
 - The `CycleID` field on `ActionPlan`, `TrackedAction`, `WorkerResult`
 - The `BaselineManager` name and monolithic API surface
 - The "baseline is the only durable per-item state" axiom
 - The "database stores confirmed synced state and nothing else" axiom
 
 It builds on:
-- [failures.md](failures.md) — failure enumeration, delta token bug analysis, retry layer behavior
+
+- [failures.md](failures.md) — failure enumeration, delta token bug analysis
 - [sync-algorithm.md](sync-algorithm.md) — planner decision matrix (unchanged)
-- [event-driven-rationale.md](event-driven-rationale.md) — architectural decisions (extended — Alternative B adopted for remote side with sub-interface solution for original objections)
+- [event-driven-rationale.md](event-driven-rationale.md) — architectural
+  decisions (extended — Alternative B adopted for remote side)
+- [filtering-conflicts.md](filtering-conflicts.md) — FC-1 through FC-12
+  analysis

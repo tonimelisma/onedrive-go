@@ -263,6 +263,7 @@ echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r 
 | [docs/design/event-driven-rationale.md](docs/design/event-driven-rationale.md) | Option E architectural decision record |
 | [docs/design/concurrent-execution.md](docs/design/concurrent-execution.md) | Execution architecture |
 | [docs/design/observability.md](docs/design/observability.md) | Daemon metrics, health, and status design |
+| [docs/design/remote-state-separation.md](docs/design/remote-state-separation.md) | Remote state separation architecture (full remote mirror, ID-based PK, state machine, reconciler) |
 | [docs/design/filtering-conflicts.md](docs/design/filtering-conflicts.md) | Filtering conflicts analysis (FC-1 through FC-12) |
 | [docs/design/ci_issues.md](docs/design/ci_issues.md) | Graph API issues & workarounds |
 | [docs/design/legacy-sequential-architecture.md](docs/design/legacy-sequential-architecture.md) | Old 9-phase architecture reference (migration guide) |
