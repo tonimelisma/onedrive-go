@@ -50,7 +50,7 @@ func (rd *ResolvedDrive) StatePath() string {
 // existing tokens on disk and suggests "drive add" or "login" accordingly.
 func MatchDrive(cfg *Config, selector string, logger *slog.Logger) (driveid.CanonicalID, Drive, error) {
 	if len(cfg.Drives) == 0 {
-		return matchNoDrives(selector, logger)
+		return matchNoDrives(logger)
 	}
 
 	if selector == "" {
@@ -61,21 +61,9 @@ func MatchDrive(cfg *Config, selector string, logger *slog.Logger) (driveid.Cano
 }
 
 // matchNoDrives handles drive matching when no drives are configured.
-// Provides context-aware error messages based on whether tokens exist on disk.
-func matchNoDrives(selector string, logger *slog.Logger) (driveid.CanonicalID, Drive, error) {
-	// If the selector looks like a canonical ID, allow zero-config usage
-	// for CLI workflows where --drive provides a canonical ID directly.
-	if strings.Contains(selector, ":") {
-		logger.Debug("zero-config mode: using selector as canonical ID", "selector", selector)
-
-		cid, err := driveid.NewCanonicalID(selector)
-		if err != nil {
-			return driveid.CanonicalID{}, Drive{}, fmt.Errorf("invalid drive selector: %w", err)
-		}
-
-		return cid, Drive{}, nil
-	}
-
+// Always returns an error with context-aware guidance based on whether
+// tokens exist on disk (suggests "drive add") or not (suggests "login").
+func matchNoDrives(logger *slog.Logger) (driveid.CanonicalID, Drive, error) {
 	// Check for tokens on disk to provide a more helpful error message.
 	tokens := DiscoverTokens(logger)
 	if len(tokens) > 0 {

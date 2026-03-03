@@ -121,8 +121,9 @@ func mapToDrive(m map[string]any, d *Drive) error {
 }
 
 // LoadOrDefault reads a TOML config file if it exists, otherwise returns
-// a Config populated with all default values. This supports the zero-config
-// first-run experience: users can start without creating a config file.
+// a Config populated with all default values. Used by EnsureDriveInConfig
+// (config creation path) and callers that want smart error messages when
+// config is missing rather than raw file-not-found errors.
 func LoadOrDefault(path string, logger *slog.Logger) (*Config, error) {
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		logger.Debug("config file not found, using defaults", "path", path)

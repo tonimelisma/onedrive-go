@@ -835,6 +835,17 @@ Extract authenticated drive access, token caching, and transfer operations into 
 
 Acceptance: `grep -rn 'NewDriveSession\|type DriveSession' *.go` → 0 hits. `grep -rn 'clientPair\|getOrCreateClient' internal/sync/orchestrator.go` → 0 hits. `TransferManager` and `SessionStore` live in `internal/driveops/`. Root package has one `graph.NewClient` call (in `newGraphClient`, used by auth/drive commands).
 
+### 6.0f: Remove zero-config, extract scanner, daemon E2E — DONE
+
+1. **Remove zero-config runtime path**: Deleted `matchNoDrives` zero-config branch. Config is mandatory for all drive operations (`login` creates it via `EnsureDriveInConfig`). Updated tests and comments. **DONE**.
+2. **Remove no-config E2E test mode**: Deleted `e2eMode`, `fileOpModes()`, and 5 no-config CLI helpers from `e2e_test.go`. Refactored 4 parametrized tests to config-only mode. **DONE**.
+3. **Extract `scanner.go`**: Split `observer_local.go` (911→313 lines) by extracting scan/walk/hash/filter logic into `scanner.go` (~480 lines). No API change. **DONE**.
+4. **Walk error counting**: Added `skippedEntries` atomic counter in `FullScan`/`makeWalkFunc` with summary log after `WalkDir`. **DONE**.
+5. **Dead code cleanup**: Moved `itemTypeFromDirEntry` from production code to test file. **DONE**.
+6. **B-299 daemon E2E**: New `e2e/sync_watch_e2e_test.go` (build tag `e2e,e2e_full`) with `TestE2E_SyncWatch_BasicRoundTrip` and `TestE2E_SyncWatch_PauseResume`. **DONE**.
+
+Acceptance: `go vet -tags=e2e,e2e_full ./e2e/...` clean. All unit tests pass. Fast E2E tests pass. No per-package coverage regression.
+
 ### 6.0d: inotify + E2E + second test account — DONE
 
 1. **inotify watch limit detection** (Linux only): `inotify_linux.go` reads `/proc/sys/fs/inotify/max_user_watches`. Warns at 80% threshold via `checkInotifyCapacity()`. On ENOSPC: `ErrWatchLimitExhausted` sentinel returned from `addWatchesRecursive()`, engine falls back to `runPeriodicFullScan()` at `poll_interval`. Other drives retain inotify. No-op stubs on macOS (`inotify_other.go`). **DONE**.
