@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 
@@ -11,32 +12,32 @@ import (
 )
 
 func TestPrintVerifyTable_NoMismatches(t *testing.T) {
-	out := captureStdout(t, func() {
-		printVerifyTable(&sync.VerifyReport{Verified: 10})
-	})
+	var buf bytes.Buffer
+	printVerifyTable(&buf, &sync.VerifyReport{Verified: 10})
+	out := buf.String()
 
 	assert.Contains(t, out, "Verified: 10")
 	assert.Contains(t, out, "All files verified successfully")
 }
 
 func TestPrintVerifyTable_WithMismatches(t *testing.T) {
-	out := captureStdout(t, func() {
-		printVerifyTable(&sync.VerifyReport{
-			Verified: 8,
-			Mismatches: []sync.VerifyResult{
-				{Path: "/foo.txt", Status: "hash_mismatch", Expected: "aaa", Actual: "bbb"},
-			},
-		})
+	var buf bytes.Buffer
+	printVerifyTable(&buf, &sync.VerifyReport{
+		Verified: 8,
+		Mismatches: []sync.VerifyResult{
+			{Path: "/foo.txt", Status: "hash_mismatch", Expected: "aaa", Actual: "bbb"},
+		},
 	})
+	out := buf.String()
 
 	assert.Contains(t, out, "Mismatches: 1")
 	assert.Contains(t, out, "/foo.txt")
 }
 
 func TestPrintVerifyJSON(t *testing.T) {
-	out := captureStdout(t, func() {
-		require.NoError(t, printVerifyJSON(&sync.VerifyReport{Verified: 5}))
-	})
+	var buf bytes.Buffer
+	require.NoError(t, printVerifyJSON(&buf, &sync.VerifyReport{Verified: 5}))
+	out := buf.String()
 
 	assert.Contains(t, out, `"verified"`)
 

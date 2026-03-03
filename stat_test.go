@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 	"time"
@@ -22,9 +23,9 @@ func TestPrintStatText(t *testing.T) {
 		CreatedAt:  time.Date(2025, time.January, 5, 8, 0, 0, 0, time.UTC),
 	}
 
-	output := captureStdout(t, func() {
-		printStatText(item)
-	})
+	var buf bytes.Buffer
+	printStatText(&buf, item)
+	output := buf.String()
 
 	assert.Contains(t, output, "photo.jpg")
 	assert.Contains(t, output, "file")
@@ -43,9 +44,9 @@ func TestPrintStatText_Folder(t *testing.T) {
 		CreatedAt:  time.Date(2025, time.January, 1, 0, 0, 0, 0, time.UTC),
 	}
 
-	output := captureStdout(t, func() {
-		printStatText(item)
-	})
+	var buf bytes.Buffer
+	printStatText(&buf, item)
+	output := buf.String()
 
 	assert.Contains(t, output, "Documents")
 	assert.Contains(t, output, "folder")
@@ -67,9 +68,9 @@ func TestPrintStatJSON(t *testing.T) {
 		ETag:       "etag1",
 	}
 
-	out := captureStdout(t, func() {
-		require.NoError(t, printStatJSON(item))
-	})
+	var buf bytes.Buffer
+	require.NoError(t, printStatJSON(&buf, item))
+	out := buf.String()
 
 	var parsed statJSONOutput
 	require.NoError(t, json.Unmarshal([]byte(out), &parsed))
