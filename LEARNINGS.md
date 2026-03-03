@@ -202,6 +202,16 @@ Build the binary in `TestMain` to a temp dir, run via `os/exec` in each test. Us
 ### Build tag isolation
 Files with `//go:build e2e` are completely excluded from `go build ./...`. Two-tier verification: compile without API, run with API.
 
+### All assertions use testify — no stdlib assertions
+The entire codebase uses `github.com/stretchr/testify/assert` and `require` exclusively. Never use `t.Fatal`, `t.Fatalf`, `t.Error`, `t.Errorf` for test assertions. Use `require` for fatal checks (test can't continue), `assert` for non-fatal comparisons. Common mappings:
+- `if err != nil { t.Fatalf(...) }` → `require.NoError(t, err)`
+- `if got != want { t.Errorf(...) }` → `assert.Equal(t, want, got)`
+- `if x == nil { t.Fatal(...) }` → `require.NotNil(t, x)`
+- `if len(x) != N` → `require.Len(t, x, N)` / `assert.Len(t, x, N)`
+- `if !strings.Contains(x, y)` → `assert.Contains(t, x, y)`
+
+Migrated in PRs #162 and #164 (34 files, -2,316 net lines).
+
 ### Always check coverage before committing
 Run `go test -coverprofile` as part of DOD check, not just build+test+lint.
 
