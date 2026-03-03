@@ -91,6 +91,7 @@ Edge cases and correctness for `internal/graph/`.
 |----|-------|----------|-------|
 | ~~B-285~~ | ~~Standardize `baseline_test.go` to testify style~~ | ~~Done~~ | Converted in fix/b285-testify-baseline. Net -637 lines. |
 | B-286 | No shared/business drive in E2E test matrix | P3 | Second personal account added (6.0d), but all tests are `personal:` type. `shared` type and `ConstructShared()` still untested against real Graph API. Needs shared/business test account. |
+| ~~B-306~~ | ~~Exhaustive E2E test hardening~~ | ~~P2~~ | **DONE** — 42 new `e2e_full` tests across 5 new files + 2 modified. Covers daemon watch (11), CLI commands (13), edge cases (8), recovery (3), output validation (4), multi-drive watch (3). Total E2E: 86 tests (44 existing + 42 new). |
 
 ## Deferred from Phase 6.0c
 
