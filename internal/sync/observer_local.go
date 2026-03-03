@@ -20,6 +20,10 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 )
 
+// ErrSyncRootMissing is returned when the sync root directory does not exist
+// or is not a directory. Callers can match with errors.Is.
+var ErrSyncRootMissing = errors.New("sync: sync root directory does not exist")
+
 // ErrNosyncGuard is returned when a .nosync guard file is present in the
 // sync root, indicating the sync directory may be unmounted or guarded.
 var ErrNosyncGuard = errors.New("sync: .nosync guard file present (sync dir may be unmounted)")
@@ -232,6 +236,15 @@ func (o *LocalObserver) FullScan(ctx context.Context, syncRoot string) ([]Change
 		slog.String("sync_root", syncRoot),
 		slog.Int("baseline_entries", o.baseline.Len()),
 	)
+
+	// Guard: abort if the sync root directory does not exist. Without this,
+	// WalkDir silently succeeds with zero events (walkFn's skipEntry returns
+	// filepath.SkipDir for the root error, so WalkDir returns nil).
+	if !syncRootExists(syncRoot) {
+		o.logger.Warn("sync root missing, aborting scan",
+			slog.String("sync_root", syncRoot))
+		return nil, ErrSyncRootMissing
+	}
 
 	// Guard: abort if .nosync file is present (sync dir may be unmounted).
 	if _, err := os.Stat(filepath.Join(syncRoot, nosyncFileName)); err == nil {

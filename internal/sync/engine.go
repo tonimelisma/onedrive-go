@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"math/rand/v2"
 	stdsync "sync"
 	"time"
 
@@ -16,6 +17,11 @@ import (
 // forceSafetyMax is the maximum threshold used when --force is set,
 // effectively disabling big-delete protection.
 const forceSafetyMax = math.MaxInt32
+
+// periodicScanJitterDivisor controls the jitter window for periodic full
+// scans. With a divisor of 10, each tick sleeps 0-10% of the interval to
+// prevent thundering-herd I/O spikes in multi-drive mode.
+const periodicScanJitterDivisor = 10
 
 // EngineConfig holds the options for NewEngine. Uses a struct because
 // seven fields is too many for positional parameters.
@@ -774,6 +780,12 @@ func (e *Engine) runPeriodicFullScan(
 	for {
 		select {
 		case <-ticker.C:
+			// Jitter: sleep 0-10% of interval to prevent thundering-herd
+			// when multiple drives fire periodic scans simultaneously.
+			if jitter := interval / periodicScanJitterDivisor; jitter > 0 {
+				time.Sleep(rand.N(jitter)) //nolint:gosec // non-cryptographic jitter for I/O scheduling
+			}
+
 			scanEvents, err := obs.FullScan(ctx, syncRoot)
 			if err != nil {
 				if ctx.Err() != nil {

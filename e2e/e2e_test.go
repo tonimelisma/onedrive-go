@@ -301,29 +301,15 @@ func runCLIExpectError(t *testing.T, args ...string) string {
 }
 
 // runCLIWithConfigExpectError runs the CLI with a config file and expects failure.
-// env overrides (if non-nil) are applied to the child process environment.
 func runCLIWithConfigExpectError(t *testing.T, cfgPath string, env map[string]string, args ...string) string {
 	t.Helper()
 
-	fullArgs := []string{"--config", cfgPath, "--drive", drive}
-	if shouldAddDebug(args) {
-		fullArgs = append(fullArgs, "--debug")
-	}
-
-	fullArgs = append(fullArgs, args...)
-	cmd := makeCmd(fullArgs, env)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	logCLIExecution(t, fullArgs, stdout.String(), stderr.String())
+	stdout, stderr, err := runCLICore(t, cfgPath, env, drive, args...)
 
 	require.Error(t, err, "expected CLI to fail for args %v, but it succeeded\nstdout: %s\nstderr: %s",
-		args, stdout.String(), stderr.String())
+		args, stdout, stderr)
 
-	return stdout.String() + stderr.String()
+	return stdout + stderr
 }
 
 // pollCLIContains retries a CLI command until stdout contains the expected

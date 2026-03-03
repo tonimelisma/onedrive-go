@@ -120,23 +120,22 @@ func setupIsolation() func() {
 		os.Exit(1)
 	}
 
-	tokenName := testutil.TokenFileName(drive)
-	testutil.CopyFile(
-		filepath.Join(testCredentialDir, tokenName),
-		filepath.Join(appDataDir, tokenName),
-		0o600,
-	)
-	testDataDir = appDataDir
-
-	// Copy second drive's token if configured.
+	// Build the list of drives whose tokens need copying (scales to N drives).
+	driveIDs := []string{drive}
 	if drive2 != "" {
-		tokenName2 := testutil.TokenFileName(drive2)
+		driveIDs = append(driveIDs, drive2)
+	}
+
+	for _, did := range driveIDs {
+		tok := testutil.TokenFileName(did)
 		testutil.CopyFile(
-			filepath.Join(testCredentialDir, tokenName2),
-			filepath.Join(appDataDir, tokenName2),
+			filepath.Join(testCredentialDir, tok),
+			filepath.Join(appDataDir, tok),
 			0o600,
 		)
 	}
+
+	testDataDir = appDataDir
 
 	// Copy config.toml from .testdata/ to isolated config dir.
 	appConfigDir := filepath.Join(tempConfig, "onedrive-go")
@@ -158,13 +157,8 @@ func setupIsolation() func() {
 
 	return func() {
 		// Preserve rotated tokens: copy back from temp to .testdata/.
-		tokenNames := []string{tokenName}
-		if drive2 != "" {
-			tokenNames = append(tokenNames, testutil.TokenFileName(drive2))
-		}
-
-		for _, tok := range tokenNames {
-
+		for _, did := range driveIDs {
+			tok := testutil.TokenFileName(did)
 			rotatedPath := filepath.Join(appDataDir, tok)
 			if _, statErr := os.Stat(rotatedPath); statErr == nil {
 				origPath := filepath.Join(testCredentialDir, tok)

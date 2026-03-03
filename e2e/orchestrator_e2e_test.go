@@ -180,6 +180,14 @@ func TestE2E_Orchestrator_OneDriveFails(t *testing.T) {
 		strings.Contains(combined, drive2) || strings.Contains(combined, "token"),
 		"output should mention the failing drive or token error")
 
+	// Verify the CLI reported the error explicitly in the output.
+	assert.Contains(t, combined, "Error:",
+		"output should contain 'Error:' for the failed drive")
+
+	// Verify drive1 reported success in this run (not stale remote state).
+	assert.Contains(t, stdout, "Succeeded:",
+		"stdout should contain 'Succeeded:' proving drive1 completed this run")
+
 	// drive1's file should still have been uploaded.
 	remotePath := "/" + testFolder + "/survive.txt"
 	pollCLIWithConfigContains(t, cfgPath, env, "survive.txt", pollTimeout, "stat", remotePath)
