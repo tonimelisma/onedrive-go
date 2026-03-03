@@ -1225,31 +1225,48 @@ Industry context: the official OneDrive client follows symlinks (syncs target co
 1. `share <path>`: generate a shareable link for a remote file or folder. Options: `--type view` (read-only, default), `--type edit` (read-write), `--expiry 7d` (link expiration).
 2. Uses Graph API `POST /drives/{drive-id}/items/{item-id}/createLink`.
 
-### 12.6: RPC control socket — FUTURE (optional enhancement)
+### 12.6: Daemon observability — FUTURE
 
-> **Note**: Phase 7.0 uses config-as-IPC via SIGHUP for all control operations (pause, resume, drive add/remove). CLI commands write config and send SIGHUP to the daemon. The RPC socket is an additive enhancement for live status data that can't be read from config + state DBs. Config-as-IPC remains the control mechanism even after RPC is added.
+> **Design doc**: [observability.md](design/observability.md). Covers metrics
+> registry, Unix socket transport, Prometheus exposition, and status command
+> integration.
 
-1. `sync --watch` exposes a JSON-over-HTTP API on a Unix domain socket (`$XDG_RUNTIME_DIR/onedrive-go.sock`). Same pattern as Docker, Tailscale, Syncthing.
-2. Polling endpoint: `GET /status` returns JSON with live data (in-flight action counts, real-time transfer progress, per-drive worker utilization) and closes. Simple scripts and status bar widgets poll this.
-3. Push endpoint: `GET /events` is an SSE (Server-Sent Events) stream. The connection stays open and pushes events (transfer progress, sync complete, conflict detected, paused/resumed) in real-time. GUIs use this.
-4. The RPC API serves CLI and GUI identically — same socket, same endpoints.
+**Layer 1: Metrics registry** (no transport)
+
+1. `MetricsRegistry` struct in `internal/sync/` with `sync/atomic` fields. Per-drive `DriveMetrics` sub-struct. `Snapshot()` returns a plain struct for JSON.
+2. Instrument `Engine.RunOnce()` (phase enum, cycle accumulation), `WorkerPool` (busy/total gauge), `graph.Client.do()` (request/retry/429 counters), upload/download paths (bytes transferred).
+3. Collect `runtime/metrics` (goroutines, heap, GC) in snapshot.
+
+**Layer 2: Unix domain socket**
+
+4. `sync --watch` opens `$XDG_RUNTIME_DIR/onedrive-go.sock` (Linux) or `/tmp/onedrive-go-$(id -u).sock` (macOS). JSON-over-HTTP-over-UDS. Same pattern as Docker, gopls, Syncthing.
+5. `GET /status` — full snapshot (application + runtime metrics). `GET /health` — liveness probe. `GET /metrics` — hand-written Prometheus exposition format (no `prometheus/client_golang` dependency).
+6. Socket lifecycle: create on daemon start, remove on shutdown, stale cleanup on startup.
+
+**Layer 3: Status command integration**
+
+7. `status` tries socket first for live data, falls back to state DB (existing behavior). `--json` gains `daemon` key. Daemon-running detection via socket connectivity.
 
 ### 12.7: RPC-based live sync trigger — FUTURE
 
-> **Note**: Pause/resume is now handled by config-as-IPC (Phase 5.5/7.0). `pause` writes `paused = true` to config and sends SIGHUP; `resume` removes it and sends SIGHUP. No RPC needed.
+> Builds on 12.6 socket. Pause/resume stays config-as-IPC (Phase 5.5/7.0).
 
-1. `sync` while `--watch` is running: delegate to the running process via RPC to trigger an immediate sync cycle instead of failing with "database is locked".
-2. Force sync: `GET /sync` triggers an immediate delta check for all drives (or `GET /sync?drive=X` for a specific drive) without waiting for `poll_interval`.
+1. `sync` while `--watch` is running: delegate to the running daemon via RPC to trigger an immediate sync cycle instead of failing with "database is locked".
+2. `POST /sync` triggers an immediate delta check for all drives (or `POST /sync?drive=X` for a specific drive) without waiting for `poll_interval`.
+3. `GET /events` — SSE (Server-Sent Events) stream for real-time push (transfer progress, sync complete, conflict detected). For TUI and GUI clients.
 
 ### 12.8: TUI interface — FUTURE
 
 1. Interactive terminal UI (like lazygit/lazydocker): real-time sync status across all drives, transfer progress bars, conflict resolution interface, log viewer.
-2. Built on a TUI framework (e.g., `github.com/charmbracelet/bubbletea`). Connects to the RPC socket for real-time updates.
+2. Built on a TUI framework (e.g., `github.com/charmbracelet/bubbletea`). Connects to the 12.6 socket for real-time updates via 12.7 SSE stream.
 
-### 12.9: Prometheus metrics — FUTURE
+### 12.9: Prometheus metrics — FUTURE (optional)
 
-1. Optional `/metrics` HTTP endpoint exposing Prometheus-format metrics: files synced (counter), transfer bytes (counter), active transfers (gauge), sync duration (histogram), conflicts (gauge), errors (counter).
-2. Enabled via `metrics_listen` config option (e.g., `"localhost:9090"`). Disabled by default.
+> The 12.6 socket already serves `/metrics` in Prometheus text format. This
+> increment adds an optional TCP HTTP listener for standard Prometheus scraping.
+
+1. `metrics_listen` config option (e.g., `"localhost:9182"`). Disabled by default.
+2. Same hand-written exposition format as the socket `/metrics` endpoint. No `prometheus/client_golang` dependency.
 
 ### 12.10: FUSE mount — FUTURE
 
