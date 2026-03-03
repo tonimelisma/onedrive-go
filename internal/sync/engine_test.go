@@ -255,7 +255,7 @@ func TestRunOnce_NoChanges(t *testing.T) {
 	}
 
 	eng, _ := newTestEngine(t, mock)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOpts{})
 	require.NoError(t, err, "RunOnce")
@@ -285,7 +285,7 @@ func TestRunOnce_DownloadOnly_SkipsLocalScan(t *testing.T) {
 	eng, syncRoot := newTestEngine(t, mock)
 	writeLocalFile(t, syncRoot, "local-only.txt", "should not be uploaded")
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	report, err := eng.RunOnce(ctx, SyncDownloadOnly, RunOpts{})
 	require.NoError(t, err, "RunOnce")
@@ -306,7 +306,7 @@ func TestRunOnce_UploadOnly_SkipsDelta(t *testing.T) {
 	}
 
 	eng, _ := newTestEngine(t, mock)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_, err := eng.RunOnce(ctx, SyncUploadOnly, RunOpts{})
 	require.NoError(t, err, "RunOnce")
@@ -344,7 +344,7 @@ func TestRunOnce_Bidirectional_FullCycle(t *testing.T) {
 	// Create a local-only file.
 	writeLocalFile(t, syncRoot, "local.txt", "local-content")
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOpts{})
 	require.NoError(t, err, "RunOnce")
@@ -388,7 +388,7 @@ func TestRunOnce_DryRun_NoExecution(t *testing.T) {
 	}
 
 	eng, _ := newTestEngine(t, mock)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOpts{DryRun: true})
 	require.NoError(t, err, "RunOnce")
@@ -415,7 +415,7 @@ func TestRunOnce_BigDelete_WithoutForce(t *testing.T) {
 	// 20-entry baseline = 100% > 50% threshold → ErrBigDeleteTriggered.
 	mock := &engineMockClient{}
 	eng, _ := newTestEngine(t, mock)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedOutcomes := make([]Outcome, 20)
 	for i := range 20 {
@@ -447,7 +447,7 @@ func TestRunOnce_BigDelete_WithForce(t *testing.T) {
 	// entries → 20 RemoteDeletes. Force bypasses the safety threshold.
 	mock := &engineMockClient{}
 	eng, _ := newTestEngine(t, mock)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedOutcomes := make([]Outcome, 20)
 	for i := range 20 {
@@ -501,7 +501,7 @@ func TestRunOnce_ExecutorPartialFailure(t *testing.T) {
 	}
 
 	eng, _ := newTestEngine(t, mock)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOpts{})
 	// DAG executor handles individual failures gracefully — RunOnce succeeds
@@ -530,7 +530,7 @@ func TestRunOnce_ContextCancellation(t *testing.T) {
 	}
 
 	eng, _ := newTestEngine(t, mock)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // pre-cancel
 
 	_, err := eng.RunOnce(ctx, SyncBidirectional, RunOpts{})
@@ -559,7 +559,7 @@ func TestRunOnce_DeltaTokenPersisted(t *testing.T) {
 	}
 
 	eng, _ := newTestEngine(t, mock)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_, err := eng.RunOnce(ctx, SyncBidirectional, RunOpts{})
 	require.NoError(t, err, "RunOnce")
@@ -592,7 +592,7 @@ func TestRunOnce_BaselineUpdatedAfterCycle(t *testing.T) {
 	}
 
 	eng, _ := newTestEngine(t, mock)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_, err := eng.RunOnce(ctx, SyncBidirectional, RunOpts{})
 	require.NoError(t, err, "RunOnce")
@@ -648,7 +648,7 @@ func TestRunOnce_DeltaExpired_AutoRetry(t *testing.T) {
 	}
 
 	eng, _ := newTestEngine(t, mock)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Seed a stale delta token.
 	seedOutcomes := []Outcome{{
@@ -696,7 +696,7 @@ func TestRunOnce_EmptyPlan_NoPanic(t *testing.T) {
 	}
 
 	eng, syncRoot := newTestEngine(t, mock)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Seed baseline so the file appears as already synced with matching hash.
 	seedOutcomes := []Outcome{{
@@ -761,7 +761,7 @@ func TestRunOnce_DeltaTokenNotCommittedOnFailure(t *testing.T) {
 	}
 
 	eng, _ := newTestEngine(t, mock)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Seed a known delta token so we can verify it's preserved.
 	seedBaseline(t, eng.baseline, ctx, nil, "old-token")
@@ -813,7 +813,7 @@ func TestResolveConflict_KeepBoth(t *testing.T) {
 	}
 
 	eng, _ := newTestEngine(t, mock)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Seed a conflict.
 	outcomes := []Outcome{{
@@ -854,7 +854,7 @@ func TestResolveConflict_NotFound(t *testing.T) {
 	}
 
 	eng, _ := newTestEngine(t, mock)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	err := eng.ResolveConflict(ctx, "nonexistent-id", ResolutionKeepBoth)
 	require.Error(t, err, "expected error for nonexistent conflict")
@@ -872,7 +872,7 @@ func TestResolveConflict_UnknownStrategy(t *testing.T) {
 	}
 
 	eng, _ := newTestEngine(t, mock)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Seed a conflict.
 	outcomes := []Outcome{{
@@ -904,7 +904,7 @@ func TestListConflicts_Engine(t *testing.T) {
 	}
 
 	eng, _ := newTestEngine(t, mock)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Empty initially.
 	conflicts, err := eng.ListConflicts(ctx)
@@ -933,7 +933,7 @@ func TestResolveConflict_KeepLocal(t *testing.T) {
 	}
 
 	eng, syncRoot := newTestEngine(t, mock)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Seed a conflict.
 	outcomes := []Outcome{{
@@ -980,7 +980,7 @@ func TestResolveConflict_KeepRemote(t *testing.T) {
 	}
 
 	eng, syncRoot := newTestEngine(t, mock)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Seed a conflict.
 	outcomes := []Outcome{{
@@ -1035,7 +1035,7 @@ func TestRunWatch_ContextCancel(t *testing.T) {
 
 	eng, _ := newTestEngine(t, mock)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	done := make(chan error, 1)
 	go func() {
@@ -1081,7 +1081,7 @@ func TestRunWatch_UploadOnly_SkipsRemoteObserver(t *testing.T) {
 
 	eng, _ := newTestEngine(t, mock)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	done := make(chan error, 1)
@@ -1130,7 +1130,7 @@ func TestRunWatch_ProcessBatch_BigDelete(t *testing.T) {
 	}
 
 	eng, _ := newTestEngine(t, mock)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Seed a large baseline so that a batch of deletes triggers big-delete.
 	seedOutcomes := make([]Outcome, 20)
@@ -1198,7 +1198,7 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 	}
 
 	eng, _ := newTestEngine(t, mock)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Seed baseline with a synced file.
 	seedOutcomes := []Outcome{{
@@ -1254,7 +1254,7 @@ func TestRunWatch_WatchCycleCompletion_CommitsDeltaToken(t *testing.T) {
 	}
 
 	eng, _ := newTestEngine(t, mock)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err, "Load")
@@ -1313,7 +1313,7 @@ func TestRunWatch_WatchCycleCompletion_SkipsOnFailure(t *testing.T) {
 	}
 
 	eng, _ := newTestEngine(t, mock)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Seed a known delta token.
 	seedBaseline(t, eng.baseline, ctx, nil, "old-token")
@@ -1376,7 +1376,7 @@ func TestRunWatch_Deduplication(t *testing.T) {
 	}
 
 	eng, _ := newTestEngine(t, mock)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err, "Load")
@@ -1442,7 +1442,7 @@ func TestRunWatch_DownloadOnly_SkipsLocalObserver(t *testing.T) {
 
 	eng, syncRoot := newTestEngine(t, mock)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	done := make(chan error, 1)
@@ -1547,7 +1547,7 @@ func TestRunWatch_WatchLimitExhausted_FallsBackToPolling(t *testing.T) {
 		return newEnospcWatcherForEngine(1), nil
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	done := make(chan error, 1)
 	go func() {
@@ -1614,7 +1614,7 @@ func TestResolveConflict_KeepLocal_TransferFails(t *testing.T) {
 	}
 
 	eng, syncRoot := newTestEngine(t, mock)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Seed a conflict.
 	outcomes := []Outcome{{
@@ -1670,7 +1670,7 @@ func TestResolveConflict_KeepLocal_CommitsToBaseline(t *testing.T) {
 	}
 
 	eng, syncRoot := newTestEngine(t, mock)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Seed a conflict.
 	outcomes := []Outcome{{
@@ -1738,7 +1738,7 @@ func TestResolveConflict_KeepLocal_MinimalRecord_NoPanic(t *testing.T) {
 	}
 
 	eng, syncRoot := newTestEngine(t, mock)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Seed a conflict with only the mandatory fields — no hashes, no etag.
 	outcomes := []Outcome{{
@@ -1794,7 +1794,7 @@ func TestExecutePlan_ActionsDepsLengthMismatch(t *testing.T) {
 	report := &SyncReport{}
 
 	// Should return cleanly without panic.
-	eng.executePlan(context.Background(), plan, "", report)
+	eng.executePlan(t.Context(), plan, "", report)
 
 	// Invariant violation should surface in the report.
 	assert.Equal(t, len(plan.Actions), report.Failed)

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -407,7 +409,7 @@ func TestQuerySyncState_WithMetadata(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_, err = db.ExecContext(ctx, `INSERT INTO sync_metadata (key, value) VALUES
 		('last_sync_time', '2026-03-02T10:30:00Z'),
@@ -472,6 +474,196 @@ func TestComputeSummary_Empty(t *testing.T) {
 	assert.Equal(t, 0, s.TotalConflicts)
 }
 
+// --- printStatusJSON ---
+
+func TestPrintStatusJSON_Empty(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	err := printStatusJSON(&buf, nil)
+	require.NoError(t, err)
+
+	var result statusOutput
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &result))
+	assert.Empty(t, result.Accounts)
+}
+
+func TestPrintStatusJSON_WithAccounts(t *testing.T) {
+	t.Parallel()
+
+	accounts := []statusAccount{
+		{
+			Email:      "alice@example.com",
+			DriveType:  "personal",
+			TokenState: tokenStateValid,
+			Drives: []statusDrive{
+				{
+					CanonicalID: "personal:alice@example.com",
+					SyncDir:     "~/OneDrive",
+					State:       driveStateReady,
+					SyncState:   &syncStateInfo{FileCount: 10, Conflicts: 1},
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	err := printStatusJSON(&buf, accounts)
+	require.NoError(t, err)
+
+	var result statusOutput
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &result))
+	require.Len(t, result.Accounts, 1)
+	assert.Equal(t, "alice@example.com", result.Accounts[0].Email)
+	assert.Equal(t, 1, result.Summary.Ready)
+}
+
+// --- printStatusText ---
+
+func TestPrintStatusText_NoDrives(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	printStatusText(&buf, nil)
+
+	output := buf.String()
+	// Should still print summary line.
+	assert.Contains(t, output, "Summary: 0 drives")
+}
+
+func TestPrintStatusText_WithDisplayNameAndOrg(t *testing.T) {
+	t.Parallel()
+
+	accounts := []statusAccount{
+		{
+			Email:       "alice@contoso.com",
+			DisplayName: "Alice Smith",
+			DriveType:   "business",
+			OrgName:     "Contoso",
+			TokenState:  tokenStateValid,
+			Drives: []statusDrive{
+				{
+					CanonicalID: "business:alice@contoso.com",
+					SyncDir:     "~/Work",
+					State:       driveStateReady,
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	printStatusText(&buf, accounts)
+
+	output := buf.String()
+	assert.Contains(t, output, "Alice Smith (alice@contoso.com)")
+	assert.Contains(t, output, "Org:   Contoso")
+	assert.Contains(t, output, "~/Work")
+}
+
+func TestPrintStatusText_SyncStateNever(t *testing.T) {
+	t.Parallel()
+
+	accounts := []statusAccount{
+		{
+			Email:      "bob@example.com",
+			DriveType:  "personal",
+			TokenState: tokenStateValid,
+			Drives: []statusDrive{
+				{
+					CanonicalID: "personal:bob@example.com",
+					SyncDir:     "~/OneDrive",
+					State:       driveStateReady,
+					SyncState:   &syncStateInfo{},
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	printStatusText(&buf, accounts)
+
+	output := buf.String()
+	assert.Contains(t, output, "Last sync: never")
+}
+
+func TestPrintStatusText_SyncStateWithError(t *testing.T) {
+	t.Parallel()
+
+	accounts := []statusAccount{
+		{
+			Email:      "bob@example.com",
+			DriveType:  "personal",
+			TokenState: tokenStateValid,
+			Drives: []statusDrive{
+				{
+					CanonicalID: "personal:bob@example.com",
+					SyncDir:     "~/OneDrive",
+					State:       driveStateReady,
+					SyncState: &syncStateInfo{
+						LastSyncTime: "2026-03-02T10:30:00Z",
+						LastError:    "network timeout",
+					},
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	printStatusText(&buf, accounts)
+
+	output := buf.String()
+	assert.Contains(t, output, "Last error: network timeout")
+}
+
+func TestPrintStatusText_EmptySyncDir(t *testing.T) {
+	t.Parallel()
+
+	accounts := []statusAccount{
+		{
+			Email:      "bob@example.com",
+			DriveType:  "personal",
+			TokenState: tokenStateValid,
+			Drives: []statusDrive{
+				{
+					CanonicalID: "personal:bob@example.com",
+					SyncDir:     "",
+					State:       driveStateNeedsSetup,
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	printStatusText(&buf, accounts)
+
+	output := buf.String()
+	assert.Contains(t, output, syncDirNotSet)
+}
+
+func TestPrintSummaryText_AllStates(t *testing.T) {
+	t.Parallel()
+
+	s := statusSummary{
+		TotalDrives:    5,
+		Ready:          2,
+		Paused:         1,
+		NeedsSetup:     1,
+		NoToken:        1,
+		TotalConflicts: 3,
+	}
+
+	var buf bytes.Buffer
+	printSummaryText(&buf, s)
+
+	output := buf.String()
+	assert.Contains(t, output, "5 drives")
+	assert.Contains(t, output, "2 ready")
+	assert.Contains(t, output, "1 paused")
+	assert.Contains(t, output, "1 needs setup")
+	assert.Contains(t, output, "1 no token")
+	assert.Contains(t, output, "3 unresolved conflicts")
+}
+
 // createTestStateDB creates a minimal SQLite DB with tables matching the sync schema.
 func createTestStateDB(t *testing.T, dbPath string) {
 	t.Helper()
@@ -481,7 +673,7 @@ func createTestStateDB(t *testing.T, dbPath string) {
 	defer db.Close()
 
 	// Create minimal tables for status queries.
-	_, err = db.ExecContext(context.Background(), `
+	_, err = db.ExecContext(t.Context(), `
 		CREATE TABLE IF NOT EXISTS baseline (
 			path TEXT PRIMARY KEY,
 			drive_id TEXT NOT NULL,

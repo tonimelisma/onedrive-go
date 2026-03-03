@@ -1,7 +1,6 @@
 package graph
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -31,7 +30,7 @@ func TestMe_Success(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	user, err := client.Me(context.Background())
+	user, err := client.Me(t.Context())
 	require.NoError(t, err)
 
 	assert.Equal(t, "user-abc-123", user.ID)
@@ -55,7 +54,7 @@ func TestMe_EmailFallbackToUPN(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	user, err := client.Me(context.Background())
+	user, err := client.Me(t.Context())
 	require.NoError(t, err)
 
 	assert.Equal(t, "user-personal", user.ID)
@@ -72,7 +71,7 @@ func TestMe_Error(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	_, err := client.Me(context.Background())
+	_, err := client.Me(t.Context())
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrUnauthorized)
 }
@@ -120,7 +119,7 @@ func TestDrives_Success(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	drives, err := client.Drives(context.Background())
+	drives, err := client.Drives(t.Context())
 	require.NoError(t, err)
 
 	require.Len(t, drives, 2)
@@ -149,7 +148,7 @@ func TestDrives_Empty(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	drives, err := client.Drives(context.Background())
+	drives, err := client.Drives(t.Context())
 	require.NoError(t, err)
 
 	assert.Empty(t, drives)
@@ -181,7 +180,7 @@ func TestPrimaryDrive_Success(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	drive, err := client.PrimaryDrive(context.Background())
+	drive, err := client.PrimaryDrive(t.Context())
 	require.NoError(t, err)
 
 	assert.Equal(t, driveid.New("f1da660e69bdec82"), drive.ID)
@@ -202,7 +201,7 @@ func TestPrimaryDrive_Error(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	_, err := client.PrimaryDrive(context.Background())
+	_, err := client.PrimaryDrive(t.Context())
 	require.Error(t, err)
 }
 
@@ -231,7 +230,7 @@ func TestDrive_Success(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	drive, err := client.Drive(context.Background(), driveid.New("drive-abc"))
+	drive, err := client.Drive(t.Context(), driveid.New("drive-abc"))
 	require.NoError(t, err)
 
 	assert.Equal(t, driveid.New("drive-abc"), drive.ID)
@@ -251,7 +250,7 @@ func TestDrive_NotFound(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	_, err := client.Drive(context.Background(), driveid.New("nonexistent-drive"))
+	_, err := client.Drive(t.Context(), driveid.New("nonexistent-drive"))
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrNotFound)
 }
@@ -270,7 +269,7 @@ func TestDrive_NilOwnerAndQuota(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	drive, err := client.Drive(context.Background(), driveid.New("drive-minimal"))
+	drive, err := client.Drive(t.Context(), driveid.New("drive-minimal"))
 	require.NoError(t, err)
 
 	assert.Equal(t, driveid.New("drive-minimal"), drive.ID)
@@ -344,7 +343,7 @@ func TestOrganization_Business(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	org, err := client.Organization(context.Background())
+	org, err := client.Organization(t.Context())
 	require.NoError(t, err)
 
 	assert.Equal(t, "Contoso Ltd", org.DisplayName)
@@ -360,7 +359,7 @@ func TestOrganization_Personal(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	org, err := client.Organization(context.Background())
+	org, err := client.Organization(t.Context())
 	require.NoError(t, err)
 
 	assert.Empty(t, org.DisplayName)
@@ -375,7 +374,7 @@ func TestOrganization_Error(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	_, err := client.Organization(context.Background())
+	_, err := client.Organization(t.Context())
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrUnauthorized)
 }
@@ -391,7 +390,7 @@ func TestDrives_DecodeError(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	_, err := client.Drives(context.Background())
+	_, err := client.Drives(t.Context())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "decoding drives response")
 }
@@ -406,7 +405,7 @@ func TestDrives_Unauthorized(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	_, err := client.Drives(context.Background())
+	_, err := client.Drives(t.Context())
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrUnauthorized)
 }
@@ -441,7 +440,7 @@ func TestSearchSites_Success(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	sites, err := client.SearchSites(context.Background(), "marketing", 10)
+	sites, err := client.SearchSites(t.Context(), "marketing", 10)
 	require.NoError(t, err)
 
 	require.Len(t, sites, 2)
@@ -463,7 +462,7 @@ func TestSearchSites_Empty(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	sites, err := client.SearchSites(context.Background(), "nonexistent", 10)
+	sites, err := client.SearchSites(t.Context(), "nonexistent", 10)
 	require.NoError(t, err)
 	assert.Empty(t, sites)
 }
@@ -477,7 +476,7 @@ func TestSearchSites_Error(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	_, err := client.SearchSites(context.Background(), "test", 10)
+	_, err := client.SearchSites(t.Context(), "test", 10)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrUnauthorized)
 }
@@ -513,7 +512,7 @@ func TestSiteDrives_Success(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	drives, err := client.SiteDrives(context.Background(), "site-abc-123")
+	drives, err := client.SiteDrives(t.Context(), "site-abc-123")
 	require.NoError(t, err)
 
 	require.Len(t, drives, 2)
@@ -535,7 +534,7 @@ func TestSiteDrives_Empty(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	drives, err := client.SiteDrives(context.Background(), "site-empty")
+	drives, err := client.SiteDrives(t.Context(), "site-empty")
 	require.NoError(t, err)
 	assert.Empty(t, drives)
 }
@@ -549,7 +548,7 @@ func TestSiteDrives_Error(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	_, err := client.SiteDrives(context.Background(), "site-forbidden")
+	_, err := client.SiteDrives(t.Context(), "site-forbidden")
 	require.Error(t, err)
 }
 
@@ -593,7 +592,7 @@ func TestDrives_Transient403_Recovers(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	drives, err := client.Drives(context.Background())
+	drives, err := client.Drives(t.Context())
 	require.NoError(t, err)
 
 	require.Len(t, drives, 1)
@@ -613,7 +612,7 @@ func TestDrives_Permanent403_ExhaustsRetries(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	_, err := client.Drives(context.Background())
+	_, err := client.Drives(t.Context())
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrForbidden)
 	assert.Equal(t, 3, attempts, "should have exhausted all 3 attempts")
@@ -631,7 +630,7 @@ func TestDrives_NonForbidden_NoRetry(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	_, err := client.Drives(context.Background())
+	_, err := client.Drives(t.Context())
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrUnauthorized)
 	assert.Equal(t, 1, attempts, "non-403 errors should not be retried")
@@ -658,7 +657,7 @@ func TestToDrive_OwnerEmail(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	drives, err := client.Drives(context.Background())
+	drives, err := client.Drives(t.Context())
 	require.NoError(t, err)
 	require.Len(t, drives, 1)
 	assert.Equal(t, "Alice", drives[0].OwnerName)
@@ -679,7 +678,7 @@ func TestSearchSites_URLEncodesQuery(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	_, err := client.SearchSites(context.Background(), "Sales & Marketing", 10)
+	_, err := client.SearchSites(t.Context(), "Sales & Marketing", 10)
 	require.NoError(t, err)
 }
 

@@ -117,7 +117,7 @@ func TestWatch_DetectsFileCreate(t *testing.T) {
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	done := make(chan error, 1)
 	go func() {
@@ -159,7 +159,7 @@ func TestWatch_DetectsFileModify(t *testing.T) {
 
 	obs := NewLocalObserver(baseline, testLogger(t), 0)
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	done := make(chan error, 1)
 	go func() {
@@ -200,7 +200,7 @@ func TestWatch_DetectsFileDelete(t *testing.T) {
 
 	obs := NewLocalObserver(baseline, testLogger(t), 0)
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	done := make(chan error, 1)
 	go func() {
@@ -244,7 +244,7 @@ func TestWatch_DeleteDirectoryRemovesWatch(t *testing.T) {
 
 	obs := NewLocalObserver(baseline, testLogger(t), 0)
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	done := make(chan error, 1)
 	go func() {
@@ -281,7 +281,7 @@ func TestWatch_IgnoresExcludedFiles(t *testing.T) {
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	done := make(chan error, 1)
 	go func() {
@@ -320,7 +320,7 @@ func TestWatch_NosyncGuard(t *testing.T) {
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events := make(chan ChangeEvent, 10)
 
-	err := obs.Watch(context.Background(), dir, events)
+	err := obs.Watch(t.Context(), dir, events)
 	assert.ErrorIs(t, err, ErrNosyncGuard)
 }
 
@@ -331,7 +331,7 @@ func TestWatch_NewDirectoryWatched(t *testing.T) {
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 
 	events := make(chan ChangeEvent, 20)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	done := make(chan error, 1)
 	go func() {
@@ -383,7 +383,7 @@ func TestWatch_NewDirectoryPreExistingFiles(t *testing.T) {
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 
 	events := make(chan ChangeEvent, 30)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	done := make(chan error, 1)
 	go func() {
@@ -434,7 +434,7 @@ func TestLocalWatch_ContextCancellation(t *testing.T) {
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	done := make(chan error, 1)
 	go func() {
@@ -462,7 +462,7 @@ func TestTrySend_ChannelAvailable_SendsEvent(t *testing.T) {
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events := make(chan ChangeEvent, 1)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	ev := ChangeEvent{
 		Source: SourceLocal, Type: ChangeCreate, Path: "test.txt",
@@ -486,7 +486,7 @@ func TestTrySend_ChannelFull_DropsEvent(t *testing.T) {
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events := make(chan ChangeEvent, 1)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Fill the channel.
 	first := ChangeEvent{
@@ -520,7 +520,7 @@ func TestTrySend_ContextCanceled_NoDrop(t *testing.T) {
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	events := make(chan ChangeEvent, 1)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	// Fill the channel so default branch would fire, but ctx is canceled.
@@ -550,7 +550,7 @@ func TestWatch_NewDirectoryNestedRecursion(t *testing.T) {
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 
 	events := make(chan ChangeEvent, 50)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	done := make(chan error, 1)
 	go func() {
@@ -626,7 +626,7 @@ func TestWatch_HashFailureStillEmitsCreate(t *testing.T) {
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	done := make(chan error, 1)
 	go func() {
@@ -687,7 +687,7 @@ func TestWatch_HashFailureModifyStillEmitsEvent(t *testing.T) {
 
 	obs := NewLocalObserver(baseline, testLogger(t), 0)
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	done := make(chan error, 1)
 	go func() {
@@ -753,7 +753,7 @@ func TestWatchLoop_BackoffResetsOnSafetyScan(t *testing.T) {
 	}
 
 	events := make(chan ChangeEvent, 50)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	done := make(chan error, 1)
@@ -816,7 +816,7 @@ func TestWatchLoop_BackoffEscalatesWithoutReset(t *testing.T) {
 	}
 
 	events := make(chan ChangeEvent, 50)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	done := make(chan error, 1)
@@ -868,7 +868,7 @@ func TestWatchLoop_ChmodCreateCombinedEvent(t *testing.T) {
 	}
 
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	done := make(chan error, 1)
@@ -920,7 +920,7 @@ func TestWatchLoop_TransientFileCreateDelete(t *testing.T) {
 	}
 
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	done := make(chan error, 1)
@@ -987,7 +987,7 @@ func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 	}
 
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	done := make(chan error, 1)
@@ -1078,7 +1078,7 @@ func TestHandleWrite_CoalescesRapidWrites(t *testing.T) {
 	}
 
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	done := make(chan error, 1)
@@ -1151,7 +1151,7 @@ func TestHandleWrite_EmitsAfterCooldownExpires(t *testing.T) {
 	}
 
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	done := make(chan error, 1)
@@ -1215,7 +1215,7 @@ func TestHandleWrite_DifferentPathsNotCoalesced(t *testing.T) {
 	}
 
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	done := make(chan error, 1)
@@ -1288,7 +1288,7 @@ func TestHandleWrite_DeleteClearsTimer(t *testing.T) {
 	}
 
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	done := make(chan error, 1)
@@ -1369,7 +1369,7 @@ func TestCancelPendingTimers(t *testing.T) {
 	}
 
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	done := make(chan error, 1)
 	go func() {
@@ -1435,7 +1435,7 @@ func TestHashAndEmit_RetriesExhausted_EmitsEvent(t *testing.T) {
 	}
 
 	events := make(chan ChangeEvent, 5)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Call hashAndEmit with retries at the cap. Even though the file is
 	// stable (no errFileChangedDuringHash), this verifies the code path
@@ -1483,7 +1483,7 @@ func TestHashAndEmit_BaselineMatch_NoEvent(t *testing.T) {
 	}
 
 	events := make(chan ChangeEvent, 5)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	obs.hashAndEmit(ctx, hashRequest{
 		fsPath:    filePath,

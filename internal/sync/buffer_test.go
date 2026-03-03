@@ -464,7 +464,7 @@ func TestFlushDebounced_SingleBatch(t *testing.T) {
 	t.Parallel()
 
 	buf := NewBuffer(testLogger(t))
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	debounce := 50 * time.Millisecond
 	out := buf.FlushDebounced(ctx, debounce)
@@ -498,7 +498,7 @@ func TestFlushDebounced_MultipleWaves(t *testing.T) {
 	t.Parallel()
 
 	buf := NewBuffer(testLogger(t))
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	debounce := 50 * time.Millisecond
 	out := buf.FlushDebounced(ctx, debounce)
@@ -540,7 +540,7 @@ func TestFlushDebounced_DebounceResets(t *testing.T) {
 	t.Parallel()
 
 	buf := NewBuffer(testLogger(t))
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	debounce := 100 * time.Millisecond
 	out := buf.FlushDebounced(ctx, debounce)
@@ -577,7 +577,7 @@ func TestFlushDebounced_ContextCancel(t *testing.T) {
 	t.Parallel()
 
 	buf := NewBuffer(testLogger(t))
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	debounce := time.Hour // never fires naturally
 	out := buf.FlushDebounced(ctx, debounce)
@@ -608,7 +608,7 @@ func TestFlushDebounced_ConcurrentAddAndFlush(t *testing.T) {
 	t.Parallel()
 
 	buf := NewBuffer(testLogger(t))
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	debounce := 30 * time.Millisecond
 	out := buf.FlushDebounced(ctx, debounce)
@@ -664,7 +664,7 @@ func TestBuffer_FlushDebounced_FinalDrainNoDeadlock(t *testing.T) {
 	t.Parallel()
 
 	buf := NewBuffer(testLogger(t))
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	debounce := time.Hour // never fires naturally
 	out := buf.FlushDebounced(ctx, debounce)
@@ -839,7 +839,7 @@ func TestFlushDebounced_SlowConsumer(t *testing.T) {
 	t.Parallel()
 
 	buf := NewBuffer(testLogger(t))
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	debounce := 30 * time.Millisecond
 	out := buf.FlushDebounced(ctx, debounce)

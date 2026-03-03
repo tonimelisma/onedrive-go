@@ -1,7 +1,6 @@
 package graph
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -51,7 +50,7 @@ func TestGetItem_Success(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	item, err := client.GetItem(context.Background(), driveid.New("drive-abc-123"), "item-123")
+	item, err := client.GetItem(t.Context(), driveid.New("drive-abc-123"), "item-123")
 	require.NoError(t, err)
 
 	assert.Equal(t, "item-123", item.ID)
@@ -90,7 +89,7 @@ func TestGetItem_Folder(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	item, err := client.GetItem(context.Background(), driveid.New("drive-1"), "folder-789")
+	item, err := client.GetItem(t.Context(), driveid.New("drive-1"), "folder-789")
 	require.NoError(t, err)
 
 	assert.True(t, item.IsFolder)
@@ -108,7 +107,7 @@ func TestGetItem_NotFound(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	_, err := client.GetItem(context.Background(), driveid.New("drive-1"), "nonexistent")
+	_, err := client.GetItem(t.Context(), driveid.New("drive-1"), "nonexistent")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrNotFound)
 }
@@ -129,7 +128,7 @@ func TestGetItem_DriveIDNormalization(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	item, err := client.GetItem(context.Background(), driveid.New("b!uppercase-drive-id"), "item-1")
+	item, err := client.GetItem(t.Context(), driveid.New("b!uppercase-drive-id"), "item-1")
 	require.NoError(t, err)
 
 	assert.Equal(t, driveid.New("b!uppercase-drive-id"), item.DriveID)
@@ -151,7 +150,7 @@ func TestGetItem_InvalidTimestamp(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	item, err := client.GetItem(context.Background(), driveid.New("d"), "item-ts")
+	item, err := client.GetItem(t.Context(), driveid.New("d"), "item-ts")
 	require.NoError(t, err)
 
 	// Invalid timestamp should fall back to approximately now
@@ -175,7 +174,7 @@ func TestGetItem_FutureTimestamp(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	item, err := client.GetItem(context.Background(), driveid.New("d"), "item-future")
+	item, err := client.GetItem(t.Context(), driveid.New("d"), "item-future")
 	require.NoError(t, err)
 
 	// Year 2200 exceeds maxValidYear — should fall back to now
@@ -199,7 +198,7 @@ func TestGetItem_PackageAndDeleted(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	item, err := client.GetItem(context.Background(), driveid.New("d"), "item-pkg")
+	item, err := client.GetItem(t.Context(), driveid.New("d"), "item-pkg")
 	require.NoError(t, err)
 
 	assert.True(t, item.IsDeleted)
@@ -222,7 +221,7 @@ func TestGetItem_NilParentReference(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	item, err := client.GetItem(context.Background(), driveid.New("d"), "root-item")
+	item, err := client.GetItem(t.Context(), driveid.New("d"), "root-item")
 	require.NoError(t, err)
 
 	assert.True(t, item.DriveID.IsZero())
@@ -247,7 +246,7 @@ func TestGetItem_NilFileFacet(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	item, err := client.GetItem(context.Background(), driveid.New("d"), "folder-1")
+	item, err := client.GetItem(t.Context(), driveid.New("d"), "folder-1")
 	require.NoError(t, err)
 
 	assert.Empty(t, item.MimeType)
@@ -277,7 +276,7 @@ func TestListChildren_SinglePage(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	items, err := client.ListChildren(context.Background(), driveid.New("d"), "parent")
+	items, err := client.ListChildren(t.Context(), driveid.New("d"), "parent")
 	require.NoError(t, err)
 
 	assert.Len(t, items, 3)
@@ -316,7 +315,7 @@ func TestListChildren_MultiPage(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	items, err := client.ListChildren(context.Background(), driveid.New("d"), "p")
+	items, err := client.ListChildren(t.Context(), driveid.New("d"), "p")
 	require.NoError(t, err)
 
 	assert.Len(t, items, 2)
@@ -333,7 +332,7 @@ func TestListChildren_Empty(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	items, err := client.ListChildren(context.Background(), driveid.New("d"), "empty-folder")
+	items, err := client.ListChildren(t.Context(), driveid.New("d"), "empty-folder")
 	require.NoError(t, err)
 
 	assert.Empty(t, items)
@@ -354,7 +353,7 @@ func TestListChildren_MixedTypes(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	items, err := client.ListChildren(context.Background(), driveid.New("d"), "p")
+	items, err := client.ListChildren(t.Context(), driveid.New("d"), "p")
 	require.NoError(t, err)
 
 	assert.Len(t, items, 3)
@@ -378,7 +377,7 @@ func TestListChildren_InvalidNextLink(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	_, err := client.ListChildren(context.Background(), driveid.New("d"), "p")
+	_, err := client.ListChildren(t.Context(), driveid.New("d"), "p")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "does not match base URL")
 }
@@ -413,7 +412,7 @@ func TestCreateFolder_Success(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	item, err := client.CreateFolder(context.Background(), driveid.New("d"), "parent", "New Folder")
+	item, err := client.CreateFolder(t.Context(), driveid.New("d"), "parent", "New Folder")
 	require.NoError(t, err)
 
 	assert.Equal(t, "new-folder-id", item.ID)
@@ -431,7 +430,7 @@ func TestCreateFolder_Conflict(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	_, err := client.CreateFolder(context.Background(), driveid.New("d"), "parent", "Existing")
+	_, err := client.CreateFolder(t.Context(), driveid.New("d"), "parent", "Existing")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrConflict)
 }
@@ -468,7 +467,7 @@ func TestMoveItem_MoveAndRename(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	item, err := client.MoveItem(context.Background(), driveid.New("d"), "item-1", "new-parent", "renamed.txt")
+	item, err := client.MoveItem(t.Context(), driveid.New("d"), "item-1", "new-parent", "renamed.txt")
 	require.NoError(t, err)
 
 	assert.Equal(t, "renamed.txt", item.Name)
@@ -500,7 +499,7 @@ func TestMoveItem_RenameOnly(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	item, err := client.MoveItem(context.Background(), driveid.New("d"), "item-1", "", "new-name.txt")
+	item, err := client.MoveItem(t.Context(), driveid.New("d"), "item-1", "", "new-name.txt")
 	require.NoError(t, err)
 
 	assert.Equal(t, "new-name.txt", item.Name)
@@ -533,7 +532,7 @@ func TestMoveItem_MoveOnly(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	item, err := client.MoveItem(context.Background(), driveid.New("d"), "item-1", "new-parent", "")
+	item, err := client.MoveItem(t.Context(), driveid.New("d"), "item-1", "new-parent", "")
 	require.NoError(t, err)
 
 	assert.Equal(t, "new-parent", item.ParentID)
@@ -542,7 +541,7 @@ func TestMoveItem_MoveOnly(t *testing.T) {
 
 func TestMoveItem_BothEmpty(t *testing.T) {
 	client := newTestClient(t, "http://localhost")
-	_, err := client.MoveItem(context.Background(), driveid.New("d"), "item-1", "", "")
+	_, err := client.MoveItem(t.Context(), driveid.New("d"), "item-1", "", "")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrMoveNoChanges)
 }
@@ -556,7 +555,7 @@ func TestMoveItem_NotFound(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	_, err := client.MoveItem(context.Background(), driveid.New("d"), "nonexistent", "new-parent", "")
+	_, err := client.MoveItem(t.Context(), driveid.New("d"), "nonexistent", "new-parent", "")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrNotFound)
 }
@@ -572,7 +571,7 @@ func TestDeleteItem_Success(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	err := client.DeleteItem(context.Background(), driveid.New("d"), "item-to-delete")
+	err := client.DeleteItem(t.Context(), driveid.New("d"), "item-to-delete")
 	require.NoError(t, err)
 }
 
@@ -585,7 +584,7 @@ func TestDeleteItem_NotFound(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	err := client.DeleteItem(context.Background(), driveid.New("d"), "nonexistent")
+	err := client.DeleteItem(t.Context(), driveid.New("d"), "nonexistent")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrNotFound)
 }
@@ -657,7 +656,7 @@ func TestGetItem_RootItem(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	item, err := client.GetItem(context.Background(), driveid.New("d"), "root")
+	item, err := client.GetItem(t.Context(), driveid.New("d"), "root")
 	require.NoError(t, err)
 
 	assert.True(t, item.IsRoot, "root facet should be detected from API response")
@@ -739,7 +738,7 @@ func TestUpdateFileSystemInfo_Success(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	item, err := client.UpdateFileSystemInfo(
-		context.Background(), driveid.New("d"), "item-fsi", mtime,
+		t.Context(), driveid.New("d"), "item-fsi", mtime,
 	)
 	require.NoError(t, err)
 
@@ -759,7 +758,7 @@ func TestUpdateFileSystemInfo_DecodeError(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	_, err := client.UpdateFileSystemInfo(
-		context.Background(), driveid.New("d"), "item-decode",
+		t.Context(), driveid.New("d"), "item-decode",
 		time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 	)
 	require.Error(t, err)
@@ -776,7 +775,7 @@ func TestUpdateFileSystemInfo_NotFound(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	_, err := client.UpdateFileSystemInfo(
-		context.Background(), driveid.New("d"), "nonexistent",
+		t.Context(), driveid.New("d"), "nonexistent",
 		time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 	)
 	require.Error(t, err)
@@ -816,7 +815,7 @@ func TestGetItemByPath_Success(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	item, err := client.GetItemByPath(context.Background(), driveid.New("d"), "Documents/file.txt")
+	item, err := client.GetItemByPath(t.Context(), driveid.New("d"), "Documents/file.txt")
 	require.NoError(t, err)
 
 	assert.Equal(t, "item-path-1", item.ID)
@@ -854,7 +853,7 @@ func TestGetItemByPath_EncodesSpecialChars(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	item, err := client.GetItemByPath(context.Background(), driveid.New("d"), "folder/my file#2.txt")
+	item, err := client.GetItemByPath(t.Context(), driveid.New("d"), "folder/my file#2.txt")
 	require.NoError(t, err)
 
 	assert.Equal(t, "encoded-item", item.ID)
@@ -893,7 +892,7 @@ func TestGetItemByPath_NotFound(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	_, err := client.GetItemByPath(context.Background(), driveid.New("d"), "nonexistent/path.txt")
+	_, err := client.GetItemByPath(t.Context(), driveid.New("d"), "nonexistent/path.txt")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrNotFound)
 }
@@ -919,7 +918,7 @@ func TestListChildrenByPath_SinglePage(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	items, err := client.ListChildrenByPath(context.Background(), driveid.New("d"), "Documents")
+	items, err := client.ListChildrenByPath(t.Context(), driveid.New("d"), "Documents")
 	require.NoError(t, err)
 
 	assert.Len(t, items, 3)
@@ -959,7 +958,7 @@ func TestListChildrenByPath_MultiPage(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	items, err := client.ListChildrenByPath(context.Background(), driveid.New("d"), "Documents")
+	items, err := client.ListChildrenByPath(t.Context(), driveid.New("d"), "Documents")
 	require.NoError(t, err)
 
 	assert.Len(t, items, 2)
@@ -976,7 +975,7 @@ func TestListChildrenByPath_Empty(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	items, err := client.ListChildrenByPath(context.Background(), driveid.New("d"), "EmptyFolder")
+	items, err := client.ListChildrenByPath(t.Context(), driveid.New("d"), "EmptyFolder")
 	require.NoError(t, err)
 
 	assert.Empty(t, items)
@@ -986,28 +985,28 @@ func TestListChildrenByPath_Empty(t *testing.T) {
 
 func TestGetItemByPath_EmptyPath(t *testing.T) {
 	client := newTestClient(t, "http://localhost")
-	_, err := client.GetItemByPath(context.Background(), driveid.New("d"), "")
+	_, err := client.GetItemByPath(t.Context(), driveid.New("d"), "")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrInvalidPath)
 }
 
 func TestGetItemByPath_LeadingSlash(t *testing.T) {
 	client := newTestClient(t, "http://localhost")
-	_, err := client.GetItemByPath(context.Background(), driveid.New("d"), "/foo/bar.txt")
+	_, err := client.GetItemByPath(t.Context(), driveid.New("d"), "/foo/bar.txt")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrInvalidPath)
 }
 
 func TestListChildrenByPath_EmptyPath(t *testing.T) {
 	client := newTestClient(t, "http://localhost")
-	_, err := client.ListChildrenByPath(context.Background(), driveid.New("d"), "")
+	_, err := client.ListChildrenByPath(t.Context(), driveid.New("d"), "")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrInvalidPath)
 }
 
 func TestListChildrenByPath_LeadingSlash(t *testing.T) {
 	client := newTestClient(t, "http://localhost")
-	_, err := client.ListChildrenByPath(context.Background(), driveid.New("d"), "/Documents")
+	_, err := client.ListChildrenByPath(t.Context(), driveid.New("d"), "/Documents")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrInvalidPath)
 }
