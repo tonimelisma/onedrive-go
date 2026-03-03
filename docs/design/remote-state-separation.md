@@ -326,8 +326,10 @@ the existing baseline. The revised design uses
    immutable; paths are derived.
 2. **Move atomicity**: Path-as-PK requires DELETE+INSERT (crash window).
    ID-as-PK is single UPDATE — atomic.
-3. **Folder rename cascade**: Only renamed folder's row changes — children's
-   `parent_id` unchanged.
+3. **Folder rename cascade**: Children's `parent_id` unchanged (O(1) for the
+   identity graph). The materialized `path` column requires O(N) update in
+   the same transaction (R9), but this is a single SQL UPDATE with a LIKE
+   prefix match — not recursive tree walking.
 4. **API identity mismatch**: Delta API identifies by ID. Path materialization is
    lossy — two items can transiently share a path.
 5. **Shared drive identity**: `(drive_id, item_id)` is globally unique; paths
@@ -336,9 +338,10 @@ the existing baseline. The revised design uses
 ### Code impact analysis
 
 - Buffer, Planner, Executor, Scanner, LocalObserver: all use `GetByPath()` —
-  unchanged (path is UNIQUE).
+  unchanged (partial unique index on path for active items).
 - Remote observer: `GetByID()` now uses PRIMARY KEY — faster.
-- CommitOutcome: upsert by ID. Moves become single UPDATE.
+- CommitOutcome: upsert by ID. Moves become single UPDATE. Uploads also
+  update `remote_state` to `synced` with server-returned metadata.
 
 ### In-memory changes
 
@@ -349,8 +352,10 @@ the existing baseline. The revised design uses
 
 - **R9** (folder rename cascade): Eager — O(N) writes in same transaction.
   Stale paths confuse every path-based lookup.
-- **R10** (transient path collision): Atomic transaction + B-281 ordering. Two
-  items transiently sharing a path are handled within the transaction.
+- **R10** (transient path collision): Partial unique index (active items only)
+  + B-281 ordering. Deleted items retain their path for diagnostics but don't
+  block new items at the same path. Two active items sharing a path is
+  prevented by the index.
 - **R11** (`local_issues` asymmetry): By design — local files have no item ID
   until uploaded.
 
@@ -515,10 +520,16 @@ Worker completes action with Success=true
   ├─ 1. store.CommitOutcome(outcome) → returns error
   │     → BEGIN TRANSACTION
   │     → Upsert baseline row (or delete for deletions, or move)
-  │     → UPDATE remote_state SET sync_status = 'synced'
+  │     → For downloads:
+  │       UPDATE remote_state SET sync_status = 'synced'
   │       WHERE drive_id = ? AND item_id = ? AND sync_status = 'downloading'
   │         AND hash IS ?
   │       (conditional — preserves row if a newer delta updated it)
+  │     → For uploads:
+  │       UPDATE remote_state SET sync_status = 'synced',
+  │         hash = ?, size = ?, mtime = ?, etag = ?, path = ?
+  │       WHERE drive_id = ? AND item_id = ?
+  │       (unconditional on status — upload may resolve a download_failed row)
   │     → COMMIT
   │
   ├─ 2. Update in-memory baseline cache
@@ -818,6 +829,14 @@ DB state:
 The DB write in Add() is ~0.1ms in WAL mode. Dependency ordering stays purely
 in-memory.
 
+**Batch dispatch optimization.** During initial sync or large delta responses,
+the engine may dispatch hundreds or thousands of actions in a tight loop. Each
+`Add()` call writes to DB individually — at 0.1ms each, 100K dispatches would
+take ~10 seconds of serialized writes. To avoid this bottleneck, `Add()` calls
+during plan dispatch SHOULD be batched in a single transaction (one BEGIN, N
+UPDATEs, one COMMIT). A single transaction with 100K UPDATEs completes in
+~0.5s in WAL mode. The in-memory map updates remain per-call.
+
 ### 8.3 CancelByPath Safety (R3)
 
 CancelByPath doesn't update DB. Three scenarios all handled by optimistic
@@ -898,6 +917,17 @@ Readable, debuggable, extensible. The extra SELECT per item is negligible
 **Failure count reset**: When `excluded.hash != remote_state.hash`, reset
 `failure_count = 0` and `next_retry_at = NULL`. The file may have changed —
 give it a fresh start.
+
+**Empty hash handling.** The Graph API omits hashes for zero-byte files and
+some SharePoint files (tier 1 research §2.1). The codebase represents absent
+hashes as empty string `""`, not SQL NULL. In `computeNewStatus()`, empty
+string equality (`"" == ""`) correctly means "same content" — a delta
+re-delivery of a hash-less item is treated as "no change." If the API
+intermittently drops a previously-present hash, the `"" != "abc123"`
+comparison triggers a re-download. This is wasteful but not data-losing — the
+downloaded file is identical. The `hash IS ?` guard in CommitOutcome uses SQL
+`IS` semantics, where `NULL IS NULL` is true, so it handles empty/NULL
+symmetrically.
 
 ### CommitObservation transaction details
 
@@ -1026,6 +1056,13 @@ type FailureRecorder interface {
     RecordFailure(ctx context.Context, path, errMsg string, httpStatus int) error
 }
 
+// ConflictEscalator — called by reconciler goroutine (single caller).
+// Writes a conflict record when a permanently-failing item exceeds the
+// retry threshold (e.g., non-empty directory delete after 10 failures).
+type ConflictEscalator interface {
+    EscalateToConflict(ctx context.Context, row RemoteStateRow, reason string) error
+}
+
 // StateReader — called by reconciler, planner, status, CLI (read-only).
 // All methods are pure reads. Multiple goroutines call concurrently.
 // WAL mode guarantees readers never block.
@@ -1059,7 +1096,7 @@ type StateAdmin interface {
 | RemoteObserver | `ObservationWriter` | Writes observations + reads delta token |
 | Worker pool | `OutcomeWriter` | Commits outcomes + reads baseline cache |
 | drainWorkerResults | `FailureRecorder` | Records failures on action failure |
-| Reconciler | `StateReader` | Reads unreconciled rows for retry scheduling |
+| Reconciler | `StateReader` + `ConflictEscalator` | Reads unreconciled rows + escalates permanently-failing items to conflicts |
 | CLI commands | `StateReader` + `StateAdmin` | Reads for display + admin writes |
 | Engine | all interfaces (constructs + distributes) | Orchestrator |
 
@@ -1177,7 +1214,7 @@ Planner checks `local_issues` for `upload_failed` items where
 CREATE TABLE IF NOT EXISTS remote_state (
     drive_id      TEXT    NOT NULL,
     item_id       TEXT    NOT NULL,
-    path          TEXT    NOT NULL UNIQUE,
+    path          TEXT    NOT NULL,
     parent_id     TEXT,
     item_type     TEXT    NOT NULL CHECK(item_type IN ('file', 'folder', 'root')),
     hash          TEXT,
@@ -1202,6 +1239,15 @@ CREATE INDEX IF NOT EXISTS idx_remote_state_status
     ON remote_state(sync_status);
 CREATE INDEX IF NOT EXISTS idx_remote_state_parent
     ON remote_state(parent_id);
+-- Partial unique index: only active (non-deleted) items enforce path uniqueness.
+-- Deleted/pending_delete items retain their path for diagnostics but do not
+-- block new items at the same path. Without this, a full remote mirror that
+-- keeps deleted rows would hit UNIQUE violations when the Graph API delivers
+-- a new file creation before (or alongside) the deletion of the old file at
+-- the same path — a known delta ordering issue (tier 1 research Issue #154).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_state_active_path
+    ON remote_state(path)
+    WHERE sync_status NOT IN ('deleted', 'pending_delete');
 ```
 
 ### `baseline` (ID PK)
@@ -1267,8 +1313,25 @@ CREATE TABLE IF NOT EXISTS local_issues (
   ```
 - **Upload success**:
   ```sql
+  UPDATE remote_state SET sync_status = 'synced',
+    hash = ?, size = ?, mtime = ?, etag = ?, path = ?
+  WHERE drive_id = ? AND item_id = ?
+  ```
+  ```sql
   DELETE FROM local_issues WHERE path = ?
   ```
+  The `remote_state` UPDATE uses the server-returned metadata from the upload
+  response (the `Outcome` struct already carries `RemoteHash`, `ETag`, `Size`,
+  `Mtime`, `ItemID`, `DriveID`). This is essential: without it, `remote_state`
+  retains the pre-upload hash and the next delta echo triggers an infinite
+  `pending_download` loop (the planner sees Remote==Baseline and generates no
+  action, so CommitOutcome is never called). It also prevents a data loss
+  scenario where a stale `download_failed` row causes the reconciler to
+  overwrite the user's upload with an old version. For SharePoint enriched
+  files, the server may change the hash post-upload — the next delta will
+  update `remote_state` via CommitObservation (synced + different hash →
+  pending_download), triggering a download of the enriched version. This is
+  correct behavior.
 
 ---
 
@@ -1447,7 +1510,10 @@ empty through retries alone.
 (e.g., 10 — roughly 5 hours of retries), the reconciler escalates to a conflict.
 The conflict record explains: "Remote deleted folder X, but local directory is
 not empty." The user can resolve by deleting local contents or keeping local
-version.
+version. The reconciler performs this escalation directly — it receives a
+`ConflictEscalator` interface (single method: `EscalateToConflict(ctx, row)`)
+in addition to `StateReader`. This avoids routing through the planner, which
+has no failure_count in its `PathView` and should not need one.
 
 ### Global auth failure
 
@@ -1577,21 +1643,26 @@ children still exist, the DAG re-orders correctly. Idempotent.
 ## 20. Critical Design Invariants
 
 1. **Every DB state write uses a WHERE clause checking expected current state.**
-   No blind UPDATEs.
-2. **CommitOutcome includes `AND hash IS ?`** — prevents overwriting newer
-   observation with stale result.
-3. **CommitObservation never regresses `synced → pending_download` when hashes
+   No blind UPDATEs. (Exception: upload success uses unconditional UPDATE on
+   remote_state because the upload may resolve any prior state.)
+2. **CommitOutcome includes `AND hash IS ?` for downloads** — prevents
+   overwriting newer observation with stale result.
+3. **CommitOutcome updates `remote_state` on ALL action types** — downloads,
+   uploads, deletes, moves. Without the upload update, the delta echo creates
+   an infinite `pending_download` loop (R23) and stale rows cause data loss
+   (R24).
+4. **CommitObservation never regresses `synced → pending_download` when hashes
    match.**
-4. **Reconciler only dispatches `pending_download` or `download_failed`.** Never
+5. **Reconciler only dispatches `pending_download` or `download_failed`.** Never
    `downloading`, `synced`, `filtered`, `deleted`.
-5. **CancelByPath is a performance optimization, not a correctness mechanism.**
+6. **CancelByPath is a performance optimization, not a correctness mechanism.**
    System is correct even if cancel doesn't fire.
 
 ---
 
 ## 21. Risk Analysis
 
-All 22 identified risks with severity, resolution, and where resolved:
+All 25 identified risks with severity, resolution, and where resolved:
 
 | Risk | Sev | Category | Decision | §  |
 |------|-----|----------|----------|----|
@@ -1604,7 +1675,7 @@ All 22 identified risks with severity, resolution, and where resolved:
 | R7: WAL growth | Med | Full mirror | Periodic checkpoint — hard requirement | 5 |
 | R8: UPDATE vs DELETE | Low | Full mirror | Conditional UPDATE identical semantics | 5 |
 | R9: Folder rename cascade | Med | ID-based PK | Eager: O(N) writes in same txn | 6 |
-| R10: Transient path collision | Low | ID-based PK | Atomic txn + B-281 ordering | 6 |
+| R10: Transient path collision | Med | ID-based PK | Partial unique index on path (active items only) + B-281 ordering | 6, 15 |
 | R11: local_issues asymmetry | None | Upload | By design — path PK for pre-upload items | 14 |
 | R12: Invisible filtered items | None | Filtering | Correct — `filtered` state deliberate | 13 |
 | R13: Stale local files | None | Filtering | Correct — warn/freeze (FC-9) | 13 |
@@ -1617,6 +1688,9 @@ All 22 identified risks with severity, resolution, and where resolved:
 | R20: Tier 1 coverage gaps | Med | Research | Document scope boundaries | 23 |
 | R21: Filter performance | Low | Filtering | Deferred to Phase 10 | 13 |
 | R22: Event ordering | Med | Buffer | Buffer takes LAST event; conditional updates catch stale | 10.4 |
+| R23: Upload echo loop | High | State machine | CommitOutcome updates remote_state on upload success | 8, 15 |
+| R24: Stale remote_state after upload | High | State machine | CommitOutcome updates remote_state on upload success | 8, 15 |
+| R25: Conflict escalation mechanism | Low | Reconciler | ConflictEscalator interface on reconciler | 12, 17 |
 
 ---
 
