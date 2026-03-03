@@ -16,7 +16,7 @@ Known Microsoft Graph API behavioral issues encountered in this project, the wor
 
 **This is NOT eventual consistency** — the resource has existed for months. It's a transient infrastructure failure misreported as a client error.
 
-**Production workaround**: None. Our retry logic (`internal/graph/client.go`) treats 404 as non-retryable, which is correct for the general case (a true 404 should not be retried). Adding 404 to the retry set would mask genuine "not found" errors and slow down normal error paths.
+**Production workaround**: The sync executor (`internal/sync/executor.go`) classifies HTTP 404 as retryable in `classifyStatusCode`, so all sync actions (download, upload, mkdir, etc.) automatically retry transient 404s with exponential backoff. The lower-level Graph client (`internal/graph/client.go`) still treats 404 as non-retryable, which is correct for CLI file operations where a true 404 should fail fast. Delete actions handle 404 as success before reaching the retry logic, so this does not cause spurious delete retries.
 
 **Test workaround**: None for `ls /` (root listing). The test calls `runCLIWithConfig(t, cfgPath, nil, "ls", "/")` which fails fast on error — no polling, no outer retry. A CI rerun resolves the issue. Adding polling would mask genuine regressions (e.g., broken drive ID resolution would silently retry for 30s then fail with a confusing timeout).
 
@@ -167,7 +167,7 @@ The retry loop reads `Retry-After` from 429 responses and uses it verbatim. For 
 
 **Retryable status codes**: 408, 429, 500, 502, 503, 504, 509 (SharePoint bandwidth limit).
 
-**Non-retryable client errors**: 400, 401, 403, 404, 409. These are returned immediately.
+**Non-retryable client errors** (at Graph client level): 400, 401, 403, 404, 409. These are returned immediately. Note: the sync executor retries 404 at a higher level (see §1) because transient 404s are common on valid resources.
 
 ---
 
