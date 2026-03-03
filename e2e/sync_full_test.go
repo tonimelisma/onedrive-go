@@ -410,6 +410,11 @@ func TestE2E_Sync_EditDeleteConflict(t *testing.T) {
 	// Step 4: Delete remote.
 	runCLIWithConfig(t, opsCfgPath, nil, "rm", "/"+testFolder+"/fragile.txt")
 
+	// Step 4b: Wait for the remote delete to propagate (Graph API eventual
+	// consistency). Without this, sync may not see the deletion and won't
+	// detect the edit-delete conflict.
+	pollCLIWithConfigNotContains(t, opsCfgPath, nil, "fragile.txt", pollTimeout, "ls", "/"+testFolder)
+
 	// Step 5: Bidirectional sync — edit-delete auto-resolved by uploading local.
 	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--force")
 

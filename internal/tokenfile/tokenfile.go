@@ -12,6 +12,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"golang.org/x/oauth2"
 )
@@ -21,6 +22,11 @@ const FilePerms = 0o600
 
 // DirPerms is used when creating the tokens directory.
 const DirPerms = 0o700
+
+// RequiredMetaKeys lists metadata keys that must be present and non-empty
+// in a complete token file. Written during login (auth.go:202-207).
+// org_name is intentionally excluded — it is empty for personal accounts.
+var RequiredMetaKeys = []string{"drive_id", "user_id", "display_name", "cached_at"}
 
 // File is the on-disk format for token files. Includes the OAuth token and
 // optional metadata (org name, display name) cached from API responses.
@@ -82,11 +88,69 @@ func ReadMeta(path string) (map[string]string, error) {
 	return parsed.Meta, nil
 }
 
+// ValidateMeta checks that all required metadata keys are present and
+// non-empty. Returns an error listing all missing or empty keys.
+func ValidateMeta(meta map[string]string) error {
+	var missing []string
+
+	for _, key := range RequiredMetaKeys {
+		if meta[key] == "" {
+			missing = append(missing, key)
+		}
+	}
+
+	if len(missing) > 0 {
+		return fmt.Errorf("tokenfile: missing required metadata: %s (re-login required)",
+			strings.Join(missing, ", "))
+	}
+
+	return nil
+}
+
+// LoadAndValidate loads a token file and validates both token and metadata
+// integrity. Use this for operational paths (config resolution, session
+// creation) where incomplete files should be rejected. Use Load() for paths
+// that may encounter pre-metadata files (login flow).
+func LoadAndValidate(path string) (*oauth2.Token, map[string]string, error) {
+	tok, meta, err := Load(path)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if tok == nil {
+		return nil, nil, nil //nolint:nilnil // sentinel for "not found"
+	}
+
+	if tok.RefreshToken == "" {
+		return nil, nil, fmt.Errorf("tokenfile: %s has no refresh token (re-login required)", path)
+	}
+
+	if meta == nil {
+		return nil, nil, fmt.Errorf("tokenfile: %s has no metadata (re-login required)", path)
+	}
+
+	if err := ValidateMeta(meta); err != nil {
+		return nil, nil, fmt.Errorf("tokenfile: %s: %w", path, err)
+	}
+
+	return tok, meta, nil
+}
+
 // Save writes a token file to disk atomically (write-to-temp + rename)
 // with 0600 permissions. Never logs token values.
+//
+// When meta is non-nil, Save validates that all required metadata keys are
+// present. meta==nil is allowed only during initial login (exchangeAndSave),
+// before metadata is merged by LoadAndMergeMeta.
 func Save(path string, tok *oauth2.Token, meta map[string]string) error {
 	if tok == nil {
 		return fmt.Errorf("tokenfile: refusing to save nil token to %s", path)
+	}
+
+	if meta != nil {
+		if err := ValidateMeta(meta); err != nil {
+			return fmt.Errorf("tokenfile: refusing to save incomplete token to %s: %w", path, err)
+		}
 	}
 
 	tf := File{Token: tok, Meta: meta}
@@ -166,6 +230,10 @@ func LoadAndMergeMeta(path string, meta map[string]string) error {
 	}
 
 	maps.Copy(existingMeta, meta)
+
+	if err := ValidateMeta(existingMeta); err != nil {
+		return fmt.Errorf("metadata incomplete after merge: %w", err)
+	}
 
 	return Save(path, tok, existingMeta)
 }

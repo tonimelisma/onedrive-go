@@ -241,6 +241,7 @@ func TestSaveLoadToken_WithMeta(t *testing.T) {
 		"user_id":      "abc123",
 		"display_name": "Alice Smith",
 		"org_name":     "Contoso Ltd",
+		"drive_id":     "test-drive-id",
 		"cached_at":    "2026-02-27T10:00:00Z",
 	}
 
@@ -361,8 +362,14 @@ func TestTokenSourceFromPath_ValidToken(t *testing.T) {
 		RefreshToken: "saved-refresh-token",
 		Expiry:       time.Now().Add(time.Hour),
 	}
+	meta := map[string]string{
+		"drive_id":     "test-drive-id",
+		"user_id":      "test-user-id",
+		"display_name": "Test User",
+		"cached_at":    "2024-01-01T00:00:00Z",
+	}
 
-	require.NoError(t, tokenfile.Save(path, tok, nil))
+	require.NoError(t, tokenfile.Save(path, tok, meta))
 
 	ts, err := TokenSourceFromPath(context.Background(), path, slog.Default())
 	require.NoError(t, err)
@@ -451,7 +458,13 @@ func TestOAuthConfig_OnTokenChange(t *testing.T) {
 	tmpDir := t.TempDir()
 	tokenPath := filepath.Join(tmpDir, "tokens", "callback.json")
 
-	meta := map[string]string{"org_name": "Test Org"}
+	meta := map[string]string{
+		"org_name":     "Test Org",
+		"drive_id":     "test-drive-id",
+		"user_id":      "test-user-id",
+		"display_name": "Test User",
+		"cached_at":    "2024-01-01T00:00:00Z",
+	}
 	cfg := oauthConfig(tokenPath, meta, slog.Default())
 
 	// Verify the callback is set.
@@ -937,7 +950,13 @@ func TestLoadTokenMeta_Success(t *testing.T) {
 	path := filepath.Join(tmpDir, "token.json")
 
 	tok := &oauth2.Token{AccessToken: "at", RefreshToken: "rt"}
-	meta := map[string]string{"org_name": "Contoso", "user_id": "abc123"}
+	meta := map[string]string{
+		"org_name":     "Contoso",
+		"user_id":      "abc123",
+		"drive_id":     "test-drive-id",
+		"display_name": "Test User",
+		"cached_at":    "2024-01-01T00:00:00Z",
+	}
 	require.NoError(t, tokenfile.Save(path, tok, meta))
 
 	loadedMeta, err := LoadTokenMeta(path)
@@ -958,10 +977,16 @@ func TestSaveTokenMeta_MergesKeys(t *testing.T) {
 	path := filepath.Join(tmpDir, "token.json")
 
 	tok := &oauth2.Token{AccessToken: "at", RefreshToken: "rt"}
-	initialMeta := map[string]string{"org_name": "Contoso", "user_id": "abc"}
+	initialMeta := map[string]string{
+		"org_name":     "Contoso",
+		"user_id":      "abc",
+		"drive_id":     "test-drive-id",
+		"display_name": "Initial Name",
+		"cached_at":    "2024-01-01T00:00:00Z",
+	}
 	require.NoError(t, tokenfile.Save(path, tok, initialMeta))
 
-	// Merge new keys — org_name updated, display_name added.
+	// Merge new keys — org_name updated, display_name updated.
 	err := SaveTokenMeta(path, map[string]string{
 		"org_name":     "Contoso Ltd",
 		"display_name": "Alice Smith",

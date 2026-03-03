@@ -730,8 +730,16 @@ func (m *BaselineManager) DB() *sql.DB {
 	return m.db
 }
 
-// Close closes the underlying database connection.
+// Close checkpoints the WAL and closes the underlying database connection.
+// The explicit checkpoint ensures cross-process readers (e.g., `conflicts
+// --history` after `sync`) see all committed data when they open a new
+// connection to the same database file.
 func (m *BaselineManager) Close() error {
+	if _, err := m.db.ExecContext(context.Background(),
+		"PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		m.logger.Warn("WAL checkpoint failed on close", slog.String("error", err.Error()))
+	}
+
 	return m.db.Close()
 }
 

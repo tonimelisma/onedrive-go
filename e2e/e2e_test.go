@@ -278,6 +278,32 @@ func pollCLIWithConfigSuccess(t *testing.T, cfgPath string, env map[string]strin
 	}
 }
 
+// pollCLIWithConfigNotContains retries a CLI command until stdout does NOT
+// contain the unexpected string (or the command errors). Used to wait for
+// Graph API eventual consistency after deletions.
+func pollCLIWithConfigNotContains(
+	t *testing.T, cfgPath string, env map[string]string, unexpected string, timeout time.Duration, args ...string,
+) (string, string) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+
+	for attempt := 0; ; attempt++ {
+		stdout, stderr, err := runCLIWithConfigAllowError(t, cfgPath, env, args...)
+		if err == nil && !strings.Contains(stdout, unexpected) {
+			return stdout, stderr
+		}
+
+		if time.Now().After(deadline) {
+			require.Failf(t, "pollCLIWithConfigNotContains: timed out",
+				"after %v waiting for %q to disappear from output of %v\nlast stdout: %s\nlast stderr: %s",
+				timeout, unexpected, args, stdout, stderr)
+		}
+
+		time.Sleep(pollBackoff(attempt))
+	}
+}
+
 // --- File operation tests ---
 
 func TestE2E_RoundTrip(t *testing.T) {
