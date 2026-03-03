@@ -87,7 +87,7 @@ Seven invariants protect user data at every stage of the pipeline:
 | **S4** | Hash-before-delete guard | Before deleting a local file, the executor computes the current local hash and compares it against `Baseline.LocalHash`. If the hashes match, the file is unchanged since the last sync and is safe to delete. If the hashes differ, the file was modified after the last sync -- the executor creates a conflict copy and preserves the user's changes. |
 | **S5** | Big-delete protection | The planner counts `ActionLocalDelete` + `ActionRemoteDelete` in the plan and compares against `len(baseline.ByPath)`. If the count exceeds the configurable threshold (count > 1000 OR percentage > 50% of baseline entries, with a minimum guard of 10 items), the sync cycle halts and reports the situation to the user. This guards against accidental mass deletion from misconfigured filters, cloud-side bulk operations, or API bugs. |
 | **S6** | Disk space check before downloads | Before each download, the executor checks available disk space against `config.MinFreeSpace` (default 1 GB). If insufficient space is available, the download produces a failed Outcome with a warning. This prevents filling the disk and destabilizing the operating system. |
-| **S7** | Never upload partial or temp files | The filter cascade excludes temporary file patterns (`.partial`, `.tmp`, `.swp`, `~*`, `.~*`, `.crdownload`) from both local and remote item processing. This prevents uploading editor swap files, incomplete downloads, and other transient files that would pollute the remote drive. |
+| **S7** | Never sync partial or temp files | Built-in exclusions (Layer 0) filter temporary file patterns (`.partial`, `.tmp`, `.swp`, `~*`, `.~*`, `.crdownload`) **symmetrically in both the local and remote observers** before ChangeEvent emission. This prevents uploading editor swap files AND downloading temp files uploaded via other clients. See [filtering-conflicts.md FC-1](filtering-conflicts.md#fc-1-remote-observer-has-no-built-in-exclusion-filtering) for the symmetry requirement. |
 
 ### 1.5 Sync Modes
 
@@ -606,26 +606,33 @@ This grouping is the key input to the planner. For each path, the planner has th
 
 > **Per-drive only.** All filter settings (`skip_dirs`, `skip_files`, `skip_dotfiles`, `max_file_size`, `sync_paths`, `ignore_marker`) are per-drive native — there are no global filter defaults. Each drive gets built-in defaults (empty lists, `false`) unless it specifies its own values. See [MULTIDRIVE.md §10](MULTIDRIVE.md#10-filter-scoping) and DP-8 for rationale.
 
-### 6.1 Symmetric Three-Layer Cascade
+### 6.1 Four-Layer Cascade
 
-The filter engine applies three layers of exclusion rules, evaluated in order. Each layer can only exclude -- a later layer cannot re-include an item excluded by an earlier layer (monotonic exclusion).
+Filtering uses a four-layer cascade split across two pipeline stages. Each layer can only exclude — a later layer cannot re-include an item excluded by an earlier layer (monotonic exclusion). See [filtering-conflicts.md FC-4](filtering-conflicts.md#fc-4-filter-in-planner-e20-vs-built-ins-in-observer) for the rationale behind the two-stage split.
 
-| Layer | Source | Scope | Examples |
-|-------|--------|-------|----------|
-| **1. sync_paths** | Config: `sync_paths` | Restricts sync to specific subtrees within the drive | `sync_paths = ["/Documents", "/Projects"]` |
-| **2. Config patterns** | Config: `skip_dotfiles`, `skip_dirs`, `skip_files`, `max_file_size` | Per-drive exclusion rules (no global defaults, DP-8) | `skip_dotfiles = true`, `skip_dirs = ["node_modules", ".git"]`, `max_file_size = "100MB"` |
-| **3. .odignore** | `.odignore` file in sync root (gitignore syntax) | User-defined per-directory rules | `*.log`, `build/`, `*.tmp` |
+| Layer | Stage | Source | Scope | Examples |
+|-------|-------|--------|-------|----------|
+| **0. Built-in exclusions** | Observer | Hardcoded safety rules | Temp files (S7), OneDrive name restrictions, OS junk, sync engine database, `.nosync` guard | `.partial`, `.tmp`, `~$*`, `desktop.ini`, `.DS_Store`, `Thumbs.db` |
+| **1. sync_paths** | Planner | Config: `sync_paths` | Restricts sync to specific subtrees within the drive | `sync_paths = ["/Documents", "/Projects"]` |
+| **2. Config patterns** | Planner | Config: `skip_dotfiles`, `skip_dirs`, `skip_files`, `max_file_size` | Per-drive exclusion rules (no global defaults, DP-8) | `skip_dotfiles = true`, `skip_dirs = ["node_modules", ".git"]`, `max_file_size = "100MB"` |
+| **3. .odignore** | Planner | `.odignore` file in sync root (gitignore syntax) | User-defined per-directory rules | `*.log`, `build/`, `*.tmp` |
 
-**Symmetric application**: The filter runs in the planner, not in the observers. This ensures that BOTH remote-only items (new downloads) AND local-only items (new uploads) are filtered through the same cascade. A file excluded by the filter is excluded regardless of which side it appears on.
+**Layer 0 (Observer-level):** Built-in safety exclusions applied **symmetrically in both local and remote observers** before ChangeEvent emission. Hardcoded, not configurable, and cannot be overridden. Items matching Layer 0 never produce ChangeEvents and are invisible to the planner. This is a performance optimization — high-volume noise (temp files, editor backups, OS junk) is eliminated at the earliest possible point. See [filtering-conflicts.md FC-1](filtering-conflicts.md#fc-1-remote-observer-has-no-built-in-exclusion-filtering) for the symmetry requirement.
 
-**Built-in exclusions** (always active, cannot be overridden):
+**Layers 1-3 (Planner-level):** User-configured exclusions applied symmetrically in the planner to both remote-only and local-only items. Hot-reloadable without restarting observers. This is where architecture decision E20 applies. See [architecture.md Appendix B](architecture.md#appendix-b-decision-summary).
 
-- `.partial` files (incomplete downloads, S3/S7)
-- `.tmp`, `.swp` files (editor temporaries, S7)
-- `~*`, `.~*` files (editor backup/lock files, S7)
-- `.crdownload` files (browser downloads, S7)
-- `.nosync` guard file
-- Sync database files
+**Built-in exclusion list** (Layer 0, always active, cannot be overridden):
+
+| Category | Patterns | Rationale |
+|----------|----------|-----------|
+| **Temp/editor files** (S7) | `.partial`, `.tmp`, `.swp`, `.crdownload`, `~*`, `.~*` | Transient files that would pollute the remote drive |
+| **OneDrive name restrictions** | `.lock`, `desktop.ini`, `~$*`, reserved names (`CON`, `PRN`, etc.), `_vti_*`, invalid chars | OneDrive API rejects these; see [configuration.md §6.5](configuration.md#65-name-validation) |
+| **OS junk** | `.DS_Store`, `Thumbs.db`, `._*` (macOS resource forks), `__MACOSX/` dirs | OS-generated noise; see [filtering-conflicts.md FC-8](filtering-conflicts.md#fc-8-auto_clean_junk-deletion-wars) |
+| **Sync engine database** | The baseline SQLite file (path-based, not suffix-based) | Prevents syncing the engine's own state; see [filtering-conflicts.md FC-2](filtering-conflicts.md#fc-2-built-in-db-exclusion-is-too-aggressive) |
+| **Guard files** | `.nosync` | S2 incomplete-enumeration protection |
+| **Ignore marker** (Phase 10.1) | Configured `ignore_marker` filename (default `.odignore`) | Never synced; per-device ignore rules. See [filtering-conflicts.md FC-7](filtering-conflicts.md#fc-7-odignore-files--sync-or-not) |
+
+**Note on `skip_dotfiles` and `.odignore`:** The configured `ignore_marker` filename is exempt from the `skip_dotfiles` check in Layer 2. See [filtering-conflicts.md FC-6](filtering-conflicts.md#fc-6-odignore-killed-by-skip_dotfiles).
 
 ### 6.2 PathView Context for Filter Decisions
 
@@ -640,19 +647,36 @@ type FilterResult struct {
 func (f *Filter) ShouldSync(path string, isDir bool, size int64) FilterResult
 ```
 
-The planner calls `ShouldSync` during the classification step for items that appear on only one side (new remote or new local items). Items that already have a baseline entry are always processed -- they were included when first synced, and removing them requires the stale file detection mechanism (see below).
+The planner calls `ShouldSync` during the classification step for items that appear on only one side (new remote or new local items). Items that already have a baseline entry are always processed.
 
-### 6.3 Stale File Detection on Filter Changes
+### 6.3 Stale Files After Filter Changes
 
-When filter rules change (e.g., `skip_dotfiles` is enabled after `.dotfiles` were already synced), previously synced files may become excluded. These files are **not automatically deleted**. Instead:
+When a user changes filter rules to exclude a previously-synced file, the file has a baseline entry but is now excluded. This creates a "stale file" — present on both sides but no longer tracked by sync. See [filtering-conflicts.md FC-9](filtering-conflicts.md#fc-9-stale-files-after-filter-changes) for full analysis.
 
-1. The engine compares the current filter configuration against the previous in-memory config.
-2. Files that were included under the old filter but are excluded under the new filter are detected by walking the baseline.
-3. The user is warned about stale files via log messages. Stale files remain on disk but are no longer synced.
+**Default behavior (warn and freeze):**
 
-This approach prevents accidental data loss from filter changes. The user retains control over whether excluded-but-present files should be removed.
+1. When a filter change excludes a baselined file, log a warning with the file path.
+2. Freeze the baseline entry — don't update it, don't delete it.
+3. The file stays on both sides but is no longer synced.
+4. Surfaced via `status` command output.
 
-In watch mode, SIGHUP triggers configuration reload, including filter re-evaluation and stale file detection.
+**Key rule:** Deleting a locally-stale file does NOT propagate to remote. The filter says "this path is excluded" — no sync operations in either direction, including deletes. This avoids the abraunegg bug where `skip_dir` on a previously-synced directory could trigger remote deletion.
+
+**Optional:** `stale_action = "untrack"` config option removes stale entries from baseline instead of freezing them.
+
+### 6.4 Non-Empty Directory Delete
+
+When a folder is deleted remotely, the DAG ensures tracked children are deleted first. But untracked files (OS junk, editor temps, files matching filters) may remain, making the directory non-empty. See [filtering-conflicts.md FC-12](filtering-conflicts.md#fc-12-non-empty-directory-delete) for full analysis.
+
+**Two-tier disposable approach:**
+
+**Tier 1 (built-in, always active):** When `deleteLocalFolder` encounters a non-empty directory, classify each remaining file:
+- If it matches `isAlwaysExcluded()`, the OS junk list (`.DS_Store`, `Thumbs.db`, `._*`, `__MACOSX/`), or `isValidOneDriveName() == false` → disposable. Silently remove.
+- If ALL remaining files are disposable, remove them and delete the directory.
+
+**Tier 2 (user-configured, Phase 10):** `perishable_files` config option. Files matching these patterns are also disposable during parent directory removal.
+
+**Fail-safe:** If ANY remaining file is not disposable, the directory delete FAILS. `slog.Warn` identifies the blocking files by name.
 
 ---
 
@@ -1480,7 +1504,7 @@ The same tracker and per-action commit infrastructure serves both modes. This me
 |--------|--------|
 | **First SIGINT/SIGTERM** | Stop accepting new events. Drain in-flight executor operations (configurable timeout). Save delta token checkpoint. Clean up `.partial` files. Exit 0. |
 | **Second SIGINT/SIGTERM** | Cancel all operations immediately. SQLite WAL ensures DB consistency even on abrupt termination. Exit 1. |
-| **SIGHUP** | Reload configuration. Re-initialize filter engine. Detect stale files from filter changes. Update bandwidth limiter settings. Continue running. |
+| **SIGHUP** | Reload configuration. Re-initialize filter engine. Update bandwidth limiter settings. Continue running. |
 
 **SIGHUP hot-reloadable options**:
 - Filter rules (`skip_dotfiles`, `skip_dirs`, `skip_files`, `max_file_size`)

@@ -382,7 +382,7 @@ sync_dir = "~/OneDrive"
 sync_dir = "~/OneDrive - Contoso"
 skip_dotfiles = true
 skip_dirs = ["node_modules", ".git", "vendor"]
-skip_files = ["~*", "*.tmp", "*.partial", ".DS_Store", "Thumbs.db"]
+skip_files = ["*.log", "*.pyc", "*.o"]
 ignore_marker = ".odignore"
 max_file_size = "50GB"
 ```
