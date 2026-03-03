@@ -96,9 +96,47 @@ func runStatus(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
+// accountMetaReader abstracts reading account metadata (display name, org name)
+// from token files. Enables testing without real token files on disk.
+type accountMetaReader interface {
+	ReadMeta(account string, driveIDs []driveid.CanonicalID) (displayName, orgName string)
+}
+
+// tokenStateChecker abstracts token validity checks.
+// Enables testing without real OAuth tokens.
+type tokenStateChecker interface {
+	CheckToken(ctx context.Context, account string, driveIDs []driveid.CanonicalID) string
+}
+
+// liveAccountMeta reads metadata from actual token files on disk.
+type liveAccountMeta struct {
+	logger *slog.Logger
+}
+
+func (m *liveAccountMeta) ReadMeta(account string, driveIDs []driveid.CanonicalID) (string, string) {
+	return readAccountMeta(account, driveIDs, m.logger)
+}
+
+// liveTokenChecker checks token validity via the graph package.
+type liveTokenChecker struct {
+	logger *slog.Logger
+}
+
+func (c *liveTokenChecker) CheckToken(ctx context.Context, account string, driveIDs []driveid.CanonicalID) string {
+	return checkTokenState(ctx, account, driveIDs, c.logger)
+}
+
 // buildStatusAccounts groups configured drives by account email and checks
 // token validity for each account.
 func buildStatusAccounts(cfg *config.Config, logger *slog.Logger) []statusAccount {
+	return buildStatusAccountsWith(cfg, &liveAccountMeta{logger: logger}, &liveTokenChecker{logger: logger})
+}
+
+// buildStatusAccountsWith is the testable core of buildStatusAccounts.
+// Accepts interfaces for metadata reading and token checking.
+func buildStatusAccountsWith(
+	cfg *config.Config, meta accountMetaReader, checker tokenStateChecker,
+) []statusAccount {
 	grouped, order := groupDrivesByAccount(cfg)
 	accounts := make([]statusAccount, 0, len(order))
 
@@ -108,7 +146,7 @@ func buildStatusAccounts(cfg *config.Config, logger *slog.Logger) []statusAccoun
 			return driveIDs[i].String() < driveIDs[j].String()
 		})
 
-		acct := buildSingleAccountStatus(cfg, email, driveIDs, logger)
+		acct := buildSingleAccountStatusWith(cfg, email, driveIDs, meta, checker)
 		accounts = append(accounts, acct)
 	}
 
@@ -135,9 +173,11 @@ func groupDrivesByAccount(cfg *config.Config) (map[string][]driveid.CanonicalID,
 	return grouped, order
 }
 
-// buildSingleAccountStatus builds the status for one account and its drives.
-func buildSingleAccountStatus(
-	cfg *config.Config, email string, driveIDs []driveid.CanonicalID, logger *slog.Logger,
+// buildSingleAccountStatusWith builds the status for one account and its drives,
+// using injected interfaces for metadata and token checking.
+func buildSingleAccountStatusWith(
+	cfg *config.Config, email string, driveIDs []driveid.CanonicalID,
+	meta accountMetaReader, checker tokenStateChecker,
 ) statusAccount {
 	acct := statusAccount{
 		Email:  email,
@@ -159,10 +199,10 @@ func buildSingleAccountStatus(
 	}
 
 	// Read display name and org name from token metadata.
-	acct.DisplayName, acct.OrgName = readAccountMeta(email, driveIDs, logger)
+	acct.DisplayName, acct.OrgName = meta.ReadMeta(email, driveIDs)
 
 	// Check token validity for this account.
-	acct.TokenState = checkTokenState(context.Background(), email, driveIDs, logger)
+	acct.TokenState = checker.CheckToken(context.Background(), email, driveIDs)
 
 	// Build drive status entries.
 	for _, cid := range driveIDs {
