@@ -80,7 +80,10 @@ func (p *SessionProvider) Session(ctx context.Context, rd *config.ResolvedDrive)
 	}
 
 	if rd.DriveID.IsZero() {
-		return nil, fmt.Errorf("drive ID not resolved for %s — re-run 'onedrive-go login'", rd.CanonicalID)
+		return nil, fmt.Errorf(
+			"drive ID not resolved for %s — token file may be missing or corrupted; re-run 'onedrive-go login'",
+			rd.CanonicalID,
+		)
 	}
 
 	meta := graph.NewClient(graph.DefaultBaseURL, p.metaHTTP, ts, p.logger, p.userAgent)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"os"
 	"path/filepath"
 	stdsync "sync"
 	"testing"
@@ -117,6 +118,38 @@ func TestNewBaselineManager_WALMode(t *testing.T) {
 	err := mgr.db.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journalMode)
 	require.NoError(t, err)
 	assert.Equal(t, "wal", journalMode)
+}
+
+func TestBaselineManager_Close_CheckpointsWAL(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	logger := testLogger(t)
+
+	mgr, err := NewBaselineManager(dbPath, logger)
+	require.NoError(t, err)
+
+	// Write some data to ensure WAL has content.
+	ctx := context.Background()
+	_, err = mgr.db.ExecContext(ctx,
+		`INSERT INTO baseline (path, drive_id, item_id, parent_id, item_type,
+		 local_hash, remote_hash, size, mtime, synced_at, etag)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"/test.txt", "drv1", "item1", "parent1", "file",
+		"hash1", "hash1", 100, 1700000000, 1700000000, "etag1")
+	require.NoError(t, err)
+
+	// Close should checkpoint and remove the WAL file.
+	require.NoError(t, mgr.Close())
+
+	// After TRUNCATE checkpoint, the WAL file should be empty or absent.
+	walPath := dbPath + "-wal"
+	info, statErr := os.Stat(walPath)
+	if statErr == nil {
+		// WAL file exists but should be empty after TRUNCATE.
+		assert.Zero(t, info.Size(), "WAL file should be empty after TRUNCATE checkpoint")
+	}
+	// If WAL file doesn't exist at all, that's also fine.
 }
 
 func TestNewBaselineManager_RunsMigrations(t *testing.T) {

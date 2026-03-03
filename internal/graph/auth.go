@@ -376,7 +376,7 @@ func generateState() (string, error) {
 // The caller is responsible for computing tokenPath (via config.DriveTokenPath).
 // This decouples graph/ from config/ — graph/ has no config import.
 func TokenSourceFromPath(ctx context.Context, tokenPath string, logger *slog.Logger) (TokenSource, error) {
-	tok, meta, err := tokenfile.Load(tokenPath)
+	tok, meta, err := tokenfile.LoadAndValidate(tokenPath)
 	if err != nil {
 		return nil, err
 	}

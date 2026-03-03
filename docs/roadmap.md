@@ -846,6 +846,14 @@ Acceptance: `grep -rn 'NewDriveSession\|type DriveSession' *.go` → 0 hits. `gr
 
 Acceptance: `go vet -tags=e2e,e2e_full ./e2e/...` clean. All unit tests pass. Fast E2E tests pass. No per-package coverage regression.
 
+### 6.0h: CI reliability hardening — DONE
+
+1. **Token file integrity enforcement** (B-303): `tokenfile.ValidateMeta()` validates required metadata keys (`drive_id`, `user_id`, `display_name`, `cached_at`) on both write and read paths. `LoadAndValidate()` for strict operational loading. `Save()` rejects incomplete non-nil meta. `TokenSourceFromPath` uses `LoadAndValidate`. `ReadTokenMeta` validates before consuming. Improved `driveops/session.go` error message for missing drive ID. **DONE**.
+2. **WAL checkpoint hardening** (B-304): `PRAGMA wal_checkpoint(TRUNCATE)` added to `BaselineManager.Close()`. Ensures all WAL data is flushed to main DB before closing, fixing potential cross-process SQLite visibility issues. **DONE**.
+3. **E2E eventual-consistency guard** (B-305): Added `pollCLIWithConfigNotContains` helper. `TestE2E_Sync_EditDeleteConflict` now polls for remote delete propagation before running sync. **DONE**.
+
+Acceptance: All unit tests pass. Lint clean. Coverage ≥77.9%. E2E compile clean.
+
 ### 6.0g: Migrate E2E helpers to explicit config + top-ups — DONE
 
 1. **Migrate all E2E callers to explicit `*WithConfig` variants**: Deleted `runCLI`, `runCLIExpectError`, `pollCLIContains` auto-config wrappers from `sync_e2e_test.go`. All ~50 call sites across 5 E2E test files migrated to `runCLIWithConfig`, `runCLIWithConfigExpectError`, `pollCLIWithConfigContains` with explicit `cfgPath`/`env`. `putRemoteFile` and `getRemoteFile` gained `cfgPath string` and `env map[string]string` parameters. **DONE**.

@@ -213,8 +213,9 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 
 // ReadTokenMeta reads cached metadata from the token file. Returns the full
 // metadata map (org_name, display_name, drive_id, etc.). Returns nil if the
-// token file is missing or doesn't contain metadata. Uses tokenfile.ReadMeta
-// (leaf package) to avoid an import cycle with graph.
+// token file is missing, doesn't contain metadata, or has incomplete metadata
+// (missing required keys). Uses tokenfile.ReadMeta + ValidateMeta to ensure
+// integrity.
 func ReadTokenMeta(cid driveid.CanonicalID, logger *slog.Logger) map[string]string {
 	tokenPath := DriveTokenPath(cid, nil)
 	if tokenPath == "" {
@@ -225,6 +226,15 @@ func ReadTokenMeta(cid driveid.CanonicalID, logger *slog.Logger) map[string]stri
 	if err != nil {
 		logger.Debug("could not read token metadata",
 			"canonical_id", cid.String(), "error", err)
+
+		return nil
+	}
+
+	if err := tokenfile.ValidateMeta(meta); err != nil {
+		logger.Warn("token file has incomplete metadata",
+			"canonical_id", cid.String(),
+			"token_path", tokenPath,
+			"error", err)
 
 		return nil
 	}

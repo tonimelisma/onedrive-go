@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -663,7 +664,11 @@ func TestCollectOtherSyncDirs_WithTokenMeta(t *testing.T) {
 
 	// Create a token file with org_name metadata.
 	writeTokenFileWithMeta(t, dataDir, "token_business_alice@contoso.com.json", map[string]string{
-		"org_name": "Contoso Ltd",
+		"org_name":     "Contoso Ltd",
+		"drive_id":     "test-drive-id",
+		"user_id":      "test-user-id",
+		"display_name": "Alice",
+		"cached_at":    "2024-01-01T00:00:00Z",
 	})
 
 	cfg := DefaultConfig()
@@ -704,6 +709,8 @@ func TestReadTokenMeta_WithMeta(t *testing.T) {
 		"org_name":     "TestOrg",
 		"display_name": "Test User",
 		"drive_id":     "abc123",
+		"user_id":      "test-user-id",
+		"cached_at":    "2024-01-01T00:00:00Z",
 	})
 
 	cid := driveid.MustCanonicalID("personal:user@example.com")
@@ -711,6 +718,19 @@ func TestReadTokenMeta_WithMeta(t *testing.T) {
 	assert.Equal(t, "TestOrg", meta["org_name"])
 	assert.Equal(t, "Test User", meta["display_name"])
 	assert.Equal(t, "abc123", meta["drive_id"])
+}
+
+func TestReadTokenMeta_IncompleteMeta(t *testing.T) {
+	dataDir := setTestDataDir(t)
+
+	// Write a token file with incomplete metadata directly (bypass Save validation).
+	incompleteMeta := map[string]string{"display_name": "Alice"}
+	writeRawTokenFile(t, dataDir, "token_personal_user@example.com.json", incompleteMeta)
+
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+	meta := ReadTokenMeta(cid, testLogger(t))
+	// Should return nil because validation fails.
+	assert.Nil(t, meta)
 }
 
 func TestReadTokenMeta_ZeroID(t *testing.T) {
@@ -740,6 +760,26 @@ func writeTokenFileWithMeta(t *testing.T, dir, name string, meta map[string]stri
 		Expiry:       time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
 	require.NoError(t, tokenfile.Save(filepath.Join(dir, name), tok, meta))
+}
+
+// writeRawTokenFile writes a token file directly without Save validation,
+// allowing creation of intentionally incomplete files for testing.
+func writeRawTokenFile(t *testing.T, dir, name string, meta map[string]string) {
+	t.Helper()
+
+	tf := tokenfile.File{
+		Token: &oauth2.Token{
+			AccessToken:  "test-access-token",
+			RefreshToken: "test-refresh-token",
+			TokenType:    "Bearer",
+			Expiry:       time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC),
+		},
+		Meta: meta,
+	}
+
+	data, err := json.MarshalIndent(tf, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), data, 0o600))
 }
 
 // setTestDataDir overrides HOME so DefaultDataDir() returns a temp directory,
