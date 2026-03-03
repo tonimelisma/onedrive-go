@@ -90,9 +90,36 @@ func NewSessionStore(dataDir string, logger *slog.Logger) *SessionStore {
 }
 
 // Load reads a session record for the given drive and local path.
-// Returns nil, nil if no session file exists.
+// Returns nil, nil if no session file exists or if the session file is
+// older than StaleSessionAge (Graph API upload sessions expire in ~48h).
 func (s *SessionStore) Load(driveID, localPath string) (*SessionRecord, error) {
 	path := s.filePath(driveID, localPath)
+
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+
+		return nil, fmt.Errorf("stat session file: %w", err)
+	}
+
+	// Delete expired sessions eagerly so callers don't attempt a doomed resume.
+	if time.Since(info.ModTime()) > StaleSessionAge {
+		s.logger.Warn("session file expired, deleting",
+			slog.String("path", path),
+			slog.Duration("age", time.Since(info.ModTime()).Truncate(time.Hour)),
+		)
+
+		if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
+			s.logger.Warn("failed to remove expired session file",
+				slog.String("path", path),
+				slog.String("error", rmErr.Error()),
+			)
+		}
+
+		return nil, nil
+	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {

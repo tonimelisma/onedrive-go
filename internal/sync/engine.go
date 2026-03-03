@@ -143,8 +143,32 @@ func NewEngine(cfg *EngineConfig) (*Engine, error) {
 	}, nil
 }
 
-// Close releases resources held by the engine (database connection).
+// Close releases resources held by the engine. Nil-safe for observer
+// references set during RunWatch, cleans stale upload sessions, and
+// closes the database connection last. Safe to call more than once.
 func (e *Engine) Close() error {
+	// Nil out observer references to prevent dangling reads after Close.
+	e.remoteObs = nil
+	e.localObs = nil
+	e.failures = nil
+
+	// Clean stale upload session files (best-effort).
+	if e.sessionStore != nil {
+		if n, err := e.sessionStore.CleanStale(driveops.StaleSessionAge); err != nil {
+			e.logger.Warn("failed to clean stale sessions on close",
+				slog.String("error", err.Error()),
+			)
+		} else if n > 0 {
+			e.logger.Info("cleaned stale upload sessions on close",
+				slog.Int("deleted", n),
+			)
+		}
+	}
+
+	if e.baseline == nil {
+		return nil
+	}
+
 	return e.baseline.Close()
 }
 
