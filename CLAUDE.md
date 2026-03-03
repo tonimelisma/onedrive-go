@@ -118,6 +118,7 @@
 - Minimum per code path: function entry with key params, state transitions, error paths, external calls. Never log secrets.
 
 **Test style**:
+- **All assertions use testify** (`github.com/stretchr/testify/assert` and `require`). Never use stdlib `t.Fatal`, `t.Fatalf`, `t.Error`, `t.Errorf` for assertions. Use `require` when the test cannot continue without the assertion passing (nil checks, error checks before using result). Use `assert` for non-fatal value comparisons.
 - Never pass nil context — runtime panics not caught by compiler
 - Table-driven tests where appropriate, with specific assertions (check values, not just "no error")
 - Scope verification to own package: `go test ./internal/graph/...` not `go test ./...`
