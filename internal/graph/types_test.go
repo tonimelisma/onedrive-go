@@ -3,8 +3,9 @@ package graph
 import (
 	"bytes"
 	"log/slog"
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 // TestDownloadURL_LogValuer verifies that DownloadURL implements slog.LogValuer
@@ -31,13 +32,8 @@ func TestDownloadURL_LogValuer(t *testing.T) {
 
 	output := buf.String()
 
-	if !strings.Contains(output, "[REDACTED]") {
-		t.Errorf("expected [REDACTED] in log output, got: %s", output)
-	}
-
-	if strings.Contains(output, "secret-token-here") {
-		t.Errorf("log output contains secret URL token: %s", output)
-	}
+	assert.Contains(t, output, "[REDACTED]")
+	assert.NotContains(t, output, "secret-token-here")
 }
 
 // TestDownloadURL_EmptyComparison verifies that an empty DownloadURL compares
@@ -46,14 +42,10 @@ func TestDownloadURL_EmptyComparison(t *testing.T) {
 	t.Parallel()
 
 	var empty DownloadURL
-	if empty != "" {
-		t.Error("zero-value DownloadURL should equal empty string")
-	}
+	assert.Equal(t, DownloadURL(""), empty, "zero-value DownloadURL should equal empty string")
 
 	populated := DownloadURL("https://example.com/download")
-	if populated == "" {
-		t.Error("populated DownloadURL should not equal empty string")
-	}
+	assert.NotEqual(t, DownloadURL(""), populated, "populated DownloadURL should not equal empty string")
 }
 
 // TestDownloadURL_StringConversion verifies that DownloadURL can be converted
@@ -64,7 +56,5 @@ func TestDownloadURL_StringConversion(t *testing.T) {
 	url := DownloadURL("https://example.com/download?token=abc")
 	s := string(url)
 
-	if s != "https://example.com/download?token=abc" {
-		t.Errorf("string conversion = %q, want original URL", s)
-	}
+	assert.Equal(t, "https://example.com/download?token=abc", s)
 }

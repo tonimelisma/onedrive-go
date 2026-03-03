@@ -304,7 +304,8 @@ func pollForDrive2File(
 		}
 
 		if time.Now().After(deadline) {
-			t.Fatalf("pollForDrive2File: timed out after %v waiting for %q in drive %s output of %v\nlast stdout: %s",
+			require.Failf(t, "pollForDrive2File: timed out",
+				"after %v waiting for %q in drive %s output of %v\nlast stdout: %s",
 				timeout, expected, driveID, args, stdout)
 		}
 
@@ -325,7 +326,8 @@ func waitForStderrContains(t *testing.T, stderr *bytes.Buffer, target string, ti
 		}
 
 		if time.Now().After(deadline) {
-			t.Fatalf("timed out after %v waiting for %q in stderr\nstderr so far: %s",
+			require.Failf(t, "timed out waiting for stderr content",
+				"after %v waiting for %q in stderr\nstderr so far: %s",
 				timeout, target, stderr.String())
 		}
 
@@ -360,7 +362,8 @@ func waitForDaemonReady(t *testing.T, stderr *bytes.Buffer, timeout time.Duratio
 		}
 
 		if time.Now().After(deadline) {
-			t.Fatalf("daemon did not become ready within %v\nstderr so far: %s",
+			require.Failf(t, "daemon did not become ready",
+				"within %v\nstderr so far: %s",
 				timeout, output)
 		}
 

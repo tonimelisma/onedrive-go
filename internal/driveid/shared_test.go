@@ -2,6 +2,9 @@ package driveid
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // --- RED tests for B-272 + foundation fixes ---
@@ -40,67 +43,38 @@ func TestNewCanonicalID_SharedType(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cid, err := NewCanonicalID(tt.raw)
 			if tt.wantErr {
-				if err == nil {
-					t.Error("expected error, got nil")
-				}
+				assert.Error(t, err)
 				return
 			}
 
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			if cid.String() != tt.want {
-				t.Errorf("NewCanonicalID(%q) = %q, want %q", tt.raw, cid.String(), tt.want)
-			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, cid.String())
 		})
 	}
 }
 
 func TestNewCanonicalID_SharedFieldRouting(t *testing.T) {
 	cid, err := NewCanonicalID("shared:me@outlook.com:b!TG9yZW0:01ABCDEF")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	require.NoError(t, err)
 
-	if cid.DriveType() != "shared" {
-		t.Errorf("DriveType() = %q, want %q", cid.DriveType(), "shared")
-	}
-
-	if cid.Email() != "me@outlook.com" {
-		t.Errorf("Email() = %q, want %q", cid.Email(), "me@outlook.com")
-	}
-
-	if cid.SourceDriveID() != "b!TG9yZW0" {
-		t.Errorf("SourceDriveID() = %q, want %q", cid.SourceDriveID(), "b!TG9yZW0")
-	}
-
-	if cid.SourceItemID() != "01ABCDEF" {
-		t.Errorf("SourceItemID() = %q, want %q", cid.SourceItemID(), "01ABCDEF")
-	}
+	assert.Equal(t, "shared", cid.DriveType())
+	assert.Equal(t, "me@outlook.com", cid.Email())
+	assert.Equal(t, "b!TG9yZW0", cid.SourceDriveID())
+	assert.Equal(t, "01ABCDEF", cid.SourceItemID())
 
 	// Shared fields must NOT leak into SharePoint-specific fields.
-	if cid.Site() != "" {
-		t.Errorf("Site() = %q, want empty for shared type", cid.Site())
-	}
-
-	if cid.Library() != "" {
-		t.Errorf("Library() = %q, want empty for shared type", cid.Library())
-	}
+	assert.Empty(t, cid.Site(), "Site() should be empty for shared type")
+	assert.Empty(t, cid.Library(), "Library() should be empty for shared type")
 }
 
 func TestNewCanonicalID_PersonalRejectsExtraParts(t *testing.T) {
 	_, err := NewCanonicalID("personal:user@example.com:extra")
-	if err == nil {
-		t.Error("expected error for personal with extra parts, got nil")
-	}
+	assert.Error(t, err)
 }
 
 func TestNewCanonicalID_BusinessRejectsExtraParts(t *testing.T) {
 	_, err := NewCanonicalID("business:alice@contoso.com:extra:parts")
-	if err == nil {
-		t.Error("expected error for business with extra parts, got nil")
-	}
+	assert.Error(t, err)
 }
 
 func TestConstructShared(t *testing.T) {
@@ -146,19 +120,12 @@ func TestConstructShared(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cid, err := ConstructShared(tt.email, tt.sourceDriveID, tt.sourceItemID)
 			if tt.wantErr {
-				if err == nil {
-					t.Error("expected error, got nil")
-				}
+				assert.Error(t, err)
 				return
 			}
 
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			if cid.String() != tt.want {
-				t.Errorf("ConstructShared() = %q, want %q", cid.String(), tt.want)
-			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, cid.String())
 		})
 	}
 }
@@ -177,9 +144,7 @@ func TestCanonicalID_IsShared(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.cid.IsShared(); got != tt.want {
-				t.Errorf("IsShared() = %v, want %v", got, tt.want)
-			}
+			assert.Equal(t, tt.want, tt.cid.IsShared())
 		})
 	}
 }
@@ -197,9 +162,7 @@ func TestCanonicalID_IsPersonal(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.cid.IsPersonal(); got != tt.want {
-				t.Errorf("IsPersonal() = %v, want %v", got, tt.want)
-			}
+			assert.Equal(t, tt.want, tt.cid.IsPersonal())
 		})
 	}
 }
@@ -217,9 +180,7 @@ func TestCanonicalID_IsBusiness(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.cid.IsBusiness(); got != tt.want {
-				t.Errorf("IsBusiness() = %v, want %v", got, tt.want)
-			}
+			assert.Equal(t, tt.want, tt.cid.IsBusiness())
 		})
 	}
 }
@@ -239,9 +200,7 @@ func TestCanonicalID_SourceDriveID(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.cid.SourceDriveID(); got != tt.want {
-				t.Errorf("SourceDriveID() = %q, want %q", got, tt.want)
-			}
+			assert.Equal(t, tt.want, tt.cid.SourceDriveID())
 		})
 	}
 }
@@ -261,9 +220,7 @@ func TestCanonicalID_SourceItemID(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.cid.SourceItemID(); got != tt.want {
-				t.Errorf("SourceItemID() = %q, want %q", got, tt.want)
-			}
+			assert.Equal(t, tt.want, tt.cid.SourceItemID())
 		})
 	}
 }
@@ -273,26 +230,15 @@ func TestCanonicalID_SharedTextRoundTrip(t *testing.T) {
 	original := MustCanonicalID(raw)
 
 	data, err := original.MarshalText()
-	if err != nil {
-		t.Fatalf("MarshalText() error: %v", err)
-	}
+	require.NoError(t, err)
 
 	var restored CanonicalID
-	if err := restored.UnmarshalText(data); err != nil {
-		t.Fatalf("UnmarshalText() error: %v", err)
-	}
+	err = restored.UnmarshalText(data)
+	require.NoError(t, err)
 
-	if original.String() != restored.String() {
-		t.Errorf("round-trip failed: original=%q, restored=%q", original.String(), restored.String())
-	}
-
-	if original.SourceDriveID() != restored.SourceDriveID() {
-		t.Errorf("SourceDriveID mismatch: %q vs %q", original.SourceDriveID(), restored.SourceDriveID())
-	}
-
-	if original.SourceItemID() != restored.SourceItemID() {
-		t.Errorf("SourceItemID mismatch: %q vs %q", original.SourceItemID(), restored.SourceItemID())
-	}
+	assert.Equal(t, original.String(), restored.String())
+	assert.Equal(t, original.SourceDriveID(), restored.SourceDriveID())
+	assert.Equal(t, original.SourceItemID(), restored.SourceItemID())
 }
 
 func TestCanonicalID_Equal(t *testing.T) {
@@ -313,9 +259,7 @@ func TestCanonicalID_Equal(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.a.Equal(tt.b); got != tt.want {
-				t.Errorf("Equal() = %v, want %v", got, tt.want)
-			}
+			assert.Equal(t, tt.want, tt.a.Equal(tt.b))
 		})
 	}
 }
@@ -327,22 +271,12 @@ func TestCanonicalID_SharedFieldIsolation(t *testing.T) {
 	sp := MustCanonicalID("sharepoint:alice@contoso.com:marketing:Docs")
 
 	// Shared type must not expose site/library.
-	if shared.Site() != "" {
-		t.Errorf("shared.Site() = %q, want empty", shared.Site())
-	}
-
-	if shared.Library() != "" {
-		t.Errorf("shared.Library() = %q, want empty", shared.Library())
-	}
+	assert.Empty(t, shared.Site())
+	assert.Empty(t, shared.Library())
 
 	// SharePoint must not expose sourceDriveID/sourceItemID.
-	if sp.SourceDriveID() != "" {
-		t.Errorf("sp.SourceDriveID() = %q, want empty", sp.SourceDriveID())
-	}
-
-	if sp.SourceItemID() != "" {
-		t.Errorf("sp.SourceItemID() = %q, want empty", sp.SourceItemID())
-	}
+	assert.Empty(t, sp.SourceDriveID())
+	assert.Empty(t, sp.SourceItemID())
 }
 
 // TokenCanonicalID() was removed from CanonicalID (B-273).
@@ -354,21 +288,11 @@ func TestID_Equal_ZeroValues(t *testing.T) {
 	zeros := New("0")
 	structZero := ID{}
 
-	if !empty.Equal(structZero) {
-		t.Error("New(\"\").Equal(ID{}) must be true — both are zero")
-	}
-
-	if !zeros.Equal(structZero) {
-		t.Error("New(\"0\").Equal(ID{}) must be true — both are zero")
-	}
-
-	if !empty.Equal(zeros) {
-		t.Error("New(\"\").Equal(New(\"0\")) must be true — both are zero")
-	}
+	assert.True(t, empty.Equal(structZero), "New(\"\").Equal(ID{}) must be true — both are zero")
+	assert.True(t, zeros.Equal(structZero), "New(\"0\").Equal(ID{}) must be true — both are zero")
+	assert.True(t, empty.Equal(zeros), "New(\"\").Equal(New(\"0\")) must be true — both are zero")
 }
 
 func TestIsValidDriveType_Shared(t *testing.T) {
-	if !IsValidDriveType("shared") {
-		t.Error("IsValidDriveType(\"shared\") must be true")
-	}
+	assert.True(t, IsValidDriveType("shared"))
 }

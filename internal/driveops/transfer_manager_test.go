@@ -10,9 +10,11 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
@@ -149,36 +151,22 @@ func TestTransferManager_FreshDownload_Success(t *testing.T) {
 	result, err := tm.DownloadToFile(context.Background(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
 		RemoteHash: expectedHash,
 	})
-	if err != nil {
-		t.Fatalf("DownloadToFile: %v", err)
-	}
+	require.NoError(t, err, "DownloadToFile")
 
-	if result.LocalHash != expectedHash {
-		t.Errorf("LocalHash = %q, want %q", result.LocalHash, expectedHash)
-	}
-
-	if result.Size != int64(len(content)) {
-		t.Errorf("Size = %d, want %d", result.Size, len(content))
-	}
+	assert.Equal(t, expectedHash, result.LocalHash)
+	assert.Equal(t, int64(len(content)), result.Size)
 
 	// HashVerified should be true on successful hash match.
-	if !result.HashVerified {
-		t.Error("HashVerified = false, want true on successful match")
-	}
+	assert.True(t, result.HashVerified, "HashVerified should be true on successful match")
 
 	got, readErr := os.ReadFile(targetPath)
-	if readErr != nil {
-		t.Fatalf("ReadFile: %v", readErr)
-	}
+	require.NoError(t, readErr, "ReadFile")
 
-	if !bytes.Equal(got, content) {
-		t.Errorf("file content mismatch")
-	}
+	assert.Equal(t, content, got, "file content mismatch")
 
 	// .partial should not exist after successful download.
-	if _, err := os.Stat(targetPath + ".partial"); !os.IsNotExist(err) {
-		t.Errorf("expected .partial to be removed, got err=%v", err)
-	}
+	_, statErr := os.Stat(targetPath + ".partial")
+	assert.True(t, os.IsNotExist(statErr), "expected .partial to be removed")
 }
 
 func TestTransferManager_FreshDownload_Error(t *testing.T) {
@@ -194,18 +182,13 @@ func TestTransferManager_FreshDownload_Error(t *testing.T) {
 	targetPath := filepath.Join(t.TempDir(), "file.txt")
 
 	_, err := tm.DownloadToFile(context.Background(), driveid.New("d1"), "item1", targetPath, DownloadOpts{})
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
+	require.Error(t, err)
 
-	if !strings.Contains(err.Error(), "network failure") {
-		t.Errorf("error = %q, want to contain 'network failure'", err.Error())
-	}
+	assert.Contains(t, err.Error(), "network failure")
 
 	// .partial should be cleaned up on non-ctx error.
-	if _, statErr := os.Stat(targetPath + ".partial"); !os.IsNotExist(statErr) {
-		t.Errorf("expected .partial to be removed on non-ctx error")
-	}
+	_, statErr := os.Stat(targetPath + ".partial")
+	assert.True(t, os.IsNotExist(statErr), "expected .partial to be removed on non-ctx error")
 }
 
 func TestTransferManager_FreshDownload_CtxCancel_PreservesPartial(t *testing.T) {
@@ -227,19 +210,13 @@ func TestTransferManager_FreshDownload_CtxCancel_PreservesPartial(t *testing.T) 
 	targetPath := filepath.Join(t.TempDir(), "file.txt")
 
 	_, err := tm.DownloadToFile(ctx, driveid.New("d1"), "item1", targetPath, DownloadOpts{})
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
+	require.Error(t, err)
 
 	// .partial should be preserved on context cancellation.
 	info, statErr := os.Stat(targetPath + ".partial")
-	if statErr != nil {
-		t.Fatalf("expected .partial to be preserved, got err=%v", statErr)
-	}
+	require.NoError(t, statErr, "expected .partial to be preserved")
 
-	if info.Size() == 0 {
-		t.Error("expected .partial to have data")
-	}
+	assert.NotZero(t, info.Size(), "expected .partial to have data")
 }
 
 func TestTransferManager_ResumeDownload_Success(t *testing.T) {
@@ -268,33 +245,20 @@ func TestTransferManager_ResumeDownload_Success(t *testing.T) {
 	partialPath := targetPath + ".partial"
 
 	// Pre-create the .partial file with existing data.
-	if err := os.WriteFile(partialPath, existingData, 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	require.NoError(t, os.WriteFile(partialPath, existingData, 0o600))
 
 	result, err := tm.DownloadToFile(context.Background(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
 		RemoteHash: expectedHash,
 	})
-	if err != nil {
-		t.Fatalf("DownloadToFile: %v", err)
-	}
+	require.NoError(t, err, "DownloadToFile")
 
-	if result.LocalHash != expectedHash {
-		t.Errorf("LocalHash = %q, want %q", result.LocalHash, expectedHash)
-	}
-
-	if result.Size != int64(len(fullContent)) {
-		t.Errorf("Size = %d, want %d", result.Size, len(fullContent))
-	}
+	assert.Equal(t, expectedHash, result.LocalHash)
+	assert.Equal(t, int64(len(fullContent)), result.Size)
 
 	got, readErr := os.ReadFile(targetPath)
-	if readErr != nil {
-		t.Fatalf("ReadFile: %v", readErr)
-	}
+	require.NoError(t, readErr, "ReadFile")
 
-	if !bytes.Equal(got, fullContent) {
-		t.Errorf("file content = %q, want %q", got, fullContent)
-	}
+	assert.Equal(t, fullContent, got)
 }
 
 func TestTransferManager_ResumeDownload_RangeFail_FallsBack(t *testing.T) {
@@ -322,24 +286,15 @@ func TestTransferManager_ResumeDownload_RangeFail_FallsBack(t *testing.T) {
 	partialPath := targetPath + ".partial"
 
 	// Pre-create .partial to trigger resume attempt.
-	if err := os.WriteFile(partialPath, []byte("old-data"), 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	require.NoError(t, os.WriteFile(partialPath, []byte("old-data"), 0o600))
 
 	result, err := tm.DownloadToFile(context.Background(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
 		RemoteHash: expectedHash,
 	})
-	if err != nil {
-		t.Fatalf("DownloadToFile: %v", err)
-	}
+	require.NoError(t, err, "DownloadToFile")
 
-	if !downloadCalled {
-		t.Error("expected fresh Download() to be called as fallback")
-	}
-
-	if result.LocalHash != expectedHash {
-		t.Errorf("LocalHash = %q, want %q", result.LocalHash, expectedHash)
-	}
+	assert.True(t, downloadCalled, "expected fresh Download() to be called as fallback")
+	assert.Equal(t, expectedHash, result.LocalHash)
 }
 
 func TestTransferManager_ResumeDownload_CloseError_FallsBack(t *testing.T) {
@@ -372,24 +327,15 @@ func TestTransferManager_ResumeDownload_CloseError_FallsBack(t *testing.T) {
 	targetPath := filepath.Join(dir, "file.txt")
 	partialPath := targetPath + ".partial"
 
-	if err := os.WriteFile(partialPath, []byte("existing"), 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	require.NoError(t, os.WriteFile(partialPath, []byte("existing"), 0o600))
 
 	result, err := tm.DownloadToFile(context.Background(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
 		RemoteHash: expectedHash,
 	})
-	if err != nil {
-		t.Fatalf("DownloadToFile: %v", err)
-	}
+	require.NoError(t, err, "DownloadToFile")
 
-	if !freshDownloadCalled {
-		t.Error("expected fresh download fallback after close error")
-	}
-
-	if result.LocalHash != expectedHash {
-		t.Errorf("LocalHash = %q, want %q", result.LocalHash, expectedHash)
-	}
+	assert.True(t, freshDownloadCalled, "expected fresh download fallback after close error")
+	assert.Equal(t, expectedHash, result.LocalHash)
 }
 
 func TestTransferManager_HashMismatch_Retry(t *testing.T) {
@@ -423,17 +369,10 @@ func TestTransferManager_HashMismatch_Retry(t *testing.T) {
 		RemoteHash:     correctHash,
 		MaxHashRetries: 3,
 	})
-	if err != nil {
-		t.Fatalf("DownloadToFile: %v", err)
-	}
+	require.NoError(t, err, "DownloadToFile")
 
-	if downloadCount != 3 {
-		t.Errorf("downloadCount = %d, want 3", downloadCount)
-	}
-
-	if result.LocalHash != correctHash {
-		t.Errorf("LocalHash = %q, want %q", result.LocalHash, correctHash)
-	}
+	assert.Equal(t, 3, downloadCount)
+	assert.Equal(t, correctHash, result.LocalHash)
 }
 
 func TestTransferManager_HashExhaustion_Accepts(t *testing.T) {
@@ -457,19 +396,13 @@ func TestTransferManager_HashExhaustion_Accepts(t *testing.T) {
 		RemoteHash:     "definitely-wrong-hash",
 		MaxHashRetries: 1,
 	})
-	if err != nil {
-		t.Fatalf("DownloadToFile: %v", err)
-	}
+	require.NoError(t, err, "DownloadToFile")
 
 	// After exhaustion, EffectiveRemoteHash should match localHash (accepted).
-	if result.EffectiveRemoteHash != result.LocalHash {
-		t.Errorf("EffectiveRemoteHash = %q, want %q (localHash)", result.EffectiveRemoteHash, result.LocalHash)
-	}
+	assert.Equal(t, result.LocalHash, result.EffectiveRemoteHash)
 
 	// HashVerified should be false when retries exhausted with mismatch.
-	if result.HashVerified {
-		t.Error("HashVerified = true, want false after exhaustion")
-	}
+	assert.False(t, result.HashVerified, "HashVerified should be false after exhaustion")
 }
 
 // ---------------------------------------------------------------------------
@@ -491,31 +424,17 @@ func TestTransferManager_Upload_Success(t *testing.T) {
 	dir := t.TempDir()
 	localPath := filepath.Join(dir, "upload.txt")
 
-	if err := os.WriteFile(localPath, []byte("upload data"), 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	require.NoError(t, os.WriteFile(localPath, []byte("upload data"), 0o600))
 
 	result, err := tm.UploadFile(context.Background(), driveid.New("d1"), "parent1", "upload.txt", localPath, UploadOpts{})
-	if err != nil {
-		t.Fatalf("UploadFile: %v", err)
-	}
+	require.NoError(t, err, "UploadFile")
 
-	if result.Item.ID != "item-1" {
-		t.Errorf("Item.ID = %q, want %q", result.Item.ID, "item-1")
-	}
-
-	if result.LocalHash == "" {
-		t.Error("LocalHash should not be empty")
-	}
+	assert.Equal(t, "item-1", result.Item.ID)
+	assert.NotEmpty(t, result.LocalHash, "LocalHash should not be empty")
 
 	// Verify Size and Mtime are populated (fix #4).
-	if result.Size != 11 {
-		t.Errorf("Size = %d, want 11", result.Size)
-	}
-
-	if result.Mtime.IsZero() {
-		t.Error("Mtime should not be zero")
-	}
+	assert.Equal(t, int64(11), result.Size)
+	assert.False(t, result.Mtime.IsZero(), "Mtime should not be zero")
 }
 
 func TestTransferManager_Upload_NilItem(t *testing.T) {
@@ -532,18 +451,12 @@ func TestTransferManager_Upload_NilItem(t *testing.T) {
 	dir := t.TempDir()
 	localPath := filepath.Join(dir, "nil-item.txt")
 
-	if err := os.WriteFile(localPath, []byte("data"), 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	require.NoError(t, os.WriteFile(localPath, []byte("data"), 0o600))
 
 	_, err := tm.UploadFile(context.Background(), driveid.New("d1"), "parent1", "nil-item.txt", localPath, UploadOpts{})
-	if err == nil {
-		t.Fatal("expected error for nil item, got nil")
-	}
+	require.Error(t, err)
 
-	if !strings.Contains(err.Error(), "returned nil item") {
-		t.Errorf("error = %q, want to contain 'returned nil item'", err.Error())
-	}
+	assert.Contains(t, err.Error(), "returned nil item")
 }
 
 func TestTransferManager_Upload_ErrorWrapping(t *testing.T) {
@@ -560,19 +473,14 @@ func TestTransferManager_Upload_ErrorWrapping(t *testing.T) {
 	dir := t.TempDir()
 	localPath := filepath.Join(dir, "err-wrap.txt")
 
-	if err := os.WriteFile(localPath, []byte("data"), 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	require.NoError(t, os.WriteFile(localPath, []byte("data"), 0o600))
 
 	_, err := tm.UploadFile(context.Background(), driveid.New("d1"), "parent1", "err-wrap.txt", localPath, UploadOpts{})
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
+	require.Error(t, err)
 
 	// Fix #13: simple upload errors should be wrapped with the local path.
-	if !strings.Contains(err.Error(), "uploading") || !strings.Contains(err.Error(), localPath) {
-		t.Errorf("error = %q, want to contain 'uploading' and local path", err.Error())
-	}
+	assert.Contains(t, err.Error(), "uploading")
+	assert.Contains(t, err.Error(), localPath)
 }
 
 func TestTransferManager_SessionUpload_Success(t *testing.T) {
@@ -596,18 +504,12 @@ func TestTransferManager_SessionUpload_Success(t *testing.T) {
 	localPath := filepath.Join(dir, "large.bin")
 	largeData := make([]byte, graph.SimpleUploadMaxSize+1)
 
-	if err := os.WriteFile(localPath, largeData, 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	require.NoError(t, os.WriteFile(localPath, largeData, 0o600))
 
 	result, err := tm.UploadFile(context.Background(), driveid.New("d1"), "parent1", "large.bin", localPath, UploadOpts{})
-	if err != nil {
-		t.Fatalf("UploadFile: %v", err)
-	}
+	require.NoError(t, err, "UploadFile")
 
-	if result.Item.ID != "session-item" {
-		t.Errorf("Item.ID = %q, want %q", result.Item.ID, "session-item")
-	}
+	assert.Equal(t, "session-item", result.Item.ID)
 }
 
 func TestTransferManager_SessionUpload_Resume(t *testing.T) {
@@ -620,25 +522,20 @@ func TestTransferManager_SessionUpload_Resume(t *testing.T) {
 	localPath := filepath.Join(dir, "resume.bin")
 	largeData := make([]byte, graph.SimpleUploadMaxSize+1)
 
-	if err := os.WriteFile(localPath, largeData, 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	require.NoError(t, os.WriteFile(localPath, largeData, 0o600))
 
 	// Pre-compute hash to match the session record.
 	fileHash, hashErr := ComputeQuickXorHash(localPath)
-	if hashErr != nil {
-		t.Fatalf("ComputeQuickXorHash: %v", hashErr)
-	}
+	require.NoError(t, hashErr, "ComputeQuickXorHash")
 
 	// Pre-save a session record.
 	driveStr := driveid.New("d1").String()
-	if saveErr := store.Save(driveStr, localPath, &SessionRecord{
+	saveErr := store.Save(driveStr, localPath, &SessionRecord{
 		SessionURL: "https://upload.example.com/existing",
 		FileHash:   fileHash,
 		FileSize:   int64(len(largeData)),
-	}); saveErr != nil {
-		t.Fatalf("Save: %v", saveErr)
-	}
+	})
+	require.NoError(t, saveErr, "Save")
 
 	var resumeCalled bool
 
@@ -657,17 +554,10 @@ func TestTransferManager_SessionUpload_Resume(t *testing.T) {
 	tm := newTestTM(&tmSimpleDownloader{}, ul, store)
 
 	result, err := tm.UploadFile(context.Background(), driveid.New("d1"), "parent1", "resume.bin", localPath, UploadOpts{})
-	if err != nil {
-		t.Fatalf("UploadFile: %v", err)
-	}
+	require.NoError(t, err, "UploadFile")
 
-	if !resumeCalled {
-		t.Error("expected ResumeUpload to be called")
-	}
-
-	if result.Item.ID != "resumed-item" {
-		t.Errorf("Item.ID = %q, want %q", result.Item.ID, "resumed-item")
-	}
+	assert.True(t, resumeCalled, "expected ResumeUpload to be called")
+	assert.Equal(t, "resumed-item", result.Item.ID)
 }
 
 func TestTransferManager_SessionUpload_ExpiredFallback(t *testing.T) {
@@ -680,23 +570,18 @@ func TestTransferManager_SessionUpload_ExpiredFallback(t *testing.T) {
 	localPath := filepath.Join(dir, "expired.bin")
 	largeData := make([]byte, graph.SimpleUploadMaxSize+1)
 
-	if err := os.WriteFile(localPath, largeData, 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	require.NoError(t, os.WriteFile(localPath, largeData, 0o600))
 
 	fileHash, hashErr := ComputeQuickXorHash(localPath)
-	if hashErr != nil {
-		t.Fatalf("ComputeQuickXorHash: %v", hashErr)
-	}
+	require.NoError(t, hashErr, "ComputeQuickXorHash")
 
 	driveStr := driveid.New("d1").String()
-	if saveErr := store.Save(driveStr, localPath, &SessionRecord{
+	saveErr := store.Save(driveStr, localPath, &SessionRecord{
 		SessionURL: "https://upload.example.com/expired",
 		FileHash:   fileHash,
 		FileSize:   int64(len(largeData)),
-	}); saveErr != nil {
-		t.Fatalf("Save: %v", saveErr)
-	}
+	})
+	require.NoError(t, saveErr, "Save")
 
 	var createCalled, uploadFromCalled bool
 
@@ -719,21 +604,11 @@ func TestTransferManager_SessionUpload_ExpiredFallback(t *testing.T) {
 	tm := newTestTM(&tmSimpleDownloader{}, ul, store)
 
 	result, err := tm.UploadFile(context.Background(), driveid.New("d1"), "parent1", "expired.bin", localPath, UploadOpts{})
-	if err != nil {
-		t.Fatalf("UploadFile: %v", err)
-	}
+	require.NoError(t, err, "UploadFile")
 
-	if !createCalled {
-		t.Error("expected CreateUploadSession to be called after expiration")
-	}
-
-	if !uploadFromCalled {
-		t.Error("expected UploadFromSession to be called after fresh session creation")
-	}
-
-	if result.Item.ID != "fresh-item" {
-		t.Errorf("Item.ID = %q, want %q", result.Item.ID, "fresh-item")
-	}
+	assert.True(t, createCalled, "expected CreateUploadSession to be called after expiration")
+	assert.True(t, uploadFromCalled, "expected UploadFromSession to be called after fresh session creation")
+	assert.Equal(t, "fresh-item", result.Item.ID)
 }
 
 func TestTransferManager_DriveID_InLogs(t *testing.T) {
@@ -760,14 +635,10 @@ func TestTransferManager_DriveID_InLogs(t *testing.T) {
 	_, err := tm.DownloadToFile(context.Background(), driveID, "item1", targetPath, DownloadOpts{
 		RemoteHash: expectedHash,
 	})
-	if err != nil {
-		t.Fatalf("DownloadToFile: %v", err)
-	}
+	require.NoError(t, err, "DownloadToFile")
 
 	logOutput := buf.String()
-	if !strings.Contains(logOutput, "test-drive-id-123") {
-		t.Errorf("expected drive_id in log output, got:\n%s", logOutput)
-	}
+	assert.Contains(t, logOutput, "test-drive-id-123", "expected drive_id in log output")
 }
 
 func TestTransferManager_ParentDirPerms(t *testing.T) {
@@ -790,20 +661,14 @@ func TestTransferManager_ParentDirPerms(t *testing.T) {
 	_, err := tm.DownloadToFile(context.Background(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
 		RemoteHash: expectedHash,
 	})
-	if err != nil {
-		t.Fatalf("DownloadToFile: %v", err)
-	}
+	require.NoError(t, err, "DownloadToFile")
 
 	info, statErr := os.Stat(filepath.Join(base, "newdir"))
-	if statErr != nil {
-		t.Fatalf("Stat newdir: %v", statErr)
-	}
+	require.NoError(t, statErr, "Stat newdir")
 
 	// Fix #15: parent dir should be 0o700 (owner-only).
 	perms := info.Mode().Perm()
-	if perms != 0o700 {
-		t.Errorf("parent dir perms = %o, want 700", perms)
-	}
+	assert.Equal(t, os.FileMode(0o700), perms, "parent dir perms")
 }
 
 // ---------------------------------------------------------------------------
@@ -819,23 +684,18 @@ func TestSessionUpload_NonExpiredResumeError_DeletesSession(t *testing.T) {
 	localPath := filepath.Join(dir, "network-err.bin")
 	largeData := make([]byte, graph.SimpleUploadMaxSize+1)
 
-	if err := os.WriteFile(localPath, largeData, 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	require.NoError(t, os.WriteFile(localPath, largeData, 0o600))
 
 	fileHash, hashErr := ComputeQuickXorHash(localPath)
-	if hashErr != nil {
-		t.Fatalf("ComputeQuickXorHash: %v", hashErr)
-	}
+	require.NoError(t, hashErr, "ComputeQuickXorHash")
 
 	driveStr := driveid.New("d1").String()
-	if saveErr := store.Save(driveStr, localPath, &SessionRecord{
+	saveErr := store.Save(driveStr, localPath, &SessionRecord{
 		SessionURL: "https://upload.example.com/broken",
 		FileHash:   fileHash,
 		FileSize:   int64(len(largeData)),
-	}); saveErr != nil {
-		t.Fatalf("Save: %v", saveErr)
-	}
+	})
+	require.NoError(t, saveErr, "Save")
 
 	ul := &tmMockUploader{
 		resumeUploadFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
@@ -846,23 +706,15 @@ func TestSessionUpload_NonExpiredResumeError_DeletesSession(t *testing.T) {
 	tm := newTestTM(&tmSimpleDownloader{}, ul, store)
 
 	_, err := tm.UploadFile(context.Background(), driveid.New("d1"), "parent1", "network-err.bin", localPath, UploadOpts{})
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
+	require.Error(t, err)
 
-	if !strings.Contains(err.Error(), "network error") {
-		t.Errorf("error = %q, want to contain 'network error'", err.Error())
-	}
+	assert.Contains(t, err.Error(), "network error")
 
 	// B-208: session should be deleted even for non-expired errors.
 	rec, loadErr := store.Load(driveStr, localPath)
-	if loadErr != nil {
-		t.Fatalf("Load: %v", loadErr)
-	}
+	require.NoError(t, loadErr, "Load")
 
-	if rec != nil {
-		t.Error("expected session to be deleted after non-expired resume error")
-	}
+	assert.Nil(t, rec, "expected session to be deleted after non-expired resume error")
 }
 
 func TestSessionUpload_NonExpiredResumeError_FreshOnRetry(t *testing.T) {
@@ -874,23 +726,18 @@ func TestSessionUpload_NonExpiredResumeError_FreshOnRetry(t *testing.T) {
 	localPath := filepath.Join(dir, "retry.bin")
 	largeData := make([]byte, graph.SimpleUploadMaxSize+1)
 
-	if err := os.WriteFile(localPath, largeData, 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	require.NoError(t, os.WriteFile(localPath, largeData, 0o600))
 
 	fileHash, hashErr := ComputeQuickXorHash(localPath)
-	if hashErr != nil {
-		t.Fatalf("ComputeQuickXorHash: %v", hashErr)
-	}
+	require.NoError(t, hashErr, "ComputeQuickXorHash")
 
 	driveStr := driveid.New("d1").String()
-	if saveErr := store.Save(driveStr, localPath, &SessionRecord{
+	saveErr := store.Save(driveStr, localPath, &SessionRecord{
 		SessionURL: "https://upload.example.com/broken-retry",
 		FileHash:   fileHash,
 		FileSize:   int64(len(largeData)),
-	}); saveErr != nil {
-		t.Fatalf("Save: %v", saveErr)
-	}
+	})
+	require.NoError(t, saveErr, "Save")
 
 	callCount := 0
 
@@ -911,28 +758,18 @@ func TestSessionUpload_NonExpiredResumeError_FreshOnRetry(t *testing.T) {
 
 	// First call fails (resume returns non-expired error).
 	_, err := tm.UploadFile(context.Background(), driveid.New("d1"), "parent1", "retry.bin", localPath, UploadOpts{})
-	if err == nil {
-		t.Fatal("expected error on first call, got nil")
-	}
+	require.Error(t, err)
 
-	if callCount != 1 {
-		t.Errorf("resumeUpload call count = %d, want 1", callCount)
-	}
+	assert.Equal(t, 1, callCount)
 
 	// Second call should NOT attempt resume (session was deleted), should create fresh.
 	result, err := tm.UploadFile(context.Background(), driveid.New("d1"), "parent1", "retry.bin", localPath, UploadOpts{})
-	if err != nil {
-		t.Fatalf("UploadFile retry: %v", err)
-	}
+	require.NoError(t, err, "UploadFile retry")
 
 	// Resume should not be called again (session deleted, so no match).
-	if callCount != 1 {
-		t.Errorf("resumeUpload call count after retry = %d, want 1 (no new resume)", callCount)
-	}
+	assert.Equal(t, 1, callCount, "resumeUpload should not be called again after session deleted")
 
-	if result.Item.ID != "fresh-retry-item" {
-		t.Errorf("Item.ID = %q, want %q", result.Item.ID, "fresh-retry-item")
-	}
+	assert.Equal(t, "fresh-retry-item", result.Item.ID)
 }
 
 // ---------------------------------------------------------------------------
@@ -945,13 +782,9 @@ func TestDownloadToFile_EmptyTargetPath(t *testing.T) {
 	tm := newTestTM(&tmSimpleDownloader{}, &tmMockUploader{}, nil)
 
 	_, err := tm.DownloadToFile(context.Background(), driveid.New("d1"), "item1", "", DownloadOpts{})
-	if err == nil {
-		t.Fatal("expected error for empty target path, got nil")
-	}
+	require.Error(t, err)
 
-	if !strings.Contains(err.Error(), "target path must not be empty") {
-		t.Errorf("error = %q, want to contain 'target path must not be empty'", err.Error())
-	}
+	assert.Contains(t, err.Error(), "target path must not be empty")
 }
 
 func TestDownloadToFile_EmptyItemID(t *testing.T) {
@@ -960,13 +793,9 @@ func TestDownloadToFile_EmptyItemID(t *testing.T) {
 	tm := newTestTM(&tmSimpleDownloader{}, &tmMockUploader{}, nil)
 
 	_, err := tm.DownloadToFile(context.Background(), driveid.New("d1"), "", "/tmp/file.txt", DownloadOpts{})
-	if err == nil {
-		t.Fatal("expected error for empty item ID, got nil")
-	}
+	require.Error(t, err)
 
-	if !strings.Contains(err.Error(), "item ID must not be empty") {
-		t.Errorf("error = %q, want to contain 'item ID must not be empty'", err.Error())
-	}
+	assert.Contains(t, err.Error(), "item ID must not be empty")
 }
 
 func TestUploadFile_EmptyName(t *testing.T) {
@@ -975,13 +804,9 @@ func TestUploadFile_EmptyName(t *testing.T) {
 	tm := newTestTM(&tmSimpleDownloader{}, &tmMockUploader{}, nil)
 
 	_, err := tm.UploadFile(context.Background(), driveid.New("d1"), "parent1", "", "/tmp/file.txt", UploadOpts{})
-	if err == nil {
-		t.Fatal("expected error for empty name, got nil")
-	}
+	require.Error(t, err)
 
-	if !strings.Contains(err.Error(), "file name must not be empty") {
-		t.Errorf("error = %q, want to contain 'file name must not be empty'", err.Error())
-	}
+	assert.Contains(t, err.Error(), "file name must not be empty")
 }
 
 func TestUploadFile_EmptyParentID(t *testing.T) {
@@ -990,13 +815,9 @@ func TestUploadFile_EmptyParentID(t *testing.T) {
 	tm := newTestTM(&tmSimpleDownloader{}, &tmMockUploader{}, nil)
 
 	_, err := tm.UploadFile(context.Background(), driveid.New("d1"), "", "file.txt", "/tmp/file.txt", UploadOpts{})
-	if err == nil {
-		t.Fatal("expected error for empty parent ID, got nil")
-	}
+	require.Error(t, err)
 
-	if !strings.Contains(err.Error(), "parent ID must not be empty") {
-		t.Errorf("error = %q, want to contain 'parent ID must not be empty'", err.Error())
-	}
+	assert.Contains(t, err.Error(), "parent ID must not be empty")
 }
 
 func TestUploadFile_EmptyLocalPath(t *testing.T) {
@@ -1005,13 +826,9 @@ func TestUploadFile_EmptyLocalPath(t *testing.T) {
 	tm := newTestTM(&tmSimpleDownloader{}, &tmMockUploader{}, nil)
 
 	_, err := tm.UploadFile(context.Background(), driveid.New("d1"), "parent1", "file.txt", "", UploadOpts{})
-	if err == nil {
-		t.Fatal("expected error for empty local path, got nil")
-	}
+	require.Error(t, err)
 
-	if !strings.Contains(err.Error(), "local path must not be empty") {
-		t.Errorf("error = %q, want to contain 'local path must not be empty'", err.Error())
-	}
+	assert.Contains(t, err.Error(), "local path must not be empty")
 }
 
 // ---------------------------------------------------------------------------
@@ -1025,33 +842,27 @@ func TestRemovePartialIfNotCanceled(t *testing.T) {
 		t.Parallel()
 
 		path := filepath.Join(t.TempDir(), "test.partial")
-		if err := os.WriteFile(path, []byte("data"), 0o600); err != nil {
-			t.Fatalf("WriteFile: %v", err)
-		}
+		require.NoError(t, os.WriteFile(path, []byte("data"), 0o600))
 
 		removePartialIfNotCanceled(context.Background(), path)
 
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Errorf("expected file to be removed, stat err = %v", err)
-		}
+		_, err := os.Stat(path)
+		assert.True(t, os.IsNotExist(err), "expected file to be removed")
 	})
 
 	t.Run("preserves file when context is canceled", func(t *testing.T) {
 		t.Parallel()
 
 		path := filepath.Join(t.TempDir(), "test.partial")
-		if err := os.WriteFile(path, []byte("data"), 0o600); err != nil {
-			t.Fatalf("WriteFile: %v", err)
-		}
+		require.NoError(t, os.WriteFile(path, []byte("data"), 0o600))
 
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
 		removePartialIfNotCanceled(ctx, path)
 
-		if _, err := os.Stat(path); err != nil {
-			t.Errorf("expected file to be preserved, stat err = %v", err)
-		}
+		_, err := os.Stat(path)
+		assert.NoError(t, err, "expected file to be preserved")
 	})
 
 	t.Run("no panic for nonexistent file", func(t *testing.T) {
@@ -1085,32 +896,22 @@ func TestDownloadToFile_RenameFailure_PreservesPartial(t *testing.T) {
 	// Make the target path a directory so os.Rename fails with EISDIR when
 	// trying to rename .partial (a file) over it.
 	targetPath := filepath.Join(dir, "target_is_dir")
-	if err := os.Mkdir(targetPath, 0o700); err != nil {
-		t.Fatalf("Mkdir: %v", err)
-	}
+	require.NoError(t, os.Mkdir(targetPath, 0o700))
 
 	_, err := tm.DownloadToFile(context.Background(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
 		RemoteHash: expectedHash,
 	})
-	if err == nil {
-		t.Fatal("expected error from rename, got nil")
-	}
+	require.Error(t, err)
 
-	if !strings.Contains(err.Error(), "renaming partial") {
-		t.Errorf("error = %q, want to contain 'renaming partial'", err.Error())
-	}
+	assert.Contains(t, err.Error(), "renaming partial")
 
 	// .partial should still exist with correct content.
 	partialPath := targetPath + ".partial"
 
 	got, readErr := os.ReadFile(partialPath)
-	if readErr != nil {
-		t.Fatalf("expected .partial to be preserved, ReadFile error: %v", readErr)
-	}
+	require.NoError(t, readErr, "expected .partial to be preserved")
 
-	if !bytes.Equal(got, content) {
-		t.Errorf("partial content = %q, want %q", got, content)
-	}
+	assert.Equal(t, content, got, "partial content mismatch")
 }
 
 // ---------------------------------------------------------------------------
@@ -1124,9 +925,7 @@ func TestSessionUpload_SaveFailure_StillCompletes(t *testing.T) {
 	store := NewSessionStore(dir, slog.Default())
 
 	// Pre-create the upload-sessions directory so we can make it read-only.
-	if err := os.MkdirAll(store.dir, 0o700); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
+	require.NoError(t, os.MkdirAll(store.dir, 0o700))
 
 	ul := &tmMockUploader{
 		createUploadSessionFn: func(_ context.Context, _ driveid.ID, _, _ string, _ int64, _ time.Time) (*graph.UploadSession, error) {
@@ -1140,27 +939,19 @@ func TestSessionUpload_SaveFailure_StillCompletes(t *testing.T) {
 	tm := newTestTM(&tmSimpleDownloader{}, ul, store)
 
 	// Make the store directory read-only so Save fails.
-	if err := os.Chmod(store.dir, 0o444); err != nil {
-		t.Fatalf("Chmod: %v", err)
-	}
+	require.NoError(t, os.Chmod(store.dir, 0o444))
 
 	t.Cleanup(func() { os.Chmod(store.dir, 0o700) })
 
 	localPath := filepath.Join(dir, "save-fail.bin")
 	largeData := make([]byte, graph.SimpleUploadMaxSize+1)
 
-	if err := os.WriteFile(localPath, largeData, 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	require.NoError(t, os.WriteFile(localPath, largeData, 0o600))
 
 	result, err := tm.UploadFile(context.Background(), driveid.New("d1"), "parent1", "save-fail.bin", localPath, UploadOpts{})
-	if err != nil {
-		t.Fatalf("UploadFile should succeed despite Save failure: %v", err)
-	}
+	require.NoError(t, err, "UploadFile should succeed despite Save failure")
 
-	if result.Item.ID != "save-fail-ok" {
-		t.Errorf("Item.ID = %q, want %q", result.Item.ID, "save-fail-ok")
-	}
+	assert.Equal(t, "save-fail-ok", result.Item.ID)
 }
 
 // ---------------------------------------------------------------------------
@@ -1176,19 +967,13 @@ func TestUploadFile_StatFailure_WrapsError(t *testing.T) {
 		context.Background(), driveid.New("d1"), "parent1", "file.txt",
 		"/nonexistent/path/file.txt", UploadOpts{},
 	)
-	if err == nil {
-		t.Fatal("expected error for nonexistent file, got nil")
-	}
+	require.Error(t, err)
 
 	// Error should wrap os.ErrNotExist and be discoverable via errors.Is.
-	if !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("expected errors.Is(err, os.ErrNotExist), got: %v", err)
-	}
+	assert.True(t, errors.Is(err, os.ErrNotExist), "expected errors.Is(err, os.ErrNotExist)")
 
 	// Error should contain "stat" context.
-	if !strings.Contains(err.Error(), "stat") {
-		t.Errorf("error = %q, want to contain 'stat'", err.Error())
-	}
+	assert.Contains(t, err.Error(), "stat")
 }
 
 // ---------------------------------------------------------------------------
@@ -1214,35 +999,23 @@ func TestDownloadToFile_SimpleDownloader_OverwritesPartial(t *testing.T) {
 	partialPath := targetPath + ".partial"
 
 	// Pre-create a .partial file with old content — should be overwritten.
-	if err := os.WriteFile(partialPath, []byte("old-partial-data-that-should-go-away"), 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	require.NoError(t, os.WriteFile(partialPath, []byte("old-partial-data-that-should-go-away"), 0o600))
 
 	result, err := tm.DownloadToFile(context.Background(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
 		RemoteHash: expectedHash,
 	})
-	if err != nil {
-		t.Fatalf("DownloadToFile: %v", err)
-	}
+	require.NoError(t, err, "DownloadToFile")
 
 	// Final file should contain fresh content, not concatenated with old.
 	got, readErr := os.ReadFile(targetPath)
-	if readErr != nil {
-		t.Fatalf("ReadFile: %v", readErr)
-	}
+	require.NoError(t, readErr, "ReadFile")
 
-	if !bytes.Equal(got, freshContent) {
-		t.Errorf("file content = %q, want %q", got, freshContent)
-	}
-
-	if result.LocalHash != expectedHash {
-		t.Errorf("LocalHash = %q, want %q", result.LocalHash, expectedHash)
-	}
+	assert.Equal(t, freshContent, got)
+	assert.Equal(t, expectedHash, result.LocalHash)
 
 	// .partial should not exist after successful download.
-	if _, statErr := os.Stat(partialPath); !os.IsNotExist(statErr) {
-		t.Errorf("expected .partial to be removed, stat err = %v", statErr)
-	}
+	_, statErr := os.Stat(partialPath)
+	assert.True(t, os.IsNotExist(statErr), "expected .partial to be removed")
 }
 
 func TestFreshDownload_FilePermissions(t *testing.T) {
@@ -1264,19 +1037,13 @@ func TestFreshDownload_FilePermissions(t *testing.T) {
 	_, err := tm.DownloadToFile(context.Background(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
 		RemoteHash: expectedHash,
 	})
-	if err != nil {
-		t.Fatalf("DownloadToFile: %v", err)
-	}
+	require.NoError(t, err, "DownloadToFile")
 
 	info, statErr := os.Stat(targetPath)
-	if statErr != nil {
-		t.Fatalf("Stat: %v", statErr)
-	}
+	require.NoError(t, statErr, "Stat")
 
 	perms := info.Mode().Perm()
-	if perms != 0o600 {
-		t.Errorf("file perms = %o, want 600", perms)
-	}
+	assert.Equal(t, os.FileMode(0o600), perms, "file perms")
 }
 
 // TestTransferManager_ResumeDownload_PartialDeletedBeforeOpen verifies that
@@ -1299,7 +1066,7 @@ func TestTransferManager_ResumeDownload_PartialDeletedBeforeOpen(t *testing.T) {
 		// DownloadRange is set so the downloader satisfies RangeDownloader,
 		// but should NOT be called since the .partial doesn't exist.
 		downloadRangeFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer, _ int64) (int64, error) {
-			t.Fatal("DownloadRange should not be called when .partial is absent")
+			require.Fail(t, "DownloadRange should not be called when .partial is absent")
 			return 0, nil
 		},
 	}
@@ -1313,17 +1080,10 @@ func TestTransferManager_ResumeDownload_PartialDeletedBeforeOpen(t *testing.T) {
 	result, err := tm.DownloadToFile(context.Background(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
 		RemoteHash: expectedHash,
 	})
-	if err != nil {
-		t.Fatalf("DownloadToFile: %v", err)
-	}
+	require.NoError(t, err, "DownloadToFile")
 
-	if !freshCalled {
-		t.Error("expected fresh download to be called")
-	}
-
-	if result.LocalHash != expectedHash {
-		t.Errorf("LocalHash = %q, want %q", result.LocalHash, expectedHash)
-	}
+	assert.True(t, freshCalled, "expected fresh download to be called")
+	assert.Equal(t, expectedHash, result.LocalHash)
 }
 
 // TestDownloadToFile_EmptyRemoteHash_HashVerifiedFalse verifies that when
@@ -1347,27 +1107,17 @@ func TestDownloadToFile_EmptyRemoteHash_HashVerifiedFalse(t *testing.T) {
 	result, err := tm.DownloadToFile(context.Background(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
 		RemoteHash: "", // empty — no hash available from remote
 	})
-	if err != nil {
-		t.Fatalf("DownloadToFile: %v", err)
-	}
+	require.NoError(t, err, "DownloadToFile")
 
 	// Download should succeed.
-	if result.LocalHash == "" {
-		t.Error("LocalHash should not be empty")
-	}
+	assert.NotEmpty(t, result.LocalHash, "LocalHash should not be empty")
 
 	// HashVerified should be false — no verification occurred.
-	if result.HashVerified {
-		t.Error("HashVerified = true, want false when remote hash is empty")
-	}
+	assert.False(t, result.HashVerified, "HashVerified should be false when remote hash is empty")
 
 	// File should exist with correct content.
 	got, readErr := os.ReadFile(targetPath)
-	if readErr != nil {
-		t.Fatalf("ReadFile: %v", readErr)
-	}
+	require.NoError(t, readErr, "ReadFile")
 
-	if !bytes.Equal(got, content) {
-		t.Error("file content mismatch")
-	}
+	assert.Equal(t, content, got, "file content mismatch")
 }

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -46,36 +45,25 @@ func TestFindConflict(t *testing.T) {
 
 			got, err := findConflict(conflicts, tt.idOrPath)
 			if tt.wantErr {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
+				require.Error(t, err)
 
-				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
-					t.Errorf("error = %q, want to contain %q", err.Error(), tt.errContains)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
 				}
 
 				return
 			}
 
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
+			require.NoError(t, err)
 
 			if tt.wantNil {
-				if got != nil {
-					t.Errorf("expected nil, got %+v", got)
-				}
+				assert.Nil(t, got)
 
 				return
 			}
 
-			if got == nil {
-				t.Fatal("expected non-nil result, got nil")
-			}
-
-			if got.ID != tt.wantID {
-				t.Errorf("ID = %q, want %q", got.ID, tt.wantID)
-			}
+			require.NotNil(t, got)
+			assert.Equal(t, tt.wantID, got.ID)
 		})
 	}
 }
@@ -143,7 +131,7 @@ func TestResolveEachConflict_EmptyConflicts(t *testing.T) {
 	cc := newTestCLIContext(&buf)
 
 	err := resolveEachConflict(cc, nil, "keep_both", false, func(_, _ string) error {
-		t.Fatal("should not be called")
+		require.Fail(t, "should not be called")
 		return nil
 	})
 	require.NoError(t, err)

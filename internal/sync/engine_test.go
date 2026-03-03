@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -155,9 +154,7 @@ func newTestEngine(t *testing.T, mock *engineMockClient) (*Engine, string) {
 	dbPath := filepath.Join(tmpDir, "test.db")
 	syncRoot := filepath.Join(tmpDir, "sync")
 
-	if err := os.MkdirAll(syncRoot, 0o755); err != nil {
-		t.Fatalf("creating sync root: %v", err)
-	}
+	require.NoError(t, os.MkdirAll(syncRoot, 0o755), "creating sync root")
 
 	logger := testLogger(t)
 	driveID := driveid.New(engineTestDriveID)
@@ -172,17 +169,13 @@ func newTestEngine(t *testing.T, mock *engineMockClient) (*Engine, string) {
 		Uploads:   mock,
 		Logger:    logger,
 	})
-	if err != nil {
-		t.Fatalf("NewEngine: %v", err)
-	}
+	require.NoError(t, err, "NewEngine")
 
 	// Override executor sleep to be instant in tests.
 	eng.execCfg.sleepFunc = func(_ context.Context, _ time.Duration) error { return nil }
 
 	t.Cleanup(func() {
-		if err := eng.Close(); err != nil {
-			t.Errorf("Engine.Close: %v", err)
-		}
+		assert.NoError(t, eng.Close(), "Engine.Close")
 	})
 
 	return eng, syncRoot
@@ -201,13 +194,8 @@ func writeLocalFile(t *testing.T, syncRoot, relPath, content string) {
 	t.Helper()
 
 	absPath := filepath.Join(syncRoot, relPath)
-	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-
-	if err := os.WriteFile(absPath, []byte(content), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	require.NoError(t, os.MkdirAll(filepath.Dir(absPath), 0o755), "MkdirAll")
+	require.NoError(t, os.WriteFile(absPath, []byte(content), 0o644), "WriteFile")
 }
 
 // seedBaseline commits outcomes and an optional delta token to the baseline,
@@ -216,15 +204,11 @@ func seedBaseline(t *testing.T, mgr *BaselineManager, ctx context.Context, outco
 	t.Helper()
 
 	for i := range outcomes {
-		if err := mgr.CommitOutcome(ctx, &outcomes[i]); err != nil {
-			t.Fatalf("seed CommitOutcome[%d]: %v", i, err)
-		}
+		require.NoError(t, mgr.CommitOutcome(ctx, &outcomes[i]), "seed CommitOutcome[%d]", i)
 	}
 
 	if deltaToken != "" {
-		if err := mgr.CommitDeltaToken(ctx, deltaToken, engineTestDriveID, "", engineTestDriveID); err != nil {
-			t.Fatalf("seed CommitDeltaToken: %v", err)
-		}
+		require.NoError(t, mgr.CommitDeltaToken(ctx, deltaToken, engineTestDriveID, "", engineTestDriveID), "seed CommitDeltaToken")
 	}
 }
 
@@ -274,24 +258,16 @@ func TestRunOnce_NoChanges(t *testing.T) {
 	ctx := context.Background()
 
 	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOpts{})
-	if err != nil {
-		t.Fatalf("RunOnce: %v", err)
-	}
+	require.NoError(t, err, "RunOnce")
 
-	if report.Mode != SyncBidirectional {
-		t.Errorf("mode = %v, want bidirectional", report.Mode)
-	}
+	assert.Equal(t, SyncBidirectional, report.Mode)
 
 	total := report.Downloads + report.Uploads + report.LocalDeletes +
 		report.RemoteDeletes + report.FolderCreates + report.Moves +
 		report.Conflicts + report.SyncedUpdates + report.Cleanups
-	if total != 0 {
-		t.Errorf("expected zero actions, got total = %d", total)
-	}
-
-	if report.Succeeded != 0 || report.Failed != 0 {
-		t.Errorf("succeeded=%d failed=%d, want both 0", report.Succeeded, report.Failed)
-	}
+	assert.Equal(t, 0, total, "expected zero actions")
+	assert.Equal(t, 0, report.Succeeded, "succeeded")
+	assert.Equal(t, 0, report.Failed, "failed")
 }
 
 func TestRunOnce_DownloadOnly_SkipsLocalScan(t *testing.T) {
@@ -312,14 +288,10 @@ func TestRunOnce_DownloadOnly_SkipsLocalScan(t *testing.T) {
 	ctx := context.Background()
 
 	report, err := eng.RunOnce(ctx, SyncDownloadOnly, RunOpts{})
-	if err != nil {
-		t.Fatalf("RunOnce: %v", err)
-	}
+	require.NoError(t, err, "RunOnce")
 
 	// The local file should not appear in uploads because local scan was skipped.
-	if report.Uploads != 0 {
-		t.Errorf("uploads = %d, want 0 (local scan should be skipped in download-only mode)", report.Uploads)
-	}
+	assert.Equal(t, 0, report.Uploads, "local scan should be skipped in download-only mode")
 }
 
 func TestRunOnce_UploadOnly_SkipsDelta(t *testing.T) {
@@ -337,13 +309,8 @@ func TestRunOnce_UploadOnly_SkipsDelta(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := eng.RunOnce(ctx, SyncUploadOnly, RunOpts{})
-	if err != nil {
-		t.Fatalf("RunOnce: %v", err)
-	}
-
-	if deltaCalled {
-		t.Error("Delta was called in upload-only mode; should have been skipped")
-	}
+	require.NoError(t, err, "RunOnce")
+	assert.False(t, deltaCalled, "Delta should not be called in upload-only mode")
 }
 
 func TestRunOnce_Bidirectional_FullCycle(t *testing.T) {
@@ -380,36 +347,22 @@ func TestRunOnce_Bidirectional_FullCycle(t *testing.T) {
 	ctx := context.Background()
 
 	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOpts{})
-	if err != nil {
-		t.Fatalf("RunOnce: %v", err)
-	}
+	require.NoError(t, err, "RunOnce")
 
 	// Expect at least one download (remote.txt) and one upload (local.txt).
-	if report.Downloads < 1 {
-		t.Errorf("downloads = %d, want >= 1", report.Downloads)
-	}
-
-	if report.Uploads < 1 {
-		t.Errorf("uploads = %d, want >= 1", report.Uploads)
-	}
-
-	if report.Failed != 0 {
-		t.Errorf("failed = %d, want 0; errors: %v", report.Failed, report.Errors)
-	}
+	assert.GreaterOrEqual(t, report.Downloads, 1, "downloads")
+	assert.GreaterOrEqual(t, report.Uploads, 1, "uploads")
+	assert.Equal(t, 0, report.Failed, "failed; errors: %v", report.Errors)
 
 	// Verify baseline was updated: reload and check entries exist.
 	bl, err := eng.baseline.Load(ctx)
-	if err != nil {
-		t.Fatalf("Load baseline: %v", err)
-	}
+	require.NoError(t, err, "Load baseline")
 
-	if _, ok := bl.ByPath["remote.txt"]; !ok {
-		t.Error("remote.txt not in baseline after sync")
-	}
+	_, ok := bl.ByPath["remote.txt"]
+	assert.True(t, ok, "remote.txt not in baseline after sync")
 
-	if _, ok := bl.ByPath["local.txt"]; !ok {
-		t.Error("local.txt not in baseline after sync")
-	}
+	_, ok = bl.ByPath["local.txt"]
+	assert.True(t, ok, "local.txt not in baseline after sync")
 }
 
 func TestRunOnce_DryRun_NoExecution(t *testing.T) {
@@ -438,35 +391,18 @@ func TestRunOnce_DryRun_NoExecution(t *testing.T) {
 	ctx := context.Background()
 
 	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOpts{DryRun: true})
-	if err != nil {
-		t.Fatalf("RunOnce: %v", err)
-	}
+	require.NoError(t, err, "RunOnce")
 
-	if !report.DryRun {
-		t.Error("report.DryRun = false, want true")
-	}
-
-	if report.Downloads < 1 {
-		t.Errorf("downloads = %d, want >= 1 (plan should be computed)", report.Downloads)
-	}
-
-	if executorCalled {
-		t.Error("executor was called during dry-run")
-	}
-
-	if report.Succeeded != 0 || report.Failed != 0 {
-		t.Errorf("succeeded=%d failed=%d, want both 0 for dry-run", report.Succeeded, report.Failed)
-	}
+	assert.True(t, report.DryRun, "report.DryRun")
+	assert.GreaterOrEqual(t, report.Downloads, 1, "plan should be computed")
+	assert.False(t, executorCalled, "executor should not be called during dry-run")
+	assert.Equal(t, 0, report.Succeeded, "succeeded")
+	assert.Equal(t, 0, report.Failed, "failed")
 
 	// Verify baseline is unchanged (no commit in dry-run).
 	bl, err := eng.baseline.Load(ctx)
-	if err != nil {
-		t.Fatalf("Load baseline: %v", err)
-	}
-
-	if len(bl.ByPath) != 0 {
-		t.Errorf("baseline has %d entries, want 0 (dry-run should not commit)", len(bl.ByPath))
-	}
+	require.NoError(t, err, "Load baseline")
+	assert.Empty(t, bl.ByPath, "dry-run should not commit")
 }
 
 func TestRunOnce_BigDelete_WithoutForce(t *testing.T) {
@@ -499,9 +435,7 @@ func TestRunOnce_BigDelete_WithoutForce(t *testing.T) {
 	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "old-token")
 
 	_, err := eng.RunOnce(ctx, SyncUploadOnly, RunOpts{})
-	if !errors.Is(err, ErrBigDeleteTriggered) {
-		t.Errorf("expected ErrBigDeleteTriggered, got: %v", err)
-	}
+	assert.ErrorIs(t, err, ErrBigDeleteTriggered)
 }
 
 func TestRunOnce_BigDelete_WithForce(t *testing.T) {
@@ -533,13 +467,8 @@ func TestRunOnce_BigDelete_WithForce(t *testing.T) {
 	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "old-token")
 
 	report, err := eng.RunOnce(ctx, SyncUploadOnly, RunOpts{Force: true})
-	if err != nil {
-		t.Fatalf("RunOnce with force: %v", err)
-	}
-
-	if report.RemoteDeletes < 1 {
-		t.Errorf("remote_deletes = %d, want >= 1 (force should bypass big-delete)", report.RemoteDeletes)
-	}
+	require.NoError(t, err, "RunOnce with force")
+	assert.GreaterOrEqual(t, report.RemoteDeletes, 1, "force should bypass big-delete")
 }
 
 func TestRunOnce_ExecutorPartialFailure(t *testing.T) {
@@ -577,28 +506,18 @@ func TestRunOnce_ExecutorPartialFailure(t *testing.T) {
 	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOpts{})
 	// DAG executor handles individual failures gracefully — RunOnce succeeds
 	// but reports the failure in Stats.
-	if err != nil {
-		t.Fatalf("RunOnce: %v", err)
-	}
+	require.NoError(t, err, "RunOnce")
 
 	// At least 1 succeeded and at least 1 failed.
-	if report.Succeeded < 1 {
-		t.Errorf("succeeded = %d, want >= 1", report.Succeeded)
-	}
-
-	if report.Failed < 1 {
-		t.Errorf("failed = %d, want >= 1", report.Failed)
-	}
+	assert.GreaterOrEqual(t, report.Succeeded, 1, "succeeded")
+	assert.GreaterOrEqual(t, report.Failed, 1, "failed")
 
 	// Verify the successful file is in baseline.
 	bl, loadErr := eng.baseline.Load(ctx)
-	if loadErr != nil {
-		t.Fatalf("Load: %v", loadErr)
-	}
+	require.NoError(t, loadErr, "Load")
 
-	if _, ok := bl.ByPath["good.txt"]; !ok {
-		t.Error("good.txt not in baseline after partial commit")
-	}
+	_, ok := bl.ByPath["good.txt"]
+	assert.True(t, ok, "good.txt not in baseline after partial commit")
 }
 
 func TestRunOnce_ContextCancellation(t *testing.T) {
@@ -615,9 +534,7 @@ func TestRunOnce_ContextCancellation(t *testing.T) {
 	cancel() // pre-cancel
 
 	_, err := eng.RunOnce(ctx, SyncBidirectional, RunOpts{})
-	if err == nil {
-		t.Fatal("expected error from canceled context")
-	}
+	require.Error(t, err, "expected error from canceled context")
 }
 
 func TestRunOnce_DeltaTokenPersisted(t *testing.T) {
@@ -645,19 +562,12 @@ func TestRunOnce_DeltaTokenPersisted(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := eng.RunOnce(ctx, SyncBidirectional, RunOpts{})
-	if err != nil {
-		t.Fatalf("RunOnce: %v", err)
-	}
+	require.NoError(t, err, "RunOnce")
 
 	// Verify delta token was saved.
 	token, err := eng.baseline.GetDeltaToken(ctx, engineTestDriveID, "")
-	if err != nil {
-		t.Fatalf("GetDeltaToken: %v", err)
-	}
-
-	if token != "new-delta-token" {
-		t.Errorf("delta token = %q, want %q", token, "new-delta-token")
-	}
+	require.NoError(t, err, "GetDeltaToken")
+	assert.Equal(t, "new-delta-token", token)
 }
 
 func TestRunOnce_BaselineUpdatedAfterCycle(t *testing.T) {
@@ -685,28 +595,16 @@ func TestRunOnce_BaselineUpdatedAfterCycle(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := eng.RunOnce(ctx, SyncBidirectional, RunOpts{})
-	if err != nil {
-		t.Fatalf("RunOnce: %v", err)
-	}
+	require.NoError(t, err, "RunOnce")
 
 	// Reload and verify.
 	bl, err := eng.baseline.Load(ctx)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	require.NoError(t, err, "Load")
 
 	entry, ok := bl.ByPath["alpha.txt"]
-	if !ok {
-		t.Fatal("alpha.txt not in baseline")
-	}
-
-	if entry.ItemID != "item-a" {
-		t.Errorf("ItemID = %q, want %q", entry.ItemID, "item-a")
-	}
-
-	if entry.DriveID != driveID {
-		t.Errorf("DriveID = %v, want %v", entry.DriveID, driveID)
-	}
+	require.True(t, ok, "alpha.txt not in baseline")
+	assert.Equal(t, "item-a", entry.ItemID)
+	assert.Equal(t, driveID, entry.DriveID)
 }
 
 func TestNewEngine_InvalidDBPath(t *testing.T) {
@@ -725,9 +623,7 @@ func TestNewEngine_InvalidDBPath(t *testing.T) {
 		Logger:    logger,
 	})
 
-	if err == nil {
-		t.Fatal("expected error for invalid DB path, got nil")
-	}
+	require.Error(t, err, "expected error for invalid DB path")
 }
 
 func TestRunOnce_DeltaExpired_AutoRetry(t *testing.T) {
@@ -765,20 +661,14 @@ func TestRunOnce_DeltaExpired_AutoRetry(t *testing.T) {
 	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "stale-token")
 
 	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOpts{})
-	if err != nil {
-		t.Fatalf("RunOnce: %v", err)
-	}
+	require.NoError(t, err, "RunOnce")
 
 	// Delta should have been called twice (expired + retry).
-	if callCount != 2 {
-		t.Errorf("delta call count = %d, want 2", callCount)
-	}
+	assert.Equal(t, 2, callCount, "delta call count")
 
 	// Report should reflect no content changes (only root in delta).
 	total := report.Downloads + report.Uploads
-	if total != 0 {
-		t.Errorf("downloads+uploads = %d, want 0", total)
-	}
+	assert.Equal(t, 0, total, "downloads+uploads")
 }
 
 // TestRunOnce_EmptyPlan_NoPanic verifies that when changes exist but all
@@ -839,16 +729,11 @@ func TestRunOnce_EmptyPlan_NoPanic(t *testing.T) {
 	case <-done:
 		// Good — completed.
 	case <-time.After(10 * time.Second):
-		t.Fatal("RunOnce deadlocked on empty action plan")
+		require.Fail(t, "RunOnce deadlocked on empty action plan")
 	}
 
-	if runErr != nil {
-		t.Fatalf("RunOnce: %v", runErr)
-	}
-
-	if report.Failed != 0 {
-		t.Errorf("failed = %d, want 0", report.Failed)
-	}
+	require.NoError(t, runErr, "RunOnce")
+	assert.Equal(t, 0, report.Failed, "failed")
 }
 
 // TestRunOnce_DeltaTokenNotCommittedOnFailure verifies that when some actions
@@ -882,24 +767,14 @@ func TestRunOnce_DeltaTokenNotCommittedOnFailure(t *testing.T) {
 	seedBaseline(t, eng.baseline, ctx, nil, "old-token")
 
 	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOpts{})
-	if err != nil {
-		t.Fatalf("RunOnce: %v", err)
-	}
-
-	if report.Failed < 1 {
-		t.Fatalf("failed = %d, want >= 1", report.Failed)
-	}
+	require.NoError(t, err, "RunOnce")
+	require.GreaterOrEqual(t, report.Failed, 1, "failed")
 
 	// The delta token should NOT have been advanced — it should still be
 	// the old value we seeded.
 	token, tokenErr := eng.baseline.GetDeltaToken(ctx, engineTestDriveID, "")
-	if tokenErr != nil {
-		t.Fatalf("GetDeltaToken: %v", tokenErr)
-	}
-
-	if token != "old-token" {
-		t.Errorf("delta token = %q, want %q (should not advance on failure)", token, "old-token")
-	}
+	require.NoError(t, tokenErr, "GetDeltaToken")
+	assert.Equal(t, "old-token", token, "should not advance on failure")
 }
 
 func TestResolveSafetyConfig_Default(t *testing.T) {
@@ -909,13 +784,8 @@ func TestResolveSafetyConfig_Default(t *testing.T) {
 	cfg := eng.resolveSafetyConfig(RunOpts{})
 
 	def := DefaultSafetyConfig()
-	if cfg.BigDeleteMaxCount != def.BigDeleteMaxCount {
-		t.Errorf("BigDeleteMaxCount = %d, want %d", cfg.BigDeleteMaxCount, def.BigDeleteMaxCount)
-	}
-
-	if cfg.BigDeleteMaxPercent != def.BigDeleteMaxPercent {
-		t.Errorf("BigDeleteMaxPercent = %f, want %f", cfg.BigDeleteMaxPercent, def.BigDeleteMaxPercent)
-	}
+	assert.Equal(t, def.BigDeleteMaxCount, cfg.BigDeleteMaxCount)
+	assert.Equal(t, def.BigDeleteMaxPercent, cfg.BigDeleteMaxPercent)
 }
 
 func TestResolveSafetyConfig_Force(t *testing.T) {
@@ -924,9 +794,7 @@ func TestResolveSafetyConfig_Force(t *testing.T) {
 	eng := &Engine{}
 	cfg := eng.resolveSafetyConfig(RunOpts{Force: true})
 
-	if cfg.BigDeleteMaxCount != forceSafetyMax {
-		t.Errorf("BigDeleteMaxCount = %d, want %d", cfg.BigDeleteMaxCount, forceSafetyMax)
-	}
+	assert.Equal(t, forceSafetyMax, cfg.BigDeleteMaxCount)
 }
 
 // ---------------------------------------------------------------------------
@@ -964,28 +832,16 @@ func TestResolveConflict_KeepBoth(t *testing.T) {
 
 	// Get conflict ID.
 	conflicts, err := eng.ListConflicts(ctx)
-	if err != nil {
-		t.Fatalf("ListConflicts: %v", err)
-	}
-
-	if len(conflicts) != 1 {
-		t.Fatalf("expected 1 conflict, got %d", len(conflicts))
-	}
+	require.NoError(t, err, "ListConflicts")
+	require.Len(t, conflicts, 1)
 
 	// Resolve as keep_both.
-	if resolveErr := eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepBoth); resolveErr != nil {
-		t.Fatalf("ResolveConflict: %v", resolveErr)
-	}
+	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepBoth), "ResolveConflict")
 
 	// Verify it's no longer unresolved.
 	remaining, err := eng.ListConflicts(ctx)
-	if err != nil {
-		t.Fatalf("ListConflicts after resolve: %v", err)
-	}
-
-	if len(remaining) != 0 {
-		t.Errorf("expected 0 unresolved conflicts, got %d", len(remaining))
-	}
+	require.NoError(t, err, "ListConflicts after resolve")
+	assert.Empty(t, remaining, "expected 0 unresolved conflicts")
 }
 
 func TestResolveConflict_NotFound(t *testing.T) {
@@ -1001,9 +857,7 @@ func TestResolveConflict_NotFound(t *testing.T) {
 	ctx := context.Background()
 
 	err := eng.ResolveConflict(ctx, "nonexistent-id", ResolutionKeepBoth)
-	if err == nil {
-		t.Fatal("expected error for nonexistent conflict, got nil")
-	}
+	require.Error(t, err, "expected error for nonexistent conflict")
 }
 
 func TestResolveConflict_UnknownStrategy(t *testing.T) {
@@ -1034,14 +888,10 @@ func TestResolveConflict_UnknownStrategy(t *testing.T) {
 	seedBaseline(t, eng.baseline, ctx, outcomes, "")
 
 	conflicts, err := eng.ListConflicts(ctx)
-	if err != nil {
-		t.Fatalf("ListConflicts: %v", err)
-	}
+	require.NoError(t, err, "ListConflicts")
 
 	err = eng.ResolveConflict(ctx, conflicts[0].ID, "invalid_strategy")
-	if err == nil {
-		t.Fatal("expected error for unknown strategy, got nil")
-	}
+	require.Error(t, err, "expected error for unknown strategy")
 }
 
 func TestListConflicts_Engine(t *testing.T) {
@@ -1058,13 +908,8 @@ func TestListConflicts_Engine(t *testing.T) {
 
 	// Empty initially.
 	conflicts, err := eng.ListConflicts(ctx)
-	if err != nil {
-		t.Fatalf("ListConflicts: %v", err)
-	}
-
-	if len(conflicts) != 0 {
-		t.Errorf("expected 0 conflicts, got %d", len(conflicts))
-	}
+	require.NoError(t, err, "ListConflicts")
+	assert.Empty(t, conflicts)
 }
 
 func TestResolveConflict_KeepLocal(t *testing.T) {
@@ -1109,31 +954,16 @@ func TestResolveConflict_KeepLocal(t *testing.T) {
 	writeLocalFile(t, syncRoot, "keep-local.txt", "local")
 
 	conflicts, err := eng.ListConflicts(ctx)
-	if err != nil {
-		t.Fatalf("ListConflicts: %v", err)
-	}
+	require.NoError(t, err, "ListConflicts")
+	require.Len(t, conflicts, 1)
 
-	if len(conflicts) != 1 {
-		t.Fatalf("expected 1 conflict, got %d", len(conflicts))
-	}
-
-	if resolveErr := eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepLocal); resolveErr != nil {
-		t.Fatalf("ResolveConflict: %v", resolveErr)
-	}
-
-	if !uploadCalled {
-		t.Error("expected Upload to be called for keep_local resolution")
-	}
+	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepLocal), "ResolveConflict")
+	assert.True(t, uploadCalled, "expected Upload to be called for keep_local resolution")
 
 	// Conflict should be resolved.
 	remaining, err := eng.ListConflicts(ctx)
-	if err != nil {
-		t.Fatalf("ListConflicts after resolve: %v", err)
-	}
-
-	if len(remaining) != 0 {
-		t.Errorf("expected 0 unresolved conflicts, got %d", len(remaining))
-	}
+	require.NoError(t, err, "ListConflicts after resolve")
+	assert.Empty(t, remaining, "expected 0 unresolved conflicts")
 }
 
 func TestResolveConflict_KeepRemote(t *testing.T) {
@@ -1168,37 +998,20 @@ func TestResolveConflict_KeepRemote(t *testing.T) {
 	seedBaseline(t, eng.baseline, ctx, outcomes, "")
 
 	conflicts, err := eng.ListConflicts(ctx)
-	if err != nil {
-		t.Fatalf("ListConflicts: %v", err)
-	}
+	require.NoError(t, err, "ListConflicts")
+	require.Len(t, conflicts, 1)
 
-	if len(conflicts) != 1 {
-		t.Fatalf("expected 1 conflict, got %d", len(conflicts))
-	}
-
-	if resolveErr := eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepRemote); resolveErr != nil {
-		t.Fatalf("ResolveConflict: %v", resolveErr)
-	}
+	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepRemote), "ResolveConflict")
 
 	// Conflict should be resolved.
 	remaining, err := eng.ListConflicts(ctx)
-	if err != nil {
-		t.Fatalf("ListConflicts after resolve: %v", err)
-	}
-
-	if len(remaining) != 0 {
-		t.Errorf("expected 0 unresolved conflicts, got %d", len(remaining))
-	}
+	require.NoError(t, err, "ListConflicts after resolve")
+	assert.Empty(t, remaining, "expected 0 unresolved conflicts")
 
 	// Verify the local file has remote content.
 	data, readErr := os.ReadFile(filepath.Join(syncRoot, "keep-remote.txt"))
-	if readErr != nil {
-		t.Fatalf("reading resolved file: %v", readErr)
-	}
-
-	if string(data) != downloadContent {
-		t.Errorf("expected %q, got %q", downloadContent, string(data))
-	}
+	require.NoError(t, readErr, "reading resolved file")
+	assert.Equal(t, downloadContent, string(data))
 }
 
 // ---------------------------------------------------------------------------
@@ -1240,11 +1053,9 @@ func TestRunWatch_ContextCancel(t *testing.T) {
 
 	select {
 	case err := <-done:
-		if err != nil {
-			t.Fatalf("RunWatch returned error: %v", err)
-		}
+		require.NoError(t, err, "RunWatch")
 	case <-time.After(10 * time.Second):
-		t.Fatal("RunWatch did not return within timeout after context cancel")
+		require.Fail(t, "RunWatch did not return within timeout after context cancel")
 	}
 }
 
@@ -1291,22 +1102,16 @@ func TestRunWatch_UploadOnly_SkipsRemoteObserver(t *testing.T) {
 
 	select {
 	case err := <-done:
-		if err != nil {
-			t.Fatalf("RunWatch: %v", err)
-		}
+		require.NoError(t, err, "RunWatch")
 	case <-time.After(10 * time.Second):
-		t.Fatal("RunWatch did not return within timeout")
+		require.Fail(t, "RunWatch did not return within timeout")
 	}
 
 	// In upload-only mode, no delta calls should happen after initial sync.
-	if deltaCalledAfterInit > 0 {
-		t.Errorf("delta called %d times after init (should be 0 in upload-only mode)", deltaCalledAfterInit)
-	}
+	assert.Equal(t, 0, deltaCalledAfterInit, "delta should not be called after init in upload-only mode")
 
 	// remoteObs should not be set in upload-only mode.
-	if eng.remoteObs != nil {
-		t.Error("remoteObs should be nil in upload-only mode")
-	}
+	assert.Nil(t, eng.remoteObs, "remoteObs should be nil in upload-only mode")
 }
 
 // TestRunWatch_ProcessBatch_BigDelete verifies that big-delete protection
@@ -1346,9 +1151,7 @@ func TestRunWatch_ProcessBatch_BigDelete(t *testing.T) {
 	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "")
 
 	bl, err := eng.baseline.Load(ctx)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	require.NoError(t, err, "Load")
 
 	// Build a batch that would delete all 20 files (100% > threshold).
 	var batch []PathChanges
@@ -1373,7 +1176,7 @@ func TestRunWatch_ProcessBatch_BigDelete(t *testing.T) {
 	// Verify no actions were dispatched (big-delete skipped the batch).
 	select {
 	case ta := <-tracker.Ready():
-		t.Errorf("unexpected action dispatched: %s", ta.Action.Path)
+		assert.Fail(t, "unexpected action dispatched", "path: %s", ta.Action.Path)
 	default:
 		// Good — no actions.
 	}
@@ -1412,9 +1215,7 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "")
 
 	bl, err := eng.baseline.Load(ctx)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	require.NoError(t, err, "Load")
 
 	// A "change" that matches baseline exactly → planner produces empty plan.
 	batch := []PathChanges{{
@@ -1456,9 +1257,7 @@ func TestRunWatch_WatchCycleCompletion_CommitsDeltaToken(t *testing.T) {
 	ctx := context.Background()
 
 	bl, err := eng.baseline.Load(ctx)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	require.NoError(t, err, "Load")
 
 	// Set up a remote observer and manually set its delta token.
 	obs := NewRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
@@ -1493,13 +1292,8 @@ func TestRunWatch_WatchCycleCompletion_CommitsDeltaToken(t *testing.T) {
 
 	// Verify the delta token was committed.
 	savedToken, tokenErr := eng.baseline.GetDeltaToken(ctx, engineTestDriveID, "")
-	if tokenErr != nil {
-		t.Fatalf("GetDeltaToken: %v", tokenErr)
-	}
-
-	if savedToken != token {
-		t.Errorf("saved token = %q, want %q", savedToken, token)
-	}
+	require.NoError(t, tokenErr, "GetDeltaToken")
+	assert.Equal(t, token, savedToken)
 }
 
 // TestRunWatch_WatchCycleCompletion_SkipsOnFailure verifies that
@@ -1526,18 +1320,14 @@ func TestRunWatch_WatchCycleCompletion_SkipsOnFailure(t *testing.T) {
 
 	// Set up a remote observer.
 	bl, err := eng.baseline.Load(ctx)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	require.NoError(t, err, "Load")
 
 	obs := NewRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
 	eng.remoteObs = obs
 
 	// Call FullDelta to set a new token.
 	_, _, deltaErr := obs.FullDelta(ctx, "")
-	if deltaErr != nil {
-		t.Fatalf("FullDelta: %v", deltaErr)
-	}
+	require.NoError(t, deltaErr, "FullDelta")
 
 	// Create a tracker with a cycle.
 	tracker := NewPersistentDepTracker(testLogger(t))
@@ -1566,13 +1356,8 @@ func TestRunWatch_WatchCycleCompletion_SkipsOnFailure(t *testing.T) {
 
 	// Delta token should NOT have been advanced.
 	savedToken, tokenErr := eng.baseline.GetDeltaToken(ctx, engineTestDriveID, "")
-	if tokenErr != nil {
-		t.Fatalf("GetDeltaToken: %v", tokenErr)
-	}
-
-	if savedToken != "old-token" {
-		t.Errorf("saved token = %q, want %q (should not advance on failure)", savedToken, "old-token")
-	}
+	require.NoError(t, tokenErr, "GetDeltaToken")
+	assert.Equal(t, "old-token", savedToken, "should not advance on failure")
 }
 
 // TestRunWatch_Deduplication verifies that processBatch cancels in-flight
@@ -1594,9 +1379,7 @@ func TestRunWatch_Deduplication(t *testing.T) {
 	ctx := context.Background()
 
 	bl, err := eng.baseline.Load(ctx)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	require.NoError(t, err, "Load")
 
 	tracker := NewPersistentDepTracker(testLogger(t))
 	safety := DefaultSafetyConfig()
@@ -1618,9 +1401,7 @@ func TestRunWatch_Deduplication(t *testing.T) {
 	eng.processBatch(ctx, batch1, bl, SyncBidirectional, safety, tracker)
 
 	// Verify the action is in-flight.
-	if !tracker.HasInFlight("overlapping.txt") {
-		t.Fatal("expected in-flight action for overlapping.txt after first batch")
-	}
+	require.True(t, tracker.HasInFlight("overlapping.txt"), "expected in-flight action for overlapping.txt after first batch")
 
 	// Second batch: same path, different content. Should cancel the first.
 	batch2 := []PathChanges{{
@@ -1641,9 +1422,7 @@ func TestRunWatch_Deduplication(t *testing.T) {
 	// The second batch should have replaced the first.
 	// We can't easily verify cancellation directly, but we can verify
 	// the path is still tracked (new action replaced old one).
-	if !tracker.HasInFlight("overlapping.txt") {
-		t.Error("expected in-flight action for overlapping.txt after second batch")
-	}
+	assert.True(t, tracker.HasInFlight("overlapping.txt"), "expected in-flight action for overlapping.txt after second batch")
 }
 
 // TestRunWatch_DownloadOnly_SkipsLocalObserver verifies that download-only mode
@@ -1689,17 +1468,13 @@ func TestRunWatch_DownloadOnly_SkipsLocalObserver(t *testing.T) {
 
 	select {
 	case err := <-done:
-		if err != nil {
-			t.Fatalf("RunWatch: %v", err)
-		}
+		require.NoError(t, err, "RunWatch")
 	case <-time.After(10 * time.Second):
-		t.Fatal("RunWatch did not return within timeout")
+		require.Fail(t, "RunWatch did not return within timeout")
 	}
 
 	// In download-only mode, the remote observer should be set.
-	if eng.remoteObs == nil {
-		t.Error("remoteObs should be set in download-only mode")
-	}
+	assert.NotNil(t, eng.remoteObs, "remoteObs should be set in download-only mode")
 }
 
 // TestRunWatch_AllObserversDead_ReturnsError verifies that RunWatch returns an
@@ -1733,20 +1508,15 @@ func TestRunWatch_AllObserversDead_ReturnsError(t *testing.T) {
 
 	select {
 	case err := <-done:
-		if err == nil {
-			t.Fatal("RunWatch returned nil, want error indicating all observers exited")
-		}
+		require.Error(t, err, "RunWatch returned nil, want error indicating all observers exited")
 
 		if !errors.Is(err, ErrNosyncGuard) {
 			// Should be the "all observers exited" wrapper, but the observer error
 			// should be logged as a warning. Check it's not a random error.
-			wantMsg := "all observers exited"
-			if err.Error() != "sync: "+wantMsg {
-				t.Errorf("RunWatch error = %q, want containing %q", err, wantMsg)
-			}
+			assert.Equal(t, "sync: all observers exited", err.Error())
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("RunWatch did not return within timeout (should exit when all observers die)")
+		require.Fail(t, "RunWatch did not return within timeout (should exit when all observers die)")
 	}
 }
 
@@ -1797,7 +1567,7 @@ func TestRunWatch_WatchLimitExhausted_FallsBackToPolling(t *testing.T) {
 		// RunWatch should return nil (clean shutdown), NOT an "all observers exited" error.
 		assert.NoError(t, err, "RunWatch should return nil on clean shutdown with fallback polling")
 	case <-time.After(10 * time.Second):
-		t.Fatal("RunWatch did not return within timeout")
+		require.Fail(t, "RunWatch did not return within timeout")
 	}
 }
 
@@ -1863,28 +1633,16 @@ func TestResolveConflict_KeepLocal_TransferFails(t *testing.T) {
 	writeLocalFile(t, syncRoot, "fail-upload.txt", "local-data")
 
 	conflicts, err := eng.ListConflicts(ctx)
-	if err != nil {
-		t.Fatalf("ListConflicts: %v", err)
-	}
-
-	if len(conflicts) != 1 {
-		t.Fatalf("expected 1 conflict, got %d", len(conflicts))
-	}
+	require.NoError(t, err, "ListConflicts")
+	require.Len(t, conflicts, 1)
 
 	resolveErr := eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepLocal)
-	if resolveErr == nil {
-		t.Fatal("expected error from failed upload, got nil")
-	}
+	require.Error(t, resolveErr, "expected error from failed upload")
 
 	// Conflict should remain unresolved.
 	remaining, err := eng.ListConflicts(ctx)
-	if err != nil {
-		t.Fatalf("ListConflicts after failed resolve: %v", err)
-	}
-
-	if len(remaining) != 1 {
-		t.Errorf("expected 1 unresolved conflict, got %d", len(remaining))
-	}
+	require.NoError(t, err, "ListConflicts after failed resolve")
+	assert.Len(t, remaining, 1, "expected 1 unresolved conflict")
 }
 
 // ---------------------------------------------------------------------------
@@ -1933,51 +1691,28 @@ func TestResolveConflict_KeepLocal_CommitsToBaseline(t *testing.T) {
 	writeLocalFile(t, syncRoot, "baseline-commit.txt", "resolved local")
 
 	conflicts, err := eng.ListConflicts(ctx)
-	if err != nil {
-		t.Fatalf("ListConflicts: %v", err)
-	}
+	require.NoError(t, err, "ListConflicts")
+	require.Len(t, conflicts, 1)
 
-	if len(conflicts) != 1 {
-		t.Fatalf("expected 1 conflict, got %d", len(conflicts))
-	}
-
-	if resolveErr := eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepLocal); resolveErr != nil {
-		t.Fatalf("ResolveConflict: %v", resolveErr)
-	}
+	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepLocal), "ResolveConflict")
 
 	// Verify the baseline was updated with the new item from the upload.
 	bl, loadErr := eng.baseline.Load(ctx)
-	if loadErr != nil {
-		t.Fatalf("baseline.Load: %v", loadErr)
-	}
+	require.NoError(t, loadErr, "baseline.Load")
 
 	entry, ok := bl.GetByPath("baseline-commit.txt")
-	if !ok {
-		t.Fatal("baseline entry not found after resolve")
-	}
+	require.True(t, ok, "baseline entry not found after resolve")
 
-	if entry.ItemID != "resolved-item-id" {
-		t.Errorf("baseline ItemID = %q, want %q", entry.ItemID, "resolved-item-id")
-	}
-
-	if entry.ETag != "etag-resolved" {
-		t.Errorf("baseline ETag = %q, want %q", entry.ETag, "etag-resolved")
-	}
-
-	if entry.LocalHash == "" {
-		t.Error("baseline LocalHash should be set (computed from local file)")
-	}
+	assert.Equal(t, "resolved-item-id", entry.ItemID)
+	assert.Equal(t, "etag-resolved", entry.ETag)
+	assert.NotEmpty(t, entry.LocalHash, "baseline LocalHash should be set (computed from local file)")
 
 	// RemoteHash comes from the upload response's QuickXorHash, which is empty
 	// in this mock (skip-verification pattern), so it should be empty.
-	if entry.RemoteHash != "" {
-		t.Errorf("baseline RemoteHash = %q, want empty (mock returns no hash)", entry.RemoteHash)
-	}
+	assert.Empty(t, entry.RemoteHash, "mock returns no hash")
 
 	// "resolved local" is 14 bytes.
-	if entry.Size != 14 {
-		t.Errorf("baseline Size = %d, want 14", entry.Size)
-	}
+	assert.Equal(t, int64(14), entry.Size)
 }
 
 // ---------------------------------------------------------------------------
@@ -2022,29 +1757,16 @@ func TestResolveConflict_KeepLocal_MinimalRecord_NoPanic(t *testing.T) {
 	writeLocalFile(t, syncRoot, "minimal-conflict.txt", "minimal data")
 
 	conflicts, err := eng.ListConflicts(ctx)
-	if err != nil {
-		t.Fatalf("ListConflicts: %v", err)
-	}
-
-	if len(conflicts) != 1 {
-		t.Fatalf("expected 1 conflict, got %d", len(conflicts))
-	}
+	require.NoError(t, err, "ListConflicts")
+	require.Len(t, conflicts, 1)
 
 	// This must not panic. The original bug was a nil-map access in resolveTransfer.
-	resolveErr := eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepLocal)
-	if resolveErr != nil {
-		t.Fatalf("ResolveConflict: %v", resolveErr)
-	}
+	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepLocal), "ResolveConflict")
 
 	// Verify the conflict is resolved.
 	remaining, err := eng.ListConflicts(ctx)
-	if err != nil {
-		t.Fatalf("ListConflicts after resolve: %v", err)
-	}
-
-	if len(remaining) != 0 {
-		t.Errorf("expected 0 unresolved conflicts, got %d", len(remaining))
-	}
+	require.NoError(t, err, "ListConflicts after resolve")
+	assert.Empty(t, remaining, "expected 0 unresolved conflicts")
 }
 
 // ---------------------------------------------------------------------------
@@ -2075,15 +1797,7 @@ func TestExecutePlan_ActionsDepsLengthMismatch(t *testing.T) {
 	eng.executePlan(context.Background(), plan, "", report)
 
 	// Invariant violation should surface in the report.
-	if report.Failed != len(plan.Actions) {
-		t.Errorf("report.Failed = %d, want %d", report.Failed, len(plan.Actions))
-	}
-
-	if len(report.Errors) != 1 {
-		t.Fatalf("report.Errors length = %d, want 1", len(report.Errors))
-	}
-
-	if !strings.Contains(report.Errors[0].Error(), "invariant violation") {
-		t.Errorf("report.Errors[0] = %q, want to contain 'invariant violation'", report.Errors[0])
-	}
+	assert.Equal(t, len(plan.Actions), report.Failed)
+	require.Len(t, report.Errors, 1)
+	assert.Contains(t, report.Errors[0].Error(), "invariant violation")
 }

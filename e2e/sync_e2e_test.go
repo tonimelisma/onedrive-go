@@ -93,10 +93,8 @@ func runCLIWithConfig(t *testing.T, cfgPath string, env map[string]string, args 
 	t.Helper()
 
 	stdout, stderr, err := runCLICore(t, cfgPath, env, drive, args...)
-	if err != nil {
-		t.Fatalf("CLI command %v failed: %v\nstdout: %s\nstderr: %s",
-			args, err, stdout, stderr)
-	}
+	require.NoErrorf(t, err, "CLI command %v failed\nstdout: %s\nstderr: %s",
+		args, stdout, stderr)
 
 	return stdout, stderr
 }
@@ -376,9 +374,7 @@ func copyTokenFile(t *testing.T, srcDir, dstDir string) {
 	srcPath := filepath.Join(srcDir, name)
 
 	data, err := os.ReadFile(srcPath)
-	if err != nil {
-		t.Fatalf("cannot read token file %s: %v", srcPath, err)
-	}
+	require.NoErrorf(t, err, "cannot read token file %s", srcPath)
 
 	require.NoError(t, os.WriteFile(filepath.Join(dstDir, name), data, 0o600))
 }
@@ -426,9 +422,7 @@ func copyTokenFileForDrive(t *testing.T, srcDir, dstDir, driveID string) {
 	srcPath := filepath.Join(srcDir, name)
 
 	data, err := os.ReadFile(srcPath)
-	if err != nil {
-		t.Fatalf("cannot read token file %s: %v", srcPath, err)
-	}
+	require.NoErrorf(t, err, "cannot read token file %s", srcPath)
 
 	require.NoError(t, os.WriteFile(filepath.Join(dstDir, name), data, 0o600))
 }
@@ -438,10 +432,8 @@ func runCLIWithConfigAllDrives(t *testing.T, cfgPath string, env map[string]stri
 	t.Helper()
 
 	stdout, stderr, err := runCLICore(t, cfgPath, env, "", args...)
-	if err != nil {
-		t.Fatalf("CLI command %v failed: %v\nstdout: %s\nstderr: %s",
-			args, err, stdout, stderr)
-	}
+	require.NoErrorf(t, err, "CLI command %v failed\nstdout: %s\nstderr: %s",
+		args, stdout, stderr)
 
 	return stdout, stderr
 }
@@ -459,10 +451,8 @@ func runCLIWithConfigForDrive(t *testing.T, cfgPath string, env map[string]strin
 	t.Helper()
 
 	stdout, stderr, err := runCLICore(t, cfgPath, env, driveID, args...)
-	if err != nil {
-		t.Fatalf("CLI command %v (drive=%s) failed: %v\nstdout: %s\nstderr: %s",
-			args, driveID, err, stdout, stderr)
-	}
+	require.NoErrorf(t, err, "CLI command %v (drive=%s) failed\nstdout: %s\nstderr: %s",
+		args, driveID, stdout, stderr)
 
 	return stdout, stderr
 }
