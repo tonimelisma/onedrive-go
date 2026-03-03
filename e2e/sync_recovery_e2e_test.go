@@ -47,7 +47,6 @@ func TestE2E_Sync_IncrementalDeltaToken(t *testing.T) {
 	}
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Re-sync should show no changes (delta token persisted).
 	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
@@ -97,7 +96,6 @@ func TestE2E_Sync_CrashRecoveryIdempotent(t *testing.T) {
 	}
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Verify all 5 exist remotely.
 	pollCLIWithConfigContains(t, opsCfgPath, nil, "crash-5.txt", pollTimeout, "ls", "/"+testFolder)
@@ -141,7 +139,6 @@ func TestE2E_Sync_DriveRemovePurgeResetsState(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "purge-a.txt"), []byte("purge a"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "purge-b.txt"), []byte("purge b"), 0o644))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Verify files exist remotely.

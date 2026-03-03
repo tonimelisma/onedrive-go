@@ -41,7 +41,6 @@ func TestE2E_Verify_JSON(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "tamper.txt"), []byte("original"), 0o644))
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Tamper with local file.
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "tamper.txt"), []byte("TAMPERED"), 0o644))
