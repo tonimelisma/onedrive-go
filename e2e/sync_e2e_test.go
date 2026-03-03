@@ -380,6 +380,128 @@ func copyTokenFile(t *testing.T, srcDir, dstDir string) {
 }
 
 // ---------------------------------------------------------------------------
+// Polling helpers for daemon watch tests
+// ---------------------------------------------------------------------------
+
+// pollLocalFileExists polls until the file at path exists on disk or timeout.
+func pollLocalFileExists(t *testing.T, path string, timeout time.Duration) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+
+	for attempt := 0; ; attempt++ {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+
+		if time.Now().After(deadline) {
+			require.Failf(t, "pollLocalFileExists: timed out",
+				"after %v waiting for %s to exist", timeout, path)
+		}
+
+		time.Sleep(pollBackoff(attempt))
+	}
+}
+
+// pollLocalFileContent polls until the file at path has the expected content.
+func pollLocalFileContent(t *testing.T, path, expected string, timeout time.Duration) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+
+	for attempt := 0; ; attempt++ {
+		data, err := os.ReadFile(path)
+		if err == nil && string(data) == expected {
+			return
+		}
+
+		if time.Now().After(deadline) {
+			var last string
+			if err != nil {
+				last = fmt.Sprintf("error: %v", err)
+			} else {
+				last = fmt.Sprintf("content: %q", string(data))
+			}
+
+			require.Failf(t, "pollLocalFileContent: timed out",
+				"after %v waiting for %s to contain %q\nlast: %s",
+				timeout, path, expected, last)
+		}
+
+		time.Sleep(pollBackoff(attempt))
+	}
+}
+
+// pollLocalDirGone polls until the directory at path no longer exists.
+func pollLocalDirGone(t *testing.T, path string, timeout time.Duration) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+
+	for attempt := 0; ; attempt++ {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			return
+		}
+
+		if time.Now().After(deadline) {
+			require.Failf(t, "pollLocalDirGone: timed out",
+				"after %v waiting for %s to be removed", timeout, path)
+		}
+
+		time.Sleep(pollBackoff(attempt))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Config helpers for extended test scenarios
+// ---------------------------------------------------------------------------
+
+// writeSyncConfigWithOptions creates a TOML config like writeSyncConfig but
+// appends extra TOML key-value pairs to the drive section. The extraTOML
+// string should start with a newline if non-empty.
+func writeSyncConfigWithOptions(t *testing.T, syncDir string, extraTOML string) (string, map[string]string) {
+	t.Helper()
+
+	perTestData := t.TempDir()
+	perTestHome := t.TempDir()
+
+	perTestDataDir := filepath.Join(perTestData, "onedrive-go")
+	require.NoError(t, os.MkdirAll(perTestDataDir, 0o755))
+	copyTokenFile(t, testDataDir, perTestDataDir)
+
+	content := fmt.Sprintf("[%q]\nsync_dir = %q\n%s", drive, syncDir, extraTOML)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o644))
+
+	env := map[string]string{
+		"XDG_DATA_HOME": perTestData,
+		"HOME":          perTestHome,
+	}
+
+	return cfgPath, env
+}
+
+// writeSyncConfigNoDrive creates a config file with no drive sections.
+// Used to test status output when no drives are configured.
+func writeSyncConfigNoDrive(t *testing.T) (string, map[string]string) {
+	t.Helper()
+
+	perTestData := t.TempDir()
+	perTestHome := t.TempDir()
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte("# no drives configured\n"), 0o644))
+
+	env := map[string]string{
+		"XDG_DATA_HOME": perTestData,
+		"HOME":          perTestHome,
+	}
+
+	return cfgPath, env
+}
+
+// ---------------------------------------------------------------------------
 // Multi-drive helpers (used by orchestrator_e2e_test.go)
 // ---------------------------------------------------------------------------
 
