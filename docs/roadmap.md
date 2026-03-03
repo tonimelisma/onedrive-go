@@ -846,6 +846,15 @@ Acceptance: `grep -rn 'NewDriveSession\|type DriveSession' *.go` → 0 hits. `gr
 
 Acceptance: `go vet -tags=e2e,e2e_full ./e2e/...` clean. All unit tests pass. Fast E2E tests pass. No per-package coverage regression.
 
+### 6.0g: Migrate E2E helpers to explicit config + top-ups — DONE
+
+1. **Migrate all E2E callers to explicit `*WithConfig` variants**: Deleted `runCLI`, `runCLIExpectError`, `pollCLIContains` auto-config wrappers from `sync_e2e_test.go`. All ~50 call sites across 5 E2E test files migrated to `runCLIWithConfig`, `runCLIWithConfigExpectError`, `pollCLIWithConfigContains` with explicit `cfgPath`/`env`. `putRemoteFile` and `getRemoteFile` gained `cfgPath string` and `env map[string]string` parameters. **DONE**.
+2. **SIGHUP reload E2E test**: `TestE2E_SyncWatch_SIGHUPReload` (build tag `e2e,e2e_full`). Starts daemon with drive1 only, rewrites config to add drive2, sends SIGHUP, verifies drive2 starts syncing. Requires `ONEDRIVE_TEST_DRIVE_2`. Helpers: `pollForDrive2File`, `waitForStderrContains`. **DONE**.
+3. **Observer file header comments**: Added file-level doc comments with cross-references to `observer_local.go`, `observer_local_handlers.go`, and `scanner.go`. **DONE**.
+4. **Root package coverage**: 21 new test functions across 7 files covering pure-logic, output formatting, and command structure functions. Root package 39.3% → 46.7%, total coverage 76.3% → 77.9%. **DONE**.
+
+Acceptance: Zero `runCLI`/`runCLIExpectError`/`pollCLIContains` references. `go vet -tags=e2e,e2e_full ./e2e/...` clean. All unit tests pass. Total coverage ≥77%.
+
 ### 6.0d: inotify + E2E + second test account — DONE
 
 1. **inotify watch limit detection** (Linux only): `inotify_linux.go` reads `/proc/sys/fs/inotify/max_user_watches`. Warns at 80% threshold via `checkInotifyCapacity()`. On ENOSPC: `ErrWatchLimitExhausted` sentinel returned from `addWatchesRecursive()`, engine falls back to `runPeriodicFullScan()` at `poll_interval`. Other drives retain inotify. No-op stubs on macOS (`inotify_other.go`). **DONE**.
