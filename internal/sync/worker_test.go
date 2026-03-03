@@ -1,9 +1,11 @@
 package sync
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -633,4 +635,27 @@ func TestWorkerPool_ErrorCap(t *testing.T) {
 	// DroppedErrors should reflect the overflow.
 	dropped := pool.DroppedErrors()
 	assert.Equal(t, int64(totalErrors-maxRecordedErrors), dropped)
+}
+
+func TestWorkerPool_ErrorCap_LogsWarnOnce(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, _ := newWorkerTestSetup(t)
+	tracker := NewDepTracker(10, testLogger(t))
+
+	// Use a buffer-backed logger to capture the warning.
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	pool := NewWorkerPool(cfg, tracker, mgr, logger, 10)
+
+	// Fill the error buffer to capacity + overflow.
+	for i := range maxRecordedErrors + 10 {
+		pool.recordFailure(fmt.Errorf("error %d", i))
+	}
+
+	logOutput := logBuf.String()
+	assert.Contains(t, logOutput, "error diagnostic buffer full")
+
+	// The warning should appear exactly once (sync.Once).
+	assert.Equal(t, 1, strings.Count(logOutput, "error diagnostic buffer full"))
 }

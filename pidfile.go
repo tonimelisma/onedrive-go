@@ -21,7 +21,7 @@ const pidDirPermissions = 0o755
 // lock. If the lock cannot be acquired, another daemon is already running.
 func writePIDFile(path string) (cleanup func(), err error) {
 	if path == "" {
-		return nil, fmt.Errorf("PID file path is empty — cannot determine data directory")
+		return nil, fmt.Errorf("pid file path is empty — cannot determine data directory")
 	}
 
 	dir := filepath.Dir(path)

@@ -82,6 +82,16 @@ func TestStatusf(t *testing.T) {
 		assert.Empty(t, buf.String())
 	})
 
+	t.Run("nil StatusWriter does not panic", func(t *testing.T) {
+		t.Parallel()
+
+		cc := &CLIContext{
+			StatusWriter: nil,
+		}
+
+		assert.NotPanics(t, func() { cc.Statusf("should not panic %s", "test") })
+	})
+
 	t.Run("normal mode writes to StatusWriter", func(t *testing.T) {
 		t.Parallel()
 
