@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"sort"
@@ -116,10 +117,10 @@ func runStatus(cmd *cobra.Command, _ []string) error {
 	accounts := buildStatusAccounts(cfg, logger)
 
 	if cc.Flags.JSON {
-		return printStatusJSON(accounts)
+		return printStatusJSON(os.Stdout, accounts)
 	}
 
-	printStatusText(accounts)
+	printStatusText(os.Stdout, accounts)
 
 	return nil
 }
@@ -436,13 +437,13 @@ func computeSummary(accounts []statusAccount) statusSummary {
 	return s
 }
 
-func printStatusJSON(accounts []statusAccount) error {
+func printStatusJSON(w io.Writer, accounts []statusAccount) error {
 	output := statusOutput{
 		Accounts: accounts,
 		Summary:  computeSummary(accounts),
 	}
 
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 
 	if err := enc.Encode(output); err != nil {
@@ -452,10 +453,10 @@ func printStatusJSON(accounts []statusAccount) error {
 	return nil
 }
 
-func printStatusText(accounts []statusAccount) {
+func printStatusText(w io.Writer, accounts []statusAccount) {
 	for i, acct := range accounts {
 		if i > 0 {
-			fmt.Println()
+			fmt.Fprintln(w)
 		}
 
 		label := acct.Email
@@ -463,13 +464,13 @@ func printStatusText(accounts []statusAccount) {
 			label = fmt.Sprintf("%s (%s)", acct.DisplayName, acct.Email)
 		}
 
-		fmt.Printf("Account: %s [%s]\n", label, acct.DriveType)
+		fmt.Fprintf(w, "Account: %s [%s]\n", label, acct.DriveType)
 
 		if acct.OrgName != "" {
-			fmt.Printf("  Org:   %s\n", acct.OrgName)
+			fmt.Fprintf(w, "  Org:   %s\n", acct.OrgName)
 		}
 
-		fmt.Printf("  Token: %s\n", acct.TokenState)
+		fmt.Fprintf(w, "  Token: %s\n", acct.TokenState)
 
 		for _, d := range acct.Drives {
 			syncDir := d.SyncDir
@@ -482,36 +483,36 @@ func printStatusText(accounts []statusAccount) {
 				driveLabel = fmt.Sprintf("%s (%s)", d.DisplayName, d.CanonicalID)
 			}
 
-			fmt.Printf("  %s\n", driveLabel)
-			fmt.Printf("    Sync dir:  %s\n", syncDir)
-			fmt.Printf("    State:     %s\n", d.State)
+			fmt.Fprintf(w, "  %s\n", driveLabel)
+			fmt.Fprintf(w, "    Sync dir:  %s\n", syncDir)
+			fmt.Fprintf(w, "    State:     %s\n", d.State)
 
 			if d.SyncState != nil {
-				printSyncStateText(d.SyncState)
+				printSyncStateText(w, d.SyncState)
 			}
 		}
 	}
 
 	// Print health summary.
 	summary := computeSummary(accounts)
-	fmt.Println()
-	printSummaryText(summary)
+	fmt.Fprintln(w)
+	printSummaryText(w, summary)
 }
 
-func printSyncStateText(ss *syncStateInfo) {
+func printSyncStateText(w io.Writer, ss *syncStateInfo) {
 	if ss.LastSyncTime != "" {
-		fmt.Printf("    Last sync: %s (%d files, %d conflicts)\n",
+		fmt.Fprintf(w, "    Last sync: %s (%d files, %d conflicts)\n",
 			ss.LastSyncTime, ss.FileCount, ss.Conflicts)
 	} else {
-		fmt.Printf("    Last sync: never\n")
+		fmt.Fprintf(w, "    Last sync: never\n")
 	}
 
 	if ss.LastError != "" {
-		fmt.Printf("    Last error: %s\n", ss.LastError)
+		fmt.Fprintf(w, "    Last error: %s\n", ss.LastError)
 	}
 }
 
-func printSummaryText(s statusSummary) {
+func printSummaryText(w io.Writer, s statusSummary) {
 	var parts []string
 
 	if s.Ready > 0 {
@@ -532,6 +533,6 @@ func printSummaryText(s statusSummary) {
 
 	stateStr := strings.Join(parts, ", ")
 
-	fmt.Printf("Summary: %d drives (%s), %d unresolved conflicts\n",
+	fmt.Fprintf(w, "Summary: %d drives (%s), %d unresolved conflicts\n",
 		s.TotalDrives, stateStr, s.TotalConflicts)
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 
@@ -48,11 +49,11 @@ func runVerify(cmd *cobra.Command, _ []string) error {
 	}
 
 	if cc.Flags.JSON {
-		if err := printVerifyJSON(report); err != nil {
+		if err := printVerifyJSON(os.Stdout, report); err != nil {
 			return err
 		}
 	} else {
-		printVerifyTable(report)
+		printVerifyTable(os.Stdout, report)
 	}
 
 	if len(report.Mismatches) > 0 {
@@ -79,8 +80,8 @@ func loadAndVerify(ctx context.Context, dbPath, syncDir string, logger *slog.Log
 	return sync.VerifyBaseline(ctx, bl, syncDir, logger)
 }
 
-func printVerifyJSON(report *sync.VerifyReport) error {
-	enc := json.NewEncoder(os.Stdout)
+func printVerifyJSON(w io.Writer, report *sync.VerifyReport) error {
+	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 
 	if err := enc.Encode(report); err != nil {
@@ -90,15 +91,15 @@ func printVerifyJSON(report *sync.VerifyReport) error {
 	return nil
 }
 
-func printVerifyTable(report *sync.VerifyReport) {
-	fmt.Printf("Verified: %d files\n", report.Verified)
+func printVerifyTable(w io.Writer, report *sync.VerifyReport) {
+	fmt.Fprintf(w, "Verified: %d files\n", report.Verified)
 
 	if len(report.Mismatches) == 0 {
-		fmt.Println("All files verified successfully.")
+		fmt.Fprintln(w, "All files verified successfully.")
 		return
 	}
 
-	fmt.Printf("Mismatches: %d\n\n", len(report.Mismatches))
+	fmt.Fprintf(w, "Mismatches: %d\n\n", len(report.Mismatches))
 
 	headers := []string{"PATH", "STATUS", "EXPECTED", "ACTUAL"}
 	rows := make([][]string, len(report.Mismatches))
@@ -108,5 +109,5 @@ func printVerifyTable(report *sync.VerifyReport) {
 		rows[i] = []string{m.Path, m.Status, m.Expected, m.Actual}
 	}
 
-	printTable(os.Stdout, headers, rows)
+	printTable(w, headers, rows)
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -162,9 +163,9 @@ func TestPrintWhoamiText(t *testing.T) {
 		},
 	}
 
-	output := captureStdout(t, func() {
-		printWhoamiText(user, drives)
-	})
+	var buf bytes.Buffer
+	printWhoamiText(&buf, user, drives)
+	output := buf.String()
 
 	assert.Contains(t, output, "Test User")
 	assert.Contains(t, output, "test@example.com")
@@ -176,9 +177,9 @@ func TestPrintWhoamiText(t *testing.T) {
 
 func TestPrintLoginSuccess_DoesNotPanic(t *testing.T) {
 	// Verify the print functions don't panic with various inputs.
-	// Output goes to stdout, which is fine in tests.
-	printLoginSuccess("personal", "toni@outlook.com", "", "personal:toni@outlook.com", "~/OneDrive")
-	printLoginSuccess("business", "alice@contoso.com", "Contoso Ltd", "business:alice@contoso.com", "~/OneDrive - Contoso")
-	printLoginSuccess("business", "bob@example.com", "", "business:bob@example.com", "~/OneDrive - Business")
-	printLoginSuccess("documentLibrary", "carol@example.com", "", "documentLibrary:carol@example.com", "~/SP")
+	var buf bytes.Buffer
+	printLoginSuccess(&buf, "personal", "toni@outlook.com", "", "personal:toni@outlook.com", "~/OneDrive")
+	printLoginSuccess(&buf, "business", "alice@contoso.com", "Contoso Ltd", "business:alice@contoso.com", "~/OneDrive - Contoso")
+	printLoginSuccess(&buf, "business", "bob@example.com", "", "business:bob@example.com", "~/OneDrive - Business")
+	printLoginSuccess(&buf, "documentLibrary", "carol@example.com", "", "documentLibrary:carol@example.com", "~/SP")
 }

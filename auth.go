@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -225,7 +226,7 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 
-	printLoginSuccess(canonicalID.DriveType(), email, orgName, canonicalID.String(), syncDir)
+	printLoginSuccess(os.Stdout, canonicalID.DriveType(), email, orgName, canonicalID.String(), syncDir)
 
 	return nil
 }
@@ -314,25 +315,25 @@ func moveToken(src, dst string) error {
 
 // printLoginSuccess prints the user-facing login output. Format differs
 // for personal vs. business accounts per accounts.md section 9.
-func printLoginSuccess(driveType, email, orgName, canonicalID, syncDir string) {
+func printLoginSuccess(w io.Writer, driveType, email, orgName, canonicalID, syncDir string) {
 	switch driveType {
 	case "personal":
-		fmt.Printf("Signed in as %s (personal account).\n", email)
-		fmt.Printf("Drive added: %s -> %s\n", canonicalID, syncDir)
+		fmt.Fprintf(w, "Signed in as %s (personal account).\n", email)
+		fmt.Fprintf(w, "Drive added: %s -> %s\n", canonicalID, syncDir)
 	case "business":
 		orgLabel := orgName
 		if orgLabel == "" {
 			orgLabel = "business account"
 		}
 
-		fmt.Printf("Signed in as %s (%s).\n", email, orgLabel)
-		fmt.Printf("Drive added: %s -> %s\n", canonicalID, syncDir)
-		fmt.Println()
-		fmt.Println("You also have access to SharePoint libraries.")
-		fmt.Println("Run 'onedrive-go drive search <term>' to find and add them.")
+		fmt.Fprintf(w, "Signed in as %s (%s).\n", email, orgLabel)
+		fmt.Fprintf(w, "Drive added: %s -> %s\n", canonicalID, syncDir)
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "You also have access to SharePoint libraries.")
+		fmt.Fprintln(w, "Run 'onedrive-go drive search <term>' to find and add them.")
 	default:
-		fmt.Printf("Signed in as %s.\n", email)
-		fmt.Printf("Drive added: %s -> %s\n", canonicalID, syncDir)
+		fmt.Fprintf(w, "Signed in as %s.\n", email)
+		fmt.Fprintf(w, "Drive added: %s -> %s\n", canonicalID, syncDir)
 	}
 }
 
@@ -434,7 +435,7 @@ func executeLogout(cfg *config.Config, cfgPath, account string, purge bool, logg
 	logger.Info("logout successful", "account", account, "token_path", tokenPath)
 	fmt.Printf("Token removed for %s.\n", account)
 
-	printAffectedDrives(cfg, affected)
+	printAffectedDrives(os.Stdout, cfg, affected)
 
 	if purge {
 		if err := purgeAccountDrives(cfgPath, affected, logger); err != nil {
@@ -491,16 +492,16 @@ func canonicalIDForToken(account string, driveIDs []driveid.CanonicalID) driveid
 }
 
 // printAffectedDrives lists drives that can no longer sync after logout.
-func printAffectedDrives(cfg *config.Config, affected []driveid.CanonicalID) {
+func printAffectedDrives(w io.Writer, cfg *config.Config, affected []driveid.CanonicalID) {
 	if len(affected) == 0 {
 		return
 	}
 
-	fmt.Println("Affected drives (can no longer sync):")
+	fmt.Fprintln(w, "Affected drives (can no longer sync):")
 
 	for _, id := range affected {
 		syncDir := cfg.Drives[id].SyncDir
-		fmt.Printf("  %s (%s)\n", id.String(), syncDir)
+		fmt.Fprintf(w, "  %s (%s)\n", id.String(), syncDir)
 	}
 }
 
@@ -626,15 +627,15 @@ func runWhoami(cmd *cobra.Command, _ []string) error {
 	}
 
 	if cc.Flags.JSON {
-		return printWhoamiJSON(user, drives)
+		return printWhoamiJSON(os.Stdout, user, drives)
 	}
 
-	printWhoamiText(user, drives)
+	printWhoamiText(os.Stdout, user, drives)
 
 	return nil
 }
 
-func printWhoamiJSON(user *graph.User, drives []graph.Drive) error {
+func printWhoamiJSON(w io.Writer, user *graph.User, drives []graph.Drive) error {
 	out := whoamiOutput{
 		User: whoamiUser{
 			ID:          user.ID,
@@ -654,7 +655,7 @@ func printWhoamiJSON(user *graph.User, drives []graph.Drive) error {
 		})
 	}
 
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 
 	if err := enc.Encode(out); err != nil {
@@ -664,13 +665,13 @@ func printWhoamiJSON(user *graph.User, drives []graph.Drive) error {
 	return nil
 }
 
-func printWhoamiText(user *graph.User, drives []graph.Drive) {
-	fmt.Printf("User:  %s (%s)\n", user.DisplayName, user.Email)
-	fmt.Printf("ID:    %s\n", user.ID)
+func printWhoamiText(w io.Writer, user *graph.User, drives []graph.Drive) {
+	fmt.Fprintf(w, "User:  %s (%s)\n", user.DisplayName, user.Email)
+	fmt.Fprintf(w, "ID:    %s\n", user.ID)
 
 	for i := range drives {
-		fmt.Printf("\nDrive: %s (%s)\n", drives[i].Name, drives[i].DriveType)
-		fmt.Printf("  ID:    %s\n", drives[i].ID)
-		fmt.Printf("  Quota: %s / %s\n", formatSize(drives[i].QuotaUsed), formatSize(drives[i].QuotaTotal))
+		fmt.Fprintf(w, "\nDrive: %s (%s)\n", drives[i].Name, drives[i].DriveType)
+		fmt.Fprintf(w, "  ID:    %s\n", drives[i].ID)
+		fmt.Fprintf(w, "  Quota: %s / %s\n", formatSize(drives[i].QuotaUsed), formatSize(drives[i].QuotaTotal))
 	}
 }

@@ -1,9 +1,8 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
-	"io"
-	"os"
 	"testing"
 	"time"
 
@@ -12,27 +11,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
-
-// captureStdout redirects os.Stdout to a pipe and returns what fn wrote.
-func captureStdout(t *testing.T, fn func()) string {
-	t.Helper()
-
-	old := os.Stdout
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-
-	os.Stdout = w
-
-	t.Cleanup(func() { os.Stdout = old })
-
-	fn()
-	w.Close()
-
-	out, err := io.ReadAll(r)
-	require.NoError(t, err)
-
-	return string(out)
-}
 
 func TestPrintItemsTable(t *testing.T) {
 	items := []graph.Item{
@@ -50,9 +28,9 @@ func TestPrintItemsTable(t *testing.T) {
 		},
 	}
 
-	output := captureStdout(t, func() {
-		printItemsTable(items)
-	})
+	var buf bytes.Buffer
+	printItemsTable(&buf, items)
+	output := buf.String()
 
 	// Headers should be present.
 	assert.Contains(t, output, "NAME")
@@ -71,9 +49,9 @@ func TestPrintItemsJSON(t *testing.T) {
 		{Name: "dir", IsFolder: true, ID: "id2", ModifiedAt: time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)},
 	}
 
-	out := captureStdout(t, func() {
-		require.NoError(t, printItemsJSON(items))
-	})
+	var buf bytes.Buffer
+	require.NoError(t, printItemsJSON(&buf, items))
+	out := buf.String()
 
 	assert.Contains(t, out, `"file.txt"`)
 	assert.Contains(t, out, `"id1"`)
