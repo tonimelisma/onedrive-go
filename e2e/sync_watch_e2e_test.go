@@ -28,6 +28,7 @@ func TestE2E_SyncWatch_BasicRoundTrip(t *testing.T) {
 
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
+	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-syncwatch-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
@@ -71,7 +72,7 @@ func TestE2E_SyncWatch_BasicRoundTrip(t *testing.T) {
 
 	// Poll until the file appears remotely.
 	remotePath := "/" + testFolder + "/watch-test.txt"
-	pollCLIContains(t, "watch-test.txt", 3*time.Minute, "stat", remotePath)
+	pollCLIWithConfigContains(t, opsCfgPath, nil, "watch-test.txt", 3*time.Minute, "stat", remotePath)
 
 	// Send SIGTERM for graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
@@ -88,7 +89,7 @@ func TestE2E_SyncWatch_BasicRoundTrip(t *testing.T) {
 	}
 
 	// Verify the file content remotely.
-	remoteContent := getRemoteFile(t, remotePath)
+	remoteContent := getRemoteFile(t, opsCfgPath, nil, remotePath)
 	assert.Equal(t, "created during watch mode\n", remoteContent)
 }
 
@@ -99,6 +100,7 @@ func TestE2E_SyncWatch_PauseResume(t *testing.T) {
 
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
+	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-syncwatch-pr-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
@@ -161,14 +163,14 @@ func TestE2E_SyncWatch_PauseResume(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "resume")
 
 	// Poll until the file appears remotely after resume.
-	pollCLIContains(t, "paused-file.txt", 3*time.Minute, "stat", remotePath)
+	pollCLIWithConfigContains(t, opsCfgPath, nil, "paused-file.txt", 3*time.Minute, "stat", remotePath)
 
 	// Send SIGTERM for graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
 	_ = cmd.Wait()
 
 	// Verify file content.
-	remoteContent := getRemoteFile(t, remotePath)
+	remoteContent := getRemoteFile(t, opsCfgPath, nil, remotePath)
 	assert.Equal(t, "created while paused\n", remoteContent)
 }
 
