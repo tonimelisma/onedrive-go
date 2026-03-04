@@ -736,11 +736,11 @@ func TestRunOnce_EmptyPlan_NoPanic(t *testing.T) {
 	assert.Equal(t, 0, report.Failed, "failed")
 }
 
-// TestRunOnce_DeltaTokenNotCommittedOnFailure verifies that when some actions
-// fail, the delta token is NOT advanced. This ensures the items that failed
-// are re-observed on the next sync cycle. Regression test for: unconditional
-// CommitDeltaToken after pool.Wait() (spec violation per §13.1).
-func TestRunOnce_DeltaTokenNotCommittedOnFailure(t *testing.T) {
+// TestRunOnce_DeltaTokenCommittedWithObservations verifies that the delta token
+// is committed atomically with observations in CommitObservation, even when
+// subsequent actions fail. Failed items are tracked in remote_state for retry
+// rather than relying on delta token rollback.
+func TestRunOnce_DeltaTokenCommittedWithObservations(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -753,7 +753,7 @@ func TestRunOnce_DeltaTokenNotCommittedOnFailure(t *testing.T) {
 					ID: "f1", Name: "will-fail.txt", ParentID: "root",
 					DriveID: driveID, Size: 10, QuickXorHash: "hash1",
 				},
-			}, "should-not-be-saved"), nil
+			}, "new-token-after-observation"), nil
 		},
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
 			return 0, fmt.Errorf("simulated network error")
@@ -763,18 +763,64 @@ func TestRunOnce_DeltaTokenNotCommittedOnFailure(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	// Seed a known delta token so we can verify it's preserved.
+	// Seed a known delta token.
 	seedBaseline(t, eng.baseline, ctx, nil, "old-token")
 
 	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOpts{})
 	require.NoError(t, err, "RunOnce")
-	require.GreaterOrEqual(t, report.Failed, 1, "failed")
+	require.GreaterOrEqual(t, report.Failed, 1, "should have failures")
 
-	// The delta token should NOT have been advanced — it should still be
-	// the old value we seeded.
+	// Delta token IS advanced — committed atomically with observations.
+	// Failed items are tracked in remote_state, not by rolling back the token.
 	token, tokenErr := eng.baseline.GetDeltaToken(ctx, engineTestDriveID, "")
 	require.NoError(t, tokenErr, "GetDeltaToken")
-	assert.Equal(t, "old-token", token, "should not advance on failure")
+	assert.Equal(t, "new-token-after-observation", token,
+		"delta token should advance with observations even when actions fail")
+}
+
+// TestRunOnce_CrashRecovery_ResetsInProgressStates verifies that RunOnce
+// resets downloading/deleting states to their pending equivalents at startup,
+// ensuring crash recovery picks up interrupted work.
+func TestRunOnce_CrashRecovery_ResetsInProgressStates(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	// Simulate a crash by inserting rows with in-progress states directly.
+	now := time.Now().Unix()
+	_, err := eng.baseline.DB().ExecContext(ctx, `
+		INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		VALUES (?, 'item-dl', '/downloading.txt', 'file', 'downloading', ?),
+		       (?, 'item-del', '/deleting.txt', 'file', 'deleting', ?)`,
+		engineTestDriveID, now, engineTestDriveID, now)
+	require.NoError(t, err, "seed in-progress rows")
+
+	// RunOnce should reset these at startup.
+	_, runErr := eng.RunOnce(ctx, SyncBidirectional, RunOpts{})
+	require.NoError(t, runErr, "RunOnce")
+
+	// Verify the states were reset.
+	var dlStatus, delStatus string
+	err = eng.baseline.DB().QueryRowContext(ctx,
+		`SELECT sync_status FROM remote_state WHERE item_id = 'item-dl'`).Scan(&dlStatus)
+	require.NoError(t, err)
+	assert.Equal(t, "pending_download", dlStatus, "downloading should be reset")
+
+	err = eng.baseline.DB().QueryRowContext(ctx,
+		`SELECT sync_status FROM remote_state WHERE item_id = 'item-del'`).Scan(&delStatus)
+	require.NoError(t, err)
+	assert.Equal(t, "pending_delete", delStatus, "deleting should be reset")
 }
 
 func TestResolveSafetyConfig_Default(t *testing.T) {
@@ -1793,7 +1839,7 @@ func TestExecutePlan_ActionsDepsLengthMismatch(t *testing.T) {
 	report := &SyncReport{}
 
 	// Should return cleanly without panic.
-	eng.executePlan(t.Context(), plan, "", report)
+	eng.executePlan(t.Context(), plan, report)
 
 	// Invariant violation should surface in the report.
 	assert.Equal(t, len(plan.Actions), report.Failed)

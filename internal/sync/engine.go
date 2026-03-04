@@ -222,6 +222,11 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 		return nil, err
 	}
 
+	// Crash recovery: reset any in-progress states from a previous crash.
+	if err := e.baseline.ResetInProgressStates(ctx); err != nil {
+		e.logger.Warn("failed to reset in-progress states", slog.String("error", err.Error()))
+	}
+
 	// Step 1: Load baseline.
 	bl, err := e.baseline.Load(ctx)
 	if err != nil {
@@ -229,7 +234,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 	}
 
 	// Steps 2-4: Observe remote + local, buffer, and flush.
-	changes, deltaToken, err := e.observeChanges(ctx, bl, mode)
+	changes, err := e.observeChanges(ctx, bl, mode)
 	if err != nil {
 		return nil, err
 	}
@@ -275,8 +280,8 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 		return report, nil
 	}
 
-	// Execute plan: run workers, then commit delta token if all succeeded.
-	e.executePlan(ctx, plan, deltaToken, report)
+	// Execute plan: run workers.
+	e.executePlan(ctx, plan, report)
 
 	report.Duration = time.Since(start)
 
@@ -303,18 +308,13 @@ func (e *Engine) postSyncHousekeeping() {
 	driveops.CleanTransferArtifacts(e.syncRoot, e.sessionStore, e.logger)
 }
 
-// executePlan populates the dependency tracker, runs the worker pool,
-// and commits the delta token after completion.
+// executePlan populates the dependency tracker and runs the worker pool.
+// Delta token is no longer committed here — it's committed atomically
+// with observations in CommitObservation.
 func (e *Engine) executePlan(
-	ctx context.Context, plan *ActionPlan, deltaToken string, report *SyncReport,
+	ctx context.Context, plan *ActionPlan, report *SyncReport,
 ) {
-	// Guard: changes existed but all classified to no-op actions, producing
-	// an empty plan. Commit the delta token and return — no work to do.
 	if len(plan.Actions) == 0 {
-		if commitErr := e.baseline.CommitDeltaToken(ctx, deltaToken, e.driveID.String(), "", e.driveID.String()); commitErr != nil {
-			e.logger.Error("failed to commit delta token", slog.String("error", commitErr.Error()))
-		}
-
 		return
 	}
 
@@ -353,19 +353,6 @@ func (e *Engine) executePlan(
 	pool.Stop()
 
 	report.Succeeded, report.Failed, report.Errors = pool.Stats()
-
-	// Only advance the delta token when the entire cycle succeeded. If any
-	// action failed, the token stays at the previous value so the next sync
-	// re-observes the items that failed.
-	if report.Failed == 0 {
-		if commitErr := e.baseline.CommitDeltaToken(ctx, deltaToken, e.driveID.String(), "", e.driveID.String()); commitErr != nil {
-			e.logger.Error("failed to commit delta token", slog.String("error", commitErr.Error()))
-		}
-	} else {
-		e.logger.Warn("skipping delta token commit due to failed actions",
-			slog.Int("failed", report.Failed),
-		)
-	}
 }
 
 // buildReportFromCounts populates a SyncReport with plan counts.
@@ -426,21 +413,19 @@ func (e *Engine) observeLocal(ctx context.Context, bl *Baseline) ([]ChangeEvent,
 }
 
 // observeChanges runs remote and local observers based on mode, buffers their
-// events, and returns the flushed change set with the delta token. Extracted
-// from RunOnce to keep each method under ~80 lines.
+// events, and returns the flushed change set. Delta token is committed
+// atomically with observations in observeAndCommitRemote.
 func (e *Engine) observeChanges(
 	ctx context.Context, bl *Baseline, mode SyncMode,
-) ([]PathChanges, string, error) {
+) ([]PathChanges, error) {
 	var remoteEvents []ChangeEvent
-
-	var deltaToken string
 
 	var err error
 
 	if mode != SyncUploadOnly {
-		remoteEvents, deltaToken, err = e.observeRemote(ctx, bl)
+		remoteEvents, err = e.observeAndCommitRemote(ctx, bl)
 		if err != nil {
-			return nil, "", err
+			return nil, err
 		}
 	}
 
@@ -449,7 +434,7 @@ func (e *Engine) observeChanges(
 	if mode != SyncDownloadOnly {
 		localEvents, err = e.observeLocal(ctx, bl)
 		if err != nil {
-			return nil, "", err
+			return nil, err
 		}
 	}
 
@@ -457,7 +442,23 @@ func (e *Engine) observeChanges(
 	buf.AddAll(remoteEvents)
 	buf.AddAll(localEvents)
 
-	return buf.FlushImmediate(), deltaToken, nil
+	return buf.FlushImmediate(), nil
+}
+
+// observeAndCommitRemote wraps observeRemote to persist observations
+// and delta token atomically via CommitObservation.
+func (e *Engine) observeAndCommitRemote(ctx context.Context, bl *Baseline) ([]ChangeEvent, error) {
+	events, deltaToken, err := e.observeRemote(ctx, bl)
+	if err != nil {
+		return nil, err
+	}
+
+	observed := changeEventsToObservedItems(events)
+	if commitErr := e.baseline.CommitObservation(ctx, observed, deltaToken, e.driveID); commitErr != nil {
+		return nil, fmt.Errorf("sync: committing observations: %w", commitErr)
+	}
+
+	return events, nil
 }
 
 // changeEventsToObservedItems converts remote ChangeEvents into ObservedItems
