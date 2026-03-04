@@ -6,13 +6,13 @@ Architectural and design decisions for onedrive-go. Referenced from [CLAUDE.md](
 
 ## Architecture Pivot (Option E)
 
-- **Event-driven sync architecture**: Observers -> ChangeBuffer -> Planner -> Executor -> BaselineManager. Event-driven coordination through immutable events. See [event-driven-rationale.md](event-driven-rationale.md) for the full analysis.
-- **Baseline-only persistence**: 11-column `baseline` table for confirmed synced state. Deletions remove the baseline row. See [data-model.md](data-model.md).
+- **Event-driven sync architecture**: Observers -> ChangeBuffer -> Planner -> Executor -> SyncStore. Event-driven coordination through immutable events. See [event-driven-rationale.md](event-driven-rationale.md) for the full analysis.
+- **Remote state separation**: Three-table model (`remote_state`, `baseline`, `local_issues`) with SyncStore sub-interfaces. See [data-model.md](data-model.md) and [remote-state-separation.md](remote-state-separation.md).
 - **Pure-function Planner**: No I/O, no DB access. Takes (events + baseline) -> ActionPlan. Deterministic, exhaustively testable with table-driven tests. Every decision matrix cell (EF1-EF14, ED1-ED8) is independently verifiable.
 - **Baseline-only move detection**: Moves detected via frozen baseline snapshot during observation. The baseline provides the "before" view for both remote and local move detection.
 - **Path-keyed local observations**: Local observations keyed by path. Remote observations have server IDs. The baseline maps between them.
-- **Sole DB writer**: BaselineManager is the only component that writes to the database. Outcomes + delta token committed atomically in a single transaction.
-- **Watch-primary design**: `sync --watch` is the primary runtime mode. One-shot is "observe everything, process as one batch." Same planner, same executor, same baseline manager for both modes.
+- **Sub-interface DB access**: SyncStore exposes typed sub-interfaces (ObservationWriter, OutcomeWriter, FailureRecorder, etc.) so each component gets minimal write access. WAL mode enables concurrent writers with optimistic concurrency guards.
+- **Watch-primary design**: `sync --watch` is the primary runtime mode. One-shot is "observe everything, process as one batch." Same planner, same executor, same SyncStore for both modes.
 - **Change buffer with debounce**: Prevents processing the same file multiple times during rapid edits. Groups events by path. Move events dual-keyed (new path + synthetic delete at old path).
 - **Symmetric filter application**: Filter applied in Planner to both remote-only AND local-only items. Applied symmetrically to both sides.
 - **Per-side hash baselines**: `local_hash` and `remote_hash` columns handle SharePoint enrichment natively without special code paths. See [sharepoint-enrichment.md](sharepoint-enrichment.md).

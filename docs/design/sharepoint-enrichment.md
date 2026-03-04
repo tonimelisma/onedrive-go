@@ -267,7 +267,7 @@ function executeUpload(ctx, action, syncRoot):
                 "local", localHash,
                 "server", serverHash)
 
-    // 4. Produce Outcome for BaselineManager — store per-side truth
+    // 4. Produce Outcome for SyncStore — store per-side truth
     outcome.ItemID      = response.Item.ID
     outcome.RemoteHash  = serverHash                // Remote truth (may be enriched)
     outcome.Size        = response.Item.Size         // Remote size (may be enriched)
@@ -275,12 +275,12 @@ function executeUpload(ctx, action, syncRoot):
     outcome.Mtime       = parseTimestamp(response.Item.FileSystemInfo.LastModifiedDateTime)
     outcome.LocalHash   = localHash                  // Local truth (what's on disk)
     outcome.SyncedAt    = NowNano()
-    // BaselineManager commits: local_hash=localHash, remote_hash=serverHash
+    // SyncStore commits: local_hash=localHash, remote_hash=serverHash
 
     return UploadResult{OK: true, Size: stat.Size}
 ```
 
-The key point: **no download after enrichment detection.** The executor logs the enrichment and produces an Outcome with divergent hashes. The BaselineManager commits `local_hash != remote_hash`. The planner's per-side comparison prevents any spurious action on the next cycle.
+The key point: **no download after enrichment detection.** The executor logs the enrichment and produces an Outcome with divergent hashes. The SyncStore commits `local_hash != remote_hash`. The planner's per-side comparison prevents any spurious action on the next cycle.
 
 ### 4.4 Three-Way Merge Pseudocode
 

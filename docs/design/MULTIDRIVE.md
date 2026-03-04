@@ -702,7 +702,7 @@ transfer_workers = 8    # concurrent file operations (default 8, range 4-64)
 check_workers    = 4    # concurrent file hash checks (default 4, range 1-16)
 ```
 
-**`transfer_workers`**: Concurrent sync action executors. Each pulls actions from the WorkerPool and executes them: downloads, uploads, renames, deletes, mkdirs. The lane system (interactive/bulk/shared) prioritizes which actions get picked up first — small metadata ops (<10MB) via interactive lane, large transfers (>=10MB) via bulk lane — but this is internal, not configurable.
+**`transfer_workers`**: Concurrent sync action executors. Each pulls actions from a flat worker pool via a single `Ready()` channel and executes them: downloads, uploads, renames, deletes, mkdirs. Go's channel scheduling provides natural fairness between action types.
 
 **`check_workers`**: Controls a global `*semaphore.Weighted` for concurrent QuickXorHash computation in LocalObserver. CPU-bound, independent of network I/O. Currently hashing is synchronous (1 at a time) — this adds concurrency.
 

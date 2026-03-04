@@ -8,40 +8,47 @@
 
 ## 1. Overview
 
-### Baseline-Only Persistence
+### Remote State Separation (Phase 5.7+)
 
-The sync database stores **confirmed synced state** and nothing else. The single
-`baseline` table records what was true the last time a file was successfully
-synced. Everything else --- remote observations from the delta API, local
-observations from the filesystem --- exists only as ephemeral in-memory
-`ChangeEvent` values that flow through the pipeline and are discarded after
-each cycle.
-
-The database is a checkpoint, not a coordination mechanism.
-
-### What the Database Stores
+The sync database uses a **three-table state model** to provide robust failure
+recovery and offline verification. See
+[remote-state-separation.md](remote-state-separation.md) for the full
+architectural rationale.
 
 | Table | Purpose | Mutability |
 |---|---|---|
-| `baseline` | Confirmed synced state per path | Updated per-action as each transfer completes |
-| `delta_tokens` | Graph API delta cursor per drive | Committed when all actions for a cycle complete |
-| `conflicts` | Conflict tracking with resolution history | Append on detection, update on resolution |
+| `remote_state` | Full mirror of remote drive state (every item the delta API has told us about) | Updated on each delta observation and action completion |
+| `baseline` | Confirmed synced state per `(drive_id, item_id)` | Updated per-action as each transfer completes |
+| `local_issues` | Upload failure tracking and path violations | Updated on upload failure, cleared on success |
+| `delta_tokens` | Graph API delta cursor per drive | Committed atomically with `remote_state` observations |
+| `conflicts` | Conflict tracking with resolution status | Append on detection, update on resolution |
+| `sync_metadata` | Key-value store for sync reporting | Updated after each sync cycle |
 | `schema_migrations` | Schema version tracking | Updated on startup |
 
-**4 tables.** The dominant table (`baseline`) has 11 columns. Upload sessions
-are tracked via a file-based `SessionStore` (JSON files in the data directory),
-not in the database.
+**7 tables.** The three core tables (`remote_state`, `baseline`, `local_issues`)
+implement the Remote State Separation architecture. Upload sessions are tracked
+via a file-based `SessionStore` (JSON files in the data directory), not in the
+database.
 
-### Single Writer: BaselineManager
+### SyncStore: Sub-Interface Database Access
 
-All database writes flow through the `BaselineManager`. The observers (remote
-and local) produce change events. The planner produces an action plan. The
-executor produces outcomes. Only the `BaselineManager` applies outcomes to the
-database. Each completed action is committed individually --- a per-action
-atomic transaction updates the baseline row for the affected path. The delta
-token is committed separately when all actions for a cycle complete. Because
-all database writes go through the single `BaselineManager`, there is never
-more than one writer, avoiding `SQLITE_BUSY` errors by construction.
+All database writes flow through the `SyncStore`, which exposes typed
+sub-interfaces grouped by caller identity. Each caller receives the narrowest
+interface it needs, enforcing transition ownership at compile time:
+
+| Interface | Caller | Purpose |
+|-----------|--------|---------|
+| `ObservationWriter` | Remote observer | Writes observed remote state + advances delta token atomically |
+| `OutcomeWriter` | Worker pool | Commits action results to baseline + updates `remote_state` on success |
+| `FailureRecorder` | `drainWorkerResults` | Records failure metadata on `remote_state` rows |
+| `ConflictEscalator` | Reconciler | Escalates permanently-failing items to conflicts |
+| `StateReader` | Reconciler, planner, CLI | Read-only queries across all tables |
+| `StateAdmin` | CLI commands, maintenance | Admin writes (resolve conflicts, reset failures) |
+
+Concurrency safety comes from SQLite WAL mode with a 5-second busy timeout.
+Every write method uses optimistic concurrency WHERE clauses to prevent stale
+updates. See [remote-state-separation.md §10-12](remote-state-separation.md)
+for the full concurrency model.
 
 ---
 
@@ -83,9 +90,8 @@ Shared drives share the token with their primary drive (personal or business). T
 **Engine**: `modernc.org/sqlite` (pure Go, no CGO dependency).
 
 The database uses WAL (Write-Ahead Logging) mode with `synchronous = FULL` for
-crash-safe durability. WAL mode allows concurrent readers while the single
-`BaselineManager` writer holds the write lock. See section 9 for the full
-pragma list.
+crash-safe durability. WAL mode allows concurrent readers while writers
+serialize via busy timeout. See section 9 for the full pragma list.
 
 ### Migration Strategy
 
@@ -111,67 +117,104 @@ On first run with a new drive:
 ### Crash Recovery
 
 SQLite WAL mode ensures the database is always in a consistent state after a
-crash. On restart, the sync engine loads the baseline and runs a fresh
-observation + planning cycle. Because the delta token for any incomplete cycle
-has not been advanced, the same delta is re-fetched from the Graph API. The
-idempotent planner detects actions that were already completed (their baseline
-rows already reflect the synced state) and skips them, producing only the
-remaining work. Upload sessions for large files are tracked via file-based
-`SessionStore` and can be resumed if the session has not expired and the local
-file has not changed.
+crash. On restart, the sync engine loads the baseline and queries
+`remote_state` for unreconciled rows (items in `downloading`, `pending_download`,
+or `download_failed` status). The reconciler resets in-flight items
+(`downloading` -> `pending_download`) and schedules retries. The delta token
+always reflects the latest successful API poll (not sync success), so no
+observations are ever lost. Previously-failed items persist in `remote_state`
+and are recovered by the reconciler, not by delta replay. See
+[remote-state-separation.md §19](remote-state-separation.md) for the full
+crash recovery matrix.
+
+Upload sessions for large files are tracked via file-based `SessionStore` and
+can be resumed if the session has not expired and the local file has not
+changed.
 
 ---
 
-## 3. Baseline Table
+## 3. Remote State Table
 
-The `baseline` table is the core of the sync database. It stores the confirmed
-synced state of every tracked file and folder. Each row represents a path that
-was successfully synced --- the content hash, size, and modification time that
-both sides agreed on at sync time.
+The `remote_state` table is a full mirror of every item the delta API has told
+us about. It persists remote observations durably, decoupling the delta token
+(API cursor) from sync success. See
+[remote-state-separation.md §5](remote-state-separation.md) for the rationale.
+
+```sql
+CREATE TABLE remote_state (
+    drive_id      TEXT    NOT NULL,
+    item_id       TEXT    NOT NULL,
+    path          TEXT    NOT NULL,
+    parent_id     TEXT,
+    item_type     TEXT    NOT NULL CHECK(item_type IN ('file', 'folder', 'root')),
+    hash          TEXT,
+    size          INTEGER,
+    mtime         INTEGER,
+    etag          TEXT,
+    previous_path TEXT,
+    sync_status   TEXT    NOT NULL DEFAULT 'pending_download'
+                  CHECK(sync_status IN (
+                      'pending_download', 'downloading', 'download_failed',
+                      'synced',
+                      'pending_delete', 'deleting', 'delete_failed', 'deleted',
+                      'filtered')),
+    observed_at   INTEGER NOT NULL CHECK(observed_at > 0),
+    failure_count INTEGER NOT NULL DEFAULT 0,
+    next_retry_at INTEGER,
+    last_error    TEXT,
+    http_status   INTEGER,
+    PRIMARY KEY (drive_id, item_id)
+);
+```
+
+**15 columns.** The `sync_status` column is an explicit state machine that
+tracks each item's sync lifecycle. See
+[remote-state-separation.md §7](remote-state-separation.md) for the full
+state machine and transition ownership.
+
+Key indexes:
+- `idx_remote_state_status` on `sync_status` — fast reconciler queries
+- `idx_remote_state_parent` on `parent_id` — folder rename cascade
+- `idx_remote_state_active_path` — partial unique index on `path` for active
+  (non-deleted) items only, preventing path collisions while allowing deleted
+  items to retain their path for diagnostics
+
+---
+
+## 4. Baseline Table
+
+The `baseline` table stores the confirmed synced state of every tracked file
+and folder. Each row represents an item that was successfully synced --- the
+content hash, size, and modification time that both sides agreed on at sync
+time. Uses `(drive_id, item_id)` as primary key with `path` as a unique
+secondary key.
 
 ```sql
 CREATE TABLE baseline (
-    -- Primary key: path relative to sync root (NFC-normalized, URL-decoded)
-    -- The filename component is always filepath.Base(path), so no separate
-    -- name column is needed.
-    path            TEXT    PRIMARY KEY,
-
-    -- Identity: server-assigned, used for remote operations and move detection
-    -- For items under shortcuts (shared folder content), drive_id stores the
-    -- SOURCE drive's ID (remoteItem.driveId), not the user's own drive ID.
-    -- This is correct — API operations on these items must target the source drive.
-    drive_id        TEXT    NOT NULL,    -- normalized: lowercase, zero-padded to 16 chars
+    drive_id        TEXT    NOT NULL,
     item_id         TEXT    NOT NULL,
+    path            TEXT    NOT NULL UNIQUE,
     parent_id       TEXT,
     item_type       TEXT    NOT NULL CHECK(item_type IN ('file', 'folder', 'root')),
 
     -- Per-side hashes (handles SharePoint enrichment natively)
-    -- For normal files: local_hash == remote_hash
-    -- For enriched files: they diverge, both recorded
-    -- For iOS .heic files: remote hash may be unreliable (known API bug)
     local_hash      TEXT,
     remote_hash     TEXT,
 
     -- Confirmed synced state
     size            INTEGER,
     mtime           INTEGER,    -- local mtime at sync time (Unix nanoseconds)
-                                -- OneDrive truncates to whole seconds; stored at full
-                                -- nanosecond precision from local FS for fast-check
     synced_at       INTEGER NOT NULL CHECK(synced_at > 0),
 
     -- Remote metadata for conditional operations (If-Match on deletes)
-    etag            TEXT
+    etag            TEXT,
+    PRIMARY KEY (drive_id, item_id)
 );
 ```
 
-**11 columns.** The baseline stores only confirmed synced state. Two columns
-evaluated during first-principles design were excluded:
-
-- **`name`**: Redundant with `filepath.Base(path)`. Eliminating it removes a
-  consistency invariant that could silently break.
-- **`ctag`**: Not used by any code path (planner compares hashes, not ctags;
-  executor does not use ctag for conditional operations; delta API returns fresh
-  ctags in its responses). Can be added back via migration if ever needed.
+**11 columns.** ID-based primary key decouples remote identity from local
+filesystem paths. Moves are a single UPDATE (atomic) rather than DELETE+INSERT.
+Path is a UNIQUE secondary key for fast local lookups.
 
 ### Per-Side Hashes
 
@@ -193,11 +236,11 @@ local content has not changed. By recording both hashes at sync time:
 
 ### Dual-Key Access
 
-The baseline table has `path` as its primary key for local operations (path
-lookups, prefix queries, cascading updates on folder renames). A unique index
-on `(drive_id, item_id)` supports remote operations (move detection: when a
-delta reports an item ID at a new path, the baseline can locate the old entry
-by item ID).
+The baseline table has `(drive_id, item_id)` as its primary key (matching API
+identity) and `path` as a UNIQUE secondary key for local operations (path
+lookups, prefix queries). Move detection uses the primary key: when a delta
+reports an item ID at a new path, the baseline locates the old entry by item ID
+and updates the path in a single UPDATE (no DELETE+INSERT).
 
 ### Column Notes
 
@@ -212,7 +255,7 @@ by item ID).
 
 ---
 
-## 4. Delta Tokens Table
+## 5. Delta Tokens Table
 
 Stores the Graph API delta query cursor per drive scope. The delta token is a
 first-class piece of sync state that must be persisted across restarts.
@@ -234,22 +277,23 @@ containing shortcuts to shared folders have additional delta tokens — one per
 shortcut, where `scope_id` is the `remoteItem.id` and `scope_drive` is the
 `remoteItem.driveId` from the shortcut's remote reference.
 
-**Critical property**: The delta token is committed only when all actions for a
-cycle are done. Individual per-action commits update the baseline but do not
-advance the delta token. If the process crashes mid-cycle, the token is not
-advanced, and the same delta is re-fetched on restart (idempotent). Already-
-completed actions are detected as convergent by the planner (EF4/EF11).
+**Critical property**: The delta token is committed atomically with
+`remote_state` observations in a single transaction via
+`SyncStore.CommitObservation()`. The token is a pure API cursor — it tracks
+what the API has told us, not what we've synced. This decoupling is the core
+of the Remote State Separation design. If the daemon crashes after the
+transaction, previously-observed items persist in `remote_state` and are
+recovered by the reconciler.
 
 On HTTP 410 (token expired), the sync engine deletes the token and falls back
 to full enumeration.
 
 ---
 
-## 5. Conflict Tracking
+## 6. Conflict Tracking
 
-Per-file conflict tracking. The `history` column stores a JSON array of
-resolution events, keeping a full audit trail without requiring an additional
-table.
+Per-file conflict tracking. The `history` column is reserved for a future
+resolution audit trail but is currently dormant/unused (B-160).
 
 ```sql
 CREATE TABLE conflicts (
@@ -290,20 +334,44 @@ CLI command and debugging.
 | `keep_remote` | Remote version wins, local overwritten |
 | `manual` | User manually resolved via `resolve` command |
 
-### History Format
+---
 
-```json
-[
-    {"action": "detected", "at": 1708123456000000000, "by": "auto"},
-    {"action": "keep_both", "at": 1708123460000000000, "by": "auto",
-     "renamed": "file.conflict.20240217T120000.txt"},
-    {"action": "keep_local", "at": 1708200000000000000, "by": "user"}
-]
+## 7. Local Issues Table
+
+Upload failure tracking is separate from `remote_state` because uploads are
+locally-driven. Local files have no item ID until uploaded. See
+[remote-state-separation.md §14](remote-state-separation.md).
+
+```sql
+CREATE TABLE local_issues (
+    path          TEXT    PRIMARY KEY,
+    issue_type    TEXT    NOT NULL
+                  CHECK(issue_type IN (
+                      'invalid_filename', 'path_too_long', 'file_too_large',
+                      'permission_denied', 'upload_failed', 'quota_exceeded',
+                      'locked', 'sharepoint_restriction')),
+    sync_status   TEXT    NOT NULL DEFAULT 'pending_upload'
+                  CHECK(sync_status IN (
+                      'pending_upload', 'uploading', 'upload_failed',
+                      'permanently_failed', 'resolved')),
+    failure_count INTEGER NOT NULL DEFAULT 0,
+    next_retry_at INTEGER,
+    last_error    TEXT,
+    http_status   INTEGER,
+    first_seen_at INTEGER NOT NULL,
+    last_seen_at  INTEGER NOT NULL,
+    file_size     INTEGER,
+    local_hash    TEXT
+);
 ```
+
+Items failing pre-upload validation (invalid filenames, path too long, file too
+large) are written with `permanently_failed` status and surfaced via
+`onedrive-go issues`.
 
 ---
 
-## 6. Upload Sessions (File-Based)
+## 8. Upload Sessions (File-Based)
 
 Resumable upload sessions for large files are tracked via the `SessionStore`,
 which persists session state as individual JSON files in the data directory
@@ -319,55 +387,52 @@ sync cycle.
 
 ---
 
-## 7. Indexes and Performance
+## 9. Indexes and Performance
 
-### 7.1 Primary Indexes
+### 9.1 Primary Indexes
 
 ```sql
--- Move detection: look up baseline entry by server-assigned item_id
-CREATE UNIQUE INDEX idx_baseline_item ON baseline(drive_id, item_id);
-
--- Cascading path operations: folder renames update all children by parent_id
+-- Baseline: cascading path operations (folder renames update children by parent_id)
 CREATE INDEX idx_baseline_parent ON baseline(parent_id);
 
--- Conflict filtering by resolution status (for `conflicts` CLI command)
+-- Remote state: fast reconciler queries
+CREATE INDEX idx_remote_state_status ON remote_state(sync_status);
+CREATE INDEX idx_remote_state_parent ON remote_state(parent_id);
+
+-- Remote state: path uniqueness for active items only (deleted items retain paths)
+CREATE UNIQUE INDEX idx_remote_state_active_path
+    ON remote_state(path)
+    WHERE sync_status NOT IN ('deleted', 'pending_delete');
+
+-- Conflict filtering by resolution status
 CREATE INDEX idx_conflicts_resolution ON conflicts(resolution);
 ```
 
-**Indexes NOT included** (evaluated and rejected during first-principles review):
+**Indexes NOT included** (evaluated and rejected):
 
 | Candidate | Why excluded |
 |-----------|-------------|
-| `idx_baseline_path_prefix ON baseline(path)` | Redundant. `path` is the PRIMARY KEY; SQLite's PK B-tree already supports prefix scans (`LIKE 'prefix/%'`) natively. A separate index doubles write overhead for zero query benefit. |
-| `idx_conflicts_drive ON conflicts(drive_id)` | Redundant. Each drive has its own database file, so `drive_id` is identical for every row. An index on a constant column has no selectivity. |
+| `idx_conflicts_drive ON conflicts(drive_id)` | Redundant. Each drive has its own database file, so `drive_id` is identical for every row. |
 
-### 7.2 Performance Guidelines
+### 9.2 Performance Guidelines
 
-**WAL checkpointing**: The `BaselineManager` performs a WAL checkpoint after
-each commit transaction. Because all writes happen in a single transaction per
-cycle, checkpoint frequency matches cycle frequency.
+**WAL checkpointing**: The `SyncStore` performs periodic WAL checkpoints —
+after initial sync, every 30 minutes, and on shutdown. This prevents unbounded
+WAL growth with the full remote mirror.
 
-**VACUUM**: Run only on schema migrations, not as routine maintenance. Routine
-VACUUM is expensive and provides minimal benefit under steady-state use.
+**VACUUM**: Run only on schema migrations, not as routine maintenance.
 
 **Prepared statements**: All repeated queries use prepared statements cached
-for the lifetime of the database connection. This avoids re-parsing SQL on
-every call.
+for the lifetime of the database connection.
 
-**Per-action commits**: The `BaselineManager` commits each completed action
-individually. Each per-action transaction updates the baseline row for the
-affected path, minimizing fsync overhead per commit while ensuring incremental
-progress is durable.
-
-**Path-prefix queries**: The baseline table's PRIMARY KEY on `path` supports
-efficient prefix matching for queries like `SELECT * FROM baseline WHERE path
-LIKE 'Documents/Reports/%'`. SQLite's B-tree ordering on TEXT keys makes
-prefix scans O(log n + k) where k is the number of matching rows. No
-additional index is needed.
+**Per-action commits**: The `SyncStore` commits each completed action
+individually. Each per-action transaction updates the baseline row and the
+corresponding `remote_state` row, minimizing fsync overhead per commit while
+ensuring incremental progress is durable.
 
 ---
 
-## 8. Three-Way Merge Data Flow
+## 10. Three-Way Merge Data Flow
 
 The planner constructs a `PathView` for each changed path by combining the
 in-memory baseline snapshot with change events. This `PathView` is the input
@@ -427,7 +492,7 @@ resolved silently by updating the baseline to match both sides.
 
 After a file is successfully synced (upload verified by hash, download
 hash-checked), the executor produces an `Outcome` containing the confirmed
-state. The `BaselineManager` applies it:
+state. The `SyncStore` applies it via `CommitOutcome()`:
 
 - **Download completed**: Upsert baseline row with the remote's hash as
   `remote_hash` and the computed local hash as `local_hash` (usually equal,
@@ -439,12 +504,14 @@ state. The `BaselineManager` applies it:
 - **False conflict**: Update the baseline row's hashes, size, and mtime to
   the converged values.
 
-Each outcome is committed individually as actions complete. The delta token
-is committed separately when all actions for a cycle are done.
+Each outcome is committed individually as actions complete. The
+`CommitOutcome()` transaction also updates the corresponding `remote_state`
+row (e.g., setting `sync_status = 'synced'` for downloads, or updating
+hash/etag for uploads).
 
 ---
 
-## 9. Conventions
+## 11. Conventions
 
 ### SQLite Pragmas
 
@@ -456,10 +523,10 @@ PRAGMA busy_timeout = 5000;             -- 5s wait on lock contention (defense-i
 PRAGMA journal_size_limit = 67108864;   -- 64 MiB WAL size limit
 ```
 
-The `busy_timeout` is defense-in-depth. Because all database writes go through
-the single `BaselineManager`, lock contention is not expected during normal
-operation. The timeout protects against unexpected concurrent access (e.g.,
-`status` command reading while sync writes).
+The `busy_timeout` handles concurrent write access from multiple goroutines
+(observer writing `remote_state`, workers writing baseline via `CommitOutcome`,
+drain writing failure metadata). Under WAL mode, readers never block — only
+writers serialize.
 
 ### Timestamps
 
@@ -514,83 +581,23 @@ before storage to handle inconsistencies in the Graph API.
 
 ## Appendix A: Full DDL
 
-Complete DDL in execution order:
+The canonical schema is in `internal/sync/migrations/00001_consolidated_schema.sql`.
+See that file for the authoritative DDL. The schema includes:
+
+- `baseline` — confirmed synced state, PK `(drive_id, item_id)`, UNIQUE on `path`
+- `delta_tokens` — Graph API delta cursor per drive scope
+- `conflicts` — conflict tracking with resolution status
+- `sync_metadata` — key-value store for sync reporting
+- `remote_state` — full remote mirror with explicit `sync_status` state machine
+- `local_issues` — upload failure tracking and path violations
+- `schema_migrations` — schema version tracking (managed by goose)
+
+Pragmas (set on every connection open):
 
 ```sql
--- ============================================================
--- Pragmas (set on every connection open, before any queries)
--- ============================================================
-
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = FULL;
 PRAGMA foreign_keys = ON;
 PRAGMA busy_timeout = 5000;
 PRAGMA journal_size_limit = 67108864;
-
--- ============================================================
--- Schema migrations tracking
--- ============================================================
-
-CREATE TABLE schema_migrations (
-    version     INTEGER PRIMARY KEY,
-    applied_at  INTEGER NOT NULL CHECK(applied_at > 0)
-);
-
--- ============================================================
--- Core tables
--- ============================================================
-
-CREATE TABLE baseline (
-    path            TEXT    PRIMARY KEY,
-    drive_id        TEXT    NOT NULL,
-    item_id         TEXT    NOT NULL,
-    parent_id       TEXT,
-    item_type       TEXT    NOT NULL CHECK(item_type IN ('file', 'folder', 'root')),
-    local_hash      TEXT,
-    remote_hash     TEXT,
-    size            INTEGER,
-    mtime           INTEGER,
-    synced_at       INTEGER NOT NULL CHECK(synced_at > 0),
-    etag            TEXT
-);
-
-CREATE TABLE delta_tokens (
-    drive_id    TEXT    NOT NULL,
-    scope_id    TEXT    NOT NULL,
-    scope_drive TEXT    NOT NULL,
-    token       TEXT    NOT NULL,
-    updated_at  INTEGER NOT NULL CHECK(updated_at > 0),
-    PRIMARY KEY (drive_id, scope_id)
-);
-
-CREATE TABLE conflicts (
-    id              TEXT    PRIMARY KEY,
-    drive_id        TEXT    NOT NULL,
-    item_id         TEXT,
-    path            TEXT    NOT NULL,
-    conflict_type   TEXT    NOT NULL CHECK(conflict_type IN (
-                                'edit_edit', 'edit_delete', 'create_create'
-                            )),
-    detected_at     INTEGER NOT NULL CHECK(detected_at > 0),
-    local_hash      TEXT,
-    remote_hash     TEXT,
-    local_mtime     INTEGER,
-    remote_mtime    INTEGER,
-    resolution      TEXT    NOT NULL DEFAULT 'unresolved'
-                            CHECK(resolution IN (
-                                'unresolved', 'keep_both', 'keep_local',
-                                'keep_remote', 'manual'
-                            )),
-    resolved_at     INTEGER,
-    resolved_by     TEXT    CHECK(resolved_by IN ('user', 'auto') OR resolved_by IS NULL),
-    history         TEXT
-);
-
--- ============================================================
--- Indexes
--- ============================================================
-
-CREATE UNIQUE INDEX idx_baseline_item ON baseline(drive_id, item_id);
-CREATE INDEX idx_baseline_parent ON baseline(parent_id);
-CREATE INDEX idx_conflicts_resolution ON conflicts(resolution);
 ```

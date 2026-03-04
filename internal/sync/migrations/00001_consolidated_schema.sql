@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS conflicts (
     item_id         TEXT,
     path            TEXT    NOT NULL,
     conflict_type   TEXT    NOT NULL CHECK(conflict_type IN (
-                                'edit_edit', 'edit_delete', 'create_create'
+                                'edit_edit', 'edit_delete', 'create_create', 'sync_failure'
                             )),
     detected_at     INTEGER NOT NULL CHECK(detected_at > 0),
     local_hash      TEXT,

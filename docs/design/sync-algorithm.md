@@ -18,7 +18,7 @@
 7. [Planner](#7-planner)
 8. [Safety Checks](#8-safety-checks)
 9. [Executor](#9-executor)
-10. [Baseline Manager](#10-baseline-manager)
+10. [SyncStore](#10-syncstore)
 11. [Initial Sync](#11-initial-sync)
 12. [Continuous Mode (`--watch`)](#12-continuous-mode---watch)
 13. [Crash Recovery](#13-crash-recovery)
@@ -40,7 +40,7 @@ This specification defines the complete synchronization algorithm for onedrive-g
 - How local, remote, and baseline states are reconciled into an action plan (Planner)
 - How safety invariants protect user data (Safety Checks)
 - How planned actions are executed via parallel worker pools (Executor)
-- How confirmed state is persisted atomically (Baseline Manager)
+- How confirmed state is persisted atomically (SyncStore)
 - How continuous mode operates with real-time change detection (`--watch`)
 - How the system recovers from crashes and interruptions
 
@@ -113,11 +113,11 @@ Each pipeline stage works with its own types. The type system makes it impossibl
 | `PathView` | Planner (internally) | Planner decision matrix, Action | Ephemeral (one cycle) |
 | `RemoteState` | Planner (from remote events) | Decision matrix | Ephemeral (one cycle) |
 | `LocalState` | Planner (from local events) | Decision matrix | Ephemeral (one cycle) |
-| `BaselineEntry` | BaselineManager.Load | All components (read-only) | Persisted in SQLite |
-| `Baseline` | BaselineManager.Load | Observers, Planner | One cycle (frozen snapshot) |
+| `BaselineEntry` | SyncStore.Load | All components (read-only) | Persisted in SQLite |
+| `Baseline` | SyncStore.Load | Observers, Planner | One cycle (frozen snapshot) |
 | `Action` | Planner | Executor | Ephemeral (one cycle) |
 | `ActionPlan` | Planner | Executor | Ephemeral (one cycle) |
-| `Outcome` | Executor | BaselineManager.CommitOutcome | Ephemeral (one cycle) |
+| `Outcome` | Executor | SyncStore.CommitOutcome | Ephemeral (one cycle) |
 
 **ChangeEvent** carries all information about an observed change:
 
@@ -279,15 +279,15 @@ Each component has a single responsibility and a clean contract:
 - **Observers** produce `[]ChangeEvent` -- they never write to the database.
 - **Change Buffer** groups events by path into `[]PathChanges` -- thread-safe, debounced.
 - **Planner** is a pure function: `([]PathChanges, *Baseline, SyncMode, SafetyConfig) -> *ActionPlan` -- no I/O.
-- **Workers** execute actions and produce `Outcome` per action. Each outcome is committed to the baseline immediately via `BaselineManager.CommitOutcome()`.
-- **Baseline Manager** is the sole database writer -- it commits each outcome individually via per-action atomic transactions.
+- **Workers** execute actions and produce `Outcome` per action. Each outcome is committed to the baseline immediately via `SyncStore.CommitOutcome()`.
+- **SyncStore** is the database access layer -- it commits each outcome individually via per-action atomic transactions, using typed sub-interfaces for compile-time safety.
 
 ### 2.2 Component Interaction Summary
 
 **One-Shot Mode** (single sync cycle):
 
 ```
-1. BaselineManager.Load()           -> Baseline (from DB, cached in memory)
+1. SyncStore.Load()           -> Baseline (from DB, cached in memory)
 2. RemoteObserver.FullDelta()       -> []ChangeEvent (remote)
 3. LocalObserver.FullScan()         -> []ChangeEvent (local)
    (steps 2-3 run concurrently)
@@ -301,7 +301,7 @@ Each component has a single responsibility and a clean contract:
 **Watch Mode** (continuous sync):
 
 ```
-1. BaselineManager.Load()           -> Baseline (from DB, cached in memory)
+1. SyncStore.Load()           -> Baseline (from DB, cached in memory)
 2. RemoteObserver.Watch()           -> streams ChangeEvents (poll / WebSocket)
 3. LocalObserver.Watch()            -> streams ChangeEvents (inotify / FSEvents)
 4. ChangeBuffer debounces (2s)      -> []PathChanges (only changed paths)
@@ -943,7 +943,7 @@ All safety invariants are implemented as pure functions operating on the `Action
 The planner checks `view.Baseline != nil` before emitting `ActionRemoteDelete`. This is structurally enforced by the decision matrix: EF6 (remote delete) requires `Baseline exists`. Without a baseline entry, the path classification falls to EF13 (new local, absent remote = upload) or produces no action (both absent, no baseline = nothing to do).
 
 **S2 -- Never process deletions from incomplete enumeration**:
-The Remote Observer returns the new delta token alongside events. The engine passes this token to `BaselineManager.CommitDeltaToken()` only after all cycle actions complete successfully. If the delta fetch is interrupted (e.g., network failure mid-pagination), no events are produced and no token is advanced. The `.nosync` guard fires in the Local Observer before any events are produced, preventing sync against unmounted volumes.
+The Remote Observer returns the new delta token alongside events. The engine passes this token to `SyncStore.CommitDeltaToken()` only after all cycle actions complete successfully. If the delta fetch is interrupted (e.g., network failure mid-pagination), no events are produced and no token is advanced. The `.nosync` guard fires in the Local Observer before any events are produced, preventing sync against unmounted volumes.
 
 **S3 -- Atomic file writes for downloads**:
 Implemented in the executor (see Section 9.4).
@@ -1204,14 +1204,14 @@ Total lane workers = `runtime.NumCPU()` or user-configured cap (minimum 4). Work
 
 ---
 
-## 10. Baseline Manager
+## 10. SyncStore
 
-The Baseline Manager is the **sole writer** to the SQLite database. It loads the baseline at cycle start and commits outcomes at cycle end. The single-writer design means database concurrency is never a concern.
+The SyncStore manages the three-table state model (`remote_state`, `baseline`, `local_issues`) via typed sub-interfaces. It loads the baseline at cycle start and commits outcomes per-action. Concurrency safety comes from SQLite WAL mode with optimistic concurrency WHERE clauses. See [remote-state-separation.md §12](remote-state-separation.md) for the sub-interface design.
 
 ### 10.1 Load (Snapshot for Planner)
 
 ```go
-func (m *BaselineManager) Load(ctx context.Context) (*Baseline, error)
+func (m *SyncStore) Load(ctx context.Context) (*Baseline, error)
 ```
 
 Reads the entire `baseline` table into memory and constructs two lookup maps:
@@ -1322,26 +1322,31 @@ type BaselineEntry struct {
 }
 ```
 
-**Supporting tables** (managed alongside the baseline):
+**Additional tables** (managed by the SyncStore):
 
 | Table | Purpose | Writer |
 |-------|---------|--------|
-| `delta_tokens` | Delta cursor per drive | BaselineManager (same txn as baseline) |
-| `conflicts` | Conflict tracking with resolution status | BaselineManager |
+| `remote_state` | Full mirror of remote drive state | ObservationWriter, OutcomeWriter, FailureRecorder |
+| `local_issues` | Upload failure tracking | Planner, OutcomeWriter |
+| `delta_tokens` | Delta cursor per drive | ObservationWriter (atomically with `remote_state`) |
+| `conflicts` | Conflict tracking with resolution status | SyncStore, ConflictEscalator |
+| `sync_metadata` | Key-value store for sync reporting | StateAdmin |
 | `schema_migrations` | Schema version tracking | Engine (on startup) |
 | SessionStore (file-based) | Crash recovery for large uploads (JSON files in data dir) | TransferManager (pre-upload) |
+
+See [remote-state-separation.md](remote-state-separation.md) for the full three-table model and sub-interface design.
 
 **SQLite configuration**:
 
 ```sql
-PRAGMA journal_mode = WAL;           -- concurrent readers + single writer
+PRAGMA journal_mode = WAL;           -- concurrent readers, writers serialize via busy_timeout
 PRAGMA synchronous = FULL;           -- durability on crash
 PRAGMA foreign_keys = ON;
-PRAGMA busy_timeout = 5000;          -- defense-in-depth (5 second wait)
+PRAGMA busy_timeout = 5000;          -- handles concurrent writes from multiple goroutines
 PRAGMA journal_size_limit = 67108864; -- 64 MiB WAL size limit
 ```
 
-WAL mode enables `status`, `conflicts`, and `verify` commands to read the database concurrently while a sync cycle is writing. The `busy_timeout` is defense-in-depth against any unexpected concurrent access.
+WAL mode enables `status`, `conflicts`, and `verify` commands to read the database concurrently while sync writes. Multiple goroutines write concurrently (observer, workers, drain); the `busy_timeout` handles serialization.
 
 **Separate database file per drive**: Each drive gets its own SQLite database file. This provides complete isolation between accounts. Cross-drive data contamination is structurally impossible.
 
@@ -1586,11 +1591,11 @@ The event-driven architecture provides natural crash recovery because the baseli
 
 | Crash Point | State Changed | Recovery |
 |-------------|---------------|----------|
-| During `BaselineManager.Load()` | Nothing | Re-read baseline |
+| During `SyncStore.Load()` | Nothing | Re-read baseline |
 | During `RemoteObserver.FullDelta()` | Nothing (events are in-memory) | Re-run cycle. Delta re-fetched from saved token. |
 | During `LocalObserver.FullScan()` | Nothing (events are in-memory) | Re-run cycle. Filesystem re-scanned. |
 | During `Planner.Plan()` | Nothing (pure function) | Re-run cycle. |
-| During execution | Completed actions already committed to baseline individually. In-memory DepTracker state lost. | On restart: delta token not advanced, so same delta is re-fetched. Idempotent planner detects already-committed actions as convergent (EF4/EF11) and skips them. Remaining actions are re-planned and executed. Upload sessions resumed via SessionStore. |
+| During execution | Completed actions already committed to baseline + `remote_state` individually. In-memory DepTracker state lost. | On restart: previously-failed items persist in `remote_state` and are recovered by the reconciler. Delta token reflects latest poll, so only new changes arrive. Upload sessions resumed via SessionStore. |
 | During per-action commit | SQLite transaction: baseline update or nothing | If rolled back: action is re-planned on restart (idempotent). If committed: action is durable. |
 | During watch mode (between cycles) | Buffer has pending events. Completed actions in baseline. | Events re-observed by the watchers. Debounce/dedup handles redundancy. Completed actions persist. |
 

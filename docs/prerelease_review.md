@@ -89,7 +89,7 @@ Dependencies: Inc 3 before Inc 4 (concurrency must be sound before state machine
 1. Lock ordering contract document (every mutex, documented hierarchy)
 2. Channel lifecycle document (every channel, who creates/closes/reads/writes)
 3. Audit all `ForEachPath` callers for re-entrancy safety
-4. `sync.Once` or mutex on `BaselineManager.Load`
+4. `sync.Once` or mutex on `SyncStore.Load`
 5. Targeted `-race` stress tests for DepTracker, Buffer, WorkerPool
 
 **Verification**: Run full test suite with `-race` under CPU contention. Custom stress tests that hammer concurrent operations on shared state.

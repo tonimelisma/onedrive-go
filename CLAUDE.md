@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-**Phases 1-5.6 complete. Phase 5.7.0 done (Remote State Separation schema + SyncStore foundation). Phase 5.7.1 done (Remote State Observation Layer + Filtering Symmetry). Phase 6.0a-6.0e done (DriveSession, Orchestrator, daemon mode, worker config, driveops package). Phase 6.0d done (inotify watch limit detection, multi-drive E2E, CI dual-token). Phase 6.0f done (zero-config removal, scanner extraction, daemon E2E). Phase 6.0g done (explicit E2E config migration, SIGHUP E2E, root package coverage). E2E hardening done (42 new e2e_full tests — 86 total). Next: Phase 5.7.2+ (Remote State Separation continued), then Phase 6 shared content (6.3-6.4b).** See [docs/roadmap.md](docs/roadmap.md).
+**Phases 1-5.6 complete. Phase 5.7.0 done (Remote State Separation schema + SyncStore foundation). Phase 5.7.1 done (Remote State Observation Layer + Filtering Symmetry). Phase 5.7.2+5.7.3 done (Dispatch transitions, crash recovery, Reconciler goroutine + conflict escalation). Phase 6.0a-6.0e done (DriveSession, Orchestrator, daemon mode, worker config, driveops package). Phase 6.0d done (inotify watch limit detection, multi-drive E2E, CI dual-token). Phase 6.0f done (zero-config removal, scanner extraction, daemon E2E). Phase 6.0g done (explicit E2E config migration, SIGHUP E2E, root package coverage). E2E hardening done (42 new e2e_full tests — 86 total). Next: Phase 5.7.4 (Upload failure tracking + status integration + interface narrowing), then Phase 6 shared content (6.3-6.4b).** See [docs/roadmap.md](docs/roadmap.md).
 
 ## Architecture Overview
 

@@ -329,7 +329,7 @@ Analysis of the last 100 CI runs (as of 2026-03-03) shows 80% pass rate (80 succ
 
 **Actionable items (all addressed)**:
 - The `TestLoadAndResolve_MissingFile_NoDrives_Error` failure (2 runs) — **fixed** in commit `39308c7`.
-- The edit-delete conflict history test failure (1 run) — **root cause**: Graph API eventual consistency (remote delete not propagated before sync runs) + SQLite WAL cross-process visibility. **Fix**: (a) added `pollCLIWithConfigNotContains` guard between remote delete and sync in `TestE2E_Sync_EditDeleteConflict`; (b) added `PRAGMA wal_checkpoint(TRUNCATE)` to `BaselineManager.Close()`.
+- The edit-delete conflict history test failure (1 run) — **root cause**: Graph API eventual consistency (remote delete not propagated before sync runs) + SQLite WAL cross-process visibility. **Fix**: (a) added `pollCLIWithConfigNotContains` guard between remote delete and sync in `TestE2E_Sync_EditDeleteConflict`; (b) added `PRAGMA wal_checkpoint(TRUNCATE)` to `SyncStore.Close()`.
 - The "drive ID not resolved" failure (2 runs) — **root cause**: token file missing mandatory metadata (`drive_id`). **Fix**: defense-in-depth validation via `tokenfile.ValidateMeta()` on both write (`Save()`) and read (`LoadAndValidate()`, `ReadTokenMeta()`) paths. Required keys: `drive_id`, `user_id`, `display_name`, `cached_at`.
 
 ---

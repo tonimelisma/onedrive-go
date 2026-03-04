@@ -729,7 +729,7 @@ CI credentials use **Azure Key Vault + OIDC federation** for OAuth refresh token
 Setup:
 1. Azure OIDC service principal (`onedrive-go-ci-github-oidc`) with federated credentials scoped to `repo:tonimelisma/onedrive-go:ref:refs/heads/main`
 2. Azure Key Vault (`kv-onedrivego-ci`) with RBAC authorization; SP has "Key Vault Secrets Officer" role
-3. GitHub repository variables: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_KEY_VAULT_NAME`, `ONEDRIVE_TEST_DRIVES` (non-sensitive identifiers)
+3. GitHub repository variables: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_KEY_VAULT_NAME`, `ONEDRIVE_TEST_DRIVE_INTEGRATION`, `ONEDRIVE_TEST_DRIVE_E2E`, `ONEDRIVE_TEST_DRIVE_E2E_2` (non-sensitive identifiers)
 4. CI loads tokens via `az keyvault secret download --file` (token never in stdout/logs)
 5. After tests, CI saves rotated tokens back via `az keyvault secret set --file` (with JSON validation)
 6. Per-drive secrets follow the naming convention: canonical drive ID with `:`, `@`, and `.` replaced by `-`, prefixed with `onedrive-oauth-token-`. E.g., `personal:user@example.com` → `onedrive-oauth-token-personal-user-outlook-com`
@@ -763,7 +763,8 @@ az keyvault secret set \
   --content-type application/json
 
 # 3. Set the GitHub repository variable
-gh variable set ONEDRIVE_TEST_DRIVES --body "personal:user@example.com"
+gh variable set ONEDRIVE_TEST_DRIVE_INTEGRATION --body "personal:user@example.com"
+gh variable set ONEDRIVE_TEST_DRIVE_E2E --body "personal:user@example.com"
 ```
 
 When tokens expire completely (90 days of inactivity), re-bootstrap using the same steps.
@@ -783,7 +784,7 @@ When changing token paths, secret naming, environment variables, or workflow log
 ./scripts/validate-ci-locally.sh [DRIVE]
 
 # Examples:
-./scripts/validate-ci-locally.sh                                      # auto-detects from ONEDRIVE_TEST_DRIVES or gh variable
+./scripts/validate-ci-locally.sh                                      # auto-detects from ONEDRIVE_TEST_DRIVE or gh variable
 ./scripts/validate-ci-locally.sh personal:user@example.com    # explicit drive
 ```
 
@@ -887,10 +888,10 @@ Build tag: `e2e,e2e_full` (nightly only).
      --file ~/.local/share/onedrive-go/token_personal_user2@example.com.json \
      --content-type application/json
    ```
-4. Update GitHub variable:
+4. Update GitHub variables:
    ```bash
-   gh variable set ONEDRIVE_TEST_DRIVES \
-     --body "personal:user@example.com,personal:user2@example.com"
+   gh variable set ONEDRIVE_TEST_DRIVE_E2E_2 \
+     --body "personal:user2@example.com"
    ```
 5. Verify: `./scripts/validate-ci-locally.sh personal:user2@example.com`
 
@@ -915,7 +916,7 @@ Build tag: `e2e,e2e_full` (nightly only).
 
 - New file: `e2e/orchestrator_e2e_test.go`
 - New helper: `writeMultiDriveConfig(t, drives, syncDirs) string`
-- New env var: `ONEDRIVE_TEST_DRIVES_MULTI` (full list for multi-drive tests)
+- Env var: `ONEDRIVE_TEST_DRIVE_2` (second drive for multi-drive tests, set from `ONEDRIVE_TEST_DRIVE_E2E_2` in CI)
 
 ---
 
@@ -1485,13 +1486,11 @@ E2E tests run in the same workflow as integration tests (`.github/workflows/inte
 - name: Run E2E tests
   run: |
     set -euo pipefail
-    IFS=',' read -ra DRIVES <<< "$ONEDRIVE_TEST_DRIVES"
-    for drive in "${DRIVES[@]}"; do
-      drive=$(echo "$drive" | xargs)
-      echo "=== Running E2E tests for: ${drive} ==="
-      ONEDRIVE_TEST_DRIVE="$drive" \
-        go test -tags=e2e -race -v -timeout=5m ./e2e/...
-    done
+    echo "=== Running E2E tests ==="
+    go test -tags=e2e -race -v -timeout=5m ./e2e/...
+  env:
+    ONEDRIVE_TEST_DRIVE: ${{ vars.ONEDRIVE_TEST_DRIVE_E2E }}
+    ONEDRIVE_TEST_DRIVE_2: ${{ vars.ONEDRIVE_TEST_DRIVE_E2E_2 }}
 ```
 
 See §6.1 for the full credential management flow (Key Vault download, token validation, post-test rotation).

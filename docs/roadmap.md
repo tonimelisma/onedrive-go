@@ -106,7 +106,7 @@ Config migration (`Enabled` → `Paused`), `drive remove` deletes config section
 
 **Dependency graph** (strictly linear):
 ```
-5.7.0 (DONE) → 5.7.1 (IN PROGRESS) → 5.7.2 → 5.7.3 → 5.7.4
+5.7.0 (DONE) → 5.7.1 (DONE) → 5.7.2 (DONE) → 5.7.3 (DONE) → 5.7.4
 ```
 
 **Design reference**: Every increment implements sections of [remote-state-separation.md](design/remote-state-separation.md). Section numbers (§N) are cited inline.
@@ -115,7 +115,7 @@ Config migration (`Enabled` → `Paused`), `drive remove` deletes config section
 
 Consolidated migrations into single `00001_consolidated_schema.sql` with `remote_state` (16 cols, 9-value state machine) and `local_issues` (10 cols) tables. Renamed `BaselineManager` → `SyncStore`. Added `computeNewStatus()` pure function (30-cell decision matrix, §11). Added 6 sub-interface declarations + `ObservedItem`/`RemoteStateRow` structs. Changed baseline PK from `path` to `(drive_id, item_id)` with `path UNIQUE`. Net: 6 new files, 12 modified, 33 new tests.
 
-##### 5.7.1: Remote State Observation Layer + Filtering Symmetry — **IN PROGRESS**
+##### 5.7.1: Remote State Observation Layer + Filtering Symmetry — **DONE**
 
 **Goal**: Wire remote state persistence into the live sync path so delta observations are durable and the delta token never advances without recording what we learned. Fix filtering asymmetry before wiring to prevent junk from polluting `remote_state` from day one.
 
@@ -170,7 +170,7 @@ Consolidated migrations into single `00001_consolidated_schema.sql` with `remote
 - `grep -rn 'CycleID' internal/sync/ --include='*.go' | grep -v '_test.go'` → 0 hits.
 - CommitObservation and RecordFailure have compile-time interface guards: `var _ ObservationWriter = (*SyncStore)(nil)`, `var _ FailureRecorder = (*SyncStore)(nil)`.
 
-##### 5.7.2: Close the State Machine Loop — CommitOutcome + Dispatch Transitions + Crash Recovery
+##### 5.7.2: Close the State Machine Loop — CommitOutcome + Dispatch Transitions + Crash Recovery — **DONE**
 
 **Goal**: Complete the `remote_state` lifecycle so rows transition through the full state machine: `pending_download → downloading → synced` (or `*_failed`). After this increment, `remote_state` accurately reflects the sync status of every remote item at all times, and crash recovery is unambiguous.
 
@@ -287,7 +287,7 @@ Consolidated migrations into single `00001_consolidated_schema.sql` with `remote
 - After a crash simulation (kill + restart), `SELECT COUNT(*) FROM remote_state WHERE sync_status IN ('downloading', 'deleting')` → 0 (all reset by crash recovery).
 - `var _ OutcomeWriter = (*SyncStore)(nil)` compiles. All 6 interface guards compile.
 
-##### 5.7.3: Reconciler Goroutine + Conflict Escalation
+##### 5.7.3: Reconciler Goroutine + Conflict Escalation — **DONE**
 
 **Goal**: Add the dedicated reconciler goroutine that automatically retries failed remote actions with exponential backoff and escalates permanently-failing items to conflicts. After this increment, watch mode is self-healing — no manual intervention needed for transient failures.
 
@@ -571,6 +571,30 @@ grep -rn 'func.*SyncStore.*DB()' internal/sync/ --include='*.go'
 5. Removed legacy cycle tracking (`failureTracker`, `cycleFailures`, `watchCycleCompletion`)
 
 New file: `commit_observation_test.go`. Deleted files: `failure_tracker.go`, `failure_tracker_test.go`. Modified: `scanner.go`, `observer_remote.go`, `baseline.go`, `engine.go`, `worker.go` + their tests.
+
+##### 5.7.2+5.7.3: Dispatch Transitions + Crash Recovery + Reconciler — **DONE**
+
+Combined as a single increment (5.7.2 items were mostly done in 5.7.1). Three commits:
+
+**Commit 1** (5.7.2 items):
+1. Compile-time interface guards for all 6 sub-interfaces (`ObservationWriter`, `OutcomeWriter`, `FailureRecorder`, `ConflictEscalator`, `StateReader`, `StateAdmin`)
+2. `SetDispatchStatus()`: `pending_download/download_failed → downloading`, `pending_delete/delete_failed → deleting`
+3. Enhanced `ResetInProgressStates(ctx, syncRoot)`: filesystem-aware crash recovery — `deleting` rows check `os.Stat` to determine `deleted` vs `pending_delete`
+4. Move case in `updateRemoteStateOnOutcome` (`ActionLocalMove`/`ActionRemoteMove → synced`)
+5. Engine wiring: dispatch transitions in `executePlan()` and `processBatch()` before `tracker.Add()`
+
+**Commit 2** (schema + escalation):
+1. Migration `00002_add_sync_failure_conflict_type.sql` — adds `'sync_failure'` to conflicts CHECK constraint
+2. `ConflictSyncFailure = "sync_failure"` constant
+3. `EscalateToConflict()`: creates `sync_failure` conflict record + NULLs `next_retry_at` in transaction
+4. `EarliestRetryAt()`: queries `MIN(next_retry_at)` for failed rows
+
+**Commit 3** (reconciler):
+1. `reconciler.go`: `Reconciler` goroutine with `Kick()`, `Run()`, `reconcile()`, `synthesizeEvent()`, `armTimer()`. Bootstrap reconcile on startup, safety ticker (2min), single-timer wake. Items ≥ 10 failures → `EscalateToConflict`. Delete statuses → `ChangeDelete`, others → `ChangeModify`.
+2. `reconciler_test.go`: 13 test functions (kick coalescing, dispatch/skip/escalation, synthesize events, timer arming, shutdown, run-loop)
+3. Engine wiring: `RunWatch` creates Reconciler after buffer, `go reconciler.Run(ctx)`. `drainWorkerResults` calls `Kick()` after every result.
+
+New files: `reconciler.go`, `reconciler_test.go`, `migrations/00002_add_sync_failure_conflict_type.sql`. Modified: `baseline.go`, `engine.go`, `store_interfaces.go`, `types.go`, `migrations/00001_consolidated_schema.sql`. 30 new tests total.
 
 ---
 
