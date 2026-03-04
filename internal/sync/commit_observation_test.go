@@ -1,0 +1,371 @@
+package sync
+
+import (
+	"context"
+	"database/sql"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
+)
+
+// readRemoteStateRow is a test helper that reads a single remote_state row.
+func readRemoteStateRow(t *testing.T, db *sql.DB, driveID, itemID string) *RemoteStateRow {
+	t.Helper()
+
+	var (
+		row        RemoteStateRow
+		parentID   sql.NullString
+		hash       sql.NullString
+		size       sql.NullInt64
+		mtime      sql.NullInt64
+		etag       sql.NullString
+		prevPath   sql.NullString
+		nextRetry  sql.NullInt64
+		lastError  sql.NullString
+		httpStatus sql.NullInt64
+	)
+
+	err := db.QueryRow(
+		`SELECT drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
+			previous_path, sync_status, observed_at, failure_count, next_retry_at, last_error, http_status
+		FROM remote_state WHERE drive_id = ? AND item_id = ?`,
+		driveID, itemID,
+	).Scan(
+		&row.DriveID, &row.ItemID, &row.Path, &parentID, &row.ItemType,
+		&hash, &size, &mtime, &etag,
+		&prevPath, &row.SyncStatus, &row.ObservedAt, &row.FailureCount,
+		&nextRetry, &lastError, &httpStatus,
+	)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+
+	require.NoError(t, err, "scanning remote_state row")
+
+	row.ParentID = parentID.String
+	row.Hash = hash.String
+	row.ETag = etag.String
+	row.PreviousPath = prevPath.String
+	row.LastError = lastError.String
+
+	if size.Valid {
+		row.Size = size.Int64
+	}
+
+	if mtime.Valid {
+		row.Mtime = mtime.Int64
+	}
+
+	if nextRetry.Valid {
+		row.NextRetryAt = nextRetry.Int64
+	}
+
+	if httpStatus.Valid {
+		row.HTTPStatus = int(httpStatus.Int64)
+	}
+
+	return &row
+}
+
+// readDeltaToken is a test helper that reads the delta token for a drive.
+func readDeltaToken(t *testing.T, db *sql.DB, driveID string) string {
+	t.Helper()
+
+	var token string
+
+	err := db.QueryRow(
+		`SELECT token FROM delta_tokens WHERE drive_id = ? AND scope_id = ''`,
+		driveID,
+	).Scan(&token)
+	if err == sql.ErrNoRows {
+		return ""
+	}
+
+	require.NoError(t, err, "reading delta token")
+
+	return token
+}
+
+func TestCommitObservation_NewItem(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	driveID := driveid.New(testDriveID)
+	events := []ObservedItem{
+		{
+			DriveID:  driveID,
+			ItemID:   "item1",
+			ParentID: "root",
+			Path:     "hello.txt",
+			ItemType: "file",
+			Hash:     "hash1",
+			Size:     100,
+			Mtime:    1000000,
+			ETag:     "etag1",
+		},
+	}
+
+	err := mgr.CommitObservation(ctx, events, "delta-token-1", driveID)
+	require.NoError(t, err)
+
+	row := readRemoteStateRow(t, mgr.DB(), testDriveID, "item1")
+	require.NotNil(t, row, "row should exist")
+	assert.Equal(t, "hello.txt", row.Path)
+	assert.Equal(t, statusPendingDownload, row.SyncStatus)
+	assert.Equal(t, "hash1", row.Hash)
+	assert.Equal(t, int64(100), row.Size)
+	assert.Equal(t, "etag1", row.ETag)
+	assert.Equal(t, 0, row.FailureCount)
+
+	// Delta token should be committed in the same transaction.
+	token := readDeltaToken(t, mgr.DB(), testDriveID)
+	assert.Equal(t, "delta-token-1", token)
+}
+
+func TestCommitObservation_DeletedUnknownItem_Noop(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	driveID := driveid.New(testDriveID)
+	events := []ObservedItem{
+		{
+			DriveID:   driveID,
+			ItemID:    "unknown",
+			Path:      "gone.txt",
+			ItemType:  "file",
+			IsDeleted: true,
+		},
+	}
+
+	err := mgr.CommitObservation(ctx, events, "delta-token-2", driveID)
+	require.NoError(t, err)
+
+	// Should NOT create a row for a deleted item we've never seen.
+	row := readRemoteStateRow(t, mgr.DB(), testDriveID, "unknown")
+	assert.Nil(t, row, "no row should exist for deleted unknown item")
+
+	// Delta token should still be committed.
+	token := readDeltaToken(t, mgr.DB(), testDriveID)
+	assert.Equal(t, "delta-token-2", token)
+}
+
+func TestCommitObservation_SyncedSameHash_NoChange(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	mgr.nowFunc = func() time.Time { return time.Unix(1000, 0) }
+	ctx := context.Background()
+
+	driveID := driveid.New(testDriveID)
+
+	// Pre-populate with a synced item.
+	_, err := mgr.DB().ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, hash, sync_status, observed_at)
+		VALUES (?, ?, ?, 'file', ?, 'synced', ?)`,
+		testDriveID, "item1", "hello.txt", "hash1", 999,
+	)
+	require.NoError(t, err)
+
+	// Observe same hash again (delta redelivery).
+	events := []ObservedItem{
+		{
+			DriveID:  driveID,
+			ItemID:   "item1",
+			Path:     "hello.txt",
+			ItemType: "file",
+			Hash:     "hash1",
+		},
+	}
+
+	err = mgr.CommitObservation(ctx, events, "delta-token-3", driveID)
+	require.NoError(t, err)
+
+	// Status should remain synced (no re-download on delta redelivery).
+	row := readRemoteStateRow(t, mgr.DB(), testDriveID, "item1")
+	require.NotNil(t, row)
+	assert.Equal(t, statusSynced, row.SyncStatus, "should remain synced")
+}
+
+func TestCommitObservation_HashChange_ResetsFailureCount(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	mgr.nowFunc = func() time.Time { return time.Unix(2000, 0) }
+	ctx := context.Background()
+
+	driveID := driveid.New(testDriveID)
+
+	// Pre-populate with a failed item.
+	_, err := mgr.DB().ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, hash, sync_status,
+			observed_at, failure_count, next_retry_at, last_error)
+		VALUES (?, ?, ?, 'file', ?, 'download_failed', ?, 5, ?, 'some error')`,
+		testDriveID, "item1", "hello.txt", "old-hash", 999, 1500,
+	)
+	require.NoError(t, err)
+
+	// Observe with different hash.
+	events := []ObservedItem{
+		{
+			DriveID:  driveID,
+			ItemID:   "item1",
+			Path:     "hello.txt",
+			ItemType: "file",
+			Hash:     "new-hash",
+		},
+	}
+
+	err = mgr.CommitObservation(ctx, events, "delta-token-4", driveID)
+	require.NoError(t, err)
+
+	row := readRemoteStateRow(t, mgr.DB(), testDriveID, "item1")
+	require.NotNil(t, row)
+	assert.Equal(t, statusPendingDownload, row.SyncStatus)
+	assert.Equal(t, "new-hash", row.Hash)
+	assert.Equal(t, 0, row.FailureCount, "failure count should reset on hash change")
+	assert.Equal(t, int64(0), row.NextRetryAt, "next_retry_at should be cleared")
+}
+
+func TestCommitObservation_MoveTracking_SetsPreviousPath(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	mgr.nowFunc = func() time.Time { return time.Unix(3000, 0) }
+	ctx := context.Background()
+
+	driveID := driveid.New(testDriveID)
+
+	// Pre-populate with an item at old path.
+	_, err := mgr.DB().ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, hash, sync_status, observed_at)
+		VALUES (?, ?, ?, 'file', ?, 'synced', ?)`,
+		testDriveID, "item1", "old/hello.txt", "hash1", 999,
+	)
+	require.NoError(t, err)
+
+	// Observe at new path.
+	events := []ObservedItem{
+		{
+			DriveID:  driveID,
+			ItemID:   "item1",
+			Path:     "new/hello.txt",
+			ItemType: "file",
+			Hash:     "hash1",
+		},
+	}
+
+	err = mgr.CommitObservation(ctx, events, "delta-token-5", driveID)
+	require.NoError(t, err)
+
+	row := readRemoteStateRow(t, mgr.DB(), testDriveID, "item1")
+	require.NotNil(t, row)
+	assert.Equal(t, "new/hello.txt", row.Path)
+	assert.Equal(t, "old/hello.txt", row.PreviousPath, "should track previous path")
+}
+
+func TestCommitObservation_AtomicWithDeltaToken(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	driveID := driveid.New(testDriveID)
+
+	// Multiple items + delta token in a single CommitObservation call.
+	events := []ObservedItem{
+		{
+			DriveID: driveID, ItemID: "a", Path: "a.txt",
+			ItemType: "file", Hash: "h1",
+		},
+		{
+			DriveID: driveID, ItemID: "b", Path: "b.txt",
+			ItemType: "file", Hash: "h2",
+		},
+	}
+
+	err := mgr.CommitObservation(ctx, events, "atomic-token", driveID)
+	require.NoError(t, err)
+
+	// Both items and token should exist.
+	assert.NotNil(t, readRemoteStateRow(t, mgr.DB(), testDriveID, "a"))
+	assert.NotNil(t, readRemoteStateRow(t, mgr.DB(), testDriveID, "b"))
+	assert.Equal(t, "atomic-token", readDeltaToken(t, mgr.DB(), testDriveID))
+}
+
+func TestCommitObservation_AllMatrixCells(t *testing.T) {
+	t.Parallel()
+
+	// Table-driven through key cells of the 30-cell matrix.
+	tests := []struct {
+		name           string
+		existingStatus string
+		existingHash   string
+		observedHash   string
+		isDeleted      bool
+		wantStatus     string
+		wantChanged    bool
+	}{
+		// Same hash, not deleted.
+		{"synced+same→noop", statusSynced, "h1", "h1", false, statusSynced, false},
+		{"pending_download+same→noop", statusPendingDownload, "h1", "h1", false, statusPendingDownload, false},
+		{"download_failed+same→retry", statusDownloadFailed, "h1", "h1", false, statusPendingDownload, true},
+		{"deleted+same→restore", statusDeleted, "h1", "h1", false, statusPendingDownload, true},
+
+		// Different hash, not deleted.
+		{"synced+diff→pending", statusSynced, "h1", "h2", false, statusPendingDownload, true},
+		{"downloading+diff→pending", statusDownloading, "h1", "h2", false, statusPendingDownload, true},
+		{"download_failed+diff→pending", statusDownloadFailed, "h1", "h2", false, statusPendingDownload, true},
+
+		// Deleted.
+		{"synced+deleted→pending_delete", statusSynced, "h1", "", true, statusPendingDelete, true},
+		{"pending_download+deleted→pending_delete", statusPendingDownload, "h1", "", true, statusPendingDelete, true},
+		{"pending_delete+deleted→noop", statusPendingDelete, "h1", "", true, statusPendingDelete, false},
+		{"deleted+deleted→noop", statusDeleted, "h1", "", true, statusDeleted, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mgr := newTestManager(t)
+			mgr.nowFunc = func() time.Time { return time.Unix(5000, 0) }
+			ctx := context.Background()
+
+			driveID := driveid.New(testDriveID)
+
+			// Insert existing row.
+			_, err := mgr.DB().ExecContext(ctx,
+				`INSERT INTO remote_state (drive_id, item_id, path, item_type, hash, sync_status, observed_at)
+				VALUES (?, ?, ?, 'file', ?, ?, ?)`,
+				testDriveID, "item1", "file.txt", tt.existingHash, tt.existingStatus, 999,
+			)
+			require.NoError(t, err)
+
+			events := []ObservedItem{
+				{
+					DriveID:   driveID,
+					ItemID:    "item1",
+					Path:      "file.txt",
+					ItemType:  "file",
+					Hash:      tt.observedHash,
+					IsDeleted: tt.isDeleted,
+				},
+			}
+
+			err = mgr.CommitObservation(ctx, events, "token", driveID)
+			require.NoError(t, err)
+
+			row := readRemoteStateRow(t, mgr.DB(), testDriveID, "item1")
+			require.NotNil(t, row)
+			assert.Equal(t, tt.wantStatus, row.SyncStatus)
+		})
+	}
+}
