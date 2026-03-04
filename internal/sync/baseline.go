@@ -501,7 +501,7 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx *sql.Tx, o *Outcome) err
 		return nil
 	}
 
-	switch o.Action {
+	switch o.Action { //nolint:exhaustive // only action types that touch remote_state
 	case ActionDownload:
 		// Hash guard: only transition if the remote_state hash matches the
 		// downloaded hash. Prevents stale overwrite when a new observation
@@ -885,7 +885,7 @@ func (m *SyncStore) CommitObservation(ctx context.Context, events []ObservedItem
 	if err != nil {
 		return fmt.Errorf("sync: beginning observation transaction: %w", err)
 	}
-	defer tx.Rollback() //nolint:errcheck // rollback after commit is benign
+	defer func() { _ = tx.Rollback() }()
 
 	now := m.nowFunc().UnixNano()
 
@@ -942,15 +942,12 @@ func (m *SyncStore) processObservedItem(ctx context.Context, tx *sql.Tx, item *O
 		newStatus = existing.SyncStatus
 	}
 
-	// Determine if this is a hash change (triggers failure count reset).
-	hashChanged := existing.Hash != item.Hash && !item.IsDeleted
-
 	var previousPath string
 	if pathChanged {
 		previousPath = existing.Path
 	}
 
-	return m.updateRemoteStateFromObs(ctx, tx, item, newStatus, previousPath, hashChanged, now)
+	return m.updateRemoteStateFromObs(ctx, tx, item, newStatus, previousPath, now)
 }
 
 // scanRemoteStateRow reads a single remote_state row within a transaction.
@@ -1023,25 +1020,14 @@ func (m *SyncStore) insertRemoteState(ctx context.Context, tx *sql.Tx, item *Obs
 // updateRemoteStateFromObs updates an existing remote_state row with observation data.
 func (m *SyncStore) updateRemoteStateFromObs(
 	ctx context.Context, tx *sql.Tx, item *ObservedItem,
-	newStatus, previousPath string, hashChanged bool, now int64,
+	newStatus, previousPath string, now int64,
 ) error {
-	failureCount := 0
-	var nextRetryAt int64
-
-	if !hashChanged {
-		// Preserve existing failure state when hash hasn't changed.
-		// We need to re-read from the existing data, but since this is only
-		// called when changed=true, and hash hasn't changed, we keep the
-		// failure count for same-hash retries (e.g., download_failed→pending_download).
-		// Actually for simplicity, just reset — the status transition handles retry logic.
-	}
-
 	_, err := tx.ExecContext(ctx, sqlUpdateRemoteState,
 		item.Path, nullString(item.ParentID), item.ItemType,
 		nullString(item.Hash), nullInt64(item.Size), nullInt64(item.Mtime),
 		nullString(item.ETag),
 		nullString(previousPath), newStatus, now,
-		failureCount, nullInt64(nextRetryAt),
+		0, nil, // reset failure_count and next_retry_at on observation update
 		item.DriveID.String(), item.ItemID,
 	)
 	if err != nil {
@@ -1095,7 +1081,11 @@ func (m *SyncStore) RecordFailure(ctx context.Context, path, errMsg string, http
 		return fmt.Errorf("sync: recording failure for %s: %w", path, err)
 	}
 
-	affected, _ := result.RowsAffected()
+	affected, rowErr := result.RowsAffected()
+	if rowErr != nil {
+		return fmt.Errorf("sync: checking rows affected for %s: %w", path, rowErr)
+	}
+
 	if affected == 0 {
 		m.logger.Debug("RecordFailure: row already transitioned",
 			slog.String("path", path),
@@ -1110,20 +1100,18 @@ const (
 	baseBackoffSeconds = 30
 	maxBackoffSeconds  = 3600 // 1 hour
 	jitterPercent      = 25
+	jitterDivisor      = 100
 )
 
 // computeNextRetry calculates the next retry time with exponential backoff
 // and jitter. Base: 30s * 2^failureCount, capped at 1 hour, ~25% jitter.
 func computeNextRetry(now time.Time, failureCount int) time.Time {
-	delaySec := baseBackoffSeconds * (1 << failureCount)
-	if delaySec > maxBackoffSeconds {
-		delaySec = maxBackoffSeconds
-	}
+	delaySec := min(baseBackoffSeconds*(1<<failureCount), maxBackoffSeconds)
 
 	// Add ~25% jitter.
-	jitter := delaySec * jitterPercent / 100
+	jitter := delaySec * jitterPercent / jitterDivisor
 	if jitter > 0 {
-		delaySec += int(rand.Int64N(int64(jitter)))
+		delaySec += int(rand.Int64N(int64(jitter))) //nolint:gosec // jitter doesn't need crypto-grade randomness
 	}
 
 	return now.Add(time.Duration(delaySec) * time.Second)

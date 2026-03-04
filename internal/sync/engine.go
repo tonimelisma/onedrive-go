@@ -77,7 +77,7 @@ type Engine struct {
 	planner         *Planner
 	execCfg         *ExecutorConfig
 	fetcher         DeltaFetcher
-	driveVerifier   DriveVerifier   // optional (B-074)
+	driveVerifier   DriveVerifier // optional (B-074)
 	syncRoot        string
 	driveID         driveid.ID
 	logger          *slog.Logger
