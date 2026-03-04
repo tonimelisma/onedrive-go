@@ -193,38 +193,16 @@ func TestOneDriveValidNames_Accepted(t *testing.T) {
 	}
 }
 
-// TestAlwaysExcludedSuffixes_Order validates that .db-wal is matched
-// BEFORE .db in the suffix check (order matters for correct exclusion).
-func TestAlwaysExcludedSuffixes_Order(t *testing.T) {
-	// .db-wal should be excluded by the .db-wal suffix.
-	assert.True(t, isAlwaysExcluded("data.db-wal"),
-		".db-wal should be excluded")
-	// .db-shm should be excluded by the .db-shm suffix.
-	assert.True(t, isAlwaysExcluded("data.db-shm"),
-		".db-shm should be excluded")
-	// .db should be excluded by the .db suffix.
-	assert.True(t, isAlwaysExcluded("sync.db"),
-		".db should be excluded")
-
-	// Verify the order: .db-wal MUST come before .db in the list to
-	// avoid .db matching first and leaving "-wal" unmatched in a
-	// different context. Since we use HasSuffix, order doesn't
-	// affect correctness here, but it's a defense-in-depth check.
-	walIdx := -1
-	dbIdx := -1
-
-	for i, ext := range alwaysExcludedSuffixes {
-		if ext == ".db-wal" {
-			walIdx = i
-		}
-
-		if ext == ".db" {
-			dbIdx = i
-		}
-	}
-
-	assert.Greater(t, dbIdx, walIdx,
-		".db-wal should appear before .db in suffix list (defense in depth)")
+// TestAlwaysExcludedSuffixes_DbNotExcluded validates that .db files are NOT
+// excluded (B-308). The sync engine's state DB lives outside the sync
+// directory — .db exclusion only creates false positives for user files.
+func TestAlwaysExcludedSuffixes_DbNotExcluded(t *testing.T) {
+	assert.False(t, isAlwaysExcluded("data.db-wal"),
+		".db-wal should not be excluded (B-308)")
+	assert.False(t, isAlwaysExcluded("data.db-shm"),
+		".db-shm should not be excluded (B-308)")
+	assert.False(t, isAlwaysExcluded("sync.db"),
+		".db should not be excluded (B-308)")
 }
 
 // TestAlwaysExcluded_PrefixPatterns validates that editor backup files

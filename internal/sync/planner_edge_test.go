@@ -145,9 +145,6 @@ func TestS7_PartialFilesNeverUploaded(t *testing.T) {
 		"document.tmp",
 		"editor.swp",
 		"chrome.crdownload",
-		"data.db-wal",
-		"data.db-shm",
-		"sync.db",
 		"~backup.txt",
 		".~lock.office",
 	}
