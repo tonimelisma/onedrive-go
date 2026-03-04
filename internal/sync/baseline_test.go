@@ -174,9 +174,9 @@ func TestCheckpoint_PrunesDeletedRemoteState(t *testing.T) {
 	ctx := t.Context()
 
 	now := time.Now()
-	oldTime := now.Add(-48 * time.Hour).UnixNano()  // 2 days ago
-	newTime := now.Add(-12 * time.Hour).UnixNano()   // 12 hours ago
-	retention := 24 * time.Hour                       // 1 day retention
+	oldTime := now.Add(-48 * time.Hour).UnixNano() // 2 days ago
+	newTime := now.Add(-12 * time.Hour).UnixNano() // 12 hours ago
+	retention := 24 * time.Hour                    // 1 day retention
 
 	// Insert a deleted row older than retention (should be pruned).
 	_, err := mgr.db.ExecContext(ctx,
@@ -1430,6 +1430,61 @@ func TestCommitOutcome_FolderCreate(t *testing.T) {
 	assert.Equal(t, "folder-id", entry.ItemID)
 }
 
+// TestCommitOutcome_Upload_NewItemID_SamePath verifies that when an upload
+// outcome has a different item_id than the existing baseline entry at the same
+// path (e.g., server-side delete+recreate assigns new ID), the stale row is
+// replaced and no UNIQUE constraint violation occurs.
+func TestCommitOutcome_Upload_NewItemID_SamePath(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	driveID := driveid.New("d1")
+
+	// Seed baseline with item_id "old-id" at path "file.txt".
+	seedOutcome := Outcome{
+		Action:     ActionDownload,
+		Success:    true,
+		Path:       "file.txt",
+		DriveID:    driveID,
+		ItemID:     "old-id",
+		ItemType:   ItemTypeFile,
+		RemoteHash: "hash1",
+		LocalHash:  "hash1",
+		Size:       100,
+	}
+	require.NoError(t, mgr.CommitOutcome(ctx, &seedOutcome))
+
+	// Upload outcome with different item_id for the same path.
+	uploadOutcome := Outcome{
+		Action:     ActionUpload,
+		Success:    true,
+		Path:       "file.txt",
+		DriveID:    driveID,
+		ItemID:     "new-id",
+		ItemType:   ItemTypeFile,
+		RemoteHash: "hash2",
+		LocalHash:  "hash2",
+		Size:       200,
+	}
+	require.NoError(t, mgr.CommitOutcome(ctx, &uploadOutcome))
+
+	// Verify the entry now has the new item_id.
+	entry, ok := mgr.baseline.GetByPath("file.txt")
+	require.True(t, ok, "entry should exist")
+	assert.Equal(t, "new-id", entry.ItemID)
+	assert.Equal(t, "hash2", entry.RemoteHash)
+
+	// Old ID should no longer exist in ByID.
+	_, ok = mgr.baseline.GetByID(driveid.NewItemKey(driveID, "old-id"))
+	assert.False(t, ok, "old ID should be removed from ByID")
+
+	// New ID should exist in ByID.
+	_, ok = mgr.baseline.GetByID(driveid.NewItemKey(driveID, "new-id"))
+	assert.True(t, ok, "new ID should exist in ByID")
+}
+
 // ---------------------------------------------------------------------------
 // CommitDeltaToken tests
 // ---------------------------------------------------------------------------
@@ -1592,6 +1647,41 @@ func TestBaseline_Put(t *testing.T) {
 	gotByID, ok := b.GetByID(key)
 	require.True(t, ok, "entry not found by ID after Put")
 	assert.Equal(t, "new/file.txt", gotByID.Path)
+}
+
+// TestBaseline_Put_ReplacesStaleID verifies that Put at an existing path with
+// a different (driveID, itemID) removes the stale ByID entry.
+func TestBaseline_Put_ReplacesStaleID(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New("d1")
+	oldEntry := &BaselineEntry{Path: "file.txt", DriveID: driveID, ItemID: "old-id"}
+	oldKey := driveid.NewItemKey(driveID, "old-id")
+
+	b := &Baseline{
+		ByPath: map[string]*BaselineEntry{"file.txt": oldEntry},
+		ByID:   map[driveid.ItemKey]*BaselineEntry{oldKey: oldEntry},
+	}
+
+	// Put a new entry at the same path but different item_id.
+	newEntry := &BaselineEntry{Path: "file.txt", DriveID: driveID, ItemID: "new-id"}
+	b.Put(newEntry)
+
+	// New entry should be accessible by path and new ID.
+	got, ok := b.GetByPath("file.txt")
+	require.True(t, ok, "entry not found by path")
+	assert.Equal(t, "new-id", got.ItemID)
+
+	newKey := driveid.NewItemKey(driveID, "new-id")
+	_, ok = b.GetByID(newKey)
+	assert.True(t, ok, "new ID not found in ByID")
+
+	// Old ID should be gone.
+	_, ok = b.GetByID(oldKey)
+	assert.False(t, ok, "stale old ID should be removed from ByID")
+
+	// Only 1 entry total.
+	assert.Equal(t, 1, b.Len())
 }
 
 func TestBaseline_Delete(t *testing.T) {

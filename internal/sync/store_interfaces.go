@@ -65,15 +65,15 @@ type StateAdmin interface {
 // ObservedItem represents a single item from a delta API response, ready
 // for CommitObservation to process against existing remote_state.
 type ObservedItem struct {
-	DriveID  driveid.ID
-	ItemID   string
-	ParentID string
-	Path     string
-	ItemType string // "file", "folder", "root"
-	Hash     string
-	Size     int64
-	Mtime    int64
-	ETag     string
+	DriveID   driveid.ID
+	ItemID    string
+	ParentID  string
+	Path      string
+	ItemType  string // "file", "folder", "root"
+	Hash      string
+	Size      int64
+	Mtime     int64
+	ETag      string
 	IsDeleted bool
 }
 

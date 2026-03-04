@@ -5,12 +5,13 @@
 -- DDL script. All test databases are created fresh, so no incremental
 -- migration path is needed.
 
--- Core sync state: confirmed synced state per path.
--- 11 columns. Primary key on path for local operations.
+-- Core sync state: confirmed synced state per (drive_id, item_id).
+-- ID-based PK decouples remote identity from local filesystem paths.
+-- Path is a UNIQUE secondary key for fast local lookups.
 CREATE TABLE IF NOT EXISTS baseline (
-    path            TEXT    PRIMARY KEY,
     drive_id        TEXT    NOT NULL,
     item_id         TEXT    NOT NULL,
+    path            TEXT    NOT NULL UNIQUE,
     parent_id       TEXT,
     item_type       TEXT    NOT NULL CHECK(item_type IN ('file', 'folder', 'root')),
     local_hash      TEXT,
@@ -18,11 +19,9 @@ CREATE TABLE IF NOT EXISTS baseline (
     size            INTEGER,
     mtime           INTEGER,
     synced_at       INTEGER NOT NULL CHECK(synced_at > 0),
-    etag            TEXT
+    etag            TEXT,
+    PRIMARY KEY (drive_id, item_id)
 );
-
--- Move detection: look up baseline entry by server-assigned item_id.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_baseline_item ON baseline(drive_id, item_id);
 
 -- Cascading path operations: folder renames update all children by parent_id.
 CREATE INDEX IF NOT EXISTS idx_baseline_parent ON baseline(parent_id);

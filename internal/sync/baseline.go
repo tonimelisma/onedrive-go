@@ -17,7 +17,7 @@ import (
 
 // SQL statements for baseline operations.
 const (
-	sqlLoadBaseline = `SELECT path, drive_id, item_id, parent_id, item_type,
+	sqlLoadBaseline = `SELECT drive_id, item_id, path, parent_id, item_type,
 		local_hash, remote_hash, size, mtime, synced_at, etag
 		FROM baseline`
 
@@ -25,12 +25,11 @@ const (
 	sqlGetDeltaToken = `SELECT token FROM delta_tokens WHERE drive_id = ? AND scope_id = ?`
 
 	sqlUpsertBaseline = `INSERT INTO baseline
-		(path, drive_id, item_id, parent_id, item_type, local_hash, remote_hash,
+		(drive_id, item_id, path, parent_id, item_type, local_hash, remote_hash,
 		 size, mtime, synced_at, etag)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(path) DO UPDATE SET
-		 drive_id = excluded.drive_id,
-		 item_id = excluded.item_id,
+		ON CONFLICT(drive_id, item_id) DO UPDATE SET
+		 path = excluded.path,
 		 parent_id = excluded.parent_id,
 		 item_type = excluded.item_type,
 		 local_hash = excluded.local_hash,
@@ -185,7 +184,7 @@ func scanBaselineRow(rows *sql.Rows) (*BaselineEntry, error) {
 	)
 
 	err := rows.Scan(
-		&e.Path, &e.DriveID, &e.ItemID, &parentID, &itemType,
+		&e.DriveID, &e.ItemID, &e.Path, &parentID, &itemType,
 		&localHash, &remoteHash, &size, &mtime, &e.SyncedAt, &etag,
 	)
 	if err != nil {
@@ -357,10 +356,23 @@ func (m *SyncStore) CommitDeltaToken(ctx context.Context, token, driveID, scopeI
 }
 
 // commitUpsert inserts or updates a baseline entry for download, upload,
-// folder create, and update-synced outcomes.
+// folder create, and update-synced outcomes. Handles the case where a
+// server-side delete+recreate assigns a new item_id for an existing path
+// by removing the stale row first (prevents UNIQUE constraint violation on path).
 func commitUpsert(ctx context.Context, tx *sql.Tx, o *Outcome, syncedAt int64) error {
-	_, err := tx.ExecContext(ctx, sqlUpsertBaseline,
+	// Remove any stale baseline row at the same path but different identity.
+	// This happens when the server assigns a new item_id for a path that
+	// was previously tracked under a different ID (delete+recreate, or
+	// re-upload after server-side deletion).
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM baseline WHERE path = ? AND NOT (drive_id = ? AND item_id = ?)`,
 		o.Path, o.DriveID, o.ItemID,
+	); err != nil {
+		return fmt.Errorf("sync: clearing stale baseline for %s: %w", o.Path, err)
+	}
+
+	_, err := tx.ExecContext(ctx, sqlUpsertBaseline,
+		o.DriveID, o.ItemID, o.Path,
 		nullString(o.ParentID),
 		o.ItemType.String(),
 		nullString(o.LocalHash),
@@ -387,12 +399,13 @@ func commitDelete(ctx context.Context, tx *sql.Tx, path string) error {
 	return nil
 }
 
-// commitMove deletes the old path and inserts the new path for move outcomes.
+// commitMove atomically updates the path for move outcomes. With the ID-based
+// PK, a move is a single UPDATE (not DELETE+INSERT) — the row identity
+// (drive_id, item_id) doesn't change, only the path does.
 func commitMove(ctx context.Context, tx *sql.Tx, o *Outcome, syncedAt int64) error {
-	if err := commitDelete(ctx, tx, o.OldPath); err != nil {
-		return err
-	}
-
+	// Upsert handles both the path update and all other field updates.
+	// The ON CONFLICT(drive_id, item_id) clause matches the existing row
+	// and updates path + all mutable fields atomically.
 	return commitUpsert(ctx, tx, o, syncedAt)
 }
 
