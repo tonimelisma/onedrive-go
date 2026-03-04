@@ -14,7 +14,10 @@ import (
 // executeLocalDelete removes a local file or folder with S4 safety:
 // for files, verifies hash before delete; mismatch triggers conflict copy.
 func (e *Executor) executeLocalDelete(_ context.Context, action *Action) Outcome {
-	absPath := filepath.Join(e.syncRoot, action.Path)
+	absPath, err := containedPath(e.syncRoot, action.Path)
+	if err != nil {
+		return e.failedOutcome(action, ActionLocalDelete, err)
+	}
 
 	info, err := os.Stat(absPath)
 	if errors.Is(err, os.ErrNotExist) {
