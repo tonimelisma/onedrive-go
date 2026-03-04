@@ -296,18 +296,25 @@ func (m *SyncStore) CommitOutcome(ctx context.Context, outcome *Outcome) error {
 
 // applySingleOutcome dispatches a single outcome to the appropriate DB helper.
 func applySingleOutcome(ctx context.Context, tx *sql.Tx, o *Outcome, syncedAt int64) error {
+	var err error
+
 	switch o.Action {
 	case ActionDownload, ActionUpload, ActionFolderCreate, ActionUpdateSynced:
-		return commitUpsert(ctx, tx, o, syncedAt)
+		err = commitUpsert(ctx, tx, o, syncedAt)
 	case ActionLocalDelete, ActionRemoteDelete, ActionCleanup:
-		return commitDelete(ctx, tx, o.Path)
+		err = commitDelete(ctx, tx, o.Path)
 	case ActionLocalMove, ActionRemoteMove:
-		return commitMove(ctx, tx, o, syncedAt)
+		err = commitMove(ctx, tx, o, syncedAt)
 	case ActionConflict:
-		return commitConflict(ctx, tx, o, syncedAt)
-	default:
-		return nil
+		err = commitConflict(ctx, tx, o, syncedAt)
 	}
+
+	if err != nil {
+		return err
+	}
+
+	// Update remote_state in the same transaction.
+	return updateRemoteStateOnOutcome(ctx, tx, o)
 }
 
 // updateBaselineCache applies a single outcome to the in-memory baseline,
@@ -478,6 +485,56 @@ func commitConflict(ctx context.Context, tx *sql.Tx, o *Outcome, syncedAt int64)
 	if o.ResolvedBy == "" && o.ConflictType == ConflictEditDelete {
 		if delErr := commitDelete(ctx, tx, o.Path); delErr != nil {
 			return delErr
+		}
+	}
+
+	return nil
+}
+
+// updateRemoteStateOnOutcome updates remote_state based on a completed action
+// outcome, called from within the same transaction as the baseline update.
+// Silently skips if no matching remote_state row exists (e.g., upload-only mode).
+func updateRemoteStateOnOutcome(ctx context.Context, tx *sql.Tx, o *Outcome) error {
+	if o.ItemID == "" || o.DriveID.IsZero() {
+		return nil
+	}
+
+	switch o.Action {
+	case ActionDownload:
+		// Hash guard: only transition if the remote_state hash matches the
+		// downloaded hash. Prevents stale overwrite when a new observation
+		// arrived while the download was in progress.
+		_, err := tx.ExecContext(ctx,
+			`UPDATE remote_state SET sync_status = ?
+			WHERE drive_id = ? AND item_id = ? AND sync_status = ? AND hash IS ?`,
+			statusSynced,
+			o.DriveID.String(), o.ItemID, statusDownloading, nullString(o.RemoteHash),
+		)
+		if err != nil {
+			return fmt.Errorf("sync: updating remote_state for download %s: %w", o.Path, err)
+		}
+
+	case ActionLocalDelete:
+		_, err := tx.ExecContext(ctx,
+			`UPDATE remote_state SET sync_status = ?
+			WHERE drive_id = ? AND item_id = ? AND sync_status = ?`,
+			statusDeleted,
+			o.DriveID.String(), o.ItemID, statusDeleting,
+		)
+		if err != nil {
+			return fmt.Errorf("sync: updating remote_state for local delete %s: %w", o.Path, err)
+		}
+
+	case ActionUpload, ActionFolderCreate:
+		// Unconditional: upload resolves any state.
+		_, err := tx.ExecContext(ctx,
+			`UPDATE remote_state SET sync_status = ?, hash = ?, size = ?, mtime = ?
+			WHERE drive_id = ? AND item_id = ?`,
+			statusSynced, nullString(o.RemoteHash), nullInt64(o.Size), nullInt64(o.Mtime),
+			o.DriveID.String(), o.ItemID,
+		)
+		if err != nil {
+			return fmt.Errorf("sync: updating remote_state for upload %s: %w", o.Path, err)
 		}
 	}
 

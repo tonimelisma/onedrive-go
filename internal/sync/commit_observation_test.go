@@ -467,6 +467,31 @@ func TestRecordFailure_IncreasesFailureCount(t *testing.T) {
 	assert.Equal(t, 2, row.FailureCount)
 }
 
+func TestRecordFailure_DeleteTransitionsDeleting(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	mgr.nowFunc = func() time.Time { return time.Unix(1000, 0) }
+	ctx := context.Background()
+
+	// Insert a deleting item.
+	_, err := mgr.DB().ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		VALUES (?, ?, ?, 'file', 'deleting', ?)`,
+		testDriveID, "item1", "hello.txt", 999,
+	)
+	require.NoError(t, err)
+
+	err = mgr.RecordFailure(ctx, "hello.txt", "permission denied", 403)
+	require.NoError(t, err)
+
+	row := readRemoteStateRow(t, mgr.DB(), testDriveID, "item1")
+	require.NotNil(t, row)
+	assert.Equal(t, statusDeleteFailed, row.SyncStatus)
+	assert.Equal(t, 1, row.FailureCount)
+	assert.Equal(t, 403, row.HTTPStatus)
+}
+
 func TestRecordFailure_BackoffCalculation(t *testing.T) {
 	t.Parallel()
 
@@ -496,4 +521,163 @@ func TestRecordFailure_BackoffCalculation(t *testing.T) {
 				"retry should be at most %ds from now", tt.wantMaxSec)
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// CommitOutcome remote_state extension tests
+// ---------------------------------------------------------------------------
+
+func TestCommitOutcome_UpdatesRemoteState_Download(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	mgr.nowFunc = func() time.Time { return time.Unix(5000, 0) }
+	ctx := context.Background()
+
+	// Load baseline so CommitOutcome can update cache.
+	_, err := mgr.Load(ctx)
+	require.NoError(t, err)
+
+	// Insert a downloading remote_state row.
+	_, err = mgr.DB().ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, hash, sync_status, observed_at)
+		VALUES (?, ?, ?, 'file', ?, 'downloading', ?)`,
+		testDriveID, "item1", "hello.txt", "hash1", 999,
+	)
+	require.NoError(t, err)
+
+	outcome := &Outcome{
+		Action:     ActionDownload,
+		Success:    true,
+		Path:       "hello.txt",
+		DriveID:    driveid.New(testDriveID),
+		ItemID:     "item1",
+		ItemType:   ItemTypeFile,
+		LocalHash:  "hash1",
+		RemoteHash: "hash1",
+		Size:       100,
+		Mtime:      2000000,
+		ETag:       "etag1",
+	}
+
+	err = mgr.CommitOutcome(ctx, outcome)
+	require.NoError(t, err)
+
+	row := readRemoteStateRow(t, mgr.DB(), testDriveID, "item1")
+	require.NotNil(t, row)
+	assert.Equal(t, statusSynced, row.SyncStatus)
+}
+
+func TestCommitOutcome_HashGuard_PreventsStaleOverwrite(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	mgr.nowFunc = func() time.Time { return time.Unix(5000, 0) }
+	ctx := context.Background()
+
+	_, err := mgr.Load(ctx)
+	require.NoError(t, err)
+
+	// Insert a downloading row with hash "new-hash" (new observation arrived).
+	_, err = mgr.DB().ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, hash, sync_status, observed_at)
+		VALUES (?, ?, ?, 'file', ?, 'downloading', ?)`,
+		testDriveID, "item1", "hello.txt", "new-hash", 999,
+	)
+	require.NoError(t, err)
+
+	// Outcome from old download with old hash.
+	outcome := &Outcome{
+		Action:     ActionDownload,
+		Success:    true,
+		Path:       "hello.txt",
+		DriveID:    driveid.New(testDriveID),
+		ItemID:     "item1",
+		ItemType:   ItemTypeFile,
+		LocalHash:  "old-hash",
+		RemoteHash: "old-hash",
+	}
+
+	err = mgr.CommitOutcome(ctx, outcome)
+	require.NoError(t, err)
+
+	// Should NOT transition to synced (hash mismatch guard).
+	row := readRemoteStateRow(t, mgr.DB(), testDriveID, "item1")
+	require.NotNil(t, row)
+	assert.Equal(t, statusDownloading, row.SyncStatus, "hash guard should prevent stale overwrite")
+}
+
+func TestCommitOutcome_Upload_UnconditionalUpdate(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	mgr.nowFunc = func() time.Time { return time.Unix(5000, 0) }
+	ctx := context.Background()
+
+	_, err := mgr.Load(ctx)
+	require.NoError(t, err)
+
+	// Insert a remote_state row in any status.
+	_, err = mgr.DB().ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, hash, sync_status, observed_at)
+		VALUES (?, ?, ?, 'file', ?, 'pending_download', ?)`,
+		testDriveID, "item1", "hello.txt", "old-hash", 999,
+	)
+	require.NoError(t, err)
+
+	outcome := &Outcome{
+		Action:     ActionUpload,
+		Success:    true,
+		Path:       "hello.txt",
+		DriveID:    driveid.New(testDriveID),
+		ItemID:     "item1",
+		ItemType:   ItemTypeFile,
+		LocalHash:  "upload-hash",
+		RemoteHash: "upload-hash",
+		Size:       500,
+		Mtime:      3000000,
+	}
+
+	err = mgr.CommitOutcome(ctx, outcome)
+	require.NoError(t, err)
+
+	row := readRemoteStateRow(t, mgr.DB(), testDriveID, "item1")
+	require.NotNil(t, row)
+	assert.Equal(t, statusSynced, row.SyncStatus)
+	assert.Equal(t, "upload-hash", row.Hash)
+	assert.Equal(t, int64(500), row.Size)
+}
+
+func TestCommitOutcome_LocalDelete_MarksDeleted(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	mgr.nowFunc = func() time.Time { return time.Unix(5000, 0) }
+	ctx := context.Background()
+
+	_, err := mgr.Load(ctx)
+	require.NoError(t, err)
+
+	// Insert a deleting remote_state row.
+	_, err = mgr.DB().ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		VALUES (?, ?, ?, 'file', 'deleting', ?)`,
+		testDriveID, "item1", "hello.txt", 999,
+	)
+	require.NoError(t, err)
+
+	outcome := &Outcome{
+		Action:  ActionLocalDelete,
+		Success: true,
+		Path:    "hello.txt",
+		DriveID: driveid.New(testDriveID),
+		ItemID:  "item1",
+	}
+
+	err = mgr.CommitOutcome(ctx, outcome)
+	require.NoError(t, err)
+
+	row := readRemoteStateRow(t, mgr.DB(), testDriveID, "item1")
+	require.NotNil(t, row)
+	assert.Equal(t, statusDeleted, row.SyncStatus)
 }
