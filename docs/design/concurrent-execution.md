@@ -5,12 +5,11 @@ onedrive-go's sync engine. It covers how planned actions are scheduled,
 dispatched to workers, committed to the database, and recovered after crashes.
 
 The execution architecture uses a two-layer design: an **in-memory dependency
-tracker** (`DepTracker`) provides instant dispatch, lane-based fairness, and
-action cancellation; the **SQLite baseline** provides durability through
-per-action atomic commits. Crash recovery relies on the idempotent planner:
-if the process crashes mid-cycle, the delta token has not advanced, so the same
-delta is re-fetched and the planner detects already-committed actions as
-convergent and skips them.
+tracker** (`DepTracker`) provides instant dispatch and action cancellation; the
+**SyncStore** provides durability through per-action atomic commits to both
+`baseline` and `remote_state`. Crash recovery uses the `remote_state` table:
+previously-failed items persist as state discrepancies and are recovered by
+the reconciler on restart.
 
 ---
 
@@ -76,11 +75,12 @@ convergent and skips them.
 
 These are existing architectural decisions that the execution layer respects:
 
-- **Event-driven pipeline.** Observers produce events (no DB writes), planner
-  is pure function (no I/O, no DB), executor produces outcomes (no DB writes),
-  BaselineManager is sole writer.
-- **Baseline is the only durable per-item state.** Remote and local
-  observations are ephemeral --- rebuilt from the API and filesystem each cycle.
+- **Event-driven pipeline.** Observers produce events, planner is pure function
+  (no I/O, no DB), executor produces outcomes. The SyncStore manages all
+  database access via typed sub-interfaces.
+- **Remote state separation.** The three-table model (`remote_state`,
+  `baseline`, `local_issues`) persists remote observations durably. The delta
+  token is a pure API cursor, not a sync cursor.
 - **Planner must remain a pure function.** Signature:
   `([]PathChanges, *Baseline, SyncMode, SafetyConfig) -> *ActionPlan`.
   No I/O, no database access, deterministic.
@@ -98,7 +98,7 @@ These are existing architectural decisions that the execution layer respects:
   and cleanup.
 - **`io.ReaderAt` for retry-safe uploads.** `SectionReader`s from the same file
   handle make retries safe without re-opening the file.
-- **Cache-through baseline loading.** `BaselineManager.Load()` returns cached
+- **Cache-through baseline loading.** `SyncStore.Load()` returns cached
   baseline. `CommitOutcome()` incrementally patches the in-memory cache via
   `updateBaselineCache()`.
 
@@ -128,8 +128,8 @@ The execution layer consists of two complementary components:
 
 | Component | Storage | Purpose | Key Properties |
 |-----------|---------|---------|---------------|
-| **DepTracker** | In-memory data structure | Scheduling, dispatch, lane fairness, cancellation, dependency resolution | Zero latency, bounded memory, channel-based |
-| **Baseline** | SQLite `baseline` table | Durability, crash recovery via idempotent planner, per-action atomic commits | Survives process exit, queryable |
+| **DepTracker** | In-memory data structure | Scheduling, dispatch, cancellation, dependency resolution | Zero latency, bounded memory, channel-based |
+| **SyncStore** | SQLite (`remote_state` + `baseline` + `local_issues`) | Durability, crash recovery via reconciler, per-action atomic commits | Survives process exit, queryable |
 
 The DepTracker is the scheduling engine that determines when actions are ready
 and dispatches them to workers. The baseline is the durable record of what has
@@ -146,20 +146,17 @@ Planner --> ActionPlan with dependency DAG
      | DepTracker          |
      | (in-memory)         |
      |                     |
-     | ready channels:     |
-     |   interactive []    |
-     |   bulk        []    |
+     | ready channel:      |
+     |   Ready() chan      |
      |                     |
-     | * lane dispatch     |
+     | * dispatch          |
      | * cancellation      |
      | * dep counting      |
-     | * cycle tracking    |
      +----------+----------+
                 |
      +----------+----------+----------+
      v          v          v          v
  Worker 1   Worker 2   Worker 3   Worker N
- (interactive) (bulk)  (shared)   (shared)
      |          |          |          |
      +----------+----------+----------+
                 |
@@ -172,15 +169,16 @@ Planner --> ActionPlan with dependency DAG
      |                     |
      | per-action commit:  |
      |   baseline upsert   |
+     |   remote_state upd  |
      |   tracker.Complete() |
      +--------------------+
 ```
 
 ### 2.3 Startup Sequence
 
-1. Load baseline from database (`BaselineManager.Load()`)
+1. Load baseline from database (`SyncStore.Load()`)
 2. Load SessionStore for any persisted upload sessions
-3. Start workers (interactive lane, bulk lane, shared pool)
+3. Start flat worker pool (`transfer_workers` goroutines)
 4. Start observers (remote, local)
 5. Workers begin draining tracker immediately
 
@@ -190,7 +188,7 @@ Planner --> ActionPlan with dependency DAG
 2. Buffer debounces (2s) and flushes `[]PathChanges`
 3. Planner produces `ActionPlan` with dependency DAG (pure function)
 4. Actions loaded into DepTracker with dependency edges
-5. Tracker dispatches ready actions to worker lanes via channels
+5. Tracker dispatches ready actions to workers via single Ready() channel
 6. Workers execute actions (same per-action logic: downloads, uploads, deletes, moves)
 7. Workers send `WorkerResult` back through the results channel
 8. Engine's `drainWorkerResults` loop processes each result: per-action atomic commit (baseline upsert) + `tracker.Complete(id)` to unblock dependents
@@ -208,12 +206,8 @@ The DepTracker provides:
 - **Zero-latency dispatch**: When action X completes and unblocks action Y,
   Y is dispatched to the ready channel immediately (in the same `Complete()`
   call). No polling.
-- **Lane-based fairness**: Ready actions are routed to interactive or bulk
-  channels based on file size and action type.
 - **Action cancellation**: Each in-flight action has a `context.CancelFunc`.
   Cancellation is instant.
-- **Cycle tracking**: Tracks which actions belong to which planning cycle.
-  Signals cycle completion via `CycleDone()` channels.
 - **Progress snapshots**: `InFlightCount()` returns live counts with a single
   mutex acquisition.
 
@@ -221,14 +215,12 @@ The DepTracker provides:
 
 ```go
 type DepTracker struct {
-    mu          sync.Mutex
-    actions     map[int64]*trackedAction
-    byPath      map[string]*trackedAction      // for cancellation by path
-    interactive chan *trackedAction             // small files, folder ops, deletes
-    bulk        chan *trackedAction             // large file transfers
-    cycles      map[string]*cycleState         // cycle completion tracking
-    persistent  bool                           // watch mode: channels stay open
-    logger      *slog.Logger
+    mu         sync.Mutex
+    actions    map[int64]*trackedAction
+    byPath     map[string]*trackedAction      // for cancellation by path
+    ready      chan *trackedAction             // single channel for all workers
+    persistent bool                           // watch mode: channels stay open
+    logger     *slog.Logger
 }
 
 type trackedAction struct {
@@ -237,43 +229,35 @@ type trackedAction struct {
     cancel     context.CancelFunc              // set when worker claims the action
     depsLeft   int32                           // atomic counter
     dependents []*trackedAction                // actions waiting on this one
-    cycleID    string
 }
 ```
 
 ### 3.3 Operations
 
-**Add(action, id, depIDs, cycleID)**: Insert an action into the tracker. If
-`depsLeft == 0`, dispatch to the appropriate ready channel immediately.
-Otherwise, register as a dependent of each dependency.
+**Add(action, id, depIDs)**: Insert an action into the tracker. If
+`depsLeft == 0`, dispatch to the ready channel immediately. Otherwise,
+register as a dependent of each dependency.
 
 **Complete(id)**: Mark action done. For each dependent action, atomically
 decrement `depsLeft`. If any dependent reaches zero, dispatch it to the ready
-channel. Track cycle completion.
+channel.
 
 **CancelByPath(path)**: Look up by path. If the action is in-flight, call
 its `context.CancelFunc` to cancel the worker's context immediately.
 
-**CycleDone(cycleID)**: Returns a channel that closes when all actions in the
-given cycle have completed. Used by the engine to know when to commit the delta
-token.
-
 ### 3.4 Ready Channel Dispatch
 
-When an action becomes ready (all dependencies satisfied), the tracker routes
-it to the appropriate lane channel:
+When an action becomes ready (all dependencies satisfied), the tracker
+dispatches it to the single ready channel:
 
 ```go
 func (dt *DepTracker) dispatch(ta *trackedAction) {
-    if ta.action.Size < sizeThreshold || !ta.action.IsTransfer() {
-        dt.interactive <- ta
-    } else {
-        dt.bulk <- ta
-    }
+    dt.ready <- ta
 }
 ```
 
-Workers pull from their assigned channel. See section 6 for the lane model.
+All workers pull from the same `Ready()` channel. Go's channel scheduling
+provides natural fairness. See section 6 for the flat pool model.
 
 ---
 
@@ -285,10 +269,11 @@ Workers report outcomes back to the engine through a `WorkerResult` channel:
 
 ```go
 type WorkerResult struct {
-    ActionID int64
-    CycleID  string
-    Outcome  *Outcome
-    Err      error
+    ActionID   int64
+    Outcome    *Outcome
+    Err        error
+    HTTPStatus int
+    ErrMsg     string
 }
 ```
 
@@ -520,9 +505,9 @@ When the observer detects a new change to a file currently being uploaded:
 
 ### 10.1 Channel-Based Backpressure
 
-The DepTracker uses buffered channels for the interactive and bulk lanes.
-When channels are full, the `Add()` call blocks until a worker drains an
-action, providing natural backpressure from workers to the planner.
+The DepTracker uses a buffered channel for the ready queue. When the channel
+is full, the `Add()` call blocks until a worker drains an action, providing
+natural backpressure from workers to the planner.
 
 For one-shot mode, channels are sized to the plan size. For watch mode,
 `NewPersistentDepTracker` uses default buffer sizes.
@@ -600,46 +585,37 @@ The per-action commit operation depends on the action type:
 
 ## 13. Delta Token Management
 
-### 13.1 Cycle-Scoped Tokens
+### 13.1 Observation-Time Token Commits
 
-The delta token is cycle-scoped. Each planning pass produces actions tagged
-with a `cycle_id`. The token for that cycle is committed only when all actions
-with that `cycle_id` complete. The DepTracker's `CycleDone(cycleID)` channel
-signals when this occurs:
+The delta token is committed atomically with `remote_state` observations
+via `SyncStore.CommitObservation()`. The token is a pure API cursor — it
+tracks what the delta API has told us, not what we've synced. This decoupling
+is the core of the Remote State Separation design.
 
 ```go
-func (e *Engine) waitForCycleCompletion(cycleID string) {
-    <-e.tracker.CycleDone(cycleID)
-    e.baseline.CommitDeltaToken(cycleID, token)
-    e.tracker.CleanupCycle(cycleID)
-}
+// In RemoteObserver, after each delta poll:
+store.CommitObservation(ctx, events, newToken, driveID)
+// Single transaction: write all events to remote_state + advance token
 ```
 
-### 13.2 Multi-Cycle Overlap
+### 13.2 Token Always Advances
 
-Multiple cycles can overlap. Cycle 2's token might commit before cycle 1's if
-cycle 2 has fewer/faster actions. Each cycle's token is independent.
+The token advances after every successful delta poll, regardless of whether
+any actions fail. Failed items persist in `remote_state` with status
+`download_failed` and are recovered by the reconciler. This eliminates the
+"delta token starvation" problem where one permanently-failing item blocks
+all new change discovery.
 
-If the process crashes with cycle 1 half-done, the delta token for cycle 1 is
-not saved. On restart, the same delta is re-fetched. The planner sees that some
-actions from that delta are already in baseline (committed individually per
-action) and skips them. The remaining actions are re-planned and re-executed.
-Idempotent by construction.
+### 13.3 Crash Recovery
 
-### 13.3 Token Commit Transaction
+If the daemon crashes between the delta poll and `CommitObservation`, both
+events and the new token are lost. The old token is replayed on restart —
+the delta API re-delivers the same items. `remote_state` writes are idempotent
+(same data rewritten via UPSERT). No data loss.
 
-The delta token commit is a separate transaction from the per-action commits:
-
-```sql
-BEGIN;
-  INSERT OR REPLACE INTO delta_tokens (drive_id, token, updated_at)
-  VALUES (?, ?, ?);
-COMMIT;
-```
-
-This is safe because all actions for the cycle are already committed to
-baseline individually. The token commit is the final step that "seals" the
-cycle.
+If the daemon crashes after `CommitObservation` but before events reach the
+buffer, the events are lost from the pipeline but the `remote_state` rows
+persist. The reconciler picks them up on restart.
 
 ---
 
@@ -665,20 +641,19 @@ On first signal:
 6. Delta token is NOT committed (cycle incomplete), ensuring idempotent
    re-planning on restart
 
-### 14.3 Crash Recovery via Idempotent Planner
+### 14.3 Crash Recovery via Remote State + Reconciler
 
-Crash recovery does not require a persistent action queue. Instead:
+Crash recovery uses the `remote_state` table:
 
-1. On restart, `BaselineManager.Load()` loads the baseline (reflects all
-   committed actions)
-2. `GetDeltaToken()` returns the last committed token (pre-crash cycle's token
-   was never committed)
-3. Delta fetch returns the same changes as the crashed cycle
-4. Planner compares changes against the baseline:
-   - Actions that completed before the crash are already in the baseline ---
-     the planner detects them as convergent (EF4/EF11) and skips them
-   - Actions that did not complete are re-planned and re-executed
-5. No duplicate work, no lost work
+1. On restart, `SyncStore.Load()` loads the baseline
+2. Reconciler bootstraps from `remote_state`: queries rows with non-terminal
+   status, resets `downloading` -> `pending_download`
+3. `GetDeltaToken()` returns the last committed token (always reflects latest
+   successful poll, not sync success)
+4. Delta fetch returns only changes SINCE the stored token — previously-failed
+   items are NOT in this response (they're in `remote_state`)
+5. Fresh delta events + reconciler retries both flow through the normal pipeline
+6. No items are ever lost, regardless of how many times the daemon crashes
 
 ### 14.4 Upload Resume via SessionStore
 
@@ -711,7 +686,7 @@ covers the entire file after download completes.
 
 End-to-end walkthrough:
 
-1. `BaselineManager.Load()` --- load baseline from database
+1. `SyncStore.Load()` --- load baseline from database
 2. `LocalObserver.FullScan()` --- walk filesystem, compare against baseline,
    produce `[]ChangeEvent` (creates, modifies, deletes). Remote observer is
    skipped entirely.
@@ -730,7 +705,7 @@ End-to-end walkthrough:
 
 End-to-end walkthrough:
 
-1. `BaselineManager.Load()` --- load baseline
+1. `SyncStore.Load()` --- load baseline
 2. `RemoteObserver.FullDelta()` --- fetch all remote changes since last delta
    token, produce `[]ChangeEvent`. Local observer is skipped entirely.
 3. `ChangeBuffer.AddAll() + FlushImmediate()` --- batch events by path
@@ -747,7 +722,7 @@ End-to-end walkthrough:
 
 End-to-end walkthrough:
 
-1. `BaselineManager.Load()` --- load baseline
+1. `SyncStore.Load()` --- load baseline
 2. `RemoteObserver.FullDelta()` and `LocalObserver.FullScan()` run
    **concurrently** --- both produce `[]ChangeEvent`
 3. `ChangeBuffer.AddAll() + FlushImmediate()` --- merge and batch by path
@@ -766,7 +741,7 @@ End-to-end walkthrough:
 
 End-to-end walkthrough:
 
-1. `BaselineManager.Load()` --- load baseline
+1. `SyncStore.Load()` --- load baseline
 2. Load SessionStore for any persisted upload sessions (crash recovery)
 3. `RemoteObserver.Watch()` --- continuous delta polling (default 5-min
    interval) or WebSocket subscription. Emits `ChangeEvent` values to buffer.
@@ -801,7 +776,7 @@ Steps 1-4 only (observe, buffer, plan). Print `ActionPlan`. No execution, no
 commit. Zero side effects.
 
 ```
-1. BaselineManager.Load()
+1. SyncStore.Load()
 2. Observe (remote and/or local, per direction mode)
 3. ChangeBuffer flush
 4. Planner.Plan() -> ActionPlan
@@ -884,9 +859,10 @@ excessive memory consumption during extended pauses.
 
 ### 16.3 Component Details
 
-- **BaselineManager**: Same schema, same sole-writer. `CommitOutcome()` commits
-  one outcome per transaction. `CommitDeltaToken()` seals cycle token separately.
-  `Load()` and `GetDeltaToken()` unchanged.
+- **SyncStore**: Three-table model with typed sub-interfaces. `CommitOutcome()`
+  commits baseline + updates `remote_state` per transaction. `CommitObservation()`
+  writes `remote_state` + advances delta token atomically. `Load()` and
+  `GetDeltaToken()` unchanged.
 - **Engine orchestration**: One-shot and watch modes both use DepTracker +
   WorkerResult channel. Watch mode uses continuous pipeline with persistent
   workers.
@@ -908,21 +884,17 @@ excessive memory consumption during extended pauses.
    planner purity). Alternative: planner queries tracker state (breaks
    pure-function constraint).
 
-2. **Lane size threshold.** Fixed at 10 MB. Provides predictable behavior
-   without requiring tuning. Adaptive threshold (p50 of recent action sizes)
-   adds complexity with marginal benefit.
-
-3. **Config key reconciliation.** PRD specifies `parallel_downloads`,
+2. **Config key deprecation.** PRD specifies `parallel_downloads`,
    `parallel_uploads`, `parallel_checkers` as three separate configurable
-   values. The lane model combines downloads and uploads into interactive/bulk
-   lanes. Section 6.4 defines the mapping. The PRD keys are preserved for
-   backwards compatibility; their sum determines total lane worker count.
+   values. These are deprecated in favor of `transfer_workers` and
+   `check_workers`. A warning is logged via `WarnDeprecatedKeys()` if the
+   old keys are present.
 
 ---
 
 ## 18. Observation-Layer Parallelization
 
-Sections 1--17 cover the **execution** layer (workers, tracker, lanes).
+Sections 1--17 cover the **execution** layer (workers, tracker, flat pool).
 This section covers parallelization opportunities in the **observation** layer
 — the pipeline stages that run before the planner.
 
