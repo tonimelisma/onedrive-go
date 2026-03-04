@@ -7,11 +7,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"syscall"
 	"testing"
 	"time"
 
-	"github.com/fsnotify/fsnotify"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -1470,7 +1468,7 @@ func TestRunWatch_WatchLimitExhausted_FallsBackToPolling(t *testing.T) {
 
 	// Inject a watcher factory that returns ENOSPC after the first Add (root).
 	eng.localWatcherFactory = func() (FsWatcher, error) {
-		return newEnospcWatcherForEngine(1), nil
+		return newEnospcWatcher(1), nil
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -1496,37 +1494,6 @@ func TestRunWatch_WatchLimitExhausted_FallsBackToPolling(t *testing.T) {
 		require.Fail(t, "RunWatch did not return within timeout")
 	}
 }
-
-// enospcWatcherForEngine is a mock FsWatcher for engine tests that returns
-// ENOSPC after a configurable number of successful Add calls.
-type enospcWatcherForEngine struct {
-	events    chan fsnotify.Event
-	errs      chan error
-	addCount  int
-	failAfter int
-}
-
-func newEnospcWatcherForEngine(failAfter int) *enospcWatcherForEngine {
-	return &enospcWatcherForEngine{
-		events:    make(chan fsnotify.Event, 10),
-		errs:      make(chan error, 10),
-		failAfter: failAfter,
-	}
-}
-
-func (w *enospcWatcherForEngine) Add(string) error {
-	w.addCount++
-	if w.addCount > w.failAfter {
-		return syscall.ENOSPC
-	}
-
-	return nil
-}
-
-func (w *enospcWatcherForEngine) Remove(string) error           { return nil }
-func (w *enospcWatcherForEngine) Events() <-chan fsnotify.Event { return w.events }
-func (w *enospcWatcherForEngine) Errors() <-chan error          { return w.errs }
-func (w *enospcWatcherForEngine) Close() error                  { return nil }
 
 func TestResolveConflict_KeepLocal_TransferFails(t *testing.T) {
 	t.Parallel()

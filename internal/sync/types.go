@@ -289,7 +289,8 @@ type Baseline struct {
 }
 
 // GetByPath returns the baseline entry for the given relative path.
-// Thread-safe: holds a read lock during access.
+// Thread-safe: holds a read lock during access. The returned pointer must not
+// be mutated by the caller; mutations outside the lock are not thread-safe.
 func (b *Baseline) GetByPath(path string) (*BaselineEntry, bool) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -300,7 +301,8 @@ func (b *Baseline) GetByPath(path string) (*BaselineEntry, bool) {
 }
 
 // GetByID returns the baseline entry for the given (driveID, itemID) pair.
-// Thread-safe: holds a read lock during access.
+// Thread-safe: holds a read lock during access. The returned pointer must not
+// be mutated by the caller; mutations outside the lock are not thread-safe.
 func (b *Baseline) GetByID(key driveid.ItemKey) (*BaselineEntry, bool) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()

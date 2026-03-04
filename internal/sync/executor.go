@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -299,13 +300,38 @@ func (e *Executor) executeCleanup(action *Action) Outcome {
 
 // containedPath joins syncRoot and relPath, returning the absolute path only
 // if the result stays within syncRoot. Uses filepath.IsLocal (Go 1.20+) to
-// reject traversal sequences, absolute paths, and empty strings.
+// reject traversal sequences, absolute paths, and empty strings. Additionally
+// resolves symlinks to detect TOCTOU escape via symlinked path components.
 func containedPath(syncRoot, relPath string) (string, error) {
 	if !filepath.IsLocal(relPath) {
 		return "", fmt.Errorf("%w: %q", ErrPathEscapesSyncRoot, relPath)
 	}
 
-	return filepath.Join(syncRoot, relPath), nil
+	absPath := filepath.Join(syncRoot, relPath)
+
+	// Resolve symlinks on the parent directory to detect escape via
+	// symlinked path components. The file itself may not exist yet
+	// (common for downloads), but its parent directory must exist for
+	// symlink-based attacks to work.
+	parentDir := filepath.Dir(absPath)
+
+	resolvedParent, err := filepath.EvalSymlinks(parentDir)
+	if err != nil {
+		return absPath, nil
+	}
+
+	resolvedRoot, err := filepath.EvalSymlinks(syncRoot)
+	if err != nil {
+		return absPath, nil
+	}
+
+	if resolvedParent != resolvedRoot &&
+		!strings.HasPrefix(resolvedParent, resolvedRoot+string(filepath.Separator)) {
+		return "", fmt.Errorf("%w: symlink resolves to %q outside root %q",
+			ErrPathEscapesSyncRoot, resolvedParent, resolvedRoot)
+	}
+
+	return absPath, nil
 }
 
 // resolveActionItemType extracts ItemType from the action's View, skipping
