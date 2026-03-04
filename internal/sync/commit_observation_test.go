@@ -3,6 +3,8 @@ package sync
 import (
 	"context"
 	"database/sql"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -827,13 +829,17 @@ func TestResetInProgressStates(t *testing.T) {
 
 	mgr := newTestManager(t)
 	ctx := context.Background()
+	syncRoot := t.TempDir()
+
+	// Create file for deleting item "b" so it's reset to pending_delete.
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "b.txt"), []byte("x"), 0o600))
 
 	for _, s := range []struct {
 		id     string
 		status string
 	}{
 		{"a", statusDownloading},
-		{"b", statusDeleting},
+		{"b", statusDeleting}, // file exists → pending_delete
 		{"c", statusSynced},
 		{"d", statusPendingDownload},
 	} {
@@ -845,14 +851,14 @@ func TestResetInProgressStates(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	err := mgr.ResetInProgressStates(ctx)
+	err := mgr.ResetInProgressStates(ctx, syncRoot)
 	require.NoError(t, err)
 
 	rowA := readRemoteStateRow(t, mgr.DB(), "a")
 	assert.Equal(t, statusPendingDownload, rowA.SyncStatus, "downloading→pending_download")
 
 	rowB := readRemoteStateRow(t, mgr.DB(), "b")
-	assert.Equal(t, statusPendingDelete, rowB.SyncStatus, "deleting→pending_delete")
+	assert.Equal(t, statusPendingDelete, rowB.SyncStatus, "deleting+file exists→pending_delete")
 
 	rowC := readRemoteStateRow(t, mgr.DB(), "c")
 	assert.Equal(t, statusSynced, rowC.SyncStatus, "synced unchanged")

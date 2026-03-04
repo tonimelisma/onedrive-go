@@ -87,6 +87,10 @@ type Engine struct {
 	transferWorkers int                    // goroutine count for the worker pool
 	checkWorkers    int                    // goroutine limit for parallel file hashing
 
+	// reconciler retries failed items with exponential backoff in watch mode.
+	// nil in one-shot mode.
+	reconciler *Reconciler
+
 	// localWatcherFactory overrides the default fsnotify watcher factory
 	// for the local observer. Tests inject a mock factory to simulate
 	// inotify watch limit exhaustion (ENOSPC).
@@ -213,7 +217,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 	}
 
 	// Crash recovery: reset any in-progress states from a previous crash.
-	if err := e.baseline.ResetInProgressStates(ctx); err != nil {
+	if err := e.baseline.ResetInProgressStates(ctx, e.syncRoot); err != nil {
 		e.logger.Warn("failed to reset in-progress states", slog.String("error", err.Error()))
 	}
 
@@ -332,6 +336,9 @@ func (e *Engine) executePlan(
 		for _, depIdx := range plan.Deps[i] {
 			depIDs = append(depIDs, int64(depIdx))
 		}
+
+		// Dispatch state transition: pending/failed → in-progress.
+		e.setDispatch(ctx, &plan.Actions[i])
 
 		// One-shot mode: no per-cycle tracking needed (empty cycleID).
 		tracker.Add(&plan.Actions[i], id, depIDs, "")
@@ -664,6 +671,11 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 	buf := NewBuffer(e.logger)
 	ready := buf.FlushDebounced(ctx, e.resolveDebounce(opts))
 
+	// Step 4b: Start reconciler for automatic retry of failed items.
+	// Created after buf so it can re-inject synthesized events.
+	e.reconciler = NewReconciler(e.baseline, e.baseline, buf, tracker, e.logger)
+	go e.reconciler.Run(ctx)
+
 	// Step 5: Start observer goroutines.
 	errs, activeObservers := e.startObservers(ctx, bl, mode, buf, opts)
 
@@ -719,6 +731,12 @@ func (e *Engine) drainWorkerResults(ctx context.Context, results <-chan WorkerRe
 						slog.String("error", recErr.Error()),
 					)
 				}
+			}
+
+			// Kick reconciler after every result (success or failure) so it
+			// can re-evaluate retry timers and dispatch newly retriable items.
+			if e.reconciler != nil {
+				e.reconciler.Kick()
 			}
 
 		case <-ctx.Done():
@@ -873,7 +891,7 @@ func (e *Engine) runPeriodicFullScan(
 // continues. In-flight actions for overlapping paths are canceled and
 // replaced (B-122 deduplication).
 func (e *Engine) processBatch(
-	_ context.Context, batch []PathChanges, bl *Baseline,
+	ctx context.Context, batch []PathChanges, bl *Baseline,
 	mode SyncMode, safety *SafetyConfig, tracker *DepTracker,
 ) {
 	e.logger.Info("processing watch batch",
@@ -926,8 +944,8 @@ func (e *Engine) processBatch(
 		return
 	}
 
-	// Populate tracker with actions. Failure suppression is handled by
-	// next_retry_at in remote_state (reconciler reads this in 5.7.2).
+	// Populate tracker with actions. Dispatch transitions set the in-progress
+	// status on remote_state before the worker picks up the action.
 	for i := range plan.Actions {
 		id := int64(i)
 
@@ -936,12 +954,26 @@ func (e *Engine) processBatch(
 			depIDs = append(depIDs, int64(depIdx))
 		}
 
+		e.setDispatch(ctx, &plan.Actions[i])
+
 		tracker.Add(&plan.Actions[i], id, depIDs, "")
 	}
 
 	e.logger.Info("watch batch dispatched",
 		slog.Int("actions", len(plan.Actions)),
 	)
+}
+
+// setDispatch writes the dispatch state transition for an action before it
+// enters the tracker. Only applies to downloads and local deletes (the action
+// types that have remote_state lifecycle).
+func (e *Engine) setDispatch(ctx context.Context, action *Action) {
+	if err := e.baseline.SetDispatchStatus(ctx, action.DriveID.String(), action.ItemID, action.Type); err != nil {
+		e.logger.Warn("failed to set dispatch status",
+			slog.String("path", action.Path),
+			slog.String("error", err.Error()),
+		)
+	}
 }
 
 // resolvePollInterval returns the configured poll interval or the default.

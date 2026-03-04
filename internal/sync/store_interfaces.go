@@ -48,6 +48,7 @@ type ConflictEscalator interface {
 type StateReader interface {
 	ListUnreconciled(ctx context.Context) ([]RemoteStateRow, error)
 	ListFailedForRetry(ctx context.Context, now time.Time) ([]RemoteStateRow, error)
+	EarliestRetryAt(ctx context.Context, now time.Time) (time.Time, error)
 	FailureCount(ctx context.Context) (int, error)
 	BaselineEntryCount(ctx context.Context) (int, error)
 	UnresolvedConflictCount(ctx context.Context) (int, error)
@@ -59,7 +60,7 @@ type StateReader interface {
 type StateAdmin interface {
 	ResetFailure(ctx context.Context, path string) error
 	ResetAllFailures(ctx context.Context) error
-	ResetInProgressStates(ctx context.Context) error
+	ResetInProgressStates(ctx context.Context, syncRoot string) error
 }
 
 // ObservedItem represents a single item from a delta API response, ready

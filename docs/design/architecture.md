@@ -19,10 +19,10 @@
 
 ### Design Principles
 
-1. **Event-driven pipeline**: Observers produce change events. A pure-function planner converts events + baseline into an action plan. An executor carries out the plan. A baseline manager atomically persists the results. The database is never the coordination mechanism between stages.
-2. **Baseline-only persistence**: The only durable per-item state is the confirmed synced baseline (11-column `baseline` table). Remote and local observations are ephemeral -- rebuilt from the API and filesystem each cycle.
+1. **Event-driven pipeline**: Observers produce change events. A pure-function planner converts events + baseline into an action plan. An executor carries out the plan. The `SyncStore` atomically persists the results. The database is never the coordination mechanism between stages.
+2. **Remote state separation**: The sync database uses a three-table model (`remote_state`, `baseline`, `local_issues`). Remote observations are persisted durably in `remote_state` at observation time, decoupling the delta token from sync success. Failed downloads persist as state discrepancies and are recovered by the reconciler. See [remote-state-separation.md](remote-state-separation.md).
 3. **Pure-function planning**: The planner has no I/O and no database access. It takes `([]PathChanges, *Baseline, SyncMode, SafetyConfig)` and returns `*ActionPlan`. Every decision is deterministic and reproducible.
-4. **Watch-primary**: `sync --watch` is the primary runtime mode. One-shot sync is "collect all events, then process them as a single batch." The same planner, executor, and baseline manager serve both modes.
+4. **Watch-primary**: `sync --watch` is the primary runtime mode. One-shot sync is "collect all events, then process them as a single batch." The same planner, executor, and SyncStore serve both modes.
 5. **Interface-driven testability**: Every component communicates via Go interfaces. All I/O (filesystem, network, database) is behind interfaces, enabling deterministic testing with mocks.
 
 ### Component Diagram
@@ -118,13 +118,14 @@ internal/
     executor_transfer.go            # Download/upload action execution
     executor_conflict.go            # Conflict handling actions
     executor_delete.go              # Delete action execution
-    baseline.go                     # Sole DB writer: Load, Commit, schema, migrations
+    baseline.go                     # SyncStore: sub-interface DB access (ObservationWriter, OutcomeWriter, etc.)
     types.go                        # ChangeEvent, BaselineEntry, PathView, Outcome, etc.
     transfer_manager.go             # Unified download/upload with resume, hash verification
-    worker.go                       # Lane-based worker pools (interactive/bulk/shared)
+    worker.go                       # Flat worker pool (transfer_workers config)
     tracker.go                      # In-memory dependency graph, action dispatch
     session_store.go                # File-based upload session persistence (JSON)
-    failure_tracker.go              # Watch mode failure suppression
+    compute_status.go               # computeNewStatus() pure function for CommitObservation
+    reconciler.go                   # Level-triggered reconciler for remote_state retries
     trash.go                        # OS trash integration (FreeDesktop.org, macOS)
     verify.go                       # Post-sync verification (baseline vs filesystem)
     migrations.go                   # Embedded SQL migration files
@@ -258,14 +259,14 @@ See [event-driven-rationale.md](event-driven-rationale.md) Parts 5.4-5.7 for ful
 
 ### 3.6 Executor (`executor.go`)
 
-Takes an `ActionPlan` and dispatches actions to lane-based workers via the DepTracker. Workers produce individual `Outcome` values committed per-action by the BaselineManager.
+Takes an `ActionPlan` and dispatches actions to a flat worker pool via the DepTracker. Workers produce individual `Outcome` values committed per-action by the SyncStore.
 
-**DAG execution with dependency tracking**: Actions are dispatched based on dependency satisfaction, not fixed phase ordering. The planner emits explicit dependency edges: parent folder must exist before child operations, children must be removed before parent folder deletion, move target parent must exist. All action types are eligible to run concurrently when their dependencies are met. An in-memory DepTracker tracks action dependencies and dispatches ready actions to workers via channels, providing instant dispatch when dependencies are satisfied. Workers report outcomes through an in-memory result channel. Lane-based worker dispatch routes small files and folder operations to an interactive lane and large transfers to a bulk lane, with a shared overflow pool ensuring fairness. See [concurrent-execution.md](concurrent-execution.md) for the full execution architecture.
+**DAG execution with dependency tracking**: Actions are dispatched based on dependency satisfaction, not fixed phase ordering. The planner emits explicit dependency edges: parent folder must exist before child operations, children must be removed before parent folder deletion, move target parent must exist. All action types are eligible to run concurrently when their dependencies are met. An in-memory DepTracker tracks action dependencies and dispatches ready actions to workers via a single `Ready()` channel, providing instant dispatch when dependencies are satisfied. Workers report outcomes through an in-memory result channel. Workers are a flat pool (`transfer_workers` config, default 8) — Go's channel scheduling provides natural fairness. See [concurrent-execution.md](concurrent-execution.md) for the full execution architecture.
 
 **Key properties**:
-- Database writes happen only in the BaselineManager, committing each action outcome individually as workers complete transfers
+- Database writes happen only in the SyncStore, committing each action outcome individually as workers complete transfers
 - Workers report Outcomes through an in-memory result channel
-- Each Outcome is self-contained: has everything the baseline manager needs
+- Each Outcome is self-contained: has everything the SyncStore needs
 - Retries happen INSIDE the executor with exponential backoff before producing the final Outcome
 
 **Download safety**: `.partial` file -> stream with `TeeReader` hash -> verify QuickXorHash -> set timestamps -> atomic rename.
@@ -274,23 +275,25 @@ Takes an `ActionPlan` and dispatches actions to lane-based workers via the DepTr
 
 See [event-driven-rationale.md](event-driven-rationale.md) Part 5.8 for full implementation details.
 
-### 3.7 Baseline Manager (`baseline.go`)
+### 3.7 SyncStore (`baseline.go`)
 
-The **sole writer** to the database. Loads the baseline at cycle start and commits each outcome as its action completes.
+The database access layer, exposing typed sub-interfaces grouped by caller identity. The `SyncStore` manages the three core tables (`remote_state`, `baseline`, `local_issues`) plus supporting tables. See [remote-state-separation.md §12](remote-state-separation.md) for the sub-interface design.
 
 **Key properties**:
-- Single writer -- all database concurrency concerns are structurally avoided
-- Per-action atomic transaction: each outcome commits the baseline row immediately. Delta token committed separately when all actions for a cycle complete.
+- Sub-interfaces enforce transition ownership at compile time (ObservationWriter, OutcomeWriter, FailureRecorder, etc.)
+- Per-action atomic transaction: each outcome commits baseline + updates `remote_state` in a single transaction
 - After each commit, the in-memory baseline cache is updated for consistency
-- Delta token is committed only when all cycle actions are done
+- Delta token is committed atomically with `remote_state` observations
 
 **Operations**:
 - `Load()`: Reads entire baseline table into memory (`Baseline.ByPath` + `Baseline.ByID` maps)
-- `CommitOutcome(outcome)`: Applies a single successful outcome to the baseline in an atomic transaction
-- `CommitDeltaToken(token, driveID)`: Saves the delta token when all cycle actions are complete
+- `CommitObservation(events, newToken, driveID)`: Writes observed remote state + advances delta token atomically
+- `CommitOutcome(outcome)`: Applies a single successful outcome to baseline + updates `remote_state`
+- `RecordFailure(path, errMsg, httpStatus)`: Records failure metadata on `remote_state` rows
+- `ListUnreconciled()`: Returns `remote_state` rows needing retry (for reconciler)
 - `GetDeltaToken()`: Returns saved delta token for a drive
 
-See [event-driven-rationale.md](event-driven-rationale.md) Part 5.9 for full implementation details.
+See [event-driven-rationale.md](event-driven-rationale.md) Part 5.9 and [remote-state-separation.md](remote-state-separation.md) for full details.
 
 ### 3.8 Config (`internal/config/`)
 
@@ -388,7 +391,7 @@ type LocalState struct {
 
 ### 4.4 Outcome
 
-The result of executing a single action. Self-contained — has everything the BaselineManager needs to update the database.
+The result of executing a single action. Self-contained — has everything the SyncStore needs to update the database.
 
 ```go
 type Outcome struct {
@@ -530,7 +533,7 @@ cmd/onedrive-go/  -->  graph.Client  -->  Microsoft Graph API
 ### 5.2 One-Shot Sync
 
 ```
-1. BaselineManager.Load()           -> Baseline (from DB, cached in memory)
+1. SyncStore.Load()           -> Baseline (from DB, cached in memory)
 2. RemoteObserver.FullDelta()       -> []ChangeEvent (remote)
 3. LocalObserver.FullScan()         -> []ChangeEvent (local)
    (steps 2-3 run concurrently)
@@ -544,7 +547,7 @@ cmd/onedrive-go/  -->  graph.Client  -->  Microsoft Graph API
 ### 5.3 Watch Mode
 
 ```
-1. BaselineManager.Load()           -> Baseline (from DB, cached in memory)
+1. SyncStore.Load()           -> Baseline (from DB, cached in memory)
 2. RemoteObserver.Watch()           -> continuous ChangeEvent stream
 3. LocalObserver.Watch()            -> continuous ChangeEvent stream
 4. ChangeBuffer debounces (2s)      -> []PathChanges
@@ -604,37 +607,33 @@ Memory bounded to ~50 MB even for 500K-item drives. For maximum speed, parallel 
 
 ## 6. Concurrency Model
 
-### 6.1 Database Writer
+### 6.1 Database Access
 
-**Sole writer**: Only the `BaselineManager` writes to the database, committing each action outcome individually as workers complete transfers. All commits are serialized through the single writer. No concurrent write contention during sync.
+Multiple goroutines write to the database concurrently: the remote observer (CommitObservation), worker goroutines (CommitOutcome), and drainWorkerResults (RecordFailure). Concurrency safety comes from SQLite WAL mode with a 5-second busy timeout, plus optimistic concurrency WHERE clauses in every write method. See [remote-state-separation.md §10](remote-state-separation.md) for the full concurrency model.
 
-**Concurrent readers**: SQLite WAL mode enables `status`, `conflicts`, and `verify` commands to read while sync writes.
+**Concurrent readers**: SQLite WAL mode enables `status`, `conflicts`, and `verify` commands to read while sync writes. Readers never block.
 
-### 6.2 Worker Lanes
+### 6.2 Worker Pool
 
-Workers are organized into two lanes with reserved capacity plus a shared overflow pool, ensuring fairness between small and large operations:
+Workers are a flat pool reading from a single `Ready()` channel. Go's channel scheduling provides natural fairness.
 
-| Lane | Reserved Workers | Purpose |
-|------|-----------------|---------|
-| Interactive | max(2, total/8) | Small files (<10 MB), folder ops, deletes, moves |
-| Bulk | max(2, total/8) | Large file transfers (>=10 MB) |
-| Shared | remainder | Dynamically assigned; interactive priority |
-| Checkers | 8 (separate) | Local hash computation for change detection |
+| Pool | Workers | Purpose |
+|------|---------|---------|
+| Transfer | `transfer_workers` (default 8, range 4-64) | File operations: downloads, uploads, renames, deletes, mkdirs |
+| Checkers | `check_workers` (default 4, range 1-16) | Local hash computation for change detection |
 
-Total lane workers = `runtime.NumCPU()` or user-configured cap (minimum 4). Reserved workers per lane = max(2, total/8). Shared workers prefer the interactive lane, ensuring small file changes get picked up immediately even when all bulk workers are busy with large transfers. The checker pool remains separate (CPU-bound, runs during observation, not execution). See [concurrent-execution.md](concurrent-execution.md) section 6 for details.
+The checker pool is separate (CPU-bound, runs during observation, not execution). See [concurrent-execution.md §6](concurrent-execution.md) for details.
 
 ### 6.3 Context Tree
 
-One root context per sync run. Workers are persistent goroutines pulling from tracker channels, not phase-scoped. Cancellation propagates to all stages:
+One root context per sync run. Workers are persistent goroutines pulling from the single tracker channel, not phase-scoped. Cancellation propagates to all stages:
 
 ```
 rootCtx
 |-- remoteObserverCtx
 |-- localObserverCtx
 |-- trackerCtx
-    |-- interactiveWorker[0..M]
-    |-- bulkWorker[0..N]
-    +-- sharedWorker[0..K]
+    |-- worker[0..N]
 ```
 
 > **Multi-drive extension**: In multi-drive mode, the context tree extends: `processCtx → orchestratorCtx → driveCtx[i] → Engine[i]`. Each drive has an independently cancelable context. See [MULTIDRIVE.md §11.5](MULTIDRIVE.md#115-context-tree) for the full context hierarchy.
@@ -656,44 +655,30 @@ rootCtx
 - **FULL synchronous** -- durability on crash
 - **Separate database file per drive** -- complete isolation between accounts
 
-### 7.2 Baseline Table
+### 7.2 Three-Table State Model
 
-The only mutable per-item state in the system. 11 columns storing the confirmed synced state of each item.
+The sync database uses a three-table model for per-item state. See [data-model.md](data-model.md) and [remote-state-separation.md](remote-state-separation.md) for full details.
 
-```sql
-CREATE TABLE baseline (
-    path            TEXT    PRIMARY KEY,
-    drive_id        TEXT    NOT NULL,
-    item_id         TEXT    NOT NULL,
-    parent_id       TEXT,
-    item_type       TEXT    NOT NULL CHECK(item_type IN ('file', 'folder', 'root')),
-    local_hash      TEXT,
-    remote_hash     TEXT,
-    size            INTEGER,
-    mtime           INTEGER,
-    synced_at       INTEGER NOT NULL CHECK(synced_at > 0),
-    etag            TEXT
-);
+| Table | Purpose | PK | Writer(s) |
+|---|---|---|---|
+| `remote_state` | Full mirror of remote drive (every delta-observed item) | `(drive_id, item_id)` | ObservationWriter, OutcomeWriter, FailureRecorder |
+| `baseline` | Confirmed synced state | `(drive_id, item_id)` | OutcomeWriter |
+| `local_issues` | Upload failure tracking | `path` | Planner, OutcomeWriter |
 
-CREATE UNIQUE INDEX idx_baseline_item ON baseline(drive_id, item_id);
-CREATE INDEX idx_baseline_parent ON baseline(parent_id);
-```
-
-The baseline stores confirmed synced state. Each row represents a live, synced item. Deletions remove the baseline row -- remote deletion events are ephemeral observations processed in the pipeline. Local observations are keyed by path; the baseline maps paths to server item IDs. The `mtime` column stores the local mtime at sync time; per-side mtimes are ephemeral (in change events).
-
-Per-side hashes (`local_hash`, `remote_hash`) handle SharePoint enrichment natively: after enrichment, local and remote hashes diverge, and both are recorded. No infinite re-upload loop.
+Per-side hashes in `baseline` (`local_hash`, `remote_hash`) handle SharePoint enrichment natively: after enrichment, local and remote hashes diverge, and both are recorded. No infinite re-upload loop.
 
 ### 7.3 Supporting Tables
 
 | Table | Purpose | Writer |
 |---|---|---|
-| `delta_tokens` | Delta cursor per drive | BaselineManager (when all cycle actions done) |
-| `conflicts` | Conflict tracking with resolution history | BaselineManager |
+| `delta_tokens` | Delta cursor per drive | ObservationWriter (atomically with `remote_state`) |
+| `conflicts` | Conflict tracking with resolution status | SyncStore, ConflictEscalator |
+| `sync_metadata` | Key-value store for sync reporting | StateAdmin |
 | `schema_migrations` | Schema version tracking | Engine (on startup) |
 
 Upload session persistence uses a file-based `SessionStore` (JSON files in `{dataDir}/upload-sessions/`), not the database.
 
-**Critical property**: The delta token is committed only when all actions for a cycle are done. Individual per-action commits update the baseline but do not advance the delta token. If the process crashes mid-cycle, the token is not advanced and the same delta is re-fetched. The idempotent planner skips actions whose outcomes are already reflected in the baseline, so no work is duplicated.
+**Critical property**: The delta token is committed atomically with `remote_state` observations via `CommitObservation()`. The token is a pure API cursor — it tracks what the API has told us, not what we've synced. Previously-failed items persist in `remote_state` and are recovered by the reconciler on restart.
 
 See [data-model.md](data-model.md) for complete schema definitions.
 
