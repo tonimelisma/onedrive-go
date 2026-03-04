@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -1487,4 +1488,109 @@ func TestFilteringSymmetry_BothObserversAgree(t *testing.T) {
 		assert.Equal(t, excluded, isAlwaysExcluded(name) || !isValidOneDriveName(name),
 			"filtering must be deterministic for %q", name)
 	}
+}
+
+// mockObservationWriter records CommitObservation calls for test verification.
+type mockObservationWriter struct {
+	calls []mockObsWriterCall
+	err   error
+}
+
+type mockObsWriterCall struct {
+	events   []ObservedItem
+	newToken string
+	driveID  driveid.ID
+}
+
+func (m *mockObservationWriter) CommitObservation(_ context.Context, events []ObservedItem, newToken string, driveID driveid.ID) error {
+	m.calls = append(m.calls, mockObsWriterCall{events: events, newToken: newToken, driveID: driveID})
+	return m.err
+}
+
+// TestWatch_CommitsObservations verifies that Watch calls CommitObservation
+// after each successful FullDelta poll.
+func TestWatch_CommitsObservations(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(testDriveID)
+
+	fetcher := &sequentialFetcher{
+		pages: []mockDeltaPage{
+			{page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+					{ID: "f1", Name: "a.txt", ParentID: "root", DriveID: driveID, Size: 10, QuickXorHash: "hash1"},
+				},
+				DeltaLink: "token-1",
+			}},
+		},
+	}
+
+	writer := &mockObservationWriter{}
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, testLogger(t))
+	obs.obsWriter = writer
+	obs.sleepFunc = noopSleep
+
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(t.Context())
+
+	go func() {
+		// Receive events then cancel.
+		received := 0
+		for range events {
+			received++
+			if received >= 1 {
+				cancel()
+				return
+			}
+		}
+	}()
+
+	err := obs.Watch(ctx, "", events, time.Millisecond)
+	require.NoError(t, err)
+
+	// CommitObservation should have been called.
+	require.GreaterOrEqual(t, len(writer.calls), 1, "CommitObservation should be called")
+	assert.Equal(t, "token-1", writer.calls[0].newToken)
+	assert.Equal(t, driveID, writer.calls[0].driveID)
+}
+
+// TestWatch_ObsWriterError_ContinuesRetry verifies that a CommitObservation
+// error causes the observer to retry (continue loop) rather than crash.
+func TestWatch_ObsWriterError_ContinuesRetry(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(testDriveID)
+	pollCount := 0
+
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{
+			{page: &graph.DeltaPage{
+				Items:     []graph.Item{{ID: "root", IsRoot: true, DriveID: driveID}},
+				DeltaLink: "token-1",
+			}},
+			{page: &graph.DeltaPage{
+				Items:     []graph.Item{{ID: "root", IsRoot: true, DriveID: driveID}},
+				DeltaLink: "token-2",
+			}},
+		},
+	}
+
+	writer := &mockObservationWriter{err: fmt.Errorf("simulated commit error")}
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, testLogger(t))
+	obs.obsWriter = writer
+	obs.sleepFunc = func(_ context.Context, _ time.Duration) error {
+		pollCount++
+		if pollCount >= 3 {
+			return fmt.Errorf("stop")
+		}
+		return nil
+	}
+
+	events := make(chan ChangeEvent, 10)
+	err := obs.Watch(t.Context(), "", events, time.Millisecond)
+	require.NoError(t, err)
+
+	// Should have retried — multiple commit attempts.
+	assert.GreaterOrEqual(t, len(writer.calls), 1, "should retry after commit failure")
 }

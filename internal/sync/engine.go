@@ -732,6 +732,14 @@ func (e *Engine) drainWorkerResults(ctx context.Context, results <-chan WorkerRe
 				e.failures.recordSuccess(r.Path)
 			} else {
 				e.failures.recordFailure(r.Path, r.ErrMsg)
+
+				// Persist failure to remote_state for durable retry tracking.
+				if recErr := e.baseline.RecordFailure(ctx, r.Path, r.ErrMsg, r.HTTPStatus); recErr != nil {
+					e.logger.Warn("failed to record failure in remote_state",
+						slog.String("path", r.Path),
+						slog.String("error", recErr.Error()),
+					)
+				}
 			}
 
 			// Track per-cycle failures for delta token commit decision.
@@ -781,6 +789,7 @@ func (e *Engine) startObservers(
 	// Remote observer (skip for upload-only mode).
 	if mode != SyncUploadOnly {
 		remoteObs := NewRemoteObserver(e.fetcher, bl, e.driveID, e.logger)
+		remoteObs.obsWriter = e.baseline
 		e.remoteObs = remoteObs
 
 		savedToken, tokenErr := e.baseline.GetDeltaToken(ctx, e.driveID.String(), "")

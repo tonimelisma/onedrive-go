@@ -659,3 +659,30 @@ func TestWorkerPool_ErrorCap_LogsWarnOnce(t *testing.T) {
 	// The warning should appear exactly once (sync.Once).
 	assert.Equal(t, 1, strings.Count(logOutput, "error diagnostic buffer full"))
 }
+
+func TestExtractHTTPStatus_GraphError(t *testing.T) {
+	t.Parallel()
+
+	ge := &graph.GraphError{StatusCode: 404, Message: "not found"}
+	assert.Equal(t, 404, extractHTTPStatus(ge))
+}
+
+func TestExtractHTTPStatus_WrappedGraphError(t *testing.T) {
+	t.Parallel()
+
+	ge := &graph.GraphError{StatusCode: 429, Message: "throttled"}
+	wrapped := fmt.Errorf("download failed: %w", ge)
+	assert.Equal(t, 429, extractHTTPStatus(wrapped))
+}
+
+func TestExtractHTTPStatus_NonGraphError(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, 0, extractHTTPStatus(fmt.Errorf("network timeout")))
+}
+
+func TestExtractHTTPStatus_Nil(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, 0, extractHTTPStatus(nil))
+}
