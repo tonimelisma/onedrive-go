@@ -730,14 +730,44 @@ func (m *SyncStore) DB() *sql.DB {
 	return m.db
 }
 
+// Checkpoint performs WAL checkpoint and optionally prunes soft-deleted rows
+// older than retention. Called: after initial sync, every 30 minutes, and on
+// shutdown. Pass retention=0 to skip pruning (WAL checkpoint only).
+func (m *SyncStore) Checkpoint(ctx context.Context, retention time.Duration) error {
+	if _, err := m.db.ExecContext(ctx,
+		"PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		m.logger.Warn("WAL checkpoint failed", slog.String("error", err.Error()))
+	}
+
+	if retention <= 0 {
+		return nil
+	}
+
+	cutoff := m.nowFunc().Add(-retention).UnixNano()
+
+	if _, err := m.db.ExecContext(ctx,
+		`DELETE FROM remote_state WHERE sync_status = 'deleted' AND observed_at < ?`,
+		cutoff); err != nil {
+		return fmt.Errorf("prune deleted remote_state: %w", err)
+	}
+
+	if _, err := m.db.ExecContext(ctx,
+		`DELETE FROM local_issues WHERE sync_status = 'resolved' AND last_seen_at < ?`,
+		cutoff); err != nil {
+		return fmt.Errorf("prune resolved local_issues: %w", err)
+	}
+
+	return nil
+}
+
 // Close checkpoints the WAL and closes the underlying database connection.
 // The explicit checkpoint ensures cross-process readers (e.g., `conflicts
 // --history` after `sync`) see all committed data when they open a new
 // connection to the same database file.
 func (m *SyncStore) Close() error {
-	if _, err := m.db.ExecContext(context.Background(),
-		"PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
-		m.logger.Warn("WAL checkpoint failed on close", slog.String("error", err.Error()))
+	// WAL checkpoint only (no pruning) on close.
+	if err := m.Checkpoint(context.Background(), 0); err != nil {
+		m.logger.Warn("checkpoint failed on close", slog.String("error", err.Error()))
 	}
 
 	return m.db.Close()

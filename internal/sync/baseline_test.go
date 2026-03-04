@@ -167,6 +167,111 @@ func TestNewSyncStore_RunsMigrations(t *testing.T) {
 	assert.NotZero(t, count, "no migrations applied (goose_db_version has no entries)")
 }
 
+func TestCheckpoint_PrunesDeletedRemoteState(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	now := time.Now()
+	oldTime := now.Add(-48 * time.Hour).UnixNano()  // 2 days ago
+	newTime := now.Add(-12 * time.Hour).UnixNano()   // 12 hours ago
+	retention := 24 * time.Hour                       // 1 day retention
+
+	// Insert a deleted row older than retention (should be pruned).
+	_, err := mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"drv1", "old-item", "/old.txt", "file", "deleted", oldTime)
+	require.NoError(t, err)
+
+	// Insert a deleted row newer than retention (should survive).
+	_, err = mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"drv1", "new-item", "/new.txt", "file", "deleted", newTime)
+	require.NoError(t, err)
+
+	// Insert a synced row (should never be pruned regardless of age).
+	_, err = mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"drv1", "synced-item", "/synced.txt", "file", "synced", oldTime)
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.Checkpoint(ctx, retention))
+
+	// Verify: old deleted row pruned, new deleted and synced rows survive.
+	var count int
+	err = mgr.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM remote_state`).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 2, count, "old deleted should be pruned, new deleted + synced should remain")
+}
+
+func TestCheckpoint_PrunesResolvedLocalIssues(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	now := time.Now()
+	oldTime := now.Add(-48 * time.Hour).UnixNano()
+	newTime := now.Add(-12 * time.Hour).UnixNano()
+	retention := 24 * time.Hour
+
+	// Insert a resolved issue older than retention (should be pruned).
+	_, err := mgr.db.ExecContext(ctx,
+		`INSERT INTO local_issues (path, issue_type, sync_status, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		"/old-issue.txt", "upload_failed", "resolved", oldTime, oldTime)
+	require.NoError(t, err)
+
+	// Insert a resolved issue newer than retention (should survive).
+	_, err = mgr.db.ExecContext(ctx,
+		`INSERT INTO local_issues (path, issue_type, sync_status, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		"/new-issue.txt", "upload_failed", "resolved", newTime, newTime)
+	require.NoError(t, err)
+
+	// Insert a pending issue (should never be pruned regardless of age).
+	_, err = mgr.db.ExecContext(ctx,
+		`INSERT INTO local_issues (path, issue_type, sync_status, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		"/pending-issue.txt", "upload_failed", "pending_upload", oldTime, oldTime)
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.Checkpoint(ctx, retention))
+
+	var count int
+	err = mgr.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM local_issues`).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 2, count, "old resolved should be pruned, new resolved + pending should remain")
+}
+
+func TestCheckpoint_ZeroRetentionSkipsPruning(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	oldTime := time.Now().Add(-48 * time.Hour).UnixNano()
+
+	// Insert old deleted row.
+	_, err := mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"drv1", "item1", "/old.txt", "file", "deleted", oldTime)
+	require.NoError(t, err)
+
+	// Zero retention = WAL checkpoint only, no pruning.
+	require.NoError(t, mgr.Checkpoint(ctx, 0))
+
+	var count int
+	err = mgr.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM remote_state`).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "zero retention should not prune anything")
+}
+
 func TestLoad_EmptyBaseline(t *testing.T) {
 	t.Parallel()
 
