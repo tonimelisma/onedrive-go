@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -13,7 +12,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/pressly/goose/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -1785,74 +1783,96 @@ func TestCheckCacheConsistency(t *testing.T) {
 // Migration tests
 // ---------------------------------------------------------------------------
 
-func TestMigration00004_CompositeKey(t *testing.T) {
+func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 	t.Parallel()
 
-	dbPath := filepath.Join(t.TempDir(), "mig4.db")
-	logger := testLogger(t)
-
-	dsn := fmt.Sprintf(
-		"file:%s?_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)"+
-			"&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)",
-		dbPath,
-	)
-
-	db, err := sql.Open("sqlite", dsn)
-	require.NoError(t, err)
-	defer db.Close()
-
-	db.SetMaxOpenConns(1)
-
+	mgr := newTestManager(t)
 	ctx := t.Context()
 
-	// Apply only migrations 1-3 (before composite key migration).
-	subFS, err := fs.Sub(migrationsFS, "migrations")
-	require.NoError(t, err)
+	// Verify all expected tables exist by querying sqlite_master.
+	expectedTables := []string{
+		"baseline", "delta_tokens", "conflicts", "sync_metadata",
+		"remote_state", "local_issues",
+	}
 
-	provider, err := goose.NewProvider(goose.DialectSQLite3, db, subFS)
-	require.NoError(t, err)
+	for _, table := range expectedTables {
+		var name string
+		err := mgr.db.QueryRowContext(ctx,
+			`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table,
+		).Scan(&name)
+		require.NoError(t, err, "table %q should exist", table)
+		assert.Equal(t, table, name)
+	}
 
-	_, err = provider.UpTo(ctx, 3)
-	require.NoError(t, err)
-
-	// Insert a delta token in the old single-key format.
-	_, err = db.ExecContext(ctx,
-		`INSERT INTO delta_tokens (drive_id, token, updated_at) VALUES (?, ?, ?)`,
-		"d!abc123", "old-delta-token", 1700000000)
-	require.NoError(t, err)
-
-	// Apply migration 4 (composite key).
-	_, err = provider.UpTo(ctx, 4)
-	require.NoError(t, err)
-
-	logger.Info("migration 4 applied, verifying token preservation")
-
-	// Verify the old token was preserved with scope_id = "".
-	var token, scopeID, scopeDrive string
-	err = db.QueryRowContext(ctx,
-		`SELECT token, scope_id, scope_drive FROM delta_tokens WHERE drive_id = ?`,
-		"d!abc123",
-	).Scan(&token, &scopeID, &scopeDrive)
-	require.NoError(t, err)
-	assert.Equal(t, "old-delta-token", token)
-	assert.Empty(t, scopeID)
-	assert.Equal(t, "d!abc123", scopeDrive)
-
-	// Verify the new composite key allows a second token for the same
-	// drive_id with a different scope_id (shared folder delta).
-	_, err = db.ExecContext(ctx,
+	// Verify delta_tokens composite key: two tokens for same drive_id,
+	// different scope_id should coexist.
+	_, err := mgr.db.ExecContext(ctx,
 		`INSERT INTO delta_tokens (drive_id, scope_id, scope_drive, token, updated_at)
 		 VALUES (?, ?, ?, ?, ?)`,
-		"d!abc123", "shared-folder-id", "d!other456", "scoped-delta-token", 1700000001)
+		"d!abc123", "", "d!abc123", "primary-token", 1700000000)
 	require.NoError(t, err)
 
-	// Both tokens should coexist.
+	_, err = mgr.db.ExecContext(ctx,
+		`INSERT INTO delta_tokens (drive_id, scope_id, scope_drive, token, updated_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		"d!abc123", "shared-folder-id", "d!other456", "scoped-token", 1700000001)
+	require.NoError(t, err)
+
 	var count int
-	err = db.QueryRowContext(ctx,
+	err = mgr.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM delta_tokens WHERE drive_id = ?`, "d!abc123",
 	).Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 2, count)
+
+	// Verify remote_state table structure: insert + query.
+	_, err = mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"d!abc123", "item1", "/test.txt", "file", "pending_download", 1700000000)
+	require.NoError(t, err)
+
+	// Verify local_issues table structure: insert + query.
+	_, err = mgr.db.ExecContext(ctx,
+		`INSERT INTO local_issues (path, issue_type, sync_status, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		"/bad-file.txt", "invalid_filename", "pending_upload", 1700000000, 1700000000)
+	require.NoError(t, err)
+
+	// Verify remote_state CHECK constraint rejects invalid status.
+	_, err = mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"d!abc123", "item2", "/bad.txt", "file", "invalid_status", 1700000000)
+	require.Error(t, err, "invalid sync_status should be rejected by CHECK constraint")
+}
+
+func TestConsolidatedSchema_RemoteStateActivePathUnique(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	// Insert an active item at a path.
+	_, err := mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"d!abc123", "item1", "/test.txt", "file", "synced", 1700000000)
+	require.NoError(t, err)
+
+	// Another active item at the same path should be rejected by the partial unique index.
+	_, err = mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"d!abc123", "item2", "/test.txt", "file", "pending_download", 1700000000)
+	require.Error(t, err, "duplicate active path should be rejected")
+
+	// A deleted item at the same path should be allowed.
+	_, err = mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"d!abc123", "item3", "/test.txt", "file", "deleted", 1700000000)
+	require.NoError(t, err, "deleted item at same path should be allowed")
 }
 
 // --- Sync metadata tests (6.2b) ---
