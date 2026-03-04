@@ -762,6 +762,30 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 ---
 
+#### 5.7: Remote State Separation — Schema + SyncStore Foundation
+
+**Goal**: Lay the schema and code foundation for the remote-state-separation architecture (see [remote-state-separation.md](design/remote-state-separation.md)). No behavioral changes — the sync pipeline still uses the existing baseline-only flow. This increment adds the new tables, renames, and pure functions that 5.7.1+ will wire into the live sync path.
+
+##### 5.7.0: Schema + SyncStore Foundation + computeNewStatus() — **DONE**
+
+**5.7.0a** (additive, mechanical):
+1. Consolidated 5 migration files into single `00001_consolidated_schema.sql` with `remote_state` (16 cols, 9-value state machine) and `local_issues` (10 cols) tables
+2. Renamed `BaselineManager` → `SyncStore` across 12 files
+3. Removed `CycleID` from `ActionPlan` + `planner.go` (moved to engine-local generation)
+4. Added `computeNewStatus()` pure function implementing 30-cell decision matrix (§11)
+5. Added `SyncStore.Checkpoint()` method (WAL checkpoint + pruning)
+6. Added 6 sub-interface declarations (`ObservationWriter`, `OutcomeWriter`, `FailureRecorder`, `ConflictEscalator`, `StateReader`, `StateAdmin`) + `ObservedItem`/`RemoteStateRow` structs
+
+**5.7.0b** (baseline PK change):
+1. Changed baseline table PK from `path` to `(drive_id, item_id)` with `path UNIQUE`
+2. Updated SQL: `ON CONFLICT(drive_id, item_id)`, path in UPDATE SET, stale-path clearing
+3. `Baseline.Put()` removes stale ByID entries on path reassignment
+4. `commitMove()` simplified to single UPSERT (not DELETE+INSERT)
+
+Net: 6 new files, 12 modified. 33 new tests. Coverage: 86.6% sync package.
+
+---
+
 ## Phase 6: Multi-Drive Orchestration + Shared Content Sync
 
 **Single-process multi-drive sync.** After this phase, `sync --watch` syncs all non-paused drives simultaneously from a single process. Each drive has its own goroutine, state DB, and sync cycle. Identity refactoring (four drive types, display_name, token resolution in config) was completed in Phase 5.6.

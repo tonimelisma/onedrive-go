@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -13,7 +12,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/pressly/goose/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -64,23 +62,23 @@ func (w *testLogWriter) Write(p []byte) (int, error) {
 }
 
 // commitAll is a test helper that commits outcomes one by one via CommitOutcome.
-func commitAll(t *testing.T, mgr *BaselineManager, ctx context.Context, outcomes []Outcome) {
+func commitAll(t *testing.T, mgr *SyncStore, ctx context.Context, outcomes []Outcome) {
 	t.Helper()
 	for i := range outcomes {
 		require.NoError(t, mgr.CommitOutcome(ctx, &outcomes[i]), "CommitOutcome[%d]", i)
 	}
 }
 
-// newTestManager creates a BaselineManager backed by a temp directory,
+// newTestManager creates a SyncStore backed by a temp directory,
 // registering cleanup with t.Cleanup.
-func newTestManager(t *testing.T) *BaselineManager {
+func newTestManager(t *testing.T) *SyncStore {
 	t.Helper()
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	logger := testLogger(t)
 
-	mgr, err := NewBaselineManager(dbPath, logger)
-	require.NoError(t, err, "NewBaselineManager(%q)", dbPath)
+	mgr, err := NewSyncStore(dbPath, logger)
+	require.NoError(t, err, "NewSyncStore(%q)", dbPath)
 
 	t.Cleanup(func() {
 		assert.NoError(t, mgr.Close(), "Close()")
@@ -89,13 +87,13 @@ func newTestManager(t *testing.T) *BaselineManager {
 	return mgr
 }
 
-func TestNewBaselineManager_CreatesDB(t *testing.T) {
+func TestNewSyncStore_CreatesDB(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	logger := testLogger(t)
 
-	mgr, err := NewBaselineManager(dbPath, logger)
+	mgr, err := NewSyncStore(dbPath, logger)
 	require.NoError(t, err)
 	defer mgr.Close()
 
@@ -107,7 +105,7 @@ func TestNewBaselineManager_CreatesDB(t *testing.T) {
 	require.NoError(t, db.PingContext(t.Context()))
 }
 
-func TestNewBaselineManager_WALMode(t *testing.T) {
+func TestNewSyncStore_WALMode(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
@@ -120,13 +118,13 @@ func TestNewBaselineManager_WALMode(t *testing.T) {
 	assert.Equal(t, "wal", journalMode)
 }
 
-func TestBaselineManager_Close_CheckpointsWAL(t *testing.T) {
+func TestSyncStore_Close_CheckpointsWAL(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	logger := testLogger(t)
 
-	mgr, err := NewBaselineManager(dbPath, logger)
+	mgr, err := NewSyncStore(dbPath, logger)
 	require.NoError(t, err)
 
 	// Write some data to ensure WAL has content.
@@ -152,7 +150,7 @@ func TestBaselineManager_Close_CheckpointsWAL(t *testing.T) {
 	// If WAL file doesn't exist at all, that's also fine.
 }
 
-func TestNewBaselineManager_RunsMigrations(t *testing.T) {
+func TestNewSyncStore_RunsMigrations(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
@@ -167,6 +165,111 @@ func TestNewBaselineManager_RunsMigrations(t *testing.T) {
 	).Scan(&count)
 	require.NoError(t, err)
 	assert.NotZero(t, count, "no migrations applied (goose_db_version has no entries)")
+}
+
+func TestCheckpoint_PrunesDeletedRemoteState(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	now := time.Now()
+	oldTime := now.Add(-48 * time.Hour).UnixNano() // 2 days ago
+	newTime := now.Add(-12 * time.Hour).UnixNano() // 12 hours ago
+	retention := 24 * time.Hour                    // 1 day retention
+
+	// Insert a deleted row older than retention (should be pruned).
+	_, err := mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"drv1", "old-item", "/old.txt", "file", "deleted", oldTime)
+	require.NoError(t, err)
+
+	// Insert a deleted row newer than retention (should survive).
+	_, err = mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"drv1", "new-item", "/new.txt", "file", "deleted", newTime)
+	require.NoError(t, err)
+
+	// Insert a synced row (should never be pruned regardless of age).
+	_, err = mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"drv1", "synced-item", "/synced.txt", "file", "synced", oldTime)
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.Checkpoint(ctx, retention))
+
+	// Verify: old deleted row pruned, new deleted and synced rows survive.
+	var count int
+	err = mgr.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM remote_state`).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 2, count, "old deleted should be pruned, new deleted + synced should remain")
+}
+
+func TestCheckpoint_PrunesResolvedLocalIssues(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	now := time.Now()
+	oldTime := now.Add(-48 * time.Hour).UnixNano()
+	newTime := now.Add(-12 * time.Hour).UnixNano()
+	retention := 24 * time.Hour
+
+	// Insert a resolved issue older than retention (should be pruned).
+	_, err := mgr.db.ExecContext(ctx,
+		`INSERT INTO local_issues (path, issue_type, sync_status, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		"/old-issue.txt", "upload_failed", "resolved", oldTime, oldTime)
+	require.NoError(t, err)
+
+	// Insert a resolved issue newer than retention (should survive).
+	_, err = mgr.db.ExecContext(ctx,
+		`INSERT INTO local_issues (path, issue_type, sync_status, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		"/new-issue.txt", "upload_failed", "resolved", newTime, newTime)
+	require.NoError(t, err)
+
+	// Insert a pending issue (should never be pruned regardless of age).
+	_, err = mgr.db.ExecContext(ctx,
+		`INSERT INTO local_issues (path, issue_type, sync_status, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		"/pending-issue.txt", "upload_failed", "pending_upload", oldTime, oldTime)
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.Checkpoint(ctx, retention))
+
+	var count int
+	err = mgr.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM local_issues`).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 2, count, "old resolved should be pruned, new resolved + pending should remain")
+}
+
+func TestCheckpoint_ZeroRetentionSkipsPruning(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	oldTime := time.Now().Add(-48 * time.Hour).UnixNano()
+
+	// Insert old deleted row.
+	_, err := mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"drv1", "item1", "/old.txt", "file", "deleted", oldTime)
+	require.NoError(t, err)
+
+	// Zero retention = WAL checkpoint only, no pruning.
+	require.NoError(t, mgr.Checkpoint(ctx, 0))
+
+	var count int
+	err = mgr.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM remote_state`).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "zero retention should not prune anything")
 }
 
 func TestLoad_EmptyBaseline(t *testing.T) {
@@ -712,7 +815,7 @@ func TestLoad_NullableFields(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // seedConflict inserts a conflict via CommitOutcome and returns its UUID.
-func seedConflict(t *testing.T, mgr *BaselineManager, path, conflictType string) string {
+func seedConflict(t *testing.T, mgr *SyncStore, path, conflictType string) string {
 	t.Helper()
 
 	ctx := t.Context()
@@ -940,12 +1043,12 @@ func TestMigrations_Idempotent(t *testing.T) {
 	logger := testLogger(t)
 
 	// First open: runs migrations.
-	mgr1, err := NewBaselineManager(dbPath, logger)
+	mgr1, err := NewSyncStore(dbPath, logger)
 	require.NoError(t, err)
 	mgr1.Close()
 
 	// Second open: migrations should be a no-op.
-	mgr2, err := NewBaselineManager(dbPath, logger)
+	mgr2, err := NewSyncStore(dbPath, logger)
 	require.NoError(t, err)
 	defer mgr2.Close()
 
@@ -1327,6 +1430,61 @@ func TestCommitOutcome_FolderCreate(t *testing.T) {
 	assert.Equal(t, "folder-id", entry.ItemID)
 }
 
+// TestCommitOutcome_Upload_NewItemID_SamePath verifies that when an upload
+// outcome has a different item_id than the existing baseline entry at the same
+// path (e.g., server-side delete+recreate assigns new ID), the stale row is
+// replaced and no UNIQUE constraint violation occurs.
+func TestCommitOutcome_Upload_NewItemID_SamePath(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	driveID := driveid.New("d1")
+
+	// Seed baseline with item_id "old-id" at path "file.txt".
+	seedOutcome := Outcome{
+		Action:     ActionDownload,
+		Success:    true,
+		Path:       "file.txt",
+		DriveID:    driveID,
+		ItemID:     "old-id",
+		ItemType:   ItemTypeFile,
+		RemoteHash: "hash1",
+		LocalHash:  "hash1",
+		Size:       100,
+	}
+	require.NoError(t, mgr.CommitOutcome(ctx, &seedOutcome))
+
+	// Upload outcome with different item_id for the same path.
+	uploadOutcome := Outcome{
+		Action:     ActionUpload,
+		Success:    true,
+		Path:       "file.txt",
+		DriveID:    driveID,
+		ItemID:     "new-id",
+		ItemType:   ItemTypeFile,
+		RemoteHash: "hash2",
+		LocalHash:  "hash2",
+		Size:       200,
+	}
+	require.NoError(t, mgr.CommitOutcome(ctx, &uploadOutcome))
+
+	// Verify the entry now has the new item_id.
+	entry, ok := mgr.baseline.GetByPath("file.txt")
+	require.True(t, ok, "entry should exist")
+	assert.Equal(t, "new-id", entry.ItemID)
+	assert.Equal(t, "hash2", entry.RemoteHash)
+
+	// Old ID should no longer exist in ByID.
+	_, ok = mgr.baseline.GetByID(driveid.NewItemKey(driveID, "old-id"))
+	assert.False(t, ok, "old ID should be removed from ByID")
+
+	// New ID should exist in ByID.
+	_, ok = mgr.baseline.GetByID(driveid.NewItemKey(driveID, "new-id"))
+	assert.True(t, ok, "new ID should exist in ByID")
+}
+
 // ---------------------------------------------------------------------------
 // CommitDeltaToken tests
 // ---------------------------------------------------------------------------
@@ -1489,6 +1647,41 @@ func TestBaseline_Put(t *testing.T) {
 	gotByID, ok := b.GetByID(key)
 	require.True(t, ok, "entry not found by ID after Put")
 	assert.Equal(t, "new/file.txt", gotByID.Path)
+}
+
+// TestBaseline_Put_ReplacesStaleID verifies that Put at an existing path with
+// a different (driveID, itemID) removes the stale ByID entry.
+func TestBaseline_Put_ReplacesStaleID(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New("d1")
+	oldEntry := &BaselineEntry{Path: "file.txt", DriveID: driveID, ItemID: "old-id"}
+	oldKey := driveid.NewItemKey(driveID, "old-id")
+
+	b := &Baseline{
+		ByPath: map[string]*BaselineEntry{"file.txt": oldEntry},
+		ByID:   map[driveid.ItemKey]*BaselineEntry{oldKey: oldEntry},
+	}
+
+	// Put a new entry at the same path but different item_id.
+	newEntry := &BaselineEntry{Path: "file.txt", DriveID: driveID, ItemID: "new-id"}
+	b.Put(newEntry)
+
+	// New entry should be accessible by path and new ID.
+	got, ok := b.GetByPath("file.txt")
+	require.True(t, ok, "entry not found by path")
+	assert.Equal(t, "new-id", got.ItemID)
+
+	newKey := driveid.NewItemKey(driveID, "new-id")
+	_, ok = b.GetByID(newKey)
+	assert.True(t, ok, "new ID not found in ByID")
+
+	// Old ID should be gone.
+	_, ok = b.GetByID(oldKey)
+	assert.False(t, ok, "stale old ID should be removed from ByID")
+
+	// Only 1 entry total.
+	assert.Equal(t, 1, b.Len())
 }
 
 func TestBaseline_Delete(t *testing.T) {
@@ -1656,7 +1849,7 @@ func TestConflictRecord_NameField(t *testing.T) {
 // - A "new" resolved conflict (detected 10 days ago)
 // - An unresolved conflict (detected 120 days ago)
 // Returns the IDs of the old and new resolved conflicts.
-func setupPruneTestConflicts(t *testing.T, mgr *BaselineManager, ctx context.Context, now time.Time) (oldID, newID string) {
+func setupPruneTestConflicts(t *testing.T, mgr *SyncStore, ctx context.Context, now time.Time) (oldID, newID string) {
 	t.Helper()
 
 	mgr.nowFunc = func() time.Time { return now.AddDate(0, 0, -120) }
@@ -1785,74 +1978,96 @@ func TestCheckCacheConsistency(t *testing.T) {
 // Migration tests
 // ---------------------------------------------------------------------------
 
-func TestMigration00004_CompositeKey(t *testing.T) {
+func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 	t.Parallel()
 
-	dbPath := filepath.Join(t.TempDir(), "mig4.db")
-	logger := testLogger(t)
-
-	dsn := fmt.Sprintf(
-		"file:%s?_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)"+
-			"&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)",
-		dbPath,
-	)
-
-	db, err := sql.Open("sqlite", dsn)
-	require.NoError(t, err)
-	defer db.Close()
-
-	db.SetMaxOpenConns(1)
-
+	mgr := newTestManager(t)
 	ctx := t.Context()
 
-	// Apply only migrations 1-3 (before composite key migration).
-	subFS, err := fs.Sub(migrationsFS, "migrations")
-	require.NoError(t, err)
+	// Verify all expected tables exist by querying sqlite_master.
+	expectedTables := []string{
+		"baseline", "delta_tokens", "conflicts", "sync_metadata",
+		"remote_state", "local_issues",
+	}
 
-	provider, err := goose.NewProvider(goose.DialectSQLite3, db, subFS)
-	require.NoError(t, err)
+	for _, table := range expectedTables {
+		var name string
+		err := mgr.db.QueryRowContext(ctx,
+			`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table,
+		).Scan(&name)
+		require.NoError(t, err, "table %q should exist", table)
+		assert.Equal(t, table, name)
+	}
 
-	_, err = provider.UpTo(ctx, 3)
-	require.NoError(t, err)
-
-	// Insert a delta token in the old single-key format.
-	_, err = db.ExecContext(ctx,
-		`INSERT INTO delta_tokens (drive_id, token, updated_at) VALUES (?, ?, ?)`,
-		"d!abc123", "old-delta-token", 1700000000)
-	require.NoError(t, err)
-
-	// Apply migration 4 (composite key).
-	_, err = provider.UpTo(ctx, 4)
-	require.NoError(t, err)
-
-	logger.Info("migration 4 applied, verifying token preservation")
-
-	// Verify the old token was preserved with scope_id = "".
-	var token, scopeID, scopeDrive string
-	err = db.QueryRowContext(ctx,
-		`SELECT token, scope_id, scope_drive FROM delta_tokens WHERE drive_id = ?`,
-		"d!abc123",
-	).Scan(&token, &scopeID, &scopeDrive)
-	require.NoError(t, err)
-	assert.Equal(t, "old-delta-token", token)
-	assert.Empty(t, scopeID)
-	assert.Equal(t, "d!abc123", scopeDrive)
-
-	// Verify the new composite key allows a second token for the same
-	// drive_id with a different scope_id (shared folder delta).
-	_, err = db.ExecContext(ctx,
+	// Verify delta_tokens composite key: two tokens for same drive_id,
+	// different scope_id should coexist.
+	_, err := mgr.db.ExecContext(ctx,
 		`INSERT INTO delta_tokens (drive_id, scope_id, scope_drive, token, updated_at)
 		 VALUES (?, ?, ?, ?, ?)`,
-		"d!abc123", "shared-folder-id", "d!other456", "scoped-delta-token", 1700000001)
+		"d!abc123", "", "d!abc123", "primary-token", 1700000000)
 	require.NoError(t, err)
 
-	// Both tokens should coexist.
+	_, err = mgr.db.ExecContext(ctx,
+		`INSERT INTO delta_tokens (drive_id, scope_id, scope_drive, token, updated_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		"d!abc123", "shared-folder-id", "d!other456", "scoped-token", 1700000001)
+	require.NoError(t, err)
+
 	var count int
-	err = db.QueryRowContext(ctx,
+	err = mgr.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM delta_tokens WHERE drive_id = ?`, "d!abc123",
 	).Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 2, count)
+
+	// Verify remote_state table structure: insert + query.
+	_, err = mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"d!abc123", "item1", "/test.txt", "file", "pending_download", 1700000000)
+	require.NoError(t, err)
+
+	// Verify local_issues table structure: insert + query.
+	_, err = mgr.db.ExecContext(ctx,
+		`INSERT INTO local_issues (path, issue_type, sync_status, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		"/bad-file.txt", "invalid_filename", "pending_upload", 1700000000, 1700000000)
+	require.NoError(t, err)
+
+	// Verify remote_state CHECK constraint rejects invalid status.
+	_, err = mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"d!abc123", "item2", "/bad.txt", "file", "invalid_status", 1700000000)
+	require.Error(t, err, "invalid sync_status should be rejected by CHECK constraint")
+}
+
+func TestConsolidatedSchema_RemoteStateActivePathUnique(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	// Insert an active item at a path.
+	_, err := mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"d!abc123", "item1", "/test.txt", "file", "synced", 1700000000)
+	require.NoError(t, err)
+
+	// Another active item at the same path should be rejected by the partial unique index.
+	_, err = mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"d!abc123", "item2", "/test.txt", "file", "pending_download", 1700000000)
+	require.Error(t, err, "duplicate active path should be rejected")
+
+	// A deleted item at the same path should be allowed.
+	_, err = mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"d!abc123", "item3", "/test.txt", "file", "deleted", 1700000000)
+	require.NoError(t, err, "deleted item at same path should be allowed")
 }
 
 // --- Sync metadata tests (6.2b) ---

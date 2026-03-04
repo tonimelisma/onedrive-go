@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-**Phases 1-5.6 complete. Phase 6.0a-6.0e done (DriveSession, Orchestrator, daemon mode, worker config, driveops package). Phase 6.0d done (inotify watch limit detection, multi-drive E2E, CI dual-token). Phase 6.0f done (zero-config removal, scanner extraction, daemon E2E). Phase 6.0g done (explicit E2E config migration, SIGHUP E2E, root package coverage). E2E hardening done (42 new e2e_full tests — 86 total). Next: Phase 6 shared content (6.3-6.4b).** See [docs/roadmap.md](docs/roadmap.md).
+**Phases 1-5.6 complete. Phase 5.7.0 done (Remote State Separation schema + SyncStore foundation). Phase 6.0a-6.0e done (DriveSession, Orchestrator, daemon mode, worker config, driveops package). Phase 6.0d done (inotify watch limit detection, multi-drive E2E, CI dual-token). Phase 6.0f done (zero-config removal, scanner extraction, daemon E2E). Phase 6.0g done (explicit E2E config migration, SIGHUP E2E, root package coverage). E2E hardening done (42 new e2e_full tests — 86 total). Next: Phase 5.7 (Remote State Separation), then Phase 6 shared content (6.3-6.4b).** See [docs/roadmap.md](docs/roadmap.md).
 
 ## Architecture Overview
 
@@ -68,7 +68,7 @@
 - **`internal/config/`** — TOML config, drive sections, XDG paths, four-layer override chain, token resolution (`TokenCanonicalID()`)
 - **`internal/graph/`** — Graph API client: auth, retry, items CRUD, delta, transfers
 - **`internal/driveops/`** — Authenticated drive access: SessionProvider (token caching + flush), Session (Meta + Transfer clients + delegation methods), TransferManager (download/upload with resume), SessionStore (upload session persistence + versioning), transfer interfaces, hash utilities, transfer artifact cleanup
-- **`internal/sync/`** — Event-driven sync: types, baseline, observers, buffer, planner, executor, tracker, workers, orchestrator, engine, verify
+- **`internal/sync/`** — Event-driven sync: types, SyncStore (remote_state + baseline + local_issues), observers, buffer, planner, executor, tracker, workers, reconciler, orchestrator, engine, verify. Sub-interfaces: ObservationWriter, OutcomeWriter, FailureRecorder, ConflictEscalator, StateReader, StateAdmin
 - **Root package** — Cobra CLI: login, logout, whoami, status, drive (list/add/remove/search), ls, get, put, rm, mkdir, stat, sync, pause, resume, conflicts, resolve, verify
 - **`e2e/`** — E2E test suite against live OneDrive
 - **`testutil/`** — Shared stdlib-only test helpers (used by both `e2e/` and `internal/graph/` integration tests; NOT under `internal/` so e2e can import it)
