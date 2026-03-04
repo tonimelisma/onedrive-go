@@ -83,19 +83,19 @@ const (
 		WHERE id = ? AND resolution = 'unresolved'`
 )
 
-// BaselineManager is the sole writer to the sync database. It loads the
+// SyncStore is the sole writer to the sync database. It loads the
 // baseline at cycle start and commits outcomes at cycle end.
-type BaselineManager struct {
+type SyncStore struct {
 	db       *sql.DB
 	baseline *Baseline
 	logger   *slog.Logger
 	nowFunc  func() time.Time // injectable for deterministic tests
 }
 
-// NewBaselineManager opens the SQLite database at dbPath, runs migrations,
+// NewSyncStore opens the SQLite database at dbPath, runs migrations,
 // and returns a ready-to-use manager. The database uses WAL mode with
 // synchronous=FULL for crash-safe durability.
-func NewBaselineManager(dbPath string, logger *slog.Logger) (*BaselineManager, error) {
+func NewSyncStore(dbPath string, logger *slog.Logger) (*SyncStore, error) {
 	// DSN parameters ensure pragmas apply to every connection from the pool.
 	dsn := fmt.Sprintf(
 		"file:%s?_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)"+
@@ -120,7 +120,7 @@ func NewBaselineManager(dbPath string, logger *slog.Logger) (*BaselineManager, e
 
 	logger.Info("baseline manager initialized", slog.String("db_path", dbPath))
 
-	return &BaselineManager{
+	return &SyncStore{
 		db:      db,
 		logger:  logger,
 		nowFunc: time.Now,
@@ -132,9 +132,9 @@ func NewBaselineManager(dbPath string, logger *slog.Logger) (*BaselineManager, e
 // the cached baseline without querying the database. The cache is kept
 // consistent by CommitOutcome(), which incrementally patches the in-memory
 // maps via updateBaselineCache() after each transaction. This is safe
-// because BaselineManager exclusively owns the database (sole-writer
+// because SyncStore exclusively owns the database (sole-writer
 // pattern with SetMaxOpenConns(1)).
-func (m *BaselineManager) Load(ctx context.Context) (*Baseline, error) {
+func (m *SyncStore) Load(ctx context.Context) (*Baseline, error) {
 	if m.baseline != nil {
 		return m.baseline, nil
 	}
@@ -217,7 +217,7 @@ func scanBaselineRow(rows *sql.Rows) (*BaselineEntry, error) {
 // GetDeltaToken returns the saved delta token for a drive and scope, or empty
 // string if no token has been saved yet. Use scopeID="" for the primary
 // drive-level delta; use a remoteItem.id for shortcut-scoped deltas.
-func (m *BaselineManager) GetDeltaToken(ctx context.Context, driveID, scopeID string) (string, error) {
+func (m *SyncStore) GetDeltaToken(ctx context.Context, driveID, scopeID string) (string, error) {
 	var token string
 
 	err := m.db.QueryRowContext(ctx, sqlGetDeltaToken, driveID, scopeID).Scan(&token)
@@ -235,7 +235,7 @@ func (m *BaselineManager) GetDeltaToken(ctx context.Context, driveID, scopeID st
 // CommitOutcome atomically applies a single outcome to the baseline in a
 // SQLite transaction. After the DB write, the in-memory baseline cache is
 // updated incrementally (Put or Delete).
-func (m *BaselineManager) CommitOutcome(ctx context.Context, outcome *Outcome) error {
+func (m *SyncStore) CommitOutcome(ctx context.Context, outcome *Outcome) error {
 	if !outcome.Success {
 		return nil
 	}
@@ -287,7 +287,7 @@ func applySingleOutcome(ctx context.Context, tx *sql.Tx, o *Outcome, syncedAt in
 
 // updateBaselineCache applies a single outcome to the in-memory baseline,
 // keeping the cache consistent without a full DB reload.
-func (m *BaselineManager) updateBaselineCache(o *Outcome, syncedAt int64) {
+func (m *SyncStore) updateBaselineCache(o *Outcome, syncedAt int64) {
 	switch o.Action {
 	case ActionDownload, ActionUpload, ActionFolderCreate, ActionUpdateSynced:
 		m.baseline.Put(outcomeToEntry(o, syncedAt))
@@ -328,7 +328,7 @@ func outcomeToEntry(o *Outcome, syncedAt int64) *BaselineEntry {
 // from baseline updates. Used after all actions in a cycle complete.
 // Use scopeID="" and scopeDrive=driveID for the primary drive-level delta.
 // For shortcut-scoped deltas, scopeID=remoteItem.id and scopeDrive=remoteItem.driveId.
-func (m *BaselineManager) CommitDeltaToken(ctx context.Context, token, driveID, scopeID, scopeDrive string) error {
+func (m *SyncStore) CommitDeltaToken(ctx context.Context, token, driveID, scopeID, scopeDrive string) error {
 	if token == "" {
 		return nil
 	}
@@ -447,7 +447,7 @@ func commitConflict(ctx context.Context, tx *sql.Tx, o *Outcome, syncedAt int64)
 
 // saveDeltaToken persists the delta token in the same transaction as
 // baseline updates.
-func (m *BaselineManager) saveDeltaToken(
+func (m *SyncStore) saveDeltaToken(
 	ctx context.Context, tx *sql.Tx, driveID, scopeID, scopeDrive, token string, updatedAt int64,
 ) error {
 	_, err := tx.ExecContext(ctx, sqlUpsertDeltaToken, driveID, scopeID, scopeDrive, token, updatedAt)
@@ -459,18 +459,18 @@ func (m *BaselineManager) saveDeltaToken(
 }
 
 // ListConflicts returns all unresolved conflicts ordered by detection time.
-func (m *BaselineManager) ListConflicts(ctx context.Context) ([]ConflictRecord, error) {
+func (m *SyncStore) ListConflicts(ctx context.Context) ([]ConflictRecord, error) {
 	return m.queryConflicts(ctx, sqlListConflicts)
 }
 
 // ListAllConflicts returns all conflicts (resolved and unresolved) ordered
 // by detection time descending. Used by 'conflicts --history'.
-func (m *BaselineManager) ListAllConflicts(ctx context.Context) ([]ConflictRecord, error) {
+func (m *SyncStore) ListAllConflicts(ctx context.Context) ([]ConflictRecord, error) {
 	return m.queryConflicts(ctx, sqlListAllConflicts)
 }
 
 // queryConflicts executes a conflict query and scans the results.
-func (m *BaselineManager) queryConflicts(ctx context.Context, query string) ([]ConflictRecord, error) {
+func (m *SyncStore) queryConflicts(ctx context.Context, query string) ([]ConflictRecord, error) {
 	rows, err := m.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying conflicts: %w", err)
@@ -497,7 +497,7 @@ func (m *BaselineManager) queryConflicts(ctx context.Context, query string) ([]C
 
 // GetConflict looks up a conflict by UUID or path. Tries ID first, falls
 // back to path (most recent unresolved conflict for that path).
-func (m *BaselineManager) GetConflict(ctx context.Context, idOrPath string) (*ConflictRecord, error) {
+func (m *SyncStore) GetConflict(ctx context.Context, idOrPath string) (*ConflictRecord, error) {
 	// Try by ID first.
 	row := m.db.QueryRowContext(ctx, sqlGetConflictByID, idOrPath)
 
@@ -527,7 +527,7 @@ func (m *BaselineManager) GetConflict(ctx context.Context, idOrPath string) (*Co
 
 // ResolveConflict marks a conflict as resolved with the given resolution
 // strategy. Only updates unresolved conflicts (idempotent-safe).
-func (m *BaselineManager) ResolveConflict(ctx context.Context, id, resolution string) error {
+func (m *SyncStore) ResolveConflict(ctx context.Context, id, resolution string) error {
 	resolvedAt := m.nowFunc().UnixNano()
 
 	result, err := m.db.ExecContext(ctx, sqlResolveConflict, resolution, resolvedAt, id)
@@ -555,7 +555,7 @@ func (m *BaselineManager) ResolveConflict(ctx context.Context, id, resolution st
 // CheckCacheConsistency reloads baseline entries from the database and compares
 // them with the in-memory cache. Returns the number of mismatches found (report-only,
 // no auto-fix). Intended for periodic verification in watch mode (B-198).
-func (m *BaselineManager) CheckCacheConsistency(ctx context.Context) (int, error) {
+func (m *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
 	if m.baseline == nil {
 		return 0, nil
 	}
@@ -629,7 +629,7 @@ func (m *BaselineManager) CheckCacheConsistency(ctx context.Context) (int, error
 // PruneResolvedConflicts deletes resolved conflicts whose detection time is
 // older than the given retention duration. Unresolved conflicts are never
 // pruned. Returns the number of deleted rows (B-087).
-func (m *BaselineManager) PruneResolvedConflicts(ctx context.Context, retention time.Duration) (int, error) {
+func (m *SyncStore) PruneResolvedConflicts(ctx context.Context, retention time.Duration) (int, error) {
 	cutoff := m.nowFunc().Add(-retention).UnixNano()
 
 	result, err := m.db.ExecContext(ctx,
@@ -726,7 +726,7 @@ func scanConflictRowSingle(row *sql.Row) (*ConflictRecord, error) {
 
 // DB returns the underlying database connection for sharing with other
 // components that need to participate in the same database.
-func (m *BaselineManager) DB() *sql.DB {
+func (m *SyncStore) DB() *sql.DB {
 	return m.db
 }
 
@@ -734,7 +734,7 @@ func (m *BaselineManager) DB() *sql.DB {
 // The explicit checkpoint ensures cross-process readers (e.g., `conflicts
 // --history` after `sync`) see all committed data when they open a new
 // connection to the same database file.
-func (m *BaselineManager) Close() error {
+func (m *SyncStore) Close() error {
 	if _, err := m.db.ExecContext(context.Background(),
 		"PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
 		m.logger.Warn("WAL checkpoint failed on close", slog.String("error", err.Error()))
@@ -746,7 +746,7 @@ func (m *BaselineManager) Close() error {
 // WriteSyncMetadata persists sync metadata after a completed RunOnce cycle.
 // Keys: last_sync_time, last_sync_duration_ms, last_sync_error,
 // last_sync_succeeded, last_sync_failed.
-func (m *BaselineManager) WriteSyncMetadata(ctx context.Context, report *SyncReport) error {
+func (m *SyncStore) WriteSyncMetadata(ctx context.Context, report *SyncReport) error {
 	now := m.nowFunc().UTC().Format(time.RFC3339)
 	durationMS := fmt.Sprintf("%d", report.Duration.Milliseconds())
 	succeeded := fmt.Sprintf("%d", report.Succeeded)
@@ -785,7 +785,7 @@ func (m *BaselineManager) WriteSyncMetadata(ctx context.Context, report *SyncRep
 
 // ReadSyncMetadata retrieves all sync metadata key-value pairs.
 // Returns an empty map if the table doesn't exist or has no rows.
-func (m *BaselineManager) ReadSyncMetadata(ctx context.Context) (map[string]string, error) {
+func (m *SyncStore) ReadSyncMetadata(ctx context.Context) (map[string]string, error) {
 	result := make(map[string]string)
 
 	rows, err := m.db.QueryContext(ctx, `SELECT key, value FROM sync_metadata`)
@@ -808,7 +808,7 @@ func (m *BaselineManager) ReadSyncMetadata(ctx context.Context) (map[string]stri
 }
 
 // BaselineEntryCount returns the number of entries in the baseline table.
-func (m *BaselineManager) BaselineEntryCount(ctx context.Context) (int, error) {
+func (m *SyncStore) BaselineEntryCount(ctx context.Context) (int, error) {
 	var count int
 	if err := m.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM baseline`).Scan(&count); err != nil {
 		return 0, fmt.Errorf("baseline entry count: %w", err)
@@ -818,7 +818,7 @@ func (m *BaselineManager) BaselineEntryCount(ctx context.Context) (int, error) {
 }
 
 // UnresolvedConflictCount returns the number of unresolved conflicts.
-func (m *BaselineManager) UnresolvedConflictCount(ctx context.Context) (int, error) {
+func (m *SyncStore) UnresolvedConflictCount(ctx context.Context) (int, error) {
 	var count int
 
 	err := m.db.QueryRowContext(ctx,

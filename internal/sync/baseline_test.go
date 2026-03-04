@@ -62,23 +62,23 @@ func (w *testLogWriter) Write(p []byte) (int, error) {
 }
 
 // commitAll is a test helper that commits outcomes one by one via CommitOutcome.
-func commitAll(t *testing.T, mgr *BaselineManager, ctx context.Context, outcomes []Outcome) {
+func commitAll(t *testing.T, mgr *SyncStore, ctx context.Context, outcomes []Outcome) {
 	t.Helper()
 	for i := range outcomes {
 		require.NoError(t, mgr.CommitOutcome(ctx, &outcomes[i]), "CommitOutcome[%d]", i)
 	}
 }
 
-// newTestManager creates a BaselineManager backed by a temp directory,
+// newTestManager creates a SyncStore backed by a temp directory,
 // registering cleanup with t.Cleanup.
-func newTestManager(t *testing.T) *BaselineManager {
+func newTestManager(t *testing.T) *SyncStore {
 	t.Helper()
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	logger := testLogger(t)
 
-	mgr, err := NewBaselineManager(dbPath, logger)
-	require.NoError(t, err, "NewBaselineManager(%q)", dbPath)
+	mgr, err := NewSyncStore(dbPath, logger)
+	require.NoError(t, err, "NewSyncStore(%q)", dbPath)
 
 	t.Cleanup(func() {
 		assert.NoError(t, mgr.Close(), "Close()")
@@ -87,13 +87,13 @@ func newTestManager(t *testing.T) *BaselineManager {
 	return mgr
 }
 
-func TestNewBaselineManager_CreatesDB(t *testing.T) {
+func TestNewSyncStore_CreatesDB(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	logger := testLogger(t)
 
-	mgr, err := NewBaselineManager(dbPath, logger)
+	mgr, err := NewSyncStore(dbPath, logger)
 	require.NoError(t, err)
 	defer mgr.Close()
 
@@ -105,7 +105,7 @@ func TestNewBaselineManager_CreatesDB(t *testing.T) {
 	require.NoError(t, db.PingContext(t.Context()))
 }
 
-func TestNewBaselineManager_WALMode(t *testing.T) {
+func TestNewSyncStore_WALMode(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
@@ -118,13 +118,13 @@ func TestNewBaselineManager_WALMode(t *testing.T) {
 	assert.Equal(t, "wal", journalMode)
 }
 
-func TestBaselineManager_Close_CheckpointsWAL(t *testing.T) {
+func TestSyncStore_Close_CheckpointsWAL(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	logger := testLogger(t)
 
-	mgr, err := NewBaselineManager(dbPath, logger)
+	mgr, err := NewSyncStore(dbPath, logger)
 	require.NoError(t, err)
 
 	// Write some data to ensure WAL has content.
@@ -150,7 +150,7 @@ func TestBaselineManager_Close_CheckpointsWAL(t *testing.T) {
 	// If WAL file doesn't exist at all, that's also fine.
 }
 
-func TestNewBaselineManager_RunsMigrations(t *testing.T) {
+func TestNewSyncStore_RunsMigrations(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
@@ -710,7 +710,7 @@ func TestLoad_NullableFields(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // seedConflict inserts a conflict via CommitOutcome and returns its UUID.
-func seedConflict(t *testing.T, mgr *BaselineManager, path, conflictType string) string {
+func seedConflict(t *testing.T, mgr *SyncStore, path, conflictType string) string {
 	t.Helper()
 
 	ctx := t.Context()
@@ -938,12 +938,12 @@ func TestMigrations_Idempotent(t *testing.T) {
 	logger := testLogger(t)
 
 	// First open: runs migrations.
-	mgr1, err := NewBaselineManager(dbPath, logger)
+	mgr1, err := NewSyncStore(dbPath, logger)
 	require.NoError(t, err)
 	mgr1.Close()
 
 	// Second open: migrations should be a no-op.
-	mgr2, err := NewBaselineManager(dbPath, logger)
+	mgr2, err := NewSyncStore(dbPath, logger)
 	require.NoError(t, err)
 	defer mgr2.Close()
 
@@ -1654,7 +1654,7 @@ func TestConflictRecord_NameField(t *testing.T) {
 // - A "new" resolved conflict (detected 10 days ago)
 // - An unresolved conflict (detected 120 days ago)
 // Returns the IDs of the old and new resolved conflicts.
-func setupPruneTestConflicts(t *testing.T, mgr *BaselineManager, ctx context.Context, now time.Time) (oldID, newID string) {
+func setupPruneTestConflicts(t *testing.T, mgr *SyncStore, ctx context.Context, now time.Time) (oldID, newID string) {
 	t.Helper()
 
 	mgr.nowFunc = func() time.Time { return now.AddDate(0, 0, -120) }

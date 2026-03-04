@@ -26,7 +26,7 @@ const (
 type WorkerPool struct {
 	cfg      *ExecutorConfig
 	tracker  *DepTracker
-	baseline *BaselineManager
+	baseline *SyncStore
 	logger   *slog.Logger
 
 	succeeded     atomic.Int32
@@ -61,7 +61,7 @@ type WorkerResult struct {
 func NewWorkerPool(
 	cfg *ExecutorConfig,
 	tracker *DepTracker,
-	baseline *BaselineManager,
+	baseline *SyncStore,
 	logger *slog.Logger,
 	planSize int,
 ) *WorkerPool {

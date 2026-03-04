@@ -452,7 +452,7 @@ type ActionPlan struct {
 }
 
 // Outcome is the result of executing a single action. Self-contained —
-// has everything the BaselineManager needs to update the database.
+// has everything the SyncStore needs to update the database.
 type Outcome struct {
 	Action       ActionType
 	Success      bool

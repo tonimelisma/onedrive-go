@@ -73,7 +73,7 @@ type SyncReport struct {
 // Engine orchestrates a complete sync cycle: observe → plan → execute → commit.
 // Single-drive only; multi-drive orchestration is handled by the Orchestrator.
 type Engine struct {
-	baseline        *BaselineManager
+	baseline        *SyncStore
 	planner         *Planner
 	execCfg         *ExecutorConfig
 	fetcher         DeltaFetcher
@@ -99,7 +99,7 @@ type Engine struct {
 	localWatcherFactory func() (FsWatcher, error)
 }
 
-// NewEngine creates an Engine, initializing the BaselineManager (which opens
+// NewEngine creates an Engine, initializing the SyncStore (which opens
 // the SQLite database and runs migrations). Returns an error if DB init fails
 // or if DriveID is zero (indicates a config/login issue).
 func NewEngine(cfg *EngineConfig) (*Engine, error) {
@@ -107,7 +107,7 @@ func NewEngine(cfg *EngineConfig) (*Engine, error) {
 		return nil, fmt.Errorf("sync: engine requires non-zero drive ID")
 	}
 
-	bm, err := NewBaselineManager(cfg.DBPath, cfg.Logger)
+	bm, err := NewSyncStore(cfg.DBPath, cfg.Logger)
 	if err != nil {
 		return nil, fmt.Errorf("sync: creating engine: %w", err)
 	}

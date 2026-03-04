@@ -64,7 +64,7 @@ func runConflicts(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("cannot determine state DB path for drive %q", cc.Cfg.CanonicalID)
 	}
 
-	mgr, err := sync.NewBaselineManager(dbPath, cc.Logger)
+	mgr, err := sync.NewSyncStore(dbPath, cc.Logger)
 	if err != nil {
 		return err
 	}
