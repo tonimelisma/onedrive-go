@@ -4,14 +4,17 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	stdsync "sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/pressly/goose/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -2618,4 +2621,105 @@ func TestEarliestRetryAt_PastRetry(t *testing.T) {
 	retryAt, err := mgr.EarliestRetryAt(ctx, now)
 	require.NoError(t, err)
 	assert.True(t, retryAt.IsZero(), "past retry should not be returned")
+}
+
+// TestMigration00002_SyncFailureRoundTrip verifies that migration 00002's
+// Up/Down correctly manages the 'sync_failure' conflict type and preserves
+// existing data through the table recreation pattern (B-316).
+//
+// Note: The consolidated schema (00001) already includes 'sync_failure',
+// so we test the Down→Up round-trip to verify the migration SQL works
+// correctly and data survives.
+func TestMigration00002_SyncFailureRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	dbPath := filepath.Join(t.TempDir(), "migration.db")
+
+	dsn := fmt.Sprintf(
+		"file:%s?_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)"+
+			"&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)",
+		dbPath,
+	)
+
+	db, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+
+	defer db.Close()
+
+	db.SetMaxOpenConns(1)
+
+	subFS, err := fs.Sub(migrationsFS, "migrations")
+	require.NoError(t, err)
+
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, subFS)
+	require.NoError(t, err)
+
+	// Step 1: Apply all migrations (both 00001 and 00002).
+	_, err = provider.Up(ctx)
+	require.NoError(t, err)
+
+	ver, err := provider.GetDBVersion(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), ver)
+
+	// Step 2: Insert seed data — one standard conflict, one sync_failure.
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO conflicts (id, drive_id, path, conflict_type, detected_at, resolution)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"edit-id", "d!abc", "/file.txt", "edit_edit", 1700000000, "unresolved",
+	)
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO conflicts (id, drive_id, path, conflict_type, detected_at, resolution)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"fail-id", "d!abc", "/fail.txt", "sync_failure", 1700000000, "unresolved",
+	)
+	require.NoError(t, err)
+
+	// Step 3: Roll back migration 00002 (Down removes 'sync_failure' from CHECK).
+	_, err = provider.Down(ctx)
+	require.NoError(t, err)
+
+	ver, err = provider.GetDBVersion(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), ver)
+
+	// Step 4: The edit_edit row should survive the rollback.
+	var count int
+	err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM conflicts WHERE id = ?`, "edit-id").Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "edit_edit conflict should survive rollback")
+
+	// The sync_failure row is excluded by the Down migration's INSERT filter.
+	err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM conflicts WHERE id = ?`, "fail-id").Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "sync_failure conflict should be removed by rollback")
+
+	// Step 5: Verify 'sync_failure' is rejected after rollback.
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO conflicts (id, drive_id, path, conflict_type, detected_at, resolution)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"new-fail", "d!abc", "/new.txt", "sync_failure", 1700000000, "unresolved",
+	)
+	require.Error(t, err, "sync_failure should be rejected after rollback")
+	assert.True(t, strings.Contains(err.Error(), "CHECK"), "expected CHECK constraint violation, got: %v", err)
+
+	// Step 6: Re-apply migration 00002.
+	_, err = provider.UpByOne(ctx)
+	require.NoError(t, err)
+
+	// Step 7: Verify 'sync_failure' is accepted again.
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO conflicts (id, drive_id, path, conflict_type, detected_at, resolution)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"restored-id", "d!abc", "/restored.txt", "sync_failure", 1700000000, "unresolved",
+	)
+	require.NoError(t, err, "sync_failure should be accepted after re-applying migration 00002")
+
+	// Step 8: Verify the edit_edit seed survived the full round-trip.
+	err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM conflicts WHERE id = ?`, "edit-id").Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "edit_edit conflict should survive full round-trip")
 }
