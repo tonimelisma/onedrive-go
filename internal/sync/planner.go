@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-
-	"github.com/google/uuid"
 )
 
 // SafetyConfig controls big-delete protection thresholds.
@@ -90,7 +88,6 @@ func (p *Planner) Plan(
 	plan := &ActionPlan{
 		Actions: allActions,
 		Deps:    deps,
-		CycleID: uuid.New().String(),
 	}
 
 	// Step 4: safety check for big deletes.

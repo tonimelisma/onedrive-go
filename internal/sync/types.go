@@ -309,14 +309,27 @@ func (b *Baseline) GetByID(key driveid.ItemKey) (*BaselineEntry, bool) {
 	return entry, ok
 }
 
-// Put inserts or updates a baseline entry in both maps.
+// Put inserts or updates a baseline entry in both maps. If the path already
+// exists with a different (driveID, itemID), the stale ByID entry is removed
+// first to prevent orphaned entries (e.g., server-side delete+recreate
+// assigns a new item_id for the same path).
 // Thread-safe: holds a write lock during access.
 func (b *Baseline) Put(entry *BaselineEntry) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	newKey := driveid.NewItemKey(entry.DriveID, entry.ItemID)
+
+	// Remove stale ByID entry if the path is being reassigned to a new ID.
+	if old, ok := b.ByPath[entry.Path]; ok {
+		oldKey := driveid.NewItemKey(old.DriveID, old.ItemID)
+		if oldKey != newKey {
+			delete(b.ByID, oldKey)
+		}
+	}
+
 	b.ByPath[entry.Path] = entry
-	b.ByID[driveid.NewItemKey(entry.DriveID, entry.ItemID)] = entry
+	b.ByID[newKey] = entry
 }
 
 // Delete removes a baseline entry from both maps by path.
@@ -448,11 +461,10 @@ type Action struct {
 type ActionPlan struct {
 	Actions []Action // flat list of all actions
 	Deps    [][]int  // Deps[i] = indices that action i depends on
-	CycleID string   // UUID grouping actions from one planning pass
 }
 
 // Outcome is the result of executing a single action. Self-contained —
-// has everything the BaselineManager needs to update the database.
+// has everything the SyncStore needs to update the database.
 type Outcome struct {
 	Action       ActionType
 	Success      bool
