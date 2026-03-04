@@ -128,8 +128,8 @@ Optimization deferred until profiling shows a bottleneck.
 
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
-| B-307 | FC-1: Remote observer symmetric filtering | P1 | Active bug. Remote observer lacks `isAlwaysExcluded()` and `isValidOneDriveName()`. Temp/junk files uploaded via web UI flow through to planner. Roadmap 6.Xa. See [filtering-conflicts.md FC-1](docs/design/filtering-conflicts.md#fc-1-remote-observer-has-no-built-in-exclusion-filtering). |
-| B-308 | FC-2: Narrow `.db` exclusion to sync engine database | P2 | Active bug (false positives). `alwaysExcludedSuffixes` includes `.db` — catches legitimate data files. Narrow to sync engine's own database path only. Roadmap 6.Xb. See [filtering-conflicts.md FC-2](docs/design/filtering-conflicts.md#fc-2-built-in-db-exclusion-is-too-aggressive). |
+| ~~B-307~~ | ~~FC-1: Remote observer symmetric filtering~~ | ~~P1~~ | **DONE** — Phase 5.7.1. Added `isAlwaysExcluded()` + `isValidOneDriveName()` to `classifyItem()` in remote observer. Remote items now filtered symmetrically with local observer. |
+| ~~B-308~~ | ~~FC-2: Narrow `.db` exclusion to sync engine database~~ | ~~P2~~ | **DONE** — Phase 5.7.1. Removed `.db`/`.db-wal`/`.db-shm` from `alwaysExcludedSuffixes`. Legitimate data files no longer silently excluded. |
 | B-309 | FC-12: Non-empty directory delete — Tier 1 disposable cleanup | P2 | Active limitation. `deleteLocalFolder` fails permanently when OS junk (`.DS_Store`, `Thumbs.db`) blocks folder removal. Add built-in disposable classification. Roadmap 6.Xc. See [filtering-conflicts.md FC-12](docs/design/filtering-conflicts.md#fc-12-non-empty-directory-delete). |
 
 ## CI / Infrastructure
@@ -141,6 +141,8 @@ Optimization deferred until profiling shows a bottleneck.
 
 | ID | Title | Resolution |
 |----|-------|------------|
+| B-307 | FC-1: Remote observer symmetric filtering | **DONE** — Phase 5.7.1. `isAlwaysExcluded()` + `isValidOneDriveName()` in `classifyItem()`. Remote items filtered symmetrically with local observer. |
+| B-308 | FC-2: Narrow `.db` exclusion | **DONE** — Phase 5.7.1. Removed `.db`/`.db-wal`/`.db-shm` from `alwaysExcludedSuffixes`. |
 | B-310 | Fix flaky `TestWatch_HashFailureStillEmitsCreate` | **DONE** — File born unreadable (mode `0o000`) eliminates race between chmod and hash. |
 | B-311 | Fix E2E data race in `waitForDaemonReady` | **DONE** — `syncBuffer` with `sync.Mutex` replaces `bytes.Buffer` in all daemon E2E tests. |
 | B-300 | Rename `SessionRecord` JSON tag `"remote_path"` → `"local_path"` | **DONE** — Bumped `currentSessionVersion` to 2. Custom `UnmarshalJSON` reads both `remote_path` (v0/v1) and `local_path` (v2+). Save writes v2. |
