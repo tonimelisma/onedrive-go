@@ -2186,3 +2186,308 @@ func TestUnresolvedConflictCount_Empty(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, count)
 }
+
+// --- SetDispatchStatus tests (5.7.2) ---
+
+func TestSetDispatchStatus_Download(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	// Insert a pending_download row.
+	_, err := mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"d!abc", "item1", "/test.txt", "file", "pending_download", 1700000000)
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.SetDispatchStatus(ctx, "d!abc", "item1", ActionDownload))
+
+	var status string
+	err = mgr.db.QueryRowContext(ctx,
+		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
+		"d!abc", "item1").Scan(&status)
+	require.NoError(t, err)
+	assert.Equal(t, "downloading", status)
+}
+
+func TestSetDispatchStatus_DownloadFromFailed(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	// Insert a download_failed row.
+	_, err := mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at, failure_count)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"d!abc", "item1", "/test.txt", "file", "download_failed", 1700000000, 3)
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.SetDispatchStatus(ctx, "d!abc", "item1", ActionDownload))
+
+	var status string
+	err = mgr.db.QueryRowContext(ctx,
+		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
+		"d!abc", "item1").Scan(&status)
+	require.NoError(t, err)
+	assert.Equal(t, "downloading", status)
+}
+
+func TestSetDispatchStatus_LocalDelete(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	// Insert a pending_delete row.
+	_, err := mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"d!abc", "item1", "/test.txt", "file", "pending_delete", 1700000000)
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.SetDispatchStatus(ctx, "d!abc", "item1", ActionLocalDelete))
+
+	var status string
+	err = mgr.db.QueryRowContext(ctx,
+		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
+		"d!abc", "item1").Scan(&status)
+	require.NoError(t, err)
+	assert.Equal(t, "deleting", status)
+}
+
+func TestSetDispatchStatus_DeleteFromFailed(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	// Insert a delete_failed row.
+	_, err := mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at, failure_count)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"d!abc", "item1", "/test.txt", "file", "delete_failed", 1700000000, 2)
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.SetDispatchStatus(ctx, "d!abc", "item1", ActionLocalDelete))
+
+	var status string
+	err = mgr.db.QueryRowContext(ctx,
+		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
+		"d!abc", "item1").Scan(&status)
+	require.NoError(t, err)
+	assert.Equal(t, "deleting", status)
+}
+
+func TestSetDispatchStatus_NoMatchingRow(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	// Insert a synced row (wrong status for dispatch).
+	_, err := mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"d!abc", "item1", "/test.txt", "file", "synced", 1700000000)
+	require.NoError(t, err)
+
+	// Should be a no-op (no error, no change).
+	require.NoError(t, mgr.SetDispatchStatus(ctx, "d!abc", "item1", ActionDownload))
+
+	var status string
+	err = mgr.db.QueryRowContext(ctx,
+		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
+		"d!abc", "item1").Scan(&status)
+	require.NoError(t, err)
+	assert.Equal(t, "synced", status, "synced row should not be affected")
+}
+
+func TestSetDispatchStatus_UnsupportedAction(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	// Unsupported action type — should be a no-op.
+	require.NoError(t, mgr.SetDispatchStatus(ctx, "d!abc", "item1", ActionUpload))
+}
+
+func TestSetDispatchStatus_NonExistentRow(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	// No rows exist — should be a no-op.
+	require.NoError(t, mgr.SetDispatchStatus(ctx, "d!nonexistent", "noitem", ActionDownload))
+}
+
+// --- Enhanced crash recovery tests (5.7.2) ---
+
+func TestResetInProgressStates_DeleteFileAbsent(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	syncRoot := t.TempDir()
+
+	// Insert a deleting row whose file does NOT exist on disk.
+	_, err := mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"d!abc", "item1", "gone.txt", "file", "deleting", 1700000000)
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot))
+
+	var status string
+	err = mgr.db.QueryRowContext(ctx,
+		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
+		"d!abc", "item1").Scan(&status)
+	require.NoError(t, err)
+	assert.Equal(t, "deleted", status, "file absent → deleted")
+}
+
+func TestResetInProgressStates_DeleteFileExists(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	syncRoot := t.TempDir()
+
+	// Create the file on disk.
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "exists.txt"), []byte("data"), 0o600))
+
+	// Insert a deleting row whose file DOES exist.
+	_, err := mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"d!abc", "item1", "exists.txt", "file", "deleting", 1700000000)
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot))
+
+	var status string
+	err = mgr.db.QueryRowContext(ctx,
+		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
+		"d!abc", "item1").Scan(&status)
+	require.NoError(t, err)
+	assert.Equal(t, "pending_delete", status, "file exists → pending_delete")
+}
+
+func TestResetInProgressStates_DownloadStillResetsToPending(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	syncRoot := t.TempDir()
+
+	// Insert a downloading row.
+	_, err := mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"d!abc", "item1", "dl.txt", "file", "downloading", 1700000000)
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot))
+
+	var status string
+	err = mgr.db.QueryRowContext(ctx,
+		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
+		"d!abc", "item1").Scan(&status)
+	require.NoError(t, err)
+	assert.Equal(t, "pending_download", status)
+}
+
+func TestResetInProgressStates_MixedStates(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	syncRoot := t.TempDir()
+
+	// Create a file for one of the deleting items.
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "has-file.txt"), []byte("data"), 0o600))
+
+	// Insert: downloading, deleting (file absent), deleting (file exists), synced.
+	for _, row := range []struct {
+		id, path, status string
+	}{
+		{"i1", "downloading.txt", "downloading"},
+		{"i2", "no-file.txt", "deleting"},
+		{"i3", "has-file.txt", "deleting"},
+		{"i4", "synced.txt", "synced"},
+	} {
+		_, err := mgr.db.ExecContext(ctx,
+			`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+			"d!abc", row.id, row.path, "file", row.status, 1700000000)
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot))
+
+	// Verify each row.
+	expected := map[string]string{
+		"i1": "pending_download", // downloading → pending_download
+		"i2": "deleted",          // deleting + file absent → deleted
+		"i3": "pending_delete",   // deleting + file exists → pending_delete
+		"i4": "synced",           // untouched
+	}
+	for id, want := range expected {
+		var got string
+		err := mgr.db.QueryRowContext(ctx,
+			`SELECT sync_status FROM remote_state WHERE item_id = ?`, id).Scan(&got)
+		require.NoError(t, err)
+		assert.Equal(t, want, got, "item %s", id)
+	}
+}
+
+// --- Move outcome remote_state update test (5.7.2) ---
+
+func TestUpdateRemoteStateOnOutcome_Move(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	driveID := driveid.New("d!abc")
+
+	// Insert a synced remote_state row using the normalized drive ID.
+	_, err := mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		driveID.String(), "item1", "/old/path.txt", "file", "synced", 1700000000)
+	require.NoError(t, err)
+
+	// Commit a move outcome.
+	outcome := Outcome{
+		Action:     ActionLocalMove,
+		Success:    true,
+		Path:       "/new/path.txt",
+		OldPath:    "/old/path.txt",
+		DriveID:    driveID,
+		ItemID:     "item1",
+		ParentID:   "parent2",
+		ItemType:   ItemTypeFile,
+		LocalHash:  "h",
+		RemoteHash: "h",
+		Size:       42,
+	}
+	require.NoError(t, mgr.CommitOutcome(ctx, &outcome))
+
+	var rsPath, status string
+	err = mgr.db.QueryRowContext(ctx,
+		`SELECT path, sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
+		driveID.String(), "item1").Scan(&rsPath, &status)
+	require.NoError(t, err)
+	assert.Equal(t, "/new/path.txt", rsPath)
+	assert.Equal(t, "synced", status)
+}

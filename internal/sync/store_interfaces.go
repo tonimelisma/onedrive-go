@@ -59,7 +59,7 @@ type StateReader interface {
 type StateAdmin interface {
 	ResetFailure(ctx context.Context, path string) error
 	ResetAllFailures(ctx context.Context) error
-	ResetInProgressStates(ctx context.Context) error
+	ResetInProgressStates(ctx context.Context, syncRoot string) error
 }
 
 // ObservedItem represents a single item from a delta API response, ready

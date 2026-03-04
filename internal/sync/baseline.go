@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"os"
 	"path"
+	"path/filepath"
 	"time"
 
 	"github.com/google/uuid"
@@ -105,6 +107,7 @@ const (
 // Compile-time interface satisfaction checks.
 var (
 	_ ObservationWriter = (*SyncStore)(nil)
+	_ OutcomeWriter     = (*SyncStore)(nil)
 	_ FailureRecorder   = (*SyncStore)(nil)
 	_ StateReader       = (*SyncStore)(nil)
 	_ StateAdmin        = (*SyncStore)(nil)
@@ -537,6 +540,18 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx *sql.Tx, o *Outcome) err
 		)
 		if err != nil {
 			return fmt.Errorf("sync: updating remote_state for upload %s: %w", o.Path, err)
+		}
+
+	case ActionLocalMove, ActionRemoteMove:
+		// Move success: update path and mark synced.
+		_, err := tx.ExecContext(ctx,
+			`UPDATE remote_state SET path = ?, sync_status = ?
+			WHERE drive_id = ? AND item_id = ?`,
+			o.Path, statusSynced,
+			o.DriveID.String(), o.ItemID,
+		)
+		if err != nil {
+			return fmt.Errorf("sync: updating remote_state for move %s: %w", o.Path, err)
 		}
 	}
 
@@ -1285,9 +1300,12 @@ func (m *SyncStore) ResetAllFailures(ctx context.Context) error {
 	return nil
 }
 
-// ResetInProgressStates is crash recovery: downloading→pending_download,
-// deleting→pending_delete. Called at engine startup.
-func (m *SyncStore) ResetInProgressStates(ctx context.Context) error {
+// ResetInProgressStates is crash recovery: downloading→pending_download.
+// For deleting rows, checks the filesystem: file absent → deleted (complete
+// the delete), file exists → pending_delete (re-attempt). Called at engine
+// startup with the sync root path.
+func (m *SyncStore) ResetInProgressStates(ctx context.Context, syncRoot string) error {
+	// downloading → pending_download (unconditional, same as before).
 	_, err := m.db.ExecContext(ctx,
 		`UPDATE remote_state SET sync_status = ? WHERE sync_status = ?`,
 		statusPendingDownload, statusDownloading,
@@ -1296,12 +1314,85 @@ func (m *SyncStore) ResetInProgressStates(ctx context.Context) error {
 		return fmt.Errorf("sync: resetting downloading states: %w", err)
 	}
 
-	_, err = m.db.ExecContext(ctx,
-		`UPDATE remote_state SET sync_status = ? WHERE sync_status = ?`,
-		statusPendingDelete, statusDeleting,
+	// deleting → check filesystem to determine correct target state.
+	rows, err := m.db.QueryContext(ctx,
+		`SELECT drive_id, item_id, path FROM remote_state WHERE sync_status = ?`,
+		statusDeleting,
 	)
 	if err != nil {
-		return fmt.Errorf("sync: resetting deleting states: %w", err)
+		return fmt.Errorf("sync: querying deleting states: %w", err)
+	}
+	defer rows.Close()
+
+	type deletingRow struct {
+		driveID, itemID, path string
+	}
+
+	var deletingRows []deletingRow
+
+	for rows.Next() {
+		var r deletingRow
+		if scanErr := rows.Scan(&r.driveID, &r.itemID, &r.path); scanErr != nil {
+			return fmt.Errorf("sync: scanning deleting row: %w", scanErr)
+		}
+
+		deletingRows = append(deletingRows, r)
+	}
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("sync: iterating deleting rows: %w", err)
+	}
+
+	for _, r := range deletingRows {
+		fullPath := filepath.Join(syncRoot, r.path)
+
+		var newStatus string
+		if _, statErr := os.Stat(fullPath); statErr != nil {
+			// File absent (deleted successfully before crash).
+			newStatus = statusDeleted
+		} else {
+			// File still exists (delete didn't complete).
+			newStatus = statusPendingDelete
+		}
+
+		if _, execErr := m.db.ExecContext(ctx,
+			`UPDATE remote_state SET sync_status = ? WHERE drive_id = ? AND item_id = ?`,
+			newStatus, r.driveID, r.itemID,
+		); execErr != nil {
+			return fmt.Errorf("sync: resetting deleting state for %s: %w", r.path, execErr)
+		}
+	}
+
+	return nil
+}
+
+// SetDispatchStatus transitions a remote_state row from pending/failed to
+// in-progress before the action is dispatched to the worker pool. Uses
+// optimistic concurrency: only updates if the current status is valid for
+// the given action type.
+func (m *SyncStore) SetDispatchStatus(ctx context.Context, driveID, itemID string, actionType ActionType) error {
+	switch actionType { //nolint:exhaustive // only download and delete dispatches touch remote_state
+	case ActionDownload:
+		_, err := m.db.ExecContext(ctx,
+			`UPDATE remote_state SET sync_status = ?
+			WHERE drive_id = ? AND item_id = ? AND sync_status IN (?, ?)`,
+			statusDownloading,
+			driveID, itemID, statusPendingDownload, statusDownloadFailed,
+		)
+		if err != nil {
+			return fmt.Errorf("sync: setting dispatch status downloading for %s: %w", itemID, err)
+		}
+
+	case ActionLocalDelete:
+		_, err := m.db.ExecContext(ctx,
+			`UPDATE remote_state SET sync_status = ?
+			WHERE drive_id = ? AND item_id = ? AND sync_status IN (?, ?)`,
+			statusDeleting,
+			driveID, itemID, statusPendingDelete, statusDeleteFailed,
+		)
+		if err != nil {
+			return fmt.Errorf("sync: setting dispatch status deleting for %s: %w", itemID, err)
+		}
 	}
 
 	return nil
