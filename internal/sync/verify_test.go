@@ -1,26 +1,13 @@
 package sync
 
 import (
-	"encoding/base64"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
-
-// hashBytes computes the QuickXorHash of raw bytes and returns the
-// base64-encoded digest, matching the format stored in the baseline.
-func hashBytes(t *testing.T, data []byte) string {
-	t.Helper()
-
-	h := quickxorhash.New()
-	h.Write(data)
-
-	return base64.StdEncoding.EncodeToString(h.Sum(nil))
-}
 
 func TestVerifyBaseline_AllMatch(t *testing.T) {
 	t.Parallel()
@@ -31,7 +18,7 @@ func TestVerifyBaseline_AllMatch(t *testing.T) {
 	writeTestFile(t, dir, "docs/readme.md", content)
 	writeTestFile(t, dir, "notes.txt", content)
 
-	hash := hashBytes(t, []byte(content))
+	hash := hashContent(t, content)
 	bl := &Baseline{
 		byPath: map[string]*BaselineEntry{
 			"docs/readme.md": {
@@ -107,7 +94,7 @@ func TestVerifyBaseline_HashMismatch(t *testing.T) {
 	assert.Equal(t, VerifyHashMismatch, report.Mismatches[0].Status)
 
 	// Actual should be the real hash.
-	actualHash := hashBytes(t, []byte(content))
+	actualHash := hashContent(t, content)
 	assert.Equal(t, actualHash, report.Mismatches[0].Actual)
 }
 
@@ -136,7 +123,7 @@ func TestVerifyBaseline_SkipsFolders(t *testing.T) {
 
 	writeTestFile(t, dir, "docs/file.txt", content)
 
-	hash := hashBytes(t, []byte(content))
+	hash := hashContent(t, content)
 	bl := &Baseline{
 		byPath: map[string]*BaselineEntry{
 			"docs": {
