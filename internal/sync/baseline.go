@@ -177,8 +177,8 @@ func (m *SyncStore) Load(ctx context.Context) (*Baseline, error) {
 	defer rows.Close()
 
 	b := &Baseline{
-		ByPath: make(map[string]*BaselineEntry),
-		ByID:   make(map[driveid.ItemKey]*BaselineEntry),
+		byPath: make(map[string]*BaselineEntry),
+		byID:   make(map[driveid.ItemKey]*BaselineEntry),
 	}
 
 	for rows.Next() {
@@ -187,8 +187,8 @@ func (m *SyncStore) Load(ctx context.Context) (*Baseline, error) {
 			return nil, err
 		}
 
-		b.ByPath[entry.Path] = entry
-		b.ByID[driveid.NewItemKey(entry.DriveID, entry.ItemID)] = entry
+		b.byPath[entry.Path] = entry
+		b.byID[driveid.NewItemKey(entry.DriveID, entry.ItemID)] = entry
 	}
 
 	if err := rows.Err(); err != nil {
@@ -196,7 +196,7 @@ func (m *SyncStore) Load(ctx context.Context) (*Baseline, error) {
 	}
 
 	m.baseline = b
-	m.logger.Debug("baseline loaded", slog.Int("entries", len(b.ByPath)))
+	m.logger.Debug("baseline loaded", slog.Int("entries", len(b.byPath)))
 
 	return b, nil
 }
@@ -698,7 +698,7 @@ func (m *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
 	mismatches := 0
 
 	// Check for entries in cache not in DB, or with different values.
-	for p, cached := range m.baseline.ByPath {
+	for p, cached := range m.baseline.byPath {
 		dbEntry, ok := dbEntries[p]
 		if !ok {
 			m.logger.Warn("cache consistency: entry in cache not in DB",
@@ -722,7 +722,7 @@ func (m *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
 
 	// Check for entries in DB not in cache.
 	for p := range dbEntries {
-		if _, ok := m.baseline.ByPath[p]; !ok {
+		if _, ok := m.baseline.byPath[p]; !ok {
 			m.logger.Warn("cache consistency: entry in DB not in cache",
 				slog.String("path", p),
 			)

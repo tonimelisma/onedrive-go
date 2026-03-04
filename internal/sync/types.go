@@ -284,8 +284,8 @@ type BaselineEntry struct {
 // ForEachPath) which hold mu during access.
 type Baseline struct {
 	mu     stdsync.RWMutex
-	ByPath map[string]*BaselineEntry
-	ByID   map[driveid.ItemKey]*BaselineEntry // keyed by (driveID, itemID) pair
+	byPath map[string]*BaselineEntry
+	byID   map[driveid.ItemKey]*BaselineEntry // keyed by (driveID, itemID) pair
 }
 
 // GetByPath returns the baseline entry for the given relative path.
@@ -294,7 +294,7 @@ func (b *Baseline) GetByPath(path string) (*BaselineEntry, bool) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
-	entry, ok := b.ByPath[path]
+	entry, ok := b.byPath[path]
 
 	return entry, ok
 }
@@ -305,7 +305,7 @@ func (b *Baseline) GetByID(key driveid.ItemKey) (*BaselineEntry, bool) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
-	entry, ok := b.ByID[key]
+	entry, ok := b.byID[key]
 
 	return entry, ok
 }
@@ -322,15 +322,15 @@ func (b *Baseline) Put(entry *BaselineEntry) {
 	newKey := driveid.NewItemKey(entry.DriveID, entry.ItemID)
 
 	// Remove stale ByID entry if the path is being reassigned to a new ID.
-	if old, ok := b.ByPath[entry.Path]; ok {
+	if old, ok := b.byPath[entry.Path]; ok {
 		oldKey := driveid.NewItemKey(old.DriveID, old.ItemID)
 		if oldKey != newKey {
-			delete(b.ByID, oldKey)
+			delete(b.byID, oldKey)
 		}
 	}
 
-	b.ByPath[entry.Path] = entry
-	b.ByID[newKey] = entry
+	b.byPath[entry.Path] = entry
+	b.byID[newKey] = entry
 }
 
 // Delete removes a baseline entry from both maps by path.
@@ -339,11 +339,11 @@ func (b *Baseline) Delete(path string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if entry, ok := b.ByPath[path]; ok {
-		delete(b.ByID, driveid.NewItemKey(entry.DriveID, entry.ItemID))
+	if entry, ok := b.byPath[path]; ok {
+		delete(b.byID, driveid.NewItemKey(entry.DriveID, entry.ItemID))
 	}
 
-	delete(b.ByPath, path)
+	delete(b.byPath, path)
 }
 
 // Len returns the number of entries in the baseline.
@@ -352,7 +352,7 @@ func (b *Baseline) Len() int {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
-	return len(b.ByPath)
+	return len(b.byPath)
 }
 
 // ForEachPath calls fn for every (path, entry) pair in the baseline.
@@ -362,9 +362,25 @@ func (b *Baseline) ForEachPath(fn func(string, *BaselineEntry)) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
-	for path, entry := range b.ByPath {
+	for path, entry := range b.byPath {
 		fn(path, entry)
 	}
+}
+
+// NewBaselineForTest creates a Baseline pre-populated with entries.
+// Exported for test files within the package; not intended for production use.
+func NewBaselineForTest(entries []*BaselineEntry) *Baseline {
+	bl := &Baseline{
+		byPath: make(map[string]*BaselineEntry, len(entries)),
+		byID:   make(map[driveid.ItemKey]*BaselineEntry, len(entries)),
+	}
+
+	for _, e := range entries {
+		bl.byPath[e.Path] = e
+		bl.byID[driveid.NewItemKey(e.DriveID, e.ItemID)] = e
+	}
+
+	return bl
 }
 
 // PathChanges groups all change events for a single path, separating

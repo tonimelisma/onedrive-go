@@ -50,8 +50,8 @@ func (m *mockDeltaFetcher) Delta(_ context.Context, driveID driveid.ID, _ string
 // emptyBaseline returns a Baseline with initialized but empty maps.
 func emptyBaseline() *Baseline {
 	return &Baseline{
-		ByPath: make(map[string]*BaselineEntry),
-		ByID:   make(map[driveid.ItemKey]*BaselineEntry),
+		byPath: make(map[string]*BaselineEntry),
+		byID:   make(map[driveid.ItemKey]*BaselineEntry),
 	}
 }
 
@@ -60,8 +60,8 @@ func emptyBaseline() *Baseline {
 func baselineWith(entries ...*BaselineEntry) *Baseline {
 	b := emptyBaseline()
 	for _, e := range entries {
-		b.ByPath[e.Path] = e
-		b.ByID[driveid.NewItemKey(e.DriveID, e.ItemID)] = e
+		b.byPath[e.Path] = e
+		b.byID[driveid.NewItemKey(e.DriveID, e.ItemID)] = e
 	}
 
 	return b

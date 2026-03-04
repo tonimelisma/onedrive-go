@@ -283,8 +283,9 @@ func TestLoad_EmptyBaseline(t *testing.T) {
 
 	b, err := mgr.Load(ctx)
 	require.NoError(t, err)
-	assert.Empty(t, b.ByPath)
-	assert.Empty(t, b.ByID)
+	assert.Equal(t, 0, b.Len())
+	_, idOk := b.GetByID(driveid.NewItemKey(driveid.ID{}, "nonexistent"))
+	assert.False(t, idOk)
 }
 
 func TestCommit_Download(t *testing.T) {
@@ -313,8 +314,8 @@ func TestCommit_Download(t *testing.T) {
 
 	commitAll(t, mgr, ctx, outcomes)
 
-	entry := mgr.baseline.ByPath["docs/readme.md"]
-	require.NotNil(t, entry, "baseline entry not found for docs/readme.md")
+	entry, ok := mgr.baseline.GetByPath("docs/readme.md")
+	require.True(t, ok, "baseline entry not found for docs/readme.md")
 	assert.True(t, entry.DriveID.Equal(driveid.New("drive1")), "DriveID mismatch")
 	assert.Equal(t, "item1", entry.ItemID)
 	assert.Equal(t, "abc123", entry.LocalHash)
@@ -347,8 +348,8 @@ func TestCommit_Upload(t *testing.T) {
 
 	commitAll(t, mgr, ctx, outcomes)
 
-	entry := mgr.baseline.ByPath["photos/cat.jpg"]
-	require.NotNil(t, entry, "baseline entry not found")
+	entry, ok := mgr.baseline.GetByPath("photos/cat.jpg")
+	require.True(t, ok, "baseline entry not found")
 	assert.Equal(t, "hash-local", entry.LocalHash)
 	assert.Equal(t, "hash-remote", entry.RemoteHash)
 }
@@ -375,8 +376,8 @@ func TestCommit_FolderCreate(t *testing.T) {
 
 	commitAll(t, mgr, ctx, outcomes)
 
-	entry := mgr.baseline.ByPath["Documents/Reports"]
-	require.NotNil(t, entry, "folder entry not found")
+	entry, ok := mgr.baseline.GetByPath("Documents/Reports")
+	require.True(t, ok, "folder entry not found")
 	assert.Equal(t, ItemTypeFolder, entry.ItemType)
 	// Folders have no hash or size.
 	assert.Empty(t, entry.LocalHash)
@@ -418,7 +419,8 @@ func TestCommit_UpdateSynced(t *testing.T) {
 
 	commitAll(t, mgr, ctx, outcomes)
 
-	entry := mgr.baseline.ByPath["file.txt"]
+	entry, ok := mgr.baseline.GetByPath("file.txt")
+	require.True(t, ok)
 	assert.Equal(t, t2.UnixNano(), entry.SyncedAt)
 	assert.Equal(t, "h2", entry.LocalHash)
 }
@@ -449,7 +451,8 @@ func TestCommit_LocalDelete(t *testing.T) {
 
 	commitAll(t, mgr, ctx, del)
 
-	assert.Nil(t, mgr.baseline.ByPath["delete-me.txt"], "entry still exists after local delete")
+	_, ok := mgr.baseline.GetByPath("delete-me.txt")
+	assert.False(t, ok, "entry still exists after local delete")
 }
 
 func TestCommit_RemoteDelete(t *testing.T) {
@@ -477,7 +480,8 @@ func TestCommit_RemoteDelete(t *testing.T) {
 
 	commitAll(t, mgr, ctx, del)
 
-	assert.Nil(t, mgr.baseline.ByPath["remote-del.txt"], "entry still exists after remote delete")
+	_, ok := mgr.baseline.GetByPath("remote-del.txt")
+	assert.False(t, ok, "entry still exists after remote delete")
 }
 
 func TestCommit_Cleanup(t *testing.T) {
@@ -505,7 +509,8 @@ func TestCommit_Cleanup(t *testing.T) {
 
 	commitAll(t, mgr, ctx, cleanup)
 
-	assert.Nil(t, mgr.baseline.ByPath["cleanup.txt"], "entry still exists after cleanup")
+	_, ok := mgr.baseline.GetByPath("cleanup.txt")
+	assert.False(t, ok, "entry still exists after cleanup")
 }
 
 func TestCommit_Move(t *testing.T) {
@@ -538,10 +543,11 @@ func TestCommit_Move(t *testing.T) {
 
 	commitAll(t, mgr, ctx, move)
 
-	assert.Nil(t, mgr.baseline.ByPath["old/path.txt"], "old path still exists after move")
+	_, ok := mgr.baseline.GetByPath("old/path.txt")
+	assert.False(t, ok, "old path still exists after move")
 
-	entry := mgr.baseline.ByPath["new/path.txt"]
-	require.NotNil(t, entry, "new path not found after move")
+	entry, ok := mgr.baseline.GetByPath("new/path.txt")
+	require.True(t, ok, "new path not found after move")
 	assert.Equal(t, "i", entry.ItemID)
 }
 
@@ -642,7 +648,7 @@ func TestCommit_SkipsFailedOutcomes(t *testing.T) {
 
 	b, err := mgr.Load(ctx)
 	require.NoError(t, err)
-	assert.Empty(t, b.ByPath)
+	assert.Equal(t, 0, b.Len())
 }
 
 func TestCommit_DeltaToken(t *testing.T) {
@@ -721,7 +727,8 @@ func TestCommit_SyncedAtFromNowFunc(t *testing.T) {
 
 	commitAll(t, mgr, ctx, outcomes)
 
-	entry := mgr.baseline.ByPath["f.txt"]
+	entry, ok := mgr.baseline.GetByPath("f.txt")
+	require.True(t, ok)
 	assert.Equal(t, fixedTime.UnixNano(), entry.SyncedAt)
 }
 
@@ -747,7 +754,7 @@ func TestCommit_RefreshesCache(t *testing.T) {
 	commitAll(t, mgr, ctx, outcomes)
 
 	require.NotNil(t, mgr.baseline, "baseline should be populated after Commit")
-	assert.Len(t, mgr.baseline.ByPath, 1)
+	assert.Equal(t, 1, mgr.baseline.Len())
 }
 
 func TestGetDeltaToken_Empty(t *testing.T) {
@@ -803,8 +810,8 @@ func TestLoad_NullableFields(t *testing.T) {
 	b, err := mgr.Load(ctx)
 	require.NoError(t, err)
 
-	entry := b.ByPath["root"]
-	require.NotNil(t, entry, "root entry not found")
+	entry, ok := b.GetByPath("root")
+	require.True(t, ok, "root entry not found")
 	assert.Empty(t, entry.ParentID)
 	assert.Empty(t, entry.LocalHash)
 	assert.Empty(t, entry.RemoteHash)
@@ -1002,7 +1009,7 @@ func TestLoad_ReturnsCachedBaseline(t *testing.T) {
 	b2, err := mgr.Load(ctx)
 	require.NoError(t, err)
 	assert.Same(t, b1, b2, "second Load returned a different *Baseline; expected cached pointer")
-	assert.Len(t, b2.ByPath, 1)
+	assert.Equal(t, 1, b2.Len())
 }
 
 func TestLoad_CacheInvalidatedByCommit(t *testing.T) {
@@ -1023,7 +1030,7 @@ func TestLoad_CacheInvalidatedByCommit(t *testing.T) {
 
 	b1, err := mgr.Load(ctx)
 	require.NoError(t, err)
-	require.Len(t, b1.ByPath, 1)
+	require.Equal(t, 1, b1.Len())
 
 	// Commit a second entry — cache should be invalidated and refreshed.
 	outcomes2 := []Outcome{{
@@ -1036,7 +1043,7 @@ func TestLoad_CacheInvalidatedByCommit(t *testing.T) {
 
 	b2, err := mgr.Load(ctx)
 	require.NoError(t, err)
-	assert.Len(t, b2.ByPath, 2, "cache should reflect both commits")
+	assert.Equal(t, 2, b2.Len(), "cache should reflect both commits")
 }
 
 func TestMigrations_Idempotent(t *testing.T) {
@@ -1104,8 +1111,8 @@ func TestCommitConflict_AutoResolved(t *testing.T) {
 	assert.NotZero(t, resolvedAt)
 
 	// Verify baseline was also updated (auto-resolve upserts baseline).
-	entry := mgr.baseline.ByPath["auto-resolved.txt"]
-	require.NotNil(t, entry, "baseline entry not found for auto-resolved conflict")
+	entry, ok := mgr.baseline.GetByPath("auto-resolved.txt")
+	require.True(t, ok, "baseline entry not found for auto-resolved conflict")
 	assert.Equal(t, "new-item", entry.ItemID)
 	assert.Equal(t, "local-h", entry.LocalHash)
 }
@@ -1591,10 +1598,10 @@ func TestBaseline_GetByPath(t *testing.T) {
 	t.Parallel()
 
 	b := &Baseline{
-		ByPath: map[string]*BaselineEntry{
+		byPath: map[string]*BaselineEntry{
 			"docs/readme.md": {Path: "docs/readme.md", ItemID: "item1", DriveID: driveid.New("d1")},
 		},
-		ByID: make(map[driveid.ItemKey]*BaselineEntry),
+		byID: make(map[driveid.ItemKey]*BaselineEntry),
 	}
 
 	entry, ok := b.GetByPath("docs/readme.md")
@@ -1613,8 +1620,8 @@ func TestBaseline_GetByID(t *testing.T) {
 	entry := &BaselineEntry{Path: "test.txt", ItemID: "item1", DriveID: driveID}
 
 	b := &Baseline{
-		ByPath: make(map[string]*BaselineEntry),
-		ByID:   map[driveid.ItemKey]*BaselineEntry{key: entry},
+		byPath: make(map[string]*BaselineEntry),
+		byID:   map[driveid.ItemKey]*BaselineEntry{key: entry},
 	}
 
 	got, ok := b.GetByID(key)
@@ -1630,8 +1637,8 @@ func TestBaseline_Put(t *testing.T) {
 	t.Parallel()
 
 	b := &Baseline{
-		ByPath: make(map[string]*BaselineEntry),
-		ByID:   make(map[driveid.ItemKey]*BaselineEntry),
+		byPath: make(map[string]*BaselineEntry),
+		byID:   make(map[driveid.ItemKey]*BaselineEntry),
 	}
 
 	entry := &BaselineEntry{
@@ -1662,8 +1669,8 @@ func TestBaseline_Put_ReplacesStaleID(t *testing.T) {
 	oldKey := driveid.NewItemKey(driveID, "old-id")
 
 	b := &Baseline{
-		ByPath: map[string]*BaselineEntry{"file.txt": oldEntry},
-		ByID:   map[driveid.ItemKey]*BaselineEntry{oldKey: oldEntry},
+		byPath: map[string]*BaselineEntry{"file.txt": oldEntry},
+		byID:   map[driveid.ItemKey]*BaselineEntry{oldKey: oldEntry},
 	}
 
 	// Put a new entry at the same path but different item_id.
@@ -1695,8 +1702,8 @@ func TestBaseline_Delete(t *testing.T) {
 	key := driveid.NewItemKey(driveID, "item-del")
 
 	b := &Baseline{
-		ByPath: map[string]*BaselineEntry{"delete-me.txt": entry},
-		ByID:   map[driveid.ItemKey]*BaselineEntry{key: entry},
+		byPath: map[string]*BaselineEntry{"delete-me.txt": entry},
+		byID:   map[driveid.ItemKey]*BaselineEntry{key: entry},
 	}
 
 	b.Delete("delete-me.txt")
@@ -1715,11 +1722,11 @@ func TestBaseline_Len(t *testing.T) {
 	t.Parallel()
 
 	b := &Baseline{
-		ByPath: map[string]*BaselineEntry{
+		byPath: map[string]*BaselineEntry{
 			"a.txt": {Path: "a.txt"},
 			"b.txt": {Path: "b.txt"},
 		},
-		ByID: make(map[driveid.ItemKey]*BaselineEntry),
+		byID: make(map[driveid.ItemKey]*BaselineEntry),
 	}
 
 	assert.Equal(t, 2, b.Len())
@@ -1729,11 +1736,11 @@ func TestBaseline_ForEachPath(t *testing.T) {
 	t.Parallel()
 
 	b := &Baseline{
-		ByPath: map[string]*BaselineEntry{
+		byPath: map[string]*BaselineEntry{
 			"a.txt": {Path: "a.txt", ItemID: "i1"},
 			"b.txt": {Path: "b.txt", ItemID: "i2"},
 		},
-		ByID: make(map[driveid.ItemKey]*BaselineEntry),
+		byID: make(map[driveid.ItemKey]*BaselineEntry),
 	}
 
 	paths := make(map[string]bool)
@@ -1750,8 +1757,8 @@ func TestBaseline_ConcurrentAccess(t *testing.T) {
 	t.Parallel()
 
 	b := &Baseline{
-		ByPath: make(map[string]*BaselineEntry),
-		ByID:   make(map[driveid.ItemKey]*BaselineEntry),
+		byPath: make(map[string]*BaselineEntry),
+		byID:   make(map[driveid.ItemKey]*BaselineEntry),
 	}
 
 	// Seed some entries.
