@@ -1008,199 +1008,43 @@ Default `MinFreeSpace` is 1 GB. If insufficient space is available:
 
 ## 9. Executor
 
-The executor takes an `ActionPlan` and dispatches actions to lane-based workers via the DepTracker. Each worker produces an individual `Outcome` — a self-contained result record that carries everything the baseline manager needs. Workers commit each outcome to the baseline per-action.
+The executor takes an `ActionPlan` and dispatches actions to workers via the DepTracker. Each worker produces an individual `Outcome` — a self-contained result record that carries everything the SyncStore needs. Workers commit each outcome per-action.
 
-### 9.1 DAG Execution with Dependency Tracking
+### 9.1 Overview
 
-Actions are dispatched based on dependency satisfaction, not fixed phase ordering. The planner emits explicit dependency edges:
+Actions are dispatched based on dependency satisfaction, not fixed phase ordering. The planner emits explicit dependency edges (parent-before-child, children-before-parent-delete, move-target-parent). All action types run concurrently when dependencies are met. Each completed action is committed to the SyncStore individually.
 
-| Dependency Type | Rule | Example |
-|----------------|------|---------|
-| **Parent-before-child** | Parent folder must exist before child operations | `upload /A/B/f.txt` depends on `mkdir /A/B` |
-| **Children-before-parent-delete** | All children must be removed before parent folder deletion | `rmdir /A` depends on `delete /A/file1.txt` |
-| **Move target parent** | Move target parent folder must exist | `move /X -> /A/Z` depends on `mkdir /A` |
-
-Actions whose parent folders already exist in the baseline have no dependencies and are immediately ready for execution. All action types (downloads, uploads, folder creates, deletes, moves, conflicts) are eligible to run concurrently when their dependencies are met. There are no artificial barriers between action types --- a download to `/A/x.txt` and an upload from `/B/y.txt` run in parallel if they have no dependency relationship.
-
-**In-memory dependency tracker (DepTracker)**: Actions are added to the in-memory DepTracker after planning. The DepTracker tracks dependency edges and dispatches ready actions to worker channels. When action X completes, the tracker immediately dispatches any action Y whose last remaining dependency was X. No polling. A bounded working window (default 10K actions) keeps memory usage predictable.
-
-**Lane-based worker dispatch**: Ready actions are routed to an interactive lane (small files, folder ops, deletes, moves) or a bulk lane (large transfers) with reserved workers per lane and a shared overflow pool. See [concurrent-execution.md](concurrent-execution.md) sections 4-6 for details.
-
-**Per-action commits**: Each completed action is committed to baseline individually in a single SQLite transaction. The delta token is committed separately when all cycle actions complete.
+See [concurrent-execution.md](concurrent-execution.md) for the definitive specification of the execution layer: DepTracker, worker pools, lane-based dispatch, bandwidth limiting, adaptive concurrency, and graceful shutdown.
 
 ### 9.2 Outcome Production
 
-Every action produces exactly one `Outcome`, regardless of success or failure:
+Every action produces exactly one `Outcome`, regardless of success or failure. Each Outcome is self-contained — carries all fields needed to update the baseline without querying the database. Failed Outcomes are NOT committed to the baseline; the item retains its current state and will be retried on the next sync cycle.
 
-```go
-type Outcome struct {
-    Action       ActionType
-    Success      bool
-    Error        error
-    Path         string
-    OldPath      string     // for moves
-    DriveID      driveid.ID
-    ItemID       string     // from API response after upload
-    ParentID     string
-    ItemType     ItemType
-    LocalHash    string     // hash of local content after action
-    RemoteHash   string     // hash of remote content after action
-    Size         int64
-    Mtime        int64      // local mtime at sync time
-    RemoteMtime  int64      // remote mtime for conflict records
-    ETag         string
-    ConflictType string     // "edit_edit", "edit_delete", "create_create" (conflicts only)
-    ResolvedBy   string     // ResolvedByAuto for auto-resolved conflicts, "" otherwise
-}
-```
+### 9.3 Error Classification
 
-**Self-contained design**: Each Outcome carries all the fields needed to update the baseline. The baseline manager processes Outcomes without querying the database or any other state. This decouples execution from persistence.
-
-**Failed Outcomes**: When `Success: false`, the Outcome carries an `Error` explaining the failure. Failed Outcomes are NOT committed to the baseline -- the item retains its current baseline state and will be retried on the next sync cycle.
-
-**Concurrency**: Workers report outcomes through an in-memory result channel. Each worker commits its outcome to the baseline per-action, then reports success/failure to the engine via `WorkerResult` for cycle tracking (failure suppression, delta token commit decisions).
-
-**Cross-drive operations**: Items under shortcuts (shared folder content) target the SOURCE drive for all API operations. The action's `DriveID` field contains `remoteItem.driveId`, not the user's own drive ID. The user's OAuth token has access to the shared content because the sharing permission grants it — the `graph.Client` token is per-account, not per-drive.
-
-### 9.3 Error Classification (Fatal, Retryable, Skip, Deferred)
-
-The executor classifies errors into four tiers and handles them internally before producing the final Outcome:
-
-| Tier | Examples | Behavior |
-|------|----------|----------|
-| **Fatal** | Auth failure (401 after token refresh), impossible state, insufficient storage on server (507) | Stops the entire sync cycle. |
-| **Retryable** | Network timeout, HTTP 429/500/502/503/504/408/412/509 | Exponential backoff with jitter, max 5 retries. For HTTP 429: use `Retry-After` header directly. After max retries: produce failed Outcome. |
-| **Skip** | Permission denied (403), invalid filename (400), file locked (423) | Produce failed Outcome immediately. Item retried on next cycle. |
-| **Deferred** | Parent directory not yet created, file locked locally | Queued for retry at the end of the current cycle. |
-
-**Retry strategy**:
-- Base delay: 1 second
-- Factor: 2 (exponential)
-- Maximum backoff: 120 seconds
-- Jitter: plus or minus 25% of calculated backoff
-- For HTTP 429: use the `Retry-After` header value directly
-- Global rate awareness: shared token bucket across all workers prevents thundering herd
-
-**HTTP error classification**:
-
-| Status | Classification | Notes |
-|--------|---------------|-------|
-| 400 | Skip | Invalid request, bad filename |
-| 401 | Fatal (after token refresh) | Auth failure |
-| 403 | Skip | Permission denied, SharePoint retention policy |
-| 404 | Skip (for deletes) / Retryable (for GET) | Item may have been deleted concurrently |
-| 408 | Retryable | Request timeout |
-| 409 | Retryable (moves) / Skip (other) | Conflict on moves: delete target, retry |
-| 412 | Retryable | ETag stale: fetch fresh ETag, retry |
-| 423 | Skip | File locked (SharePoint) |
-| 429 | Retryable | Rate limited, honor Retry-After header |
-| 500-504 | Retryable | Server errors |
-| 507 | Fatal | Insufficient storage on server |
-| 509 | Retryable (long backoff) | Bandwidth limit exceeded (SharePoint) |
+The executor classifies errors into four tiers: **Fatal** (stops cycle), **Retryable** (exponential backoff, max 5 retries), **Skip** (failed Outcome immediately), **Deferred** (retry end of cycle). See [concurrent-execution.md §10](concurrent-execution.md) for error recovery details.
 
 ### 9.4 Download Safety (.partial + Hash Verify + Atomic Rename)
 
-Every download follows a strict safety protocol (S3):
-
-1. **Malware check**: If the remote item has a malware flag, skip the download and produce a failed Outcome.
-2. **Disk space check** (S6): Verify `available_space - file_size >= config.MinFreeSpace`. Skip if insufficient.
-3. **Create `.partial` file**: Write to `<target>.partial` in the same directory as the target. This ensures the `.partial` file is on the same filesystem, enabling atomic rename.
-4. **Stream content with hash computation**: Download the file content through an `io.TeeReader` that simultaneously writes to the `.partial` file and computes the QuickXorHash. Single-pass -- no re-reading required.
-5. **Verify hash**: Compare the computed QuickXorHash against the expected hash from the remote item. Special handling for iOS `.heic` files (known API bug: log warning, do not fail).
-6. **Set timestamps**: Apply `os.Chtimes` with the remote `mtime` to the `.partial` file.
-7. **Atomic rename**: `os.Rename` from `.partial` to the target path. On the same filesystem, this is an atomic metadata operation -- the target file either has the complete old content or the complete new content, never a partial state.
-8. **Produce Outcome**: With verified hashes, size, mtime, and server metadata (ETag, ItemID).
-
-If the process crashes at any point before step 7, only the `.partial` file exists. On startup, the engine cleans up stale `.partial` files -- they are safe to delete and will be re-downloaded.
+Every download follows a strict safety protocol (S3): malware check, disk space check, `.partial` file creation, streaming download with `TeeReader` hash computation, hash verification, timestamp application, atomic rename. Process crash before rename leaves only the `.partial` file, which is cleaned up on restart.
 
 ### 9.5 Upload Strategy (Simple vs. Chunked)
 
-**Simple upload** (files up to 4 MB):
-
-```
-PUT /drives/{driveId}/items/{parentId}:/{name}:/content
-```
-
-Used for small files and zero-byte files. Zero-byte files ALWAYS use simple upload because upload sessions require a non-empty first chunk.
-
-**Chunked upload** (files larger than 4 MB):
-
-1. **Create upload session**: Includes `fileSystemInfo` facet with the local `mtime` to preserve timestamps and avoid double-versioning on Business/SharePoint.
-2. **Persist session**: Save session URL, expiry, and progress to the file-based SessionStore BEFORE starting the upload (for crash recovery).
-3. **Upload chunks**: Each chunk must be a multiple of 320 KiB (API requirement). Default chunk size: 10 MiB. Fragment upload URLs are pre-authenticated -- do NOT send Authorization header on chunk uploads.
-4. **Complete**: The last chunk upload returns the completed `graph.Item` with server metadata.
-5. **Clean up session**: Delete the session from the SessionStore.
-
-**Post-upload hash verification**:
-- Compare local hash against the server response hash.
-- If hashes match: normal Outcome with `LocalHash == RemoteHash`.
-- If hashes diverge AND the drive is a SharePoint library: enrichment detected. Store per-side hashes in the Outcome (`LocalHash != RemoteHash`).
-- If hashes diverge AND NOT SharePoint: log a warning (potential corruption). Configurable escape hatch: `disable_upload_validation`.
+Files <=4 MB use simple PUT. Files >4 MB use resumable sessions with 320 KiB-aligned chunks. `fileSystemInfo` included in session creation to preserve timestamps. Post-upload hash verification detects SharePoint enrichment vs. corruption.
 
 ### 9.6 Delete Guards
 
-**Remote deletion**:
+**Remote deletion**: Conditional DELETE with `If-Match` ETag. Handles 404 (already deleted), 403 (retention policy), 423 (locked), 412 (stale ETag).
 
-1. Send DELETE request with `If-Match` ETag header for conditional deletion.
-2. HTTP 404: Item already deleted remotely -- not an error, produce success Outcome.
-3. HTTP 403: Permission denied (SharePoint retention policy) -- skip.
-4. HTTP 423: Locked (SharePoint) -- skip.
-5. HTTP 412: ETag stale. Fetch fresh item metadata, retry once with new ETag.
-6. Recycle bin: `config.UseRecycleBin` controls whether items are soft-deleted to the OneDrive recycle bin (default) or permanently deleted.
+**Local deletion** (S4 hash-before-delete): Hash local file, compare against baseline. Match = safe to delete. Mismatch = create conflict copy to preserve user's work.
 
-**Local deletion** (with S4 hash-before-delete guard):
+**Folder deletion**: Bottom-up (deepest first) via dependency edges. Skip non-empty folders.
 
-1. Compute the current local file hash (QuickXorHash).
-2. Compare against `action.View.Baseline.LocalHash`.
-3. **Hashes match**: File is unchanged since the last sync. Safe to delete.
-4. **Hashes differ**: File was modified after the last sync -- the user made changes that haven't been synced. Instead of deleting, create a conflict copy to preserve the user's work.
-5. `config.UseLocalTrash`: Controls whether local deletes use the OS trash (FreeDesktop on Linux, Finder trash on macOS) or permanently remove files.
+### 9.7 Move and Conflict Execution
 
-**Folder deletion**: Folders are deleted bottom-up (deepest first), enforced by dependency edges. Before deleting a local folder, the executor verifies it is empty. If the folder contains unexpected files (e.g., new files created after the scan but before execution), the delete is skipped and deferred to the next cycle.
+**Moves**: `ActionLocalMove` uses `os.Rename` (atomic same-filesystem). `ActionRemoteMove` calls `MoveItem` API.
 
-**Move execution details**:
-
-- **ActionLocalMove**: Rename the local file/folder from `action.OldPath` (source) to `action.Path` (destination). Uses `os.Rename` which is atomic on the same filesystem. If source and destination are on different filesystems, falls back to copy + delete.
-- **ActionRemoteMove**: Call the `MoveItem` API to rename the item on the server. The API call specifies the new parent ID and new name. On success, the Outcome carries both `OldPath` and `Path` for the baseline manager to update.
-
-**Conflict execution**:
-
-For each conflict action, the executor applies the configured resolution strategy:
-
-| Strategy | Behavior |
-|----------|----------|
-| `keep_both` (default) | Download remote version to target path. Rename local version to `<name>.conflict-YYYYMMDD-HHMMSS.<ext>`. Both files remain. |
-| `keep_local` | Upload local version to remote, overwriting the remote version. |
-| `keep_remote` | Download remote version, overwriting local. Local changes are lost. |
-| `manual` | Log the conflict. Take no action. User resolves via `conflicts` and `resolve` commands. |
-
-Conflict copies use timestamp-based naming: `document.conflict-20260222-143052.pdf`. This format is self-documenting (the user can see when the conflict was detected) and shorter than hostname-based naming schemes.
-
-**Synced update execution**:
-
-Synced updates (EF4, EF11, ED2) require no I/O. The executor produces an Outcome populated from the PathView's remote and local state:
-
-- `ItemID`, `ParentID`, `ETag`: from `PathView.Remote` (server is authoritative for metadata).
-- `LocalHash`: from `PathView.Local.Hash` (what is on disk).
-- `RemoteHash`: from `PathView.Remote.Hash` (what server reports).
-- `Size`, `Mtime`: from whichever side is considered authoritative (remote for downloads, local for uploads; for convergent cases, they match).
-
-**Transfer pipeline**:
-
-The executor delegates transfer operations to lane-based workers managed by the dependency tracker:
-
-| Lane | Reserved Workers | Purpose |
-|------|-----------------|---------|
-| Interactive | max(2, total/8) | Small files (<10 MB), folder ops, deletes, moves |
-| Bulk | max(2, total/8) | Large file transfers (>=10 MB) |
-| Shared | remainder | Dynamically assigned; interactive priority |
-| Checkers | 8 (separate pool) | Local hash computation for change detection |
-
-Total lane workers = `runtime.NumCPU()` or user-configured cap (minimum 4). Workers are persistent goroutines pulling from tracker channels. Each worker receives its own context for per-action cancellation. Canceling the root context propagates to all workers.
-
-**Bandwidth limiting**: A token-bucket rate limiter optionally caps total transfer bandwidth (configured via `bandwidth_limit`). The limiter is shared across all download and upload workers, preventing any single worker from consuming the entire allowance. Scheduled throttling supports time-of-day rules.
-
-**Dispatch order**: Actions are dispatched as their dependencies are satisfied. Within a lane, the tracker's ready channel provides FIFO ordering. The dependency DAG naturally ensures correctness (parents before children, children before parent deletes) without requiring explicit sorting.
+**Conflicts**: Strategy-dependent — `keep_both` (download remote + rename local), `keep_local` (upload), `keep_remote` (download), `manual` (log only). Conflict copies use timestamp naming: `document.conflict-20260222-143052.pdf`.
 
 ---
 

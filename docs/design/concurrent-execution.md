@@ -643,6 +643,8 @@ On first signal:
 
 ### 14.3 Crash Recovery via Remote State + Reconciler
 
+See [remote-state-separation.md §19](remote-state-separation.md) for the authoritative crash recovery matrix covering all state combinations.
+
 Crash recovery uses the `remote_state` table:
 
 1. On restart, `SyncStore.Load()` loads the baseline
@@ -876,19 +878,16 @@ excessive memory consumption during extended pauses.
 
 ---
 
-## 17. Open Questions
+## 17. Resolved Questions
 
-1. **Planner deduplication strategy.** When observers detect new changes
-   mid-execution, the planner runs again. It must not re-emit actions already
-   in the tracker. Preferred: tracker deduplicates by path (preserves
-   planner purity). Alternative: planner queries tracker state (breaks
-   pure-function constraint).
+1. **Planner deduplication strategy.** *Resolved*: the tracker deduplicates
+   by path via `HasInFlight()` + `CancelByPath()`, preserving planner purity.
+   The planner remains a pure function that does not query tracker state.
 
-2. **Config key deprecation.** PRD specifies `parallel_downloads`,
-   `parallel_uploads`, `parallel_checkers` as three separate configurable
-   values. These are deprecated in favor of `transfer_workers` and
-   `check_workers`. A warning is logged via `WarnDeprecatedKeys()` if the
-   old keys are present.
+2. **Config key deprecation.** *Resolved*: `parallel_downloads`,
+   `parallel_uploads`, `parallel_checkers` are deprecated in favor of
+   `transfer_workers` and `check_workers`. A warning is logged via
+   `WarnDeprecatedKeys()` if the old keys are present.
 
 ---
 
