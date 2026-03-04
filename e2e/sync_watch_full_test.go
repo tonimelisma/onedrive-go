@@ -3,7 +3,6 @@
 package e2e
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -39,7 +38,7 @@ func startDaemon(
 
 	cmd := makeCmd(daemonArgs, env)
 
-	var stdout, stderr bytes.Buffer
+	var stdout, stderr syncBuffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 

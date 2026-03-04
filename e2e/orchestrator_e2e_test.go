@@ -3,7 +3,6 @@
 package e2e
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -273,7 +272,7 @@ func TestE2E_Orchestrator_WatchSimultaneous(t *testing.T) {
 	}
 	cmd := makeCmd(daemonArgs, env)
 
-	var stdout, stderr bytes.Buffer
+	var stdout, stderr syncBuffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
@@ -335,7 +334,7 @@ func TestE2E_Orchestrator_WatchDriveIsolation(t *testing.T) {
 	}
 	cmd := makeCmd(daemonArgs, env)
 
-	var stdout, stderr bytes.Buffer
+	var stdout, stderr syncBuffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
@@ -421,7 +420,7 @@ func TestE2E_Orchestrator_WatchPausedDrive(t *testing.T) {
 	}
 	cmd := makeCmd(daemonArgs, env)
 
-	var stdout, stderr bytes.Buffer
+	var stdout, stderr syncBuffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
