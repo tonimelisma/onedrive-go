@@ -543,14 +543,14 @@ func TestIsAlwaysExcluded(t *testing.T) {
 		{"tmp file", "temp.tmp", true},
 		{"swap file", "file.swp", true},
 		{"crdownload", "file.crdownload", true},
-		{"db file", "data.db", true},
-		{"db-wal file", "data.db-wal", true},
-		{"db-shm file", "data.db-shm", true},
+		{"db file", "data.db", false},
+		{"db-wal file", "data.db-wal", false},
+		{"db-shm file", "data.db-shm", false},
 
 		// Case insensitive.
 		{"tmp uppercase", "FILE.TMP", true},
 		{"partial mixed case", "Download.Partial", true},
-		{"db uppercase", "DATA.DB", true},
+		{"db uppercase", "DATA.DB", false},
 
 		// Prefix-based exclusions.
 		{"tilde prefix", "~backup", true},
@@ -574,6 +574,26 @@ func TestIsAlwaysExcluded(t *testing.T) {
 			assert.Equal(t, tt.want, got, "isAlwaysExcluded(%q)", tt.in)
 		})
 	}
+}
+
+// TestIsAlwaysExcluded_DbFilesNotExcluded validates that .db, .db-wal, and
+// .db-shm files are NOT excluded (B-308). The sync engine's state DB lives
+// outside the sync directory, so these suffixes only cause false positives
+// for legitimate user files.
+func TestIsAlwaysExcluded_DbFilesNotExcluded(t *testing.T) {
+	t.Parallel()
+
+	// .db files should NOT be excluded.
+	assert.False(t, isAlwaysExcluded("data.db"), ".db should not be excluded")
+	assert.False(t, isAlwaysExcluded("data.db-wal"), ".db-wal should not be excluded")
+	assert.False(t, isAlwaysExcluded("data.db-shm"), ".db-shm should not be excluded")
+	assert.False(t, isAlwaysExcluded("DATA.DB"), "case-insensitive .db should not be excluded")
+
+	// These should still be excluded.
+	assert.True(t, isAlwaysExcluded("file.partial"), ".partial should still be excluded")
+	assert.True(t, isAlwaysExcluded("file.tmp"), ".tmp should still be excluded")
+	assert.True(t, isAlwaysExcluded("file.swp"), ".swp should still be excluded")
+	assert.True(t, isAlwaysExcluded("file.crdownload"), ".crdownload should still be excluded")
 }
 
 func TestIsValidOneDriveName(t *testing.T) {

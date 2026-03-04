@@ -471,15 +471,14 @@ func syncRootExists(syncRoot string) bool {
 }
 
 // isAlwaysExcluded returns true for file patterns that must never be synced.
-// These are S7 safety invariants: partial downloads, editor temporaries,
-// and SQLite database files (which corrupt if synced mid-transaction).
+// These are S7 safety invariants: partial downloads and editor temporaries.
 //
 // Called on every fsnotify event and every file during FullScan, so we use
 // asciiLower to avoid the heap allocation that strings.ToLower incurs per call.
 func isAlwaysExcluded(name string) bool {
 	lower := asciiLower(name)
 
-	// Extension-based: partial downloads, editor temps, SQLite files.
+	// Extension-based: partial downloads and editor temps.
 	for _, ext := range alwaysExcludedSuffixes {
 		if strings.HasSuffix(lower, ext) {
 			return true
@@ -521,12 +520,10 @@ func asciiLower(s string) string {
 	return s
 }
 
-// alwaysExcludedSuffixes lists file extensions that are unsafe to sync.
-// SQLite files (.db, .db-wal, .db-shm) corrupt if synced mid-transaction.
+// alwaysExcludedSuffixes lists file extensions that are unsafe to sync:
+// partial downloads and editor temporaries.
 var alwaysExcludedSuffixes = []string{
 	".partial", ".tmp", ".swp", ".crdownload",
-	".db-wal", ".db-shm",
-	".db",
 }
 
 // isValidOneDriveName returns true if the name can be synced to OneDrive.

@@ -344,8 +344,8 @@ Running `golangci-lint run` before `gofumpt -w` wastes a cycle fixing formatting
 ### DOD gates are not optional — complete ALL 15 before declaring done
 In 4v2.3, gates 7 (logging review), 8 (comment review), 9 (docs update), 14 (retrospective), and 15 (re-envisioning) were initially skipped. The logging review caught two missing log lines (nosync guard Warn, deletion detection Debug summary) and the comment review caught a misleading "order matters" comment. These are exactly the kind of issues the gates exist to catch. Never shortcut the DOD checklist — the mechanical gates (build/test/lint) are necessary but not sufficient.
 
-### alwaysExcludedSuffixes order and `.db` exclusion narrowing
-The `strings.HasSuffix` loop checks suffixes in declaration order. `.db-wal` and `.db-shm` must appear before `.db` in the slice, otherwise `.db` would match first and the longer suffixes would never be reached. This ordering is tested and correct. **However**, the `.db` suffix exclusion itself is too aggressive (FC-2) — it catches legitimate non-SQLite data files. Decision: narrow to path-based exclusion for the sync engine's own baseline database. See [filtering-conflicts.md FC-2](docs/design/filtering-conflicts.md#fc-2-built-in-db-exclusion-is-too-aggressive) and roadmap 6.Xb.
+### alwaysExcludedSuffixes — `.db` suffixes removed (Phase 5.7.1)
+The `strings.HasSuffix` loop checks suffixes in declaration order. Originally `.db-wal` and `.db-shm` appeared before `.db` in the slice to prevent `.db` from matching first. **Phase 5.7.1 removed all three SQLite suffixes** (B-308) — they caused false positives on legitimate data files (e.g., `my-app.db`). The sync engine's own database lives outside the sync root by design (`StatePath()` is always outside `sync_dir`), so path-based exclusion is unnecessary.
 
 ### Planner decision matrix: localDeleted implies localChanged
 When splitting the EF1-EF10 file decision matrix into switch cases, `localDeleted` (baseline exists but Local is nil) always implies `localChanged` (detectLocalChange returns true when Local is nil). This means a catch-all case like `localChanged && remoteChanged && hasRemote` will match both EF5 (edit-edit conflict, local present) and EF7 (local deleted, remote modified). The fix: add `!localDeleted` to EF4/EF5/EF9 cases, or evaluate `localDeleted` cases first. This is a subtle ordering bug that manifests as conflicts instead of downloads.
@@ -588,3 +588,28 @@ Go's `for k, v := range m` copies each value. If `v` is a struct with pointer fi
 
 ### DriveTypeShared needs explicit handling in every drive-type switch
 `BaseSyncDir()`, `DefaultSyncDir()`, `DriveTokenPath()`, `CollectOtherSyncDirs()` — all need shared drive cases. Missing cases return "" or empty, causing silent failures. Check all type-switch statements when adding new drive types.
+
+---
+
+## 10. Remote State Separation
+
+### Filtering must be symmetric between local and remote observers
+The local observer had `isAlwaysExcluded()` and `isValidOneDriveName()` checks that the remote observer lacked (FC-1). Temp files (`.swp`, `.crdownload`) or invalid-name files uploaded via the OneDrive web UI would flow through to the planner unchecked. Fix: call the same filtering functions in `classifyItem()` for remote items. General rule: any exclusion logic applied to local items must also apply to remote items, and vice versa.
+
+### Narrow exclusion suffixes to avoid false positives
+The original `alwaysExcludedSuffixes` included `.db`/`.db-wal`/`.db-shm` to protect against syncing the sync engine's own SQLite database. This was too aggressive — it silently excluded legitimate data files (e.g., `my-app.db`). Fix: remove the SQLite suffixes entirely and rely on the sync engine's database living outside the sync root. The sync engine's state path (`StatePath()`) is always outside the sync directory by design.
+
+### CommitObservation atomicity: observations + delta token in one transaction
+`CommitObservation(ctx, items, deltaToken)` wraps all `remote_state` UPSERTs and the delta token update in a single SQLite transaction. If any observation fails, no delta token is saved — the next cycle re-fetches from the last good token. This prevents the failure mode where a partial observation is committed with the new token, causing missed items on the next delta call.
+
+### RecordFailure with exponential backoff scheduling
+`RecordFailure(ctx, driveID, itemID, errMsg)` increments `fail_count` and sets `next_retry` using exponential backoff (1m, 5m, 25m, 2h, 10h, capped at 24h). `ListFailedForRetry(ctx, driveID)` only returns items whose `next_retry` is in the past. This prevents retry storms for permanently broken items while still eventually retrying.
+
+### Legacy cycle tracking replaced by durable failure state
+The old `failureTracker` (in-memory map of path-to-failure-count, reset on cycle completion) and `cycleFailures`/`watchCycleCompletion` were purely in-memory — a crash lost all failure history. `RecordFailure` persists failures in `remote_state` with backoff scheduling, surviving crashes. `ResetInProgressStates()` on startup handles items that were mid-operation when the process died.
+
+### ChangeEvent-to-ObservedItem converter bridges observer and store layers
+The observer layer produces `ChangeEvent` structs; the SyncStore layer consumes `ObservedItem` structs. A converter function bridges the gap, mapping `ChangeEvent` fields to `ObservedItem` fields. This keeps the observer independent of the storage schema and allows the converter to evolve independently of either layer.
+
+### Crash recovery: ResetInProgressStates at RunOnce start
+`RunOnce` calls `store.ResetInProgressStates(ctx, driveID)` before any observation. Items left in `syncing` or `downloading` state from a prior crash are reset to `observed`, causing them to be re-planned in the current cycle. This is safe because the planner is idempotent — re-planning an already-synced item results in a no-op (EF1).

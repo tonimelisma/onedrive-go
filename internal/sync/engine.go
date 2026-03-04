@@ -10,8 +10,6 @@ import (
 	stdsync "sync"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 )
@@ -79,8 +77,7 @@ type Engine struct {
 	planner         *Planner
 	execCfg         *ExecutorConfig
 	fetcher         DeltaFetcher
-	driveVerifier   DriveVerifier   // optional (B-074)
-	failures        *failureTracker // watch mode only (B-123)
+	driveVerifier   DriveVerifier // optional (B-074)
 	syncRoot        string
 	driveID         driveid.ID
 	logger          *slog.Logger
@@ -89,11 +86,6 @@ type Engine struct {
 	sessionStore    *driveops.SessionStore // for CleanStale() housekeeping
 	transferWorkers int                    // goroutine count for the worker pool
 	checkWorkers    int                    // goroutine limit for parallel file hashing
-
-	// In-memory per-cycle failure counts. Fed by drainWorkerResults, read by
-	// watchCycleCompletion for delta token commit decisions.
-	cycleFailuresMu stdsync.Mutex
-	cycleFailures   map[string]int
 
 	// localWatcherFactory overrides the default fsnotify watcher factory
 	// for the local observer. Tests inject a mock factory to simulate
@@ -141,7 +133,6 @@ func NewEngine(cfg *EngineConfig) (*Engine, error) {
 		logger:          cfg.Logger,
 		transferWorkers: cfg.TransferWorkers,
 		checkWorkers:    cfg.CheckWorkers,
-		cycleFailures:   make(map[string]int),
 	}, nil
 }
 
@@ -152,7 +143,6 @@ func (e *Engine) Close() error {
 	// Nil out observer references to prevent dangling reads after Close.
 	e.remoteObs = nil
 	e.localObs = nil
-	e.failures = nil
 
 	// Clean stale upload session files (best-effort).
 	if e.sessionStore != nil {
@@ -222,6 +212,11 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 		return nil, err
 	}
 
+	// Crash recovery: reset any in-progress states from a previous crash.
+	if err := e.baseline.ResetInProgressStates(ctx); err != nil {
+		e.logger.Warn("failed to reset in-progress states", slog.String("error", err.Error()))
+	}
+
 	// Step 1: Load baseline.
 	bl, err := e.baseline.Load(ctx)
 	if err != nil {
@@ -229,7 +224,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 	}
 
 	// Steps 2-4: Observe remote + local, buffer, and flush.
-	changes, deltaToken, err := e.observeChanges(ctx, bl, mode)
+	changes, err := e.observeChanges(ctx, bl, mode)
 	if err != nil {
 		return nil, err
 	}
@@ -275,8 +270,8 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 		return report, nil
 	}
 
-	// Execute plan: run workers, then commit delta token if all succeeded.
-	e.executePlan(ctx, plan, deltaToken, report)
+	// Execute plan: run workers.
+	e.executePlan(ctx, plan, report)
 
 	report.Duration = time.Since(start)
 
@@ -303,18 +298,13 @@ func (e *Engine) postSyncHousekeeping() {
 	driveops.CleanTransferArtifacts(e.syncRoot, e.sessionStore, e.logger)
 }
 
-// executePlan populates the dependency tracker, runs the worker pool,
-// and commits the delta token after completion.
+// executePlan populates the dependency tracker and runs the worker pool.
+// Delta token is no longer committed here — it's committed atomically
+// with observations in CommitObservation.
 func (e *Engine) executePlan(
-	ctx context.Context, plan *ActionPlan, deltaToken string, report *SyncReport,
+	ctx context.Context, plan *ActionPlan, report *SyncReport,
 ) {
-	// Guard: changes existed but all classified to no-op actions, producing
-	// an empty plan. Commit the delta token and return — no work to do.
 	if len(plan.Actions) == 0 {
-		if commitErr := e.baseline.CommitDeltaToken(ctx, deltaToken, e.driveID.String(), "", e.driveID.String()); commitErr != nil {
-			e.logger.Error("failed to commit delta token", slog.String("error", commitErr.Error()))
-		}
-
 		return
 	}
 
@@ -353,19 +343,6 @@ func (e *Engine) executePlan(
 	pool.Stop()
 
 	report.Succeeded, report.Failed, report.Errors = pool.Stats()
-
-	// Only advance the delta token when the entire cycle succeeded. If any
-	// action failed, the token stays at the previous value so the next sync
-	// re-observes the items that failed.
-	if report.Failed == 0 {
-		if commitErr := e.baseline.CommitDeltaToken(ctx, deltaToken, e.driveID.String(), "", e.driveID.String()); commitErr != nil {
-			e.logger.Error("failed to commit delta token", slog.String("error", commitErr.Error()))
-		}
-	} else {
-		e.logger.Warn("skipping delta token commit due to failed actions",
-			slog.Int("failed", report.Failed),
-		)
-	}
 }
 
 // buildReportFromCounts populates a SyncReport with plan counts.
@@ -426,21 +403,19 @@ func (e *Engine) observeLocal(ctx context.Context, bl *Baseline) ([]ChangeEvent,
 }
 
 // observeChanges runs remote and local observers based on mode, buffers their
-// events, and returns the flushed change set with the delta token. Extracted
-// from RunOnce to keep each method under ~80 lines.
+// events, and returns the flushed change set. Delta token is committed
+// atomically with observations in observeAndCommitRemote.
 func (e *Engine) observeChanges(
 	ctx context.Context, bl *Baseline, mode SyncMode,
-) ([]PathChanges, string, error) {
+) ([]PathChanges, error) {
 	var remoteEvents []ChangeEvent
-
-	var deltaToken string
 
 	var err error
 
 	if mode != SyncUploadOnly {
-		remoteEvents, deltaToken, err = e.observeRemote(ctx, bl)
+		remoteEvents, err = e.observeAndCommitRemote(ctx, bl)
 		if err != nil {
-			return nil, "", err
+			return nil, err
 		}
 	}
 
@@ -449,7 +424,7 @@ func (e *Engine) observeChanges(
 	if mode != SyncDownloadOnly {
 		localEvents, err = e.observeLocal(ctx, bl)
 		if err != nil {
-			return nil, "", err
+			return nil, err
 		}
 	}
 
@@ -457,7 +432,50 @@ func (e *Engine) observeChanges(
 	buf.AddAll(remoteEvents)
 	buf.AddAll(localEvents)
 
-	return buf.FlushImmediate(), deltaToken, nil
+	return buf.FlushImmediate(), nil
+}
+
+// observeAndCommitRemote wraps observeRemote to persist observations
+// and delta token atomically via CommitObservation.
+func (e *Engine) observeAndCommitRemote(ctx context.Context, bl *Baseline) ([]ChangeEvent, error) {
+	events, deltaToken, err := e.observeRemote(ctx, bl)
+	if err != nil {
+		return nil, err
+	}
+
+	observed := changeEventsToObservedItems(events)
+	if commitErr := e.baseline.CommitObservation(ctx, observed, deltaToken, e.driveID); commitErr != nil {
+		return nil, fmt.Errorf("sync: committing observations: %w", commitErr)
+	}
+
+	return events, nil
+}
+
+// changeEventsToObservedItems converts remote ChangeEvents into ObservedItems
+// for CommitObservation. Filters out local-source events.
+func changeEventsToObservedItems(events []ChangeEvent) []ObservedItem {
+	var items []ObservedItem
+
+	for i := range events {
+		if events[i].Source != SourceRemote {
+			continue
+		}
+
+		items = append(items, ObservedItem{
+			DriveID:   events[i].DriveID,
+			ItemID:    events[i].ItemID,
+			ParentID:  events[i].ParentID,
+			Path:      events[i].Path,
+			ItemType:  events[i].ItemType.String(),
+			Hash:      events[i].Hash,
+			Size:      events[i].Size,
+			Mtime:     events[i].Mtime,
+			ETag:      events[i].ETag,
+			IsDeleted: events[i].IsDeleted,
+		})
+	}
+
+	return items
 }
 
 // resolveSafetyConfig returns the appropriate SafetyConfig based on RunOpts.
@@ -614,8 +632,7 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 		return fmt.Errorf("sync: loading baseline for watch: %w", err)
 	}
 
-	// Step 3: Create persistent tracker, failure tracker, and worker pool.
-	e.failures = newFailureTracker(e.logger)
+	// Step 3: Create persistent tracker and worker pool.
 	tracker := NewPersistentDepTracker(e.logger)
 	pool := NewWorkerPool(e.execCfg, tracker, e.baseline, e.logger, watchResultBuf)
 	pool.Start(ctx, e.transferWorkers)
@@ -684,10 +701,8 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 	}
 }
 
-// drainWorkerResults reads from the worker result channel and feeds
-// successes/failures into the failure tracker for B-123 suppression.
-// Also feeds per-cycle failure counts into the cycleFailures map
-// for delta token commit decisions.
+// drainWorkerResults reads from the worker result channel and persists
+// failures to remote_state for durable retry tracking.
 func (e *Engine) drainWorkerResults(ctx context.Context, results <-chan WorkerResult) {
 	for {
 		select {
@@ -696,21 +711,14 @@ func (e *Engine) drainWorkerResults(ctx context.Context, results <-chan WorkerRe
 				return
 			}
 
-			if e.failures == nil {
-				continue
-			}
-
-			if r.Success {
-				e.failures.recordSuccess(r.Path)
-			} else {
-				e.failures.recordFailure(r.Path, r.ErrMsg)
-			}
-
-			// Track per-cycle failures for delta token commit decision.
 			if !r.Success {
-				e.cycleFailuresMu.Lock()
-				e.cycleFailures[r.CycleID]++
-				e.cycleFailuresMu.Unlock()
+				// Persist failure to remote_state for durable retry tracking.
+				if recErr := e.baseline.RecordFailure(ctx, r.Path, r.ErrMsg, r.HTTPStatus); recErr != nil {
+					e.logger.Warn("failed to record failure in remote_state",
+						slog.String("path", r.Path),
+						slog.String("error", recErr.Error()),
+					)
+				}
 			}
 
 		case <-ctx.Done():
@@ -753,6 +761,7 @@ func (e *Engine) startObservers(
 	// Remote observer (skip for upload-only mode).
 	if mode != SyncUploadOnly {
 		remoteObs := NewRemoteObserver(e.fetcher, bl, e.driveID, e.logger)
+		remoteObs.obsWriter = e.baseline
 		e.remoteObs = remoteObs
 
 		savedToken, tokenErr := e.baseline.GetDeltaToken(ctx, e.driveID.String(), "")
@@ -864,7 +873,7 @@ func (e *Engine) runPeriodicFullScan(
 // continues. In-flight actions for overlapping paths are canceled and
 // replaced (B-122 deduplication).
 func (e *Engine) processBatch(
-	ctx context.Context, batch []PathChanges, bl *Baseline,
+	_ context.Context, batch []PathChanges, bl *Baseline,
 	mode SyncMode, safety *SafetyConfig, tracker *DepTracker,
 ) {
 	e.logger.Info("processing watch batch",
@@ -904,28 +913,6 @@ func (e *Engine) processBatch(
 		}
 	}
 
-	// B-123: Build set of suppressed indices for paths that fail repeatedly.
-	suppressed := make(map[int]bool)
-
-	if e.failures != nil {
-		for i := range plan.Actions {
-			if e.failures.shouldSkip(plan.Actions[i].Path) {
-				e.logger.Warn("skipping repeatedly-failing path",
-					slog.String("path", plan.Actions[i].Path),
-				)
-
-				suppressed[i] = true
-			}
-		}
-	}
-
-	if len(suppressed) == len(plan.Actions) {
-		e.logger.Debug("all actions suppressed due to repeated failures")
-		// Early return before cycleFailures init and watchCycleCompletion spawn.
-		// No actions dispatched → no results to drain → no cycle to complete.
-		return
-	}
-
 	// Invariant: Planner always builds Deps with len(Actions).
 	// Log-only on violation: processBatch has no SyncReport to populate (unlike
 	// executePlan), and the Error log is the correct signal for this impossible
@@ -939,100 +926,22 @@ func (e *Engine) processBatch(
 		return
 	}
 
-	// Generate a cycle ID for per-cycle failure tracking and delta token
-	// commit decisions. Moved from planner (which no longer owns cycle identity)
-	// to the engine (which consumes it for watch-mode orchestration).
-	cycleID := uuid.New().String()
-
-	// Initialize per-cycle failure counter.
-	e.cycleFailuresMu.Lock()
-	e.cycleFailures[cycleID] = 0
-	e.cycleFailuresMu.Unlock()
-
-	// Populate tracker with non-suppressed actions using sequential IDs.
+	// Populate tracker with actions. Failure suppression is handled by
+	// next_retry_at in remote_state (reconciler reads this in 5.7.2).
 	for i := range plan.Actions {
-		if suppressed[i] {
-			continue
-		}
-
 		id := int64(i)
 
 		var depIDs []int64
 		for _, depIdx := range plan.Deps[i] {
-			if suppressed[depIdx] {
-				continue // suppressed dep won't be tracked; skip to avoid phantom dependency
-			}
-
 			depIDs = append(depIDs, int64(depIdx))
 		}
 
-		tracker.Add(&plan.Actions[i], id, depIDs, cycleID)
+		tracker.Add(&plan.Actions[i], id, depIDs, "")
 	}
-
-	// Spawn cycle completion watcher (B-121: per-cycle delta token tracking).
-	go e.watchCycleCompletion(ctx, tracker, cycleID)
 
 	e.logger.Info("watch batch dispatched",
-		slog.Int("actions", len(plan.Actions)-len(suppressed)),
-		slog.String("cycle_id", cycleID),
+		slog.Int("actions", len(plan.Actions)),
 	)
-}
-
-// watchCycleCompletion waits for all actions in a cycle to complete, then
-// commits the delta token if no failures occurred. This ensures the token
-// is only advanced for fully-successful cycles (B-121).
-func (e *Engine) watchCycleCompletion(ctx context.Context, tracker *DepTracker, cycleID string) {
-	select {
-	case <-tracker.CycleDone(cycleID):
-	case <-ctx.Done():
-		return
-	}
-
-	// Check in-memory failure count for this cycle.
-	e.cycleFailuresMu.Lock()
-	failed := e.cycleFailures[cycleID]
-	delete(e.cycleFailures, cycleID)
-	e.cycleFailuresMu.Unlock()
-
-	if failed > 0 {
-		e.logger.Warn("skipping delta token commit for cycle with failures",
-			slog.String("cycle_id", cycleID),
-			slog.Int("failed", failed),
-		)
-
-		tracker.CleanupCycle(cycleID)
-
-		return
-	}
-
-	// Commit the delta token for this successful cycle.
-	// Read the latest delta token, not the one from batch arrival time.
-	// This is safe because delta tokens are monotonically advancing —
-	// a later token always subsumes earlier ones. Using the latest token
-	// avoids re-processing changes that arrived while this cycle executed.
-	if e.remoteObs != nil {
-		token := e.remoteObs.CurrentDeltaToken()
-		if commitErr := e.baseline.CommitDeltaToken(ctx, token, e.driveID.String(), "", e.driveID.String()); commitErr != nil {
-			e.logger.Error("failed to commit delta token for watch cycle",
-				slog.String("cycle_id", cycleID),
-				slog.String("error", commitErr.Error()),
-			)
-		}
-	}
-
-	// Log and reset dropped local events for this cycle. ResetDroppedEvents
-	// atomically reads and zeros the counter, preventing double-counting
-	// across cycles (B-190).
-	if e.localObs != nil {
-		if dropped := e.localObs.ResetDroppedEvents(); dropped > 0 {
-			e.logger.Warn("local observer dropped events due to channel backpressure",
-				slog.String("cycle_id", cycleID),
-				slog.Int64("dropped_this_cycle", dropped),
-			)
-		}
-	}
-
-	tracker.CleanupCycle(cycleID)
 }
 
 // resolvePollInterval returns the configured poll interval or the default.

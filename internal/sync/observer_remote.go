@@ -54,6 +54,7 @@ type RemoteObserver struct {
 	driveID   driveid.ID
 	logger    *slog.Logger
 	sleepFunc func(ctx context.Context, d time.Duration) error
+	obsWriter ObservationWriter // nil-safe: when set, observations are committed atomically with delta token
 
 	// mu protects deltaToken for concurrent reads via CurrentDeltaToken().
 	mu         stdsync.Mutex
@@ -181,6 +182,21 @@ func (o *RemoteObserver) Watch(ctx context.Context, savedToken string, events ch
 			}
 
 			continue
+		}
+
+		// Commit observations atomically with delta token before sending
+		// events to the channel. This ensures remote state is durable even
+		// if the engine crashes before processing the events.
+		if o.obsWriter != nil {
+			observed := changeEventsToObservedItems(polledEvents)
+			if commitErr := o.obsWriter.CommitObservation(ctx, observed, newToken, o.driveID); commitErr != nil {
+				o.logger.Error("failed to commit observations in watch",
+					slog.String("error", commitErr.Error()),
+					slog.Int("events", len(polledEvents)),
+				)
+				// Retry on next poll — token replay is idempotent.
+				continue
+			}
 		}
 
 		// Successful poll — send events, advance token, reset backoff.
@@ -384,6 +400,25 @@ func (o *RemoteObserver) classifyItem(item *graph.Item, inflight map[driveid.Ite
 		)
 
 		return nil
+	}
+
+	// B-307: Filtering symmetry — apply the same exclusion rules as the
+	// local observer. Deleted items bypass filtering so pre-B-307 synced
+	// excluded files get their delete events propagated for cleanup.
+	if !item.IsDeleted && item.Name != "" {
+		if isAlwaysExcluded(item.Name) {
+			o.logger.Debug("skipping always-excluded remote item",
+				slog.String("name", item.Name), slog.String("item_id", item.ID))
+
+			return nil
+		}
+
+		if !isValidOneDriveName(item.Name) {
+			o.logger.Debug("skipping invalid OneDrive name in remote delta",
+				slog.String("name", item.Name), slog.String("item_id", item.ID))
+
+			return nil
+		}
 	}
 
 	return o.classifyAndConvert(item, inflight, itemDriveID)

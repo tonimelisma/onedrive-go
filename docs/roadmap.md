@@ -784,6 +784,27 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 Net: 6 new files, 12 modified. 33 new tests. Coverage: 86.6% sync package.
 
+##### 5.7.1: Remote State Observation Layer + Filtering Symmetry — **DONE**
+
+**5.7.1a** (filtering symmetry — B-307, B-308):
+1. Remote observer filtering symmetry: added `isAlwaysExcluded()` + `isValidOneDriveName()` checks in `classifyItem()` — remote items now filtered symmetrically with local observer (B-307)
+2. Narrowed `.db` exclusion: removed `.db`/`.db-wal`/`.db-shm` from `alwaysExcludedSuffixes` — legitimate data files no longer silently excluded (B-308)
+
+**5.7.1b** (SyncStore observation + failure layer):
+1. `CommitObservation()`: atomically persists `[]ObservedItem` + delta token in a single transaction
+2. `RecordFailure()`: durable failure tracking in `remote_state` with exponential backoff (`next_retry` scheduling)
+3. `CommitOutcome` extension: updates `remote_state` on action completion (download/upload/delete)
+4. `ChangeEvent`-to-`ObservedItem` converter for bridging observer output to SyncStore input
+
+**5.7.1c** (query layer + engine wiring):
+1. `StateReader`: `ListUnreconciled()`, `ListFailedForRetry()`
+2. `StateAdmin`: `ResetFailure()`, `ResetAllFailures()`, `ResetInProgressStates()`
+3. Engine wiring — `RunOnce`: crash recovery via `ResetInProgressStates()` + `observeAndCommitRemote()` pipeline
+4. Engine wiring — `RunWatch`: `obsWriter` + `RecordFailure` integration
+5. Removed legacy cycle tracking (`failureTracker`, `cycleFailures`, `watchCycleCompletion`)
+
+New file: `commit_observation_test.go`. Deleted files: `failure_tracker.go`, `failure_tracker_test.go`. Modified: `scanner.go`, `observer_remote.go`, `baseline.go`, `engine.go`, `worker.go` + their tests.
+
 ---
 
 ## Phase 6: Multi-Drive Orchestration + Shared Content Sync
