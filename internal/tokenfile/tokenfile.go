@@ -23,10 +23,13 @@ const FilePerms = 0o600
 // DirPerms is used when creating the tokens directory.
 const DirPerms = 0o700
 
-// RequiredMetaKeys lists metadata keys that must be present and non-empty
-// in a complete token file. Written during login (auth.go:202-207).
+// requiredMetaKeys returns the metadata keys that must be present and non-empty
+// in a complete token file. Returns a fresh copy each call so callers cannot
+// corrupt the canonical list. Written during login (auth.go:202-207).
 // org_name is intentionally excluded — it is empty for personal accounts.
-var RequiredMetaKeys = []string{"drive_id", "user_id", "display_name", "cached_at"}
+func requiredMetaKeys() []string {
+	return []string{"drive_id", "user_id", "display_name", "cached_at"}
+}
 
 // File is the on-disk format for token files. Includes the OAuth token and
 // optional metadata (org name, display name) cached from API responses.
@@ -93,7 +96,7 @@ func ReadMeta(path string) (map[string]string, error) {
 func ValidateMeta(meta map[string]string) error {
 	var missing []string
 
-	for _, key := range RequiredMetaKeys {
+	for _, key := range requiredMetaKeys() {
 		if meta[key] == "" {
 			missing = append(missing, key)
 		}

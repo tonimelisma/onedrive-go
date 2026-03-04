@@ -1718,3 +1718,77 @@ func TestExecutor_Upload_MtimePassedToUploader(t *testing.T) {
 	// Verify the outcome also records the mtime.
 	assert.Equal(t, targetMtime.UnixNano(), o.Mtime)
 }
+
+// ---------------------------------------------------------------------------
+// Path containment guard tests (B-312)
+// ---------------------------------------------------------------------------
+
+func TestContainedPath_ValidPaths(t *testing.T) {
+	t.Parallel()
+
+	root := "/sync/root"
+
+	tests := []struct {
+		name    string
+		relPath string
+		want    string
+	}{
+		{"simple file", "file.txt", "/sync/root/file.txt"},
+		{"nested path", "dir/subdir/file.txt", "/sync/root/dir/subdir/file.txt"},
+		{"deep nesting", "a/b/c/d/e.txt", "/sync/root/a/b/c/d/e.txt"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := containedPath(root, tt.relPath)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestContainedPath_TraversalAttempts(t *testing.T) {
+	t.Parallel()
+
+	root := "/sync/root"
+
+	tests := []struct {
+		name    string
+		relPath string
+	}{
+		{"parent traversal", "../escape.txt"},
+		{"deep traversal", "../../etc/passwd"},
+		{"mid-path traversal", "subdir/../../escape.txt"},
+		{"absolute path", "/etc/passwd"},
+		{"empty path", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := containedPath(root, tt.relPath)
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrPathEscapesSyncRoot)
+		})
+	}
+}
+
+func TestCreateLocalFolder_TraversalBlocked(t *testing.T) {
+	t.Parallel()
+
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	e := NewExecution(cfg, emptyBaseline())
+
+	action := &Action{
+		Type:       ActionFolderCreate,
+		Path:       "../escape",
+		CreateSide: CreateLocal,
+	}
+
+	o := e.executeFolderCreate(t.Context(), action)
+	requireOutcomeFailure(t, o)
+	assert.ErrorIs(t, o.Error, ErrPathEscapesSyncRoot)
+}

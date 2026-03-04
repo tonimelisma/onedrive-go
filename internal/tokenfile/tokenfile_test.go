@@ -188,9 +188,25 @@ func TestValidateMeta_NilMeta(t *testing.T) {
 	err := ValidateMeta(nil)
 	require.Error(t, err)
 	// All required keys are missing.
-	for _, key := range RequiredMetaKeys {
+	for _, key := range requiredMetaKeys() {
 		assert.Contains(t, err.Error(), key)
 	}
+}
+
+// TestRequiredMetaKeys_ReturnsIndependentCopy verifies that each call returns
+// an independent copy so callers cannot corrupt the canonical list (B-321).
+func TestRequiredMetaKeys_ReturnsIndependentCopy(t *testing.T) {
+	t.Parallel()
+
+	first := requiredMetaKeys()
+	second := requiredMetaKeys()
+
+	// Mutate the first copy.
+	first[0] = "CORRUPTED"
+
+	// Second copy must be unaffected.
+	assert.NotEqual(t, "CORRUPTED", second[0], "requiredMetaKeys must return independent copies")
+	assert.Equal(t, "drive_id", second[0])
 }
 
 func TestValidateMeta_EmptyValues(t *testing.T) {
@@ -213,7 +229,7 @@ func TestValidateMeta_EmptyValues(t *testing.T) {
 func TestValidateMeta_OrgNameNotRequired(t *testing.T) {
 	t.Parallel()
 
-	// org_name is intentionally excluded from RequiredMetaKeys
+	// org_name is intentionally excluded from requiredMetaKeys()
 	// because personal accounts have empty org_name.
 	meta := completeMeta()
 	delete(meta, "org_name")

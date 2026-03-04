@@ -849,6 +849,50 @@ func TestDoPreAuthRetry_ContextCancelDuringHTTPBackoff(t *testing.T) {
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
+func TestDo_ErrorBodyCappedAt64KiB(t *testing.T) {
+	// Verify that error response bodies are capped at maxErrBodySize (64 KiB)
+	// to prevent OOM from malicious/buggy servers (B-314).
+	bigBody := strings.Repeat("X", 128*1024) // 128 KiB — twice the cap
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(bigBody))
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+
+	_, err := client.Do(t.Context(), http.MethodGet, "/big-error", nil)
+	require.Error(t, err)
+
+	var ge *GraphError
+	require.ErrorAs(t, err, &ge)
+	assert.LessOrEqual(t, len(ge.Message), maxErrBodySize, "error body should be capped at 64 KiB")
+	assert.Equal(t, maxErrBodySize, len(ge.Message), "error body should be exactly 64 KiB (truncated)")
+}
+
+func TestDoPreAuthRetry_ErrorBodyCappedAt64KiB(t *testing.T) {
+	// Same test but for the pre-auth retry path (B-314).
+	bigBody := strings.Repeat("Y", 128*1024)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(bigBody))
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, "http://unused")
+
+	_, err := client.doPreAuthRetry(t.Context(), "big error", func() (*http.Request, error) {
+		return http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/big", http.NoBody)
+	})
+	require.Error(t, err)
+
+	var ge *GraphError
+	require.ErrorAs(t, err, &ge)
+	assert.LessOrEqual(t, len(ge.Message), maxErrBodySize)
+}
+
 func TestDoPreAuthRetry_ContextCancelDuringNetworkBackoff(t *testing.T) {
 	// Verify that context cancellation during the backoff sleep after a network
 	// error is detected and returned.

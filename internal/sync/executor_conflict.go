@@ -21,7 +21,10 @@ func (e *Executor) executeConflict(ctx context.Context, action *Action) Outcome 
 		return e.executeEditDeleteConflict(ctx, action)
 	}
 
-	absPath := filepath.Join(e.syncRoot, action.Path)
+	absPath, err := containedPath(e.syncRoot, action.Path)
+	if err != nil {
+		return e.failedOutcome(action, ActionConflict, err)
+	}
 
 	// Step 1: Rename local to conflict copy (if it exists).
 	conflictPath := conflictCopyPath(absPath, e.nowFunc())

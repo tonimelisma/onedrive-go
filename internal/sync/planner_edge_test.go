@@ -745,3 +745,80 @@ func TestPlan_BigDeleteBlocked(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrBigDeleteTriggered)
 }
+
+// ---------------------------------------------------------------------------
+// §6: DAG Cycle Detection
+// ---------------------------------------------------------------------------
+
+func TestDetectCycle_NoCycle(t *testing.T) {
+	t.Parallel()
+
+	// Linear chain: 0 → 1 → 2.
+	deps := [][]int{
+		{},  // 0 depends on nothing
+		{0}, // 1 depends on 0
+		{1}, // 2 depends on 1
+	}
+
+	err := detectDependencyCycle(deps)
+	assert.NoError(t, err)
+}
+
+func TestDetectCycle_SelfLoop(t *testing.T) {
+	t.Parallel()
+
+	// Node 1 depends on itself.
+	deps := [][]int{
+		{},  // 0
+		{1}, // 1 → 1
+		{},  // 2
+	}
+
+	err := detectDependencyCycle(deps)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrDependencyCycle)
+}
+
+func TestDetectCycle_MutualDependency(t *testing.T) {
+	t.Parallel()
+
+	// 0 → 1 → 0.
+	deps := [][]int{
+		{1}, // 0 depends on 1
+		{0}, // 1 depends on 0
+	}
+
+	err := detectDependencyCycle(deps)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrDependencyCycle)
+}
+
+func TestDetectCycle_IndirectCycle(t *testing.T) {
+	t.Parallel()
+
+	// 0 → 1 → 2 → 0.
+	deps := [][]int{
+		{2}, // 0 depends on 2
+		{0}, // 1 depends on 0
+		{1}, // 2 depends on 1
+	}
+
+	err := detectDependencyCycle(deps)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrDependencyCycle)
+}
+
+func TestDetectCycle_DiamondNoCycle(t *testing.T) {
+	t.Parallel()
+
+	// Diamond: 0 → 1, 0 → 2, 1 → 3, 2 → 3.
+	deps := [][]int{
+		{1, 2}, // 0 depends on 1 and 2
+		{3},    // 1 depends on 3
+		{3},    // 2 depends on 3
+		{},     // 3 depends on nothing
+	}
+
+	err := detectDependencyCycle(deps)
+	assert.NoError(t, err)
+}

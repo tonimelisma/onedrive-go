@@ -687,7 +687,7 @@ func TestUploadChunk_ReaderAtEnablesRetrySafe(t *testing.T) {
 		data[i] = byte(i % 256)
 	}
 
-	session := &UploadSession{UploadURL: srv.URL + "/upload"}
+	session := &UploadSession{UploadURL: UploadURL(srv.URL + "/upload")}
 	chunk := bytes.NewReader(data)
 
 	item, err := client.UploadChunk(t.Context(), session, chunk, 0, 1024, 1024)
@@ -708,7 +708,7 @@ func TestUploadChunk_416_ClassifiedAsRangeError(t *testing.T) {
 
 	client := newTestClient(t, "http://unused")
 
-	session := &UploadSession{UploadURL: srv.URL + "/upload"}
+	session := &UploadSession{UploadURL: UploadURL(srv.URL + "/upload")}
 	chunk := bytes.NewReader(make([]byte, 1024))
 
 	_, err := client.UploadChunk(t.Context(), session, chunk, 0, 1024, 2048)
@@ -740,7 +740,7 @@ func TestQueryUploadSession_ReturnsNextExpectedRanges(t *testing.T) {
 	srvURL.Store(srv.URL)
 
 	client := newTestClient(t, "http://unused")
-	session := &UploadSession{UploadURL: srv.URL + "/upload"}
+	session := &UploadSession{UploadURL: UploadURL(srv.URL + "/upload")}
 
 	status, err := client.QueryUploadSession(t.Context(), session)
 	require.NoError(t, err)
