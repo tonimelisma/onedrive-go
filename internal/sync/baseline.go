@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"path"
 	"time"
 
@@ -80,6 +81,33 @@ const (
 	sqlResolveConflict = `UPDATE conflicts
 		SET resolution = ?, resolved_at = ?, resolved_by = 'user'
 		WHERE id = ? AND resolution = 'unresolved'`
+)
+
+// SQL statements for remote_state operations.
+const (
+	sqlGetRemoteStateRow = `SELECT drive_id, item_id, path, parent_id, item_type,
+		hash, size, mtime, etag, previous_path, sync_status, observed_at,
+		failure_count, next_retry_at, last_error, http_status
+		FROM remote_state WHERE drive_id = ? AND item_id = ?`
+
+	sqlInsertRemoteState = `INSERT INTO remote_state
+		(drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
+		 sync_status, observed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+	sqlUpdateRemoteState = `UPDATE remote_state SET
+		path = ?, parent_id = ?, item_type = ?, hash = ?, size = ?, mtime = ?, etag = ?,
+		previous_path = ?, sync_status = ?, observed_at = ?,
+		failure_count = ?, next_retry_at = ?
+		WHERE drive_id = ? AND item_id = ?`
+)
+
+// Compile-time interface satisfaction checks.
+var (
+	_ ObservationWriter = (*SyncStore)(nil)
+	_ FailureRecorder   = (*SyncStore)(nil)
+	_ StateReader       = (*SyncStore)(nil)
+	_ StateAdmin        = (*SyncStore)(nil)
 )
 
 // SyncStore is the sole writer to the sync database. It loads the
@@ -270,18 +298,25 @@ func (m *SyncStore) CommitOutcome(ctx context.Context, outcome *Outcome) error {
 
 // applySingleOutcome dispatches a single outcome to the appropriate DB helper.
 func applySingleOutcome(ctx context.Context, tx *sql.Tx, o *Outcome, syncedAt int64) error {
+	var err error
+
 	switch o.Action {
 	case ActionDownload, ActionUpload, ActionFolderCreate, ActionUpdateSynced:
-		return commitUpsert(ctx, tx, o, syncedAt)
+		err = commitUpsert(ctx, tx, o, syncedAt)
 	case ActionLocalDelete, ActionRemoteDelete, ActionCleanup:
-		return commitDelete(ctx, tx, o.Path)
+		err = commitDelete(ctx, tx, o.Path)
 	case ActionLocalMove, ActionRemoteMove:
-		return commitMove(ctx, tx, o, syncedAt)
+		err = commitMove(ctx, tx, o, syncedAt)
 	case ActionConflict:
-		return commitConflict(ctx, tx, o, syncedAt)
-	default:
-		return nil
+		err = commitConflict(ctx, tx, o, syncedAt)
 	}
+
+	if err != nil {
+		return err
+	}
+
+	// Update remote_state in the same transaction.
+	return updateRemoteStateOnOutcome(ctx, tx, o)
 }
 
 // updateBaselineCache applies a single outcome to the in-memory baseline,
@@ -452,6 +487,56 @@ func commitConflict(ctx context.Context, tx *sql.Tx, o *Outcome, syncedAt int64)
 	if o.ResolvedBy == "" && o.ConflictType == ConflictEditDelete {
 		if delErr := commitDelete(ctx, tx, o.Path); delErr != nil {
 			return delErr
+		}
+	}
+
+	return nil
+}
+
+// updateRemoteStateOnOutcome updates remote_state based on a completed action
+// outcome, called from within the same transaction as the baseline update.
+// Silently skips if no matching remote_state row exists (e.g., upload-only mode).
+func updateRemoteStateOnOutcome(ctx context.Context, tx *sql.Tx, o *Outcome) error {
+	if o.ItemID == "" || o.DriveID.IsZero() {
+		return nil
+	}
+
+	switch o.Action { //nolint:exhaustive // only action types that touch remote_state
+	case ActionDownload:
+		// Hash guard: only transition if the remote_state hash matches the
+		// downloaded hash. Prevents stale overwrite when a new observation
+		// arrived while the download was in progress.
+		_, err := tx.ExecContext(ctx,
+			`UPDATE remote_state SET sync_status = ?
+			WHERE drive_id = ? AND item_id = ? AND sync_status = ? AND hash IS ?`,
+			statusSynced,
+			o.DriveID.String(), o.ItemID, statusDownloading, nullString(o.RemoteHash),
+		)
+		if err != nil {
+			return fmt.Errorf("sync: updating remote_state for download %s: %w", o.Path, err)
+		}
+
+	case ActionLocalDelete:
+		_, err := tx.ExecContext(ctx,
+			`UPDATE remote_state SET sync_status = ?
+			WHERE drive_id = ? AND item_id = ? AND sync_status = ?`,
+			statusDeleted,
+			o.DriveID.String(), o.ItemID, statusDeleting,
+		)
+		if err != nil {
+			return fmt.Errorf("sync: updating remote_state for local delete %s: %w", o.Path, err)
+		}
+
+	case ActionUpload, ActionFolderCreate:
+		// Unconditional: upload resolves any state.
+		_, err := tx.ExecContext(ctx,
+			`UPDATE remote_state SET sync_status = ?, hash = ?, size = ?, mtime = ?
+			WHERE drive_id = ? AND item_id = ?`,
+			statusSynced, nullString(o.RemoteHash), nullInt64(o.Size), nullInt64(o.Mtime),
+			o.DriveID.String(), o.ItemID,
+		)
+		if err != nil {
+			return fmt.Errorf("sync: updating remote_state for upload %s: %w", o.Path, err)
 		}
 	}
 
@@ -784,6 +869,442 @@ func (m *SyncStore) Close() error {
 	}
 
 	return m.db.Close()
+}
+
+// CommitObservation atomically persists observed remote state and advances the
+// delta token in a single transaction. Called by the remote observer after each
+// successful delta poll.
+//
+// For each ObservedItem:
+//   - New item (no existing row): INSERT with pending_download (skip if deleted)
+//   - Existing item: call computeNewStatus() and UPDATE only if changed
+//   - Hash change: reset failure_count and next_retry_at
+//   - Path change: set previous_path for move tracking
+func (m *SyncStore) CommitObservation(ctx context.Context, events []ObservedItem, newToken string, driveID driveid.ID) error {
+	tx, err := m.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("sync: beginning observation transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	now := m.nowFunc().UnixNano()
+
+	for i := range events {
+		if err := m.processObservedItem(ctx, tx, &events[i], now); err != nil {
+			return err
+		}
+	}
+
+	// Persist delta token in the same transaction.
+	if newToken != "" {
+		if err := m.saveDeltaToken(ctx, tx, driveID.String(), "", driveID.String(), newToken, now); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sync: committing observation transaction: %w", err)
+	}
+
+	m.logger.Debug("observations committed",
+		slog.Int("items", len(events)),
+		slog.String("drive_id", driveID.String()),
+	)
+
+	return nil
+}
+
+// processObservedItem handles a single item within the CommitObservation transaction.
+func (m *SyncStore) processObservedItem(ctx context.Context, tx *sql.Tx, item *ObservedItem, now int64) error {
+	existing := m.scanRemoteStateRow(ctx, tx, item.DriveID.String(), item.ItemID)
+
+	if existing == nil {
+		// No existing row — skip deleted items we've never seen.
+		if item.IsDeleted {
+			return nil
+		}
+
+		return m.insertRemoteState(ctx, tx, item, now)
+	}
+
+	// Existing row — compute new status.
+	newStatus, changed := computeNewStatus(existing.SyncStatus, existing.Hash, item.Hash, item.IsDeleted)
+
+	// Track path changes for move detection.
+	pathChanged := item.Path != "" && item.Path != existing.Path
+
+	// Update if status changed OR path changed (moves with same hash).
+	if !changed && !pathChanged {
+		return nil
+	}
+
+	if !changed {
+		newStatus = existing.SyncStatus
+	}
+
+	var previousPath string
+	if pathChanged {
+		previousPath = existing.Path
+	}
+
+	return m.updateRemoteStateFromObs(ctx, tx, item, newStatus, previousPath, now)
+}
+
+// scanRemoteStateRow reads a single remote_state row within a transaction.
+// Returns nil if no row exists.
+func (m *SyncStore) scanRemoteStateRow(ctx context.Context, tx *sql.Tx, driveID, itemID string) *RemoteStateRow {
+	var (
+		row        RemoteStateRow
+		parentID   sql.NullString
+		hash       sql.NullString
+		size       sql.NullInt64
+		mtime      sql.NullInt64
+		etag       sql.NullString
+		prevPath   sql.NullString
+		nextRetry  sql.NullInt64
+		lastError  sql.NullString
+		httpStatus sql.NullInt64
+	)
+
+	err := tx.QueryRowContext(ctx, sqlGetRemoteStateRow, driveID, itemID).Scan(
+		&row.DriveID, &row.ItemID, &row.Path, &parentID, &row.ItemType,
+		&hash, &size, &mtime, &etag,
+		&prevPath, &row.SyncStatus, &row.ObservedAt, &row.FailureCount,
+		&nextRetry, &lastError, &httpStatus,
+	)
+	if err != nil {
+		return nil
+	}
+
+	row.ParentID = parentID.String
+	row.Hash = hash.String
+	row.ETag = etag.String
+	row.PreviousPath = prevPath.String
+	row.LastError = lastError.String
+
+	if size.Valid {
+		row.Size = size.Int64
+	}
+
+	if mtime.Valid {
+		row.Mtime = mtime.Int64
+	}
+
+	if nextRetry.Valid {
+		row.NextRetryAt = nextRetry.Int64
+	}
+
+	if httpStatus.Valid {
+		row.HTTPStatus = int(httpStatus.Int64)
+	}
+
+	return &row
+}
+
+// insertRemoteState inserts a new remote_state row for a newly observed item.
+func (m *SyncStore) insertRemoteState(ctx context.Context, tx *sql.Tx, item *ObservedItem, now int64) error {
+	_, err := tx.ExecContext(ctx, sqlInsertRemoteState,
+		item.DriveID.String(), item.ItemID, item.Path,
+		nullString(item.ParentID), item.ItemType,
+		nullString(item.Hash), nullInt64(item.Size), nullInt64(item.Mtime),
+		nullString(item.ETag),
+		statusPendingDownload, now,
+	)
+	if err != nil {
+		return fmt.Errorf("sync: inserting remote_state for %s: %w", item.Path, err)
+	}
+
+	return nil
+}
+
+// updateRemoteStateFromObs updates an existing remote_state row with observation data.
+func (m *SyncStore) updateRemoteStateFromObs(
+	ctx context.Context, tx *sql.Tx, item *ObservedItem,
+	newStatus, previousPath string, now int64,
+) error {
+	_, err := tx.ExecContext(ctx, sqlUpdateRemoteState,
+		item.Path, nullString(item.ParentID), item.ItemType,
+		nullString(item.Hash), nullInt64(item.Size), nullInt64(item.Mtime),
+		nullString(item.ETag),
+		nullString(previousPath), newStatus, now,
+		0, nil, // reset failure_count and next_retry_at on observation update
+		item.DriveID.String(), item.ItemID,
+	)
+	if err != nil {
+		return fmt.Errorf("sync: updating remote_state for %s: %w", item.Path, err)
+	}
+
+	return nil
+}
+
+// RecordFailure records a failure for a remote_state row, transitioning it
+// from downloading→download_failed or deleting→delete_failed. Uses optimistic
+// concurrency: if the row has already transitioned (e.g., a new observation
+// arrived), the update is a no-op.
+func (m *SyncStore) RecordFailure(ctx context.Context, path, errMsg string, httpStatus int) error {
+	now := m.nowFunc()
+
+	// Read current failure count for backoff calculation.
+	var currentFailures int
+
+	err := m.db.QueryRowContext(ctx,
+		`SELECT failure_count FROM remote_state WHERE path = ? AND sync_status IN (?, ?)`,
+		path, statusDownloading, statusDeleting,
+	).Scan(&currentFailures)
+	if err != nil {
+		// Row doesn't match (already transitioned) — no-op.
+		return nil
+	}
+
+	newCount := currentFailures + 1
+	nextRetry := computeNextRetry(now, currentFailures)
+
+	// Transition downloading→download_failed or deleting→delete_failed.
+	result, err := m.db.ExecContext(ctx,
+		`UPDATE remote_state SET
+			sync_status = CASE sync_status
+				WHEN ? THEN ?
+				WHEN ? THEN ?
+			END,
+			failure_count = ?,
+			next_retry_at = ?,
+			last_error = ?,
+			http_status = ?
+		WHERE path = ? AND sync_status IN (?, ?)`,
+		statusDownloading, statusDownloadFailed,
+		statusDeleting, statusDeleteFailed,
+		newCount, nextRetry.UnixNano(),
+		errMsg, httpStatus,
+		path, statusDownloading, statusDeleting,
+	)
+	if err != nil {
+		return fmt.Errorf("sync: recording failure for %s: %w", path, err)
+	}
+
+	affected, rowErr := result.RowsAffected()
+	if rowErr != nil {
+		return fmt.Errorf("sync: checking rows affected for %s: %w", path, rowErr)
+	}
+
+	if affected == 0 {
+		m.logger.Debug("RecordFailure: row already transitioned",
+			slog.String("path", path),
+		)
+	}
+
+	return nil
+}
+
+// Backoff constants for failure retry scheduling.
+const (
+	baseBackoffSeconds = 30
+	maxBackoffSeconds  = 3600 // 1 hour
+	jitterPercent      = 25
+	jitterDivisor      = 100
+)
+
+// computeNextRetry calculates the next retry time with exponential backoff
+// and jitter. Base: 30s * 2^failureCount, capped at 1 hour, ~25% jitter.
+func computeNextRetry(now time.Time, failureCount int) time.Time {
+	delaySec := min(baseBackoffSeconds*(1<<failureCount), maxBackoffSeconds)
+
+	// Add ~25% jitter.
+	jitter := delaySec * jitterPercent / jitterDivisor
+	if jitter > 0 {
+		delaySec += int(rand.Int64N(int64(jitter))) //nolint:gosec // jitter doesn't need crypto-grade randomness
+	}
+
+	return now.Add(time.Duration(delaySec) * time.Second)
+}
+
+// ---------------------------------------------------------------------------
+// StateReader methods
+// ---------------------------------------------------------------------------
+
+// ListUnreconciled returns remote_state rows that need action (not synced,
+// filtered, or deleted).
+func (m *SyncStore) ListUnreconciled(ctx context.Context) ([]RemoteStateRow, error) {
+	return m.queryRemoteStateRows(ctx,
+		`SELECT drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
+			previous_path, sync_status, observed_at, failure_count, next_retry_at, last_error, http_status
+		FROM remote_state WHERE sync_status NOT IN (?, ?, ?)`,
+		statusSynced, statusFiltered, statusDeleted,
+	)
+}
+
+// ListFailedForRetry returns rows eligible for retry: pending or failed states
+// where next_retry_at is NULL or in the past.
+func (m *SyncStore) ListFailedForRetry(ctx context.Context, now time.Time) ([]RemoteStateRow, error) {
+	return m.queryRemoteStateRows(ctx,
+		`SELECT drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
+			previous_path, sync_status, observed_at, failure_count, next_retry_at, last_error, http_status
+		FROM remote_state
+		WHERE sync_status IN (?, ?, ?, ?)
+			AND (next_retry_at IS NULL OR next_retry_at <= ?)`,
+		statusPendingDownload, statusDownloadFailed, statusPendingDelete, statusDeleteFailed,
+		now.UnixNano(),
+	)
+}
+
+// FailureCount returns the number of failed remote_state rows.
+func (m *SyncStore) FailureCount(ctx context.Context) (int, error) {
+	var count int
+
+	err := m.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM remote_state WHERE sync_status IN (?, ?)`,
+		statusDownloadFailed, statusDeleteFailed,
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("sync: counting failed remote_state: %w", err)
+	}
+
+	return count, nil
+}
+
+// queryRemoteStateRows is a shared helper for scanning multiple remote_state rows.
+func (m *SyncStore) queryRemoteStateRows(ctx context.Context, query string, args ...any) ([]RemoteStateRow, error) {
+	rows, err := m.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("sync: querying remote_state: %w", err)
+	}
+	defer rows.Close()
+
+	var result []RemoteStateRow
+
+	for rows.Next() {
+		var (
+			row        RemoteStateRow
+			parentID   sql.NullString
+			hash       sql.NullString
+			size       sql.NullInt64
+			mtime      sql.NullInt64
+			etag       sql.NullString
+			prevPath   sql.NullString
+			nextRetry  sql.NullInt64
+			lastError  sql.NullString
+			httpStatus sql.NullInt64
+		)
+
+		if err := rows.Scan(
+			&row.DriveID, &row.ItemID, &row.Path, &parentID, &row.ItemType,
+			&hash, &size, &mtime, &etag,
+			&prevPath, &row.SyncStatus, &row.ObservedAt, &row.FailureCount,
+			&nextRetry, &lastError, &httpStatus,
+		); err != nil {
+			return nil, fmt.Errorf("sync: scanning remote_state row: %w", err)
+		}
+
+		row.ParentID = parentID.String
+		row.Hash = hash.String
+		row.ETag = etag.String
+		row.PreviousPath = prevPath.String
+		row.LastError = lastError.String
+
+		if size.Valid {
+			row.Size = size.Int64
+		}
+
+		if mtime.Valid {
+			row.Mtime = mtime.Int64
+		}
+
+		if nextRetry.Valid {
+			row.NextRetryAt = nextRetry.Int64
+		}
+
+		if httpStatus.Valid {
+			row.HTTPStatus = int(httpStatus.Int64)
+		}
+
+		result = append(result, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sync: iterating remote_state rows: %w", err)
+	}
+
+	return result, nil
+}
+
+// ---------------------------------------------------------------------------
+// StateAdmin methods
+// ---------------------------------------------------------------------------
+
+// ResetFailure resets a single failed path to pending_download, clearing
+// failure metadata.
+func (m *SyncStore) ResetFailure(ctx context.Context, path string) error {
+	_, err := m.db.ExecContext(ctx,
+		`UPDATE remote_state SET
+			sync_status = ?,
+			failure_count = 0,
+			next_retry_at = NULL,
+			last_error = NULL,
+			http_status = NULL
+		WHERE path = ? AND sync_status IN (?, ?)`,
+		statusPendingDownload,
+		path, statusDownloadFailed, statusDeleteFailed,
+	)
+	if err != nil {
+		return fmt.Errorf("sync: resetting failure for %s: %w", path, err)
+	}
+
+	return nil
+}
+
+// ResetAllFailures resets all failed rows: download_failed→pending_download,
+// delete_failed→pending_delete.
+func (m *SyncStore) ResetAllFailures(ctx context.Context) error {
+	_, err := m.db.ExecContext(ctx,
+		`UPDATE remote_state SET
+			sync_status = ?,
+			failure_count = 0,
+			next_retry_at = NULL,
+			last_error = NULL,
+			http_status = NULL
+		WHERE sync_status = ?`,
+		statusPendingDownload, statusDownloadFailed,
+	)
+	if err != nil {
+		return fmt.Errorf("sync: resetting download failures: %w", err)
+	}
+
+	_, err = m.db.ExecContext(ctx,
+		`UPDATE remote_state SET
+			sync_status = ?,
+			failure_count = 0,
+			next_retry_at = NULL,
+			last_error = NULL,
+			http_status = NULL
+		WHERE sync_status = ?`,
+		statusPendingDelete, statusDeleteFailed,
+	)
+	if err != nil {
+		return fmt.Errorf("sync: resetting delete failures: %w", err)
+	}
+
+	return nil
+}
+
+// ResetInProgressStates is crash recovery: downloading→pending_download,
+// deleting→pending_delete. Called at engine startup.
+func (m *SyncStore) ResetInProgressStates(ctx context.Context) error {
+	_, err := m.db.ExecContext(ctx,
+		`UPDATE remote_state SET sync_status = ? WHERE sync_status = ?`,
+		statusPendingDownload, statusDownloading,
+	)
+	if err != nil {
+		return fmt.Errorf("sync: resetting downloading states: %w", err)
+	}
+
+	_, err = m.db.ExecContext(ctx,
+		`UPDATE remote_state SET sync_status = ? WHERE sync_status = ?`,
+		statusPendingDelete, statusDeleting,
+	)
+	if err != nil {
+		return fmt.Errorf("sync: resetting deleting states: %w", err)
+	}
+
+	return nil
 }
 
 // WriteSyncMetadata persists sync metadata after a completed RunOnce cycle.

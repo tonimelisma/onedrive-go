@@ -736,11 +736,11 @@ func TestRunOnce_EmptyPlan_NoPanic(t *testing.T) {
 	assert.Equal(t, 0, report.Failed, "failed")
 }
 
-// TestRunOnce_DeltaTokenNotCommittedOnFailure verifies that when some actions
-// fail, the delta token is NOT advanced. This ensures the items that failed
-// are re-observed on the next sync cycle. Regression test for: unconditional
-// CommitDeltaToken after pool.Wait() (spec violation per §13.1).
-func TestRunOnce_DeltaTokenNotCommittedOnFailure(t *testing.T) {
+// TestRunOnce_DeltaTokenCommittedWithObservations verifies that the delta token
+// is committed atomically with observations in CommitObservation, even when
+// subsequent actions fail. Failed items are tracked in remote_state for retry
+// rather than relying on delta token rollback.
+func TestRunOnce_DeltaTokenCommittedWithObservations(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -753,7 +753,7 @@ func TestRunOnce_DeltaTokenNotCommittedOnFailure(t *testing.T) {
 					ID: "f1", Name: "will-fail.txt", ParentID: "root",
 					DriveID: driveID, Size: 10, QuickXorHash: "hash1",
 				},
-			}, "should-not-be-saved"), nil
+			}, "new-token-after-observation"), nil
 		},
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
 			return 0, fmt.Errorf("simulated network error")
@@ -763,18 +763,64 @@ func TestRunOnce_DeltaTokenNotCommittedOnFailure(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	// Seed a known delta token so we can verify it's preserved.
+	// Seed a known delta token.
 	seedBaseline(t, eng.baseline, ctx, nil, "old-token")
 
 	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOpts{})
 	require.NoError(t, err, "RunOnce")
-	require.GreaterOrEqual(t, report.Failed, 1, "failed")
+	require.GreaterOrEqual(t, report.Failed, 1, "should have failures")
 
-	// The delta token should NOT have been advanced — it should still be
-	// the old value we seeded.
+	// Delta token IS advanced — committed atomically with observations.
+	// Failed items are tracked in remote_state, not by rolling back the token.
 	token, tokenErr := eng.baseline.GetDeltaToken(ctx, engineTestDriveID, "")
 	require.NoError(t, tokenErr, "GetDeltaToken")
-	assert.Equal(t, "old-token", token, "should not advance on failure")
+	assert.Equal(t, "new-token-after-observation", token,
+		"delta token should advance with observations even when actions fail")
+}
+
+// TestRunOnce_CrashRecovery_ResetsInProgressStates verifies that RunOnce
+// resets downloading/deleting states to their pending equivalents at startup,
+// ensuring crash recovery picks up interrupted work.
+func TestRunOnce_CrashRecovery_ResetsInProgressStates(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	// Simulate a crash by inserting rows with in-progress states directly.
+	now := time.Now().Unix()
+	_, err := eng.baseline.DB().ExecContext(ctx, `
+		INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		VALUES (?, 'item-dl', '/downloading.txt', 'file', 'downloading', ?),
+		       (?, 'item-del', '/deleting.txt', 'file', 'deleting', ?)`,
+		engineTestDriveID, now, engineTestDriveID, now)
+	require.NoError(t, err, "seed in-progress rows")
+
+	// RunOnce should reset these at startup.
+	_, runErr := eng.RunOnce(ctx, SyncBidirectional, RunOpts{})
+	require.NoError(t, runErr, "RunOnce")
+
+	// Verify the states were reset.
+	var dlStatus, delStatus string
+	err = eng.baseline.DB().QueryRowContext(ctx,
+		`SELECT sync_status FROM remote_state WHERE item_id = 'item-dl'`).Scan(&dlStatus)
+	require.NoError(t, err)
+	assert.Equal(t, "pending_download", dlStatus, "downloading should be reset")
+
+	err = eng.baseline.DB().QueryRowContext(ctx,
+		`SELECT sync_status FROM remote_state WHERE item_id = 'item-del'`).Scan(&delStatus)
+	require.NoError(t, err)
+	assert.Equal(t, "pending_delete", delStatus, "deleting should be reset")
 }
 
 func TestResolveSafetyConfig_Default(t *testing.T) {
@@ -1238,128 +1284,6 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 	eng.processBatch(ctx, batch, bl, SyncBidirectional, safety, tracker)
 }
 
-// TestRunWatch_WatchCycleCompletion_CommitsDeltaToken verifies that
-// watchCycleCompletion commits the delta token for a fully-successful cycle.
-func TestRunWatch_WatchCycleCompletion_CommitsDeltaToken(t *testing.T) {
-	t.Parallel()
-
-	driveID := driveid.New(engineTestDriveID)
-
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
-				{ID: "root", IsRoot: true, DriveID: driveID},
-			}, "token-1"), nil
-		},
-	}
-
-	eng, _ := newTestEngine(t, mock)
-	ctx := t.Context()
-
-	bl, err := eng.baseline.Load(ctx)
-	require.NoError(t, err, "Load")
-
-	// Set up a remote observer and manually set its delta token.
-	obs := NewRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
-	obs.setDeltaToken("watch-token-v1")
-	eng.remoteObs = obs
-
-	token := obs.CurrentDeltaToken()
-
-	// Create a tracker with a cycle that completes immediately.
-	tracker := NewPersistentDepTracker(testLogger(t))
-	cycleID := "test-cycle-commit"
-
-	action := &Action{
-		Type:    ActionLocalDelete,
-		Path:    "dummy.txt",
-		DriveID: driveID,
-		View:    &PathView{},
-	}
-
-	tracker.Add(action, 0, nil, cycleID)
-
-	// No in-memory failures recorded — cycle is successful.
-	eng.cycleFailuresMu.Lock()
-	eng.cycleFailures[cycleID] = 0
-	eng.cycleFailuresMu.Unlock()
-
-	// Complete the action to trigger CycleDone.
-	tracker.Complete(0)
-
-	// Now call watchCycleCompletion — it should commit the delta token.
-	eng.watchCycleCompletion(ctx, tracker, cycleID)
-
-	// Verify the delta token was committed.
-	savedToken, tokenErr := eng.baseline.GetDeltaToken(ctx, engineTestDriveID, "")
-	require.NoError(t, tokenErr, "GetDeltaToken")
-	assert.Equal(t, token, savedToken)
-}
-
-// TestRunWatch_WatchCycleCompletion_SkipsOnFailure verifies that
-// watchCycleCompletion does NOT commit the delta token when the cycle
-// has failed actions.
-func TestRunWatch_WatchCycleCompletion_SkipsOnFailure(t *testing.T) {
-	t.Parallel()
-
-	driveID := driveid.New(engineTestDriveID)
-
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
-				{ID: "root", IsRoot: true, DriveID: driveID},
-			}, "token-1"), nil
-		},
-	}
-
-	eng, _ := newTestEngine(t, mock)
-	ctx := t.Context()
-
-	// Seed a known delta token.
-	seedBaseline(t, eng.baseline, ctx, nil, "old-token")
-
-	// Set up a remote observer.
-	bl, err := eng.baseline.Load(ctx)
-	require.NoError(t, err, "Load")
-
-	obs := NewRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
-	eng.remoteObs = obs
-
-	// Call FullDelta to set a new token.
-	_, _, deltaErr := obs.FullDelta(ctx, "")
-	require.NoError(t, deltaErr, "FullDelta")
-
-	// Create a tracker with a cycle.
-	tracker := NewPersistentDepTracker(testLogger(t))
-	cycleID := "test-cycle-fail"
-
-	action := &Action{
-		Type:    ActionDownload,
-		Path:    "will-fail.txt",
-		DriveID: driveID,
-		ItemID:  "fail-item",
-		View:    &PathView{},
-	}
-
-	tracker.Add(action, 0, nil, cycleID)
-
-	// Record a failure in the in-memory cycle tracker.
-	eng.cycleFailuresMu.Lock()
-	eng.cycleFailures[cycleID] = 1
-	eng.cycleFailuresMu.Unlock()
-
-	// Complete in the tracker to trigger CycleDone.
-	tracker.Complete(0)
-
-	// watchCycleCompletion should detect the in-memory failure count.
-	eng.watchCycleCompletion(ctx, tracker, cycleID)
-
-	// Delta token should NOT have been advanced.
-	savedToken, tokenErr := eng.baseline.GetDeltaToken(ctx, engineTestDriveID, "")
-	require.NoError(t, tokenErr, "GetDeltaToken")
-	assert.Equal(t, "old-token", savedToken, "should not advance on failure")
-}
-
 // TestRunWatch_Deduplication verifies that processBatch cancels in-flight
 // actions for paths that appear in a new batch (B-122).
 func TestRunWatch_Deduplication(t *testing.T) {
@@ -1793,7 +1717,7 @@ func TestExecutePlan_ActionsDepsLengthMismatch(t *testing.T) {
 	report := &SyncReport{}
 
 	// Should return cleanly without panic.
-	eng.executePlan(t.Context(), plan, "", report)
+	eng.executePlan(t.Context(), plan, report)
 
 	// Invariant violation should surface in the report.
 	assert.Equal(t, len(plan.Actions), report.Failed)
@@ -1851,4 +1775,69 @@ func TestEngine_Close_NilsObserversAndCleansStale(t *testing.T) {
 	assert.NotPanics(t, func() {
 		_ = eng.Close()
 	}, "second Close must not panic")
+}
+
+// ---------------------------------------------------------------------------
+// changeEventsToObservedItems converter tests
+// ---------------------------------------------------------------------------
+
+func TestChangeEventsToObservedItems_RemoteOnly(t *testing.T) {
+	t.Parallel()
+
+	events := []ChangeEvent{
+		{Source: SourceRemote, ItemID: "r1", Path: "remote.txt", DriveID: driveid.New(testDriveID)},
+		{Source: SourceLocal, Path: "local.txt"},
+		{Source: SourceRemote, ItemID: "r2", Path: "remote2.txt", DriveID: driveid.New(testDriveID)},
+	}
+
+	items := changeEventsToObservedItems(events)
+	assert.Len(t, items, 2, "should only include remote events")
+	assert.Equal(t, "r1", items[0].ItemID)
+	assert.Equal(t, "r2", items[1].ItemID)
+}
+
+func TestChangeEventsToObservedItems_MapsAllFields(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(testDriveID)
+	events := []ChangeEvent{
+		{
+			Source:    SourceRemote,
+			ItemID:    "item1",
+			ParentID:  "parent1",
+			DriveID:   driveID,
+			Path:      "docs/file.txt",
+			ItemType:  ItemTypeFile,
+			Hash:      "qxh1",
+			Size:      1024,
+			Mtime:     123456789,
+			ETag:      "etag1",
+			IsDeleted: false,
+		},
+		{
+			Source:    SourceRemote,
+			ItemID:    "item2",
+			DriveID:   driveID,
+			Path:      "docs/folder",
+			ItemType:  ItemTypeFolder,
+			IsDeleted: true,
+		},
+	}
+
+	items := changeEventsToObservedItems(events)
+	require.Len(t, items, 2)
+
+	assert.Equal(t, driveID, items[0].DriveID)
+	assert.Equal(t, "item1", items[0].ItemID)
+	assert.Equal(t, "parent1", items[0].ParentID)
+	assert.Equal(t, "docs/file.txt", items[0].Path)
+	assert.Equal(t, "file", items[0].ItemType)
+	assert.Equal(t, "qxh1", items[0].Hash)
+	assert.Equal(t, int64(1024), items[0].Size)
+	assert.Equal(t, int64(123456789), items[0].Mtime)
+	assert.Equal(t, "etag1", items[0].ETag)
+	assert.False(t, items[0].IsDeleted)
+
+	assert.Equal(t, "folder", items[1].ItemType)
+	assert.True(t, items[1].IsDeleted)
 }

@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	stdsync "sync"
 	"sync/atomic"
+
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 var errUnknownActionType = errors.New("sync: unknown action type in worker dispatch")
@@ -45,14 +47,14 @@ type WorkerPool struct {
 }
 
 // WorkerResult reports the outcome of a single action execution. The engine
-// reads these from the Results channel for failure suppression and delta
-// token commit decisions.
+// reads these from the Results channel for failure recording in remote_state.
 type WorkerResult struct {
-	ID      int64
-	CycleID string
-	Path    string
-	Success bool
-	ErrMsg  string
+	ID         int64
+	CycleID    string
+	Path       string
+	Success    bool
+	ErrMsg     string
+	HTTPStatus int // from graph.GraphError, 0 if not a Graph API error
 }
 
 // NewWorkerPool creates a pool without starting any workers. planSize
@@ -161,8 +163,9 @@ func (wp *WorkerPool) safeExecuteAction(ctx context.Context, ta *TrackedAction) 
 				slog.String("path", ta.Action.Path),
 				slog.Any("panic", r),
 			)
-			wp.recordFailure(fmt.Errorf("panic: %v", r))
-			wp.sendResult(ctx, ta, false, fmt.Sprintf("panic: %v", r))
+			panicErr := fmt.Errorf("panic: %v", r)
+			wp.recordFailure(panicErr)
+			wp.sendResult(ctx, ta, false, panicErr.Error(), panicErr)
 			wp.tracker.Complete(ta.ID)
 		}
 	}()
@@ -185,7 +188,7 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 			slog.String("error", loadErr.Error()),
 		)
 		wp.recordFailure(loadErr)
-		wp.sendResult(ctx, ta, false, loadErr.Error())
+		wp.sendResult(ctx, ta, false, loadErr.Error(), loadErr)
 		wp.tracker.Complete(ta.ID)
 
 		return
@@ -204,7 +207,7 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 			slog.String("error", commitErr.Error()),
 		)
 		wp.recordFailure(commitErr)
-		wp.sendResult(ctx, ta, false, commitErr.Error())
+		wp.sendResult(ctx, ta, false, commitErr.Error(), commitErr)
 		wp.tracker.Complete(ta.ID)
 
 		return
@@ -212,10 +215,10 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 
 	if outcome.Success {
 		wp.succeeded.Add(1)
-		wp.sendResult(ctx, ta, true, "")
+		wp.sendResult(ctx, ta, true, "", nil)
 	} else {
 		wp.recordFailure(outcome.Error)
-		wp.sendResult(ctx, ta, false, outcome.Error.Error())
+		wp.sendResult(ctx, ta, false, outcome.Error.Error(), outcome.Error)
 	}
 
 	// Signal completion to dispatch dependents.
@@ -305,17 +308,33 @@ func (wp *WorkerPool) DroppedErrors() int64 {
 // shutdown), the WorkerResult is silently dropped. This is benign: callers
 // always call recordFailure() before sendResult, so the failed counter and
 // diagnostic error list remain accurate regardless (B-206).
-func (wp *WorkerPool) sendResult(ctx context.Context, ta *TrackedAction, success bool, errMsg string) {
+func (wp *WorkerPool) sendResult(ctx context.Context, ta *TrackedAction, success bool, errMsg string, actionErr error) {
 	r := WorkerResult{
-		ID:      ta.ID,
-		CycleID: ta.CycleID,
-		Path:    ta.Action.Path,
-		Success: success,
-		ErrMsg:  errMsg,
+		ID:         ta.ID,
+		CycleID:    ta.CycleID,
+		Path:       ta.Action.Path,
+		Success:    success,
+		ErrMsg:     errMsg,
+		HTTPStatus: extractHTTPStatus(actionErr),
 	}
 
 	select {
 	case wp.results <- r:
 	case <-ctx.Done():
 	}
+}
+
+// extractHTTPStatus unwraps a graph.GraphError from err and returns its
+// StatusCode. Returns 0 if err is nil or not a GraphError.
+func extractHTTPStatus(err error) int {
+	if err == nil {
+		return 0
+	}
+
+	var ge *graph.GraphError
+	if errors.As(err, &ge) {
+		return ge.StatusCode
+	}
+
+	return 0
 }
