@@ -10,6 +10,8 @@ import (
 	stdsync "sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 )
@@ -341,7 +343,8 @@ func (e *Engine) executePlan(
 			depIDs = append(depIDs, int64(depIdx))
 		}
 
-		tracker.Add(&plan.Actions[i], id, depIDs, plan.CycleID)
+		// One-shot mode: no per-cycle tracking needed (empty cycleID).
+		tracker.Add(&plan.Actions[i], id, depIDs, "")
 	}
 
 	pool := NewWorkerPool(e.execCfg, tracker, e.baseline, e.logger, len(plan.Actions))
@@ -936,9 +939,14 @@ func (e *Engine) processBatch(
 		return
 	}
 
+	// Generate a cycle ID for per-cycle failure tracking and delta token
+	// commit decisions. Moved from planner (which no longer owns cycle identity)
+	// to the engine (which consumes it for watch-mode orchestration).
+	cycleID := uuid.New().String()
+
 	// Initialize per-cycle failure counter.
 	e.cycleFailuresMu.Lock()
-	e.cycleFailures[plan.CycleID] = 0
+	e.cycleFailures[cycleID] = 0
 	e.cycleFailuresMu.Unlock()
 
 	// Populate tracker with non-suppressed actions using sequential IDs.
@@ -958,15 +966,15 @@ func (e *Engine) processBatch(
 			depIDs = append(depIDs, int64(depIdx))
 		}
 
-		tracker.Add(&plan.Actions[i], id, depIDs, plan.CycleID)
+		tracker.Add(&plan.Actions[i], id, depIDs, cycleID)
 	}
 
 	// Spawn cycle completion watcher (B-121: per-cycle delta token tracking).
-	go e.watchCycleCompletion(ctx, tracker, plan.CycleID)
+	go e.watchCycleCompletion(ctx, tracker, cycleID)
 
 	e.logger.Info("watch batch dispatched",
 		slog.Int("actions", len(plan.Actions)-len(suppressed)),
-		slog.String("cycle_id", plan.CycleID),
+		slog.String("cycle_id", cycleID),
 	)
 }
 

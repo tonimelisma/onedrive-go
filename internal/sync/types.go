@@ -448,7 +448,6 @@ type Action struct {
 type ActionPlan struct {
 	Actions []Action // flat list of all actions
 	Deps    [][]int  // Deps[i] = indices that action i depends on
-	CycleID string   // UUID grouping actions from one planning pass
 }
 
 // Outcome is the result of executing a single action. Self-contained —

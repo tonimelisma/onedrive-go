@@ -1787,8 +1787,7 @@ func TestExecutePlan_ActionsDepsLengthMismatch(t *testing.T) {
 			{Type: ActionDownload, Path: "file.txt"},
 			{Type: ActionDownload, Path: "file2.txt"},
 		},
-		Deps:    [][]int{{1}}, // only 1 dep entry for 2 actions
-		CycleID: "test-cycle",
+		Deps: [][]int{{1}}, // only 1 dep entry for 2 actions
 	}
 
 	report := &SyncReport{}
