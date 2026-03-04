@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"path"
 	"time"
 
@@ -101,8 +102,11 @@ const (
 		WHERE drive_id = ? AND item_id = ?`
 )
 
-// Compile-time interface satisfaction check.
-var _ ObservationWriter = (*SyncStore)(nil)
+// Compile-time interface satisfaction checks.
+var (
+	_ ObservationWriter = (*SyncStore)(nil)
+	_ FailureRecorder   = (*SyncStore)(nil)
+)
 
 // SyncStore is the sole writer to the sync database. It loads the
 // baseline at cycle start and commits outcomes at cycle end.
@@ -986,6 +990,84 @@ func (m *SyncStore) updateRemoteStateFromObs(
 	}
 
 	return nil
+}
+
+// RecordFailure records a failure for a remote_state row, transitioning it
+// from downloading→download_failed or deleting→delete_failed. Uses optimistic
+// concurrency: if the row has already transitioned (e.g., a new observation
+// arrived), the update is a no-op.
+func (m *SyncStore) RecordFailure(ctx context.Context, path, errMsg string, httpStatus int) error {
+	now := m.nowFunc()
+
+	// Read current failure count for backoff calculation.
+	var currentFailures int
+
+	err := m.db.QueryRowContext(ctx,
+		`SELECT failure_count FROM remote_state WHERE path = ? AND sync_status IN (?, ?)`,
+		path, statusDownloading, statusDeleting,
+	).Scan(&currentFailures)
+	if err != nil {
+		// Row doesn't match (already transitioned) — no-op.
+		return nil
+	}
+
+	newCount := currentFailures + 1
+	nextRetry := computeNextRetry(now, currentFailures)
+
+	// Transition downloading→download_failed or deleting→delete_failed.
+	result, err := m.db.ExecContext(ctx,
+		`UPDATE remote_state SET
+			sync_status = CASE sync_status
+				WHEN ? THEN ?
+				WHEN ? THEN ?
+			END,
+			failure_count = ?,
+			next_retry_at = ?,
+			last_error = ?,
+			http_status = ?
+		WHERE path = ? AND sync_status IN (?, ?)`,
+		statusDownloading, statusDownloadFailed,
+		statusDeleting, statusDeleteFailed,
+		newCount, nextRetry.UnixNano(),
+		errMsg, httpStatus,
+		path, statusDownloading, statusDeleting,
+	)
+	if err != nil {
+		return fmt.Errorf("sync: recording failure for %s: %w", path, err)
+	}
+
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		m.logger.Debug("RecordFailure: row already transitioned",
+			slog.String("path", path),
+		)
+	}
+
+	return nil
+}
+
+// Backoff constants for failure retry scheduling.
+const (
+	baseBackoffSeconds = 30
+	maxBackoffSeconds  = 3600 // 1 hour
+	jitterPercent      = 25
+)
+
+// computeNextRetry calculates the next retry time with exponential backoff
+// and jitter. Base: 30s * 2^failureCount, capped at 1 hour, ~25% jitter.
+func computeNextRetry(now time.Time, failureCount int) time.Time {
+	delaySec := baseBackoffSeconds * (1 << failureCount)
+	if delaySec > maxBackoffSeconds {
+		delaySec = maxBackoffSeconds
+	}
+
+	// Add ~25% jitter.
+	jitter := delaySec * jitterPercent / 100
+	if jitter > 0 {
+		delaySec += int(rand.Int64N(int64(jitter)))
+	}
+
+	return now.Add(time.Duration(delaySec) * time.Second)
 }
 
 // WriteSyncMetadata persists sync metadata after a completed RunOnce cycle.

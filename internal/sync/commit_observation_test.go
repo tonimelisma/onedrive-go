@@ -369,3 +369,131 @@ func TestCommitObservation_AllMatrixCells(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// RecordFailure tests
+// ---------------------------------------------------------------------------
+
+func TestRecordFailure_TransitionsDownloading(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	mgr.nowFunc = func() time.Time { return time.Unix(1000, 0) }
+	ctx := context.Background()
+
+	// Insert a downloading item.
+	_, err := mgr.DB().ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		VALUES (?, ?, ?, 'file', 'downloading', ?)`,
+		testDriveID, "item1", "hello.txt", 999,
+	)
+	require.NoError(t, err)
+
+	err = mgr.RecordFailure(ctx, "hello.txt", "connection reset", 500)
+	require.NoError(t, err)
+
+	row := readRemoteStateRow(t, mgr.DB(), testDriveID, "item1")
+	require.NotNil(t, row)
+	assert.Equal(t, statusDownloadFailed, row.SyncStatus)
+	assert.Equal(t, 1, row.FailureCount)
+	assert.Equal(t, "connection reset", row.LastError)
+	assert.Equal(t, 500, row.HTTPStatus)
+	assert.Greater(t, row.NextRetryAt, int64(0), "should have next_retry_at set")
+}
+
+func TestRecordFailure_OptimisticConcurrency_NoMatch(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	mgr.nowFunc = func() time.Time { return time.Unix(1000, 0) }
+	ctx := context.Background()
+
+	// Insert a synced item (not downloading/deleting).
+	_, err := mgr.DB().ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		VALUES (?, ?, ?, 'file', 'synced', ?)`,
+		testDriveID, "item1", "hello.txt", 999,
+	)
+	require.NoError(t, err)
+
+	// RecordFailure should be a no-op (row not in downloading/deleting).
+	err = mgr.RecordFailure(ctx, "hello.txt", "some error", 500)
+	require.NoError(t, err)
+
+	// Status should remain synced.
+	row := readRemoteStateRow(t, mgr.DB(), testDriveID, "item1")
+	require.NotNil(t, row)
+	assert.Equal(t, statusSynced, row.SyncStatus)
+}
+
+func TestRecordFailure_IncreasesFailureCount(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	callCount := 0
+	mgr.nowFunc = func() time.Time {
+		callCount++
+		return time.Unix(int64(1000+callCount*100), 0)
+	}
+	ctx := context.Background()
+
+	// Insert a downloading item.
+	_, err := mgr.DB().ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at, failure_count)
+		VALUES (?, ?, ?, 'file', 'downloading', ?, 0)`,
+		testDriveID, "item1", "hello.txt", 999,
+	)
+	require.NoError(t, err)
+
+	// First failure.
+	err = mgr.RecordFailure(ctx, "hello.txt", "err1", 500)
+	require.NoError(t, err)
+
+	row := readRemoteStateRow(t, mgr.DB(), testDriveID, "item1")
+	require.NotNil(t, row)
+	assert.Equal(t, 1, row.FailureCount)
+
+	// Set status back to downloading for second failure.
+	_, err = mgr.DB().ExecContext(ctx,
+		`UPDATE remote_state SET sync_status = 'downloading' WHERE item_id = ?`, "item1")
+	require.NoError(t, err)
+
+	// Second failure.
+	err = mgr.RecordFailure(ctx, "hello.txt", "err2", 503)
+	require.NoError(t, err)
+
+	row = readRemoteStateRow(t, mgr.DB(), testDriveID, "item1")
+	require.NotNil(t, row)
+	assert.Equal(t, 2, row.FailureCount)
+}
+
+func TestRecordFailure_BackoffCalculation(t *testing.T) {
+	t.Parallel()
+
+	now := time.Unix(1000, 0)
+
+	tests := []struct {
+		name         string
+		failureCount int
+		wantMinSec   int64 // minimum seconds from now
+		wantMaxSec   int64 // maximum seconds from now
+	}{
+		{"first failure", 0, 20, 45},     // 30s base ± jitter
+		{"second failure", 1, 45, 90},    // 60s ± jitter
+		{"third failure", 2, 90, 180},    // 120s ± jitter
+		{"capped", 10, 2700, 4500},       // should not exceed 3600
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			retry := computeNextRetry(now, tt.failureCount)
+			diffSec := retry.Unix() - now.Unix()
+			assert.GreaterOrEqual(t, diffSec, tt.wantMinSec,
+				"retry should be at least %ds from now", tt.wantMinSec)
+			assert.LessOrEqual(t, diffSec, tt.wantMaxSec,
+				"retry should be at most %ds from now", tt.wantMaxSec)
+		})
+	}
+}
