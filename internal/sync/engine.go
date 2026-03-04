@@ -460,6 +460,33 @@ func (e *Engine) observeChanges(
 	return buf.FlushImmediate(), deltaToken, nil
 }
 
+// changeEventsToObservedItems converts remote ChangeEvents into ObservedItems
+// for CommitObservation. Filters out local-source events.
+func changeEventsToObservedItems(events []ChangeEvent) []ObservedItem {
+	var items []ObservedItem
+
+	for i := range events {
+		if events[i].Source != SourceRemote {
+			continue
+		}
+
+		items = append(items, ObservedItem{
+			DriveID:   events[i].DriveID,
+			ItemID:    events[i].ItemID,
+			ParentID:  events[i].ParentID,
+			Path:      events[i].Path,
+			ItemType:  events[i].ItemType.String(),
+			Hash:      events[i].Hash,
+			Size:      events[i].Size,
+			Mtime:     events[i].Mtime,
+			ETag:      events[i].ETag,
+			IsDeleted: events[i].IsDeleted,
+		})
+	}
+
+	return items
+}
+
 // resolveSafetyConfig returns the appropriate SafetyConfig based on RunOpts.
 // When Force is true, thresholds are set to max values (effectively disabled).
 func (e *Engine) resolveSafetyConfig(opts RunOpts) *SafetyConfig {

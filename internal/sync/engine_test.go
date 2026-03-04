@@ -1852,3 +1852,68 @@ func TestEngine_Close_NilsObserversAndCleansStale(t *testing.T) {
 		_ = eng.Close()
 	}, "second Close must not panic")
 }
+
+// ---------------------------------------------------------------------------
+// changeEventsToObservedItems converter tests
+// ---------------------------------------------------------------------------
+
+func TestChangeEventsToObservedItems_RemoteOnly(t *testing.T) {
+	t.Parallel()
+
+	events := []ChangeEvent{
+		{Source: SourceRemote, ItemID: "r1", Path: "remote.txt", DriveID: driveid.New(testDriveID)},
+		{Source: SourceLocal, Path: "local.txt"},
+		{Source: SourceRemote, ItemID: "r2", Path: "remote2.txt", DriveID: driveid.New(testDriveID)},
+	}
+
+	items := changeEventsToObservedItems(events)
+	assert.Len(t, items, 2, "should only include remote events")
+	assert.Equal(t, "r1", items[0].ItemID)
+	assert.Equal(t, "r2", items[1].ItemID)
+}
+
+func TestChangeEventsToObservedItems_MapsAllFields(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(testDriveID)
+	events := []ChangeEvent{
+		{
+			Source:    SourceRemote,
+			ItemID:    "item1",
+			ParentID:  "parent1",
+			DriveID:   driveID,
+			Path:      "docs/file.txt",
+			ItemType:  ItemTypeFile,
+			Hash:      "qxh1",
+			Size:      1024,
+			Mtime:     123456789,
+			ETag:      "etag1",
+			IsDeleted: false,
+		},
+		{
+			Source:    SourceRemote,
+			ItemID:    "item2",
+			DriveID:   driveID,
+			Path:      "docs/folder",
+			ItemType:  ItemTypeFolder,
+			IsDeleted: true,
+		},
+	}
+
+	items := changeEventsToObservedItems(events)
+	require.Len(t, items, 2)
+
+	assert.Equal(t, driveID, items[0].DriveID)
+	assert.Equal(t, "item1", items[0].ItemID)
+	assert.Equal(t, "parent1", items[0].ParentID)
+	assert.Equal(t, "docs/file.txt", items[0].Path)
+	assert.Equal(t, "file", items[0].ItemType)
+	assert.Equal(t, "qxh1", items[0].Hash)
+	assert.Equal(t, int64(1024), items[0].Size)
+	assert.Equal(t, int64(123456789), items[0].Mtime)
+	assert.Equal(t, "etag1", items[0].ETag)
+	assert.False(t, items[0].IsDeleted)
+
+	assert.Equal(t, "folder", items[1].ItemType)
+	assert.True(t, items[1].IsDeleted)
+}
