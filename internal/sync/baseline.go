@@ -1377,7 +1377,7 @@ func (m *SyncStore) EscalateToConflict(ctx context.Context, driveID driveid.ID, 
 	if err != nil {
 		return fmt.Errorf("sync: beginning escalation transaction: %w", err)
 	}
-	defer tx.Rollback() //nolint:errcheck // rollback after commit is benign
+	defer tx.Rollback()
 
 	conflictID := uuid.New().String()
 	detectedAt := m.nowFunc().UnixNano()

@@ -87,6 +87,10 @@ type Engine struct {
 	transferWorkers int                    // goroutine count for the worker pool
 	checkWorkers    int                    // goroutine limit for parallel file hashing
 
+	// reconciler retries failed items with exponential backoff in watch mode.
+	// nil in one-shot mode.
+	reconciler *Reconciler
+
 	// localWatcherFactory overrides the default fsnotify watcher factory
 	// for the local observer. Tests inject a mock factory to simulate
 	// inotify watch limit exhaustion (ENOSPC).
@@ -667,6 +671,11 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 	buf := NewBuffer(e.logger)
 	ready := buf.FlushDebounced(ctx, e.resolveDebounce(opts))
 
+	// Step 4b: Start reconciler for automatic retry of failed items.
+	// Created after buf so it can re-inject synthesized events.
+	e.reconciler = NewReconciler(e.baseline, e.baseline, buf, tracker, e.logger)
+	go e.reconciler.Run(ctx)
+
 	// Step 5: Start observer goroutines.
 	errs, activeObservers := e.startObservers(ctx, bl, mode, buf, opts)
 
@@ -722,6 +731,12 @@ func (e *Engine) drainWorkerResults(ctx context.Context, results <-chan WorkerRe
 						slog.String("error", recErr.Error()),
 					)
 				}
+			}
+
+			// Kick reconciler after every result (success or failure) so it
+			// can re-evaluate retry timers and dispatch newly retriable items.
+			if e.reconciler != nil {
+				e.reconciler.Kick()
 			}
 
 		case <-ctx.Done():
