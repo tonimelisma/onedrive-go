@@ -634,9 +634,12 @@ func TestWatch_HashFailureStillEmitsCreate(t *testing.T) {
 	}()
 
 	// Let the watcher settle, then create an unreadable file.
+	// The file must be born unreadable — if we create then chmod, the observer
+	// can hash the file between creation and chmod, producing a valid hash
+	// instead of the expected empty hash (B-310).
 	time.Sleep(100 * time.Millisecond)
-	path := writeTestFile(t, dir, "unreadable.txt", "secret")
-	require.NoError(t, os.Chmod(path, 0o000))
+	path := filepath.Join(dir, "unreadable.txt")
+	require.NoError(t, os.WriteFile(path, []byte("secret"), 0o000))
 
 	t.Cleanup(func() {
 		// Restore permissions so TempDir cleanup works.

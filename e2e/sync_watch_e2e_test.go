@@ -3,11 +3,11 @@
 package e2e
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -15,6 +15,33 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// syncBuffer is a thread-safe bytes.Buffer for capturing subprocess output.
+// os/exec writes to cmd.Stdout/Stderr from a goroutine; reading the buffer
+// (e.g., in waitForDaemonReady) from the test goroutine is a data race
+// without synchronization.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf []byte
+}
+
+// Write implements io.Writer for use as cmd.Stdout/Stderr.
+func (sb *syncBuffer) Write(p []byte) (int, error) {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+
+	sb.buf = append(sb.buf, p...)
+
+	return len(p), nil
+}
+
+// String returns the accumulated output.
+func (sb *syncBuffer) String() string {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+
+	return string(sb.buf)
+}
 
 // ---------------------------------------------------------------------------
 // Daemon mode E2E tests (slow — run only with -tags=e2e,e2e_full)
@@ -42,7 +69,7 @@ func TestE2E_SyncWatch_BasicRoundTrip(t *testing.T) {
 	}
 	cmd := makeCmd(daemonArgs, env)
 
-	var stdout, stderr bytes.Buffer
+	var stdout, stderr syncBuffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
@@ -114,7 +141,7 @@ func TestE2E_SyncWatch_PauseResume(t *testing.T) {
 	}
 	cmd := makeCmd(daemonArgs, env)
 
-	var stdout, stderr bytes.Buffer
+	var stdout, stderr syncBuffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
@@ -223,7 +250,7 @@ func TestE2E_SyncWatch_SIGHUPReload(t *testing.T) {
 	}
 	cmd := makeCmd(daemonArgs, env)
 
-	var stdout, stderr bytes.Buffer
+	var stdout, stderr syncBuffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
@@ -314,7 +341,7 @@ func pollForDrive2File(
 }
 
 // waitForStderrContains polls stderr until it contains the target string.
-func waitForStderrContains(t *testing.T, stderr *bytes.Buffer, target string, timeout time.Duration) {
+func waitForStderrContains(t *testing.T, stderr *syncBuffer, target string, timeout time.Duration) {
 	t.Helper()
 
 	deadline := time.Now().Add(timeout)
@@ -337,7 +364,7 @@ func waitForStderrContains(t *testing.T, stderr *bytes.Buffer, target string, ti
 
 // waitForDaemonReady polls the daemon's stderr output until it contains
 // evidence that watch mode has initialized, or times out.
-func waitForDaemonReady(t *testing.T, stderr *bytes.Buffer, timeout time.Duration) {
+func waitForDaemonReady(t *testing.T, stderr *syncBuffer, timeout time.Duration) {
 	t.Helper()
 
 	deadline := time.Now().Add(timeout)
