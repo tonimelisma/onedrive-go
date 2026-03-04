@@ -39,6 +39,11 @@ func DefaultSafetyConfig() *SafetyConfig {
 // user confirmation before proceeding.
 var ErrBigDeleteTriggered = errors.New("sync: big-delete protection triggered")
 
+// ErrDependencyCycle indicates that the action plan contains a dependency
+// cycle, making topological ordering impossible. This is a planner bug —
+// well-formed sync actions should always form a DAG (B-313).
+var ErrDependencyCycle = errors.New("sync: dependency cycle detected in action plan")
+
 // Planner is a pure decision engine that transforms change events and
 // baseline state into an ordered ActionPlan. It performs no I/O.
 type Planner struct {
@@ -82,8 +87,12 @@ func (p *Planner) Plan(
 		allActions = append(allActions, classifyPathView(views[p], mode)...)
 	}
 
-	// Step 3: build dependency edges.
+	// Step 3: build dependency edges and verify acyclicity.
 	deps := buildDependencies(allActions)
+
+	if err := detectDependencyCycle(deps); err != nil {
+		return nil, err
+	}
 
 	plan := &ActionPlan{
 		Actions: allActions,
@@ -781,6 +790,49 @@ func ActionsOfType(actions []Action, t ActionType) []Action {
 	}
 
 	return result
+}
+
+// detectDependencyCycle performs a DFS to check for cycles in the dependency
+// graph. Returns ErrDependencyCycle if any cycle is found. Uses standard
+// white/gray/black three-color marking (B-313).
+func detectDependencyCycle(deps [][]int) error {
+	const (
+		white = 0 // unvisited
+		gray  = 1 // in current DFS path
+		black = 2 // fully explored, no cycle
+	)
+
+	color := make([]int, len(deps))
+
+	var dfs func(node int) bool
+	dfs = func(node int) bool {
+		color[node] = gray
+
+		for _, neighbor := range deps[node] {
+			switch color[neighbor] {
+			case gray:
+				return true // back edge → cycle
+			case white:
+				if dfs(neighbor) {
+					return true
+				}
+			}
+		}
+
+		color[node] = black
+
+		return false
+	}
+
+	for i := range deps {
+		if color[i] == white {
+			if dfs(i) {
+				return ErrDependencyCycle
+			}
+		}
+	}
+
+	return nil
 }
 
 // bigDeleteTriggered returns true if the planned deletions exceed the

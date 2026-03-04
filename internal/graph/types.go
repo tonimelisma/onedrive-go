@@ -18,6 +18,17 @@ func (DownloadURL) LogValue() slog.Value {
 	return slog.StringValue("[REDACTED]")
 }
 
+// UploadURL is a pre-authenticated, ephemeral upload session URL returned by
+// the Graph API. It implements slog.LogValuer to prevent accidental logging
+// of embedded auth tokens, mirroring DownloadURL (B-315).
+type UploadURL string
+
+// LogValue redacts the URL content when passed to slog, preventing accidental
+// exposure of embedded authentication tokens in log output.
+func (UploadURL) LogValue() slog.Value {
+	return slog.StringValue("[REDACTED]")
+}
+
 // ChildCountUnknown indicates the child count was not present in the API response.
 const ChildCountUnknown = -1
 
@@ -92,14 +103,14 @@ type Organization struct {
 
 // UploadSession represents an in-progress resumable upload.
 type UploadSession struct {
-	UploadURL      string // pre-authenticated, ephemeral; NEVER log (architecture.md §9.2)
+	UploadURL      UploadURL // pre-authenticated, ephemeral; redacted via LogValue (B-315)
 	ExpirationTime time.Time
 }
 
 // UploadSessionStatus represents the current state of a resumable upload session.
 // Returned by QueryUploadSession to determine which byte ranges have been accepted.
 type UploadSessionStatus struct {
-	UploadURL          string // pre-authenticated, ephemeral; NEVER log (architecture.md §9.2)
+	UploadURL          UploadURL // pre-authenticated, ephemeral; redacted via LogValue (B-315)
 	ExpirationTime     time.Time
 	NextExpectedRanges []string // e.g., ["0-", "327680-"]
 }

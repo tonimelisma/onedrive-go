@@ -151,7 +151,7 @@ func (c *Client) UploadChunk(
 		// so no race with a previous attempt's transport writeLoop goroutine.
 		reader := io.NewSectionReader(chunk, 0, length)
 
-		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPut, session.UploadURL, reader)
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPut, string(session.UploadURL), reader)
 		if reqErr != nil {
 			return nil, fmt.Errorf("graph: creating chunk upload request: %w", reqErr)
 		}
@@ -206,7 +206,7 @@ func (c *Client) handleChunkResponse(resp *http.Response) (*Item, error) {
 
 	default:
 		// Unexpected 2xx status (e.g., 204, 206). doPreAuthRetry filters non-2xx.
-		body, _ := io.ReadAll(resp.Body) //nolint:errcheck // best-effort read for error message
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBodySize)) //nolint:errcheck // best-effort read for error message
 		c.logger.Error("chunk upload returned unexpected 2xx status",
 			slog.Int("status", resp.StatusCode),
 		)
@@ -221,7 +221,7 @@ func (c *Client) CancelUploadSession(ctx context.Context, session *UploadSession
 	c.logger.Info("canceling upload session")
 
 	resp, err := c.doPreAuthRetry(ctx, "cancel upload session", func() (*http.Request, error) {
-		req, reqErr := http.NewRequestWithContext(ctx, http.MethodDelete, session.UploadURL, http.NoBody)
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodDelete, string(session.UploadURL), http.NoBody)
 		if reqErr != nil {
 			return nil, fmt.Errorf("graph: creating cancel session request: %w", reqErr)
 		}
@@ -293,7 +293,7 @@ func (c *Client) doRawUpload(
 	}
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		errBody, _ := io.ReadAll(resp.Body) //nolint:errcheck // best-effort read for error message
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBodySize)) //nolint:errcheck // best-effort read for error message
 		resp.Body.Close()
 
 		sentinel := classifyStatus(resp.StatusCode)
@@ -318,7 +318,7 @@ func (c *Client) QueryUploadSession(
 	c.logger.Info("querying upload session status")
 
 	resp, err := c.doPreAuthRetry(ctx, "query upload session", func() (*http.Request, error) {
-		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, session.UploadURL, http.NoBody)
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, string(session.UploadURL), http.NoBody)
 		if reqErr != nil {
 			return nil, fmt.Errorf("graph: creating query session request: %w", reqErr)
 		}
@@ -349,7 +349,7 @@ func (c *Client) QueryUploadSession(
 	}
 
 	status := &UploadSessionStatus{
-		UploadURL:          ssr.UploadURL,
+		UploadURL:          UploadURL(ssr.UploadURL),
 		ExpirationTime:     expTime,
 		NextExpectedRanges: ssr.NextExpectedRanges,
 	}
@@ -568,7 +568,7 @@ func (c *Client) parseUploadSessionResponse(resp *http.Response) (*UploadSession
 	}
 
 	session := &UploadSession{
-		UploadURL:      usr.UploadURL,
+		UploadURL:      UploadURL(usr.UploadURL),
 		ExpirationTime: expTime,
 	}
 

@@ -490,7 +490,7 @@ func (tm *TransferManager) sessionUpload(
 	if rec != nil && rec.FileHash == localHash {
 		tm.logger.Debug("attempting upload session resume", slog.String("path", localPath))
 
-		session := &graph.UploadSession{UploadURL: rec.SessionURL}
+		session := &graph.UploadSession{UploadURL: graph.UploadURL(rec.SessionURL)}
 
 		item, resumeErr := su.ResumeUpload(ctx, session, content, size, progress)
 		if resumeErr == nil {
@@ -516,7 +516,7 @@ func (tm *TransferManager) sessionUpload(
 	}
 
 	if saveErr := tm.sessionStore.Save(driveStr, localPath, &SessionRecord{
-		SessionURL: session.UploadURL,
+		SessionURL: string(session.UploadURL),
 		FileHash:   localHash,
 		FileSize:   size,
 	}); saveErr != nil {

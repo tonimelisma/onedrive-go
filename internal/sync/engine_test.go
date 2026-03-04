@@ -358,10 +358,10 @@ func TestRunOnce_Bidirectional_FullCycle(t *testing.T) {
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err, "Load baseline")
 
-	_, ok := bl.ByPath["remote.txt"]
+	_, ok := bl.GetByPath("remote.txt")
 	assert.True(t, ok, "remote.txt not in baseline after sync")
 
-	_, ok = bl.ByPath["local.txt"]
+	_, ok = bl.GetByPath("local.txt")
 	assert.True(t, ok, "local.txt not in baseline after sync")
 }
 
@@ -402,7 +402,7 @@ func TestRunOnce_DryRun_NoExecution(t *testing.T) {
 	// Verify baseline is unchanged (no commit in dry-run).
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err, "Load baseline")
-	assert.Empty(t, bl.ByPath, "dry-run should not commit")
+	assert.Equal(t, 0, bl.Len(), "dry-run should not commit")
 }
 
 func TestRunOnce_BigDelete_WithoutForce(t *testing.T) {
@@ -516,7 +516,7 @@ func TestRunOnce_ExecutorPartialFailure(t *testing.T) {
 	bl, loadErr := eng.baseline.Load(ctx)
 	require.NoError(t, loadErr, "Load")
 
-	_, ok := bl.ByPath["good.txt"]
+	_, ok := bl.GetByPath("good.txt")
 	assert.True(t, ok, "good.txt not in baseline after partial commit")
 }
 
@@ -601,7 +601,7 @@ func TestRunOnce_BaselineUpdatedAfterCycle(t *testing.T) {
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err, "Load")
 
-	entry, ok := bl.ByPath["alpha.txt"]
+	entry, ok := bl.GetByPath("alpha.txt")
 	require.True(t, ok, "alpha.txt not in baseline")
 	assert.Equal(t, "item-a", entry.ItemID)
 	assert.Equal(t, driveID, entry.DriveID)

@@ -28,19 +28,11 @@ func TestEstimateDirCount_Empty(t *testing.T) {
 func TestEstimateDirCount_WithFolders(t *testing.T) {
 	t.Parallel()
 
-	bl := emptyBaseline()
-	bl.ByPath["docs"] = &BaselineEntry{
-		Path:     "docs",
-		ItemType: ItemTypeFolder,
-	}
-	bl.ByPath["docs/sub"] = &BaselineEntry{
-		Path:     "docs/sub",
-		ItemType: ItemTypeFolder,
-	}
-	bl.ByPath["file.txt"] = &BaselineEntry{
-		Path:     "file.txt",
-		ItemType: ItemTypeFile,
-	}
+	bl := NewBaselineForTest([]*BaselineEntry{
+		{Path: "docs", ItemType: ItemTypeFolder},
+		{Path: "docs/sub", ItemType: ItemTypeFolder},
+		{Path: "file.txt", ItemType: ItemTypeFile},
+	})
 
 	obs := NewLocalObserver(bl, testLogger(t), 0)
 	// 2 folders + 1 for root = 3.

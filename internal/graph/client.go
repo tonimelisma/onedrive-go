@@ -23,6 +23,10 @@ const (
 	backoffFactor    = 2.0
 	jitterFraction   = 0.25
 	defaultUserAgent = "onedrive-go/dev"
+
+	// maxErrBodySize caps error response body reads to prevent OOM from
+	// malicious or buggy servers returning enormous error responses (B-314).
+	maxErrBodySize = 64 * 1024
 )
 
 // TokenSource provides OAuth2 bearer tokens.
@@ -146,7 +150,7 @@ func (c *Client) doRetry(
 			return resp, nil
 		}
 
-		errBody, readErr := io.ReadAll(resp.Body)
+		errBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrBodySize))
 		resp.Body.Close()
 
 		if readErr != nil {
@@ -320,7 +324,7 @@ func (c *Client) doPreAuthRetry(
 			return resp, nil
 		}
 
-		errBody, readErr := io.ReadAll(resp.Body)
+		errBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrBodySize))
 		resp.Body.Close()
 
 		if readErr != nil {

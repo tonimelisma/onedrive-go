@@ -33,7 +33,7 @@ func TestVerifyBaseline_AllMatch(t *testing.T) {
 
 	hash := hashBytes(t, []byte(content))
 	bl := &Baseline{
-		ByPath: map[string]*BaselineEntry{
+		byPath: map[string]*BaselineEntry{
 			"docs/readme.md": {
 				Path: "docs/readme.md", DriveID: driveid.New("d"), ItemID: "i1",
 				ItemType: ItemTypeFile, LocalHash: hash, Size: int64(len(content)),
@@ -61,7 +61,7 @@ func TestVerifyBaseline_MissingFile(t *testing.T) {
 
 	// Baseline references a file that doesn't exist on disk.
 	bl := &Baseline{
-		ByPath: map[string]*BaselineEntry{
+		byPath: map[string]*BaselineEntry{
 			"ghost.txt": {
 				Path: "ghost.txt", DriveID: driveid.New("d"), ItemID: "i1",
 				ItemType: ItemTypeFile, LocalHash: "somehash", Size: 100,
@@ -89,7 +89,7 @@ func TestVerifyBaseline_HashMismatch(t *testing.T) {
 
 	// Baseline has a different hash than what's on disk.
 	bl := &Baseline{
-		ByPath: map[string]*BaselineEntry{
+		byPath: map[string]*BaselineEntry{
 			"changed.txt": {
 				Path: "changed.txt", DriveID: driveid.New("d"), ItemID: "i1",
 				ItemType: ItemTypeFile, LocalHash: "wrong-hash", Size: int64(len(content)),
@@ -116,7 +116,7 @@ func TestVerifyBaseline_EmptyBaseline(t *testing.T) {
 
 	dir := t.TempDir()
 	bl := &Baseline{
-		ByPath: make(map[string]*BaselineEntry),
+		byPath: make(map[string]*BaselineEntry),
 	}
 
 	ctx := t.Context()
@@ -138,7 +138,7 @@ func TestVerifyBaseline_SkipsFolders(t *testing.T) {
 
 	hash := hashBytes(t, []byte(content))
 	bl := &Baseline{
-		ByPath: map[string]*BaselineEntry{
+		byPath: map[string]*BaselineEntry{
 			"docs": {
 				Path: "docs", DriveID: driveid.New("d"), ItemID: "folder1",
 				ItemType: ItemTypeFolder,
@@ -169,7 +169,7 @@ func TestVerifyBaseline_SizeMismatch(t *testing.T) {
 	writeTestFile(t, dir, "size.txt", content)
 
 	bl := &Baseline{
-		ByPath: map[string]*BaselineEntry{
+		byPath: map[string]*BaselineEntry{
 			"size.txt": {
 				Path: "size.txt", DriveID: driveid.New("d"), ItemID: "i1",
 				ItemType: ItemTypeFile, LocalHash: "somehash", Size: 99999,

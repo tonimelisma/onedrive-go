@@ -19,7 +19,11 @@ const maxHashRetries = 2
 // executeDownload downloads a remote file via TransferManager with .partial
 // safety, hash verification with retry, and atomic rename.
 func (e *Executor) executeDownload(ctx context.Context, action *Action) Outcome {
-	targetPath := filepath.Join(e.syncRoot, action.Path)
+	targetPath, err := containedPath(e.syncRoot, action.Path)
+	if err != nil {
+		return e.failedOutcome(action, ActionDownload, err)
+	}
+
 	driveID := e.resolveDriveID(action)
 
 	opts := driveops.DownloadOpts{MaxHashRetries: maxHashRetries}
@@ -32,7 +36,7 @@ func (e *Executor) executeDownload(ctx context.Context, action *Action) Outcome 
 
 	var result *driveops.DownloadResult
 
-	err := e.withRetry(ctx, "download "+action.Path, func() error {
+	err = e.withRetry(ctx, "download "+action.Path, func() error {
 		var dlErr error
 		result, dlErr = e.transferMgr.DownloadToFile(ctx, driveID, action.ItemID, targetPath, opts)
 
@@ -84,7 +88,11 @@ func (e *Executor) executeUpload(ctx context.Context, action *Action) Outcome {
 		return e.failedOutcome(action, ActionUpload, err)
 	}
 
-	localPath := filepath.Join(e.syncRoot, action.Path)
+	localPath, err := containedPath(e.syncRoot, action.Path)
+	if err != nil {
+		return e.failedOutcome(action, ActionUpload, err)
+	}
+
 	name := filepath.Base(action.Path)
 
 	var result *driveops.UploadResult

@@ -17,6 +17,10 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
+// ErrPathEscapesSyncRoot is returned when a relative path would resolve
+// outside the sync root directory (path traversal attack prevention).
+var ErrPathEscapesSyncRoot = errors.New("sync: path escapes sync root")
+
 // graphRootID is the Graph API parent reference for top-level items.
 // Distinct from strRoot in types.go which serializes the ItemTypeRoot enum.
 const graphRootID = "root"
@@ -108,7 +112,10 @@ func (e *Executor) executeFolderCreate(ctx context.Context, action *Action) Outc
 
 // createLocalFolder creates a directory on the local filesystem.
 func (e *Executor) createLocalFolder(action *Action) Outcome {
-	absPath := filepath.Join(e.syncRoot, action.Path)
+	absPath, err := containedPath(e.syncRoot, action.Path)
+	if err != nil {
+		return e.failedOutcome(action, ActionFolderCreate, err)
+	}
 
 	if err := os.MkdirAll(absPath, 0o755); err != nil { //nolint:mnd // standard dir perms
 		return e.failedOutcome(action, ActionFolderCreate, fmt.Errorf("creating local folder %s: %w", action.Path, err))
@@ -180,8 +187,15 @@ func (e *Executor) executeMove(ctx context.Context, action *Action) Outcome {
 
 // executeLocalMove renames a local file/folder.
 func (e *Executor) executeLocalMove(action *Action) Outcome {
-	oldAbs := filepath.Join(e.syncRoot, action.OldPath)
-	newAbs := filepath.Join(e.syncRoot, action.Path)
+	oldAbs, err := containedPath(e.syncRoot, action.OldPath)
+	if err != nil {
+		return e.failedOutcome(action, ActionLocalMove, err)
+	}
+
+	newAbs, err := containedPath(e.syncRoot, action.Path)
+	if err != nil {
+		return e.failedOutcome(action, ActionLocalMove, err)
+	}
 
 	// Ensure parent directory exists.
 	if err := os.MkdirAll(filepath.Dir(newAbs), 0o755); err != nil { //nolint:mnd // standard dir perms
@@ -282,6 +296,17 @@ func (e *Executor) executeCleanup(action *Action) Outcome {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// containedPath joins syncRoot and relPath, returning the absolute path only
+// if the result stays within syncRoot. Uses filepath.IsLocal (Go 1.20+) to
+// reject traversal sequences, absolute paths, and empty strings.
+func containedPath(syncRoot, relPath string) (string, error) {
+	if !filepath.IsLocal(relPath) {
+		return "", fmt.Errorf("%w: %q", ErrPathEscapesSyncRoot, relPath)
+	}
+
+	return filepath.Join(syncRoot, relPath), nil
+}
 
 // resolveActionItemType extracts ItemType from the action's View, skipping
 // zero values (ItemTypeFile) to find the actual type. Checks Remote → Baseline
