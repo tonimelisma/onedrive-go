@@ -49,6 +49,7 @@ const (
 	ConflictEditEdit     = "edit_edit"
 	ConflictEditDelete   = "edit_delete"
 	ConflictCreateCreate = "create_create"
+	ConflictSyncFailure  = "sync_failure"
 )
 
 // ResolvedBy constants for conflict resolution attribution.

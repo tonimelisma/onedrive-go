@@ -109,6 +109,7 @@ var (
 	_ ObservationWriter = (*SyncStore)(nil)
 	_ OutcomeWriter     = (*SyncStore)(nil)
 	_ FailureRecorder   = (*SyncStore)(nil)
+	_ ConflictEscalator = (*SyncStore)(nil)
 	_ StateReader       = (*SyncStore)(nil)
 	_ StateAdmin        = (*SyncStore)(nil)
 )
@@ -1366,6 +1367,55 @@ func (m *SyncStore) ResetInProgressStates(ctx context.Context, syncRoot string) 
 	return nil
 }
 
+// EscalateToConflict creates a sync_failure conflict record for an item that
+// has exceeded the retry threshold. In the same transaction, NULLs
+// next_retry_at on the remote_state row to prevent further retry scheduling.
+// The row stays in its *_failed state; the reconciler checks failure_count
+// against the threshold.
+func (m *SyncStore) EscalateToConflict(ctx context.Context, driveID driveid.ID, itemID, conflictPath, reason string) error {
+	tx, err := m.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("sync: beginning escalation transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback after commit is benign
+
+	conflictID := uuid.New().String()
+	detectedAt := m.nowFunc().UnixNano()
+
+	_, err = tx.ExecContext(ctx, sqlInsertConflict,
+		conflictID, driveID.String(),
+		nullString(itemID),
+		conflictPath, ConflictSyncFailure, detectedAt,
+		sql.NullString{}, sql.NullString{}, // no local/remote hash for sync failures
+		sql.NullInt64{}, sql.NullInt64{}, // no local/remote mtime
+		ResolutionUnresolved, sql.NullInt64{}, sql.NullString{},
+	)
+	if err != nil {
+		return fmt.Errorf("sync: inserting sync_failure conflict for %s: %w", conflictPath, err)
+	}
+
+	// Stop further retry scheduling.
+	_, err = tx.ExecContext(ctx,
+		`UPDATE remote_state SET next_retry_at = NULL WHERE drive_id = ? AND item_id = ?`,
+		driveID.String(), itemID,
+	)
+	if err != nil {
+		return fmt.Errorf("sync: nulling next_retry_at for %s: %w", conflictPath, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sync: committing escalation for %s: %w", conflictPath, err)
+	}
+
+	m.logger.Info("escalated to conflict",
+		slog.String("path", conflictPath),
+		slog.String("conflict_id", conflictID),
+		slog.String("reason", reason),
+	)
+
+	return nil
+}
+
 // SetDispatchStatus transitions a remote_state row from pending/failed to
 // in-progress before the action is dispatched to the worker pool. Uses
 // optimistic concurrency: only updates if the current status is valid for
@@ -1396,6 +1446,28 @@ func (m *SyncStore) SetDispatchStatus(ctx context.Context, driveID, itemID strin
 	}
 
 	return nil
+}
+
+// EarliestRetryAt returns the earliest next_retry_at timestamp that is strictly
+// after `now` among failed remote_state rows. Returns zero time if no future
+// retries are scheduled. Used by the reconciler to arm its wake-up timer.
+func (m *SyncStore) EarliestRetryAt(ctx context.Context, now time.Time) (time.Time, error) {
+	var minRetry sql.NullInt64
+
+	err := m.db.QueryRowContext(ctx,
+		`SELECT MIN(next_retry_at) FROM remote_state
+		WHERE sync_status IN (?, ?) AND next_retry_at > ?`,
+		statusDownloadFailed, statusDeleteFailed, now.UnixNano(),
+	).Scan(&minRetry)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("sync: querying earliest retry: %w", err)
+	}
+
+	if !minRetry.Valid {
+		return time.Time{}, nil
+	}
+
+	return time.Unix(0, minRetry.Int64), nil
 }
 
 // WriteSyncMetadata persists sync metadata after a completed RunOnce cycle.

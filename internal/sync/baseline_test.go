@@ -2491,3 +2491,131 @@ func TestUpdateRemoteStateOnOutcome_Move(t *testing.T) {
 	assert.Equal(t, "/new/path.txt", rsPath)
 	assert.Equal(t, "synced", status)
 }
+
+// --- EscalateToConflict tests (5.7.3) ---
+
+func TestEscalateToConflict_CreatesRecord(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	driveID := driveid.New("d!esc")
+
+	// Insert a failed remote_state row with a retry scheduled.
+	_, err := mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at, failure_count, next_retry_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		driveID.String(), "item1", "/failing.txt", "file", "download_failed", 1700000000, 10, 1700001000)
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.EscalateToConflict(ctx, driveID, "item1", "/failing.txt", "too many failures"))
+
+	// Verify conflict record exists with sync_failure type.
+	var conflictType, resolution string
+	err = mgr.db.QueryRowContext(ctx,
+		`SELECT conflict_type, resolution FROM conflicts WHERE path = ?`,
+		"/failing.txt").Scan(&conflictType, &resolution)
+	require.NoError(t, err)
+	assert.Equal(t, ConflictSyncFailure, conflictType)
+	assert.Equal(t, ResolutionUnresolved, resolution)
+
+	// Verify next_retry_at was NULLed to stop further retries.
+	var nextRetry sql.NullInt64
+	err = mgr.db.QueryRowContext(ctx,
+		`SELECT next_retry_at FROM remote_state WHERE drive_id = ? AND item_id = ?`,
+		driveID.String(), "item1").Scan(&nextRetry)
+	require.NoError(t, err)
+	assert.False(t, nextRetry.Valid, "next_retry_at should be NULL after escalation")
+}
+
+func TestEscalateToConflict_AlongsideExisting(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	driveID := driveid.New("d!esc2")
+
+	// Insert an existing unresolved conflict at the same path.
+	_, err := mgr.db.ExecContext(ctx,
+		`INSERT INTO conflicts (id, drive_id, item_id, path, conflict_type, detected_at, resolution)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		uuid.New().String(), driveID.String(), "item0", "/failing.txt", ConflictEditEdit, 1700000000, ResolutionUnresolved)
+	require.NoError(t, err)
+
+	// Insert a failed remote_state row.
+	_, err = mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at, failure_count)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		driveID.String(), "item1", "/failing.txt", "file", "delete_failed", 1700000000, 10)
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.EscalateToConflict(ctx, driveID, "item1", "/failing.txt", "permanent failure"))
+
+	// Should now have 2 conflict records for this path.
+	var count int
+	err = mgr.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM conflicts WHERE path = ?`, "/failing.txt").Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 2, count)
+}
+
+// --- EarliestRetryAt tests (5.7.3) ---
+
+func TestEarliestRetryAt_Empty(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	now := time.Now()
+	retryAt, err := mgr.EarliestRetryAt(ctx, now)
+	require.NoError(t, err)
+	assert.True(t, retryAt.IsZero(), "no failed rows → zero time")
+}
+
+func TestEarliestRetryAt_FutureRetry(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	future := now.Add(5 * time.Minute)
+
+	// Insert a failed row with next_retry_at in the future.
+	_, err := mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at, failure_count, next_retry_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"d!abc", "item1", "/future.txt", "file", "download_failed", 1700000000, 1, future.UnixNano())
+	require.NoError(t, err)
+
+	retryAt, err := mgr.EarliestRetryAt(ctx, now)
+	require.NoError(t, err)
+	assert.False(t, retryAt.IsZero())
+	assert.Equal(t, future.UnixNano(), retryAt.UnixNano())
+}
+
+func TestEarliestRetryAt_PastRetry(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	past := now.Add(-5 * time.Minute)
+
+	// Insert a failed row with next_retry_at in the past (already due).
+	_, err := mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at, failure_count, next_retry_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"d!abc", "item1", "/past.txt", "file", "delete_failed", 1700000000, 3, past.UnixNano())
+	require.NoError(t, err)
+
+	// EarliestRetryAt only considers retries AFTER now. Past retries are
+	// already eligible for ListFailedForRetry and don't need timer arming.
+	retryAt, err := mgr.EarliestRetryAt(ctx, now)
+	require.NoError(t, err)
+	assert.True(t, retryAt.IsZero(), "past retry should not be returned")
+}
