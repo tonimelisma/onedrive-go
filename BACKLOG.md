@@ -132,6 +132,21 @@ Optimization deferred until profiling shows a bottleneck.
 | ~~B-308~~ | ~~FC-2: Narrow `.db` exclusion to sync engine database~~ | ~~P2~~ | **DONE** — Phase 5.7.1. Removed `.db`/`.db-wal`/`.db-shm` from `alwaysExcludedSuffixes`. Legitimate data files no longer silently excluded. |
 | B-309 | FC-12: Non-empty directory delete — Tier 1 disposable cleanup | P2 | Active limitation. `deleteLocalFolder` fails permanently when OS junk (`.DS_Store`, `Thumbs.db`) blocks folder removal. Add built-in disposable classification. Roadmap 6.Xc. See [filtering-conflicts.md FC-12](docs/design/filtering-conflicts.md#fc-12-non-empty-directory-delete). |
 
+## Prerelease Robustness (from [prerelease review](docs/archive/prerelease_review.md))
+
+| ID | Title | Priority | Package | Notes |
+|----|-------|----------|---------|-------|
+| B-312 | Path containment guard at executor write points | P1 | sync | No `filepath.Rel` guard after `filepath.Join(syncRoot, action.Path)`. A crafted path like `../../etc/passwd` escapes the root. Apply containment check at every `os.Create`, `os.MkdirAll`, `os.Rename`, `os.Remove`, `os.Chtimes` in executor. Security-critical. |
+| B-313 | DAG cycle detection in `buildDependencies` | P1 | sync | `buildDependencies` assumes the dependency graph is a DAG without verification. A cycle causes DepTracker to deadlock. Add runtime cycle detection assertion + test. |
+| B-314 | `io.ReadAll` unbounded on error responses | P2 | graph | 4 production `io.ReadAll(resp.Body)` calls without `io.LimitReader`. Malicious/buggy server can OOM the process. Cap at 64 KiB. |
+| B-315 | `UploadURL` lacks `slog.LogValuer` protection | P2 | graph | `UploadURL` is a plain `string`, unlike `DownloadURL` which implements `slog.LogValuer` for redaction. Pre-authenticated URL could leak to logs. |
+| B-316 | No dedicated migration tests | P2 | sync | `migrations.go` has zero dedicated tests. Need: fresh DB, intermediate versions, interrupted migration, idempotency. |
+| B-317 | API response fuzz tests | P3 | graph | No fuzz tests for `graph.Item` JSON parsing with missing/extra/malformed fields. Nil guards on Item field accesses in `observer_remote.go` untested. |
+| B-318 | Fault injection test suite | P3 | sync, driveops | No systematic fault injection for: disk full during baseline commit, network partition during upload session, SIGTERM during active worker pool. |
+| B-319 | Clock skew resilience audit | P3 | sync | Document all time-sensitive comparisons (mtime, conflict timestamps, session expiry). Verify resilience to clock drift. |
+| B-320 | `Baseline.ByPath`/`ByID` exported mutable maps | P3 | sync | Exported for test convenience but production footgun. Unexport and provide test-only setup helpers. |
+| B-321 | `tokenfile.RequiredMetaKeys` exported mutable slice | P3 | tokenfile | Any caller can modify the exported `[]string` var. Convert to function returning a copy. |
+
 ## CI / Infrastructure
 
 | ID | Title | Priority | Notes |

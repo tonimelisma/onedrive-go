@@ -259,41 +259,17 @@ See [event-driven-rationale.md](event-driven-rationale.md) Parts 5.4-5.7 for ful
 
 ### 3.6 Executor (`executor.go`)
 
-Takes an `ActionPlan` and dispatches actions to a flat worker pool via the DepTracker. Workers produce individual `Outcome` values committed per-action by the SyncStore.
+Takes an `ActionPlan` and dispatches actions to workers via the DepTracker. Actions are dispatched based on dependency satisfaction, not fixed phase ordering. Workers produce individual `Outcome` values committed per-action by the SyncStore. Each Outcome is self-contained — carries everything the SyncStore needs.
 
-**DAG execution with dependency tracking**: Actions are dispatched based on dependency satisfaction, not fixed phase ordering. The planner emits explicit dependency edges: parent folder must exist before child operations, children must be removed before parent folder deletion, move target parent must exist. All action types are eligible to run concurrently when their dependencies are met. An in-memory DepTracker tracks action dependencies and dispatches ready actions to workers via a single `Ready()` channel, providing instant dispatch when dependencies are satisfied. Workers report outcomes through an in-memory result channel. Workers are a flat pool (`transfer_workers` config, default 8) — Go's channel scheduling provides natural fairness. See [concurrent-execution.md](concurrent-execution.md) for the full execution architecture.
+Key safety protocols: `.partial` + hash verify + atomic rename for downloads; simple PUT (<=4 MB) or resumable sessions (>4 MB) for uploads; hash-before-delete guard for local deletions.
 
-**Key properties**:
-- Database writes happen only in the SyncStore, committing each action outcome individually as workers complete transfers
-- Workers report Outcomes through an in-memory result channel
-- Each Outcome is self-contained: has everything the SyncStore needs
-- Retries happen INSIDE the executor with exponential backoff before producing the final Outcome
-
-**Download safety**: `.partial` file -> stream with `TeeReader` hash -> verify QuickXorHash -> set timestamps -> atomic rename.
-
-**Upload strategy**: Files <=4 MB use simple PUT. Files >4 MB use resumable sessions with 320 KiB-aligned chunks. `fileSystemInfo` included in session creation to avoid double-versioning on Business/SharePoint.
-
-See [event-driven-rationale.md](event-driven-rationale.md) Part 5.8 for full implementation details.
+See [concurrent-execution.md](concurrent-execution.md) for the definitive execution architecture (DepTracker, worker pools, lanes, bandwidth limiting, adaptive concurrency).
 
 ### 3.7 SyncStore (`baseline.go`)
 
-The database access layer, exposing typed sub-interfaces grouped by caller identity. The `SyncStore` manages the three core tables (`remote_state`, `baseline`, `local_issues`) plus supporting tables. See [remote-state-separation.md §12](remote-state-separation.md) for the sub-interface design.
+The database access layer, exposing typed sub-interfaces grouped by caller identity. The `SyncStore` manages the three core tables (`remote_state`, `baseline`, `local_issues`) plus supporting tables. Sub-interfaces enforce transition ownership at compile time.
 
-**Key properties**:
-- Sub-interfaces enforce transition ownership at compile time (ObservationWriter, OutcomeWriter, FailureRecorder, etc.)
-- Per-action atomic transaction: each outcome commits baseline + updates `remote_state` in a single transaction
-- After each commit, the in-memory baseline cache is updated for consistency
-- Delta token is committed atomically with `remote_state` observations
-
-**Operations**:
-- `Load()`: Reads entire baseline table into memory (`Baseline.ByPath` + `Baseline.ByID` maps)
-- `CommitObservation(events, newToken, driveID)`: Writes observed remote state + advances delta token atomically
-- `CommitOutcome(outcome)`: Applies a single successful outcome to baseline + updates `remote_state`
-- `RecordFailure(path, errMsg, httpStatus)`: Records failure metadata on `remote_state` rows
-- `ListUnreconciled()`: Returns `remote_state` rows needing retry (for reconciler)
-- `GetDeltaToken()`: Returns saved delta token for a drive
-
-See [event-driven-rationale.md](event-driven-rationale.md) Part 5.9 and [remote-state-separation.md](remote-state-separation.md) for full details.
+See [data-model.md §1](data-model.md) for the full sub-interface table and [remote-state-separation.md](remote-state-separation.md) for the three-table architecture.
 
 ### 3.8 Config (`internal/config/`)
 

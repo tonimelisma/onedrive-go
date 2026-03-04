@@ -1,5 +1,14 @@
 # Architectural Rationale: Event-Driven Design
 
+> **Status: Historical ADR.** This document records the architectural decision
+> to adopt event-driven sync (Option E). The design principles, decision
+> matrices, and safety invariants remain authoritative. Implementation details
+> (pseudocode, component wiring, BaselineManager references) reflect the
+> original design and have since evolved — see
+> [remote-state-separation.md](remote-state-separation.md) for the current
+> three-table architecture and [concurrent-execution.md](concurrent-execution.md)
+> for the current execution model.
+
 **Date**: 2026-02-22
 
 This document explains the architectural rationale for the event-driven design
