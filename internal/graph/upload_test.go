@@ -179,7 +179,7 @@ func TestCreateUploadSession_Success(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	assert.Equal(t, "https://upload.example.com/session/abc123", session.UploadURL)
+	assert.Equal(t, UploadURL("https://upload.example.com/session/abc123"), session.UploadURL)
 	assert.Equal(t, 2024, session.ExpirationTime.Year())
 	assert.Equal(t, 12, int(session.ExpirationTime.Month()))
 	assert.Equal(t, 31, session.ExpirationTime.Day())
@@ -202,7 +202,7 @@ func TestCreateUploadSession_InvalidExpiration(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	assert.Equal(t, "https://upload.example.com/session/xyz", session.UploadURL)
+	assert.Equal(t, UploadURL("https://upload.example.com/session/xyz"), session.UploadURL)
 	assert.True(t, session.ExpirationTime.IsZero())
 }
 
@@ -250,7 +250,7 @@ func TestUploadChunk_Intermediate(t *testing.T) {
 	defer chunkSrv.Close()
 
 	client := newTestClient(t, "http://unused")
-	session := &UploadSession{UploadURL: chunkSrv.URL + "/upload"}
+	session := &UploadSession{UploadURL: UploadURL(chunkSrv.URL + "/upload")}
 
 	chunkData := bytes.Repeat([]byte("A"), ChunkAlignment)
 	item, err := client.UploadChunk(
@@ -284,7 +284,7 @@ func TestUploadChunk_Final(t *testing.T) {
 	defer chunkSrv.Close()
 
 	client := newTestClient(t, "http://unused")
-	session := &UploadSession{UploadURL: chunkSrv.URL + "/upload"}
+	session := &UploadSession{UploadURL: UploadURL(chunkSrv.URL + "/upload")}
 
 	chunkData := bytes.Repeat([]byte("B"), ChunkAlignment)
 	totalSize := 2 * int64(ChunkAlignment)
@@ -318,7 +318,7 @@ func TestUploadChunk_FinalWith200(t *testing.T) {
 	defer chunkSrv.Close()
 
 	client := newTestClient(t, "http://unused")
-	session := &UploadSession{UploadURL: chunkSrv.URL + "/upload"}
+	session := &UploadSession{UploadURL: UploadURL(chunkSrv.URL + "/upload")}
 
 	item, err := client.UploadChunk(
 		t.Context(), session,
@@ -341,7 +341,7 @@ func TestUploadChunk_ContentRange(t *testing.T) {
 	defer chunkSrv.Close()
 
 	client := newTestClient(t, "http://unused")
-	session := &UploadSession{UploadURL: chunkSrv.URL + "/upload"}
+	session := &UploadSession{UploadURL: UploadURL(chunkSrv.URL + "/upload")}
 
 	offset := int64(ChunkAlignment)
 	length := int64(ChunkAlignment)
@@ -363,7 +363,7 @@ func TestUploadChunk_ServerError(t *testing.T) {
 	defer chunkSrv.Close()
 
 	client := newTestClient(t, "http://unused")
-	session := &UploadSession{UploadURL: chunkSrv.URL + "/upload"}
+	session := &UploadSession{UploadURL: UploadURL(chunkSrv.URL + "/upload")}
 
 	_, err := client.UploadChunk(
 		t.Context(), session,
@@ -401,7 +401,7 @@ func TestCancelUploadSession_Success(t *testing.T) {
 	defer chunkSrv.Close()
 
 	client := newTestClient(t, "http://unused")
-	session := &UploadSession{UploadURL: chunkSrv.URL + "/session/abc"}
+	session := &UploadSession{UploadURL: UploadURL(chunkSrv.URL + "/session/abc")}
 
 	err := client.CancelUploadSession(t.Context(), session)
 	require.NoError(t, err)
@@ -414,7 +414,7 @@ func TestCancelUploadSession_Error(t *testing.T) {
 	defer chunkSrv.Close()
 
 	client := newTestClient(t, "http://unused")
-	session := &UploadSession{UploadURL: chunkSrv.URL + "/session/gone"}
+	session := &UploadSession{UploadURL: UploadURL(chunkSrv.URL + "/session/gone")}
 
 	err := client.CancelUploadSession(t.Context(), session)
 	require.Error(t, err)
@@ -467,7 +467,7 @@ func TestCreateUploadSession_WithFileSystemInfo(t *testing.T) {
 		t.Context(), driveid.New("d"), "parent", "timestamped.bin", 5242880, mtime,
 	)
 	require.NoError(t, err)
-	assert.Equal(t, "https://upload.example.com/session/fsi", session.UploadURL)
+	assert.Equal(t, UploadURL("https://upload.example.com/session/fsi"), session.UploadURL)
 }
 
 func TestCreateUploadSession_WithoutFileSystemInfo(t *testing.T) {
@@ -494,7 +494,7 @@ func TestCreateUploadSession_WithoutFileSystemInfo(t *testing.T) {
 		t.Context(), driveid.New("d"), "parent", "no-timestamp.bin", 5242880, time.Time{},
 	)
 	require.NoError(t, err)
-	assert.Equal(t, "https://upload.example.com/session/nofsi", session.UploadURL)
+	assert.Equal(t, UploadURL("https://upload.example.com/session/nofsi"), session.UploadURL)
 }
 
 func TestUploadChunk_416_RangeNotSatisfiable(t *testing.T) {
@@ -505,7 +505,7 @@ func TestUploadChunk_416_RangeNotSatisfiable(t *testing.T) {
 	defer chunkSrv.Close()
 
 	client := newTestClient(t, "http://unused")
-	session := &UploadSession{UploadURL: chunkSrv.URL + "/upload"}
+	session := &UploadSession{UploadURL: UploadURL(chunkSrv.URL + "/upload")}
 
 	_, err := client.UploadChunk(
 		t.Context(), session,
@@ -538,12 +538,12 @@ func TestQueryUploadSession_Success(t *testing.T) {
 	defer sessionSrv.Close()
 
 	client := newTestClient(t, "http://unused")
-	session := &UploadSession{UploadURL: sessionSrv.URL + "/session"}
+	session := &UploadSession{UploadURL: UploadURL(sessionSrv.URL + "/session")}
 
 	status, err := client.QueryUploadSession(t.Context(), session)
 	require.NoError(t, err)
 
-	assert.Equal(t, "https://upload.example.com/session/resume", status.UploadURL)
+	assert.Equal(t, UploadURL("https://upload.example.com/session/resume"), status.UploadURL)
 	assert.Equal(t, 2024, status.ExpirationTime.Year())
 	assert.Equal(t, []string{"327680-"}, status.NextExpectedRanges)
 }
@@ -556,7 +556,7 @@ func TestQueryUploadSession_Expired(t *testing.T) {
 	defer sessionSrv.Close()
 
 	client := newTestClient(t, "http://unused")
-	session := &UploadSession{UploadURL: sessionSrv.URL + "/session"}
+	session := &UploadSession{UploadURL: UploadURL(sessionSrv.URL + "/session")}
 
 	_, err := client.QueryUploadSession(t.Context(), session)
 	require.Error(t, err)
@@ -584,7 +584,7 @@ func TestHandleChunkResponse_FinalDecodeError(t *testing.T) {
 	defer chunkSrv.Close()
 
 	client := newTestClient(t, "http://unused")
-	session := &UploadSession{UploadURL: chunkSrv.URL + "/upload"}
+	session := &UploadSession{UploadURL: UploadURL(chunkSrv.URL + "/upload")}
 
 	_, err := client.UploadChunk(
 		t.Context(), session,
@@ -622,7 +622,7 @@ func TestQueryUploadSession_DecodeError(t *testing.T) {
 	defer sessionSrv.Close()
 
 	client := newTestClient(t, "http://unused")
-	session := &UploadSession{UploadURL: sessionSrv.URL + "/session"}
+	session := &UploadSession{UploadURL: UploadURL(sessionSrv.URL + "/session")}
 
 	_, err := client.QueryUploadSession(t.Context(), session)
 	require.Error(t, err)
@@ -644,12 +644,12 @@ func TestQueryUploadSession_InvalidExpiration(t *testing.T) {
 	defer sessionSrv.Close()
 
 	client := newTestClient(t, "http://unused")
-	session := &UploadSession{UploadURL: sessionSrv.URL + "/session"}
+	session := &UploadSession{UploadURL: UploadURL(sessionSrv.URL + "/session")}
 
 	status, err := client.QueryUploadSession(t.Context(), session)
 	require.NoError(t, err)
 
-	assert.Equal(t, "https://upload.example.com/session/inv-exp", status.UploadURL)
+	assert.Equal(t, UploadURL("https://upload.example.com/session/inv-exp"), status.UploadURL)
 	assert.True(t, status.ExpirationTime.IsZero(), "invalid expiration should produce zero time")
 	assert.Equal(t, []string{"0-"}, status.NextExpectedRanges)
 }
@@ -1076,7 +1076,7 @@ func TestUploadChunk_RetriesOn503(t *testing.T) {
 	defer chunkSrv.Close()
 
 	client := newTestClient(t, "http://unused")
-	session := &UploadSession{UploadURL: chunkSrv.URL + "/upload"}
+	session := &UploadSession{UploadURL: UploadURL(chunkSrv.URL + "/upload")}
 
 	item, err := client.UploadChunk(
 		t.Context(), session,
@@ -1098,7 +1098,7 @@ func TestCancelUploadSession_Unexpected2xx(t *testing.T) {
 	defer chunkSrv.Close()
 
 	client := newTestClient(t, "http://unused")
-	session := &UploadSession{UploadURL: chunkSrv.URL + "/session"}
+	session := &UploadSession{UploadURL: UploadURL(chunkSrv.URL + "/session")}
 
 	err := client.CancelUploadSession(t.Context(), session)
 	require.Error(t, err)
@@ -1122,7 +1122,7 @@ func TestCancelUploadSession_RetriesOn503(t *testing.T) {
 	defer chunkSrv.Close()
 
 	client := newTestClient(t, "http://unused")
-	session := &UploadSession{UploadURL: chunkSrv.URL + "/session"}
+	session := &UploadSession{UploadURL: UploadURL(chunkSrv.URL + "/session")}
 
 	err := client.CancelUploadSession(t.Context(), session)
 	require.NoError(t, err)
@@ -1183,7 +1183,7 @@ func TestResumeUpload_Success(t *testing.T) {
 	defer chunkSrv.Close()
 
 	client := newTestClient(t, "http://unused")
-	session := &UploadSession{UploadURL: chunkSrv.URL + "/upload/session"}
+	session := &UploadSession{UploadURL: UploadURL(chunkSrv.URL + "/upload/session")}
 	reader := bytes.NewReader(content)
 
 	item, err := client.ResumeUpload(t.Context(), session, reader, totalSize, nil)
@@ -1200,7 +1200,7 @@ func TestResumeUpload_SessionExpired(t *testing.T) {
 	defer sessionSrv.Close()
 
 	client := newTestClient(t, "http://unused")
-	session := &UploadSession{UploadURL: sessionSrv.URL + "/expired"}
+	session := &UploadSession{UploadURL: UploadURL(sessionSrv.URL + "/expired")}
 
 	_, err := client.ResumeUpload(t.Context(), session, bytes.NewReader(nil), 1024, nil)
 	require.Error(t, err)
@@ -1229,10 +1229,10 @@ func TestQueryUploadSession_RetriesOn429(t *testing.T) {
 	defer sessionSrv.Close()
 
 	client := newTestClient(t, "http://unused")
-	session := &UploadSession{UploadURL: sessionSrv.URL + "/session"}
+	session := &UploadSession{UploadURL: UploadURL(sessionSrv.URL + "/session")}
 
 	status, err := client.QueryUploadSession(t.Context(), session)
 	require.NoError(t, err)
-	assert.Equal(t, "https://upload.example.com/session/retry", status.UploadURL)
+	assert.Equal(t, UploadURL("https://upload.example.com/session/retry"), status.UploadURL)
 	assert.Equal(t, int32(2), calls.Load())
 }
