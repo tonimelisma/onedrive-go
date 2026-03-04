@@ -152,7 +152,6 @@ The `delta_tokens` table schema is unchanged. Existing delta tokens are preserve
 |-------|-----------------|
 | `delta_tokens` | **Preserved** — schema unchanged |
 | `conflicts` | **Preserved** — schema unchanged |
-| `stale_files` | **Preserved** — schema unchanged |
 | `upload_sessions` | **Preserved** — schema unchanged |
 | `config_snapshots` | **Preserved** — schema unchanged |
 | `schema_migrations` | **Preserved** — version incremented |

@@ -2431,7 +2431,7 @@ In watch mode, remote changes arrive via polling (WebSocket is a future optimiza
 |---|---|
 | **First SIGINT/SIGTERM** | Stop accepting new events. Drain in-flight executor operations (configurable timeout). Save delta token checkpoint. Clean up `.partial` files. Exit 0. |
 | **Second SIGINT/SIGTERM** | Cancel all operations immediately. SQLite WAL ensures DB consistency even on abrupt termination. Exit 1. |
-| **SIGHUP** | Reload configuration. Re-initialize filter engine. Detect stale files from filter changes. Update bandwidth limiter settings. Continue running. |
+| **SIGHUP** | Reload configuration. Re-initialize filter engine. Update bandwidth limiter settings. Continue running. |
 
 ### 18.5 SIGHUP Config Reload
 
@@ -2446,8 +2446,6 @@ NOT hot-reloadable (require restart):
 - `sync_dir`, `drive_id`
 - Worker pool sizes (`parallel_downloads`, `parallel_uploads`, `parallel_checkers`)
 - Network settings
-
-**Filter change → stale file detection**: When SIGHUP changes filter rules, the engine compares the new filter config against the previous in-memory config. Files that were previously included but are now excluded are detected and the user is warned. Stale files remain on disk and are no longer synced.
 
 ### 18.6 Pause/Resume Detail
 
@@ -2703,32 +2701,6 @@ Engine distributes to components:
 | `poll_interval` | RemoteObserver (watch) | Default 5 minutes. Hot-reloadable |
 | `tombstone_retention_days` | N/A | **Eliminated in E** — no tombstones in baseline |
 | `skip_symlinks` | Local Observer | Default: skip |
-
-### 22.3 Stale File Detection on Filter Changes
-
-When filter configuration changes (via SIGHUP or between runs):
-
-```go
-func (e *Engine) detectStaleFiles(ctx context.Context, oldFilter, newFilter Filter) {
-    if oldFilter.Equal(newFilter) { return }
-
-    // Walk baseline: find items that pass old filter but fail new filter
-    var staleCount int
-    baseline := e.baselineMgr.Cached()
-    for path, entry := range baseline.ByPath {
-        if !newFilter.ShouldSync(path, entry.ItemType == ItemTypeFolder, entry.Size).Included {
-            staleCount++
-            e.logger.Warn("stale file: previously synced, now excluded by filter",
-                "path", path, "size", entry.Size)
-        }
-    }
-
-    if staleCount > 0 {
-        e.logger.Warn("stale files detected from filter change",
-            "count", staleCount)
-    }
-}
-```
 
 ---
 

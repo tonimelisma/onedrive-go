@@ -104,7 +104,7 @@ func resolveKeepBothOnly(ctx context.Context, cc *CLIContext, args []string, all
 		return fmt.Errorf("cannot determine state DB path for drive %q", cc.Cfg.CanonicalID)
 	}
 
-	mgr, err := sync.NewBaselineManager(dbPath, cc.Logger)
+	mgr, err := sync.NewSyncStore(dbPath, cc.Logger)
 	if err != nil {
 		return err
 	}
@@ -145,7 +145,7 @@ func resolveEachConflict(
 	return nil
 }
 
-func resolveAllKeepBoth(ctx context.Context, cc *CLIContext, mgr *sync.BaselineManager, dryRun bool) error {
+func resolveAllKeepBoth(ctx context.Context, cc *CLIContext, mgr *sync.SyncStore, dryRun bool) error {
 	conflicts, err := mgr.ListConflicts(ctx)
 	if err != nil {
 		return err
@@ -156,7 +156,7 @@ func resolveAllKeepBoth(ctx context.Context, cc *CLIContext, mgr *sync.BaselineM
 	})
 }
 
-func resolveSingleKeepBoth(ctx context.Context, cc *CLIContext, mgr *sync.BaselineManager, idOrPath string, dryRun bool) error {
+func resolveSingleKeepBoth(ctx context.Context, cc *CLIContext, mgr *sync.SyncStore, idOrPath string, dryRun bool) error {
 	return resolveSingleConflict(cc, idOrPath, resolutionKeepBoth, dryRun,
 		func() ([]sync.ConflictRecord, error) { return mgr.ListConflicts(ctx) },
 		func(id, resolution string) error { return mgr.ResolveConflict(ctx, id, resolution) },

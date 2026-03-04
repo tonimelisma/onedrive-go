@@ -109,7 +109,7 @@ type LocalObserver struct {
 
 // NewLocalObserver creates a LocalObserver. checkWorkers controls the number
 // of parallel goroutines used for file hashing during FullScan (0 → default 4).
-// The baseline must be loaded (from BaselineManager.Load); it is read-only
+// The baseline must be loaded (from SyncStore.Load); it is read-only
 // during observation.
 func NewLocalObserver(baseline *Baseline, logger *slog.Logger, checkWorkers int) *LocalObserver {
 	return &LocalObserver{

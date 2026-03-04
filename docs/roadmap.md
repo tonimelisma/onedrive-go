@@ -103,7 +103,7 @@ Estimated reuse: `internal/graph/` 100%, `internal/config/` 100%, `pkg/quickxorh
 **Foundation types and persistence layer.**
 
 - All type definitions: enums (ChangeSource, ChangeType, ItemType, SyncMode, ActionType, FolderCreateSide), core structs (ChangeEvent, BaselineEntry, Baseline, PathView, RemoteState, LocalState, ConflictRecord, Action, ActionPlan, Outcome), consumer-defined interfaces (DeltaFetcher, ItemClient, TransferClient)
-- SQLite baseline schema via goose migrations: 7 tables (baseline, delta_tokens, conflicts, stale_files, upload_sessions, change_journal, config_snapshots) + 4 indexes
+- SQLite baseline schema via goose migrations: 4 tables (baseline, delta_tokens, conflicts, upload_sessions) + 4 indexes
 - BaselineManager: sole DB writer with WAL mode via DSN pragmas, atomic Commit (outcomes + delta token), Load (ByPath + ByID maps), GetDeltaToken, injectable nowFunc for deterministic tests
 - 25 tests, 82.5% coverage. Dependencies: modernc.org/sqlite, goose/v3, google/uuid
 - **Acceptance**: All tests pass, baseline round-trip with real SQLite. PR #78.
@@ -762,6 +762,30 @@ This analysis categorizes every part of the codebase by its relationship to the 
 
 ---
 
+#### 5.7: Remote State Separation — Schema + SyncStore Foundation
+
+**Goal**: Lay the schema and code foundation for the remote-state-separation architecture (see [remote-state-separation.md](design/remote-state-separation.md)). No behavioral changes — the sync pipeline still uses the existing baseline-only flow. This increment adds the new tables, renames, and pure functions that 5.7.1+ will wire into the live sync path.
+
+##### 5.7.0: Schema + SyncStore Foundation + computeNewStatus() — **DONE**
+
+**5.7.0a** (additive, mechanical):
+1. Consolidated 5 migration files into single `00001_consolidated_schema.sql` with `remote_state` (16 cols, 9-value state machine) and `local_issues` (10 cols) tables
+2. Renamed `BaselineManager` → `SyncStore` across 12 files
+3. Removed `CycleID` from `ActionPlan` + `planner.go` (moved to engine-local generation)
+4. Added `computeNewStatus()` pure function implementing 30-cell decision matrix (§11)
+5. Added `SyncStore.Checkpoint()` method (WAL checkpoint + pruning)
+6. Added 6 sub-interface declarations (`ObservationWriter`, `OutcomeWriter`, `FailureRecorder`, `ConflictEscalator`, `StateReader`, `StateAdmin`) + `ObservedItem`/`RemoteStateRow` structs
+
+**5.7.0b** (baseline PK change):
+1. Changed baseline table PK from `path` to `(drive_id, item_id)` with `path UNIQUE`
+2. Updated SQL: `ON CONFLICT(drive_id, item_id)`, path in UPDATE SET, stale-path clearing
+3. `Baseline.Put()` removes stale ByID entries on path reassignment
+4. `commitMove()` simplified to single UPSERT (not DELETE+INSERT)
+
+Net: 6 new files, 12 modified. 33 new tests. Coverage: 86.6% sync package.
+
+---
+
 ## Phase 6: Multi-Drive Orchestration + Shared Content Sync
 
 **Single-process multi-drive sync.** After this phase, `sync --watch` syncs all non-paused drives simultaneously from a single process. Each drive has its own goroutine, state DB, and sync cycle. Identity refactoring (four drive types, display_name, token resolution in config) was completed in Phase 5.6.
@@ -906,6 +930,44 @@ Acceptance: `go vet -tags=e2e,e2e_full ./e2e/...` clean. `golangci-lint run` 0 i
 3. In multi-drive mode: `DriveRunner.lastErr` and failures exposed via `Orchestrator.States()` for live display. — Deferred to Phase 8 (WebSocket/daemon IPC).
 
 Acceptance: status shows per-drive sync state and aggregate health. Also bundled B-284 (structured TOML line model) and B-036 (CLI service layer interfaces).
+
+### 6.Xa: Remote observer symmetric filtering (FC-1) — FUTURE
+
+> **Active bug.** See [filtering-conflicts.md FC-1](design/filtering-conflicts.md#fc-1-remote-observer-has-no-built-in-exclusion-filtering) and B-307.
+
+1. Apply `isAlwaysExcluded()` in `observer_remote.go:classifyItem()` after vault check. Items failing: log at Debug, return nil (skip item).
+2. Apply `isValidOneDriveName()` in `observer_remote.go:classifyItem()` after vault check. Same treatment.
+3. Unit tests: remote observer rejects `.tmp`, `.partial`, `~$doc`, `desktop.ini`, `CON` items — assert no ChangeEvents emitted.
+4. Unit tests: parameterized symmetry test confirming both observers agree on all excluded patterns.
+5. E2E test (`e2e_full`): upload `.tmp` via Graph API, sync, assert not downloaded.
+
+Acceptance: `isAlwaysExcluded` and `isValidOneDriveName` called in remote observer. S7 enforced symmetrically.
+
+### 6.Xb: Narrow `.db` exclusion to sync engine database (FC-2) — FUTURE
+
+> **Active bug (false positives).** See [filtering-conflicts.md FC-2](design/filtering-conflicts.md#fc-2-built-in-db-exclusion-is-too-aggressive) and B-308.
+
+1. Remove `.db`, `.db-wal`, `.db-shm` from `alwaysExcludedSuffixes`.
+2. Add path-based exclusion for the sync engine's own baseline database file (check against known database path).
+3. Unit tests: `test-data.db` is NOT excluded; sync engine's database IS excluded.
+4. Unit tests: `.sqlite`/`.sqlite3` files are NOT excluded (documenting the behavior).
+5. E2E test (`e2e_full`): create `test-data.db` locally, sync, verify appears on remote.
+
+Acceptance: Legitimate `.db` files sync. Only the sync engine's own database is excluded.
+
+### 6.Xc: Non-empty directory delete — Tier 1 disposable cleanup (FC-12) — FUTURE
+
+> **Active limitation.** See [filtering-conflicts.md FC-12](design/filtering-conflicts.md#fc-12-non-empty-directory-delete) and B-309.
+
+1. Add `isBuiltinDisposable(name)` function covering: `isAlwaysExcluded`, `!isValidOneDriveName`, plus OS junk list (`.DS_Store`, `Thumbs.db`, `._*` prefix, `__MACOSX`).
+2. Update `deleteLocalFolder` in `executor_delete.go`: when `os.ReadDir` returns entries, classify each. If all are built-in disposable, remove them and retry rmdir. If any are unknown, fail with file names in error message (upgrade from Debug to Warn).
+3. Unit tests: directory with only `.DS_Store` → delete succeeds.
+4. Unit tests: directory with only `.tmp` files → delete succeeds.
+5. Unit tests: directory with mix of disposable + unknown → delete fails, error names blocking files.
+6. Unit tests: directory with `desktop.ini` only → delete succeeds (caught by `!isValidOneDriveName`).
+7. E2E test (`e2e_full`): create folder+file on remote, sync, create `.DS_Store` locally, delete folder on remote, sync, assert folder removed.
+
+Acceptance: Non-empty directories with only disposable files are cleaned up. Unknown files block deletion with named warnings.
 
 ### 6.3: Shared drive enumeration — FUTURE
 
@@ -1099,26 +1161,34 @@ Moved to Phase 6.0c as `transfer_workers` (default 8, range 4-64) and `check_wor
 
 ### 10.0: Config-based filtering — FUTURE
 
-1. `skip_files` config option: glob patterns for files to exclude from sync. Example: `["~*", "*.tmp", "*.partial", ".DS_Store", "Thumbs.db"]`. Matched against filename only (not full path). Applied in both observers (local and remote).
-2. `skip_dirs` config option: glob patterns for directories to exclude. Example: `["node_modules", ".git", "__pycache__"]`. When a directory matches, skip it and all its contents. Applied during local walk and remote delta processing.
-3. `skip_dotfiles` config option (default `false`): when `true`, exclude all files and directories starting with `.` (except `.odignore`).
+> **Prerequisites:** 6.Xa (FC-1: remote observer symmetric filtering) and 6.Xb (FC-2: narrow `.db` exclusion) must be completed first.
+
+1. `skip_files` config option: glob patterns for files to exclude from sync. Example: `["*.log", "*.pyc", "*.o"]`. Note: `*.tmp`, `*.partial`, `~*`, `.DS_Store`, `Thumbs.db` are already in the built-in exclusion list (Layer 0) and don't need to be in `skip_files`. See [filtering-conflicts.md FC-5](design/filtering-conflicts.md#fc-5-built-in-exclusions-vs-future-skip_files-overlap). Matched against filename only (not full path). Applied in the planner (Layer 2).
+2. `skip_dirs` config option: glob patterns for directories to exclude. Example: `["node_modules", ".git", "__pycache__"]`. When a directory matches, skip it and all its contents. Applied in the planner (Layer 2).
+3. `skip_dotfiles` config option (default `false`): when `true`, exclude all files and directories starting with `.`, **except** the configured `ignore_marker` filename (default `.odignore`). The `ignore_marker` exemption prevents Layer 2 from killing `.odignore` before Layer 3 processes it. See [filtering-conflicts.md FC-6](design/filtering-conflicts.md#fc-6-odignore-killed-by-skip_dotfiles).
 4. `max_file_size` config option (e.g., `"50GB"`): skip files larger than N bytes. Log a warning for each skipped file. Checked in both upload and download paths.
-5. Per-drive overrides: each drive section can override global filter settings. Drive-level `skip_dirs` replaces (not merges with) global `skip_dirs`.
-6. Filter evaluation shared between `LocalObserver.FullScan()`, `LocalObserver.Watch()`, and `RemoteObserver.FullDelta()`. Extract a `Filter` type that all three consume.
+5. Per-drive overrides: each drive section can override filter settings. Drive-level `skip_dirs` replaces (not merges with) other drive settings.
+6. Filter evaluation as a `Filter` type consumed by the planner. Built-in exclusions (Layer 0) remain in observers.
+7. **Stale file handling** (FC-9): When a filter change excludes a previously-synced file (baseline entry exists), log a warning and freeze the baseline entry. No sync operations generated for stale files — no downloads, no uploads, no deletes. Optional `stale_action = "untrack"` to remove from baseline. See [filtering-conflicts.md FC-9](design/filtering-conflicts.md#fc-9-stale-files-after-filter-changes).
+8. Log effective built-in exclusions at startup so users see what's always excluded (FC-5).
+9. Test: removing a `skip_files` pattern for a built-in-excluded file does NOT cause it to sync.
 
 ### 10.1: Per-directory ignore files — FUTURE
 
 1. `.odignore` marker file support: drop a file named `.odignore` (configurable via `ignore_marker` config key) in any directory to control exclusion.
 2. Empty `.odignore` or `.odignore` containing `*`: exclude the entire directory and all contents from sync.
 3. `.odignore` with patterns: gitignore-style pattern matching within that directory. Supports `*.log`, `build/`, `!important.log` (negation). Patterns apply to the directory containing the marker file and its descendants.
-4. `.odignore` files themselves are never synced to OneDrive (always excluded).
+4. **`.odignore` never synced** (FC-7): The configured `ignore_marker` value is added to the built-in exclusion list (Layer 0) and filtered in both observers. Ignore rules are per-device. See [filtering-conflicts.md FC-7](design/filtering-conflicts.md#fc-7-odignore-files--sync-or-not).
 5. Changes to `.odignore` take effect on the next sync cycle in watch mode.
+6. Test: `.odignore` not synced locally→remote. Test: `.odignore` not downloaded remote→local.
 
 ### 10.2: Selective sync paths — FUTURE
 
 1. `sync_paths` per-drive config option: list of remote paths to sync. Example: `["/Documents", "/Photos/Camera Roll", "/Work"]`. Only these paths and their children are synced. Everything else is ignored.
 2. When `sync_paths` is set, the local sync directory mirrors only the specified subtrees. Remote changes outside `sync_paths` are ignored in delta processing.
 3. `sync_paths` interacts with `skip_dirs`/`skip_files`: both filters apply. A file must be within a `sync_path` AND not match any skip pattern to be synced.
+4. **Lightweight baseline entries for traversal parents** (FC-10): Parent directories of `sync_paths` entries get baseline entries with a `sync_paths_traversal` flag. The planner processes renames and deletes for these parents but doesn't sync their direct children unless they're within a sync_path. See [filtering-conflicts.md FC-10](design/filtering-conflicts.md#fc-10-sync_paths-parent-traversal-gaps).
+5. Test: parent of `sync_path` renamed remotely → local structure updated correctly.
 
 ### 10.3: Symlink handling — FUTURE
 
@@ -1137,12 +1207,13 @@ Industry context: the official OneDrive client follows symlinks (syncs target co
 1. OneNote auto-exclusion: automatically exclude `.one` and `.onetoc2` files from sync. OneNote files can only be edited through the OneNote application and synced through its own mechanism. Syncing them causes corruption. Always excluded regardless of config.
 2. SharePoint enrichment known-type list: maintain a list of file types that SharePoint modifies server-side after upload (PDF metadata, Office document properties, HTML). When a post-upload hash mismatch occurs for these types, accept the server version without flagging a conflict. See [design/sharepoint-enrichment.md](design/sharepoint-enrichment.md).
 
-### 10.5: OS junk file cleanup — FUTURE
+### 10.5: OS junk handling + perishable files — FUTURE
 
-1. Configurable auto-delete of OS-generated junk files during sync. `auto_clean_junk` config option (default `false`).
-2. Default junk file list: `.DS_Store`, `Thumbs.db`, `desktop.ini`, `._*` (macOS resource forks), `__MACOSX/` directories.
-3. When enabled: delete matching files from the remote side during upload-direction sync. Do not re-download them if deleted locally. Log each deletion at Debug level.
-4. Junk list extensible via config: `junk_files = [".DS_Store", "Thumbs.db", "*.pyc"]`.
+> **Rewritten from "auto-clean junk" to "built-in junk exclusion + perishable files."** The original auto-clean design would cause infinite deletion loops in cross-platform shared folders (macOS recreates `.DS_Store` after every Finder visit). See [filtering-conflicts.md FC-8](design/filtering-conflicts.md#fc-8-auto_clean_junk-deletion-wars).
+
+1. **Built-in junk exclusion** (core junk files already in Layer 0 from 6.Xc): `.DS_Store`, `Thumbs.db`, `._*` (macOS resource forks), `__MACOSX/` directories. Note: `desktop.ini` is already covered by `isValidOneDriveName` (FC-3). These files are never synced in either direction.
+2. **`perishable_files` config option** (FC-12 Tier 2): per-drive list of glob patterns for files that can be cleaned during directory deletion. Example: `perishable_files = ["*.pyc", "*.o", "__pycache__/", "node_modules/"]`. See [filtering-conflicts.md FC-12](design/filtering-conflicts.md#fc-12-non-empty-directory-delete).
+3. **Optional CLI command**: `onedrive-go clean-remote-junk` for one-time removal of junk files that were uploaded to remote by other clients. Not automated — manual, user-initiated. Avoids deletion wars.
 
 ---
 

@@ -66,7 +66,7 @@ func runVerify(cmd *cobra.Command, _ []string) error {
 // loadAndVerify opens the baseline, loads it, and runs verification.
 // Separated so the defer Close() runs before the caller returns.
 func loadAndVerify(ctx context.Context, dbPath, syncDir string, logger *slog.Logger) (*sync.VerifyReport, error) {
-	mgr, err := sync.NewBaselineManager(dbPath, logger)
+	mgr, err := sync.NewSyncStore(dbPath, logger)
 	if err != nil {
 		return nil, err
 	}

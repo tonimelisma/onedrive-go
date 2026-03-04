@@ -377,11 +377,16 @@ func classifyStatusCode(code int) errClass {
 		return errClassFatal
 	case http.StatusLocked: // HTTP 423: SharePoint co-authoring locks last hours; skip, don't retry (B-020)
 		return errClassSkip
+	// 404 Not Found: Graph API returns transient 404s on valid resources due to
+	// load-balancer cache misses and cross-datacenter lookup timeouts (ci_issues.md §1).
+	// A retry resolves it in ~1 second. Delete actions handle 404 as success before
+	// reaching withRetry, so this does not affect delete behavior.
+	//
 	// 412 Precondition Failed: Graph API returns this on server-side ETag conflicts
 	// during mutations (e.g., concurrent writes). We don't send If-Match headers,
 	// so 412 only comes from server-side checks. A plain retry succeeds once the
 	// server resolves the transient conflict.
-	case http.StatusRequestTimeout, http.StatusPreconditionFailed,
+	case http.StatusNotFound, http.StatusRequestTimeout, http.StatusPreconditionFailed,
 		http.StatusTooManyRequests, 509: //nolint:mnd // HTTP 509 Bandwidth Limit Exceeded (no stdlib constant)
 		return errClassRetryable
 	default:

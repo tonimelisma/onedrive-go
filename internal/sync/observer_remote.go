@@ -84,7 +84,7 @@ type ObserverStats struct {
 }
 
 // NewRemoteObserver creates a RemoteObserver for the given drive. The
-// baseline must be a loaded Baseline (from BaselineManager.Load); it is
+// baseline must be a loaded Baseline (from SyncStore.Load); it is
 // read-only during observation. The caller must pass a normalized driveid.ID.
 func NewRemoteObserver(fetcher DeltaFetcher, baseline *Baseline, driveID driveid.ID, logger *slog.Logger) *RemoteObserver {
 	return &RemoteObserver{

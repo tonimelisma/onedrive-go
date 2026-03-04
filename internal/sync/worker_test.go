@@ -105,7 +105,7 @@ func (m *workerMockUploader) Upload(ctx context.Context, driveID driveid.ID, par
 // ---------------------------------------------------------------------------
 
 func newWorkerTestSetup(t *testing.T) (
-	*ExecutorConfig, *BaselineManager, string,
+	*ExecutorConfig, *SyncStore, string,
 ) {
 	t.Helper()
 

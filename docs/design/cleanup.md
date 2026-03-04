@@ -4,3 +4,6 @@ Toni's cleanup list - to be ignored by AI agents
 - Module boundaries
 - Consistency
 - Dead code
+- Defensive validation
+- Belt and suspenders
+- Resource cleanup

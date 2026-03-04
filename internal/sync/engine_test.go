@@ -200,7 +200,7 @@ func writeLocalFile(t *testing.T, syncRoot, relPath, content string) {
 
 // seedBaseline commits outcomes and an optional delta token to the baseline,
 // using the per-outcome CommitOutcome API (the old batch Commit was removed).
-func seedBaseline(t *testing.T, mgr *BaselineManager, ctx context.Context, outcomes []Outcome, deltaToken string) {
+func seedBaseline(t *testing.T, mgr *SyncStore, ctx context.Context, outcomes []Outcome, deltaToken string) {
 	t.Helper()
 
 	for i := range outcomes {
@@ -1787,8 +1787,7 @@ func TestExecutePlan_ActionsDepsLengthMismatch(t *testing.T) {
 			{Type: ActionDownload, Path: "file.txt"},
 			{Type: ActionDownload, Path: "file2.txt"},
 		},
-		Deps:    [][]int{{1}}, // only 1 dep entry for 2 actions
-		CycleID: "test-cycle",
+		Deps: [][]int{{1}}, // only 1 dep entry for 2 actions
 	}
 
 	report := &SyncReport{}
