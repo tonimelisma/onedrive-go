@@ -169,6 +169,10 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 
 		// Synthesize a change event and inject into the buffer.
 		ev := r.synthesizeEvent(row)
+		if ev == nil {
+			continue
+		}
+
 		r.buf.Add(ev)
 		dispatched++
 	}
@@ -186,6 +190,7 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 // synthesizeEvent creates a ChangeEvent from a failed remote_state row.
 // delete_failed and pending_delete rows become ChangeDelete events;
 // everything else becomes ChangeModify (re-download).
+// Returns nil if the row has an invalid item type (corrupt data).
 func (r *Reconciler) synthesizeEvent(row *RemoteStateRow) *ChangeEvent {
 	changeType := ChangeModify
 
@@ -193,9 +198,14 @@ func (r *Reconciler) synthesizeEvent(row *RemoteStateRow) *ChangeEvent {
 		changeType = ChangeDelete
 	}
 
-	itemType := ItemTypeFile
-	if row.ItemType == strFolder {
-		itemType = ItemTypeFolder
+	itemType, err := ParseItemType(row.ItemType)
+	if err != nil {
+		r.logger.Warn("reconciler: skipping row with invalid item type",
+			slog.String("path", row.Path),
+			slog.String("item_type", row.ItemType),
+		)
+
+		return nil
 	}
 
 	return &ChangeEvent{
@@ -215,7 +225,9 @@ func (r *Reconciler) synthesizeEvent(row *RemoteStateRow) *ChangeEvent {
 }
 
 // armTimer sets up a timer to fire at the earliest future retry time.
-// Stops any existing timer first.
+// Stops any existing timer first. The entire method runs under mu
+// (via defer Unlock), so the r.timer assignment at the end is protected.
+// The AfterFunc callback only calls Kick() which does not access r.timer.
 func (r *Reconciler) armTimer(ctx context.Context, now time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

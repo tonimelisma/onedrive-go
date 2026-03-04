@@ -488,6 +488,14 @@ Consolidated migrations into single `00001_consolidated_schema.sql` with `remote
 
 4. **`status.go`** — Add `PendingSyncCount` and `UploadIssueCount` fields to `syncStateInfo`. Add SQL queries in `querySyncState()`. Update display formatting.
 
+7. **Configurable reconciler thresholds** — Extract the three hardcoded reconciler constants into the config layer:
+   - `escalation_threshold` (default: 10) — failure count before escalation to `sync_failure` conflict.
+   - `base_backoff` (default: 30s) — base delay for exponential backoff in `RecordFailure`.
+   - `max_backoff` (default: 3600s) — maximum backoff cap.
+   - These become fields on `Reconciler` (or a `ReconcilerConfig` struct passed to `NewReconciler`), populated from the TOML config with fallback to current defaults. No behavioral change unless the user overrides.
+
+8. **`ListUnreconciled` wired into status command** — The `ListUnreconciled` method on `StateReader` is implemented but not yet called by any production code. Wire it into the `status` command to show "N items pending sync" (count of remote_state rows not yet reconciled with baseline). This is complementary to item 6 above (`status` command remote_state integration).
+
 **What gets removed**:
 - `DB()` public method on `*SyncStore` (or downgraded to unexported for test use only).
 

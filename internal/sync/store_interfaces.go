@@ -46,6 +46,8 @@ type ConflictEscalator interface {
 // All methods are pure reads. Multiple goroutines call concurrently.
 // WAL mode guarantees readers never block.
 type StateReader interface {
+	// ListUnreconciled returns remote_state rows not yet reconciled with
+	// baseline. Used by the status command (5.7.4) to show pending items.
 	ListUnreconciled(ctx context.Context) ([]RemoteStateRow, error)
 	ListFailedForRetry(ctx context.Context, now time.Time) ([]RemoteStateRow, error)
 	EarliestRetryAt(ctx context.Context, now time.Time) (time.Time, error)

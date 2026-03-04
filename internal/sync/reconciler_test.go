@@ -332,6 +332,38 @@ func TestSynthesizeEvent_FolderItemType(t *testing.T) {
 	assert.Equal(t, ItemTypeFolder, ev.ItemType)
 }
 
+func TestSynthesizeEvent_InvalidItemType(t *testing.T) {
+	r := testReconciler(&mockStateReader{}, &mockEscalator{}, &mockEventAdder{}, newMockInFlightChecker())
+
+	row := makeFailedRow("bad.txt", statusDownloadFailed, 1)
+	row.ItemType = "bogus"
+
+	ev := r.synthesizeEvent(&row)
+	assert.Nil(t, ev, "invalid item type should return nil")
+}
+
+func TestReconcile_SkipsInvalidItemType(t *testing.T) {
+	rows := []RemoteStateRow{
+		makeFailedRow("good.txt", statusDownloadFailed, 2),
+		makeFailedRow("bad.txt", statusDownloadFailed, 2),
+	}
+	rows[1].ItemType = "bogus" // invalid item type
+
+	state := &mockStateReader{failedRows: rows}
+	adder := &mockEventAdder{}
+	r := testReconciler(state, &mockEscalator{}, adder, newMockInFlightChecker())
+	r.nowFunc = func() time.Time { return time.Unix(1000, 0) }
+
+	r.reconcile(context.Background())
+
+	adder.mu.Lock()
+	defer adder.mu.Unlock()
+
+	// Only good.txt dispatched; bad.txt skipped due to invalid item type.
+	require.Len(t, adder.events, 1)
+	assert.Equal(t, "good.txt", adder.events[0].Path)
+}
+
 func TestReconcile_NoRows(t *testing.T) {
 	state := &mockStateReader{failedRows: nil}
 	esc := &mockEscalator{}
