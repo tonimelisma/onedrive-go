@@ -106,6 +106,8 @@ const (
 var (
 	_ ObservationWriter = (*SyncStore)(nil)
 	_ FailureRecorder   = (*SyncStore)(nil)
+	_ StateReader       = (*SyncStore)(nil)
+	_ StateAdmin        = (*SyncStore)(nil)
 )
 
 // SyncStore is the sole writer to the sync database. It loads the
@@ -1125,6 +1127,196 @@ func computeNextRetry(now time.Time, failureCount int) time.Time {
 	}
 
 	return now.Add(time.Duration(delaySec) * time.Second)
+}
+
+// ---------------------------------------------------------------------------
+// StateReader methods
+// ---------------------------------------------------------------------------
+
+// ListUnreconciled returns remote_state rows that need action (not synced,
+// filtered, or deleted).
+func (m *SyncStore) ListUnreconciled(ctx context.Context) ([]RemoteStateRow, error) {
+	return m.queryRemoteStateRows(ctx,
+		`SELECT drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
+			previous_path, sync_status, observed_at, failure_count, next_retry_at, last_error, http_status
+		FROM remote_state WHERE sync_status NOT IN (?, ?, ?)`,
+		statusSynced, statusFiltered, statusDeleted,
+	)
+}
+
+// ListFailedForRetry returns rows eligible for retry: pending or failed states
+// where next_retry_at is NULL or in the past.
+func (m *SyncStore) ListFailedForRetry(ctx context.Context, now time.Time) ([]RemoteStateRow, error) {
+	return m.queryRemoteStateRows(ctx,
+		`SELECT drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
+			previous_path, sync_status, observed_at, failure_count, next_retry_at, last_error, http_status
+		FROM remote_state
+		WHERE sync_status IN (?, ?, ?, ?)
+			AND (next_retry_at IS NULL OR next_retry_at <= ?)`,
+		statusPendingDownload, statusDownloadFailed, statusPendingDelete, statusDeleteFailed,
+		now.UnixNano(),
+	)
+}
+
+// FailureCount returns the number of failed remote_state rows.
+func (m *SyncStore) FailureCount(ctx context.Context) (int, error) {
+	var count int
+
+	err := m.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM remote_state WHERE sync_status IN (?, ?)`,
+		statusDownloadFailed, statusDeleteFailed,
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("sync: counting failed remote_state: %w", err)
+	}
+
+	return count, nil
+}
+
+// queryRemoteStateRows is a shared helper for scanning multiple remote_state rows.
+func (m *SyncStore) queryRemoteStateRows(ctx context.Context, query string, args ...any) ([]RemoteStateRow, error) {
+	rows, err := m.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("sync: querying remote_state: %w", err)
+	}
+	defer rows.Close()
+
+	var result []RemoteStateRow
+
+	for rows.Next() {
+		var (
+			row        RemoteStateRow
+			parentID   sql.NullString
+			hash       sql.NullString
+			size       sql.NullInt64
+			mtime      sql.NullInt64
+			etag       sql.NullString
+			prevPath   sql.NullString
+			nextRetry  sql.NullInt64
+			lastError  sql.NullString
+			httpStatus sql.NullInt64
+		)
+
+		if err := rows.Scan(
+			&row.DriveID, &row.ItemID, &row.Path, &parentID, &row.ItemType,
+			&hash, &size, &mtime, &etag,
+			&prevPath, &row.SyncStatus, &row.ObservedAt, &row.FailureCount,
+			&nextRetry, &lastError, &httpStatus,
+		); err != nil {
+			return nil, fmt.Errorf("sync: scanning remote_state row: %w", err)
+		}
+
+		row.ParentID = parentID.String
+		row.Hash = hash.String
+		row.ETag = etag.String
+		row.PreviousPath = prevPath.String
+		row.LastError = lastError.String
+
+		if size.Valid {
+			row.Size = size.Int64
+		}
+
+		if mtime.Valid {
+			row.Mtime = mtime.Int64
+		}
+
+		if nextRetry.Valid {
+			row.NextRetryAt = nextRetry.Int64
+		}
+
+		if httpStatus.Valid {
+			row.HTTPStatus = int(httpStatus.Int64)
+		}
+
+		result = append(result, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sync: iterating remote_state rows: %w", err)
+	}
+
+	return result, nil
+}
+
+// ---------------------------------------------------------------------------
+// StateAdmin methods
+// ---------------------------------------------------------------------------
+
+// ResetFailure resets a single failed path to pending_download, clearing
+// failure metadata.
+func (m *SyncStore) ResetFailure(ctx context.Context, path string) error {
+	_, err := m.db.ExecContext(ctx,
+		`UPDATE remote_state SET
+			sync_status = ?,
+			failure_count = 0,
+			next_retry_at = NULL,
+			last_error = NULL,
+			http_status = NULL
+		WHERE path = ? AND sync_status IN (?, ?)`,
+		statusPendingDownload,
+		path, statusDownloadFailed, statusDeleteFailed,
+	)
+	if err != nil {
+		return fmt.Errorf("sync: resetting failure for %s: %w", path, err)
+	}
+
+	return nil
+}
+
+// ResetAllFailures resets all failed rows: download_failed→pending_download,
+// delete_failed→pending_delete.
+func (m *SyncStore) ResetAllFailures(ctx context.Context) error {
+	_, err := m.db.ExecContext(ctx,
+		`UPDATE remote_state SET
+			sync_status = ?,
+			failure_count = 0,
+			next_retry_at = NULL,
+			last_error = NULL,
+			http_status = NULL
+		WHERE sync_status = ?`,
+		statusPendingDownload, statusDownloadFailed,
+	)
+	if err != nil {
+		return fmt.Errorf("sync: resetting download failures: %w", err)
+	}
+
+	_, err = m.db.ExecContext(ctx,
+		`UPDATE remote_state SET
+			sync_status = ?,
+			failure_count = 0,
+			next_retry_at = NULL,
+			last_error = NULL,
+			http_status = NULL
+		WHERE sync_status = ?`,
+		statusPendingDelete, statusDeleteFailed,
+	)
+	if err != nil {
+		return fmt.Errorf("sync: resetting delete failures: %w", err)
+	}
+
+	return nil
+}
+
+// ResetInProgressStates is crash recovery: downloading→pending_download,
+// deleting→pending_delete. Called at engine startup.
+func (m *SyncStore) ResetInProgressStates(ctx context.Context) error {
+	_, err := m.db.ExecContext(ctx,
+		`UPDATE remote_state SET sync_status = ? WHERE sync_status = ?`,
+		statusPendingDownload, statusDownloading,
+	)
+	if err != nil {
+		return fmt.Errorf("sync: resetting downloading states: %w", err)
+	}
+
+	_, err = m.db.ExecContext(ctx,
+		`UPDATE remote_state SET sync_status = ? WHERE sync_status = ?`,
+		statusPendingDelete, statusDeleting,
+	)
+	if err != nil {
+		return fmt.Errorf("sync: resetting deleting states: %w", err)
+	}
+
+	return nil
 }
 
 // WriteSyncMetadata persists sync metadata after a completed RunOnce cycle.

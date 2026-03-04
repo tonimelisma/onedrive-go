@@ -648,6 +648,219 @@ func TestCommitOutcome_Upload_UnconditionalUpdate(t *testing.T) {
 	assert.Equal(t, int64(500), row.Size)
 }
 
+// ---------------------------------------------------------------------------
+// StateReader + StateAdmin tests
+// ---------------------------------------------------------------------------
+
+func TestListUnreconciled(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	// Insert rows in various states.
+	for _, s := range []struct {
+		id     string
+		status string
+	}{
+		{"a", statusPendingDownload},
+		{"b", statusSynced},
+		{"c", statusDownloadFailed},
+		{"d", statusDeleted},
+		{"e", statusPendingDelete},
+		{"f", statusFiltered},
+	} {
+		_, err := mgr.DB().ExecContext(ctx,
+			`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+			VALUES (?, ?, ?, 'file', ?, ?)`,
+			testDriveID, s.id, s.id+".txt", s.status, 999,
+		)
+		require.NoError(t, err)
+	}
+
+	rows, err := mgr.ListUnreconciled(ctx)
+	require.NoError(t, err)
+
+	// Should include: pending_download, download_failed, pending_delete
+	// Should exclude: synced, deleted, filtered
+	assert.Len(t, rows, 3)
+
+	ids := make(map[string]bool)
+	for _, r := range rows {
+		ids[r.ItemID] = true
+	}
+
+	assert.True(t, ids["a"], "pending_download should be unreconciled")
+	assert.True(t, ids["c"], "download_failed should be unreconciled")
+	assert.True(t, ids["e"], "pending_delete should be unreconciled")
+}
+
+func TestListFailedForRetry(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	now := time.Unix(5000, 0)
+
+	// Insert: one ready for retry, one not yet.
+	_, err := mgr.DB().ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at, next_retry_at)
+		VALUES (?, ?, ?, 'file', ?, ?, ?)`,
+		testDriveID, "ready", "ready.txt", statusDownloadFailed, 999, now.Add(-time.Minute).UnixNano(),
+	)
+	require.NoError(t, err)
+
+	_, err = mgr.DB().ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at, next_retry_at)
+		VALUES (?, ?, ?, 'file', ?, ?, ?)`,
+		testDriveID, "not-ready", "not-ready.txt", statusDownloadFailed, 999, now.Add(time.Hour).UnixNano(),
+	)
+	require.NoError(t, err)
+
+	// One with NULL next_retry_at (new pending item).
+	_, err = mgr.DB().ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		VALUES (?, ?, ?, 'file', ?, ?)`,
+		testDriveID, "null-retry", "null-retry.txt", statusPendingDownload, 999,
+	)
+	require.NoError(t, err)
+
+	rows, err := mgr.ListFailedForRetry(ctx, now)
+	require.NoError(t, err)
+	assert.Len(t, rows, 2, "should include ready + null-retry")
+}
+
+func TestFailureCount(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	// Insert some rows.
+	for _, s := range []struct {
+		id     string
+		status string
+	}{
+		{"a", statusDownloadFailed},
+		{"b", statusDeleteFailed},
+		{"c", statusSynced},
+		{"d", statusPendingDownload},
+	} {
+		_, err := mgr.DB().ExecContext(ctx,
+			`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+			VALUES (?, ?, ?, 'file', ?, ?)`,
+			testDriveID, s.id, s.id+".txt", s.status, 999,
+		)
+		require.NoError(t, err)
+	}
+
+	count, err := mgr.FailureCount(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 2, count, "should count download_failed + delete_failed")
+}
+
+func TestResetFailure(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	_, err := mgr.DB().ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at,
+			failure_count, next_retry_at, last_error)
+		VALUES (?, ?, ?, 'file', ?, ?, 5, 9999, 'old error')`,
+		testDriveID, "item1", "hello.txt", statusDownloadFailed, 999,
+	)
+	require.NoError(t, err)
+
+	err = mgr.ResetFailure(ctx, "hello.txt")
+	require.NoError(t, err)
+
+	row := readRemoteStateRow(t, mgr.DB(), testDriveID, "item1")
+	require.NotNil(t, row)
+	assert.Equal(t, statusPendingDownload, row.SyncStatus)
+	assert.Equal(t, 0, row.FailureCount)
+	assert.Equal(t, int64(0), row.NextRetryAt)
+}
+
+func TestResetAllFailures(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	for _, s := range []struct {
+		id     string
+		status string
+	}{
+		{"a", statusDownloadFailed},
+		{"b", statusDeleteFailed},
+		{"c", statusSynced},
+	} {
+		_, err := mgr.DB().ExecContext(ctx,
+			`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at, failure_count)
+			VALUES (?, ?, ?, 'file', ?, ?, 3)`,
+			testDriveID, s.id, s.id+".txt", s.status, 999,
+		)
+		require.NoError(t, err)
+	}
+
+	err := mgr.ResetAllFailures(ctx)
+	require.NoError(t, err)
+
+	// download_failed should become pending_download.
+	rowA := readRemoteStateRow(t, mgr.DB(), testDriveID, "a")
+	assert.Equal(t, statusPendingDownload, rowA.SyncStatus)
+
+	// delete_failed should become pending_delete.
+	rowB := readRemoteStateRow(t, mgr.DB(), testDriveID, "b")
+	assert.Equal(t, statusPendingDelete, rowB.SyncStatus)
+
+	// synced should not change.
+	rowC := readRemoteStateRow(t, mgr.DB(), testDriveID, "c")
+	assert.Equal(t, statusSynced, rowC.SyncStatus)
+}
+
+func TestResetInProgressStates(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	for _, s := range []struct {
+		id     string
+		status string
+	}{
+		{"a", statusDownloading},
+		{"b", statusDeleting},
+		{"c", statusSynced},
+		{"d", statusPendingDownload},
+	} {
+		_, err := mgr.DB().ExecContext(ctx,
+			`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+			VALUES (?, ?, ?, 'file', ?, ?)`,
+			testDriveID, s.id, s.id+".txt", s.status, 999,
+		)
+		require.NoError(t, err)
+	}
+
+	err := mgr.ResetInProgressStates(ctx)
+	require.NoError(t, err)
+
+	rowA := readRemoteStateRow(t, mgr.DB(), testDriveID, "a")
+	assert.Equal(t, statusPendingDownload, rowA.SyncStatus, "downloading→pending_download")
+
+	rowB := readRemoteStateRow(t, mgr.DB(), testDriveID, "b")
+	assert.Equal(t, statusPendingDelete, rowB.SyncStatus, "deleting→pending_delete")
+
+	rowC := readRemoteStateRow(t, mgr.DB(), testDriveID, "c")
+	assert.Equal(t, statusSynced, rowC.SyncStatus, "synced unchanged")
+
+	rowD := readRemoteStateRow(t, mgr.DB(), testDriveID, "d")
+	assert.Equal(t, statusPendingDownload, rowD.SyncStatus, "pending_download unchanged")
+}
+
 func TestCommitOutcome_LocalDelete_MarksDeleted(t *testing.T) {
 	t.Parallel()
 
