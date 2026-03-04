@@ -122,6 +122,14 @@ Optimization deferred until profiling shows a bottleneck.
 | B-172 | SQLite batched commits for high-throughput workloads | P4 | Per-action commit is ~0.5ms. Bottleneck is network I/O, not SQLite. |
 | B-173 | Concurrent folder creates via Graph API `$batch` | P4 | Sibling folders at same depth. Diminishing returns after first sync. |
 
+## Filtering Conflicts (pre-Phase 10)
+
+| ID | Title | Priority | Notes |
+|----|-------|----------|-------|
+| B-307 | FC-1: Remote observer symmetric filtering | P1 | Active bug. Remote observer lacks `isAlwaysExcluded()` and `isValidOneDriveName()`. Temp/junk files uploaded via web UI flow through to planner. Roadmap 6.Xa. See [filtering-conflicts.md FC-1](docs/design/filtering-conflicts.md#fc-1-remote-observer-has-no-built-in-exclusion-filtering). |
+| B-308 | FC-2: Narrow `.db` exclusion to sync engine database | P2 | Active bug (false positives). `alwaysExcludedSuffixes` includes `.db` — catches legitimate data files. Narrow to sync engine's own database path only. Roadmap 6.Xb. See [filtering-conflicts.md FC-2](docs/design/filtering-conflicts.md#fc-2-built-in-db-exclusion-is-too-aggressive). |
+| B-309 | FC-12: Non-empty directory delete — Tier 1 disposable cleanup | P2 | Active limitation. `deleteLocalFolder` fails permanently when OS junk (`.DS_Store`, `Thumbs.db`) blocks folder removal. Add built-in disposable classification. Roadmap 6.Xc. See [filtering-conflicts.md FC-12](docs/design/filtering-conflicts.md#fc-12-non-empty-directory-delete). |
+
 ## CI / Infrastructure
 
 | ID | Title | Priority | Notes |

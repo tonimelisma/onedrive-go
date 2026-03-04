@@ -1113,6 +1113,7 @@ func TestClassifyError(t *testing.T) {
 		{"507 insufficient storage", &graph.GraphError{StatusCode: 507, Err: graph.ErrServerError}, errClassFatal},
 		{"408 request timeout", &graph.GraphError{StatusCode: 408}, errClassRetryable},
 		{"412 precondition failed", &graph.GraphError{StatusCode: 412}, errClassRetryable},
+		{"404 transient not found via GraphError", &graph.GraphError{StatusCode: 404, Err: graph.ErrNotFound}, errClassRetryable},
 		{"509 bandwidth exceeded", &graph.GraphError{StatusCode: 509}, errClassRetryable},
 		{"401 via GraphError", &graph.GraphError{StatusCode: 401, Err: graph.ErrUnauthorized}, errClassFatal},
 		{"429 via GraphError", &graph.GraphError{StatusCode: 429, Err: graph.ErrThrottled}, errClassRetryable},
