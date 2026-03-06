@@ -213,6 +213,27 @@ func TestIntegration_Drives(t *testing.T) {
 	}
 }
 
+// TestIntegration_SharedWithMe verifies SharedWithMe() returns without error.
+// The result may be empty if no items have been shared with the test account.
+func TestIntegration_SharedWithMe(t *testing.T) {
+	client := newIntegrationClient(t)
+
+	ctx, cancel := context.WithTimeout(t.Context(), integrationTimeout)
+	defer cancel()
+
+	items, err := client.SharedWithMe(ctx)
+	require.NoError(t, err)
+
+	for _, item := range items {
+		if item.IsFolder && item.RemoteDriveID != "" {
+			t.Logf("shared folder: %s (owner=%s, remoteDrive=%s, remoteItem=%s)",
+				item.Name, item.SharedOwnerEmail, item.RemoteDriveID, item.RemoteItemID)
+		}
+	}
+
+	t.Logf("SharedWithMe returned %d items", len(items))
+}
+
 // TestIntegration_CreateAndDeleteFolder creates a test folder, verifies it,
 // then deletes it and confirms deletion.
 func TestIntegration_CreateAndDeleteFolder(t *testing.T) {
