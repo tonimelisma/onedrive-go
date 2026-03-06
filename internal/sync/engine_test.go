@@ -1815,3 +1815,246 @@ func TestChangeEventsToObservedItems_MapsAllFields(t *testing.T) {
 	assert.Equal(t, "folder", items[1].ItemType)
 	assert.True(t, items[1].IsDeleted)
 }
+
+// ---------------------------------------------------------------------------
+// Zero-event guard tests (Step 1)
+// ---------------------------------------------------------------------------
+
+func TestObserveAndCommitRemote_ZeroEvents_NoTokenAdvance(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(testDriveID)
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return &graph.DeltaPage{
+				Items:     []graph.Item{{ID: "root", IsRoot: true, DriveID: driveID}},
+				DeltaLink: "new-token-should-not-be-saved",
+			}, nil
+		},
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	syncDir := t.TempDir()
+	logger := testLogger(t)
+
+	e, err := NewEngine(&EngineConfig{
+		DBPath:    dbPath,
+		SyncRoot:  syncDir,
+		DriveID:   driveID,
+		Fetcher:   mock,
+		Items:     mock,
+		Downloads: mock,
+		Uploads:   mock,
+		Logger:    logger,
+	})
+	require.NoError(t, err)
+	defer e.Close()
+
+	ctx := t.Context()
+
+	// Seed a known delta token.
+	require.NoError(t, e.baseline.CommitDeltaToken(ctx, "old-token", driveID.String(), "", driveID.String()))
+
+	bl, err := e.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	// observeAndCommitRemote with 0 events (only root, which is skipped).
+	events, err := e.observeAndCommitRemote(ctx, bl)
+	require.NoError(t, err)
+	assert.Empty(t, events, "should return 0 events (root is skipped)")
+
+	// Token should NOT have been advanced.
+	savedToken, err := e.baseline.GetDeltaToken(ctx, driveID.String(), "")
+	require.NoError(t, err)
+	assert.Equal(t, "old-token", savedToken, "token should not advance when 0 events returned")
+}
+
+func TestObserveAndCommitRemote_WithEvents_TokenAdvances(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(testDriveID)
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+					{ID: "f1", Name: "hello.txt", ParentID: "root", DriveID: driveID, Size: 100, QuickXorHash: "qxh1"},
+				},
+				DeltaLink: "new-token",
+			}, nil
+		},
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	syncDir := t.TempDir()
+	logger := testLogger(t)
+
+	e, err := NewEngine(&EngineConfig{
+		DBPath:    dbPath,
+		SyncRoot:  syncDir,
+		DriveID:   driveID,
+		Fetcher:   mock,
+		Items:     mock,
+		Downloads: mock,
+		Uploads:   mock,
+		Logger:    logger,
+	})
+	require.NoError(t, err)
+	defer e.Close()
+
+	ctx := t.Context()
+
+	// Seed a known delta token.
+	require.NoError(t, e.baseline.CommitDeltaToken(ctx, "old-token", driveID.String(), "", driveID.String()))
+
+	bl, err := e.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	// observeAndCommitRemote with actual events.
+	events, err := e.observeAndCommitRemote(ctx, bl)
+	require.NoError(t, err)
+	assert.Len(t, events, 1, "should return 1 event (root is skipped)")
+
+	// Token SHOULD have been advanced.
+	savedToken, err := e.baseline.GetDeltaToken(ctx, driveID.String(), "")
+	require.NoError(t, err)
+	assert.Equal(t, "new-token", savedToken, "token should advance when events > 0")
+}
+
+// ---------------------------------------------------------------------------
+// Full reconciliation tests (Step 2)
+// ---------------------------------------------------------------------------
+
+func TestFindOrphans_DetectsDeletedItems(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(testDriveID)
+
+	bl := NewBaselineForTest([]*BaselineEntry{
+		{Path: "a.txt", DriveID: driveID, ItemID: "id-a", ItemType: ItemTypeFile},
+		{Path: "b.txt", DriveID: driveID, ItemID: "id-b", ItemType: ItemTypeFile},
+		{Path: "c.txt", DriveID: driveID, ItemID: "id-c", ItemType: ItemTypeFile},
+	})
+
+	// Seen set has 2 of 3 items — id-b is missing (orphan).
+	seen := map[driveid.ItemKey]struct{}{
+		driveid.NewItemKey(driveID, "id-a"): {},
+		driveid.NewItemKey(driveID, "id-c"): {},
+	}
+
+	orphans := bl.FindOrphans(seen, driveID)
+	require.Len(t, orphans, 1, "should detect 1 orphan")
+	assert.Equal(t, "b.txt", orphans[0].Path)
+	assert.Equal(t, "id-b", orphans[0].ItemID)
+	assert.Equal(t, ChangeDelete, orphans[0].Type)
+	assert.Equal(t, SourceRemote, orphans[0].Source)
+	assert.True(t, orphans[0].IsDeleted)
+}
+
+func TestFindOrphans_NoOrphans(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(testDriveID)
+
+	bl := NewBaselineForTest([]*BaselineEntry{
+		{Path: "a.txt", DriveID: driveID, ItemID: "id-a", ItemType: ItemTypeFile},
+		{Path: "b.txt", DriveID: driveID, ItemID: "id-b", ItemType: ItemTypeFile},
+	})
+
+	// All baseline items are in the seen set.
+	seen := map[driveid.ItemKey]struct{}{
+		driveid.NewItemKey(driveID, "id-a"): {},
+		driveid.NewItemKey(driveID, "id-b"): {},
+	}
+
+	orphans := bl.FindOrphans(seen, driveID)
+	assert.Empty(t, orphans, "should find no orphans when all items are in seen set")
+}
+
+func TestFindOrphans_IgnoresOtherDrives(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(testDriveID)
+	otherDrive := driveid.New("0000000000000002")
+
+	bl := NewBaselineForTest([]*BaselineEntry{
+		{Path: "a.txt", DriveID: driveID, ItemID: "id-a", ItemType: ItemTypeFile},
+		{Path: "other.txt", DriveID: otherDrive, ItemID: "id-other", ItemType: ItemTypeFile},
+	})
+
+	// Empty seen set — only driveID's items should be orphaned.
+	seen := map[driveid.ItemKey]struct{}{}
+
+	orphans := bl.FindOrphans(seen, driveID)
+	require.Len(t, orphans, 1, "should only detect orphans for the specified drive")
+	assert.Equal(t, "a.txt", orphans[0].Path)
+}
+
+func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(testDriveID)
+
+	// Full delta returns 2 items (root + file1). Baseline has file1 + file2.
+	// file2 should be detected as an orphan.
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+					{ID: "f1", Name: "file1.txt", ParentID: "root", DriveID: driveID, Size: 100, QuickXorHash: "qxh1"},
+				},
+				DeltaLink: "full-token",
+			}, nil
+		},
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	syncDir := t.TempDir()
+	logger := testLogger(t)
+
+	e, err := NewEngine(&EngineConfig{
+		DBPath:    dbPath,
+		SyncRoot:  syncDir,
+		DriveID:   driveID,
+		Fetcher:   mock,
+		Items:     mock,
+		Downloads: mock,
+		Uploads:   mock,
+		Logger:    logger,
+	})
+	require.NoError(t, err)
+	defer e.Close()
+
+	ctx := t.Context()
+
+	// Seed baseline with 2 files (file1 + file2).
+	bl, err := e.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	bl.Put(&BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: ItemTypeFile})
+	bl.Put(&BaselineEntry{Path: "file2.txt", DriveID: driveID, ItemID: "f2", ItemType: ItemTypeFile})
+
+	events, token, err := e.observeRemoteFull(ctx, bl)
+	require.NoError(t, err)
+	assert.Equal(t, "full-token", token)
+
+	// Should have 1 modify (file1 exists in baseline) + 1 orphan delete (file2).
+	var modifies, deletes int
+	for _, ev := range events {
+		switch ev.Type {
+		case ChangeModify:
+			modifies++
+		case ChangeDelete:
+			deletes++
+			assert.Equal(t, "file2.txt", ev.Path, "orphan should be file2.txt")
+			assert.Equal(t, "f2", ev.ItemID)
+			assert.True(t, ev.IsDeleted)
+		case ChangeCreate, ChangeMove:
+			// Not expected in this test.
+		}
+	}
+
+	assert.Equal(t, 1, modifies, "should have 1 modify event (file1 exists in baseline)")
+	assert.Equal(t, 1, deletes, "should have 1 orphan delete event")
+}

@@ -988,10 +988,26 @@ func TestWatch_ContextCancellation(t *testing.T) {
 func TestWatch_CurrentDeltaToken(t *testing.T) {
 	t.Parallel()
 
+	driveID := driveid.New(testDriveID)
+
+	// Pages must include a non-root item so events > 0 (the zero-event
+	// guard skips token advancement when events are empty).
 	fetcher := &sequentialFetcher{
 		pages: []mockDeltaPage{
-			{page: &graph.DeltaPage{DeltaLink: "token-after-poll-1"}},
-			{page: &graph.DeltaPage{DeltaLink: "token-after-poll-2"}},
+			{page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+					{ID: "f1", Name: "file.txt", ParentID: "root", DriveID: driveID, Size: 10},
+				},
+				DeltaLink: "token-after-poll-1",
+			}},
+			{page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+					{ID: "f1", Name: "file.txt", ParentID: "root", DriveID: driveID, Size: 10},
+				},
+				DeltaLink: "token-after-poll-2",
+			}},
 		},
 	}
 
@@ -1563,14 +1579,22 @@ func TestWatch_ObsWriterError_ContinuesRetry(t *testing.T) {
 	driveID := driveid.New(testDriveID)
 	pollCount := 0
 
+	// Pages must include a non-root item so events > 0 (the zero-event
+	// guard skips CommitObservation entirely when events are empty).
 	fetcher := &mockDeltaFetcher{
 		pages: []mockDeltaPage{
 			{page: &graph.DeltaPage{
-				Items:     []graph.Item{{ID: "root", IsRoot: true, DriveID: driveID}},
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+					{ID: "f1", Name: "file.txt", ParentID: "root", DriveID: driveID, Size: 10},
+				},
 				DeltaLink: "token-1",
 			}},
 			{page: &graph.DeltaPage{
-				Items:     []graph.Item{{ID: "root", IsRoot: true, DriveID: driveID}},
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+					{ID: "f1", Name: "file.txt", ParentID: "root", DriveID: driveID, Size: 10},
+				},
 				DeltaLink: "token-2",
 			}},
 		},
@@ -1593,4 +1617,43 @@ func TestWatch_ObsWriterError_ContinuesRetry(t *testing.T) {
 
 	// Should have retried — multiple commit attempts.
 	assert.GreaterOrEqual(t, len(writer.calls), 1, "should retry after commit failure")
+}
+
+func TestWatch_ZeroEvents_NoTokenAdvance(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(testDriveID)
+	pollCount := 0
+
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{
+			// First poll: 0 events (only root, which is skipped).
+			{page: &graph.DeltaPage{
+				Items:     []graph.Item{{ID: "root", IsRoot: true, DriveID: driveID}},
+				DeltaLink: "new-token-should-not-be-saved",
+			}},
+		},
+	}
+
+	writer := &mockObservationWriter{}
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, testLogger(t))
+	obs.obsWriter = writer
+	obs.sleepFunc = func(_ context.Context, _ time.Duration) error {
+		pollCount++
+		if pollCount >= 1 {
+			return fmt.Errorf("stop")
+		}
+
+		return nil
+	}
+
+	events := make(chan ChangeEvent, 10)
+	err := obs.Watch(t.Context(), "old-token", events, time.Millisecond)
+	require.NoError(t, err)
+
+	// CommitObservation should NOT have been called (0 events).
+	assert.Empty(t, writer.calls, "should not commit observations when 0 events returned")
+
+	// Internal token should NOT have advanced.
+	assert.Equal(t, "old-token", obs.CurrentDeltaToken(), "token should not advance when 0 events returned")
 }

@@ -31,9 +31,11 @@ one-way sync. Use --dry-run to preview what would happen without making changes.
 	cmd.Flags().Bool("dry-run", false, "preview sync actions without executing")
 	cmd.Flags().Bool("force", false, "override big-delete safety threshold")
 	cmd.Flags().Bool("watch", false, "continuously sync changes (watch mode)")
+	cmd.Flags().Bool("full", false, "run full reconciliation (enumerate all remote items, detect orphans)")
 
 	cmd.MarkFlagsMutuallyExclusive("download-only", "upload-only")
 	cmd.MarkFlagsMutuallyExclusive("dry-run", "watch")
+	cmd.MarkFlagsMutuallyExclusive("full", "watch")
 
 	return cmd
 }
@@ -103,6 +105,11 @@ func runSync(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
+	fullReconcile, err := cmd.Flags().GetBool("full")
+	if err != nil {
+		return err
+	}
+
 	holder := config.NewHolder(rawCfg, cc.CfgPath)
 	provider := driveops.NewSessionProvider(holder,
 		defaultHTTPClient(), transferHTTPClient(), "onedrive-go/"+version, logger)
@@ -115,8 +122,9 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	})
 
 	reports := orch.RunOnce(ctx, mode, isync.RunOpts{
-		DryRun: dryRun,
-		Force:  force,
+		DryRun:        dryRun,
+		Force:         force,
+		FullReconcile: fullReconcile,
 	})
 
 	printDriveReports(reports, cc)

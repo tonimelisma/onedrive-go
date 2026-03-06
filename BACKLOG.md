@@ -153,11 +153,16 @@ Optimization deferred until profiling shows a bottleneck.
 
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
+| B-324 | Cross-test contamination mitigation via `remote_path` filtering | P2 | Bidirectional sync E2E tests on shared drive pick up delta events from other parallel tests' folders. Root cause: delta returns ALL drive events, no folder-scoped delta on Business accounts. **Interim fix**: deletion-dependent tests de-parallelized (no `t.Parallel()`). **Long-term fix**: implement `remote_path` config (roadmap Phase 10) to filter delta events client-side. See ci_issues.md §19. |
+| ~~B-325~~ | ~~Periodic full reconciliation scan (safety net for missed delta deletions)~~ | ~~P2~~ | **DONE** — Full reconciliation implemented: `observeRemoteFull()` + `Baseline.FindOrphans()` detect orphaned items missed by incremental delta. Three access modes: `sync --full` (manual), daemon periodic reconciliation (default 24h via `ReconcileInterval`), programmatic. See ci_issues.md §21. |
+| ~~B-326~~ | ~~Investigate delta token advancement on zero-event responses~~ | ~~P3~~ | **DONE** — Zero-event guard: `observeAndCommitRemote()` and `RemoteObserver.Watch()` skip token advancement when delta returns 0 events. Replaying costs O(1); prevents advancing past still-propagating deletions. See ci_issues.md §20. |
 
 ## Closed
 
 | ID | Title | Resolution |
 |----|-------|------------|
+| B-325 | Periodic full reconciliation scan | **DONE** — `observeRemoteFull()` + `Baseline.FindOrphans()` + `sync --full` + daemon periodic reconciliation (24h default). See ci_issues.md §21. |
+| B-326 | Delta token advancement on zero-event responses | **DONE** — Zero-event guard in `observeAndCommitRemote()` and `Watch()`. See ci_issues.md §20. |
 | B-307 | FC-1: Remote observer symmetric filtering | **DONE** — Phase 5.7.1. `isAlwaysExcluded()` + `isValidOneDriveName()` in `classifyItem()`. Remote items filtered symmetrically with local observer. |
 | B-308 | FC-2: Narrow `.db` exclusion | **DONE** — Phase 5.7.1. Removed `.db`/`.db-wal`/`.db-shm` from `alwaysExcludedSuffixes`. |
 | B-310 | Fix flaky `TestWatch_HashFailureStillEmitsCreate` | **DONE** — File born unreadable (mode `0o000`) eliminates race between chmod and hash. |

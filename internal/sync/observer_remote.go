@@ -184,6 +184,23 @@ func (o *RemoteObserver) Watch(ctx context.Context, savedToken string, events ch
 			continue
 		}
 
+		// Skip token advancement and observation commit when 0 events are
+		// returned. The old token replays the same empty window at zero cost,
+		// but avoids advancing past deletions still propagating through the
+		// Graph change log (ci_issues.md §20).
+		if len(polledEvents) == 0 {
+			o.logger.Debug("watch: delta returned 0 events, skipping token advancement")
+
+			backoff = initialWatchBackoff
+			consecutiveErrors = 0
+
+			if sleepErr := o.sleepFunc(ctx, interval); sleepErr != nil {
+				return nil
+			}
+
+			continue
+		}
+
 		// Commit observations atomically with delta token before sending
 		// events to the channel. This ensures remote state is durable even
 		// if the engine crashes before processing the events.

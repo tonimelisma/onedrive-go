@@ -25,6 +25,13 @@ import (
 // daemon processes are resource-intensive.
 // ---------------------------------------------------------------------------
 
+// daemonHandle bundles the command and stderr buffer for daemon tests that
+// need to poll daemon output (e.g., waiting for pause acknowledgment).
+type daemonHandle struct {
+	Cmd    *exec.Cmd
+	Stderr *syncBuffer
+}
+
 // startDaemon starts the sync daemon as a background process and waits for
 // it to become ready. It registers a cleanup function that sends SIGTERM and
 // logs output. Returns the command handle for signal control.
@@ -33,14 +40,27 @@ func startDaemon(
 ) *exec.Cmd {
 	t.Helper()
 
+	h := startDaemonWithStderr(t, cfgPath, env, args...)
+
+	return h.Cmd
+}
+
+// startDaemonWithStderr is like startDaemon but also returns the stderr buffer
+// for tests that need to poll daemon output.
+func startDaemonWithStderr(
+	t *testing.T, cfgPath string, env map[string]string, args ...string,
+) *daemonHandle {
+	t.Helper()
+
 	daemonArgs := []string{"--config", cfgPath, "--debug"}
 	daemonArgs = append(daemonArgs, args...)
 
 	cmd := makeCmd(daemonArgs, env)
 
-	var stdout, stderr syncBuffer
+	var stdout syncBuffer
+	stderr := &syncBuffer{}
 	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	cmd.Stderr = stderr
 
 	require.NoError(t, cmd.Start(), "failed to start daemon")
 
@@ -53,9 +73,9 @@ func startDaemon(
 		logCLIExecution(t, daemonArgs, stdout.String(), stderr.String())
 	})
 
-	waitForDaemonReady(t, &stderr, 30*time.Second)
+	waitForDaemonReady(t, stderr, 30*time.Second)
 
-	return cmd
+	return &daemonHandle{Cmd: cmd, Stderr: stderr}
 }
 
 // daemonPollTimeout is the default timeout for polling in daemon tests.
@@ -511,16 +531,21 @@ func TestE2E_SyncWatch_TimedPauseExpiry(t *testing.T) {
 	testFolder := fmt.Sprintf("e2e-watch-expire-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
-	// Start upload-only daemon.
-	cmd := startDaemon(t, cfgPath, env,
+	// Start upload-only daemon (with stderr access for polling).
+	h := startDaemonWithStderr(t, cfgPath, env,
 		"--drive", drive, "sync", "--upload-only", "--watch", "--force")
+	cmd := h.Cmd
 
 	// Pause for 5 seconds.
 	runCLIWithConfig(t, cfgPath, env, "pause", "5s")
 
-	// Sleep 1s, create local file.
-	time.Sleep(1 * time.Second)
+	// Send SIGHUP directly to ensure daemon gets it (per-test PID isolation).
+	require.NoError(t, cmd.Process.Signal(syscall.SIGHUP))
 
+	// Poll stderr for pause acknowledgment.
+	waitForStderrContains(t, h.Stderr, "paused", 10*time.Second)
+
+	// Create local file while paused.
 	localDir := filepath.Join(syncDir, testFolder)
 	require.NoError(t, os.MkdirAll(localDir, 0o755))
 	require.NoError(t, os.WriteFile(
@@ -529,20 +554,21 @@ func TestE2E_SyncWatch_TimedPauseExpiry(t *testing.T) {
 		0o644,
 	))
 
-	// Sleep 2s — still within pause window (3s total < 5s pause).
-	time.Sleep(2 * time.Second)
-
-	// Best-effort check that file is NOT remotely visible yet.
+	// Bounded negative check: confirm file not remote while paused.
 	remotePath := "/" + testFolder + "/paused-file.txt"
-	_, _, statErr := runCLIWithConfigAllowError(t, opsCfgPath, nil, "stat", remotePath)
-	if statErr == nil {
-		t.Log("warning: file appeared remotely while paused (test environment may not support pause)")
+	negDeadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(negDeadline) {
+		_, _, statErr := runCLIWithConfigAllowError(t, opsCfgPath, nil, "stat", remotePath)
+		if statErr == nil {
+			t.Log("warning: file appeared remotely while paused (test environment may not support pause)")
+			break
+		}
+		time.Sleep(1 * time.Second)
 	}
 
-	// Sleep 4s more (total ~7s, past 5s expiry).
+	// Wait for pause to expire (5s total from pause command), then send
+	// SIGHUP to trigger clearExpiredPauses.
 	time.Sleep(4 * time.Second)
-
-	// Send SIGHUP to trigger clearExpiredPauses.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGHUP))
 
 	// Poll until file appears remotely (daemon should now be unpaused).

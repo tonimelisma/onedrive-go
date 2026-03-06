@@ -356,9 +356,26 @@ Analysis of the last 100 CI runs (as of 2026-03-03) shows 80% pass rate (80 succ
 
 **This is distinct from §2 (read-after-write consistency)** — §2 is about REST reads lagging behind REST writes on the same endpoint. This issue is about the delta endpoint (used by sync) lagging behind REST endpoints (used by poll guards).
 
-**Critical constraint**: Only incremental delta (with saved token) reports deletions. Fresh delta (no token, as used by first-time sync) only returns currently existing items — deleted items are never included. This means `--force` (which bypasses big-delete protection but does NOT affect delta token) is irrelevant, but tests must ensure the delta token was saved BEFORE the deletion occurs so that incremental delta captures it.
+**Critical constraint — deletions are sent only once**: The delta endpoint delivers deletion events in exactly one response. If the client's token window spans past the deletion, it is permanently missed. The abraunegg/onedrive project maintainer confirms this behavior: deletion events are ephemeral in the change log and have a limited retention window. If the client advances its delta token (even with zero events returned), it may skip over the deletion entirely. A subsequent incremental delta call will never see that deletion again.
 
-**Production workaround**: None needed. The sync engine is designed for eventual consistency — a missed deletion in one delta cycle will appear in the next. This is only problematic in tests where a single sync cycle must capture a specific deletion.
+This has three implications:
+1. Fresh delta (no token) **never** reports deletions — it only enumerates existing items.
+2. Incremental delta reports a deletion **exactly once** in the response where the token window covers it.
+3. Advancing the token on a zero-event response can permanently skip over pending deletions that haven't propagated to the change log yet.
+
+**Hierarchical deletion behavior**: When a parent folder is deleted, the delta response may only report the parent deletion without individual child item deletions. The client must infer that all descendants are also deleted. Our sync engine handles this correctly — `classifyAndConvert` in `observer_remote.go` processes the parent deletion, and the planner cascades the deletion to all local children.
+
+**How other sync tools handle this**:
+- **rclone**: Does NOT use delta for OneDrive sync. It performs full directory tree enumeration every sync cycle. The rclone maintainers explicitly disabled delta support due to the root-only restriction and unreliable deletion tracking. This avoids the problem entirely at the cost of O(n) API calls per sync.
+- **abraunegg/onedrive** (v2.5.x): Uses delta but supplements with periodic full scans as a safety net. The v2.5.x release defaulted to download-only mode specifically because auto-deleting local files based on delta deletion events was unreliable — too many false negatives. The maintainer's recommendation is to never trust delta alone for deletions.
+- **Microsoft's own recommendation**: "Applications should periodically perform a full delta enumeration to ensure no changes were missed" (paraphrased from Graph API delta docs). No SLA is provided for delta propagation latency.
+
+**Production implication**: Any delta token advancement can potentially skip pending events. This applies to both zero-event responses (most common failure mode) and non-empty batches that exclude still-propagating events.
+
+**Production workaround**: Three-layer defense:
+1. **Zero-event guard** (§20): `observeAndCommitRemote()` skips token advancement when delta returns 0 events. The old token replays the same empty window at zero cost.
+2. **Full reconciliation** (§21): `sync --full` runs a fresh delta with empty token (enumerates ALL remote items) and detects orphans — baseline entries not in the full enumeration. Periodic full reconciliation in daemon mode (every 24 hours by default).
+3. **Retry loops in tests**: 120-second polling with 5-second intervals for deletion-dependent tests.
 
 **Test workaround**: Two-part fix:
 
@@ -381,7 +398,7 @@ require.Eventually(t, func() bool {
 }, 120*time.Second, 5*time.Second, "deletion should propagate locally")
 ```
 
-**Skipped tests**: `TestE2E_Sync_DeletePropagation` (delta lag exceeds 120s for multi-file deletions), `TestE2E_Sync_EmptyDirectory` (delta lag exceeds 120s for folder deletions), `TestE2E_Sync_NestedDeletion` (delta lag exceeds 120s for nested folder deletions), `TestE2E_Sync_BigDeleteProtection` (parallel tests inflate baseline count on shared drives).
+**De-parallelized tests**: `TestE2E_Sync_DeletePropagation`, `TestE2E_Sync_EmptyDirectory`, `TestE2E_Sync_NestedDeletion`, `TestE2E_Sync_BigDeleteProtection` — these tests depend on delta deletion delivery and run sequentially (no `t.Parallel()`) to avoid cross-test contamination. They use 120s retry loops to handle delta lag.
 
 **Affected tests**: `TestE2E_Sync_EditDeleteConflict` (120s retry timeout).
 
@@ -398,6 +415,94 @@ require.Eventually(t, func() bool {
 **Fix**: When `DryRun` is true, call `observeRemote()` (observe-only, no commit) instead of `observeAndCommitRemote()`. This ensures the delta token and observations remain unchanged after a dry-run, so the next real sync sees the same remote state.
 
 **Test verification**: `TestRunOnce_DryRun_NoExecution` asserts both `baseline.Len() == 0` and `GetDeltaToken() == ""` after a dry-run.
+
+---
+
+## 19. Cross-Test Contamination on Shared Drive
+
+**Observed**: Parallel E2E tests that run bidirectional sync against the same OneDrive account interfere with each other. The delta endpoint returns ALL changes across the entire drive root, so one test's folder creation/deletion can appear as unexpected events in another test's sync cycle.
+
+**Evidence**:
+- `TestE2E_Sync_ResolveKeepRemoteThenSync`: Bidirectional sync picks up cleanup deletions from other parallel tests' folders (e.g., `e2e-cli-noconfl/`, `e2e-sync-ver/`), causing `os.Remove` failures on non-empty directories. Nightly CI 2026-03-05.
+- `TestE2E_Sync_CrashRecoveryIdempotent`: Re-sync reports "changes detected" instead of "No changes detected" because delta includes items created by other parallel tests that started after the first sync.
+- `TestE2E_Sync_BigDeleteProtection`: Parallel tests inflate the baseline item count. When the test expects N items and the big-delete threshold is N×50%, additional items from other tests push the total past the threshold, changing the protection calculation.
+
+**Cause**: All parallel E2E tests share one OneDrive account. The delta endpoint (`GET /drives/{driveID}/root/delta`) returns changes for the **entire drive** — there is no way to scope delta to a subfolder reliably. Folder-scoped delta (`GET /drives/{driveID}/items/{folderId}/delta`) works on OneDrive Personal but broke on OneDrive Business in November 2018 (Microsoft acknowledged, never fixed). Since our CI uses Business accounts, folder-scoped delta is not an option.
+
+**How other sync tools handle test isolation**:
+- **rclone**: Uses random-prefix test directories (`rclone-test-XXXXXXXXXXXX`) and full enumeration (no delta). Each test scopes to its own prefix. Since rclone doesn't use delta, cross-test pollution doesn't affect sync correctness — each test only reads its own directory.
+- **restic**: Uses a per-test backend factory that creates isolated storage. Tests include `WaitForDelayedRemoval()` helpers for eventual consistency. Each test operates in a completely separate namespace.
+- **No project uses delta-based filtering for test isolation** — the root-only nature of the delta endpoint makes this impractical.
+
+**Current mitigations**:
+1. Each test creates a uniquely-named folder with a nanosecond timestamp (e.g., `e2e-sync-reskl-1741234567890123456`).
+2. Each sync test gets its own `sync_dir` (temp directory) and config file, so local state doesn't overlap.
+3. **Deletion-dependent tests run sequentially** (no `t.Parallel()`): `TestE2E_Sync_DeletePropagation`, `TestE2E_Sync_EmptyDirectory`, `TestE2E_Sync_NestedDeletion`, `TestE2E_Sync_BigDeleteProtection`, `TestE2E_BigDeleteProtection`. These tests rely on delta delivering deletion events — cross-test contamination from parallel execution caused spurious failures. Sequential execution eliminates the contamination source while retaining 120s retry loops for delta lag.
+4. Upload-only and download-only syncs are less affected (no cross-contamination from other tests' deletions) and keep `t.Parallel()`.
+
+**Remaining exposure**: Bidirectional syncs (`sync --force` without `--upload-only` or `--download-only`) that run in parallel remain vulnerable. The download phase pulls delta events from the entire drive, which may include other tests' folders. Sequential execution for deletion-dependent tests narrows this but does not eliminate it for all bidirectional tests.
+
+**Long-term fix options**:
+1. **`remote_path` filtering** (roadmap Phase 10): Configure each sync test to only sync a specific remote subfolder. Delta events outside the configured path are ignored. This doesn't change delta's root-only behavior — it filters events client-side after receiving them. This is the definitive fix.
+2. **Separate test accounts per test**: Expensive (token management, Azure AD app registrations) but eliminates the problem entirely.
+
+---
+
+## 20. Delta Token Advancement on Zero-Event Responses
+
+**Observed**: When `observeAndCommitRemote()` calls the delta endpoint and receives zero events but a new delta token, it saves the new token. This advances the client's delta window even though no changes were processed.
+
+**Risk**: If a deletion event hasn't propagated to the delta change log yet (§17) but the client calls delta and gets 0 events + new token, the client's window advances past the pending deletion. When the deletion finally propagates to the change log, it falls outside the client's token window and is permanently missed.
+
+**This is the mechanism behind §17's "deletions sent only once" problem in practice**: The delta endpoint returns a new token even when reporting zero events. The client faithfully saves it. A pending deletion that was still propagating through Microsoft's infrastructure is now stranded behind the saved token.
+
+**Previous behavior**: `observeAndCommitRemote()` always saved the new token regardless of event count. This was correct for the general case (steady-state sync) — the token must advance to avoid reprocessing old events. The problem only manifested when:
+1. A mutation (delete) was performed via REST, AND
+2. Delta is called before the deletion propagates to the change log, AND
+3. The returned token window has advanced past the deletion's change log entry
+
+**Fix implemented**: When delta returns 0 events, the delta token is **not** advanced. Replaying a delta token that returned 0 events costs O(1) — the server already knows there's nothing to return. But if a deletion was still propagating, we haven't advanced past it. This is implemented in both `observeAndCommitRemote()` (one-shot sync) and `RemoteObserver.Watch()` (daemon mode).
+
+This does **not** fully close the window — events can also be excluded from non-empty batches if the token advancement within a batch skips a still-propagating deletion. Full reconciliation (§21) addresses this remaining gap.
+
+**Production impact**: Low in normal operation. The sync daemon calls delta every 30 seconds. If a deletion hasn't propagated within one cycle, it will almost certainly be in the next. The "permanently missed" scenario requires very specific timing. However, in E2E tests where operations happen in rapid succession (delete → poll → sync within seconds), the window is much larger.
+
+**Evidence from other projects**: The abraunegg/onedrive maintainer explicitly warns about this pattern and recommends periodic full scans. rclone avoids the problem entirely by not using delta. Microsoft's docs acknowledge "varying delays" but provide no SLA or guarantee that a single delta call after a mutation will include that mutation.
+
+**Additional mitigation**: Periodic full reconciliation (§21) detects and corrects any items missed by incremental delta.
+
+---
+
+## 21. Full Reconciliation — Orphan Detection
+
+**Problem**: Incremental delta can permanently miss deletion events (§17, §20). The zero-event token guard (§20) narrows the window but doesn't close it — events can also be excluded from non-empty batches if the token advancement within a batch skips a still-propagating deletion.
+
+**Solution**: Full reconciliation runs a fresh delta with an empty token (enumerates ALL remote items) and compares against the baseline to detect **orphans** — items present in the baseline but absent from the full enumeration. These orphans represent remote deletions that were missed by incremental delta.
+
+**Algorithm**:
+1. Call `FullDelta(ctx, "")` — enumerates all remote items (returns ChangeCreate/ChangeModify for every item)
+2. Collect all seen item IDs into a set
+3. Iterate baseline entries via `ForEachPath()` — any entry whose ItemID is NOT in the seen set is an orphan
+4. Synthesize `ChangeDelete` events for orphans
+5. Feed all events (full enumeration + orphan deletions) through the normal planner + executor pipeline
+6. Save the new delta token from the full enumeration
+
+**API cost**: Full enumeration of 100K items requires ~500 API calls (~50 seconds). Per-user rate limit is 3,000 requests / 5 minutes. A full reconciliation consumes ~17% of a single 5-minute rate window. Safe to run periodically (default: every 24 hours in daemon mode).
+
+**Three access modes**:
+1. **`sync --full`**: Manual one-shot full reconciliation. Useful for post-incident recovery or after suspected missed deletions.
+2. **Daemon mode**: Automatic periodic full reconciliation every `ReconcileInterval` (default 24 hours, configurable). Runs alongside normal incremental delta polling.
+3. **Programmatic**: `observeRemoteFull()` and `observeAndCommitRemoteFull()` methods on `Engine` for use by tests or future automation.
+
+**Implementation files**:
+- `internal/sync/engine.go`: `observeRemoteFull()`, `observeAndCommitRemoteFull()`, `runFullReconciliation()`, `ReconcileInterval` in `WatchOpts`, reconcile ticker in `RunWatch()`
+- `internal/sync/types.go`: `Baseline.FindOrphans()` method
+- Root package `sync.go`: `--full` flag, mutual exclusivity with `--watch`
+
+**Relationship to other mitigations**:
+- §20 zero-event guard: First line of defense — prevents unnecessary token advancement at zero cost
+- §21 full reconciliation: Second line — detects and corrects any orphans that slipped through
+- §19 serial test execution: Test-side mitigation — reduces cross-test contamination that amplifies the delta miss window
 
 ---
 
