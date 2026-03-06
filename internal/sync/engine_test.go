@@ -2058,3 +2058,238 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 	assert.Equal(t, 1, modifies, "should have 1 modify event (file1 exists in baseline)")
 	assert.Equal(t, 1, deletes, "should have 1 orphan delete event")
 }
+
+// ---------------------------------------------------------------------------
+// changeEventsToObservedItems — empty ItemID guard (Item 4)
+// ---------------------------------------------------------------------------
+
+func TestChangeEventsToObservedItems_SkipsEmptyItemID(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(testDriveID)
+	events := []ChangeEvent{
+		{Source: SourceRemote, ItemID: "valid-1", Path: "a.txt", DriveID: driveID},
+		{Source: SourceRemote, ItemID: "", Path: "bad.txt", DriveID: driveID},
+		{Source: SourceRemote, ItemID: "valid-2", Path: "b.txt", DriveID: driveID},
+	}
+
+	items := changeEventsToObservedItems(events)
+	require.Len(t, items, 2, "empty ItemID event should be skipped")
+	assert.Equal(t, "valid-1", items[0].ItemID)
+	assert.Equal(t, "valid-2", items[1].ItemID)
+}
+
+// ---------------------------------------------------------------------------
+// resolveReconcileInterval tests (Item 5)
+// ---------------------------------------------------------------------------
+
+func TestResolveReconcileInterval_Default(t *testing.T) {
+	t.Parallel()
+
+	e, _ := newTestEngine(t, &engineMockClient{})
+	d := e.resolveReconcileInterval(WatchOpts{})
+	assert.Equal(t, 24*time.Hour, d)
+}
+
+func TestResolveReconcileInterval_Disabled(t *testing.T) {
+	t.Parallel()
+
+	e, _ := newTestEngine(t, &engineMockClient{})
+	d := e.resolveReconcileInterval(WatchOpts{ReconcileInterval: -1})
+	assert.Equal(t, time.Duration(0), d)
+}
+
+func TestResolveReconcileInterval_Custom(t *testing.T) {
+	t.Parallel()
+
+	e, _ := newTestEngine(t, &engineMockClient{})
+	d := e.resolveReconcileInterval(WatchOpts{ReconcileInterval: 2 * time.Hour})
+	assert.Equal(t, 2*time.Hour, d)
+}
+
+func TestResolveReconcileInterval_ClampsBelowMinimum(t *testing.T) {
+	t.Parallel()
+
+	e, _ := newTestEngine(t, &engineMockClient{})
+	d := e.resolveReconcileInterval(WatchOpts{ReconcileInterval: 1 * time.Minute})
+	assert.Equal(t, minReconcileInterval, d, "should be clamped to 15 minutes")
+}
+
+// ---------------------------------------------------------------------------
+// newReconcileTicker tests (Item 6)
+// ---------------------------------------------------------------------------
+
+func TestNewReconcileTicker_Zero(t *testing.T) {
+	t.Parallel()
+
+	e, _ := newTestEngine(t, &engineMockClient{})
+	ticker := e.newReconcileTicker(0)
+	assert.Nil(t, ticker, "zero duration should return nil")
+}
+
+func TestNewReconcileTicker_Negative(t *testing.T) {
+	t.Parallel()
+
+	e, _ := newTestEngine(t, &engineMockClient{})
+	ticker := e.newReconcileTicker(-1)
+	assert.Nil(t, ticker, "negative duration should return nil")
+}
+
+func TestNewReconcileTicker_Positive(t *testing.T) {
+	t.Parallel()
+
+	e, _ := newTestEngine(t, &engineMockClient{})
+	ticker := e.newReconcileTicker(time.Hour)
+	require.NotNil(t, ticker, "positive duration should return non-nil ticker")
+	ticker.Stop()
+}
+
+// ---------------------------------------------------------------------------
+// observeAndCommitRemoteFull tests (Item 6)
+// ---------------------------------------------------------------------------
+
+func TestObserveAndCommitRemoteFull(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(testDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+					{ID: "f1", Name: "file1.txt", ParentID: "root", DriveID: driveID, Size: 100, QuickXorHash: "qxh1"},
+				},
+				DeltaLink: "full-token",
+			}, nil
+		},
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	syncDir := t.TempDir()
+	logger := testLogger(t)
+
+	e, err := NewEngine(&EngineConfig{
+		DBPath:    dbPath,
+		SyncRoot:  syncDir,
+		DriveID:   driveID,
+		Fetcher:   mock,
+		Items:     mock,
+		Downloads: mock,
+		Uploads:   mock,
+		Logger:    logger,
+	})
+	require.NoError(t, err)
+	defer e.Close()
+
+	ctx := t.Context()
+
+	// Seed baseline with file1 + file2 (file2 will become an orphan).
+	bl, err := e.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	bl.Put(&BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: ItemTypeFile})
+	bl.Put(&BaselineEntry{Path: "file2.txt", DriveID: driveID, ItemID: "f2", ItemType: ItemTypeFile})
+
+	events, err := e.observeAndCommitRemoteFull(ctx, bl)
+	require.NoError(t, err)
+
+	// Should have modify (file1) + orphan delete (file2).
+	var modifies, deletes int
+	for _, ev := range events {
+		switch ev.Type {
+		case ChangeModify:
+			modifies++
+		case ChangeDelete:
+			deletes++
+			assert.Equal(t, "file2.txt", ev.Path)
+			assert.True(t, ev.IsDeleted)
+		case ChangeCreate, ChangeMove:
+			// not expected
+		}
+	}
+
+	assert.Equal(t, 1, modifies)
+	assert.Equal(t, 1, deletes)
+
+	// Delta token should have been saved.
+	savedToken, err := e.baseline.GetDeltaToken(ctx, driveID.String(), "")
+	require.NoError(t, err)
+	assert.Equal(t, "full-token", savedToken)
+}
+
+// ---------------------------------------------------------------------------
+// runFullReconciliation tests (Item 6)
+// ---------------------------------------------------------------------------
+
+func TestRunFullReconciliation_NoChanges(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(testDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+					{ID: "f1", Name: "file1.txt", ParentID: "root", DriveID: driveID, Size: 100, QuickXorHash: "qxh1"},
+				},
+				DeltaLink: "full-token",
+			}, nil
+		},
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	syncDir := t.TempDir()
+	logger := testLogger(t)
+
+	e, err := NewEngine(&EngineConfig{
+		DBPath:    dbPath,
+		SyncRoot:  syncDir,
+		DriveID:   driveID,
+		Fetcher:   mock,
+		Items:     mock,
+		Downloads: mock,
+		Uploads:   mock,
+		Logger:    logger,
+	})
+	require.NoError(t, err)
+	defer e.Close()
+
+	ctx := t.Context()
+
+	// Seed baseline matching delta exactly — no orphans.
+	bl, err := e.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	bl.Put(&BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: ItemTypeFile})
+
+	safety := DefaultSafetyConfig()
+	tracker := NewDepTracker(10, testLogger(t))
+
+	// Should complete without panic; events exist but planner produces no
+	// actions because nothing is different from baseline.
+	e.runFullReconciliation(ctx, bl, SyncDownloadOnly, safety, tracker)
+}
+
+func TestRunFullReconciliation_DeltaError(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return nil, errors.New("delta unavailable")
+		},
+	}
+
+	e, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	bl, err := e.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	safety := DefaultSafetyConfig()
+	tracker := NewDepTracker(10, testLogger(t))
+
+	// Should not panic — error is logged and function returns.
+	e.runFullReconciliation(ctx, bl, SyncDownloadOnly, safety, tracker)
+}

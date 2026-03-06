@@ -35,14 +35,14 @@ type FailureRecorder interface {
 	RecordFailure(ctx context.Context, path string, errMsg string, httpStatus int) error
 }
 
-// ConflictEscalator is called by the reconciler goroutine (single caller).
+// ConflictEscalator is called by the failure retrier goroutine (single caller).
 // Writes a conflict record when a permanently-failing item exceeds the
 // retry threshold (e.g., non-empty directory delete after 10 failures).
 type ConflictEscalator interface {
 	EscalateToConflict(ctx context.Context, driveID driveid.ID, itemID, path, reason string) error
 }
 
-// StateReader is called by reconciler, planner, status, CLI (read-only).
+// StateReader is called by failure retrier, planner, status, CLI (read-only).
 // All methods are pure reads. Multiple goroutines call concurrently.
 // WAL mode guarantees readers never block.
 type StateReader interface {
@@ -105,7 +105,7 @@ type ObservedItem struct {
 }
 
 // RemoteStateRow represents a row from the remote_state table, used by
-// the reconciler and status queries.
+// the failure retrier and status queries.
 type RemoteStateRow struct {
 	DriveID      driveid.ID
 	ItemID       string
