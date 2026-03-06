@@ -186,7 +186,21 @@ func TestNewSyncCmd_Structure(t *testing.T) {
 	cmd := newSyncCmd()
 	assert.Equal(t, "sync", cmd.Use)
 
-	for _, flag := range []string{"download-only", "upload-only", "dry-run", "force", "watch"} {
+	for _, flag := range []string{"download-only", "upload-only", "dry-run", "force", "watch", "full"} {
 		assert.NotNil(t, cmd.Flags().Lookup(flag), "missing flag %q", flag)
 	}
+}
+
+func TestNewSyncCmd_FullWatchMutualExclusivity(t *testing.T) {
+	t.Parallel()
+
+	cmd := newSyncCmd()
+	require.NoError(t, cmd.Flags().Set("full", "true"))
+	require.NoError(t, cmd.Flags().Set("watch", "true"))
+
+	// Cobra validates mutual exclusivity during PreRunE / ValidateFlagGroups.
+	err := cmd.ValidateFlagGroups()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "full")
+	assert.Contains(t, err.Error(), "watch")
 }
