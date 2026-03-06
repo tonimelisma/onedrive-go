@@ -119,7 +119,7 @@ func (m *mockInFlightChecker) HasInFlight(path string) bool {
 func testReconciler(state *mockStateReader, esc *mockEscalator, adder *mockEventAdder, checker *mockInFlightChecker) *Reconciler {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
-	return NewReconciler(state, esc, adder, checker, logger)
+	return NewReconciler(DefaultReconcilerConfig(), state, esc, adder, checker, logger)
 }
 
 func makeFailedRow(path, status string, failureCount int) RemoteStateRow {
@@ -235,8 +235,8 @@ func TestReconcile_SkipInFlight(t *testing.T) {
 
 func TestReconcile_EscalationThreshold(t *testing.T) {
 	rows := []RemoteStateRow{
-		makeFailedRow("a.txt", statusDownloadFailed, escalationThreshold),
-		makeFailedRow("b.txt", statusDownloadFailed, escalationThreshold+5),
+		makeFailedRow("a.txt", statusDownloadFailed, defaultEscalationThreshold),
+		makeFailedRow("b.txt", statusDownloadFailed, defaultEscalationThreshold+5),
 		makeFailedRow("c.txt", statusDownloadFailed, 2), // below threshold
 	}
 	state := &mockStateReader{failedRows: rows}
@@ -266,7 +266,7 @@ func TestReconcile_EscalationThreshold(t *testing.T) {
 
 func TestReconcile_EscalationError(t *testing.T) {
 	rows := []RemoteStateRow{
-		makeFailedRow("a.txt", statusDownloadFailed, escalationThreshold),
+		makeFailedRow("a.txt", statusDownloadFailed, defaultEscalationThreshold),
 	}
 	state := &mockStateReader{failedRows: rows}
 	esc := &mockEscalator{err: errors.New("db error")}
@@ -510,6 +510,39 @@ func TestRun_KickTriggersReconcile(t *testing.T) {
 
 	cancel()
 	<-done
+}
+
+func TestDefaultReconcilerConfig(t *testing.T) {
+	cfg := DefaultReconcilerConfig()
+	assert.Equal(t, 10, cfg.EscalationThreshold)
+}
+
+func TestReconciler_CustomEscalationThreshold(t *testing.T) {
+	rows := []RemoteStateRow{
+		makeFailedRow("a.txt", statusDownloadFailed, 3),
+		makeFailedRow("b.txt", statusDownloadFailed, 2), // below threshold
+	}
+	state := &mockStateReader{failedRows: rows}
+	esc := &mockEscalator{}
+	adder := &mockEventAdder{}
+	checker := newMockInFlightChecker()
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	cfg := ReconcilerConfig{EscalationThreshold: 3}
+	r := NewReconciler(cfg, state, esc, adder, checker, logger)
+	r.nowFunc = func() time.Time { return time.Unix(1000, 0) }
+
+	r.reconcile(context.Background())
+
+	esc.mu.Lock()
+	require.Len(t, esc.calls, 1, "a.txt should be escalated at threshold=3")
+	assert.Equal(t, "a.txt", esc.calls[0].path)
+	esc.mu.Unlock()
+
+	adder.mu.Lock()
+	require.Len(t, adder.events, 1, "b.txt should be dispatched")
+	assert.Equal(t, "b.txt", adder.events[0].Path)
+	adder.mu.Unlock()
 }
 
 func TestArmTimer_StopsExistingTimer(t *testing.T) {

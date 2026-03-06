@@ -73,17 +73,21 @@ type syncStateInfo struct {
 	LastSyncDuration string `json:"last_sync_duration,omitempty"`
 	FileCount        int    `json:"file_count"`
 	Conflicts        int    `json:"unresolved_conflicts"`
+	PendingSync      int    `json:"pending_sync"`
+	UploadIssues     int    `json:"upload_issues"`
 	LastError        string `json:"last_error,omitempty"`
 }
 
 // statusSummary aggregates health info across all drives.
 type statusSummary struct {
-	TotalDrives    int `json:"total_drives"`
-	Ready          int `json:"ready"`
-	Paused         int `json:"paused"`
-	NeedsSetup     int `json:"needs_setup"`
-	NoToken        int `json:"no_token"`
-	TotalConflicts int `json:"total_conflicts"`
+	TotalDrives      int `json:"total_drives"`
+	Ready            int `json:"ready"`
+	Paused           int `json:"paused"`
+	NeedsSetup       int `json:"needs_setup"`
+	NoToken          int `json:"no_token"`
+	TotalConflicts   int `json:"total_conflicts"`
+	TotalPendingSync int `json:"total_pending_sync"`
+	TotalUploadIss   int `json:"total_upload_issues"`
 }
 
 // statusOutput wraps the full status response for JSON output.
@@ -406,6 +410,18 @@ func querySyncState(statePath string, logger *slog.Logger) *syncStateInfo {
 		logger.Debug("could not count conflicts", slog.String("error", scanErr.Error()))
 	}
 
+	// Count pending sync items (remote_state not yet synced/deleted/filtered).
+	pendingSQL := "SELECT COUNT(*) FROM remote_state WHERE sync_status NOT IN ('synced','deleted','filtered')"
+	if scanErr := db.QueryRowContext(ctx, pendingSQL).Scan(&info.PendingSync); scanErr != nil {
+		logger.Debug("could not count pending sync items", slog.String("error", scanErr.Error()))
+	}
+
+	// Count active upload issues.
+	issuesSQL := "SELECT COUNT(*) FROM local_issues WHERE sync_status != 'resolved'"
+	if scanErr := db.QueryRowContext(ctx, issuesSQL).Scan(&info.UploadIssues); scanErr != nil {
+		logger.Debug("could not count upload issues", slog.String("error", scanErr.Error()))
+	}
+
 	return info
 }
 
@@ -430,6 +446,8 @@ func computeSummary(accounts []statusAccount) statusSummary {
 
 			if d.SyncState != nil {
 				s.TotalConflicts += d.SyncState.Conflicts
+				s.TotalPendingSync += d.SyncState.PendingSync
+				s.TotalUploadIss += d.SyncState.UploadIssues
 			}
 		}
 	}
@@ -507,6 +525,14 @@ func printSyncStateText(w io.Writer, ss *syncStateInfo) {
 		fmt.Fprintf(w, "    Last sync: never\n")
 	}
 
+	if ss.PendingSync > 0 {
+		fmt.Fprintf(w, "    Pending:   %d items\n", ss.PendingSync)
+	}
+
+	if ss.UploadIssues > 0 {
+		fmt.Fprintf(w, "    Issues:    %d upload issues (run 'onedrive-go issues' for details)\n", ss.UploadIssues)
+	}
+
 	if ss.LastError != "" {
 		fmt.Fprintf(w, "    Last error: %s\n", ss.LastError)
 	}
@@ -533,6 +559,16 @@ func printSummaryText(w io.Writer, s statusSummary) {
 
 	stateStr := strings.Join(parts, ", ")
 
-	fmt.Fprintf(w, "Summary: %d drives (%s), %d unresolved conflicts\n",
-		s.TotalDrives, stateStr, s.TotalConflicts)
+	extra := fmt.Sprintf("%d conflicts", s.TotalConflicts)
+
+	if s.TotalPendingSync > 0 {
+		extra += fmt.Sprintf(", %d pending", s.TotalPendingSync)
+	}
+
+	if s.TotalUploadIss > 0 {
+		extra += fmt.Sprintf(", %d upload issues", s.TotalUploadIss)
+	}
+
+	fmt.Fprintf(w, "Summary: %d drives (%s), %s\n",
+		s.TotalDrives, stateStr, extra)
 }

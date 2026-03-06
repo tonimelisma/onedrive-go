@@ -613,3 +613,12 @@ The observer layer produces `ChangeEvent` structs; the SyncStore layer consumes 
 
 ### Crash recovery: ResetInProgressStates at RunOnce start
 `RunOnce` calls `store.ResetInProgressStates(ctx, driveID)` before any observation. Items left in `syncing` or `downloading` state from a prior crash are reset to `observed`, causing them to be re-planned in the current cycle. This is safe because the planner is idempotent — re-planning an already-synced item results in a no-op (EF1).
+
+### Three durable per-item state stores
+`remote_state` is the authoritative record of what the server has (server truth). `baseline` is the authoritative record of what's synced locally (local truth). `local_issues` is the upload-side failure store — tracks files that can't be uploaded due to validation failures or transient errors. All three participate in the same SQLite database.
+
+### Pre-upload validation as post-plan filter
+Upload validation (reserved names, path length, file size) runs *after* the planner but *before* execution. The planner stays pure — it doesn't know about OneDrive constraints. The engine calls `validateUploadActions()` and records any failures via `RecordLocalIssue()`, then rebuilds the plan with `removeActionsByIndex()`. This keeps the planner testable and constraint-free.
+
+### isValidOneDriveName only checks exact reserved names
+`isValidOneDriveName()` in scanner.go rejects exact reserved device names (CON, PRN, AUX, NUL, COM0-9, LPT0-9) but *not* names with extensions (e.g., `CON.txt` passes). This matches the OneDrive API behavior — `CON.txt` is a valid filename on OneDrive, only bare `CON` is rejected.

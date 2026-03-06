@@ -106,12 +106,13 @@ const (
 
 // Compile-time interface satisfaction checks.
 var (
-	_ ObservationWriter = (*SyncStore)(nil)
-	_ OutcomeWriter     = (*SyncStore)(nil)
-	_ FailureRecorder   = (*SyncStore)(nil)
-	_ ConflictEscalator = (*SyncStore)(nil)
-	_ StateReader       = (*SyncStore)(nil)
-	_ StateAdmin        = (*SyncStore)(nil)
+	_ ObservationWriter  = (*SyncStore)(nil)
+	_ OutcomeWriter      = (*SyncStore)(nil)
+	_ FailureRecorder    = (*SyncStore)(nil)
+	_ ConflictEscalator  = (*SyncStore)(nil)
+	_ StateReader        = (*SyncStore)(nil)
+	_ StateAdmin         = (*SyncStore)(nil)
+	_ LocalIssueRecorder = (*SyncStore)(nil)
 )
 
 // SyncStore is the sole writer to the sync database. It loads the
@@ -543,6 +544,13 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx *sql.Tx, o *Outcome) err
 			return fmt.Errorf("sync: updating remote_state for upload %s: %w", o.Path, err)
 		}
 
+		// Clear any prior local_issues record for this path on upload success.
+		if _, delErr := tx.ExecContext(ctx,
+			`DELETE FROM local_issues WHERE path = ?`, o.Path,
+		); delErr != nil {
+			return fmt.Errorf("sync: clearing local issue on upload success for %s: %w", o.Path, delErr)
+		}
+
 	case ActionLocalMove, ActionRemoteMove:
 		// Move success: update path and mark synced.
 		_, err := tx.ExecContext(ctx,
@@ -838,9 +846,9 @@ func scanConflictRowSingle(row *sql.Row) (*ConflictRecord, error) {
 	return scanConflict(row)
 }
 
-// DB returns the underlying database connection for sharing with other
-// components that need to participate in the same database.
-func (m *SyncStore) DB() *sql.DB {
+// rawDB returns the underlying database connection for test access.
+// Unexported to prevent external packages from bypassing typed interfaces.
+func (m *SyncStore) rawDB() *sql.DB {
 	return m.db
 }
 
@@ -1579,4 +1587,112 @@ func nullInt64(n int64) sql.NullInt64 {
 	}
 
 	return sql.NullInt64{Int64: n, Valid: true}
+}
+
+// ---------------------------------------------------------------------------
+// LocalIssueRecorder methods
+// ---------------------------------------------------------------------------
+
+// localIssueSyncStatus classifies an issue_type into its sync_status:
+// permanent issues (invalid_filename, path_too_long, file_too_large) →
+// permanently_failed; everything else retains its issue_type as sync_status.
+func localIssueSyncStatus(issueType string) string {
+	switch issueType {
+	case "invalid_filename", "path_too_long", "file_too_large":
+		return "permanently_failed"
+	default:
+		return issueType
+	}
+}
+
+// RecordLocalIssue persists or updates an upload-side failure in local_issues.
+// On repeat failures for the same path, increments failure_count and updates
+// last_seen_at. Uses UPSERT to handle both new and existing rows.
+func (m *SyncStore) RecordLocalIssue(
+	ctx context.Context, issuePath, issueType, errMsg string,
+	httpStatus int, fileSize int64, localHash string,
+) error {
+	now := m.nowFunc().UnixNano()
+	syncStatus := localIssueSyncStatus(issueType)
+
+	_, err := m.db.ExecContext(ctx,
+		`INSERT INTO local_issues
+			(path, issue_type, sync_status, failure_count, last_error, http_status,
+			 first_seen_at, last_seen_at, file_size, local_hash)
+		VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(path) DO UPDATE SET
+			issue_type = excluded.issue_type,
+			sync_status = excluded.sync_status,
+			failure_count = local_issues.failure_count + 1,
+			last_error = excluded.last_error,
+			http_status = excluded.http_status,
+			last_seen_at = excluded.last_seen_at,
+			file_size = excluded.file_size,
+			local_hash = excluded.local_hash`,
+		issuePath, issueType, syncStatus, errMsg, httpStatus,
+		now, now, nullInt64(fileSize), nullString(localHash),
+	)
+	if err != nil {
+		return fmt.Errorf("sync: recording local issue for %s: %w", issuePath, err)
+	}
+
+	return nil
+}
+
+// ListLocalIssues returns all local_issues rows ordered by last_seen_at DESC.
+func (m *SyncStore) ListLocalIssues(ctx context.Context) ([]LocalIssueRow, error) {
+	rows, err := m.db.QueryContext(ctx,
+		`SELECT path, issue_type, sync_status, failure_count,
+			COALESCE(next_retry_at, 0), COALESCE(last_error, ''),
+			COALESCE(http_status, 0), first_seen_at, last_seen_at,
+			COALESCE(file_size, 0), COALESCE(local_hash, '')
+		FROM local_issues
+		ORDER BY last_seen_at DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing local issues: %w", err)
+	}
+	defer rows.Close()
+
+	var result []LocalIssueRow
+
+	for rows.Next() {
+		var r LocalIssueRow
+		if scanErr := rows.Scan(
+			&r.Path, &r.IssueType, &r.SyncStatus, &r.FailureCount,
+			&r.NextRetryAt, &r.LastError, &r.HTTPStatus,
+			&r.FirstSeenAt, &r.LastSeenAt, &r.FileSize, &r.LocalHash,
+		); scanErr != nil {
+			return nil, fmt.Errorf("sync: scanning local issue row: %w", scanErr)
+		}
+
+		result = append(result, r)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sync: iterating local issues: %w", err)
+	}
+
+	return result, nil
+}
+
+// ClearLocalIssue removes a single local_issues row by path.
+func (m *SyncStore) ClearLocalIssue(ctx context.Context, issuePath string) error {
+	_, err := m.db.ExecContext(ctx,
+		`DELETE FROM local_issues WHERE path = ?`, issuePath)
+	if err != nil {
+		return fmt.Errorf("sync: clearing local issue for %s: %w", issuePath, err)
+	}
+
+	return nil
+}
+
+// ClearResolvedLocalIssues removes all local_issues rows with sync_status = 'resolved'.
+func (m *SyncStore) ClearResolvedLocalIssues(ctx context.Context) error {
+	_, err := m.db.ExecContext(ctx,
+		`DELETE FROM local_issues WHERE sync_status = 'resolved'`)
+	if err != nil {
+		return fmt.Errorf("sync: clearing resolved local issues: %w", err)
+	}
+
+	return nil
 }

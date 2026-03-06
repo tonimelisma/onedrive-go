@@ -1974,7 +1974,7 @@ func TestCheckCacheConsistency(t *testing.T) {
 	assert.Equal(t, 0, mismatches)
 
 	// Manually corrupt the DB row behind the cache's back.
-	_, err = mgr.DB().ExecContext(ctx,
+	_, err = mgr.rawDB().ExecContext(ctx,
 		`UPDATE baseline SET local_hash = 'tampered' WHERE path = 'consistency-check.txt'`)
 	require.NoError(t, err)
 

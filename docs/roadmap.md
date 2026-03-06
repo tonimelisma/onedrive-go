@@ -106,7 +106,7 @@ Config migration (`Enabled` → `Paused`), `drive remove` deletes config section
 
 **Dependency graph** (strictly linear):
 ```
-5.7.0 (DONE) → 5.7.1 (DONE) → 5.7.2 (DONE) → 5.7.3 (DONE) → 5.7.4
+5.7.0 (DONE) → 5.7.1 (DONE) → 5.7.2 (DONE) → 5.7.3 (DONE) → 5.7.4 (DONE)
 ```
 
 **Design reference**: Every increment implements sections of [remote-state-separation.md](design/remote-state-separation.md). Section numbers (§N) are cited inline.
@@ -413,7 +413,7 @@ Consolidated migrations into single `00001_consolidated_schema.sql` with `remote
 - `var _ ConflictEscalator = (*SyncStore)(nil)` compiles.
 - `grep -rn 'reconcil' internal/sync/ --include='*.go' | grep -v '_test.go'` shows `reconciler.go` and engine wiring.
 
-##### 5.7.4: Upload Failure Tracking + Status Integration + Interface Narrowing + Cleanup
+##### 5.7.4: Upload Failure Tracking + Status Integration + Interface Narrowing + Cleanup — **DONE**
 
 **Goal**: Complete the remote state separation architecture: add persistent upload failure tracking via `local_issues`, surface pending/failed items to the user via `status` and `issues` commands, narrow all component interfaces to their sub-interface, remove the `DB()` escape hatch, and verify the full architecture against the design doc checklist.
 
