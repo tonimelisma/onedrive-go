@@ -452,8 +452,19 @@ func TestE2E_Orchestrator_WatchPausedDrive(t *testing.T) {
 	remotePath1 := "/" + testFolder1 + "/active.txt"
 	pollCLIWithConfigContains(t, opsCfgPath, nil, "active.txt", 3*time.Minute, "stat", remotePath1)
 
-	// Wait a bit, then verify drive2 did NOT sync.
-	time.Sleep(10 * time.Second)
+	// Bounded negative check: poll a few times over 10s to confirm file not on drive2.
+	negDeadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(negDeadline) {
+		d2Args := []string{"--config", cfgPath, "--drive", drive2, "--debug", "stat", "/" + testFolder2 + "/paused.txt"}
+		d2Cmd := makeCmd(d2Args, env)
+		d2Err := d2Cmd.Run()
+		if d2Err == nil {
+			t.Log("warning: paused drive2 file appeared remotely (pause may not be effective)")
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
+	// Final check.
 	d2Args := []string{"--config", cfgPath, "--drive", drive2, "--debug", "stat", "/" + testFolder2 + "/paused.txt"}
 	d2Cmd := makeCmd(d2Args, env)
 	d2Err := d2Cmd.Run()

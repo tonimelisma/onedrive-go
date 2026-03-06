@@ -23,6 +23,9 @@ import (
 // TestE2E_ZeroByteFileSync validates that zero-byte files can be uploaded
 // and downloaded with correct metadata via the OneDrive API.
 func TestE2E_ZeroByteFileSync(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
 	opsCfgPath := writeMinimalConfig(t)
@@ -52,6 +55,9 @@ func TestE2E_ZeroByteFileSync(t *testing.T) {
 // TestE2E_UnicodeFilenameRoundtrip validates that files with accented
 // characters (NFC normalization) survive a full upload-download cycle.
 func TestE2E_UnicodeFilenameRoundtrip(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
 	opsCfgPath := writeMinimalConfig(t)
@@ -83,6 +89,9 @@ func TestE2E_UnicodeFilenameRoundtrip(t *testing.T) {
 // TestE2E_InvalidFilenameRejection validates that OneDrive-invalid filenames
 // are not uploaded and produce warnings.
 func TestE2E_InvalidFilenameRejection(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
 	opsCfgPath := writeMinimalConfig(t)
@@ -115,6 +124,9 @@ func TestE2E_InvalidFilenameRejection(t *testing.T) {
 // and re-creating a file in quick succession results in the correct
 // final state after sync.
 func TestE2E_RapidFileChurn(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
 	opsCfgPath := writeMinimalConfig(t)
@@ -155,12 +167,15 @@ func TestE2E_RapidFileChurn(t *testing.T) {
 // TestPlan_BigDeleteBlocked in planner_edge_test.go covers this logic
 // with precise control over the baseline.
 func TestE2E_BigDeleteProtection(t *testing.T) {
-	t.Skip("unreliable with shared global state DB — big-delete threshold depends on total baseline count from all E2E tests")
+	registerLogDump(t)
 }
 
 // TestE2E_ConflictDetectionAndResolution validates the full conflict
 // lifecycle: create conflicting files, detect the conflict, resolve it.
 func TestE2E_ConflictDetectionAndResolution(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
 	opsCfgPath := writeMinimalConfig(t)

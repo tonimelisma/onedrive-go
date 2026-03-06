@@ -22,6 +22,7 @@ import (
 // TestE2E_EdgeCases covers edge cases: large files (resumable upload),
 // unicode filenames, spaces in filenames, and concurrent uploads.
 func TestE2E_EdgeCases(t *testing.T) {
+	registerLogDump(t)
 	opsCfgPath := writeMinimalConfig(t)
 	testFolder := fmt.Sprintf("onedrive-go-e2e-edge-%d", time.Now().UnixNano())
 
@@ -588,7 +589,6 @@ func TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal(t *testing.T) {
 // EF8 (remote delete→local delete), EF10 (both deleted→cleanup),
 // EF7 (local deleted+remote changed→download), ED6 (remote folder deleted).
 func TestE2E_Sync_DeletePropagation(t *testing.T) {
-	t.Skip("unreliable — remote→local deletion depends on Graph API delta endpoint which lags 120+ seconds (ci_issues.md §17)")
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
@@ -696,7 +696,6 @@ func TestE2E_Sync_DeletePropagation(t *testing.T) {
 // the --force override. Creates 12 files (above MinItems=10 threshold),
 // deletes all remotely (100% > 50% MaxPercent), verifies protection triggers.
 func TestE2E_Sync_BigDeleteProtection(t *testing.T) {
-	t.Skip("unreliable with shared drive — parallel tests inflate baseline count, changing big-delete percentage")
 	registerLogDump(t)
 
 	syncDir := t.TempDir()

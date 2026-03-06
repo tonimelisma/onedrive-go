@@ -369,6 +369,43 @@ func (b *Baseline) ForEachPath(fn func(string, *BaselineEntry)) {
 	}
 }
 
+// FindOrphans identifies baseline entries that are not present in the seen
+// set (a full delta enumeration). These represent items deleted remotely but
+// missed by incremental delta — deletions are delivered exactly once in a
+// narrow window and permanently lost if the client's token advances past them.
+//
+// Returns synthesized ChangeDelete events for each orphan, which can be fed
+// through the normal planner + executor pipeline.
+func (b *Baseline) FindOrphans(seen map[driveid.ItemKey]struct{}, driveID driveid.ID) []ChangeEvent {
+	var orphans []ChangeEvent
+
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	for _, entry := range b.byPath {
+		if entry.DriveID != driveID {
+			continue
+		}
+
+		key := driveid.NewItemKey(entry.DriveID, entry.ItemID)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+
+		orphans = append(orphans, ChangeEvent{
+			Source:    SourceRemote,
+			Type:      ChangeDelete,
+			Path:      entry.Path,
+			ItemID:    entry.ItemID,
+			DriveID:   entry.DriveID,
+			ItemType:  entry.ItemType,
+			IsDeleted: true,
+		})
+	}
+
+	return orphans
+}
+
 // NewBaselineForTest creates a Baseline pre-populated with entries.
 // Exported for test files within the package; not intended for production use.
 func NewBaselineForTest(entries []*BaselineEntry) *Baseline {
