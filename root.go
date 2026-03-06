@@ -230,6 +230,7 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newPauseCmd())
 	cmd.AddCommand(newResumeCmd())
 	cmd.AddCommand(newConflictsCmd())
+	cmd.AddCommand(newIssuesCmd())
 	cmd.AddCommand(newVerifyCmd())
 	cmd.AddCommand(newResolveCmd())
 

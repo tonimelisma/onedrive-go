@@ -52,6 +52,7 @@ type WorkerResult struct {
 	ID         int64
 	CycleID    string
 	Path       string
+	ActionType ActionType
 	Success    bool
 	ErrMsg     string
 	HTTPStatus int // from graph.GraphError, 0 if not a Graph API error
@@ -313,6 +314,7 @@ func (wp *WorkerPool) sendResult(ctx context.Context, ta *TrackedAction, success
 		ID:         ta.ID,
 		CycleID:    ta.CycleID,
 		Path:       ta.Action.Path,
+		ActionType: ta.Action.Type,
 		Success:    success,
 		ErrMsg:     errMsg,
 		HTTPStatus: extractHTTPStatus(actionErr),

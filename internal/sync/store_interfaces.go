@@ -57,12 +57,36 @@ type StateReader interface {
 	ReadSyncMetadata(ctx context.Context) (map[string]string, error)
 }
 
+// LocalIssueRecorder is called by the engine to persist upload-side failures
+// (pre-validation rejects, transient upload errors). Single or few callers.
+type LocalIssueRecorder interface {
+	RecordLocalIssue(ctx context.Context, path, issueType, errMsg string, httpStatus int, fileSize int64, localHash string) error
+	ListLocalIssues(ctx context.Context) ([]LocalIssueRow, error)
+	ClearLocalIssue(ctx context.Context, path string) error
+	ClearResolvedLocalIssues(ctx context.Context) error
+}
+
 // StateAdmin is called by CLI commands and daemon maintenance.
 // Write operations that don't fit the hot path.
 type StateAdmin interface {
 	ResetFailure(ctx context.Context, path string) error
 	ResetAllFailures(ctx context.Context) error
 	ResetInProgressStates(ctx context.Context, syncRoot string) error
+}
+
+// LocalIssueRow represents a row from the local_issues table.
+type LocalIssueRow struct {
+	Path         string
+	IssueType    string
+	SyncStatus   string
+	FailureCount int
+	NextRetryAt  int64
+	LastError    string
+	HTTPStatus   int
+	FirstSeenAt  int64
+	LastSeenAt   int64
+	FileSize     int64
+	LocalHash    string
 }
 
 // ObservedItem represents a single item from a delta API response, ready

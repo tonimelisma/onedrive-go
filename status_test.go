@@ -438,6 +438,44 @@ func TestQuerySyncState_WithMetadata(t *testing.T) {
 	assert.Equal(t, 1, info.Conflicts)
 }
 
+func TestQuerySyncState_PendingSyncAndIssues(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "state.db")
+
+	createTestStateDB(t, dbPath)
+
+	db, err := sql.Open("sqlite", "file:"+dbPath)
+	require.NoError(t, err)
+
+	ctx := t.Context()
+
+	// Insert remote_state rows with mixed statuses.
+	_, err = db.ExecContext(ctx, `INSERT INTO remote_state (path, drive_id, item_id, parent_id, item_type, sync_status, observed_at) VALUES
+		('/a.txt', 'd!1', 'i1', 'root', 'file', 'synced', 0),
+		('/b.txt', 'd!1', 'i2', 'root', 'file', 'pending_download', 0),
+		('/c.txt', 'd!1', 'i3', 'root', 'file', 'download_failed', 0),
+		('/d.txt', 'd!1', 'i4', 'root', 'file', 'deleted', 0),
+		('/e.txt', 'd!1', 'i5', 'root', 'file', 'filtered', 0)`)
+	require.NoError(t, err)
+
+	// Insert local_issues rows.
+	_, err = db.ExecContext(ctx, `INSERT INTO local_issues (path, issue_type, sync_status, failure_count, first_seen_at, last_seen_at) VALUES
+		('/x.txt', 'invalid_filename', 'permanently_failed', 1, 0, 0),
+		('/y.txt', 'upload_failed', 'upload_failed', 2, 0, 0),
+		('/z.txt', 'upload_failed', 'resolved', 1, 0, 0)`)
+	require.NoError(t, err)
+
+	db.Close()
+
+	info := querySyncState(dbPath, logger)
+	require.NotNil(t, info)
+	assert.Equal(t, 2, info.PendingSync)  // pending_download + download_failed
+	assert.Equal(t, 2, info.UploadIssues) // permanently_failed + upload_failed (not resolved)
+}
+
 func TestComputeSummary_Mixed(t *testing.T) {
 	t.Parallel()
 
@@ -661,7 +699,62 @@ func TestPrintSummaryText_AllStates(t *testing.T) {
 	assert.Contains(t, output, "1 paused")
 	assert.Contains(t, output, "1 needs setup")
 	assert.Contains(t, output, "1 no token")
-	assert.Contains(t, output, "3 unresolved conflicts")
+	assert.Contains(t, output, "3 conflicts")
+}
+
+func TestPrintSummaryText_WithPendingAndIssues(t *testing.T) {
+	t.Parallel()
+
+	s := statusSummary{
+		TotalDrives:      2,
+		Ready:            2,
+		TotalConflicts:   1,
+		TotalPendingSync: 5,
+		TotalUploadIss:   3,
+	}
+
+	var buf bytes.Buffer
+	printSummaryText(&buf, s)
+
+	output := buf.String()
+	assert.Contains(t, output, "5 pending")
+	assert.Contains(t, output, "3 upload issues")
+}
+
+func TestPrintSyncStateText_WithPendingAndIssues(t *testing.T) {
+	t.Parallel()
+
+	ss := &syncStateInfo{
+		LastSyncTime: "2026-03-02T10:30:00Z",
+		FileCount:    45,
+		Conflicts:    0,
+		PendingSync:  3,
+		UploadIssues: 2,
+	}
+
+	var buf bytes.Buffer
+	printSyncStateText(&buf, ss)
+
+	output := buf.String()
+	assert.Contains(t, output, "3 items")
+	assert.Contains(t, output, "2 upload issues")
+}
+
+func TestComputeSummary_AggregatesPendingAndIssues(t *testing.T) {
+	t.Parallel()
+
+	accounts := []statusAccount{
+		{
+			Drives: []statusDrive{
+				{State: driveStateReady, SyncState: &syncStateInfo{PendingSync: 3, UploadIssues: 1}},
+				{State: driveStateReady, SyncState: &syncStateInfo{PendingSync: 2, UploadIssues: 4}},
+			},
+		},
+	}
+
+	s := computeSummary(accounts)
+	assert.Equal(t, 5, s.TotalPendingSync)
+	assert.Equal(t, 5, s.TotalUploadIss)
 }
 
 // createTestStateDB creates a minimal SQLite DB with tables matching the sync schema.
@@ -707,6 +800,35 @@ func createTestStateDB(t *testing.T, dbPath string) {
 		CREATE TABLE IF NOT EXISTS sync_metadata (
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL
+		);
+		CREATE TABLE IF NOT EXISTS remote_state (
+			path TEXT PRIMARY KEY,
+			drive_id TEXT NOT NULL,
+			item_id TEXT NOT NULL,
+			parent_id TEXT NOT NULL,
+			item_type TEXT NOT NULL,
+			sync_status TEXT NOT NULL DEFAULT 'synced',
+			size INTEGER,
+			hash TEXT,
+			mtime INTEGER,
+			etag TEXT,
+			failure_count INTEGER NOT NULL DEFAULT 0,
+			last_error TEXT,
+			next_retry_at INTEGER,
+			observed_at INTEGER NOT NULL DEFAULT 0
+		);
+		CREATE TABLE IF NOT EXISTS local_issues (
+			path TEXT PRIMARY KEY,
+			issue_type TEXT NOT NULL,
+			sync_status TEXT NOT NULL,
+			failure_count INTEGER NOT NULL DEFAULT 1,
+			next_retry_at INTEGER,
+			last_error TEXT,
+			http_status INTEGER,
+			first_seen_at INTEGER NOT NULL,
+			last_seen_at INTEGER NOT NULL,
+			file_size INTEGER,
+			local_hash TEXT
 		);
 	`)
 	require.NoError(t, err)
