@@ -260,6 +260,9 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 		return nil, err
 	}
 
+	// Step 6b: Pre-upload validation — reject permanently invalid uploads.
+	plan = e.filterInvalidUploads(ctx, plan)
+
 	// Step 7: Build report from plan counts.
 	counts := countByType(plan.Actions)
 	report := buildReportFromCounts(counts, mode, opts)
@@ -681,7 +684,7 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 
 	// Step 4b: Start reconciler for automatic retry of failed items.
 	// Created after buf so it can re-inject synthesized events.
-	e.reconciler = NewReconciler(e.baseline, e.baseline, buf, tracker, e.logger)
+	e.reconciler = NewReconciler(DefaultReconcilerConfig(), e.baseline, e.baseline, buf, tracker, e.logger)
 	go e.reconciler.Run(ctx)
 
 	// Step 5: Start observer goroutines.
@@ -738,6 +741,16 @@ func (e *Engine) drainWorkerResults(ctx context.Context, results <-chan WorkerRe
 						slog.String("path", r.Path),
 						slog.String("error", recErr.Error()),
 					)
+				}
+
+				// Also record upload failures in local_issues for user visibility.
+				if r.ActionType == ActionUpload {
+					if issueErr := e.baseline.RecordLocalIssue(ctx, r.Path, "upload_failed", r.ErrMsg, r.HTTPStatus, 0, ""); issueErr != nil {
+						e.logger.Warn("failed to record upload issue in local_issues",
+							slog.String("path", r.Path),
+							slog.String("error", issueErr.Error()),
+						)
+					}
 				}
 			}
 
@@ -923,6 +936,9 @@ func (e *Engine) processBatch(
 		return
 	}
 
+	// Pre-upload validation for watch-mode batches.
+	plan = e.filterInvalidUploads(ctx, plan)
+
 	if len(plan.Actions) == 0 {
 		e.logger.Debug("empty plan for batch, nothing to do")
 		return
@@ -1014,4 +1030,35 @@ func (e *Engine) resolveWatchSafetyConfig(opts WatchOpts) *SafetyConfig {
 	}
 
 	return DefaultSafetyConfig()
+}
+
+// filterInvalidUploads runs pre-upload validation on the plan, recording
+// permanent issues for rejected uploads and returning a filtered plan.
+func (e *Engine) filterInvalidUploads(ctx context.Context, plan *ActionPlan) *ActionPlan {
+	keep, failures := validateUploadActions(plan.Actions)
+	if len(failures) == 0 {
+		return plan
+	}
+
+	for _, f := range failures {
+		e.logger.Warn("pre-upload validation failed",
+			slog.String("path", f.Path),
+			slog.String("issue_type", f.IssueType),
+			slog.String("error", f.Error),
+		)
+
+		var fileSize int64
+		if plan.Actions[f.Index].View != nil && plan.Actions[f.Index].View.Local != nil {
+			fileSize = plan.Actions[f.Index].View.Local.Size
+		}
+
+		if recErr := e.baseline.RecordLocalIssue(ctx, f.Path, f.IssueType, f.Error, 0, fileSize, ""); recErr != nil {
+			e.logger.Warn("failed to record local issue",
+				slog.String("path", f.Path),
+				slog.String("error", recErr.Error()),
+			)
+		}
+	}
+
+	return removeActionsByIndex(plan, keep)
 }

@@ -9,14 +9,26 @@ import (
 
 // Reconciler constants.
 const (
-	// escalationThreshold is the failure_count at which a row is escalated
+	// defaultEscalationThreshold is the failure_count at which a row is escalated
 	// to a user-visible conflict instead of being retried.
-	escalationThreshold = 10
+	defaultEscalationThreshold = 10
 
 	// reconcilerSafetyInterval is the maximum time between reconcile sweeps.
 	// Acts as a safety net in case kick signals are lost.
 	reconcilerSafetyInterval = 2 * time.Minute
 )
+
+// ReconcilerConfig holds tunable thresholds for the reconciler.
+type ReconcilerConfig struct {
+	EscalationThreshold int // failure count before escalation to conflict
+}
+
+// DefaultReconcilerConfig returns a ReconcilerConfig with production defaults.
+func DefaultReconcilerConfig() ReconcilerConfig {
+	return ReconcilerConfig{
+		EscalationThreshold: defaultEscalationThreshold,
+	}
+}
 
 // InFlightChecker reports whether a path has an in-flight action in the tracker.
 type InFlightChecker interface {
@@ -30,8 +42,10 @@ type EventAdder interface {
 
 // Reconciler periodically checks remote_state for failed items whose backoff
 // has expired and re-injects them into the sync pipeline. Items that have
-// failed escalationThreshold times are escalated to user-visible conflicts.
+// failed more than cfg.EscalationThreshold times are escalated to
+// user-visible conflicts.
 type Reconciler struct {
+	cfg       ReconcilerConfig
 	state     StateReader
 	escalator ConflictEscalator
 	buf       EventAdder
@@ -47,6 +61,7 @@ type Reconciler struct {
 // NewReconciler creates a Reconciler. The reconciler does not start until
 // Run() is called.
 func NewReconciler(
+	cfg ReconcilerConfig,
 	state StateReader,
 	escalator ConflictEscalator,
 	buf EventAdder,
@@ -54,6 +69,7 @@ func NewReconciler(
 	logger *slog.Logger,
 ) *Reconciler {
 	return &Reconciler{
+		cfg:       cfg,
 		state:     state,
 		escalator: escalator,
 		buf:       buf,
@@ -154,7 +170,7 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 		}
 
 		// Escalate if failure count exceeds threshold.
-		if row.FailureCount >= escalationThreshold {
+		if row.FailureCount >= r.cfg.EscalationThreshold {
 			if escErr := r.escalator.EscalateToConflict(ctx, row.DriveID, row.ItemID, row.Path, row.LastError); escErr != nil {
 				r.logger.Warn("reconciler: failed to escalate",
 					slog.String("path", row.Path),
