@@ -157,19 +157,6 @@ func TestE2E_RapidFileChurn(t *testing.T) {
 		"final state should be the last written content")
 }
 
-// TestE2E_BigDeleteProtection validates that deleting a large fraction
-// of files locally triggers the big-delete protection mechanism.
-//
-// Note: This test is unreliable with the shared global state DB because
-// the big-delete percentage is calculated against ALL baseline entries
-// (not just the test folder). When many entries from other tests exist,
-// 20 deletes may fall below the 50% threshold. The unit test
-// TestPlan_BigDeleteBlocked in planner_edge_test.go covers this logic
-// with precise control over the baseline.
-func TestE2E_BigDeleteProtection(t *testing.T) {
-	registerLogDump(t)
-}
-
 // TestE2E_ConflictDetectionAndResolution validates the full conflict
 // lifecycle: create conflicting files, detect the conflict, resolve it.
 func TestE2E_ConflictDetectionAndResolution(t *testing.T) {

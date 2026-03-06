@@ -19,7 +19,7 @@ import (
 // Mock types for reconciler tests
 // ---------------------------------------------------------------------------
 
-// mockStateReader implements StateReader for reconciler tests.
+// mockStateReader implements StateReader for failure retrier tests.
 type mockStateReader struct {
 	mu                 stdsync.Mutex
 	failedRows         []RemoteStateRow
@@ -59,7 +59,7 @@ func (m *mockStateReader) ReadSyncMetadata(_ context.Context) (map[string]string
 	return nil, nil
 }
 
-// mockEscalator implements ConflictEscalator for reconciler tests.
+// mockEscalator implements ConflictEscalator for failure retrier tests.
 type mockEscalator struct {
 	mu    stdsync.Mutex
 	calls []escalateCall
@@ -82,7 +82,7 @@ func (m *mockEscalator) EscalateToConflict(_ context.Context, driveID driveid.ID
 	return m.err
 }
 
-// mockEventAdder implements EventAdder for reconciler tests.
+// mockEventAdder implements EventAdder for failure retrier tests.
 type mockEventAdder struct {
 	mu     stdsync.Mutex
 	events []*ChangeEvent
@@ -95,7 +95,7 @@ func (m *mockEventAdder) Add(ev *ChangeEvent) {
 	m.events = append(m.events, ev)
 }
 
-// mockInFlightChecker implements InFlightChecker for reconciler tests.
+// mockInFlightChecker implements InFlightChecker for failure retrier tests.
 type mockInFlightChecker struct {
 	mu    stdsync.Mutex
 	paths map[string]bool
@@ -116,10 +116,10 @@ func (m *mockInFlightChecker) HasInFlight(path string) bool {
 // Test helpers
 // ---------------------------------------------------------------------------
 
-func testReconciler(state *mockStateReader, esc *mockEscalator, adder *mockEventAdder, checker *mockInFlightChecker) *Reconciler {
+func testFailureRetrier(state *mockStateReader, esc *mockEscalator, adder *mockEventAdder, checker *mockInFlightChecker) *FailureRetrier {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
-	return NewReconciler(DefaultReconcilerConfig(), state, esc, adder, checker, logger)
+	return NewFailureRetrier(DefaultFailureRetrierConfig(), state, esc, adder, checker, logger)
 }
 
 func makeFailedRow(path, status string, failureCount int) RemoteStateRow {
@@ -145,13 +145,13 @@ func makeFailedRow(path, status string, failureCount int) RemoteStateRow {
 // Tests
 // ---------------------------------------------------------------------------
 
-func TestNewReconciler(t *testing.T) {
+func TestNewFailureRetrier(t *testing.T) {
 	state := &mockStateReader{}
 	esc := &mockEscalator{}
 	adder := &mockEventAdder{}
 	checker := newMockInFlightChecker()
 
-	r := testReconciler(state, esc, adder, checker)
+	r := testFailureRetrier(state, esc, adder, checker)
 
 	require.NotNil(t, r)
 	assert.NotNil(t, r.kickCh)
@@ -164,7 +164,7 @@ func TestKick_Coalescing(t *testing.T) {
 	adder := &mockEventAdder{}
 	checker := newMockInFlightChecker()
 
-	r := testReconciler(state, esc, adder, checker)
+	r := testFailureRetrier(state, esc, adder, checker)
 
 	// First kick should succeed (buffered channel has capacity 1).
 	r.Kick()
@@ -189,7 +189,7 @@ func TestReconcile_DispatchRetriableItems(t *testing.T) {
 	adder := &mockEventAdder{}
 	checker := newMockInFlightChecker()
 
-	r := testReconciler(state, esc, adder, checker)
+	r := testFailureRetrier(state, esc, adder, checker)
 	r.nowFunc = func() time.Time { return time.Unix(1000, 0) }
 
 	r.reconcile(context.Background())
@@ -220,7 +220,7 @@ func TestReconcile_SkipInFlight(t *testing.T) {
 	checker := newMockInFlightChecker()
 	checker.paths["a.txt"] = true // a.txt is in-flight
 
-	r := testReconciler(state, esc, adder, checker)
+	r := testFailureRetrier(state, esc, adder, checker)
 	r.nowFunc = func() time.Time { return time.Unix(1000, 0) }
 
 	r.reconcile(context.Background())
@@ -244,7 +244,7 @@ func TestReconcile_EscalationThreshold(t *testing.T) {
 	adder := &mockEventAdder{}
 	checker := newMockInFlightChecker()
 
-	r := testReconciler(state, esc, adder, checker)
+	r := testFailureRetrier(state, esc, adder, checker)
 	r.nowFunc = func() time.Time { return time.Unix(1000, 0) }
 
 	r.reconcile(context.Background())
@@ -273,7 +273,7 @@ func TestReconcile_EscalationError(t *testing.T) {
 	adder := &mockEventAdder{}
 	checker := newMockInFlightChecker()
 
-	r := testReconciler(state, esc, adder, checker)
+	r := testFailureRetrier(state, esc, adder, checker)
 	r.nowFunc = func() time.Time { return time.Unix(1000, 0) }
 
 	// Should not panic; error is logged.
@@ -289,7 +289,7 @@ func TestReconcile_EscalationError(t *testing.T) {
 }
 
 func TestSynthesizeEvent_DeleteStatuses(t *testing.T) {
-	r := testReconciler(&mockStateReader{}, &mockEscalator{}, &mockEventAdder{}, newMockInFlightChecker())
+	r := testFailureRetrier(&mockStateReader{}, &mockEscalator{}, &mockEventAdder{}, newMockInFlightChecker())
 
 	tests := []struct {
 		name     string
@@ -323,7 +323,7 @@ func TestSynthesizeEvent_DeleteStatuses(t *testing.T) {
 }
 
 func TestSynthesizeEvent_FolderItemType(t *testing.T) {
-	r := testReconciler(&mockStateReader{}, &mockEscalator{}, &mockEventAdder{}, newMockInFlightChecker())
+	r := testFailureRetrier(&mockStateReader{}, &mockEscalator{}, &mockEventAdder{}, newMockInFlightChecker())
 
 	row := makeFailedRow("dir", statusDownloadFailed, 1)
 	row.ItemType = "folder"
@@ -333,7 +333,7 @@ func TestSynthesizeEvent_FolderItemType(t *testing.T) {
 }
 
 func TestSynthesizeEvent_InvalidItemType(t *testing.T) {
-	r := testReconciler(&mockStateReader{}, &mockEscalator{}, &mockEventAdder{}, newMockInFlightChecker())
+	r := testFailureRetrier(&mockStateReader{}, &mockEscalator{}, &mockEventAdder{}, newMockInFlightChecker())
 
 	row := makeFailedRow("bad.txt", statusDownloadFailed, 1)
 	row.ItemType = "bogus"
@@ -351,7 +351,7 @@ func TestReconcile_SkipsInvalidItemType(t *testing.T) {
 
 	state := &mockStateReader{failedRows: rows}
 	adder := &mockEventAdder{}
-	r := testReconciler(state, &mockEscalator{}, adder, newMockInFlightChecker())
+	r := testFailureRetrier(state, &mockEscalator{}, adder, newMockInFlightChecker())
 	r.nowFunc = func() time.Time { return time.Unix(1000, 0) }
 
 	r.reconcile(context.Background())
@@ -370,7 +370,7 @@ func TestReconcile_NoRows(t *testing.T) {
 	adder := &mockEventAdder{}
 	checker := newMockInFlightChecker()
 
-	r := testReconciler(state, esc, adder, checker)
+	r := testFailureRetrier(state, esc, adder, checker)
 	r.nowFunc = func() time.Time { return time.Unix(1000, 0) }
 
 	r.reconcile(context.Background())
@@ -390,7 +390,7 @@ func TestReconcile_ListFailedError(t *testing.T) {
 	adder := &mockEventAdder{}
 	checker := newMockInFlightChecker()
 
-	r := testReconciler(state, esc, adder, checker)
+	r := testFailureRetrier(state, esc, adder, checker)
 	r.nowFunc = func() time.Time { return time.Unix(1000, 0) }
 
 	// Should not panic; error is logged, no events dispatched.
@@ -406,7 +406,7 @@ func TestArmTimer_FutureRetry(t *testing.T) {
 	future := now.Add(30 * time.Second)
 
 	state := &mockStateReader{earliestRetry: future}
-	r := testReconciler(state, &mockEscalator{}, &mockEventAdder{}, newMockInFlightChecker())
+	r := testFailureRetrier(state, &mockEscalator{}, &mockEventAdder{}, newMockInFlightChecker())
 	r.nowFunc = func() time.Time { return now }
 
 	r.armTimer(context.Background(), now)
@@ -419,7 +419,7 @@ func TestArmTimer_FutureRetry(t *testing.T) {
 
 func TestArmTimer_NoRetry(t *testing.T) {
 	state := &mockStateReader{earliestRetry: time.Time{}} // zero = no pending retries
-	r := testReconciler(state, &mockEscalator{}, &mockEventAdder{}, newMockInFlightChecker())
+	r := testFailureRetrier(state, &mockEscalator{}, &mockEventAdder{}, newMockInFlightChecker())
 
 	r.armTimer(context.Background(), time.Unix(1000, 0))
 
@@ -433,7 +433,7 @@ func TestArmTimer_PastRetry_Kicks(t *testing.T) {
 	past := now.Add(-5 * time.Second)
 
 	state := &mockStateReader{earliestRetry: past}
-	r := testReconciler(state, &mockEscalator{}, &mockEventAdder{}, newMockInFlightChecker())
+	r := testFailureRetrier(state, &mockEscalator{}, &mockEventAdder{}, newMockInFlightChecker())
 	r.nowFunc = func() time.Time { return now }
 
 	r.armTimer(context.Background(), now)
@@ -449,7 +449,7 @@ func TestArmTimer_PastRetry_Kicks(t *testing.T) {
 
 func TestRun_ShutdownOnCancel(t *testing.T) {
 	state := &mockStateReader{} // no rows, no timer
-	r := testReconciler(state, &mockEscalator{}, &mockEventAdder{}, newMockInFlightChecker())
+	r := testFailureRetrier(state, &mockEscalator{}, &mockEventAdder{}, newMockInFlightChecker())
 	r.nowFunc = func() time.Time { return time.Unix(1000, 0) }
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -479,7 +479,7 @@ func TestRun_KickTriggersReconcile(t *testing.T) {
 	}
 	state := &mockStateReader{failedRows: rows}
 	adder := &mockEventAdder{}
-	r := testReconciler(state, &mockEscalator{}, adder, newMockInFlightChecker())
+	r := testFailureRetrier(state, &mockEscalator{}, adder, newMockInFlightChecker())
 	r.nowFunc = func() time.Time { return time.Unix(1000, 0) }
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -512,12 +512,12 @@ func TestRun_KickTriggersReconcile(t *testing.T) {
 	<-done
 }
 
-func TestDefaultReconcilerConfig(t *testing.T) {
-	cfg := DefaultReconcilerConfig()
+func TestDefaultFailureRetrierConfig(t *testing.T) {
+	cfg := DefaultFailureRetrierConfig()
 	assert.Equal(t, 10, cfg.EscalationThreshold)
 }
 
-func TestReconciler_CustomEscalationThreshold(t *testing.T) {
+func TestFailureRetrier_CustomEscalationThreshold(t *testing.T) {
 	rows := []RemoteStateRow{
 		makeFailedRow("a.txt", statusDownloadFailed, 3),
 		makeFailedRow("b.txt", statusDownloadFailed, 2), // below threshold
@@ -528,8 +528,8 @@ func TestReconciler_CustomEscalationThreshold(t *testing.T) {
 	checker := newMockInFlightChecker()
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	cfg := ReconcilerConfig{EscalationThreshold: 3}
-	r := NewReconciler(cfg, state, esc, adder, checker, logger)
+	cfg := FailureRetrierConfig{EscalationThreshold: 3}
+	r := NewFailureRetrier(cfg, state, esc, adder, checker, logger)
 	r.nowFunc = func() time.Time { return time.Unix(1000, 0) }
 
 	r.reconcile(context.Background())
@@ -550,7 +550,7 @@ func TestArmTimer_StopsExistingTimer(t *testing.T) {
 	future := now.Add(10 * time.Minute)
 
 	state := &mockStateReader{earliestRetry: future}
-	r := testReconciler(state, &mockEscalator{}, &mockEventAdder{}, newMockInFlightChecker())
+	r := testFailureRetrier(state, &mockEscalator{}, &mockEventAdder{}, newMockInFlightChecker())
 	r.nowFunc = func() time.Time { return now }
 
 	// Arm once.

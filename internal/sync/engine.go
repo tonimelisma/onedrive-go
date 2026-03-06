@@ -88,9 +88,9 @@ type Engine struct {
 	transferWorkers int                    // goroutine count for the worker pool
 	checkWorkers    int                    // goroutine limit for parallel file hashing
 
-	// reconciler retries failed items with exponential backoff in watch mode.
+	// retrier retries failed items with exponential backoff in watch mode.
 	// nil in one-shot mode.
-	reconciler *Reconciler
+	retrier *FailureRetrier
 
 	// localWatcherFactory overrides the default fsnotify watcher factory
 	// for the local observer. Tests inject a mock factory to simulate
@@ -553,12 +553,21 @@ func (e *Engine) observeAndCommitRemoteFull(ctx context.Context, bl *Baseline) (
 }
 
 // changeEventsToObservedItems converts remote ChangeEvents into ObservedItems
-// for CommitObservation. Filters out local-source events.
+// for CommitObservation. Filters out local-source events and events with
+// empty ItemIDs (defensive guard against malformed API responses).
 func changeEventsToObservedItems(events []ChangeEvent) []ObservedItem {
 	var items []ObservedItem
 
 	for i := range events {
 		if events[i].Source != SourceRemote {
+			continue
+		}
+
+		if events[i].ItemID == "" {
+			slog.Warn("changeEventsToObservedItems: skipping event with empty ItemID",
+				slog.String("path", events[i].Path),
+			)
+
 			continue
 		}
 
@@ -771,10 +780,10 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 	buf := NewBuffer(e.logger)
 	ready := buf.FlushDebounced(ctx, e.resolveDebounce(opts))
 
-	// Step 4b: Start reconciler for automatic retry of failed items.
+	// Step 4b: Start failure retrier for automatic retry of failed items.
 	// Created after buf so it can re-inject synthesized events.
-	e.reconciler = NewReconciler(DefaultReconcilerConfig(), e.baseline, e.baseline, buf, tracker, e.logger)
-	go e.reconciler.Run(ctx)
+	e.retrier = NewFailureRetrier(DefaultFailureRetrierConfig(), e.baseline, e.baseline, buf, tracker, e.logger)
+	go e.retrier.Run(ctx)
 
 	// Step 5: Start observer goroutines.
 	errs, activeObservers := e.startObservers(ctx, bl, mode, buf, opts)
@@ -859,10 +868,10 @@ func (e *Engine) drainWorkerResults(ctx context.Context, results <-chan WorkerRe
 				}
 			}
 
-			// Kick reconciler after every result (success or failure) so it
+			// Kick retrier after every result (success or failure) so it
 			// can re-evaluate retry timers and dispatch newly retriable items.
-			if e.reconciler != nil {
-				e.reconciler.Kick()
+			if e.retrier != nil {
+				e.retrier.Kick()
 			}
 
 		case <-ctx.Done():
@@ -1168,14 +1177,29 @@ func (e *Engine) filterInvalidUploads(ctx context.Context, plan *ActionPlan) *Ac
 	return removeActionsByIndex(plan, keep)
 }
 
+// minReconcileInterval is the minimum allowed reconcile interval. A full
+// enumeration of 100K items costs ~500 API calls; anything under 15 minutes
+// risks rate-limit exhaustion.
+const minReconcileInterval = 15 * time.Minute
+
 // resolveReconcileInterval returns the configured reconcile interval or the
-// default. Negative values disable periodic reconciliation.
+// default. Negative values disable periodic reconciliation. Values below
+// minReconcileInterval are clamped up.
 func (e *Engine) resolveReconcileInterval(opts WatchOpts) time.Duration {
 	if opts.ReconcileInterval < 0 {
 		return 0 // disabled
 	}
 
 	if opts.ReconcileInterval > 0 {
+		if opts.ReconcileInterval < minReconcileInterval {
+			e.logger.Warn("reconcile interval below minimum, clamping",
+				slog.Duration("requested", opts.ReconcileInterval),
+				slog.Duration("minimum", minReconcileInterval),
+			)
+
+			return minReconcileInterval
+		}
+
 		return opts.ReconcileInterval
 	}
 

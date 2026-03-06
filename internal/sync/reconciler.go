@@ -7,25 +7,25 @@ import (
 	"time"
 )
 
-// Reconciler constants.
+// FailureRetrier constants.
 const (
 	// defaultEscalationThreshold is the failure_count at which a row is escalated
 	// to a user-visible conflict instead of being retried.
 	defaultEscalationThreshold = 10
 
-	// reconcilerSafetyInterval is the maximum time between reconcile sweeps.
+	// retrierSafetyInterval is the maximum time between retry sweeps.
 	// Acts as a safety net in case kick signals are lost.
-	reconcilerSafetyInterval = 2 * time.Minute
+	retrierSafetyInterval = 2 * time.Minute
 )
 
-// ReconcilerConfig holds tunable thresholds for the reconciler.
-type ReconcilerConfig struct {
+// FailureRetrierConfig holds tunable thresholds for the failure retrier.
+type FailureRetrierConfig struct {
 	EscalationThreshold int // failure count before escalation to conflict
 }
 
-// DefaultReconcilerConfig returns a ReconcilerConfig with production defaults.
-func DefaultReconcilerConfig() ReconcilerConfig {
-	return ReconcilerConfig{
+// DefaultFailureRetrierConfig returns a FailureRetrierConfig with production defaults.
+func DefaultFailureRetrierConfig() FailureRetrierConfig {
+	return FailureRetrierConfig{
 		EscalationThreshold: defaultEscalationThreshold,
 	}
 }
@@ -40,12 +40,12 @@ type EventAdder interface {
 	Add(ev *ChangeEvent)
 }
 
-// Reconciler periodically checks remote_state for failed items whose backoff
+// FailureRetrier periodically checks remote_state for failed items whose backoff
 // has expired and re-injects them into the sync pipeline. Items that have
 // failed more than cfg.EscalationThreshold times are escalated to
 // user-visible conflicts.
-type Reconciler struct {
-	cfg       ReconcilerConfig
+type FailureRetrier struct {
+	cfg       FailureRetrierConfig
 	state     StateReader
 	escalator ConflictEscalator
 	buf       EventAdder
@@ -58,17 +58,17 @@ type Reconciler struct {
 	mu     stdsync.Mutex
 }
 
-// NewReconciler creates a Reconciler. The reconciler does not start until
+// NewFailureRetrier creates a FailureRetrier. It does not start until
 // Run() is called.
-func NewReconciler(
-	cfg ReconcilerConfig,
+func NewFailureRetrier(
+	cfg FailureRetrierConfig,
 	state StateReader,
 	escalator ConflictEscalator,
 	buf EventAdder,
 	tracker InFlightChecker,
 	logger *slog.Logger,
-) *Reconciler {
-	return &Reconciler{
+) *FailureRetrier {
+	return &FailureRetrier{
 		cfg:       cfg,
 		state:     state,
 		escalator: escalator,
@@ -82,7 +82,7 @@ func NewReconciler(
 
 // Kick sends a non-blocking signal to the reconciler to run a sweep.
 // Coalesces multiple kicks — only one sweep runs at a time.
-func (r *Reconciler) Kick() {
+func (r *FailureRetrier) Kick() {
 	select {
 	case r.kickCh <- struct{}{}:
 	default:
@@ -93,14 +93,14 @@ func (r *Reconciler) Kick() {
 // Run is the reconciler's main loop. It performs an initial reconcile sweep,
 // then selects on kick signals, safety ticker, and context cancellation.
 // Blocks until ctx is canceled.
-func (r *Reconciler) Run(ctx context.Context) {
-	r.logger.Info("reconciler started")
+func (r *FailureRetrier) Run(ctx context.Context) {
+	r.logger.Info("failure retrier started")
 
 	// Bootstrap: reconcile immediately to pick up any items reset by
 	// crash recovery (ResetInProgressStates).
 	r.reconcile(ctx)
 
-	safety := time.NewTicker(reconcilerSafetyInterval)
+	safety := time.NewTicker(retrierSafetyInterval)
 	defer safety.Stop()
 
 	for {
@@ -118,7 +118,7 @@ func (r *Reconciler) Run(ctx context.Context) {
 			}
 			r.mu.Unlock()
 
-			r.logger.Info("reconciler stopped")
+			r.logger.Info("failure retrier stopped")
 
 			return
 		}
@@ -128,7 +128,7 @@ func (r *Reconciler) Run(ctx context.Context) {
 // timerChan returns the timer's channel, or a nil channel if no timer is set.
 // A nil channel in a select blocks forever, which is the desired behavior
 // when there are no future retries to wake up for.
-func (r *Reconciler) timerChan() <-chan time.Time {
+func (r *FailureRetrier) timerChan() <-chan time.Time {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -141,12 +141,12 @@ func (r *Reconciler) timerChan() <-chan time.Time {
 
 // reconcile scans for retriable failed items, escalates those exceeding the
 // threshold, and synthesizes events for the rest.
-func (r *Reconciler) reconcile(ctx context.Context) {
+func (r *FailureRetrier) reconcile(ctx context.Context) {
 	now := r.nowFunc()
 
 	rows, err := r.state.ListFailedForRetry(ctx, now)
 	if err != nil {
-		r.logger.Warn("reconciler: failed to list retriable items",
+		r.logger.Warn("failure retrier: failed to list retriable items",
 			slog.String("error", err.Error()),
 		)
 
@@ -172,7 +172,7 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 		// Escalate if failure count exceeds threshold.
 		if row.FailureCount >= r.cfg.EscalationThreshold {
 			if escErr := r.escalator.EscalateToConflict(ctx, row.DriveID, row.ItemID, row.Path, row.LastError); escErr != nil {
-				r.logger.Warn("reconciler: failed to escalate",
+				r.logger.Warn("failure retrier: failed to escalate",
 					slog.String("path", row.Path),
 					slog.String("error", escErr.Error()),
 				)
@@ -194,7 +194,7 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 	}
 
 	if dispatched > 0 || escalated > 0 {
-		r.logger.Info("reconciler sweep",
+		r.logger.Info("failure retrier sweep",
 			slog.Int("dispatched", dispatched),
 			slog.Int("escalated", escalated),
 		)
@@ -207,7 +207,7 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 // delete_failed and pending_delete rows become ChangeDelete events;
 // everything else becomes ChangeModify (re-download).
 // Returns nil if the row has an invalid item type (corrupt data).
-func (r *Reconciler) synthesizeEvent(row *RemoteStateRow) *ChangeEvent {
+func (r *FailureRetrier) synthesizeEvent(row *RemoteStateRow) *ChangeEvent {
 	changeType := ChangeModify
 
 	if row.SyncStatus == statusDeleteFailed || row.SyncStatus == statusPendingDelete {
@@ -216,7 +216,7 @@ func (r *Reconciler) synthesizeEvent(row *RemoteStateRow) *ChangeEvent {
 
 	itemType, err := ParseItemType(row.ItemType)
 	if err != nil {
-		r.logger.Warn("reconciler: skipping row with invalid item type",
+		r.logger.Warn("failure retrier: skipping row with invalid item type",
 			slog.String("path", row.Path),
 			slog.String("item_type", row.ItemType),
 		)
@@ -244,7 +244,7 @@ func (r *Reconciler) synthesizeEvent(row *RemoteStateRow) *ChangeEvent {
 // Stops any existing timer first. The entire method runs under mu
 // (via defer Unlock), so the r.timer assignment at the end is protected.
 // The AfterFunc callback only calls Kick() which does not access r.timer.
-func (r *Reconciler) armTimer(ctx context.Context, now time.Time) {
+func (r *FailureRetrier) armTimer(ctx context.Context, now time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -255,7 +255,7 @@ func (r *Reconciler) armTimer(ctx context.Context, now time.Time) {
 
 	earliest, err := r.state.EarliestRetryAt(ctx, now)
 	if err != nil {
-		r.logger.Warn("reconciler: failed to query earliest retry",
+		r.logger.Warn("failure retrier: failed to query earliest retry",
 			slog.String("error", err.Error()),
 		)
 
