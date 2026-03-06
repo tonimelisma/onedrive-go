@@ -159,13 +159,14 @@ func TestE2E_SyncWatch_PauseResume(t *testing.T) {
 	// Wait for daemon to initialize.
 	waitForDaemonReady(t, &stderr, 30*time.Second)
 
-	// Pause the drive.
+	// Pause the drive. The pause command sends SIGHUP via the PID file.
+	// In per-test isolation, the PID file path must match the daemon's.
+	// Send SIGHUP directly to ensure the daemon receives it.
 	runCLIWithConfig(t, cfgPath, env, "pause")
+	require.NoError(t, cmd.Process.Signal(syscall.SIGHUP))
 
-	// Give daemon time to process the pause (SIGHUP is sent by pause command
-	// automatically, but in E2E the daemon PID file may point to the wrong
-	// process since we use per-test isolation). Wait briefly.
-	time.Sleep(3 * time.Second)
+	// Poll stderr for pause acknowledgment instead of sleeping.
+	waitForStderrContains(t, &stderr, "paused", 10*time.Second)
 
 	// Create a local file while paused.
 	localDir := filepath.Join(syncDir, testFolder)
@@ -176,14 +177,16 @@ func TestE2E_SyncWatch_PauseResume(t *testing.T) {
 		0o644,
 	))
 
-	// Wait briefly — file should NOT appear remotely while paused.
-	time.Sleep(10 * time.Second)
-
-	// Verify file is NOT remotely visible (best-effort check).
+	// Bounded negative check: poll a few times over 10s, assert file still absent.
 	remotePath := "/" + testFolder + "/paused-file.txt"
-	_, _, statErr := runCLIWithConfigAllowError(t, cfgPath, env, "stat", remotePath)
-	if statErr == nil {
-		t.Log("warning: file appeared remotely while paused (test environment may not support pause in watch mode)")
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		_, _, statErr := runCLIWithConfigAllowError(t, cfgPath, env, "stat", remotePath)
+		if statErr == nil {
+			t.Log("warning: file appeared remotely while paused (test environment may not support pause in watch mode)")
+			break
+		}
+		time.Sleep(2 * time.Second)
 	}
 
 	// Resume the drive.

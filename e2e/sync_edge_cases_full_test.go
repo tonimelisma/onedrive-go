@@ -20,8 +20,6 @@ import (
 // TestE2E_Sync_EmptyDirectory validates that empty local folders are created
 // remotely and that remote folder deletion propagates locally.
 func TestE2E_Sync_EmptyDirectory(t *testing.T) {
-	t.Skip("unreliable — remote folder deletion depends on Graph API delta endpoint which lags 120+ seconds (ci_issues.md §17)")
-	t.Parallel()
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
@@ -71,8 +69,6 @@ func TestE2E_Sync_EmptyDirectory(t *testing.T) {
 // TestE2E_Sync_NestedDeletion validates that deleting a deeply nested remote
 // folder tree results in the entire local tree being removed.
 func TestE2E_Sync_NestedDeletion(t *testing.T) {
-	t.Skip("unreliable — remote folder deletion depends on Graph API delta endpoint which lags 120+ seconds (ci_issues.md §17)")
-	t.Parallel()
 	registerLogDump(t)
 
 	syncDir := t.TempDir()

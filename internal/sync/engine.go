@@ -43,8 +43,9 @@ type EngineConfig struct {
 
 // RunOpts holds per-cycle options for RunOnce.
 type RunOpts struct {
-	DryRun bool
-	Force  bool
+	DryRun        bool
+	Force         bool
+	FullReconcile bool // when true, runs a full delta enumeration + orphan detection
 }
 
 // SyncReport summarizes the result of a single sync cycle.
@@ -228,7 +229,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 	}
 
 	// Steps 2-4: Observe remote + local, buffer, and flush.
-	changes, err := e.observeChanges(ctx, bl, mode, opts.DryRun)
+	changes, err := e.observeChanges(ctx, bl, mode, opts.DryRun, opts.FullReconcile)
 	if err != nil {
 		return nil, err
 	}
@@ -416,15 +417,22 @@ func (e *Engine) observeLocal(ctx context.Context, bl *Baseline) ([]ChangeEvent,
 // events, and returns the flushed change set. Delta token is committed
 // atomically with observations in observeAndCommitRemote (skipped for dry-run
 // so that a subsequent real sync sees the same delta changes).
+//
+// When fullReconcile is true, runs a fresh delta with empty token (enumerates
+// ALL remote items) and detects orphans — baseline entries not in the full
+// enumeration, representing missed delta deletions.
 func (e *Engine) observeChanges(
-	ctx context.Context, bl *Baseline, mode SyncMode, dryRun bool,
+	ctx context.Context, bl *Baseline, mode SyncMode, dryRun, fullReconcile bool,
 ) ([]PathChanges, error) {
 	var remoteEvents []ChangeEvent
 
 	var err error
 
 	if mode != SyncUploadOnly {
-		if dryRun {
+		if fullReconcile {
+			e.logger.Info("full reconciliation: enumerating all remote items")
+			remoteEvents, err = e.observeAndCommitRemoteFull(ctx, bl)
+		} else if dryRun {
 			// Dry-run: observe without committing delta token or observations.
 			// A subsequent real sync must see the same remote changes.
 			remoteEvents, _, err = e.observeRemote(ctx, bl)
@@ -455,15 +463,90 @@ func (e *Engine) observeChanges(
 
 // observeAndCommitRemote wraps observeRemote to persist observations
 // and delta token atomically via CommitObservation.
+//
+// When delta returns 0 events, the token is NOT advanced. The old token
+// still covers the same window — replaying it costs nothing (O(1)). But if
+// a deletion was still propagating to the Graph change log, advancing would
+// permanently skip it. Deletions are delivered exactly once in a narrow
+// window (ci_issues.md §20). This narrows but does not close the miss
+// window — events can also be excluded from non-empty batches.
 func (e *Engine) observeAndCommitRemote(ctx context.Context, bl *Baseline) ([]ChangeEvent, error) {
 	events, deltaToken, err := e.observeRemote(ctx, bl)
 	if err != nil {
 		return nil, err
 	}
 
+	// Skip token advancement when no events were returned. The old token
+	// replays the same empty window at zero cost, but avoids advancing
+	// past deletions still propagating through the Graph change log.
+	if len(events) == 0 {
+		e.logger.Debug("delta returned 0 events, skipping token advancement")
+		return events, nil
+	}
+
 	observed := changeEventsToObservedItems(events)
 	if commitErr := e.baseline.CommitObservation(ctx, observed, deltaToken, e.driveID); commitErr != nil {
 		return nil, fmt.Errorf("sync: committing observations: %w", commitErr)
+	}
+
+	return events, nil
+}
+
+// observeRemoteFull runs a fresh delta with empty token (enumerates ALL remote
+// items) and compares against the baseline to find orphans: items in baseline
+// but not in the full enumeration = deleted remotely but missed by incremental
+// delta. Returns all events (creates/modifies from the full enumeration +
+// synthesized deletes for orphans) and the new delta token.
+func (e *Engine) observeRemoteFull(ctx context.Context, bl *Baseline) ([]ChangeEvent, string, error) {
+	obs := NewRemoteObserver(e.fetcher, bl, e.driveID, e.logger)
+
+	// Full enumeration: empty token returns ALL items as create/modify events.
+	events, token, err := obs.FullDelta(ctx, "")
+	if err != nil {
+		return nil, "", fmt.Errorf("sync: full reconciliation delta: %w", err)
+	}
+
+	// Build seen set from all non-deleted events in the full enumeration.
+	seen := make(map[driveid.ItemKey]struct{}, len(events))
+	for i := range events {
+		if events[i].IsDeleted {
+			continue
+		}
+
+		key := driveid.NewItemKey(events[i].DriveID, events[i].ItemID)
+		seen[key] = struct{}{}
+	}
+
+	// Detect orphans: baseline entries whose ItemID is not in the seen set.
+	orphans := bl.FindOrphans(seen, e.driveID)
+
+	if len(orphans) > 0 {
+		e.logger.Info("full reconciliation: detected orphaned items",
+			slog.Int("orphans", len(orphans)),
+		)
+
+		events = append(events, orphans...)
+	}
+
+	e.logger.Info("full reconciliation complete",
+		slog.Int("total_events", len(events)),
+		slog.Int("orphans", len(orphans)),
+	)
+
+	return events, token, nil
+}
+
+// observeAndCommitRemoteFull wraps observeRemoteFull to persist observations
+// and delta token atomically via CommitObservation.
+func (e *Engine) observeAndCommitRemoteFull(ctx context.Context, bl *Baseline) ([]ChangeEvent, error) {
+	events, deltaToken, err := e.observeRemoteFull(ctx, bl)
+	if err != nil {
+		return nil, err
+	}
+
+	observed := changeEventsToObservedItems(events)
+	if commitErr := e.baseline.CommitObservation(ctx, observed, deltaToken, e.driveID); commitErr != nil {
+		return nil, fmt.Errorf("sync: committing full reconciliation: %w", commitErr)
 	}
 
 	return events, nil
@@ -616,12 +699,18 @@ const (
 	watchResultBuf = 4096
 )
 
+// defaultReconcileInterval is the default interval for periodic full
+// reconciliation in daemon mode. A full enumeration of 100K items costs
+// ~500 API calls (~17% of a single 5-minute rate window), so 24h is safe.
+const defaultReconcileInterval = 24 * time.Hour
+
 // WatchOpts holds per-session options for RunWatch.
 type WatchOpts struct {
 	Force              bool
 	PollInterval       time.Duration // remote delta polling interval (0 → 5m)
 	Debounce           time.Duration // buffer debounce window (0 → 2s)
 	SafetyScanInterval time.Duration // local safety scan interval (0 → 5m) (B-099)
+	ReconcileInterval  time.Duration // periodic full reconciliation (0 → 24h, negative = disabled)
 }
 
 // RunWatch runs a continuous sync loop: initial one-shot sync, then
@@ -693,6 +782,19 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 	// Step 6: Main select loop.
 	safety := e.resolveWatchSafetyConfig(opts)
 
+	// Periodic full reconciliation timer (safety net for missed delta deletions).
+	reconcileInterval := e.resolveReconcileInterval(opts)
+	reconcileTicker := e.newReconcileTicker(reconcileInterval)
+	var reconcileC <-chan time.Time
+	if reconcileTicker != nil {
+		reconcileC = reconcileTicker.C
+		defer reconcileTicker.Stop()
+
+		e.logger.Info("periodic full reconciliation enabled",
+			slog.Duration("interval", reconcileInterval),
+		)
+	}
+
 	for {
 		select {
 		case batch, ok := <-ready:
@@ -701,6 +803,9 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 			}
 
 			e.processBatch(ctx, batch, bl, mode, safety, tracker)
+
+		case <-reconcileC:
+			e.runFullReconciliation(ctx, bl, mode, safety, tracker)
 
 		case obsErr := <-errs:
 			// Observers return nil on clean context cancellation and non-nil
@@ -1061,4 +1166,73 @@ func (e *Engine) filterInvalidUploads(ctx context.Context, plan *ActionPlan) *Ac
 	}
 
 	return removeActionsByIndex(plan, keep)
+}
+
+// resolveReconcileInterval returns the configured reconcile interval or the
+// default. Negative values disable periodic reconciliation.
+func (e *Engine) resolveReconcileInterval(opts WatchOpts) time.Duration {
+	if opts.ReconcileInterval < 0 {
+		return 0 // disabled
+	}
+
+	if opts.ReconcileInterval > 0 {
+		return opts.ReconcileInterval
+	}
+
+	return defaultReconcileInterval
+}
+
+// newReconcileTicker creates a ticker for periodic reconciliation. Returns
+// nil if the interval is 0 (disabled).
+func (e *Engine) newReconcileTicker(interval time.Duration) *time.Ticker {
+	if interval <= 0 {
+		return nil
+	}
+
+	return time.NewTicker(interval)
+}
+
+// runFullReconciliation performs a full delta enumeration + orphan detection,
+// then feeds the resulting events through the normal planner + executor
+// pipeline. Called periodically in watch mode to recover from missed delta
+// deletions.
+func (e *Engine) runFullReconciliation(
+	ctx context.Context, bl *Baseline, mode SyncMode, safety *SafetyConfig, tracker *DepTracker,
+) {
+	e.logger.Info("periodic full reconciliation starting")
+
+	events, deltaToken, err := e.observeRemoteFull(ctx, bl)
+	if err != nil {
+		e.logger.Error("full reconciliation failed",
+			slog.String("error", err.Error()),
+		)
+
+		return
+	}
+
+	// Commit observations and delta token.
+	observed := changeEventsToObservedItems(events)
+	if commitErr := e.baseline.CommitObservation(ctx, observed, deltaToken, e.driveID); commitErr != nil {
+		e.logger.Error("failed to commit full reconciliation observations",
+			slog.String("error", commitErr.Error()),
+		)
+
+		return
+	}
+
+	// Buffer and flush through the normal pipeline.
+	buf := NewBuffer(e.logger)
+	buf.AddAll(events)
+	batch := buf.FlushImmediate()
+
+	if len(batch) == 0 {
+		e.logger.Info("periodic full reconciliation complete: no changes")
+		return
+	}
+
+	e.processBatch(ctx, batch, bl, mode, safety, tracker)
+
+	e.logger.Info("periodic full reconciliation complete",
+		slog.Int("paths", len(batch)),
+	)
 }
