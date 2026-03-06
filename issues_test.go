@@ -146,6 +146,6 @@ func TestPrintIssuesTable_TruncatesLongErrors(t *testing.T) {
 	printIssuesTable(&buf, issues)
 
 	output := buf.String()
-	assert.Contains(t, output, "...")
+	assert.Contains(t, output, longErr[:maxIssueErrorLen-3]+"...")
 	assert.NotContains(t, output, longErr) // full message should not appear
 }

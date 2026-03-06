@@ -24,6 +24,9 @@ type ValidationFailure struct {
 // validateUploadActions checks upload actions for issues that would always
 // fail at the API level. Returns valid actions (indices to keep) and any
 // validation failures. Non-upload actions always pass.
+// When multiple issues exist for the same file, they are combined into a
+// single ValidationFailure using the first (most severe) IssueType and all
+// error messages joined with "; ".
 func validateUploadActions(actions []Action) (keep []int, failures []ValidationFailure) {
 	for i := range actions {
 		if actions[i].Type != ActionUpload {
@@ -31,9 +34,20 @@ func validateUploadActions(actions []Action) (keep []int, failures []ValidationF
 			continue
 		}
 
-		if fail := validateSingleUpload(&actions[i]); fail != nil {
-			fail.Index = i
-			failures = append(failures, *fail)
+		fails := validateSingleUpload(&actions[i])
+		if len(fails) > 0 {
+			// Combine multiple failures: use first issue type, join all errors.
+			var errMsgs []string
+			for j := range fails {
+				errMsgs = append(errMsgs, fails[j].Error)
+			}
+
+			failures = append(failures, ValidationFailure{
+				Index:     i,
+				Path:      actions[i].Path,
+				IssueType: fails[0].IssueType,
+				Error:     strings.Join(errMsgs, "; "),
+			})
 		} else {
 			keep = append(keep, i)
 		}
@@ -42,36 +56,40 @@ func validateUploadActions(actions []Action) (keep []int, failures []ValidationF
 	return keep, failures
 }
 
-// validateSingleUpload checks a single upload action. Returns nil if valid.
-func validateSingleUpload(a *Action) *ValidationFailure {
+// validateSingleUpload checks a single upload action for all validation issues.
+// Returns all failures found (empty slice if valid). Checks are ordered by
+// severity: invalid filename > path too long > file too large.
+// isValidOneDriveName (scanner.go) covers reserved names, invalid chars, etc.
+func validateSingleUpload(a *Action) []ValidationFailure {
+	var fails []ValidationFailure
 	name := path.Base(a.Path)
 
 	if !isValidOneDriveName(name) {
-		return &ValidationFailure{
+		fails = append(fails, ValidationFailure{
 			Path:      a.Path,
 			IssueType: "invalid_filename",
 			Error:     "file name is not valid for OneDrive: " + name,
-		}
+		})
 	}
 
 	if len(a.Path) > maxOneDrivePathLength {
-		return &ValidationFailure{
+		fails = append(fails, ValidationFailure{
 			Path:      a.Path,
 			IssueType: "path_too_long",
 			Error:     "path exceeds OneDrive maximum length of 400 characters",
-		}
+		})
 	}
 
 	// Check file size from the PathView local state.
 	if a.View != nil && a.View.Local != nil && a.View.Local.Size > maxOneDriveFileSize {
-		return &ValidationFailure{
+		fails = append(fails, ValidationFailure{
 			Path:      a.Path,
 			IssueType: "file_too_large",
 			Error:     "file exceeds OneDrive maximum size of 250 GB",
-		}
+		})
 	}
 
-	return nil
+	return fails
 }
 
 // removeActionsByIndex rebuilds an ActionPlan keeping only the indices in keep.
@@ -108,12 +126,4 @@ func removeActionsByIndex(plan *ActionPlan, keep []int) *ActionPlan {
 		Actions: newActions,
 		Deps:    newDeps,
 	}
-}
-
-// isReservedOneDriveName checks Windows reserved device names (for the
-// upload validation path). Delegates to the existing scanner validation.
-// This function exists solely as documentation that we reuse isValidOneDriveName
-// from scanner.go, which is in the same package.
-func isReservedOneDriveName(name string) bool {
-	return isReservedDeviceName(strings.ToLower(name))
 }

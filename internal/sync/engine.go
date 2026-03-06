@@ -782,7 +782,7 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 
 	// Step 4b: Start failure retrier for automatic retry of failed items.
 	// Created after buf so it can re-inject synthesized events.
-	e.retrier = NewFailureRetrier(DefaultFailureRetrierConfig(), e.baseline, e.baseline, buf, tracker, e.logger)
+	e.retrier = NewFailureRetrier(DefaultFailureRetrierConfig(), e.baseline, e.baseline, e.baseline, buf, tracker, e.logger)
 	go e.retrier.Run(ctx)
 
 	// Step 5: Start observer goroutines.
@@ -1154,6 +1154,8 @@ func (e *Engine) filterInvalidUploads(ctx context.Context, plan *ActionPlan) *Ac
 		return plan
 	}
 
+	recordErrors := 0
+
 	for _, f := range failures {
 		e.logger.Warn("pre-upload validation failed",
 			slog.String("path", f.Path),
@@ -1167,11 +1169,20 @@ func (e *Engine) filterInvalidUploads(ctx context.Context, plan *ActionPlan) *Ac
 		}
 
 		if recErr := e.baseline.RecordLocalIssue(ctx, f.Path, f.IssueType, f.Error, 0, fileSize, ""); recErr != nil {
-			e.logger.Warn("failed to record local issue",
+			e.logger.Error("failed to record local issue",
 				slog.String("path", f.Path),
 				slog.String("error", recErr.Error()),
 			)
+
+			recordErrors++
 		}
+	}
+
+	if recordErrors > 0 {
+		e.logger.Error("local issue recording failures",
+			slog.Int("failed", recordErrors),
+			slog.Int("total", len(failures)),
+		)
 	}
 
 	return removeActionsByIndex(plan, keep)

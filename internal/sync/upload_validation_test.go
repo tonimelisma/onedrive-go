@@ -14,7 +14,7 @@ func TestValidateSingleUpload_ValidFile(t *testing.T) {
 		Path: "docs/report.xlsx",
 		View: &PathView{Local: &LocalState{Size: 1024}},
 	}
-	assert.Nil(t, validateSingleUpload(a))
+	assert.Empty(t, validateSingleUpload(a))
 }
 
 func TestValidateSingleUpload_InvalidFilename(t *testing.T) {
@@ -23,10 +23,10 @@ func TestValidateSingleUpload_InvalidFilename(t *testing.T) {
 		Path: "docs/CON",
 		View: &PathView{Local: &LocalState{Size: 1024}},
 	}
-	fail := validateSingleUpload(a)
-	require.NotNil(t, fail)
-	assert.Equal(t, "invalid_filename", fail.IssueType)
-	assert.Contains(t, fail.Error, "CON")
+	fails := validateSingleUpload(a)
+	require.Len(t, fails, 1)
+	assert.Equal(t, "invalid_filename", fails[0].IssueType)
+	assert.Contains(t, fails[0].Error, "CON")
 }
 
 func TestValidateSingleUpload_ReservedNames(t *testing.T) {
@@ -44,9 +44,9 @@ func TestValidateSingleUpload_ReservedNames(t *testing.T) {
 				Path: "dir/" + name,
 				View: &PathView{Local: &LocalState{Size: 100}},
 			}
-			fail := validateSingleUpload(a)
-			require.NotNil(t, fail, "expected failure for reserved name %s", name)
-			assert.Equal(t, "invalid_filename", fail.IssueType)
+			fails := validateSingleUpload(a)
+			require.NotEmpty(t, fails, "expected failure for reserved name %s", name)
+			assert.Equal(t, "invalid_filename", fails[0].IssueType)
 		})
 	}
 }
@@ -61,9 +61,9 @@ func TestValidateSingleUpload_PathTooLong(t *testing.T) {
 		Path: longPath,
 		View: &PathView{Local: &LocalState{Size: 100}},
 	}
-	fail := validateSingleUpload(a)
-	require.NotNil(t, fail)
-	assert.Equal(t, "path_too_long", fail.IssueType)
+	fails := validateSingleUpload(a)
+	require.Len(t, fails, 1)
+	assert.Equal(t, "path_too_long", fails[0].IssueType)
 }
 
 func TestValidateSingleUpload_FileTooLarge(t *testing.T) {
@@ -72,9 +72,42 @@ func TestValidateSingleUpload_FileTooLarge(t *testing.T) {
 		Path: "huge.bin",
 		View: &PathView{Local: &LocalState{Size: 300 * 1024 * 1024 * 1024}}, // 300 GB
 	}
-	fail := validateSingleUpload(a)
-	require.NotNil(t, fail)
-	assert.Equal(t, "file_too_large", fail.IssueType)
+	fails := validateSingleUpload(a)
+	require.Len(t, fails, 1)
+	assert.Equal(t, "file_too_large", fails[0].IssueType)
+}
+
+func TestValidateSingleUpload_MultipleFailures(t *testing.T) {
+	// CON in a very long path: triggers both invalid_filename and path_too_long.
+	longPath := strings.Repeat("abcdefgh/", 51) + "CON" // >400 chars, reserved name
+	require.Greater(t, len(longPath), maxOneDrivePathLength)
+
+	a := &Action{
+		Type: ActionUpload,
+		Path: longPath,
+		View: &PathView{Local: &LocalState{Size: 100}},
+	}
+	fails := validateSingleUpload(a)
+	require.Len(t, fails, 2)
+	assert.Equal(t, "invalid_filename", fails[0].IssueType)
+	assert.Equal(t, "path_too_long", fails[1].IssueType)
+}
+
+func TestValidateSingleUpload_AllThreeFailures(t *testing.T) {
+	// CON in a very long path with an enormous file: all three checks fail.
+	longPath := strings.Repeat("abcdefgh/", 51) + "CON"
+	require.Greater(t, len(longPath), maxOneDrivePathLength)
+
+	a := &Action{
+		Type: ActionUpload,
+		Path: longPath,
+		View: &PathView{Local: &LocalState{Size: 300 * 1024 * 1024 * 1024}},
+	}
+	fails := validateSingleUpload(a)
+	require.Len(t, fails, 3)
+	assert.Equal(t, "invalid_filename", fails[0].IssueType)
+	assert.Equal(t, "path_too_long", fails[1].IssueType)
+	assert.Equal(t, "file_too_large", fails[2].IssueType)
 }
 
 func TestValidateUploadActions_Mixed(t *testing.T) {
@@ -99,6 +132,24 @@ func TestValidateUploadActions_Mixed(t *testing.T) {
 	assert.Equal(t, 2, failures[0].Index)
 	assert.Equal(t, "dir/CON", failures[0].Path)
 	assert.Equal(t, "invalid_filename", failures[0].IssueType)
+}
+
+func TestValidateUploadActions_MultipleFailuresCombinesErrors(t *testing.T) {
+	longPath := strings.Repeat("abcdefgh/", 51) + "CON"
+
+	actions := []Action{
+		{Type: ActionUpload, Path: longPath, View: &PathView{Local: &LocalState{Size: 100}}},
+	}
+
+	keep, failures := validateUploadActions(actions)
+	assert.Empty(t, keep)
+	require.Len(t, failures, 1)
+
+	// First issue type is used, errors are joined.
+	assert.Equal(t, "invalid_filename", failures[0].IssueType)
+	assert.Contains(t, failures[0].Error, "not valid for OneDrive")
+	assert.Contains(t, failures[0].Error, "path exceeds")
+	assert.Contains(t, failures[0].Error, "; ")
 }
 
 func TestRemoveActionsByIndex_NoRemoval(t *testing.T) {
@@ -155,11 +206,4 @@ func TestRemoveActionsByIndex_DroppedDeps(t *testing.T) {
 	// Dep on removed action is dropped.
 	assert.Empty(t, result.Deps[0])
 	assert.Equal(t, []int{0}, result.Deps[1])
-}
-
-func TestIsReservedOneDriveName(t *testing.T) {
-	assert.True(t, isReservedOneDriveName("CON"))
-	assert.True(t, isReservedOneDriveName("con"))
-	assert.True(t, isReservedOneDriveName("LPT1"))
-	assert.False(t, isReservedOneDriveName("normal.txt"))
 }
