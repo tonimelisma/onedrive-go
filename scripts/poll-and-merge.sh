@@ -10,6 +10,13 @@
 #   0 = success (all checks passed / all PRs merged)
 #   1 = CI failure
 #   2 = timed out
+#
+# gh CLI exit codes we depend on (from gh source: internal/ghcmd/cmd.go):
+#   0 = success
+#   1 = SilentError (failure)
+#   2 = CancelError (user cancellation)
+#   4 = AuthError
+#   8 = PendingError (checks still pending — used by gh pr checks)
 
 set -euo pipefail
 
@@ -43,11 +50,20 @@ if [ "$1" = "--push" ]; then
     fi
 
     echo "Watching workflow run ${run_id}..."
-    if gh run watch "$run_id" --exit-status; then
+
+    # Don't use --exit-status: gh run watch returns exit 1 (SilentError)
+    # when run.Conclusion != "success", but annotation warnings (e.g. cache
+    # restore failures) can cause a non-success conclusion even when all jobs
+    # pass. Instead, check the actual conclusion via gh run view.
+    gh run watch "$run_id" 2>/dev/null || true
+
+    conclusion=$(gh run view "$run_id" --json conclusion -q '.conclusion' 2>/dev/null || echo "unknown")
+
+    if [ "$conclusion" = "success" ]; then
         echo "CI PASSED."
         exit 0
     else
-        echo "CI FAILED."
+        echo "CI FAILED (conclusion: ${conclusion})."
         echo "View logs: gh run view ${run_id} --log-failed"
         exit 1
     fi
@@ -114,11 +130,19 @@ wait_for_post_merge_workflow() {
 
     echo "  Watching workflow run ${run_id}..."
 
-    # Use gh run watch to block until completion
-    if gh run watch "$run_id" --exit-status 2>/dev/null; then
+    # Block until the workflow completes. We don't use --exit-status because
+    # gh run watch treats annotation warnings (e.g. cache restore failures)
+    # as failures even when all jobs pass. Instead, we check the actual
+    # workflow conclusion via gh run view after it finishes.
+    gh run watch "$run_id" 2>/dev/null || true
+
+    local conclusion
+    conclusion=$(gh run view "$run_id" --json conclusion -q '.conclusion' 2>/dev/null || echo "unknown")
+
+    if [ "$conclusion" = "success" ]; then
         echo "  Post-merge workflow PASSED for PR #${pr}."
     else
-        echo "  Post-merge workflow FAILED for PR #${pr}!"
+        echo "  Post-merge workflow FAILED for PR #${pr} (conclusion: ${conclusion})."
         echo "  View logs: gh run view ${run_id} --log-failed"
         POST_MERGE_FAILED_PRS+=("$pr")
     fi
