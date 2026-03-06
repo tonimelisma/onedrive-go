@@ -401,6 +401,11 @@ func TestRunOnce_DryRun_NoExecution(t *testing.T) {
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err, "Load baseline")
 	assert.Equal(t, 0, bl.Len(), "dry-run should not commit")
+
+	// Verify delta token is not saved (dry-run must not advance the token).
+	savedToken, err := eng.baseline.GetDeltaToken(ctx, eng.driveID.String(), "")
+	require.NoError(t, err, "GetDeltaToken")
+	assert.Empty(t, savedToken, "dry-run should not save delta token")
 }
 
 func TestRunOnce_BigDelete_WithoutForce(t *testing.T) {

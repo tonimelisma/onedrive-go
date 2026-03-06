@@ -459,7 +459,7 @@ type VerifyResult struct {
 // against the baseline database.
 type VerifyReport struct {
 	Verified   int            `json:"verified"`
-	Mismatches []VerifyResult `json:"mismatches,omitempty"`
+	Mismatches []VerifyResult `json:"mismatches"`
 }
 
 // Action is an instruction for the executor, produced by the planner.

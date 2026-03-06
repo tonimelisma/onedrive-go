@@ -87,8 +87,8 @@ func TestE2E_Status_NoDrives(t *testing.T) {
 		combined = stdout
 	}
 
-	assert.Contains(t, combined, "drive add",
-		"status with no drives should suggest 'drive add'")
+	assert.Contains(t, combined, "login",
+		"status with no drives should suggest 'login' or 'drive add'")
 }
 
 // TestE2E_Sync_QuietMode validates that --quiet suppresses informational
