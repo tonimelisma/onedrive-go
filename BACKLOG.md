@@ -153,6 +153,9 @@ Optimization deferred until profiling shows a bottleneck.
 
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
+| B-324 | Cross-test contamination mitigation via `remote_path` filtering | P2 | Bidirectional sync E2E tests on shared drive pick up delta events from other parallel tests' folders. Root cause: delta returns ALL drive events, no folder-scoped delta on Business accounts. Fix: implement `remote_path` config (roadmap Phase 10) to filter delta events client-side. Interim: tests that can't tolerate contamination are skipped. See ci_issues.md §19. |
+| B-325 | Periodic full reconciliation scan (safety net for missed delta deletions) | P2 | Delta deletions are "sent only once" and can be permanently missed if the token advances past them (ci_issues.md §17, §20). Fix: periodic full delta enumeration (no token) every N sync cycles to detect orphaned local files. Same approach used by abraunegg/onedrive and recommended by Microsoft. |
+| B-326 | Investigate delta token advancement on zero-event responses | P3 | `observeAndCommitRemote()` saves a new delta token even when 0 events are returned. If a deletion hasn't propagated to the change log yet, this can permanently skip it. Investigate whether we should defer token save when 0 events are returned, or add a minimum delay between deletion and token advancement. See ci_issues.md §20. |
 
 ## Closed
 
