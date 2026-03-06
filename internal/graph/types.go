@@ -56,6 +56,10 @@ type Item struct {
 	ChildCount        int         // ChildCountUnknown if not present
 	DownloadURL       DownloadURL // pre-authenticated, ephemeral; redacted via LogValue (B-158)
 	SpecialFolderName string      // "vault", "documents", etc.; empty if not a special folder (B-271)
+	RemoteDriveID     string      // from remoteItem.parentReference.driveId (shared/shortcut items)
+	RemoteItemID      string      // from remoteItem.id (shared/shortcut items)
+	SharedOwnerName   string      // from shared.owner.user.displayName
+	SharedOwnerEmail  string      // from shared.owner.user.email
 }
 
 // DeltaPage holds one page of delta query results.

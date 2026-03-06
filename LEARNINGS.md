@@ -52,6 +52,12 @@ When using `replace` with a commit hash, the pseudo-version timestamp must match
 - **Delta token is always a full URL.** Use `stripBaseURL()` to convert to a relative path for `Do()`.
 - **`permanentDelete` uses POST, not DELETE.** The Graph API action endpoint `items/{id}/permanentDelete` is a POST action, not a DELETE. Tests must assert `http.MethodPost`.
 
+### SharedWithMe API response shape
+`/me/drive/sharedWithMe` returns items with `remoteItem` and `shared` facets. Key fields: `shared.owner.user.email` (owner), `remoteItem.id` (source item), `remoteItem.parentReference.driveId` (source drive). These construct the canonical ID `shared:email:driveID:itemID`. Only shared **folders** (items with `folder != nil`) are valid sync targets. Supports `@odata.nextLink` pagination (same pattern as delta). Owner email may be empty on some accounts — use display name as fallback.
+
+### EnsureDriveInConfig is broken for shared drives
+`EnsureDriveInConfig` passes `nil` for the config parameter through `ReadTokenMeta` → `DriveTokenPath` → `TokenCanonicalID` → `resolveSharedToken`, which requires non-nil config. Workaround: `addSharedDrive` bypasses `EnsureDriveInConfig` and writes config directly via `AppendDriveSection` + `SetDriveKey`. See B-327.
+
 ### Pre-authenticated URLs bypass the Graph API
 `@microsoft.graph.downloadUrl` and `uploadUrl` from CreateUploadSession are pre-authenticated URLs. Must NOT use `Do()` (no base URL prefix, no auth headers). Use `httpClient.Do(req)` directly. Never log these URLs.
 

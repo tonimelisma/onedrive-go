@@ -31,7 +31,6 @@ func TestDefaultDisplayName_SharePointNoSiteLibrary(t *testing.T) {
 func TestDefaultDisplayName_Shared(t *testing.T) {
 	cid := driveid.MustCanonicalID("shared:me@outlook.com:b!TG9yZW0:01ABCDEF")
 	name := DefaultDisplayName(cid)
-	// Shared drives use a placeholder — the CLI will override with API data.
-	assert.NotEmpty(t, name)
-	assert.Contains(t, name, "b!TG9yZW0")
+	// Fallback when display_name is not stored in config.
+	assert.Equal(t, "Shared from me@outlook.com", name)
 }

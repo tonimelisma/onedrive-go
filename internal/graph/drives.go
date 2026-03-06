@@ -372,3 +372,61 @@ func (c *Client) Organization(ctx context.Context) (*Organization, error) {
 
 	return org, nil
 }
+
+// SharedWithMe returns items shared with the authenticated user.
+// Handles @odata.nextLink pagination automatically.
+func (c *Client) SharedWithMe(ctx context.Context) ([]Item, error) {
+	c.logger.Info("listing shared items")
+
+	var items []Item
+	path := "/me/drive/sharedWithMe"
+
+	for path != "" {
+		page, nextPath, err := c.fetchSharedWithMePage(ctx, path)
+		if err != nil {
+			return nil, err
+		}
+
+		items = append(items, page...)
+		path = nextPath
+	}
+
+	c.logger.Info("listed shared items", slog.Int("count", len(items)))
+
+	return items, nil
+}
+
+// fetchSharedWithMePage fetches one page of SharedWithMe results.
+// Extracted to ensure resp.Body.Close() runs per-page (not deferred in loop).
+func (c *Client) fetchSharedWithMePage(ctx context.Context, path string) ([]Item, string, error) {
+	resp, err := c.Do(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+
+	var page struct {
+		Value    []driveItemResponse `json:"value"`
+		NextLink string              `json:"@odata.nextLink"` //nolint:tagliatelle // OData annotation key
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+		return nil, "", fmt.Errorf("graph: decoding sharedWithMe response: %w", err)
+	}
+
+	items := make([]Item, 0, len(page.Value))
+	for i := range page.Value {
+		items = append(items, page.Value[i].toItem(c.logger))
+	}
+
+	var nextPath string
+	if page.NextLink != "" {
+		var stripErr error
+
+		nextPath, stripErr = c.stripBaseURL(page.NextLink)
+		if stripErr != nil {
+			return nil, "", stripErr
+		}
+	}
+
+	return items, nextPath, nil
+}

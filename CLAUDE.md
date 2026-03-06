@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-**Phases 1-5.6 complete. Phase 5.7.0-5.7.4 done (full Remote State Separation architecture — schema, observation, dispatch, crash recovery, reconciler, upload failure tracking, local_issues CRUD, issues CLI, status integration, interface narrowing). Phase 6.0a-6.0e done (DriveSession, Orchestrator, daemon mode, worker config, driveops package). Phase 6.0d done (inotify watch limit detection, multi-drive E2E, CI dual-token). Phase 6.0f done (zero-config removal, scanner extraction, daemon E2E). Phase 6.0g done (explicit E2E config migration, SIGHUP E2E, root package coverage). E2E hardening done (42 new e2e_full tests — 86 total). Next: Phase 6 shared content (6.3-6.4b).** See [docs/roadmap.md](docs/roadmap.md).
+**Phases 1-5.6 complete. Phase 5.7.0-5.7.4 done (full Remote State Separation architecture — schema, observation, dispatch, crash recovery, reconciler, upload failure tracking, local_issues CRUD, issues CLI, status integration, interface narrowing). Phase 6.0a-6.0e done (DriveSession, Orchestrator, daemon mode, worker config, driveops package). Phase 6.0d done (inotify watch limit detection, multi-drive E2E, CI dual-token). Phase 6.0f done (zero-config removal, scanner extraction, daemon E2E). Phase 6.0g done (explicit E2E config migration, SIGHUP E2E, root package coverage). E2E hardening done (42 new e2e_full tests — 86 total). Phase 6.3 done (SharedWithMe API, shared drive enumeration in `drive list`, shared drive add with display name escalation). Next: Phase 6.4a-6.4b (folder-scoped delta, shared folder sync).** See [docs/roadmap.md](docs/roadmap.md).
 
 ## Architecture Overview
 
