@@ -643,15 +643,18 @@ New files: `reconciler.go`, `reconciler_test.go`, `migrations/00002_add_sync_fai
 
 ### Future increments
 
-#### 6.3: Shared drive enumeration — FUTURE
+#### 6.3: Shared drive enumeration — DONE
 
-1. `graph.SharedWithMe(ctx)` — shared drive items with owner, permissions.
-2. `drive list` shows shared folders alongside personal/business/SharePoint.
-3. `drive add` for shared folders — substring match, construct `shared:email:sourceDriveID:sourceItemID` canonical ID.
+1. `graph.SharedWithMe(ctx)` — paginated shared items with `remoteItem` + `shared` facet parsing.
+2. `graph.Item` gains `RemoteDriveID`, `RemoteItemID`, `SharedOwnerName`, `SharedOwnerEmail`.
+3. `drive list` shows shared folders with "(shared by email)" alongside personal/business/SharePoint.
+4. `drive add` for shared folders — substring match or canonical ID. Bypasses `EnsureDriveInConfig` (broken for shared drives). Derives display name with 3-step uniqueness escalation per MULTIDRIVE.md §2.1.
+5. `DefaultDisplayName` shared fallback improved: "Shared from email" instead of raw drive ID.
+6. Integration test for `SharedWithMe` endpoint.
 
 #### 6.4a: Folder-scoped delta + remoteItem parsing — FUTURE
 
-1. `graph.Item` gains `RemoteDriveID`/`RemoteItemID` from `remoteItem` facet.
+1. ~~`graph.Item` gains `RemoteDriveID`/`RemoteItemID` from `remoteItem` facet.~~ (Done in 6.3.)
 2. `graph.DeltaFolder()` for `/drives/{driveID}/items/{folderID}/delta`.
 3. RemoteObserver shortcut detection + sub-delta orchestration.
 4. Path mapping: shortcut position prefix + sub-delta item path.

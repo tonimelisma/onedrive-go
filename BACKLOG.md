@@ -92,7 +92,7 @@ Edge cases and correctness for `internal/graph/`.
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
 | ~~B-285~~ | ~~Standardize `baseline_test.go` to testify style~~ | ~~Done~~ | Converted in fix/b285-testify-baseline. Net -637 lines. |
-| B-286 | No shared/business drive in E2E test matrix | P3 | Second personal account added (6.0d), but all tests are `personal:` type. `shared` type and `ConstructShared()` still untested against real Graph API. Needs shared/business test account. |
+| B-286 | No shared/business drive in E2E test matrix | P3 | Second personal account added (6.0d), but all tests are `personal:` type. Phase 6.3 added `SharedWithMe` integration test (may return empty if no items shared between test accounts). Still needs a shared folder fixture between test accounts for full E2E validation. |
 | ~~B-306~~ | ~~Exhaustive E2E test hardening~~ | ~~P2~~ | **DONE** — 42 new `e2e_full` tests across 5 new files + 2 modified. Covers daemon watch (11), CLI commands (13), edge cases (8), recovery (3), output validation (4), multi-drive watch (3). Total E2E: 86 tests (44 existing + 42 new). |
 
 ## Deferred from Phase 6.0c
@@ -156,6 +156,7 @@ Optimization deferred until profiling shows a bottleneck.
 | B-324 | Cross-test contamination mitigation via `remote_path` filtering | P2 | Bidirectional sync E2E tests on shared drive pick up delta events from other parallel tests' folders. Root cause: delta returns ALL drive events, no folder-scoped delta on Business accounts. **Interim fix**: deletion-dependent tests de-parallelized (no `t.Parallel()`). **Long-term fix**: implement `remote_path` config (roadmap Phase 10) to filter delta events client-side. See ci_issues.md §19. |
 | ~~B-325~~ | ~~Periodic full reconciliation scan (safety net for missed delta deletions)~~ | ~~P2~~ | **DONE** — Full reconciliation implemented: `observeRemoteFull()` + `Baseline.FindOrphans()` detect orphaned items missed by incremental delta. Three access modes: `sync --full` (manual), daemon periodic reconciliation (default 24h via `ReconcileInterval`), programmatic. See ci_issues.md §21. |
 | ~~B-326~~ | ~~Investigate delta token advancement on zero-event responses~~ | ~~P3~~ | **DONE** — Zero-event guard: `observeAndCommitRemote()` and `RemoteObserver.Watch()` skip token advancement when delta returns 0 events. Replaying costs O(1); prevents advancing past still-propagating deletions. See ci_issues.md §20. |
+| B-327 | `EnsureDriveInConfig` broken for shared drives | P3 | `EnsureDriveInConfig` → `ReadTokenMeta(cid, logger)` → `DriveTokenPath(cid, nil)` → `TokenCanonicalID(cid, nil)` → `resolveSharedToken(cid, nil)` → "config required" (nil cfg). Workaround in 6.3: `addSharedDrive` bypasses `EnsureDriveInConfig` and writes config directly. Proper fix: make `EnsureDriveInConfig` accept `*config.Config` parameter or refactor token resolution to not require config for shared drives. |
 
 ## Closed
 

@@ -72,6 +72,8 @@ type driveItemResponse struct {
 	Package              *json.RawMessage    `json:"package"`
 	DownloadURL          string              `json:"@microsoft.graph.downloadUrl"` //nolint:tagliatelle // Graph API annotation key
 	SpecialFolder        *specialFolderFacet `json:"specialFolder"`
+	RemoteItem           *remoteItemFacet    `json:"remoteItem"`
+	Shared               *sharedFacet        `json:"shared"`
 }
 
 type specialFolderFacet struct {
@@ -96,6 +98,24 @@ type hashFacet struct {
 
 type folderFacet struct {
 	ChildCount int `json:"childCount"`
+}
+
+type remoteItemFacet struct {
+	ID              string     `json:"id"`
+	ParentReference *parentRef `json:"parentReference"`
+}
+
+type sharedFacet struct {
+	Owner *sharedOwnerFacet `json:"owner"`
+}
+
+type sharedOwnerFacet struct {
+	User *sharedUserFacet `json:"user"`
+}
+
+type sharedUserFacet struct {
+	DisplayName string `json:"displayName"`
+	Email       string `json:"email"`
 }
 
 type listChildrenResponse struct {
@@ -165,6 +185,20 @@ func (d *driveItemResponse) toItem(logger *slog.Logger) Item {
 			item.SHA1Hash = d.File.Hashes.SHA1Hash
 			item.SHA256Hash = d.File.Hashes.SHA256Hash
 		}
+	}
+
+	// Remote item (shared/shortcut items from SharedWithMe endpoint).
+	if d.RemoteItem != nil {
+		item.RemoteItemID = d.RemoteItem.ID
+		if d.RemoteItem.ParentReference != nil {
+			item.RemoteDriveID = d.RemoteItem.ParentReference.DriveID
+		}
+	}
+
+	// Shared owner info (SharedWithMe items).
+	if d.Shared != nil && d.Shared.Owner != nil && d.Shared.Owner.User != nil {
+		item.SharedOwnerName = d.Shared.Owner.User.DisplayName
+		item.SharedOwnerEmail = d.Shared.Owner.User.Email
 	}
 
 	// Timestamps — validate and fallback to now if invalid.

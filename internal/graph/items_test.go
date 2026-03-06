@@ -1010,3 +1010,116 @@ func TestListChildrenByPath_LeadingSlash(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrInvalidPath)
 }
+
+// --- remoteItem + shared facet tests ---
+
+func TestToItem_SharedWithMe_AllFields(t *testing.T) {
+	// SharedWithMe items include remoteItem and shared facets.
+	raw := `{
+		"id": "local-shortcut-id",
+		"name": "Shared Folder",
+		"size": 0,
+		"createdDateTime": "2024-03-01T10:00:00Z",
+		"lastModifiedDateTime": "2024-06-15T14:30:00Z",
+		"parentReference": {"id": "root", "driveId": "my-drive-id"},
+		"folder": {"childCount": 5},
+		"remoteItem": {
+			"id": "source-item-id",
+			"parentReference": {"driveId": "source-drive-id"}
+		},
+		"shared": {
+			"owner": {
+				"user": {
+					"displayName": "John Doe",
+					"email": "john@example.com"
+				}
+			}
+		}
+	}`
+
+	var dir driveItemResponse
+	require.NoError(t, json.Unmarshal([]byte(raw), &dir))
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	item := dir.toItem(logger)
+
+	assert.Equal(t, "local-shortcut-id", item.ID)
+	assert.Equal(t, "Shared Folder", item.Name)
+	assert.True(t, item.IsFolder)
+	assert.Equal(t, 5, item.ChildCount)
+
+	// remoteItem fields
+	assert.Equal(t, "source-item-id", item.RemoteItemID)
+	assert.Equal(t, "source-drive-id", item.RemoteDriveID)
+
+	// shared owner fields
+	assert.Equal(t, "John Doe", item.SharedOwnerName)
+	assert.Equal(t, "john@example.com", item.SharedOwnerEmail)
+}
+
+func TestToItem_SharedWithMe_NilRemoteItem(t *testing.T) {
+	// Regular items have no remoteItem — fields should be empty.
+	raw := `{
+		"id": "regular-item",
+		"name": "file.txt",
+		"size": 1024,
+		"createdDateTime": "2024-01-01T00:00:00Z",
+		"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+		"file": {"mimeType": "text/plain"}
+	}`
+
+	var dir driveItemResponse
+	require.NoError(t, json.Unmarshal([]byte(raw), &dir))
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	item := dir.toItem(logger)
+
+	assert.Empty(t, item.RemoteItemID)
+	assert.Empty(t, item.RemoteDriveID)
+	assert.Empty(t, item.SharedOwnerName)
+	assert.Empty(t, item.SharedOwnerEmail)
+}
+
+func TestToItem_SharedWithMe_NilSharedOwner(t *testing.T) {
+	// shared facet present but owner is nil (edge case).
+	raw := `{
+		"id": "item-partial-shared",
+		"name": "Partial",
+		"size": 0,
+		"createdDateTime": "2024-01-01T00:00:00Z",
+		"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+		"shared": {}
+	}`
+
+	var dir driveItemResponse
+	require.NoError(t, json.Unmarshal([]byte(raw), &dir))
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	item := dir.toItem(logger)
+
+	assert.Empty(t, item.SharedOwnerName)
+	assert.Empty(t, item.SharedOwnerEmail)
+}
+
+func TestToItem_RemoteItem_NilParentReference(t *testing.T) {
+	// remoteItem present but parentReference is nil.
+	raw := `{
+		"id": "item-remote-no-parent",
+		"name": "Remote",
+		"size": 0,
+		"createdDateTime": "2024-01-01T00:00:00Z",
+		"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+		"remoteItem": {
+			"id": "remote-id"
+		}
+	}`
+
+	var dir driveItemResponse
+	require.NoError(t, json.Unmarshal([]byte(raw), &dir))
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	item := dir.toItem(logger)
+
+	assert.Equal(t, "remote-id", item.RemoteItemID)
+	assert.Empty(t, item.RemoteDriveID)
+}

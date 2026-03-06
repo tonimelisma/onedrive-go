@@ -16,6 +16,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
@@ -230,7 +231,7 @@ func TestPrintDriveListText_ShowsDisplayName(t *testing.T) {
 }
 
 func TestDriveLabel_WithDisplayName(t *testing.T) {
-	e := driveListEntry{
+	e := &driveListEntry{
 		CanonicalID: "personal:user@example.com",
 		DisplayName: "user@example.com",
 	}
@@ -238,12 +239,12 @@ func TestDriveLabel_WithDisplayName(t *testing.T) {
 }
 
 func TestDriveLabel_WithoutDisplayName(t *testing.T) {
-	e := driveListEntry{CanonicalID: "personal:user@example.com"}
+	e := &driveListEntry{CanonicalID: "personal:user@example.com"}
 	assert.Equal(t, "personal:user@example.com", driveLabel(e))
 }
 
 func TestDriveLabel_DisplayNameSameAsCanonicalID(t *testing.T) {
-	e := driveListEntry{
+	e := &driveListEntry{
 		CanonicalID: "personal:user@example.com",
 		DisplayName: "personal:user@example.com",
 	}
@@ -633,6 +634,183 @@ func TestAddNewDrive_WithToken(t *testing.T) {
 	assert.Contains(t, string(data), "personal:user@example.com")
 	assert.Contains(t, string(data), "sync_dir")
 	assert.Contains(t, string(data), "OneDrive")
+}
+
+// --- deriveSharedDisplayName ---
+
+func TestDeriveSharedDisplayName_Basic(t *testing.T) {
+	item := &graph.Item{
+		Name:             "Documents",
+		SharedOwnerName:  "John Doe",
+		SharedOwnerEmail: "john@example.com",
+	}
+	name := deriveSharedDisplayName(item, nil)
+	assert.Equal(t, "John's Documents", name)
+}
+
+func TestDeriveSharedDisplayName_FirstNameCollision(t *testing.T) {
+	item := &graph.Item{
+		Name:             "Documents",
+		SharedOwnerName:  "John Doe",
+		SharedOwnerEmail: "john@example.com",
+	}
+	existing := map[string]bool{"John's Documents": true}
+	name := deriveSharedDisplayName(item, existing)
+	assert.Equal(t, "John Doe's Documents", name)
+}
+
+func TestDeriveSharedDisplayName_FullNameCollision(t *testing.T) {
+	item := &graph.Item{
+		Name:             "Documents",
+		SharedOwnerName:  "John Doe",
+		SharedOwnerEmail: "john@example.com",
+	}
+	existing := map[string]bool{
+		"John's Documents":     true,
+		"John Doe's Documents": true,
+	}
+	name := deriveSharedDisplayName(item, existing)
+	assert.Equal(t, "John Doe's Documents (john@example.com)", name)
+}
+
+func TestDeriveSharedDisplayName_SingleName(t *testing.T) {
+	item := &graph.Item{
+		Name:             "Shared Stuff",
+		SharedOwnerName:  "Alice",
+		SharedOwnerEmail: "alice@example.com",
+	}
+	name := deriveSharedDisplayName(item, nil)
+	assert.Equal(t, "Alice's Shared Stuff", name)
+}
+
+func TestDeriveSharedDisplayName_EmptyOwnerName(t *testing.T) {
+	item := &graph.Item{
+		Name:             "Folder",
+		SharedOwnerName:  "",
+		SharedOwnerEmail: "unknown@example.com",
+	}
+	name := deriveSharedDisplayName(item, nil)
+	assert.Equal(t, "'s Folder (unknown@example.com)", name)
+}
+
+// --- printDriveListText shared drives ---
+
+func TestPrintDriveListText_SharedDrive(t *testing.T) {
+	available := []driveListEntry{
+		{
+			CanonicalID: "shared:user@example.com:drive1:item1",
+			State:       "available",
+			Source:      "available",
+			OwnerEmail:  "alice@example.com",
+		},
+	}
+	var buf bytes.Buffer
+	printDriveListText(&buf, nil, available)
+	output := buf.String()
+	assert.Contains(t, output, "shared by alice@example.com")
+}
+
+func TestPrintDriveListText_SharedAndSharePoint(t *testing.T) {
+	available := []driveListEntry{
+		{CanonicalID: "sharepoint:u@c.com:site:lib", State: "available", Source: "available", SiteName: "Marketing"},
+		{CanonicalID: "shared:u@c.com:d:i", State: "available", Source: "available", OwnerEmail: "bob@example.com"},
+	}
+	var buf bytes.Buffer
+	printDriveListText(&buf, nil, available)
+	output := buf.String()
+	assert.Contains(t, output, "(Marketing)")
+	assert.Contains(t, output, "(shared by bob@example.com)")
+}
+
+// --- driveListEntry JSON ---
+
+func TestDriveListEntry_SharedFieldsJSON(t *testing.T) {
+	entry := driveListEntry{
+		CanonicalID: "shared:user@example.com:driveX:itemY",
+		State:       "available",
+		Source:      "available",
+		OwnerName:   "Alice",
+		OwnerEmail:  "alice@example.com",
+	}
+	data, err := json.Marshal(entry)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"owner_name":"Alice"`)
+	assert.Contains(t, string(data), `"owner_email":"alice@example.com"`)
+}
+
+func TestDriveListEntry_SharedFieldsOmittedWhenEmpty(t *testing.T) {
+	entry := driveListEntry{
+		CanonicalID: "personal:user@example.com",
+		State:       "ready",
+		Source:      "configured",
+	}
+	data, err := json.Marshal(entry)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "owner_name")
+	assert.NotContains(t, string(data), "owner_email")
+}
+
+// --- addSharedDrive ---
+
+func TestAddSharedDrive_AlreadyConfigured(t *testing.T) {
+	setTestDriveHome(t)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+
+	cid := driveid.MustCanonicalID("shared:user@example.com:driveX:itemY")
+
+	// Write a config that already has this drive.
+	require.NoError(t, os.WriteFile(cfgPath, []byte(`
+["personal:user@example.com"]
+sync_dir = "~/OneDrive"
+
+["shared:user@example.com:driveX:itemY"]
+sync_dir = "~/OneDrive-Shared/Test"
+`), 0o600))
+
+	err := addSharedDrive(t.Context(), cfgPath, cid, testDriveLogger(t))
+	assert.NoError(t, err)
+}
+
+func TestAddSharedDrive_NoToken(t *testing.T) {
+	setTestDriveHome(t)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+
+	cid := driveid.MustCanonicalID("shared:nobody@example.com:driveX:itemY")
+
+	// Empty config — no primary drive to resolve token from.
+	require.NoError(t, os.WriteFile(cfgPath, []byte(""), 0o600))
+
+	err := addSharedDrive(t.Context(), cfgPath, cid, testDriveLogger(t))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot resolve token")
+}
+
+// --- collectExistingDisplayNames ---
+
+func TestCollectExistingDisplayNames(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Drives[driveid.MustCanonicalID("personal:user@example.com")] = config.Drive{
+		SyncDir:     "~/OneDrive",
+		DisplayName: "My Drive",
+	}
+	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = config.Drive{
+		SyncDir: "~/Work",
+	}
+
+	names := collectExistingDisplayNames(cfg)
+	assert.True(t, names["My Drive"])
+	assert.True(t, names["alice@contoso.com"]) // DefaultDisplayName fallback
+}
+
+// --- extractFirstName ---
+
+func TestExtractFirstName(t *testing.T) {
+	assert.Equal(t, "John", extractFirstName("John Doe"))
+	assert.Equal(t, "Alice", extractFirstName("Alice"))
+	assert.Equal(t, "Mary", extractFirstName("Mary Jane Watson"))
+	assert.Equal(t, "", extractFirstName(""))
 }
 
 // --- test helpers ---

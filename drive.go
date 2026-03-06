@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"slices"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -66,6 +67,8 @@ type driveListEntry struct {
 	Source      string `json:"source"` // "configured" or "available"
 	SiteName    string `json:"site_name,omitempty"`
 	LibraryName string `json:"library_name,omitempty"`
+	OwnerName   string `json:"owner_name,omitempty"`
+	OwnerEmail  string `json:"owner_email,omitempty"`
 }
 
 func runDriveList(cmd *cobra.Command, _ []string) error {
@@ -200,6 +203,10 @@ func discoverAvailableDrives(ctx context.Context, cfg *config.Config, logger *sl
 			spEntries := discoverSharePointDrives(ctx, client, cfg, email, logger)
 			entries = append(entries, spEntries...)
 		}
+
+		// Discover shared folders (all account types).
+		sharedEntries := discoverSharedDrives(ctx, client, cfg, email, logger)
+		entries = append(entries, sharedEntries...)
 	}
 
 	slices.SortFunc(entries, func(a, b driveListEntry) int {
@@ -256,6 +263,95 @@ func discoverSharePointDrives(
 	return entries
 }
 
+// discoverSharedDrives queries the SharedWithMe endpoint for shared folders.
+func discoverSharedDrives(
+	ctx context.Context, client *graph.Client, cfg *config.Config, email string, logger *slog.Logger,
+) []driveListEntry {
+	items, err := client.SharedWithMe(ctx)
+	if err != nil {
+		logger.Debug("failed to list shared items", "error", err)
+
+		return nil
+	}
+
+	var entries []driveListEntry
+
+	for i := range items {
+		item := &items[i]
+
+		if !item.IsFolder {
+			continue
+		}
+
+		if item.RemoteDriveID == "" || item.RemoteItemID == "" {
+			continue
+		}
+
+		cid, cidErr := driveid.ConstructShared(email, item.RemoteDriveID, item.RemoteItemID)
+		if cidErr != nil {
+			continue
+		}
+
+		if _, exists := cfg.Drives[cid]; exists {
+			continue
+		}
+
+		entries = append(entries, driveListEntry{
+			CanonicalID: cid.String(),
+			DisplayName: deriveSharedDisplayName(item, nil),
+			State:       "available",
+			Source:      "available",
+			OwnerName:   item.SharedOwnerName,
+			OwnerEmail:  item.SharedOwnerEmail,
+		})
+	}
+
+	return entries
+}
+
+// deriveSharedDisplayName builds a human-friendly name for a shared folder.
+// Three-step uniqueness escalation per MULTIDRIVE.md §2.1:
+//  1. "{FirstName}'s {FolderName}" — if unique
+//  2. "{FullName}'s {FolderName}" — if step 1 collides
+//  3. "{FullName}'s {FolderName} ({email})" — if step 2 collides
+//
+// Pass nil for existingNames when listing (no collision detection needed).
+func deriveSharedDisplayName(item *graph.Item, existingNames map[string]bool) string {
+	folderName := item.Name
+	ownerName := item.SharedOwnerName
+
+	// When owner name is unknown, skip directly to email-based name.
+	if ownerName == "" {
+		return fmt.Sprintf("'s %s (%s)", folderName, item.SharedOwnerEmail)
+	}
+
+	firstName := extractFirstName(ownerName)
+
+	// Step 1: "John's Documents"
+	name := fmt.Sprintf("%s's %s", firstName, folderName)
+	if existingNames == nil || !existingNames[name] {
+		return name
+	}
+
+	// Step 2: "John Doe's Documents"
+	name = fmt.Sprintf("%s's %s", ownerName, folderName)
+	if !existingNames[name] {
+		return name
+	}
+
+	// Step 3: "John Doe's Documents (john@example.com)"
+	return fmt.Sprintf("%s's %s (%s)", ownerName, folderName, item.SharedOwnerEmail)
+}
+
+// extractFirstName returns the first space-separated token from a full name.
+func extractFirstName(fullName string) string {
+	if i := strings.Index(fullName, " "); i > 0 {
+		return fullName[:i]
+	}
+
+	return fullName
+}
+
 // driveListJSONOutput is the structured JSON schema for drive list output.
 // Separates configured and available drives into distinct top-level keys,
 // replacing the flat array that required callers to filter by "source" field.
@@ -292,7 +388,7 @@ func printDriveListJSON(w io.Writer, configured, available []driveListEntry) err
 // driveLabel returns a human-readable label for a drive list entry.
 // Shows "DisplayName (CanonicalID)" when a display name differs from the
 // canonical ID, otherwise just the canonical ID.
-func driveLabel(e driveListEntry) string {
+func driveLabel(e *driveListEntry) string {
 	if e.DisplayName != "" && e.DisplayName != e.CanonicalID {
 		return fmt.Sprintf("%s (%s)", e.DisplayName, e.CanonicalID)
 	}
@@ -312,13 +408,13 @@ func printDriveListText(w io.Writer, configured, available []driveListEntry) {
 
 		// Compute dynamic column widths from content, with minimums for readability.
 		maxName, maxDir := 0, 0
-		for _, e := range configured {
-			label := driveLabel(e)
+		for i := range configured {
+			label := driveLabel(&configured[i])
 			if len(label) > maxName {
 				maxName = len(label)
 			}
 
-			sd := e.SyncDir
+			sd := configured[i].SyncDir
 			if sd == "" {
 				sd = syncDirNotSet
 			}
@@ -333,13 +429,13 @@ func printDriveListText(w io.Writer, configured, available []driveListEntry) {
 
 		fmtStr := fmt.Sprintf("  %%-%ds  %%-%ds  %%s\n", maxName, maxDir)
 
-		for _, e := range configured {
-			syncDir := e.SyncDir
+		for i := range configured {
+			syncDir := configured[i].SyncDir
 			if syncDir == "" {
 				syncDir = syncDirNotSet
 			}
 
-			fmt.Fprintf(w, fmtStr, driveLabel(e), syncDir, e.State)
+			fmt.Fprintf(w, fmtStr, driveLabel(&configured[i]), syncDir, configured[i].State)
 		}
 	}
 
@@ -350,13 +446,17 @@ func printDriveListText(w io.Writer, configured, available []driveListEntry) {
 
 		fmt.Fprintln(w, "Available drives (not configured):")
 
-		for _, e := range available {
+		for i := range available {
 			label := ""
-			if e.SiteName != "" {
-				label = fmt.Sprintf(" (%s)", e.SiteName)
+
+			switch {
+			case available[i].SiteName != "":
+				label = fmt.Sprintf(" (%s)", available[i].SiteName)
+			case available[i].OwnerEmail != "":
+				label = fmt.Sprintf(" (shared by %s)", available[i].OwnerEmail)
 			}
 
-			fmt.Fprintf(w, "  %s%s\n", e.CanonicalID, label)
+			fmt.Fprintf(w, "  %s%s\n", driveLabel(&available[i]), label)
 		}
 
 		fmt.Fprintln(w, "\nRun 'onedrive-go drive add <canonical-id>' to add a drive.")
@@ -369,16 +469,20 @@ func newDriveAddCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "add [canonical-id]",
 		Short: "Add a new drive to the configuration",
-		Long: `Add a drive to the configuration by canonical ID.
+		Long: `Add a drive to the configuration by canonical ID or shared folder name.
 
 If the drive already exists in config, reports it as already configured.
 If the drive is new, it is added with a default sync directory.
+
+For shared drives, you can use a search term instead of a canonical ID.
+The term is matched against shared folder names (case-insensitive substring).
 
 Without arguments, lists available drives that can be added.
 
 Examples:
   onedrive-go drive add personal:user@example.com
-  onedrive-go drive add sharepoint:user@contoso.com:marketing:Documents`,
+  onedrive-go drive add sharepoint:user@contoso.com:marketing:Documents
+  onedrive-go drive add "Shared Folder"`,
 		Annotations: map[string]string{skipConfigAnnotation: "true"},
 		RunE:        runDriveAdd,
 		Args:        cobra.MaximumNArgs(1),
@@ -411,7 +515,12 @@ func runDriveAdd(cmd *cobra.Command, args []string) error {
 
 	cid, err := driveid.NewCanonicalID(selector)
 	if err != nil {
-		return fmt.Errorf("invalid canonical ID %q: %w", selector, err)
+		// Not a valid canonical ID — try substring matching against shared drives.
+		return addSharedDriveByName(cmd.Context(), selector, cfgPath, logger)
+	}
+
+	if cid.IsShared() {
+		return addSharedDrive(cmd.Context(), cfgPath, cid, logger)
 	}
 
 	return addNewDrive(cfgPath, cid, logger)
@@ -466,6 +575,229 @@ func listAvailableDrives() error {
 	fmt.Println("Run 'onedrive-go drive list' to see available drives.")
 
 	return nil
+}
+
+// addSharedDrive adds a shared drive to config by canonical ID.
+// Bypasses EnsureDriveInConfig (which is broken for shared drives — BUG 1)
+// and instead directly computes display name + sync dir.
+func addSharedDrive(
+	ctx context.Context, cfgPath string, cid driveid.CanonicalID, logger *slog.Logger,
+) error {
+	cfg, err := config.LoadOrDefault(cfgPath, logger)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+
+	if _, exists := cfg.Drives[cid]; exists {
+		fmt.Printf("Drive %s is already configured.\n", cid.String())
+
+		return nil
+	}
+
+	tokenCID, err := config.TokenCanonicalID(cid, cfg)
+	if err != nil {
+		return fmt.Errorf("cannot resolve token for %s: %w\n"+
+			"Run 'onedrive-go login' first, then add your primary drive", cid.String(), err)
+	}
+
+	tokenPath := config.DriveTokenPath(tokenCID, nil)
+	if tokenPath == "" {
+		return fmt.Errorf("cannot determine data directory for %s", cid.Email())
+	}
+
+	if _, statErr := os.Stat(tokenPath); errors.Is(statErr, os.ErrNotExist) {
+		return fmt.Errorf("no token file for %s — run 'onedrive-go login' first", cid.Email())
+	}
+
+	displayName, resolveErr := resolveSharedDisplayName(ctx, cid, tokenPath, cfg, logger)
+	if resolveErr != nil {
+		displayName = config.DefaultDisplayName(cid)
+		logger.Warn("could not derive shared drive display name, using fallback",
+			"error", resolveErr, "fallback", displayName)
+	}
+
+	syncDir := config.BaseSyncDir(cid, "", displayName)
+
+	if err := config.AppendDriveSection(cfgPath, cid, syncDir); err != nil {
+		return fmt.Errorf("writing drive config: %w", err)
+	}
+
+	if err := config.SetDriveKey(cfgPath, cid, "display_name", displayName); err != nil {
+		return fmt.Errorf("writing display_name to config: %w", err)
+	}
+
+	fmt.Printf("Added drive %s (%s) -> %s\n", displayName, cid.String(), syncDir)
+
+	return nil
+}
+
+// resolveSharedDisplayName calls SharedWithMe to find the matching item
+// and derives a collision-free display name.
+func resolveSharedDisplayName(
+	ctx context.Context, cid driveid.CanonicalID,
+	tokenPath string, cfg *config.Config, logger *slog.Logger,
+) (string, error) {
+	ts, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
+	if err != nil {
+		return "", err
+	}
+
+	client := newGraphClient(ts, logger)
+
+	items, err := client.SharedWithMe(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	existingNames := collectExistingDisplayNames(cfg)
+
+	for i := range items {
+		item := &items[i]
+
+		if !item.IsFolder || item.RemoteDriveID == "" || item.RemoteItemID == "" {
+			continue
+		}
+
+		itemCID, cidErr := driveid.ConstructShared(cid.Email(), item.RemoteDriveID, item.RemoteItemID)
+		if cidErr != nil {
+			continue
+		}
+
+		if itemCID == cid {
+			return deriveSharedDisplayName(item, existingNames), nil
+		}
+	}
+
+	return "", fmt.Errorf("shared item not found in SharedWithMe response")
+}
+
+// collectExistingDisplayNames gathers all configured drive display names
+// for collision detection during shared drive naming.
+func collectExistingDisplayNames(cfg *config.Config) map[string]bool {
+	names := make(map[string]bool, len(cfg.Drives))
+
+	for id := range cfg.Drives {
+		name := cfg.Drives[id].DisplayName
+		if name == "" {
+			name = config.DefaultDisplayName(id)
+		}
+
+		names[name] = true
+	}
+
+	return names
+}
+
+// sharedMatch holds a shared folder that matched a search term.
+type sharedMatch struct {
+	cid         driveid.CanonicalID
+	displayName string
+	ownerEmail  string
+}
+
+// addSharedDriveByName searches SharedWithMe for a folder matching the
+// given search term (case-insensitive substring match against folder name
+// and derived display name). Single match → add. Multiple → show list.
+func addSharedDriveByName(
+	ctx context.Context, selector, cfgPath string, logger *slog.Logger,
+) error {
+	cfg, err := config.LoadOrDefault(cfgPath, logger)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+
+	matches := searchSharedDrives(ctx, cfg, selector, logger)
+
+	switch len(matches) {
+	case 0:
+		return fmt.Errorf(
+			"no shared folders matching %q found — run 'onedrive-go drive list' to see available drives",
+			selector)
+
+	case 1:
+		return addSharedDrive(ctx, cfgPath, matches[0].cid, logger)
+
+	default:
+		fmt.Printf("Multiple shared folders match %q — be more specific:\n\n", selector)
+
+		for i := range matches {
+			ownerInfo := ""
+			if matches[i].ownerEmail != "" {
+				ownerInfo = fmt.Sprintf(" (shared by %s)", matches[i].ownerEmail)
+			}
+
+			fmt.Printf("  %d. %s%s\n     %s\n",
+				i+1, matches[i].displayName, ownerInfo, matches[i].cid.String())
+		}
+
+		fmt.Println("\nRun 'onedrive-go drive add <canonical-id>' to add a specific drive.")
+
+		return nil
+	}
+}
+
+// searchSharedDrives queries all tokens for shared folders matching selector.
+func searchSharedDrives(
+	ctx context.Context, cfg *config.Config, selector string, logger *slog.Logger,
+) []sharedMatch {
+	tokens := config.DiscoverTokens(logger)
+	lowerSelector := strings.ToLower(selector)
+
+	var matches []sharedMatch
+
+	for _, tokenCID := range tokens {
+		tokenPath := config.DriveTokenPath(tokenCID, nil)
+		if tokenPath == "" {
+			continue
+		}
+
+		ts, tsErr := graph.TokenSourceFromPath(ctx, tokenPath, logger)
+		if tsErr != nil {
+			continue
+		}
+
+		client := newGraphClient(ts, logger)
+		email := tokenCID.Email()
+
+		items, apiErr := client.SharedWithMe(ctx)
+		if apiErr != nil {
+			logger.Debug("failed to list shared items", "token", tokenCID.String(), "error", apiErr)
+
+			continue
+		}
+
+		for i := range items {
+			item := &items[i]
+
+			if !item.IsFolder || item.RemoteDriveID == "" || item.RemoteItemID == "" {
+				continue
+			}
+
+			cid, cidErr := driveid.ConstructShared(email, item.RemoteDriveID, item.RemoteItemID)
+			if cidErr != nil {
+				continue
+			}
+
+			if _, exists := cfg.Drives[cid]; exists {
+				continue
+			}
+
+			displayName := deriveSharedDisplayName(item, nil)
+
+			if !strings.Contains(strings.ToLower(item.Name), lowerSelector) &&
+				!strings.Contains(strings.ToLower(displayName), lowerSelector) {
+				continue
+			}
+
+			matches = append(matches, sharedMatch{
+				cid:         cid,
+				displayName: displayName,
+				ownerEmail:  item.SharedOwnerEmail,
+			})
+		}
+	}
+
+	return matches
 }
 
 // --- drive remove ---

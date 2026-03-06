@@ -699,3 +699,158 @@ func TestToDrive_NilQuota(t *testing.T) {
 	assert.Equal(t, int64(0), drive.QuotaUsed)
 	assert.Equal(t, int64(0), drive.QuotaTotal)
 }
+
+// --- SharedWithMe tests ---
+
+func TestSharedWithMe_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, "/me/drive/sharedWithMe", r.URL.Path)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{
+			"value": [
+				{
+					"id": "local-shortcut-1",
+					"name": "Shared Folder",
+					"size": 0,
+					"createdDateTime": "2024-01-01T00:00:00Z",
+					"lastModifiedDateTime": "2024-06-01T00:00:00Z",
+					"folder": {"childCount": 3},
+					"remoteItem": {
+						"id": "source-item-1",
+						"parentReference": {"driveId": "source-drive-1"}
+					},
+					"shared": {
+						"owner": {
+							"user": {
+								"displayName": "Alice",
+								"email": "alice@example.com"
+							}
+						}
+					}
+				},
+				{
+					"id": "local-shortcut-2",
+					"name": "shared-file.docx",
+					"size": 2048,
+					"createdDateTime": "2024-02-01T00:00:00Z",
+					"lastModifiedDateTime": "2024-05-01T00:00:00Z",
+					"file": {"mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+					"remoteItem": {
+						"id": "source-item-2",
+						"parentReference": {"driveId": "source-drive-2"}
+					},
+					"shared": {
+						"owner": {
+							"user": {
+								"displayName": "Bob",
+								"email": "bob@example.com"
+							}
+						}
+					}
+				}
+			]
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	items, err := client.SharedWithMe(t.Context())
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+
+	// First item: shared folder
+	assert.Equal(t, "local-shortcut-1", items[0].ID)
+	assert.Equal(t, "Shared Folder", items[0].Name)
+	assert.True(t, items[0].IsFolder)
+	assert.Equal(t, "source-item-1", items[0].RemoteItemID)
+	assert.Equal(t, "source-drive-1", items[0].RemoteDriveID)
+	assert.Equal(t, "Alice", items[0].SharedOwnerName)
+	assert.Equal(t, "alice@example.com", items[0].SharedOwnerEmail)
+
+	// Second item: shared file
+	assert.Equal(t, "local-shortcut-2", items[1].ID)
+	assert.Equal(t, "shared-file.docx", items[1].Name)
+	assert.False(t, items[1].IsFolder)
+	assert.Equal(t, "source-item-2", items[1].RemoteItemID)
+	assert.Equal(t, "source-drive-2", items[1].RemoteDriveID)
+	assert.Equal(t, "Bob", items[1].SharedOwnerName)
+	assert.Equal(t, "bob@example.com", items[1].SharedOwnerEmail)
+}
+
+func TestSharedWithMe_Empty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"value": []}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	items, err := client.SharedWithMe(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, items)
+}
+
+func TestSharedWithMe_Pagination(t *testing.T) {
+	// Self-referencing nextLink: the handler needs its own server URL.
+	// Use a pointer to hold the server, assigned after creation.
+	var page int
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		page++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+
+		if page == 1 {
+			fmt.Fprintf(w, `{
+				"value": [{
+					"id": "item-page1",
+					"name": "Page 1 Folder",
+					"size": 0,
+					"createdDateTime": "2024-01-01T00:00:00Z",
+					"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+					"folder": {"childCount": 0}
+				}],
+				"@odata.nextLink": "%s/me/drive/sharedWithMe?$skiptoken=page2"
+			}`, srv.URL)
+			return
+		}
+
+		fmt.Fprint(w, `{
+			"value": [{
+				"id": "item-page2",
+				"name": "Page 2 Folder",
+				"size": 0,
+				"createdDateTime": "2024-01-01T00:00:00Z",
+				"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+				"folder": {"childCount": 0}
+			}]
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	items, err := client.SharedWithMe(t.Context())
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	assert.Equal(t, "item-page1", items[0].ID)
+	assert.Equal(t, "item-page2", items[1].ID)
+	assert.Equal(t, 2, page)
+}
+
+func TestSharedWithMe_Error(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("request-id", "req-shared-401")
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `{"error":{"code":"InvalidAuthenticationToken"}}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.SharedWithMe(t.Context())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrUnauthorized)
+}

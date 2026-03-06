@@ -18,7 +18,9 @@ func DefaultDisplayName(cid driveid.CanonicalID) string {
 		return cid.Site() + " / " + cid.Library()
 
 	case cid.IsShared():
-		return "Shared (" + cid.SourceDriveID() + ")"
+		// Best effort when no display_name is stored in config. The real
+		// display name should be set at drive-add time via the API response.
+		return "Shared from " + cid.Email()
 
 	default:
 		return cid.Email()
