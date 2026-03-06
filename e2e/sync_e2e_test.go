@@ -457,8 +457,8 @@ func pollLocalDirGone(t *testing.T, path string, timeout time.Duration) {
 // ---------------------------------------------------------------------------
 
 // writeSyncConfigWithOptions creates a TOML config like writeSyncConfig but
-// appends extra TOML key-value pairs to the drive section. The extraTOML
-// string should start with a newline if non-empty.
+// appends extra TOML key-value pairs before the drive section. The extraTOML
+// string contains global-level config keys (e.g., "transfer_workers = 2\n").
 func writeSyncConfigWithOptions(t *testing.T, syncDir string, extraTOML string) (string, map[string]string) {
 	t.Helper()
 
@@ -469,7 +469,7 @@ func writeSyncConfigWithOptions(t *testing.T, syncDir string, extraTOML string) 
 	require.NoError(t, os.MkdirAll(perTestDataDir, 0o755))
 	copyTokenFile(t, testDataDir, perTestDataDir)
 
-	content := fmt.Sprintf("[%q]\nsync_dir = %q\n%s", drive, syncDir, extraTOML)
+	content := fmt.Sprintf("%s\n[%q]\nsync_dir = %q\n", extraTOML, drive, syncDir)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o644))

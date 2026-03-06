@@ -228,7 +228,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 	}
 
 	// Steps 2-4: Observe remote + local, buffer, and flush.
-	changes, err := e.observeChanges(ctx, bl, mode)
+	changes, err := e.observeChanges(ctx, bl, mode, opts.DryRun)
 	if err != nil {
 		return nil, err
 	}
@@ -411,16 +411,24 @@ func (e *Engine) observeLocal(ctx context.Context, bl *Baseline) ([]ChangeEvent,
 
 // observeChanges runs remote and local observers based on mode, buffers their
 // events, and returns the flushed change set. Delta token is committed
-// atomically with observations in observeAndCommitRemote.
+// atomically with observations in observeAndCommitRemote (skipped for dry-run
+// so that a subsequent real sync sees the same delta changes).
 func (e *Engine) observeChanges(
-	ctx context.Context, bl *Baseline, mode SyncMode,
+	ctx context.Context, bl *Baseline, mode SyncMode, dryRun bool,
 ) ([]PathChanges, error) {
 	var remoteEvents []ChangeEvent
 
 	var err error
 
 	if mode != SyncUploadOnly {
-		remoteEvents, err = e.observeAndCommitRemote(ctx, bl)
+		if dryRun {
+			// Dry-run: observe without committing delta token or observations.
+			// A subsequent real sync must see the same remote changes.
+			remoteEvents, _, err = e.observeRemote(ctx, bl)
+		} else {
+			remoteEvents, err = e.observeAndCommitRemote(ctx, bl)
+		}
+
 		if err != nil {
 			return nil, err
 		}
