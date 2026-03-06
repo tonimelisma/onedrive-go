@@ -51,6 +51,8 @@ type StateReader interface {
 	ListUnreconciled(ctx context.Context) ([]RemoteStateRow, error)
 	ListFailedForRetry(ctx context.Context, now time.Time) ([]RemoteStateRow, error)
 	EarliestRetryAt(ctx context.Context, now time.Time) (time.Time, error)
+	ListLocalIssuesForRetry(ctx context.Context, now time.Time) ([]LocalIssueRow, error)
+	EarliestLocalIssueRetryAt(ctx context.Context, now time.Time) (time.Time, error)
 	FailureCount(ctx context.Context) (int, error)
 	BaselineEntryCount(ctx context.Context) (int, error)
 	UnresolvedConflictCount(ctx context.Context) (int, error)
@@ -64,6 +66,7 @@ type LocalIssueRecorder interface {
 	ListLocalIssues(ctx context.Context) ([]LocalIssueRow, error)
 	ClearLocalIssue(ctx context.Context, path string) error
 	ClearResolvedLocalIssues(ctx context.Context) error
+	MarkLocalIssuePermanent(ctx context.Context, path string) error
 }
 
 // StateAdmin is called by CLI commands and daemon maintenance.

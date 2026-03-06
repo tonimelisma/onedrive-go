@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -177,7 +176,7 @@ func printIssuesTable(w io.Writer, issues []sync.LocalIssueRow) {
 		lastSeen := ""
 
 		if row.LastSeenAt != 0 {
-			lastSeen = time.Unix(0, row.LastSeenAt).UTC().Format(time.RFC3339)
+			lastSeen = formatNanoTimestamp(row.LastSeenAt)
 		}
 
 		errMsg := row.LastError

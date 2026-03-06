@@ -2293,3 +2293,115 @@ func TestRunFullReconciliation_DeltaError(t *testing.T) {
 	// Should not panic — error is logged and function returns.
 	e.runFullReconciliation(ctx, bl, SyncDownloadOnly, safety, tracker)
 }
+
+// ---------------------------------------------------------------------------
+// Issue #9: filterInvalidUploads integration test
+// ---------------------------------------------------------------------------
+
+func TestRunOnce_InvalidUpload_RecordsIssue(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	// Create a deeply nested file >400 chars total, each component <255 chars.
+	// This passes the scanner (component length OK) but fails upload validation
+	// (total path too long).
+	deepPath := ""
+	for range 51 {
+		deepPath = filepath.Join(deepPath, "abcdefgh")
+	}
+	deepPath = filepath.Join(deepPath, "file.txt")
+	require.Greater(t, len(deepPath), 400)
+
+	writeLocalFile(t, syncRoot, deepPath, "test content")
+
+	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOpts{})
+	require.NoError(t, err)
+
+	// The upload should NOT have been attempted.
+	assert.Equal(t, 0, report.Uploads, "invalid upload should not be executed")
+
+	// The local_issues table should have an entry.
+	issues, issErr := eng.baseline.ListLocalIssues(ctx)
+	require.NoError(t, issErr)
+	require.NotEmpty(t, issues, "local_issues should have an entry for the invalid upload")
+
+	found := false
+	for _, iss := range issues {
+		if iss.IssueType == "path_too_long" {
+			found = true
+
+			break
+		}
+	}
+
+	assert.True(t, found, "expected path_too_long issue in local_issues")
+}
+
+// ---------------------------------------------------------------------------
+// Issue #10: drainWorkerResults upload failure recording
+// ---------------------------------------------------------------------------
+
+func TestDrainWorkerResults_UploadFailure_RecordsLocalIssue(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	results := make(chan WorkerResult, 1)
+	results <- WorkerResult{
+		Path:       "docs/report.xlsx",
+		ActionType: ActionUpload,
+		Success:    false,
+		ErrMsg:     "connection reset",
+		HTTPStatus: 503,
+	}
+	close(results)
+
+	eng.drainWorkerResults(ctx, results)
+
+	issues, err := eng.baseline.ListLocalIssues(ctx)
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+	assert.Equal(t, "docs/report.xlsx", issues[0].Path)
+	assert.Equal(t, "upload_failed", issues[0].IssueType)
+	assert.Equal(t, "connection reset", issues[0].LastError)
+	assert.Equal(t, 503, issues[0].HTTPStatus)
+}
+
+func TestDrainWorkerResults_DownloadFailure_NoLocalIssue(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	results := make(chan WorkerResult, 1)
+	results <- WorkerResult{
+		Path:       "docs/report.xlsx",
+		ActionType: ActionDownload,
+		Success:    false,
+		ErrMsg:     "connection reset",
+		HTTPStatus: 503,
+	}
+	close(results)
+
+	eng.drainWorkerResults(ctx, results)
+
+	// Download failures should NOT create local_issues entries.
+	issues, err := eng.baseline.ListLocalIssues(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, issues, "download failures should not be recorded in local_issues")
+}

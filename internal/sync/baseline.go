@@ -1593,13 +1593,17 @@ func nullInt64(n int64) sql.NullInt64 {
 // LocalIssueRecorder methods
 // ---------------------------------------------------------------------------
 
+// statusPermanentlyFailed is the sync_status for local issues that cannot be
+// retried (pre-validation rejects or items exceeding the retry threshold).
+const statusPermanentlyFailed = "permanently_failed"
+
 // localIssueSyncStatus classifies an issue_type into its sync_status:
 // permanent issues (invalid_filename, path_too_long, file_too_large) →
 // permanently_failed; everything else retains its issue_type as sync_status.
 func localIssueSyncStatus(issueType string) string {
 	switch issueType {
 	case "invalid_filename", "path_too_long", "file_too_large":
-		return "permanently_failed"
+		return statusPermanentlyFailed
 	default:
 		return issueType
 	}
@@ -1607,30 +1611,51 @@ func localIssueSyncStatus(issueType string) string {
 
 // RecordLocalIssue persists or updates an upload-side failure in local_issues.
 // On repeat failures for the same path, increments failure_count and updates
-// last_seen_at. Uses UPSERT to handle both new and existing rows.
+// last_seen_at. For transient issues, computes next_retry_at using exponential
+// backoff (same schedule as remote_state retries). Permanent issues get no
+// retry time.
 func (m *SyncStore) RecordLocalIssue(
 	ctx context.Context, issuePath, issueType, errMsg string,
 	httpStatus int, fileSize int64, localHash string,
 ) error {
-	now := m.nowFunc().UnixNano()
+	now := m.nowFunc()
+	nowNano := now.UnixNano()
 	syncStatus := localIssueSyncStatus(issueType)
+
+	// Read current failure_count for backoff calculation (0 if new row).
+	var currentFailures int
+	if scanErr := m.db.QueryRowContext(ctx,
+		`SELECT failure_count FROM local_issues WHERE path = ?`, issuePath,
+	).Scan(&currentFailures); scanErr != nil {
+		// No existing row — currentFailures stays 0.
+		currentFailures = 0
+	}
+
+	// Compute next_retry_at for transient issues; NULL for permanent.
+	var nextRetryNano *int64
+	if syncStatus != statusPermanentlyFailed {
+		retryAt := computeNextRetry(now, currentFailures)
+		nanos := retryAt.UnixNano()
+		nextRetryNano = &nanos
+	}
 
 	_, err := m.db.ExecContext(ctx,
 		`INSERT INTO local_issues
-			(path, issue_type, sync_status, failure_count, last_error, http_status,
+			(path, issue_type, sync_status, failure_count, next_retry_at, last_error, http_status,
 			 first_seen_at, last_seen_at, file_size, local_hash)
-		VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(path) DO UPDATE SET
 			issue_type = excluded.issue_type,
 			sync_status = excluded.sync_status,
 			failure_count = local_issues.failure_count + 1,
+			next_retry_at = excluded.next_retry_at,
 			last_error = excluded.last_error,
 			http_status = excluded.http_status,
 			last_seen_at = excluded.last_seen_at,
 			file_size = excluded.file_size,
 			local_hash = excluded.local_hash`,
-		issuePath, issueType, syncStatus, errMsg, httpStatus,
-		now, now, nullInt64(fileSize), nullString(localHash),
+		issuePath, issueType, syncStatus, nextRetryNano, errMsg, httpStatus,
+		nowNano, nowNano, nullInt64(fileSize), nullString(localHash),
 	)
 	if err != nil {
 		return fmt.Errorf("sync: recording local issue for %s: %w", issuePath, err)
@@ -1695,4 +1720,83 @@ func (m *SyncStore) ClearResolvedLocalIssues(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// MarkLocalIssuePermanent sets a local_issues row to permanently_failed
+// and clears its next_retry_at. Used by the failure retrier when a
+// transient issue exceeds the escalation threshold.
+func (m *SyncStore) MarkLocalIssuePermanent(ctx context.Context, issuePath string) error {
+	_, err := m.db.ExecContext(ctx,
+		`UPDATE local_issues SET sync_status = ?, next_retry_at = NULL WHERE path = ?`,
+		statusPermanentlyFailed, issuePath)
+	if err != nil {
+		return fmt.Errorf("sync: marking local issue permanent for %s: %w", issuePath, err)
+	}
+
+	return nil
+}
+
+// ListLocalIssuesForRetry returns transient local_issues rows whose
+// next_retry_at has expired (i.e. ready for retry).
+func (m *SyncStore) ListLocalIssuesForRetry(ctx context.Context, now time.Time) ([]LocalIssueRow, error) {
+	nowNano := now.UnixNano()
+	rows, err := m.db.QueryContext(ctx,
+		`SELECT path, issue_type, sync_status, failure_count,
+			COALESCE(next_retry_at, 0), COALESCE(last_error, ''),
+			COALESCE(http_status, 0), first_seen_at, last_seen_at,
+			COALESCE(file_size, 0), COALESCE(local_hash, '')
+		FROM local_issues
+		WHERE sync_status NOT IN (?, 'resolved')
+			AND next_retry_at IS NOT NULL
+			AND next_retry_at <= ?`,
+		statusPermanentlyFailed, nowNano)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing local issues for retry: %w", err)
+	}
+	defer rows.Close()
+
+	var result []LocalIssueRow
+
+	for rows.Next() {
+		var r LocalIssueRow
+		if scanErr := rows.Scan(
+			&r.Path, &r.IssueType, &r.SyncStatus, &r.FailureCount,
+			&r.NextRetryAt, &r.LastError, &r.HTTPStatus,
+			&r.FirstSeenAt, &r.LastSeenAt, &r.FileSize, &r.LocalHash,
+		); scanErr != nil {
+			return nil, fmt.Errorf("sync: scanning local issue retry row: %w", scanErr)
+		}
+
+		result = append(result, r)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sync: iterating local issues for retry: %w", err)
+	}
+
+	return result, nil
+}
+
+// EarliestLocalIssueRetryAt returns the minimum future next_retry_at across
+// transient local_issues rows. Returns zero time if none exist.
+func (m *SyncStore) EarliestLocalIssueRetryAt(ctx context.Context, now time.Time) (time.Time, error) {
+	nowNano := now.UnixNano()
+
+	var minNano *int64
+	err := m.db.QueryRowContext(ctx,
+		`SELECT MIN(next_retry_at) FROM local_issues
+		WHERE sync_status NOT IN (?, 'resolved')
+			AND next_retry_at IS NOT NULL
+			AND next_retry_at > ?`,
+		statusPermanentlyFailed, nowNano,
+	).Scan(&minNano)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("sync: querying earliest local issue retry: %w", err)
+	}
+
+	if minNano == nil {
+		return time.Time{}, nil
+	}
+
+	return time.Unix(0, *minNano), nil
 }

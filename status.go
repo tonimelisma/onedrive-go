@@ -80,14 +80,14 @@ type syncStateInfo struct {
 
 // statusSummary aggregates health info across all drives.
 type statusSummary struct {
-	TotalDrives      int `json:"total_drives"`
-	Ready            int `json:"ready"`
-	Paused           int `json:"paused"`
-	NeedsSetup       int `json:"needs_setup"`
-	NoToken          int `json:"no_token"`
-	TotalConflicts   int `json:"total_conflicts"`
-	TotalPendingSync int `json:"total_pending_sync"`
-	TotalUploadIss   int `json:"total_upload_issues"`
+	TotalDrives       int `json:"total_drives"`
+	Ready             int `json:"ready"`
+	Paused            int `json:"paused"`
+	NeedsSetup        int `json:"needs_setup"`
+	NoToken           int `json:"no_token"`
+	TotalConflicts    int `json:"total_conflicts"`
+	TotalPendingSync  int `json:"total_pending_sync"`
+	TotalUploadIssues int `json:"total_upload_issues"`
 }
 
 // statusOutput wraps the full status response for JSON output.
@@ -447,7 +447,7 @@ func computeSummary(accounts []statusAccount) statusSummary {
 			if d.SyncState != nil {
 				s.TotalConflicts += d.SyncState.Conflicts
 				s.TotalPendingSync += d.SyncState.PendingSync
-				s.TotalUploadIss += d.SyncState.UploadIssues
+				s.TotalUploadIssues += d.SyncState.UploadIssues
 			}
 		}
 	}
@@ -559,14 +559,14 @@ func printSummaryText(w io.Writer, s statusSummary) {
 
 	stateStr := strings.Join(parts, ", ")
 
-	extra := fmt.Sprintf("%d conflicts", s.TotalConflicts)
+	extra := fmt.Sprintf("%d unresolved conflicts", s.TotalConflicts)
 
 	if s.TotalPendingSync > 0 {
 		extra += fmt.Sprintf(", %d pending", s.TotalPendingSync)
 	}
 
-	if s.TotalUploadIss > 0 {
-		extra += fmt.Sprintf(", %d upload issues", s.TotalUploadIss)
+	if s.TotalUploadIssues > 0 {
+		extra += fmt.Sprintf(", %d upload issues", s.TotalUploadIssues)
 	}
 
 	fmt.Fprintf(w, "Summary: %d drives (%s), %s\n",
