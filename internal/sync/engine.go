@@ -35,6 +35,8 @@ type EngineConfig struct {
 	Downloads       driveops.Downloader // satisfied by *graph.Client
 	Uploads         driveops.Uploader   // satisfied by *graph.Client
 	DriveVerifier   DriveVerifier       // optional: verified at startup (B-074); nil skips check
+	FolderDelta     FolderDeltaFetcher  // optional: folder-scoped delta for shortcut observation (6.4b)
+	RecursiveLister RecursiveLister     // optional: recursive listing for shortcut observation (6.4b)
 	Logger          *slog.Logger
 	UseLocalTrash   bool // move deleted local files to OS trash instead of permanent delete
 	TransferWorkers int  // goroutine count for the worker pool (0 → minWorkers)
@@ -78,7 +80,9 @@ type Engine struct {
 	planner         *Planner
 	execCfg         *ExecutorConfig
 	fetcher         DeltaFetcher
-	driveVerifier   DriveVerifier // optional (B-074)
+	driveVerifier   DriveVerifier      // optional (B-074)
+	folderDelta     FolderDeltaFetcher // optional: for shortcut observation (6.4b)
+	recursiveLister RecursiveLister    // optional: for shortcut observation (6.4b)
 	syncRoot        string
 	driveID         driveid.ID
 	logger          *slog.Logger
@@ -132,6 +136,8 @@ func NewEngine(cfg *EngineConfig) (*Engine, error) {
 		execCfg:         execCfg,
 		fetcher:         cfg.Fetcher,
 		driveVerifier:   cfg.DriveVerifier,
+		folderDelta:     cfg.FolderDelta,
+		recursiveLister: cfg.RecursiveLister,
 		sessionStore:    sessionStore,
 		syncRoot:        cfg.SyncRoot,
 		driveID:         cfg.DriveID,
@@ -445,6 +451,18 @@ func (e *Engine) observeChanges(
 		}
 	}
 
+	// Process shortcuts: register new ones, remove deleted ones, observe content.
+	shortcutEvents, err := e.processShortcuts(ctx, remoteEvents, bl, dryRun)
+	if err != nil {
+		e.logger.Warn("shortcut processing failed, continuing without shortcut content",
+			slog.String("error", err.Error()),
+		)
+	}
+
+	// Filter out ChangeShortcut events from primary events — they were consumed
+	// by processShortcuts and should not enter the planner as regular events.
+	remoteEvents = filterOutShortcuts(remoteEvents)
+
 	var localEvents []ChangeEvent
 
 	if mode != SyncDownloadOnly {
@@ -456,6 +474,7 @@ func (e *Engine) observeChanges(
 
 	buf := NewBuffer(e.logger)
 	buf.AddAll(remoteEvents)
+	buf.AddAll(shortcutEvents)
 	buf.AddAll(localEvents)
 
 	return buf.FlushImmediate(), nil
@@ -1254,6 +1273,18 @@ func (e *Engine) runFullReconciliation(
 
 		return
 	}
+
+	// Filter out shortcut events and process shortcut scopes.
+	events = filterOutShortcuts(events)
+
+	shortcutEvents, scErr := e.reconcileShortcutScopes(ctx, bl)
+	if scErr != nil {
+		e.logger.Warn("shortcut reconciliation failed during full reconciliation",
+			slog.String("error", scErr.Error()),
+		)
+	}
+
+	events = append(events, shortcutEvents...)
 
 	// Buffer and flush through the normal pipeline.
 	buf := NewBuffer(e.logger)

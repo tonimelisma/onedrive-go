@@ -678,20 +678,28 @@ New files: `reconciler.go`, `reconciler_test.go`, `migrations/00002_add_sync_fai
 - Parallelized shared item identity enrichment via `errgroup` with `SetLimit(5)`.
 - Unit tests for `enrichSharedItem` (5 cases) and `searchSharedItemsWithFallback` (4 cases).
 
-#### 6.4a: Folder-scoped delta + remoteItem parsing — FUTURE
+#### 6.4a+b: Shared folder sync via shortcuts — DONE
 
-1. ~~`graph.Item` gains `RemoteDriveID`/`RemoteItemID` from `remoteItem` facet.~~ (Done in 6.3.)
-2. `graph.DeltaFolder()` for `/drives/{driveID}/items/{folderID}/delta`.
-3. RemoteObserver shortcut detection + sub-delta orchestration.
-4. Path mapping: shortcut position prefix + sub-delta item path.
-5. Scope token management via composite key schema (migration 00004).
+Graph API + shortcut detection + multi-scope observation + cross-drive execution.
 
-#### 6.4b: Shared folder sync (shortcuts + lifecycle) — FUTURE
+1. `graph.DeltaFolder()` + `DeltaFolderAll()` — folder-scoped delta for personal source drives. Refactored `delta.go` to deduplicate Delta/DeltaFolder via shared `fetchDeltaPage()`/`deltaAllPages()` helpers.
+2. `graph.ListChildrenRecursive()` — recursive children enumeration for business/SharePoint source drives (where folder-scoped delta is not supported). Depth guard at 100 levels.
+3. `shortcuts` table (migration 00003) — tracks shortcut item ID, source drive/item, local path, drive type, observation strategy (delta vs enumerate), read-only flag.
+4. Shortcut detection in `classifyItem()` — items with `RemoteDriveID != ""` AND `IsFolder` emit `ChangeShortcut` events. Deleted shortcuts emit `ChangeDelete` for normal planner handling.
+5. `FolderDeltaFetcher` and `RecursiveLister` interfaces — injected into engine for testability.
+6. `processShortcuts()` — after primary delta: registers new shortcuts, removes deleted ones, observes content on source drives. Dual observation: folder-scoped delta for personal, recursive listing for business/SharePoint.
+7. Path mapping — `buildShortcutRelPath()` walks parent chain within item batch; `mapShortcutPath()` prefixes with shortcut's local path.
+8. Cross-drive executor — already supported via `resolveDriveID(action)` pattern.
+9. Full reconciliation extended — `reconcileShortcutScopes()` runs fresh observations for all active shortcuts during periodic reconciliation.
+10. Drive type detection — uses existing `DriveVerifier.Drive()` to determine observation strategy.
+11. ci_issues.md §19 corrected — folder-scoped delta limitation is a documented API constraint (not a 2018 bug).
 
-1. Shortcut lifecycle: new → enumerate + local dir, removed → delete + clean tokens, moved → rename.
-2. Cross-drive executor operations (same OAuth token grants shared access).
-3. Read-only content: auto-detect via 403, mark shortcut read-only.
-4. Shared-with-me drives: full drive infrastructure for standalone shared folders.
+**Deferred to 6.4c (hardening)**:
+- B-286: E2E test fixtures for shared folder sync (requires live shared folder setup)
+- B-309: FC-12 non-empty directory delete (OS junk blocking shortcut folder removal)
+- Read-only auto-detection via HTTP 403
+- Shortcut-to-shortcut (nested shortcuts)
+- Multiple shortcuts to same source folder (observation dedup)
 
 ---
 
