@@ -1,20 +1,16 @@
 package config
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/oauth2"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
 // --- matchDrive ---
@@ -592,29 +588,30 @@ func TestCollectOtherSyncDirs_ComputesBaseForEmptySyncDir(t *testing.T) {
 	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{} // no sync_dir
 
 	dirs := CollectOtherSyncDirs(cfg, selfID, testLogger(t))
-	// Without token meta, business defaults to "~/OneDrive - Business" via BaseSyncDir.
+	// Without account profile, business defaults to "~/OneDrive - Business" via BaseSyncDir.
 	assert.Contains(t, dirs, "~/OneDrive - Business")
 }
 
-func TestCollectOtherSyncDirs_WithTokenMeta(t *testing.T) {
+func TestCollectOtherSyncDirs_WithAccountProfile(t *testing.T) {
 	dataDir := setTestDataDir(t)
 
-	// Create a token file with org_name metadata.
-	writeTokenFileWithMeta(t, dataDir, "token_business_alice@contoso.com.json", map[string]string{
-		"org_name":     "Contoso Ltd",
-		"drive_id":     "test-drive-id",
-		"user_id":      "test-user-id",
-		"display_name": "Alice",
-		"cached_at":    "2024-01-01T00:00:00Z",
-	})
+	// Create an account profile with org_name.
+	bizCID := driveid.MustCanonicalID("business:alice@contoso.com")
+	require.NoError(t, SaveAccountProfile(bizCID, &AccountProfile{
+		OrgName:     "Contoso Ltd",
+		DisplayName: "Alice",
+	}))
+
+	// Also create a token file so discovery sees the account.
+	writeTokenFile(t, dataDir, "token_business_alice@contoso.com.json")
 
 	cfg := DefaultConfig()
 	selfID := driveid.MustCanonicalID("personal:self@example.com")
 	cfg.Drives[selfID] = Drive{SyncDir: "~/OneDrive"}
-	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{} // no sync_dir
+	cfg.Drives[bizCID] = Drive{} // no sync_dir
 
 	dirs := CollectOtherSyncDirs(cfg, selfID, testLogger(t))
-	// With org_name from token meta, business resolves to "~/OneDrive - Contoso Ltd".
+	// With org_name from account profile, business resolves to "~/OneDrive - Contoso Ltd".
 	assert.Contains(t, dirs, "~/OneDrive - Contoso Ltd")
 }
 
@@ -629,50 +626,60 @@ func TestCollectOtherSyncDirs_SkipsEmptyBaseName(t *testing.T) {
 	assert.Empty(t, dirs)
 }
 
-// --- ReadTokenMeta ---
+// --- cleanup-correctness tests (no token metadata fallback) ---
 
-func TestReadTokenMeta_NoToken(t *testing.T) {
+func TestBuildResolvedDrive_DriveIDFromMetadataOnly(t *testing.T) {
+	dataDir := setTestDataDir(t)
+	cid := driveid.MustCanonicalID("personal:meta@example.com")
+
+	// Write drive metadata with a drive_id.
+	require.NoError(t, SaveDriveMetadata(cid, &DriveMetadata{DriveID: "abcdef0123456789"}))
+
+	// Also need a token file for discovery.
+	writeTokenFile(t, dataDir, "token_personal_meta@example.com.json")
+
+	cfg := DefaultConfig()
+	d := Drive{SyncDir: "~/sync"}
+	resolved := buildResolvedDrive(cfg, cid, &d, testLogger(t))
+
+	assert.Equal(t, "abcdef0123456789", resolved.DriveID.String())
+}
+
+func TestBuildResolvedDrive_NoDriveMetadata_DriveIDStaysZero(t *testing.T) {
 	setTestDataDir(t)
+	cid := driveid.MustCanonicalID("personal:nometa@example.com")
 
-	cid := driveid.MustCanonicalID("personal:nobody@example.com")
-	meta := ReadTokenMeta(cid, testLogger(t))
-	assert.Nil(t, meta)
+	cfg := DefaultConfig()
+	d := Drive{SyncDir: "~/sync"}
+	resolved := buildResolvedDrive(cfg, cid, &d, testLogger(t))
+
+	assert.True(t, resolved.DriveID.IsZero(), "DriveID should be zero when no metadata exists")
 }
 
-func TestReadTokenMeta_WithMeta(t *testing.T) {
+func TestResolveAccountNames_NoFallback(t *testing.T) {
+	setTestDataDir(t)
+	cid := driveid.MustCanonicalID("business:noprofile@example.com")
+
+	orgName, displayName := ResolveAccountNames(cid, testLogger(t))
+	assert.Empty(t, orgName, "org_name should be empty without account profile")
+	assert.Empty(t, displayName, "display_name should be empty without account profile")
+}
+
+func TestCollectOtherSyncDirs_NoFallback(t *testing.T) {
 	dataDir := setTestDataDir(t)
+	cid := driveid.MustCanonicalID("business:noprofile@example.com")
 
-	writeTokenFileWithMeta(t, dataDir, "token_personal_user@example.com.json", map[string]string{
-		"org_name":     "TestOrg",
-		"display_name": "Test User",
-		"drive_id":     "abc123",
-		"user_id":      "test-user-id",
-		"cached_at":    "2024-01-01T00:00:00Z",
-	})
+	// Create a token so the drive is discoverable.
+	writeTokenFile(t, dataDir, "token_business_noprofile@example.com.json")
 
-	cid := driveid.MustCanonicalID("personal:user@example.com")
-	meta := ReadTokenMeta(cid, testLogger(t))
-	assert.Equal(t, "TestOrg", meta["org_name"])
-	assert.Equal(t, "Test User", meta["display_name"])
-	assert.Equal(t, "abc123", meta["drive_id"])
-}
+	cfg := DefaultConfig()
+	selfID := driveid.MustCanonicalID("personal:self@example.com")
+	cfg.Drives[selfID] = Drive{SyncDir: "~/OneDrive"}
+	cfg.Drives[cid] = Drive{} // no sync_dir, no account profile
 
-func TestReadTokenMeta_IncompleteMeta(t *testing.T) {
-	dataDir := setTestDataDir(t)
-
-	// Write a token file with incomplete metadata directly (bypass Save validation).
-	incompleteMeta := map[string]string{"display_name": "Alice"}
-	writeRawTokenFile(t, dataDir, "token_personal_user@example.com.json", incompleteMeta)
-
-	cid := driveid.MustCanonicalID("personal:user@example.com")
-	meta := ReadTokenMeta(cid, testLogger(t))
-	// Should return nil because validation fails.
-	assert.Nil(t, meta)
-}
-
-func TestReadTokenMeta_ZeroID(t *testing.T) {
-	meta := ReadTokenMeta(driveid.CanonicalID{}, testLogger(t))
-	assert.Nil(t, meta)
+	dirs := CollectOtherSyncDirs(cfg, selfID, testLogger(t))
+	// Without account profile, business defaults to "~/OneDrive - Business" via BaseSyncDir.
+	assert.Contains(t, dirs, "~/OneDrive - Business")
 }
 
 // --- test helpers ---
@@ -683,40 +690,6 @@ func writeTokenFile(t *testing.T, dir, name string) {
 
 	err := os.WriteFile(filepath.Join(dir, name), []byte("{}"), 0o600)
 	require.NoError(t, err)
-}
-
-// writeTokenFileWithMeta creates a properly formatted token file using
-// tokenfile.Save, ensuring test files match the real on-disk format exactly.
-func writeTokenFileWithMeta(t *testing.T, dir, name string, meta map[string]string) {
-	t.Helper()
-
-	tok := &oauth2.Token{
-		AccessToken:  "test-access-token",
-		RefreshToken: "test-refresh-token",
-		TokenType:    "Bearer",
-		Expiry:       time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC),
-	}
-	require.NoError(t, tokenfile.Save(filepath.Join(dir, name), tok, meta))
-}
-
-// writeRawTokenFile writes a token file directly without Save validation,
-// allowing creation of intentionally incomplete files for testing.
-func writeRawTokenFile(t *testing.T, dir, name string, meta map[string]string) {
-	t.Helper()
-
-	tf := tokenfile.File{
-		Token: &oauth2.Token{
-			AccessToken:  "test-access-token",
-			RefreshToken: "test-refresh-token",
-			TokenType:    "Bearer",
-			Expiry:       time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC),
-		},
-		Meta: meta,
-	}
-
-	data, err := json.MarshalIndent(tf, "", "  ")
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, name), data, 0o600))
 }
 
 // setTestDataDir overrides HOME so DefaultDataDir() returns a temp directory,

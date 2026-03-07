@@ -3,8 +3,8 @@
 # Usage: ./scripts/bootstrap-test-credentials.sh
 #
 # Runs the interactive login flow with XDG overrides pointing to .testdata/.
-# The login command creates the token file (token + metadata) AND
-# updates config.toml (adds drive section with sync_dir).
+# The login command creates the token file (pure OAuth), account profile,
+# drive metadata, and updates config.toml (adds drive section with sync_dir).
 #
 # Run once per test account. Config accumulates drive sections across runs.
 # After bootstrapping all accounts, run scripts/migrate-test-data-to-ci.sh
@@ -27,21 +27,10 @@ if [ -f "$TESTDATA/config.toml" ]; then
     cp "$TESTDATA/config.toml" "$CONFIG_SUBDIR/config.toml"
 fi
 
-# Preserve existing token files so they survive the subdir cleanup.
-for f in "$TESTDATA"/token_*.json; do
+# Preserve existing token, account profile, and drive metadata files.
+for f in "$TESTDATA"/token_*.json "$TESTDATA"/account_*.json "$TESTDATA"/drive_*.json; do
     [ -f "$f" ] && cp "$f" "$DATA_SUBDIR/"
 done
-
-# Preserve existing account profiles and drive metadata (Architecture A).
-if [ -d "$TESTDATA/accounts" ]; then
-    mkdir -p "$DATA_SUBDIR/accounts"
-    cp "$TESTDATA"/accounts/*.json "$DATA_SUBDIR/accounts/" 2>/dev/null || true
-fi
-
-if [ -d "$TESTDATA/drives" ]; then
-    mkdir -p "$DATA_SUBDIR/drives"
-    cp "$TESTDATA"/drives/*.json "$DATA_SUBDIR/drives/" 2>/dev/null || true
-fi
 
 echo "=== Test Credential Bootstrap ==="
 echo "Login output will go to .testdata/ (not production)"
@@ -56,12 +45,9 @@ HOME="$TESTDATA/home" \
 # Flatten: move files from subdirs to .testdata/ root.
 # cp (not mv) so existing tokens from prior runs are preserved.
 cp "$DATA_SUBDIR"/token_*.json "$TESTDATA/" 2>/dev/null || true
+cp "$DATA_SUBDIR"/account_*.json "$TESTDATA/" 2>/dev/null || true
+cp "$DATA_SUBDIR"/drive_*.json "$TESTDATA/" 2>/dev/null || true
 cp "$CONFIG_SUBDIR/config.toml" "$TESTDATA/config.toml" 2>/dev/null || true
-
-# Flatten account profiles and drive metadata (Architecture A).
-mkdir -p "$TESTDATA/accounts" "$TESTDATA/drives"
-cp "$DATA_SUBDIR"/accounts/*.json "$TESTDATA/accounts/" 2>/dev/null || true
-cp "$DATA_SUBDIR"/drives/*.json "$TESTDATA/drives/" 2>/dev/null || true
 
 # Clean up subdirs. chmod first because go module cache is read-only.
 chmod -R u+w "$TESTDATA/home" 2>/dev/null || true

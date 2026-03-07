@@ -6,6 +6,7 @@ Historical backlog from Phases 1-4v1 archived in `docs/archive/backlog-v1.md`.
 
 | ID | Title | Priority | Package | Notes |
 |----|-------|----------|---------|-------|
+| ~~B-331~~ | ~~Architecture A cleanup — complete token metadata removal~~ | ~~P1~~ | ~~tokenfile, config, root~~ | **DONE** — Token files pure OAuth (strict JSON, no meta). Flat data dir layout (account_*, drive_* at root). All metadata fallbacks deleted. CI/scripts updated. |
 
 ## Ready (Up Next)
 

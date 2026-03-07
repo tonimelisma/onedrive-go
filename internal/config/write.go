@@ -97,7 +97,7 @@ func AppendDriveSection(path string, canonicalID driveid.CanonicalID, syncDir st
 
 // EnsureDriveInConfig is the single entry point for adding a drive to the config
 // file. It loads the config (or defaults if missing), checks whether the drive
-// already exists, computes the default sync_dir from token metadata, and writes
+// already exists, computes the default sync_dir from account profile data, and writes
 // the drive section. Returns the sync directory, whether a new section was added,
 // and any error. Used by both login and `drive add`.
 func EnsureDriveInConfig(path string, cid driveid.CanonicalID, logger *slog.Logger) (string, bool, error) {
@@ -110,33 +110,8 @@ func EnsureDriveInConfig(path string, cid driveid.CanonicalID, logger *slog.Logg
 		return d.SyncDir, false, nil
 	}
 
-	// Prefer account profile for org_name/display_name, fall back to token metadata.
-	var orgName, displayName string
-
-	acctCID := accountCIDForDrive(cid)
-	if !acctCID.IsZero() {
-		profile, profileErr := LoadAccountProfile(acctCID)
-		if profileErr != nil {
-			logger.Debug("could not load account profile for ensure drive",
-				"canonical_id", cid.String(), "error", profileErr)
-		}
-
-		if profile != nil {
-			orgName = profile.OrgName
-			displayName = profile.DisplayName
-		}
-	}
-
-	if orgName == "" || displayName == "" {
-		meta := ReadTokenMeta(cid, logger)
-		if orgName == "" {
-			orgName = meta["org_name"]
-		}
-
-		if displayName == "" {
-			displayName = meta["display_name"]
-		}
-	}
+	// Use account profile for org_name/display_name.
+	orgName, displayName := ResolveAccountNames(cid, logger)
 
 	existingDirs := CollectOtherSyncDirs(cfg, cid, logger)
 	syncDir := DefaultSyncDir(cid, orgName, displayName, existingDirs)

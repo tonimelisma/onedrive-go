@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Upload test data to Azure Key Vault for CI.
-# Uploads: cache files (token + metadata) + config.toml
+# Uploads: token files (pure OAuth), account profiles, drive metadata, config.toml
 #
 # Usage: ./scripts/migrate-test-data-to-ci.sh
 #
@@ -22,7 +22,7 @@ echo "=== Migrating test data to Key Vault ==="
 echo "Vault: $VAULT_NAME"
 echo ""
 
-# Upload each cache file as a separate secret.
+# Upload each token file as a separate secret.
 for token_file in "$TESTDATA"/token_*.json; do
     [ -f "$token_file" ] || continue
 
@@ -44,15 +44,15 @@ for token_file in "$TESTDATA"/token_*.json; do
         --output none
 done
 
-# Upload account profiles (Architecture A).
-for account_file in "$TESTDATA"/accounts/*.json; do
+# Upload account profiles (flat layout: account_*.json).
+for account_file in "$TESTDATA"/account_*.json; do
     [ -f "$account_file" ] || continue
 
     filename=$(basename "$account_file")
-    sanitized=$(echo "$filename" | sed 's/\.json$//; s/[:@._]/-/g')
+    sanitized=$(echo "$filename" | sed 's/^account_//; s/\.json$//; s/[:@._]/-/g')
     secret_name="onedrive-account-${sanitized}"
 
-    echo "Uploading: accounts/$filename → $secret_name"
+    echo "Uploading: $filename → $secret_name"
     az keyvault secret set \
         --vault-name "$VAULT_NAME" \
         --name "$secret_name" \
@@ -61,15 +61,15 @@ for account_file in "$TESTDATA"/accounts/*.json; do
         --output none
 done
 
-# Upload drive metadata (Architecture A).
-for drive_file in "$TESTDATA"/drives/*.json; do
+# Upload drive metadata (flat layout: drive_*.json).
+for drive_file in "$TESTDATA"/drive_*.json; do
     [ -f "$drive_file" ] || continue
 
     filename=$(basename "$drive_file")
-    sanitized=$(echo "$filename" | sed 's/\.json$//; s/[:@._]/-/g')
+    sanitized=$(echo "$filename" | sed 's/^drive_//; s/\.json$//; s/[:@._]/-/g')
     secret_name="onedrive-drivemeta-${sanitized}"
 
-    echo "Uploading: drives/$filename → $secret_name"
+    echo "Uploading: $filename → $secret_name"
     az keyvault secret set \
         --vault-name "$VAULT_NAME" \
         --name "$secret_name" \

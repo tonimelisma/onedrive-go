@@ -64,7 +64,7 @@
 **Packages:**
 - **`pkg/quickxorhash/`** — QuickXorHash algorithm (hash.Hash interface)
 - **`internal/driveid/`** — Type-safe drive identity: ID, CanonicalID, ItemKey. Four drive types (personal, business, sharepoint, shared). Pure identity — no business logic.
-- **`internal/tokenfile/`** — Token file format + I/O (leaf package: stdlib + oauth2 only)
+- **`internal/tokenfile/`** — Pure OAuth token file I/O (leaf package: stdlib + oauth2 only). Strict JSON — rejects unknown fields.
 - **`internal/config/`** — TOML config, drive sections, XDG paths, four-layer override chain, token resolution (`TokenCanonicalID()`)
 - **`internal/graph/`** — Graph API client: auth, retry, items CRUD, delta, transfers
 - **`internal/driveops/`** — Authenticated drive access: SessionProvider (token caching + flush), Session (Meta + Transfer clients + delegation methods), TransferManager (download/upload with resume), SessionStore (upload session persistence + versioning), transfer interfaces, hash utilities, transfer artifact cleanup
