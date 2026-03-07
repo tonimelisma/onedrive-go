@@ -7,3 +7,5 @@ Toni's cleanup list - to be ignored by AI agents
 - Defensive validation
 - Belt and suspenders
 - Resource cleanup
+- No migrations or backwards compatibility in first release
+- No visibility of architectural evolution
