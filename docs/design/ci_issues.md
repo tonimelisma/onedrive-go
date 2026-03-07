@@ -442,6 +442,11 @@ require.Eventually(t, func() bool {
 
 **Remaining exposure**: Bidirectional syncs (`sync --force` without `--upload-only` or `--download-only`) that run in parallel remain vulnerable. The download phase pulls delta events from the entire drive, which may include other tests' folders. Sequential execution for deletion-dependent tests narrows this but does not eliminate it for all bidirectional tests.
 
+**Mitigation status (as of Phase 6.4c)**:
+- Sequential deletion tests + unique folder names + 120s retry → **effective** for deletion-dependent tests (no CI failures since Phase 5.7.4)
+- Bidirectional parallel tests → **still exposed** but failures are rare in practice (unique folder names reduce collisions)
+- No code changes planned until Phase 10 `remote_path` filtering
+
 **Long-term fix options**:
 1. **`remote_path` filtering** (roadmap Phase 10): Configure each sync test to only sync a specific remote subfolder. Delta events outside the configured path are ignored. This doesn't change delta's root-only behavior — it filters events client-side after receiving them. This is the definitive fix.
 2. **Separate test accounts per test**: Expensive (token management, Azure AD app registrations) but eliminates the problem entirely.

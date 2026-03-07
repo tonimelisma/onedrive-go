@@ -694,12 +694,20 @@ Graph API + shortcut detection + multi-scope observation + cross-drive execution
 10. Drive type detection — uses existing `DriveVerifier.Drive()` to determine observation strategy.
 11. ci_issues.md §19 corrected — folder-scoped delta limitation is a documented API constraint (not a 2018 bug).
 
-**Deferred to 6.4c (hardening)**:
-- B-286: E2E test fixtures for shared folder sync (requires live shared folder setup)
-- B-309: FC-12 non-empty directory delete (OS junk blocking shortcut folder removal)
-- Read-only auto-detection via HTTP 403
-- Shortcut-to-shortcut (nested shortcuts)
-- Multiple shortcuts to same source folder (observation dedup)
+**Phase 6.4c (hardening) — DONE**:
+- Read-only auto-detection: reactive 403 handling via `ListItemPermissions` API, permission boundary walk, local_issues persistence, per-cycle recheck, planner-level write suppression
+- B-309: FC-12 `isDisposable()` + `deleteLocalFolder` modification — OS junk (`.DS_Store`, `Thumbs.db`, `._*`) no longer blocks folder removal
+- B-332: `reconcileShortcutScopes` test coverage (delta reconciliation, enumerate, collision skip, per-scope error isolation)
+- B-333: Thread shortcut list through `processShortcuts` (4 DB queries → 1)
+- B-334: Pre-filter delete IDs to known shortcuts
+- B-335: Collapse duplicate `ObservationEnumerate` case in `observeSingleShortcut`
+- Nested shortcut detection — items with `RemoteItemID` skipped with warning during observation
+- Source folder dedup — duplicate `(remote_drive, remote_item)` shortcuts flagged as collisions
+- B-317: API response fuzz tests (`FuzzDriveItemUnmarshal`, `FuzzDeltaResponseUnmarshal`, `FuzzPermissionUnmarshal`)
+- B-318: Fault injection tests (context cancel during worker pool, DB close during commit, partial file cleanup)
+- B-319: Clock skew resilience audit (`docs/design/clock-skew-audit.md`) + targeted tests
+- Dead code removal: `filterReadOnlyShortcutEvents`, `SetShortcutReadOnly`, `Shortcut.ReadOnly`
+- B-286: Shared folder E2E tests deferred — requires live shared folder setup between test accounts
 
 ---
 
