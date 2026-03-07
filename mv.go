@@ -37,48 +37,53 @@ type mvJSONOutput struct {
 	ID          string `json:"id"`
 }
 
-// resolveDest resolves a destination path to (parentID, newName).
+// resolveDest resolves a destination path to (parentID, newName, existingID).
 // If dest exists and is a folder, the item moves into it keeping sourceName.
 // If dest doesn't exist, the parent must exist — the item moves there with the new name.
 // If dest exists and is a file, returns an error unless force is true.
+// When force is true and dest is an existing file, existingID is set to the
+// file's ID so the caller can delete it before the operation.
 func resolveDest(
 	ctx context.Context,
 	session *driveops.Session,
 	destPath, sourceName string,
 	force bool,
-) (parentID, newName string, err error) {
+) (parentID, newName, existingID string, err error) {
 	// Attempt 1: does the dest path already exist?
 	item, resolveErr := session.ResolveItem(ctx, destPath)
 	if resolveErr == nil {
 		if item.IsFolder {
-			// Move into the folder, keep the source name.
-			return item.ID, sourceName, nil
+			return item.ID, sourceName, "", nil
 		}
 
 		if force {
-			return item.ParentID, item.Name, nil
+			if item.ParentID == "" {
+				return "", "", "", fmt.Errorf("destination %q has no parent reference; cannot overwrite", destPath)
+			}
+
+			return item.ParentID, item.Name, item.ID, nil
 		}
 
-		return "", "", fmt.Errorf("destination %q already exists (file); use --force to overwrite", destPath)
+		return "", "", "", fmt.Errorf("destination %q already exists (file); use --force to overwrite", destPath)
 	}
 
 	// Attempt 2: if not found, split into parent + name and resolve parent.
 	if !errors.Is(resolveErr, graph.ErrNotFound) {
-		return "", "", fmt.Errorf("resolving destination %q: %w", destPath, resolveErr)
+		return "", "", "", fmt.Errorf("resolving destination %q: %w", destPath, resolveErr)
 	}
 
 	parentPath, destName := driveops.SplitParentAndName(destPath)
 
 	parentItem, parentErr := session.ResolveItem(ctx, parentPath)
 	if parentErr != nil {
-		return "", "", fmt.Errorf("resolving destination parent %q: %w", parentPath, parentErr)
+		return "", "", "", fmt.Errorf("resolving destination parent %q: %w", parentPath, parentErr)
 	}
 
 	if !parentItem.IsFolder {
-		return "", "", fmt.Errorf("destination parent %q is not a folder", parentPath)
+		return "", "", "", fmt.Errorf("destination parent %q is not a folder", parentPath)
 	}
 
-	return parentItem.ID, destName, nil
+	return parentItem.ID, destName, "", nil
 }
 
 func runMv(cmd *cobra.Command, args []string, force bool) error {
@@ -100,9 +105,16 @@ func runMv(cmd *cobra.Command, args []string, force bool) error {
 		return fmt.Errorf("resolving source %q: %w", sourcePath, err)
 	}
 
-	parentID, newName, err := resolveDest(ctx, session, destPath, sourceItem.Name, force)
+	parentID, newName, existingID, err := resolveDest(ctx, session, destPath, sourceItem.Name, force)
 	if err != nil {
 		return err
+	}
+
+	// If --force resolved to an existing file, delete it before moving.
+	if existingID != "" {
+		if delErr := session.DeleteItem(ctx, existingID); delErr != nil {
+			return fmt.Errorf("deleting existing %q: %w", destPath, delErr)
+		}
 	}
 
 	// Determine what changed — MoveItem requires at least one of parentID or newName.
