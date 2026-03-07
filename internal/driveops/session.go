@@ -183,3 +183,41 @@ func (s *Session) CopyItem(ctx context.Context, itemID, destParentID, newName st
 func CleanRemotePath(path string) string {
 	return strings.Trim(path, "/")
 }
+
+// SplitParentAndName splits a remote path into parent path and leaf name.
+// "foo/bar/baz" → ("foo/bar", "baz"); "baz" → ("", "baz").
+func SplitParentAndName(path string) (string, string) {
+	clean := CleanRemotePath(path)
+	idx := strings.LastIndex(clean, "/")
+
+	if idx < 0 {
+		return "", clean
+	}
+
+	return clean[:idx], clean[idx+1:]
+}
+
+// EnsureFolder creates a folder, returning the existing folder on 409 conflict.
+func (s *Session) EnsureFolder(ctx context.Context, parentID, name string) (*graph.Item, error) {
+	item, err := s.CreateFolder(ctx, parentID, name)
+	if err != nil {
+		if errors.Is(err, graph.ErrConflict) {
+			children, listErr := s.Meta.ListChildren(ctx, s.DriveID, parentID)
+			if listErr != nil {
+				return nil, fmt.Errorf("resolving existing folder %q: %w", name, listErr)
+			}
+
+			for i := range children {
+				if children[i].IsFolder && children[i].Name == name {
+					return &children[i], nil
+				}
+			}
+
+			return nil, fmt.Errorf("folder %q reported as existing but not found in parent", name)
+		}
+
+		return nil, err
+	}
+
+	return item, nil
+}

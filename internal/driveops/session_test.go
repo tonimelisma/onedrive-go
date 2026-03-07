@@ -414,3 +414,86 @@ func TestSession_CreateFolder(t *testing.T) {
 	assert.Equal(t, "new-folder-id", item.ID)
 	assert.Equal(t, "NewFolder", item.Name)
 }
+
+// --- SplitParentAndName ---
+
+func TestSplitParentAndName(t *testing.T) {
+	tests := []struct {
+		name       string
+		path       string
+		wantParent string
+		wantName   string
+	}{
+		{"nested path", "foo/bar/baz", "foo/bar", "baz"},
+		{"single segment", "baz", "", "baz"},
+		{"empty string", "", "", ""},
+		{"trailing slash top-level", "/top/", "", "top"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parent, name := SplitParentAndName(tt.path)
+			assert.Equal(t, tt.wantParent, parent)
+			assert.Equal(t, tt.wantName, name)
+		})
+	}
+}
+
+// --- EnsureFolder ---
+
+func TestEnsureFolder_Created(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprintf(w, `{"id":"new-id","name":"docs","folder":{}}`)
+	}))
+
+	item, err := s.EnsureFolder(t.Context(), "parent-id", "docs")
+	require.NoError(t, err)
+	assert.Equal(t, "new-id", item.ID)
+	assert.Equal(t, "docs", item.Name)
+}
+
+func TestEnsureFolder_Conflict(t *testing.T) {
+	t.Parallel()
+
+	callCount := 0
+	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		if callCount == 1 {
+			// CreateFolder → 409 Conflict
+			w.WriteHeader(http.StatusConflict)
+			fmt.Fprintf(w, `{"error":{"code":"nameAlreadyExists"}}`)
+
+			return
+		}
+		// ListChildren → returns matching folder
+		fmt.Fprintf(w, `{"value":[{"id":"existing-id","name":"docs","folder":{}}]}`)
+	}))
+
+	item, err := s.EnsureFolder(t.Context(), "parent-id", "docs")
+	require.NoError(t, err)
+	assert.Equal(t, "existing-id", item.ID)
+}
+
+func TestEnsureFolder_ConflictNotFound(t *testing.T) {
+	t.Parallel()
+
+	callCount := 0
+	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		if callCount == 1 {
+			w.WriteHeader(http.StatusConflict)
+			fmt.Fprintf(w, `{"error":{"code":"nameAlreadyExists"}}`)
+
+			return
+		}
+		// ListChildren returns no matching folder
+		fmt.Fprintf(w, `{"value":[{"id":"other-id","name":"other","folder":{}}]}`)
+	}))
+
+	_, err := s.EnsureFolder(t.Context(), "parent-id", "docs")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found in parent")
+}
