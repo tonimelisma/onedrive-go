@@ -123,3 +123,21 @@ func TestDefaultCacheDir_XDGFallback(t *testing.T) {
 	assert.NotEmpty(t, result)
 	assert.Contains(t, result, appName)
 }
+
+func TestAssertDevSafe_PanicsWithoutXDG(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("XDG_CACHE_HOME", "")
+
+	assert.Panics(t, func() {
+		AssertDevSafe()
+	})
+}
+
+func TestAssertDevSafe_PassesWithXDG(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", "/tmp/test-data")
+
+	assert.NotPanics(t, func() {
+		AssertDevSafe()
+	})
+}

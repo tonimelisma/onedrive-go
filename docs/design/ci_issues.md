@@ -504,6 +504,29 @@ This does **not** fully close the window — events can also be excluded from no
 - §21 full reconciliation: Second line — detects and corrects any orphans that slipped through
 - §19 serial test execution: Test-side mitigation — reduces cross-test contamination that amplifies the delta miss window
 
+## 22. SharedWithMe API Deprecation and Identity Parsing
+
+**Created**: 2026-03-06
+
+### Root cause: empty display names on personal accounts
+
+SharedWithMe returns identity data under `remoteItem.shared` and `remoteItem.createdBy`, NOT top-level `shared`. The original implementation read `shared.owner` at the top level, which is empty on personal accounts. Live API testing confirmed all identity fields ARE populated — we were reading the wrong JSON path.
+
+### Four-level identity fallback chain
+
+1. `remoteItem.shared.sharedBy` (correct semantics: who shared it)
+2. `remoteItem.shared.owner`
+3. `remoteItem.createdBy`
+4. Top-level `shared.owner` (for non-SharedWithMe items)
+
+### API deprecation
+
+SharedWithMe and `/me/drive/recent` deprecated November 2026. Non-deprecated alternative: `GET /me/drive/search(q='*')` returns shared items with `remoteItem` facet but less identity data (no email). Enrich via `GET /drives/{driveId}/items/{itemId}`. `/me/drives` is NOT deprecated.
+
+### Shared folders in test accounts
+
+Shared folders created for Phase 6.3 testing (2026-03-06). testitesti18 owns; kikkelimies123 is recipient. Shortcuts appear in delta (but non-shortcut SharedWithMe items do not). Tests should not assert exact item counts on root — use test-specific subfolders.
+
 ---
 
 ## Summary: The Normalization Pipeline

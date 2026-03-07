@@ -52,8 +52,11 @@ When using `replace` with a commit hash, the pseudo-version timestamp must match
 - **Delta token is always a full URL.** Use `stripBaseURL()` to convert to a relative path for `Do()`.
 - **`permanentDelete` uses POST, not DELETE.** The Graph API action endpoint `items/{id}/permanentDelete` is a POST action, not a DELETE. Tests must assert `http.MethodPost`.
 
-### SharedWithMe API response shape
-`/me/drive/sharedWithMe` returns items with `remoteItem` and `shared` facets. Key fields: `shared.owner.user.email` (owner), `remoteItem.id` (source item), `remoteItem.parentReference.driveId` (source drive). These construct the canonical ID `shared:email:driveID:itemID`. Only shared **folders** (items with `folder != nil`) are valid sync targets. Supports `@odata.nextLink` pagination (same pattern as delta). Owner email may be empty on some accounts — use display name as fallback.
+### SharedWithMe API response shape (CORRECTED)
+`/me/drive/sharedWithMe` returns identity under `remoteItem.shared` and `remoteItem.createdBy`, NOT top-level `shared`. Four-level fallback chain: `remoteItem.shared.sharedBy` → `.owner` → `remoteItem.createdBy` → top-level `shared.owner`. Key fields: `remoteItem.id` (source item), `remoteItem.parentReference.driveId` (source drive). The `email` field in identity responses is undocumented but works on both personal and business accounts. Supports `@odata.nextLink` pagination.
+
+### SharedWithMe API deprecated Nov 2026
+`/me/drive/sharedWithMe` and `/me/drive/recent` are deprecated (November 2026 EOL). Non-deprecated alternative for shared item discovery: `GET /me/drive/search(q='*')` returns shared items with `remoteItem` facet but less identity data (no email). Enrich via `GET /drives/{driveId}/items/{itemId}` to get full owner identity. `/me/drives` is NOT deprecated.
 
 ### EnsureDriveInConfig is broken for shared drives
 `EnsureDriveInConfig` passes `nil` for the config parameter through `ReadTokenMeta` → `DriveTokenPath` → `TokenCanonicalID` → `resolveSharedToken`, which requires non-nil config. Workaround: `addSharedDrive` bypasses `EnsureDriveInConfig` and writes config directly via `AppendDriveSection` + `SetDriveKey`. See B-327.

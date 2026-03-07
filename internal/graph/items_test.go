@@ -1013,48 +1013,139 @@ func TestListChildrenByPath_LeadingSlash(t *testing.T) {
 
 // --- remoteItem + shared facet tests ---
 
-func TestToItem_SharedWithMe_AllFields(t *testing.T) {
-	// SharedWithMe items include remoteItem and shared facets.
-	raw := `{
-		"id": "local-shortcut-id",
-		"name": "Shared Folder",
-		"size": 0,
-		"createdDateTime": "2024-03-01T10:00:00Z",
-		"lastModifiedDateTime": "2024-06-15T14:30:00Z",
-		"parentReference": {"id": "root", "driveId": "my-drive-id"},
-		"folder": {"childCount": 5},
-		"remoteItem": {
-			"id": "source-item-id",
-			"parentReference": {"driveId": "source-drive-id"}
+func TestToItem_SharedOwner_FallbackChain(t *testing.T) {
+	// Fallback chain: remoteItem.shared.sharedBy > remoteItem.shared.owner >
+	// remoteItem.createdBy > top-level shared.owner
+	tests := []struct {
+		name         string
+		json         string
+		wantName     string
+		wantEmail    string
+		wantRemoteID string
+		wantDriveID  string
+		wantIsFolder bool
+		wantChildCnt int
+	}{
+		{
+			name: "level 1: remoteItem.shared.sharedBy wins",
+			json: `{
+				"id": "item-1", "name": "Shared Folder",
+				"createdDateTime": "2024-01-01T00:00:00Z",
+				"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+				"folder": {"childCount": 5},
+				"remoteItem": {
+					"id": "source-item-id",
+					"parentReference": {"driveId": "source-drive-id"},
+					"shared": {
+						"sharedBy": {"user": {"displayName": "Sharer", "email": "sharer@example.com"}},
+						"owner": {"user": {"displayName": "Owner", "email": "owner@example.com"}}
+					},
+					"createdBy": {"user": {"displayName": "Creator", "email": "creator@example.com"}}
+				},
+				"shared": {"owner": {"user": {"displayName": "TopLevel", "email": "toplevel@example.com"}}}
+			}`,
+			wantName: "Sharer", wantEmail: "sharer@example.com",
+			wantRemoteID: "source-item-id", wantDriveID: "source-drive-id",
+			wantIsFolder: true, wantChildCnt: 5,
 		},
-		"shared": {
-			"owner": {
-				"user": {
-					"displayName": "John Doe",
-					"email": "john@example.com"
+		{
+			name: "level 2: remoteItem.shared.owner when no sharedBy",
+			json: `{
+				"id": "item-2", "name": "Shared Folder",
+				"createdDateTime": "2024-01-01T00:00:00Z",
+				"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+				"folder": {"childCount": 3},
+				"remoteItem": {
+					"id": "src-id",
+					"parentReference": {"driveId": "src-drive"},
+					"shared": {
+						"owner": {"user": {"displayName": "Owner", "email": "owner@example.com"}}
+					},
+					"createdBy": {"user": {"displayName": "Creator", "email": "creator@example.com"}}
+				},
+				"shared": {"owner": {"user": {"displayName": "TopLevel", "email": "toplevel@example.com"}}}
+			}`,
+			wantName: "Owner", wantEmail: "owner@example.com",
+			wantRemoteID: "src-id", wantDriveID: "src-drive",
+			wantIsFolder: true, wantChildCnt: 3,
+		},
+		{
+			name: "level 3: remoteItem.createdBy when no shared facet",
+			json: `{
+				"id": "item-3", "name": "Shared Folder",
+				"createdDateTime": "2024-01-01T00:00:00Z",
+				"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+				"folder": {"childCount": 0},
+				"remoteItem": {
+					"id": "src-id",
+					"parentReference": {"driveId": "src-drive"},
+					"createdBy": {"user": {"displayName": "Creator", "email": "creator@example.com"}}
+				},
+				"shared": {"owner": {"user": {"displayName": "TopLevel", "email": "toplevel@example.com"}}}
+			}`,
+			wantName: "Creator", wantEmail: "creator@example.com",
+			wantRemoteID: "src-id", wantDriveID: "src-drive",
+			wantIsFolder: true, wantChildCnt: 0,
+		},
+		{
+			name: "level 4: top-level shared.owner (no remoteItem identity)",
+			json: `{
+				"id": "item-4", "name": "Shared Folder",
+				"createdDateTime": "2024-01-01T00:00:00Z",
+				"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+				"folder": {"childCount": 5},
+				"remoteItem": {
+					"id": "source-item-id",
+					"parentReference": {"driveId": "source-drive-id"}
+				},
+				"shared": {
+					"owner": {
+						"user": {
+							"displayName": "John Doe",
+							"email": "john@example.com"
+						}
+					}
 				}
-			}
-		}
-	}`
-
-	var dir driveItemResponse
-	require.NoError(t, json.Unmarshal([]byte(raw), &dir))
+			}`,
+			wantName: "John Doe", wantEmail: "john@example.com",
+			wantRemoteID: "source-item-id", wantDriveID: "source-drive-id",
+			wantIsFolder: true, wantChildCnt: 5,
+		},
+		{
+			name: "createdBy displayName only (no email — search endpoint pattern)",
+			json: `{
+				"id": "item-5", "name": "Shared Folder",
+				"createdDateTime": "2024-01-01T00:00:00Z",
+				"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+				"folder": {"childCount": 0},
+				"remoteItem": {
+					"id": "src-id",
+					"parentReference": {"driveId": "src-drive"},
+					"createdBy": {"user": {"displayName": "Creator Only"}}
+				}
+			}`,
+			wantName: "Creator Only", wantEmail: "",
+			wantRemoteID: "src-id", wantDriveID: "src-drive",
+			wantIsFolder: true, wantChildCnt: 0,
+		},
+	}
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	item := dir.toItem(logger)
 
-	assert.Equal(t, "local-shortcut-id", item.ID)
-	assert.Equal(t, "Shared Folder", item.Name)
-	assert.True(t, item.IsFolder)
-	assert.Equal(t, 5, item.ChildCount)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var dir driveItemResponse
+			require.NoError(t, json.Unmarshal([]byte(tt.json), &dir))
+			item := dir.toItem(logger)
 
-	// remoteItem fields
-	assert.Equal(t, "source-item-id", item.RemoteItemID)
-	assert.Equal(t, "source-drive-id", item.RemoteDriveID)
-
-	// shared owner fields
-	assert.Equal(t, "John Doe", item.SharedOwnerName)
-	assert.Equal(t, "john@example.com", item.SharedOwnerEmail)
+			assert.Equal(t, tt.wantName, item.SharedOwnerName)
+			assert.Equal(t, tt.wantEmail, item.SharedOwnerEmail)
+			assert.Equal(t, tt.wantRemoteID, item.RemoteItemID)
+			assert.Equal(t, tt.wantDriveID, item.RemoteDriveID)
+			assert.Equal(t, tt.wantIsFolder, item.IsFolder)
+			assert.Equal(t, tt.wantChildCnt, item.ChildCount)
+		})
+	}
 }
 
 func TestToItem_SharedWithMe_NilRemoteItem(t *testing.T) {

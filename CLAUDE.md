@@ -177,6 +177,8 @@ Work is done in increments. Follow this process from start to finish. Do not ask
 
 Pre-commit hook: `.githooks/pre-commit` runs `golangci-lint run` before every commit.
 
+`.worktreeinclude` lists files to copy into new worktrees. Entries prefixed with `@` are symlinked instead of copied (preserves changes like rotated tokens back to the main worktree).
+
 ### Step 4: Develop with TDD
 
 All development follows strict red/green/refactor TDD. For every behavior change — new feature, bug fix, refactoring, edge case:

@@ -58,8 +58,8 @@ type Item struct {
 	SpecialFolderName string      // "vault", "documents", etc.; empty if not a special folder (B-271)
 	RemoteDriveID     string      // from remoteItem.parentReference.driveId (shared/shortcut items)
 	RemoteItemID      string      // from remoteItem.id (shared/shortcut items)
-	SharedOwnerName   string      // from shared.owner.user.displayName
-	SharedOwnerEmail  string      // from shared.owner.user.email
+	SharedOwnerName   string      // sharer identity: remoteItem.shared.sharedBy → .owner → .createdBy → shared.owner
+	SharedOwnerEmail  string      // sharer email via same fallback chain as SharedOwnerName
 }
 
 // DeltaPage holds one page of delta query results.
