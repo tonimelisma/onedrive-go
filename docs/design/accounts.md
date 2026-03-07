@@ -87,40 +87,35 @@ For shared drives, the canonical ID is opaque to humans — users interact via d
 
 ## 3. File Layout
 
-All data files in one flat directory. No nested folders. The `:` separator from canonical IDs is replaced with `_` in filenames.
+The data directory has three layers: token files (OAuth), account/drive metadata (cached API data), and state databases (sync state). The `:` separator from canonical IDs is replaced with `_` in filenames.
 
 ```
 ~/.local/share/onedrive-go/
-  config.toml
-  onedrive-go.log
-  token_personal_toni@outlook.com.json
+  token_personal_toni@outlook.com.json            # OAuth token + legacy metadata
   token_business_alice@contoso.com.json
+  accounts/
+    personal_toni@outlook.com.json                 # Account profile (user_id, org_name, etc.)
+    business_alice@contoso.com.json
+  drives/
+    personal_toni@outlook.com.json                 # Drive metadata (drive_id)
+    business_alice@contoso.com.json
+    sharepoint_alice@contoso.com_marketing_Docs.json  # Library-specific drive_id
+    shared_toni@outlook.com_b!abc123_01DEFGH.json     # account_canonical_id + owner info
   state_personal_toni@outlook.com.db
   state_business_alice@contoso.com.db
-  state_sharepoint_alice@contoso.com_marketing_Documents.db
-  state_sharepoint_alice@contoso.com_hr_Policies.db
+  state_sharepoint_alice@contoso.com_marketing_Docs.db
 ```
 
 ### Filename mapping
 
-| Canonical ID | Token file | State DB |
-|---|---|---|
-| `personal:<email>` | `token_personal_<email>.json` | `state_personal_<email>.db` |
-| `business:<email>` | `token_business_<email>.json` | `state_business_<email>.db` |
-| `sharepoint:<email>:<site>:<lib>` | (shares `token_business_<email>.json`) | `state_sharepoint_<email>_<site>_<lib>.db` |
-| `shared:<email>:<did>:<iid>` | (shares primary drive's token) | `state_shared_<email>_<did>_<iid>.db` |
+| Canonical ID | Token file | Account profile | Drive metadata | State DB |
+|---|---|---|---|---|
+| `personal:<email>` | `token_personal_<email>.json` | `accounts/personal_<email>.json` | `drives/personal_<email>.json` | `state_personal_<email>.db` |
+| `business:<email>` | `token_business_<email>.json` | `accounts/business_<email>.json` | `drives/business_<email>.json` | `state_business_<email>.db` |
+| `sharepoint:<email>:<s>:<l>` | (shares business token) | (shares business profile) | `drives/sharepoint_<email>_<s>_<l>.json` | `state_sharepoint_<email>_<s>_<l>.db` |
+| `shared:<email>:<d>:<i>` | (resolved via drive metadata) | (resolved via drive metadata) | `drives/shared_<email>_<d>_<i>.json` | `state_shared_<email>_<d>_<i>.db` |
 
 Filenames are always derived FROM the canonical ID in the config file. We never parse filenames to discover drives — config is the source of truth.
-
-Example layout with a shared drive:
-
-```
-~/.local/share/onedrive-go/
-  config.toml
-  token_personal_me@outlook.com.json
-  state_personal_me@outlook.com.db
-  state_shared_me@outlook.com_b!TG9yZW0_01ABCDEF.db
-```
 
 ### Token file format
 
@@ -138,24 +133,58 @@ Token files contain the OAuth token AND cached API metadata in a single JSON fil
     "user_id": "abc123-def456",
     "display_name": "Alice Smith",
     "org_name": "Contoso Ltd",
+    "drive_id": "abc123",
     "cached_at": "2026-02-27T10:00:00Z"
   }
 }
 ```
 
-Metadata fields:
-- `user_id` — Azure AD user GUID (stable identifier)
-- `display_name` — user's display name (for friendly status output and sync_dir naming)
-- `org_name` — organization name (for business sync_dir computation: `~/OneDrive - {org_name}`)
-- `cached_at` — timestamp of last metadata refresh
+### Account profile format (Architecture A)
 
-Every login (including re-login) refreshes both the token AND all cached metadata. Old bare `oauth2.Token` files (without the `token`/`meta` wrapper) are rejected — re-login is required.
+Account profiles cache user/org data separately from the token. Updated on every login.
 
-### SharePoint token sharing
+```json
+{
+  "profile": {
+    "user_id": "abc123-def456",
+    "display_name": "Alice Smith",
+    "org_name": "Contoso Ltd",
+    "primary_drive_id": "abc123"
+  }
+}
+```
 
-SharePoint drives share the OAuth token with the business account (same user, same session, same scopes). Only the state DB is per-drive. `token_business_alice@contoso.com.json` serves both her OneDrive for Business and all her SharePoint drives.
+### Drive metadata format (Architecture A)
 
-Shared drives share the OAuth token with their primary drive (personal or business). Token resolution is handled by `config.TokenCanonicalID()`, which finds the account type (personal or business) for the email and returns the corresponding token's canonical ID.
+Drive metadata stores per-drive identity data. Crucial for SharePoint (library-specific drive_id) and shared drives (parent account resolution).
+
+```json
+// Personal/Business:
+{ "drive_id": "abc123", "cached_at": "2026-02-27T..." }
+
+// SharePoint:
+{ "drive_id": "sp789", "site_id": "site123", "cached_at": "2026-02-27T..." }
+
+// Shared:
+{ "account_canonical_id": "personal:alice@outlook.com",
+  "owner_name": "Bob Jones", "owner_email": "bob@contoso.com",
+  "cached_at": "2026-02-27T..." }
+```
+
+Every login (including re-login) refreshes both the token AND all cached metadata (token, account profile, drive metadata).
+
+### Token resolution (Architecture A)
+
+Token resolution is pure file I/O — no config scanning. `DriveTokenPath(cid)`:
+
+| Drive type | Resolution |
+|---|---|
+| `personal:<email>` | Direct: `token_personal_<email>.json` |
+| `business:<email>` | Direct: `token_business_<email>.json` |
+| `sharepoint:<email>:*` | Same as business: `token_business_<email>.json` |
+| `shared:<email>:*` | Read `drives/shared_*.json` → `account_canonical_id` → resolve that CID's token |
+
+SharedPoint drives share the OAuth token with the business account (same user, same session, same scopes). Shared drives read their drive metadata file to find the parent account's canonical ID, then resolve that to a token path. No config dependency.
 
 ### Platform paths
 

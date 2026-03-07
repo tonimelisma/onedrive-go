@@ -298,7 +298,7 @@ func readAccountMeta(account string, driveIDs []driveid.CanonicalID, logger *slo
 		tokenID = findTokenFallback(account, logger)
 	}
 
-	tokenPath := config.DriveTokenPath(tokenID, nil)
+	tokenPath := config.DriveTokenPath(tokenID)
 	if tokenPath == "" {
 		return "", ""
 	}
@@ -322,7 +322,7 @@ func checkTokenState(ctx context.Context, account string, driveIDs []driveid.Can
 		tokenID = findTokenFallback(account, logger)
 	}
 
-	tokenPath := config.DriveTokenPath(tokenID, nil)
+	tokenPath := config.DriveTokenPath(tokenID)
 	if tokenPath == "" {
 		return tokenStateMissing
 	}

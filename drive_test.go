@@ -3,7 +3,10 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -800,7 +803,7 @@ func TestAddSharedDrive_NoToken(t *testing.T) {
 
 	err := addSharedDrive(t.Context(), cfgPath, cid, "", testDriveLogger(t))
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "cannot resolve token")
+	assert.Contains(t, err.Error(), "no token file")
 }
 
 // --- collectExistingDisplayNames ---
@@ -856,4 +859,259 @@ func writeTestTokenFile(t *testing.T, dir, name string, meta map[string]string) 
 		Expiry:       time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
 	require.NoError(t, tokenfile.Save(filepath.Join(dir, name), tok, meta))
+}
+
+// --- enrichSharedItem tests ---
+
+// staticTokenSource implements graph.TokenSource for testing.
+type staticTokenSource struct{}
+
+func (s staticTokenSource) Token() (string, error) { return "test-token", nil }
+
+func newTestGraphClient(t *testing.T, baseURL string) *graph.Client {
+	t.Helper()
+
+	return graph.NewClient(baseURL, http.DefaultClient, staticTokenSource{}, slog.Default(), "test")
+}
+
+func TestEnrichSharedItem_AlreadyHasEmail(t *testing.T) {
+	// No server needed — should return immediately without API call.
+	client := newTestGraphClient(t, "http://should-not-be-called")
+
+	item := &graph.Item{
+		Name:             "Shared Folder",
+		SharedOwnerEmail: "owner@example.com",
+		SharedOwnerName:  "Owner",
+		RemoteDriveID:    "b!abc123",
+		RemoteItemID:     "01DEFGH",
+	}
+
+	enrichSharedItem(t.Context(), client, item, slog.Default())
+
+	assert.Equal(t, "owner@example.com", item.SharedOwnerEmail)
+	assert.Equal(t, "Owner", item.SharedOwnerName)
+}
+
+func TestEnrichSharedItem_MissingEmail_GetItemSucceeds(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Contains(t, r.URL.Path, "/drives/")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"id": "01DEFGH",
+			"name": "Shared Folder",
+			"createdDateTime": "2024-01-15T10:00:00Z",
+			"lastModifiedDateTime": "2024-01-15T10:00:00Z",
+			"parentReference": {"driveId": "b!abc123"},
+			"folder": {},
+			"shared": {
+				"owner": {
+					"user": {
+						"displayName": "Bob Jones",
+						"email": "bob@contoso.com"
+					}
+				}
+			}
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestGraphClient(t, srv.URL)
+
+	item := &graph.Item{
+		Name:          "Shared Folder",
+		RemoteDriveID: "b!abc123",
+		RemoteItemID:  "01DEFGH",
+	}
+
+	enrichSharedItem(t.Context(), client, item, slog.Default())
+
+	assert.Equal(t, "Bob Jones", item.SharedOwnerName)
+	assert.Equal(t, "bob@contoso.com", item.SharedOwnerEmail)
+}
+
+func TestEnrichSharedItem_MissingEmail_GetItemFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"error":{"code":"itemNotFound","message":"not found"}}`)
+	}))
+	defer srv.Close()
+
+	client := newTestGraphClient(t, srv.URL)
+
+	item := &graph.Item{
+		Name:            "Shared Folder",
+		SharedOwnerName: "Partial",
+		RemoteDriveID:   "b!abc123",
+		RemoteItemID:    "01DEFGH",
+	}
+
+	enrichSharedItem(t.Context(), client, item, slog.Default())
+
+	// Original fields preserved on failure.
+	assert.Equal(t, "Partial", item.SharedOwnerName)
+	assert.Empty(t, item.SharedOwnerEmail)
+}
+
+func TestEnrichSharedItem_NoRemoteDriveID(t *testing.T) {
+	client := newTestGraphClient(t, "http://should-not-be-called")
+
+	item := &graph.Item{
+		Name:         "Shared Folder",
+		RemoteItemID: "01DEFGH",
+		// RemoteDriveID is empty — should not make API call
+	}
+
+	enrichSharedItem(t.Context(), client, item, slog.Default())
+
+	assert.Empty(t, item.SharedOwnerName)
+	assert.Empty(t, item.SharedOwnerEmail)
+}
+
+func TestEnrichSharedItem_GetItemReturnsNameOnly(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"id": "01DEFGH",
+			"name": "Shared Folder",
+			"createdDateTime": "2024-01-15T10:00:00Z",
+			"lastModifiedDateTime": "2024-01-15T10:00:00Z",
+			"parentReference": {"driveId": "b!abc123"},
+			"folder": {},
+			"shared": {
+				"owner": {
+					"user": {
+						"displayName": "Bob Jones"
+					}
+				}
+			}
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestGraphClient(t, srv.URL)
+
+	item := &graph.Item{
+		Name:          "Shared Folder",
+		RemoteDriveID: "b!abc123",
+		RemoteItemID:  "01DEFGH",
+	}
+
+	enrichSharedItem(t.Context(), client, item, slog.Default())
+
+	assert.Equal(t, "Bob Jones", item.SharedOwnerName)
+	assert.Empty(t, item.SharedOwnerEmail) // only name, no email
+}
+
+// --- searchSharedItemsWithFallback tests ---
+
+// sharedItemJSON returns a minimal JSON representation of a shared folder.
+func sharedItemJSON(name string) string {
+	return fmt.Sprintf(`{
+		"id": "item-%s",
+		"name": %q,
+		"createdDateTime": "2024-01-15T10:00:00Z",
+		"lastModifiedDateTime": "2024-01-15T10:00:00Z",
+		"parentReference": {"driveId": "b!abc123"},
+		"folder": {},
+		"remoteItem": {
+			"id": "remote-1",
+			"parentReference": {"driveId": "b!remote123"}
+		}
+	}`, name, name)
+}
+
+func TestSearchSharedItemsWithFallback_SearchSucceeds(t *testing.T) {
+	var sharedWithMeCalled bool
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if strings.Contains(r.URL.Path, "search") {
+			fmt.Fprintf(w, `{"value": [%s]}`, sharedItemJSON("SearchResult"))
+
+			return
+		}
+
+		if strings.Contains(r.URL.Path, "sharedWithMe") {
+			sharedWithMeCalled = true
+		}
+
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	client := newTestGraphClient(t, srv.URL)
+	items := searchSharedItemsWithFallback(t.Context(), client, "test@example.com", slog.Default())
+
+	require.Len(t, items, 1)
+	assert.Equal(t, "SearchResult", items[0].Name)
+	assert.False(t, sharedWithMeCalled, "SharedWithMe should not be called when search succeeds")
+}
+
+func TestSearchSharedItemsWithFallback_SearchFails_SharedWithMeSucceeds(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if strings.Contains(r.URL.Path, "search") {
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, `{"error":{"code":"generalException","message":"search failed"}}`)
+
+			return
+		}
+
+		if strings.Contains(r.URL.Path, "sharedWithMe") {
+			fmt.Fprintf(w, `{"value": [%s]}`, sharedItemJSON("FallbackResult"))
+
+			return
+		}
+
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := newTestGraphClient(t, srv.URL)
+	items := searchSharedItemsWithFallback(t.Context(), client, "test@example.com", slog.Default())
+
+	require.Len(t, items, 1)
+	assert.Equal(t, "FallbackResult", items[0].Name)
+}
+
+func TestSearchSharedItemsWithFallback_BothFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, `{"error":{"code":"generalException","message":"failed"}}`)
+	}))
+	defer srv.Close()
+
+	client := newTestGraphClient(t, srv.URL)
+	items := searchSharedItemsWithFallback(t.Context(), client, "test@example.com", slog.Default())
+
+	assert.Nil(t, items)
+}
+
+func TestSearchSharedItemsWithFallback_SearchReturnsEmpty(t *testing.T) {
+	var sharedWithMeCalled bool
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if strings.Contains(r.URL.Path, "search") {
+			fmt.Fprint(w, `{"value": []}`)
+
+			return
+		}
+
+		if strings.Contains(r.URL.Path, "sharedWithMe") {
+			sharedWithMeCalled = true
+		}
+
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	client := newTestGraphClient(t, srv.URL)
+	items := searchSharedItemsWithFallback(t.Context(), client, "test@example.com", slog.Default())
+
+	assert.Empty(t, items)
+	assert.False(t, sharedWithMeCalled, "empty is not an error — no fallback needed")
 }

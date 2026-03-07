@@ -13,6 +13,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
+// NOTE: DriveTokenPath is defined in token_resolution.go (not here).
+
 // Default remote path when none is specified.
 const defaultRemotePath = "/"
 
@@ -171,29 +173,47 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 		resolved.RemotePath = defaultRemotePath
 	}
 
-	// Read cached token metadata for sync_dir and drive_id resolution.
-	// Drive ID is NEVER stored in config — it comes exclusively from token
-	// file metadata, cached at login time.
-	meta := ReadTokenMeta(canonicalID, logger)
+	// Drive ID resolution: prefer drive metadata file (per-drive, accurate for
+	// SharePoint libraries and shared drives), fall back to token metadata
+	// (per-account, cached at login time).
+	driveMeta, driveMetaErr := LoadDriveMetadata(canonicalID)
+	if driveMetaErr != nil {
+		logger.Debug("could not load drive metadata", "canonical_id", canonicalID.String(), "error", driveMetaErr)
+	}
 
-	if meta["drive_id"] != "" {
-		resolved.DriveID = driveid.New(meta["drive_id"])
-		logger.Debug("resolved drive ID from token metadata",
+	if driveMeta != nil && driveMeta.DriveID != "" {
+		resolved.DriveID = driveid.New(driveMeta.DriveID)
+		logger.Debug("resolved drive ID from drive metadata",
 			"drive_id", resolved.DriveID.String(),
 			"canonical_id", canonicalID.String(),
 		)
+	} else if canonicalID.IsShared() {
+		// Shared drives embed the remote drive ID in the canonical ID.
+		resolved.DriveID = driveid.New(canonicalID.SourceDriveID())
+		logger.Debug("resolved drive ID from canonical ID",
+			"drive_id", resolved.DriveID.String(),
+			"canonical_id", canonicalID.String(),
+		)
+	} else {
+		meta := ReadTokenMeta(canonicalID, logger)
+		if meta["drive_id"] != "" {
+			resolved.DriveID = driveid.New(meta["drive_id"])
+			logger.Debug("resolved drive ID from token metadata",
+				"drive_id", resolved.DriveID.String(),
+				"canonical_id", canonicalID.String(),
+			)
+		}
 	}
 
 	// Compute runtime default sync_dir when the drive has none configured.
-	// Reads org_name from the token file metadata for accurate business
-	// drive naming (e.g., "~/OneDrive - Contoso" instead of "~/OneDrive - Business").
 	if resolved.SyncDir == "" {
+		orgName, displayName := resolveAccountNames(canonicalID, logger)
 		otherDirs := CollectOtherSyncDirs(cfg, canonicalID, logger)
-		resolved.SyncDir = expandTilde(DefaultSyncDir(canonicalID, meta["org_name"], meta["display_name"], otherDirs))
+		resolved.SyncDir = expandTilde(DefaultSyncDir(canonicalID, orgName, displayName, otherDirs))
 		logger.Debug("using default sync_dir",
 			"sync_dir", resolved.SyncDir,
 			"canonical_id", canonicalID.String(),
-			"org_name", meta["org_name"],
+			"org_name", orgName,
 		)
 	}
 
@@ -217,7 +237,7 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 // (missing required keys). Uses tokenfile.ReadMeta + ValidateMeta to ensure
 // integrity.
 func ReadTokenMeta(cid driveid.CanonicalID, logger *slog.Logger) map[string]string {
-	tokenPath := DriveTokenPath(cid, nil)
+	tokenPath := DriveTokenPath(cid)
 	if tokenPath == "" {
 		return nil
 	}
@@ -257,8 +277,28 @@ func CollectOtherSyncDirs(cfg *Config, excludeID driveid.CanonicalID, logger *sl
 		dir := cfg.Drives[id].SyncDir
 		if dir == "" {
 			// Compute base name for this drive (without collision cascade).
-			meta := ReadTokenMeta(id, logger)
-			dir = BaseSyncDir(id, meta["org_name"], cfg.Drives[id].DisplayName)
+			// Prefer account profile for org_name, fall back to token metadata.
+			var orgName string
+
+			acctCID := accountCIDForDrive(id)
+			if !acctCID.IsZero() {
+				profile, profileErr := LoadAccountProfile(acctCID)
+				if profileErr != nil {
+					logger.Debug("could not load account profile for sync dir",
+						"canonical_id", id.String(), "error", profileErr)
+				}
+
+				if profile != nil && profile.OrgName != "" {
+					orgName = profile.OrgName
+				}
+			}
+
+			if orgName == "" {
+				meta := ReadTokenMeta(id, logger)
+				orgName = meta["org_name"]
+			}
+
+			dir = BaseSyncDir(id, orgName, cfg.Drives[id].DisplayName)
 		}
 
 		if dir != "" {
@@ -267,6 +307,38 @@ func CollectOtherSyncDirs(cfg *Config, excludeID driveid.CanonicalID, logger *sl
 	}
 
 	return dirs
+}
+
+// resolveAccountNames returns org_name and display_name for a drive's parent
+// account. Prefers the account profile file, falls back to token metadata.
+func resolveAccountNames(cid driveid.CanonicalID, logger *slog.Logger) (orgName, displayName string) {
+	acctCID := accountCIDForDrive(cid)
+	if !acctCID.IsZero() {
+		profile, profileErr := LoadAccountProfile(acctCID)
+		if profileErr != nil {
+			logger.Debug("could not load account profile for names",
+				"canonical_id", cid.String(), "error", profileErr)
+		}
+
+		if profile != nil {
+			orgName = profile.OrgName
+			displayName = profile.DisplayName
+		}
+	}
+
+	// Fall back to token metadata when account profile is unavailable.
+	if orgName == "" || displayName == "" {
+		meta := ReadTokenMeta(cid, logger)
+		if orgName == "" {
+			orgName = meta["org_name"]
+		}
+
+		if displayName == "" {
+			displayName = meta["display_name"]
+		}
+	}
+
+	return orgName, displayName
 }
 
 // applyDriveOverrides selectively replaces global config values with per-drive
@@ -375,35 +447,6 @@ func discoverTokensIn(dir string, logger *slog.Logger) []driveid.CanonicalID {
 	logger.Debug("token discovery complete", "dir", dir, "count", len(ids))
 
 	return ids
-}
-
-// DriveTokenPath returns the token file path for a canonical drive ID.
-// SharePoint drives share the business account's token since they use the
-// same OAuth session. Shared drives piggyback on their primary account's
-// token (personal or business), resolved by scanning cfg.Drives.
-//
-// Examples:
-//
-//	"personal:toni@outlook.com"                    -> "{dataDir}/token_personal_toni@outlook.com.json"
-//	"sharepoint:alice@contoso.com:marketing:Docs"  -> "{dataDir}/token_business_alice@contoso.com.json"
-//	"shared:alice@outlook.com:drv123:item456"      -> "{dataDir}/token_personal_alice@outlook.com.json" (with config)
-//
-// The cfg parameter is only required for shared drives. Pass nil for
-// personal, business, and SharePoint drives.
-func DriveTokenPath(canonicalID driveid.CanonicalID, cfg *Config) string {
-	dataDir := DefaultDataDir()
-	if dataDir == "" || canonicalID.IsZero() {
-		return ""
-	}
-
-	tokenCID, err := TokenCanonicalID(canonicalID, cfg)
-	if err != nil {
-		return ""
-	}
-
-	sanitized := tokenCID.DriveType() + "_" + tokenCID.Email()
-
-	return filepath.Join(dataDir, "token_"+sanitized+".json")
 }
 
 // DriveStatePath returns the state DB path for a canonical drive ID.
