@@ -13,8 +13,8 @@
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                      cmd/onedrive-go/ (Cobra CLI)                   │
-│  ls, get, put, rm, mkdir, sync, pause, resume, status, conflicts,  │
-│  resolve, issues, login, logout, whoami, verify                    │
+│  ls, get, put, rm, mkdir, mv, cp, sync, pause, resume, status,     │
+│  conflicts, resolve, issues, login, logout, whoami, verify         │
 └──────────┬───────────────────────────────────────────────────────────┘
            │ file ops                              │ sync operations
            │                                       │
@@ -69,7 +69,7 @@
 - **`internal/graph/`** — Graph API client: auth, retry, items CRUD, delta, transfers
 - **`internal/driveops/`** — Authenticated drive access: SessionProvider (token caching + flush), Session (Meta + Transfer clients + delegation methods), TransferManager (download/upload with resume), SessionStore (upload session persistence + versioning), transfer interfaces, hash utilities, transfer artifact cleanup
 - **`internal/sync/`** — Event-driven sync: types, SyncStore (remote_state + baseline + local_issues), observers, buffer, planner, executor, tracker, workers, reconciler, orchestrator, engine, verify, upload_validation. Sub-interfaces: ObservationWriter, OutcomeWriter, FailureRecorder, ConflictEscalator, StateReader, StateAdmin, LocalIssueRecorder
-- **Root package** — Cobra CLI: login, logout, whoami, status, drive (list/add/remove/search), ls, get, put, rm, mkdir, stat, sync, pause, resume, conflicts, resolve, issues, verify
+- **Root package** — Cobra CLI: login, logout, whoami, status, drive (list/add/remove/search), ls, get, put, rm, mkdir, mv, cp, stat, sync, pause, resume, conflicts, resolve, issues, verify
 - **`e2e/`** — E2E test suite against live OneDrive
 - **`testutil/`** — Shared stdlib-only test helpers (used by both `e2e/` and `internal/graph/` integration tests; NOT under `internal/` so e2e can import it)
 

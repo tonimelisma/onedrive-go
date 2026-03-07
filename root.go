@@ -218,24 +218,13 @@ func newRootCmd() *cobra.Command {
 	cmd.MarkFlagsMutuallyExclusive("verbose", "debug", "quiet")
 
 	// Register subcommands.
-	cmd.AddCommand(newLoginCmd())
-	cmd.AddCommand(newLogoutCmd())
-	cmd.AddCommand(newWhoamiCmd())
-	cmd.AddCommand(newStatusCmd())
-	cmd.AddCommand(newDriveCmd())
-	cmd.AddCommand(newLsCmd())
-	cmd.AddCommand(newGetCmd())
-	cmd.AddCommand(newPutCmd())
-	cmd.AddCommand(newRmCmd())
-	cmd.AddCommand(newMkdirCmd())
-	cmd.AddCommand(newStatCmd())
-	cmd.AddCommand(newSyncCmd())
-	cmd.AddCommand(newPauseCmd())
-	cmd.AddCommand(newResumeCmd())
-	cmd.AddCommand(newConflictsCmd())
-	cmd.AddCommand(newIssuesCmd())
-	cmd.AddCommand(newVerifyCmd())
-	cmd.AddCommand(newResolveCmd())
+	cmd.AddCommand(
+		newLoginCmd(), newLogoutCmd(), newWhoamiCmd(), newStatusCmd(),
+		newDriveCmd(), newLsCmd(), newGetCmd(), newPutCmd(),
+		newRmCmd(), newMkdirCmd(), newStatCmd(), newSyncCmd(),
+		newPauseCmd(), newResumeCmd(), newConflictsCmd(), newIssuesCmd(),
+		newVerifyCmd(), newResolveCmd(), newMvCmd(), newCpCmd(),
+	)
 
 	return cmd
 }
