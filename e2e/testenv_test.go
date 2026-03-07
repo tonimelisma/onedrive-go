@@ -130,12 +130,7 @@ func setupIsolation() func() {
 	}
 
 	// Copy account profile and drive metadata files from .testdata/.
-	for _, prefix := range []string{"account_", "drive_"} {
-		matches, _ := filepath.Glob(filepath.Join(testCredentialDir, prefix+"*.json"))
-		for _, m := range matches {
-			testutil.CopyFile(m, filepath.Join(appDataDir, filepath.Base(m)), 0o600)
-		}
-	}
+	testutil.CopyMetadataFiles(testCredentialDir, appDataDir)
 
 	testDataDir = appDataDir
 

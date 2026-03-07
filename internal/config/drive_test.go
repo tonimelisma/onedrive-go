@@ -684,11 +684,11 @@ func TestCollectOtherSyncDirs_NoFallback(t *testing.T) {
 
 // --- test helpers ---
 
-// writeTokenFile creates an empty file with the given name in dir.
+// writeTokenFile creates a minimal valid token file with the given name in dir.
 func writeTokenFile(t *testing.T, dir, name string) {
 	t.Helper()
 
-	err := os.WriteFile(filepath.Join(dir, name), []byte("{}"), 0o600)
+	err := os.WriteFile(filepath.Join(dir, name), []byte(`{"token":{"access_token":"test","token_type":"Bearer"}}`), 0o600)
 	require.NoError(t, err)
 }
 

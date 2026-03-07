@@ -16,6 +16,9 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// ErrNotFound is returned by Load when the token file does not exist.
+var ErrNotFound = errors.New("token file not found")
+
 // FilePerms restricts token files to owner-only read/write.
 const FilePerms = 0o600
 
@@ -29,13 +32,13 @@ type File struct {
 }
 
 // Load reads a saved token file from disk. Returns the OAuth token.
-// Returns (nil, nil) if the file does not exist.
+// Returns ErrNotFound if the file does not exist.
 // Old bare oauth2.Token files (without the "token" wrapper) will fail with
 // "missing token field" — re-login is required.
 func Load(path string) (*oauth2.Token, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil //nolint:nilnil // sentinel for "not found"
+		return nil, ErrNotFound
 	}
 
 	if err != nil {

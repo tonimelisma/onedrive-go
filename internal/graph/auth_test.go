@@ -300,7 +300,7 @@ func TestSaveToken_CreatesDirectory(t *testing.T) {
 
 func TestLoadToken_NoFile(t *testing.T) {
 	tok, err := tokenfile.Load(filepath.Join(t.TempDir(), "nonexistent.json"))
-	assert.NoError(t, err)
+	assert.ErrorIs(t, err, tokenfile.ErrNotFound)
 	assert.Nil(t, tok)
 }
 

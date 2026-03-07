@@ -18,13 +18,13 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// mockMetaReader returns fixed display name and org name for testing.
-type mockMetaReader struct {
+// mockNameReader returns fixed display name and org name for testing.
+type mockNameReader struct {
 	displayName string
 	orgName     string
 }
 
-func (m *mockMetaReader) ReadMeta(_ string, _ []driveid.CanonicalID) (string, string) {
+func (m *mockNameReader) ReadAccountNames(_ string, _ []driveid.CanonicalID) (string, string) {
 	return m.displayName, m.orgName
 }
 
@@ -140,7 +140,7 @@ func TestBuildStatusAccountsWith_SingleAccount(t *testing.T) {
 	}
 
 	accounts := buildStatusAccountsWith(cfg,
-		&mockMetaReader{displayName: "Alice", orgName: ""},
+		&mockNameReader{displayName: "Alice", orgName: ""},
 		&mockTokenChecker{state: tokenStateValid},
 		&mockSyncStateQuerier{},
 	)
@@ -169,7 +169,7 @@ func TestBuildStatusAccountsWith_MultiAccountGrouping(t *testing.T) {
 	}
 
 	accounts := buildStatusAccountsWith(cfg,
-		&mockMetaReader{displayName: "", orgName: ""},
+		&mockNameReader{displayName: "", orgName: ""},
 		&mockTokenChecker{state: tokenStateValid},
 		&mockSyncStateQuerier{},
 	)
@@ -195,7 +195,7 @@ func TestBuildStatusAccountsWith_MissingToken(t *testing.T) {
 	}
 
 	accounts := buildStatusAccountsWith(cfg,
-		&mockMetaReader{},
+		&mockNameReader{},
 		&mockTokenChecker{state: tokenStateMissing},
 		&mockSyncStateQuerier{},
 	)
@@ -213,7 +213,7 @@ func TestBuildStatusAccountsWith_ExpiredToken(t *testing.T) {
 	}
 
 	accounts := buildStatusAccountsWith(cfg,
-		&mockMetaReader{},
+		&mockNameReader{},
 		&mockTokenChecker{state: tokenStateExpired},
 		&mockSyncStateQuerier{},
 	)
@@ -232,7 +232,7 @@ func TestBuildStatusAccountsWith_EmptySyncDir(t *testing.T) {
 	}
 
 	accounts := buildStatusAccountsWith(cfg,
-		&mockMetaReader{},
+		&mockNameReader{},
 		&mockTokenChecker{state: tokenStateValid},
 		&mockSyncStateQuerier{},
 	)
@@ -251,7 +251,7 @@ func TestBuildStatusAccountsWith_SharePointGrouping(t *testing.T) {
 	}
 
 	accounts := buildStatusAccountsWith(cfg,
-		&mockMetaReader{displayName: "Alice", orgName: "Contoso"},
+		&mockNameReader{displayName: "Alice", orgName: "Contoso"},
 		&mockTokenChecker{state: tokenStateValid},
 		&mockSyncStateQuerier{},
 	)
@@ -275,7 +275,7 @@ func TestBuildStatusAccountsWith_DisplayNameFromConfig(t *testing.T) {
 	}
 
 	accounts := buildStatusAccountsWith(cfg,
-		&mockMetaReader{},
+		&mockNameReader{},
 		&mockTokenChecker{state: tokenStateValid},
 		&mockSyncStateQuerier{},
 	)
@@ -296,7 +296,7 @@ func TestBuildStatusAccountsWith_PausedOverridesNoToken(t *testing.T) {
 	}
 
 	accounts := buildStatusAccountsWith(cfg,
-		&mockMetaReader{},
+		&mockNameReader{},
 		&mockTokenChecker{state: tokenStateMissing},
 		&mockSyncStateQuerier{},
 	)
@@ -311,7 +311,7 @@ func TestBuildStatusAccountsWith_EmptyConfig(t *testing.T) {
 	}
 
 	accounts := buildStatusAccountsWith(cfg,
-		&mockMetaReader{},
+		&mockNameReader{},
 		&mockTokenChecker{state: tokenStateValid},
 		&mockSyncStateQuerier{},
 	)
@@ -336,7 +336,7 @@ func TestBuildStatusAccountsWith_SyncStatePopulated(t *testing.T) {
 	}
 
 	accounts := buildStatusAccountsWith(cfg,
-		&mockMetaReader{},
+		&mockNameReader{},
 		&mockTokenChecker{state: tokenStateValid},
 		&mockSyncStateQuerier{state: syncState},
 	)
@@ -360,7 +360,7 @@ func TestBuildStatusAccountsWith_NilSyncState(t *testing.T) {
 	}
 
 	accounts := buildStatusAccountsWith(cfg,
-		&mockMetaReader{},
+		&mockNameReader{},
 		&mockTokenChecker{state: tokenStateValid},
 		&mockSyncStateQuerier{state: nil},
 	)

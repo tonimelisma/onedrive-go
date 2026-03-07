@@ -632,8 +632,8 @@ Upload validation (reserved names, path length, file size) runs *after* the plan
 ### isValidOneDriveName only checks exact reserved names
 `isValidOneDriveName()` in scanner.go rejects exact reserved device names (CON, PRN, AUX, NUL, COM0-9, LPT0-9) but *not* names with extensions (e.g., `CON.txt` passes). This matches the OneDrive API behavior — `CON.txt` is a valid filename on OneDrive, only bare `CON` is rejected.
 
-### Architecture A: Accounts, drives, and config are separate concerns
-Token resolution (`DriveTokenPath`) must NOT depend on config for shared drives. Pre-Architecture A, `resolveSharedToken(cid, cfg)` scanned `cfg.Drives` to find the parent account — but during `drive add` (and many other paths) config wasn't loaded or was nil. Architecture A introduces drive metadata files (`drives/` subdir) with `account_canonical_id` for shared drives, and account profile files (`accounts/` subdir) with user/org info. Resolution is pure file I/O — no config scanning.
+### Accounts, drives, and config are separate concerns
+Token resolution (`DriveTokenPath`) must NOT depend on config for shared drives. Previously `resolveSharedToken(cid, cfg)` scanned `cfg.Drives` to find the parent account — but during `drive add` (and many other paths) config wasn't loaded or was nil. Drive metadata files (`drive_*.json` at data root) store `account_canonical_id` for shared drives, and account profile files (`account_*.json` at data root) store user/org info. Resolution is pure file I/O — no config scanning. All data files use a flat layout with type prefixes (`token_`, `account_`, `drive_`, `state_`) directly in the data directory.
 
 ### SharePoint drive_id must be per-drive, not per-account
 Token metadata stores the primary business drive_id. SharePoint document libraries have their OWN drive_id, different from the business account's primary drive. Drive metadata files fix this — each drive (personal, business, sharepoint, shared) gets its own metadata file with the correct drive_id.
