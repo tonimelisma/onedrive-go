@@ -9,7 +9,6 @@ import (
 	"sync"
 
 	"github.com/spf13/cobra"
-	"golang.org/x/sync/errgroup"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
@@ -19,7 +18,8 @@ import (
 // defaultDirPerm is the permission mode for directories created during recursive get.
 const defaultDirPerm = 0o755
 
-// defaultDownloadConcurrency is the number of concurrent file downloads per directory.
+// defaultDownloadConcurrency is the maximum number of concurrent file downloads
+// across the entire directory tree (shared semaphore).
 const defaultDownloadConcurrency = 4
 
 func newGetCmd() *cobra.Command {
@@ -74,7 +74,7 @@ func runGet(cmd *cobra.Command, args []string) error {
 			localPath = args[1]
 		}
 
-		return downloadFolder(cmd, cc, session, item, remotePath, localPath)
+		return downloadFolder(cmd, cc, session, remotePath, localPath)
 	}
 
 	localPath := item.Name
@@ -115,35 +115,30 @@ func runGet(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// cachedChild holds the subset of graph.Item fields needed for download.
-type cachedChild struct {
-	name         string
-	id           string
-	isFolder     bool
-	quickXorHash string
-}
-
 // downloadState holds mutable state shared across the recursive download.
 type downloadState struct {
-	mu         sync.Mutex
-	result     getFolderJSONOutput
-	done       int
-	total      int
-	childCache map[string][]cachedChild // keyed by remote path
+	mu          sync.Mutex
+	wg          sync.WaitGroup
+	sem         chan struct{} // shared semaphore bounding total concurrency
+	result      getFolderJSONOutput
+	done        int
+	total       int
+	childCache  map[string][]graph.Item // keyed by remote path
+	countErrors []string                // non-fatal errors from counting pass
 }
 
 func downloadFolder(
 	cmd *cobra.Command,
 	cc *CLIContext,
 	session *driveops.Session,
-	_ *graph.Item,
 	remotePath, localPath string,
 ) error {
 	ctx := cmd.Context()
 	logger := cc.Logger
 
 	state := &downloadState{
-		childCache: make(map[string][]cachedChild),
+		childCache: make(map[string][]graph.Item),
+		sem:        make(chan struct{}, defaultDownloadConcurrency),
 	}
 
 	// Pass 1: count files and cache directory listings.
@@ -154,8 +149,12 @@ func downloadFolder(
 	store := driveops.NewSessionStore(config.DefaultDataDir(), logger)
 	tm := driveops.NewTransferManager(session.Transfer, session.Transfer, store, logger)
 
-	// Pass 2: download recursively.
+	// Propagate non-fatal counting errors to the result.
+	state.result.Errors = append(state.result.Errors, state.countErrors...)
+
+	// Pass 2: download recursively. Goroutines are bounded by the shared semaphore.
 	downloadRecursive(ctx, cc, session, tm, state, remotePath, localPath)
+	state.wg.Wait()
 
 	if cc.Flags.JSON {
 		enc := json.NewEncoder(os.Stdout)
@@ -180,25 +179,19 @@ func countRemoteFiles(ctx context.Context, session *driveops.Session, remotePath
 		return fmt.Errorf("listing %q: %w", remotePath, err)
 	}
 
-	cached := make([]cachedChild, len(children))
 	for i := range children {
-		cached[i] = cachedChild{
-			name:         children[i].Name,
-			id:           children[i].ID,
-			isFolder:     children[i].IsFolder,
-			quickXorHash: children[i].QuickXorHash,
-		}
-
 		if children[i].IsFolder {
-			if err := countRemoteFiles(ctx, session, joinRemotePath(remotePath, children[i].Name), state); err != nil {
-				return err
+			childRemote := joinRemotePath(remotePath, children[i].Name)
+			if subErr := countRemoteFiles(ctx, session, childRemote, state); subErr != nil {
+				// Record subdirectory errors but continue counting accessible parts.
+				state.countErrors = append(state.countErrors, subErr.Error())
 			}
 		} else {
 			state.total++
 		}
 	}
 
-	state.childCache[remotePath] = cached
+	state.childCache[remotePath] = children
 
 	return nil
 }
@@ -226,44 +219,61 @@ func downloadRecursive(
 	state.result.FoldersCreated++
 	state.mu.Unlock()
 
-	// Process all children concurrently with bounded parallelism.
-	// Subdirectory traversal is safe to parallelize because:
+	// Process all children concurrently with a shared semaphore that bounds
+	// total goroutines across the entire tree (not per directory).
+	// This is safe because:
 	// - Directory listings are cached (no redundant API calls)
 	// - MkdirAll is idempotent (concurrent dir creation is safe)
 	// - State mutations are mutex-protected
-	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(defaultDownloadConcurrency)
-
 	for i := range children {
-		if children[i].isFolder {
+		if children[i].IsFolder {
 			child := children[i]
-			childLocal := filepath.Join(localPath, child.name)
-			childRemote := joinRemotePath(remotePath, child.name)
+			childLocal := filepath.Join(localPath, child.Name)
+			childRemote := joinRemotePath(remotePath, child.Name)
 
-			g.Go(func() error {
-				downloadRecursive(gCtx, cc, session, tm, state, childRemote, childLocal)
+			state.wg.Add(1)
 
-				return nil
-			})
+			go func() {
+				defer state.wg.Done()
+				downloadRecursive(ctx, cc, session, tm, state, childRemote, childLocal)
+			}()
 
 			continue
 		}
 
 		child := children[i]
-		childLocal := filepath.Join(localPath, child.name)
+		childLocal := filepath.Join(localPath, child.Name)
 
-		g.Go(func() error {
-			dlResult, dlErr := tm.DownloadToFile(gCtx, session.DriveID, child.id, childLocal, driveops.DownloadOpts{
-				RemoteHash: child.quickXorHash,
+		state.wg.Add(1)
+
+		go func() {
+			defer state.wg.Done()
+
+			// Acquire semaphore slot before starting the download.
+			// Respect context cancellation to avoid blocking forever.
+			select {
+			case state.sem <- struct{}{}:
+			case <-ctx.Done():
+				state.mu.Lock()
+				state.result.Errors = append(state.result.Errors, fmt.Sprintf("%s: %v", child.Name, ctx.Err()))
+				state.mu.Unlock()
+
+				return
+			}
+
+			defer func() { <-state.sem }()
+
+			dlResult, dlErr := tm.DownloadToFile(ctx, session.DriveID, child.ID, childLocal, driveops.DownloadOpts{
+				RemoteHash: child.QuickXorHash,
 			})
 
 			state.mu.Lock()
 			defer state.mu.Unlock()
 
 			if dlErr != nil {
-				state.result.Errors = append(state.result.Errors, fmt.Sprintf("%s: %v", child.name, dlErr))
+				state.result.Errors = append(state.result.Errors, fmt.Sprintf("%s: %v", child.Name, dlErr))
 
-				return nil
+				return
 			}
 
 			state.result.Files = append(state.result.Files, getJSONOutput{
@@ -274,15 +284,7 @@ func downloadRecursive(
 			state.result.TotalSize += dlResult.Size
 			state.done++
 			cc.Statusf("Downloaded %d/%d files\n", state.done, state.total)
-
-			return nil
-		})
-	}
-
-	if err := g.Wait(); err != nil {
-		state.mu.Lock()
-		state.result.Errors = append(state.result.Errors, err.Error())
-		state.mu.Unlock()
+		}()
 	}
 }
 

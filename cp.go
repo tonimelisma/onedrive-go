@@ -61,19 +61,22 @@ func runCp(cmd *cobra.Command, args []string, force bool) error {
 		return fmt.Errorf("resolving source %q: %w", sourcePath, err)
 	}
 
-	parentID, newName, existingID, err := resolveDest(ctx, session, destPath, sourceItem.Name, force)
+	dest, err := resolveDest(ctx, session, destPath, sourceItem.Name, force)
 	if err != nil {
 		return err
 	}
 
 	// If --force resolved to an existing file, delete it before copying.
-	if existingID != "" {
-		if delErr := session.DeleteItem(ctx, existingID); delErr != nil {
+	// Skip when the existing file IS the source (self-copy via different paths).
+	// NOTE: This is a TOCTOU race — another client could recreate the file
+	// between delete and copy. Server-side copy has no atomic overwrite.
+	if dest.existingID != "" && !isSelfReference(sourceItem.ID, dest) {
+		if delErr := session.DeleteItem(ctx, dest.existingID); delErr != nil {
 			return fmt.Errorf("deleting existing %q: %w", destPath, delErr)
 		}
 	}
 
-	copyResult, err := session.CopyItem(ctx, sourceItem.ID, parentID, newName)
+	copyResult, err := session.CopyItem(ctx, sourceItem.ID, dest.parentID, dest.newName)
 	if err != nil {
 		return fmt.Errorf("copying %q: %w", sourcePath, err)
 	}
@@ -83,7 +86,13 @@ func runCp(cmd *cobra.Command, args []string, force bool) error {
 		return err
 	}
 
-	displayDest := buildCopyDisplayDest(ctx, session, destPath, newName)
+	displayDest := destPath
+	if dest.destIsDir {
+		clean := driveops.CleanRemotePath(destPath)
+		if clean != "" {
+			displayDest = clean + "/" + dest.newName
+		}
+	}
 
 	if cc.Flags.JSON {
 		enc := json.NewEncoder(os.Stdout)
@@ -129,14 +138,4 @@ func awaitCopy(ctx context.Context, cc *CLIContext, meta *graph.Client, monitorU
 	}
 
 	return "", fmt.Errorf("copy timed out after %v", copyTimeout)
-}
-
-// buildCopyDisplayDest constructs a display path for the copy destination.
-func buildCopyDisplayDest(ctx context.Context, session *driveops.Session, destPath, newName string) string {
-	destItem, resolveErr := session.ResolveItem(ctx, destPath)
-	if resolveErr == nil && destItem.IsFolder {
-		return driveops.CleanRemotePath(destPath) + "/" + newName
-	}
-
-	return destPath
 }
