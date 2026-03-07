@@ -1214,3 +1214,139 @@ func TestToItem_RemoteItem_NilParentReference(t *testing.T) {
 	assert.Equal(t, "remote-id", item.RemoteItemID)
 	assert.Empty(t, item.RemoteDriveID)
 }
+
+// --- CopyItem tests ---
+
+func TestCopyItem_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/drives/000000000000000d/items/item-to-copy/copy", r.URL.Path)
+
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+
+		var req copyItemRequest
+		require.NoError(t, json.Unmarshal(body, &req))
+		assert.Equal(t, "dest-folder-id", req.ParentReference.ID)
+		assert.Equal(t, "copy-of-file.txt", req.Name)
+
+		w.Header().Set("Location", "https://monitor.example.com/status/abc")
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	result, err := client.CopyItem(t.Context(), driveid.New("d"), "item-to-copy", "dest-folder-id", "copy-of-file.txt")
+	require.NoError(t, err)
+
+	assert.Equal(t, "https://monitor.example.com/status/abc", result.MonitorURL)
+}
+
+func TestCopyItem_NoName(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+
+		var req copyItemRequest
+		require.NoError(t, json.Unmarshal(body, &req))
+		assert.Empty(t, req.Name)
+		assert.Equal(t, "dest-id", req.ParentReference.ID)
+
+		w.Header().Set("Location", "https://monitor.example.com/status/def")
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	result, err := client.CopyItem(t.Context(), driveid.New("d"), "item-1", "dest-id", "")
+	require.NoError(t, err)
+
+	assert.Equal(t, "https://monitor.example.com/status/def", result.MonitorURL)
+}
+
+func TestCopyItem_MissingLocationHeader(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.CopyItem(t.Context(), driveid.New("d"), "item-1", "dest-id", "name.txt")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing Location header")
+}
+
+func TestCopyItem_NotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("request-id", "req-copy-404")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"error":{"code":"itemNotFound"}}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.CopyItem(t.Context(), driveid.New("d"), "nonexistent", "dest-id", "name.txt")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestPollCopyStatus_Completed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{
+			"status": "completed",
+			"percentageComplete": 100.0,
+			"resourceId": "new-item-id"
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	status, err := client.PollCopyStatus(t.Context(), srv.URL+"/monitor/abc")
+	require.NoError(t, err)
+
+	assert.Equal(t, "completed", status.Status)
+	assert.Equal(t, 100.0, status.PercentageComplete)
+	assert.Equal(t, "new-item-id", status.ResourceID)
+}
+
+func TestPollCopyStatus_InProgress(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{
+			"status": "inProgress",
+			"percentageComplete": 45.5,
+			"resourceId": ""
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	status, err := client.PollCopyStatus(t.Context(), srv.URL+"/monitor/def")
+	require.NoError(t, err)
+
+	assert.Equal(t, "inProgress", status.Status)
+	assert.Equal(t, 45.5, status.PercentageComplete)
+	assert.Empty(t, status.ResourceID)
+}
+
+func TestPollCopyStatus_Failed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{
+			"status": "failed",
+			"percentageComplete": 0,
+			"resourceId": ""
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	status, err := client.PollCopyStatus(t.Context(), srv.URL+"/monitor/fail")
+	require.NoError(t, err)
+
+	assert.Equal(t, "failed", status.Status)
+}

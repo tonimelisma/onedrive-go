@@ -169,6 +169,16 @@ func (s *Session) CreateFolder(ctx context.Context, parentID, name string) (*gra
 	return s.Meta.CreateFolder(ctx, s.DriveID, parentID, name)
 }
 
+// MoveItem moves and/or renames an item.
+func (s *Session) MoveItem(ctx context.Context, itemID, newParentID, newName string) (*graph.Item, error) {
+	return s.Meta.MoveItem(ctx, s.DriveID, itemID, newParentID, newName)
+}
+
+// CopyItem starts an async copy operation. Returns a monitor URL for polling.
+func (s *Session) CopyItem(ctx context.Context, itemID, destParentID, newName string) (*graph.CopyResult, error) {
+	return s.Meta.CopyItem(ctx, s.DriveID, itemID, destParentID, newName)
+}
+
 // CleanRemotePath strips leading/trailing slashes, returns "" for root.
 func CleanRemotePath(path string) string {
 	return strings.Trim(path, "/")

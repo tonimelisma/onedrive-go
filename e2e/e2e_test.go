@@ -441,9 +441,9 @@ func TestE2E_ErrorCases(t *testing.T) {
 		assert.Contains(t, output, "nonexistent-uuid-path-12345")
 	})
 
-	t.Run("get_root_is_folder", func(t *testing.T) {
-		output := runCLIWithConfigExpectError(t, cfgPath, nil, "get", "/")
-		assert.Contains(t, output, "folder")
+	t.Run("get_not_found", func(t *testing.T) {
+		output := runCLIWithConfigExpectError(t, cfgPath, nil, "get", "/nonexistent-uuid-path-12345")
+		assert.Contains(t, output, "nonexistent-uuid-path-12345")
 	})
 
 	t.Run("rm_not_found", func(t *testing.T) {

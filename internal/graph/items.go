@@ -612,6 +612,90 @@ func (c *Client) DeleteItem(ctx context.Context, driveID driveid.ID, itemID stri
 		fmt.Sprintf("/drives/%s/items/%s", driveID, itemID))
 }
 
+// CopyResult holds the monitor URL returned by a copy operation.
+type CopyResult struct {
+	MonitorURL string
+}
+
+// CopyStatus represents the current state of an async copy operation.
+type CopyStatus struct {
+	Status             string  `json:"status"`
+	PercentageComplete float64 `json:"percentageComplete"`
+	ResourceID         string  `json:"resourceId"`
+}
+
+type copyItemRequest struct {
+	ParentReference *moveParentRef `json:"parentReference"`
+	Name            string         `json:"name,omitempty"`
+}
+
+// CopyItem starts an async copy of a drive item to a new location.
+// Returns a CopyResult with a monitor URL. The copy completes server-side;
+// poll PollCopyStatus to track progress.
+func (c *Client) CopyItem(
+	ctx context.Context, driveID driveid.ID, itemID, destParentID, newName string,
+) (*CopyResult, error) {
+	c.logger.Info("copying item",
+		slog.String("drive_id", driveID.String()),
+		slog.String("item_id", itemID),
+		slog.String("dest_parent_id", destParentID),
+		slog.String("new_name", newName),
+	)
+
+	apiPath := fmt.Sprintf("/drives/%s/items/%s/copy", driveID, itemID)
+
+	req := copyItemRequest{
+		ParentReference: &moveParentRef{ID: destParentID},
+	}
+	if newName != "" {
+		req.Name = newName
+	}
+
+	bodyBytes, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("graph: marshaling copy request: %w", err)
+	}
+
+	resp, err := c.Do(ctx, http.MethodPost, apiPath, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if _, drainErr := io.Copy(io.Discard, resp.Body); drainErr != nil {
+		return nil, fmt.Errorf("graph: draining copy response: %w", drainErr)
+	}
+
+	monitorURL := resp.Header.Get("Location")
+	if monitorURL == "" {
+		return nil, fmt.Errorf("graph: copy response missing Location header")
+	}
+
+	return &CopyResult{MonitorURL: monitorURL}, nil
+}
+
+// PollCopyStatus checks the progress of an async copy operation.
+// The monitor URL is a pre-authenticated Azure URL — no auth header needed.
+func (c *Client) PollCopyStatus(ctx context.Context, monitorURL string) (*CopyStatus, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, monitorURL, http.NoBody)
+	if err != nil {
+		return nil, fmt.Errorf("graph: creating copy status request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("graph: polling copy status: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var status CopyStatus
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		return nil, fmt.Errorf("graph: decoding copy status: %w", err)
+	}
+
+	return &status, nil
+}
+
 // deleteAndDrain sends a request and drains the response body to reuse the connection.
 func (c *Client) deleteAndDrain(ctx context.Context, method, path string) error {
 	resp, err := c.Do(ctx, method, path, nil)
