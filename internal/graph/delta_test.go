@@ -352,3 +352,215 @@ func TestBuildDeltaPath_FullURLToken(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "/drives/000000000000000d/root/delta?token=abc", path)
 }
+
+// --- DeltaFolder tests ---
+
+func TestBuildFolderDeltaPath_EmptyToken(t *testing.T) {
+	client := newTestClient(t, "http://localhost")
+	path, err := client.buildFolderDeltaPath(driveid.New("d"), "folder-abc", "")
+	require.NoError(t, err)
+	assert.Equal(t, "/drives/000000000000000d/items/folder-abc/delta", path)
+}
+
+func TestBuildFolderDeltaPath_NonHTTPToken(t *testing.T) {
+	client := newTestClient(t, "http://localhost")
+	path, err := client.buildFolderDeltaPath(driveid.New("d"), "folder-abc", "not-a-url")
+	require.NoError(t, err)
+	assert.Equal(t, "/drives/000000000000000d/items/folder-abc/delta", path)
+}
+
+func TestBuildFolderDeltaPath_FullURLToken(t *testing.T) {
+	client := newTestClient(t, "http://localhost")
+	path, err := client.buildFolderDeltaPath(driveid.New("d"), "folder-abc", "http://localhost/drives/000000000000000d/items/folder-abc/delta?token=xyz")
+	require.NoError(t, err)
+	assert.Equal(t, "/drives/000000000000000d/items/folder-abc/delta?token=xyz", path)
+}
+
+func TestDeltaFolder_SinglePage(t *testing.T) {
+	var srv *httptest.Server
+
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, "/drives/000000000000000d/items/folder-abc/delta", r.URL.Path)
+		// Folder-scoped delta should also send the Prefer header.
+		assert.Equal(t, "deltashowremoteitemsaliasid", r.Header.Get("Prefer"))
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `{
+			"value": [
+				{"id":"item-1","name":"file1.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"folder-abc","driveId":"d"},"file":{"mimeType":"text/plain"}},
+				{"id":"item-2","name":"sub","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"folder-abc","driveId":"d"},"folder":{"childCount":1}}
+			],
+			"@odata.deltaLink": "%s/drives/000000000000000d/items/folder-abc/delta?token=newtoken"
+		}`, srv.URL)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	page, err := client.DeltaFolder(t.Context(), driveid.New("d"), "folder-abc", "")
+	require.NoError(t, err)
+
+	assert.Len(t, page.Items, 2)
+	assert.Equal(t, "item-1", page.Items[0].ID)
+	assert.Equal(t, "item-2", page.Items[1].ID)
+	assert.True(t, page.Items[1].IsFolder)
+	assert.Empty(t, page.NextLink)
+	assert.Contains(t, page.DeltaLink, "token=newtoken")
+}
+
+func TestDeltaFolder_WithToken(t *testing.T) {
+	var srv *httptest.Server
+
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/drives/d/items/folder-abc/delta", r.URL.Path)
+		assert.Equal(t, "prevtoken", r.URL.Query().Get("token"))
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `{
+			"value": [
+				{"id":"changed-1","name":"updated.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-06-01T00:00:00Z","parentReference":{"id":"folder-abc","driveId":"d"}}
+			],
+			"@odata.deltaLink": "%s/drives/d/items/folder-abc/delta?token=newtoken"
+		}`, srv.URL)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	token := srv.URL + "/drives/d/items/folder-abc/delta?token=prevtoken"
+	page, err := client.DeltaFolder(t.Context(), driveid.New("d"), "folder-abc", token)
+	require.NoError(t, err)
+
+	assert.Len(t, page.Items, 1)
+	assert.Equal(t, "changed-1", page.Items[0].ID)
+}
+
+func TestDeltaFolder_Gone(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("request-id", "req-gone-folder")
+		w.WriteHeader(http.StatusGone)
+		fmt.Fprint(w, `{"error":{"code":"resyncRequired","message":"Token expired"}}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.DeltaFolder(t.Context(), driveid.New("d"), "folder-abc", "")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrGone)
+}
+
+func TestDeltaFolder_NormalizesPackages(t *testing.T) {
+	var srv *httptest.Server
+
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `{
+			"value": [
+				{"id":"file-1","name":"doc.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"folder-abc","driveId":"d"},"file":{"mimeType":"text/plain"}},
+				{"id":"pkg-1","name":"Notebook.one","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"folder-abc","driveId":"d"},"package":{"type":"oneNote"}}
+			],
+			"@odata.deltaLink": "%s/drives/d/items/folder-abc/delta?token=abc"
+		}`, srv.URL)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	page, err := client.DeltaFolder(t.Context(), driveid.New("d"), "folder-abc", "")
+	require.NoError(t, err)
+
+	assert.Len(t, page.Items, 1)
+	assert.Equal(t, "file-1", page.Items[0].ID)
+}
+
+func TestDeltaFolderAll_SinglePage(t *testing.T) {
+	var srv *httptest.Server
+
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `{
+			"value": [
+				{"id":"item-1","name":"file1.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"folder-abc","driveId":"d"}},
+				{"id":"item-2","name":"file2.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"folder-abc","driveId":"d"}}
+			],
+			"@odata.deltaLink": "%s/drives/d/items/folder-abc/delta?token=final"
+		}`, srv.URL)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	items, token, err := client.DeltaFolderAll(t.Context(), driveid.New("d"), "folder-abc", "")
+	require.NoError(t, err)
+
+	assert.Len(t, items, 2)
+	assert.Equal(t, "item-1", items[0].ID)
+	assert.Equal(t, "item-2", items[1].ID)
+	assert.Contains(t, token, "token=final")
+}
+
+func TestDeltaFolderAll_MultiPage(t *testing.T) {
+	var srv *httptest.Server
+
+	callCount := 0
+
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+
+		if !strings.Contains(r.URL.RawQuery, "token=page2") {
+			fmt.Fprintf(w, `{
+				"value": [
+					{"id":"item-1","name":"file1.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"folder-abc","driveId":"d"}}
+				],
+				"@odata.nextLink": "%s/drives/d/items/folder-abc/delta?token=page2"
+			}`, srv.URL)
+		} else {
+			fmt.Fprintf(w, `{
+				"value": [
+					{"id":"item-2","name":"file2.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"folder-abc","driveId":"d"}}
+				],
+				"@odata.deltaLink": "%s/drives/d/items/folder-abc/delta?token=alldone"
+			}`, srv.URL)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	items, token, err := client.DeltaFolderAll(t.Context(), driveid.New("d"), "folder-abc", "")
+	require.NoError(t, err)
+
+	assert.Len(t, items, 2)
+	assert.Equal(t, "item-1", items[0].ID)
+	assert.Equal(t, "item-2", items[1].ID)
+	assert.Contains(t, token, "token=alldone")
+	assert.Equal(t, 2, callCount)
+}
+
+func TestDeltaFolderAll_MaxPages(t *testing.T) {
+	origMax := maxDeltaPages
+	maxDeltaPages = 3
+	defer func() { maxDeltaPages = origMax }()
+
+	var srv *httptest.Server
+
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `{
+			"value": [
+				{"id":"item","name":"file.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"folder-abc","driveId":"d"}}
+			],
+			"@odata.nextLink": "%s/drives/d/items/folder-abc/delta?token=next"
+		}`, srv.URL)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, _, err := client.DeltaFolderAll(t.Context(), driveid.New("d"), "folder-abc", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeded")
+}

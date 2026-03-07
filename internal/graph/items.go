@@ -406,6 +406,64 @@ func (c *Client) ListChildrenByPath(ctx context.Context, driveID driveid.ID, rem
 	)
 }
 
+// maxRecursionDepth is the upper bound on folder nesting depth for
+// ListChildrenRecursive. Prevents stack overflow on pathological hierarchies
+// or circular references. Package-level var so tests can override.
+var maxRecursionDepth = 100 //nolint:gochecknoglobals // test-overridable guard
+
+// ListChildrenRecursive returns all descendants of a folder by recursively
+// listing children of subfolders. Returns a flat list including both files
+// and folders. Used for enumerating shared folder content on Business/SharePoint
+// drives where folder-scoped delta is not available.
+func (c *Client) ListChildrenRecursive(ctx context.Context, driveID driveid.ID, folderID string) ([]Item, error) {
+	c.logger.Info("listing children recursively",
+		slog.String("drive_id", driveID.String()),
+		slog.String("folder_id", folderID),
+	)
+
+	items, err := c.listChildrenRecursiveDepth(ctx, driveID, folderID, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	c.logger.Debug("listed children recursively",
+		slog.String("drive_id", driveID.String()),
+		slog.String("folder_id", folderID),
+		slog.Int("total_items", len(items)),
+	)
+
+	return items, nil
+}
+
+// listChildrenRecursiveDepth is the depth-tracked implementation of ListChildrenRecursive.
+func (c *Client) listChildrenRecursiveDepth(ctx context.Context, driveID driveid.ID, folderID string, depth int) ([]Item, error) {
+	if depth >= maxRecursionDepth {
+		return nil, fmt.Errorf("graph: recursive listing exceeded max depth %d at folder %s", maxRecursionDepth, folderID)
+	}
+
+	children, err := c.ListChildren(ctx, driveID, folderID)
+	if err != nil {
+		return nil, err
+	}
+
+	var allItems []Item
+
+	for i := range children {
+		allItems = append(allItems, children[i])
+
+		if children[i].IsFolder {
+			descendants, err := c.listChildrenRecursiveDepth(ctx, driveID, children[i].ID, depth+1)
+			if err != nil {
+				return nil, err
+			}
+
+			allItems = append(allItems, descendants...)
+		}
+	}
+
+	return allItems, nil
+}
+
 // listChildrenPage fetches a single page of children and returns the items
 // and the next page path (empty if no more pages).
 func (c *Client) listChildrenPage(ctx context.Context, path string, page int) ([]Item, string, error) {

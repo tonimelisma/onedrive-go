@@ -438,6 +438,14 @@ func (o *RemoteObserver) classifyItem(item *graph.Item, inflight map[driveid.Ite
 		}
 	}
 
+	// Shortcut detection (6.4a.2): items with a remoteItem facet pointing to
+	// another drive AND IsFolder are shortcuts. These get ChangeShortcut events
+	// instead of normal folder create/modify — the engine handles them
+	// separately for sub-scope observation.
+	if item.IsFolder && item.RemoteDriveID != "" && !item.IsDeleted {
+		return o.classifyShortcut(item, inflight, itemDriveID)
+	}
+
 	return o.classifyAndConvert(item, inflight, itemDriveID)
 }
 
@@ -496,6 +504,39 @@ func (o *RemoteObserver) classifyAndConvert(
 	}
 
 	return &ev
+}
+
+// classifyShortcut builds a ChangeShortcut event for a shortcut/shared folder.
+// Shortcuts point to content on another drive — their children don't appear
+// in the user's own delta. The engine must observe the source drive separately.
+func (o *RemoteObserver) classifyShortcut(
+	item *graph.Item, inflight map[driveid.ItemKey]inflightParent, itemDriveID driveid.ID,
+) *ChangeEvent {
+	relPath := o.materializePath(item, inflight, itemDriveID)
+
+	o.logger.Info("detected shortcut",
+		slog.String("item_id", item.ID),
+		slog.String("name", item.Name),
+		slog.String("path", relPath),
+		slog.String("remote_drive", item.RemoteDriveID),
+		slog.String("remote_item", item.RemoteItemID),
+	)
+
+	return &ChangeEvent{
+		Source:        SourceRemote,
+		Type:          ChangeShortcut,
+		Path:          relPath,
+		ItemID:        item.ID,
+		ParentID:      item.ParentID,
+		DriveID:       itemDriveID,
+		ItemType:      ItemTypeFolder,
+		Name:          nfcNormalize(item.Name),
+		Mtime:         toUnixNano(item.ModifiedAt),
+		ETag:          item.ETag,
+		CTag:          item.CTag,
+		RemoteDriveID: item.RemoteDriveID,
+		RemoteItemID:  item.RemoteItemID,
+	}
 }
 
 // materializePath builds the full relative path by walking the parent chain.
