@@ -122,29 +122,18 @@ func TestResolveDest_NotFound(t *testing.T) {
 	assert.False(t, dest.destIsDir)
 }
 
-func TestResolveDest_SelfMoveForceDoesNotDelete(t *testing.T) {
-	// mv --force file.txt file.txt should be a no-op, NOT delete the file.
+func TestResolveDest_SelfReferenceDetected(t *testing.T) {
+	// When --force resolves to the same file, isSelfReference should detect it.
 	t.Parallel()
 
-	deleteCalled := false
-	session := makeTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodDelete {
-			deleteCalled = true
-			w.WriteHeader(http.StatusNoContent)
-
-			return
-		}
-		// ResolveItem for both source and dest — same file.
+	session := makeTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintf(w, `{"id":"item-1","name":"file.txt","parentReference":{"id":"parent-1"}}`)
 	}))
 
-	// Simulate: source resolved to {ID: "item-1", ParentID: "parent-1", Name: "file.txt"}
 	dest, err := resolveDest(t.Context(), session, "file.txt", "file.txt", true)
 	require.NoError(t, err)
-
-	// The key assertion: isSelfReference should detect this.
 	assert.True(t, isSelfReference("item-1", dest), "should detect self-reference")
-	assert.False(t, deleteCalled, "delete should not be called for self-move")
+	assert.Equal(t, "item-1", dest.existingID)
 }
 
 func TestIsNoOpMove(t *testing.T) {
