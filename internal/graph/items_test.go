@@ -1559,3 +1559,74 @@ func TestListChildrenRecursive_MaxDepth(t *testing.T) {
 	assert.Contains(t, err.Error(), "exceeded max depth")
 	assert.Contains(t, err.Error(), "2")
 }
+
+// ---------------------------------------------------------------------------
+// ListItemPermissions + HasWriteAccess tests
+// ---------------------------------------------------------------------------
+
+func TestListItemPermissions_ReadOnly(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Contains(t, r.URL.Path, "/permissions")
+
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"value": [{"id": "perm-1", "roles": ["read"]}]}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	perms, err := client.ListItemPermissions(t.Context(), driveid.New("drive-1"), "item-1")
+	require.NoError(t, err)
+	require.Len(t, perms, 1)
+	assert.Equal(t, []string{"read"}, perms[0].Roles)
+	assert.False(t, HasWriteAccess(perms))
+}
+
+func TestListItemPermissions_Writable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"value": [{"id": "perm-1", "roles": ["read", "write"]}]}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	perms, err := client.ListItemPermissions(t.Context(), driveid.New("drive-1"), "item-1")
+	require.NoError(t, err)
+	require.Len(t, perms, 1)
+	assert.True(t, HasWriteAccess(perms))
+}
+
+func TestListItemPermissions_Error(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"error":{"code":"itemNotFound","message":"not found"}}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.ListItemPermissions(t.Context(), driveid.New("drive-1"), "item-1")
+	require.Error(t, err)
+}
+
+func TestHasWriteAccess(t *testing.T) {
+	tests := []struct {
+		name  string
+		perms []Permission
+		want  bool
+	}{
+		{"empty", nil, false},
+		{"read only", []Permission{{Roles: []string{"read"}}}, false},
+		{"write", []Permission{{Roles: []string{"write"}}}, true},
+		{"owner", []Permission{{Roles: []string{"owner"}}}, true},
+		{"mixed read and write", []Permission{{Roles: []string{"read"}}, {Roles: []string{"write"}}}, true},
+		{"member only", []Permission{{Roles: []string{"member"}}}, false},
+		{"owner in mixed", []Permission{{Roles: []string{"read", "owner"}}}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, HasWriteAccess(tt.perms))
+		})
+	}
+}

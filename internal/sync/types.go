@@ -500,6 +500,8 @@ type ConflictRecord struct {
 
 // Shortcut represents a OneDrive shortcut or shared folder that requires
 // separate observation on the source drive. Stored in the shortcuts table.
+// Note: the shortcuts table has a read_only column that is no longer used —
+// permission state lives entirely in local_issues + in-memory permission cache.
 type Shortcut struct {
 	ItemID       string // shortcut item ID in the user's drive
 	RemoteDrive  string // source drive ID
@@ -507,7 +509,6 @@ type Shortcut struct {
 	LocalPath    string // local filesystem path for this shortcut's content
 	DriveType    string // source drive type: "personal", "business", "documentLibrary"
 	Observation  string // "unknown", "delta", or "enumerate"
-	ReadOnly     bool   // true if uploads are forbidden (403 detected)
 	DiscoveredAt int64  // unix timestamp when first seen
 }
 

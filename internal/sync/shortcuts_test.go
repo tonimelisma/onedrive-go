@@ -20,7 +20,6 @@ func TestUpsertShortcut_Insert(t *testing.T) {
 		LocalPath:    "Shared/TeamDocs",
 		DriveType:    "personal",
 		Observation:  ObservationDelta,
-		ReadOnly:     false,
 		DiscoveredAt: 1000,
 	}
 
@@ -37,7 +36,6 @@ func TestUpsertShortcut_Insert(t *testing.T) {
 	assert.Equal(t, "Shared/TeamDocs", got.LocalPath)
 	assert.Equal(t, "personal", got.DriveType)
 	assert.Equal(t, ObservationDelta, got.Observation)
-	assert.False(t, got.ReadOnly)
 	assert.Equal(t, int64(1000), got.DiscoveredAt)
 }
 
@@ -69,7 +67,7 @@ func TestUpsertShortcut_Update(t *testing.T) {
 	assert.Equal(t, ObservationDelta, got.Observation)
 }
 
-func TestUpsertShortcut_PreservesReadOnlyAndDiscoveredAt(t *testing.T) {
+func TestUpsertShortcut_PreservesDiscoveredAt(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
@@ -81,10 +79,7 @@ func TestUpsertShortcut_PreservesReadOnlyAndDiscoveredAt(t *testing.T) {
 	}
 	require.NoError(t, mgr.UpsertShortcut(ctx, &sc))
 
-	// Mark as read-only externally.
-	require.NoError(t, mgr.SetShortcutReadOnly(ctx, "sc-1", true))
-
-	// Upsert again with a new path — should preserve read_only and discovered_at.
+	// Upsert again with a new path — should preserve discovered_at.
 	sc.LocalPath = "path2"
 	sc.DiscoveredAt = 9999 // caller passes a new timestamp, but ON CONFLICT should ignore it
 	require.NoError(t, mgr.UpsertShortcut(ctx, &sc))
@@ -92,7 +87,6 @@ func TestUpsertShortcut_PreservesReadOnlyAndDiscoveredAt(t *testing.T) {
 	got, err := mgr.GetShortcut(ctx, "sc-1")
 	require.NoError(t, err)
 	assert.Equal(t, "path2", got.LocalPath)
-	assert.True(t, got.ReadOnly, "read_only should be preserved across upserts")
 	assert.Equal(t, int64(1000), got.DiscoveredAt, "discovered_at should be preserved across upserts")
 }
 
@@ -165,32 +159,4 @@ func TestDeleteShortcut_NotFound(t *testing.T) {
 	// Deleting a nonexistent shortcut should not error.
 	err := mgr.DeleteShortcut(ctx, "nonexistent")
 	require.NoError(t, err)
-}
-
-func TestSetShortcutReadOnly(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestManager(t)
-	ctx := t.Context()
-
-	sc := Shortcut{
-		ItemID: "sc-1", RemoteDrive: "d1", RemoteItem: "i1",
-		LocalPath: "path1", Observation: ObservationDelta, DiscoveredAt: 1000,
-	}
-	require.NoError(t, mgr.UpsertShortcut(ctx, &sc))
-
-	err := mgr.SetShortcutReadOnly(ctx, "sc-1", true)
-	require.NoError(t, err)
-
-	got, err := mgr.GetShortcut(ctx, "sc-1")
-	require.NoError(t, err)
-	assert.True(t, got.ReadOnly)
-
-	// Toggle back.
-	err = mgr.SetShortcutReadOnly(ctx, "sc-1", false)
-	require.NoError(t, err)
-
-	got, err = mgr.GetShortcut(ctx, "sc-1")
-	require.NoError(t, err)
-	assert.False(t, got.ReadOnly)
 }

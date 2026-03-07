@@ -2662,13 +2662,13 @@ func TestMigration00002_SyncFailureRoundTrip(t *testing.T) {
 	provider, err := goose.NewProvider(goose.DialectSQLite3, db, subFS)
 	require.NoError(t, err)
 
-	// Step 1: Apply all migrations (both 00001 and 00002).
+	// Step 1: Apply all migrations.
 	_, err = provider.Up(ctx)
 	require.NoError(t, err)
 
 	ver, err := provider.GetDBVersion(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, int64(3), ver)
+	assert.Equal(t, int64(4), ver)
 
 	// Step 2: Insert seed data — one standard conflict, one sync_failure.
 	_, err = db.ExecContext(ctx,
@@ -2685,7 +2685,10 @@ func TestMigration00002_SyncFailureRoundTrip(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	// Step 3: Roll back migrations 00003 (shortcuts) then 00002 (sync_failure).
+	// Step 3: Roll back migrations 00004, 00003, 00002.
+	_, err = provider.Down(ctx) // 00004 → 00003
+	require.NoError(t, err)
+
 	_, err = provider.Down(ctx) // 00003 → 00002
 	require.NoError(t, err)
 

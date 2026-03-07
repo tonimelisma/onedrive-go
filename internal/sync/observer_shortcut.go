@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"log/slog"
 	"path"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -29,6 +30,15 @@ func filterOutShortcuts(events []ChangeEvent) []ChangeEvent {
 func shortcutItemsToEvents(
 	items []graph.Item, sc *Shortcut, remoteDriveID driveid.ID, bl *Baseline,
 ) []ChangeEvent {
+	return shortcutItemsToEventsWithLog(items, sc, remoteDriveID, bl, nil)
+}
+
+// shortcutItemsToEventsWithLog converts graph.Items from a shortcut scope
+// into ChangeEvents, skipping nested shortcuts (items with RemoteItemID).
+func shortcutItemsToEventsWithLog(
+	items []graph.Item, sc *Shortcut, remoteDriveID driveid.ID, bl *Baseline,
+	logger *slog.Logger,
+) []ChangeEvent {
 	pathMap := buildShortcutPathMap(items, sc.RemoteItem)
 
 	var events []ChangeEvent
@@ -37,6 +47,19 @@ func shortcutItemsToEvents(
 		item := &items[i]
 
 		if item.IsRoot || item.ID == sc.RemoteItem {
+			continue
+		}
+
+		// Skip nested shortcuts — items that themselves reference another drive.
+		if item.RemoteItemID != "" {
+			if logger != nil {
+				logger.Warn("nested shortcut detected in observation, skipping",
+					slog.String("item_id", item.ID),
+					slog.String("name", item.Name),
+					slog.String("parent_shortcut", sc.ItemID),
+				)
+			}
+
 			continue
 		}
 

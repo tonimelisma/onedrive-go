@@ -7,9 +7,10 @@ import (
 
 // Issue type constants for upload validation failures.
 const (
-	IssueInvalidFilename = "invalid_filename"
-	IssuePathTooLong     = "path_too_long"
-	IssueFileTooLarge    = "file_too_large"
+	IssueInvalidFilename  = "invalid_filename"
+	IssuePathTooLong      = "path_too_long"
+	IssueFileTooLarge     = "file_too_large"
+	IssuePermissionDenied = "permission_denied"
 )
 
 // Upload validation constants.

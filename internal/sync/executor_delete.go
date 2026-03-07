@@ -7,9 +7,38 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
+
+// isDisposable returns true for files that are safe to remove when they block
+// a parent directory deletion. These are OS junk files, editor temps, and
+// names invalid for OneDrive.
+func isDisposable(name string) bool {
+	// OS junk files.
+	lower := strings.ToLower(name)
+	if lower == ".ds_store" || lower == "thumbs.db" || lower == "__macosx" {
+		return true
+	}
+
+	// Apple resource forks (._filename).
+	if strings.HasPrefix(name, "._") {
+		return true
+	}
+
+	// Editor temps and partial downloads.
+	if isAlwaysExcluded(name) {
+		return true
+	}
+
+	// Names that can't be synced to OneDrive (desktop.ini, ~$doc.docx, etc.).
+	if !isValidOneDriveName(name) {
+		return true
+	}
+
+	return false
+}
 
 // executeLocalDelete removes a local file or folder with S4 safety:
 // for files, verifies hash before delete; mismatch triggers conflict copy.
@@ -49,7 +78,29 @@ func (e *Executor) deleteLocalFolder(action *Action, absPath string) Outcome {
 	}
 
 	if len(entries) > 0 {
-		return e.failedOutcome(action, ActionLocalDelete, fmt.Errorf("directory %s is not empty (%d entries)", action.Path, len(entries)))
+		// Check if all remaining entries are disposable (OS junk, temp files).
+		var blockers []string
+		for _, entry := range entries {
+			if !isDisposable(entry.Name()) {
+				blockers = append(blockers, entry.Name())
+			}
+		}
+
+		if len(blockers) > 0 {
+			return e.failedOutcome(action, ActionLocalDelete,
+				fmt.Errorf("directory %s blocked by non-disposable files: %v", action.Path, blockers))
+		}
+
+		// All entries are disposable — remove them before deleting the folder.
+		for _, entry := range entries {
+			entryPath := filepath.Join(absPath, entry.Name())
+			if rmErr := os.RemoveAll(entryPath); rmErr != nil {
+				e.logger.Warn("failed to remove disposable file",
+					slog.String("path", entryPath),
+					slog.String("error", rmErr.Error()),
+				)
+			}
+		}
 	}
 
 	// Try trash before permanent delete.

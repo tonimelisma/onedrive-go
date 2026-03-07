@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"math/rand/v2"
+	"net/http"
 	stdsync "sync"
 	"time"
 
@@ -37,6 +38,7 @@ type EngineConfig struct {
 	DriveVerifier   DriveVerifier       // optional: verified at startup (B-074); nil skips check
 	FolderDelta     FolderDeltaFetcher  // optional: folder-scoped delta for shortcut observation (6.4b)
 	RecursiveLister RecursiveLister     // optional: recursive listing for shortcut observation (6.4b)
+	PermChecker     PermissionChecker   // optional: permission checking for shared folders (6.4c)
 	Logger          *slog.Logger
 	UseLocalTrash   bool // move deleted local files to OS trash instead of permanent delete
 	TransferWorkers int  // goroutine count for the worker pool (0 → minWorkers)
@@ -83,6 +85,7 @@ type Engine struct {
 	driveVerifier   DriveVerifier      // optional (B-074)
 	folderDelta     FolderDeltaFetcher // optional: for shortcut observation (6.4b)
 	recursiveLister RecursiveLister    // optional: for shortcut observation (6.4b)
+	permChecker     PermissionChecker  // optional: for shared folder permission checks (6.4c)
 	syncRoot        string
 	driveID         driveid.ID
 	logger          *slog.Logger
@@ -138,6 +141,7 @@ func NewEngine(cfg *EngineConfig) (*Engine, error) {
 		driveVerifier:   cfg.DriveVerifier,
 		folderDelta:     cfg.FolderDelta,
 		recursiveLister: cfg.RecursiveLister,
+		permChecker:     cfg.PermChecker,
 		sessionStore:    sessionStore,
 		syncRoot:        cfg.SyncRoot,
 		driveID:         cfg.DriveID,
@@ -228,6 +232,19 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 		e.logger.Warn("failed to reset in-progress states", slog.String("error", err.Error()))
 	}
 
+	// Step 0b: Recheck permissions — clear any permission_denied issues
+	// for folders that have become writable since the last cycle.
+	if e.permChecker != nil {
+		shortcuts, scErr := e.baseline.ListShortcuts(ctx)
+		if scErr != nil {
+			e.logger.Warn("failed to load shortcuts for permission recheck",
+				slog.String("error", scErr.Error()),
+			)
+		} else {
+			e.recheckPermissions(ctx, shortcuts)
+		}
+	}
+
 	// Step 1: Load baseline.
 	bl, err := e.baseline.Load(ctx)
 	if err != nil {
@@ -269,6 +286,9 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 
 	// Step 6b: Pre-upload validation — reject permanently invalid uploads.
 	plan = e.filterInvalidUploads(ctx, plan)
+
+	// Step 6c: Suppress writes under permission-denied folders.
+	plan = e.filterDeniedWrites(ctx, plan)
 
 	// Step 7: Build report from plan counts.
 	counts := countByType(plan.Actions)
@@ -470,10 +490,6 @@ func (e *Engine) observeChanges(
 		if err != nil {
 			return nil, err
 		}
-
-		// Filter out local events under read-only shortcuts — uploading to
-		// read-only shared folders will always fail with 403.
-		localEvents = e.filterReadOnlyShortcutEvents(ctx, localEvents)
 	}
 
 	buf := NewBuffer(e.logger)
@@ -864,6 +880,11 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 // drainWorkerResults reads from the worker result channel and persists
 // failures to remote_state for durable retry tracking.
 func (e *Engine) drainWorkerResults(ctx context.Context, results <-chan WorkerResult) {
+	// Cache shortcuts once for 403 handling (avoids repeated DB queries).
+	var cachedShortcuts []Shortcut
+
+	var shortcutsLoaded bool
+
 	for {
 		select {
 		case r, ok := <-results:
@@ -888,6 +909,23 @@ func (e *Engine) drainWorkerResults(ctx context.Context, results <-chan WorkerRe
 							slog.String("error", issueErr.Error()),
 						)
 					}
+				}
+
+				// On HTTP 403, check if the folder is read-only via API.
+				if r.HTTPStatus == http.StatusForbidden && e.permChecker != nil {
+					if !shortcutsLoaded {
+						var scErr error
+						cachedShortcuts, scErr = e.baseline.ListShortcuts(ctx)
+						if scErr != nil {
+							e.logger.Warn("drainWorkerResults: failed to load shortcuts for 403 handling",
+								slog.String("error", scErr.Error()),
+							)
+						}
+
+						shortcutsLoaded = true
+					}
+
+					e.handle403(ctx, r.Path, cachedShortcuts)
 				}
 			}
 

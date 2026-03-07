@@ -754,6 +754,56 @@ func (c *Client) PollCopyStatus(ctx context.Context, monitorURL string) (*CopySt
 	return &status, nil
 }
 
+// Permission represents a single permission entry on a drive item.
+// Used to determine whether the current user has write access to shared folders.
+type Permission struct {
+	ID    string   `json:"id"`
+	Roles []string `json:"roles"`
+}
+
+type listPermissionsResponse struct {
+	Value []Permission `json:"value"`
+}
+
+// HasWriteAccess returns true if any permission in the slice grants write or
+// owner access. Returns false for empty slices (no permissions = no access).
+func HasWriteAccess(perms []Permission) bool {
+	for i := range perms {
+		for _, role := range perms[i].Roles {
+			if role == "write" || role == "owner" {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// ListItemPermissions returns the permissions for a drive item. For non-owner
+// callers, only THEIR permissions are returned — ideal for checking our own
+// access level on shared folders.
+func (c *Client) ListItemPermissions(ctx context.Context, driveID driveid.ID, itemID string) ([]Permission, error) {
+	c.logger.Debug("listing item permissions",
+		slog.String("drive_id", driveID.String()),
+		slog.String("item_id", itemID),
+	)
+
+	apiPath := fmt.Sprintf("/drives/%s/items/%s/permissions", driveID, itemID)
+
+	resp, err := c.Do(ctx, http.MethodGet, apiPath, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var lpr listPermissionsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&lpr); err != nil {
+		return nil, fmt.Errorf("graph: decoding permissions response: %w", err)
+	}
+
+	return lpr.Value, nil
+}
+
 // deleteAndDrain sends a request and drains the response body to reuse the connection.
 func (c *Client) deleteAndDrain(ctx context.Context, method, path string) error {
 	resp, err := c.Do(ctx, method, path, nil)
