@@ -44,6 +44,40 @@ for token_file in "$TESTDATA"/token_*.json; do
         --output none
 done
 
+# Upload account profiles (Architecture A).
+for account_file in "$TESTDATA"/accounts/*.json; do
+    [ -f "$account_file" ] || continue
+
+    filename=$(basename "$account_file")
+    sanitized=$(echo "$filename" | sed 's/\.json$//; s/[:@._]/-/g')
+    secret_name="onedrive-account-${sanitized}"
+
+    echo "Uploading: accounts/$filename → $secret_name"
+    az keyvault secret set \
+        --vault-name "$VAULT_NAME" \
+        --name "$secret_name" \
+        --file "$account_file" \
+        --content-type "application/json" \
+        --output none
+done
+
+# Upload drive metadata (Architecture A).
+for drive_file in "$TESTDATA"/drives/*.json; do
+    [ -f "$drive_file" ] || continue
+
+    filename=$(basename "$drive_file")
+    sanitized=$(echo "$filename" | sed 's/\.json$//; s/[:@._]/-/g')
+    secret_name="onedrive-drivemeta-${sanitized}"
+
+    echo "Uploading: drives/$filename → $secret_name"
+    az keyvault secret set \
+        --vault-name "$VAULT_NAME" \
+        --name "$secret_name" \
+        --file "$drive_file" \
+        --content-type "application/json" \
+        --output none
+done
+
 # Upload config as a separate secret.
 if [ -f "$TESTDATA/config.toml" ]; then
     echo "Uploading: config.toml → onedrive-test-config"

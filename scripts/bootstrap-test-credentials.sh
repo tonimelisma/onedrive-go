@@ -32,6 +32,17 @@ for f in "$TESTDATA"/token_*.json; do
     [ -f "$f" ] && cp "$f" "$DATA_SUBDIR/"
 done
 
+# Preserve existing account profiles and drive metadata (Architecture A).
+if [ -d "$TESTDATA/accounts" ]; then
+    mkdir -p "$DATA_SUBDIR/accounts"
+    cp "$TESTDATA"/accounts/*.json "$DATA_SUBDIR/accounts/" 2>/dev/null || true
+fi
+
+if [ -d "$TESTDATA/drives" ]; then
+    mkdir -p "$DATA_SUBDIR/drives"
+    cp "$TESTDATA"/drives/*.json "$DATA_SUBDIR/drives/" 2>/dev/null || true
+fi
+
 echo "=== Test Credential Bootstrap ==="
 echo "Login output will go to .testdata/ (not production)"
 echo ""
@@ -46,6 +57,11 @@ HOME="$TESTDATA/home" \
 # cp (not mv) so existing tokens from prior runs are preserved.
 cp "$DATA_SUBDIR"/token_*.json "$TESTDATA/" 2>/dev/null || true
 cp "$CONFIG_SUBDIR/config.toml" "$TESTDATA/config.toml" 2>/dev/null || true
+
+# Flatten account profiles and drive metadata (Architecture A).
+mkdir -p "$TESTDATA/accounts" "$TESTDATA/drives"
+cp "$DATA_SUBDIR"/accounts/*.json "$TESTDATA/accounts/" 2>/dev/null || true
+cp "$DATA_SUBDIR"/drives/*.json "$TESTDATA/drives/" 2>/dev/null || true
 
 # Clean up subdirs. chmod first because go module cache is read-only.
 chmod -R u+w "$TESTDATA/home" 2>/dev/null || true
