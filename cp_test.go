@@ -8,6 +8,42 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestIsSelfReference(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		sourceID string
+		dest     destInfo
+		want     bool
+	}{
+		{
+			name:     "same ID",
+			sourceID: "item-1",
+			dest:     destInfo{existingID: "item-1"},
+			want:     true,
+		},
+		{
+			name:     "different ID",
+			sourceID: "item-1",
+			dest:     destInfo{existingID: "item-2"},
+			want:     false,
+		},
+		{
+			name:     "no existing ID",
+			sourceID: "item-1",
+			dest:     destInfo{existingID: ""},
+			want:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isSelfReference(tt.sourceID, tt.dest))
+		})
+	}
+}
+
 func TestCpJSONOutput_Serialization(t *testing.T) {
 	out := cpJSONOutput{
 		Source:      "/docs/report.pdf",
