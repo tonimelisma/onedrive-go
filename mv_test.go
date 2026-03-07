@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -47,11 +48,11 @@ func TestResolveDest_ForceReturnsExistingID(t *testing.T) {
 		fmt.Fprintf(w, `{"id":"existing-file-id","name":"dest.txt","parentReference":{"id":"parent-folder-id"}}`)
 	}))
 
-	parentID, newName, existingID, err := resolveDest(t.Context(), session, "dest.txt", "source.txt", true)
+	dest, err := resolveDest(t.Context(), session, "dest.txt", "source.txt", true)
 	require.NoError(t, err)
-	assert.Equal(t, "parent-folder-id", parentID)
-	assert.Equal(t, "dest.txt", newName)
-	assert.Equal(t, "existing-file-id", existingID, "should return existing file ID for deletion")
+	assert.Equal(t, "parent-folder-id", dest.parentID)
+	assert.Equal(t, "dest.txt", dest.newName)
+	assert.Equal(t, "existing-file-id", dest.existingID, "should return existing file ID for deletion")
 }
 
 func TestResolveDest_ForceEmptyParentID(t *testing.T) {
@@ -62,9 +63,9 @@ func TestResolveDest_ForceEmptyParentID(t *testing.T) {
 		fmt.Fprintf(w, `{"id":"file-id","name":"dest.txt"}`)
 	}))
 
-	parentID, _, _, err := resolveDest(t.Context(), session, "dest.txt", "source.txt", true)
+	dest, err := resolveDest(t.Context(), session, "dest.txt", "source.txt", true)
 	require.Error(t, err)
-	assert.Empty(t, parentID)
+	assert.Empty(t, dest.parentID)
 	assert.Contains(t, err.Error(), "parent")
 }
 
@@ -75,9 +76,9 @@ func TestResolveDest_NoForceFileExists(t *testing.T) {
 		fmt.Fprintf(w, `{"id":"file-id","name":"dest.txt","parentReference":{"id":"p1"}}`)
 	}))
 
-	parentID, _, _, err := resolveDest(t.Context(), session, "dest.txt", "source.txt", false)
+	dest, err := resolveDest(t.Context(), session, "dest.txt", "source.txt", false)
 	require.Error(t, err)
-	assert.Empty(t, parentID)
+	assert.Empty(t, dest.parentID)
 	assert.Contains(t, err.Error(), "--force")
 }
 
@@ -88,11 +89,12 @@ func TestResolveDest_FolderDest(t *testing.T) {
 		fmt.Fprintf(w, `{"id":"folder-id","name":"destdir","folder":{}}`)
 	}))
 
-	parentID, newName, existingID, err := resolveDest(t.Context(), session, "destdir", "source.txt", false)
+	dest, err := resolveDest(t.Context(), session, "destdir", "source.txt", false)
 	require.NoError(t, err)
-	assert.Equal(t, "folder-id", parentID)
-	assert.Equal(t, "source.txt", newName)
-	assert.Empty(t, existingID, "folder dest should not return existingID")
+	assert.Equal(t, "folder-id", dest.parentID)
+	assert.Equal(t, "source.txt", dest.newName)
+	assert.Empty(t, dest.existingID, "folder dest should not return existingID")
+	assert.True(t, dest.destIsDir, "folder dest should set destIsDir")
 }
 
 func TestResolveDest_NotFound(t *testing.T) {
@@ -112,11 +114,96 @@ func TestResolveDest_NotFound(t *testing.T) {
 		fmt.Fprintf(w, `{"id":"parent-id","name":"parentdir","folder":{}}`)
 	}))
 
-	parentID, newName, existingID, err := resolveDest(t.Context(), session, "parentdir/newname.txt", "source.txt", false)
+	dest, err := resolveDest(t.Context(), session, "parentdir/newname.txt", "source.txt", false)
 	require.NoError(t, err)
-	assert.Equal(t, "parent-id", parentID)
-	assert.Equal(t, "newname.txt", newName)
-	assert.Empty(t, existingID)
+	assert.Equal(t, "parent-id", dest.parentID)
+	assert.Equal(t, "newname.txt", dest.newName)
+	assert.Empty(t, dest.existingID)
+	assert.False(t, dest.destIsDir)
+}
+
+func TestResolveDest_SelfMoveForceDoesNotDelete(t *testing.T) {
+	// mv --force file.txt file.txt should be a no-op, NOT delete the file.
+	t.Parallel()
+
+	deleteCalled := false
+	session := makeTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			deleteCalled = true
+			w.WriteHeader(http.StatusNoContent)
+
+			return
+		}
+		// ResolveItem for both source and dest — same file.
+		fmt.Fprintf(w, `{"id":"item-1","name":"file.txt","parentReference":{"id":"parent-1"}}`)
+	}))
+
+	// Simulate: source resolved to {ID: "item-1", ParentID: "parent-1", Name: "file.txt"}
+	dest, err := resolveDest(t.Context(), session, "file.txt", "file.txt", true)
+	require.NoError(t, err)
+
+	// The key assertion: isSelfReference should detect this.
+	assert.True(t, isSelfReference("item-1", dest), "should detect self-reference")
+	assert.False(t, deleteCalled, "delete should not be called for self-move")
+}
+
+func TestIsNoOpMove(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		dest     destInfo
+		srcPID   string
+		srcName  string
+		wantNoop bool
+	}{
+		{
+			name:     "same parent and name",
+			dest:     destInfo{parentID: "p1", newName: "file.txt"},
+			srcPID:   "p1",
+			srcName:  "file.txt",
+			wantNoop: true,
+		},
+		{
+			name:     "different parent",
+			dest:     destInfo{parentID: "p2", newName: "file.txt"},
+			srcPID:   "p1",
+			srcName:  "file.txt",
+			wantNoop: false,
+		},
+		{
+			name:     "different name",
+			dest:     destInfo{parentID: "p1", newName: "renamed.txt"},
+			srcPID:   "p1",
+			srcName:  "file.txt",
+			wantNoop: false,
+		},
+		{
+			name:     "self-reference via force",
+			dest:     destInfo{parentID: "p1", newName: "file.txt", existingID: "item-1"},
+			srcPID:   "p1",
+			srcName:  "file.txt",
+			wantNoop: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.wantNoop, isNoOpMove(tt.dest, tt.srcPID, tt.srcName))
+		})
+	}
+}
+
+func TestNoOpMoveProducesOutput(t *testing.T) {
+	// When a move is a no-op, the command should still produce status output.
+	t.Parallel()
+
+	var buf bytes.Buffer
+	cc := &CLIContext{StatusWriter: &buf}
+
+	// Simulate a no-op move output.
+	emitMoveResult(cc, "file.txt", "file.txt", "item-1")
+	assert.Contains(t, buf.String(), "file.txt")
 }
 
 func TestMvJSONOutput_Serialization(t *testing.T) {
