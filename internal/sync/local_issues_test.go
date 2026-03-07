@@ -258,9 +258,9 @@ func TestLocalIssueSyncStatus(t *testing.T) {
 		issueType string
 		want      string
 	}{
-		{"invalid_filename", "permanently_failed"},
-		{"path_too_long", "permanently_failed"},
-		{"file_too_large", "permanently_failed"},
+		{IssueInvalidFilename, "permanently_failed"},
+		{IssuePathTooLong, "permanently_failed"},
+		{IssueFileTooLarge, "permanently_failed"},
 		{"upload_failed", "upload_failed"},
 		{"permission_denied", "permission_denied"},
 		{"quota_exceeded", "quota_exceeded"},
