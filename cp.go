@@ -61,9 +61,16 @@ func runCp(cmd *cobra.Command, args []string, force bool) error {
 		return fmt.Errorf("resolving source %q: %w", sourcePath, err)
 	}
 
-	parentID, newName, err := resolveDest(ctx, session, destPath, sourceItem.Name, force)
+	parentID, newName, existingID, err := resolveDest(ctx, session, destPath, sourceItem.Name, force)
 	if err != nil {
 		return err
+	}
+
+	// If --force resolved to an existing file, delete it before copying.
+	if existingID != "" {
+		if delErr := session.DeleteItem(ctx, existingID); delErr != nil {
+			return fmt.Errorf("deleting existing %q: %w", destPath, delErr)
+		}
 	}
 
 	copyResult, err := session.CopyItem(ctx, sourceItem.ID, parentID, newName)

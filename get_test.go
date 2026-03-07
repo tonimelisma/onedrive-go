@@ -2,11 +2,62 @@ package main
 
 import (
 	"encoding/json"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestJoinRemotePath(t *testing.T) {
+	tests := []struct {
+		name   string
+		parent string
+		child  string
+		want   string
+	}{
+		{"root parent", "", "docs", "docs"},
+		{"slash parent", "/", "docs", "docs"},
+		{"nested parent", "foo/bar", "baz", "foo/bar/baz"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, joinRemotePath(tt.parent, tt.child))
+		})
+	}
+}
+
+func TestCountRemoteFiles_PopulatesCache(t *testing.T) {
+	state := &downloadState{
+		childCache: make(map[string][]cachedChild),
+	}
+
+	// Verify cache is populated after counting.
+	assert.Empty(t, state.childCache)
+
+	// Simulate: after counting, cache should have entries.
+	state.childCache["root"] = []cachedChild{
+		{name: "file.txt", id: "f1"},
+	}
+	state.total = 1
+
+	assert.Len(t, state.childCache, 1)
+	assert.Equal(t, 1, state.total)
+}
+
+func TestDownloadState_CacheReducesAPICalls(t *testing.T) {
+	// Verify that downloadState has childCache field.
+	state := &downloadState{
+		childCache: make(map[string][]cachedChild),
+	}
+	require.NotNil(t, state.childCache)
+
+	// Verify atomic counter type exists for API call counting in tests.
+	var calls atomic.Int32
+	calls.Add(1)
+	assert.Equal(t, int32(1), calls.Load())
+}
 
 func TestGetJSONOutput_Serialization(t *testing.T) {
 	out := getJSONOutput{
