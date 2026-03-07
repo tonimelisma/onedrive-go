@@ -5,6 +5,13 @@ import (
 	"strings"
 )
 
+// Issue type constants for upload validation failures.
+const (
+	IssueInvalidFilename = "invalid_filename"
+	IssuePathTooLong     = "path_too_long"
+	IssueFileTooLarge    = "file_too_large"
+)
+
 // Upload validation constants.
 const (
 	// maxOneDrivePathLength is the maximum total path length OneDrive allows.
@@ -17,7 +24,7 @@ const (
 type ValidationFailure struct {
 	Index     int // index in the original Actions slice
 	Path      string
-	IssueType string // "invalid_filename", "path_too_long", "file_too_large"
+	IssueType string // IssueInvalidFilename, IssuePathTooLong, IssueFileTooLarge
 	Error     string
 }
 
@@ -67,7 +74,7 @@ func validateSingleUpload(a *Action) []ValidationFailure {
 	if !isValidOneDriveName(name) {
 		fails = append(fails, ValidationFailure{
 			Path:      a.Path,
-			IssueType: "invalid_filename",
+			IssueType: IssueInvalidFilename,
 			Error:     "file name is not valid for OneDrive: " + name,
 		})
 	}
@@ -75,7 +82,7 @@ func validateSingleUpload(a *Action) []ValidationFailure {
 	if len(a.Path) > maxOneDrivePathLength {
 		fails = append(fails, ValidationFailure{
 			Path:      a.Path,
-			IssueType: "path_too_long",
+			IssueType: IssuePathTooLong,
 			Error:     "path exceeds OneDrive maximum length of 400 characters",
 		})
 	}
@@ -84,7 +91,7 @@ func validateSingleUpload(a *Action) []ValidationFailure {
 	if a.View != nil && a.View.Local != nil && a.View.Local.Size > maxOneDriveFileSize {
 		fails = append(fails, ValidationFailure{
 			Path:      a.Path,
-			IssueType: "file_too_large",
+			IssueType: IssueFileTooLarge,
 			Error:     "file exceeds OneDrive maximum size of 250 GB",
 		})
 	}

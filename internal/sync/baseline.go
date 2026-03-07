@@ -1602,7 +1602,7 @@ const statusPermanentlyFailed = "permanently_failed"
 // permanently_failed; everything else retains its issue_type as sync_status.
 func localIssueSyncStatus(issueType string) string {
 	switch issueType {
-	case "invalid_filename", "path_too_long", "file_too_large":
+	case IssueInvalidFilename, IssuePathTooLong, IssueFileTooLarge:
 		return statusPermanentlyFailed
 	default:
 		return issueType
