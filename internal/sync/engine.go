@@ -470,6 +470,10 @@ func (e *Engine) observeChanges(
 		if err != nil {
 			return nil, err
 		}
+
+		// Filter out local events under read-only shortcuts — uploading to
+		// read-only shared folders will always fail with 403.
+		localEvents = e.filterReadOnlyShortcutEvents(ctx, localEvents)
 	}
 
 	buf := NewBuffer(e.logger)
@@ -537,7 +541,7 @@ func (e *Engine) observeRemoteFull(ctx context.Context, bl *Baseline) ([]ChangeE
 	}
 
 	// Detect orphans: baseline entries whose ItemID is not in the seen set.
-	orphans := bl.FindOrphans(seen, e.driveID)
+	orphans := bl.FindOrphans(seen, e.driveID, "")
 
 	if len(orphans) > 0 {
 		e.logger.Info("full reconciliation: detected orphaned items",

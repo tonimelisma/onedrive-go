@@ -4,14 +4,17 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"path"
 	"strings"
+	stdsync "sync"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
+
+// maxShortcutConcurrency limits how many shortcut scopes are observed in parallel.
+const maxShortcutConcurrency = 4
 
 // processShortcuts extracts shortcut events from the primary delta, updates
 // the shortcuts table, and observes content on each shortcut's source drive.
@@ -48,27 +51,15 @@ func (e *Engine) processShortcuts(
 		return nil, err
 	}
 
+	// Step 4: Detect path collisions between shortcuts and primary drive content.
+	e.detectShortcutCollisions(ctx, bl)
+
 	if dryRun {
 		return nil, nil
 	}
 
-	// Step 4: Observe content for all active shortcuts.
+	// Step 5: Observe content for all active shortcuts.
 	return e.observeShortcutContent(ctx, bl)
-}
-
-// filterOutShortcuts removes ChangeShortcut events from a slice — they are
-// consumed by processShortcuts and should not enter the planner as regular events.
-func filterOutShortcuts(events []ChangeEvent) []ChangeEvent {
-	n := 0
-
-	for i := range events {
-		if events[i].Type != ChangeShortcut {
-			events[n] = events[i]
-			n++
-		}
-	}
-
-	return events[:n]
 }
 
 // registerShortcuts upserts shortcuts from ChangeShortcut events.
@@ -120,6 +111,101 @@ func (e *Engine) registerShortcuts(ctx context.Context, events []ChangeEvent) er
 	}
 
 	return nil
+}
+
+// detectShortcutCollisions warns about shortcuts whose local paths conflict
+// with each other or with existing primary drive paths in the baseline.
+// Collisions mean two different scopes would write to the same local directory.
+func (e *Engine) detectShortcutCollisions(ctx context.Context, bl *Baseline) {
+	shortcuts, err := e.baseline.ListShortcuts(ctx)
+	if err != nil {
+		return
+	}
+
+	// Check shortcut-vs-shortcut collisions.
+	paths := make(map[string]string, len(shortcuts)) // localPath → itemID
+	for i := range shortcuts {
+		sc := &shortcuts[i]
+		if existing, ok := paths[sc.LocalPath]; ok {
+			e.logger.Warn("shortcut path collision: two shortcuts share the same local path",
+				slog.String("path", sc.LocalPath),
+				slog.String("shortcut_a", existing),
+				slog.String("shortcut_b", sc.ItemID),
+			)
+		}
+
+		paths[sc.LocalPath] = sc.ItemID
+	}
+
+	// Check shortcut-vs-primary-drive collisions: a shortcut's local path
+	// matches a baseline entry from the user's own drive (not the remote drive).
+	for i := range shortcuts {
+		sc := &shortcuts[i]
+		remoteDriveID := driveid.New(sc.RemoteDrive)
+
+		if entry, ok := bl.GetByPath(sc.LocalPath); ok && entry.DriveID != remoteDriveID {
+			e.logger.Warn("shortcut path collision: path conflicts with primary drive entry",
+				slog.String("path", sc.LocalPath),
+				slog.String("shortcut", sc.ItemID),
+				slog.String("primary_item", entry.ItemID),
+			)
+		}
+	}
+}
+
+// filterReadOnlyShortcutEvents removes local change events for paths under
+// read-only shortcuts. Uploading to read-only shared folders always fails
+// with 403, so we filter these early to avoid noisy errors.
+func (e *Engine) filterReadOnlyShortcutEvents(ctx context.Context, events []ChangeEvent) []ChangeEvent {
+	shortcuts, err := e.baseline.ListShortcuts(ctx)
+	if err != nil || len(shortcuts) == 0 {
+		return events
+	}
+
+	// Collect read-only shortcut prefixes.
+	var readOnlyPrefixes []string
+
+	for i := range shortcuts {
+		if shortcuts[i].ReadOnly {
+			readOnlyPrefixes = append(readOnlyPrefixes, shortcuts[i].LocalPath+"/")
+		}
+	}
+
+	if len(readOnlyPrefixes) == 0 {
+		return events
+	}
+
+	n := 0
+	filtered := 0
+
+	for i := range events {
+		drop := false
+
+		for _, prefix := range readOnlyPrefixes {
+			if strings.HasPrefix(events[i].Path, prefix) || events[i].Path+"/" == prefix {
+				drop = true
+
+				break
+			}
+		}
+
+		if drop {
+			filtered++
+
+			continue
+		}
+
+		events[n] = events[i]
+		n++
+	}
+
+	if filtered > 0 {
+		e.logger.Info("filtered local events under read-only shortcuts",
+			slog.Int("filtered", filtered),
+		)
+	}
+
+	return events[:n]
 }
 
 // detectDriveType queries the source drive to determine its type and the
@@ -185,30 +271,80 @@ func (e *Engine) handleRemovedShortcuts(ctx context.Context, deletedItemIDs map[
 	return nil
 }
 
-// observeShortcutContent observes content for all active shortcuts.
+// scopeResult holds the observation output for a single shortcut scope.
+// Delta tokens are collected and committed only after all scopes succeed,
+// preventing partial token advancement on crash.
+type scopeResult struct {
+	events     []ChangeEvent
+	deltaToken string // non-empty for delta-observed scopes
+	shortcut   *Shortcut
+}
+
+// observeShortcutContent observes content for all active shortcuts concurrently
+// (up to maxShortcutConcurrency in parallel). Delta tokens are deferred until
+// all scopes complete, ensuring atomicity — a crash mid-observation won't leave
+// some tokens advanced past unprocessed events.
 func (e *Engine) observeShortcutContent(ctx context.Context, bl *Baseline) ([]ChangeEvent, error) {
 	shortcuts, err := e.baseline.ListShortcuts(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing shortcuts for observation: %w", err)
 	}
 
-	var allEvents []ChangeEvent
+	if len(shortcuts) == 0 {
+		return nil, nil
+	}
+
+	results := make([]scopeResult, len(shortcuts))
+
+	var mu stdsync.Mutex
+
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(maxShortcutConcurrency)
 
 	for i := range shortcuts {
 		sc := &shortcuts[i]
 
-		events, err := e.observeSingleShortcut(ctx, sc, bl)
-		if err != nil {
-			e.logger.Warn("shortcut observation failed, skipping",
-				slog.String("item_id", sc.ItemID),
-				slog.String("remote_drive", sc.RemoteDrive),
-				slog.String("error", err.Error()),
-			)
+		g.Go(func() error {
+			result, scErr := e.observeSingleShortcut(gCtx, sc, bl)
+			if scErr != nil {
+				e.logger.Warn("shortcut observation failed, skipping",
+					slog.String("item_id", sc.ItemID),
+					slog.String("remote_drive", sc.RemoteDrive),
+					slog.String("error", scErr.Error()),
+				)
 
-			continue
+				return nil // don't fail the group
+			}
+
+			mu.Lock()
+			results[i] = result
+			mu.Unlock()
+
+			return nil
+		})
+	}
+
+	// errgroup goroutines never return errors (they log and continue),
+	// but we check the error to satisfy errcheck lint.
+	if err := g.Wait(); err != nil {
+		return nil, fmt.Errorf("sync: shortcut observation: %w", err)
+	}
+
+	// Commit all delta tokens after all scopes are done.
+	var allEvents []ChangeEvent
+
+	for i := range results {
+		allEvents = append(allEvents, results[i].events...)
+
+		if results[i].deltaToken != "" {
+			sc := results[i].shortcut
+			if err := e.baseline.CommitDeltaToken(ctx, results[i].deltaToken, sc.RemoteDrive, sc.RemoteItem, sc.RemoteDrive); err != nil {
+				e.logger.Warn("failed to commit shortcut delta token",
+					slog.String("item_id", sc.ItemID),
+					slog.String("error", err.Error()),
+				)
+			}
 		}
-
-		allEvents = append(allEvents, events...)
 	}
 
 	if len(allEvents) > 0 {
@@ -222,7 +358,8 @@ func (e *Engine) observeShortcutContent(ctx context.Context, bl *Baseline) ([]Ch
 }
 
 // observeSingleShortcut observes content for one shortcut scope.
-func (e *Engine) observeSingleShortcut(ctx context.Context, sc *Shortcut, bl *Baseline) ([]ChangeEvent, error) {
+// Returns a scopeResult with events and an optional delta token to commit.
+func (e *Engine) observeSingleShortcut(ctx context.Context, sc *Shortcut, bl *Baseline) (scopeResult, error) {
 	remoteDriveID := driveid.New(sc.RemoteDrive)
 
 	switch sc.Observation {
@@ -236,16 +373,17 @@ func (e *Engine) observeSingleShortcut(ctx context.Context, sc *Shortcut, bl *Ba
 }
 
 // observeShortcutDelta uses folder-scoped delta to observe shortcut content.
+// Returns the events and the new delta token (not committed — caller handles that).
 func (e *Engine) observeShortcutDelta(
 	ctx context.Context, sc *Shortcut, remoteDriveID driveid.ID, bl *Baseline,
-) ([]ChangeEvent, error) {
+) (scopeResult, error) {
 	if e.folderDelta == nil {
-		return nil, fmt.Errorf("sync: folder delta not available for shortcut %s", sc.ItemID)
+		return scopeResult{}, fmt.Errorf("sync: folder delta not available for shortcut %s", sc.ItemID)
 	}
 
 	savedToken, err := e.baseline.GetDeltaToken(ctx, sc.RemoteDrive, sc.RemoteItem)
 	if err != nil {
-		return nil, fmt.Errorf("sync: getting shortcut delta token: %w", err)
+		return scopeResult{}, fmt.Errorf("sync: getting shortcut delta token: %w", err)
 	}
 
 	items, newToken, err := e.folderDelta.DeltaFolderAll(ctx, remoteDriveID, sc.RemoteItem, savedToken)
@@ -257,36 +395,33 @@ func (e *Engine) observeShortcutDelta(
 
 			items, newToken, err = e.folderDelta.DeltaFolderAll(ctx, remoteDriveID, sc.RemoteItem, "")
 			if err != nil {
-				return nil, fmt.Errorf("sync: shortcut full resync: %w", err)
+				return scopeResult{}, fmt.Errorf("sync: shortcut full resync: %w", err)
 			}
 		} else {
-			return nil, fmt.Errorf("sync: shortcut delta: %w", err)
+			return scopeResult{}, fmt.Errorf("sync: shortcut delta: %w", err)
 		}
 	}
 
 	events := shortcutItemsToEvents(items, sc, remoteDriveID, bl)
 
-	// Commit delta token for this scope.
-	if newToken != "" {
-		if err := e.baseline.CommitDeltaToken(ctx, newToken, sc.RemoteDrive, sc.RemoteItem, sc.RemoteDrive); err != nil {
-			return nil, fmt.Errorf("sync: saving shortcut delta token: %w", err)
-		}
-	}
-
-	return events, nil
+	return scopeResult{
+		events:     events,
+		deltaToken: newToken,
+		shortcut:   sc,
+	}, nil
 }
 
 // observeShortcutEnumerate uses recursive listing to observe shortcut content.
 func (e *Engine) observeShortcutEnumerate(
 	ctx context.Context, sc *Shortcut, remoteDriveID driveid.ID, bl *Baseline,
-) ([]ChangeEvent, error) {
+) (scopeResult, error) {
 	if e.recursiveLister == nil {
-		return nil, fmt.Errorf("sync: recursive lister not available for shortcut %s", sc.ItemID)
+		return scopeResult{}, fmt.Errorf("sync: recursive lister not available for shortcut %s", sc.ItemID)
 	}
 
 	items, err := e.recursiveLister.ListChildrenRecursive(ctx, remoteDriveID, sc.RemoteItem)
 	if err != nil {
-		return nil, fmt.Errorf("sync: shortcut enumerate: %w", err)
+		return scopeResult{}, fmt.Errorf("sync: shortcut enumerate: %w", err)
 	}
 
 	events := shortcutItemsToEvents(items, sc, remoteDriveID, bl)
@@ -295,7 +430,10 @@ func (e *Engine) observeShortcutEnumerate(
 	orphans := detectShortcutOrphans(sc, remoteDriveID, items, bl)
 	events = append(events, orphans...)
 
-	return events, nil
+	return scopeResult{
+		events:   events,
+		shortcut: sc,
+	}, nil
 }
 
 // reconcileShortcutScopes performs full reconciliation for all active shortcut
@@ -318,17 +456,17 @@ func (e *Engine) reconcileShortcutScopes(ctx context.Context, bl *Baseline) ([]C
 		sc := &shortcuts[i]
 		remoteDriveID := driveid.New(sc.RemoteDrive)
 
-		var events []ChangeEvent
+		var result scopeResult
 
 		var scErr error
 
 		switch sc.Observation {
 		case ObservationDelta:
 			// Full delta with empty token = enumerate all items via delta.
-			events, scErr = e.reconcileShortcutDelta(ctx, sc, remoteDriveID, bl)
+			result, scErr = e.reconcileShortcutDelta(ctx, sc, remoteDriveID, bl)
 		default:
 			// Enumerate: same as normal observation (already a full enum).
-			events, scErr = e.observeShortcutEnumerate(ctx, sc, remoteDriveID, bl)
+			result, scErr = e.observeShortcutEnumerate(ctx, sc, remoteDriveID, bl)
 		}
 
 		if scErr != nil {
@@ -340,7 +478,17 @@ func (e *Engine) reconcileShortcutScopes(ctx context.Context, bl *Baseline) ([]C
 			continue
 		}
 
-		allEvents = append(allEvents, events...)
+		allEvents = append(allEvents, result.events...)
+
+		// Commit delta token for reconciliation scopes.
+		if result.deltaToken != "" {
+			if err := e.baseline.CommitDeltaToken(ctx, result.deltaToken, sc.RemoteDrive, sc.RemoteItem, sc.RemoteDrive); err != nil {
+				e.logger.Warn("failed to commit reconciliation delta token",
+					slog.String("item_id", sc.ItemID),
+					slog.String("error", err.Error()),
+				)
+			}
+		}
 	}
 
 	return allEvents, nil
@@ -351,187 +499,23 @@ func (e *Engine) reconcileShortcutScopes(ctx context.Context, bl *Baseline) ([]C
 // orphans that may have been missed by incremental delta.
 func (e *Engine) reconcileShortcutDelta(
 	ctx context.Context, sc *Shortcut, remoteDriveID driveid.ID, bl *Baseline,
-) ([]ChangeEvent, error) {
+) (scopeResult, error) {
 	if e.folderDelta == nil {
-		return nil, fmt.Errorf("sync: folder delta not available for shortcut %s", sc.ItemID)
+		return scopeResult{}, fmt.Errorf("sync: folder delta not available for shortcut %s", sc.ItemID)
 	}
 
 	items, newToken, err := e.folderDelta.DeltaFolderAll(ctx, remoteDriveID, sc.RemoteItem, "")
 	if err != nil {
-		return nil, fmt.Errorf("sync: shortcut full reconciliation delta: %w", err)
+		return scopeResult{}, fmt.Errorf("sync: shortcut full reconciliation delta: %w", err)
 	}
 
 	events := shortcutItemsToEvents(items, sc, remoteDriveID, bl)
 	orphans := detectShortcutOrphans(sc, remoteDriveID, items, bl)
 	events = append(events, orphans...)
 
-	// Commit new delta token for this scope.
-	if newToken != "" {
-		if err := e.baseline.CommitDeltaToken(ctx, newToken, sc.RemoteDrive, sc.RemoteItem, sc.RemoteDrive); err != nil {
-			return nil, fmt.Errorf("sync: saving reconciliation delta token: %w", err)
-		}
-	}
-
-	return events, nil
-}
-
-// shortcutItemsToEvents converts graph.Items from a shortcut scope into
-// ChangeEvents with paths prefixed by the shortcut's local path.
-// Builds relative paths by walking parent chains within the item batch.
-func shortcutItemsToEvents(
-	items []graph.Item, sc *Shortcut, remoteDriveID driveid.ID, bl *Baseline,
-) []ChangeEvent {
-	// Build parent map for path construction.
-	parentMap := make(map[string]shortcutParent, len(items))
-	for i := range items {
-		parentMap[items[i].ID] = shortcutParent{
-			name:     items[i].Name,
-			parentID: items[i].ParentID,
-		}
-	}
-
-	var events []ChangeEvent
-
-	for i := range items {
-		item := &items[i]
-
-		if item.IsRoot {
-			continue
-		}
-
-		// Build relative path within the shortcut scope.
-		relPath := buildShortcutRelPath(item, parentMap, sc.RemoteItem)
-		mappedPath := mapShortcutPath(sc.LocalPath, relPath)
-
-		hash := driveops.SelectHash(item)
-		itemDriveID := remoteDriveID
-
-		if !item.DriveID.IsZero() {
-			itemDriveID = item.DriveID
-		}
-
-		baselineKey := driveid.NewItemKey(itemDriveID, item.ID)
-		existing, _ := bl.GetByID(baselineKey)
-
-		ev := ChangeEvent{
-			Source:   SourceRemote,
-			Path:     mappedPath,
-			ItemID:   item.ID,
-			ParentID: item.ParentID,
-			DriveID:  itemDriveID,
-			ItemType: classifyItemType(item),
-			Name:     item.Name,
-			Size:     item.Size,
-			Hash:     hash,
-			Mtime:    toUnixNano(item.ModifiedAt),
-			ETag:     item.ETag,
-			CTag:     item.CTag,
-		}
-
-		switch {
-		case item.IsDeleted:
-			ev.Type = ChangeDelete
-			ev.IsDeleted = true
-
-			if existing != nil {
-				ev.Path = existing.Path
-			}
-		case existing != nil:
-			ev.Type = ChangeModify
-		default:
-			ev.Type = ChangeCreate
-		}
-
-		events = append(events, ev)
-	}
-
-	return events
-}
-
-// shortcutParent tracks an item's name and parent for path construction.
-type shortcutParent struct {
-	name     string
-	parentID string
-}
-
-// buildShortcutRelPath constructs the relative path of an item within a
-// shortcut scope by walking the parent chain. Stops at the source folder
-// (rootItemID) or when the chain breaks.
-func buildShortcutRelPath(item *graph.Item, parentMap map[string]shortcutParent, rootItemID string) string {
-	segments := []string{item.Name}
-	parentID := item.ParentID
-
-	for depth := 0; depth < maxPathDepth; depth++ {
-		if parentID == "" || parentID == rootItemID {
-			break
-		}
-
-		p, ok := parentMap[parentID]
-		if !ok {
-			break
-		}
-
-		segments = append(segments, p.name)
-		parentID = p.parentID
-	}
-
-	// Reverse to get root-first order.
-	for i, j := 0, len(segments)-1; i < j; i, j = i+1, j-1 {
-		segments[i], segments[j] = segments[j], segments[i]
-	}
-
-	return strings.Join(segments, "/")
-}
-
-// mapShortcutPath prefixes a relative path within a shortcut scope with
-// the shortcut's local path.
-func mapShortcutPath(shortcutLocalPath, relPath string) string {
-	return path.Join(shortcutLocalPath, relPath)
-}
-
-// detectShortcutOrphans finds baseline entries belonging to a shortcut scope
-// that are no longer present in the full enumeration.
-func detectShortcutOrphans(
-	sc *Shortcut, remoteDriveID driveid.ID, items []graph.Item, bl *Baseline,
-) []ChangeEvent {
-	seen := make(map[driveid.ItemKey]struct{}, len(items))
-	for i := range items {
-		itemDriveID := remoteDriveID
-
-		if !items[i].DriveID.IsZero() {
-			itemDriveID = items[i].DriveID
-		}
-
-		seen[driveid.NewItemKey(itemDriveID, items[i].ID)] = struct{}{}
-	}
-
-	prefix := sc.LocalPath + "/"
-	var orphans []ChangeEvent
-
-	bl.ForEachPath(func(p string, entry *BaselineEntry) {
-		if !strings.HasPrefix(p, prefix) && p != sc.LocalPath {
-			return
-		}
-
-		if entry.DriveID != remoteDriveID {
-			return
-		}
-
-		key := driveid.NewItemKey(entry.DriveID, entry.ItemID)
-		if _, ok := seen[key]; ok {
-			return
-		}
-
-		orphans = append(orphans, ChangeEvent{
-			Source:    SourceRemote,
-			Type:      ChangeDelete,
-			Path:      entry.Path,
-			ItemID:    entry.ItemID,
-			DriveID:   entry.DriveID,
-			ItemType:  entry.ItemType,
-			IsDeleted: true,
-		})
-	})
-
-	return orphans
+	return scopeResult{
+		events:     events,
+		deltaToken: newToken,
+		shortcut:   sc,
+	}, nil
 }
