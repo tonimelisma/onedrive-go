@@ -81,57 +81,73 @@ func TestMapShortcutPath(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// buildShortcutRelPath
+// buildShortcutPathMap (O(n) memoized path building)
 // ---------------------------------------------------------------------------
 
-func TestBuildShortcutRelPath_DirectChild(t *testing.T) {
+func TestBuildShortcutPathMap_DirectChild(t *testing.T) {
 	t.Parallel()
 
-	item := &graph.Item{
-		ID:       "file-1",
-		Name:     "report.xlsx",
-		ParentID: "root-folder",
+	items := []graph.Item{
+		{ID: "file-1", Name: "report.xlsx", ParentID: "root-folder"},
 	}
 
-	parentMap := map[string]shortcutParent{}
-
-	got := buildShortcutRelPath(item, parentMap, "root-folder")
-	assert.Equal(t, "report.xlsx", got)
+	pathMap := buildShortcutPathMap(items, "root-folder")
+	assert.Equal(t, "report.xlsx", pathMap["file-1"])
 }
 
-func TestBuildShortcutRelPath_NestedChild(t *testing.T) {
+func TestBuildShortcutPathMap_NestedChild(t *testing.T) {
 	t.Parallel()
 
-	item := &graph.Item{
-		ID:       "file-1",
-		Name:     "report.xlsx",
-		ParentID: "subfolder-1",
+	items := []graph.Item{
+		{ID: "subfolder-1", Name: "Documents", ParentID: "root-folder", IsFolder: true},
+		{ID: "file-1", Name: "report.xlsx", ParentID: "subfolder-1"},
 	}
 
-	parentMap := map[string]shortcutParent{
-		"subfolder-1": {name: "Documents", parentID: "root-folder"},
-	}
-
-	got := buildShortcutRelPath(item, parentMap, "root-folder")
-	assert.Equal(t, "Documents/report.xlsx", got)
+	pathMap := buildShortcutPathMap(items, "root-folder")
+	assert.Equal(t, "Documents", pathMap["subfolder-1"])
+	assert.Equal(t, "Documents/report.xlsx", pathMap["file-1"])
 }
 
-func TestBuildShortcutRelPath_DeeplyNested(t *testing.T) {
+func TestBuildShortcutPathMap_DeeplyNested(t *testing.T) {
 	t.Parallel()
 
-	item := &graph.Item{
-		ID:       "file-1",
-		Name:     "data.csv",
-		ParentID: "folder-c",
+	items := []graph.Item{
+		{ID: "folder-b", Name: "B", ParentID: "root-folder", IsFolder: true},
+		{ID: "folder-c", Name: "C", ParentID: "folder-b", IsFolder: true},
+		{ID: "file-1", Name: "data.csv", ParentID: "folder-c"},
 	}
 
-	parentMap := map[string]shortcutParent{
-		"folder-c": {name: "C", parentID: "folder-b"},
-		"folder-b": {name: "B", parentID: "root-folder"},
+	pathMap := buildShortcutPathMap(items, "root-folder")
+	assert.Equal(t, "B/C/data.csv", pathMap["file-1"])
+}
+
+func TestBuildShortcutPathMap_MemoizesCorrectly(t *testing.T) {
+	t.Parallel()
+
+	// Multiple files under the same subfolder — parent path resolved once.
+	items := []graph.Item{
+		{ID: "sub", Name: "Sub", ParentID: "root", IsFolder: true},
+		{ID: "f1", Name: "a.txt", ParentID: "sub"},
+		{ID: "f2", Name: "b.txt", ParentID: "sub"},
 	}
 
-	got := buildShortcutRelPath(item, parentMap, "root-folder")
-	assert.Equal(t, "B/C/data.csv", got)
+	pathMap := buildShortcutPathMap(items, "root")
+	assert.Equal(t, "Sub/a.txt", pathMap["f1"])
+	assert.Equal(t, "Sub/b.txt", pathMap["f2"])
+}
+
+func TestBuildShortcutPathMap_SkipsRoot(t *testing.T) {
+	t.Parallel()
+
+	items := []graph.Item{
+		{ID: "root-folder", Name: "root", ParentID: "", IsRoot: true},
+		{ID: "f1", Name: "file.txt", ParentID: "root-folder"},
+	}
+
+	pathMap := buildShortcutPathMap(items, "root-folder")
+	_, hasRoot := pathMap["root-folder"]
+	assert.False(t, hasRoot, "root item should not be in path map")
+	assert.Equal(t, "file.txt", pathMap["f1"])
 }
 
 // ---------------------------------------------------------------------------
@@ -499,6 +515,192 @@ func TestHandleRemovedShortcuts_IgnoresNonShortcutDeletes(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// detectShortcutCollisions
+// ---------------------------------------------------------------------------
+
+func TestDetectShortcutCollisions_NoCollisions(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
+		ItemID:       "sc-1",
+		RemoteDrive:  "remote-drive-1",
+		RemoteItem:   "remote-item-1",
+		LocalPath:    "SharedA",
+		Observation:  ObservationUnknown,
+		DiscoveredAt: 1000,
+	}))
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
+		ItemID:       "sc-2",
+		RemoteDrive:  "remote-drive-2",
+		RemoteItem:   "remote-item-2",
+		LocalPath:    "SharedB",
+		Observation:  ObservationUnknown,
+		DiscoveredAt: 1000,
+	}))
+
+	e := &Engine{
+		baseline: mgr,
+		logger:   testLogger(t),
+	}
+
+	// Should not panic or log errors — no collisions.
+	e.detectShortcutCollisions(ctx, emptyBaseline())
+}
+
+func TestDetectShortcutCollisions_DuplicatePath(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	// Two shortcuts at the same local path.
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
+		ItemID:       "sc-1",
+		RemoteDrive:  "remote-drive-1",
+		RemoteItem:   "remote-item-1",
+		LocalPath:    "SharedDocs",
+		Observation:  ObservationUnknown,
+		DiscoveredAt: 1000,
+	}))
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
+		ItemID:       "sc-2",
+		RemoteDrive:  "remote-drive-2",
+		RemoteItem:   "remote-item-2",
+		LocalPath:    "SharedDocs",
+		Observation:  ObservationUnknown,
+		DiscoveredAt: 1000,
+	}))
+
+	e := &Engine{
+		baseline: mgr,
+		logger:   testLogger(t),
+	}
+
+	// Should warn but not panic. We verify it doesn't crash.
+	e.detectShortcutCollisions(ctx, emptyBaseline())
+}
+
+func TestDetectShortcutCollisions_PrimaryDriveConflict(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	primaryDriveID := driveid.New("0000000000000001")
+
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
+		ItemID:       "sc-1",
+		RemoteDrive:  "0000000000000099",
+		RemoteItem:   "remote-item-1",
+		LocalPath:    "SharedDocs",
+		Observation:  ObservationUnknown,
+		DiscoveredAt: 1000,
+	}))
+
+	// Baseline has a primary drive entry at the same path.
+	bl := baselineWith(&BaselineEntry{
+		Path:    "SharedDocs",
+		DriveID: primaryDriveID,
+		ItemID:  "primary-folder-1",
+	})
+
+	e := &Engine{
+		baseline: mgr,
+		logger:   testLogger(t),
+	}
+
+	// Should warn about the conflict but not crash.
+	e.detectShortcutCollisions(ctx, bl)
+}
+
+// ---------------------------------------------------------------------------
+// filterReadOnlyShortcutEvents
+// ---------------------------------------------------------------------------
+
+func TestFilterReadOnlyShortcutEvents_NoReadOnly(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
+		ItemID:       "sc-1",
+		RemoteDrive:  "remote-drive-1",
+		RemoteItem:   "remote-item-1",
+		LocalPath:    "SharedDocs",
+		ReadOnly:     false,
+		Observation:  ObservationUnknown,
+		DiscoveredAt: 1000,
+	}))
+
+	e := &Engine{
+		baseline: mgr,
+		logger:   testLogger(t),
+	}
+
+	events := []ChangeEvent{
+		{Type: ChangeCreate, Path: "SharedDocs/file.txt", Source: SourceLocal},
+		{Type: ChangeModify, Path: "other/file.txt", Source: SourceLocal},
+	}
+
+	result := e.filterReadOnlyShortcutEvents(ctx, events)
+	assert.Len(t, result, 2, "no events should be filtered when shortcut is not read-only")
+}
+
+func TestFilterReadOnlyShortcutEvents_FiltersReadOnly(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
+		ItemID:       "sc-1",
+		RemoteDrive:  "remote-drive-1",
+		RemoteItem:   "remote-item-1",
+		LocalPath:    "SharedDocs",
+		ReadOnly:     true,
+		Observation:  ObservationUnknown,
+		DiscoveredAt: 1000,
+	}))
+
+	e := &Engine{
+		baseline: mgr,
+		logger:   testLogger(t),
+	}
+
+	events := []ChangeEvent{
+		{Type: ChangeCreate, Path: "SharedDocs/new.txt", Source: SourceLocal},
+		{Type: ChangeModify, Path: "SharedDocs/sub/edited.txt", Source: SourceLocal},
+		{Type: ChangeCreate, Path: "MyFolder/local.txt", Source: SourceLocal},
+	}
+
+	result := e.filterReadOnlyShortcutEvents(ctx, events)
+	require.Len(t, result, 1)
+	assert.Equal(t, "MyFolder/local.txt", result[0].Path, "only non-shortcut events should remain")
+}
+
+func TestFilterReadOnlyShortcutEvents_NoShortcuts(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+
+	e := &Engine{
+		baseline: mgr,
+		logger:   testLogger(t),
+	}
+
+	events := []ChangeEvent{
+		{Type: ChangeCreate, Path: "file.txt"},
+	}
+
+	result := e.filterReadOnlyShortcutEvents(t.Context(), events)
+	assert.Len(t, result, 1, "should pass through all events when no shortcuts")
+}
+
+// ---------------------------------------------------------------------------
 // detectDriveType
 // ---------------------------------------------------------------------------
 
@@ -838,6 +1040,70 @@ func TestProcessShortcuts_NilCapabilities(t *testing.T) {
 	events, err := e.processShortcuts(t.Context(), nil, emptyBaseline(), false)
 	require.NoError(t, err)
 	assert.Nil(t, events, "should return nil when no shortcut capabilities configured")
+}
+
+// ---------------------------------------------------------------------------
+// Integration: observeChanges produces both primary and shortcut events
+// ---------------------------------------------------------------------------
+
+func TestProcessShortcuts_ShortcutAndPrimaryEventsCoexist(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	remoteDriveID := driveid.New("0000000000000099")
+
+	// Pre-register a shortcut so observation finds it.
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
+		ItemID:       "sc-1",
+		RemoteDrive:  "0000000000000099",
+		RemoteItem:   "remote-item-1",
+		LocalPath:    "SharedDocs",
+		Observation:  ObservationEnumerate,
+		DiscoveredAt: 1000,
+	}))
+
+	mockLister := &mockRecursiveLister{
+		items: []graph.Item{
+			{ID: "f1", Name: "shared.txt", ParentID: "remote-item-1", DriveID: remoteDriveID},
+		},
+	}
+
+	e := &Engine{
+		baseline:        mgr,
+		recursiveLister: mockLister,
+		logger:          testLogger(t),
+	}
+
+	// Simulate primary delta producing a regular file change AND a shortcut event.
+	remoteEvents := []ChangeEvent{
+		{Type: ChangeCreate, Path: "primary/newfile.txt", ItemID: "p1", Source: SourceRemote},
+		{
+			Type: ChangeShortcut, Path: "SharedDocs", ItemID: "sc-1",
+			RemoteDriveID: "0000000000000099", RemoteItemID: "remote-item-1",
+		},
+	}
+
+	bl := emptyBaseline()
+	shortcutEvents, err := e.processShortcuts(ctx, remoteEvents, bl, false)
+	require.NoError(t, err)
+
+	// Shortcut events should contain the shared file.
+	require.Len(t, shortcutEvents, 1)
+	assert.Equal(t, "SharedDocs/shared.txt", shortcutEvents[0].Path)
+
+	// Filter out shortcuts from primary events.
+	filtered := filterOutShortcuts(remoteEvents)
+	require.Len(t, filtered, 1)
+	assert.Equal(t, "primary/newfile.txt", filtered[0].Path)
+
+	// Both sets of events should coexist in a buffer.
+	buf := NewBuffer(testLogger(t))
+	buf.AddAll(filtered)
+	buf.AddAll(shortcutEvents)
+	batch := buf.FlushImmediate()
+	assert.Len(t, batch, 2, "buffer should contain both primary and shortcut events")
 }
 
 // ---------------------------------------------------------------------------
