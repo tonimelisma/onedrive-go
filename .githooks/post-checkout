@@ -1,8 +1,12 @@
 #!/bin/bash
 
-# Auto-copy files listed in .worktreeinclude when creating a new worktree.
+# Auto-copy/symlink files listed in .worktreeinclude when creating a new worktree.
 # Git calls post-checkout with a null previous ref on worktree creation.
 # Forward-compatible with Claude Code Desktop which reads .worktreeinclude natively.
+#
+# Entries prefixed with @ are symlinked instead of copied. This preserves
+# changes (e.g., rotated tokens) back to the main worktree instead of
+# losing them when the worktree is deleted.
 
 prev_ref="$1"
 
@@ -25,7 +29,7 @@ if [ ! -f "$include_file" ]; then
     exit 0
 fi
 
-echo "post-checkout: Copying files from .worktreeinclude..."
+echo "post-checkout: Setting up files from .worktreeinclude..."
 
 while IFS= read -r file || [ -n "$file" ]; do
     # Skip empty lines and comments
@@ -33,14 +37,27 @@ while IFS= read -r file || [ -n "$file" ]; do
     [ -z "$file" ] && continue
     [[ "$file" == \#* ]] && continue
 
-    src="$main_worktree/$file"
-    dst="$current_dir/$file"
-
-    if [ -e "$src" ]; then
-        mkdir -p "$(dirname "$dst")"
-        cp -r "$src" "$dst"
-        echo "  Copied $file"
+    # @-prefixed entries are symlinked instead of copied
+    if [[ "$file" == @* ]]; then
+        file="${file#@}"
+        src="$main_worktree/$file"
+        dst="$current_dir/$file"
+        if [ -e "$src" ]; then
+            mkdir -p "$(dirname "$dst")"
+            ln -s "$src" "$dst"
+            echo "  Symlinked $file -> $src"
+        else
+            echo "  Skipped $file (not found in main worktree)"
+        fi
     else
-        echo "  Skipped $file (not found in main worktree)"
+        src="$main_worktree/$file"
+        dst="$current_dir/$file"
+        if [ -e "$src" ]; then
+            mkdir -p "$(dirname "$dst")"
+            cp -r "$src" "$dst"
+            echo "  Copied $file"
+        else
+            echo "  Skipped $file (not found in main worktree)"
+        fi
     fi
 done < "$include_file"

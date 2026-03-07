@@ -644,7 +644,8 @@ func TestDeriveSharedDisplayName_Basic(t *testing.T) {
 		SharedOwnerName:  "John Doe",
 		SharedOwnerEmail: "john@example.com",
 	}
-	name := deriveSharedDisplayName(item, nil)
+	name, err := deriveSharedDisplayName(item, nil)
+	require.NoError(t, err)
 	assert.Equal(t, "John's Documents", name)
 }
 
@@ -655,7 +656,8 @@ func TestDeriveSharedDisplayName_FirstNameCollision(t *testing.T) {
 		SharedOwnerEmail: "john@example.com",
 	}
 	existing := map[string]bool{"John's Documents": true}
-	name := deriveSharedDisplayName(item, existing)
+	name, err := deriveSharedDisplayName(item, existing)
+	require.NoError(t, err)
 	assert.Equal(t, "John Doe's Documents", name)
 }
 
@@ -669,7 +671,8 @@ func TestDeriveSharedDisplayName_FullNameCollision(t *testing.T) {
 		"John's Documents":     true,
 		"John Doe's Documents": true,
 	}
-	name := deriveSharedDisplayName(item, existing)
+	name, err := deriveSharedDisplayName(item, existing)
+	require.NoError(t, err)
 	assert.Equal(t, "John Doe's Documents (john@example.com)", name)
 }
 
@@ -679,18 +682,31 @@ func TestDeriveSharedDisplayName_SingleName(t *testing.T) {
 		SharedOwnerName:  "Alice",
 		SharedOwnerEmail: "alice@example.com",
 	}
-	name := deriveSharedDisplayName(item, nil)
+	name, err := deriveSharedDisplayName(item, nil)
+	require.NoError(t, err)
 	assert.Equal(t, "Alice's Shared Stuff", name)
 }
 
-func TestDeriveSharedDisplayName_EmptyOwnerName(t *testing.T) {
+func TestDeriveSharedDisplayName_EmptyOwnerNameWithEmail(t *testing.T) {
 	item := &graph.Item{
 		Name:             "Folder",
 		SharedOwnerName:  "",
 		SharedOwnerEmail: "unknown@example.com",
 	}
-	name := deriveSharedDisplayName(item, nil)
-	assert.Equal(t, "'s Folder (unknown@example.com)", name)
+	name, err := deriveSharedDisplayName(item, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "Folder (shared by unknown@example.com)", name)
+}
+
+func TestDeriveSharedDisplayName_NoIdentity(t *testing.T) {
+	item := &graph.Item{
+		Name:             "Folder",
+		SharedOwnerName:  "",
+		SharedOwnerEmail: "",
+	}
+	_, err := deriveSharedDisplayName(item, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no owner identity")
 }
 
 // --- printDriveListText shared drives ---
@@ -768,7 +784,7 @@ sync_dir = "~/OneDrive"
 sync_dir = "~/OneDrive-Shared/Test"
 `), 0o600))
 
-	err := addSharedDrive(t.Context(), cfgPath, cid, testDriveLogger(t))
+	err := addSharedDrive(t.Context(), cfgPath, cid, "", testDriveLogger(t))
 	assert.NoError(t, err)
 }
 
@@ -782,7 +798,7 @@ func TestAddSharedDrive_NoToken(t *testing.T) {
 	// Empty config — no primary drive to resolve token from.
 	require.NoError(t, os.WriteFile(cfgPath, []byte(""), 0o600))
 
-	err := addSharedDrive(t.Context(), cfgPath, cid, testDriveLogger(t))
+	err := addSharedDrive(t.Context(), cfgPath, cid, "", testDriveLogger(t))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot resolve token")
 }

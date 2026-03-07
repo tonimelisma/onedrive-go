@@ -153,6 +153,9 @@ func newRootCmd() *cobra.Command {
 		//   Phase 1 (always): read Cobra flags → build CLIFlags → read env → build bootstrap logger
 		//   Phase 2 (data commands only): load config → resolve drive → build final logger
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			if version == "dev" {
+				config.AssertDevSafe() // prevent go run . from touching production data
+			}
 			// Phase 1: always populate flags + bootstrap logger + env + config path.
 			flags := CLIFlags{
 				ConfigPath: flagConfigPath,

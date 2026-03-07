@@ -652,6 +652,21 @@ New files: `reconciler.go`, `reconciler_test.go`, `migrations/00002_add_sync_fai
 5. `DefaultDisplayName` shared fallback improved: "Shared from email" instead of raw drive ID.
 6. Integration test for `SharedWithMe` endpoint.
 
+**6.3 Follow-up** (merged separately):
+- Fixed `remoteItem` identity parsing — owner data lives in `remoteItem.shared`/`.createdBy`, not top-level `shared`.
+- Four-level identity fallback chain: `remoteItem.shared.sharedBy` → `.owner` → `.createdBy` → top-level `shared.owner`.
+- `deriveSharedDisplayName` returns error on missing identity (no more `'s Folder ()`).
+- Search-based discovery (`GET /me/drive/search(q='*')`) as primary, SharedWithMe as fallback (deprecated Nov 2026).
+- Identity enrichment via `GetItem` for search results (which lack email).
+- Dev build safeguard (`AssertDevSafe`) prevents `go run .` from touching production data.
+- Worktree `.testdata/` symlinked instead of copied (preserves rotated tokens).
+- `addSharedDrive` accepts pre-resolved display name (avoids re-querying API).
+- Extracted `filterSharedFolders` iterator (eliminated ~40 lines of duplication).
+- `sharedMatch.tokenEmail` shows source account in multi-match output.
+- Partial canonical ID validation (selectors with `:` get clear error).
+- Parallelized `discoverAvailableDrives` across tokens via `errgroup`.
+- `printDriveListText` label parts joined (non-exclusive).
+
 #### 6.4a: Folder-scoped delta + remoteItem parsing — FUTURE
 
 1. ~~`graph.Item` gains `RemoteDriveID`/`RemoteItemID` from `remoteItem` facet.~~ (Done in 6.3.)

@@ -159,6 +159,8 @@ func TestNewRootCmd_PersistentFlags(t *testing.T) {
 }
 
 func TestNewRootCmd_MutualExclusivity(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir()) // satisfy dev build guard
+
 	// Cobra enforces mutual exclusivity during Execute(). Verify that
 	// combining --verbose/--debug/--quiet produces an error.
 	// Uses "status" because it has skipConfigAnnotation, so Phase 2
@@ -183,6 +185,8 @@ func TestNewRootCmd_MutualExclusivity(t *testing.T) {
 }
 
 func TestNewRootCmd_AuthSkipsConfig(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir()) // satisfy dev build guard
+
 	cmd := newRootCmd()
 
 	// Auth and account management commands should pass through PersistentPreRunE
@@ -235,6 +239,8 @@ func TestNewRootCmd_DriveSubcommands(t *testing.T) {
 }
 
 func TestNewRootCmd_DriveSubcommandsSkipConfig(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir()) // satisfy dev build guard
+
 	cmd := newRootCmd()
 
 	// drive, drive add, and drive remove should skip config loading via annotation.
@@ -352,6 +358,7 @@ func TestLoadAndResolve_MissingFile_NoDrives_Error(t *testing.T) {
 
 	// Override HOME so token discovery finds nothing on disk.
 	t.Setenv("HOME", tmpDir)
+	t.Setenv("XDG_DATA_HOME", tmpDir) // satisfy dev build guard
 
 	// No config file and no tokens: matchNoDrives returns "no accounts
 	// configured" because no tokens exist on disk.
@@ -389,6 +396,8 @@ func TestMustCLIContext_Returns(t *testing.T) {
 // --- CLIFlags tests ---
 
 func TestCLIFlags_PopulatedByPersistentPreRunE(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir()) // satisfy dev build guard
+
 	// Verify that PersistentPreRunE populates CLIFlags for auth commands.
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"--verbose", "status"})

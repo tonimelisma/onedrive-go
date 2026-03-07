@@ -158,10 +158,19 @@ Optimization deferred until profiling shows a bottleneck.
 | ~~B-326~~ | ~~Investigate delta token advancement on zero-event responses~~ | ~~P3~~ | **DONE** — Zero-event guard: `observeAndCommitRemote()` and `RemoteObserver.Watch()` skip token advancement when delta returns 0 events. Replaying costs O(1); prevents advancing past still-propagating deletions. See ci_issues.md §20. |
 | B-327 | `EnsureDriveInConfig` broken for shared drives | P3 | `EnsureDriveInConfig` → `ReadTokenMeta(cid, logger)` → `DriveTokenPath(cid, nil)` → `TokenCanonicalID(cid, nil)` → `resolveSharedToken(cid, nil)` → "config required" (nil cfg). Workaround in 6.3: `addSharedDrive` bypasses `EnsureDriveInConfig` and writes config directly. Proper fix: make `EnsureDriveInConfig` accept `*config.Config` parameter or refactor token resolution to not require config for shared drives. |
 
+## Phase 6.3 Follow-up
+
+| ID | Title | Priority | Notes |
+|----|-------|----------|-------|
+| ~~B-328~~ | ~~SharedWithMe deprecated Nov 2026 — search-based alternative~~ | ~~P2~~ | **DONE** — `SearchDriveItems` using `GET /me/drive/search(q='*')` as primary discovery. SharedWithMe as fallback. Identity enrichment via `GetItem` for search results. |
+| B-329 | `drive/recent` deprecated Nov 2026 | P5 | We don't use this endpoint. No action needed. |
+| B-330 | Monitor `search(q='*')` reliability on business accounts | P4 | Wildcard search for shared item discovery needs verification on non-personal accounts. |
+
 ## Closed
 
 | ID | Title | Resolution |
 |----|-------|------------|
+| B-328 | SharedWithMe deprecated Nov 2026 — search-based alternative | **DONE** — `SearchDriveItems` + identity enrichment via `GetItem`. SharedWithMe as fallback. |
 | B-325 | Periodic full reconciliation scan | **DONE** — `observeRemoteFull()` + `Baseline.FindOrphans()` + `sync --full` + daemon periodic reconciliation (24h default). See ci_issues.md §21. |
 | B-326 | Delta token advancement on zero-event responses | **DONE** — Zero-event guard in `observeAndCommitRemote()` and `Watch()`. See ci_issues.md §20. |
 | B-307 | FC-1: Remote observer symmetric filtering | **DONE** — Phase 5.7.1. `isAlwaysExcluded()` + `isValidOneDriveName()` in `classifyItem()`. Remote items filtered symmetrically with local observer. |

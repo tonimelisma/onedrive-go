@@ -382,7 +382,7 @@ func (c *Client) SharedWithMe(ctx context.Context) ([]Item, error) {
 	path := "/me/drive/sharedWithMe"
 
 	for path != "" {
-		page, nextPath, err := c.fetchSharedWithMePage(ctx, path)
+		page, nextPath, err := c.fetchItemPage(ctx, path, "sharedWithMe")
 		if err != nil {
 			return nil, err
 		}
@@ -396,9 +396,36 @@ func (c *Client) SharedWithMe(ctx context.Context) ([]Item, error) {
 	return items, nil
 }
 
-// fetchSharedWithMePage fetches one page of SharedWithMe results.
-// Extracted to ensure resp.Body.Close() runs per-page (not deferred in loop).
-func (c *Client) fetchSharedWithMePage(ctx context.Context, path string) ([]Item, string, error) {
+// SearchDriveItems searches the user's drive using GET /me/drive/search(q='{query}').
+// Returns items including shared content (items with remoteItem facets).
+// This endpoint is NOT deprecated, unlike SharedWithMe.
+// Identity data in search results is incomplete (no email); callers should
+// enrich shared items via GetItem if owner email is needed.
+func (c *Client) SearchDriveItems(ctx context.Context, query string) ([]Item, error) {
+	c.logger.Info("searching drive items", slog.String("query", query))
+
+	var items []Item
+	path := fmt.Sprintf("/me/drive/search(q='%s')", url.QueryEscape(query))
+
+	for path != "" {
+		page, nextPath, err := c.fetchItemPage(ctx, path, "search")
+		if err != nil {
+			return nil, err
+		}
+
+		items = append(items, page...)
+		path = nextPath
+	}
+
+	c.logger.Info("search returned items", slog.Int("count", len(items)))
+
+	return items, nil
+}
+
+// fetchItemPage fetches one page of items from a paginated endpoint
+// (SharedWithMe, search, etc.). Handles response decoding, item normalization,
+// and @odata.nextLink extraction. The label is used in error messages only.
+func (c *Client) fetchItemPage(ctx context.Context, path, label string) ([]Item, string, error) {
 	resp, err := c.Do(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, "", err
@@ -410,7 +437,7 @@ func (c *Client) fetchSharedWithMePage(ctx context.Context, path string) ([]Item
 		NextLink string              `json:"@odata.nextLink"` //nolint:tagliatelle // OData annotation key
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
-		return nil, "", fmt.Errorf("graph: decoding sharedWithMe response: %w", err)
+		return nil, "", fmt.Errorf("graph: decoding %s response: %w", label, err)
 	}
 
 	items := make([]Item, 0, len(page.Value))
