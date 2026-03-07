@@ -51,15 +51,15 @@ func (e *Engine) processShortcuts(
 		return nil, err
 	}
 
-	// Step 4: Detect path collisions between shortcuts and primary drive content.
-	e.detectShortcutCollisions(ctx, bl)
+	// Step 4: Detect path collisions and skip colliding shortcuts.
+	collisions := e.detectShortcutCollisions(ctx, bl)
 
 	if dryRun {
 		return nil, nil
 	}
 
-	// Step 5: Observe content for all active shortcuts.
-	return e.observeShortcutContent(ctx, bl)
+	// Step 5: Observe content for all active shortcuts (excluding collisions).
+	return e.observeShortcutContent(ctx, bl, collisions)
 }
 
 // registerShortcuts upserts shortcuts from ChangeShortcut events.
@@ -113,44 +113,86 @@ func (e *Engine) registerShortcuts(ctx context.Context, events []ChangeEvent) er
 	return nil
 }
 
-// detectShortcutCollisions warns about shortcuts whose local paths conflict
-// with each other or with existing primary drive paths in the baseline.
-// Collisions mean two different scopes would write to the same local directory.
-func (e *Engine) detectShortcutCollisions(ctx context.Context, bl *Baseline) {
+// detectShortcutCollisions checks for path conflicts between shortcuts and
+// returns the set of item IDs that should be skipped during observation.
+// Detects: exact duplicates, prefix nesting (Shared vs Shared/Sub), and
+// conflicts with primary drive baseline entries.
+func (e *Engine) detectShortcutCollisions(ctx context.Context, bl *Baseline) map[string]bool {
 	shortcuts, err := e.baseline.ListShortcuts(ctx)
 	if err != nil {
-		return
+		return nil
 	}
 
-	// Check shortcut-vs-shortcut collisions.
+	collisions := make(map[string]bool)
+
+	// Check shortcut-vs-shortcut: exact duplicates and prefix nesting.
 	paths := make(map[string]string, len(shortcuts)) // localPath → itemID
+
 	for i := range shortcuts {
 		sc := &shortcuts[i]
+
+		// Exact duplicate check.
 		if existing, ok := paths[sc.LocalPath]; ok {
-			e.logger.Warn("shortcut path collision: two shortcuts share the same local path",
+			e.logger.Warn("shortcut path collision: duplicate path, skipping later shortcut",
 				slog.String("path", sc.LocalPath),
-				slog.String("shortcut_a", existing),
-				slog.String("shortcut_b", sc.ItemID),
+				slog.String("kept", existing),
+				slog.String("skipped", sc.ItemID),
 			)
+
+			collisions[sc.ItemID] = true
+
+			continue
+		}
+
+		// Prefix nesting check: is this path a parent or child of an existing shortcut?
+		for existingPath, existingID := range paths {
+			if strings.HasPrefix(sc.LocalPath, existingPath+"/") {
+				e.logger.Warn("shortcut path collision: nested under existing shortcut, skipping",
+					slog.String("parent_path", existingPath),
+					slog.String("child_path", sc.LocalPath),
+					slog.String("skipped", sc.ItemID),
+				)
+
+				collisions[sc.ItemID] = true
+
+				break
+			}
+
+			if strings.HasPrefix(existingPath, sc.LocalPath+"/") {
+				e.logger.Warn("shortcut path collision: existing shortcut nested under new, skipping existing",
+					slog.String("parent_path", sc.LocalPath),
+					slog.String("child_path", existingPath),
+					slog.String("skipped", existingID),
+				)
+
+				collisions[existingID] = true
+			}
 		}
 
 		paths[sc.LocalPath] = sc.ItemID
 	}
 
-	// Check shortcut-vs-primary-drive collisions: a shortcut's local path
-	// matches a baseline entry from the user's own drive (not the remote drive).
+	// Check shortcut-vs-primary-drive collisions.
 	for i := range shortcuts {
 		sc := &shortcuts[i]
+		if collisions[sc.ItemID] {
+			continue
+		}
+
 		remoteDriveID := driveid.New(sc.RemoteDrive)
 
 		if entry, ok := bl.GetByPath(sc.LocalPath); ok && entry.DriveID != remoteDriveID {
-			e.logger.Warn("shortcut path collision: path conflicts with primary drive entry",
+			e.logger.Warn("shortcut path collision: conflicts with primary drive, skipping",
 				slog.String("path", sc.LocalPath),
 				slog.String("shortcut", sc.ItemID),
 				slog.String("primary_item", entry.ItemID),
 			)
+
+			collisions[sc.ItemID] = true
 		}
 	}
+
+	return collisions
 }
 
 // filterReadOnlyShortcutEvents removes local change events for paths under
@@ -284,7 +326,7 @@ type scopeResult struct {
 // (up to maxShortcutConcurrency in parallel). Delta tokens are deferred until
 // all scopes complete, ensuring atomicity — a crash mid-observation won't leave
 // some tokens advanced past unprocessed events.
-func (e *Engine) observeShortcutContent(ctx context.Context, bl *Baseline) ([]ChangeEvent, error) {
+func (e *Engine) observeShortcutContent(ctx context.Context, bl *Baseline, collisions map[string]bool) ([]ChangeEvent, error) {
 	shortcuts, err := e.baseline.ListShortcuts(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing shortcuts for observation: %w", err)
@@ -305,6 +347,16 @@ func (e *Engine) observeShortcutContent(ctx context.Context, bl *Baseline) ([]Ch
 		sc := &shortcuts[i]
 
 		g.Go(func() error {
+			// Always set shortcut pointer so post-loop code can safely
+			// dereference it even for failed/skipped scopes.
+			mu.Lock()
+			results[i].shortcut = sc
+			mu.Unlock()
+
+			if collisions[sc.ItemID] {
+				return nil
+			}
+
 			result, scErr := e.observeSingleShortcut(gCtx, sc, bl)
 			if scErr != nil {
 				e.logger.Warn("shortcut observation failed, skipping",
@@ -450,39 +502,66 @@ func (e *Engine) reconcileShortcutScopes(ctx context.Context, bl *Baseline) ([]C
 		return nil, fmt.Errorf("sync: listing shortcuts for reconciliation: %w", err)
 	}
 
-	var allEvents []ChangeEvent
+	if len(shortcuts) == 0 {
+		return nil, nil
+	}
+
+	results := make([]scopeResult, len(shortcuts))
+
+	var mu stdsync.Mutex
+
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(maxShortcutConcurrency)
 
 	for i := range shortcuts {
 		sc := &shortcuts[i]
-		remoteDriveID := driveid.New(sc.RemoteDrive)
 
-		var result scopeResult
+		g.Go(func() error {
+			mu.Lock()
+			results[i].shortcut = sc
+			mu.Unlock()
 
-		var scErr error
+			remoteDriveID := driveid.New(sc.RemoteDrive)
 
-		switch sc.Observation {
-		case ObservationDelta:
-			// Full delta with empty token = enumerate all items via delta.
-			result, scErr = e.reconcileShortcutDelta(ctx, sc, remoteDriveID, bl)
-		default:
-			// Enumerate: same as normal observation (already a full enum).
-			result, scErr = e.observeShortcutEnumerate(ctx, sc, remoteDriveID, bl)
-		}
+			var result scopeResult
+			var scErr error
 
-		if scErr != nil {
-			e.logger.Warn("shortcut reconciliation failed, skipping",
-				slog.String("item_id", sc.ItemID),
-				slog.String("error", scErr.Error()),
-			)
+			switch sc.Observation {
+			case ObservationDelta:
+				result, scErr = e.reconcileShortcutDelta(gCtx, sc, remoteDriveID, bl)
+			default:
+				result, scErr = e.observeShortcutEnumerate(gCtx, sc, remoteDriveID, bl)
+			}
 
-			continue
-		}
+			if scErr != nil {
+				e.logger.Warn("shortcut reconciliation failed, skipping",
+					slog.String("item_id", sc.ItemID),
+					slog.String("error", scErr.Error()),
+				)
 
-		allEvents = append(allEvents, result.events...)
+				return nil
+			}
 
-		// Commit delta token for reconciliation scopes.
-		if result.deltaToken != "" {
-			if err := e.baseline.CommitDeltaToken(ctx, result.deltaToken, sc.RemoteDrive, sc.RemoteItem, sc.RemoteDrive); err != nil {
+			mu.Lock()
+			results[i] = result
+			mu.Unlock()
+
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, fmt.Errorf("sync: shortcut reconciliation: %w", err)
+	}
+
+	var allEvents []ChangeEvent
+
+	for i := range results {
+		allEvents = append(allEvents, results[i].events...)
+
+		if results[i].deltaToken != "" {
+			sc := results[i].shortcut
+			if err := e.baseline.CommitDeltaToken(ctx, results[i].deltaToken, sc.RemoteDrive, sc.RemoteItem, sc.RemoteDrive); err != nil {
 				e.logger.Warn("failed to commit reconciliation delta token",
 					slog.String("item_id", sc.ItemID),
 					slog.String("error", err.Error()),

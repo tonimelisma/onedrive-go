@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -546,8 +547,8 @@ func TestDetectShortcutCollisions_NoCollisions(t *testing.T) {
 		logger:   testLogger(t),
 	}
 
-	// Should not panic or log errors — no collisions.
-	e.detectShortcutCollisions(ctx, emptyBaseline())
+	collisions := e.detectShortcutCollisions(ctx, emptyBaseline())
+	assert.Empty(t, collisions)
 }
 
 func TestDetectShortcutCollisions_DuplicatePath(t *testing.T) {
@@ -579,8 +580,9 @@ func TestDetectShortcutCollisions_DuplicatePath(t *testing.T) {
 		logger:   testLogger(t),
 	}
 
-	// Should warn but not panic. We verify it doesn't crash.
-	e.detectShortcutCollisions(ctx, emptyBaseline())
+	collisions := e.detectShortcutCollisions(ctx, emptyBaseline())
+	assert.True(t, collisions["sc-2"], "later duplicate should be in collisions set")
+	assert.False(t, collisions["sc-1"], "first shortcut should be kept")
 }
 
 func TestDetectShortcutCollisions_PrimaryDriveConflict(t *testing.T) {
@@ -612,8 +614,91 @@ func TestDetectShortcutCollisions_PrimaryDriveConflict(t *testing.T) {
 		logger:   testLogger(t),
 	}
 
-	// Should warn about the conflict but not crash.
-	e.detectShortcutCollisions(ctx, bl)
+	collisions := e.detectShortcutCollisions(ctx, bl)
+	assert.True(t, collisions["sc-1"], "shortcut conflicting with primary drive should be in collisions set")
+}
+
+func TestDetectShortcutCollisions_NestedPaths(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
+		ItemID:       "sc-parent",
+		RemoteDrive:  "remote-drive-1",
+		RemoteItem:   "remote-item-1",
+		LocalPath:    "Shared",
+		Observation:  ObservationUnknown,
+		DiscoveredAt: 1000,
+	}))
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
+		ItemID:       "sc-child",
+		RemoteDrive:  "remote-drive-2",
+		RemoteItem:   "remote-item-2",
+		LocalPath:    "Shared/Sub",
+		Observation:  ObservationUnknown,
+		DiscoveredAt: 1000,
+	}))
+
+	e := &Engine{
+		baseline: mgr,
+		logger:   testLogger(t),
+	}
+
+	collisions := e.detectShortcutCollisions(ctx, emptyBaseline())
+	assert.True(t, collisions["sc-child"], "child nested under parent shortcut should be in collisions set")
+	assert.False(t, collisions["sc-parent"], "parent shortcut should be kept")
+}
+
+func TestObserveShortcutContent_SkipsCollisions(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	remoteDriveID := driveid.New("0000000000000099")
+
+	// Two shortcuts — one will be marked as collision.
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
+		ItemID:       "sc-ok",
+		RemoteDrive:  "0000000000000099",
+		RemoteItem:   "ok-folder",
+		LocalPath:    "Good",
+		Observation:  ObservationEnumerate,
+		DiscoveredAt: 1000,
+	}))
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
+		ItemID:       "sc-collide",
+		RemoteDrive:  "0000000000000099",
+		RemoteItem:   "collide-folder",
+		LocalPath:    "Bad",
+		Observation:  ObservationEnumerate,
+		DiscoveredAt: 1000,
+	}))
+
+	mockLister := &mockRecursiveLister{
+		items: []graph.Item{
+			{ID: "f1", Name: "file.txt", ParentID: "ok-folder", DriveID: remoteDriveID},
+		},
+	}
+
+	e := &Engine{
+		baseline:        mgr,
+		recursiveLister: mockLister,
+		logger:          testLogger(t),
+	}
+
+	collisions := map[string]bool{"sc-collide": true}
+	bl := emptyBaseline()
+	events, err := e.observeShortcutContent(ctx, bl, collisions)
+	require.NoError(t, err)
+
+	// Only the non-colliding shortcut should produce events.
+	// The mock returns the same items for all calls, but the colliding shortcut is skipped entirely.
+	for _, ev := range events {
+		assert.NotEqual(t, "Bad/file.txt", ev.Path, "colliding shortcut should not produce events")
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -839,7 +924,7 @@ func TestObserveShortcutContent_DeltaStrategy(t *testing.T) {
 	}
 
 	bl := emptyBaseline()
-	events, err := e.observeShortcutContent(ctx, bl)
+	events, err := e.observeShortcutContent(ctx, bl, nil)
 	require.NoError(t, err)
 
 	require.Len(t, events, 1)
@@ -889,7 +974,7 @@ func TestObserveShortcutContent_EnumerateStrategy(t *testing.T) {
 	}
 
 	bl := emptyBaseline()
-	events, err := e.observeShortcutContent(ctx, bl)
+	events, err := e.observeShortcutContent(ctx, bl, nil)
 	require.NoError(t, err)
 
 	require.Len(t, events, 1)
@@ -919,7 +1004,7 @@ func TestObserveShortcutContent_SkipsOnError(t *testing.T) {
 	}
 
 	bl := emptyBaseline()
-	events, err := e.observeShortcutContent(ctx, bl)
+	events, err := e.observeShortcutContent(ctx, bl, nil)
 	require.NoError(t, err, "should not propagate per-shortcut errors")
 	assert.Empty(t, events)
 }
@@ -937,7 +1022,7 @@ func TestObserveShortcutContent_NoShortcuts(t *testing.T) {
 	}
 
 	bl := emptyBaseline()
-	events, err := e.observeShortcutContent(ctx, bl)
+	events, err := e.observeShortcutContent(ctx, bl, nil)
 	require.NoError(t, err)
 	assert.Empty(t, events)
 }
@@ -1104,6 +1189,51 @@ func TestProcessShortcuts_ShortcutAndPrimaryEventsCoexist(t *testing.T) {
 	buf.AddAll(shortcutEvents)
 	batch := buf.FlushImmediate()
 	assert.Len(t, batch, 2, "buffer should contain both primary and shortcut events")
+}
+
+// ---------------------------------------------------------------------------
+// Concurrent multi-shortcut observation
+// ---------------------------------------------------------------------------
+
+func TestObserveShortcutContent_ConcurrentMultipleShortcuts(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	remoteDriveID := driveid.New("0000000000000099")
+
+	// Register 5 shortcuts to exercise concurrency (maxShortcutConcurrency=4).
+	for i := range 5 {
+		id := fmt.Sprintf("sc-%d", i)
+		require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
+			ItemID:       id,
+			RemoteDrive:  "0000000000000099",
+			RemoteItem:   fmt.Sprintf("folder-%d", i),
+			LocalPath:    fmt.Sprintf("Shared%d", i),
+			Observation:  ObservationEnumerate,
+			DiscoveredAt: 1000,
+		}))
+	}
+
+	mockLister := &mockRecursiveLister{
+		items: []graph.Item{
+			{ID: "f1", Name: "file.txt", ParentID: "folder-0", DriveID: remoteDriveID},
+		},
+	}
+
+	e := &Engine{
+		baseline:        mgr,
+		recursiveLister: mockLister,
+		logger:          testLogger(t),
+	}
+
+	bl := emptyBaseline()
+	events, err := e.observeShortcutContent(ctx, bl, nil)
+	require.NoError(t, err)
+
+	// Each shortcut produces 1 event from the mock, so expect 5.
+	assert.Len(t, events, 5, "all 5 shortcuts should be observed concurrently")
 }
 
 // ---------------------------------------------------------------------------
