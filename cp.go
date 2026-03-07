@@ -43,6 +43,15 @@ const copyPollInterval = 1 * time.Second
 // copyTimeout is the maximum time to wait for an async copy to complete.
 const copyTimeout = 5 * time.Minute
 
+// checkSelfCopy returns an error if the copy would overwrite the source item.
+func checkSelfCopy(sourceID string, dest destInfo) error {
+	if isSelfReference(sourceID, dest) {
+		return fmt.Errorf("cannot copy a file over itself")
+	}
+
+	return nil
+}
+
 func runCp(cmd *cobra.Command, args []string, force bool) error {
 	sourcePath := args[0]
 	destPath := args[1]
@@ -66,11 +75,16 @@ func runCp(cmd *cobra.Command, args []string, force bool) error {
 		return err
 	}
 
+	// Bail early if copying a file over itself — prevents both data loss
+	// (delete then fail) and silent duplicates (API auto-rename).
+	if selfErr := checkSelfCopy(sourceItem.ID, dest); selfErr != nil {
+		return selfErr
+	}
+
 	// If --force resolved to an existing file, delete it before copying.
-	// Skip when the existing file IS the source (self-copy via different paths).
 	// NOTE: This is a TOCTOU race — another client could recreate the file
 	// between delete and copy. Server-side copy has no atomic overwrite.
-	if dest.existingID != "" && !isSelfReference(sourceItem.ID, dest) {
+	if dest.existingID != "" {
 		if delErr := session.DeleteItem(ctx, dest.existingID); delErr != nil {
 			return fmt.Errorf("deleting existing %q: %w", destPath, delErr)
 		}
