@@ -76,7 +76,7 @@ func newIntegrationClient(t *testing.T) *Client {
 
 	cid := driveid.MustCanonicalID(drive)
 
-	tokenPath := config.DriveTokenPath(cid, nil)
+	tokenPath := config.DriveTokenPath(cid)
 	require.NotEmpty(t, tokenPath, "cannot determine token path for drive %q", drive)
 
 	logger.Info("loading token for integration test",
@@ -103,7 +103,7 @@ func driveIDForTest(t *testing.T) driveid.ID {
 	require.NotEmpty(t, drive, "ONEDRIVE_TEST_DRIVE not set")
 
 	cid := driveid.MustCanonicalID(drive)
-	tokenPath := config.DriveTokenPath(cid, nil)
+	tokenPath := config.DriveTokenPath(cid)
 	require.NotEmpty(t, tokenPath, "cannot determine token path for drive %q", drive)
 
 	meta, err := tokenfile.ReadMeta(tokenPath)

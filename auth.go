@@ -87,7 +87,7 @@ func newWhoamiCmd() *cobra.Command {
 func findTokenFallback(account string, logger *slog.Logger) driveid.CanonicalID {
 	personalID := driveid.MustCanonicalID("personal:" + account)
 
-	personalPath := config.DriveTokenPath(personalID, nil)
+	personalPath := config.DriveTokenPath(personalID)
 	if personalPath != "" {
 		if _, err := os.Stat(personalPath); err == nil {
 			logger.Debug("token fallback: found personal token", "path", personalPath)
@@ -98,7 +98,7 @@ func findTokenFallback(account string, logger *slog.Logger) driveid.CanonicalID 
 
 	businessID := driveid.MustCanonicalID("business:" + account)
 
-	businessPath := config.DriveTokenPath(businessID, nil)
+	businessPath := config.DriveTokenPath(businessID)
 	if businessPath != "" {
 		if _, err := os.Stat(businessPath); err == nil {
 			logger.Debug("token fallback: found business token", "path", businessPath)
@@ -185,7 +185,7 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Step 5: Move token from temp path to its canonical location.
-	finalTokenPath := config.DriveTokenPath(canonicalID, nil)
+	finalTokenPath := config.DriveTokenPath(canonicalID)
 	if finalTokenPath == "" {
 		os.Remove(tempPath)
 
@@ -208,6 +208,27 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 		"cached_at":    time.Now().UTC().Format(time.RFC3339),
 	}); saveErr != nil {
 		logger.Warn("failed to save cached metadata", "error", saveErr)
+	}
+
+	// Step 5c: Save account profile and drive metadata files (Architecture A).
+	// These new-format files are used by DriveTokenPath for shared/SharePoint
+	// resolution and by buildResolvedDrive for drive_id lookup.
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	if profileErr := config.SaveAccountProfile(canonicalID, &config.AccountProfile{
+		UserID:         user.ID,
+		DisplayName:    user.DisplayName,
+		OrgName:        orgName,
+		PrimaryDriveID: primaryDriveID.String(),
+	}); profileErr != nil {
+		logger.Warn("failed to save account profile", "error", profileErr)
+	}
+
+	if driveMetaErr := config.SaveDriveMetadata(canonicalID, &config.DriveMetadata{
+		DriveID:  primaryDriveID.String(),
+		CachedAt: now,
+	}); driveMetaErr != nil {
+		logger.Warn("failed to save drive metadata", "error", driveMetaErr)
 	}
 
 	// Step 6: Ensure drive is in config (idempotent — handles both new login and re-login).
@@ -422,7 +443,7 @@ func executeLogout(cfg *config.Config, cfgPath, account string, purge bool, logg
 		tokenCanonicalID = findTokenFallback(account, logger)
 	}
 
-	tokenPath := config.DriveTokenPath(tokenCanonicalID, nil)
+	tokenPath := config.DriveTokenPath(tokenCanonicalID)
 	if tokenPath == "" {
 		return fmt.Errorf("cannot determine token path for account %q", account)
 	}
@@ -470,7 +491,7 @@ func drivesForAccount(cfg *config.Config, account string) []driveid.CanonicalID 
 
 // canonicalIDForToken picks a canonical ID to use for token path derivation.
 // SharePoint drives share the business token, so we prefer a non-sharepoint ID.
-// Uses driveid.TokenCanonicalID() to handle the SharePoint→business mapping.
+// DriveTokenPath handles the SharePoint→business mapping internally.
 func canonicalIDForToken(account string, driveIDs []driveid.CanonicalID) driveid.CanonicalID {
 	for _, cid := range driveIDs {
 		if !cid.IsSharePoint() {
@@ -603,7 +624,7 @@ func runWhoami(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	tokenPath := config.DriveTokenPath(cid, nil)
+	tokenPath := config.DriveTokenPath(cid)
 	if tokenPath == "" {
 		return fmt.Errorf("cannot determine token path for drive %q", cid.String())
 	}

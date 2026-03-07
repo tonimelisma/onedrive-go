@@ -1,53 +1,63 @@
 package config
 
 import (
-	"fmt"
+	"path/filepath"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// TokenCanonicalID resolves which OAuth token a drive uses. Personal and
-// business drives use their own token. SharePoint drives share the business
-// account's token (same OAuth session). Shared drives piggyback on their
-// primary account's token (personal or business), determined by scanning
-// configured drives.
+// DriveTokenPath returns the token file path for a canonical drive ID.
+// Personal and business drives have their own token. SharePoint drives
+// share the business account's token (same OAuth session). Shared drives
+// piggyback on their parent account's token, resolved via drive metadata
+// files (no config dependency).
 //
-// The cfg parameter is only required for shared drives. Pass nil for
-// personal, business, and SharePoint drives.
-func TokenCanonicalID(cid driveid.CanonicalID, cfg *Config) (driveid.CanonicalID, error) {
-	switch cid.DriveType() {
-	case driveid.DriveTypePersonal, driveid.DriveTypeBusiness:
-		return cid, nil
-
-	case driveid.DriveTypeSharePoint:
-		return driveid.Construct(driveid.DriveTypeBusiness, cid.Email())
-
-	case driveid.DriveTypeShared:
-		return resolveSharedToken(cid, cfg)
-
-	default:
-		return driveid.CanonicalID{}, fmt.Errorf("config: unknown drive type %q", cid.DriveType())
+// Examples:
+//
+//	"personal:toni@outlook.com"                    -> "{dataDir}/token_personal_toni@outlook.com.json"
+//	"sharepoint:alice@contoso.com:marketing:Docs"  -> "{dataDir}/token_business_alice@contoso.com.json"
+//	"shared:alice@outlook.com:drv123:item456"      -> "{dataDir}/token_personal_alice@outlook.com.json" (via drive metadata)
+func DriveTokenPath(canonicalID driveid.CanonicalID) string {
+	dataDir := DefaultDataDir()
+	if dataDir == "" || canonicalID.IsZero() {
+		return ""
 	}
+
+	tokenCID := tokenAccountCID(canonicalID)
+	if tokenCID.IsZero() {
+		return ""
+	}
+
+	sanitized := tokenCID.DriveType() + "_" + tokenCID.Email()
+
+	return filepath.Join(dataDir, "token_"+sanitized+".json")
 }
 
-// resolveSharedToken finds the primary drive (personal or business) for the
-// shared drive's email and returns that drive's canonical ID for token lookup.
-func resolveSharedToken(cid driveid.CanonicalID, cfg *Config) (driveid.CanonicalID, error) {
-	if cfg == nil {
-		return driveid.CanonicalID{}, fmt.Errorf(
-			"config: config required to resolve token for shared drive %s", cid.Email())
+// tokenAccountCID resolves which account owns the OAuth token for a drive.
+// Personal and business drives own their token. SharePoint drives use the
+// business account's token. Shared drives use their parent account's
+// token, determined from the drive metadata file.
+func tokenAccountCID(cid driveid.CanonicalID) driveid.CanonicalID {
+	if cid.IsShared() {
+		return resolveSharedTokenCID(cid)
 	}
 
-	for id := range cfg.Drives {
-		if id.Email() != cid.Email() {
-			continue
-		}
+	return accountCIDForDrive(cid)
+}
 
-		if id.IsPersonal() || id.IsBusiness() {
-			return driveid.Construct(id.DriveType(), cid.Email())
-		}
+// resolveSharedTokenCID reads the drive metadata file for a shared drive
+// to find its parent account's canonical ID. Returns a zero CID if the
+// drive metadata is missing or lacks an account_canonical_id.
+func resolveSharedTokenCID(cid driveid.CanonicalID) driveid.CanonicalID {
+	meta, err := LoadDriveMetadata(cid)
+	if err != nil || meta == nil || meta.AccountCanonicalID == "" {
+		return driveid.CanonicalID{}
 	}
 
-	return driveid.CanonicalID{}, fmt.Errorf(
-		"config: no personal or business account found for %s to resolve shared drive token", cid.Email())
+	accountCID, err := driveid.NewCanonicalID(meta.AccountCanonicalID)
+	if err != nil {
+		return driveid.CanonicalID{}
+	}
+
+	return accountCID
 }
