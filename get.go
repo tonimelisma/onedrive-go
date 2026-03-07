@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
@@ -16,6 +18,9 @@ import (
 
 // defaultDirPerm is the permission mode for directories created during recursive get.
 const defaultDirPerm = 0o755
+
+// defaultDownloadConcurrency is the number of concurrent file downloads per directory.
+const defaultDownloadConcurrency = 4
 
 func newGetCmd() *cobra.Command {
 	return &cobra.Command{
@@ -110,6 +115,14 @@ func runGet(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// downloadState holds mutable state shared across the recursive download.
+type downloadState struct {
+	mu     sync.Mutex
+	result getFolderJSONOutput
+	done   int
+	total  int
+}
+
 func downloadFolder(
 	cmd *cobra.Command,
 	cc *CLIContext,
@@ -120,145 +133,144 @@ func downloadFolder(
 	ctx := cmd.Context()
 	logger := cc.Logger
 
-	if err := os.MkdirAll(localPath, defaultDirPerm); err != nil {
-		return fmt.Errorf("creating local directory %q: %w", localPath, err)
-	}
+	state := &downloadState{}
 
-	children, err := session.ListChildren(ctx, remotePath)
-	if err != nil {
-		return fmt.Errorf("listing %q: %w", remotePath, err)
+	// Pass 1: count all files recursively.
+	if err := countRemoteFiles(ctx, session, remotePath, state); err != nil {
+		return err
 	}
 
 	store := driveops.NewSessionStore(config.DefaultDataDir(), logger)
 	tm := driveops.NewTransferManager(session.Transfer, session.Transfer, store, logger)
 
-	var result getFolderJSONOutput
-	result.FoldersCreated = 1 // count the root folder
-
-	total := 0
-	for i := range children {
-		if !children[i].IsFolder {
-			total++
-		}
-	}
-
-	done := 0
-
-	for i := range children {
-		childLocal := filepath.Join(localPath, children[i].Name)
-
-		if children[i].IsFolder {
-			childRemote := remotePath
-			if driveops.CleanRemotePath(childRemote) == "" {
-				childRemote = children[i].Name
-			} else {
-				childRemote = driveops.CleanRemotePath(childRemote) + "/" + children[i].Name
-			}
-
-			subResult, subErr := downloadFolderRecursive(ctx, session, tm, childRemote, childLocal)
-			if subErr != nil {
-				result.Errors = append(result.Errors, subErr.Error())
-
-				continue
-			}
-
-			result.Files = append(result.Files, subResult.Files...)
-			result.FoldersCreated += subResult.FoldersCreated
-			result.TotalSize += subResult.TotalSize
-			result.Errors = append(result.Errors, subResult.Errors...)
-
-			continue
-		}
-
-		dlResult, dlErr := tm.DownloadToFile(ctx, session.DriveID, children[i].ID, childLocal, driveops.DownloadOpts{
-			RemoteHash: children[i].QuickXorHash,
-		})
-		if dlErr != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", children[i].Name, dlErr))
-
-			continue
-		}
-
-		result.Files = append(result.Files, getJSONOutput{
-			Path:         childLocal,
-			Size:         dlResult.Size,
-			HashVerified: dlResult.HashVerified,
-		})
-		result.TotalSize += dlResult.Size
-		done++
-		cc.Statusf("Downloaded %d/%d files\n", done, total)
-	}
+	// Pass 2: download recursively.
+	downloadRecursive(ctx, cc, session, tm, state, remotePath, localPath)
 
 	if cc.Flags.JSON {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 
-		return enc.Encode(result)
+		return enc.Encode(state.result)
 	}
 
 	cc.Statusf("Downloaded %d files, %d folders (%s)\n",
-		len(result.Files), result.FoldersCreated, formatSize(result.TotalSize))
+		len(state.result.Files), state.result.FoldersCreated, formatSize(state.result.TotalSize))
 
-	if len(result.Errors) > 0 {
-		return fmt.Errorf("%d errors during download", len(result.Errors))
+	if len(state.result.Errors) > 0 {
+		return fmt.Errorf("%d errors during download", len(state.result.Errors))
 	}
 
 	return nil
 }
 
-func downloadFolderRecursive(
+func countRemoteFiles(ctx context.Context, session *driveops.Session, remotePath string, state *downloadState) error {
+	children, err := session.ListChildren(ctx, remotePath)
+	if err != nil {
+		return fmt.Errorf("listing %q: %w", remotePath, err)
+	}
+
+	for i := range children {
+		if children[i].IsFolder {
+			if err := countRemoteFiles(ctx, session, joinRemotePath(remotePath, children[i].Name), state); err != nil {
+				return err
+			}
+		} else {
+			state.total++
+		}
+	}
+
+	return nil
+}
+
+func downloadRecursive(
 	ctx context.Context,
+	cc *CLIContext,
 	session *driveops.Session,
 	tm *driveops.TransferManager,
+	state *downloadState,
 	remotePath, localPath string,
-) (*getFolderJSONOutput, error) {
+) {
 	if err := os.MkdirAll(localPath, defaultDirPerm); err != nil {
-		return nil, fmt.Errorf("creating directory %q: %w", localPath, err)
+		state.mu.Lock()
+		state.result.Errors = append(state.result.Errors, fmt.Sprintf("creating %q: %v", localPath, err))
+		state.mu.Unlock()
+
+		return
 	}
 
 	children, err := session.ListChildren(ctx, remotePath)
 	if err != nil {
-		return nil, fmt.Errorf("listing %q: %w", remotePath, err)
+		state.mu.Lock()
+		state.result.Errors = append(state.result.Errors, fmt.Sprintf("listing %q: %v", remotePath, err))
+		state.mu.Unlock()
+
+		return
 	}
 
-	result := &getFolderJSONOutput{FoldersCreated: 1}
+	state.mu.Lock()
+	state.result.FoldersCreated++
+	state.mu.Unlock()
+
+	// Recurse into subdirectories sequentially (must exist before children).
+	for i := range children {
+		if children[i].IsFolder {
+			childLocal := filepath.Join(localPath, children[i].Name)
+			downloadRecursive(ctx, cc, session, tm, state, joinRemotePath(remotePath, children[i].Name), childLocal)
+		}
+	}
+
+	// Download files in this directory concurrently with bounded parallelism.
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(defaultDownloadConcurrency)
 
 	for i := range children {
-		childLocal := filepath.Join(localPath, children[i].Name)
-
 		if children[i].IsFolder {
-			childRemote := driveops.CleanRemotePath(remotePath) + "/" + children[i].Name
-			subResult, subErr := downloadFolderRecursive(ctx, session, tm, childRemote, childLocal)
-			if subErr != nil {
-				result.Errors = append(result.Errors, subErr.Error())
+			continue
+		}
 
-				continue
+		child := children[i]
+		childLocal := filepath.Join(localPath, child.Name)
+
+		g.Go(func() error {
+			dlResult, dlErr := tm.DownloadToFile(gCtx, session.DriveID, child.ID, childLocal, driveops.DownloadOpts{
+				RemoteHash: child.QuickXorHash,
+			})
+
+			state.mu.Lock()
+			defer state.mu.Unlock()
+
+			if dlErr != nil {
+				state.result.Errors = append(state.result.Errors, fmt.Sprintf("%s: %v", child.Name, dlErr))
+
+				return nil
 			}
 
-			result.Files = append(result.Files, subResult.Files...)
-			result.FoldersCreated += subResult.FoldersCreated
-			result.TotalSize += subResult.TotalSize
-			result.Errors = append(result.Errors, subResult.Errors...)
+			state.result.Files = append(state.result.Files, getJSONOutput{
+				Path:         childLocal,
+				Size:         dlResult.Size,
+				HashVerified: dlResult.HashVerified,
+			})
+			state.result.TotalSize += dlResult.Size
+			state.done++
+			cc.Statusf("Downloaded %d/%d files\n", state.done, state.total)
 
-			continue
-		}
-
-		dlResult, dlErr := tm.DownloadToFile(ctx, session.DriveID, children[i].ID, childLocal, driveops.DownloadOpts{
-			RemoteHash: children[i].QuickXorHash,
+			return nil
 		})
-		if dlErr != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", children[i].Name, dlErr))
-
-			continue
-		}
-
-		result.Files = append(result.Files, getJSONOutput{
-			Path:         childLocal,
-			Size:         dlResult.Size,
-			HashVerified: dlResult.HashVerified,
-		})
-		result.TotalSize += dlResult.Size
 	}
 
-	return result, nil
+	if err := g.Wait(); err != nil {
+		state.mu.Lock()
+		state.result.Errors = append(state.result.Errors, err.Error())
+		state.mu.Unlock()
+	}
+}
+
+// joinRemotePath joins a parent and child remote path segment.
+func joinRemotePath(parent, child string) string {
+	clean := driveops.CleanRemotePath(parent)
+	if clean == "" {
+		return child
+	}
+
+	return clean + "/" + child
 }

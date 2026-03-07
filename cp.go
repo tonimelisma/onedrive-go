@@ -14,12 +14,20 @@ import (
 )
 
 func newCpCmd() *cobra.Command {
-	return &cobra.Command{
+	var force bool
+
+	cmd := &cobra.Command{
 		Use:   "cp <source> <dest>",
 		Short: "Copy a file or folder (server-side)",
 		Args:  cobra.ExactArgs(2),
-		RunE:  runCp,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runCp(cmd, args, force)
+		},
 	}
+
+	cmd.Flags().BoolVarP(&force, "force", "f", false, "overwrite existing file at destination")
+
+	return cmd
 }
 
 // cpJSONOutput is the JSON output schema for the cp command.
@@ -35,7 +43,7 @@ const copyPollInterval = 1 * time.Second
 // copyTimeout is the maximum time to wait for an async copy to complete.
 const copyTimeout = 5 * time.Minute
 
-func runCp(cmd *cobra.Command, args []string) error {
+func runCp(cmd *cobra.Command, args []string, force bool) error {
 	sourcePath := args[0]
 	destPath := args[1]
 	ctx := cmd.Context()
@@ -53,7 +61,7 @@ func runCp(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("resolving source %q: %w", sourcePath, err)
 	}
 
-	parentID, newName, err := resolveDest(ctx, session, destPath, sourceItem.Name)
+	parentID, newName, err := resolveDest(ctx, session, destPath, sourceItem.Name, force)
 	if err != nil {
 		return err
 	}

@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -10,7 +9,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 func newMkdirCmd() *cobra.Command {
@@ -48,33 +46,14 @@ func runMkdir(cmd *cobra.Command, args []string) error {
 	// Walk path segments, creating each missing folder.
 	segments := strings.Split(remotePath, "/")
 	parentID := "root"
-	builtPath := ""
 
 	for _, seg := range segments {
 		if seg == "" {
 			continue
 		}
 
-		if builtPath == "" {
-			builtPath = seg
-		} else {
-			builtPath = builtPath + "/" + seg
-		}
-
-		item, createErr := session.CreateFolder(ctx, parentID, seg)
+		item, createErr := session.EnsureFolder(ctx, parentID, seg)
 		if createErr != nil {
-			// If folder already exists (409 Conflict), resolve it and continue.
-			if errors.Is(createErr, graph.ErrConflict) {
-				existing, resolveErr := session.ResolveItem(ctx, builtPath)
-				if resolveErr != nil {
-					return fmt.Errorf("resolving existing folder %q: %w", seg, resolveErr)
-				}
-
-				parentID = existing.ID
-
-				continue
-			}
-
 			return fmt.Errorf("creating folder %q: %w", seg, createErr)
 		}
 
