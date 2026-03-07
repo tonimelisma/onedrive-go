@@ -82,6 +82,21 @@ func DefaultCacheDir() string {
 	}
 }
 
+// AssertDevSafe panics if a dev build (version=="dev") is running without
+// XDG isolation. Prevents accidental production data access during development.
+// At least one of XDG_DATA_HOME, XDG_CONFIG_HOME, or XDG_CACHE_HOME must be set.
+func AssertDevSafe() {
+	if os.Getenv("XDG_DATA_HOME") != "" ||
+		os.Getenv("XDG_CONFIG_HOME") != "" ||
+		os.Getenv("XDG_CACHE_HOME") != "" {
+		return
+	}
+
+	panic("DEV BUILD: set XDG_DATA_HOME, XDG_CONFIG_HOME, and XDG_CACHE_HOME " +
+		"to avoid touching production data.\n" +
+		"Example: source scripts/dev-env.sh && go run . <command>")
+}
+
 // UploadSessionDir returns the directory for persisted upload session files.
 // These are JSON files containing pre-authenticated upload URLs, stored with
 // 0700 directory permissions for security.

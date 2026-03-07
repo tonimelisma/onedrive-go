@@ -101,12 +101,23 @@ type folderFacet struct {
 }
 
 type remoteItemFacet struct {
-	ID              string     `json:"id"`
-	ParentReference *parentRef `json:"parentReference"`
+	ID              string            `json:"id"`
+	ParentReference *parentRef        `json:"parentReference"`
+	CreatedBy       *identitySetFacet `json:"createdBy"`
+	Shared          *sharedFacet      `json:"shared"`
+}
+
+// identitySetFacet represents the createdBy/lastModifiedBy identity set
+// in Graph API responses. Reuses sharedUserFacet for the user — the API
+// returns displayName and email (undocumented but works on both personal
+// and business accounts, confirmed via live testing 2026-03-06).
+type identitySetFacet struct {
+	User *sharedUserFacet `json:"user"`
 }
 
 type sharedFacet struct {
-	Owner *sharedOwnerFacet `json:"owner"`
+	Owner    *sharedOwnerFacet `json:"owner"`
+	SharedBy *sharedOwnerFacet `json:"sharedBy"`
 }
 
 type sharedOwnerFacet struct {
@@ -195,11 +206,8 @@ func (d *driveItemResponse) toItem(logger *slog.Logger) Item {
 		}
 	}
 
-	// Shared owner info (SharedWithMe items).
-	if d.Shared != nil && d.Shared.Owner != nil && d.Shared.Owner.User != nil {
-		item.SharedOwnerName = d.Shared.Owner.User.DisplayName
-		item.SharedOwnerEmail = d.Shared.Owner.User.Email
-	}
+	// Shared owner identity — see resolveSharedOwner for fallback chain.
+	item.SharedOwnerName, item.SharedOwnerEmail = d.resolveSharedOwner()
 
 	// Timestamps — validate and fallback to now if invalid.
 	// Deleted items routinely have empty timestamps (known OneDrive API behavior),
@@ -208,6 +216,31 @@ func (d *driveItemResponse) toItem(logger *slog.Logger) Item {
 	item.ModifiedAt = parseTimestamp(d.LastModifiedDateTime, "lastModifiedDateTime", d.ID, item.IsDeleted, logger)
 
 	return item
+}
+
+// resolveSharedOwner extracts sharer identity using a four-level fallback chain:
+//  1. remoteItem.shared.sharedBy (correct semantics: who shared it)
+//  2. remoteItem.shared.owner
+//  3. remoteItem.createdBy
+//  4. top-level shared.owner (for non-SharedWithMe items)
+//
+// SharedWithMe returns identity under remoteItem.shared (NOT top-level shared),
+// confirmed via live API testing on personal accounts (2026-03-06).
+func (d *driveItemResponse) resolveSharedOwner() (name, email string) {
+	switch {
+	case d.RemoteItem != nil && d.RemoteItem.Shared != nil && d.RemoteItem.Shared.SharedBy != nil &&
+		d.RemoteItem.Shared.SharedBy.User != nil:
+		return d.RemoteItem.Shared.SharedBy.User.DisplayName, d.RemoteItem.Shared.SharedBy.User.Email
+	case d.RemoteItem != nil && d.RemoteItem.Shared != nil && d.RemoteItem.Shared.Owner != nil &&
+		d.RemoteItem.Shared.Owner.User != nil:
+		return d.RemoteItem.Shared.Owner.User.DisplayName, d.RemoteItem.Shared.Owner.User.Email
+	case d.RemoteItem != nil && d.RemoteItem.CreatedBy != nil && d.RemoteItem.CreatedBy.User != nil:
+		return d.RemoteItem.CreatedBy.User.DisplayName, d.RemoteItem.CreatedBy.User.Email
+	case d.Shared != nil && d.Shared.Owner != nil && d.Shared.Owner.User != nil:
+		return d.Shared.Owner.User.DisplayName, d.Shared.Owner.User.Email
+	default:
+		return "", ""
+	}
 }
 
 // parseTimestamp parses an RFC3339 timestamp and validates the year range.
