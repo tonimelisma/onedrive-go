@@ -1,12 +1,17 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
-	"sync/atomic"
+	"fmt"
+	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 func TestJoinRemotePath(t *testing.T) {
@@ -29,34 +34,99 @@ func TestJoinRemotePath(t *testing.T) {
 }
 
 func TestCountRemoteFiles_PopulatesCache(t *testing.T) {
+	t.Parallel()
+
+	session := makeTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// Root listing: two files, no folders.
+		fmt.Fprintf(w, `{"value":[
+			{"id":"f1","name":"a.txt"},
+			{"id":"f2","name":"b.txt"}
+		]}`)
+	}))
+
 	state := &downloadState{
-		childCache: make(map[string][]cachedChild),
+		childCache: make(map[string][]graph.Item),
 	}
 
-	// Verify cache is populated after counting.
-	assert.Empty(t, state.childCache)
-
-	// Simulate: after counting, cache should have entries.
-	state.childCache["root"] = []cachedChild{
-		{name: "file.txt", id: "f1"},
-	}
-	state.total = 1
-
-	assert.Len(t, state.childCache, 1)
-	assert.Equal(t, 1, state.total)
+	err := countRemoteFiles(t.Context(), session, "", state)
+	require.NoError(t, err)
+	assert.Equal(t, 2, state.total, "should count both files")
+	assert.Len(t, state.childCache[""], 2, "should cache the listing")
+	assert.Equal(t, "a.txt", state.childCache[""][0].Name)
+	assert.Empty(t, state.countErrors)
 }
 
-func TestDownloadState_CacheReducesAPICalls(t *testing.T) {
-	// Verify that downloadState has childCache field.
-	state := &downloadState{
-		childCache: make(map[string][]cachedChild),
-	}
-	require.NotNil(t, state.childCache)
+func TestCountRemoteFiles_SurvivesSubdirError(t *testing.T) {
+	// countRemoteFiles should record errors for inaccessible subdirs
+	// but continue counting accessible parts of the tree.
+	t.Parallel()
 
-	// Verify atomic counter type exists for API call counting in tests.
-	var calls atomic.Int32
-	calls.Add(1)
-	assert.Equal(t, int32(1), calls.Load())
+	callCount := 0
+	session := makeTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		if callCount == 1 {
+			// Root listing: one file + one folder
+			fmt.Fprintf(w, `{"value":[
+				{"id":"f1","name":"a.txt"},
+				{"id":"d1","name":"subdir","folder":{}}
+			]}`)
+
+			return
+		}
+		// Subdir listing fails
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprintf(w, `{"error":{"code":"accessDenied"}}`)
+	}))
+
+	state := &downloadState{
+		childCache: make(map[string][]graph.Item),
+	}
+
+	err := countRemoteFiles(t.Context(), session, "", state)
+	require.NoError(t, err, "counting should not fail on subdirectory errors")
+	assert.Equal(t, 1, state.total, "should count the accessible file")
+	assert.NotEmpty(t, state.countErrors, "should record the subdirectory error")
+}
+
+func TestDownloadRecursive_RespectsContextCancellation(t *testing.T) {
+	// When the context is canceled, goroutines waiting for the semaphore
+	// should not block forever — they should bail out promptly.
+	t.Parallel()
+
+	session := makeTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// This handler should never be called because the context is canceled
+		// before any download starts.
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+
+	state := &downloadState{
+		childCache: make(map[string][]graph.Item),
+		sem:        make(chan struct{}, 1), // capacity 1
+	}
+
+	// Fill the semaphore so the download goroutine must wait.
+	state.sem <- struct{}{}
+
+	// Cache a single file child.
+	state.childCache["testdir"] = []graph.Item{
+		{Name: "blocked.txt", ID: "f1"},
+	}
+
+	// Cancel the context immediately.
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	cc := &CLIContext{Flags: CLIFlags{Quiet: true}}
+
+	tm := driveops.NewTransferManager(session.Transfer, session.Transfer, nil, cc.Logger)
+	downloadRecursive(ctx, cc, session, tm, state, "testdir", t.TempDir())
+	state.wg.Wait()
+
+	// The goroutine should have recorded a context error, not hung forever.
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	require.NotEmpty(t, state.result.Errors, "should record context cancellation error")
+	assert.Contains(t, state.result.Errors[0], "context canceled")
 }
 
 func TestGetJSONOutput_Serialization(t *testing.T) {

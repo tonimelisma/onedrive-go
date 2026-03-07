@@ -37,7 +37,15 @@ type mvJSONOutput struct {
 	ID          string `json:"id"`
 }
 
-// resolveDest resolves a destination path to (parentID, newName, existingID).
+// destInfo holds the result of resolving a destination path.
+type destInfo struct {
+	parentID   string
+	newName    string
+	existingID string // non-empty when force=true and dest is an existing file
+	destIsDir  bool   // true when dest resolved to an existing folder
+}
+
+// resolveDest resolves a destination path to a destInfo.
 // If dest exists and is a folder, the item moves into it keeping sourceName.
 // If dest doesn't exist, the parent must exist — the item moves there with the new name.
 // If dest exists and is a file, returns an error unless force is true.
@@ -48,42 +56,70 @@ func resolveDest(
 	session *driveops.Session,
 	destPath, sourceName string,
 	force bool,
-) (parentID, newName, existingID string, err error) {
+) (info destInfo, err error) {
 	// Attempt 1: does the dest path already exist?
 	item, resolveErr := session.ResolveItem(ctx, destPath)
 	if resolveErr == nil {
 		if item.IsFolder {
-			return item.ID, sourceName, "", nil
+			return destInfo{parentID: item.ID, newName: sourceName, destIsDir: true}, nil
 		}
 
 		if force {
 			if item.ParentID == "" {
-				return "", "", "", fmt.Errorf("destination %q has no parent reference; cannot overwrite", destPath)
+				return destInfo{}, fmt.Errorf("destination %q has no parent reference; cannot overwrite", destPath)
 			}
 
-			return item.ParentID, item.Name, item.ID, nil
+			return destInfo{parentID: item.ParentID, newName: item.Name, existingID: item.ID}, nil
 		}
 
-		return "", "", "", fmt.Errorf("destination %q already exists (file); use --force to overwrite", destPath)
+		return destInfo{}, fmt.Errorf("destination %q already exists (file); use --force to overwrite", destPath)
 	}
 
 	// Attempt 2: if not found, split into parent + name and resolve parent.
 	if !errors.Is(resolveErr, graph.ErrNotFound) {
-		return "", "", "", fmt.Errorf("resolving destination %q: %w", destPath, resolveErr)
+		return destInfo{}, fmt.Errorf("resolving destination %q: %w", destPath, resolveErr)
 	}
 
 	parentPath, destName := driveops.SplitParentAndName(destPath)
 
 	parentItem, parentErr := session.ResolveItem(ctx, parentPath)
 	if parentErr != nil {
-		return "", "", "", fmt.Errorf("resolving destination parent %q: %w", parentPath, parentErr)
+		return destInfo{}, fmt.Errorf("resolving destination parent %q: %w", parentPath, parentErr)
 	}
 
 	if !parentItem.IsFolder {
-		return "", "", "", fmt.Errorf("destination parent %q is not a folder", parentPath)
+		return destInfo{}, fmt.Errorf("destination parent %q is not a folder", parentPath)
 	}
 
-	return parentItem.ID, destName, "", nil
+	return destInfo{parentID: parentItem.ID, newName: destName}, nil
+}
+
+// isSelfReference returns true when --force resolved to the source item itself.
+func isSelfReference(sourceID string, dest destInfo) bool {
+	return dest.existingID != "" && dest.existingID == sourceID
+}
+
+// isNoOpMove returns true when the resolved destination is the same as the source.
+func isNoOpMove(dest destInfo, sourceParentID, sourceName string) bool {
+	return dest.parentID == sourceParentID && dest.newName == sourceName
+}
+
+// emitMoveResult writes the move result as JSON or status text.
+func emitMoveResult(cc *CLIContext, sourcePath, displayDest, itemID string) error {
+	if cc.Flags.JSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+
+		return enc.Encode(mvJSONOutput{
+			Source:      sourcePath,
+			Destination: displayDest,
+			ID:          itemID,
+		})
+	}
+
+	cc.Statusf("Moved %s → %s\n", sourcePath, displayDest)
+
+	return nil
 }
 
 func runMv(cmd *cobra.Command, args []string, force bool) error {
@@ -105,21 +141,31 @@ func runMv(cmd *cobra.Command, args []string, force bool) error {
 		return fmt.Errorf("resolving source %q: %w", sourcePath, err)
 	}
 
-	parentID, newName, existingID, err := resolveDest(ctx, session, destPath, sourceItem.Name, force)
+	dest, err := resolveDest(ctx, session, destPath, sourceItem.Name, force)
 	if err != nil {
 		return err
 	}
 
+	// Check for no-op BEFORE any destructive action (delete or move).
+	if isNoOpMove(dest, sourceItem.ParentID, sourceItem.Name) {
+		logger.Debug("mv: no-op, source and dest are the same")
+
+		return emitMoveResult(cc, sourcePath, destPath, sourceItem.ID)
+	}
+
 	// If --force resolved to an existing file, delete it before moving.
-	if existingID != "" {
-		if delErr := session.DeleteItem(ctx, existingID); delErr != nil {
+	// Skip when the existing file IS the source (self-reference via different paths).
+	// NOTE: This is a TOCTOU race — another client could recreate the file
+	// between delete and move. The Graph API has no atomic overwrite for moves.
+	if dest.existingID != "" && !isSelfReference(sourceItem.ID, dest) {
+		if delErr := session.DeleteItem(ctx, dest.existingID); delErr != nil {
 			return fmt.Errorf("deleting existing %q: %w", destPath, delErr)
 		}
 	}
 
 	// Determine what changed — MoveItem requires at least one of parentID or newName.
-	moveParentID := parentID
-	moveName := newName
+	moveParentID := dest.parentID
+	moveName := dest.newName
 
 	// If the parent didn't change, don't send it (avoids unnecessary API field).
 	if moveParentID == sourceItem.ParentID {
@@ -131,39 +177,19 @@ func runMv(cmd *cobra.Command, args []string, force bool) error {
 		moveName = ""
 	}
 
-	// If nothing changed, it's a no-op move to the same location.
-	if moveParentID == "" && moveName == "" {
-		moveParentID = parentID // force the move to go through
-	}
-
 	moved, err := session.MoveItem(ctx, sourceItem.ID, moveParentID, moveName)
 	if err != nil {
 		return fmt.Errorf("moving %q: %w", sourcePath, err)
 	}
 
-	// Build display destination.
+	// Build display destination from info we already have — no extra API call.
 	displayDest := destPath
-	if driveops.CleanRemotePath(destPath) != "" {
-		// If dest was a folder we moved into, show the full new path.
-		destItem, resolveErr := session.ResolveItem(ctx, destPath)
-		if resolveErr == nil && destItem.IsFolder {
-			clean := driveops.CleanRemotePath(destPath)
+	if dest.destIsDir {
+		clean := driveops.CleanRemotePath(destPath)
+		if clean != "" {
 			displayDest = clean + "/" + moved.Name
 		}
 	}
 
-	if cc.Flags.JSON {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-
-		return enc.Encode(mvJSONOutput{
-			Source:      sourcePath,
-			Destination: displayDest,
-			ID:          moved.ID,
-		})
-	}
-
-	cc.Statusf("Moved %s → %s\n", sourcePath, displayDest)
-
-	return nil
+	return emitMoveResult(cc, sourcePath, displayDest, moved.ID)
 }
