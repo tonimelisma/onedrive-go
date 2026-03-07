@@ -87,6 +87,7 @@ const (
 	ChangeModify
 	ChangeDelete
 	ChangeMove
+	ChangeShortcut // shortcut/shared folder detected (remote only)
 )
 
 func (t ChangeType) String() string {
@@ -99,6 +100,8 @@ func (t ChangeType) String() string {
 		return "delete"
 	case ChangeMove:
 		return "move"
+	case ChangeShortcut:
+		return "shortcut"
 	default:
 		return fmt.Sprintf("ChangeType(%d)", int(t))
 	}
@@ -244,21 +247,23 @@ func (s FolderCreateSide) String() string {
 //	Buffer synthetic deletes: Source, Type, Path, ItemID, ParentID, DriveID,
 //	  ItemType, Name, IsDeleted. No Size/Hash/Mtime (move context only).
 type ChangeEvent struct {
-	Source    ChangeSource
-	Type      ChangeType
-	Path      string     // NFC-normalized, relative to sync root
-	OldPath   string     // for moves only
-	ItemID    string     // server-assigned (remote only; empty for local)
-	ParentID  string     // server parent ID (remote only)
-	DriveID   driveid.ID // normalized (lowercase, zero-padded to 16 chars)
-	ItemType  ItemType
-	Name      string // URL-decoded, NFC-normalized
-	Size      int64
-	Hash      string // QuickXorHash (base64); empty for folders
-	Mtime     int64  // Unix nanoseconds
-	ETag      string // remote only
-	CTag      string // remote only
-	IsDeleted bool
+	Source        ChangeSource
+	Type          ChangeType
+	Path          string     // NFC-normalized, relative to sync root
+	OldPath       string     // for moves only
+	ItemID        string     // server-assigned (remote only; empty for local)
+	ParentID      string     // server parent ID (remote only)
+	DriveID       driveid.ID // normalized (lowercase, zero-padded to 16 chars)
+	ItemType      ItemType
+	Name          string // URL-decoded, NFC-normalized
+	Size          int64
+	Hash          string // QuickXorHash (base64); empty for folders
+	Mtime         int64  // Unix nanoseconds
+	ETag          string // remote only
+	CTag          string // remote only
+	IsDeleted     bool
+	RemoteDriveID string // for shortcuts: source drive containing shared content
+	RemoteItemID  string // for shortcuts: source folder ID on the remote drive
 }
 
 // BaselineEntry represents the confirmed synced state of a single path.
@@ -484,6 +489,26 @@ type ConflictRecord struct {
 	ResolvedBy   string // ResolvedByUser, ResolvedByAuto, or "" if unresolved
 }
 
+// Shortcut represents a OneDrive shortcut or shared folder that requires
+// separate observation on the source drive. Stored in the shortcuts table.
+type Shortcut struct {
+	ItemID       string // shortcut item ID in the user's drive
+	RemoteDrive  string // source drive ID
+	RemoteItem   string // source folder ID
+	LocalPath    string // local filesystem path for this shortcut's content
+	DriveType    string // source drive type: "personal", "business", "documentLibrary"
+	Observation  string // "unknown", "delta", or "enumerate"
+	ReadOnly     bool   // true if uploads are forbidden (403 detected)
+	DiscoveredAt int64  // unix timestamp when first seen
+}
+
+// Shortcut observation strategies.
+const (
+	ObservationUnknown   = "unknown"
+	ObservationDelta     = "delta"
+	ObservationEnumerate = "enumerate"
+)
+
 // VerifyResult describes the verification status of a single file.
 type VerifyResult struct {
 	Path     string `json:"path"`
@@ -564,4 +589,17 @@ type ItemClient interface {
 // the remote API. Used at engine startup to detect stale config (B-074).
 type DriveVerifier interface {
 	Drive(ctx context.Context, driveID driveid.ID) (*graph.Drive, error)
+}
+
+// FolderDeltaFetcher provides folder-scoped delta enumeration for shortcut
+// observation on personal drives (6.4b).
+type FolderDeltaFetcher interface {
+	DeltaFolderAll(ctx context.Context, driveID driveid.ID, folderID, token string) ([]graph.Item, string, error)
+}
+
+// RecursiveLister provides recursive children enumeration for shortcut
+// observation on business/SharePoint drives where folder-scoped delta
+// is not supported (6.4b).
+type RecursiveLister interface {
+	ListChildrenRecursive(ctx context.Context, driveID driveid.ID, folderID string) ([]graph.Item, error)
 }

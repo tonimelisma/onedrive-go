@@ -640,3 +640,17 @@ Token metadata stores the primary business drive_id. SharePoint document librari
 
 ### filterSharedFolders collision tracking
 When building display names for shared folders in `drive list`, pass `existingNames` map to `deriveSharedDisplayName` and update it incrementally. Without this, two shared folders from different owners with the same first name + folder name get identical display names. The name derivation phase must be sequential (for collision tracking), but enrichment can be parallel.
+
+## 11. Shared Folder Sync (Shortcuts)
+
+### Folder-scoped delta is a documented API limitation
+On OneDrive for Business and SharePoint, the delta action is only available on the `root` item of a drive. Folder-scoped delta (`/drives/{driveID}/items/{folderID}/delta`) only works on OneDrive Personal. This is a documented API limitation per Microsoft's official release notes, not a bug. The production workaround is dual observation: folder-scoped delta for personal source drives, recursive children enumeration for business/SharePoint.
+
+### Shortcut detection in delta
+Items in the user's drive delta with `RemoteDriveID != ""` AND `IsFolder` are shortcuts pointing to content on another drive. Their children do NOT appear in the user's own delta — the engine must observe the source drive separately. Deleted shortcuts still produce `ChangeDelete` events (not `ChangeShortcut`) for normal planner handling.
+
+### Shortcuts table CHECK constraint
+The `observation` column has a CHECK constraint: `IN ('unknown', 'delta', 'enumerate')`. When creating a `Shortcut` struct, always initialize `Observation` to `ObservationUnknown` — an empty string violates the constraint.
+
+### Delta code deduplication
+`Delta()` and `DeltaFolder()` are thin wrappers over a shared `fetchDeltaPage()` helper. `DeltaAll()` and `DeltaFolderAll()` share `deltaAllPages()`. The `deltaPathBuilder` function type abstracts the path construction difference. This eliminated ~60 lines of copy-paste code.

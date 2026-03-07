@@ -2668,7 +2668,7 @@ func TestMigration00002_SyncFailureRoundTrip(t *testing.T) {
 
 	ver, err := provider.GetDBVersion(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, int64(2), ver)
+	assert.Equal(t, int64(3), ver)
 
 	// Step 2: Insert seed data — one standard conflict, one sync_failure.
 	_, err = db.ExecContext(ctx,
@@ -2685,8 +2685,11 @@ func TestMigration00002_SyncFailureRoundTrip(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	// Step 3: Roll back migration 00002 (Down removes 'sync_failure' from CHECK).
-	_, err = provider.Down(ctx)
+	// Step 3: Roll back migrations 00003 (shortcuts) then 00002 (sync_failure).
+	_, err = provider.Down(ctx) // 00003 → 00002
+	require.NoError(t, err)
+
+	_, err = provider.Down(ctx) // 00002 → 00001
 	require.NoError(t, err)
 
 	ver, err = provider.GetDBVersion(ctx)

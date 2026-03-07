@@ -395,6 +395,19 @@ func (m *SyncStore) CommitDeltaToken(ctx context.Context, token, driveID, scopeI
 	return nil
 }
 
+// DeleteDeltaToken removes a delta token for a specific drive and scope.
+// Used when a shortcut is removed to clean up its scoped delta token.
+func (m *SyncStore) DeleteDeltaToken(ctx context.Context, driveID, scopeID string) error {
+	_, err := m.db.ExecContext(ctx,
+		`DELETE FROM delta_tokens WHERE drive_id = ? AND scope_id = ?`,
+		driveID, scopeID)
+	if err != nil {
+		return fmt.Errorf("sync: deleting delta token for drive %s scope %s: %w", driveID, scopeID, err)
+	}
+
+	return nil
+}
+
 // commitUpsert inserts or updates a baseline entry for download, upload,
 // folder create, and update-synced outcomes. Handles the case where a
 // server-side delete+recreate assigns a new item_id for an existing path

@@ -1657,3 +1657,160 @@ func TestWatch_ZeroEvents_NoTokenAdvance(t *testing.T) {
 	// Internal token should NOT have advanced.
 	assert.Equal(t, "old-token", obs.CurrentDeltaToken(), "token should not advance when 0 events returned")
 }
+
+// ---------------------------------------------------------------------------
+// Shortcut detection (6.4a.2)
+// ---------------------------------------------------------------------------
+
+// TestClassifyItem_ShortcutDetection verifies that items with a remoteItem
+// facet (RemoteDriveID + IsFolder) are classified as ChangeShortcut events
+// instead of regular folder creates/modifies.
+func TestClassifyItem_ShortcutDetection(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(testDriveID)
+	bl := emptyBaseline()
+	obs := NewRemoteObserver(nil, bl, driveID, testLogger(t))
+
+	inflight := map[driveid.ItemKey]inflightParent{
+		driveid.NewItemKey(driveID, "root"): {name: "", isRoot: true},
+	}
+
+	// A shortcut folder: IsFolder=true with RemoteDriveID pointing to another drive.
+	item := &graph.Item{
+		ID:            "shortcut-1",
+		Name:          "TeamDocs",
+		ParentID:      "root",
+		DriveID:       driveID,
+		IsFolder:      true,
+		RemoteDriveID: "source-drive-abc",
+		RemoteItemID:  "source-item-123",
+	}
+
+	ev := obs.classifyItem(item, inflight)
+	require.NotNil(t, ev, "shortcut should produce an event")
+
+	assert.Equal(t, ChangeShortcut, ev.Type, "shortcut should be classified as ChangeShortcut")
+	assert.Equal(t, "shortcut-1", ev.ItemID)
+	assert.Equal(t, "TeamDocs", ev.Path)
+	assert.Equal(t, ItemTypeFolder, ev.ItemType)
+	assert.Equal(t, "source-drive-abc", ev.RemoteDriveID)
+	assert.Equal(t, "source-item-123", ev.RemoteItemID)
+}
+
+// TestClassifyItem_ShortcutDetection_NotFolder verifies that items with
+// RemoteDriveID but NOT IsFolder are not treated as shortcuts (e.g.,
+// shared files appear with remoteItem but are regular files).
+func TestClassifyItem_ShortcutDetection_NotFolder(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(testDriveID)
+	bl := emptyBaseline()
+	obs := NewRemoteObserver(nil, bl, driveID, testLogger(t))
+
+	inflight := map[driveid.ItemKey]inflightParent{
+		driveid.NewItemKey(driveID, "root"): {name: "", isRoot: true},
+	}
+
+	// A shared file (not a folder) — should be treated as a normal file create.
+	item := &graph.Item{
+		ID:            "shared-file-1",
+		Name:          "shared-doc.docx",
+		ParentID:      "root",
+		DriveID:       driveID,
+		IsFolder:      false,
+		RemoteDriveID: "source-drive-abc",
+		RemoteItemID:  "source-item-456",
+		QuickXorHash:  "hash123",
+	}
+
+	ev := obs.classifyItem(item, inflight)
+	require.NotNil(t, ev, "shared file should produce an event")
+
+	assert.Equal(t, ChangeCreate, ev.Type, "shared file should be ChangeCreate, not ChangeShortcut")
+}
+
+// TestClassifyItem_ShortcutDeleted verifies that a deleted shortcut produces
+// a ChangeDelete event (not ChangeShortcut) so the planner can handle cleanup.
+func TestClassifyItem_ShortcutDeleted(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(testDriveID)
+	bl := baselineWith(&BaselineEntry{
+		Path:    "TeamDocs",
+		DriveID: driveID,
+		ItemID:  "shortcut-1",
+	})
+	obs := NewRemoteObserver(nil, bl, driveID, testLogger(t))
+
+	inflight := map[driveid.ItemKey]inflightParent{
+		driveid.NewItemKey(driveID, "root"): {name: "", isRoot: true},
+	}
+
+	item := &graph.Item{
+		ID:            "shortcut-1",
+		Name:          "TeamDocs",
+		ParentID:      "root",
+		DriveID:       driveID,
+		IsFolder:      true,
+		IsDeleted:     true,
+		RemoteDriveID: "source-drive-abc",
+		RemoteItemID:  "source-item-123",
+	}
+
+	ev := obs.classifyItem(item, inflight)
+	require.NotNil(t, ev, "deleted shortcut should produce an event")
+
+	assert.Equal(t, ChangeDelete, ev.Type, "deleted shortcut should be ChangeDelete")
+	assert.Equal(t, "TeamDocs", ev.Path)
+}
+
+// TestFullDelta_ShortcutsInDelta verifies that shortcuts appear in FullDelta
+// output with ChangeShortcut type and populated remote fields.
+func TestFullDelta_ShortcutsInDelta(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(testDriveID)
+
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{{
+			page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+					{
+						ID: "f1", Name: "myfile.txt", ParentID: "root", DriveID: driveID,
+						QuickXorHash: "hash1", Size: 100,
+					},
+					{
+						ID: "sc-1", Name: "SharedFolder", ParentID: "root", DriveID: driveID,
+						IsFolder: true, RemoteDriveID: "remote-drive-1", RemoteItemID: "remote-item-1",
+					},
+				},
+				DeltaLink: "https://graph.microsoft.com/delta?token=tok",
+			},
+		}},
+	}
+
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, testLogger(t))
+	events, _, err := obs.FullDelta(t.Context(), "")
+	require.NoError(t, err)
+
+	// Should have 2 events: 1 file create + 1 shortcut.
+	require.Len(t, events, 2)
+
+	// Find the shortcut event.
+	var shortcutEvent *ChangeEvent
+	for i := range events {
+		if events[i].Type == ChangeShortcut {
+			shortcutEvent = &events[i]
+
+			break
+		}
+	}
+
+	require.NotNil(t, shortcutEvent, "should have a ChangeShortcut event")
+	assert.Equal(t, "sc-1", shortcutEvent.ItemID)
+	assert.Equal(t, "SharedFolder", shortcutEvent.Path)
+	assert.Equal(t, "remote-drive-1", shortcutEvent.RemoteDriveID)
+	assert.Equal(t, "remote-item-1", shortcutEvent.RemoteItemID)
+}

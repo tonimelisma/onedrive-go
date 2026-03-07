@@ -2050,7 +2050,7 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 			assert.Equal(t, "file2.txt", ev.Path, "orphan should be file2.txt")
 			assert.Equal(t, "f2", ev.ItemID)
 			assert.True(t, ev.IsDeleted)
-		case ChangeCreate, ChangeMove:
+		case ChangeCreate, ChangeMove, ChangeShortcut:
 			// Not expected in this test.
 		}
 	}
@@ -2204,7 +2204,7 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 			deletes++
 			assert.Equal(t, "file2.txt", ev.Path)
 			assert.True(t, ev.IsDeleted)
-		case ChangeCreate, ChangeMove:
+		case ChangeCreate, ChangeMove, ChangeShortcut:
 			// not expected
 		}
 	}

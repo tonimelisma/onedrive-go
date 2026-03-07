@@ -1350,3 +1350,212 @@ func TestPollCopyStatus_Failed(t *testing.T) {
 
 	assert.Equal(t, "failed", status.Status)
 }
+
+// --- ListChildrenRecursive tests ---
+
+func TestListChildrenRecursive_FlatFolder(t *testing.T) {
+	// Folder with only files, no subfolders.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Contains(t, r.URL.Path, "/drives/000000000000000d/items/folder-root/children")
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{
+			"value": [
+				{"id":"f1","name":"a.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"folder-root","driveId":"d"},"file":{"mimeType":"text/plain"},"size":100},
+				{"id":"f2","name":"b.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"folder-root","driveId":"d"},"file":{"mimeType":"text/plain"},"size":200}
+			]
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	items, err := client.ListChildrenRecursive(t.Context(), driveid.New("d"), "folder-root")
+	require.NoError(t, err)
+
+	assert.Len(t, items, 2)
+	assert.Equal(t, "a.txt", items[0].Name)
+	assert.Equal(t, "b.txt", items[1].Name)
+}
+
+func TestListChildrenRecursive_NestedFolders(t *testing.T) {
+	// Root has file + subfolder; subfolder has a file.
+	// Server dispatches based on parent ID in the path.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+
+		if strings.Contains(r.URL.Path, "/items/root-folder/children") {
+			fmt.Fprint(w, `{
+				"value": [
+					{"id":"f1","name":"file1.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root-folder","driveId":"d"},"file":{"mimeType":"text/plain"}},
+					{"id":"sub1","name":"subdir","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root-folder","driveId":"d"},"folder":{"childCount":1}}
+				]
+			}`)
+		} else if strings.Contains(r.URL.Path, "/items/sub1/children") {
+			fmt.Fprint(w, `{
+				"value": [
+					{"id":"f2","name":"nested.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"sub1","driveId":"d"},"file":{"mimeType":"text/plain"}}
+				]
+			}`)
+		} else {
+			t.Errorf("unexpected request path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	items, err := client.ListChildrenRecursive(t.Context(), driveid.New("d"), "root-folder")
+	require.NoError(t, err)
+
+	// Should include the subfolder itself + all files (3 total).
+	assert.Len(t, items, 3)
+
+	// Verify we got all items (order may vary due to recursion).
+	ids := make(map[string]bool)
+	for _, item := range items {
+		ids[item.ID] = true
+	}
+
+	assert.True(t, ids["f1"], "should contain file1")
+	assert.True(t, ids["sub1"], "should contain subfolder")
+	assert.True(t, ids["f2"], "should contain nested file")
+}
+
+func TestListChildrenRecursive_DeeplyNested(t *testing.T) {
+	// root -> sub1 -> sub2 -> file.txt (3 levels deep)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+
+		switch {
+		case strings.Contains(r.URL.Path, "/items/root-folder/children"):
+			fmt.Fprint(w, `{
+				"value": [
+					{"id":"sub1","name":"level1","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root-folder","driveId":"d"},"folder":{"childCount":1}}
+				]
+			}`)
+		case strings.Contains(r.URL.Path, "/items/sub1/children"):
+			fmt.Fprint(w, `{
+				"value": [
+					{"id":"sub2","name":"level2","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"sub1","driveId":"d"},"folder":{"childCount":1}}
+				]
+			}`)
+		case strings.Contains(r.URL.Path, "/items/sub2/children"):
+			fmt.Fprint(w, `{
+				"value": [
+					{"id":"f1","name":"deep.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"sub2","driveId":"d"},"file":{"mimeType":"text/plain"}}
+				]
+			}`)
+		default:
+			t.Errorf("unexpected request path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	items, err := client.ListChildrenRecursive(t.Context(), driveid.New("d"), "root-folder")
+	require.NoError(t, err)
+
+	// sub1, sub2, and deep.txt
+	assert.Len(t, items, 3)
+}
+
+func TestListChildrenRecursive_EmptyFolder(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"value": []}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	items, err := client.ListChildrenRecursive(t.Context(), driveid.New("d"), "empty-folder")
+	require.NoError(t, err)
+
+	assert.Empty(t, items)
+}
+
+func TestListChildrenRecursive_WithPagination(t *testing.T) {
+	// Root folder children are paginated across two pages.
+	var srv *httptest.Server
+
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+
+		if strings.Contains(r.URL.Path, "/items/root-folder/children") && !strings.Contains(r.URL.RawQuery, "page=2") {
+			fmt.Fprintf(w, `{
+				"value": [
+					{"id":"f1","name":"file1.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root-folder","driveId":"d"},"file":{"mimeType":"text/plain"}}
+				],
+				"@odata.nextLink": "%s/drives/d/items/root-folder/children?$top=200&page=2"
+			}`, srv.URL)
+		} else if strings.Contains(r.URL.RawQuery, "page=2") {
+			fmt.Fprint(w, `{
+				"value": [
+					{"id":"f2","name":"file2.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root-folder","driveId":"d"},"file":{"mimeType":"text/plain"}}
+				]
+			}`)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	items, err := client.ListChildrenRecursive(t.Context(), driveid.New("d"), "root-folder")
+	require.NoError(t, err)
+
+	assert.Len(t, items, 2)
+	assert.Equal(t, "f1", items[0].ID)
+	assert.Equal(t, "f2", items[1].ID)
+}
+
+func TestListChildrenRecursive_ErrorPropagation(t *testing.T) {
+	// Root has a subfolder; listing the subfolder's children returns an error.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/items/root-folder/children") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{
+				"value": [
+					{"id":"sub1","name":"subdir","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root-folder","driveId":"d"},"folder":{"childCount":1}}
+				]
+			}`)
+		} else {
+			w.Header().Set("request-id", "req-err")
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, `{"error":{"code":"internalError","message":"something broke"}}`)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.ListChildrenRecursive(t.Context(), driveid.New("d"), "root-folder")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "500")
+}
+
+func TestListChildrenRecursive_MaxDepth(t *testing.T) {
+	origMax := maxRecursionDepth
+	maxRecursionDepth = 2
+	defer func() { maxRecursionDepth = origMax }()
+
+	// Each folder contains one subfolder — will exceed depth 2.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		// Always return a single subfolder, creating infinite depth.
+		fmt.Fprint(w, `{
+			"value": [
+				{"id":"sub","name":"deep","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"p","driveId":"d"},"folder":{"childCount":1}}
+			]
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.ListChildrenRecursive(t.Context(), driveid.New("d"), "root-folder")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeded max depth")
+	assert.Contains(t, err.Error(), "2")
+}
