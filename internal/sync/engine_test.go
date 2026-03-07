@@ -2339,14 +2339,14 @@ func TestRunOnce_InvalidUpload_RecordsIssue(t *testing.T) {
 
 	found := false
 	for _, iss := range issues {
-		if iss.IssueType == "path_too_long" {
+		if iss.IssueType == IssuePathTooLong {
 			found = true
 
 			break
 		}
 	}
 
-	assert.True(t, found, "expected path_too_long issue in local_issues")
+	assert.True(t, found, "expected IssuePathTooLong issue in local_issues")
 }
 
 // ---------------------------------------------------------------------------

@@ -63,7 +63,7 @@ func TestValidateSingleUpload_PathTooLong(t *testing.T) {
 	}
 	fails := validateSingleUpload(a)
 	require.Len(t, fails, 1)
-	assert.Equal(t, "path_too_long", fails[0].IssueType)
+	assert.Equal(t, IssuePathTooLong, fails[0].IssueType)
 }
 
 func TestValidateSingleUpload_FileTooLarge(t *testing.T) {
@@ -74,7 +74,7 @@ func TestValidateSingleUpload_FileTooLarge(t *testing.T) {
 	}
 	fails := validateSingleUpload(a)
 	require.Len(t, fails, 1)
-	assert.Equal(t, "file_too_large", fails[0].IssueType)
+	assert.Equal(t, IssueFileTooLarge, fails[0].IssueType)
 }
 
 func TestValidateSingleUpload_MultipleFailures(t *testing.T) {
@@ -89,8 +89,8 @@ func TestValidateSingleUpload_MultipleFailures(t *testing.T) {
 	}
 	fails := validateSingleUpload(a)
 	require.Len(t, fails, 2)
-	assert.Equal(t, "invalid_filename", fails[0].IssueType)
-	assert.Equal(t, "path_too_long", fails[1].IssueType)
+	assert.Equal(t, IssueInvalidFilename, fails[0].IssueType)
+	assert.Equal(t, IssuePathTooLong, fails[1].IssueType)
 }
 
 func TestValidateSingleUpload_AllThreeFailures(t *testing.T) {
@@ -105,9 +105,9 @@ func TestValidateSingleUpload_AllThreeFailures(t *testing.T) {
 	}
 	fails := validateSingleUpload(a)
 	require.Len(t, fails, 3)
-	assert.Equal(t, "invalid_filename", fails[0].IssueType)
-	assert.Equal(t, "path_too_long", fails[1].IssueType)
-	assert.Equal(t, "file_too_large", fails[2].IssueType)
+	assert.Equal(t, IssueInvalidFilename, fails[0].IssueType)
+	assert.Equal(t, IssuePathTooLong, fails[1].IssueType)
+	assert.Equal(t, IssueFileTooLarge, fails[2].IssueType)
 }
 
 func TestValidateUploadActions_Mixed(t *testing.T) {
