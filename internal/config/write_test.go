@@ -1176,3 +1176,19 @@ func TestEnsureDriveInConfig_CollisionDetection(t *testing.T) {
 	// Should be disambiguated with email since no display_name metadata.
 	assert.Equal(t, "~/OneDrive - second@example.com", syncDir)
 }
+
+func TestEnsureDriveInConfig_NoFallback(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	// Business drive with no account profile — should get plain default name.
+	cid := driveid.MustCanonicalID("business:noprofile@example.com")
+
+	syncDir, added, err := EnsureDriveInConfig(path, cid, testLogger(t))
+	require.NoError(t, err)
+	assert.True(t, added)
+	// Without account profile, falls back to BaseSyncDir ("~/OneDrive - Business").
+	assert.Equal(t, "~/OneDrive - Business", syncDir)
+}

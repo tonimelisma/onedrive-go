@@ -377,6 +377,27 @@ func copyTokenFile(t *testing.T, srcDir, dstDir string) {
 	require.NoErrorf(t, err, "cannot read token file %s", srcPath)
 
 	require.NoError(t, os.WriteFile(filepath.Join(dstDir, name), data, 0o600))
+
+	// Copy account profile and drive metadata files (best-effort).
+	copyMetadataFiles(t, srcDir, dstDir)
+}
+
+// copyMetadataFiles copies account_* and drive_* JSON files from srcDir to
+// dstDir. Best-effort: missing files are silently skipped.
+func copyMetadataFiles(t *testing.T, srcDir, dstDir string) {
+	t.Helper()
+
+	for _, prefix := range []string{"account_", "drive_"} {
+		matches, _ := filepath.Glob(filepath.Join(srcDir, prefix+"*.json"))
+		for _, m := range matches {
+			data, err := os.ReadFile(m)
+			if err != nil {
+				continue
+			}
+
+			_ = os.WriteFile(filepath.Join(dstDir, filepath.Base(m)), data, 0o600)
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -547,6 +568,9 @@ func copyTokenFileForDrive(t *testing.T, srcDir, dstDir, driveID string) {
 	require.NoErrorf(t, err, "cannot read token file %s", srcPath)
 
 	require.NoError(t, os.WriteFile(filepath.Join(dstDir, name), data, 0o600))
+
+	// Copy account profile and drive metadata files (best-effort).
+	copyMetadataFiles(t, srcDir, dstDir)
 }
 
 // runCLIWithConfigAllDrives runs the CLI without --drive flag (syncs all drives).

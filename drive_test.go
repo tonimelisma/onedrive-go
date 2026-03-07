@@ -123,35 +123,33 @@ func TestBuildConfiguredDriveEntries_NoSyncDir_ComputesDefault(t *testing.T) {
 
 	entries := buildConfiguredDriveEntries(cfg, testDriveLogger(t))
 	require.Len(t, entries, 1)
-	// Without token meta, personal defaults to "~/OneDrive".
+	// Without account profile, personal defaults to "~/OneDrive".
 	assert.Equal(t, "~/OneDrive", entries[0].SyncDir)
 }
 
-func TestBuildConfiguredDriveEntries_NoSyncDir_WithTokenMeta(t *testing.T) {
+func TestBuildConfiguredDriveEntries_NoSyncDir_WithAccountProfile(t *testing.T) {
 	setTestDriveHome(t)
 	dataDir := config.DefaultDataDir()
 	require.NoError(t, os.MkdirAll(dataDir, 0o755))
 
-	// Create a proper token file with metadata.
-	writeTestTokenFile(t, dataDir, "token_business_alice@contoso.com.json", map[string]string{
-		"org_name":     "Contoso",
-		"display_name": "Alice Smith",
-		"drive_id":     "test-drive-id",
-		"user_id":      "test-user-id",
-		"cached_at":    "2024-01-01T00:00:00Z",
-	})
+	// Create a token file and an account profile with org_name.
+	bizCID := driveid.MustCanonicalID("business:alice@contoso.com")
+	writeTestTokenFile(t, dataDir, "token_business_alice@contoso.com.json")
+	require.NoError(t, config.SaveAccountProfile(bizCID, &config.AccountProfile{
+		OrgName:     "Contoso",
+		DisplayName: "Alice Smith",
+	}))
 
 	cfg := config.DefaultConfig()
-	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = config.Drive{}
+	cfg.Drives[bizCID] = config.Drive{}
 
 	entries := buildConfiguredDriveEntries(cfg, testDriveLogger(t))
 	require.Len(t, entries, 1)
 	assert.Equal(t, "~/OneDrive - Contoso", entries[0].SyncDir)
 }
 
-// collectConfigSyncDirs and readDriveTokenMeta were deleted — their logic now
-// lives in config.CollectOtherSyncDirs and config.ReadTokenMeta.
-// Tests for these functions live in internal/config/drive_test.go.
+// Tests for CollectOtherSyncDirs and ResolveAccountNames live in
+// internal/config/drive_test.go.
 
 // --- listAvailableDrives ---
 
@@ -417,8 +415,8 @@ func TestFindBusinessTokens_HasBusinessToken(t *testing.T) {
 	require.NoError(t, os.MkdirAll(dataDir, 0o755))
 
 	// Create business and personal token files.
-	writeTestTokenFile(t, dataDir, "token_business_alice@contoso.com.json", nil)
-	writeTestTokenFile(t, dataDir, "token_personal_user@example.com.json", nil)
+	writeTestTokenFile(t, dataDir, "token_business_alice@contoso.com.json")
+	writeTestTokenFile(t, dataDir, "token_personal_user@example.com.json")
 
 	tokens := findBusinessTokens("", testDriveLogger(t))
 	require.Len(t, tokens, 1)
@@ -431,8 +429,8 @@ func TestFindBusinessTokens_FilterSelectsOne(t *testing.T) {
 	require.NoError(t, os.MkdirAll(dataDir, 0o755))
 
 	// Two business tokens for different accounts.
-	writeTestTokenFile(t, dataDir, "token_business_alice@contoso.com.json", nil)
-	writeTestTokenFile(t, dataDir, "token_business_bob@fabrikam.com.json", nil)
+	writeTestTokenFile(t, dataDir, "token_business_alice@contoso.com.json")
+	writeTestTokenFile(t, dataDir, "token_business_bob@fabrikam.com.json")
 
 	tokens := findBusinessTokens("alice@contoso.com", testDriveLogger(t))
 	require.Len(t, tokens, 1)
@@ -444,7 +442,7 @@ func TestFindBusinessTokens_SkipsPersonal(t *testing.T) {
 	dataDir := config.DefaultDataDir()
 	require.NoError(t, os.MkdirAll(dataDir, 0o755))
 
-	writeTestTokenFile(t, dataDir, "token_personal_user@example.com.json", nil)
+	writeTestTokenFile(t, dataDir, "token_personal_user@example.com.json")
 
 	tokens := findBusinessTokens("", testDriveLogger(t))
 	assert.Empty(t, tokens)
@@ -616,12 +614,7 @@ func TestAddNewDrive_WithToken(t *testing.T) {
 	dataDir := config.DefaultDataDir()
 	require.NoError(t, os.MkdirAll(dataDir, 0o755))
 
-	writeTestTokenFile(t, dataDir, "token_personal_user@example.com.json", map[string]string{
-		"display_name": "Test User",
-		"drive_id":     "test-drive-id",
-		"user_id":      "test-user-id",
-		"cached_at":    "2024-01-01T00:00:00Z",
-	})
+	writeTestTokenFile(t, dataDir, "token_personal_user@example.com.json")
 
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")
@@ -849,7 +842,7 @@ func setTestDriveHome(t *testing.T) {
 
 // writeTestTokenFile creates a token file using the canonical tokenfile.Save,
 // ensuring test files match the real on-disk format exactly.
-func writeTestTokenFile(t *testing.T, dir, name string, meta map[string]string) {
+func writeTestTokenFile(t *testing.T, dir, name string) {
 	t.Helper()
 
 	tok := &oauth2.Token{
@@ -858,7 +851,7 @@ func writeTestTokenFile(t *testing.T, dir, name string, meta map[string]string) 
 		TokenType:    "Bearer",
 		Expiry:       time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
-	require.NoError(t, tokenfile.Save(filepath.Join(dir, name), tok, meta))
+	require.NoError(t, tokenfile.Save(filepath.Join(dir, name), tok))
 }
 
 // --- enrichSharedItem tests ---

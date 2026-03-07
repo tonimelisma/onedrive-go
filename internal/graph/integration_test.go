@@ -19,7 +19,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 	"github.com/tonimelisma/onedrive-go/testutil"
 )
 
@@ -93,8 +92,8 @@ func newIntegrationClient(t *testing.T) *Client {
 	return NewClient(DefaultBaseURL, http.DefaultClient, ts, logger, "onedrive-go/test")
 }
 
-// driveIDForTest reads .meta.drive_id from the cache file for the test drive.
-// The cache file is in the isolated data dir (copied from .testdata/ by
+// driveIDForTest reads drive_id from the drive metadata file for the test drive.
+// The metadata file is in the isolated data dir (copied from .testdata/ by
 // setupIntegrationIsolation). No env var needed — metadata is in the file.
 func driveIDForTest(t *testing.T) driveid.ID {
 	t.Helper()
@@ -103,17 +102,13 @@ func driveIDForTest(t *testing.T) driveid.ID {
 	require.NotEmpty(t, drive, "ONEDRIVE_TEST_DRIVE not set")
 
 	cid := driveid.MustCanonicalID(drive)
-	tokenPath := config.DriveTokenPath(cid)
-	require.NotEmpty(t, tokenPath, "cannot determine token path for drive %q", drive)
 
-	meta, err := tokenfile.ReadMeta(tokenPath)
-	require.NoError(t, err, "reading token metadata for drive %q", drive)
+	meta, err := config.LoadDriveMetadata(cid)
+	require.NoError(t, err, "reading drive metadata for drive %q", drive)
+	require.NotNil(t, meta, "drive metadata file missing — re-run scripts/bootstrap-test-credentials.sh")
+	require.NotEmpty(t, meta.DriveID, "drive metadata has empty drive_id")
 
-	id, ok := meta["drive_id"]
-	require.True(t, ok, "cache file missing .meta.drive_id — re-run scripts/bootstrap-test-credentials.sh")
-	require.NotEmpty(t, id, "cache file has empty .meta.drive_id")
-
-	return driveid.New(id)
+	return driveid.New(meta.DriveID)
 }
 
 // TestIntegration_GetItem verifies GetItem returns a properly normalized Item

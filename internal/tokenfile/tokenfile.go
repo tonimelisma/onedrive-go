@@ -1,18 +1,17 @@
-// Package tokenfile handles reading and writing token files. Token files store
-// an OAuth2 token alongside cached API metadata (org name, display name, etc.).
-// This is a leaf package imported by both config/ and graph/ to avoid duplication
-// and break the config→graph import cycle.
+// Package tokenfile handles reading and writing OAuth2 token files. Token
+// files store a pure OAuth2 token — no metadata. This is a leaf package
+// imported by both config/ and graph/ to avoid duplication and break the
+// config→graph import cycle.
 package tokenfile
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
-	"maps"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"golang.org/x/oauth2"
 )
@@ -23,55 +22,17 @@ const FilePerms = 0o600
 // DirPerms is used when creating the tokens directory.
 const DirPerms = 0o700
 
-// requiredMetaKeys returns the metadata keys that must be present and non-empty
-// in a complete token file. Returns a fresh copy each call so callers cannot
-// corrupt the canonical list. Written during login (auth.go:202-207).
-// org_name is intentionally excluded — it is empty for personal accounts.
-func requiredMetaKeys() []string {
-	return []string{"drive_id", "user_id", "display_name", "cached_at"}
-}
-
-// File is the on-disk format for token files. Includes the OAuth token and
-// optional metadata (org name, display name) cached from API responses.
+// File is the on-disk format for token files. Contains only the OAuth token.
 // Old bare oauth2.Token files are not supported — re-login is required.
 type File struct {
-	Token *oauth2.Token     `json:"token"`
-	Meta  map[string]string `json:"meta,omitempty"`
+	Token *oauth2.Token `json:"token"`
 }
 
-// Load reads a saved token file from disk. Returns the OAuth token and any
-// cached metadata. Returns (nil, nil, nil) if the file does not exist.
+// Load reads a saved token file from disk. Returns the OAuth token.
+// Returns (nil, nil) if the file does not exist.
 // Old bare oauth2.Token files (without the "token" wrapper) will fail with
 // "missing token field" — re-login is required.
-func Load(path string) (*oauth2.Token, map[string]string, error) {
-	data, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil, nil //nolint:nilnil // sentinel for "not found"
-	}
-
-	if err != nil {
-		return nil, nil, fmt.Errorf("tokenfile: reading %s: %w", path, err)
-	}
-
-	var tf File
-	if err := json.Unmarshal(data, &tf); err != nil {
-		return nil, nil, fmt.Errorf("tokenfile: decoding %s: %w", path, err)
-	}
-
-	if tf.Token == nil {
-		return nil, nil, fmt.Errorf("tokenfile: %s missing token field (re-login required)", path)
-	}
-
-	if tf.Token.AccessToken == "" && tf.Token.RefreshToken == "" {
-		return nil, nil, fmt.Errorf("tokenfile: %s has empty credentials (re-login required)", path)
-	}
-
-	return tf.Token, tf.Meta, nil
-}
-
-// ReadMeta reads just the metadata from a token file without loading the full
-// OAuth token. Returns (nil, nil) if the file does not exist.
-func ReadMeta(path string) (map[string]string, error) {
+func Load(path string) (*oauth2.Token, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil //nolint:nilnil // sentinel for "not found"
@@ -81,82 +42,35 @@ func ReadMeta(path string) (map[string]string, error) {
 		return nil, fmt.Errorf("tokenfile: reading %s: %w", path, err)
 	}
 
-	var parsed struct {
-		Meta map[string]string `json:"meta"`
-	}
-	if err := json.Unmarshal(data, &parsed); err != nil {
+	var tf File
+
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+
+	if err := dec.Decode(&tf); err != nil {
 		return nil, fmt.Errorf("tokenfile: decoding %s: %w", path, err)
 	}
 
-	return parsed.Meta, nil
-}
-
-// ValidateMeta checks that all required metadata keys are present and
-// non-empty. Returns an error listing all missing or empty keys.
-func ValidateMeta(meta map[string]string) error {
-	var missing []string
-
-	for _, key := range requiredMetaKeys() {
-		if meta[key] == "" {
-			missing = append(missing, key)
-		}
+	if tf.Token == nil {
+		return nil, fmt.Errorf("tokenfile: %s missing token field (re-login required)", path)
 	}
 
-	if len(missing) > 0 {
-		return fmt.Errorf("tokenfile: missing required metadata: %s (re-login required)",
-			strings.Join(missing, ", "))
+	if tf.Token.AccessToken == "" && tf.Token.RefreshToken == "" {
+		return nil, fmt.Errorf("tokenfile: %s has empty credentials (re-login required)", path)
 	}
 
-	return nil
-}
-
-// LoadAndValidate loads a token file and validates both token and metadata
-// integrity. Use this for operational paths (config resolution, session
-// creation) where incomplete files should be rejected. Use Load() for paths
-// that may encounter pre-metadata files (login flow).
-func LoadAndValidate(path string) (*oauth2.Token, map[string]string, error) {
-	tok, meta, err := Load(path)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	if tok == nil {
-		return nil, nil, nil //nolint:nilnil // sentinel for "not found"
-	}
-
-	if tok.RefreshToken == "" {
-		return nil, nil, fmt.Errorf("tokenfile: %s has no refresh token (re-login required)", path)
-	}
-
-	if meta == nil {
-		return nil, nil, fmt.Errorf("tokenfile: %s has no metadata (re-login required)", path)
-	}
-
-	if err := ValidateMeta(meta); err != nil {
-		return nil, nil, fmt.Errorf("tokenfile: %s: %w", path, err)
-	}
-
-	return tok, meta, nil
+	return tf.Token, nil
 }
 
 // Save writes a token file to disk atomically (write-to-temp + rename)
-// with 0600 permissions. Never logs token values.
-//
-// When meta is non-nil, Save validates that all required metadata keys are
-// present. meta==nil is allowed only during initial login (exchangeAndSave),
-// before metadata is merged by LoadAndMergeMeta.
-func Save(path string, tok *oauth2.Token, meta map[string]string) error {
+// with 0600 permissions. Never logs token values. Writes only the OAuth
+// token — no metadata.
+func Save(path string, tok *oauth2.Token) error {
 	if tok == nil {
 		return fmt.Errorf("tokenfile: refusing to save nil token to %s", path)
 	}
 
-	if meta != nil {
-		if err := ValidateMeta(meta); err != nil {
-			return fmt.Errorf("tokenfile: refusing to save incomplete token to %s: %w", path, err)
-		}
-	}
-
-	tf := File{Token: tok, Meta: meta}
+	tf := File{Token: tok}
 
 	data, err := json.MarshalIndent(tf, "", "  ")
 	if err != nil {
@@ -213,30 +127,4 @@ func Save(path string, tok *oauth2.Token, meta map[string]string) error {
 	success = true
 
 	return nil
-}
-
-// LoadAndMergeMeta reads the current token file, merges new metadata keys
-// (new keys overwrite existing), and saves. Returns an error if the file
-// does not exist or has no token.
-func LoadAndMergeMeta(path string, meta map[string]string) error {
-	tok, existingMeta, err := Load(path)
-	if err != nil {
-		return fmt.Errorf("reading token for metadata update: %w", err)
-	}
-
-	if tok == nil {
-		return fmt.Errorf("no token file at %s", path)
-	}
-
-	if existingMeta == nil {
-		existingMeta = make(map[string]string, len(meta))
-	}
-
-	maps.Copy(existingMeta, meta)
-
-	if err := ValidateMeta(existingMeta); err != nil {
-		return fmt.Errorf("metadata incomplete after merge: %w", err)
-	}
-
-	return Save(path, tok, existingMeta)
 }

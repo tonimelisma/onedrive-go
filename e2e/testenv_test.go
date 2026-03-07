@@ -56,12 +56,6 @@ func validateTestData(credDir, driveID string) {
 		os.Exit(1)
 	}
 
-	if _, ok := parsed["meta"]; !ok {
-		fmt.Fprintf(os.Stderr, "FATAL: token file %s missing \"meta\" key\n", tokenPath)
-		fmt.Fprintln(os.Stderr, "Re-run scripts/bootstrap-test-credentials.sh.")
-		os.Exit(1)
-	}
-
 	configPath := filepath.Join(credDir, "config.toml")
 	if _, statErr := os.Stat(configPath); statErr != nil {
 		fmt.Fprintf(os.Stderr, "FATAL: config.toml not found at %s\n", configPath)
@@ -133,6 +127,14 @@ func setupIsolation() func() {
 			filepath.Join(appDataDir, tok),
 			0o600,
 		)
+	}
+
+	// Copy account profile and drive metadata files from .testdata/.
+	for _, prefix := range []string{"account_", "drive_"} {
+		matches, _ := filepath.Glob(filepath.Join(testCredentialDir, prefix+"*.json"))
+		for _, m := range matches {
+			testutil.CopyFile(m, filepath.Join(appDataDir, filepath.Base(m)), 0o600)
+		}
 	}
 
 	testDataDir = appDataDir

@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
 // NOTE: DriveTokenPath is defined in token_resolution.go (not here).
@@ -173,9 +172,9 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 		resolved.RemotePath = defaultRemotePath
 	}
 
-	// Drive ID resolution: prefer drive metadata file (per-drive, accurate for
-	// SharePoint libraries and shared drives), fall back to token metadata
-	// (per-account, cached at login time).
+	// Two-source drive ID resolution: prefer drive metadata file (per-drive,
+	// accurate for SharePoint libraries and shared drives), then shared
+	// canonical ID (embeds the remote drive ID). Otherwise DriveID stays zero.
 	driveMeta, driveMetaErr := LoadDriveMetadata(canonicalID)
 	if driveMetaErr != nil {
 		logger.Debug("could not load drive metadata", "canonical_id", canonicalID.String(), "error", driveMetaErr)
@@ -194,20 +193,11 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 			"drive_id", resolved.DriveID.String(),
 			"canonical_id", canonicalID.String(),
 		)
-	} else {
-		meta := ReadTokenMeta(canonicalID, logger)
-		if meta["drive_id"] != "" {
-			resolved.DriveID = driveid.New(meta["drive_id"])
-			logger.Debug("resolved drive ID from token metadata",
-				"drive_id", resolved.DriveID.String(),
-				"canonical_id", canonicalID.String(),
-			)
-		}
 	}
 
 	// Compute runtime default sync_dir when the drive has none configured.
 	if resolved.SyncDir == "" {
-		orgName, displayName := resolveAccountNames(canonicalID, logger)
+		orgName, displayName := ResolveAccountNames(canonicalID, logger)
 		otherDirs := CollectOtherSyncDirs(cfg, canonicalID, logger)
 		resolved.SyncDir = expandTilde(DefaultSyncDir(canonicalID, orgName, displayName, otherDirs))
 		logger.Debug("using default sync_dir",
@@ -231,37 +221,6 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 	return resolved
 }
 
-// ReadTokenMeta reads cached metadata from the token file. Returns the full
-// metadata map (org_name, display_name, drive_id, etc.). Returns nil if the
-// token file is missing, doesn't contain metadata, or has incomplete metadata
-// (missing required keys). Uses tokenfile.ReadMeta + ValidateMeta to ensure
-// integrity.
-func ReadTokenMeta(cid driveid.CanonicalID, logger *slog.Logger) map[string]string {
-	tokenPath := DriveTokenPath(cid)
-	if tokenPath == "" {
-		return nil
-	}
-
-	meta, err := tokenfile.ReadMeta(tokenPath)
-	if err != nil {
-		logger.Debug("could not read token metadata",
-			"canonical_id", cid.String(), "error", err)
-
-		return nil
-	}
-
-	if err := tokenfile.ValidateMeta(meta); err != nil {
-		logger.Warn("token file has incomplete metadata",
-			"canonical_id", cid.String(),
-			"token_path", tokenPath,
-			"error", err)
-
-		return nil
-	}
-
-	return meta
-}
-
 // CollectOtherSyncDirs collects sync_dir values from all drives in the config
 // except the specified one. For drives without explicit sync_dir, computes
 // the base name (without collision cascade) so all potential collisions are detected.
@@ -277,7 +236,7 @@ func CollectOtherSyncDirs(cfg *Config, excludeID driveid.CanonicalID, logger *sl
 		dir := cfg.Drives[id].SyncDir
 		if dir == "" {
 			// Compute base name for this drive (without collision cascade).
-			// Prefer account profile for org_name, fall back to token metadata.
+			// Use account profile for org_name.
 			var orgName string
 
 			acctCID := accountCIDForDrive(id)
@@ -293,11 +252,6 @@ func CollectOtherSyncDirs(cfg *Config, excludeID driveid.CanonicalID, logger *sl
 				}
 			}
 
-			if orgName == "" {
-				meta := ReadTokenMeta(id, logger)
-				orgName = meta["org_name"]
-			}
-
 			dir = BaseSyncDir(id, orgName, cfg.Drives[id].DisplayName)
 		}
 
@@ -309,36 +263,28 @@ func CollectOtherSyncDirs(cfg *Config, excludeID driveid.CanonicalID, logger *sl
 	return dirs
 }
 
-// resolveAccountNames returns org_name and display_name for a drive's parent
-// account. Prefers the account profile file, falls back to token metadata.
-func resolveAccountNames(cid driveid.CanonicalID, logger *slog.Logger) (orgName, displayName string) {
+// ResolveAccountNames returns org_name and display_name for a drive's parent
+// account using the account profile file. Returns empty strings if the profile
+// is unavailable.
+func ResolveAccountNames(cid driveid.CanonicalID, logger *slog.Logger) (orgName, displayName string) {
 	acctCID := accountCIDForDrive(cid)
-	if !acctCID.IsZero() {
-		profile, profileErr := LoadAccountProfile(acctCID)
-		if profileErr != nil {
-			logger.Debug("could not load account profile for names",
-				"canonical_id", cid.String(), "error", profileErr)
-		}
-
-		if profile != nil {
-			orgName = profile.OrgName
-			displayName = profile.DisplayName
-		}
+	if acctCID.IsZero() {
+		return "", ""
 	}
 
-	// Fall back to token metadata when account profile is unavailable.
-	if orgName == "" || displayName == "" {
-		meta := ReadTokenMeta(cid, logger)
-		if orgName == "" {
-			orgName = meta["org_name"]
-		}
+	profile, profileErr := LoadAccountProfile(acctCID)
+	if profileErr != nil {
+		logger.Debug("could not load account profile for names",
+			"canonical_id", cid.String(), "error", profileErr)
 
-		if displayName == "" {
-			displayName = meta["display_name"]
-		}
+		return "", ""
 	}
 
-	return orgName, displayName
+	if profile == nil {
+		return "", ""
+	}
+
+	return profile.OrgName, profile.DisplayName
 }
 
 // applyDriveOverrides selectively replaces global config values with per-drive

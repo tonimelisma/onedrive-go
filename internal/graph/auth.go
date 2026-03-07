@@ -53,7 +53,7 @@ func Login(
 	display func(DeviceAuth),
 	logger *slog.Logger,
 ) (TokenSource, error) {
-	cfg := oauthConfig(tokenPath, nil, logger)
+	cfg := oauthConfig(tokenPath, logger)
 
 	return doLogin(ctx, tokenPath, cfg, display, logger)
 }
@@ -92,7 +92,7 @@ func doLogin(
 		slog.Time("expiry", tok.Expiry),
 	)
 
-	if saveErr := tokenfile.Save(tokenPath, tok, nil); saveErr != nil {
+	if saveErr := tokenfile.Save(tokenPath, tok); saveErr != nil {
 		return nil, fmt.Errorf("graph: saving token: %w", saveErr)
 	}
 
@@ -143,7 +143,7 @@ func LoginWithBrowser(
 	openURL func(string) error,
 	logger *slog.Logger,
 ) (TokenSource, error) {
-	cfg := oauthConfig(tokenPath, nil, logger)
+	cfg := oauthConfig(tokenPath, logger)
 
 	return doAuthCodeLogin(ctx, tokenPath, cfg, openURL, logger)
 }
@@ -340,7 +340,7 @@ func exchangeAndSave(
 
 	logger.Info("token exchange successful", slog.Time("expiry", tok.Expiry))
 
-	if saveErr := tokenfile.Save(tokenPath, tok, nil); saveErr != nil {
+	if saveErr := tokenfile.Save(tokenPath, tok); saveErr != nil {
 		return nil, fmt.Errorf("graph: saving token: %w", saveErr)
 	}
 
@@ -376,12 +376,12 @@ func generateState() (string, error) {
 // The caller is responsible for computing tokenPath (via config.DriveTokenPath).
 // This decouples graph/ from config/ — graph/ has no config import.
 func TokenSourceFromPath(ctx context.Context, tokenPath string, logger *slog.Logger) (TokenSource, error) {
-	tok, meta, err := tokenfile.LoadAndValidate(tokenPath)
+	tok, err := tokenfile.Load(tokenPath)
 	if err != nil {
 		return nil, err
 	}
 
-	if tok == nil {
+	if tok == nil || tok.RefreshToken == "" {
 		return nil, ErrNotLoggedIn
 	}
 
@@ -392,7 +392,7 @@ func TokenSourceFromPath(ctx context.Context, tokenPath string, logger *slog.Log
 		slog.Bool("expired", expired),
 	)
 
-	cfg := oauthConfig(tokenPath, meta, logger)
+	cfg := oauthConfig(tokenPath, logger)
 	src := cfg.TokenSource(ctx, tok)
 
 	return &tokenBridge{src: src, logger: logger}, nil
@@ -425,9 +425,8 @@ func Logout(tokenPath string, logger *slog.Logger) error {
 }
 
 // oauthConfig builds an oauth2.Config with OnTokenChange wired to persist
-// refreshed tokens. meta is captured by the closure so metadata is preserved
-// through silent token refreshes.
-func oauthConfig(tokenPath string, meta map[string]string, logger *slog.Logger) *oauth2.Config {
+// refreshed tokens.
+func oauthConfig(tokenPath string, logger *slog.Logger) *oauth2.Config {
 	return &oauth2.Config{
 		ClientID: defaultClientID,
 		Scopes:   defaultScopes,
@@ -439,7 +438,7 @@ func oauthConfig(tokenPath string, meta map[string]string, logger *slog.Logger) 
 				slog.Time("new_expiry", tok.Expiry),
 			)
 
-			if err := tokenfile.Save(tokenPath, tok, meta); err != nil {
+			if err := tokenfile.Save(tokenPath, tok); err != nil {
 				logger.Warn("failed to persist refreshed token",
 					slog.String("path", tokenPath),
 					slog.String("error", err.Error()),
@@ -475,17 +474,4 @@ func (b *tokenBridge) Token() (string, error) {
 	)
 
 	return t.AccessToken, nil
-}
-
-// LoadTokenMeta reads just the metadata from a token file.
-// Delegates to tokenfile.Load — single loading code path.
-// Returns nil metadata (not an error) if the file does not exist.
-func LoadTokenMeta(tokenPath string) (map[string]string, error) {
-	return tokenfile.ReadMeta(tokenPath)
-}
-
-// SaveTokenMeta reads the current token, merges new metadata, and saves.
-// New metadata keys overwrite existing ones.
-func SaveTokenMeta(tokenPath string, meta map[string]string) error {
-	return tokenfile.LoadAndMergeMeta(tokenPath, meta)
 }

@@ -27,11 +27,11 @@ Use `httptest.NewServer` for all Graph client tests. Real HTTP, no interfaces fo
 ### Public auth functions accept explicit token paths
 Public auth functions (`Login`, `Logout`, `TokenSourceFromPath`) accept explicit `tokenPath` parameters — the caller computes the path via `config.DriveTokenPath(canonicalID)`. This decouples `graph/` from `config/` entirely.
 
-### Token file embeds cached API metadata
-Token files wrap the OAuth token in a struct with a `meta` map for cached metadata (org_name, display_name, user_id). This avoids a separate metadata file and ensures metadata travels with the token. The `internal/tokenfile` leaf package (stdlib + oauth2 only) owns the on-disk format and I/O. Both `graph/` and `config/` import `tokenfile/` — no cycle since `tokenfile/` has no project-internal imports. Old bare `oauth2.Token` files fail with "missing token field" and require re-login.
+### Token files are pure OAuth — no metadata
+Token files contain only `{"token": {...}}` — a pure OAuth token with no metadata. Strict JSON parsing (`DisallowUnknownFields`) rejects files with unknown keys. Account data (org_name, display_name, user_id) lives in account profile files (`account_*.json`). Drive data (drive_id) lives in drive metadata files (`drive_*.json`). The `internal/tokenfile` leaf package (stdlib + oauth2 only) owns the on-disk format and I/O. Both `graph/` and `config/` import `tokenfile/` — no cycle since `tokenfile/` has no project-internal imports.
 
 ### tokenfile leaf package breaks the graph/config cycle
-Token file I/O lives in `internal/tokenfile/` (depends only on stdlib + oauth2). Both `config/` and `graph/` import it for reading token metadata and saving tokens. This replaces the former `config/ → graph/` dependency for `LoadTokenMeta()`, which had a test-time cycle risk via `graph/integration_test.go → config/`.
+Token file I/O lives in `internal/tokenfile/` (depends only on stdlib + oauth2). Both `config/` and `graph/` import it for saving tokens. This prevents a `config/ → graph/` dependency cycle.
 
 ### sync_dir is deterministically computable
 Default sync directories are computed from the canonical ID + cached metadata using a two-level collision scheme: base name → + display_name → + email. `DefaultSyncDir()` is the single entry point. All callers must pass `existingDirs` for accurate collision detection.
@@ -58,8 +58,8 @@ When using `replace` with a commit hash, the pseudo-version timestamp must match
 ### SharedWithMe API deprecated Nov 2026
 `/me/drive/sharedWithMe` and `/me/drive/recent` are deprecated (November 2026 EOL). Non-deprecated alternative for shared item discovery: `GET /me/drive/search(q='*')` returns shared items with `remoteItem` facet but less identity data (no email). Enrich via `GET /drives/{driveId}/items/{itemId}` to get full owner identity. `/me/drives` is NOT deprecated.
 
-### EnsureDriveInConfig is broken for shared drives
-`EnsureDriveInConfig` passes `nil` for the config parameter through `ReadTokenMeta` → `DriveTokenPath` → `TokenCanonicalID` → `resolveSharedToken`, which requires non-nil config. Workaround: `addSharedDrive` bypasses `EnsureDriveInConfig` and writes config directly via `AppendDriveSection` + `SetDriveKey`. See B-327.
+### EnsureDriveInConfig uses ResolveAccountNames for defaults
+`EnsureDriveInConfig` calls `ResolveAccountNames(cid, logger)` — reads account profile only. No token file access. Shared drives bypass `EnsureDriveInConfig` and write config directly via `AppendDriveSection` + `SetDriveKey`.
 
 ### Pre-authenticated URLs bypass the Graph API
 `@microsoft.graph.downloadUrl` and `uploadUrl` from CreateUploadSession are pre-authenticated URLs. Must NOT use `Do()` (no base URL prefix, no auth headers). Use `httpClient.Do(req)` directly. Never log these URLs.
