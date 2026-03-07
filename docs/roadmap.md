@@ -701,11 +701,11 @@ New files: `reconciler.go`, `reconciler_test.go`, `migrations/00002_add_sync_fai
 
 | Increment | Status | Description |
 |-----------|--------|-------------|
-| 7.0 | Mostly DONE | Global output flags (`--verbose`, `--debug`, `--quiet`, `--json`). Output layer refactor FUTURE. |
-| 7.1 | Partially DONE | `ls` pagination DONE, recursive `rm` DONE. Recursive `get`/`put` FUTURE. |
-| 7.2 | FUTURE | Server-side `mv` and `cp` commands |
+| 7.0 | DONE | Global output flags (`--verbose`, `--debug`, `--quiet`, `--json`). `--json` on all 15 commands including `get`/`put`. |
+| 7.1 | DONE | `ls` pagination, recursive `rm`, recursive `get` (folder download), recursive `put` (directory upload). |
+| 7.2 | DONE | Server-side `mv` (move/rename) and `cp` (async copy with polling) commands. |
 | 7.3 | DONE | `login --browser` (PKCE + localhost callback), `logout --purge` |
-| 7.4 | Mostly DONE | `--drive` fuzzy matching DONE, `--account` flag DONE. `--drive` repeatable FUTURE. |
+| 7.4 | DONE | `--drive` fuzzy matching, `--account` flag, `--drive` repeatable for sync. |
 | 7.5 | FUTURE | Transfer progress bars (mpb library) |
 | 7.6 | FUTURE | Structured JSON logging (`log_format` config) |
 | 7.7 | FUTURE | Recycle bin commands (`recycle-bin list/empty/restore`) |
