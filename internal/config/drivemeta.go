@@ -12,10 +12,10 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// DriveMetadata holds cached API data for a specific drive. Persisted in a
-// per-drive JSON file under drives/. Personal and business drives store
-// drive_id. SharePoint adds site_id. Shared drives store the parent account
-// canonical ID and owner info instead.
+// DriveMetadata holds cached API data for a specific drive. Persisted as a
+// per-drive JSON file (drive_*.json) in the data directory. Personal and
+// business drives store drive_id. SharePoint adds site_id. Shared drives
+// store the parent account canonical ID and owner info instead.
 type DriveMetadata struct {
 	DriveID            string `json:"drive_id,omitempty"`
 	SiteID             string `json:"site_id,omitempty"`
@@ -24,9 +24,6 @@ type DriveMetadata struct {
 	OwnerEmail         string `json:"owner_email,omitempty"`
 	CachedAt           string `json:"cached_at,omitempty"`
 }
-
-// drivesDirName is the subdirectory under DefaultDataDir() for drive metadata files.
-const drivesDirName = "drives"
 
 // DriveMetadataPath returns the path for a drive's metadata file.
 // Uses the canonical ID with ":" replaced by "_" for filesystem safety.
@@ -42,7 +39,7 @@ func DriveMetadataPath(cid driveid.CanonicalID) string {
 
 	sanitized := strings.ReplaceAll(cid.String(), ":", "_")
 
-	return filepath.Join(dataDir, drivesDirName, sanitized+".json")
+	return filepath.Join(dataDir, "drive_"+sanitized+".json")
 }
 
 // LoadDriveMetadata reads a drive's cached metadata. Returns (nil, nil) if
@@ -70,8 +67,8 @@ func LoadDriveMetadata(cid driveid.CanonicalID) (*DriveMetadata, error) {
 	return &meta, nil
 }
 
-// SaveDriveMetadata writes a drive's cached metadata. Creates the drives/
-// directory and parent directories as needed. Atomic write (temp + rename).
+// SaveDriveMetadata writes a drive's cached metadata. Creates parent
+// directories as needed. Atomic write (temp + rename).
 // Idempotent: overwrites existing metadata.
 func SaveDriveMetadata(cid driveid.CanonicalID, meta *DriveMetadata) error {
 	path := DriveMetadataPath(cid)
@@ -87,7 +84,7 @@ func SaveDriveMetadata(cid driveid.CanonicalID, meta *DriveMetadata) error {
 	dir := filepath.Dir(path)
 
 	if mkdirErr := os.MkdirAll(dir, configDirPermissions); mkdirErr != nil {
-		return fmt.Errorf("creating drives directory: %w", mkdirErr)
+		return fmt.Errorf("creating data directory: %w", mkdirErr)
 	}
 
 	tmp, err := os.CreateTemp(dir, ".drivemeta-*.tmp")

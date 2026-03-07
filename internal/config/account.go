@@ -27,9 +27,6 @@ type accountFile struct {
 	Profile *AccountProfile `json:"profile"`
 }
 
-// accountsDirName is the subdirectory under DefaultDataDir() for account files.
-const accountsDirName = "accounts"
-
 // AccountFilePath returns the path for an account's file (token + profile).
 // Only valid for personal and business canonical IDs — SharePoint and shared
 // drives use their parent account's file.
@@ -49,7 +46,7 @@ func AccountFilePath(cid driveid.CanonicalID) string {
 
 	sanitized := cid.DriveType() + "_" + cid.Email()
 
-	return filepath.Join(dataDir, accountsDirName, sanitized+".json")
+	return filepath.Join(dataDir, "account_"+sanitized+".json")
 }
 
 // accountCIDForDrive returns the account canonical ID that owns this drive.
@@ -97,9 +94,8 @@ func LoadAccountProfile(cid driveid.CanonicalID) (*AccountProfile, error) {
 	return af.Profile, nil
 }
 
-// SaveAccountProfile writes the profile to an account file. Creates the
-// accounts/ directory and parent directories as needed. Atomic write
-// (temp file + rename).
+// SaveAccountProfile writes the profile to an account file. Creates
+// parent directories as needed. Atomic write (temp file + rename).
 func SaveAccountProfile(cid driveid.CanonicalID, profile *AccountProfile) error {
 	path := AccountFilePath(cid)
 	if path == "" {
@@ -116,7 +112,7 @@ func SaveAccountProfile(cid driveid.CanonicalID, profile *AccountProfile) error 
 	dir := filepath.Dir(path)
 
 	if mkdirErr := os.MkdirAll(dir, configDirPermissions); mkdirErr != nil {
-		return fmt.Errorf("creating accounts directory: %w", mkdirErr)
+		return fmt.Errorf("creating data directory: %w", mkdirErr)
 	}
 
 	// Atomic write: temp file in same dir, then rename.

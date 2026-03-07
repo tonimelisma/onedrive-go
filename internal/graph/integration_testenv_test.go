@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
-	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 	"github.com/tonimelisma/onedrive-go/testutil"
 )
 
@@ -25,20 +24,12 @@ var integrationRealHomeDir string
 var integrationTestCredentialDir string
 
 // validateIntegrationTestData checks that .testdata/ has the expected structure.
-// Integration tests CAN import internal packages, so we use tokenfile.ReadMeta().
 func validateIntegrationTestData(credDir, driveID string) {
 	tokenName := testutil.TokenFileName(driveID)
 	tokenPath := filepath.Join(credDir, tokenName)
 
-	meta, err := tokenfile.ReadMeta(tokenPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "FATAL: cannot read token metadata from %s: %v\n", tokenPath, err)
-		fmt.Fprintln(os.Stderr, "Re-run scripts/bootstrap-test-credentials.sh.")
-		os.Exit(1)
-	}
-
-	if id, ok := meta["drive_id"]; !ok || id == "" {
-		fmt.Fprintf(os.Stderr, "FATAL: token file %s missing .meta.drive_id\n", tokenPath)
+	if _, err := os.Stat(tokenPath); err != nil {
+		fmt.Fprintf(os.Stderr, "FATAL: token file not found at %s: %v\n", tokenPath, err)
 		fmt.Fprintln(os.Stderr, "Re-run scripts/bootstrap-test-credentials.sh.")
 		os.Exit(1)
 	}
@@ -111,6 +102,14 @@ func setupIntegrationIsolation() func() {
 		filepath.Join(appDataDir, tokenName),
 		0o600,
 	)
+
+	// Copy account profile and drive metadata files from .testdata/.
+	for _, prefix := range []string{"account_", "drive_"} {
+		matches, _ := filepath.Glob(filepath.Join(integrationTestCredentialDir, prefix+"*.json"))
+		for _, m := range matches {
+			testutil.CopyFile(m, filepath.Join(appDataDir, filepath.Base(m)), 0o600)
+		}
+	}
 
 	// Copy config.toml from .testdata/ to isolated config dir.
 	appConfigDir := filepath.Join(tempConfig, "onedrive-go")

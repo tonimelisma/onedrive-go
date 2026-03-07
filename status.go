@@ -130,7 +130,7 @@ func runStatus(cmd *cobra.Command, _ []string) error {
 }
 
 // accountMetaReader abstracts reading account metadata (display name, org name)
-// from token files. Enables testing without real token files on disk.
+// from account profile files. Enables testing without real files on disk.
 type accountMetaReader interface {
 	ReadMeta(account string, driveIDs []driveid.CanonicalID) (displayName, orgName string)
 }
@@ -147,7 +147,7 @@ type syncStateQuerier interface {
 	QuerySyncState(cid driveid.CanonicalID) *syncStateInfo
 }
 
-// liveAccountMeta reads metadata from actual token files on disk.
+// liveAccountMeta reads metadata from account profile files on disk.
 type liveAccountMeta struct {
 	logger *slog.Logger
 }
@@ -251,7 +251,7 @@ func buildSingleAccountStatusWith(
 		acct.DriveType = driveIDs[0].DriveType()
 	}
 
-	// Read display name and org name from token metadata.
+	// Read display name and org name from account profile.
 	acct.DisplayName, acct.OrgName = meta.ReadMeta(email, driveIDs)
 
 	// Check token validity for this account.
@@ -291,26 +291,14 @@ func buildSingleAccountStatusWith(
 	return acct
 }
 
-// readAccountMeta reads display name and org name from token file metadata.
+// readAccountMeta reads display name and org name from the account profile.
 func readAccountMeta(account string, driveIDs []driveid.CanonicalID, logger *slog.Logger) (displayName, orgName string) {
 	tokenID := canonicalIDForToken(account, driveIDs)
 	if tokenID.IsZero() {
 		tokenID = findTokenFallback(account, logger)
 	}
 
-	tokenPath := config.DriveTokenPath(tokenID)
-	if tokenPath == "" {
-		return "", ""
-	}
-
-	meta, err := graph.LoadTokenMeta(tokenPath)
-	if err != nil {
-		logger.Debug("could not read token meta for status", "error", err)
-
-		return "", ""
-	}
-
-	return meta["display_name"], meta["org_name"]
+	return config.ResolveAccountNames(tokenID, logger)
 }
 
 // checkTokenState determines whether a valid token exists for the given account.

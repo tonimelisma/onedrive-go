@@ -19,7 +19,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
 // pendingTokenFile is the filename for the temporary token saved during login
@@ -196,22 +195,8 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 		return moveErr
 	}
 
-	// Step 5b: Save metadata to the token file. Every login (including re-login)
-	// refreshes cached metadata so org renames and display name changes propagate.
-	// drive_id is cached here to avoid runtime re-discovery (DRY: the Graph API
-	// was already called in discoverAccount).
-	if saveErr := tokenfile.LoadAndMergeMeta(finalTokenPath, map[string]string{
-		"user_id":      user.ID,
-		"display_name": user.DisplayName,
-		"org_name":     orgName,
-		"drive_id":     primaryDriveID.String(),
-		"cached_at":    time.Now().UTC().Format(time.RFC3339),
-	}); saveErr != nil {
-		logger.Warn("failed to save cached metadata", "error", saveErr)
-	}
-
-	// Step 5c: Save account profile and drive metadata files (Architecture A).
-	// These new-format files are used by DriveTokenPath for shared/SharePoint
+	// Step 5b: Save account profile and drive metadata files.
+	// These files are used by DriveTokenPath for shared/SharePoint
 	// resolution and by buildResolvedDrive for drive_id lookup.
 	now := time.Now().UTC().Format(time.RFC3339)
 

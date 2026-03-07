@@ -16,7 +16,7 @@ func TestDriveMetadataPath_Personal(t *testing.T) {
 	cid := driveid.MustCanonicalID("personal:alice@outlook.com")
 
 	path := DriveMetadataPath(cid)
-	assert.Equal(t, filepath.Join(dataDir, "drives", "personal_alice@outlook.com.json"), path)
+	assert.Equal(t, filepath.Join(dataDir, "drive_personal_alice@outlook.com.json"), path)
 }
 
 func TestDriveMetadataPath_Business(t *testing.T) {
@@ -24,7 +24,7 @@ func TestDriveMetadataPath_Business(t *testing.T) {
 	cid := driveid.MustCanonicalID("business:bob@contoso.com")
 
 	path := DriveMetadataPath(cid)
-	assert.Equal(t, filepath.Join(dataDir, "drives", "business_bob@contoso.com.json"), path)
+	assert.Equal(t, filepath.Join(dataDir, "drive_business_bob@contoso.com.json"), path)
 }
 
 func TestDriveMetadataPath_SharePoint(t *testing.T) {
@@ -32,7 +32,7 @@ func TestDriveMetadataPath_SharePoint(t *testing.T) {
 	cid := driveid.MustCanonicalID("sharepoint:bob@contoso.com:marketing:Docs")
 
 	path := DriveMetadataPath(cid)
-	assert.Equal(t, filepath.Join(dataDir, "drives", "sharepoint_bob@contoso.com_marketing_Docs.json"), path)
+	assert.Equal(t, filepath.Join(dataDir, "drive_sharepoint_bob@contoso.com_marketing_Docs.json"), path)
 }
 
 func TestDriveMetadataPath_Shared(t *testing.T) {
@@ -40,7 +40,7 @@ func TestDriveMetadataPath_Shared(t *testing.T) {
 	cid := driveid.MustCanonicalID("shared:alice@outlook.com:b!abc123:01DEFGH")
 
 	path := DriveMetadataPath(cid)
-	assert.Equal(t, filepath.Join(dataDir, "drives", "shared_alice@outlook.com_b!abc123_01DEFGH.json"), path)
+	assert.Equal(t, filepath.Join(dataDir, "drive_shared_alice@outlook.com_b!abc123_01DEFGH.json"), path)
 }
 
 func TestDriveMetadataPath_ZeroID(t *testing.T) {
@@ -137,4 +137,14 @@ func TestSaveDriveMetadata_CreatesDirectory(t *testing.T) {
 	path := DriveMetadataPath(cid)
 	_, statErr := os.Stat(path)
 	assert.NoError(t, statErr)
+}
+
+func TestDriveMetadataPath_NoSubdirectory(t *testing.T) {
+	dataDir := setTestDataDir(t)
+	cid := driveid.MustCanonicalID("personal:alice@outlook.com")
+
+	path := DriveMetadataPath(cid)
+	// File should be directly in dataDir, not in a drives/ subdirectory.
+	assert.Equal(t, dataDir, filepath.Dir(path))
+	assert.NotContains(t, path, "drives/")
 }

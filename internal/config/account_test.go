@@ -16,7 +16,7 @@ func TestAccountFilePath_Personal(t *testing.T) {
 	cid := driveid.MustCanonicalID("personal:alice@outlook.com")
 
 	path := AccountFilePath(cid)
-	assert.Equal(t, filepath.Join(dataDir, "accounts", "personal_alice@outlook.com.json"), path)
+	assert.Equal(t, filepath.Join(dataDir, "account_personal_alice@outlook.com.json"), path)
 }
 
 func TestAccountFilePath_Business(t *testing.T) {
@@ -24,7 +24,7 @@ func TestAccountFilePath_Business(t *testing.T) {
 	cid := driveid.MustCanonicalID("business:bob@contoso.com")
 
 	path := AccountFilePath(cid)
-	assert.Equal(t, filepath.Join(dataDir, "accounts", "business_bob@contoso.com.json"), path)
+	assert.Equal(t, filepath.Join(dataDir, "account_business_bob@contoso.com.json"), path)
 }
 
 func TestAccountFilePath_SharePointReturnsEmpty(t *testing.T) {
@@ -121,7 +121,7 @@ func TestSaveAccountProfile_CreatesDirectory(t *testing.T) {
 	setTestDataDir(t)
 	cid := driveid.MustCanonicalID("personal:alice@outlook.com")
 
-	// accounts/ dir doesn't exist yet — SaveAccountProfile should create it.
+	// Data dir already exists — SaveAccountProfile should write directly.
 	err := SaveAccountProfile(cid, &AccountProfile{
 		UserID: "u123", DisplayName: "Alice", PrimaryDriveID: "d123",
 	})
@@ -148,4 +148,14 @@ func TestAccountCIDForDrive_SharePointReturnsBusiness(t *testing.T) {
 	cid := driveid.MustCanonicalID("sharepoint:bob@contoso.com:site:lib")
 	got := accountCIDForDrive(cid)
 	assert.Equal(t, "business:bob@contoso.com", got.String())
+}
+
+func TestAccountFilePath_NoSubdirectory(t *testing.T) {
+	dataDir := setTestDataDir(t)
+	cid := driveid.MustCanonicalID("personal:alice@outlook.com")
+
+	path := AccountFilePath(cid)
+	// File should be directly in dataDir, not in an accounts/ subdirectory.
+	assert.Equal(t, dataDir, filepath.Dir(path))
+	assert.NotContains(t, path, "accounts/")
 }

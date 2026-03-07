@@ -81,7 +81,7 @@ jobs:
       - name: Download credentials to .testdata/
         run: |
           set -euo pipefail
-          mkdir -p .testdata .testdata/accounts .testdata/drives
+          mkdir -p .testdata
 
           # Download config.
           az keyvault secret download \
@@ -104,26 +104,27 @@ jobs:
             --file ".testdata/${TOKEN_FILE}" \
             --encoding utf-8
 
-          # Download account profile and drive metadata (Architecture A).
+          # Download account profile and drive metadata (flat layout).
           ACCOUNT_SECRET="onedrive-account-${SANITIZED}"
-          ACCOUNT_FILE="${SANITIZED_FILE}.json"
-          echo "Downloading: ${ACCOUNT_SECRET} → .testdata/accounts/${ACCOUNT_FILE}"
+          ACCOUNT_FILE="account_${SANITIZED_FILE}.json"
+          echo "Downloading: ${ACCOUNT_SECRET} → .testdata/${ACCOUNT_FILE}"
           az keyvault secret download \
             --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
             --name "$ACCOUNT_SECRET" \
-            --file ".testdata/accounts/${ACCOUNT_FILE}" \
+            --file ".testdata/${ACCOUNT_FILE}" \
             --encoding utf-8 || echo "::warning::Account profile not found (non-fatal)"
 
           DRIVEMETA_SECRET="onedrive-drivemeta-${SANITIZED}"
-          echo "Downloading: ${DRIVEMETA_SECRET} → .testdata/drives/${ACCOUNT_FILE}"
+          DRIVEMETA_FILE="drive_${SANITIZED_FILE}.json"
+          echo "Downloading: ${DRIVEMETA_SECRET} → .testdata/${DRIVEMETA_FILE}"
           az keyvault secret download \
             --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
             --name "$DRIVEMETA_SECRET" \
-            --file ".testdata/drives/${ACCOUNT_FILE}" \
+            --file ".testdata/${DRIVEMETA_FILE}" \
             --encoding utf-8 || echo "::warning::Drive metadata not found (non-fatal)"
 
           echo "=== .testdata/ contents ==="
-          ls -laR .testdata/
+          ls -la .testdata/
 
       - name: Run integration tests
         run: |
@@ -181,7 +182,7 @@ jobs:
       - name: Download credentials to .testdata/
         run: |
           set -euo pipefail
-          mkdir -p .testdata .testdata/accounts .testdata/drives
+          mkdir -p .testdata
 
           # Download config.
           az keyvault secret download \
@@ -210,27 +211,28 @@ jobs:
               --file ".testdata/${TOKEN_FILE}" \
               --encoding utf-8
 
-            # Account profile and drive metadata (Architecture A).
-            ACCOUNT_FILE="${SANITIZED_FILE}.json"
+            # Account profile and drive metadata (flat layout).
+            ACCOUNT_FILE="account_${SANITIZED_FILE}.json"
             ACCOUNT_SECRET="onedrive-account-${SANITIZED}"
-            echo "Downloading: ${ACCOUNT_SECRET} → .testdata/accounts/${ACCOUNT_FILE}"
+            echo "Downloading: ${ACCOUNT_SECRET} → .testdata/${ACCOUNT_FILE}"
             az keyvault secret download \
               --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
               --name "$ACCOUNT_SECRET" \
-              --file ".testdata/accounts/${ACCOUNT_FILE}" \
+              --file ".testdata/${ACCOUNT_FILE}" \
               --encoding utf-8 || echo "::warning::Account profile for ${DRIVE_VAR} not found (non-fatal)"
 
             DRIVEMETA_SECRET="onedrive-drivemeta-${SANITIZED}"
-            echo "Downloading: ${DRIVEMETA_SECRET} → .testdata/drives/${ACCOUNT_FILE}"
+            DRIVEMETA_FILE="drive_${SANITIZED_FILE}.json"
+            echo "Downloading: ${DRIVEMETA_SECRET} → .testdata/${DRIVEMETA_FILE}"
             az keyvault secret download \
               --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
               --name "$DRIVEMETA_SECRET" \
-              --file ".testdata/drives/${ACCOUNT_FILE}" \
+              --file ".testdata/${DRIVEMETA_FILE}" \
               --encoding utf-8 || echo "::warning::Drive metadata for ${DRIVE_VAR} not found (non-fatal)"
           done
 
           echo "=== .testdata/ contents ==="
-          ls -laR .testdata/
+          ls -la .testdata/
 
       - name: Run E2E tests
         run: |

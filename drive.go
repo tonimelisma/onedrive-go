@@ -117,9 +117,9 @@ func buildConfiguredDriveEntries(cfg *config.Config, logger *slog.Logger) []driv
 		syncDir := d.SyncDir
 		if syncDir == "" {
 			// Compute default sync_dir for display.
-			meta := config.ReadTokenMeta(id, logger)
+			orgName, displayName := config.ResolveAccountNames(id, logger)
 			otherDirs := config.CollectOtherSyncDirs(cfg, id, logger)
-			syncDir = config.DefaultSyncDir(id, meta["org_name"], meta["display_name"], otherDirs)
+			syncDir = config.DefaultSyncDir(id, orgName, displayName, otherDirs)
 
 			if syncDir == "" {
 				state = driveStateNeedsSetup

@@ -87,20 +87,18 @@ For shared drives, the canonical ID is opaque to humans — users interact via d
 
 ## 3. File Layout
 
-The data directory has three layers: token files (OAuth), account/drive metadata (cached API data), and state databases (sync state). The `:` separator from canonical IDs is replaced with `_` in filenames.
+The data directory is flat — all files at the root, distinguished by prefix. Four prefixes: `token_`, `account_`, `drive_`, `state_`. The `:` separator from canonical IDs is replaced with `_` in filenames.
 
 ```
 ~/.local/share/onedrive-go/
-  token_personal_toni@outlook.com.json            # OAuth token + legacy metadata
+  token_personal_toni@outlook.com.json              # Pure OAuth token
   token_business_alice@contoso.com.json
-  accounts/
-    personal_toni@outlook.com.json                 # Account profile (user_id, org_name, etc.)
-    business_alice@contoso.com.json
-  drives/
-    personal_toni@outlook.com.json                 # Drive metadata (drive_id)
-    business_alice@contoso.com.json
-    sharepoint_alice@contoso.com_marketing_Docs.json  # Library-specific drive_id
-    shared_toni@outlook.com_b!abc123_01DEFGH.json     # account_canonical_id + owner info
+  account_personal_toni@outlook.com.json            # Account profile (user_id, org_name, etc.)
+  account_business_alice@contoso.com.json
+  drive_personal_toni@outlook.com.json              # Drive metadata (drive_id)
+  drive_business_alice@contoso.com.json
+  drive_sharepoint_alice@contoso.com_marketing_Docs.json  # Library-specific drive_id
+  drive_shared_toni@outlook.com_b!abc123_01DEFGH.json     # account_canonical_id + owner info
   state_personal_toni@outlook.com.db
   state_business_alice@contoso.com.db
   state_sharepoint_alice@contoso.com_marketing_Docs.db
@@ -110,16 +108,16 @@ The data directory has three layers: token files (OAuth), account/drive metadata
 
 | Canonical ID | Token file | Account profile | Drive metadata | State DB |
 |---|---|---|---|---|
-| `personal:<email>` | `token_personal_<email>.json` | `accounts/personal_<email>.json` | `drives/personal_<email>.json` | `state_personal_<email>.db` |
-| `business:<email>` | `token_business_<email>.json` | `accounts/business_<email>.json` | `drives/business_<email>.json` | `state_business_<email>.db` |
-| `sharepoint:<email>:<s>:<l>` | (shares business token) | (shares business profile) | `drives/sharepoint_<email>_<s>_<l>.json` | `state_sharepoint_<email>_<s>_<l>.db` |
-| `shared:<email>:<d>:<i>` | (resolved via drive metadata) | (resolved via drive metadata) | `drives/shared_<email>_<d>_<i>.json` | `state_shared_<email>_<d>_<i>.db` |
+| `personal:<email>` | `token_personal_<email>.json` | `account_personal_<email>.json` | `drive_personal_<email>.json` | `state_personal_<email>.db` |
+| `business:<email>` | `token_business_<email>.json` | `account_business_<email>.json` | `drive_business_<email>.json` | `state_business_<email>.db` |
+| `sharepoint:<email>:<s>:<l>` | (shares business token) | (shares business profile) | `drive_sharepoint_<email>_<s>_<l>.json` | `state_sharepoint_<email>_<s>_<l>.db` |
+| `shared:<email>:<d>:<i>` | (resolved via drive metadata) | (resolved via drive metadata) | `drive_shared_<email>_<d>_<i>.json` | `state_shared_<email>_<d>_<i>.db` |
 
 Filenames are always derived FROM the canonical ID in the config file. We never parse filenames to discover drives — config is the source of truth.
 
 ### Token file format
 
-Token files contain the OAuth token AND cached API metadata in a single JSON file:
+Token files contain only the pure OAuth token — no metadata:
 
 ```json
 {
@@ -128,20 +126,15 @@ Token files contain the OAuth token AND cached API metadata in a single JSON fil
     "refresh_token": "...",
     "token_type": "Bearer",
     "expiry": "2026-02-27T..."
-  },
-  "meta": {
-    "user_id": "abc123-def456",
-    "display_name": "Alice Smith",
-    "org_name": "Contoso Ltd",
-    "drive_id": "abc123",
-    "cached_at": "2026-02-27T10:00:00Z"
   }
 }
 ```
 
-### Account profile format (Architecture A)
+Strict JSON parsing rejects unknown fields. Files with extra keys require re-login.
 
-Account profiles cache user/org data separately from the token. Updated on every login.
+### Account profile format
+
+Account profiles cache user/org data. Updated on every login.
 
 ```json
 {
@@ -154,7 +147,7 @@ Account profiles cache user/org data separately from the token. Updated on every
 }
 ```
 
-### Drive metadata format (Architecture A)
+### Drive metadata format
 
 Drive metadata stores per-drive identity data. Crucial for SharePoint (library-specific drive_id) and shared drives (parent account resolution).
 
@@ -171,9 +164,9 @@ Drive metadata stores per-drive identity data. Crucial for SharePoint (library-s
   "cached_at": "2026-02-27T..." }
 ```
 
-Every login (including re-login) refreshes both the token AND all cached metadata (token, account profile, drive metadata).
+Every login (including re-login) refreshes the token, account profile, and drive metadata.
 
-### Token resolution (Architecture A)
+### Token resolution
 
 Token resolution is pure file I/O — no config scanning. `DriveTokenPath(cid)`:
 
@@ -182,7 +175,7 @@ Token resolution is pure file I/O — no config scanning. `DriveTokenPath(cid)`:
 | `personal:<email>` | Direct: `token_personal_<email>.json` |
 | `business:<email>` | Direct: `token_business_<email>.json` |
 | `sharepoint:<email>:*` | Same as business: `token_business_<email>.json` |
-| `shared:<email>:*` | Read `drives/shared_*.json` → `account_canonical_id` → resolve that CID's token |
+| `shared:<email>:*` | Read `drive_shared_*.json` → `account_canonical_id` → resolve that CID's token |
 
 SharedPoint drives share the OAuth token with the business account (same user, same session, same scopes). Shared drives read their drive metadata file to find the parent account's canonical ID, then resolve that to a token path. No config dependency.
 
@@ -251,14 +244,13 @@ Quotes around section names are required by TOML because `@` and `:` are not val
 
 | Key | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `sync_dir` | string | No | (computed) | Where to sync. Must be unique across drives. Auto-computed from canonical ID + token metadata if omitted. |
+| `sync_dir` | string | No | (computed) | Where to sync. Must be unique across drives. Auto-computed from canonical ID + account profile if omitted. |
 | `paused` | bool | No | `false` | `true` = paused (pause command sets this) |
 | `paused_until` | string | No | — | RFC3339 timestamp for timed pause expiry (e.g., `2026-02-28T18:00:00Z`) |
 | `display_name` | string | No | (auto-derived) | Human-facing name. Auto-generated at drive add time, user-editable. |
 | `owner` | string | No | — | Owner's email (shared drives only) |
 | `sync_vault` | bool | No | `false` | Include Personal Vault items in sync (dangerous — vault auto-lock can cause local deletes) |
 | `remote_path` | string | No | `"/"` | Remote subfolder to sync |
-| `drive_id` | string | No | auto | Explicit drive ID (auto-detected for personal/business) |
 | `skip_dotfiles` | bool | No | `false` | Skip files/dirs starting with `.` (per-drive native, DP-8) |
 | `skip_dirs` | string[] | No | `[]` | Directory names to skip (per-drive native) |
 | `skip_files` | string[] | No | `[]` | File name patterns to skip (per-drive native) |
