@@ -1790,6 +1790,53 @@ func (m *SyncStore) ListLocalIssuesForRetry(ctx context.Context, now time.Time) 
 	return result, nil
 }
 
+// ListLocalIssuesByType returns all local_issues rows with the given issue_type.
+func (m *SyncStore) ListLocalIssuesByType(ctx context.Context, issueType string) ([]LocalIssueRow, error) {
+	rows, err := m.db.QueryContext(ctx,
+		`SELECT path, issue_type, sync_status, failure_count,
+			COALESCE(next_retry_at, 0), COALESCE(last_error, ''),
+			COALESCE(http_status, 0), first_seen_at, last_seen_at,
+			COALESCE(file_size, 0), COALESCE(local_hash, '')
+		FROM local_issues
+		WHERE issue_type = ?
+		ORDER BY last_seen_at DESC`, issueType)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing local issues by type %s: %w", issueType, err)
+	}
+	defer rows.Close()
+
+	var result []LocalIssueRow
+
+	for rows.Next() {
+		var r LocalIssueRow
+		if scanErr := rows.Scan(
+			&r.Path, &r.IssueType, &r.SyncStatus, &r.FailureCount,
+			&r.NextRetryAt, &r.LastError, &r.HTTPStatus,
+			&r.FirstSeenAt, &r.LastSeenAt, &r.FileSize, &r.LocalHash,
+		); scanErr != nil {
+			return nil, fmt.Errorf("sync: scanning local issue by type row: %w", scanErr)
+		}
+
+		result = append(result, r)
+	}
+
+	return result, rows.Err()
+}
+
+// ClearLocalIssuesByPrefix removes all local_issues rows whose path starts
+// with the given prefix and matches the given issue_type. Used to clear
+// permission_denied issues for a folder and all its descendants.
+func (m *SyncStore) ClearLocalIssuesByPrefix(ctx context.Context, pathPrefix, issueType string) error {
+	_, err := m.db.ExecContext(ctx,
+		`DELETE FROM local_issues WHERE issue_type = ? AND (path = ? OR path LIKE ?)`,
+		issueType, pathPrefix, pathPrefix+"/%")
+	if err != nil {
+		return fmt.Errorf("sync: clearing local issues by prefix %s: %w", pathPrefix, err)
+	}
+
+	return nil
+}
+
 // EarliestLocalIssueRetryAt returns the minimum future next_retry_at across
 // transient local_issues rows. Returns zero time if none exist.
 func (m *SyncStore) EarliestLocalIssueRetryAt(ctx context.Context, now time.Time) (time.Time, error) {

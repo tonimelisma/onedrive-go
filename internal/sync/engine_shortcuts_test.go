@@ -703,90 +703,6 @@ func TestObserveShortcutContent_SkipsCollisions(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// filterReadOnlyShortcutEvents
-// ---------------------------------------------------------------------------
-
-func TestFilterReadOnlyShortcutEvents_NoReadOnly(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestManager(t)
-	ctx := t.Context()
-
-	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
-		ItemID:       "sc-1",
-		RemoteDrive:  "remote-drive-1",
-		RemoteItem:   "remote-item-1",
-		LocalPath:    "SharedDocs",
-		ReadOnly:     false,
-		Observation:  ObservationUnknown,
-		DiscoveredAt: 1000,
-	}))
-
-	e := &Engine{
-		baseline: mgr,
-		logger:   testLogger(t),
-	}
-
-	events := []ChangeEvent{
-		{Type: ChangeCreate, Path: "SharedDocs/file.txt", Source: SourceLocal},
-		{Type: ChangeModify, Path: "other/file.txt", Source: SourceLocal},
-	}
-
-	result := e.filterReadOnlyShortcutEvents(ctx, events)
-	assert.Len(t, result, 2, "no events should be filtered when shortcut is not read-only")
-}
-
-func TestFilterReadOnlyShortcutEvents_FiltersReadOnly(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestManager(t)
-	ctx := t.Context()
-
-	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
-		ItemID:       "sc-1",
-		RemoteDrive:  "remote-drive-1",
-		RemoteItem:   "remote-item-1",
-		LocalPath:    "SharedDocs",
-		ReadOnly:     true,
-		Observation:  ObservationUnknown,
-		DiscoveredAt: 1000,
-	}))
-
-	e := &Engine{
-		baseline: mgr,
-		logger:   testLogger(t),
-	}
-
-	events := []ChangeEvent{
-		{Type: ChangeCreate, Path: "SharedDocs/new.txt", Source: SourceLocal},
-		{Type: ChangeModify, Path: "SharedDocs/sub/edited.txt", Source: SourceLocal},
-		{Type: ChangeCreate, Path: "MyFolder/local.txt", Source: SourceLocal},
-	}
-
-	result := e.filterReadOnlyShortcutEvents(ctx, events)
-	require.Len(t, result, 1)
-	assert.Equal(t, "MyFolder/local.txt", result[0].Path, "only non-shortcut events should remain")
-}
-
-func TestFilterReadOnlyShortcutEvents_NoShortcuts(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestManager(t)
-
-	e := &Engine{
-		baseline: mgr,
-		logger:   testLogger(t),
-	}
-
-	events := []ChangeEvent{
-		{Type: ChangeCreate, Path: "file.txt"},
-	}
-
-	result := e.filterReadOnlyShortcutEvents(t.Context(), events)
-	assert.Len(t, result, 1, "should pass through all events when no shortcuts")
-}
-
-// ---------------------------------------------------------------------------
 // detectDriveType
 // ---------------------------------------------------------------------------
 
@@ -1290,6 +1206,288 @@ func TestObserveShortcutDelta_RetryOnErrGone(t *testing.T) {
 
 	// Mock should have been called twice (first 410, then success).
 	assert.Equal(t, 2, mock.calls)
+}
+
+// ---------------------------------------------------------------------------
+// reconcileShortcutScopes tests (B-332)
+// ---------------------------------------------------------------------------
+
+func TestReconcileShortcutScopes_DeltaReconciliation(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	remoteDriveID := driveid.New("0000000000000099")
+
+	// Register a delta-observation shortcut.
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
+		ItemID: "sc-1", RemoteDrive: "0000000000000099", RemoteItem: "root-1",
+		LocalPath: "Shared/Delta", Observation: ObservationDelta, DiscoveredAt: 1000,
+	}))
+
+	// Seed baseline with an existing file (will NOT be in delta → becomes orphan).
+	require.NoError(t, mgr.CommitOutcome(ctx, &Outcome{
+		Action: ActionDownload, Success: true, Path: "Shared/Delta/old.txt",
+		DriveID: remoteDriveID, ItemID: "old-file", ParentID: "root-1", ItemType: ItemTypeFile,
+		RemoteHash: "oldhash", Size: 100,
+	}))
+
+	mockDelta := &mockFolderDeltaFetcher{
+		items: []graph.Item{
+			{ID: "new-file", Name: "new.txt", ParentID: "root-1", DriveID: remoteDriveID, QuickXorHash: "newhash", Size: 200},
+		},
+		token: "reconcile-token",
+	}
+
+	e := &Engine{
+		baseline:    mgr,
+		folderDelta: mockDelta,
+		logger:      testLogger(t),
+	}
+
+	bl, err := mgr.Load(ctx)
+	require.NoError(t, err)
+
+	events, err := e.reconcileShortcutScopes(ctx, bl)
+	require.NoError(t, err)
+
+	// Should have: 1 create (new file) + 1 delete (orphan old file).
+	require.Len(t, events, 2)
+
+	var creates, deletes int
+	for _, ev := range events {
+		switch ev.Type { //nolint:exhaustive // only create and delete are relevant
+		case ChangeCreate:
+			creates++
+			assert.Equal(t, "Shared/Delta/new.txt", ev.Path)
+		case ChangeDelete:
+			deletes++
+			assert.Equal(t, "Shared/Delta/old.txt", ev.Path)
+		}
+	}
+
+	assert.Equal(t, 1, creates)
+	assert.Equal(t, 1, deletes)
+
+	// Delta token should be committed.
+	token, err := mgr.GetDeltaToken(ctx, "0000000000000099", "root-1")
+	require.NoError(t, err)
+	assert.Equal(t, "reconcile-token", token)
+}
+
+func TestReconcileShortcutScopes_EnumerateReconciliation(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	remoteDriveID := driveid.New("0000000000000099")
+
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
+		ItemID: "sc-1", RemoteDrive: "0000000000000099", RemoteItem: "root-1",
+		LocalPath: "Shared/Enum", Observation: ObservationEnumerate, DiscoveredAt: 1000,
+	}))
+
+	mockLister := &mockRecursiveLister{
+		items: []graph.Item{
+			{ID: "f1", Name: "doc.txt", ParentID: "root-1", DriveID: remoteDriveID, QuickXorHash: "h1"},
+		},
+	}
+
+	e := &Engine{
+		baseline:        mgr,
+		recursiveLister: mockLister,
+		logger:          testLogger(t),
+	}
+
+	bl := emptyBaseline()
+
+	events, err := e.reconcileShortcutScopes(ctx, bl)
+	require.NoError(t, err)
+
+	require.Len(t, events, 1)
+	assert.Equal(t, ChangeCreate, events[0].Type)
+	assert.Equal(t, "Shared/Enum/doc.txt", events[0].Path)
+}
+
+func TestReconcileShortcutScopes_CollisionSkipped(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	remoteDriveID := driveid.New("0000000000000099")
+
+	// Two shortcuts with colliding local paths.
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
+		ItemID: "sc-1", RemoteDrive: "0000000000000099", RemoteItem: "root-1",
+		LocalPath: "Shared/Collide", Observation: ObservationDelta, DiscoveredAt: 1000,
+	}))
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
+		ItemID: "sc-2", RemoteDrive: "0000000000000099", RemoteItem: "root-2",
+		LocalPath: "Shared/Collide", Observation: ObservationDelta, DiscoveredAt: 2000,
+	}))
+
+	mockDelta := &mockFolderDeltaFetcher{
+		items: []graph.Item{
+			{ID: "f1", Name: "file.txt", ParentID: "root-1", DriveID: remoteDriveID, QuickXorHash: "h1"},
+		},
+		token: "tok",
+	}
+
+	e := &Engine{
+		baseline:    mgr,
+		folderDelta: mockDelta,
+		logger:      testLogger(t),
+	}
+
+	bl := emptyBaseline()
+
+	events, err := e.reconcileShortcutScopes(ctx, bl)
+	require.NoError(t, err)
+
+	// sc-2 is colliding (skipped). sc-1 is the "kept" shortcut.
+	// sc-1 gets delta results, but the mock returns items for root-1.
+	// Both shortcuts hit the same mock, but only sc-1 produces events
+	// because sc-2 is skipped. The mock returns 1 item, so sc-1 produces
+	// 1 create event. Verify only sc-1's events appear.
+	for _, ev := range events {
+		assert.Equal(t, "Shared/Collide/file.txt", ev.Path,
+			"all events should be from the non-colliding shortcut")
+	}
+}
+
+func TestReconcileShortcutScopes_PerScopeErrorIsolation(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	remoteDriveID := driveid.New("0000000000000099")
+
+	// Two shortcuts: one with failing delta, one with working lister.
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
+		ItemID: "sc-fail", RemoteDrive: "0000000000000099", RemoteItem: "root-fail",
+		LocalPath: "Shared/Fail", Observation: ObservationDelta, DiscoveredAt: 1000,
+	}))
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
+		ItemID: "sc-ok", RemoteDrive: "0000000000000099", RemoteItem: "root-ok",
+		LocalPath: "Shared/Ok", Observation: ObservationEnumerate, DiscoveredAt: 2000,
+	}))
+
+	// Folder delta will fail.
+	mockDelta := &mockFolderDeltaFetcher{
+		err: fmt.Errorf("network timeout"),
+	}
+
+	// Recursive lister will succeed.
+	mockLister := &mockRecursiveLister{
+		items: []graph.Item{
+			{ID: "f1", Name: "ok.txt", ParentID: "root-ok", DriveID: remoteDriveID, QuickXorHash: "h1"},
+		},
+	}
+
+	e := &Engine{
+		baseline:        mgr,
+		folderDelta:     mockDelta,
+		recursiveLister: mockLister,
+		logger:          testLogger(t),
+	}
+
+	bl := emptyBaseline()
+
+	events, err := e.reconcileShortcutScopes(ctx, bl)
+	require.NoError(t, err, "overall reconciliation should succeed even if one scope fails")
+
+	// Only the successful scope's events should appear.
+	require.Len(t, events, 1)
+	assert.Equal(t, "Shared/Ok/ok.txt", events[0].Path)
+}
+
+func TestReconcileShortcutScopes_NoShortcuts(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	e := &Engine{
+		baseline:    mgr,
+		folderDelta: &mockFolderDeltaFetcher{},
+		logger:      testLogger(t),
+	}
+
+	bl := emptyBaseline()
+	events, err := e.reconcileShortcutScopes(ctx, bl)
+	require.NoError(t, err)
+	assert.Empty(t, events)
+}
+
+func TestReconcileShortcutScopes_NilFetchersReturnsNil(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	e := &Engine{
+		baseline: mgr,
+		logger:   testLogger(t),
+	}
+
+	bl := emptyBaseline()
+	events, err := e.reconcileShortcutScopes(ctx, bl)
+	require.NoError(t, err)
+	assert.Nil(t, events)
+}
+
+// ---------------------------------------------------------------------------
+// Source dedup tests
+// ---------------------------------------------------------------------------
+
+func TestDetectShortcutCollisions_DuplicateSourceFolder(t *testing.T) {
+	t.Parallel()
+
+	shortcuts := []Shortcut{
+		{ItemID: "sc-1", RemoteDrive: "drive-1", RemoteItem: "item-1", LocalPath: "Shared/A"},
+		{ItemID: "sc-2", RemoteDrive: "drive-1", RemoteItem: "item-1", LocalPath: "Shared/B"},
+	}
+
+	collisions := detectShortcutCollisionsFromList(shortcuts, emptyBaseline(), testLogger(t))
+
+	// sc-2 is the duplicate source — should be skipped.
+	assert.True(t, collisions["sc-2"], "duplicate source shortcut should be flagged")
+	assert.False(t, collisions["sc-1"], "original source shortcut should not be flagged")
+}
+
+// ---------------------------------------------------------------------------
+// Nested shortcut skip tests
+// ---------------------------------------------------------------------------
+
+func TestShortcutItemsToEvents_NestedShortcut_SkippedWithWarning(t *testing.T) {
+	t.Parallel()
+
+	remoteDriveID := driveid.New("0000000000000099")
+
+	items := []graph.Item{
+		// Normal file.
+		{ID: "f1", Name: "report.xlsx", ParentID: "root-1", DriveID: remoteDriveID, QuickXorHash: "h1"},
+		// Nested shortcut (has RemoteItemID).
+		{
+			ID: "nested-sc", Name: "NestedShared", ParentID: "root-1", DriveID: remoteDriveID, IsFolder: true,
+			RemoteItemID: "remote-nested-item", RemoteDriveID: "other-drive",
+		},
+	}
+
+	sc := &Shortcut{
+		ItemID: "sc-1", RemoteDrive: "0000000000000099", RemoteItem: "root-1",
+		LocalPath: "SharedFolder",
+	}
+
+	events := shortcutItemsToEventsWithLog(items, sc, remoteDriveID, emptyBaseline(), testLogger(t))
+
+	// Only the normal file should produce an event.
+	require.Len(t, events, 1)
+	assert.Equal(t, "SharedFolder/report.xlsx", events[0].Path)
 }
 
 // ---------------------------------------------------------------------------

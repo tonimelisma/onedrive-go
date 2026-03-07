@@ -410,3 +410,71 @@ func TestMarkLocalIssuePermanent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, rows)
 }
+
+func TestListLocalIssuesByType(t *testing.T) {
+	mgr, _ := newTestSyncStoreForIssues(t)
+	ctx := context.Background()
+
+	// Record issues of different types.
+	require.NoError(t, mgr.RecordLocalIssue(ctx, "a.txt", "upload_failed", "err", 0, 0, ""))
+	require.NoError(t, mgr.RecordLocalIssue(ctx, "b.txt", IssuePermissionDenied, "read-only", 403, 0, ""))
+	require.NoError(t, mgr.RecordLocalIssue(ctx, "c.txt", IssuePermissionDenied, "read-only", 403, 0, ""))
+	require.NoError(t, mgr.RecordLocalIssue(ctx, "d.txt", "upload_failed", "err", 0, 0, ""))
+
+	// Query by permission_denied type.
+	issues, err := mgr.ListLocalIssuesByType(ctx, IssuePermissionDenied)
+	require.NoError(t, err)
+	require.Len(t, issues, 2)
+	assert.Equal(t, IssuePermissionDenied, issues[0].IssueType)
+	assert.Equal(t, IssuePermissionDenied, issues[1].IssueType)
+
+	// Query by upload_failed type.
+	issues, err = mgr.ListLocalIssuesByType(ctx, "upload_failed")
+	require.NoError(t, err)
+	require.Len(t, issues, 2)
+
+	// Query by nonexistent type.
+	issues, err = mgr.ListLocalIssuesByType(ctx, "nonexistent")
+	require.NoError(t, err)
+	assert.Empty(t, issues)
+}
+
+func TestClearLocalIssuesByPrefix(t *testing.T) {
+	mgr, _ := newTestSyncStoreForIssues(t)
+	ctx := context.Background()
+
+	// Record issues at various paths.
+	require.NoError(t, mgr.RecordLocalIssue(ctx, "shared", IssuePermissionDenied, "read-only", 403, 0, ""))
+	require.NoError(t, mgr.RecordLocalIssue(ctx, "shared/file.txt", IssuePermissionDenied, "read-only", 403, 0, ""))
+	require.NoError(t, mgr.RecordLocalIssue(ctx, "shared/sub/file.txt", IssuePermissionDenied, "read-only", 403, 0, ""))
+	require.NoError(t, mgr.RecordLocalIssue(ctx, "other/file.txt", IssuePermissionDenied, "read-only", 403, 0, ""))
+
+	// Clear by prefix "shared".
+	err := mgr.ClearLocalIssuesByPrefix(ctx, "shared", IssuePermissionDenied)
+	require.NoError(t, err)
+
+	// Only "other/file.txt" should remain.
+	issues, err := mgr.ListLocalIssues(ctx)
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+	assert.Equal(t, "other/file.txt", issues[0].Path)
+}
+
+func TestClearLocalIssuesByPrefix_TypeFiltering(t *testing.T) {
+	mgr, _ := newTestSyncStoreForIssues(t)
+	ctx := context.Background()
+
+	// Record a permission_denied and an upload_failed at the same prefix.
+	require.NoError(t, mgr.RecordLocalIssue(ctx, "shared/a.txt", IssuePermissionDenied, "read-only", 403, 0, ""))
+	require.NoError(t, mgr.RecordLocalIssue(ctx, "shared/b.txt", "upload_failed", "err", 500, 0, ""))
+
+	// Clear permission_denied only.
+	err := mgr.ClearLocalIssuesByPrefix(ctx, "shared", IssuePermissionDenied)
+	require.NoError(t, err)
+
+	// upload_failed should remain.
+	issues, err := mgr.ListLocalIssues(ctx)
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+	assert.Equal(t, "upload_failed", issues[0].IssueType)
+}

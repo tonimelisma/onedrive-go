@@ -43,6 +43,26 @@ func (e *Engine) processShortcuts(
 		}
 	}
 
+	// B-334: Pre-filter delete IDs to known shortcuts before loading the full list.
+	// This avoids unnecessary work in handleRemovedShortcuts.
+	if len(removedShortcutIDs) > 0 {
+		shortcuts, err := e.baseline.ListShortcuts(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("sync: listing shortcuts for removal pre-filter: %w", err)
+		}
+
+		known := make(map[string]bool, len(shortcuts))
+		for i := range shortcuts {
+			known[shortcuts[i].ItemID] = true
+		}
+
+		for id := range removedShortcutIDs {
+			if !known[id] {
+				delete(removedShortcutIDs, id)
+			}
+		}
+	}
+
 	// Step 2: Handle removed shortcuts.
 	if err := e.handleRemovedShortcuts(ctx, removedShortcutIDs); err != nil {
 		return nil, err
@@ -53,15 +73,21 @@ func (e *Engine) processShortcuts(
 		return nil, err
 	}
 
+	// B-333: Load shortcuts once after registration and thread through.
+	shortcuts, err := e.baseline.ListShortcuts(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing shortcuts: %w", err)
+	}
+
 	// Step 4: Detect path collisions and skip colliding shortcuts.
-	collisions := e.detectShortcutCollisions(ctx, bl)
+	collisions := detectShortcutCollisionsFromList(shortcuts, bl, e.logger)
 
 	if dryRun {
 		return nil, nil
 	}
 
 	// Step 5: Observe content for all active shortcuts (excluding collisions).
-	return e.observeShortcutContent(ctx, bl, collisions)
+	return e.observeShortcutContentFromList(ctx, shortcuts, bl, collisions)
 }
 
 // registerShortcuts upserts shortcuts from ChangeShortcut events.
@@ -125,6 +151,13 @@ func (e *Engine) detectShortcutCollisions(ctx context.Context, bl *Baseline) map
 		return nil
 	}
 
+	return detectShortcutCollisionsFromList(shortcuts, bl, e.logger)
+}
+
+// detectShortcutCollisionsFromList is the list-threaded variant of
+// detectShortcutCollisions (B-333). Avoids a redundant ListShortcuts query
+// when the caller already has the list.
+func detectShortcutCollisionsFromList(shortcuts []Shortcut, bl *Baseline, logger *slog.Logger) map[string]bool {
 	collisions := make(map[string]bool)
 
 	// Check shortcut-vs-shortcut: exact duplicates and prefix nesting.
@@ -135,7 +168,7 @@ func (e *Engine) detectShortcutCollisions(ctx context.Context, bl *Baseline) map
 
 		// Exact duplicate check.
 		if existing, ok := paths[sc.LocalPath]; ok {
-			e.logger.Warn("shortcut path collision: duplicate path, skipping later shortcut",
+			logger.Warn("shortcut path collision: duplicate path, skipping later shortcut",
 				slog.String("path", sc.LocalPath),
 				slog.String("kept", existing),
 				slog.String("skipped", sc.ItemID),
@@ -149,7 +182,7 @@ func (e *Engine) detectShortcutCollisions(ctx context.Context, bl *Baseline) map
 		// Prefix nesting check: is this path a parent or child of an existing shortcut?
 		for existingPath, existingID := range paths {
 			if strings.HasPrefix(sc.LocalPath, existingPath+"/") {
-				e.logger.Warn("shortcut path collision: nested under existing shortcut, skipping",
+				logger.Warn("shortcut path collision: nested under existing shortcut, skipping",
 					slog.String("parent_path", existingPath),
 					slog.String("child_path", sc.LocalPath),
 					slog.String("skipped", sc.ItemID),
@@ -161,7 +194,7 @@ func (e *Engine) detectShortcutCollisions(ctx context.Context, bl *Baseline) map
 			}
 
 			if strings.HasPrefix(existingPath, sc.LocalPath+"/") {
-				e.logger.Warn("shortcut path collision: existing shortcut nested under new, skipping existing",
+				logger.Warn("shortcut path collision: existing shortcut nested under new, skipping existing",
 					slog.String("parent_path", sc.LocalPath),
 					slog.String("child_path", existingPath),
 					slog.String("skipped", existingID),
@@ -174,6 +207,32 @@ func (e *Engine) detectShortcutCollisions(ctx context.Context, bl *Baseline) map
 		paths[sc.LocalPath] = sc.ItemID
 	}
 
+	// Check shortcut-vs-shortcut: duplicate source folder.
+	sources := make(map[string]string, len(shortcuts)) // "remoteDrive:remoteItem" → itemID
+
+	for i := range shortcuts {
+		sc := &shortcuts[i]
+		if collisions[sc.ItemID] {
+			continue
+		}
+
+		key := sc.RemoteDrive + ":" + sc.RemoteItem
+		if existing, ok := sources[key]; ok {
+			logger.Warn("shortcut source collision: duplicate source folder, skipping",
+				slog.String("remote_drive", sc.RemoteDrive),
+				slog.String("remote_item", sc.RemoteItem),
+				slog.String("kept", existing),
+				slog.String("skipped", sc.ItemID),
+			)
+
+			collisions[sc.ItemID] = true
+
+			continue
+		}
+
+		sources[key] = sc.ItemID
+	}
+
 	// Check shortcut-vs-primary-drive collisions.
 	for i := range shortcuts {
 		sc := &shortcuts[i]
@@ -184,7 +243,7 @@ func (e *Engine) detectShortcutCollisions(ctx context.Context, bl *Baseline) map
 		remoteDriveID := driveid.New(sc.RemoteDrive)
 
 		if entry, ok := bl.GetByPath(sc.LocalPath); ok && entry.DriveID != remoteDriveID {
-			e.logger.Warn("shortcut path collision: conflicts with primary drive, skipping",
+			logger.Warn("shortcut path collision: conflicts with primary drive, skipping",
 				slog.String("path", sc.LocalPath),
 				slog.String("shortcut", sc.ItemID),
 				slog.String("primary_item", entry.ItemID),
@@ -195,61 +254,6 @@ func (e *Engine) detectShortcutCollisions(ctx context.Context, bl *Baseline) map
 	}
 
 	return collisions
-}
-
-// filterReadOnlyShortcutEvents removes local change events for paths under
-// read-only shortcuts. Uploading to read-only shared folders always fails
-// with 403, so we filter these early to avoid noisy errors.
-func (e *Engine) filterReadOnlyShortcutEvents(ctx context.Context, events []ChangeEvent) []ChangeEvent {
-	shortcuts, err := e.baseline.ListShortcuts(ctx)
-	if err != nil || len(shortcuts) == 0 {
-		return events
-	}
-
-	// Collect read-only shortcut prefixes.
-	var readOnlyPrefixes []string
-
-	for i := range shortcuts {
-		if shortcuts[i].ReadOnly {
-			readOnlyPrefixes = append(readOnlyPrefixes, shortcuts[i].LocalPath+"/")
-		}
-	}
-
-	if len(readOnlyPrefixes) == 0 {
-		return events
-	}
-
-	n := 0
-	filtered := 0
-
-	for i := range events {
-		drop := false
-
-		for _, prefix := range readOnlyPrefixes {
-			if strings.HasPrefix(events[i].Path, prefix) || events[i].Path+"/" == prefix {
-				drop = true
-
-				break
-			}
-		}
-
-		if drop {
-			filtered++
-
-			continue
-		}
-
-		events[n] = events[i]
-		n++
-	}
-
-	if filtered > 0 {
-		e.logger.Info("filtered local events under read-only shortcuts",
-			slog.Int("filtered", filtered),
-		)
-	}
-
-	return events[:n]
 }
 
 // detectDriveType queries the source drive to determine its type and the
@@ -324,16 +328,24 @@ type scopeResult struct {
 	shortcut   *Shortcut
 }
 
-// observeShortcutContent observes content for all active shortcuts concurrently
-// (up to maxShortcutConcurrency in parallel). Delta tokens are deferred until
-// all scopes complete, ensuring atomicity — a crash mid-observation won't leave
-// some tokens advanced past unprocessed events.
+// observeShortcutContent observes content for all active shortcuts concurrently.
+// Delegates to observeShortcutContentFromList after loading shortcuts from the DB.
 func (e *Engine) observeShortcutContent(ctx context.Context, bl *Baseline, collisions map[string]bool) ([]ChangeEvent, error) {
 	shortcuts, err := e.baseline.ListShortcuts(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing shortcuts for observation: %w", err)
 	}
 
+	return e.observeShortcutContentFromList(ctx, shortcuts, bl, collisions)
+}
+
+// observeShortcutContentFromList is the list-threaded variant (B-333).
+// Observes content for all active shortcuts concurrently (up to
+// maxShortcutConcurrency). Delta tokens are deferred until all scopes
+// complete, ensuring atomicity.
+func (e *Engine) observeShortcutContentFromList(
+	ctx context.Context, shortcuts []Shortcut, bl *Baseline, collisions map[string]bool,
+) ([]ChangeEvent, error) {
 	if len(shortcuts) == 0 {
 		return nil, nil
 	}
@@ -420,9 +432,8 @@ func (e *Engine) observeSingleShortcut(ctx context.Context, sc *Shortcut, bl *Ba
 	switch sc.Observation {
 	case ObservationDelta:
 		return e.observeShortcutDelta(ctx, sc, remoteDriveID, bl)
-	case ObservationEnumerate:
-		return e.observeShortcutEnumerate(ctx, sc, remoteDriveID, bl)
 	default:
+		// B-335: ObservationEnumerate and ObservationUnknown both use enumerate.
 		return e.observeShortcutEnumerate(ctx, sc, remoteDriveID, bl)
 	}
 }
@@ -457,7 +468,7 @@ func (e *Engine) observeShortcutDelta(
 		}
 	}
 
-	events := shortcutItemsToEvents(items, sc, remoteDriveID, bl)
+	events := shortcutItemsToEventsWithLog(items, sc, remoteDriveID, bl, e.logger)
 
 	return scopeResult{
 		events:     events,
@@ -479,7 +490,7 @@ func (e *Engine) observeShortcutEnumerate(
 		return scopeResult{}, fmt.Errorf("sync: shortcut enumerate: %w", err)
 	}
 
-	events := shortcutItemsToEvents(items, sc, remoteDriveID, bl)
+	events := shortcutItemsToEventsWithLog(items, sc, remoteDriveID, bl, e.logger)
 
 	// Detect deletions: items in baseline under this scope but not in enumeration.
 	orphans := detectShortcutOrphans(sc, remoteDriveID, items, bl)
@@ -597,7 +608,7 @@ func (e *Engine) reconcileShortcutDelta(
 		return scopeResult{}, fmt.Errorf("sync: shortcut full reconciliation delta: %w", err)
 	}
 
-	events := shortcutItemsToEvents(items, sc, remoteDriveID, bl)
+	events := shortcutItemsToEventsWithLog(items, sc, remoteDriveID, bl, e.logger)
 	orphans := detectShortcutOrphans(sc, remoteDriveID, items, bl)
 	events = append(events, orphans...)
 
