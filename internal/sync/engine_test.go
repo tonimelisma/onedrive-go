@@ -1942,7 +1942,7 @@ func TestFindOrphans_DetectsDeletedItems(t *testing.T) {
 		driveid.NewItemKey(driveID, "id-c"): {},
 	}
 
-	orphans := bl.FindOrphans(seen, driveID)
+	orphans := bl.FindOrphans(seen, driveID, "")
 	require.Len(t, orphans, 1, "should detect 1 orphan")
 	assert.Equal(t, "b.txt", orphans[0].Path)
 	assert.Equal(t, "id-b", orphans[0].ItemID)
@@ -1967,7 +1967,7 @@ func TestFindOrphans_NoOrphans(t *testing.T) {
 		driveid.NewItemKey(driveID, "id-b"): {},
 	}
 
-	orphans := bl.FindOrphans(seen, driveID)
+	orphans := bl.FindOrphans(seen, driveID, "")
 	assert.Empty(t, orphans, "should find no orphans when all items are in seen set")
 }
 
@@ -1985,9 +1985,31 @@ func TestFindOrphans_IgnoresOtherDrives(t *testing.T) {
 	// Empty seen set — only driveID's items should be orphaned.
 	seen := map[driveid.ItemKey]struct{}{}
 
-	orphans := bl.FindOrphans(seen, driveID)
+	orphans := bl.FindOrphans(seen, driveID, "")
 	require.Len(t, orphans, 1, "should only detect orphans for the specified drive")
 	assert.Equal(t, "a.txt", orphans[0].Path)
+}
+
+func TestFindOrphans_WithPathPrefix(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(testDriveID)
+
+	bl := NewBaselineForTest([]*BaselineEntry{
+		{Path: "SharedFolder/a.txt", DriveID: driveID, ItemID: "id-a", ItemType: ItemTypeFile},
+		{Path: "SharedFolder/sub/b.txt", DriveID: driveID, ItemID: "id-b", ItemType: ItemTypeFile},
+		{Path: "OtherFolder/c.txt", DriveID: driveID, ItemID: "id-c", ItemType: ItemTypeFile},
+	})
+
+	// Only id-a is in the seen set. id-b is an orphan under SharedFolder.
+	// id-c is outside the prefix — should NOT be detected.
+	seen := map[driveid.ItemKey]struct{}{
+		driveid.NewItemKey(driveID, "id-a"): {},
+	}
+
+	orphans := bl.FindOrphans(seen, driveID, "SharedFolder")
+	require.Len(t, orphans, 1, "should detect only orphans under the prefix")
+	assert.Equal(t, "SharedFolder/sub/b.txt", orphans[0].Path)
 }
 
 func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {

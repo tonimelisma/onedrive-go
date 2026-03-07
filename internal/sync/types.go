@@ -7,6 +7,7 @@ package sync
 import (
 	"context"
 	"fmt"
+	"strings"
 	stdsync "sync"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -379,16 +380,24 @@ func (b *Baseline) ForEachPath(fn func(string, *BaselineEntry)) {
 // missed by incremental delta — deletions are delivered exactly once in a
 // narrow window and permanently lost if the client's token advances past them.
 //
+// When pathPrefix is non-empty, only entries under that prefix are considered
+// (used for shortcut-scoped orphan detection). When empty, all entries for the
+// given driveID are checked.
+//
 // Returns synthesized ChangeDelete events for each orphan, which can be fed
 // through the normal planner + executor pipeline.
-func (b *Baseline) FindOrphans(seen map[driveid.ItemKey]struct{}, driveID driveid.ID) []ChangeEvent {
+func (b *Baseline) FindOrphans(seen map[driveid.ItemKey]struct{}, driveID driveid.ID, pathPrefix string) []ChangeEvent {
 	var orphans []ChangeEvent
 
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
-	for _, entry := range b.byPath {
+	for p, entry := range b.byPath {
 		if entry.DriveID != driveID {
+			continue
+		}
+
+		if pathPrefix != "" && p != pathPrefix && !strings.HasPrefix(p, pathPrefix+"/") {
 			continue
 		}
 
