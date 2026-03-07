@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"fmt"
+	stdsync "sync"
 	"testing"
 	"time"
 
@@ -1237,6 +1238,61 @@ func TestObserveShortcutContent_ConcurrentMultipleShortcuts(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// observeShortcutDelta: ErrGone retry
+// ---------------------------------------------------------------------------
+
+func TestObserveShortcutDelta_RetryOnErrGone(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	remoteDriveID := driveid.New("0000000000000099")
+
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
+		ItemID:       "sc-1",
+		RemoteDrive:  "0000000000000099",
+		RemoteItem:   "source-folder-1",
+		LocalPath:    "SharedFolder",
+		Observation:  ObservationDelta,
+		DiscoveredAt: 1000,
+	}))
+
+	// Save a stale delta token.
+	require.NoError(t, mgr.CommitDeltaToken(ctx, "stale-token", "0000000000000099", "source-folder-1", "0000000000000099"))
+
+	mock := &mockRetryFolderDelta{
+		firstErr: graph.ErrGone,
+		items: []graph.Item{
+			{ID: "f1", Name: "report.xlsx", ParentID: "source-folder-1", DriveID: remoteDriveID},
+		},
+		token: "fresh-token",
+	}
+
+	e := &Engine{
+		baseline:    mgr,
+		folderDelta: mock,
+		logger:      testLogger(t),
+	}
+
+	bl := emptyBaseline()
+	events, err := e.observeShortcutContent(ctx, bl, nil)
+	require.NoError(t, err)
+
+	// Should have retried with empty token and succeeded.
+	require.Len(t, events, 1)
+	assert.Equal(t, "SharedFolder/report.xlsx", events[0].Path)
+
+	// Fresh token should be committed.
+	token, err := mgr.GetDeltaToken(ctx, "0000000000000099", "source-folder-1")
+	require.NoError(t, err)
+	assert.Equal(t, "fresh-token", token)
+
+	// Mock should have been called twice (first 410, then success).
+	assert.Equal(t, 2, mock.calls)
+}
+
+// ---------------------------------------------------------------------------
 // Mocks
 // ---------------------------------------------------------------------------
 
@@ -1257,6 +1313,28 @@ type mockFolderDeltaFetcher struct {
 
 func (m *mockFolderDeltaFetcher) DeltaFolderAll(_ context.Context, _ driveid.ID, _, _ string) ([]graph.Item, string, error) {
 	return m.items, m.token, m.err
+}
+
+// mockRetryFolderDelta returns an error on the first call (simulating 410/ErrGone),
+// then succeeds on subsequent calls with fresh items and token.
+type mockRetryFolderDelta struct {
+	calls    int
+	firstErr error
+	items    []graph.Item
+	token    string
+	mu       stdsync.Mutex
+}
+
+func (m *mockRetryFolderDelta) DeltaFolderAll(_ context.Context, _ driveid.ID, _, _ string) ([]graph.Item, string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.calls++
+	if m.calls == 1 && m.firstErr != nil {
+		return nil, "", m.firstErr
+	}
+
+	return m.items, m.token, nil
 }
 
 type mockRecursiveLister struct {

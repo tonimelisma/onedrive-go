@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 // maxShortcutConcurrency limits how many shortcut scopes are observed in parallel.
@@ -369,7 +371,8 @@ func (e *Engine) observeShortcutContent(ctx context.Context, bl *Baseline, colli
 			}
 
 			mu.Lock()
-			results[i] = result
+			results[i].events = result.events
+			results[i].deltaToken = result.deltaToken
 			mu.Unlock()
 
 			return nil
@@ -440,7 +443,7 @@ func (e *Engine) observeShortcutDelta(
 
 	items, newToken, err := e.folderDelta.DeltaFolderAll(ctx, remoteDriveID, sc.RemoteItem, savedToken)
 	if err != nil {
-		if strings.Contains(err.Error(), "410") {
+		if errors.Is(err, graph.ErrGone) {
 			e.logger.Warn("shortcut delta token expired, performing full resync",
 				slog.String("item_id", sc.ItemID),
 			)
@@ -506,6 +509,7 @@ func (e *Engine) reconcileShortcutScopes(ctx context.Context, bl *Baseline) ([]C
 		return nil, nil
 	}
 
+	collisions := e.detectShortcutCollisions(ctx, bl)
 	results := make([]scopeResult, len(shortcuts))
 
 	var mu stdsync.Mutex
@@ -520,6 +524,10 @@ func (e *Engine) reconcileShortcutScopes(ctx context.Context, bl *Baseline) ([]C
 			mu.Lock()
 			results[i].shortcut = sc
 			mu.Unlock()
+
+			if collisions[sc.ItemID] {
+				return nil
+			}
 
 			remoteDriveID := driveid.New(sc.RemoteDrive)
 
@@ -543,7 +551,8 @@ func (e *Engine) reconcileShortcutScopes(ctx context.Context, bl *Baseline) ([]C
 			}
 
 			mu.Lock()
-			results[i] = result
+			results[i].events = result.events
+			results[i].deltaToken = result.deltaToken
 			mu.Unlock()
 
 			return nil
