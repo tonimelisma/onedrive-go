@@ -667,8 +667,8 @@ New files: `reconciler.go`, `reconciler_test.go`, `migrations/00002_add_sync_fai
 - Parallelized `discoverAvailableDrives` across tokens via `errgroup`.
 - `printDriveListText` label parts joined (non-exclusive).
 
-**6.3 Architecture A hardening** (merged separately):
-- Architecture A: Account files (`accounts/` subdir) and drive metadata files (`drives/` subdir) separate authentication, drive identity, and config.
+**6.3 Account/drive data hardening** (merged separately):
+- Account profile files (`account_*.json`) and drive metadata files (`drive_*.json`) at data root separate authentication, drive identity, and config.
 - `DriveTokenPath(cid)` no longer requires `*Config` — shared drive token resolution reads drive metadata files instead of scanning config. Fixes B-327.
 - Login flow saves `AccountProfile` and `DriveMetadata` alongside token file metadata.
 - `addSharedDrive` registers drive metadata via `SaveDriveMetadata` before `EnsureDriveInConfig`.

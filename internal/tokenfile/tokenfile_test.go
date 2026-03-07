@@ -26,7 +26,7 @@ func testToken() *oauth2.Token {
 func TestLoad_FileNotFound(t *testing.T) {
 	tok, err := Load("/nonexistent/path/token.json")
 	assert.Nil(t, tok)
-	assert.NoError(t, err)
+	assert.ErrorIs(t, err, ErrNotFound)
 }
 
 func TestLoad_ValidFile(t *testing.T) {

@@ -377,11 +377,15 @@ func generateState() (string, error) {
 // This decouples graph/ from config/ — graph/ has no config import.
 func TokenSourceFromPath(ctx context.Context, tokenPath string, logger *slog.Logger) (TokenSource, error) {
 	tok, err := tokenfile.Load(tokenPath)
+	if errors.Is(err, tokenfile.ErrNotFound) {
+		return nil, ErrNotLoggedIn
+	}
+
 	if err != nil {
 		return nil, err
 	}
 
-	if tok == nil || tok.RefreshToken == "" {
+	if tok.RefreshToken == "" {
 		return nil, ErrNotLoggedIn
 	}
 

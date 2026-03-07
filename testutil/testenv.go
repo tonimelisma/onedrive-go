@@ -119,6 +119,24 @@ func TokenFileName(driveID string) string {
 	return "token_" + parts[0] + "_" + parts[1] + ".json"
 }
 
+// metadataFilePerms is owner-only read/write for metadata files.
+const metadataFilePerms = 0o600
+
+// CopyMetadataFiles copies all account_*.json and drive_*.json files from
+// srcDir to dstDir. Missing files are silently skipped; copy failures are fatal.
+func CopyMetadataFiles(srcDir, dstDir string) {
+	for _, prefix := range []string{"account_", "drive_"} {
+		matches, err := filepath.Glob(filepath.Join(srcDir, prefix+"*.json"))
+		if err != nil {
+			continue
+		}
+
+		for _, m := range matches {
+			CopyFile(m, filepath.Join(dstDir, filepath.Base(m)), metadataFilePerms)
+		}
+	}
+}
+
 // CopyFile copies a file from src to dst with the given permissions.
 // Crashes on failure because tests cannot proceed without the file.
 func CopyFile(src, dst string, perm os.FileMode) {
