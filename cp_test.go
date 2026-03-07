@@ -44,6 +44,20 @@ func TestIsSelfReference(t *testing.T) {
 	}
 }
 
+func TestSelfCopyReturnsEarly(t *testing.T) {
+	// cp --force file.txt file.txt should error, not proceed to CopyItem
+	// which would fail with conflict or create an unwanted duplicate.
+	t.Parallel()
+
+	dest := destInfo{parentID: "p1", newName: "file.txt", existingID: "item-1"}
+	assert.True(t, isSelfReference("item-1", dest))
+
+	// Verify isSelfCopy returns the right error.
+	err := checkSelfCopy("item-1", dest)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot copy")
+}
+
 func TestCpJSONOutput_Serialization(t *testing.T) {
 	out := cpJSONOutput{
 		Source:      "/docs/report.pdf",
