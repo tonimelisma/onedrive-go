@@ -14,12 +14,20 @@ import (
 )
 
 func newMvCmd() *cobra.Command {
-	return &cobra.Command{
+	var force bool
+
+	cmd := &cobra.Command{
 		Use:   "mv <source> <dest>",
 		Short: "Move or rename a file or folder",
 		Args:  cobra.ExactArgs(2),
-		RunE:  runMv,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runMv(cmd, args, force)
+		},
 	}
+
+	cmd.Flags().BoolVarP(&force, "force", "f", false, "overwrite existing file at destination")
+
+	return cmd
 }
 
 // mvJSONOutput is the JSON output schema for the mv command.
@@ -32,11 +40,12 @@ type mvJSONOutput struct {
 // resolveDest resolves a destination path to (parentID, newName).
 // If dest exists and is a folder, the item moves into it keeping sourceName.
 // If dest doesn't exist, the parent must exist — the item moves there with the new name.
-// If dest exists and is a file, returns an error (no silent overwrite).
+// If dest exists and is a file, returns an error unless force is true.
 func resolveDest(
 	ctx context.Context,
 	session *driveops.Session,
 	destPath, sourceName string,
+	force bool,
 ) (parentID, newName string, err error) {
 	// Attempt 1: does the dest path already exist?
 	item, resolveErr := session.ResolveItem(ctx, destPath)
@@ -46,7 +55,11 @@ func resolveDest(
 			return item.ID, sourceName, nil
 		}
 
-		return "", "", fmt.Errorf("destination %q already exists (file); will not overwrite", destPath)
+		if force {
+			return item.ParentID, item.Name, nil
+		}
+
+		return "", "", fmt.Errorf("destination %q already exists (file); use --force to overwrite", destPath)
 	}
 
 	// Attempt 2: if not found, split into parent + name and resolve parent.
@@ -54,7 +67,7 @@ func resolveDest(
 		return "", "", fmt.Errorf("resolving destination %q: %w", destPath, resolveErr)
 	}
 
-	parentPath, destName := splitParentAndName(destPath)
+	parentPath, destName := driveops.SplitParentAndName(destPath)
 
 	parentItem, parentErr := session.ResolveItem(ctx, parentPath)
 	if parentErr != nil {
@@ -68,7 +81,7 @@ func resolveDest(
 	return parentItem.ID, destName, nil
 }
 
-func runMv(cmd *cobra.Command, args []string) error {
+func runMv(cmd *cobra.Command, args []string, force bool) error {
 	sourcePath := args[0]
 	destPath := args[1]
 	ctx := cmd.Context()
@@ -87,7 +100,7 @@ func runMv(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("resolving source %q: %w", sourcePath, err)
 	}
 
-	parentID, newName, err := resolveDest(ctx, session, destPath, sourceItem.Name)
+	parentID, newName, err := resolveDest(ctx, session, destPath, sourceItem.Name, force)
 	if err != nil {
 		return err
 	}

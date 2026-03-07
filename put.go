@@ -3,17 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 func newPutCmd() *cobra.Command {
@@ -38,20 +35,6 @@ type putFolderJSONOutput struct {
 	FoldersCreated int             `json:"folders_created"`
 	TotalSize      int64           `json:"total_size"`
 	Errors         []string        `json:"errors"`
-}
-
-// splitParentAndName splits a remote path into parent path and name.
-// For "foo/bar/baz" returns ("foo/bar", "baz").
-// For "baz" returns ("", "baz").
-func splitParentAndName(path string) (string, string) {
-	clean := driveops.CleanRemotePath(path)
-	idx := strings.LastIndex(clean, "/")
-
-	if idx < 0 {
-		return "", clean
-	}
-
-	return clean[:idx], clean[idx+1:]
 }
 
 func runPut(cmd *cobra.Command, args []string) error {
@@ -89,7 +72,7 @@ func runPut(cmd *cobra.Command, args []string) error {
 
 	logger.Debug("put", "local_path", localPath, "remote_path", remotePath, "size", fi.Size())
 
-	parentPath, name := splitParentAndName(remotePath)
+	parentPath, name := driveops.SplitParentAndName(remotePath)
 
 	// Resolve parent folder ID.
 	parentItem, err := session.ResolveItem(ctx, parentPath)
@@ -150,14 +133,14 @@ func uploadFolder(
 	logger.Debug("put folder", "local_path", localPath, "remote_path", remotePath)
 
 	// Resolve or create the root remote folder.
-	parentPath, name := splitParentAndName(remotePath)
+	parentPath, name := driveops.SplitParentAndName(remotePath)
 
 	parentItem, err := session.ResolveItem(ctx, parentPath)
 	if err != nil {
 		return fmt.Errorf("resolving parent %q: %w", parentPath, err)
 	}
 
-	rootFolder, err := ensureFolder(ctx, session, parentItem.ID, name)
+	rootFolder, err := session.EnsureFolder(ctx, parentItem.ID, name)
 	if err != nil {
 		return fmt.Errorf("creating remote folder %q: %w", remotePath, err)
 	}
@@ -240,7 +223,7 @@ func uploadWalkEntry(
 	}
 
 	if d.IsDir() {
-		folder, folderErr := ensureFolder(ctx, session, parentID, d.Name())
+		folder, folderErr := session.EnsureFolder(ctx, parentID, d.Name())
 		if folderErr != nil {
 			state.result.Errors = append(state.result.Errors, fmt.Sprintf("%s: %v", path, folderErr))
 
@@ -304,30 +287,4 @@ func uploadFileEntry(
 	cc.Statusf("Uploaded %d/%d files\n", state.done, state.total)
 
 	return nil
-}
-
-// ensureFolder creates a folder, returning the existing folder on 409 conflict.
-func ensureFolder(ctx context.Context, session *driveops.Session, parentID, name string) (*graph.Item, error) {
-	item, err := session.CreateFolder(ctx, parentID, name)
-	if err != nil {
-		if errors.Is(err, graph.ErrConflict) {
-			// Folder already exists — resolve by listing parent's children.
-			children, listErr := session.Meta.ListChildren(ctx, session.DriveID, parentID)
-			if listErr != nil {
-				return nil, fmt.Errorf("resolving existing folder %q: %w", name, listErr)
-			}
-
-			for i := range children {
-				if children[i].IsFolder && children[i].Name == name {
-					return &children[i], nil
-				}
-			}
-
-			return nil, fmt.Errorf("folder %q reported as existing but not found in parent", name)
-		}
-
-		return nil, err
-	}
-
-	return item, nil
 }
