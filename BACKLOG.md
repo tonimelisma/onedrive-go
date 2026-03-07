@@ -159,6 +159,15 @@ Optimization deferred until profiling shows a bottleneck.
 | ~~B-326~~ | ~~Investigate delta token advancement on zero-event responses~~ | ~~P3~~ | **DONE** — Zero-event guard: `observeAndCommitRemote()` and `RemoteObserver.Watch()` skip token advancement when delta returns 0 events. Replaying costs O(1); prevents advancing past still-propagating deletions. See ci_issues.md §20. |
 | ~~B-327~~ | ~~`EnsureDriveInConfig` broken for shared drives~~ | ~~P3~~ | **DONE** — `DriveTokenPath(cid)` no longer requires `cfg`. Shared drive token resolution reads drive metadata files (`drive_*.json` at data root) for `account_canonical_id`. `addSharedDrive` registers drive metadata via `SaveDriveMetadata` before calling `EnsureDriveInConfig`. No more nil-cfg crashes. |
 
+## Phase 6.4 Follow-up
+
+| ID | Title | Priority | Notes |
+|----|-------|----------|-------|
+| B-332 | Add tests for `reconcileShortcutScopes` | P2 | Concurrent errgroup logic, collision skipping, delta token commits — all untested. Observation path is well-tested; reconciliation path has zero coverage. |
+| B-333 | Reduce redundant `ListShortcuts` queries per sync cycle | P4 | `processShortcuts` triggers 3 separate `ListShortcuts` calls (via `detectShortcutCollisions` + `observeShortcutContent`). Query once and pass the slice through. |
+| B-334 | `processShortcuts` collects ALL deletes into `removedShortcutIDs` | P4 | Lines 39-41 put every `ChangeDelete` item ID into the map, not just shortcut deletes. Harmless but wasteful for large deltas. Could pre-filter to known shortcut IDs. |
+| B-335 | Remove duplicate `ObservationEnumerate` case in `observeSingleShortcut` | P5 | `case ObservationEnumerate:` and `default:` do the same thing. Collapse to just `case ObservationDelta:` / `default:`. |
+
 ## Phase 6.3 Follow-up
 
 | ID | Title | Priority | Notes |

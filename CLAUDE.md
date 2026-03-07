@@ -226,8 +226,14 @@ After each increment, run through this entire checklist. If something fails, fix
     - `LEARNINGS.md` — read for patterns and gotchas, add new institutional knowledge
     - `docs/roadmap.md` — check current phase status, update on completion
     - `docs/design/` — update relevant design docs if design changed
-8. [ ] **Push and CI green**: Push branch, open PR with `--delete-branch` (auto-deletes remote branch on merge), `ci.yml` green (4 jobs: lint, test, integration, e2e). Merge with `./scripts/poll-and-merge.sh <pr_number>`. After merge, run `git fetch --prune origin && git branch -r` to verify the remote branch was deleted — if not, delete it manually with `git push origin --delete <branch>`
-9. [ ] **Cleanup**: Clean `git status`. Remove the current worktree after merge. **NEVER delete other worktrees or branches — even if they appear stale.** Instead, report all other worktrees and branches to the human, including their last commit date (use `git log -1 --format='%ci' <branch>` for each). Let the human decide what to clean up
+8. [ ] **Push and CI green**: Push branch, open PR with `gh pr create`, then enable auto-merge with `gh pr merge --auto --squash --delete-branch`. The PR will auto-merge once CI passes (4 jobs: lint, test, integration, e2e). Monitor with `gh pr checks <pr_number> --watch`
+9. [ ] **Cleanup**: Clean `git status`. Remove the current worktree after merge. Then, **from the root repo** (not the worktree), prune stale remote-tracking branches and pull main forward:
+    ```bash
+    cd /Users/tonimelisma/Development/onedrive-go
+    git fetch --prune origin
+    git checkout main && git pull --ff-only origin main
+    ```
+    **NEVER delete other worktrees or branches — even if they appear stale.** Instead, report all other worktrees and branches to the human, including their last commit date (use `git log -1 --format='%ci' <branch>` for each). Let the human decide what to clean up
 10. [ ] **Increment report**: Present to the human:
     - **Plan deviations**: For every deviation from the approved plan — what changed, why it changed, what was done instead, and whether the new approach is the long-term solution or a temporary measure that needs follow-up (with BACKLOG IDs for any follow-up)
     - **Process changes**: What you would do differently next time in how the work was planned or executed
