@@ -40,18 +40,27 @@ type EventAdder interface {
 	Add(ev *ChangeEvent)
 }
 
+// LocalIssueEscalator marks a local issue as permanently failed when it
+// exceeds the escalation threshold. Unlike remote-side escalation (which
+// creates a conflict record), local escalation simply gives up.
+type LocalIssueEscalator interface {
+	MarkLocalIssuePermanent(ctx context.Context, path string) error
+}
+
 // Reconciler periodically checks remote_state for failed items whose backoff
 // has expired and re-injects them into the sync pipeline. Items that have
 // failed more than cfg.EscalationThreshold times are escalated to
-// user-visible conflicts.
+// user-visible conflicts. Also retries transient local_issues (upload
+// failures) by synthesizing local ChangeModify events.
 type Reconciler struct {
-	cfg       ReconcilerConfig
-	state     StateReader
-	escalator ConflictEscalator
-	buf       EventAdder
-	tracker   InFlightChecker
-	logger    *slog.Logger
-	nowFunc   func() time.Time
+	cfg         ReconcilerConfig
+	state       StateReader
+	escalator   ConflictEscalator
+	localIssues LocalIssueEscalator
+	buf         EventAdder
+	tracker     InFlightChecker
+	logger      *slog.Logger
+	nowFunc     func() time.Time
 
 	kickCh chan struct{} // 1-buffered
 	timer  *time.Timer
@@ -59,24 +68,26 @@ type Reconciler struct {
 }
 
 // NewReconciler creates a Reconciler. The reconciler does not start until
-// Run() is called.
+// Run() is called. Pass localIssues as nil to disable local issue retry.
 func NewReconciler(
 	cfg ReconcilerConfig,
 	state StateReader,
 	escalator ConflictEscalator,
+	localIssues LocalIssueEscalator,
 	buf EventAdder,
 	tracker InFlightChecker,
 	logger *slog.Logger,
 ) *Reconciler {
 	return &Reconciler{
-		cfg:       cfg,
-		state:     state,
-		escalator: escalator,
-		buf:       buf,
-		tracker:   tracker,
-		logger:    logger,
-		nowFunc:   time.Now,
-		kickCh:    make(chan struct{}, 1),
+		cfg:         cfg,
+		state:       state,
+		escalator:   escalator,
+		localIssues: localIssues,
+		buf:         buf,
+		tracker:     tracker,
+		logger:      logger,
+		nowFunc:     time.Now,
+		kickCh:      make(chan struct{}, 1),
 	}
 }
 
@@ -149,12 +160,10 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 		r.logger.Warn("reconciler: failed to list retriable items",
 			slog.String("error", err.Error()),
 		)
-
-		return
-	}
-
-	if len(rows) == 0 {
+		// Still try local issues even if remote query fails.
+		r.reconcileLocalIssues(ctx, now)
 		r.armTimer(ctx, now)
+
 		return
 	}
 
@@ -200,7 +209,67 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 		)
 	}
 
+	r.reconcileLocalIssues(ctx, now)
+
 	r.armTimer(ctx, now)
+}
+
+// reconcileLocalIssues scans local_issues for transient failures whose
+// backoff has expired, escalates those exceeding the threshold, and
+// synthesizes ChangeModify events for the rest so the planner re-plans
+// the upload.
+func (r *Reconciler) reconcileLocalIssues(ctx context.Context, now time.Time) {
+	if r.localIssues == nil {
+		return
+	}
+
+	rows, err := r.state.ListLocalIssuesForRetry(ctx, now)
+	if err != nil {
+		r.logger.Warn("reconciler: failed to list retriable local issues",
+			slog.String("error", err.Error()),
+		)
+
+		return
+	}
+
+	dispatched := 0
+	escalated := 0
+
+	for i := range rows {
+		row := &rows[i]
+
+		if r.tracker.HasInFlight(row.Path) {
+			continue
+		}
+
+		if row.FailureCount >= r.cfg.EscalationThreshold {
+			if escErr := r.localIssues.MarkLocalIssuePermanent(ctx, row.Path); escErr != nil {
+				r.logger.Warn("reconciler: failed to escalate local issue",
+					slog.String("path", row.Path),
+					slog.String("error", escErr.Error()),
+				)
+			} else {
+				escalated++
+			}
+
+			continue
+		}
+
+		ev := &ChangeEvent{
+			Source: SourceLocal,
+			Type:   ChangeModify,
+			Path:   row.Path,
+		}
+		r.buf.Add(ev)
+		dispatched++
+	}
+
+	if dispatched > 0 || escalated > 0 {
+		r.logger.Info("reconciler local issues sweep",
+			slog.Int("dispatched", dispatched),
+			slog.Int("escalated", escalated),
+		)
+	}
 }
 
 // synthesizeEvent creates a ChangeEvent from a failed remote_state row.
@@ -240,10 +309,11 @@ func (r *Reconciler) synthesizeEvent(row *RemoteStateRow) *ChangeEvent {
 	}
 }
 
-// armTimer sets up a timer to fire at the earliest future retry time.
-// Stops any existing timer first. The entire method runs under mu
-// (via defer Unlock), so the r.timer assignment at the end is protected.
-// The AfterFunc callback only calls Kick() which does not access r.timer.
+// armTimer sets up a timer to fire at the earliest future retry time
+// across both remote_state and local_issues. Stops any existing timer first.
+// The entire method runs under mu (via defer Unlock), so the r.timer
+// assignment at the end is protected. The AfterFunc callback only calls
+// Kick() which does not access r.timer.
 func (r *Reconciler) armTimer(ctx context.Context, now time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -260,6 +330,18 @@ func (r *Reconciler) armTimer(ctx context.Context, now time.Time) {
 		)
 
 		return
+	}
+
+	// Also check local_issues for earliest retry.
+	localEarliest, localErr := r.state.EarliestLocalIssueRetryAt(ctx, now)
+	if localErr != nil {
+		r.logger.Warn("reconciler: failed to query earliest local issue retry",
+			slog.String("error", localErr.Error()),
+		)
+	} else if !localEarliest.IsZero() {
+		if earliest.IsZero() || localEarliest.Before(earliest) {
+			earliest = localEarliest
+		}
 	}
 
 	if earliest.IsZero() {

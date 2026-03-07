@@ -699,18 +699,18 @@ func TestPrintSummaryText_AllStates(t *testing.T) {
 	assert.Contains(t, output, "1 paused")
 	assert.Contains(t, output, "1 needs setup")
 	assert.Contains(t, output, "1 no token")
-	assert.Contains(t, output, "3 conflicts")
+	assert.Contains(t, output, "3 unresolved conflicts")
 }
 
 func TestPrintSummaryText_WithPendingAndIssues(t *testing.T) {
 	t.Parallel()
 
 	s := statusSummary{
-		TotalDrives:      2,
-		Ready:            2,
-		TotalConflicts:   1,
-		TotalPendingSync: 5,
-		TotalUploadIss:   3,
+		TotalDrives:       2,
+		Ready:             2,
+		TotalConflicts:    1,
+		TotalPendingSync:  5,
+		TotalUploadIssues: 3,
 	}
 
 	var buf bytes.Buffer
@@ -754,7 +754,7 @@ func TestComputeSummary_AggregatesPendingAndIssues(t *testing.T) {
 
 	s := computeSummary(accounts)
 	assert.Equal(t, 5, s.TotalPendingSync)
-	assert.Equal(t, 5, s.TotalUploadIss)
+	assert.Equal(t, 5, s.TotalUploadIssues)
 }
 
 // createTestStateDB creates a minimal SQLite DB with tables matching the sync schema.

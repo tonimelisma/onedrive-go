@@ -1815,3 +1815,103 @@ func TestChangeEventsToObservedItems_MapsAllFields(t *testing.T) {
 	assert.Equal(t, "folder", items[1].ItemType)
 	assert.True(t, items[1].IsDeleted)
 }
+
+// ---------------------------------------------------------------------------
+// Issue #10: drainWorkerResults upload failure recording
+// ---------------------------------------------------------------------------
+
+func TestDrainWorkerResults_UploadFailure_RecordsLocalIssue(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	ctx := context.Background()
+
+	results := make(chan WorkerResult, 1)
+	results <- WorkerResult{
+		Path:       "docs/file.txt",
+		ActionType: ActionUpload,
+		Success:    false,
+		ErrMsg:     "server timeout",
+		HTTPStatus: 503,
+	}
+	close(results)
+
+	eng.drainWorkerResults(ctx, results)
+
+	issues, err := eng.baseline.ListLocalIssues(ctx)
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+	assert.Equal(t, "docs/file.txt", issues[0].Path)
+	assert.Equal(t, "upload_failed", issues[0].IssueType)
+	assert.Equal(t, "server timeout", issues[0].LastError)
+	assert.Equal(t, 503, issues[0].HTTPStatus)
+}
+
+func TestDrainWorkerResults_DownloadFailure_NoLocalIssue(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	ctx := context.Background()
+
+	results := make(chan WorkerResult, 1)
+	results <- WorkerResult{
+		Path:       "docs/file.txt",
+		ActionType: ActionDownload,
+		Success:    false,
+		ErrMsg:     "not found",
+		HTTPStatus: 404,
+	}
+	close(results)
+
+	eng.drainWorkerResults(ctx, results)
+
+	// Download failures should not create local_issues entries.
+	issues, err := eng.baseline.ListLocalIssues(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, issues)
+}
+
+// ---------------------------------------------------------------------------
+// Issue #9: filterInvalidUploads integration test
+// ---------------------------------------------------------------------------
+
+func TestRunOnce_InvalidUpload_RecordsIssue(t *testing.T) {
+	t.Parallel()
+
+	uploadCalled := false
+	mock := &engineMockClient{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			uploadCalled = true
+			return nil, fmt.Errorf("should not be called")
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+
+	// Build a deeply nested path >400 chars (each component <255 chars).
+	// 51 components of 8 chars each = 51*9 = 459 chars + "file.txt" = ~467 chars.
+	longDir := syncRoot
+	for i := range 51 {
+		longDir = filepath.Join(longDir, fmt.Sprintf("dir%05d", i))
+	}
+
+	require.NoError(t, os.MkdirAll(longDir, 0o755))
+	longFile := filepath.Join(longDir, "file.txt")
+	require.NoError(t, os.WriteFile(longFile, []byte("content"), 0o644))
+
+	ctx := context.Background()
+	_, err := eng.RunOnce(ctx, SyncBidirectional, RunOpts{})
+	require.NoError(t, err)
+
+	// Verify a local_issues entry was created.
+	issues, err := eng.baseline.ListLocalIssues(ctx)
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+	assert.Equal(t, "path_too_long", issues[0].IssueType)
+	assert.Contains(t, issues[0].LastError, "path exceeds")
+
+	// The uploader should NOT have been called for this file.
+	assert.False(t, uploadCalled, "upload should not be called for path_too_long files")
+}

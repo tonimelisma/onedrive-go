@@ -253,6 +253,137 @@ func TestCommitOutcome_DownloadSuccess_DoesNotClearLocalIssue(t *testing.T) {
 	assert.Len(t, issues, 1)
 }
 
+func TestRecordLocalIssue_TransientSetsNextRetryAt(t *testing.T) {
+	mgr, fixedTime := newTestSyncStoreForIssues(t)
+	ctx := context.Background()
+
+	err := mgr.RecordLocalIssue(ctx, "file.txt", "upload_failed", "timeout", 500, 0, "")
+	require.NoError(t, err)
+
+	issues, err := mgr.ListLocalIssues(ctx)
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+
+	// For first failure (count=0 at time of computation), base backoff = 30s.
+	assert.Greater(t, issues[0].NextRetryAt, fixedTime.UnixNano(),
+		"next_retry_at should be in the future")
+	retryTime := time.Unix(0, issues[0].NextRetryAt)
+	assert.WithinRange(t, retryTime,
+		fixedTime.Add(25*time.Second), // 30s minus jitter
+		fixedTime.Add(40*time.Second), // 30s plus jitter
+	)
+}
+
+func TestRecordLocalIssue_PermanentNoRetryAt(t *testing.T) {
+	mgr, _ := newTestSyncStoreForIssues(t)
+	ctx := context.Background()
+
+	err := mgr.RecordLocalIssue(ctx, "CON.txt", "invalid_filename", "reserved name", 0, 0, "")
+	require.NoError(t, err)
+
+	issues, err := mgr.ListLocalIssues(ctx)
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+	assert.Equal(t, int64(0), issues[0].NextRetryAt, "permanent issues should have no next_retry_at")
+}
+
+func TestRecordLocalIssue_RepeatBackoffIncreases(t *testing.T) {
+	mgr, fixedTime := newTestSyncStoreForIssues(t)
+	ctx := context.Background()
+
+	// First failure.
+	err := mgr.RecordLocalIssue(ctx, "file.txt", "upload_failed", "err", 0, 0, "")
+	require.NoError(t, err)
+
+	issues, err := mgr.ListLocalIssues(ctx)
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+	firstRetry := issues[0].NextRetryAt
+
+	// Second failure — advance time past the first retry.
+	laterTime := fixedTime.Add(5 * time.Minute)
+	mgr.nowFunc = func() time.Time { return laterTime }
+
+	err = mgr.RecordLocalIssue(ctx, "file.txt", "upload_failed", "err2", 0, 0, "")
+	require.NoError(t, err)
+
+	issues, err = mgr.ListLocalIssues(ctx)
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+
+	secondRetry := issues[0].NextRetryAt
+	assert.Greater(t, secondRetry, firstRetry,
+		"second retry should be later than first (exponential backoff)")
+}
+
+func TestListLocalIssuesForRetry(t *testing.T) {
+	mgr, fixedTime := newTestSyncStoreForIssues(t)
+	ctx := context.Background()
+
+	// Record a transient issue (gets next_retry_at set).
+	err := mgr.RecordLocalIssue(ctx, "retry.txt", "upload_failed", "timeout", 500, 0, "")
+	require.NoError(t, err)
+
+	// Record a permanent issue (should not appear in retry list).
+	err = mgr.RecordLocalIssue(ctx, "CON.txt", "invalid_filename", "reserved", 0, 0, "")
+	require.NoError(t, err)
+
+	// Query for retry in the future (past the backoff).
+	futureTime := fixedTime.Add(10 * time.Minute)
+	rows, err := mgr.ListLocalIssuesForRetry(ctx, futureTime)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "retry.txt", rows[0].Path)
+
+	// Query for retry right now (backoff not yet expired).
+	rows, err = mgr.ListLocalIssuesForRetry(ctx, fixedTime)
+	require.NoError(t, err)
+	assert.Empty(t, rows, "backoff has not expired yet")
+}
+
+func TestEarliestLocalIssueRetryAt(t *testing.T) {
+	mgr, fixedTime := newTestSyncStoreForIssues(t)
+	ctx := context.Background()
+
+	// No issues → zero time.
+	earliest, err := mgr.EarliestLocalIssueRetryAt(ctx, fixedTime)
+	require.NoError(t, err)
+	assert.True(t, earliest.IsZero())
+
+	// Record a transient issue.
+	err = mgr.RecordLocalIssue(ctx, "file.txt", "upload_failed", "err", 0, 0, "")
+	require.NoError(t, err)
+
+	// Query from before the retry time — should return the retry time.
+	earliest, err = mgr.EarliestLocalIssueRetryAt(ctx, fixedTime)
+	require.NoError(t, err)
+	assert.False(t, earliest.IsZero())
+	assert.True(t, earliest.After(fixedTime))
+}
+
+func TestMarkLocalIssuePermanent(t *testing.T) {
+	mgr, _ := newTestSyncStoreForIssues(t)
+	ctx := context.Background()
+
+	err := mgr.RecordLocalIssue(ctx, "file.txt", "upload_failed", "timeout", 500, 0, "")
+	require.NoError(t, err)
+
+	// Mark as permanent.
+	err = mgr.MarkLocalIssuePermanent(ctx, "file.txt")
+	require.NoError(t, err)
+
+	issues, err := mgr.ListLocalIssues(ctx)
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+	assert.Equal(t, "permanently_failed", issues[0].SyncStatus)
+	assert.Equal(t, int64(0), issues[0].NextRetryAt, "permanent should clear next_retry_at")
+
+	// Should no longer appear in retry list.
+	rows, err := mgr.ListLocalIssuesForRetry(ctx, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	assert.Empty(t, rows)
+}
+
 func TestLocalIssueSyncStatus(t *testing.T) {
 	tests := []struct {
 		issueType string

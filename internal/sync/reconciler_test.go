@@ -28,6 +28,12 @@ type mockStateReader struct {
 	earliestRetryErr   error
 	listFailedCalls    int
 	earliestRetryCalls int
+
+	// Local issues
+	localIssueRows        []LocalIssueRow
+	localIssueErr         error
+	earliestLocalRetry    time.Time
+	earliestLocalRetryErr error
 }
 
 func (m *mockStateReader) ListUnreconciled(_ context.Context) ([]RemoteStateRow, error) {
@@ -50,6 +56,20 @@ func (m *mockStateReader) EarliestRetryAt(_ context.Context, _ time.Time) (time.
 	m.earliestRetryCalls++
 
 	return m.earliestRetry, m.earliestRetryErr
+}
+
+func (m *mockStateReader) ListLocalIssuesForRetry(_ context.Context, _ time.Time) ([]LocalIssueRow, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.localIssueRows, m.localIssueErr
+}
+
+func (m *mockStateReader) EarliestLocalIssueRetryAt(_ context.Context, _ time.Time) (time.Time, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.earliestLocalRetry, m.earliestLocalRetryErr
 }
 
 func (m *mockStateReader) FailureCount(_ context.Context) (int, error)            { return 0, nil }
@@ -78,6 +98,23 @@ func (m *mockEscalator) EscalateToConflict(_ context.Context, driveID driveid.ID
 	defer m.mu.Unlock()
 
 	m.calls = append(m.calls, escalateCall{driveID: driveID, itemID: itemID, path: path, reason: reason})
+
+	return m.err
+}
+
+// mockLocalIssueRecorder implements the MarkLocalIssuePermanent method for
+// reconciler tests.
+type mockLocalIssueRecorder struct {
+	mu    stdsync.Mutex
+	paths []string
+	err   error
+}
+
+func (m *mockLocalIssueRecorder) MarkLocalIssuePermanent(_ context.Context, path string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.paths = append(m.paths, path)
 
 	return m.err
 }
@@ -117,9 +154,18 @@ func (m *mockInFlightChecker) HasInFlight(path string) bool {
 // ---------------------------------------------------------------------------
 
 func testReconciler(state *mockStateReader, esc *mockEscalator, adder *mockEventAdder, checker *mockInFlightChecker) *Reconciler {
+	return testReconcilerWith(state, esc, nil, adder, checker)
+}
+
+func testReconcilerWith(state *mockStateReader, esc *mockEscalator, localIss *mockLocalIssueRecorder, adder *mockEventAdder, checker *mockInFlightChecker) *Reconciler {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
-	return NewReconciler(DefaultReconcilerConfig(), state, esc, adder, checker, logger)
+	var li LocalIssueEscalator
+	if localIss != nil {
+		li = localIss
+	}
+
+	return NewReconciler(DefaultReconcilerConfig(), state, esc, li, adder, checker, logger)
 }
 
 func makeFailedRow(path, status string, failureCount int) RemoteStateRow {
@@ -529,7 +575,7 @@ func TestReconciler_CustomEscalationThreshold(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	cfg := ReconcilerConfig{EscalationThreshold: 3}
-	r := NewReconciler(cfg, state, esc, adder, checker, logger)
+	r := NewReconciler(cfg, state, esc, nil, adder, checker, logger)
 	r.nowFunc = func() time.Time { return time.Unix(1000, 0) }
 
 	r.reconcile(context.Background())
@@ -565,6 +611,140 @@ func TestArmTimer_StopsExistingTimer(t *testing.T) {
 	r.mu.Lock()
 	require.NotNil(t, r.timer)
 	assert.NotSame(t, firstTimer, r.timer, "armTimer should create a new timer")
+	r.timer.Stop()
+	r.mu.Unlock()
+}
+
+// ---------------------------------------------------------------------------
+// Local issues reconciler tests
+// ---------------------------------------------------------------------------
+
+func TestReconcile_DispatchLocalIssues(t *testing.T) {
+	localRows := []LocalIssueRow{
+		{Path: "upload1.txt", IssueType: "upload_failed", SyncStatus: "upload_failed", FailureCount: 2},
+		{Path: "upload2.txt", IssueType: "upload_failed", SyncStatus: "upload_failed", FailureCount: 3},
+	}
+	state := &mockStateReader{localIssueRows: localRows}
+	adder := &mockEventAdder{}
+	localIss := &mockLocalIssueRecorder{}
+
+	r := testReconcilerWith(state, &mockEscalator{}, localIss, adder, newMockInFlightChecker())
+	r.nowFunc = func() time.Time { return time.Unix(1000, 0) }
+
+	r.reconcile(context.Background())
+
+	adder.mu.Lock()
+	defer adder.mu.Unlock()
+
+	require.Len(t, adder.events, 2)
+	assert.Equal(t, "upload1.txt", adder.events[0].Path)
+	assert.Equal(t, SourceLocal, adder.events[0].Source)
+	assert.Equal(t, ChangeModify, adder.events[0].Type)
+	assert.Equal(t, "upload2.txt", adder.events[1].Path)
+}
+
+func TestReconcile_EscalateLocalIssue(t *testing.T) {
+	localRows := []LocalIssueRow{
+		{Path: "stuck.txt", IssueType: "upload_failed", SyncStatus: "upload_failed", FailureCount: defaultEscalationThreshold},
+		{Path: "ok.txt", IssueType: "upload_failed", SyncStatus: "upload_failed", FailureCount: 2},
+	}
+	state := &mockStateReader{localIssueRows: localRows}
+	adder := &mockEventAdder{}
+	localIss := &mockLocalIssueRecorder{}
+
+	r := testReconcilerWith(state, &mockEscalator{}, localIss, adder, newMockInFlightChecker())
+	r.nowFunc = func() time.Time { return time.Unix(1000, 0) }
+
+	r.reconcile(context.Background())
+
+	// stuck.txt should be escalated to permanent.
+	localIss.mu.Lock()
+	require.Len(t, localIss.paths, 1)
+	assert.Equal(t, "stuck.txt", localIss.paths[0])
+	localIss.mu.Unlock()
+
+	// ok.txt should be dispatched.
+	adder.mu.Lock()
+	require.Len(t, adder.events, 1)
+	assert.Equal(t, "ok.txt", adder.events[0].Path)
+	adder.mu.Unlock()
+}
+
+func TestReconcile_MixedRemoteAndLocal(t *testing.T) {
+	remoteRows := []RemoteStateRow{
+		makeFailedRow("remote.txt", statusDownloadFailed, 2),
+	}
+	localRows := []LocalIssueRow{
+		{Path: "local.txt", IssueType: "upload_failed", SyncStatus: "upload_failed", FailureCount: 1},
+	}
+	state := &mockStateReader{failedRows: remoteRows, localIssueRows: localRows}
+	adder := &mockEventAdder{}
+	localIss := &mockLocalIssueRecorder{}
+
+	r := testReconcilerWith(state, &mockEscalator{}, localIss, adder, newMockInFlightChecker())
+	r.nowFunc = func() time.Time { return time.Unix(1000, 0) }
+
+	r.reconcile(context.Background())
+
+	adder.mu.Lock()
+	defer adder.mu.Unlock()
+
+	// Both remote and local items dispatched.
+	require.Len(t, adder.events, 2)
+
+	paths := []string{adder.events[0].Path, adder.events[1].Path}
+	assert.Contains(t, paths, "remote.txt")
+	assert.Contains(t, paths, "local.txt")
+
+	// Verify remote event is SourceRemote.
+	for _, ev := range adder.events {
+		if ev.Path == "remote.txt" {
+			assert.Equal(t, SourceRemote, ev.Source)
+		}
+		if ev.Path == "local.txt" {
+			assert.Equal(t, SourceLocal, ev.Source)
+		}
+	}
+}
+
+func TestArmTimer_ConsidersLocalIssues(t *testing.T) {
+	now := time.Unix(1000, 0)
+	remoteFuture := now.Add(5 * time.Minute)
+	localFuture := now.Add(1 * time.Minute) // earlier than remote
+
+	state := &mockStateReader{
+		earliestRetry:      remoteFuture,
+		earliestLocalRetry: localFuture,
+	}
+	r := testReconcilerWith(state, &mockEscalator{}, nil, &mockEventAdder{}, newMockInFlightChecker())
+	r.nowFunc = func() time.Time { return now }
+
+	r.armTimer(context.Background(), now)
+
+	r.mu.Lock()
+	require.NotNil(t, r.timer, "timer should be armed")
+	r.timer.Stop()
+	r.mu.Unlock()
+
+	// The timer should fire at the local issue time (1 min), not remote (5 min).
+	// We can't inspect the timer delay directly, but we verified it arms.
+}
+
+func TestArmTimer_OnlyLocalIssues(t *testing.T) {
+	now := time.Unix(1000, 0)
+	localFuture := now.Add(30 * time.Second)
+
+	state := &mockStateReader{
+		earliestRetry:      time.Time{}, // no remote retries
+		earliestLocalRetry: localFuture,
+	}
+	r := testReconcilerWith(state, &mockEscalator{}, nil, &mockEventAdder{}, newMockInFlightChecker())
+	r.nowFunc = func() time.Time { return now }
+
+	r.armTimer(context.Background(), now)
+
+	r.mu.Lock()
+	require.NotNil(t, r.timer, "timer should be armed for local issue")
 	r.timer.Stop()
 	r.mu.Unlock()
 }
