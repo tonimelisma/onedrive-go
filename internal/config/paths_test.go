@@ -125,6 +125,7 @@ func TestDefaultCacheDir_XDGFallback(t *testing.T) {
 }
 
 func TestAssertDevSafe_PanicsWithoutXDG(t *testing.T) {
+	// t.Setenv("") sets to empty string (not unset); AssertDevSafe treats "" as unset.
 	t.Setenv("XDG_DATA_HOME", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("XDG_CACHE_HOME", "")

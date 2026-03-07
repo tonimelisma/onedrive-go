@@ -190,7 +190,7 @@ func discoverDrivesForToken(
 	ctx context.Context, tokenCID driveid.CanonicalID,
 	cfg *config.Config, logger *slog.Logger,
 ) []driveListEntry {
-	tokenPath := config.DriveTokenPath(tokenCID, nil)
+	tokenPath := config.DriveTokenPath(tokenCID)
 	if tokenPath == "" {
 		return nil
 	}
@@ -298,14 +298,14 @@ func discoverSharePointDrives(
 func discoverSharedDrives(
 	ctx context.Context, client *graph.Client, cfg *config.Config, email string, logger *slog.Logger,
 ) []driveListEntry {
-	// Primary: search-based discovery (non-deprecated endpoint)
-	entries := discoverSharedDrivesViaSearch(ctx, client, cfg, email, logger)
-	if entries != nil {
-		return entries
+	items := searchSharedItemsWithFallback(ctx, client, email, logger)
+	if items == nil {
+		return nil
 	}
 
-	// Fallback: SharedWithMe (deprecated Nov 2026 but still functional)
-	return discoverSharedDrivesViaSharedWithMe(ctx, client, cfg, email, logger)
+	folders := filterSharedFolders(ctx, client, items, cfg, email, logger)
+
+	return sharedFoldersToEntries(folders)
 }
 
 // sharedFolderInfo holds a validated shared folder ready for use.
@@ -315,19 +315,8 @@ type sharedFolderInfo struct {
 	displayName string
 }
 
-// discoverSharedDrivesViaSearch uses GET /me/drive/search(q='*') to find
-// shared folders. Returns nil (not empty slice) on error to trigger fallback.
-func discoverSharedDrivesViaSearch(
-	ctx context.Context, client *graph.Client, cfg *config.Config, email string, logger *slog.Logger,
-) []driveListEntry {
-	items, err := client.SearchDriveItems(ctx, "*")
-	if err != nil {
-		logger.Debug("search-based shared discovery failed, will try SharedWithMe", "error", err)
-
-		return nil
-	}
-
-	folders := filterSharedFolders(ctx, client, items, cfg, email, logger)
+// sharedFoldersToEntries converts validated shared folders to drive list entries.
+func sharedFoldersToEntries(folders []sharedFolderInfo) []driveListEntry {
 	entries := make([]driveListEntry, 0, len(folders))
 
 	for _, f := range folders {
@@ -344,43 +333,21 @@ func discoverSharedDrivesViaSearch(
 	return entries
 }
 
-// discoverSharedDrivesViaSharedWithMe uses the SharedWithMe endpoint (deprecated
-// Nov 2026) as fallback when search-based discovery fails.
-func discoverSharedDrivesViaSharedWithMe(
-	ctx context.Context, client *graph.Client, cfg *config.Config, email string, logger *slog.Logger,
-) []driveListEntry {
-	items, err := client.SharedWithMe(ctx)
-	if err != nil {
-		logger.Debug("failed to list shared items", "error", err)
-
-		return nil
-	}
-
-	folders := filterSharedFolders(ctx, client, items, cfg, email, logger)
-	entries := make([]driveListEntry, 0, len(folders))
-
-	for _, f := range folders {
-		entries = append(entries, driveListEntry{
-			CanonicalID: f.cid.String(),
-			DisplayName: f.displayName,
-			State:       "available",
-			Source:      "available",
-			OwnerName:   f.item.SharedOwnerName,
-			OwnerEmail:  f.item.SharedOwnerEmail,
-		})
-	}
-
-	return entries
+// candidateSharedFolder holds a filtered shared item pending enrichment.
+type candidateSharedFolder struct {
+	cid  driveid.CanonicalID
+	item *graph.Item
 }
 
 // filterSharedFolders applies common filtering to shared items: folders only,
-// valid remote references, not already configured, identity enrichment,
-// and display name derivation.
+// valid remote references, not already configured, identity enrichment
+// (parallelized), and display name derivation with collision tracking.
 func filterSharedFolders(
 	ctx context.Context, client *graph.Client, items []graph.Item,
 	cfg *config.Config, email string, logger *slog.Logger,
 ) []sharedFolderInfo {
-	var folders []sharedFolderInfo
+	// Phase 1: Filter — identify valid shared folders.
+	var candidates []candidateSharedFolder
 
 	for i := range items {
 		item := &items[i]
@@ -398,19 +365,47 @@ func filterSharedFolders(
 			continue
 		}
 
-		enriched := enrichSharedItem(ctx, client, item, logger)
+		candidates = append(candidates, candidateSharedFolder{cid: cid, item: item})
+	}
 
-		displayName, nameErr := deriveSharedDisplayName(enriched, nil)
+	// Phase 2: Enrich — parallel identity resolution (up to 5 concurrent).
+	const enrichConcurrency = 5
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(enrichConcurrency)
+
+	for i := range candidates {
+		item := candidates[i].item
+
+		g.Go(func() error {
+			enrichSharedItem(gctx, client, item, logger)
+
+			return nil
+		})
+	}
+
+	//nolint:errcheck // enrichment is best-effort; errors logged inside enrichSharedItem
+	g.Wait()
+
+	// Phase 3: Name — sequential display name derivation with collision tracking.
+	var folders []sharedFolderInfo
+
+	existingNames := make(map[string]bool)
+
+	for _, c := range candidates {
+		displayName, nameErr := deriveSharedDisplayName(c.item, existingNames)
 		if nameErr != nil {
 			logger.Warn("skipping shared folder with no owner identity",
-				"name", enriched.Name, "error", nameErr)
+				"name", c.item.Name, "error", nameErr)
 
 			continue
 		}
 
+		existingNames[displayName] = true
+
 		folders = append(folders, sharedFolderInfo{
-			cid:         cid,
-			item:        enriched,
+			cid:         c.cid,
+			item:        c.item,
 			displayName: displayName,
 		})
 	}
@@ -424,13 +419,13 @@ func filterSharedFolders(
 // if the enrichment call fails.
 func enrichSharedItem(
 	ctx context.Context, client *graph.Client, item *graph.Item, logger *slog.Logger,
-) *graph.Item {
+) {
 	if item.SharedOwnerEmail != "" {
-		return item // already has full identity
+		return // already has full identity
 	}
 
 	if item.RemoteDriveID == "" || item.RemoteItemID == "" {
-		return item
+		return
 	}
 
 	enriched, err := client.GetItem(ctx, driveid.New(item.RemoteDriveID), item.RemoteItemID)
@@ -438,7 +433,7 @@ func enrichSharedItem(
 		logger.Debug("could not enrich shared item identity",
 			"name", item.Name, "error", err)
 
-		return item
+		return
 	}
 
 	// Merge enriched identity into original item (keep original metadata).
@@ -449,8 +444,6 @@ func enrichSharedItem(
 	if enriched.SharedOwnerEmail != "" {
 		item.SharedOwnerEmail = enriched.SharedOwnerEmail
 	}
-
-	return item
 }
 
 // deriveSharedDisplayName builds a human-friendly name for a shared folder.
@@ -699,19 +692,8 @@ func runDriveAdd(cmd *cobra.Command, args []string) error {
 // If the drive already exists, reports it as already configured. Token
 // existence is verified as a precondition before writing config.
 func addNewDrive(cfgPath string, cid driveid.CanonicalID, logger *slog.Logger) error {
-	// Verify a token exists for this drive's account. Load config for
-	// token resolution (shared drives may reference a primary account's token).
-	cfg, err := config.LoadOrDefault(cfgPath, logger)
-	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
-	}
-
-	tokenCID, err := config.TokenCanonicalID(cid, cfg)
-	if err != nil {
-		return fmt.Errorf("cannot resolve token for %s: %w", cid.String(), err)
-	}
-
-	tokenPath := config.DriveTokenPath(tokenCID, nil)
+	// Verify a token exists for this drive's account.
+	tokenPath := config.DriveTokenPath(cid)
 	if tokenPath == "" {
 		return fmt.Errorf("cannot determine data directory for %s", cid.Email())
 	}
@@ -765,19 +747,26 @@ func addSharedDrive(
 		return nil
 	}
 
-	tokenCID, err := config.TokenCanonicalID(cid, cfg)
-	if err != nil {
-		return fmt.Errorf("cannot resolve token for %s: %w\n"+
-			"Run 'onedrive-go login' first, then add your primary drive", cid.String(), err)
-	}
+	// Shared drives don't have their own token — find the parent account.
+	// DriveTokenPath(sharedCID) reads drive metadata which doesn't exist yet
+	// for new drives. Probe the filesystem for existing personal/business tokens.
+	parentCID := findTokenFallback(cid.Email(), logger)
 
-	tokenPath := config.DriveTokenPath(tokenCID, nil)
+	tokenPath := config.DriveTokenPath(parentCID)
 	if tokenPath == "" {
 		return fmt.Errorf("cannot determine data directory for %s", cid.Email())
 	}
 
 	if _, statErr := os.Stat(tokenPath); errors.Is(statErr, os.ErrNotExist) {
 		return fmt.Errorf("no token file for %s — run 'onedrive-go login' first", cid.Email())
+	}
+
+	// Register drive metadata so DriveTokenPath works for this shared drive
+	// in subsequent operations.
+	if saveErr := config.SaveDriveMetadata(cid, &config.DriveMetadata{
+		AccountCanonicalID: parentCID.String(),
+	}); saveErr != nil {
+		return fmt.Errorf("registering shared drive metadata: %w", saveErr)
 	}
 
 	displayName := preResolvedName
@@ -836,9 +825,9 @@ func resolveSharedDisplayName(
 		}
 
 		if itemCID == cid {
-			enriched := enrichSharedItem(ctx, client, item, logger)
+			enrichSharedItem(ctx, client, item, logger)
 
-			return deriveSharedDisplayName(enriched, existingNames)
+			return deriveSharedDisplayName(item, existingNames)
 		}
 	}
 
@@ -927,7 +916,7 @@ func searchSharedDrives(
 	var matches []sharedMatch
 
 	for _, tokenCID := range tokens {
-		tokenPath := config.DriveTokenPath(tokenCID, nil)
+		tokenPath := config.DriveTokenPath(tokenCID)
 		if tokenPath == "" {
 			continue
 		}
@@ -1165,7 +1154,7 @@ func findBusinessTokens(accountFilter string, logger *slog.Logger) []driveid.Can
 func searchAccountSharePoint(
 	ctx context.Context, tokenCID driveid.CanonicalID, query string, logger *slog.Logger,
 ) []driveSearchResult {
-	tokenPath := config.DriveTokenPath(tokenCID, nil)
+	tokenPath := config.DriveTokenPath(tokenCID)
 	if tokenPath == "" {
 		return nil
 	}

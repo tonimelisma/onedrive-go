@@ -63,9 +63,7 @@ func NewSessionProvider(
 // resolved drive. Token caching ensures drives sharing a token path
 // reuse the same TokenSource.
 func (p *SessionProvider) Session(ctx context.Context, rd *config.ResolvedDrive) (*Session, error) {
-	cfg := p.holder.Config()
-
-	tokenPath := config.DriveTokenPath(rd.CanonicalID, cfg)
+	tokenPath := config.DriveTokenPath(rd.CanonicalID)
 	if tokenPath == "" {
 		return nil, fmt.Errorf("cannot determine token path for drive %q", rd.CanonicalID)
 	}

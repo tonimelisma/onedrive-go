@@ -667,6 +667,17 @@ New files: `reconciler.go`, `reconciler_test.go`, `migrations/00002_add_sync_fai
 - Parallelized `discoverAvailableDrives` across tokens via `errgroup`.
 - `printDriveListText` label parts joined (non-exclusive).
 
+**6.3 Architecture A hardening** (merged separately):
+- Architecture A: Account files (`accounts/` subdir) and drive metadata files (`drives/` subdir) separate authentication, drive identity, and config.
+- `DriveTokenPath(cid)` no longer requires `*Config` — shared drive token resolution reads drive metadata files instead of scanning config. Fixes B-327.
+- Login flow saves `AccountProfile` and `DriveMetadata` alongside token file metadata.
+- `addSharedDrive` registers drive metadata via `SaveDriveMetadata` before `EnsureDriveInConfig`.
+- `enrichSharedItem` changed to void return (mutate-only) — no more misleading pointer return.
+- Collapsed `discoverSharedDrivesViaSearch`/`ViaSharedWithMe` into `discoverSharedDrives` using `searchSharedItemsWithFallback`.
+- `filterSharedFolders` tracks `existingNames` for collision-free display names.
+- Parallelized shared item identity enrichment via `errgroup` with `SetLimit(5)`.
+- Unit tests for `enrichSharedItem` (5 cases) and `searchSharedItemsWithFallback` (4 cases).
+
 #### 6.4a: Folder-scoped delta + remoteItem parsing — FUTURE
 
 1. ~~`graph.Item` gains `RemoteDriveID`/`RemoteItemID` from `remoteItem` facet.~~ (Done in 6.3.)

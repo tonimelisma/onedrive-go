@@ -110,9 +110,36 @@ func EnsureDriveInConfig(path string, cid driveid.CanonicalID, logger *slog.Logg
 		return d.SyncDir, false, nil
 	}
 
-	meta := ReadTokenMeta(cid, logger)
+	// Prefer account profile for org_name/display_name, fall back to token metadata.
+	var orgName, displayName string
+
+	acctCID := accountCIDForDrive(cid)
+	if !acctCID.IsZero() {
+		profile, profileErr := LoadAccountProfile(acctCID)
+		if profileErr != nil {
+			logger.Debug("could not load account profile for ensure drive",
+				"canonical_id", cid.String(), "error", profileErr)
+		}
+
+		if profile != nil {
+			orgName = profile.OrgName
+			displayName = profile.DisplayName
+		}
+	}
+
+	if orgName == "" || displayName == "" {
+		meta := ReadTokenMeta(cid, logger)
+		if orgName == "" {
+			orgName = meta["org_name"]
+		}
+
+		if displayName == "" {
+			displayName = meta["display_name"]
+		}
+	}
+
 	existingDirs := CollectOtherSyncDirs(cfg, cid, logger)
-	syncDir := DefaultSyncDir(cid, meta["org_name"], meta["display_name"], existingDirs)
+	syncDir := DefaultSyncDir(cid, orgName, displayName, existingDirs)
 
 	logger.Info("adding drive to config", "canonical_id", cid.String(), "sync_dir", syncDir)
 
