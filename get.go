@@ -115,12 +115,21 @@ func runGet(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// cachedChild holds the subset of graph.Item fields needed for download.
+type cachedChild struct {
+	name         string
+	id           string
+	isFolder     bool
+	quickXorHash string
+}
+
 // downloadState holds mutable state shared across the recursive download.
 type downloadState struct {
-	mu     sync.Mutex
-	result getFolderJSONOutput
-	done   int
-	total  int
+	mu         sync.Mutex
+	result     getFolderJSONOutput
+	done       int
+	total      int
+	childCache map[string][]cachedChild // keyed by remote path
 }
 
 func downloadFolder(
@@ -133,9 +142,11 @@ func downloadFolder(
 	ctx := cmd.Context()
 	logger := cc.Logger
 
-	state := &downloadState{}
+	state := &downloadState{
+		childCache: make(map[string][]cachedChild),
+	}
 
-	// Pass 1: count all files recursively.
+	// Pass 1: count files and cache directory listings.
 	if err := countRemoteFiles(ctx, session, remotePath, state); err != nil {
 		return err
 	}
@@ -169,7 +180,15 @@ func countRemoteFiles(ctx context.Context, session *driveops.Session, remotePath
 		return fmt.Errorf("listing %q: %w", remotePath, err)
 	}
 
+	cached := make([]cachedChild, len(children))
 	for i := range children {
+		cached[i] = cachedChild{
+			name:         children[i].Name,
+			id:           children[i].ID,
+			isFolder:     children[i].IsFolder,
+			quickXorHash: children[i].QuickXorHash,
+		}
+
 		if children[i].IsFolder {
 			if err := countRemoteFiles(ctx, session, joinRemotePath(remotePath, children[i].Name), state); err != nil {
 				return err
@@ -178,6 +197,8 @@ func countRemoteFiles(ctx context.Context, session *driveops.Session, remotePath
 			state.total++
 		}
 	}
+
+	state.childCache[remotePath] = cached
 
 	return nil
 }
@@ -198,49 +219,49 @@ func downloadRecursive(
 		return
 	}
 
-	children, err := session.ListChildren(ctx, remotePath)
-	if err != nil {
-		state.mu.Lock()
-		state.result.Errors = append(state.result.Errors, fmt.Sprintf("listing %q: %v", remotePath, err))
-		state.mu.Unlock()
-
-		return
-	}
+	// Read from cache populated by countRemoteFiles — no extra API call.
+	children := state.childCache[remotePath]
 
 	state.mu.Lock()
 	state.result.FoldersCreated++
 	state.mu.Unlock()
 
-	// Recurse into subdirectories sequentially (must exist before children).
-	for i := range children {
-		if children[i].IsFolder {
-			childLocal := filepath.Join(localPath, children[i].Name)
-			downloadRecursive(ctx, cc, session, tm, state, joinRemotePath(remotePath, children[i].Name), childLocal)
-		}
-	}
-
-	// Download files in this directory concurrently with bounded parallelism.
+	// Process all children concurrently with bounded parallelism.
+	// Subdirectory traversal is safe to parallelize because:
+	// - Directory listings are cached (no redundant API calls)
+	// - MkdirAll is idempotent (concurrent dir creation is safe)
+	// - State mutations are mutex-protected
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(defaultDownloadConcurrency)
 
 	for i := range children {
-		if children[i].IsFolder {
+		if children[i].isFolder {
+			child := children[i]
+			childLocal := filepath.Join(localPath, child.name)
+			childRemote := joinRemotePath(remotePath, child.name)
+
+			g.Go(func() error {
+				downloadRecursive(gCtx, cc, session, tm, state, childRemote, childLocal)
+
+				return nil
+			})
+
 			continue
 		}
 
 		child := children[i]
-		childLocal := filepath.Join(localPath, child.Name)
+		childLocal := filepath.Join(localPath, child.name)
 
 		g.Go(func() error {
-			dlResult, dlErr := tm.DownloadToFile(gCtx, session.DriveID, child.ID, childLocal, driveops.DownloadOpts{
-				RemoteHash: child.QuickXorHash,
+			dlResult, dlErr := tm.DownloadToFile(gCtx, session.DriveID, child.id, childLocal, driveops.DownloadOpts{
+				RemoteHash: child.quickXorHash,
 			})
 
 			state.mu.Lock()
 			defer state.mu.Unlock()
 
 			if dlErr != nil {
-				state.result.Errors = append(state.result.Errors, fmt.Sprintf("%s: %v", child.Name, dlErr))
+				state.result.Errors = append(state.result.Errors, fmt.Sprintf("%s: %v", child.name, dlErr))
 
 				return nil
 			}

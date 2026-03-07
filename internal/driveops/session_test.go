@@ -458,17 +458,15 @@ func TestEnsureFolder_Created(t *testing.T) {
 func TestEnsureFolder_Conflict(t *testing.T) {
 	t.Parallel()
 
-	callCount := 0
 	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
-		if callCount == 1 {
-			// CreateFolder → 409 Conflict
+		// CreateFolder = POST, ListChildren = GET — both hit /children
+		if r.Method == http.MethodPost {
 			w.WriteHeader(http.StatusConflict)
 			fmt.Fprintf(w, `{"error":{"code":"nameAlreadyExists"}}`)
 
 			return
 		}
-		// ListChildren → returns matching folder
+		// GET /children → returns matching folder
 		fmt.Fprintf(w, `{"value":[{"id":"existing-id","name":"docs","folder":{}}]}`)
 	}))
 
@@ -480,16 +478,14 @@ func TestEnsureFolder_Conflict(t *testing.T) {
 func TestEnsureFolder_ConflictNotFound(t *testing.T) {
 	t.Parallel()
 
-	callCount := 0
 	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
-		if callCount == 1 {
+		if r.Method == http.MethodPost {
 			w.WriteHeader(http.StatusConflict)
 			fmt.Fprintf(w, `{"error":{"code":"nameAlreadyExists"}}`)
 
 			return
 		}
-		// ListChildren returns no matching folder
+		// GET /children → no matching folder
 		fmt.Fprintf(w, `{"value":[{"id":"other-id","name":"other","folder":{}}]}`)
 	}))
 
