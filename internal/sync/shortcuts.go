@@ -9,7 +9,7 @@ import (
 // UpsertShortcut inserts or updates a shortcut in the shortcuts table.
 // Uses ON CONFLICT to explicitly control which columns are updated,
 // preserving discovered_at on updates. The read_only column is always
-// written as 0 (ignored — permission state lives in local_issues).
+// written as 0 (ignored — permission state lives in sync_failures).
 func (m *SyncStore) UpsertShortcut(ctx context.Context, sc *Shortcut) error {
 	_, err := m.db.ExecContext(ctx,
 		`INSERT INTO shortcuts

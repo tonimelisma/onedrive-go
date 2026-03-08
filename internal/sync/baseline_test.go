@@ -4,17 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	stdsync "sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/pressly/goose/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -211,7 +208,7 @@ func TestCheckpoint_PrunesDeletedRemoteState(t *testing.T) {
 	assert.Equal(t, 2, count, "old deleted should be pruned, new deleted + synced should remain")
 }
 
-func TestCheckpoint_PrunesPermanentSyncFailures(t *testing.T) {
+func TestCheckpoint_PrunesActionableSyncFailures(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
@@ -222,18 +219,18 @@ func TestCheckpoint_PrunesPermanentSyncFailures(t *testing.T) {
 	newTime := now.Add(-12 * time.Hour).UnixNano()
 	retention := 24 * time.Hour
 
-	// Insert a permanent failure older than retention (should be pruned).
+	// Insert an actionable failure older than retention (should be pruned).
 	_, err := mgr.db.ExecContext(ctx,
 		`INSERT INTO sync_failures (path, drive_id, direction, category, first_seen_at, last_seen_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"/old-issue.txt", "", "upload", "permanent", oldTime, oldTime)
+		"/old-issue.txt", "", "upload", "actionable", oldTime, oldTime)
 	require.NoError(t, err)
 
-	// Insert a permanent failure newer than retention (should survive).
+	// Insert an actionable failure newer than retention (should survive).
 	_, err = mgr.db.ExecContext(ctx,
 		`INSERT INTO sync_failures (path, drive_id, direction, category, first_seen_at, last_seen_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"/new-issue.txt", "", "upload", "permanent", newTime, newTime)
+		"/new-issue.txt", "", "upload", "actionable", newTime, newTime)
 	require.NoError(t, err)
 
 	// Insert a transient failure (should never be pruned regardless of age).
@@ -248,7 +245,7 @@ func TestCheckpoint_PrunesPermanentSyncFailures(t *testing.T) {
 	var count int
 	err = mgr.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sync_failures`).Scan(&count)
 	require.NoError(t, err)
-	assert.Equal(t, 2, count, "old permanent should be pruned, new permanent + transient should remain")
+	assert.Equal(t, 2, count, "old actionable should be pruned, new actionable + transient should remain")
 }
 
 func TestCheckpoint_ZeroRetentionSkipsPruning(t *testing.T) {
@@ -2502,67 +2499,6 @@ func TestUpdateRemoteStateOnOutcome_Move(t *testing.T) {
 	assert.Equal(t, "synced", status)
 }
 
-// --- EscalateToConflict tests (5.7.3) ---
-
-func TestEscalateToConflict_CreatesRecord(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestManager(t)
-	ctx := t.Context()
-
-	driveID := driveid.New("d!esc")
-
-	// Insert a failed remote_state row.
-	_, err := mgr.db.ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		driveID.String(), "item1", "/failing.txt", "file", "download_failed", 1700000000)
-	require.NoError(t, err)
-
-	require.NoError(t, mgr.EscalateToConflict(ctx, driveID, "item1", "/failing.txt", "too many failures"))
-
-	// Verify conflict record exists with sync_failure type.
-	var conflictType, resolution string
-	err = mgr.db.QueryRowContext(ctx,
-		`SELECT conflict_type, resolution FROM conflicts WHERE path = ?`,
-		"/failing.txt").Scan(&conflictType, &resolution)
-	require.NoError(t, err)
-	assert.Equal(t, ConflictSyncFailure, conflictType)
-	assert.Equal(t, ResolutionUnresolved, resolution)
-}
-
-func TestEscalateToConflict_AlongsideExisting(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestManager(t)
-	ctx := t.Context()
-
-	driveID := driveid.New("d!esc2")
-
-	// Insert an existing unresolved conflict at the same path.
-	_, err := mgr.db.ExecContext(ctx,
-		`INSERT INTO conflicts (id, drive_id, item_id, path, conflict_type, detected_at, resolution)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		uuid.New().String(), driveID.String(), "item0", "/failing.txt", ConflictEditEdit, 1700000000, ResolutionUnresolved)
-	require.NoError(t, err)
-
-	// Insert a failed remote_state row.
-	_, err = mgr.db.ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		driveID.String(), "item1", "/failing.txt", "file", "delete_failed", 1700000000)
-	require.NoError(t, err)
-
-	require.NoError(t, mgr.EscalateToConflict(ctx, driveID, "item1", "/failing.txt", "permanent failure"))
-
-	// Should now have 2 conflict records for this path.
-	var count int
-	err = mgr.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM conflicts WHERE path = ?`, "/failing.txt").Scan(&count)
-	require.NoError(t, err)
-	assert.Equal(t, 2, count)
-}
-
 // --- EarliestSyncFailureRetryAt tests (5.7.3) ---
 
 func TestEarliestSyncFailureRetryAt_Empty(t *testing.T) {
@@ -2620,295 +2556,4 @@ func TestEarliestSyncFailureRetryAt_PastRetry(t *testing.T) {
 	retryAt, err := mgr.EarliestSyncFailureRetryAt(ctx, now)
 	require.NoError(t, err)
 	assert.True(t, retryAt.IsZero(), "past retry should not be returned")
-}
-
-// TestMigration00002_SyncFailureRoundTrip verifies that migration 00002's
-// Up/Down correctly manages the 'sync_failure' conflict type and preserves
-// existing data through the table recreation pattern (B-316).
-//
-// Note: The consolidated schema (00001) already includes 'sync_failure',
-// so we test the Down→Up round-trip to verify the migration SQL works
-// correctly and data survives.
-func TestMigration00002_SyncFailureRoundTrip(t *testing.T) {
-	t.Parallel()
-
-	ctx := t.Context()
-	dbPath := filepath.Join(t.TempDir(), "migration.db")
-
-	dsn := fmt.Sprintf(
-		"file:%s?_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)"+
-			"&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)",
-		dbPath,
-	)
-
-	db, err := sql.Open("sqlite", dsn)
-	require.NoError(t, err)
-
-	defer db.Close()
-
-	db.SetMaxOpenConns(1)
-
-	subFS, err := fs.Sub(migrationsFS, "migrations")
-	require.NoError(t, err)
-
-	provider, err := goose.NewProvider(goose.DialectSQLite3, db, subFS)
-	require.NoError(t, err)
-
-	// Step 1: Apply all migrations.
-	_, err = provider.Up(ctx)
-	require.NoError(t, err)
-
-	ver, err := provider.GetDBVersion(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, int64(6), ver)
-
-	// Step 2: Insert seed data — one standard conflict, one sync_failure.
-	_, err = db.ExecContext(ctx,
-		`INSERT INTO conflicts (id, drive_id, path, conflict_type, detected_at, resolution)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"edit-id", "d!abc", "/file.txt", "edit_edit", 1700000000, "unresolved",
-	)
-	require.NoError(t, err)
-
-	_, err = db.ExecContext(ctx,
-		`INSERT INTO conflicts (id, drive_id, path, conflict_type, detected_at, resolution)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"fail-id", "d!abc", "/fail.txt", "sync_failure", 1700000000, "unresolved",
-	)
-	require.NoError(t, err)
-
-	// Step 3: Roll back migrations 00006, 00005, 00004, 00003, 00002.
-	_, err = provider.Down(ctx) // 00006 → 00005
-	require.NoError(t, err)
-
-	_, err = provider.Down(ctx) // 00005 → 00004
-	require.NoError(t, err)
-
-	_, err = provider.Down(ctx) // 00004 → 00003
-	require.NoError(t, err)
-
-	_, err = provider.Down(ctx) // 00003 → 00002
-	require.NoError(t, err)
-
-	_, err = provider.Down(ctx) // 00002 → 00001
-	require.NoError(t, err)
-
-	ver, err = provider.GetDBVersion(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, int64(1), ver)
-
-	// Step 4: The edit_edit row should survive the rollback.
-	var count int
-	err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM conflicts WHERE id = ?`, "edit-id").Scan(&count)
-	require.NoError(t, err)
-	assert.Equal(t, 1, count, "edit_edit conflict should survive rollback")
-
-	// The sync_failure row is excluded by the Down migration's INSERT filter.
-	err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM conflicts WHERE id = ?`, "fail-id").Scan(&count)
-	require.NoError(t, err)
-	assert.Equal(t, 0, count, "sync_failure conflict should be removed by rollback")
-
-	// Step 5: Verify 'sync_failure' is rejected after rollback.
-	_, err = db.ExecContext(ctx,
-		`INSERT INTO conflicts (id, drive_id, path, conflict_type, detected_at, resolution)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"new-fail", "d!abc", "/new.txt", "sync_failure", 1700000000, "unresolved",
-	)
-	require.Error(t, err, "sync_failure should be rejected after rollback")
-	assert.True(t, strings.Contains(err.Error(), "CHECK"), "expected CHECK constraint violation, got: %v", err)
-
-	// Step 6: Re-apply migration 00002.
-	_, err = provider.UpByOne(ctx)
-	require.NoError(t, err)
-
-	// Step 7: Verify 'sync_failure' is accepted again.
-	_, err = db.ExecContext(ctx,
-		`INSERT INTO conflicts (id, drive_id, path, conflict_type, detected_at, resolution)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"restored-id", "d!abc", "/restored.txt", "sync_failure", 1700000000, "unresolved",
-	)
-	require.NoError(t, err, "sync_failure should be accepted after re-applying migration 00002")
-
-	// Step 8: Verify the edit_edit seed survived the full round-trip.
-	err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM conflicts WHERE id = ?`, "edit-id").Scan(&count)
-	require.NoError(t, err)
-	assert.Equal(t, 1, count, "edit_edit conflict should survive full round-trip")
-}
-
-// TestMigration00006_DropDeadFailureColumns verifies that migration 00006
-// removes the dead failure columns (failure_count, next_retry_at, last_error,
-// http_status) from remote_state without losing data, and that the rollback
-// restores them (B-336).
-func TestMigration00006_DropDeadFailureColumns(t *testing.T) {
-	t.Parallel()
-
-	ctx := t.Context()
-	dbPath := filepath.Join(t.TempDir(), "migration.db")
-
-	dsn := fmt.Sprintf(
-		"file:%s?_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)"+
-			"&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)",
-		dbPath,
-	)
-
-	db, err := sql.Open("sqlite", dsn)
-	require.NoError(t, err)
-
-	defer db.Close()
-
-	db.SetMaxOpenConns(1)
-
-	subFS, err := fs.Sub(migrationsFS, "migrations")
-	require.NoError(t, err)
-
-	provider, err := goose.NewProvider(goose.DialectSQLite3, db, subFS)
-	require.NoError(t, err)
-
-	// Step 1: Apply migrations up to 00005 (before the new migration).
-	for range 5 {
-		_, err = provider.UpByOne(ctx)
-		require.NoError(t, err)
-	}
-
-	// Step 2: Insert seed data with failure columns populated.
-	_, err = db.ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status,
-		 observed_at, failure_count, next_retry_at, last_error, http_status)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"d!abc", "item1", "/file.txt", "file", "download_failed",
-		1700000000, 3, 1700001000, "server error", 500,
-	)
-	require.NoError(t, err)
-
-	_, err = db.ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status,
-		 observed_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"d!abc", "item2", "/clean.txt", "file", "synced", 1700000000,
-	)
-	require.NoError(t, err)
-
-	// Verify dead columns exist before migration.
-	assert.True(t, remoteStateColumnExists(t, db, "failure_count"),
-		"failure_count should exist before migration")
-	assert.True(t, remoteStateColumnExists(t, db, "next_retry_at"),
-		"next_retry_at should exist before migration")
-	assert.True(t, remoteStateColumnExists(t, db, "last_error"),
-		"last_error should exist before migration")
-	assert.True(t, remoteStateColumnExists(t, db, "http_status"),
-		"http_status should exist before migration")
-
-	// Step 3: Apply migration 00006.
-	_, err = provider.UpByOne(ctx)
-	require.NoError(t, err)
-
-	ver, err := provider.GetDBVersion(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, int64(6), ver)
-
-	// Step 4: Verify dead columns are gone.
-	assert.False(t, remoteStateColumnExists(t, db, "failure_count"),
-		"failure_count should not exist after migration")
-	assert.False(t, remoteStateColumnExists(t, db, "next_retry_at"),
-		"next_retry_at should not exist after migration")
-	assert.False(t, remoteStateColumnExists(t, db, "last_error"),
-		"last_error should not exist after migration")
-	assert.False(t, remoteStateColumnExists(t, db, "http_status"),
-		"http_status should not exist after migration")
-
-	// Step 5: Verify data survived the rebuild.
-	var (
-		driveID, itemID, path, itemType, syncStatus string
-		observedAt                                  int64
-	)
-
-	err = db.QueryRowContext(ctx,
-		`SELECT drive_id, item_id, path, item_type, sync_status, observed_at
-		 FROM remote_state WHERE item_id = ?`, "item1",
-	).Scan(&driveID, &itemID, &path, &itemType, &syncStatus, &observedAt)
-	require.NoError(t, err)
-	assert.Equal(t, "d!abc", driveID)
-	assert.Equal(t, "/file.txt", path)
-	assert.Equal(t, "download_failed", syncStatus)
-	assert.Equal(t, int64(1700000000), observedAt)
-
-	// Second row also survived.
-	err = db.QueryRowContext(ctx,
-		`SELECT path, sync_status FROM remote_state WHERE item_id = ?`, "item2",
-	).Scan(&path, &syncStatus)
-	require.NoError(t, err)
-	assert.Equal(t, "/clean.txt", path)
-	assert.Equal(t, "synced", syncStatus)
-
-	// Step 6: Verify indexes survived the rebuild.
-	assert.True(t, indexExists(t, db, "idx_remote_state_status"),
-		"status index should survive rebuild")
-	assert.True(t, indexExists(t, db, "idx_remote_state_parent"),
-		"parent index should survive rebuild")
-	assert.True(t, indexExists(t, db, "idx_remote_state_active_path"),
-		"active path index should survive rebuild")
-
-	// Step 7: Roll back migration 00006.
-	_, err = provider.Down(ctx)
-	require.NoError(t, err)
-
-	ver, err = provider.GetDBVersion(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, int64(5), ver)
-
-	// Step 8: Verify dead columns are restored.
-	assert.True(t, remoteStateColumnExists(t, db, "failure_count"),
-		"failure_count should be restored after rollback")
-	assert.True(t, remoteStateColumnExists(t, db, "next_retry_at"),
-		"next_retry_at should be restored after rollback")
-
-	// Step 9: Verify data survived the round-trip.
-	err = db.QueryRowContext(ctx,
-		`SELECT path, sync_status FROM remote_state WHERE item_id = ?`, "item1",
-	).Scan(&path, &syncStatus)
-	require.NoError(t, err)
-	assert.Equal(t, "/file.txt", path)
-	assert.Equal(t, "download_failed", syncStatus)
-}
-
-// remoteStateColumnExists checks whether a column exists in the remote_state table.
-func remoteStateColumnExists(t *testing.T, db *sql.DB, column string) bool {
-	t.Helper()
-
-	rows, err := db.QueryContext(t.Context(), "PRAGMA table_info(remote_state)")
-	require.NoError(t, err)
-	defer rows.Close()
-
-	for rows.Next() {
-		var cid int
-		var name, colType string
-		var notNull, pk int
-		var dfltValue sql.NullString
-
-		err := rows.Scan(&cid, &name, &colType, &notNull, &dfltValue, &pk)
-		require.NoError(t, err)
-
-		if name == column {
-			return true
-		}
-	}
-
-	require.NoError(t, rows.Err())
-
-	return false
-}
-
-// indexExists checks whether an index exists in a SQLite database.
-func indexExists(t *testing.T, db *sql.DB, indexName string) bool {
-	t.Helper()
-
-	var count int
-
-	err := db.QueryRowContext(t.Context(),
-		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?`,
-		indexName,
-	).Scan(&count)
-	require.NoError(t, err)
-
-	return count > 0
 }

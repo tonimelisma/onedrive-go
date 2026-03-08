@@ -107,7 +107,6 @@ var (
 	_ ObservationWriter   = (*SyncStore)(nil)
 	_ OutcomeWriter       = (*SyncStore)(nil)
 	_ FailureRecorder     = (*SyncStore)(nil)
-	_ ConflictEscalator   = (*SyncStore)(nil)
 	_ StateReader         = (*SyncStore)(nil)
 	_ StateAdmin          = (*SyncStore)(nil)
 	_ SyncFailureRecorder = (*SyncStore)(nil)
@@ -887,19 +886,19 @@ func (m *SyncStore) Checkpoint(ctx context.Context, retention time.Duration) err
 		return fmt.Errorf("prune deleted remote_state: %w", err)
 	}
 
-	// Permanent failures are kept for user visibility but pruned after retention
+	// Actionable failures are kept for user visibility but pruned after retention
 	// to prevent unbounded growth of stale entries.
 	if _, err := m.db.ExecContext(ctx,
-		`DELETE FROM sync_failures WHERE category = 'permanent' AND last_seen_at < ?`,
+		`DELETE FROM sync_failures WHERE category = 'actionable' AND last_seen_at < ?`,
 		cutoff); err != nil {
-		return fmt.Errorf("prune permanent sync_failures: %w", err)
+		return fmt.Errorf("prune actionable sync_failures: %w", err)
 	}
 
 	return nil
 }
 
 // Close checkpoints the WAL and closes the underlying database connection.
-// The explicit checkpoint ensures cross-process readers (e.g., `conflicts
+// The explicit checkpoint ensures cross-process readers (e.g., `issues
 // --history` after `sync`) see all committed data when they open a new
 // connection to the same database file.
 func (m *SyncStore) Close() error {
@@ -1362,44 +1361,6 @@ func (m *SyncStore) ResetInProgressStates(ctx context.Context, syncRoot string) 
 	return nil
 }
 
-// EscalateToConflict creates a sync_failure conflict record for an item that
-// has exceeded the retry threshold. The row stays in its *_failed state;
-// retry scheduling is managed by the sync_failures table.
-func (m *SyncStore) EscalateToConflict(ctx context.Context, driveID driveid.ID, itemID, conflictPath, reason string) error {
-	tx, err := m.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("sync: beginning escalation transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	conflictID := uuid.New().String()
-	detectedAt := m.nowFunc().UnixNano()
-
-	_, err = tx.ExecContext(ctx, sqlInsertConflict,
-		conflictID, driveID.String(),
-		nullString(itemID),
-		conflictPath, ConflictSyncFailure, detectedAt,
-		sql.NullString{}, sql.NullString{}, // no local/remote hash for sync failures
-		sql.NullInt64{}, sql.NullInt64{}, // no local/remote mtime
-		ResolutionUnresolved, sql.NullInt64{}, sql.NullString{},
-	)
-	if err != nil {
-		return fmt.Errorf("sync: inserting sync_failure conflict for %s: %w", conflictPath, err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing escalation for %s: %w", conflictPath, err)
-	}
-
-	m.logger.Info("escalated to conflict",
-		slog.String("path", conflictPath),
-		slog.String("conflict_id", conflictID),
-		slog.String("reason", reason),
-	)
-
-	return nil
-}
-
 // SetDispatchStatus transitions a remote_state row from pending/failed to
 // in-progress before the action is dispatched to the worker pool. Uses
 // optimistic concurrency: only updates if the current status is valid for
@@ -1547,8 +1508,8 @@ func nullInt64(n int64) sql.NullInt64 {
 // SyncFailureRecorder methods
 // ---------------------------------------------------------------------------
 
-// isPermanentIssue returns true for issue types that should never be retried.
-func isPermanentIssue(issueType string) bool {
+// isActionableIssue returns true for issue types that require user action and should not be retried.
+func isActionableIssue(issueType string) bool {
 	switch issueType {
 	case IssueInvalidFilename, IssuePathTooLong, IssueFileTooLarge:
 		return true
@@ -1559,7 +1520,7 @@ func isPermanentIssue(issueType string) bool {
 
 // RecordSyncFailure persists or updates a failure in sync_failures.
 // On repeat failures for the same (path, drive_id), increments failure_count
-// and updates last_seen_at. Permanent issue types get category='permanent'
+// and updates last_seen_at. Actionable issue types get category='actionable'
 // with no retry. Transient failures use exponential backoff for next_retry_at.
 func (m *SyncStore) RecordSyncFailure(
 	ctx context.Context, path string, driveID driveid.ID, direction, issueType, errMsg string,
@@ -1569,8 +1530,8 @@ func (m *SyncStore) RecordSyncFailure(
 	nowNano := now.UnixNano()
 
 	category := strTransient
-	if isPermanentIssue(issueType) {
-		category = strPermanent
+	if isActionableIssue(issueType) {
+		category = strActionable
 	}
 
 	// Read current failure_count for backoff calculation (0 if new row).
@@ -1581,9 +1542,9 @@ func (m *SyncStore) RecordSyncFailure(
 		path, driveID.String(),
 	).Scan(&currentFailures)
 
-	// Compute next_retry_at for transient issues; NULL for permanent.
+	// Compute next_retry_at for transient issues; NULL for actionable.
 	var nextRetryNano *int64
-	if category != strPermanent {
+	if category != strActionable {
 		retryAt := computeNextRetry(now, currentFailures)
 		nanos := retryAt.UnixNano()
 		nextRetryNano = &nanos
@@ -1638,7 +1599,27 @@ func (m *SyncStore) ListSyncFailures(ctx context.Context) ([]SyncFailureRow, err
 	return scanSyncFailureRows(rows)
 }
 
-// ClearSyncFailure removes sync_failures rows for the given path. If driveID
+// ListActionableFailures returns sync_failures rows where category is actionable.
+// Used by the issues command to show user-actionable file issues.
+func (m *SyncStore) ListActionableFailures(ctx context.Context) ([]SyncFailureRow, error) {
+	rows, err := m.db.QueryContext(ctx,
+		`SELECT path, drive_id, direction, category,
+			COALESCE(issue_type, ''), COALESCE(item_id, ''),
+			failure_count, COALESCE(next_retry_at, 0),
+			COALESCE(last_error, ''), COALESCE(http_status, 0),
+			first_seen_at, last_seen_at,
+			COALESCE(file_size, 0), COALESCE(local_hash, '')
+		FROM sync_failures
+		WHERE category = 'actionable'
+		ORDER BY last_seen_at DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing actionable sync failures: %w", err)
+	}
+	defer rows.Close()
+
+	return scanSyncFailureRows(rows)
+}
+
 // ClearSyncFailure removes a specific sync_failures row by path and drive.
 func (m *SyncStore) ClearSyncFailure(ctx context.Context, path string, driveID driveid.ID) error {
 	_, err := m.db.ExecContext(ctx,
@@ -1663,10 +1644,10 @@ func (m *SyncStore) ClearSyncFailureByPath(ctx context.Context, path string) err
 	return nil
 }
 
-// ClearResolvedSyncFailures removes all permanent sync_failures rows.
-func (m *SyncStore) ClearResolvedSyncFailures(ctx context.Context) error {
+// ClearActionableSyncFailures removes all actionable sync_failures rows.
+func (m *SyncStore) ClearActionableSyncFailures(ctx context.Context) error {
 	_, err := m.db.ExecContext(ctx,
-		`DELETE FROM sync_failures WHERE category = 'permanent'`)
+		`DELETE FROM sync_failures WHERE category = 'actionable'`)
 	if err != nil {
 		return fmt.Errorf("sync: clearing resolved sync failures: %w", err)
 	}
@@ -1674,16 +1655,15 @@ func (m *SyncStore) ClearResolvedSyncFailures(ctx context.Context) error {
 	return nil
 }
 
-// MarkSyncFailurePermanent sets a sync_failures row to category='permanent'
-// and clears its next_retry_at. Used by the failure retrier when a
-// transient issue exceeds the escalation threshold.
-func (m *SyncStore) MarkSyncFailurePermanent(ctx context.Context, path string, driveID driveid.ID) error {
+// MarkSyncFailureActionable sets a sync_failures row to category='actionable'
+// and clears its next_retry_at.
+func (m *SyncStore) MarkSyncFailureActionable(ctx context.Context, path string, driveID driveid.ID) error {
 	_, err := m.db.ExecContext(ctx,
-		`UPDATE sync_failures SET category = 'permanent', next_retry_at = NULL
+		`UPDATE sync_failures SET category = 'actionable', next_retry_at = NULL
 		WHERE path = ? AND drive_id = ?`,
 		path, driveID.String())
 	if err != nil {
-		return fmt.Errorf("sync: marking sync failure permanent for %s: %w", path, err)
+		return fmt.Errorf("sync: marking sync failure actionable for %s: %w", path, err)
 	}
 
 	return nil

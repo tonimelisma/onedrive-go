@@ -332,7 +332,7 @@ func TestBuildStatusAccountsWith_SyncStatePopulated(t *testing.T) {
 		LastSyncTime:     "2026-03-02T10:30:00Z",
 		LastSyncDuration: "1500",
 		FileCount:        45,
-		Conflicts:        2,
+		Issues:           2,
 	}
 
 	accounts := buildStatusAccountsWith(cfg,
@@ -349,7 +349,7 @@ func TestBuildStatusAccountsWith_SyncStatePopulated(t *testing.T) {
 	assert.Equal(t, "2026-03-02T10:30:00Z", ss.LastSyncTime)
 	assert.Equal(t, "1500", ss.LastSyncDuration)
 	assert.Equal(t, 45, ss.FileCount)
-	assert.Equal(t, 2, ss.Conflicts)
+	assert.Equal(t, 2, ss.Issues)
 }
 
 func TestBuildStatusAccountsWith_NilSyncState(t *testing.T) {
@@ -392,7 +392,7 @@ func TestQuerySyncState_EmptyDB(t *testing.T) {
 	require.NotNil(t, info)
 	assert.Empty(t, info.LastSyncTime)
 	assert.Equal(t, 0, info.FileCount)
-	assert.Equal(t, 0, info.Conflicts)
+	assert.Equal(t, 0, info.Issues)
 }
 
 func TestQuerySyncState_WithMetadata(t *testing.T) {
@@ -435,7 +435,7 @@ func TestQuerySyncState_WithMetadata(t *testing.T) {
 	assert.Equal(t, "1500", info.LastSyncDuration)
 	assert.Empty(t, info.LastError)
 	assert.Equal(t, 1, info.FileCount)
-	assert.Equal(t, 1, info.Conflicts)
+	assert.Equal(t, 1, info.Issues) // 1 conflict = 1 issue
 }
 
 func TestQuerySyncState_PendingSyncAndIssues(t *testing.T) {
@@ -463,17 +463,18 @@ func TestQuerySyncState_PendingSyncAndIssues(t *testing.T) {
 
 	// Insert sync_failures rows.
 	_, err = db.ExecContext(ctx, `INSERT INTO sync_failures (path, drive_id, direction, category, failure_count, first_seen_at, last_seen_at) VALUES
-		('/x.txt', 'd!1', 'upload', 'transient', 1, 0, 0),
-		('/y.txt', 'd!1', 'upload', 'transient', 2, 0, 0),
-		('/z.txt', 'd!1', 'upload', 'permanent', 1, 0, 0)`)
+		('/x.txt', 'd!1', 'upload', 'transient', 3, 0, 0),
+		('/y.txt', 'd!1', 'upload', 'transient', 5, 0, 0),
+		('/z.txt', 'd!1', 'upload', 'actionable', 1, 0, 0)`)
 	require.NoError(t, err)
 
 	db.Close()
 
 	info := querySyncState(dbPath, logger)
 	require.NotNil(t, info)
-	assert.Equal(t, 2, info.PendingSync)  // pending_download + download_failed
-	assert.Equal(t, 2, info.SyncFailures) // 2 transient failures (not permanent)
+	assert.Equal(t, 2, info.PendingSync) // pending_download + download_failed
+	assert.Equal(t, 1, info.Issues)      // 1 actionable failure
+	assert.Equal(t, 2, info.Retrying)    // 2 transient with failure_count >= 3
 }
 
 func TestComputeSummary_Mixed(t *testing.T) {
@@ -482,7 +483,7 @@ func TestComputeSummary_Mixed(t *testing.T) {
 	accounts := []statusAccount{
 		{
 			Drives: []statusDrive{
-				{State: driveStateReady, SyncState: &syncStateInfo{Conflicts: 3}},
+				{State: driveStateReady, SyncState: &syncStateInfo{Issues: 3}},
 				{State: driveStatePaused},
 			},
 		},
@@ -490,7 +491,7 @@ func TestComputeSummary_Mixed(t *testing.T) {
 			Drives: []statusDrive{
 				{State: driveStateNoToken},
 				{State: driveStateNeedsSetup},
-				{State: driveStateReady, SyncState: &syncStateInfo{Conflicts: 1}},
+				{State: driveStateReady, SyncState: &syncStateInfo{Issues: 1}},
 			},
 		},
 	}
@@ -501,7 +502,7 @@ func TestComputeSummary_Mixed(t *testing.T) {
 	assert.Equal(t, 1, s.Paused)
 	assert.Equal(t, 1, s.NeedsSetup)
 	assert.Equal(t, 1, s.NoToken)
-	assert.Equal(t, 4, s.TotalConflicts)
+	assert.Equal(t, 4, s.TotalIssues)
 }
 
 func TestComputeSummary_Empty(t *testing.T) {
@@ -509,7 +510,7 @@ func TestComputeSummary_Empty(t *testing.T) {
 
 	s := computeSummary(nil)
 	assert.Equal(t, 0, s.TotalDrives)
-	assert.Equal(t, 0, s.TotalConflicts)
+	assert.Equal(t, 0, s.TotalIssues)
 }
 
 // --- printStatusJSON ---
@@ -539,7 +540,7 @@ func TestPrintStatusJSON_WithAccounts(t *testing.T) {
 					CanonicalID: "personal:alice@example.com",
 					SyncDir:     "~/OneDrive",
 					State:       driveStateReady,
-					SyncState:   &syncStateInfo{FileCount: 10, Conflicts: 1},
+					SyncState:   &syncStateInfo{FileCount: 10, Issues: 1},
 				},
 			},
 		},
@@ -682,12 +683,12 @@ func TestPrintSummaryText_AllStates(t *testing.T) {
 	t.Parallel()
 
 	s := statusSummary{
-		TotalDrives:    5,
-		Ready:          2,
-		Paused:         1,
-		NeedsSetup:     1,
-		NoToken:        1,
-		TotalConflicts: 3,
+		TotalDrives: 5,
+		Ready:       2,
+		Paused:      1,
+		NeedsSetup:  1,
+		NoToken:     1,
+		TotalIssues: 3,
 	}
 
 	var buf bytes.Buffer
@@ -699,18 +700,18 @@ func TestPrintSummaryText_AllStates(t *testing.T) {
 	assert.Contains(t, output, "1 paused")
 	assert.Contains(t, output, "1 needs setup")
 	assert.Contains(t, output, "1 no token")
-	assert.Contains(t, output, "3 unresolved conflicts")
+	assert.Contains(t, output, "3 issues")
 }
 
-func TestPrintSummaryText_WithPendingAndIssues(t *testing.T) {
+func TestPrintSummaryText_WithPendingAndRetrying(t *testing.T) {
 	t.Parallel()
 
 	s := statusSummary{
-		TotalDrives:       2,
-		Ready:             2,
-		TotalConflicts:    1,
-		TotalPendingSync:  5,
-		TotalSyncFailures: 3,
+		TotalDrives:      2,
+		Ready:            2,
+		TotalIssues:      1,
+		TotalPendingSync: 5,
+		TotalRetrying:    3,
 	}
 
 	var buf bytes.Buffer
@@ -718,7 +719,7 @@ func TestPrintSummaryText_WithPendingAndIssues(t *testing.T) {
 
 	output := buf.String()
 	assert.Contains(t, output, "5 pending")
-	assert.Contains(t, output, "3 sync failures")
+	assert.Contains(t, output, "3 retrying")
 }
 
 func TestPrintSyncStateText_WithPendingAndIssues(t *testing.T) {
@@ -727,34 +728,34 @@ func TestPrintSyncStateText_WithPendingAndIssues(t *testing.T) {
 	ss := &syncStateInfo{
 		LastSyncTime: "2026-03-02T10:30:00Z",
 		FileCount:    45,
-		Conflicts:    0,
+		Issues:       0,
 		PendingSync:  3,
-		SyncFailures: 2,
+		Retrying:     2,
 	}
 
 	var buf bytes.Buffer
 	printSyncStateText(&buf, ss)
 
 	output := buf.String()
-	assert.Contains(t, output, "3 items")
-	assert.Contains(t, output, "2 sync failures")
+	assert.Contains(t, output, "Pending:   3 items")
+	assert.Contains(t, output, "Retrying:  2 items")
 }
 
-func TestComputeSummary_AggregatesPendingAndIssues(t *testing.T) {
+func TestComputeSummary_AggregatesPendingAndRetrying(t *testing.T) {
 	t.Parallel()
 
 	accounts := []statusAccount{
 		{
 			Drives: []statusDrive{
-				{State: driveStateReady, SyncState: &syncStateInfo{PendingSync: 3, SyncFailures: 1}},
-				{State: driveStateReady, SyncState: &syncStateInfo{PendingSync: 2, SyncFailures: 4}},
+				{State: driveStateReady, SyncState: &syncStateInfo{PendingSync: 3, Retrying: 1}},
+				{State: driveStateReady, SyncState: &syncStateInfo{PendingSync: 2, Retrying: 4}},
 			},
 		},
 	}
 
 	s := computeSummary(accounts)
 	assert.Equal(t, 5, s.TotalPendingSync)
-	assert.Equal(t, 5, s.TotalSyncFailures)
+	assert.Equal(t, 5, s.TotalRetrying)
 }
 
 // createTestStateDB creates a minimal SQLite DB with tables matching the sync schema.
@@ -818,7 +819,7 @@ func createTestStateDB(t *testing.T, dbPath string) {
 			path TEXT NOT NULL,
 			drive_id TEXT NOT NULL,
 			direction TEXT NOT NULL CHECK(direction IN ('download', 'upload', 'delete')),
-			category TEXT NOT NULL CHECK(category IN ('transient', 'permanent')),
+			category TEXT NOT NULL CHECK(category IN ('transient', 'actionable')),
 			issue_type TEXT,
 			item_id TEXT,
 			failure_count INTEGER NOT NULL DEFAULT 0,

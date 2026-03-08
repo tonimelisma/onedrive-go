@@ -251,10 +251,10 @@ func newRootCmd() *cobra.Command {
 		newLoginCmd(), newLogoutCmd(), newWhoamiCmd(), newStatusCmd(),
 		newDriveCmd(), newLsCmd(), newGetCmd(), newPutCmd(),
 		newRmCmd(), newMkdirCmd(), newStatCmd(), newSyncCmd(),
-		newPauseCmd(), newResumeCmd(), newConflictsCmd(), newFailuresCmd(),
+		newPauseCmd(), newResumeCmd(), newIssuesCmd(),
 		newVerifyCmd(), newMvCmd(), newCpCmd(),
 		newRecycleBinCmd(),
-		newIssuesCmd(), newResolveCmd(), // hidden backward-compat aliases
+		newConflictsCmd(), newFailuresCmd(), newResolveCmd(), // hidden backward-compat aliases
 	)
 
 	return cmd
