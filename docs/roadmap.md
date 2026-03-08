@@ -723,8 +723,8 @@ Graph API + shortcut detection + multi-scope observation + cross-drive execution
 | 7.3 | DONE | `login --browser` (PKCE + localhost callback), `logout --purge` |
 | 7.4 | DONE | `--drive` fuzzy matching, `--account` flag, `--drive` repeatable for sync. |
 | 7.5 | FUTURE | Transfer progress bars (mpb library) |
-| 7.6 | FUTURE | Structured JSON logging (`log_format` config) |
-| 7.7 | FUTURE | Recycle bin commands (`recycle-bin list/empty/restore`) |
+| 7.6 | DONE | Structured JSON logging (`log_file` + `log_retention_days` config, dual console/file output) |
+| 7.7 | DONE | Recycle bin commands (`recycle-bin list/restore/empty`) |
 | 7.8 | FUTURE | Conflict path filtering (`conflicts --path`, `resolve --path`) |
 
 ---
