@@ -228,7 +228,7 @@ After each increment, run through this entire checklist. If something fails, fix
     - `LEARNINGS.md` — read for patterns and gotchas, add new institutional knowledge
     - `docs/roadmap.md` — check current phase status, update on completion
     - `docs/design/` — update relevant design docs if design changed
-8. [ ] **Push and CI green**: Push branch, open PR with `gh pr create`, then enable auto-merge with `gh pr merge --auto --squash --delete-branch`. Branch protection requires all 4 CI jobs (lint, test, integration, e2e) to pass before merge. CI runs on PRs only — push-to-main is skipped for PR merges (squash commits containing `(#NNN)`). Direct pushes, schedule, and dispatch still trigger CI. Monitor with `gh pr checks <pr_number> --watch`
+8. [ ] **Push and CI green**: Push branch, open PR with `gh pr create`, then enable auto-merge with `gh pr merge --auto --squash --delete-branch`. Branch protection requires all 4 CI jobs (lint, test, integration, e2e) to pass before merge (`enforce_admins=true`, no direct pushes). Push-to-main CI is automatically skipped since all main commits come from PR merges. Schedule and dispatch still trigger CI. Monitor with `gh pr checks <pr_number> --watch`
 9. [ ] **Cleanup**: Clean `git status`. Remove the current worktree after merge. Then, **from the root repo** (not the worktree), prune stale remote-tracking branches and pull main forward:
     ```bash
     cd /Users/tonimelisma/Development/onedrive-go

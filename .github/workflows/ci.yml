@@ -21,7 +21,9 @@ permissions:
 jobs:
   # --- Always-run jobs (including fork PRs) ---
   # Skip push-to-main for PR merges (squash commits contain "(#NNN)").
-  # Direct pushes, schedule, and dispatch still run. PRs always run.
+  # All main commits go through PRs (branch protection enforces this),
+  # so push-to-main CI is effectively always skipped. Schedule and
+  # dispatch still trigger all jobs.
 
   lint:
     runs-on: ubuntu-latest
