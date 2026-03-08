@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"path/filepath"
@@ -25,6 +26,12 @@ type permissionCache struct {
 
 func newPermissionCache() *permissionCache {
 	return &permissionCache{cache: make(map[string]bool)}
+}
+
+// reset clears all cached entries. Called at the start of each sync cycle
+// to prevent stale entries from persisting when permissions change.
+func (pc *permissionCache) reset() {
+	pc.cache = make(map[string]bool)
 }
 
 func (pc *permissionCache) get(folderPath string) (canWrite bool, ok bool) {
@@ -66,30 +73,26 @@ func (e *Engine) handle403(ctx context.Context, failedPath string, shortcuts []S
 	remoteDriveID := driveid.New(sc.RemoteDrive)
 
 	// Resolve the parent folder's remote item ID from baseline.
+	// If not in baseline (e.g., brand-new local file), fall back to the
+	// shortcut root. This means the boundary walk won't find intermediate
+	// read-only folders for brand-new content, but will still correctly
+	// suppress at the shortcut root level.
 	parentFolder := filepath.Dir(failedPath)
 	parentItemID := e.resolveRemoteItemID(parentFolder, remoteDriveID)
 
 	if parentItemID == "" {
-		e.logger.Warn("handle403: cannot resolve remote item ID for parent folder",
-			slog.String("path", parentFolder),
-		)
-
-		return
+		parentFolder = sc.LocalPath
+		parentItemID = sc.RemoteItem
 	}
 
 	// Query permissions on the parent folder.
 	perms, err := e.permChecker.ListItemPermissions(ctx, remoteDriveID, parentItemID)
 	if err != nil {
-		e.logger.Warn("handle403: permission check failed, not suppressing",
-			slog.String("path", failedPath),
-			slog.String("error", err.Error()),
-		)
-
+		e.handlePermissionCheckError(ctx, err, failedPath, parentFolder)
 		return
 	}
 
 	if graph.HasWriteAccess(perms) {
-		// Transient 403 — folder is writable. Don't suppress.
 		e.logger.Debug("handle403: transient 403, folder is writable",
 			slog.String("path", failedPath),
 		)
@@ -97,8 +100,60 @@ func (e *Engine) handle403(ctx context.Context, failedPath string, shortcuts []S
 		return
 	}
 
-	// Folder is read-only. Walk UP to find the permission boundary.
-	boundary := parentFolder
+	// Folder is read-only. Walk up to find the highest read-only ancestor.
+	boundary := e.walkPermissionBoundary(ctx, parentFolder, sc, remoteDriveID)
+
+	// Record ONE issue for the boundary folder.
+	if issueErr := e.baseline.RecordLocalIssue(
+		ctx, boundary, IssuePermissionDenied,
+		"folder is read-only (no write access)", http.StatusForbidden, 0, "",
+	); issueErr != nil {
+		e.logger.Warn("handle403: failed to record permission issue",
+			slog.String("path", boundary),
+			slog.String("error", issueErr.Error()),
+		)
+	}
+
+	e.logger.Info("handle403: read-only folder detected, writes suppressed",
+		slog.String("boundary", boundary),
+		slog.String("trigger_path", failedPath),
+	)
+}
+
+// handlePermissionCheckError handles errors from ListItemPermissions during
+// 403 processing. If the item is not found (404), records a permission issue
+// to prevent infinite retries. Otherwise logs a warning and does not suppress.
+func (e *Engine) handlePermissionCheckError(ctx context.Context, err error, failedPath, parentFolder string) {
+	if errors.Is(err, graph.ErrNotFound) {
+		e.logger.Warn("handle403: folder not found, recording as permission denied",
+			slog.String("path", parentFolder),
+		)
+
+		if issueErr := e.baseline.RecordLocalIssue(
+			ctx, parentFolder, IssuePermissionDenied,
+			"folder not found on remote (deleted or inaccessible)", http.StatusNotFound, 0, "",
+		); issueErr != nil {
+			e.logger.Warn("handle403: failed to record issue for missing folder",
+				slog.String("path", parentFolder),
+				slog.String("error", issueErr.Error()),
+			)
+		}
+
+		return
+	}
+
+	e.logger.Warn("handle403: permission check failed, not suppressing",
+		slog.String("path", failedPath),
+		slog.String("error", err.Error()),
+	)
+}
+
+// walkPermissionBoundary walks UP the folder hierarchy to find the highest
+// read-only ancestor. Returns the boundary folder path.
+func (e *Engine) walkPermissionBoundary(
+	ctx context.Context, startFolder string, sc *Shortcut, remoteDriveID driveid.ID,
+) string {
+	boundary := startFolder
 
 	for boundary != sc.LocalPath && boundary != "." && boundary != "" {
 		parent := filepath.Dir(boundary)
@@ -117,27 +172,13 @@ func (e *Engine) handle403(ctx context.Context, failedPath string, shortcuts []S
 		}
 
 		if graph.HasWriteAccess(parentPerms) {
-			break // parent is writable, boundary stays
+			break
 		}
 
 		boundary = parent
 	}
 
-	// Record ONE issue for the boundary folder.
-	if issueErr := e.baseline.RecordLocalIssue(
-		ctx, boundary, IssuePermissionDenied,
-		"folder is read-only (no write access)", http.StatusForbidden, 0, "",
-	); issueErr != nil {
-		e.logger.Warn("handle403: failed to record permission issue",
-			slog.String("path", boundary),
-			slog.String("error", issueErr.Error()),
-		)
-	}
-
-	e.logger.Info("handle403: read-only folder detected, writes suppressed",
-		slog.String("boundary", boundary),
-		slog.String("trigger_path", failedPath),
-	)
+	return boundary
 }
 
 // resolveRemoteItemID looks up the remote item ID for a local path from the
@@ -168,6 +209,10 @@ func (e *Engine) recheckPermissions(ctx context.Context, shortcuts []Shortcut) {
 		return
 	}
 
+	// Reset the in-memory cache at the start of each cycle to prevent
+	// stale entries from persisting when permissions change.
+	e.permCache.reset()
+
 	issues, err := e.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
 	if err != nil || len(issues) == 0 {
 		return
@@ -193,7 +238,10 @@ func (e *Engine) recheckPermissions(ctx context.Context, shortcuts []Shortcut) {
 			continue
 		}
 
-		if graph.HasWriteAccess(perms) {
+		canWrite := graph.HasWriteAccess(perms)
+		e.permCache.set(issue.Path, canWrite)
+
+		if canWrite {
 			if clearErr := e.baseline.ClearLocalIssue(ctx, issue.Path); clearErr != nil {
 				e.logger.Warn("recheckPermissions: failed to clear issue",
 					slog.String("path", issue.Path),

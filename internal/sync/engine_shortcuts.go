@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	stdsync "sync"
 	"time"
@@ -208,10 +209,15 @@ func detectShortcutCollisionsFromList(shortcuts []Shortcut, bl *Baseline, logger
 	}
 
 	// Check shortcut-vs-shortcut: duplicate source folder.
-	sources := make(map[string]string, len(shortcuts)) // "remoteDrive:remoteItem" → itemID
+	// Sort by ItemID for deterministic winner selection (lowest ID wins).
+	sorted := make([]Shortcut, len(shortcuts))
+	copy(sorted, shortcuts)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].ItemID < sorted[j].ItemID })
 
-	for i := range shortcuts {
-		sc := &shortcuts[i]
+	sources := make(map[string]string, len(sorted)) // "remoteDrive:remoteItem" → itemID
+
+	for i := range sorted {
+		sc := &sorted[i]
 		if collisions[sc.ItemID] {
 			continue
 		}

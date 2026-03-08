@@ -11,7 +11,7 @@ import (
 // driveItemResponse, then calls toItem(). Verifies no panics from nil
 // pointer dereferences in the normalization logic.
 func FuzzDriveItemUnmarshal(f *testing.F) {
-	// Seed corpus: representative API responses.
+	// Seed corpus: representative API responses including real quirks from ci_issues.md.
 	f.Add([]byte(`{"id":"abc","name":"test.txt","size":100}`))
 	f.Add([]byte(`{"id":"x","name":"folder","folder":{"childCount":5},"root":{}}`))
 	f.Add([]byte(`{"id":"y","name":"deleted","deleted":{}}`))
@@ -19,6 +19,16 @@ func FuzzDriveItemUnmarshal(f *testing.F) {
 	f.Add([]byte(`{"id":"","name":"","size":-1,"file":{"hashes":{"quickXorHash":"abc"}}}`))
 	f.Add([]byte(`{}`))
 	f.Add([]byte(`null`))
+	// ci_issues §3: null hashes object.
+	f.Add([]byte(`{"id":"a","name":"f.txt","file":{"hashes":null}}`))
+	// ci_issues §5: zero-byte file with hash.
+	f.Add([]byte(`{"id":"b","name":"empty.txt","size":0,"file":{"hashes":{"quickXorHash":"AAAAAAAAAAAAAAAAAAAAAAAAAAA="}}}`))
+	// ci_issues §8: package facet (OneNote).
+	f.Add([]byte(`{"id":"c","name":"notebook","package":{},"folder":{"childCount":2}}`))
+	// Large size field.
+	f.Add([]byte(`{"id":"d","name":"big.zip","size":10737418240,"file":{"hashes":{"quickXorHash":"xyz="}}}`))
+	// Shared facet.
+	f.Add([]byte(`{"id":"e","name":"shared.txt","shared":{"scope":"users"},"file":{}}`))
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
