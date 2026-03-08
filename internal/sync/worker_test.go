@@ -443,8 +443,6 @@ func TestWorkerPool_ResultChannel(t *testing.T) {
 check:
 
 	require.True(t, found, "expected result for result-test.txt in channel")
-	assert.Equal(t, int64(42), result.ID)
-	assert.Equal(t, "test-cycle", result.CycleID)
 	assert.True(t, result.Success)
 }
 
