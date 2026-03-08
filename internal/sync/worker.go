@@ -49,8 +49,6 @@ type WorkerPool struct {
 // WorkerResult reports the outcome of a single action execution. The engine
 // reads these from the Results channel for failure recording in remote_state.
 type WorkerResult struct {
-	ID         int64
-	CycleID    string
 	Path       string
 	ActionType ActionType
 	Success    bool
@@ -311,8 +309,6 @@ func (wp *WorkerPool) DroppedErrors() int64 {
 // diagnostic error list remain accurate regardless (B-206).
 func (wp *WorkerPool) sendResult(ctx context.Context, ta *TrackedAction, success bool, errMsg string, actionErr error) {
 	r := WorkerResult{
-		ID:         ta.ID,
-		CycleID:    ta.CycleID,
 		Path:       ta.Action.Path,
 		ActionType: ta.Action.Type,
 		Success:    success,

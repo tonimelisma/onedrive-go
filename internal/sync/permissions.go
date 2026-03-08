@@ -36,7 +36,7 @@ type PermissionChecker interface {
 
 // permissionCache is a thread-safe in-memory cache of folder path → canWrite.
 // Built from local_issues + API queries each cycle. Not persisted.
-// Accessed concurrently by the watch cycle goroutine (recheckPermissions,
+// Accessed concurrently by the main sync goroutine (recheckPermissions,
 // deniedPrefixes) and the drain goroutine (handle403 → set).
 type permissionCache struct {
 	mu    stdsync.RWMutex
