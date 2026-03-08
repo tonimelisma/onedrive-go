@@ -39,7 +39,7 @@ type WorkerPool struct {
 	dropWarnOnce  stdsync.Once
 
 	// results reports per-action outcomes back to the engine for in-memory
-	// cycle result tracking.
+	// result tracking.
 	results chan WorkerResult
 
 	cancel context.CancelFunc
@@ -260,7 +260,7 @@ func (wp *WorkerPool) dispatchAction(
 }
 
 // Results returns a read-only channel of per-action results. The engine
-// reads from this channel for in-memory cycle result tracking (failure
+// reads from this channel for in-memory result tracking (failure
 // suppression, delta token commit decisions).
 func (wp *WorkerPool) Results() <-chan WorkerResult {
 	return wp.results

@@ -17,7 +17,7 @@ func newSyncCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "sync",
 		Short: "Synchronize files with OneDrive",
-		Long: `Run a one-shot sync cycle between the local directory and OneDrive.
+		Long: `Run a one-shot sync run between the local directory and OneDrive.
 
 By default, sync is bidirectional. Use --download-only or --upload-only for
 one-way sync. Use --dry-run to preview what would happen without making changes.`,

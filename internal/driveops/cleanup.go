@@ -7,7 +7,7 @@ import "log/slog"
 //   - Cleans expired upload session files from the session store
 //
 // Errors are logged but not propagated — housekeeping should never
-// fail a sync cycle.
+// fail a sync run.
 func CleanTransferArtifacts(syncRoot string, sessionStore *SessionStore, logger *slog.Logger) {
 	if n, err := CleanStalePartials(syncRoot, logger); err != nil {
 		logger.Warn("partial file cleanup failed", slog.String("error", err.Error()))

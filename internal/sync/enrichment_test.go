@@ -19,7 +19,7 @@ import (
 
 // TestPerSideHash_PreventsReUploadLoop validates that after uploading a file
 // (LocalHash=AAA), if the server modifies it (RemoteHash=BBB), the next sync
-// cycle does NOT produce an upload action because LocalHash still matches.
+// run does NOT produce an upload action because LocalHash still matches.
 func TestPerSideHash_PreventsReUploadLoop(t *testing.T) {
 	planner := NewPlanner(testLogger(t))
 
@@ -33,7 +33,7 @@ func TestPerSideHash_PreventsReUploadLoop(t *testing.T) {
 		RemoteHash: "remoteHashBBB",
 	})
 
-	// Next cycle: local unchanged (still AAA), remote unchanged (still BBB).
+	// Next run: local unchanged (still AAA), remote unchanged (still BBB).
 	changes := []PathChanges{
 		{
 			Path: "enriched.docx",
@@ -72,7 +72,7 @@ func TestPerSideHash_PreventsReUploadLoop(t *testing.T) {
 
 // TestPerSideHash_PreventsReDownloadLoop validates the reverse: after
 // download, if the local file's hash differs from remote (because server
-// enriched it), the next cycle does NOT produce a download action.
+// enriched it), the next run does NOT produce a download action.
 func TestPerSideHash_PreventsReDownloadLoop(t *testing.T) {
 	planner := NewPlanner(testLogger(t))
 
@@ -120,11 +120,11 @@ func TestPerSideHash_PreventsReDownloadLoop(t *testing.T) {
 	assert.Empty(t, uploads, "no re-upload when local hash matches baseline")
 }
 
-// TestPerSideHash_5CycleStabilityProof runs 5 planner cycles with divergent
+// TestPerSideHash_5RunStabilityProof runs 5 planner runs with divergent
 // local/remote hashes in the baseline and verifies that zero actions are
-// produced in every cycle. This proves the per-side hash scheme prevents
+// produced in every run. This proves the per-side hash scheme prevents
 // infinite sync loops caused by SharePoint enrichment.
-func TestPerSideHash_5CycleStabilityProof(t *testing.T) {
+func TestPerSideHash_5RunStabilityProof(t *testing.T) {
 	baseline := baselineWith(&BaselineEntry{
 		Path:       "stable.docx",
 		DriveID:    driveid.New(testDriveID),
@@ -134,7 +134,7 @@ func TestPerSideHash_5CycleStabilityProof(t *testing.T) {
 		RemoteHash: "remoteHashYYY",
 	})
 
-	for cycle := range 5 {
+	for run := range 5 {
 		planner := NewPlanner(testLogger(t))
 
 		changes := []PathChanges{
@@ -164,10 +164,10 @@ func TestPerSideHash_5CycleStabilityProof(t *testing.T) {
 		}
 
 		plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
-		require.NoError(t, err, "cycle %d", cycle)
+		require.NoError(t, err, "run %d", run)
 
 		assert.Empty(t, plan.Actions,
-			"cycle %d: divergent per-side hashes should produce zero actions", cycle)
+			"run %d: divergent per-side hashes should produce zero actions", run)
 	}
 }
 
