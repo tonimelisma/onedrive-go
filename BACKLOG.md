@@ -174,6 +174,15 @@ Optimization deferred until profiling shows a bottleneck.
 |----|-------|----------|-------|
 | ~~B-336~~ | ~~Drop dead failure columns from remote_state schema~~ | ~~P5~~ | **DONE** — Migration 00006 rebuilds `remote_state` without `failure_count`, `next_retry_at`, `last_error`, `http_status`. `sqlUpdateRemoteState` and `EscalateToConflict` updated. Tests cleaned of dead column references. |
 
+## Phase 7 Follow-up
+
+| ID | Title | Priority | Package | Notes |
+|----|-------|----------|---------|-------|
+| B-337 | Extract `multiHandler` to `internal/slogutil/` package | P4 | root | `multiHandler` lives in `root.go` alongside CLI setup. If logging grows (structured error reporting, log sampling), a dedicated package would be cleaner. |
+| B-338 | Concurrent `recycle-bin empty` deletion | P4 | root | Currently deletes items sequentially. For large recycle bins, a worker pool (similar to sync executor) would be faster. |
+| B-339 | Remove `PermanentDeleteItem` 405→`DeleteItem` fallback when MS adds Personal support | P5 | root, graph | The `DeleteItem` fallback for Personal accounts is a workaround for HTTP 405 on `permanentDelete`. Monitor MS Graph API changelog. |
+| B-340 | Recover coverage lost by recycle-bin CLI handlers (75.5% → 76.0%) | P4 | root | CLI `RunE` handlers in `recycle_bin.go` are untestable without live Session. Interface-based mock injection could recover those lines. |
+
 ## Phase 6.3 Follow-up
 
 | ID | Title | Priority | Notes |
