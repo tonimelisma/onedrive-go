@@ -20,15 +20,20 @@ import (
 // version is set at build time via ldflags.
 var version = "dev"
 
-// isTTY reports whether stderr is a terminal. Package-level var for testability.
-var isTTY = func() bool { return isatty.IsTerminal(os.Stderr.Fd()) }
-
 // Log format constants for the log_format config setting.
 const (
 	logFormatText = "text"
 	logFormatJSON = "json"
 	logFormatAuto = "auto"
 )
+
+// logLevelMap maps config log_level strings to slog.Level values.
+var logLevelMap = map[string]slog.Level{
+	"debug": slog.LevelDebug,
+	"info":  slog.LevelInfo,
+	"warn":  slog.LevelWarn,
+	"error": slog.LevelError,
+}
 
 // skipConfigAnnotation marks commands that handle config loading themselves.
 // Commands annotated with this key skip the Phase 2 config resolution in
@@ -301,20 +306,11 @@ func resolveLogLevel(cfg *config.ResolvedDrive, flags CLIFlags) slog.Level {
 	level := slog.LevelWarn
 
 	// Config-based log level (lower priority than CLI flags).
-	if cfg != nil {
-		switch cfg.LogLevel {
-		case "debug":
-			level = slog.LevelDebug
-		case "info":
-			level = slog.LevelInfo
-		case "warn":
-			level = slog.LevelWarn
-		case "error":
-			level = slog.LevelError
-		default:
-			if cfg.LogLevel != "" {
-				fmt.Fprintf(os.Stderr, "warning: unknown log level %q, using warn\n", cfg.LogLevel)
-			}
+	if cfg != nil && cfg.LogLevel != "" {
+		if mapped, ok := logLevelMap[cfg.LogLevel]; ok {
+			level = mapped
+		} else {
+			fmt.Fprintf(os.Stderr, "warning: unknown log level %q, using warn\n", cfg.LogLevel)
 		}
 	}
 
@@ -337,6 +333,8 @@ func resolveLogLevel(cfg *config.ResolvedDrive, flags CLIFlags) slog.Level {
 // buildHandler creates the appropriate slog.Handler based on the log_format
 // config setting. Defaults to text for bootstrap (nil cfg) or empty format.
 // The w parameter specifies the output destination (typically os.Stderr).
+// For "auto" format, TTY detection checks w itself (not hardcoded stderr),
+// so log_file redirection will correctly select JSON.
 func buildHandler(w io.Writer, cfg *config.ResolvedDrive, opts *slog.HandlerOptions) slog.Handler {
 	format := logFormatText
 	if cfg != nil && cfg.LogFormat != "" {
@@ -347,7 +345,7 @@ func buildHandler(w io.Writer, cfg *config.ResolvedDrive, opts *slog.HandlerOpti
 	case logFormatJSON:
 		return slog.NewJSONHandler(w, opts)
 	case logFormatAuto:
-		if isTTY() {
+		if isWriterTTY(w) {
 			return slog.NewTextHandler(w, opts)
 		}
 
@@ -355,10 +353,27 @@ func buildHandler(w io.Writer, cfg *config.ResolvedDrive, opts *slog.HandlerOpti
 	case logFormatText:
 		return slog.NewTextHandler(w, opts)
 	default:
-		fmt.Fprintf(os.Stderr, "warning: unknown log format %q, using text\n", format)
+		fmt.Fprintf(w, "warning: unknown log format %q, using text\n", format)
 
 		return slog.NewTextHandler(w, opts)
 	}
+}
+
+// fdProvider is implemented by types that expose a file descriptor (e.g., *os.File).
+type fdProvider interface {
+	Fd() uintptr
+}
+
+// isWriterTTY checks whether w is a terminal. Returns false for non-file
+// writers (buffers, pipes, log files), ensuring "auto" format selects JSON
+// when output is redirected.
+func isWriterTTY(w io.Writer) bool {
+	f, ok := w.(fdProvider)
+	if !ok {
+		return false
+	}
+
+	return isatty.IsTerminal(f.Fd())
 }
 
 // exitOnError prints a user-friendly error message to stderr and exits.
