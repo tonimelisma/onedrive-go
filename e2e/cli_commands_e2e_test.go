@@ -406,3 +406,98 @@ func TestE2E_Verify_AfterSync(t *testing.T) {
 	assert.Contains(t, verifyOutput, "verified", "JSON should have verified count")
 	assert.Contains(t, verifyOutput, "mismatches", "JSON should have mismatches array")
 }
+
+// TestE2E_RecycleBinRoundtrip validates the full recycle bin workflow:
+// put → rm → recycle-bin list → recycle-bin restore → verify restored.
+func TestE2E_RecycleBinRoundtrip(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
+	syncDir := t.TempDir()
+	cfgPath, env := writeSyncConfig(t, syncDir)
+
+	testFolder := fmt.Sprintf("e2e-recycle-bin-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
+
+	// Upload a file.
+	localFile := filepath.Join(syncDir, "recycle-test.txt")
+	require.NoError(t, os.WriteFile(localFile, []byte("recycle bin test content"), 0o644))
+	runCLIWithConfig(t, cfgPath, env, "put", localFile, testFolder+"/recycle-test.txt")
+
+	// Get the item ID via ls --json.
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "ls", testFolder, "--json")
+	var lsItems []map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &lsItems),
+		"ls --json should produce valid JSON, got: %s", stdout)
+	require.Len(t, lsItems, 1)
+	itemID, ok := lsItems[0]["id"].(string)
+	require.True(t, ok, "item should have an id field")
+
+	// Delete the file (moves to recycle bin).
+	runCLIWithConfig(t, cfgPath, env, "rm", testFolder+"/recycle-test.txt")
+
+	// List recycle bin — should contain our file.
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "recycle-bin", "list")
+	assert.Contains(t, stdout, "recycle-test.txt", "recycle bin should contain deleted file")
+
+	// List in JSON mode.
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "recycle-bin", "list", "--json")
+	var rbItems []map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &rbItems),
+		"recycle-bin list --json should produce valid JSON, got: %s", stdout)
+
+	// Find our item in the list.
+	var foundID string
+	for _, item := range rbItems {
+		if name, nameOK := item["name"].(string); nameOK && name == "recycle-test.txt" {
+			foundID, _ = item["id"].(string)
+		}
+	}
+	require.NotEmpty(t, foundID, "should find recycle-test.txt in recycle bin list")
+	assert.Equal(t, itemID, foundID, "recycle bin item ID should match original")
+
+	// Restore the file.
+	runCLIWithConfig(t, cfgPath, env, "recycle-bin", "restore", itemID)
+
+	// Verify the file is back.
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "ls", testFolder, "--json")
+	require.NoError(t, json.Unmarshal([]byte(stdout), &lsItems),
+		"ls --json after restore should produce valid JSON, got: %s", stdout)
+	require.Len(t, lsItems, 1)
+	assert.Equal(t, "recycle-test.txt", lsItems[0]["name"])
+}
+
+// TestE2E_RecycleBinEmpty validates that recycle-bin empty --confirm
+// permanently removes items from the recycle bin.
+func TestE2E_RecycleBinEmpty(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
+	syncDir := t.TempDir()
+	cfgPath, env := writeSyncConfig(t, syncDir)
+
+	testFolder := fmt.Sprintf("e2e-recycle-empty-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
+
+	// Upload and delete a file to put it in the recycle bin.
+	localFile := filepath.Join(syncDir, "empty-test.txt")
+	require.NoError(t, os.WriteFile(localFile, []byte("will be permanently deleted"), 0o644))
+	runCLIWithConfig(t, cfgPath, env, "put", localFile, testFolder+"/empty-test.txt")
+	runCLIWithConfig(t, cfgPath, env, "rm", testFolder+"/empty-test.txt")
+
+	// Verify the item is in the recycle bin.
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "recycle-bin", "list")
+	assert.Contains(t, stdout, "empty-test.txt", "file should be in recycle bin")
+
+	// Empty without --confirm should fail.
+	_, _, err := runCLIWithConfigAllowError(t, cfgPath, env, "recycle-bin", "empty")
+	require.Error(t, err, "empty without --confirm should fail")
+
+	// Empty with --confirm should succeed.
+	runCLIWithConfig(t, cfgPath, env, "recycle-bin", "empty", "--confirm")
+
+	// Verify the recycle bin is empty or the file is gone.
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "recycle-bin", "list")
+	assert.NotContains(t, stdout, "empty-test.txt",
+		"file should no longer be in recycle bin after empty")
+}

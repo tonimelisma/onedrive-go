@@ -357,6 +357,7 @@ func TestClassifyStatus(t *testing.T) {
 		{http.StatusUnauthorized, ErrUnauthorized},
 		{http.StatusForbidden, ErrForbidden},
 		{http.StatusNotFound, ErrNotFound},
+		{http.StatusMethodNotAllowed, ErrMethodNotAllowed},
 		{http.StatusConflict, ErrConflict},
 		{http.StatusGone, ErrGone},
 		{http.StatusTooManyRequests, ErrThrottled},

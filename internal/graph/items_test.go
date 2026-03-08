@@ -1630,3 +1630,128 @@ func TestHasWriteAccess(t *testing.T) {
 		})
 	}
 }
+
+// --- ListRecycleBinItems tests ---
+
+func TestListRecycleBinItems_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Contains(t, r.URL.Path, "/drives/000000000000000d/special/recyclebin/children")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"value": [
+				{
+					"id": "deleted-1",
+					"name": "old-file.txt",
+					"size": 1024,
+					"createdDateTime": "2024-01-01T00:00:00Z",
+					"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+					"deleted": {},
+					"file": {"mimeType": "text/plain"}
+				},
+				{
+					"id": "deleted-2",
+					"name": "old-folder",
+					"createdDateTime": "2024-01-01T00:00:00Z",
+					"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+					"deleted": {},
+					"folder": {"childCount": 3}
+				}
+			]
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	items, err := client.ListRecycleBinItems(t.Context(), driveid.New("d"))
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	assert.Equal(t, "deleted-1", items[0].ID)
+	assert.Equal(t, "old-file.txt", items[0].Name)
+	assert.True(t, items[0].IsDeleted)
+	assert.Equal(t, "deleted-2", items[1].ID)
+	assert.True(t, items[1].IsFolder)
+	assert.True(t, items[1].IsDeleted)
+}
+
+func TestListRecycleBinItems_Empty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"value": []}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	items, err := client.ListRecycleBinItems(t.Context(), driveid.New("d"))
+	require.NoError(t, err)
+	assert.Empty(t, items)
+}
+
+func TestListRecycleBinItems_NotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("request-id", "req-rb-404")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"error":{"code":"itemNotFound"}}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.ListRecycleBinItems(t.Context(), driveid.New("d"))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+// --- RestoreItem tests ---
+
+func TestRestoreItem_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/drives/000000000000000d/items/deleted-1/restore", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"id": "restored-1",
+			"name": "old-file.txt",
+			"size": 1024,
+			"createdDateTime": "2024-01-01T00:00:00Z",
+			"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+			"parentReference": {"id": "root-id", "driveId": "d"},
+			"file": {"mimeType": "text/plain"}
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	item, err := client.RestoreItem(t.Context(), driveid.New("d"), "deleted-1")
+	require.NoError(t, err)
+	require.NotNil(t, item)
+	assert.Equal(t, "restored-1", item.ID)
+	assert.Equal(t, "old-file.txt", item.Name)
+}
+
+func TestRestoreItem_NotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("request-id", "req-restore-404")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"error":{"code":"itemNotFound"}}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.RestoreItem(t.Context(), driveid.New("d"), "nonexistent")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestRestoreItem_Conflict(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("request-id", "req-restore-409")
+		w.WriteHeader(http.StatusConflict)
+		fmt.Fprint(w, `{"error":{"code":"nameAlreadyExists"}}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.RestoreItem(t.Context(), driveid.New("d"), "conflict-item")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrConflict)
+}
