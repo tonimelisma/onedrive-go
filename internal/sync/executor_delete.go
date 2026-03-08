@@ -40,6 +40,30 @@ func isDisposable(name string) bool {
 	return false
 }
 
+// findNonDisposable recursively checks a directory for non-disposable files.
+// Returns the relative path to the first non-disposable file found, or ""
+// if all contents are disposable.
+func findNonDisposable(dirPath string) string {
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		return "" // can't read → treat as disposable (will fail on RemoveAll anyway)
+	}
+
+	for _, entry := range entries {
+		if !isDisposable(entry.Name()) {
+			return entry.Name()
+		}
+
+		if entry.IsDir() {
+			if sub := findNonDisposable(filepath.Join(dirPath, entry.Name())); sub != "" {
+				return entry.Name() + "/" + sub
+			}
+		}
+	}
+
+	return ""
+}
+
 // executeLocalDelete removes a local file or folder with S4 safety:
 // for files, verifies hash before delete; mismatch triggers conflict copy.
 func (e *Executor) executeLocalDelete(_ context.Context, action *Action) Outcome {
@@ -79,10 +103,17 @@ func (e *Executor) deleteLocalFolder(action *Action, absPath string) Outcome {
 
 	if len(entries) > 0 {
 		// Check if all remaining entries are disposable (OS junk, temp files).
+		// For directories, check recursively — a disposable-named directory
+		// could contain non-disposable files that would be silently lost.
 		var blockers []string
 		for _, entry := range entries {
+			entryPath := filepath.Join(absPath, entry.Name())
 			if !isDisposable(entry.Name()) {
 				blockers = append(blockers, entry.Name())
+			} else if entry.IsDir() {
+				if nonDisp := findNonDisposable(entryPath); nonDisp != "" {
+					blockers = append(blockers, entry.Name()+"/"+nonDisp)
+				}
 			}
 		}
 

@@ -188,6 +188,58 @@ func TestDeleteLocalFolder_AppleDoubleFiles_Succeeds(t *testing.T) {
 	assert.True(t, os.IsNotExist(err))
 }
 
+func TestDeleteLocalFolder_DisposableDirWithNonDisposableChild_Fails(t *testing.T) {
+	t.Parallel()
+
+	e, syncRoot := newDeleteTestExecutor(t)
+
+	dir := filepath.Join(syncRoot, "folder")
+	macDir := filepath.Join(dir, "__MACOSX")
+	require.NoError(t, os.MkdirAll(macDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(macDir, "important.txt"), []byte("data"), 0o644))
+
+	action := &Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}
+	outcome := e.deleteLocalFolder(action, dir)
+
+	requireOutcomeFailure(t, outcome)
+	assert.Contains(t, outcome.Error.Error(), "__MACOSX/important.txt")
+}
+
+func TestDeleteLocalFolder_DisposableDirAllDisposableChildren_Succeeds(t *testing.T) {
+	t.Parallel()
+
+	e, syncRoot := newDeleteTestExecutor(t)
+
+	dir := filepath.Join(syncRoot, "folder")
+	macDir := filepath.Join(dir, "__MACOSX")
+	require.NoError(t, os.MkdirAll(macDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(macDir, "._photo.jpg"), []byte{0}, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(macDir, ".DS_Store"), []byte{0}, 0o644))
+
+	action := &Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}
+	outcome := e.deleteLocalFolder(action, dir)
+
+	requireOutcomeSuccess(t, outcome)
+
+	_, err := os.Stat(dir)
+	assert.True(t, os.IsNotExist(err))
+}
+
+func TestFindNonDisposable(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	// All disposable.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".DS_Store"), []byte{0}, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "._foo"), []byte{0}, 0o644))
+	assert.Empty(t, findNonDisposable(dir))
+
+	// Add a non-disposable file.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "real.txt"), []byte("data"), 0o644))
+	assert.Equal(t, "real.txt", findNonDisposable(dir))
+}
+
 func TestDeleteLocalFolder_EmptyDir_Succeeds(t *testing.T) {
 	t.Parallel()
 

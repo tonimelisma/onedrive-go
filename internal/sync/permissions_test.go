@@ -22,9 +22,10 @@ import (
 
 type mockPermChecker struct {
 	// Map of "driveID:itemID" → permissions
-	perms map[string][]graph.Permission
-	err   error
-	calls []string // records "driveID:itemID" for each call
+	perms      map[string][]graph.Permission
+	err        error
+	notFoundOn bool     // if true, return graph.ErrNotFound for unknown keys
+	calls      []string // records "driveID:itemID" for each call
 }
 
 func (m *mockPermChecker) ListItemPermissions(_ context.Context, driveID driveid.ID, itemID string) ([]graph.Permission, error) {
@@ -39,7 +40,11 @@ func (m *mockPermChecker) ListItemPermissions(_ context.Context, driveID driveid
 		return perms, nil
 	}
 
-	return nil, fmt.Errorf("not found: %s", key)
+	if m.notFoundOn {
+		return nil, graph.ErrNotFound
+	}
+
+	return nil, fmt.Errorf("unknown key: %s", key)
 }
 
 // ---------------------------------------------------------------------------
@@ -625,4 +630,150 @@ func TestPermissionCache(t *testing.T) {
 	canWrite, ok = pc.get("other")
 	assert.True(t, ok)
 	assert.False(t, canWrite)
+}
+
+func TestPermissionCache_Reset(t *testing.T) {
+	t.Parallel()
+
+	pc := newPermissionCache()
+
+	pc.set("folder", true)
+	pc.set("other", false)
+
+	pc.reset()
+
+	_, ok := pc.get("folder")
+	assert.False(t, ok, "entries should be cleared after reset")
+
+	_, ok = pc.get("other")
+	assert.False(t, ok, "entries should be cleared after reset")
+}
+
+// ---------------------------------------------------------------------------
+// handle403 404 fallback test
+// ---------------------------------------------------------------------------
+
+func TestHandle403_FolderNotFound_RecordsIssue(t *testing.T) {
+	t.Parallel()
+
+	remoteDriveID := "remote-drive-1"
+
+	checker := &mockPermChecker{
+		perms:      map[string][]graph.Permission{},
+		notFoundOn: true, // Return graph.ErrNotFound for unknown keys.
+	}
+
+	shortcuts := []Shortcut{{
+		ItemID: "sc-1", RemoteDrive: remoteDriveID, RemoteItem: "root-id",
+		LocalPath: "Shared/TeamDocs", Observation: ObservationDelta, DiscoveredAt: 1000,
+	}}
+
+	baselineEntries := []Outcome{
+		{
+			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs",
+			DriveID: driveid.New(remoteDriveID), ItemID: "root-id", ParentID: "root", ItemType: ItemTypeFolder,
+		},
+		{
+			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs/sub",
+			DriveID: driveid.New(remoteDriveID), ItemID: "sub-id", ParentID: "root-id", ItemType: ItemTypeFolder,
+		},
+	}
+
+	eng, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+	ctx := t.Context()
+
+	eng.handle403(ctx, "Shared/TeamDocs/sub/file.txt", shortcuts)
+
+	// Should record an issue because the folder returned 404.
+	issues, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+	assert.Equal(t, "Shared/TeamDocs/sub", issues[0].Path)
+	assert.Contains(t, issues[0].LastError, "not found")
+}
+
+// ---------------------------------------------------------------------------
+// handle403 with unresolved parent (falls back to shortcut root)
+// ---------------------------------------------------------------------------
+
+func TestHandle403_UnresolvedParent_FallsBackToRoot(t *testing.T) {
+	t.Parallel()
+
+	remoteDriveID := "remote-drive-1"
+
+	checker := &mockPermChecker{
+		perms: map[string][]graph.Permission{
+			// Root is read-only.
+			driveid.New(remoteDriveID).String() + ":root-id": {{ID: "p1", Roles: []string{"read"}}},
+		},
+	}
+
+	shortcuts := []Shortcut{{
+		ItemID: "sc-1", RemoteDrive: remoteDriveID, RemoteItem: "root-id",
+		LocalPath: "Shared/TeamDocs", Observation: ObservationDelta, DiscoveredAt: 1000,
+	}}
+
+	// Only root is in baseline — parent folder "Shared/TeamDocs/newdir" is NOT.
+	baselineEntries := []Outcome{
+		{
+			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs",
+			DriveID: driveid.New(remoteDriveID), ItemID: "root-id", ParentID: "root", ItemType: ItemTypeFolder,
+		},
+	}
+
+	eng, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+	ctx := t.Context()
+
+	// File in a folder that's not in baseline yet.
+	eng.handle403(ctx, "Shared/TeamDocs/newdir/file.txt", shortcuts)
+
+	// Should fall back to root and record issue there.
+	issues, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+	assert.Equal(t, "Shared/TeamDocs", issues[0].Path)
+}
+
+// ---------------------------------------------------------------------------
+// recheckPermissions populates cache
+// ---------------------------------------------------------------------------
+
+func TestRecheckPermissions_PopulatesCache(t *testing.T) {
+	t.Parallel()
+
+	remoteDriveID := "remote-drive-1"
+
+	checker := &mockPermChecker{
+		perms: map[string][]graph.Permission{
+			// Still read-only.
+			driveid.New(remoteDriveID).String() + ":folder-id": {{ID: "p1", Roles: []string{"read"}}},
+		},
+	}
+
+	shortcuts := []Shortcut{{
+		ItemID: "sc-1", RemoteDrive: remoteDriveID, RemoteItem: "root-id",
+		LocalPath: "Shared/TeamDocs", Observation: ObservationDelta, DiscoveredAt: 1000,
+	}}
+
+	baselineEntries := []Outcome{
+		{
+			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs/sub",
+			DriveID: driveid.New(remoteDriveID), ItemID: "folder-id", ParentID: "root-id", ItemType: ItemTypeFolder,
+		},
+	}
+
+	eng, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+	ctx := t.Context()
+
+	require.NoError(t, eng.baseline.RecordLocalIssue(
+		ctx, "Shared/TeamDocs/sub", IssuePermissionDenied,
+		"folder is read-only", http.StatusForbidden, 0, "",
+	))
+
+	eng.recheckPermissions(ctx, shortcuts)
+
+	// Cache should have been populated.
+	canWrite, ok := eng.permCache.get("Shared/TeamDocs/sub")
+	assert.True(t, ok, "cache should contain the checked path")
+	assert.False(t, canWrite, "should be cached as read-only")
 }

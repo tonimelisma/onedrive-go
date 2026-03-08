@@ -93,7 +93,7 @@ Edge cases and correctness for `internal/graph/`.
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
 | ~~B-285~~ | ~~Standardize `baseline_test.go` to testify style~~ | ~~Done~~ | Converted in fix/b285-testify-baseline. Net -637 lines. |
-| B-286 | No shared/business drive in E2E test matrix | P3 | Second personal account added (6.0d), but all tests are `personal:` type. Phase 6.3 added `SharedWithMe` integration test. 6.4c added shared folder sync unit tests + permission handling tests. Still needs E2E test fixtures with live shared folders between test accounts (testitesti18 → kikkelimies123). |
+| ~~B-286~~ | ~~No shared/business drive in E2E test matrix~~ | ~~P3~~ | **DONE** — 6.4c topup: added `sync_shared_e2e_test.go` with 3 E2E tests (owner upload → recipient download, drive list --shared, idempotent re-sync). Uses testitesti18 → kikkelimies123 shared folder fixture. |
 | ~~B-306~~ | ~~Exhaustive E2E test hardening~~ | ~~P2~~ | **DONE** — 42 new `e2e_full` tests across 5 new files + 2 modified. Covers daemon watch (11), CLI commands (13), edge cases (8), recovery (3), output validation (4), multi-drive watch (3). Total E2E: 86 tests (44 existing + 42 new). |
 
 ## Deferred from Phase 6.0c
