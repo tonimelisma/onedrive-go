@@ -490,7 +490,7 @@ func TestClassifyStatus_UnmappedCodes(t *testing.T) {
 	}{
 		{http.StatusMovedPermanently, nil},                                // 301 — not an error
 		{http.StatusFound, nil},                                           // 302 — not an error
-		{http.StatusMethodNotAllowed, nil},                                // 405 — not mapped
+		{http.StatusMethodNotAllowed, ErrMethodNotAllowed},                // 405 — mapped
 		{http.StatusRequestedRangeNotSatisfiable, ErrRangeNotSatisfiable}, // 416
 	}
 

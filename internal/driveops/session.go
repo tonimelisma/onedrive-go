@@ -225,6 +225,16 @@ func (s *Session) CopyItem(ctx context.Context, itemID, destParentID, newName st
 	return s.Meta.CopyItem(ctx, s.DriveID, itemID, destParentID, newName)
 }
 
+// ListRecycleBinItems returns all items in the drive's recycle bin.
+func (s *Session) ListRecycleBinItems(ctx context.Context) ([]graph.Item, error) {
+	return s.Meta.ListRecycleBinItems(ctx, s.DriveID)
+}
+
+// RestoreItem restores a deleted item from the recycle bin.
+func (s *Session) RestoreItem(ctx context.Context, itemID string) (*graph.Item, error) {
+	return s.Meta.RestoreItem(ctx, s.DriveID, itemID)
+}
+
 // CleanRemotePath strips leading/trailing slashes, returns "" for root.
 func CleanRemotePath(path string) string {
 	return strings.Trim(path, "/")
