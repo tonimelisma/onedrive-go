@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
@@ -18,6 +19,16 @@ import (
 
 // version is set at build time via ldflags.
 var version = "dev"
+
+// isTTY reports whether stderr is a terminal. Package-level var for testability.
+var isTTY = func() bool { return isatty.IsTerminal(os.Stderr.Fd()) }
+
+// Log format constants for the log_format config setting.
+const (
+	logFormatText = "text"
+	logFormatJSON = "json"
+	logFormatAuto = "auto"
+)
 
 // skipConfigAnnotation marks commands that handle config loading themselves.
 // Commands annotated with this key skip the Phase 2 config resolution in
@@ -279,6 +290,14 @@ func loadAndResolve(
 // override it because CLI flags always win. The flags are mutually exclusive
 // (enforced by Cobra).
 func buildLogger(cfg *config.ResolvedDrive, flags CLIFlags) *slog.Logger {
+	level := resolveLogLevel(cfg, flags)
+	opts := &slog.HandlerOptions{Level: level}
+
+	return slog.New(buildHandler(os.Stderr, cfg, opts))
+}
+
+// resolveLogLevel determines the effective slog.Level from config and CLI flags.
+func resolveLogLevel(cfg *config.ResolvedDrive, flags CLIFlags) slog.Level {
 	level := slog.LevelWarn
 
 	// Config-based log level (lower priority than CLI flags).
@@ -312,7 +331,34 @@ func buildLogger(cfg *config.ResolvedDrive, flags CLIFlags) *slog.Logger {
 		level = slog.LevelError
 	}
 
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	return level
+}
+
+// buildHandler creates the appropriate slog.Handler based on the log_format
+// config setting. Defaults to text for bootstrap (nil cfg) or empty format.
+// The w parameter specifies the output destination (typically os.Stderr).
+func buildHandler(w io.Writer, cfg *config.ResolvedDrive, opts *slog.HandlerOptions) slog.Handler {
+	format := logFormatText
+	if cfg != nil && cfg.LogFormat != "" {
+		format = cfg.LogFormat
+	}
+
+	switch format {
+	case logFormatJSON:
+		return slog.NewJSONHandler(w, opts)
+	case logFormatAuto:
+		if isTTY() {
+			return slog.NewTextHandler(w, opts)
+		}
+
+		return slog.NewJSONHandler(w, opts)
+	case logFormatText:
+		return slog.NewTextHandler(w, opts)
+	default:
+		fmt.Fprintf(os.Stderr, "warning: unknown log format %q, using text\n", format)
+
+		return slog.NewTextHandler(w, opts)
+	}
 }
 
 // exitOnError prints a user-friendly error message to stderr and exits.
