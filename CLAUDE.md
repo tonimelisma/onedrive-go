@@ -175,7 +175,7 @@ Work is done in increments. Follow this process from start to finish. Do not ask
 
 1. Create a worktree: `claude --worktree <name>`.
 2. Create a branch with the naming convention: `<type>/<task-name>` (e.g., `feat/cli-auth`). Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`.
-3. Doc-only changes push directly to `main` without a worktree.
+3. All changes go through PRs — including doc-only changes. Branch protection requires CI to pass before merge.
 
 Pre-commit hook: `.githooks/pre-commit` runs `golangci-lint run` before every commit.
 
@@ -228,7 +228,7 @@ After each increment, run through this entire checklist. If something fails, fix
     - `LEARNINGS.md` — read for patterns and gotchas, add new institutional knowledge
     - `docs/roadmap.md` — check current phase status, update on completion
     - `docs/design/` — update relevant design docs if design changed
-8. [ ] **Push and CI green**: Push branch, open PR with `gh pr create`, then enable auto-merge with `gh pr merge --auto --squash --delete-branch`. The PR will auto-merge once CI passes (4 jobs: lint, test, integration, e2e). Monitor with `gh pr checks <pr_number> --watch`
+8. [ ] **Push and CI green**: Push branch, open PR with `gh pr create`, then enable auto-merge with `gh pr merge --auto --squash --delete-branch`. Branch protection requires all 4 CI jobs (lint, test, integration, e2e) to pass before merge. CI runs on PRs only — push-to-main is skipped for PR merges (squash commits containing `(#NNN)`). Direct pushes, schedule, and dispatch still trigger CI. Monitor with `gh pr checks <pr_number> --watch`
 9. [ ] **Cleanup**: Clean `git status`. Remove the current worktree after merge. Then, **from the root repo** (not the worktree), prune stale remote-tracking branches and pull main forward:
     ```bash
     cd /Users/tonimelisma/Development/onedrive-go
