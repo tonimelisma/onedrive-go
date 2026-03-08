@@ -459,70 +459,88 @@ sync_dir = "` + tmpDir + `/two"
 	assert.Contains(t, err.Error(), "loading config")
 }
 
-// --- buildLogger log format tests ---
-// These tests mutate the package-level isTTY var, so they run sequentially.
-// Do NOT add t.Parallel() — concurrent writes to isTTY cause data races.
+// --- buildHandler / format tests ---
+// These tests are safe for t.Parallel() — no mutable globals; TTY detection
+// is based on the io.Writer passed to buildHandler, not package-level state.
 
-func TestBuildLogger_FormatText(t *testing.T) {
+func TestBuildHandler_FormatText(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogFormat: "text"},
 	}
-	logger := buildLogger(cfg, CLIFlags{})
-	_, ok := logger.Handler().(*slog.TextHandler)
+	handler := buildHandler(&buf, cfg, &slog.HandlerOptions{})
+	_, ok := handler.(*slog.TextHandler)
 	assert.True(t, ok, "expected *slog.TextHandler")
 }
 
-func TestBuildLogger_FormatJSON(t *testing.T) {
+func TestBuildHandler_FormatJSON(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogFormat: "json"},
 	}
-	logger := buildLogger(cfg, CLIFlags{})
-	_, ok := logger.Handler().(*slog.JSONHandler)
+	handler := buildHandler(&buf, cfg, &slog.HandlerOptions{})
+	_, ok := handler.(*slog.JSONHandler)
 	assert.True(t, ok, "expected *slog.JSONHandler")
 }
 
-func TestBuildLogger_FormatAutoTTY(t *testing.T) {
-	orig := isTTY
-	t.Cleanup(func() { isTTY = orig })
-	isTTY = func() bool { return true }
+func TestBuildHandler_FormatAutoNonTTY(t *testing.T) {
+	t.Parallel()
 
+	// bytes.Buffer has no Fd() method → isWriterTTY returns false → JSON.
+	var buf bytes.Buffer
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogFormat: "auto"},
 	}
-	logger := buildLogger(cfg, CLIFlags{})
-	_, ok := logger.Handler().(*slog.TextHandler)
-	assert.True(t, ok, "expected *slog.TextHandler for TTY")
+	handler := buildHandler(&buf, cfg, &slog.HandlerOptions{})
+	_, ok := handler.(*slog.JSONHandler)
+	assert.True(t, ok, "expected *slog.JSONHandler for non-TTY writer")
 }
 
-func TestBuildLogger_FormatAutoNonTTY(t *testing.T) {
-	orig := isTTY
-	t.Cleanup(func() { isTTY = orig })
-	isTTY = func() bool { return false }
+func TestBuildHandler_NilConfigUsesText(t *testing.T) {
+	t.Parallel()
 
-	cfg := &config.ResolvedDrive{
-		LoggingConfig: config.LoggingConfig{LogFormat: "auto"},
-	}
-	logger := buildLogger(cfg, CLIFlags{})
-	_, ok := logger.Handler().(*slog.JSONHandler)
-	assert.True(t, ok, "expected *slog.JSONHandler for non-TTY")
-}
-
-func TestBuildLogger_NilConfigUsesTextHandler(t *testing.T) {
-	logger := buildLogger(nil, CLIFlags{})
-	_, ok := logger.Handler().(*slog.TextHandler)
+	var buf bytes.Buffer
+	handler := buildHandler(&buf, nil, &slog.HandlerOptions{})
+	_, ok := handler.(*slog.TextHandler)
 	assert.True(t, ok, "nil config should use *slog.TextHandler")
 }
 
-func TestBuildLogger_EmptyFormatUsesTextHandler(t *testing.T) {
+func TestBuildHandler_EmptyFormatUsesText(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogFormat: ""},
 	}
-	logger := buildLogger(cfg, CLIFlags{})
-	_, ok := logger.Handler().(*slog.TextHandler)
+	handler := buildHandler(&buf, cfg, &slog.HandlerOptions{})
+	_, ok := handler.(*slog.TextHandler)
 	assert.True(t, ok, "empty format should use *slog.TextHandler")
 }
 
+func TestBuildHandler_UnknownFormatWarnsAndFallsBack(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	cfg := &config.ResolvedDrive{
+		LoggingConfig: config.LoggingConfig{LogFormat: "xml"},
+	}
+	handler := buildHandler(&buf, cfg, &slog.HandlerOptions{})
+
+	// Should fall back to text handler.
+	_, ok := handler.(*slog.TextHandler)
+	assert.True(t, ok, "unknown format should fall back to *slog.TextHandler")
+
+	// Warning should be written to the same writer (not hardcoded stderr).
+	assert.Contains(t, buf.String(), `unknown log format "xml"`)
+}
+
 func TestBuildHandler_JSONOutputFormat(t *testing.T) {
+	t.Parallel()
+
 	var buf bytes.Buffer
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{
@@ -543,6 +561,51 @@ func TestBuildHandler_JSONOutputFormat(t *testing.T) {
 	assert.Equal(t, "INFO", record["level"])
 	assert.Equal(t, "value", record["key"])
 	assert.Contains(t, record, "time")
+}
+
+func TestBuildHandler_JSONFormatWithDebugLevel(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	cfg := &config.ResolvedDrive{
+		LoggingConfig: config.LoggingConfig{
+			LogFormat: "json",
+			LogLevel:  "debug",
+		},
+	}
+	level := resolveLogLevel(cfg, CLIFlags{})
+	opts := &slog.HandlerOptions{Level: level}
+	handler := buildHandler(&buf, cfg, opts)
+
+	// Verify correct handler type.
+	_, ok := handler.(*slog.JSONHandler)
+	assert.True(t, ok, "expected *slog.JSONHandler")
+
+	// Verify the level was correctly resolved.
+	assert.Equal(t, slog.LevelDebug, level)
+
+	// Verify debug messages are emitted.
+	logger := slog.New(handler)
+	logger.Debug("debug msg")
+	assert.Contains(t, buf.String(), "debug msg")
+}
+
+func TestIsWriterTTY_Buffer(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	assert.False(t, isWriterTTY(&buf), "bytes.Buffer should not be a TTY")
+}
+
+func TestIsWriterTTY_File(t *testing.T) {
+	t.Parallel()
+
+	// A regular file is not a TTY.
+	f, err := os.CreateTemp(t.TempDir(), "test")
+	require.NoError(t, err)
+	defer f.Close()
+
+	assert.False(t, isWriterTTY(f), "regular file should not be a TTY")
 }
 
 func TestBuildLogger_UnknownLogLevel(t *testing.T) {
