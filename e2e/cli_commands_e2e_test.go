@@ -195,11 +195,11 @@ func TestE2E_Conflicts_EmptyHistory(t *testing.T) {
 
 	// Check conflicts — should show no unresolved.
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
-	assert.Contains(t, stdout, "No unresolved conflicts")
+	assert.Contains(t, stdout, "No issues")
 
 	// Check conflicts --history — should show no history.
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts", "--history")
-	assert.Contains(t, stdout, "No conflicts in history")
+	assert.Contains(t, stdout, "No issues in history")
 }
 
 // TestE2E_Conflicts_JSON validates that conflicts --json produces a valid
