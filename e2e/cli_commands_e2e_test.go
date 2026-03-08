@@ -194,11 +194,11 @@ func TestE2E_Conflicts_EmptyHistory(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Check conflicts — should show no unresolved.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "issues")
 	assert.Contains(t, stdout, "No issues")
 
 	// Check conflicts --history — should show no history.
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts", "--history")
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "issues", "--history")
 	assert.Contains(t, stdout, "No issues in history")
 }
 
@@ -229,7 +229,7 @@ func TestE2E_Conflicts_JSON(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
 
 	// Check conflicts --json.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts", "--json")
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "issues", "--json")
 
 	var conflicts []map[string]interface{}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &conflicts),
@@ -245,7 +245,7 @@ func TestE2E_Conflicts_JSON(t *testing.T) {
 	assert.Equal(t, "edit_edit", conflict["conflict_type"], "conflict type should be edit_edit")
 
 	// Resolve to clean up.
-	runCLIWithConfig(t, cfgPath, env, "resolve", "--all", "--keep-remote")
+	runCLIWithConfig(t, cfgPath, env, "issues", "resolve", "--all", "--keep-remote")
 }
 
 // TestE2E_Resolve_KeepBoth validates that resolve --keep-both marks the
@@ -280,7 +280,7 @@ func TestE2E_Resolve_KeepBoth(t *testing.T) {
 	require.NotEmpty(t, matches, "conflict copy should exist before resolve")
 
 	// Resolve --keep-both.
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "resolve", testFolder+"/both.txt", "--keep-both")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "issues", "resolve", testFolder+"/both.txt", "--keep-both")
 	assert.Contains(t, stderr, "Resolved", "resolve should confirm resolution")
 
 	// Verify both files still exist.
@@ -331,12 +331,12 @@ func TestE2E_Resolve_MultipleStrategies(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
 
 	// Resolve each with a different strategy.
-	runCLIWithConfig(t, cfgPath, env, "resolve", testFolder+"/a.txt", "--keep-local")
-	runCLIWithConfig(t, cfgPath, env, "resolve", testFolder+"/b.txt", "--keep-remote")
-	runCLIWithConfig(t, cfgPath, env, "resolve", testFolder+"/c.txt", "--keep-both")
+	runCLIWithConfig(t, cfgPath, env, "issues", "resolve", testFolder+"/a.txt", "--keep-local")
+	runCLIWithConfig(t, cfgPath, env, "issues", "resolve", testFolder+"/b.txt", "--keep-remote")
+	runCLIWithConfig(t, cfgPath, env, "issues", "resolve", testFolder+"/c.txt", "--keep-both")
 
 	// Verify conflict history shows all 3.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts", "--history")
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "issues", "--history")
 	assert.Contains(t, stdout, "a.txt", "history should include a.txt")
 	assert.Contains(t, stdout, "b.txt", "history should include b.txt")
 	assert.Contains(t, stdout, "c.txt", "history should include c.txt")
@@ -365,7 +365,7 @@ func TestE2E_Resolve_ConflictNotFound(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Try to resolve a non-existent conflict.
-	output := runCLIWithConfigExpectError(t, cfgPath, env, "resolve", "nonexistent-id", "--keep-local")
+	output := runCLIWithConfigExpectError(t, cfgPath, env, "issues", "resolve", "nonexistent-id", "--keep-local")
 	assert.Contains(t, output, "not found", "should report conflict not found")
 }
 

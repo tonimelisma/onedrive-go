@@ -119,34 +119,6 @@ func TestNewIssuesCmd_Structure(t *testing.T) {
 	assert.Equal(t, "retry [path]", retryCmd.Use)
 }
 
-func TestNewConflictsCmd_HiddenAlias(t *testing.T) {
-	t.Parallel()
-
-	cmd := newConflictsCmd()
-	assert.Equal(t, "conflicts", cmd.Use)
-	assert.True(t, cmd.Hidden, "conflicts should be a hidden alias")
-}
-
-func TestNewFailuresCmd_HiddenAlias(t *testing.T) {
-	t.Parallel()
-
-	cmd := newFailuresCmd()
-	assert.Equal(t, "failures", cmd.Use)
-	assert.True(t, cmd.Hidden, "failures should be a hidden alias")
-}
-
-func TestNewResolveCmd_HiddenAlias(t *testing.T) {
-	t.Parallel()
-
-	cmd := newResolveCmd()
-	assert.Equal(t, "resolve [path-or-id]", cmd.Use)
-	assert.True(t, cmd.Hidden, "resolve should be a hidden alias")
-
-	for _, flag := range []string{"keep-local", "keep-remote", "keep-both", "all", "dry-run"} {
-		assert.NotNil(t, cmd.Flags().Lookup(flag), "missing flag %q", flag)
-	}
-}
-
 func TestIssuesResolveCmd_Structure(t *testing.T) {
 	t.Parallel()
 

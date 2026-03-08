@@ -285,7 +285,7 @@ func TestE2E_Sync_Conflicts(t *testing.T) {
 	cfgPath, env := writeSyncConfig(t, syncDir)
 
 	// Run conflicts — should show no conflicts on a fresh drive.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "issues")
 	// Trim whitespace for comparison.
 	assert.True(t, strings.Contains(stdout, "No issues"),
 		"expected 'No issues' in output, got: %s", stdout)

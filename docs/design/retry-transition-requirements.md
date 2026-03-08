@@ -73,10 +73,10 @@ Specific, testable requirements derived from the design analysis in `retry-trans
 - R9.4. `onedrive-go issues clear --all` dismisses all actionable failures.
 - R9.5. The `issues` output groups items into sections: CONFLICTS and FILE ISSUES. Each item shows a specific reason and what the user should do.
 - R9.6. Transient failures never appear in `issues` output.
-- R9.7. The `conflicts` command does not exist as a standalone command.
-- R9.8. The `failures` command does not exist as a standalone command.
-- R9.9. The hidden `issues` backward-compat alias (old `newIssuesCmd()`) does not exist.
-- R9.10. The hidden `resolve` backward-compat alias (old `newResolveCmd()`) does not exist.
+- R9.7. The `conflicts` command does not exist — not even as a hidden alias.
+- R9.8. The `failures` command does not exist — not even as a hidden alias.
+- R9.9. The `resolve` top-level command does not exist — not even as a hidden alias. Resolve is a subcommand of `issues`.
+- R9.10. No backward-compat aliases exist. Pre-1.0 software has no backward-compat obligations.
 
 ## R10. Status Display
 
@@ -95,9 +95,9 @@ Specific, testable requirements derived from the design analysis in `retry-trans
 
 ## R12. Schema Migrations
 
-- R12.1. Migration 00006 drops `failure_count`, `next_retry_at`, `last_error`, `http_status` columns from `remote_state` via table rebuild.
-- R12.2. Migration 00007 renames `permanent` → `actionable` in `sync_failures`, deletes all `sync_failure` rows from `conflicts`, and rebuilds `conflicts` with a CHECK constraint excluding `sync_failure`.
-- R12.3. The consolidated schema (`00001_consolidated_schema.sql`) reflects the final state: no `sync_failure` in conflicts CHECK, no failure columns in `remote_state`, `actionable` as the non-transient category.
+- R12.1. Incremental migrations 00002-00006 are deleted. The consolidated schema (`00001_consolidated_schema.sql`) is the single source of truth.
+- R12.2. The consolidated schema has: no failure columns in `remote_state`, `sync_failures` with `category IN ('transient', 'actionable')`, `conflicts` CHECK constraint excluding `sync_failure`.
+- R12.3. No `local_issues` table exists in the schema.
 
 ## R13. Naming Cleanup
 

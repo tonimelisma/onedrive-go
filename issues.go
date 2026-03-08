@@ -49,33 +49,6 @@ conflicts or clear failures.`,
 	return cmd
 }
 
-// newConflictsCmd returns a hidden alias for 'issues' (backward compat).
-func newConflictsCmd() *cobra.Command {
-	cmd := newIssuesCmd()
-	cmd.Use = "conflicts"
-	cmd.Hidden = true
-
-	return cmd
-}
-
-// newFailuresCmd returns a hidden alias for 'issues' (backward compat).
-func newFailuresCmd() *cobra.Command {
-	cmd := newIssuesCmd()
-	cmd.Use = "failures"
-	cmd.Hidden = true
-
-	return cmd
-}
-
-// newResolveCmd returns a hidden top-level alias for 'issues resolve' (backward compat).
-func newResolveCmd() *cobra.Command {
-	cmd := newIssuesResolveCmd()
-	cmd.Use = "resolve [path-or-id]"
-	cmd.Hidden = true
-
-	return cmd
-}
-
 // --- issues list ---
 
 func runIssuesList(cmd *cobra.Command, _ []string) error {
