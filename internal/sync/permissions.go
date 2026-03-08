@@ -12,6 +12,21 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
+// resolveRemoteItemID looks up the remote item ID for a local path from the
+// baseline. Pure data lookup — no store access needed.
+func resolveRemoteItemID(bl *Baseline, localPath string, driveID driveid.ID) string {
+	entry, ok := bl.GetByPath(localPath)
+	if !ok {
+		return ""
+	}
+
+	if entry.DriveID != driveID {
+		return ""
+	}
+
+	return entry.ItemID
+}
+
 // PermissionChecker provides permission queries on drive items.
 // Satisfied by *graph.Client.
 type PermissionChecker interface {
@@ -91,7 +106,7 @@ func findShortcutForPath(shortcuts []Shortcut, filePath string) *Shortcut {
 // records a local_issue at the boundary folder.
 // Returns true if permission-denied was confirmed and recorded (read-only),
 // false if transient or unknown (caller should proceed with normal failure recording).
-func (e *Engine) handle403(ctx context.Context, failedPath string, shortcuts []Shortcut) bool {
+func (e *Engine) handle403(ctx context.Context, bl *Baseline, failedPath string, shortcuts []Shortcut) bool {
 	if e.permChecker == nil {
 		return false
 	}
@@ -109,7 +124,7 @@ func (e *Engine) handle403(ctx context.Context, failedPath string, shortcuts []S
 	// read-only folders for brand-new content, but will still correctly
 	// suppress at the shortcut root level.
 	parentFolder := filepath.Dir(failedPath)
-	parentItemID := e.resolveRemoteItemID(parentFolder, remoteDriveID)
+	parentItemID := resolveRemoteItemID(bl, parentFolder, remoteDriveID)
 
 	if parentItemID == "" {
 		parentFolder = sc.LocalPath
@@ -131,7 +146,7 @@ func (e *Engine) handle403(ctx context.Context, failedPath string, shortcuts []S
 	}
 
 	// Folder is read-only. Walk up to find the highest read-only ancestor.
-	boundary := e.walkPermissionBoundary(ctx, parentFolder, sc, remoteDriveID)
+	boundary := e.walkPermissionBoundary(ctx, bl, parentFolder, sc, remoteDriveID)
 
 	// Record ONE issue for the boundary folder.
 	if issueErr := e.baseline.RecordLocalIssue(
@@ -190,7 +205,7 @@ func (e *Engine) handlePermissionCheckError(ctx context.Context, err error, fail
 // walkPermissionBoundary walks UP the folder hierarchy to find the highest
 // read-only ancestor. Returns the boundary folder path.
 func (e *Engine) walkPermissionBoundary(
-	ctx context.Context, startFolder string, sc *Shortcut, remoteDriveID driveid.ID,
+	ctx context.Context, bl *Baseline, startFolder string, sc *Shortcut, remoteDriveID driveid.ID,
 ) string {
 	boundary := startFolder
 
@@ -200,7 +215,7 @@ func (e *Engine) walkPermissionBoundary(
 			break
 		}
 
-		parentID := e.resolveRemoteItemID(parent, remoteDriveID)
+		parentID := resolveRemoteItemID(bl, parent, remoteDriveID)
 		if parentID == "" {
 			break
 		}
@@ -220,30 +235,10 @@ func (e *Engine) walkPermissionBoundary(
 	return boundary
 }
 
-// resolveRemoteItemID looks up the remote item ID for a local path from the
-// baseline. Returns empty string if not found.
-func (e *Engine) resolveRemoteItemID(localPath string, driveID driveid.ID) string {
-	bl, err := e.baseline.Load(context.Background())
-	if err != nil {
-		return ""
-	}
-
-	entry, ok := bl.GetByPath(localPath)
-	if !ok {
-		return ""
-	}
-
-	if entry.DriveID != driveID {
-		return ""
-	}
-
-	return entry.ItemID
-}
-
 // recheckPermissions re-queries all permission_denied local_issues at the
 // start of each sync cycle. If a folder is now writable, the issue is cleared
 // and writes resume. Runs every cycle (typically 5 min in watch mode).
-func (e *Engine) recheckPermissions(ctx context.Context, shortcuts []Shortcut) {
+func (e *Engine) recheckPermissions(ctx context.Context, bl *Baseline, shortcuts []Shortcut) {
 	if e.permChecker == nil {
 		return
 	}
@@ -268,7 +263,7 @@ func (e *Engine) recheckPermissions(ctx context.Context, shortcuts []Shortcut) {
 		}
 
 		remoteDriveID := driveid.New(sc.RemoteDrive)
-		remoteItemID := e.resolveRemoteItemID(issue.Path, remoteDriveID)
+		remoteItemID := resolveRemoteItemID(bl, issue.Path, remoteDriveID)
 
 		if remoteItemID == "" {
 			e.permCache.set(issue.Path, false)

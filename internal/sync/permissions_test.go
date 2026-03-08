@@ -93,7 +93,7 @@ func TestFindShortcutForPath(t *testing.T) {
 
 // newTestEngineWithPerms creates an engine with a mock permission checker
 // and seeds baseline entries for the given paths.
-func newTestEngineWithPerms(t *testing.T, checker PermissionChecker, shortcuts []Shortcut, baselineEntries []Outcome) (*Engine, string) { //nolint:unparam // syncRoot useful for callers
+func newTestEngineWithPerms(t *testing.T, checker PermissionChecker, shortcuts []Shortcut, baselineEntries []Outcome) (*Engine, *Baseline, string) { //nolint:unparam // syncRoot useful for callers
 	t.Helper()
 
 	tmpDir := t.TempDir()
@@ -131,11 +131,15 @@ func newTestEngineWithPerms(t *testing.T, checker PermissionChecker, shortcuts [
 		require.NoError(t, eng.baseline.UpsertShortcut(ctx, &shortcuts[i]))
 	}
 
+	// Load baseline after seeding so tests get a populated snapshot.
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
 	t.Cleanup(func() {
 		assert.NoError(t, eng.Close())
 	})
 
-	return eng, syncRoot
+	return eng, bl, syncRoot
 }
 
 func TestHandle403_ReadOnlyFolder_RecordsIssueAtBoundary(t *testing.T) {
@@ -168,10 +172,10 @@ func TestHandle403_ReadOnlyFolder_RecordsIssueAtBoundary(t *testing.T) {
 		},
 	}
 
-	eng, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
-	result := eng.handle403(ctx, "Shared/TeamDocs/sub/file.txt", shortcuts)
+	result := eng.handle403(ctx, bl, "Shared/TeamDocs/sub/file.txt", shortcuts)
 	assert.True(t, result, "handle403 should return true for read-only folder")
 
 	// Should have recorded a permission_denied issue at the boundary (sub folder).
@@ -214,10 +218,10 @@ func TestHandle403_TransientError_NoSuppression(t *testing.T) {
 		},
 	}
 
-	eng, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
-	result := eng.handle403(ctx, "Shared/TeamDocs/sub/file.txt", shortcuts)
+	result := eng.handle403(ctx, bl, "Shared/TeamDocs/sub/file.txt", shortcuts)
 	assert.False(t, result, "handle403 should return false for transient 403")
 
 	// No issue should be recorded — transient 403.
@@ -255,10 +259,10 @@ func TestHandle403_WholeShareReadOnly_BoundaryAtRoot(t *testing.T) {
 		},
 	}
 
-	eng, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
-	eng.handle403(ctx, "Shared/TeamDocs/sub/file.txt", shortcuts)
+	eng.handle403(ctx, bl, "Shared/TeamDocs/sub/file.txt", shortcuts)
 
 	// Boundary should walk all the way up to the shortcut root.
 	issues, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
@@ -292,10 +296,10 @@ func TestHandle403_APIFailure_FailOpen(t *testing.T) {
 		},
 	}
 
-	eng, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
-	eng.handle403(ctx, "Shared/TeamDocs/sub/file.txt", shortcuts)
+	eng.handle403(ctx, bl, "Shared/TeamDocs/sub/file.txt", shortcuts)
 
 	// No issue — fail-open when API is unavailable.
 	issues, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
@@ -308,11 +312,11 @@ func TestHandle403_NoShortcutMatch_Ignored(t *testing.T) {
 
 	checker := &mockPermChecker{}
 
-	eng, _ := newTestEngineWithPerms(t, checker, nil, nil)
+	eng, bl, _ := newTestEngineWithPerms(t, checker, nil, nil)
 	ctx := t.Context()
 
 	// Path not under any shortcut.
-	eng.handle403(ctx, "Documents/file.txt", nil)
+	eng.handle403(ctx, bl, "Documents/file.txt", nil)
 
 	issues, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
 	require.NoError(t, err)
@@ -348,7 +352,7 @@ func TestRecheckPermissions_GrantDetected_IssueCleared(t *testing.T) {
 		},
 	}
 
-	eng, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
 	// Pre-record a permission_denied issue.
@@ -362,7 +366,7 @@ func TestRecheckPermissions_GrantDetected_IssueCleared(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, before, 1)
 
-	eng.recheckPermissions(ctx, shortcuts)
+	eng.recheckPermissions(ctx, bl, shortcuts)
 
 	// Issue should be cleared.
 	after, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
@@ -394,7 +398,7 @@ func TestRecheckPermissions_StillDenied_NoChange(t *testing.T) {
 		},
 	}
 
-	eng, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
 	require.NoError(t, eng.baseline.RecordLocalIssue(
@@ -402,7 +406,7 @@ func TestRecheckPermissions_StillDenied_NoChange(t *testing.T) {
 		"folder is read-only", http.StatusForbidden, 0, "",
 	))
 
-	eng.recheckPermissions(ctx, shortcuts)
+	eng.recheckPermissions(ctx, bl, shortcuts)
 
 	// Issue should remain.
 	after, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
@@ -415,12 +419,90 @@ func TestRecheckPermissions_NoIssues_NoAPICalls(t *testing.T) {
 
 	checker := &mockPermChecker{}
 
-	eng, _ := newTestEngineWithPerms(t, checker, nil, nil)
+	eng, bl, _ := newTestEngineWithPerms(t, checker, nil, nil)
 	ctx := t.Context()
 
-	eng.recheckPermissions(ctx, nil)
+	eng.recheckPermissions(ctx, bl, nil)
 
 	assert.Empty(t, checker.calls, "should not call API when there are no issues")
+}
+
+// ---------------------------------------------------------------------------
+// Fix #7: recheckPermissions caches unresolvable issues as denied.
+// ---------------------------------------------------------------------------
+
+func TestRecheckPermissions_UnresolvableIssues_CachedAsDenied(t *testing.T) {
+	t.Parallel()
+
+	checker := &mockPermChecker{}
+
+	// No shortcuts registered — issues won't match any shortcut.
+	eng, bl, _ := newTestEngineWithPerms(t, checker, nil, nil)
+	ctx := t.Context()
+
+	// Record two permission_denied issues.
+	require.NoError(t, eng.baseline.RecordLocalIssue(
+		ctx, "Shared/NoShortcut/sub", IssuePermissionDenied,
+		"folder is read-only", http.StatusForbidden, 0, "",
+	))
+	require.NoError(t, eng.baseline.RecordLocalIssue(
+		ctx, "Shared/Other/locked", IssuePermissionDenied,
+		"folder is read-only", http.StatusForbidden, 0, "",
+	))
+
+	// Recheck with no shortcuts — both issues have sc == nil.
+	eng.recheckPermissions(ctx, bl, nil)
+
+	// Both should be cached as denied (canWrite == false).
+	canWrite, ok := eng.permCache.get("Shared/NoShortcut/sub")
+	assert.True(t, ok, "unresolvable issue should be cached")
+	assert.False(t, canWrite, "unresolvable issue should be cached as denied")
+
+	canWrite, ok = eng.permCache.get("Shared/Other/locked")
+	assert.True(t, ok, "unresolvable issue should be cached")
+	assert.False(t, canWrite, "unresolvable issue should be cached as denied")
+
+	// No API calls — can't resolve without shortcuts.
+	assert.Empty(t, checker.calls, "should not call API when no shortcut matches")
+
+	// deniedPrefixes should return both.
+	prefixes := eng.permCache.deniedPrefixes()
+	assert.Len(t, prefixes, 2)
+	assert.Contains(t, prefixes, "Shared/NoShortcut/sub")
+	assert.Contains(t, prefixes, "Shared/Other/locked")
+}
+
+func TestRecheckPermissions_UnresolvedItemID_CachedAsDenied(t *testing.T) {
+	t.Parallel()
+
+	remoteDriveID := "remote-drive-1"
+
+	checker := &mockPermChecker{}
+
+	// Shortcut exists but the issue path is NOT in baseline → remoteItemID == "".
+	shortcuts := []Shortcut{{
+		ItemID: "sc-1", RemoteDrive: remoteDriveID, RemoteItem: "root-id",
+		LocalPath: "Shared/TeamDocs", Observation: ObservationDelta, DiscoveredAt: 1000,
+	}}
+
+	// No baseline entries for the issue path.
+	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, nil)
+	ctx := t.Context()
+
+	require.NoError(t, eng.baseline.RecordLocalIssue(
+		ctx, "Shared/TeamDocs/missing", IssuePermissionDenied,
+		"folder is read-only", http.StatusForbidden, 0, "",
+	))
+
+	eng.recheckPermissions(ctx, bl, shortcuts)
+
+	// Should be cached as denied even though item ID can't be resolved.
+	canWrite, ok := eng.permCache.get("Shared/TeamDocs/missing")
+	assert.True(t, ok, "unresolved item ID should be cached")
+	assert.False(t, canWrite, "unresolved item ID should be cached as denied")
+
+	// No API calls — can't query without item ID.
+	assert.Empty(t, checker.calls)
 }
 
 // ---------------------------------------------------------------------------
@@ -528,10 +610,10 @@ func TestHandle403_FolderNotFound_RecordsIssue(t *testing.T) {
 		},
 	}
 
-	eng, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
-	eng.handle403(ctx, "Shared/TeamDocs/sub/file.txt", shortcuts)
+	eng.handle403(ctx, bl, "Shared/TeamDocs/sub/file.txt", shortcuts)
 
 	// Should record an issue because the folder returned 404.
 	issues, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
@@ -570,11 +652,11 @@ func TestHandle403_UnresolvedParent_FallsBackToRoot(t *testing.T) {
 		},
 	}
 
-	eng, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
 	// File in a folder that's not in baseline yet.
-	eng.handle403(ctx, "Shared/TeamDocs/newdir/file.txt", shortcuts)
+	eng.handle403(ctx, bl, "Shared/TeamDocs/newdir/file.txt", shortcuts)
 
 	// Should fall back to root and record issue there.
 	issues, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
@@ -611,7 +693,7 @@ func TestRecheckPermissions_PopulatesCache(t *testing.T) {
 		},
 	}
 
-	eng, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
 	require.NoError(t, eng.baseline.RecordLocalIssue(
@@ -619,7 +701,7 @@ func TestRecheckPermissions_PopulatesCache(t *testing.T) {
 		"folder is read-only", http.StatusForbidden, 0, "",
 	))
 
-	eng.recheckPermissions(ctx, shortcuts)
+	eng.recheckPermissions(ctx, bl, shortcuts)
 
 	// Cache should have been populated.
 	canWrite, ok := eng.permCache.get("Shared/TeamDocs/sub")

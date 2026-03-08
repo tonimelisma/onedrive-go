@@ -2420,6 +2420,44 @@ func TestPlan_DeniedPrefix_RemoteDelete_LocalDelete(t *testing.T) {
 	assert.Empty(t, remoteDeletes, "should not produce remote deletes under denied prefix")
 }
 
+func TestPlan_DeniedPrefix_LocalMove_Suppressed(t *testing.T) {
+	t.Parallel()
+
+	planner := NewPlanner(testLogger(t))
+
+	// Baseline has a file at old path.
+	baseline := baselineWith(&BaselineEntry{
+		Path: "Shared/ReadOnly/old.txt", ItemType: ItemTypeFile,
+		LocalHash: "abc123", RemoteHash: "abc123",
+		DriveID: driveid.New(testDriveID), ItemID: "item-1",
+	})
+
+	// Local delete at old path + local create at new path with same hash = local move.
+	changes := []PathChanges{
+		{
+			Path: "Shared/ReadOnly/old.txt",
+			// No local events (file gone locally = local delete).
+		},
+		{
+			Path: "Shared/ReadOnly/new.txt",
+			LocalEvents: []ChangeEvent{{
+				Type:     ChangeCreate,
+				Path:     "Shared/ReadOnly/new.txt",
+				ItemType: ItemTypeFile,
+				Hash:     "abc123",
+			}},
+		},
+	}
+
+	denied := []string{"Shared/ReadOnly"}
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), denied)
+	require.NoError(t, err)
+
+	// Should NOT produce a remote move — can't write to remote under denied prefix.
+	remoteMoves := ActionsOfType(plan.Actions, ActionRemoteMove)
+	assert.Empty(t, remoteMoves, "local move under denied prefix should not produce remote move")
+}
+
 func TestIsWriteDenied(t *testing.T) {
 	t.Parallel()
 

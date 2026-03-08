@@ -44,14 +44,10 @@ func (e *Engine) processShortcuts(
 		}
 	}
 
-	// B-334: Pre-filter delete IDs to known shortcuts before loading the full list.
-	// This avoids unnecessary work in handleRemovedShortcuts.
-	var preFilterShortcuts []Shortcut
-
+	// Step 2: Handle removed shortcuts.
+	// B-334: Pre-filter delete IDs to known shortcuts before processing.
 	if len(removedShortcutIDs) > 0 {
-		var err error
-
-		preFilterShortcuts, err = e.baseline.ListShortcuts(ctx)
+		preFilterShortcuts, err := e.baseline.ListShortcuts(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("sync: listing shortcuts for removal pre-filter: %w", err)
 		}
@@ -66,11 +62,10 @@ func (e *Engine) processShortcuts(
 				delete(removedShortcutIDs, id)
 			}
 		}
-	}
 
-	// Step 2: Handle removed shortcuts.
-	if err := e.handleRemovedShortcuts(ctx, removedShortcutIDs, preFilterShortcuts); err != nil {
-		return nil, err
+		if err := e.handleRemovedShortcuts(ctx, removedShortcutIDs, preFilterShortcuts); err != nil {
+			return nil, err
+		}
 	}
 
 	// Step 3: Register/update shortcuts from shortcut events.
