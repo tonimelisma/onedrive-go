@@ -8,6 +8,7 @@ import (
 	stdsync "sync"
 	"sync/atomic"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -47,9 +48,10 @@ type WorkerPool struct {
 }
 
 // WorkerResult reports the outcome of a single action execution. The engine
-// reads these from the Results channel for failure recording in remote_state.
+// reads these from the Results channel for failure recording in sync_failures.
 type WorkerResult struct {
 	Path       string
+	DriveID    driveid.ID
 	ActionType ActionType
 	Success    bool
 	ErrMsg     string
@@ -310,6 +312,7 @@ func (wp *WorkerPool) DroppedErrors() int64 {
 func (wp *WorkerPool) sendResult(ctx context.Context, ta *TrackedAction, success bool, errMsg string, actionErr error) {
 	r := WorkerResult{
 		Path:       ta.Action.Path,
+		DriveID:    ta.Action.DriveID,
 		ActionType: ta.Action.Type,
 		Success:    success,
 		ErrMsg:     errMsg,

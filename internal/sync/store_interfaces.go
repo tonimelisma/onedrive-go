@@ -11,9 +11,6 @@ import (
 // methods needed by a specific caller. SyncStore implements all of them.
 // Components receive the interface they need, not the full SyncStore.
 //
-// These are declarations only in Phase 5.7.0. Nothing implements or uses
-// them yet — they exist so Phase 5.7.1+ can wire them incrementally.
-//
 // See docs/design/remote-state-separation.md §12 for the full design.
 
 // ObservationWriter is called by the RemoteObserver goroutine (single caller).
@@ -30,9 +27,9 @@ type OutcomeWriter interface {
 }
 
 // FailureRecorder is called by the drainWorkerResults goroutine (single caller).
-// Records failure metadata on remote_state rows.
+// Records failure metadata in sync_failures and transitions remote_state status.
 type FailureRecorder interface {
-	RecordFailure(ctx context.Context, path string, errMsg string, httpStatus int) error
+	RecordFailure(ctx context.Context, path string, driveID driveid.ID, direction, errMsg string, httpStatus int) error
 }
 
 // ConflictEscalator is called by the failure retrier goroutine (single caller).
@@ -47,26 +44,25 @@ type ConflictEscalator interface {
 // WAL mode guarantees readers never block.
 type StateReader interface {
 	// ListUnreconciled returns remote_state rows not yet reconciled with
-	// baseline. Used by the status command (5.7.4) to show pending items.
+	// baseline. Used by the status command to show pending items.
 	ListUnreconciled(ctx context.Context) ([]RemoteStateRow, error)
-	ListFailedForRetry(ctx context.Context, now time.Time) ([]RemoteStateRow, error)
-	EarliestRetryAt(ctx context.Context, now time.Time) (time.Time, error)
-	ListLocalIssuesForRetry(ctx context.Context, now time.Time) ([]LocalIssueRow, error)
-	EarliestLocalIssueRetryAt(ctx context.Context, now time.Time) (time.Time, error)
-	FailureCount(ctx context.Context) (int, error)
+	ListSyncFailuresForRetry(ctx context.Context, now time.Time) ([]SyncFailureRow, error)
+	EarliestSyncFailureRetryAt(ctx context.Context, now time.Time) (time.Time, error)
+	SyncFailureCount(ctx context.Context) (int, error)
 	BaselineEntryCount(ctx context.Context) (int, error)
 	UnresolvedConflictCount(ctx context.Context) (int, error)
 	ReadSyncMetadata(ctx context.Context) (map[string]string, error)
 }
 
-// LocalIssueRecorder is called by the engine to persist upload-side failures
-// (pre-validation rejects, transient upload errors). Single or few callers.
-type LocalIssueRecorder interface {
-	RecordLocalIssue(ctx context.Context, path, issueType, errMsg string, httpStatus int, fileSize int64, localHash string) error
-	ListLocalIssues(ctx context.Context) ([]LocalIssueRow, error)
-	ClearLocalIssue(ctx context.Context, path string) error
-	ClearResolvedLocalIssues(ctx context.Context) error
-	MarkLocalIssuePermanent(ctx context.Context, path string) error
+// SyncFailureRecorder is called by the engine to persist all failure types
+// (upload, download, delete) in the unified sync_failures table.
+type SyncFailureRecorder interface {
+	RecordSyncFailure(ctx context.Context, path string, driveID driveid.ID, direction, issueType, errMsg string,
+		httpStatus int, fileSize int64, localHash string, itemID string) error
+	ListSyncFailures(ctx context.Context) ([]SyncFailureRow, error)
+	ClearSyncFailure(ctx context.Context, path string, driveID driveid.ID) error
+	ClearResolvedSyncFailures(ctx context.Context) error
+	MarkSyncFailurePermanent(ctx context.Context, path string, driveID driveid.ID) error
 }
 
 // StateAdmin is called by CLI commands and daemon maintenance.
@@ -77,11 +73,14 @@ type StateAdmin interface {
 	ResetInProgressStates(ctx context.Context, syncRoot string) error
 }
 
-// LocalIssueRow represents a row from the local_issues table.
-type LocalIssueRow struct {
+// SyncFailureRow represents a row from the sync_failures table.
+type SyncFailureRow struct {
 	Path         string
+	DriveID      driveid.ID
+	Direction    string // "download", "upload", "delete"
+	Category     string // "transient", "permanent"
 	IssueType    string
-	SyncStatus   string
+	ItemID       string
 	FailureCount int
 	NextRetryAt  int64
 	LastError    string
