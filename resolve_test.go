@@ -247,7 +247,7 @@ func TestResolveStrategy(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			cmd := newResolveCmd()
+			cmd := newConflictsResolveCmd()
 			require.NoError(t, cmd.Flags().Set(tt.flag, "true"))
 
 			got, err := resolveStrategy(cmd)
@@ -260,7 +260,7 @@ func TestResolveStrategy(t *testing.T) {
 func TestResolveStrategy_NoFlag(t *testing.T) {
 	t.Parallel()
 
-	cmd := newResolveCmd()
+	cmd := newConflictsResolveCmd()
 
 	_, err := resolveStrategy(cmd)
 	require.Error(t, err)

@@ -228,3 +228,32 @@ func TestFilterFailures_NoMatch(t *testing.T) {
 	result := filterFailures(rows, "delete", "")
 	assert.Empty(t, result)
 }
+
+func TestNewFailuresCmd_HasRetrySubcommand(t *testing.T) {
+	t.Parallel()
+
+	cmd := newFailuresCmd()
+	retryCmd, _, err := cmd.Find([]string{"retry"})
+	require.NoError(t, err)
+	assert.Equal(t, "retry [path]", retryCmd.Use)
+	assert.NotNil(t, retryCmd.Flags().Lookup("all"))
+}
+
+func TestValidDirections(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, validDirections["download"])
+	assert.True(t, validDirections["upload"])
+	assert.True(t, validDirections["delete"])
+	assert.False(t, validDirections["downlod"]) // typo
+	assert.False(t, validDirections[""])
+}
+
+func TestValidCategories(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, validCategories["transient"])
+	assert.True(t, validCategories["permanent"])
+	assert.False(t, validCategories["tranisent"]) // typo
+	assert.False(t, validCategories[""])
+}

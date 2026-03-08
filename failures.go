@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -30,6 +31,7 @@ download/delete failures. Use 'failures clear' to remove resolved failures.`,
 	cmd.Flags().String("category", "", "filter by category (transient, permanent)")
 
 	cmd.AddCommand(newFailuresClearCmd())
+	cmd.AddCommand(newFailuresRetryCmd())
 
 	return cmd
 }
@@ -92,15 +94,23 @@ func runFailuresList(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	// Apply optional filters.
+	// Apply optional filters with validation.
 	dirFilter, err := cmd.Flags().GetString("direction")
 	if err != nil {
 		return err
 	}
 
+	if dirFilter != "" && !validDirections[dirFilter] {
+		return fmt.Errorf("invalid --direction %q: must be download, upload, or delete", dirFilter)
+	}
+
 	catFilter, err := cmd.Flags().GetString("category")
 	if err != nil {
 		return err
+	}
+
+	if catFilter != "" && !validCategories[catFilter] {
+		return fmt.Errorf("invalid --category %q: must be transient or permanent", catFilter)
 	}
 
 	if dirFilter != "" || catFilter != "" {
@@ -140,7 +150,17 @@ func filterFailures(rows []sync.SyncFailureRow, direction, category string) []sy
 	return filtered
 }
 
-func runFailuresClear(cmd *cobra.Command, args []string) error {
+// failureAction defines the all/single operations for a failures subcommand.
+type failureAction struct {
+	allFn     func(ctx context.Context, mgr *sync.SyncStore) error
+	singleFn  func(ctx context.Context, mgr *sync.SyncStore, path string) error
+	noArgMsg  string
+	allMsg    string
+	singleFmt string // format string with %s for path
+}
+
+// runFailureAction is a shared runner for clear and retry subcommands.
+func runFailureAction(cmd *cobra.Command, args []string, action failureAction) error {
 	cc := mustCLIContext(cmd.Context())
 
 	dbPath := cc.Cfg.StatePath()
@@ -156,34 +176,77 @@ func runFailuresClear(cmd *cobra.Command, args []string) error {
 
 	ctx := cmd.Context()
 
-	clearAll, err := cmd.Flags().GetBool("all")
+	doAll, err := cmd.Flags().GetBool("all")
 	if err != nil {
 		return err
 	}
 
-	if clearAll {
-		if err := mgr.ClearResolvedSyncFailures(ctx); err != nil {
+	if doAll {
+		if err := action.allFn(ctx, mgr); err != nil {
 			return err
 		}
 
-		fmt.Println("Cleared all permanent failures.")
+		fmt.Println(action.allMsg)
 
 		return nil
 	}
 
 	if len(args) == 0 {
-		return fmt.Errorf("provide a path to clear, or use --all to clear all permanent failures")
+		return fmt.Errorf("%s", action.noArgMsg)
 	}
 
-	// CLI doesn't know which drive owns the path — clear for all drives.
-	if err := mgr.ClearSyncFailureByPath(ctx, args[0]); err != nil {
+	if err := action.singleFn(ctx, mgr, args[0]); err != nil {
 		return err
 	}
 
-	fmt.Printf("Cleared failure for %s.\n", args[0])
+	fmt.Printf(action.singleFmt+"\n", args[0])
 
 	return nil
 }
+
+func runFailuresClear(cmd *cobra.Command, args []string) error {
+	return runFailureAction(cmd, args, failureAction{
+		allFn: func(ctx context.Context, mgr *sync.SyncStore) error { return mgr.ClearResolvedSyncFailures(ctx) },
+		singleFn: func(ctx context.Context, mgr *sync.SyncStore, p string) error {
+			return mgr.ClearSyncFailureByPath(ctx, p)
+		},
+		noArgMsg:  "provide a path to clear, or use --all to clear all permanent failures",
+		allMsg:    "Cleared all permanent failures.",
+		singleFmt: "Cleared failure for %s.",
+	})
+}
+
+func newFailuresRetryCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "retry [path]",
+		Short: "Reset failures for immediate retry",
+		Long: `Reset failure state so items are retried on the next sync.
+
+Provide a path to retry a specific failure. Use --all to retry all
+failed items.`,
+		RunE: runFailuresRetry,
+	}
+
+	cmd.Flags().Bool("all", false, "retry all failed items")
+
+	return cmd
+}
+
+func runFailuresRetry(cmd *cobra.Command, args []string) error {
+	return runFailureAction(cmd, args, failureAction{
+		allFn:     func(ctx context.Context, mgr *sync.SyncStore) error { return mgr.ResetAllFailures(ctx) },
+		singleFn:  func(ctx context.Context, mgr *sync.SyncStore, p string) error { return mgr.ResetFailure(ctx, p) },
+		noArgMsg:  "provide a path to retry, or use --all to retry all failures",
+		allMsg:    "Reset all failures for retry.",
+		singleFmt: "Reset failure for %s — will retry on next sync.",
+	})
+}
+
+// validDirections and validCategories for --direction and --category flag validation.
+var (
+	validDirections = map[string]bool{"download": true, "upload": true, "delete": true}
+	validCategories = map[string]bool{"transient": true, "permanent": true}
+)
 
 func toFailureJSON(row *sync.SyncFailureRow) failureJSON {
 	return failureJSON{
