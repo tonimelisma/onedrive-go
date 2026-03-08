@@ -376,7 +376,7 @@ func TestE2E_Sync_EditEditConflict_ResolveKeepRemote(t *testing.T) {
 
 	// Step 13: No more conflicts.
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
-	assert.Contains(t, stdout, "No unresolved conflicts")
+	assert.Contains(t, stdout, "No issues")
 
 	// Step 14: Verify passes.
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "verify")
@@ -459,7 +459,7 @@ func TestE2E_Sync_EditDeleteConflict(t *testing.T) {
 
 	// Step 11: No unresolved conflicts.
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
-	assert.Contains(t, stdout, "No unresolved conflicts")
+	assert.Contains(t, stdout, "No issues")
 
 	// Step 12: Verify passes.
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "verify")
@@ -509,7 +509,7 @@ func TestE2E_Sync_ResolveAll(t *testing.T) {
 
 	// Step 7: No unresolved conflicts.
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
-	assert.Contains(t, stdout, "No unresolved conflicts")
+	assert.Contains(t, stdout, "No issues")
 
 	// Step 8: Local files have remote content.
 	aData, err := os.ReadFile(filepath.Join(localDir, "a.txt"))
@@ -575,7 +575,7 @@ func TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal(t *testing.T) {
 
 	// Step 9: No more conflicts.
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
-	assert.Contains(t, stdout, "No unresolved conflicts")
+	assert.Contains(t, stdout, "No issues")
 
 	// Step 10: Sync to propagate local version upstream.
 	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
@@ -1123,5 +1123,5 @@ func TestE2E_Sync_ResolveDryRun(t *testing.T) {
 
 	// Step 8: No more conflicts.
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
-	assert.Contains(t, stdout, "No unresolved conflicts")
+	assert.Contains(t, stdout, "No issues")
 }
