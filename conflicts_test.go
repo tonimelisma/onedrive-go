@@ -96,6 +96,11 @@ func TestNewConflictsCmd_Structure(t *testing.T) {
 	cmd := newConflictsCmd()
 	assert.Equal(t, "conflicts", cmd.Use)
 	assert.NotNil(t, cmd.Flags().Lookup("history"))
+
+	// Has a "resolve" subcommand.
+	resolveCmd, _, err := cmd.Find([]string{"resolve"})
+	require.NoError(t, err)
+	assert.Equal(t, "resolve [path-or-id]", resolveCmd.Use)
 }
 
 // --- printConflictsJSON ---

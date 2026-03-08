@@ -198,16 +198,33 @@ func TestResolveSingleConflict_NotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "conflict not found")
 }
 
-// --- newResolveCmd ---
+// --- newResolveCmd (hidden alias) ---
 
-func TestNewResolveCmd_Structure(t *testing.T) {
+func TestNewResolveCmd_HiddenAlias(t *testing.T) {
 	t.Parallel()
 
 	cmd := newResolveCmd()
 	assert.Equal(t, "resolve [path-or-id]", cmd.Use)
+	assert.True(t, cmd.Hidden, "resolve should be a hidden alias")
 
 	for _, flag := range []string{"keep-local", "keep-remote", "keep-both", "all", "dry-run"} {
 		assert.NotNil(t, cmd.Flags().Lookup(flag), "missing flag %q", flag)
+	}
+}
+
+// --- conflicts resolve subcommand ---
+
+func TestConflictsResolveCmd_Structure(t *testing.T) {
+	t.Parallel()
+
+	cmd := newConflictsCmd()
+	resolveCmd, _, err := cmd.Find([]string{"resolve"})
+	require.NoError(t, err)
+	assert.Equal(t, "resolve [path-or-id]", resolveCmd.Use)
+	assert.False(t, resolveCmd.Hidden)
+
+	for _, flag := range []string{"keep-local", "keep-remote", "keep-both", "all", "dry-run"} {
+		assert.NotNil(t, resolveCmd.Flags().Lookup(flag), "missing flag %q", flag)
 	}
 }
 

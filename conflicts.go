@@ -30,15 +30,46 @@ func truncateID(id string) string {
 func newConflictsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "conflicts",
-		Short: "List unresolved sync conflicts",
+		Short: "List and resolve sync conflicts",
 		Long: `Display sync conflicts from the state database.
 
 By default shows only unresolved conflicts. Use --history to include
-resolved conflicts. Use 'onedrive-go resolve' to resolve conflicts.`,
+resolved conflicts. Use 'conflicts resolve' to resolve conflicts.`,
 		RunE: runConflicts,
 	}
 
 	cmd.Flags().Bool("history", false, "show all conflicts including resolved ones")
+
+	cmd.AddCommand(newConflictsResolveCmd())
+
+	return cmd
+}
+
+// newConflictsResolveCmd creates the 'conflicts resolve' subcommand.
+func newConflictsResolveCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "resolve [path-or-id]",
+		Short: "Resolve sync conflicts",
+		Long: `Resolve sync conflicts with a chosen strategy.
+
+Strategies:
+  --keep-local   Upload the local file to overwrite remote
+  --keep-remote  Download the remote file to overwrite local
+  --keep-both    Keep both versions (conflict copies already saved)
+
+Use --all to resolve all unresolved conflicts with the chosen strategy.
+Without --all, a path or conflict ID argument is required.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: runResolve,
+	}
+
+	cmd.Flags().Bool("keep-local", false, "upload local file to overwrite remote")
+	cmd.Flags().Bool("keep-remote", false, "download remote file to overwrite local")
+	cmd.Flags().Bool("keep-both", false, "keep both versions as-is")
+	cmd.Flags().Bool("all", false, "resolve all unresolved conflicts")
+	cmd.Flags().Bool("dry-run", false, "preview resolution without executing")
+
+	cmd.MarkFlagsMutuallyExclusive("keep-local", "keep-remote", "keep-both")
 
 	return cmd
 }
