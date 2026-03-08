@@ -771,7 +771,7 @@ When tokens expire completely (90 days of inactivity), re-bootstrap using the sa
 
 **Who manages secrets**: The AI orchestrator (Claude) has `az` CLI access and **should** manage Key Vault secrets directly. This includes creating, updating, rotating, and verifying secrets — not just human-only operations. When CI changes affect token paths or secret naming, the orchestrator should update Key Vault secrets and GitHub variables as part of the same increment, then verify CI passes before declaring done. The human only needs to intervene for one-time Azure infrastructure setup (service principal, RBAC, federated credentials) and interactive `login` flows that require a browser.
 
-**CI auth failure handling**: If the integration job fails authentication, it prints re-bootstrap instructions. Integration tests run only on push to main, nightly, and manual dispatch — never on PRs.
+**CI auth failure handling**: If the integration job fails authentication, it prints re-bootstrap instructions. All CI jobs run on PRs, nightly schedule, and manual dispatch. Push-to-main CI is skipped for PR merges (squash commits containing `(#NNN)`) to avoid redundant runs.
 
 **Local CI validation** (before pushing changes that affect CI):
 
@@ -1347,26 +1347,23 @@ Each of the 12+ known API quirks has a regression test using realistic API respo
 
 ### 10.1 Pipeline Overview
 
-Three parallel jobs run on every PR push. E2E tests run only on merge to main and nightly.
+Four parallel jobs run on every PR. Push-to-main CI is skipped for PR merges (squash commits containing `(#NNN)`) to avoid redundant runs. Direct pushes, nightly schedule, and manual dispatch still trigger all jobs. Branch protection requires all 4 jobs to pass before merge.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        PR Push Trigger                           │
-└──────────┬────────────────────┬──────────────────────┬──────────┘
-           │                    │                      │
-           ▼                    ▼                      ▼
-   ┌──────────────┐   ┌─────────────────┐   ┌────────────────┐
-   │   Job 1:     │   │    Job 2:       │   │   Job 3:       │
-   │ Lint + Build │   │  Integration    │   │  E2E           │
-   │ + Unit       │   │  + Chaos        │   │ (merge+nightly │
-   │              │   │                 │   │  only)         │
-   │ golangci-lint│   │ Mock HTTP       │   │ Live OneDrive  │
-   │ go build     │   │ Real SQLite     │   │ Personal acct  │
-   │ go test      │   │ Fault injection │   │                │
-   │ benchmarks   │   │                 │   │                │
-   │ coverage     │   │                 │   │                │
-   └──────────────┘   └─────────────────┘   └────────────────┘
-        ~2 min              ~3 min               ~10 min
+└────────┬──────────────┬──────────────────┬──────────────┬───────┘
+         │              │                  │              │
+         ▼              ▼                  ▼              ▼
+  ┌────────────┐ ┌────────────┐  ┌─────────────────┐ ┌────────┐
+  │  Job 1:    │ │  Job 2:    │  │   Job 3:        │ │ Job 4: │
+  │  Lint      │ │  Test      │  │  Integration    │ │ E2E    │
+  │            │ │            │  │                 │ │        │
+  │ golangci-  │ │ go build   │  │ Azure OIDC +   │ │ Live   │
+  │ lint       │ │ go test    │  │ Key Vault +     │ │ OneDrive│
+  │            │ │ -race      │  │ Graph API       │ │ CLI    │
+  └────────────┘ └────────────┘  └─────────────────┘ └────────┘
+     ~40s           ~1m30s            ~1m40s            ~2m
 ```
 
 ### 10.2 E2E-First CI Strategy
@@ -1387,11 +1384,11 @@ Phase 2 introduces E2E CI **before** the sync engine is built. This is deliberat
 - Concurrent operations (parallel uploads/downloads via worker pool)
 - Token refresh mid-operation (access token expires during upload session)
 
-**CI infrastructure**: GitHub Actions with Azure Key Vault + OIDC federation for OneDrive API tokens (details in §6.1). Integration tests run on push to main + nightly, not on PRs.
+**CI infrastructure**: GitHub Actions with Azure Key Vault + OIDC federation for OneDrive API tokens (details in §6.1). All 4 jobs (lint, test, integration, e2e) run on every PR. Branch protection requires all to pass before merge.
 
 ### 10.3 Job 1: Lint + Build + Unit Tests
 
-Runs on every PR push and every commit to main.
+Runs on every PR. Skipped on push-to-main for PR merges.
 
 ```yaml
 job1-lint-build-unit:
@@ -1477,7 +1474,7 @@ job2-integration-chaos:
 
 ### 10.5 Job 3: E2E Tests
 
-E2E tests run in the same workflow as integration tests (`.github/workflows/integration.yml`), not a separate job. They share the same Azure OIDC + Key Vault credential flow. Runs on push to main, nightly schedule, and manual dispatch.
+E2E tests run as a dedicated job in `.github/workflows/ci.yml`, using Azure OIDC + Key Vault credential flow. Runs on every PR, nightly schedule (with full suite), and manual dispatch. Skipped on push-to-main for PR merges.
 
 ```yaml
 # E2E tests run after integration tests in integration.yml

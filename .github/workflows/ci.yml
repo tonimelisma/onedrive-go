@@ -20,9 +20,12 @@ permissions:
 
 jobs:
   # --- Always-run jobs (including fork PRs) ---
+  # Skip push-to-main for PR merges (squash commits contain "(#NNN)").
+  # Direct pushes, schedule, and dispatch still run. PRs always run.
 
   lint:
     runs-on: ubuntu-latest
+    if: github.event_name != 'push' || !contains(github.event.head_commit.message, '(#')
     steps:
       - uses: actions/checkout@v4
 
@@ -37,6 +40,7 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    if: github.event_name != 'push' || !contains(github.event.head_commit.message, '(#')
     steps:
       - uses: actions/checkout@v4
 
@@ -56,7 +60,9 @@ jobs:
 
   integration:
     runs-on: ubuntu-latest
-    if: vars.AZURE_CLIENT_ID != ''
+    if: >-
+      vars.AZURE_CLIENT_ID != ''
+      && (github.event_name != 'push' || !contains(github.event.head_commit.message, '(#'))
     env:
       ONEDRIVE_TEST_DRIVE: ${{ vars.ONEDRIVE_TEST_DRIVE_INTEGRATION }}
       ONEDRIVE_ALLOWED_TEST_ACCOUNTS: ${{ vars.ONEDRIVE_ALLOWED_TEST_ACCOUNTS }}
@@ -156,7 +162,9 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
-    if: vars.AZURE_CLIENT_ID != ''
+    if: >-
+      vars.AZURE_CLIENT_ID != ''
+      && (github.event_name != 'push' || !contains(github.event.head_commit.message, '(#'))
     env:
       ONEDRIVE_TEST_DRIVE: ${{ vars.ONEDRIVE_TEST_DRIVE_E2E }}
       ONEDRIVE_TEST_DRIVE_2: ${{ vars.ONEDRIVE_TEST_DRIVE_E2E_2 }}
