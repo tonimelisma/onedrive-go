@@ -98,8 +98,7 @@ const (
 
 	sqlUpdateRemoteState = `UPDATE remote_state SET
 		path = ?, parent_id = ?, item_type = ?, hash = ?, size = ?, mtime = ?, etag = ?,
-		previous_path = ?, sync_status = ?, observed_at = ?,
-		failure_count = ?, next_retry_at = ?
+		previous_path = ?, sync_status = ?, observed_at = ?
 		WHERE drive_id = ? AND item_id = ?`
 )
 
@@ -919,7 +918,6 @@ func (m *SyncStore) Close() error {
 // For each ObservedItem:
 //   - New item (no existing row): INSERT with pending_download (skip if deleted)
 //   - Existing item: call computeNewStatus() and UPDATE only if changed
-//   - Hash change: reset failure_count and next_retry_at
 //   - Path change: set previous_path for move tracking
 func (m *SyncStore) CommitObservation(ctx context.Context, events []ObservedItem, newToken string, driveID driveid.ID) error {
 	tx, err := m.db.BeginTx(ctx, nil)
@@ -1055,7 +1053,6 @@ func (m *SyncStore) updateRemoteStateFromObs(
 		nullString(item.Hash), nullInt64(item.Size), nullInt64(item.Mtime),
 		nullString(item.ETag),
 		nullString(previousPath), newStatus, now,
-		0, nil, // reset failure_count and next_retry_at on observation update
 		item.DriveID.String(), item.ItemID,
 	)
 	if err != nil {
@@ -1366,10 +1363,8 @@ func (m *SyncStore) ResetInProgressStates(ctx context.Context, syncRoot string) 
 }
 
 // EscalateToConflict creates a sync_failure conflict record for an item that
-// has exceeded the retry threshold. In the same transaction, NULLs
-// next_retry_at on the remote_state row to prevent further retry scheduling.
-// The row stays in its *_failed state; the reconciler checks failure_count
-// against the threshold.
+// has exceeded the retry threshold. The row stays in its *_failed state;
+// retry scheduling is managed by the sync_failures table.
 func (m *SyncStore) EscalateToConflict(ctx context.Context, driveID driveid.ID, itemID, conflictPath, reason string) error {
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1390,15 +1385,6 @@ func (m *SyncStore) EscalateToConflict(ctx context.Context, driveID driveid.ID, 
 	)
 	if err != nil {
 		return fmt.Errorf("sync: inserting sync_failure conflict for %s: %w", conflictPath, err)
-	}
-
-	// Stop further retry scheduling.
-	_, err = tx.ExecContext(ctx,
-		`UPDATE remote_state SET next_retry_at = NULL WHERE drive_id = ? AND item_id = ?`,
-		driveID.String(), itemID,
-	)
-	if err != nil {
-		return fmt.Errorf("sync: nulling next_retry_at for %s: %w", conflictPath, err)
 	}
 
 	if err := tx.Commit(); err != nil {

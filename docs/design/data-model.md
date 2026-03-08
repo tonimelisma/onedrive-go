@@ -159,15 +159,15 @@ CREATE TABLE remote_state (
                       'pending_delete', 'deleting', 'delete_failed', 'deleted',
                       'filtered')),
     observed_at   INTEGER NOT NULL CHECK(observed_at > 0),
-    failure_count INTEGER NOT NULL DEFAULT 0,
-    next_retry_at INTEGER,
-    last_error    TEXT,
-    http_status   INTEGER,
     PRIMARY KEY (drive_id, item_id)
 );
 ```
 
-**15 columns.** The `sync_status` column is an explicit state machine that
+**11 columns.** Failure metadata (`failure_count`, `next_retry_at`, `last_error`,
+`http_status`) was moved to the `sync_failures` table and removed from
+`remote_state` in migration 00006 (B-336).
+
+The `sync_status` column is an explicit state machine that
 tracks each item's sync lifecycle. See
 [remote-state-separation.md §7](remote-state-separation.md) for the full
 state machine and transition ownership.
