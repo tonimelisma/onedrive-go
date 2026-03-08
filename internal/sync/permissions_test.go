@@ -580,6 +580,41 @@ func TestPermissionCache_NilSafe(t *testing.T) {
 	assert.Nil(t, pc.deniedPrefixes())
 }
 
+func TestPermissionCache_ConcurrentAccess(t *testing.T) {
+	t.Parallel()
+
+	pc := newPermissionCache()
+
+	// Hammer the cache from multiple goroutines to verify thread safety.
+	// The race detector will catch unprotected map access.
+	done := make(chan struct{})
+	for i := range 10 {
+		go func(id int) {
+			defer func() { done <- struct{}{} }()
+			path := fmt.Sprintf("folder/%d", id)
+
+			for range 100 {
+				pc.set(path, id%2 == 0)
+				pc.get(path)
+				pc.deniedPrefixes()
+			}
+		}(i)
+	}
+
+	// One goroutine doing resets.
+	go func() {
+		defer func() { done <- struct{}{} }()
+
+		for range 50 {
+			pc.reset()
+		}
+	}()
+
+	for range 11 {
+		<-done
+	}
+}
+
 // ---------------------------------------------------------------------------
 // handle403 404 fallback test
 // ---------------------------------------------------------------------------
