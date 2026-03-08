@@ -12,12 +12,14 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
-func TestNewIssuesCmd_Structure(t *testing.T) {
+func TestNewFailuresCmd_Structure(t *testing.T) {
 	t.Parallel()
 
-	cmd := newIssuesCmd()
-	assert.Equal(t, "issues", cmd.Use)
+	cmd := newFailuresCmd()
+	assert.Equal(t, "failures", cmd.Use)
 	assert.NotNil(t, cmd.RunE)
+	assert.NotNil(t, cmd.Flags().Lookup("direction"))
+	assert.NotNil(t, cmd.Flags().Lookup("category"))
 
 	// Has a "clear" subcommand.
 	clearCmd, _, err := cmd.Find([]string{"clear"})
@@ -26,7 +28,16 @@ func TestNewIssuesCmd_Structure(t *testing.T) {
 	assert.NotNil(t, clearCmd.Flags().Lookup("all"))
 }
 
-func TestToIssueJSON(t *testing.T) {
+func TestNewIssuesCmd_HiddenAlias(t *testing.T) {
+	t.Parallel()
+
+	cmd := newIssuesCmd()
+	assert.Equal(t, "issues", cmd.Use)
+	assert.True(t, cmd.Hidden, "issues should be a hidden alias")
+	assert.NotNil(t, cmd.RunE)
+}
+
+func TestToFailureJSON(t *testing.T) {
 	t.Parallel()
 
 	row := &sync.SyncFailureRow{
@@ -44,7 +55,7 @@ func TestToIssueJSON(t *testing.T) {
 		LastSeenAt:   1700000001000000000,
 	}
 
-	j := toIssueJSON(row)
+	j := toFailureJSON(row)
 	assert.Equal(t, "docs/CON", j.Path)
 	assert.Equal(t, "upload", j.Direction)
 	assert.Equal(t, "permanent", j.Category)
@@ -56,22 +67,22 @@ func TestToIssueJSON(t *testing.T) {
 	assert.NotEmpty(t, j.LastSeenAt)
 }
 
-func TestPrintIssuesJSON_EmptyList(t *testing.T) {
+func TestPrintFailuresJSON_EmptyList(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	err := printIssuesJSON(&buf, nil)
+	err := printFailuresJSON(&buf, nil)
 	require.NoError(t, err)
 
-	var result []issueJSON
+	var result []failureJSON
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &result))
 	assert.Empty(t, result)
 }
 
-func TestPrintIssuesJSON_WithIssues(t *testing.T) {
+func TestPrintFailuresJSON_WithFailures(t *testing.T) {
 	t.Parallel()
 
-	issues := []sync.SyncFailureRow{
+	failures := []sync.SyncFailureRow{
 		{
 			Path:         "docs/CON",
 			DriveID:      driveid.New("drive-1"),
@@ -98,10 +109,10 @@ func TestPrintIssuesJSON_WithIssues(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := printIssuesJSON(&buf, issues)
+	err := printFailuresJSON(&buf, failures)
 	require.NoError(t, err)
 
-	var result []issueJSON
+	var result []failureJSON
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &result))
 	require.Len(t, result, 2)
 	assert.Equal(t, "docs/CON", result[0].Path)
@@ -110,10 +121,10 @@ func TestPrintIssuesJSON_WithIssues(t *testing.T) {
 	assert.Equal(t, int64(300*1024*1024*1024), result[1].FileSize)
 }
 
-func TestPrintIssuesTable(t *testing.T) {
+func TestPrintFailuresTable(t *testing.T) {
 	t.Parallel()
 
-	issues := []sync.SyncFailureRow{
+	failures := []sync.SyncFailureRow{
 		{
 			Path:         "docs/CON",
 			DriveID:      driveid.New("drive-1"),
@@ -127,7 +138,7 @@ func TestPrintIssuesTable(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printIssuesTable(&buf, issues)
+	printFailuresTable(&buf, failures)
 
 	output := buf.String()
 	assert.Contains(t, output, "PATH")
@@ -138,11 +149,11 @@ func TestPrintIssuesTable(t *testing.T) {
 	assert.Contains(t, output, "permanent")
 }
 
-func TestPrintIssuesTable_TruncatesLongErrors(t *testing.T) {
+func TestPrintFailuresTable_TruncatesLongErrors(t *testing.T) {
 	t.Parallel()
 
 	longErr := "this is a very long error message that should be truncated to sixty characters total for table display purposes"
-	issues := []sync.SyncFailureRow{
+	failures := []sync.SyncFailureRow{
 		{
 			Path:         "file.txt",
 			DriveID:      driveid.New("drive-1"),
@@ -156,9 +167,64 @@ func TestPrintIssuesTable_TruncatesLongErrors(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printIssuesTable(&buf, issues)
+	printFailuresTable(&buf, failures)
 
 	output := buf.String()
-	assert.Contains(t, output, longErr[:maxIssueErrorLen-3]+"...")
+	assert.Contains(t, output, longErr[:maxFailureErrorLen-3]+"...")
 	assert.NotContains(t, output, longErr) // full message should not appear
+}
+
+func TestFilterFailures_ByDirection(t *testing.T) {
+	t.Parallel()
+
+	rows := []sync.SyncFailureRow{
+		{Path: "a.txt", Direction: "upload", Category: "transient"},
+		{Path: "b.txt", Direction: "download", Category: "transient"},
+		{Path: "c.txt", Direction: "upload", Category: "permanent"},
+	}
+
+	result := filterFailures(rows, "upload", "")
+	require.Len(t, result, 2)
+	assert.Equal(t, "a.txt", result[0].Path)
+	assert.Equal(t, "c.txt", result[1].Path)
+}
+
+func TestFilterFailures_ByCategory(t *testing.T) {
+	t.Parallel()
+
+	rows := []sync.SyncFailureRow{
+		{Path: "a.txt", Direction: "upload", Category: "transient"},
+		{Path: "b.txt", Direction: "download", Category: "permanent"},
+		{Path: "c.txt", Direction: "upload", Category: "permanent"},
+	}
+
+	result := filterFailures(rows, "", "permanent")
+	require.Len(t, result, 2)
+	assert.Equal(t, "b.txt", result[0].Path)
+	assert.Equal(t, "c.txt", result[1].Path)
+}
+
+func TestFilterFailures_BothFilters(t *testing.T) {
+	t.Parallel()
+
+	rows := []sync.SyncFailureRow{
+		{Path: "a.txt", Direction: "upload", Category: "transient"},
+		{Path: "b.txt", Direction: "download", Category: "permanent"},
+		{Path: "c.txt", Direction: "upload", Category: "permanent"},
+	}
+
+	result := filterFailures(rows, "upload", "permanent")
+	require.Len(t, result, 1)
+	assert.Equal(t, "c.txt", result[0].Path)
+}
+
+func TestFilterFailures_NoMatch(t *testing.T) {
+	t.Parallel()
+
+	rows := []sync.SyncFailureRow{
+		{Path: "a.txt", Direction: "upload", Category: "transient"},
+	}
+
+	result := filterFailures(rows, "delete", "")
+	assert.Empty(t, result)
 }
