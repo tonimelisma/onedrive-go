@@ -2230,9 +2230,9 @@ func TestSetDispatchStatus_DownloadFromFailed(t *testing.T) {
 
 	// Insert a download_failed row.
 	_, err := mgr.db.ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at, failure_count)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		"d!abc", "item1", "/test.txt", "file", "download_failed", 1700000000, 3)
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"d!abc", "item1", "/test.txt", "file", "download_failed", 1700000000)
 	require.NoError(t, err)
 
 	require.NoError(t, mgr.SetDispatchStatus(ctx, "d!abc", "item1", ActionDownload))
@@ -2276,9 +2276,9 @@ func TestSetDispatchStatus_DeleteFromFailed(t *testing.T) {
 
 	// Insert a delete_failed row.
 	_, err := mgr.db.ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at, failure_count)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		"d!abc", "item1", "/test.txt", "file", "delete_failed", 1700000000, 2)
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"d!abc", "item1", "/test.txt", "file", "delete_failed", 1700000000)
 	require.NoError(t, err)
 
 	require.NoError(t, mgr.SetDispatchStatus(ctx, "d!abc", "item1", ActionLocalDelete))
@@ -2512,11 +2512,11 @@ func TestEscalateToConflict_CreatesRecord(t *testing.T) {
 
 	driveID := driveid.New("d!esc")
 
-	// Insert a failed remote_state row with a retry scheduled.
+	// Insert a failed remote_state row.
 	_, err := mgr.db.ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at, failure_count, next_retry_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		driveID.String(), "item1", "/failing.txt", "file", "download_failed", 1700000000, 10, 1700001000)
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		driveID.String(), "item1", "/failing.txt", "file", "download_failed", 1700000000)
 	require.NoError(t, err)
 
 	require.NoError(t, mgr.EscalateToConflict(ctx, driveID, "item1", "/failing.txt", "too many failures"))
@@ -2529,14 +2529,6 @@ func TestEscalateToConflict_CreatesRecord(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, ConflictSyncFailure, conflictType)
 	assert.Equal(t, ResolutionUnresolved, resolution)
-
-	// Verify next_retry_at was NULLed to stop further retries.
-	var nextRetry sql.NullInt64
-	err = mgr.db.QueryRowContext(ctx,
-		`SELECT next_retry_at FROM remote_state WHERE drive_id = ? AND item_id = ?`,
-		driveID.String(), "item1").Scan(&nextRetry)
-	require.NoError(t, err)
-	assert.False(t, nextRetry.Valid, "next_retry_at should be NULL after escalation")
 }
 
 func TestEscalateToConflict_AlongsideExisting(t *testing.T) {
@@ -2556,9 +2548,9 @@ func TestEscalateToConflict_AlongsideExisting(t *testing.T) {
 
 	// Insert a failed remote_state row.
 	_, err = mgr.db.ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at, failure_count)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		driveID.String(), "item1", "/failing.txt", "file", "delete_failed", 1700000000, 10)
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		driveID.String(), "item1", "/failing.txt", "file", "delete_failed", 1700000000)
 	require.NoError(t, err)
 
 	require.NoError(t, mgr.EscalateToConflict(ctx, driveID, "item1", "/failing.txt", "permanent failure"))
@@ -2668,7 +2660,7 @@ func TestMigration00002_SyncFailureRoundTrip(t *testing.T) {
 
 	ver, err := provider.GetDBVersion(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, int64(5), ver)
+	assert.Equal(t, int64(6), ver)
 
 	// Step 2: Insert seed data — one standard conflict, one sync_failure.
 	_, err = db.ExecContext(ctx,
@@ -2685,7 +2677,10 @@ func TestMigration00002_SyncFailureRoundTrip(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	// Step 3: Roll back migrations 00005, 00004, 00003, 00002.
+	// Step 3: Roll back migrations 00006, 00005, 00004, 00003, 00002.
+	_, err = provider.Down(ctx) // 00006 → 00005
+	require.NoError(t, err)
+
 	_, err = provider.Down(ctx) // 00005 → 00004
 	require.NoError(t, err)
 
@@ -2738,4 +2733,182 @@ func TestMigration00002_SyncFailureRoundTrip(t *testing.T) {
 	err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM conflicts WHERE id = ?`, "edit-id").Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count, "edit_edit conflict should survive full round-trip")
+}
+
+// TestMigration00006_DropDeadFailureColumns verifies that migration 00006
+// removes the dead failure columns (failure_count, next_retry_at, last_error,
+// http_status) from remote_state without losing data, and that the rollback
+// restores them (B-336).
+func TestMigration00006_DropDeadFailureColumns(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	dbPath := filepath.Join(t.TempDir(), "migration.db")
+
+	dsn := fmt.Sprintf(
+		"file:%s?_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)"+
+			"&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)",
+		dbPath,
+	)
+
+	db, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+
+	defer db.Close()
+
+	db.SetMaxOpenConns(1)
+
+	subFS, err := fs.Sub(migrationsFS, "migrations")
+	require.NoError(t, err)
+
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, subFS)
+	require.NoError(t, err)
+
+	// Step 1: Apply migrations up to 00005 (before the new migration).
+	for range 5 {
+		_, err = provider.UpByOne(ctx)
+		require.NoError(t, err)
+	}
+
+	// Step 2: Insert seed data with failure columns populated.
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status,
+		 observed_at, failure_count, next_retry_at, last_error, http_status)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"d!abc", "item1", "/file.txt", "file", "download_failed",
+		1700000000, 3, 1700001000, "server error", 500,
+	)
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status,
+		 observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"d!abc", "item2", "/clean.txt", "file", "synced", 1700000000,
+	)
+	require.NoError(t, err)
+
+	// Verify dead columns exist before migration.
+	assert.True(t, remoteStateColumnExists(t, db, "failure_count"),
+		"failure_count should exist before migration")
+	assert.True(t, remoteStateColumnExists(t, db, "next_retry_at"),
+		"next_retry_at should exist before migration")
+	assert.True(t, remoteStateColumnExists(t, db, "last_error"),
+		"last_error should exist before migration")
+	assert.True(t, remoteStateColumnExists(t, db, "http_status"),
+		"http_status should exist before migration")
+
+	// Step 3: Apply migration 00006.
+	_, err = provider.UpByOne(ctx)
+	require.NoError(t, err)
+
+	ver, err := provider.GetDBVersion(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(6), ver)
+
+	// Step 4: Verify dead columns are gone.
+	assert.False(t, remoteStateColumnExists(t, db, "failure_count"),
+		"failure_count should not exist after migration")
+	assert.False(t, remoteStateColumnExists(t, db, "next_retry_at"),
+		"next_retry_at should not exist after migration")
+	assert.False(t, remoteStateColumnExists(t, db, "last_error"),
+		"last_error should not exist after migration")
+	assert.False(t, remoteStateColumnExists(t, db, "http_status"),
+		"http_status should not exist after migration")
+
+	// Step 5: Verify data survived the rebuild.
+	var (
+		driveID, itemID, path, itemType, syncStatus string
+		observedAt                                  int64
+	)
+
+	err = db.QueryRowContext(ctx,
+		`SELECT drive_id, item_id, path, item_type, sync_status, observed_at
+		 FROM remote_state WHERE item_id = ?`, "item1",
+	).Scan(&driveID, &itemID, &path, &itemType, &syncStatus, &observedAt)
+	require.NoError(t, err)
+	assert.Equal(t, "d!abc", driveID)
+	assert.Equal(t, "/file.txt", path)
+	assert.Equal(t, "download_failed", syncStatus)
+	assert.Equal(t, int64(1700000000), observedAt)
+
+	// Second row also survived.
+	err = db.QueryRowContext(ctx,
+		`SELECT path, sync_status FROM remote_state WHERE item_id = ?`, "item2",
+	).Scan(&path, &syncStatus)
+	require.NoError(t, err)
+	assert.Equal(t, "/clean.txt", path)
+	assert.Equal(t, "synced", syncStatus)
+
+	// Step 6: Verify indexes survived the rebuild.
+	assert.True(t, indexExists(t, db, "idx_remote_state_status"),
+		"status index should survive rebuild")
+	assert.True(t, indexExists(t, db, "idx_remote_state_parent"),
+		"parent index should survive rebuild")
+	assert.True(t, indexExists(t, db, "idx_remote_state_active_path"),
+		"active path index should survive rebuild")
+
+	// Step 7: Roll back migration 00006.
+	_, err = provider.Down(ctx)
+	require.NoError(t, err)
+
+	ver, err = provider.GetDBVersion(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), ver)
+
+	// Step 8: Verify dead columns are restored.
+	assert.True(t, remoteStateColumnExists(t, db, "failure_count"),
+		"failure_count should be restored after rollback")
+	assert.True(t, remoteStateColumnExists(t, db, "next_retry_at"),
+		"next_retry_at should be restored after rollback")
+
+	// Step 9: Verify data survived the round-trip.
+	err = db.QueryRowContext(ctx,
+		`SELECT path, sync_status FROM remote_state WHERE item_id = ?`, "item1",
+	).Scan(&path, &syncStatus)
+	require.NoError(t, err)
+	assert.Equal(t, "/file.txt", path)
+	assert.Equal(t, "download_failed", syncStatus)
+}
+
+// remoteStateColumnExists checks whether a column exists in the remote_state table.
+func remoteStateColumnExists(t *testing.T, db *sql.DB, column string) bool {
+	t.Helper()
+
+	rows, err := db.QueryContext(t.Context(), "PRAGMA table_info(remote_state)")
+	require.NoError(t, err)
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull, pk int
+		var dfltValue sql.NullString
+
+		err := rows.Scan(&cid, &name, &colType, &notNull, &dfltValue, &pk)
+		require.NoError(t, err)
+
+		if name == column {
+			return true
+		}
+	}
+
+	require.NoError(t, rows.Err())
+
+	return false
+}
+
+// indexExists checks whether an index exists in a SQLite database.
+func indexExists(t *testing.T, db *sql.DB, indexName string) bool {
+	t.Helper()
+
+	var count int
+
+	err := db.QueryRowContext(t.Context(),
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?`,
+		indexName,
+	).Scan(&count)
+	require.NoError(t, err)
+
+	return count > 0
 }
