@@ -32,13 +32,6 @@ type FailureRecorder interface {
 	RecordFailure(ctx context.Context, path string, driveID driveid.ID, direction, errMsg string, httpStatus int) error
 }
 
-// ConflictEscalator is called by the failure retrier goroutine (single caller).
-// Writes a conflict record when a permanently-failing item exceeds the
-// retry threshold (e.g., non-empty directory delete after 10 failures).
-type ConflictEscalator interface {
-	EscalateToConflict(ctx context.Context, driveID driveid.ID, itemID, path, reason string) error
-}
-
 // StateReader is called by failure retrier, planner, status, CLI (read-only).
 // All methods are pure reads. Multiple goroutines call concurrently.
 // WAL mode guarantees readers never block.
@@ -60,9 +53,10 @@ type SyncFailureRecorder interface {
 	RecordSyncFailure(ctx context.Context, path string, driveID driveid.ID, direction, issueType, errMsg string,
 		httpStatus int, fileSize int64, localHash string, itemID string) error
 	ListSyncFailures(ctx context.Context) ([]SyncFailureRow, error)
+	ListActionableFailures(ctx context.Context) ([]SyncFailureRow, error)
 	ClearSyncFailure(ctx context.Context, path string, driveID driveid.ID) error
-	ClearResolvedSyncFailures(ctx context.Context) error
-	MarkSyncFailurePermanent(ctx context.Context, path string, driveID driveid.ID) error
+	ClearActionableSyncFailures(ctx context.Context) error
+	MarkSyncFailureActionable(ctx context.Context, path string, driveID driveid.ID) error
 }
 
 // StateAdmin is called by CLI commands and daemon maintenance.
@@ -78,7 +72,7 @@ type SyncFailureRow struct {
 	Path         string
 	DriveID      driveid.ID
 	Direction    string // "download", "upload", "delete"
-	Category     string // "transient", "permanent"
+	Category     string // "transient", "actionable"
 	IssueType    string
 	ItemID       string
 	FailureCount int

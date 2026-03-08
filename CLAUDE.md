@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-**Phases 1-5.6 complete. Phase 5.7.0-5.7.4 done (full Remote State Separation architecture — schema, observation, dispatch, crash recovery, reconciler, upload failure tracking, local_issues CRUD, issues CLI, status integration, interface narrowing). Phase 6.0a-6.0e done (DriveSession, Orchestrator, daemon mode, worker config, driveops package). Phase 6.0d done (inotify watch limit detection, multi-drive E2E, CI dual-token). Phase 6.0f done (zero-config removal, scanner extraction, daemon E2E). Phase 6.0g done (explicit E2E config migration, SIGHUP E2E, root package coverage). E2E hardening done (42 new e2e_full tests — 86 total). Phase 6.3 done (SharedWithMe API, shared drive enumeration in `drive list`, shared drive add with display name escalation). Phase 6.4a+b done (folder-scoped delta, shortcut detection, multi-scope observation, cross-drive execution, shared folder sync infrastructure). Next: Phase 6.4c (hardening — E2E fixtures, read-only detection, edge cases).** See [docs/roadmap.md](docs/roadmap.md).
+**Phases 1-5.6 complete. Phase 5.7.0-5.7.4 done (full Remote State Separation architecture — schema, observation, dispatch, crash recovery, reconciler, upload failure tracking, sync_failures CRUD, issues CLI, status integration, interface narrowing). Phase 6.0a-6.0e done (DriveSession, Orchestrator, daemon mode, worker config, driveops package). Phase 6.0d done (inotify watch limit detection, multi-drive E2E, CI dual-token). Phase 6.0f done (zero-config removal, scanner extraction, daemon E2E). Phase 6.0g done (explicit E2E config migration, SIGHUP E2E, root package coverage). E2E hardening done (42 new e2e_full tests — 86 total). Phase 6.3 done (SharedWithMe API, shared drive enumeration in `drive list`, shared drive add with display name escalation). Phase 6.4a+b done (folder-scoped delta, shortcut detection, multi-scope observation, cross-drive execution, shared folder sync infrastructure). Next: Phase 6.4c (hardening — E2E fixtures, read-only detection, edge cases).** See [docs/roadmap.md](docs/roadmap.md).
 
 ## Architecture Overview
 
@@ -14,7 +14,7 @@
 ┌─────────────────────────────────────────────────────────────────────┐
 │                      cmd/onedrive-go/ (Cobra CLI)                   │
 │  ls, get, put, rm, mkdir, mv, cp, sync, pause, resume, status,     │
-│  conflicts (list/resolve), failures, login, logout, whoami, verify  │
+│  issues (list/resolve/clear/retry), login, logout, whoami, verify   │
 └──────────┬───────────────────────────────────────────────────────────┘
            │ file ops                              │ sync operations
            │                                       │
@@ -68,10 +68,10 @@
 - **`internal/config/`** — TOML config, drive sections, XDG paths, four-layer override chain, token resolution (`TokenCanonicalID()`)
 - **`internal/graph/`** — Graph API client: auth, retry, items CRUD, delta, transfers
 - **`internal/driveops/`** — Authenticated drive access: SessionProvider (token caching + flush), Session (Meta + Transfer clients + delegation methods), TransferManager (download/upload with resume), SessionStore (upload session persistence + versioning), transfer interfaces, hash utilities, transfer artifact cleanup
-- **`internal/retry/`** — Unified retry infrastructure: Policy (exponential backoff with jitter), Backoff (stateful for watch loops), CircuitBreaker (threshold + sliding window + cooldown). Named policies: Transport, DriveDiscovery, Action, Reconcile, WatchLocal, WatchRemote
-- **`internal/sync/`** — Event-driven sync: types, SyncStore (remote_state + baseline + sync_failures), observers, buffer, planner, executor, tracker, workers, reconciler, orchestrator, engine, verify, upload_validation. Sub-interfaces: ObservationWriter, OutcomeWriter, FailureRecorder, ConflictEscalator, StateReader, StateAdmin, SyncFailureRecorder
+- **`internal/retry/`** — Unified retry infrastructure: Policy (exponential backoff with jitter), Backoff (stateful for watch loops). Named policies: Transport, DriveDiscovery, Action, Reconcile, WatchLocal, WatchRemote
+- **`internal/sync/`** — Event-driven sync: types, SyncStore (remote_state + baseline + sync_failures), observers, buffer, planner, executor, tracker, workers, reconciler, orchestrator, engine, verify, upload_validation. Sub-interfaces: ObservationWriter, OutcomeWriter, FailureRecorder, StateReader, StateAdmin, SyncFailureRecorder
 - **`internal/logfile/`** — Log file creation, append mode, parent dir creation, retention-based rotation
-- **Root package** — Cobra CLI: login, logout, whoami, status, drive (list/add/remove/search), ls, get, put, rm, mkdir, mv, cp, stat, sync, pause, resume, conflicts (list/resolve), failures, verify, recycle-bin (list/restore/empty)
+- **Root package** — Cobra CLI: login, logout, whoami, status, drive (list/add/remove/search), ls, get, put, rm, mkdir, mv, cp, stat, sync, pause, resume, issues (list/resolve/clear/retry), verify, recycle-bin (list/restore/empty)
 - **`e2e/`** — E2E test suite against live OneDrive
 - **`testutil/`** — Shared stdlib-only test helpers (used by both `e2e/` and `internal/graph/` integration tests; NOT under `internal/` so e2e can import it)
 

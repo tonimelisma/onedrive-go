@@ -11,8 +11,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// newTestSyncStoreForIssues creates a test SyncStore with a fixed nowFunc.
-func newTestSyncStoreForIssues(t *testing.T) (*SyncStore, time.Time) {
+// newTestSyncStoreForFailures creates a test SyncStore with a fixed nowFunc.
+func newTestSyncStoreForFailures(t *testing.T) (*SyncStore, time.Time) {
 	t.Helper()
 
 	fixedTime := time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
@@ -22,8 +22,8 @@ func newTestSyncStoreForIssues(t *testing.T) (*SyncStore, time.Time) {
 	return mgr, fixedTime
 }
 
-func TestRecordLocalIssue_NewEntry(t *testing.T) {
-	mgr, fixedTime := newTestSyncStoreForIssues(t)
+func TestRecordSyncFailure_NewEntry(t *testing.T) {
+	mgr, fixedTime := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
 	err := mgr.RecordSyncFailure(ctx, "docs/report.xlsx", driveid.ID{}, "upload", "upload_failed", "connection reset", 500, 1024, "abc123", "")
@@ -46,8 +46,8 @@ func TestRecordLocalIssue_NewEntry(t *testing.T) {
 	assert.Equal(t, fixedTime.UnixNano(), row.LastSeenAt)
 }
 
-func TestRecordLocalIssue_RepeatFailure(t *testing.T) {
-	mgr, fixedTime := newTestSyncStoreForIssues(t)
+func TestRecordSyncFailure_RepeatFailure(t *testing.T) {
+	mgr, fixedTime := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
 	err := mgr.RecordSyncFailure(ctx, "file.txt", driveid.ID{}, "upload", "upload_failed", "timeout", 0, 0, "", "")
@@ -72,8 +72,8 @@ func TestRecordLocalIssue_RepeatFailure(t *testing.T) {
 	assert.Equal(t, 503, row.HTTPStatus)
 }
 
-func TestRecordLocalIssue_PermanentStatus(t *testing.T) {
-	mgr, _ := newTestSyncStoreForIssues(t)
+func TestRecordSyncFailure_PermanentStatus(t *testing.T) {
+	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
 	err := mgr.RecordSyncFailure(ctx, "CON.txt", driveid.ID{}, "upload", "invalid_filename", "reserved name", 0, 0, "", "")
@@ -82,11 +82,11 @@ func TestRecordLocalIssue_PermanentStatus(t *testing.T) {
 	issues, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
-	assert.Equal(t, "permanent", issues[0].Category)
+	assert.Equal(t, "actionable", issues[0].Category)
 }
 
-func TestRecordLocalIssue_TransientStatus(t *testing.T) {
-	mgr, _ := newTestSyncStoreForIssues(t)
+func TestRecordSyncFailure_TransientStatus(t *testing.T) {
+	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
 	err := mgr.RecordSyncFailure(ctx, "big.zip", driveid.ID{}, "upload", "upload_failed", "server error", 500, 0, "", "")
@@ -99,7 +99,7 @@ func TestRecordLocalIssue_TransientStatus(t *testing.T) {
 }
 
 func TestListLocalIssues_Empty(t *testing.T) {
-	mgr, _ := newTestSyncStoreForIssues(t)
+	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
 	issues, err := mgr.ListSyncFailures(ctx)
@@ -108,7 +108,7 @@ func TestListLocalIssues_Empty(t *testing.T) {
 }
 
 func TestListLocalIssues_Multiple(t *testing.T) {
-	mgr, fixedTime := newTestSyncStoreForIssues(t)
+	mgr, fixedTime := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
 	// Insert 3 issues with different last_seen_at times.
@@ -128,7 +128,7 @@ func TestListLocalIssues_Multiple(t *testing.T) {
 }
 
 func TestClearLocalIssue(t *testing.T) {
-	mgr, _ := newTestSyncStoreForIssues(t)
+	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
 	err := mgr.RecordSyncFailure(ctx, "file.txt", driveid.ID{}, "upload", "upload_failed", "err", 0, 0, "", "")
@@ -143,7 +143,7 @@ func TestClearLocalIssue(t *testing.T) {
 }
 
 func TestClearResolvedLocalIssues(t *testing.T) {
-	mgr, _ := newTestSyncStoreForIssues(t)
+	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
 	// Insert 3 issues.
@@ -152,13 +152,13 @@ func TestClearResolvedLocalIssues(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Manually set one to permanent (ClearResolvedSyncFailures removes permanent rows).
+	// Manually set one to actionable (ClearActionableSyncFailures removes actionable rows).
 	_, err := mgr.db.ExecContext(ctx,
-		`UPDATE sync_failures SET category = 'permanent' WHERE path = 'b.txt'`)
+		`UPDATE sync_failures SET category = 'actionable' WHERE path = 'b.txt'`)
 	require.NoError(t, err)
 
-	// Clear resolved (permanent).
-	err = mgr.ClearResolvedSyncFailures(ctx)
+	// Clear resolved (actionable).
+	err = mgr.ClearActionableSyncFailures(ctx)
 	require.NoError(t, err)
 
 	issues, err := mgr.ListSyncFailures(ctx)
@@ -171,7 +171,7 @@ func TestClearResolvedLocalIssues(t *testing.T) {
 }
 
 func TestCommitOutcome_UploadSuccess_ClearsLocalIssue(t *testing.T) {
-	mgr, _ := newTestSyncStoreForIssues(t)
+	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
 	// Record an issue.
@@ -199,7 +199,7 @@ func TestCommitOutcome_UploadSuccess_ClearsLocalIssue(t *testing.T) {
 }
 
 func TestCommitOutcome_UploadSuccess_NoIssue_NoError(t *testing.T) {
-	mgr, _ := newTestSyncStoreForIssues(t)
+	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
 	// Commit a successful upload without any prior issue.
@@ -218,7 +218,7 @@ func TestCommitOutcome_UploadSuccess_NoIssue_NoError(t *testing.T) {
 }
 
 func TestCommitOutcome_DownloadSuccess_DoesNotClearLocalIssue(t *testing.T) {
-	mgr, _ := newTestSyncStoreForIssues(t)
+	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
 	// Record an issue.
@@ -270,13 +270,13 @@ func TestLocalIssueSyncStatus(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.issueType, func(t *testing.T) {
-			assert.Equal(t, tt.want, isPermanentIssue(tt.issueType))
+			assert.Equal(t, tt.want, isActionableIssue(tt.issueType))
 		})
 	}
 }
 
-func TestRecordLocalIssue_TransientSetsNextRetryAt(t *testing.T) {
-	mgr, fixedTime := newTestSyncStoreForIssues(t)
+func TestRecordSyncFailure_TransientSetsNextRetryAt(t *testing.T) {
+	mgr, fixedTime := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
 	err := mgr.RecordSyncFailure(ctx, "file.txt", driveid.ID{}, "upload", "upload_failed", "timeout", 0, 0, "", "")
@@ -291,8 +291,8 @@ func TestRecordLocalIssue_TransientSetsNextRetryAt(t *testing.T) {
 		"transient issue should have next_retry_at in the future")
 }
 
-func TestRecordLocalIssue_PermanentNoRetryAt(t *testing.T) {
-	mgr, _ := newTestSyncStoreForIssues(t)
+func TestRecordSyncFailure_PermanentNoRetryAt(t *testing.T) {
+	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
 	err := mgr.RecordSyncFailure(ctx, "CON", driveid.ID{}, "upload", "invalid_filename", "reserved name", 0, 0, "", "")
@@ -306,8 +306,8 @@ func TestRecordLocalIssue_PermanentNoRetryAt(t *testing.T) {
 		"permanent issue should have no next_retry_at")
 }
 
-func TestRecordLocalIssue_RepeatBackoffIncreases(t *testing.T) {
-	mgr, fixedTime := newTestSyncStoreForIssues(t)
+func TestRecordSyncFailure_RepeatBackoffIncreases(t *testing.T) {
+	mgr, fixedTime := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
 	// First failure.
@@ -336,7 +336,7 @@ func TestRecordLocalIssue_RepeatBackoffIncreases(t *testing.T) {
 }
 
 func TestListLocalIssuesForRetry(t *testing.T) {
-	mgr, fixedTime := newTestSyncStoreForIssues(t)
+	mgr, fixedTime := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
 	// Record a transient issue (will have next_retry_at set).
@@ -361,7 +361,7 @@ func TestListLocalIssuesForRetry(t *testing.T) {
 }
 
 func TestEarliestLocalIssueRetryAt(t *testing.T) {
-	mgr, fixedTime := newTestSyncStoreForIssues(t)
+	mgr, fixedTime := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
 	// No issues — zero time.
@@ -381,7 +381,7 @@ func TestEarliestLocalIssueRetryAt(t *testing.T) {
 }
 
 func TestMarkLocalIssuePermanent(t *testing.T) {
-	mgr, _ := newTestSyncStoreForIssues(t)
+	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
 	// Record a transient issue.
@@ -395,14 +395,14 @@ func TestMarkLocalIssuePermanent(t *testing.T) {
 	assert.Equal(t, "transient", issues[0].Category)
 
 	// Mark as permanent.
-	err = mgr.MarkSyncFailurePermanent(ctx, "file.txt", driveid.ID{})
+	err = mgr.MarkSyncFailureActionable(ctx, "file.txt", driveid.ID{})
 	require.NoError(t, err)
 
 	// Verify category changed.
 	issues, err = mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
-	assert.Equal(t, "permanent", issues[0].Category)
+	assert.Equal(t, "actionable", issues[0].Category)
 	assert.Equal(t, int64(0), issues[0].NextRetryAt, "permanent issues should have no retry time")
 
 	// Should not appear in retry list.
@@ -412,7 +412,7 @@ func TestMarkLocalIssuePermanent(t *testing.T) {
 }
 
 func TestListLocalIssuesByType(t *testing.T) {
-	mgr, _ := newTestSyncStoreForIssues(t)
+	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
 	// Record issues of different types.
@@ -440,7 +440,7 @@ func TestListLocalIssuesByType(t *testing.T) {
 }
 
 func TestClearLocalIssuesByPrefix(t *testing.T) {
-	mgr, _ := newTestSyncStoreForIssues(t)
+	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
 	// Record issues at various paths.
@@ -461,7 +461,7 @@ func TestClearLocalIssuesByPrefix(t *testing.T) {
 }
 
 func TestClearLocalIssuesByPrefix_TypeFiltering(t *testing.T) {
-	mgr, _ := newTestSyncStoreForIssues(t)
+	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
 	// Record a permission_denied and an upload_failed at the same prefix.

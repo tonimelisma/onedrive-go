@@ -172,7 +172,7 @@ Optimization deferred until profiling shows a bottleneck.
 
 | ID | Title | Priority | Notes |
 |----|-------|----------|-------|
-| ~~B-336~~ | ~~Drop dead failure columns from remote_state schema~~ | ~~P5~~ | **DONE** — Migration 00006 rebuilds `remote_state` without `failure_count`, `next_retry_at`, `last_error`, `http_status`. `sqlUpdateRemoteState` and `EscalateToConflict` updated. Tests cleaned of dead column references. |
+| ~~B-336~~ | ~~Drop dead failure columns from remote_state schema~~ | ~~P5~~ | **DONE** — Consolidated schema rebuilds `remote_state` without `failure_count`, `next_retry_at`, `last_error`, `http_status`. Full retry architecture transition complete: removed escalation infrastructure, renamed permanent→actionable, replaced circuit breaker with throttle gate, unified `issues` CLI command, updated status/retry policy. |
 
 ## Phase 7 Follow-up
 
