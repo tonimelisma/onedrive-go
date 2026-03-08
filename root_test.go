@@ -748,3 +748,190 @@ func TestNewMkdirCmd_Structure(t *testing.T) {
 	cmd := newMkdirCmd()
 	assert.Equal(t, "mkdir <path>", cmd.Use)
 }
+
+// --- multiHandler tests ---
+
+func TestMultiHandler_Enabled_ORSemantics(t *testing.T) {
+	t.Parallel()
+
+	var buf1, buf2 bytes.Buffer
+	h1 := slog.NewTextHandler(&buf1, &slog.HandlerOptions{Level: slog.LevelError})
+	h2 := slog.NewTextHandler(&buf2, &slog.HandlerOptions{Level: slog.LevelDebug})
+
+	mh := &multiHandler{handlers: []slog.Handler{h1, h2}}
+
+	// Debug is enabled because h2 allows it (OR semantics).
+	assert.True(t, mh.Enabled(t.Context(), slog.LevelDebug),
+		"should be enabled when any handler accepts the level")
+}
+
+func TestMultiHandler_Enabled_AllDisabled(t *testing.T) {
+	t.Parallel()
+
+	var buf1, buf2 bytes.Buffer
+	h1 := slog.NewTextHandler(&buf1, &slog.HandlerOptions{Level: slog.LevelError})
+	h2 := slog.NewTextHandler(&buf2, &slog.HandlerOptions{Level: slog.LevelError})
+
+	mh := &multiHandler{handlers: []slog.Handler{h1, h2}}
+
+	assert.False(t, mh.Enabled(t.Context(), slog.LevelDebug),
+		"should be disabled when no handler accepts the level")
+}
+
+func TestMultiHandler_Handle_PerHandlerFiltering(t *testing.T) {
+	t.Parallel()
+
+	var buf1, buf2 bytes.Buffer
+	h1 := slog.NewTextHandler(&buf1, &slog.HandlerOptions{Level: slog.LevelError})
+	h2 := slog.NewTextHandler(&buf2, &slog.HandlerOptions{Level: slog.LevelDebug})
+
+	mh := &multiHandler{handlers: []slog.Handler{h1, h2}}
+	logger := slog.New(mh)
+
+	logger.Debug("debug msg")
+
+	// h1 (Error level) should not receive the debug message.
+	assert.Empty(t, buf1.String(), "error-level handler should not receive debug messages")
+	// h2 (Debug level) should receive it.
+	assert.Contains(t, buf2.String(), "debug msg", "debug-level handler should receive debug messages")
+}
+
+func TestMultiHandler_Handle_BothReceive(t *testing.T) {
+	t.Parallel()
+
+	var buf1, buf2 bytes.Buffer
+	h1 := slog.NewTextHandler(&buf1, &slog.HandlerOptions{Level: slog.LevelInfo})
+	h2 := slog.NewJSONHandler(&buf2, &slog.HandlerOptions{Level: slog.LevelInfo})
+
+	mh := &multiHandler{handlers: []slog.Handler{h1, h2}}
+	logger := slog.New(mh)
+
+	logger.Info("test message", slog.String("key", "value"))
+
+	assert.Contains(t, buf1.String(), "test message", "text handler should receive the message")
+	assert.Contains(t, buf2.String(), "test message", "json handler should receive the message")
+}
+
+func TestMultiHandler_WithAttrs(t *testing.T) {
+	t.Parallel()
+
+	var buf1, buf2 bytes.Buffer
+	h1 := slog.NewTextHandler(&buf1, &slog.HandlerOptions{Level: slog.LevelInfo})
+	h2 := slog.NewJSONHandler(&buf2, &slog.HandlerOptions{Level: slog.LevelInfo})
+
+	mh := &multiHandler{handlers: []slog.Handler{h1, h2}}
+	mh2 := mh.WithAttrs([]slog.Attr{slog.String("component", "test")})
+	logger := slog.New(mh2)
+
+	logger.Info("attrs test")
+
+	assert.Contains(t, buf1.String(), "component", "attrs should propagate to text handler")
+	assert.Contains(t, buf2.String(), "component", "attrs should propagate to json handler")
+}
+
+func TestMultiHandler_WithGroup(t *testing.T) {
+	t.Parallel()
+
+	var buf1, buf2 bytes.Buffer
+	h1 := slog.NewTextHandler(&buf1, &slog.HandlerOptions{Level: slog.LevelInfo})
+	h2 := slog.NewJSONHandler(&buf2, &slog.HandlerOptions{Level: slog.LevelInfo})
+
+	mh := &multiHandler{handlers: []slog.Handler{h1, h2}}
+	mh2 := mh.WithGroup("mygroup")
+	logger := slog.New(mh2)
+
+	logger.Info("group test", slog.String("key", "val"))
+
+	assert.Contains(t, buf1.String(), "mygroup", "group should propagate to text handler")
+	assert.Contains(t, buf2.String(), "mygroup", "group should propagate to json handler")
+}
+
+// --- buildLogger dual-output tests ---
+
+func TestBuildLoggerDual_NoLogFile(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.ResolvedDrive{}
+	flags := CLIFlags{}
+	logger, closer := buildLoggerDual(cfg, flags)
+
+	assert.NotNil(t, logger)
+	assert.Nil(t, closer, "closer should be nil when no log file is set")
+}
+
+func TestBuildLoggerDual_WithLogFile(t *testing.T) {
+	t.Parallel()
+
+	logPath := filepath.Join(t.TempDir(), "test.log")
+	cfg := &config.ResolvedDrive{
+		LoggingConfig: config.LoggingConfig{
+			LogFile:  logPath,
+			LogLevel: "debug",
+		},
+	}
+	flags := CLIFlags{}
+
+	logger, closer := buildLoggerDual(cfg, flags)
+	require.NotNil(t, logger)
+	require.NotNil(t, closer, "closer should be non-nil when log file is set")
+
+	logger.Info("test log message", slog.String("key", "value"))
+	require.NoError(t, closer.Close())
+
+	data, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "test log message")
+	assert.Contains(t, string(data), "key")
+}
+
+func TestBuildLoggerDual_FileGetsJSON(t *testing.T) {
+	t.Parallel()
+
+	logPath := filepath.Join(t.TempDir(), "json.log")
+	cfg := &config.ResolvedDrive{
+		LoggingConfig: config.LoggingConfig{
+			LogFile:  logPath,
+			LogLevel: "info",
+		},
+	}
+	flags := CLIFlags{}
+
+	logger, closer := buildLoggerDual(cfg, flags)
+	require.NotNil(t, closer)
+
+	logger.Info("json check")
+	require.NoError(t, closer.Close())
+
+	data, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+
+	// File output should be JSON.
+	var record map[string]any
+	require.NoError(t, json.Unmarshal(data, &record), "file output should be valid JSON: %s", string(data))
+	assert.Equal(t, "json check", record["msg"])
+}
+
+func TestBuildLoggerDual_IndependentLevels(t *testing.T) {
+	t.Parallel()
+
+	logPath := filepath.Join(t.TempDir(), "levels.log")
+	cfg := &config.ResolvedDrive{
+		LoggingConfig: config.LoggingConfig{
+			LogFile:  logPath,
+			LogLevel: "debug",
+		},
+	}
+	// CLI flag sets console to error-only, but file should still get debug.
+	flags := CLIFlags{Quiet: true}
+
+	logger, closer := buildLoggerDual(cfg, flags)
+	require.NotNil(t, closer)
+
+	logger.Debug("debug for file only")
+	require.NoError(t, closer.Close())
+
+	data, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "debug for file only",
+		"file handler should receive debug messages regardless of CLI flags")
+}
