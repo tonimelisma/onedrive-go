@@ -11,27 +11,39 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
-// maxIssueErrorLen is the maximum error message length in table output.
-const maxIssueErrorLen = 60
+// maxFailureErrorLen is the maximum error message length in table output.
+const maxFailureErrorLen = 60
 
-func newIssuesCmd() *cobra.Command {
+func newFailuresCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "issues",
+		Use:   "failures",
 		Short: "List sync failures",
 		Long: `Display sync failures from the state database.
 
 Sync failures track files that cannot be synced due to validation failures
 (invalid filenames, paths too long, files too large), transient errors, or
-download/delete failures. Use 'issues clear' to remove resolved failures.`,
-		RunE: runIssuesList,
+download/delete failures. Use 'failures clear' to remove resolved failures.`,
+		RunE: runFailuresList,
 	}
 
-	cmd.AddCommand(newIssuesClearCmd())
+	cmd.Flags().String("direction", "", "filter by direction (download, upload, delete)")
+	cmd.Flags().String("category", "", "filter by category (transient, permanent)")
+
+	cmd.AddCommand(newFailuresClearCmd())
 
 	return cmd
 }
 
-func newIssuesClearCmd() *cobra.Command {
+// newIssuesCmd returns a hidden alias for the failures command (backward compat).
+func newIssuesCmd() *cobra.Command {
+	cmd := newFailuresCmd()
+	cmd.Use = "issues"
+	cmd.Hidden = true
+
+	return cmd
+}
+
+func newFailuresClearCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "clear [path]",
 		Short: "Clear sync failures",
@@ -39,7 +51,7 @@ func newIssuesClearCmd() *cobra.Command {
 
 Provide a path to clear a specific failure. Use --all to clear all
 permanent failures.`,
-		RunE: runIssuesClear,
+		RunE: runFailuresClear,
 	}
 
 	cmd.Flags().Bool("all", false, "clear all permanent failures")
@@ -47,8 +59,8 @@ permanent failures.`,
 	return cmd
 }
 
-// issueJSON is the JSON-serializable representation of a sync failure.
-type issueJSON struct {
+// failureJSON is the JSON-serializable representation of a sync failure.
+type failureJSON struct {
 	Path         string `json:"path"`
 	Direction    string `json:"direction"`
 	Category     string `json:"category"`
@@ -61,7 +73,7 @@ type issueJSON struct {
 	LastSeenAt   string `json:"last_seen_at"`
 }
 
-func runIssuesList(cmd *cobra.Command, _ []string) error {
+func runFailuresList(cmd *cobra.Command, _ []string) error {
 	cc := mustCLIContext(cmd.Context())
 
 	dbPath := cc.Cfg.StatePath()
@@ -75,26 +87,60 @@ func runIssuesList(cmd *cobra.Command, _ []string) error {
 	}
 	defer mgr.Close()
 
-	issues, err := mgr.ListSyncFailures(cmd.Context())
+	failures, err := mgr.ListSyncFailures(cmd.Context())
 	if err != nil {
 		return err
 	}
 
-	if len(issues) == 0 {
+	// Apply optional filters.
+	dirFilter, err := cmd.Flags().GetString("direction")
+	if err != nil {
+		return err
+	}
+
+	catFilter, err := cmd.Flags().GetString("category")
+	if err != nil {
+		return err
+	}
+
+	if dirFilter != "" || catFilter != "" {
+		failures = filterFailures(failures, dirFilter, catFilter)
+	}
+
+	if len(failures) == 0 {
 		fmt.Println("No sync failures.")
 		return nil
 	}
 
 	if cc.Flags.JSON {
-		return printIssuesJSON(os.Stdout, issues)
+		return printFailuresJSON(os.Stdout, failures)
 	}
 
-	printIssuesTable(os.Stdout, issues)
+	printFailuresTable(os.Stdout, failures)
 
 	return nil
 }
 
-func runIssuesClear(cmd *cobra.Command, args []string) error {
+// filterFailures returns only rows matching the given direction and/or category.
+func filterFailures(rows []sync.SyncFailureRow, direction, category string) []sync.SyncFailureRow {
+	filtered := make([]sync.SyncFailureRow, 0, len(rows))
+
+	for i := range rows {
+		if direction != "" && rows[i].Direction != direction {
+			continue
+		}
+
+		if category != "" && rows[i].Category != category {
+			continue
+		}
+
+		filtered = append(filtered, rows[i])
+	}
+
+	return filtered
+}
+
+func runFailuresClear(cmd *cobra.Command, args []string) error {
 	cc := mustCLIContext(cmd.Context())
 
 	dbPath := cc.Cfg.StatePath()
@@ -139,8 +185,8 @@ func runIssuesClear(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func toIssueJSON(row *sync.SyncFailureRow) issueJSON {
-	return issueJSON{
+func toFailureJSON(row *sync.SyncFailureRow) failureJSON {
+	return failureJSON{
 		Path:         row.Path,
 		Direction:    row.Direction,
 		Category:     row.Category,
@@ -154,10 +200,10 @@ func toIssueJSON(row *sync.SyncFailureRow) issueJSON {
 	}
 }
 
-func printIssuesJSON(w io.Writer, issues []sync.SyncFailureRow) error {
-	items := make([]issueJSON, len(issues))
-	for i := range issues {
-		items[i] = toIssueJSON(&issues[i])
+func printFailuresJSON(w io.Writer, failures []sync.SyncFailureRow) error {
+	items := make([]failureJSON, len(failures))
+	for i := range failures {
+		items[i] = toFailureJSON(&failures[i])
 	}
 
 	enc := json.NewEncoder(w)
@@ -170,12 +216,12 @@ func printIssuesJSON(w io.Writer, issues []sync.SyncFailureRow) error {
 	return nil
 }
 
-func printIssuesTable(w io.Writer, issues []sync.SyncFailureRow) {
+func printFailuresTable(w io.Writer, failures []sync.SyncFailureRow) {
 	headers := []string{"PATH", "DIRECTION", "CATEGORY", "COUNT", "ERROR", "LAST SEEN"}
 
-	rows := make([][]string, len(issues))
-	for i := range issues {
-		row := &issues[i]
+	rows := make([][]string, len(failures))
+	for i := range failures {
+		row := &failures[i]
 		lastSeen := ""
 
 		if row.LastSeenAt != 0 {
@@ -183,8 +229,8 @@ func printIssuesTable(w io.Writer, issues []sync.SyncFailureRow) {
 		}
 
 		errMsg := row.LastError
-		if len(errMsg) > maxIssueErrorLen {
-			errMsg = errMsg[:maxIssueErrorLen-3] + "..."
+		if len(errMsg) > maxFailureErrorLen {
+			errMsg = errMsg[:maxFailureErrorLen-3] + "..."
 		}
 
 		rows[i] = []string{

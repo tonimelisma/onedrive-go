@@ -16,30 +16,11 @@ const (
 	resolutionKeepBoth   = sync.ResolutionKeepBoth
 )
 
+// newResolveCmd returns a hidden top-level alias for 'conflicts resolve' (backward compat).
 func newResolveCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "resolve [path-or-id]",
-		Short: "Resolve sync conflicts",
-		Long: `Resolve sync conflicts with a chosen strategy.
-
-Strategies:
-  --keep-local   Upload the local file to overwrite remote
-  --keep-remote  Download the remote file to overwrite local
-  --keep-both    Keep both versions (conflict copies already saved)
-
-Use --all to resolve all unresolved conflicts with the chosen strategy.
-Without --all, a path or conflict ID argument is required.`,
-		Args: cobra.MaximumNArgs(1),
-		RunE: runResolve,
-	}
-
-	cmd.Flags().Bool("keep-local", false, "upload local file to overwrite remote")
-	cmd.Flags().Bool("keep-remote", false, "download remote file to overwrite local")
-	cmd.Flags().Bool("keep-both", false, "keep both versions as-is")
-	cmd.Flags().Bool("all", false, "resolve all unresolved conflicts")
-	cmd.Flags().Bool("dry-run", false, "preview resolution without executing")
-
-	cmd.MarkFlagsMutuallyExclusive("keep-local", "keep-remote", "keep-both")
+	cmd := newConflictsResolveCmd()
+	cmd.Use = "resolve [path-or-id]"
+	cmd.Hidden = true
 
 	return cmd
 }
