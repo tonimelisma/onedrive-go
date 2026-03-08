@@ -88,7 +88,7 @@ func (fw *fsnotifyWrapper) Errors() <-chan error          { return fw.w.Errors }
 
 // LocalObserver walks the local filesystem and produces []ChangeEvent by
 // comparing each entry against the in-memory baseline. Stateless — syncRoot
-// is a parameter of FullScan, allowing reuse across cycles.
+// is a parameter of FullScan, allowing reuse across passes.
 type LocalObserver struct {
 	baseline           *Baseline
 	logger             *slog.Logger
@@ -149,7 +149,7 @@ func (o *LocalObserver) trySend(ctx context.Context, events chan<- ChangeEvent, 
 }
 
 // DroppedEvents returns the cumulative number of events dropped by trySend
-// due to a full channel. Production code uses ResetDroppedEvents for per-cycle
+// due to a full channel. Production code uses ResetDroppedEvents for per-pass
 // reporting; this accessor is retained for tests and diagnostics.
 func (o *LocalObserver) DroppedEvents() int64 {
 	return o.droppedEvents.Load()
@@ -157,7 +157,7 @@ func (o *LocalObserver) DroppedEvents() int64 {
 
 // ResetDroppedEvents atomically reads and resets the drop counter to zero.
 // Returns the number of events dropped since the last reset. Used by the
-// engine to log per-cycle drops without double-counting across cycles.
+// engine to log per-pass drops without double-counting across passes.
 func (o *LocalObserver) ResetDroppedEvents() int64 {
 	return o.droppedEvents.Swap(0)
 }

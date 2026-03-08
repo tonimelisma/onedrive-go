@@ -116,7 +116,7 @@ var (
 )
 
 // SyncStore is the sole writer to the sync database. It loads the
-// baseline at cycle start and commits outcomes at cycle end.
+// baseline at pass start and commits outcomes at pass end.
 type SyncStore struct {
 	db       *sql.DB
 	baseline *Baseline
@@ -364,7 +364,7 @@ func outcomeToEntry(o *Outcome, syncedAt int64) *BaselineEntry {
 }
 
 // CommitDeltaToken persists a delta token in its own transaction, separate
-// from baseline updates. Used after all actions in a cycle complete.
+// from baseline updates. Used after all actions in a pass complete.
 // Use scopeID="" and scopeDrive=driveID for the primary drive-level delta.
 // For shortcut-scoped deltas, scopeID=remoteItem.id and scopeDrive=remoteItem.driveId.
 func (m *SyncStore) CommitDeltaToken(ctx context.Context, token, driveID, scopeID, scopeDrive string) error {
@@ -1491,7 +1491,7 @@ func (m *SyncStore) EarliestRetryAt(ctx context.Context, now time.Time) (time.Ti
 	return time.Unix(0, minRetry.Int64), nil
 }
 
-// WriteSyncMetadata persists sync metadata after a completed RunOnce cycle.
+// WriteSyncMetadata persists sync metadata after a completed RunOnce pass.
 // Keys: last_sync_time, last_sync_duration_ms, last_sync_error,
 // last_sync_succeeded, last_sync_failed.
 func (m *SyncStore) WriteSyncMetadata(ctx context.Context, report *SyncReport) error {

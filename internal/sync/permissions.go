@@ -35,7 +35,7 @@ type PermissionChecker interface {
 }
 
 // permissionCache is a thread-safe in-memory cache of folder path → canWrite.
-// Built from local_issues + API queries each cycle. Not persisted.
+// Built from local_issues + API queries each pass. Not persisted.
 // Accessed concurrently by the main sync goroutine (recheckPermissions,
 // deniedPrefixes) and the drain goroutine (handle403 → set).
 type permissionCache struct {
@@ -47,7 +47,7 @@ func newPermissionCache() *permissionCache {
 	return &permissionCache{cache: make(map[string]bool)}
 }
 
-// reset clears all cached entries. Called at the start of each sync cycle
+// reset clears all cached entries. Called at the start of each sync pass
 // to prevent stale entries from persisting when permissions change.
 func (pc *permissionCache) reset() {
 	if pc == nil {
@@ -249,14 +249,14 @@ func (e *Engine) walkPermissionBoundary(
 }
 
 // recheckPermissions re-queries all permission_denied local_issues at the
-// start of each sync cycle. If a folder is now writable, the issue is cleared
-// and writes resume. Runs every cycle (typically 5 min in watch mode).
+// start of each sync pass. If a folder is now writable, the issue is cleared
+// and writes resume. Runs every pass (typically 5 min in watch mode).
 func (e *Engine) recheckPermissions(ctx context.Context, bl *Baseline, shortcuts []Shortcut) {
 	if e.permChecker == nil {
 		return
 	}
 
-	// Reset the in-memory cache at the start of each cycle to prevent
+	// Reset the in-memory cache at the start of each pass to prevent
 	// stale entries from persisting when permissions change.
 	e.permCache.reset()
 

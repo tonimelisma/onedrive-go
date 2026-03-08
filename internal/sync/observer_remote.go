@@ -98,7 +98,7 @@ func NewRemoteObserver(fetcher DeltaFetcher, baseline *Baseline, driveID driveid
 }
 
 // FullDelta fetches all delta pages and returns the accumulated change events
-// plus the new delta token (DeltaLink URL) for the next sync cycle.
+// plus the new delta token (DeltaLink URL) for the next sync pass.
 func (o *RemoteObserver) FullDelta(ctx context.Context, savedToken string) ([]ChangeEvent, string, error) {
 	o.logger.Info("remote observer starting delta enumeration",
 		slog.String("drive_id", o.driveID.String()),

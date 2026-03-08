@@ -16,11 +16,9 @@ import (
 //   - Add(): Insert an action with its sequential ID and dependency IDs.
 //     If all deps are satisfied, the action is dispatched immediately.
 //   - Complete(): Mark an action done, decrement dependents' counters,
-//     and dispatch any dependents that become ready. Advances per-cycle
-//     completion tracking for delta token commits (B-121).
+//     and dispatch any dependents that become ready.
 //   - HasInFlight() / CancelByPath(): Deduplication for watch mode (B-122).
 //   - Ready(): Single channel consumed by WorkerPool.
-//   - CycleDone() / CleanupCycle(): Per-cycle lifecycle for watch mode.
 //
 // Two constructors: NewDepTracker (one-shot, Done() fires when all complete)
 // and NewPersistentDepTracker (watch mode, workers exit via ctx cancellation).
@@ -34,22 +32,12 @@ const watchChanBuf = 1024
 // is a sequential counter (assigned by the engine) used as a unique key for
 // the tracker's internal maps.
 type TrackedAction struct {
-	Action  Action
-	ID      int64
-	CycleID string
-	Cancel  context.CancelFunc
+	Action Action
+	ID     int64
+	Cancel context.CancelFunc
 
 	depsLeft   atomic.Int32
 	dependents []*TrackedAction
-}
-
-// cycleTracker tracks completion of actions within a single planning cycle.
-// Used in watch mode (persistent tracker) to know when all actions from one
-// batch have finished, so the delta token can be safely committed.
-type cycleTracker struct {
-	total     int32
-	completed atomic.Int32
-	done      chan struct{}
 }
 
 // DepTracker is an in-memory dependency graph that dispatches actions to a
@@ -66,24 +54,17 @@ type DepTracker struct {
 	completed  atomic.Int32
 	persistent bool // when true, Done() never fires; workers exit on ctx.Done()
 	logger     *slog.Logger
-
-	// Per-cycle completion tracking for watch mode (B-121).
-	cyclesMu    stdsync.Mutex
-	cycles      map[string]*cycleTracker
-	cycleLookup map[int64]string // action ID → cycle ID
 }
 
 // NewDepTracker creates a tracker with the given channel buffer size.
 // Current callers pass len(plan.Actions) so dispatch() never blocks.
 func NewDepTracker(bufSize int, logger *slog.Logger) *DepTracker {
 	return &DepTracker{
-		actions:     make(map[int64]*TrackedAction),
-		byPath:      make(map[string]*TrackedAction),
-		ready:       make(chan *TrackedAction, bufSize),
-		done:        make(chan struct{}),
-		logger:      logger,
-		cycles:      make(map[string]*cycleTracker),
-		cycleLookup: make(map[int64]string),
+		actions: make(map[int64]*TrackedAction),
+		byPath:  make(map[string]*TrackedAction),
+		ready:   make(chan *TrackedAction, bufSize),
+		done:    make(chan struct{}),
+		logger:  logger,
 	}
 }
 
@@ -92,14 +73,12 @@ func NewDepTracker(bufSize int, logger *slog.Logger) *DepTracker {
 // instead. Channel buffers are sized for continuous operation.
 func NewPersistentDepTracker(logger *slog.Logger) *DepTracker {
 	return &DepTracker{
-		actions:     make(map[int64]*TrackedAction),
-		byPath:      make(map[string]*TrackedAction),
-		ready:       make(chan *TrackedAction, watchChanBuf),
-		done:        make(chan struct{}),
-		persistent:  true,
-		logger:      logger,
-		cycles:      make(map[string]*cycleTracker),
-		cycleLookup: make(map[int64]string),
+		actions:    make(map[int64]*TrackedAction),
+		byPath:     make(map[string]*TrackedAction),
+		ready:      make(chan *TrackedAction, watchChanBuf),
+		done:       make(chan struct{}),
+		persistent: true,
+		logger:     logger,
 	}
 }
 
@@ -107,14 +86,10 @@ func NewPersistentDepTracker(logger *slog.Logger) *DepTracker {
 // satisfied (depIDs is empty or all deps already completed), the action is
 // dispatched immediately. Otherwise it waits until Complete() decrements
 // its depsLeft to zero.
-//
-// cycleID groups the action with a planning cycle for per-cycle completion
-// tracking (B-121). Pass empty string for one-shot mode (no cycle tracking).
-func (dt *DepTracker) Add(action *Action, id int64, depIDs []int64, cycleID string) {
+func (dt *DepTracker) Add(action *Action, id int64, depIDs []int64) {
 	ta := &TrackedAction{
-		Action:  *action,
-		ID:      id,
-		CycleID: cycleID,
+		Action: *action,
+		ID:     id,
 	}
 
 	dt.mu.Lock()
@@ -123,11 +98,6 @@ func (dt *DepTracker) Add(action *Action, id int64, depIDs []int64, cycleID stri
 	dt.actions[id] = ta
 	dt.byPath[action.Path] = ta
 	dt.total.Add(1)
-
-	// Register with per-cycle tracker if a cycleID is provided.
-	if cycleID != "" {
-		dt.registerCycleLocked(id, cycleID)
-	}
 
 	var depsRemaining int32
 
@@ -147,22 +117,6 @@ func (dt *DepTracker) Add(action *Action, id int64, depIDs []int64, cycleID stri
 	if depsRemaining == 0 {
 		dt.dispatch(ta)
 	}
-}
-
-// registerCycleLocked registers an action ID with a cycle tracker, creating
-// the cycle tracker if it doesn't exist yet. Must be called with dt.mu held.
-func (dt *DepTracker) registerCycleLocked(id int64, cycleID string) {
-	dt.cyclesMu.Lock()
-	defer dt.cyclesMu.Unlock()
-
-	ct, ok := dt.cycles[cycleID]
-	if !ok {
-		ct = &cycleTracker{done: make(chan struct{})}
-		dt.cycles[cycleID] = ct
-	}
-
-	ct.total++
-	dt.cycleLookup[id] = cycleID
 }
 
 // Complete marks an action as done and decrements the depsLeft counter on
@@ -190,12 +144,12 @@ func (dt *DepTracker) Complete(id int64) {
 	}
 
 	// Copy dependents under the lock to prevent races with Add() appending
-	// to the same slice in Phase 5.1+ (watch mode overlapping cycles).
+	// to the same slice in watch mode (overlapping passes).
 	dependents := make([]*TrackedAction, len(ta.dependents))
 	copy(dependents, ta.dependents)
 
 	// Clean up byPath so long-lived trackers (watch mode) don't cancel
-	// the wrong action if the same path appears in a subsequent cycle.
+	// the wrong action if the same path appears in a subsequent pass.
 	delete(dt.byPath, ta.Action.Path)
 	dt.mu.Unlock()
 
@@ -205,37 +159,11 @@ func (dt *DepTracker) Complete(id int64) {
 		}
 	}
 
-	// Advance per-cycle tracker.
-	dt.completeCycle(id)
-
 	// In persistent mode, the global done channel never fires — workers
 	// exit via context cancellation instead.
 	newCompleted := dt.completed.Add(1)
 	if !dt.persistent && newCompleted == dt.total.Load() {
 		close(dt.done)
-	}
-}
-
-// completeCycle advances the per-cycle completion counter. When all actions
-// in a cycle have completed, the cycle's done channel is closed.
-func (dt *DepTracker) completeCycle(id int64) {
-	dt.cyclesMu.Lock()
-	defer dt.cyclesMu.Unlock()
-
-	cycleID, ok := dt.cycleLookup[id]
-	if !ok {
-		return
-	}
-
-	delete(dt.cycleLookup, id)
-
-	ct, ok := dt.cycles[cycleID]
-	if !ok {
-		return
-	}
-
-	if ct.completed.Add(1) == ct.total {
-		close(ct.done)
 	}
 }
 
@@ -251,7 +179,7 @@ func (dt *DepTracker) HasInFlight(path string) bool {
 
 // CancelByPath cancels the in-flight action for the given path, if any.
 // Removes the byPath entry so long-lived trackers don't cancel the wrong
-// action if the same path is re-added in a subsequent cycle.
+// action if the same path is re-added in a subsequent pass.
 func (dt *DepTracker) CancelByPath(path string) {
 	dt.mu.Lock()
 	ta, ok := dt.byPath[path]
@@ -263,33 +191,6 @@ func (dt *DepTracker) CancelByPath(path string) {
 	if ok && ta.Cancel != nil {
 		ta.Cancel()
 	}
-}
-
-// CycleDone returns a channel that is closed when all actions in the given
-// cycle have completed. Returns a closed channel for unknown cycle IDs
-// (defensive: prevents callers from blocking forever).
-func (dt *DepTracker) CycleDone(cycleID string) <-chan struct{} {
-	dt.cyclesMu.Lock()
-	defer dt.cyclesMu.Unlock()
-
-	ct, ok := dt.cycles[cycleID]
-	if !ok {
-		// Unknown cycle — return a closed channel so the caller doesn't block.
-		ch := make(chan struct{})
-		close(ch)
-		return ch
-	}
-
-	return ct.done
-}
-
-// CleanupCycle removes a completed cycle from the tracker's cycle map,
-// preventing unbounded growth in long-running watch sessions.
-func (dt *DepTracker) CleanupCycle(cycleID string) {
-	dt.cyclesMu.Lock()
-	defer dt.cyclesMu.Unlock()
-
-	delete(dt.cycles, cycleID)
 }
 
 // InFlightCount returns the number of actions currently in the tracker that

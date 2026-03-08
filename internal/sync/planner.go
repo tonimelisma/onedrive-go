@@ -35,7 +35,7 @@ func DefaultSafetyConfig() *SafetyConfig {
 }
 
 // ErrBigDeleteTriggered indicates that the planned number of deletions
-// exceeds safety thresholds. The sync cycle should halt and require
+// exceeds safety thresholds. The sync pass should halt and require
 // user confirmation before proceeding.
 var ErrBigDeleteTriggered = errors.New("sync: big-delete protection triggered")
 

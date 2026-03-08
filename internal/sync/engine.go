@@ -45,14 +45,14 @@ type EngineConfig struct {
 	CheckWorkers    int  // goroutine limit for parallel file hashing (0 → 4)
 }
 
-// RunOpts holds per-cycle options for RunOnce.
+// RunOpts holds per-pass options for RunOnce.
 type RunOpts struct {
 	DryRun        bool
 	Force         bool
 	FullReconcile bool // when true, runs a full delta enumeration + orphan detection
 }
 
-// SyncReport summarizes the result of a single sync cycle.
+// SyncReport summarizes the result of a single sync pass.
 type SyncReport struct {
 	Mode     SyncMode
 	DryRun   bool
@@ -75,7 +75,7 @@ type SyncReport struct {
 	Errors    []error
 }
 
-// Engine orchestrates a complete sync cycle: observe → plan → execute → commit.
+// Engine orchestrates a complete sync pass: observe → plan → execute → commit.
 // Single-drive only; multi-drive orchestration is handled by the Orchestrator.
 type Engine struct {
 	baseline        *SyncStore
@@ -86,7 +86,7 @@ type Engine struct {
 	folderDelta     FolderDeltaFetcher // optional: for shortcut observation (6.4b)
 	recursiveLister RecursiveLister    // optional: for shortcut observation (6.4b)
 	permChecker     PermissionChecker  // optional: for shared folder permission checks (6.4c)
-	permCache       *permissionCache   // per-cycle in-memory cache of folder→canWrite
+	permCache       *permissionCache   // per-pass in-memory cache of folder→canWrite
 	syncRoot        string
 	driveID         driveid.ID
 	logger          *slog.Logger
@@ -97,7 +97,7 @@ type Engine struct {
 	checkWorkers    int                    // goroutine limit for parallel file hashing
 
 	// watchShortcuts holds the latest shortcuts for use by the drain
-	// goroutine in watch mode. Updated by the cycle goroutine after
+	// goroutine in watch mode. Updated by the watch goroutine after
 	// observation; read by drainWorkerResults for 403 handling.
 	watchShortcuts   []Shortcut
 	watchShortcutsMu stdsync.RWMutex
@@ -211,7 +211,7 @@ func (e *Engine) verifyDriveIdentity(ctx context.Context) error {
 	return nil
 }
 
-// RunOnce executes a single sync cycle:
+// RunOnce executes a single sync pass:
 //  1. Load baseline
 //  2. Observe remote (skip if upload-only)
 //  3. Observe local (skip if download-only)
@@ -224,7 +224,7 @@ func (e *Engine) verifyDriveIdentity(ctx context.Context) error {
 func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*SyncReport, error) {
 	start := time.Now()
 
-	e.logger.Info("sync cycle starting",
+	e.logger.Info("sync pass starting",
 		slog.String("mode", mode.String()),
 		slog.Bool("dry_run", opts.DryRun),
 		slog.Bool("force", opts.Force),
@@ -255,7 +255,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 	}
 
 	// Recheck permissions — clear any permission_denied issues
-	// for folders that have become writable since the last cycle.
+	// for folders that have become writable since the last pass.
 	if e.permChecker != nil && scErr == nil {
 		e.recheckPermissions(ctx, bl, shortcuts)
 	}
@@ -268,7 +268,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 
 	// Step 5: Early return if no changes.
 	if len(changes) == 0 {
-		e.logger.Info("sync cycle complete: no changes detected",
+		e.logger.Info("sync pass complete: no changes detected",
 			slog.Duration("duration", time.Since(start)),
 		)
 
@@ -316,7 +316,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 
 	report.Duration = time.Since(start)
 
-	e.logger.Info("sync cycle complete",
+	e.logger.Info("sync pass complete",
 		slog.Duration("duration", report.Duration),
 		slog.Int("succeeded", report.Succeeded),
 		slog.Int("failed", report.Failed),
@@ -332,7 +332,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 	return report, nil
 }
 
-// postSyncHousekeeping runs non-critical cleanup after a sync cycle:
+// postSyncHousekeeping runs non-critical cleanup after a sync pass:
 // .partial deletion and session file cleanup. Synchronous — completes
 // before RunOnce returns to guarantee cleanup on process exit.
 func (e *Engine) postSyncHousekeeping() {
@@ -378,8 +378,7 @@ func (e *Engine) executePlan(
 		// Dispatch state transition: pending/failed → in-progress.
 		e.setDispatch(ctx, &plan.Actions[i])
 
-		// One-shot mode: no per-cycle tracking needed (empty cycleID).
-		tracker.Add(&plan.Actions[i], id, depIDs, "")
+		tracker.Add(&plan.Actions[i], id, depIDs)
 	}
 
 	pool := NewWorkerPool(e.execCfg, tracker, e.baseline, e.logger, len(plan.Actions))
@@ -776,7 +775,7 @@ type WatchOpts struct {
 }
 
 // setWatchShortcuts updates the shortcuts used by the drain goroutine.
-// Called by the cycle goroutine after observation when shortcuts may have changed.
+// Called by the watch goroutine after observation when shortcuts may have changed.
 func (e *Engine) setWatchShortcuts(shortcuts []Shortcut) {
 	e.watchShortcutsMu.Lock()
 	e.watchShortcuts = shortcuts
@@ -1204,7 +1203,7 @@ func (e *Engine) processBatch(
 
 		e.setDispatch(ctx, &plan.Actions[i])
 
-		tracker.Add(&plan.Actions[i], id, depIDs, "")
+		tracker.Add(&plan.Actions[i], id, depIDs)
 	}
 
 	e.logger.Info("watch batch dispatched",

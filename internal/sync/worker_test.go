@@ -168,7 +168,7 @@ func TestWorkerPool_FolderCreate(t *testing.T) {
 	}
 
 	tracker := NewDepTracker(10, testLogger(t))
-	tracker.Add(&actions[0], 0, nil, "")
+	tracker.Add(&actions[0], 0, nil)
 
 	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
 	pool.Start(ctx, 4)
@@ -232,8 +232,8 @@ func TestWorkerPool_DependencyChain(t *testing.T) {
 	}
 
 	tracker := NewDepTracker(10, testLogger(t))
-	tracker.Add(&actions[0], 0, nil, "")
-	tracker.Add(&actions[1], 1, []int64{0}, "")
+	tracker.Add(&actions[0], 0, nil)
+	tracker.Add(&actions[1], 1, []int64{0})
 
 	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
 	pool.Start(ctx, 4)
@@ -273,7 +273,7 @@ func TestWorkerPool_StopCancelsWork(t *testing.T) {
 	}
 
 	tracker := NewDepTracker(10, testLogger(t))
-	tracker.Add(&actions[0], 0, nil, "")
+	tracker.Add(&actions[0], 0, nil)
 
 	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
 	pool.Start(ctx, 4)
@@ -315,7 +315,7 @@ func TestWorkerPool_Stats(t *testing.T) {
 	}
 
 	tracker := NewDepTracker(10, testLogger(t))
-	tracker.Add(&actions[0], 0, nil, "")
+	tracker.Add(&actions[0], 0, nil)
 
 	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
 	pool.Start(ctx, 4)
@@ -360,7 +360,7 @@ func TestWorkerPool_FailedOutcome(t *testing.T) {
 	}
 
 	tracker := NewDepTracker(10, testLogger(t))
-	tracker.Add(&actions[0], 0, nil, "cycle-fail")
+	tracker.Add(&actions[0], 0, nil)
 
 	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
 	pool.Start(ctx, 4)
@@ -395,7 +395,7 @@ done:
 }
 
 // TestWorkerPool_ResultChannel verifies that worker results are reported
-// through the Results channel with correct cycle IDs.
+// through the Results channel.
 func TestWorkerPool_ResultChannel(t *testing.T) {
 	t.Parallel()
 
@@ -413,7 +413,7 @@ func TestWorkerPool_ResultChannel(t *testing.T) {
 	}
 
 	tracker := NewDepTracker(10, testLogger(t))
-	tracker.Add(&actions[0], 42, nil, "test-cycle")
+	tracker.Add(&actions[0], 42, nil)
 
 	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
 	pool.Start(ctx, 4)
@@ -502,8 +502,8 @@ func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing
 	require.NoError(t, os.WriteFile(absPath, []byte("upload content"), 0o644))
 
 	tracker := NewDepTracker(10, testLogger(t))
-	tracker.Add(&actions[0], 0, nil, "")
-	tracker.Add(&actions[1], 1, []int64{0}, "")
+	tracker.Add(&actions[0], 0, nil)
+	tracker.Add(&actions[1], 1, []int64{0})
 
 	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
 	pool.Start(ctx, 4)
@@ -555,7 +555,7 @@ func TestWorkerPool_PanicRecovery(t *testing.T) {
 	}
 
 	tracker := NewDepTracker(10, testLogger(t))
-	tracker.Add(&actions[0], 0, nil, "panic-cycle")
+	tracker.Add(&actions[0], 0, nil)
 
 	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
 	pool.Start(ctx, 4)
