@@ -93,7 +93,7 @@ The `doRetry` loop reused an `io.Reader` body across retries. Fix: seek the body
 - Upload session URLs are pre-authenticated (no `Authorization` header).
 
 ### Simple upload can't set metadata — post-upload PATCH required
-Graph API simple upload (PUT `/content`) sends raw binary — there's no way to include `fileSystemInfo` in the same request. Files ≤4 MiB uploaded via `SimpleUpload` get server receipt timestamps instead of local mtime. Fix: call `UpdateFileSystemInfo` (PATCH `/drives/{id}/items/{id}`) after simple upload when mtime is non-zero. One extra API call per small file, but mtime correctness prevents unnecessary re-evaluation on the next sync cycle.
+Graph API simple upload (PUT `/content`) sends raw binary — there's no way to include `fileSystemInfo` in the same request. Files ≤4 MiB uploaded via `SimpleUpload` get server receipt timestamps instead of local mtime. Fix: call `UpdateFileSystemInfo` (PATCH `/drives/{id}/items/{id}`) after simple upload when mtime is non-zero. One extra API call per small file, but mtime correctness prevents unnecessary re-evaluation on the next sync run.
 
 ### httptest closure variable forward-reference
 When an `httptest.NewServer` handler needs `srv.URL`, declare `var srv *httptest.Server` first, then assign. Direct assignment with a closure referencing `srv.URL` won't compile.
@@ -348,7 +348,7 @@ Refresh tokens are bound to the OAuth client ID that obtained them. If the Azure
 The `gocritic` `hugeParam` lint catches this (already documented in §3 under `rangeValCopy`), but it's easy to forget when writing new code that accepts `graph.Item` as a parameter. In 4v2.2, all three methods (`processItem`, `classifyAndConvert`, `materializePath`) and standalone helpers (`classifyItemType`, `selectHash`, `resolveParentDriveID`) were initially written with value parameters and had to be refactored to pointer. Check LEARNINGS §3 gocritic section before writing any function that takes graph types.
 
 ### Run gofumpt before first lint check
-Running `golangci-lint run` before `gofumpt -w` wastes a cycle fixing formatting issues that gofumpt would have caught. Always format before linting.
+Running `golangci-lint run` before `gofumpt -w` wastes a pass fixing formatting issues that gofumpt would have caught. Always format before linting.
 
 ### DOD gates are not optional — complete ALL 15 before declaring done
 In 4v2.3, gates 7 (logging review), 8 (comment review), 9 (docs update), 14 (retrospective), and 15 (re-envisioning) were initially skipped. The logging review caught two missing log lines (nosync guard Warn, deletion detection Debug summary) and the comment review caught a misleading "order matters" comment. These are exactly the kind of issues the gates exist to catch. Never shortcut the DOD checklist — the mechanical gates (build/test/lint) are necessary but not sufficient.
@@ -447,7 +447,7 @@ cleaned up instead of propagated to remote. Fix: restructured both folder classi
 parallel to the file path, with `localDeleted` as an explicit boolean.
 
 ### Auto-resolved conflicts need baseline upsert in commitConflict
-When `commitConflict()` handles an auto-resolved outcome, it must also call `commitUpsert()` to update the baseline. Without this, the next sync cycle would see the file as untracked (no baseline entry) and try to upload it again, creating a re-detection loop.
+When `commitConflict()` handles an auto-resolved outcome, it must also call `commitUpsert()` to update the baseline. Without this, the next sync run would see the file as untracked (no baseline entry) and try to upload it again, creating a re-detection loop.
 
 ### DAG edges replace createdFolders — commit-before-dispatch contract
 The old `createdFolders` map was a per-Executor hack to track folder IDs before baseline commit. With DAG edges, the dependency system guarantees: parent folder create action completes → `CommitOutcome()` calls `baseline.Put()` → child action dispatched → `resolveParentID()` finds parent via `GetByPath()`. The contract: a worker MUST call `CommitOutcome()` BEFORE `tracker.Complete()`. This ordering is critical — reversing them causes a race where the child dispatches before the parent's baseline entry exists.
@@ -609,19 +609,19 @@ The local observer had `isAlwaysExcluded()` and `isValidOneDriveName()` checks t
 The original `alwaysExcludedSuffixes` included `.db`/`.db-wal`/`.db-shm` to protect against syncing the sync engine's own SQLite database. This was too aggressive — it silently excluded legitimate data files (e.g., `my-app.db`). Fix: remove the SQLite suffixes entirely and rely on the sync engine's database living outside the sync root. The sync engine's state path (`StatePath()`) is always outside the sync directory by design.
 
 ### CommitObservation atomicity: observations + delta token in one transaction
-`CommitObservation(ctx, items, deltaToken)` wraps all `remote_state` UPSERTs and the delta token update in a single SQLite transaction. If any observation fails, no delta token is saved — the next cycle re-fetches from the last good token. This prevents the failure mode where a partial observation is committed with the new token, causing missed items on the next delta call.
+`CommitObservation(ctx, items, deltaToken)` wraps all `remote_state` UPSERTs and the delta token update in a single SQLite transaction. If any observation fails, no delta token is saved — the next run re-fetches from the last good token. This prevents the failure mode where a partial observation is committed with the new token, causing missed items on the next delta call.
 
 ### RecordFailure with exponential backoff scheduling
 `RecordFailure(ctx, driveID, itemID, errMsg)` increments `fail_count` and sets `next_retry` using exponential backoff (1m, 5m, 25m, 2h, 10h, capped at 24h). `ListFailedForRetry(ctx, driveID)` only returns items whose `next_retry` is in the past. This prevents retry storms for permanently broken items while still eventually retrying.
 
-### Legacy cycle tracking replaced by durable failure state
+### Legacy in-memory failure tracking replaced by durable failure state
 The old in-memory failure tracking (path-to-failure-count map, reset on run completion, plus in-memory delta token commit gating) was purely in-memory — a crash lost all failure history. `RecordFailure` persists failures in `remote_state` with backoff scheduling, surviving crashes. `ResetInProgressStates()` on startup handles items that were mid-operation when the process died.
 
 ### ChangeEvent-to-ObservedItem converter bridges observer and store layers
 The observer layer produces `ChangeEvent` structs; the SyncStore layer consumes `ObservedItem` structs. A converter function bridges the gap, mapping `ChangeEvent` fields to `ObservedItem` fields. This keeps the observer independent of the storage schema and allows the converter to evolve independently of either layer.
 
 ### Crash recovery: ResetInProgressStates at RunOnce start
-`RunOnce` calls `store.ResetInProgressStates(ctx, driveID)` before any observation. Items left in `syncing` or `downloading` state from a prior crash are reset to `observed`, causing them to be re-planned in the current cycle. This is safe because the planner is idempotent — re-planning an already-synced item results in a no-op (EF1).
+`RunOnce` calls `store.ResetInProgressStates(ctx, driveID)` before any observation. Items left in `syncing` or `downloading` state from a prior crash are reset to `observed`, causing them to be re-planned in the current run. This is safe because the planner is idempotent — re-planning an already-synced item results in a no-op (EF1).
 
 ### Three durable per-item state stores
 `remote_state` is the authoritative record of what the server has (server truth). `baseline` is the authoritative record of what's synced locally (local truth). `local_issues` is the upload-side failure store — tracks files that can't be uploaded due to validation failures or transient errors. All three participate in the same SQLite database.

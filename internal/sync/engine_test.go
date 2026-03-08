@@ -311,7 +311,7 @@ func TestRunOnce_UploadOnly_SkipsDelta(t *testing.T) {
 	assert.False(t, deltaCalled, "Delta should not be called in upload-only mode")
 }
 
-func TestRunOnce_Bidirectional_FullCycle(t *testing.T) {
+func TestRunOnce_Bidirectional_FullRun(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -573,7 +573,7 @@ func TestRunOnce_DeltaTokenPersisted(t *testing.T) {
 	assert.Equal(t, "new-delta-token", token)
 }
 
-func TestRunOnce_BaselineUpdatedAfterCycle(t *testing.T) {
+func TestRunOnce_BaselineUpdatedAfterRun(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)

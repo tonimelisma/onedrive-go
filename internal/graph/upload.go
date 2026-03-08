@@ -380,7 +380,7 @@ func (c *Client) Upload(
 
 		// Simple upload (PUT /content) cannot include fileSystemInfo in the
 		// request body. Post-upload PATCH preserves local mtime on the server,
-		// preventing mtime mismatch on the next sync cycle.
+		// preventing mtime mismatch on the next sync pass.
 		if !mtime.IsZero() {
 			patched, patchErr := c.UpdateFileSystemInfo(ctx, driveID, item.ID, mtime)
 			if patchErr != nil {

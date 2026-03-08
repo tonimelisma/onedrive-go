@@ -94,7 +94,7 @@ func (e *Executor) executeLocalDelete(_ context.Context, action *Action) Outcome
 // NOTE: There is an inherent TOCTOU race between ReadDir and Remove — a file
 // could be created between the two calls. This is acceptable because the DAG
 // guarantees child deletes complete before parent folder deletes, and new
-// creations would be caught in the next sync cycle.
+// creations would be caught in the next sync pass.
 func (e *Executor) deleteLocalFolder(action *Action, absPath string) Outcome {
 	entries, err := os.ReadDir(absPath)
 	if err != nil {
