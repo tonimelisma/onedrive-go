@@ -19,14 +19,16 @@ architectural rationale.
 |---|---|---|
 | `remote_state` | Full mirror of remote drive state (every item the delta API has told us about) | Updated on each delta observation and action completion |
 | `baseline` | Confirmed synced state per `(drive_id, item_id)` | Updated per-action as each transfer completes |
-| `local_issues` | Upload failure tracking and path violations | Updated on upload failure, cleared on success |
+| `sync_failures` | Unified failure tracking (download, upload, delete) with retry scheduling | Updated on failure, cleared on success |
 | `delta_tokens` | Graph API delta cursor per drive | Committed atomically with `remote_state` observations |
 | `conflicts` | Conflict tracking with resolution status | Append on detection, update on resolution |
 | `sync_metadata` | Key-value store for sync reporting | Updated after each sync cycle |
+| `shortcuts` | Shortcut-to-shared-folder tracking | Updated on delta observation |
 | `schema_migrations` | Schema version tracking | Updated on startup |
 
-**7 tables.** The three core tables (`remote_state`, `baseline`, `local_issues`)
-implement the Remote State Separation architecture. Upload sessions are tracked
+**8 tables.** The three core tables (`remote_state`, `baseline`, `sync_failures`)
+implement the Remote State Separation architecture. The `local_issues` table
+was replaced by `sync_failures` in migration 00005. Upload sessions are tracked
 via a file-based `SessionStore` (JSON files in the data directory), not in the
 database.
 
@@ -40,7 +42,7 @@ interface it needs, enforcing transition ownership at compile time:
 |-----------|--------|---------|
 | `ObservationWriter` | Remote observer | Writes observed remote state + advances delta token atomically |
 | `OutcomeWriter` | Worker pool | Commits action results to baseline + updates `remote_state` on success |
-| `FailureRecorder` | `drainWorkerResults` | Records failure metadata on `remote_state` rows |
+| `FailureRecorder` | `drainWorkerResults` | Records failure metadata in `sync_failures` and transitions `remote_state` status |
 | `ConflictEscalator` | Reconciler | Escalates permanently-failing items to conflicts |
 | `StateReader` | Reconciler, planner, CLI | Read-only queries across all tables |
 | `StateAdmin` | CLI commands, maintenance | Admin writes (resolve conflicts, reset failures) |
@@ -336,38 +338,37 @@ CLI command and debugging.
 
 ---
 
-## 7. Local Issues Table
+## 7. Sync Failures Table
 
-Upload failure tracking is separate from `remote_state` because uploads are
-locally-driven. Local files have no item ID until uploaded. See
-[remote-state-separation.md §14](remote-state-separation.md).
+Unified failure tracking for all sync directions (download, upload, delete).
+Replaced the `local_issues` table and the dead failure columns on
+`remote_state` in migration 00005. See
+[retry-architecture.md](retry-architecture.md) for the retry design.
 
 ```sql
-CREATE TABLE local_issues (
-    path          TEXT    PRIMARY KEY,
-    issue_type    TEXT    NOT NULL
-                  CHECK(issue_type IN (
-                      'invalid_filename', 'path_too_long', 'file_too_large',
-                      'permission_denied', 'upload_failed', 'quota_exceeded',
-                      'locked', 'sharepoint_restriction')),
-    sync_status   TEXT    NOT NULL DEFAULT 'pending_upload'
-                  CHECK(sync_status IN (
-                      'pending_upload', 'uploading', 'upload_failed',
-                      'permanently_failed', 'resolved')),
-    failure_count INTEGER NOT NULL DEFAULT 0,
-    next_retry_at INTEGER,
-    last_error    TEXT,
-    http_status   INTEGER,
-    first_seen_at INTEGER NOT NULL,
-    last_seen_at  INTEGER NOT NULL,
-    file_size     INTEGER,
-    local_hash    TEXT
+CREATE TABLE sync_failures (
+    path           TEXT    NOT NULL,
+    drive_id       TEXT    NOT NULL,
+    direction      TEXT    NOT NULL CHECK(direction IN ('download', 'upload', 'delete')),
+    category       TEXT    NOT NULL CHECK(category IN ('transient', 'permanent')),
+    issue_type     TEXT,
+    item_id        TEXT,
+    failure_count  INTEGER NOT NULL DEFAULT 0,
+    next_retry_at  INTEGER,
+    last_error     TEXT,
+    http_status    INTEGER,
+    first_seen_at  INTEGER NOT NULL,
+    last_seen_at   INTEGER NOT NULL,
+    file_size      INTEGER,
+    local_hash     TEXT,
+    PRIMARY KEY (path, drive_id)
 );
 ```
 
-Items failing pre-upload validation (invalid filenames, path too long, file too
-large) are written with `permanently_failed` status and surfaced via
-`onedrive-go issues`.
+**14 columns.** Keyed by `(path, drive_id)`. Transient failures use exponential
+backoff via `next_retry_at`; permanent failures (`invalid_filename`,
+`path_too_long`, `file_too_large`) have `next_retry_at = NULL` and are never
+retried. Surfaced via `onedrive-go failures`.
 
 ---
 
@@ -589,7 +590,8 @@ See that file for the authoritative DDL. The schema includes:
 - `conflicts` — conflict tracking with resolution status
 - `sync_metadata` — key-value store for sync reporting
 - `remote_state` — full remote mirror with explicit `sync_status` state machine
-- `local_issues` — upload failure tracking and path violations
+- `sync_failures` — unified failure tracking (download, upload, delete)
+- `shortcuts` — shortcut-to-shared-folder tracking
 - `schema_migrations` — schema version tracking (managed by goose)
 
 Pragmas (set on every connection open):
