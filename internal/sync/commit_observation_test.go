@@ -19,28 +19,24 @@ func readRemoteStateRow(t *testing.T, db *sql.DB, itemID string) *RemoteStateRow
 	t.Helper()
 
 	var (
-		row        RemoteStateRow
-		parentID   sql.NullString
-		hash       sql.NullString
-		size       sql.NullInt64
-		mtime      sql.NullInt64
-		etag       sql.NullString
-		prevPath   sql.NullString
-		nextRetry  sql.NullInt64
-		lastError  sql.NullString
-		httpStatus sql.NullInt64
+		row      RemoteStateRow
+		parentID sql.NullString
+		hash     sql.NullString
+		size     sql.NullInt64
+		mtime    sql.NullInt64
+		etag     sql.NullString
+		prevPath sql.NullString
 	)
 
 	err := db.QueryRowContext(t.Context(),
 		`SELECT drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
-			previous_path, sync_status, observed_at, failure_count, next_retry_at, last_error, http_status
+			previous_path, sync_status, observed_at
 		FROM remote_state WHERE item_id = ?`,
 		itemID,
 	).Scan(
 		&row.DriveID, &row.ItemID, &row.Path, &parentID, &row.ItemType,
 		&hash, &size, &mtime, &etag,
-		&prevPath, &row.SyncStatus, &row.ObservedAt, &row.FailureCount,
-		&nextRetry, &lastError, &httpStatus,
+		&prevPath, &row.SyncStatus, &row.ObservedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil
@@ -52,7 +48,6 @@ func readRemoteStateRow(t *testing.T, db *sql.DB, itemID string) *RemoteStateRow
 	row.Hash = hash.String
 	row.ETag = etag.String
 	row.PreviousPath = prevPath.String
-	row.LastError = lastError.String
 
 	if size.Valid {
 		row.Size = size.Int64
@@ -60,14 +55,6 @@ func readRemoteStateRow(t *testing.T, db *sql.DB, itemID string) *RemoteStateRow
 
 	if mtime.Valid {
 		row.Mtime = mtime.Int64
-	}
-
-	if nextRetry.Valid {
-		row.NextRetryAt = nextRetry.Int64
-	}
-
-	if httpStatus.Valid {
-		row.HTTPStatus = int(httpStatus.Int64)
 	}
 
 	return &row
@@ -123,7 +110,6 @@ func TestCommitObservation_NewItem(t *testing.T) {
 	assert.Equal(t, "hash1", row.Hash)
 	assert.Equal(t, int64(100), row.Size)
 	assert.Equal(t, "etag1", row.ETag)
-	assert.Equal(t, 0, row.FailureCount)
 
 	// Delta token should be committed in the same transaction.
 	token := readDeltaToken(t, mgr.rawDB(), testDriveID)
@@ -232,8 +218,7 @@ func TestCommitObservation_HashChange_ResetsFailureCount(t *testing.T) {
 	require.NotNil(t, row)
 	assert.Equal(t, statusPendingDownload, row.SyncStatus)
 	assert.Equal(t, "new-hash", row.Hash)
-	assert.Equal(t, 0, row.FailureCount, "failure count should reset on hash change")
-	assert.Equal(t, int64(0), row.NextRetryAt, "next_retry_at should be cleared")
+	// Failure state is tracked in sync_failures table, not remote_state.
 }
 
 func TestCommitObservation_MoveTracking_SetsPreviousPath(t *testing.T) {
