@@ -121,8 +121,4 @@ type RemoteStateRow struct {
 	PreviousPath string
 	SyncStatus   string
 	ObservedAt   int64
-	FailureCount int
-	NextRetryAt  int64
-	LastError    string
-	HTTPStatus   int
 }

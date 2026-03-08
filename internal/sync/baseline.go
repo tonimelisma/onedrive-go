@@ -88,8 +88,7 @@ const (
 // SQL statements for remote_state operations.
 const (
 	sqlGetRemoteStateRow = `SELECT drive_id, item_id, path, parent_id, item_type,
-		hash, size, mtime, etag, previous_path, sync_status, observed_at,
-		failure_count, next_retry_at, last_error, http_status
+		hash, size, mtime, etag, previous_path, sync_status, observed_at
 		FROM remote_state WHERE drive_id = ? AND item_id = ?`
 
 	sqlInsertRemoteState = `INSERT INTO remote_state
@@ -889,6 +888,8 @@ func (m *SyncStore) Checkpoint(ctx context.Context, retention time.Duration) err
 		return fmt.Errorf("prune deleted remote_state: %w", err)
 	}
 
+	// Permanent failures are kept for user visibility but pruned after retention
+	// to prevent unbounded growth of stale entries.
 	if _, err := m.db.ExecContext(ctx,
 		`DELETE FROM sync_failures WHERE category = 'permanent' AND last_seen_at < ?`,
 		cutoff); err != nil {
@@ -994,23 +995,19 @@ func (m *SyncStore) processObservedItem(ctx context.Context, tx *sql.Tx, item *O
 // Returns nil if no row exists.
 func (m *SyncStore) scanRemoteStateRow(ctx context.Context, tx *sql.Tx, driveID, itemID string) *RemoteStateRow {
 	var (
-		row        RemoteStateRow
-		parentID   sql.NullString
-		hash       sql.NullString
-		size       sql.NullInt64
-		mtime      sql.NullInt64
-		etag       sql.NullString
-		prevPath   sql.NullString
-		nextRetry  sql.NullInt64
-		lastError  sql.NullString
-		httpStatus sql.NullInt64
+		row      RemoteStateRow
+		parentID sql.NullString
+		hash     sql.NullString
+		size     sql.NullInt64
+		mtime    sql.NullInt64
+		etag     sql.NullString
+		prevPath sql.NullString
 	)
 
 	err := tx.QueryRowContext(ctx, sqlGetRemoteStateRow, driveID, itemID).Scan(
 		&row.DriveID, &row.ItemID, &row.Path, &parentID, &row.ItemType,
 		&hash, &size, &mtime, &etag,
-		&prevPath, &row.SyncStatus, &row.ObservedAt, &row.FailureCount,
-		&nextRetry, &lastError, &httpStatus,
+		&prevPath, &row.SyncStatus, &row.ObservedAt,
 	)
 	if err != nil {
 		return nil
@@ -1020,7 +1017,6 @@ func (m *SyncStore) scanRemoteStateRow(ctx context.Context, tx *sql.Tx, driveID,
 	row.Hash = hash.String
 	row.ETag = etag.String
 	row.PreviousPath = prevPath.String
-	row.LastError = lastError.String
 
 	if size.Valid {
 		row.Size = size.Int64
@@ -1028,14 +1024,6 @@ func (m *SyncStore) scanRemoteStateRow(ctx context.Context, tx *sql.Tx, driveID,
 
 	if mtime.Valid {
 		row.Mtime = mtime.Int64
-	}
-
-	if nextRetry.Valid {
-		row.NextRetryAt = nextRetry.Int64
-	}
-
-	if httpStatus.Valid {
-		row.HTTPStatus = int(httpStatus.Int64)
 	}
 
 	return &row
@@ -1184,7 +1172,7 @@ func computeNextRetry(now time.Time, failureCount int) time.Time {
 func (m *SyncStore) ListUnreconciled(ctx context.Context) ([]RemoteStateRow, error) {
 	return m.queryRemoteStateRows(ctx,
 		`SELECT drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
-			previous_path, sync_status, observed_at, failure_count, next_retry_at, last_error, http_status
+			previous_path, sync_status, observed_at
 		FROM remote_state WHERE sync_status NOT IN (?, ?, ?)`,
 		statusSynced, statusFiltered, statusDeleted,
 	)
@@ -1195,7 +1183,7 @@ func (m *SyncStore) ListUnreconciled(ctx context.Context) ([]RemoteStateRow, err
 func (m *SyncStore) ListActionableRemoteState(ctx context.Context) ([]RemoteStateRow, error) {
 	return m.queryRemoteStateRows(ctx,
 		`SELECT drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
-			previous_path, sync_status, observed_at, failure_count, next_retry_at, last_error, http_status
+			previous_path, sync_status, observed_at
 		FROM remote_state
 		WHERE sync_status IN (?, ?, ?, ?)`,
 		statusPendingDownload, statusDownloadFailed, statusPendingDelete, statusDeleteFailed,
@@ -1214,23 +1202,19 @@ func (m *SyncStore) queryRemoteStateRows(ctx context.Context, query string, args
 
 	for rows.Next() {
 		var (
-			row        RemoteStateRow
-			parentID   sql.NullString
-			hash       sql.NullString
-			size       sql.NullInt64
-			mtime      sql.NullInt64
-			etag       sql.NullString
-			prevPath   sql.NullString
-			nextRetry  sql.NullInt64
-			lastError  sql.NullString
-			httpStatus sql.NullInt64
+			row      RemoteStateRow
+			parentID sql.NullString
+			hash     sql.NullString
+			size     sql.NullInt64
+			mtime    sql.NullInt64
+			etag     sql.NullString
+			prevPath sql.NullString
 		)
 
 		if err := rows.Scan(
 			&row.DriveID, &row.ItemID, &row.Path, &parentID, &row.ItemType,
 			&hash, &size, &mtime, &etag,
-			&prevPath, &row.SyncStatus, &row.ObservedAt, &row.FailureCount,
-			&nextRetry, &lastError, &httpStatus,
+			&prevPath, &row.SyncStatus, &row.ObservedAt,
 		); err != nil {
 			return nil, fmt.Errorf("sync: scanning remote_state row: %w", err)
 		}
@@ -1239,7 +1223,6 @@ func (m *SyncStore) queryRemoteStateRows(ctx context.Context, query string, args
 		row.Hash = hash.String
 		row.ETag = etag.String
 		row.PreviousPath = prevPath.String
-		row.LastError = lastError.String
 
 		if size.Valid {
 			row.Size = size.Int64
@@ -1247,14 +1230,6 @@ func (m *SyncStore) queryRemoteStateRows(ctx context.Context, query string, args
 
 		if mtime.Valid {
 			row.Mtime = mtime.Int64
-		}
-
-		if nextRetry.Valid {
-			row.NextRetryAt = nextRetry.Int64
-		}
-
-		if httpStatus.Valid {
-			row.HTTPStatus = int(httpStatus.Int64)
 		}
 
 		result = append(result, row)
