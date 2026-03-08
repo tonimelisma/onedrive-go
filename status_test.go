@@ -812,9 +812,6 @@ func createTestStateDB(t *testing.T, dbPath string) {
 			hash TEXT,
 			mtime INTEGER,
 			etag TEXT,
-			failure_count INTEGER NOT NULL DEFAULT 0,
-			last_error TEXT,
-			next_retry_at INTEGER,
 			observed_at INTEGER NOT NULL DEFAULT 0
 		);
 		CREATE TABLE IF NOT EXISTS sync_failures (

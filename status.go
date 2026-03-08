@@ -87,7 +87,7 @@ type statusSummary struct {
 	NoToken           int `json:"no_token"`
 	TotalConflicts    int `json:"total_conflicts"`
 	TotalPendingSync  int `json:"total_pending_sync"`
-	TotalSyncFailures int `json:"total_upload_issues"`
+	TotalSyncFailures int `json:"total_sync_failures"`
 }
 
 // statusOutput wraps the full status response for JSON output.
@@ -405,8 +405,8 @@ func querySyncState(statePath string, logger *slog.Logger) *syncStateInfo {
 	}
 
 	// Count active sync failures.
-	issuesSQL := "SELECT COUNT(*) FROM sync_failures WHERE category = 'transient'"
-	if scanErr := db.QueryRowContext(ctx, issuesSQL).Scan(&info.SyncFailures); scanErr != nil {
+	failuresSQL := "SELECT COUNT(*) FROM sync_failures WHERE category = 'transient'"
+	if scanErr := db.QueryRowContext(ctx, failuresSQL).Scan(&info.SyncFailures); scanErr != nil {
 		logger.Debug("could not count sync failures", slog.String("error", scanErr.Error()))
 	}
 
@@ -518,7 +518,7 @@ func printSyncStateText(w io.Writer, ss *syncStateInfo) {
 	}
 
 	if ss.SyncFailures > 0 {
-		fmt.Fprintf(w, "    Failures:  %d sync failures (run 'onedrive-go issues' for details)\n", ss.SyncFailures)
+		fmt.Fprintf(w, "    Failures:  %d sync failures (run 'onedrive-go failures' for details)\n", ss.SyncFailures)
 	}
 
 	if ss.LastError != "" {

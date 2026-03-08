@@ -257,8 +257,8 @@ func TestKick_Coalescing(t *testing.T) {
 
 func TestReconcile_DispatchRetriableItems(t *testing.T) {
 	rows := []SyncFailureRow{
-		makeFailedRow("a.txt", "download", 2),
-		makeFailedRow("b.txt", "delete", 3),
+		makeFailedRow("a.txt", strDownload, 2),
+		makeFailedRow("b.txt", strDelete, 3),
 	}
 	state := &mockStateReader{failureRows: rows}
 	esc := &mockEscalator{}
@@ -287,8 +287,8 @@ func TestReconcile_DispatchRetriableItems(t *testing.T) {
 
 func TestReconcile_SkipInFlight(t *testing.T) {
 	rows := []SyncFailureRow{
-		makeFailedRow("a.txt", "download", 2),
-		makeFailedRow("b.txt", "download", 3),
+		makeFailedRow("a.txt", strDownload, 2),
+		makeFailedRow("b.txt", strDownload, 3),
 	}
 	state := &mockStateReader{failureRows: rows}
 	esc := &mockEscalator{}
@@ -311,9 +311,9 @@ func TestReconcile_SkipInFlight(t *testing.T) {
 
 func TestReconcile_EscalationThreshold(t *testing.T) {
 	rows := []SyncFailureRow{
-		makeFailedRow("a.txt", "download", defaultEscalationThreshold),
-		makeFailedRow("b.txt", "download", defaultEscalationThreshold+5),
-		makeFailedRow("c.txt", "download", 2), // below threshold
+		makeFailedRow("a.txt", strDownload, defaultEscalationThreshold),
+		makeFailedRow("b.txt", strDownload, defaultEscalationThreshold+5),
+		makeFailedRow("c.txt", strDownload, 2), // below threshold
 	}
 	state := &mockStateReader{failureRows: rows}
 	esc := &mockEscalator{}
@@ -342,7 +342,7 @@ func TestReconcile_EscalationThreshold(t *testing.T) {
 
 func TestReconcile_EscalationError(t *testing.T) {
 	rows := []SyncFailureRow{
-		makeFailedRow("a.txt", "download", defaultEscalationThreshold),
+		makeFailedRow("a.txt", strDownload, defaultEscalationThreshold),
 	}
 	state := &mockStateReader{failureRows: rows}
 	esc := &mockEscalator{err: errors.New("db error")}
@@ -373,9 +373,9 @@ func TestSynthesizeFailureEvent_Directions(t *testing.T) {
 		wantType   ChangeType
 		wantSource ChangeSource
 	}{
-		{"download", "download", ChangeModify, SourceRemote},
-		{"upload", "upload", ChangeModify, SourceLocal},
-		{"delete", "delete", ChangeDelete, SourceRemote},
+		{strDownload, strDownload, ChangeModify, SourceRemote},
+		{strUpload, strUpload, ChangeModify, SourceLocal},
+		{strDelete, strDelete, ChangeDelete, SourceRemote},
 	}
 
 	for _, tt := range tests {
@@ -390,7 +390,7 @@ func TestSynthesizeFailureEvent_Directions(t *testing.T) {
 			assert.Equal(t, tt.wantType == ChangeDelete, ev.IsDeleted)
 
 			// Download and delete events carry item metadata from the row.
-			if tt.direction != "upload" {
+			if tt.direction != strUpload {
 				assert.Equal(t, row.ItemID, ev.ItemID)
 				assert.Equal(t, row.DriveID, ev.DriveID)
 			}
@@ -509,7 +509,7 @@ func TestRun_ShutdownOnCancel(t *testing.T) {
 
 func TestRun_KickTriggersReconcile(t *testing.T) {
 	rows := []SyncFailureRow{
-		makeFailedRow("a.txt", "download", 2),
+		makeFailedRow("a.txt", strDownload, 2),
 	}
 	state := &mockStateReader{failureRows: rows}
 	adder := &mockEventAdder{}
@@ -553,8 +553,8 @@ func TestDefaultFailureRetrierConfig(t *testing.T) {
 
 func TestFailureRetrier_CustomEscalationThreshold(t *testing.T) {
 	rows := []SyncFailureRow{
-		makeFailedRow("a.txt", "download", 3),
-		makeFailedRow("b.txt", "download", 2), // below threshold
+		makeFailedRow("a.txt", strDownload, 3),
+		makeFailedRow("b.txt", strDownload, 2), // below threshold
 	}
 	state := &mockStateReader{failureRows: rows}
 	esc := &mockEscalator{}
@@ -609,8 +609,8 @@ func TestArmTimer_StopsExistingTimer(t *testing.T) {
 
 func TestReconcile_DispatchUploadFailures(t *testing.T) {
 	rows := []SyncFailureRow{
-		makeFailedRow("a.txt", "upload", 2),
-		makeFailedRow("b.txt", "upload", 3),
+		makeFailedRow("a.txt", strUpload, 2),
+		makeFailedRow("b.txt", strUpload, 3),
 	}
 	state := &mockStateReader{failureRows: rows}
 	adder := &mockEventAdder{}
@@ -633,8 +633,8 @@ func TestReconcile_DispatchUploadFailures(t *testing.T) {
 
 func TestReconcile_EscalateUploadFailure(t *testing.T) {
 	rows := []SyncFailureRow{
-		makeFailedRow("bad.txt", "upload", defaultEscalationThreshold),
-		makeFailedRow("ok.txt", "upload", 2),
+		makeFailedRow("bad.txt", strUpload, defaultEscalationThreshold),
+		makeFailedRow("ok.txt", strUpload, 2),
 	}
 	state := &mockStateReader{failureRows: rows}
 	adder := &mockEventAdder{}
@@ -659,8 +659,8 @@ func TestReconcile_EscalateUploadFailure(t *testing.T) {
 
 func TestReconcile_MixedDirections(t *testing.T) {
 	rows := []SyncFailureRow{
-		makeFailedRow("remote.txt", "download", 2),
-		makeFailedRow("local.txt", "upload", 1),
+		makeFailedRow("remote.txt", strDownload, 2),
+		makeFailedRow("local.txt", strUpload, 1),
 	}
 	state := &mockStateReader{failureRows: rows}
 	adder := &mockEventAdder{}

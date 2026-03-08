@@ -168,6 +168,12 @@ Optimization deferred until profiling shows a bottleneck.
 | ~~B-334~~ | ~~`processShortcuts` collects ALL deletes into `removedShortcutIDs`~~ | ~~P4~~ | **DONE** — Pre-filters delete IDs against known shortcut IDs before passing to `handleRemovedShortcuts`. |
 | ~~B-335~~ | ~~Remove duplicate `ObservationEnumerate` case in `observeSingleShortcut`~~ | ~~P5~~ | **DONE** — Collapsed to `case ObservationDelta:` / `default:`. |
 
+## Retry Architecture Follow-up
+
+| ID | Title | Priority | Notes |
+|----|-------|----------|-------|
+| B-336 | Drop dead failure columns from remote_state schema | P5 | `failure_count`, `next_retry_at`, `last_error`, `http_status` are no longer written (failure state moved to `sync_failures` table). A future migration should recreate the table without these columns (SQLite limitation). Low priority since reads already ignore them. |
+
 ## Phase 6.3 Follow-up
 
 | ID | Title | Priority | Notes |
