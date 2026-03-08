@@ -86,6 +86,7 @@ type Engine struct {
 	folderDelta     FolderDeltaFetcher // optional: for shortcut observation (6.4b)
 	recursiveLister RecursiveLister    // optional: for shortcut observation (6.4b)
 	permChecker     PermissionChecker  // optional: for shared folder permission checks (6.4c)
+	permCache       *permissionCache   // per-cycle in-memory cache of folder→canWrite
 	syncRoot        string
 	driveID         driveid.ID
 	logger          *slog.Logger
@@ -142,6 +143,7 @@ func NewEngine(cfg *EngineConfig) (*Engine, error) {
 		folderDelta:     cfg.FolderDelta,
 		recursiveLister: cfg.RecursiveLister,
 		permChecker:     cfg.PermChecker,
+		permCache:       newPermissionCache(),
 		sessionStore:    sessionStore,
 		syncRoot:        cfg.SyncRoot,
 		driveID:         cfg.DriveID,
