@@ -1347,7 +1347,7 @@ Each of the 12+ known API quirks has a regression test using realistic API respo
 
 ### 10.1 Pipeline Overview
 
-Four parallel jobs run on every PR. Push-to-main CI is skipped for PR merges (squash commits containing `(#NNN)`) to avoid redundant runs. Direct pushes, nightly schedule, and manual dispatch still trigger all jobs. Branch protection requires all 4 jobs to pass before merge.
+Four parallel jobs run on every PR. Branch protection (`enforce_admins=true`) requires all 4 jobs to pass before merge — no direct pushes to main. Push-to-main CI is automatically skipped since all main commits come from PR squash merges. Nightly schedule and manual dispatch still trigger all jobs.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
