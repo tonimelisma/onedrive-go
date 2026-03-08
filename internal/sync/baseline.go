@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
-	"math/rand/v2"
 	"os"
 	"path"
 	"path/filepath"
@@ -16,6 +15,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // SQL statements for baseline operations.
@@ -1132,26 +1132,10 @@ func (m *SyncStore) RecordFailure(ctx context.Context, path, errMsg string, http
 	return nil
 }
 
-// Backoff constants for failure retry scheduling.
-const (
-	baseBackoffSeconds = 30
-	maxBackoffSeconds  = 3600 // 1 hour
-	jitterPercent      = 25
-	jitterDivisor      = 100
-)
-
 // computeNextRetry calculates the next retry time with exponential backoff
-// and jitter. Base: 30s * 2^failureCount, capped at 1 hour, ~25% jitter.
+// and jitter using the unified retry.Reconcile policy.
 func computeNextRetry(now time.Time, failureCount int) time.Time {
-	delaySec := min(baseBackoffSeconds*(1<<failureCount), maxBackoffSeconds)
-
-	// Add ~25% jitter.
-	jitter := delaySec * jitterPercent / jitterDivisor
-	if jitter > 0 {
-		delaySec += int(rand.Int64N(int64(jitter))) //nolint:gosec // jitter doesn't need crypto-grade randomness
-	}
-
-	return now.Add(time.Duration(delaySec) * time.Second)
+	return now.Add(retry.Reconcile.Delay(failureCount))
 }
 
 // ---------------------------------------------------------------------------

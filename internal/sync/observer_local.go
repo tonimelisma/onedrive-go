@@ -35,10 +35,7 @@ var ErrWatchLimitExhausted = errors.New("sync: inotify watch limit exhausted")
 
 // Constants for the local observer (watch mode).
 const (
-	safetyScanInterval  = 5 * time.Minute
-	watchErrInitBackoff = 1 * time.Second
-	watchErrMaxBackoff  = 30 * time.Second
-	watchErrBackoffMult = 2
+	safetyScanInterval = 5 * time.Minute
 
 	// defaultWriteCoalesceCooldown is the per-path quiescence window for
 	// write coalescing (B-107). Multiple Write events within this window are
