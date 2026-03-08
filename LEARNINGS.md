@@ -611,11 +611,11 @@ The original `alwaysExcludedSuffixes` included `.db`/`.db-wal`/`.db-shm` to prot
 ### CommitObservation atomicity: observations + delta token in one transaction
 `CommitObservation(ctx, items, deltaToken)` wraps all `remote_state` UPSERTs and the delta token update in a single SQLite transaction. If any observation fails, no delta token is saved — the next run re-fetches from the last good token. This prevents the failure mode where a partial observation is committed with the new token, causing missed items on the next delta call.
 
-### RecordFailure with exponential backoff scheduling
-`RecordFailure(ctx, driveID, itemID, errMsg)` increments `fail_count` and sets `next_retry` using exponential backoff (1m, 5m, 25m, 2h, 10h, capped at 24h). `ListFailedForRetry(ctx, driveID)` only returns items whose `next_retry` is in the past. This prevents retry storms for permanently broken items while still eventually retrying.
+### RecordSyncFailure with exponential backoff scheduling
+`RecordSyncFailure(ctx, path, driveID, direction, issueType, errMsg, ...)` increments `failure_count` and sets `next_retry_at` using exponential backoff (30s base, 2x multiplier, capped at 1h). Transient failures retry indefinitely. Actionable failures (reserved names, file too large, etc.) require user intervention via `issues clear`. `ListSyncFailuresForRetry(ctx, now)` only returns transient items whose `next_retry_at` is in the past.
 
 ### Legacy in-memory failure tracking replaced by durable failure state
-The old in-memory failure tracking (path-to-failure-count map, reset on run completion, plus in-memory delta token commit gating) was purely in-memory — a crash lost all failure history. `RecordFailure` persists failures in `remote_state` with backoff scheduling, surviving crashes. `ResetInProgressStates()` on startup handles items that were mid-operation when the process died.
+The old in-memory failure tracking was purely in-memory — a crash lost all failure history. `RecordSyncFailure` persists failures in `sync_failures` with backoff scheduling, surviving crashes. `ResetInProgressStates()` on startup handles items that were mid-operation when the process died.
 
 ### ChangeEvent-to-ObservedItem converter bridges observer and store layers
 The observer layer produces `ChangeEvent` structs; the SyncStore layer consumes `ObservedItem` structs. A converter function bridges the gap, mapping `ChangeEvent` fields to `ObservedItem` fields. This keeps the observer independent of the storage schema and allows the converter to evolve independently of either layer.
@@ -624,10 +624,10 @@ The observer layer produces `ChangeEvent` structs; the SyncStore layer consumes 
 `RunOnce` calls `store.ResetInProgressStates(ctx, driveID)` before any observation. Items left in `syncing` or `downloading` state from a prior crash are reset to `observed`, causing them to be re-planned in the current run. This is safe because the planner is idempotent — re-planning an already-synced item results in a no-op (EF1).
 
 ### Three durable per-item state stores
-`remote_state` is the authoritative record of what the server has (server truth). `baseline` is the authoritative record of what's synced locally (local truth). `local_issues` is the upload-side failure store — tracks files that can't be uploaded due to validation failures or transient errors. All three participate in the same SQLite database.
+`remote_state` is the authoritative record of what the server has (server truth). `baseline` is the authoritative record of what's synced locally (local truth). `sync_failures` is the unified failure store — tracks files that can't be synced due to validation failures (actionable) or transient errors (retried automatically). All three participate in the same SQLite database.
 
 ### Pre-upload validation as post-plan filter
-Upload validation (reserved names, path length, file size) runs *after* the planner but *before* execution. The planner stays pure — it doesn't know about OneDrive constraints. The engine calls `validateUploadActions()` and records any failures via `RecordLocalIssue()`, then rebuilds the plan with `removeActionsByIndex()`. This keeps the planner testable and constraint-free.
+Upload validation (reserved names, path length, file size) runs *after* the planner but *before* execution. The planner stays pure — it doesn't know about OneDrive constraints. The engine calls `validateUploadActions()` and records any failures via `RecordSyncFailure()`, then rebuilds the plan with `removeActionsByIndex()`. This keeps the planner testable and constraint-free.
 
 ### isValidOneDriveName only checks exact reserved names
 `isValidOneDriveName()` in scanner.go rejects exact reserved device names (CON, PRN, AUX, NUL, COM0-9, LPT0-9) but *not* names with extensions (e.g., `CON.txt` passes). This matches the OneDrive API behavior — `CON.txt` is a valid filename on OneDrive, only bare `CON` is rejected.

@@ -41,10 +41,12 @@ var Action = Policy{ //nolint:gochecknoglobals // named policy singleton
 }
 
 // Reconcile is the failure retrier scheduling policy (sync/baseline.go).
-// Used to compute next_retry_at for failed items. 10 attempts (escalation
-// threshold), 30s base, 1h max, 2x multiplier, ~25% jitter.
+// Used to compute next_retry_at for failed items. Infinite retries (transient
+// failures retry forever), 30s base, 1h max, 2x multiplier, ~25% jitter.
+// MaxAttempts=0 means no upper bound — the backoff curve parameters are used
+// for computing next_retry_at, not as a loop bound.
 var Reconcile = Policy{ //nolint:gochecknoglobals // named policy singleton
-	MaxAttempts: 10,               //nolint:mnd // escalation threshold
+	MaxAttempts: 0,                // infinite retries
 	Base:        30 * time.Second, //nolint:mnd // canonical base backoff
 	Max:         1 * time.Hour,
 	Multiplier:  2.0,  //nolint:mnd // standard exponential factor

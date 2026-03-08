@@ -60,9 +60,9 @@ func TestClockSkew_BackwardJump_BaselineSyncedAt(t *testing.T) {
 		"synced_at should reflect the new (backward) clock — no crash")
 }
 
-// TestClockSkew_BackwardJump_LocalIssueTimestamp verifies that recording
-// local issues works correctly with backward clock jumps.
-func TestClockSkew_BackwardJump_LocalIssueTimestamp(t *testing.T) {
+// TestClockSkew_BackwardJump_SyncFailureTimestamp verifies that recording
+// sync failures works correctly with backward clock jumps.
+func TestClockSkew_BackwardJump_SyncFailureTimestamp(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
@@ -85,7 +85,7 @@ func TestClockSkew_BackwardJump_LocalIssueTimestamp(t *testing.T) {
 }
 
 // TestClockSkew_BackwardJump_ConflictDetectedAt verifies that conflict
-// escalation works correctly with backward clock jumps.
+// recording works correctly with backward clock jumps.
 func TestClockSkew_BackwardJump_ConflictDetectedAt(t *testing.T) {
 	t.Parallel()
 
@@ -94,18 +94,30 @@ func TestClockSkew_BackwardJump_ConflictDetectedAt(t *testing.T) {
 
 	driveID := driveid.New(engineTestDriveID)
 
-	// Record conflict at t=1000.
+	// Record conflict at t=1000 via CommitOutcome with a conflict action.
 	mgr.nowFunc = func() time.Time { return time.Unix(1000, 0) }
 
-	require.NoError(t, mgr.EscalateToConflict(ctx, driveID, "item-1",
-		"file.txt", "edit-edit conflict"))
+	require.NoError(t, mgr.CommitOutcome(ctx, &Outcome{
+		Path:         "file.txt",
+		DriveID:      driveID,
+		ItemID:       "item-1",
+		Action:       ActionConflict,
+		ConflictType: ConflictEditEdit,
+		Success:      true,
+	}))
 
 	// Jump clock backward to t=500.
 	mgr.nowFunc = func() time.Time { return time.Unix(500, 0) }
 
 	// Record another conflict.
-	require.NoError(t, mgr.EscalateToConflict(ctx, driveID, "item-2",
-		"other.txt", "edit-delete conflict"))
+	require.NoError(t, mgr.CommitOutcome(ctx, &Outcome{
+		Path:         "other.txt",
+		DriveID:      driveID,
+		ItemID:       "item-2",
+		Action:       ActionConflict,
+		ConflictType: ConflictEditEdit,
+		Success:      true,
+	}))
 
 	conflicts, err := mgr.ListConflicts(ctx)
 	require.NoError(t, err)

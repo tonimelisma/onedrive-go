@@ -771,7 +771,7 @@ func TestFailureCount(t *testing.T) {
 	}{
 		{"a.txt", "transient", "download"},
 		{"b.txt", "transient", "delete"},
-		{"c.txt", "permanent", "download"}, // permanent should not be counted
+		{"c.txt", "actionable", "download"}, // actionable should not be counted
 	} {
 		_, err := mgr.rawDB().ExecContext(ctx,
 			`INSERT INTO sync_failures (path, drive_id, direction, category, failure_count, first_seen_at, last_seen_at)

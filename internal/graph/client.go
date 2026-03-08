@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	gosync "sync"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/retry"
@@ -44,10 +45,11 @@ type Client struct {
 	// Tests override this to avoid real delays.
 	sleepFunc func(ctx context.Context, d time.Duration) error
 
-	// breaker is an optional circuit breaker for detecting service-wide
-	// outages. When open, requests fail immediately with ErrCircuitOpen.
-	// Nil means no circuit breaker (backward compatible).
-	breaker *retry.CircuitBreaker
+	// throttleMu guards throttledUntil.
+	throttleMu gosync.Mutex
+	// throttledUntil is the deadline until which all requests should wait.
+	// Set when any request receives a 429 with Retry-After.
+	throttledUntil time.Time
 }
 
 // NewClient creates a Graph API client.
@@ -97,25 +99,12 @@ func (c *Client) DoWithHeaders(
 	return c.doRetry(ctx, method, path, body, extraHeaders)
 }
 
-// SetCircuitBreaker attaches a circuit breaker to the client. When the
-// breaker is open, requests fail immediately with retry.ErrCircuitOpen.
-// Pass nil to disable. Thread-safe — intended for use during setup before
-// concurrent requests begin.
-func (c *Client) SetCircuitBreaker(cb *retry.CircuitBreaker) {
-	c.breaker = cb
-}
-
 // doRetry is the shared retry loop for Do and DoWithHeaders.
 func (c *Client) doRetry(
 	ctx context.Context, method, path string, body io.Reader, extraHeaders http.Header,
 ) (*http.Response, error) {
-	// Circuit breaker check: reject immediately when open.
-	if c.breaker != nil && !c.breaker.Allow() {
-		return nil, &GraphError{
-			Err:     retry.ErrCircuitOpen,
-			Message: "circuit breaker open",
-		}
-	}
+	// Account-wide throttle gate: wait if a 429 Retry-After set a deadline.
+	c.waitForThrottle(ctx)
 
 	url := c.baseURL + path
 
@@ -162,8 +151,6 @@ func (c *Client) doRetry(
 				slog.String("request_id", resp.Header.Get("request-id")),
 			)
 
-			c.recordBreakerSuccess()
-
 			return resp, nil
 		}
 
@@ -195,23 +182,19 @@ func (c *Client) doRetry(
 			continue
 		}
 
-		c.recordBreakerFailure()
-
 		return nil, c.terminalError(method, path, resp.StatusCode, reqID, errBody, attempt)
 	}
 }
 
-// recordBreakerSuccess records a successful request on the circuit breaker.
-func (c *Client) recordBreakerSuccess() {
-	if c.breaker != nil {
-		c.breaker.RecordSuccess()
-	}
-}
+// waitForThrottle blocks until the account-wide throttle deadline passes.
+// Called at the start of every request to enforce 429 Retry-After across all workers.
+func (c *Client) waitForThrottle(ctx context.Context) {
+	c.throttleMu.Lock()
+	deadline := c.throttledUntil
+	c.throttleMu.Unlock()
 
-// recordBreakerFailure records a failed request on the circuit breaker.
-func (c *Client) recordBreakerFailure() {
-	if c.breaker != nil {
-		c.breaker.RecordFailure()
+	if delay := time.Until(deadline); delay > 0 {
+		_ = c.sleepFunc(ctx, delay) //nolint:errcheck // context cancellation handled by caller
 	}
 }
 
@@ -425,6 +408,14 @@ func (c *Client) retryBackoff(resp *http.Response, attempt int) time.Duration {
 	if resp.StatusCode == http.StatusTooManyRequests {
 		if ra := resp.Header.Get("Retry-After"); ra != "" {
 			if seconds, err := strconv.Atoi(ra); err == nil && seconds > 0 {
+				deadline := time.Now().Add(time.Duration(seconds) * time.Second)
+
+				c.throttleMu.Lock()
+				if deadline.After(c.throttledUntil) {
+					c.throttledUntil = deadline
+				}
+				c.throttleMu.Unlock()
+
 				return time.Duration(seconds) * time.Second
 			}
 		}

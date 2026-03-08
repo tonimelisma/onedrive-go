@@ -7,28 +7,9 @@ import (
 	"time"
 )
 
-// FailureRetrier constants.
-const (
-	// defaultEscalationThreshold is the failure_count at which a row is escalated
-	// to a user-visible conflict instead of being retried.
-	defaultEscalationThreshold = 10
-
-	// retrierSafetyInterval is the maximum time between retry sweeps.
-	// Acts as a safety net in case kick signals are lost.
-	retrierSafetyInterval = 2 * time.Minute
-)
-
-// FailureRetrierConfig holds tunable thresholds for the failure retrier.
-type FailureRetrierConfig struct {
-	EscalationThreshold int // failure count before escalation to conflict
-}
-
-// DefaultFailureRetrierConfig returns a FailureRetrierConfig with production defaults.
-func DefaultFailureRetrierConfig() FailureRetrierConfig {
-	return FailureRetrierConfig{
-		EscalationThreshold: defaultEscalationThreshold,
-	}
-}
+// retrierSafetyInterval is the maximum time between retry sweeps.
+// Acts as a safety net in case kick signals are lost.
+const retrierSafetyInterval = 2 * time.Minute
 
 // InFlightChecker reports whether a path has an in-flight action in the tracker.
 type InFlightChecker interface {
@@ -41,18 +22,13 @@ type EventAdder interface {
 }
 
 // FailureRetrier periodically checks sync_failures for failed items whose
-// backoff has expired and re-injects them into the sync pipeline. Upload
-// failures that exceed the threshold are marked permanently failed; download
-// and delete failures are escalated to user-visible conflicts.
+// backoff has expired and re-injects them into the sync pipeline.
 type FailureRetrier struct {
-	cfg             FailureRetrierConfig
-	state           StateReader
-	escalator       ConflictEscalator
-	failureRecorder SyncFailureRecorder
-	buf             EventAdder
-	tracker         InFlightChecker
-	logger          *slog.Logger
-	nowFunc         func() time.Time
+	state   StateReader
+	buf     EventAdder
+	tracker InFlightChecker
+	logger  *slog.Logger
+	nowFunc func() time.Time
 
 	kickCh chan struct{} // 1-buffered
 	timer  *time.Timer
@@ -62,24 +38,18 @@ type FailureRetrier struct {
 // NewFailureRetrier creates a FailureRetrier. It does not start until
 // Run() is called.
 func NewFailureRetrier(
-	cfg FailureRetrierConfig,
 	state StateReader,
-	escalator ConflictEscalator,
-	failureRecorder SyncFailureRecorder,
 	buf EventAdder,
 	tracker InFlightChecker,
 	logger *slog.Logger,
 ) *FailureRetrier {
 	return &FailureRetrier{
-		cfg:             cfg,
-		state:           state,
-		escalator:       escalator,
-		failureRecorder: failureRecorder,
-		buf:             buf,
-		tracker:         tracker,
-		logger:          logger,
-		nowFunc:         time.Now,
-		kickCh:          make(chan struct{}, 1),
+		state:   state,
+		buf:     buf,
+		tracker: tracker,
+		logger:  logger,
+		nowFunc: time.Now,
+		kickCh:  make(chan struct{}, 1),
 	}
 }
 
@@ -168,7 +138,6 @@ func (r *FailureRetrier) reconcileSyncFailures(ctx context.Context, now time.Tim
 	}
 
 	dispatched := 0
-	escalated := 0
 
 	for i := range rows {
 		row := &rows[i]
@@ -178,43 +147,15 @@ func (r *FailureRetrier) reconcileSyncFailures(ctx context.Context, now time.Tim
 			continue
 		}
 
-		// Escalate if failure count exceeds threshold.
-		if row.FailureCount >= r.cfg.EscalationThreshold {
-			if row.Direction == strUpload {
-				// Upload failures: mark permanent (no conflict escalation).
-				if escErr := r.failureRecorder.MarkSyncFailurePermanent(ctx, row.Path, row.DriveID); escErr != nil {
-					r.logger.Warn("failure retrier: failed to mark upload permanent",
-						slog.String("path", row.Path),
-						slog.String("error", escErr.Error()),
-					)
-				} else {
-					escalated++
-				}
-			} else {
-				// Download/delete failures: escalate to user-visible conflict.
-				if escErr := r.escalator.EscalateToConflict(ctx, row.DriveID, row.ItemID, row.Path, row.LastError); escErr != nil {
-					r.logger.Warn("failure retrier: failed to escalate",
-						slog.String("path", row.Path),
-						slog.String("error", escErr.Error()),
-					)
-				} else {
-					escalated++
-				}
-			}
-
-			continue
-		}
-
 		// Synthesize event based on direction and inject into the buffer.
 		ev := r.synthesizeFailureEvent(row)
 		r.buf.Add(ev)
 		dispatched++
 	}
 
-	if dispatched > 0 || escalated > 0 {
+	if dispatched > 0 {
 		r.logger.Info("failure retrier sweep",
 			slog.Int("dispatched", dispatched),
-			slog.Int("escalated", escalated),
 		)
 	}
 }

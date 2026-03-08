@@ -72,22 +72,22 @@ type syncStateInfo struct {
 	LastSyncTime     string `json:"last_sync_time,omitempty"`
 	LastSyncDuration string `json:"last_sync_duration,omitempty"`
 	FileCount        int    `json:"file_count"`
-	Conflicts        int    `json:"unresolved_conflicts"`
+	Issues           int    `json:"issues"` // conflicts + actionable failures
 	PendingSync      int    `json:"pending_sync"`
-	SyncFailures     int    `json:"sync_failures"`
+	Retrying         int    `json:"retrying"` // transient failures with failure_count >= 3
 	LastError        string `json:"last_error,omitempty"`
 }
 
 // statusSummary aggregates health info across all drives.
 type statusSummary struct {
-	TotalDrives       int `json:"total_drives"`
-	Ready             int `json:"ready"`
-	Paused            int `json:"paused"`
-	NeedsSetup        int `json:"needs_setup"`
-	NoToken           int `json:"no_token"`
-	TotalConflicts    int `json:"total_conflicts"`
-	TotalPendingSync  int `json:"total_pending_sync"`
-	TotalSyncFailures int `json:"total_sync_failures"`
+	TotalDrives      int `json:"total_drives"`
+	Ready            int `json:"ready"`
+	Paused           int `json:"paused"`
+	NeedsSetup       int `json:"needs_setup"`
+	NoToken          int `json:"no_token"`
+	TotalIssues      int `json:"total_issues"`
+	TotalPendingSync int `json:"total_pending_sync"`
+	TotalRetrying    int `json:"total_retrying"`
 }
 
 // statusOutput wraps the full status response for JSON output.
@@ -392,11 +392,20 @@ func querySyncState(statePath string, logger *slog.Logger) *syncStateInfo {
 		logger.Debug("could not count baseline entries", slog.String("error", scanErr.Error()))
 	}
 
-	// Count unresolved conflicts.
+	// Count issues = unresolved conflicts + actionable failures.
+	var conflicts, actionable int
+
 	conflictSQL := "SELECT COUNT(*) FROM conflicts WHERE resolution = 'unresolved'"
-	if scanErr := db.QueryRowContext(ctx, conflictSQL).Scan(&info.Conflicts); scanErr != nil {
+	if scanErr := db.QueryRowContext(ctx, conflictSQL).Scan(&conflicts); scanErr != nil {
 		logger.Debug("could not count conflicts", slog.String("error", scanErr.Error()))
 	}
+
+	actionableSQL := "SELECT COUNT(*) FROM sync_failures WHERE category = 'actionable'"
+	if scanErr := db.QueryRowContext(ctx, actionableSQL).Scan(&actionable); scanErr != nil {
+		logger.Debug("could not count actionable failures", slog.String("error", scanErr.Error()))
+	}
+
+	info.Issues = conflicts + actionable
 
 	// Count pending sync items (remote_state not yet synced/deleted/filtered).
 	pendingSQL := "SELECT COUNT(*) FROM remote_state WHERE sync_status NOT IN ('synced','deleted','filtered')"
@@ -404,10 +413,10 @@ func querySyncState(statePath string, logger *slog.Logger) *syncStateInfo {
 		logger.Debug("could not count pending sync items", slog.String("error", scanErr.Error()))
 	}
 
-	// Count active sync failures.
-	failuresSQL := "SELECT COUNT(*) FROM sync_failures WHERE category = 'transient'"
-	if scanErr := db.QueryRowContext(ctx, failuresSQL).Scan(&info.SyncFailures); scanErr != nil {
-		logger.Debug("could not count sync failures", slog.String("error", scanErr.Error()))
+	// Count retrying = transient failures with failure_count >= 3.
+	retryingSQL := "SELECT COUNT(*) FROM sync_failures WHERE category = 'transient' AND failure_count >= 3"
+	if scanErr := db.QueryRowContext(ctx, retryingSQL).Scan(&info.Retrying); scanErr != nil {
+		logger.Debug("could not count retrying failures", slog.String("error", scanErr.Error()))
 	}
 
 	return info
@@ -433,9 +442,9 @@ func computeSummary(accounts []statusAccount) statusSummary {
 			}
 
 			if d.SyncState != nil {
-				s.TotalConflicts += d.SyncState.Conflicts
+				s.TotalIssues += d.SyncState.Issues
 				s.TotalPendingSync += d.SyncState.PendingSync
-				s.TotalSyncFailures += d.SyncState.SyncFailures
+				s.TotalRetrying += d.SyncState.Retrying
 			}
 		}
 	}
@@ -507,8 +516,8 @@ func printStatusText(w io.Writer, accounts []statusAccount) {
 
 func printSyncStateText(w io.Writer, ss *syncStateInfo) {
 	if ss.LastSyncTime != "" {
-		fmt.Fprintf(w, "    Last sync: %s (%d files, %d conflicts)\n",
-			ss.LastSyncTime, ss.FileCount, ss.Conflicts)
+		fmt.Fprintf(w, "    Last sync: %s (%d files)\n",
+			ss.LastSyncTime, ss.FileCount)
 	} else {
 		fmt.Fprintf(w, "    Last sync: never\n")
 	}
@@ -517,8 +526,12 @@ func printSyncStateText(w io.Writer, ss *syncStateInfo) {
 		fmt.Fprintf(w, "    Pending:   %d items\n", ss.PendingSync)
 	}
 
-	if ss.SyncFailures > 0 {
-		fmt.Fprintf(w, "    Failures:  %d sync failures (run 'onedrive-go failures' for details)\n", ss.SyncFailures)
+	if ss.Issues > 0 {
+		fmt.Fprintf(w, "    Issues:    %d (run 'onedrive-go issues')\n", ss.Issues)
+	}
+
+	if ss.Retrying > 0 {
+		fmt.Fprintf(w, "    Retrying:  %d items\n", ss.Retrying)
 	}
 
 	if ss.LastError != "" {
@@ -547,14 +560,14 @@ func printSummaryText(w io.Writer, s statusSummary) {
 
 	stateStr := strings.Join(parts, ", ")
 
-	extra := fmt.Sprintf("%d unresolved conflicts", s.TotalConflicts)
+	extra := fmt.Sprintf("%d issues", s.TotalIssues)
 
 	if s.TotalPendingSync > 0 {
 		extra += fmt.Sprintf(", %d pending", s.TotalPendingSync)
 	}
 
-	if s.TotalSyncFailures > 0 {
-		extra += fmt.Sprintf(", %d sync failures", s.TotalSyncFailures)
+	if s.TotalRetrying > 0 {
+		extra += fmt.Sprintf(", %d retrying", s.TotalRetrying)
 	}
 
 	fmt.Fprintf(w, "Summary: %d drives (%s), %s\n",

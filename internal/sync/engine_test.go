@@ -2354,10 +2354,10 @@ func TestRunOnce_InvalidUpload_RecordsIssue(t *testing.T) {
 	// The upload should NOT have been attempted.
 	assert.Equal(t, 0, report.Uploads, "invalid upload should not be executed")
 
-	// The local_issues table should have an entry.
+	// The sync_failures table should have an entry.
 	issues, issErr := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, issErr)
-	require.NotEmpty(t, issues, "local_issues should have an entry for the invalid upload")
+	require.NotEmpty(t, issues, "sync_failures should have an entry for the invalid upload")
 
 	found := false
 	for _, iss := range issues {
@@ -2368,7 +2368,7 @@ func TestRunOnce_InvalidUpload_RecordsIssue(t *testing.T) {
 		}
 	}
 
-	assert.True(t, found, "expected IssuePathTooLong issue in local_issues")
+	assert.True(t, found, "expected IssuePathTooLong issue in sync_failures")
 }
 
 // ---------------------------------------------------------------------------
@@ -2392,7 +2392,7 @@ func TestDrainWorkerResults_MultipleResults(t *testing.T) {
 
 	eng.drainWorkerResults(ctx, results, nil)
 
-	// Both upload failures should produce local_issues.
+	// Both upload failures should produce sync_failures.
 	issues, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	assert.Len(t, issues, 2, "drain loop should process all results")
@@ -2461,7 +2461,7 @@ func TestProcessWorkerResult_403ReadOnly_SkipsRemoteState(t *testing.T) {
 		HTTPStatus: 403,
 	}, bl, shortcuts)
 
-	// Permission-denied should be recorded in local_issues.
+	// Permission-denied should be recorded in sync_failures.
 	permIssues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssuePermissionDenied)
 	require.NoError(t, err)
 	assert.Len(t, permIssues, 1, "should record permission_denied issue")

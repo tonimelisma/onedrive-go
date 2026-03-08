@@ -103,8 +103,8 @@ func TestNamedPolicies_MatchOriginal(t *testing.T) {
 	assert.Equal(t, 2.0, Action.Multiplier)
 	assert.Equal(t, 0.25, Action.Jitter)
 
-	// Reconcile: sync/baseline.go — baseBackoffSeconds=30, maxBackoffSeconds=3600, jitterPercent=25
-	assert.Equal(t, 10, Reconcile.MaxAttempts)
+	// Reconcile: sync/baseline.go — infinite retries, 30s base, 1h max, 25% jitter
+	assert.Equal(t, 0, Reconcile.MaxAttempts)
 	assert.Equal(t, 30*time.Second, Reconcile.Base)
 	assert.Equal(t, 1*time.Hour, Reconcile.Max)
 	assert.Equal(t, 0.25, Reconcile.Jitter)
@@ -155,7 +155,7 @@ func TestReconcileDelay_MatchesComputeNextRetry(t *testing.T) {
 	t.Parallel()
 
 	noJitter := Policy{
-		MaxAttempts: 10,
+		MaxAttempts: 0,
 		Base:        30 * time.Second,
 		Max:         1 * time.Hour,
 		Multiplier:  2.0,

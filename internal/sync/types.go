@@ -28,7 +28,7 @@ const (
 	strDownload     = "download"
 	strUpload       = "upload"
 	strDelete       = "delete"
-	strPermanent    = "permanent"
+	strActionable   = "actionable"
 	strTransient    = "transient"
 	strLocalDelete  = "local_delete"
 	strRemoteDelete = "remote_delete"
@@ -53,7 +53,6 @@ const (
 	ConflictEditEdit     = "edit_edit"
 	ConflictEditDelete   = "edit_delete"
 	ConflictCreateCreate = "create_create"
-	ConflictSyncFailure  = "sync_failure"
 )
 
 // ResolvedBy constants for conflict resolution attribution.
@@ -504,7 +503,7 @@ type ConflictRecord struct {
 // Shortcut represents a OneDrive shortcut or shared folder that requires
 // separate observation on the source drive. Stored in the shortcuts table.
 // Note: the shortcuts table has a read_only column that is no longer used —
-// permission state lives entirely in local_issues + in-memory permission cache.
+// permission state lives entirely in sync_failures + in-memory permission cache.
 type Shortcut struct {
 	ItemID       string // shortcut item ID in the user's drive
 	RemoteDrive  string // source drive ID

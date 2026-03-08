@@ -871,7 +871,7 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 
 	// Step 4b: Start failure retrier for automatic retry of failed items.
 	// Created after buf so it can re-inject synthesized events.
-	e.retrier = NewFailureRetrier(DefaultFailureRetrierConfig(), e.baseline, e.baseline, e.baseline, buf, tracker, e.logger) //nolint:lll // constructor with many deps
+	e.retrier = NewFailureRetrier(e.baseline, buf, tracker, e.logger)
 	go e.retrier.Run(ctx)
 
 	// Step 5: Start observer goroutines.
