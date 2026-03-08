@@ -379,7 +379,7 @@ func (o *RemoteObserver) classifyItem(item *graph.Item, inflight map[driveid.Ite
 
 	// Personal Vault exclusion (B-271): skip the vault folder itself and
 	// any items whose parent chain includes a vault folder. This prevents
-	// data loss from vault lock/unlock cycles where items appear and
+	// data loss from vault lock/unlock transitions where items appear and
 	// disappear in delta responses.
 	isVault := item.SpecialFolderName == specialFolderVault
 	if isVault || o.isDescendantOfVault(item, inflight, itemDriveID) {
