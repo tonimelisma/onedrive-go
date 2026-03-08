@@ -13,6 +13,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // ---------------------------------------------------------------------------
@@ -907,8 +908,8 @@ func TestWatch_BackoffOnError(t *testing.T) {
 
 	// First sleep should be 5s (initial backoff), second should be 10s (doubled).
 	require.GreaterOrEqual(t, len(sleepDurations), 2, "sleep should be called for backoff")
-	assert.Equal(t, initialWatchBackoff, sleepDurations[0])
-	assert.Equal(t, initialWatchBackoff*backoffMultiplier, sleepDurations[1])
+	assert.Equal(t, retry.WatchRemote.Base, sleepDurations[0])
+	assert.Equal(t, time.Duration(float64(retry.WatchRemote.Base)*retry.WatchRemote.Multiplier), sleepDurations[1])
 }
 
 func TestWatch_DeltaExpiredResets(t *testing.T) {

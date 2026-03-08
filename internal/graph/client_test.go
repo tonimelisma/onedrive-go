@@ -16,6 +16,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // noopSleep is a sleep function that returns immediately, for fast tests.
@@ -401,11 +403,12 @@ func TestTimeSleep_ContextCancel(t *testing.T) {
 func TestCalcBackoff_MaxCap(t *testing.T) {
 	c := NewClient("http://localhost", nil, staticToken("tok"), nil, "")
 
-	// Attempt 10 produces 1s * 2^10 = 1024s which exceeds maxBackoff (60s).
-	// Verify the result is capped near maxBackoff (±jitter).
+	// Attempt 10 produces 1s * 2^10 = 1024s which exceeds max (60s).
+	// Verify the result is capped near max (±jitter).
+	maxDur := retry.Transport.Max
 	backoff := c.calcBackoff(10)
-	assert.LessOrEqual(t, backoff, maxBackoff+maxBackoff/4)
-	assert.GreaterOrEqual(t, backoff, maxBackoff-maxBackoff/4)
+	assert.LessOrEqual(t, backoff, maxDur+maxDur/4)
+	assert.GreaterOrEqual(t, backoff, maxDur-maxDur/4)
 }
 
 func TestDoWithHeaders_SendsExtraHeaders(t *testing.T) {

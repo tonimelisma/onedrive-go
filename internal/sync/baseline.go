@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
-	"math/rand/v2"
 	"os"
 	"path"
 	"path/filepath"
@@ -16,6 +15,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // SQL statements for baseline operations.
@@ -106,13 +106,13 @@ const (
 
 // Compile-time interface satisfaction checks.
 var (
-	_ ObservationWriter  = (*SyncStore)(nil)
-	_ OutcomeWriter      = (*SyncStore)(nil)
-	_ FailureRecorder    = (*SyncStore)(nil)
-	_ ConflictEscalator  = (*SyncStore)(nil)
-	_ StateReader        = (*SyncStore)(nil)
-	_ StateAdmin         = (*SyncStore)(nil)
-	_ LocalIssueRecorder = (*SyncStore)(nil)
+	_ ObservationWriter   = (*SyncStore)(nil)
+	_ OutcomeWriter       = (*SyncStore)(nil)
+	_ FailureRecorder     = (*SyncStore)(nil)
+	_ ConflictEscalator   = (*SyncStore)(nil)
+	_ StateReader         = (*SyncStore)(nil)
+	_ StateAdmin          = (*SyncStore)(nil)
+	_ SyncFailureRecorder = (*SyncStore)(nil)
 )
 
 // SyncStore is the sole writer to the sync database. It loads the
@@ -557,11 +557,14 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx *sql.Tx, o *Outcome) err
 			return fmt.Errorf("sync: updating remote_state for upload %s: %w", o.Path, err)
 		}
 
-		// Clear any prior local_issues record for this path on upload success.
+		// Clear any prior sync_failures for this path on upload success. Uses
+		// path-only match because the failure may have been recorded with an
+		// empty drive_id (CLI, pre-migration data) while the outcome has a
+		// real drive_id. A successful upload resolves all prior failures.
 		if _, delErr := tx.ExecContext(ctx,
-			`DELETE FROM local_issues WHERE path = ?`, o.Path,
+			`DELETE FROM sync_failures WHERE path = ?`, o.Path,
 		); delErr != nil {
-			return fmt.Errorf("sync: clearing local issue on upload success for %s: %w", o.Path, delErr)
+			return fmt.Errorf("sync: clearing sync failure on upload success for %s: %w", o.Path, delErr)
 		}
 
 	case ActionLocalMove, ActionRemoteMove:
@@ -887,9 +890,9 @@ func (m *SyncStore) Checkpoint(ctx context.Context, retention time.Duration) err
 	}
 
 	if _, err := m.db.ExecContext(ctx,
-		`DELETE FROM local_issues WHERE sync_status = 'resolved' AND last_seen_at < ?`,
+		`DELETE FROM sync_failures WHERE category = 'permanent' AND last_seen_at < ?`,
 		cutoff); err != nil {
-		return fmt.Errorf("prune resolved local_issues: %w", err)
+		return fmt.Errorf("prune permanent sync_failures: %w", err)
 	}
 
 	return nil
@@ -1075,83 +1078,101 @@ func (m *SyncStore) updateRemoteStateFromObs(
 }
 
 // RecordFailure records a failure for a remote_state row, transitioning it
-// from downloading→download_failed or deleting→delete_failed. Uses optimistic
-// concurrency: if the row has already transitioned (e.g., a new observation
-// arrived), the update is a no-op.
-func (m *SyncStore) RecordFailure(ctx context.Context, path, errMsg string, httpStatus int) error {
+// from downloading→download_failed or deleting→delete_failed, and writes
+// failure metadata to sync_failures atomically. Uses optimistic concurrency:
+// if the row has already transitioned, the update is a no-op.
+func (m *SyncStore) RecordFailure(ctx context.Context, path string, driveID driveid.ID, direction, errMsg string, httpStatus int) error {
 	now := m.nowFunc()
 
-	// Read current failure count for backoff calculation.
-	var currentFailures int
-
-	err := m.db.QueryRowContext(ctx,
-		`SELECT failure_count FROM remote_state WHERE path = ? AND sync_status IN (?, ?)`,
-		path, statusDownloading, statusDeleting,
-	).Scan(&currentFailures)
+	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
-		// Row doesn't match (already transitioned) — no-op.
-		return nil
+		return fmt.Errorf("sync: beginning failure transaction for %s: %w", path, err)
 	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Transition remote_state status for download/delete failures.
+	if direction == strDownload || direction == strDelete {
+		result, execErr := tx.ExecContext(ctx,
+			`UPDATE remote_state SET
+				sync_status = CASE sync_status
+					WHEN ? THEN ?
+					WHEN ? THEN ?
+				END
+			WHERE path = ? AND sync_status IN (?, ?)`,
+			statusDownloading, statusDownloadFailed,
+			statusDeleting, statusDeleteFailed,
+			path, statusDownloading, statusDeleting,
+		)
+		if execErr != nil {
+			return fmt.Errorf("sync: transitioning remote_state for %s: %w", path, execErr)
+		}
+
+		affected, rowErr := result.RowsAffected()
+		if rowErr != nil {
+			return fmt.Errorf("sync: checking rows affected for %s: %w", path, rowErr)
+		}
+
+		if affected == 0 {
+			m.logger.Debug("RecordFailure: remote_state row already transitioned",
+				slog.String("path", path),
+			)
+		}
+	}
+
+	// Read current failure count from sync_failures for backoff calculation.
+	var currentFailures int
+	//nolint:errcheck // no-row is fine — currentFailures stays 0
+	tx.QueryRowContext(ctx,
+		`SELECT failure_count FROM sync_failures WHERE path = ? AND drive_id = ?`,
+		path, driveID.String(),
+	).Scan(&currentFailures)
 
 	newCount := currentFailures + 1
 	nextRetry := computeNextRetry(now, currentFailures)
+	nowNano := now.UnixNano()
 
-	// Transition downloading→download_failed or deleting→delete_failed.
-	result, err := m.db.ExecContext(ctx,
-		`UPDATE remote_state SET
-			sync_status = CASE sync_status
-				WHEN ? THEN ?
-				WHEN ? THEN ?
-			END,
-			failure_count = ?,
-			next_retry_at = ?,
-			last_error = ?,
-			http_status = ?
-		WHERE path = ? AND sync_status IN (?, ?)`,
-		statusDownloading, statusDownloadFailed,
-		statusDeleting, statusDeleteFailed,
-		newCount, nextRetry.UnixNano(),
-		errMsg, httpStatus,
-		path, statusDownloading, statusDeleting,
+	// Read item_id from remote_state if this is a download/delete failure.
+	var itemID string
+	if direction == strDownload || direction == strDelete {
+		//nolint:errcheck // no-row is fine — itemID stays empty
+		tx.QueryRowContext(ctx,
+			`SELECT item_id FROM remote_state WHERE path = ? AND drive_id = ?`,
+			path, driveID.String(),
+		).Scan(&itemID)
+	}
+
+	// UPSERT into sync_failures.
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO sync_failures
+			(path, drive_id, direction, category, item_id, failure_count,
+			 next_retry_at, last_error, http_status, first_seen_at, last_seen_at)
+		VALUES (?, ?, ?, 'transient', ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(path, drive_id) DO UPDATE SET
+			direction = excluded.direction,
+			failure_count = sync_failures.failure_count + 1,
+			next_retry_at = excluded.next_retry_at,
+			last_error = excluded.last_error,
+			http_status = excluded.http_status,
+			last_seen_at = excluded.last_seen_at,
+			item_id = COALESCE(excluded.item_id, sync_failures.item_id)`,
+		path, driveID.String(), direction, nullString(itemID), newCount,
+		nextRetry.UnixNano(), errMsg, httpStatus, nowNano, nowNano,
 	)
 	if err != nil {
-		return fmt.Errorf("sync: recording failure for %s: %w", path, err)
+		return fmt.Errorf("sync: recording sync failure for %s: %w", path, err)
 	}
 
-	affected, rowErr := result.RowsAffected()
-	if rowErr != nil {
-		return fmt.Errorf("sync: checking rows affected for %s: %w", path, rowErr)
-	}
-
-	if affected == 0 {
-		m.logger.Debug("RecordFailure: row already transitioned",
-			slog.String("path", path),
-		)
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sync: committing failure for %s: %w", path, err)
 	}
 
 	return nil
 }
 
-// Backoff constants for failure retry scheduling.
-const (
-	baseBackoffSeconds = 30
-	maxBackoffSeconds  = 3600 // 1 hour
-	jitterPercent      = 25
-	jitterDivisor      = 100
-)
-
 // computeNextRetry calculates the next retry time with exponential backoff
-// and jitter. Base: 30s * 2^failureCount, capped at 1 hour, ~25% jitter.
+// and jitter using the unified retry.Reconcile policy.
 func computeNextRetry(now time.Time, failureCount int) time.Time {
-	delaySec := min(baseBackoffSeconds*(1<<failureCount), maxBackoffSeconds)
-
-	// Add ~25% jitter.
-	jitter := delaySec * jitterPercent / jitterDivisor
-	if jitter > 0 {
-		delaySec += int(rand.Int64N(int64(jitter))) //nolint:gosec // jitter doesn't need crypto-grade randomness
-	}
-
-	return now.Add(time.Duration(delaySec) * time.Second)
+	return now.Add(retry.Reconcile.Delay(failureCount))
 }
 
 // ---------------------------------------------------------------------------
@@ -1169,33 +1190,16 @@ func (m *SyncStore) ListUnreconciled(ctx context.Context) ([]RemoteStateRow, err
 	)
 }
 
-// ListFailedForRetry returns rows eligible for retry: pending or failed states
-// where next_retry_at is NULL or in the past.
-func (m *SyncStore) ListFailedForRetry(ctx context.Context, now time.Time) ([]RemoteStateRow, error) {
+// ListActionableRemoteState returns remote_state rows with pending or failed status
+// that don't have pending sync_failures (used for initial dispatch, not retry scheduling).
+func (m *SyncStore) ListActionableRemoteState(ctx context.Context) ([]RemoteStateRow, error) {
 	return m.queryRemoteStateRows(ctx,
 		`SELECT drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
 			previous_path, sync_status, observed_at, failure_count, next_retry_at, last_error, http_status
 		FROM remote_state
-		WHERE sync_status IN (?, ?, ?, ?)
-			AND (next_retry_at IS NULL OR next_retry_at <= ?)`,
+		WHERE sync_status IN (?, ?, ?, ?)`,
 		statusPendingDownload, statusDownloadFailed, statusPendingDelete, statusDeleteFailed,
-		now.UnixNano(),
 	)
-}
-
-// FailureCount returns the number of failed remote_state rows.
-func (m *SyncStore) FailureCount(ctx context.Context) (int, error) {
-	var count int
-
-	err := m.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM remote_state WHERE sync_status IN (?, ?)`,
-		statusDownloadFailed, statusDeleteFailed,
-	).Scan(&count)
-	if err != nil {
-		return 0, fmt.Errorf("sync: counting failed remote_state: %w", err)
-	}
-
-	return count, nil
 }
 
 // queryRemoteStateRows is a shared helper for scanning multiple remote_state rows.
@@ -1267,16 +1271,12 @@ func (m *SyncStore) queryRemoteStateRows(ctx context.Context, query string, args
 // StateAdmin methods
 // ---------------------------------------------------------------------------
 
-// ResetFailure resets a single failed path to pending_download, clearing
-// failure metadata.
+// ResetFailure resets a single failed path: transitions remote_state back to
+// pending and removes the sync_failures row.
 func (m *SyncStore) ResetFailure(ctx context.Context, path string) error {
 	_, err := m.db.ExecContext(ctx,
 		`UPDATE remote_state SET
-			sync_status = ?,
-			failure_count = 0,
-			next_retry_at = NULL,
-			last_error = NULL,
-			http_status = NULL
+			sync_status = ?
 		WHERE path = ? AND sync_status IN (?, ?)`,
 		statusPendingDownload,
 		path, statusDownloadFailed, statusDeleteFailed,
@@ -1285,20 +1285,21 @@ func (m *SyncStore) ResetFailure(ctx context.Context, path string) error {
 		return fmt.Errorf("sync: resetting failure for %s: %w", path, err)
 	}
 
+	// Also remove from sync_failures.
+	_, err = m.db.ExecContext(ctx,
+		`DELETE FROM sync_failures WHERE path = ?`, path)
+	if err != nil {
+		return fmt.Errorf("sync: clearing sync failure for %s: %w", path, err)
+	}
+
 	return nil
 }
 
-// ResetAllFailures resets all failed rows: download_failed→pending_download,
-// delete_failed→pending_delete.
+// ResetAllFailures resets all failed rows: transitions remote_state back to
+// pending and clears all transient sync_failures.
 func (m *SyncStore) ResetAllFailures(ctx context.Context) error {
 	_, err := m.db.ExecContext(ctx,
-		`UPDATE remote_state SET
-			sync_status = ?,
-			failure_count = 0,
-			next_retry_at = NULL,
-			last_error = NULL,
-			http_status = NULL
-		WHERE sync_status = ?`,
+		`UPDATE remote_state SET sync_status = ? WHERE sync_status = ?`,
 		statusPendingDownload, statusDownloadFailed,
 	)
 	if err != nil {
@@ -1306,17 +1307,18 @@ func (m *SyncStore) ResetAllFailures(ctx context.Context) error {
 	}
 
 	_, err = m.db.ExecContext(ctx,
-		`UPDATE remote_state SET
-			sync_status = ?,
-			failure_count = 0,
-			next_retry_at = NULL,
-			last_error = NULL,
-			http_status = NULL
-		WHERE sync_status = ?`,
+		`UPDATE remote_state SET sync_status = ? WHERE sync_status = ?`,
 		statusPendingDelete, statusDeleteFailed,
 	)
 	if err != nil {
 		return fmt.Errorf("sync: resetting delete failures: %w", err)
+	}
+
+	// Clear all transient failures from sync_failures.
+	_, err = m.db.ExecContext(ctx,
+		`DELETE FROM sync_failures WHERE category = 'transient'`)
+	if err != nil {
+		return fmt.Errorf("sync: clearing transient sync failures: %w", err)
 	}
 
 	return nil
@@ -1469,28 +1471,6 @@ func (m *SyncStore) SetDispatchStatus(ctx context.Context, driveID, itemID strin
 	return nil
 }
 
-// EarliestRetryAt returns the earliest next_retry_at timestamp that is strictly
-// after `now` among failed remote_state rows. Returns zero time if no future
-// retries are scheduled. Used by the reconciler to arm its wake-up timer.
-func (m *SyncStore) EarliestRetryAt(ctx context.Context, now time.Time) (time.Time, error) {
-	var minRetry sql.NullInt64
-
-	err := m.db.QueryRowContext(ctx,
-		`SELECT MIN(next_retry_at) FROM remote_state
-		WHERE sync_status IN (?, ?) AND next_retry_at > ?`,
-		statusDownloadFailed, statusDeleteFailed, now.UnixNano(),
-	).Scan(&minRetry)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("sync: querying earliest retry: %w", err)
-	}
-
-	if !minRetry.Valid {
-		return time.Time{}, nil
-	}
-
-	return time.Unix(0, minRetry.Int64), nil
-}
-
 // WriteSyncMetadata persists sync metadata after a completed RunOnce pass.
 // Keys: last_sync_time, last_sync_duration_ms, last_sync_error,
 // last_sync_succeeded, last_sync_failed.
@@ -1603,255 +1583,190 @@ func nullInt64(n int64) sql.NullInt64 {
 }
 
 // ---------------------------------------------------------------------------
-// LocalIssueRecorder methods
+// SyncFailureRecorder methods
 // ---------------------------------------------------------------------------
 
-// statusPermanentlyFailed is the sync_status for local issues that cannot be
-// retried (pre-validation rejects or items exceeding the retry threshold).
-const statusPermanentlyFailed = "permanently_failed"
-
-// localIssueSyncStatus classifies an issue_type into its sync_status:
-// permanent issues (invalid_filename, path_too_long, file_too_large) →
-// permanently_failed; everything else retains its issue_type as sync_status.
-func localIssueSyncStatus(issueType string) string {
+// isPermanentIssue returns true for issue types that should never be retried.
+func isPermanentIssue(issueType string) bool {
 	switch issueType {
 	case IssueInvalidFilename, IssuePathTooLong, IssueFileTooLarge:
-		return statusPermanentlyFailed
+		return true
 	default:
-		return issueType
+		return false
 	}
 }
 
-// RecordLocalIssue persists or updates an upload-side failure in local_issues.
-// On repeat failures for the same path, increments failure_count and updates
-// last_seen_at. For transient issues, computes next_retry_at using exponential
-// backoff (same schedule as remote_state retries). Permanent issues get no
-// retry time.
-func (m *SyncStore) RecordLocalIssue(
-	ctx context.Context, issuePath, issueType, errMsg string,
-	httpStatus int, fileSize int64, localHash string,
+// RecordSyncFailure persists or updates a failure in sync_failures.
+// On repeat failures for the same (path, drive_id), increments failure_count
+// and updates last_seen_at. Permanent issue types get category='permanent'
+// with no retry. Transient failures use exponential backoff for next_retry_at.
+func (m *SyncStore) RecordSyncFailure(
+	ctx context.Context, path string, driveID driveid.ID, direction, issueType, errMsg string,
+	httpStatus int, fileSize int64, localHash string, itemID string,
 ) error {
 	now := m.nowFunc()
 	nowNano := now.UnixNano()
-	syncStatus := localIssueSyncStatus(issueType)
+
+	category := strTransient
+	if isPermanentIssue(issueType) {
+		category = strPermanent
+	}
 
 	// Read current failure_count for backoff calculation (0 if new row).
 	var currentFailures int
-	if scanErr := m.db.QueryRowContext(ctx,
-		`SELECT failure_count FROM local_issues WHERE path = ?`, issuePath,
-	).Scan(&currentFailures); scanErr != nil {
-		// No existing row — currentFailures stays 0.
-		currentFailures = 0
-	}
+	//nolint:errcheck // no-row is fine — currentFailures stays 0
+	m.db.QueryRowContext(ctx,
+		`SELECT failure_count FROM sync_failures WHERE path = ? AND drive_id = ?`,
+		path, driveID.String(),
+	).Scan(&currentFailures)
 
 	// Compute next_retry_at for transient issues; NULL for permanent.
 	var nextRetryNano *int64
-	if syncStatus != statusPermanentlyFailed {
+	if category != strPermanent {
 		retryAt := computeNextRetry(now, currentFailures)
 		nanos := retryAt.UnixNano()
 		nextRetryNano = &nanos
 	}
 
 	_, err := m.db.ExecContext(ctx,
-		`INSERT INTO local_issues
-			(path, issue_type, sync_status, failure_count, next_retry_at, last_error, http_status,
+		`INSERT INTO sync_failures
+			(path, drive_id, direction, category, issue_type, item_id,
+			 failure_count, next_retry_at, last_error, http_status,
 			 first_seen_at, last_seen_at, file_size, local_hash)
-		VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(path) DO UPDATE SET
-			issue_type = excluded.issue_type,
-			sync_status = excluded.sync_status,
-			failure_count = local_issues.failure_count + 1,
+		VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(path, drive_id) DO UPDATE SET
+			direction = excluded.direction,
+			category = excluded.category,
+			issue_type = COALESCE(excluded.issue_type, sync_failures.issue_type),
+			item_id = COALESCE(excluded.item_id, sync_failures.item_id),
+			failure_count = sync_failures.failure_count + 1,
 			next_retry_at = excluded.next_retry_at,
 			last_error = excluded.last_error,
 			http_status = excluded.http_status,
 			last_seen_at = excluded.last_seen_at,
-			file_size = excluded.file_size,
-			local_hash = excluded.local_hash`,
-		issuePath, issueType, syncStatus, nextRetryNano, errMsg, httpStatus,
+			file_size = COALESCE(excluded.file_size, sync_failures.file_size),
+			local_hash = COALESCE(excluded.local_hash, sync_failures.local_hash)`,
+		path, driveID.String(), direction, category,
+		nullString(issueType), nullString(itemID),
+		nextRetryNano, errMsg, httpStatus,
 		nowNano, nowNano, nullInt64(fileSize), nullString(localHash),
 	)
 	if err != nil {
-		return fmt.Errorf("sync: recording local issue for %s: %w", issuePath, err)
+		return fmt.Errorf("sync: recording sync failure for %s: %w", path, err)
 	}
 
 	return nil
 }
 
-// ListLocalIssues returns all local_issues rows ordered by last_seen_at DESC.
-func (m *SyncStore) ListLocalIssues(ctx context.Context) ([]LocalIssueRow, error) {
+// ListSyncFailures returns all sync_failures rows ordered by last_seen_at DESC.
+func (m *SyncStore) ListSyncFailures(ctx context.Context) ([]SyncFailureRow, error) {
 	rows, err := m.db.QueryContext(ctx,
-		`SELECT path, issue_type, sync_status, failure_count,
-			COALESCE(next_retry_at, 0), COALESCE(last_error, ''),
-			COALESCE(http_status, 0), first_seen_at, last_seen_at,
+		`SELECT path, drive_id, direction, category,
+			COALESCE(issue_type, ''), COALESCE(item_id, ''),
+			failure_count, COALESCE(next_retry_at, 0),
+			COALESCE(last_error, ''), COALESCE(http_status, 0),
+			first_seen_at, last_seen_at,
 			COALESCE(file_size, 0), COALESCE(local_hash, '')
-		FROM local_issues
+		FROM sync_failures
 		ORDER BY last_seen_at DESC`)
 	if err != nil {
-		return nil, fmt.Errorf("sync: listing local issues: %w", err)
+		return nil, fmt.Errorf("sync: listing sync failures: %w", err)
 	}
 	defer rows.Close()
 
-	var result []LocalIssueRow
-
-	for rows.Next() {
-		var r LocalIssueRow
-		if scanErr := rows.Scan(
-			&r.Path, &r.IssueType, &r.SyncStatus, &r.FailureCount,
-			&r.NextRetryAt, &r.LastError, &r.HTTPStatus,
-			&r.FirstSeenAt, &r.LastSeenAt, &r.FileSize, &r.LocalHash,
-		); scanErr != nil {
-			return nil, fmt.Errorf("sync: scanning local issue row: %w", scanErr)
-		}
-
-		result = append(result, r)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sync: iterating local issues: %w", err)
-	}
-
-	return result, nil
+	return scanSyncFailureRows(rows)
 }
 
-// ClearLocalIssue removes a single local_issues row by path.
-func (m *SyncStore) ClearLocalIssue(ctx context.Context, issuePath string) error {
+// ClearSyncFailure removes sync_failures rows for the given path. If driveID
+// ClearSyncFailure removes a specific sync_failures row by path and drive.
+func (m *SyncStore) ClearSyncFailure(ctx context.Context, path string, driveID driveid.ID) error {
 	_, err := m.db.ExecContext(ctx,
-		`DELETE FROM local_issues WHERE path = ?`, issuePath)
+		`DELETE FROM sync_failures WHERE path = ? AND drive_id = ?`,
+		path, driveID.String())
 	if err != nil {
-		return fmt.Errorf("sync: clearing local issue for %s: %w", issuePath, err)
+		return fmt.Errorf("sync: clearing sync failure for %s: %w", path, err)
 	}
 
 	return nil
 }
 
-// ClearResolvedLocalIssues removes all local_issues rows with sync_status = 'resolved'.
-func (m *SyncStore) ClearResolvedLocalIssues(ctx context.Context) error {
+// ClearSyncFailureByPath removes all sync_failures rows for a path regardless
+// of drive. Used by CLI commands where the drive context isn't known.
+func (m *SyncStore) ClearSyncFailureByPath(ctx context.Context, path string) error {
 	_, err := m.db.ExecContext(ctx,
-		`DELETE FROM local_issues WHERE sync_status = 'resolved'`)
+		`DELETE FROM sync_failures WHERE path = ?`, path)
 	if err != nil {
-		return fmt.Errorf("sync: clearing resolved local issues: %w", err)
+		return fmt.Errorf("sync: clearing sync failure for %s: %w", path, err)
 	}
 
 	return nil
 }
 
-// MarkLocalIssuePermanent sets a local_issues row to permanently_failed
+// ClearResolvedSyncFailures removes all permanent sync_failures rows.
+func (m *SyncStore) ClearResolvedSyncFailures(ctx context.Context) error {
+	_, err := m.db.ExecContext(ctx,
+		`DELETE FROM sync_failures WHERE category = 'permanent'`)
+	if err != nil {
+		return fmt.Errorf("sync: clearing resolved sync failures: %w", err)
+	}
+
+	return nil
+}
+
+// MarkSyncFailurePermanent sets a sync_failures row to category='permanent'
 // and clears its next_retry_at. Used by the failure retrier when a
 // transient issue exceeds the escalation threshold.
-func (m *SyncStore) MarkLocalIssuePermanent(ctx context.Context, issuePath string) error {
+func (m *SyncStore) MarkSyncFailurePermanent(ctx context.Context, path string, driveID driveid.ID) error {
 	_, err := m.db.ExecContext(ctx,
-		`UPDATE local_issues SET sync_status = ?, next_retry_at = NULL WHERE path = ?`,
-		statusPermanentlyFailed, issuePath)
+		`UPDATE sync_failures SET category = 'permanent', next_retry_at = NULL
+		WHERE path = ? AND drive_id = ?`,
+		path, driveID.String())
 	if err != nil {
-		return fmt.Errorf("sync: marking local issue permanent for %s: %w", issuePath, err)
+		return fmt.Errorf("sync: marking sync failure permanent for %s: %w", path, err)
 	}
 
 	return nil
 }
 
-// ListLocalIssuesForRetry returns transient local_issues rows whose
-// next_retry_at has expired (i.e. ready for retry).
-func (m *SyncStore) ListLocalIssuesForRetry(ctx context.Context, now time.Time) ([]LocalIssueRow, error) {
+// ListSyncFailuresForRetry returns transient sync_failures rows whose
+// next_retry_at has expired (ready for retry).
+func (m *SyncStore) ListSyncFailuresForRetry(ctx context.Context, now time.Time) ([]SyncFailureRow, error) {
 	nowNano := now.UnixNano()
 	rows, err := m.db.QueryContext(ctx,
-		`SELECT path, issue_type, sync_status, failure_count,
-			COALESCE(next_retry_at, 0), COALESCE(last_error, ''),
-			COALESCE(http_status, 0), first_seen_at, last_seen_at,
+		`SELECT path, drive_id, direction, category,
+			COALESCE(issue_type, ''), COALESCE(item_id, ''),
+			failure_count, COALESCE(next_retry_at, 0),
+			COALESCE(last_error, ''), COALESCE(http_status, 0),
+			first_seen_at, last_seen_at,
 			COALESCE(file_size, 0), COALESCE(local_hash, '')
-		FROM local_issues
-		WHERE sync_status NOT IN (?, 'resolved')
+		FROM sync_failures
+		WHERE category = 'transient'
 			AND next_retry_at IS NOT NULL
 			AND next_retry_at <= ?`,
-		statusPermanentlyFailed, nowNano)
+		nowNano)
 	if err != nil {
-		return nil, fmt.Errorf("sync: listing local issues for retry: %w", err)
+		return nil, fmt.Errorf("sync: listing sync failures for retry: %w", err)
 	}
 	defer rows.Close()
 
-	var result []LocalIssueRow
-
-	for rows.Next() {
-		var r LocalIssueRow
-		if scanErr := rows.Scan(
-			&r.Path, &r.IssueType, &r.SyncStatus, &r.FailureCount,
-			&r.NextRetryAt, &r.LastError, &r.HTTPStatus,
-			&r.FirstSeenAt, &r.LastSeenAt, &r.FileSize, &r.LocalHash,
-		); scanErr != nil {
-			return nil, fmt.Errorf("sync: scanning local issue retry row: %w", scanErr)
-		}
-
-		result = append(result, r)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sync: iterating local issues for retry: %w", err)
-	}
-
-	return result, nil
+	return scanSyncFailureRows(rows)
 }
 
-// ListLocalIssuesByType returns all local_issues rows with the given issue_type.
-func (m *SyncStore) ListLocalIssuesByType(ctx context.Context, issueType string) ([]LocalIssueRow, error) {
-	rows, err := m.db.QueryContext(ctx,
-		`SELECT path, issue_type, sync_status, failure_count,
-			COALESCE(next_retry_at, 0), COALESCE(last_error, ''),
-			COALESCE(http_status, 0), first_seen_at, last_seen_at,
-			COALESCE(file_size, 0), COALESCE(local_hash, '')
-		FROM local_issues
-		WHERE issue_type = ?
-		ORDER BY last_seen_at DESC`, issueType)
-	if err != nil {
-		return nil, fmt.Errorf("sync: listing local issues by type %s: %w", issueType, err)
-	}
-	defer rows.Close()
-
-	var result []LocalIssueRow
-
-	for rows.Next() {
-		var r LocalIssueRow
-		if scanErr := rows.Scan(
-			&r.Path, &r.IssueType, &r.SyncStatus, &r.FailureCount,
-			&r.NextRetryAt, &r.LastError, &r.HTTPStatus,
-			&r.FirstSeenAt, &r.LastSeenAt, &r.FileSize, &r.LocalHash,
-		); scanErr != nil {
-			return nil, fmt.Errorf("sync: scanning local issue by type row: %w", scanErr)
-		}
-
-		result = append(result, r)
-	}
-
-	return result, rows.Err()
-}
-
-// ClearLocalIssuesByPrefix removes all local_issues rows whose path starts
-// with the given prefix and matches the given issue_type. Used to clear
-// permission_denied issues for a folder and all its descendants.
-func (m *SyncStore) ClearLocalIssuesByPrefix(ctx context.Context, pathPrefix, issueType string) error {
-	_, err := m.db.ExecContext(ctx,
-		`DELETE FROM local_issues WHERE issue_type = ? AND (path = ? OR path LIKE ?)`,
-		issueType, pathPrefix, pathPrefix+"/%")
-	if err != nil {
-		return fmt.Errorf("sync: clearing local issues by prefix %s: %w", pathPrefix, err)
-	}
-
-	return nil
-}
-
-// EarliestLocalIssueRetryAt returns the minimum future next_retry_at across
-// transient local_issues rows. Returns zero time if none exist.
-func (m *SyncStore) EarliestLocalIssueRetryAt(ctx context.Context, now time.Time) (time.Time, error) {
+// EarliestSyncFailureRetryAt returns the minimum future next_retry_at across
+// transient sync_failures. Returns zero time if none exist.
+func (m *SyncStore) EarliestSyncFailureRetryAt(ctx context.Context, now time.Time) (time.Time, error) {
 	nowNano := now.UnixNano()
 
 	var minNano *int64
 	err := m.db.QueryRowContext(ctx,
-		`SELECT MIN(next_retry_at) FROM local_issues
-		WHERE sync_status NOT IN (?, 'resolved')
+		`SELECT MIN(next_retry_at) FROM sync_failures
+		WHERE category = 'transient'
 			AND next_retry_at IS NOT NULL
 			AND next_retry_at > ?`,
-		statusPermanentlyFailed, nowNano,
+		nowNano,
 	).Scan(&minNano)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("sync: querying earliest local issue retry: %w", err)
+		return time.Time{}, fmt.Errorf("sync: querying earliest sync failure retry: %w", err)
 	}
 
 	if minNano == nil {
@@ -1859,4 +1774,78 @@ func (m *SyncStore) EarliestLocalIssueRetryAt(ctx context.Context, now time.Time
 	}
 
 	return time.Unix(0, *minNano), nil
+}
+
+// SyncFailureCount returns the number of transient sync_failures rows.
+func (m *SyncStore) SyncFailureCount(ctx context.Context) (int, error) {
+	var count int
+
+	err := m.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sync_failures WHERE category = 'transient'`,
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("sync: counting sync failures: %w", err)
+	}
+
+	return count, nil
+}
+
+// ListSyncFailuresByIssueType returns all sync_failures rows with the given issue_type.
+func (m *SyncStore) ListSyncFailuresByIssueType(ctx context.Context, issueType string) ([]SyncFailureRow, error) {
+	rows, err := m.db.QueryContext(ctx,
+		`SELECT path, drive_id, direction, category,
+			COALESCE(issue_type, ''), COALESCE(item_id, ''),
+			failure_count, COALESCE(next_retry_at, 0),
+			COALESCE(last_error, ''), COALESCE(http_status, 0),
+			first_seen_at, last_seen_at,
+			COALESCE(file_size, 0), COALESCE(local_hash, '')
+		FROM sync_failures
+		WHERE issue_type = ?
+		ORDER BY last_seen_at DESC`, issueType)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing sync failures by type %s: %w", issueType, err)
+	}
+	defer rows.Close()
+
+	return scanSyncFailureRows(rows)
+}
+
+// ClearSyncFailuresByPrefix removes all sync_failures rows whose path starts
+// with the given prefix and matches the given issue_type.
+func (m *SyncStore) ClearSyncFailuresByPrefix(ctx context.Context, pathPrefix, issueType string) error {
+	_, err := m.db.ExecContext(ctx,
+		`DELETE FROM sync_failures WHERE issue_type = ? AND (path = ? OR path LIKE ?)`,
+		issueType, pathPrefix, pathPrefix+"/%")
+	if err != nil {
+		return fmt.Errorf("sync: clearing sync failures by prefix %s: %w", pathPrefix, err)
+	}
+
+	return nil
+}
+
+// scanSyncFailureRows scans multiple sync_failures rows from a query result.
+func scanSyncFailureRows(rows *sql.Rows) ([]SyncFailureRow, error) {
+	var result []SyncFailureRow
+
+	for rows.Next() {
+		var r SyncFailureRow
+		if scanErr := rows.Scan(
+			&r.Path, &r.DriveID, &r.Direction, &r.Category,
+			&r.IssueType, &r.ItemID,
+			&r.FailureCount, &r.NextRetryAt,
+			&r.LastError, &r.HTTPStatus,
+			&r.FirstSeenAt, &r.LastSeenAt,
+			&r.FileSize, &r.LocalHash,
+		); scanErr != nil {
+			return nil, fmt.Errorf("sync: scanning sync failure row: %w", scanErr)
+		}
+
+		result = append(result, r)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sync: iterating sync failure rows: %w", err)
+	}
+
+	return result, nil
 }

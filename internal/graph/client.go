@@ -5,23 +5,17 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
-	"math/rand/v2"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // DefaultBaseURL is the production Microsoft Graph API v1.0 endpoint.
 const DefaultBaseURL = "https://graph.microsoft.com/v1.0"
 
-// Per architecture.md §7.2: base 1s, factor 2x, max 60s, ±25% jitter, max 5 retries.
 const (
-	maxRetries       = 5
-	baseBackoff      = 1 * time.Second
-	maxBackoff       = 60 * time.Second
-	backoffFactor    = 2.0
-	jitterFraction   = 0.25
 	defaultUserAgent = "onedrive-go/dev"
 
 	// maxErrBodySize caps error response body reads to prevent OOM from
@@ -49,6 +43,11 @@ type Client struct {
 	// sleepFunc is called to wait between retries. Defaults to timeSleep.
 	// Tests override this to avoid real delays.
 	sleepFunc func(ctx context.Context, d time.Duration) error
+
+	// breaker is an optional circuit breaker for detecting service-wide
+	// outages. When open, requests fail immediately with ErrCircuitOpen.
+	// Nil means no circuit breaker (backward compatible).
+	breaker *retry.CircuitBreaker
 }
 
 // NewClient creates a Graph API client.
@@ -98,10 +97,26 @@ func (c *Client) DoWithHeaders(
 	return c.doRetry(ctx, method, path, body, extraHeaders)
 }
 
+// SetCircuitBreaker attaches a circuit breaker to the client. When the
+// breaker is open, requests fail immediately with retry.ErrCircuitOpen.
+// Pass nil to disable. Thread-safe — intended for use during setup before
+// concurrent requests begin.
+func (c *Client) SetCircuitBreaker(cb *retry.CircuitBreaker) {
+	c.breaker = cb
+}
+
 // doRetry is the shared retry loop for Do and DoWithHeaders.
 func (c *Client) doRetry(
 	ctx context.Context, method, path string, body io.Reader, extraHeaders http.Header,
 ) (*http.Response, error) {
+	// Circuit breaker check: reject immediately when open.
+	if c.breaker != nil && !c.breaker.Allow() {
+		return nil, &GraphError{
+			Err:     retry.ErrCircuitOpen,
+			Message: "circuit breaker open",
+		}
+	}
+
 	url := c.baseURL + path
 
 	var attempt int
@@ -117,7 +132,7 @@ func (c *Client) doRetry(
 				return nil, fmt.Errorf("graph: request canceled: %w", ctx.Err())
 			}
 
-			if attempt < maxRetries {
+			if attempt < retry.Transport.MaxAttempts {
 				backoff := c.calcBackoff(attempt)
 				c.logger.Warn("retrying after network error",
 					slog.String("method", method),
@@ -136,7 +151,7 @@ func (c *Client) doRetry(
 				continue
 			}
 
-			return nil, fmt.Errorf("graph: %s %s failed after %d retries: %w", method, path, maxRetries, err)
+			return nil, fmt.Errorf("graph: %s %s failed after %d retries: %w", method, path, retry.Transport.MaxAttempts, err)
 		}
 
 		if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
@@ -146,6 +161,8 @@ func (c *Client) doRetry(
 				slog.Int("status", resp.StatusCode),
 				slog.String("request_id", resp.Header.Get("request-id")),
 			)
+
+			c.recordBreakerSuccess()
 
 			return resp, nil
 		}
@@ -159,7 +176,7 @@ func (c *Client) doRetry(
 
 		reqID := resp.Header.Get("request-id")
 
-		if isRetryable(resp.StatusCode) && attempt < maxRetries {
+		if isRetryable(resp.StatusCode) && attempt < retry.Transport.MaxAttempts {
 			backoff := c.retryBackoff(resp, attempt)
 			c.logger.Warn("retrying after HTTP error",
 				slog.String("method", method),
@@ -178,7 +195,23 @@ func (c *Client) doRetry(
 			continue
 		}
 
+		c.recordBreakerFailure()
+
 		return nil, c.terminalError(method, path, resp.StatusCode, reqID, errBody, attempt)
+	}
+}
+
+// recordBreakerSuccess records a successful request on the circuit breaker.
+func (c *Client) recordBreakerSuccess() {
+	if c.breaker != nil {
+		c.breaker.RecordSuccess()
+	}
+}
+
+// recordBreakerFailure records a failed request on the circuit breaker.
+func (c *Client) recordBreakerFailure() {
+	if c.breaker != nil {
+		c.breaker.RecordFailure()
 	}
 }
 
@@ -299,7 +332,7 @@ func (c *Client) doPreAuthRetry(
 				return nil, fmt.Errorf("graph: %s canceled: %w", desc, ctx.Err())
 			}
 
-			if attempt < maxRetries {
+			if attempt < retry.Transport.MaxAttempts {
 				backoff := c.calcBackoff(attempt)
 				c.logger.Warn("retrying pre-auth request after network error",
 					slog.String("desc", desc),
@@ -317,7 +350,7 @@ func (c *Client) doPreAuthRetry(
 				continue
 			}
 
-			return nil, fmt.Errorf("graph: %s failed after %d retries: %w", desc, maxRetries, err)
+			return nil, fmt.Errorf("graph: %s failed after %d retries: %w", desc, retry.Transport.MaxAttempts, err)
 		}
 
 		if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
@@ -333,7 +366,7 @@ func (c *Client) doPreAuthRetry(
 
 		reqID := resp.Header.Get("request-id")
 
-		if isRetryable(resp.StatusCode) && attempt < maxRetries {
+		if isRetryable(resp.StatusCode) && attempt < retry.Transport.MaxAttempts {
 			backoff := c.retryBackoff(resp, attempt)
 			c.logger.Warn("retrying pre-auth request after HTTP error",
 				slog.String("desc", desc),
@@ -400,18 +433,10 @@ func (c *Client) retryBackoff(resp *http.Response, attempt int) time.Duration {
 	return c.calcBackoff(attempt)
 }
 
-// calcBackoff computes exponential backoff with ±25% jitter.
+// calcBackoff computes exponential backoff with ±25% jitter using the
+// unified retry.Transport policy.
 func (c *Client) calcBackoff(attempt int) time.Duration {
-	backoff := float64(baseBackoff) * math.Pow(backoffFactor, float64(attempt))
-	if backoff > float64(maxBackoff) {
-		backoff = float64(maxBackoff)
-	}
-
-	// Jitter prevents thundering herd when multiple workers hit rate limits simultaneously.
-	jitter := backoff * jitterFraction * (rand.Float64()*2 - 1) //nolint:gosec // jitter does not need crypto rand
-	backoff += jitter
-
-	return time.Duration(backoff)
+	return retry.Transport.Delay(attempt)
 }
 
 // rewindBody seeks an io.Reader back to offset 0 if it implements io.Seeker.

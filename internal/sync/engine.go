@@ -871,7 +871,7 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 
 	// Step 4b: Start failure retrier for automatic retry of failed items.
 	// Created after buf so it can re-inject synthesized events.
-	e.retrier = NewFailureRetrier(DefaultFailureRetrierConfig(), e.baseline, e.baseline, e.baseline, buf, tracker, e.logger)
+	e.retrier = NewFailureRetrier(DefaultFailureRetrierConfig(), e.baseline, e.baseline, e.baseline, buf, tracker, e.logger) //nolint:lll // constructor with many deps
 	go e.retrier.Run(ctx)
 
 	// Step 5: Start observer goroutines.
@@ -928,12 +928,11 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 }
 
 // processWorkerResult handles a single worker result: records failures in
-// remote_state, checks permissions on 403s, records upload issues in
-// local_issues, and kicks the retrier. Shared by both one-shot (RunOnce)
-// and watch (drainWorkerResults) paths.
+// sync_failures, checks permissions on 403s, and kicks the retrier. Shared
+// by both one-shot (RunOnce) and watch (drainWorkerResults) paths.
 func (e *Engine) processWorkerResult(ctx context.Context, r WorkerResult, bl *Baseline, shortcuts []Shortcut) {
 	if !r.Success {
-		// Check permissions FIRST for 403s — if read-only, skip remote_state
+		// Check permissions FIRST for 403s — if read-only, skip failure
 		// recording entirely. Permission-denied items should not enter the
 		// retry/escalation pipeline.
 		if r.HTTPStatus == http.StatusForbidden && e.permChecker != nil {
@@ -942,22 +941,22 @@ func (e *Engine) processWorkerResult(ctx context.Context, r WorkerResult, bl *Ba
 			}
 		}
 
-		// Non-permission failures: record in remote_state for retry.
-		if recErr := e.baseline.RecordFailure(ctx, r.Path, r.ErrMsg, r.HTTPStatus); recErr != nil {
-			e.logger.Warn("failed to record failure in remote_state",
+		// Determine direction from action type.
+		direction := directionFromAction(r.ActionType)
+
+		// Use the engine's driveID if the worker result doesn't have one
+		// (e.g., one-shot mode where actions may not carry drive context).
+		driveID := r.DriveID
+		if driveID.String() == "" {
+			driveID = e.driveID
+		}
+
+		// Single write to sync_failures + remote_state status transition.
+		if recErr := e.baseline.RecordFailure(ctx, r.Path, driveID, direction, r.ErrMsg, r.HTTPStatus); recErr != nil {
+			e.logger.Warn("failed to record failure",
 				slog.String("path", r.Path),
 				slog.String("error", recErr.Error()),
 			)
-		}
-
-		// Also record upload failures in local_issues for user visibility.
-		if r.ActionType == ActionUpload {
-			if issueErr := e.baseline.RecordLocalIssue(ctx, r.Path, "upload_failed", r.ErrMsg, r.HTTPStatus, 0, ""); issueErr != nil {
-				e.logger.Warn("failed to record upload issue in local_issues",
-					slog.String("path", r.Path),
-					slog.String("error", issueErr.Error()),
-				)
-			}
 		}
 	}
 
@@ -965,6 +964,18 @@ func (e *Engine) processWorkerResult(ctx context.Context, r WorkerResult, bl *Ba
 	// can re-evaluate retry timers and dispatch newly retriable items.
 	if e.retrier != nil {
 		e.retrier.Kick()
+	}
+}
+
+// directionFromAction maps an ActionType to a sync_failures direction string.
+func directionFromAction(at ActionType) string {
+	switch at { //nolint:exhaustive // only failure-producing actions need mapping
+	case ActionUpload:
+		return strUpload
+	case ActionLocalDelete, ActionRemoteDelete:
+		return strDelete
+	default:
+		return strDownload
 	}
 }
 
@@ -1277,8 +1288,8 @@ func (e *Engine) filterInvalidUploads(ctx context.Context, plan *ActionPlan) *Ac
 			fileSize = plan.Actions[f.Index].View.Local.Size
 		}
 
-		if recErr := e.baseline.RecordLocalIssue(ctx, f.Path, f.IssueType, f.Error, 0, fileSize, ""); recErr != nil {
-			e.logger.Error("failed to record local issue",
+		if recErr := e.baseline.RecordSyncFailure(ctx, f.Path, e.driveID, "upload", f.IssueType, f.Error, 0, fileSize, "", ""); recErr != nil {
+			e.logger.Error("failed to record sync failure",
 				slog.String("path", f.Path),
 				slog.String("error", recErr.Error()),
 			)

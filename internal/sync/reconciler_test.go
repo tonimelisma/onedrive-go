@@ -22,33 +22,30 @@ import (
 // mockStateReader implements StateReader for failure retrier tests.
 type mockStateReader struct {
 	mu                 stdsync.Mutex
-	failedRows         []RemoteStateRow
-	failedErr          error
+	failureRows        []SyncFailureRow
+	failureErr         error
 	earliestRetry      time.Time
 	earliestRetryErr   error
-	listFailedCalls    int
+	failureCount       int
+	failureCountErr    error
+	listFailureCalls   int
 	earliestRetryCalls int
-
-	localIssueRows        []LocalIssueRow
-	localIssueErr         error
-	earliestLocalRetry    time.Time
-	earliestLocalRetryErr error
 }
 
 func (m *mockStateReader) ListUnreconciled(_ context.Context) ([]RemoteStateRow, error) {
 	return nil, nil
 }
 
-func (m *mockStateReader) ListFailedForRetry(_ context.Context, _ time.Time) ([]RemoteStateRow, error) {
+func (m *mockStateReader) ListSyncFailuresForRetry(_ context.Context, _ time.Time) ([]SyncFailureRow, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.listFailedCalls++
+	m.listFailureCalls++
 
-	return m.failedRows, m.failedErr
+	return m.failureRows, m.failureErr
 }
 
-func (m *mockStateReader) EarliestRetryAt(_ context.Context, _ time.Time) (time.Time, error) {
+func (m *mockStateReader) EarliestSyncFailureRetryAt(_ context.Context, _ time.Time) (time.Time, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -57,21 +54,13 @@ func (m *mockStateReader) EarliestRetryAt(_ context.Context, _ time.Time) (time.
 	return m.earliestRetry, m.earliestRetryErr
 }
 
-func (m *mockStateReader) ListLocalIssuesForRetry(_ context.Context, _ time.Time) ([]LocalIssueRow, error) {
+func (m *mockStateReader) SyncFailureCount(_ context.Context) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	return m.localIssueRows, m.localIssueErr
+	return m.failureCount, m.failureCountErr
 }
 
-func (m *mockStateReader) EarliestLocalIssueRetryAt(_ context.Context, _ time.Time) (time.Time, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	return m.earliestLocalRetry, m.earliestLocalRetryErr
-}
-
-func (m *mockStateReader) FailureCount(_ context.Context) (int, error)            { return 0, nil }
 func (m *mockStateReader) BaselineEntryCount(_ context.Context) (int, error)      { return 0, nil }
 func (m *mockStateReader) UnresolvedConflictCount(_ context.Context) (int, error) { return 0, nil }
 func (m *mockStateReader) ReadSyncMetadata(_ context.Context) (map[string]string, error) {
@@ -114,20 +103,66 @@ func (m *mockEventAdder) Add(ev *ChangeEvent) {
 	m.events = append(m.events, ev)
 }
 
-// mockLocalIssueEscalator implements LocalIssueEscalator for failure retrier tests.
-type mockLocalIssueEscalator struct {
-	mu    stdsync.Mutex
-	paths []string
-	err   error
+// mockSyncFailureRecorder implements SyncFailureRecorder for failure retrier tests.
+type mockSyncFailureRecorder struct {
+	mu              stdsync.Mutex
+	permanentCalls  []permanentCall
+	permanentErr    error
+	recordCalls     int
+	clearCalls      int
+	clearResCalls   int
+	listFailures    []SyncFailureRow
+	listFailuresErr error
 }
 
-func (m *mockLocalIssueEscalator) MarkLocalIssuePermanent(_ context.Context, path string) error {
+type permanentCall struct {
+	path    string
+	driveID driveid.ID
+}
+
+func (m *mockSyncFailureRecorder) RecordSyncFailure(_ context.Context, _ string, _ driveid.ID,
+	_, _, _ string, _ int, _ int64, _, _ string,
+) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.paths = append(m.paths, path)
+	m.recordCalls++
 
-	return m.err
+	return nil
+}
+
+func (m *mockSyncFailureRecorder) ListSyncFailures(_ context.Context) ([]SyncFailureRow, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.listFailures, m.listFailuresErr
+}
+
+func (m *mockSyncFailureRecorder) ClearSyncFailure(_ context.Context, _ string, _ driveid.ID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.clearCalls++
+
+	return nil
+}
+
+func (m *mockSyncFailureRecorder) ClearResolvedSyncFailures(_ context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.clearResCalls++
+
+	return nil
+}
+
+func (m *mockSyncFailureRecorder) MarkSyncFailurePermanent(_ context.Context, path string, driveID driveid.ID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.permanentCalls = append(m.permanentCalls, permanentCall{path: path, driveID: driveID})
+
+	return m.permanentErr
 }
 
 // mockInFlightChecker implements InFlightChecker for failure retrier tests.
@@ -155,32 +190,28 @@ func testFailureRetrier(state *mockStateReader, esc *mockEscalator, adder *mockE
 	return testFailureRetrierWith(state, esc, nil, adder, checker)
 }
 
-func testFailureRetrierWith(state *mockStateReader, esc *mockEscalator, localIss *mockLocalIssueEscalator, adder *mockEventAdder, checker *mockInFlightChecker) *FailureRetrier {
+func testFailureRetrierWith(state *mockStateReader, esc *mockEscalator, recorder *mockSyncFailureRecorder, adder *mockEventAdder, checker *mockInFlightChecker) *FailureRetrier {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
-	// Convert nil *mockLocalIssueEscalator to nil LocalIssueEscalator interface.
-	var lis LocalIssueEscalator
-	if localIss != nil {
-		lis = localIss
+	// Convert nil *mockSyncFailureRecorder to nil SyncFailureRecorder interface.
+	var sfr SyncFailureRecorder
+	if recorder != nil {
+		sfr = recorder
 	}
 
-	return NewFailureRetrier(DefaultFailureRetrierConfig(), state, esc, lis, adder, checker, logger)
+	return NewFailureRetrier(DefaultFailureRetrierConfig(), state, esc, sfr, adder, checker, logger)
 }
 
-func makeFailedRow(path, status string, failureCount int) RemoteStateRow {
+func makeFailedRow(path, direction string, failureCount int) SyncFailureRow {
 	driveID := driveid.New("00000000000d0001")
 
-	return RemoteStateRow{
+	return SyncFailureRow{
 		DriveID:      driveID,
 		ItemID:       "item-" + path,
 		Path:         path,
-		ParentID:     "parent1",
-		ItemType:     "file",
-		Hash:         "hash-" + path,
-		Size:         100,
-		Mtime:        1000,
-		ETag:         "etag-" + path,
-		SyncStatus:   status,
+		Direction:    direction,
+		Category:     "transient",
+		IssueType:    direction + "_failed",
 		FailureCount: failureCount,
 		LastError:    "some error",
 	}
@@ -225,11 +256,11 @@ func TestKick_Coalescing(t *testing.T) {
 }
 
 func TestReconcile_DispatchRetriableItems(t *testing.T) {
-	rows := []RemoteStateRow{
-		makeFailedRow("a.txt", statusDownloadFailed, 2),
-		makeFailedRow("b.txt", statusDeleteFailed, 3),
+	rows := []SyncFailureRow{
+		makeFailedRow("a.txt", "download", 2),
+		makeFailedRow("b.txt", "delete", 3),
 	}
-	state := &mockStateReader{failedRows: rows}
+	state := &mockStateReader{failureRows: rows}
 	esc := &mockEscalator{}
 	adder := &mockEventAdder{}
 	checker := newMockInFlightChecker()
@@ -244,22 +275,22 @@ func TestReconcile_DispatchRetriableItems(t *testing.T) {
 
 	require.Len(t, adder.events, 2)
 
-	// First: download_failed → ChangeModify
+	// First: download → ChangeModify
 	assert.Equal(t, "a.txt", adder.events[0].Path)
 	assert.Equal(t, ChangeModify, adder.events[0].Type)
 	assert.Equal(t, SourceRemote, adder.events[0].Source)
 
-	// Second: delete_failed → ChangeDelete
+	// Second: delete → ChangeDelete
 	assert.Equal(t, "b.txt", adder.events[1].Path)
 	assert.Equal(t, ChangeDelete, adder.events[1].Type)
 }
 
 func TestReconcile_SkipInFlight(t *testing.T) {
-	rows := []RemoteStateRow{
-		makeFailedRow("a.txt", statusDownloadFailed, 2),
-		makeFailedRow("b.txt", statusDownloadFailed, 3),
+	rows := []SyncFailureRow{
+		makeFailedRow("a.txt", "download", 2),
+		makeFailedRow("b.txt", "download", 3),
 	}
-	state := &mockStateReader{failedRows: rows}
+	state := &mockStateReader{failureRows: rows}
 	esc := &mockEscalator{}
 	adder := &mockEventAdder{}
 	checker := newMockInFlightChecker()
@@ -279,12 +310,12 @@ func TestReconcile_SkipInFlight(t *testing.T) {
 }
 
 func TestReconcile_EscalationThreshold(t *testing.T) {
-	rows := []RemoteStateRow{
-		makeFailedRow("a.txt", statusDownloadFailed, defaultEscalationThreshold),
-		makeFailedRow("b.txt", statusDownloadFailed, defaultEscalationThreshold+5),
-		makeFailedRow("c.txt", statusDownloadFailed, 2), // below threshold
+	rows := []SyncFailureRow{
+		makeFailedRow("a.txt", "download", defaultEscalationThreshold),
+		makeFailedRow("b.txt", "download", defaultEscalationThreshold+5),
+		makeFailedRow("c.txt", "download", 2), // below threshold
 	}
-	state := &mockStateReader{failedRows: rows}
+	state := &mockStateReader{failureRows: rows}
 	esc := &mockEscalator{}
 	adder := &mockEventAdder{}
 	checker := newMockInFlightChecker()
@@ -310,10 +341,10 @@ func TestReconcile_EscalationThreshold(t *testing.T) {
 }
 
 func TestReconcile_EscalationError(t *testing.T) {
-	rows := []RemoteStateRow{
-		makeFailedRow("a.txt", statusDownloadFailed, defaultEscalationThreshold),
+	rows := []SyncFailureRow{
+		makeFailedRow("a.txt", "download", defaultEscalationThreshold),
 	}
-	state := &mockStateReader{failedRows: rows}
+	state := &mockStateReader{failureRows: rows}
 	esc := &mockEscalator{err: errors.New("db error")}
 	adder := &mockEventAdder{}
 	checker := newMockInFlightChecker()
@@ -333,84 +364,42 @@ func TestReconcile_EscalationError(t *testing.T) {
 	adder.mu.Unlock()
 }
 
-func TestSynthesizeEvent_DeleteStatuses(t *testing.T) {
+func TestSynthesizeFailureEvent_Directions(t *testing.T) {
 	r := testFailureRetrier(&mockStateReader{}, &mockEscalator{}, &mockEventAdder{}, newMockInFlightChecker())
 
 	tests := []struct {
-		name     string
-		status   string
-		wantType ChangeType
+		name       string
+		direction  string
+		wantType   ChangeType
+		wantSource ChangeSource
 	}{
-		{"download_failed", statusDownloadFailed, ChangeModify},
-		{"pending_download", statusPendingDownload, ChangeModify},
-		{"synced", statusSynced, ChangeModify},
-		{"delete_failed", statusDeleteFailed, ChangeDelete},
-		{"pending_delete", statusPendingDelete, ChangeDelete},
+		{"download", "download", ChangeModify, SourceRemote},
+		{"upload", "upload", ChangeModify, SourceLocal},
+		{"delete", "delete", ChangeDelete, SourceRemote},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			row := makeFailedRow("test.txt", tt.status, 1)
-			ev := r.synthesizeEvent(&row)
+			row := makeFailedRow("test.txt", tt.direction, 1)
+			ev := r.synthesizeFailureEvent(&row)
 
+			require.NotNil(t, ev)
 			assert.Equal(t, tt.wantType, ev.Type)
-			assert.Equal(t, SourceRemote, ev.Source)
+			assert.Equal(t, tt.wantSource, ev.Source)
 			assert.Equal(t, "test.txt", ev.Path)
-			assert.Equal(t, row.ItemID, ev.ItemID)
-			assert.Equal(t, row.DriveID, ev.DriveID)
-			assert.Equal(t, row.Hash, ev.Hash)
-			assert.Equal(t, row.Size, ev.Size)
-			assert.Equal(t, row.Mtime, ev.Mtime)
-			assert.Equal(t, row.ETag, ev.ETag)
 			assert.Equal(t, tt.wantType == ChangeDelete, ev.IsDeleted)
+
+			// Download and delete events carry item metadata from the row.
+			if tt.direction != "upload" {
+				assert.Equal(t, row.ItemID, ev.ItemID)
+				assert.Equal(t, row.DriveID, ev.DriveID)
+			}
 		})
 	}
 }
 
-func TestSynthesizeEvent_FolderItemType(t *testing.T) {
-	r := testFailureRetrier(&mockStateReader{}, &mockEscalator{}, &mockEventAdder{}, newMockInFlightChecker())
-
-	row := makeFailedRow("dir", statusDownloadFailed, 1)
-	row.ItemType = "folder"
-
-	ev := r.synthesizeEvent(&row)
-	assert.Equal(t, ItemTypeFolder, ev.ItemType)
-}
-
-func TestSynthesizeEvent_InvalidItemType(t *testing.T) {
-	r := testFailureRetrier(&mockStateReader{}, &mockEscalator{}, &mockEventAdder{}, newMockInFlightChecker())
-
-	row := makeFailedRow("bad.txt", statusDownloadFailed, 1)
-	row.ItemType = "bogus"
-
-	ev := r.synthesizeEvent(&row)
-	assert.Nil(t, ev, "invalid item type should return nil")
-}
-
-func TestReconcile_SkipsInvalidItemType(t *testing.T) {
-	rows := []RemoteStateRow{
-		makeFailedRow("good.txt", statusDownloadFailed, 2),
-		makeFailedRow("bad.txt", statusDownloadFailed, 2),
-	}
-	rows[1].ItemType = "bogus" // invalid item type
-
-	state := &mockStateReader{failedRows: rows}
-	adder := &mockEventAdder{}
-	r := testFailureRetrier(state, &mockEscalator{}, adder, newMockInFlightChecker())
-	r.nowFunc = func() time.Time { return time.Unix(1000, 0) }
-
-	r.reconcile(context.Background())
-
-	adder.mu.Lock()
-	defer adder.mu.Unlock()
-
-	// Only good.txt dispatched; bad.txt skipped due to invalid item type.
-	require.Len(t, adder.events, 1)
-	assert.Equal(t, "good.txt", adder.events[0].Path)
-}
-
 func TestReconcile_NoRows(t *testing.T) {
-	state := &mockStateReader{failedRows: nil}
+	state := &mockStateReader{failureRows: nil}
 	esc := &mockEscalator{}
 	adder := &mockEventAdder{}
 	checker := newMockInFlightChecker()
@@ -430,7 +419,7 @@ func TestReconcile_NoRows(t *testing.T) {
 }
 
 func TestReconcile_ListFailedError(t *testing.T) {
-	state := &mockStateReader{failedErr: errors.New("query error")}
+	state := &mockStateReader{failureErr: errors.New("query error")}
 	esc := &mockEscalator{}
 	adder := &mockEventAdder{}
 	checker := newMockInFlightChecker()
@@ -519,10 +508,10 @@ func TestRun_ShutdownOnCancel(t *testing.T) {
 }
 
 func TestRun_KickTriggersReconcile(t *testing.T) {
-	rows := []RemoteStateRow{
-		makeFailedRow("a.txt", statusDownloadFailed, 2),
+	rows := []SyncFailureRow{
+		makeFailedRow("a.txt", "download", 2),
 	}
-	state := &mockStateReader{failedRows: rows}
+	state := &mockStateReader{failureRows: rows}
 	adder := &mockEventAdder{}
 	r := testFailureRetrier(state, &mockEscalator{}, adder, newMockInFlightChecker())
 	r.nowFunc = func() time.Time { return time.Unix(1000, 0) }
@@ -563,11 +552,11 @@ func TestDefaultFailureRetrierConfig(t *testing.T) {
 }
 
 func TestFailureRetrier_CustomEscalationThreshold(t *testing.T) {
-	rows := []RemoteStateRow{
-		makeFailedRow("a.txt", statusDownloadFailed, 3),
-		makeFailedRow("b.txt", statusDownloadFailed, 2), // below threshold
+	rows := []SyncFailureRow{
+		makeFailedRow("a.txt", "download", 3),
+		makeFailedRow("b.txt", "download", 2), // below threshold
 	}
-	state := &mockStateReader{failedRows: rows}
+	state := &mockStateReader{failureRows: rows}
 	esc := &mockEscalator{}
 	adder := &mockEventAdder{}
 	checker := newMockInFlightChecker()
@@ -615,29 +604,19 @@ func TestArmTimer_StopsExistingTimer(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Local issue retry tests
+// Upload failure (local issue) retry tests
 // ---------------------------------------------------------------------------
 
-func makeLocalIssueRow(path string, failureCount int) LocalIssueRow {
-	return LocalIssueRow{
-		Path:         path,
-		IssueType:    "upload_failed",
-		SyncStatus:   "upload_failed",
-		FailureCount: failureCount,
-		LastError:    "some error",
+func TestReconcile_DispatchUploadFailures(t *testing.T) {
+	rows := []SyncFailureRow{
+		makeFailedRow("a.txt", "upload", 2),
+		makeFailedRow("b.txt", "upload", 3),
 	}
-}
-
-func TestReconcile_DispatchLocalIssues(t *testing.T) {
-	localRows := []LocalIssueRow{
-		makeLocalIssueRow("a.txt", 2),
-		makeLocalIssueRow("b.txt", 3),
-	}
-	state := &mockStateReader{localIssueRows: localRows}
+	state := &mockStateReader{failureRows: rows}
 	adder := &mockEventAdder{}
-	localIss := &mockLocalIssueEscalator{}
+	recorder := &mockSyncFailureRecorder{}
 
-	r := testFailureRetrierWith(state, &mockEscalator{}, localIss, adder, newMockInFlightChecker())
+	r := testFailureRetrierWith(state, &mockEscalator{}, recorder, adder, newMockInFlightChecker())
 	r.nowFunc = func() time.Time { return time.Unix(1000, 0) }
 
 	r.reconcile(context.Background())
@@ -652,24 +631,25 @@ func TestReconcile_DispatchLocalIssues(t *testing.T) {
 	assert.Equal(t, "b.txt", adder.events[1].Path)
 }
 
-func TestReconcile_EscalateLocalIssue(t *testing.T) {
-	localRows := []LocalIssueRow{
-		makeLocalIssueRow("bad.txt", defaultEscalationThreshold),
-		makeLocalIssueRow("ok.txt", 2),
+func TestReconcile_EscalateUploadFailure(t *testing.T) {
+	rows := []SyncFailureRow{
+		makeFailedRow("bad.txt", "upload", defaultEscalationThreshold),
+		makeFailedRow("ok.txt", "upload", 2),
 	}
-	state := &mockStateReader{localIssueRows: localRows}
+	state := &mockStateReader{failureRows: rows}
 	adder := &mockEventAdder{}
-	localIss := &mockLocalIssueEscalator{}
+	recorder := &mockSyncFailureRecorder{}
 
-	r := testFailureRetrierWith(state, &mockEscalator{}, localIss, adder, newMockInFlightChecker())
+	r := testFailureRetrierWith(state, &mockEscalator{}, recorder, adder, newMockInFlightChecker())
 	r.nowFunc = func() time.Time { return time.Unix(1000, 0) }
 
 	r.reconcile(context.Background())
 
-	localIss.mu.Lock()
-	require.Len(t, localIss.paths, 1)
-	assert.Equal(t, "bad.txt", localIss.paths[0])
-	localIss.mu.Unlock()
+	recorder.mu.Lock()
+	require.Len(t, recorder.permanentCalls, 1)
+	assert.Equal(t, "bad.txt", recorder.permanentCalls[0].path)
+	assert.Equal(t, driveid.New("00000000000d0001"), recorder.permanentCalls[0].driveID)
+	recorder.mu.Unlock()
 
 	adder.mu.Lock()
 	require.Len(t, adder.events, 1)
@@ -677,18 +657,16 @@ func TestReconcile_EscalateLocalIssue(t *testing.T) {
 	adder.mu.Unlock()
 }
 
-func TestReconcile_MixedRemoteAndLocal(t *testing.T) {
-	remoteRows := []RemoteStateRow{
-		makeFailedRow("remote.txt", statusDownloadFailed, 2),
+func TestReconcile_MixedDirections(t *testing.T) {
+	rows := []SyncFailureRow{
+		makeFailedRow("remote.txt", "download", 2),
+		makeFailedRow("local.txt", "upload", 1),
 	}
-	localRows := []LocalIssueRow{
-		makeLocalIssueRow("local.txt", 1),
-	}
-	state := &mockStateReader{failedRows: remoteRows, localIssueRows: localRows}
+	state := &mockStateReader{failureRows: rows}
 	adder := &mockEventAdder{}
-	localIss := &mockLocalIssueEscalator{}
+	recorder := &mockSyncFailureRecorder{}
 
-	r := testFailureRetrierWith(state, &mockEscalator{}, localIss, adder, newMockInFlightChecker())
+	r := testFailureRetrierWith(state, &mockEscalator{}, recorder, adder, newMockInFlightChecker())
 	r.nowFunc = func() time.Time { return time.Unix(1000, 0) }
 
 	r.reconcile(context.Background())
@@ -698,54 +676,9 @@ func TestReconcile_MixedRemoteAndLocal(t *testing.T) {
 
 	require.Len(t, adder.events, 2)
 
-	// First event from remote (SourceRemote), second from local (SourceLocal).
+	// First event from download (SourceRemote), second from upload (SourceLocal).
 	assert.Equal(t, SourceRemote, adder.events[0].Source)
 	assert.Equal(t, "remote.txt", adder.events[0].Path)
 	assert.Equal(t, SourceLocal, adder.events[1].Source)
 	assert.Equal(t, "local.txt", adder.events[1].Path)
-}
-
-func TestArmTimer_ConsidersLocalIssues(t *testing.T) {
-	now := time.Unix(1000, 0)
-	remoteFuture := now.Add(5 * time.Minute)
-	localFuture := now.Add(2 * time.Minute) // earlier than remote
-
-	state := &mockStateReader{
-		earliestRetry:      remoteFuture,
-		earliestLocalRetry: localFuture,
-	}
-	adder := &mockEventAdder{}
-	localIss := &mockLocalIssueEscalator{}
-
-	r := testFailureRetrierWith(state, &mockEscalator{}, localIss, adder, newMockInFlightChecker())
-	r.nowFunc = func() time.Time { return now }
-
-	r.armTimer(context.Background(), now)
-
-	r.mu.Lock()
-	require.NotNil(t, r.timer, "timer should be armed")
-	r.timer.Stop()
-	r.mu.Unlock()
-}
-
-func TestArmTimer_OnlyLocalIssues(t *testing.T) {
-	now := time.Unix(1000, 0)
-	localFuture := now.Add(30 * time.Second)
-
-	state := &mockStateReader{
-		earliestRetry:      time.Time{}, // no remote retries
-		earliestLocalRetry: localFuture,
-	}
-	adder := &mockEventAdder{}
-	localIss := &mockLocalIssueEscalator{}
-
-	r := testFailureRetrierWith(state, &mockEscalator{}, localIss, adder, newMockInFlightChecker())
-	r.nowFunc = func() time.Time { return now }
-
-	r.armTimer(context.Background(), now)
-
-	r.mu.Lock()
-	require.NotNil(t, r.timer, "timer should be armed for local issues even with no remote retries")
-	r.timer.Stop()
-	r.mu.Unlock()
 }

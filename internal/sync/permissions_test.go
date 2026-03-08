@@ -179,7 +179,7 @@ func TestHandle403_ReadOnlyFolder_RecordsIssueAtBoundary(t *testing.T) {
 	assert.True(t, result, "handle403 should return true for read-only folder")
 
 	// Should have recorded a permission_denied issue at the boundary (sub folder).
-	issues, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssuePermissionDenied)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 	assert.Equal(t, "Shared/TeamDocs/sub", issues[0].Path)
@@ -225,7 +225,7 @@ func TestHandle403_TransientError_NoSuppression(t *testing.T) {
 	assert.False(t, result, "handle403 should return false for transient 403")
 
 	// No issue should be recorded — transient 403.
-	issues, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssuePermissionDenied)
 	require.NoError(t, err)
 	assert.Empty(t, issues)
 }
@@ -265,7 +265,7 @@ func TestHandle403_WholeShareReadOnly_BoundaryAtRoot(t *testing.T) {
 	eng.handle403(ctx, bl, "Shared/TeamDocs/sub/file.txt", shortcuts)
 
 	// Boundary should walk all the way up to the shortcut root.
-	issues, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssuePermissionDenied)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 	assert.Equal(t, "Shared/TeamDocs", issues[0].Path)
@@ -302,7 +302,7 @@ func TestHandle403_APIFailure_FailOpen(t *testing.T) {
 	eng.handle403(ctx, bl, "Shared/TeamDocs/sub/file.txt", shortcuts)
 
 	// No issue — fail-open when API is unavailable.
-	issues, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssuePermissionDenied)
 	require.NoError(t, err)
 	assert.Empty(t, issues)
 }
@@ -318,7 +318,7 @@ func TestHandle403_NoShortcutMatch_Ignored(t *testing.T) {
 	// Path not under any shortcut.
 	eng.handle403(ctx, bl, "Documents/file.txt", nil)
 
-	issues, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssuePermissionDenied)
 	require.NoError(t, err)
 	assert.Empty(t, issues)
 	assert.Empty(t, checker.calls, "should not call API when no shortcut matches")
@@ -356,20 +356,20 @@ func TestRecheckPermissions_GrantDetected_IssueCleared(t *testing.T) {
 	ctx := t.Context()
 
 	// Pre-record a permission_denied issue.
-	require.NoError(t, eng.baseline.RecordLocalIssue(
-		ctx, "Shared/TeamDocs/sub", IssuePermissionDenied,
-		"folder is read-only", http.StatusForbidden, 0, "",
+	require.NoError(t, eng.baseline.RecordSyncFailure(
+		ctx, "Shared/TeamDocs/sub", driveid.ID{}, "upload", IssuePermissionDenied,
+		"folder is read-only", http.StatusForbidden, 0, "", "",
 	))
 
 	// Verify issue exists.
-	before, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
+	before, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssuePermissionDenied)
 	require.NoError(t, err)
 	require.Len(t, before, 1)
 
 	eng.recheckPermissions(ctx, bl, shortcuts)
 
 	// Issue should be cleared.
-	after, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
+	after, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssuePermissionDenied)
 	require.NoError(t, err)
 	assert.Empty(t, after)
 }
@@ -401,15 +401,15 @@ func TestRecheckPermissions_StillDenied_NoChange(t *testing.T) {
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
-	require.NoError(t, eng.baseline.RecordLocalIssue(
-		ctx, "Shared/TeamDocs/sub", IssuePermissionDenied,
-		"folder is read-only", http.StatusForbidden, 0, "",
+	require.NoError(t, eng.baseline.RecordSyncFailure(
+		ctx, "Shared/TeamDocs/sub", driveid.ID{}, "upload", IssuePermissionDenied,
+		"folder is read-only", http.StatusForbidden, 0, "", "",
 	))
 
 	eng.recheckPermissions(ctx, bl, shortcuts)
 
 	// Issue should remain.
-	after, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
+	after, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssuePermissionDenied)
 	require.NoError(t, err)
 	assert.Len(t, after, 1)
 }
@@ -441,13 +441,13 @@ func TestRecheckPermissions_UnresolvableIssues_CachedAsDenied(t *testing.T) {
 	ctx := t.Context()
 
 	// Record two permission_denied issues.
-	require.NoError(t, eng.baseline.RecordLocalIssue(
-		ctx, "Shared/NoShortcut/sub", IssuePermissionDenied,
-		"folder is read-only", http.StatusForbidden, 0, "",
+	require.NoError(t, eng.baseline.RecordSyncFailure(
+		ctx, "Shared/NoShortcut/sub", driveid.ID{}, "upload", IssuePermissionDenied,
+		"folder is read-only", http.StatusForbidden, 0, "", "",
 	))
-	require.NoError(t, eng.baseline.RecordLocalIssue(
-		ctx, "Shared/Other/locked", IssuePermissionDenied,
-		"folder is read-only", http.StatusForbidden, 0, "",
+	require.NoError(t, eng.baseline.RecordSyncFailure(
+		ctx, "Shared/Other/locked", driveid.ID{}, "upload", IssuePermissionDenied,
+		"folder is read-only", http.StatusForbidden, 0, "", "",
 	))
 
 	// Recheck with no shortcuts — both issues have sc == nil.
@@ -489,9 +489,9 @@ func TestRecheckPermissions_UnresolvedItemID_CachedAsDenied(t *testing.T) {
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, nil)
 	ctx := t.Context()
 
-	require.NoError(t, eng.baseline.RecordLocalIssue(
-		ctx, "Shared/TeamDocs/missing", IssuePermissionDenied,
-		"folder is read-only", http.StatusForbidden, 0, "",
+	require.NoError(t, eng.baseline.RecordSyncFailure(
+		ctx, "Shared/TeamDocs/missing", driveid.ID{}, "upload", IssuePermissionDenied,
+		"folder is read-only", http.StatusForbidden, 0, "", "",
 	))
 
 	eng.recheckPermissions(ctx, bl, shortcuts)
@@ -651,7 +651,7 @@ func TestHandle403_FolderNotFound_RecordsIssue(t *testing.T) {
 	eng.handle403(ctx, bl, "Shared/TeamDocs/sub/file.txt", shortcuts)
 
 	// Should record an issue because the folder returned 404.
-	issues, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssuePermissionDenied)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 	assert.Equal(t, "Shared/TeamDocs/sub", issues[0].Path)
@@ -694,7 +694,7 @@ func TestHandle403_UnresolvedParent_FallsBackToRoot(t *testing.T) {
 	eng.handle403(ctx, bl, "Shared/TeamDocs/newdir/file.txt", shortcuts)
 
 	// Should fall back to root and record issue there.
-	issues, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssuePermissionDenied)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 	assert.Equal(t, "Shared/TeamDocs", issues[0].Path)
@@ -731,9 +731,9 @@ func TestRecheckPermissions_PopulatesCache(t *testing.T) {
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
-	require.NoError(t, eng.baseline.RecordLocalIssue(
-		ctx, "Shared/TeamDocs/sub", IssuePermissionDenied,
-		"folder is read-only", http.StatusForbidden, 0, "",
+	require.NoError(t, eng.baseline.RecordSyncFailure(
+		ctx, "Shared/TeamDocs/sub", driveid.ID{}, "upload", IssuePermissionDenied,
+		"folder is read-only", http.StatusForbidden, 0, "", "",
 	))
 
 	eng.recheckPermissions(ctx, bl, shortcuts)

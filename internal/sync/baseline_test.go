@@ -211,7 +211,7 @@ func TestCheckpoint_PrunesDeletedRemoteState(t *testing.T) {
 	assert.Equal(t, 2, count, "old deleted should be pruned, new deleted + synced should remain")
 }
 
-func TestCheckpoint_PrunesResolvedLocalIssues(t *testing.T) {
+func TestCheckpoint_PrunesPermanentSyncFailures(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
@@ -222,33 +222,33 @@ func TestCheckpoint_PrunesResolvedLocalIssues(t *testing.T) {
 	newTime := now.Add(-12 * time.Hour).UnixNano()
 	retention := 24 * time.Hour
 
-	// Insert a resolved issue older than retention (should be pruned).
+	// Insert a permanent failure older than retention (should be pruned).
 	_, err := mgr.db.ExecContext(ctx,
-		`INSERT INTO local_issues (path, issue_type, sync_status, first_seen_at, last_seen_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		"/old-issue.txt", "upload_failed", "resolved", oldTime, oldTime)
+		`INSERT INTO sync_failures (path, drive_id, direction, category, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"/old-issue.txt", "", "upload", "permanent", oldTime, oldTime)
 	require.NoError(t, err)
 
-	// Insert a resolved issue newer than retention (should survive).
+	// Insert a permanent failure newer than retention (should survive).
 	_, err = mgr.db.ExecContext(ctx,
-		`INSERT INTO local_issues (path, issue_type, sync_status, first_seen_at, last_seen_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		"/new-issue.txt", "upload_failed", "resolved", newTime, newTime)
+		`INSERT INTO sync_failures (path, drive_id, direction, category, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"/new-issue.txt", "", "upload", "permanent", newTime, newTime)
 	require.NoError(t, err)
 
-	// Insert a pending issue (should never be pruned regardless of age).
+	// Insert a transient failure (should never be pruned regardless of age).
 	_, err = mgr.db.ExecContext(ctx,
-		`INSERT INTO local_issues (path, issue_type, sync_status, first_seen_at, last_seen_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		"/pending-issue.txt", "upload_failed", "pending_upload", oldTime, oldTime)
+		`INSERT INTO sync_failures (path, drive_id, direction, category, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"/pending-issue.txt", "", "upload", "transient", oldTime, oldTime)
 	require.NoError(t, err)
 
 	require.NoError(t, mgr.Checkpoint(ctx, retention))
 
 	var count int
-	err = mgr.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM local_issues`).Scan(&count)
+	err = mgr.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sync_failures`).Scan(&count)
 	require.NoError(t, err)
-	assert.Equal(t, 2, count, "old resolved should be pruned, new resolved + pending should remain")
+	assert.Equal(t, 2, count, "old permanent should be pruned, new permanent + transient should remain")
 }
 
 func TestCheckpoint_ZeroRetentionSkipsPruning(t *testing.T) {
@@ -1997,7 +1997,7 @@ func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 	// Verify all expected tables exist by querying sqlite_master.
 	expectedTables := []string{
 		"baseline", "delta_tokens", "conflicts", "sync_metadata",
-		"remote_state", "local_issues",
+		"remote_state", "sync_failures",
 	}
 
 	for _, table := range expectedTables {
@@ -2037,11 +2037,11 @@ func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 		"d!abc123", "item1", "/test.txt", "file", "pending_download", 1700000000)
 	require.NoError(t, err)
 
-	// Verify local_issues table structure: insert + query.
+	// Verify sync_failures table structure: insert + query.
 	_, err = mgr.db.ExecContext(ctx,
-		`INSERT INTO local_issues (path, issue_type, sync_status, first_seen_at, last_seen_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		"/bad-file.txt", "invalid_filename", "pending_upload", 1700000000, 1700000000)
+		`INSERT INTO sync_failures (path, drive_id, direction, category, issue_type, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"/bad-file.txt", "d!abc123", "upload", "transient", "invalid_filename", 1700000000, 1700000000)
 	require.NoError(t, err)
 
 	// Verify remote_state CHECK constraint rejects invalid status.
@@ -2571,21 +2571,21 @@ func TestEscalateToConflict_AlongsideExisting(t *testing.T) {
 	assert.Equal(t, 2, count)
 }
 
-// --- EarliestRetryAt tests (5.7.3) ---
+// --- EarliestSyncFailureRetryAt tests (5.7.3) ---
 
-func TestEarliestRetryAt_Empty(t *testing.T) {
+func TestEarliestSyncFailureRetryAt_Empty(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
 	ctx := t.Context()
 
 	now := time.Now()
-	retryAt, err := mgr.EarliestRetryAt(ctx, now)
+	retryAt, err := mgr.EarliestSyncFailureRetryAt(ctx, now)
 	require.NoError(t, err)
 	assert.True(t, retryAt.IsZero(), "no failed rows → zero time")
 }
 
-func TestEarliestRetryAt_FutureRetry(t *testing.T) {
+func TestEarliestSyncFailureRetryAt_FutureRetry(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
@@ -2594,20 +2594,20 @@ func TestEarliestRetryAt_FutureRetry(t *testing.T) {
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	future := now.Add(5 * time.Minute)
 
-	// Insert a failed row with next_retry_at in the future.
+	// Insert a transient sync_failures row with next_retry_at in the future.
 	_, err := mgr.db.ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at, failure_count, next_retry_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		"d!abc", "item1", "/future.txt", "file", "download_failed", 1700000000, 1, future.UnixNano())
+		`INSERT INTO sync_failures (path, drive_id, direction, category, failure_count, next_retry_at, last_error, http_status, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"/future.txt", "d!abc", "download", "transient", 1, future.UnixNano(), "timeout", 0, now.UnixNano(), now.UnixNano())
 	require.NoError(t, err)
 
-	retryAt, err := mgr.EarliestRetryAt(ctx, now)
+	retryAt, err := mgr.EarliestSyncFailureRetryAt(ctx, now)
 	require.NoError(t, err)
 	assert.False(t, retryAt.IsZero())
 	assert.Equal(t, future.UnixNano(), retryAt.UnixNano())
 }
 
-func TestEarliestRetryAt_PastRetry(t *testing.T) {
+func TestEarliestSyncFailureRetryAt_PastRetry(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
@@ -2616,16 +2616,16 @@ func TestEarliestRetryAt_PastRetry(t *testing.T) {
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	past := now.Add(-5 * time.Minute)
 
-	// Insert a failed row with next_retry_at in the past (already due).
+	// Insert a transient sync_failures row with next_retry_at in the past (already due).
 	_, err := mgr.db.ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at, failure_count, next_retry_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		"d!abc", "item1", "/past.txt", "file", "delete_failed", 1700000000, 3, past.UnixNano())
+		`INSERT INTO sync_failures (path, drive_id, direction, category, failure_count, next_retry_at, last_error, http_status, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"/past.txt", "d!abc", "download", "transient", 3, past.UnixNano(), "timeout", 0, now.UnixNano(), now.UnixNano())
 	require.NoError(t, err)
 
-	// EarliestRetryAt only considers retries AFTER now. Past retries are
-	// already eligible for ListFailedForRetry and don't need timer arming.
-	retryAt, err := mgr.EarliestRetryAt(ctx, now)
+	// EarliestSyncFailureRetryAt only considers retries AFTER now. Past retries are
+	// already eligible and don't need timer arming.
+	retryAt, err := mgr.EarliestSyncFailureRetryAt(ctx, now)
 	require.NoError(t, err)
 	assert.True(t, retryAt.IsZero(), "past retry should not be returned")
 }
@@ -2668,7 +2668,7 @@ func TestMigration00002_SyncFailureRoundTrip(t *testing.T) {
 
 	ver, err := provider.GetDBVersion(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, int64(4), ver)
+	assert.Equal(t, int64(5), ver)
 
 	// Step 2: Insert seed data — one standard conflict, one sync_failure.
 	_, err = db.ExecContext(ctx,
@@ -2685,7 +2685,10 @@ func TestMigration00002_SyncFailureRoundTrip(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	// Step 3: Roll back migrations 00004, 00003, 00002.
+	// Step 3: Roll back migrations 00005, 00004, 00003, 00002.
+	_, err = provider.Down(ctx) // 00005 → 00004
+	require.NoError(t, err)
+
 	_, err = provider.Down(ctx) // 00004 → 00003
 	require.NoError(t, err)
 

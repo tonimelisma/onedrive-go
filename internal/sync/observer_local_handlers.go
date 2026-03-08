@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // watchLoop is the main select loop for Watch(). It processes fsnotify events,
@@ -43,7 +45,7 @@ func (o *LocalObserver) watchLoop(
 	tickCh, tickStop := o.safetyTickFunc(interval)
 	defer tickStop()
 
-	errBackoff := watchErrInitBackoff
+	errBackoff := retry.NewBackoff(retry.WatchLocal)
 
 	for {
 		select {
@@ -58,7 +60,7 @@ func (o *LocalObserver) watchLoop(
 			o.handleFsEvent(ctx, fsEvent, watcher, syncRoot, events)
 
 			// Successful event resets error backoff.
-			errBackoff = watchErrInitBackoff
+			errBackoff.Reset()
 
 		case req := <-o.hashRequests:
 			// Deferred hash from write coalesce timer (B-107).
@@ -69,14 +71,15 @@ func (o *LocalObserver) watchLoop(
 				return nil
 			}
 
+			delay := errBackoff.Next()
 			o.logger.Warn("filesystem watcher error",
 				slog.String("error", watchErr.Error()),
-				slog.Duration("backoff", errBackoff),
+				slog.Duration("backoff", delay),
 			)
 
 			// Exponential backoff prevents tight loop under sustained errors
 			// (e.g., kernel buffer overflow).
-			if sleepErr := o.sleepFunc(ctx, errBackoff); sleepErr != nil {
+			if sleepErr := o.sleepFunc(ctx, delay); sleepErr != nil {
 				return nil
 			}
 
@@ -89,11 +92,6 @@ func (o *LocalObserver) watchLoop(
 				return ErrSyncRootDeleted
 			}
 
-			errBackoff *= watchErrBackoffMult
-			if errBackoff > watchErrMaxBackoff {
-				errBackoff = watchErrMaxBackoff
-			}
-
 		case <-tickCh:
 			// Check if sync root still exists before running safety scan (B-113).
 			if !syncRootExists(syncRoot) {
@@ -104,7 +102,7 @@ func (o *LocalObserver) watchLoop(
 			}
 
 			o.runSafetyScan(ctx, syncRoot, events)
-			errBackoff = watchErrInitBackoff
+			errBackoff.Reset()
 		}
 	}
 }
