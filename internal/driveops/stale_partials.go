@@ -9,11 +9,11 @@ import (
 )
 
 // CleanStalePartials deletes all .partial files found under syncRoot.
-// After a sync cycle completes, any surviving .partial files are guaranteed
+// After a sync run completes, any surviving .partial files are guaranteed
 // garbage: successful downloads rename them away, failed downloads delete
 // them via removePartialIfNotCanceled, and context cancellation aborts the
 // sync before this function runs. The only edge case is rename failure
-// (B-207), where re-downloading on the next cycle is acceptable.
+// (B-207), where re-downloading on the next run is acceptable.
 //
 // Follows the CleanStale pattern: per-file errors are logged and skipped,
 // returns (count, scanError). The caller logs a summary.

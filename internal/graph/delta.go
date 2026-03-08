@@ -147,7 +147,7 @@ func (c *Client) buildFolderDeltaPath(driveID driveid.ID, folderID, token string
 }
 
 // DeltaAll fetches all pages of delta changes and returns the combined items
-// and the new delta token for the next sync cycle.
+// and the new delta token for the next sync run.
 // On success, the returned token is always a non-empty DeltaLink.
 func (c *Client) DeltaAll(ctx context.Context, driveID driveid.ID, token string) ([]Item, string, error) {
 	return c.deltaAllPages(ctx, token, func(t string) (*DeltaPage, error) {

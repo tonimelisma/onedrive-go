@@ -20,7 +20,7 @@ This creates five unanswerable questions:
 4. **"What is it doing right now?"** — No current phase, no in-flight
    transfer count, no progress.
 5. **"How much has it done?"** — `SyncReport` is printed to stderr once per
-   cycle and thrown away. No cumulative stats.
+   run and thrown away. No cumulative stats.
 
 ## 2. Current State
 
@@ -40,7 +40,7 @@ discards it immediately.
 
 | Data | Location | Exposure |
 |------|----------|----------|
-| `SyncReport` (9 action counts + outcomes) | `engine.go` | Printed to stderr, persisted to SQLite. Gone after cycle. |
+| `SyncReport` (9 action counts + outcomes) | `engine.go` | Printed to stderr, persisted to SQLite. Gone after run. |
 | `WorkerPool.Stats()` (succeeded, failed) | `worker.go` | Flows into SyncReport, then discarded |
 | Upload `ProgressFunc` | `graph/upload.go` | CLI `put` only — sync engine passes `nil` |
 | PID file | `pidfile.go` | Duplicate-daemon prevention only |
@@ -78,9 +78,9 @@ discards it immediately.
 
 | Metric | Type | Source |
 |--------|------|--------|
-| `sync.cycles_completed` | Counter | Increment after each `RunOnce` |
-| `sync.last_cycle_duration_seconds` | Gauge | `SyncReport.Duration` |
-| `sync.last_cycle_time` | Timestamp | `time.Now()` after cycle |
+| `sync.runs_completed` | Counter | Increment after each `RunOnce` |
+| `sync.last_run_duration_seconds` | Gauge | `SyncReport.Duration` |
+| `sync.last_run_time` | Timestamp | `time.Now()` after run |
 | `sync.files_uploaded` | Counter | Cumulative from `SyncReport.Uploads` |
 | `sync.files_downloaded` | Counter | Cumulative from `SyncReport.Downloads` |
 | `sync.files_deleted` | Counter | Cumulative local + remote deletes |
@@ -168,7 +168,7 @@ Where existing code needs changes to feed the registry:
 | `graph.Client.do()` | Increment `api.requests_total`. On retry: `api.retries_total`. On 429: `api.throttles_total`. On 5xx: `api.server_errors_total`. |
 | `graph.Client` download path | Wrap response body in counting reader → `bytes_downloaded` |
 | `graph.Client` upload path | Wrap request body / count chunk callbacks → `bytes_uploaded` |
-| `Engine.RunOnce()` | Set phase enum at each stage. After cycle: accumulate `SyncReport` fields into registry counters. |
+| `Engine.RunOnce()` | Set phase enum at each stage. After run: accumulate `SyncReport` fields into registry counters. |
 | `WorkerPool` dispatch/complete | Increment/decrement `workers_busy` gauge |
 | `Orchestrator` | Per-drive registry keyed by canonical ID |
 | `failureTracker` | Expose `Len()` for `failures_suppressed` gauge |
@@ -270,7 +270,7 @@ Account: user@example.com
     Sync dir:  /home/user/OneDrive
     Last sync: 12s ago (42 files, 1.2 MB uploaded)
     Uptime:    3d 14h 22m
-    Cycle:     #847 (0 errors, 0 conflicts)
+    Run:       #847 (0 errors, 0 conflicts)
     API:       1,247 requests, 3 retries, 0 throttles
     Transfers: 847 files synced, 2.1 GB transferred
 ```
@@ -295,14 +295,14 @@ the daemon is not running, the output looks exactly like today plus a
     "drives": {
       "personal:user@example.com": {
         "state": "idle",
-        "cycles_completed": 847,
+        "runs_completed": 847,
         "files_uploaded": 423,
         "files_downloaded": 312,
         "bytes_uploaded": 1258291200,
         "bytes_downloaded": 891289600,
         "actions_failed": 0,
-        "last_cycle_duration_ms": 1234,
-        "last_cycle_time": "2026-03-02T14:30:12Z"
+        "last_run_duration_ms": 1234,
+        "last_run_time": "2026-03-02T14:30:12Z"
       }
     },
     "api": {
@@ -354,7 +354,7 @@ instead of building its own counts.
 ### Layer 4: Future Endpoints (not in this increment)
 
 - `GET /events` — SSE stream for TUI (12.8)
-- `POST /sync` — trigger immediate cycle (12.7)
+- `POST /sync` — trigger immediate run (12.7)
 - `GET /debug/pprof/*` — runtime profiling
 
 ## 7. Open Questions
