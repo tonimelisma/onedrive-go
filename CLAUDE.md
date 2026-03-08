@@ -59,7 +59,7 @@
                      └────────────────┘
 ```
 
-**Dependency direction**: `cmd/` -> `internal/driveops/` -> `internal/graph/` -> `pkg/*`. `internal/sync/` -> `internal/driveops/`. No cycles. `driveops` does NOT import `sync`. `internal/driveid/` and `internal/tokenfile/` are leaf packages. `driveid` is pure identity (no business logic); `config` imports `driveid` and provides `TokenCanonicalID()` for token resolution. Both `graph/` and `config/` import `tokenfile/` for token file I/O. `internal/graph/` does NOT import `internal/config/` — callers pass token paths directly. See [docs/design/architecture.md](docs/design/architecture.md).
+**Dependency direction**: `cmd/` -> `internal/driveops/` -> `internal/graph/` -> `pkg/*`. `internal/sync/` -> `internal/driveops/`. No cycles. `driveops` does NOT import `sync`. `internal/retry/` is a leaf package (stdlib only) used by `graph/`, `sync/`, and `driveops/`. `internal/driveid/` and `internal/tokenfile/` are leaf packages. `driveid` is pure identity (no business logic); `config` imports `driveid` and provides `TokenCanonicalID()` for token resolution. Both `graph/` and `config/` import `tokenfile/` for token file I/O. `internal/graph/` does NOT import `internal/config/` — callers pass token paths directly. See [docs/design/architecture.md](docs/design/architecture.md).
 
 **Packages:**
 - **`pkg/quickxorhash/`** — QuickXorHash algorithm (hash.Hash interface)
@@ -68,7 +68,8 @@
 - **`internal/config/`** — TOML config, drive sections, XDG paths, four-layer override chain, token resolution (`TokenCanonicalID()`)
 - **`internal/graph/`** — Graph API client: auth, retry, items CRUD, delta, transfers
 - **`internal/driveops/`** — Authenticated drive access: SessionProvider (token caching + flush), Session (Meta + Transfer clients + delegation methods), TransferManager (download/upload with resume), SessionStore (upload session persistence + versioning), transfer interfaces, hash utilities, transfer artifact cleanup
-- **`internal/sync/`** — Event-driven sync: types, SyncStore (remote_state + baseline + local_issues), observers, buffer, planner, executor, tracker, workers, reconciler, orchestrator, engine, verify, upload_validation. Sub-interfaces: ObservationWriter, OutcomeWriter, FailureRecorder, ConflictEscalator, StateReader, StateAdmin, LocalIssueRecorder
+- **`internal/retry/`** — Unified retry infrastructure: Policy (exponential backoff with jitter), Backoff (stateful for watch loops), CircuitBreaker (threshold + sliding window + cooldown). Named policies: Transport, DriveDiscovery, Action, Reconcile, WatchLocal, WatchRemote
+- **`internal/sync/`** — Event-driven sync: types, SyncStore (remote_state + baseline + sync_failures), observers, buffer, planner, executor, tracker, workers, reconciler, orchestrator, engine, verify, upload_validation. Sub-interfaces: ObservationWriter, OutcomeWriter, FailureRecorder, ConflictEscalator, StateReader, StateAdmin, SyncFailureRecorder
 - **Root package** — Cobra CLI: login, logout, whoami, status, drive (list/add/remove/search), ls, get, put, rm, mkdir, mv, cp, stat, sync, pause, resume, conflicts, resolve, issues, verify
 - **`e2e/`** — E2E test suite against live OneDrive
 - **`testutil/`** — Shared stdlib-only test helpers (used by both `e2e/` and `internal/graph/` integration tests; NOT under `internal/` so e2e can import it)
