@@ -474,12 +474,15 @@ func TestHandleRemovedShortcuts_RemovesKnownShortcut(t *testing.T) {
 		DiscoveredAt: 1000,
 	}))
 
+	shortcuts, err := mgr.ListShortcuts(ctx)
+	require.NoError(t, err)
+
 	e := &Engine{
 		baseline: mgr,
 		logger:   testLogger(t),
 	}
 
-	err := e.handleRemovedShortcuts(ctx, map[string]bool{"sc-1": true})
+	err = e.handleRemovedShortcuts(ctx, map[string]bool{"sc-1": true}, shortcuts)
 	require.NoError(t, err)
 
 	sc, err := mgr.GetShortcut(ctx, "sc-1")
@@ -502,13 +505,16 @@ func TestHandleRemovedShortcuts_IgnoresNonShortcutDeletes(t *testing.T) {
 		DiscoveredAt: 1000,
 	}))
 
+	shortcuts, err := mgr.ListShortcuts(ctx)
+	require.NoError(t, err)
+
 	e := &Engine{
 		baseline: mgr,
 		logger:   testLogger(t),
 	}
 
 	// Delete a different item ID — shortcut should remain.
-	err := e.handleRemovedShortcuts(ctx, map[string]bool{"other-item": true})
+	err = e.handleRemovedShortcuts(ctx, map[string]bool{"other-item": true}, shortcuts)
 	require.NoError(t, err)
 
 	sc, err := mgr.GetShortcut(ctx, "sc-1")
@@ -543,12 +549,10 @@ func TestDetectShortcutCollisions_NoCollisions(t *testing.T) {
 		DiscoveredAt: 1000,
 	}))
 
-	e := &Engine{
-		baseline: mgr,
-		logger:   testLogger(t),
-	}
+	shortcuts, err := mgr.ListShortcuts(ctx)
+	require.NoError(t, err)
 
-	collisions := e.detectShortcutCollisions(ctx, emptyBaseline())
+	collisions := detectShortcutCollisionsFromList(shortcuts, emptyBaseline(), testLogger(t))
 	assert.Empty(t, collisions)
 }
 
@@ -576,12 +580,10 @@ func TestDetectShortcutCollisions_DuplicatePath(t *testing.T) {
 		DiscoveredAt: 1000,
 	}))
 
-	e := &Engine{
-		baseline: mgr,
-		logger:   testLogger(t),
-	}
+	shortcuts, err := mgr.ListShortcuts(ctx)
+	require.NoError(t, err)
 
-	collisions := e.detectShortcutCollisions(ctx, emptyBaseline())
+	collisions := detectShortcutCollisionsFromList(shortcuts, emptyBaseline(), testLogger(t))
 	assert.True(t, collisions["sc-2"], "later duplicate should be in collisions set")
 	assert.False(t, collisions["sc-1"], "first shortcut should be kept")
 }
@@ -610,12 +612,10 @@ func TestDetectShortcutCollisions_PrimaryDriveConflict(t *testing.T) {
 		ItemID:  "primary-folder-1",
 	})
 
-	e := &Engine{
-		baseline: mgr,
-		logger:   testLogger(t),
-	}
+	shortcuts, err := mgr.ListShortcuts(ctx)
+	require.NoError(t, err)
 
-	collisions := e.detectShortcutCollisions(ctx, bl)
+	collisions := detectShortcutCollisionsFromList(shortcuts, bl, testLogger(t))
 	assert.True(t, collisions["sc-1"], "shortcut conflicting with primary drive should be in collisions set")
 }
 
@@ -642,12 +642,10 @@ func TestDetectShortcutCollisions_NestedPaths(t *testing.T) {
 		DiscoveredAt: 1000,
 	}))
 
-	e := &Engine{
-		baseline: mgr,
-		logger:   testLogger(t),
-	}
+	shortcuts, err := mgr.ListShortcuts(ctx)
+	require.NoError(t, err)
 
-	collisions := e.detectShortcutCollisions(ctx, emptyBaseline())
+	collisions := detectShortcutCollisionsFromList(shortcuts, emptyBaseline(), testLogger(t))
 	assert.True(t, collisions["sc-child"], "child nested under parent shortcut should be in collisions set")
 	assert.False(t, collisions["sc-parent"], "parent shortcut should be kept")
 }
@@ -690,9 +688,12 @@ func TestObserveShortcutContent_SkipsCollisions(t *testing.T) {
 		logger:          testLogger(t),
 	}
 
+	shortcuts, err := mgr.ListShortcuts(ctx)
+	require.NoError(t, err)
+
 	collisions := map[string]bool{"sc-collide": true}
 	bl := emptyBaseline()
-	events, err := e.observeShortcutContent(ctx, bl, collisions)
+	events, err := e.observeShortcutContentFromList(ctx, shortcuts, bl, collisions)
 	require.NoError(t, err)
 
 	// Only the non-colliding shortcut should produce events.
@@ -834,6 +835,9 @@ func TestObserveShortcutContent_DeltaStrategy(t *testing.T) {
 		token: "new-delta-token",
 	}
 
+	shortcuts, err := mgr.ListShortcuts(ctx)
+	require.NoError(t, err)
+
 	e := &Engine{
 		baseline:    mgr,
 		folderDelta: mockFolderDelta,
@@ -841,7 +845,7 @@ func TestObserveShortcutContent_DeltaStrategy(t *testing.T) {
 	}
 
 	bl := emptyBaseline()
-	events, err := e.observeShortcutContent(ctx, bl, nil)
+	events, err := e.observeShortcutContentFromList(ctx, shortcuts, bl, nil)
 	require.NoError(t, err)
 
 	require.Len(t, events, 1)
@@ -884,6 +888,9 @@ func TestObserveShortcutContent_EnumerateStrategy(t *testing.T) {
 		},
 	}
 
+	shortcuts, err := mgr.ListShortcuts(ctx)
+	require.NoError(t, err)
+
 	e := &Engine{
 		baseline:        mgr,
 		recursiveLister: mockLister,
@@ -891,7 +898,7 @@ func TestObserveShortcutContent_EnumerateStrategy(t *testing.T) {
 	}
 
 	bl := emptyBaseline()
-	events, err := e.observeShortcutContent(ctx, bl, nil)
+	events, err := e.observeShortcutContentFromList(ctx, shortcuts, bl, nil)
 	require.NoError(t, err)
 
 	require.Len(t, events, 1)
@@ -914,6 +921,9 @@ func TestObserveShortcutContent_SkipsOnError(t *testing.T) {
 		DiscoveredAt: 1000,
 	}))
 
+	shortcuts, err := mgr.ListShortcuts(ctx)
+	require.NoError(t, err)
+
 	e := &Engine{
 		baseline:    mgr,
 		folderDelta: &mockFolderDeltaFetcher{err: assert.AnError},
@@ -921,7 +931,7 @@ func TestObserveShortcutContent_SkipsOnError(t *testing.T) {
 	}
 
 	bl := emptyBaseline()
-	events, err := e.observeShortcutContent(ctx, bl, nil)
+	events, err := e.observeShortcutContentFromList(ctx, shortcuts, bl, nil)
 	require.NoError(t, err, "should not propagate per-shortcut errors")
 	assert.Empty(t, events)
 }
@@ -939,7 +949,8 @@ func TestObserveShortcutContent_NoShortcuts(t *testing.T) {
 	}
 
 	bl := emptyBaseline()
-	events, err := e.observeShortcutContent(ctx, bl, nil)
+	var shortcuts []Shortcut
+	events, err := e.observeShortcutContentFromList(ctx, shortcuts, bl, nil)
 	require.NoError(t, err)
 	assert.Empty(t, events)
 }
@@ -1139,6 +1150,9 @@ func TestObserveShortcutContent_ConcurrentMultipleShortcuts(t *testing.T) {
 		},
 	}
 
+	shortcuts, err := mgr.ListShortcuts(ctx)
+	require.NoError(t, err)
+
 	e := &Engine{
 		baseline:        mgr,
 		recursiveLister: mockLister,
@@ -1146,7 +1160,7 @@ func TestObserveShortcutContent_ConcurrentMultipleShortcuts(t *testing.T) {
 	}
 
 	bl := emptyBaseline()
-	events, err := e.observeShortcutContent(ctx, bl, nil)
+	events, err := e.observeShortcutContentFromList(ctx, shortcuts, bl, nil)
 	require.NoError(t, err)
 
 	// Each shortcut produces 1 event from the mock, so expect 5.
@@ -1185,6 +1199,9 @@ func TestObserveShortcutDelta_RetryOnErrGone(t *testing.T) {
 		token: "fresh-token",
 	}
 
+	shortcuts, err := mgr.ListShortcuts(ctx)
+	require.NoError(t, err)
+
 	e := &Engine{
 		baseline:    mgr,
 		folderDelta: mock,
@@ -1192,7 +1209,7 @@ func TestObserveShortcutDelta_RetryOnErrGone(t *testing.T) {
 	}
 
 	bl := emptyBaseline()
-	events, err := e.observeShortcutContent(ctx, bl, nil)
+	events, err := e.observeShortcutContentFromList(ctx, shortcuts, bl, nil)
 	require.NoError(t, err)
 
 	// Should have retried with empty token and succeeded.

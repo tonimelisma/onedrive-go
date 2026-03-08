@@ -76,7 +76,7 @@ func TestClassifyFile_EF1_Unchanged(t *testing.T) {
 		RemoteHash: "hashA",
 	})
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 	assert.Equal(t, 0, countActions(plan), "EF1")
 }
@@ -111,7 +111,7 @@ func TestClassifyFile_EF2_RemoteModified(t *testing.T) {
 		RemoteHash: "hashA",
 	})
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	downloads := ActionsOfType(plan.Actions, ActionDownload)
@@ -147,7 +147,7 @@ func TestClassifyFile_EF3_LocalModified(t *testing.T) {
 		RemoteHash: "hashA",
 	})
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	uploads := ActionsOfType(plan.Actions, ActionUpload)
@@ -194,7 +194,7 @@ func TestClassifyFile_EF4_ConvergentEdit(t *testing.T) {
 		RemoteHash: "hashA",
 	})
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	syncedUpdates := ActionsOfType(plan.Actions, ActionUpdateSynced)
@@ -240,7 +240,7 @@ func TestClassifyFile_EF5_EditEditConflict(t *testing.T) {
 		RemoteHash: "hashA",
 	})
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	conflicts := ActionsOfType(plan.Actions, ActionConflict)
@@ -275,7 +275,7 @@ func TestClassifyFile_EF6_LocalDeleteRemoteUnchanged(t *testing.T) {
 		RemoteHash: "hashA",
 	})
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	remoteDeletes := ActionsOfType(plan.Actions, ActionRemoteDelete)
@@ -320,7 +320,7 @@ func TestClassifyFile_EF7_LocalDeleteRemoteModified(t *testing.T) {
 		RemoteHash: "hashA",
 	})
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	downloads := ActionsOfType(plan.Actions, ActionDownload)
@@ -358,7 +358,7 @@ func TestClassifyFile_EF8_RemoteDeleted(t *testing.T) {
 		RemoteHash: "hashA",
 	})
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	localDeletes := ActionsOfType(plan.Actions, ActionLocalDelete)
@@ -404,7 +404,7 @@ func TestClassifyFile_EF9_EditDeleteConflict(t *testing.T) {
 		RemoteHash: "hashA",
 	})
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	conflicts := ActionsOfType(plan.Actions, ActionConflict)
@@ -450,7 +450,7 @@ func TestClassifyFile_EF10_BothDeleted(t *testing.T) {
 		RemoteHash: "hashA",
 	})
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	cleanups := ActionsOfType(plan.Actions, ActionCleanup)
@@ -487,7 +487,7 @@ func TestClassifyFile_EF11_ConvergentCreate(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	syncedUpdates := ActionsOfType(plan.Actions, ActionUpdateSynced)
@@ -524,7 +524,7 @@ func TestClassifyFile_EF12_CreateCreateConflict(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	conflicts := ActionsOfType(plan.Actions, ActionConflict)
@@ -551,7 +551,7 @@ func TestClassifyFile_EF13_NewLocal(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	uploads := ActionsOfType(plan.Actions, ActionUpload)
@@ -579,7 +579,7 @@ func TestClassifyFile_EF14_NewRemote(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	downloads := ActionsOfType(plan.Actions, ActionDownload)
@@ -624,7 +624,7 @@ func TestClassifyFolder_ED1_InSync(t *testing.T) {
 		ItemType: ItemTypeFolder,
 	})
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	assert.Equal(t, 0, countActions(plan), "ED1")
@@ -657,7 +657,7 @@ func TestClassifyFolder_ED2_Adopt(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	syncedUpdates := ActionsOfType(plan.Actions, ActionUpdateSynced)
@@ -683,7 +683,7 @@ func TestClassifyFolder_ED3_NewRemoteFolder(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	folderCreates := ActionsOfType(plan.Actions, ActionFolderCreate)
@@ -725,7 +725,7 @@ func TestClassifyFolder_ED4_RecreateLocal(t *testing.T) {
 		ItemType: ItemTypeFolder,
 	})
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	folderCreates := ActionsOfType(plan.Actions, ActionFolderCreate)
@@ -751,7 +751,7 @@ func TestClassifyFolder_ED5_NewLocalFolder(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	folderCreates := ActionsOfType(plan.Actions, ActionFolderCreate)
@@ -794,7 +794,7 @@ func TestClassifyFolder_ED6_RemoteDeletedFolder(t *testing.T) {
 		ItemType: ItemTypeFolder,
 	})
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	localDeletes := ActionsOfType(plan.Actions, ActionLocalDelete)
@@ -836,7 +836,7 @@ func TestClassifyFolder_ED7_BothGone(t *testing.T) {
 		ItemType: ItemTypeFolder,
 	})
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	cleanups := ActionsOfType(plan.Actions, ActionCleanup)
@@ -869,7 +869,7 @@ func TestClassifyFolder_ED8_PropagateRemoteDelete(t *testing.T) {
 		ItemType: ItemTypeFolder,
 	})
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	remoteDeletes := ActionsOfType(plan.Actions, ActionRemoteDelete)
@@ -905,7 +905,7 @@ func TestClassifyFolder_ED8_DownloadOnly(t *testing.T) {
 		ItemType: ItemTypeFolder,
 	})
 
-	plan, err := planner.Plan(changes, baseline, SyncDownloadOnly, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncDownloadOnly, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	assert.Equal(t, 0, countActions(plan), "ED8 download-only")
@@ -949,7 +949,7 @@ func TestClassifyFolder_ED4_UploadOnly(t *testing.T) {
 		ItemType: ItemTypeFolder,
 	})
 
-	plan, err := planner.Plan(changes, baseline, SyncUploadOnly, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncUploadOnly, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	folderCreates := ActionsOfType(plan.Actions, ActionFolderCreate)
@@ -998,7 +998,7 @@ func TestClassifyFolder_ED6_UploadOnly(t *testing.T) {
 		ItemType: ItemTypeFolder,
 	})
 
-	plan, err := planner.Plan(changes, baseline, SyncUploadOnly, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncUploadOnly, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	localDeletes := ActionsOfType(plan.Actions, ActionLocalDelete)
@@ -1041,7 +1041,7 @@ func TestDetectMoves_RemoteMove(t *testing.T) {
 		RemoteHash: "hashM",
 	})
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	allMoves := moves(plan)
@@ -1092,7 +1092,7 @@ func TestDetectMoves_LocalMoveByHash(t *testing.T) {
 		RemoteHash: "hashMove",
 	})
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	allMoves := moves(plan)
@@ -1164,7 +1164,7 @@ func TestDetectMoves_LocalMoveAmbiguous(t *testing.T) {
 		},
 	)
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	// No moves — ambiguous hash match.
@@ -1214,7 +1214,7 @@ func TestDetectMoves_MovedPathsExcluded(t *testing.T) {
 		RemoteHash: "hashExcl",
 	})
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	// Should have exactly 1 move and no other actions.
@@ -1259,7 +1259,7 @@ func TestBigDelete_BelowMinItems(t *testing.T) {
 	})
 
 	// 1 item in baseline, 1 delete = 100%, but below MinItems (10).
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "expected no error below MinItems")
 	require.NotNil(t, plan, "expected non-nil plan below MinItems")
 }
@@ -1307,7 +1307,7 @@ func TestBigDelete_ExceedsMaxCount(t *testing.T) {
 		BigDeleteMaxPercent: defaultBigDeleteMaxPercent,
 	}
 
-	_, err := planner.Plan(changes, baseline, SyncBidirectional, config)
+	_, err := planner.Plan(changes, baseline, SyncBidirectional, config, nil)
 	require.ErrorIs(t, err, ErrBigDeleteTriggered)
 }
 
@@ -1358,7 +1358,7 @@ func TestBigDelete_ExceedsPercent(t *testing.T) {
 		BigDeleteMaxPercent: 50.0, // 75% > 50% threshold
 	}
 
-	_, err := planner.Plan(changes, baseline, SyncBidirectional, config)
+	_, err := planner.Plan(changes, baseline, SyncBidirectional, config, nil)
 	require.ErrorIs(t, err, ErrBigDeleteTriggered)
 }
 
@@ -1420,7 +1420,7 @@ func TestBigDelete_NoTrigger(t *testing.T) {
 		BigDeleteMaxPercent: defaultBigDeleteMaxPercent,
 	}
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, config)
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, config, nil)
 	require.NoError(t, err)
 	require.NotNil(t, plan)
 }
@@ -1477,7 +1477,7 @@ func TestBigDelete_PerFolder_EntireFolderDeleted(t *testing.T) {
 		BigDeleteMaxPercent: defaultBigDeleteMaxPercent,
 	}
 
-	_, err := planner.Plan(changes, baseline, SyncBidirectional, config)
+	_, err := planner.Plan(changes, baseline, SyncBidirectional, config, nil)
 	require.ErrorIs(t, err, ErrBigDeleteTriggered, "expected per-folder trigger")
 }
 
@@ -1529,7 +1529,7 @@ func TestBigDelete_PerFolder_SpreadAcrossFolders(t *testing.T) {
 		BigDeleteMaxPercent: defaultBigDeleteMaxPercent, // 50%
 	}
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, config)
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, config, nil)
 	require.NoError(t, err, "deletes spread evenly")
 	require.NotNil(t, plan)
 }
@@ -1579,7 +1579,7 @@ func TestBigDelete_PerFolder_SmallFolder(t *testing.T) {
 		BigDeleteMaxPercent: defaultBigDeleteMaxPercent,
 	}
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, config)
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, config, nil)
 	require.NoError(t, err, "small folder below MinItems")
 	require.NotNil(t, plan)
 }
@@ -1616,7 +1616,7 @@ func TestPlan_DownloadOnly_SuppressesUploads(t *testing.T) {
 		RemoteHash: "hashOld",
 	})
 
-	plan, err := planner.Plan(changes, baseline, SyncDownloadOnly, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncDownloadOnly, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	uploads := ActionsOfType(plan.Actions, ActionUpload)
@@ -1652,7 +1652,7 @@ func TestPlan_UploadOnly_SuppressesDownloads(t *testing.T) {
 		RemoteHash: "hashOld",
 	})
 
-	plan, err := planner.Plan(changes, baseline, SyncUploadOnly, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncUploadOnly, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	downloads := ActionsOfType(plan.Actions, ActionDownload)
@@ -1677,7 +1677,7 @@ func TestPlan_DownloadOnly_SuppressesFolderCreateRemote(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, emptyBaseline(), SyncDownloadOnly, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, emptyBaseline(), SyncDownloadOnly, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	folderCreates := ActionsOfType(plan.Actions, ActionFolderCreate)
@@ -1703,7 +1703,7 @@ func TestPlan_UploadOnly_SuppressesFolderCreateLocal(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, emptyBaseline(), SyncUploadOnly, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, emptyBaseline(), SyncUploadOnly, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	folderCreates := ActionsOfType(plan.Actions, ActionFolderCreate)
@@ -1739,7 +1739,7 @@ func TestOrderPlan_FolderCreatesTopDown(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	folderCreates := ActionsOfType(plan.Actions, ActionFolderCreate)
@@ -1809,7 +1809,7 @@ func TestOrderPlan_DeletesBottomUp(t *testing.T) {
 		},
 	)
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	localDeletes := ActionsOfType(plan.Actions, ActionLocalDelete)
@@ -1839,7 +1839,7 @@ func TestPlan_EmptyChanges(t *testing.T) {
 	// Empty changes → empty plan, no error.
 	planner := NewPlanner(testLogger(t))
 
-	plan, err := planner.Plan(nil, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(nil, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	assert.Equal(t, 0, countActions(plan), "empty changes: expected 0 actions")
@@ -1867,7 +1867,7 @@ func TestPlan_MixedFileAndFolder(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	folderCreates := ActionsOfType(plan.Actions, ActionFolderCreate)
@@ -1935,7 +1935,7 @@ func TestPlan_FullScenario(t *testing.T) {
 		},
 	)
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	// EF2 + EF14 = 2 downloads.
@@ -2139,7 +2139,7 @@ func TestDetectMoves_RemoteMoveOldPathReused(t *testing.T) {
 		RemoteHash: "hashOriginal",
 	})
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	allMoves := moves(plan)
@@ -2205,7 +2205,7 @@ func TestDetectMoves_RemoteMoveOldPathReusedFolder(t *testing.T) {
 		ItemType: ItemTypeFolder,
 	})
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	allMoves := moves(plan)
@@ -2260,7 +2260,7 @@ func TestOrderPlan_DeletesFilesBeforeFoldersAtSameDepth(t *testing.T) {
 		},
 	)
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
 	localDeletes := ActionsOfType(plan.Actions, ActionLocalDelete)
@@ -2291,10 +2291,10 @@ func TestPlan_DeterministicOrder(t *testing.T) {
 		{Path: "b/gamma.txt", LocalEvents: []ChangeEvent{{Source: SourceLocal, Type: ChangeCreate, Path: "b/gamma.txt", ItemType: ItemTypeFile, Hash: "h3"}}},
 	}
 
-	plan1, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan1, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "first Plan()")
 
-	plan2, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan2, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "second Plan()")
 
 	require.Len(t, plan2.Actions, len(plan1.Actions), "action count mismatch")
@@ -2302,5 +2302,185 @@ func TestPlan_DeterministicOrder(t *testing.T) {
 	for i := range plan1.Actions {
 		assert.Equal(t, plan1.Actions[i].Path, plan2.Actions[i].Path, "action[%d] path", i)
 		assert.Equal(t, plan1.Actions[i].Type, plan2.Actions[i].Type, "action[%d] type", i)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Denied Prefix Tests (planner-integrated permission suppression)
+// ---------------------------------------------------------------------------
+
+func TestPlan_DeniedPrefix_SuppressesUploads(t *testing.T) {
+	t.Parallel()
+
+	planner := NewPlanner(testLogger(t))
+
+	baseline := baselineWith(&BaselineEntry{
+		Path: "Shared/ReadOnly/file.txt", ItemType: ItemTypeFile,
+		LocalHash: "aaa", RemoteHash: "aaa",
+	})
+
+	// Local changed, remote unchanged → would normally be ActionUpload.
+	changes := []PathChanges{{
+		Path:         "Shared/ReadOnly/file.txt",
+		LocalEvents:  []ChangeEvent{{Type: ChangeModify, Path: "Shared/ReadOnly/file.txt", ItemType: ItemTypeFile, Hash: "bbb"}},
+		RemoteEvents: nil,
+	}}
+
+	denied := []string{"Shared/ReadOnly"}
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), denied)
+	require.NoError(t, err)
+
+	// Upload suppressed under denied prefix.
+	uploads := ActionsOfType(plan.Actions, ActionUpload)
+	assert.Empty(t, uploads, "uploads should be suppressed under denied prefix")
+}
+
+func TestPlan_DeniedPrefix_AllowsDownloads(t *testing.T) {
+	t.Parallel()
+
+	planner := NewPlanner(testLogger(t))
+
+	baseline := baselineWith(&BaselineEntry{
+		Path: "Shared/ReadOnly/file.txt", ItemType: ItemTypeFile,
+		LocalHash: "aaa", RemoteHash: "aaa",
+	})
+
+	// Remote changed, local unchanged → ActionDownload (should proceed).
+	changes := []PathChanges{{
+		Path:        "Shared/ReadOnly/file.txt",
+		LocalEvents: nil,
+		RemoteEvents: []ChangeEvent{{
+			Type: ChangeModify, Path: "Shared/ReadOnly/file.txt",
+			ItemType: ItemTypeFile, Hash: "bbb",
+		}},
+	}}
+
+	denied := []string{"Shared/ReadOnly"}
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), denied)
+	require.NoError(t, err)
+
+	downloads := ActionsOfType(plan.Actions, ActionDownload)
+	assert.Len(t, downloads, 1, "downloads should proceed under denied prefix")
+}
+
+func TestPlan_DeniedPrefix_OutsideDenied_Normal(t *testing.T) {
+	t.Parallel()
+
+	planner := NewPlanner(testLogger(t))
+
+	baseline := baselineWith(&BaselineEntry{
+		Path: "Writable/file.txt", ItemType: ItemTypeFile,
+		LocalHash: "aaa", RemoteHash: "aaa",
+	})
+
+	// Local changed outside denied prefix → normal ActionUpload.
+	changes := []PathChanges{{
+		Path:         "Writable/file.txt",
+		LocalEvents:  []ChangeEvent{{Type: ChangeModify, Path: "Writable/file.txt", ItemType: ItemTypeFile, Hash: "bbb"}},
+		RemoteEvents: nil,
+	}}
+
+	denied := []string{"Shared/ReadOnly"}
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), denied)
+	require.NoError(t, err)
+
+	uploads := ActionsOfType(plan.Actions, ActionUpload)
+	assert.Len(t, uploads, 1, "uploads outside denied prefix should proceed normally")
+}
+
+func TestPlan_DeniedPrefix_RemoteDelete_LocalDelete(t *testing.T) {
+	t.Parallel()
+
+	planner := NewPlanner(testLogger(t))
+
+	baseline := baselineWith(&BaselineEntry{
+		Path: "Shared/ReadOnly/file.txt", ItemType: ItemTypeFile,
+		LocalHash: "aaa", RemoteHash: "aaa",
+	})
+
+	// Remote deleted under denied prefix → should produce ActionLocalDelete.
+	changes := []PathChanges{{
+		Path:        "Shared/ReadOnly/file.txt",
+		LocalEvents: nil,
+		RemoteEvents: []ChangeEvent{{
+			Type: ChangeDelete, Path: "Shared/ReadOnly/file.txt",
+			ItemType: ItemTypeFile, IsDeleted: true,
+		}},
+	}}
+
+	denied := []string{"Shared/ReadOnly"}
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), denied)
+	require.NoError(t, err)
+
+	localDeletes := ActionsOfType(plan.Actions, ActionLocalDelete)
+	assert.Len(t, localDeletes, 1, "remote delete under denied prefix → local delete")
+
+	// Should NOT produce remote delete (we can't write to remote).
+	remoteDeletes := ActionsOfType(plan.Actions, ActionRemoteDelete)
+	assert.Empty(t, remoteDeletes, "should not produce remote deletes under denied prefix")
+}
+
+func TestPlan_DeniedPrefix_LocalMove_Suppressed(t *testing.T) {
+	t.Parallel()
+
+	planner := NewPlanner(testLogger(t))
+
+	// Baseline has a file at old path.
+	baseline := baselineWith(&BaselineEntry{
+		Path: "Shared/ReadOnly/old.txt", ItemType: ItemTypeFile,
+		LocalHash: "abc123", RemoteHash: "abc123",
+		DriveID: driveid.New(testDriveID), ItemID: "item-1",
+	})
+
+	// Local delete at old path + local create at new path with same hash = local move.
+	changes := []PathChanges{
+		{
+			Path: "Shared/ReadOnly/old.txt",
+			// No local events (file gone locally = local delete).
+		},
+		{
+			Path: "Shared/ReadOnly/new.txt",
+			LocalEvents: []ChangeEvent{{
+				Type:     ChangeCreate,
+				Path:     "Shared/ReadOnly/new.txt",
+				ItemType: ItemTypeFile,
+				Hash:     "abc123",
+			}},
+		},
+	}
+
+	denied := []string{"Shared/ReadOnly"}
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), denied)
+	require.NoError(t, err)
+
+	// Should NOT produce a remote move — can't write to remote under denied prefix.
+	remoteMoves := ActionsOfType(plan.Actions, ActionRemoteMove)
+	assert.Empty(t, remoteMoves, "local move under denied prefix should not produce remote move")
+}
+
+func TestIsWriteDenied(t *testing.T) {
+	t.Parallel()
+
+	denied := []string{"Shared/ReadOnly", "Shared/Other/Private"}
+
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{"exact denied folder", "Shared/ReadOnly", true},
+		{"child of denied", "Shared/ReadOnly/sub/file.txt", true},
+		{"different folder", "Shared/Writable/file.txt", false},
+		{"partial prefix", "Shared/ReadOnlyExtra/file.txt", false},
+		{"exact subfolder denied", "Shared/Other/Private", true},
+		{"child of subfolder denied", "Shared/Other/Private/deep/file.txt", true},
+		{"sibling of denied subfolder", "Shared/Other/Public/file.txt", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, isWriteDenied(tt.path, denied))
+		})
 	}
 }

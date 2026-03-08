@@ -820,7 +820,7 @@ func TestBuffer_WatchAndSafetyScanConflictingTypes(t *testing.T) {
 	// event (ChangeModify), which gives a non-nil LocalState.
 	planner := NewPlanner(testLogger(t))
 
-	plan, err := planner.Plan(result, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(result, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 	require.Len(t, plan.Actions, 1, "single upload for local-only file")
 	assert.Equal(t, ActionUpload, plan.Actions[0].Type)
