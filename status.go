@@ -74,7 +74,7 @@ type syncStateInfo struct {
 	FileCount        int    `json:"file_count"`
 	Conflicts        int    `json:"unresolved_conflicts"`
 	PendingSync      int    `json:"pending_sync"`
-	UploadIssues     int    `json:"upload_issues"`
+	SyncFailures     int    `json:"sync_failures"`
 	LastError        string `json:"last_error,omitempty"`
 }
 
@@ -87,7 +87,7 @@ type statusSummary struct {
 	NoToken           int `json:"no_token"`
 	TotalConflicts    int `json:"total_conflicts"`
 	TotalPendingSync  int `json:"total_pending_sync"`
-	TotalUploadIssues int `json:"total_upload_issues"`
+	TotalSyncFailures int `json:"total_upload_issues"`
 }
 
 // statusOutput wraps the full status response for JSON output.
@@ -406,7 +406,7 @@ func querySyncState(statePath string, logger *slog.Logger) *syncStateInfo {
 
 	// Count active sync failures.
 	issuesSQL := "SELECT COUNT(*) FROM sync_failures WHERE category = 'transient'"
-	if scanErr := db.QueryRowContext(ctx, issuesSQL).Scan(&info.UploadIssues); scanErr != nil {
+	if scanErr := db.QueryRowContext(ctx, issuesSQL).Scan(&info.SyncFailures); scanErr != nil {
 		logger.Debug("could not count sync failures", slog.String("error", scanErr.Error()))
 	}
 
@@ -435,7 +435,7 @@ func computeSummary(accounts []statusAccount) statusSummary {
 			if d.SyncState != nil {
 				s.TotalConflicts += d.SyncState.Conflicts
 				s.TotalPendingSync += d.SyncState.PendingSync
-				s.TotalUploadIssues += d.SyncState.UploadIssues
+				s.TotalSyncFailures += d.SyncState.SyncFailures
 			}
 		}
 	}
@@ -517,8 +517,8 @@ func printSyncStateText(w io.Writer, ss *syncStateInfo) {
 		fmt.Fprintf(w, "    Pending:   %d items\n", ss.PendingSync)
 	}
 
-	if ss.UploadIssues > 0 {
-		fmt.Fprintf(w, "    Issues:    %d upload issues (run 'onedrive-go issues' for details)\n", ss.UploadIssues)
+	if ss.SyncFailures > 0 {
+		fmt.Fprintf(w, "    Failures:  %d sync failures (run 'onedrive-go issues' for details)\n", ss.SyncFailures)
 	}
 
 	if ss.LastError != "" {
@@ -553,8 +553,8 @@ func printSummaryText(w io.Writer, s statusSummary) {
 		extra += fmt.Sprintf(", %d pending", s.TotalPendingSync)
 	}
 
-	if s.TotalUploadIssues > 0 {
-		extra += fmt.Sprintf(", %d upload issues", s.TotalUploadIssues)
+	if s.TotalSyncFailures > 0 {
+		extra += fmt.Sprintf(", %d sync failures", s.TotalSyncFailures)
 	}
 
 	fmt.Fprintf(w, "Summary: %d drives (%s), %s\n",
