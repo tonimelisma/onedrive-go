@@ -391,16 +391,27 @@ func TestRecordFailure_TransitionsDownloading(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	err = mgr.RecordFailure(ctx, "hello.txt", "connection reset", 500)
+	err = mgr.RecordFailure(ctx, "hello.txt", driveid.New(testDriveID), "download", "connection reset", 500)
 	require.NoError(t, err)
 
 	row := readRemoteStateRow(t, mgr.rawDB(), "item1")
 	require.NotNil(t, row)
 	assert.Equal(t, statusDownloadFailed, row.SyncStatus)
-	assert.Equal(t, 1, row.FailureCount)
-	assert.Equal(t, "connection reset", row.LastError)
-	assert.Equal(t, 500, row.HTTPStatus)
-	assert.Greater(t, row.NextRetryAt, int64(0), "should have next_retry_at set")
+
+	// Failure metadata is now in sync_failures, not remote_state.
+	var sfCount int
+	var sfError string
+	var sfHTTP int
+	var sfRetry int64
+	err = mgr.rawDB().QueryRowContext(ctx,
+		"SELECT failure_count, last_error, http_status, next_retry_at FROM sync_failures WHERE path = ?",
+		"hello.txt",
+	).Scan(&sfCount, &sfError, &sfHTTP, &sfRetry)
+	require.NoError(t, err)
+	assert.Equal(t, 1, sfCount)
+	assert.Equal(t, "connection reset", sfError)
+	assert.Equal(t, 500, sfHTTP)
+	assert.Greater(t, sfRetry, int64(0), "should have next_retry_at set")
 }
 
 func TestRecordFailure_OptimisticConcurrency_NoMatch(t *testing.T) {
@@ -419,7 +430,7 @@ func TestRecordFailure_OptimisticConcurrency_NoMatch(t *testing.T) {
 	require.NoError(t, err)
 
 	// RecordFailure should be a no-op (row not in downloading/deleting).
-	err = mgr.RecordFailure(ctx, "hello.txt", "some error", 500)
+	err = mgr.RecordFailure(ctx, "hello.txt", driveid.New(testDriveID), "download", "some error", 500)
 	require.NoError(t, err)
 
 	// Status should remain synced.
@@ -448,12 +459,16 @@ func TestRecordFailure_IncreasesFailureCount(t *testing.T) {
 	require.NoError(t, err)
 
 	// First failure.
-	err = mgr.RecordFailure(ctx, "hello.txt", "err1", 500)
+	err = mgr.RecordFailure(ctx, "hello.txt", driveid.New(testDriveID), "download", "err1", 500)
 	require.NoError(t, err)
 
-	row := readRemoteStateRow(t, mgr.rawDB(), "item1")
-	require.NotNil(t, row)
-	assert.Equal(t, 1, row.FailureCount)
+	// Failure count is now in sync_failures.
+	var sfCount int
+	err = mgr.rawDB().QueryRowContext(ctx,
+		"SELECT failure_count FROM sync_failures WHERE path = ?", "hello.txt",
+	).Scan(&sfCount)
+	require.NoError(t, err)
+	assert.Equal(t, 1, sfCount)
 
 	// Set status back to downloading for second failure.
 	_, err = mgr.rawDB().ExecContext(ctx,
@@ -461,12 +476,14 @@ func TestRecordFailure_IncreasesFailureCount(t *testing.T) {
 	require.NoError(t, err)
 
 	// Second failure.
-	err = mgr.RecordFailure(ctx, "hello.txt", "err2", 503)
+	err = mgr.RecordFailure(ctx, "hello.txt", driveid.New(testDriveID), "download", "err2", 503)
 	require.NoError(t, err)
 
-	row = readRemoteStateRow(t, mgr.rawDB(), "item1")
-	require.NotNil(t, row)
-	assert.Equal(t, 2, row.FailureCount)
+	err = mgr.rawDB().QueryRowContext(ctx,
+		"SELECT failure_count FROM sync_failures WHERE path = ?", "hello.txt",
+	).Scan(&sfCount)
+	require.NoError(t, err)
+	assert.Equal(t, 2, sfCount)
 }
 
 func TestRecordFailure_DeleteTransitionsDeleting(t *testing.T) {
@@ -484,14 +501,22 @@ func TestRecordFailure_DeleteTransitionsDeleting(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	err = mgr.RecordFailure(ctx, "hello.txt", "permission denied", 403)
+	err = mgr.RecordFailure(ctx, "hello.txt", driveid.New(testDriveID), "download", "permission denied", 403)
 	require.NoError(t, err)
 
 	row := readRemoteStateRow(t, mgr.rawDB(), "item1")
 	require.NotNil(t, row)
 	assert.Equal(t, statusDeleteFailed, row.SyncStatus)
-	assert.Equal(t, 1, row.FailureCount)
-	assert.Equal(t, 403, row.HTTPStatus)
+
+	// Failure metadata is now in sync_failures.
+	var sfCount int
+	var sfHTTP int
+	err = mgr.rawDB().QueryRowContext(ctx,
+		"SELECT failure_count, http_status FROM sync_failures WHERE path = ?", "hello.txt",
+	).Scan(&sfCount, &sfHTTP)
+	require.NoError(t, err)
+	assert.Equal(t, 1, sfCount)
+	assert.Equal(t, 403, sfHTTP)
 }
 
 func TestRecordFailure_BackoffCalculation(t *testing.T) {
@@ -703,34 +728,48 @@ func TestListFailedForRetry(t *testing.T) {
 	mgr := newTestManager(t)
 	ctx := context.Background()
 
-	now := time.Unix(5000, 0)
-
-	// Insert: one ready for retry, one not yet.
+	// Insert rows with various statuses.
 	_, err := mgr.rawDB().ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at, next_retry_at)
-		VALUES (?, ?, ?, 'file', ?, ?, ?)`,
-		testDriveID, "ready", "ready.txt", statusDownloadFailed, 999, now.Add(-time.Minute).UnixNano(),
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		VALUES (?, ?, ?, 'file', ?, ?)`,
+		testDriveID, "pending", "pending.txt", statusPendingDownload, 999,
 	)
 	require.NoError(t, err)
 
-	_, err = mgr.rawDB().ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at, next_retry_at)
-		VALUES (?, ?, ?, 'file', ?, ?, ?)`,
-		testDriveID, "not-ready", "not-ready.txt", statusDownloadFailed, 999, now.Add(time.Hour).UnixNano(),
-	)
-	require.NoError(t, err)
-
-	// One with NULL next_retry_at (new pending item).
 	_, err = mgr.rawDB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		VALUES (?, ?, ?, 'file', ?, ?)`,
-		testDriveID, "null-retry", "null-retry.txt", statusPendingDownload, 999,
+		testDriveID, "failed", "failed.txt", statusDownloadFailed, 999,
 	)
 	require.NoError(t, err)
 
-	rows, err := mgr.ListFailedForRetry(ctx, now)
+	_, err = mgr.rawDB().ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		VALUES (?, ?, ?, 'file', ?, ?)`,
+		testDriveID, "synced", "synced.txt", statusSynced, 999,
+	)
 	require.NoError(t, err)
-	assert.Len(t, rows, 2, "should include ready + null-retry")
+
+	_, err = mgr.rawDB().ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		VALUES (?, ?, ?, 'file', ?, ?)`,
+		testDriveID, "del-failed", "del-failed.txt", statusDeleteFailed, 999,
+	)
+	require.NoError(t, err)
+
+	// ListActionableRemoteState returns all rows with pending/failed statuses.
+	rows, err := mgr.ListActionableRemoteState(ctx)
+	require.NoError(t, err)
+	assert.Len(t, rows, 3, "should include pending_download + download_failed + delete_failed")
+
+	ids := make(map[string]bool)
+	for _, r := range rows {
+		ids[r.ItemID] = true
+	}
+	assert.True(t, ids["pending"], "pending_download should be included")
+	assert.True(t, ids["failed"], "download_failed should be included")
+	assert.True(t, ids["del-failed"], "delete_failed should be included")
+	assert.False(t, ids["synced"], "synced should not be included")
 }
 
 func TestFailureCount(t *testing.T) {
@@ -738,28 +777,29 @@ func TestFailureCount(t *testing.T) {
 
 	mgr := newTestManager(t)
 	ctx := context.Background()
+	nowNano := time.Now().UnixNano()
 
-	// Insert some rows.
+	// SyncFailureCount queries sync_failures (category='transient'), not remote_state.
 	for _, s := range []struct {
-		id     string
-		status string
+		path      string
+		category  string
+		direction string
 	}{
-		{"a", statusDownloadFailed},
-		{"b", statusDeleteFailed},
-		{"c", statusSynced},
-		{"d", statusPendingDownload},
+		{"a.txt", "transient", "download"},
+		{"b.txt", "transient", "delete"},
+		{"c.txt", "permanent", "download"}, // permanent should not be counted
 	} {
 		_, err := mgr.rawDB().ExecContext(ctx,
-			`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
-			VALUES (?, ?, ?, 'file', ?, ?)`,
-			testDriveID, s.id, s.id+".txt", s.status, 999,
+			`INSERT INTO sync_failures (path, drive_id, direction, category, failure_count, first_seen_at, last_seen_at)
+			VALUES (?, ?, ?, ?, 1, ?, ?)`,
+			s.path, testDriveID, s.direction, s.category, nowNano, nowNano,
 		)
 		require.NoError(t, err)
 	}
 
-	count, err := mgr.FailureCount(ctx)
+	count, err := mgr.SyncFailureCount(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, 2, count, "should count download_failed + delete_failed")
+	assert.Equal(t, 2, count, "should count transient sync_failures only")
 }
 
 func TestResetFailure(t *testing.T) {
@@ -767,23 +807,39 @@ func TestResetFailure(t *testing.T) {
 
 	mgr := newTestManager(t)
 	ctx := context.Background()
+	nowNano := time.Now().UnixNano()
 
 	_, err := mgr.rawDB().ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at,
-			failure_count, next_retry_at, last_error)
-		VALUES (?, ?, ?, 'file', ?, ?, 5, 9999, 'old error')`,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		VALUES (?, ?, ?, 'file', ?, ?)`,
 		testDriveID, "item1", "hello.txt", statusDownloadFailed, 999,
+	)
+	require.NoError(t, err)
+
+	// Insert a corresponding sync_failures row.
+	_, err = mgr.rawDB().ExecContext(ctx,
+		`INSERT INTO sync_failures (path, drive_id, direction, category, failure_count,
+			next_retry_at, last_error, first_seen_at, last_seen_at)
+		VALUES (?, ?, 'download', 'transient', 5, 9999, 'old error', ?, ?)`,
+		"hello.txt", testDriveID, nowNano, nowNano,
 	)
 	require.NoError(t, err)
 
 	err = mgr.ResetFailure(ctx, "hello.txt")
 	require.NoError(t, err)
 
+	// remote_state should be transitioned to pending_download.
 	row := readRemoteStateRow(t, mgr.rawDB(), "item1")
 	require.NotNil(t, row)
 	assert.Equal(t, statusPendingDownload, row.SyncStatus)
-	assert.Equal(t, 0, row.FailureCount)
-	assert.Equal(t, int64(0), row.NextRetryAt)
+
+	// sync_failures row should be deleted.
+	var sfCount int
+	err = mgr.rawDB().QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM sync_failures WHERE path = ?", "hello.txt",
+	).Scan(&sfCount)
+	require.NoError(t, err)
+	assert.Equal(t, 0, sfCount, "sync_failures row should be removed")
 }
 
 func TestResetAllFailures(t *testing.T) {

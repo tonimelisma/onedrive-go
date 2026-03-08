@@ -26,17 +26,17 @@ func TestRecordLocalIssue_NewEntry(t *testing.T) {
 	mgr, fixedTime := newTestSyncStoreForIssues(t)
 	ctx := context.Background()
 
-	err := mgr.RecordLocalIssue(ctx, "docs/report.xlsx", "upload_failed", "connection reset", 500, 1024, "abc123")
+	err := mgr.RecordSyncFailure(ctx, "docs/report.xlsx", driveid.ID{}, "upload", "upload_failed", "connection reset", 500, 1024, "abc123", "")
 	require.NoError(t, err)
 
-	issues, err := mgr.ListLocalIssues(ctx)
+	issues, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 
 	row := issues[0]
 	assert.Equal(t, "docs/report.xlsx", row.Path)
 	assert.Equal(t, "upload_failed", row.IssueType)
-	assert.Equal(t, "upload_failed", row.SyncStatus)
+	assert.Equal(t, "transient", row.Category)
 	assert.Equal(t, 1, row.FailureCount)
 	assert.Equal(t, "connection reset", row.LastError)
 	assert.Equal(t, 500, row.HTTPStatus)
@@ -50,17 +50,17 @@ func TestRecordLocalIssue_RepeatFailure(t *testing.T) {
 	mgr, fixedTime := newTestSyncStoreForIssues(t)
 	ctx := context.Background()
 
-	err := mgr.RecordLocalIssue(ctx, "file.txt", "upload_failed", "timeout", 0, 0, "")
+	err := mgr.RecordSyncFailure(ctx, "file.txt", driveid.ID{}, "upload", "upload_failed", "timeout", 0, 0, "", "")
 	require.NoError(t, err)
 
 	// Advance time and record again.
 	laterTime := fixedTime.Add(5 * time.Minute)
 	mgr.nowFunc = func() time.Time { return laterTime }
 
-	err = mgr.RecordLocalIssue(ctx, "file.txt", "upload_failed", "connection reset", 503, 0, "")
+	err = mgr.RecordSyncFailure(ctx, "file.txt", driveid.ID{}, "upload", "upload_failed", "connection reset", 503, 0, "", "")
 	require.NoError(t, err)
 
-	issues, err := mgr.ListLocalIssues(ctx)
+	issues, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 
@@ -76,33 +76,33 @@ func TestRecordLocalIssue_PermanentStatus(t *testing.T) {
 	mgr, _ := newTestSyncStoreForIssues(t)
 	ctx := context.Background()
 
-	err := mgr.RecordLocalIssue(ctx, "CON.txt", "invalid_filename", "reserved name", 0, 0, "")
+	err := mgr.RecordSyncFailure(ctx, "CON.txt", driveid.ID{}, "upload", "invalid_filename", "reserved name", 0, 0, "", "")
 	require.NoError(t, err)
 
-	issues, err := mgr.ListLocalIssues(ctx)
+	issues, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
-	assert.Equal(t, "permanently_failed", issues[0].SyncStatus)
+	assert.Equal(t, "permanent", issues[0].Category)
 }
 
 func TestRecordLocalIssue_TransientStatus(t *testing.T) {
 	mgr, _ := newTestSyncStoreForIssues(t)
 	ctx := context.Background()
 
-	err := mgr.RecordLocalIssue(ctx, "big.zip", "upload_failed", "server error", 500, 0, "")
+	err := mgr.RecordSyncFailure(ctx, "big.zip", driveid.ID{}, "upload", "upload_failed", "server error", 500, 0, "", "")
 	require.NoError(t, err)
 
-	issues, err := mgr.ListLocalIssues(ctx)
+	issues, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
-	assert.Equal(t, "upload_failed", issues[0].SyncStatus)
+	assert.Equal(t, "transient", issues[0].Category)
 }
 
 func TestListLocalIssues_Empty(t *testing.T) {
 	mgr, _ := newTestSyncStoreForIssues(t)
 	ctx := context.Background()
 
-	issues, err := mgr.ListLocalIssues(ctx)
+	issues, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, issues)
 }
@@ -114,11 +114,11 @@ func TestListLocalIssues_Multiple(t *testing.T) {
 	// Insert 3 issues with different last_seen_at times.
 	for i, p := range []string{"a.txt", "b.txt", "c.txt"} {
 		mgr.nowFunc = func() time.Time { return fixedTime.Add(time.Duration(i) * time.Minute) }
-		err := mgr.RecordLocalIssue(ctx, p, "upload_failed", "err", 0, 0, "")
+		err := mgr.RecordSyncFailure(ctx, p, driveid.ID{}, "upload", "upload_failed", "err", 0, 0, "", "")
 		require.NoError(t, err)
 	}
 
-	issues, err := mgr.ListLocalIssues(ctx)
+	issues, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 3)
 	// Ordered by last_seen_at DESC.
@@ -131,13 +131,13 @@ func TestClearLocalIssue(t *testing.T) {
 	mgr, _ := newTestSyncStoreForIssues(t)
 	ctx := context.Background()
 
-	err := mgr.RecordLocalIssue(ctx, "file.txt", "upload_failed", "err", 0, 0, "")
+	err := mgr.RecordSyncFailure(ctx, "file.txt", driveid.ID{}, "upload", "upload_failed", "err", 0, 0, "", "")
 	require.NoError(t, err)
 
-	err = mgr.ClearLocalIssue(ctx, "file.txt")
+	err = mgr.ClearSyncFailure(ctx, "file.txt", driveid.ID{})
 	require.NoError(t, err)
 
-	issues, err := mgr.ListLocalIssues(ctx)
+	issues, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, issues)
 }
@@ -148,20 +148,20 @@ func TestClearResolvedLocalIssues(t *testing.T) {
 
 	// Insert 3 issues.
 	for _, p := range []string{"a.txt", "b.txt", "c.txt"} {
-		err := mgr.RecordLocalIssue(ctx, p, "upload_failed", "err", 0, 0, "")
+		err := mgr.RecordSyncFailure(ctx, p, driveid.ID{}, "upload", "upload_failed", "err", 0, 0, "", "")
 		require.NoError(t, err)
 	}
 
-	// Manually set one to resolved.
+	// Manually set one to permanent (ClearResolvedSyncFailures removes permanent rows).
 	_, err := mgr.db.ExecContext(ctx,
-		`UPDATE local_issues SET sync_status = 'resolved' WHERE path = 'b.txt'`)
+		`UPDATE sync_failures SET category = 'permanent' WHERE path = 'b.txt'`)
 	require.NoError(t, err)
 
-	// Clear resolved.
-	err = mgr.ClearResolvedLocalIssues(ctx)
+	// Clear resolved (permanent).
+	err = mgr.ClearResolvedSyncFailures(ctx)
 	require.NoError(t, err)
 
-	issues, err := mgr.ListLocalIssues(ctx)
+	issues, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 2)
 
@@ -175,7 +175,7 @@ func TestCommitOutcome_UploadSuccess_ClearsLocalIssue(t *testing.T) {
 	ctx := context.Background()
 
 	// Record an issue.
-	err := mgr.RecordLocalIssue(ctx, "docs/file.txt", "upload_failed", "timeout", 0, 0, "")
+	err := mgr.RecordSyncFailure(ctx, "docs/file.txt", driveid.ID{}, "upload", "upload_failed", "timeout", 0, 0, "", "")
 	require.NoError(t, err)
 
 	// Commit a successful upload outcome.
@@ -193,7 +193,7 @@ func TestCommitOutcome_UploadSuccess_ClearsLocalIssue(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify issue is gone.
-	issues, err := mgr.ListLocalIssues(ctx)
+	issues, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, issues)
 }
@@ -222,15 +222,15 @@ func TestCommitOutcome_DownloadSuccess_DoesNotClearLocalIssue(t *testing.T) {
 	ctx := context.Background()
 
 	// Record an issue.
-	err := mgr.RecordLocalIssue(ctx, "docs/file.txt", "upload_failed", "timeout", 0, 0, "")
+	err := mgr.RecordSyncFailure(ctx, "docs/file.txt", driveid.ID{}, "upload", "upload_failed", "timeout", 0, 0, "", "")
 	require.NoError(t, err)
 
 	// Insert a remote_state row so the download outcome has something to update.
 	_, err = mgr.db.ExecContext(ctx,
 		`INSERT INTO remote_state
-			(drive_id, item_id, path, item_type, sync_status, observed_at)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		driveid.New(testDriveID).String(), "item-1", "docs/file.txt", "file", statusDownloading, 1)
+			(drive_id, item_id, path, parent_id, item_type, sync_status, observed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		driveid.New(testDriveID).String(), "item-1", "docs/file.txt", "file", "file", statusDownloading, 1)
 	require.NoError(t, err)
 
 	// Commit a successful download outcome.
@@ -248,7 +248,7 @@ func TestCommitOutcome_DownloadSuccess_DoesNotClearLocalIssue(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify issue still exists.
-	issues, err := mgr.ListLocalIssues(ctx)
+	issues, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	assert.Len(t, issues, 1)
 }
@@ -256,21 +256,21 @@ func TestCommitOutcome_DownloadSuccess_DoesNotClearLocalIssue(t *testing.T) {
 func TestLocalIssueSyncStatus(t *testing.T) {
 	tests := []struct {
 		issueType string
-		want      string
+		want      bool // true = permanent
 	}{
-		{IssueInvalidFilename, "permanently_failed"},
-		{IssuePathTooLong, "permanently_failed"},
-		{IssueFileTooLarge, "permanently_failed"},
-		{"upload_failed", "upload_failed"},
-		{"permission_denied", "permission_denied"},
-		{"quota_exceeded", "quota_exceeded"},
-		{"locked", "locked"},
-		{"sharepoint_restriction", "sharepoint_restriction"},
+		{IssueInvalidFilename, true},
+		{IssuePathTooLong, true},
+		{IssueFileTooLarge, true},
+		{"upload_failed", false},
+		{"permission_denied", false},
+		{"quota_exceeded", false},
+		{"locked", false},
+		{"sharepoint_restriction", false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.issueType, func(t *testing.T) {
-			assert.Equal(t, tt.want, localIssueSyncStatus(tt.issueType))
+			assert.Equal(t, tt.want, isPermanentIssue(tt.issueType))
 		})
 	}
 }
@@ -279,10 +279,10 @@ func TestRecordLocalIssue_TransientSetsNextRetryAt(t *testing.T) {
 	mgr, fixedTime := newTestSyncStoreForIssues(t)
 	ctx := context.Background()
 
-	err := mgr.RecordLocalIssue(ctx, "file.txt", "upload_failed", "timeout", 0, 0, "")
+	err := mgr.RecordSyncFailure(ctx, "file.txt", driveid.ID{}, "upload", "upload_failed", "timeout", 0, 0, "", "")
 	require.NoError(t, err)
 
-	issues, err := mgr.ListLocalIssues(ctx)
+	issues, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 
@@ -295,10 +295,10 @@ func TestRecordLocalIssue_PermanentNoRetryAt(t *testing.T) {
 	mgr, _ := newTestSyncStoreForIssues(t)
 	ctx := context.Background()
 
-	err := mgr.RecordLocalIssue(ctx, "CON", "invalid_filename", "reserved name", 0, 0, "")
+	err := mgr.RecordSyncFailure(ctx, "CON", driveid.ID{}, "upload", "invalid_filename", "reserved name", 0, 0, "", "")
 	require.NoError(t, err)
 
-	issues, err := mgr.ListLocalIssues(ctx)
+	issues, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 
@@ -311,10 +311,10 @@ func TestRecordLocalIssue_RepeatBackoffIncreases(t *testing.T) {
 	ctx := context.Background()
 
 	// First failure.
-	err := mgr.RecordLocalIssue(ctx, "file.txt", "upload_failed", "timeout", 0, 0, "")
+	err := mgr.RecordSyncFailure(ctx, "file.txt", driveid.ID{}, "upload", "upload_failed", "timeout", 0, 0, "", "")
 	require.NoError(t, err)
 
-	issues, err := mgr.ListLocalIssues(ctx)
+	issues, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 	firstRetry := issues[0].NextRetryAt
@@ -323,10 +323,10 @@ func TestRecordLocalIssue_RepeatBackoffIncreases(t *testing.T) {
 	laterTime := fixedTime.Add(5 * time.Minute)
 	mgr.nowFunc = func() time.Time { return laterTime }
 
-	err = mgr.RecordLocalIssue(ctx, "file.txt", "upload_failed", "timeout again", 0, 0, "")
+	err = mgr.RecordSyncFailure(ctx, "file.txt", driveid.ID{}, "upload", "upload_failed", "timeout again", 0, 0, "", "")
 	require.NoError(t, err)
 
-	issues, err = mgr.ListLocalIssues(ctx)
+	issues, err = mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 
@@ -340,21 +340,21 @@ func TestListLocalIssuesForRetry(t *testing.T) {
 	ctx := context.Background()
 
 	// Record a transient issue (will have next_retry_at set).
-	err := mgr.RecordLocalIssue(ctx, "retry.txt", "upload_failed", "timeout", 0, 0, "")
+	err := mgr.RecordSyncFailure(ctx, "retry.txt", driveid.ID{}, "upload", "upload_failed", "timeout", 0, 0, "", "")
 	require.NoError(t, err)
 
 	// Record a permanent issue (should not appear in retry list).
-	err = mgr.RecordLocalIssue(ctx, "CON", "invalid_filename", "reserved", 0, 0, "")
+	err = mgr.RecordSyncFailure(ctx, "CON", driveid.ID{}, "upload", "invalid_filename", "reserved", 0, 0, "", "")
 	require.NoError(t, err)
 
 	// Query at a time before next_retry_at — should be empty.
-	rows, err := mgr.ListLocalIssuesForRetry(ctx, fixedTime)
+	rows, err := mgr.ListSyncFailuresForRetry(ctx, fixedTime)
 	require.NoError(t, err)
 	assert.Empty(t, rows, "should not return issues before their retry time")
 
 	// Query at a time after next_retry_at — should return the transient issue.
 	futureTime := fixedTime.Add(10 * time.Minute)
-	rows, err = mgr.ListLocalIssuesForRetry(ctx, futureTime)
+	rows, err = mgr.ListSyncFailuresForRetry(ctx, futureTime)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "retry.txt", rows[0].Path)
@@ -365,16 +365,16 @@ func TestEarliestLocalIssueRetryAt(t *testing.T) {
 	ctx := context.Background()
 
 	// No issues — zero time.
-	earliest, err := mgr.EarliestLocalIssueRetryAt(ctx, fixedTime)
+	earliest, err := mgr.EarliestSyncFailureRetryAt(ctx, fixedTime)
 	require.NoError(t, err)
 	assert.True(t, earliest.IsZero())
 
 	// Record a transient issue.
-	err = mgr.RecordLocalIssue(ctx, "file.txt", "upload_failed", "timeout", 0, 0, "")
+	err = mgr.RecordSyncFailure(ctx, "file.txt", driveid.ID{}, "upload", "upload_failed", "timeout", 0, 0, "", "")
 	require.NoError(t, err)
 
 	// Query from fixedTime — should return the next_retry_at (which is in the future).
-	earliest, err = mgr.EarliestLocalIssueRetryAt(ctx, fixedTime)
+	earliest, err = mgr.EarliestSyncFailureRetryAt(ctx, fixedTime)
 	require.NoError(t, err)
 	assert.False(t, earliest.IsZero(), "should return a future retry time")
 	assert.True(t, earliest.After(fixedTime))
@@ -385,28 +385,28 @@ func TestMarkLocalIssuePermanent(t *testing.T) {
 	ctx := context.Background()
 
 	// Record a transient issue.
-	err := mgr.RecordLocalIssue(ctx, "file.txt", "upload_failed", "timeout", 0, 0, "")
+	err := mgr.RecordSyncFailure(ctx, "file.txt", driveid.ID{}, "upload", "upload_failed", "timeout", 0, 0, "", "")
 	require.NoError(t, err)
 
 	// Verify it's transient.
-	issues, err := mgr.ListLocalIssues(ctx)
+	issues, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
-	assert.Equal(t, "upload_failed", issues[0].SyncStatus)
+	assert.Equal(t, "transient", issues[0].Category)
 
 	// Mark as permanent.
-	err = mgr.MarkLocalIssuePermanent(ctx, "file.txt")
+	err = mgr.MarkSyncFailurePermanent(ctx, "file.txt", driveid.ID{})
 	require.NoError(t, err)
 
-	// Verify status changed.
-	issues, err = mgr.ListLocalIssues(ctx)
+	// Verify category changed.
+	issues, err = mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
-	assert.Equal(t, statusPermanentlyFailed, issues[0].SyncStatus)
+	assert.Equal(t, "permanent", issues[0].Category)
 	assert.Equal(t, int64(0), issues[0].NextRetryAt, "permanent issues should have no retry time")
 
 	// Should not appear in retry list.
-	rows, err := mgr.ListLocalIssuesForRetry(ctx, time.Now().Add(time.Hour))
+	rows, err := mgr.ListSyncFailuresForRetry(ctx, time.Now().Add(time.Hour))
 	require.NoError(t, err)
 	assert.Empty(t, rows)
 }
@@ -416,25 +416,25 @@ func TestListLocalIssuesByType(t *testing.T) {
 	ctx := context.Background()
 
 	// Record issues of different types.
-	require.NoError(t, mgr.RecordLocalIssue(ctx, "a.txt", "upload_failed", "err", 0, 0, ""))
-	require.NoError(t, mgr.RecordLocalIssue(ctx, "b.txt", IssuePermissionDenied, "read-only", 403, 0, ""))
-	require.NoError(t, mgr.RecordLocalIssue(ctx, "c.txt", IssuePermissionDenied, "read-only", 403, 0, ""))
-	require.NoError(t, mgr.RecordLocalIssue(ctx, "d.txt", "upload_failed", "err", 0, 0, ""))
+	require.NoError(t, mgr.RecordSyncFailure(ctx, "a.txt", driveid.ID{}, "upload", "upload_failed", "err", 0, 0, "", ""))
+	require.NoError(t, mgr.RecordSyncFailure(ctx, "b.txt", driveid.ID{}, "upload", IssuePermissionDenied, "read-only", 403, 0, "", ""))
+	require.NoError(t, mgr.RecordSyncFailure(ctx, "c.txt", driveid.ID{}, "upload", IssuePermissionDenied, "read-only", 403, 0, "", ""))
+	require.NoError(t, mgr.RecordSyncFailure(ctx, "d.txt", driveid.ID{}, "upload", "upload_failed", "err", 0, 0, "", ""))
 
 	// Query by permission_denied type.
-	issues, err := mgr.ListLocalIssuesByType(ctx, IssuePermissionDenied)
+	issues, err := mgr.ListSyncFailuresByIssueType(ctx, IssuePermissionDenied)
 	require.NoError(t, err)
 	require.Len(t, issues, 2)
 	assert.Equal(t, IssuePermissionDenied, issues[0].IssueType)
 	assert.Equal(t, IssuePermissionDenied, issues[1].IssueType)
 
 	// Query by upload_failed type.
-	issues, err = mgr.ListLocalIssuesByType(ctx, "upload_failed")
+	issues, err = mgr.ListSyncFailuresByIssueType(ctx, "upload_failed")
 	require.NoError(t, err)
 	require.Len(t, issues, 2)
 
 	// Query by nonexistent type.
-	issues, err = mgr.ListLocalIssuesByType(ctx, "nonexistent")
+	issues, err = mgr.ListSyncFailuresByIssueType(ctx, "nonexistent")
 	require.NoError(t, err)
 	assert.Empty(t, issues)
 }
@@ -444,17 +444,17 @@ func TestClearLocalIssuesByPrefix(t *testing.T) {
 	ctx := context.Background()
 
 	// Record issues at various paths.
-	require.NoError(t, mgr.RecordLocalIssue(ctx, "shared", IssuePermissionDenied, "read-only", 403, 0, ""))
-	require.NoError(t, mgr.RecordLocalIssue(ctx, "shared/file.txt", IssuePermissionDenied, "read-only", 403, 0, ""))
-	require.NoError(t, mgr.RecordLocalIssue(ctx, "shared/sub/file.txt", IssuePermissionDenied, "read-only", 403, 0, ""))
-	require.NoError(t, mgr.RecordLocalIssue(ctx, "other/file.txt", IssuePermissionDenied, "read-only", 403, 0, ""))
+	require.NoError(t, mgr.RecordSyncFailure(ctx, "shared", driveid.ID{}, "upload", IssuePermissionDenied, "read-only", 403, 0, "", ""))
+	require.NoError(t, mgr.RecordSyncFailure(ctx, "shared/file.txt", driveid.ID{}, "upload", IssuePermissionDenied, "read-only", 403, 0, "", ""))
+	require.NoError(t, mgr.RecordSyncFailure(ctx, "shared/sub/file.txt", driveid.ID{}, "upload", IssuePermissionDenied, "read-only", 403, 0, "", ""))
+	require.NoError(t, mgr.RecordSyncFailure(ctx, "other/file.txt", driveid.ID{}, "upload", IssuePermissionDenied, "read-only", 403, 0, "", ""))
 
 	// Clear by prefix "shared".
-	err := mgr.ClearLocalIssuesByPrefix(ctx, "shared", IssuePermissionDenied)
+	err := mgr.ClearSyncFailuresByPrefix(ctx, "shared", IssuePermissionDenied)
 	require.NoError(t, err)
 
 	// Only "other/file.txt" should remain.
-	issues, err := mgr.ListLocalIssues(ctx)
+	issues, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 	assert.Equal(t, "other/file.txt", issues[0].Path)
@@ -465,15 +465,15 @@ func TestClearLocalIssuesByPrefix_TypeFiltering(t *testing.T) {
 	ctx := context.Background()
 
 	// Record a permission_denied and an upload_failed at the same prefix.
-	require.NoError(t, mgr.RecordLocalIssue(ctx, "shared/a.txt", IssuePermissionDenied, "read-only", 403, 0, ""))
-	require.NoError(t, mgr.RecordLocalIssue(ctx, "shared/b.txt", "upload_failed", "err", 500, 0, ""))
+	require.NoError(t, mgr.RecordSyncFailure(ctx, "shared/a.txt", driveid.ID{}, "upload", IssuePermissionDenied, "read-only", 403, 0, "", ""))
+	require.NoError(t, mgr.RecordSyncFailure(ctx, "shared/b.txt", driveid.ID{}, "upload", "upload_failed", "err", 500, 0, "", ""))
 
 	// Clear permission_denied only.
-	err := mgr.ClearLocalIssuesByPrefix(ctx, "shared", IssuePermissionDenied)
+	err := mgr.ClearSyncFailuresByPrefix(ctx, "shared", IssuePermissionDenied)
 	require.NoError(t, err)
 
 	// upload_failed should remain.
-	issues, err := mgr.ListLocalIssues(ctx)
+	issues, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 	assert.Equal(t, "upload_failed", issues[0].IssueType)

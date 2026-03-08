@@ -17,6 +17,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // ErrDeltaExpired indicates the saved delta token has expired and a full
@@ -25,13 +26,10 @@ var ErrDeltaExpired = errors.New("sync: delta token expired (resync required)")
 
 // Constants for the remote observer (satisfy mnd linter).
 const (
-	maxObserverPages      = 10000
-	maxPathDepth          = 256
-	initialWatchBackoff   = 5 * time.Second
-	backoffMultiplier     = 2
-	maxConsecutiveBackoff = 10 // cap prevents overflow; 5s * 2^10 = 5120s > any interval
-	minPollInterval       = 30 * time.Second
-	specialFolderVault    = "vault" // Graph API personal vault folder name
+	maxObserverPages   = 10000
+	maxPathDepth       = 256
+	minPollInterval    = 30 * time.Second
+	specialFolderVault = "vault" // Graph API personal vault folder name
 )
 
 // inflightParent tracks a non-root item seen in the current delta batch,
@@ -162,8 +160,8 @@ func (o *RemoteObserver) Watch(ctx context.Context, savedToken string, events ch
 		slog.Bool("has_token", savedToken != ""),
 	)
 
-	backoff := initialWatchBackoff
-	consecutiveErrors := 0
+	bo := retry.NewBackoff(retry.WatchRemote)
+	bo.SetMaxOverride(interval)
 
 	for {
 		token := o.CurrentDeltaToken()
@@ -174,11 +172,21 @@ func (o *RemoteObserver) Watch(ctx context.Context, savedToken string, events ch
 				return nil
 			}
 
-			sleepDur := backoff
-			backoff, consecutiveErrors = o.advanceBackoff(err, backoff, consecutiveErrors, interval)
+			if errors.Is(err, ErrDeltaExpired) {
+				o.logger.Warn("delta token expired during watch, resetting for full resync")
+				o.setDeltaToken("")
+				bo.Reset()
+			} else {
+				delay := bo.Next()
+				o.logger.Warn("remote watch poll failed, backing off",
+					slog.String("error", err.Error()),
+					slog.Duration("backoff", delay),
+					slog.Int("consecutive_errors", bo.Consecutive()),
+				)
 
-			if sleepErr := o.sleepFunc(ctx, sleepDur); sleepErr != nil {
-				return nil
+				if sleepErr := o.sleepFunc(ctx, delay); sleepErr != nil {
+					return nil
+				}
 			}
 
 			continue
@@ -191,8 +199,7 @@ func (o *RemoteObserver) Watch(ctx context.Context, savedToken string, events ch
 		if len(polledEvents) == 0 {
 			o.logger.Debug("watch: delta returned 0 events, skipping token advancement")
 
-			backoff = initialWatchBackoff
-			consecutiveErrors = 0
+			bo.Reset()
 
 			if sleepErr := o.sleepFunc(ctx, interval); sleepErr != nil {
 				return nil
@@ -230,45 +237,13 @@ func (o *RemoteObserver) Watch(ctx context.Context, savedToken string, events ch
 		}
 
 		o.setDeltaToken(newToken)
-
-		backoff = initialWatchBackoff
-		consecutiveErrors = 0
+		bo.Reset()
 
 		// Wait for the next poll interval.
 		if sleepErr := o.sleepFunc(ctx, interval); sleepErr != nil {
 			return nil
 		}
 	}
-}
-
-// advanceBackoff processes a poll error, advancing the backoff for the next
-// retry. The caller sleeps with the CURRENT backoff before calling this.
-// Returns the updated backoff duration and consecutive error count.
-func (o *RemoteObserver) advanceBackoff(
-	err error, backoff time.Duration, consecutiveErrors int, interval time.Duration,
-) (time.Duration, int) {
-	if errors.Is(err, ErrDeltaExpired) {
-		o.logger.Warn("delta token expired during watch, resetting for full resync")
-		o.setDeltaToken("")
-
-		return initialWatchBackoff, 0
-	}
-
-	consecutiveErrors++
-
-	o.logger.Warn("remote watch poll failed, backing off",
-		slog.String("error", err.Error()),
-		slog.Duration("backoff", backoff),
-		slog.Int("consecutive_errors", consecutiveErrors),
-	)
-
-	nextBackoff := min(backoff*backoffMultiplier, interval)
-
-	if consecutiveErrors > maxConsecutiveBackoff {
-		nextBackoff = interval
-	}
-
-	return nextBackoff, consecutiveErrors
 }
 
 // CurrentDeltaToken returns the latest delta token observed by Watch().

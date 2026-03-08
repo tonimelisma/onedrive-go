@@ -162,9 +162,9 @@ func (e *Engine) handle403(ctx context.Context, bl *Baseline, failedPath string,
 	boundary := e.walkPermissionBoundary(ctx, bl, parentFolder, sc, remoteDriveID)
 
 	// Record ONE issue for the boundary folder.
-	if issueErr := e.baseline.RecordLocalIssue(
-		ctx, boundary, IssuePermissionDenied,
-		"folder is read-only (no write access)", http.StatusForbidden, 0, "",
+	if issueErr := e.baseline.RecordSyncFailure(
+		ctx, boundary, e.driveID, "upload", IssuePermissionDenied,
+		"folder is read-only (no write access)", http.StatusForbidden, 0, "", "",
 	); issueErr != nil {
 		e.logger.Warn("handle403: failed to record permission issue",
 			slog.String("path", boundary),
@@ -192,9 +192,9 @@ func (e *Engine) handlePermissionCheckError(ctx context.Context, err error, fail
 			slog.String("path", parentFolder),
 		)
 
-		if issueErr := e.baseline.RecordLocalIssue(
-			ctx, parentFolder, IssuePermissionDenied,
-			"folder not found on remote (deleted or inaccessible)", http.StatusNotFound, 0, "",
+		if issueErr := e.baseline.RecordSyncFailure(
+			ctx, parentFolder, e.driveID, "upload", IssuePermissionDenied,
+			"folder not found on remote (deleted or inaccessible)", http.StatusNotFound, 0, "", "",
 		); issueErr != nil {
 			e.logger.Warn("handle403: failed to record issue for missing folder",
 				slog.String("path", parentFolder),
@@ -248,7 +248,7 @@ func (e *Engine) walkPermissionBoundary(
 	return boundary
 }
 
-// recheckPermissions re-queries all permission_denied local_issues at the
+// recheckPermissions re-queries all permission_denied sync_failures at the
 // start of each sync pass. If a folder is now writable, the issue is cleared
 // and writes resume. Runs every pass (typically 5 min in watch mode).
 func (e *Engine) recheckPermissions(ctx context.Context, bl *Baseline, shortcuts []Shortcut) {
@@ -260,7 +260,7 @@ func (e *Engine) recheckPermissions(ctx context.Context, bl *Baseline, shortcuts
 	// stale entries from persisting when permissions change.
 	e.permCache.reset()
 
-	issues, err := e.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
+	issues, err := e.baseline.ListSyncFailuresByIssueType(ctx, IssuePermissionDenied)
 	if err != nil || len(issues) == 0 {
 		return
 	}
@@ -295,8 +295,8 @@ func (e *Engine) recheckPermissions(ctx context.Context, bl *Baseline, shortcuts
 		e.permCache.set(issue.Path, canWrite)
 
 		if canWrite {
-			if clearErr := e.baseline.ClearLocalIssue(ctx, issue.Path); clearErr != nil {
-				e.logger.Warn("recheckPermissions: failed to clear issue",
+			if clearErr := e.baseline.ClearSyncFailure(ctx, issue.Path, issue.DriveID); clearErr != nil {
+				e.logger.Warn("recheckPermissions: failed to clear failure",
 					slog.String("path", issue.Path),
 					slog.String("error", clearErr.Error()),
 				)

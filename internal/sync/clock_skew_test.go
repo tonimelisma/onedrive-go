@@ -71,15 +71,15 @@ func TestClockSkew_BackwardJump_LocalIssueTimestamp(t *testing.T) {
 	// Record at t=5000.
 	mgr.nowFunc = func() time.Time { return time.Unix(5000, 0) }
 
-	require.NoError(t, mgr.RecordLocalIssue(ctx, "file1.txt", "upload_failed", "err", 500, 0, ""))
+	require.NoError(t, mgr.RecordSyncFailure(ctx, "file1.txt", driveid.ID{}, "upload", "upload_failed", "err", 500, 0, "", ""))
 
 	// Jump backward to t=1000.
 	mgr.nowFunc = func() time.Time { return time.Unix(1000, 0) }
 
 	// Should still succeed.
-	require.NoError(t, mgr.RecordLocalIssue(ctx, "file2.txt", "upload_failed", "err", 500, 0, ""))
+	require.NoError(t, mgr.RecordSyncFailure(ctx, "file2.txt", driveid.ID{}, "upload", "upload_failed", "err", 500, 0, "", ""))
 
-	issues, err := mgr.ListLocalIssuesByType(ctx, "upload_failed")
+	issues, err := mgr.ListSyncFailuresByIssueType(ctx, "upload_failed")
 	require.NoError(t, err)
 	assert.Len(t, issues, 2, "both issues recorded despite clock jump")
 }

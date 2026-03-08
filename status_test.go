@@ -461,11 +461,11 @@ func TestQuerySyncState_PendingSyncAndIssues(t *testing.T) {
 		('/e.txt', 'd!1', 'i5', 'root', 'file', 'filtered', 0)`)
 	require.NoError(t, err)
 
-	// Insert local_issues rows.
-	_, err = db.ExecContext(ctx, `INSERT INTO local_issues (path, issue_type, sync_status, failure_count, first_seen_at, last_seen_at) VALUES
-		('/x.txt', 'invalid_filename', 'permanently_failed', 1, 0, 0),
-		('/y.txt', 'upload_failed', 'upload_failed', 2, 0, 0),
-		('/z.txt', 'upload_failed', 'resolved', 1, 0, 0)`)
+	// Insert sync_failures rows.
+	_, err = db.ExecContext(ctx, `INSERT INTO sync_failures (path, drive_id, direction, category, failure_count, first_seen_at, last_seen_at) VALUES
+		('/x.txt', 'd!1', 'upload', 'transient', 1, 0, 0),
+		('/y.txt', 'd!1', 'upload', 'transient', 2, 0, 0),
+		('/z.txt', 'd!1', 'upload', 'permanent', 1, 0, 0)`)
 	require.NoError(t, err)
 
 	db.Close()
@@ -473,7 +473,7 @@ func TestQuerySyncState_PendingSyncAndIssues(t *testing.T) {
 	info := querySyncState(dbPath, logger)
 	require.NotNil(t, info)
 	assert.Equal(t, 2, info.PendingSync)  // pending_download + download_failed
-	assert.Equal(t, 2, info.UploadIssues) // permanently_failed + upload_failed (not resolved)
+	assert.Equal(t, 2, info.UploadIssues) // 2 transient failures (not permanent)
 }
 
 func TestComputeSummary_Mixed(t *testing.T) {
@@ -829,6 +829,23 @@ func createTestStateDB(t *testing.T, dbPath string) {
 			last_seen_at INTEGER NOT NULL,
 			file_size INTEGER,
 			local_hash TEXT
+		);
+		CREATE TABLE IF NOT EXISTS sync_failures (
+			path TEXT NOT NULL,
+			drive_id TEXT NOT NULL,
+			direction TEXT NOT NULL CHECK(direction IN ('download', 'upload', 'delete')),
+			category TEXT NOT NULL CHECK(category IN ('transient', 'permanent')),
+			issue_type TEXT,
+			item_id TEXT,
+			failure_count INTEGER NOT NULL DEFAULT 0,
+			next_retry_at INTEGER,
+			last_error TEXT,
+			http_status INTEGER,
+			first_seen_at INTEGER NOT NULL,
+			last_seen_at INTEGER NOT NULL,
+			file_size INTEGER,
+			local_hash TEXT,
+			PRIMARY KEY (path, drive_id)
 		);
 	`)
 	require.NoError(t, err)

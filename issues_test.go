@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
@@ -28,10 +29,13 @@ func TestNewIssuesCmd_Structure(t *testing.T) {
 func TestToIssueJSON(t *testing.T) {
 	t.Parallel()
 
-	row := &sync.LocalIssueRow{
+	row := &sync.SyncFailureRow{
 		Path:         "docs/CON",
+		DriveID:      driveid.New("test-drive-id"),
+		Direction:    "upload",
+		Category:     "permanent",
 		IssueType:    "invalid_filename",
-		SyncStatus:   "permanently_failed",
+		ItemID:       "item-123",
 		FailureCount: 1,
 		LastError:    "file name is not valid for OneDrive: CON",
 		HTTPStatus:   0,
@@ -42,8 +46,9 @@ func TestToIssueJSON(t *testing.T) {
 
 	j := toIssueJSON(row)
 	assert.Equal(t, "docs/CON", j.Path)
+	assert.Equal(t, "upload", j.Direction)
+	assert.Equal(t, "permanent", j.Category)
 	assert.Equal(t, "invalid_filename", j.IssueType)
-	assert.Equal(t, "permanently_failed", j.SyncStatus)
 	assert.Equal(t, 1, j.FailureCount)
 	assert.Equal(t, "file name is not valid for OneDrive: CON", j.LastError)
 	assert.Equal(t, int64(1024), j.FileSize)
@@ -66,11 +71,13 @@ func TestPrintIssuesJSON_EmptyList(t *testing.T) {
 func TestPrintIssuesJSON_WithIssues(t *testing.T) {
 	t.Parallel()
 
-	issues := []sync.LocalIssueRow{
+	issues := []sync.SyncFailureRow{
 		{
 			Path:         "docs/CON",
+			DriveID:      driveid.New("drive-1"),
+			Direction:    "upload",
+			Category:     "permanent",
 			IssueType:    "invalid_filename",
-			SyncStatus:   "permanently_failed",
 			FailureCount: 1,
 			LastError:    "reserved name",
 			FirstSeenAt:  1700000000000000000,
@@ -78,8 +85,10 @@ func TestPrintIssuesJSON_WithIssues(t *testing.T) {
 		},
 		{
 			Path:         "data/huge.bin",
+			DriveID:      driveid.New("drive-1"),
+			Direction:    "upload",
+			Category:     "permanent",
 			IssueType:    "file_too_large",
-			SyncStatus:   "permanently_failed",
 			FailureCount: 1,
 			LastError:    "exceeds 250 GB",
 			FileSize:     300 * 1024 * 1024 * 1024,
@@ -104,11 +113,13 @@ func TestPrintIssuesJSON_WithIssues(t *testing.T) {
 func TestPrintIssuesTable(t *testing.T) {
 	t.Parallel()
 
-	issues := []sync.LocalIssueRow{
+	issues := []sync.SyncFailureRow{
 		{
 			Path:         "docs/CON",
+			DriveID:      driveid.New("drive-1"),
+			Direction:    "upload",
+			Category:     "permanent",
 			IssueType:    "invalid_filename",
-			SyncStatus:   "permanently_failed",
 			FailureCount: 1,
 			LastError:    "reserved name",
 			LastSeenAt:   1700000000000000000,
@@ -120,22 +131,24 @@ func TestPrintIssuesTable(t *testing.T) {
 
 	output := buf.String()
 	assert.Contains(t, output, "PATH")
-	assert.Contains(t, output, "TYPE")
-	assert.Contains(t, output, "STATUS")
+	assert.Contains(t, output, "DIRECTION")
+	assert.Contains(t, output, "CATEGORY")
 	assert.Contains(t, output, "docs/CON")
-	assert.Contains(t, output, "invalid_filename")
-	assert.Contains(t, output, "permanently_failed")
+	assert.Contains(t, output, "upload")
+	assert.Contains(t, output, "permanent")
 }
 
 func TestPrintIssuesTable_TruncatesLongErrors(t *testing.T) {
 	t.Parallel()
 
 	longErr := "this is a very long error message that should be truncated to sixty characters total for table display purposes"
-	issues := []sync.LocalIssueRow{
+	issues := []sync.SyncFailureRow{
 		{
 			Path:         "file.txt",
+			DriveID:      driveid.New("drive-1"),
+			Direction:    "upload",
+			Category:     "transient",
 			IssueType:    "upload_failed",
-			SyncStatus:   "upload_failed",
 			FailureCount: 3,
 			LastError:    longErr,
 			LastSeenAt:   1700000000000000000,

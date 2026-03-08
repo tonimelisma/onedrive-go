@@ -2355,7 +2355,7 @@ func TestRunOnce_InvalidUpload_RecordsIssue(t *testing.T) {
 	assert.Equal(t, 0, report.Uploads, "invalid upload should not be executed")
 
 	// The local_issues table should have an entry.
-	issues, issErr := eng.baseline.ListLocalIssues(ctx)
+	issues, issErr := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, issErr)
 	require.NotEmpty(t, issues, "local_issues should have an entry for the invalid upload")
 
@@ -2393,7 +2393,7 @@ func TestDrainWorkerResults_MultipleResults(t *testing.T) {
 	eng.drainWorkerResults(ctx, results, nil)
 
 	// Both upload failures should produce local_issues.
-	issues, err := eng.baseline.ListLocalIssues(ctx)
+	issues, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	assert.Len(t, issues, 2, "drain loop should process all results")
 }
@@ -2417,12 +2417,12 @@ func TestProcessWorkerResult_UploadFailure_RecordsLocalIssue(t *testing.T) {
 		HTTPStatus: 503,
 	}, nil, nil)
 
-	// Should record upload failure in local_issues.
-	issues, err := eng.baseline.ListLocalIssues(ctx)
+	// Should record upload failure in sync_failures.
+	issues, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 	assert.Equal(t, "docs/report.xlsx", issues[0].Path)
-	assert.Equal(t, "upload_failed", issues[0].IssueType)
+	assert.Equal(t, "upload", issues[0].Direction)
 	assert.Equal(t, "connection reset", issues[0].LastError)
 	assert.Equal(t, 503, issues[0].HTTPStatus)
 }
@@ -2462,12 +2462,12 @@ func TestProcessWorkerResult_403ReadOnly_SkipsRemoteState(t *testing.T) {
 	}, bl, shortcuts)
 
 	// Permission-denied should be recorded in local_issues.
-	permIssues, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
+	permIssues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssuePermissionDenied)
 	require.NoError(t, err)
 	assert.Len(t, permIssues, 1, "should record permission_denied issue")
 
 	// remote_state should be empty.
-	failed, err := eng.baseline.ListFailedForRetry(ctx, time.Now().Add(time.Hour))
+	failed, err := eng.baseline.ListActionableRemoteState(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, failed, "confirmed read-only 403 should not be in remote_state")
 }
@@ -2486,11 +2486,11 @@ func TestProcessWorkerResult_Success_NoRecords(t *testing.T) {
 	}, nil, nil)
 
 	// No failures should be recorded.
-	failed, err := eng.baseline.ListFailedForRetry(ctx, time.Now().Add(time.Hour))
+	failed, err := eng.baseline.ListActionableRemoteState(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, failed)
 
-	issues, err := eng.baseline.ListLocalIssues(ctx)
+	issues, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, issues)
 }

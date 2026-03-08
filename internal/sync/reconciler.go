@@ -40,25 +40,19 @@ type EventAdder interface {
 	Add(ev *ChangeEvent)
 }
 
-// LocalIssueEscalator marks a local issue as permanently failed.
-// Used by the failure retrier when transient issues exceed the retry threshold.
-type LocalIssueEscalator interface {
-	MarkLocalIssuePermanent(ctx context.Context, path string) error
-}
-
-// FailureRetrier periodically checks remote_state and local_issues for failed
-// items whose backoff has expired and re-injects them into the sync pipeline.
-// Remote items that exceed the threshold are escalated to user-visible conflicts;
-// local issues that exceed the threshold are marked permanently_failed.
+// FailureRetrier periodically checks sync_failures for failed items whose
+// backoff has expired and re-injects them into the sync pipeline. Upload
+// failures that exceed the threshold are marked permanently failed; download
+// and delete failures are escalated to user-visible conflicts.
 type FailureRetrier struct {
-	cfg         FailureRetrierConfig
-	state       StateReader
-	escalator   ConflictEscalator
-	localIssues LocalIssueEscalator
-	buf         EventAdder
-	tracker     InFlightChecker
-	logger      *slog.Logger
-	nowFunc     func() time.Time
+	cfg             FailureRetrierConfig
+	state           StateReader
+	escalator       ConflictEscalator
+	failureRecorder SyncFailureRecorder
+	buf             EventAdder
+	tracker         InFlightChecker
+	logger          *slog.Logger
+	nowFunc         func() time.Time
 
 	kickCh chan struct{} // 1-buffered
 	timer  *time.Timer
@@ -66,26 +60,26 @@ type FailureRetrier struct {
 }
 
 // NewFailureRetrier creates a FailureRetrier. It does not start until
-// Run() is called. localIssues may be nil if local issue retry is not needed.
+// Run() is called.
 func NewFailureRetrier(
 	cfg FailureRetrierConfig,
 	state StateReader,
 	escalator ConflictEscalator,
-	localIssues LocalIssueEscalator,
+	failureRecorder SyncFailureRecorder,
 	buf EventAdder,
 	tracker InFlightChecker,
 	logger *slog.Logger,
 ) *FailureRetrier {
 	return &FailureRetrier{
-		cfg:         cfg,
-		state:       state,
-		escalator:   escalator,
-		localIssues: localIssues,
-		buf:         buf,
-		tracker:     tracker,
-		logger:      logger,
-		nowFunc:     time.Now,
-		kickCh:      make(chan struct{}, 1),
+		cfg:             cfg,
+		state:           state,
+		escalator:       escalator,
+		failureRecorder: failureRecorder,
+		buf:             buf,
+		tracker:         tracker,
+		logger:          logger,
+		nowFunc:         time.Now,
+		kickCh:          make(chan struct{}, 1),
 	}
 }
 
@@ -148,19 +142,19 @@ func (r *FailureRetrier) timerChan() <-chan time.Time {
 	return r.timer.C
 }
 
-// reconcile scans remote_state and local_issues for retriable failed items,
-// escalates those exceeding the threshold, and synthesizes events for the rest.
+// reconcile scans sync_failures for retriable failed items, escalates those
+// exceeding the threshold, and synthesizes events for the rest.
 func (r *FailureRetrier) reconcile(ctx context.Context) {
 	now := r.nowFunc()
 
-	r.reconcileRemote(ctx, now)
-	r.reconcileLocalIssues(ctx, now)
+	r.reconcileSyncFailures(ctx, now)
 	r.armTimer(ctx, now)
 }
 
-// reconcileRemote handles remote_state failed items.
-func (r *FailureRetrier) reconcileRemote(ctx context.Context, now time.Time) {
-	rows, err := r.state.ListFailedForRetry(ctx, now)
+// reconcileSyncFailures handles all failure types in a single sweep over the
+// unified sync_failures table.
+func (r *FailureRetrier) reconcileSyncFailures(ctx context.Context, now time.Time) {
+	rows, err := r.state.ListSyncFailuresForRetry(ctx, now)
 	if err != nil {
 		r.logger.Warn("failure retrier: failed to list retriable items",
 			slog.String("error", err.Error()),
@@ -186,135 +180,82 @@ func (r *FailureRetrier) reconcileRemote(ctx context.Context, now time.Time) {
 
 		// Escalate if failure count exceeds threshold.
 		if row.FailureCount >= r.cfg.EscalationThreshold {
-			if escErr := r.escalator.EscalateToConflict(ctx, row.DriveID, row.ItemID, row.Path, row.LastError); escErr != nil {
-				r.logger.Warn("failure retrier: failed to escalate",
-					slog.String("path", row.Path),
-					slog.String("error", escErr.Error()),
-				)
+			if row.Direction == strUpload {
+				// Upload failures: mark permanent (no conflict escalation).
+				if escErr := r.failureRecorder.MarkSyncFailurePermanent(ctx, row.Path, row.DriveID); escErr != nil {
+					r.logger.Warn("failure retrier: failed to mark upload permanent",
+						slog.String("path", row.Path),
+						slog.String("error", escErr.Error()),
+					)
+				} else {
+					escalated++
+				}
 			} else {
-				escalated++
+				// Download/delete failures: escalate to user-visible conflict.
+				if escErr := r.escalator.EscalateToConflict(ctx, row.DriveID, row.ItemID, row.Path, row.LastError); escErr != nil {
+					r.logger.Warn("failure retrier: failed to escalate",
+						slog.String("path", row.Path),
+						slog.String("error", escErr.Error()),
+					)
+				} else {
+					escalated++
+				}
 			}
 
 			continue
 		}
 
-		// Synthesize a change event and inject into the buffer.
-		ev := r.synthesizeEvent(row)
-		if ev == nil {
-			continue
-		}
-
+		// Synthesize event based on direction and inject into the buffer.
+		ev := r.synthesizeFailureEvent(row)
 		r.buf.Add(ev)
 		dispatched++
 	}
 
 	if dispatched > 0 || escalated > 0 {
-		r.logger.Info("failure retrier remote sweep",
+		r.logger.Info("failure retrier sweep",
 			slog.Int("dispatched", dispatched),
 			slog.Int("escalated", escalated),
 		)
 	}
 }
 
-// reconcileLocalIssues handles local_issues with expired backoff.
-// Transient issues exceeding the threshold are marked permanently_failed;
-// others get a SourceLocal ChangeModify event injected to trigger re-upload.
-func (r *FailureRetrier) reconcileLocalIssues(ctx context.Context, now time.Time) {
-	if r.localIssues == nil {
-		return
-	}
-
-	rows, err := r.state.ListLocalIssuesForRetry(ctx, now)
-	if err != nil {
-		r.logger.Warn("failure retrier: failed to list local issues for retry",
-			slog.String("error", err.Error()),
-		)
-
-		return
-	}
-
-	if len(rows) == 0 {
-		return
-	}
-
-	dispatched := 0
-	escalated := 0
-
-	for i := range rows {
-		row := &rows[i]
-
-		if r.tracker.HasInFlight(row.Path) {
-			continue
-		}
-
-		if row.FailureCount >= r.cfg.EscalationThreshold {
-			if escErr := r.localIssues.MarkLocalIssuePermanent(ctx, row.Path); escErr != nil {
-				r.logger.Warn("failure retrier: failed to escalate local issue",
-					slog.String("path", row.Path),
-					slog.String("error", escErr.Error()),
-				)
-			} else {
-				escalated++
-			}
-
-			continue
-		}
-
-		r.buf.Add(&ChangeEvent{
+// synthesizeFailureEvent creates a ChangeEvent from a sync_failures row.
+// Upload failures become SourceLocal ChangeModify events; download failures
+// become SourceRemote ChangeModify; delete failures become SourceRemote
+// ChangeDelete. ItemType defaults to file — the executor looks up the actual
+// type during dispatch.
+func (r *FailureRetrier) synthesizeFailureEvent(row *SyncFailureRow) *ChangeEvent {
+	switch row.Direction {
+	case strUpload:
+		return &ChangeEvent{
 			Source: SourceLocal,
 			Type:   ChangeModify,
 			Path:   row.Path,
-		})
-		dispatched++
-	}
-
-	if dispatched > 0 || escalated > 0 {
-		r.logger.Info("failure retrier local sweep",
-			slog.Int("dispatched", dispatched),
-			slog.Int("escalated", escalated),
-		)
-	}
-}
-
-// synthesizeEvent creates a ChangeEvent from a failed remote_state row.
-// delete_failed and pending_delete rows become ChangeDelete events;
-// everything else becomes ChangeModify (re-download).
-// Returns nil if the row has an invalid item type (corrupt data).
-func (r *FailureRetrier) synthesizeEvent(row *RemoteStateRow) *ChangeEvent {
-	changeType := ChangeModify
-
-	if row.SyncStatus == statusDeleteFailed || row.SyncStatus == statusPendingDelete {
-		changeType = ChangeDelete
-	}
-
-	itemType, err := ParseItemType(row.ItemType)
-	if err != nil {
-		r.logger.Warn("failure retrier: skipping row with invalid item type",
-			slog.String("path", row.Path),
-			slog.String("item_type", row.ItemType),
-		)
-
-		return nil
-	}
-
-	return &ChangeEvent{
-		Source:    SourceRemote,
-		Type:      changeType,
-		Path:      row.Path,
-		ItemID:    row.ItemID,
-		ParentID:  row.ParentID,
-		DriveID:   row.DriveID,
-		ItemType:  itemType,
-		Size:      row.Size,
-		Hash:      row.Hash,
-		Mtime:     row.Mtime,
-		ETag:      row.ETag,
-		IsDeleted: changeType == ChangeDelete,
+		}
+	case strDelete:
+		return &ChangeEvent{
+			Source:    SourceRemote,
+			Type:      ChangeDelete,
+			Path:      row.Path,
+			ItemID:    row.ItemID,
+			DriveID:   row.DriveID,
+			ItemType:  ItemTypeFile,
+			IsDeleted: true,
+		}
+	default: // "download"
+		return &ChangeEvent{
+			Source:   SourceRemote,
+			Type:     ChangeModify,
+			Path:     row.Path,
+			ItemID:   row.ItemID,
+			DriveID:  row.DriveID,
+			ItemType: ItemTypeFile,
+		}
 	}
 }
 
-// armTimer sets up a timer to fire at the earliest future retry time across
-// both remote_state and local_issues. Stops any existing timer first.
+// armTimer sets up a timer to fire at the earliest future retry time in the
+// sync_failures table. Stops any existing timer first.
 func (r *FailureRetrier) armTimer(ctx context.Context, now time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -324,25 +265,13 @@ func (r *FailureRetrier) armTimer(ctx context.Context, now time.Time) {
 		r.timer = nil
 	}
 
-	earliest, err := r.state.EarliestRetryAt(ctx, now)
+	earliest, err := r.state.EarliestSyncFailureRetryAt(ctx, now)
 	if err != nil {
-		r.logger.Warn("failure retrier: failed to query earliest remote retry",
+		r.logger.Warn("failure retrier: failed to query earliest retry",
 			slog.String("error", err.Error()),
 		)
 
 		return
-	}
-
-	// Also check local issues for earlier retry times.
-	if r.localIssues != nil {
-		localEarliest, localErr := r.state.EarliestLocalIssueRetryAt(ctx, now)
-		if localErr != nil {
-			r.logger.Warn("failure retrier: failed to query earliest local issue retry",
-				slog.String("error", localErr.Error()),
-			)
-		} else if !localEarliest.IsZero() && (earliest.IsZero() || localEarliest.Before(earliest)) {
-			earliest = localEarliest
-		}
 	}
 
 	if earliest.IsZero() {

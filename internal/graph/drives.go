@@ -10,12 +10,12 @@ import (
 	"net/url"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
-// driveDiscoveryRetries is the number of extra attempts for transient 403s
-// on /me/drives. Microsoft Graph occasionally returns 403 "accessDenied"
-// during token propagation, even when the token is valid.
-const driveDiscoveryRetries = 3
+// driveDiscoveryRetries is the number of attempts for transient 403s on
+// /me/drives, sourced from the unified retry.DriveDiscovery policy.
+var driveDiscoveryRetries = retry.DriveDiscovery.MaxAttempts
 
 // userResponse mirrors the Graph API /me JSON response.
 // Unexported — callers use User via toUser() normalization.

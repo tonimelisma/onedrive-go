@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
-	"math/rand/v2"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,6 +14,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // ErrPathEscapesSyncRoot is returned when a relative path would resolve
@@ -26,13 +25,9 @@ var ErrPathEscapesSyncRoot = errors.New("sync: path escapes sync root")
 // Distinct from strRoot in types.go which serializes the ItemTypeRoot enum.
 const graphRootID = "root"
 
-// Retry parameters for executor-level retries (separate from graph client retries).
-const (
-	executorMaxRetries = 3
-	executorBaseDelay  = 1 * time.Second
-	executorBackoffExp = 2.0
-	executorJitter     = 0.25
-)
+// executorMaxRetries is the number of executor-level retries, sourced from
+// the unified retry.Action policy.
+var executorMaxRetries = retry.Action.MaxAttempts
 
 // errClass classifies an error for the executor's retry/skip/fatal decision.
 type errClass int
@@ -481,13 +476,10 @@ func (e *Executor) withRetry(ctx context.Context, desc string, fn func() error) 
 	return lastErr
 }
 
-// calcExecBackoff computes exponential backoff with jitter for executor retries.
+// calcExecBackoff computes exponential backoff with jitter for executor retries
+// using the unified retry.Action policy.
 func calcExecBackoff(attempt int) time.Duration {
-	backoff := float64(executorBaseDelay) * math.Pow(executorBackoffExp, float64(attempt))
-	jitter := backoff * executorJitter * (rand.Float64()*2 - 1) //nolint:gosec // jitter does not need crypto rand
-	backoff += jitter
-
-	return time.Duration(backoff)
+	return retry.Action.Delay(attempt)
 }
 
 // failedOutcome builds an Outcome for a failed action.

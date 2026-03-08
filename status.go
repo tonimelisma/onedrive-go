@@ -404,10 +404,10 @@ func querySyncState(statePath string, logger *slog.Logger) *syncStateInfo {
 		logger.Debug("could not count pending sync items", slog.String("error", scanErr.Error()))
 	}
 
-	// Count active upload issues.
-	issuesSQL := "SELECT COUNT(*) FROM local_issues WHERE sync_status != 'resolved'"
+	// Count active sync failures.
+	issuesSQL := "SELECT COUNT(*) FROM sync_failures WHERE category = 'transient'"
 	if scanErr := db.QueryRowContext(ctx, issuesSQL).Scan(&info.UploadIssues); scanErr != nil {
-		logger.Debug("could not count upload issues", slog.String("error", scanErr.Error()))
+		logger.Debug("could not count sync failures", slog.String("error", scanErr.Error()))
 	}
 
 	return info

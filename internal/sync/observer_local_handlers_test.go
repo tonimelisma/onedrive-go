@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // ---------------------------------------------------------------------------
@@ -769,11 +770,11 @@ func TestWatchLoop_BackoffResetsOnSafetyScan(t *testing.T) {
 	recorder.waitForCalls(t, 1)
 
 	calls := recorder.getCalls()
-	require.Equal(t, watchErrInitBackoff, calls[0],
+	require.Equal(t, retry.WatchLocal.Base, calls[0],
 		"first error should use initial backoff")
 
 	// Step 2: Fire the safety scan tick deterministically (no time.Sleep).
-	// The safety scan resets errBackoff to watchErrInitBackoff.
+	// The safety scan resets errBackoff to retry.WatchLocal.Base.
 	tickCh <- time.Now()
 
 	// Give watchLoop time to process the tick before we send the next error.
@@ -788,7 +789,7 @@ func TestWatchLoop_BackoffResetsOnSafetyScan(t *testing.T) {
 	recorder.waitForCalls(t, 2)
 
 	calls = recorder.getCalls()
-	require.Equal(t, watchErrInitBackoff, calls[1],
+	require.Equal(t, retry.WatchLocal.Base, calls[1],
 		"second error after safety scan should use initial backoff (reset)")
 
 	cancel()
@@ -835,8 +836,8 @@ func TestWatchLoop_BackoffEscalatesWithoutReset(t *testing.T) {
 	recorder.waitForCalls(t, 2)
 
 	calls := recorder.getCalls()
-	require.Equal(t, watchErrInitBackoff, calls[0], "first error: initial backoff")
-	require.Equal(t, watchErrInitBackoff*watchErrBackoffMult, calls[1],
+	require.Equal(t, retry.WatchLocal.Base, calls[0], "first error: initial backoff")
+	require.Equal(t, retry.WatchLocal.Base*time.Duration(retry.WatchLocal.Multiplier), calls[1],
 		"second error: escalated backoff (no safety scan to reset)")
 
 	cancel()

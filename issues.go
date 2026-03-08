@@ -17,12 +17,12 @@ const maxIssueErrorLen = 60
 func newIssuesCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "issues",
-		Short: "List upload issues",
-		Long: `Display upload issues from the state database.
+		Short: "List sync failures",
+		Long: `Display sync failures from the state database.
 
-Upload issues track files that cannot be synced to OneDrive due to
-validation failures (invalid filenames, paths too long, files too large)
-or transient upload errors. Use 'issues clear' to remove resolved issues.`,
+Sync failures track files that cannot be synced due to validation failures
+(invalid filenames, paths too long, files too large), transient errors, or
+download/delete failures. Use 'issues clear' to remove resolved failures.`,
 		RunE: runIssuesList,
 	}
 
@@ -34,24 +34,25 @@ or transient upload errors. Use 'issues clear' to remove resolved issues.`,
 func newIssuesClearCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "clear [path]",
-		Short: "Clear upload issues",
-		Long: `Clear specific or resolved upload issues.
+		Short: "Clear sync failures",
+		Long: `Clear specific or resolved sync failures.
 
-Provide a path to clear a specific issue. Use --all to clear all
-resolved issues.`,
+Provide a path to clear a specific failure. Use --all to clear all
+permanent failures.`,
 		RunE: runIssuesClear,
 	}
 
-	cmd.Flags().Bool("all", false, "clear all resolved issues")
+	cmd.Flags().Bool("all", false, "clear all permanent failures")
 
 	return cmd
 }
 
-// issueJSON is the JSON-serializable representation of a local issue.
+// issueJSON is the JSON-serializable representation of a sync failure.
 type issueJSON struct {
 	Path         string `json:"path"`
-	IssueType    string `json:"issue_type"`
-	SyncStatus   string `json:"sync_status"`
+	Direction    string `json:"direction"`
+	Category     string `json:"category"`
+	IssueType    string `json:"issue_type,omitempty"`
 	FailureCount int    `json:"failure_count"`
 	LastError    string `json:"last_error"`
 	HTTPStatus   int    `json:"http_status,omitempty"`
@@ -74,13 +75,13 @@ func runIssuesList(cmd *cobra.Command, _ []string) error {
 	}
 	defer mgr.Close()
 
-	issues, err := mgr.ListLocalIssues(cmd.Context())
+	issues, err := mgr.ListSyncFailures(cmd.Context())
 	if err != nil {
 		return err
 	}
 
 	if len(issues) == 0 {
-		fmt.Println("No upload issues.")
+		fmt.Println("No sync failures.")
 		return nil
 	}
 
@@ -115,33 +116,35 @@ func runIssuesClear(cmd *cobra.Command, args []string) error {
 	}
 
 	if clearAll {
-		if err := mgr.ClearResolvedLocalIssues(ctx); err != nil {
+		if err := mgr.ClearResolvedSyncFailures(ctx); err != nil {
 			return err
 		}
 
-		fmt.Println("Cleared all resolved issues.")
+		fmt.Println("Cleared all permanent failures.")
 
 		return nil
 	}
 
 	if len(args) == 0 {
-		return fmt.Errorf("provide a path to clear, or use --all to clear all resolved issues")
+		return fmt.Errorf("provide a path to clear, or use --all to clear all permanent failures")
 	}
 
-	if err := mgr.ClearLocalIssue(ctx, args[0]); err != nil {
+	// CLI doesn't know which drive owns the path — clear for all drives.
+	if err := mgr.ClearSyncFailureByPath(ctx, args[0]); err != nil {
 		return err
 	}
 
-	fmt.Printf("Cleared issue for %s.\n", args[0])
+	fmt.Printf("Cleared failure for %s.\n", args[0])
 
 	return nil
 }
 
-func toIssueJSON(row *sync.LocalIssueRow) issueJSON {
+func toIssueJSON(row *sync.SyncFailureRow) issueJSON {
 	return issueJSON{
 		Path:         row.Path,
+		Direction:    row.Direction,
+		Category:     row.Category,
 		IssueType:    row.IssueType,
-		SyncStatus:   row.SyncStatus,
 		FailureCount: row.FailureCount,
 		LastError:    row.LastError,
 		HTTPStatus:   row.HTTPStatus,
@@ -151,7 +154,7 @@ func toIssueJSON(row *sync.LocalIssueRow) issueJSON {
 	}
 }
 
-func printIssuesJSON(w io.Writer, issues []sync.LocalIssueRow) error {
+func printIssuesJSON(w io.Writer, issues []sync.SyncFailureRow) error {
 	items := make([]issueJSON, len(issues))
 	for i := range issues {
 		items[i] = toIssueJSON(&issues[i])
@@ -167,8 +170,8 @@ func printIssuesJSON(w io.Writer, issues []sync.LocalIssueRow) error {
 	return nil
 }
 
-func printIssuesTable(w io.Writer, issues []sync.LocalIssueRow) {
-	headers := []string{"PATH", "TYPE", "STATUS", "COUNT", "ERROR", "LAST SEEN"}
+func printIssuesTable(w io.Writer, issues []sync.SyncFailureRow) {
+	headers := []string{"PATH", "DIRECTION", "CATEGORY", "COUNT", "ERROR", "LAST SEEN"}
 
 	rows := make([][]string, len(issues))
 	for i := range issues {
@@ -186,8 +189,8 @@ func printIssuesTable(w io.Writer, issues []sync.LocalIssueRow) {
 
 		rows[i] = []string{
 			row.Path,
-			row.IssueType,
-			row.SyncStatus,
+			row.Direction,
+			row.Category,
 			fmt.Sprintf("%d", row.FailureCount),
 			errMsg,
 			lastSeen,

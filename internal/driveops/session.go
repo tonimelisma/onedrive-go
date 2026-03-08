@@ -8,10 +8,12 @@ import (
 	"net/http"
 	"strings"
 	gosync "sync"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // Session holds authenticated clients and the resolved drive identity for a
@@ -39,8 +41,9 @@ type SessionProvider struct {
 	// for test injection; defaults to graph.TokenSourceFromPath.
 	TokenSourceFn func(ctx context.Context, tokenPath string, logger *slog.Logger) (graph.TokenSource, error)
 
-	mu         gosync.Mutex
-	tokenCache map[string]graph.TokenSource // keyed by token file path
+	mu              gosync.Mutex
+	tokenCache      map[string]graph.TokenSource         // keyed by token file path
+	circuitBreakers map[driveid.ID]*retry.CircuitBreaker // per-drive circuit breakers
 }
 
 // NewSessionProvider creates a SessionProvider with default TokenSourceFn.
@@ -49,13 +52,14 @@ func NewSessionProvider(
 	userAgent string, logger *slog.Logger,
 ) *SessionProvider {
 	return &SessionProvider{
-		holder:        holder,
-		metaHTTP:      metaHTTP,
-		transferHTTP:  transferHTTP,
-		userAgent:     userAgent,
-		logger:        logger,
-		TokenSourceFn: graph.TokenSourceFromPath,
-		tokenCache:    make(map[string]graph.TokenSource),
+		holder:          holder,
+		metaHTTP:        metaHTTP,
+		transferHTTP:    transferHTTP,
+		userAgent:       userAgent,
+		logger:          logger,
+		TokenSourceFn:   graph.TokenSourceFromPath,
+		tokenCache:      make(map[string]graph.TokenSource),
+		circuitBreakers: make(map[driveid.ID]*retry.CircuitBreaker),
 	}
 }
 
@@ -86,6 +90,12 @@ func (p *SessionProvider) Session(ctx context.Context, rd *config.ResolvedDrive)
 
 	meta := graph.NewClient(graph.DefaultBaseURL, p.metaHTTP, ts, p.logger, p.userAgent)
 	transfer := graph.NewClient(graph.DefaultBaseURL, p.transferHTTP, ts, p.logger, p.userAgent)
+
+	// Attach per-drive circuit breaker. Breaker state persists across sync
+	// runs because SessionProvider outlives individual Session instances.
+	cb := p.getOrCreateBreaker(rd.DriveID)
+	meta.SetCircuitBreaker(cb)
+	transfer.SetCircuitBreaker(cb)
 
 	p.logger.Debug("session created",
 		slog.String("drive_id", rd.DriveID.String()),
@@ -120,6 +130,13 @@ func (p *SessionProvider) getOrCreateTokenSource(ctx context.Context, tokenPath 
 	return ts, nil
 }
 
+// Circuit breaker defaults for per-drive breakers.
+const (
+	breakerThreshold = 5                // failures within window to trip
+	breakerWindow    = 30 * time.Second // sliding failure window
+	breakerCooldown  = 60 * time.Second // time in open state before half-open probe
+)
+
 // FlushTokenCache clears the cached TokenSources, forcing the next Session()
 // call to re-read token files from disk. Called during daemon SIGHUP reload
 // to pick up logout/re-login credential changes.
@@ -129,6 +146,35 @@ func (p *SessionProvider) FlushTokenCache() {
 
 	p.tokenCache = make(map[string]graph.TokenSource)
 	p.logger.Info("token cache flushed")
+}
+
+// getOrCreateBreaker returns the circuit breaker for a drive, creating one on
+// cache miss. Thread-safe via the same mutex as tokenCache.
+func (p *SessionProvider) getOrCreateBreaker(id driveid.ID) *retry.CircuitBreaker {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if cb, ok := p.circuitBreakers[id]; ok {
+		return cb
+	}
+
+	cb := retry.NewCircuitBreaker(breakerThreshold, breakerWindow, breakerCooldown)
+	p.circuitBreakers[id] = cb
+
+	return cb
+}
+
+// CircuitBreakerState returns the current state of the per-drive circuit
+// breaker. Returns CircuitClosed if no breaker exists for the drive.
+func (p *SessionProvider) CircuitBreakerState(id driveid.ID) retry.CircuitState {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if cb, ok := p.circuitBreakers[id]; ok {
+		return cb.State()
+	}
+
+	return retry.CircuitClosed
 }
 
 // ResolveItem resolves a remote path to an Item. For root (""), uses GetItem
