@@ -1283,7 +1283,7 @@ func TestFullDelta_CrossDriveItems(t *testing.T) {
 
 // TestFullDelta_PersonalVaultExcluded verifies that items with
 // specialFolder.name == "vault" are excluded from delta processing by default,
-// preventing data-loss from vault lock/unlock cycles (B-271).
+// preventing data-loss from vault lock/unlock transitions (B-271).
 func TestFullDelta_PersonalVaultExcluded(t *testing.T) {
 	t.Parallel()
 
