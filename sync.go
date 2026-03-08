@@ -72,8 +72,15 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	// logger construction in PersistentPreRunE, which is skipped for sync
 	// because it uses skipConfigAnnotation to handle multi-drive resolution
 	// itself.
-	logger = buildLogger(&config.ResolvedDrive{LoggingConfig: rawCfg.LoggingConfig}, cc.Flags)
+	cfgForLog := &config.ResolvedDrive{LoggingConfig: rawCfg.LoggingConfig}
+	dualLogger, logCloser := buildLoggerDual(cfgForLog, cc.Flags)
+	logger = dualLogger
 	cc.Logger = logger
+	cc.logCloser = logCloser
+
+	if logCloser != nil {
+		defer func() { _ = logCloser.Close() }()
+	}
 
 	selectors := cc.Flags.Drive
 

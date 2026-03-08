@@ -15,6 +15,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/logfile"
 )
 
 // version is set at build time via ldflags.
@@ -82,6 +83,7 @@ type CLIContext struct {
 	Env          config.EnvOverrides       // env overrides (always set in Phase 1)
 	Cfg          *config.ResolvedDrive     // nil for auth/account commands
 	Provider     *driveops.SessionProvider // nil for auth/account commands; created in Phase 2
+	logCloser    io.Closer                 // log file closer; nil when no log file is configured
 }
 
 // cliContextKey is the context key for CLIContext.
@@ -200,7 +202,10 @@ func newRootCmd() *cobra.Command {
 				}
 
 				cc.Cfg = resolved
-				cc.Logger = buildLogger(resolved, flags)
+
+				dualLogger, closer := buildLoggerDual(resolved, flags)
+				cc.Logger = dualLogger
+				cc.logCloser = closer
 
 				holder := config.NewHolder(rawCfg, cc.CfgPath)
 				cc.Provider = driveops.NewSessionProvider(holder,
@@ -216,6 +221,14 @@ func newRootCmd() *cobra.Command {
 
 			if cc.Cfg != nil {
 				config.WarnUnimplemented(cc.Cfg, cc.Logger)
+			}
+
+			return nil
+		},
+		PersistentPostRunE: func(cmd *cobra.Command, _ []string) error {
+			cc := cliContextFrom(cmd.Context())
+			if cc != nil && cc.logCloser != nil {
+				return cc.logCloser.Close()
 			}
 
 			return nil
@@ -375,6 +388,86 @@ func isWriterTTY(w io.Writer) bool {
 	}
 
 	return isatty.IsTerminal(f.Fd())
+}
+
+// multiHandler fans out log records to multiple slog.Handler instances.
+// Each handler independently filters by level, so a console handler at Error
+// and a file handler at Debug can coexist without the console being flooded.
+type multiHandler struct {
+	handlers []slog.Handler
+}
+
+// Enabled returns true if any handler accepts the level (OR semantics).
+func (m *multiHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	for _, h := range m.handlers {
+		if h.Enabled(ctx, level) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// Handle dispatches the record to each handler that accepts its level.
+//
+//nolint:gocritic // slog.Handler interface requires value receiver for Record
+func (m *multiHandler) Handle(ctx context.Context, r slog.Record) error {
+	for _, h := range m.handlers {
+		if h.Enabled(ctx, r.Level) {
+			if err := h.Handle(ctx, r); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// WithAttrs returns a new multiHandler where each inner handler has the attrs.
+func (m *multiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	handlers := make([]slog.Handler, len(m.handlers))
+	for i, h := range m.handlers {
+		handlers[i] = h.WithAttrs(attrs)
+	}
+
+	return &multiHandler{handlers: handlers}
+}
+
+// WithGroup returns a new multiHandler where each inner handler has the group.
+func (m *multiHandler) WithGroup(name string) slog.Handler {
+	handlers := make([]slog.Handler, len(m.handlers))
+	for i, h := range m.handlers {
+		handlers[i] = h.WithGroup(name)
+	}
+
+	return &multiHandler{handlers: handlers}
+}
+
+// buildLoggerDual creates an slog.Logger with optional dual output. When
+// cfg.LogFile is set, logs go to both stderr (console format, CLI-driven level)
+// and the file (JSON format, config-driven level). Returns an io.Closer for
+// the log file (nil when no file is used).
+func buildLoggerDual(cfg *config.ResolvedDrive, flags CLIFlags) (*slog.Logger, io.Closer) {
+	if cfg == nil || cfg.LogFile == "" {
+		return buildLogger(cfg, flags), nil
+	}
+
+	f, err := logfile.Open(cfg.LogFile, cfg.LogRetentionDays)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: cannot open log file %q: %v\n", cfg.LogFile, err)
+
+		return buildLogger(cfg, flags), nil
+	}
+
+	// Console handler: CLI-flag-driven level, config-driven format.
+	consoleLevel := resolveLogLevel(cfg, flags)
+	consoleHandler := buildHandler(os.Stderr, cfg, &slog.HandlerOptions{Level: consoleLevel})
+
+	// File handler: config-driven level, always JSON for machine parsing.
+	fileLevel := resolveLogLevel(cfg, CLIFlags{})
+	fileHandler := slog.NewJSONHandler(f, &slog.HandlerOptions{Level: fileLevel})
+
+	return slog.New(&multiHandler{handlers: []slog.Handler{consoleHandler, fileHandler}}), f
 }
 
 // exitOnError prints a user-friendly error message to stderr and exits.
