@@ -301,9 +301,8 @@ func TestAnnotationBasedSkipConfig(t *testing.T) {
 		{"rm"},
 		{"mkdir"},
 		{"stat"},
-		{"conflicts"},
+		{"issues"},
 		{"verify"},
-		{"resolve"},
 	}
 
 	for _, args := range configPaths {
