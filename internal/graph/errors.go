@@ -19,6 +19,7 @@ var (
 	ErrGone                = errors.New("graph: resource gone")
 	ErrThrottled           = errors.New("graph: throttled")
 	ErrLocked              = errors.New("graph: resource locked")
+	ErrMethodNotAllowed    = errors.New("graph: method not allowed")
 	ErrRangeNotSatisfiable = errors.New("graph: range not satisfiable")
 	ErrServerError         = errors.New("graph: server error")
 	ErrNotLoggedIn         = errors.New("graph: not logged in")
@@ -63,6 +64,8 @@ func classifyStatus(code int) error {
 		return ErrGone
 	case http.StatusTooManyRequests:
 		return ErrThrottled
+	case http.StatusMethodNotAllowed:
+		return ErrMethodNotAllowed
 	case http.StatusLocked:
 		return ErrLocked
 	case http.StatusRequestedRangeNotSatisfiable:
