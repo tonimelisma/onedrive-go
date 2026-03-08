@@ -88,68 +88,6 @@ func TestFindShortcutForPath(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// isWriteSuppressed tests
-// ---------------------------------------------------------------------------
-
-func TestIsWriteSuppressed(t *testing.T) {
-	t.Parallel()
-
-	denied := []string{"Shared/ReadOnly", "Shared/Other/Private"}
-
-	tests := []struct {
-		name string
-		path string
-		want bool
-	}{
-		{"exact denied folder", "Shared/ReadOnly", true},
-		{"child of denied", "Shared/ReadOnly/sub/file.txt", true},
-		{"different folder", "Shared/Writable/file.txt", false},
-		{"partial prefix", "Shared/ReadOnlyExtra/file.txt", false},
-		{"exact subfolder denied", "Shared/Other/Private", true},
-		{"child of subfolder denied", "Shared/Other/Private/deep/file.txt", true},
-		{"sibling of denied subfolder", "Shared/Other/Public/file.txt", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			assert.Equal(t, tt.want, isWriteSuppressed(tt.path, denied))
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
-// isRemoteWriteAction tests
-// ---------------------------------------------------------------------------
-
-func TestIsRemoteWriteAction(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		action ActionType
-		want   bool
-	}{
-		{ActionUpload, true},
-		{ActionRemoteDelete, true},
-		{ActionRemoteMove, true},
-		{ActionFolderCreate, true},
-		{ActionDownload, false},
-		{ActionLocalDelete, false},
-		{ActionLocalMove, false},
-		{ActionConflict, false},
-		{ActionUpdateSynced, false},
-		{ActionCleanup, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.action.String(), func(t *testing.T) {
-			t.Parallel()
-			assert.Equal(t, tt.want, isRemoteWriteAction(tt.action))
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
 // handle403 tests
 // ---------------------------------------------------------------------------
 
@@ -233,13 +171,19 @@ func TestHandle403_ReadOnlyFolder_RecordsIssueAtBoundary(t *testing.T) {
 	eng, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
-	eng.handle403(ctx, "Shared/TeamDocs/sub/file.txt", shortcuts)
+	result := eng.handle403(ctx, "Shared/TeamDocs/sub/file.txt", shortcuts)
+	assert.True(t, result, "handle403 should return true for read-only folder")
 
 	// Should have recorded a permission_denied issue at the boundary (sub folder).
 	issues, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 	assert.Equal(t, "Shared/TeamDocs/sub", issues[0].Path)
+
+	// Should have populated the cache.
+	canWrite, ok := eng.permCache.get("Shared/TeamDocs/sub")
+	assert.True(t, ok, "cache should contain boundary path")
+	assert.False(t, canWrite, "boundary should be cached as read-only")
 }
 
 func TestHandle403_TransientError_NoSuppression(t *testing.T) {
@@ -273,7 +217,8 @@ func TestHandle403_TransientError_NoSuppression(t *testing.T) {
 	eng, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
-	eng.handle403(ctx, "Shared/TeamDocs/sub/file.txt", shortcuts)
+	result := eng.handle403(ctx, "Shared/TeamDocs/sub/file.txt", shortcuts)
+	assert.False(t, result, "handle403 should return false for transient 403")
 
 	// No issue should be recorded — transient 403.
 	issues, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
@@ -479,132 +424,6 @@ func TestRecheckPermissions_NoIssues_NoAPICalls(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// filterDeniedWrites tests
-// ---------------------------------------------------------------------------
-
-func TestFilterDeniedWrites_SuppressesWritesUnderDenied(t *testing.T) {
-	t.Parallel()
-
-	eng, _ := newTestEngineWithPerms(t, &mockPermChecker{}, nil, nil)
-	ctx := t.Context()
-
-	// Record a denied folder.
-	require.NoError(t, eng.baseline.RecordLocalIssue(
-		ctx, "Shared/ReadOnly", IssuePermissionDenied,
-		"read-only", http.StatusForbidden, 0, "",
-	))
-
-	plan := &ActionPlan{
-		Actions: []Action{
-			{Type: ActionUpload, Path: "Shared/ReadOnly/file.txt"},
-			{Type: ActionDownload, Path: "Shared/ReadOnly/other.txt"},
-			{Type: ActionUpload, Path: "Shared/Writable/doc.txt"},
-			{Type: ActionRemoteDelete, Path: "Shared/ReadOnly/old.txt"},
-		},
-		Deps: [][]int{{}, {}, {}, {}},
-	}
-
-	filtered := eng.filterDeniedWrites(ctx, plan)
-
-	// Only download and writable upload should remain.
-	require.Len(t, filtered.Actions, 2)
-	assert.Equal(t, ActionDownload, filtered.Actions[0].Type)
-	assert.Equal(t, "Shared/ReadOnly/other.txt", filtered.Actions[0].Path)
-	assert.Equal(t, ActionUpload, filtered.Actions[1].Type)
-	assert.Equal(t, "Shared/Writable/doc.txt", filtered.Actions[1].Path)
-}
-
-func TestFilterDeniedWrites_NoDenied_PassThrough(t *testing.T) {
-	t.Parallel()
-
-	eng, _ := newTestEngineWithPerms(t, &mockPermChecker{}, nil, nil)
-	ctx := t.Context()
-
-	plan := &ActionPlan{
-		Actions: []Action{
-			{Type: ActionUpload, Path: "docs/file.txt"},
-			{Type: ActionDownload, Path: "docs/other.txt"},
-		},
-		Deps: [][]int{{}, {}},
-	}
-
-	filtered := eng.filterDeniedWrites(ctx, plan)
-
-	// No denied folders — plan unchanged.
-	assert.Len(t, filtered.Actions, 2)
-}
-
-func TestFilterDeniedWrites_RemapsDependencies(t *testing.T) {
-	t.Parallel()
-
-	eng, _ := newTestEngineWithPerms(t, &mockPermChecker{}, nil, nil)
-	ctx := t.Context()
-
-	require.NoError(t, eng.baseline.RecordLocalIssue(
-		ctx, "Shared/ReadOnly", IssuePermissionDenied,
-		"read-only", http.StatusForbidden, 0, "",
-	))
-
-	// Action 0: folder create (suppressed — under denied)
-	// Action 1: upload depends on 0 (suppressed — under denied)
-	// Action 2: download (kept)
-	// Action 3: upload outside denied, depends on 2 (kept, dep remapped)
-	plan := &ActionPlan{
-		Actions: []Action{
-			{Type: ActionFolderCreate, Path: "Shared/ReadOnly/newdir"},
-			{Type: ActionUpload, Path: "Shared/ReadOnly/newdir/file.txt"},
-			{Type: ActionDownload, Path: "Other/file.txt"},
-			{Type: ActionUpload, Path: "Other/local.txt"},
-		},
-		Deps: [][]int{{}, {0}, {}, {2}},
-	}
-
-	filtered := eng.filterDeniedWrites(ctx, plan)
-
-	require.Len(t, filtered.Actions, 2)
-	assert.Equal(t, ActionDownload, filtered.Actions[0].Type)
-	assert.Equal(t, ActionUpload, filtered.Actions[1].Type)
-
-	// Action 3 (now index 1) depended on action 2 (now index 0).
-	assert.Equal(t, []int{0}, filtered.Deps[1])
-
-	// Action 2 (now index 0) had no deps.
-	assert.Empty(t, filtered.Deps[0])
-}
-
-// ---------------------------------------------------------------------------
-// loadDeniedPrefixes tests
-// ---------------------------------------------------------------------------
-
-func TestLoadDeniedPrefixes(t *testing.T) {
-	t.Parallel()
-
-	eng, _ := newTestEngineWithPerms(t, &mockPermChecker{}, nil, nil)
-	ctx := t.Context()
-
-	// No issues → empty.
-	assert.Empty(t, eng.loadDeniedPrefixes(ctx))
-
-	// Add some permission_denied issues.
-	require.NoError(t, eng.baseline.RecordLocalIssue(
-		ctx, "Shared/A", IssuePermissionDenied, "ro", http.StatusForbidden, 0, "",
-	))
-	require.NoError(t, eng.baseline.RecordLocalIssue(
-		ctx, "Shared/B", IssuePermissionDenied, "ro", http.StatusForbidden, 0, "",
-	))
-
-	// Add a non-permission issue — should NOT appear.
-	require.NoError(t, eng.baseline.RecordLocalIssue(
-		ctx, "Other/file.txt", "upload_failed", "err", 500, 0, "",
-	))
-
-	prefixes := eng.loadDeniedPrefixes(ctx)
-	assert.Len(t, prefixes, 2)
-	assert.Contains(t, prefixes, "Shared/A")
-	assert.Contains(t, prefixes, "Shared/B")
-}
-
-// ---------------------------------------------------------------------------
 // permissionCache tests
 // ---------------------------------------------------------------------------
 
@@ -647,6 +466,36 @@ func TestPermissionCache_Reset(t *testing.T) {
 
 	_, ok = pc.get("other")
 	assert.False(t, ok, "entries should be cleared after reset")
+}
+
+func TestPermissionCache_DeniedPrefixes(t *testing.T) {
+	t.Parallel()
+
+	pc := newPermissionCache()
+
+	pc.set("Shared/ReadOnly", false)
+	pc.set("Shared/Writable", true)
+	pc.set("Shared/Other", false)
+
+	prefixes := pc.deniedPrefixes()
+	assert.Len(t, prefixes, 2)
+	assert.Contains(t, prefixes, "Shared/ReadOnly")
+	assert.Contains(t, prefixes, "Shared/Other")
+}
+
+func TestPermissionCache_NilSafe(t *testing.T) {
+	t.Parallel()
+
+	var pc *permissionCache
+
+	// None of these should panic.
+	pc.reset()
+	pc.set("folder", true)
+
+	_, ok := pc.get("folder")
+	assert.False(t, ok)
+
+	assert.Nil(t, pc.deniedPrefixes())
 }
 
 // ---------------------------------------------------------------------------

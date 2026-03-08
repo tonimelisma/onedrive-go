@@ -280,17 +280,15 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 
 	// Step 6: Plan actions.
 	safety := e.resolveSafetyConfig(opts)
+	denied := e.permCache.deniedPrefixes()
 
-	plan, err := e.planner.Plan(changes, bl, mode, safety)
+	plan, err := e.planner.Plan(changes, bl, mode, safety, denied)
 	if err != nil {
 		return nil, err
 	}
 
 	// Step 6b: Pre-upload validation — reject permanently invalid uploads.
 	plan = e.filterInvalidUploads(ctx, plan)
-
-	// Step 6c: Suppress writes under permission-denied folders.
-	plan = e.filterDeniedWrites(ctx, plan)
 
 	// Step 7: Build report from plan counts.
 	counts := countByType(plan.Actions)
@@ -895,7 +893,28 @@ func (e *Engine) drainWorkerResults(ctx context.Context, results <-chan WorkerRe
 			}
 
 			if !r.Success {
-				// Persist failure to remote_state for durable retry tracking.
+				// Check permissions FIRST for 403s — if read-only, skip remote_state
+				// recording entirely. Permission-denied items should not enter the
+				// retry/escalation pipeline.
+				if r.HTTPStatus == http.StatusForbidden && e.permChecker != nil {
+					if !shortcutsLoaded {
+						var scErr error
+						cachedShortcuts, scErr = e.baseline.ListShortcuts(ctx)
+						if scErr != nil {
+							e.logger.Warn("drainWorkerResults: failed to load shortcuts for 403 handling",
+								slog.String("error", scErr.Error()),
+							)
+						}
+
+						shortcutsLoaded = true
+					}
+
+					if e.handle403(ctx, r.Path, cachedShortcuts) {
+						continue
+					}
+				}
+
+				// Non-permission failures: record in remote_state for retry.
 				if recErr := e.baseline.RecordFailure(ctx, r.Path, r.ErrMsg, r.HTTPStatus); recErr != nil {
 					e.logger.Warn("failed to record failure in remote_state",
 						slog.String("path", r.Path),
@@ -911,23 +930,6 @@ func (e *Engine) drainWorkerResults(ctx context.Context, results <-chan WorkerRe
 							slog.String("error", issueErr.Error()),
 						)
 					}
-				}
-
-				// On HTTP 403, check if the folder is read-only via API.
-				if r.HTTPStatus == http.StatusForbidden && e.permChecker != nil {
-					if !shortcutsLoaded {
-						var scErr error
-						cachedShortcuts, scErr = e.baseline.ListShortcuts(ctx)
-						if scErr != nil {
-							e.logger.Warn("drainWorkerResults: failed to load shortcuts for 403 handling",
-								slog.String("error", scErr.Error()),
-							)
-						}
-
-						shortcutsLoaded = true
-					}
-
-					e.handle403(ctx, r.Path, cachedShortcuts)
 				}
 			}
 
@@ -1096,7 +1098,8 @@ func (e *Engine) processBatch(
 		slog.Int("paths", len(batch)),
 	)
 
-	plan, err := e.planner.Plan(batch, bl, mode, safety)
+	denied := e.permCache.deniedPrefixes()
+	plan, err := e.planner.Plan(batch, bl, mode, safety, denied)
 	if err != nil {
 		if errors.Is(err, ErrBigDeleteTriggered) {
 			e.logger.Warn("big-delete protection triggered, skipping batch",

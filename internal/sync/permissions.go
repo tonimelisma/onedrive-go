@@ -31,16 +31,45 @@ func newPermissionCache() *permissionCache {
 // reset clears all cached entries. Called at the start of each sync cycle
 // to prevent stale entries from persisting when permissions change.
 func (pc *permissionCache) reset() {
+	if pc == nil {
+		return
+	}
+
 	pc.cache = make(map[string]bool)
 }
 
 func (pc *permissionCache) get(folderPath string) (canWrite bool, ok bool) {
+	if pc == nil {
+		return false, false
+	}
+
 	canWrite, ok = pc.cache[folderPath]
+
 	return canWrite, ok
 }
 
 func (pc *permissionCache) set(folderPath string, canWrite bool) {
+	if pc == nil {
+		return
+	}
+
 	pc.cache[folderPath] = canWrite
+}
+
+// deniedPrefixes returns all folder paths cached as read-only (canWrite == false).
+func (pc *permissionCache) deniedPrefixes() []string {
+	if pc == nil {
+		return nil
+	}
+
+	var prefixes []string
+	for path, canWrite := range pc.cache {
+		if !canWrite {
+			prefixes = append(prefixes, path)
+		}
+	}
+
+	return prefixes
 }
 
 // findShortcutForPath returns the first shortcut whose LocalPath is a prefix
@@ -60,14 +89,16 @@ func findShortcutForPath(shortcuts []Shortcut, filePath string) *Shortcut {
 // It queries the Graph API to determine if the folder is truly read-only,
 // and if so, walks up the hierarchy to find the permission boundary and
 // records a local_issue at the boundary folder.
-func (e *Engine) handle403(ctx context.Context, failedPath string, shortcuts []Shortcut) {
+// Returns true if permission-denied was confirmed and recorded (read-only),
+// false if transient or unknown (caller should proceed with normal failure recording).
+func (e *Engine) handle403(ctx context.Context, failedPath string, shortcuts []Shortcut) bool {
 	if e.permChecker == nil {
-		return
+		return false
 	}
 
 	sc := findShortcutForPath(shortcuts, failedPath)
 	if sc == nil {
-		return
+		return false
 	}
 
 	remoteDriveID := driveid.New(sc.RemoteDrive)
@@ -88,8 +119,7 @@ func (e *Engine) handle403(ctx context.Context, failedPath string, shortcuts []S
 	// Query permissions on the parent folder.
 	perms, err := e.permChecker.ListItemPermissions(ctx, remoteDriveID, parentItemID)
 	if err != nil {
-		e.handlePermissionCheckError(ctx, err, failedPath, parentFolder)
-		return
+		return e.handlePermissionCheckError(ctx, err, failedPath, parentFolder)
 	}
 
 	if graph.HasWriteAccess(perms) {
@@ -97,7 +127,7 @@ func (e *Engine) handle403(ctx context.Context, failedPath string, shortcuts []S
 			slog.String("path", failedPath),
 		)
 
-		return
+		return false
 	}
 
 	// Folder is read-only. Walk up to find the highest read-only ancestor.
@@ -114,16 +144,21 @@ func (e *Engine) handle403(ctx context.Context, failedPath string, shortcuts []S
 		)
 	}
 
+	e.permCache.set(boundary, false)
+
 	e.logger.Info("handle403: read-only folder detected, writes suppressed",
 		slog.String("boundary", boundary),
 		slog.String("trigger_path", failedPath),
 	)
+
+	return true
 }
 
 // handlePermissionCheckError handles errors from ListItemPermissions during
 // 403 processing. If the item is not found (404), records a permission issue
-// to prevent infinite retries. Otherwise logs a warning and does not suppress.
-func (e *Engine) handlePermissionCheckError(ctx context.Context, err error, failedPath, parentFolder string) {
+// to prevent infinite retries and returns true. Otherwise logs a warning and
+// returns false (caller should proceed with normal failure recording).
+func (e *Engine) handlePermissionCheckError(ctx context.Context, err error, failedPath, parentFolder string) bool {
 	if errors.Is(err, graph.ErrNotFound) {
 		e.logger.Warn("handle403: folder not found, recording as permission denied",
 			slog.String("path", parentFolder),
@@ -139,13 +174,17 @@ func (e *Engine) handlePermissionCheckError(ctx context.Context, err error, fail
 			)
 		}
 
-		return
+		e.permCache.set(parentFolder, false)
+
+		return true
 	}
 
 	e.logger.Warn("handle403: permission check failed, not suppressing",
 		slog.String("path", failedPath),
 		slog.String("error", err.Error()),
 	)
+
+	return false
 }
 
 // walkPermissionBoundary walks UP the folder hierarchy to find the highest
@@ -223,6 +262,8 @@ func (e *Engine) recheckPermissions(ctx context.Context, shortcuts []Shortcut) {
 
 		sc := findShortcutForPath(shortcuts, issue.Path)
 		if sc == nil {
+			e.permCache.set(issue.Path, false)
+
 			continue
 		}
 
@@ -230,11 +271,15 @@ func (e *Engine) recheckPermissions(ctx context.Context, shortcuts []Shortcut) {
 		remoteItemID := e.resolveRemoteItemID(issue.Path, remoteDriveID)
 
 		if remoteItemID == "" {
+			e.permCache.set(issue.Path, false)
+
 			continue
 		}
 
 		perms, permErr := e.permChecker.ListItemPermissions(ctx, remoteDriveID, remoteItemID)
 		if permErr != nil {
+			e.permCache.set(issue.Path, false)
+
 			continue
 		}
 
@@ -256,92 +301,4 @@ func (e *Engine) recheckPermissions(ctx context.Context, shortcuts []Shortcut) {
 			)
 		}
 	}
-}
-
-// isWriteSuppressed checks if a write action should be suppressed because
-// its path is under a permission_denied folder. Used by the engine when
-// filtering actions before execution.
-func isWriteSuppressed(path string, deniedPrefixes []string) bool {
-	for _, prefix := range deniedPrefixes {
-		if path == prefix || strings.HasPrefix(path, prefix+"/") {
-			return true
-		}
-	}
-
-	return false
-}
-
-// isRemoteWriteAction returns true for action types that write to the remote
-// drive and would fail with 403 on a read-only folder.
-func isRemoteWriteAction(at ActionType) bool {
-	switch at { //nolint:exhaustive // only write actions are relevant
-	case ActionUpload, ActionRemoteDelete, ActionRemoteMove, ActionFolderCreate:
-		return true
-	default:
-		return false
-	}
-}
-
-// filterDeniedWrites removes write actions whose paths fall under
-// permission-denied folders. Downloads continue normally.
-func (e *Engine) filterDeniedWrites(ctx context.Context, plan *ActionPlan) *ActionPlan {
-	denied := e.loadDeniedPrefixes(ctx)
-	if len(denied) == 0 {
-		return plan
-	}
-
-	var filtered []Action
-
-	var filteredDeps [][]int
-
-	// Map old indices → new indices for dependency remapping.
-	oldToNew := make(map[int]int, len(plan.Actions))
-
-	for i, action := range plan.Actions {
-		if isRemoteWriteAction(action.Type) && isWriteSuppressed(action.Path, denied) {
-			e.logger.Debug("suppressing write under denied folder",
-				slog.String("path", action.Path),
-				slog.String("action", action.Type.String()),
-			)
-
-			continue
-		}
-
-		oldToNew[i] = len(filtered)
-		filtered = append(filtered, action)
-		filteredDeps = append(filteredDeps, plan.Deps[i])
-	}
-
-	// Remap dependency indices.
-	for i := range filteredDeps {
-		var remapped []int
-		for _, dep := range filteredDeps[i] {
-			if newIdx, ok := oldToNew[dep]; ok {
-				remapped = append(remapped, newIdx)
-			}
-			// Drop dependencies on suppressed actions — they no longer exist.
-		}
-
-		filteredDeps[i] = remapped
-	}
-
-	return &ActionPlan{
-		Actions: filtered,
-		Deps:    filteredDeps,
-	}
-}
-
-// loadDeniedPrefixes loads all permission_denied local_issue paths.
-func (e *Engine) loadDeniedPrefixes(ctx context.Context) []string {
-	issues, err := e.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
-	if err != nil {
-		return nil
-	}
-
-	prefixes := make([]string, 0, len(issues))
-	for i := range issues {
-		prefixes = append(prefixes, issues[i].Path)
-	}
-
-	return prefixes
 }
