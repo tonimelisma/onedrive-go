@@ -38,7 +38,7 @@ func TestS1_NoRemoteDeleteWithoutBaseline(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
 	for _, a := range plan.Actions {
@@ -207,7 +207,7 @@ func TestEF6_LocalDeletedImpliesLocalChanged(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
 	remoteDeletes := ActionsOfType(plan.Actions, ActionRemoteDelete)
@@ -255,7 +255,7 @@ func TestEF4_ConvergentEdit_NoTransfer(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
 	synced := ActionsOfType(plan.Actions, ActionUpdateSynced)
@@ -298,7 +298,7 @@ func TestEF11_ConvergentCreate(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
 	synced := ActionsOfType(plan.Actions, ActionUpdateSynced)
@@ -336,7 +336,7 @@ func TestEF12_DivergentCreate(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
 	conflicts := ActionsOfType(plan.Actions, ActionConflict)
@@ -384,7 +384,7 @@ func TestEF9_EditDeleteAutoResolve(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
 	conflicts := ActionsOfType(plan.Actions, ActionConflict)
@@ -422,7 +422,7 @@ func TestUploadOnlyMode_ProducesRemoteDeletes(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, baseline, SyncUploadOnly, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncUploadOnly, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
 	remoteDeletes := ActionsOfType(plan.Actions, ActionRemoteDelete)
@@ -461,7 +461,7 @@ func TestDownloadOnlyMode_SkipsLocalCorruption(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, baseline, SyncDownloadOnly, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncDownloadOnly, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
 	// In download-only mode, local changes are suppressed. Since remote
@@ -498,7 +498,7 @@ func TestED8_FolderModeFilteringRegression(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
 	remoteDeletes := ActionsOfType(plan.Actions, ActionRemoteDelete)
@@ -548,7 +548,7 @@ func TestMoveDetection_AmbiguousSameHashMultipleDeletes(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
 	// Ambiguous: two deletes with same hash → no move detected.
@@ -589,7 +589,7 @@ func TestMoveDetection_AmbiguousSameHashMultipleCreates(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
 	// Ambiguous: one delete, two creates with same hash → no move detected.
@@ -642,7 +642,7 @@ func TestRemoteMove_WithRecreationAtSource(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
 	// Should have a local move for the renamed item.
@@ -741,7 +741,7 @@ func TestPlan_BigDeleteBlocked(t *testing.T) {
 		})
 	}
 
-	_, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	_, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrBigDeleteTriggered)
 }

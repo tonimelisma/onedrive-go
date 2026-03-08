@@ -60,7 +60,7 @@ func TestPerSideHash_PreventsReUploadLoop(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
 	// No upload, no download — both sides match their respective baselines.
@@ -111,7 +111,7 @@ func TestPerSideHash_PreventsReDownloadLoop(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
 	downloads := ActionsOfType(plan.Actions, ActionDownload)
@@ -163,7 +163,7 @@ func TestPerSideHash_5CycleStabilityProof(t *testing.T) {
 			},
 		}
 
-		plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+		plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 		require.NoError(t, err, "cycle %d", cycle)
 
 		assert.Empty(t, plan.Actions,
@@ -205,7 +205,7 @@ func TestPerSideHash_NormalDriveUnaffected(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig())
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
 	// Should produce a download because remote hash changed.

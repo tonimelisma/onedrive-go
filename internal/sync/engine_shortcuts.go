@@ -44,17 +44,17 @@ func (e *Engine) processShortcuts(
 		}
 	}
 
-	// B-334: Pre-filter delete IDs to known shortcuts before loading the full list.
-	// This avoids unnecessary work in handleRemovedShortcuts.
+	// Step 2: Handle removed shortcuts.
+	// B-334: Pre-filter delete IDs to known shortcuts before processing.
 	if len(removedShortcutIDs) > 0 {
-		shortcuts, err := e.baseline.ListShortcuts(ctx)
+		preFilterShortcuts, err := e.baseline.ListShortcuts(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("sync: listing shortcuts for removal pre-filter: %w", err)
 		}
 
-		known := make(map[string]bool, len(shortcuts))
-		for i := range shortcuts {
-			known[shortcuts[i].ItemID] = true
+		known := make(map[string]bool, len(preFilterShortcuts))
+		for i := range preFilterShortcuts {
+			known[preFilterShortcuts[i].ItemID] = true
 		}
 
 		for id := range removedShortcutIDs {
@@ -62,11 +62,10 @@ func (e *Engine) processShortcuts(
 				delete(removedShortcutIDs, id)
 			}
 		}
-	}
 
-	// Step 2: Handle removed shortcuts.
-	if err := e.handleRemovedShortcuts(ctx, removedShortcutIDs); err != nil {
-		return nil, err
+		if err := e.handleRemovedShortcuts(ctx, removedShortcutIDs, preFilterShortcuts); err != nil {
+			return nil, err
+		}
 	}
 
 	// Step 3: Register/update shortcuts from shortcut events.
@@ -142,22 +141,10 @@ func (e *Engine) registerShortcuts(ctx context.Context, events []ChangeEvent) er
 	return nil
 }
 
-// detectShortcutCollisions checks for path conflicts between shortcuts and
-// returns the set of item IDs that should be skipped during observation.
+// detectShortcutCollisionsFromList checks for path conflicts between shortcuts
+// and returns the set of item IDs that should be skipped during observation.
 // Detects: exact duplicates, prefix nesting (Shared vs Shared/Sub), and
 // conflicts with primary drive baseline entries.
-func (e *Engine) detectShortcutCollisions(ctx context.Context, bl *Baseline) map[string]bool {
-	shortcuts, err := e.baseline.ListShortcuts(ctx)
-	if err != nil {
-		return nil
-	}
-
-	return detectShortcutCollisionsFromList(shortcuts, bl, e.logger)
-}
-
-// detectShortcutCollisionsFromList is the list-threaded variant of
-// detectShortcutCollisions (B-333). Avoids a redundant ListShortcuts query
-// when the caller already has the list.
 func detectShortcutCollisionsFromList(shortcuts []Shortcut, bl *Baseline, logger *slog.Logger) map[string]bool {
 	collisions := make(map[string]bool)
 
@@ -286,14 +273,10 @@ func (e *Engine) detectDriveType(ctx context.Context, remoteDriveID string) (str
 }
 
 // handleRemovedShortcuts processes ChangeDelete events for known shortcuts.
-func (e *Engine) handleRemovedShortcuts(ctx context.Context, deletedItemIDs map[string]bool) error {
+// Takes pre-loaded shortcuts to avoid a redundant DB query.
+func (e *Engine) handleRemovedShortcuts(ctx context.Context, deletedItemIDs map[string]bool, shortcuts []Shortcut) error {
 	if len(deletedItemIDs) == 0 {
 		return nil
-	}
-
-	shortcuts, err := e.baseline.ListShortcuts(ctx)
-	if err != nil {
-		return fmt.Errorf("sync: listing shortcuts for removal: %w", err)
 	}
 
 	for i := range shortcuts {
@@ -334,18 +317,9 @@ type scopeResult struct {
 	shortcut   *Shortcut
 }
 
-// observeShortcutContent observes content for all active shortcuts concurrently.
-// Delegates to observeShortcutContentFromList after loading shortcuts from the DB.
-func (e *Engine) observeShortcutContent(ctx context.Context, bl *Baseline, collisions map[string]bool) ([]ChangeEvent, error) {
-	shortcuts, err := e.baseline.ListShortcuts(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("sync: listing shortcuts for observation: %w", err)
-	}
-
-	return e.observeShortcutContentFromList(ctx, shortcuts, bl, collisions)
-}
-
-// observeShortcutContentFromList is the list-threaded variant (B-333).
+// observeShortcutContentFromList observes content for all active shortcuts
+// concurrently (up to maxShortcutConcurrency). Takes pre-loaded shortcuts
+// to avoid redundant DB queries (B-333).
 // Observes content for all active shortcuts concurrently (up to
 // maxShortcutConcurrency). Delta tokens are deferred until all scopes
 // complete, ensuring atomicity.
@@ -526,7 +500,7 @@ func (e *Engine) reconcileShortcutScopes(ctx context.Context, bl *Baseline) ([]C
 		return nil, nil
 	}
 
-	collisions := e.detectShortcutCollisions(ctx, bl)
+	collisions := detectShortcutCollisionsFromList(shortcuts, bl, e.logger)
 	results := make([]scopeResult, len(shortcuts))
 
 	var mu stdsync.Mutex

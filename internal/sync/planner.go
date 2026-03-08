@@ -55,16 +55,19 @@ func NewPlanner(logger *slog.Logger) *Planner {
 	return &Planner{logger: logger}
 }
 
-// Plan takes buffered changes, the current baseline, sync mode, and safety
-// config, and produces an ActionPlan. Returns ErrBigDeleteTriggered if
-// the planned deletions exceed safety thresholds.
+// Plan takes buffered changes, the current baseline, sync mode, safety
+// config, and denied prefixes, and produces an ActionPlan. Paths under
+// deniedPrefixes are treated as download-only (remote writes suppressed).
+// Returns ErrBigDeleteTriggered if the planned deletions exceed safety thresholds.
 func (p *Planner) Plan(
 	changes []PathChanges, baseline *Baseline, mode SyncMode, config *SafetyConfig,
+	deniedPrefixes []string,
 ) (*ActionPlan, error) {
 	p.logger.Info("planning sync actions",
 		slog.Int("changes", len(changes)),
 		slog.Int("baseline_entries", baseline.Len()),
 		slog.String("mode", mode.String()),
+		slog.Int("denied_prefixes", len(deniedPrefixes)),
 	)
 
 	views := buildPathViews(changes, baseline)
@@ -72,7 +75,7 @@ func (p *Planner) Plan(
 	var allActions []Action
 
 	// Step 1: detect and extract moves before per-path classification.
-	allActions = append(allActions, detectMoves(views, changes)...)
+	allActions = append(allActions, detectMoves(views, changes, deniedPrefixes)...)
 
 	// Step 2: classify each remaining path. Sort keys for deterministic
 	// action order across runs with identical input (B-154).
@@ -84,7 +87,7 @@ func (p *Planner) Plan(
 	sort.Strings(sortedPaths)
 
 	for _, p := range sortedPaths {
-		allActions = append(allActions, classifyPathView(views[p], mode)...)
+		allActions = append(allActions, classifyPathView(views[p], mode, deniedPrefixes)...)
 	}
 
 	// Step 3: build dependency edges and verify acyclicity.
@@ -170,14 +173,14 @@ func buildPathViews(changes []PathChanges, baseline *Baseline) map[string]*PathV
 // detectMoves finds remote and local moves, produces move actions, and
 // removes matched paths from the views map so they do not enter per-path
 // classification.
-func detectMoves(views map[string]*PathView, changes []PathChanges) []Action {
+func detectMoves(views map[string]*PathView, changes []PathChanges, deniedPrefixes []string) []Action {
 	var actions []Action
 
 	// Remote moves: scan for ChangeMove events in remote events.
 	actions = append(actions, detectRemoteMoves(views, changes)...)
 
 	// Local moves: hash-based correlation of delete+create pairs.
-	actions = append(actions, detectLocalMoves(views)...)
+	actions = append(actions, detectLocalMoves(views, deniedPrefixes)...)
 
 	return actions
 }
@@ -232,7 +235,7 @@ func detectRemoteMoves(views map[string]*PathView, changes []PathChanges) []Acti
 // to detect renames. Only unique matches (exactly one delete and one
 // create with the same hash) produce move actions. Ambiguous cases are
 // skipped and fall through to separate delete+create.
-func detectLocalMoves(views map[string]*PathView) []Action {
+func detectLocalMoves(views map[string]*PathView, deniedPrefixes []string) []Action {
 	// Build hash-keyed maps of candidates.
 	deletesByHash := make(map[string][]string) // hash -> [paths]
 	createsByHash := make(map[string][]string) // hash -> [paths]
@@ -271,6 +274,12 @@ func detectLocalMoves(views map[string]*PathView) []Action {
 
 		deletePath := delPaths[0]
 		createPath := crePaths[0]
+
+		// Skip local moves under permission-denied folders — can't write to remote.
+		if isWriteDenied(deletePath, deniedPrefixes) || isWriteDenied(createPath, deniedPrefixes) {
+			continue
+		}
+
 		view := views[deletePath]
 
 		action := makeAction(ActionRemoteMove, view)
@@ -288,15 +297,33 @@ func detectLocalMoves(views map[string]*PathView) []Action {
 }
 
 // classifyPathView determines actions for a single path view based on
-// the item type and sync mode.
-func classifyPathView(view *PathView, mode SyncMode) []Action {
+// the item type and sync mode. Paths under deniedPrefixes are treated
+// as download-only (remote writes suppressed).
+func classifyPathView(view *PathView, mode SyncMode, deniedPrefixes []string) []Action {
+	// Under a denied prefix, behave as download-only: we cannot write to remote.
+	effectiveMode := mode
+	if isWriteDenied(view.Path, deniedPrefixes) {
+		effectiveMode = SyncDownloadOnly
+	}
+
 	itemType := resolveItemType(view)
 
 	if itemType == ItemTypeFolder {
-		return classifyFolder(view, mode)
+		return classifyFolder(view, effectiveMode)
 	}
 
-	return classifyFile(view, mode)
+	return classifyFile(view, effectiveMode)
+}
+
+// isWriteDenied checks if a path falls under a permission-denied folder.
+func isWriteDenied(filePath string, deniedPrefixes []string) bool {
+	for _, prefix := range deniedPrefixes {
+		if filePath == prefix || strings.HasPrefix(filePath, prefix+"/") {
+			return true
+		}
+	}
+
+	return false
 }
 
 // classifyFile dispatches to the appropriate file classification function

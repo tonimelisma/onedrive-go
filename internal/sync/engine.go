@@ -234,23 +234,24 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 		e.logger.Warn("failed to reset in-progress states", slog.String("error", err.Error()))
 	}
 
-	// Step 0b: Recheck permissions — clear any permission_denied issues
-	// for folders that have become writable since the last cycle.
-	if e.permChecker != nil {
-		shortcuts, scErr := e.baseline.ListShortcuts(ctx)
-		if scErr != nil {
-			e.logger.Warn("failed to load shortcuts for permission recheck",
-				slog.String("error", scErr.Error()),
-			)
-		} else {
-			e.recheckPermissions(ctx, shortcuts)
-		}
-	}
-
 	// Step 1: Load baseline.
 	bl, err := e.baseline.Load(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("sync: loading baseline: %w", err)
+	}
+
+	// Step 1b: Load shortcuts (needed for permission recheck + result drain).
+	shortcuts, scErr := e.baseline.ListShortcuts(ctx)
+	if scErr != nil {
+		e.logger.Warn("failed to load shortcuts",
+			slog.String("error", scErr.Error()),
+		)
+	}
+
+	// Recheck permissions — clear any permission_denied issues
+	// for folders that have become writable since the last cycle.
+	if e.permChecker != nil && scErr == nil {
+		e.recheckPermissions(ctx, bl, shortcuts)
 	}
 
 	// Steps 2-4: Observe remote + local, buffer, and flush.
@@ -280,17 +281,15 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 
 	// Step 6: Plan actions.
 	safety := e.resolveSafetyConfig(opts)
+	denied := e.permCache.deniedPrefixes()
 
-	plan, err := e.planner.Plan(changes, bl, mode, safety)
+	plan, err := e.planner.Plan(changes, bl, mode, safety, denied)
 	if err != nil {
 		return nil, err
 	}
 
 	// Step 6b: Pre-upload validation — reject permanently invalid uploads.
 	plan = e.filterInvalidUploads(ctx, plan)
-
-	// Step 6c: Suppress writes under permission-denied folders.
-	plan = e.filterDeniedWrites(ctx, plan)
 
 	// Step 7: Build report from plan counts.
 	counts := countByType(plan.Actions)
@@ -306,8 +305,8 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 		return report, nil
 	}
 
-	// Execute plan: run workers.
-	e.executePlan(ctx, plan, report)
+	// Execute plan: run workers, drain results (failures, 403s, upload issues).
+	e.executePlan(ctx, plan, report, bl, shortcuts)
 
 	report.Duration = time.Since(start)
 
@@ -335,10 +334,11 @@ func (e *Engine) postSyncHousekeeping() {
 }
 
 // executePlan populates the dependency tracker and runs the worker pool.
-// Delta token is no longer committed here — it's committed atomically
-// with observations in CommitObservation.
+// In one-shot mode, drains the result channel synchronously after pool
+// shutdown to process failures, 403 permission checks, and upload issues.
 func (e *Engine) executePlan(
 	ctx context.Context, plan *ActionPlan, report *SyncReport,
+	bl *Baseline, shortcuts []Shortcut,
 ) {
 	if len(plan.Actions) == 0 {
 		return
@@ -380,6 +380,12 @@ func (e *Engine) executePlan(
 	pool.Start(ctx, e.transferWorkers)
 	pool.Wait()
 	pool.Stop()
+
+	// Drain results synchronously — process failures, 403s, upload issues.
+	// After Stop(), the results channel is closed; range terminates cleanly.
+	for r := range pool.Results() {
+		e.processWorkerResult(ctx, r, bl, shortcuts)
+	}
 
 	report.Succeeded, report.Failed, report.Errors = pool.Stats()
 }
@@ -763,6 +769,24 @@ type WatchOpts struct {
 	ReconcileInterval  time.Duration // periodic full reconciliation (0 → 24h, negative = disabled)
 }
 
+// loadWatchState loads the baseline and shortcuts for the watch session.
+// Both are loaded once after the initial sync and reused throughout.
+func (e *Engine) loadWatchState(ctx context.Context) (*Baseline, []Shortcut, error) {
+	bl, err := e.baseline.Load(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("sync: loading baseline for watch: %w", err)
+	}
+
+	shortcuts, scErr := e.baseline.ListShortcuts(ctx)
+	if scErr != nil {
+		e.logger.Warn("failed to load shortcuts for watch mode",
+			slog.String("error", scErr.Error()),
+		)
+	}
+
+	return bl, shortcuts, nil
+}
+
 // RunWatch runs a continuous sync loop: initial one-shot sync, then
 // watches for remote and local changes, processing them in batches.
 // Blocks until the context is canceled, returning nil on clean shutdown.
@@ -780,13 +804,11 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 		return fmt.Errorf("sync: initial sync failed: %w", err)
 	}
 
-	// Step 2: Load baseline. bl is loaded once and reused across all batches.
-	// This is safe because Baseline.Load() returns a cached object that
-	// CommitOutcome() updates in-place under RWMutex — each processBatch
-	// call sees the latest state.
-	bl, err := e.baseline.Load(ctx)
+	// Step 2: Load baseline (cached, mutated in-place under RWMutex) and
+	// shortcuts (frozen after initial sync) for use throughout the watch session.
+	bl, watchShortcuts, err := e.loadWatchState(ctx)
 	if err != nil {
-		return fmt.Errorf("sync: loading baseline for watch: %w", err)
+		return err
 	}
 
 	// Step 3: Create persistent tracker and worker pool.
@@ -815,7 +837,8 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 	}()
 
 	// Drain worker results in a background goroutine for failure tracking.
-	go e.drainWorkerResults(ctx, pool.Results())
+	// Baseline and shortcuts are passed explicitly — no store queries during execution.
+	go e.drainWorkerResults(ctx, pool.Results(), bl, watchShortcuts)
 
 	// Step 4: Create buffer and debounced output.
 	buf := NewBuffer(e.logger)
@@ -879,14 +902,51 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 	}
 }
 
+// processWorkerResult handles a single worker result: records failures in
+// remote_state, checks permissions on 403s, records upload issues in
+// local_issues, and kicks the retrier. Shared by both one-shot (RunOnce)
+// and watch (drainWorkerResults) paths.
+func (e *Engine) processWorkerResult(ctx context.Context, r WorkerResult, bl *Baseline, shortcuts []Shortcut) {
+	if !r.Success {
+		// Check permissions FIRST for 403s — if read-only, skip remote_state
+		// recording entirely. Permission-denied items should not enter the
+		// retry/escalation pipeline.
+		if r.HTTPStatus == http.StatusForbidden && e.permChecker != nil {
+			if e.handle403(ctx, bl, r.Path, shortcuts) {
+				return
+			}
+		}
+
+		// Non-permission failures: record in remote_state for retry.
+		if recErr := e.baseline.RecordFailure(ctx, r.Path, r.ErrMsg, r.HTTPStatus); recErr != nil {
+			e.logger.Warn("failed to record failure in remote_state",
+				slog.String("path", r.Path),
+				slog.String("error", recErr.Error()),
+			)
+		}
+
+		// Also record upload failures in local_issues for user visibility.
+		if r.ActionType == ActionUpload {
+			if issueErr := e.baseline.RecordLocalIssue(ctx, r.Path, "upload_failed", r.ErrMsg, r.HTTPStatus, 0, ""); issueErr != nil {
+				e.logger.Warn("failed to record upload issue in local_issues",
+					slog.String("path", r.Path),
+					slog.String("error", issueErr.Error()),
+				)
+			}
+		}
+	}
+
+	// Kick retrier after every result (success or failure) so it
+	// can re-evaluate retry timers and dispatch newly retriable items.
+	if e.retrier != nil {
+		e.retrier.Kick()
+	}
+}
+
 // drainWorkerResults reads from the worker result channel and persists
-// failures to remote_state for durable retry tracking.
-func (e *Engine) drainWorkerResults(ctx context.Context, results <-chan WorkerResult) {
-	// Cache shortcuts once for 403 handling (avoids repeated DB queries).
-	var cachedShortcuts []Shortcut
-
-	var shortcutsLoaded bool
-
+// failures to remote_state for durable retry tracking. Used by watch mode.
+// Receives baseline and shortcuts as explicit parameters.
+func (e *Engine) drainWorkerResults(ctx context.Context, results <-chan WorkerResult, bl *Baseline, shortcuts []Shortcut) {
 	for {
 		select {
 		case r, ok := <-results:
@@ -894,48 +954,7 @@ func (e *Engine) drainWorkerResults(ctx context.Context, results <-chan WorkerRe
 				return
 			}
 
-			if !r.Success {
-				// Persist failure to remote_state for durable retry tracking.
-				if recErr := e.baseline.RecordFailure(ctx, r.Path, r.ErrMsg, r.HTTPStatus); recErr != nil {
-					e.logger.Warn("failed to record failure in remote_state",
-						slog.String("path", r.Path),
-						slog.String("error", recErr.Error()),
-					)
-				}
-
-				// Also record upload failures in local_issues for user visibility.
-				if r.ActionType == ActionUpload {
-					if issueErr := e.baseline.RecordLocalIssue(ctx, r.Path, "upload_failed", r.ErrMsg, r.HTTPStatus, 0, ""); issueErr != nil {
-						e.logger.Warn("failed to record upload issue in local_issues",
-							slog.String("path", r.Path),
-							slog.String("error", issueErr.Error()),
-						)
-					}
-				}
-
-				// On HTTP 403, check if the folder is read-only via API.
-				if r.HTTPStatus == http.StatusForbidden && e.permChecker != nil {
-					if !shortcutsLoaded {
-						var scErr error
-						cachedShortcuts, scErr = e.baseline.ListShortcuts(ctx)
-						if scErr != nil {
-							e.logger.Warn("drainWorkerResults: failed to load shortcuts for 403 handling",
-								slog.String("error", scErr.Error()),
-							)
-						}
-
-						shortcutsLoaded = true
-					}
-
-					e.handle403(ctx, r.Path, cachedShortcuts)
-				}
-			}
-
-			// Kick retrier after every result (success or failure) so it
-			// can re-evaluate retry timers and dispatch newly retriable items.
-			if e.retrier != nil {
-				e.retrier.Kick()
-			}
+			e.processWorkerResult(ctx, r, bl, shortcuts)
 
 		case <-ctx.Done():
 			return
@@ -1096,7 +1115,8 @@ func (e *Engine) processBatch(
 		slog.Int("paths", len(batch)),
 	)
 
-	plan, err := e.planner.Plan(batch, bl, mode, safety)
+	denied := e.permCache.deniedPrefixes()
+	plan, err := e.planner.Plan(batch, bl, mode, safety, denied)
 	if err != nil {
 		if errors.Is(err, ErrBigDeleteTriggered) {
 			e.logger.Warn("big-delete protection triggered, skipping batch",

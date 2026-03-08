@@ -1691,7 +1691,7 @@ func TestExecutePlan_ActionsDepsLengthMismatch(t *testing.T) {
 	report := &SyncReport{}
 
 	// Should return cleanly without panic.
-	eng.executePlan(t.Context(), plan, report)
+	eng.executePlan(t.Context(), plan, report, nil, nil)
 
 	// Invariant violation should surface in the report.
 	assert.Equal(t, len(plan.Actions), report.Failed)
@@ -2392,7 +2392,7 @@ func TestDrainWorkerResults_UploadFailure_RecordsLocalIssue(t *testing.T) {
 	}
 	close(results)
 
-	eng.drainWorkerResults(ctx, results)
+	eng.drainWorkerResults(ctx, results, nil, nil)
 
 	issues, err := eng.baseline.ListLocalIssues(ctx)
 	require.NoError(t, err)
@@ -2420,10 +2420,163 @@ func TestDrainWorkerResults_DownloadFailure_NoLocalIssue(t *testing.T) {
 	}
 	close(results)
 
-	eng.drainWorkerResults(ctx, results)
+	eng.drainWorkerResults(ctx, results, nil, nil)
 
 	// Download failures should NOT create local_issues entries.
 	issues, err := eng.baseline.ListLocalIssues(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, issues, "download failures should not be recorded in local_issues")
+}
+
+// ---------------------------------------------------------------------------
+// Fix #5: drainWorkerResults 403 reordering — confirmed read-only 403 should
+// NOT call RecordFailure (skip remote_state entirely).
+// ---------------------------------------------------------------------------
+
+func TestDrainWorkerResults_403ReadOnly_SkipsRecordFailure(t *testing.T) {
+	t.Parallel()
+
+	remoteDriveID := "remote-drive-1"
+
+	// Permission checker returns read-only for the parent folder.
+	checker := &mockPermChecker{
+		perms: map[string][]graph.Permission{
+			driveid.New(remoteDriveID).String() + ":root-id": {{ID: "p1", Roles: []string{"read"}}},
+		},
+	}
+
+	shortcuts := []Shortcut{{
+		ItemID: "sc-1", RemoteDrive: remoteDriveID, RemoteItem: "root-id",
+		LocalPath: "Shared/TeamDocs", Observation: ObservationDelta, DiscoveredAt: 1000,
+	}}
+
+	baselineEntries := []Outcome{
+		{
+			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs",
+			DriveID: driveid.New(remoteDriveID), ItemID: "root-id", ParentID: "root", ItemType: ItemTypeFolder,
+		},
+	}
+
+	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+	ctx := t.Context()
+
+	results := make(chan WorkerResult, 1)
+	results <- WorkerResult{
+		Path:       "Shared/TeamDocs/file.txt",
+		ActionType: ActionUpload,
+		Success:    false,
+		ErrMsg:     "403 Forbidden",
+		HTTPStatus: 403,
+	}
+	close(results)
+
+	eng.drainWorkerResults(ctx, results, bl, shortcuts)
+
+	// Permission-denied should be recorded in local_issues.
+	permIssues, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
+	require.NoError(t, err)
+	assert.Len(t, permIssues, 1, "should record permission_denied issue")
+
+	// remote_state should NOT have a failure recorded — the 403 was confirmed
+	// as read-only and should not enter the retry/escalation pipeline.
+	failed, err := eng.baseline.ListFailedForRetry(ctx, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	assert.Empty(t, failed, "confirmed read-only 403 should not be in remote_state")
+}
+
+// ---------------------------------------------------------------------------
+// processWorkerResult — shared helper tests
+// ---------------------------------------------------------------------------
+
+func TestProcessWorkerResult_UploadFailure_RecordsLocalIssue(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	eng.processWorkerResult(ctx, WorkerResult{
+		Path:       "docs/report.xlsx",
+		ActionType: ActionUpload,
+		Success:    false,
+		ErrMsg:     "connection reset",
+		HTTPStatus: 503,
+	}, nil, nil)
+
+	// Should record upload failure in local_issues.
+	issues, err := eng.baseline.ListLocalIssues(ctx)
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+	assert.Equal(t, "docs/report.xlsx", issues[0].Path)
+	assert.Equal(t, "upload_failed", issues[0].IssueType)
+	assert.Equal(t, "connection reset", issues[0].LastError)
+	assert.Equal(t, 503, issues[0].HTTPStatus)
+}
+
+func TestProcessWorkerResult_403ReadOnly_SkipsRemoteState(t *testing.T) {
+	t.Parallel()
+
+	remoteDriveID := "remote-drive-1"
+
+	checker := &mockPermChecker{
+		perms: map[string][]graph.Permission{
+			driveid.New(remoteDriveID).String() + ":root-id": {{ID: "p1", Roles: []string{"read"}}},
+		},
+	}
+
+	shortcuts := []Shortcut{{
+		ItemID: "sc-1", RemoteDrive: remoteDriveID, RemoteItem: "root-id",
+		LocalPath: "Shared/TeamDocs", Observation: ObservationDelta, DiscoveredAt: 1000,
+	}}
+
+	baselineEntries := []Outcome{
+		{
+			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs",
+			DriveID: driveid.New(remoteDriveID), ItemID: "root-id", ParentID: "root", ItemType: ItemTypeFolder,
+		},
+	}
+
+	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+	ctx := t.Context()
+
+	eng.processWorkerResult(ctx, WorkerResult{
+		Path:       "Shared/TeamDocs/file.txt",
+		ActionType: ActionUpload,
+		Success:    false,
+		ErrMsg:     "403 Forbidden",
+		HTTPStatus: 403,
+	}, bl, shortcuts)
+
+	// Permission-denied should be recorded in local_issues.
+	permIssues, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
+	require.NoError(t, err)
+	assert.Len(t, permIssues, 1, "should record permission_denied issue")
+
+	// remote_state should be empty.
+	failed, err := eng.baseline.ListFailedForRetry(ctx, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	assert.Empty(t, failed, "confirmed read-only 403 should not be in remote_state")
+}
+
+func TestProcessWorkerResult_Success_NoRecords(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	eng.processWorkerResult(ctx, WorkerResult{
+		Path:       "docs/report.xlsx",
+		ActionType: ActionDownload,
+		Success:    true,
+	}, nil, nil)
+
+	// No failures should be recorded.
+	failed, err := eng.baseline.ListFailedForRetry(ctx, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	assert.Empty(t, failed)
+
+	issues, err := eng.baseline.ListLocalIssues(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, issues)
 }

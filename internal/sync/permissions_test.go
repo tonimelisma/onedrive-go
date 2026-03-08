@@ -88,74 +88,12 @@ func TestFindShortcutForPath(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// isWriteSuppressed tests
-// ---------------------------------------------------------------------------
-
-func TestIsWriteSuppressed(t *testing.T) {
-	t.Parallel()
-
-	denied := []string{"Shared/ReadOnly", "Shared/Other/Private"}
-
-	tests := []struct {
-		name string
-		path string
-		want bool
-	}{
-		{"exact denied folder", "Shared/ReadOnly", true},
-		{"child of denied", "Shared/ReadOnly/sub/file.txt", true},
-		{"different folder", "Shared/Writable/file.txt", false},
-		{"partial prefix", "Shared/ReadOnlyExtra/file.txt", false},
-		{"exact subfolder denied", "Shared/Other/Private", true},
-		{"child of subfolder denied", "Shared/Other/Private/deep/file.txt", true},
-		{"sibling of denied subfolder", "Shared/Other/Public/file.txt", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			assert.Equal(t, tt.want, isWriteSuppressed(tt.path, denied))
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
-// isRemoteWriteAction tests
-// ---------------------------------------------------------------------------
-
-func TestIsRemoteWriteAction(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		action ActionType
-		want   bool
-	}{
-		{ActionUpload, true},
-		{ActionRemoteDelete, true},
-		{ActionRemoteMove, true},
-		{ActionFolderCreate, true},
-		{ActionDownload, false},
-		{ActionLocalDelete, false},
-		{ActionLocalMove, false},
-		{ActionConflict, false},
-		{ActionUpdateSynced, false},
-		{ActionCleanup, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.action.String(), func(t *testing.T) {
-			t.Parallel()
-			assert.Equal(t, tt.want, isRemoteWriteAction(tt.action))
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
 // handle403 tests
 // ---------------------------------------------------------------------------
 
 // newTestEngineWithPerms creates an engine with a mock permission checker
 // and seeds baseline entries for the given paths.
-func newTestEngineWithPerms(t *testing.T, checker PermissionChecker, shortcuts []Shortcut, baselineEntries []Outcome) (*Engine, string) { //nolint:unparam // syncRoot useful for callers
+func newTestEngineWithPerms(t *testing.T, checker PermissionChecker, shortcuts []Shortcut, baselineEntries []Outcome) (*Engine, *Baseline, string) { //nolint:unparam // syncRoot useful for callers
 	t.Helper()
 
 	tmpDir := t.TempDir()
@@ -193,11 +131,15 @@ func newTestEngineWithPerms(t *testing.T, checker PermissionChecker, shortcuts [
 		require.NoError(t, eng.baseline.UpsertShortcut(ctx, &shortcuts[i]))
 	}
 
+	// Load baseline after seeding so tests get a populated snapshot.
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
 	t.Cleanup(func() {
 		assert.NoError(t, eng.Close())
 	})
 
-	return eng, syncRoot
+	return eng, bl, syncRoot
 }
 
 func TestHandle403_ReadOnlyFolder_RecordsIssueAtBoundary(t *testing.T) {
@@ -230,16 +172,22 @@ func TestHandle403_ReadOnlyFolder_RecordsIssueAtBoundary(t *testing.T) {
 		},
 	}
 
-	eng, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
-	eng.handle403(ctx, "Shared/TeamDocs/sub/file.txt", shortcuts)
+	result := eng.handle403(ctx, bl, "Shared/TeamDocs/sub/file.txt", shortcuts)
+	assert.True(t, result, "handle403 should return true for read-only folder")
 
 	// Should have recorded a permission_denied issue at the boundary (sub folder).
 	issues, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 	assert.Equal(t, "Shared/TeamDocs/sub", issues[0].Path)
+
+	// Should have populated the cache.
+	canWrite, ok := eng.permCache.get("Shared/TeamDocs/sub")
+	assert.True(t, ok, "cache should contain boundary path")
+	assert.False(t, canWrite, "boundary should be cached as read-only")
 }
 
 func TestHandle403_TransientError_NoSuppression(t *testing.T) {
@@ -270,10 +218,11 @@ func TestHandle403_TransientError_NoSuppression(t *testing.T) {
 		},
 	}
 
-	eng, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
-	eng.handle403(ctx, "Shared/TeamDocs/sub/file.txt", shortcuts)
+	result := eng.handle403(ctx, bl, "Shared/TeamDocs/sub/file.txt", shortcuts)
+	assert.False(t, result, "handle403 should return false for transient 403")
 
 	// No issue should be recorded — transient 403.
 	issues, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
@@ -310,10 +259,10 @@ func TestHandle403_WholeShareReadOnly_BoundaryAtRoot(t *testing.T) {
 		},
 	}
 
-	eng, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
-	eng.handle403(ctx, "Shared/TeamDocs/sub/file.txt", shortcuts)
+	eng.handle403(ctx, bl, "Shared/TeamDocs/sub/file.txt", shortcuts)
 
 	// Boundary should walk all the way up to the shortcut root.
 	issues, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
@@ -347,10 +296,10 @@ func TestHandle403_APIFailure_FailOpen(t *testing.T) {
 		},
 	}
 
-	eng, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
-	eng.handle403(ctx, "Shared/TeamDocs/sub/file.txt", shortcuts)
+	eng.handle403(ctx, bl, "Shared/TeamDocs/sub/file.txt", shortcuts)
 
 	// No issue — fail-open when API is unavailable.
 	issues, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
@@ -363,11 +312,11 @@ func TestHandle403_NoShortcutMatch_Ignored(t *testing.T) {
 
 	checker := &mockPermChecker{}
 
-	eng, _ := newTestEngineWithPerms(t, checker, nil, nil)
+	eng, bl, _ := newTestEngineWithPerms(t, checker, nil, nil)
 	ctx := t.Context()
 
 	// Path not under any shortcut.
-	eng.handle403(ctx, "Documents/file.txt", nil)
+	eng.handle403(ctx, bl, "Documents/file.txt", nil)
 
 	issues, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
 	require.NoError(t, err)
@@ -403,7 +352,7 @@ func TestRecheckPermissions_GrantDetected_IssueCleared(t *testing.T) {
 		},
 	}
 
-	eng, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
 	// Pre-record a permission_denied issue.
@@ -417,7 +366,7 @@ func TestRecheckPermissions_GrantDetected_IssueCleared(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, before, 1)
 
-	eng.recheckPermissions(ctx, shortcuts)
+	eng.recheckPermissions(ctx, bl, shortcuts)
 
 	// Issue should be cleared.
 	after, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
@@ -449,7 +398,7 @@ func TestRecheckPermissions_StillDenied_NoChange(t *testing.T) {
 		},
 	}
 
-	eng, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
 	require.NoError(t, eng.baseline.RecordLocalIssue(
@@ -457,7 +406,7 @@ func TestRecheckPermissions_StillDenied_NoChange(t *testing.T) {
 		"folder is read-only", http.StatusForbidden, 0, "",
 	))
 
-	eng.recheckPermissions(ctx, shortcuts)
+	eng.recheckPermissions(ctx, bl, shortcuts)
 
 	// Issue should remain.
 	after, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
@@ -470,138 +419,90 @@ func TestRecheckPermissions_NoIssues_NoAPICalls(t *testing.T) {
 
 	checker := &mockPermChecker{}
 
-	eng, _ := newTestEngineWithPerms(t, checker, nil, nil)
+	eng, bl, _ := newTestEngineWithPerms(t, checker, nil, nil)
 	ctx := t.Context()
 
-	eng.recheckPermissions(ctx, nil)
+	eng.recheckPermissions(ctx, bl, nil)
 
 	assert.Empty(t, checker.calls, "should not call API when there are no issues")
 }
 
 // ---------------------------------------------------------------------------
-// filterDeniedWrites tests
+// Fix #7: recheckPermissions caches unresolvable issues as denied.
 // ---------------------------------------------------------------------------
 
-func TestFilterDeniedWrites_SuppressesWritesUnderDenied(t *testing.T) {
+func TestRecheckPermissions_UnresolvableIssues_CachedAsDenied(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngineWithPerms(t, &mockPermChecker{}, nil, nil)
+	checker := &mockPermChecker{}
+
+	// No shortcuts registered — issues won't match any shortcut.
+	eng, bl, _ := newTestEngineWithPerms(t, checker, nil, nil)
 	ctx := t.Context()
 
-	// Record a denied folder.
+	// Record two permission_denied issues.
 	require.NoError(t, eng.baseline.RecordLocalIssue(
-		ctx, "Shared/ReadOnly", IssuePermissionDenied,
-		"read-only", http.StatusForbidden, 0, "",
-	))
-
-	plan := &ActionPlan{
-		Actions: []Action{
-			{Type: ActionUpload, Path: "Shared/ReadOnly/file.txt"},
-			{Type: ActionDownload, Path: "Shared/ReadOnly/other.txt"},
-			{Type: ActionUpload, Path: "Shared/Writable/doc.txt"},
-			{Type: ActionRemoteDelete, Path: "Shared/ReadOnly/old.txt"},
-		},
-		Deps: [][]int{{}, {}, {}, {}},
-	}
-
-	filtered := eng.filterDeniedWrites(ctx, plan)
-
-	// Only download and writable upload should remain.
-	require.Len(t, filtered.Actions, 2)
-	assert.Equal(t, ActionDownload, filtered.Actions[0].Type)
-	assert.Equal(t, "Shared/ReadOnly/other.txt", filtered.Actions[0].Path)
-	assert.Equal(t, ActionUpload, filtered.Actions[1].Type)
-	assert.Equal(t, "Shared/Writable/doc.txt", filtered.Actions[1].Path)
-}
-
-func TestFilterDeniedWrites_NoDenied_PassThrough(t *testing.T) {
-	t.Parallel()
-
-	eng, _ := newTestEngineWithPerms(t, &mockPermChecker{}, nil, nil)
-	ctx := t.Context()
-
-	plan := &ActionPlan{
-		Actions: []Action{
-			{Type: ActionUpload, Path: "docs/file.txt"},
-			{Type: ActionDownload, Path: "docs/other.txt"},
-		},
-		Deps: [][]int{{}, {}},
-	}
-
-	filtered := eng.filterDeniedWrites(ctx, plan)
-
-	// No denied folders — plan unchanged.
-	assert.Len(t, filtered.Actions, 2)
-}
-
-func TestFilterDeniedWrites_RemapsDependencies(t *testing.T) {
-	t.Parallel()
-
-	eng, _ := newTestEngineWithPerms(t, &mockPermChecker{}, nil, nil)
-	ctx := t.Context()
-
-	require.NoError(t, eng.baseline.RecordLocalIssue(
-		ctx, "Shared/ReadOnly", IssuePermissionDenied,
-		"read-only", http.StatusForbidden, 0, "",
-	))
-
-	// Action 0: folder create (suppressed — under denied)
-	// Action 1: upload depends on 0 (suppressed — under denied)
-	// Action 2: download (kept)
-	// Action 3: upload outside denied, depends on 2 (kept, dep remapped)
-	plan := &ActionPlan{
-		Actions: []Action{
-			{Type: ActionFolderCreate, Path: "Shared/ReadOnly/newdir"},
-			{Type: ActionUpload, Path: "Shared/ReadOnly/newdir/file.txt"},
-			{Type: ActionDownload, Path: "Other/file.txt"},
-			{Type: ActionUpload, Path: "Other/local.txt"},
-		},
-		Deps: [][]int{{}, {0}, {}, {2}},
-	}
-
-	filtered := eng.filterDeniedWrites(ctx, plan)
-
-	require.Len(t, filtered.Actions, 2)
-	assert.Equal(t, ActionDownload, filtered.Actions[0].Type)
-	assert.Equal(t, ActionUpload, filtered.Actions[1].Type)
-
-	// Action 3 (now index 1) depended on action 2 (now index 0).
-	assert.Equal(t, []int{0}, filtered.Deps[1])
-
-	// Action 2 (now index 0) had no deps.
-	assert.Empty(t, filtered.Deps[0])
-}
-
-// ---------------------------------------------------------------------------
-// loadDeniedPrefixes tests
-// ---------------------------------------------------------------------------
-
-func TestLoadDeniedPrefixes(t *testing.T) {
-	t.Parallel()
-
-	eng, _ := newTestEngineWithPerms(t, &mockPermChecker{}, nil, nil)
-	ctx := t.Context()
-
-	// No issues → empty.
-	assert.Empty(t, eng.loadDeniedPrefixes(ctx))
-
-	// Add some permission_denied issues.
-	require.NoError(t, eng.baseline.RecordLocalIssue(
-		ctx, "Shared/A", IssuePermissionDenied, "ro", http.StatusForbidden, 0, "",
+		ctx, "Shared/NoShortcut/sub", IssuePermissionDenied,
+		"folder is read-only", http.StatusForbidden, 0, "",
 	))
 	require.NoError(t, eng.baseline.RecordLocalIssue(
-		ctx, "Shared/B", IssuePermissionDenied, "ro", http.StatusForbidden, 0, "",
+		ctx, "Shared/Other/locked", IssuePermissionDenied,
+		"folder is read-only", http.StatusForbidden, 0, "",
 	))
 
-	// Add a non-permission issue — should NOT appear.
-	require.NoError(t, eng.baseline.RecordLocalIssue(
-		ctx, "Other/file.txt", "upload_failed", "err", 500, 0, "",
-	))
+	// Recheck with no shortcuts — both issues have sc == nil.
+	eng.recheckPermissions(ctx, bl, nil)
 
-	prefixes := eng.loadDeniedPrefixes(ctx)
+	// Both should be cached as denied (canWrite == false).
+	canWrite, ok := eng.permCache.get("Shared/NoShortcut/sub")
+	assert.True(t, ok, "unresolvable issue should be cached")
+	assert.False(t, canWrite, "unresolvable issue should be cached as denied")
+
+	canWrite, ok = eng.permCache.get("Shared/Other/locked")
+	assert.True(t, ok, "unresolvable issue should be cached")
+	assert.False(t, canWrite, "unresolvable issue should be cached as denied")
+
+	// No API calls — can't resolve without shortcuts.
+	assert.Empty(t, checker.calls, "should not call API when no shortcut matches")
+
+	// deniedPrefixes should return both.
+	prefixes := eng.permCache.deniedPrefixes()
 	assert.Len(t, prefixes, 2)
-	assert.Contains(t, prefixes, "Shared/A")
-	assert.Contains(t, prefixes, "Shared/B")
+	assert.Contains(t, prefixes, "Shared/NoShortcut/sub")
+	assert.Contains(t, prefixes, "Shared/Other/locked")
+}
+
+func TestRecheckPermissions_UnresolvedItemID_CachedAsDenied(t *testing.T) {
+	t.Parallel()
+
+	remoteDriveID := "remote-drive-1"
+
+	checker := &mockPermChecker{}
+
+	// Shortcut exists but the issue path is NOT in baseline → remoteItemID == "".
+	shortcuts := []Shortcut{{
+		ItemID: "sc-1", RemoteDrive: remoteDriveID, RemoteItem: "root-id",
+		LocalPath: "Shared/TeamDocs", Observation: ObservationDelta, DiscoveredAt: 1000,
+	}}
+
+	// No baseline entries for the issue path.
+	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, nil)
+	ctx := t.Context()
+
+	require.NoError(t, eng.baseline.RecordLocalIssue(
+		ctx, "Shared/TeamDocs/missing", IssuePermissionDenied,
+		"folder is read-only", http.StatusForbidden, 0, "",
+	))
+
+	eng.recheckPermissions(ctx, bl, shortcuts)
+
+	// Should be cached as denied even though item ID can't be resolved.
+	canWrite, ok := eng.permCache.get("Shared/TeamDocs/missing")
+	assert.True(t, ok, "unresolved item ID should be cached")
+	assert.False(t, canWrite, "unresolved item ID should be cached as denied")
+
+	// No API calls — can't query without item ID.
+	assert.Empty(t, checker.calls)
 }
 
 // ---------------------------------------------------------------------------
@@ -649,6 +550,36 @@ func TestPermissionCache_Reset(t *testing.T) {
 	assert.False(t, ok, "entries should be cleared after reset")
 }
 
+func TestPermissionCache_DeniedPrefixes(t *testing.T) {
+	t.Parallel()
+
+	pc := newPermissionCache()
+
+	pc.set("Shared/ReadOnly", false)
+	pc.set("Shared/Writable", true)
+	pc.set("Shared/Other", false)
+
+	prefixes := pc.deniedPrefixes()
+	assert.Len(t, prefixes, 2)
+	assert.Contains(t, prefixes, "Shared/ReadOnly")
+	assert.Contains(t, prefixes, "Shared/Other")
+}
+
+func TestPermissionCache_NilSafe(t *testing.T) {
+	t.Parallel()
+
+	var pc *permissionCache
+
+	// None of these should panic.
+	pc.reset()
+	pc.set("folder", true)
+
+	_, ok := pc.get("folder")
+	assert.False(t, ok)
+
+	assert.Nil(t, pc.deniedPrefixes())
+}
+
 // ---------------------------------------------------------------------------
 // handle403 404 fallback test
 // ---------------------------------------------------------------------------
@@ -679,10 +610,10 @@ func TestHandle403_FolderNotFound_RecordsIssue(t *testing.T) {
 		},
 	}
 
-	eng, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
-	eng.handle403(ctx, "Shared/TeamDocs/sub/file.txt", shortcuts)
+	eng.handle403(ctx, bl, "Shared/TeamDocs/sub/file.txt", shortcuts)
 
 	// Should record an issue because the folder returned 404.
 	issues, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
@@ -721,11 +652,11 @@ func TestHandle403_UnresolvedParent_FallsBackToRoot(t *testing.T) {
 		},
 	}
 
-	eng, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
 	// File in a folder that's not in baseline yet.
-	eng.handle403(ctx, "Shared/TeamDocs/newdir/file.txt", shortcuts)
+	eng.handle403(ctx, bl, "Shared/TeamDocs/newdir/file.txt", shortcuts)
 
 	// Should fall back to root and record issue there.
 	issues, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
@@ -762,7 +693,7 @@ func TestRecheckPermissions_PopulatesCache(t *testing.T) {
 		},
 	}
 
-	eng, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
 	require.NoError(t, eng.baseline.RecordLocalIssue(
@@ -770,7 +701,7 @@ func TestRecheckPermissions_PopulatesCache(t *testing.T) {
 		"folder is read-only", http.StatusForbidden, 0, "",
 	))
 
-	eng.recheckPermissions(ctx, shortcuts)
+	eng.recheckPermissions(ctx, bl, shortcuts)
 
 	// Cache should have been populated.
 	canWrite, ok := eng.permCache.get("Shared/TeamDocs/sub")
