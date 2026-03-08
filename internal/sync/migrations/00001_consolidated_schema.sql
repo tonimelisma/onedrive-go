@@ -93,6 +93,8 @@ CREATE TABLE IF NOT EXISTS remote_state (
                       'pending_delete', 'deleting', 'delete_failed', 'deleted',
                       'filtered')),
     observed_at   INTEGER NOT NULL CHECK(observed_at > 0),
+    -- Dead columns: retained for migration 00005 compatibility (reads them
+    -- during data migration to sync_failures). Removed by migration 00006.
     failure_count INTEGER NOT NULL DEFAULT 0,
     next_retry_at INTEGER,
     last_error    TEXT,

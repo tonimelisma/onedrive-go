@@ -193,10 +193,9 @@ func TestCommitObservation_HashChange_ResetsFailureCount(t *testing.T) {
 
 	// Pre-populate with a failed item.
 	_, err := mgr.rawDB().ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, hash, sync_status,
-			observed_at, failure_count, next_retry_at, last_error)
-		VALUES (?, ?, ?, 'file', ?, 'download_failed', ?, 5, ?, 'some error')`,
-		testDriveID, "item1", "hello.txt", "old-hash", 999, 1500,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, hash, sync_status, observed_at)
+		VALUES (?, ?, ?, 'file', ?, 'download_failed', ?)`,
+		testDriveID, "item1", "hello.txt", "old-hash", 999,
 	)
 	require.NoError(t, err)
 
@@ -437,8 +436,8 @@ func TestRecordFailure_IncreasesFailureCount(t *testing.T) {
 
 	// Insert a downloading item.
 	_, err := mgr.rawDB().ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at, failure_count)
-		VALUES (?, ?, ?, 'file', 'downloading', ?, 0)`,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		VALUES (?, ?, ?, 'file', 'downloading', ?)`,
 		testDriveID, "item1", "hello.txt", 999,
 	)
 	require.NoError(t, err)
@@ -842,8 +841,8 @@ func TestResetAllFailures(t *testing.T) {
 		{"c", statusSynced},
 	} {
 		_, err := mgr.rawDB().ExecContext(ctx,
-			`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at, failure_count)
-			VALUES (?, ?, ?, 'file', ?, ?, 3)`,
+			`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+			VALUES (?, ?, ?, 'file', ?, ?)`,
 			testDriveID, s.id, s.id+".txt", s.status, 999,
 		)
 		require.NoError(t, err)
