@@ -615,7 +615,7 @@ The original `alwaysExcludedSuffixes` included `.db`/`.db-wal`/`.db-shm` to prot
 `RecordFailure(ctx, driveID, itemID, errMsg)` increments `fail_count` and sets `next_retry` using exponential backoff (1m, 5m, 25m, 2h, 10h, capped at 24h). `ListFailedForRetry(ctx, driveID)` only returns items whose `next_retry` is in the past. This prevents retry storms for permanently broken items while still eventually retrying.
 
 ### Legacy cycle tracking replaced by durable failure state
-The old `failureTracker` (in-memory map of path-to-failure-count, reset on cycle completion) and `cycleFailures`/`watchCycleCompletion` were purely in-memory — a crash lost all failure history. `RecordFailure` persists failures in `remote_state` with backoff scheduling, surviving crashes. `ResetInProgressStates()` on startup handles items that were mid-operation when the process died.
+The old in-memory failure tracking (path-to-failure-count map, reset on run completion, plus in-memory delta token commit gating) was purely in-memory — a crash lost all failure history. `RecordFailure` persists failures in `remote_state` with backoff scheduling, surviving crashes. `ResetInProgressStates()` on startup handles items that were mid-operation when the process died.
 
 ### ChangeEvent-to-ObservedItem converter bridges observer and store layers
 The observer layer produces `ChangeEvent` structs; the SyncStore layer consumes `ObservedItem` structs. A converter function bridges the gap, mapping `ChangeEvent` fields to `ObservedItem` fields. This keeps the observer independent of the storage schema and allows the converter to evolve independently of either layer.

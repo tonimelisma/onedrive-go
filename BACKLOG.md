@@ -265,7 +265,7 @@ Optimization deferred until profiling shows a bottleneck.
 | B-112 | `handleDelete` doesn't remove watches | **DONE** — `watcher.Remove()` for deleted dirs. |
 | B-113 | `Watch()` doesn't detect sync root deletion | **DONE** — `ErrSyncRootDeleted` sentinel. |
 | B-119 | Hashing actively-written files | **DONE** — Phase 5.3. `computeStableHash()`. |
-| B-121 | Delta token and baseline not atomically consistent | **DONE** — Phase 5.2. `cycleTracker`. |
+| B-121 | Delta token and baseline not atomically consistent | **DONE** — Phase 5.2. Resolved via `CommitObservation` atomicity + durable failure state. cycleTracker removed as dead code. |
 | B-122 | No dedup between planner and in-flight tracker | **DONE** — Phase 5.2. `HasInFlight()` + `CancelByPath()`. |
 | B-123 | Repeated failure suppression for watch mode | **DONE** — Phase 5.3. `failureTracker`. |
 | B-124 | Watch() error semantics don't distinguish exit reasons | **CLOSED** — Asymmetry is harmless. Comment added. |

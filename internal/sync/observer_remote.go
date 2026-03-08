@@ -109,7 +109,7 @@ func (o *RemoteObserver) FullDelta(ctx context.Context, savedToken string) ([]Ch
 	inflight := make(map[driveid.ItemKey]inflightParent)
 	token := savedToken
 
-	for page := 0; page < maxObserverPages; page++ {
+	for page := range maxObserverPages {
 		pageEvents, newToken, done, err := o.fetchPage(ctx, token, page, inflight)
 		if err != nil {
 			o.stats.errors.Add(1)
@@ -262,10 +262,7 @@ func (o *RemoteObserver) advanceBackoff(
 		slog.Int("consecutive_errors", consecutiveErrors),
 	)
 
-	nextBackoff := backoff * backoffMultiplier
-	if nextBackoff > interval {
-		nextBackoff = interval
-	}
+	nextBackoff := min(backoff*backoffMultiplier, interval)
 
 	if consecutiveErrors > maxConsecutiveBackoff {
 		nextBackoff = interval
@@ -550,7 +547,7 @@ func (o *RemoteObserver) materializePath(
 	parentDriveID := resolveParentDriveID(item, itemDriveID)
 	parentID := item.ParentID
 
-	for depth := 0; depth < maxPathDepth; depth++ {
+	for range maxPathDepth {
 		if parentID == "" {
 			break
 		}
@@ -601,7 +598,7 @@ func (o *RemoteObserver) isDescendantOfVault(
 	parentDriveID := resolveParentDriveID(item, itemDriveID)
 	parentID := item.ParentID
 
-	for depth := 0; depth < maxPathDepth; depth++ {
+	for range maxPathDepth {
 		if parentID == "" {
 			return false
 		}

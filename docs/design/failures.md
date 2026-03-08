@@ -4,6 +4,11 @@
 
 This document analyzes every failure path in the sync engine, what the existing retry layers handle, what survives them, and the delta token advancement bug that causes permanent item loss in watch mode.
 
+> **Note:** This document describes the failure analysis that motivated the current design.
+> The delta token advancement bug (§4) and in-memory failure tracker (§5) have been
+> replaced by durable per-item failure state with exponential backoff in `remote_state`.
+> Function names like `watchCycleCompletion` and `failureTracker` refer to removed code.
+
 ## Existing Retry Layers
 
 ### Layer 1: Graph Client (`internal/graph/client.go`)
