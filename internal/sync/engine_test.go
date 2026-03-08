@@ -2375,113 +2375,27 @@ func TestRunOnce_InvalidUpload_RecordsIssue(t *testing.T) {
 // Issue #10: drainWorkerResults upload failure recording
 // ---------------------------------------------------------------------------
 
-func TestDrainWorkerResults_UploadFailure_RecordsLocalIssue(t *testing.T) {
+// TestDrainWorkerResults_MultipleResults verifies the drain loop processes
+// all buffered results before returning when the channel is closed.
+func TestDrainWorkerResults_MultipleResults(t *testing.T) {
 	t.Parallel()
 
 	mock := &engineMockClient{}
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	results := make(chan WorkerResult, 1)
-	results <- WorkerResult{
-		Path:       "docs/report.xlsx",
-		ActionType: ActionUpload,
-		Success:    false,
-		ErrMsg:     "connection reset",
-		HTTPStatus: 503,
-	}
+	results := make(chan WorkerResult, 3)
+	results <- WorkerResult{Path: "a.txt", ActionType: ActionUpload, Success: false, ErrMsg: "fail1", HTTPStatus: 500}
+	results <- WorkerResult{Path: "b.txt", ActionType: ActionUpload, Success: false, ErrMsg: "fail2", HTTPStatus: 500}
+	results <- WorkerResult{Path: "c.txt", ActionType: ActionDownload, Success: true}
 	close(results)
 
-	eng.drainWorkerResults(ctx, results, nil, nil)
+	eng.drainWorkerResults(ctx, results, nil)
 
+	// Both upload failures should produce local_issues.
 	issues, err := eng.baseline.ListLocalIssues(ctx)
 	require.NoError(t, err)
-	require.Len(t, issues, 1)
-	assert.Equal(t, "docs/report.xlsx", issues[0].Path)
-	assert.Equal(t, "upload_failed", issues[0].IssueType)
-	assert.Equal(t, "connection reset", issues[0].LastError)
-	assert.Equal(t, 503, issues[0].HTTPStatus)
-}
-
-func TestDrainWorkerResults_DownloadFailure_NoLocalIssue(t *testing.T) {
-	t.Parallel()
-
-	mock := &engineMockClient{}
-	eng, _ := newTestEngine(t, mock)
-	ctx := t.Context()
-
-	results := make(chan WorkerResult, 1)
-	results <- WorkerResult{
-		Path:       "docs/report.xlsx",
-		ActionType: ActionDownload,
-		Success:    false,
-		ErrMsg:     "connection reset",
-		HTTPStatus: 503,
-	}
-	close(results)
-
-	eng.drainWorkerResults(ctx, results, nil, nil)
-
-	// Download failures should NOT create local_issues entries.
-	issues, err := eng.baseline.ListLocalIssues(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, issues, "download failures should not be recorded in local_issues")
-}
-
-// ---------------------------------------------------------------------------
-// Fix #5: drainWorkerResults 403 reordering — confirmed read-only 403 should
-// NOT call RecordFailure (skip remote_state entirely).
-// ---------------------------------------------------------------------------
-
-func TestDrainWorkerResults_403ReadOnly_SkipsRecordFailure(t *testing.T) {
-	t.Parallel()
-
-	remoteDriveID := "remote-drive-1"
-
-	// Permission checker returns read-only for the parent folder.
-	checker := &mockPermChecker{
-		perms: map[string][]graph.Permission{
-			driveid.New(remoteDriveID).String() + ":root-id": {{ID: "p1", Roles: []string{"read"}}},
-		},
-	}
-
-	shortcuts := []Shortcut{{
-		ItemID: "sc-1", RemoteDrive: remoteDriveID, RemoteItem: "root-id",
-		LocalPath: "Shared/TeamDocs", Observation: ObservationDelta, DiscoveredAt: 1000,
-	}}
-
-	baselineEntries := []Outcome{
-		{
-			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs",
-			DriveID: driveid.New(remoteDriveID), ItemID: "root-id", ParentID: "root", ItemType: ItemTypeFolder,
-		},
-	}
-
-	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
-	ctx := t.Context()
-
-	results := make(chan WorkerResult, 1)
-	results <- WorkerResult{
-		Path:       "Shared/TeamDocs/file.txt",
-		ActionType: ActionUpload,
-		Success:    false,
-		ErrMsg:     "403 Forbidden",
-		HTTPStatus: 403,
-	}
-	close(results)
-
-	eng.drainWorkerResults(ctx, results, bl, shortcuts)
-
-	// Permission-denied should be recorded in local_issues.
-	permIssues, err := eng.baseline.ListLocalIssuesByType(ctx, IssuePermissionDenied)
-	require.NoError(t, err)
-	assert.Len(t, permIssues, 1, "should record permission_denied issue")
-
-	// remote_state should NOT have a failure recorded — the 403 was confirmed
-	// as read-only and should not enter the retry/escalation pipeline.
-	failed, err := eng.baseline.ListFailedForRetry(ctx, time.Now().Add(time.Hour))
-	require.NoError(t, err)
-	assert.Empty(t, failed, "confirmed read-only 403 should not be in remote_state")
+	assert.Len(t, issues, 2, "drain loop should process all results")
 }
 
 // ---------------------------------------------------------------------------

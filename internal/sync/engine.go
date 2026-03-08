@@ -96,6 +96,12 @@ type Engine struct {
 	transferWorkers int                    // goroutine count for the worker pool
 	checkWorkers    int                    // goroutine limit for parallel file hashing
 
+	// watchShortcuts holds the latest shortcuts for use by the drain
+	// goroutine in watch mode. Updated by the cycle goroutine after
+	// observation; read by drainWorkerResults for 403 handling.
+	watchShortcuts   []Shortcut
+	watchShortcutsMu stdsync.RWMutex
+
 	// retrier retries failed items with exponential backoff in watch mode.
 	// nil in one-shot mode.
 	retrier *FailureRetrier
@@ -769,12 +775,29 @@ type WatchOpts struct {
 	ReconcileInterval  time.Duration // periodic full reconciliation (0 → 24h, negative = disabled)
 }
 
+// setWatchShortcuts updates the shortcuts used by the drain goroutine.
+// Called by the cycle goroutine after observation when shortcuts may have changed.
+func (e *Engine) setWatchShortcuts(shortcuts []Shortcut) {
+	e.watchShortcutsMu.Lock()
+	e.watchShortcuts = shortcuts
+	e.watchShortcutsMu.Unlock()
+}
+
+// getWatchShortcuts returns the latest shortcuts for drain goroutine use.
+func (e *Engine) getWatchShortcuts() []Shortcut {
+	e.watchShortcutsMu.RLock()
+	defer e.watchShortcutsMu.RUnlock()
+
+	return e.watchShortcuts
+}
+
 // loadWatchState loads the baseline and shortcuts for the watch session.
-// Both are loaded once after the initial sync and reused throughout.
-func (e *Engine) loadWatchState(ctx context.Context) (*Baseline, []Shortcut, error) {
+// Both are loaded once after the initial sync. Baseline is live-mutated
+// under RWMutex; shortcuts are updated via setWatchShortcuts when they change.
+func (e *Engine) loadWatchState(ctx context.Context) (*Baseline, error) {
 	bl, err := e.baseline.Load(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("sync: loading baseline for watch: %w", err)
+		return nil, fmt.Errorf("sync: loading baseline for watch: %w", err)
 	}
 
 	shortcuts, scErr := e.baseline.ListShortcuts(ctx)
@@ -784,7 +807,9 @@ func (e *Engine) loadWatchState(ctx context.Context) (*Baseline, []Shortcut, err
 		)
 	}
 
-	return bl, shortcuts, nil
+	e.setWatchShortcuts(shortcuts)
+
+	return bl, nil
 }
 
 // RunWatch runs a continuous sync loop: initial one-shot sync, then
@@ -805,8 +830,8 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 	}
 
 	// Step 2: Load baseline (cached, mutated in-place under RWMutex) and
-	// shortcuts (frozen after initial sync) for use throughout the watch session.
-	bl, watchShortcuts, err := e.loadWatchState(ctx)
+	// shortcuts (stored in synchronized field, updated when shortcuts change).
+	bl, err := e.loadWatchState(ctx)
 	if err != nil {
 		return err
 	}
@@ -837,8 +862,9 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 	}()
 
 	// Drain worker results in a background goroutine for failure tracking.
-	// Baseline and shortcuts are passed explicitly — no store queries during execution.
-	go e.drainWorkerResults(ctx, pool.Results(), bl, watchShortcuts)
+	// Baseline is passed explicitly. Shortcuts are read from the synchronized
+	// watchShortcuts field so the drain goroutine always sees the latest set.
+	go e.drainWorkerResults(ctx, pool.Results(), bl)
 
 	// Step 4: Create buffer and debounced output.
 	buf := NewBuffer(e.logger)
@@ -945,8 +971,9 @@ func (e *Engine) processWorkerResult(ctx context.Context, r WorkerResult, bl *Ba
 
 // drainWorkerResults reads from the worker result channel and persists
 // failures to remote_state for durable retry tracking. Used by watch mode.
-// Receives baseline and shortcuts as explicit parameters.
-func (e *Engine) drainWorkerResults(ctx context.Context, results <-chan WorkerResult, bl *Baseline, shortcuts []Shortcut) {
+// Baseline is passed explicitly. Shortcuts are read from the synchronized
+// watchShortcuts field on each result to pick up newly discovered shortcuts.
+func (e *Engine) drainWorkerResults(ctx context.Context, results <-chan WorkerResult, bl *Baseline) {
 	for {
 		select {
 		case r, ok := <-results:
@@ -954,7 +981,7 @@ func (e *Engine) drainWorkerResults(ctx context.Context, results <-chan WorkerRe
 				return
 			}
 
-			e.processWorkerResult(ctx, r, bl, shortcuts)
+			e.processWorkerResult(ctx, r, bl, e.getWatchShortcuts())
 
 		case <-ctx.Done():
 			return
@@ -1361,6 +1388,12 @@ func (e *Engine) runFullReconciliation(
 	}
 
 	e.processBatch(ctx, batch, bl, mode, safety, tracker)
+
+	// Refresh watch shortcuts after reconciliation — reconcileShortcutScopes
+	// may have added or removed shortcuts.
+	if refreshed, refreshErr := e.baseline.ListShortcuts(ctx); refreshErr == nil {
+		e.setWatchShortcuts(refreshed)
+	}
 
 	e.logger.Info("periodic full reconciliation complete",
 		slog.Int("paths", len(batch)),
