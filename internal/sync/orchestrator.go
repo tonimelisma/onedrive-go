@@ -13,7 +13,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 )
 
-// engineRunner is the interface the Orchestrator uses to run sync cycles.
+// engineRunner is the interface the Orchestrator uses to run sync passes.
 // Implemented by *Engine; mock implementations are used in tests.
 type engineRunner interface {
 	RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*SyncReport, error)
@@ -64,7 +64,7 @@ type driveWork struct {
 	fn     func(context.Context) (*SyncReport, error)
 }
 
-// RunOnce executes a single sync cycle for all configured drives. Each drive
+// RunOnce executes a single sync pass for all configured drives. Each drive
 // runs in its own goroutine via a DriveRunner with panic recovery. RunOnce
 // never returns an error — individual drive errors are captured in each
 // DriveReport. The caller inspects reports to determine success or failure.

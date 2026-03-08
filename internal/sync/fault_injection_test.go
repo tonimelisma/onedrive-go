@@ -51,7 +51,7 @@ func TestFault_ContextCancel_WorkerPool(t *testing.T) {
 		ItemID: "item-1",
 		View:   &PathView{Remote: &RemoteState{ItemID: "parent", ParentID: "root"}},
 	}
-	tracker.Add(action, 0, nil, "cycle-1")
+	tracker.Add(action, 0, nil)
 
 	// Cancel immediately — should not panic or hang.
 	cancel()

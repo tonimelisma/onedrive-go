@@ -40,7 +40,7 @@ type errClass int
 const (
 	errClassSkip      errClass = iota // non-retryable, skip this action
 	errClassRetryable                 // transient, retry with backoff
-	errClassFatal                     // abort the entire sync cycle
+	errClassFatal                     // abort the entire sync pass
 )
 
 // ExecutorConfig holds the immutable configuration for creating per-call
