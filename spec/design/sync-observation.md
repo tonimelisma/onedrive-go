@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/observer_local.go, internal/sync/observer_local_handlers.go, internal/sync/observer_remote.go, internal/sync/observer_shortcut.go, internal/sync/scanner.go, internal/sync/buffer.go, internal/sync/shortcuts.go, internal/sync/permissions.go, internal/sync/inotify_linux.go, internal/sync/inotify_other.go
 
-Implements: R-2.1.2 [implemented], R-2.4 [implemented], R-6.7.1 [implemented], R-6.7.3 [implemented], R-6.7.5 [implemented], R-6.7.15 [planned], R-6.7.16 [planned], R-6.7.19 [planned], R-6.7.20 [implemented], R-6.7.21 [planned], R-6.7.24 [implemented], R-2.11 [planned], R-2.12 [planned], R-2.13.1 [implemented], R-2.14.1 [implemented]
+Implements: R-2.1.2 [verified], R-2.4 [implemented], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.15 [planned], R-6.7.16 [planned], R-6.7.19 [planned], R-6.7.20 [verified], R-6.7.21 [planned], R-6.7.24 [verified], R-2.11 [planned], R-2.12 [planned], R-2.13.1 [verified], R-2.14.1 [verified]
 
 ## Remote Observer (`observer_remote.go`)
 
@@ -48,7 +48,7 @@ Read-only detection for shared content. When a write attempt returns 403, the pa
 
 ## Design Constraints
 
-Implements: R-6.2.7 [implemented]
+Implements: R-6.2.7 [verified]
 
 - Filtering is symmetric: any exclusion applied to local items (always-excluded suffixes, invalid OneDrive names) is also applied to remote items in `classifyItem()`. This prevents remote-only files (e.g., temp files uploaded via web UI) from entering the planner.
 - The `alwaysExcludedSuffixes` list does NOT include `.db`/`.db-wal`/`.db-shm` — those caused false positives on legitimate data files. The sync engine's state DB lives outside the sync root by design.

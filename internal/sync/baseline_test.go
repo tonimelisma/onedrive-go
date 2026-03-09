@@ -1514,6 +1514,7 @@ func TestCommitOutcome_Upload_NewItemID_SamePath(t *testing.T) {
 // CommitDeltaToken tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.15.1
 func TestCommitDeltaToken(t *testing.T) {
 	t.Parallel()
 

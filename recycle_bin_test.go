@@ -79,6 +79,7 @@ func TestFormatRecycleBinJSON(t *testing.T) {
 	assert.Contains(t, output, `"type": "file"`)
 }
 
+// Validates: R-1.9
 func TestNewRecycleBinCmd_Structure(t *testing.T) {
 	t.Parallel()
 

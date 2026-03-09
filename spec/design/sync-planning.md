@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/planner.go, internal/sync/types.go
 
-Implements: R-2.2 [implemented], R-2.3.1 [implemented], R-6.4.1 [implemented], R-6.4.2 [implemented], R-6.4.3 [implemented]
+Implements: R-2.2 [verified], R-2.3.1 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified]
 
 ## Overview
 
@@ -59,7 +59,7 @@ Per-side baselines for SharePoint enrichment correctness:
 
 ## Big-Delete Protection
 
-Implements: R-6.2.5 [implemented]
+Implements: R-6.2.5 [verified]
 
 Pure function on ActionPlan + Baseline. Triggers when:
 - Global delete count exceeds `BigDeleteMaxCount` (default: 1000)

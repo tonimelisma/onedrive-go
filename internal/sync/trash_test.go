@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Validates: R-6.4.6
 func TestDefaultTrashFunc_NonDarwin(t *testing.T) {
 	if runtime.GOOS == "darwin" {
 		t.Skip("test only applicable on non-darwin")
@@ -26,6 +27,7 @@ func TestDefaultTrashFunc_NonDarwin(t *testing.T) {
 	require.Error(t, err, "expected error on non-darwin platform")
 }
 
+// Validates: R-6.4.5
 func TestMoveToMacOSTrash(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("macOS-only test")

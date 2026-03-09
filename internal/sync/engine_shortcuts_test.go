@@ -18,6 +18,7 @@ import (
 // filterOutShortcuts
 // ---------------------------------------------------------------------------
 
+// Validates: R-3.4.2
 func TestFilterOutShortcuts_Empty(t *testing.T) {
 	t.Parallel()
 
@@ -38,6 +39,7 @@ func TestFilterOutShortcuts_NoShortcuts(t *testing.T) {
 	assert.Len(t, result, 3)
 }
 
+// Validates: R-3.4.2
 func TestFilterOutShortcuts_RemovesShortcuts(t *testing.T) {
 	t.Parallel()
 
@@ -378,6 +380,7 @@ func TestDetectShortcutOrphans_IgnoresOtherDrives(t *testing.T) {
 // registerShortcuts (integration with SyncStore)
 // ---------------------------------------------------------------------------
 
+// Validates: R-3.4.2
 func TestRegisterShortcuts_NewShortcut(t *testing.T) {
 	t.Parallel()
 
@@ -803,6 +806,7 @@ func TestDeleteDeltaToken_NonExistent(t *testing.T) {
 // observeShortcutContent + observeSingleShortcut
 // ---------------------------------------------------------------------------
 
+// Validates: R-3.4.2
 func TestObserveShortcutContent_DeltaStrategy(t *testing.T) {
 	t.Parallel()
 
@@ -959,6 +963,7 @@ func TestObserveShortcutContent_NoShortcuts(t *testing.T) {
 // processShortcuts (integration)
 // ---------------------------------------------------------------------------
 
+// Validates: R-3.4.2
 func TestProcessShortcuts_RegistersAndObserves(t *testing.T) {
 	t.Parallel()
 

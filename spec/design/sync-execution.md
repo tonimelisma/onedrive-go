@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_transfer.go, internal/sync/worker.go, internal/sync/tracker.go, internal/sync/reconciler.go, internal/sync/upload_validation.go, internal/sync/compute_status.go, status.go
 
-Implements: R-2.3 [implemented], R-5.1 [implemented], R-6.4 [implemented], R-6.5.3 [implemented], R-6.4.9 [planned], R-6.7.25 [planned]
+Implements: R-2.3 [implemented], R-5.1 [verified], R-6.4 [implemented], R-6.5.3 [verified], R-6.4.9 [planned], R-6.7.25 [planned]
 
 ## Executor (`executor.go`)
 
@@ -25,7 +25,7 @@ Flat pool of `transfer_workers` goroutines. Each worker picks an action, execute
 Simple PUT (≤4 MiB) or resumable session (>4 MiB). Post-upload validation detects SharePoint enrichment.
 
 ### Deletes (`executor_delete.go`)
-Implements: R-6.2.4 [implemented]
+Implements: R-6.2.4 [verified]
 
 Hash-before-delete guard for local deletions (verifies the file hasn't changed since planning). Remote deletes use `If-Match` with eTag. Local deletes go to OS trash if configured. When a local folder delete would fail due to non-empty directory containing only disposable files (OS junk like `.DS_Store`, editor temps like `.swp`, invalid OneDrive names), `deleteLocalFolder` auto-removes them before retrying the folder delete.
 

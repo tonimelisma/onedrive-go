@@ -376,6 +376,7 @@ func TestStatePath_SharePoint_ColonsReplaced(t *testing.T) {
 
 // --- Integration: TOML parsing -> resolution ---
 
+// Validates: R-4.1.1, R-3.4.1
 func TestLoad_FullConfigWithDrives(t *testing.T) {
 	path := writeTestConfig(t, `
 skip_dotfiles = false

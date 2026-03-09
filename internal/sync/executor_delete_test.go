@@ -93,6 +93,7 @@ func newDeleteTestExecutor(t *testing.T) (*Executor, string) {
 	return e, syncRoot
 }
 
+// Validates: R-6.2.4
 func TestDeleteLocalFolder_DSStoreOnly_Succeeds(t *testing.T) {
 	t.Parallel()
 
@@ -132,6 +133,7 @@ func TestDeleteLocalFolder_TmpFilesOnly_Succeeds(t *testing.T) {
 	assert.True(t, os.IsNotExist(err))
 }
 
+// Validates: R-6.2.4
 func TestDeleteLocalFolder_UnknownFile_Fails(t *testing.T) {
 	t.Parallel()
 

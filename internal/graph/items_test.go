@@ -17,6 +17,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
+// Validates: R-1.6
 func TestGetItem_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
@@ -257,6 +258,7 @@ func TestGetItem_NilFileFacet(t *testing.T) {
 
 // --- ListChildren tests ---
 
+// Validates: R-1.1
 func TestListChildren_SinglePage(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
@@ -288,6 +290,7 @@ func TestListChildren_SinglePage(t *testing.T) {
 	assert.Equal(t, 5, items[2].ChildCount)
 }
 
+// Validates: R-1.1
 func TestListChildren_MultiPage(t *testing.T) {
 	var srv *httptest.Server
 
@@ -384,6 +387,7 @@ func TestListChildren_InvalidNextLink(t *testing.T) {
 
 // --- CreateFolder tests ---
 
+// Validates: R-1.5
 func TestCreateFolder_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
@@ -505,6 +509,7 @@ func TestMoveItem_RenameOnly(t *testing.T) {
 	assert.Equal(t, "new-name.txt", item.Name)
 }
 
+// Validates: R-1.7
 func TestMoveItem_MoveOnly(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
@@ -562,6 +567,7 @@ func TestMoveItem_NotFound(t *testing.T) {
 
 // --- DeleteItem tests ---
 
+// Validates: R-1.4
 func TestDeleteItem_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodDelete, r.Method)
@@ -899,6 +905,7 @@ func TestGetItemByPath_NotFound(t *testing.T) {
 
 // --- ListChildrenByPath tests ---
 
+// Validates: R-1.1
 func TestListChildrenByPath_SinglePage(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
@@ -1217,6 +1224,7 @@ func TestToItem_RemoteItem_NilParentReference(t *testing.T) {
 
 // --- CopyItem tests ---
 
+// Validates: R-1.8
 func TestCopyItem_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
@@ -1378,6 +1386,7 @@ func TestListChildrenRecursive_FlatFolder(t *testing.T) {
 	assert.Equal(t, "b.txt", items[1].Name)
 }
 
+// Validates: R-1.1
 func TestListChildrenRecursive_NestedFolders(t *testing.T) {
 	// Root has file + subfolder; subfolder has a file.
 	// Server dispatches based on parent ID in the path.

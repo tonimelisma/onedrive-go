@@ -142,6 +142,7 @@ func newTestEngineWithPerms(t *testing.T, checker PermissionChecker, shortcuts [
 	return eng, bl, syncRoot
 }
 
+// Validates: R-2.14.1
 func TestHandle403_ReadOnlyFolder_RecordsIssueAtBoundary(t *testing.T) {
 	t.Parallel()
 
@@ -190,6 +191,7 @@ func TestHandle403_ReadOnlyFolder_RecordsIssueAtBoundary(t *testing.T) {
 	assert.False(t, canWrite, "boundary should be cached as read-only")
 }
 
+// Validates: R-2.14.1
 func TestHandle403_TransientError_NoSuppression(t *testing.T) {
 	t.Parallel()
 
@@ -230,6 +232,7 @@ func TestHandle403_TransientError_NoSuppression(t *testing.T) {
 	assert.Empty(t, issues)
 }
 
+// Validates: R-2.14.1
 func TestHandle403_WholeShareReadOnly_BoundaryAtRoot(t *testing.T) {
 	t.Parallel()
 
@@ -271,6 +274,7 @@ func TestHandle403_WholeShareReadOnly_BoundaryAtRoot(t *testing.T) {
 	assert.Equal(t, "Shared/TeamDocs", issues[0].Path)
 }
 
+// Validates: R-2.14.1
 func TestHandle403_APIFailure_FailOpen(t *testing.T) {
 	t.Parallel()
 
@@ -328,6 +332,7 @@ func TestHandle403_NoShortcutMatch_Ignored(t *testing.T) {
 // recheckPermissions tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.14.1
 func TestRecheckPermissions_GrantDetected_IssueCleared(t *testing.T) {
 	t.Parallel()
 

@@ -184,6 +184,7 @@ func TestPrintConflictsJSON_WithConflicts(t *testing.T) {
 
 // --- printConflictsTable ---
 
+// Validates: R-2.3.3
 func TestPrintConflictsTable(t *testing.T) {
 	t.Parallel()
 
