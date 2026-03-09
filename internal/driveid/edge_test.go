@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// Validates: R-6.7.2
 // TestNew_TruncatedDriveIDZeroPadding validates that Personal accounts
 // returning short (<16 char) drive IDs are zero-padded consistently.
 // Graph API bug: Personal accounts sometimes drop the leading zero.
@@ -50,6 +51,7 @@ func TestNew_TruncatedDriveIDZeroPadding(t *testing.T) {
 	}
 }
 
+// Validates: R-6.7.2
 // TestNew_CaseNormalization validates that drive IDs are lowercased
 // regardless of input casing. Graph API returns inconsistent casing
 // across endpoints (documented in tier1-research).
@@ -89,6 +91,7 @@ func TestNew_CaseNormalization(t *testing.T) {
 	}
 }
 
+// Validates: R-6.7.2
 // TestNew_Idempotent verifies that normalizing an already-normalized ID
 // produces the same result. This is critical for map key stability.
 func TestNew_Idempotent(t *testing.T) {
@@ -99,6 +102,7 @@ func TestNew_Idempotent(t *testing.T) {
 	assert.Equal(t, first.String(), second.String())
 }
 
+// Validates: R-6.7.2
 // TestID_Equal_CrossCaseMatch verifies that IDs differing only in
 // API casing are equal after normalization.
 func TestID_Equal_CrossCaseMatch(t *testing.T) {
@@ -107,6 +111,7 @@ func TestID_Equal_CrossCaseMatch(t *testing.T) {
 	assert.True(t, upper.Equal(lower))
 }
 
+// Validates: R-6.7.2
 // TestID_Equal_PaddedMatch verifies that a truncated ID and its
 // zero-padded form are equal after normalization.
 func TestID_Equal_PaddedMatch(t *testing.T) {
@@ -138,6 +143,7 @@ func TestID_IsZero_AllZerosPadded(t *testing.T) {
 	}
 }
 
+// Validates: R-6.7.2
 // TestItemKey_NormalizedEquality verifies that ItemKeys with differently
 // cased or padded DriveIDs but same logical identity are equal when used
 // as map keys.
@@ -151,6 +157,7 @@ func TestItemKey_NormalizedEquality(t *testing.T) {
 	assert.Equal(t, "value", m[key2])
 }
 
+// Validates: R-6.7.2
 // TestItemKey_PaddedDriveIDEquality verifies that ItemKeys with short
 // vs full DriveIDs are equal.
 func TestItemKey_PaddedDriveIDEquality(t *testing.T) {
