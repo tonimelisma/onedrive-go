@@ -1,3 +1,4 @@
+<!-- ABSORBED: API quirks → spec/reference/graph-api-quirks.md; sync behavior observations → spec/reference/onedrive-sync-behavior.md; reference implementation design patterns → spec/design/ docs during Phase 3 -->
 # Reference Implementation: Sync Algorithm Analysis
 
 This document is a clean-room behavioral analysis of the reference OneDrive sync client's synchronization algorithm. It describes observable behaviors, design decisions, edge cases, and known problems -- not source code. It is intended for consumption by Tier 2 design agents who must never see the original implementation.

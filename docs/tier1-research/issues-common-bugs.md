@@ -1,3 +1,4 @@
+<!-- ABSORBED: API quirks (driveId, HEIC, enrichment, timestamps) → spec/reference/graph-api-quirks.md; defensive design patterns → spec/design/ docs (sync-planning, sync-observation, sync-execution, sync-store, graph-client, drive-transfers) during Phase 3 -->
 # Common Bugs & Production Issues (from abraunegg/onedrive issues)
 
 This document catalogs the most impactful bugs reported in the abraunegg/onedrive

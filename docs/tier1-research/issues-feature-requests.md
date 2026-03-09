@@ -1,3 +1,4 @@
+<!-- ABSORBED: feature requests already incorporated into docs/design/prd.md and docs/roadmap.md during Tier 2 design; requirements → spec/requirements/ during Phase 2 -->
 # Feature Requests & User Needs (from abraunegg/onedrive issues)
 
 > **Source**: abraunegg/onedrive GitHub repository (issues with `Feature Request` and `Enhancement` labels)

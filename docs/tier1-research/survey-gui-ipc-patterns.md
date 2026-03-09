@@ -1,3 +1,4 @@
+<!-- ABSORBED: IPC patterns → spec/reference/sync-ecosystem.md; tool-specific details dropped as googlable -->
 # Survey: GUI/IPC Integration Patterns for Sync Daemons
 
 This document surveys how existing file sync tools expose control interfaces to GUI frontends, and evaluates IPC mechanisms suitable for a Go-based sync daemon. It covers OneDriveGUI's integration with abraunegg/onedrive, rclone's remote control API, Syncthing's REST API, and general IPC patterns for Go daemons.

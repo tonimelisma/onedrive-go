@@ -1,3 +1,4 @@
+<!-- ABSORBED: OneDrive naming restrictions → spec/reference/onedrive-sync-behavior.md; filtering design patterns → spec/design/sync-observation.md during Phase 3; config format → spec/design/config.md during Phase 3 -->
 # Reference Implementation: File and Folder Filtering Rules
 
 This document analyzes how the reference OneDrive sync client handles file and folder filtering. It describes the observable behaviors, semantics, configuration surface, and edge cases of the filtering system. This is a Tier 1 research document intended to inform our own implementation design.

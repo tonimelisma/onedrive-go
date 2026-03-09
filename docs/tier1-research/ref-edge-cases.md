@@ -1,3 +1,4 @@
+<!-- ABSORBED: API quirks → spec/reference/graph-api-quirks.md; sync behavior → spec/reference/onedrive-sync-behavior.md; naming rules → onedrive-sync-behavior.md; design lessons → spec/design/ during Phase 3 -->
 # Edge Cases, Gotchas, and Hard-Won Lessons from the Reference Implementation
 
 This document catalogs known edge cases, API quirks, workarounds, and pitfalls discovered through the reference implementation's development and issue tracker. It is intended as a field guide for building a clean-room OneDrive sync client.

@@ -1,3 +1,4 @@
+<!-- ABSORBED: reference implementation config options → design input for spec/design/config.md and spec/requirements/configuration.md during Phases 2-3 -->
 # Reference Implementation: Configuration Inventory
 
 This document catalogs every configuration option in the reference OneDrive sync client for Linux, organized by functional area. It describes what each option controls, its type, default value, and importance for our Go reimplementation.

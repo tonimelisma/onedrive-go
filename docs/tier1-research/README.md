@@ -1,3 +1,4 @@
+<!-- ABSORBED: index file — all content migrated to spec/ -->
 # Tier 1 Research Documents
 
 ## Provenance

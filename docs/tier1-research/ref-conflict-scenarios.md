@@ -1,3 +1,4 @@
+<!-- ABSORBED: conflict resolution patterns → spec/design/sync-planning.md during Phase 3; API behavior → spec/reference/graph-api-quirks.md and onedrive-sync-behavior.md -->
 # Reference Implementation: Conflict Scenarios Analysis
 
 This document analyzes how the reference OneDrive sync client detects, classifies, and resolves conflicts between local and remote state. It describes observable behaviors, strategies, and edge cases -- not code structure.

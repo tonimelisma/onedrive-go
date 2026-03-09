@@ -1,3 +1,4 @@
+<!-- ABSORBED: state model patterns → spec/reference/sync-ecosystem.md; tool-specific details dropped as googlable -->
 # Survey: Sync State Database Models
 
 A comprehensive survey of how file synchronization tools model their sync state, covering storage engines, per-file metadata, identity models, change detection, conflict detection, move/rename detection, and crash recovery.

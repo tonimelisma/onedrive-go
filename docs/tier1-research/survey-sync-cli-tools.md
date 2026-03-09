@@ -1,3 +1,4 @@
+<!-- ABSORBED: comparative design patterns → spec/reference/sync-ecosystem.md; tool-specific details dropped as googlable -->
 # Survey of File Sync CLI Tools
 
 A comprehensive survey of file synchronization and backup CLI tools, documenting features, patterns, innovations, and gaps across the landscape. This informs our sync engine design by identifying what is table stakes, what is innovative, and what is missing.
