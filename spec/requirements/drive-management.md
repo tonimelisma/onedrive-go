@@ -44,8 +44,13 @@ The system shall support all four drive types:
 - R-3.6.2: The system shall use non-deprecated search API for shared item discovery (SharedWithMe deprecated Nov 2026). [implemented]
 - R-3.6.3: When adding a shared drive, the system shall derive a display name from the sharer's identity. [implemented]
 
-## R-3.7 Migration [future]
+## R-3.7 Email Change Detection [future]
 
-- R-3.7.1: When the user runs `migrate`, the system shall auto-detect abraunegg/onedrive or rclone configs. [future]
-- R-3.7.2: The system shall convert filter rules and sync settings to equivalent config. [future]
-- R-3.7.3: The system shall NOT migrate auth tokens (different OAuth app ID; re-auth required). [future]
+- R-3.7.1: The system shall store a stable user GUID from the Graph API alongside the email. [future]
+- R-3.7.2: When a user's email changes, the system shall auto-rename token files, state DBs, and config sections. [future]
+
+## R-3.8 Migration [future]
+
+- R-3.8.1: When the user runs `migrate`, the system shall auto-detect abraunegg/onedrive or rclone configs. [future]
+- R-3.8.2: The system shall convert filter rules and sync settings to equivalent config. [future]
+- R-3.8.3: The system shall NOT migrate auth tokens (different OAuth app ID; re-auth required). [future]

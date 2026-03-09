@@ -20,7 +20,7 @@ When the same file has been modified on both the local filesystem and OneDrive s
 
 ## R-2.3 Conflict Resolution [implemented]
 
-- R-2.3.1: The default resolution shall keep both versions: remote version at original path, local version renamed to `<name>.conflict-<timestamp>.<ext>`. [implemented]
+- R-2.3.1: The default resolution shall preserve both versions: remote wins the original path, local version is renamed to `<name>.conflict-<timestamp>.<ext>`. [implemented]
 - R-2.3.2: The system shall persistently record conflicts with metadata (path, timestamp, hashes, resolution status). [implemented]
 - R-2.3.3: When the user runs `issues`, the system shall list all unresolved conflicts and failures. [implemented]
 - R-2.3.4: When the user runs `issues resolve <path>`, the system shall allow resolution (keep-local, keep-remote, keep-both). [implemented]
@@ -60,6 +60,7 @@ When the user runs `verify`, the system shall re-hash local files and compare ag
 - R-2.8.2: The system shall use a PID file with flock for single-instance enforcement. [implemented]
 - R-2.8.3: The system shall support two-signal shutdown (first SIGINT = drain, second = force). [implemented]
 - R-2.8.4: The system shall run periodic full reconciliation (default every 24 hours) to detect missed delta deletions. [implemented]
+- R-2.8.5: The system shall support WebSocket subscription for near-instant remote change notification. [future]
 
 ## R-2.9 RPC / Control Socket [planned]
 
