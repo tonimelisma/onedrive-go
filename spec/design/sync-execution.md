@@ -2,19 +2,35 @@
 
 GOVERNS: internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_transfer.go, internal/sync/worker.go, internal/sync/tracker.go, internal/sync/reconciler.go, internal/sync/upload_validation.go, internal/sync/compute_status.go, status.go
 
-Implements: R-2.3 [verified], R-5.1 [verified], R-6.4 [implemented], R-6.5.3 [verified], R-6.4.9 [planned], R-6.7.25 [planned]
+Implements: R-2.3 [verified], R-5.1 [verified], R-6.4 [implemented], R-6.5.3 [verified], R-6.4.9 [planned], R-6.7.25 [planned], R-6.8.7 [planned], R-6.8.8 [planned], R-6.8.9 [planned], R-2.10.5 [planned], R-2.10.11 [planned], R-2.10.15 [planned], R-2.10.16 [planned], R-2.10.41 [planned], R-2.10.42 [planned], R-2.10.43 [planned], R-2.10.44 [planned]
 
 ## Executor (`executor.go`)
 
 Takes an `ActionPlan` and dispatches actions to workers via the DepTracker. Actions dispatched based on dependency satisfaction, not fixed phase ordering. Workers produce individual `Outcome` values committed per-action by the SyncStore.
 
-## DepTracker (`tracker.go`)
+**Planned: Thin Action Dispatcher** — Executor will become a thin action dispatcher. `withRetry`, `classifyError`, `classifyStatusCode`, `sleepFunc`, and `errClass` constants will be removed. Action methods call graph client directly and return `Outcome`. The engine classifies errors and schedules retries. Hash mismatch retry (`downloadWithHashRetry`) is unchanged — it's a data integrity mechanism orthogonal to the retry redesign.
+
+## Tracker (`tracker.go`)
 
 In-memory dependency graph for action ordering. Folder creates must complete before their children. Depth-first ordering for deletes. Actions are released for execution when all dependencies are satisfied.
+
+### Planned: Tracker Extensions
+
+Implements: R-6.8.7 [planned], R-2.10.5 [planned], R-2.10.11 [planned], R-2.10.15 [planned], R-2.10.42 [planned]
+
+- **TrackedAction extensions**: `NotBefore time.Time`, `Attempt int`, `MaxAttempts int` (default 5), `IsTrial bool`.
+- **Delayed queue**: min-heap ordered by `NotBefore`. Timer goroutine dispatches actions when their delay expires.
+- **Held queue**: per-scope-key map. After dependency resolution, if the action's scope is blocked, it moves to the held queue instead of the worker pool.
+- **`ReQueue()`**: increment attempt, set `NotBefore` per backoff schedule (1s, 2s, 4s, 8s, 16s), re-enter the dispatch pipeline.
+- **`releaseScope()`**: release all held actions for a scope key with `NotBefore = now`.
+- **`dispatchTrial()`**: release one action marked `IsTrial` from the held queue for scope block recovery probing.
+- Existing dependency graph behavior unchanged.
 
 ## Worker Pool (`worker.go`)
 
 Flat pool of `transfer_workers` goroutines. Each worker picks an action, executes it (download/upload/delete/conflict resolution), and returns an Outcome. No lane-based architecture — simplified flat pool.
+
+**Planned: Scope-Aware WorkerResult** — Workers will populate `WorkerResult` with `TargetDriveID` and `ShortcutKey` from the action, plus `RetryAfter` from `GraphError`, so the engine knows which scope the result belongs to. Implements: R-2.10.16 [planned]
 
 ## Action Execution
 
@@ -40,9 +56,19 @@ After upload, compares server-reported hash with local hash. If they differ (Sha
 
 Level-triggered reconciler for crash recovery and failure retry. On startup, resets items stuck in `downloading`/`deleting` state to `pending_download`/`pending_delete`. Schedules retries for failed items using exponential backoff.
 
+**Planned: CommitOutcome Success Cleanup Extension** — `CommitOutcome` success cleanup will be extended to clear `sync_failures` for download/delete/move successes (currently upload-only). Implements: R-2.10.41 [planned]
+
 ## Status Computation (`compute_status.go`)
 
 Pure function `computeNewStatus()` determines the new `sync_status` for a `remote_state` row based on the action outcome. Used by `CommitObservation`.
+
+## Planned: Disk Space Pre-Check
+
+Implements: R-2.10.43 [planned], R-2.10.44 [planned], R-6.2.6 [planned]
+
+Pre-check available disk space in executor before download. Two-level check:
+- **Critical**: available space < `min_free_space` → `disk:local` scope block, all downloads held until space recovers.
+- **Per-file**: available space < file_size + `min_free_space` → per-file failure recorded in `sync_failures`, no scope escalation (other smaller files can still download).
 
 ## Design Constraints
 

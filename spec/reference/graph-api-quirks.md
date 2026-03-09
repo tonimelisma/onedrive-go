@@ -102,6 +102,16 @@ Multi-hour Microsoft-side backend failures return HTTP 400 `invalidRequest` / `"
 
 HTTP 507 (Insufficient Storage) wraps `ErrServerError` at the sentinel level. If error classification checks sentinels before status codes, 507 is incorrectly classified as retryable (like other 5xx errors). Status code classification must take priority.
 
+## Throttling Scopes
+
+Microsoft Graph API throttling scope behavior (not in official docs, discovered through testing and community):
+
+- **Per-user limit**: All requests from the same user (same OAuth token) share a throttle bucket, regardless of which drive or folder is targeted.
+- **Per-tenant limit**: All users in an organization share a higher aggregate limit.
+- **Per-app-per-tenant limit**: Each registered app has its own per-tenant quota.
+- **Implication for sync**: HTTP 429 on any drive (including shortcuts) means the entire account is throttled. Shortcut drives that belong to different users still share the caller's rate limit (the caller's token is used, not the sharer's).
+- `RateLimit-Remaining` and `RateLimit-Limit` headers provide real-time visibility. `Retry-After` on 429/503 provides server-mandated wait time.
+
 ## Shared Folder Issues
 
 ### SharedWithMe Identity Response Shape

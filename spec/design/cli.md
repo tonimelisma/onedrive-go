@@ -2,7 +2,7 @@
 
 GOVERNS: main.go, root.go, format.go, signal.go, pidfile.go, auth.go, ls.go, rm.go, mkdir.go, mv.go, cp.go, stat.go, pause.go, resume.go, recycle_bin.go, internal/logfile/logfile.go
 
-Implements: R-1 [implemented], R-3.1 [verified], R-4.7 [verified], R-1.9 [implemented]
+Implements: R-1 [implemented], R-3.1 [verified], R-4.7 [verified], R-1.9 [implemented], R-2.3.7 [planned], R-2.3.8 [planned], R-2.3.9 [planned], R-6.6.11 [planned]
 
 ## Overview
 
@@ -26,7 +26,7 @@ Implements: R-6.2.8 [verified]
 | `sync` | `sync.go` | Sync (see [sync-engine.md](sync-engine.md)) |
 | `pause`, `resume` | `pause.go`, `resume.go` | Pause/resume sync |
 | `status` | `status.go` | Display account/drive status |
-| `issues` | `issues.go` | Conflict and failure management |
+| `issues` | `issues.go` | Conflict and failure management (grouped display, per-scope sub-grouping) |
 | `verify` | `verify.go` | Post-sync verification |
 | `drive` | `drive.go` | Drive management (list/add/remove/search) |
 | `recycle-bin` | `recycle_bin.go` | Recycle bin operations (list/restore/empty) |
@@ -59,4 +59,13 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
 - CLI handlers use `cmd.Context()` for signal propagation. Exception: upload session cancel paths use `context.Background()` because the cancel must succeed even when the original context is done.
 - The status command uses a testable service layer with narrowed interfaces (`accountMetaReader`, `tokenStateChecker`, `syncStateQuerier`), decoupling status aggregation from Cobra wiring.
 - Extract `multiHandler` from `root.go` to `internal/slogutil/` if logging grows (structured error reporting, log sampling). [planned]
+
+## Planned: Issues Display Enhancements
+
+Implements: R-2.3.7 [planned], R-2.3.8 [planned], R-2.3.9 [planned], R-6.6.11 [planned]
+
+- **Grouped display**: >10 failures of same `issue_type` → single heading with count, first 5 paths shown. `--verbose` shows all paths.
+- **Per-scope sub-grouping**: 507 quota and 403 permissions grouped by scope (own drive vs each shortcut). Different scopes = different owners = different user actions.
+- **Human-readable names**: Shortcut-scoped failures display local path name, not internal drive IDs.
+- **Per-error-type user action text**: Every failure includes plain-language reason + concrete user action. Scope-owner-specific variants: "Your OneDrive storage is full" (own drive) vs "Shared folder '{name}' owner's storage is full" (shortcut).
 - Root package unit test coverage target: 60%+ (currently ~47%). CLI `RunE` handlers need interface-based mock injection. [planned]
