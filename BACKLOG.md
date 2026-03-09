@@ -190,15 +190,43 @@ Optimization deferred until profiling shows a bottleneck.
 
 **Why time-based retry is correct**: Unlike file-scoped actionable failures (invalid name, path too long, file too large) where the user fixes the problem locally (scanner detects it), 507 requires a server-side fix with no local signal. The reconciler must periodically re-inject the upload attempt. When quota is freed, upload succeeds, and `CommitOutcome` (baseline.go:557-565) auto-clears the `sync_failures` row.
 
+#### Architectural context: two failure recording paths
+
+The codebase has **two separate code paths** that write to `sync_failures`, each with its own category logic. This is a design smell that B-341 will make worse unless addressed.
+
+**Path 1: `RecordFailure()` (baseline.go:1068)** — Called by `processWorkerResult()` in the engine when an executor action (download, upload, delete) fails with an HTTP error. This path **always hardcodes `category='transient'`** in the INSERT statement. It stores `http_status`, `last_error`, and computes `next_retry_at` via `computeNextRetry()`. It has **no concept of issue types** — the `issue_type` column is left empty. This is the path that handles runtime HTTP errors like 429, 500, 503, 507, etc.
+
+**Path 2: `RecordSyncFailure()` (baseline.go:1525)** — Called by `filterInvalidUploads()` in the engine when pre-upload validation fails (invalid filename, path too long, file too large). This path uses `isActionableIssue()` to determine category. Actionable failures get `next_retry_at = NULL` (never retried by the reconciler). This path **always has an issue type** (`IssueInvalidFilename`, `IssuePathTooLong`, `IssueFileTooLarge`).
+
+**`isActionableIssue()` (baseline.go:1512)** — A switch statement that returns `true` for `IssueInvalidFilename`, `IssuePathTooLong`, `IssueFileTooLarge`. This function is **only called by Path 2** (`RecordSyncFailure`). Path 1 (`RecordFailure`) bypasses it entirely because Path 1 doesn't set issue types — it only has an HTTP status code.
+
+**The problem for B-341**: HTTP 507 arrives via Path 1 (`RecordFailure`), which hardcodes `category='transient'`. To classify 507 as actionable, we must either:
+
+1. **Add HTTP-status-based classification to Path 1**: Add a `classifyCategory(httpStatus)` check in `RecordFailure()` that returns `'actionable'` for 507. This keeps the two paths separate but splits the "what is actionable?" decision across two functions (`isActionableIssue` for issue types, `classifyCategory` for HTTP codes). The category decision becomes harder to audit.
+
+2. **Unify into a single failure classifier**: Create a `classifyFailure(issueType, httpStatus) → (category, needsRetry)` function that both paths call. All category logic lives in one place. `RecordFailure` would need to derive an issue type from the HTTP status (e.g., 507 → `IssueQuotaExceeded`), then call the unified classifier. This is a larger refactor but makes the system more auditable.
+
+3. **Merge the two recording paths**: A single `RecordSyncFailure()` that accepts both issue-type-based and HTTP-status-based failures. Callers provide what they have (issue type, HTTP status, or both), and the function determines category. This eliminates the dual-path smell entirely.
+
+**Recommendation**: Option 2 or 3 should be evaluated during B-341's design phase. The current split means that to answer "what category does failure X get?", you must know which code path recorded it, then trace through path-specific logic. A unified classifier makes the answer a single function lookup. This becomes critical when B-343 adds scope classification — without unification, scope logic would also need to be duplicated across both paths.
+
 **Changes required**:
 - `internal/sync/upload_validation.go`: Add `IssueQuotaExceeded = "quota_exceeded"` constant
-- `internal/sync/baseline.go`: `isActionableIssue()` — add `IssueQuotaExceeded`
-- `internal/sync/baseline.go`: `RecordFailure()` — detect `httpStatus == 507`, set `category = 'actionable'`, `issue_type = IssueQuotaExceeded`, with `next_retry_at` (507 is the one actionable type that should have time-based retry)
+- `internal/sync/baseline.go`: Unify or extend failure classification — either add HTTP-status awareness to `isActionableIssue()`, or create a unified `classifyFailure()` function that both `RecordFailure` and `RecordSyncFailure` call (design decision)
+- `internal/sync/baseline.go`: `RecordFailure()` — detect `httpStatus == 507`, set `category = 'actionable'`, `issue_type = IssueQuotaExceeded`, with `next_retry_at` (507 is the one actionable type that should have time-based retry). Currently the INSERT on line 1133 hardcodes `'transient'` — must use a variable.
 - `internal/sync/baseline.go`: `ListSyncFailuresForRetry()` — change WHERE from `category = 'transient'` to `next_retry_at IS NOT NULL AND next_retry_at <= ?`
 - `internal/sync/baseline.go`: `EarliestSyncFailureRetryAt()` — same category filter removal
 - Schema partial index (`migrations/00001_consolidated_schema.sql`): Remove `category = 'transient'` from `idx_sync_failures_retry`. New: `WHERE next_retry_at IS NOT NULL`
+- `internal/sync/engine.go`: `classifyStatusCode(507)` currently returns `errClassFatal` (line 422-423). This means 507 goes through `RecordFailure()` without retry. Verify this is correct after B-341 changes (507 should still be fatal at the transport/action level — retries happen at the reconciler level via `next_retry_at`).
 
-**Tests**: `RecordFailure` with 507 → actionable + quota_exceeded + next_retry_at set. `RecordFailure` with 503 → transient (unchanged). `ListSyncFailuresForRetry` returns 507 failures. `ListActionableFailures` returns 507 failures.
+**Tests**:
+- `RecordFailure` with `httpStatus=507` → `category='actionable'`, `issue_type='quota_exceeded'`, `next_retry_at` set (not NULL)
+- `RecordFailure` with `httpStatus=503` → `category='transient'` (unchanged behavior)
+- `RecordFailure` with `httpStatus=429` → `category='transient'` (unchanged behavior)
+- `ListSyncFailuresForRetry` returns 507 failures when `next_retry_at <= now`
+- `ListActionableFailures` returns 507 failures (visible in `issues`)
+- If unified classifier is built: table-driven test covering every known `(issueType, httpStatus)` → `(category, needsRetry)` mapping
+- `isActionableIssue()` or its replacement: exhaustive test covering all issue type constants
 
 ### B-342: File-Scoped Actionable Failure Lifecycle — Stale Cleanup
 
@@ -226,14 +254,19 @@ Optimization deferred until profiling shows a bottleneck.
 
 The `status` command shows flat "Retrying: N" with no scope context.
 
+**Prerequisite**: B-341 should be implemented first. If B-341 introduces a unified failure classifier (see B-341 architectural context), scope classification naturally extends it: `classifyFailure(issueType, httpStatus) → (category, scope, retryPolicy)`. If B-341 leaves the two recording paths separate, B-343 must add scope derivation logic to **both** paths — `RecordFailure()` would derive scope from HTTP status, `RecordSyncFailure()` would derive scope from issue type. This duplication is another argument for unifying during B-341.
+
 **Key design decisions**:
 1. **Retry policies**: Proposed three: `Reconcile` (file: 30s→1h, existing), `ReconcileWide` (service/account: 2min→1h, new), `ReconcileActionable` (actionable: 5min→6h, new).
-2. **Scope derivation**: Store `scope` column in `sync_failures`? Or derive from `(category, issue_type, http_status)` in Go code?
-3. **Probe-based retry for wide-scope**: When 100 items fail with 503, retry ONE probe and kick all 100 if it succeeds? Or use longer intervals + jitter?
-4. **Scope-classified display**: `status` showing "47 items (503 Service Unavailable since 2h ago)" instead of "Retrying: 47".
-5. **`computeNextRetry()` changes**: Must become scope-aware.
+2. **Scope derivation**: Store `scope` column in `sync_failures`? Or derive from `(category, issue_type, http_status)` in Go code? Storing makes SQL grouping trivial (`GROUP BY scope`). Deriving avoids schema change but requires Go-side grouping for display.
+3. **Probe-based retry for wide-scope**: When 100 items fail with 503, retry ONE probe and kick all 100 if it succeeds? Or use longer intervals + jitter? The throttle gate (R6) already handles 429 batching — could a similar pattern work for 503?
+4. **Scope-classified display**: `status` showing "47 items (503 Service Unavailable since 2h ago)" instead of "Retrying: 47". Requires either `scope` column or Go-side `GROUP BY http_status` over `ListSyncFailures()` results.
+5. **`computeNextRetry()` changes**: Currently `computeNextRetry(now, failureCount)` calls `retry.Reconcile.Delay(failureCount)`. Must become scope-aware: `computeNextRetry(now, failureCount, scope)` selecting the appropriate policy. Both `RecordFailure()` and `RecordSyncFailure()` call `computeNextRetry()` — if a unified classifier exists (B-341), scope is available at the call site.
+6. **Reconciler changes**: `reconcileSyncFailures()` currently re-injects all due items uniformly. With scope classification, should the reconciler prioritize file-scoped items (likely to succeed) over service-wide items (likely to fail again)?
 
 **Scope classification from R11**: Service-wide (500, 502, 503, 504, 509, network timeout, 400 ObjectHandle), Account-wide (429, 401, 507), Folder-scoped (403 — existing permission subsystem), File-scoped (423, hash mismatch, 412).
+
+**Where scope is determined today**: `RecordFailure()` receives `httpStatus` as a parameter from `processWorkerResult()`. `RecordSyncFailure()` receives `issueType` from `filterInvalidUploads()`. All file-scoped actionable issues come through Path 2; all HTTP-status-based failures come through Path 1. The 403 case is special — it goes through `handle403()` in the engine which calls `RecordSyncFailure()` with `issue_type='permission_denied'` and has its own recheck subsystem (`recheckPermissions()`). Scope classification must respect this existing 403 carve-out.
 
 **Implements**: R10.3, R10.4, R11.1-R11.4 from `docs/design/retry-transition-requirements.md`.
 
