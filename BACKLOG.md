@@ -174,6 +174,69 @@ Optimization deferred until profiling shows a bottleneck.
 |----|-------|----------|-------|
 | ~~B-336~~ | ~~Drop dead failure columns from remote_state schema~~ | ~~P5~~ | **DONE** — Consolidated schema rebuilds `remote_state` without `failure_count`, `next_retry_at`, `last_error`, `http_status`. Full retry architecture transition complete: removed escalation infrastructure, renamed permanent→actionable, replaced circuit breaker with throttle gate, unified `issues` CLI command, updated status/retry policy. |
 
+## Retry Architecture — Actionable Failure Lifecycle
+
+| ID | Title | Priority | Notes |
+|----|-------|----------|-------|
+| B-341 | 507 quota exceeded → actionable failure with time-based retry | P3 | **Design phase required.** HTTP 507 (Insufficient Storage) is currently misclassified as transient. Should be actionable with `issue_type='quota_exceeded'`, visible in `issues`, with time-based retry (server-scoped fix has no local signal). See details below. |
+| B-342 | File-scoped actionable failure lifecycle — stale cleanup | P3 | **Design phase required.** When user fixes a file-scoped actionable failure (rename, move, delete), the old `sync_failures` row persists until age-based pruning. Four design options to evaluate. See details below. |
+| B-343 | Scope-classified retry policies and display | P3 | **Design phase required.** Different retry backoff curves per failure scope. Scope-classified display in `status`. Implements R10.3-R10.4, R11.1-R11.4. See details below. |
+
+### B-341: 507 Quota Exceeded → Actionable Failure with Time-Based Retry
+
+**Problem**: HTTP 507 from Graph API during upload is misclassified. `RecordFailure()` (baseline.go:1068) hardcodes `category='transient'`. User has no visibility — 507 failures don't appear in `issues`.
+
+**What 507 means**: File is fine locally. Problem is server-side (OneDrive quota full). User must free space on OneDrive (delete files via web UI, empty recycle bin). No local filesystem change signals the fix — only a retry against the server can detect resolution.
+
+**Why time-based retry is correct**: Unlike file-scoped actionable failures (invalid name, path too long, file too large) where the user fixes the problem locally (scanner detects it), 507 requires a server-side fix with no local signal. The reconciler must periodically re-inject the upload attempt. When quota is freed, upload succeeds, and `CommitOutcome` (baseline.go:557-565) auto-clears the `sync_failures` row.
+
+**Changes required**:
+- `internal/sync/upload_validation.go`: Add `IssueQuotaExceeded = "quota_exceeded"` constant
+- `internal/sync/baseline.go`: `isActionableIssue()` — add `IssueQuotaExceeded`
+- `internal/sync/baseline.go`: `RecordFailure()` — detect `httpStatus == 507`, set `category = 'actionable'`, `issue_type = IssueQuotaExceeded`, with `next_retry_at` (507 is the one actionable type that should have time-based retry)
+- `internal/sync/baseline.go`: `ListSyncFailuresForRetry()` — change WHERE from `category = 'transient'` to `next_retry_at IS NOT NULL AND next_retry_at <= ?`
+- `internal/sync/baseline.go`: `EarliestSyncFailureRetryAt()` — same category filter removal
+- Schema partial index (`migrations/00001_consolidated_schema.sql`): Remove `category = 'transient'` from `idx_sync_failures_retry`. New: `WHERE next_retry_at IS NOT NULL`
+
+**Tests**: `RecordFailure` with 507 → actionable + quota_exceeded + next_retry_at set. `RecordFailure` with 503 → transient (unchanged). `ListSyncFailuresForRetry` returns 507 failures. `ListActionableFailures` returns 507 failures.
+
+### B-342: File-Scoped Actionable Failure Lifecycle — Stale Cleanup
+
+**Problem**: When a user fixes a file-scoped actionable failure (`path_too_long`, `file_too_large`, `invalid_filename`) by renaming, moving, or deleting the file, the old `sync_failures` row persists indefinitely. The file was never uploaded (no baseline entry), so the scanner's deletion detection doesn't emit a `ChangeDelete`. Stale entry shows in `issues` as unresolved even though user already fixed it. Currently cleared only by age-based pruning (baseline.go:889-895) or manual `issues clear`.
+
+**Why re-validation is unnecessary for 2 of 3 types**:
+- `path_too_long`: If file still exists at same path, path is still too long by definition (path = primary key).
+- `invalid_filename`: If file still exists at same path, name is still invalid.
+- `file_too_large`: Could change (user compresses in place), but this case is already handled by the existing scanner → validation → upload → CommitOutcome pipeline.
+
+**Also consider**: Suppressing redundant re-validation noise in one-shot mode. Every `sync` pass re-emits unchanged files with actionable failures (no baseline → scanner emits ChangeCreate → planner plans upload → `filterInvalidUploads` catches it → `RecordSyncFailure` UPSERT bumps `failure_count`). `filterInvalidUploads` could skip files that already have an actionable sync_failure with the same issue_type.
+
+**Design options (to be evaluated)**:
+1. **`recheckActionableFailures()` at start of pass** (403 pattern): Stat each actionable failure path. If file gone → `ClearSyncFailure`. Pro: follows established pattern. Con: arguably overkill since detection is just an `os.Stat`.
+2. **Scanner deletion detection enhancement**: Extend `detectDeletions()` to compare observed set against sync_failures paths (not just baseline). Pro: uses existing mechanism. Con: scanner gains sync_failures coupling.
+3. **Aggressive pruning**: Enhance `Prune()` to stat actionable failure paths and clear missing ones. Pro: minimal new code. Con: only runs on prune schedule.
+4. **Do nothing**: Rely on existing age-based pruning + `issues clear`. Pro: no changes. Con: stale entries linger.
+
+### B-343: Scope-Classified Retry Policies and Display
+
+**Problem**: All transient failures use the same `retry.Reconcile` policy (30s base → 1h max). Suboptimal for different scopes:
+- **File-scoped transient** (423 locked, hash mismatch, 412 ETag): Self-resolving. 30s→1h appropriate.
+- **Service/account-wide transient** (500, 502, 503, 504, 509, 429, 401): Affects ALL items. Retrying 100 files every 30s when service is down wastes resources.
+- **Actionable server-scoped** (507 quota — B-341): User must free space. Retrying every 30s is pointless.
+
+The `status` command shows flat "Retrying: N" with no scope context.
+
+**Key design decisions**:
+1. **Retry policies**: Proposed three: `Reconcile` (file: 30s→1h, existing), `ReconcileWide` (service/account: 2min→1h, new), `ReconcileActionable` (actionable: 5min→6h, new).
+2. **Scope derivation**: Store `scope` column in `sync_failures`? Or derive from `(category, issue_type, http_status)` in Go code?
+3. **Probe-based retry for wide-scope**: When 100 items fail with 503, retry ONE probe and kick all 100 if it succeeds? Or use longer intervals + jitter?
+4. **Scope-classified display**: `status` showing "47 items (503 Service Unavailable since 2h ago)" instead of "Retrying: 47".
+5. **`computeNextRetry()` changes**: Must become scope-aware.
+
+**Scope classification from R11**: Service-wide (500, 502, 503, 504, 509, network timeout, 400 ObjectHandle), Account-wide (429, 401, 507), Folder-scoped (403 — existing permission subsystem), File-scoped (423, hash mismatch, 412).
+
+**Implements**: R10.3, R10.4, R11.1-R11.4 from `docs/design/retry-transition-requirements.md`.
+
 ## Phase 7 Follow-up
 
 | ID | Title | Priority | Package | Notes |

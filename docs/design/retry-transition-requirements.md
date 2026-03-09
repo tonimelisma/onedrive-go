@@ -82,11 +82,13 @@ Specific, testable requirements derived from the design analysis in `retry-trans
 
 - R10.1. `status` shows a single "Issues" count = unresolved conflicts + actionable failures.
 - R10.2. `status` shows a "Retrying" count = transient failures with `failure_count >= 3` (below 3 is invisible).
-- R10.3. The retrying count includes scope context: service-wide (e.g., "503 Service Unavailable since 2h ago"), account-wide, or file-scoped.
-- R10.4. Service-wide errors are collapsed: "47 items (503 Service Unavailable since 2h ago)" not 47 individual lines.
+- R10.3. **Not yet implemented.** The retrying count is currently a simple item count with no scope breakdown. Target: scope context showing service-wide (e.g., "503 Service Unavailable since 2h ago"), account-wide, or file-scoped. See B-343.
+- R10.4. **Not yet implemented.** Target: service-wide errors collapsed in display — "47 items (503 Service Unavailable since 2h ago)" not 47 individual lines. See B-343.
 - R10.5. Short-term transient failures (fewer than 3 reconciler-level attempts) are invisible in all user-facing output.
 
 ## R11. Transient Failure Scope Classification
+
+> **Not yet implemented.** The following requirements describe the target state for scope-classified failure display and retry policies. See B-343 for the planned implementation.
 
 - R11.1. Service-wide errors: 500, 502, 503, 504, 509, network timeout, 400 ObjectHandle. Detected by multiple items failing with the same HTTP status.
 - R11.2. Account-wide errors: 429 (throttled), 401 (auth expired), 507 (quota full). Inherently per-account.

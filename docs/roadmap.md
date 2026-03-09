@@ -756,6 +756,20 @@ Graph API + shortcut detection + multi-scope observation + cross-drive execution
 
 ---
 
+## Phase 9.5: Actionable Failure Lifecycle & Scope-Classified Retries
+
+> **Prerequisites**: Retry architecture transition complete (PRs #214-#216).
+> **Design phase required**: Each increment starts with a design analysis.
+> **Backlog items**: B-341, B-342, B-343.
+
+| Increment | Status | Description |
+|-----------|--------|-------------|
+| 9.5.0 | FUTURE | **507 Quota Exceeded → Actionable Failure (B-341)** — HTTP 507 classified as actionable, shows in `issues`, retries with time-based backoff. When user frees quota, next retry succeeds and auto-clears. Key: `RecordFailure()` detects 507 → `category='actionable'`, `issue_type='quota_exceeded'`, with `next_retry_at`. SQL queries drop `category='transient'` filter. Schema partial index updated. |
+| 9.5.1 | FUTURE | **File-Scoped Actionable Failure Lifecycle (B-342)** — When user fixes file-scoped actionable failure (renames, moves, deletes), stale `sync_failures` row auto-cleaned. Design: evaluate recheckActionableFailures (403 pattern), scanner enhancement, aggressive pruning, or do-nothing. Also address redundant re-validation noise in one-shot mode. |
+| 9.5.2 | FUTURE | **Scope-Classified Retry Policies and Display (B-343)** — Different retry backoff curves per failure scope. `ReconcileWide` (service: 2min→1h) and `ReconcileActionable` (actionable: 5min→6h) policies. `status` groups retrying items by scope. Implements R10.3-R10.4, R11.1-R11.4. |
+
+---
+
 ## Phase 10: Filtering
 
 > **Prerequisites**: B-307 (FC-1) and B-308 (FC-2) are addressed in Phase 5.7.1.
