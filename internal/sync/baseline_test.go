@@ -105,6 +105,7 @@ func TestNewSyncStore_CreatesDB(t *testing.T) {
 	require.NoError(t, db.PingContext(t.Context()))
 }
 
+// Validates: R-6.5.1, R-2.5.2
 func TestNewSyncStore_WALMode(t *testing.T) {
 	t.Parallel()
 
@@ -118,6 +119,7 @@ func TestNewSyncStore_WALMode(t *testing.T) {
 	assert.Equal(t, "wal", journalMode)
 }
 
+// Validates: R-6.5.1, R-2.5.2
 func TestSyncStore_Close_CheckpointsWAL(t *testing.T) {
 	t.Parallel()
 
@@ -285,6 +287,7 @@ func TestLoad_EmptyBaseline(t *testing.T) {
 	assert.False(t, idOk)
 }
 
+// Validates: R-6.5.2
 func TestCommit_Download(t *testing.T) {
 	t.Parallel()
 
@@ -319,6 +322,7 @@ func TestCommit_Download(t *testing.T) {
 	assert.Equal(t, fixedTime.UnixNano(), entry.SyncedAt)
 }
 
+// Validates: R-6.5.2
 func TestCommit_Upload(t *testing.T) {
 	t.Parallel()
 
@@ -422,6 +426,7 @@ func TestCommit_UpdateSynced(t *testing.T) {
 	assert.Equal(t, "h2", entry.LocalHash)
 }
 
+// Validates: R-6.5.2
 func TestCommit_LocalDelete(t *testing.T) {
 	t.Parallel()
 
@@ -452,6 +457,7 @@ func TestCommit_LocalDelete(t *testing.T) {
 	assert.False(t, ok, "entry still exists after local delete")
 }
 
+// Validates: R-6.5.2
 func TestCommit_RemoteDelete(t *testing.T) {
 	t.Parallel()
 
@@ -623,6 +629,7 @@ func TestCommit_Conflict_StoresRemoteMtime(t *testing.T) {
 	assert.Equal(t, remoteMtime, storedRemoteMtime.Int64)
 }
 
+// Validates: R-6.5.2
 func TestCommit_SkipsFailedOutcomes(t *testing.T) {
 	t.Parallel()
 
@@ -852,6 +859,7 @@ func seedConflict(t *testing.T, mgr *SyncStore, path, conflictType string) strin
 	return id
 }
 
+// Validates: R-2.3.2
 func TestListConflicts_Empty(t *testing.T) {
 	t.Parallel()
 
@@ -863,6 +871,7 @@ func TestListConflicts_Empty(t *testing.T) {
 	assert.Empty(t, conflicts)
 }
 
+// Validates: R-2.3.2
 func TestListConflicts_WithConflicts(t *testing.T) {
 	t.Parallel()
 
@@ -881,6 +890,7 @@ func TestListConflicts_WithConflicts(t *testing.T) {
 	assert.Equal(t, "b.txt", conflicts[1].Path)
 }
 
+// Validates: R-2.3.2
 func TestListConflicts_OnlyUnresolved(t *testing.T) {
 	t.Parallel()
 
@@ -901,6 +911,7 @@ func TestListConflicts_OnlyUnresolved(t *testing.T) {
 	assert.Equal(t, "pending.txt", conflicts[0].Path)
 }
 
+// Validates: R-2.3.2
 func TestGetConflict_ByID(t *testing.T) {
 	t.Parallel()
 
@@ -917,6 +928,7 @@ func TestGetConflict_ByID(t *testing.T) {
 	assert.Equal(t, "create_create", c.ConflictType)
 }
 
+// Validates: R-2.3.2
 func TestGetConflict_ByPath(t *testing.T) {
 	t.Parallel()
 
@@ -941,6 +953,7 @@ func TestGetConflict_NotFound(t *testing.T) {
 	require.Error(t, err)
 }
 
+// Validates: R-2.3.2
 func TestResolveConflict(t *testing.T) {
 	t.Parallel()
 
@@ -1067,6 +1080,7 @@ func TestMigrations_Idempotent(t *testing.T) {
 	assert.NotNil(t, b)
 }
 
+// Validates: R-2.3.2
 func TestCommitConflict_AutoResolved(t *testing.T) {
 	t.Parallel()
 
@@ -1114,6 +1128,7 @@ func TestCommitConflict_AutoResolved(t *testing.T) {
 	assert.Equal(t, "local-h", entry.LocalHash)
 }
 
+// Validates: R-2.3.2
 func TestListAllConflicts(t *testing.T) {
 	t.Parallel()
 
@@ -1276,6 +1291,7 @@ func TestCommitOutcome_Move(t *testing.T) {
 	assert.Equal(t, "p2", entry.ParentID)
 }
 
+// Validates: R-2.3.2
 func TestCommitOutcome_Conflict_AutoResolved(t *testing.T) {
 	t.Parallel()
 
@@ -1314,6 +1330,7 @@ func TestCommitOutcome_Conflict_AutoResolved(t *testing.T) {
 	assert.Equal(t, ResolutionKeepLocal, resolution)
 }
 
+// Validates: R-2.3.2
 func TestCommitOutcome_Conflict_Unresolved(t *testing.T) {
 	t.Parallel()
 
@@ -1339,6 +1356,7 @@ func TestCommitOutcome_Conflict_Unresolved(t *testing.T) {
 	assert.False(t, ok, "baseline entry should not exist for unresolved conflict")
 }
 
+// Validates: R-2.3.2
 func TestCommitOutcome_EditDeleteConflict_DeletesBaseline(t *testing.T) {
 	t.Parallel()
 
@@ -1813,6 +1831,7 @@ func TestBaseline_ConcurrentAccess(t *testing.T) {
 
 // TestConflictRecord_NameField verifies that ConflictRecord.Name is populated
 // as path.Base(Path) by the shared scanConflict function (B-071).
+// Validates: R-2.3.2
 func TestConflictRecord_NameField(t *testing.T) {
 	mgr := newTestManager(t)
 	ctx := t.Context()
@@ -1913,6 +1932,7 @@ func setupPruneTestConflicts(t *testing.T, mgr *SyncStore, ctx context.Context, 
 // TestPruneResolvedConflicts verifies that PruneResolvedConflicts deletes
 // resolved conflicts older than the retention period while preserving
 // newer resolved and all unresolved conflicts (B-087).
+// Validates: R-2.3.2
 func TestPruneResolvedConflicts(t *testing.T) {
 	mgr := newTestManager(t)
 	ctx := t.Context()
@@ -2334,6 +2354,7 @@ func TestSetDispatchStatus_NonExistentRow(t *testing.T) {
 
 // --- Enhanced crash recovery tests (5.7.2) ---
 
+// Validates: R-2.5.1, R-6.5.2
 func TestResetInProgressStates_DeleteFileAbsent(t *testing.T) {
 	t.Parallel()
 
@@ -2359,6 +2380,7 @@ func TestResetInProgressStates_DeleteFileAbsent(t *testing.T) {
 	assert.Equal(t, "deleted", status, "file absent → deleted")
 }
 
+// Validates: R-2.5.1, R-6.5.2
 func TestResetInProgressStates_DeleteFileExists(t *testing.T) {
 	t.Parallel()
 
@@ -2387,6 +2409,7 @@ func TestResetInProgressStates_DeleteFileExists(t *testing.T) {
 	assert.Equal(t, "pending_delete", status, "file exists → pending_delete")
 }
 
+// Validates: R-2.5.1, R-6.5.2
 func TestResetInProgressStates_DownloadStillResetsToPending(t *testing.T) {
 	t.Parallel()
 
@@ -2412,6 +2435,7 @@ func TestResetInProgressStates_DownloadStillResetsToPending(t *testing.T) {
 	assert.Equal(t, "pending_download", status)
 }
 
+// Validates: R-2.5.1, R-6.5.2
 func TestResetInProgressStates_MixedStates(t *testing.T) {
 	t.Parallel()
 

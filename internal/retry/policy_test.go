@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Validates: R-6.8.2
 func TestPolicy_Delay_NoJitter(t *testing.T) {
 	t.Parallel()
 
@@ -40,6 +41,7 @@ func TestPolicy_Delay_NoJitter(t *testing.T) {
 	}
 }
 
+// Validates: R-6.8.2
 func TestPolicy_Delay_WithJitter(t *testing.T) {
 	t.Parallel()
 
@@ -66,6 +68,7 @@ func TestPolicy_Delay_WithJitter(t *testing.T) {
 	}
 }
 
+// Validates: R-6.8.2
 func TestPolicy_Delay_MaxCap(t *testing.T) {
 	t.Parallel()
 
@@ -82,6 +85,7 @@ func TestPolicy_Delay_MaxCap(t *testing.T) {
 	assert.Equal(t, 30*time.Second, p.Delay(10))
 }
 
+// Validates: R-6.8.2
 // TestNamedPolicies_MatchOriginal verifies named policies match the original constants.
 func TestNamedPolicies_MatchOriginal(t *testing.T) {
 	t.Parallel()
@@ -121,6 +125,7 @@ func TestNamedPolicies_MatchOriginal(t *testing.T) {
 	assert.Equal(t, 0.0, WatchRemote.Jitter)
 }
 
+// Validates: R-6.8.1, R-6.8.2
 // TestTransportDelay_MatchesCalcBackoff verifies Transport.Delay produces the same
 // no-jitter base as graph/client.go calcBackoff.
 func TestTransportDelay_MatchesCalcBackoff(t *testing.T) {
@@ -148,6 +153,7 @@ func TestTransportDelay_MatchesCalcBackoff(t *testing.T) {
 	}
 }
 
+// Validates: R-6.8.2
 // TestReconcileDelay_MatchesComputeNextRetry verifies the Reconcile policy
 // produces delays matching the original computeNextRetry in baseline.go.
 // Original: delaySec = min(30*(1<<failureCount), 3600)
@@ -187,6 +193,7 @@ func TestReconcileDelay_MatchesComputeNextRetry(t *testing.T) {
 	}
 }
 
+// Validates: R-6.8.2
 // TestWatchLocalDelay_MatchesOriginal verifies WatchLocal delays.
 func TestWatchLocalDelay_MatchesOriginal(t *testing.T) {
 	t.Parallel()
@@ -206,6 +213,7 @@ func TestWatchLocalDelay_MatchesOriginal(t *testing.T) {
 	}
 }
 
+// Validates: R-6.8.2
 // TestWatchRemoteDelay_MatchesOriginal verifies WatchRemote delays.
 func TestWatchRemoteDelay_MatchesOriginal(t *testing.T) {
 	t.Parallel()

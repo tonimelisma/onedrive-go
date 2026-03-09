@@ -16,6 +16,7 @@ func newTestBreaker(threshold int, window, cooldown time.Duration) (*CircuitBrea
 	return cb, &now
 }
 
+// Validates: R-6.8.2
 func TestCircuitBreaker_StartsClosedAllowsRequests(t *testing.T) {
 	t.Parallel()
 
@@ -25,6 +26,7 @@ func TestCircuitBreaker_StartsClosedAllowsRequests(t *testing.T) {
 	assert.True(t, cb.Allow())
 }
 
+// Validates: R-6.8.2
 func TestCircuitBreaker_TripsOpenOnThreshold(t *testing.T) {
 	t.Parallel()
 
@@ -40,6 +42,7 @@ func TestCircuitBreaker_TripsOpenOnThreshold(t *testing.T) {
 	assert.False(t, cb.Allow())
 }
 
+// Validates: R-6.8.2
 func TestCircuitBreaker_OpenToHalfOpenAfterCooldown(t *testing.T) {
 	t.Parallel()
 
@@ -59,6 +62,7 @@ func TestCircuitBreaker_OpenToHalfOpenAfterCooldown(t *testing.T) {
 	assert.Equal(t, CircuitHalfOpen, cb.State())
 }
 
+// Validates: R-6.8.2
 func TestCircuitBreaker_HalfOpenSuccessCloses(t *testing.T) {
 	t.Parallel()
 
@@ -75,6 +79,7 @@ func TestCircuitBreaker_HalfOpenSuccessCloses(t *testing.T) {
 	assert.True(t, cb.Allow())
 }
 
+// Validates: R-6.8.2
 func TestCircuitBreaker_HalfOpenFailureReopens(t *testing.T) {
 	t.Parallel()
 
@@ -91,6 +96,7 @@ func TestCircuitBreaker_HalfOpenFailureReopens(t *testing.T) {
 	assert.False(t, cb.Allow())
 }
 
+// Validates: R-6.8.2
 func TestCircuitBreaker_HalfOpenRejectsSecondProbe(t *testing.T) {
 	t.Parallel()
 
@@ -106,6 +112,7 @@ func TestCircuitBreaker_HalfOpenRejectsSecondProbe(t *testing.T) {
 	assert.False(t, cb.Allow())
 }
 
+// Validates: R-6.8.2
 func TestCircuitBreaker_FailuresOutsideWindowPruned(t *testing.T) {
 	t.Parallel()
 
@@ -123,6 +130,7 @@ func TestCircuitBreaker_FailuresOutsideWindowPruned(t *testing.T) {
 	assert.Equal(t, CircuitClosed, cb.State()) // only 1 failure in window, below threshold of 3
 }
 
+// Validates: R-6.8.2
 func TestCircuitBreaker_SuccessResetsClearsFaitures(t *testing.T) {
 	t.Parallel()
 

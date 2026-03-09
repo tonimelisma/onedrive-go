@@ -13,6 +13,7 @@ import (
 // §3: Safety Invariant Tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-6.2.1
 // TestS1_NoRemoteDeleteWithoutBaseline validates Safety Invariant S1:
 // a file absent locally with NO baseline entry must NOT produce a
 // ActionRemoteDelete. Only baseline-tracked items can propagate deletes.

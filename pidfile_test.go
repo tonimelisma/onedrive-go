@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Validates: R-6.3.1
 func TestWritePIDFile_CreatesFileWithCurrentPID(t *testing.T) {
 	t.Parallel()
 
@@ -32,6 +33,7 @@ func TestWritePIDFile_CreatesFileWithCurrentPID(t *testing.T) {
 	assert.Equal(t, os.Getpid(), pid)
 }
 
+// Validates: R-6.3.1
 func TestWritePIDFile_FlockPreventsSecondAcquisition(t *testing.T) {
 	t.Parallel()
 
@@ -50,6 +52,7 @@ func TestWritePIDFile_FlockPreventsSecondAcquisition(t *testing.T) {
 	assert.Contains(t, err.Error(), "already running")
 }
 
+// Validates: R-6.3.1
 func TestWritePIDFile_CleanupRemovesFile(t *testing.T) {
 	t.Parallel()
 

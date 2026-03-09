@@ -1,6 +1,6 @@
 # Data Model
 
-Implements: R-6.5.1 [implemented], R-6.5.2 [implemented], R-2.5.1 [implemented], R-2.5.2 [implemented], R-2.3.2 [implemented]
+Implements: R-6.5.1 [verified], R-6.5.2 [verified], R-2.5.1 [verified], R-2.5.2 [verified], R-2.3.2 [verified]
 
 ## One Database per Drive
 
