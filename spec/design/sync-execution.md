@@ -51,6 +51,12 @@ Pure function `computeNewStatus()` determines the new `sync_status` for a `remot
 - Individual worker failures increment `report.Failed` and collect errors in `report.Errors`, but `RunOnce()` returns nil. Tests check `report.Failed >= 1`, not `err != nil`.
 - Two concurrency knobs: `transfer_workers` (default 8, range 4-64) for file operations, `check_workers` (default 4, range 1-16) for QuickXorHash computation.
 - All executor write operations use `containedPath()` with `filepath.IsLocal()` to reject path traversal. Symlink escape from the sync directory is prevented by resolving symlinks on the parent directory via `filepath.EvalSymlinks`.
+- Concurrent folder creates via Graph API `$batch` for sibling folders at same depth. Diminishing returns after first sync. [planned]
+- Targeted `-race` stress tests for DepTracker, Buffer, WorkerPool. [planned]
+- Sub-second uniqueness in `conflictCopyPath`: second-precision timestamps mean two conflicts in the same second collide. [planned]
+- Explicit error for unknown `ActionType` in `applySingleOutcome`: default case currently returns nil, silently dropping outcomes. [planned]
+- Graceful shutdown test under active worker pool: verify SIGTERM during active transfers drains correctly. [planned]
+- Channel lifecycle document: every channel — who creates, closes, reads, writes. [planned]
 
 ## CLI Status (`status.go`)
 

@@ -76,3 +76,16 @@ For detailed module design, see:
 | Sync store | [sync-store.md](sync-store.md) |
 | Data model (schema) | [data-model.md](data-model.md) |
 | CLI commands | [cli.md](cli.md) |
+
+## Planned Improvements
+
+- Threat model document covering all attack surfaces and guards. [planned]
+- Resource consumption guarantees documented per component. [planned]
+- Lock ordering contract: every mutex documented in a hierarchy. `tracker.go` has nested `mu` → `cyclesMu`. [planned]
+- Audit all `_ = ...` patterns in production code for silently ignored errors. [planned]
+- Add value assertions after bare `assert.NoError` test calls (42+ instances could mask incorrect results). [planned]
+- Audit deferred `Close` on write paths — errors universally ignored. [planned]
+- Degraded-mode behavior guarantees documented (what happens when components fail). [planned]
+- Evaluate `sync` → `graph` error coupling — decouple via interface if warranted. [planned]
+- Evaluate `internal/sync/` package splitting — 8k+ lines in one package. [planned]
+- Evaluate CLI structure scaling — 21 files / 4k+ lines in root package, consider domain grouping. [planned]

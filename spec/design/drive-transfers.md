@@ -42,6 +42,8 @@ QuickXorHash computation for local files (`hash.go`). The `pkg/quickxorhash/` pa
 
 - `Upload()` accepts `io.ReaderAt` (not `io.Reader`): enables retry-safe uploads without re-opening the file. `io.NewSectionReader` creates independent readers for each chunk.
 - Guard `.partial` file cleanup with `ctx.Err() == nil`: a 3.9 GB partial of a 4 GB download should survive Ctrl-C for resume. Only intentional deletions (hash mismatch) should remove partials.
+- Per-transfer timeout or connection-level deadline for `transferHTTPClient()`: `Timeout: 0` relies on context; a stalled connection without context cancellation hangs indefinitely. [planned]
+- Transfer manager resume edge case tests: corrupt partial file, changed remote content, oversized partial. [planned]
 
 ### Rationale: Per-Side Hashes
 

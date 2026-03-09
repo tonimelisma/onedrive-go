@@ -54,3 +54,11 @@ Sentinel errors: `ErrGone` (410), `ErrNotFound` (404), `ErrThrottled` (429), `Er
 - Upload URLs are sensitive credentials. The `UploadURL` type implements `slog.LogValuer` with redaction, matching the `DownloadURL` pattern.
 - Search API calls URL-escape query parameters to prevent special characters from breaking URL construction.
 - Token metadata validation is enforced on both write and read paths. Required fields must be present in non-nil metadata. `tokenfile.ValidateMeta()` validates before save, `LoadAndValidate()` validates on load.
+- Per-tenant rate limit coordination: multiple drives under the same tenant share Graph API rate limits. A shared rate limiter per-tenant prevents aggregate throttling. [planned]
+- Upload URL validation: verify HTTPS scheme and Microsoft domain on `UploadSession.UploadURL` before use. [planned]
+- Audit all `slog.*` calls for potential secret leakage (tokens, pre-auth URLs). [planned]
+- Audit all error message strings for embedded secrets — `GraphError.Message` includes API error body. [planned]
+- Test that captures log output and verifies no tokens or pre-auth URLs appear. [planned]
+- Evaluate unexporting `graph.Client.Do`/`DoWithHeaders` if unused outside the package. [planned]
+- Monitor `search(q='*')` reliability on business accounts for shared item discovery. [planned]
+- The `PermanentDeleteItem` 405→`DeleteItem` fallback for Personal accounts is a workaround. Remove when MS adds Personal support. [planned]

@@ -57,3 +57,16 @@ Read-only detection for shared content. When a write attempt returns 403, the pa
 ### Rationale
 
 `fsnotify/fsnotify` (v1.9.0, 10.6k stars, used by Hugo/Docker/Kubernetes/Syncthing) was chosen over `rjeczalik/notify` (unmaintained since Jan 2023).
+
+### Planned Improvements
+
+- Debounce semantics under load: write coalescing implemented, load-testing and tuning remaining. [planned]
+- Streaming delta processing: process pages as they arrive rather than buffering all pages. Modest win (~1ms per page vs ~100-300ms API call). [planned]
+- Total item cap during delta enumeration to bound memory from unbounded API pages. [planned]
+- Per-path event cap in Buffer: `defaultBufferMaxPaths` caps path count but not events-per-path. [planned]
+- Panic recovery in scanner hash phase: worker pool has recovery, scanner does not. [planned]
+- Nil guards on all Item field accesses in `observer_remote.go`: delta items may have missing `Name`, `ParentReference`, etc. [planned]
+- NFC normalization idempotency test. [planned]
+- Buffer overflow test with drop metric verification. [planned]
+- inotify partial-watch cleanup verification: ensure already-added watches are cleaned up on setup failure. [planned]
+- Remote filename validation: reject `..`, `/`, `\`, null bytes, control chars in `classifyAndConvert`. [planned]

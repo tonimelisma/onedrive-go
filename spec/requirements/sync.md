@@ -39,6 +39,7 @@ All filter settings are per-drive (no global filter defaults).
 - R-2.4.6: When `sync_paths` is set, the system shall sync only the specified paths. [planned]
 - R-2.4.7: When `skip_symlinks = true`, the system shall exclude symlinks. Symlinked directories are always excluded from watch mode. [implemented]
 - R-2.4.8: When an item belongs to the Personal Vault, the system shall exclude it by default. The `sync_vault` option enables vault sync for users who accept the auto-lock risk. [implemented]
+- R-2.4.9: When `remote_path` is configured, the system shall filter delta events to only process items under the specified remote path prefix. [planned]
 
 ## R-2.5 Crash Recovery [implemented]
 
@@ -68,3 +69,12 @@ When the user runs `verify`, the system shall re-hash local files and compare ag
 - R-2.9.1: When running `sync --watch`, the system shall expose a JSON-over-HTTP API on a Unix domain socket. [planned]
 - R-2.9.2: The RPC API shall support polling (`GET /status`) and push (`GET /events` via SSE). [planned]
 - R-2.9.3: GUI frontends shall connect to the control socket for real-time status, pause/resume, and conflict resolution. [planned]
+
+## R-2.10 Failure Management
+
+Failure tracking, classification, and lifecycle management.
+
+- R-2.10.1: When a transfer fails with HTTP 507 (quota exceeded), the system shall classify it as an actionable failure with issue type `quota_exceeded`, visible in `issues` output, with time-based retry. [planned]
+- R-2.10.2: When a user resolves a file-scoped actionable failure (by renaming, moving, or deleting the file), the system shall automatically detect the resolution and remove the stale failure entry. [planned]
+- R-2.10.3: When retrying failures, the system shall use scope-classified retry policies (file-scoped, service-wide, account-wide) with appropriate backoff curves per scope. [planned]
+- R-2.10.4: When displaying sync status, the system shall show failure scope context (file, service, account) alongside retry information. [planned]

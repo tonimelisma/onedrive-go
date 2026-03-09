@@ -46,3 +46,17 @@ Controlled by `use_local_trash` config (default: true on macOS, false on Linux).
 ### Verify (`verify.go` in root)
 
 CLI wiring for the verification command. Opens state DB read-only, runs verification, displays results.
+
+## SyncStore Planned Improvements
+
+- Audit `ForEachPath` callers for re-entrancy safety: holds read lock during callback — write from callback causes deadlock. [planned]
+- Mutex or `sync.Once` on `SyncStore.Load`: concurrent `Load` calls race on `m.baseline = b`. [planned]
+- Disk full during baseline commit: in-memory cache consistency when SQLite write fails. [planned]
+- Evaluate `BaselineStore` interface abstraction for storage backend flexibility. [planned]
+
+## Planned: Failure Management Enhancements
+
+Implements: R-2.10.1 [planned], R-2.10.2 [planned]
+
+- HTTP 507 (quota exceeded) classification: currently misclassified as transient. Should be actionable with `issue_type='quota_exceeded'`, visible in `issues`, with time-based retry. Requires changes in `upload_validation.go`, `baseline.go`, schema, and engine. [planned]
+- Stale actionable failure cleanup: when a user fixes a file-scoped actionable failure (rename, move, delete), the old `sync_failures` row should be automatically detected and removed. Options: `recheckActionableFailures()` at start of pass, scanner deletion detection enhancement, or aggressive pruning. [planned]

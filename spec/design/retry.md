@@ -34,3 +34,9 @@ Stateful wrapper around Policy for watch loops. Tracks consecutive error count. 
 - **No circuit breaker**: Removed from graph client. Replaced by account-wide 429 throttle gate. Circuit breakers are appropriate for multi-service architectures, not a single-API client.
 - **Transient failures retry forever**: In daemon mode, transient failures (network, 5xx) should always recover eventually. `Reconcile.MaxAttempts = 0`.
 - **No escalation**: Removed. Transient failures don't become permanent. Actionable failures are classified at detection time based on HTTP status and error type.
+
+## Planned: Scope-Classified Retry
+
+Implements: R-2.10.3 [planned], R-2.10.4 [planned]
+
+Different retry backoff curves per failure scope: file-scoped (immediate exponential), service-wide (probe-based), account-wide (long delay). Scope derived from failure type. Reconciler prioritizes file-scoped retries over wide-scope probes. `status` command displays scope context alongside retry information.

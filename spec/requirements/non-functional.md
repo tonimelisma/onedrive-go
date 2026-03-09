@@ -9,6 +9,7 @@ Performance targets, data integrity, process model, safety, observability, and p
 - R-6.1.3: Initial sync of 10K files shall complete in under 10 minutes. [target]
 - R-6.1.4: Startup time shall be under 1 second. [implemented]
 - R-6.1.5: Binary size shall be under 20 MB (single static binary, no runtime dependencies). [implemented]
+- R-6.1.6: When operating in production, the system shall meet CPU, memory, and I/O performance targets validated via profiling. [planned]
 
 ## R-6.2 Data Integrity [implemented]
 
@@ -23,6 +24,8 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.2.7: (S7) The system shall never upload partial or temporary files (filter cascade excludes temp patterns). [implemented]
 - R-6.2.8: File operations (ls, get, put, rm, mkdir, stat, mv, cp) shall work independently of sync state — no sync database involved. [implemented]
 - R-6.2.9: The system shall support configurable file permissions (`sync_file_permissions`) and directory permissions (`sync_dir_permissions`) for synced content. [implemented]
+- R-6.2.10: When a transfer connection stalls without context cancellation, the system shall enforce a per-transfer timeout or connection-level deadline to prevent indefinite hangs. [planned]
+- R-6.2.11: When enumerating delta items, the system shall enforce a total item cap to bound memory growth from unbounded API responses. [planned]
 
 ## R-6.3 Process Model [implemented]
 
@@ -39,6 +42,7 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.4.5: Local deletions triggered by remote changes shall go to OS trash on macOS (`use_local_trash`). [implemented]
 - R-6.4.6: On Linux, local trash shall be opt-in (default off; servers/NAS typically lack XDG trash). [implemented]
 - R-6.4.7: The system shall support configurable disk space reservation (`min_free_space`). [planned]
+- R-6.4.8: When receiving filenames from the delta API, the system shall validate them against path traversal characters (`..`, `/`, `\`, null bytes, control chars) and reject invalid names. [planned]
 
 ## R-6.5 Crash Recovery [implemented]
 

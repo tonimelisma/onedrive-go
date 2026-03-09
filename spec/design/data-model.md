@@ -47,6 +47,10 @@ Per-side hashes (`local_hash`, `remote_hash`) handle SharePoint enrichment: when
 
 `path` is a UNIQUE secondary key for fast local lookups. Moves are a single UPDATE (atomic) rather than DELETE+INSERT, enabled by the ID-based primary key.
 
+Baseline memory footprint is ~19 MB per 100K files, additive across drives. Monitor under profiling. [planned]
+
+Zero-byte files map to `NULL` in SQLite — indistinguishable from "size unknown". Fix: use `sql.NullInt64{Valid: true, Int64: 0}`. [planned]
+
 ### sync_failures
 
 Unified failure tracking for download, upload, and delete failures. Two categories:
@@ -93,3 +97,4 @@ Schema migrations use embedded `.sql` files applied in order on startup. The `sc
 - **Prepared statements**: Cached for connection lifetime
 - **Per-action commits**: Each completed action committed individually for incremental durability
 - **VACUUM**: On schema migrations only, not routine maintenance
+- **Batched commits**: Per-action commit is ~0.5ms. For high-throughput workloads, batched commits could reduce overhead. Currently bottleneck is network I/O, not SQLite. [planned]
