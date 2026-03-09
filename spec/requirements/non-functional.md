@@ -20,7 +20,7 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.2.3: (S3) Downloads shall use atomic file writes (`.partial` + hash verify + rename). [verified]
 - R-6.2.4: (S4) Local deletions shall verify the file hash against baseline before deleting; on mismatch, a conflict copy is preserved. [verified]
 - R-6.2.5: (S5) Big-delete protection shall abort when planned deletions exceed configured thresholds. [verified]
-- R-6.2.6: (S6) The system shall check available disk space before downloading. [planned]
+- R-6.2.6: (S6) Before each download, the system shall verify available disk space. When below `min_free_space`: set a `disk:local` scope block on all downloads. When above `min_free_space` but below file size plus `min_free_space`: record a per-file failure. [planned]
 - R-6.2.7: (S7) The system shall never upload partial or temporary files (filter cascade excludes temp patterns). [verified]
 - R-6.2.8: File operations (ls, get, put, rm, mkdir, stat, mv, cp) shall work independently of sync state — no sync database involved. [verified]
 - R-6.2.9: The system shall support configurable file permissions (`sync_file_permissions`) and directory permissions (`sync_dir_permissions`) for synced content. [verified]
@@ -41,7 +41,7 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.4.4: Remote deletions shall go to the OneDrive recycle bin by default (`use_recycle_bin`). [verified]
 - R-6.4.5: Local deletions triggered by remote changes shall go to OS trash on macOS (`use_local_trash`). [verified]
 - R-6.4.6: On Linux, local trash shall be opt-in (default off; servers/NAS typically lack XDG trash). [verified]
-- R-6.4.7: The system shall support configurable disk space reservation (`min_free_space`). [planned]
+- R-6.4.7: The system shall support configurable disk space reservation (`min_free_space`, default 1 GB). When available space falls below this threshold, downloads shall be scope-blocked. Set to 0 to disable. [planned]
 - R-6.4.8: When receiving filenames from the delta API, the system shall validate them against path traversal characters (`..`, `/`, `\`, null bytes, control chars) and reject invalid names. [planned]
 - R-6.4.9: When a requested permanent deletion fails (e.g., National Clouds that do not support it), the system shall fall back to recycle bin deletion. [planned]
 
@@ -59,6 +59,11 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.6.4: The log file shall use structured JSON format. [verified]
 - R-6.6.5: The system shall support progress bars and color-coded transfer output. [future]
 - R-6.6.6: The system shall support a TUI (terminal UI) for real-time status. [future]
+- R-6.6.7: When more than 10 items share the same warning category in a sync pass, the system shall log one WARN summary with count and individual items at DEBUG. [planned]
+- R-6.6.8: Individual retry attempts for transient errors shall be logged at DEBUG, not WARN. Only the final outcome shall be logged at WARN or higher. [planned]
+- R-6.6.9: When transient errors resolve within the retry budget, the system shall log at INFO with attempt count (not WARN). [planned]
+- R-6.6.10: When retries are exhausted, the system shall log a single WARN with final error, attempt count, and next retry time. [planned]
+- R-6.6.11: Every failure shown to the user shall include a plain-language reason and a concrete user action. Per-error-type reason and action text shall cover all failure categories (quota, permissions, disk space, service outage, rate limiting, naming violations, case collisions, network errors, auth failures, unknown errors), with scope-owner-specific variants for shortcut-scoped failures. [planned]
 
 ## R-6.7 Technical Requirements [implemented]
 
@@ -77,7 +82,7 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.7.11: The system shall filter out phantom system drives provisioned by Microsoft for Personal accounts (face crops, albums) that return HTTP 400 on access. For Personal accounts, the system shall use `GET /me/drive` (singular) to discover the primary drive. [planned]
 - R-6.7.12: When a transient HTTP 404 occurs on a valid resource (cross-datacenter load balancer timeout), the system shall classify it as transient and retry with backoff. [planned]
 - R-6.7.13: When an HTTP 403 occurs on `/me/drives` shortly after token refresh (eventual consistency), the system shall classify it as transient and retry with backoff. [planned]
-- R-6.7.14: When the Graph API returns HTTP 400 `invalidRequest` / `ObjectHandle is Invalid` during a multi-hour server outage, the system shall classify it as non-retryable and report the error rather than retrying indefinitely. [planned]
+- R-6.7.14: When the Graph API returns HTTP 400 with `innerError.code == "invalidRequest"` and known outage message patterns (e.g., "ObjectHandle is Invalid"), the system shall classify it as transient (service outage) and route through scope-based retry, not generic skip. [planned]
 - R-6.7.15: The system shall truncate local timestamps to zero fractional seconds before comparing with OneDrive's whole-second precision. [planned]
 - R-6.7.16: The system shall safely handle missing or invalid timestamps (`0001-01-01T00:00:00Z`, absent `lastModifiedDateTime` on deletions) without panicking. [planned]
 - R-6.7.17: When a file completely lacks hashes (zero-byte files, certain Business/SharePoint files), the system shall use a fallback comparison of size + mtime + eTag. [implemented]
@@ -90,12 +95,24 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.7.24: When a folder is renamed, the system shall infer and recalculate path changes for all descendants, since only the renamed folder appears in the delta response. [verified]
 - R-6.7.25: When re-uploading a modified file to Business/SharePoint, the system shall accept the unavoidable extra version created by the API (unfixed Microsoft bug) without attempting futile workarounds. [planned]
 - R-6.7.26: The system shall handle absent `lastModifiedDateTime` (null) on API-initiated deletions without error. [planned]
+- R-6.7.27: When classifying errors, the engine shall handle empty `TargetDriveID` (local-only operations like `os.ErrPermission`) by skipping remote scope routing. Only remote API errors shall require drive-aware scope routing. [planned]
 
 ## R-6.8 Network Resilience [verified]
 
 - R-6.8.1: The system shall respect 429 (Too Many Requests) with Retry-After headers. [verified]
 - R-6.8.2: The system shall use exponential backoff with jitter for transient failures. [verified]
 - R-6.8.3: All transfers shall be resumable after network interruption. [verified]
+- R-6.8.4: The system shall treat HTTP 429 as account-scoped: all drives under the same account share the throttle. [planned]
+- R-6.8.5: The system shall parse `RateLimit-Remaining` headers and proactively slow when less than 20% remains. [planned]
+- R-6.8.6: The system shall honor `Retry-After` from both 429 and 503 responses, populating `GraphError.RetryAfter`. [planned]
+- R-6.8.7: During sync, workers shall never block on retry backoff. Actions shall be returned to the tracker with `NotBefore` and incremented attempt count. Workers block only for HTTP round-trip time. [planned]
+- R-6.8.8: For sync operations, the graph client shall use `SyncTransport` policy (`MaxAttempts: 0`): each dispatch equals one HTTP request. CLI commands shall retain `Transport` policy (`MaxAttempts: 5`). [planned]
+- R-6.8.9: The executor shall not contain a retry loop. It shall dispatch actions and return results; the engine shall classify and schedule retries. [planned]
+- R-6.8.10: Each sync action shall have an in-memory retry budget (default 5 attempts). When exhausted, the action shall escalate to `sync_failures` with `next_retry_at` for reconciler-based persistent retry. [planned]
+- R-6.8.11: The system shall use unified non-compounding backoff: tracker re-queue (1s, 2s, 4s, 8s, 16s), then reconciler (30s, 60s, 120s, max 1h). Sequential phases, not nested loops. [planned]
+- R-6.8.12: Target drive identity shall flow through the pipeline without lookup: planner to Action to TrackedAction to WorkerResult to engine. No component shall query drive identity from DB or API during failure handling. [planned]
+- R-6.8.13: `Action` shall expose `TargetsOwnDrive() bool` and `ShortcutKey() string` as the only drive-identity accessors for scope matching and routing. [planned]
+- R-6.8.14: `SyncTransport` (`MaxAttempts: 0`) shall still perform transparent 401 token refresh. Auth refresh is lifecycle, not transient retry. When refresh fails, the system shall return `ErrUnauthorized` (fatal). [planned]
 
 ## R-6.9 Packaging [future]
 
