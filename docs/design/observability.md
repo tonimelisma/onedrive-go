@@ -1,3 +1,4 @@
+<!-- ABSORBED → spec/requirements/non-functional.md (R-6.4), spec/requirements/sync.md (R-2.9); detailed metrics/socket design stays here for Phase 3 design migration -->
 # Observability Design
 
 > **Status**: Design doc. Implementation target: Phase 12 (post-release).

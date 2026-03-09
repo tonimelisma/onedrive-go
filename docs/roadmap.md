@@ -1,3 +1,4 @@
+<!-- ABSORBED → spec/requirements/ (status markers derived from code, not roadmap phases) -->
 # onedrive-go — Implementation Roadmap
 
 > **ZERO PATH DEPENDENCY**: This document describes the Option E event-driven

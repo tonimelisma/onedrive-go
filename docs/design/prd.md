@@ -1,3 +1,4 @@
+<!-- ABSORBED → spec/requirements/ (all R-1 through R-6 files) -->
 # Product Requirements Document: onedrive-go
 
 ## 1. Product Vision
