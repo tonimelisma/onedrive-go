@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/observer_local.go, internal/sync/observer_local_handlers.go, internal/sync/observer_remote.go, internal/sync/observer_shortcut.go, internal/sync/scanner.go, internal/sync/buffer.go, internal/sync/shortcuts.go, internal/sync/permissions.go, internal/sync/inotify_linux.go, internal/sync/inotify_other.go
 
-Implements: R-2.1.2 [verified], R-2.4 [implemented], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.15 [planned], R-6.7.16 [planned], R-6.7.19 [planned], R-6.7.20 [verified], R-6.7.21 [planned], R-6.7.24 [verified], R-2.11 [planned], R-2.12 [planned], R-2.13.1 [verified], R-2.14.1 [verified]
+Implements: R-2.1.2 [verified], R-2.4 [implemented], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.15 [planned], R-6.7.16 [planned], R-6.7.19 [planned], R-6.7.20 [verified], R-6.7.21 [planned], R-6.7.24 [verified], R-2.11 [implemented], R-2.11.5 [planned], R-2.12 [planned], R-2.13.1 [verified], R-2.14.1 [verified]
 
 ## Remote Observer (`observer_remote.go`)
 
@@ -14,6 +14,8 @@ Key properties:
 - Normalization (driveId casing, missing fields, timestamps) happens here
 - Within each delta page, deletions are buffered and processed before creations (API reordering bug)
 - HTTP 410 (expired delta token) returns `ErrGone` sentinel; engine restarts with full delta
+
+**Planned: Remove `isValidOneDriveName()` call** (~line 405). OneDrive enforces its own naming rules server-side; upload naming rules should not filter downloads.
 
 ### Shortcut Observation (`observer_shortcut.go`)
 
@@ -35,6 +37,8 @@ Key properties:
 ### Scanner (`scanner.go`)
 
 Extracted filesystem walker for full-scan mode. Produces change events by walking the sync directory and comparing against baseline.
+
+**Planned: ScanResult Return Type** — Scanner will return `ScanResult{Events []ChangeEvent, Skipped []SkippedItem}` instead of `[]ChangeEvent`. `SkippedItem` struct: `{Path string, Reason string, Detail string}`. Invalid files become `SkippedItem` entries instead of silent DEBUG logs. Scanner remains a pure observer with no DB dependency — it reports what it found; the engine decides what to record. Implements: R-2.11.5 [planned]
 
 ## Change Buffer (`buffer.go`)
 
@@ -72,3 +76,4 @@ Implements: R-6.2.7 [verified]
 - Buffer overflow test with drop metric verification. [planned]
 - inotify partial-watch cleanup verification: ensure already-added watches are cleaned up on setup failure. [planned]
 - Remote filename validation: reject `..`, `/`, `\`, null bytes, control chars in `classifyAndConvert`. [planned]
+- Remote observer name validation removal: `isValidOneDriveName()` in remote observer filters downloads using upload naming rules. OneDrive enforces its own naming rules server-side; this filter should be removed. [planned]

@@ -2,11 +2,11 @@
 
 GOVERNS: internal/graph/auth.go, internal/graph/client.go, internal/graph/delta.go, internal/graph/download.go, internal/graph/drives.go, internal/graph/errors.go, internal/graph/items.go, internal/graph/normalize.go, internal/graph/types.go, internal/graph/upload.go, internal/tokenfile/tokenfile.go
 
-Implements: R-3.1 [verified], R-6.7 [implemented], R-6.8 [verified], R-1.1 [verified], R-1.4 [verified], R-1.5 [verified], R-1.6 [verified], R-1.7 [verified], R-1.8 [verified], R-6.7.4 [verified], R-6.7.8 [verified], R-6.7.9 [verified], R-6.7.10 [verified], R-6.7.11 [planned], R-6.7.12 [planned], R-6.7.13 [planned], R-6.7.14 [planned], R-6.7.17 [implemented], R-6.7.18 [planned], R-6.7.22 [planned], R-6.7.23 [planned]
+Implements: R-3.1 [verified], R-6.7 [implemented], R-6.8 [verified], R-1.1 [verified], R-1.4 [verified], R-1.5 [verified], R-1.6 [verified], R-1.7 [verified], R-1.8 [verified], R-6.7.4 [verified], R-6.7.8 [verified], R-6.7.9 [verified], R-6.7.10 [verified], R-6.7.11 [planned], R-6.7.12 [planned], R-6.7.13 [planned], R-6.7.14 [planned], R-6.7.17 [implemented], R-6.7.18 [planned], R-6.7.22 [planned], R-6.7.23 [planned], R-6.8.4 [planned], R-6.8.5 [planned], R-6.8.6 [planned], R-6.8.8 [planned], R-6.8.14 [planned]
 
 ## Overview
 
-All Microsoft Graph API communication flows through `graph.Client`. The client handles authentication, retry, rate limiting, and API quirk normalization internally. Callers receive clean, consistent data via `graph.Item` and never deal with API inconsistencies.
+All Microsoft Graph API communication flows through `graph.Client`. The client handles authentication, retry, rate limiting, and API quirk normalization internally. Callers receive clean, consistent data via `graph.Item` and never deal with API inconsistencies. Retry policy is parameterizable — sync callers use `SyncTransport` (0 retries, single attempt per request), CLI callers retain `Transport` (5 retries).
 
 ## Authentication (`auth.go`)
 
@@ -42,6 +42,20 @@ GetItem, ListChildren, CreateFolder, MoveItem, CopyItem, DeleteItem. All operati
 ## Error Handling (`errors.go`)
 
 Sentinel errors: `ErrGone` (410), `ErrNotFound` (404), `ErrThrottled` (429), `ErrConflict` (409). The client respects `Retry-After` headers and uses exponential backoff for transient failures. Error response bodies are read with a 64 KiB cap (`io.LimitReader`) to prevent unbounded memory allocation from malformed responses. HTTP 423 (Locked) from SharePoint co-authoring is classified as skip (`errClassSkip`), not retryable — locks persist for hours; watch mode retries on the next safety scan.
+
+**Planned: RetryAfter and RateLimit Headers** — `RetryAfter time.Duration` field added to `GraphError`. Parsed from `Retry-After` header for 429 and 503 responses. `RateLimit-Remaining` header parsing: proactive slowdown when <20% remaining. Implements: R-6.8.5 [planned], R-6.8.6 [planned]
+
+## Planned: Retry Policy Parameterization
+
+Implements: R-6.8.8 [planned]
+
+`retryPolicy retry.Policy` field on `Client` struct, accepted as constructor parameter (default: `retry.Transport`). Replaces all 4 hardcoded `retry.Transport.MaxAttempts` references in `doRetry` (lines 124, 166) and `doPreAuthRetry` (lines 318, 352) with `c.retryPolicy.MaxAttempts`. Sync callers pass `SyncTransport` (0 retries). CLI callers pass nothing (default `Transport` with 5 retries).
+
+## Planned: 401 Token Refresh
+
+Implements: R-6.8.14 [planned]
+
+Transparent token refresh on 401 inside `doOnce()`, independent of retry policy. On 401: refresh token → retry once. If still 401 → return `ErrUnauthorized` (fatal). Auth refresh is lifecycle management, not transient retry — it applies even with `SyncTransport` (`MaxAttempts: 0`).
 
 ## Design Constraints
 

@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/engine.go, internal/sync/engine_shortcuts.go, internal/sync/orchestrator.go, internal/sync/drive_runner.go, sync.go, sync_helpers.go
 
-Implements: R-2.1 [verified], R-2.6 [verified], R-2.8 [verified], R-3.4.2 [verified]
+Implements: R-2.1 [verified], R-2.6 [verified], R-2.8 [verified], R-3.4.2 [verified], R-2.10.1 [planned], R-2.10.2 [planned], R-2.10.3 [planned], R-2.10.4 [planned], R-2.10.7 [planned], R-2.10.9 [planned], R-2.10.10 [planned], R-2.10.12 [planned], R-2.10.13 [planned], R-2.10.17 [planned], R-2.10.18 [planned], R-2.10.19 [planned], R-2.10.20 [planned], R-2.10.23 [planned], R-2.10.24 [planned], R-2.10.25 [planned], R-2.10.26 [planned], R-2.10.28 [planned], R-2.10.29 [planned], R-2.10.30 [planned], R-2.10.31 [planned], R-2.10.35 [planned], R-2.10.36 [planned], R-2.10.37 [planned], R-2.10.38 [planned], R-6.6.7 [planned], R-6.6.8 [planned], R-6.6.9 [planned], R-6.6.10 [planned], R-6.7.27 [planned]
 
 ## Engine (`engine.go`)
 
@@ -13,13 +13,63 @@ Wires the sync pipeline: observers → buffer → planner → executor → SyncS
 
 Watch mode uses a unified tick loop: filesystem events are debounced by the change buffer, remote changes are polled at `poll_interval` (default 5 minutes). Periodic full reconciliation runs every 24 hours to detect missed delta deletions.
 
+### Planned: Error Classification (`classifyResult()`)
+
+Implements: R-6.8.9 [planned], R-6.7.27 [planned]
+
+Single classification point for all worker results. Maps HTTP status codes + error types → result class (success, transient, actionable, fatal). Target-drive-aware: uses `WorkerResult.TargetDriveID` and `ShortcutKey` to route scope decisions correctly. Replaces executor's `classifyError`/`classifyStatusCode`.
+
+### Planned: Scope Detection and Management (`updateScope()`)
+
+Implements: R-2.10.3 [planned], R-2.10.17 [planned], R-2.10.18 [planned], R-2.10.19 [planned], R-2.10.20 [planned], R-2.10.23 [planned], R-2.10.26 [planned], R-2.10.28 [planned], R-2.10.29 [planned]
+
+Target-drive-aware scope routing:
+- 507/403 → per-drive scope key (`quota:own`, `quota:shortcut:$drive:$item`, `perm:remote:{path}`)
+- 429 → `throttle:account` (all drives share the same OAuth token)
+- 5xx → `service` scope (shared infrastructure)
+- Empty `TargetDriveID` (local-only errors like `os.ErrPermission`) → skip remote scope routing
+
+Sliding window detection: N unique-path failures with no intervening success within T seconds. Success from any path in scope resets the counter.
+
+### Planned: ScopeState
+
+Implements: R-2.10.35 [planned], R-2.10.36 [planned], R-2.10.37 [planned]
+
+In-memory data structure: blocks map (scope_key → `ScopeBlock`), sliding windows (scope_key → window), trial timers. Engine-internal — no cross-engine coordination (each engine discovers independently).
+
+### Planned: Scanner ScanResult Contract
+
+Implements: R-2.11.5 [planned], R-2.10.2 [planned]
+
+Scanner returns `ScanResult{Events []ChangeEvent, Skipped []SkippedItem}` instead of `[]ChangeEvent`. Engine processes skipped items via `recordSkippedItems()` (batch-upserts to `sync_failures` as actionable) and `clearResolvedActionableFailures()` (deletes entries for files no longer skipped).
+
+### Planned: Aggregated Logging
+
+Implements: R-6.6.7 [planned], R-6.6.8 [planned], R-6.6.9 [planned], R-6.6.10 [planned]
+
+When >10 items share the same warning category, log 1 WARN summary + individual DEBUG. Transient retries at DEBUG, resolved at INFO, exhausted at WARN.
+
+### Planned: Local Permission Handling
+
+Implements: R-2.10.12 [planned], R-2.10.13 [planned]
+
+`os.ErrPermission` → check parent directory accessibility. Inaccessible directory: one `local_permission_denied` at directory level, suppress operations under it. Accessible directory: file-level failure. Recheck directory-level issues at start of each sync pass.
+
+### Planned: Observation Suppression
+
+Implements: R-2.10.30 [planned], R-2.10.31 [planned]
+
+During `throttle:account` or `service` scope block, suppress shortcut observation polling (wastes API calls). During `quota:shortcut:*` block, observation continues (read-only).
+
 ### Shortcut Integration (`engine_shortcuts.go`)
 
 Detects shortcuts to shared folders in the delta stream. Creates additional delta scopes for shared folder observation. Handles shortcut removal (cleanup local copies).
 
 ## Orchestrator (`orchestrator.go`)
 
-Multi-drive coordination. Runs one `DriveRunner` per configured, non-paused drive. Each drive gets its own goroutine, state DB, and sync engine instance. Handles:
+Multi-drive coordination. Runs one `DriveRunner` per configured, non-paused drive. Each drive gets its own goroutine, state DB, and sync engine instance. Engines do not coordinate scope blocks across engine boundaries — each engine discovers independently. Bounded waste accepted (one request per engine for 429). Implements: R-2.10.35 [planned]
+
+Handles:
 - Drive add/remove via SIGHUP config reload
 - Pause/resume per drive
 - Graceful shutdown (drain all drives)
