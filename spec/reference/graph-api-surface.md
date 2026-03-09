@@ -1,5 +1,5 @@
 # Graph API Surface
 
-The Microsoft Graph API endpoints, fields, authentication flows, and response shapes used by onedrive-go.
+For Microsoft Graph API endpoint documentation, see [Microsoft's official docs](https://learn.microsoft.com/en-us/graph/api/resources/onedrive).
 
-<!-- placeholder — populated in Phase 1 -->
+This project uses the OneDrive v1.0 endpoints. Agents should consult Microsoft's docs at runtime for endpoint specifics. Project-specific API issues are documented in [graph-api-quirks.md](graph-api-quirks.md).

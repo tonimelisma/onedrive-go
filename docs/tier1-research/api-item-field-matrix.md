@@ -1,3 +1,4 @@
+<!-- ABSORBED: field reliability issues → spec/reference/graph-api-quirks.md; field availability matrix dropped as googlable -->
 # Microsoft Graph API DriveItem Field Matrix
 
 This document provides a comprehensive inventory of every field available on the Microsoft Graph API DriveItem resource type, along with a detailed availability matrix showing which fields are present across different contexts, account types, and API endpoints.

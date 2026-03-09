@@ -1,3 +1,4 @@
+<!-- ABSORBED into spec/reference/onedrive-glossary.md -->
 # Domain Glossary: OneDrive & Microsoft Graph Concepts
 
 This document defines the shared vocabulary used throughout all project documentation. Every concept is defined precisely to eliminate ambiguity.

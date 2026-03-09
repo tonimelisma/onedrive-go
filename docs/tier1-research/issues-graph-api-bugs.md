@@ -1,3 +1,4 @@
+<!-- ABSORBED into spec/reference/graph-api-quirks.md -->
 # Microsoft Graph API Bugs & Quirks (from abraunegg/onedrive issues)
 
 This document catalogs known Microsoft Graph API bugs and inconsistencies

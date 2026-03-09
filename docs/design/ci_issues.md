@@ -1,3 +1,4 @@
+<!-- ABSORBED: API quirks → spec/reference/graph-api-quirks.md; delta behavior → spec/reference/onedrive-sync-behavior.md; CI workarounds → design docs -->
 # Graph API Issues & Workarounds
 
 Known Microsoft Graph API behavioral issues encountered in this project, the workarounds in production code and tests, and the evidence behind each.

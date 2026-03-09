@@ -1,3 +1,4 @@
+<!-- ABSORBED into spec/reference/graph-api-surface.md (pointer to Microsoft docs — content dropped as googlable) -->
 # Microsoft Graph API Analysis for OneDrive Sync Client
 
 This document provides a comprehensive analysis of every Microsoft Graph API endpoint required to build a fully functional OneDrive sync client. It is derived from the official Microsoft Graph API documentation and observed behaviors documented in the reference implementation.

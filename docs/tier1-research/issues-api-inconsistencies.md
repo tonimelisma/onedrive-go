@@ -1,3 +1,4 @@
+<!-- ABSORBED into spec/reference/graph-api-quirks.md -->
 # API Inconsistencies, Blockers & Data Integrity Risks
 
 This document catalogs known Microsoft Graph API inconsistencies, bugs, and blockers
