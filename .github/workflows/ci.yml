@@ -300,4 +300,4 @@ jobs:
         run: |
           echo "::warning::E2E test auth may have failed."
           echo "::warning::If the refresh token has expired (90 days idle), re-bootstrap."
-          echo "::warning::See docs/design/test-strategy.md for re-bootstrap instructions."
+          echo "::warning::See CLAUDE.md 'Test Credentials' section for re-bootstrap instructions."

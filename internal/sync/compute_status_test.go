@@ -7,7 +7,7 @@ import (
 )
 
 // TestComputeNewStatus exhaustively covers the 30-cell decision matrix from
-// docs/design/remote-state-separation.md §11. Each cell maps a (currentStatus,
+// spec/design/data-model.md (remote_state sync_status state machine). Each cell maps a (currentStatus,
 // condition) pair to an expected (newStatus, changed) result.
 func TestComputeNewStatus(t *testing.T) {
 	t.Parallel()

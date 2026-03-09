@@ -401,7 +401,7 @@ func TestOrchestrator_RunWatch_MultiDrive(t *testing.T) {
 }
 
 func TestOrchestrator_Reload_AddDrive(t *testing.T) {
-	t.Skip("requires E2E test isolation (token + metadata in temp dir) — see docs/design/E2E.md")
+	t.Skip("requires E2E test isolation (token + metadata in temp dir) — see e2e/ test suite")
 
 	rd1 := testResolvedDrive(t, "personal:existing@example.com", "Existing")
 	cfgPath := writeTestConfig(t, rd1.CanonicalID)
@@ -625,7 +625,7 @@ func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 }
 
 func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
-	t.Skip("requires E2E test isolation (token + metadata in temp dir) — see docs/design/E2E.md")
+	t.Skip("requires E2E test isolation (token + metadata in temp dir) — see e2e/ test suite")
 
 	rd := testResolvedDrive(t, "personal:timedpause@example.com", "TimedPause")
 	cfgPath := writeTestConfig(t, rd.CanonicalID)

@@ -167,7 +167,7 @@ func TestIntegration_GetItem_NotFound(t *testing.T) {
 	require.Error(t, err)
 
 	// Graph API returns 400 for invalid ID format, 404 for valid format but missing.
-	// Accept either (see LEARNINGS.md section 5).
+	// Accept either (see spec/reference/graph-api-quirks.md).
 	isExpectedErr := errors.Is(err, ErrNotFound) || errors.Is(err, ErrBadRequest)
 	assert.True(t, isExpectedErr, "expected ErrNotFound or ErrBadRequest, got: %v", err)
 }

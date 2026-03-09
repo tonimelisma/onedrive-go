@@ -11,7 +11,7 @@ import (
 // methods needed by a specific caller. SyncStore implements all of them.
 // Components receive the interface they need, not the full SyncStore.
 //
-// See docs/design/remote-state-separation.md §12 for the full design.
+// See spec/design/sync-store.md for the full design.
 
 // ObservationWriter is called by the RemoteObserver goroutine (single caller).
 // Writes observed remote state and advances the delta token atomically.
