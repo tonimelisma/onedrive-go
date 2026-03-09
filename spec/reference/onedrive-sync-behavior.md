@@ -18,7 +18,7 @@ When a folder is renamed, **only that folder** appears in the delta response. No
 
 ## Case-Insensitive Namespace
 
-OneDrive uses a case-insensitive, case-preserving namespace (consistent with Windows/NTFS). Two files named `README.md` and `Readme.md` cannot coexist in the same folder. On case-sensitive filesystems (Linux), the sync client must enforce this constraint:
+OneDrive uses a case-insensitive, case-preserving namespace (consistent with Windows/NTFS). Two files named `README.md` and `Readme.md` cannot coexist in the same folder. See also [graph-api-quirks.md](graph-api-quirks.md#onedrive-is-case-insensitive) for an API bug where path-based queries return false matches. On case-sensitive filesystems (Linux), the sync client must enforce this constraint:
 
 - Before uploading, check for case-insensitive collisions at the target path
 - When two local items would collide under case-insensitive rules, flag a conflict
