@@ -118,6 +118,7 @@ func TestPrintDriveReports_MultiDrive_WithError(t *testing.T) {
 
 // --- syncModeFromFlags ---
 
+// Validates: R-2.1
 func TestSyncModeFromFlags(t *testing.T) {
 	t.Parallel()
 

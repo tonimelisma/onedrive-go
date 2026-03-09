@@ -52,6 +52,7 @@ func TestS1_NoRemoteDeleteWithoutBaseline(t *testing.T) {
 	assert.Len(t, downloads, 1)
 }
 
+// Validates: R-6.2.5
 // TestS5_BigDeleteThresholdBoundary validates Safety Invariant S5:
 // big-delete protection triggers at the threshold boundary.
 func TestS5_BigDeleteThresholdBoundary(t *testing.T) {
@@ -86,6 +87,7 @@ func TestS5_BigDeleteThresholdBoundary(t *testing.T) {
 	})
 }
 
+// Validates: R-6.2.5
 // TestS5_BigDeleteMinimumGuard validates that the big-delete check does
 // not apply when the baseline has fewer items than the minimum threshold.
 func TestS5_BigDeleteMinimumGuard(t *testing.T) {
@@ -109,6 +111,7 @@ func TestS5_BigDeleteMinimumGuard(t *testing.T) {
 		"S5: big-delete should not trigger below minimum items")
 }
 
+// Validates: R-6.2.5
 // TestS5_BigDeleteMaxCount validates that the absolute count threshold
 // blocks even when percentage is low.
 func TestS5_BigDeleteMaxCount(t *testing.T) {
@@ -306,6 +309,7 @@ func TestEF11_ConvergentCreate(t *testing.T) {
 	assert.Len(t, synced, 1, "EF11: convergent create should adopt")
 }
 
+// Validates: R-2.2
 // TestEF12_DivergentCreate validates that files appearing on both sides
 // with different hashes produce a create-create conflict.
 func TestEF12_DivergentCreate(t *testing.T) {
@@ -345,6 +349,7 @@ func TestEF12_DivergentCreate(t *testing.T) {
 	assert.Equal(t, ConflictCreateCreate, conflicts[0].ConflictInfo.ConflictType)
 }
 
+// Validates: R-2.2
 // TestEF9_EditDeleteAutoResolve validates that local edit + remote delete
 // produces a conflict with edit-delete type.
 func TestEF9_EditDeleteAutoResolve(t *testing.T) {
@@ -709,6 +714,7 @@ func TestBuildDependencies_ChildDeleteBeforeParent(t *testing.T) {
 // §3: Planner-level safety check integration
 // ---------------------------------------------------------------------------
 
+// Validates: R-6.2.5
 // TestPlan_BigDeleteBlocked validates that the planner returns
 // ErrBigDeleteTriggered when planned deletions exceed safety thresholds.
 func TestPlan_BigDeleteBlocked(t *testing.T) {

@@ -2,7 +2,7 @@
 
 GOVERNS: internal/graph/auth.go, internal/graph/client.go, internal/graph/delta.go, internal/graph/download.go, internal/graph/drives.go, internal/graph/errors.go, internal/graph/items.go, internal/graph/normalize.go, internal/graph/types.go, internal/graph/upload.go, internal/tokenfile/tokenfile.go
 
-Implements: R-3.1 [implemented], R-6.7 [implemented], R-6.8 [implemented], R-1.1 [implemented], R-1.4 [implemented], R-1.5 [implemented], R-1.6 [implemented], R-1.7 [implemented], R-1.8 [implemented], R-6.7.8 [implemented], R-6.7.9 [implemented], R-6.7.10 [implemented], R-6.7.11 [planned], R-6.7.12 [planned], R-6.7.13 [planned], R-6.7.14 [planned], R-6.7.17 [implemented], R-6.7.18 [planned], R-6.7.22 [planned], R-6.7.23 [planned]
+Implements: R-3.1 [verified], R-6.7 [implemented], R-6.8 [implemented], R-1.1 [verified], R-1.4 [verified], R-1.5 [verified], R-1.6 [verified], R-1.7 [verified], R-1.8 [verified], R-6.7.8 [verified], R-6.7.9 [verified], R-6.7.10 [verified], R-6.7.11 [planned], R-6.7.12 [planned], R-6.7.13 [planned], R-6.7.14 [planned], R-6.7.17 [implemented], R-6.7.18 [planned], R-6.7.22 [planned], R-6.7.23 [planned]
 
 ## Overview
 

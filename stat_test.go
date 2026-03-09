@@ -81,6 +81,7 @@ func TestPrintStatJSON(t *testing.T) {
 
 // --- newStatCmd ---
 
+// Validates: R-1.6
 func TestNewStatCmd_Structure(t *testing.T) {
 	t.Parallel()
 

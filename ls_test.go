@@ -63,6 +63,7 @@ func TestPrintItemsJSON(t *testing.T) {
 
 // --- newLsCmd ---
 
+// Validates: R-1.1
 func TestNewLsCmd_Structure(t *testing.T) {
 	t.Parallel()
 

@@ -201,6 +201,7 @@ func TestClassifyFile_EF4_ConvergentEdit(t *testing.T) {
 	require.Len(t, syncedUpdates, 1, "EF4")
 }
 
+// Validates: R-2.2
 func TestClassifyFile_EF5_EditEditConflict(t *testing.T) {
 	// EF5: baseline exists, both hashes changed and differ.
 	planner := NewPlanner(testLogger(t))
@@ -365,6 +366,7 @@ func TestClassifyFile_EF8_RemoteDeleted(t *testing.T) {
 	require.Len(t, localDeletes, 1, "EF8")
 }
 
+// Validates: R-2.2
 func TestClassifyFile_EF9_EditDeleteConflict(t *testing.T) {
 	// EF9: baseline exists, local hash changed, remote IsDeleted=true.
 	planner := NewPlanner(testLogger(t))
@@ -494,6 +496,7 @@ func TestClassifyFile_EF11_ConvergentCreate(t *testing.T) {
 	require.Len(t, syncedUpdates, 1, "EF11")
 }
 
+// Validates: R-2.2
 func TestClassifyFile_EF12_CreateCreateConflict(t *testing.T) {
 	// EF12: no baseline, both exist with different hashes.
 	planner := NewPlanner(testLogger(t))
@@ -1229,6 +1232,7 @@ func TestDetectMoves_MovedPathsExcluded(t *testing.T) {
 // Safety Tests (Big Delete)
 // ---------------------------------------------------------------------------
 
+// Validates: R-6.4.1
 func TestBigDelete_BelowMinItems(t *testing.T) {
 	// Baseline has fewer items than MinItems → no trigger even at 100% deletes.
 	planner := NewPlanner(testLogger(t))
@@ -1264,6 +1268,7 @@ func TestBigDelete_BelowMinItems(t *testing.T) {
 	require.NotNil(t, plan, "expected non-nil plan below MinItems")
 }
 
+// Validates: R-6.4.1
 func TestBigDelete_ExceedsMaxCount(t *testing.T) {
 	// Delete count exceeds MaxCount → ErrBigDeleteTriggered.
 	planner := NewPlanner(testLogger(t))
@@ -1311,6 +1316,7 @@ func TestBigDelete_ExceedsMaxCount(t *testing.T) {
 	require.ErrorIs(t, err, ErrBigDeleteTriggered)
 }
 
+// Validates: R-6.4.2
 func TestBigDelete_ExceedsPercent(t *testing.T) {
 	// Delete percentage exceeds MaxPercent → ErrBigDeleteTriggered.
 	planner := NewPlanner(testLogger(t))
@@ -1362,6 +1368,7 @@ func TestBigDelete_ExceedsPercent(t *testing.T) {
 	require.ErrorIs(t, err, ErrBigDeleteTriggered)
 }
 
+// Validates: R-6.4.1
 func TestBigDelete_NoTrigger(t *testing.T) {
 	// Deletes within limits → no error.
 	planner := NewPlanner(testLogger(t))
@@ -1429,6 +1436,7 @@ func TestBigDelete_NoTrigger(t *testing.T) {
 // Per-Folder Big Delete Tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-6.4.3
 func TestBigDelete_PerFolder_EntireFolderDeleted(t *testing.T) {
 	// 1000 items across 10 folders (100 each). Deleting all 100 items in one
 	// folder is 100% of that folder → triggered even though global is only 10%.
@@ -1481,6 +1489,7 @@ func TestBigDelete_PerFolder_EntireFolderDeleted(t *testing.T) {
 	require.ErrorIs(t, err, ErrBigDeleteTriggered, "expected per-folder trigger")
 }
 
+// Validates: R-6.4.3
 func TestBigDelete_PerFolder_SpreadAcrossFolders(t *testing.T) {
 	// 100 deletes spread evenly across 10 folders (10 per folder out of 100).
 	// Per-folder: 10/100 = 10% → NOT triggered.
@@ -1534,6 +1543,7 @@ func TestBigDelete_PerFolder_SpreadAcrossFolders(t *testing.T) {
 	require.NotNil(t, plan)
 }
 
+// Validates: R-6.4.3
 func TestBigDelete_PerFolder_SmallFolder(t *testing.T) {
 	// A folder with fewer items than BigDeleteMinItems should not trigger
 	// per-folder protection even at 100% deletion.

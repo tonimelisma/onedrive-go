@@ -2,7 +2,7 @@
 
 GOVERNS: internal/config/account.go, internal/config/config.go, internal/config/defaults.go, internal/config/display_name.go, internal/config/drive.go, internal/config/drivemeta.go, internal/config/env.go, internal/config/holder.go, internal/config/load.go, internal/config/paths.go, internal/config/size.go, internal/config/token_resolution.go, internal/config/toml_lines.go, internal/config/unknown.go, internal/config/validate.go, internal/config/validate_drive.go, internal/config/write.go
 
-Implements: R-4.1 [implemented], R-4.2 [implemented], R-4.3 [implemented], R-4.4 [implemented]
+Implements: R-4.1 [verified], R-4.2 [verified], R-4.3 [verified], R-4.4 [verified]
 
 ## Overview
 
@@ -24,7 +24,7 @@ The config file is read with a TOML parser (`BurntSushi/toml`) but written with 
 
 ## Drive Sections
 
-Implements: R-3.4.1 [implemented], R-3.4.3 [implemented], R-6.2.9 [implemented]
+Implements: R-3.4.1 [verified], R-3.4.3 [verified], R-6.2.9 [verified]
 
 Each drive section contains per-drive settings (sync_dir, filters, paused state). Drive resolution (`ResolveDrive`) matches by exact canonical ID → exact display_name (case-insensitive) → substring. Ambiguous matches produce an error with suggestions. `ResolveDrive()` returns both `*ResolvedDrive` and `*Config` — the raw config is needed by shared drive token resolution.
 

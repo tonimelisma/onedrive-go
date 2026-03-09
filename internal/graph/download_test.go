@@ -24,6 +24,7 @@ func (errorWriter) Write(_ []byte) (int, error) {
 	return 0, errors.New("write failed")
 }
 
+// Validates: R-1.2
 func TestDownload_Success(t *testing.T) {
 	fileContent := "Hello, this is the file content for download testing."
 
@@ -235,6 +236,7 @@ func TestDownload_NoAuthOnPreAuthURL(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// Validates: R-1.2
 func TestDownloadRange_Success(t *testing.T) {
 	fullContent := "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 	offset := int64(10)

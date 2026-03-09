@@ -78,6 +78,7 @@ func TestParseDuration_Invalid(t *testing.T) {
 	}
 }
 
+// Validates: R-2.6
 func TestNewPauseCmd_Structure(t *testing.T) {
 	t.Parallel()
 

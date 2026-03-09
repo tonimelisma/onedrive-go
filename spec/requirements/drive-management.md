@@ -2,13 +2,13 @@
 
 Authentication, account management, drive types, and shared drive support.
 
-## R-3.1 Authentication [implemented]
+## R-3.1 Authentication [verified]
 
-- R-3.1.1: When the user runs `login`, the system shall authenticate via device code flow (default). [implemented]
-- R-3.1.2: When `--browser` is passed, the system shall use PKCE authorization code flow with localhost callback. [implemented]
-- R-3.1.3: When the user runs `logout`, the system shall remove authentication state. [implemented]
-- R-3.1.4: When `--purge` is passed with logout, the system shall also delete state DBs and config sections. [implemented]
-- R-3.1.5: When the user runs `whoami`, the system shall display authenticated accounts. [implemented]
+- R-3.1.1: When the user runs `login`, the system shall authenticate via device code flow (default). [verified]
+- R-3.1.2: When `--browser` is passed, the system shall use PKCE authorization code flow with localhost callback. [verified]
+- R-3.1.3: When the user runs `logout`, the system shall remove authentication state. [verified]
+- R-3.1.4: When `--purge` is passed with logout, the system shall also delete state DBs and config sections. [verified]
+- R-3.1.5: When the user runs `whoami`, the system shall display authenticated accounts. [verified]
 
 ## R-3.2 Drive Types [verified]
 
@@ -26,11 +26,11 @@ The system shall support all four drive types:
 - R-3.3.3: When the user runs `drive remove`, the system shall remove the drive config section. [verified]
 - R-3.3.4: When the user runs `drive search`, the system shall search SharePoint sites by name. [verified]
 
-## R-3.4 Multi-Account [implemented]
+## R-3.4 Multi-Account [verified]
 
-- R-3.4.1: A single config file shall hold multiple drive sections. [implemented]
-- R-3.4.2: A single `sync --watch` process shall sync all non-paused drives simultaneously. [implemented]
-- R-3.4.3: SharePoint drives shall share the business account's OAuth token. [implemented]
+- R-3.4.1: A single config file shall hold multiple drive sections. [verified]
+- R-3.4.2: A single `sync --watch` process shall sync all non-paused drives simultaneously. [verified]
+- R-3.4.3: SharePoint drives shall share the business account's OAuth token. [verified]
 
 ## R-3.5 Drive Selection [verified]
 

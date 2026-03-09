@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Validates: R-4.7.3
 func TestOpen_CreatesFile(t *testing.T) {
 	t.Parallel()
 

@@ -242,6 +242,7 @@ func TestFullDelta_MovedFile(t *testing.T) {
 	assert.Equal(t, "old-folder/doc.txt", moveEvent.OldPath)
 }
 
+// Validates: R-2.1.2
 func TestFullDelta_MultiPage(t *testing.T) {
 	t.Parallel()
 
@@ -296,6 +297,7 @@ func TestFullDelta_EmptyDelta(t *testing.T) {
 	assert.Equal(t, "empty-delta-link", token)
 }
 
+// Validates: R-6.7.5
 func TestFullDelta_DeltaExpired(t *testing.T) {
 	t.Parallel()
 
@@ -349,6 +351,7 @@ func TestFullDelta_SkipsRootItem(t *testing.T) {
 	assert.Empty(t, events, "root should be skipped")
 }
 
+// Validates: R-6.7.3
 func TestFullDelta_PathMaterialization_InFlight(t *testing.T) {
 	t.Parallel()
 
@@ -1068,6 +1071,7 @@ func TestWatch_IntervalClamping(t *testing.T) {
 	assert.Equal(t, minPollInterval, actualSleepDuration, "clamped from 0")
 }
 
+// Validates: R-6.7.24
 func TestFullDelta_RenameInPlace(t *testing.T) {
 	t.Parallel()
 
@@ -1281,6 +1285,7 @@ func TestFullDelta_CrossDriveItems(t *testing.T) {
 	assert.Equal(t, ChangeCreate, ev.Type)
 }
 
+// Validates: R-2.4
 // TestFullDelta_PersonalVaultExcluded verifies that items with
 // specialFolder.name == "vault" are excluded from delta processing by default,
 // preventing data-loss from vault lock/unlock transitions (B-271).
@@ -1332,6 +1337,7 @@ func TestFullDelta_PersonalVaultExcluded(t *testing.T) {
 // child's parent is not yet in the inflight map when isDescendantOfVault
 // runs, causing it to be emitted as a normal file — data loss when the
 // vault re-locks (B-281).
+// Validates: R-6.7.1
 func TestFullDelta_VaultChildBeforeParent(t *testing.T) {
 	t.Parallel()
 
@@ -1417,6 +1423,7 @@ func TestObserverStats_HashesComputed(t *testing.T) {
 // B-307: Remote observer filtering symmetry
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.4, R-6.2.7
 // TestClassifyItem_FilteringSymmetry validates that the remote observer
 // applies the same filtering as the local observer (S7 symmetric).
 func TestClassifyItem_FilteringSymmetry(t *testing.T) {
@@ -1620,6 +1627,7 @@ func TestWatch_ObsWriterError_ContinuesRetry(t *testing.T) {
 	assert.GreaterOrEqual(t, len(writer.calls), 1, "should retry after commit failure")
 }
 
+// Validates: R-2.1.2
 func TestWatch_ZeroEvents_NoTokenAdvance(t *testing.T) {
 	t.Parallel()
 
@@ -1663,6 +1671,7 @@ func TestWatch_ZeroEvents_NoTokenAdvance(t *testing.T) {
 // Shortcut detection (6.4a.2)
 // ---------------------------------------------------------------------------
 
+// Validates: R-6.7.20
 // TestClassifyItem_ShortcutDetection verifies that items with a remoteItem
 // facet (RemoteDriveID + IsFolder) are classified as ChangeShortcut events
 // instead of regular folder creates/modifies.

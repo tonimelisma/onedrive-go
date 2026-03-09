@@ -2,7 +2,7 @@
 
 GOVERNS: main.go, root.go, format.go, signal.go, pidfile.go, auth.go, ls.go, rm.go, mkdir.go, mv.go, cp.go, stat.go, pause.go, resume.go, recycle_bin.go, internal/logfile/logfile.go
 
-Implements: R-1 [implemented], R-3.1 [implemented], R-4.7 [implemented], R-1.9 [implemented]
+Implements: R-1 [implemented], R-3.1 [verified], R-4.7 [verified], R-1.9 [implemented]
 
 ## Overview
 
@@ -10,7 +10,7 @@ Cobra CLI with Unix-style verbs. Root command (`root.go`) handles global flags (
 
 ## Command Structure
 
-Implements: R-6.2.8 [implemented]
+Implements: R-6.2.8 [verified]
 
 | Command | File | Description |
 |---------|------|-------------|
@@ -41,13 +41,13 @@ Two-signal shutdown for watch mode: first SIGINT = drain current operations, sec
 
 ## PID File (`pidfile.go`)
 
-Implements: R-6.3.3 [implemented]
+Implements: R-6.3.3 [verified]
 
 Single-instance enforcement via advisory file lock. Created at daemon start, removed on shutdown. Stale PID files detected and cleaned up.
 
 ## Logging (`internal/logfile/logfile.go`)
 
-Implements: R-6.6.1 [implemented], R-6.6.2 [implemented], R-6.6.3 [implemented], R-6.6.4 [implemented]
+Implements: R-6.6.1 [verified], R-6.6.2 [verified], R-6.6.3 [verified], R-6.6.4 [verified]
 
 Log file creation with parent directory auto-creation. Append mode. Retention-based rotation (`log_retention_days`).
 

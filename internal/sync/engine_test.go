@@ -268,6 +268,7 @@ func TestRunOnce_NoChanges(t *testing.T) {
 	assert.Equal(t, 0, report.Failed, "failed")
 }
 
+// Validates: R-2.1.3
 func TestRunOnce_DownloadOnly_SkipsLocalScan(t *testing.T) {
 	t.Parallel()
 
@@ -292,6 +293,7 @@ func TestRunOnce_DownloadOnly_SkipsLocalScan(t *testing.T) {
 	assert.Equal(t, 0, report.Uploads, "local scan should be skipped in download-only mode")
 }
 
+// Validates: R-2.1.4
 func TestRunOnce_UploadOnly_SkipsDelta(t *testing.T) {
 	t.Parallel()
 
@@ -311,6 +313,7 @@ func TestRunOnce_UploadOnly_SkipsDelta(t *testing.T) {
 	assert.False(t, deltaCalled, "Delta should not be called in upload-only mode")
 }
 
+// Validates: R-2.1.1
 func TestRunOnce_Bidirectional_FullRun(t *testing.T) {
 	t.Parallel()
 
@@ -363,6 +366,7 @@ func TestRunOnce_Bidirectional_FullRun(t *testing.T) {
 	assert.True(t, ok, "local.txt not in baseline after sync")
 }
 
+// Validates: R-2.1.5
 func TestRunOnce_DryRun_NoExecution(t *testing.T) {
 	t.Parallel()
 
@@ -781,6 +785,7 @@ func TestRunOnce_DeltaTokenCommittedWithObservations(t *testing.T) {
 		"delta token should advance with observations even when actions fail")
 }
 
+// Validates: R-6.5.3, R-2.5.3
 // TestRunOnce_CrashRecovery_ResetsInProgressStates verifies that RunOnce
 // resets downloading/deleting states to their pending equivalents at startup,
 // ensuring crash recovery picks up interrupted work.
@@ -852,6 +857,7 @@ func TestResolveSafetyConfig_Force(t *testing.T) {
 // Conflict resolution tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.3.4
 func TestResolveConflict_KeepBoth(t *testing.T) {
 	t.Parallel()
 
@@ -963,6 +969,7 @@ func TestListConflicts_Engine(t *testing.T) {
 	assert.Empty(t, conflicts)
 }
 
+// Validates: R-2.3.4
 func TestResolveConflict_KeepLocal(t *testing.T) {
 	t.Parallel()
 
@@ -1017,6 +1024,7 @@ func TestResolveConflict_KeepLocal(t *testing.T) {
 	assert.Empty(t, remaining, "expected 0 unresolved conflicts")
 }
 
+// Validates: R-2.3.4
 func TestResolveConflict_KeepRemote(t *testing.T) {
 	t.Parallel()
 
@@ -1069,6 +1077,7 @@ func TestResolveConflict_KeepRemote(t *testing.T) {
 // RunWatch tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.8
 // TestRunWatch_ContextCancel verifies that canceling the context causes
 // RunWatch to return nil (clean shutdown).
 func TestRunWatch_ContextCancel(t *testing.T) {
@@ -1291,6 +1300,7 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 
 // TestRunWatch_Deduplication verifies that processBatch cancels in-flight
 // actions for paths that appear in a new batch (B-122).
+// Validates: R-2.8
 func TestRunWatch_Deduplication(t *testing.T) {
 	t.Parallel()
 
@@ -1869,6 +1879,7 @@ func TestObserveAndCommitRemote_ZeroEvents_NoTokenAdvance(t *testing.T) {
 	assert.Equal(t, "old-token", savedToken, "token should not advance when 0 events returned")
 }
 
+// Validates: R-2.15.1
 func TestObserveAndCommitRemote_WithEvents_TokenAdvances(t *testing.T) {
 	t.Parallel()
 

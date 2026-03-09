@@ -17,6 +17,7 @@ func TestNewHolder(t *testing.T) {
 	assert.Equal(t, "/etc/onedrive/config.toml", h.Path())
 }
 
+// Validates: R-4.4.1
 func TestHolder_Update(t *testing.T) {
 	cfg1 := DefaultConfig()
 	h := NewHolder(cfg1, "/tmp/config.toml")
@@ -39,6 +40,7 @@ func TestHolder_PathImmutable(t *testing.T) {
 	assert.Equal(t, "/original/path.toml", h.Path())
 }
 
+// Validates: R-4.4.2
 func TestHolder_ConcurrentReadWrite(t *testing.T) {
 	cfg := DefaultConfig()
 	h := NewHolder(cfg, "/tmp/config.toml")

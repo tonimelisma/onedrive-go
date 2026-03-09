@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// Validates: R-6.7.8
 func TestDecodeURLEncodedNames(t *testing.T) {
 	items := []Item{
 		{ID: "item-1", Name: "my%20file.txt"},
@@ -69,6 +70,7 @@ func TestFilterPackages(t *testing.T) {
 	assert.Equal(t, "file-2", result[1].ID)
 }
 
+// Validates: R-6.7.9
 func TestFilterPackages_AllPackages(t *testing.T) {
 	items := []Item{
 		{ID: "pkg-1", Name: "Notebook1.one", IsPackage: true},
@@ -137,6 +139,7 @@ func TestClearDeletedHashes_DeletedWithNoHashes(t *testing.T) {
 	assert.Equal(t, "", result[0].SHA256Hash)
 }
 
+// Validates: R-6.7.10
 func TestDeduplicateItems(t *testing.T) {
 	items := []Item{
 		{ID: "item-1", Name: "v1"},
@@ -228,6 +231,7 @@ func TestReorderDeletions_Empty(t *testing.T) {
 	assert.Empty(t, result)
 }
 
+// Validates: R-6.7.8, R-6.7.9, R-6.7.10
 func TestNormalizeDeltaItems_FullPipeline(t *testing.T) {
 	items := []Item{
 		{ID: "pkg-1", Name: "Notebook.one", IsPackage: true, ParentID: "root"},

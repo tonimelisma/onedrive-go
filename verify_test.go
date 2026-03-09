@@ -46,6 +46,7 @@ func TestPrintVerifyJSON(t *testing.T) {
 	assert.Equal(t, 5, parsed.Verified)
 }
 
+// Validates: R-2.7
 func TestNewVerifyCmd_Structure(t *testing.T) {
 	t.Parallel()
 

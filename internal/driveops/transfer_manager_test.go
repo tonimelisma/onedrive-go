@@ -132,6 +132,7 @@ func newTestTM(dl Downloader, ul Uploader, store *SessionStore) *TransferManager
 // Download tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-1.2, R-6.2.3
 func TestTransferManager_FreshDownload_Success(t *testing.T) {
 	t.Parallel()
 
@@ -219,6 +220,7 @@ func TestTransferManager_FreshDownload_CtxCancel_PreservesPartial(t *testing.T) 
 	assert.NotZero(t, info.Size(), "expected .partial to have data")
 }
 
+// Validates: R-5.2
 func TestTransferManager_ResumeDownload_Success(t *testing.T) {
 	t.Parallel()
 
@@ -338,6 +340,7 @@ func TestTransferManager_ResumeDownload_CloseError_FallsBack(t *testing.T) {
 	assert.Equal(t, expectedHash, result.LocalHash)
 }
 
+// Validates: R-5.5
 func TestTransferManager_HashMismatch_Retry(t *testing.T) {
 	t.Parallel()
 
@@ -483,6 +486,7 @@ func TestTransferManager_Upload_ErrorWrapping(t *testing.T) {
 	assert.Contains(t, err.Error(), localPath)
 }
 
+// Validates: R-1.3, R-5.2
 func TestTransferManager_SessionUpload_Success(t *testing.T) {
 	t.Parallel()
 

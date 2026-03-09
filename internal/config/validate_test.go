@@ -162,6 +162,7 @@ func TestValidate_BigDeleteMinItems_BelowMin(t *testing.T) {
 	assert.Contains(t, err.Error(), "big_delete_min_items")
 }
 
+// Validates: R-6.2.9
 func TestValidate_Permissions_Invalid(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -185,6 +186,7 @@ func TestValidate_Permissions_Invalid(t *testing.T) {
 	}
 }
 
+// Validates: R-6.2.9
 func TestValidate_Permissions_Valid(t *testing.T) {
 	for _, perm := range []string{"0600", "0700", "0755", "0644", "777"} {
 		cfg := validConfig()

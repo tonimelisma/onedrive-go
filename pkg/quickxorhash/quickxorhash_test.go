@@ -20,6 +20,8 @@ func decodeBase64(t *testing.T, s string) []byte {
 	return b
 }
 
+// Validates: R-5.5
+//
 // Reference hashes verified against rclone v1.73.1's quickxorhash implementation.
 func TestKnownVectors(t *testing.T) {
 	tests := []struct {

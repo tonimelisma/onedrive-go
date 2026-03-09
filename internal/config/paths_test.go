@@ -34,6 +34,7 @@ func TestDefaultConfigPath_EndsWithConfigToml(t *testing.T) {
 	assert.True(t, strings.HasSuffix(path, "config.toml"))
 }
 
+// Validates: R-4.1.2
 func TestDefaultConfigDir_MacOS(t *testing.T) {
 	if runtime.GOOS != platformDarwin {
 		t.Skip("macOS-only test")
@@ -47,6 +48,7 @@ func TestDefaultConfigDir_MacOS(t *testing.T) {
 	assert.Contains(t, dir, "Library/Application Support")
 }
 
+// Validates: R-4.1.2
 func TestDefaultDataDir_MacOS(t *testing.T) {
 	if runtime.GOOS != platformDarwin {
 		t.Skip("macOS-only test")
@@ -59,6 +61,7 @@ func TestDefaultDataDir_MacOS(t *testing.T) {
 	assert.Contains(t, dir, "Library/Application Support")
 }
 
+// Validates: R-4.1.2
 func TestDefaultCacheDir_MacOS(t *testing.T) {
 	if runtime.GOOS != platformDarwin {
 		t.Skip("macOS-only test")
@@ -73,6 +76,7 @@ func TestDefaultCacheDir_MacOS(t *testing.T) {
 
 // XDG override tests: work on ALL platforms (the whole point of the change).
 
+// Validates: R-4.1.2
 func TestDefaultConfigDir_XDGOverride(t *testing.T) {
 	xdgDir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdgDir)
@@ -90,6 +94,7 @@ func TestDefaultConfigDir_XDGFallback(t *testing.T) {
 	assert.Contains(t, result, appName)
 }
 
+// Validates: R-4.1.2
 func TestDefaultDataDir_XDGOverride(t *testing.T) {
 	xdgDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", xdgDir)
@@ -107,6 +112,7 @@ func TestDefaultDataDir_XDGFallback(t *testing.T) {
 	assert.Contains(t, result, appName)
 }
 
+// Validates: R-4.1.2
 func TestDefaultCacheDir_XDGOverride(t *testing.T) {
 	xdgDir := t.TempDir()
 	t.Setenv("XDG_CACHE_HOME", xdgDir)

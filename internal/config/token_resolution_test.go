@@ -23,6 +23,7 @@ func TestDriveTokenPath_Business(t *testing.T) {
 	assert.Contains(t, path, "token_business_alice@contoso.com.json")
 }
 
+// Validates: R-3.4.3
 func TestDriveTokenPath_SharePoint_SharesBusinessToken(t *testing.T) {
 	path := DriveTokenPath(driveid.MustCanonicalID("sharepoint:alice@contoso.com:marketing:Docs"))
 	assert.NotEmpty(t, path)
@@ -95,6 +96,7 @@ func TestTokenAccountCID_Business(t *testing.T) {
 	assert.Equal(t, "business:alice@contoso.com", got.String())
 }
 
+// Validates: R-3.4.3
 func TestTokenAccountCID_SharePoint(t *testing.T) {
 	cid := driveid.MustCanonicalID("sharepoint:alice@contoso.com:marketing:Docs")
 	got := tokenAccountCID(cid)

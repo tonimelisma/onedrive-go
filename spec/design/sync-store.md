@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/baseline.go, internal/sync/store_interfaces.go, internal/sync/migrations.go, internal/sync/verify.go, internal/sync/trash.go, issues.go, verify.go
 
-Implements: R-2.5 [implemented], R-2.3.2 [implemented], R-2.3.3 [implemented], R-2.7 [implemented], R-6.4.4 [implemented], R-6.4.5 [implemented], R-2.15.1 [implemented]
+Implements: R-2.5 [verified], R-2.3.2 [verified], R-2.3.3 [verified], R-2.7 [verified], R-6.4.4 [verified], R-6.4.5 [verified], R-2.15.1 [verified]
 
 ## SyncStore (`baseline.go`)
 
@@ -13,7 +13,7 @@ Key operations:
 - `CommitOutcome()`: updates baseline + `remote_state` status per action
 - `RecordFailure()`: writes to `sync_failures` with retry scheduling
 
-All write methods use optimistic concurrency (WHERE clauses preventing stale updates). Concurrency safety from SQLite WAL mode with 5-second busy timeout. Implements: R-6.3.2 [implemented]
+All write methods use optimistic concurrency (WHERE clauses preventing stale updates). Concurrency safety from SQLite WAL mode with 5-second busy timeout. Implements: R-6.3.2 [verified]
 
 ## Store Interfaces (`store_interfaces.go`)
 

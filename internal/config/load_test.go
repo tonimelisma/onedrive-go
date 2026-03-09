@@ -31,6 +31,7 @@ func writeTestConfig(t *testing.T, content string) string {
 	return path
 }
 
+// Validates: R-4.1.1
 func TestLoad_ValidFullConfig(t *testing.T) {
 	tomlContent := `
 skip_files = ["*.tmp", "*.swp"]
@@ -127,6 +128,7 @@ force_http_11 = true
 	assert.True(t, cfg.ForceHTTP11)
 }
 
+// Validates: R-4.2.1
 func TestLoad_MinimalConfig_UsesDefaults(t *testing.T) {
 	path := writeTestConfig(t, "")
 	cfg, err := Load(path, testLogger(t))
@@ -231,6 +233,7 @@ bandwidth_schedule = [
 
 // --- Two-pass decode: drive section tests ---
 
+// Validates: R-4.1.1
 func TestLoad_SingleDriveSection(t *testing.T) {
 	path := writeTestConfig(t, `
 log_level = "debug"
@@ -249,6 +252,7 @@ display_name = "home"
 	assert.Equal(t, "debug", cfg.LogLevel)
 }
 
+// Validates: R-4.1.1, R-3.4.1
 func TestLoad_MultipleDriveSections(t *testing.T) {
 	path := writeTestConfig(t, `
 skip_dotfiles = true
@@ -408,6 +412,7 @@ display_name = "work"
 	assert.Equal(t, driveid.MustCanonicalID("personal:toni@outlook.com"), resolved.CanonicalID)
 }
 
+// Validates: R-4.3
 func TestResolveDrive_CLIDriveOverridesEnv(t *testing.T) {
 	path := writeTestConfig(t, `
 ["personal:toni@outlook.com"]
@@ -427,6 +432,7 @@ display_name = "work"
 	assert.Equal(t, driveid.MustCanonicalID("business:alice@contoso.com"), resolved.CanonicalID)
 }
 
+// Validates: R-4.3
 func TestResolveDrive_CLIConfigPathOverridesEnv(t *testing.T) {
 	path := writeTestConfig(t, `
 ["personal:toni@outlook.com"]
@@ -479,6 +485,7 @@ func TestResolveDrive_NoConfigFile(t *testing.T) {
 	assert.Contains(t, err.Error(), "no accounts")
 }
 
+// Validates: R-4.3
 func TestResolveDrive_PerDriveOverridesApplied(t *testing.T) {
 	path := writeTestConfig(t, `
 skip_dotfiles = false
@@ -504,6 +511,7 @@ poll_interval = "10m"
 	assert.Equal(t, "10m", resolved.PollInterval)
 }
 
+// Validates: R-4.3
 func TestResolveDrive_GlobalSettingsUsedWhenNoDriveOverride(t *testing.T) {
 	path := writeTestConfig(t, `
 skip_dotfiles = true
@@ -635,11 +643,13 @@ func TestResolveDrives_ZeroDrives(t *testing.T) {
 
 // --- ResolveConfigPath tests ---
 
+// Validates: R-4.1.3
 func TestResolveConfigPath_DefaultWhenEmpty(t *testing.T) {
 	result := ResolveConfigPath(EnvOverrides{}, CLIOverrides{}, testLogger(t))
 	assert.Equal(t, DefaultConfigPath(), result)
 }
 
+// Validates: R-4.1.3
 func TestResolveConfigPath_EnvOverridesDefault(t *testing.T) {
 	result := ResolveConfigPath(
 		EnvOverrides{ConfigPath: "/env/config.toml"},
@@ -649,6 +659,7 @@ func TestResolveConfigPath_EnvOverridesDefault(t *testing.T) {
 	assert.Equal(t, "/env/config.toml", result)
 }
 
+// Validates: R-4.1.3
 func TestResolveConfigPath_CLIOverridesEnv(t *testing.T) {
 	result := ResolveConfigPath(
 		EnvOverrides{ConfigPath: "/env/config.toml"},
@@ -658,6 +669,7 @@ func TestResolveConfigPath_CLIOverridesEnv(t *testing.T) {
 	assert.Equal(t, "/cli/config.toml", result)
 }
 
+// Validates: R-4.1.3
 func TestResolveConfigPath_CLIOverridesDefault(t *testing.T) {
 	result := ResolveConfigPath(
 		EnvOverrides{},

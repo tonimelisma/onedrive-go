@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// Validates: R-4.3
 func TestReadEnvOverrides_AllSet(t *testing.T) {
 	t.Setenv("ONEDRIVE_GO_CONFIG", "/custom/config.toml")
 	t.Setenv("ONEDRIVE_GO_DRIVE", "work")

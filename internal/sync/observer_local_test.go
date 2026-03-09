@@ -342,6 +342,7 @@ func TestFullScan_EmptyDir(t *testing.T) {
 	assert.Empty(t, events)
 }
 
+// Validates: R-2.4
 func TestFullScan_Symlink(t *testing.T) {
 	t.Parallel()
 
@@ -375,6 +376,7 @@ func TestFullScan_InvalidName(t *testing.T) {
 	assert.Equal(t, "valid.txt", events[0].Path)
 }
 
+// Validates: R-2.4
 func TestFullScan_AlwaysExcluded(t *testing.T) {
 	t.Parallel()
 
@@ -409,6 +411,7 @@ func TestFullScan_ContextCanceled(t *testing.T) {
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
+// Validates: R-2.13.1
 func TestFullScan_NFCNormalization(t *testing.T) {
 	t.Parallel()
 
@@ -756,6 +759,7 @@ func TestFullScan_NosyncGuardDir(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNosyncGuard)
 }
 
+// Validates: R-2.4
 func TestFullScan_ExcludedDirSkipsSubtree(t *testing.T) {
 	t.Parallel()
 

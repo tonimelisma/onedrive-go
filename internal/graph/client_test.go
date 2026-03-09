@@ -140,6 +140,7 @@ func TestDo_ErrorClassification(t *testing.T) {
 	}
 }
 
+// Validates: R-6.8.2
 func TestDo_RetryOn5xx(t *testing.T) {
 	var calls atomic.Int32
 
@@ -165,6 +166,7 @@ func TestDo_RetryOn5xx(t *testing.T) {
 	assert.Equal(t, int32(3), calls.Load())
 }
 
+// Validates: R-6.8.1
 func TestDo_RetryOn429WithRetryAfter(t *testing.T) {
 	var calls atomic.Int32
 
@@ -938,6 +940,8 @@ func (r *sleepRecord) count() int {
 	return len(r.calls)
 }
 
+// Validates: R-6.8.1
+//
 // TestThrottleGate_429SetsDeadline verifies that a 429 with Retry-After sets
 // the account-wide throttle deadline, causing subsequent requests to sleep at
 // the throttle gate before proceeding.
