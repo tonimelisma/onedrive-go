@@ -25,6 +25,7 @@ import (
 
 // --- command structure ---
 
+// Validates: R-3.3.1, R-3.3.2, R-3.3.3, R-3.3.4
 func TestNewDriveCmd_Structure(t *testing.T) {
 	cmd := newDriveCmd()
 	assert.Equal(t, "drive", cmd.Name())
@@ -68,12 +69,14 @@ func TestNewDriveSearchCmd_HasRunE(t *testing.T) {
 
 // --- buildConfiguredDriveEntries ---
 
+// Validates: R-3.3.1
 func TestBuildConfiguredDriveEntries_Empty(t *testing.T) {
 	cfg := config.DefaultConfig()
 	entries := buildConfiguredDriveEntries(cfg, testDriveLogger(t))
 	assert.Nil(t, entries)
 }
 
+// Validates: R-3.3.1
 func TestBuildConfiguredDriveEntries_OneDrive_WithSyncDir(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Drives[driveid.MustCanonicalID("personal:user@example.com")] = config.Drive{
@@ -102,6 +105,7 @@ func TestBuildConfiguredDriveEntries_PausedDrive(t *testing.T) {
 	assert.Equal(t, driveStatePaused, entries[0].State)
 }
 
+// Validates: R-3.3.1
 func TestBuildConfiguredDriveEntries_MultipleDrives_Sorted(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Drives[driveid.MustCanonicalID("personal:zack@example.com")] = config.Drive{SyncDir: "~/OneDrive-Z"}
@@ -166,6 +170,7 @@ func TestPrintDriveListText_EmptyBothSections(t *testing.T) {
 	assert.Contains(t, buf.String(), "No drives configured")
 }
 
+// Validates: R-3.3.1
 func TestPrintDriveListText_ConfiguredOnly(t *testing.T) {
 	configured := []driveListEntry{
 		{CanonicalID: "personal:user@example.com", SyncDir: "~/OneDrive", State: driveStateReady, Source: "configured"},
@@ -177,6 +182,7 @@ func TestPrintDriveListText_ConfiguredOnly(t *testing.T) {
 	assert.Contains(t, output, "personal:user@example.com")
 }
 
+// Validates: R-3.6.1
 func TestPrintDriveListText_AvailableOnly(t *testing.T) {
 	available := []driveListEntry{
 		{CanonicalID: "business:user@contoso.com", State: "", Source: "available", SiteName: "Marketing"},
@@ -188,6 +194,7 @@ func TestPrintDriveListText_AvailableOnly(t *testing.T) {
 	assert.Contains(t, output, "business:user@contoso.com")
 }
 
+// Validates: R-3.3.1, R-3.6.1
 func TestPrintDriveListText_BothSections(t *testing.T) {
 	configured := []driveListEntry{
 		{CanonicalID: "personal:user@example.com", SyncDir: "~/OneDrive", State: driveStateReady, Source: "configured"},
@@ -202,6 +209,7 @@ func TestPrintDriveListText_BothSections(t *testing.T) {
 	assert.Contains(t, output, "Available drives")
 }
 
+// Validates: R-3.5.1
 func TestBuildConfiguredDriveEntries_ExplicitDisplayName(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Drives[driveid.MustCanonicalID("personal:user@example.com")] = config.Drive{
@@ -214,6 +222,7 @@ func TestBuildConfiguredDriveEntries_ExplicitDisplayName(t *testing.T) {
 	assert.Equal(t, "My Personal Drive", entries[0].DisplayName)
 }
 
+// Validates: R-3.5.1
 func TestPrintDriveListText_ShowsDisplayName(t *testing.T) {
 	configured := []driveListEntry{
 		{
@@ -343,6 +352,7 @@ func TestPrintDriveSearchText_Empty(t *testing.T) {
 	printDriveSearchText(&buf, nil, "test query")
 }
 
+// Validates: R-3.3.4
 func TestPrintDriveSearchText_WithResults(t *testing.T) {
 	results := []driveSearchResult{
 		{CanonicalID: "sharepoint:user@contoso.com:marketing:Docs", SiteName: "Marketing", LibraryName: "Docs", WebURL: "https://contoso.sharepoint.com/sites/marketing"},
@@ -352,6 +362,7 @@ func TestPrintDriveSearchText_WithResults(t *testing.T) {
 	assert.NotPanics(t, func() { printDriveSearchText(&buf, results, "marketing") })
 }
 
+// Validates: R-3.3.4
 func TestPrintDriveSearchText_MultipleSites(t *testing.T) {
 	results := []driveSearchResult{
 		{CanonicalID: "sharepoint:user@contoso.com:marketing:Docs", SiteName: "Marketing", LibraryName: "Docs"},
@@ -468,6 +479,7 @@ func TestDriveSearchResult_JSONRoundTrip(t *testing.T) {
 
 // --- removeDrive ---
 
+// Validates: R-3.3.3
 func TestRemoveDrive_DeletesConfigSection(t *testing.T) {
 	// Create a config file with a drive.
 	dir := t.TempDir()
@@ -487,6 +499,7 @@ sync_dir = "~/OneDrive"
 	assert.NotContains(t, string(data), "personal:user@example.com")
 }
 
+// Validates: R-3.3.3
 func TestRemoveDrive_DriveNotInConfig(t *testing.T) {
 	// removeDrive should return an error when the drive doesn't exist in config.
 	dir := t.TempDir()
@@ -609,6 +622,7 @@ func TestAddNewDrive_NoToken(t *testing.T) {
 	assert.Contains(t, err.Error(), "no token file")
 }
 
+// Validates: R-3.3.2
 func TestAddNewDrive_WithToken(t *testing.T) {
 	setTestDriveHome(t)
 	dataDir := config.DefaultDataDir()
@@ -634,6 +648,7 @@ func TestAddNewDrive_WithToken(t *testing.T) {
 
 // --- deriveSharedDisplayName ---
 
+// Validates: R-3.6.3
 func TestDeriveSharedDisplayName_Basic(t *testing.T) {
 	item := &graph.Item{
 		Name:             "Documents",
@@ -645,6 +660,7 @@ func TestDeriveSharedDisplayName_Basic(t *testing.T) {
 	assert.Equal(t, "John's Documents", name)
 }
 
+// Validates: R-3.6.3
 func TestDeriveSharedDisplayName_FirstNameCollision(t *testing.T) {
 	item := &graph.Item{
 		Name:             "Documents",
@@ -657,6 +673,7 @@ func TestDeriveSharedDisplayName_FirstNameCollision(t *testing.T) {
 	assert.Equal(t, "John Doe's Documents", name)
 }
 
+// Validates: R-3.6.3
 func TestDeriveSharedDisplayName_FullNameCollision(t *testing.T) {
 	item := &graph.Item{
 		Name:             "Documents",
@@ -707,6 +724,7 @@ func TestDeriveSharedDisplayName_NoIdentity(t *testing.T) {
 
 // --- printDriveListText shared drives ---
 
+// Validates: R-3.6.1
 func TestPrintDriveListText_SharedDrive(t *testing.T) {
 	available := []driveListEntry{
 		{
@@ -764,6 +782,7 @@ func TestDriveListEntry_SharedFieldsOmittedWhenEmpty(t *testing.T) {
 
 // --- addSharedDrive ---
 
+// Validates: R-3.3.2
 func TestAddSharedDrive_AlreadyConfigured(t *testing.T) {
 	setTestDriveHome(t)
 	dir := t.TempDir()
@@ -1013,6 +1032,7 @@ func sharedItemJSON(name string) string {
 	}`, name, name)
 }
 
+// Validates: R-3.6.2
 func TestSearchSharedItemsWithFallback_SearchSucceeds(t *testing.T) {
 	var sharedWithMeCalled bool
 
@@ -1041,6 +1061,7 @@ func TestSearchSharedItemsWithFallback_SearchSucceeds(t *testing.T) {
 	assert.False(t, sharedWithMeCalled, "SharedWithMe should not be called when search succeeds")
 }
 
+// Validates: R-3.6.2
 func TestSearchSharedItemsWithFallback_SearchFails_SharedWithMeSucceeds(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
