@@ -2,19 +2,27 @@
 
 Performance targets, data integrity, process model, safety, observability, and packaging.
 
-## R-6.1 Performance Targets [planned]
+## R-6.1 Performance Targets [target]
 
-- R-6.1.1: Memory usage shall stay below 100 MB for 100K synced files. [planned]
-- R-6.1.2: CPU usage in idle watch mode shall stay below 1%. [planned]
-- R-6.1.3: Initial sync of 10K files shall complete in under 10 minutes. [planned]
+- R-6.1.1: Memory usage shall stay below 100 MB for 100K synced files. [target]
+- R-6.1.2: CPU usage in idle watch mode shall stay below 1%. [target]
+- R-6.1.3: Initial sync of 10K files shall complete in under 10 minutes. [target]
 - R-6.1.4: Startup time shall be under 1 second. [implemented]
 - R-6.1.5: Binary size shall be under 20 MB (single static binary, no runtime dependencies). [implemented]
 
 ## R-6.2 Data Integrity [implemented]
 
-- R-6.2.1: The system shall never silently lose or corrupt user data. [implemented]
-- R-6.2.2: File operations (ls, get, put, rm, mkdir, stat, mv, cp) shall work independently of sync state — no sync database involved. [implemented]
-- R-6.2.3: The system shall support configurable file permissions (`sync_file_permissions`) and directory permissions (`sync_dir_permissions`) for synced content. [implemented]
+The system shall never silently lose or corrupt user data. This umbrella principle is enforced by the following specific safety invariants:
+
+- R-6.2.1: (S1) The system shall never delete a remote item based on local absence unless a synced baseline entry exists. [implemented]
+- R-6.2.2: (S2) The system shall never process deletions from an incomplete enumeration (partial delta fetch or unmounted volume). [implemented]
+- R-6.2.3: (S3) Downloads shall use atomic file writes (`.partial` + hash verify + rename). [implemented]
+- R-6.2.4: (S4) Local deletions shall verify the file hash against baseline before deleting; on mismatch, a conflict copy is preserved. [implemented]
+- R-6.2.5: (S5) Big-delete protection shall abort when planned deletions exceed configured thresholds. [implemented]
+- R-6.2.6: (S6) The system shall check available disk space before downloading. [planned]
+- R-6.2.7: (S7) The system shall never upload partial or temporary files (filter cascade excludes temp patterns). [implemented]
+- R-6.2.8: File operations (ls, get, put, rm, mkdir, stat, mv, cp) shall work independently of sync state — no sync database involved. [implemented]
+- R-6.2.9: The system shall support configurable file permissions (`sync_file_permissions`) and directory permissions (`sync_dir_permissions`) for synced content. [implemented]
 
 ## R-6.3 Process Model [implemented]
 
