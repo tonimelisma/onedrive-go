@@ -2,15 +2,20 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/sync"
 )
@@ -685,4 +690,172 @@ func TestPrintIssuesText_OnlyFailures(t *testing.T) {
 	output := buf.String()
 	assert.NotContains(t, output, "CONFLICTS")
 	assert.Contains(t, output, "FILE ISSUES")
+}
+
+// --- issues clear / retry behavioral tests ---
+
+// newSeededIssuesCmd creates a cobra command with a CLIContext backed by a
+// real SyncStore in a temp directory, pre-seeded with actionable and transient
+// failures. Returns the command and the DB path (for post-assertions).
+func newSeededIssuesCmd(t *testing.T) (*cobra.Command, string) {
+	t.Helper()
+
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test-issues.db")
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// Create and seed the DB.
+	mgr, err := sync.NewSyncStore(dbPath, logger)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	// Actionable failure (invalid filename — will be targeted by "clear").
+	err = mgr.RecordSyncFailure(ctx, "docs/CON", driveid.ID{},
+		"upload", "invalid_filename", "reserved name", 0, 0, "", "")
+	require.NoError(t, err)
+
+	// Transient failure (upload_failed — will be targeted by "retry").
+	err = mgr.RecordSyncFailure(ctx, "data/report.xlsx", driveid.ID{},
+		"upload", "upload_failed", "connection reset", 500, 1024, "", "")
+	require.NoError(t, err)
+
+	// Second actionable failure for testing --all.
+	err = mgr.RecordSyncFailure(ctx, "docs/NUL.txt", driveid.ID{},
+		"upload", "invalid_filename", "reserved name", 0, 0, "", "")
+	require.NoError(t, err)
+
+	mgr.Close()
+
+	// Build a CLIContext whose Cfg.StatePath() returns our temp DB path.
+	// We override XDG_DATA_HOME and pick a CanonicalID that resolves to our path.
+	// Simpler: directly set Cfg with the known StatePath by using a custom
+	// ResolvedDrive. StatePath() calls DriveStatePath which uses DefaultDataDir,
+	// so we set XDG_DATA_HOME to make it predictable.
+	xdgDir := filepath.Join(tmpDir, "xdg-data")
+	require.NoError(t, os.MkdirAll(filepath.Join(xdgDir, "onedrive-go"), 0o700))
+	t.Setenv("XDG_DATA_HOME", xdgDir)
+
+	// Compute the canonical ID that maps to our DB path.
+	// DriveStatePath produces: $XDG_DATA_HOME/onedrive-go/state_<sanitized>.db
+	// We need to create a symlink or copy the DB to that location.
+	cid := driveid.MustCanonicalID("personal:test@example.com")
+	expectedPath := config.DriveStatePath(cid)
+
+	require.NoError(t, os.MkdirAll(filepath.Dir(expectedPath), 0o700))
+	// Symlink our seeded DB to the expected path.
+	require.NoError(t, os.Symlink(dbPath, expectedPath))
+
+	var buf bytes.Buffer
+	cc := &CLIContext{
+		StatusWriter: &buf,
+		Logger:       logger,
+		Cfg: &config.ResolvedDrive{
+			CanonicalID: cid,
+		},
+	}
+
+	cmd := newIssuesCmd()
+	cmd.SetContext(context.WithValue(context.Background(), cliContextKey{}, cc))
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+
+	return cmd, expectedPath
+}
+
+// Validates: R-2.3.5
+func TestIssuesClear_SinglePath(t *testing.T) {
+	cmd, dbPath := newSeededIssuesCmd(t)
+
+	// Execute "issues clear docs/CON" via the parent command.
+	cmd.SetArgs([]string{"clear", "docs/CON"})
+	require.NoError(t, cmd.Execute())
+
+	// Verify: "docs/CON" is gone, other failures remain.
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mgr, err := sync.NewSyncStore(dbPath, logger)
+	require.NoError(t, err)
+	defer mgr.Close()
+
+	ctx := context.Background()
+	actionable, err := mgr.ListActionableFailures(ctx)
+	require.NoError(t, err)
+
+	// Only "docs/NUL.txt" should remain as actionable.
+	require.Len(t, actionable, 1)
+	assert.Equal(t, "docs/NUL.txt", actionable[0].Path)
+}
+
+// Validates: R-2.3.5
+func TestIssuesClear_All(t *testing.T) {
+	cmd, dbPath := newSeededIssuesCmd(t)
+
+	cmd.SetArgs([]string{"clear", "--all"})
+	require.NoError(t, cmd.Execute())
+
+	// Verify: all actionable failures gone, transient remains.
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mgr, err := sync.NewSyncStore(dbPath, logger)
+	require.NoError(t, err)
+	defer mgr.Close()
+
+	ctx := context.Background()
+	actionable, err := mgr.ListActionableFailures(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, actionable, "all actionable failures should be cleared")
+
+	// Transient failure should still exist.
+	all, err := mgr.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, all, 1)
+	assert.Equal(t, "data/report.xlsx", all[0].Path)
+}
+
+// Validates: R-2.3.6
+func TestIssuesRetry_SinglePath(t *testing.T) {
+	cmd, dbPath := newSeededIssuesCmd(t)
+
+	cmd.SetArgs([]string{"retry", "data/report.xlsx"})
+	require.NoError(t, cmd.Execute())
+
+	// Verify: the transient failure for "data/report.xlsx" is cleared.
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mgr, err := sync.NewSyncStore(dbPath, logger)
+	require.NoError(t, err)
+	defer mgr.Close()
+
+	ctx := context.Background()
+	all, err := mgr.ListSyncFailures(ctx)
+	require.NoError(t, err)
+
+	// The transient failure should be gone; actionable ones remain.
+	for _, f := range all {
+		assert.NotEqual(t, "data/report.xlsx", f.Path,
+			"retried failure should be cleared from sync_failures")
+	}
+}
+
+// Validates: R-2.3.6
+func TestIssuesRetry_All(t *testing.T) {
+	cmd, dbPath := newSeededIssuesCmd(t)
+
+	cmd.SetArgs([]string{"retry", "--all"})
+	require.NoError(t, cmd.Execute())
+
+	// Verify: transient failures are cleared; actionable remain.
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mgr, err := sync.NewSyncStore(dbPath, logger)
+	require.NoError(t, err)
+	defer mgr.Close()
+
+	ctx := context.Background()
+	all, err := mgr.ListSyncFailures(ctx)
+	require.NoError(t, err)
+
+	// Only actionable failures should remain.
+	for _, f := range all {
+		assert.Equal(t, "actionable", f.Category,
+			"only actionable failures should remain after retry --all")
+	}
 }

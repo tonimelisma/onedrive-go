@@ -17,6 +17,7 @@ import (
 // hashes (LocalHash vs RemoteHash) prevent infinite re-sync loops.
 // ---------------------------------------------------------------------------
 
+// Validates: R-6.7.4
 // TestPerSideHash_PreventsReUploadLoop validates that after uploading a file
 // (LocalHash=AAA), if the server modifies it (RemoteHash=BBB), the next sync
 // run does NOT produce an upload action because LocalHash still matches.

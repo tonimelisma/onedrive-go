@@ -43,6 +43,7 @@ func TestPrintItemsTable(t *testing.T) {
 
 // --- printItemsJSON ---
 
+// Validates: R-1.1.1
 func TestPrintItemsJSON(t *testing.T) {
 	items := []graph.Item{
 		{Name: "file.txt", Size: 100, ID: "id1", ModifiedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)},

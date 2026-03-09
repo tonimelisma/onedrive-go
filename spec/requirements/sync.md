@@ -2,14 +2,14 @@
 
 Bidirectional file synchronization between a local directory and OneDrive.
 
-## R-2.1 Sync Modes [implemented]
+## R-2.1 Sync Modes [verified]
 
 - R-2.1.1: When the user runs `sync`, the system shall perform one-shot bidirectional sync. [verified]
 - R-2.1.2: When `--watch` is passed, the system shall run continuously, detecting changes via filesystem events (inotify/FSEvents) and remote delta polling. [verified]
 - R-2.1.3: When `--download-only` is passed, the system shall only download remote changes. [verified]
 - R-2.1.4: When `--upload-only` is passed, the system shall only upload local changes. [verified]
 - R-2.1.5: When `--dry-run` is passed, the system shall preview operations without executing. [verified]
-- R-2.1.6: When `--full` is passed, the system shall perform full reconciliation (fresh delta enumeration + orphan detection). [implemented]
+- R-2.1.6: When `--full` is passed, the system shall perform full reconciliation (fresh delta enumeration + orphan detection). [verified]
 
 ## R-2.2 Conflict Detection [verified]
 
@@ -18,14 +18,14 @@ When the same file has been modified on both the local filesystem and OneDrive s
 - R-2.2.1: The system shall use content hash comparison (QuickXorHash) against the baseline as the primary conflict signal. [verified]
 - R-2.2.2: The system shall use mtime as a fast-path optimization (skip hashing when timestamps match baseline). [verified]
 
-## R-2.3 Conflict Resolution [implemented]
+## R-2.3 Conflict Resolution [verified]
 
 - R-2.3.1: The default resolution shall preserve both versions: remote wins the original path, local version is renamed to `<name>.conflict-<timestamp>.<ext>`. [verified]
 - R-2.3.2: The system shall persistently record conflicts with metadata (path, timestamp, hashes, resolution status). [verified]
 - R-2.3.3: When the user runs `issues`, the system shall list all unresolved conflicts and failures. [verified]
 - R-2.3.4: When the user runs `issues resolve <path>`, the system shall allow resolution (keep-local, keep-remote, keep-both). [verified]
-- R-2.3.5: When the user runs `issues clear <path>`, the system shall dismiss a conflict. [implemented]
-- R-2.3.6: When the user runs `issues retry <path>`, the system shall retry a failed item. [implemented]
+- R-2.3.5: When the user runs `issues clear <path>`, the system shall dismiss a conflict. [verified]
+- R-2.3.6: When the user runs `issues retry <path>`, the system shall retry a failed item. [verified]
 
 ## R-2.4 Filtering [implemented]
 

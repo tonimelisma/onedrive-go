@@ -2255,6 +2255,7 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 // runFullReconciliation tests (Item 6)
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.1.6
 func TestRunFullReconciliation_NoChanges(t *testing.T) {
 	t.Parallel()
 
@@ -2305,6 +2306,7 @@ func TestRunFullReconciliation_NoChanges(t *testing.T) {
 	e.runFullReconciliation(ctx, bl, SyncDownloadOnly, safety, tracker)
 }
 
+// Validates: R-2.1.6
 func TestRunFullReconciliation_DeltaError(t *testing.T) {
 	t.Parallel()
 

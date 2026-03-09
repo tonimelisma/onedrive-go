@@ -258,7 +258,7 @@ func TestGetItem_NilFileFacet(t *testing.T) {
 
 // --- ListChildren tests ---
 
-// Validates: R-1.1
+// Validates: R-1.1, R-1.1.2
 func TestListChildren_SinglePage(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
@@ -290,7 +290,7 @@ func TestListChildren_SinglePage(t *testing.T) {
 	assert.Equal(t, 5, items[2].ChildCount)
 }
 
-// Validates: R-1.1
+// Validates: R-1.1, R-1.1.3
 func TestListChildren_MultiPage(t *testing.T) {
 	var srv *httptest.Server
 
@@ -938,6 +938,7 @@ func TestListChildrenByPath_SinglePage(t *testing.T) {
 	assert.Equal(t, 12, items[2].ChildCount)
 }
 
+// Validates: R-1.1.3
 func TestListChildrenByPath_MultiPage(t *testing.T) {
 	var srv *httptest.Server
 
