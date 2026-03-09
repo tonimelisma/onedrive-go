@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/planner.go, internal/sync/types.go
 
-Implements: R-2.2 [verified], R-2.3.1 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified]
+Implements: R-2.2 [verified], R-2.3.1 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.7.7 [verified]
 
 ## Overview
 

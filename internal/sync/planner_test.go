@@ -328,6 +328,7 @@ func TestClassifyFile_EF7_LocalDeleteRemoteModified(t *testing.T) {
 	require.Len(t, downloads, 1, "EF7")
 }
 
+// Validates: R-6.7.7
 func TestClassifyFile_EF8_RemoteDeleted(t *testing.T) {
 	// EF8: baseline exists, remote event with IsDeleted=true, no local events
 	// (local derived from baseline → unchanged).
@@ -2058,6 +2059,7 @@ func TestDetectLocalChange(t *testing.T) {
 	assert.False(t, detectLocalChange(view), "expected no change for folder")
 }
 
+// Validates: R-6.7.7
 func TestDetectRemoteChange(t *testing.T) {
 	// No baseline, remote exists → changed.
 	view := &PathView{

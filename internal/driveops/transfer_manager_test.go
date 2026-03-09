@@ -220,7 +220,7 @@ func TestTransferManager_FreshDownload_CtxCancel_PreservesPartial(t *testing.T) 
 	assert.NotZero(t, info.Size(), "expected .partial to have data")
 }
 
-// Validates: R-5.2
+// Validates: R-5.2, R-6.8.3
 func TestTransferManager_ResumeDownload_Success(t *testing.T) {
 	t.Parallel()
 

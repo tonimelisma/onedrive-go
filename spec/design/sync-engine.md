@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/engine.go, internal/sync/engine_shortcuts.go, internal/sync/orchestrator.go, internal/sync/drive_runner.go, sync.go, sync_helpers.go
 
-Implements: R-2.1 [implemented], R-2.6 [verified], R-2.8 [implemented], R-3.4.2 [verified]
+Implements: R-2.1 [verified], R-2.6 [verified], R-2.8 [implemented], R-3.4.2 [verified]
 
 ## Engine (`engine.go`)
 

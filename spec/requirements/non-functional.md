@@ -67,10 +67,10 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.7.1: The system shall handle delta operation reordering (deletions arriving after creations at the same path). [verified]
 - R-6.7.2: The system shall normalize driveId values across all endpoints to a canonical form. [verified]
 - R-6.7.3: The system shall track items by ID and reconstruct paths from parent chains. [verified]
-- R-6.7.4: The system shall detect server-side file modification after upload (SharePoint enrichment) and not re-upload. [implemented]
+- R-6.7.4: The system shall detect server-side file modification after upload (SharePoint enrichment) and not re-upload. [verified]
 - R-6.7.5: The system shall handle HTTP 410 (delta token expiry) with full re-enumeration. [verified]
 - R-6.7.6: The system shall enforce upload chunk alignment to 320 KiB boundaries. [verified]
-- R-6.7.7: The system shall not compare hashes for deleted items. [implemented]
+- R-6.7.7: The system shall not compare hashes for deleted items. [verified]
 - R-6.7.8: The system shall unconditionally URL-decode item names in all API responses. [verified]
 - R-6.7.9: The system shall filter out OneNote package items (`type: "oneNote"`) that lack standard file/folder facets. [verified]
 - R-6.7.10: The system shall deduplicate identical items appearing multiple times within a single delta response, keeping the last occurrence per item ID. [verified]
@@ -91,11 +91,11 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.7.25: When re-uploading a modified file to Business/SharePoint, the system shall accept the unavoidable extra version created by the API (unfixed Microsoft bug) without attempting futile workarounds. [planned]
 - R-6.7.26: The system shall handle absent `lastModifiedDateTime` (null) on API-initiated deletions without error. [planned]
 
-## R-6.8 Network Resilience [implemented]
+## R-6.8 Network Resilience [verified]
 
 - R-6.8.1: The system shall respect 429 (Too Many Requests) with Retry-After headers. [verified]
 - R-6.8.2: The system shall use exponential backoff with jitter for transient failures. [verified]
-- R-6.8.3: All transfers shall be resumable after network interruption. [implemented]
+- R-6.8.3: All transfers shall be resumable after network interruption. [verified]
 
 ## R-6.9 Packaging [future]
 
