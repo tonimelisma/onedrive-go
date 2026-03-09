@@ -51,7 +51,7 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.5.2: Every sync operation shall be atomic — incomplete operations shall not corrupt state. [verified]
 - R-6.5.3: On startup, the system shall detect items stuck in `syncing` state and reset them. [verified]
 
-## R-6.6 Observability [implemented]
+## R-6.6 Observability [verified]
 
 - R-6.6.1: The system shall support dual-channel logging: console (stderr) and log file. [verified]
 - R-6.6.2: Console verbosity shall be controlled by `--quiet`, `--verbose`, and `--debug` flags. [verified]
