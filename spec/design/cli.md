@@ -44,3 +44,10 @@ Single-instance enforcement via advisory file lock. Created at daemon start, rem
 ## Logging (`internal/logfile/logfile.go`)
 
 Log file creation with parent directory auto-creation. Append mode. Retention-based rotation (`log_retention_days`).
+
+## Design Constraints
+
+- Config flows through Cobra context (`CLIContext` stored via `context.WithValue` with unexported key type). No global flag variables.
+- Two-phase `PersistentPreRunE`: Phase 1 (all commands) reads flags + creates logger. Phase 2 (data commands only) loads config + resolves drive. Commands skip Phase 2 via `skipConfigAnnotation` in `Annotations`.
+- `SessionProvider` caches `TokenSource`s by token file path — multiple drives sharing an account share one `TokenSource`, preventing OAuth2 refresh token rotation races.
+- CLI handlers use `cmd.Context()` for signal propagation. Exception: upload session cancel paths use `context.Background()` because the cancel must succeed even when the original context is done.

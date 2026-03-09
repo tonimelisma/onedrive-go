@@ -19,6 +19,8 @@ All write methods use optimistic concurrency (WHERE clauses preventing stale upd
 
 Typed sub-interfaces enforce transition ownership at compile time. Each caller receives the narrowest interface it needs. See [data-model.md](data-model.md) for the full interface-to-caller mapping.
 
+`SyncStore.Load()` uses a cache-through pattern: returns cached `*Baseline` if non-nil. `Commit()` invalidates the cache before calling `Load()` to refresh. For N conflict resolutions, this reduces 2N DB loads to 1 initial load + N refreshes.
+
 ## Migrations (`migrations.go`)
 
 Embedded `.sql` files via Go `embed.FS`. Applied in order on startup. The `schema_migrations` table tracks versions. DB backed up before destructive migrations.

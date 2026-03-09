@@ -48,3 +48,6 @@ Sentinel errors: `ErrGone` (410), `ErrNotFound` (404), `ErrThrottled` (429), `Er
 - `graph/` exposes concrete types, not interfaces (`graph.Client`, `graph.Item`)
 - `graph/` does NOT import `config/` — callers pass token paths directly
 - `tokenfile/` is a leaf package (stdlib + oauth2 only)
+- Token refresh uses a forked `golang.org/x/oauth2` (`github.com/tonimelisma/oauth2`, branch `on-token-change`) with `Config.OnTokenChange` callback for persistence. Tracks upstream proposal `golang/go#77502`.
+- Pre-authenticated URLs (`@microsoft.graph.downloadUrl`, upload session URLs) bypass the Graph API — use `httpClient.Do(req)` directly, no base URL prefix, no auth headers. Never log these URLs.
+- Two HTTP clients: `defaultHTTPClient()` (30-second timeout for metadata) and `transferHTTPClient()` (no timeout for large file transfers, bounded only by context).

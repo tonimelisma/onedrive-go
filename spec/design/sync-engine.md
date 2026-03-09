@@ -38,3 +38,8 @@ Cobra command wiring. Sets up the orchestrator, handles `--watch`, `--download-o
 - PID file with flock for single-instance enforcement
 - Two-signal shutdown (drain, then force)
 - Periodic full reconciliation (default 24h)
+
+### Rationale
+
+- **Idempotent planner = free crash recovery**: On restart after crash, delta re-observation produces the same actions. Items completed before crash are in baseline (EF1 no-ops). Items not completed get fresh actions. No persistent action queue needed.
+- **Always use Orchestrator, even for single drive**: N=1 means one DriveRunner — same logic, no special case. Prevents "works for N=1 but breaks for N=2" class of bugs.

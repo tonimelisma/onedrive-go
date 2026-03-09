@@ -45,3 +45,14 @@ Collects events from both observers, deduplicates, debounces (default 2 seconds)
 ## Permissions (`permissions.go`)
 
 Read-only detection for shared content. When a write attempt returns 403, the path prefix is recorded and subsequent writes to that prefix are suppressed (download-only for that subtree).
+
+## Design Constraints
+
+- Filtering is symmetric: any exclusion applied to local items (always-excluded suffixes, invalid OneDrive names) is also applied to remote items in `classifyItem()`. This prevents remote-only files (e.g., temp files uploaded via web UI) from entering the planner.
+- The `alwaysExcludedSuffixes` list does NOT include `.db`/`.db-wal`/`.db-shm` — those caused false positives on legitimate data files. The sync engine's state DB lives outside the sync root by design.
+- Personal Vault items (`specialFolder.name == "vault"`) are excluded by default. Vault auto-locks after 20 minutes → locked items appear deleted in delta → phantom deletions. `sync_vault = true` escape hatch.
+- FullScan uses three sequential phases: (1) Walk (readdir + Lstat + classify), (2) Hash (parallel QuickXorHash via `errgroup.SetLimit(checkWorkers)`), (3) Deletion detection (compare observed paths vs baseline).
+
+### Rationale
+
+`fsnotify/fsnotify` (v1.9.0, 10.6k stars, used by Hugo/Docker/Kubernetes/Syncthing) was chosen over `rjeczalik/notify` (unmaintained since Jan 2023).

@@ -52,6 +52,11 @@ Resolution order: exact canonical ID → exact display_name (case-insensitive) �
 
 `drive list`, `drive add`, `drive remove`, `drive search`. Drive add creates a config section with auto-generated display_name and sync_dir.
 
+## Design Constraints
+
+- DriveID is cached in token metadata at login — NEVER stored in config. `discoverAccount()` returns the primary drive ID, saved via `tokenfile.LoadAndMergeMeta()`. Both Orchestrator and Engine reject zero DriveID.
+- SharePoint document libraries have their OWN drive_id, different from the business account's primary drive. Drive metadata files (`drive_*.json`) store the correct per-drive ID.
+
 ### Rationale
 
 - **`driveid` is a leaf package** (stdlib only): parsing, construction, formatting. No business logic, no config imports.
