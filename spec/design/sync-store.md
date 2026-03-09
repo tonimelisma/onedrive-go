@@ -13,7 +13,7 @@ Key operations:
 - `CommitOutcome()`: updates baseline + `remote_state` status per action
 - `RecordFailure()`: writes to `sync_failures` with retry scheduling
 
-All write methods use optimistic concurrency (WHERE clauses preventing stale updates). Concurrency safety from SQLite WAL mode with 5-second busy timeout.
+All write methods use optimistic concurrency (WHERE clauses preventing stale updates). Concurrency safety from SQLite WAL mode with 5-second busy timeout. Implements: R-6.3.2 [implemented]
 
 ## Store Interfaces (`store_interfaces.go`)
 

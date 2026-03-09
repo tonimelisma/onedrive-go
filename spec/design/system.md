@@ -4,6 +4,8 @@ Implements: R-6.2.1 [implemented], R-6.2.2 [implemented], R-6.3.1 [implemented]
 
 ## Package Structure
 
+Implements: R-6.1.4 [implemented], R-6.1.5 [implemented], R-6.9.1 [implemented]
+
 ```
 .                             Root package (Cobra CLI commands)
 internal/

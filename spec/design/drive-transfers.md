@@ -10,6 +10,8 @@ Unified download/upload manager shared by both CLI file operations and the sync 
 
 ### Download
 
+Implements: R-6.2.3 [implemented]
+
 1. Create `.partial` file in target directory
 2. If `.partial` exists with content, resume via HTTP Range request
 3. Stream response body, computing QuickXorHash incrementally

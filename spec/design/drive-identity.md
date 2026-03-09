@@ -50,6 +50,8 @@ Resolution order: exact canonical ID â†’ exact display_name (case-insensitive) â
 
 ## CLI Drive Command (`drive.go`)
 
+Implements: R-3.3.1 [implemented], R-3.3.2 [implemented], R-3.3.3 [implemented], R-3.3.4 [implemented], R-3.6.1 [implemented], R-3.6.2 [implemented], R-3.6.3 [implemented]
+
 `drive list`, `drive add`, `drive remove`, `drive search`. Drive add creates a config section with auto-generated display_name and sync_dir.
 
 ## Design Constraints

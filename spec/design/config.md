@@ -24,6 +24,8 @@ The config file is read with a TOML parser (`BurntSushi/toml`) but written with 
 
 ## Drive Sections
 
+Implements: R-3.4.1 [implemented], R-3.4.3 [implemented], R-6.2.9 [implemented]
+
 Each drive section contains per-drive settings (sync_dir, filters, paused state). Drive resolution (`ResolveDrive`) matches by exact canonical ID → exact display_name (case-insensitive) → substring. Ambiguous matches produce an error with suggestions. `ResolveDrive()` returns both `*ResolvedDrive` and `*Config` — the raw config is needed by shared drive token resolution.
 
 Default sync directories are computed deterministically from the canonical ID + cached metadata using a two-level collision scheme: base name → + display_name → + email. `DefaultSyncDir()` is the single entry point.

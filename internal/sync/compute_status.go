@@ -21,7 +21,7 @@ const (
 // updated (the observation is a no-op for this row).
 //
 // Implements the 30-cell decision matrix from
-// docs/design/remote-state-separation.md §11.
+// spec/design/data-model.md (remote_state sync_status state machine).
 func computeNewStatus(currentStatus, currentHash, observedHash string, isDeleted bool) (string, bool) {
 	sameHash := currentHash == observedHash
 

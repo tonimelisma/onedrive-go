@@ -59,6 +59,8 @@ Per-side baselines for SharePoint enrichment correctness:
 
 ## Big-Delete Protection
 
+Implements: R-6.2.5 [implemented]
+
 Pure function on ActionPlan + Baseline. Triggers when:
 - Global delete count exceeds `BigDeleteMaxCount` (default: 1000)
 - Global delete percentage exceeds `BigDeleteMaxPercent` (default: 50%)

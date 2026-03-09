@@ -10,6 +10,8 @@ Cobra CLI with Unix-style verbs. Root command (`root.go`) handles global flags (
 
 ## Command Structure
 
+Implements: R-6.2.8 [implemented]
+
 | Command | File | Description |
 |---------|------|-------------|
 | `login`, `logout`, `whoami` | `auth.go` | Authentication (device code, PKCE, token management) |
@@ -39,9 +41,13 @@ Two-signal shutdown for watch mode: first SIGINT = drain current operations, sec
 
 ## PID File (`pidfile.go`)
 
+Implements: R-6.3.3 [implemented]
+
 Single-instance enforcement via advisory file lock. Created at daemon start, removed on shutdown. Stale PID files detected and cleaned up.
 
 ## Logging (`internal/logfile/logfile.go`)
+
+Implements: R-6.6.1 [implemented], R-6.6.2 [implemented], R-6.6.3 [implemented], R-6.6.4 [implemented]
 
 Log file creation with parent directory auto-creation. Append mode. Retention-based rotation (`log_retention_days`).
 
