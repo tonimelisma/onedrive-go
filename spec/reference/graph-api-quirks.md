@@ -62,6 +62,20 @@ Some responses return item names with URL encoding (e.g., `%20` for spaces, `%E6
 
 Items with a `package` facet (`type: "oneNote"`) have no `file` or `folder` facet. Database schemas expecting every item to have a type will fail. The normalization pipeline filters package items.
 
+### Delta Endpoint Consistency Lag
+
+The delta endpoint (`/drives/{driveID}/root/delta`) aggregates changes from a different consistency domain than REST item endpoints. After a mutation (e.g., `DELETE /items/{id}`), a direct `GET` on the item returns 404 within seconds, but the delta endpoint may not include the change for 5-60+ seconds. This causes the delta response to lag behind the observable state of individual items.
+
+Microsoft acknowledges this: "Due to replication delays, changes to the object do not show up immediately [...] You should retry [...] after some time to retrieve the latest changes."
+
+### Ephemeral Deletion Events
+
+Delta deletion events are delivered **exactly once**. If the client's token window advances past a deletion (including via a zero-event response that returns a new token), the deletion is permanently missed. A subsequent incremental delta call will never report that deletion again. Fresh delta (no token) enumerates only existing items — it never reports deletions. This means incremental delta is the **only** way to learn about deletions, and it has exactly one chance to deliver each one.
+
+The combination of consistency lag (above) and ephemeral deletions creates a window where: (1) a deletion is performed, (2) the client calls delta before the deletion propagates to the change log, (3) delta returns zero events + new token, (4) the client saves the new token, permanently skipping the deletion.
+
+Mitigation requires both a zero-event token guard (don't advance token on empty responses) and periodic full reconciliation (enumerate all items, detect orphans in baseline).
+
 ### Personal Phantom System Drives
 
 Every Personal account has 2-3 hidden system drives (face crops, albums) created by Microsoft for the Photos app. They report `driveType: "personal"` and share quota numbers with the real OneDrive, but return HTTP 400 `ObjectHandle is Invalid` when accessed. `GET /me/drive` (singular) returns the real drive. `GET /me/drives` (plural) returns all drives in non-deterministic order.
