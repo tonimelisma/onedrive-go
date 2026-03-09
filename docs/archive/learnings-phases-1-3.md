@@ -1,3 +1,4 @@
+<!-- ABSORBED → historical only, not migrated -->
 # Learnings — Institutional Knowledge Base
 
 Knowledge captured during implementation. Patterns, gotchas, and design decisions that future agents need.

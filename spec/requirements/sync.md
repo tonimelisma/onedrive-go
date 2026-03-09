@@ -38,6 +38,7 @@ All filter settings are per-drive (no global filter defaults).
 - R-2.4.5: When a directory contains a marker file (configurable name), the system shall exclude that directory. Whether the marker file supports gitignore-style patterns is TBD. [implemented]
 - R-2.4.6: When `sync_paths` is set, the system shall sync only the specified paths. [planned]
 - R-2.4.7: When `skip_symlinks = true`, the system shall exclude symlinks. Symlinked directories are always excluded from watch mode. [implemented]
+- R-2.4.8: When an item belongs to the Personal Vault, the system shall exclude it by default. The `sync_vault` option enables vault sync for users who accept the auto-lock risk. [implemented]
 
 ## R-2.5 Crash Recovery [implemented]
 

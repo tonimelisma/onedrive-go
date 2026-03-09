@@ -32,7 +32,7 @@ Two required interfaces (`Downloader`, `Uploader`) and two optional interfaces (
 
 ## Hash Utilities
 
-QuickXorHash computation for local files (`hash.go`). The `pkg/quickxorhash/` package implements the algorithm (vendored from rclone, BSD-0 license).
+QuickXorHash computation for local files (`hash.go`). The `pkg/quickxorhash/` package implements the algorithm (vendored from rclone, BSD-0 license). When a remote file lacks a hash (common on Business/SharePoint), a fallback chain is attempted: QuickXorHash → SHA256 → SHA1. `HashVerified` is set to false when the remote hash is empty.
 
 ## Cleanup
 

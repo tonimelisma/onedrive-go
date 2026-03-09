@@ -1,3 +1,4 @@
+<!-- ABSORBED → personal notes, not migrated -->
 Toni's cleanup list - to be ignored by AI agents
 - DRY
 - Naming things

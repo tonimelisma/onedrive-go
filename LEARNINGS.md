@@ -1,3 +1,4 @@
+<!-- ABSORBED → spec/design/*.md (25 entries distributed), remainder noise/already covered -->
 # Learnings — Institutional Knowledge Base
 
 Knowledge captured during implementation. Organized by topic. Historical learnings from the batch-pipeline sync engine (Phases 4.1-4.11) archived in `docs/archive/learnings-phases-1-3.md`.

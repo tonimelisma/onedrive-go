@@ -1,3 +1,4 @@
+<!-- ABSORBED → BACKLOG.md (B-344 through B-382, remaining unaddressed items) -->
 # Robustness Improvement Program — Investigation Plan
 
 ## Context

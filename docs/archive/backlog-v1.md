@@ -1,3 +1,4 @@
+<!-- ABSORBED → historical only, not migrated -->
 # Backlog
 
 ## Active (In Progress)

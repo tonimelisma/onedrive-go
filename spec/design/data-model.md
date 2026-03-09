@@ -89,7 +89,7 @@ Schema migrations use embedded `.sql` files applied in order on startup. The `sc
 
 ## Performance
 
-- **WAL checkpointing**: After initial sync, every 30 minutes, and on shutdown
+- **WAL checkpointing**: After initial sync, every 30 minutes, and on shutdown. Explicit `PRAGMA wal_checkpoint(TRUNCATE)` before database close ensures all WAL data is flushed to the main file.
 - **Prepared statements**: Cached for connection lifetime
 - **Per-action commits**: Each completed action committed individually for incremental durability
 - **VACUUM**: On schema migrations only, not routine maintenance

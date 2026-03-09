@@ -1,3 +1,4 @@
+<!-- ABSORBED → historical only, not migrated -->
 # Migration: Batch Pipeline to Event-Driven (Option E)
 
 > **ZERO PATH DEPENDENCY**: This document describes the Option E event-driven

@@ -25,7 +25,7 @@ Flat pool of `transfer_workers` goroutines. Each worker picks an action, execute
 Simple PUT (≤4 MiB) or resumable session (>4 MiB). Post-upload validation detects SharePoint enrichment.
 
 ### Deletes (`executor_delete.go`)
-Hash-before-delete guard for local deletions (verifies the file hasn't changed since planning). Remote deletes use `If-Match` with eTag. Local deletes go to OS trash if configured.
+Hash-before-delete guard for local deletions (verifies the file hasn't changed since planning). Remote deletes use `If-Match` with eTag. Local deletes go to OS trash if configured. When a local folder delete would fail due to non-empty directory containing only disposable files (OS junk like `.DS_Store`, editor temps like `.swp`, invalid OneDrive names), `deleteLocalFolder` auto-removes them before retrying the folder delete.
 
 ### Conflicts (`executor_conflict.go`)
 Default: keep both versions. Remote version at original path, local version renamed to `<name>.conflict-<timestamp>.<ext>`. Conflict recorded in `conflicts` table.
@@ -50,6 +50,7 @@ Pure function `computeNewStatus()` determines the new `sync_status` for a `remot
 - Edit-delete conflicts (local edit, remote delete) auto-resolve: local modified version wins and is uploaded. Conflict recorded as `resolved_by: "auto"`.
 - Individual worker failures increment `report.Failed` and collect errors in `report.Errors`, but `RunOnce()` returns nil. Tests check `report.Failed >= 1`, not `err != nil`.
 - Two concurrency knobs: `transfer_workers` (default 8, range 4-64) for file operations, `check_workers` (default 4, range 1-16) for QuickXorHash computation.
+- All executor write operations use `containedPath()` with `filepath.IsLocal()` to reject path traversal. Symlink escape from the sync directory is prevented by resolving symlinks on the parent directory via `filepath.EvalSymlinks`.
 
 ## CLI Status (`status.go`)
 

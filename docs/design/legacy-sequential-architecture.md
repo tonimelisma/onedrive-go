@@ -1,3 +1,4 @@
+<!-- ABSORBED → historical only, not migrated -->
 # Legacy Sequential Architecture Reference
 
 **Status**: Migration reference document (not a spec)

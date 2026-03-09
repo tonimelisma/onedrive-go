@@ -270,6 +270,104 @@ The `status` command shows flat "Retrying: N" with no scope context.
 
 **Implements**: R10.3, R10.4, R11.1-R11.4 from `docs/design/retry-transition-requirements.md`.
 
+## Prerelease Robustness — Remaining Items
+
+From [prerelease_review.md](docs/archive/prerelease_review.md). Items B-312 to B-323 already done. Remaining:
+
+### Inc 1: Security — Path Containment (partial)
+
+| ID | Title | Priority | Notes |
+|----|-------|----------|-------|
+| B-344 | Remote filename validation (reject `..`, `/`, `\`, null bytes, control chars) in `classifyAndConvert` | P2 | Inc 1 deliverable 2. Scanner validates local names but remote API responses NOT validated for path traversal chars. |
+| B-345 | Written threat model document | P3 | Inc 1 deliverable 5. Document all attack surfaces and guards. |
+
+### Inc 2: Resource Bounds & DoS Resistance (partial)
+
+| ID | Title | Priority | Notes |
+|----|-------|----------|-------|
+| B-346 | Per-transfer timeout or connection-level deadline for `transferHTTPClient()` | P3 | Inc 2 deliverable 2. `Timeout: 0` relies on context. Stalled connection without context cancellation hangs forever. |
+| B-347 | Total item cap during delta enumeration | P3 | Inc 2 deliverable 3. `maxObserverPages = 10000` × items per page = unbounded memory. |
+| B-348 | Per-path event cap in Buffer | P4 | Inc 2 deliverable 4. `defaultBufferMaxPaths` caps path count but not events-per-path. |
+| B-349 | Documentation of resource consumption guarantees | P4 | Inc 2 deliverable 5. Per-component resource bounds. |
+
+### Inc 3: Concurrency Correctness
+
+| ID | Title | Priority | Notes |
+|----|-------|----------|-------|
+| B-350 | Lock ordering contract document | P3 | Inc 3 deliverable 1. Every mutex, documented hierarchy. `tracker.go:154` has nested `mu` → `cyclesMu`. |
+| B-351 | Channel lifecycle document | P4 | Inc 3 deliverable 2. Every channel: who creates/closes/reads/writes. |
+| B-352 | Audit `ForEachPath` callers for re-entrancy safety | P2 | Inc 3 deliverable 3. Holds read lock during callback — write from callback → deadlock. |
+| B-353 | Mutex or `sync.Once` on `SyncStore.Load` | P3 | Inc 3 deliverable 4. Concurrent `Load` calls race on `m.baseline = b`. |
+| B-354 | Targeted `-race` stress tests for DepTracker, Buffer, WorkerPool | P3 | Inc 3 deliverable 5. |
+
+### Inc 4: State Machine Invariants (partial)
+
+| ID | Title | Priority | Notes |
+|----|-------|----------|-------|
+| B-355 | Sub-second uniqueness in `conflictCopyPath` | P3 | Inc 4 deliverable 3. Second-precision timestamps — two conflicts in same second collide. |
+| B-356 | Fix zero-byte NULL conflation in baseline | P2 | Inc 4 deliverable 4. Zero-byte files map to `NULL` in SQLite — can't distinguish from "size unknown". Use `sql.NullInt64{Valid: true, Int64: 0}`. |
+| B-357 | Explicit error for unknown ActionType in `applySingleOutcome` | P3 | Inc 4 deliverable 5. Default case returns nil — silently drops outcomes. |
+| B-358 | Property-based tests for planner with random inputs | P4 | Inc 4 deliverable 6. `testing/quick` or manual generators. |
+
+### Inc 5: Error Handling Completeness
+
+| ID | Title | Priority | Notes |
+|----|-------|----------|-------|
+| B-359 | Audit all `_ = ...` patterns in production code | P3 | Inc 5 deliverable 1. |
+| B-360 | Add value assertions after bare `assert.NoError` calls | P4 | Inc 5 deliverable 2. 42+ bare assertions could mask incorrect results. |
+| B-361 | Error return from deferred `Close` on write paths | P3 | Inc 5 deliverable 3. Deferred close errors universally ignored. |
+| B-362 | Panic recovery in scanner hash phase | P3 | Inc 5 deliverable 4. Worker pool has recovery; scanner does not. |
+
+### Inc 6: API Contract Fidelity (partial)
+
+| ID | Title | Priority | Notes |
+|----|-------|----------|-------|
+| B-363 | Nil guards on all Item field accesses in `observer_remote.go` | P2 | Inc 6 deliverable 2. Delta items with missing `Name`, `ParentReference`, etc. |
+| B-364 | Upload URL validation (HTTPS scheme, Microsoft domain) | P3 | Inc 6 deliverable 3. `UploadSession.UploadURL` received with no URL validation. |
+| B-365 | NFC normalization idempotency test | P4 | Inc 6 deliverable 4. |
+
+### Inc 7: Credential Safety (partial)
+
+| ID | Title | Priority | Notes |
+|----|-------|----------|-------|
+| B-366 | Audit all `slog.*` calls for potential secret leakage | P2 | Inc 7 deliverable 2. |
+| B-367 | Audit all error message strings for embedded secrets | P3 | Inc 7 deliverable 3. `GraphError.Message` includes API error body. |
+| B-368 | Test that captures log output and verifies no tokens/pre-auth URLs appear | P3 | Inc 7 deliverable 4. |
+
+### Inc 8: Encapsulation (partial)
+
+| ID | Title | Priority | Notes |
+|----|-------|----------|-------|
+| B-369 | Unexport `graph.Client.Do`/`DoWithHeaders` if unused externally | P4 | Inc 8 deliverable 3. |
+| B-370 | Evaluate decoupling `sync` → `graph` error dependency via interface | P4 | Inc 8 deliverable 4. |
+
+### Inc 9: Test Completeness (partial)
+
+| ID | Title | Priority | Notes |
+|----|-------|----------|-------|
+| B-371 | Planner property tests (random inputs, verify DAG invariant) | P3 | Inc 9 deliverable 2. Same as B-358, cross-reference. |
+| B-372 | Buffer overflow test with drop metric verification | P3 | Inc 9 deliverable 3. |
+| B-373 | Transfer manager resume edge case tests (corrupt partial, changed remote, oversized) | P3 | Inc 9 deliverable 4. |
+| B-374 | Root package unit test expansion (target 60%+) | P4 | Inc 9 deliverable 5. Currently ~47%. |
+
+### Inc 10: Operational Resilience (partial)
+
+| ID | Title | Priority | Notes |
+|----|-------|----------|-------|
+| B-375 | Disk full during baseline commit — in-memory cache consistency | P3 | Inc 10 deliverable 1 (partial). |
+| B-376 | Graceful shutdown test under active worker pool | P3 | Inc 10 deliverable 2. SIGTERM during active transfers. |
+| B-377 | inotify partial-watch cleanup verification | P4 | Inc 10 deliverable 4. Already-added watches cleaned up on setup failure? |
+| B-378 | Documentation of degraded-mode behavior guarantees | P4 | Inc 10 deliverable 5. |
+
+### Inc 11: Architecture Re-evaluation
+
+| ID | Title | Priority | Notes |
+|----|-------|----------|-------|
+| B-379 | Architecture re-evaluation: `internal/sync/` package splitting | P4 | Inc 11 question 1. 8k lines in one package — evaluate sub-packages. |
+| B-380 | Architecture re-evaluation: `sync` → `graph` error coupling | P4 | Inc 11 question 2+7. Same as B-370. |
+| B-381 | Architecture re-evaluation: baseline storage abstraction | P4 | Inc 11 question 3. `BaselineStore` interface? |
+| B-382 | Architecture re-evaluation: CLI structure scaling | P5 | Inc 11 question 6. 21 files / 4k lines — group by domain? |
+
 ## Phase 7 Follow-up
 
 | ID | Title | Priority | Package | Notes |
