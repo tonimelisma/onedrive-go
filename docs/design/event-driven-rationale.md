@@ -1,3 +1,4 @@
+<!-- ABSORBED → spec/design/system.md (rationale section) -->
 # Architectural Rationale: Event-Driven Design
 
 > **Status: Historical ADR.** This document records the architectural decision

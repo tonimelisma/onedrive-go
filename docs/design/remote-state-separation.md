@@ -1,3 +1,4 @@
+<!-- ABSORBED → spec/design/data-model.md (schema) + spec/design/sync-store.md (interfaces, Phase 4) -->
 # Remote State Separation — Architectural Design
 
 > **Scope**: Design document only. No code changes. This document is the single

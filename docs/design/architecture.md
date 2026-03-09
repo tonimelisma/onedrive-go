@@ -1,3 +1,4 @@
+<!-- ABSORBED → spec/design/system.md (package structure, dependency rules, pipeline overview) -->
 # System Architecture: onedrive-go
 
 > **Blank-slate design**: This document describes the event-driven architecture

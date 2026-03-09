@@ -1,3 +1,4 @@
+<!-- ABSORBED → rationale sections distributed across spec/design/ module docs (Phase 3/4) -->
 # Key Decisions
 
 Architectural and design decisions for onedrive-go. Referenced from [CLAUDE.md](../../CLAUDE.md).

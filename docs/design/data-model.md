@@ -1,3 +1,4 @@
+<!-- ABSORBED → spec/design/data-model.md (schema, state machine, migrations, performance) -->
 # Data Model
 
 > **BLANK-SLATE DESIGN**: This document describes the event-driven sync
