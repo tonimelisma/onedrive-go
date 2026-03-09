@@ -10,6 +10,7 @@ import (
 // --- RED tests for B-272 + foundation fixes ---
 // All of these tests should FAIL before the GREEN implementation.
 
+// Validates: R-3.2.4
 func TestNewCanonicalID_SharedType(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -53,6 +54,7 @@ func TestNewCanonicalID_SharedType(t *testing.T) {
 	}
 }
 
+// Validates: R-3.2.4
 func TestNewCanonicalID_SharedFieldRouting(t *testing.T) {
 	cid, err := NewCanonicalID("shared:me@outlook.com:b!TG9yZW0:01ABCDEF")
 	require.NoError(t, err)
@@ -77,6 +79,7 @@ func TestNewCanonicalID_BusinessRejectsExtraParts(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// Validates: R-3.2.4
 func TestConstructShared(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -130,6 +133,7 @@ func TestConstructShared(t *testing.T) {
 	}
 }
 
+// Validates: R-3.2.4
 func TestCanonicalID_IsShared(t *testing.T) {
 	tests := []struct {
 		name string
@@ -225,6 +229,7 @@ func TestCanonicalID_SourceItemID(t *testing.T) {
 	}
 }
 
+// Validates: R-3.2.4
 func TestCanonicalID_SharedTextRoundTrip(t *testing.T) {
 	raw := "shared:me@outlook.com:b!TG9yZW0:01ABCDEF"
 	original := MustCanonicalID(raw)

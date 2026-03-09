@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Validates: R-3.2.1, R-3.2.2, R-3.2.3
 func TestNewCanonicalID(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -93,6 +94,7 @@ func TestMustCanonicalID(t *testing.T) {
 	})
 }
 
+// Validates: R-3.2.1, R-3.2.2
 func TestConstruct(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -153,6 +155,7 @@ func TestConstruct(t *testing.T) {
 	}
 }
 
+// Validates: R-3.2.3
 func TestConstructSharePoint(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -206,6 +209,7 @@ func TestConstructSharePoint(t *testing.T) {
 	}
 }
 
+// Validates: R-3.2.1, R-3.2.2, R-3.2.3
 func TestCanonicalID_DriveType(t *testing.T) {
 	tests := []struct {
 		name string
@@ -343,6 +347,7 @@ func TestCanonicalID_Library(t *testing.T) {
 	}
 }
 
+// Validates: R-3.2.1, R-3.2.2, R-3.2.3, R-3.2.4
 func TestCanonicalID_TextRoundTrip(t *testing.T) {
 	tests := []struct {
 		name string

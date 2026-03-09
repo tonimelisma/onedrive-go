@@ -65,7 +65,7 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 Constraints derived from the OneDrive API that the system must satisfy for correctness. See [graph-api-quirks.md](../reference/graph-api-quirks.md) for the underlying API behaviors.
 
 - R-6.7.1: The system shall handle delta operation reordering (deletions arriving after creations at the same path). [implemented]
-- R-6.7.2: The system shall normalize driveId values across all endpoints to a canonical form. [implemented]
+- R-6.7.2: The system shall normalize driveId values across all endpoints to a canonical form. [verified]
 - R-6.7.3: The system shall track items by ID and reconstruct paths from parent chains. [implemented]
 - R-6.7.4: The system shall detect server-side file modification after upload (SharePoint enrichment) and not re-upload. [implemented]
 - R-6.7.5: The system shall handle HTTP 410 (delta token expiry) with full re-enumeration. [implemented]
