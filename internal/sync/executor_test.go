@@ -301,6 +301,7 @@ func TestExecutor_RemoteMove(t *testing.T) {
 // Download tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-5.1
 func TestExecutor_Download_Success(t *testing.T) {
 	t.Parallel()
 
@@ -426,6 +427,7 @@ func TestExecutor_Download_ZeroByte(t *testing.T) {
 // Download hash mismatch tests (B-132)
 // ---------------------------------------------------------------------------
 
+// Validates: R-5.1
 func TestExecutor_Download_HashMismatch_Retries(t *testing.T) {
 	t.Parallel()
 
@@ -542,6 +544,7 @@ func TestExecutor_Download_HashMatch_NoRetry(t *testing.T) {
 // Upload tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-5.1
 func TestExecutor_Upload_SimpleSuccess(t *testing.T) {
 	t.Parallel()
 
@@ -638,6 +641,7 @@ func TestExecutor_Upload_B068_ZeroDriveIDFilled(t *testing.T) {
 	assert.Equal(t, driveid.New(testDriveID), capturedDriveID)
 }
 
+// Validates: R-5.1
 func TestExecutor_Upload_LargeFileSuccess(t *testing.T) {
 	t.Parallel()
 
@@ -670,6 +674,7 @@ func TestExecutor_Upload_LargeFileSuccess(t *testing.T) {
 // Local delete tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-6.2.4
 func TestExecutor_LocalDelete_HashMatch(t *testing.T) {
 	t.Parallel()
 
@@ -697,6 +702,7 @@ func TestExecutor_LocalDelete_HashMatch(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "file should have been deleted")
 }
 
+// Validates: R-6.2.4
 func TestExecutor_LocalDelete_HashMismatch_ConflictCopy(t *testing.T) {
 	t.Parallel()
 
@@ -882,6 +888,7 @@ func TestExecutor_RemoteDelete_403Skip(t *testing.T) {
 // Conflict tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.3.1
 func TestExecutor_Conflict_EditEdit_KeepBoth(t *testing.T) {
 	t.Parallel()
 
@@ -1515,6 +1522,7 @@ func TestExecutor_SyncedUpdate_BaselineFallback(t *testing.T) {
 // Local delete with trash tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-6.4.4
 func TestExecutor_LocalDelete_TrashSuccess(t *testing.T) {
 	t.Parallel()
 
@@ -1544,6 +1552,7 @@ func TestExecutor_LocalDelete_TrashSuccess(t *testing.T) {
 	assert.True(t, trashCalled, "trashFunc should have been called")
 }
 
+// Validates: R-6.4.4
 func TestExecutor_LocalDelete_TrashFailure_FallsBackToRemove(t *testing.T) {
 	t.Parallel()
 
@@ -1596,6 +1605,7 @@ func TestExecutor_LocalDelete_NoTrashFunc_DirectRemove(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "file should have been deleted")
 }
 
+// Validates: R-6.4.4
 func TestExecutor_LocalDeleteFolder_TrashSuccess(t *testing.T) {
 	t.Parallel()
 

@@ -64,6 +64,7 @@ Planned work: search `spec/` for `[planned]`. Reference docs: `spec/reference/`.
 
 **Test style**:
 - **All assertions use testify** (`github.com/stretchr/testify/assert` and `require`). Never use stdlib `t.Fatal`, `t.Fatalf`, `t.Error`, `t.Errorf` for assertions. Use `require` when the test cannot continue without the assertion passing (nil checks, error checks before using result). Use `assert` for non-fatal value comparisons.
+- **Requirement traceability**: Every test that validates a spec requirement MUST have a `// Validates: R-X.Y.Z` comment on the line immediately before the `func Test...` declaration. Multiple requirements use comma separation: `// Validates: R-1.1, R-1.2`. For table-driven subtests, place the comment on the subtest case struct. This enables `grep -r "Validates:"` to produce a full traceability matrix.
 - Never pass nil context — runtime panics not caught by compiler
 - Table-driven tests where appropriate, with specific assertions (check values, not just "no error")
 

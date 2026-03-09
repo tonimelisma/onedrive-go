@@ -12,6 +12,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
+// Validates: R-2.6
 func TestNewResumeCmd_Structure(t *testing.T) {
 	t.Parallel()
 

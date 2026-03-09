@@ -33,6 +33,7 @@ func (errorReadCloser) Close() error {
 	return nil
 }
 
+// Validates: R-1.3, R-5.3
 func TestSimpleUpload_Success(t *testing.T) {
 	content := "simple upload file content"
 
@@ -238,6 +239,7 @@ func TestCreateUploadSession_DecodeError(t *testing.T) {
 	assert.Contains(t, err.Error(), "decoding upload session response")
 }
 
+// Validates: R-5.3
 func TestUploadChunk_Intermediate(t *testing.T) {
 	chunkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPut, r.Method)
@@ -433,6 +435,7 @@ func TestCancelUploadSession_ContextCanceled(t *testing.T) {
 	require.Error(t, err)
 }
 
+// Validates: R-5.3, R-6.7.6
 func TestChunkAlignment(t *testing.T) {
 	assert.Equal(t, 327680, ChunkAlignment)
 }

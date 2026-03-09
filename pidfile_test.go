@@ -33,7 +33,7 @@ func TestWritePIDFile_CreatesFileWithCurrentPID(t *testing.T) {
 	assert.Equal(t, os.Getpid(), pid)
 }
 
-// Validates: R-6.3.1
+// Validates: R-6.3.1, R-6.3.3
 func TestWritePIDFile_FlockPreventsSecondAcquisition(t *testing.T) {
 	t.Parallel()
 

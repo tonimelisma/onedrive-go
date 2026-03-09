@@ -76,6 +76,7 @@ func TestMe_Error(t *testing.T) {
 	assert.ErrorIs(t, err, ErrUnauthorized)
 }
 
+// Validates: R-3.1
 func TestDrives_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
@@ -154,6 +155,7 @@ func TestDrives_Empty(t *testing.T) {
 	assert.Empty(t, drives)
 }
 
+// Validates: R-3.1
 func TestPrimaryDrive_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
@@ -205,6 +207,7 @@ func TestPrimaryDrive_Error(t *testing.T) {
 	require.Error(t, err)
 }
 
+// Validates: R-3.1
 func TestDrive_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)

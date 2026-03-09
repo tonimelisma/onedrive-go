@@ -158,6 +158,7 @@ func TestKick_Coalescing(t *testing.T) {
 	assert.Len(t, r.kickCh, 0)
 }
 
+// Validates: R-6.5.3
 func TestReconcile_DispatchRetriableItems(t *testing.T) {
 	rows := []SyncFailureRow{
 		makeFailedRow("a.txt", strDownload, 2),

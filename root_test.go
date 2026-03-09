@@ -47,6 +47,7 @@ func TestBuildLogger_Debug(t *testing.T) {
 	assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelDebug))
 }
 
+// Validates: R-6.6.2
 func TestBuildLogger_ConfigDebug(t *testing.T) {
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogLevel: "debug"},
@@ -537,6 +538,7 @@ func TestBuildHandler_UnknownFormatWarnsAndFallsBack(t *testing.T) {
 	assert.Contains(t, buf.String(), `unknown log format "xml"`)
 }
 
+// Validates: R-4.7.2, R-6.6.4
 func TestBuildHandler_JSONOutputFormat(t *testing.T) {
 	t.Parallel()
 
@@ -718,6 +720,7 @@ func TestErrVerifyMismatch_IsSentinel(t *testing.T) {
 
 // --- Command structure tests ---
 
+// Validates: R-1.2, R-6.2.8
 func TestNewGetCmd_Structure(t *testing.T) {
 	t.Parallel()
 
@@ -725,6 +728,7 @@ func TestNewGetCmd_Structure(t *testing.T) {
 	assert.Equal(t, "get <remote-path> [local-path]", cmd.Use)
 }
 
+// Validates: R-1.3
 func TestNewPutCmd_Structure(t *testing.T) {
 	t.Parallel()
 
@@ -732,6 +736,7 @@ func TestNewPutCmd_Structure(t *testing.T) {
 	assert.Equal(t, "put <local-path> [remote-path]", cmd.Use)
 }
 
+// Validates: R-1.4
 func TestNewRmCmd_Structure(t *testing.T) {
 	t.Parallel()
 
@@ -741,6 +746,7 @@ func TestNewRmCmd_Structure(t *testing.T) {
 	assert.NotNil(t, cmd.Flags().Lookup("permanent"))
 }
 
+// Validates: R-1.5
 func TestNewMkdirCmd_Structure(t *testing.T) {
 	t.Parallel()
 
@@ -858,6 +864,7 @@ func TestBuildLoggerDual_NoLogFile(t *testing.T) {
 	assert.Nil(t, closer, "closer should be nil when no log file is set")
 }
 
+// Validates: R-4.7.1, R-6.6.1
 func TestBuildLoggerDual_WithLogFile(t *testing.T) {
 	t.Parallel()
 
@@ -883,6 +890,7 @@ func TestBuildLoggerDual_WithLogFile(t *testing.T) {
 	assert.Contains(t, string(data), "key")
 }
 
+// Validates: R-4.7.2, R-6.6.4
 func TestBuildLoggerDual_FileGetsJSON(t *testing.T) {
 	t.Parallel()
 
@@ -910,6 +918,7 @@ func TestBuildLoggerDual_FileGetsJSON(t *testing.T) {
 	assert.Equal(t, "json check", record["msg"])
 }
 
+// Validates: R-6.6.3
 func TestBuildLoggerDual_IndependentLevels(t *testing.T) {
 	t.Parallel()
 

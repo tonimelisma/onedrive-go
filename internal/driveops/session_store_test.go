@@ -21,6 +21,7 @@ func testLogger(t *testing.T) *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+// Validates: R-5.2
 func TestSessionStore_SaveLoadDelete(t *testing.T) {
 	t.Parallel()
 
@@ -324,6 +325,7 @@ func TestSessionStore_Load_StaleSessionReturnsNil(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "stale session file should be deleted")
 }
 
+// Validates: R-5.2
 func TestSessionStore_CleanStale(t *testing.T) {
 	t.Parallel()
 

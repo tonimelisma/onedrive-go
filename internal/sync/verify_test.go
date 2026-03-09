@@ -9,6 +9,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
+// Validates: R-2.7
 func TestVerifyBaseline_AllMatch(t *testing.T) {
 	t.Parallel()
 
@@ -41,6 +42,7 @@ func TestVerifyBaseline_AllMatch(t *testing.T) {
 	assert.Empty(t, report.Mismatches)
 }
 
+// Validates: R-2.7
 func TestVerifyBaseline_MissingFile(t *testing.T) {
 	t.Parallel()
 
@@ -66,6 +68,7 @@ func TestVerifyBaseline_MissingFile(t *testing.T) {
 	assert.Equal(t, VerifyMissing, report.Mismatches[0].Status)
 }
 
+// Validates: R-2.7
 func TestVerifyBaseline_HashMismatch(t *testing.T) {
 	t.Parallel()
 

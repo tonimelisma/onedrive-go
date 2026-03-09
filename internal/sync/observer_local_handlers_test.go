@@ -111,6 +111,7 @@ func (s *sleepRecorder) getCalls() []time.Duration {
 // Watch tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.1.2
 func TestWatch_DetectsFileCreate(t *testing.T) {
 	t.Parallel()
 
@@ -275,6 +276,7 @@ func TestWatch_DeleteDirectoryRemovesWatch(t *testing.T) {
 	require.True(t, ev.IsDeleted)
 }
 
+// Validates: R-2.4
 func TestWatch_IgnoresExcludedFiles(t *testing.T) {
 	t.Parallel()
 

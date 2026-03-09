@@ -123,6 +123,7 @@ func TestGroupDrivesByAccount_Empty(t *testing.T) {
 	assert.Empty(t, grouped)
 }
 
+// Validates: R-6.3.2
 func TestNewStatusCmd_Structure(t *testing.T) {
 	cmd := newStatusCmd()
 	assert.Equal(t, "status", cmd.Name())

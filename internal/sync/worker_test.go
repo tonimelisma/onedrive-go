@@ -192,6 +192,7 @@ func TestWorkerPool_FolderCreate(t *testing.T) {
 	assert.True(t, ok, "baseline entry not found for Documents")
 }
 
+// Validates: R-5.1
 func TestWorkerPool_DependencyChain(t *testing.T) {
 	t.Parallel()
 
@@ -296,6 +297,7 @@ func TestWorkerPool_StopCancelsWork(t *testing.T) {
 	}
 }
 
+// Validates: R-5.1
 func TestWorkerPool_Stats(t *testing.T) {
 	t.Parallel()
 

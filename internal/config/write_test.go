@@ -72,6 +72,7 @@ sync_dir = "~/OneDrive"`), configFilePermissions)
 	assert.Equal(t, "~/Work", cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")].SyncDir)
 }
 
+// Validates: R-4.2.1
 func TestAppendDriveSection_CreatesFileWhenMissing(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
@@ -596,6 +597,7 @@ func TestBaseSyncDir_Shared_UnsafeCharsInDisplayName(t *testing.T) {
 
 // --- Comment preservation tests ---
 
+// Validates: R-4.2.2
 func TestCommentPreservation_AppendDriveSection(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
@@ -632,6 +634,7 @@ func TestCommentPreservation_AppendDriveSection(t *testing.T) {
 	assert.Contains(t, resultStr, `["business:alice@contoso.com"]`)
 }
 
+// Validates: R-4.2.2
 func TestCommentPreservation_SetDriveKey(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
@@ -659,6 +662,7 @@ sync_dir = "~/Work"
 	assert.Contains(t, resultStr, "paused = true")
 }
 
+// Validates: R-4.2.2
 func TestCommentPreservation_DeleteDriveSection(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
@@ -1100,6 +1104,7 @@ func TestScenario_DriveRemoveThenReAdd(t *testing.T) {
 
 // --- EnsureDriveInConfig tests ---
 
+// Validates: R-4.2.1
 func TestEnsureDriveInConfig_NewDrive_NoConfigFile(t *testing.T) {
 	// Isolate HOME so token paths resolve to temp dir.
 	t.Setenv("HOME", t.TempDir())

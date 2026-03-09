@@ -460,6 +460,7 @@ func TestBuffer_ThreadSafety(t *testing.T) {
 // FlushDebounced tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.1.2
 func TestFlushDebounced_SingleBatch(t *testing.T) {
 	t.Parallel()
 
@@ -494,6 +495,7 @@ func TestFlushDebounced_SingleBatch(t *testing.T) {
 	}
 }
 
+// Validates: R-2.1.2
 func TestFlushDebounced_MultipleWaves(t *testing.T) {
 	t.Parallel()
 
@@ -536,6 +538,7 @@ func TestFlushDebounced_MultipleWaves(t *testing.T) {
 	}
 }
 
+// Validates: R-2.1.2
 func TestFlushDebounced_DebounceResets(t *testing.T) {
 	t.Parallel()
 
