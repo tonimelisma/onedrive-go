@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -914,4 +915,129 @@ func TestDoPreAuthRetry_ContextCancelDuringNetworkBackoff(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
+}
+
+// sleepRecord captures sleep calls for throttle gate testing.
+type sleepRecord struct {
+	mu    sync.Mutex
+	calls []time.Duration
+}
+
+func (r *sleepRecord) sleep(_ context.Context, d time.Duration) error {
+	r.mu.Lock()
+	r.calls = append(r.calls, d)
+	r.mu.Unlock()
+
+	return nil
+}
+
+func (r *sleepRecord) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return len(r.calls)
+}
+
+// TestThrottleGate_429SetsDeadline verifies that a 429 with Retry-After sets
+// the account-wide throttle deadline, causing subsequent requests to sleep at
+// the throttle gate before proceeding.
+func TestThrottleGate_429SetsDeadline(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		n := calls.Add(1)
+		if n == 1 {
+			w.Header().Set("Retry-After", "5")
+			w.WriteHeader(http.StatusTooManyRequests)
+
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`ok`))
+	}))
+	defer srv.Close()
+
+	rec := &sleepRecord{}
+	client := NewClient(srv.URL, http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent")
+	client.sleepFunc = rec.sleep
+
+	// First request: 429 → retryBackoff sets throttledUntil → sleeps → retries → 200.
+	resp, err := client.Do(t.Context(), http.MethodGet, "/first", nil)
+	require.NoError(t, err)
+	resp.Body.Close()
+
+	// The retryBackoff sleep for the 429 should have been recorded.
+	require.GreaterOrEqual(t, rec.count(), 1, "retryBackoff should sleep on 429")
+
+	// Second request: waitForThrottle should detect the deadline and sleep.
+	sleepsBefore := rec.count()
+	resp, err = client.Do(t.Context(), http.MethodGet, "/second", nil)
+	require.NoError(t, err)
+	resp.Body.Close()
+
+	assert.Greater(t, rec.count(), sleepsBefore,
+		"second request should sleep at throttle gate due to Retry-After deadline")
+}
+
+// TestThrottleGate_ConcurrentWorkers verifies that multiple concurrent
+// goroutines all respect the throttle gate set by a 429 Retry-After response.
+func TestThrottleGate_ConcurrentWorkers(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		n := calls.Add(1)
+		if n == 1 {
+			w.Header().Set("Retry-After", "3")
+			w.WriteHeader(http.StatusTooManyRequests)
+
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`ok`))
+	}))
+	defer srv.Close()
+
+	rec := &sleepRecord{}
+	client := NewClient(srv.URL, http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent")
+	client.sleepFunc = rec.sleep
+
+	// First request sets throttledUntil via 429 Retry-After.
+	resp, err := client.Do(t.Context(), http.MethodGet, "/trigger", nil)
+	require.NoError(t, err)
+	resp.Body.Close()
+
+	// Launch 5 concurrent workers — all should hit the throttle gate.
+	const workers = 5
+
+	var wg sync.WaitGroup
+
+	sleepsBefore := rec.count()
+
+	for i := range workers {
+		wg.Add(1)
+
+		go func(idx int) {
+			defer wg.Done()
+
+			resp, doErr := client.Do(t.Context(), http.MethodGet, fmt.Sprintf("/worker-%d", idx), nil)
+			assert.NoError(t, doErr)
+
+			if resp != nil {
+				resp.Body.Close()
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	// All 5 workers should have called sleepFunc at the throttle gate.
+	sleepsFromWorkers := rec.count() - sleepsBefore
+	assert.GreaterOrEqual(t, sleepsFromWorkers, workers,
+		"all %d workers should sleep at throttle gate", workers)
 }

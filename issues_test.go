@@ -205,6 +205,31 @@ func TestPrintConflictsTable(t *testing.T) {
 	assert.Contains(t, output, "edit_edit")
 }
 
+func TestPrintConflictsTable_WithHistory(t *testing.T) {
+	t.Parallel()
+
+	conflicts := []sync.ConflictRecord{
+		{
+			ID:           "abcdefghijklmnop",
+			Path:         "/resolved.txt",
+			ConflictType: "edit_edit",
+			DetectedAt:   1700000000000000000,
+			Resolution:   "keep_local",
+			ResolvedBy:   "user",
+		},
+	}
+
+	var buf bytes.Buffer
+	printConflictsTable(&buf, conflicts, true)
+
+	output := buf.String()
+	assert.Contains(t, output, "RESOLUTION")
+	assert.Contains(t, output, "RESOLVED BY")
+	assert.Contains(t, output, "keep_local")
+	assert.Contains(t, output, "user")
+	assert.Contains(t, output, "/resolved.txt")
+}
+
 // --- failure output ---
 
 func TestToFailureJSON(t *testing.T) {
