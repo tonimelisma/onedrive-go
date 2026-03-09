@@ -1,3 +1,4 @@
+<!-- ABSORBED → spec/design/sync-execution.md -->
 # Execution Architecture
 
 This document is the definitive specification for the execution layer of

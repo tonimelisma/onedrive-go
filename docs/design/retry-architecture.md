@@ -1,3 +1,4 @@
+<!-- ABSORBED → spec/design/retry.md -->
 # Retry & Error Persistence Architecture
 
 ## Overview

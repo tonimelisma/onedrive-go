@@ -1,3 +1,4 @@
+<!-- ABSORBED → relevant design docs -->
 # Clock Skew Resilience Audit
 
 ## Summary

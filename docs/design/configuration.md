@@ -1,3 +1,4 @@
+<!-- ABSORBED → spec/design/config.md -->
 # Configuration Specification: onedrive-go
 
 This document specifies the complete configuration system for onedrive-go — file format, option catalog, drive sections, filtering, validation, hot reload, migration, and the interactive setup command. It is the definitive reference for every configurable behavior in the system.

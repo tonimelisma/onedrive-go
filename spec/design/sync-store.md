@@ -2,6 +2,45 @@
 
 GOVERNS: internal/sync/baseline.go, internal/sync/store_interfaces.go, internal/sync/migrations.go, internal/sync/verify.go, internal/sync/trash.go, issues.go, verify.go
 
-Baseline management, store interfaces, database migrations, verification, trash handling, and CLI issues/verify commands.
+Implements: R-2.5 [implemented], R-2.3.2 [implemented], R-2.3.3 [implemented], R-2.7 [implemented], R-6.4.4 [implemented], R-6.4.5 [implemented]
 
-<!-- placeholder — populated in Phase 4 -->
+## SyncStore (`baseline.go`)
+
+Database access layer exposing typed sub-interfaces. See [data-model.md](data-model.md) for the sub-interface table and schema details.
+
+Key operations:
+- `CommitObservation()`: atomically writes `remote_state` rows + advances delta token in a single transaction
+- `CommitOutcome()`: updates baseline + `remote_state` status per action
+- `RecordFailure()`: writes to `sync_failures` with retry scheduling
+
+All write methods use optimistic concurrency (WHERE clauses preventing stale updates). Concurrency safety from SQLite WAL mode with 5-second busy timeout.
+
+## Store Interfaces (`store_interfaces.go`)
+
+Typed sub-interfaces enforce transition ownership at compile time. Each caller receives the narrowest interface it needs. See [data-model.md](data-model.md) for the full interface-to-caller mapping.
+
+## Migrations (`migrations.go`)
+
+Embedded `.sql` files via Go `embed.FS`. Applied in order on startup. The `schema_migrations` table tracks versions. DB backed up before destructive migrations.
+
+## Verification (`verify.go`)
+
+`verify` command re-hashes local files and compares against baseline and remote state. Reports discrepancies: missing files, hash mismatches, extra files not in baseline.
+
+## Trash (`trash.go`)
+
+OS trash integration for local deletions triggered by remote changes:
+- **macOS**: moves to `~/.Trash/` with collision handling (append numeric suffix)
+- **Linux**: returns error (opt-in only, XDG trash not implemented)
+
+Controlled by `use_local_trash` config (default: true on macOS, false on Linux).
+
+## CLI Commands
+
+### Issues (`issues.go`)
+
+`issues` lists unresolved conflicts and failures. Sub-commands: `issues resolve <path>` (keep-local/keep-remote/keep-both), `issues clear <path>` (dismiss), `issues retry <path>` (retry failed item).
+
+### Verify (`verify.go` in root)
+
+CLI wiring for the verification command. Opens state DB read-only, runs verification, displays results.

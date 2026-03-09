@@ -1,3 +1,4 @@
+<!-- ABSORBED → spec/design/retry.md -->
 # Retry Architecture Transition — Requirements
 
 Specific, testable requirements derived from the design analysis in `retry-transition-design.md`.

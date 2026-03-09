@@ -1,3 +1,4 @@
+<!-- ABSORBED → spec/design/drive-identity.md -->
 # Account & Drive System Design
 
 ## Core Concepts

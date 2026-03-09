@@ -1,3 +1,4 @@
+<!-- ABSORBED → CLAUDE.md -->
 # Test Strategy: onedrive-go
 
 This document specifies the testing approach for onedrive-go — infrastructure, unit tests, integration tests, end-to-end tests, chaos/fault injection, performance benchmarks, regression suites, and CI pipeline configuration. It is designed to ensure that every safety invariant, API quirk, and sync algorithm decision row is covered by automated tests.

@@ -1,3 +1,4 @@
+<!-- ABSORBED → spec/design/drive-transfers.md -->
 # `internal/driveops/` — Authenticated Drive Access
 
 ## Problem

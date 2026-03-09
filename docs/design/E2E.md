@@ -1,3 +1,4 @@
+<!-- ABSORBED → CLAUDE.md -->
 # E2E Test Isolation Design
 
 ## Status: IMPLEMENTED

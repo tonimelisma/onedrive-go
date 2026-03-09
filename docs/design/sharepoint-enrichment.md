@@ -1,3 +1,4 @@
+<!-- ABSORBED → spec/design/drive-transfers.md -->
 # SharePoint Enrichment: Per-Side Hash Baselines
 
 > This document is the **design rationale** for per-side hash baselines

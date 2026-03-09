@@ -1,3 +1,4 @@
+<!-- ABSORBED → spec/design/retry.md + sync-execution.md -->
 # Failure Analysis: Sync Engine Error Handling
 
 ## Overview

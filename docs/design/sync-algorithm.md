@@ -1,3 +1,4 @@
+<!-- ABSORBED → spec/design/sync-*.md -->
 # Sync Algorithm Specification
 
 > This document specifies the complete synchronization algorithm for

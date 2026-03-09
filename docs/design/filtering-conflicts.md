@@ -1,3 +1,4 @@
+<!-- ABSORBED → spec/design/sync-planning.md -->
 # Filtering Conflicts Analysis
 
 > **Decision IDs FC-1 through FC-12.** This document analyzes 12 conflicts,

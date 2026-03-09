@@ -1,3 +1,4 @@
+<!-- ABSORBED → spec/design/drive-identity.md -->
 # Multi-Account / Multi-Drive Architecture
 
 > **Status**: All decision points resolved. Orchestrator architecture specified (§11).
