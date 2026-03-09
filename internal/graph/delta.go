@@ -14,7 +14,7 @@ import (
 // deltaPreferHeader requests that the Graph API include remote/shared items
 // using stable alias IDs in delta responses. Without this header, Personal
 // accounts may receive incomplete delta results for shared folders.
-// See docs/tier1-research/issues-graph-api-bugs.md.
+// See spec/reference/graph-api-quirks.md.
 var deltaPreferHeader = http.Header{
 	"Prefer": {"deltashowremoteitemsaliasid"},
 }

@@ -1,116 +1,59 @@
-# onedrive-go — Project Hub
+# onedrive-go
 
-## Project Summary
+Fast, safe OneDrive CLI and sync client in Go. Unix-style file ops (`ls`, `get`, `put`) plus bidirectional sync with conflict tracking. Linux and macOS. MIT licensed.
 
-**onedrive-go** — a fast, safe, and well-tested OneDrive CLI and sync client in Go. Unix-style file operations (`ls`, `get`, `put`) plus robust bidirectional sync with conflict tracking. Targets Linux and macOS. MIT licensed. "Pragmatic Flat" architecture (8 active packages). See [docs/design/event-driven-rationale.md](docs/design/event-driven-rationale.md).
+## Routing Table
 
-## Current Phase
+| When modifying... | Read first | Also consult |
+|-------------------|-----------|--------------|
+| `internal/graph/` | `spec/design/graph-client.md` | `spec/reference/graph-api-quirks.md` |
+| `internal/tokenfile/` | `spec/design/graph-client.md` | |
+| `internal/config/` | `spec/design/config.md` | |
+| `internal/driveid/`, `drive.go` | `spec/design/drive-identity.md` | |
+| `internal/driveops/`, `get.go`, `put.go` | `spec/design/drive-transfers.md` | |
+| `pkg/quickxorhash/` | `spec/design/drive-transfers.md` | |
+| `internal/retry/` | `spec/design/retry.md` | |
+| `internal/sync/observer_*.go`, `scanner.go`, `buffer.go` | `spec/design/sync-observation.md` | `spec/reference/onedrive-sync-behavior.md` |
+| `internal/sync/planner.go`, `types.go` | `spec/design/sync-planning.md` | `spec/reference/onedrive-sync-behavior.md` |
+| `internal/sync/executor*.go`, `worker.go`, `tracker.go`, `reconciler.go` | `spec/design/sync-execution.md` | |
+| `internal/sync/engine*.go`, `orchestrator.go`, `drive_runner.go`, `sync.go` | `spec/design/sync-engine.md` | |
+| `internal/sync/baseline.go`, `store_interfaces.go`, `migrations.go` | `spec/design/sync-store.md` | `spec/design/data-model.md` |
+| Root package CLI files | `spec/design/cli.md` | |
 
-**Phases 1-5.6 complete. Phase 5.7.0-5.7.4 done (full Remote State Separation architecture — schema, observation, dispatch, crash recovery, reconciler, upload failure tracking, sync_failures CRUD, issues CLI, status integration, interface narrowing). Phase 6.0a-6.0e done (DriveSession, Orchestrator, daemon mode, worker config, driveops package). Phase 6.0d done (inotify watch limit detection, multi-drive E2E, CI dual-token). Phase 6.0f done (zero-config removal, scanner extraction, daemon E2E). Phase 6.0g done (explicit E2E config migration, SIGHUP E2E, root package coverage). E2E hardening done (42 new e2e_full tests — 86 total). Phase 6.3 done (SharedWithMe API, shared drive enumeration in `drive list`, shared drive add with display name escalation). Phase 6.4a+b done (folder-scoped delta, shortcut detection, multi-scope observation, cross-drive execution, shared folder sync infrastructure). Next: Phase 6.4c (hardening — E2E fixtures, read-only detection, edge cases).** See [docs/roadmap.md](docs/roadmap.md).
+| Working on capability... | Requirements | Design docs |
+|--------------------------|-------------|-------------|
+| R-1 File Operations | `spec/requirements/file-operations.md` | `spec/design/cli.md`, `spec/design/drive-transfers.md` |
+| R-2 Sync | `spec/requirements/sync.md` | `spec/design/sync-*.md`, `spec/design/data-model.md` |
+| R-3 Drive Management | `spec/requirements/drive-management.md` | `spec/design/drive-identity.md`, `spec/design/config.md` |
+| R-4 Configuration | `spec/requirements/configuration.md` | `spec/design/config.md` |
+| R-5 Transfers | `spec/requirements/transfers.md` | `spec/design/drive-transfers.md` |
+| R-6 Non-Functional | `spec/requirements/non-functional.md` | `spec/design/system.md`, `spec/design/retry.md` |
 
-## Architecture Overview
+Planned work: search `spec/` for `[planned]`. Reference docs: `spec/reference/`.
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                      cmd/onedrive-go/ (Cobra CLI)                   │
-│  ls, get, put, rm, mkdir, mv, cp, sync, pause, resume, status,     │
-│  issues (list/resolve/clear/retry), login, logout, whoami, verify   │
-└──────────┬───────────────────────────────────────────────────────────┘
-           │ file ops                              │ sync operations
-           │                                       │
-           ▼                                       ▼
-┌──────────────────────────┐         ┌──────────────────────────────┐
-│  internal/driveops/      │◄────────│       internal/sync/         │
-│  SessionProvider, Session│         │  engine, observers, buffer,  │
-│  TransferManager, hashing│         │  planner, executor, baseline │
-└──────────┬───────────────┘         │  tracker, workers, orch      │
-           │                         └──────────────┬───────────────┘
-           ▼                                        │
-┌──────────────────────┐                            │
-│   internal/graph/    │◄───────────────────────────┘
-│   Graph API client   │
-│   + quirk handling   │
-│   + auth             │
-└─────────┬────────────┘
-          │
-          ├─────────┐
-          │         ▼
-          │  ┌──────────────────────┐
-          │  │ internal/tokenfile/  │
-          │  │ token I/O (leaf pkg) │
-          │  └──────────────────────┘
-          │         ▲
-          │          ┌──────────────────────┐
-          ├─────────►│  internal/driveid/   │◄──────┐
-          │          │  ID, CanonicalID,    │       │
-          │          │  ItemKey (pure ID)   │       │
-          │          └──────────┬───────────┘       │
-          │                     ▲                   │
-          │          ┌──────────┴───────────┐       │
-          │          │  internal/config/    │◄──────┘
-          │          │  TOML + drives +     │
-          │          │  TokenCanonicalID()  │
-          │          └─────────────────────-┘
-          │
-          │          ┌────────────────┐
-          └─────────►│ pkg/           │
-                     │ quickxorhash/  │
-                     │ (vendored)     │
-                     └────────────────┘
-```
-
-**Dependency direction**: `cmd/` -> `internal/driveops/` -> `internal/graph/` -> `pkg/*`. `internal/sync/` -> `internal/driveops/`. No cycles. `driveops` does NOT import `sync`. `internal/retry/` is a leaf package (stdlib only) used by `graph/`, `sync/`, and `driveops/`. `internal/driveid/` and `internal/tokenfile/` are leaf packages. `driveid` is pure identity (no business logic); `config` imports `driveid` and provides `TokenCanonicalID()` for token resolution. Both `graph/` and `config/` import `tokenfile/` for token file I/O. `internal/graph/` does NOT import `internal/config/` — callers pass token paths directly. See [docs/design/architecture.md](docs/design/architecture.md).
-
-**Packages:**
-- **`pkg/quickxorhash/`** — QuickXorHash algorithm (hash.Hash interface)
-- **`internal/driveid/`** — Type-safe drive identity: ID, CanonicalID, ItemKey. Four drive types (personal, business, sharepoint, shared). Pure identity — no business logic.
-- **`internal/tokenfile/`** — Pure OAuth token file I/O (leaf package: stdlib + oauth2 only). Strict JSON — rejects unknown fields.
-- **`internal/config/`** — TOML config, drive sections, XDG paths, four-layer override chain, token resolution (`TokenCanonicalID()`)
-- **`internal/graph/`** — Graph API client: auth, retry, items CRUD, delta, transfers
-- **`internal/driveops/`** — Authenticated drive access: SessionProvider (token caching + flush), Session (Meta + Transfer clients + delegation methods), TransferManager (download/upload with resume), SessionStore (upload session persistence + versioning), transfer interfaces, hash utilities, transfer artifact cleanup
-- **`internal/retry/`** — Unified retry infrastructure: Policy (exponential backoff with jitter), Backoff (stateful for watch loops). Named policies: Transport, DriveDiscovery, Action, Reconcile, WatchLocal, WatchRemote
-- **`internal/sync/`** — Event-driven sync: types, SyncStore (remote_state + baseline + sync_failures), observers, buffer, planner, executor, tracker, workers, reconciler, orchestrator, engine, verify, upload_validation. Sub-interfaces: ObservationWriter, OutcomeWriter, FailureRecorder, StateReader, StateAdmin, SyncFailureRecorder
-- **`internal/logfile/`** — Log file creation, append mode, parent dir creation, retention-based rotation
-- **Root package** — Cobra CLI: login, logout, whoami, status, drive (list/add/remove/search), ls, get, put, rm, mkdir, mv, cp, stat, sync, pause, resume, issues (list/resolve/clear/retry), verify, recycle-bin (list/restore/empty)
-- **`e2e/`** — E2E test suite against live OneDrive
-- **`testutil/`** — Shared stdlib-only test helpers (used by both `e2e/` and `internal/graph/` integration tests; NOT under `internal/` so e2e can import it)
-
-## Engineering Philosophy
-
-**Always do the right thing. Engineering effort is free.**
+## Eng Philosophy
 
 - Prefer large, long-term solutions over quick fixes. Do big re-architectures early, not late.
-- Always suggest the most ambitious correct approach — never settle for "good enough for now."
-- Never treat current implementation as a reason to avoid change. We are never stuck in a local minimum.
-- The fact that an architectural issue won't bite until later is not a reason to defer fixing it. Fix it now.
-- Even tiny, minor issues deserve attention. The architecture should be extremely robust and full of defensive coding practices.
+- Never settle for "good enough for now."
+- Never treat current implementation as a reason to avoid change.
+- The architecture should be extremely robust and full of defensive coding practices.
 - Modules and packages can be rethought at a whim if a better design appears. No code is sacred.
-- When you see a better way to structure something, propose it — regardless of how much code it touches.
-- Every behavior change is developed test-first. Write the test, watch it fail, write the minimum code to pass, then refactor. No exceptions.
+- App hasn't been launched yet. No backwards compatibility. Ensure after refactoring the code doesn't show any signs of the old architecture.
 
-**You own this repo.** A broken test is not "unrelated" — it's your responsibility.
+### Ownership - you own this repo
 
 - Never leave the repo in a broken state (build fails, tests fail, lint errors)
-- Never introduce a regression and call it "pre-existing"
+- Never call issues "pre-existing" - you find it, you fix it
 - If you touch a file, leave it better than you found it
 - If something is broken, fix it — don't work around it
 
-## Multi-Agent Environment
-
-**Multiple AI agents work in this repo concurrently** Be aware:
-
-- Always check git status before committing — another agent may have pushed changes
-- Do not assume you are the only one modifying files; expect merge conflicts
-- Coordinate through BACKLOG.md — check for in-progress items before claiming work
-- If you encounter unexpected changes, investigate before overwriting
-
 ## Coding Conventions
 
-- Go 1.23+, module path `github.com/tonimelisma/onedrive-go`
-- Format: `gofumpt` + `goimports -local github.com/tonimelisma/onedrive-go`
-- Follow `.golangci.yml` (140 char lines, complexity limits)
-- US English (`canceled`, `marshaling`), three-group imports (stdlib / third-party / local)
-- Comments explain **why**, not **what**
+- Write lots of comments explaining **why**, not **what**
+- Functions do one thing
+- Accept interfaces / return structs
+- Sentinel errors with `%w` wrapping
+- No package-level mutable state
 
 **Logging** (`log/slog` with structured fields):
 - **Debug**: HTTP request/response, token acquisition, file read/write
@@ -123,163 +66,77 @@
 - **All assertions use testify** (`github.com/stretchr/testify/assert` and `require`). Never use stdlib `t.Fatal`, `t.Fatalf`, `t.Error`, `t.Errorf` for assertions. Use `require` when the test cannot continue without the assertion passing (nil checks, error checks before using result). Use `assert` for non-fatal value comparisons.
 - Never pass nil context — runtime panics not caught by compiler
 - Table-driven tests where appropriate, with specific assertions (check values, not just "no error")
-- Scope verification to own package: `go test ./internal/graph/...` not `go test ./...`
 
 **E2E & integration tests** run against live OneDrive accounts. Test account names are never committed — use `.env` (gitignored) or environment variables. Both suites require `ONEDRIVE_ALLOWED_TEST_ACCOUNTS` and `ONEDRIVE_TEST_DRIVE` to be set (crashes without them). Copy `.env.example` to `.env` and fill in your test accounts. E2E tests are tiered: `e2e` tag (fast, every CI push) vs `e2e_full` tag (slow, nightly/manual, 30-min timeout).
 
 **Test credential pipeline** (one-time setup, then CI is self-sustaining):
 
 1. **Bootstrap** — run once per test account (interactive, requires browser):
-   ```bash
    ./scripts/bootstrap-test-credentials.sh   # opens browser for OAuth login
-   ```
    Creates `.testdata/` with token files and `config.toml`. Run multiple times to add accounts (config accumulates drive sections).
 
 2. **Migrate to CI** — upload `.testdata/` to Azure Key Vault:
-   ```bash
    az login                                   # if not already logged in
    ./scripts/migrate-test-data-to-ci.sh       # uploads tokens + config to Key Vault
-   ```
-   Secret naming: `onedrive-cache-<sanitized-drive-id>` for tokens, `onedrive-test-config` for config.
 
-3. **CI pipeline** — fully automatic after migration:
-   - Downloads credentials from Key Vault to `.testdata/` via OIDC
-   - Runs tests with XDG isolation (`.testdata/` → temp dirs)
-   - Saves rotated tokens back to Key Vault (keeps refresh tokens alive)
-   - Nightly cron (10 AM UTC) prevents 90-day token expiry
+## Dev Process
 
-**Re-bootstrapping** is needed if tokens expire (90 days idle) or Azure Key Vault secrets are purged. Run bootstrap + migrate again.
-
-For full details see [docs/design/test-strategy.md §6](docs/design/test-strategy.md#6-e2e-test-strategy).
-
-**Code quality**: Functions do one thing, accept interfaces / return structs, sentinel errors with `%w` wrapping, no package-level mutable state.
-
-## Development Process
-
-Work is done in increments. Follow this process from start to finish. Do not ask permission, do not skip any step.
+Work is done in increments. Do not ask permission, do not skip any step.
 
 ### Step 1: Claim work
 
-1. Check `docs/roadmap.md` for the next increment.
-2. Evaluate the codebase to determine if any foundational improvements are needed before starting the increment.
-3. Check `BACKLOG.md` for items that should be addressed before or alongside the increment.
-4. Mark the work as in-progress in BACKLOG.md.
+1. Search `spec/` for `[planned]` items.
+2. Read the governing design doc and requirements file (see Routing Table above).
+3. Evaluate the codebase to determine if any foundational improvements are needed before starting.
 
-### Step 2: Read context
+### Step 2: Set up worktree
 
-1. Read all design docs relevant to the increment (see Documentation Index below).
-2. Read `LEARNINGS.md` for patterns and gotchas.
-3. Read the existing code you will be modifying or extending.
-
-### Step 3: Set up worktree
-
-1. Create a worktree: `claude --worktree <name>`.
+1. Create a worktree using tool
 2. Create a branch with the naming convention: `<type>/<task-name>` (e.g., `feat/cli-auth`). Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`.
-3. All changes go through PRs — including doc-only changes. Branch protection requires CI to pass before merge.
+3. All changes go through PRs
 
-Pre-commit hook: `.githooks/pre-commit` runs `golangci-lint run` before every commit.
+`.worktreeinclude` lists files to copy into new worktrees. Entries prefixed with `@` are symlinked instead of copied
 
-`.worktreeinclude` lists files to copy into new worktrees. Entries prefixed with `@` are symlinked instead of copied (preserves changes like rotated tokens back to the main worktree).
+### Step 3: Develop with TDD
 
-### Step 4: Develop with TDD
+All development follows strict red/green/refactor TDD
+Mandatory regression tests for every bug fix.
 
-All development follows strict red/green/refactor TDD. For every behavior change — new feature, bug fix, refactoring, edge case:
+### Step 4: Update docs
 
-1. **Red**: Write a failing test that specifies the desired behavior. Run it. Confirm it fails for the right reason.
-2. **Green**: Write the minimum production code to make the test pass. Nothing more.
-3. **Refactor**: Clean up the production code and test code while keeping all tests green.
+Mandatory, not optional:
+- **Design doc**: update the module doc(s) you touched. New behavior → new spec section. Changed behavior → updated spec. New constraint discovered → constraints section.
+- **Requirements**: if you completed a feature, update status (`implemented` → `verified` once tests pass). Mirror status in the design doc `Implements:` line.
+- **Reference**: if you discovered a new API quirk, update the relevant reference doc upstream.
 
-Mandatory regression tests for every bug fix. Every new exported function, every behavior change, and every bug fix must have a test that was written first and seen to fail before the implementation made it pass.
+### Step 5: Self-verify
 
-### Step 5: Code review checklist
+Re-read the governing design doc. Produce a compliance report listing each spec item, whether it was implemented in full, partially, or not at all, and how it was implemented.
 
-Self-review every change against this checklist before proceeding to the Definition of Done.
+### Step 6: Code review checklist
 
-**Correctness:**
-- Error paths handled correctly (wrapped with `fmt.Errorf("context: %w", err)`)
-- Edge cases covered (nil, empty, zero values, boundary conditions)
-- Resource cleanup (defer Close, temp file removal)
+Self-review every change against coding standards proceeding to the Definition of Done.
 
-**Consistency:**
-- Naming follows codebase conventions (camelCase, verb-first functions)
-- Import grouping (stdlib / third-party / local, separated by blank lines)
-- Error message style matches codebase (lowercase, no punctuation)
-- Function signatures follow Go conventions (context first, error last)
-
-**Quality:**
-- Functions focused (<100 lines), no unnecessary duplication
-- Comments explain "why" not "how", logging at entry/transitions/errors/external calls
-- Tests are table-driven with specific assertions, developed test-first
-- No speculative code (unused helpers, premature abstractions)
-
-### Step 6: Definition of Done
+### Step 7: Definition of Done
 
 After each increment, run through this entire checklist. If something fails, fix and re-run from the top. **When complete, present this checklist to the human with pass/fail status for each item.**
 
 1. [ ] **Format**: `gofumpt -w . && goimports -local github.com/tonimelisma/onedrive-go -w .`
-2. [ ] **Build**: `go build ./...`
-3. [ ] **Unit tests**: `go test -race -coverprofile=/tmp/cover.out ./...`
-4. [ ] **Lint**: `golangci-lint run`
-5. [ ] **Coverage**: `go tool cover -func=/tmp/cover.out | grep total` — never decrease
-6. [ ] **Fast E2E**: `go test -tags=e2e -race -v -parallel 5 -timeout=10m ./e2e/...` (reads `.env` for test accounts)
-7. [ ] **Docs updated**:
-    - `CLAUDE.md` — update if structural changes (new packages, commands, deps)
-    - `BACKLOG.md` — check before starting work, update when discovering or fixing issues
-    - `LEARNINGS.md` — read for patterns and gotchas, add new institutional knowledge
-    - `docs/roadmap.md` — check current phase status, update on completion
-    - `docs/design/` — update relevant design docs if design changed
-8. [ ] **Push and CI green**: Push branch, open PR with `gh pr create`, then enable auto-merge with `gh pr merge --auto --squash --delete-branch`. Branch protection requires all 4 CI jobs (lint, test, integration, e2e) to pass before merge (`enforce_admins=true`, no direct pushes). Push-to-main CI is automatically skipped since all main commits come from PR merges. Schedule and dispatch still trigger CI. Monitor with `gh pr checks <pr_number> --watch`
-9. [ ] **Cleanup**: Clean `git status`. Remove the current worktree after merge. Then, **from the root repo** (not the worktree), prune stale remote-tracking branches and pull main forward:
-    ```bash
+2. [ ] **Lint**: `golangci-lint run`
+3. [ ] **Build**: `go build ./...`
+4. [ ] **Unit tests**: `go test -race -coverprofile=/tmp/cover.out ./...`
+5. [ ] **Coverage**: `go tool cover -func=/tmp/cover.out | grep total`
+6. [ ] **Fast E2E**: `go test -tags=e2e -race -v -parallel 5 -timeout=10m ./e2e/...`
+7. [ ] **Docs updated**: CLAUDE.md, spec/design/, spec/requirements/ as needed
+8. [ ] **Push and CI green**: Push branch, open PR with `gh pr create`, then enable auto-merge with `gh pr merge --auto --squash --delete-branch`. Branch protection requires CI to pass before merge. Monitor with `gh pr checks <pr_number> --watch`
+9. [ ] **Cleanup**: Clean `git status`. From the root repo (not worktree), remove the current worktree after merge. Prune stale remote-tracking branches and pull main forward:
     cd /Users/tonimelisma/Development/onedrive-go
     git fetch --prune origin
     git checkout main && git pull --ff-only origin main
-    ```
-    **NEVER delete other worktrees or branches — even if they appear stale.** Instead, report all other worktrees and branches to the human, including their last commit date (use `git log -1 --format='%ci' <branch>` for each). Let the human decide what to clean up
+    echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r && echo "=== Stashes ===" && git stash list && echo "=== Worktrees ===" && git worktree list && echo "=== Open PRs ===" && gh pr list --state open && echo "=== Status ===" && git status
+    **NEVER delete other worktrees or branches — even if they appear stale.** Instead, report all other worktrees and branches to the human, including their last commit date. Let the human decide what to clean up
 10. [ ] **Increment report**: Present to the human:
-    - **Plan deviations**: For every deviation from the approved plan — what changed, why it changed, what was done instead, and whether the new approach is the long-term solution or a temporary measure that needs follow-up (with BACKLOG IDs for any follow-up)
-    - **Process changes**: What you would do differently next time in how the work was planned or executed
+    - **What you changed**: What files did you change, why and how
+    - **Plan deviations**: For every deviation from the approved plan — what changed, why it changed, what was done instead, and whether the new approach is the long-term solution or a temporary measure that needs follow-up
     - **Top-up recommendations**: Any remaining codebase improvements you'd make. Don't be coy. Engineering effort is free, and this is mission-critical software. Ensure even small issues are brought up, and don't be coy to suggest more ambitious refactoring.
-    - **Architecture re-envisioning**: If you were starting from a blank slate, would you build it the same way? Propose any dramatic architectural changes if a better design is apparent
-    - **Unfixed items**: Anything you were unable to address in this increment (with BACKLOG IDs for deferred items)
-
-Quick command (gates 1-6):
-```bash
-gofumpt -w . && goimports -local github.com/tonimelisma/onedrive-go -w . && go build ./... && go test -race -coverprofile=/tmp/cover.out ./... && golangci-lint run && go tool cover -func=/tmp/cover.out | grep total && go test -tags=e2e -race -v -parallel 5 -timeout=10m ./e2e/... && echo "ALL GATES PASS"
-```
-
-Cleanup check:
-```bash
-echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r && echo "=== Stashes ===" && git stash list && echo "=== Worktrees ===" && git worktree list && echo "=== Open PRs ===" && gh pr list --state open && echo "=== Status ===" && git status
-```
-
-## Documentation Index
-
-| Document | Description |
-|----------|-------------|
-| [docs/roadmap.md](docs/roadmap.md) | Implementation phases and increments |
-| [BACKLOG.md](BACKLOG.md) | Issue/task tracker |
-| [LEARNINGS.md](LEARNINGS.md) | Institutional knowledge base |
-| [docs/design/prd.md](docs/design/prd.md) | Product requirements and scope |
-| [docs/design/architecture.md](docs/design/architecture.md) | System architecture |
-| [docs/design/data-model.md](docs/design/data-model.md) | Database schema and state model |
-| [docs/design/sync-algorithm.md](docs/design/sync-algorithm.md) | Sync algorithm specification |
-| [docs/design/configuration.md](docs/design/configuration.md) | Config options spec |
-| [docs/design/test-strategy.md](docs/design/test-strategy.md) | Testing approach |
-| [docs/design/sharepoint-enrichment.md](docs/design/sharepoint-enrichment.md) | SharePoint enrichment design |
-| [docs/design/decisions.md](docs/design/decisions.md) | Architectural and design decisions |
-| [docs/design/accounts.md](docs/design/accounts.md) | Account and drive system design |
-| [docs/design/MULTIDRIVE.md](docs/design/MULTIDRIVE.md) | Multi-drive architecture (shared drives, display_name, vault exclusion) |
-| [docs/design/event-driven-rationale.md](docs/design/event-driven-rationale.md) | Option E architectural decision record |
-| [docs/design/concurrent-execution.md](docs/design/concurrent-execution.md) | Execution architecture |
-| [docs/design/observability.md](docs/design/observability.md) | Daemon metrics, health, and status design |
-| [docs/design/remote-state-separation.md](docs/design/remote-state-separation.md) | Remote state separation architecture (full remote mirror, ID-based PK, state machine, reconciler) |
-| [docs/design/filtering-conflicts.md](docs/design/filtering-conflicts.md) | Filtering conflicts analysis (FC-1 through FC-12) |
-| [docs/design/ci_issues.md](docs/design/ci_issues.md) | Graph API issues & workarounds |
-| [docs/design/legacy-sequential-architecture.md](docs/design/legacy-sequential-architecture.md) | Old 9-phase architecture reference (migration guide) |
-| [docs/archive/](docs/archive/) | Historical docs |
-| [docs/tier1-research/](docs/tier1-research/) | 16 Tier 1 research docs |
-
-## Self-Maintenance Rule
-
-**This CLAUDE.md is the single source of truth for working on this codebase.** After major changes (new packages, CLI commands, docs, dependencies, or architectural shifts), update this file. Keep it concise — link to detailed docs rather than duplicating content. Every linked doc must exist; remove stale links.
+    - **Unfixed items**: Anything you were unable to address in this increment
