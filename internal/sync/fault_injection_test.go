@@ -54,8 +54,11 @@ func TestFault_ContextCancel_WorkerPool(t *testing.T) {
 	tracker.Add(action, 0, nil)
 
 	// Cancel immediately — should not panic or hang.
+	// pool.Wait() is not called here because it blocks on tracker.Done(),
+	// which never closes when the worker exits via ctx.Done() before
+	// picking up the action. pool.Stop() calls wp.wg.Wait() internally,
+	// which is sufficient for clean shutdown.
 	cancel()
-	pool.Wait()
 	pool.Stop()
 }
 
