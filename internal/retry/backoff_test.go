@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// Validates: R-6.8.2
 func TestBackoff_Next_IncreasesDelay(t *testing.T) {
 	t.Parallel()
 
@@ -22,6 +23,7 @@ func TestBackoff_Next_IncreasesDelay(t *testing.T) {
 	assert.Equal(t, 3, b.Consecutive())
 }
 
+// Validates: R-6.8.2
 func TestBackoff_Reset(t *testing.T) {
 	t.Parallel()
 
@@ -36,6 +38,7 @@ func TestBackoff_Reset(t *testing.T) {
 	assert.Equal(t, 1*time.Second, b.Next()) // back to base
 }
 
+// Validates: R-6.8.2
 func TestBackoff_MaxCap(t *testing.T) {
 	t.Parallel()
 
@@ -50,6 +53,7 @@ func TestBackoff_MaxCap(t *testing.T) {
 	assert.Equal(t, 30*time.Second, b.Next())
 }
 
+// Validates: R-6.8.2
 func TestBackoff_SetMaxOverride(t *testing.T) {
 	t.Parallel()
 
@@ -72,6 +76,7 @@ func TestBackoff_SetMaxOverride(t *testing.T) {
 	assert.Equal(t, 30*time.Second, b.Next()) // still capped
 }
 
+// Validates: R-6.8.2
 func TestBackoff_RemoteObserverPattern(t *testing.T) {
 	t.Parallel()
 

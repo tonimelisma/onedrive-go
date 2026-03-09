@@ -1,10 +1,10 @@
 # System Architecture
 
-Implements: R-6.2.1 [implemented], R-6.2.2 [implemented], R-6.3.1 [implemented]
+Implements: R-6.2.1 [verified], R-6.2.2 [verified], R-6.3.1 [verified]
 
 ## Package Structure
 
-Implements: R-6.1.4 [implemented], R-6.1.5 [implemented], R-6.9.1 [implemented]
+Implements: R-6.1.4 [verified], R-6.1.5 [verified], R-6.9.1 [verified]
 
 ```
 .                             Root package (Cobra CLI commands)

@@ -21,7 +21,7 @@ When the same file has been modified on both the local filesystem and OneDrive s
 ## R-2.3 Conflict Resolution [implemented]
 
 - R-2.3.1: The default resolution shall preserve both versions: remote wins the original path, local version is renamed to `<name>.conflict-<timestamp>.<ext>`. [implemented]
-- R-2.3.2: The system shall persistently record conflicts with metadata (path, timestamp, hashes, resolution status). [implemented]
+- R-2.3.2: The system shall persistently record conflicts with metadata (path, timestamp, hashes, resolution status). [verified]
 - R-2.3.3: When the user runs `issues`, the system shall list all unresolved conflicts and failures. [implemented]
 - R-2.3.4: When the user runs `issues resolve <path>`, the system shall allow resolution (keep-local, keep-remote, keep-both). [implemented]
 - R-2.3.5: When the user runs `issues clear <path>`, the system shall dismiss a conflict. [implemented]
@@ -43,8 +43,8 @@ All filter settings are per-drive (no global filter defaults).
 
 ## R-2.5 Crash Recovery [implemented]
 
-- R-2.5.1: When the process is killed mid-sync, the next run shall resume cleanly from the last checkpoint. [implemented]
-- R-2.5.2: The sync state store shall provide durable, transactional writes that survive process kill. [implemented]
+- R-2.5.1: When the process is killed mid-sync, the next run shall resume cleanly from the last checkpoint. [verified]
+- R-2.5.2: The sync state store shall provide durable, transactional writes that survive process kill. [verified]
 - R-2.5.3: On startup, the system shall detect items stuck in `syncing` state and reset them for re-planning (reconciler). [implemented]
 
 ## R-2.6 Pause / Resume [implemented]

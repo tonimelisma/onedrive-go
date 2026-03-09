@@ -2,7 +2,7 @@
 
 GOVERNS: internal/retry/backoff.go, internal/retry/circuit.go, internal/retry/doc.go, internal/retry/named.go, internal/retry/policy.go
 
-Implements: R-6.8.1 [implemented], R-6.8.2 [implemented]
+Implements: R-6.8.1 [verified], R-6.8.2 [verified]
 
 ## Overview
 
