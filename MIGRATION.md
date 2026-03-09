@@ -414,6 +414,18 @@ Spec Compliance Report:
 
 This is added to the development process in CLAUDE.md.
 
+## Progress
+
+| Phase | Status |
+|-------|--------|
+| Phase 0: Create structure and skeleton | **done** |
+| Phase 1: Reference sources | in progress |
+| Phase 2: Requirements sources | pending |
+| Phase 3: System design sources | pending |
+| Phase 4: Module design sources | pending |
+| Phase 5: Dissolve remaining files | pending |
+| Phase 6: Finalize | pending |
+
 ## Migration Process
 
 One PR for the entire migration. Process source docs upstream-first (reference → requirements → design). For each source doc: read it fully, distribute knowledge into appropriate target docs (reference facts → reference, requirements → requirements, design details → design), then mark it absorbed.
