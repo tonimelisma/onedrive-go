@@ -56,7 +56,7 @@ All filter settings are per-drive (no global filter defaults).
 
 When the user runs `verify`, the system shall re-hash local files and compare against the baseline and remote state, reporting discrepancies.
 
-## R-2.8 Watch Mode Behavior [implemented]
+## R-2.8 Watch Mode Behavior [verified]
 
 - R-2.8.1: The system shall reload `config.toml` on SIGHUP. [verified]
 - R-2.8.2: The system shall use a PID file with flock for single-instance enforcement. [verified]
@@ -92,15 +92,15 @@ The system shall validate filenames against OneDrive naming restrictions before 
 
 - R-2.12.1: Before uploading, the system shall detect local case-insensitive filename collisions (e.g., `file.txt` vs `File.txt`) and flag them as conflicts rather than attempting upload. [planned]
 
-## R-2.13 Unicode Normalization [implemented]
+## R-2.13 Unicode Normalization [verified]
 
 - R-2.13.1: The system shall normalize filenames to NFC form before comparison, to handle macOS NFD paths correctly. [verified]
 
-## R-2.14 Read-Only Shared Items [implemented]
+## R-2.14 Read-Only Shared Items [verified]
 
 - R-2.14.1: When a write to a shared item returns HTTP 403 (permanent permission constraint), the system shall record the path prefix as read-only and suppress subsequent writes to that subtree. [verified]
 
-## R-2.15 Delta Checkpoint Integrity [implemented]
+## R-2.15 Delta Checkpoint Integrity [verified]
 
 - R-2.15.1: The system shall track individual item failures independently of the delta token, since the delta checkpoint only appears on the final page and cannot be partially committed. [verified]
 
