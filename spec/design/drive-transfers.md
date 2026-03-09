@@ -2,7 +2,7 @@
 
 GOVERNS: internal/driveops/cleanup.go, internal/driveops/doc.go, internal/driveops/hash.go, internal/driveops/interfaces.go, internal/driveops/session.go, internal/driveops/session_store.go, internal/driveops/stale_partials.go, internal/driveops/transfer_manager.go, pkg/quickxorhash/quickxorhash.go, get.go, put.go
 
-Implements: R-5.1 [implemented], R-5.2 [implemented], R-5.3 [implemented], R-5.5 [implemented], R-1.2 [implemented], R-1.3 [implemented]
+Implements: R-5.1 [implemented], R-5.2 [implemented], R-5.3 [implemented], R-5.5 [implemented], R-1.2 [implemented], R-1.3 [implemented], R-5.6 [planned], R-5.7 [planned], R-5.8 [planned]
 
 ## TransferManager
 

@@ -43,6 +43,7 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.4.6: On Linux, local trash shall be opt-in (default off; servers/NAS typically lack XDG trash). [implemented]
 - R-6.4.7: The system shall support configurable disk space reservation (`min_free_space`). [planned]
 - R-6.4.8: When receiving filenames from the delta API, the system shall validate them against path traversal characters (`..`, `/`, `\`, null bytes, control chars) and reject invalid names. [planned]
+- R-6.4.9: When a requested permanent deletion fails (e.g., National Clouds that do not support it), the system shall fall back to recycle bin deletion. [planned]
 
 ## R-6.5 Crash Recovery [implemented]
 
@@ -70,6 +71,25 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.7.5: The system shall handle HTTP 410 (delta token expiry) with full re-enumeration. [implemented]
 - R-6.7.6: The system shall enforce upload chunk alignment to 320 KiB boundaries. [implemented]
 - R-6.7.7: The system shall not compare hashes for deleted items. [implemented]
+- R-6.7.8: The system shall unconditionally URL-decode item names in all API responses. [implemented]
+- R-6.7.9: The system shall filter out OneNote package items (`type: "oneNote"`) that lack standard file/folder facets. [implemented]
+- R-6.7.10: The system shall deduplicate identical items appearing multiple times within a single delta response, keeping the last occurrence per item ID. [implemented]
+- R-6.7.11: The system shall filter out phantom system drives provisioned by Microsoft for Personal accounts (face crops, albums) that return HTTP 400 on access. For Personal accounts, the system shall use `GET /me/drive` (singular) to discover the primary drive. [planned]
+- R-6.7.12: When a transient HTTP 404 occurs on a valid resource (cross-datacenter load balancer timeout), the system shall classify it as transient and retry with backoff. [planned]
+- R-6.7.13: When an HTTP 403 occurs on `/me/drives` shortly after token refresh (eventual consistency), the system shall classify it as transient and retry with backoff. [planned]
+- R-6.7.14: When the Graph API returns HTTP 400 `invalidRequest` / `ObjectHandle is Invalid` during a multi-hour server outage, the system shall classify it as non-retryable and report the error rather than retrying indefinitely. [planned]
+- R-6.7.15: The system shall truncate local timestamps to zero fractional seconds before comparing with OneDrive's whole-second precision. [planned]
+- R-6.7.16: The system shall safely handle missing or invalid timestamps (`0001-01-01T00:00:00Z`, absent `lastModifiedDateTime` on deletions) without panicking. [planned]
+- R-6.7.17: When a file completely lacks hashes (zero-byte files, certain Business/SharePoint files), the system shall use a fallback comparison of size + mtime + eTag. [implemented]
+- R-6.7.18: When extracting identity data for shared items, the system shall use a four-level fallback chain: `remoteItem.shared.sharedBy` → `.owner` → `remoteItem.createdBy` → top-level `shared.owner`. [planned]
+- R-6.7.19: The system shall not advance the delta token when a delta response contains zero events, to prevent permanently missing ephemeral deletion events. [planned]
+- R-6.7.20: The system shall adapt observation methods based on drive type: folder-scoped delta for Personal shared folders, standard enumeration for Business/SharePoint (which do not support folder-scoped delta). [implemented]
+- R-6.7.21: The system shall handle shared folder items whose parent IDs reference a different drive (the sharer's drive), including driveId truncation and casing normalization on cross-drive references. [planned]
+- R-6.7.22: When the API's path-based query returns an item from an incorrect path (fuzzy matching bug), the system shall post-validate that the returned item's name matches the requested path. [planned]
+- R-6.7.23: The system shall URL-decode `parentReference.path` in non-delta responses before using it for path reconstruction. [planned]
+- R-6.7.24: When a folder is renamed, the system shall infer and recalculate path changes for all descendants, since only the renamed folder appears in the delta response. [implemented]
+- R-6.7.25: When re-uploading a modified file to Business/SharePoint, the system shall accept the unavoidable extra version created by the API (unfixed Microsoft bug) without attempting futile workarounds. [planned]
+- R-6.7.26: The system shall handle absent `lastModifiedDateTime` (null) on API-initiated deletions without error. [planned]
 
 ## R-6.8 Network Resilience [implemented]
 

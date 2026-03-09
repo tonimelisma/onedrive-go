@@ -2,7 +2,7 @@
 
 GOVERNS: internal/driveid/canonical.go, internal/driveid/id.go, internal/driveid/itemkey.go, drive.go
 
-Implements: R-3.2 [implemented], R-3.5 [implemented], R-6.7.2 [implemented]
+Implements: R-3.2 [implemented], R-3.5 [implemented], R-6.7.2 [implemented], R-3.6.4 [planned], R-3.6.5 [planned]
 
 ## Core Concepts
 

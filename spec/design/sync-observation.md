@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/observer_local.go, internal/sync/observer_local_handlers.go, internal/sync/observer_remote.go, internal/sync/observer_shortcut.go, internal/sync/scanner.go, internal/sync/buffer.go, internal/sync/shortcuts.go, internal/sync/permissions.go, internal/sync/inotify_linux.go, internal/sync/inotify_other.go
 
-Implements: R-2.1.2 [implemented], R-2.4 [implemented], R-6.7.1 [implemented], R-6.7.3 [implemented], R-6.7.5 [implemented]
+Implements: R-2.1.2 [implemented], R-2.4 [implemented], R-6.7.1 [implemented], R-6.7.3 [implemented], R-6.7.5 [implemented], R-6.7.15 [planned], R-6.7.16 [planned], R-6.7.19 [planned], R-6.7.20 [implemented], R-6.7.21 [planned], R-6.7.24 [implemented], R-2.11 [planned], R-2.12 [planned], R-2.13.1 [implemented], R-2.14.1 [implemented]
 
 ## Remote Observer (`observer_remote.go`)
 

@@ -43,6 +43,8 @@ The system shall support all four drive types:
 - R-3.6.1: When the user runs `drive list`, the system shall show available shared folders. [implemented]
 - R-3.6.2: The system shall use non-deprecated search API for shared item discovery (SharedWithMe deprecated Nov 2026). [implemented]
 - R-3.6.3: When adding a shared drive, the system shall derive a display name from the sharer's identity. [implemented]
+- R-3.6.4: When discovering shared items via the Search API (which returns less identity data than the deprecated SharedWithMe endpoint), the system shall enrich results by making secondary `GET /drives/{driveId}/items/{itemId}` calls to retrieve full identity data including email. [planned]
+- R-3.6.5: When a user attempts to access shared folders from outside their organization (invisible to Graph API), the system shall provide a clear error message explaining the platform limitation. [planned]
 
 ## R-3.7 Email Change Detection [future]
 

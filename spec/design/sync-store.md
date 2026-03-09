@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/baseline.go, internal/sync/store_interfaces.go, internal/sync/migrations.go, internal/sync/verify.go, internal/sync/trash.go, issues.go, verify.go
 
-Implements: R-2.5 [implemented], R-2.3.2 [implemented], R-2.3.3 [implemented], R-2.7 [implemented], R-6.4.4 [implemented], R-6.4.5 [implemented]
+Implements: R-2.5 [implemented], R-2.3.2 [implemented], R-2.3.3 [implemented], R-2.7 [implemented], R-6.4.4 [implemented], R-6.4.5 [implemented], R-2.15.1 [implemented]
 
 ## SyncStore (`baseline.go`)
 

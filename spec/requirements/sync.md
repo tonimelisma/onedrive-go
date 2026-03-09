@@ -78,3 +78,32 @@ Failure tracking, classification, and lifecycle management.
 - R-2.10.2: When a user resolves a file-scoped actionable failure (by renaming, moving, or deleting the file), the system shall automatically detect the resolution and remove the stale failure entry. [planned]
 - R-2.10.3: When retrying failures, the system shall use scope-classified retry policies (file-scoped, service-wide, account-wide) with appropriate backoff curves per scope. [planned]
 - R-2.10.4: When displaying sync status, the system shall show failure scope context (file, service, account) alongside retry information. [planned]
+
+## R-2.11 Filename Validation [planned]
+
+The system shall validate filenames against OneDrive naming restrictions before upload and during remote observation.
+
+- R-2.11.1: The system shall reject local files with characters invalid on OneDrive (`"`, `*`, `:`, `<`, `>`, `?`, `/`, `\`, `|`) before upload. [planned]
+- R-2.11.2: The system shall reject local files with OneDrive reserved names (case-insensitive): `.lock`, `desktop.ini`, `CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9`, `LPT0`-`LPT9`. [planned]
+- R-2.11.3: The system shall reject local files matching OneDrive reserved patterns: names starting with `~$`, names containing `_vti_`, and `forms` at root level on SharePoint drives. [planned]
+- R-2.11.4: The system shall reject local files with trailing dots or leading/trailing whitespace. [planned]
+
+## R-2.12 Case Collision Handling [planned]
+
+- R-2.12.1: Before uploading, the system shall detect local case-insensitive filename collisions (e.g., `file.txt` vs `File.txt`) and flag them as conflicts rather than attempting upload. [planned]
+
+## R-2.13 Unicode Normalization [planned]
+
+- R-2.13.1: The system shall normalize filenames to NFC form before comparison, to handle macOS NFD paths correctly. [implemented]
+
+## R-2.14 Read-Only Shared Items [planned]
+
+- R-2.14.1: When a write to a shared item returns HTTP 403 (permanent permission constraint), the system shall record the path prefix as read-only and suppress subsequent writes to that subtree. [implemented]
+
+## R-2.15 Delta Checkpoint Integrity [planned]
+
+- R-2.15.1: The system shall track individual item failures independently of the delta token, since the delta checkpoint only appears on the final page and cannot be partially committed. [implemented]
+
+## R-2.16 Eventual Consistency [planned]
+
+- R-2.16.1: The system shall not re-query file metadata immediately after upload, as OneDrive properties may be temporarily in flux during server-side processing (thumbnails, indexing). [planned]
