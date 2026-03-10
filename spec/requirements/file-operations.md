@@ -49,9 +49,8 @@ When the user runs `mv <src> <dst>`, the system shall perform a server-side move
 
 When the user runs `cp <src> <dst>`, the system shall perform a server-side async copy with polling until complete.
 
-## R-1.9 Recycle Bin [implemented]
+## R-1.9 Recycle Bin [verified]
 
 - R-1.9.1: When the user runs `recycle-bin list`, the system shall list items in the recycle bin. [verified]
 - R-1.9.2: When the user runs `recycle-bin restore <id>`, the system shall restore the item. [verified]
 - R-1.9.3: When the user runs `recycle-bin empty`, the system shall permanently delete all recycled items. [verified]
-- R-1.9.4: When the user runs `recycle-bin empty` with many items, the system shall delete items concurrently using a worker pool. [planned]
