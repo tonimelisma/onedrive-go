@@ -1,6 +1,6 @@
 # Drive Identity
 
-GOVERNS: internal/driveid/canonical.go, internal/driveid/id.go, internal/driveid/itemkey.go, drive.go
+GOVERNS: internal/driveid/canonical.go, internal/driveid/id.go, internal/driveid/itemkey.go, drive.go, purge.go
 
 Implements: R-3.2 [verified], R-3.5 [verified], R-6.7.2 [verified], R-3.6.4 [planned], R-3.6.5 [planned]
 
@@ -50,7 +50,7 @@ Resolution order: exact canonical ID â†’ exact display_name (case-insensitive) â
 
 ## CLI Drive Command (`drive.go`)
 
-Implements: R-3.3.2 [verified], R-3.3.3 [implemented], R-3.3.4 [implemented], R-3.3.5 [verified], R-3.3.6 [verified], R-3.3.7 [verified], R-3.3.8 [implemented], R-3.3.9 [verified], R-3.6.1 [verified], R-3.6.2 [verified], R-3.6.3 [verified]
+Implements: R-3.3.2 [verified], R-3.3.3 [verified], R-3.3.4 [verified], R-3.3.5 [verified], R-3.3.6 [verified], R-3.3.7 [verified], R-3.3.8 [verified], R-3.3.9 [verified], R-3.6.1 [verified], R-3.6.2 [verified], R-3.6.3 [verified]
 
 `drive list`, `drive add`, `drive remove`, `drive search`. Drive add creates a config section with auto-generated display_name and sync_dir. Drive list annotates available drives with state DB presence (R-3.3.3), supports `--all` to remove the SharePoint site cap (R-3.3.4). Drive remove `--purge` works on unconfigured drives with orphaned state (R-3.3.8).
 

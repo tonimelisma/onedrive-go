@@ -19,8 +19,15 @@ import (
 // loading. Used by informational commands (drive list, status, whoami) that
 // want to show what they can even when the config has errors.
 type ConfigWarning struct {
-	Field   string // config key name, or empty for validation errors
 	Message string // human-readable description of the issue
+}
+
+// LogWarnings logs each warning at Warn level. Used by informational commands
+// (drive list, status, whoami) to surface config issues without failing.
+func LogWarnings(warnings []ConfigWarning, logger *slog.Logger) {
+	for _, w := range warnings {
+		logger.Warn("config issue", "message", w.Message)
+	}
 }
 
 // Load reads and parses a TOML config file using a two-pass decode, validates
@@ -71,43 +78,112 @@ func Load(path string, logger *slog.Logger) (*Config, error) {
 	return cfg, nil
 }
 
-// decodeDriveSections performs the second TOML decode pass to extract drive
-// sections. Drive sections have canonical IDs containing ":" as their key.
-func decodeDriveSections(data []byte, cfg *Config) error {
+// decodeMode controls whether drive section parsing is strict (fail on first
+// error) or lenient (collect errors as warnings, skip bad drives).
+type decodeMode int
+
+const (
+	decodeModeStrict decodeMode = iota
+	decodeModeLenient
+)
+
+// decodeDriveSectionsInternal is the shared implementation for both strict and
+// lenient drive section parsing. Drive sections have canonical IDs containing
+// ":" as their key. In strict mode, the first error is returned immediately.
+// In lenient mode, errors are collected as warnings and bad drives are skipped.
+func decodeDriveSectionsInternal(data []byte, cfg *Config, mode decodeMode) ([]ConfigWarning, error) {
 	var rawMap map[string]any
 	if _, err := toml.Decode(string(data), &rawMap); err != nil {
-		return fmt.Errorf("drive sections: %w", err)
+		if mode == decodeModeStrict {
+			return nil, fmt.Errorf("drive sections: %w", err)
+		}
+		// Lenient: TOML re-decode failed — but Load already succeeded on the
+		// first decode, so this shouldn't happen. Return empty warnings.
+		return nil, nil
 	}
+
+	var warnings []ConfigWarning
 
 	for key, val := range rawMap {
 		if !strings.Contains(key, ":") {
 			continue // not a drive section
 		}
 
-		// Validate canonical ID at parse time (fail fast).
+		// Validate canonical ID at parse time.
 		cid, cidErr := driveid.NewCanonicalID(key)
 		if cidErr != nil {
-			return fmt.Errorf("drive section [%q]: invalid canonical ID: %w", key, cidErr)
+			if mode == decodeModeStrict {
+				return nil, fmt.Errorf("drive section [%q]: invalid canonical ID: %w", key, cidErr)
+			}
+
+			warnings = append(warnings, ConfigWarning{
+				Message: fmt.Sprintf("drive section [%q]: invalid canonical ID: %s", key, cidErr),
+			})
+
+			continue
 		}
 
 		driveMap, ok := val.(map[string]any)
 		if !ok {
-			return fmt.Errorf("drive section [%q] must be a table", key)
+			if mode == decodeModeStrict {
+				return nil, fmt.Errorf("drive section [%q] must be a table", key)
+			}
+
+			warnings = append(warnings, ConfigWarning{
+				Message: fmt.Sprintf("drive section [%q] must be a table", key),
+			})
+
+			continue
 		}
 
-		if err := checkDriveUnknownKeys(driveMap, key); err != nil {
-			return err
+		// Check for unknown drive keys.
+		unknownKeyErrs := collectDriveUnknownKeyErrors(driveMap, key)
+		if mode == decodeModeStrict {
+			if err := errors.Join(unknownKeyErrs...); err != nil {
+				return nil, err
+			}
+		} else {
+			for _, e := range unknownKeyErrs {
+				warnings = append(warnings, ConfigWarning{
+					Message: e.Error(),
+				})
+			}
 		}
 
 		var drive Drive
 		if err := mapToDrive(driveMap, &drive); err != nil {
-			return fmt.Errorf("drive section [%q]: %w", key, err)
+			if mode == decodeModeStrict {
+				return nil, fmt.Errorf("drive section [%q]: %w", key, err)
+			}
+
+			warnings = append(warnings, ConfigWarning{
+				Message: fmt.Sprintf("drive section [%q]: %s", key, err),
+			})
+
+			continue
 		}
 
 		cfg.Drives[cid] = drive
 	}
 
-	return nil
+	return warnings, nil
+}
+
+// decodeDriveSections performs the strict second TOML decode pass to extract
+// drive sections. Returns an error on the first invalid section.
+func decodeDriveSections(data []byte, cfg *Config) error {
+	_, err := decodeDriveSectionsInternal(data, cfg, decodeModeStrict)
+	return err
+}
+
+// decodeDriveSectionsLenient is the lenient variant that collects errors as
+// warnings instead of failing. Drives with structural issues are skipped.
+// In lenient mode, decodeDriveSectionsInternal never returns an error — it
+// collects all issues as warnings instead.
+func decodeDriveSectionsLenient(data []byte, cfg *Config) []ConfigWarning {
+	//nolint:errcheck // lenient mode never returns errors — issues become warnings
+	warnings, _ := decodeDriveSectionsInternal(data, cfg, decodeModeLenient)
+	return warnings
 }
 
 // mapToDrive converts a raw map to a Drive struct by re-encoding as TOML
@@ -205,69 +281,6 @@ func LoadOrDefaultLenient(path string, logger *slog.Logger) (*Config, []ConfigWa
 	}
 
 	return LoadLenient(path, logger)
-}
-
-// decodeDriveSectionsLenient is the lenient variant of decodeDriveSections.
-// Invalid canonical IDs, non-table values, unknown drive keys, and type
-// coercion errors are collected as warnings. Drives with structural issues
-// are skipped (not added to cfg.Drives) so other drives can still be used.
-func decodeDriveSectionsLenient(data []byte, cfg *Config) []ConfigWarning {
-	var rawMap map[string]any
-	if _, err := toml.Decode(string(data), &rawMap); err != nil {
-		// If re-decode fails, TOML is malformed — but Load already succeeded
-		// on the first decode, so this shouldn't happen. Return empty warnings.
-		return nil
-	}
-
-	var warnings []ConfigWarning
-
-	for key, val := range rawMap {
-		if !strings.Contains(key, ":") {
-			continue // not a drive section
-		}
-
-		cid, cidErr := driveid.NewCanonicalID(key)
-		if cidErr != nil {
-			warnings = append(warnings, ConfigWarning{
-				Field:   key,
-				Message: fmt.Sprintf("drive section [%q]: invalid canonical ID: %s", key, cidErr),
-			})
-
-			continue
-		}
-
-		driveMap, ok := val.(map[string]any)
-		if !ok {
-			warnings = append(warnings, ConfigWarning{
-				Field:   key,
-				Message: fmt.Sprintf("drive section [%q] must be a table", key),
-			})
-
-			continue
-		}
-
-		// Unknown drive keys → warnings instead of errors.
-		for _, e := range collectDriveUnknownKeyErrors(driveMap, key) {
-			warnings = append(warnings, ConfigWarning{
-				Field:   key,
-				Message: e.Error(),
-			})
-		}
-
-		var drive Drive
-		if err := mapToDrive(driveMap, &drive); err != nil {
-			warnings = append(warnings, ConfigWarning{
-				Field:   key,
-				Message: fmt.Sprintf("drive section [%q]: %s", key, err),
-			})
-
-			continue
-		}
-
-		cfg.Drives[cid] = drive
-	}
-
-	return warnings
 }
 
 // ResolveDrive loads configuration and applies the four-layer override chain:

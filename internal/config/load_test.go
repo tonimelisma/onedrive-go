@@ -792,3 +792,66 @@ func TestResolveConfigPath_CLIOverridesDefault(t *testing.T) {
 	)
 	assert.Equal(t, "/cli/config.toml", result)
 }
+
+func TestLogWarnings_EmitsWarnPerWarning(t *testing.T) {
+	h := &testLogHandler{}
+	logger := slog.New(h)
+
+	warnings := []ConfigWarning{
+		{Message: "unknown key foo"},
+		{Message: "invalid value for bar"},
+	}
+
+	LogWarnings(warnings, logger)
+
+	// Should have 2 warn-level records.
+	var warnCount int
+	for _, r := range h.records {
+		if r.Level == slog.LevelWarn {
+			warnCount++
+		}
+	}
+
+	assert.Equal(t, 2, warnCount)
+}
+
+func TestLogWarnings_EmptySlice_NoLogs(t *testing.T) {
+	h := &testLogHandler{}
+	logger := slog.New(h)
+
+	LogWarnings(nil, logger)
+
+	assert.Empty(t, h.records)
+}
+
+// TestDecodeDriveSections_StrictAndLenient_IdenticalOutput verifies that valid
+// configs produce the same cfg.Drives from both the strict and lenient paths.
+// This is a regression guard for the unified decodeDriveSectionsInternal.
+func TestDecodeDriveSections_StrictAndLenient_IdenticalOutput(t *testing.T) {
+	data := []byte(`
+["personal:toni@outlook.com"]
+sync_dir = "~/OneDrive"
+display_name = "home"
+
+["business:alice@contoso.com"]
+sync_dir = "~/Work"
+skip_dirs = ["vendor"]
+`)
+
+	strictCfg := DefaultConfig()
+	err := decodeDriveSections(data, strictCfg)
+	require.NoError(t, err)
+
+	lenientCfg := DefaultConfig()
+	warnings := decodeDriveSectionsLenient(data, lenientCfg)
+	assert.Empty(t, warnings, "valid config should produce no warnings in lenient mode")
+
+	// Both should produce identical drive maps.
+	require.Equal(t, len(strictCfg.Drives), len(lenientCfg.Drives))
+
+	for cid, strictDrive := range strictCfg.Drives {
+		lenientDrive, exists := lenientCfg.Drives[cid]
+		require.True(t, exists, "lenient should have drive %s", cid.String())
+		assert.Equal(t, strictDrive, lenientDrive, "drives should match for %s", cid.String())
+	}
+}

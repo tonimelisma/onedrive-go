@@ -1188,6 +1188,68 @@ func TestSearchSharedItemsWithFallback_SearchReturnsEmpty(t *testing.T) {
 	assert.False(t, sharedWithMeCalled, "empty is not an error — no fallback needed")
 }
 
+// --- annotateStateDB ---
+
+// Validates: R-3.3.3
+func TestAnnotateStateDB_DetectsExistingDB(t *testing.T) {
+	setTestDriveHome(t)
+	dataDir := config.DefaultDataDir()
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+
+	// Create a state DB file on disk.
+	statePath := config.DriveStatePath(cid)
+	require.NotEmpty(t, statePath)
+	require.NoError(t, os.WriteFile(statePath, []byte("fake-db"), 0o600))
+
+	entries := []driveListEntry{
+		{CanonicalID: cid.String(), parsedCID: cid, State: "available", Source: "available"},
+	}
+
+	annotateStateDB(entries)
+	assert.True(t, entries[0].HasStateDB, "should detect existing state DB")
+}
+
+// Validates: R-3.3.3
+func TestAnnotateStateDB_NoDBFile(t *testing.T) {
+	setTestDriveHome(t)
+	dataDir := config.DefaultDataDir()
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+
+	entries := []driveListEntry{
+		{CanonicalID: cid.String(), parsedCID: cid, State: "available", Source: "available"},
+	}
+
+	annotateStateDB(entries)
+	assert.False(t, entries[0].HasStateDB, "should not detect state DB when file doesn't exist")
+}
+
+// Validates: R-3.3.3
+func TestAnnotateStateDB_MixedEntries(t *testing.T) {
+	setTestDriveHome(t)
+	dataDir := config.DefaultDataDir()
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	cidWithDB := driveid.MustCanonicalID("personal:user@example.com")
+	cidWithoutDB := driveid.MustCanonicalID("business:alice@contoso.com")
+
+	// Create state DB only for the first drive.
+	statePath := config.DriveStatePath(cidWithDB)
+	require.NoError(t, os.WriteFile(statePath, []byte("fake-db"), 0o600))
+
+	entries := []driveListEntry{
+		{CanonicalID: cidWithDB.String(), parsedCID: cidWithDB, State: "available", Source: "available"},
+		{CanonicalID: cidWithoutDB.String(), parsedCID: cidWithoutDB, State: "available", Source: "available"},
+	}
+
+	annotateStateDB(entries)
+	assert.True(t, entries[0].HasStateDB, "first entry should have state DB")
+	assert.False(t, entries[1].HasStateDB, "second entry should not have state DB")
+}
+
 // --- purgeOrphanedDriveState ---
 
 // Validates: R-3.3.8

@@ -632,24 +632,9 @@ func printAffectedDrives(w io.Writer, cfg *config.Config, affected []driveid.Can
 // and config section for one drive. Token deletion is handled separately since
 // tokens may be shared (SharePoint).
 func purgeSingleDrive(cfgPath string, canonicalID driveid.CanonicalID, logger *slog.Logger) error {
-	// Remove state database.
-	statePath := config.DriveStatePath(canonicalID)
-	if statePath != "" {
-		if err := os.Remove(statePath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			logger.Warn("failed to remove state database", "path", statePath, "error", err)
-		} else if err == nil {
-			logger.Info("removed state database", "path", statePath)
-		}
-	}
-
-	// Remove drive metadata file.
-	metaPath := config.DriveMetadataPath(canonicalID)
-	if metaPath != "" {
-		if err := os.Remove(metaPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			logger.Warn("failed to remove drive metadata", "path", metaPath, "error", err)
-		} else if err == nil {
-			logger.Info("removed drive metadata", "path", metaPath)
-		}
+	// Remove state DB and drive metadata (best-effort, errors logged).
+	if _, err := removeDriveDataFiles(canonicalID, logger); err != nil {
+		logger.Warn("errors removing drive data files", "drive", canonicalID.String(), "error", err)
 	}
 
 	// Remove account profile file (only for personal/business — shared/SP
@@ -748,9 +733,7 @@ func runWhoami(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	for _, w := range warnings {
-		logger.Warn("config issue", "message", w.Message)
-	}
+	config.LogWarnings(warnings, logger)
 
 	driveSelector, driveErr := cc.Flags.SingleDrive()
 	if driveErr != nil {

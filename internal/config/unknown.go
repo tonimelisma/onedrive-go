@@ -136,8 +136,8 @@ func buildGlobalKeyError(keyStr string) error {
 }
 
 // collectDriveUnknownKeyErrors returns individual errors for each unknown key
-// in a drive section. Used by both the strict path (checkDriveUnknownKeys) and
-// the lenient path (decodeDriveSectionsLenient).
+// in a drive section. Used by decodeDriveSectionsInternal for both strict and
+// lenient parsing modes.
 func collectDriveUnknownKeyErrors(driveMap map[string]any, canonicalID string) []error {
 	var errs []error
 
@@ -156,12 +156,6 @@ func collectDriveUnknownKeyErrors(driveMap map[string]any, canonicalID string) [
 	}
 
 	return errs
-}
-
-// checkDriveUnknownKeys wraps collectDriveUnknownKeyErrors for the strict
-// loading path, joining all errors into a single error.
-func checkDriveUnknownKeys(driveMap map[string]any, canonicalID string) error {
-	return errors.Join(collectDriveUnknownKeyErrors(driveMap, canonicalID)...)
 }
 
 // closestMatch finds the closest known key by Levenshtein distance.

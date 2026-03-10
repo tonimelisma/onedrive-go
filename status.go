@@ -104,9 +104,7 @@ func runStatus(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	for _, w := range warnings {
-		logger.Warn("config issue", "message", w.Message)
-	}
+	config.LogWarnings(warnings, logger)
 
 	if len(cfg.Drives) == 0 {
 		// Config-mandatory: no drives means check for tokens to provide smart guidance.
