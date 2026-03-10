@@ -1099,3 +1099,71 @@ func TestDoRetry_CustomPolicy_LimitsAttempts(t *testing.T) {
 		assert.Equal(t, int32(1), attempts.Load(), "SyncTransport should make exactly 1 attempt")
 	})
 }
+
+// Validates: R-6.8.5, R-6.8.6
+func TestTerminalError_RetryAfter(t *testing.T) {
+	t.Parallel()
+
+	t.Run("429 with Retry-After populates RetryAfter", func(t *testing.T) {
+		t.Parallel()
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Retry-After", "42")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"error":"throttled"}`))
+		}))
+		defer srv.Close()
+
+		// SyncTransport: single attempt, no retries → hits terminal immediately.
+		client := NewClient(srv.URL, http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent", retry.SyncTransport)
+		client.sleepFunc = noopSleep
+
+		_, err := client.Do(t.Context(), http.MethodGet, "/throttle", nil)
+		require.Error(t, err)
+
+		var graphErr *GraphError
+		require.ErrorAs(t, err, &graphErr)
+		assert.Equal(t, 42*time.Second, graphErr.RetryAfter)
+	})
+
+	t.Run("503 with Retry-After populates RetryAfter", func(t *testing.T) {
+		t.Parallel()
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Retry-After", "10")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":"service unavailable"}`))
+		}))
+		defer srv.Close()
+
+		client := NewClient(srv.URL, http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent", retry.SyncTransport)
+		client.sleepFunc = noopSleep
+
+		_, err := client.Do(t.Context(), http.MethodGet, "/unavail", nil)
+		require.Error(t, err)
+
+		var graphErr *GraphError
+		require.ErrorAs(t, err, &graphErr)
+		assert.Equal(t, 10*time.Second, graphErr.RetryAfter)
+	})
+
+	t.Run("500 without Retry-After has zero RetryAfter", func(t *testing.T) {
+		t.Parallel()
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"server error"}`))
+		}))
+		defer srv.Close()
+
+		client := NewClient(srv.URL, http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent", retry.SyncTransport)
+		client.sleepFunc = noopSleep
+
+		_, err := client.Do(t.Context(), http.MethodGet, "/fail", nil)
+		require.Error(t, err)
+
+		var graphErr *GraphError
+		require.ErrorAs(t, err, &graphErr)
+		assert.Equal(t, time.Duration(0), graphErr.RetryAfter)
+	})
+}

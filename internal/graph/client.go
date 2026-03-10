@@ -186,7 +186,9 @@ func (c *Client) doRetry(
 			continue
 		}
 
-		return nil, c.terminalError(method, path, resp.StatusCode, reqID, errBody, attempt)
+		retryAfter := parseRetryAfter(resp)
+
+		return nil, c.terminalError(method, path, resp.StatusCode, reqID, errBody, attempt, retryAfter)
 	}
 }
 
@@ -263,13 +265,14 @@ func (c *Client) doOnce(
 // terminalError builds a GraphError and logs the final failure.
 // Extracted from doRetry to keep the retry loop under funlen limits.
 func (c *Client) terminalError(
-	method, path string, statusCode int, reqID string, body []byte, attempt int,
+	method, path string, statusCode int, reqID string, body []byte, attempt int, retryAfter time.Duration,
 ) *GraphError {
 	graphErr := &GraphError{
 		StatusCode: statusCode,
 		RequestID:  reqID,
 		Message:    string(body),
 		Err:        classifyStatus(statusCode),
+		RetryAfter: retryAfter,
 	}
 
 	if attempt > 0 {
@@ -371,20 +374,23 @@ func (c *Client) doPreAuthRetry(
 			continue
 		}
 
-		return nil, c.preAuthTerminalError(desc, resp.StatusCode, reqID, errBody, attempt)
+		retryAfter := parseRetryAfter(resp)
+
+		return nil, c.preAuthTerminalError(desc, resp.StatusCode, reqID, errBody, attempt, retryAfter)
 	}
 }
 
 // preAuthTerminalError builds a GraphError and logs the final failure for pre-auth URLs.
 // Mirrors terminalError but uses desc instead of method+path.
 func (c *Client) preAuthTerminalError(
-	desc string, statusCode int, reqID string, body []byte, attempt int,
+	desc string, statusCode int, reqID string, body []byte, attempt int, retryAfter time.Duration,
 ) *GraphError {
 	graphErr := &GraphError{
 		StatusCode: statusCode,
 		RequestID:  reqID,
 		Message:    string(body),
 		Err:        classifyStatus(statusCode),
+		RetryAfter: retryAfter,
 	}
 
 	if attempt > 0 {
@@ -431,6 +437,27 @@ func (c *Client) retryBackoff(resp *http.Response, attempt int) time.Duration {
 // calcBackoff computes exponential backoff using the client's retry policy.
 func (c *Client) calcBackoff(attempt int) time.Duration {
 	return c.retryPolicy.Delay(attempt)
+}
+
+// parseRetryAfter extracts the Retry-After header from 429 and 503 responses
+// and returns it as a time.Duration. Returns 0 when the header is absent,
+// unparseable, or the status code is not 429/503.
+func parseRetryAfter(resp *http.Response) time.Duration {
+	if resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode != http.StatusServiceUnavailable {
+		return 0
+	}
+
+	ra := resp.Header.Get("Retry-After")
+	if ra == "" {
+		return 0
+	}
+
+	seconds, err := strconv.Atoi(ra)
+	if err != nil || seconds <= 0 {
+		return 0
+	}
+
+	return time.Duration(seconds) * time.Second
 }
 
 // rewindBody seeks an io.Reader back to offset 0 if it implements io.Seeker.
