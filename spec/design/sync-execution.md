@@ -1,6 +1,6 @@
 # Sync Execution
 
-GOVERNS: internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_transfer.go, internal/sync/worker.go, internal/sync/tracker.go, internal/sync/reconciler.go, internal/sync/upload_validation.go, internal/sync/compute_status.go, status.go
+GOVERNS: internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_transfer.go, internal/sync/worker.go, internal/sync/tracker.go, internal/sync/reconciler.go, internal/sync/issue_types.go, internal/sync/compute_status.go, status.go
 
 Implements: R-2.3 [verified], R-5.1 [verified], R-6.4 [implemented], R-6.5.3 [verified], R-6.4.9 [planned], R-6.7.25 [planned], R-6.8.7 [planned], R-6.8.8 [planned], R-6.8.9 [planned], R-2.10.5 [planned], R-2.10.11 [planned], R-2.10.15 [planned], R-2.10.16 [planned], R-2.10.41 [planned], R-2.10.42 [planned], R-2.10.43 [planned], R-2.10.44 [planned]
 
@@ -48,9 +48,9 @@ Hash-before-delete guard for local deletions (verifies the file hasn't changed s
 ### Conflicts (`executor_conflict.go`)
 Default: keep both versions. Remote version at original path, local version renamed to `<name>.conflict-<timestamp>.<ext>`. Conflict recorded in `conflicts` table.
 
-## Upload Validation (`upload_validation.go`)
+## Issue Types (`issue_types.go`)
 
-After upload, compares server-reported hash with local hash. If they differ (SharePoint enrichment), records the server hash as `remote_hash` in baseline without re-uploading.
+Issue type constants for failure classification (e.g., `IssueInvalidFilename`, `IssuePathTooLong`, `IssueFileTooLarge`). Moved from the deleted `upload_validation.go`. The upload validation functions (`filterInvalidUploads`, `validateUploadActions`, `validateSingleUpload`, `ValidationFailure`, `removeActionsByIndex`) have been removed entirely — all validation now happens in the observation layer via `shouldObserve()` (Stage 1) and post-stat size checks (Stage 2). See `spec/design/sync-observation.md`.
 
 ## Reconciler (`reconciler.go`)
 

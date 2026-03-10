@@ -1,14 +1,16 @@
 // scanner.go — Local filesystem scanning for LocalObserver.
 //
 // Contents:
-//   - FullScan:            orchestrates walk + hash phases → []ChangeEvent
-//   - hashPhase:           parallel hash computation for discovered files
-//   - makeWalkFunc:        builds the filepath.WalkDir callback
-//   - classifyLocalChange: compares local state against baseline
-//   - detectDeletions:     finds baseline entries missing from walk
-//   - computeStableHash:   double-stat hash for actively-written files
-//   - isAlwaysExcluded:    OneDrive-incompatible name filtering
-//   - isValidOneDriveName: name validation (reserved names, chars, length)
+//   - FullScan:              orchestrates walk + hash phases → ScanResult
+//   - hashPhase:             parallel hash computation for discovered files
+//   - makeWalkFunc:          builds the filepath.WalkDir callback
+//   - classifyLocalChange:   compares local state against baseline
+//   - detectDeletions:       finds baseline entries missing from walk
+//   - computeStableHash:     double-stat hash for actively-written files
+//   - shouldObserve:         unified observation filter (Stage 1: name + path)
+//   - validateOneDriveName:  returns reason + detail for invalid names
+//   - isValidOneDriveName:   convenience predicate (delegates to validateOneDriveName)
+//   - isAlwaysExcluded:      OneDrive-incompatible name filtering
 //
 // Related files:
 //   - observer_local.go:           LocalObserver struct and Watch() entry point
@@ -72,15 +74,18 @@ func (o *LocalObserver) resolveCheckWorkers() int {
 	return defaultCheckWorkers
 }
 
-// FullScan walks the sync root directory and returns change events for all
-// local changes (creates, modifies, deletes) relative to the baseline.
+// FullScan walks the sync root directory and returns a ScanResult containing
+// change events for all local changes (creates, modifies, deletes) relative
+// to the baseline, plus any skipped items that should be recorded as
+// actionable failures.
 //
 // Three-phase design:
 //  1. Walk (sequential): collect observed map, emit folder creates, classify
-//     files that need hashing into a hashJob slice.
+//     files that need hashing into a hashJob slice. Collects SkippedItems
+//     for invalid names, too-long paths, and too-large files.
 //  2. Hash (parallel): errgroup.SetLimit(checkWorkers) hashes files concurrently.
 //  3. Deletion detection (sequential): compare observed vs baseline.
-func (o *LocalObserver) FullScan(ctx context.Context, syncRoot string) ([]ChangeEvent, error) {
+func (o *LocalObserver) FullScan(ctx context.Context, syncRoot string) (ScanResult, error) {
 	o.logger.Info("local observer starting full scan",
 		slog.String("sync_root", syncRoot),
 		slog.Int("baseline_entries", o.baseline.Len()),
@@ -92,30 +97,31 @@ func (o *LocalObserver) FullScan(ctx context.Context, syncRoot string) ([]Change
 	if !syncRootExists(syncRoot) {
 		o.logger.Warn("sync root missing, aborting scan",
 			slog.String("sync_root", syncRoot))
-		return nil, ErrSyncRootMissing
+		return ScanResult{}, ErrSyncRootMissing
 	}
 
 	// Guard: abort if .nosync file is present (sync dir may be unmounted).
 	if _, err := os.Stat(filepath.Join(syncRoot, nosyncFileName)); err == nil {
 		o.logger.Warn("nosync guard file detected, aborting scan",
 			slog.String("sync_root", syncRoot))
-		return nil, ErrNosyncGuard
+		return ScanResult{}, ErrNosyncGuard
 	}
 
-	// Phase 1: Walk — collect observed paths, folder events, and hash jobs.
+	// Phase 1: Walk — collect observed paths, folder events, hash jobs, and skipped items.
 	var events []ChangeEvent
 	var jobs []hashJob
+	var skipped []SkippedItem
 	var skippedEntries atomic.Int64
 	observed := make(map[string]bool)
 	scanStartNano := time.Now().UnixNano()
 
-	walkFn := o.makeWalkFunc(ctx, syncRoot, observed, &events, &jobs, &skippedEntries, scanStartNano)
+	walkFn := o.makeWalkFunc(ctx, syncRoot, observed, &events, &jobs, &skipped, &skippedEntries, scanStartNano)
 	if err := filepath.WalkDir(syncRoot, walkFn); err != nil {
 		if ctx.Err() != nil {
-			return nil, fmt.Errorf("sync: local scan canceled: %w", ctx.Err())
+			return ScanResult{}, fmt.Errorf("sync: local scan canceled: %w", ctx.Err())
 		}
 
-		return nil, fmt.Errorf("sync: walking %s: %w", syncRoot, err)
+		return ScanResult{}, fmt.Errorf("sync: walking %s: %w", syncRoot, err)
 	}
 
 	if n := skippedEntries.Load(); n > 0 {
@@ -128,7 +134,7 @@ func (o *LocalObserver) FullScan(ctx context.Context, syncRoot string) ([]Change
 	if len(jobs) > 0 {
 		hashEvents, err := o.hashPhase(ctx, jobs)
 		if err != nil {
-			return nil, err
+			return ScanResult{}, err
 		}
 
 		events = append(events, hashEvents...)
@@ -148,13 +154,14 @@ func (o *LocalObserver) FullScan(ctx context.Context, syncRoot string) ([]Change
 		slog.Int("events", len(events)),
 		slog.Int("observed", len(observed)),
 		slog.Int("hashed", len(jobs)),
+		slog.Int("skipped", len(skipped)),
 	)
 
 	if len(events) > 0 {
 		o.recordActivity()
 	}
 
-	return events, nil
+	return ScanResult{Events: events, Skipped: skipped}, nil
 }
 
 // hashPhase runs hash jobs in parallel using errgroup with checkWorkers limit.
@@ -227,10 +234,12 @@ func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]Change
 
 // makeWalkFunc returns a WalkDirFunc that classifies filesystem entries
 // against the baseline. Folder events are appended to events directly.
-// Files that need hashing are appended to jobs for phase 2.
+// Files that need hashing are appended to jobs for phase 2. User-actionable
+// rejections are appended to skipped for engine recording.
 func (o *LocalObserver) makeWalkFunc(
 	ctx context.Context, syncRoot string, observed map[string]bool,
-	events *[]ChangeEvent, jobs *[]hashJob, skippedEntries *atomic.Int64, scanStartNano int64,
+	events *[]ChangeEvent, jobs *[]hashJob, skipped *[]SkippedItem,
+	skippedEntries *atomic.Int64, scanStartNano int64,
 ) fs.WalkDirFunc {
 	return func(fsPath string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -257,32 +266,38 @@ func (o *LocalObserver) makeWalkFunc(
 		dbRelPath := nfcNormalize(filepath.ToSlash(relPath))
 		name := nfcNormalize(d.Name())
 
-		// Symlinks are never synced — skip silently.
+		// Symlinks are never synced, not a naming issue — skip silently.
 		if d.Type()&fs.ModeSymlink != 0 {
 			o.logger.Debug("skipping symlink", slog.String("path", dbRelPath))
 			return skipEntry(d)
 		}
 
-		if isAlwaysExcluded(name) {
-			o.logger.Debug("skipping excluded file", slog.String("name", name))
+		// Stage 1 observation filter: name validation + path length (cheap, no syscall).
+		ok, skipItem := shouldObserve(name, dbRelPath)
+		if !ok {
+			if skipItem != nil {
+				*skipped = append(*skipped, *skipItem)
+				o.logger.Debug("skipping invalid entry",
+					slog.String("path", dbRelPath),
+					slog.String("reason", skipItem.Reason))
+			} else {
+				o.logger.Debug("skipping excluded file", slog.String("name", name))
+			}
+
 			return skipEntry(d)
 		}
 
-		if !isValidOneDriveName(name) {
-			o.logger.Debug("skipping invalid OneDrive name", slog.String("name", name))
-			return skipEntry(d)
-		}
-
-		return o.processEntry(fsPath, dbRelPath, name, d, observed, events, jobs, scanStartNano)
+		return o.processEntry(fsPath, dbRelPath, name, d, observed, events, jobs, skipped, scanStartNano)
 	}
 }
 
 // processEntry reads file info, marks the path as observed, and classifies
 // the local change against the baseline. Folder events are appended to
 // events directly; files that need hashing are appended to jobs for phase 2.
+// Stage 2 observation filter: file size > 250GB is checked here (after stat).
 func (o *LocalObserver) processEntry(
 	fsPath, dbRelPath, name string, d fs.DirEntry, observed map[string]bool,
-	events *[]ChangeEvent, jobs *[]hashJob, scanStartNano int64,
+	events *[]ChangeEvent, jobs *[]hashJob, skipped *[]SkippedItem, scanStartNano int64,
 ) error {
 	info, err := d.Info()
 	if err != nil {
@@ -290,6 +305,16 @@ func (o *LocalObserver) processEntry(
 		o.logger.Warn("stat failed (file may have disappeared)",
 			slog.String("path", dbRelPath), slog.String("error", err.Error()))
 		return nil
+	}
+
+	// Stage 2 observation filter: file size check (requires stat, hence here).
+	if !d.IsDir() && info.Size() > maxOneDriveFileSize {
+		*skipped = append(*skipped, SkippedItem{
+			Path:   dbRelPath,
+			Reason: IssueFileTooLarge,
+			Detail: fmt.Sprintf("file size %d bytes exceeds 250 GB limit", info.Size()),
+		})
+		return nil // skip — don't create event or hash job
 	}
 
 	observed[dbRelPath] = true
@@ -461,6 +486,84 @@ func computeStableHash(fsPath string) (string, error) {
 }
 
 // ---------------------------------------------------------------------------
+// Unified observation filter
+// ---------------------------------------------------------------------------
+
+// shouldObserve checks whether a local filesystem entry should enter the sync
+// pipeline. Returns (true, nil) for valid entries. Returns (false, nil) for
+// internal exclusions (temp files — not user-actionable). Returns (false, skip)
+// for user-actionable rejections that should be recorded.
+//
+// Called from FullScan walk, watch event handlers, and watch setup.
+// Expects NFC-normalized name and path. This is Stage 1 of the two-stage
+// observation filter — cheap string checks only (no syscall). Stage 2
+// (file size > 250GB) is checked after stat in processEntry/hashAndEmit.
+func shouldObserve(name, path string) (ok bool, skip *SkippedItem) {
+	if isAlwaysExcluded(name) {
+		return false, nil // internal exclusion, not reportable
+	}
+
+	if reason, detail := validateOneDriveName(name); reason != "" {
+		return false, &SkippedItem{Path: path, Reason: reason, Detail: detail}
+	}
+
+	if len(path) > maxOneDrivePathLength {
+		return false, &SkippedItem{
+			Path:   path,
+			Reason: IssuePathTooLong,
+			Detail: fmt.Sprintf("path length %d exceeds %d-character limit", len(path), maxOneDrivePathLength),
+		}
+	}
+
+	return true, nil
+}
+
+// validateOneDriveName checks whether a filename is valid for OneDrive.
+// Returns ("", "") for valid names. For invalid names, returns the issue
+// type constant and a human-readable detail string.
+//
+// Checks (ordered by specificity): empty name, trailing dot/space, leading
+// space, component length > 255, reserved device names, reserved patterns,
+// invalid characters.
+func validateOneDriveName(name string) (reason, detail string) {
+	if name == "" {
+		return IssueInvalidFilename, "empty filename"
+	}
+
+	if name[len(name)-1] == '.' {
+		return IssueInvalidFilename, fmt.Sprintf("filename %q ends with a period", name)
+	}
+
+	if name[len(name)-1] == ' ' {
+		return IssueInvalidFilename, fmt.Sprintf("filename %q ends with a space", name)
+	}
+
+	if name[0] == ' ' {
+		return IssueInvalidFilename, fmt.Sprintf("filename %q starts with a space", name)
+	}
+
+	if len(name) > maxComponentLength {
+		return IssueInvalidFilename, fmt.Sprintf("filename %q exceeds %d-character component limit", name, maxComponentLength)
+	}
+
+	lower := strings.ToLower(name)
+
+	if isReservedDeviceName(lower) {
+		return IssueInvalidFilename, fmt.Sprintf("filename %q is a reserved Windows device name", name)
+	}
+
+	if isReservedPattern(name, lower) {
+		return IssueInvalidFilename, fmt.Sprintf("filename %q matches a reserved OneDrive pattern", name)
+	}
+
+	if containsInvalidChars(name) {
+		return IssueInvalidFilename, fmt.Sprintf("filename %q contains characters forbidden by OneDrive", name)
+	}
+
+	return "", ""
+}
+
+// ---------------------------------------------------------------------------
 // Filtering and validation helpers
 // ---------------------------------------------------------------------------
 
@@ -527,42 +630,12 @@ var alwaysExcludedSuffixes = []string{
 }
 
 // isValidOneDriveName returns true if the name can be synced to OneDrive.
-// Rejects reserved names, invalid characters, and structural constraints
-// per the OneDrive API documentation.
+// Delegates to validateOneDriveName for the actual checks. Retained as a
+// convenience predicate for call sites that don't need the reason/detail
+// (e.g., executor_delete.go isDisposable, observer_remote.go filtering).
 func isValidOneDriveName(name string) bool {
-	if name == "" {
-		return false
-	}
-
-	if name[len(name)-1] == '.' || name[len(name)-1] == ' ' {
-		return false
-	}
-
-	if name[0] == ' ' {
-		return false
-	}
-
-	if len(name) > maxComponentLength {
-		return false
-	}
-
-	return isValidNameContent(name)
-}
-
-// isValidNameContent checks the name for reserved patterns, invalid
-// characters, and OneDrive-specific restrictions.
-func isValidNameContent(name string) bool {
-	lower := strings.ToLower(name)
-
-	if isReservedDeviceName(lower) {
-		return false
-	}
-
-	if isReservedPattern(name, lower) {
-		return false
-	}
-
-	return !containsInvalidChars(name)
+	reason, _ := validateOneDriveName(name)
+	return reason == ""
 }
 
 // isReservedDeviceName returns true for Windows reserved device names

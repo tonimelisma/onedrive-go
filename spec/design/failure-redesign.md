@@ -360,7 +360,6 @@ The system has three independent retry loops that nest and compound:
     │
     ├─ [Change Buffer] ← Events
     ├─ [Planner] → ActionPlan
-    ├─ [Upload Validation] → filtered ActionPlan (defense-in-depth)
     │
     ├─ [Tracker] ← actions from ActionPlan
     │     ├─ dependency resolution (existing, unchanged)
@@ -755,6 +754,9 @@ func (e *Engine) classifyResult(r WorkerResult) resultClass {
     case errors.Is(r.Err, context.Canceled) || errors.Is(r.Err, context.DeadlineExceeded):
         return resultShutdown   // graceful drain: discard action, don't record failure
     default:
+        // NOTE: The default case should log at WARN level before returning,
+        // so unrecognized errors are surfaced for investigation rather than
+        // silently skipped. (Issue 4: doc-only fix)
         return resultSkip          // unknown error, don't retry
     }
 }
@@ -967,9 +969,9 @@ This is an observation-time issue. The retry architecture is not involved — in
 9. Only `ScanResult.Events` (valid files) enter the change buffer → planner → `ActionPlan`.
 10. Invalid files are absent. No actions planned for them. No worker time will be spent.
 
-**Phase 5: Validation (defense-in-depth)**
+**Phase 5: (Removed)**
 
-11. `filterInvalidUploads()` runs on the `ActionPlan`. In normal operation, finds nothing (scanner already filtered). Catches edge cases only (reconciler re-injected a file that was since renamed to an invalid name).
+11. All validation moved to observation layer. Upload validator deleted. Invalid files are filtered by `shouldObserve()` (Stage 1: name + path length, before stat) and `processEntry`/watch handlers (Stage 2: file size, after stat) in the scanner/observer. No separate validation pass on the `ActionPlan`.
 
 **Phase 6: Execution**
 
@@ -1647,6 +1649,12 @@ Everything that gets deleted during this redesign. *Eng Philosophy: "Ensure afte
 | `internal/sync/executor.go` | `executorMaxRetries` constant | No executor retry budget — tracker handles retry budget. |
 | `internal/sync/executor.go` | 423 `errClassSkip` handling | Reclassified: 423 is transient in engine `classifyResult()`. Non-blocking retry handles multi-hour SharePoint locks. |
 | `internal/sync/observer_remote.go` | `isValidOneDriveName()` call (line ~405) | Wrong: applies upload naming rules to downloads. OneDrive enforces its own rules server-side. |
+| `internal/sync/upload_validation.go` | **Entire file** | Upload validator deleted. All validation moved to observation layer (`shouldObserve()` + Stage 2 size check). |
+| `internal/sync/upload_validation.go` | `filterInvalidUploads()` function | Replaced by `shouldObserve()` in scanner/watch handlers (Stage 1) and size check in `processEntry`/watch handlers (Stage 2). |
+| `internal/sync/upload_validation.go` | `validateUploadActions()` function | No longer needed — invalid files never reach the planner. |
+| `internal/sync/upload_validation.go` | `validateSingleUpload()` function | No longer needed — validation happens at observation time. |
+| `internal/sync/upload_validation.go` | `ValidationFailure` type | Replaced by `SkippedItem` type in `types.go`. |
+| `internal/sync/upload_validation.go` | `removeActionsByIndex()` helper | No longer needed — no post-planning action filtering. |
 | `internal/sync/store_interfaces.go` | `FailureRecorder` interface | Consolidated into `SyncFailureRecorder`. See Interface Consolidation below. |
 
 ### Interface Consolidation
@@ -1734,7 +1742,7 @@ Non-breaking preparatory changes. All existing tests continue to pass unchanged.
 6. **Store extensions — scope_key:** Add `scope_key TEXT NOT NULL DEFAULT ''` column to `sync_failures` (migration). Add `ScopeKey string` field to `SyncFailureRow`. Add `scopeKey` parameter to `RecordSyncFailure`. Update all INSERT/UPSERT queries to include `scope_key`. Update all SELECT queries to read `scope_key`. Add `UpsertActionableFailures` batch method. Add `ClearResolvedActionableFailures`.
 7. **Store extensions — success cleanup + interface consolidation:** Extend `CommitOutcome` to clear sync_failures for download/delete/move successes (currently upload-only). Move `remote_state` failure status transitions from `RecordFailure` into a new method callable from both success and failure paths. Delete `FailureRecorder` interface and `RecordFailure` method — all callers use `RecordSyncFailure`.
 8. **New issue types:** `quota_exceeded`, `local_permission_denied`, `case_collision`, `disk_full`, `service_outage`, `file_too_large_for_space`.
-9. **Remove `isValidOneDriveName()` from remote observer:** observer_remote.go line ~405. Simple deletion.
+9. **Remove `isValidOneDriveName()` from remote observer:** observer_remote.go line ~405. Simple deletion. [implemented]
 10. **Fix isActionableIssue():** baseline.go `isActionableIssue()` (lines 1511-1519) does not include `IssuePermissionDenied`. Currently `permission_denied` is defined as a constant but not checked in `isActionableIssue()` — permission failures are misclassified as transient and scheduled for retry instead of being treated as actionable.
 
 TDD: Write tests for new store methods, 401 refresh, RetryAfter parsing, SyncTransport policy, graph client parameterization first.
@@ -1743,14 +1751,18 @@ TDD: Write tests for new store methods, 401 refresh, RetryAfter parsing, SyncTra
 
 **PR: `feat/scanner-scan-result`**
 
-Scanner returns `ScanResult{Events, Skipped}` instead of `[]ChangeEvent`. Engine processes skipped items.
+Scanner returns `ScanResult{Events, Skipped}` instead of `[]ChangeEvent`. Engine processes skipped items. Unified observation filter `shouldObserve()` replaces scattered filter calls. Upload validator deleted entirely.
 
-1. **`ScanResult` struct:** `ScanResult{Events []ChangeEvent, Skipped []SkippedItem}`.
-2. **Scanner changes:** Invalid files → `SkippedItem` instead of silent DEBUG log.
-3. **Engine `recordSkippedItems()`:** Groups by reason, batch-upserts to sync_failures as actionable.
-4. **Engine `clearResolvedActionableFailures()`:** Deletes sync_failures entries for files no longer skipped.
-5. **Aggregated logging:** >10 same-type skips → 1 WARN summary + individual DEBUG.
-6. **Directory buffering:** Buffer entries per directory during `filepath.WalkDir` before emitting ChangeEvents. This is a prerequisite for Phase 7 (case collision detection), which requires a per-directory case-insensitive name map. Without buffering, the scanner emits events one-at-a-time during the walk and cannot compare sibling names.
+1. **`ScanResult` and `SkippedItem` types:** `ScanResult{Events []ChangeEvent, Skipped []SkippedItem}` in `types.go`. `SkippedItem{Path, Reason, Detail string}`.
+2. **`shouldObserve()` unified filter:** Single entry point in `scanner.go` replacing scattered `isAlwaysExcluded()` + `isValidOneDriveName()` calls across scanner, watch handlers, and watch setup. Stage 1 (name + path length, before stat). Stage 2 (file size > 250 GB, after stat) in `processEntry`/`handleCreate`/`hashAndEmit`/`scanNewDirectory`.
+3. **`validateOneDriveName()`:** Returns `(reason, detail)` strings for invalid names. `isValidOneDriveName()` delegates to it.
+4. **Scanner changes:** Invalid files → `SkippedItem` instead of silent DEBUG log.
+5. **Upload validator deletion:** `upload_validation.go` deleted entirely — `filterInvalidUploads`, `validateUploadActions`, `validateSingleUpload`, `ValidationFailure`, `removeActionsByIndex` all removed. Issue type constants moved to `issue_types.go`.
+6. **Watch handler updates:** Watch handlers and watch setup use `shouldObserve()` instead of direct `isAlwaysExcluded()` + `isValidOneDriveName()` calls.
+7. **Engine `recordSkippedItems()`:** Groups by reason, batch-upserts to sync_failures as actionable.
+8. **Engine `clearResolvedSkippedItems()`:** Deletes sync_failures entries for files no longer skipped.
+9. **Aggregated logging:** >10 same-type skips → 1 WARN summary + individual DEBUG. <=10 → per-file WARN.
+10. **Directory buffering:** Buffer entries per directory during `filepath.WalkDir` before emitting ChangeEvents. This is a prerequisite for Phase 7 (case collision detection), which requires a per-directory case-insensitive name map. Without buffering, the scanner emits events one-at-a-time during the walk and cannot compare sibling names.
 
 TDD: Write tests for ScanResult contract, engine recording, auto-clear, aggregated logging first.
 

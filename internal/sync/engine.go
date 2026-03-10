@@ -294,9 +294,6 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 		return nil, err
 	}
 
-	// Step 6b: Pre-upload validation — reject permanently invalid uploads.
-	plan = e.filterInvalidUploads(ctx, plan)
-
 	// Step 7: Build report from plan counts.
 	counts := countByType(plan.Actions)
 	report := buildReportFromCounts(counts, mode, opts)
@@ -440,16 +437,17 @@ func (e *Engine) observeRemote(ctx context.Context, bl *Baseline) ([]ChangeEvent
 	return events, token, nil
 }
 
-// observeLocal scans the local filesystem for changes.
-func (e *Engine) observeLocal(ctx context.Context, bl *Baseline) ([]ChangeEvent, error) {
+// observeLocal scans the local filesystem for changes and collects skipped
+// items (invalid names, path too long, file too large) for failure recording.
+func (e *Engine) observeLocal(ctx context.Context, bl *Baseline) (ScanResult, error) {
 	obs := NewLocalObserver(bl, e.logger, e.checkWorkers)
 
-	events, err := obs.FullScan(ctx, e.syncRoot)
+	result, err := obs.FullScan(ctx, e.syncRoot)
 	if err != nil {
-		return nil, fmt.Errorf("sync: local scan: %w", err)
+		return ScanResult{}, fmt.Errorf("sync: local scan: %w", err)
 	}
 
-	return events, nil
+	return result, nil
 }
 
 // observeChanges runs remote and local observers based on mode, buffers their
@@ -496,19 +494,23 @@ func (e *Engine) observeChanges(
 	// by processShortcuts and should not enter the planner as regular events.
 	remoteEvents = filterOutShortcuts(remoteEvents)
 
-	var localEvents []ChangeEvent
+	var localResult ScanResult
 
 	if mode != SyncDownloadOnly {
-		localEvents, err = e.observeLocal(ctx, bl)
+		localResult, err = e.observeLocal(ctx, bl)
 		if err != nil {
 			return nil, err
 		}
+
+		// Record observation-time issues (invalid names, path too long, file too large).
+		e.recordSkippedItems(ctx, localResult.Skipped)
+		e.clearResolvedSkippedItems(ctx, localResult.Skipped)
 	}
 
 	buf := NewBuffer(e.logger)
 	buf.AddAll(remoteEvents)
 	buf.AddAll(shortcutEvents)
-	buf.AddAll(localEvents)
+	buf.AddAll(localResult.Events)
 
 	return buf.FlushImmediate(), nil
 }
@@ -1124,7 +1126,7 @@ func (e *Engine) runPeriodicFullScan(
 				time.Sleep(rand.N(jitter)) //nolint:gosec // non-cryptographic jitter for I/O scheduling
 			}
 
-			scanEvents, err := obs.FullScan(ctx, syncRoot)
+			result, err := obs.FullScan(ctx, syncRoot)
 			if err != nil {
 				if ctx.Err() != nil {
 					return
@@ -1137,8 +1139,15 @@ func (e *Engine) runPeriodicFullScan(
 				continue
 			}
 
-			for i := range scanEvents {
-				obs.trySend(ctx, events, &scanEvents[i])
+			// Forward events only — skipped items are logged at DEBUG.
+			// The primary scan and safety scan handle recording to sync_failures.
+			for i := range result.Events {
+				obs.trySend(ctx, events, &result.Events[i])
+			}
+
+			if len(result.Skipped) > 0 {
+				e.logger.Debug("periodic scan: skipped items",
+					slog.Int("count", len(result.Skipped)))
 			}
 		case <-ctx.Done():
 			return
@@ -1175,9 +1184,6 @@ func (e *Engine) processBatch(
 
 		return
 	}
-
-	// Pre-upload validation for watch-mode batches.
-	plan = e.filterInvalidUploads(ctx, plan)
 
 	if len(plan.Actions) == 0 {
 		e.logger.Debug("empty plan for batch, nothing to do")
@@ -1272,53 +1278,94 @@ func (e *Engine) resolveWatchSafetyConfig(opts WatchOpts) *SafetyConfig {
 	return DefaultSafetyConfig()
 }
 
-// filterInvalidUploads runs pre-upload validation on the plan, recording
-// permanent issues for rejected uploads and returning a filtered plan.
-func (e *Engine) filterInvalidUploads(ctx context.Context, plan *ActionPlan) *ActionPlan {
-	keep, failures := validateUploadActions(plan.Actions)
-	if len(failures) == 0 {
-		return plan
+// recordSkippedItems records observation-time rejections (invalid names,
+// path too long, file too large) as actionable failures in sync_failures.
+// Groups items by issue type and uses UpsertActionableFailures for efficient
+// batch upserts. Aggregated logging: >10 same-type items → 1 WARN with
+// count + sample paths; ≤10 → per-file WARN.
+func (e *Engine) recordSkippedItems(ctx context.Context, skipped []SkippedItem) {
+	if len(skipped) == 0 {
+		return
 	}
 
-	recordErrors := 0
+	// Group by issue type for batch upsert and aggregated logging.
+	byReason := make(map[string][]SkippedItem)
+	for i := range skipped {
+		byReason[skipped[i].Reason] = append(byReason[skipped[i].Reason], skipped[i])
+	}
 
-	for _, f := range failures {
-		e.logger.Warn("pre-upload validation failed",
-			slog.String("path", f.Path),
-			slog.String("issue_type", f.IssueType),
-			slog.String("error", f.Error),
-		)
+	for reason, items := range byReason {
+		// Aggregated logging.
+		const aggregateThreshold = 10
+		if len(items) > aggregateThreshold {
+			// Log summary with sample paths.
+			const sampleCount = 3
+			samples := make([]string, 0, sampleCount)
+			for i := range items {
+				if i >= sampleCount {
+					break
+				}
+				samples = append(samples, items[i].Path)
+			}
 
-		var fileSize int64
-		if plan.Actions[f.Index].View != nil && plan.Actions[f.Index].View.Local != nil {
-			fileSize = plan.Actions[f.Index].View.Local.Size
-		}
-
-		if recErr := e.baseline.RecordFailure(ctx, &SyncFailureParams{
-			Path:      f.Path,
-			DriveID:   e.driveID,
-			Direction: "upload",
-			IssueType: f.IssueType,
-			ErrMsg:    f.Error,
-			FileSize:  fileSize,
-		}); recErr != nil {
-			e.logger.Error("failed to record sync failure",
-				slog.String("path", f.Path),
-				slog.String("error", recErr.Error()),
+			e.logger.Warn("observation filter: skipped files",
+				slog.String("issue_type", reason),
+				slog.Int("count", len(items)),
+				slog.Any("sample_paths", samples),
 			)
+		} else {
+			for i := range items {
+				e.logger.Warn("observation filter: skipped file",
+					slog.String("path", items[i].Path),
+					slog.String("issue_type", reason),
+					slog.String("detail", items[i].Detail),
+				)
+			}
+		}
 
-			recordErrors++
+		// Build ActionableFailure slice for batch upsert.
+		failures := make([]ActionableFailure, len(items))
+		for i := range items {
+			failures[i] = ActionableFailure{
+				Path:      items[i].Path,
+				DriveID:   e.driveID,
+				Direction: "upload",
+				IssueType: reason,
+				Error:     items[i].Detail,
+			}
+		}
+
+		if err := e.baseline.UpsertActionableFailures(ctx, failures); err != nil {
+			e.logger.Error("failed to record skipped items",
+				slog.String("issue_type", reason),
+				slog.Int("count", len(failures)),
+				slog.String("error", err.Error()),
+			)
 		}
 	}
+}
 
-	if recordErrors > 0 {
-		e.logger.Error("local issue recording failures",
-			slog.Int("failed", recordErrors),
-			slog.Int("total", len(failures)),
-		)
+// clearResolvedSkippedItems removes sync_failures entries for scanner-detectable
+// issue types that are no longer present in the current scan. For example, if a
+// user renames an invalid file to a valid name, the old failure is auto-cleared.
+func (e *Engine) clearResolvedSkippedItems(ctx context.Context, skipped []SkippedItem) {
+	// Collect current paths per scanner-detectable issue type.
+	currentByType := make(map[string][]string)
+	for i := range skipped {
+		currentByType[skipped[i].Reason] = append(currentByType[skipped[i].Reason], skipped[i].Path)
 	}
 
-	return removeActionsByIndex(plan, keep)
+	// For each scanner-detectable issue type, clear entries not in the current scan.
+	// If no items of that type were found, pass empty slice (clears all of that type).
+	for _, issueType := range scannerDetectableIssueTypes {
+		paths := currentByType[issueType] // nil if no items — that's fine (clears all)
+		if err := e.baseline.ClearResolvedActionableFailures(ctx, issueType, paths); err != nil {
+			e.logger.Error("failed to clear resolved failures",
+				slog.String("issue_type", issueType),
+				slog.String("error", err.Error()),
+			)
+		}
+	}
 }
 
 // minReconcileInterval is the minimum allowed reconcile interval. A full
