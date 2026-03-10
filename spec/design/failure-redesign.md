@@ -6,8 +6,165 @@ Comprehensive analysis addressing all questions, corrections from code review, t
 
 | Date | Changes |
 |------|---------|
+| 2026-03-09 | Taxonomy cross-reference pass: 10 fixes. #1: added HTTP 400 outage signature as 3rd service_outage trigger. #2: 423 reclassified from skip to transient (non-blocking retry handles multi-hour locks). #3: added remote move rows to Table 5. #4: defined transient exhaustion issue types (server_error, request_timeout, transient_conflict, transient_not_found). #5: clarified scope key format (internal IDs in ScopeState, local paths in sync_failures). #6: added Mechanism column to Table 2 distinguishing trial-based vs queryable vs scanner scopes. #7: fixed Table 5 — 403 blocks remote deletes and moves (not just uploads). #8: split quota auto-clear into own-drive/shortcut rows in Table 4. #9: added missing Shortcut Y rows in Table 5. #10: added doc.go removal to Table 6. |
+| 2026-03-09 | Added Failure Taxonomy section (6 tables) between revision history and Part 1. Tables cover: error classification, detection & recovery, user communication, auto-clear rules, scope interaction with shared drives, architectural removals. Serves as structured reference — the rest of the document is analysis and rationale. |
 | 2026-03-09 | Gap analysis pass: Parts 12-15 added. Part 12: gap analysis (14 items — 8 resolved, 5 dismissed, 1 corrected). Part 13: disk_full detection design. Part 14: consolidated removal inventory (code, policies, behaviors, specs to delete). Part 15: implementation plan (8 phases). 5 new requirements, 3 updated. |
 | 2026-03-09 | Code audit pass: 9 fixes from systematic code-vs-redesign contrast. Fixed: Client policy not parameterized (was claimed "already does"), doPreAuthRetry missing from redesign, 507 already non-retryable (wrong code change removed), hash retry explicitly unchanged, dual FailureRecorder interfaces consolidated, SyncFailureRow scope_key touch points expanded, scope lifecycle clarified (queryable vs trial-only), waitForThrottle language fixed. Compressed Parts 4 and 12. |
+
+---
+
+## Failure Taxonomy
+
+Structured reference for every failure type in the system. Each table captures one dimension. Together they are the complete specification — the rest of this document is analysis and rationale.
+
+**How to verify completeness:** Every `issue_type` in Table 1 must have exactly one row in Tables 2, 3, and 4. Every scope key in Table 1 must appear in Table 5. A missing cell is a spec gap.
+
+**Scope key format convention:** `ScopeState` (in-memory, used for scope matching in the tracker) uses stable internal identifiers: `quota:shortcut:$remoteDrive:$remoteItem`. The `sync_failures` table (persistent, used for `issues` display) uses human-readable local paths: `quota:shortcut:Team Docs`. Translation happens once when recording a failure — the engine knows both. Tables below show the human-readable format.
+
+### Table 1: Error Classification
+
+What each error is, how it's classified, and what scope it maps to.
+
+| Issue Type | Trigger | Classification | Scope Key | Scope Level | Blocks | Requirements |
+|---|---|---|---|---|---|---|
+| `invalid_filename` | Scanner: `isValidOneDriveName` rejects | actionable | — (file-scoped) | File | Nothing (file excluded from plan) | R-2.11.1–5 |
+| `path_too_long` | Scanner: path > 400 chars | actionable | — (file-scoped) | File | Nothing (file excluded from plan) | R-2.11.5 |
+| `file_too_large` | Scanner: file > 250 GB | actionable | — (file-scoped) | File | Nothing (file excluded from plan) | R-2.11.5 |
+| `case_collision` | Scanner: case-insensitive name conflict in same directory | actionable | — (file-scoped) | File | Nothing (both files excluded) | R-2.12.1–2 |
+| `quota_exceeded` | HTTP 507 on own-drive upload | actionable | `quota:own` | Account (own drives) | Own-drive uploads only | R-2.10.1, R-2.10.19 |
+| `quota_exceeded` | HTTP 507 on shortcut upload | actionable | `quota:shortcut:{localPath}` | Per-shortcut | Uploads to that shortcut only | R-2.10.1, R-2.10.20 |
+| `permission_denied` | HTTP 403 on own-drive action | actionable | `perm:remote:{localPath}` | Folder subtree (own drive) | All remote writes under boundary | R-2.10.23 |
+| `permission_denied` | HTTP 403 on shortcut action | actionable | `perm:remote:{localPath}` | Folder subtree (per-shortcut) | All remote writes under that shortcut | R-2.10.23–25 |
+| `local_permission_denied` | `os.ErrPermission` on file (dir readable) | actionable | — (file-scoped) | File | Nothing (file fails individually) | R-2.10.12 |
+| `local_permission_denied` | `os.ErrPermission` on file (dir unreadable) | actionable | `perm:dir:{path}` | Directory subtree | All ops under directory | R-2.10.12–13 |
+| `disk_full` | Disk available < `min_free_space` | actionable | `disk:local` | Local system | All downloads | R-2.10.43, R-6.2.6 |
+| `file_too_large_for_space` | Disk ≥ `min_free_space` but < file size + reserve | actionable | — (file-scoped) | File | Nothing (smaller files may proceed) | R-2.10.44 |
+| `rate_limited` | HTTP 429 (any request) | transient | `throttle:account` | Account (all drives) | All actions, all drives + shortcuts | R-2.10.26, R-6.8.4 |
+| `service_outage` | HTTP 5xx (pattern: 5 unique paths / 30s) | transient | `service` | Service (all drives) | All actions, all drives + shortcuts | R-2.10.28 |
+| `service_outage` | HTTP 503 with `Retry-After` | transient | `service` | Service (all drives) | All actions, all drives + shortcuts | R-2.10.28 |
+| `service_outage` | HTTP 400 with `innerError.code == "invalidRequest"` and known outage body (e.g., "ObjectHandle is Invalid") | transient | `service` | Service (all drives) | All actions, all drives + shortcuts | R-6.7.14 |
+| `auth_expired` | HTTP 401 after token refresh fails | fatal | — | Session | Sync terminates | R-6.8.14 |
+| `server_error` | HTTP 5xx (individual, before scope triggers) | transient | — (file-scoped) | File | Nothing (re-queued via tracker) | R-6.8.10 |
+| `request_timeout` | HTTP 408 (individual) | transient | — (file-scoped) | File | Nothing (re-queued via tracker) | R-6.8.10 |
+| `transient_conflict` | HTTP 412 (individual) | transient | — (file-scoped) | File | Nothing (re-queued via tracker) | R-6.8.10 |
+| `transient_not_found` | HTTP 404 (individual, resolves after delta reordering) | transient | — (file-scoped) | File | Nothing (re-queued via tracker) | R-6.8.10 |
+| `resource_locked` | HTTP 423 (SharePoint co-authoring lock) | transient | — (file-scoped) | File | Nothing (re-queued via tracker) | R-6.8.10 |
+
+Note: `permission_denied` blocks "all remote writes" — uploads, remote deletes, remote moves, and remote folder creates. Downloads and local-only operations (local deletes, local moves) continue. See Table 5 for the full matrix.
+
+### Table 2: Detection & Recovery
+
+How each failure is detected and how the system recovers. The "Mechanism" column distinguishes three fundamentally different lifecycle types.
+
+| Scope Key | Mechanism | Detection | Threshold | Recovery | First Trial | Backoff | Max Interval | Persist Scope? |
+|---|---|---|---|---|---|---|---|---|
+| — (file-scoped, observation) | Scanner filter | Scanner walk | Immediate | Auto-clear when file renamed/deleted/excluded | — | — | — | sync_failures only |
+| — (file-scoped, transient) | ScopeState + tracker | Single HTTP error | Immediate | Tracker re-queue (5 attempts: 1s, 2s, 4s, 8s, 16s) then escalate to sync_failures for reconciler (30s, 60s, 120s... max 1h) | — | — | — | sync_failures after budget |
+| `quota:own` | ScopeState + trial | Pattern | 3 unique own-drive paths with 507 in 10s | Trial (real upload to own drive) | 5 min | 2× | 1 hour | No (rediscover: 3 requests) |
+| `quota:shortcut:{d}:{i}` | ScopeState + trial | Pattern | 3 unique paths to same shortcut with 507 in 10s | Trial (real upload to that shortcut) | 5 min | 2× | 1 hour | No |
+| `perm:remote:*` | permissionCache + recheck | `handle403` + `walkPermissionBoundary` | Single 403 + boundary walk | Queryable: `recheckPermissions()` each sync pass | — | — | — | Via sync_failures |
+| `perm:dir:{path}` | permissionCache + recheck | `os.ErrPermission` + parent dir check | Single error (deterministic) | Recheck `os.Open(dir)` each sync pass | — | — | — | Via sync_failures |
+| `disk:local` | ScopeState + trial | Executor pre-check: available < `min_free_space` | Single check (deterministic) | Trial (real download, pre-check re-runs) | 5 min | 2× | 1 hour | No |
+| `throttle:account` | ScopeState + trial | Server signal | Single 429 response | Trial (any action) | `Retry-After` from response | 2× | 10 min | No (expires by restart) |
+| `service` | ScopeState + trial | Pattern (or server signal for 503 w/ Retry-After, 400 outage) | 5 unique paths with 5xx in 30s (pattern); single response (server signal) | Trial (any action) | 60s (or `Retry-After` if present) | 2× | 10 min | No (transient by nature) |
+
+### Table 3: User Communication
+
+What the user sees per failure type. Scope variants get separate rows.
+
+| Issue Type | Scope Variant | Reason Text | Action Text |
+|---|---|---|---|
+| `invalid_filename` | — | "File name '{name}' contains characters not allowed on OneDrive ({chars})" or "reserved name" | "Rename the file, or add it to skip_files in config" |
+| `path_too_long` | — | "Path exceeds OneDrive's 400-character limit ({len} characters)" | "Shorten the directory structure or file name" |
+| `file_too_large` | — | "File exceeds OneDrive's 250 GB size limit ({size})" | "Exclude via skip_files or max_file_size in config" |
+| `case_collision` | — | "Files '{name1}' and '{name2}' differ only in case — OneDrive is case-insensitive" | "Rename one of the files to avoid the collision" |
+| `quota_exceeded` | Own drive | "Your OneDrive storage is full ({used}/{total})" | "Free space on OneDrive (delete files, empty recycle bin) or upgrade storage plan" |
+| `quota_exceeded` | Shortcut | "Shared folder '{name}' owner's storage is full" | "Contact the folder owner to free space or upgrade their storage plan" |
+| `permission_denied` | Own drive | "OneDrive folder '{boundary}' is read-only" | "Request write access from the folder owner, or accept read-only sync" |
+| `permission_denied` | Shortcut | "Shared folder '{name}' is read-only (shared without write access)" | "Request write access from '{owner}', or accept read-only sync for this folder" |
+| `local_permission_denied` | File | "Cannot read file (local permission denied)" | "Fix file permissions: chmod/chown the file or its parent directory" |
+| `local_permission_denied` | Directory | "Directory '{path}' is not readable" | "Fix directory permissions: chmod/chown" |
+| `disk_full` | — | "Local disk space below minimum ({available} free, {min_free_space} required)" | "Free local disk space. Downloads will resume automatically." |
+| `file_too_large_for_space` | — | "Insufficient space for file: need {size}, available {available}" | "Free local disk space or increase min_free_space to 0 to disable reservation" |
+| `rate_limited` | — | "OneDrive API rate limit reached (retry in {seconds}s)" | "No action needed — will auto-resolve. Reduce transfer_workers to lower request rate" |
+| `service_outage` | — | "Microsoft Graph API appears unavailable (HTTP {code})" | "No action needed — will auto-resolve when service recovers" |
+| `auth_expired` | — | "Authentication has expired" | "Run 'onedrive login' to re-authenticate" |
+| `server_error` | — | "Server error (HTTP {code})" | "Will auto-resolve — no action needed. If persistent, check Microsoft service status" |
+| `request_timeout` | — | "Request timed out (HTTP 408)" | "Will auto-resolve — no action needed" |
+| `transient_conflict` | — | "Conflict detected (HTTP 412)" | "Will auto-resolve — no action needed" |
+| `transient_not_found` | — | "Item not found (HTTP 404) — may resolve after sync catches up" | "Will auto-resolve — no action needed" |
+| `resource_locked` | — | "File locked by SharePoint co-authoring (HTTP 423)" | "Will auto-resolve when lock is released, or close the file in the other application" |
+
+### Table 4: Auto-Clear Rules
+
+When each failure type is automatically removed without user intervention.
+
+| Issue Type | Auto-Clear Condition | Mechanism | Requirement |
+|---|---|---|---|
+| `invalid_filename` | File renamed/deleted/excluded | Engine compares `ScanResult.Skipped` against sync_failures after each scan | R-2.10.2 |
+| `path_too_long` | Path shortened or file deleted | Same as above | R-2.10.2 |
+| `file_too_large` | File deleted or `max_file_size` config changed | Same as above | R-2.10.2 |
+| `case_collision` | One of the colliding files renamed | Same as above | R-2.10.2 |
+| `quota_exceeded` (own drive) | Trial upload to own-drive path succeeds | Scope block `quota:own` cleared; action success clears sync_failures entry | R-2.10.5, R-2.10.21, R-2.10.41 |
+| `quota_exceeded` (shortcut) | Trial upload to that specific shortcut succeeds | Scope block `quota:shortcut:*` cleared; action success clears sync_failures entry | R-2.10.5, R-2.10.21, R-2.10.41 |
+| `permission_denied` | `recheckPermissions()` finds folder writable | Permission cache refreshed each sync pass; sync_failures cleared | R-2.10.9 |
+| `local_permission_denied` (dir) | `os.Open(dir)` succeeds on next sync pass | Engine `recheckLocalPermissions()` clears entry + scope block | R-2.10.13 |
+| `local_permission_denied` (file) | File permissions fixed, next upload succeeds | Action success clears sync_failures entry | R-2.10.41 |
+| `disk_full` | Trial download's pre-check finds space available | Scope block cleared | R-2.10.43 |
+| `file_too_large_for_space` | Disk space freed, next download attempt fits | Action success clears sync_failures entry | R-2.10.41 |
+| `rate_limited` | Trial succeeds after `Retry-After` | Scope block cleared (no sync_failures entry for transient) | R-2.10.7 |
+| `service_outage` | Trial succeeds | Scope block cleared | R-2.10.8 |
+| `auth_expired` | Never (fatal) | User must run `onedrive login` | — |
+| `server_error` | Retry succeeds (in-memory or reconciler) | In-memory: tracker re-queue succeeds, no sync_failures written. Exhausted: reconciler retry succeeds, sync_failures entry cleared | R-6.8.10, R-2.10.41 |
+| `request_timeout` | Same as `server_error` | Same as above | R-6.8.10, R-2.10.41 |
+| `transient_conflict` | Same as `server_error` | Same as above | R-6.8.10, R-2.10.41 |
+| `transient_not_found` | Same as `server_error` | Same as above | R-6.8.10, R-2.10.41 |
+| `resource_locked` | Same as `server_error` (lock releases, retry succeeds) | Same as above | R-6.8.10, R-2.10.41 |
+
+### Table 5: Scope Interaction with Shared Drives
+
+How each scope type behaves across own-drive vs shortcut boundaries within a single engine. "Remote writes" = uploads, remote deletes, remote moves, remote folder creates.
+
+| Action | 429 blocks? | 5xx blocks? | Own-drive 507 blocks? | Shortcut X 507 blocks? | Own-drive 403 blocks? | Shortcut X 403 blocks? |
+|---|---|---|---|---|---|---|
+| Own-drive uploads | Yes | Yes | **Yes** | No | If under boundary | No |
+| Own-drive remote deletes | Yes | Yes | No | No | If under boundary | No |
+| Own-drive remote moves | Yes | Yes | No | No | If under boundary | No |
+| Own-drive downloads | Yes | Yes | No | No | No | No |
+| Own-drive local deletes | Yes | Yes | No | No | No | No |
+| Own-drive local moves | Yes | Yes | No | No | No | No |
+| Shortcut X uploads | Yes | Yes | No | **Yes** | No | If under boundary |
+| Shortcut X remote deletes | Yes | Yes | No | No | No | If under boundary |
+| Shortcut X remote moves | Yes | Yes | No | No | No | If under boundary |
+| Shortcut X downloads | Yes | Yes | No | No | No | No |
+| Shortcut X local deletes | Yes | Yes | No | No | No | No |
+| Shortcut Y uploads | Yes | Yes | No | No | No | No |
+| Shortcut Y remote deletes | Yes | Yes | No | No | No | No |
+| Shortcut Y remote moves | Yes | Yes | No | No | No | No |
+| Shortcut Y downloads | Yes | Yes | No | No | No | No |
+| Shortcut Y local deletes | Yes | Yes | No | No | No | No |
+| Observation polling | Yes (R-2.10.30) | Yes (R-2.10.30) | No | No (R-2.10.31) | No | No |
+
+### Table 6: Architectural Removals
+
+What gets deleted from the old architecture. Ensures no remnants.
+
+| What | Where | Replaced By | Requirement |
+|---|---|---|---|
+| `withRetry()` loop | `sync/executor.go` | Tracker re-queue + engine classification | R-6.8.9 |
+| `classifyError()` | `sync/executor.go` | Engine `classifyResult()` | R-6.8.9 |
+| `classifyStatusCode()` | `sync/executor.go` | Engine `classifyResult()` | R-6.8.9 |
+| `sleepFunc` field | `sync/executor.go` | Non-blocking tracker delayed queue | R-6.8.7 |
+| `errClassRetryable/Fatal/Skip` | `sync/executor.go` | Engine `resultClass` enum | R-6.8.9 |
+| `executorMaxRetries` const | `sync/executor.go` | Tracker `MaxAttempts` (default 5) | R-6.8.10 |
+| `retry.Action` policy | `internal/retry/named.go` | Tracker backoff schedule | R-6.8.10 |
+| `circuit.go` + test | `internal/retry/` | Scope-based blocking with trial actions | — (dead code) |
+| Circuit breaker docs | `internal/retry/doc.go` | Remove section (references deleted code) | — |
+| `FailureRecorder` interface | `sync/store_interfaces.go` | Consolidated into `SyncFailureRecorder` | — (consolidation) |
+| `RecordFailure` method | `sync/baseline.go` | `RecordSyncFailure` (all callers) | — (consolidation) |
+| Transport retry in sync path | `graph/client.go` | `SyncTransport` policy (MaxAttempts: 0) | R-6.8.8 |
+| `isValidOneDriveName()` call | `sync/observer_remote.go:405` | Nothing (wrong: upload rules on downloads) | — (bug fix) |
+| 423 `errClassSkip` handling | `sync/executor.go` | Classified as transient in engine `classifyResult()` | R-6.8.9 |
 
 ---
 
@@ -279,13 +436,18 @@ type ScopeBlock struct {
     TrialCount    int           // consecutive failed trials (for backoff)
 }
 
-// Scope key format:
+// Scope key format (in-memory ScopeState — uses stable internal IDs for matching):
 //   "service"                               — all actions, all drives
 //   "throttle:account"                      — all actions, all drives (429)
 //   "quota:own"                             — uploads to user's own drive paths only
 //   "quota:shortcut:$remoteDrive:$remoteItem" — uploads to one specific shortcut only
 //   "perm:dir:/local/path"                  — all actions under a local directory
 //   "perm:remote:$remoteDrive:$boundary"    — writes under a remote permission boundary
+//
+// When recording to sync_failures, scope keys use human-readable local paths:
+//   "quota:shortcut:Team Docs"              — for display in `issues` command
+//   "perm:remote:Shared/Marketing"          — for display in `issues` command
+// Translation from internal IDs to local paths happens at recording time.
 ```
 
 **When a scope block is set.** The tracker moves all matching actions from its ready/delayed queues to a per-scope **held queue**. No new actions for the blocked scope are dispatched. Workers that were already executing in-flight actions complete naturally — their results route through the standard path and end up held if the scope is still blocked.
@@ -581,12 +743,12 @@ func (e *Engine) classifyResult(r WorkerResult) resultClass {
         return resultActionable    // permission_denied (scope key depends on target drive — see handle403)
     case r.HTTPStatus == 401:
         return resultFatal         // auth expired, unrecoverable
-    case r.HTTPStatus == 423:
-        return resultSkip          // SharePoint lock, don't retry
+    case r.HTTPStatus == 400 && isOutagePattern(r.Err):
+        return resultTransient     // known outage pattern (e.g., "ObjectHandle is Invalid") — feeds scope detection
     case r.HTTPStatus >= 500:
         return resultTransient     // server error, retry via tracker
-    case r.HTTPStatus == 404 || r.HTTPStatus == 408 || r.HTTPStatus == 412:
-        return resultTransient     // known transient HTTP codes
+    case r.HTTPStatus == 404 || r.HTTPStatus == 408 || r.HTTPStatus == 412 || r.HTTPStatus == 423:
+        return resultTransient     // known transient HTTP codes (423 = SharePoint lock, self-resolving)
     case errors.Is(r.Err, os.ErrPermission):
         return resultActionable    // local permission denied
     default:
@@ -614,6 +776,9 @@ func (e *Engine) updateScope(r WorkerResult, class resultClass) {
         e.handle403(r)
     case r.HTTPStatus >= 500:
         // Service-level: Graph API shared infrastructure, affects all drives
+        e.scopeState.AddToWindow("service", r)
+    case r.HTTPStatus == 400 && isOutagePattern(r.Err):
+        // Known outage pattern (e.g., "ObjectHandle is Invalid") — route to service scope
         e.scopeState.AddToWindow("service", r)
     }
 }
@@ -1463,6 +1628,7 @@ Everything that gets deleted during this redesign. *Eng Philosophy: "Ensure afte
 | `internal/sync/executor.go` | `sleepFunc` field and injection | No more blocking sleep in executor. |
 | `internal/sync/executor.go` | `errClassRetryable`, `errClassFatal`, `errClassSkip` constants | Engine uses `resultClass` enum instead. |
 | `internal/sync/executor.go` | `executorMaxRetries` constant | No executor retry budget — tracker handles retry budget. |
+| `internal/sync/executor.go` | 423 `errClassSkip` handling | Reclassified: 423 is transient in engine `classifyResult()`. Non-blocking retry handles multi-hour SharePoint locks. |
 | `internal/sync/observer_remote.go` | `isValidOneDriveName()` call (line ~405) | Wrong: applies upload naming rules to downloads. OneDrive enforces its own rules server-side. |
 | `internal/sync/store_interfaces.go` | `FailureRecorder` interface | Consolidated into `SyncFailureRecorder`. See Interface Consolidation below. |
 
@@ -1493,6 +1659,7 @@ The store has two overlapping failure recording interfaces: `FailureRecorder` (o
 | Nested retry multiplication | 5 transport × 4 executor = 20 attempts per action | **Eliminated.** One attempt per dispatch. 5 in-memory re-queues max before escalation. |
 | Three-way error classification | `graph/errors.go isRetryable()` + `executor.go classifyError()` + `engine.go processWorkerResult()` | **Collapsed to one.** Engine `classifyResult()` is the single classification point. |
 | Per-action blocking backoff | Worker sleeps 1-60s between retries | **Eliminated.** Workers never sleep. Backoff is in tracker delayed queue (non-blocking). |
+| 423 skip (no retry) | `errClassSkip` — SharePoint locks silently dropped | **Reclassified as transient.** Non-blocking retry via tracker handles multi-hour locks naturally. Reconciler backoff (30s→1h) matches lock durations. |
 
 ### Spec/Design Removals
 
