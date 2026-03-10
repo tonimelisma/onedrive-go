@@ -110,7 +110,7 @@ Failure tracking, scope-based classification, and lifecycle management. Each fai
 - R-2.10.31: During `quota:shortcut:*` scope blocks, observation of that shortcut shall continue (read-only). Other observations shall be unaffected. [planned]
 - R-2.10.32: The `status` command shall show per-scope block status as separate entries per drive/shortcut. [planned]
 - R-2.10.33: The `sync_failures` table shall store a `scope_key` column for scope-level failures, enabling `issues` display grouping without re-deriving scope. [planned]
-- R-2.10.34: The `scope_key` format shall be: `quota:own`, `quota:shortcut:{localPath}`, `perm:remote:{localPath}`. Human-resolvable for display. [planned]
+- R-2.10.34: The `scope_key` format shall be: `quota:own`, `quota:shortcut:{localPath}`, `perm:remote:{localPath}`. The sync_failures table (persistent, used for issues display) stores human-readable local paths (e.g., `quota:shortcut:Team Docs`). ScopeState (in-memory, used for scope matching in the tracker) uses stable internal identifiers (e.g., `quota:shortcut:$remoteDrive:$remoteItem`). Translation happens once at recording time — the engine knows both formats. [planned]
 - R-2.10.35: Engines shall not coordinate scope blocks across engine boundaries. Each engine shall discover scope conditions independently. [planned]
 - R-2.10.36: When 429 is discovered independently per engine (same token), no shared state shall be required. [planned]
 - R-2.10.37: Shortcut scope blocks shall be engine-internal. A shortcut in Engine A shall have no effect on Engine B's shortcuts. [planned]
