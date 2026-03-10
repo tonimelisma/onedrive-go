@@ -1508,10 +1508,14 @@ func nullInt64(n int64) sql.NullInt64 {
 // SyncFailureRecorder methods
 // ---------------------------------------------------------------------------
 
-// isActionableIssue returns true for issue types that require user action and should not be retried.
+// isActionableIssue returns true for issue types that require user action and
+// should not be auto-retried. Transient issues (e.g. IssueServiceOutage) are
+// NOT actionable — they auto-resolve when the external condition clears.
 func isActionableIssue(issueType string) bool {
 	switch issueType {
-	case IssueInvalidFilename, IssuePathTooLong, IssueFileTooLarge:
+	case IssueInvalidFilename, IssuePathTooLong, IssueFileTooLarge,
+		IssuePermissionDenied, IssueQuotaExceeded, IssueLocalPermissionDenied,
+		IssueCaseCollision, IssueDiskFull, IssueFileTooLargeForSpace:
 		return true
 	default:
 		return false

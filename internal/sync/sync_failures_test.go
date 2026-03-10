@@ -256,14 +256,19 @@ func TestCommitOutcome_DownloadSuccess_DoesNotClearLocalIssue(t *testing.T) {
 func TestLocalIssueSyncStatus(t *testing.T) {
 	tests := []struct {
 		issueType string
-		want      bool // true = permanent
+		want      bool // true = actionable (user must fix)
 	}{
 		{IssueInvalidFilename, true},
 		{IssuePathTooLong, true},
 		{IssueFileTooLarge, true},
+		{IssuePermissionDenied, true},
+		{IssueQuotaExceeded, true},
+		{IssueLocalPermissionDenied, true},
+		{IssueCaseCollision, true},
+		{IssueDiskFull, true},
+		{IssueFileTooLargeForSpace, true},
+		{IssueServiceOutage, false}, // transient — auto-resolves
 		{"upload_failed", false},
-		{"permission_denied", false},
-		{"quota_exceeded", false},
 		{"locked", false},
 		{"sharepoint_restriction", false},
 	}

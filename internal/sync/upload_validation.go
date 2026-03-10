@@ -5,12 +5,21 @@ import (
 	"strings"
 )
 
-// Issue type constants for upload validation failures.
+// Issue type constants for sync failures. Upload validation issues are
+// detected pre-upload; other types are detected at runtime by the engine.
 const (
 	IssueInvalidFilename  = "invalid_filename"
 	IssuePathTooLong      = "path_too_long"
 	IssueFileTooLarge     = "file_too_large"
 	IssuePermissionDenied = "permission_denied"
+
+	// New issue types for failure handling redesign (Phase 2).
+	IssueQuotaExceeded         = "quota_exceeded"
+	IssueLocalPermissionDenied = "local_permission_denied"
+	IssueCaseCollision         = "case_collision"
+	IssueDiskFull              = "disk_full"
+	IssueServiceOutage         = "service_outage"
+	IssueFileTooLargeForSpace  = "file_too_large_for_space"
 )
 
 // Upload validation constants.
