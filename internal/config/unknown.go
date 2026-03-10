@@ -74,11 +74,12 @@ var knownDriveKeysList = func() []string {
 	return keys
 }()
 
-// checkUnknownKeys inspects TOML metadata for undecoded keys and returns
-// an error with "did you mean?" suggestions for each unknown key.
-// Drive sections (keys containing ":") are skipped because they are parsed
-// separately in the two-pass decode.
-func checkUnknownKeys(md *toml.MetaData) error {
+// collectUnknownGlobalKeyErrors inspects TOML metadata for undecoded keys
+// and returns individual errors for each unknown global key. Drive sections
+// (keys containing ":") are skipped because they are parsed separately.
+// Used by both the strict path (checkUnknownKeys) and the lenient path
+// (LoadLenient, which collects these as warnings).
+func collectUnknownGlobalKeyErrors(md *toml.MetaData) []error {
 	undecoded := md.Undecoded()
 	if len(undecoded) == 0 {
 		return nil
@@ -100,11 +101,13 @@ func checkUnknownKeys(md *toml.MetaData) error {
 		}
 	}
 
-	if len(errs) > 0 {
-		return errors.Join(errs...)
-	}
+	return errs
+}
 
-	return nil
+// checkUnknownKeys wraps collectUnknownGlobalKeyErrors for the strict loading
+// path, joining all errors into a single error.
+func checkUnknownKeys(md *toml.MetaData) error {
+	return errors.Join(collectUnknownGlobalKeyErrors(md)...)
 }
 
 // buildGlobalKeyError creates a descriptive error for an unknown top-level key,
@@ -133,9 +136,10 @@ func buildGlobalKeyError(keyStr string) error {
 	return fmt.Errorf("unknown config key %q", fieldName)
 }
 
-// checkDriveUnknownKeys validates that all keys in a drive section map are
-// recognized drive keys. Returns an error with suggestions for unknown keys.
-func checkDriveUnknownKeys(driveMap map[string]any, canonicalID string) error {
+// collectDriveUnknownKeyErrors returns individual errors for each unknown key
+// in a drive section. Used by both the strict path (checkDriveUnknownKeys) and
+// the lenient path (decodeDriveSectionsLenient).
+func collectDriveUnknownKeyErrors(driveMap map[string]any, canonicalID string) []error {
 	var errs []error
 
 	for key := range driveMap {
@@ -152,7 +156,13 @@ func checkDriveUnknownKeys(driveMap map[string]any, canonicalID string) error {
 		}
 	}
 
-	return errors.Join(errs...)
+	return errs
+}
+
+// checkDriveUnknownKeys wraps collectDriveUnknownKeyErrors for the strict
+// loading path, joining all errors into a single error.
+func checkDriveUnknownKeys(driveMap map[string]any, canonicalID string) error {
+	return errors.Join(collectDriveUnknownKeyErrors(driveMap, canonicalID)...)
 }
 
 // closestMatch finds the closest known key by Levenshtein distance.
