@@ -54,15 +54,15 @@ The system shall resolve settings with a four-layer override chain: defaults →
   across drives. [verified]
 - R-4.8.4: Informational commands (`drive list`, `status`, `whoami`) shall
   tolerate config validation errors, parsing what they can and reporting
-  warnings instead of failing. [implemented]
+  warnings instead of failing. [verified]
 - R-4.8.5: File operation commands (`ls`, `get`, `put`, `rm`, `mkdir`, `mv`,
   `cp`, `stat`) shall require only a selectable drive section and a valid
   token. They shall NOT require `sync_dir` or any sync-related settings.
-  [planned]
+  [verified]
 - R-4.8.6: The `sync` command shall require `sync_dir` to be set, absolute,
   and either an existing directory or creatable. All sync-related settings
   (filters, safety thresholds, timing) shall be fully validated before sync
-  starts. [implemented]
+  starts. [verified]
 
 ## R-4.9 Config Schema [planned]
 
@@ -70,11 +70,11 @@ The system shall resolve settings with a four-layer override chain: defaults →
   global settings are required for any command to function. [verified]
 - R-4.9.2: For file operation commands, a drive section header
   (`["type:email"]`) must exist in config. No fields inside the section are
-  required. [planned]
+  required. [verified]
 - R-4.9.3: For the `sync` command, each drive section must contain `sync_dir`
   set to a valid local path. This is the only required per-drive config field.
   All other per-drive fields (filters, poll_interval, paused) are optional with
-  documented defaults. [planned]
+  documented defaults. [verified]
 - R-4.9.4: The config design doc shall contain a complete field reference:
   every global and per-drive field, its type, default value, valid range, and
   which command class uses it. [planned]
