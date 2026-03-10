@@ -61,11 +61,8 @@ type SyncFailureParams struct {
 // (upload, download, delete) in the unified sync_failures table.
 type SyncFailureRecorder interface {
 	RecordFailure(ctx context.Context, p SyncFailureParams) error
-	RecordSyncFailure(ctx context.Context, path string, driveID driveid.ID, direction, issueType, errMsg string,
-		httpStatus int, fileSize int64, localHash string, itemID string, scopeKey string) error
-	RecordFailureWithStateTransition(ctx context.Context, path string, driveID driveid.ID,
-		direction, issueType, errMsg string, httpStatus int, scopeKey string) error
 	ListSyncFailures(ctx context.Context) ([]SyncFailureRow, error)
+	ListSyncFailuresByIssueType(ctx context.Context, issueType string) ([]SyncFailureRow, error)
 	ListActionableFailures(ctx context.Context) ([]SyncFailureRow, error)
 	ClearSyncFailure(ctx context.Context, path string, driveID driveid.ID) error
 	ClearActionableSyncFailures(ctx context.Context) error
