@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/engine.go, internal/sync/engine_shortcuts.go, internal/sync/orchestrator.go, internal/sync/drive_runner.go, sync.go, sync_helpers.go
 
-Implements: R-2.1 [verified], R-2.6 [verified], R-2.8 [verified], R-3.4.2 [verified], R-2.10.1 [planned], R-2.10.2 [planned], R-2.10.3 [planned], R-2.10.4 [planned], R-2.10.7 [planned], R-2.10.9 [planned], R-2.10.10 [planned], R-2.10.12 [planned], R-2.10.13 [planned], R-2.10.17 [planned], R-2.10.18 [planned], R-2.10.19 [planned], R-2.10.20 [planned], R-2.10.23 [planned], R-2.10.24 [planned], R-2.10.25 [planned], R-2.10.26 [planned], R-2.10.28 [planned], R-2.10.29 [planned], R-2.10.30 [planned], R-2.10.31 [planned], R-2.10.35 [planned], R-2.10.36 [planned], R-2.10.37 [planned], R-2.10.38 [planned], R-6.6.7 [planned], R-6.6.8 [planned], R-6.6.9 [planned], R-6.6.10 [planned], R-6.7.27 [planned]
+Implements: R-2.1 [verified], R-2.6 [verified], R-2.8 [verified], R-3.4.2 [verified], R-2.10.1 [planned], R-2.10.2 [planned], R-2.10.3 [planned], R-2.10.4 [planned], R-2.10.7 [planned], R-2.10.9 [planned], R-2.10.10 [planned], R-2.10.12 [planned], R-2.10.13 [planned], R-2.10.17 [planned], R-2.10.18 [planned], R-2.10.19 [planned], R-2.10.20 [planned], R-2.10.23 [planned], R-2.10.24 [planned], R-2.10.25 [planned], R-2.10.26 [planned], R-2.10.28 [planned], R-2.10.29 [planned], R-2.10.30 [planned], R-2.10.31 [planned], R-2.10.35 [planned], R-2.10.36 [planned], R-2.10.37 [planned], R-2.10.38 [planned], R-6.6.7 [planned], R-6.6.8 [planned], R-6.6.9 [planned], R-6.6.10 [planned], R-6.6.12 [planned], R-6.7.27 [planned], R-6.8.15 [planned]
 
 ## Engine (`engine.go`)
 
@@ -15,9 +15,13 @@ Watch mode uses a unified tick loop: filesystem events are debounced by the chan
 
 ### Planned: Error Classification (`classifyResult()`)
 
-Implements: R-6.8.9 [planned], R-6.7.27 [planned]
+Implements: R-6.8.9 [planned], R-6.8.15 [planned], R-6.7.27 [planned]
 
-Single classification point for all worker results. Maps HTTP status codes + error types → result class (success, transient, actionable, fatal). Target-drive-aware: uses `WorkerResult.TargetDriveID` and `ShortcutKey` to route scope decisions correctly. Replaces executor's `classifyError`/`classifyStatusCode`.
+Single classification point for all worker results. Maps HTTP status codes + error types → result class (success, transient, actionable, fatal). Replaces executor's `classifyError`/`classifyStatusCode`.
+
+Target-drive-aware scope routing: `WorkerResult.TargetDriveID` and `ShortcutKey` determine scope key. Own-drive actions (empty `ShortcutKey`) route to `quota:own` or `perm:remote:{path}`. Shortcut actions route to `quota:shortcut:$drive:$item` or `perm:remote:{path}`. 429/5xx always route to account/service scope regardless of target drive. Empty `TargetDriveID` (local-only errors) skips remote scope routing entirely.
+
+Transient classification (R-6.8.15): 5xx → `server_error`, 408 → `request_timeout`, 412 → `transient_conflict`, 404 → `transient_not_found`, 423 → `resource_locked`. 423 reclassified from skip to transient — non-blocking tracker re-queue handles multi-hour SharePoint locks naturally.
 
 ### Planned: Scope Detection and Management (`updateScope()`)
 
@@ -45,9 +49,9 @@ Scanner returns `ScanResult{Events []ChangeEvent, Skipped []SkippedItem}` instea
 
 ### Planned: Aggregated Logging
 
-Implements: R-6.6.7 [planned], R-6.6.8 [planned], R-6.6.9 [planned], R-6.6.10 [planned]
+Implements: R-6.6.7 [planned], R-6.6.8 [planned], R-6.6.9 [planned], R-6.6.10 [planned], R-6.6.12 [planned]
 
-When >10 items share the same warning category, log 1 WARN summary + individual DEBUG. Transient retries at DEBUG, resolved at INFO, exhausted at WARN.
+When >10 items share the same warning category, log 1 WARN summary + individual DEBUG. Transient retries at DEBUG, resolved at INFO, exhausted at WARN. Extends to execution-time transient failures: when >10 transient failures of the same `issue_type` exhaust their retry budget in a single sync pass, aggregate into 1 WARN summary with count, individual paths at DEBUG (R-6.6.12).
 
 ### Planned: Local Permission Handling
 
