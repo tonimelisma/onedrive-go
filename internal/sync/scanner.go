@@ -9,7 +9,6 @@
 //   - computeStableHash:     double-stat hash for actively-written files
 //   - shouldObserve:         unified observation filter (Stage 1: name + path)
 //   - validateOneDriveName:  returns reason + detail for invalid names
-//   - isValidOneDriveName:   convenience predicate (delegates to validateOneDriveName)
 //   - isAlwaysExcluded:      OneDrive-incompatible name filtering
 //
 // Related files:
@@ -310,9 +309,10 @@ func (o *LocalObserver) processEntry(
 	// Stage 2 observation filter: file size check (requires stat, hence here).
 	if !d.IsDir() && info.Size() > maxOneDriveFileSize {
 		*skipped = append(*skipped, SkippedItem{
-			Path:   dbRelPath,
-			Reason: IssueFileTooLarge,
-			Detail: fmt.Sprintf("file size %d bytes exceeds 250 GB limit", info.Size()),
+			Path:     dbRelPath,
+			Reason:   IssueFileTooLarge,
+			Detail:   fmt.Sprintf("file size %d bytes exceeds 250 GB limit", info.Size()),
+			FileSize: info.Size(),
 		})
 		return nil // skip — don't create event or hash job
 	}
@@ -627,15 +627,6 @@ func asciiLower(s string) string {
 // partial downloads and editor temporaries.
 var alwaysExcludedSuffixes = []string{
 	".partial", ".tmp", ".swp", ".crdownload",
-}
-
-// isValidOneDriveName returns true if the name can be synced to OneDrive.
-// Delegates to validateOneDriveName for the actual checks. Retained as a
-// convenience predicate for call sites that don't need the reason/detail
-// (e.g., executor_delete.go isDisposable, observer_remote.go filtering).
-func isValidOneDriveName(name string) bool {
-	reason, _ := validateOneDriveName(name)
-	return reason == ""
 }
 
 // isReservedDeviceName returns true for Windows reserved device names

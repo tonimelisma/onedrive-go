@@ -239,9 +239,10 @@ func (s FolderCreateSide) String() string {
 // observation time. The scanner collects these alongside events so the
 // engine can record them as actionable failures in sync_failures.
 type SkippedItem struct {
-	Path   string // NFC-normalized, relative to sync root
-	Reason string // issue type constant (IssueInvalidFilename, etc.)
-	Detail string // human-readable explanation
+	Path     string // NFC-normalized, relative to sync root
+	Reason   string // issue type constant (IssueInvalidFilename, etc.)
+	Detail   string // human-readable explanation
+	FileSize int64  // populated for IssueFileTooLarge (after stat)
 }
 
 // ScanResult is the return type of FullScan. Events are valid change

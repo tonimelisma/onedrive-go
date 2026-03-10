@@ -391,25 +391,6 @@ func (o *RemoteObserver) classifyItem(item *graph.Item, inflight map[driveid.Ite
 		return nil
 	}
 
-	// B-307: Filtering symmetry — apply the same exclusion rules as the
-	// local observer. Deleted items bypass filtering so pre-B-307 synced
-	// excluded files get their delete events propagated for cleanup.
-	if !item.IsDeleted && item.Name != "" {
-		if isAlwaysExcluded(item.Name) {
-			o.logger.Debug("skipping always-excluded remote item",
-				slog.String("name", item.Name), slog.String("item_id", item.ID))
-
-			return nil
-		}
-
-		if !isValidOneDriveName(item.Name) {
-			o.logger.Debug("skipping invalid OneDrive name in remote delta",
-				slog.String("name", item.Name), slog.String("item_id", item.ID))
-
-			return nil
-		}
-	}
-
 	// Shortcut detection (6.4a.2): items with a remoteItem facet pointing to
 	// another drive AND IsFolder are shortcuts. These get ChangeShortcut events
 	// instead of normal folder create/modify — the engine handles them

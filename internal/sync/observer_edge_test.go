@@ -127,7 +127,7 @@ func TestNosyncGuard_PreventsAllSync(t *testing.T) {
 }
 
 // TestOneDriveInvalidNames_Rejected validates that all OneDrive-invalid
-// name patterns are correctly rejected by isValidOneDriveName.
+// name patterns are correctly rejected by validateOneDriveName.
 func TestOneDriveInvalidNames_Rejected(t *testing.T) {
 	invalidNames := []struct {
 		name   string
@@ -161,7 +161,8 @@ func TestOneDriveInvalidNames_Rejected(t *testing.T) {
 
 	for _, tt := range invalidNames {
 		t.Run(tt.name+"_"+tt.reason, func(t *testing.T) {
-			assert.False(t, isValidOneDriveName(tt.name),
+			reason, _ := validateOneDriveName(tt.name)
+			assert.NotEmpty(t, reason,
 				"%q should be rejected (%s)", tt.name, tt.reason)
 		})
 	}
@@ -187,7 +188,8 @@ func TestOneDriveValidNames_Accepted(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			// Note: NUL.txt would actually be valid since we only check
 			// the exact name "nul", not names starting with "nul".
-			assert.True(t, isValidOneDriveName(name),
+			reason, _ := validateOneDriveName(name)
+			assert.Empty(t, reason,
 				"%q should be accepted", name)
 		})
 	}
@@ -256,17 +258,20 @@ func TestAsciiLower(t *testing.T) {
 	}
 }
 
-// TestIsValidOneDriveName_MaxLength validates the 255-byte limit.
-func TestIsValidOneDriveName_MaxLength(t *testing.T) {
+// TestValidateOneDriveName_MaxLength validates the 255-byte limit.
+func TestValidateOneDriveName_MaxLength(t *testing.T) {
 	validName := strings.Repeat("a", 255)
-	assert.True(t, isValidOneDriveName(validName), "255 bytes should be valid")
+	reason, _ := validateOneDriveName(validName)
+	assert.Empty(t, reason, "255 bytes should be valid")
 
 	// 256 bytes is invalid.
 	invalidName := validName + "b"
-	assert.False(t, isValidOneDriveName(invalidName), "256 bytes should be invalid")
+	reason, _ = validateOneDriveName(invalidName)
+	assert.NotEmpty(t, reason, "256 bytes should be invalid")
 }
 
-// TestIsValidOneDriveName_Empty validates that empty names are rejected.
-func TestIsValidOneDriveName_Empty(t *testing.T) {
-	assert.False(t, isValidOneDriveName(""), "empty name should be invalid")
+// TestValidateOneDriveName_Empty validates that empty names are rejected.
+func TestValidateOneDriveName_Empty(t *testing.T) {
+	reason, _ := validateOneDriveName("")
+	assert.NotEmpty(t, reason, "empty name should be invalid")
 }
