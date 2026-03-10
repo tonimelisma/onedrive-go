@@ -1734,7 +1734,7 @@ func (m *SyncStore) UpsertActionableFailures(ctx context.Context, failures []Act
 	if err != nil {
 		return fmt.Errorf("sync: begin upsert actionable failures: %w", err)
 	}
-	defer tx.Rollback() //nolint:errcheck // rollback on commit is no-op
+	defer func() { _ = tx.Rollback() }()
 
 	stmt, err := tx.PrepareContext(ctx,
 		`INSERT INTO sync_failures
@@ -1805,9 +1805,9 @@ func (m *SyncStore) ClearResolvedActionableFailures(ctx context.Context, issueTy
 		args = append(args, p)
 	}
 
-	query := fmt.Sprintf(
-		`DELETE FROM sync_failures WHERE category = 'actionable' AND issue_type = ? AND path NOT IN (%s)`,
-		string(placeholders))
+	//nolint:gosec // G202: placeholders is only '?' and ',' chars, not user input
+	query := `DELETE FROM sync_failures WHERE category = 'actionable' AND issue_type = ? AND path NOT IN (` +
+		string(placeholders) + `)`
 
 	_, err := m.db.ExecContext(ctx, query, args...)
 	if err != nil {

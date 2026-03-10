@@ -58,7 +58,10 @@ type Client struct {
 // userAgent is sent in every request; defaults to "onedrive-go/dev" if empty.
 // retryPolicy controls the retry loop — use retry.Transport for standard
 // behavior or retry.SyncTransport for single-attempt sync dispatch.
-func NewClient(baseURL string, httpClient *http.Client, token TokenSource, logger *slog.Logger, userAgent string, retryPolicy retry.Policy) *Client {
+func NewClient(
+	baseURL string, httpClient *http.Client, token TokenSource,
+	logger *slog.Logger, userAgent string, retryPolicy retry.Policy,
+) *Client {
 	if token == nil {
 		panic("graph.NewClient: token source must not be nil")
 	}
