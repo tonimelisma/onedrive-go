@@ -25,10 +25,6 @@ var ErrPathEscapesSyncRoot = errors.New("sync: path escapes sync root")
 // Distinct from strRoot in types.go which serializes the ItemTypeRoot enum.
 const graphRootID = "root"
 
-// executorMaxRetries is the number of executor-level retries, sourced from
-// the unified retry.Action policy.
-var executorMaxRetries = retry.Action.MaxAttempts
-
 // errClass classifies an error for the executor's retry/skip/fatal decision.
 type errClass int
 
@@ -448,7 +444,7 @@ func classifyStatusCode(code int) errClass {
 func (e *Executor) withRetry(ctx context.Context, desc string, fn func() error) error {
 	var lastErr error
 
-	for attempt := range executorMaxRetries + 1 {
+	for attempt := range retry.Action.MaxAttempts + 1 {
 		lastErr = fn()
 		if lastErr == nil {
 			return nil
@@ -458,7 +454,7 @@ func (e *Executor) withRetry(ctx context.Context, desc string, fn func() error) 
 			return lastErr
 		}
 
-		if attempt < executorMaxRetries {
+		if attempt < retry.Action.MaxAttempts {
 			backoff := calcExecBackoff(attempt)
 			e.logger.Warn("retrying after transient error",
 				slog.String("operation", desc),
