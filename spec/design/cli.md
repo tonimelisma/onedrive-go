@@ -2,7 +2,7 @@
 
 GOVERNS: main.go, root.go, format.go, signal.go, pidfile.go, auth.go, ls.go, rm.go, mkdir.go, mv.go, cp.go, stat.go, pause.go, resume.go, recycle_bin.go, internal/logfile/logfile.go
 
-Implements: R-1 [implemented], R-3.1 [verified], R-4.7 [verified], R-4.8.4 [implemented], R-1.9 [verified], R-1.2.4 [verified], R-1.3.4 [verified], R-1.4.3 [verified], R-1.5.1 [verified], R-1.6.1 [verified], R-1.7.1 [verified], R-1.8.1 [verified], R-1.9.4 [verified], R-3.1.6 [verified], R-3.3.10 [verified], R-3.3.11 [verified], R-2.3.10 [verified], R-2.7.1 [verified], R-2.3.7 [planned], R-2.3.8 [planned], R-2.3.9 [planned], R-6.6.11 [planned]
+Implements: R-1 [implemented], R-3.1 [verified], R-4.7 [verified], R-4.8.4 [verified], R-1.9 [verified], R-1.2.4 [verified], R-1.3.4 [verified], R-1.4.3 [verified], R-1.5.1 [verified], R-1.6.1 [verified], R-1.7.1 [verified], R-1.8.1 [verified], R-1.9.4 [verified], R-3.1.6 [verified], R-3.3.10 [verified], R-3.3.11 [verified], R-2.3.10 [verified], R-2.7.1 [verified], R-2.3.7 [planned], R-2.3.8 [planned], R-2.3.9 [planned], R-6.6.11 [planned]
 
 ## Overview
 
@@ -89,7 +89,7 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
 - `SessionProvider` caches `TokenSource`s by token file path — multiple drives sharing an account share one `TokenSource`, preventing OAuth2 refresh token rotation races.
 - CLI handlers use `cmd.Context()` for signal propagation. Exception: upload session cancel paths use `context.Background()` because the cancel must succeed even when the original context is done.
 - The status command uses a testable service layer with narrowed interfaces (`accountMetaReader`, `tokenStateChecker`, `syncStateQuerier`), decoupling status aggregation from Cobra wiring.
-- Informational commands (`drive list`, `status`, `whoami`) use lenient config loading (`LoadOrDefaultLenient`) that collects validation errors as warnings instead of failing. This allows users to inspect their configuration and see drive status even when config has errors. [implemented]
+- Informational commands (`drive list`, `status`, `whoami`) use lenient config loading (`LoadOrDefaultLenient`) that collects validation errors as warnings instead of failing. This allows users to inspect their configuration and see drive status even when config has errors. Each of these commands (and `drive search`) must have `skipConfigAnnotation` on the leaf Cobra command — not just the parent — because Cobra checks annotations on the executing command, not parent commands. [verified]
 - Extract `multiHandler` from `root.go` to `internal/slogutil/` if logging grows (structured error reporting, log sampling). [planned]
 
 ## Planned: Issues Display Enhancements

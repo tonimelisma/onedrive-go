@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -98,22 +97,30 @@ func TestE2E_SharedFolder_OwnerUpload_RecipientDownload(t *testing.T) {
 		"sync should complete successfully for recipient")
 }
 
-// TestE2E_SharedFolder_DriveList_ShowsShared verifies that `drive list --shared`
-// shows shared drives available to the recipient.
+// Validates: R-3.6.1
+// TestE2E_SharedFolder_DriveList_ShowsShared verifies that `drive list`
+// shows shared drives as available when authenticated as the recipient.
 func TestE2E_SharedFolder_DriveList_ShowsShared(t *testing.T) {
 	requireDrive2Shared(t)
 	registerLogDump(t)
 
-	cfgPath := writeMinimalConfig(t)
+	// Use drive2 (the recipient) with per-test isolation so only drive2's
+	// token and config are visible. drive list doesn't accept --drive, so
+	// we use runCLICore with empty driveID.
+	syncDir := t.TempDir()
+	cfgPath, env := writeSyncConfigForDrive2(t, syncDir)
 
-	// Run drive list --shared as drive2 (recipient).
-	stdout, _ := runCLIWithConfigForDrive(t, cfgPath, nil, drive2, "drive", "list", "--shared")
+	stdout, _, err := runCLICore(t, cfgPath, env, "", "drive", "list")
+	require.NoError(t, err, "drive list should succeed\nstdout: %s", stdout)
 
-	// The shared folder from testitesti18 should appear.
-	// We can't assert exact names but there should be at least one result.
-	lines := strings.Split(strings.TrimSpace(stdout), "\n")
-	assert.GreaterOrEqual(t, len(lines), 1,
-		"drive list --shared should show at least the header or one entry")
+	// drive2 is configured, so we expect the configured header.
+	assert.Contains(t, stdout, "Configured drives:",
+		"drive list should show configured drives section for drive2")
+
+	// The shared folder from testitesti18 should appear as an available
+	// drive with "shared by" in its description.
+	assert.Contains(t, stdout, "shared by",
+		"drive list should show shared drives from testitesti18")
 }
 
 // TestE2E_SharedFolder_RecipientSyncTwice_Idempotent verifies that syncing
