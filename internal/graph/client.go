@@ -259,6 +259,49 @@ func (c *Client) doOnce(
 		slog.String("request_id", resp.Header.Get("request-id")),
 	)
 
+	// 401 token refresh: if the server rejects the token, try once more with
+	// a fresh token. This handles the common case where the token expires
+	// between our Token() call and the server's validation. The oauth2
+	// ReuseTokenSource underneath auto-refreshes when the cached token has
+	// expired (10-second safety margin ensures detection after HTTP RTT).
+	// This is auth lifecycle management, not transient retry — it applies
+	// even with SyncTransport (MaxAttempts: 0).
+	if resp.StatusCode == http.StatusUnauthorized {
+		newTok, tokErr := c.token.Token()
+		if tokErr == nil && newTok != tok {
+			resp.Body.Close()
+
+			c.logger.Info("retrying after 401 with refreshed token",
+				slog.String("method", method),
+				slog.String("url", url),
+			)
+
+			if err := rewindBody(body); err != nil {
+				return nil, err
+			}
+
+			req2, reqErr := http.NewRequestWithContext(ctx, method, url, body)
+			if reqErr != nil {
+				return nil, fmt.Errorf("creating retry request: %w", reqErr)
+			}
+
+			req2.Header.Set("Authorization", "Bearer "+newTok)
+			req2.Header.Set("User-Agent", c.userAgent)
+
+			if body != nil {
+				req2.Header.Set("Content-Type", "application/json")
+			}
+
+			for key, vals := range extraHeaders {
+				for _, v := range vals {
+					req2.Header.Add(key, v)
+				}
+			}
+
+			return c.httpClient.Do(req2)
+		}
+	}
+
 	return resp, nil
 }
 

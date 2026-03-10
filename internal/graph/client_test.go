@@ -1167,3 +1167,78 @@ func TestTerminalError_RetryAfter(t *testing.T) {
 		assert.Equal(t, time.Duration(0), graphErr.RetryAfter)
 	})
 }
+
+// switchingToken returns different tokens on successive calls, simulating a
+// token refresh. First call returns oldTok, subsequent calls return newTok.
+type switchingToken struct {
+	oldTok string
+	newTok string
+	calls  atomic.Int32
+}
+
+func (s *switchingToken) Token() (string, error) {
+	n := s.calls.Add(1)
+	if n == 1 {
+		return s.oldTok, nil
+	}
+
+	return s.newTok, nil
+}
+
+// Validates: R-6.8.14
+func TestDoOnce_401_RefreshSucceeds(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		auth := r.Header.Get("Authorization")
+
+		if auth == "Bearer refreshed-token" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"value":"ok"}`))
+
+			return
+		}
+
+		// Old token → 401.
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"expired"}`))
+	}))
+	defer srv.Close()
+
+	ts := &switchingToken{oldTok: "expired-token", newTok: "refreshed-token"}
+	client := NewClient(srv.URL, http.DefaultClient, ts, slog.Default(), "test-agent", retry.SyncTransport)
+	client.sleepFunc = noopSleep
+
+	resp, err := client.Do(t.Context(), http.MethodGet, "/me", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	// 2 server hits: 1st with old token (401), 2nd with refreshed token (200).
+	assert.Equal(t, int32(2), attempts.Load())
+}
+
+// Validates: R-6.8.14
+func TestDoOnce_401_SameToken_Returns401(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"invalid"}`))
+	}))
+	defer srv.Close()
+
+	// Static token — second Token() call returns the same value, so no refresh.
+	client := NewClient(srv.URL, http.DefaultClient, staticToken("same-token"), slog.Default(), "test-agent", retry.SyncTransport)
+	client.sleepFunc = noopSleep
+
+	_, err := client.Do(t.Context(), http.MethodGet, "/me", nil)
+	require.Error(t, err)
+
+	var graphErr *GraphError
+	require.ErrorAs(t, err, &graphErr)
+	assert.Equal(t, http.StatusUnauthorized, graphErr.StatusCode)
+}
