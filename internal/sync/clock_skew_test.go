@@ -71,13 +71,25 @@ func TestClockSkew_BackwardJump_SyncFailureTimestamp(t *testing.T) {
 	// Record at t=5000.
 	mgr.nowFunc = func() time.Time { return time.Unix(5000, 0) }
 
-	require.NoError(t, mgr.RecordSyncFailure(ctx, "file1.txt", driveid.ID{}, "upload", "upload_failed", "err", 500, 0, "", "", ""))
+	require.NoError(t, mgr.RecordFailure(ctx, SyncFailureParams{
+		Path:       "file1.txt",
+		Direction:  "upload",
+		IssueType:  "upload_failed",
+		ErrMsg:     "err",
+		HTTPStatus: 500,
+	}))
 
 	// Jump backward to t=1000.
 	mgr.nowFunc = func() time.Time { return time.Unix(1000, 0) }
 
 	// Should still succeed.
-	require.NoError(t, mgr.RecordSyncFailure(ctx, "file2.txt", driveid.ID{}, "upload", "upload_failed", "err", 500, 0, "", "", ""))
+	require.NoError(t, mgr.RecordFailure(ctx, SyncFailureParams{
+		Path:       "file2.txt",
+		Direction:  "upload",
+		IssueType:  "upload_failed",
+		ErrMsg:     "err",
+		HTTPStatus: 500,
+	}))
 
 	issues, err := mgr.ListSyncFailuresByIssueType(ctx, "upload_failed")
 	require.NoError(t, err)

@@ -162,10 +162,14 @@ func (e *Engine) handle403(ctx context.Context, bl *Baseline, failedPath string,
 	boundary := e.walkPermissionBoundary(ctx, bl, parentFolder, sc, remoteDriveID)
 
 	// Record ONE issue for the boundary folder.
-	if issueErr := e.baseline.RecordSyncFailure(
-		ctx, boundary, e.driveID, "upload", IssuePermissionDenied,
-		"folder is read-only (no write access)", http.StatusForbidden, 0, "", "", "",
-	); issueErr != nil {
+	if issueErr := e.baseline.RecordFailure(ctx, SyncFailureParams{
+		Path:       boundary,
+		DriveID:    e.driveID,
+		Direction:  "upload",
+		IssueType:  IssuePermissionDenied,
+		ErrMsg:     "folder is read-only (no write access)",
+		HTTPStatus: http.StatusForbidden,
+	}); issueErr != nil {
 		e.logger.Warn("handle403: failed to record permission issue",
 			slog.String("path", boundary),
 			slog.String("error", issueErr.Error()),
@@ -192,10 +196,14 @@ func (e *Engine) handlePermissionCheckError(ctx context.Context, err error, fail
 			slog.String("path", parentFolder),
 		)
 
-		if issueErr := e.baseline.RecordSyncFailure(
-			ctx, parentFolder, e.driveID, "upload", IssuePermissionDenied,
-			"folder not found on remote (deleted or inaccessible)", http.StatusNotFound, 0, "", "", "",
-		); issueErr != nil {
+		if issueErr := e.baseline.RecordFailure(ctx, SyncFailureParams{
+			Path:       parentFolder,
+			DriveID:    e.driveID,
+			Direction:  "upload",
+			IssueType:  IssuePermissionDenied,
+			ErrMsg:     "folder not found on remote (deleted or inaccessible)",
+			HTTPStatus: http.StatusNotFound,
+		}); issueErr != nil {
 			e.logger.Warn("handle403: failed to record issue for missing folder",
 				slog.String("path", parentFolder),
 				slog.String("error", issueErr.Error()),
