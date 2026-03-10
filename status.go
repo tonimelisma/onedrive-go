@@ -99,9 +99,13 @@ func runStatus(cmd *cobra.Command, _ []string) error {
 	logger := cc.Logger
 	cfgPath := cc.CfgPath
 
-	cfg, err := config.LoadOrDefault(cfgPath, logger)
+	cfg, warnings, err := config.LoadOrDefaultLenient(cfgPath, logger)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
+	}
+
+	for _, w := range warnings {
+		logger.Warn("config issue", "message", w.Message)
 	}
 
 	if len(cfg.Drives) == 0 {

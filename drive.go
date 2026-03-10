@@ -22,8 +22,12 @@ import (
 )
 
 // sharePointSiteLimit caps the number of SharePoint sites fetched during
-// drive list. Use "drive search" for targeted queries.
+// drive list. Use "drive search" for targeted queries, or --all to lift this cap.
 const sharePointSiteLimit = 10
+
+// sharePointSiteUnlimited is used when --all is passed to drive list,
+// removing the SharePoint site discovery cap.
+const sharePointSiteUnlimited = 999
 
 // minColumnWidth is the minimum column width for formatted text output,
 // preventing narrow columns when all entries happen to be short.
@@ -48,16 +52,21 @@ func newDriveCmd() *cobra.Command {
 // --- drive list ---
 
 func newDriveListCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "Show configured and available drives",
 		Long: `Display all configured drives with their sync status, plus all available
 drives discovered from your accounts (personal, business, SharePoint).
 
-SharePoint discovery is limited to the first 10 sites. Use 'drive search'
-for targeted SharePoint queries.`,
+SharePoint discovery is limited to the first 10 sites by default.
+Use --all to show all discoverable drives, or 'drive search' for
+targeted SharePoint queries.`,
 		RunE: runDriveList,
 	}
+
+	cmd.Flags().Bool("all", false, "show all discoverable drives (remove SharePoint site cap)")
+
+	return cmd
 }
 
 // driveListEntry represents one drive in the list output.
@@ -71,6 +80,7 @@ type driveListEntry struct {
 	LibraryName string `json:"library_name,omitempty"`
 	OwnerName   string `json:"owner_name,omitempty"`
 	OwnerEmail  string `json:"owner_email,omitempty"`
+	HasStateDB  bool   `json:"has_state_db,omitempty"`
 }
 
 func runDriveList(cmd *cobra.Command, _ []string) error {
@@ -79,16 +89,31 @@ func runDriveList(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
 	cfgPath := cc.CfgPath
 
-	cfg, err := config.LoadOrDefault(cfgPath, logger)
+	cfg, warnings, err := config.LoadOrDefaultLenient(cfgPath, logger)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
+	}
+
+	for _, w := range warnings {
+		logger.Warn("config issue", "message", w.Message)
 	}
 
 	// Section 1: configured drives.
 	configured := buildConfiguredDriveEntries(cfg, logger)
 
+	showAll, err := cmd.Flags().GetBool("all")
+	if err != nil {
+		return fmt.Errorf("reading --all flag: %w", err)
+	}
+
 	// Section 2: available drives from network (best-effort).
-	available := discoverAvailableDrives(ctx, cfg, logger)
+	available := discoverAvailableDrives(ctx, cfg, showAll, logger)
+
+	// Annotate available drives with local state DB presence. This is a
+	// separate pass from discovery — discovery is network I/O, state DB
+	// detection is local filesystem I/O. Keeping them separate makes
+	// discovery functions pure and this annotation independently testable.
+	annotateStateDB(available)
 
 	if cc.Flags.JSON {
 		return printDriveListJSON(os.Stdout, configured, available)
@@ -145,8 +170,9 @@ func buildConfiguredDriveEntries(cfg *config.Config, logger *slog.Logger) []driv
 }
 
 // discoverAvailableDrives queries the network for all drives accessible via
-// existing tokens. Filters out drives already in config.
-func discoverAvailableDrives(ctx context.Context, cfg *config.Config, logger *slog.Logger) []driveListEntry {
+// existing tokens. Filters out drives already in config. When showAll is true,
+// the SharePoint site discovery cap is removed.
+func discoverAvailableDrives(ctx context.Context, cfg *config.Config, showAll bool, logger *slog.Logger) []driveListEntry {
 	tokens := config.DiscoverTokens(logger)
 	if len(tokens) == 0 {
 		return nil
@@ -161,7 +187,7 @@ func discoverAvailableDrives(ctx context.Context, cfg *config.Config, logger *sl
 
 	for _, tokenCID := range tokens {
 		g.Go(func() error {
-			tokenEntries := discoverDrivesForToken(gctx, tokenCID, cfg, logger)
+			tokenEntries := discoverDrivesForToken(gctx, tokenCID, cfg, showAll, logger)
 
 			mu.Lock()
 			entries = append(entries, tokenEntries...)
@@ -184,7 +210,7 @@ func discoverAvailableDrives(ctx context.Context, cfg *config.Config, logger *sl
 // discoverDrivesForToken discovers all available drives for a single token.
 func discoverDrivesForToken(
 	ctx context.Context, tokenCID driveid.CanonicalID,
-	cfg *config.Config, logger *slog.Logger,
+	cfg *config.Config, showAll bool, logger *slog.Logger,
 ) []driveListEntry {
 	tokenPath := config.DriveTokenPath(tokenCID)
 	if tokenPath == "" {
@@ -231,7 +257,7 @@ func discoverDrivesForToken(
 
 	// For business accounts, discover SharePoint sites.
 	if tokenCID.DriveType() == driveid.DriveTypeBusiness {
-		spEntries := discoverSharePointDrives(ctx, client, cfg, email, logger)
+		spEntries := discoverSharePointDrives(ctx, client, cfg, email, showAll, logger)
 		entries = append(entries, spEntries...)
 	}
 
@@ -243,10 +269,16 @@ func discoverDrivesForToken(
 }
 
 // discoverSharePointDrives queries SharePoint sites and their document libraries.
+// When showAll is true, the site limit is raised to discover all sites.
 func discoverSharePointDrives(
-	ctx context.Context, client *graph.Client, cfg *config.Config, email string, logger *slog.Logger,
+	ctx context.Context, client *graph.Client, cfg *config.Config, email string, showAll bool, logger *slog.Logger,
 ) []driveListEntry {
-	sites, err := client.SearchSites(ctx, "*", sharePointSiteLimit)
+	limit := sharePointSiteLimit
+	if showAll {
+		limit = sharePointSiteUnlimited
+	}
+
+	sites, err := client.SearchSites(ctx, "*", limit)
 	if err != nil {
 		logger.Warn("SharePoint site search failed", "error", err)
 
@@ -590,6 +622,28 @@ func printConfiguredDrives(w io.Writer, entries []driveListEntry) {
 	}
 }
 
+// annotateStateDB sets HasStateDB on available drive entries that have a state
+// database on disk from a previous configuration. This is a post-processing
+// step separate from network discovery — keeping filesystem I/O out of the
+// discovery functions preserves their single responsibility.
+func annotateStateDB(entries []driveListEntry) {
+	for i := range entries {
+		cid, err := driveid.NewCanonicalID(entries[i].CanonicalID)
+		if err != nil {
+			continue
+		}
+
+		path := config.DriveStatePath(cid)
+		if path == "" {
+			continue
+		}
+
+		if _, statErr := os.Stat(path); statErr == nil {
+			entries[i].HasStateDB = true
+		}
+	}
+}
+
 func printAvailableDrives(w io.Writer, entries []driveListEntry) {
 	fmt.Fprintln(w, "Available drives (not configured):")
 
@@ -608,7 +662,12 @@ func printAvailableDrives(w io.Writer, entries []driveListEntry) {
 			label = fmt.Sprintf(" (%s)", strings.Join(parts, ", "))
 		}
 
-		fmt.Fprintf(w, "  %s%s\n", driveLabel(&entries[i]), label)
+		stateDBMarker := ""
+		if entries[i].HasStateDB {
+			stateDBMarker = " [has sync data]"
+		}
+
+		fmt.Fprintf(w, "  %s%s%s\n", driveLabel(&entries[i]), label, stateDBMarker)
 	}
 
 	fmt.Fprintln(w, "\nRun 'onedrive-go drive add <canonical-id>' to add a drive.")
@@ -1020,8 +1079,18 @@ func runDriveRemove(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("invalid drive ID %q: %w", driveSelector, cidErr)
 	}
 
-	if _, exists := cfg.Drives[cid]; !exists {
-		return fmt.Errorf("drive %q not found in config", driveSelector)
+	_, inConfig := cfg.Drives[cid]
+
+	if !inConfig && !purge {
+		return fmt.Errorf("drive %q not found in config — use --purge to clean up leftover state", driveSelector)
+	}
+
+	// Purge orphaned state: drive not in config but state DB may exist on disk
+	// from a previous configuration. Only removes state DB + drive metadata.
+	if !inConfig && purge {
+		logger.Info("purging orphaned drive state", "drive", cid.String())
+
+		return purgeOrphanedDriveState(cid, logger)
 	}
 
 	logger.Info("removing drive", "drive", cid.String(), "purge", purge)
@@ -1060,6 +1129,44 @@ func purgeDrive(cfgPath string, driveID driveid.CanonicalID, logger *slog.Logger
 
 	fmt.Printf("Purged config and state for %s.\n", driveID.String())
 	fmt.Println("Sync directory untouched — delete manually if desired.")
+
+	return nil
+}
+
+// purgeOrphanedDriveState removes state DB and drive metadata files for a
+// drive that is no longer in config. Unlike purgeSingleDrive (which also
+// removes config sections and account profiles), this only deletes data files
+// left behind from a previous `drive remove` without --purge.
+func purgeOrphanedDriveState(cid driveid.CanonicalID, logger *slog.Logger) error {
+	removed := 0
+
+	// Remove state database.
+	statePath := config.DriveStatePath(cid)
+	if statePath != "" {
+		if err := os.Remove(statePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("removing state database: %w", err)
+		} else if err == nil {
+			logger.Info("removed state database", "path", statePath)
+			removed++
+		}
+	}
+
+	// Remove drive metadata file.
+	metaPath := config.DriveMetadataPath(cid)
+	if metaPath != "" {
+		if err := os.Remove(metaPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("removing drive metadata: %w", err)
+		} else if err == nil {
+			logger.Info("removed drive metadata", "path", metaPath)
+			removed++
+		}
+	}
+
+	if removed == 0 {
+		fmt.Printf("No orphaned state found for %s.\n", cid.String())
+	} else {
+		fmt.Printf("Purged %d orphaned data file(s) for %s.\n", removed, cid.String())
+	}
 
 	return nil
 }

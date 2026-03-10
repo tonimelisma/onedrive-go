@@ -36,9 +36,9 @@ The system shall support all four drive types:
 - R-3.3.3: Available drives in `drive list` that retain a state database from a
   previous configuration shall be marked as such, indicating they can be
   re-added without a full re-sync or purged with `drive remove --purge`.
-  [planned]
+  [implemented]
 - R-3.3.4: When `--all` is passed to `drive list`, the system shall remove the
-  SharePoint site discovery cap and show all discoverable drives. [planned]
+  SharePoint site discovery cap and show all discoverable drives. [implemented]
 - R-3.3.5: When the user runs `drive add <canonical-id>`, the system shall add
   the specified drive to the configuration, provided a valid token exists for
   the account. This works for any drive type: personal, business, SharePoint,
@@ -60,7 +60,7 @@ The system shall support all four drive types:
   delete the state database. This works both for configured drives (removing
   config section and state database) and for available drives that retain a
   state database from a previous removal (deleting only the state database).
-  The account token and sync directory are always preserved. [planned]
+  The account token and sync directory are always preserved. [implemented]
 - R-3.3.9: When the user runs `drive search <term>`, the system shall search
   SharePoint sites by name across all business accounts, returning up to 50
   matching sites with their document libraries and canonical IDs. When

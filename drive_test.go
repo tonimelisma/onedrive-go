@@ -61,6 +61,14 @@ func TestNewDriveListCmd_HasRunE(t *testing.T) {
 	assert.Equal(t, "list", cmd.Use)
 }
 
+// Validates: R-3.3.4
+func TestNewDriveListCmd_HasAllFlag(t *testing.T) {
+	cmd := newDriveListCmd()
+	flag := cmd.Flags().Lookup("all")
+	require.NotNil(t, flag, "--all flag should be registered")
+	assert.Equal(t, "false", flag.DefValue)
+}
+
 func TestNewDriveSearchCmd_HasRunE(t *testing.T) {
 	cmd := newDriveSearchCmd()
 	assert.NotNil(t, cmd.RunE)
@@ -342,6 +350,56 @@ func TestDriveListEntry_JSONOmitsEmpty(t *testing.T) {
 	assert.NotContains(t, string(data), "sync_dir")
 	assert.NotContains(t, string(data), "site_name")
 	assert.NotContains(t, string(data), "library_name")
+}
+
+// --- HasStateDB indicator ---
+
+// Validates: R-3.3.3
+func TestPrintDriveListText_HasStateDB_ShowsMarker(t *testing.T) {
+	available := []driveListEntry{
+		{CanonicalID: "personal:user@example.com", State: "available", Source: "available", HasStateDB: true},
+	}
+	var buf bytes.Buffer
+	printDriveListText(&buf, nil, available)
+	output := buf.String()
+	assert.Contains(t, output, "[has sync data]")
+}
+
+// Validates: R-3.3.3
+func TestPrintDriveListText_NoStateDB_NoMarker(t *testing.T) {
+	available := []driveListEntry{
+		{CanonicalID: "personal:user@example.com", State: "available", Source: "available", HasStateDB: false},
+	}
+	var buf bytes.Buffer
+	printDriveListText(&buf, nil, available)
+	output := buf.String()
+	assert.NotContains(t, output, "[has sync data]")
+}
+
+// Validates: R-3.3.3
+func TestDriveListEntry_HasStateDB_JSON(t *testing.T) {
+	entry := driveListEntry{
+		CanonicalID: "personal:user@example.com",
+		State:       "available",
+		Source:      "available",
+		HasStateDB:  true,
+	}
+	data, err := json.Marshal(entry)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"has_state_db":true`)
+}
+
+// Validates: R-3.3.3
+func TestDriveListEntry_HasStateDB_OmittedWhenFalse(t *testing.T) {
+	entry := driveListEntry{
+		CanonicalID: "personal:user@example.com",
+		State:       "available",
+		Source:      "available",
+		HasStateDB:  false,
+	}
+	data, err := json.Marshal(entry)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "has_state_db")
 }
 
 // --- printDriveSearchText ---
@@ -1128,4 +1186,40 @@ func TestSearchSharedItemsWithFallback_SearchReturnsEmpty(t *testing.T) {
 
 	assert.Empty(t, items)
 	assert.False(t, sharedWithMeCalled, "empty is not an error — no fallback needed")
+}
+
+// --- purgeOrphanedDriveState ---
+
+// Validates: R-3.3.8
+func TestPurgeOrphanedDriveState_DeletesStateDB(t *testing.T) {
+	setTestDriveHome(t)
+	dataDir := config.DefaultDataDir()
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+
+	// Create a fake state DB file.
+	statePath := config.DriveStatePath(cid)
+	require.NotEmpty(t, statePath)
+	require.NoError(t, os.WriteFile(statePath, []byte("fake-db"), 0o600))
+
+	err := purgeOrphanedDriveState(cid, testDriveLogger(t))
+	require.NoError(t, err)
+
+	// State DB should be deleted.
+	_, statErr := os.Stat(statePath)
+	assert.True(t, os.IsNotExist(statErr), "state DB should be deleted")
+}
+
+// Validates: R-3.3.8
+func TestPurgeOrphanedDriveState_NoStateDB(t *testing.T) {
+	setTestDriveHome(t)
+	dataDir := config.DefaultDataDir()
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+
+	// No state DB on disk — should succeed with "no orphaned state" message.
+	err := purgeOrphanedDriveState(cid, testDriveLogger(t))
+	assert.NoError(t, err)
 }

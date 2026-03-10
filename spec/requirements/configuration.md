@@ -49,7 +49,7 @@ The system shall resolve settings with a four-layer override chain: defaults →
   across drives. [verified]
 - R-4.8.4: Informational commands (`drive list`, `status`, `whoami`) shall
   tolerate config validation errors, parsing what they can and reporting
-  warnings instead of failing. [planned]
+  warnings instead of failing. [implemented]
 - R-4.8.5: File operation commands (`ls`, `get`, `put`, `rm`, `mkdir`, `mv`,
   `cp`, `stat`) shall require only a selectable drive section and a valid
   token. They shall NOT require `sync_dir` or any sync-related settings.
@@ -57,7 +57,7 @@ The system shall resolve settings with a four-layer override chain: defaults →
 - R-4.8.6: The `sync` command shall require `sync_dir` to be set, absolute,
   and either an existing directory or creatable. All sync-related settings
   (filters, safety thresholds, timing) shall be fully validated before sync
-  starts. [planned]
+  starts. [implemented]
 
 ## R-4.9 Config Schema [planned]
 

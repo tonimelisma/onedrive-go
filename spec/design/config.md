@@ -2,7 +2,7 @@
 
 GOVERNS: internal/config/account.go, internal/config/config.go, internal/config/defaults.go, internal/config/discovery.go, internal/config/display_name.go, internal/config/drive.go, internal/config/drivemeta.go, internal/config/env.go, internal/config/holder.go, internal/config/load.go, internal/config/paths.go, internal/config/size.go, internal/config/token_resolution.go, internal/config/toml_lines.go, internal/config/unknown.go, internal/config/validate.go, internal/config/validate_drive.go, internal/config/write.go
 
-Implements: R-4.1 [verified], R-4.2 [verified], R-4.3 [verified], R-4.4 [verified], R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified]
+Implements: R-4.1 [verified], R-4.2 [verified], R-4.3 [verified], R-4.4 [verified], R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified], R-4.8.4 [implemented], R-4.8.6 [implemented]
 
 ## Overview
 
@@ -40,9 +40,19 @@ Implements: R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified]
 
 Unknown config keys are fatal errors (`unknown.go`). Per-drive validation checks sync_dir, filter patterns, size parsing, and drive-specific constraints. Global validation checks log level, transfer workers, and safety thresholds. `checkSyncDirOverlap()` prevents overlapping sync directories using `filepath.Clean` + `strings.HasPrefix` with separator suffix. Called at both config load and Orchestrator start.
 
-### Validation Tiers [planned]
+### Validation Tiers [implemented]
 
-Currently all validation is strict — any error is fatal. Future work (R-4.8.4) will add a lenient loading path for informational commands (`drive list`, `status`, `whoami`) that collects validation errors as warnings instead of failing. This allows users to inspect their configuration even when it contains errors. The strict path remains the default for commands that modify data (`sync`, file operations).
+Implements: R-4.8.4 [implemented]
+
+Two loading paths: strict (`Load`/`LoadOrDefault`) for data commands, lenient (`LoadLenient`/`LoadOrDefaultLenient`) for informational commands.
+
+**Strict path** (default): unknown keys and validation errors are fatal. Used by `sync`, file operations, `drive add`, `drive remove`.
+
+**Lenient path**: TOML syntax errors remain fatal (can't produce Config). Unknown keys, validation errors, and drive section issues (type mismatches, unknown drive keys) are collected as `ConfigWarning` values. Malformed drive sections are skipped — other drives remain usable. Used by `drive list`, `status`, `whoami`.
+
+Internal refactoring supports both paths cleanly: `collectUnknownGlobalKeyErrors`, `collectDriveUnknownKeyErrors`, and `collectValidationErrors` return `[]error` slices. The strict wrappers (`checkUnknownKeys`, `Validate`) join them into a single error. The lenient path converts them to warnings.
+
+**Sync-specific validation** (`ValidateResolvedForSync`): enforces sync_dir is set, absolute, and not a regular file. Called only by the `sync` command — file operations don't require sync_dir.
 
 ## Config Holder
 
