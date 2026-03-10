@@ -2,16 +2,6 @@
 
 Comprehensive analysis addressing all questions, corrections from code review, three-alternative designs for each architectural decision, to-be journeys, and full requirements inventory.
 
-### Revision History
-
-| Date | Changes |
-|------|---------|
-| 2026-03-09 | Taxonomy fixes round 2 (13 items). #2: R-2.10.34 dual scope key format clarified. #3: R-6.8.15 transient error classification requirement added. #5: isActionableIssue() bug noted in Phase 2. #6: Part 10 marked as superseded by taxonomy. #7: isOutagePattern() pseudocode added; Table 1 400 row disambiguated from phantom drives. #8: disk:local footnote added to Table 5. #9: Post-taxonomy additions listed in Phase 0. #10: R-6.6.12 aggregated transient logging requirement added. #11: remote_state transition row added to Table 6. #12: Directory buffering added to Phase 3; Phase 7 dependency note added. #13: context.Canceled/DeadlineExceeded row added to Table 1 + classifyResult case. #14: RateLimit-Remaining component assignment deferred, documented in §7.4. |
-| 2026-03-09 | Taxonomy cross-reference pass: 10 fixes. #1: added HTTP 400 outage signature as 3rd service_outage trigger. #2: 423 reclassified from skip to transient (non-blocking retry handles multi-hour locks). #3: added remote move rows to Table 5. #4: defined transient exhaustion issue types (server_error, request_timeout, transient_conflict, transient_not_found). #5: clarified scope key format (internal IDs in ScopeState, local paths in sync_failures). #6: added Mechanism column to Table 2 distinguishing trial-based vs queryable vs scanner scopes. #7: fixed Table 5 — 403 blocks remote deletes and moves (not just uploads). #8: split quota auto-clear into own-drive/shortcut rows in Table 4. #9: added missing Shortcut Y rows in Table 5. #10: added doc.go removal to Table 6. |
-| 2026-03-09 | Added Failure Taxonomy section (6 tables) between revision history and Part 1. Tables cover: error classification, detection & recovery, user communication, auto-clear rules, scope interaction with shared drives, architectural removals. Serves as structured reference — the rest of the document is analysis and rationale. |
-| 2026-03-09 | Gap analysis pass: Parts 12-15 added. Part 12: gap analysis (14 items — 8 resolved, 5 dismissed, 1 corrected). Part 13: disk_full detection design. Part 14: consolidated removal inventory (code, policies, behaviors, specs to delete). Part 15: implementation plan (8 phases). 5 new requirements, 3 updated. |
-| 2026-03-09 | Code audit pass: 9 fixes from systematic code-vs-redesign contrast. Fixed: Client policy not parameterized (was claimed "already does"), doPreAuthRetry missing from redesign, 507 already non-retryable (wrong code change removed), hash retry explicitly unchanged, dual FailureRecorder interfaces consolidated, SyncFailureRow scope_key touch points expanded, scope lifecycle clarified (queryable vs trial-only), waitForThrottle language fixed. Compressed Parts 4 and 12. |
-
 ---
 
 ## Failure Taxonomy
@@ -309,23 +299,25 @@ Currently, every individual retry attempt within `withRetry` logs at WARN (execu
 
 **R-6.6.11:** Every failure displayed to the user (in log warnings, `issues` output, and `status` output) shall include: (a) the specific error reason in plain language, and (b) the user action required to resolve it, if any.
 
-### Sub-requirements per error type
+### Per-error-type reason and action text
 
-| ID | Error Type | Reason Text | User Action Text |
-|----|-----------|-------------|-----------------|
-| R-6.6.11.1 | `invalid_filename` | "File name '{name}' contains characters not allowed on OneDrive ({chars})" or "File name '{name}' is reserved on OneDrive" | "Rename the file to remove invalid characters, or add it to skip_files in config" |
-| R-6.6.11.2 | `path_too_long` | "Path exceeds OneDrive's 400-character limit ({len} characters)" | "Shorten the directory structure or file name" |
-| R-6.6.11.3 | `file_too_large` | "File exceeds OneDrive's 250 GB size limit ({size})" | "Exclude via skip_files or max_file_size in config" |
-| R-6.6.11.4 | `permission_denied` | "OneDrive folder '{boundary}' is read-only (shared without write access)" | "Request write access from the folder owner, or accept read-only sync" |
-| R-6.6.11.5 | `local_permission_denied` | "Cannot read file (local permission denied)" | "Fix file permissions: chmod/chown the file or its parent directory" |
-| R-6.6.11.6a | `quota_exceeded` (own drive) | "Your OneDrive storage is full ({used}/{total})" | "Free space on OneDrive (delete files, empty recycle bin) or upgrade storage plan" |
-| R-6.6.11.6b | `quota_exceeded` (shared folder) | "Shared folder '{shortcut}' owner's storage is full" | "Contact the folder owner to free space or upgrade their storage plan" |
-| R-6.6.11.7 | `disk_full` (critical) | "Local disk space below minimum ({available} free, {min_free_space} required)" | "Free local disk space. Downloads will resume automatically." |
-| R-6.6.11.7a | `file_too_large_for_space` (per-file) | "Insufficient space for file: need {size}, available {available}" | "Free local disk space or increase min_free_space to 0 to disable reservation" |
-| R-6.6.11.8 | `case_collision` | "Files '{name1}' and '{name2}' differ only in case — OneDrive is case-insensitive" | "Rename one of the files to avoid the collision" |
-| R-6.6.11.9 | `rate_limited` | "OneDrive API rate limit reached (retry in {seconds}s)" | "No action needed — will auto-resolve. Reduce transfer_workers to lower request rate" |
-| R-6.6.11.10 | `service_outage` | "Microsoft Graph API appears unavailable (HTTP {code})" | "No action needed — will auto-resolve when service recovers" |
-| R-6.6.11.11 | `auth_expired` | "Authentication has expired" | "Run 'onedrive login' to re-authenticate" |
+> **Note:** Table 3 (User Communication) in the Failure Taxonomy is the canonical version of this table, including scope variants and all transient exhaustion types (`server_error`, `request_timeout`, `transient_conflict`, `transient_not_found`, `resource_locked`). This table preserves the original analysis.
+
+| Error Type | Reason Text | User Action Text |
+|-----------|-------------|-----------------|
+| `invalid_filename` | "File name '{name}' contains characters not allowed on OneDrive ({chars})" or "File name '{name}' is reserved on OneDrive" | "Rename the file to remove invalid characters, or add it to skip_files in config" |
+| `path_too_long` | "Path exceeds OneDrive's 400-character limit ({len} characters)" | "Shorten the directory structure or file name" |
+| `file_too_large` | "File exceeds OneDrive's 250 GB size limit ({size})" | "Exclude via skip_files or max_file_size in config" |
+| `permission_denied` | "OneDrive folder '{boundary}' is read-only (shared without write access)" | "Request write access from the folder owner, or accept read-only sync" |
+| `local_permission_denied` | "Cannot read file (local permission denied)" | "Fix file permissions: chmod/chown the file or its parent directory" |
+| `quota_exceeded` (own drive) | "Your OneDrive storage is full ({used}/{total})" | "Free space on OneDrive (delete files, empty recycle bin) or upgrade storage plan" |
+| `quota_exceeded` (shared folder) | "Shared folder '{shortcut}' owner's storage is full" | "Contact the folder owner to free space or upgrade their storage plan" |
+| `disk_full` (critical) | "Local disk space below minimum ({available} free, {min_free_space} required)" | "Free local disk space. Downloads will resume automatically." |
+| `file_too_large_for_space` (per-file) | "Insufficient space for file: need {size}, available {available}" | "Free local disk space or increase min_free_space to 0 to disable reservation" |
+| `case_collision` | "Files '{name1}' and '{name2}' differ only in case — OneDrive is case-insensitive" | "Rename one of the files to avoid the collision" |
+| `rate_limited` | "OneDrive API rate limit reached (retry in {seconds}s)" | "No action needed — will auto-resolve. Reduce transfer_workers to lower request rate" |
+| `service_outage` | "Microsoft Graph API appears unavailable (HTTP {code})" | "No action needed — will auto-resolve when service recovers" |
+| `auth_expired` | "Authentication has expired" | "Run 'onedrive login' to re-authenticate" |
 
 ---
 
@@ -1409,13 +1401,13 @@ Shortcut observations make Graph API calls. During scope blocks, these calls may
 
 ### 11.7: User-Facing Display
 
-Different scope owners require different user actions. The display must make this clear.
+Different scope owners require different user actions. The display must make this clear. Table 3 (User Communication) in the taxonomy is the canonical per-error-type reference — scope variants are separate rows there.
 
-**R-6.6.11.6a:** For `quota_exceeded` on own drive: reason text "Your OneDrive storage is full ({used}/{total})", action text "Free space on OneDrive (delete files, empty recycle bin) or upgrade storage plan."
+**R-6.6.11 (quota, own drive):** reason text "Your OneDrive storage is full ({used}/{total})", action text "Free space on OneDrive (delete files, empty recycle bin) or upgrade storage plan."
 
-**R-6.6.11.6b:** For `quota_exceeded` on shared folder: reason text "Shared folder '{name}' owner's storage is full", action text "Contact the folder owner to free space or upgrade their storage plan."
+**R-6.6.11 (quota, shortcut):** reason text "Shared folder '{name}' owner's storage is full", action text "Contact the folder owner to free space or upgrade their storage plan."
 
-**R-6.6.11.4a:** For `permission_denied` on shortcut: reason text "Shared folder '{name}' is read-only", action text "Request write access from '{owner}', or accept read-only sync for this folder."
+**R-6.6.11 (permission, shortcut):** reason text "Shared folder '{name}' is read-only", action text "Request write access from '{owner}', or accept read-only sync for this folder."
 
 **R-2.3.8:** The `issues` command shall sub-group scope-level failures (507, 403) by scope key, showing the drive or shortcut name and scope-owner-specific action text. Different scopes with different owners must not be conflated under a single heading.
 
@@ -1845,15 +1837,13 @@ After each phase: update requirement statuses from `[planned]` → `[implemented
 
 ## Part 10: Complete Requirements Inventory
 
-> **Note:** The Failure Taxonomy tables (above) are the canonical requirement-to-error-type mapping. This section preserves the original inventory for reference but should not be treated as authoritative where it conflicts with the taxonomy.
-
-All proposed new/changed requirements, organized by area. Failure handling principles from the analysis are encoded directly as testable requirements below — not as CLAUDE.md philosophy additions.
+All proposed new/changed requirements, organized by area. Failure handling principles from the analysis are encoded directly as testable requirements below — not as CLAUDE.md philosophy additions. The Failure Taxonomy tables (above) and this inventory are kept in sync — any change to one must be reflected in the other.
 
 ### R-2 Sync — Failure Management (R-2.10)
 
 | ID | Requirement | Status | Part |
 |----|------------|--------|------|
-| R-2.10.1 | When a transfer fails with HTTP 507, the system shall classify it as an actionable failure with issue type `quota_exceeded`, scoped to the quota owner. For own-drive actions: scope key `quota:own` (user's quota shared across own drives). For shortcut actions: scope key `quota:shortcut:$remoteDrive:$remoteItem` (sharer's independent quota). The system shall NOT retry 507 at the transport level. Uploads to the affected scope shall be suppressed; downloads and uploads to other scopes shall continue. | planned (revise) | 7.2, 7.4.1 |
+| R-2.10.1 | When a transfer fails with HTTP 507, the system shall classify it as an actionable failure with issue type `quota_exceeded`, scoped to the quota owner. For own-drive actions: scope key `quota:own` (user's quota shared across own drives). For shortcut actions: scope key `quota:shortcut:{localPath}` (sharer's independent quota; see R-2.10.34 for dual-format convention). The system shall NOT retry 507 at the transport level. Uploads to the affected scope shall be suppressed; downloads and uploads to other scopes shall continue. | planned (revise) | 7.2, 7.4.1 |
 | R-2.10.2 | When a user resolves a file-scoped actionable failure (by renaming, moving, or deleting the file), the system shall automatically detect the resolution on the next scanner pass and remove the stale failure entry. Implementation: engine calls `ClearResolvedActionableFailures` after observation, comparing current skipped paths against recorded failures. | planned (revise) | 4 |
 | R-2.10.3 | The system shall detect scope-level failure patterns: 429 immediate account-scope from single response; 507 account-scope after 3 consecutive from different files in 10s; 5xx service-scope after 5 consecutive from different files in 30s; 503 with Retry-After immediate service-scope. Scope blocks prevent the tracker from dispatching actions in the affected scope. | planned (revise) | 7.3 |
 | R-2.10.4 | When displaying sync status, the system shall show failure scope context (file, directory, drive/shortcut, account, service) alongside retry information. For per-drive scopes (507, 403), the display shall identify which drive or shortcut is affected and show the appropriate user action for that scope owner. | planned | 7.3, 7.4.1 |
@@ -1872,7 +1862,7 @@ All proposed new/changed requirements, organized by area. Failure handling princ
 | R-2.10.17 | `updateScope()` shall use target drive context for 507/403 scope keys. 429/5xx always route to account/service scope regardless of target drive. | **new** | 11.1 |
 | R-2.10.18 | Independent sliding windows per scope key. Own-drive 507s shall not count toward shortcut scope windows, and vice versa. | **new** | 11.1 |
 | R-2.10.19 | 507 on own-drive → scope key `quota:own`, blocks own-drive uploads only. Shortcut uploads, downloads, deletes, moves continue. | **new** | 11.2 |
-| R-2.10.20 | 507 on shortcut → scope key `quota:shortcut:$remoteDrive:$remoteItem`, blocks that shortcut's uploads only. Own-drive and other shortcuts continue. | **new** | 11.2 |
+| R-2.10.20 | 507 on shortcut → scope key `quota:shortcut:{localPath}`, blocks that shortcut's uploads only. Own-drive and other shortcuts continue. See R-2.10.34 for dual-format convention. | **new** | 11.2 |
 | R-2.10.21 | Trial actions for `quota:own` shall select own-drive uploads. Trial actions for `quota:shortcut:*` shall select uploads targeting that shortcut. A trial targeting the wrong quota owner proves nothing. | **new** | 11.2 |
 | R-2.10.22 | `issues` display shall identify shortcut-scoped 507 by local path name (e.g., "Shared folder 'Team Docs'"), not opaque drive IDs. | **new** | 11.2 |
 | R-2.10.23 | 403 on shortcut shall scope boundary to that shortcut's `RemoteDriveID`. `walkPermissionBoundary` uses shortcut's drive, not primary. | **new** | 11.3 |
@@ -1886,7 +1876,7 @@ All proposed new/changed requirements, organized by area. Failure handling princ
 | R-2.10.31 | During `quota:shortcut:*` scope block, observation of that shortcut continues (read-only). Other observations unaffected. | **new** | 11.6 |
 | R-2.10.32 | `status` command (future) shall show per-scope block status as separate entries per drive/shortcut. | **new** | 11.7 |
 | R-2.10.33 | `sync_failures` table shall store `scope_key` column for scope-level failures. Enables `issues` display grouping without re-deriving scope. | **new** | 11.8 |
-| R-2.10.34 | `scope_key` format: `quota:own`, `quota:shortcut:{localPath}`, `perm:remote:{localPath}`. Human-resolvable for display. | **new** | 11.8 |
+| R-2.10.34 | `scope_key` format: `quota:own`, `quota:shortcut:{localPath}`, `perm:remote:{localPath}`. The sync_failures table (persistent, used for issues display) stores human-readable local paths (e.g., `quota:shortcut:Team Docs`). ScopeState (in-memory, used for scope matching in the tracker) uses stable internal identifiers (e.g., `quota:shortcut:$remoteDrive:$remoteItem`). Translation happens once at recording time — the engine knows both formats. | **new** | 11.8 |
 | R-2.10.35 | Engines shall NOT coordinate scope blocks across engine boundaries. Each discovers independently. Bounded waste accepted. | **new** | 11.10 |
 | R-2.10.36 | 429 discovered independently per engine (same token). No shared state. Waste: one request per engine. | **new** | 11.10 |
 | R-2.10.37 | Shortcut scope blocks are engine-internal. A shortcut in Engine A has no effect on Engine B's shortcuts. | **new** | 11.10 |
@@ -1930,18 +1920,14 @@ All proposed new/changed requirements, organized by area. Failure handling princ
 | R-6.6.8 | Individual retry attempts for transient errors logged at DEBUG, not WARN. Only final outcome logged at WARN or higher. | **new** | 5 |
 | R-6.6.9 | Transient errors that resolve within retry budget shall not emit WARN. Log at INFO with attempt count. | **new** | 5 |
 | R-6.6.10 | Exhausted retries: single WARN with final error, attempt count, and next retry time. | **new** | 5 |
-| R-6.6.11 | Every failure shown to user includes plain-language reason AND concrete user action. | **new** | 6 |
-| R-6.6.11.1–11 | Per-error-type reason and action text (see Part 6 table). | **new** | 6 |
-| R-6.6.11.4a | `permission_denied` on shortcut: "Shared folder '{name}' is read-only" / "Request write access from '{owner}', or accept read-only sync for this folder." | **new** | 11.7 |
-| R-6.6.11.6a | `quota_exceeded` own drive: "Your OneDrive storage is full ({used}/{total})" / "Free space on OneDrive or upgrade storage plan." | **new** | 11.7 |
-| R-6.6.11.6b | `quota_exceeded` shared folder: "Shared folder '{name}' owner's storage is full" / "Contact the folder owner to free space or upgrade their storage plan." | **new** | 11.7 |
-| R-6.6.11.7/7a | `disk_full` (critical) and `file_too_large_for_space` (per-file) — see Part 6 table and Part 13 design. | **new** | 13.1 |
+| R-6.6.11 | Every failure shown to user includes plain-language reason AND concrete user action. Per-error-type reason and action text shall cover all failure categories, with scope-owner-specific variants for shortcut-scoped failures. Table 3 (User Communication) is the canonical per-error-type reference. | **new** | 6, Table 3 |
+| R-6.6.12 | When >10 transient failures of the same issue_type exhaust their retry budget in a single sync pass, aggregate into 1 WARN summary with count, individual paths at DEBUG. Extends R-6.6.7 pattern to execution-time transient failures. | **new** | Table 1 |
 ### R-6.7 Technical Requirements
 
 | ID | Requirement | Status | Part |
 |----|------------|--------|------|
 | R-6.7.14 | When the Graph API returns HTTP 400 with `innerError.code == "invalidRequest"` and known outage message patterns (e.g., "ObjectHandle is Invalid"), classify as transient (service outage), not generic skip. | planned (revise) | 9, J7 |
-| R-6.7.21a | When classifying errors, the engine shall handle empty `TargetDriveID` (local-only operations like `os.ErrPermission`) by skipping remote scope routing. Only remote API errors require drive-aware scope routing. | **new** | 11.11 |
+| R-6.7.27 | When classifying errors, the engine shall handle empty `TargetDriveID` (local-only operations like `os.ErrPermission`) by skipping remote scope routing. Only remote API errors require drive-aware scope routing. | **new** | 11.11 |
 ### R-6.2 Data Integrity (Disk Space)
 
 | ID | Requirement | Status | Part |
@@ -1964,6 +1950,7 @@ All proposed new/changed requirements, organized by area. Failure handling princ
 | R-6.8.12 | Target drive identity flows through the pipeline without lookup: planner → Action → TrackedAction → WorkerResult → engine. No component queries drive identity from DB or API during failure handling. | **new** | 11.9 |
 | R-6.8.13 | `Action` shall expose `TargetsOwnDrive() bool` and `ShortcutKey() string`. These are the only drive-identity accessors for scope matching and routing. Internal drive/item IDs are encapsulated. | **new** | 11.9 |
 | R-6.8.14 | `SyncTransport` (`MaxAttempts: 0`) shall still perform transparent 401 token refresh inside `doOnce()`. Auth refresh is lifecycle, not transient retry. If refresh fails, return `ErrUnauthorized` (fatal). | **new** | 12.7 |
+| R-6.8.15 | The engine shall classify the following HTTP status codes as transient: 5xx (`server_error`), 408 (`request_timeout`), 412 (`transient_conflict`), 404 (`transient_not_found`), 423 (`resource_locked`). Transient errors are retried via tracker re-queue (5 attempts: 1s, 2s, 4s, 8s, 16s). When exhausted, recorded in sync_failures with the specific issue_type for reconciler-based persistent retry. 423 reclassified from skip to transient — non-blocking retry handles multi-hour locks naturally. | **new** | Table 1, 7.2 |
 
 ### Design Document Changes
 
@@ -1975,7 +1962,7 @@ All proposed new/changed requirements, organized by area. Failure handling princ
 | `spec/design/sync-observation.md` | Scanner returns `ScanResult{Events, Skipped}` instead of `[]ChangeEvent`. Add `SkippedItem` struct. Scanner remains a pure observer with no DB dependency. Remove `isValidOneDriveName()` call from remote observer (observer_remote.go:405) — OneDrive enforces its own naming rules server-side; upload naming rules should not apply to downloads. |
 | `spec/design/sync-store.md` | Add new issue types: `quota_exceeded`, `local_permission_denied`, `case_collision`, `disk_full`, `service_outage`. Add scope key column to `sync_failures` (e.g., `"quota:own"`, `"quota:shortcut:$drive:$item"`) for per-scope grouping in `issues` display. Add `UpsertActionableFailures` batch method. Add `ClearResolvedActionableFailures` method. |
 | `spec/design/graph-client.md` | Add `SyncTransport` policy. Add `RetryAfter` field to `GraphError`. Document that sync callers use 0-retry transport. Document `RateLimit-*` header parsing. Document 401 token refresh behavior: transparent refresh inside `doOnce()`, independent of retry policy. |
-| `spec/design/cli.md` | Update `issues` command for grouped display (R-2.3.7). Add per-scope sub-grouping for drive-specific issues (R-2.3.8). Add per-error-type user action text with scope-owner-specific variants (R-6.6.11.6a/6b). |
+| `spec/design/cli.md` | Update `issues` command for grouped display (R-2.3.7). Add per-scope sub-grouping for drive-specific issues (R-2.3.8). Add per-error-type user action text with scope-owner-specific variants (R-6.6.11, see Table 3). |
 | `spec/reference/graph-api-quirks.md` | Add Microsoft throttling scope documentation (per-user, per-tenant, per-app-per-tenant limits). |
 
 ### Code Changes
@@ -2046,7 +2033,7 @@ All proposed new/changed requirements, organized by area. Failure handling princ
 | 403 on shortcut → per-shortcut permission scope, doesn't affect other shortcuts or own drive | R-2.10.3 |
 | WorkerResult carries TargetDriveID and ShortcutKey from action | R-2.10.1 |
 | Issues display sub-groups 507/403 by scope (own drive vs shortcut) | R-2.3.8 |
-| Quota exceeded text: "Your storage" for own drive, "Folder owner's storage" for shortcut | R-6.6.11.6a/6b |
+| Quota exceeded text: "Your storage" for own drive, "Folder owner's storage" for shortcut | R-6.6.11 (Table 3) |
 | Download success clears sync_failures entry (currently upload-only) | R-2.10.41 |
 | Delete success clears sync_failures entry | R-2.10.41 |
 | Scope detection window: success from any path resets unique-path failure counter | R-2.10.42 |
