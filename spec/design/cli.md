@@ -2,7 +2,7 @@
 
 GOVERNS: main.go, root.go, format.go, signal.go, pidfile.go, auth.go, ls.go, rm.go, mkdir.go, mv.go, cp.go, stat.go, pause.go, resume.go, recycle_bin.go, internal/logfile/logfile.go
 
-Implements: R-1 [implemented], R-3.1 [verified], R-4.7 [verified], R-4.8.4 [implemented], R-1.9 [implemented], R-2.3.7 [planned], R-2.3.8 [planned], R-2.3.9 [planned], R-6.6.11 [planned]
+Implements: R-1 [implemented], R-3.1 [verified], R-4.7 [verified], R-4.8.4 [implemented], R-1.9 [verified], R-2.3.7 [planned], R-2.3.8 [planned], R-2.3.9 [planned], R-6.6.11 [planned]
 
 ## Overview
 

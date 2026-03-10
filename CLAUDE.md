@@ -130,8 +130,10 @@ After each increment, run through this entire checklist. If something fails, fix
 6. [ ] **Fast E2E**: `go test -tags=e2e -race -v -parallel 5 -timeout=10m ./e2e/...`
 7. [ ] **Docs updated**: CLAUDE.md, spec/design/, spec/requirements/ as needed
 8. [ ] **Push and CI green**: Push branch, open PR with `gh pr create`, then enable auto-merge with `gh pr merge --auto --squash --delete-branch`. Branch protection requires CI to pass before merge. Monitor with `gh pr checks <pr_number> --watch`
-9. [ ] **Cleanup**: Clean `git status`. From the root repo (not worktree), remove the current worktree after merge. Prune stale remote-tracking branches and pull main forward:
+9. [ ] **Cleanup**: Clean `git status`. From the root repo (not worktree), remove the current worktree after merge. Then force-delete the local branch with `git branch -D` (squash merges create a new commit on main, so Git cannot detect the branch as merged — `git branch -d` will wrongly warn "not fully merged"). Prune stale remote-tracking branches and pull main forward:
     cd /Users/tonimelisma/Development/onedrive-go
+    git worktree remove <worktree-path>
+    git branch -D <branch-name>
     git fetch --prune origin
     git checkout main && git pull --ff-only origin main
     echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r && echo "=== Stashes ===" && git stash list && echo "=== Worktrees ===" && git worktree list && echo "=== Open PRs ===" && gh pr list --state open && echo "=== Status ===" && git status
