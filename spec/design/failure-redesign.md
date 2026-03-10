@@ -6,6 +6,7 @@ Comprehensive analysis addressing all questions, corrections from code review, t
 
 | Date | Changes |
 |------|---------|
+| 2026-03-09 | Taxonomy fixes round 2 (13 items). #2: R-2.10.34 dual scope key format clarified. #3: R-6.8.15 transient error classification requirement added. #5: isActionableIssue() bug noted in Phase 2. #6: Part 10 marked as superseded by taxonomy. #7: isOutagePattern() pseudocode added; Table 1 400 row disambiguated from phantom drives. #8: disk:local footnote added to Table 5. #9: Post-taxonomy additions listed in Phase 0. #10: R-6.6.12 aggregated transient logging requirement added. #11: remote_state transition row added to Table 6. #12: Directory buffering added to Phase 3; Phase 7 dependency note added. #13: context.Canceled/DeadlineExceeded row added to Table 1 + classifyResult case. #14: RateLimit-Remaining component assignment deferred, documented in §7.4. |
 | 2026-03-09 | Taxonomy cross-reference pass: 10 fixes. #1: added HTTP 400 outage signature as 3rd service_outage trigger. #2: 423 reclassified from skip to transient (non-blocking retry handles multi-hour locks). #3: added remote move rows to Table 5. #4: defined transient exhaustion issue types (server_error, request_timeout, transient_conflict, transient_not_found). #5: clarified scope key format (internal IDs in ScopeState, local paths in sync_failures). #6: added Mechanism column to Table 2 distinguishing trial-based vs queryable vs scanner scopes. #7: fixed Table 5 — 403 blocks remote deletes and moves (not just uploads). #8: split quota auto-clear into own-drive/shortcut rows in Table 4. #9: added missing Shortcut Y rows in Table 5. #10: added doc.go removal to Table 6. |
 | 2026-03-09 | Added Failure Taxonomy section (6 tables) between revision history and Part 1. Tables cover: error classification, detection & recovery, user communication, auto-clear rules, scope interaction with shared drives, architectural removals. Serves as structured reference — the rest of the document is analysis and rationale. |
 | 2026-03-09 | Gap analysis pass: Parts 12-15 added. Part 12: gap analysis (14 items — 8 resolved, 5 dismissed, 1 corrected). Part 13: disk_full detection design. Part 14: consolidated removal inventory (code, policies, behaviors, specs to delete). Part 15: implementation plan (8 phases). 5 new requirements, 3 updated. |
@@ -42,13 +43,16 @@ What each error is, how it's classified, and what scope it maps to.
 | `rate_limited` | HTTP 429 (any request) | transient | `throttle:account` | Account (all drives) | All actions, all drives + shortcuts | R-2.10.26, R-6.8.4 |
 | `service_outage` | HTTP 5xx (pattern: 5 unique paths / 30s) | transient | `service` | Service (all drives) | All actions, all drives + shortcuts | R-2.10.28 |
 | `service_outage` | HTTP 503 with `Retry-After` | transient | `service` | Service (all drives) | All actions, all drives + shortcuts | R-2.10.28 |
-| `service_outage` | HTTP 400 with `innerError.code == "invalidRequest"` and known outage body (e.g., "ObjectHandle is Invalid") | transient | `service` | Service (all drives) | All actions, all drives + shortcuts | R-6.7.14 |
+| `service_outage` | HTTP 400 with `innerError.code == "invalidRequest"` and known outage body (e.g., "ObjectHandle is Invalid") (disambiguated from phantom drive 400s (R-6.7.11) by error body inspection — phantom drives fail on one specific drive ID; outage 400s affect all endpoints) | transient | `service` | Service (all drives) | All actions, all drives + shortcuts | R-6.7.14 |
 | `auth_expired` | HTTP 401 after token refresh fails | fatal | — | Session | Sync terminates | R-6.8.14 |
 | `server_error` | HTTP 5xx (individual, before scope triggers) | transient | — (file-scoped) | File | Nothing (re-queued via tracker) | R-6.8.10 |
 | `request_timeout` | HTTP 408 (individual) | transient | — (file-scoped) | File | Nothing (re-queued via tracker) | R-6.8.10 |
 | `transient_conflict` | HTTP 412 (individual) | transient | — (file-scoped) | File | Nothing (re-queued via tracker) | R-6.8.10 |
 | `transient_not_found` | HTTP 404 (individual, resolves after delta reordering) | transient | — (file-scoped) | File | Nothing (re-queued via tracker) | R-6.8.10 |
 | `resource_locked` | HTTP 423 (SharePoint co-authoring lock) | transient | — (file-scoped) | File | Nothing (re-queued via tracker) | R-6.8.10 |
+| — (shutdown) | context.Canceled or context.DeadlineExceeded | — | — | Session | Nothing (action discarded, not recorded) | R-2.8.3 |
+
+Note: context.Canceled/DeadlineExceeded actions are discarded during graceful shutdown — they do not appear in Tables 2, 3, or 4 because no sync_failures entry is created. See R-2.8.3 (two-signal shutdown).
 
 Note: `permission_denied` blocks "all remote writes" — uploads, remote deletes, remote moves, and remote folder creates. Downloads and local-only operations (local deletes, local moves) continue. See Table 5 for the full matrix.
 
@@ -145,6 +149,8 @@ How each scope type behaves across own-drive vs shortcut boundaries within a sin
 | Shortcut Y local deletes | Yes | Yes | No | No | No | No |
 | Observation polling | Yes (R-2.10.30) | Yes (R-2.10.30) | No | No (R-2.10.31) | No | No |
 
+Note: `disk:local` scope blocks all downloads (own-drive, all shortcuts) but does not block uploads, deletes, moves, or observation polling. See R-2.10.43.
+
 ### Table 6: Architectural Removals
 
 What gets deleted from the old architecture. Ensures no remnants.
@@ -165,6 +171,7 @@ What gets deleted from the old architecture. Ensures no remnants.
 | Transport retry in sync path | `graph/client.go` | `SyncTransport` policy (MaxAttempts: 0) | R-6.8.8 |
 | `isValidOneDriveName()` call | `sync/observer_remote.go:405` | Nothing (wrong: upload rules on downloads) | — (bug fix) |
 | 423 `errClassSkip` handling | `sync/executor.go` | Classified as transient in engine `classifyResult()` | R-6.8.9 |
+| `remote_state` failure transitions | `sync/baseline.go` (inside RecordFailure) | Moved to CommitOutcome (symmetry: success + failure state transitions in one place) | — (consolidation) |
 
 ---
 
@@ -538,6 +545,8 @@ Partially. Microsoft doesn't explicitly say "per-user limit" vs "per-tenant limi
 
 **Proactive rate reduction:** Parse `RateLimit-Remaining` headers when present. When remaining quota falls below 20%, reduce request rate before hitting 429. This is an optimization layered on top, not part of the retry architecture.
 
+**Component assignment (deferred):** The graph client parses RateLimit-Remaining from response headers and exposes it on GraphError. The engine reads it after each WorkerResult and, when remaining quota falls below 20%, reduces dispatch rate by inserting artificial NotBefore delays on queued actions. This prevents 429s proactively rather than reacting to them. Implementation is deferred to a post-launch optimization pass — the scope-based retry architecture handles 429s reactively as the primary mechanism. R-6.8.5 status remains [planned].
+
 ### 7.4.1: Shared Drives and Scope Boundaries
 
 A single engine handles both the user's primary drive AND shortcuts to shared folders. Shortcuts are observed using the same graph client but target a different drive (the sharer's). This has critical implications for scope detection — a single engine's actions target multiple quota owners and permission domains.
@@ -751,6 +760,8 @@ func (e *Engine) classifyResult(r WorkerResult) resultClass {
         return resultTransient     // known transient HTTP codes (423 = SharePoint lock, self-resolving)
     case errors.Is(r.Err, os.ErrPermission):
         return resultActionable    // local permission denied
+    case errors.Is(r.Err, context.Canceled) || errors.Is(r.Err, context.DeadlineExceeded):
+        return resultShutdown   // graceful drain: discard action, don't record failure
     default:
         return resultSkip          // unknown error, don't retry
     }
@@ -781,6 +792,20 @@ func (e *Engine) updateScope(r WorkerResult, class resultClass) {
         // Known outage pattern (e.g., "ObjectHandle is Invalid") — route to service scope
         e.scopeState.AddToWindow("service", r)
     }
+}
+```
+
+```go
+// isOutagePattern distinguishes transient service outages from permanent
+// phantom drive 400s (R-6.7.11). Phantom drives fail on one specific drive
+// ID and are handled by drive filtering, not scope detection.
+func isOutagePattern(err error) bool {
+    var ge *graph.GraphError
+    if !errors.As(err, &ge) {
+        return false
+    }
+    return ge.InnerError.Code == "invalidRequest" &&
+        strings.Contains(ge.Message, "ObjectHandle is Invalid")
 }
 ```
 
@@ -1690,6 +1715,13 @@ Update `spec/requirements/` files with all new and revised requirements from thi
 
 Status for all: `[planned]`. This PR establishes the requirements baseline. No code changes.
 
+Post-taxonomy additions (added after initial Phase 0 scope):
+- R-6.8.15: Transient error classification and issue_type assignment (5xx, 408, 412, 404, 423)
+- R-6.6.12: Aggregated transient failure logging (same pattern as R-6.6.7 for execution-time failures)
+- R-2.10.34: Dual scope key format (internal IDs in ScopeState, local paths in sync_failures)
+- context.Canceled/DeadlineExceeded: Graceful shutdown handling in classifyResult
+- R-6.8.5: RateLimit-Remaining component assignment (deferred to post-launch)
+
 ### Phase 1: Design Docs (1 PR)
 
 **PR: `docs/failure-handling-design`**
@@ -1711,6 +1743,7 @@ Non-breaking preparatory changes. All existing tests continue to pass unchanged.
 7. **Store extensions — success cleanup + interface consolidation:** Extend `CommitOutcome` to clear sync_failures for download/delete/move successes (currently upload-only). Move `remote_state` failure status transitions from `RecordFailure` into a new method callable from both success and failure paths. Delete `FailureRecorder` interface and `RecordFailure` method — all callers use `RecordSyncFailure`.
 8. **New issue types:** `quota_exceeded`, `local_permission_denied`, `case_collision`, `disk_full`, `service_outage`, `file_too_large_for_space`.
 9. **Remove `isValidOneDriveName()` from remote observer:** observer_remote.go line ~405. Simple deletion.
+10. **Fix isActionableIssue():** baseline.go `isActionableIssue()` (lines 1511-1519) does not include `IssuePermissionDenied`. Currently `permission_denied` is defined as a constant but not checked in `isActionableIssue()` — permission failures are misclassified as transient and scheduled for retry instead of being treated as actionable.
 
 TDD: Write tests for new store methods, 401 refresh, RetryAfter parsing, SyncTransport policy, graph client parameterization first.
 
@@ -1725,6 +1758,7 @@ Scanner returns `ScanResult{Events, Skipped}` instead of `[]ChangeEvent`. Engine
 3. **Engine `recordSkippedItems()`:** Groups by reason, batch-upserts to sync_failures as actionable.
 4. **Engine `clearResolvedActionableFailures()`:** Deletes sync_failures entries for files no longer skipped.
 5. **Aggregated logging:** >10 same-type skips → 1 WARN summary + individual DEBUG.
+6. **Directory buffering:** Buffer entries per directory during `filepath.WalkDir` before emitting ChangeEvents. This is a prerequisite for Phase 7 (case collision detection), which requires a per-directory case-insensitive name map. Without buffering, the scanner emits events one-at-a-time during the walk and cannot compare sibling names.
 
 TDD: Write tests for ScanResult contract, engine recording, auto-clear, aggregated logging first.
 
@@ -1783,6 +1817,8 @@ User-facing improvements to issues command and logging.
 
 Case-insensitive collision detection during scanner walk.
 
+Depends on Phase 3's directory buffering infrastructure. The scanner must buffer entries within each directory before emitting events so that case-insensitive name comparison can happen across siblings.
+
 1. **Per-directory case-insensitive name map** in scanner.
 2. **Both colliding files** flagged as `SkippedItem{Reason: "case_collision"}`.
 3. **Neither uploaded** until collision resolved.
@@ -1808,6 +1844,8 @@ After each phase: update requirement statuses from `[planned]` → `[implemented
 ---
 
 ## Part 10: Complete Requirements Inventory
+
+> **Note:** The Failure Taxonomy tables (above) are the canonical requirement-to-error-type mapping. This section preserves the original inventory for reference but should not be treated as authoritative where it conflicts with the taxonomy.
 
 All proposed new/changed requirements, organized by area. Failure handling principles from the analysis are encoded directly as testable requirements below — not as CLAUDE.md philosophy additions.
 
