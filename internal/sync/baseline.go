@@ -1139,11 +1139,12 @@ func (m *SyncStore) RecordFailure(ctx context.Context, p *SyncFailureParams) err
 
 	// Step 2: Read current failure count from sync_failures for backoff calculation.
 	var currentFailures int
-	//nolint:errcheck // no-row is fine — currentFailures stays 0
-	tx.QueryRowContext(ctx,
+	if scanErr := tx.QueryRowContext(ctx,
 		`SELECT failure_count FROM sync_failures WHERE path = ? AND drive_id = ?`,
 		p.Path, p.DriveID.String(),
-	).Scan(&currentFailures)
+	).Scan(&currentFailures); scanErr != nil && scanErr != sql.ErrNoRows {
+		return fmt.Errorf("sync: reading failure count for %s: %w", p.Path, scanErr)
+	}
 
 	// Step 3: Determine category from issue type.
 	category := strTransient
@@ -1165,11 +1166,12 @@ func (m *SyncStore) RecordFailure(ctx context.Context, p *SyncFailureParams) err
 	// when caller didn't provide one.
 	itemID := p.ItemID
 	if itemID == "" && (p.Direction == strDownload || p.Direction == strDelete) {
-		//nolint:errcheck // no-row is fine — itemID stays empty
-		tx.QueryRowContext(ctx,
+		if scanErr := tx.QueryRowContext(ctx,
 			`SELECT item_id FROM remote_state WHERE path = ? AND drive_id = ?`,
 			p.Path, p.DriveID.String(),
-		).Scan(&itemID)
+		).Scan(&itemID); scanErr != nil && scanErr != sql.ErrNoRows {
+			return fmt.Errorf("sync: reading item_id for %s: %w", p.Path, scanErr)
+		}
 	}
 
 	// Step 5: UPSERT into sync_failures with full field set.
