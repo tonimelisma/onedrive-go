@@ -1186,6 +1186,8 @@ func (m *SyncStore) RecordFailure(ctx context.Context, p *SyncFailureParams) err
 
 	// Step 5: UPSERT into sync_failures with full field set.
 	// COALESCE preserves existing values when new values are empty/zero.
+	// NOTE: UpsertActionableFailures has a parallel INSERT with different
+	// ON CONFLICT semantics — update both when adding columns.
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO sync_failures
 			(path, drive_id, direction, category, issue_type, item_id,
@@ -1683,6 +1685,9 @@ func (m *SyncStore) UpsertActionableFailures(ctx context.Context, failures []Act
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// NOTE: RecordFailure has a parallel INSERT with different ON CONFLICT
+	// semantics (COALESCE, failure_count increment) — update both when
+	// adding columns.
 	stmt, err := tx.PrepareContext(ctx,
 		`INSERT INTO sync_failures
 			(path, drive_id, direction, category, issue_type, item_id,
