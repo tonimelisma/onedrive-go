@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/observer_local.go, internal/sync/observer_local_handlers.go, internal/sync/observer_remote.go, internal/sync/observer_shortcut.go, internal/sync/scanner.go, internal/sync/buffer.go, internal/sync/shortcuts.go, internal/sync/permissions.go, internal/sync/inotify_linux.go, internal/sync/inotify_other.go
 
-Implements: R-2.1.2 [verified], R-2.4 [implemented], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.15 [planned], R-6.7.16 [planned], R-6.7.19 [planned], R-6.7.20 [verified], R-6.7.21 [planned], R-6.7.24 [verified], R-2.11 [implemented], R-2.11.5 [planned], R-2.12 [planned], R-2.13.1 [verified], R-2.14.1 [verified]
+Implements: R-2.1.2 [verified], R-2.4 [implemented], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.15 [planned], R-6.7.16 [planned], R-6.7.19 [planned], R-6.7.20 [verified], R-6.7.21 [planned], R-6.7.24 [verified], R-2.11 [implemented], R-2.11.5 [planned], R-2.12 [planned], R-2.13.1 [verified], R-2.14.1 [verified], R-2.14.3 [verified], R-2.14.4 [verified]
 
 ## Remote Observer (`observer_remote.go`)
 
@@ -57,7 +57,7 @@ Implements: R-6.2.7 [verified]
 - Filtering is symmetric: any exclusion applied to local items (always-excluded suffixes, invalid OneDrive names) is also applied to remote items in `classifyItem()`. This prevents remote-only files (e.g., temp files uploaded via web UI) from entering the planner.
 - The `alwaysExcludedSuffixes` list does NOT include `.db`/`.db-wal`/`.db-shm` — those caused false positives on legitimate data files. The sync engine's state DB lives outside the sync root by design.
 - Delta processing uses two-pass page handling to ensure vault parent folders are classified before their children, preventing path materialization failures.
-- Personal Vault items (`specialFolder.name == "vault"`) are excluded by default. Vault auto-locks after 20 minutes → locked items appear deleted in delta → phantom deletions. `sync_vault = true` escape hatch.
+- Personal Vault items (`specialFolder.name == "vault"`) are unconditionally excluded. Vault auto-locks after 20 minutes → locked items appear deleted in delta → phantom deletions.
 - FullScan uses three sequential phases: (1) Walk (readdir + Lstat + classify), (2) Hash (parallel QuickXorHash via `errgroup.SetLimit(checkWorkers)`), (3) Deletion detection (compare observed paths vs baseline).
 
 ### Rationale
