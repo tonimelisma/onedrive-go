@@ -45,6 +45,16 @@ const (
 
 	sqlDeleteBaseline = `DELETE FROM baseline WHERE path = ?`
 
+	// Shared column list for all sync_failures SELECT queries. Must match
+	// the scan order in scanSyncFailureRows. Update both when adding columns.
+	sqlSelectSyncFailureCols = `path, drive_id, direction, category,
+		COALESCE(issue_type, ''), COALESCE(item_id, ''),
+		failure_count, COALESCE(next_retry_at, 0),
+		COALESCE(last_error, ''), COALESCE(http_status, 0),
+		first_seen_at, last_seen_at,
+		COALESCE(file_size, 0), COALESCE(local_hash, ''),
+		scope_key`
+
 	sqlInsertConflict = `INSERT INTO conflicts
 		(id, drive_id, item_id, path, conflict_type, detected_at,
 		 local_hash, remote_hash, local_mtime, remote_mtime,
@@ -1583,15 +1593,7 @@ func isActionableIssue(issueType string) bool {
 // ListSyncFailures returns all sync_failures rows ordered by last_seen_at DESC.
 func (m *SyncStore) ListSyncFailures(ctx context.Context) ([]SyncFailureRow, error) {
 	rows, err := m.db.QueryContext(ctx,
-		`SELECT path, drive_id, direction, category,
-			COALESCE(issue_type, ''), COALESCE(item_id, ''),
-			failure_count, COALESCE(next_retry_at, 0),
-			COALESCE(last_error, ''), COALESCE(http_status, 0),
-			first_seen_at, last_seen_at,
-			COALESCE(file_size, 0), COALESCE(local_hash, ''),
-			scope_key
-		FROM sync_failures
-		ORDER BY last_seen_at DESC`)
+		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures ORDER BY last_seen_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing sync failures: %w", err)
 	}
@@ -1604,16 +1606,8 @@ func (m *SyncStore) ListSyncFailures(ctx context.Context) ([]SyncFailureRow, err
 // Used by the issues command to show user-actionable file issues.
 func (m *SyncStore) ListActionableFailures(ctx context.Context) ([]SyncFailureRow, error) {
 	rows, err := m.db.QueryContext(ctx,
-		`SELECT path, drive_id, direction, category,
-			COALESCE(issue_type, ''), COALESCE(item_id, ''),
-			failure_count, COALESCE(next_retry_at, 0),
-			COALESCE(last_error, ''), COALESCE(http_status, 0),
-			first_seen_at, last_seen_at,
-			COALESCE(file_size, 0), COALESCE(local_hash, ''),
-			scope_key
-		FROM sync_failures
-		WHERE category = 'actionable'
-		ORDER BY last_seen_at DESC`)
+		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
+		WHERE category = 'actionable' ORDER BY last_seen_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing actionable sync failures: %w", err)
 	}
@@ -1769,14 +1763,7 @@ func (m *SyncStore) ClearResolvedActionableFailures(ctx context.Context, issueTy
 func (m *SyncStore) ListSyncFailuresForRetry(ctx context.Context, now time.Time) ([]SyncFailureRow, error) {
 	nowNano := now.UnixNano()
 	rows, err := m.db.QueryContext(ctx,
-		`SELECT path, drive_id, direction, category,
-			COALESCE(issue_type, ''), COALESCE(item_id, ''),
-			failure_count, COALESCE(next_retry_at, 0),
-			COALESCE(last_error, ''), COALESCE(http_status, 0),
-			first_seen_at, last_seen_at,
-			COALESCE(file_size, 0), COALESCE(local_hash, ''),
-			scope_key
-		FROM sync_failures
+		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
 		WHERE category = 'transient'
 			AND next_retry_at IS NOT NULL
 			AND next_retry_at <= ?`,
@@ -1830,16 +1817,8 @@ func (m *SyncStore) SyncFailureCount(ctx context.Context) (int, error) {
 // ListSyncFailuresByIssueType returns all sync_failures rows with the given issue_type.
 func (m *SyncStore) ListSyncFailuresByIssueType(ctx context.Context, issueType string) ([]SyncFailureRow, error) {
 	rows, err := m.db.QueryContext(ctx,
-		`SELECT path, drive_id, direction, category,
-			COALESCE(issue_type, ''), COALESCE(item_id, ''),
-			failure_count, COALESCE(next_retry_at, 0),
-			COALESCE(last_error, ''), COALESCE(http_status, 0),
-			first_seen_at, last_seen_at,
-			COALESCE(file_size, 0), COALESCE(local_hash, ''),
-			scope_key
-		FROM sync_failures
-		WHERE issue_type = ?
-		ORDER BY last_seen_at DESC`, issueType)
+		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
+		WHERE issue_type = ? ORDER BY last_seen_at DESC`, issueType)
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing sync failures by type %s: %w", issueType, err)
 	}
