@@ -30,6 +30,11 @@ The system shall resolve settings with a four-layer override chain: defaults →
 
 - R-4.6.1: When the user runs `service install`, the system shall generate a systemd unit (Linux) or launchd plist (macOS). [future]
 - R-4.6.2: `service install` shall NOT auto-enable the service. [future]
+- R-4.6.3: `service install` shall be idempotent, regenerating the definition if already present. [future]
+- R-4.6.4: When the user runs `service enable`, the system shall enable auto-start at boot. [future]
+- R-4.6.5: When the user runs `service disable`, the system shall disable auto-start at boot. [future]
+- R-4.6.6: When the user runs `service uninstall`, the system shall stop, disable, and remove the service definition. [future]
+- R-4.6.7: When the user runs `service status`, the system shall report whether the service is installed, enabled, and running. [future]
 
 ## R-4.7 Logging [verified]
 
