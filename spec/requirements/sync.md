@@ -41,7 +41,7 @@ All filter settings are per-drive (no global filter defaults).
 - R-2.4.4: When a directory contains a file matching the `ignore_marker` name (default `.odignore`), the system shall exclude that directory from sync. The marker file is a presence-only check — its contents are not read. The marker file itself is not synced. [planned]
 - R-2.4.5: When `sync_paths` is set, the system shall sync only the specified paths. [planned]
 - R-2.4.6: When `skip_symlinks = true`, the system shall exclude symlinks. Symlinked directories are always excluded from watch mode. [verified]
-- R-2.4.7: When an item belongs to the Personal Vault, the system shall exclude it by default. The `sync_vault` option enables vault sync for users who accept the auto-lock risk. [verified]
+- R-2.4.7: When an item belongs to the Personal Vault, the system shall exclude it. Vault auto-locks after 20 minutes, causing locked items to appear deleted in delta responses — syncing vault items would cause data loss. [verified]
 
 ## R-2.5 Crash Recovery [verified]
 
@@ -144,7 +144,10 @@ The system shall validate filenames against OneDrive naming restrictions before 
 
 ## R-2.14 Read-Only Shared Items [verified]
 
-- R-2.14.1: When a write to a shared item returns HTTP 403 (permanent permission constraint), the system shall record the path prefix as read-only and suppress subsequent writes to that subtree. [verified]
+- R-2.14.1: When a write to a shared item returns HTTP 403, the system shall query the Graph API to confirm the denial is permanent (not transient), then walk up the folder hierarchy to find the permission boundary and record it as read-only. [verified]
+- R-2.14.2: When a subtree is recorded as read-only, the planner shall switch it to download-only mode — suppressing uploads, remote moves, and remote deletes while still allowing downloads. [verified]
+- R-2.14.3: At the start of each sync pass, the system shall recheck all permission-denied records against the Graph API and clear any where write access has been restored. [verified]
+- R-2.14.4: When the Graph API is unavailable during a permission check, the system shall fail open — not suppressing writes based on inconclusive evidence. [verified]
 
 ## R-2.15 Delta Checkpoint Integrity [verified]
 
