@@ -321,14 +321,6 @@ func TestValidate_IgnoreMarker_Empty(t *testing.T) {
 	assert.Contains(t, err.Error(), "ignore_marker")
 }
 
-func TestValidate_MaxFileSize_Invalid(t *testing.T) {
-	cfg := validConfig()
-	cfg.MaxFileSize = invalidSizeStr
-	err := Validate(cfg)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "max_file_size")
-}
-
 func TestValidate_MinFreeSpace_Invalid(t *testing.T) {
 	cfg := validConfig()
 	cfg.MinFreeSpace = invalidSizeStr
@@ -598,7 +590,6 @@ func TestWarnUnimplemented_NonDefaults_WarnsAll(t *testing.T) {
 	rd.SyncPaths = []string{"/docs"}
 	rd.SkipFiles = []string{"*.tmp"}
 	rd.SkipDirs = []string{".git"}
-	rd.MaxFileSize = "1GB"
 	rd.BandwidthLimit = "10MB"
 	rd.BandwidthSchedule = []BandwidthScheduleEntry{{Time: "08:00", Limit: "5MB"}}
 	rd.Websocket = true
@@ -609,7 +600,7 @@ func TestWarnUnimplemented_NonDefaults_WarnsAll(t *testing.T) {
 	warned := h.warnedFields()
 
 	expected := []string{
-		"sync_paths", "skip_files", "skip_dirs", "max_file_size",
+		"sync_paths", "skip_files", "skip_dirs",
 		"bandwidth_limit", "bandwidth_schedule", "websocket", "user_agent",
 	}
 	for _, f := range expected {

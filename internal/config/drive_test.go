@@ -148,7 +148,6 @@ func TestBuildResolvedDrive_GlobalDefaults(t *testing.T) {
 	assert.False(t, resolved.Paused)
 	assert.True(t, resolved.SkipDotfiles)
 	assert.Equal(t, "debug", resolved.LogLevel)
-	assert.Equal(t, "/", resolved.RemotePath)
 }
 
 func TestBuildResolvedDrive_PausedDefault(t *testing.T) {
@@ -197,22 +196,6 @@ func TestBuildResolvedDrive_PerDriveOverrides(t *testing.T) {
 	assert.Equal(t, []string{"vendor"}, resolved.SkipDirs)
 	assert.Equal(t, []string{"*.log"}, resolved.SkipFiles)
 	assert.Equal(t, "10m", resolved.PollInterval)
-}
-
-func TestBuildResolvedDrive_RemotePathDefault(t *testing.T) {
-	cfg := DefaultConfig()
-	drive := &Drive{SyncDir: "~/OneDrive"}
-
-	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("personal:toni@outlook.com"), drive, testLogger(t))
-	assert.Equal(t, "/", resolved.RemotePath)
-}
-
-func TestBuildResolvedDrive_RemotePathExplicit(t *testing.T) {
-	cfg := DefaultConfig()
-	drive := &Drive{SyncDir: "~/OneDrive", RemotePath: "/Documents"}
-
-	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("personal:toni@outlook.com"), drive, testLogger(t))
-	assert.Equal(t, "/Documents", resolved.RemotePath)
 }
 
 func TestBuildResolvedDrive_TildeExpanded(t *testing.T) {

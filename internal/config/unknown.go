@@ -18,7 +18,7 @@ const maxLevenshteinDistance = 3
 var knownGlobalKeys = map[string]bool{
 	// Filter settings
 	"skip_files": true, "skip_dirs": true, "skip_dotfiles": true,
-	"skip_symlinks": true, "max_file_size": true, "sync_paths": true, "ignore_marker": true,
+	"skip_symlinks": true, "sync_paths": true, "ignore_marker": true,
 	// Transfer settings
 	"transfer_workers": true, "check_workers": true,
 	"chunk_size": true, "bandwidth_limit": true, "bandwidth_schedule": true, "transfer_order": true,
@@ -56,8 +56,7 @@ var knownGlobalKeysList = func() []string {
 // knownDriveKeys are the valid keys inside a drive section.
 var knownDriveKeys = map[string]bool{
 	"sync_dir": true, "paused": true, "paused_until": true, "display_name": true, "owner": true,
-	"remote_path": true, "skip_dotfiles": true, "skip_dirs": true,
-	"skip_files": true, "poll_interval": true,
+	"skip_dotfiles": true, "skip_dirs": true, "skip_files": true, "poll_interval": true,
 }
 
 // knownDriveKeysList is the sorted slice form for Levenshtein matching.

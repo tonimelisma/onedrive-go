@@ -114,12 +114,6 @@ func ValidateResolvedForSync(rd *ResolvedDrive) error {
 func validateFilter(f *FilterConfig) []error {
 	var errs []error
 
-	if f.MaxFileSize != "" && f.MaxFileSize != "0" {
-		if _, err := ParseSize(f.MaxFileSize); err != nil {
-			errs = append(errs, fmt.Errorf("max_file_size: %w", err))
-		}
-	}
-
 	for _, p := range f.SyncPaths {
 		if !strings.HasPrefix(p, "/") {
 			errs = append(errs, fmt.Errorf("sync_paths: path %q must start with /", p))
@@ -450,10 +444,6 @@ func WarnUnimplemented(rd *ResolvedDrive, logger *slog.Logger) {
 
 	if len(rd.SkipDirs) > 0 {
 		warn("skip_dirs")
-	}
-
-	if rd.MaxFileSize != "0" && rd.MaxFileSize != defaultMaxFileSize {
-		warn("max_file_size")
 	}
 
 	if rd.BandwidthLimit != "0" && rd.BandwidthLimit != defaultBandwidthLimit {
