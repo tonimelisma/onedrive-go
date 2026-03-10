@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -310,6 +311,98 @@ func TestPurgeOrphanedFiles(t *testing.T) {
 	// Bob's file should remain.
 	_, statErr := os.Stat(filepath.Join(dataDir, "state_personal_bob@outlook.com.db"))
 	assert.NoError(t, statErr, "bob's state DB should remain")
+}
+
+// Validates: R-3.1.6
+func TestPrintWhoamiJSON(t *testing.T) {
+	t.Parallel()
+
+	user := &graph.User{
+		ID:          "user-123",
+		DisplayName: "Alice Smith",
+		Email:       "alice@example.com",
+	}
+
+	drives := []graph.Drive{
+		{
+			ID:         driveid.New("drive-abc"),
+			Name:       "OneDrive",
+			DriveType:  "personal",
+			QuotaUsed:  1073741824,
+			QuotaTotal: 5368709120,
+		},
+	}
+
+	loggedOut := []loggedOutAccount{
+		{
+			Email:       "bob@example.com",
+			DriveType:   "business",
+			DisplayName: "Bob Jones",
+			StateDBs:    1,
+		},
+	}
+
+	var buf bytes.Buffer
+	err := printWhoamiJSON(&buf, user, drives, loggedOut)
+	require.NoError(t, err)
+
+	var decoded whoamiOutput
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &decoded))
+
+	require.NotNil(t, decoded.User)
+	assert.Equal(t, "user-123", decoded.User.ID)
+	assert.Equal(t, "Alice Smith", decoded.User.DisplayName)
+	assert.Equal(t, "alice@example.com", decoded.User.Email)
+
+	require.Len(t, decoded.Drives, 1)
+	assert.Contains(t, decoded.Drives[0].ID, "drive-abc")
+	assert.Equal(t, "OneDrive", decoded.Drives[0].Name)
+	assert.Equal(t, "personal", decoded.Drives[0].DriveType)
+	assert.Equal(t, int64(1073741824), decoded.Drives[0].QuotaUsed)
+
+	require.Len(t, decoded.LoggedOutAccounts, 1)
+	assert.Equal(t, "bob@example.com", decoded.LoggedOutAccounts[0].Email)
+}
+
+// Validates: R-3.1.6
+func TestPrintWhoamiJSON_LoggedOutOnly(t *testing.T) {
+	t.Parallel()
+
+	loggedOut := []loggedOutAccount{
+		{
+			Email:     "carol@outlook.com",
+			DriveType: "personal",
+			StateDBs:  2,
+		},
+	}
+
+	var buf bytes.Buffer
+	err := printWhoamiJSON(&buf, nil, nil, loggedOut)
+	require.NoError(t, err)
+
+	var decoded whoamiOutput
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &decoded))
+
+	assert.Nil(t, decoded.User)
+	assert.Empty(t, decoded.Drives)
+	require.Len(t, decoded.LoggedOutAccounts, 1)
+	assert.Equal(t, "carol@outlook.com", decoded.LoggedOutAccounts[0].Email)
+}
+
+// Validates: R-3.1.6
+func TestPrintWhoamiJSON_Empty(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	err := printWhoamiJSON(&buf, nil, nil, nil)
+	require.NoError(t, err)
+
+	var decoded whoamiOutput
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &decoded))
+
+	assert.Nil(t, decoded.User)
+	assert.Empty(t, decoded.Drives)
+	assert.Empty(t, decoded.LoggedOutAccounts)
 }
 
 // Validates: R-3.1.5

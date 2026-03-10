@@ -9,6 +9,7 @@ Authentication, account management, drive types, and shared drive support.
 - R-3.1.3: When the user runs `logout`, the system shall remove the authentication token and config sections, preserving state databases, account profiles, and drive metadata. [verified]
 - R-3.1.4: When `--purge` is passed with logout, the system shall also delete state databases, account profiles, and drive metadata. `--purge` shall work after a prior non-purge logout. [verified]
 - R-3.1.5: When the user runs `whoami`, the system shall display authenticated accounts and logged-out accounts whose account profile files remain (not yet purged). [verified]
+- R-3.1.6: When `--json` is passed, `whoami` shall output structured JSON with user info, drives, and logged-out accounts. [verified]
 
 ## R-3.2 Drive Types [verified]
 
@@ -66,6 +67,8 @@ The system shall support all four drive types:
   matching sites with their document libraries and canonical IDs. When
   `--account` is passed, the search is restricted to that business account.
   [verified]
+- R-3.3.10: When `--json` is passed, `drive list` shall output structured JSON with configured and available drive arrays. [verified]
+- R-3.3.11: When `--json` is passed, `drive search` shall output structured JSON with results array. [verified]
 
 ## R-3.4 Multi-Account [verified]
 

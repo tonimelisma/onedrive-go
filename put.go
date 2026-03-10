@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -98,10 +99,7 @@ func runPut(cmd *cobra.Command, args []string) error {
 	logger.Debug("upload complete", "remote_path", remotePath, "item_id", result.Item.ID, "size", fi.Size())
 
 	if cc.Flags.JSON {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-
-		return enc.Encode(putJSONOutput{
+		return printPutJSON(os.Stdout, putJSONOutput{
 			Path: remotePath,
 			ID:   result.Item.ID,
 			Size: fi.Size(),
@@ -111,6 +109,22 @@ func runPut(cmd *cobra.Command, args []string) error {
 	cc.Statusf("Uploaded %s (%s)\n", remotePath, formatSize(fi.Size()))
 
 	return nil
+}
+
+// printPutJSON writes the put command's single-file JSON output to w.
+func printPutJSON(w io.Writer, out putJSONOutput) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+
+	return enc.Encode(out)
+}
+
+// printPutFolderJSON writes the put command's folder JSON output to w.
+func printPutFolderJSON(w io.Writer, out putFolderJSONOutput) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+
+	return enc.Encode(out)
 }
 
 // uploadWalkState holds mutable state for the upload walk callback.
@@ -177,10 +191,7 @@ func uploadFolder(
 	}
 
 	if cc.Flags.JSON {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-
-		return enc.Encode(state.result)
+		return printPutFolderJSON(os.Stdout, state.result)
 	}
 
 	cc.Statusf("Uploaded %d files, %d folders (%s)\n",

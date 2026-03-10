@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -100,10 +101,7 @@ func runGet(cmd *cobra.Command, args []string) error {
 	logger.Debug("download complete", "local_path", localPath, "bytes", result.Size)
 
 	if cc.Flags.JSON {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-
-		return enc.Encode(getJSONOutput{
+		return printGetJSON(os.Stdout, getJSONOutput{
 			Path:         localPath,
 			Size:         result.Size,
 			HashVerified: result.HashVerified,
@@ -113,6 +111,22 @@ func runGet(cmd *cobra.Command, args []string) error {
 	cc.Statusf("Downloaded %s (%s)\n", localPath, formatSize(result.Size))
 
 	return nil
+}
+
+// printGetJSON writes the get command's single-file JSON output to w.
+func printGetJSON(w io.Writer, out getJSONOutput) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+
+	return enc.Encode(out)
+}
+
+// printGetFolderJSON writes the get command's folder JSON output to w.
+func printGetFolderJSON(w io.Writer, out getFolderJSONOutput) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+
+	return enc.Encode(out)
 }
 
 // downloadState holds mutable state shared across the recursive download.
@@ -157,10 +171,7 @@ func downloadFolder(
 	state.wg.Wait()
 
 	if cc.Flags.JSON {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-
-		return enc.Encode(state.result)
+		return printGetFolderJSON(os.Stdout, state.result)
 	}
 
 	cc.Statusf("Downloaded %d files, %d folders (%s)\n",

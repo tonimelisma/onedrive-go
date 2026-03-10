@@ -2,10 +2,12 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
@@ -126,4 +128,47 @@ func TestFormatRecycleBinJSON_Empty(t *testing.T) {
 	err := formatRecycleBinJSON(&buf, nil)
 	assert.NoError(t, err)
 	assert.Contains(t, buf.String(), "[]")
+}
+
+// Validates: R-1.9.4
+func TestPrintRecycleBinRestoreJSON(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	err := printRecycleBinRestoreJSON(&buf, recycleBinJSONItem{
+		ID:      "item-restored-1",
+		Name:    "recovered-file.txt",
+		Size:    2048,
+		Type:    "file",
+		Deleted: "2024-06-15T10:30:00Z",
+	})
+	require.NoError(t, err)
+
+	var decoded recycleBinJSONItem
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &decoded))
+	assert.Equal(t, "item-restored-1", decoded.ID)
+	assert.Equal(t, "recovered-file.txt", decoded.Name)
+	assert.Equal(t, int64(2048), decoded.Size)
+	assert.Equal(t, "file", decoded.Type)
+	assert.Equal(t, "2024-06-15T10:30:00Z", decoded.Deleted)
+}
+
+// Validates: R-1.9.4
+func TestPrintRecycleBinRestoreJSON_Folder(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	err := printRecycleBinRestoreJSON(&buf, recycleBinJSONItem{
+		ID:      "folder-restored-1",
+		Name:    "recovered-folder",
+		Size:    0,
+		Type:    "folder",
+		Deleted: "2024-06-14T08:00:00Z",
+	})
+	require.NoError(t, err)
+
+	var decoded recycleBinJSONItem
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &decoded))
+	assert.Equal(t, "folder", decoded.Type)
+	assert.Equal(t, "recovered-folder", decoded.Name)
 }

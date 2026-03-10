@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -188,4 +189,47 @@ func TestGetFolderJSONOutput_EmptyErrors(t *testing.T) {
 
 	assert.Equal(t, float64(1), decoded["folders_created"])
 	assert.Equal(t, float64(0), decoded["total_size"])
+}
+
+// Validates: R-1.2.4
+func TestPrintGetJSON(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	err := printGetJSON(&buf, getJSONOutput{
+		Path:         "report.pdf",
+		Size:         4096,
+		HashVerified: true,
+	})
+	require.NoError(t, err)
+
+	var decoded getJSONOutput
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &decoded))
+	assert.Equal(t, "report.pdf", decoded.Path)
+	assert.Equal(t, int64(4096), decoded.Size)
+	assert.True(t, decoded.HashVerified)
+}
+
+// Validates: R-1.2.4
+func TestPrintGetFolderJSON(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	err := printGetFolderJSON(&buf, getFolderJSONOutput{
+		Files: []getJSONOutput{
+			{Path: "dir/a.txt", Size: 100, HashVerified: true},
+			{Path: "dir/b.txt", Size: 200, HashVerified: false},
+		},
+		FoldersCreated: 2,
+		TotalSize:      300,
+		Errors:         []string{"dir/c.txt: access denied"},
+	})
+	require.NoError(t, err)
+
+	var decoded getFolderJSONOutput
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &decoded))
+	assert.Len(t, decoded.Files, 2)
+	assert.Equal(t, 2, decoded.FoldersCreated)
+	assert.Equal(t, int64(300), decoded.TotalSize)
+	assert.Len(t, decoded.Errors, 1)
 }

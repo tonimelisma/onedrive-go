@@ -17,6 +17,7 @@ When the user runs `get <remote> [local]`, the system shall download the specifi
 - R-1.2.1: When the remote path is a folder, the system shall download recursively. [verified]
 - R-1.2.2: When the download is interrupted, the system shall resume via `.partial` files on retry. [verified]
 - R-1.2.3: When download completes, the system shall verify hash and size against API metadata. [verified]
+- R-1.2.4: When `--json` is passed, the system shall output structured JSON with path, size, and hash_verified; for folders, with files array, folders_created, total_size, and errors. [verified]
 
 ## R-1.3 Upload (`put`) [verified]
 
@@ -25,6 +26,7 @@ When the user runs `put <local> [remote]`, the system shall upload the specified
 - R-1.3.1: When the local path is a directory, the system shall upload recursively. [verified]
 - R-1.3.2: When the file exceeds 4 MiB, the system shall use a resumable upload session. [verified]
 - R-1.3.3: When upload completes, the system shall verify the server-reported hash matches the local file. [verified]
+- R-1.3.4: When `--json` is passed, the system shall output structured JSON with path, id, and size; for directories, with files array, folders_created, total_size, and errors. [verified]
 
 ## R-1.4 Delete (`rm`) [verified]
 
@@ -32,25 +34,35 @@ When the user runs `rm <path>`, the system shall delete the item (to recycle bin
 
 - R-1.4.1: When the path is a folder, the system shall delete recursively. [verified]
 - R-1.4.2: Deletions shall go to the OneDrive recycle bin by default (`use_recycle_bin`). [verified]
+- R-1.4.3: When `--json` is passed, the system shall output structured JSON with the deleted path. [verified]
 
 ## R-1.5 Create Folder (`mkdir`) [verified]
 
 When the user runs `mkdir <path>`, the system shall create the folder on OneDrive.
 
+- R-1.5.1: When `--json` is passed, the system shall output structured JSON with created path and folder ID. [verified]
+
 ## R-1.6 Metadata (`stat`) [verified]
 
 When the user runs `stat <path>`, the system shall display item metadata (ID, size, hashes, timestamps, parent, eTag, download URL).
+
+- R-1.6.1: When `--json` is passed, the system shall output structured JSON with item metadata. [verified]
 
 ## R-1.7 Move (`mv`) [verified]
 
 When the user runs `mv <src> <dst>`, the system shall perform a server-side move/rename.
 
+- R-1.7.1: When `--json` is passed, the system shall output structured JSON with source, destination, and item ID. [verified]
+
 ## R-1.8 Copy (`cp`) [verified]
 
 When the user runs `cp <src> <dst>`, the system shall perform a server-side async copy with polling until complete.
+
+- R-1.8.1: When `--json` is passed, the system shall output structured JSON with source, destination, and item ID. [verified]
 
 ## R-1.9 Recycle Bin [verified]
 
 - R-1.9.1: When the user runs `recycle-bin list`, the system shall list items in the recycle bin. [verified]
 - R-1.9.2: When the user runs `recycle-bin restore <id>`, the system shall restore the item. [verified]
 - R-1.9.3: When the user runs `recycle-bin empty`, the system shall permanently delete all recycled items. [verified]
+- R-1.9.4: When `--json` is passed, `recycle-bin list` and `recycle-bin restore` shall output structured JSON. [verified]

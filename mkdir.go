@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -63,13 +64,18 @@ func runMkdir(cmd *cobra.Command, args []string) error {
 	logger.Debug("mkdir complete", "path", remotePath, "folder_id", parentID)
 
 	if cc.Flags.JSON {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-
-		return enc.Encode(mkdirJSONOutput{Created: remotePath, ID: parentID})
+		return printMkdirJSON(os.Stdout, mkdirJSONOutput{Created: remotePath, ID: parentID})
 	}
 
 	cc.Statusf("Created %s\n", remotePath)
 
 	return nil
+}
+
+// printMkdirJSON writes the mkdir command's JSON output to w.
+func printMkdirJSON(w io.Writer, out mkdirJSONOutput) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+
+	return enc.Encode(out)
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 
@@ -93,4 +94,23 @@ func TestCpJSONOutput_Fields(t *testing.T) {
 	assert.Contains(t, raw, "destination")
 	assert.Contains(t, raw, "id")
 	assert.Len(t, raw, 3)
+}
+
+// Validates: R-1.8.1
+func TestPrintCpJSON(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	err := printCpJSON(&buf, cpJSONOutput{
+		Source:      "/docs/report.pdf",
+		Destination: "/backup/report.pdf",
+		ID:          "item-789",
+	})
+	require.NoError(t, err)
+
+	var decoded cpJSONOutput
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &decoded))
+	assert.Equal(t, "/docs/report.pdf", decoded.Source)
+	assert.Equal(t, "/backup/report.pdf", decoded.Destination)
+	assert.Equal(t, "item-789", decoded.ID)
 }

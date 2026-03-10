@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -107,10 +108,7 @@ func isNoOpMove(dest destInfo, sourceParentID, sourceName string) bool {
 // emitMoveResult writes the move result as JSON or status text.
 func emitMoveResult(cc *CLIContext, sourcePath, displayDest, itemID string) error {
 	if cc.Flags.JSON {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-
-		return enc.Encode(mvJSONOutput{
+		return printMvJSON(os.Stdout, mvJSONOutput{
 			Source:      sourcePath,
 			Destination: displayDest,
 			ID:          itemID,
@@ -120,6 +118,14 @@ func emitMoveResult(cc *CLIContext, sourcePath, displayDest, itemID string) erro
 	cc.Statusf("Moved %s → %s\n", sourcePath, displayDest)
 
 	return nil
+}
+
+// printMvJSON writes the mv command's JSON output to w.
+func printMvJSON(w io.Writer, out mvJSONOutput) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+
+	return enc.Encode(out)
 }
 
 func runMv(cmd *cobra.Command, args []string, force bool) error {

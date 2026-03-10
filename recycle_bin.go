@@ -102,10 +102,7 @@ func runRecycleBinRestore(cmd *cobra.Command, args []string) error {
 	}
 
 	if cc.Flags.JSON {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-
-		return enc.Encode(recycleBinJSONItem{
+		return printRecycleBinRestoreJSON(os.Stdout, recycleBinJSONItem{
 			ID:      item.ID,
 			Name:    item.Name,
 			Size:    item.Size,
@@ -231,6 +228,14 @@ func formatRecycleBinTable(w io.Writer, items []graph.Item) {
 	}
 
 	printTable(w, headers, rows)
+}
+
+// printRecycleBinRestoreJSON writes the restore command's JSON output to w.
+func printRecycleBinRestoreJSON(w io.Writer, item recycleBinJSONItem) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+
+	return enc.Encode(item)
 }
 
 func formatRecycleBinJSON(w io.Writer, items []graph.Item) error {
