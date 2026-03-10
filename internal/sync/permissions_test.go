@@ -363,7 +363,7 @@ func TestRecheckPermissions_GrantDetected_IssueCleared(t *testing.T) {
 	// Pre-record a permission_denied issue.
 	require.NoError(t, eng.baseline.RecordSyncFailure(
 		ctx, "Shared/TeamDocs/sub", driveid.ID{}, "upload", IssuePermissionDenied,
-		"folder is read-only", http.StatusForbidden, 0, "", "",
+		"folder is read-only", http.StatusForbidden, 0, "", "", "",
 	))
 
 	// Verify issue exists.
@@ -408,7 +408,7 @@ func TestRecheckPermissions_StillDenied_NoChange(t *testing.T) {
 
 	require.NoError(t, eng.baseline.RecordSyncFailure(
 		ctx, "Shared/TeamDocs/sub", driveid.ID{}, "upload", IssuePermissionDenied,
-		"folder is read-only", http.StatusForbidden, 0, "", "",
+		"folder is read-only", http.StatusForbidden, 0, "", "", "",
 	))
 
 	eng.recheckPermissions(ctx, bl, shortcuts)
@@ -448,11 +448,11 @@ func TestRecheckPermissions_UnresolvableIssues_CachedAsDenied(t *testing.T) {
 	// Record two permission_denied issues.
 	require.NoError(t, eng.baseline.RecordSyncFailure(
 		ctx, "Shared/NoShortcut/sub", driveid.ID{}, "upload", IssuePermissionDenied,
-		"folder is read-only", http.StatusForbidden, 0, "", "",
+		"folder is read-only", http.StatusForbidden, 0, "", "", "",
 	))
 	require.NoError(t, eng.baseline.RecordSyncFailure(
 		ctx, "Shared/Other/locked", driveid.ID{}, "upload", IssuePermissionDenied,
-		"folder is read-only", http.StatusForbidden, 0, "", "",
+		"folder is read-only", http.StatusForbidden, 0, "", "", "",
 	))
 
 	// Recheck with no shortcuts — both issues have sc == nil.
@@ -496,7 +496,7 @@ func TestRecheckPermissions_UnresolvedItemID_CachedAsDenied(t *testing.T) {
 
 	require.NoError(t, eng.baseline.RecordSyncFailure(
 		ctx, "Shared/TeamDocs/missing", driveid.ID{}, "upload", IssuePermissionDenied,
-		"folder is read-only", http.StatusForbidden, 0, "", "",
+		"folder is read-only", http.StatusForbidden, 0, "", "", "",
 	))
 
 	eng.recheckPermissions(ctx, bl, shortcuts)
@@ -738,7 +738,7 @@ func TestRecheckPermissions_PopulatesCache(t *testing.T) {
 
 	require.NoError(t, eng.baseline.RecordSyncFailure(
 		ctx, "Shared/TeamDocs/sub", driveid.ID{}, "upload", IssuePermissionDenied,
-		"folder is read-only", http.StatusForbidden, 0, "", "",
+		"folder is read-only", http.StatusForbidden, 0, "", "", "",
 	))
 
 	eng.recheckPermissions(ctx, bl, shortcuts)

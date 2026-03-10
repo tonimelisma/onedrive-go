@@ -1288,7 +1288,7 @@ func (e *Engine) filterInvalidUploads(ctx context.Context, plan *ActionPlan) *Ac
 			fileSize = plan.Actions[f.Index].View.Local.Size
 		}
 
-		if recErr := e.baseline.RecordSyncFailure(ctx, f.Path, e.driveID, "upload", f.IssueType, f.Error, 0, fileSize, "", ""); recErr != nil {
+		if recErr := e.baseline.RecordSyncFailure(ctx, f.Path, e.driveID, "upload", f.IssueType, f.Error, 0, fileSize, "", "", ""); recErr != nil {
 			e.logger.Error("failed to record sync failure",
 				slog.String("path", f.Path),
 				slog.String("error", recErr.Error()),

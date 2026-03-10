@@ -51,12 +51,14 @@ type StateReader interface {
 // (upload, download, delete) in the unified sync_failures table.
 type SyncFailureRecorder interface {
 	RecordSyncFailure(ctx context.Context, path string, driveID driveid.ID, direction, issueType, errMsg string,
-		httpStatus int, fileSize int64, localHash string, itemID string) error
+		httpStatus int, fileSize int64, localHash string, itemID string, scopeKey string) error
 	ListSyncFailures(ctx context.Context) ([]SyncFailureRow, error)
 	ListActionableFailures(ctx context.Context) ([]SyncFailureRow, error)
 	ClearSyncFailure(ctx context.Context, path string, driveID driveid.ID) error
 	ClearActionableSyncFailures(ctx context.Context) error
 	MarkSyncFailureActionable(ctx context.Context, path string, driveID driveid.ID) error
+	UpsertActionableFailures(ctx context.Context, failures []ActionableFailure) error
+	ClearResolvedActionableFailures(ctx context.Context, issueType string, currentPaths []string) error
 }
 
 // StateAdmin is called by CLI commands and daemon maintenance.
@@ -83,6 +85,18 @@ type SyncFailureRow struct {
 	LastSeenAt   int64
 	FileSize     int64
 	LocalHash    string
+	ScopeKey     string // e.g. "quota:own", "throttle:account", "perm:remote:/path"
+}
+
+// ActionableFailure represents a scanner-detected issue to batch-upsert into
+// sync_failures. Used by UpsertActionableFailures.
+type ActionableFailure struct {
+	Path      string
+	DriveID   driveid.ID
+	Direction string
+	IssueType string
+	Error     string
+	ScopeKey  string
 }
 
 // ObservedItem represents a single item from a delta API response, ready
