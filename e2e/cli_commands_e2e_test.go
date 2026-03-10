@@ -501,3 +501,289 @@ func TestE2E_RecycleBinEmpty(t *testing.T) {
 	assert.NotContains(t, stdout, "empty-test.txt",
 		"file should no longer be in recycle bin after empty")
 }
+
+// ---------------------------------------------------------------------------
+// mv E2E tests
+// ---------------------------------------------------------------------------
+
+// Validates: R-1.6
+// TestE2E_Mv_Rename validates that mv can rename a file within the same folder.
+func TestE2E_Mv_Rename(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
+	cfgPath := writeMinimalConfig(t)
+
+	testFolder := fmt.Sprintf("e2e-mv-rename-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
+
+	// Create folder and file.
+	runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder)
+	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/original.txt", "mv rename content")
+	pollCLIWithConfigContains(t, cfgPath, nil, "original.txt", pollTimeout, "ls", "/"+testFolder)
+
+	// Rename.
+	_, stderr := runCLIWithConfig(t, cfgPath, nil, "mv", "/"+testFolder+"/original.txt", "/"+testFolder+"/renamed.txt")
+	assert.Contains(t, stderr, "Moved", "mv should confirm the move")
+
+	// Verify new name exists and old name is gone.
+	stdout, _ := runCLIWithConfig(t, cfgPath, nil, "ls", "/"+testFolder)
+	assert.Contains(t, stdout, "renamed.txt", "renamed file should exist")
+	assert.NotContains(t, stdout, "original.txt", "original file should not exist")
+}
+
+// Validates: R-1.6
+// TestE2E_Mv_MoveToFolder validates that mv can move a file into an existing folder.
+func TestE2E_Mv_MoveToFolder(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
+	cfgPath := writeMinimalConfig(t)
+
+	testFolder := fmt.Sprintf("e2e-mv-tofolder-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
+
+	// Create parent folder, subfolder, and file.
+	runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder+"/sub")
+	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/moveme.txt", "mv to folder content")
+	pollCLIWithConfigContains(t, cfgPath, nil, "moveme.txt", pollTimeout, "ls", "/"+testFolder)
+
+	// Move file into subfolder.
+	_, stderr := runCLIWithConfig(t, cfgPath, nil, "mv", "/"+testFolder+"/moveme.txt", "/"+testFolder+"/sub")
+	assert.Contains(t, stderr, "Moved", "mv should confirm the move")
+
+	// Verify file is now in sub and not in parent.
+	stdout, _ := runCLIWithConfig(t, cfgPath, nil, "ls", "/"+testFolder+"/sub")
+	assert.Contains(t, stdout, "moveme.txt", "file should be in subfolder")
+
+	stdout, _ = runCLIWithConfig(t, cfgPath, nil, "ls", "/"+testFolder)
+	assert.NotContains(t, stdout, "moveme.txt", "file should no longer be in parent")
+}
+
+// Validates: R-1.6
+// TestE2E_Mv_JSON validates that mv --json produces valid JSON output.
+func TestE2E_Mv_JSON(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
+	cfgPath := writeMinimalConfig(t)
+
+	testFolder := fmt.Sprintf("e2e-mv-json-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
+
+	runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder)
+	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/a.txt", "mv json content")
+	pollCLIWithConfigContains(t, cfgPath, nil, "a.txt", pollTimeout, "ls", "/"+testFolder)
+
+	stdout, _ := runCLIWithConfig(t, cfgPath, nil, "mv", "--json", "/"+testFolder+"/a.txt", "/"+testFolder+"/b.txt")
+
+	var result map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &result),
+		"mv --json should produce valid JSON, got: %s", stdout)
+	assert.Contains(t, result, "source", "JSON should have source field")
+	assert.Contains(t, result, "destination", "JSON should have destination field")
+	assert.Contains(t, result, "id", "JSON should have id field")
+}
+
+// Validates: R-1.6
+// TestE2E_Mv_NotFound validates that mv with a non-existent source fails.
+func TestE2E_Mv_NotFound(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
+	cfgPath := writeMinimalConfig(t)
+
+	output := runCLIWithConfigExpectError(t, cfgPath, nil, "mv", "/nonexistent-uuid-mv-12345", "/somewhere")
+	assert.Contains(t, output, "nonexistent-uuid-mv-12345", "error should mention the source path")
+}
+
+// ---------------------------------------------------------------------------
+// cp E2E tests
+// ---------------------------------------------------------------------------
+
+// Validates: R-1.7
+// TestE2E_Cp_File validates that cp creates a server-side copy of a file.
+func TestE2E_Cp_File(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
+	cfgPath := writeMinimalConfig(t)
+
+	testFolder := fmt.Sprintf("e2e-cp-file-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
+
+	runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder)
+	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/source.txt", "cp file content")
+	pollCLIWithConfigContains(t, cfgPath, nil, "source.txt", pollTimeout, "ls", "/"+testFolder)
+
+	// Copy to a new name.
+	_, stderr := runCLIWithConfig(t, cfgPath, nil, "cp", "/"+testFolder+"/source.txt", "/"+testFolder+"/copy.txt")
+	assert.Contains(t, stderr, "Copied", "cp should confirm the copy")
+
+	// Verify both files exist.
+	stdout, _ := runCLIWithConfig(t, cfgPath, nil, "ls", "/"+testFolder)
+	assert.Contains(t, stdout, "source.txt", "source file should still exist")
+	assert.Contains(t, stdout, "copy.txt", "copied file should exist")
+
+	// Verify content matches.
+	content := getRemoteFile(t, cfgPath, nil, "/"+testFolder+"/copy.txt")
+	assert.Equal(t, "cp file content", content, "copied file content should match source")
+}
+
+// Validates: R-1.7
+// TestE2E_Cp_IntoFolder validates that cp into an existing folder works.
+func TestE2E_Cp_IntoFolder(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
+	cfgPath := writeMinimalConfig(t)
+
+	testFolder := fmt.Sprintf("e2e-cp-folder-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
+
+	runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder+"/dest")
+	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/src.txt", "cp into folder")
+	pollCLIWithConfigContains(t, cfgPath, nil, "src.txt", pollTimeout, "ls", "/"+testFolder)
+
+	// Copy into the dest folder.
+	_, stderr := runCLIWithConfig(t, cfgPath, nil, "cp", "/"+testFolder+"/src.txt", "/"+testFolder+"/dest")
+	assert.Contains(t, stderr, "Copied", "cp should confirm the copy")
+
+	// Verify the copy is in the dest folder.
+	stdout, _ := runCLIWithConfig(t, cfgPath, nil, "ls", "/"+testFolder+"/dest")
+	assert.Contains(t, stdout, "src.txt", "copied file should appear in dest folder")
+}
+
+// Validates: R-1.7
+// TestE2E_Cp_JSON validates that cp --json produces valid JSON output.
+func TestE2E_Cp_JSON(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
+	cfgPath := writeMinimalConfig(t)
+
+	testFolder := fmt.Sprintf("e2e-cp-json-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
+
+	runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder)
+	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/j.txt", "cp json")
+	pollCLIWithConfigContains(t, cfgPath, nil, "j.txt", pollTimeout, "ls", "/"+testFolder)
+
+	stdout, _ := runCLIWithConfig(t, cfgPath, nil, "cp", "--json", "/"+testFolder+"/j.txt", "/"+testFolder+"/j-copy.txt")
+
+	var result map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &result),
+		"cp --json should produce valid JSON, got: %s", stdout)
+	assert.Contains(t, result, "source", "JSON should have source field")
+	assert.Contains(t, result, "destination", "JSON should have destination field")
+	assert.Contains(t, result, "id", "JSON should have id field")
+}
+
+// Validates: R-1.7
+// TestE2E_Cp_NotFound validates that cp with a non-existent source fails.
+func TestE2E_Cp_NotFound(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
+	cfgPath := writeMinimalConfig(t)
+
+	output := runCLIWithConfigExpectError(t, cfgPath, nil, "cp", "/nonexistent-uuid-cp-12345", "/somewhere")
+	assert.Contains(t, output, "nonexistent-uuid-cp-12345", "error should mention the source path")
+}
+
+// ---------------------------------------------------------------------------
+// issues clear / issues retry E2E tests
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.3.5
+// TestE2E_IssuesClear_NoIssues validates that issues clear --all succeeds
+// (no-op) when there are no actionable failures.
+func TestE2E_IssuesClear_NoIssues(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
+	syncDir := t.TempDir()
+	cfgPath, env := writeSyncConfig(t, syncDir)
+
+	testFolder := fmt.Sprintf("e2e-clear-none-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
+
+	// Create a file and sync to establish state DB.
+	localDir := filepath.Join(syncDir, testFolder)
+	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "ok.txt"), []byte("ok"), 0o644))
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+
+	// Clear all — should succeed with no errors.
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "issues", "clear", "--all")
+	assert.Contains(t, stdout, "Cleared all", "clear --all should confirm clearing")
+}
+
+// Validates: R-2.3.5
+// TestE2E_IssuesClear_NoArg validates that issues clear without arguments
+// produces an appropriate error.
+func TestE2E_IssuesClear_NoArg(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
+	syncDir := t.TempDir()
+	cfgPath, env := writeSyncConfig(t, syncDir)
+
+	testFolder := fmt.Sprintf("e2e-clear-noarg-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
+
+	localDir := filepath.Join(syncDir, testFolder)
+	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "ok.txt"), []byte("ok"), 0o644))
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+
+	// No argument and no --all should fail.
+	output := runCLIWithConfigExpectError(t, cfgPath, env, "issues", "clear")
+	assert.Contains(t, output, "provide a path", "should guide user to provide argument")
+}
+
+// Validates: R-2.3.6
+// TestE2E_IssuesRetry_NoIssues validates that issues retry --all succeeds
+// (no-op) when there are no failures.
+func TestE2E_IssuesRetry_NoIssues(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
+	syncDir := t.TempDir()
+	cfgPath, env := writeSyncConfig(t, syncDir)
+
+	testFolder := fmt.Sprintf("e2e-retry-none-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
+
+	localDir := filepath.Join(syncDir, testFolder)
+	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "ok.txt"), []byte("ok"), 0o644))
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+
+	// Retry all — should succeed with no errors.
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "issues", "retry", "--all")
+	assert.Contains(t, stdout, "Reset all", "retry --all should confirm resetting")
+}
+
+// Validates: R-2.3.6
+// TestE2E_IssuesRetry_NoArg validates that issues retry without arguments
+// produces an appropriate error.
+func TestE2E_IssuesRetry_NoArg(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
+	syncDir := t.TempDir()
+	cfgPath, env := writeSyncConfig(t, syncDir)
+
+	testFolder := fmt.Sprintf("e2e-retry-noarg-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
+
+	localDir := filepath.Join(syncDir, testFolder)
+	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "ok.txt"), []byte("ok"), 0o644))
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+
+	// No argument and no --all should fail.
+	output := runCLIWithConfigExpectError(t, cfgPath, env, "issues", "retry")
+	assert.Contains(t, output, "provide a path", "should guide user to provide argument")
+}
