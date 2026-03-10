@@ -8,6 +8,7 @@
 //   - detectDeletions:       finds baseline entries missing from walk
 //   - computeStableHash:     double-stat hash for actively-written files
 //   - shouldObserve:         unified observation filter (Stage 1: name + path)
+//   - isOversizedFile:       Stage 2 observation filter (file size > 250GB)
 //   - validateOneDriveName:  returns reason + detail for invalid names
 //   - isAlwaysExcluded:      OneDrive-incompatible name filtering
 //
@@ -307,7 +308,9 @@ func (o *LocalObserver) processEntry(
 	}
 
 	// Stage 2 observation filter: file size check (requires stat, hence here).
-	if !d.IsDir() && info.Size() > maxOneDriveFileSize {
+	// FullScan records SkippedItems for oversized files; watch handlers don't
+	// (the safety scan catches them).
+	if !d.IsDir() && o.isOversizedFile(info.Size(), dbRelPath) {
 		*skipped = append(*skipped, SkippedItem{
 			Path:     dbRelPath,
 			Reason:   IssueFileTooLarge,
@@ -489,6 +492,19 @@ func computeStableHash(fsPath string) (string, error) {
 // Unified observation filter
 // ---------------------------------------------------------------------------
 
+// isOversizedFile returns true if the file exceeds the OneDrive 250 GB size
+// limit. Logs a debug message when skipping. This is Stage 2 of the two-stage
+// observation filter — requires a stat result, so it runs after stat.
+func (o *LocalObserver) isOversizedFile(size int64, path string) bool {
+	if size > maxOneDriveFileSize {
+		o.logger.Debug("skipping oversized file",
+			slog.String("path", path),
+			slog.Int64("size", size))
+		return true
+	}
+	return false
+}
+
 // shouldObserve checks whether a local filesystem entry should enter the sync
 // pipeline. Returns (true, nil) for valid entries. Returns (false, nil) for
 // internal exclusions (temp files — not user-actionable). Returns (false, skip)
@@ -578,14 +594,17 @@ func syncRootExists(syncRoot string) bool {
 //
 // Called on every fsnotify event and every file during FullScan, so we use
 // asciiLower to avoid the heap allocation that strings.ToLower incurs per call.
+// Suffixes are inlined as explicit checks — no slice allocation, no mutable
+// package-level state, and the compiler inlines the string constants.
 func isAlwaysExcluded(name string) bool {
 	lower := asciiLower(name)
 
 	// Extension-based: partial downloads and editor temps.
-	for _, ext := range alwaysExcludedSuffixes {
-		if strings.HasSuffix(lower, ext) {
-			return true
-		}
+	if strings.HasSuffix(lower, ".partial") ||
+		strings.HasSuffix(lower, ".tmp") ||
+		strings.HasSuffix(lower, ".swp") ||
+		strings.HasSuffix(lower, ".crdownload") {
+		return true
 	}
 
 	// Prefix-based: editor backup files (~file) and LibreOffice locks (.~lock).
@@ -621,12 +640,6 @@ func asciiLower(s string) string {
 
 	// No uppercase letters found — return the original string (zero alloc).
 	return s
-}
-
-// alwaysExcludedSuffixes lists file extensions that are unsafe to sync:
-// partial downloads and editor temporaries.
-var alwaysExcludedSuffixes = []string{
-	".partial", ".tmp", ".swp", ".crdownload",
 }
 
 // isReservedDeviceName returns true for Windows reserved device names

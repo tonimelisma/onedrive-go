@@ -65,7 +65,7 @@ Read-only detection for shared content. When a write attempt returns 403, the pa
 Implements: R-6.2.7 [verified]
 
 - Filtering is asymmetric by design: the local observer filters by always-excluded patterns and OneDrive naming rules (upload validation), while the remote observer trusts the server. If OneDrive sends an item in a delta response, it exists remotely — filtering it would cause silent data loss. Remote-only temp files (e.g., uploaded via web UI) are intentionally allowed through to the planner.
-- The `alwaysExcludedSuffixes` list does NOT include `.db`/`.db-wal`/`.db-shm` — those caused false positives on legitimate data files. The sync engine's state DB lives outside the sync root by design.
+- The always-excluded suffix checks in `isAlwaysExcluded()` do NOT include `.db`/`.db-wal`/`.db-shm` — those caused false positives on legitimate data files. The sync engine's state DB lives outside the sync root by design.
 - Delta processing uses two-pass page handling to ensure vault parent folders are classified before their children, preventing path materialization failures.
 - Personal Vault items (`specialFolder.name == "vault"`) are unconditionally excluded. Vault auto-locks after 20 minutes → locked items appear deleted in delta → phantom deletions.
 - FullScan uses three sequential phases: (1) Walk (readdir + Lstat + classify), (2) Hash (parallel QuickXorHash via `errgroup.SetLimit(checkWorkers)`), (3) Deletion detection (compare observed paths vs baseline).
@@ -85,5 +85,4 @@ Implements: R-6.2.7 [verified]
 - NFC normalization idempotency test. [planned]
 - Buffer overflow test with drop metric verification. [planned]
 - inotify partial-watch cleanup verification: ensure already-added watches are cleaned up on setup failure. [planned]
-- Remote filename validation: reject `..`, `/`, `\`, null bytes, control chars in `classifyAndConvert`. [planned]
 - Remote observer name validation removal: removed — remote observer now trusts server data. [verified]

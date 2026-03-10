@@ -1597,26 +1597,18 @@ func nullInt64(n int64) sql.NullInt64 {
 // SyncFailureRecorder methods
 // ---------------------------------------------------------------------------
 
-// actionableIssues is the set of issue types that require user action and
+// isActionableIssue returns true for issue types that require user action and
 // should not be auto-retried. Transient issues (e.g. IssueServiceOutage)
-// are NOT in this set — they auto-resolve when the external condition clears.
-// Add new actionable issue types here; no other code changes needed.
-var actionableIssues = map[string]struct{}{
-	IssueInvalidFilename:       {},
-	IssuePathTooLong:           {},
-	IssueFileTooLarge:          {},
-	IssuePermissionDenied:      {},
-	IssueQuotaExceeded:         {},
-	IssueLocalPermissionDenied: {},
-	IssueCaseCollision:         {},
-	IssueDiskFull:              {},
-	IssueFileTooLargeForSpace:  {},
-}
-
-// isActionableIssue returns true for issue types that require user action.
+// are NOT matched — they auto-resolve when the external condition clears.
 func isActionableIssue(issueType string) bool {
-	_, ok := actionableIssues[issueType]
-	return ok
+	switch issueType {
+	case IssueInvalidFilename, IssuePathTooLong, IssueFileTooLarge,
+		IssuePermissionDenied, IssueQuotaExceeded, IssueLocalPermissionDenied,
+		IssueCaseCollision, IssueDiskFull, IssueFileTooLargeForSpace:
+		return true
+	default:
+		return false
+	}
 }
 
 // ListSyncFailures returns all sync_failures rows ordered by last_seen_at DESC.
