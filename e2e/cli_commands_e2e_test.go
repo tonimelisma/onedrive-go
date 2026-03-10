@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -786,4 +787,219 @@ func TestE2E_IssuesRetry_NoArg(t *testing.T) {
 	// No argument and no --all should fail.
 	output := runCLIWithConfigExpectError(t, cfgPath, env, "issues", "retry")
 	assert.Contains(t, output, "provide a path", "should guide user to provide argument")
+}
+
+// ---------------------------------------------------------------------------
+// mv --force / cp --force E2E tests
+// ---------------------------------------------------------------------------
+
+// Validates: R-1.6
+// TestE2E_Mv_ForceOverwrite validates that mv without --force fails when the
+// destination exists, and mv --force overwrites successfully.
+func TestE2E_Mv_ForceOverwrite(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
+	cfgPath := writeMinimalConfig(t)
+
+	testFolder := fmt.Sprintf("e2e-mv-force-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
+
+	// Create folder, source file, and existing destination file.
+	runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder)
+	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/src.txt", "new content")
+	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/dst.txt", "old content")
+	pollCLIWithConfigContains(t, cfgPath, nil, "src.txt", pollTimeout, "ls", "/"+testFolder)
+	pollCLIWithConfigContains(t, cfgPath, nil, "dst.txt", pollTimeout, "ls", "/"+testFolder)
+
+	// mv without --force should fail (destination already exists).
+	output := runCLIWithConfigExpectError(t, cfgPath, nil, "mv", "/"+testFolder+"/src.txt", "/"+testFolder+"/dst.txt")
+	assert.Contains(t, output, "already exists", "mv without --force should report destination exists")
+
+	// mv --force should succeed and overwrite.
+	_, stderr := runCLIWithConfig(t, cfgPath, nil, "mv", "--force", "/"+testFolder+"/src.txt", "/"+testFolder+"/dst.txt")
+	assert.Contains(t, stderr, "Moved", "mv --force should confirm the move")
+
+	// Verify destination has source content and source is gone.
+	content := getRemoteFile(t, cfgPath, nil, "/"+testFolder+"/dst.txt")
+	assert.Equal(t, "new content", content, "destination should have source's content after force move")
+
+	stdout, _ := runCLIWithConfig(t, cfgPath, nil, "ls", "/"+testFolder)
+	assert.NotContains(t, stdout, "src.txt", "source should no longer exist after move")
+	assert.Contains(t, stdout, "dst.txt", "destination should exist")
+}
+
+// Validates: R-1.7
+// TestE2E_Cp_ForceOverwrite validates that cp without --force fails when the
+// destination exists, and cp --force overwrites while preserving the source.
+func TestE2E_Cp_ForceOverwrite(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
+	cfgPath := writeMinimalConfig(t)
+
+	testFolder := fmt.Sprintf("e2e-cp-force-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
+
+	// Create folder, source file, and existing destination file.
+	runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder)
+	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/src.txt", "copied content")
+	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/dst.txt", "old content")
+	pollCLIWithConfigContains(t, cfgPath, nil, "src.txt", pollTimeout, "ls", "/"+testFolder)
+	pollCLIWithConfigContains(t, cfgPath, nil, "dst.txt", pollTimeout, "ls", "/"+testFolder)
+
+	// cp without --force should fail (destination already exists).
+	output := runCLIWithConfigExpectError(t, cfgPath, nil, "cp", "/"+testFolder+"/src.txt", "/"+testFolder+"/dst.txt")
+	assert.Contains(t, output, "already exists", "cp without --force should report destination exists")
+
+	// cp --force should succeed and overwrite.
+	_, stderr := runCLIWithConfig(t, cfgPath, nil, "cp", "--force", "/"+testFolder+"/src.txt", "/"+testFolder+"/dst.txt")
+	assert.Contains(t, stderr, "Copied", "cp --force should confirm the copy")
+
+	// Verify destination has source content and source still exists (it's a copy).
+	content := getRemoteFile(t, cfgPath, nil, "/"+testFolder+"/dst.txt")
+	assert.Equal(t, "copied content", content, "destination should have source's content after force copy")
+
+	stdout, _ := runCLIWithConfig(t, cfgPath, nil, "ls", "/"+testFolder)
+	assert.Contains(t, stdout, "src.txt", "source should still exist after copy")
+	assert.Contains(t, stdout, "dst.txt", "destination should exist")
+}
+
+// ---------------------------------------------------------------------------
+// mv folder E2E test
+// ---------------------------------------------------------------------------
+
+// Validates: R-1.6
+// TestE2E_Mv_Folder validates that mv can move a folder with its contents
+// to a new location (Graph API PATCH handles folders transparently).
+func TestE2E_Mv_Folder(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
+	cfgPath := writeMinimalConfig(t)
+
+	testFolder := fmt.Sprintf("e2e-mv-folder-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
+
+	// Create source directory with a file inside, and a destination parent.
+	runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder+"/source-dir")
+	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/source-dir/inner.txt", "preserved")
+	runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder+"/dest-parent")
+	pollCLIWithConfigContains(t, cfgPath, nil, "source-dir", pollTimeout, "ls", "/"+testFolder)
+
+	// Move folder into dest-parent with a new name.
+	_, stderr := runCLIWithConfig(t, cfgPath, nil, "mv",
+		"/"+testFolder+"/source-dir", "/"+testFolder+"/dest-parent/moved-dir")
+	assert.Contains(t, stderr, "Moved", "mv folder should confirm the move")
+
+	// Verify folder contents are at the new location.
+	stdout, _ := runCLIWithConfig(t, cfgPath, nil, "ls", "/"+testFolder+"/dest-parent/moved-dir")
+	assert.Contains(t, stdout, "inner.txt", "inner file should be in moved folder")
+
+	// Verify source directory is gone from the parent.
+	stdout, _ = runCLIWithConfig(t, cfgPath, nil, "ls", "/"+testFolder)
+	assert.NotContains(t, stdout, "source-dir", "source directory should no longer exist")
+	assert.Contains(t, stdout, "dest-parent", "dest-parent should still exist")
+}
+
+// ---------------------------------------------------------------------------
+// issues clear / issues retry with actual failures
+// ---------------------------------------------------------------------------
+
+// buildDeepPath creates a directory structure under localDir whose relative
+// path (from syncRoot) exceeds OneDrive's 400-character path limit. Each
+// individual component is a valid OneDrive name, so the scanner processes the
+// file normally, but filterInvalidUploads() rejects it with path_too_long.
+// Returns (absolute file path, relative path from syncRoot).
+func buildDeepPath(t *testing.T, syncDir, testFolder string) (string, string) {
+	t.Helper()
+
+	// 200-char directory name + 204-char filename: each passes the scanner's
+	// isValidOneDriveName (< 255), but combined with testFolder (~34 chars)
+	// the total relative path is ~440 chars > 400.
+	longDirName := strings.Repeat("d", 200)
+	longFileName := strings.Repeat("f", 200) + ".txt"
+
+	deepDir := filepath.Join(syncDir, testFolder, longDirName)
+	deepRelPath := filepath.Join(testFolder, longDirName, longFileName)
+
+	require.Greater(t, len(deepRelPath), 400,
+		"relative path must exceed 400 chars to trigger path_too_long failure")
+
+	require.NoError(t, os.MkdirAll(deepDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(deepDir, longFileName), []byte("deep"), 0o644))
+
+	return filepath.Join(deepDir, longFileName), deepRelPath
+}
+
+// Validates: R-2.3.5
+// TestE2E_IssuesClear_WithFailure triggers a real sync failure (path too long)
+// and validates that issues clear <path> removes the specific failure.
+func TestE2E_IssuesClear_WithFailure(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
+	syncDir := t.TempDir()
+	cfgPath, env := writeSyncConfig(t, syncDir)
+
+	testFolder := fmt.Sprintf("e2e-clear-fail-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
+
+	// Create a file whose total relative path exceeds 400 chars.
+	_, deepRelPath := buildDeepPath(t, syncDir, testFolder)
+
+	// Sync to trigger pre-upload validation failure.
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+
+	// Verify the failure was recorded.
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "issues")
+	assert.Contains(t, stdout, "FILE ISSUES", "issues should show file issues section")
+	assert.Contains(t, stdout, "path exceeds", "issues should describe the path_too_long error")
+
+	// Clear the specific failure by path.
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "issues", "clear", deepRelPath)
+	assert.Contains(t, stdout, "Cleared failure for", "clear should confirm the action")
+
+	// Verify the failure is gone.
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "issues")
+	assert.Contains(t, stdout, "No issues", "issues should be clean after clear")
+}
+
+// Validates: R-2.3.6
+// TestE2E_IssuesRetry_WithFailure validates the full failure retry lifecycle:
+// trigger failure → verify → fix the problem → retry → resync → verify clean.
+func TestE2E_IssuesRetry_WithFailure(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
+	syncDir := t.TempDir()
+	cfgPath, env := writeSyncConfig(t, syncDir)
+
+	testFolder := fmt.Sprintf("e2e-retry-fail-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
+
+	// Create a file whose total relative path exceeds 400 chars.
+	_, deepRelPath := buildDeepPath(t, syncDir, testFolder)
+
+	// Sync to trigger pre-upload validation failure.
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+
+	// Verify the failure was recorded.
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "issues")
+	assert.Contains(t, stdout, "FILE ISSUES", "issues should show the failure")
+
+	// Fix the problem: remove the deeply nested directory tree.
+	longDirName := strings.Repeat("d", 200)
+	require.NoError(t, os.RemoveAll(filepath.Join(syncDir, testFolder, longDirName)))
+
+	// Retry the specific failure (resets it for next sync).
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "issues", "retry", deepRelPath)
+	assert.Contains(t, stdout, "Reset failure for", "retry should confirm the action")
+
+	// Resync — with the file gone, no new failure should appear.
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+
+	// Verify clean state.
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "issues")
+	assert.Contains(t, stdout, "No issues", "issues should be clean after retry and resync")
 }
