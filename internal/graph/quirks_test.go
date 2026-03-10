@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // ---------------------------------------------------------------------------
@@ -157,7 +158,7 @@ func TestNormalizeDeltaItems_PipelineOrder(t *testing.T) {
 // TestStripBaseURL_FullURLToRelativePath validates that absolute delta token
 // URLs from the API are converted to relative paths for Do().
 func TestStripBaseURL_FullURLToRelativePath(t *testing.T) {
-	client := NewClient("https://graph.microsoft.com/v1.0", nil, staticToken("tok"), nil, "")
+	client := NewClient("https://graph.microsoft.com/v1.0", nil, staticToken("tok"), nil, "", retry.Transport)
 
 	path, err := client.stripBaseURL("https://graph.microsoft.com/v1.0/drives/abc/root/delta?token=xxx")
 	require.NoError(t, err)
@@ -167,7 +168,7 @@ func TestStripBaseURL_FullURLToRelativePath(t *testing.T) {
 // TestStripBaseURL_CrossDomainRejected validates that delta tokens pointing
 // to a different domain are rejected (security: prevents SSRF via token).
 func TestStripBaseURL_CrossDomainRejected(t *testing.T) {
-	client := NewClient("https://graph.microsoft.com/v1.0", nil, staticToken("tok"), nil, "")
+	client := NewClient("https://graph.microsoft.com/v1.0", nil, staticToken("tok"), nil, "", retry.Transport)
 
 	_, err := client.stripBaseURL("https://evil.example.com/v1.0/drives/abc/root/delta")
 	require.Error(t, err)
@@ -177,7 +178,7 @@ func TestStripBaseURL_CrossDomainRejected(t *testing.T) {
 // TestBuildDeltaPath_EmptyTokenIsInitialSync validates that an empty token
 // triggers the initial delta path (no token parameter).
 func TestBuildDeltaPath_EmptyTokenIsInitialSync(t *testing.T) {
-	client := NewClient("https://graph.microsoft.com/v1.0", nil, staticToken("tok"), nil, "")
+	client := NewClient("https://graph.microsoft.com/v1.0", nil, staticToken("tok"), nil, "", retry.Transport)
 
 	path, err := client.buildDeltaPath(driveid.New("abc123def4567890"), "")
 	require.NoError(t, err)
@@ -187,7 +188,7 @@ func TestBuildDeltaPath_EmptyTokenIsInitialSync(t *testing.T) {
 // TestBuildDeltaPath_FullURLToken validates that a full URL token from a
 // previous response is correctly stripped to a relative path.
 func TestBuildDeltaPath_FullURLTokenStripped(t *testing.T) {
-	client := NewClient("https://graph.microsoft.com/v1.0", nil, staticToken("tok"), nil, "")
+	client := NewClient("https://graph.microsoft.com/v1.0", nil, staticToken("tok"), nil, "", retry.Transport)
 
 	path, err := client.buildDeltaPath(
 		driveid.New("abc123def4567890"),
@@ -430,7 +431,7 @@ func TestGraphError_StatusBeforeSentinel(t *testing.T) {
 // TestRetryBackoff_429_LargeRetryAfter validates that the Retry-After
 // header value is honored, not capped by the normal backoff max.
 func TestRetryBackoff_429_LargeRetryAfter(t *testing.T) {
-	client := NewClient("http://localhost", nil, staticToken("tok"), nil, "")
+	client := NewClient("http://localhost", nil, staticToken("tok"), nil, "", retry.Transport)
 
 	resp := &http.Response{
 		StatusCode: http.StatusTooManyRequests,
@@ -445,7 +446,7 @@ func TestRetryBackoff_429_LargeRetryAfter(t *testing.T) {
 // TestRetryBackoff_Non429_IgnoresRetryAfter validates that Retry-After
 // headers are ignored for non-429 responses.
 func TestRetryBackoff_Non429_IgnoresRetryAfter(t *testing.T) {
-	client := NewClient("http://localhost", nil, staticToken("tok"), nil, "")
+	client := NewClient("http://localhost", nil, staticToken("tok"), nil, "", retry.Transport)
 
 	resp := &http.Response{
 		StatusCode: http.StatusServiceUnavailable,

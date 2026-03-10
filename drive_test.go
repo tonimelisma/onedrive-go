@@ -20,6 +20,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
@@ -941,7 +942,7 @@ func (s staticTokenSource) Token() (string, error) { return "test-token", nil }
 func newTestGraphClient(t *testing.T, baseURL string) *graph.Client {
 	t.Helper()
 
-	return graph.NewClient(baseURL, http.DefaultClient, staticTokenSource{}, slog.Default(), "test")
+	return graph.NewClient(baseURL, http.DefaultClient, staticTokenSource{}, slog.Default(), "test", retry.Transport)
 }
 
 func TestEnrichSharedItem_AlreadyHasEmail(t *testing.T) {

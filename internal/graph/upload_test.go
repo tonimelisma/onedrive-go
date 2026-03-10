@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // errorReadCloser is an io.ReadCloser that always returns an error from Read.
@@ -117,7 +118,7 @@ func TestSimpleUpload_Error(t *testing.T) {
 }
 
 func TestSimpleUpload_TokenError(t *testing.T) {
-	client := NewClient("http://localhost", http.DefaultClient, failingToken{}, slog.Default(), "test-agent")
+	client := NewClient("http://localhost", http.DefaultClient, failingToken{}, slog.Default(), "test-agent", retry.Transport)
 	client.sleepFunc = noopSleep
 
 	_, err := client.SimpleUpload(
@@ -129,7 +130,7 @@ func TestSimpleUpload_TokenError(t *testing.T) {
 }
 
 func TestSimpleUpload_NetworkError(t *testing.T) {
-	client := NewClient("http://127.0.0.1:1", http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent")
+	client := NewClient("http://127.0.0.1:1", http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent", retry.Transport)
 	client.sleepFunc = noopSleep
 
 	_, err := client.SimpleUpload(

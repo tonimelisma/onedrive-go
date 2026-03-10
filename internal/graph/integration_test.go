@@ -19,6 +19,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 	"github.com/tonimelisma/onedrive-go/testutil"
 )
 
@@ -89,7 +90,7 @@ func newIntegrationClient(t *testing.T) *Client {
 	}
 	require.NoError(t, err, "loading token for drive %q", drive)
 
-	return NewClient(DefaultBaseURL, http.DefaultClient, ts, logger, "onedrive-go/test")
+	return NewClient(DefaultBaseURL, http.DefaultClient, ts, logger, "onedrive-go/test", retry.Transport)
 }
 
 // driveIDForTest reads drive_id from the drive metadata file for the test drive.

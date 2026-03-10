@@ -16,6 +16,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/logfile"
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // version is set at build time via ldflags.
@@ -141,7 +142,7 @@ func transferHTTPClient() *http.Client {
 // newGraphClient creates a graph.Client with the standard HTTP client,
 // user-agent, and base URL. Eliminates boilerplate repeated across commands.
 func newGraphClient(ts graph.TokenSource, logger *slog.Logger) *graph.Client {
-	return graph.NewClient(graph.DefaultBaseURL, defaultHTTPClient(), ts, logger, "onedrive-go/"+version)
+	return graph.NewClient(graph.DefaultBaseURL, defaultHTTPClient(), ts, logger, "onedrive-go/"+version, retry.Transport)
 }
 
 // newRootCmd builds and returns the fully-assembled root command with all

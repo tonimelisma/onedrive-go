@@ -79,7 +79,7 @@ func (failingToken) Token() (string, error) {
 func newTestClient(t *testing.T, url string) *Client {
 	t.Helper()
 
-	c := NewClient(url, http.DefaultClient, staticToken("test-token"), slog.Default(), "test-agent")
+	c := NewClient(url, http.DefaultClient, staticToken("test-token"), slog.Default(), "test-agent", retry.Transport)
 	c.sleepFunc = noopSleep
 
 	return c
@@ -242,7 +242,7 @@ func TestDo_AuthorizationHeader(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewClient(srv.URL, http.DefaultClient, staticToken("my-secret-token"), slog.Default(), "test-agent")
+	client := NewClient(srv.URL, http.DefaultClient, staticToken("my-secret-token"), slog.Default(), "test-agent", retry.Transport)
 	client.sleepFunc = noopSleep
 
 	resp, err := client.Do(t.Context(), http.MethodGet, "/auth", nil)
@@ -317,7 +317,7 @@ func TestDo_ContentTypeForBody(t *testing.T) {
 }
 
 func TestDo_TokenError(t *testing.T) {
-	client := NewClient("http://localhost", http.DefaultClient, failingToken{}, slog.Default(), "test-agent")
+	client := NewClient("http://localhost", http.DefaultClient, failingToken{}, slog.Default(), "test-agent", retry.Transport)
 	client.sleepFunc = noopSleep
 
 	_, err := client.Do(t.Context(), http.MethodGet, "/test", nil)
@@ -380,14 +380,14 @@ func TestClassifyStatus(t *testing.T) {
 
 func TestNewClient_Defaults(t *testing.T) {
 	// Nil logger and httpClient should use defaults, not panic.
-	c := NewClient("http://localhost", nil, staticToken("tok"), nil, "")
+	c := NewClient("http://localhost", nil, staticToken("tok"), nil, "", retry.Transport)
 	assert.NotNil(t, c.httpClient)
 	assert.NotNil(t, c.logger)
 }
 
 func TestNewClient_NilTokenSourcePanics(t *testing.T) {
 	assert.Panics(t, func() {
-		NewClient("http://localhost", nil, nil, nil, "")
+		NewClient("http://localhost", nil, nil, nil, "", retry.Transport)
 	})
 }
 
@@ -405,7 +405,7 @@ func TestTimeSleep_ContextCancel(t *testing.T) {
 }
 
 func TestCalcBackoff_MaxCap(t *testing.T) {
-	c := NewClient("http://localhost", nil, staticToken("tok"), nil, "")
+	c := NewClient("http://localhost", nil, staticToken("tok"), nil, "", retry.Transport)
 
 	// Attempt 10 produces 1s * 2^10 = 1024s which exceeds max (60s).
 	// Verify the result is capped near max (±jitter).
@@ -622,7 +622,7 @@ func TestRetryBackoff_MalformedRetryAfter(t *testing.T) {
 func TestDoRetry_NetworkError_MaxRetries(t *testing.T) {
 	// Point the client at an unreachable address and verify that all retries
 	// are exhausted before returning an error.
-	client := NewClient("http://127.0.0.1:1", http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent")
+	client := NewClient("http://127.0.0.1:1", http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent", retry.Transport)
 	client.sleepFunc = noopSleep
 
 	_, err := client.Do(t.Context(), http.MethodGet, "/unreachable", nil)
@@ -821,7 +821,7 @@ func TestDoPreAuthRetry_MakeReqError(t *testing.T) {
 }
 
 func TestDoPreAuthRetry_NetworkMaxRetries(t *testing.T) {
-	client := NewClient("http://localhost", http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent")
+	client := NewClient("http://localhost", http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent", retry.Transport)
 	client.sleepFunc = noopSleep
 
 	_, err := client.doPreAuthRetry(t.Context(), "net exhaust", func() (*http.Request, error) {
@@ -905,7 +905,7 @@ func TestDoPreAuthRetry_ContextCancelDuringNetworkBackoff(t *testing.T) {
 	// error is detected and returned.
 	ctx, cancel := context.WithCancel(t.Context())
 
-	client := NewClient("http://localhost", http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent")
+	client := NewClient("http://localhost", http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent", retry.Transport)
 	client.sleepFunc = func(_ context.Context, _ time.Duration) error {
 		cancel()
 
@@ -965,7 +965,7 @@ func TestThrottleGate_429SetsDeadline(t *testing.T) {
 	defer srv.Close()
 
 	rec := &sleepRecord{}
-	client := NewClient(srv.URL, http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent")
+	client := NewClient(srv.URL, http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent", retry.Transport)
 	client.sleepFunc = rec.sleep
 
 	// First request: 429 → retryBackoff sets throttledUntil → sleeps → retries → 200.
@@ -1008,7 +1008,7 @@ func TestThrottleGate_ConcurrentWorkers(t *testing.T) {
 	defer srv.Close()
 
 	rec := &sleepRecord{}
-	client := NewClient(srv.URL, http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent")
+	client := NewClient(srv.URL, http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent", retry.Transport)
 	client.sleepFunc = rec.sleep
 
 	// First request sets throttledUntil via 429 Retry-After.
@@ -1044,4 +1044,58 @@ func TestThrottleGate_ConcurrentWorkers(t *testing.T) {
 	sleepsFromWorkers := rec.count() - sleepsBefore
 	assert.GreaterOrEqual(t, sleepsFromWorkers, workers,
 		"all %d workers should sleep at throttle gate", workers)
+}
+
+// Validates: R-6.8.8
+func TestDoRetry_CustomPolicy_LimitsAttempts(t *testing.T) {
+	t.Parallel()
+
+	t.Run("MaxAttempts=2 retries twice after initial", func(t *testing.T) {
+		t.Parallel()
+
+		var attempts atomic.Int32
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			attempts.Add(1)
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"server error"}`))
+		}))
+		defer srv.Close()
+
+		twoRetryPolicy := retry.Policy{
+			MaxAttempts: 2,
+			Base:        1 * time.Millisecond,
+			Max:         10 * time.Millisecond,
+			Multiplier:  2.0,
+			Jitter:      0.0,
+		}
+
+		client := NewClient(srv.URL, http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent", twoRetryPolicy)
+		client.sleepFunc = noopSleep
+
+		_, err := client.Do(t.Context(), http.MethodGet, "/fail", nil)
+		require.Error(t, err)
+		// MaxAttempts=2 means 2 retries after the initial attempt = 3 total server hits.
+		assert.Equal(t, int32(3), attempts.Load(), "MaxAttempts=2 should make 1 initial + 2 retries = 3 total")
+	})
+
+	t.Run("SyncTransport makes exactly 1 attempt", func(t *testing.T) {
+		t.Parallel()
+
+		var attempts atomic.Int32
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			attempts.Add(1)
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"server error"}`))
+		}))
+		defer srv.Close()
+
+		client := NewClient(srv.URL, http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent", retry.SyncTransport)
+		client.sleepFunc = noopSleep
+
+		_, err := client.Do(t.Context(), http.MethodGet, "/fail", nil)
+		require.Error(t, err)
+		assert.Equal(t, int32(1), attempts.Load(), "SyncTransport should make exactly 1 attempt")
+	})
 }
