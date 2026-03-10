@@ -275,3 +275,23 @@ func TestValidateOneDriveName_Empty(t *testing.T) {
 	reason, _ := validateOneDriveName("")
 	assert.NotEmpty(t, reason, "empty name should be invalid")
 }
+
+// TestIsOversizedFile validates the boundary behavior of the Stage 2
+// observation filter at the 250 GB OneDrive file size limit.
+func TestIsOversizedFile(t *testing.T) {
+	t.Parallel()
+
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
+
+	// Exactly at the limit — should NOT be oversized.
+	assert.False(t, obs.isOversizedFile(maxOneDriveFileSize, "exactly-250gb.bin"),
+		"file exactly at maxOneDriveFileSize should not be oversized")
+
+	// One byte over the limit — should be oversized.
+	assert.True(t, obs.isOversizedFile(maxOneDriveFileSize+1, "over-250gb.bin"),
+		"file one byte over maxOneDriveFileSize should be oversized")
+
+	// Zero-length file — should NOT be oversized.
+	assert.False(t, obs.isOversizedFile(0, "empty.txt"),
+		"zero-length file should not be oversized")
+}

@@ -17,6 +17,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // ---------------------------------------------------------------------------
@@ -1283,8 +1284,8 @@ func TestWithRetry_ExhaustsRetries(t *testing.T) {
 
 	assert.ErrorIs(t, err, graph.ErrThrottled)
 
-	// executorMaxRetries=3 -> 1 initial + 3 retries = 4 total.
-	assert.Equal(t, executorMaxRetries+1, calls)
+	// retry.Action.MaxAttempts=3 -> 1 initial + 3 retries = 4 total.
+	assert.Equal(t, retry.Action.MaxAttempts+1, calls)
 }
 
 // Fix 9: Test conflict download-failure restore path.

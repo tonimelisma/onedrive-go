@@ -192,10 +192,7 @@ func (o *LocalObserver) handleCreate(
 		o.scanNewDirectory(ctx, fsPath, dbRelPath, watcher, events)
 	} else {
 		// Stage 2 observation filter: file size check (requires stat).
-		if info.Size() > maxOneDriveFileSize {
-			o.logger.Debug("watch: skipping oversized file",
-				slog.String("path", dbRelPath),
-				slog.Int64("size", info.Size()))
+		if o.isOversizedFile(info.Size(), dbRelPath) {
 			return
 		}
 
@@ -290,11 +287,7 @@ func (o *LocalObserver) scanNewDirectory(
 		}
 
 		// Stage 2 observation filter: file size check (requires stat).
-		if info.Size() > maxOneDriveFileSize {
-			o.logger.Debug("watch: skipping oversized file in new directory",
-				slog.String("path", entryRelPath),
-				slog.Int64("size", info.Size()))
-
+		if o.isOversizedFile(info.Size(), entryRelPath) {
 			continue
 		}
 
@@ -384,10 +377,7 @@ func (o *LocalObserver) hashAndEmit(ctx context.Context, req hashRequest, events
 	}
 
 	// Stage 2 observation filter: file size check (requires stat).
-	if info.Size() > maxOneDriveFileSize {
-		o.logger.Debug("watch: skipping oversized file",
-			slog.String("path", req.dbRelPath),
-			slog.Int64("size", info.Size()))
+	if o.isOversizedFile(info.Size(), req.dbRelPath) {
 		return
 	}
 
