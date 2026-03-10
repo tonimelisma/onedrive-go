@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -1081,28 +1082,34 @@ func (m *SyncStore) updateRemoteStateFromObs(
 	return nil
 }
 
-// RecordFailureWithStateTransition combines remote_state status transition
-// (downloading→download_failed, deleting→delete_failed) with sync_failures
-// recording in a single atomic transaction. Supports the full sync_failures
-// field set including issue_type, scope_key, and category classification.
+// RecordFailure is the unified failure recording method. It always runs in a
+// transaction and handles all failure types (upload, download, delete).
 //
-// This replaces the older RecordFailure method. The atomicity is critical:
-// splitting the operations causes silent data loss because the reconciler
-// doesn't recover orphaned download_failed states without sync_failures entries.
-func (m *SyncStore) RecordFailureWithStateTransition(
-	ctx context.Context, path string, driveID driveid.ID,
-	direction, issueType, errMsg string, httpStatus int, scopeKey string,
-) error {
+// For download/delete failures, it atomically transitions remote_state
+// (downloading→download_failed, deleting→delete_failed). The WHERE clause
+// is a natural no-op when no matching row exists (uploads, pre-upload
+// validation, permission checks).
+//
+// When ItemID is not provided and direction is download/delete, it is
+// auto-resolved from remote_state within the same transaction.
+//
+// Actionable issues (determined by isActionableIssue) get category='actionable'
+// with no next_retry_at. Transient issues use exponential backoff.
+//
+// UPSERT ON CONFLICT uses COALESCE for issue_type, item_id, file_size,
+// local_hash to preserve existing values when new values are empty/zero.
+func (m *SyncStore) RecordFailure(ctx context.Context, p *SyncFailureParams) error {
 	now := m.nowFunc()
 
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("sync: beginning failure transaction for %s: %w", path, err)
+		return fmt.Errorf("sync: beginning failure transaction for %s: %w", p.Path, err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Transition remote_state status for download/delete failures.
-	if direction == strDownload || direction == strDelete {
+	// Step 1: Transition remote_state status for download/delete failures.
+	// The WHERE clause is a safe no-op for uploads and pre-upload validation.
+	if p.Direction == strDownload || p.Direction == strDelete {
 		result, execErr := tx.ExecContext(ctx,
 			`UPDATE remote_state SET
 				sync_status = CASE sync_status
@@ -1112,84 +1119,91 @@ func (m *SyncStore) RecordFailureWithStateTransition(
 			WHERE path = ? AND sync_status IN (?, ?)`,
 			statusDownloading, statusDownloadFailed,
 			statusDeleting, statusDeleteFailed,
-			path, statusDownloading, statusDeleting,
+			p.Path, statusDownloading, statusDeleting,
 		)
 		if execErr != nil {
-			return fmt.Errorf("sync: transitioning remote_state for %s: %w", path, execErr)
+			return fmt.Errorf("sync: transitioning remote_state for %s: %w", p.Path, execErr)
 		}
 
 		affected, rowErr := result.RowsAffected()
 		if rowErr != nil {
-			return fmt.Errorf("sync: checking rows affected for %s: %w", path, rowErr)
+			return fmt.Errorf("sync: checking rows affected for %s: %w", p.Path, rowErr)
 		}
 
 		if affected == 0 {
-			m.logger.Debug("RecordFailureWithStateTransition: remote_state row already transitioned",
-				slog.String("path", path),
+			m.logger.Debug("RecordFailure: remote_state row already transitioned or absent",
+				slog.String("path", p.Path),
 			)
 		}
 	}
 
-	// Read current failure count from sync_failures for backoff calculation.
+	// Step 2: Read current failure count from sync_failures for backoff calculation.
 	var currentFailures int
 	//nolint:errcheck // no-row is fine — currentFailures stays 0
 	tx.QueryRowContext(ctx,
 		`SELECT failure_count FROM sync_failures WHERE path = ? AND drive_id = ?`,
-		path, driveID.String(),
+		p.Path, p.DriveID.String(),
 	).Scan(&currentFailures)
 
-	// Determine category from issue type. Empty issue type defaults to
-	// transient (generic failures like "upload_failed" aren't actionable).
-	category := "transient"
-	var nextRetryNano int64
+	// Step 3: Determine category from issue type.
+	category := strTransient
+	var nextRetryNano *int64
 
-	if issueType != "" && isActionableIssue(issueType) {
-		category = "actionable"
+	if p.IssueType != "" && isActionableIssue(p.IssueType) {
+		category = strActionable
 	} else {
-		nextRetry := computeNextRetry(now, currentFailures)
-		nextRetryNano = nextRetry.UnixNano()
+		// Transient: compute exponential backoff.
+		retryAt := computeNextRetry(now, currentFailures)
+		nanos := retryAt.UnixNano()
+		nextRetryNano = &nanos
 	}
 
 	newCount := currentFailures + 1
 	nowNano := now.UnixNano()
 
-	// Read item_id from remote_state if this is a download/delete failure.
-	var itemID string
-	if direction == strDownload || direction == strDelete {
+	// Step 4: Auto-resolve item_id from remote_state for download/delete
+	// when caller didn't provide one.
+	itemID := p.ItemID
+	if itemID == "" && (p.Direction == strDownload || p.Direction == strDelete) {
 		//nolint:errcheck // no-row is fine — itemID stays empty
 		tx.QueryRowContext(ctx,
 			`SELECT item_id FROM remote_state WHERE path = ? AND drive_id = ?`,
-			path, driveID.String(),
+			p.Path, p.DriveID.String(),
 		).Scan(&itemID)
 	}
 
-	// UPSERT into sync_failures with full field set.
+	// Step 5: UPSERT into sync_failures with full field set.
+	// COALESCE preserves existing values when new values are empty/zero.
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO sync_failures
-			(path, drive_id, direction, category, issue_type, item_id, failure_count,
-			 next_retry_at, last_error, http_status, first_seen_at, last_seen_at, scope_key)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			(path, drive_id, direction, category, issue_type, item_id,
+			 failure_count, next_retry_at, last_error, http_status,
+			 first_seen_at, last_seen_at, file_size, local_hash, scope_key)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(path, drive_id) DO UPDATE SET
 			direction = excluded.direction,
 			category = excluded.category,
-			issue_type = excluded.issue_type,
+			issue_type = COALESCE(excluded.issue_type, sync_failures.issue_type),
+			item_id = COALESCE(excluded.item_id, sync_failures.item_id),
 			failure_count = sync_failures.failure_count + 1,
 			next_retry_at = excluded.next_retry_at,
 			last_error = excluded.last_error,
 			http_status = excluded.http_status,
 			last_seen_at = excluded.last_seen_at,
-			item_id = COALESCE(excluded.item_id, sync_failures.item_id),
+			file_size = COALESCE(excluded.file_size, sync_failures.file_size),
+			local_hash = COALESCE(excluded.local_hash, sync_failures.local_hash),
 			scope_key = excluded.scope_key`,
-		path, driveID.String(), direction, category, issueType,
-		nullString(itemID), newCount,
-		nextRetryNano, errMsg, httpStatus, nowNano, nowNano, scopeKey,
+		p.Path, p.DriveID.String(), p.Direction, category,
+		nullString(p.IssueType), nullString(itemID),
+		newCount, nextRetryNano, p.ErrMsg, p.HTTPStatus,
+		nowNano, nowNano, nullInt64(p.FileSize), nullString(p.LocalHash), p.ScopeKey,
 	)
 	if err != nil {
-		return fmt.Errorf("sync: recording sync failure for %s: %w", path, err)
+		return fmt.Errorf("sync: recording sync failure for %s: %w", p.Path, err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing failure for %s: %w", path, err)
+		return fmt.Errorf("sync: committing failure for %s: %w", p.Path, err)
 	}
 
 	return nil
@@ -1564,69 +1578,6 @@ func isActionableIssue(issueType string) bool {
 	}
 }
 
-// RecordSyncFailure persists or updates a failure in sync_failures.
-// On repeat failures for the same (path, drive_id), increments failure_count
-// and updates last_seen_at. Actionable issue types get category='actionable'
-// with no retry. Transient failures use exponential backoff for next_retry_at.
-func (m *SyncStore) RecordSyncFailure(
-	ctx context.Context, path string, driveID driveid.ID, direction, issueType, errMsg string,
-	httpStatus int, fileSize int64, localHash string, itemID string, scopeKey string,
-) error {
-	now := m.nowFunc()
-	nowNano := now.UnixNano()
-
-	category := strTransient
-	if isActionableIssue(issueType) {
-		category = strActionable
-	}
-
-	// Read current failure_count for backoff calculation (0 if new row).
-	var currentFailures int
-	//nolint:errcheck // no-row is fine — currentFailures stays 0
-	m.db.QueryRowContext(ctx,
-		`SELECT failure_count FROM sync_failures WHERE path = ? AND drive_id = ?`,
-		path, driveID.String(),
-	).Scan(&currentFailures)
-
-	// Compute next_retry_at for transient issues; NULL for actionable.
-	var nextRetryNano *int64
-	if category != strActionable {
-		retryAt := computeNextRetry(now, currentFailures)
-		nanos := retryAt.UnixNano()
-		nextRetryNano = &nanos
-	}
-
-	_, err := m.db.ExecContext(ctx,
-		`INSERT INTO sync_failures
-			(path, drive_id, direction, category, issue_type, item_id,
-			 failure_count, next_retry_at, last_error, http_status,
-			 first_seen_at, last_seen_at, file_size, local_hash, scope_key)
-		VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(path, drive_id) DO UPDATE SET
-			direction = excluded.direction,
-			category = excluded.category,
-			issue_type = COALESCE(excluded.issue_type, sync_failures.issue_type),
-			item_id = COALESCE(excluded.item_id, sync_failures.item_id),
-			failure_count = sync_failures.failure_count + 1,
-			next_retry_at = excluded.next_retry_at,
-			last_error = excluded.last_error,
-			http_status = excluded.http_status,
-			last_seen_at = excluded.last_seen_at,
-			file_size = COALESCE(excluded.file_size, sync_failures.file_size),
-			local_hash = COALESCE(excluded.local_hash, sync_failures.local_hash),
-			scope_key = excluded.scope_key`,
-		path, driveID.String(), direction, category,
-		nullString(issueType), nullString(itemID),
-		nextRetryNano, errMsg, httpStatus,
-		nowNano, nowNano, nullInt64(fileSize), nullString(localHash), scopeKey,
-	)
-	if err != nil {
-		return fmt.Errorf("sync: recording sync failure for %s: %w", path, err)
-	}
-
-	return nil
-}
-
 // ListSyncFailures returns all sync_failures rows ordered by last_seen_at DESC.
 func (m *SyncStore) ListSyncFailures(ctx context.Context) ([]SyncFailureRow, error) {
 	rows, err := m.db.QueryContext(ctx,
@@ -1790,24 +1741,18 @@ func (m *SyncStore) ClearResolvedActionableFailures(ctx context.Context, issueTy
 		return nil
 	}
 
-	// Build parameterized IN clause.
-	placeholders := make([]byte, 0, len(currentPaths)*2)
+	// Build parameterized IN clause with literal placeholders.
+	placeholders := "?" + strings.Repeat(",?", len(currentPaths)-1)
 	args := make([]any, 0, len(currentPaths)+1)
 	args = append(args, issueType)
 
-	for i, p := range currentPaths {
-		if i > 0 {
-			placeholders = append(placeholders, ',')
-		}
-
-		placeholders = append(placeholders, '?')
-
+	for _, p := range currentPaths {
 		args = append(args, p)
 	}
 
-	//nolint:gosec // G202: placeholders is only '?' and ',' chars, not user input
+	//nolint:gosec // G202: placeholders is strings.Repeat(",?", n) — literal, not user input
 	query := `DELETE FROM sync_failures WHERE category = 'actionable' AND issue_type = ? AND path NOT IN (` +
-		string(placeholders) + `)`
+		placeholders + `)`
 
 	_, err := m.db.ExecContext(ctx, query, args...)
 	if err != nil {

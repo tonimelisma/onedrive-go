@@ -11,7 +11,7 @@ Database access layer exposing typed sub-interfaces. See [data-model.md](data-mo
 Key operations:
 - `CommitObservation()`: atomically writes `remote_state` rows + advances delta token in a single transaction
 - `CommitOutcome()`: updates baseline + `remote_state` status per action
-- `RecordFailure()`: writes to `sync_failures` with retry scheduling — **to be replaced**. `FailureRecorder` interface and `RecordFailure` method will be deleted. All callers will use `RecordSyncFailure`. `remote_state` failure transitions from `RecordFailure` will move into `CommitOutcome`
+- `RecordFailure(ctx, SyncFailureParams)`: unified failure recording — always transactional, handles all failure types. For download/delete: atomically transitions `remote_state` and records `sync_failures`. Actionable issues get `category='actionable'` with no `next_retry_at`; transient issues get exponential backoff. UPSERT with COALESCE preserves existing `file_size`, `local_hash`, `item_id` on conflict. Auto-resolves `item_id` from `remote_state` for download/delete when not provided
 
 All write methods use optimistic concurrency (WHERE clauses preventing stale updates). Concurrency safety from SQLite WAL mode with 5-second busy timeout. Implements: R-6.3.2 [verified]
 
@@ -65,8 +65,8 @@ Implements: R-2.10.1 [planned], R-2.10.2 [planned], R-2.10.33 [implemented], R-2
 **Scope key column**: `scope_key TEXT NOT NULL DEFAULT ''` added to `sync_failures` table (migration). Format: `quota:own`, `quota:shortcut:{localPath}`, `perm:remote:{localPath}`, `disk:local`, `throttle:account`, `service`. Enables `issues` display grouping without re-deriving scope.
 
 **Store method changes**:
-- `RecordSyncFailure`: add `scopeKey` parameter to all INSERT/UPSERT queries.
+- `RecordFailure(ctx, SyncFailureParams)`: unified method replacing both `RecordSyncFailure` (11-param, non-transactional) and `RecordFailureWithStateTransition` (8-param, transactional). Always transactional, handles state transitions for download/delete as a safe no-op for uploads. `SyncFailureParams` struct bundles all inputs with named fields.
 - `UpsertActionableFailures([]ActionableFailure)`: batch upsert for scanner-detected naming/collision issues.
-- `ClearResolvedActionableFailures(currentSkippedPaths)`: compare current skipped paths against recorded `sync_failures`; delete entries for paths no longer in the skipped set.
-- `CommitOutcome`: extend success cleanup to download/delete/move (not just upload).
-- Delete `FailureRecorder` interface and `RecordFailure` method — all callers consolidated to `RecordSyncFailure`.
+- `ClearResolvedActionableFailures(issueType, currentPaths)`: compare current skipped paths against recorded `sync_failures`; delete entries for paths no longer in the skipped set. Uses `strings.Repeat` for SQL placeholder construction.
+- `CommitOutcome`: success cleanup for download/delete/move clears `sync_failures` entries.
+- `ListSyncFailuresByIssueType(ctx, issueType)`: added to `SyncFailureRecorder` interface (was concrete-only).
