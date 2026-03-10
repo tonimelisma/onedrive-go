@@ -15,7 +15,7 @@ Key properties:
 - Within each delta page, deletions are buffered and processed before creations (API reordering bug)
 - HTTP 410 (expired delta token) returns `ErrGone` sentinel; engine restarts with full delta
 
-**Planned: Remove `isValidOneDriveName()` call** (~line 405). OneDrive enforces its own naming rules server-side; upload naming rules should not filter downloads.
+**Server-trusted observation**: The remote observer does NOT filter items by name validity or always-excluded patterns. If OneDrive sends an item in a delta response, it exists on OneDrive — filtering it would be silent data loss. Name-based filtering is a local-only concern (upload validation). Only root items and vault descendants are excluded from remote observation.
 
 ### Shortcut Observation (`observer_shortcut.go`)
 
@@ -46,9 +46,9 @@ Extracted filesystem walker for full-scan mode. Produces change events by walkin
 - **Stage 1 (before stat):** Name-based checks (always-excluded suffixes, dotfiles, user skip patterns, invalid OneDrive names via `validateOneDriveName()`) and path length check (> 400 chars). Runs in `shouldObserve()`. Avoids unnecessary `Lstat` calls on files that will be skipped anyway.
 - **Stage 2 (after stat):** File size check (> 250 GB). Runs in `processEntry` (full scan), `handleCreate`/`hashAndEmit`/`scanNewDirectory` (watch mode). Requires `Lstat` result to know the file size.
 
-**`validateOneDriveName()`** — Returns `(reason string, detail string)` for names that violate OneDrive naming restrictions. `isValidOneDriveName()` delegates to it: returns `true` when reason is empty. The `reason` field maps to issue types (e.g., `"invalid_filename"`, `"reserved_name"`). The `detail` field provides a human-readable explanation (e.g., `"contains ':' (invalid character)"`).
+**`validateOneDriveName()`** — Returns `(reason string, detail string)` for names that violate OneDrive naming restrictions. Called directly at all call sites — no convenience wrapper. The `reason` field maps to issue types (e.g., `"invalid_filename"`, `"reserved_name"`). The `detail` field provides a human-readable explanation (e.g., `"contains ':' (invalid character)"`).
 
-**`SkippedItem`** — Defined in `types.go`: `{Path string, Reason string, Detail string}`. Represents a file that was observed but excluded from the event stream due to validation failure. Collected during full scan and returned in `ScanResult.Skipped`. The engine processes these via `recordSkippedItems()` and `clearResolvedSkippedItems()`.
+**`SkippedItem`** — Defined in `types.go`: `{Path string, Reason string, Detail string, FileSize int64}`. Represents a file that was observed but excluded from the event stream due to validation failure. `FileSize` is populated for `IssueFileTooLarge` (after stat). Collected during full scan and returned in `ScanResult.Skipped`. The engine processes these via `recordSkippedItems()` and `clearResolvedSkippedItems()`.
 
 ## Change Buffer (`buffer.go`)
 
@@ -64,7 +64,7 @@ Read-only detection for shared content. When a write attempt returns 403, the pa
 
 Implements: R-6.2.7 [verified]
 
-- Filtering is symmetric: any exclusion applied to local items (always-excluded suffixes, invalid OneDrive names) is also applied to remote items in `classifyItem()`. This prevents remote-only files (e.g., temp files uploaded via web UI) from entering the planner.
+- Filtering is asymmetric by design: the local observer filters by always-excluded patterns and OneDrive naming rules (upload validation), while the remote observer trusts the server. If OneDrive sends an item in a delta response, it exists remotely — filtering it would cause silent data loss. Remote-only temp files (e.g., uploaded via web UI) are intentionally allowed through to the planner.
 - The `alwaysExcludedSuffixes` list does NOT include `.db`/`.db-wal`/`.db-shm` — those caused false positives on legitimate data files. The sync engine's state DB lives outside the sync root by design.
 - Delta processing uses two-pass page handling to ensure vault parent folders are classified before their children, preventing path materialization failures.
 - Personal Vault items (`specialFolder.name == "vault"`) are unconditionally excluded. Vault auto-locks after 20 minutes → locked items appear deleted in delta → phantom deletions.
@@ -86,4 +86,4 @@ Implements: R-6.2.7 [verified]
 - Buffer overflow test with drop metric verification. [planned]
 - inotify partial-watch cleanup verification: ensure already-added watches are cleaned up on setup failure. [planned]
 - Remote filename validation: reject `..`, `/`, `\`, null bytes, control chars in `classifyAndConvert`. [planned]
-- Remote observer name validation removal: `isValidOneDriveName()` in remote observer filters downloads using upload naming rules. OneDrive enforces its own naming rules server-side; this filter should be removed. [planned]
+- Remote observer name validation removal: removed — remote observer now trusts server data. [verified]

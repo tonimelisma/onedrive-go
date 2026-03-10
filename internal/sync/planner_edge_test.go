@@ -170,7 +170,8 @@ func TestS7_TempFilesFilteredSymmetrically(t *testing.T) {
 	}
 
 	for _, name := range names {
-		excluded := isAlwaysExcluded(name) || !isValidOneDriveName(name)
+		reason, _ := validateOneDriveName(name)
+		excluded := isAlwaysExcluded(name) || reason != ""
 		assert.True(t, excluded,
 			"S7: %q should be excluded from sync", name)
 	}

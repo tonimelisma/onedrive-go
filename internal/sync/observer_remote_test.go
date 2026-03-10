@@ -1420,13 +1420,14 @@ func TestObserverStats_HashesComputed(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// B-307: Remote observer filtering symmetry
+// Remote observer trusts server — no name filtering
 // ---------------------------------------------------------------------------
 
-// Validates: R-2.4, R-6.2.7
-// TestClassifyItem_FilteringSymmetry validates that the remote observer
-// applies the same filtering as the local observer (S7 symmetric).
-func TestClassifyItem_FilteringSymmetry(t *testing.T) {
+// TestClassifyItem_RemoteTrustsServer validates that the remote observer does
+// NOT filter items by name validity. If OneDrive sends an item in a delta
+// response, it exists on OneDrive — filtering it would be silent data loss.
+// Only root and vault items are filtered.
+func TestClassifyItem_RemoteTrustsServer(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(testDriveID)
@@ -1441,32 +1442,29 @@ func TestClassifyItem_FilteringSymmetry(t *testing.T) {
 		name      string
 		itemName  string
 		isDeleted bool
-		wantNil   bool
 	}{
-		// Excluded names should be filtered.
-		{".tmp file", "data.tmp", false, true},
-		{".partial file", "download.partial", false, true},
-		{"tilde backup", "~backup.txt", false, true},
-		{"dot-tilde lock", ".~lock.file", false, true},
-		{".swp file", "file.swp", false, true},
-		{".crdownload", "file.crdownload", false, true},
-		// Invalid OneDrive names.
-		{"reserved name CON", "CON", false, true},
-		{"trailing dot", "file.", false, true},
-		{"trailing space", "file ", false, true},
-		// desktop.ini has a leading space so it passes isValidOneDriveName
-		// but let's test the standard Office temp pattern.
-		{"tilde-dollar", "~$document.docx", false, true},
+		// Names that the local observer would exclude — remote observer
+		// must still produce events for these because they exist on OneDrive.
+		{".tmp file", "data.tmp", false},
+		{".partial file", "download.partial", false},
+		{"tilde backup", "~backup.txt", false},
+		{"dot-tilde lock", ".~lock.file", false},
+		{".swp file", "file.swp", false},
+		{".crdownload", "file.crdownload", false},
+		{"reserved name CON", "CON", false},
+		{"trailing dot", "file.", false},
+		{"trailing space", "file ", false},
+		{"tilde-dollar", "~$document.docx", false},
 
-		// Valid names should produce events.
-		{"normal file", "hello.txt", false, false},
-		{"db file", "data.db", false, false},
-		{"pdf file", "report.pdf", false, false},
+		// Valid names produce events as before.
+		{"normal file", "hello.txt", false},
+		{"db file", "data.db", false},
+		{"pdf file", "report.pdf", false},
 
-		// Deleted items with excluded names MUST pass through for cleanup.
-		{"deleted .tmp", "data.tmp", true, false},
-		{"deleted tilde", "~backup.txt", true, false},
-		{"deleted .partial", "download.partial", true, false},
+		// Deleted items also pass through.
+		{"deleted .tmp", "data.tmp", true},
+		{"deleted tilde", "~backup.txt", true},
+		{"deleted .partial", "download.partial", true},
 	}
 
 	for _, tt := range tests {
@@ -1482,35 +1480,8 @@ func TestClassifyItem_FilteringSymmetry(t *testing.T) {
 			}
 
 			ev := obs.classifyItem(item, inflight)
-			if tt.wantNil {
-				assert.Nil(t, ev, "expected nil for %q", tt.itemName)
-			} else {
-				assert.NotNil(t, ev, "expected event for %q", tt.itemName)
-			}
+			assert.NotNil(t, ev, "remote observer must produce event for %q (server data is authoritative)", tt.itemName)
 		})
-	}
-}
-
-// TestFilteringSymmetry_BothObserversAgree confirms that isAlwaysExcluded
-// and isValidOneDriveName produce identical results for a shared set of
-// test names, regardless of which observer calls them.
-func TestFilteringSymmetry_BothObserversAgree(t *testing.T) {
-	t.Parallel()
-
-	names := []string{
-		"hello.txt", "data.db", "report.pdf",
-		"download.partial", "data.tmp", "file.swp", "file.crdownload",
-		"~backup.txt", ".~lock.file", "~$document.docx",
-		"CON", "PRN", "NUL",
-		"file.", "file ", " leading",
-	}
-
-	for _, name := range names {
-		excluded := isAlwaysExcluded(name) || !isValidOneDriveName(name)
-		// Both observers use the same functions — this is a regression
-		// guard that the filtering logic stays in scanner.go (shared).
-		assert.Equal(t, excluded, isAlwaysExcluded(name) || !isValidOneDriveName(name),
-			"filtering must be deterministic for %q", name)
 	}
 }
 

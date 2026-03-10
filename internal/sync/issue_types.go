@@ -35,12 +35,3 @@ const (
 	// maxOneDriveFileSize is the maximum file size OneDrive allows (250 GB).
 	maxOneDriveFileSize = 250 * 1024 * 1024 * 1024 // 250 GB
 )
-
-// scannerDetectableIssueTypes lists all issue types that the scanner can
-// detect at observation time. Used by clearResolvedSkippedItems to know
-// which issue types to check for auto-clearing.
-var scannerDetectableIssueTypes = []string{
-	IssueInvalidFilename,
-	IssuePathTooLong,
-	IssueFileTooLarge,
-}

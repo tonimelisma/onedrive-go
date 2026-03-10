@@ -1720,7 +1720,7 @@ func (m *SyncStore) UpsertActionableFailures(ctx context.Context, failures []Act
 			(path, drive_id, direction, category, issue_type, item_id,
 			 failure_count, next_retry_at, last_error, http_status,
 			 first_seen_at, last_seen_at, file_size, local_hash, scope_key)
-		VALUES (?, ?, ?, 'actionable', ?, '', 1, NULL, ?, 0, ?, ?, 0, '', ?)
+		VALUES (?, ?, ?, 'actionable', ?, '', 1, NULL, ?, 0, ?, ?, ?, '', ?)
 		ON CONFLICT(path, drive_id) DO UPDATE SET
 			direction = excluded.direction,
 			category = 'actionable',
@@ -1728,6 +1728,7 @@ func (m *SyncStore) UpsertActionableFailures(ctx context.Context, failures []Act
 			next_retry_at = NULL,
 			last_error = excluded.last_error,
 			last_seen_at = excluded.last_seen_at,
+			file_size = excluded.file_size,
 			scope_key = excluded.scope_key`)
 	if err != nil {
 		return fmt.Errorf("sync: prepare upsert actionable: %w", err)
@@ -1739,7 +1740,7 @@ func (m *SyncStore) UpsertActionableFailures(ctx context.Context, failures []Act
 		if _, err := stmt.ExecContext(ctx,
 			f.Path, f.DriveID.String(), f.Direction,
 			nullString(f.IssueType), f.Error,
-			nowNano, nowNano, f.ScopeKey,
+			nowNano, nowNano, f.FileSize, f.ScopeKey,
 		); err != nil {
 			return fmt.Errorf("sync: upsert actionable failure for %s: %w", f.Path, err)
 		}

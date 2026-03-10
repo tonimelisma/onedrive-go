@@ -1332,6 +1332,7 @@ func (e *Engine) recordSkippedItems(ctx context.Context, skipped []SkippedItem) 
 				Direction: "upload",
 				IssueType: reason,
 				Error:     items[i].Detail,
+				FileSize:  items[i].FileSize,
 			}
 		}
 
@@ -1357,7 +1358,7 @@ func (e *Engine) clearResolvedSkippedItems(ctx context.Context, skipped []Skippe
 
 	// For each scanner-detectable issue type, clear entries not in the current scan.
 	// If no items of that type were found, pass empty slice (clears all of that type).
-	for _, issueType := range scannerDetectableIssueTypes {
+	for _, issueType := range []string{IssueInvalidFilename, IssuePathTooLong, IssueFileTooLarge} {
 		paths := currentByType[issueType] // nil if no items — that's fine (clears all)
 		if err := e.baseline.ClearResolvedActionableFailures(ctx, issueType, paths); err != nil {
 			e.logger.Error("failed to clear resolved failures",

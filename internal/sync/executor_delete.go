@@ -33,7 +33,7 @@ func isDisposable(name string) bool {
 	}
 
 	// Names that can't be synced to OneDrive (desktop.ini, ~$doc.docx, etc.).
-	if !isValidOneDriveName(name) {
+	if reason, _ := validateOneDriveName(name); reason != "" {
 		return true
 	}
 

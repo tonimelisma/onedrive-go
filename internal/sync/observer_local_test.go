@@ -608,13 +608,13 @@ func TestIsAlwaysExcluded_DbFilesNotExcluded(t *testing.T) {
 	assert.True(t, isAlwaysExcluded("file.crdownload"), ".crdownload should still be excluded")
 }
 
-func TestIsValidOneDriveName(t *testing.T) {
+func TestValidateOneDriveName(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name string
-		in   string
-		want bool
+		name      string
+		in        string
+		wantValid bool
 	}{
 		// Valid names.
 		{"simple file", "hello.txt", true},
@@ -685,8 +685,12 @@ func TestIsValidOneDriveName(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := isValidOneDriveName(tt.in)
-			assert.Equal(t, tt.want, got, "isValidOneDriveName(%q)", tt.in)
+			reason, _ := validateOneDriveName(tt.in)
+			if tt.wantValid {
+				assert.Empty(t, reason, "validateOneDriveName(%q) should return empty reason", tt.in)
+			} else {
+				assert.NotEmpty(t, reason, "validateOneDriveName(%q) should return non-empty reason", tt.in)
+			}
 		})
 	}
 }
