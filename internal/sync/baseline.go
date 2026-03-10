@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -1740,24 +1741,17 @@ func (m *SyncStore) ClearResolvedActionableFailures(ctx context.Context, issueTy
 		return nil
 	}
 
-	// Build parameterized IN clause.
-	placeholders := make([]byte, 0, len(currentPaths)*2)
+	// Build parameterized IN clause with literal placeholders.
+	placeholders := "?" + strings.Repeat(",?", len(currentPaths)-1)
 	args := make([]any, 0, len(currentPaths)+1)
 	args = append(args, issueType)
 
-	for i, p := range currentPaths {
-		if i > 0 {
-			placeholders = append(placeholders, ',')
-		}
-
-		placeholders = append(placeholders, '?')
-
+	for _, p := range currentPaths {
 		args = append(args, p)
 	}
 
-	//nolint:gosec // G202: placeholders is only '?' and ',' chars, not user input
 	query := `DELETE FROM sync_failures WHERE category = 'actionable' AND issue_type = ? AND path NOT IN (` +
-		string(placeholders) + `)`
+		placeholders + `)`
 
 	_, err := m.db.ExecContext(ctx, query, args...)
 	if err != nil {
