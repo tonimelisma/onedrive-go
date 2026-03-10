@@ -120,10 +120,6 @@ func buildConfiguredDriveEntries(cfg *config.Config, logger *slog.Logger) []driv
 			orgName, displayName := config.ResolveAccountNames(id, logger)
 			otherDirs := config.CollectOtherSyncDirs(cfg, id, logger)
 			syncDir = config.DefaultSyncDir(id, orgName, displayName, otherDirs)
-
-			if syncDir == "" {
-				state = driveStateNeedsSetup
-			}
 		}
 
 		// Use explicit display_name from config, falling back to auto-derived.

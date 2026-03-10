@@ -68,6 +68,7 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
 - `SessionProvider` caches `TokenSource`s by token file path — multiple drives sharing an account share one `TokenSource`, preventing OAuth2 refresh token rotation races.
 - CLI handlers use `cmd.Context()` for signal propagation. Exception: upload session cancel paths use `context.Background()` because the cancel must succeed even when the original context is done.
 - The status command uses a testable service layer with narrowed interfaces (`accountMetaReader`, `tokenStateChecker`, `syncStateQuerier`), decoupling status aggregation from Cobra wiring.
+- Informational commands (`drive list`, `status`, `whoami`) do not require a fully valid config. Future work (R-4.8.4) will switch them to lenient config loading that collects validation errors as warnings instead of failing. [planned]
 - Extract `multiHandler` from `root.go` to `internal/slogutil/` if logging grows (structured error reporting, log sampling). [planned]
 
 ## Planned: Issues Display Enhancements
