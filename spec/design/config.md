@@ -2,7 +2,7 @@
 
 GOVERNS: internal/config/account.go, internal/config/config.go, internal/config/defaults.go, internal/config/discovery.go, internal/config/display_name.go, internal/config/drive.go, internal/config/drivemeta.go, internal/config/env.go, internal/config/holder.go, internal/config/load.go, internal/config/paths.go, internal/config/size.go, internal/config/token_resolution.go, internal/config/toml_lines.go, internal/config/unknown.go, internal/config/validate.go, internal/config/validate_drive.go, internal/config/write.go
 
-Implements: R-4.1 [verified], R-4.2 [verified], R-4.3 [verified], R-4.4 [verified], R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified], R-4.8.4 [implemented], R-4.8.6 [implemented]
+Implements: R-4.1 [verified], R-4.2 [verified], R-4.3 [verified], R-4.4 [verified], R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified], R-4.8.4 [verified], R-4.8.5 [verified], R-4.8.6 [verified], R-4.9.2 [verified], R-4.9.3 [verified]
 
 ## Overview
 
@@ -40,9 +40,9 @@ Implements: R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified]
 
 Unknown config keys are fatal errors (`unknown.go`). Per-drive validation checks sync_dir, filter patterns, size parsing, and drive-specific constraints. Global validation checks log level, transfer workers, and safety thresholds. `checkSyncDirOverlap()` prevents overlapping sync directories using `filepath.Clean` + `strings.HasPrefix` with separator suffix. Called at both config load and Orchestrator start.
 
-### Validation Tiers [implemented]
+### Validation Tiers [verified]
 
-Implements: R-4.8.4 [implemented]
+Implements: R-4.8.4 [verified]
 
 Two loading paths: strict (`Load`/`LoadOrDefault`) for data commands, lenient (`LoadLenient`/`LoadOrDefaultLenient`) for informational commands.
 
