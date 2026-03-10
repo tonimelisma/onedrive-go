@@ -28,11 +28,10 @@ const (
 
 // Drive state constants for status and drive list display.
 const (
-	driveStateReady      = "ready"
-	driveStatePaused     = "paused"
-	driveStateNoToken    = "no token"
-	driveStateNeedsSetup = "needs setup"
-	syncDirNotSet        = "(not set)"
+	driveStateReady   = "ready"
+	driveStatePaused  = "paused"
+	driveStateNoToken = "no token"
+	syncDirNotSet     = "(not set)"
 )
 
 func newStatusCmd() *cobra.Command {
@@ -83,7 +82,6 @@ type statusSummary struct {
 	TotalDrives      int `json:"total_drives"`
 	Ready            int `json:"ready"`
 	Paused           int `json:"paused"`
-	NeedsSetup       int `json:"needs_setup"`
 	NoToken          int `json:"no_token"`
 	TotalIssues      int `json:"total_issues"`
 	TotalPendingSync int `json:"total_pending_sync"`
@@ -101,9 +99,13 @@ func runStatus(cmd *cobra.Command, _ []string) error {
 	logger := cc.Logger
 	cfgPath := cc.CfgPath
 
-	cfg, err := config.LoadOrDefault(cfgPath, logger)
+	cfg, warnings, err := config.LoadOrDefaultLenient(cfgPath, logger)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
+	}
+
+	for _, w := range warnings {
+		logger.Warn("config issue", "message", w.Message)
 	}
 
 	if len(cfg.Drives) == 0 {
@@ -262,11 +264,6 @@ func buildSingleAccountStatusWith(
 		d := cfg.Drives[cid]
 		state := driveState(&d, acct.TokenState)
 
-		syncDir := d.SyncDir
-		if syncDir == "" {
-			state = driveStateNeedsSetup
-		}
-
 		// Use explicit display_name from config, falling back to auto-derived.
 		driveDisplayName := d.DisplayName
 		if driveDisplayName == "" {
@@ -276,7 +273,7 @@ func buildSingleAccountStatusWith(
 		sd := statusDrive{
 			CanonicalID: cid.String(),
 			DisplayName: driveDisplayName,
-			SyncDir:     syncDir,
+			SyncDir:     d.SyncDir,
 			State:       state,
 		}
 
@@ -435,8 +432,6 @@ func computeSummary(accounts []statusAccount) statusSummary {
 				s.Ready++
 			case driveStatePaused:
 				s.Paused++
-			case driveStateNeedsSetup:
-				s.NeedsSetup++
 			case driveStateNoToken:
 				s.NoToken++
 			}
@@ -548,10 +543,6 @@ func printSummaryText(w io.Writer, s statusSummary) {
 
 	if s.Paused > 0 {
 		parts = append(parts, fmt.Sprintf("%d paused", s.Paused))
-	}
-
-	if s.NeedsSetup > 0 {
-		parts = append(parts, fmt.Sprintf("%d needs setup", s.NeedsSetup))
 	}
 
 	if s.NoToken > 0 {

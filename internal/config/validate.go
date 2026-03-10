@@ -38,10 +38,10 @@ const (
 	maxScheduleMinute  = 59
 )
 
-// Validate checks all configuration values and returns all errors found.
-// It accumulates every error rather than stopping at the first, so users
-// see a complete report and can fix all issues in one pass.
-func Validate(cfg *Config) error {
+// collectValidationErrors accumulates all config validation errors into a
+// slice. Used by both the strict path (Validate) and the lenient path
+// (LoadLenient, which converts these to warnings).
+func collectValidationErrors(cfg *Config) []error {
 	var errs []error
 
 	errs = append(errs, validateDrives(cfg)...)
@@ -52,7 +52,14 @@ func Validate(cfg *Config) error {
 	errs = append(errs, validateLogging(&cfg.LoggingConfig)...)
 	errs = append(errs, validateNetwork(&cfg.NetworkConfig)...)
 
-	return errors.Join(errs...)
+	return errs
+}
+
+// Validate checks all configuration values and returns all errors found.
+// It accumulates every error rather than stopping at the first, so users
+// see a complete report and can fix all issues in one pass.
+func Validate(cfg *Config) error {
+	return errors.Join(collectValidationErrors(cfg)...)
 }
 
 // ValidateResolved checks cross-field constraints on a fully resolved drive.
@@ -78,6 +85,30 @@ func ValidateResolved(rd *ResolvedDrive) error {
 	}
 
 	return errors.Join(errs...)
+}
+
+// ValidateResolvedForSync checks sync-specific constraints on a resolved drive.
+// Unlike ValidateResolved() which checks general resolved-drive invariants,
+// this enforces that sync_dir is set and valid — required only for the sync
+// command, not for file operations like ls/get/put.
+func ValidateResolvedForSync(rd *ResolvedDrive) error {
+	if rd.SyncDir == "" {
+		return fmt.Errorf("drive %q has no sync_dir — set sync_dir in config or run 'drive add %s'",
+			rd.CanonicalID.String(), rd.CanonicalID.String())
+	}
+
+	if !filepath.IsAbs(rd.SyncDir) {
+		return fmt.Errorf("drive %q sync_dir must be absolute, got %q",
+			rd.CanonicalID.String(), rd.SyncDir)
+	}
+
+	// Reject sync_dir that exists but is a regular file.
+	if info, err := os.Stat(rd.SyncDir); err == nil && !info.IsDir() {
+		return fmt.Errorf("drive %q sync_dir %q exists but is not a directory",
+			rd.CanonicalID.String(), rd.SyncDir)
+	}
+
+	return nil
 }
 
 func validateFilter(f *FilterConfig) []error {

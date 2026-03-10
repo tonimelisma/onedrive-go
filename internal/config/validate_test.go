@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 const (
@@ -613,4 +615,65 @@ func TestWarnUnimplemented_NonDefaults_WarnsAll(t *testing.T) {
 	for _, f := range expected {
 		assert.Contains(t, warned, f, "expected warning for %q", f)
 	}
+}
+
+// --- ValidateResolvedForSync tests ---
+
+// Validates: R-4.8.6
+func TestValidateResolvedForSync_EmptySyncDir(t *testing.T) {
+	rd := &ResolvedDrive{
+		CanonicalID: driveid.MustCanonicalID("personal:user@example.com"),
+		SyncDir:     "",
+	}
+	err := ValidateResolvedForSync(rd)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no sync_dir")
+	assert.Contains(t, err.Error(), "personal:user@example.com")
+}
+
+// Validates: R-4.8.6
+func TestValidateResolvedForSync_RelativeSyncDir(t *testing.T) {
+	rd := &ResolvedDrive{
+		CanonicalID: driveid.MustCanonicalID("personal:user@example.com"),
+		SyncDir:     "relative/path",
+	}
+	err := ValidateResolvedForSync(rd)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be absolute")
+}
+
+// Validates: R-4.8.6
+func TestValidateResolvedForSync_SyncDirIsFile(t *testing.T) {
+	// Create a temp file to simulate sync_dir pointing to a file.
+	tmpFile := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(tmpFile, []byte("data"), 0o600))
+
+	rd := &ResolvedDrive{
+		CanonicalID: driveid.MustCanonicalID("personal:user@example.com"),
+		SyncDir:     tmpFile,
+	}
+	err := ValidateResolvedForSync(rd)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not a directory")
+}
+
+// Validates: R-4.8.6
+func TestValidateResolvedForSync_Valid(t *testing.T) {
+	rd := &ResolvedDrive{
+		CanonicalID: driveid.MustCanonicalID("personal:user@example.com"),
+		SyncDir:     "/tmp/valid-sync-dir",
+	}
+	err := ValidateResolvedForSync(rd)
+	assert.NoError(t, err)
+}
+
+// Validates: R-4.8.6
+func TestValidateResolvedForSync_NonExistentDir_OK(t *testing.T) {
+	// Non-existent paths are valid — sync creates the directory on first run.
+	rd := &ResolvedDrive{
+		CanonicalID: driveid.MustCanonicalID("personal:user@example.com"),
+		SyncDir:     "/nonexistent/path/that/does/not/exist",
+	}
+	err := ValidateResolvedForSync(rd)
+	assert.NoError(t, err)
 }

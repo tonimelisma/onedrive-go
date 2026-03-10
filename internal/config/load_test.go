@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -670,6 +671,123 @@ func TestResolveConfigPath_CLIOverridesEnv(t *testing.T) {
 }
 
 // Validates: R-4.1.3
+// --- Lenient loading tests ---
+
+// Validates: R-4.8.4
+func TestLoadLenient_UnknownKeys_ReturnsWarnings(t *testing.T) {
+	path := writeTestConfig(t, `
+unknown_global_key = "value"
+transfer_workers = 8
+`)
+	cfg, warnings, err := LoadLenient(path, testLogger(t))
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0].Message, "unknown config key")
+	assert.Contains(t, warnings[0].Message, "unknown_global_key")
+}
+
+// Validates: R-4.8.4
+func TestLoadLenient_InvalidValues_ReturnsWarnings(t *testing.T) {
+	path := writeTestConfig(t, `transfer_workers = 0`)
+	cfg, warnings, err := LoadLenient(path, testLogger(t))
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	require.NotEmpty(t, warnings)
+
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w.Message, "transfer_workers") {
+			found = true
+
+			break
+		}
+	}
+
+	assert.True(t, found, "expected warning about transfer_workers")
+}
+
+// Validates: R-4.8.4
+func TestLoadLenient_ValidConfig_NoWarnings(t *testing.T) {
+	path := writeTestConfig(t, `log_level = "debug"`)
+	cfg, warnings, err := LoadLenient(path, testLogger(t))
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	assert.Empty(t, warnings)
+	assert.Equal(t, "debug", cfg.LogLevel)
+}
+
+// Validates: R-4.8.4
+func TestLoadLenient_TOMLSyntaxError_Fatal(t *testing.T) {
+	path := writeTestConfig(t, `[invalid toml`)
+	_, _, err := LoadLenient(path, testLogger(t))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parsing config file")
+}
+
+// Validates: R-4.8.4
+func TestLoadOrDefaultLenient_MissingFile_ReturnsDefaults(t *testing.T) {
+	cfg, warnings, err := LoadOrDefaultLenient("/nonexistent/path/config.toml", testLogger(t))
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	assert.Empty(t, warnings)
+	assert.Equal(t, "info", cfg.LogLevel)
+	assert.Equal(t, 8, cfg.TransferWorkers)
+}
+
+// Validates: R-4.8.4
+func TestLoadLenient_UnknownDriveKeys_ReturnsWarnings(t *testing.T) {
+	path := writeTestConfig(t, `
+["personal:toni@outlook.com"]
+sync_dir = "~/OneDrive"
+unknown_drive_key = "value"
+`)
+	cfg, warnings, err := LoadLenient(path, testLogger(t))
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0].Message, "unknown key")
+	assert.Contains(t, warnings[0].Message, "unknown_drive_key")
+}
+
+// Validates: R-4.8.4
+func TestLoadLenient_MixedWarnings(t *testing.T) {
+	// Both unknown keys and validation errors should be collected.
+	path := writeTestConfig(t, `
+unknown_global_key = "value"
+transfer_workers = 0
+`)
+	cfg, warnings, err := LoadLenient(path, testLogger(t))
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	// Should have at least 2 warnings: one for unknown key, one for invalid value.
+	assert.GreaterOrEqual(t, len(warnings), 2)
+}
+
+// Validates: R-4.8.4
+func TestLoadLenient_FileNotFound_Fatal(t *testing.T) {
+	_, _, err := LoadLenient("/nonexistent/path/config.toml", testLogger(t))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reading config file")
+}
+
+// Validates: R-4.8.4
+func TestLoadLenient_DriveParseError_Warning(t *testing.T) {
+	// A drive section with a type mismatch becomes a warning in lenient mode.
+	path := writeTestConfig(t, `
+["personal:toni@outlook.com"]
+sync_dir = "~/OneDrive"
+paused = "not-a-bool"
+`)
+	cfg, warnings, err := LoadLenient(path, testLogger(t))
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	// The drive should not be in cfg.Drives (mapToDrive failed).
+	assert.Empty(t, cfg.Drives)
+	require.NotEmpty(t, warnings)
+	assert.Contains(t, warnings[0].Message, "personal:toni@outlook.com")
+}
+
 func TestResolveConfigPath_CLIOverridesDefault(t *testing.T) {
 	result := ResolveConfigPath(
 		EnvOverrides{},

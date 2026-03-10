@@ -97,6 +97,13 @@ func runSync(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
+	// Sync requires sync_dir on every drive (file ops like ls/get don't).
+	for _, rd := range drives {
+		if syncErr := config.ValidateResolvedForSync(rd); syncErr != nil {
+			return syncErr
+		}
+	}
+
 	if len(drives) == 0 {
 		// Distinguish "all paused" from "none configured" for a clearer message.
 		allDrives, resolveErr := config.ResolveDrives(rawCfg, selectors, true, logger)
@@ -150,6 +157,13 @@ func runSyncDaemon(
 	drives, err := config.ResolveDrives(holder.Config(), selectors, true, logger)
 	if err != nil {
 		return err
+	}
+
+	// Sync requires sync_dir on every drive (file ops like ls/get don't).
+	for _, rd := range drives {
+		if syncErr := config.ValidateResolvedForSync(rd); syncErr != nil {
+			return syncErr
+		}
 	}
 
 	if len(drives) == 0 {

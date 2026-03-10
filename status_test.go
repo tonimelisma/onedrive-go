@@ -239,7 +239,8 @@ func TestBuildStatusAccountsWith_EmptySyncDir(t *testing.T) {
 	)
 
 	require.Len(t, accounts, 1)
-	assert.Equal(t, driveStateNeedsSetup, accounts[0].Drives[0].State)
+	// Empty sync_dir no longer overrides drive state — drive is still "ready".
+	assert.Equal(t, driveStateReady, accounts[0].Drives[0].State)
 }
 
 func TestBuildStatusAccountsWith_SharePointGrouping(t *testing.T) {
@@ -491,17 +492,15 @@ func TestComputeSummary_Mixed(t *testing.T) {
 		{
 			Drives: []statusDrive{
 				{State: driveStateNoToken},
-				{State: driveStateNeedsSetup},
 				{State: driveStateReady, SyncState: &syncStateInfo{Issues: 1}},
 			},
 		},
 	}
 
 	s := computeSummary(accounts)
-	assert.Equal(t, 5, s.TotalDrives)
+	assert.Equal(t, 4, s.TotalDrives)
 	assert.Equal(t, 2, s.Ready)
 	assert.Equal(t, 1, s.Paused)
-	assert.Equal(t, 1, s.NeedsSetup)
 	assert.Equal(t, 1, s.NoToken)
 	assert.Equal(t, 4, s.TotalIssues)
 }
@@ -667,7 +666,7 @@ func TestPrintStatusText_EmptySyncDir(t *testing.T) {
 				{
 					CanonicalID: "personal:bob@example.com",
 					SyncDir:     "",
-					State:       driveStateNeedsSetup,
+					State:       driveStateReady,
 				},
 			},
 		},
@@ -684,10 +683,9 @@ func TestPrintSummaryText_AllStates(t *testing.T) {
 	t.Parallel()
 
 	s := statusSummary{
-		TotalDrives: 5,
+		TotalDrives: 4,
 		Ready:       2,
 		Paused:      1,
-		NeedsSetup:  1,
 		NoToken:     1,
 		TotalIssues: 3,
 	}
@@ -696,10 +694,9 @@ func TestPrintSummaryText_AllStates(t *testing.T) {
 	printSummaryText(&buf, s)
 
 	output := buf.String()
-	assert.Contains(t, output, "5 drives")
+	assert.Contains(t, output, "4 drives")
 	assert.Contains(t, output, "2 ready")
 	assert.Contains(t, output, "1 paused")
-	assert.Contains(t, output, "1 needs setup")
 	assert.Contains(t, output, "1 no token")
 	assert.Contains(t, output, "3 issues")
 }

@@ -25,7 +25,7 @@ import (
 
 // --- command structure ---
 
-// Validates: R-3.3.1, R-3.3.2, R-3.3.3, R-3.3.4
+// Validates: R-3.3.2, R-3.3.5, R-3.3.7, R-3.3.9
 func TestNewDriveCmd_Structure(t *testing.T) {
 	cmd := newDriveCmd()
 	assert.Equal(t, "drive", cmd.Name())
@@ -61,6 +61,14 @@ func TestNewDriveListCmd_HasRunE(t *testing.T) {
 	assert.Equal(t, "list", cmd.Use)
 }
 
+// Validates: R-3.3.4
+func TestNewDriveListCmd_HasAllFlag(t *testing.T) {
+	cmd := newDriveListCmd()
+	flag := cmd.Flags().Lookup("all")
+	require.NotNil(t, flag, "--all flag should be registered")
+	assert.Equal(t, "false", flag.DefValue)
+}
+
 func TestNewDriveSearchCmd_HasRunE(t *testing.T) {
 	cmd := newDriveSearchCmd()
 	assert.NotNil(t, cmd.RunE)
@@ -69,14 +77,14 @@ func TestNewDriveSearchCmd_HasRunE(t *testing.T) {
 
 // --- buildConfiguredDriveEntries ---
 
-// Validates: R-3.3.1
+// Validates: R-3.3.2
 func TestBuildConfiguredDriveEntries_Empty(t *testing.T) {
 	cfg := config.DefaultConfig()
 	entries := buildConfiguredDriveEntries(cfg, testDriveLogger(t))
 	assert.Nil(t, entries)
 }
 
-// Validates: R-3.3.1
+// Validates: R-3.3.2
 func TestBuildConfiguredDriveEntries_OneDrive_WithSyncDir(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Drives[driveid.MustCanonicalID("personal:user@example.com")] = config.Drive{
@@ -105,7 +113,7 @@ func TestBuildConfiguredDriveEntries_PausedDrive(t *testing.T) {
 	assert.Equal(t, driveStatePaused, entries[0].State)
 }
 
-// Validates: R-3.3.1
+// Validates: R-3.3.2
 func TestBuildConfiguredDriveEntries_MultipleDrives_Sorted(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Drives[driveid.MustCanonicalID("personal:zack@example.com")] = config.Drive{SyncDir: "~/OneDrive-Z"}
@@ -170,7 +178,7 @@ func TestPrintDriveListText_EmptyBothSections(t *testing.T) {
 	assert.Contains(t, buf.String(), "No drives configured")
 }
 
-// Validates: R-3.3.1
+// Validates: R-3.3.2
 func TestPrintDriveListText_ConfiguredOnly(t *testing.T) {
 	configured := []driveListEntry{
 		{CanonicalID: "personal:user@example.com", SyncDir: "~/OneDrive", State: driveStateReady, Source: "configured"},
@@ -194,7 +202,7 @@ func TestPrintDriveListText_AvailableOnly(t *testing.T) {
 	assert.Contains(t, output, "business:user@contoso.com")
 }
 
-// Validates: R-3.3.1, R-3.6.1
+// Validates: R-3.3.2, R-3.6.1
 func TestPrintDriveListText_BothSections(t *testing.T) {
 	configured := []driveListEntry{
 		{CanonicalID: "personal:user@example.com", SyncDir: "~/OneDrive", State: driveStateReady, Source: "configured"},
@@ -263,7 +271,7 @@ func TestDriveLabel_DisplayNameSameAsCanonicalID(t *testing.T) {
 
 func TestPrintDriveListText_EmptySyncDir_ShowsNotSet(t *testing.T) {
 	configured := []driveListEntry{
-		{CanonicalID: "personal:user@example.com", SyncDir: "", State: driveStateNeedsSetup, Source: "configured"},
+		{CanonicalID: "personal:user@example.com", SyncDir: "", State: driveStateReady, Source: "configured"},
 	}
 	var buf bytes.Buffer
 	printDriveListText(&buf, configured, nil)
@@ -344,6 +352,56 @@ func TestDriveListEntry_JSONOmitsEmpty(t *testing.T) {
 	assert.NotContains(t, string(data), "library_name")
 }
 
+// --- HasStateDB indicator ---
+
+// Validates: R-3.3.3
+func TestPrintDriveListText_HasStateDB_ShowsMarker(t *testing.T) {
+	available := []driveListEntry{
+		{CanonicalID: "personal:user@example.com", State: "available", Source: "available", HasStateDB: true},
+	}
+	var buf bytes.Buffer
+	printDriveListText(&buf, nil, available)
+	output := buf.String()
+	assert.Contains(t, output, "[has sync data]")
+}
+
+// Validates: R-3.3.3
+func TestPrintDriveListText_NoStateDB_NoMarker(t *testing.T) {
+	available := []driveListEntry{
+		{CanonicalID: "personal:user@example.com", State: "available", Source: "available", HasStateDB: false},
+	}
+	var buf bytes.Buffer
+	printDriveListText(&buf, nil, available)
+	output := buf.String()
+	assert.NotContains(t, output, "[has sync data]")
+}
+
+// Validates: R-3.3.3
+func TestDriveListEntry_HasStateDB_JSON(t *testing.T) {
+	entry := driveListEntry{
+		CanonicalID: "personal:user@example.com",
+		State:       "available",
+		Source:      "available",
+		HasStateDB:  true,
+	}
+	data, err := json.Marshal(entry)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"has_state_db":true`)
+}
+
+// Validates: R-3.3.3
+func TestDriveListEntry_HasStateDB_OmittedWhenFalse(t *testing.T) {
+	entry := driveListEntry{
+		CanonicalID: "personal:user@example.com",
+		State:       "available",
+		Source:      "available",
+		HasStateDB:  false,
+	}
+	data, err := json.Marshal(entry)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "has_state_db")
+}
+
 // --- printDriveSearchText ---
 
 func TestPrintDriveSearchText_Empty(t *testing.T) {
@@ -352,7 +410,7 @@ func TestPrintDriveSearchText_Empty(t *testing.T) {
 	printDriveSearchText(&buf, nil, "test query")
 }
 
-// Validates: R-3.3.4
+// Validates: R-3.3.9
 func TestPrintDriveSearchText_WithResults(t *testing.T) {
 	results := []driveSearchResult{
 		{CanonicalID: "sharepoint:user@contoso.com:marketing:Docs", SiteName: "Marketing", LibraryName: "Docs", WebURL: "https://contoso.sharepoint.com/sites/marketing"},
@@ -362,7 +420,7 @@ func TestPrintDriveSearchText_WithResults(t *testing.T) {
 	assert.NotPanics(t, func() { printDriveSearchText(&buf, results, "marketing") })
 }
 
-// Validates: R-3.3.4
+// Validates: R-3.3.9
 func TestPrintDriveSearchText_MultipleSites(t *testing.T) {
 	results := []driveSearchResult{
 		{CanonicalID: "sharepoint:user@contoso.com:marketing:Docs", SiteName: "Marketing", LibraryName: "Docs"},
@@ -479,7 +537,7 @@ func TestDriveSearchResult_JSONRoundTrip(t *testing.T) {
 
 // --- removeDrive ---
 
-// Validates: R-3.3.3
+// Validates: R-3.3.7
 func TestRemoveDrive_DeletesConfigSection(t *testing.T) {
 	// Create a config file with a drive.
 	dir := t.TempDir()
@@ -499,7 +557,7 @@ sync_dir = "~/OneDrive"
 	assert.NotContains(t, string(data), "personal:user@example.com")
 }
 
-// Validates: R-3.3.3
+// Validates: R-3.3.7
 func TestRemoveDrive_DriveNotInConfig(t *testing.T) {
 	// removeDrive should return an error when the drive doesn't exist in config.
 	dir := t.TempDir()
@@ -622,7 +680,7 @@ func TestAddNewDrive_NoToken(t *testing.T) {
 	assert.Contains(t, err.Error(), "no token file")
 }
 
-// Validates: R-3.3.2
+// Validates: R-3.3.5
 func TestAddNewDrive_WithToken(t *testing.T) {
 	setTestDriveHome(t)
 	dataDir := config.DefaultDataDir()
@@ -782,7 +840,7 @@ func TestDriveListEntry_SharedFieldsOmittedWhenEmpty(t *testing.T) {
 
 // --- addSharedDrive ---
 
-// Validates: R-3.3.2
+// Validates: R-3.3.5
 func TestAddSharedDrive_AlreadyConfigured(t *testing.T) {
 	setTestDriveHome(t)
 	dir := t.TempDir()
@@ -1128,4 +1186,40 @@ func TestSearchSharedItemsWithFallback_SearchReturnsEmpty(t *testing.T) {
 
 	assert.Empty(t, items)
 	assert.False(t, sharedWithMeCalled, "empty is not an error — no fallback needed")
+}
+
+// --- purgeOrphanedDriveState ---
+
+// Validates: R-3.3.8
+func TestPurgeOrphanedDriveState_DeletesStateDB(t *testing.T) {
+	setTestDriveHome(t)
+	dataDir := config.DefaultDataDir()
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+
+	// Create a fake state DB file.
+	statePath := config.DriveStatePath(cid)
+	require.NotEmpty(t, statePath)
+	require.NoError(t, os.WriteFile(statePath, []byte("fake-db"), 0o600))
+
+	err := purgeOrphanedDriveState(cid, testDriveLogger(t))
+	require.NoError(t, err)
+
+	// State DB should be deleted.
+	_, statErr := os.Stat(statePath)
+	assert.True(t, os.IsNotExist(statErr), "state DB should be deleted")
+}
+
+// Validates: R-3.3.8
+func TestPurgeOrphanedDriveState_NoStateDB(t *testing.T) {
+	setTestDriveHome(t)
+	dataDir := config.DefaultDataDir()
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+
+	// No state DB on disk — should succeed with "no orphaned state" message.
+	err := purgeOrphanedDriveState(cid, testDriveLogger(t))
+	assert.NoError(t, err)
 }
