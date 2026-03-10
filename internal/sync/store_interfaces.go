@@ -107,6 +107,7 @@ type ActionableFailure struct {
 	IssueType string
 	Error     string
 	ScopeKey  string
+	FileSize  int64
 }
 
 // ObservedItem represents a single item from a delta API response, ready
