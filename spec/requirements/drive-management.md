@@ -20,14 +20,55 @@ The system shall support all four drive types:
 - R-3.2.3: SharePoint Document Libraries (via `drive add`). [verified]
 - R-3.2.4: Shared Folders (folders shared by other users, synced as separate drives). [verified]
 
-## R-3.3 Drive Management Commands [verified]
+## R-3.3 Drive Management Commands [implemented]
 
-- R-3.3.1: When the user runs `drive list`, the system shall show all configured drives with status. [verified]
-- R-3.3.2: When the user runs `drive add`, the system shall add a SharePoint library or shared folder. [verified]
-- R-3.3.3: When the user runs `drive remove`, the system shall remove the drive config section. [verified]
-- R-3.3.4: When the user runs `drive search`, the system shall search SharePoint sites by name. [verified]
-- R-3.3.5: When `--json` is passed, `drive list` shall output structured JSON with configured and available drive arrays. [verified]
-- R-3.3.6: When `--json` is passed, `drive search` shall output structured JSON with results array. [verified]
+- R-3.3.1: When the user runs `login`, the system shall auto-add the account's
+  primary drive to the configuration: `personal:<email>` for consumer Microsoft
+  accounts, `business:<email>` for work/school accounts. Re-login shall refresh
+  the token and metadata without duplicating the drive section. [verified]
+- R-3.3.2: When the user runs `drive list`, the system shall show two sections.
+  Section 1 ("Configured drives"): every drive in config with display name,
+  sync directory (blank if not set), and state (ready or paused). Section 2
+  ("Available drives"): all not-yet-added drives discovered from authenticated
+  accounts — personal and business drives, SharePoint document libraries
+  (business accounts only, capped at 10 sites), and shared folders (all
+  account types). Drives already in config shall not appear in the available
+  section. [verified]
+- R-3.3.3: Available drives in `drive list` that retain a state database from a
+  previous configuration shall be marked as such, indicating they can be
+  re-added without a full re-sync or purged with `drive remove --purge`.
+  [implemented]
+- R-3.3.4: When `--all` is passed to `drive list`, the system shall remove the
+  SharePoint site discovery cap and show all discoverable drives. [implemented]
+- R-3.3.5: When the user runs `drive add <canonical-id>`, the system shall add
+  the specified drive to the configuration, provided a valid token exists for
+  the account. This works for any drive type: personal, business, SharePoint,
+  or shared — including re-adding a default drive previously removed via
+  `drive remove`. If the drive is already configured, the system shall report
+  it as such without creating a duplicate. [verified]
+- R-3.3.6: When a search term without `:` is passed to `drive add`, the system
+  shall match against shared folder names using case-insensitive substring
+  search across all authenticated accounts. A single match auto-adds the drive.
+  Multiple matches display a numbered list with canonical IDs. Zero matches
+  return an error suggesting `drive list`. [verified]
+- R-3.3.7: When the user runs `drive remove --drive <id>`, the system shall
+  remove only the drive's config section. The account token is preserved (the
+  account remains logged in), the state database is preserved (so a future
+  `drive add` avoids a full re-sync), and the sync directory is preserved (the
+  user's files remain on disk). After removal, the drive appears as "available"
+  in `drive list` and can be re-added with `drive add`. [verified]
+- R-3.3.8: When `--purge` is passed to `drive remove`, the system shall also
+  delete the state database. This works both for configured drives (removing
+  config section and state database) and for available drives that retain a
+  state database from a previous removal (deleting only the state database).
+  The account token and sync directory are always preserved. [implemented]
+- R-3.3.9: When the user runs `drive search <term>`, the system shall search
+  SharePoint sites by name across all business accounts, returning up to 50
+  matching sites with their document libraries and canonical IDs. When
+  `--account` is passed, the search is restricted to that business account.
+  [verified]
+- R-3.3.10: When `--json` is passed, `drive list` shall output structured JSON with configured and available drive arrays. [verified]
+- R-3.3.11: When `--json` is passed, `drive search` shall output structured JSON with results array. [verified]
 
 ## R-3.4 Multi-Account [verified]
 
