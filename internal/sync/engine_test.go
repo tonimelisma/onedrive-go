@@ -2330,10 +2330,10 @@ func TestRunFullReconciliation_DeltaError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Issue #9: filterInvalidUploads integration test
+// Observation-time validation: path too long is caught by shouldObserve
 // ---------------------------------------------------------------------------
 
-func TestRunOnce_InvalidUpload_RecordsIssue(t *testing.T) {
+func TestRunOnce_PathTooLong_RecordsIssue(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -2350,8 +2350,8 @@ func TestRunOnce_InvalidUpload_RecordsIssue(t *testing.T) {
 	ctx := t.Context()
 
 	// Create a deeply nested file >400 chars total, each component <255 chars.
-	// This passes the scanner (component length OK) but fails upload validation
-	// (total path too long).
+	// shouldObserve catches this at observation time — the file never enters
+	// the planner. recordSkippedItems writes it to sync_failures.
 	deepPath := ""
 	for range 51 {
 		deepPath = filepath.Join(deepPath, "abcdefgh")
@@ -2364,13 +2364,13 @@ func TestRunOnce_InvalidUpload_RecordsIssue(t *testing.T) {
 	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOpts{})
 	require.NoError(t, err)
 
-	// The upload should NOT have been attempted.
-	assert.Equal(t, 0, report.Uploads, "invalid upload should not be executed")
+	// The upload should NOT have been attempted — caught at observation time.
+	assert.Equal(t, 0, report.Uploads, "path-too-long file should not reach planner")
 
-	// The sync_failures table should have an entry.
+	// The sync_failures table should have an entry from recordSkippedItems.
 	issues, issErr := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, issErr)
-	require.NotEmpty(t, issues, "sync_failures should have an entry for the invalid upload")
+	require.NotEmpty(t, issues, "sync_failures should have an entry for path too long")
 
 	found := false
 	for _, iss := range issues {

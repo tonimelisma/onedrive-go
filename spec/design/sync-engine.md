@@ -41,17 +41,20 @@ Implements: R-2.10.35 [planned], R-2.10.36 [planned], R-2.10.37 [planned]
 
 In-memory data structure: blocks map (scope_key → `ScopeBlock`), sliding windows (scope_key → window), trial timers. Engine-internal — no cross-engine coordination (each engine discovers independently).
 
-### Planned: Scanner ScanResult Contract
+### Scanner ScanResult Contract
 
-Implements: R-2.11.5 [planned], R-2.10.2 [planned]
+Implements: R-2.11.5 [implemented], R-2.10.2 [planned]
 
-Scanner returns `ScanResult{Events []ChangeEvent, Skipped []SkippedItem}` instead of `[]ChangeEvent`. Engine processes skipped items via `recordSkippedItems()` (batch-upserts to `sync_failures` as actionable) and `clearResolvedActionableFailures()` (deletes entries for files no longer skipped).
+Scanner returns `ScanResult{Events []ChangeEvent, Skipped []SkippedItem}` instead of `[]ChangeEvent`. Engine processes skipped items via two methods:
 
-### Planned: Aggregated Logging
+- **`recordSkippedItems(skipped []SkippedItem)`** — Groups skipped items by reason, batch-upserts to `sync_failures` as actionable failures. Uses aggregated logging: when >10 items share the same reason, logs 1 WARN summary with count and sample paths, individual paths at DEBUG. When <=10 items, logs each as an individual WARN.
+- **`clearResolvedSkippedItems(skipped []SkippedItem)`** — Deletes `sync_failures` entries for files that are no longer skipped (e.g., user renamed a previously invalid file). Compares current skipped paths against recorded failures and removes stale entries.
+
+### Aggregated Logging
 
 Implements: R-6.6.7 [planned], R-6.6.8 [planned], R-6.6.9 [planned], R-6.6.10 [planned], R-6.6.12 [planned]
 
-When >10 items share the same warning category, log 1 WARN summary + individual DEBUG. Transient retries at DEBUG, resolved at INFO, exhausted at WARN. Extends to execution-time transient failures: when >10 transient failures of the same `issue_type` exhaust their retry budget in a single sync pass, aggregate into 1 WARN summary with count, individual paths at DEBUG (R-6.6.12).
+When >10 items share the same warning category, log 1 WARN summary with count and sample paths + individual paths at DEBUG. When <=10 items, log each as an individual WARN. This pattern is implemented in `recordSkippedItems()` for scanner-time validation failures. Transient retries at DEBUG, resolved at INFO, exhausted at WARN. Extends to execution-time transient failures: when >10 transient failures of the same `issue_type` exhaust their retry budget in a single sync pass, aggregate into 1 WARN summary with count, individual paths at DEBUG (R-6.6.12).
 
 ### Planned: Local Permission Handling
 

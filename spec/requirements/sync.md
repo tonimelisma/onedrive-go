@@ -131,7 +131,7 @@ The system shall validate filenames against OneDrive naming restrictions before 
 - R-2.11.2: The system shall reject local files with OneDrive reserved names (case-insensitive): `.lock`, `desktop.ini`, `CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9`, `LPT0`-`LPT9`. [implemented]
 - R-2.11.3: The system shall reject local files matching OneDrive reserved patterns: names starting with `~$`, names containing `_vti_`, and `forms` at root level on SharePoint drives. [implemented]
 - R-2.11.4: The system shall reject local files with trailing dots or leading/trailing whitespace. [implemented]
-- R-2.11.5: When the scanner filters a file due to naming restrictions, the system shall record it as an actionable issue (not silently skip with only a DEBUG log). [planned]
+- R-2.11.5: When the scanner filters a file due to naming restrictions, the system shall record it as an actionable issue (not silently skip with only a DEBUG log). [implemented]
 
 ## R-2.12 Case Collision Handling [planned]
 
