@@ -682,3 +682,195 @@ func TestClearResolvedActionableFailures_DifferentTypeNotCleared(t *testing.T) {
 	require.Len(t, issues, 1)
 	assert.Equal(t, IssuePathTooLong, issues[0].IssueType)
 }
+
+// ---------------------------------------------------------------------------
+// RecordFailure (unified method) tests
+// ---------------------------------------------------------------------------
+
+func TestRecordFailure_NewEntry(t *testing.T) {
+	t.Parallel()
+
+	mgr, fixedTime := newTestSyncStoreForFailures(t)
+	ctx := context.Background()
+
+	err := mgr.RecordFailure(ctx, SyncFailureParams{
+		Path:       "docs/report.xlsx",
+		DriveID:    driveid.ID{},
+		Direction:  "upload",
+		IssueType:  "upload_failed",
+		ErrMsg:     "connection reset",
+		HTTPStatus: 500,
+		FileSize:   1024,
+		LocalHash:  "abc123",
+	})
+	require.NoError(t, err)
+
+	issues, err := mgr.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+
+	row := issues[0]
+	assert.Equal(t, "docs/report.xlsx", row.Path)
+	assert.Equal(t, "upload_failed", row.IssueType)
+	assert.Equal(t, "transient", row.Category)
+	assert.Equal(t, 1, row.FailureCount)
+	assert.Equal(t, "connection reset", row.LastError)
+	assert.Equal(t, 500, row.HTTPStatus)
+	assert.Equal(t, int64(1024), row.FileSize)
+	assert.Equal(t, "abc123", row.LocalHash)
+	assert.Equal(t, fixedTime.UnixNano(), row.FirstSeenAt)
+	assert.Equal(t, fixedTime.UnixNano(), row.LastSeenAt)
+}
+
+func TestRecordFailure_ActionableClassification(t *testing.T) {
+	t.Parallel()
+
+	mgr, _ := newTestSyncStoreForFailures(t)
+	ctx := context.Background()
+
+	// Actionable issue type → category="actionable", no next_retry_at.
+	err := mgr.RecordFailure(ctx, SyncFailureParams{
+		Path:      "CON.txt",
+		DriveID:   driveid.ID{},
+		Direction: "upload",
+		IssueType: IssueInvalidFilename,
+		ErrMsg:    "reserved name",
+	})
+	require.NoError(t, err)
+
+	issues, err := mgr.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+
+	assert.Equal(t, "actionable", issues[0].Category)
+	assert.Equal(t, int64(0), issues[0].NextRetryAt, "actionable issues should not have next_retry_at")
+}
+
+func TestRecordFailure_TransientHasBackoff(t *testing.T) {
+	t.Parallel()
+
+	mgr, fixedTime := newTestSyncStoreForFailures(t)
+	ctx := context.Background()
+
+	err := mgr.RecordFailure(ctx, SyncFailureParams{
+		Path:       "file.txt",
+		DriveID:    driveid.ID{},
+		Direction:  "upload",
+		ErrMsg:     "timeout",
+		HTTPStatus: 503,
+	})
+	require.NoError(t, err)
+
+	issues, err := mgr.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+
+	assert.Equal(t, "transient", issues[0].Category)
+	assert.Greater(t, issues[0].NextRetryAt, fixedTime.UnixNano(),
+		"transient issues should have next_retry_at in the future")
+}
+
+func TestRecordFailure_DownloadStateTransition(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	mgr.nowFunc = func() time.Time { return time.Unix(1000, 0) }
+	ctx := context.Background()
+
+	// Insert a downloading item.
+	_, err := mgr.rawDB().ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		VALUES (?, ?, ?, 'file', 'downloading', ?)`,
+		testDriveID, "item1", "hello.txt", 999,
+	)
+	require.NoError(t, err)
+
+	err = mgr.RecordFailure(ctx, SyncFailureParams{
+		Path:       "hello.txt",
+		DriveID:    driveid.New(testDriveID),
+		Direction:  "download",
+		ErrMsg:     "connection reset",
+		HTTPStatus: 500,
+	})
+	require.NoError(t, err)
+
+	// remote_state should be transitioned to download_failed.
+	row := readRemoteStateRow(t, mgr.rawDB(), "item1")
+	require.NotNil(t, row)
+	assert.Equal(t, statusDownloadFailed, row.SyncStatus)
+
+	// sync_failures row should exist with item_id auto-resolved.
+	issues, err := mgr.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+	assert.Equal(t, "item1", issues[0].ItemID, "item_id should be auto-resolved from remote_state")
+}
+
+func TestRecordFailure_UploadNoStateTransition(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	mgr.nowFunc = func() time.Time { return time.Unix(1000, 0) }
+	ctx := context.Background()
+
+	// Insert a synced item — uploads should not affect remote_state.
+	_, err := mgr.rawDB().ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		VALUES (?, ?, ?, 'file', 'synced', ?)`,
+		testDriveID, "item1", "hello.txt", 999,
+	)
+	require.NoError(t, err)
+
+	err = mgr.RecordFailure(ctx, SyncFailureParams{
+		Path:      "hello.txt",
+		DriveID:   driveid.New(testDriveID),
+		Direction: "upload",
+		ErrMsg:    "upload error",
+	})
+	require.NoError(t, err)
+
+	// Status should remain synced — uploads don't transition remote_state.
+	row := readRemoteStateRow(t, mgr.rawDB(), "item1")
+	require.NotNil(t, row)
+	assert.Equal(t, statusSynced, row.SyncStatus)
+}
+
+func TestRecordFailure_PreservesExistingValuesOnConflict(t *testing.T) {
+	t.Parallel()
+
+	mgr, fixedTime := newTestSyncStoreForFailures(t)
+	ctx := context.Background()
+
+	// First record with file_size and local_hash.
+	err := mgr.RecordFailure(ctx, SyncFailureParams{
+		Path:      "file.txt",
+		DriveID:   driveid.ID{},
+		Direction: "upload",
+		IssueType: "upload_failed",
+		ErrMsg:    "timeout",
+		FileSize:  2048,
+		LocalHash: "hash1",
+	})
+	require.NoError(t, err)
+
+	// Second record without file_size and local_hash — should preserve originals.
+	laterTime := fixedTime.Add(5 * time.Minute)
+	mgr.nowFunc = func() time.Time { return laterTime }
+
+	err = mgr.RecordFailure(ctx, SyncFailureParams{
+		Path:      "file.txt",
+		DriveID:   driveid.ID{},
+		Direction: "upload",
+		ErrMsg:    "new error",
+	})
+	require.NoError(t, err)
+
+	issues, err := mgr.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+
+	assert.Equal(t, int64(2048), issues[0].FileSize, "file_size should be preserved via COALESCE")
+	assert.Equal(t, "hash1", issues[0].LocalHash, "local_hash should be preserved via COALESCE")
+	assert.Equal(t, 2, issues[0].FailureCount)
+	assert.Equal(t, "new error", issues[0].LastError)
+}

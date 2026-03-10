@@ -41,9 +41,26 @@ type StateReader interface {
 	ReadSyncMetadata(ctx context.Context) (map[string]string, error)
 }
 
+// SyncFailureParams bundles all inputs for RecordFailure into a single struct.
+// Only Path, DriveID, Direction, and ErrMsg are always required. Other fields
+// are optional — zero values are preserved via COALESCE on conflict.
+type SyncFailureParams struct {
+	Path       string     // required
+	DriveID    driveid.ID // required
+	Direction  string     // "upload", "download", "delete"
+	IssueType  string     // e.g. IssueQuotaExceeded; empty = generic transient
+	ErrMsg     string
+	HTTPStatus int
+	FileSize   int64  // optional, for upload validation context
+	LocalHash  string // optional, for upload validation context
+	ItemID     string // optional; auto-resolved from remote_state when empty
+	ScopeKey   string // e.g. "quota:own", "perm:remote:/path"
+}
+
 // SyncFailureRecorder is called by the engine to persist all failure types
 // (upload, download, delete) in the unified sync_failures table.
 type SyncFailureRecorder interface {
+	RecordFailure(ctx context.Context, p SyncFailureParams) error
 	RecordSyncFailure(ctx context.Context, path string, driveID driveid.ID, direction, issueType, errMsg string,
 		httpStatus int, fileSize int64, localHash string, itemID string, scopeKey string) error
 	RecordFailureWithStateTransition(ctx context.Context, path string, driveID driveid.ID,

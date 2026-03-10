@@ -1081,14 +1081,139 @@ func (m *SyncStore) updateRemoteStateFromObs(
 	return nil
 }
 
+// RecordFailure is the unified failure recording method. It always runs in a
+// transaction and handles all failure types (upload, download, delete).
+//
+// For download/delete failures, it atomically transitions remote_state
+// (downloading→download_failed, deleting→delete_failed). The WHERE clause
+// is a natural no-op when no matching row exists (uploads, pre-upload
+// validation, permission checks).
+//
+// When ItemID is not provided and direction is download/delete, it is
+// auto-resolved from remote_state within the same transaction.
+//
+// Actionable issues (determined by isActionableIssue) get category='actionable'
+// with no next_retry_at. Transient issues use exponential backoff.
+//
+// UPSERT ON CONFLICT uses COALESCE for issue_type, item_id, file_size,
+// local_hash to preserve existing values when new values are empty/zero.
+func (m *SyncStore) RecordFailure(ctx context.Context, p SyncFailureParams) error {
+	now := m.nowFunc()
+
+	tx, err := m.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("sync: beginning failure transaction for %s: %w", p.Path, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Step 1: Transition remote_state status for download/delete failures.
+	// The WHERE clause is a safe no-op for uploads and pre-upload validation.
+	if p.Direction == strDownload || p.Direction == strDelete {
+		result, execErr := tx.ExecContext(ctx,
+			`UPDATE remote_state SET
+				sync_status = CASE sync_status
+					WHEN ? THEN ?
+					WHEN ? THEN ?
+				END
+			WHERE path = ? AND sync_status IN (?, ?)`,
+			statusDownloading, statusDownloadFailed,
+			statusDeleting, statusDeleteFailed,
+			p.Path, statusDownloading, statusDeleting,
+		)
+		if execErr != nil {
+			return fmt.Errorf("sync: transitioning remote_state for %s: %w", p.Path, execErr)
+		}
+
+		affected, rowErr := result.RowsAffected()
+		if rowErr != nil {
+			return fmt.Errorf("sync: checking rows affected for %s: %w", p.Path, rowErr)
+		}
+
+		if affected == 0 {
+			m.logger.Debug("RecordFailure: remote_state row already transitioned or absent",
+				slog.String("path", p.Path),
+			)
+		}
+	}
+
+	// Step 2: Read current failure count from sync_failures for backoff calculation.
+	var currentFailures int
+	//nolint:errcheck // no-row is fine — currentFailures stays 0
+	tx.QueryRowContext(ctx,
+		`SELECT failure_count FROM sync_failures WHERE path = ? AND drive_id = ?`,
+		p.Path, p.DriveID.String(),
+	).Scan(&currentFailures)
+
+	// Step 3: Determine category from issue type.
+	category := strTransient
+	var nextRetryNano *int64
+
+	if p.IssueType != "" && isActionableIssue(p.IssueType) {
+		category = strActionable
+	} else {
+		// Transient: compute exponential backoff.
+		retryAt := computeNextRetry(now, currentFailures)
+		nanos := retryAt.UnixNano()
+		nextRetryNano = &nanos
+	}
+
+	newCount := currentFailures + 1
+	nowNano := now.UnixNano()
+
+	// Step 4: Auto-resolve item_id from remote_state for download/delete
+	// when caller didn't provide one.
+	itemID := p.ItemID
+	if itemID == "" && (p.Direction == strDownload || p.Direction == strDelete) {
+		//nolint:errcheck // no-row is fine — itemID stays empty
+		tx.QueryRowContext(ctx,
+			`SELECT item_id FROM remote_state WHERE path = ? AND drive_id = ?`,
+			p.Path, p.DriveID.String(),
+		).Scan(&itemID)
+	}
+
+	// Step 5: UPSERT into sync_failures with full field set.
+	// COALESCE preserves existing values when new values are empty/zero.
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO sync_failures
+			(path, drive_id, direction, category, issue_type, item_id,
+			 failure_count, next_retry_at, last_error, http_status,
+			 first_seen_at, last_seen_at, file_size, local_hash, scope_key)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(path, drive_id) DO UPDATE SET
+			direction = excluded.direction,
+			category = excluded.category,
+			issue_type = COALESCE(excluded.issue_type, sync_failures.issue_type),
+			item_id = COALESCE(excluded.item_id, sync_failures.item_id),
+			failure_count = sync_failures.failure_count + 1,
+			next_retry_at = excluded.next_retry_at,
+			last_error = excluded.last_error,
+			http_status = excluded.http_status,
+			last_seen_at = excluded.last_seen_at,
+			file_size = COALESCE(excluded.file_size, sync_failures.file_size),
+			local_hash = COALESCE(excluded.local_hash, sync_failures.local_hash),
+			scope_key = excluded.scope_key`,
+		p.Path, p.DriveID.String(), p.Direction, category,
+		nullString(p.IssueType), nullString(itemID),
+		newCount, nextRetryNano, p.ErrMsg, p.HTTPStatus,
+		nowNano, nowNano, nullInt64(p.FileSize), nullString(p.LocalHash), p.ScopeKey,
+	)
+	if err != nil {
+		return fmt.Errorf("sync: recording sync failure for %s: %w", p.Path, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sync: committing failure for %s: %w", p.Path, err)
+	}
+
+	return nil
+}
+
 // RecordFailureWithStateTransition combines remote_state status transition
 // (downloading→download_failed, deleting→delete_failed) with sync_failures
 // recording in a single atomic transaction. Supports the full sync_failures
 // field set including issue_type, scope_key, and category classification.
 //
-// This replaces the older RecordFailure method. The atomicity is critical:
-// splitting the operations causes silent data loss because the reconciler
-// doesn't recover orphaned download_failed states without sync_failures entries.
+// Deprecated: Use RecordFailure instead. Will be removed in Commit 3.
 func (m *SyncStore) RecordFailureWithStateTransition(
 	ctx context.Context, path string, driveID driveid.ID,
 	direction, issueType, errMsg string, httpStatus int, scopeKey string,
