@@ -8,8 +8,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -269,51 +271,82 @@ func TestNewRootCmd_DriveSubcommandsSkipConfig(t *testing.T) {
 	}
 }
 
-// --- annotation-based skip config ---
+// --- annotation-based skip config (tree-walking) ---
 
-func TestAnnotationBasedSkipConfig(t *testing.T) {
+// dataCommands lists leaf commands that require Phase 2 config loading (no
+// skipConfigAnnotation). This set is small and stable — adding a new data
+// command requires updating this list, which triggers a test failure as a
+// reminder to classify the new command.
+var dataCommands = map[string]bool{
+	"onedrive-go ls":                  true,
+	"onedrive-go get":                 true,
+	"onedrive-go put":                 true,
+	"onedrive-go rm":                  true,
+	"onedrive-go mkdir":               true,
+	"onedrive-go stat":                true,
+	"onedrive-go mv":                  true,
+	"onedrive-go cp":                  true,
+	"onedrive-go issues":              true,
+	"onedrive-go issues resolve":      true,
+	"onedrive-go issues clear":        true,
+	"onedrive-go issues retry":        true,
+	"onedrive-go verify":              true,
+	"onedrive-go recycle-bin list":    true,
+	"onedrive-go recycle-bin restore": true,
+	"onedrive-go recycle-bin empty":   true,
+}
+
+// TestAnnotationTreeWalk walks the entire command tree and verifies that every
+// leaf command with RunE is correctly classified: data commands must NOT have
+// skipConfigAnnotation, and all other commands must HAVE it. Any unclassified
+// command fails the test, forcing authors to explicitly decide when adding
+// new commands.
+func TestAnnotationTreeWalk(t *testing.T) {
 	cmd := newRootCmd()
 
-	// All commands that should skip config must have the annotation.
-	skipPaths := [][]string{
-		{"login"},
-		{"logout"},
-		{"whoami"},
-		{"status"},
-		{"drive"},
-		{"drive", "list"},
-		{"drive", "add"},
-		{"drive", "remove"},
-		{"drive", "search"},
-		{"sync"},
+	var walk func(c *cobra.Command)
+	walk = func(c *cobra.Command) {
+		// Recurse into subcommands first.
+		for _, sub := range c.Commands() {
+			walk(sub)
+		}
+
+		// Only check leaf commands that have a RunE handler. Parent commands
+		// without RunE (e.g., "recycle-bin") are grouping containers.
+		if c.RunE == nil {
+			// Parent group commands with skipConfig are still valid (e.g.,
+			// "drive" group skips config so child resolution works). But we
+			// don't enforce classification for them — only leaf commands matter.
+			return
+		}
+
+		path := c.CommandPath()
+		isData := dataCommands[path]
+
+		if isData {
+			assert.Empty(t, c.Annotations[skipConfigAnnotation],
+				"data command %q must NOT have skipConfig annotation", path)
+		} else {
+			assert.Equal(t, "true", c.Annotations[skipConfigAnnotation],
+				"non-data command %q must have skipConfig annotation (or add it to dataCommands)", path)
+		}
 	}
 
-	for _, args := range skipPaths {
+	walk(cmd)
+
+	// Verify the dataCommands set doesn't have stale entries.
+	for path := range dataCommands {
+		// Split "onedrive-go ls" → ["ls"], "onedrive-go issues resolve" → ["issues", "resolve"]
+		parts := strings.SplitN(path, " ", 2)
+		var args []string
+		if len(parts) == 2 {
+			args = strings.Split(parts[1], " ")
+		}
+
 		sub, _, err := cmd.Find(args)
-		require.NoError(t, err)
-
-		assert.Equal(t, "true", sub.Annotations[skipConfigAnnotation],
-			"command %q should have skipConfig annotation", sub.CommandPath())
-	}
-
-	// Commands that require config should NOT have the annotation.
-	configPaths := [][]string{
-		{"ls"},
-		{"get"},
-		{"put"},
-		{"rm"},
-		{"mkdir"},
-		{"stat"},
-		{"issues"},
-		{"verify"},
-	}
-
-	for _, args := range configPaths {
-		sub, _, err := cmd.Find(args)
-		require.NoError(t, err)
-
-		assert.Empty(t, sub.Annotations[skipConfigAnnotation],
-			"command %q should NOT have skipConfig annotation", sub.CommandPath())
+		require.NoError(t, err, "dataCommands entry %q not found in command tree", path)
+		assert.NotNil(t, sub.RunE,
+			"dataCommands entry %q has no RunE — remove it from the set", path)
 	}
 }
 
@@ -458,7 +491,30 @@ sync_dir = "` + tmpDir + `/two"
 
 	_, _, err = loadAndResolve(cmd, flags, config.EnvOverrides{}, logger)
 	require.Error(t, err)
+	// MatchDrive errors are returned unwrapped — they're user-facing messages.
+	assert.Contains(t, err.Error(), "multiple drives configured")
+}
+
+func TestLoadAndResolve_NoDoubleWrapping(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfgFile := filepath.Join(tmpDir, "config.toml")
+
+	// Invalid TOML triggers LoadOrDefault error, which ResolveDrive wraps
+	// with "loading config: ". Verify loadAndResolve doesn't double-wrap.
+	err := os.WriteFile(cfgFile, []byte("{{invalid toml"), 0o600)
+	require.NoError(t, err)
+
+	flags := CLIFlags{ConfigPath: cfgFile}
+	logger := buildLogger(nil, flags)
+
+	cmd := newRootCmd()
+	cmd.SetContext(t.Context())
+
+	_, _, err = loadAndResolve(cmd, flags, config.EnvOverrides{}, logger)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "loading config")
+	assert.NotContains(t, err.Error(), "loading config: loading config",
+		"loadAndResolve must not double-wrap errors from ResolveDrive")
 }
 
 // --- buildHandler / format tests ---

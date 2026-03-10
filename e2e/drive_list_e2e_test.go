@@ -200,3 +200,75 @@ func TestE2E_DriveList_ConfigTolerance(t *testing.T) {
 	assert.Contains(t, stdout, "Configured drives:",
 		"should show configured drives header despite unknown config key")
 }
+
+// Validates: R-4.8.4
+// TestE2E_Status_ConfigTolerance verifies that `status` succeeds (exit 0)
+// even when the config file contains unknown keys. Status uses lenient
+// config loading (LoadOrDefaultLenient + skipConfigAnnotation).
+func TestE2E_Status_ConfigTolerance(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
+	syncDir := t.TempDir()
+
+	// Per-test isolation with an unknown key in the config.
+	perTestData := t.TempDir()
+	perTestHome := t.TempDir()
+
+	perTestDataDir := filepath.Join(perTestData, "onedrive-go")
+	require.NoError(t, os.MkdirAll(perTestDataDir, 0o755))
+	copyTokenFile(t, testDataDir, perTestDataDir)
+
+	content := fmt.Sprintf("unknown_global_key = \"should warn not crash\"\n\n[%q]\nsync_dir = %q\n", drive, syncDir)
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o644))
+
+	env := map[string]string{
+		"XDG_DATA_HOME": perTestData,
+		"HOME":          perTestHome,
+	}
+
+	stdout, _, err := runCLICore(t, cfgPath, env, "", "status")
+	require.NoError(t, err, "status should succeed despite unknown config key\nstdout: %s", stdout)
+
+	// Status output should contain account/token information.
+	assert.Contains(t, stdout, "Account:",
+		"status should show account header despite unknown config key")
+	assert.Contains(t, stdout, "Token:",
+		"status should show token state despite unknown config key")
+}
+
+// Validates: R-4.8.4
+// TestE2E_Whoami_ConfigTolerance verifies that `whoami` succeeds (exit 0)
+// even when the config file contains unknown keys. Whoami uses lenient
+// config loading (LoadOrDefaultLenient + skipConfigAnnotation).
+func TestE2E_Whoami_ConfigTolerance(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
+	syncDir := t.TempDir()
+
+	// Per-test isolation with an unknown key in the config.
+	perTestData := t.TempDir()
+	perTestHome := t.TempDir()
+
+	perTestDataDir := filepath.Join(perTestData, "onedrive-go")
+	require.NoError(t, os.MkdirAll(perTestDataDir, 0o755))
+	copyTokenFile(t, testDataDir, perTestDataDir)
+
+	content := fmt.Sprintf("unknown_global_key = \"should warn not crash\"\n\n[%q]\nsync_dir = %q\n", drive, syncDir)
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o644))
+
+	env := map[string]string{
+		"XDG_DATA_HOME": perTestData,
+		"HOME":          perTestHome,
+	}
+
+	stdout, _, err := runCLICore(t, cfgPath, env, "", "whoami")
+	require.NoError(t, err, "whoami should succeed despite unknown config key\nstdout: %s", stdout)
+
+	// Whoami output should contain user/account information.
+	assert.NotEmpty(t, stdout,
+		"whoami should produce output despite unknown config key")
+}
