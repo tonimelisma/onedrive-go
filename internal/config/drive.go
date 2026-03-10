@@ -13,9 +13,6 @@ import (
 
 // NOTE: DriveTokenPath is defined in token_resolution.go (not here).
 
-// Default remote path when none is specified.
-const defaultRemotePath = "/"
-
 // ResolvedDrive contains drive fields plus effective config sections after
 // merging global defaults with per-drive overrides and CLI/env flags. This
 // is the final product consumed by the CLI and sync engine.
@@ -26,7 +23,6 @@ type ResolvedDrive struct {
 	Paused      bool
 	PausedUntil string // RFC3339 timestamp; empty when not timed
 	SyncDir     string // absolute path after tilde expansion
-	RemotePath  string
 	DriveID     driveid.ID
 
 	FilterConfig
@@ -158,17 +154,12 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 		Paused:          drive.Paused != nil && *drive.Paused,
 		PausedUntil:     pausedUntil,
 		SyncDir:         expandTilde(drive.SyncDir),
-		RemotePath:      drive.RemotePath,
 		FilterConfig:    cfg.FilterConfig,
 		TransfersConfig: cfg.TransfersConfig,
 		SafetyConfig:    cfg.SafetyConfig,
 		SyncConfig:      cfg.SyncConfig,
 		LoggingConfig:   cfg.LoggingConfig,
 		NetworkConfig:   cfg.NetworkConfig,
-	}
-
-	if resolved.RemotePath == "" {
-		resolved.RemotePath = defaultRemotePath
 	}
 
 	// Two-source drive ID resolution: prefer drive metadata file (per-drive,

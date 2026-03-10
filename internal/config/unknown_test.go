@@ -69,7 +69,6 @@ func TestLoad_DriveSection_ValidKeysPass(t *testing.T) {
 sync_dir = "~/OneDrive"
 display_name = "home"
 paused = false
-remote_path = "/"
 skip_dotfiles = true
 skip_dirs = ["vendor"]
 skip_files = ["*.log"]
