@@ -951,8 +951,8 @@ func (e *Engine) processWorkerResult(ctx context.Context, r WorkerResult, bl *Ba
 			driveID = e.driveID
 		}
 
-		// Single write to sync_failures + remote_state status transition.
-		if recErr := e.baseline.RecordFailure(ctx, r.Path, driveID, direction, r.ErrMsg, r.HTTPStatus); recErr != nil {
+		// Atomic write: sync_failures + remote_state status transition.
+		if recErr := e.baseline.RecordFailureWithStateTransition(ctx, r.Path, driveID, direction, "", r.ErrMsg, r.HTTPStatus, ""); recErr != nil {
 			e.logger.Warn("failed to record failure",
 				slog.String("path", r.Path),
 				slog.String("error", recErr.Error()),
@@ -1288,7 +1288,9 @@ func (e *Engine) filterInvalidUploads(ctx context.Context, plan *ActionPlan) *Ac
 			fileSize = plan.Actions[f.Index].View.Local.Size
 		}
 
-		if recErr := e.baseline.RecordSyncFailure(ctx, f.Path, e.driveID, "upload", f.IssueType, f.Error, 0, fileSize, "", ""); recErr != nil {
+		if recErr := e.baseline.RecordSyncFailure(
+			ctx, f.Path, e.driveID, "upload", f.IssueType, f.Error, 0, fileSize, "", "", "",
+		); recErr != nil {
 			e.logger.Error("failed to record sync failure",
 				slog.String("path", f.Path),
 				slog.String("error", recErr.Error()),

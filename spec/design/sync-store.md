@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/baseline.go, internal/sync/store_interfaces.go, internal/sync/migrations.go, internal/sync/verify.go, internal/sync/trash.go, issues.go, verify.go
 
-Implements: R-2.5 [verified], R-2.3.2 [verified], R-2.3.3 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.7 [verified], R-6.4.4 [verified], R-6.4.5 [verified], R-2.15.1 [verified], R-2.10.1 [planned], R-2.10.2 [planned], R-2.10.33 [planned], R-2.10.34 [planned], R-2.10.41 [planned]
+Implements: R-2.5 [verified], R-2.3.2 [verified], R-2.3.3 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.7 [verified], R-6.4.4 [verified], R-6.4.5 [verified], R-2.15.1 [verified], R-2.10.1 [planned], R-2.10.2 [planned], R-2.10.33 [implemented], R-2.10.34 [planned], R-2.10.41 [implemented]
 
 ## SyncStore (`baseline.go`)
 
@@ -58,7 +58,7 @@ CLI wiring for the verification command. Opens state DB read-only, runs verifica
 
 ## Planned: Failure Management Enhancements
 
-Implements: R-2.10.1 [planned], R-2.10.2 [planned], R-2.10.33 [planned], R-2.10.34 [planned], R-2.10.41 [planned]
+Implements: R-2.10.1 [planned], R-2.10.2 [planned], R-2.10.33 [implemented], R-2.10.34 [planned], R-2.10.41 [implemented]
 
 **New issue types**: `quota_exceeded`, `local_permission_denied`, `case_collision`, `disk_full`, `service_outage`, `file_too_large_for_space`.
 

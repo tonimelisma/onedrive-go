@@ -35,11 +35,12 @@ type TokenSource interface {
 // It handles request construction, authentication, retry with
 // exponential backoff, and error classification.
 type Client struct {
-	baseURL    string
-	httpClient *http.Client
-	token      TokenSource
-	logger     *slog.Logger
-	userAgent  string
+	baseURL     string
+	httpClient  *http.Client
+	token       TokenSource
+	logger      *slog.Logger
+	userAgent   string
+	retryPolicy retry.Policy
 
 	// sleepFunc is called to wait between retries. Defaults to timeSleep.
 	// Tests override this to avoid real delays.
@@ -55,7 +56,12 @@ type Client struct {
 // NewClient creates a Graph API client.
 // baseURL is typically "https://graph.microsoft.com/v1.0".
 // userAgent is sent in every request; defaults to "onedrive-go/dev" if empty.
-func NewClient(baseURL string, httpClient *http.Client, token TokenSource, logger *slog.Logger, userAgent string) *Client {
+// retryPolicy controls the retry loop — use retry.Transport for standard
+// behavior or retry.SyncTransport for single-attempt sync dispatch.
+func NewClient(
+	baseURL string, httpClient *http.Client, token TokenSource,
+	logger *slog.Logger, userAgent string, retryPolicy retry.Policy,
+) *Client {
 	if token == nil {
 		panic("graph.NewClient: token source must not be nil")
 	}
@@ -73,12 +79,13 @@ func NewClient(baseURL string, httpClient *http.Client, token TokenSource, logge
 	}
 
 	return &Client{
-		baseURL:    baseURL,
-		httpClient: httpClient,
-		token:      token,
-		logger:     logger,
-		userAgent:  userAgent,
-		sleepFunc:  timeSleep,
+		baseURL:     baseURL,
+		httpClient:  httpClient,
+		token:       token,
+		logger:      logger,
+		userAgent:   userAgent,
+		retryPolicy: retryPolicy,
+		sleepFunc:   timeSleep,
 	}
 }
 
@@ -121,7 +128,7 @@ func (c *Client) doRetry(
 				return nil, fmt.Errorf("graph: request canceled: %w", ctx.Err())
 			}
 
-			if attempt < retry.Transport.MaxAttempts {
+			if attempt < c.retryPolicy.MaxAttempts {
 				backoff := c.calcBackoff(attempt)
 				c.logger.Warn("retrying after network error",
 					slog.String("method", method),
@@ -140,7 +147,7 @@ func (c *Client) doRetry(
 				continue
 			}
 
-			return nil, fmt.Errorf("graph: %s %s failed after %d retries: %w", method, path, retry.Transport.MaxAttempts, err)
+			return nil, fmt.Errorf("graph: %s %s failed after %d retries: %w", method, path, c.retryPolicy.MaxAttempts, err)
 		}
 
 		if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
@@ -163,7 +170,7 @@ func (c *Client) doRetry(
 
 		reqID := resp.Header.Get("request-id")
 
-		if isRetryable(resp.StatusCode) && attempt < retry.Transport.MaxAttempts {
+		if isRetryable(resp.StatusCode) && attempt < c.retryPolicy.MaxAttempts {
 			backoff := c.retryBackoff(resp, attempt)
 			c.logger.Warn("retrying after HTTP error",
 				slog.String("method", method),
@@ -182,7 +189,9 @@ func (c *Client) doRetry(
 			continue
 		}
 
-		return nil, c.terminalError(method, path, resp.StatusCode, reqID, errBody, attempt)
+		retryAfter := parseRetryAfter(resp)
+
+		return nil, c.terminalError(method, path, resp.StatusCode, reqID, errBody, attempt, retryAfter)
 	}
 }
 
@@ -253,19 +262,63 @@ func (c *Client) doOnce(
 		slog.String("request_id", resp.Header.Get("request-id")),
 	)
 
+	// 401 token refresh: if the server rejects the token, try once more with
+	// a fresh token. This handles the common case where the token expires
+	// between our Token() call and the server's validation. The oauth2
+	// ReuseTokenSource underneath auto-refreshes when the cached token has
+	// expired (10-second safety margin ensures detection after HTTP RTT).
+	// This is auth lifecycle management, not transient retry — it applies
+	// even with SyncTransport (MaxAttempts: 0).
+	if resp.StatusCode == http.StatusUnauthorized {
+		newTok, tokErr := c.token.Token()
+		if tokErr == nil && newTok != tok {
+			resp.Body.Close()
+
+			c.logger.Info("retrying after 401 with refreshed token",
+				slog.String("method", method),
+				slog.String("url", url),
+			)
+
+			if err := rewindBody(body); err != nil {
+				return nil, err
+			}
+
+			req2, reqErr := http.NewRequestWithContext(ctx, method, url, body)
+			if reqErr != nil {
+				return nil, fmt.Errorf("creating retry request: %w", reqErr)
+			}
+
+			req2.Header.Set("Authorization", "Bearer "+newTok)
+			req2.Header.Set("User-Agent", c.userAgent)
+
+			if body != nil {
+				req2.Header.Set("Content-Type", "application/json")
+			}
+
+			for key, vals := range extraHeaders {
+				for _, v := range vals {
+					req2.Header.Add(key, v)
+				}
+			}
+
+			return c.httpClient.Do(req2)
+		}
+	}
+
 	return resp, nil
 }
 
 // terminalError builds a GraphError and logs the final failure.
 // Extracted from doRetry to keep the retry loop under funlen limits.
 func (c *Client) terminalError(
-	method, path string, statusCode int, reqID string, body []byte, attempt int,
+	method, path string, statusCode int, reqID string, body []byte, attempt int, retryAfter time.Duration,
 ) *GraphError {
 	graphErr := &GraphError{
 		StatusCode: statusCode,
 		RequestID:  reqID,
 		Message:    string(body),
 		Err:        classifyStatus(statusCode),
+		RetryAfter: retryAfter,
 	}
 
 	if attempt > 0 {
@@ -315,7 +368,7 @@ func (c *Client) doPreAuthRetry(
 				return nil, fmt.Errorf("graph: %s canceled: %w", desc, ctx.Err())
 			}
 
-			if attempt < retry.Transport.MaxAttempts {
+			if attempt < c.retryPolicy.MaxAttempts {
 				backoff := c.calcBackoff(attempt)
 				c.logger.Warn("retrying pre-auth request after network error",
 					slog.String("desc", desc),
@@ -333,7 +386,7 @@ func (c *Client) doPreAuthRetry(
 				continue
 			}
 
-			return nil, fmt.Errorf("graph: %s failed after %d retries: %w", desc, retry.Transport.MaxAttempts, err)
+			return nil, fmt.Errorf("graph: %s failed after %d retries: %w", desc, c.retryPolicy.MaxAttempts, err)
 		}
 
 		if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
@@ -349,7 +402,7 @@ func (c *Client) doPreAuthRetry(
 
 		reqID := resp.Header.Get("request-id")
 
-		if isRetryable(resp.StatusCode) && attempt < retry.Transport.MaxAttempts {
+		if isRetryable(resp.StatusCode) && attempt < c.retryPolicy.MaxAttempts {
 			backoff := c.retryBackoff(resp, attempt)
 			c.logger.Warn("retrying pre-auth request after HTTP error",
 				slog.String("desc", desc),
@@ -367,20 +420,23 @@ func (c *Client) doPreAuthRetry(
 			continue
 		}
 
-		return nil, c.preAuthTerminalError(desc, resp.StatusCode, reqID, errBody, attempt)
+		retryAfter := parseRetryAfter(resp)
+
+		return nil, c.preAuthTerminalError(desc, resp.StatusCode, reqID, errBody, attempt, retryAfter)
 	}
 }
 
 // preAuthTerminalError builds a GraphError and logs the final failure for pre-auth URLs.
 // Mirrors terminalError but uses desc instead of method+path.
 func (c *Client) preAuthTerminalError(
-	desc string, statusCode int, reqID string, body []byte, attempt int,
+	desc string, statusCode int, reqID string, body []byte, attempt int, retryAfter time.Duration,
 ) *GraphError {
 	graphErr := &GraphError{
 		StatusCode: statusCode,
 		RequestID:  reqID,
 		Message:    string(body),
 		Err:        classifyStatus(statusCode),
+		RetryAfter: retryAfter,
 	}
 
 	if attempt > 0 {
@@ -424,10 +480,30 @@ func (c *Client) retryBackoff(resp *http.Response, attempt int) time.Duration {
 	return c.calcBackoff(attempt)
 }
 
-// calcBackoff computes exponential backoff with ±25% jitter using the
-// unified retry.Transport policy.
+// calcBackoff computes exponential backoff using the client's retry policy.
 func (c *Client) calcBackoff(attempt int) time.Duration {
-	return retry.Transport.Delay(attempt)
+	return c.retryPolicy.Delay(attempt)
+}
+
+// parseRetryAfter extracts the Retry-After header from 429 and 503 responses
+// and returns it as a time.Duration. Returns 0 when the header is absent,
+// unparseable, or the status code is not 429/503.
+func parseRetryAfter(resp *http.Response) time.Duration {
+	if resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode != http.StatusServiceUnavailable {
+		return 0
+	}
+
+	ra := resp.Header.Get("Retry-After")
+	if ra == "" {
+		return 0
+	}
+
+	seconds, err := strconv.Atoi(ra)
+	if err != nil || seconds <= 0 {
+		return 0
+	}
+
+	return time.Duration(seconds) * time.Second
 }
 
 // rewindBody seeks an io.Reader back to offset 0 if it implements io.Seeker.

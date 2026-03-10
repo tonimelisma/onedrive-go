@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 )
 
 // Sentinel errors for HTTP status code classification.
@@ -32,6 +33,10 @@ type GraphError struct {
 	RequestID  string
 	Message    string
 	Err        error // sentinel, for errors.Is()
+	// RetryAfter is the server-mandated wait duration from the Retry-After
+	// header on 429/503 responses. Zero when absent or unparseable. The engine
+	// uses this for scope-based backoff instead of computing its own delay.
+	RetryAfter time.Duration
 }
 
 func (e *GraphError) Error() string {

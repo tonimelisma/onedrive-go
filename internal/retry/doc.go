@@ -1,7 +1,7 @@
-// Package retry provides unified retry policies, stateful backoff, and circuit
-// breaker for the onedrive-go sync engine.
+// Package retry provides unified retry policies and stateful backoff for the
+// onedrive-go sync engine.
 //
-// The package consolidates six independent retry/backoff implementations into a
+// The package consolidates independent retry/backoff implementations into a
 // single set of primitives:
 //
 //   - [Policy] defines an immutable exponential backoff configuration (base delay,
@@ -11,14 +11,9 @@
 //   - [Backoff] wraps a Policy with mutable state for long-running loops (observer
 //     watch loops) that need to track consecutive errors across iterations.
 //
-//   - [CircuitBreaker] is available as a library primitive for threshold-based
-//     failure detection. Not wired into the HTTP client at runtime — the
-//     account-wide throttle gate (429 Retry-After) handles rate limiting on the
-//     hot path.
-//
 // # Named Policies
 //
-// Six named policies preserve exact behavior from their original implementations:
+// Named policies preserve exact behavior from their original implementations:
 //
 //   - [Transport]: HTTP transport retries (graph/client.go) — 5 attempts, 1s-60s.
 //   - [DriveDiscovery]: Transient 403 retry during drive enumeration — 3 attempts.
