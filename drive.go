@@ -61,7 +61,10 @@ drives discovered from your accounts (personal, business, SharePoint).
 SharePoint discovery is limited to the first 10 sites by default.
 Use --all to show all discoverable drives, or 'drive search' for
 targeted SharePoint queries.`,
-		RunE: runDriveList,
+		// skipConfig: drive list loads config leniently itself (R-4.8.4) —
+		// Phase 2 strict loading must not run.
+		Annotations: map[string]string{skipConfigAnnotation: "true"},
+		RunE:        runDriveList,
 	}
 
 	cmd.Flags().Bool("all", false, "show all discoverable drives (remove SharePoint site cap)")
@@ -1177,8 +1180,11 @@ Use --account to restrict the search to a specific business account.
 Examples:
   onedrive-go drive search marketing
   onedrive-go drive search "project docs" --account user@contoso.com`,
-		RunE: runDriveSearch,
-		Args: cobra.ExactArgs(1),
+		// skipConfig: drive search loads config leniently itself —
+		// Phase 2 strict loading must not run.
+		Annotations: map[string]string{skipConfigAnnotation: "true"},
+		RunE:        runDriveSearch,
+		Args:        cobra.ExactArgs(1),
 	}
 }
 

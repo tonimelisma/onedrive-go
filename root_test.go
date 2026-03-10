@@ -281,8 +281,10 @@ func TestAnnotationBasedSkipConfig(t *testing.T) {
 		{"whoami"},
 		{"status"},
 		{"drive"},
+		{"drive", "list"},
 		{"drive", "add"},
 		{"drive", "remove"},
+		{"drive", "search"},
 		{"sync"},
 	}
 

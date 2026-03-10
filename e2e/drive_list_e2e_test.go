@@ -86,27 +86,29 @@ func TestE2E_DriveList_JSON(t *testing.T) {
 }
 
 // Validates: R-3.3.2
-// TestE2E_DriveList_NoAccounts verifies that `drive list` reports an
-// actionable error when no accounts/tokens are present.
+// TestE2E_DriveList_NoAccounts verifies that `drive list` shows the
+// empty-state message when no accounts/tokens are present.
 func TestE2E_DriveList_NoAccounts(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
 	cfgPath, env := writeSyncConfigNoDrive(t)
 
-	_, stderr, err := runCLICore(t, cfgPath, env, "", "drive", "list")
-	require.Error(t, err, "drive list should fail when no accounts are present")
+	stdout, _, err := runCLICore(t, cfgPath, env, "", "drive", "list")
+	require.NoError(t, err, "drive list should succeed even with no accounts\nstdout: %s", stdout)
 
-	assert.Contains(t, stderr, "no accounts configured",
-		"should report no accounts configured")
-	assert.Contains(t, stderr, "login",
+	assert.Contains(t, stdout, "No drives configured",
+		"should show the no-accounts guidance message")
+	assert.Contains(t, stdout, "login",
 		"should guide user to run login")
+	assert.NotContains(t, stdout, "Configured drives:",
+		"should NOT show configured drives header when there are none")
 }
 
 // Validates: R-3.3.2
-// TestE2E_DriveList_AccountsNoDrives verifies that `drive list` reports
-// an actionable error when tokens are present but no drive sections are
-// configured — the CLI currently requires at least one configured drive.
+// TestE2E_DriveList_AccountsNoDrives verifies that `drive list` shows
+// available drives discovered from the network when tokens are present
+// but no drive sections are configured.
 func TestE2E_DriveList_AccountsNoDrives(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
@@ -127,13 +129,20 @@ func TestE2E_DriveList_AccountsNoDrives(t *testing.T) {
 		"HOME":          perTestHome,
 	}
 
-	_, stderr, err := runCLICore(t, cfgPath, env, "", "drive", "list")
-	require.Error(t, err, "drive list should fail when no drives are configured")
+	stdout, _, err := runCLICore(t, cfgPath, env, "", "drive", "list")
+	require.NoError(t, err, "drive list should succeed\nstdout: %s", stdout)
 
-	assert.Contains(t, stderr, "no drives configured",
-		"should report no drives configured")
-	assert.Contains(t, stderr, "drive add",
-		"should guide user to add a drive")
+	// No configured drives section.
+	assert.NotContains(t, stdout, "Configured drives:",
+		"should not show configured drives header")
+
+	// Available drives should be discovered from the network.
+	assert.Contains(t, stdout, "Available drives (not configured):",
+		"should show available drives discovered from tokens")
+
+	// Footer with add command hint.
+	assert.Contains(t, stdout, "drive add",
+		"should show footer with add command hint")
 }
 
 // Validates: R-3.3.2
@@ -159,11 +168,10 @@ func TestE2E_DriveList_ConfiguredNoSyncDir(t *testing.T) {
 }
 
 // Validates: R-4.8.4
-// TestE2E_DriveList_ConfigRejectsUnknownKeys verifies that `drive list`
-// fails with a clear error when the config file contains unknown keys.
-// The CLI strictly validates config to prevent typos from causing silent
-// misconfiguration.
-func TestE2E_DriveList_ConfigRejectsUnknownKeys(t *testing.T) {
+// TestE2E_DriveList_ConfigTolerance verifies that `drive list` succeeds
+// (exit 0) even when the config file contains unknown keys. Informational
+// commands use lenient config loading that collects errors as warnings.
+func TestE2E_DriveList_ConfigTolerance(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
@@ -177,7 +185,7 @@ func TestE2E_DriveList_ConfigRejectsUnknownKeys(t *testing.T) {
 	require.NoError(t, os.MkdirAll(perTestDataDir, 0o755))
 	copyTokenFile(t, testDataDir, perTestDataDir)
 
-	content := fmt.Sprintf("unknown_global_key = \"should cause error\"\n\n[%q]\nsync_dir = %q\n", drive, syncDir)
+	content := fmt.Sprintf("unknown_global_key = \"should warn not crash\"\n\n[%q]\nsync_dir = %q\n", drive, syncDir)
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o644))
 
@@ -186,9 +194,9 @@ func TestE2E_DriveList_ConfigRejectsUnknownKeys(t *testing.T) {
 		"HOME":          perTestHome,
 	}
 
-	_, stderr, err := runCLICore(t, cfgPath, env, "", "drive", "list")
-	require.Error(t, err, "drive list should fail with unknown config key")
+	stdout, _, err := runCLICore(t, cfgPath, env, "", "drive", "list")
+	require.NoError(t, err, "drive list should succeed despite unknown config key\nstdout: %s", stdout)
 
-	assert.Contains(t, stderr, "unknown config key",
-		"error should mention the unknown config key")
+	assert.Contains(t, stdout, "Configured drives:",
+		"should show configured drives header despite unknown config key")
 }
