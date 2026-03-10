@@ -9,6 +9,7 @@ Authentication, account management, drive types, and shared drive support.
 - R-3.1.3: When the user runs `logout`, the system shall remove the authentication token and config sections, preserving state databases, account profiles, and drive metadata. [verified]
 - R-3.1.4: When `--purge` is passed with logout, the system shall also delete state databases, account profiles, and drive metadata. `--purge` shall work after a prior non-purge logout. [verified]
 - R-3.1.5: When the user runs `whoami`, the system shall display authenticated accounts and logged-out accounts whose account profile files remain (not yet purged). [verified]
+- R-3.1.6: When `--json` is passed, `whoami` shall output structured JSON with user info, drives, and logged-out accounts. [verified]
 
 ## R-3.2 Drive Types [verified]
 
@@ -25,6 +26,8 @@ The system shall support all four drive types:
 - R-3.3.2: When the user runs `drive add`, the system shall add a SharePoint library or shared folder. [verified]
 - R-3.3.3: When the user runs `drive remove`, the system shall remove the drive config section. [verified]
 - R-3.3.4: When the user runs `drive search`, the system shall search SharePoint sites by name. [verified]
+- R-3.3.5: When `--json` is passed, `drive list` shall output structured JSON with configured and available drive arrays. [verified]
+- R-3.3.6: When `--json` is passed, `drive search` shall output structured JSON with results array. [verified]
 
 ## R-3.4 Multi-Account [verified]
 

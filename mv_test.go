@@ -231,3 +231,22 @@ func TestMvJSONOutput_Fields(t *testing.T) {
 	assert.Contains(t, raw, "id")
 	assert.Len(t, raw, 3)
 }
+
+// Validates: R-1.7.1
+func TestPrintMvJSON(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	err := printMvJSON(&buf, mvJSONOutput{
+		Source:      "/docs/report.pdf",
+		Destination: "/archive/report.pdf",
+		ID:          "item-456",
+	})
+	require.NoError(t, err)
+
+	var decoded mvJSONOutput
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &decoded))
+	assert.Equal(t, "/docs/report.pdf", decoded.Source)
+	assert.Equal(t, "/archive/report.pdf", decoded.Destination)
+	assert.Equal(t, "item-456", decoded.ID)
+}

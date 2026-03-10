@@ -2,7 +2,7 @@
 
 GOVERNS: main.go, root.go, format.go, signal.go, pidfile.go, auth.go, ls.go, rm.go, mkdir.go, mv.go, cp.go, stat.go, pause.go, resume.go, recycle_bin.go, internal/logfile/logfile.go
 
-Implements: R-1 [implemented], R-3.1 [verified], R-4.7 [verified], R-1.9 [verified], R-2.3.7 [planned], R-2.3.8 [planned], R-2.3.9 [planned], R-6.6.11 [planned]
+Implements: R-1 [implemented], R-3.1 [verified], R-4.7 [verified], R-1.9 [verified], R-1.2.4 [verified], R-1.3.4 [verified], R-1.4.3 [verified], R-1.5.1 [verified], R-1.6.1 [verified], R-1.7.1 [verified], R-1.8.1 [verified], R-1.9.4 [verified], R-3.1.6 [verified], R-3.3.5 [verified], R-3.3.6 [verified], R-2.3.10 [verified], R-2.7.1 [verified], R-2.3.7 [planned], R-2.3.8 [planned], R-2.3.9 [planned], R-6.6.11 [planned]
 
 ## Overview
 
@@ -44,6 +44,27 @@ Logout proceeds in two stages. A plain `logout` removes the OAuth token and conf
 ## Output Formatting (`format.go`)
 
 Two modes: human-readable (default) and JSON (`--json`). Human output to stderr, structured data to stdout.
+
+All commands with `--json` support use extracted `printXxxJSON(w io.Writer, out T) error` functions that encode via `json.NewEncoder(w)` with 2-space indent. This enables unit testing via `bytes.Buffer` roundtrip without CLI wiring.
+
+| Command | JSON function(s) | Schema type(s) |
+|---------|------------------|----------------|
+| `ls` | `formatListJSON` | `lsJSONItem` |
+| `get` | `printGetJSON`, `printGetFolderJSON` | `getJSONOutput`, `getFolderJSONOutput` |
+| `put` | `printPutJSON`, `printPutFolderJSON` | `putJSONOutput`, `putFolderJSONOutput` |
+| `rm` | `printRmJSON` | `rmJSONOutput` |
+| `mkdir` | `printMkdirJSON` | `mkdirJSONOutput` |
+| `stat` | `printStatJSON` | `statJSONOutput` |
+| `mv` | `printMvJSON` | `mvJSONOutput` |
+| `cp` | `printCpJSON` | `cpJSONOutput` |
+| `recycle-bin list` | `formatRecycleBinJSON` | `recycleBinJSONItem` |
+| `recycle-bin restore` | `printRecycleBinRestoreJSON` | `recycleBinJSONItem` |
+| `whoami` | `printWhoamiJSON` | `whoamiOutput` |
+| `drive list` | `printDriveListJSON` | `driveListJSON` |
+| `drive search` | `printDriveSearchJSON` | `driveSearchResult` |
+| `issues` | `printIssuesJSON` | `issuesJSONOutput` |
+| `verify` | `printVerifyJSON` | `verifyJSONOutput` |
+| `status` | `printStatusJSON` | `statusJSON` |
 
 ## Signal Handling (`signal.go`)
 

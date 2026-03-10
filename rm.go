@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -83,10 +84,7 @@ func runRm(cmd *cobra.Command, args []string) error {
 	}
 
 	if cc.Flags.JSON {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-
-		return enc.Encode(rmJSONOutput{Deleted: remotePath})
+		return printRmJSON(os.Stdout, rmJSONOutput{Deleted: remotePath})
 	}
 
 	if permanent {
@@ -96,4 +94,12 @@ func runRm(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// printRmJSON writes the rm command's JSON output to w.
+func printRmJSON(w io.Writer, out rmJSONOutput) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+
+	return enc.Encode(out)
 }

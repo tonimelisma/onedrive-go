@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -109,10 +110,7 @@ func runCp(cmd *cobra.Command, args []string, force bool) error {
 	}
 
 	if cc.Flags.JSON {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-
-		return enc.Encode(cpJSONOutput{
+		return printCpJSON(os.Stdout, cpJSONOutput{
 			Source:      sourcePath,
 			Destination: displayDest,
 			ID:          resourceID,
@@ -122,6 +120,14 @@ func runCp(cmd *cobra.Command, args []string, force bool) error {
 	cc.Statusf("Copied %s → %s\n", sourcePath, displayDest)
 
 	return nil
+}
+
+// printCpJSON writes the cp command's JSON output to w.
+func printCpJSON(w io.Writer, out cpJSONOutput) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+
+	return enc.Encode(out)
 }
 
 // awaitCopy polls the monitor URL until the copy completes, fails, or times out.
