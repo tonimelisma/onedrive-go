@@ -291,7 +291,10 @@ func loadAndResolve(
 
 	resolved, rawCfg, err := config.ResolveDrive(env, cli, logger)
 	if err != nil {
-		return nil, nil, fmt.Errorf("loading config: %w", err)
+		// Don't wrap — ResolveDrive already wraps LoadOrDefault errors with
+		// "loading config: ", and MatchDrive errors are user-facing messages
+		// that read better without a prefix.
+		return nil, nil, err
 	}
 
 	logger.Debug("config resolved",

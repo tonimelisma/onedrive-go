@@ -31,6 +31,17 @@ func TestE2E_DriveList_AllFlag(t *testing.T) {
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
 
+	// Text mode: both default and --all should succeed and show configured drives.
+	textDefault, _, err := runCLICore(t, cfgPath, env, "", "drive", "list")
+	require.NoError(t, err, "drive list (text) should succeed\nstdout: %s", textDefault)
+	assert.Contains(t, textDefault, "Configured drives:",
+		"text default should show configured drives header")
+
+	textAll, _, err := runCLICore(t, cfgPath, env, "", "drive", "list", "--all")
+	require.NoError(t, err, "drive list --all (text) should succeed\nstdout: %s", textAll)
+	assert.Contains(t, textAll, "Configured drives:",
+		"text --all should show configured drives header")
+
 	// Default listing (capped SharePoint discovery).
 	defaultOut, _, err := runCLICore(t, cfgPath, env, "", "drive", "list", "--json")
 	require.NoError(t, err, "drive list --json should succeed\nstdout: %s", defaultOut)
