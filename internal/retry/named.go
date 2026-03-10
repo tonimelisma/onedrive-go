@@ -19,6 +19,15 @@ var Transport = Policy{ //nolint:gochecknoglobals // named policy singleton
 	Jitter:      0.25,             //nolint:mnd // ±25% jitter fraction
 }
 
+// SyncTransport is the retry policy for sync action dispatch. Each dispatch
+// is a single HTTP request — workers never block on client-side retry backoff.
+// Failed actions return to the tracker for re-queue with engine-level backoff.
+// MaxAttempts=0 means the graph client loop condition (attempt < MaxAttempts)
+// is never satisfied, producing exactly one attempt per dispatch.
+var SyncTransport = Policy{ //nolint:gochecknoglobals // named policy singleton
+	MaxAttempts: 0,
+}
+
 // DriveDiscovery is the transient-403 retry policy for drive enumeration
 // (graph/drives.go). 3 attempts, same backoff curve as Transport.
 var DriveDiscovery = Policy{ //nolint:gochecknoglobals // named policy singleton
