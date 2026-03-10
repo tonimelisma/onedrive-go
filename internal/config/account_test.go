@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -148,6 +149,77 @@ func TestAccountCIDForDrive_SharePointReturnsBusiness(t *testing.T) {
 	cid := driveid.MustCanonicalID("sharepoint:bob@contoso.com:site:lib")
 	got := accountCIDForDrive(cid)
 	assert.Equal(t, "business:bob@contoso.com", got.String())
+}
+
+// Validates: R-3.1.5
+func TestDiscoverAccountProfilesIn_EmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	ids := discoverAccountProfilesIn(dir, slog.Default())
+	assert.Nil(t, ids)
+}
+
+// Validates: R-3.1.5
+func TestDiscoverAccountProfilesIn_OneProfile(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "account_personal_alice@outlook.com.json"),
+		[]byte(`{"profile":{"user_id":"u1"}}`), 0o600,
+	))
+
+	ids := discoverAccountProfilesIn(dir, slog.Default())
+	require.Len(t, ids, 1)
+	assert.Equal(t, "personal:alice@outlook.com", ids[0].String())
+}
+
+// Validates: R-3.1.5
+func TestDiscoverAccountProfilesIn_MultipleProfiles(t *testing.T) {
+	dir := t.TempDir()
+
+	for _, name := range []string{
+		"account_personal_charlie@outlook.com.json",
+		"account_business_alice@contoso.com.json",
+		"account_personal_bob@outlook.com.json",
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(`{}`), 0o600))
+	}
+
+	ids := discoverAccountProfilesIn(dir, slog.Default())
+	require.Len(t, ids, 3)
+	// Should be sorted alphabetically by canonical ID string.
+	assert.Equal(t, "business:alice@contoso.com", ids[0].String())
+	assert.Equal(t, "personal:bob@outlook.com", ids[1].String())
+	assert.Equal(t, "personal:charlie@outlook.com", ids[2].String())
+}
+
+// Validates: R-3.1.5
+func TestDiscoverAccountProfilesIn_IgnoresNonProfileFiles(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create account profile, token file, state DB, drive metadata — only profile should match.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "account_personal_alice@outlook.com.json"), []byte(`{}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "token_personal_alice@outlook.com.json"), []byte(`{}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "state_personal_alice@outlook.com.db"), []byte{}, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "drive_personal_alice@outlook.com.json"), []byte(`{}`), 0o600))
+
+	ids := discoverAccountProfilesIn(dir, slog.Default())
+	require.Len(t, ids, 1)
+	assert.Equal(t, "personal:alice@outlook.com", ids[0].String())
+}
+
+// Validates: R-3.1.5
+func TestDiscoverAccountProfilesIn_SkipsMalformed(t *testing.T) {
+	dir := t.TempDir()
+
+	// Malformed: no underscore between type and email, or missing email.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "account_.json"), []byte(`{}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "account_personal_.json"), []byte(`{}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "account_unknowntype_alice@outlook.com.json"), []byte(`{}`), 0o600))
+	// Valid one for contrast:
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "account_personal_alice@outlook.com.json"), []byte(`{}`), 0o600))
+
+	ids := discoverAccountProfilesIn(dir, slog.Default())
+	require.Len(t, ids, 1)
+	assert.Equal(t, "personal:alice@outlook.com", ids[0].String())
 }
 
 func TestAccountFilePath_NoSubdirectory(t *testing.T) {

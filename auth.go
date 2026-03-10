@@ -364,7 +364,7 @@ func runLogout(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Determine which account to log out.
-	account, autoErr := resolveLogoutAccount(cfg, cc.Flags.Account)
+	account, autoErr := resolveLogoutAccount(cfg, cc.Flags.Account, purge, logger)
 	if autoErr != nil {
 		return autoErr
 	}
@@ -375,8 +375,10 @@ func runLogout(cmd *cobra.Command, _ []string) error {
 }
 
 // resolveLogoutAccount determines the account email for logout. Uses the
-// account flag if provided, otherwise auto-selects when there is exactly one account.
-func resolveLogoutAccount(cfg *config.Config, accountFlag string) (string, error) {
+// account flag if provided, otherwise auto-selects when there is exactly one
+// account. When config is empty (prior logout removed config sections), falls
+// back to discovering orphaned account profiles on disk.
+func resolveLogoutAccount(cfg *config.Config, accountFlag string, purge bool, logger *slog.Logger) (string, error) {
 	if accountFlag != "" {
 		return accountFlag, nil
 	}
@@ -384,18 +386,71 @@ func resolveLogoutAccount(cfg *config.Config, accountFlag string) (string, error
 	// Collect unique account emails from configured drives.
 	accounts := uniqueAccounts(cfg)
 
-	if len(accounts) == 0 {
-		return "", fmt.Errorf("no accounts configured — nothing to log out")
-	}
-
 	if len(accounts) == 1 {
 		return accounts[0], nil
 	}
 
+	if len(accounts) > 1 {
+		return "", fmt.Errorf(
+			"multiple accounts configured — specify with --account:\n  %s",
+			strings.Join(accounts, "\n  "),
+		)
+	}
+
+	// No accounts in config — check for orphaned account profiles (logged out
+	// but not purged). This enables `logout --purge` after a prior `logout`.
+	orphanEmails := discoverOrphanedEmails(logger)
+
+	if len(orphanEmails) == 0 {
+		return "", fmt.Errorf("no accounts configured — nothing to log out")
+	}
+
+	if !purge {
+		return "", fmt.Errorf(
+			"no accounts configured, but orphaned data remains for:\n  %s\n"+
+				"run 'onedrive-go logout --purge --account <email>' to remove",
+			strings.Join(orphanEmails, "\n  "),
+		)
+	}
+
+	if len(orphanEmails) == 1 {
+		return orphanEmails[0], nil
+	}
+
 	return "", fmt.Errorf(
-		"multiple accounts configured — specify with --account:\n  %s",
-		strings.Join(accounts, "\n  "),
+		"multiple orphaned accounts — specify with --account:\n  %s",
+		strings.Join(orphanEmails, "\n  "),
 	)
+}
+
+// discoverOrphanedEmails returns unique emails from account profiles on disk
+// that lack a token file. Used by resolveLogoutAccount to find accounts that
+// were logged out but not purged.
+func discoverOrphanedEmails(logger *slog.Logger) []string {
+	profiles := config.DiscoverAccountProfiles(logger)
+
+	seen := make(map[string]bool)
+	var emails []string
+
+	for _, cid := range profiles {
+		email := cid.Email()
+		if seen[email] {
+			continue
+		}
+
+		// Check if token still exists — if so, not orphaned.
+		tokenPath := config.DriveTokenPath(cid)
+		if tokenPath != "" {
+			if _, err := os.Stat(tokenPath); err == nil {
+				continue
+			}
+		}
+
+		seen[email] = true
+		emails = append(emails, email)
+	}
+
+	return emails
 }
 
 // uniqueAccounts extracts unique account emails from all configured drives.
@@ -429,23 +484,34 @@ func executeLogout(cfg *config.Config, cfgPath, account string, purge bool, logg
 	}
 
 	tokenPath := config.DriveTokenPath(tokenCanonicalID)
-	if tokenPath == "" {
+
+	// Delete the token file. graph.Logout handles "not found" gracefully
+	// (returns nil), so this works even after a prior logout.
+	if tokenPath != "" {
+		if err := graph.Logout(tokenPath, logger); err != nil {
+			return err
+		}
+
+		fmt.Printf("Token removed for %s.\n", account)
+	} else if !purge {
 		return fmt.Errorf("cannot determine token path for account %q", account)
+	} else {
+		// Purge after prior logout — token already gone, that's fine.
+		fmt.Printf("Token already removed for %s.\n", account)
 	}
-
-	// Delete the token file.
-	if err := graph.Logout(tokenPath, logger); err != nil {
-		return err
-	}
-
-	logger.Info("logout successful", "account", account, "token_path", tokenPath)
-	fmt.Printf("Token removed for %s.\n", account)
 
 	printAffectedDrives(os.Stdout, cfg, affected)
 
 	if purge {
 		if err := purgeAccountDrives(cfgPath, affected, logger); err != nil {
 			return fmt.Errorf("purging account drives: %w", err)
+		}
+
+		// Also purge orphaned files (state DBs, drive metadata, account profiles)
+		// that may remain from a prior non-purge logout or from drives that were
+		// removed from config but left data on disk.
+		if err := purgeOrphanedFiles(account, logger); err != nil {
+			return fmt.Errorf("purging orphaned files: %w", err)
 		}
 
 		fmt.Println("Sync directories untouched — your files remain on disk.")
@@ -459,6 +525,57 @@ func executeLogout(cfg *config.Config, cfgPath, account string, purge bool, logg
 	}
 
 	return nil
+}
+
+// purgeOrphanedFiles removes state databases, drive metadata files, and
+// account profile files for the given email. Idempotent — ignores files
+// that don't exist. This handles cleanup after a prior non-purge logout
+// where config sections and tokens were removed but data files remained.
+func purgeOrphanedFiles(email string, logger *slog.Logger) error {
+	var errs []error
+
+	// Remove orphaned state databases.
+	for _, path := range config.DiscoverStateDBsForEmail(email, logger) {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			logger.Warn("failed to remove orphaned state DB", "path", path, "error", err)
+			errs = append(errs, fmt.Errorf("removing %s: %w", path, err))
+		} else if err == nil {
+			logger.Info("removed orphaned state DB", "path", path)
+			fmt.Printf("Purged orphaned state DB: %s\n", filepath.Base(path))
+		}
+	}
+
+	// Remove orphaned drive metadata files.
+	for _, path := range config.DiscoverDriveMetadataForEmail(email, logger) {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			logger.Warn("failed to remove orphaned drive metadata", "path", path, "error", err)
+			errs = append(errs, fmt.Errorf("removing %s: %w", path, err))
+		} else if err == nil {
+			logger.Info("removed orphaned drive metadata", "path", path)
+		}
+	}
+
+	// Remove account profile files. Discover actual profiles on disk rather
+	// than guessing drive types, so we handle any type that exists.
+	for _, profileCID := range config.DiscoverAccountProfiles(logger) {
+		if profileCID.Email() != email {
+			continue
+		}
+
+		profilePath := config.AccountFilePath(profileCID)
+		if profilePath == "" {
+			continue
+		}
+
+		if err := os.Remove(profilePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			logger.Warn("failed to remove account profile", "path", profilePath, "error", err)
+			errs = append(errs, fmt.Errorf("removing %s: %w", profilePath, err))
+		} else if err == nil {
+			logger.Info("removed account profile", "path", profilePath)
+		}
+	}
+
+	return errors.Join(errs...)
 }
 
 // drivesForAccount returns all canonical IDs whose email matches the given account.
@@ -511,15 +628,38 @@ func printAffectedDrives(w io.Writer, cfg *config.Config, affected []driveid.Can
 	}
 }
 
-// purgeSingleDrive removes the state database and config section for one drive.
-// Token deletion is handled separately since tokens may be shared (SharePoint).
+// purgeSingleDrive removes the state database, drive metadata, account profile,
+// and config section for one drive. Token deletion is handled separately since
+// tokens may be shared (SharePoint).
 func purgeSingleDrive(cfgPath string, canonicalID driveid.CanonicalID, logger *slog.Logger) error {
+	// Remove state database.
 	statePath := config.DriveStatePath(canonicalID)
 	if statePath != "" {
 		if err := os.Remove(statePath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			logger.Warn("failed to remove state database", "path", statePath, "error", err)
 		} else if err == nil {
 			logger.Info("removed state database", "path", statePath)
+		}
+	}
+
+	// Remove drive metadata file.
+	metaPath := config.DriveMetadataPath(canonicalID)
+	if metaPath != "" {
+		if err := os.Remove(metaPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			logger.Warn("failed to remove drive metadata", "path", metaPath, "error", err)
+		} else if err == nil {
+			logger.Info("removed drive metadata", "path", metaPath)
+		}
+	}
+
+	// Remove account profile file (only for personal/business — shared/SP
+	// don't have their own profile files).
+	profilePath := config.AccountFilePath(canonicalID)
+	if profilePath != "" {
+		if err := os.Remove(profilePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			logger.Warn("failed to remove account profile", "path", profilePath, "error", err)
+		} else if err == nil {
+			logger.Info("removed account profile", "path", profilePath)
 		}
 	}
 
@@ -568,8 +708,9 @@ func removeAccountDriveConfigs(cfgPath string, affected []driveid.CanonicalID, l
 
 // whoamiOutput is the JSON schema for `whoami --json`.
 type whoamiOutput struct {
-	User   whoamiUser    `json:"user"`
-	Drives []whoamiDrive `json:"drives"`
+	User              *whoamiUser        `json:"user,omitempty"`
+	Drives            []whoamiDrive      `json:"drives,omitempty"`
+	LoggedOutAccounts []loggedOutAccount `json:"logged_out_accounts,omitempty"`
 }
 
 type whoamiUser struct {
@@ -586,12 +727,20 @@ type whoamiDrive struct {
 	QuotaTotal int64  `json:"quota_total"`
 }
 
+// loggedOutAccount represents an account that was logged out but not purged.
+// The account profile file still exists on disk, but the token file is gone.
+type loggedOutAccount struct {
+	Email       string `json:"email"`
+	DriveType   string `json:"drive_type"`
+	DisplayName string `json:"display_name,omitempty"`
+	StateDBs    int    `json:"state_dbs"`
+}
+
 func runWhoami(cmd *cobra.Command, _ []string) error {
 	cc := mustCLIContext(cmd.Context())
 	logger := cc.Logger
 	ctx := cmd.Context()
 
-	// Delegate drive resolution to config.MatchDrive for consistent behavior.
 	cfgPath := cc.CfgPath
 
 	cfg, err := config.LoadOrDefault(cfgPath, logger)
@@ -604,66 +753,159 @@ func runWhoami(cmd *cobra.Command, _ []string) error {
 		return driveErr
 	}
 
-	cid, _, err := config.MatchDrive(cfg, driveSelector, logger)
-	if err != nil {
-		return err
+	// Try the authenticated path: match drive → fetch from Graph API.
+	user, drives, authenticatedEmail, authErr := fetchAuthenticatedAccount(
+		ctx, cfg, driveSelector, logger,
+	)
+	if authErr != nil {
+		return authErr
+	}
+
+	// Discover logged-out accounts: profile files on disk without a token file.
+	loggedOut := findLoggedOutAccounts(cfg, authenticatedEmail, logger)
+
+	// If no authenticated account and no logged-out accounts, give a helpful error.
+	if user == nil && len(loggedOut) == 0 {
+		return fmt.Errorf("not logged in — run 'onedrive-go login' first")
+	}
+
+	if cc.Flags.JSON {
+		return printWhoamiJSON(os.Stdout, user, drives, loggedOut)
+	}
+
+	printWhoamiText(os.Stdout, user, drives, loggedOut)
+
+	return nil
+}
+
+// fetchAuthenticatedAccount attempts to resolve a drive from config, load its
+// token, and fetch user/drive info from the Graph API. Returns (nil, nil, "", nil)
+// when no authenticated account is found (e.g. all logged out). Returns a
+// non-nil error only for hard failures (API errors after successful auth).
+func fetchAuthenticatedAccount(
+	ctx context.Context, cfg *config.Config, driveSelector string, logger *slog.Logger,
+) (*graph.User, []graph.Drive, string, error) {
+	cid, _, matchErr := config.MatchDrive(cfg, driveSelector, logger)
+	if matchErr != nil {
+		return nil, nil, "", nil
 	}
 
 	tokenPath := config.DriveTokenPath(cid)
 	if tokenPath == "" {
-		return fmt.Errorf("cannot determine token path for drive %q", cid.String())
+		return nil, nil, "", nil
 	}
 
 	logger.Debug("whoami", "drive", cid.String(), "token_path", tokenPath)
 
-	ts, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
-	if err != nil {
-		if errors.Is(err, graph.ErrNotLoggedIn) {
-			return fmt.Errorf("not logged in — run 'onedrive-go login' first")
+	ts, tsErr := graph.TokenSourceFromPath(ctx, tokenPath, logger)
+	if tsErr != nil {
+		if errors.Is(tsErr, graph.ErrNotLoggedIn) {
+			return nil, nil, "", nil
 		}
 
-		return err
+		return nil, nil, "", tsErr
 	}
 
 	client := newGraphClient(ts, logger)
 
 	user, err := client.Me(ctx)
 	if err != nil {
-		return fmt.Errorf("fetching user profile: %w", err)
+		return nil, nil, "", fmt.Errorf("fetching user profile: %w", err)
 	}
 
 	drives, err := client.Drives(ctx)
 	if err != nil {
-		return fmt.Errorf("listing drives: %w", err)
+		return nil, nil, "", fmt.Errorf("listing drives: %w", err)
 	}
 
-	if cc.Flags.JSON {
-		return printWhoamiJSON(os.Stdout, user, drives)
-	}
-
-	printWhoamiText(os.Stdout, user, drives)
-
-	return nil
+	return user, drives, user.Email, nil
 }
 
-func printWhoamiJSON(w io.Writer, user *graph.User, drives []graph.Drive) error {
+// findLoggedOutAccounts discovers account profiles on disk that lack a token
+// file (i.e. logged out but not purged). Accounts still in config or matching
+// the authenticated email are excluded.
+func findLoggedOutAccounts(cfg *config.Config, authenticatedEmail string, logger *slog.Logger) []loggedOutAccount {
+	profiles := config.DiscoverAccountProfiles(logger)
+	if len(profiles) == 0 {
+		return nil
+	}
+
+	// Build set of emails that are still authenticated (in config).
+	configEmails := make(map[string]bool)
+	for id := range cfg.Drives {
+		configEmails[id.Email()] = true
+	}
+
+	if authenticatedEmail != "" {
+		configEmails[authenticatedEmail] = true
+	}
+
+	var result []loggedOutAccount
+
+	for _, profileCID := range profiles {
+		email := profileCID.Email()
+
+		// Skip if this account is still in config (authenticated).
+		if configEmails[email] {
+			continue
+		}
+
+		// Check if token file exists — if it does, this isn't a logged-out account.
+		tokenPath := config.DriveTokenPath(profileCID)
+		if tokenPath != "" {
+			if _, statErr := os.Stat(tokenPath); statErr == nil {
+				continue
+			}
+		}
+
+		// Load profile for display name.
+		profile, profileErr := config.LoadAccountProfile(profileCID)
+		if profileErr != nil {
+			logger.Debug("could not load account profile for logged-out display",
+				"canonical_id", profileCID.String(), "error", profileErr)
+		}
+
+		var displayName string
+		if profile != nil {
+			displayName = profile.DisplayName
+		}
+
+		// Count state DBs for this email.
+		stateDBs := config.DiscoverStateDBsForEmail(email, logger)
+
+		result = append(result, loggedOutAccount{
+			Email:       email,
+			DriveType:   profileCID.DriveType(),
+			DisplayName: displayName,
+			StateDBs:    len(stateDBs),
+		})
+	}
+
+	return result
+}
+
+func printWhoamiJSON(w io.Writer, user *graph.User, drives []graph.Drive, loggedOut []loggedOutAccount) error {
 	out := whoamiOutput{
-		User: whoamiUser{
+		LoggedOutAccounts: loggedOut,
+	}
+
+	if user != nil {
+		out.User = &whoamiUser{
 			ID:          user.ID,
 			DisplayName: user.DisplayName,
 			Email:       user.Email,
-		},
-		Drives: make([]whoamiDrive, 0, len(drives)),
-	}
+		}
+		out.Drives = make([]whoamiDrive, 0, len(drives))
 
-	for i := range drives {
-		out.Drives = append(out.Drives, whoamiDrive{
-			ID:         drives[i].ID.String(),
-			Name:       drives[i].Name,
-			DriveType:  drives[i].DriveType,
-			QuotaUsed:  drives[i].QuotaUsed,
-			QuotaTotal: drives[i].QuotaTotal,
-		})
+		for i := range drives {
+			out.Drives = append(out.Drives, whoamiDrive{
+				ID:         drives[i].ID.String(),
+				Name:       drives[i].Name,
+				DriveType:  drives[i].DriveType,
+				QuotaUsed:  drives[i].QuotaUsed,
+				QuotaTotal: drives[i].QuotaTotal,
+			})
+		}
 	}
 
 	enc := json.NewEncoder(w)
@@ -676,13 +918,46 @@ func printWhoamiJSON(w io.Writer, user *graph.User, drives []graph.Drive) error 
 	return nil
 }
 
-func printWhoamiText(w io.Writer, user *graph.User, drives []graph.Drive) {
-	fmt.Fprintf(w, "User:  %s (%s)\n", user.DisplayName, user.Email)
-	fmt.Fprintf(w, "ID:    %s\n", user.ID)
+func printWhoamiText(w io.Writer, user *graph.User, drives []graph.Drive, loggedOut []loggedOutAccount) {
+	if user != nil {
+		fmt.Fprintf(w, "User:  %s (%s)\n", user.DisplayName, user.Email)
+		fmt.Fprintf(w, "ID:    %s\n", user.ID)
 
-	for i := range drives {
-		fmt.Fprintf(w, "\nDrive: %s (%s)\n", drives[i].Name, drives[i].DriveType)
-		fmt.Fprintf(w, "  ID:    %s\n", drives[i].ID)
-		fmt.Fprintf(w, "  Quota: %s / %s\n", formatSize(drives[i].QuotaUsed), formatSize(drives[i].QuotaTotal))
+		for i := range drives {
+			fmt.Fprintf(w, "\nDrive: %s (%s)\n", drives[i].Name, drives[i].DriveType)
+			fmt.Fprintf(w, "  ID:    %s\n", drives[i].ID)
+			fmt.Fprintf(w, "  Quota: %s / %s\n", formatSize(drives[i].QuotaUsed), formatSize(drives[i].QuotaTotal))
+		}
 	}
+
+	printLoggedOutAccountsText(w, loggedOut)
+}
+
+// printLoggedOutAccountsText prints the logged-out accounts section in
+// human-readable text format. Shows each account's email, display name,
+// and how many state DBs remain.
+func printLoggedOutAccountsText(w io.Writer, loggedOut []loggedOutAccount) {
+	if len(loggedOut) == 0 {
+		return
+	}
+
+	fmt.Fprintln(w, "\nLogged out accounts:")
+
+	for _, acct := range loggedOut {
+		nameLabel := acct.Email
+		if acct.DisplayName != "" {
+			nameLabel = fmt.Sprintf("%s (%s)", acct.DisplayName, acct.Email)
+		}
+
+		dbLabel := "no state databases"
+		if acct.StateDBs == 1 {
+			dbLabel = "1 state database"
+		} else if acct.StateDBs > 1 {
+			dbLabel = fmt.Sprintf("%d state databases", acct.StateDBs)
+		}
+
+		fmt.Fprintf(w, "  %s — %s, %s\n", nameLabel, acct.DriveType, dbLabel)
+	}
+
+	fmt.Fprintln(w, "  Run 'onedrive-go logout --purge' to remove remaining data.")
 }

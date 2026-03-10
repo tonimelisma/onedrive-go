@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -137,6 +138,24 @@ func TestSaveDriveMetadata_CreatesDirectory(t *testing.T) {
 	path := DriveMetadataPath(cid)
 	_, statErr := os.Stat(path)
 	assert.NoError(t, statErr)
+}
+
+// Validates: R-3.1.4
+func TestDiscoverDriveMetadataForEmailIn_MatchesEmail(t *testing.T) {
+	dir := t.TempDir()
+
+	// Drive metadata for alice — personal and SharePoint.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "drive_personal_alice@outlook.com.json"), []byte(`{}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "drive_sharepoint_alice@outlook.com_marketing_Docs.json"), []byte(`{}`), 0o600))
+	// Different account — should NOT match.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "drive_personal_bob@outlook.com.json"), []byte(`{}`), 0o600))
+	// Not a drive metadata file — should NOT match.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "account_personal_alice@outlook.com.json"), []byte(`{}`), 0o600))
+
+	paths := discoverDriveMetadataForEmailIn(dir, "alice@outlook.com", slog.Default())
+	require.Len(t, paths, 2)
+	assert.Contains(t, paths, filepath.Join(dir, "drive_personal_alice@outlook.com.json"))
+	assert.Contains(t, paths, filepath.Join(dir, "drive_sharepoint_alice@outlook.com_marketing_Docs.json"))
 }
 
 func TestDriveMetadataPath_NoSubdirectory(t *testing.T) {

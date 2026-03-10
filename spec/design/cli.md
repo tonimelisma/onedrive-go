@@ -31,6 +31,16 @@ Implements: R-6.2.8 [verified]
 | `drive` | `drive.go` | Drive management (list/add/remove/search) |
 | `recycle-bin` | `recycle_bin.go` | Recycle bin operations (list/restore/empty) |
 
+## Logout Lifecycle and Whoami Logged-Out Display
+
+Implements: R-3.1.3 [verified], R-3.1.4 [verified], R-3.1.5 [verified]
+
+Logout proceeds in two stages. A plain `logout` removes the OAuth token and config sections but preserves state databases, account profiles, and drive metadata — enabling re-authentication without a full re-sync. A subsequent `logout --purge` removes all remaining data files.
+
+**Orphan detection**: After a plain logout, the account is no longer in config but its `account_*.json` profile file remains on disk. `whoami` discovers these orphaned profiles via `config.DiscoverAccountProfiles()`, filters out accounts still in config, and checks each for a missing token file. Logged-out accounts are displayed in both text and JSON output with display name, drive type, and state DB count.
+
+**Purge after prior logout**: `resolveLogoutAccount()` accepts `purge` and `logger` parameters. When config has zero accounts, it falls back to `discoverOrphanedEmails()` which scans account profile files. With `--purge`, it auto-selects a single orphan or requires `--account` for multiple. `executeLogout()` calls `purgeOrphanedFiles()` which removes state DBs (via `DiscoverStateDBsForEmail`), drive metadata (via `DiscoverDriveMetadataForEmail`), and account profiles for both personal and business CID variants.
+
 ## Output Formatting (`format.go`)
 
 Two modes: human-readable (default) and JSON (`--json`). Human output to stderr, structured data to stdout.

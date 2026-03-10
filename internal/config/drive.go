@@ -1,7 +1,6 @@
 package config
 
 import (
-	"cmp"
 	"fmt"
 	"log/slog"
 	"os"
@@ -341,58 +340,7 @@ func DiscoverTokens(logger *slog.Logger) []driveid.CanonicalID {
 // discoverTokensIn scans dir for token files and extracts canonical IDs.
 // Files that don't match the token naming convention are silently skipped.
 func discoverTokensIn(dir string, logger *slog.Logger) []driveid.CanonicalID {
-	if dir == "" {
-		return nil
-	}
-
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		logger.Debug("cannot read data directory for token discovery", "dir", dir, "error", err)
-
-		return nil
-	}
-
-	var ids []driveid.CanonicalID
-
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-
-		name := e.Name()
-		if !strings.HasPrefix(name, "token_") || !strings.HasSuffix(name, ".json") {
-			continue
-		}
-
-		// Strip "token_" prefix and ".json" suffix, then split on first "_"
-		// to recover {type}:{email}. Emails may contain underscores, so only
-		// the first underscore separates type from email.
-		inner := strings.TrimPrefix(name, "token_")
-		inner = strings.TrimSuffix(inner, ".json")
-
-		parts := strings.SplitN(inner, "_", 2)
-		if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
-			logger.Debug("skipping malformed token filename", "name", name)
-
-			continue
-		}
-
-		cid, err := driveid.Construct(parts[0], parts[1])
-		if err != nil {
-			logger.Debug("skipping token with invalid drive type", "name", name, "error", err)
-
-			continue
-		}
-
-		ids = append(ids, cid)
-	}
-
-	slices.SortFunc(ids, func(a, b driveid.CanonicalID) int {
-		return cmp.Compare(a.String(), b.String())
-	})
-	logger.Debug("token discovery complete", "dir", dir, "count", len(ids))
-
-	return ids
+	return discoverCIDFiles(dir, "token_", logger)
 }
 
 // DriveStatePath returns the state DB path for a canonical drive ID.
@@ -410,4 +358,17 @@ func DriveStatePath(canonicalID driveid.CanonicalID) string {
 	sanitized := strings.ReplaceAll(canonicalID.String(), ":", "_")
 
 	return filepath.Join(dataDir, "state_"+sanitized+".db")
+}
+
+// DiscoverStateDBsForEmail scans the data directory for state database files
+// belonging to the given email address. Returns full file paths. The email
+// match uses an underscore boundary ("_email") to prevent substring collisions
+// (e.g. "a@b.com" won't match "ba@b.com").
+func DiscoverStateDBsForEmail(email string, logger *slog.Logger) []string {
+	return discoverStateDBsForEmailIn(DefaultDataDir(), email, logger)
+}
+
+// discoverStateDBsForEmailIn scans dir for state DB files belonging to email.
+func discoverStateDBsForEmailIn(dir, email string, logger *slog.Logger) []string {
+	return discoverFilesForEmail(dir, "state_", ".db", email, logger)
 }

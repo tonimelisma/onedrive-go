@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -681,6 +682,42 @@ func TestCollectOtherSyncDirs_NoFallback(t *testing.T) {
 	dirs := CollectOtherSyncDirs(cfg, selfID, testLogger(t))
 	// Without account profile, business defaults to "~/OneDrive - Business" via BaseSyncDir.
 	assert.Contains(t, dirs, "~/OneDrive - Business")
+}
+
+// Validates: R-3.1.4
+func TestDiscoverStateDBsForEmailIn_EmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	paths := discoverStateDBsForEmailIn(dir, "alice@outlook.com", slog.Default())
+	assert.Nil(t, paths)
+}
+
+// Validates: R-3.1.4
+func TestDiscoverStateDBsForEmailIn_MatchesEmail(t *testing.T) {
+	dir := t.TempDir()
+
+	// Personal and SharePoint state DBs for alice — both should match.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "state_personal_alice@outlook.com.db"), []byte{}, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "state_sharepoint_alice@outlook.com_marketing_Docs.db"), []byte{}, 0o600))
+	// Different account — should NOT match.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "state_personal_bob@outlook.com.db"), []byte{}, 0o600))
+
+	paths := discoverStateDBsForEmailIn(dir, "alice@outlook.com", slog.Default())
+	require.Len(t, paths, 2)
+	assert.Contains(t, paths, filepath.Join(dir, "state_personal_alice@outlook.com.db"))
+	assert.Contains(t, paths, filepath.Join(dir, "state_sharepoint_alice@outlook.com_marketing_Docs.db"))
+}
+
+// Validates: R-3.1.4
+func TestDiscoverStateDBsForEmailIn_NoSubstringCollision(t *testing.T) {
+	dir := t.TempDir()
+
+	// "a@b.com" should NOT match "ba@b.com".
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "state_personal_ba@b.com.db"), []byte{}, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "state_personal_a@b.com.db"), []byte{}, 0o600))
+
+	paths := discoverStateDBsForEmailIn(dir, "a@b.com", slog.Default())
+	require.Len(t, paths, 1)
+	assert.Contains(t, paths, filepath.Join(dir, "state_personal_a@b.com.db"))
 }
 
 // --- test helpers ---

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -157,4 +158,19 @@ func SaveAccountProfile(cid driveid.CanonicalID, profile *AccountProfile) error 
 	succeeded = true
 
 	return nil
+}
+
+// DiscoverAccountProfiles scans the data directory for account profile files
+// and returns the canonical IDs they represent. Account files follow the naming
+// convention: account_{type}_{email}.json. This is the profile-file counterpart
+// of DiscoverTokens — it finds accounts that may no longer have tokens (logged
+// out but not purged).
+func DiscoverAccountProfiles(logger *slog.Logger) []driveid.CanonicalID {
+	return discoverAccountProfilesIn(DefaultDataDir(), logger)
+}
+
+// discoverAccountProfilesIn scans dir for account profile files and extracts
+// canonical IDs. Files that don't match the naming convention are silently skipped.
+func discoverAccountProfilesIn(dir string, logger *slog.Logger) []driveid.CanonicalID {
+	return discoverCIDFiles(dir, "account_", logger)
 }

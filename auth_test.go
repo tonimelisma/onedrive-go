@@ -164,7 +164,7 @@ func TestPrintWhoamiText(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printWhoamiText(&buf, user, drives)
+	printWhoamiText(&buf, user, drives, nil)
 	output := buf.String()
 
 	assert.Contains(t, output, "Test User")
@@ -182,4 +182,161 @@ func TestPrintLoginSuccess_DoesNotPanic(t *testing.T) {
 	printLoginSuccess(&buf, "business", "alice@contoso.com", "Contoso Ltd", "business:alice@contoso.com", "~/OneDrive - Contoso")
 	printLoginSuccess(&buf, "business", "bob@example.com", "", "business:bob@example.com", "~/OneDrive - Business")
 	printLoginSuccess(&buf, "documentLibrary", "carol@example.com", "", "documentLibrary:carol@example.com", "~/SP")
+}
+
+// Validates: R-3.1.4
+func TestResolveLogoutAccount_FallbackToProfiles(t *testing.T) {
+	// When config is empty but orphaned account profiles exist, --purge should
+	// auto-select the single orphan.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	dataDir := config.DefaultDataDir()
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	// Create an orphaned account profile (no token).
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dataDir, "account_personal_alice@outlook.com.json"),
+		[]byte(`{"profile":{"user_id":"u1","display_name":"Alice"}}`), 0o600,
+	))
+
+	cfg := config.DefaultConfig()
+	logger := slog.Default()
+
+	// With purge=true, should auto-select the single orphaned account.
+	email, err := resolveLogoutAccount(cfg, "", true, logger)
+	require.NoError(t, err)
+	assert.Equal(t, "alice@outlook.com", email)
+}
+
+// Validates: R-3.1.4
+func TestResolveLogoutAccount_NoPurgeShowsOrphans(t *testing.T) {
+	// Without --purge, should show an error listing orphaned accounts.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	dataDir := config.DefaultDataDir()
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dataDir, "account_personal_alice@outlook.com.json"),
+		[]byte(`{"profile":{"user_id":"u1"}}`), 0o600,
+	))
+
+	cfg := config.DefaultConfig()
+	logger := slog.Default()
+
+	_, err := resolveLogoutAccount(cfg, "", false, logger)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "orphaned data remains for")
+	assert.Contains(t, err.Error(), "alice@outlook.com")
+}
+
+// Validates: R-3.1.5
+func TestFindLoggedOutAccounts(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	dataDir := config.DefaultDataDir()
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	// Account profile without token → logged out.
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dataDir, "account_personal_alice@outlook.com.json"),
+		[]byte(`{"profile":{"user_id":"u1","display_name":"Alice Smith"}}`), 0o600,
+	))
+
+	// Account profile WITH token → still authenticated.
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dataDir, "account_business_bob@contoso.com.json"),
+		[]byte(`{"profile":{"user_id":"u2","display_name":"Bob Jones"}}`), 0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dataDir, "token_business_bob@contoso.com.json"),
+		[]byte(`{}`), 0o600,
+	))
+
+	// Also create a state DB for alice to verify the count.
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dataDir, "state_personal_alice@outlook.com.db"),
+		[]byte{}, 0o600,
+	))
+
+	cfg := config.DefaultConfig()
+	logger := slog.Default()
+
+	loggedOut := findLoggedOutAccounts(cfg, "", logger)
+	require.Len(t, loggedOut, 1)
+	assert.Equal(t, "alice@outlook.com", loggedOut[0].Email)
+	assert.Equal(t, "personal", loggedOut[0].DriveType)
+	assert.Equal(t, "Alice Smith", loggedOut[0].DisplayName)
+	assert.Equal(t, 1, loggedOut[0].StateDBs)
+}
+
+// Validates: R-3.1.4
+func TestPurgeOrphanedFiles(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	dataDir := config.DefaultDataDir()
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	// Create orphaned files for alice.
+	files := []string{
+		"state_personal_alice@outlook.com.db",
+		"drive_personal_alice@outlook.com.json",
+		"account_personal_alice@outlook.com.json",
+	}
+	for _, f := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(dataDir, f), []byte(`{}`), 0o600))
+	}
+
+	// Also create a file for bob — should NOT be removed.
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dataDir, "state_personal_bob@outlook.com.db"),
+		[]byte{}, 0o600,
+	))
+
+	logger := slog.Default()
+	err := purgeOrphanedFiles("alice@outlook.com", logger)
+	require.NoError(t, err)
+
+	// Alice's files should be gone.
+	for _, f := range files {
+		_, statErr := os.Stat(filepath.Join(dataDir, f))
+		assert.True(t, os.IsNotExist(statErr), "expected %s to be deleted", f)
+	}
+
+	// Bob's file should remain.
+	_, statErr := os.Stat(filepath.Join(dataDir, "state_personal_bob@outlook.com.db"))
+	assert.NoError(t, statErr, "bob's state DB should remain")
+}
+
+// Validates: R-3.1.5
+func TestPrintLoggedOutAccountsText(t *testing.T) {
+	var buf bytes.Buffer
+
+	loggedOut := []loggedOutAccount{
+		{
+			Email:       "alice@outlook.com",
+			DriveType:   "personal",
+			DisplayName: "Alice Smith",
+			StateDBs:    2,
+		},
+		{
+			Email:     "bob@contoso.com",
+			DriveType: "business",
+			StateDBs:  0,
+		},
+	}
+
+	printLoggedOutAccountsText(&buf, loggedOut)
+	output := buf.String()
+
+	assert.Contains(t, output, "Logged out accounts:")
+	assert.Contains(t, output, "Alice Smith (alice@outlook.com)")
+	assert.Contains(t, output, "2 state databases")
+	assert.Contains(t, output, "bob@contoso.com")
+	assert.Contains(t, output, "no state databases")
+	assert.Contains(t, output, "logout --purge")
 }
