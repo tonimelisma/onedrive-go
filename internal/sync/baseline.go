@@ -1118,61 +1118,18 @@ func (m *SyncStore) RecordFailure(ctx context.Context, p *SyncFailureParams) err
 	defer func() { _ = tx.Rollback() }()
 
 	// Step 1: Transition remote_state status for download/delete failures.
-	// The WHERE clause is a safe no-op for uploads and pre-upload validation.
 	if p.Direction == strDownload || p.Direction == strDelete {
-		result, execErr := tx.ExecContext(ctx,
-			`UPDATE remote_state SET
-				sync_status = CASE sync_status
-					WHEN ? THEN ?
-					WHEN ? THEN ?
-				END
-			WHERE path = ? AND sync_status IN (?, ?)`,
-			statusDownloading, statusDownloadFailed,
-			statusDeleting, statusDeleteFailed,
-			p.Path, statusDownloading, statusDeleting,
-		)
-		if execErr != nil {
-			return fmt.Errorf("sync: transitioning remote_state for %s: %w", p.Path, execErr)
-		}
-
-		affected, rowErr := result.RowsAffected()
-		if rowErr != nil {
-			return fmt.Errorf("sync: checking rows affected for %s: %w", p.Path, rowErr)
-		}
-
-		if affected == 0 {
-			m.logger.Debug("RecordFailure: remote_state row already transitioned or absent",
-				slog.String("path", p.Path),
-			)
+		if transErr := m.transitionRemoteStateOnFailure(ctx, tx, p.Path); transErr != nil {
+			return transErr
 		}
 	}
 
-	// Step 2: Read current failure count from sync_failures for backoff calculation.
-	var currentFailures int
-	if scanErr := tx.QueryRowContext(ctx,
-		`SELECT failure_count FROM sync_failures WHERE path = ? AND drive_id = ?`,
-		p.Path, p.DriveID.String(),
-	).Scan(&currentFailures); scanErr != nil && scanErr != sql.ErrNoRows {
-		return fmt.Errorf("sync: reading failure count for %s: %w", p.Path, scanErr)
-	}
-
-	// Step 3: Determine category from issue type.
-	category := strTransient
-	var nextRetryNano *int64
-
-	if p.IssueType != "" && isActionableIssue(p.IssueType) {
-		category = strActionable
-	} else {
-		// Transient: compute exponential backoff.
-		retryAt := computeNextRetry(now, currentFailures)
-		nanos := retryAt.UnixNano()
-		nextRetryNano = &nanos
-	}
-
+	// Step 2: Classify failure and compute backoff.
+	category, nextRetryNano, currentFailures := m.classifyAndBackoff(ctx, tx, p, now)
 	newCount := currentFailures + 1
 	nowNano := now.UnixNano()
 
-	// Step 4: Auto-resolve item_id from remote_state for download/delete
+	// Step 3: Auto-resolve item_id from remote_state for download/delete
 	// when caller didn't provide one.
 	itemID := p.ItemID
 	if itemID == "" && (p.Direction == strDownload || p.Direction == strDelete) {
@@ -1218,6 +1175,68 @@ func (m *SyncStore) RecordFailure(ctx context.Context, p *SyncFailureParams) err
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("sync: committing failure for %s: %w", p.Path, err)
+	}
+
+	return nil
+}
+
+// classifyAndBackoff reads the current failure count, determines whether
+// the issue is actionable or transient, and computes the next retry time
+// for transient issues. Returns (category, nextRetryNano, currentFailures).
+func (m *SyncStore) classifyAndBackoff(
+	ctx context.Context, tx *sql.Tx, p *SyncFailureParams, now time.Time,
+) (string, *int64, int) {
+	var currentFailures int
+	if scanErr := tx.QueryRowContext(ctx,
+		`SELECT failure_count FROM sync_failures WHERE path = ? AND drive_id = ?`,
+		p.Path, p.DriveID.String(),
+	).Scan(&currentFailures); scanErr != nil && scanErr != sql.ErrNoRows {
+		// Non-critical: if we can't read the count, start from 0.
+		// The UPSERT will still work correctly.
+		m.logger.Warn("RecordFailure: failed to read failure count, using 0",
+			slog.String("path", p.Path),
+			slog.String("error", scanErr.Error()),
+		)
+	}
+
+	if p.IssueType != "" && isActionableIssue(p.IssueType) {
+		return strActionable, nil, currentFailures
+	}
+
+	retryAt := computeNextRetry(now, currentFailures)
+	nanos := retryAt.UnixNano()
+
+	return strTransient, &nanos, currentFailures
+}
+
+// transitionRemoteStateOnFailure transitions remote_state status for
+// download/delete failures (downloading→download_failed, deleting→delete_failed).
+// The WHERE clause is a safe no-op when no matching row exists.
+func (m *SyncStore) transitionRemoteStateOnFailure(ctx context.Context, tx *sql.Tx, path string) error {
+	result, execErr := tx.ExecContext(ctx,
+		`UPDATE remote_state SET
+			sync_status = CASE sync_status
+				WHEN ? THEN ?
+				WHEN ? THEN ?
+			END
+		WHERE path = ? AND sync_status IN (?, ?)`,
+		statusDownloading, statusDownloadFailed,
+		statusDeleting, statusDeleteFailed,
+		path, statusDownloading, statusDeleting,
+	)
+	if execErr != nil {
+		return fmt.Errorf("sync: transitioning remote_state for %s: %w", path, execErr)
+	}
+
+	affected, rowErr := result.RowsAffected()
+	if rowErr != nil {
+		return fmt.Errorf("sync: checking rows affected for %s: %w", path, rowErr)
+	}
+
+	if affected == 0 {
+		m.logger.Debug("RecordFailure: remote_state row already transitioned or absent",
+			slog.String("path", path),
+		)
 	}
 
 	return nil
@@ -1578,18 +1597,26 @@ func nullInt64(n int64) sql.NullInt64 {
 // SyncFailureRecorder methods
 // ---------------------------------------------------------------------------
 
-// isActionableIssue returns true for issue types that require user action and
-// should not be auto-retried. Transient issues (e.g. IssueServiceOutage) are
-// NOT actionable — they auto-resolve when the external condition clears.
+// actionableIssues is the set of issue types that require user action and
+// should not be auto-retried. Transient issues (e.g. IssueServiceOutage)
+// are NOT in this set — they auto-resolve when the external condition clears.
+// Add new actionable issue types here; no other code changes needed.
+var actionableIssues = map[string]struct{}{
+	IssueInvalidFilename:       {},
+	IssuePathTooLong:           {},
+	IssueFileTooLarge:          {},
+	IssuePermissionDenied:      {},
+	IssueQuotaExceeded:         {},
+	IssueLocalPermissionDenied: {},
+	IssueCaseCollision:         {},
+	IssueDiskFull:              {},
+	IssueFileTooLargeForSpace:  {},
+}
+
+// isActionableIssue returns true for issue types that require user action.
 func isActionableIssue(issueType string) bool {
-	switch issueType {
-	case IssueInvalidFilename, IssuePathTooLong, IssueFileTooLarge,
-		IssuePermissionDenied, IssueQuotaExceeded, IssueLocalPermissionDenied,
-		IssueCaseCollision, IssueDiskFull, IssueFileTooLargeForSpace:
-		return true
-	default:
-		return false
-	}
+	_, ok := actionableIssues[issueType]
+	return ok
 }
 
 // ListSyncFailures returns all sync_failures rows ordered by last_seen_at DESC.
