@@ -39,7 +39,6 @@ skip_files = ["*.tmp", "*.swp"]
 skip_dirs = ["node_modules", ".git"]
 skip_dotfiles = true
 skip_symlinks = true
-max_file_size = "1GB"
 sync_paths = ["/Documents", "/Photos"]
 ignore_marker = ".syncignore"
 
@@ -88,7 +87,6 @@ force_http_11 = true
 	assert.Equal(t, []string{"node_modules", ".git"}, cfg.SkipDirs)
 	assert.True(t, cfg.SkipDotfiles)
 	assert.True(t, cfg.SkipSymlinks)
-	assert.Equal(t, "1GB", cfg.MaxFileSize)
 	assert.Equal(t, []string{"/Documents", "/Photos"}, cfg.SyncPaths)
 	assert.Equal(t, ".syncignore", cfg.IgnoreMarker)
 
@@ -287,7 +285,6 @@ func TestLoad_DriveWithAllFields(t *testing.T) {
 sync_dir = "~/OneDrive"
 display_name = "home"
 paused = true
-remote_path = "/Documents"
 skip_dotfiles = true
 skip_dirs = ["vendor"]
 skip_files = ["*.log"]
@@ -301,7 +298,6 @@ poll_interval = "10m"
 	assert.Equal(t, "home", d.DisplayName)
 	require.NotNil(t, d.Paused)
 	assert.True(t, *d.Paused)
-	assert.Equal(t, "/Documents", d.RemotePath)
 	require.NotNil(t, d.SkipDotfiles)
 	assert.True(t, *d.SkipDotfiles)
 	assert.Equal(t, []string{"vendor"}, d.SkipDirs)

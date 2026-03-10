@@ -70,7 +70,7 @@ What the user sees per failure type. Scope variants get separate rows.
 |---|---|---|---|
 | `invalid_filename` | — | "File name '{name}' contains characters not allowed on OneDrive ({chars})" or "reserved name" | "Rename the file, or add it to skip_files in config" |
 | `path_too_long` | — | "Path exceeds OneDrive's 400-character limit ({len} characters)" | "Shorten the directory structure or file name" |
-| `file_too_large` | — | "File exceeds OneDrive's 250 GB size limit ({size})" | "Exclude via skip_files or max_file_size in config" |
+| `file_too_large` | — | "File exceeds OneDrive's 250 GB size limit ({size})" | "Exclude via skip_files in config" |
 | `case_collision` | — | "Files '{name1}' and '{name2}' differ only in case — OneDrive is case-insensitive" | "Rename one of the files to avoid the collision" |
 | `quota_exceeded` | Own drive | "Your OneDrive storage is full ({used}/{total})" | "Free space on OneDrive (delete files, empty recycle bin) or upgrade storage plan" |
 | `quota_exceeded` | Shortcut | "Shared folder '{name}' owner's storage is full" | "Contact the folder owner to free space or upgrade their storage plan" |
@@ -97,7 +97,7 @@ When each failure type is automatically removed without user intervention.
 |---|---|---|---|
 | `invalid_filename` | File renamed/deleted/excluded | Engine compares `ScanResult.Skipped` against sync_failures after each scan | R-2.10.2 |
 | `path_too_long` | Path shortened or file deleted | Same as above | R-2.10.2 |
-| `file_too_large` | File deleted or `max_file_size` config changed | Same as above | R-2.10.2 |
+| `file_too_large` | File deleted or excluded via skip_files | Same as above | R-2.10.2 |
 | `case_collision` | One of the colliding files renamed | Same as above | R-2.10.2 |
 | `quota_exceeded` (own drive) | Trial upload to own-drive path succeeds | Scope block `quota:own` cleared; action success clears sync_failures entry | R-2.10.5, R-2.10.21, R-2.10.41 |
 | `quota_exceeded` (shortcut) | Trial upload to that specific shortcut succeeds | Scope block `quota:shortcut:*` cleared; action success clears sync_failures entry | R-2.10.5, R-2.10.21, R-2.10.41 |
@@ -307,7 +307,7 @@ Currently, every individual retry attempt within `withRetry` logs at WARN (execu
 |-----------|-------------|-----------------|
 | `invalid_filename` | "File name '{name}' contains characters not allowed on OneDrive ({chars})" or "File name '{name}' is reserved on OneDrive" | "Rename the file to remove invalid characters, or add it to skip_files in config" |
 | `path_too_long` | "Path exceeds OneDrive's 400-character limit ({len} characters)" | "Shorten the directory structure or file name" |
-| `file_too_large` | "File exceeds OneDrive's 250 GB size limit ({size})" | "Exclude via skip_files or max_file_size in config" |
+| `file_too_large` | "File exceeds OneDrive's 250 GB size limit ({size})" | "Exclude via skip_files in config" |
 | `permission_denied` | "OneDrive folder '{boundary}' is read-only (shared without write access)" | "Request write access from the folder owner, or accept read-only sync" |
 | `local_permission_denied` | "Cannot read file (local permission denied)" | "Fix file permissions: chmod/chown the file or its parent directory" |
 | `quota_exceeded` (own drive) | "Your OneDrive storage is full ({used}/{total})" | "Free space on OneDrive (delete files, empty recycle bin) or upgrade storage plan" |
@@ -927,7 +927,7 @@ This is an observation-time issue. The retry architecture is not involved — in
 
 1. Engine calls `engine.RunOnce()` → `observeLocal()` → `scanner.Scan(ctx, root)`.
 2. Scanner walks the filesystem via `filepath.WalkDir`. For each file:
-   a. Applies filter cascade: dotfiles, skip_dirs, skip_files, max_file_size, symlinks, vault, marker files.
+   a. Applies filter cascade: dotfiles, skip_dirs, skip_files, symlinks, vault, marker files.
    b. Calls `isValidOneDriveName(name)` (scanner.go:271).
    c. **Invalid** → appends `SkippedItem{Path: "CON.txt", Reason: "invalid_filename", Detail: "reserved name: CON"}` to `ScanResult.Skipped`.
    d. **Valid** → creates `ChangeEvent` as today, appends to `ScanResult.Events`.
@@ -1002,7 +1002,7 @@ This is an observation-time issue. The retry architecture is not involved — in
         ... and 3,999 more
 
       file_too_large (1,000 items):
-        huge-backup.tar.gz (312 GB) — exceeds 250 GB limit. Exclude via max_file_size.
+        huge-backup.tar.gz (312 GB) — exceeds 250 GB limit. Exclude via skip_files.
         ... and 999 more
     ```
 
@@ -1202,8 +1202,8 @@ Identical flow to Journey 1 (Invalid Filename). These are observation-time filte
 1. Scanner checks file size during walk. Files exceeding 250 GB: `SkippedItem{Reason: "file_too_large", Detail: "312 GB exceeds 250 GB limit"}`.
 2. Engine records as actionable failures. One WARN line with count.
 3. No actions planned. No worker time. No scope escalation.
-4. Auto-clear when user excludes via `max_file_size` config or deletes the file.
-5. `onedrive issues` groups under `file_too_large` with action text: "Exclude via skip_files or max_file_size in config."
+4. Auto-clear when user excludes via `skip_files` config or deletes the file.
+5. `onedrive issues` groups under `file_too_large` with action text: "Exclude via skip_files in config."
 
 ### Journey 6 (TO-BE): Path Too Long — 100k files
 

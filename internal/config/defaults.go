@@ -11,7 +11,6 @@ import (
 // starting points that work for most users without any config file.
 const (
 	defaultIgnoreMarker        = ".odignore"
-	defaultMaxFileSize         = "50GB"
 	defaultTransferWorkers     = 8
 	defaultCheckWorkers        = 4
 	defaultChunkSize           = "10MiB"
@@ -55,7 +54,6 @@ func defaultFilterConfig() FilterConfig {
 	return FilterConfig{
 		SkipDotfiles: false,
 		SkipSymlinks: false,
-		MaxFileSize:  defaultMaxFileSize,
 		IgnoreMarker: defaultIgnoreMarker,
 	}
 }

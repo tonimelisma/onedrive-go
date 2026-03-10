@@ -33,9 +33,15 @@ type FilterConfig struct {
 	SkipDirs     []string `toml:"skip_dirs"`
 	SkipDotfiles bool     `toml:"skip_dotfiles"`
 	SkipSymlinks bool     `toml:"skip_symlinks"`
-	MaxFileSize  string   `toml:"max_file_size"`
-	SyncPaths    []string `toml:"sync_paths"`
-	IgnoreMarker string   `toml:"ignore_marker"`
+
+	// Placeholder for planned functionality (R-2.4.5). Config parsing and
+	// validation are ready; scanner logic is not yet implemented.
+	SyncPaths []string `toml:"sync_paths"`
+
+	// Placeholder for planned functionality (R-2.4.4). When implemented,
+	// the scanner will exclude any directory containing a file with this
+	// name (presence-only check — file contents are not read).
+	IgnoreMarker string `toml:"ignore_marker"`
 }
 
 // TransfersConfig controls parallel workers, chunk sizes, and bandwidth limits.
@@ -117,7 +123,6 @@ type Drive struct {
 	PausedUntil  *string  `toml:"paused_until,omitempty"`
 	DisplayName  string   `toml:"display_name,omitempty"`
 	Owner        string   `toml:"owner,omitempty"` // drive owner name; for shared drives: "{Owner}'s {FolderName}"
-	RemotePath   string   `toml:"remote_path,omitempty"`
 	SkipDotfiles *bool    `toml:"skip_dotfiles,omitempty"`
 	SkipDirs     []string `toml:"skip_dirs,omitempty"`
 	SkipFiles    []string `toml:"skip_files,omitempty"`

@@ -38,12 +38,10 @@ All filter settings are per-drive (no global filter defaults).
 - R-2.4.1: When `skip_dotfiles = true`, the system shall exclude files and folders starting with `.`. [verified]
 - R-2.4.2: When `skip_dirs` is set, the system shall exclude matching directory names. [verified]
 - R-2.4.3: When `skip_files` is set, the system shall exclude matching file patterns. [verified]
-- R-2.4.4: When `max_file_size` is set, the system shall exclude files exceeding the limit. [verified]
-- R-2.4.5: When a directory contains a marker file (configurable name), the system shall exclude that directory. Whether the marker file supports gitignore-style patterns is TBD. [verified]
-- R-2.4.6: When `sync_paths` is set, the system shall sync only the specified paths. [planned]
-- R-2.4.7: When `skip_symlinks = true`, the system shall exclude symlinks. Symlinked directories are always excluded from watch mode. [verified]
-- R-2.4.8: When an item belongs to the Personal Vault, the system shall exclude it by default. The `sync_vault` option enables vault sync for users who accept the auto-lock risk. [verified]
-- R-2.4.9: When `remote_path` is configured, the system shall filter delta events to only process items under the specified remote path prefix. [planned]
+- R-2.4.4: When a directory contains a file matching the `ignore_marker` name (default `.odignore`), the system shall exclude that directory from sync. The marker file is a presence-only check — its contents are not read. The marker file itself is not synced. [planned]
+- R-2.4.5: When `sync_paths` is set, the system shall sync only the specified paths. [planned]
+- R-2.4.6: When `skip_symlinks = true`, the system shall exclude symlinks. Symlinked directories are always excluded from watch mode. [verified]
+- R-2.4.7: When an item belongs to the Personal Vault, the system shall exclude it by default. The `sync_vault` option enables vault sync for users who accept the auto-lock risk. [verified]
 
 ## R-2.5 Crash Recovery [verified]
 

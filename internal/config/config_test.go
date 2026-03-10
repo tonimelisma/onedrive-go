@@ -14,7 +14,6 @@ func TestDefaultConfig_AllFieldsPopulated(t *testing.T) {
 
 	// Filter defaults (using promoted field access)
 	assert.Equal(t, ".odignore", cfg.IgnoreMarker)
-	assert.Equal(t, "50GB", cfg.MaxFileSize)
 	assert.False(t, cfg.SkipDotfiles)
 	assert.False(t, cfg.SkipSymlinks)
 	assert.Empty(t, cfg.SkipFiles)
