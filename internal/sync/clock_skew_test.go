@@ -71,7 +71,7 @@ func TestClockSkew_BackwardJump_SyncFailureTimestamp(t *testing.T) {
 	// Record at t=5000.
 	mgr.nowFunc = func() time.Time { return time.Unix(5000, 0) }
 
-	require.NoError(t, mgr.RecordFailure(ctx, SyncFailureParams{
+	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "file1.txt",
 		Direction:  "upload",
 		IssueType:  "upload_failed",
@@ -83,7 +83,7 @@ func TestClockSkew_BackwardJump_SyncFailureTimestamp(t *testing.T) {
 	mgr.nowFunc = func() time.Time { return time.Unix(1000, 0) }
 
 	// Should still succeed.
-	require.NoError(t, mgr.RecordFailure(ctx, SyncFailureParams{
+	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "file2.txt",
 		Direction:  "upload",
 		IssueType:  "upload_failed",

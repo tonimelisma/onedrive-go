@@ -162,7 +162,7 @@ func (e *Engine) handle403(ctx context.Context, bl *Baseline, failedPath string,
 	boundary := e.walkPermissionBoundary(ctx, bl, parentFolder, sc, remoteDriveID)
 
 	// Record ONE issue for the boundary folder.
-	if issueErr := e.baseline.RecordFailure(ctx, SyncFailureParams{
+	if issueErr := e.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:       boundary,
 		DriveID:    e.driveID,
 		Direction:  "upload",
@@ -196,7 +196,7 @@ func (e *Engine) handlePermissionCheckError(ctx context.Context, err error, fail
 			slog.String("path", parentFolder),
 		)
 
-		if issueErr := e.baseline.RecordFailure(ctx, SyncFailureParams{
+		if issueErr := e.baseline.RecordFailure(ctx, &SyncFailureParams{
 			Path:       parentFolder,
 			DriveID:    e.driveID,
 			Direction:  "upload",

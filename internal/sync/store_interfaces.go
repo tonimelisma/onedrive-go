@@ -60,7 +60,7 @@ type SyncFailureParams struct {
 // SyncFailureRecorder is called by the engine to persist all failure types
 // (upload, download, delete) in the unified sync_failures table.
 type SyncFailureRecorder interface {
-	RecordFailure(ctx context.Context, p SyncFailureParams) error
+	RecordFailure(ctx context.Context, p *SyncFailureParams) error
 	ListSyncFailures(ctx context.Context) ([]SyncFailureRow, error)
 	ListSyncFailuresByIssueType(ctx context.Context, issueType string) ([]SyncFailureRow, error)
 	ListActionableFailures(ctx context.Context) ([]SyncFailureRow, error)

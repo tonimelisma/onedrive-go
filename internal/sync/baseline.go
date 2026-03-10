@@ -1098,7 +1098,7 @@ func (m *SyncStore) updateRemoteStateFromObs(
 //
 // UPSERT ON CONFLICT uses COALESCE for issue_type, item_id, file_size,
 // local_hash to preserve existing values when new values are empty/zero.
-func (m *SyncStore) RecordFailure(ctx context.Context, p SyncFailureParams) error {
+func (m *SyncStore) RecordFailure(ctx context.Context, p *SyncFailureParams) error {
 	now := m.nowFunc()
 
 	tx, err := m.db.BeginTx(ctx, nil)
@@ -1750,6 +1750,7 @@ func (m *SyncStore) ClearResolvedActionableFailures(ctx context.Context, issueTy
 		args = append(args, p)
 	}
 
+	//nolint:gosec // G202: placeholders is strings.Repeat(",?", n) — literal, not user input
 	query := `DELETE FROM sync_failures WHERE category = 'actionable' AND issue_type = ? AND path NOT IN (` +
 		placeholders + `)`
 

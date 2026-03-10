@@ -375,7 +375,7 @@ func TestRecordFailure_TransitionsDownloading(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	err = mgr.RecordFailure(ctx, SyncFailureParams{
+	err = mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "hello.txt",
 		DriveID:    driveid.New(testDriveID),
 		Direction:  "download",
@@ -422,7 +422,7 @@ func TestRecordFailure_OptimisticConcurrency_NoMatch(t *testing.T) {
 	// RecordFailure should be a no-op for the state
 	// transition (row not in downloading/deleting), but still records the
 	// sync_failure entry.
-	err = mgr.RecordFailure(ctx, SyncFailureParams{
+	err = mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "hello.txt",
 		DriveID:    driveid.New(testDriveID),
 		Direction:  "download",
@@ -457,7 +457,7 @@ func TestRecordFailure_IncreasesFailureCount(t *testing.T) {
 	require.NoError(t, err)
 
 	// First failure.
-	err = mgr.RecordFailure(ctx, SyncFailureParams{
+	err = mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "hello.txt",
 		DriveID:    driveid.New(testDriveID),
 		Direction:  "download",
@@ -480,7 +480,7 @@ func TestRecordFailure_IncreasesFailureCount(t *testing.T) {
 	require.NoError(t, err)
 
 	// Second failure.
-	err = mgr.RecordFailure(ctx, SyncFailureParams{
+	err = mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "hello.txt",
 		DriveID:    driveid.New(testDriveID),
 		Direction:  "download",
@@ -511,7 +511,7 @@ func TestRecordFailure_DeleteTransitionsDeleting(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	err = mgr.RecordFailure(ctx, SyncFailureParams{
+	err = mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "hello.txt",
 		DriveID:    driveid.New(testDriveID),
 		Direction:  "download",
@@ -554,7 +554,7 @@ func TestRecordFailure_Download(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	err = mgr.RecordFailure(ctx, SyncFailureParams{
+	err = mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "hello.txt",
 		DriveID:    driveid.New(testDriveID),
 		Direction:  "download",
@@ -597,7 +597,7 @@ func TestRecordFailure_Delete(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	err = mgr.RecordFailure(ctx, SyncFailureParams{
+	err = mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "hello.txt",
 		DriveID:    driveid.New(testDriveID),
 		Direction:  "delete",
@@ -626,7 +626,7 @@ func TestRecordFailure_SetsIssueTypeAndScopeKey(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	err = mgr.RecordFailure(ctx, SyncFailureParams{
+	err = mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "hello.txt",
 		DriveID:    driveid.New(testDriveID),
 		Direction:  "download",

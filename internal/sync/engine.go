@@ -952,7 +952,7 @@ func (e *Engine) processWorkerResult(ctx context.Context, r WorkerResult, bl *Ba
 		}
 
 		// Atomic write: sync_failures + remote_state status transition.
-		if recErr := e.baseline.RecordFailure(ctx, SyncFailureParams{
+		if recErr := e.baseline.RecordFailure(ctx, &SyncFailureParams{
 			Path:       r.Path,
 			DriveID:    driveID,
 			Direction:  direction,
@@ -1294,7 +1294,7 @@ func (e *Engine) filterInvalidUploads(ctx context.Context, plan *ActionPlan) *Ac
 			fileSize = plan.Actions[f.Index].View.Local.Size
 		}
 
-		if recErr := e.baseline.RecordFailure(ctx, SyncFailureParams{
+		if recErr := e.baseline.RecordFailure(ctx, &SyncFailureParams{
 			Path:      f.Path,
 			DriveID:   e.driveID,
 			Direction: "upload",

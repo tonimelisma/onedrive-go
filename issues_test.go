@@ -712,7 +712,7 @@ func newSeededIssuesCmd(t *testing.T) (*cobra.Command, string) {
 	ctx := context.Background()
 
 	// Actionable failure (invalid filename — will be targeted by "clear").
-	err = mgr.RecordFailure(ctx, sync.SyncFailureParams{
+	err = mgr.RecordFailure(ctx, &sync.SyncFailureParams{
 		Path:      "docs/CON",
 		Direction: "upload",
 		IssueType: "invalid_filename",
@@ -721,7 +721,7 @@ func newSeededIssuesCmd(t *testing.T) (*cobra.Command, string) {
 	require.NoError(t, err)
 
 	// Transient failure (upload_failed — will be targeted by "retry").
-	err = mgr.RecordFailure(ctx, sync.SyncFailureParams{
+	err = mgr.RecordFailure(ctx, &sync.SyncFailureParams{
 		Path:       "data/report.xlsx",
 		Direction:  "upload",
 		IssueType:  "upload_failed",
@@ -732,7 +732,7 @@ func newSeededIssuesCmd(t *testing.T) (*cobra.Command, string) {
 	require.NoError(t, err)
 
 	// Second actionable failure for testing --all.
-	err = mgr.RecordFailure(ctx, sync.SyncFailureParams{
+	err = mgr.RecordFailure(ctx, &sync.SyncFailureParams{
 		Path:      "docs/NUL.txt",
 		Direction: "upload",
 		IssueType: "invalid_filename",

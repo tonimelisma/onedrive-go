@@ -361,7 +361,7 @@ func TestRecheckPermissions_GrantDetected_IssueCleared(t *testing.T) {
 	ctx := t.Context()
 
 	// Pre-record a permission_denied issue.
-	require.NoError(t, eng.baseline.RecordFailure(ctx, SyncFailureParams{
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "Shared/TeamDocs/sub",
 		Direction:  "upload",
 		IssueType:  IssuePermissionDenied,
@@ -409,7 +409,7 @@ func TestRecheckPermissions_StillDenied_NoChange(t *testing.T) {
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
-	require.NoError(t, eng.baseline.RecordFailure(ctx, SyncFailureParams{
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "Shared/TeamDocs/sub",
 		Direction:  "upload",
 		IssueType:  IssuePermissionDenied,
@@ -452,14 +452,14 @@ func TestRecheckPermissions_UnresolvableIssues_CachedAsDenied(t *testing.T) {
 	ctx := t.Context()
 
 	// Record two permission_denied issues.
-	require.NoError(t, eng.baseline.RecordFailure(ctx, SyncFailureParams{
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "Shared/NoShortcut/sub",
 		Direction:  "upload",
 		IssueType:  IssuePermissionDenied,
 		ErrMsg:     "folder is read-only",
 		HTTPStatus: http.StatusForbidden,
 	}))
-	require.NoError(t, eng.baseline.RecordFailure(ctx, SyncFailureParams{
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "Shared/Other/locked",
 		Direction:  "upload",
 		IssueType:  IssuePermissionDenied,
@@ -506,7 +506,7 @@ func TestRecheckPermissions_UnresolvedItemID_CachedAsDenied(t *testing.T) {
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, nil)
 	ctx := t.Context()
 
-	require.NoError(t, eng.baseline.RecordFailure(ctx, SyncFailureParams{
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "Shared/TeamDocs/missing",
 		Direction:  "upload",
 		IssueType:  IssuePermissionDenied,
@@ -751,7 +751,7 @@ func TestRecheckPermissions_PopulatesCache(t *testing.T) {
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
-	require.NoError(t, eng.baseline.RecordFailure(ctx, SyncFailureParams{
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "Shared/TeamDocs/sub",
 		Direction:  "upload",
 		IssueType:  IssuePermissionDenied,
