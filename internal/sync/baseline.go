@@ -106,7 +106,6 @@ const (
 var (
 	_ ObservationWriter   = (*SyncStore)(nil)
 	_ OutcomeWriter       = (*SyncStore)(nil)
-	_ FailureRecorder     = (*SyncStore)(nil)
 	_ StateReader         = (*SyncStore)(nil)
 	_ StateAdmin          = (*SyncStore)(nil)
 	_ SyncFailureRecorder = (*SyncStore)(nil)
@@ -531,6 +530,13 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx *sql.Tx, o *Outcome) err
 			return fmt.Errorf("sync: updating remote_state for download %s: %w", o.Path, err)
 		}
 
+		// Clear any prior sync_failures for this path on download success.
+		if _, delErr := tx.ExecContext(ctx,
+			`DELETE FROM sync_failures WHERE path = ?`, o.Path,
+		); delErr != nil {
+			return fmt.Errorf("sync: clearing sync failure on download success for %s: %w", o.Path, delErr)
+		}
+
 	case ActionLocalDelete:
 		_, err := tx.ExecContext(ctx,
 			`UPDATE remote_state SET sync_status = ?
@@ -540,6 +546,13 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx *sql.Tx, o *Outcome) err
 		)
 		if err != nil {
 			return fmt.Errorf("sync: updating remote_state for local delete %s: %w", o.Path, err)
+		}
+
+		// Clear any prior sync_failures for this path on delete success.
+		if _, delErr := tx.ExecContext(ctx,
+			`DELETE FROM sync_failures WHERE path = ?`, o.Path,
+		); delErr != nil {
+			return fmt.Errorf("sync: clearing sync failure on delete success for %s: %w", o.Path, delErr)
 		}
 
 	case ActionUpload, ActionFolderCreate:
@@ -574,6 +587,13 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx *sql.Tx, o *Outcome) err
 		)
 		if err != nil {
 			return fmt.Errorf("sync: updating remote_state for move %s: %w", o.Path, err)
+		}
+
+		// Clear any prior sync_failures for this path on move success.
+		if _, delErr := tx.ExecContext(ctx,
+			`DELETE FROM sync_failures WHERE path = ?`, o.Path,
+		); delErr != nil {
+			return fmt.Errorf("sync: clearing sync failure on move success for %s: %w", o.Path, delErr)
 		}
 	}
 
@@ -1061,11 +1081,18 @@ func (m *SyncStore) updateRemoteStateFromObs(
 	return nil
 }
 
-// RecordFailure records a failure for a remote_state row, transitioning it
-// from downloading→download_failed or deleting→delete_failed, and writes
-// failure metadata to sync_failures atomically. Uses optimistic concurrency:
-// if the row has already transitioned, the update is a no-op.
-func (m *SyncStore) RecordFailure(ctx context.Context, path string, driveID driveid.ID, direction, errMsg string, httpStatus int) error {
+// RecordFailureWithStateTransition combines remote_state status transition
+// (downloading→download_failed, deleting→delete_failed) with sync_failures
+// recording in a single atomic transaction. Supports the full sync_failures
+// field set including issue_type, scope_key, and category classification.
+//
+// This replaces the older RecordFailure method. The atomicity is critical:
+// splitting the operations causes silent data loss because the reconciler
+// doesn't recover orphaned download_failed states without sync_failures entries.
+func (m *SyncStore) RecordFailureWithStateTransition(
+	ctx context.Context, path string, driveID driveid.ID,
+	direction, issueType, errMsg string, httpStatus int, scopeKey string,
+) error {
 	now := m.nowFunc()
 
 	tx, err := m.db.BeginTx(ctx, nil)
@@ -1097,7 +1124,7 @@ func (m *SyncStore) RecordFailure(ctx context.Context, path string, driveID driv
 		}
 
 		if affected == 0 {
-			m.logger.Debug("RecordFailure: remote_state row already transitioned",
+			m.logger.Debug("RecordFailureWithStateTransition: remote_state row already transitioned",
 				slog.String("path", path),
 			)
 		}
@@ -1111,8 +1138,19 @@ func (m *SyncStore) RecordFailure(ctx context.Context, path string, driveID driv
 		path, driveID.String(),
 	).Scan(&currentFailures)
 
+	// Determine category from issue type. Empty issue type defaults to
+	// transient (generic failures like "upload_failed" aren't actionable).
+	category := "transient"
+	var nextRetryNano int64
+
+	if issueType != "" && isActionableIssue(issueType) {
+		category = "actionable"
+	} else {
+		nextRetry := computeNextRetry(now, currentFailures)
+		nextRetryNano = nextRetry.UnixNano()
+	}
+
 	newCount := currentFailures + 1
-	nextRetry := computeNextRetry(now, currentFailures)
 	nowNano := now.UnixNano()
 
 	// Read item_id from remote_state if this is a download/delete failure.
@@ -1125,22 +1163,26 @@ func (m *SyncStore) RecordFailure(ctx context.Context, path string, driveID driv
 		).Scan(&itemID)
 	}
 
-	// UPSERT into sync_failures.
+	// UPSERT into sync_failures with full field set.
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO sync_failures
-			(path, drive_id, direction, category, item_id, failure_count,
-			 next_retry_at, last_error, http_status, first_seen_at, last_seen_at)
-		VALUES (?, ?, ?, 'transient', ?, ?, ?, ?, ?, ?, ?)
+			(path, drive_id, direction, category, issue_type, item_id, failure_count,
+			 next_retry_at, last_error, http_status, first_seen_at, last_seen_at, scope_key)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(path, drive_id) DO UPDATE SET
 			direction = excluded.direction,
+			category = excluded.category,
+			issue_type = excluded.issue_type,
 			failure_count = sync_failures.failure_count + 1,
 			next_retry_at = excluded.next_retry_at,
 			last_error = excluded.last_error,
 			http_status = excluded.http_status,
 			last_seen_at = excluded.last_seen_at,
-			item_id = COALESCE(excluded.item_id, sync_failures.item_id)`,
-		path, driveID.String(), direction, nullString(itemID), newCount,
-		nextRetry.UnixNano(), errMsg, httpStatus, nowNano, nowNano,
+			item_id = COALESCE(excluded.item_id, sync_failures.item_id),
+			scope_key = excluded.scope_key`,
+		path, driveID.String(), direction, category, issueType,
+		nullString(itemID), newCount,
+		nextRetryNano, errMsg, httpStatus, nowNano, nowNano, scopeKey,
 	)
 	if err != nil {
 		return fmt.Errorf("sync: recording sync failure for %s: %w", path, err)

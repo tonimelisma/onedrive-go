@@ -357,10 +357,10 @@ func TestCommitObservation_AllMatrixCells(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// RecordFailure tests
+// RecordFailureWithStateTransition tests (migrated from old RecordFailure)
 // ---------------------------------------------------------------------------
 
-func TestRecordFailure_TransitionsDownloading(t *testing.T) {
+func TestRecordFailureWithStateTransition_TransitionsDownloading(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
@@ -375,7 +375,8 @@ func TestRecordFailure_TransitionsDownloading(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	err = mgr.RecordFailure(ctx, "hello.txt", driveid.New(testDriveID), "download", "connection reset", 500)
+	err = mgr.RecordFailureWithStateTransition(ctx, "hello.txt", driveid.New(testDriveID),
+		"download", "", "connection reset", 500, "")
 	require.NoError(t, err)
 
 	row := readRemoteStateRow(t, mgr.rawDB(), "item1")
@@ -398,7 +399,7 @@ func TestRecordFailure_TransitionsDownloading(t *testing.T) {
 	assert.Greater(t, sfRetry, int64(0), "should have next_retry_at set")
 }
 
-func TestRecordFailure_OptimisticConcurrency_NoMatch(t *testing.T) {
+func TestRecordFailureWithStateTransition_OptimisticConcurrency_NoMatch(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
@@ -413,8 +414,11 @@ func TestRecordFailure_OptimisticConcurrency_NoMatch(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	// RecordFailure should be a no-op (row not in downloading/deleting).
-	err = mgr.RecordFailure(ctx, "hello.txt", driveid.New(testDriveID), "download", "some error", 500)
+	// RecordFailureWithStateTransition should be a no-op for the state
+	// transition (row not in downloading/deleting), but still records the
+	// sync_failure entry.
+	err = mgr.RecordFailureWithStateTransition(ctx, "hello.txt", driveid.New(testDriveID),
+		"download", "", "some error", 500, "")
 	require.NoError(t, err)
 
 	// Status should remain synced.
@@ -423,7 +427,7 @@ func TestRecordFailure_OptimisticConcurrency_NoMatch(t *testing.T) {
 	assert.Equal(t, statusSynced, row.SyncStatus)
 }
 
-func TestRecordFailure_IncreasesFailureCount(t *testing.T) {
+func TestRecordFailureWithStateTransition_IncreasesFailureCount(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
@@ -443,7 +447,8 @@ func TestRecordFailure_IncreasesFailureCount(t *testing.T) {
 	require.NoError(t, err)
 
 	// First failure.
-	err = mgr.RecordFailure(ctx, "hello.txt", driveid.New(testDriveID), "download", "err1", 500)
+	err = mgr.RecordFailureWithStateTransition(ctx, "hello.txt", driveid.New(testDriveID),
+		"download", "", "err1", 500, "")
 	require.NoError(t, err)
 
 	// Failure count is now in sync_failures.
@@ -460,7 +465,8 @@ func TestRecordFailure_IncreasesFailureCount(t *testing.T) {
 	require.NoError(t, err)
 
 	// Second failure.
-	err = mgr.RecordFailure(ctx, "hello.txt", driveid.New(testDriveID), "download", "err2", 503)
+	err = mgr.RecordFailureWithStateTransition(ctx, "hello.txt", driveid.New(testDriveID),
+		"download", "", "err2", 503, "")
 	require.NoError(t, err)
 
 	err = mgr.rawDB().QueryRowContext(ctx,
@@ -470,7 +476,7 @@ func TestRecordFailure_IncreasesFailureCount(t *testing.T) {
 	assert.Equal(t, 2, sfCount)
 }
 
-func TestRecordFailure_DeleteTransitionsDeleting(t *testing.T) {
+func TestRecordFailureWithStateTransition_DeleteTransitionsDeleting(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
@@ -485,7 +491,8 @@ func TestRecordFailure_DeleteTransitionsDeleting(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	err = mgr.RecordFailure(ctx, "hello.txt", driveid.New(testDriveID), "download", "permission denied", 403)
+	err = mgr.RecordFailureWithStateTransition(ctx, "hello.txt", driveid.New(testDriveID),
+		"download", "", "permission denied", 403, "")
 	require.NoError(t, err)
 
 	row := readRemoteStateRow(t, mgr.rawDB(), "item1")
@@ -501,6 +508,103 @@ func TestRecordFailure_DeleteTransitionsDeleting(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, sfCount)
 	assert.Equal(t, 403, sfHTTP)
+}
+
+// ---------------------------------------------------------------------------
+// RecordFailureWithStateTransition tests
+// ---------------------------------------------------------------------------
+
+func TestRecordFailureWithStateTransition_Download(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	mgr.nowFunc = func() time.Time { return time.Unix(1000, 0) }
+	ctx := context.Background()
+
+	// Insert a downloading item.
+	_, err := mgr.rawDB().ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		VALUES (?, ?, ?, 'file', 'downloading', ?)`,
+		testDriveID, "item1", "hello.txt", 999,
+	)
+	require.NoError(t, err)
+
+	err = mgr.RecordFailureWithStateTransition(ctx, "hello.txt", driveid.New(testDriveID),
+		"download", "", "connection reset", 500, "")
+	require.NoError(t, err)
+
+	// remote_state should transition to download_failed.
+	row := readRemoteStateRow(t, mgr.rawDB(), "item1")
+	require.NotNil(t, row)
+	assert.Equal(t, statusDownloadFailed, row.SyncStatus)
+
+	// sync_failures should have the failure recorded.
+	var sfCount int
+	var sfError string
+	var sfHTTP int
+	err = mgr.rawDB().QueryRowContext(ctx,
+		"SELECT failure_count, last_error, http_status FROM sync_failures WHERE path = ?",
+		"hello.txt",
+	).Scan(&sfCount, &sfError, &sfHTTP)
+	require.NoError(t, err)
+	assert.Equal(t, 1, sfCount)
+	assert.Equal(t, "connection reset", sfError)
+	assert.Equal(t, 500, sfHTTP)
+}
+
+func TestRecordFailureWithStateTransition_Delete(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	mgr.nowFunc = func() time.Time { return time.Unix(1000, 0) }
+	ctx := context.Background()
+
+	// Insert a deleting item.
+	_, err := mgr.rawDB().ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		VALUES (?, ?, ?, 'file', 'deleting', ?)`,
+		testDriveID, "item1", "hello.txt", 999,
+	)
+	require.NoError(t, err)
+
+	err = mgr.RecordFailureWithStateTransition(ctx, "hello.txt", driveid.New(testDriveID),
+		"delete", "", "permission denied", 403, "")
+	require.NoError(t, err)
+
+	row := readRemoteStateRow(t, mgr.rawDB(), "item1")
+	require.NotNil(t, row)
+	assert.Equal(t, statusDeleteFailed, row.SyncStatus)
+}
+
+func TestRecordFailureWithStateTransition_SetsIssueTypeAndScopeKey(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	mgr.nowFunc = func() time.Time { return time.Unix(1000, 0) }
+	ctx := context.Background()
+
+	// Insert a downloading item.
+	_, err := mgr.rawDB().ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		VALUES (?, ?, ?, 'file', 'downloading', ?)`,
+		testDriveID, "item1", "hello.txt", 999,
+	)
+	require.NoError(t, err)
+
+	err = mgr.RecordFailureWithStateTransition(ctx, "hello.txt", driveid.New(testDriveID),
+		"download", IssueQuotaExceeded, "quota full", 507, "quota:own")
+	require.NoError(t, err)
+
+	// Verify issue_type, scope_key, and category are set correctly.
+	var issueType, scopeKey, category string
+	err = mgr.rawDB().QueryRowContext(ctx,
+		"SELECT issue_type, scope_key, category FROM sync_failures WHERE path = ?",
+		"hello.txt",
+	).Scan(&issueType, &scopeKey, &category)
+	require.NoError(t, err)
+	assert.Equal(t, IssueQuotaExceeded, issueType)
+	assert.Equal(t, "quota:own", scopeKey)
+	assert.Equal(t, "actionable", category, "quota_exceeded is an actionable issue")
 }
 
 func TestRecordFailure_BackoffCalculation(t *testing.T) {

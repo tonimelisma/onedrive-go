@@ -217,12 +217,12 @@ func TestCommitOutcome_UploadSuccess_NoIssue_NoError(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestCommitOutcome_DownloadSuccess_DoesNotClearLocalIssue(t *testing.T) {
+func TestCommitOutcome_DownloadSuccess_ClearsSyncFailures(t *testing.T) {
 	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
-	// Record an issue.
-	err := mgr.RecordSyncFailure(ctx, "docs/file.txt", driveid.ID{}, "upload", "upload_failed", "timeout", 0, 0, "", "", "")
+	// Record a sync failure for the file.
+	err := mgr.RecordSyncFailure(ctx, "docs/file.txt", driveid.ID{}, "download", "download_failed", "timeout", 0, 0, "", "", "")
 	require.NoError(t, err)
 
 	// Insert a remote_state row so the download outcome has something to update.
@@ -247,10 +247,76 @@ func TestCommitOutcome_DownloadSuccess_DoesNotClearLocalIssue(t *testing.T) {
 	err = mgr.CommitOutcome(ctx, outcome)
 	require.NoError(t, err)
 
-	// Verify issue still exists.
+	// Download success should clear sync_failures for the path.
 	issues, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
-	assert.Len(t, issues, 1)
+	assert.Empty(t, issues)
+}
+
+func TestCommitOutcome_DeleteSuccess_ClearsSyncFailures(t *testing.T) {
+	mgr, _ := newTestSyncStoreForFailures(t)
+	ctx := context.Background()
+
+	// Record a sync failure for the file.
+	err := mgr.RecordSyncFailure(ctx, "docs/old.txt", driveid.ID{}, "delete", "delete_failed", "timeout", 0, 0, "", "", "")
+	require.NoError(t, err)
+
+	// Insert a remote_state row in deleting status.
+	_, err = mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state
+			(drive_id, item_id, path, parent_id, item_type, sync_status, observed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		driveid.New(testDriveID).String(), "item-1", "docs/old.txt", "root", "file", statusDeleting, 1)
+	require.NoError(t, err)
+
+	// Commit a successful local delete outcome.
+	outcome := &Outcome{
+		Action:  ActionLocalDelete,
+		Success: true,
+		Path:    "docs/old.txt",
+		DriveID: driveid.New(testDriveID),
+		ItemID:  "item-1",
+	}
+	err = mgr.CommitOutcome(ctx, outcome)
+	require.NoError(t, err)
+
+	// Delete success should clear sync_failures for the path.
+	issues, err := mgr.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, issues)
+}
+
+func TestCommitOutcome_MoveSuccess_ClearsSyncFailures(t *testing.T) {
+	mgr, _ := newTestSyncStoreForFailures(t)
+	ctx := context.Background()
+
+	// Record a sync failure at the old path.
+	err := mgr.RecordSyncFailure(ctx, "docs/moved.txt", driveid.ID{}, "upload", "upload_failed", "timeout", 0, 0, "", "", "")
+	require.NoError(t, err)
+
+	// Insert a remote_state row for the item.
+	_, err = mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state
+			(drive_id, item_id, path, parent_id, item_type, sync_status, observed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		driveid.New(testDriveID).String(), "item-1", "docs/moved.txt", "root", "file", statusSynced, 1)
+	require.NoError(t, err)
+
+	// Commit a successful move outcome (path stays the same in outcome).
+	outcome := &Outcome{
+		Action:  ActionLocalMove,
+		Success: true,
+		Path:    "docs/moved.txt",
+		DriveID: driveid.New(testDriveID),
+		ItemID:  "item-1",
+	}
+	err = mgr.CommitOutcome(ctx, outcome)
+	require.NoError(t, err)
+
+	// Move success should clear sync_failures for the path.
+	issues, err := mgr.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, issues)
 }
 
 func TestLocalIssueSyncStatus(t *testing.T) {

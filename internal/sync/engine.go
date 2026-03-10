@@ -951,8 +951,8 @@ func (e *Engine) processWorkerResult(ctx context.Context, r WorkerResult, bl *Ba
 			driveID = e.driveID
 		}
 
-		// Single write to sync_failures + remote_state status transition.
-		if recErr := e.baseline.RecordFailure(ctx, r.Path, driveID, direction, r.ErrMsg, r.HTTPStatus); recErr != nil {
+		// Atomic write: sync_failures + remote_state status transition.
+		if recErr := e.baseline.RecordFailureWithStateTransition(ctx, r.Path, driveID, direction, "", r.ErrMsg, r.HTTPStatus, ""); recErr != nil {
 			e.logger.Warn("failed to record failure",
 				slog.String("path", r.Path),
 				slog.String("error", recErr.Error()),

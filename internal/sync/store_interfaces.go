@@ -26,12 +26,6 @@ type OutcomeWriter interface {
 	Load(ctx context.Context) (*Baseline, error)
 }
 
-// FailureRecorder is called by the drainWorkerResults goroutine (single caller).
-// Records failure metadata in sync_failures and transitions remote_state status.
-type FailureRecorder interface {
-	RecordFailure(ctx context.Context, path string, driveID driveid.ID, direction, errMsg string, httpStatus int) error
-}
-
 // StateReader is called by failure retrier, planner, status, CLI (read-only).
 // All methods are pure reads. Multiple goroutines call concurrently.
 // WAL mode guarantees readers never block.
@@ -52,6 +46,8 @@ type StateReader interface {
 type SyncFailureRecorder interface {
 	RecordSyncFailure(ctx context.Context, path string, driveID driveid.ID, direction, issueType, errMsg string,
 		httpStatus int, fileSize int64, localHash string, itemID string, scopeKey string) error
+	RecordFailureWithStateTransition(ctx context.Context, path string, driveID driveid.ID,
+		direction, issueType, errMsg string, httpStatus int, scopeKey string) error
 	ListSyncFailures(ctx context.Context) ([]SyncFailureRow, error)
 	ListActionableFailures(ctx context.Context) ([]SyncFailureRow, error)
 	ClearSyncFailure(ctx context.Context, path string, driveID driveid.ID) error
