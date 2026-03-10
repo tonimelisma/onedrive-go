@@ -129,13 +129,17 @@ func (o *LocalObserver) handleFsEvent(
 	dbRelPath := nfcNormalize(filepath.ToSlash(relPath))
 	name := nfcNormalize(filepath.Base(fsEvent.Name))
 
-	if isAlwaysExcluded(name) {
-		o.logger.Debug("watch: skipping excluded file", slog.String("name", name), slog.String("path", dbRelPath))
-		return
-	}
+	// Unified observation filter (Stage 1: name + path length).
+	// Watch handlers don't collect SkippedItems — the safety scan (FullScan
+	// every 5 min) catches them for recording to sync_failures.
+	ok, skip := shouldObserve(name, dbRelPath)
+	if !ok {
+		if skip != nil {
+			o.logger.Debug("watch: skipping file",
+				slog.String("path", dbRelPath),
+				slog.String("reason", skip.Reason))
+		}
 
-	if !isValidOneDriveName(name) {
-		o.logger.Debug("watch: skipping invalid OneDrive name", slog.String("name", name))
 		return
 	}
 
@@ -187,6 +191,14 @@ func (o *LocalObserver) handleCreate(
 		// per-path deduplication handles them.
 		o.scanNewDirectory(ctx, fsPath, dbRelPath, watcher, events)
 	} else {
+		// Stage 2 observation filter: file size check (requires stat).
+		if info.Size() > maxOneDriveFileSize {
+			o.logger.Debug("watch: skipping oversized file",
+				slog.String("path", dbRelPath),
+				slog.Int64("size", info.Size()))
+			return
+		}
+
 		ev.ItemType = ItemTypeFile
 		ev.Hash = o.stableHashOrEmpty(fsPath, dbRelPath)
 	}
@@ -237,12 +249,15 @@ func (o *LocalObserver) scanNewDirectory(
 		}
 
 		entryName := nfcNormalize(entry.Name())
-		if isAlwaysExcluded(entryName) || !isValidOneDriveName(entryName) {
+		entryRelPath := dirRelPath + "/" + entryName
+
+		// Unified observation filter (Stage 1).
+		ok, _ := shouldObserve(entryName, entryRelPath)
+		if !ok {
 			continue
 		}
 
 		entryFsPath := filepath.Join(dirPath, entry.Name())
-		entryRelPath := dirRelPath + "/" + entryName
 
 		// Recurse into subdirectories: add watch and scan contents.
 		if entry.IsDir() {
@@ -270,6 +285,15 @@ func (o *LocalObserver) scanNewDirectory(
 		if statErr != nil {
 			o.logger.Debug("stat failed during directory scan",
 				slog.String("path", entryRelPath), slog.String("error", statErr.Error()))
+
+			continue
+		}
+
+		// Stage 2 observation filter: file size check (requires stat).
+		if info.Size() > maxOneDriveFileSize {
+			o.logger.Debug("watch: skipping oversized file in new directory",
+				slog.String("path", entryRelPath),
+				slog.Int64("size", info.Size()))
 
 			continue
 		}
@@ -356,6 +380,14 @@ func (o *LocalObserver) hashAndEmit(ctx context.Context, req hashRequest, events
 	}
 
 	if info.IsDir() {
+		return
+	}
+
+	// Stage 2 observation filter: file size check (requires stat).
+	if info.Size() > maxOneDriveFileSize {
+		o.logger.Debug("watch: skipping oversized file",
+			slog.String("path", req.dbRelPath),
+			slog.Int64("size", info.Size()))
 		return
 	}
 
@@ -463,31 +495,38 @@ func (o *LocalObserver) handleDelete(
 
 // runSafetyScan performs a full filesystem scan as a safety net, sending any
 // detected changes to the events channel. This catches events that fsnotify
-// may have missed.
+// may have missed. Skipped items are logged at DEBUG — the engine's primary
+// scan handles recording to sync_failures.
 func (o *LocalObserver) runSafetyScan(ctx context.Context, syncRoot string, events chan<- ChangeEvent) {
 	o.logger.Debug("running safety scan")
 
 	start := time.Now()
 
-	scanEvents, err := o.FullScan(ctx, syncRoot)
+	result, err := o.FullScan(ctx, syncRoot)
 	if err != nil {
 		o.logger.Warn("safety scan failed", slog.String("error", err.Error()))
 		return
 	}
 
-	for i := range scanEvents {
-		o.trySend(ctx, events, &scanEvents[i])
+	for i := range result.Events {
+		o.trySend(ctx, events, &result.Events[i])
 
 		if ctx.Err() != nil {
 			return
 		}
 	}
 
+	if len(result.Skipped) > 0 {
+		o.logger.Debug("safety scan: skipped items",
+			slog.Int("count", len(result.Skipped)))
+	}
+
 	// Log timing and resource counts for operational visibility (B-101).
 	elapsed := time.Since(start)
 	o.logger.Info("safety scan complete",
 		slog.Duration("elapsed", elapsed),
-		slog.Int("events", len(scanEvents)),
+		slog.Int("events", len(result.Events)),
+		slog.Int("skipped", len(result.Skipped)),
 		slog.Int("baseline_entries", o.baseline.Len()),
 	)
 }

@@ -42,12 +42,12 @@ func TestRacilyClean_SameSecondDetection(t *testing.T) {
 	obs := NewLocalObserver(baseline, testLogger(t), 0)
 
 	// Immediately scan — the file's mtime is within 1 second of now.
-	events, err := obs.FullScan(t.Context(), syncRoot)
+	result, err := obs.FullScan(t.Context(), syncRoot)
 	require.NoError(t, err)
 
 	// The file is UNCHANGED, but the racily-clean guard forces a hash check.
 	// Since the hash matches, no change event should be emitted.
-	for _, ev := range events {
+	for _, ev := range result.Events {
 		if ev.Path == "racily-clean.txt" {
 			assert.NotEqual(t, ChangeModify, ev.Type,
 				"racily-clean file with matching hash should not emit ChangeModify")
@@ -81,11 +81,11 @@ func TestMtimeChangeWithoutContentChange(t *testing.T) {
 
 	obs := NewLocalObserver(baseline, testLogger(t), 0)
 
-	events, err := obs.FullScan(t.Context(), syncRoot)
+	result, err := obs.FullScan(t.Context(), syncRoot)
 	require.NoError(t, err)
 
 	// Mtime differs but hash matches → no event should be emitted.
-	for _, ev := range events {
+	for _, ev := range result.Events {
 		if ev.Path == "touched.txt" {
 			assert.NotEqual(t, ChangeModify, ev.Type,
 				"mtime change without content change should not emit ChangeModify")
@@ -121,9 +121,9 @@ func TestNosyncGuard_PreventsAllSync(t *testing.T) {
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 
-	events, err := obs.FullScan(t.Context(), syncRoot)
+	result, err := obs.FullScan(t.Context(), syncRoot)
 	assert.ErrorIs(t, err, ErrNosyncGuard)
-	assert.Nil(t, events, ".nosync should prevent all events")
+	assert.Empty(t, result.Events, ".nosync should prevent all events")
 }
 
 // TestOneDriveInvalidNames_Rejected validates that all OneDrive-invalid

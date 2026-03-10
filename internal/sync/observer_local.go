@@ -281,9 +281,23 @@ func (o *LocalObserver) addWatchesRecursive(watcher FsWatcher, syncRoot string) 
 			return filepath.SkipDir
 		}
 
-		name := d.Name()
-		if fsPath != syncRoot && (isAlwaysExcluded(name) || !isValidOneDriveName(name)) {
-			return filepath.SkipDir
+		// Unified observation filter for directory names. NFC-normalize to match
+		// the convention used by scanner and watch handlers.
+		name := nfcNormalize(d.Name())
+		if fsPath != syncRoot {
+			relPath, relErr := filepath.Rel(syncRoot, fsPath)
+			if relErr != nil {
+				o.logger.Warn("failed to compute relative path during watch setup",
+					slog.String("path", fsPath), slog.String("error", relErr.Error()))
+				return filepath.SkipDir
+			}
+
+			dbRelPath := nfcNormalize(filepath.ToSlash(relPath))
+
+			ok, _ := shouldObserve(name, dbRelPath)
+			if !ok {
+				return filepath.SkipDir
+			}
 		}
 
 		if addErr := watcher.Add(fsPath); addErr != nil {

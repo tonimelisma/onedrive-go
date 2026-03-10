@@ -235,6 +235,23 @@ func (s FolderCreateSide) String() string {
 // Core structs
 // ---------------------------------------------------------------------------
 
+// SkippedItem records a local filesystem entry that was rejected at
+// observation time. The scanner collects these alongside events so the
+// engine can record them as actionable failures in sync_failures.
+type SkippedItem struct {
+	Path   string // NFC-normalized, relative to sync root
+	Reason string // issue type constant (IssueInvalidFilename, etc.)
+	Detail string // human-readable explanation
+}
+
+// ScanResult is the return type of FullScan. Events are valid change
+// observations; Skipped are user-actionable rejections (invalid names,
+// path too long, file too large) that the engine should record.
+type ScanResult struct {
+	Events  []ChangeEvent
+	Skipped []SkippedItem
+}
+
 // ChangeEvent is an immutable observation of a change, produced by observers
 // and consumed by the change buffer and planner. Never stored in the database
 // (except optionally in the change journal for debugging).
