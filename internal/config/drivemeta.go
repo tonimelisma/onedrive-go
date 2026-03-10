@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -128,4 +129,16 @@ func SaveDriveMetadata(cid driveid.CanonicalID, meta *DriveMetadata) error {
 	succeeded = true
 
 	return nil
+}
+
+// DiscoverDriveMetadataForEmail scans the data directory for drive metadata
+// files belonging to the given email address. Returns full file paths.
+// Uses the same underscore-boundary matching as DiscoverStateDBsForEmail.
+func DiscoverDriveMetadataForEmail(email string, logger *slog.Logger) []string {
+	return discoverDriveMetadataForEmailIn(DefaultDataDir(), email, logger)
+}
+
+// discoverDriveMetadataForEmailIn scans dir for drive metadata files belonging to email.
+func discoverDriveMetadataForEmailIn(dir, email string, logger *slog.Logger) []string {
+	return discoverFilesForEmail(dir, "drive_", ".json", email, logger)
 }

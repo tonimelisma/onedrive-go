@@ -6,9 +6,9 @@ Authentication, account management, drive types, and shared drive support.
 
 - R-3.1.1: When the user runs `login`, the system shall authenticate via device code flow (default). [verified]
 - R-3.1.2: When `--browser` is passed, the system shall use PKCE authorization code flow with localhost callback. [verified]
-- R-3.1.3: When the user runs `logout`, the system shall remove authentication state. [verified]
-- R-3.1.4: When `--purge` is passed with logout, the system shall also delete state DBs and config sections. [verified]
-- R-3.1.5: When the user runs `whoami`, the system shall display authenticated accounts. [verified]
+- R-3.1.3: When the user runs `logout`, the system shall remove the authentication token and config sections, preserving state databases, account profiles, and drive metadata. [verified]
+- R-3.1.4: When `--purge` is passed with logout, the system shall also delete state databases, account profiles, and drive metadata. `--purge` shall work after a prior non-purge logout. [verified]
+- R-3.1.5: When the user runs `whoami`, the system shall display authenticated accounts and logged-out accounts whose account profile files remain (not yet purged). [verified]
 
 ## R-3.2 Drive Types [verified]
 
