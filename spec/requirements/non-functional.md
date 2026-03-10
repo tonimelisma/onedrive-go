@@ -64,6 +64,7 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.6.9: When transient errors resolve within the retry budget, the system shall log at INFO with attempt count (not WARN). [planned]
 - R-6.6.10: When retries are exhausted, the system shall log a single WARN with final error, attempt count, and next retry time. [planned]
 - R-6.6.11: Every failure shown to the user shall include a plain-language reason and a concrete user action. Per-error-type reason and action text shall cover all failure categories (quota, permissions, disk space, service outage, rate limiting, naming violations, case collisions, network errors, auth failures, unknown errors), with scope-owner-specific variants for shortcut-scoped failures. [planned]
+- R-6.6.12: When more than 10 transient failures of the same issue_type exhaust their retry budget within a single sync pass, the system shall aggregate them into a single summary WARN log line with count, logging individual paths at DEBUG. This extends the scanner-skipped aggregation pattern (R-6.6.7) to execution-time transient failures. [planned]
 
 ## R-6.7 Technical Requirements [implemented]
 
@@ -113,6 +114,7 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.8.12: Target drive identity shall flow through the pipeline without lookup: planner to Action to TrackedAction to WorkerResult to engine. No component shall query drive identity from DB or API during failure handling. [planned]
 - R-6.8.13: `Action` shall expose `TargetsOwnDrive() bool` and `ShortcutKey() string` as the only drive-identity accessors for scope matching and routing. [planned]
 - R-6.8.14: `SyncTransport` (`MaxAttempts: 0`) shall still perform transparent 401 token refresh. Auth refresh is lifecycle, not transient retry. When refresh fails, the system shall return `ErrUnauthorized` (fatal). [planned]
+- R-6.8.15: The engine shall classify the following HTTP status codes as transient: 5xx (issue_type: server_error), 408 (request_timeout), 412 (transient_conflict), 404 (transient_not_found), 423 (resource_locked). Transient errors are retried via tracker re-queue (5 attempts with backoff: 1s, 2s, 4s, 8s, 16s). When retries are exhausted, the error is recorded in sync_failures with the specific issue_type for reconciler-based persistent retry and diagnostic grouping in the issues command. HTTP 423 (SharePoint co-authoring lock) was previously classified as skip — the non-blocking retry architecture handles multi-hour locks naturally via tracker re-queue and reconciler backoff (30s→1h) without dedicated timeout logic. [planned]
 
 ## R-6.9 Packaging [future]
 
