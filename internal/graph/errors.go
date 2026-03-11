@@ -83,22 +83,3 @@ func classifyStatus(code int) error {
 		return nil
 	}
 }
-
-// isRetryable reports whether the given HTTP status code should be retried.
-// Retry set defined in architecture.md §7.4. Callers should also check
-// Retry-After headers for 429 responses before computing backoff.
-func isRetryable(code int) bool {
-	switch code {
-	case http.StatusRequestTimeout,
-		http.StatusTooManyRequests,
-		http.StatusInternalServerError,
-		http.StatusBadGateway,
-		http.StatusServiceUnavailable,
-		http.StatusGatewayTimeout:
-		return true
-	default:
-		// 509 Bandwidth Limit Exceeded (SharePoint).
-		const statusBandwidthExceeded = 509
-		return code == statusBandwidthExceeded
-	}
-}

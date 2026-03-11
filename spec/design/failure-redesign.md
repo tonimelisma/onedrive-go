@@ -396,9 +396,9 @@ The system has three independent retry loops that nest and compound:
 | Executor `withRetry` | 3-attempt retry loop with `sleepFunc` | **Deleted entirely** — executor becomes thin action dispatch | *"Functions do one thing"* — execute, don't schedule |
 | Executor `classifyError` | Error classification in executor | **Moved to engine** `classifyResult()` | Single classification point eliminates contradictions between layers |
 | `retry.Action` policy | Used by executor withRetry | **Deleted** — tracker handles all retry timing | No executor retry → no executor retry policy |
-| `retry.SyncTransport` | N/A | **New**: `MaxAttempts: 0` for sync callers | Sync callers get raw result without transport blocking |
-| Tracker | Dependency dispatch only | **Extended**: delayed queue (NotBefore), scope gating, trial dispatch | *"Prefer large, long-term solutions"* — tracker becomes the unified scheduler |
-| Reconciler | Primary retry mechanism (30s-1h) | **Narrowed**: crash recovery + persistent long-term retry only | Primary retry moves to tracker; reconciler handles DB persistence |
+| `retry.SyncTransport` | N/A | **Created then deleted** — sync callers use raw `http.DefaultTransport` directly | No named policy constant needed; sync gets raw result without transport blocking |
+| Tracker | Dependency dispatch only | **Extended**: delayed queue (NotBefore), scope gating, trial dispatch, sole retry mechanism | *"Prefer large, long-term solutions"* — tracker becomes the unified scheduler |
+| Reconciler (FailureRetrier) | Primary retry mechanism (30s-1h) | **Eliminated**: retry loop deleted. Tracker handles all retry. sync_failures is diagnostic-only. Crash recovery via `ResetInProgressStates`. | One retry mechanism, not two. |
 | Engine result processing | Records failures, handles 403 | **Extended**: classification, scope detection, retry-vs-record decisions | *"Functions do one thing"* — engine orchestrates, everything else executes |
 
 **Eng Philosophy: "App hasn't been launched yet. No backwards compatibility."** The executor retry loop, transport retry in the sync path, and the `retry.Action` policy are deleted. No compatibility shims. No fallback paths. The new architecture replaces the old one completely.
@@ -830,10 +830,10 @@ For CLI callers (`ls`, `get`, `put`), the graph client continues to use `retry.T
 | Policy | Current Use | After Redesign |
 |--------|------------|----------------|
 | `Transport` | Graph client HTTP retry (5 attempts, 1-60s) | **Unchanged** — used by CLI callers only |
-| `SyncTransport` | N/A | **New** — `MaxAttempts: 0`, used by sync workers |
+| `SyncTransport` | Was MaxAttempts: 0, used by sync workers | **Deleted** — sync callers use raw `http.DefaultTransport` directly (no named policy constant needed) |
 | `DriveDiscovery` | Drive initialization (3 attempts) | **Unchanged** — not part of sync action path |
 | `Action` | Executor `withRetry` (3 attempts) | **Deleted** — executor retry loop removed |
-| `Reconcile` | Reconciler persistent retry (infinite, 30s-1h) | **Unchanged** — still drives `next_retry_at` in sync_failures |
+| `Reconcile` | Reconciler persistent retry (infinite, 30s-1h) | **Deleted** — tracker is the sole retry mechanism. sync_failures is diagnostic-only. FailureRetrier eliminated. |
 | `WatchLocal` | Local observer retry (infinite, 1-30s) | **Unchanged** — observer-level, not action-level |
 | `WatchRemote` | Remote observer retry (infinite, 5s-5min) | **Unchanged** — observer-level, not action-level |
 
