@@ -61,7 +61,7 @@ Stateful wrapper around Policy for watch loops. Tracks consecutive error count. 
 
 ## Scope-Based Retry with Trial Actions
 
-Implements: R-2.10.3 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.14 [verified], R-6.8.7 [verified], R-6.8.10 [verified], R-6.8.11 [verified]
+Implements: R-2.10.3 [verified], R-2.10.5 [planned], R-2.10.6 [planned], R-2.10.7 [planned], R-2.10.8 [planned], R-2.10.14 [planned], R-6.8.7 [verified], R-6.8.10 [verified], R-6.8.11 [verified]
 
 - **No transport-level retry for sync**: Sync callers use raw `http.DefaultTransport`. Each sync dispatch = one HTTP request. Workers never block on retry backoff. Failed actions returned to the tracker with `NotBefore` + incremented attempt counter.
 - **In-memory retry budget**: One-shot mode: 5 attempts per action. Budget exhaustion → `tracker.Complete()` as failed, recorded in `sync_failures` as diagnostic. Next `onedrive sync` run replans naturally. Watch mode: unlimited attempts (MaxAttempts = 0), retries forever with increasing backoff.
