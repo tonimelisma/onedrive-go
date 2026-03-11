@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 )
 
 // ErrSyncRootDeleted is returned when the sync root directory has been deleted
@@ -97,6 +99,10 @@ type LocalObserver struct {
 	safetyTickFunc     func(d time.Duration) (<-chan time.Time, func()) // injectable for testing; returns tick channel + stop func
 	safetyScanInterval time.Duration                                    // 0 → default (5 minutes); configurable (B-099)
 
+	// hashFunc computes the QuickXorHash of a file. Injectable for testing
+	// (e.g., to simulate panics in the hash phase).
+	hashFunc func(path string) (string, error)
+
 	// Write coalescing fields (B-107). Initialized in Watch(), not the
 	// constructor, since FullScan doesn't use coalescing.
 	writeCoalesceCooldown time.Duration          // 0 → defaultWriteCoalesceCooldown; injectable for tests
@@ -113,6 +119,7 @@ func NewLocalObserver(baseline *Baseline, logger *slog.Logger, checkWorkers int)
 		baseline:     baseline,
 		logger:       logger,
 		checkWorkers: checkWorkers,
+		hashFunc:     driveops.ComputeQuickXorHash,
 		sleepFunc:    timeSleep,
 		safetyTickFunc: func(d time.Duration) (<-chan time.Time, func()) {
 			t := time.NewTicker(d)

@@ -1552,3 +1552,227 @@ func (a *addTrackingWatcher) Remove(string) error           { return nil }
 func (a *addTrackingWatcher) Close() error                  { return nil }
 func (a *addTrackingWatcher) Events() <-chan fsnotify.Event { return a.events }
 func (a *addTrackingWatcher) Errors() <-chan error          { return a.errs }
+
+// ---------------------------------------------------------------------------
+// handleDelete NFC fix tests
+// ---------------------------------------------------------------------------
+
+// recordingFsWatcher extends mockFsWatcher to record Remove() calls.
+// This allows tests to verify which paths were passed to watcher.Remove().
+type recordingFsWatcher struct {
+	mockFsWatcher
+	mu        stdsync.Mutex
+	removed   []string
+	removeErr error // injectable error for Remove()
+}
+
+func newRecordingFsWatcher() *recordingFsWatcher {
+	return &recordingFsWatcher{
+		mockFsWatcher: mockFsWatcher{
+			events: make(chan fsnotify.Event, 10),
+			errs:   make(chan error, 10),
+		},
+	}
+}
+
+func (r *recordingFsWatcher) Remove(name string) error {
+	r.mu.Lock()
+	r.removed = append(r.removed, name)
+	err := r.removeErr
+	r.mu.Unlock()
+	return err
+}
+
+func (r *recordingFsWatcher) getRemovedPaths() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	result := make([]string, len(r.removed))
+	copy(result, r.removed)
+	return result
+}
+
+// Validates: R-6.7.20
+func TestHandleDelete_UsesOriginalFsPath(t *testing.T) {
+	t.Parallel()
+
+	// On macOS HFS+, fsnotify delivers NFD paths. handleDelete must pass the
+	// original filesystem path (from fsEvent.Name) to watcher.Remove(), not a
+	// reconstructed NFC path. Otherwise watcher.Remove() silently fails and
+	// the watch leaks.
+
+	tests := []struct {
+		name       string
+		fsPath     string // original path from fsnotify (potentially NFD)
+		dbRelPath  string // NFC-normalized for baseline lookup
+		baseType   ItemType
+		wantRemove bool   // expect watcher.Remove() to be called
+		wantPath   string // expected path passed to watcher.Remove()
+	}{
+		{
+			name:       "NFC folder path",
+			fsPath:     "/sync/r\u00e9sum\u00e9",
+			dbRelPath:  "r\u00e9sum\u00e9",
+			baseType:   ItemTypeFolder,
+			wantRemove: true,
+			wantPath:   "/sync/r\u00e9sum\u00e9",
+		},
+		{
+			name:       "NFD folder path (decomposed)",
+			fsPath:     "/sync/re\u0301sume\u0301",
+			dbRelPath:  "r\u00e9sum\u00e9",
+			baseType:   ItemTypeFolder,
+			wantRemove: true,
+			wantPath:   "/sync/re\u0301sume\u0301", // must use original, NOT reconstructed NFC
+		},
+		{
+			name:       "ASCII folder path",
+			fsPath:     "/sync/photos",
+			dbRelPath:  "photos",
+			baseType:   ItemTypeFolder,
+			wantRemove: true,
+			wantPath:   "/sync/photos",
+		},
+		{
+			name:       "file (not folder) — no Remove call",
+			fsPath:     "/sync/file.txt",
+			dbRelPath:  "file.txt",
+			baseType:   ItemTypeFile,
+			wantRemove: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			watcher := newRecordingFsWatcher()
+			baseline := baselineWith(&BaselineEntry{
+				Path:     tt.dbRelPath,
+				DriveID:  driveid.New("d"),
+				ItemID:   "item1",
+				ItemType: tt.baseType,
+			})
+
+			obs := NewLocalObserver(baseline, testLogger(t), 0)
+			obs.pendingTimers = make(map[string]*time.Timer)
+			obs.hashRequests = make(chan hashRequest, hashRequestBufSize)
+
+			events := make(chan ChangeEvent, 10)
+			name := filepath.Base(tt.dbRelPath)
+
+			obs.handleDelete(t.Context(), watcher, tt.fsPath, tt.dbRelPath, name, events)
+
+			removed := watcher.getRemovedPaths()
+			if tt.wantRemove {
+				require.Len(t, removed, 1, "expected exactly one Remove call")
+				assert.Equal(t, tt.wantPath, removed[0],
+					"watcher.Remove() should receive the original filesystem path")
+			} else {
+				assert.Empty(t, removed, "file deletes should not call watcher.Remove()")
+			}
+		})
+	}
+}
+
+// Validates: R-6.7.20
+func TestHandleDelete_EmitsDeleteEvent(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		baseType ItemType
+	}{
+		{"file deletion", ItemTypeFile},
+		{"folder deletion", ItemTypeFolder},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			watcher := newRecordingFsWatcher()
+			baseline := baselineWith(&BaselineEntry{
+				Path:     "target",
+				DriveID:  driveid.New("d"),
+				ItemID:   "item1",
+				ItemType: tt.baseType,
+			})
+
+			obs := NewLocalObserver(baseline, testLogger(t), 0)
+			obs.pendingTimers = make(map[string]*time.Timer)
+			obs.hashRequests = make(chan hashRequest, hashRequestBufSize)
+
+			events := make(chan ChangeEvent, 10)
+			obs.handleDelete(t.Context(), watcher, "/sync/target", "target", "target", events)
+
+			select {
+			case ev := <-events:
+				assert.Equal(t, ChangeDelete, ev.Type)
+				assert.Equal(t, "target", ev.Path)
+				assert.Equal(t, "target", ev.Name)
+				assert.Equal(t, tt.baseType, ev.ItemType)
+				assert.True(t, ev.IsDeleted)
+				assert.Equal(t, SourceLocal, ev.Source)
+			default:
+				require.Fail(t, "expected a ChangeDelete event")
+			}
+		})
+	}
+}
+
+// TestHandleDelete_CancelsCoalesceTimer verifies that handleDelete cancels
+// any pending write coalesce timer for the deleted path (B-107).
+func TestHandleDelete_CancelsCoalesceTimer(t *testing.T) {
+	t.Parallel()
+
+	watcher := newRecordingFsWatcher()
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
+	obs.pendingTimers = make(map[string]*time.Timer)
+	obs.hashRequests = make(chan hashRequest, hashRequestBufSize)
+
+	// Set up a pending timer for "file.txt".
+	obs.pendingTimers["file.txt"] = time.AfterFunc(time.Hour, func() {})
+
+	events := make(chan ChangeEvent, 10)
+	obs.handleDelete(t.Context(), watcher, "/sync/file.txt", "file.txt", "file.txt", events)
+
+	assert.Empty(t, obs.pendingTimers, "handleDelete should cancel pending timer")
+}
+
+// Validates: R-6.7.20
+func TestHandleFsEvent_DeletePassesFsPath(t *testing.T) {
+	t.Parallel()
+
+	// This test verifies the full call chain: handleFsEvent → handleDelete
+	// passes fsEvent.Name (the original filesystem path) to watcher.Remove().
+
+	syncRoot := t.TempDir()
+	dirPath := filepath.Join(syncRoot, "folder")
+	require.NoError(t, os.MkdirAll(dirPath, 0o755))
+
+	watcher := newRecordingFsWatcher()
+	baseline := baselineWith(&BaselineEntry{
+		Path:     "folder",
+		DriveID:  driveid.New("d"),
+		ItemID:   "f1",
+		ItemType: ItemTypeFolder,
+	})
+
+	obs := NewLocalObserver(baseline, testLogger(t), 0)
+	obs.pendingTimers = make(map[string]*time.Timer)
+	obs.hashRequests = make(chan hashRequest, hashRequestBufSize)
+
+	events := make(chan ChangeEvent, 10)
+
+	fsEvent := fsnotify.Event{
+		Name: dirPath,
+		Op:   fsnotify.Remove,
+	}
+
+	obs.handleFsEvent(t.Context(), fsEvent, watcher, syncRoot, events)
+
+	removed := watcher.getRemovedPaths()
+	require.Len(t, removed, 1, "expected Remove call for folder delete")
+	assert.Equal(t, dirPath, removed[0],
+		"should pass original fsEvent.Name to watcher.Remove()")
+}
