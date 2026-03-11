@@ -17,7 +17,7 @@ Fast, safe OneDrive CLI and sync client in Go. Unix-style file ops (`ls`, `get`,
 | `internal/sync/planner.go`, `types.go` | `spec/design/sync-planning.md` | `spec/reference/onedrive-sync-behavior.md` |
 | `internal/sync/executor*.go`, `worker.go`, `tracker.go`, `reconciler.go` | `spec/design/sync-execution.md` | |
 | `internal/sync/engine*.go`, `orchestrator.go`, `drive_runner.go`, `sync.go` | `spec/design/sync-engine.md` | |
-| `internal/sync/baseline.go`, `store_interfaces.go`, `migrations.go` | `spec/design/sync-store.md` | `spec/design/data-model.md` |
+| `internal/sync/store*.go`, `migrations.go` | `spec/design/sync-store.md` | `spec/design/data-model.md` |
 | Root package CLI files | `spec/design/cli.md` | |
 
 | Working on capability... | Requirements | Design docs |

@@ -1,10 +1,10 @@
 # Sync Store
 
-GOVERNS: internal/sync/baseline.go, internal/sync/store_interfaces.go, internal/sync/migrations.go, internal/sync/verify.go, internal/sync/trash.go, issues.go, verify.go
+GOVERNS: internal/sync/store.go, internal/sync/store_baseline.go, internal/sync/store_observation.go, internal/sync/store_conflicts.go, internal/sync/store_failures.go, internal/sync/store_admin.go, internal/sync/store_interfaces.go, internal/sync/migrations.go, internal/sync/verify.go, internal/sync/trash.go, issues.go, verify.go
 
 Implements: R-2.5 [verified], R-2.3.2 [verified], R-2.3.3 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.7 [verified], R-6.4.4 [verified], R-6.4.5 [verified], R-2.15.1 [verified], R-2.10.1 [planned], R-2.10.2 [planned], R-2.10.33 [implemented], R-2.10.34 [planned], R-2.10.41 [implemented]
 
-## SyncStore (`baseline.go`)
+## SyncStore (`store.go`)
 
 Database access layer exposing typed sub-interfaces. See [data-model.md](data-model.md) for the sub-interface table and schema details.
 

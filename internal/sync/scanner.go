@@ -49,6 +49,11 @@ const (
 	nanosPerSecond         = 1_000_000_000
 	maxComponentLength     = 255
 	deviceNameWithDigitLen = 4 // COM0-COM9, LPT0-LPT9 have exactly 4 characters
+
+	// maxOneDrivePathLength is the maximum total path length OneDrive allows.
+	maxOneDrivePathLength = 400
+	// maxOneDriveFileSize is the maximum file size OneDrive allows (250 GB).
+	maxOneDriveFileSize = 250 * 1024 * 1024 * 1024 // 250 GB
 )
 
 // defaultCheckWorkers is the default parallel hash goroutine limit when
