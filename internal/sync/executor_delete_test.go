@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -86,8 +85,6 @@ func newDeleteTestExecutor(t *testing.T) (*Executor, string) {
 	cfg := NewExecutorConfig(items, dl, ul, syncRoot, driveID, logger)
 	cfg.transferMgr = driveops.NewTransferManager(dl, ul, nil, logger)
 	cfg.nowFunc = func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) }
-	cfg.sleepFunc = func(_ context.Context, _ time.Duration) error { return nil }
-
 	e := NewExecution(cfg, emptyBaseline())
 
 	return e, syncRoot

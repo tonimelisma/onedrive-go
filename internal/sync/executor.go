@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,8 +12,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // ErrPathEscapesSyncRoot is returned when a relative path would resolve
@@ -24,15 +21,6 @@ var ErrPathEscapesSyncRoot = errors.New("sync: path escapes sync root")
 // graphRootID is the Graph API parent reference for top-level items.
 // Distinct from strRoot in types.go which serializes the ItemTypeRoot enum.
 const graphRootID = "root"
-
-// errClass classifies an error for the executor's retry/skip/fatal decision.
-type errClass int
-
-const (
-	errClassSkip      errClass = iota // non-retryable, skip this action
-	errClassRetryable                 // transient, retry with backoff
-	errClassFatal                     // abort the entire sync pass
-)
 
 // ExecutorConfig holds the immutable configuration for creating per-call
 // Executor instances. Separated from mutable state to prevent temporal
@@ -51,7 +39,6 @@ type ExecutorConfig struct {
 	// Injectable for testing.
 	nowFunc   func() time.Time
 	hashFunc  func(filePath string) (string, error)
-	sleepFunc func(ctx context.Context, d time.Duration) error
 	trashFunc func(absPath string) error // nil = permanent delete (os.Remove)
 }
 
@@ -78,7 +65,6 @@ func NewExecutorConfig(
 		logger:    logger,
 		nowFunc:   time.Now,
 		hashFunc:  driveops.ComputeQuickXorHash,
-		sleepFunc: timeSleep,
 	}
 
 	return cfg
@@ -138,14 +124,7 @@ func (e *Executor) createRemoteFolder(ctx context.Context, action *Action) Outco
 	driveID := e.resolveDriveID(action)
 	name := filepath.Base(action.Path)
 
-	var item *graph.Item
-
-	err = e.withRetry(ctx, "create folder "+action.Path, func() error {
-		var createErr error
-		item, createErr = e.items.CreateFolder(ctx, driveID, parentID, name)
-
-		return createErr
-	})
+	item, err := e.items.CreateFolder(ctx, driveID, parentID, name)
 	if err != nil {
 		return e.failedOutcome(action, ActionFolderCreate, fmt.Errorf("creating remote folder %s: %w", action.Path, err))
 	}
@@ -214,14 +193,7 @@ func (e *Executor) executeRemoteMove(ctx context.Context, action *Action) Outcom
 
 	newName := filepath.Base(action.Path)
 
-	var item *graph.Item
-
-	err = e.withRetry(ctx, "remote move "+action.OldPath, func() error {
-		var moveErr error
-		item, moveErr = e.items.MoveItem(ctx, driveID, action.ItemID, newParentID, newName)
-
-		return moveErr
-	})
+	item, err := e.items.MoveItem(ctx, driveID, action.ItemID, newParentID, newName)
 	if err != nil {
 		return e.failedOutcome(action, ActionRemoteMove, fmt.Errorf("moving %s -> %s: %w", action.OldPath, action.Path, err))
 	}
@@ -376,106 +348,6 @@ func (e *Executor) resolveDriveID(action *Action) driveid.ID {
 	}
 
 	return e.driveID
-}
-
-// classifyError determines whether an error is fatal, retryable, or skippable.
-func classifyError(err error) errClass {
-	if err == nil {
-		return errClassSkip
-	}
-
-	// Context cancellation is always fatal.
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return errClassFatal
-	}
-
-	// GraphError carries a status code — classify by code for precision.
-	// This must come before sentinel checks because 507 (fatal) wraps
-	// ErrServerError (retryable), and the specific code wins.
-	var ge *graph.GraphError
-	if errors.As(err, &ge) {
-		return classifyStatusCode(ge.StatusCode)
-	}
-
-	// Bare sentinel errors (not wrapped in GraphError).
-	if errors.Is(err, graph.ErrUnauthorized) {
-		return errClassFatal
-	}
-
-	if errors.Is(err, graph.ErrThrottled) || errors.Is(err, graph.ErrServerError) {
-		return errClassRetryable
-	}
-
-	// Non-graph errors (filesystem, etc.) are skippable.
-	return errClassSkip
-}
-
-// classifyStatusCode maps HTTP status codes to error classes.
-func classifyStatusCode(code int) errClass {
-	switch code {
-	case http.StatusUnauthorized:
-		return errClassFatal
-	case http.StatusInsufficientStorage:
-		return errClassFatal
-	case http.StatusLocked: // HTTP 423: SharePoint co-authoring locks last hours; skip, don't retry (B-020)
-		return errClassSkip
-	// 404 Not Found: Graph API returns transient 404s on valid resources due to
-	// load-balancer cache misses and cross-datacenter lookup timeouts (ci_issues.md §1).
-	// A retry resolves it in ~1 second. Delete actions handle 404 as success before
-	// reaching withRetry, so this does not affect delete behavior.
-	//
-	// 412 Precondition Failed: Graph API returns this on server-side ETag conflicts
-	// during mutations (e.g., concurrent writes). We don't send If-Match headers,
-	// so 412 only comes from server-side checks. A plain retry succeeds once the
-	// server resolves the transient conflict.
-	case http.StatusNotFound, http.StatusRequestTimeout, http.StatusPreconditionFailed,
-		http.StatusTooManyRequests, 509: //nolint:mnd // HTTP 509 Bandwidth Limit Exceeded (no stdlib constant)
-		return errClassRetryable
-	default:
-		if code >= http.StatusInternalServerError {
-			return errClassRetryable
-		}
-
-		return errClassSkip
-	}
-}
-
-// withRetry retries a function with exponential backoff on retryable errors.
-func (e *Executor) withRetry(ctx context.Context, desc string, fn func() error) error {
-	var lastErr error
-
-	for attempt := range retry.Action.MaxAttempts + 1 {
-		lastErr = fn()
-		if lastErr == nil {
-			return nil
-		}
-
-		if classifyError(lastErr) != errClassRetryable {
-			return lastErr
-		}
-
-		if attempt < retry.Action.MaxAttempts {
-			backoff := calcExecBackoff(attempt)
-			e.logger.Warn("retrying after transient error",
-				slog.String("operation", desc),
-				slog.Int("attempt", attempt+1),
-				slog.Duration("backoff", backoff),
-				slog.String("error", lastErr.Error()),
-			)
-
-			if err := e.sleepFunc(ctx, backoff); err != nil {
-				return fmt.Errorf("sync: retry wait canceled: %w", err)
-			}
-		}
-	}
-
-	return lastErr
-}
-
-// calcExecBackoff computes exponential backoff with jitter for executor retries
-// using the unified retry.Action policy.
-func calcExecBackoff(attempt int) time.Duration {
-	return retry.Action.Delay(attempt)
 }
 
 // failedOutcome builds an Outcome for a failed action.

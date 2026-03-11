@@ -90,7 +90,9 @@ func newIntegrationClient(t *testing.T) *Client {
 	}
 	require.NoError(t, err, "loading token for drive %q", drive)
 
-	return NewClient(DefaultBaseURL, http.DefaultClient, ts, logger, "onedrive-go/test", retry.Transport)
+	httpClient := retryHTTPClient(http.DefaultClient, retry.Transport)
+
+	return NewClient(DefaultBaseURL, httpClient, ts, logger, "onedrive-go/test")
 }
 
 // driveIDForTest reads drive_id from the drive metadata file for the test drive.

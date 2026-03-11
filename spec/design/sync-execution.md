@@ -2,13 +2,15 @@
 
 GOVERNS: internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_transfer.go, internal/sync/worker.go, internal/sync/tracker.go, internal/sync/reconciler.go, internal/sync/issue_types.go, internal/sync/compute_status.go, status.go
 
-Implements: R-2.3 [verified], R-5.1 [verified], R-6.4 [implemented], R-6.5.3 [verified], R-6.4.9 [planned], R-6.7.25 [planned], R-6.8.7 [planned], R-6.8.8 [planned], R-6.8.9 [planned], R-2.10.5 [planned], R-2.10.11 [planned], R-2.10.15 [planned], R-2.10.16 [planned], R-2.10.41 [planned], R-2.10.42 [planned], R-2.10.43 [planned], R-2.10.44 [planned]
+Implements: R-2.3 [verified], R-5.1 [verified], R-6.4 [implemented], R-6.5.3 [verified], R-6.4.9 [planned], R-6.7.25 [planned], R-6.8.7 [planned], R-6.8.8 [verified], R-6.8.9 [verified], R-2.10.5 [planned], R-2.10.11 [planned], R-2.10.15 [planned], R-2.10.16 [planned], R-2.10.41 [planned], R-2.10.42 [planned], R-2.10.43 [planned], R-2.10.44 [planned]
 
 ## Executor (`executor.go`)
 
-Takes an `ActionPlan` and dispatches actions to workers via the DepTracker. Actions dispatched based on dependency satisfaction, not fixed phase ordering. Workers produce individual `Outcome` values committed per-action by the SyncStore.
+Implements: R-6.8.9 [verified]
 
-**Planned: Thin Action Dispatcher** — Executor will become a thin action dispatcher. `withRetry`, `classifyError`, `classifyStatusCode`, `sleepFunc`, and `errClass` constants will be removed. Action methods call graph client directly and return `Outcome`. The engine classifies errors and schedules retries. Hash mismatch retry (`downloadWithHashRetry`) is unchanged — it's a data integrity mechanism orthogonal to the retry redesign.
+Thin action dispatcher. Takes an `ActionPlan` and dispatches actions to workers via the DepTracker. Actions dispatched based on dependency satisfaction, not fixed phase ordering. Workers produce individual `Outcome` values committed per-action by the SyncStore.
+
+Action methods call the graph client directly and return `Outcome` — no retry loop, no error classification, no sleep. The following were removed as part of the retry-to-transport refactoring: `withRetry()`, `classifyError()`, `classifyStatusCode()`, `calcExecBackoff()`, `errClass` type + constants, `sleepFunc` field. Hash mismatch retry (`downloadWithHashRetry`) is unchanged — it's a data integrity mechanism orthogonal to the retry redesign.
 
 ## Tracker (`tracker.go`)
 

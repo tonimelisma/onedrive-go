@@ -4,13 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -40,26 +38,6 @@ func (f *failingSeeker) Seek(_ int64, _ int) (int64, error) {
 	return 0, errors.New("seek failed")
 }
 
-// failOnSecondSeeker is an io.ReadSeeker where the first Seek succeeds but
-// subsequent Seeks fail. Used to test the rewindBody failure on retry in doRetry.
-type failOnSecondSeeker struct {
-	data      []byte
-	seekCount atomic.Int32
-}
-
-func (f *failOnSecondSeeker) Read(p []byte) (int, error) {
-	return copy(p, f.data), io.EOF
-}
-
-func (f *failOnSecondSeeker) Seek(_ int64, _ int) (int64, error) {
-	n := f.seekCount.Add(1)
-	if n > 1 {
-		return 0, errors.New("seek failed on retry")
-	}
-
-	return 0, nil
-}
-
 // staticToken is a test TokenSource that returns a fixed token.
 type staticToken string
 
@@ -74,15 +52,46 @@ func (failingToken) Token() (string, error) {
 	return "", errors.New("token error")
 }
 
-// newTestClient creates a Client pointing at the given httptest server
-// with instant retry sleeps for fast tests.
+// testRetryPolicy is a fast retry policy for tests.
+var testRetryPolicy = retry.Policy{
+	MaxAttempts: 5,
+	Base:        1 * time.Millisecond,
+	Max:         10 * time.Millisecond,
+	Multiplier:  2.0,
+	Jitter:      0.0,
+}
+
+// retryHTTPClient wraps an http.Client with a fast RetryTransport for tests.
+// This replaces the old approach of injecting sleepFunc on the graph.Client.
+func retryHTTPClient(inner *http.Client, policy retry.Policy) *http.Client {
+	transport := inner.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+
+	return &http.Client{
+		Timeout: inner.Timeout,
+		Transport: &retry.RetryTransport{
+			Inner:  transport,
+			Policy: policy,
+			Logger: slog.Default(),
+			Sleep:  noopSleep,
+		},
+	}
+}
+
+// newTestClient creates a Client with a RetryTransport for fast tests that need retry behavior.
 func newTestClient(t *testing.T, url string) *Client {
 	t.Helper()
 
-	c := NewClient(url, http.DefaultClient, staticToken("test-token"), slog.Default(), "test-agent", retry.Transport)
-	c.sleepFunc = noopSleep
+	return NewClient(url, retryHTTPClient(http.DefaultClient, testRetryPolicy), staticToken("test-token"), slog.Default(), "test-agent")
+}
 
-	return c
+// newNoRetryTestClient creates a Client with no retry — for testing single-request behavior.
+func newNoRetryTestClient(t *testing.T, url string) *Client {
+	t.Helper()
+
+	return NewClient(url, http.DefaultClient, staticToken("test-token"), slog.Default(), "test-agent")
 }
 
 func TestDo_Success(t *testing.T) {
@@ -127,7 +136,8 @@ func TestDo_ErrorClassification(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			client := newTestClient(t, srv.URL)
+			// Use no-retry client — these are non-retryable codes.
+			client := newNoRetryTestClient(t, srv.URL)
 			_, err := client.Do(t.Context(), http.MethodGet, "/test", nil)
 			require.Error(t, err)
 			assert.ErrorIs(t, err, tt.sentinel)
@@ -242,8 +252,7 @@ func TestDo_AuthorizationHeader(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewClient(srv.URL, http.DefaultClient, staticToken("my-secret-token"), slog.Default(), "test-agent", retry.Transport)
-	client.sleepFunc = noopSleep
+	client := NewClient(srv.URL, http.DefaultClient, staticToken("my-secret-token"), slog.Default(), "test-agent")
 
 	resp, err := client.Do(t.Context(), http.MethodGet, "/auth", nil)
 	require.NoError(t, err)
@@ -261,7 +270,7 @@ func TestDo_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	client := newTestClient(t, srv.URL)
+	client := newNoRetryTestClient(t, srv.URL)
 	_, err := client.Do(ctx, http.MethodGet, "/cancel", nil)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
@@ -317,8 +326,7 @@ func TestDo_ContentTypeForBody(t *testing.T) {
 }
 
 func TestDo_TokenError(t *testing.T) {
-	client := NewClient("http://localhost", http.DefaultClient, failingToken{}, slog.Default(), "test-agent", retry.Transport)
-	client.sleepFunc = noopSleep
+	client := NewClient("http://localhost", http.DefaultClient, failingToken{}, slog.Default(), "test-agent")
 
 	_, err := client.Do(t.Context(), http.MethodGet, "/test", nil)
 	require.Error(t, err)
@@ -380,39 +388,15 @@ func TestClassifyStatus(t *testing.T) {
 
 func TestNewClient_Defaults(t *testing.T) {
 	// Nil logger and httpClient should use defaults, not panic.
-	c := NewClient("http://localhost", nil, staticToken("tok"), nil, "", retry.Transport)
+	c := NewClient("http://localhost", nil, staticToken("tok"), nil, "")
 	assert.NotNil(t, c.httpClient)
 	assert.NotNil(t, c.logger)
 }
 
 func TestNewClient_NilTokenSourcePanics(t *testing.T) {
 	assert.Panics(t, func() {
-		NewClient("http://localhost", nil, nil, nil, "", retry.Transport)
+		NewClient("http://localhost", nil, nil, nil, "")
 	})
-}
-
-func TestTimeSleep_Completes(t *testing.T) {
-	err := timeSleep(t.Context(), 10*time.Millisecond)
-	assert.NoError(t, err)
-}
-
-func TestTimeSleep_ContextCancel(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-
-	err := timeSleep(ctx, time.Minute)
-	assert.ErrorIs(t, err, context.Canceled)
-}
-
-func TestCalcBackoff_MaxCap(t *testing.T) {
-	c := NewClient("http://localhost", nil, staticToken("tok"), nil, "", retry.Transport)
-
-	// Attempt 10 produces 1s * 2^10 = 1024s which exceeds max (60s).
-	// Verify the result is capped near max (±jitter).
-	maxDur := retry.Transport.Max
-	backoff := c.calcBackoff(10)
-	assert.LessOrEqual(t, backoff, maxDur+maxDur/4)
-	assert.GreaterOrEqual(t, backoff, maxDur-maxDur/4)
 }
 
 func TestDoWithHeaders_SendsExtraHeaders(t *testing.T) {
@@ -480,23 +464,14 @@ func TestDoWithHeaders_RetriesWithHeaders(t *testing.T) {
 
 func TestDo_RetryWithBody(t *testing.T) {
 	// Verify that POST/PATCH bodies are fully readable on retry attempts.
-	// Before the fix, the body io.Reader was consumed on the first attempt
-	// and subsequent retries sent empty bodies.
 	expectedBody := `{"name":"test-folder","folder":{}}`
 
 	var calls atomic.Int32
 
-	var capturedBodies []string
-
-	var mu sync.Mutex
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, readErr := io.ReadAll(r.Body)
 		require.NoError(t, readErr)
-
-		mu.Lock()
-		capturedBodies = append(capturedBodies, string(body))
-		mu.Unlock()
+		assert.Equal(t, expectedBody, string(body))
 
 		n := calls.Add(1)
 		if n <= 1 {
@@ -521,14 +496,6 @@ func TestDo_RetryWithBody(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, int32(2), calls.Load())
-
-	// Both attempts must have received the full body.
-	mu.Lock()
-	defer mu.Unlock()
-
-	require.Len(t, capturedBodies, 2)
-	assert.Equal(t, expectedBody, capturedBodies[0], "first attempt body")
-	assert.Equal(t, expectedBody, capturedBodies[1], "retry attempt body")
 }
 
 func TestIsRetryable(t *testing.T) {
@@ -568,29 +535,6 @@ func TestRewindBody_SeekError(t *testing.T) {
 	assert.Contains(t, err.Error(), "seek failed")
 }
 
-func TestDoRetry_RewindBodyFailure(t *testing.T) {
-	// The first rewind (before attempt 0) succeeds, the HTTP call gets a 500
-	// (retryable), then the second rewind (before the retry) fails.
-	var calls atomic.Int32
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		calls.Add(1)
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-
-	body := &failOnSecondSeeker{data: []byte(`{"key":"value"}`)}
-
-	_, err := client.Do(t.Context(), http.MethodPost, "/test", body)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "rewinding request body for retry")
-
-	// Only one HTTP call should have been made — the rewind failure prevents retry.
-	assert.Equal(t, int32(1), calls.Load())
-}
-
 func TestRetryBackoff_MalformedRetryAfter(t *testing.T) {
 	// Verify that a non-numeric Retry-After header falls back to exponential backoff
 	// instead of crashing or using a zero duration.
@@ -619,20 +563,18 @@ func TestRetryBackoff_MalformedRetryAfter(t *testing.T) {
 	assert.Equal(t, int32(2), calls.Load())
 }
 
-func TestDoRetry_NetworkError_MaxRetries(t *testing.T) {
+func TestDo_NetworkError_MaxRetries(t *testing.T) {
 	// Point the client at an unreachable address and verify that all retries
 	// are exhausted before returning an error.
-	client := NewClient("http://127.0.0.1:1", http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent", retry.Transport)
-	client.sleepFunc = noopSleep
+	client := NewClient("http://127.0.0.1:1", retryHTTPClient(http.DefaultClient, testRetryPolicy), staticToken("tok"), slog.Default(), "test-agent")
 
 	_, err := client.Do(t.Context(), http.MethodGet, "/unreachable", nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed after 5 retries")
 }
 
-// --- doPreAuthRetry tests ---
+// --- doPreAuth tests ---
 
-func TestDoPreAuthRetry_SuccessFirstTry(t *testing.T) {
+func TestDoPreAuth_SuccessFirstTry(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Verify no Authorization header is sent.
 		assert.Empty(t, r.Header.Get("Authorization"))
@@ -644,7 +586,7 @@ func TestDoPreAuthRetry_SuccessFirstTry(t *testing.T) {
 
 	client := newTestClient(t, "http://unused")
 
-	resp, err := client.doPreAuthRetry(t.Context(), "test op", func() (*http.Request, error) {
+	resp, err := client.doPreAuth(t.Context(), "test op", func() (*http.Request, error) {
 		req, reqErr := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/test", http.NoBody)
 		if reqErr != nil {
 			return nil, reqErr
@@ -660,131 +602,7 @@ func TestDoPreAuthRetry_SuccessFirstTry(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
-func TestDoPreAuthRetry_NetworkRetry(t *testing.T) {
-	// Verify that network errors trigger retries. Use a factory that switches
-	// from an unreachable address to a working server after the first attempt.
-	var attempts atomic.Int32
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`ok`))
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, "http://unused")
-
-	resp, err := client.doPreAuthRetry(t.Context(), "net retry", func() (*http.Request, error) {
-		n := attempts.Add(1)
-
-		target := "http://127.0.0.1:1/unreachable"
-		if n > 1 {
-			target = srv.URL + "/ok"
-		}
-
-		return http.NewRequestWithContext(t.Context(), http.MethodGet, target, http.NoBody)
-	})
-	require.NoError(t, err)
-	defer resp.Body.Close()
-
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, int32(2), attempts.Load(), "should succeed on second attempt")
-}
-
-func TestDoPreAuthRetry_503Retry(t *testing.T) {
-	var calls atomic.Int32
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		n := calls.Add(1)
-		if n <= 2 {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			return
-		}
-
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`ok`))
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, "http://unused")
-
-	resp, err := client.doPreAuthRetry(t.Context(), "503 retry", func() (*http.Request, error) {
-		return http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/test", http.NoBody)
-	})
-	require.NoError(t, err)
-	defer resp.Body.Close()
-
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, int32(3), calls.Load())
-}
-
-func TestDoPreAuthRetry_429WithRetryAfter(t *testing.T) {
-	var calls atomic.Int32
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		n := calls.Add(1)
-		if n <= 1 {
-			w.Header().Set("Retry-After", "1")
-			w.WriteHeader(http.StatusTooManyRequests)
-			return
-		}
-
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`ok`))
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, "http://unused")
-
-	resp, err := client.doPreAuthRetry(t.Context(), "429 retry", func() (*http.Request, error) {
-		return http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/test", http.NoBody)
-	})
-	require.NoError(t, err)
-	defer resp.Body.Close()
-
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, int32(2), calls.Load())
-}
-
-func TestDoPreAuthRetry_MaxRetriesExhausted(t *testing.T) {
-	var calls atomic.Int32
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		calls.Add(1)
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, "http://unused")
-
-	_, err := client.doPreAuthRetry(t.Context(), "exhaust", func() (*http.Request, error) {
-		return http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/fail", http.NoBody)
-	})
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrServerError)
-
-	// 1 initial + 5 retries = 6 total attempts.
-	assert.Equal(t, int32(6), calls.Load())
-}
-
-func TestDoPreAuthRetry_ContextCancellation(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	defer srv.Close()
-
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-
-	client := newTestClient(t, "http://unused")
-
-	_, err := client.doPreAuthRetry(ctx, "cancel test", func() (*http.Request, error) {
-		return http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/test", http.NoBody)
-	})
-	require.Error(t, err)
-	assert.ErrorIs(t, err, context.Canceled)
-}
-
-func TestDoPreAuthRetry_NonRetryable4xx(t *testing.T) {
+func TestDoPreAuth_NonRetryable4xx(t *testing.T) {
 	var calls atomic.Int32
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -796,7 +614,7 @@ func TestDoPreAuthRetry_NonRetryable4xx(t *testing.T) {
 
 	client := newTestClient(t, "http://unused")
 
-	_, err := client.doPreAuthRetry(t.Context(), "404 test", func() (*http.Request, error) {
+	_, err := client.doPreAuth(t.Context(), "404 test", func() (*http.Request, error) {
 		return http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/missing", http.NoBody)
 	})
 	require.Error(t, err)
@@ -810,50 +628,14 @@ func TestDoPreAuthRetry_NonRetryable4xx(t *testing.T) {
 	assert.Equal(t, int32(1), calls.Load())
 }
 
-func TestDoPreAuthRetry_MakeReqError(t *testing.T) {
+func TestDoPreAuth_MakeReqError(t *testing.T) {
 	client := newTestClient(t, "http://unused")
 
-	_, err := client.doPreAuthRetry(t.Context(), "bad factory", func() (*http.Request, error) {
+	_, err := client.doPreAuth(t.Context(), "bad factory", func() (*http.Request, error) {
 		return nil, errors.New("factory failed")
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "factory failed")
-}
-
-func TestDoPreAuthRetry_NetworkMaxRetries(t *testing.T) {
-	client := NewClient("http://localhost", http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent", retry.Transport)
-	client.sleepFunc = noopSleep
-
-	_, err := client.doPreAuthRetry(t.Context(), "net exhaust", func() (*http.Request, error) {
-		return http.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:1/unreachable", http.NoBody)
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed after 5 retries")
-}
-
-func TestDoPreAuthRetry_ContextCancelDuringHTTPBackoff(t *testing.T) {
-	// Verify that context cancellation during the backoff sleep after a retryable
-	// HTTP error (503) is detected and returned.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	defer srv.Close()
-
-	ctx, cancel := context.WithCancel(t.Context())
-
-	client := newTestClient(t, "http://unused")
-	// Override sleepFunc to cancel context on first backoff.
-	client.sleepFunc = func(_ context.Context, _ time.Duration) error {
-		cancel()
-
-		return context.Canceled
-	}
-
-	_, err := client.doPreAuthRetry(ctx, "cancel during backoff", func() (*http.Request, error) {
-		return http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/fail", http.NoBody)
-	})
-	require.Error(t, err)
-	assert.ErrorIs(t, err, context.Canceled)
 }
 
 func TestDo_ErrorBodyCappedAt64KiB(t *testing.T) {
@@ -867,7 +649,7 @@ func TestDo_ErrorBodyCappedAt64KiB(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := newTestClient(t, srv.URL)
+	client := newNoRetryTestClient(t, srv.URL)
 
 	_, err := client.Do(t.Context(), http.MethodGet, "/big-error", nil)
 	require.Error(t, err)
@@ -878,8 +660,8 @@ func TestDo_ErrorBodyCappedAt64KiB(t *testing.T) {
 	assert.Equal(t, maxErrBodySize, len(ge.Message), "error body should be exactly 64 KiB (truncated)")
 }
 
-func TestDoPreAuthRetry_ErrorBodyCappedAt64KiB(t *testing.T) {
-	// Same test but for the pre-auth retry path (B-314).
+func TestDoPreAuth_ErrorBodyCappedAt64KiB(t *testing.T) {
+	// Same test but for the pre-auth path (B-314).
 	bigBody := strings.Repeat("Y", 128*1024)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -890,7 +672,7 @@ func TestDoPreAuthRetry_ErrorBodyCappedAt64KiB(t *testing.T) {
 
 	client := newTestClient(t, "http://unused")
 
-	_, err := client.doPreAuthRetry(t.Context(), "big error", func() (*http.Request, error) {
+	_, err := client.doPreAuth(t.Context(), "big error", func() (*http.Request, error) {
 		return http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/big", http.NoBody)
 	})
 	require.Error(t, err)
@@ -900,154 +682,8 @@ func TestDoPreAuthRetry_ErrorBodyCappedAt64KiB(t *testing.T) {
 	assert.LessOrEqual(t, len(ge.Message), maxErrBodySize)
 }
 
-func TestDoPreAuthRetry_ContextCancelDuringNetworkBackoff(t *testing.T) {
-	// Verify that context cancellation during the backoff sleep after a network
-	// error is detected and returned.
-	ctx, cancel := context.WithCancel(t.Context())
-
-	client := NewClient("http://localhost", http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent", retry.Transport)
-	client.sleepFunc = func(_ context.Context, _ time.Duration) error {
-		cancel()
-
-		return context.Canceled
-	}
-
-	_, err := client.doPreAuthRetry(ctx, "cancel during net backoff", func() (*http.Request, error) {
-		return http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:1/unreachable", http.NoBody)
-	})
-	require.Error(t, err)
-	assert.ErrorIs(t, err, context.Canceled)
-}
-
-// sleepRecord captures sleep calls for throttle gate testing.
-type sleepRecord struct {
-	mu    sync.Mutex
-	calls []time.Duration
-}
-
-func (r *sleepRecord) sleep(_ context.Context, d time.Duration) error {
-	r.mu.Lock()
-	r.calls = append(r.calls, d)
-	r.mu.Unlock()
-
-	return nil
-}
-
-func (r *sleepRecord) count() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	return len(r.calls)
-}
-
-// Validates: R-6.8.1
-//
-// TestThrottleGate_429SetsDeadline verifies that a 429 with Retry-After sets
-// the account-wide throttle deadline, causing subsequent requests to sleep at
-// the throttle gate before proceeding.
-func TestThrottleGate_429SetsDeadline(t *testing.T) {
-	t.Parallel()
-
-	var calls atomic.Int32
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		n := calls.Add(1)
-		if n == 1 {
-			w.Header().Set("Retry-After", "5")
-			w.WriteHeader(http.StatusTooManyRequests)
-
-			return
-		}
-
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`ok`))
-	}))
-	defer srv.Close()
-
-	rec := &sleepRecord{}
-	client := NewClient(srv.URL, http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent", retry.Transport)
-	client.sleepFunc = rec.sleep
-
-	// First request: 429 → retryBackoff sets throttledUntil → sleeps → retries → 200.
-	resp, err := client.Do(t.Context(), http.MethodGet, "/first", nil)
-	require.NoError(t, err)
-	resp.Body.Close()
-
-	// The retryBackoff sleep for the 429 should have been recorded.
-	require.GreaterOrEqual(t, rec.count(), 1, "retryBackoff should sleep on 429")
-
-	// Second request: waitForThrottle should detect the deadline and sleep.
-	sleepsBefore := rec.count()
-	resp, err = client.Do(t.Context(), http.MethodGet, "/second", nil)
-	require.NoError(t, err)
-	resp.Body.Close()
-
-	assert.Greater(t, rec.count(), sleepsBefore,
-		"second request should sleep at throttle gate due to Retry-After deadline")
-}
-
-// TestThrottleGate_ConcurrentWorkers verifies that multiple concurrent
-// goroutines all respect the throttle gate set by a 429 Retry-After response.
-func TestThrottleGate_ConcurrentWorkers(t *testing.T) {
-	t.Parallel()
-
-	var calls atomic.Int32
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		n := calls.Add(1)
-		if n == 1 {
-			w.Header().Set("Retry-After", "3")
-			w.WriteHeader(http.StatusTooManyRequests)
-
-			return
-		}
-
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`ok`))
-	}))
-	defer srv.Close()
-
-	rec := &sleepRecord{}
-	client := NewClient(srv.URL, http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent", retry.Transport)
-	client.sleepFunc = rec.sleep
-
-	// First request sets throttledUntil via 429 Retry-After.
-	resp, err := client.Do(t.Context(), http.MethodGet, "/trigger", nil)
-	require.NoError(t, err)
-	resp.Body.Close()
-
-	// Launch 5 concurrent workers — all should hit the throttle gate.
-	const workers = 5
-
-	var wg sync.WaitGroup
-
-	sleepsBefore := rec.count()
-
-	for i := range workers {
-		wg.Add(1)
-
-		go func(idx int) {
-			defer wg.Done()
-
-			resp, doErr := client.Do(t.Context(), http.MethodGet, fmt.Sprintf("/worker-%d", idx), nil)
-			assert.NoError(t, doErr)
-
-			if resp != nil {
-				resp.Body.Close()
-			}
-		}(i)
-	}
-
-	wg.Wait()
-
-	// All 5 workers should have called sleepFunc at the throttle gate.
-	sleepsFromWorkers := rec.count() - sleepsBefore
-	assert.GreaterOrEqual(t, sleepsFromWorkers, workers,
-		"all %d workers should sleep at throttle gate", workers)
-}
-
 // Validates: R-6.8.8
-func TestDoRetry_CustomPolicy_LimitsAttempts(t *testing.T) {
+func TestDo_CustomPolicy_LimitsAttempts(t *testing.T) {
 	t.Parallel()
 
 	t.Run("MaxAttempts=2 retries twice after initial", func(t *testing.T) {
@@ -1070,8 +706,7 @@ func TestDoRetry_CustomPolicy_LimitsAttempts(t *testing.T) {
 			Jitter:      0.0,
 		}
 
-		client := NewClient(srv.URL, http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent", twoRetryPolicy)
-		client.sleepFunc = noopSleep
+		client := NewClient(srv.URL, retryHTTPClient(http.DefaultClient, twoRetryPolicy), staticToken("tok"), slog.Default(), "test-agent")
 
 		_, err := client.Do(t.Context(), http.MethodGet, "/fail", nil)
 		require.Error(t, err)
@@ -1079,7 +714,7 @@ func TestDoRetry_CustomPolicy_LimitsAttempts(t *testing.T) {
 		assert.Equal(t, int32(3), attempts.Load(), "MaxAttempts=2 should make 1 initial + 2 retries = 3 total")
 	})
 
-	t.Run("SyncTransport makes exactly 1 attempt", func(t *testing.T) {
+	t.Run("NoRetryClient makes exactly 1 attempt", func(t *testing.T) {
 		t.Parallel()
 
 		var attempts atomic.Int32
@@ -1091,12 +726,11 @@ func TestDoRetry_CustomPolicy_LimitsAttempts(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		client := NewClient(srv.URL, http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent", retry.SyncTransport)
-		client.sleepFunc = noopSleep
+		client := newNoRetryTestClient(t, srv.URL)
 
 		_, err := client.Do(t.Context(), http.MethodGet, "/fail", nil)
 		require.Error(t, err)
-		assert.Equal(t, int32(1), attempts.Load(), "SyncTransport should make exactly 1 attempt")
+		assert.Equal(t, int32(1), attempts.Load(), "no-retry client should make exactly 1 attempt")
 	})
 }
 
@@ -1114,9 +748,8 @@ func TestTerminalError_RetryAfter(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		// SyncTransport: single attempt, no retries → hits terminal immediately.
-		client := NewClient(srv.URL, http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent", retry.SyncTransport)
-		client.sleepFunc = noopSleep
+		// No retry client — single attempt, hits terminal immediately.
+		client := newNoRetryTestClient(t, srv.URL)
 
 		_, err := client.Do(t.Context(), http.MethodGet, "/throttle", nil)
 		require.Error(t, err)
@@ -1136,8 +769,7 @@ func TestTerminalError_RetryAfter(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		client := NewClient(srv.URL, http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent", retry.SyncTransport)
-		client.sleepFunc = noopSleep
+		client := newNoRetryTestClient(t, srv.URL)
 
 		_, err := client.Do(t.Context(), http.MethodGet, "/unavail", nil)
 		require.Error(t, err)
@@ -1156,8 +788,7 @@ func TestTerminalError_RetryAfter(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		client := NewClient(srv.URL, http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent", retry.SyncTransport)
-		client.sleepFunc = noopSleep
+		client := newNoRetryTestClient(t, srv.URL)
 
 		_, err := client.Do(t.Context(), http.MethodGet, "/fail", nil)
 		require.Error(t, err)
@@ -1209,8 +840,7 @@ func TestDoOnce_401_RefreshSucceeds(t *testing.T) {
 	defer srv.Close()
 
 	ts := &switchingToken{oldTok: "expired-token", newTok: "refreshed-token"}
-	client := NewClient(srv.URL, http.DefaultClient, ts, slog.Default(), "test-agent", retry.SyncTransport)
-	client.sleepFunc = noopSleep
+	client := NewClient(srv.URL, http.DefaultClient, ts, slog.Default(), "test-agent")
 
 	resp, err := client.Do(t.Context(), http.MethodGet, "/me", nil)
 	require.NoError(t, err)
@@ -1232,8 +862,7 @@ func TestDoOnce_401_SameToken_Returns401(t *testing.T) {
 	defer srv.Close()
 
 	// Static token — second Token() call returns the same value, so no refresh.
-	client := NewClient(srv.URL, http.DefaultClient, staticToken("same-token"), slog.Default(), "test-agent", retry.SyncTransport)
-	client.sleepFunc = noopSleep
+	client := NewClient(srv.URL, http.DefaultClient, staticToken("same-token"), slog.Default(), "test-agent")
 
 	_, err := client.Do(t.Context(), http.MethodGet, "/me", nil)
 	require.Error(t, err)

@@ -17,8 +17,29 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
+
+// failOnSecondSeeker is an io.ReadSeeker that succeeds on the first Seek
+// but fails on subsequent ones. Used to test the rewindBody error path
+// when a body becomes non-seekable after the first rewind (e.g., stream
+// consumed by a failed attempt).
+type failOnSecondSeeker struct {
+	data  []byte
+	seeks int
+}
+
+func (f *failOnSecondSeeker) Read(p []byte) (int, error) {
+	return copy(p, f.data), io.EOF
+}
+
+func (f *failOnSecondSeeker) Seek(_ int64, _ int) (int64, error) {
+	f.seeks++
+	if f.seeks > 1 {
+		return 0, errors.New("seek failed on second attempt")
+	}
+
+	return 0, nil
+}
 
 // ---------------------------------------------------------------------------
 // §1: Delta normalization pipeline quirk tests
@@ -158,7 +179,7 @@ func TestNormalizeDeltaItems_PipelineOrder(t *testing.T) {
 // TestStripBaseURL_FullURLToRelativePath validates that absolute delta token
 // URLs from the API are converted to relative paths for Do().
 func TestStripBaseURL_FullURLToRelativePath(t *testing.T) {
-	client := NewClient("https://graph.microsoft.com/v1.0", nil, staticToken("tok"), nil, "", retry.Transport)
+	client := NewClient("https://graph.microsoft.com/v1.0", nil, staticToken("tok"), nil, "")
 
 	path, err := client.stripBaseURL("https://graph.microsoft.com/v1.0/drives/abc/root/delta?token=xxx")
 	require.NoError(t, err)
@@ -168,7 +189,7 @@ func TestStripBaseURL_FullURLToRelativePath(t *testing.T) {
 // TestStripBaseURL_CrossDomainRejected validates that delta tokens pointing
 // to a different domain are rejected (security: prevents SSRF via token).
 func TestStripBaseURL_CrossDomainRejected(t *testing.T) {
-	client := NewClient("https://graph.microsoft.com/v1.0", nil, staticToken("tok"), nil, "", retry.Transport)
+	client := NewClient("https://graph.microsoft.com/v1.0", nil, staticToken("tok"), nil, "")
 
 	_, err := client.stripBaseURL("https://evil.example.com/v1.0/drives/abc/root/delta")
 	require.Error(t, err)
@@ -178,7 +199,7 @@ func TestStripBaseURL_CrossDomainRejected(t *testing.T) {
 // TestBuildDeltaPath_EmptyTokenIsInitialSync validates that an empty token
 // triggers the initial delta path (no token parameter).
 func TestBuildDeltaPath_EmptyTokenIsInitialSync(t *testing.T) {
-	client := NewClient("https://graph.microsoft.com/v1.0", nil, staticToken("tok"), nil, "", retry.Transport)
+	client := NewClient("https://graph.microsoft.com/v1.0", nil, staticToken("tok"), nil, "")
 
 	path, err := client.buildDeltaPath(driveid.New("abc123def4567890"), "")
 	require.NoError(t, err)
@@ -188,7 +209,7 @@ func TestBuildDeltaPath_EmptyTokenIsInitialSync(t *testing.T) {
 // TestBuildDeltaPath_FullURLToken validates that a full URL token from a
 // previous response is correctly stripped to a relative path.
 func TestBuildDeltaPath_FullURLTokenStripped(t *testing.T) {
-	client := NewClient("https://graph.microsoft.com/v1.0", nil, staticToken("tok"), nil, "", retry.Transport)
+	client := NewClient("https://graph.microsoft.com/v1.0", nil, staticToken("tok"), nil, "")
 
 	path, err := client.buildDeltaPath(
 		driveid.New("abc123def4567890"),
@@ -215,7 +236,7 @@ func TestPreAuthURL_NoAuthorizationHeader(t *testing.T) {
 
 	client := newTestClient(t, "http://unused")
 
-	resp, err := client.doPreAuthRetry(t.Context(), "test", func() (*http.Request, error) {
+	resp, err := client.doPreAuth(t.Context(), "test", func() (*http.Request, error) {
 		req, reqErr := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/download", http.NoBody)
 		if reqErr != nil {
 			return nil, reqErr
@@ -273,7 +294,7 @@ func TestHandleChunkResponse_Intermediate202(t *testing.T) {
 
 	client := newTestClient(t, "http://unused")
 
-	resp, err := client.doPreAuthRetry(t.Context(), "chunk", func() (*http.Request, error) {
+	resp, err := client.doPreAuth(t.Context(), "chunk", func() (*http.Request, error) {
 		return http.NewRequestWithContext(t.Context(), http.MethodPut, srv.URL+"/upload", http.NoBody)
 	})
 	require.NoError(t, err)
@@ -299,7 +320,7 @@ func TestHandleChunkResponse_Final201(t *testing.T) {
 
 	client := newTestClient(t, "http://unused")
 
-	resp, err := client.doPreAuthRetry(t.Context(), "chunk", func() (*http.Request, error) {
+	resp, err := client.doPreAuth(t.Context(), "chunk", func() (*http.Request, error) {
 		return http.NewRequestWithContext(t.Context(), http.MethodPut, srv.URL+"/upload", http.NoBody)
 	})
 	require.NoError(t, err)
@@ -325,7 +346,7 @@ func TestHandleChunkResponse_Final200(t *testing.T) {
 
 	client := newTestClient(t, "http://unused")
 
-	resp, err := client.doPreAuthRetry(t.Context(), "chunk", func() (*http.Request, error) {
+	resp, err := client.doPreAuth(t.Context(), "chunk", func() (*http.Request, error) {
 		return http.NewRequestWithContext(t.Context(), http.MethodPut, srv.URL+"/upload", http.NoBody)
 	})
 	require.NoError(t, err)
@@ -426,37 +447,6 @@ func TestGraphError_StatusBeforeSentinel(t *testing.T) {
 	assert.True(t, isRetryable(http.StatusBadGateway))
 	assert.True(t, isRetryable(http.StatusServiceUnavailable))
 	assert.True(t, isRetryable(http.StatusGatewayTimeout))
-}
-
-// TestRetryBackoff_429_LargeRetryAfter validates that the Retry-After
-// header value is honored, not capped by the normal backoff max.
-func TestRetryBackoff_429_LargeRetryAfter(t *testing.T) {
-	client := NewClient("http://localhost", nil, staticToken("tok"), nil, "", retry.Transport)
-
-	resp := &http.Response{
-		StatusCode: http.StatusTooManyRequests,
-		Header:     http.Header{"Retry-After": {"120"}},
-	}
-
-	backoff := client.retryBackoff(resp, 0)
-	assert.Equal(t, 120*time.Second, backoff,
-		"Retry-After: 120 should produce exactly 120s backoff")
-}
-
-// TestRetryBackoff_Non429_IgnoresRetryAfter validates that Retry-After
-// headers are ignored for non-429 responses.
-func TestRetryBackoff_Non429_IgnoresRetryAfter(t *testing.T) {
-	client := NewClient("http://localhost", nil, staticToken("tok"), nil, "", retry.Transport)
-
-	resp := &http.Response{
-		StatusCode: http.StatusServiceUnavailable,
-		Header:     http.Header{"Retry-After": {"120"}},
-	}
-
-	backoff := client.retryBackoff(resp, 0)
-	// Should use calculated backoff (1s ± jitter), not 120s.
-	assert.Less(t, backoff, 2*time.Second,
-		"non-429 should use calculated backoff, not Retry-After")
 }
 
 // TestIsRetryable_UnmappedStatusCodes validates that unmapped status codes

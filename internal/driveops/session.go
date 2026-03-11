@@ -12,7 +12,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // Session holds authenticated clients and the resolved drive identity for a
@@ -85,8 +84,8 @@ func (p *SessionProvider) Session(ctx context.Context, rd *config.ResolvedDrive)
 		)
 	}
 
-	meta := graph.NewClient(graph.DefaultBaseURL, p.metaHTTP, ts, p.logger, p.userAgent, retry.Transport)
-	transfer := graph.NewClient(graph.DefaultBaseURL, p.transferHTTP, ts, p.logger, p.userAgent, retry.Transport)
+	meta := graph.NewClient(graph.DefaultBaseURL, p.metaHTTP, ts, p.logger, p.userAgent)
+	transfer := graph.NewClient(graph.DefaultBaseURL, p.transferHTTP, ts, p.logger, p.userAgent)
 
 	p.logger.Debug("session created",
 		slog.String("drive_id", rd.DriveID.String()),

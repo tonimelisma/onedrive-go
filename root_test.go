@@ -353,13 +353,27 @@ func TestAnnotationTreeWalk(t *testing.T) {
 // --- defaultHTTPClient tests ---
 
 func TestDefaultHTTPClient_HasTimeout(t *testing.T) {
-	client := defaultHTTPClient()
+	client := defaultHTTPClient(slog.Default())
 	assert.Equal(t, httpClientTimeout, client.Timeout)
+	assert.NotNil(t, client.Transport, "should have RetryTransport")
 }
 
 func TestTransferHTTPClient_NoTimeout(t *testing.T) {
-	client := transferHTTPClient()
+	client := transferHTTPClient(slog.Default())
 	assert.Zero(t, client.Timeout)
+	assert.NotNil(t, client.Transport, "should have RetryTransport")
+}
+
+func TestSyncMetaHTTPClient_NoRetryTransport(t *testing.T) {
+	client := syncMetaHTTPClient()
+	assert.Equal(t, httpClientTimeout, client.Timeout)
+	assert.Nil(t, client.Transport, "sync client should have no RetryTransport")
+}
+
+func TestSyncTransferHTTPClient_NoRetryTransport(t *testing.T) {
+	client := syncTransferHTTPClient()
+	assert.Zero(t, client.Timeout)
+	assert.Nil(t, client.Transport, "sync client should have no RetryTransport")
 }
 
 // --- loadAndResolve tests ---

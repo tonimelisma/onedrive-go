@@ -146,7 +146,7 @@ func (c *Client) UploadChunk(
 
 	contentRange := fmt.Sprintf("bytes %d-%d/%d", offset, offset+length-1, total)
 
-	resp, err := c.doPreAuthRetry(ctx, "upload chunk", func() (*http.Request, error) {
+	resp, err := c.doPreAuth(ctx, "upload chunk", func() (*http.Request, error) {
 		// Fresh SectionReader per attempt — io.ReaderAt.ReadAt is goroutine-safe,
 		// so no race with a previous attempt's transport writeLoop goroutine.
 		reader := io.NewSectionReader(chunk, 0, length)
@@ -172,8 +172,8 @@ func (c *Client) UploadChunk(
 }
 
 // handleChunkResponse processes the HTTP response from an upload chunk request.
-// doPreAuthRetry guarantees only 2xx responses reach this function — non-2xx
-// (including 416 Range Not Satisfiable) are handled by doPreAuthRetry and
+// doPreAuth guarantees only 2xx responses reach this function — non-2xx
+// (including 416 Range Not Satisfiable) are handled by doPreAuth and
 // returned as *GraphError with appropriate sentinels (e.g., ErrRangeNotSatisfiable).
 // 202 Accepted means intermediate chunk; 200/201 means upload complete with item data.
 func (c *Client) handleChunkResponse(resp *http.Response) (*Item, error) {
@@ -205,7 +205,7 @@ func (c *Client) handleChunkResponse(resp *http.Response) (*Item, error) {
 		return &item, nil
 
 	default:
-		// Unexpected 2xx status (e.g., 204, 206). doPreAuthRetry filters non-2xx.
+		// Unexpected 2xx status (e.g., 204, 206). doPreAuth filters non-2xx.
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBodySize)) //nolint:errcheck // best-effort read for error message
 		c.logger.Error("chunk upload returned unexpected 2xx status",
 			slog.Int("status", resp.StatusCode),
@@ -220,7 +220,7 @@ func (c *Client) handleChunkResponse(resp *http.Response) (*Item, error) {
 func (c *Client) CancelUploadSession(ctx context.Context, session *UploadSession) error {
 	c.logger.Info("canceling upload session")
 
-	resp, err := c.doPreAuthRetry(ctx, "cancel upload session", func() (*http.Request, error) {
+	resp, err := c.doPreAuth(ctx, "cancel upload session", func() (*http.Request, error) {
 		req, reqErr := http.NewRequestWithContext(ctx, http.MethodDelete, string(session.UploadURL), http.NoBody)
 		if reqErr != nil {
 			return nil, fmt.Errorf("graph: creating cancel session request: %w", reqErr)
@@ -317,7 +317,7 @@ func (c *Client) QueryUploadSession(
 ) (*UploadSessionStatus, error) {
 	c.logger.Info("querying upload session status")
 
-	resp, err := c.doPreAuthRetry(ctx, "query upload session", func() (*http.Request, error) {
+	resp, err := c.doPreAuth(ctx, "query upload session", func() (*http.Request, error) {
 		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, string(session.UploadURL), http.NoBody)
 		if reqErr != nil {
 			return nil, fmt.Errorf("graph: creating query session request: %w", reqErr)
@@ -332,7 +332,7 @@ func (c *Client) QueryUploadSession(
 	}
 	defer resp.Body.Close()
 
-	// doPreAuthRetry guarantees 2xx here. QueryUploadSession expects exactly 200.
+	// doPreAuth guarantees 2xx here. QueryUploadSession expects exactly 200.
 	// Other 2xx codes are unexpected but not worth failing on.
 
 	var ssr uploadSessionStatusResponse
