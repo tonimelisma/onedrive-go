@@ -148,7 +148,7 @@ func (o *LocalObserver) handleFsEvent(
 		o.handleCreate(ctx, fsEvent.Name, dbRelPath, name, watcher, events)
 
 	case fsEvent.Has(fsnotify.Write):
-		o.handleWrite(ctx, fsEvent.Name, dbRelPath, name, events)
+		o.handleWrite(fsEvent.Name, dbRelPath, name)
 
 	case fsEvent.Has(fsnotify.Remove) || fsEvent.Has(fsnotify.Rename):
 		o.handleDelete(ctx, watcher, syncRoot, dbRelPath, name, events)
@@ -309,20 +309,15 @@ func (o *LocalObserver) scanNewDirectory(
 // handleWrite processes a Write event by scheduling a deferred hash after a
 // cooldown period (B-107 write coalescing). Rapid saves (IDE auto-save) trigger
 // multiple Write events per file; coalescing ensures only one hash + emit per
-// quiescence window.
-//
-// The ctx and events params are unused because B-107 coalescing routes emission
-// through the hashRequests channel → hashAndEmit. The params remain in the
-// signature for dispatch contract parity with handleCreate and handleDelete.
+// quiescence window. Emission is routed through the hashRequests channel →
+// hashAndEmit (which has ctx and events from the watchLoop).
 //
 // Stale baseline interaction (B-116): handleWrite reads the live baseline
 // (RWMutex-protected, updated in-place by CommitOutcome). If an action is
 // in-flight (dispatched to workers but not yet committed to baseline), the safety scan
 // may re-emit an event for something already being processed. This is safe:
 // processBatch deduplicates via HasInFlight + CancelByPath (B-122).
-func (o *LocalObserver) handleWrite(
-	_ context.Context, fsPath, dbRelPath, name string, _ chan<- ChangeEvent,
-) {
+func (o *LocalObserver) handleWrite(fsPath, dbRelPath, name string) {
 	info, err := os.Stat(fsPath)
 	if err != nil {
 		o.logger.Debug("stat failed for modified path",
