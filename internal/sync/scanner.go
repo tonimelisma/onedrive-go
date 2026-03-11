@@ -135,14 +135,16 @@ func (o *LocalObserver) FullScan(ctx context.Context, syncRoot string) (ScanResu
 			slog.String("sync_root", syncRoot))
 	}
 
-	// Phase 2: Hash — parallel file hashing.
+	// Phase 2: Hash — parallel file hashing. Panics in hash goroutines are
+	// recovered and converted to SkippedItems (defensive coding).
 	if len(jobs) > 0 {
-		hashEvents, err := o.hashPhase(ctx, jobs)
+		hashEvents, hashSkipped, err := o.hashPhase(ctx, jobs)
 		if err != nil {
 			return ScanResult{}, err
 		}
 
 		events = append(events, hashEvents...)
+		skipped = append(skipped, hashSkipped...)
 	}
 
 	// Phase 3: Deletion detection.
@@ -170,8 +172,11 @@ func (o *LocalObserver) FullScan(ctx context.Context, syncRoot string) (ScanResu
 }
 
 // hashPhase runs hash jobs in parallel using errgroup with checkWorkers limit.
-// Returns the resulting change events (creates and modifies with hashes).
-func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]ChangeEvent, error) {
+// Returns the resulting change events (creates and modifies with hashes), plus
+// any skipped items from panics in hash goroutines. Panics are recovered and
+// converted to SkippedItem entries — a single corrupted file cannot crash the
+// entire scan (defensive coding per eng philosophy).
+func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]ChangeEvent, []SkippedItem, error) {
 	workers := o.resolveCheckWorkers()
 
 	o.logger.Debug("starting parallel hash phase",
@@ -179,19 +184,45 @@ func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]Change
 		slog.Int("workers", workers),
 	)
 
+	hashFn := o.hashFunc
+	if hashFn == nil {
+		hashFn = driveops.ComputeQuickXorHash
+	}
+
 	var mu stdsync.Mutex
 	var events []ChangeEvent
+	var skipped []SkippedItem
 
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(workers)
 
 	for _, job := range jobs {
-		g.Go(func() error {
+		g.Go(func() (retErr error) {
+			// Recover from panics in hash computation (e.g., corrupt file
+			// triggering a nil dereference in the hash library). Convert to
+			// SkippedItem so the rest of the scan completes normally.
+			defer func() {
+				if r := recover(); r != nil {
+					o.logger.Error("hash phase: panic in worker",
+						slog.String("path", job.dbRelPath),
+						slog.Any("panic", r),
+					)
+
+					mu.Lock()
+					skipped = append(skipped, SkippedItem{
+						Path:   job.dbRelPath,
+						Reason: IssueHashPanic,
+						Detail: fmt.Sprintf("panic: %v", r),
+					})
+					mu.Unlock()
+				}
+			}()
+
 			if gCtx.Err() != nil {
 				return gCtx.Err()
 			}
 
-			hash, err := driveops.ComputeQuickXorHash(job.fsPath)
+			hash, err := hashFn(job.fsPath)
 			if err != nil {
 				o.logger.Warn("hash computation failed, emitting event with empty hash",
 					slog.String("path", job.dbRelPath), slog.String("error", err.Error()))
@@ -231,10 +262,10 @@ func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]Change
 	}
 
 	if err := g.Wait(); err != nil {
-		return nil, fmt.Errorf("sync: hash phase: %w", err)
+		return nil, nil, fmt.Errorf("sync: hash phase: %w", err)
 	}
 
-	return events, nil
+	return events, skipped, nil
 }
 
 // makeWalkFunc returns a WalkDirFunc that classifies filesystem entries

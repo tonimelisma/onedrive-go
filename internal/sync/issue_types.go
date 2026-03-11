@@ -16,6 +16,9 @@ const (
 	IssuePathTooLong     = "path_too_long"
 	IssueFileTooLarge    = "file_too_large"
 
+	// Scanner-detectable (hash phase).
+	IssueHashPanic = "hash_panic"
+
 	// Runtime (execution-time).
 	IssuePermissionDenied      = "permission_denied"
 	IssueQuotaExceeded         = "quota_exceeded"
