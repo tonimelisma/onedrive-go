@@ -175,8 +175,8 @@ func TestDownload_NetworkError(t *testing.T) {
 	var buf bytes.Buffer
 	_, err := client.Download(t.Context(), driveid.New("d"), "item-net", &buf)
 	require.Error(t, err)
-	// doPreAuthRetry retries network errors, then returns "failed after N retries".
-	assert.Contains(t, err.Error(), "failed after 5 retries")
+	// RetryTransport exhausts retries, then doPreAuth wraps the network error.
+	assert.Contains(t, err.Error(), "download failed")
 }
 
 func TestDownloadFromURL_WriterError(t *testing.T) {

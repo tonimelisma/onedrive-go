@@ -6,7 +6,9 @@ Implements: R-3.1 [verified], R-6.7 [implemented], R-6.8 [verified], R-1.1 [veri
 
 ## Overview
 
-All Microsoft Graph API communication flows through `graph.Client`. The client handles authentication, retry, rate limiting, and API quirk normalization internally. Callers receive clean, consistent data via `graph.Item` and never deal with API inconsistencies. Retry policy is parameterizable — sync callers use `SyncTransport` (0 retries, single attempt per request), CLI callers retain `Transport` (5 retries).
+All Microsoft Graph API communication flows through `graph.Client`. The client is a pure API mapper: authentication, API quirk normalization, and error construction. No retry logic, no throttle state, no sleep. Callers receive clean, consistent data via `graph.Item` and never deal with API inconsistencies.
+
+Retry lives in the transport layer via `retry.RetryTransport` (an `http.RoundTripper`). CLI callers wrap their HTTP client with `RetryTransport{Policy: Transport}` (5 retries). Sync callers use a raw HTTP client — failed requests return immediately for engine-level classification.
 
 ## Authentication (`auth.go`)
 
@@ -41,21 +43,25 @@ GetItem, ListChildren, CreateFolder, MoveItem, CopyItem, DeleteItem. All operati
 
 ## Error Handling (`errors.go`)
 
-Sentinel errors: `ErrGone` (410), `ErrNotFound` (404), `ErrThrottled` (429), `ErrConflict` (409). The client respects `Retry-After` headers and uses exponential backoff for transient failures. Error response bodies are read with a 64 KiB cap (`io.LimitReader`) to prevent unbounded memory allocation from malformed responses. HTTP 423 (Locked) from SharePoint co-authoring is classified as skip (`errClassSkip`), not retryable — locks persist for hours; watch mode retries on the next safety scan.
+Sentinel errors: `ErrGone` (410), `ErrNotFound` (404), `ErrThrottled` (429), `ErrConflict` (409). Error response bodies are read with a 64 KiB cap (`io.LimitReader`) to prevent unbounded memory allocation from malformed responses. HTTP 423 (Locked) from SharePoint co-authoring is classified as skip, not retryable — locks persist for hours; watch mode retries on the next safety scan.
 
-**RetryAfter and RateLimit Headers** — `RetryAfter time.Duration` field added to `GraphError`. Parsed from `Retry-After` header for 429 and 503 responses. `RateLimit-Remaining` header parsing: proactive slowdown when <20% remaining. Implements: R-6.8.5 [implemented], R-6.8.6 [implemented]
+**RetryAfter and RateLimit Headers** — `RetryAfter time.Duration` field on `GraphError`. Parsed from `Retry-After` header for 429 and 503 responses. `RateLimit-Remaining` header parsing: proactive slowdown when <20% remaining. Implements: R-6.8.5 [implemented], R-6.8.6 [implemented]
 
-## Retry Policy Parameterization
+## Transport-Layer Retry
 
-Implements: R-6.8.8 [implemented]
+Implements: R-6.8.8 [verified]
 
-`retryPolicy retry.Policy` field on `Client` struct, accepted as constructor parameter (default: `retry.Transport`). Replaces all 4 hardcoded `retry.Transport.MaxAttempts` references in `doRetry` (lines 124, 166) and `doPreAuthRetry` (lines 318, 352) with `c.retryPolicy.MaxAttempts`. Sync callers pass `SyncTransport` (0 retries). CLI callers pass nothing (default `Transport` with 5 retries).
+Retry has been extracted from the graph client into `retry.RetryTransport`, an `http.RoundTripper` wrapper. The graph client no longer has retry loops (`doRetry`/`doPreAuthRetry` deleted), sleep functions, retry policies, or throttle state. All retry, backoff, Retry-After parsing, and 429 throttle coordination live in the transport layer.
+
+`NewClient` accepts an `*http.Client` — the caller decides whether that client's transport includes retry. CLI callers wrap with `RetryTransport`. Sync callers pass a raw client.
+
+Pre-authenticated requests (upload chunks, downloads) go through `httpClient.Do()` directly. The `doPreAuth` helper sets `req.GetBody` using the `makeReq` factory so `RetryTransport` can rewind request bodies between attempts (e.g., `io.SectionReader` for upload chunks).
 
 ## 401 Token Refresh
 
 Implements: R-6.8.14 [implemented]
 
-Transparent token refresh on 401 inside `doOnce()`, independent of retry policy. On 401: refresh token → retry once. If still 401 → return `ErrUnauthorized` (fatal). Auth refresh is lifecycle management, not transient retry — it applies even with `SyncTransport` (`MaxAttempts: 0`).
+Transparent token refresh on 401 inside `doOnce()`, independent of retry transport. On 401: refresh token → retry once. If still 401 → return `ErrUnauthorized` (fatal). Auth refresh is lifecycle management, not transient retry — it works regardless of whether the HTTP client has a `RetryTransport`.
 
 ## Design Constraints
 

@@ -2,7 +2,6 @@ package sync
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -17,7 +16,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // ---------------------------------------------------------------------------
@@ -114,7 +112,6 @@ func newTestExecutorConfig(t *testing.T, items *executorMockItemClient, dl *exec
 	cfg := NewExecutorConfig(items, dl, ul, syncRoot, driveID, logger)
 	cfg.transferMgr = driveops.NewTransferManager(dl, ul, nil, logger)
 	cfg.nowFunc = func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) }
-	cfg.sleepFunc = func(_ context.Context, _ time.Duration) error { return nil }
 
 	return cfg, syncRoot
 }
@@ -1095,53 +1092,6 @@ func TestExecutor_Cleanup(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Error classification tests
-// ---------------------------------------------------------------------------
-
-func TestClassifyError(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		err      error
-		expected errClass
-	}{
-		{"nil", nil, errClassSkip},
-		{"context canceled", context.Canceled, errClassFatal},
-		{"context deadline", context.DeadlineExceeded, errClassFatal},
-		{"unauthorized", graph.ErrUnauthorized, errClassFatal},
-		{"throttled", graph.ErrThrottled, errClassRetryable},
-		{"server error", graph.ErrServerError, errClassRetryable},
-		{"not found", graph.ErrNotFound, errClassSkip},
-		{"forbidden", graph.ErrForbidden, errClassSkip},
-		{"locked", graph.ErrLocked, errClassSkip},
-		{"bad request", graph.ErrBadRequest, errClassSkip},
-		{"generic error", errors.New("something broke"), errClassSkip},
-		{"wrapped unauthorized", fmt.Errorf("auth: %w", graph.ErrUnauthorized), errClassFatal},
-		{"507 insufficient storage", &graph.GraphError{StatusCode: 507, Err: graph.ErrServerError}, errClassFatal},
-		{"408 request timeout", &graph.GraphError{StatusCode: 408}, errClassRetryable},
-		{"412 precondition failed", &graph.GraphError{StatusCode: 412}, errClassRetryable},
-		{"404 transient not found via GraphError", &graph.GraphError{StatusCode: 404, Err: graph.ErrNotFound}, errClassRetryable},
-		{"509 bandwidth exceeded", &graph.GraphError{StatusCode: 509}, errClassRetryable},
-		{"401 via GraphError", &graph.GraphError{StatusCode: 401, Err: graph.ErrUnauthorized}, errClassFatal},
-		{"429 via GraphError", &graph.GraphError{StatusCode: 429, Err: graph.ErrThrottled}, errClassRetryable},
-		{"500 via GraphError", &graph.GraphError{StatusCode: 500, Err: graph.ErrServerError}, errClassRetryable},
-		{"502 via GraphError", &graph.GraphError{StatusCode: 502, Err: graph.ErrServerError}, errClassRetryable},
-		{"403 via GraphError", &graph.GraphError{StatusCode: 403, Err: graph.ErrForbidden}, errClassSkip},
-		{"423 locked via GraphError", &graph.GraphError{StatusCode: 423, Err: graph.ErrLocked}, errClassSkip},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := classifyError(tt.err)
-			assert.Equal(t, tt.expected, got, "classifyError(%v)", tt.err)
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Parent ID resolution tests
 // ---------------------------------------------------------------------------
 
@@ -1213,79 +1163,6 @@ func TestConflictStemExt(t *testing.T) {
 			assert.Equal(t, tt.wantExt, ext, "ext mismatch for %q", tt.input)
 		})
 	}
-}
-
-// ---------------------------------------------------------------------------
-// Retry tests
-// ---------------------------------------------------------------------------
-
-func TestWithRetry_Succeeds(t *testing.T) {
-	t.Parallel()
-
-	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
-
-	calls := 0
-	err := e.withRetry(t.Context(), "test-op", func() error {
-		calls++
-		return nil
-	})
-	require.NoError(t, err)
-	assert.Equal(t, 1, calls)
-}
-
-func TestWithRetry_RetriesOnTransient(t *testing.T) {
-	t.Parallel()
-
-	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
-
-	calls := 0
-	err := e.withRetry(t.Context(), "test-retry", func() error {
-		calls++
-		if calls < 3 {
-			return graph.ErrThrottled
-		}
-
-		return nil
-	})
-	require.NoError(t, err)
-	assert.Equal(t, 3, calls)
-}
-
-func TestWithRetry_NoRetryOnSkip(t *testing.T) {
-	t.Parallel()
-
-	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
-
-	calls := 0
-	err := e.withRetry(t.Context(), "test-skip", func() error {
-		calls++
-		return graph.ErrForbidden
-	})
-
-	assert.ErrorIs(t, err, graph.ErrForbidden)
-	assert.Equal(t, 1, calls, "expected 1 call (no retry)")
-}
-
-// Fix 8: Test retry exhaustion — all attempts return retryable error.
-func TestWithRetry_ExhaustsRetries(t *testing.T) {
-	t.Parallel()
-
-	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
-
-	calls := 0
-	err := e.withRetry(t.Context(), "exhaust", func() error {
-		calls++
-		return graph.ErrThrottled
-	})
-
-	assert.ErrorIs(t, err, graph.ErrThrottled)
-
-	// retry.Action.MaxAttempts=3 -> 1 initial + 3 retries = 4 total.
-	assert.Equal(t, retry.Action.MaxAttempts+1, calls)
 }
 
 // Fix 9: Test conflict download-failure restore path.

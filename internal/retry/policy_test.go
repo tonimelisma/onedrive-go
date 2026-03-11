@@ -101,12 +101,6 @@ func TestNamedPolicies_MatchOriginal(t *testing.T) {
 	assert.Equal(t, 3, DriveDiscovery.MaxAttempts)
 	assert.Equal(t, 1*time.Second, DriveDiscovery.Base)
 
-	// Action: sync/executor.go — executorMaxRetries=3, executorBaseDelay=1s, executorBackoffExp=2.0, executorJitter=0.25
-	assert.Equal(t, 3, Action.MaxAttempts)
-	assert.Equal(t, 1*time.Second, Action.Base)
-	assert.Equal(t, 2.0, Action.Multiplier)
-	assert.Equal(t, 0.25, Action.Jitter)
-
 	// Reconcile: sync/baseline.go — infinite retries, 30s base, 1h max, 25% jitter
 	assert.Equal(t, 0, Reconcile.MaxAttempts)
 	assert.Equal(t, 30*time.Second, Reconcile.Base)

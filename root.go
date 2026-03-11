@@ -127,22 +127,36 @@ func (cc *CLIContext) Session(ctx context.Context) (*driveops.Session, error) {
 const httpClientTimeout = 30 * time.Second
 
 // defaultHTTPClient returns an HTTP client with a sensible timeout.
-func defaultHTTPClient() *http.Client {
-	return &http.Client{Timeout: httpClientTimeout}
+func defaultHTTPClient(logger *slog.Logger) *http.Client {
+	return &http.Client{
+		Timeout: httpClientTimeout,
+		Transport: &retry.RetryTransport{
+			Inner:  http.DefaultTransport,
+			Policy: retry.Transport,
+			Logger: logger,
+		},
+	}
 }
 
 // transferHTTPClient returns an HTTP client with no timeout for
 // upload/download operations. Large file transfers on slow connections
 // can exceed the 30-second default (e.g., 10MB chunks at 100KB/s = 100s).
 // Transfers are bounded by context cancellation instead.
-func transferHTTPClient() *http.Client {
-	return &http.Client{Timeout: 0}
+func transferHTTPClient(logger *slog.Logger) *http.Client {
+	return &http.Client{
+		Timeout: 0,
+		Transport: &retry.RetryTransport{
+			Inner:  http.DefaultTransport,
+			Policy: retry.Transport,
+			Logger: logger,
+		},
+	}
 }
 
 // newGraphClient creates a graph.Client with the standard HTTP client,
 // user-agent, and base URL. Eliminates boilerplate repeated across commands.
 func newGraphClient(ts graph.TokenSource, logger *slog.Logger) *graph.Client {
-	return graph.NewClient(graph.DefaultBaseURL, defaultHTTPClient(), ts, logger, "onedrive-go/"+version, retry.Transport)
+	return graph.NewClient(graph.DefaultBaseURL, defaultHTTPClient(logger), ts, logger, "onedrive-go/"+version)
 }
 
 // newRootCmd builds and returns the fully-assembled root command with all
@@ -210,7 +224,7 @@ func newRootCmd() *cobra.Command {
 
 				holder := config.NewHolder(rawCfg, cc.CfgPath)
 				cc.Provider = driveops.NewSessionProvider(holder,
-					defaultHTTPClient(), transferHTTPClient(), "onedrive-go/"+version, cc.Logger)
+					defaultHTTPClient(cc.Logger), transferHTTPClient(cc.Logger), "onedrive-go/"+version, cc.Logger)
 			}
 
 			ctx := cmd.Context()

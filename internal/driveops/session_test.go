@@ -17,7 +17,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // stubTokenSource implements graph.TokenSource for tests.
@@ -267,7 +266,7 @@ func newTestSession(t *testing.T, handler http.Handler) *Session {
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
-	client := graph.NewClient(srv.URL, srv.Client(), &stubTokenSource{}, slog.Default(), "test/1.0", retry.Transport)
+	client := graph.NewClient(srv.URL, srv.Client(), &stubTokenSource{}, slog.Default(), "test/1.0")
 
 	return &Session{
 		Meta:    client,

@@ -183,7 +183,7 @@ func (c *Client) Drives(ctx context.Context) ([]Drive, error) {
 			break
 		}
 
-		backoff := c.calcBackoff(attempt)
+		backoff := retry.DriveDiscovery.Delay(attempt)
 		c.logger.Warn("retrying /me/drives after transient 403",
 			slog.Int("attempt", attempt+1),
 			slog.Int("max_attempts", driveDiscoveryRetries),
@@ -191,7 +191,7 @@ func (c *Client) Drives(ctx context.Context) ([]Drive, error) {
 			slog.String("request_id", ge.RequestID),
 		)
 
-		if sleepErr := c.sleepFunc(ctx, backoff); sleepErr != nil {
+		if sleepErr := retry.TimeSleep(ctx, backoff); sleepErr != nil {
 			return nil, fmt.Errorf("graph: drives discovery canceled: %w", sleepErr)
 		}
 	}

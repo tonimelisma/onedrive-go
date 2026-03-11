@@ -19,7 +19,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // errorReadCloser is an io.ReadCloser that always returns an error from Read.
@@ -118,8 +117,7 @@ func TestSimpleUpload_Error(t *testing.T) {
 }
 
 func TestSimpleUpload_TokenError(t *testing.T) {
-	client := NewClient("http://localhost", http.DefaultClient, failingToken{}, slog.Default(), "test-agent", retry.Transport)
-	client.sleepFunc = noopSleep
+	client := NewClient("http://localhost", http.DefaultClient, failingToken{}, slog.Default(), "test-agent")
 
 	_, err := client.SimpleUpload(
 		t.Context(), driveid.New("d"), "p", "file.txt",
@@ -130,8 +128,7 @@ func TestSimpleUpload_TokenError(t *testing.T) {
 }
 
 func TestSimpleUpload_NetworkError(t *testing.T) {
-	client := NewClient("http://127.0.0.1:1", http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent", retry.Transport)
-	client.sleepFunc = noopSleep
+	client := NewClient("http://127.0.0.1:1", http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent")
 
 	_, err := client.SimpleUpload(
 		t.Context(), driveid.New("d"), "p", "file.txt",
@@ -374,7 +371,7 @@ func TestUploadChunk_ServerError(t *testing.T) {
 		0, 4, 4,
 	)
 	require.Error(t, err)
-	// 500 is retryable; after exhausting retries, doPreAuthRetry returns *GraphError.
+	// 500 is retryable; after exhausting retries, doPreAuth returns *GraphError.
 	assert.ErrorIs(t, err, ErrServerError)
 }
 
@@ -421,7 +418,7 @@ func TestCancelUploadSession_Error(t *testing.T) {
 
 	err := client.CancelUploadSession(t.Context(), session)
 	require.Error(t, err)
-	// 404 is non-retryable; doPreAuthRetry returns *GraphError with ErrNotFound.
+	// 404 is non-retryable; doPreAuth returns *GraphError with ErrNotFound.
 	assert.ErrorIs(t, err, ErrNotFound)
 }
 
@@ -573,8 +570,8 @@ func TestQueryUploadSession_NetworkError(t *testing.T) {
 
 	_, err := client.QueryUploadSession(t.Context(), session)
 	require.Error(t, err)
-	// doPreAuthRetry retries network errors, then returns "failed after N retries".
-	assert.Contains(t, err.Error(), "failed after 5 retries")
+	// RetryTransport exhausts retries, then doPreAuth wraps the network error.
+	assert.Contains(t, err.Error(), "query upload session failed")
 }
 
 func TestHandleChunkResponse_FinalDecodeError(t *testing.T) {
@@ -1093,7 +1090,7 @@ func TestUploadChunk_RetriesOn503(t *testing.T) {
 }
 
 func TestCancelUploadSession_Unexpected2xx(t *testing.T) {
-	// doPreAuthRetry passes through any 2xx, but CancelUploadSession expects 204.
+	// doPreAuth passes through any 2xx, but CancelUploadSession expects 204.
 	// If the server returns 200, the explicit 204 check should fail.
 	chunkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)

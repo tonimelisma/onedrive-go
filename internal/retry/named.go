@@ -1,7 +1,6 @@
 package retry
 
 import (
-	"math"
 	"time"
 )
 
@@ -36,17 +35,6 @@ var DriveDiscovery = Policy{ //nolint:gochecknoglobals // named policy singleton
 	Max:         60 * time.Second, //nolint:mnd // canonical max backoff
 	Multiplier:  2.0,              //nolint:mnd // standard exponential factor
 	Jitter:      0.25,             //nolint:mnd // ±25% jitter fraction
-}
-
-// Action is the executor-level retry policy (sync/executor.go).
-// 3 retries, 1s base, no explicit max (grows unbounded in 3 attempts:
-// 1s, 2s, 4s — never reaches any reasonable cap).
-var Action = Policy{ //nolint:gochecknoglobals // named policy singleton
-	MaxAttempts: 3,
-	Base:        1 * time.Second,
-	Max:         time.Duration(math.MaxInt64), // effectively unbounded for 3 attempts
-	Multiplier:  2.0,                          //nolint:mnd // standard exponential factor
-	Jitter:      0.25,                         //nolint:mnd // ±25% jitter fraction
 }
 
 // Reconcile is the failure retrier scheduling policy (sync/baseline.go).
