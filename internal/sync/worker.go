@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	stdsync "sync"
-	"sync/atomic"
+	stdsync "sync" // used by WaitGroup
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
@@ -14,33 +14,23 @@ import (
 
 var errUnknownActionType = errors.New("sync: unknown action type in worker dispatch")
 
-const (
-	// minWorkers is the floor for total worker count.
-	minWorkers = 4
-	// maxRecordedErrors caps the diagnostic error slice to bound memory in
-	// long-running watch mode. The failed atomic counter remains accurate
-	// regardless of this cap (B-205).
-	maxRecordedErrors = 1000
-)
+// minWorkers is the floor for total worker count.
+const minWorkers = 4
 
 // WorkerPool spawns goroutines that pull TrackedActions from the DepTracker's
-// ready channel, execute them, commit outcomes, and signal completion back
-// to the tracker for dependent dispatch.
+// ready channel, execute them, persist success outcomes, and send results
+// back to the engine. Workers are pure executors — they NEVER call
+// tracker.Complete() or tracker.ReQueue(). The engine owns all completion
+// decisions (R-6.8.9).
 type WorkerPool struct {
 	cfg      *ExecutorConfig
 	tracker  *DepTracker
 	baseline *SyncStore
 	logger   *slog.Logger
 
-	succeeded     atomic.Int32
-	failed        atomic.Int32
-	errors        []error
-	errorsMu      stdsync.Mutex
-	droppedErrors atomic.Int64
-	dropWarnOnce  stdsync.Once
-
-	// results reports per-action outcomes back to the engine for in-memory
-	// result tracking.
+	// results reports per-action outcomes back to the engine. The engine
+	// reads from this channel, classifies results, and calls Complete or
+	// ReQueue on the tracker.
 	results chan WorkerResult
 
 	cancel context.CancelFunc
@@ -48,7 +38,8 @@ type WorkerPool struct {
 }
 
 // WorkerResult reports the outcome of a single action execution. The engine
-// reads these from the Results channel for failure recording in sync_failures.
+// reads these from the Results channel, classifies them via classifyResult,
+// and routes to tracker.Complete or tracker.ReQueue.
 type WorkerResult struct {
 	Path       string
 	DriveID    driveid.ID
@@ -56,6 +47,32 @@ type WorkerResult struct {
 	Success    bool
 	ErrMsg     string
 	HTTPStatus int // from graph.GraphError, 0 if not a Graph API error
+
+	// Err is the full error for classification (context.Canceled, os.ErrPermission, etc.).
+	// The engine uses errors.Is to distinguish shutdown from genuine failures.
+	Err error
+
+	// RetryAfter is the server-mandated wait duration from the Retry-After
+	// header on 429/503 responses. Zero when absent. Used by scope blocks
+	// for initial trial timing (R-2.10.7, R-2.10.8).
+	RetryAfter time.Duration
+
+	// TargetDriveID is the actual drive ID targeted by this action. For
+	// own-drive actions, equals DriveID. For shortcut actions, equals the
+	// sharer's drive. Flows through the pipeline without lookup (R-6.8.12).
+	TargetDriveID driveid.ID
+
+	// ShortcutKey identifies the shortcut scope. Format: "remoteDrive:remoteItem".
+	// Empty for own-drive actions. Used by updateScope for 507 scope keys (R-2.10.16).
+	ShortcutKey string
+
+	// Attempt is the attempt number from TrackedAction (0 = first). Used by
+	// computeBackoff to determine the delay for re-queued actions (R-6.8.11).
+	Attempt int
+
+	// ActionID is the TrackedAction.ID for the engine to call Complete or
+	// ReQueue on the tracker.
+	ActionID int64
 }
 
 // NewWorkerPool creates a pool without starting any workers. planSize
@@ -122,16 +139,6 @@ func (wp *WorkerPool) Stop() {
 	close(wp.results)
 }
 
-// Stats returns execution counters and any errors collected during execution.
-func (wp *WorkerPool) Stats() (succeeded, failed int, errors []error) {
-	wp.errorsMu.Lock()
-	errs := make([]error, len(wp.errors))
-	copy(errs, wp.errors)
-	wp.errorsMu.Unlock()
-
-	return int(wp.succeeded.Load()), int(wp.failed.Load()), errs
-}
-
 // worker is the main loop for a single goroutine. It reads from the
 // tracker's single ready channel until the context is canceled or all
 // actions are done.
@@ -155,7 +162,8 @@ func (wp *WorkerPool) worker(ctx context.Context) {
 }
 
 // safeExecuteAction wraps executeAction with panic recovery so a single
-// action panic doesn't crash the entire program.
+// action panic doesn't crash the entire program. The engine receives the
+// panic as a failed WorkerResult and decides how to handle it.
 func (wp *WorkerPool) safeExecuteAction(ctx context.Context, ta *TrackedAction) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -165,16 +173,17 @@ func (wp *WorkerPool) safeExecuteAction(ctx context.Context, ta *TrackedAction) 
 				slog.Any("panic", r),
 			)
 			panicErr := fmt.Errorf("panic: %v", r)
-			wp.recordFailure(panicErr)
-			wp.sendResult(ctx, ta, false, panicErr.Error(), panicErr)
-			wp.tracker.Complete(ta.ID)
+			wp.sendResult(ctx, ta, nil, panicErr)
+			// NO tracker.Complete() — engine owns completion decisions.
 		}
 	}()
 
 	wp.executeAction(ctx, ta)
 }
 
-// executeAction runs a single tracked action: execute, commit, complete.
+// executeAction runs a single tracked action: execute, persist success
+// outcomes, and send the result to the engine. Workers are pure executors —
+// they NEVER call tracker.Complete() or tracker.ReQueue().
 func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 	// Per-action cancellable context.
 	actionCtx, cancel := context.WithCancel(ctx)
@@ -188,10 +197,7 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 		wp.logger.Error("worker: baseline load failed",
 			slog.String("error", loadErr.Error()),
 		)
-		wp.recordFailure(loadErr)
-		wp.sendResult(ctx, ta, false, loadErr.Error(), loadErr)
-		wp.tracker.Complete(ta.ID)
-
+		wp.sendResult(ctx, ta, nil, loadErr)
 		return
 	}
 
@@ -199,31 +205,23 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 	exec := NewExecution(wp.cfg, bl)
 	outcome := wp.dispatchAction(actionCtx, exec, ta)
 
-	// Commit outcome to baseline. Uses pool-level ctx because the action
-	// already completed — its outcome should be persisted even if
-	// CancelByPath canceled actionCtx after dispatch returned.
-	if commitErr := wp.baseline.CommitOutcome(ctx, &outcome); commitErr != nil {
-		wp.logger.Error("worker: commit outcome failed",
-			slog.Int64("id", ta.ID),
-			slog.String("error", commitErr.Error()),
-		)
-		wp.recordFailure(commitErr)
-		wp.sendResult(ctx, ta, false, commitErr.Error(), commitErr)
-		wp.tracker.Complete(ta.ID)
-
-		return
-	}
-
+	// Persist success outcomes immediately. CommitOutcome is a no-op for
+	// failures (store_baseline.go:186), so we only call it on success.
+	// Uses pool-level ctx because the action already completed — its outcome
+	// should be persisted even if CancelByPath canceled actionCtx.
 	if outcome.Success {
-		wp.succeeded.Add(1)
-		wp.sendResult(ctx, ta, true, "", nil)
-	} else {
-		wp.recordFailure(outcome.Error)
-		wp.sendResult(ctx, ta, false, outcome.Error.Error(), outcome.Error)
+		if commitErr := wp.baseline.CommitOutcome(ctx, &outcome); commitErr != nil {
+			wp.logger.Error("worker: commit outcome failed",
+				slog.Int64("id", ta.ID),
+				slog.String("error", commitErr.Error()),
+			)
+			wp.sendResult(ctx, ta, nil, commitErr)
+			return
+		}
 	}
 
-	// Signal completion to dispatch dependents.
-	wp.tracker.Complete(ta.ID)
+	wp.sendResult(ctx, ta, &outcome, outcome.Error)
+	// NO tracker.Complete() — engine owns completion decisions.
 }
 
 // dispatchAction routes a tracked action to the appropriate executor method.
@@ -262,61 +260,44 @@ func (wp *WorkerPool) dispatchAction(
 }
 
 // Results returns a read-only channel of per-action results. The engine
-// reads from this channel for in-memory result tracking (failure
-// suppression, delta token commit decisions).
+// reads from this channel, classifies each result, and routes to
+// tracker.Complete or tracker.ReQueue.
 func (wp *WorkerPool) Results() <-chan WorkerResult {
 	return wp.results
 }
 
-// recordFailure atomically increments the failed counter and appends an error
-// to the diagnostic error list. The list is capped at maxRecordedErrors to
-// bound memory in long-running watch mode (B-205). Overflow errors are counted
-// via droppedErrors; the failed counter remains accurate regardless.
-func (wp *WorkerPool) recordFailure(err error) {
-	if err == nil {
-		return
-	}
-
-	wp.failed.Add(1)
-	wp.errorsMu.Lock()
-
-	if len(wp.errors) >= maxRecordedErrors {
-		wp.droppedErrors.Add(1)
-		wp.dropWarnOnce.Do(func() {
-			wp.logger.Warn("error diagnostic buffer full, subsequent errors will only be counted",
-				slog.Int("cap", maxRecordedErrors),
-			)
-		})
-	} else {
-		wp.errors = append(wp.errors, err)
-	}
-
-	wp.errorsMu.Unlock()
-}
-
-// DroppedErrors returns the number of errors that were not recorded because
-// the diagnostic error slice was full (B-205).
-func (wp *WorkerPool) DroppedErrors() int64 {
-	return wp.droppedErrors.Load()
-}
-
-// sendResult reports a per-action outcome to the results channel. Blocks until
-// the result is sent or the context is canceled. In one-shot mode the channel
-// is sized to planSize so this never blocks. In watch mode the channel is 4096
-// deep and a drain goroutine reads concurrently (see Engine.drainWorkerResults).
+// sendResult reports a per-action outcome to the results channel. Populates
+// the WorkerResult from the TrackedAction and any error. When outcome is
+// non-nil, uses its Success/Error fields; otherwise treats as failure with
+// the provided error.
 //
-// If the context is canceled before the result is sent (e.g., during engine
-// shutdown), the WorkerResult is silently dropped. This is benign: callers
-// always call recordFailure() before sendResult, so the failed counter and
-// diagnostic error list remain accurate regardless (B-206).
-func (wp *WorkerPool) sendResult(ctx context.Context, ta *TrackedAction, success bool, errMsg string, actionErr error) {
+// If the context is canceled before the result is sent (engine shutdown),
+// the WorkerResult is silently dropped. The engine handles shutdown via
+// context cancellation on the drain goroutine (resultShutdown classification).
+func (wp *WorkerPool) sendResult(ctx context.Context, ta *TrackedAction, outcome *Outcome, actionErr error) {
 	r := WorkerResult{
-		Path:       ta.Action.Path,
-		DriveID:    ta.Action.DriveID,
-		ActionType: ta.Action.Type,
-		Success:    success,
-		ErrMsg:     errMsg,
-		HTTPStatus: extractHTTPStatus(actionErr),
+		Path:          ta.Action.Path,
+		DriveID:       ta.Action.DriveID,
+		ActionType:    ta.Action.Type,
+		Err:           actionErr,
+		HTTPStatus:    extractHTTPStatus(actionErr),
+		RetryAfter:    extractRetryAfter(actionErr),
+		TargetDriveID: ta.Action.TargetDriveID(),
+		ShortcutKey:   ta.Action.ShortcutKey(),
+		Attempt:       ta.Attempt,
+		ActionID:      ta.ID,
+	}
+
+	if outcome != nil {
+		r.Success = outcome.Success
+		if outcome.Error != nil {
+			r.ErrMsg = outcome.Error.Error()
+			r.Err = outcome.Error
+			r.HTTPStatus = extractHTTPStatus(outcome.Error)
+			r.RetryAfter = extractRetryAfter(outcome.Error)
+		}
+	} else if actionErr != nil {
+		r.ErrMsg = actionErr.Error()
 	}
 
 	select {
@@ -335,6 +316,21 @@ func extractHTTPStatus(err error) int {
 	var ge *graph.GraphError
 	if errors.As(err, &ge) {
 		return ge.StatusCode
+	}
+
+	return 0
+}
+
+// extractRetryAfter unwraps a graph.GraphError from err and returns its
+// RetryAfter duration. Returns 0 if err is nil or not a GraphError.
+func extractRetryAfter(err error) time.Duration {
+	if err == nil {
+		return 0
+	}
+
+	var ge *graph.GraphError
+	if errors.As(err, &ge) {
+		return ge.RetryAfter
 	}
 
 	return 0

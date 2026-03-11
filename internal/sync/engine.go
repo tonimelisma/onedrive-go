@@ -8,11 +8,15 @@ import (
 	"math"
 	"math/rand/v2"
 	"net/http"
+	"os"
+	"strings"
 	stdsync "sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 // forceSafetyMax is the maximum threshold used when --force is set,
@@ -102,9 +106,21 @@ type Engine struct {
 	watchShortcuts   []Shortcut
 	watchShortcutsMu stdsync.RWMutex
 
-	// retrier retries failed items with exponential backoff in watch mode.
-	// nil in one-shot mode.
-	retrier *FailureRetrier
+	// scopeState tracks scope-level failure detection (sliding windows)
+	// and informs scope block decisions. Created per sync pass.
+	scopeState *ScopeState
+
+	// tracker is a reference to the active DepTracker, needed by
+	// processWorkerResult to call Complete/ReQueue. Set during executePlan
+	// (one-shot) or RunWatch (watch mode).
+	tracker *DepTracker
+
+	// Engine-owned result counters. Workers are pure executors — the engine
+	// classifies results and owns all final disposition counts (R-6.8.9).
+	succeeded    atomic.Int32
+	failed       atomic.Int32
+	syncErrors   []error
+	syncErrorsMu stdsync.Mutex
 
 	// localWatcherFactory overrides the default fsnotify watcher factory
 	// for the local observer. Tests inject a mock factory to simulate
@@ -308,8 +324,11 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 		return report, nil
 	}
 
+	// Store shortcuts so the drain goroutine can access them via getWatchShortcuts.
+	e.setWatchShortcuts(shortcuts)
+
 	// Execute plan: run workers, drain results (failures, 403s, upload issues).
-	e.executePlan(ctx, plan, report, bl, shortcuts)
+	e.executePlan(ctx, plan, report, bl)
 
 	report.Duration = time.Since(start)
 
@@ -337,11 +356,11 @@ func (e *Engine) postSyncHousekeeping() {
 }
 
 // executePlan populates the dependency tracker and runs the worker pool.
-// In one-shot mode, drains the result channel synchronously after pool
-// shutdown to process failures, 403 permission checks, and upload issues.
+// The engine processes results concurrently while workers run, classifying
+// each result and calling tracker.Complete or tracker.ReQueue (R-6.8.9).
 func (e *Engine) executePlan(
 	ctx context.Context, plan *ActionPlan, report *SyncReport,
-	bl *Baseline, shortcuts []Shortcut,
+	bl *Baseline,
 ) {
 	if len(plan.Actions) == 0 {
 		return
@@ -362,7 +381,12 @@ func (e *Engine) executePlan(
 		return
 	}
 
+	// Reset engine counters for this pass.
+	e.resetResultStats()
+	e.scopeState = NewScopeState(e.nowFunc, e.logger)
+
 	tracker := NewDepTracker(len(plan.Actions), e.logger)
+	e.tracker = tracker
 
 	for i := range plan.Actions {
 		id := int64(i)
@@ -380,16 +404,17 @@ func (e *Engine) executePlan(
 
 	pool := NewWorkerPool(e.execCfg, tracker, e.baseline, e.logger, len(plan.Actions))
 	pool.Start(ctx, e.transferWorkers)
-	pool.Wait()
-	pool.Stop()
 
-	// Drain results synchronously — process failures, 403s, upload issues.
-	// After Stop(), the results channel is closed; range terminates cleanly.
-	for r := range pool.Results() {
-		e.processWorkerResult(ctx, r, bl, shortcuts)
-	}
+	// Process results concurrently — engine classifies and calls Complete/ReQueue.
+	// The drain goroutine reads from the results channel while workers run.
+	go e.drainWorkerResults(ctx, pool.Results(), bl)
 
-	report.Succeeded, report.Failed, report.Errors = pool.Stats()
+	pool.Wait() // blocks until tracker.Done() (all actions at terminal state)
+	pool.Stop() // cancels workers, closes results → drain goroutine exits
+
+	tracker.StopDelayed() // stop delayed queue timer
+
+	report.Succeeded, report.Failed, report.Errors = e.resultStats()
 }
 
 // buildReportFromCounts populates a SyncReport with plan counts.
@@ -839,6 +864,9 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 
 	// Step 3: Create persistent tracker and worker pool.
 	tracker := NewPersistentDepTracker(e.logger)
+	e.tracker = tracker
+	e.scopeState = NewScopeState(e.nowFunc, e.logger)
+
 	pool := NewWorkerPool(e.execCfg, tracker, e.baseline, e.logger, watchResultBuf)
 	pool.Start(ctx, e.transferWorkers)
 
@@ -851,30 +879,22 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 		}
 
 		pool.Stop()
-
-		if dropped := pool.DroppedErrors(); dropped > 0 {
-			e.logger.Warn("diagnostic error buffer overflowed",
-				slog.Int64("dropped_errors", dropped),
-				slog.Int("max_recorded", maxRecordedErrors),
-			)
-		}
+		tracker.StopDelayed()
 
 		e.logger.Info("watch mode stopped")
 	}()
 
-	// Drain worker results in a background goroutine for failure tracking.
-	// Baseline is passed explicitly. Shortcuts are read from the synchronized
-	// watchShortcuts field so the drain goroutine always sees the latest set.
+	// Drain worker results in a background goroutine. The engine classifies
+	// results and calls tracker.Complete or tracker.ReQueue (R-6.8.9).
 	go e.drainWorkerResults(ctx, pool.Results(), bl)
 
 	// Step 4: Create buffer and debounced output.
 	buf := NewBuffer(e.logger)
 	ready := buf.FlushDebounced(ctx, e.resolveDebounce(opts))
 
-	// Step 4b: Start failure retrier for automatic retry of failed items.
-	// Created after buf so it can re-inject synthesized events.
-	e.retrier = NewFailureRetrier(e.baseline, buf, tracker, e.logger)
-	go e.retrier.Run(ctx)
+	// Note: FailureRetrier retry loop is eliminated. The tracker is the sole
+	// retry mechanism (R-6.8.10). Crash recovery is handled by RunWatch's
+	// initial RunOnce + ResetInProgressStates.
 
 	// Step 5: Start observer goroutines.
 	errs, activeObservers := e.startObservers(ctx, bl, mode, buf, opts)
@@ -929,50 +949,258 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 	}
 }
 
-// processWorkerResult handles a single worker result: records failures in
-// sync_failures, checks permissions on 403s, and kicks the retrier. Shared
-// by both one-shot (RunOnce) and watch (drainWorkerResults) paths.
-func (e *Engine) processWorkerResult(ctx context.Context, r WorkerResult, bl *Baseline, shortcuts []Shortcut) {
-	if !r.Success {
-		// Check permissions FIRST for 403s — if read-only, skip failure
-		// recording entirely. Permission-denied items should not enter the
-		// retry/escalation pipeline.
+// ---------------------------------------------------------------------------
+// Result classification (R-6.8.15)
+// ---------------------------------------------------------------------------
+
+// resultClass categorizes a WorkerResult for routing by processWorkerResult.
+type resultClass int
+
+const (
+	resultSuccess    resultClass = iota // action succeeded
+	resultRequeue                       // transient failure — re-queue with backoff
+	resultScopeBlock                    // scope-level failure (429, 507, 5xx pattern)
+	resultSkip                          // non-retryable — record and move on
+	resultShutdown                      // context canceled — discard silently
+	resultFatal                         // abort sync pass (401 unrecoverable auth)
+)
+
+// classifyResult is a pure function that maps a WorkerResult to a result
+// class and optional scope key. No side effects — classification is
+// separate from routing ("functions do one thing").
+//
+//nolint:gocyclo // classification table — each HTTP status code is a distinct case
+func classifyResult(r *WorkerResult) (resultClass, string) {
+	if r.Success {
+		return resultSuccess, ""
+	}
+
+	// Shutdown: context canceled or deadline exceeded — graceful drain.
+	// NOT a failure — just a canceled operation. Don't record in sync_failures.
+	if errors.Is(r.Err, context.Canceled) || errors.Is(r.Err, context.DeadlineExceeded) {
+		return resultShutdown, ""
+	}
+
+	switch {
+	case r.HTTPStatus == http.StatusUnauthorized:
+		return resultFatal, ""
+
+	case r.HTTPStatus == http.StatusForbidden:
+		return resultSkip, ""
+
+	case r.HTTPStatus == http.StatusTooManyRequests:
+		return resultScopeBlock, scopeKeyThrottleAccount
+
+	case r.HTTPStatus == http.StatusInsufficientStorage:
+		return resultScopeBlock, scopeKeyForQuota(r)
+
+	case r.HTTPStatus == http.StatusBadRequest && isOutagePattern(r.Err):
+		// Known outage pattern (e.g., "ObjectHandle is Invalid") — transient,
+		// feeds scope detection. Distinguished from phantom drive 400s
+		// (R-6.7.11) which are handled by drive filtering.
+		return resultRequeue, ""
+
+	case r.HTTPStatus >= 500:
+		return resultRequeue, ""
+
+	case r.HTTPStatus == http.StatusRequestTimeout ||
+		r.HTTPStatus == http.StatusPreconditionFailed ||
+		r.HTTPStatus == http.StatusNotFound ||
+		r.HTTPStatus == http.StatusLocked:
+		return resultRequeue, ""
+
+	case errors.Is(r.Err, os.ErrPermission):
+		return resultSkip, ""
+
+	default:
+		return resultSkip, ""
+	}
+}
+
+// scopeKeyForQuota returns the scope key for a 507 quota error based on
+// the target drive context (R-2.10.1, R-2.10.17).
+func scopeKeyForQuota(r *WorkerResult) string {
+	if r.ShortcutKey != "" {
+		return scopeKeyQuotaShortcut + r.ShortcutKey
+	}
+	return scopeKeyQuotaOwn
+}
+
+// isOutagePattern returns true if the error matches known transient 400
+// outage patterns. Per failure-redesign.md §7.6, some 400 errors (e.g.,
+// "ObjectHandle is Invalid") are actually transient service outages.
+func isOutagePattern(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var ge *graph.GraphError
+	if !errors.As(err, &ge) {
+		return false
+	}
+
+	return strings.Contains(ge.Message, "ObjectHandle is Invalid")
+}
+
+// maxBackoffDuration caps the exponential backoff delay at 5 minutes.
+const maxBackoffDuration = 5 * time.Minute
+
+// computeBackoff returns the delay for a re-queued action based on its
+// attempt number. Unified non-compounding backoff: min(1s * 2^attempt, 5min)
+// (R-6.8.11). Single curve, no handoff between mechanisms.
+func computeBackoff(attempt int) time.Duration {
+	return min(time.Second<<uint(attempt), maxBackoffDuration)
+}
+
+// processWorkerResult handles a single worker result: classifies via
+// classifyResult, routes to tracker.Complete or tracker.ReQueue, and
+// records diagnostic failures. The engine owns all completion decisions —
+// workers execute and report, the engine classifies and routes (R-6.8.9).
+//
+// Shared by both one-shot (executePlan drain goroutine) and watch
+// (drainWorkerResults) paths.
+func (e *Engine) processWorkerResult(ctx context.Context, r *WorkerResult, bl *Baseline, shortcuts []Shortcut) {
+	class, _ := classifyResult(r)
+
+	switch class {
+	case resultSuccess:
+		e.tracker.Complete(r.ActionID)
+		if e.scopeState != nil {
+			e.scopeState.RecordSuccess(r)
+		}
+		e.succeeded.Add(1)
+
+	case resultRequeue:
+		e.recordDiagnosticFailure(ctx, r)
+		backoff := computeBackoff(r.Attempt)
+		if err := e.tracker.ReQueue(r.ActionID, e.nowFunc().Add(backoff)); err != nil {
+			// Budget exhausted (one-shot mode only). Complete as failed.
+			e.tracker.Complete(r.ActionID)
+			e.recordError(r)
+		}
+		e.feedScopeDetection(r)
+
+	case resultScopeBlock:
+		e.recordDiagnosticFailure(ctx, r)
+		e.feedScopeDetection(r)
+		// Re-queue the action — it will be caught by the scope gate in dispatch().
+		if err := e.tracker.ReQueue(r.ActionID, time.Time{}); err != nil {
+			e.tracker.Complete(r.ActionID)
+			e.recordError(r)
+		}
+
+	case resultSkip:
 		if r.HTTPStatus == http.StatusForbidden && e.permChecker != nil {
-			if e.handle403(ctx, bl, r.Path, shortcuts) {
-				return
-			}
+			e.handle403(ctx, bl, r.Path, shortcuts)
 		}
+		e.recordDiagnosticFailure(ctx, r)
+		e.tracker.Complete(r.ActionID)
+		e.recordError(r)
 
-		// Determine direction from action type.
-		direction := directionFromAction(r.ActionType)
+	case resultShutdown:
+		// Context canceled — graceful drain. Don't record failure.
+		e.tracker.Complete(r.ActionID)
 
-		// Use the engine's driveID if the worker result doesn't have one
-		// (e.g., one-shot mode where actions may not carry drive context).
-		driveID := r.DriveID
-		if driveID.String() == "" {
-			driveID = e.driveID
-		}
+	case resultFatal:
+		e.recordDiagnosticFailure(ctx, r)
+		e.tracker.Complete(r.ActionID)
+		e.recordError(r)
+	}
+}
 
-		// Atomic write: sync_failures + remote_state status transition.
-		if recErr := e.baseline.RecordFailure(ctx, &SyncFailureParams{
-			Path:       r.Path,
-			DriveID:    driveID,
-			Direction:  direction,
-			ErrMsg:     r.ErrMsg,
-			HTTPStatus: r.HTTPStatus,
-		}); recErr != nil {
-			e.logger.Warn("failed to record failure",
-				slog.String("path", r.Path),
-				slog.String("error", recErr.Error()),
-			)
+// feedScopeDetection feeds a worker result into scope detection sliding
+// windows. If a threshold is crossed, creates a scope block. Handles both
+// regular failures and 400 outage patterns.
+func (e *Engine) feedScopeDetection(r *WorkerResult) {
+	if e.scopeState == nil {
+		return
+	}
+	sr := e.scopeState.UpdateScope(r)
+	if sr.Block {
+		e.applyScopeBlock(sr)
+	}
+	// Also check outage pattern for 400s.
+	if r.HTTPStatus == http.StatusBadRequest && isOutagePattern(r.Err) {
+		osr := e.scopeState.UpdateScopeOutagePattern(r.Path)
+		if osr.Block {
+			e.applyScopeBlock(osr)
 		}
 	}
+}
 
-	// Kick retrier after every result (success or failure) so it
-	// can re-evaluate retry timers and dispatch newly retriable items.
-	if e.retrier != nil {
-		e.retrier.Kick()
+// applyScopeBlock creates a ScopeBlock and tells the tracker to hold
+// affected actions.
+func (e *Engine) applyScopeBlock(sr ScopeUpdateResult) {
+	now := e.nowFunc()
+	block := &ScopeBlock{
+		Key:           sr.ScopeKey,
+		IssueType:     sr.IssueType,
+		BlockedAt:     now,
+		TrialInterval: sr.TrialInterval,
+		NextTrialAt:   now.Add(sr.TrialInterval),
 	}
+	e.tracker.HoldScope(sr.ScopeKey, block)
+}
+
+// recordError increments the failed counter and appends the error to the
+// diagnostic error list.
+func (e *Engine) recordError(r *WorkerResult) {
+	e.failed.Add(1)
+	if r.Err != nil {
+		e.syncErrorsMu.Lock()
+		e.syncErrors = append(e.syncErrors, r.Err)
+		e.syncErrorsMu.Unlock()
+	}
+}
+
+// recordDiagnosticFailure writes a failure to sync_failures for diagnostic
+// visibility (onedrive status). No retry scheduling — the tracker handles
+// all retry timing. This replaces the old RecordFailure which computed
+// all retry timing.
+func (e *Engine) recordDiagnosticFailure(ctx context.Context, r *WorkerResult) {
+	direction := directionFromAction(r.ActionType)
+
+	driveID := r.DriveID
+	if driveID.String() == "" {
+		driveID = e.driveID
+	}
+
+	if recErr := e.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path:       r.Path,
+		DriveID:    driveID,
+		Direction:  direction,
+		ErrMsg:     r.ErrMsg,
+		HTTPStatus: r.HTTPStatus,
+	}); recErr != nil {
+		e.logger.Warn("failed to record diagnostic failure",
+			slog.String("path", r.Path),
+			slog.String("error", recErr.Error()),
+		)
+	}
+}
+
+// nowFunc returns the current time. Uses the engine's clock if available,
+// otherwise falls back to time.Now.
+func (e *Engine) nowFunc() time.Time {
+	return time.Now()
+}
+
+// resultStats returns the engine-owned counters and error list.
+func (e *Engine) resultStats() (succeeded, failed int, errs []error) {
+	e.syncErrorsMu.Lock()
+	errs = make([]error, len(e.syncErrors))
+	copy(errs, e.syncErrors)
+	e.syncErrorsMu.Unlock()
+	return int(e.succeeded.Load()), int(e.failed.Load()), errs
+}
+
+// resetResultStats resets the engine-owned counters for a new pass.
+func (e *Engine) resetResultStats() {
+	e.succeeded.Store(0)
+	e.failed.Store(0)
+	e.syncErrorsMu.Lock()
+	e.syncErrors = nil
+	e.syncErrorsMu.Unlock()
 }
 
 // directionFromAction maps an ActionType to a sync_failures direction string.
@@ -999,7 +1227,7 @@ func (e *Engine) drainWorkerResults(ctx context.Context, results <-chan WorkerRe
 				return
 			}
 
-			e.processWorkerResult(ctx, r, bl, e.getWatchShortcuts())
+			e.processWorkerResult(ctx, &r, bl, e.getWatchShortcuts())
 
 		case <-ctx.Done():
 			return

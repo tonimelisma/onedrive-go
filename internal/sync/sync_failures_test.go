@@ -390,8 +390,8 @@ func TestLocalIssueSyncStatus(t *testing.T) {
 	}
 }
 
-func TestRecordFailure_TransientSetsNextRetryAt(t *testing.T) {
-	mgr, fixedTime := newTestSyncStoreForFailures(t)
+func TestRecordFailure_TransientHasNoNextRetryAt(t *testing.T) {
+	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
 	err := mgr.RecordFailure(ctx, &SyncFailureParams{
@@ -407,9 +407,10 @@ func TestRecordFailure_TransientSetsNextRetryAt(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 
-	// next_retry_at should be set (non-zero) and after fixedTime.
-	assert.Greater(t, issues[0].NextRetryAt, fixedTime.UnixNano(),
-		"transient issue should have next_retry_at in the future")
+	// Transient issues have no next_retry_at — the tracker is the sole
+	// retry mechanism (R-6.8.10). sync_failures is diagnostic-only.
+	assert.Equal(t, int64(0), issues[0].NextRetryAt,
+		"transient issue should have no next_retry_at (tracker handles retry)")
 }
 
 func TestRecordFailure_PermanentNoRetryAt(t *testing.T) {
@@ -433,7 +434,7 @@ func TestRecordFailure_PermanentNoRetryAt(t *testing.T) {
 		"permanent issue should have no next_retry_at")
 }
 
-func TestRecordFailure_RepeatBackoffIncreases(t *testing.T) {
+func TestRecordFailure_RepeatIncrementsCount(t *testing.T) {
 	mgr, fixedTime := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
@@ -450,7 +451,7 @@ func TestRecordFailure_RepeatBackoffIncreases(t *testing.T) {
 	issues, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
-	firstRetry := issues[0].NextRetryAt
+	assert.Equal(t, 1, issues[0].FailureCount)
 
 	// Advance time and record second failure.
 	laterTime := fixedTime.Add(5 * time.Minute)
@@ -469,16 +470,18 @@ func TestRecordFailure_RepeatBackoffIncreases(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 
-	// Second retry should be further in the future than the first.
-	assert.Greater(t, issues[0].NextRetryAt, firstRetry,
-		"backoff should increase on repeated failures")
+	// Failure count should increment on repeated failures.
+	assert.Equal(t, 2, issues[0].FailureCount,
+		"failure count should increase on repeated failures")
+	// No next_retry_at — tracker handles retry.
+	assert.Equal(t, int64(0), issues[0].NextRetryAt)
 }
 
-func TestListLocalIssuesForRetry(t *testing.T) {
+func TestListLocalIssuesForRetry_NoResults(t *testing.T) {
 	mgr, fixedTime := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
-	// Record a transient issue (will have next_retry_at set).
+	// Record a transient issue — no next_retry_at since tracker handles retry.
 	err := mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:      "retry.txt",
 		DriveID:   driveid.ID{},
@@ -488,30 +491,16 @@ func TestListLocalIssuesForRetry(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Record a permanent issue (should not appear in retry list).
-	err = mgr.RecordFailure(ctx, &SyncFailureParams{
-		Path:      "CON",
-		DriveID:   driveid.ID{},
-		Direction: "upload",
-		IssueType: "invalid_filename",
-		ErrMsg:    "reserved",
-	})
-	require.NoError(t, err)
-
-	// Query at a time before next_retry_at — should be empty.
-	rows, err := mgr.ListSyncFailuresForRetry(ctx, fixedTime)
-	require.NoError(t, err)
-	assert.Empty(t, rows, "should not return issues before their retry time")
-
-	// Query at a time after next_retry_at — should return the transient issue.
+	// ListSyncFailuresForRetry finds rows with next_retry_at set. Since
+	// transient issues now have NULL next_retry_at (tracker handles retry),
+	// this returns empty.
 	futureTime := fixedTime.Add(10 * time.Minute)
-	rows, err = mgr.ListSyncFailuresForRetry(ctx, futureTime)
+	rows, err := mgr.ListSyncFailuresForRetry(ctx, futureTime)
 	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	assert.Equal(t, "retry.txt", rows[0].Path)
+	assert.Empty(t, rows, "transient issues have no next_retry_at, so none are returned")
 }
 
-func TestEarliestLocalIssueRetryAt(t *testing.T) {
+func TestEarliestLocalIssueRetryAt_AlwaysZero(t *testing.T) {
 	mgr, fixedTime := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
@@ -530,11 +519,11 @@ func TestEarliestLocalIssueRetryAt(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Query from fixedTime — should return the next_retry_at (which is in the future).
+	// Transient issues have no next_retry_at (tracker handles retry), so
+	// EarliestSyncFailureRetryAt returns zero.
 	earliest, err = mgr.EarliestSyncFailureRetryAt(ctx, fixedTime)
 	require.NoError(t, err)
-	assert.False(t, earliest.IsZero(), "should return a future retry time")
-	assert.True(t, earliest.After(fixedTime))
+	assert.True(t, earliest.IsZero(), "no retry scheduling in sync_failures")
 }
 
 func TestMarkLocalIssuePermanent(t *testing.T) {
@@ -870,10 +859,10 @@ func TestRecordFailure_ActionableClassification(t *testing.T) {
 	assert.Equal(t, int64(0), issues[0].NextRetryAt, "actionable issues should not have next_retry_at")
 }
 
-func TestRecordFailure_TransientHasBackoff(t *testing.T) {
+func TestRecordFailure_TransientNoDatabaseBackoff(t *testing.T) {
 	t.Parallel()
 
-	mgr, fixedTime := newTestSyncStoreForFailures(t)
+	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
 	err := mgr.RecordFailure(ctx, &SyncFailureParams{
@@ -890,8 +879,9 @@ func TestRecordFailure_TransientHasBackoff(t *testing.T) {
 	require.Len(t, issues, 1)
 
 	assert.Equal(t, "transient", issues[0].Category)
-	assert.Greater(t, issues[0].NextRetryAt, fixedTime.UnixNano(),
-		"transient issues should have next_retry_at in the future")
+	// No next_retry_at — the tracker is the sole retry mechanism (R-6.8.10).
+	assert.Equal(t, int64(0), issues[0].NextRetryAt,
+		"transient issues should have no next_retry_at (tracker handles retry)")
 }
 
 func TestRecordFailure_DownloadStateTransition(t *testing.T) {

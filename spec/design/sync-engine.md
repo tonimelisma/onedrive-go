@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/engine.go, internal/sync/engine_shortcuts.go, internal/sync/orchestrator.go, internal/sync/drive_runner.go, sync.go, sync_helpers.go
 
-Implements: R-2.1 [verified], R-2.6 [verified], R-2.8 [verified], R-3.4.2 [verified], R-2.10.1 [planned], R-2.10.2 [planned], R-2.10.3 [planned], R-2.10.4 [planned], R-2.10.7 [planned], R-2.10.9 [planned], R-2.10.10 [planned], R-2.10.12 [planned], R-2.10.13 [planned], R-2.10.17 [planned], R-2.10.18 [planned], R-2.10.19 [planned], R-2.10.20 [planned], R-2.10.23 [planned], R-2.10.24 [planned], R-2.10.25 [planned], R-2.10.26 [planned], R-2.10.28 [planned], R-2.10.29 [planned], R-2.10.30 [planned], R-2.10.31 [planned], R-2.10.35 [planned], R-2.10.36 [planned], R-2.10.37 [planned], R-2.10.38 [planned], R-6.6.7 [planned], R-6.6.8 [planned], R-6.6.9 [planned], R-6.6.10 [planned], R-6.6.12 [planned], R-6.7.27 [planned], R-6.8.15 [planned]
+Implements: R-2.1 [verified], R-2.6 [verified], R-2.8 [verified], R-3.4.2 [verified], R-2.10.1 [verified], R-2.10.2 [planned], R-2.10.3 [verified], R-2.10.4 [planned], R-2.10.7 [verified], R-2.10.9 [planned], R-2.10.10 [planned], R-2.10.12 [planned], R-2.10.13 [planned], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [planned], R-2.10.24 [planned], R-2.10.25 [planned], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified], R-2.10.30 [planned], R-2.10.31 [planned], R-2.10.35 [verified], R-2.10.36 [verified], R-2.10.37 [verified], R-2.10.38 [planned], R-6.6.7 [planned], R-6.6.8 [planned], R-6.6.9 [planned], R-6.6.10 [planned], R-6.6.12 [planned], R-6.7.27 [planned], R-6.8.15 [verified]
 
 ## Engine (`engine.go`)
 
@@ -13,33 +13,40 @@ Wires the sync pipeline: observers → buffer → planner → executor → SyncS
 
 Watch mode uses a unified tick loop: filesystem events are debounced by the change buffer, remote changes are polled at `poll_interval` (default 5 minutes). Periodic full reconciliation runs every 24 hours to detect missed delta deletions.
 
-### Planned: Error Classification (`classifyResult()`)
+### Error Classification (`classifyResult()`)
 
-Implements: R-6.8.9 [planned], R-6.8.15 [planned], R-6.7.27 [planned]
+Implements: R-6.8.9 [verified], R-6.8.15 [verified], R-6.7.27 [planned]
 
-Single classification point for all worker results. Maps HTTP status codes + error types → result class (success, transient, actionable, fatal). Replaces executor's `classifyError`/`classifyStatusCode`.
+Pure function `classifyResult(*WorkerResult) → (resultClass, scopeKey)`. Single classification point for all worker results. No side effects — classification is separate from routing ("functions do one thing"). Six result classes:
 
-Target-drive-aware scope routing: `WorkerResult.TargetDriveID` and `ShortcutKey` determine scope key. Own-drive actions (empty `ShortcutKey`) route to `quota:own` or `perm:remote:{path}`. Shortcut actions route to `quota:shortcut:$drive:$item` or `perm:remote:{path}`. 429/5xx always route to account/service scope regardless of target drive. Empty `TargetDriveID` (local-only errors) skips remote scope routing entirely.
+- `resultSuccess`: action succeeded
+- `resultRequeue`: transient failure — re-queue with backoff
+- `resultScopeBlock`: scope-level failure (429, 507, 5xx pattern) — feed scope detection
+- `resultSkip`: non-retryable — record and move on
+- `resultShutdown`: context canceled — discard silently, no failure recorded
+- `resultFatal`: abort sync pass (401 unrecoverable auth)
 
-Transient classification (R-6.8.15): 5xx → `server_error`, 408 → `request_timeout`, 412 → `transient_conflict`, 404 → `transient_not_found`, 423 → `resource_locked`. 423 reclassified from skip to transient — non-blocking tracker re-queue handles multi-hour SharePoint locks naturally.
+Classification table: 401 → fatal, 403 → skip (with handle403 side effect), 429 → scopeBlock `throttle:account`, 507 → scopeBlock `quota:own` or `quota:shortcut:$key`, 400 + outage pattern → requeue, 5xx → requeue, 408/412/404/423 → requeue, context.Canceled → shutdown, os.ErrPermission → skip.
 
-### Planned: Scope Detection and Management (`updateScope()`)
+`isOutagePattern()` detects known 400 outage patterns (e.g., "ObjectHandle is Invalid") that are actually transient service outages. Distinguished from phantom drive 400s (R-6.7.11) by error body inspection.
 
-Implements: R-2.10.3 [planned], R-2.10.17 [planned], R-2.10.18 [planned], R-2.10.19 [planned], R-2.10.20 [planned], R-2.10.23 [planned], R-2.10.26 [planned], R-2.10.28 [planned], R-2.10.29 [planned]
+### Scope Detection and Management
 
-Target-drive-aware scope routing:
-- 507/403 → per-drive scope key (`quota:own`, `quota:shortcut:$drive:$item`, `perm:remote:{path}`)
-- 429 → `throttle:account` (all drives share the same OAuth token)
-- 5xx → `service` scope (shared infrastructure)
-- Empty `TargetDriveID` (local-only errors like `os.ErrPermission`) → skip remote scope routing
+Implements: R-2.10.3 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [planned], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified]
 
-Sliding window detection: N unique-path failures with no intervening success within T seconds. Success from any path in scope resets the counter.
+`processWorkerResult()` classifies each result and routes it: success → Complete + counter, requeue → ReQueue with backoff, scopeBlock → feed scope detection + ReQueue, skip → handle403 side effect + Complete, shutdown → Complete (no failure), fatal → Complete.
 
-### Planned: ScopeState
+`feedScopeDetection()` feeds results into `ScopeState.UpdateScope()`. When a threshold is crossed, creates a scope block via `applyScopeBlock()` which calls `tracker.HoldScope()`.
 
-Implements: R-2.10.35 [planned], R-2.10.36 [planned], R-2.10.37 [planned]
+The engine owns all completion decisions — workers are pure executors. Engine-owned counters (`succeeded`, `failed` atomics) replace the worker-owned counters removed in this refactoring. `drainWorkerResults()` processes results concurrently for both one-shot and watch modes.
 
-In-memory data structure: blocks map (scope_key → `ScopeBlock`), sliding windows (scope_key → window), trial timers. Engine-internal — no cross-engine coordination (each engine discovers independently).
+Unified backoff: `min(1s * 2^attempt, 5min)` via `computeBackoff()`. Single mechanism — no reconciler handoff. `recordDiagnosticFailure()` writes to `sync_failures` for `onedrive status` visibility without retry scheduling.
+
+### ScopeState
+
+Implements: R-2.10.35 [verified], R-2.10.36 [verified], R-2.10.37 [verified]
+
+In-memory data structure in `scope.go`: sliding windows (scope_key → `slidingWindow`) for scope escalation detection. Engine-internal — no cross-engine coordination (each engine discovers independently). Scope blocks are stored in the tracker's `scopeBlocks` map and enforce held queuing.
 
 ### Scanner ScanResult Contract
 

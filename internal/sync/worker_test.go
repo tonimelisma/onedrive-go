@@ -1,14 +1,12 @@
 package sync
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -137,6 +135,49 @@ func newWorkerTestSetup(t *testing.T) (
 	return cfg, mgr, syncRoot
 }
 
+// drainAndComplete drains the worker result channel, calling tracker.Complete
+// for each result. Returns the collected results. This simulates the engine's
+// drain goroutine in tests.
+func drainAndComplete(results <-chan WorkerResult, tracker *DepTracker) []WorkerResult {
+	var collected []WorkerResult
+	for r := range results {
+		collected = append(collected, r)
+		tracker.Complete(r.ActionID)
+	}
+	return collected
+}
+
+// runPoolWithDrain starts the pool, drains results in a goroutine (calling
+// Complete on each), waits for all actions to finish, then stops the pool
+// and returns the collected results.
+func runPoolWithDrain(ctx context.Context, pool *WorkerPool, tracker *DepTracker) []WorkerResult {
+	pool.Start(ctx, 4)
+
+	var results []WorkerResult
+	done := make(chan struct{})
+	go func() {
+		results = drainAndComplete(pool.Results(), tracker)
+		close(done)
+	}()
+
+	pool.Wait()
+	pool.Stop()
+	<-done
+	return results
+}
+
+// countResults counts succeeded and failed results.
+func countResults(results []WorkerResult) (succeeded, failed int) {
+	for _, r := range results {
+		if r.Success {
+			succeeded++
+		} else {
+			failed++
+		}
+	}
+	return
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -169,12 +210,10 @@ func TestWorkerPool_FolderCreate(t *testing.T) {
 	tracker.Add(&actions[0], 0, nil)
 
 	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
-	pool.Start(ctx, 4)
-	pool.Wait()
-	pool.Stop()
+	results := runPoolWithDrain(ctx, pool, tracker)
 
-	succeeded, failed, errs := pool.Stats()
-	assert.Equal(t, 0, failed, "failed actions; errors: %v", errs)
+	succeeded, failed := countResults(results)
+	assert.Equal(t, 0, failed, "failed actions")
 	assert.Equal(t, 1, succeeded)
 
 	// Verify directory was created.
@@ -235,12 +274,10 @@ func TestWorkerPool_DependencyChain(t *testing.T) {
 	tracker.Add(&actions[1], 1, []int64{0})
 
 	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
-	pool.Start(ctx, 4)
-	pool.Wait()
-	pool.Stop()
+	results := runPoolWithDrain(ctx, pool, tracker)
 
-	succeeded, failed, errs := pool.Stats()
-	assert.Equal(t, 0, failed, "failed actions; errors: %v", errs)
+	succeeded, failed := countResults(results)
+	assert.Equal(t, 0, failed, "failed actions")
 	assert.Equal(t, 2, succeeded)
 
 	// Verify file was downloaded.
@@ -296,18 +333,16 @@ func TestWorkerPool_StopCancelsWork(t *testing.T) {
 }
 
 // Validates: R-5.1
-func TestWorkerPool_Stats(t *testing.T) {
+func TestWorkerPool_ResultChannel(t *testing.T) {
 	t.Parallel()
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
 	ctx := t.Context()
 
-	// Use a delete action against a nonexistent local file — the delete should
-	// still succeed (deleteLocalFile succeeds when file doesn't exist).
 	actions := []Action{
 		{
 			Type:    ActionLocalDelete,
-			Path:    "nonexistent.txt",
+			Path:    "result-test.txt",
 			DriveID: driveid.New("0000000000000001"),
 			ItemID:  "del-id",
 			View:    &PathView{},
@@ -315,19 +350,25 @@ func TestWorkerPool_Stats(t *testing.T) {
 	}
 
 	tracker := NewDepTracker(10, testLogger(t))
-	tracker.Add(&actions[0], 0, nil)
+	tracker.Add(&actions[0], 42, nil)
 
 	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
-	pool.Start(ctx, 4)
-	pool.Wait()
-	pool.Stop()
+	results := runPoolWithDrain(ctx, pool, tracker)
 
-	succeeded, _, _ := pool.Stats()
-	assert.GreaterOrEqual(t, succeeded, 1)
+	// Verify result for the action.
+	var found bool
+	for _, r := range results {
+		if r.Path == "result-test.txt" {
+			assert.True(t, r.Success)
+			assert.Equal(t, int64(42), r.ActionID)
+			found = true
+		}
+	}
+	require.True(t, found, "expected result for result-test.txt in channel")
 }
 
 // TestWorkerPool_FailedOutcome verifies that when an action execution fails,
-// the worker reports the failure via Stats() and the result channel.
+// the worker reports the failure via the result channel.
 func TestWorkerPool_FailedOutcome(t *testing.T) {
 	t.Parallel()
 
@@ -363,87 +404,22 @@ func TestWorkerPool_FailedOutcome(t *testing.T) {
 	tracker.Add(&actions[0], 0, nil)
 
 	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
-	pool.Start(ctx, 4)
-	pool.Wait()
-	pool.Stop()
+	results := runPoolWithDrain(ctx, pool, tracker)
 
-	succeeded, failed, errs := pool.Stats()
+	succeeded, failed := countResults(results)
 	assert.Equal(t, 0, succeeded)
-	assert.GreaterOrEqual(t, failed, 1, "failed actions; errors: %v", errs)
+	assert.GreaterOrEqual(t, failed, 1, "expected at least one failure")
 
-	// Drain the result channel and verify the failure is reported.
+	// Verify the failure details.
 	var foundFailure bool
-
-	for {
-		select {
-		case r, ok := <-pool.Results():
-			if !ok {
-				goto done
-			}
-
-			if !r.Success && r.Path == "fail-me.txt" {
-				foundFailure = true
-			}
-		default:
-			goto done
+	for _, r := range results {
+		if !r.Success && r.Path == "fail-me.txt" {
+			foundFailure = true
+			assert.NotEmpty(t, r.ErrMsg)
+			assert.NotNil(t, r.Err, "Err should carry the full error")
 		}
 	}
-
-done:
-
-	assert.True(t, foundFailure, "expected failure result for fail-me.txt in result channel")
-}
-
-// TestWorkerPool_ResultChannel verifies that worker results are reported
-// through the Results channel.
-func TestWorkerPool_ResultChannel(t *testing.T) {
-	t.Parallel()
-
-	cfg, mgr, _ := newWorkerTestSetup(t)
-	ctx := t.Context()
-
-	actions := []Action{
-		{
-			Type:    ActionLocalDelete,
-			Path:    "result-test.txt",
-			DriveID: driveid.New("0000000000000001"),
-			ItemID:  "del-id",
-			View:    &PathView{},
-		},
-	}
-
-	tracker := NewDepTracker(10, testLogger(t))
-	tracker.Add(&actions[0], 42, nil)
-
-	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
-	pool.Start(ctx, 4)
-	pool.Wait()
-	pool.Stop()
-
-	// Read from result channel.
-	var result WorkerResult
-	var found bool
-
-	for {
-		select {
-		case r, ok := <-pool.Results():
-			if !ok {
-				goto check
-			}
-
-			if r.Path == "result-test.txt" {
-				result = r
-				found = true
-			}
-		default:
-			goto check
-		}
-	}
-
-check:
-
-	require.True(t, found, "expected result for result-test.txt in channel")
-	assert.True(t, result.Success)
+	assert.True(t, foundFailure, "expected failure result for fail-me.txt")
 }
 
 // ---------------------------------------------------------------------------
@@ -506,12 +482,10 @@ func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing
 	tracker.Add(&actions[1], 1, []int64{0})
 
 	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
-	pool.Start(ctx, 4)
-	pool.Wait()
-	pool.Stop()
+	results := runPoolWithDrain(ctx, pool, tracker)
 
-	succeeded, failed, errs := pool.Stats()
-	assert.Equal(t, 0, failed, "failed actions; errors: %v", errs)
+	succeeded, failed := countResults(results)
+	assert.Equal(t, 0, failed, "failed actions")
 	assert.Equal(t, 2, succeeded)
 
 	// The upload must have resolved its parent from the baseline entry committed
@@ -522,8 +496,8 @@ func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing
 }
 
 // TestWorkerPool_PanicRecovery verifies that a panic in action execution
-// doesn't crash the process — the worker recovers, records a failure, and
-// the pool completes normally.
+// doesn't crash the process — the worker recovers and reports a failure
+// result. The pool completes normally.
 func TestWorkerPool_PanicRecovery(t *testing.T) {
 	t.Parallel()
 
@@ -558,104 +532,193 @@ func TestWorkerPool_PanicRecovery(t *testing.T) {
 	tracker.Add(&actions[0], 0, nil)
 
 	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
-	pool.Start(ctx, 4)
-	pool.Wait()
-	pool.Stop()
+	results := runPoolWithDrain(ctx, pool, tracker)
 
 	// If we got here, the panic was recovered — the process didn't crash.
-	_, failed, errs := pool.Stats()
+	_, failed := countResults(results)
 	assert.GreaterOrEqual(t, failed, 1, "panic should be recorded as failure")
 
-	// B-218: verify the error message in wp.errors contains "panic:".
-	var foundPanicError bool
-
-	for _, e := range errs {
-		if e != nil && strings.Contains(e.Error(), "panic:") {
-			foundPanicError = true
-
-			break
-		}
-	}
-
-	assert.True(t, foundPanicError,
-		"expected error containing 'panic:' in Stats() errors, got %v", errs)
-
-	// Verify the failure is reported through the result channel.
+	// Verify the error message contains "panic:".
 	var foundPanicResult bool
-
-	for {
-		select {
-		case r, ok := <-pool.Results():
-			if !ok {
-				goto done
-			}
-
-			if !r.Success && r.Path == "panic-me.txt" {
-				assert.Contains(t, r.ErrMsg, "panic:")
-				foundPanicResult = true
-			}
-		default:
-			goto done
+	for _, r := range results {
+		if !r.Success && r.Path == "panic-me.txt" {
+			assert.Contains(t, r.ErrMsg, "panic:")
+			foundPanicResult = true
 		}
 	}
-
-done:
-
 	assert.True(t, foundPanicResult,
 		"expected panic failure result for panic-me.txt in result channel")
 }
 
 // ---------------------------------------------------------------------------
-// B-205: Error cap to bound memory in watch mode
+// Worker→Engine ownership: worker never calls Complete (R-6.8.9)
 // ---------------------------------------------------------------------------
 
-func TestWorkerPool_ErrorCap(t *testing.T) {
+// Validates: R-6.8.9
+func TestWorker_NeverCallsComplete(t *testing.T) {
 	t.Parallel()
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
-	tracker := NewDepTracker(10, testLogger(t))
-	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
+	ctx := t.Context()
 
-	// Manually call recordFailure more than maxRecordedErrors times.
-	totalErrors := maxRecordedErrors + 500
-	for i := range totalErrors {
-		pool.recordFailure(fmt.Errorf("error %d", i))
+	actions := []Action{
+		{
+			Type:    ActionLocalDelete,
+			Path:    "test-no-complete.txt",
+			DriveID: driveid.New("0000000000000001"),
+			ItemID:  "del-id",
+			View:    &PathView{},
+		},
 	}
 
-	_, failed, errs := pool.Stats()
+	tracker := NewDepTracker(10, testLogger(t))
+	tracker.Add(&actions[0], 0, nil)
 
-	// failed counter should reflect all errors.
-	assert.Equal(t, totalErrors, failed)
+	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
+	pool.Start(ctx, 4)
 
-	// Diagnostic error slice should be capped.
-	assert.Len(t, errs, maxRecordedErrors)
+	// Read one result from the channel — worker must send a result.
+	var result WorkerResult
+	select {
+	case r := <-pool.Results():
+		result = r
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "timeout waiting for worker result")
+	}
 
-	// DroppedErrors should reflect the overflow.
-	dropped := pool.DroppedErrors()
-	assert.Equal(t, int64(totalErrors-maxRecordedErrors), dropped)
+	// Worker sent the result but did NOT call Complete — tracker.Done should
+	// NOT have fired (the action is still in-flight from tracker's perspective).
+	select {
+	case <-tracker.Done():
+		require.Fail(t, "tracker.Done fired — worker must not call Complete")
+	default:
+		// Expected: Done not fired because Complete was not called.
+	}
+
+	assert.True(t, result.Success)
+	assert.Equal(t, "test-no-complete.txt", result.Path)
+	assert.Equal(t, int64(0), result.ActionID, "ActionID should match TrackedAction.ID")
+
+	// Now WE call Complete (simulating the engine), which should fire Done.
+	tracker.Complete(result.ActionID)
+
+	select {
+	case <-tracker.Done():
+		// Expected: Done fires after engine calls Complete.
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "tracker.Done did not fire after Complete")
+	}
+
+	pool.Stop()
 }
 
-func TestWorkerPool_ErrorCap_LogsWarnOnce(t *testing.T) {
+// ---------------------------------------------------------------------------
+// WorkerResult populates from TrackedAction (R-2.10.16, R-6.8.12)
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.10.16, R-6.8.12
+func TestWorkerResult_PopulatesFromAction(t *testing.T) {
 	t.Parallel()
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
-	tracker := NewDepTracker(10, testLogger(t))
+	ctx := t.Context()
 
-	// Use a buffer-backed logger to capture the warning.
-	var logBuf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	pool := NewWorkerPool(cfg, tracker, mgr, logger, 10)
-
-	// Fill the error buffer to capacity + overflow.
-	for i := range maxRecordedErrors + 10 {
-		pool.recordFailure(fmt.Errorf("error %d", i))
+	actions := []Action{
+		{
+			Type:              ActionLocalDelete,
+			Path:              "shortcut-action.txt",
+			DriveID:           driveid.New("0000000000000001"),
+			ItemID:            "del-id",
+			View:              &PathView{},
+			targetShortcutKey: "remoteDrive:remoteItem",
+			targetDriveID:     driveid.New("0000000000000002"),
+		},
 	}
 
-	logOutput := logBuf.String()
-	assert.Contains(t, logOutput, "error diagnostic buffer full")
+	tracker := NewDepTracker(10, testLogger(t))
+	tracker.Add(&actions[0], 77, nil)
 
-	// The warning should appear exactly once (sync.Once).
-	assert.Equal(t, 1, strings.Count(logOutput, "error diagnostic buffer full"))
+	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
+	pool.Start(ctx, 4)
+
+	var result WorkerResult
+	select {
+	case r := <-pool.Results():
+		result = r
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "timeout waiting for worker result")
+	}
+
+	assert.Equal(t, "shortcut-action.txt", result.Path)
+	assert.Equal(t, driveid.New("0000000000000001"), result.DriveID)
+	assert.Equal(t, driveid.New("0000000000000002"), result.TargetDriveID,
+		"TargetDriveID should flow through from Action")
+	assert.Equal(t, "remoteDrive:remoteItem", result.ShortcutKey,
+		"ShortcutKey should flow through from Action")
+	assert.Equal(t, 0, result.Attempt, "first attempt should be 0")
+	assert.Equal(t, int64(77), result.ActionID, "ActionID should match TrackedAction.ID")
+
+	// Clean up.
+	tracker.Complete(result.ActionID)
+	pool.Stop()
+}
+
+// Validates: R-6.8.12
+func TestWorkerResult_HTTPStatusAndRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, _ := newWorkerTestSetup(t)
+	ctx := t.Context()
+
+	// Configure a download mock that returns a 429 with Retry-After.
+	cfg.downloads = &workerMockDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
+			return 0, &graph.GraphError{
+				StatusCode: 429,
+				Message:    "throttled",
+				RetryAfter: 30 * time.Second,
+			}
+		},
+	}
+	cfg.transferMgr = driveops.NewTransferManager(cfg.downloads, cfg.uploads, nil, testLogger(t))
+
+	actions := []Action{
+		{
+			Type:    ActionDownload,
+			Path:    "throttled.txt",
+			DriveID: driveid.New("0000000000000001"),
+			ItemID:  "throttled-id",
+			View: &PathView{
+				Remote: &RemoteState{
+					ItemID:  "throttled-id",
+					DriveID: driveid.New("0000000000000001"),
+					Size:    10,
+				},
+			},
+		},
+	}
+
+	tracker := NewDepTracker(10, testLogger(t))
+	tracker.Add(&actions[0], 0, nil)
+
+	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
+	pool.Start(ctx, 4)
+
+	var result WorkerResult
+	select {
+	case r := <-pool.Results():
+		result = r
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "timeout waiting for worker result")
+	}
+
+	assert.False(t, result.Success)
+	assert.Equal(t, 429, result.HTTPStatus)
+	assert.Equal(t, 30*time.Second, result.RetryAfter,
+		"RetryAfter should be extracted from GraphError")
+
+	tracker.Complete(result.ActionID)
+	pool.Stop()
 }
 
 func TestExtractHTTPStatus_GraphError(t *testing.T) {
@@ -683,4 +746,139 @@ func TestExtractHTTPStatus_Nil(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, 0, extractHTTPStatus(nil))
+}
+
+func TestExtractRetryAfter_GraphError(t *testing.T) {
+	t.Parallel()
+
+	ge := &graph.GraphError{StatusCode: 429, RetryAfter: 30 * time.Second}
+	assert.Equal(t, 30*time.Second, extractRetryAfter(ge))
+}
+
+func TestExtractRetryAfter_Nil(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, time.Duration(0), extractRetryAfter(nil))
+}
+
+// ---------------------------------------------------------------------------
+// Action drive identity methods (R-6.8.13)
+// ---------------------------------------------------------------------------
+
+// Validates: R-6.8.13, R-2.10.16, R-2.10.17
+func TestAction_TargetsOwnDrive(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		targetShortcutKey string
+		wantOwnDrive      bool
+		wantShortcutKey   string
+	}{
+		{
+			name:            "own-drive action",
+			wantOwnDrive:    true,
+			wantShortcutKey: "",
+		},
+		{
+			name:              "shortcut action",
+			targetShortcutKey: "remoteDrive:remoteItem",
+			wantOwnDrive:      false,
+			wantShortcutKey:   "remoteDrive:remoteItem",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			a := Action{targetShortcutKey: tt.targetShortcutKey}
+			assert.Equal(t, tt.wantOwnDrive, a.TargetsOwnDrive())
+			assert.Equal(t, tt.wantShortcutKey, a.ShortcutKey())
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Engine-owned counters (R-6.8.9)
+// ---------------------------------------------------------------------------
+
+func TestEngineOwnsCounters(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, _ := newWorkerTestSetup(t)
+	ctx := t.Context()
+
+	// 2 actions: one succeeds, one fails.
+	cfg.downloads = &workerMockDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, itemID string, w io.Writer) (int64, error) {
+			if itemID == "fail-id" {
+				return 0, fmt.Errorf("simulated failure")
+			}
+			n, err := w.Write([]byte("ok"))
+			return int64(n), err
+		},
+	}
+	cfg.transferMgr = driveops.NewTransferManager(cfg.downloads, cfg.uploads, nil, testLogger(t))
+
+	actions := []Action{
+		{
+			Type:    ActionLocalDelete,
+			Path:    "ok.txt",
+			DriveID: driveid.New("0000000000000001"),
+			ItemID:  "ok-id",
+			View:    &PathView{},
+		},
+		{
+			Type:    ActionDownload,
+			Path:    "fail.txt",
+			DriveID: driveid.New("0000000000000001"),
+			ItemID:  "fail-id",
+			View: &PathView{
+				Remote: &RemoteState{
+					ItemID:  "fail-id",
+					DriveID: driveid.New("0000000000000001"),
+					Size:    10,
+				},
+			},
+		},
+	}
+
+	tracker := NewDepTracker(10, testLogger(t))
+	tracker.Add(&actions[0], 0, nil)
+	tracker.Add(&actions[1], 1, nil)
+
+	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
+
+	// Simulate engine-owned counters.
+	var succeeded, failed atomic.Int32
+	pool.Start(ctx, 4)
+
+	done := make(chan struct{})
+	go func() {
+		for r := range pool.Results() {
+			if r.Success {
+				succeeded.Add(1)
+			} else {
+				failed.Add(1)
+			}
+			tracker.Complete(r.ActionID)
+		}
+		close(done)
+	}()
+
+	pool.Wait()
+	pool.Stop()
+	<-done
+
+	assert.Equal(t, int32(1), succeeded.Load(), "engine should count 1 success")
+	assert.Equal(t, int32(1), failed.Load(), "engine should count 1 failure")
+}
+
+// TestExtractRetryAfter_Wrapped verifies that extractRetryAfter works with wrapped errors.
+func TestExtractRetryAfter_Wrapped(t *testing.T) {
+	t.Parallel()
+
+	ge := &graph.GraphError{StatusCode: 503, RetryAfter: 120 * time.Second}
+	wrapped := fmt.Errorf("request failed: %w", ge)
+	assert.Equal(t, 120*time.Second, extractRetryAfter(wrapped))
 }

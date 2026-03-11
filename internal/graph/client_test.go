@@ -498,33 +498,8 @@ func TestDo_RetryWithBody(t *testing.T) {
 	assert.Equal(t, int32(2), calls.Load())
 }
 
-func TestIsRetryable(t *testing.T) {
-	retryable := []int{
-		http.StatusRequestTimeout,
-		http.StatusTooManyRequests,
-		http.StatusInternalServerError,
-		http.StatusBadGateway,
-		http.StatusServiceUnavailable,
-		http.StatusGatewayTimeout,
-		509, // Bandwidth Limit Exceeded
-	}
-
-	for _, code := range retryable {
-		assert.True(t, isRetryable(code), "expected %d to be retryable", code)
-	}
-
-	notRetryable := []int{
-		http.StatusBadRequest,
-		http.StatusUnauthorized,
-		http.StatusForbidden,
-		http.StatusNotFound,
-		http.StatusConflict,
-	}
-
-	for _, code := range notRetryable {
-		assert.False(t, isRetryable(code), "expected %d to not be retryable", code)
-	}
-}
+// TestIsRetryable was deleted: isRetryable moved to retry/transport.go.
+// Coverage is provided by retry/transport_test.go.
 
 func TestRewindBody_SeekError(t *testing.T) {
 	// Verify that rewindBody returns an error when Seek fails.

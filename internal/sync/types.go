@@ -564,6 +564,36 @@ type Action struct {
 	CreateSide   FolderCreateSide // for folder creates
 	View         *PathView        // full three-way context
 	ConflictInfo *ConflictRecord
+
+	// targetShortcutKey identifies the shortcut scope for scope-based failure
+	// handling. Format: "remoteDrive:remoteItem". Empty for own-drive actions.
+	// Populated by the planner for shortcut-targeted actions (R-6.8.13).
+	targetShortcutKey string
+
+	// targetDriveID is the actual drive ID targeted by this action. For own-drive
+	// actions, equals DriveID. For shortcut actions, equals the remote drive.
+	// Flows through the pipeline without lookup (R-6.8.12).
+	targetDriveID driveid.ID
+}
+
+// TargetsOwnDrive returns true if this action targets the user's own drive.
+// Used by scope detection to determine scope key for 507/quota failures (R-6.8.13).
+func (a *Action) TargetsOwnDrive() bool {
+	return a.targetShortcutKey == ""
+}
+
+// ShortcutKey returns "remoteDrive:remoteItem" for shortcut-targeted actions,
+// empty for own-drive actions. Used as the scope key suffix for shortcut-scoped
+// quota failures (R-6.8.13).
+func (a *Action) ShortcutKey() string {
+	return a.targetShortcutKey
+}
+
+// TargetDriveID returns the actual drive ID targeted by this action. For
+// own-drive actions this equals DriveID; for shortcut actions it equals
+// the sharer's drive ID. Flows through the pipeline without lookup (R-6.8.12).
+func (a *Action) TargetDriveID() driveid.ID {
+	return a.targetDriveID
 }
 
 // ActionPlan contains a flat list of actions with explicit dependency edges.

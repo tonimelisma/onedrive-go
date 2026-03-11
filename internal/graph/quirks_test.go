@@ -433,44 +433,9 @@ func TestRewindBody_FailOnSecondSeek(t *testing.T) {
 // §9: Error classification edge cases
 // ---------------------------------------------------------------------------
 
-// TestGraphError_StatusBeforeSentinel validates that GraphError wrapping a
-// sentinel is classified by its StatusCode, not the generic sentinel.
-// E.g., HTTP 507 wrapping ErrServerError is classified as 507 (fatal),
-// not generic 5xx (retryable).
-func TestGraphError_StatusBeforeSentinel(t *testing.T) {
-	// 507 Insufficient Storage should NOT be retried despite being 5xx.
-	assert.False(t, isRetryable(http.StatusInsufficientStorage),
-		"507 should not be retryable")
-
-	// But generic 500/502/503/504 ARE retryable.
-	assert.True(t, isRetryable(http.StatusInternalServerError))
-	assert.True(t, isRetryable(http.StatusBadGateway))
-	assert.True(t, isRetryable(http.StatusServiceUnavailable))
-	assert.True(t, isRetryable(http.StatusGatewayTimeout))
-}
-
-// TestIsRetryable_UnmappedStatusCodes validates that unmapped status codes
-// (3xx, 4xx not in the switch) are not silently treated as retryable.
-func TestIsRetryable_UnmappedStatusCodes(t *testing.T) {
-	tests := []struct {
-		code      int
-		retryable bool
-	}{
-		{http.StatusMovedPermanently, false},    // 301
-		{http.StatusFound, false},               // 302
-		{http.StatusNotModified, false},         // 304
-		{http.StatusMethodNotAllowed, false},    // 405
-		{http.StatusTeapot, false},              // 418
-		{http.StatusInsufficientStorage, false}, // 507
-		{509, true},                             // Bandwidth Limit Exceeded
-	}
-
-	for _, tt := range tests {
-		t.Run(fmt.Sprintf("HTTP_%d", tt.code), func(t *testing.T) {
-			assert.Equal(t, tt.retryable, isRetryable(tt.code))
-		})
-	}
-}
+// TestGraphError_StatusBeforeSentinel and TestIsRetryable_UnmappedStatusCodes
+// were deleted: isRetryable moved to retry/transport.go. Coverage is provided
+// by retry/transport_test.go.
 
 // TestClassifyStatus_UnmappedCodes validates that unmapped status codes
 // outside the 5xx range return nil (not classified as server error).

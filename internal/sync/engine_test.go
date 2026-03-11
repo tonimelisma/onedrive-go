@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -496,7 +497,8 @@ func TestRunOnce_ExecutorPartialFailure(t *testing.T) {
 		},
 		downloadFn: func(_ context.Context, _ driveid.ID, itemID string, w io.Writer) (int64, error) {
 			if itemID == "f2" {
-				return 0, context.Canceled
+				// Use 403 (non-retryable) to avoid retry delays in tests.
+				return 0, &graph.GraphError{StatusCode: 403, Message: "forbidden"}
 			}
 
 			n, err := w.Write([]byte("good"))
@@ -1698,7 +1700,7 @@ func TestExecutePlan_ActionsDepsLengthMismatch(t *testing.T) {
 	report := &SyncReport{}
 
 	// Should return cleanly without panic.
-	eng.executePlan(t.Context(), plan, report, nil, nil)
+	eng.executePlan(t.Context(), plan, report, nil)
 
 	// Invariant violation should surface in the report.
 	assert.Equal(t, len(plan.Actions), report.Failed)
@@ -2394,10 +2396,18 @@ func TestDrainWorkerResults_MultipleResults(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
+	// Set up tracker with actions for each result.
+	tracker := NewDepTracker(16, eng.logger)
+	for _, id := range []int64{1, 2, 3} {
+		tracker.Add(&Action{Path: fmt.Sprintf("action-%d", id), Type: ActionUpload}, id, nil)
+	}
+	eng.tracker = tracker
+	t.Cleanup(func() { tracker.StopDelayed() })
+
 	results := make(chan WorkerResult, 3)
-	results <- WorkerResult{Path: "a.txt", ActionType: ActionUpload, Success: false, ErrMsg: "fail1", HTTPStatus: 500}
-	results <- WorkerResult{Path: "b.txt", ActionType: ActionUpload, Success: false, ErrMsg: "fail2", HTTPStatus: 500}
-	results <- WorkerResult{Path: "c.txt", ActionType: ActionDownload, Success: true}
+	results <- WorkerResult{Path: "a.txt", ActionType: ActionUpload, Success: false, ErrMsg: "fail1", HTTPStatus: 500, ActionID: 1}
+	results <- WorkerResult{Path: "b.txt", ActionType: ActionUpload, Success: false, ErrMsg: "fail2", HTTPStatus: 500, ActionID: 2}
+	results <- WorkerResult{Path: "c.txt", ActionType: ActionDownload, Success: true, ActionID: 3}
 	close(results)
 
 	eng.drainWorkerResults(ctx, results, nil)
@@ -2412,14 +2422,27 @@ func TestDrainWorkerResults_MultipleResults(t *testing.T) {
 // processWorkerResult — shared helper tests
 // ---------------------------------------------------------------------------
 
+// setupEngineTracker creates a one-shot DepTracker on the engine and adds a
+// dummy action for the given actionID so that processWorkerResult can call
+// Complete/ReQueue without panicking on nil tracker or unknown ID.
+func setupEngineTracker(t *testing.T, eng *Engine, actionID int64) {
+	t.Helper()
+	tracker := NewDepTracker(16, eng.logger)
+	dummyAction := &Action{Path: "dummy", Type: ActionDownload}
+	tracker.Add(dummyAction, actionID, nil)
+	eng.tracker = tracker
+	t.Cleanup(func() { tracker.StopDelayed() })
+}
+
 func TestProcessWorkerResult_UploadFailure_RecordsLocalIssue(t *testing.T) {
 	t.Parallel()
 
 	mock := &engineMockClient{}
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
+	setupEngineTracker(t, eng, 0)
 
-	eng.processWorkerResult(ctx, WorkerResult{
+	eng.processWorkerResult(ctx, &WorkerResult{
 		Path:       "docs/report.xlsx",
 		ActionType: ActionUpload,
 		Success:    false,
@@ -2462,8 +2485,9 @@ func TestProcessWorkerResult_403ReadOnly_SkipsRemoteState(t *testing.T) {
 
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
+	setupEngineTracker(t, eng, 0)
 
-	eng.processWorkerResult(ctx, WorkerResult{
+	eng.processWorkerResult(ctx, &WorkerResult{
 		Path:       "Shared/TeamDocs/file.txt",
 		ActionType: ActionUpload,
 		Success:    false,
@@ -2488,8 +2512,9 @@ func TestProcessWorkerResult_Success_NoRecords(t *testing.T) {
 	mock := &engineMockClient{}
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
+	setupEngineTracker(t, eng, 0)
 
-	eng.processWorkerResult(ctx, WorkerResult{
+	eng.processWorkerResult(ctx, &WorkerResult{
 		Path:       "docs/report.xlsx",
 		ActionType: ActionDownload,
 		Success:    true,
@@ -2503,4 +2528,228 @@ func TestProcessWorkerResult_Success_NoRecords(t *testing.T) {
 	issues, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, issues)
+}
+
+// ---------------------------------------------------------------------------
+// classifyResult — pure classification of WorkerResult (R-6.8.15)
+// ---------------------------------------------------------------------------
+
+// Validates: R-6.8.15
+func TestClassifyResult(t *testing.T) {
+	t.Parallel()
+
+	// outageErr is a GraphError whose Message triggers isOutagePattern.
+	outageErr := &graph.GraphError{
+		StatusCode: http.StatusBadRequest,
+		Message:    "ObjectHandle is Invalid for operation",
+		Err:        graph.ErrBadRequest,
+	}
+
+	// normalBadRequest is a 400 that does NOT match the outage pattern.
+	normalBadRequestErr := &graph.GraphError{
+		StatusCode: http.StatusBadRequest,
+		Message:    "invalid payload",
+		Err:        graph.ErrBadRequest,
+	}
+
+	tests := []struct {
+		name      string
+		result    WorkerResult
+		wantClass resultClass
+		wantScope string
+	}{
+		{
+			name:      "success",
+			result:    WorkerResult{Success: true},
+			wantClass: resultSuccess,
+			wantScope: "",
+		},
+		{
+			name:      "context_canceled",
+			result:    WorkerResult{Err: context.Canceled},
+			wantClass: resultShutdown,
+			wantScope: "",
+		},
+		{
+			name:      "context_deadline_exceeded",
+			result:    WorkerResult{Err: context.DeadlineExceeded},
+			wantClass: resultShutdown,
+			wantScope: "",
+		},
+		{
+			name:      "wrapped_context_canceled",
+			result:    WorkerResult{Err: fmt.Errorf("operation failed: %w", context.Canceled)},
+			wantClass: resultShutdown,
+			wantScope: "",
+		},
+		{
+			name:      "401_unauthorized",
+			result:    WorkerResult{HTTPStatus: http.StatusUnauthorized, Err: graph.ErrUnauthorized},
+			wantClass: resultFatal,
+			wantScope: "",
+		},
+		{
+			name:      "403_forbidden",
+			result:    WorkerResult{HTTPStatus: http.StatusForbidden, Err: graph.ErrForbidden},
+			wantClass: resultSkip,
+			wantScope: "",
+		},
+		{
+			name:      "404_not_found",
+			result:    WorkerResult{HTTPStatus: http.StatusNotFound, Err: graph.ErrNotFound},
+			wantClass: resultRequeue,
+			wantScope: "",
+		},
+		{
+			name:      "408_request_timeout",
+			result:    WorkerResult{HTTPStatus: http.StatusRequestTimeout, Err: errors.New("timeout")},
+			wantClass: resultRequeue,
+			wantScope: "",
+		},
+		{
+			name:      "412_precondition_failed",
+			result:    WorkerResult{HTTPStatus: http.StatusPreconditionFailed, Err: errors.New("etag mismatch")},
+			wantClass: resultRequeue,
+			wantScope: "",
+		},
+		{
+			name:      "423_locked",
+			result:    WorkerResult{HTTPStatus: http.StatusLocked, Err: graph.ErrLocked},
+			wantClass: resultRequeue,
+			wantScope: "",
+		},
+		{
+			name:      "429_too_many_requests",
+			result:    WorkerResult{HTTPStatus: http.StatusTooManyRequests, Err: graph.ErrThrottled},
+			wantClass: resultScopeBlock,
+			wantScope: "throttle:account",
+		},
+		{
+			name:      "400_outage_pattern",
+			result:    WorkerResult{HTTPStatus: http.StatusBadRequest, Err: outageErr},
+			wantClass: resultRequeue,
+			wantScope: "",
+		},
+		{
+			name:      "400_normal",
+			result:    WorkerResult{HTTPStatus: http.StatusBadRequest, Err: normalBadRequestErr},
+			wantClass: resultSkip,
+			wantScope: "",
+		},
+		{
+			name:      "500_internal_server_error",
+			result:    WorkerResult{HTTPStatus: http.StatusInternalServerError, Err: graph.ErrServerError},
+			wantClass: resultRequeue,
+			wantScope: "",
+		},
+		{
+			name:      "502_bad_gateway",
+			result:    WorkerResult{HTTPStatus: http.StatusBadGateway, Err: graph.ErrServerError},
+			wantClass: resultRequeue,
+			wantScope: "",
+		},
+		{
+			name:      "503_service_unavailable",
+			result:    WorkerResult{HTTPStatus: http.StatusServiceUnavailable, Err: graph.ErrServerError},
+			wantClass: resultRequeue,
+			wantScope: "",
+		},
+		{
+			name:      "504_gateway_timeout",
+			result:    WorkerResult{HTTPStatus: http.StatusGatewayTimeout, Err: graph.ErrServerError},
+			wantClass: resultRequeue,
+			wantScope: "",
+		},
+		{
+			name:      "509_bandwidth_limit",
+			result:    WorkerResult{HTTPStatus: 509, Err: graph.ErrServerError},
+			wantClass: resultRequeue,
+			wantScope: "",
+		},
+		{
+			name: "507_own_drive",
+			result: WorkerResult{
+				HTTPStatus:  http.StatusInsufficientStorage,
+				Err:         errors.New("insufficient storage"),
+				ShortcutKey: "",
+			},
+			wantClass: resultScopeBlock,
+			wantScope: "quota:own",
+		},
+		{
+			name: "507_shortcut_drive",
+			result: WorkerResult{
+				HTTPStatus:  http.StatusInsufficientStorage,
+				Err:         errors.New("insufficient storage"),
+				ShortcutKey: "drive1:item1",
+			},
+			wantClass: resultScopeBlock,
+			wantScope: "quota:shortcut:drive1:item1",
+		},
+		{
+			name:      "409_conflict",
+			result:    WorkerResult{HTTPStatus: http.StatusConflict, Err: graph.ErrConflict},
+			wantClass: resultSkip,
+			wantScope: "",
+		},
+		{
+			name:      "other_4xx_falls_to_skip",
+			result:    WorkerResult{HTTPStatus: http.StatusMethodNotAllowed, Err: graph.ErrMethodNotAllowed},
+			wantClass: resultSkip,
+			wantScope: "",
+		},
+		{
+			name:      "os_err_permission",
+			result:    WorkerResult{Err: os.ErrPermission},
+			wantClass: resultSkip,
+			wantScope: "",
+		},
+		{
+			name:      "wrapped_os_err_permission",
+			result:    WorkerResult{Err: fmt.Errorf("cannot write: %w", os.ErrPermission)},
+			wantClass: resultSkip,
+			wantScope: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			gotClass, gotScope := classifyResult(&tt.result)
+			assert.Equal(t, tt.wantClass, gotClass, "resultClass mismatch")
+			assert.Equal(t, tt.wantScope, gotScope, "scope key mismatch")
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// computeBackoff — exponential backoff with 5-minute cap (R-6.8.11)
+// ---------------------------------------------------------------------------
+
+// Validates: R-6.8.11
+func TestComputeBackoff(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		attempt int
+		want    time.Duration
+	}{
+		{attempt: 0, want: 1 * time.Second},
+		{attempt: 1, want: 2 * time.Second},
+		{attempt: 2, want: 4 * time.Second},
+		{attempt: 5, want: 32 * time.Second},
+		{attempt: 8, want: 256 * time.Second},
+		{attempt: 9, want: 5 * time.Minute},  // 512s exceeds cap → clamped
+		{attempt: 20, want: 5 * time.Minute}, // stays at cap
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("attempt_%d", tt.attempt), func(t *testing.T) {
+			t.Parallel()
+
+			got := computeBackoff(tt.attempt)
+			assert.Equal(t, tt.want, got, "backoff for attempt %d", tt.attempt)
+		})
+	}
 }

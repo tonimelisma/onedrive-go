@@ -392,7 +392,7 @@ func TestRecordFailure_TransitionsDownloading(t *testing.T) {
 	var sfCount int
 	var sfError string
 	var sfHTTP int
-	var sfRetry int64
+	var sfRetry *int64 // nullable — tracker handles retry, not sync_failures
 	err = mgr.rawDB().QueryRowContext(ctx,
 		"SELECT failure_count, last_error, http_status, next_retry_at FROM sync_failures WHERE path = ?",
 		"hello.txt",
@@ -401,7 +401,7 @@ func TestRecordFailure_TransitionsDownloading(t *testing.T) {
 	assert.Equal(t, 1, sfCount)
 	assert.Equal(t, "connection reset", sfError)
 	assert.Equal(t, 500, sfHTTP)
-	assert.Greater(t, sfRetry, int64(0), "should have next_retry_at set")
+	assert.Nil(t, sfRetry, "transient issues have no next_retry_at (tracker handles retry)")
 }
 
 func TestRecordFailure_OptimisticConcurrency_NoMatch(t *testing.T) {
@@ -649,36 +649,9 @@ func TestRecordFailure_SetsIssueTypeAndScopeKey(t *testing.T) {
 	assert.Equal(t, "actionable", category, "quota_exceeded is an actionable issue")
 }
 
-func TestRecordFailure_BackoffCalculation(t *testing.T) {
-	t.Parallel()
-
-	now := time.Unix(1000, 0)
-
-	tests := []struct {
-		name         string
-		failureCount int
-		wantMinSec   int64 // minimum seconds from now
-		wantMaxSec   int64 // maximum seconds from now
-	}{
-		{"first failure", 0, 20, 45},  // 30s base ± jitter
-		{"second failure", 1, 45, 90}, // 60s ± jitter
-		{"third failure", 2, 90, 180}, // 120s ± jitter
-		{"capped", 10, 2700, 4500},    // should not exceed 3600
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			retry := computeNextRetry(now, tt.failureCount)
-			diffSec := retry.Unix() - now.Unix()
-			assert.GreaterOrEqual(t, diffSec, tt.wantMinSec,
-				"retry should be at least %ds from now", tt.wantMinSec)
-			assert.LessOrEqual(t, diffSec, tt.wantMaxSec,
-				"retry should be at most %ds from now", tt.wantMaxSec)
-		})
-	}
-}
+// TestRecordFailure_BackoffCalculation was removed: computeNextRetry is
+// deleted because the tracker is the sole retry mechanism (R-6.8.10).
+// sync_failures no longer drives retry scheduling.
 
 // ---------------------------------------------------------------------------
 // CommitOutcome remote_state extension tests

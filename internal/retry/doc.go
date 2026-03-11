@@ -17,8 +17,6 @@
 //
 //   - [Transport]: HTTP transport retries (graph/client.go) — 5 attempts, 1s-60s.
 //   - [DriveDiscovery]: Transient 403 retry during drive enumeration — 3 attempts.
-//   - [Action]: Executor-level retries (sync/executor.go) — 3 attempts, 1s+.
-//   - [Reconcile]: Failure retrier scheduling (sync/baseline.go) — infinite, 30s-1h.
 //   - [WatchLocal]: Local observer error backoff — infinite, 1s-30s, no jitter.
 //   - [WatchRemote]: Remote observer error backoff — infinite, 5s-dynamic, no jitter.
 //
