@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,11 +28,6 @@ func TestFault_ContextCancel_WorkerPool(t *testing.T) {
 		&executorMockDownloader{},
 		&executorMockUploader{},
 	)
-	cfg.sleepFunc = func(ctx context.Context, _ time.Duration) error {
-		<-ctx.Done()
-		return ctx.Err()
-	}
-
 	// Create a local file so the upload has something to read.
 	writeExecTestFile(t, syncRoot, "file.txt", "content")
 

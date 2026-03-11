@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os/signal"
 
 	"github.com/spf13/cobra"
@@ -12,6 +13,21 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	isync "github.com/tonimelisma/onedrive-go/internal/sync"
 )
+
+// syncMetaHTTPClient returns an HTTP client for sync metadata requests. No
+// RetryTransport — sync workers never block on retry backoff (R-6.8.7). Failed
+// requests return immediately as GraphError for engine-level classification
+// and tracker re-queue.
+func syncMetaHTTPClient() *http.Client {
+	return &http.Client{Timeout: httpClientTimeout}
+}
+
+// syncTransferHTTPClient returns an HTTP client for sync transfers. Same
+// rationale as syncMetaHTTPClient — no RetryTransport. Large file transfers
+// are bounded by context cancellation instead of timeout.
+func syncTransferHTTPClient() *http.Client {
+	return &http.Client{Timeout: 0}
+}
 
 func newSyncCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -126,7 +142,7 @@ func runSync(cmd *cobra.Command, _ []string) error {
 
 	holder := config.NewHolder(rawCfg, cc.CfgPath)
 	provider := driveops.NewSessionProvider(holder,
-		defaultHTTPClient(), transferHTTPClient(), "onedrive-go/"+version, logger)
+		syncMetaHTTPClient(), syncTransferHTTPClient(), "onedrive-go/"+version, logger)
 
 	orch := isync.NewOrchestrator(&isync.OrchestratorConfig{
 		Holder:   holder,
@@ -180,7 +196,7 @@ func runSyncDaemon(
 	defer signal.Stop(sighup)
 
 	provider := driveops.NewSessionProvider(holder,
-		defaultHTTPClient(), transferHTTPClient(), "onedrive-go/"+version, logger)
+		syncMetaHTTPClient(), syncTransferHTTPClient(), "onedrive-go/"+version, logger)
 
 	orch := isync.NewOrchestrator(&isync.OrchestratorConfig{
 		Holder:     holder,

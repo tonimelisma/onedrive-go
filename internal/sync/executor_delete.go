@@ -235,9 +235,7 @@ func (e *Executor) deleteLocalFile(action *Action, absPath string, info os.FileI
 func (e *Executor) executeRemoteDelete(ctx context.Context, action *Action) Outcome {
 	driveID := e.resolveDriveID(action)
 
-	err := e.withRetry(ctx, "remote delete "+action.Path, func() error {
-		return e.items.DeleteItem(ctx, driveID, action.ItemID)
-	})
+	err := e.items.DeleteItem(ctx, driveID, action.ItemID)
 	if err != nil {
 		// 404 means already deleted — success.
 		if errors.Is(err, graph.ErrNotFound) {

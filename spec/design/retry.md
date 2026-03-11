@@ -1,12 +1,12 @@
 # Retry
 
-GOVERNS: internal/retry/backoff.go, internal/retry/doc.go, internal/retry/named.go, internal/retry/policy.go
+GOVERNS: internal/retry/backoff.go, internal/retry/doc.go, internal/retry/named.go, internal/retry/policy.go, internal/retry/transport.go
 
-Implements: R-6.8.1 [verified], R-6.8.2 [verified], R-6.8.7 [planned], R-6.8.8 [implemented], R-6.8.10 [planned], R-6.8.11 [planned]
+Implements: R-6.8.1 [verified], R-6.8.2 [verified], R-6.8.7 [planned], R-6.8.8 [verified], R-6.8.10 [planned], R-6.8.11 [planned]
 
 ## Overview
 
-Leaf package (stdlib only). Provides reusable retry infrastructure used by `graph/`, `sync/`, and `driveops/`.
+Leaf package (stdlib + `net/http` + `log/slog` only). Provides reusable retry infrastructure used by `graph/`, `sync/`, and `driveops/`.
 
 ## Policy
 
@@ -16,15 +16,36 @@ Immutable configuration for exponential backoff with jitter. Fields: `MaxAttempt
 
 | Policy | Use Case | MaxAttempts | Initial | Max |
 |--------|----------|-------------|---------|-----|
-| `Transport` | HTTP request retry in graph client | finite | short | moderate |
-| `DriveDiscovery` | Drive enumeration retry | finite | short | moderate |
-| `Action` | Sync action retry (download/upload/delete) — **to be deleted**, superseded by SyncTransport + engine-level retry | finite | short | moderate |
-| `SyncTransport` | Sync action dispatch — single attempt, no retry | 0 (single attempt) | — | — |
-| `Reconcile` | Reconciler retry scheduling | 0 (infinite) | moderate | long |
-| `WatchLocal` | Local observer error recovery | 0 (infinite) | short | long |
-| `WatchRemote` | Remote observer error recovery | 0 (infinite) | short | long |
+| `Transport` | HTTP retry via `RetryTransport` for CLI callers | 5 | 1s | 60s |
+| `DriveDiscovery` | Drive enumeration retry | 3 | 1s | 60s |
+| `SyncTransport` | Sync action dispatch — single attempt, no retry (workers never block) | 0 (single attempt) | — | — |
+| `Reconcile` | Reconciler retry scheduling | 0 (infinite) | 30s | 1h |
+| `WatchLocal` | Local observer error recovery | 0 (infinite) | 1s | 30s |
+| `WatchRemote` | Remote observer error recovery | 0 (infinite) | 5s | 5m |
 
 Watch-mode policies use `MaxAttempts = 0` (retry forever) because a daemon should never give up permanently.
+
+`Action` policy was deleted — superseded by `SyncTransport` (zero retries at transport layer) + engine-level result classification + tracker re-queue.
+
+## RetryTransport (`transport.go`)
+
+Implements: R-6.8.8 [verified]
+
+Standard `http.RoundTripper` that wraps an inner transport with automatic retry on transient failures. Separates retry responsibility from the graph client — the client is a pure API mapper, the transport handles resilience.
+
+Architecture:
+- **CLI callers**: `RetryTransport{Inner: http.DefaultTransport, Policy: Transport}` → 5 retries with exponential backoff
+- **Sync callers**: raw `http.DefaultTransport` → failed requests return immediately for engine-level classification and tracker re-queuing (R-6.8.7: workers never block on retry backoff)
+
+Features:
+- Exponential backoff with jitter per `Policy`
+- `Retry-After` header parsing for 429/503 responses
+- Account-wide 429 throttle coordination: when any request gets 429, all subsequent requests through the same transport wait until the deadline passes
+- Seekable body rewinding between attempts (via `req.GetBody` or `io.Seeker` fallback)
+- `X-Retry-Count` header annotation on retried requests
+- Retryable status codes: 408, 429, 500, 502, 503, 504, 509
+
+Thread-safe. All mutable state (throttle deadline) is mutex-protected.
 
 ## Backoff
 

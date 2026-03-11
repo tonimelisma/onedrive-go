@@ -108,7 +108,7 @@ func (c *Client) DownloadRange(
 func (c *Client) downloadFromURLWithRange(
 	ctx context.Context, downloadURL string, w io.Writer, offset int64,
 ) (int64, error) {
-	resp, err := c.doPreAuthRetry(ctx, "range download", func() (*http.Request, error) {
+	resp, err := c.doPreAuth(ctx, "range download", func() (*http.Request, error) {
 		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, http.NoBody)
 		if reqErr != nil {
 			return nil, fmt.Errorf("graph: creating range download request: %w", reqErr)
@@ -146,7 +146,7 @@ func (c *Client) downloadFromURLWithRange(
 // Only the HTTP request/response cycle is retried; streaming (io.Copy) happens after
 // doPreAuthRetry returns, so partial-stream failures are handled by the caller.
 func (c *Client) downloadFromURL(ctx context.Context, downloadURL string, w io.Writer) (int64, error) {
-	resp, err := c.doPreAuthRetry(ctx, "download", func() (*http.Request, error) {
+	resp, err := c.doPreAuth(ctx, "download", func() (*http.Request, error) {
 		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, http.NoBody)
 		if reqErr != nil {
 			return nil, fmt.Errorf("graph: creating download request: %w", reqErr)

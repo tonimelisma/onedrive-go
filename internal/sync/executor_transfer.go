@@ -10,8 +10,8 @@ import (
 
 // maxHashRetries is the number of additional download attempts when the
 // downloaded content hash doesn't match the remote hash. This is separate from
-// network-level retries (withRetry) because hash mismatches indicate corrupted
-// content, not transport failures. iOS .heic files are a known source of stale
+// transport-level retries because hash mismatches indicate corrupted content,
+// not transport failures. iOS .heic files are a known source of stale
 // remote hashes — after exhausting retries we accept the download to prevent
 // an infinite re-download loop (B-132).
 const maxHashRetries = 2
@@ -34,14 +34,7 @@ func (e *Executor) executeDownload(ctx context.Context, action *Action) Outcome 
 		opts.RemoteSize = action.View.Remote.Size
 	}
 
-	var result *driveops.DownloadResult
-
-	err = e.withRetry(ctx, "download "+action.Path, func() error {
-		var dlErr error
-		result, dlErr = e.transferMgr.DownloadToFile(ctx, driveID, action.ItemID, targetPath, opts)
-
-		return dlErr
-	})
+	result, err := e.transferMgr.DownloadToFile(ctx, driveID, action.ItemID, targetPath, opts)
 	if err != nil {
 		return e.failedOutcome(action, ActionDownload, err)
 	}
@@ -95,14 +88,7 @@ func (e *Executor) executeUpload(ctx context.Context, action *Action) Outcome {
 
 	name := filepath.Base(action.Path)
 
-	var result *driveops.UploadResult
-
-	err = e.withRetry(ctx, "upload "+action.Path, func() error {
-		var ulErr error
-		result, ulErr = e.transferMgr.UploadFile(ctx, driveID, parentID, name, localPath, driveops.UploadOpts{})
-
-		return ulErr
-	})
+	result, err := e.transferMgr.UploadFile(ctx, driveID, parentID, name, localPath, driveops.UploadOpts{})
 	if err != nil {
 		return e.failedOutcome(action, ActionUpload, err)
 	}

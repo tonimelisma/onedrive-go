@@ -134,8 +134,6 @@ func newWorkerTestSetup(t *testing.T) (
 	cfg := NewExecutorConfig(items, dl, ul, syncRoot, driveID, logger)
 	cfg.transferMgr = driveops.NewTransferManager(dl, ul, nil, logger)
 	cfg.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
-	cfg.sleepFunc = func(_ context.Context, _ time.Duration) error { return nil }
-
 	return cfg, mgr, syncRoot
 }
 
