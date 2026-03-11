@@ -1222,3 +1222,133 @@ func TestValidateOneDriveName_AllCases(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Scanner hash phase panic recovery tests
+// ---------------------------------------------------------------------------
+
+// Validates: R-6.7.5
+func TestHashPhase_PanicRecovery(t *testing.T) {
+	t.Parallel()
+
+	// Inject a hash function that panics for a specific path. Other files
+	// should still be hashed successfully, and the panicking file should
+	// become a SkippedItem with IssueHashPanic.
+
+	tests := []struct {
+		name       string
+		panicPath  string // which file triggers the panic
+		files      []string
+		wantEvents int // events from non-panicking files
+	}{
+		{
+			name:       "panic on first job",
+			panicPath:  "panic.txt",
+			files:      []string{"panic.txt", "ok1.txt", "ok2.txt"},
+			wantEvents: 2,
+		},
+		{
+			name:       "panic on middle job",
+			panicPath:  "ok1.txt",
+			files:      []string{"a.txt", "ok1.txt", "b.txt"},
+			wantEvents: 2,
+		},
+		{
+			name:       "panic on last job",
+			panicPath:  "last.txt",
+			files:      []string{"first.txt", "second.txt", "last.txt"},
+			wantEvents: 2,
+		},
+		{
+			name:       "single file panics",
+			panicPath:  "only.txt",
+			files:      []string{"only.txt"},
+			wantEvents: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			for _, f := range tt.files {
+				writeTestFile(t, dir, f, "content of "+f)
+			}
+
+			obs := NewLocalObserver(emptyBaseline(), testLogger(t), 1)
+			// Inject a hash function that panics for the target path.
+			obs.hashFunc = func(path string) (string, error) {
+				if filepath.Base(path) == tt.panicPath {
+					panic("simulated hash panic for " + tt.panicPath)
+				}
+				// Use real hash for other files.
+				return hashContent(t, "content of "+filepath.Base(path)), nil
+			}
+
+			result, err := obs.FullScan(t.Context(), dir)
+			require.NoError(t, err, "FullScan should not fail due to panic in hash worker")
+
+			// Non-panicking files should still produce events.
+			assert.Len(t, result.Events, tt.wantEvents,
+				"non-panicking files should still produce events")
+
+			// The panicking file should appear in Skipped.
+			var found *SkippedItem
+			for i := range result.Skipped {
+				if result.Skipped[i].Path == tt.panicPath {
+					found = &result.Skipped[i]
+					break
+				}
+			}
+			require.NotNil(t, found, "panicking file should be in Skipped")
+			assert.Equal(t, IssueHashPanic, found.Reason)
+			assert.Contains(t, found.Detail, "panic:")
+		})
+	}
+}
+
+// Validates: R-6.7.5
+func TestFullScan_HashPanicDoesNotAbort(t *testing.T) {
+	t.Parallel()
+
+	// End-to-end test: a panic in hash phase should not abort FullScan.
+	// The scan completes with events for successful files and SkippedItems
+	// for panicking files.
+
+	dir := t.TempDir()
+	writeTestFile(t, dir, "good.txt", "good content")
+	writeTestFile(t, dir, "bad.txt", "bad content")
+
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
+	obs.hashFunc = func(path string) (string, error) {
+		if filepath.Base(path) == "bad.txt" {
+			panic("corrupted file")
+		}
+		return hashContent(t, "good content"), nil
+	}
+
+	result, err := obs.FullScan(t.Context(), dir)
+	require.NoError(t, err, "FullScan must not return error on hash panic")
+
+	// good.txt should produce an event.
+	goodEv := findEvent(result.Events, "good.txt")
+	require.NotNil(t, goodEv, "good.txt should still produce an event")
+	assert.Equal(t, ChangeCreate, goodEv.Type)
+
+	// bad.txt should NOT produce an event.
+	badEv := findEvent(result.Events, "bad.txt")
+	assert.Nil(t, badEv, "panicking file should not produce an event")
+
+	// bad.txt should be in Skipped.
+	var badSkip *SkippedItem
+	for i := range result.Skipped {
+		if result.Skipped[i].Path == "bad.txt" {
+			badSkip = &result.Skipped[i]
+			break
+		}
+	}
+	require.NotNil(t, badSkip, "panicking file should be in Skipped")
+	assert.Equal(t, IssueHashPanic, badSkip.Reason)
+	assert.Contains(t, badSkip.Detail, "corrupted file")
+}

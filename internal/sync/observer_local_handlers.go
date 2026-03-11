@@ -151,7 +151,11 @@ func (o *LocalObserver) handleFsEvent(
 		o.handleWrite(fsEvent.Name, dbRelPath, name)
 
 	case fsEvent.Has(fsnotify.Remove) || fsEvent.Has(fsnotify.Rename):
-		o.handleDelete(ctx, watcher, syncRoot, dbRelPath, name, events)
+		// Pass the original filesystem path (fsEvent.Name) rather than
+		// reconstructing from syncRoot + dbRelPath. The NFC-normalized
+		// dbRelPath may differ from the filesystem's encoding (NFD on
+		// macOS HFS+), causing watcher.Remove() to silently fail.
+		o.handleDelete(ctx, watcher, fsEvent.Name, dbRelPath, name, events)
 	}
 }
 
@@ -437,8 +441,13 @@ func (o *LocalObserver) hashAndEmit(ctx context.Context, req hashRequest, events
 
 // handleDelete processes a Remove/Rename event. For directories, also removes
 // the fsnotify watch to prevent resource leaks (macOS/kqueue doesn't auto-clean).
+//
+// fsPath is the original filesystem path from fsEvent.Name — NOT reconstructed
+// from syncRoot + dbRelPath. On macOS HFS+, fsnotify delivers NFD-encoded
+// paths while dbRelPath is NFC-normalized. Using the original fsPath for
+// watcher.Remove() ensures the removal matches the path registered by fsnotify.
 func (o *LocalObserver) handleDelete(
-	ctx context.Context, watcher FsWatcher, syncRoot, dbRelPath, name string,
+	ctx context.Context, watcher FsWatcher, fsPath, dbRelPath, name string,
 	events chan<- ChangeEvent,
 ) {
 	// Clean up write coalesce timer for deleted path (B-107).
@@ -456,9 +465,10 @@ func (o *LocalObserver) handleDelete(
 	// Remove watch for deleted directories to prevent resource leaks (B-112).
 	// Linux inotify auto-cleans, but macOS kqueue may not. Safe to call even
 	// if the watch was already removed (Remove returns a benign error).
+	// Uses fsPath directly instead of reconstructing from syncRoot + dbRelPath
+	// to avoid NFC/NFD mismatch on macOS HFS+ (B-312).
 	if itemType == ItemTypeFolder {
-		absPath := filepath.Join(syncRoot, filepath.FromSlash(dbRelPath))
-		if rmErr := watcher.Remove(absPath); rmErr != nil {
+		if rmErr := watcher.Remove(fsPath); rmErr != nil {
 			o.logger.Debug("watch removal for deleted directory",
 				slog.String("path", dbRelPath),
 				slog.String("error", rmErr.Error()),

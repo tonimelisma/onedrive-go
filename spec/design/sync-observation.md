@@ -30,7 +30,7 @@ Key properties:
 - Local events keyed by path (no ItemID — that's a remote concept)
 - Compares against in-memory baseline, not DB queries
 - Racily-clean guard: same-second mtime triggers hash verification
-- Dual-path threading: `fsRelPath` (filesystem I/O) and `dbRelPath` (NFC-normalized for baseline lookup)
+- Dual-path threading: `fsRelPath` (filesystem I/O) and `dbRelPath` (NFC-normalized for baseline lookup). `handleDelete` receives `fsPath` (the original `fsEvent.Name`) directly and passes it to `watcher.Remove()` — never reconstructs the filesystem path from NFC-normalized `dbRelPath` (B-312). On macOS HFS+ where fsnotify delivers NFD-encoded paths, reconstructing with NFC causes `watcher.Remove()` to silently fail and leak watch resources.
 - Symlinked directories always excluded from watch mode
 - inotify watch limit detection on Linux (`inotify_linux.go`)
 
@@ -39,6 +39,8 @@ Key properties:
 Extracted filesystem walker for full-scan mode. Produces change events by walking the sync directory and comparing against baseline.
 
 **ScanResult Return Type** — `FullScan` returns `ScanResult{Events []ChangeEvent, Skipped []SkippedItem}` instead of `[]ChangeEvent`. `SkippedItem` struct: `{Path string, Reason string, Detail string}`. Invalid files become `SkippedItem` entries instead of silent DEBUG logs. Scanner remains a pure observer with no DB dependency — it reports what it found; the engine decides what to record. Implements: R-2.11.5 [implemented]
+
+**Hash Phase Panic Recovery** — Each hash goroutine in `hashPhase` has a `defer/recover` that converts panics to `SkippedItem{Reason: IssueHashPanic}` entries. A single corrupted file or unexpected library error cannot crash the entire scan. The hash function is injectable (`LocalObserver.hashFunc`) for testing. Skipped items from panics are merged into `ScanResult.Skipped` alongside walk-phase skips. Implements: R-6.7.5 [verified]
 
 **`shouldObserve()` — Unified Local Observation Filter** — Single entry point replacing scattered `isAlwaysExcluded()` + `isValidOneDriveName()` calls across scanner, watch handlers, and watch setup. Returns `(observe bool, reason string, detail string)`. When `observe` is false, the caller either skips silently (always-excluded suffixes, dotfiles) or records a `SkippedItem` (invalid names, path too long). Used by `FullScan`, `processEntry`, watch event handlers (`handleCreate`, `handleWrite`, `handleRename`), and watch setup (`setupWatches`).
 
@@ -80,8 +82,6 @@ Implements: R-6.2.7 [verified]
 - Streaming delta processing: process pages as they arrive rather than buffering all pages. Modest win (~1ms per page vs ~100-300ms API call). [planned]
 - Total item cap during delta enumeration to bound memory from unbounded API pages. [planned]
 - Per-path event cap in Buffer: `defaultBufferMaxPaths` caps path count but not events-per-path. [planned]
-- Panic recovery in scanner hash phase: worker pool has recovery, scanner does not. [planned]
 - Nil guards on all Item field accesses in `observer_remote.go`: delta items may have missing `Name`, `ParentReference`, etc. [planned]
-- NFC normalization idempotency test. [planned]
 - Buffer overflow test with drop metric verification. [planned]
 - inotify partial-watch cleanup verification: ensure already-added watches are cleaned up on setup failure. [planned]
