@@ -488,3 +488,375 @@ func TestDepTracker_SuppressedDepFilteredByEngine(t *testing.T) {
 
 	dt.Complete(1)
 }
+
+// ---------------------------------------------------------------------------
+// Retry budget tests (R-6.8.10, R-6.8.7)
+// ---------------------------------------------------------------------------
+
+// Validates: R-6.8.10
+func TestTrackedAction_OneShotBudget(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+	t.Cleanup(dt.StopDelayed)
+
+	dt.Add(&Action{
+		Type: ActionUpload, Path: "file.txt",
+		DriveID: driveid.New("d"), ItemID: "i1",
+	}, 1, nil)
+
+	ta := <-dt.Ready()
+
+	// One-shot tracker should assign defaultOneShotBudget as MaxAttempts.
+	assert.Equal(t, defaultOneShotBudget, ta.MaxAttempts,
+		"one-shot tracker should set MaxAttempts to defaultOneShotBudget")
+	assert.Equal(t, 0, ta.Attempt, "initial attempt should be 0")
+}
+
+// Validates: R-6.8.7
+func TestTrackedAction_WatchModeUnlimited(t *testing.T) {
+	t.Parallel()
+
+	dt := NewPersistentDepTracker(testLogger(t))
+	t.Cleanup(dt.StopDelayed)
+
+	dt.Add(&Action{
+		Type: ActionUpload, Path: "file.txt",
+		DriveID: driveid.New("d"), ItemID: "i1",
+	}, 1, nil)
+
+	ta := <-dt.Ready()
+
+	// Persistent tracker should assign MaxAttempts=0 (unlimited).
+	assert.Equal(t, 0, ta.MaxAttempts,
+		"persistent tracker should set MaxAttempts to 0 (unlimited)")
+}
+
+// ---------------------------------------------------------------------------
+// ReQueue tests (R-6.8.7, R-6.8.10, R-6.8.11)
+// ---------------------------------------------------------------------------
+
+// Validates: R-6.8.10
+func TestReQueue_IncrementsAttempt(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+	t.Cleanup(dt.StopDelayed)
+
+	dt.Add(&Action{
+		Type: ActionUpload, Path: "retry.txt",
+		DriveID: driveid.New("d"), ItemID: "i1",
+	}, 1, nil)
+
+	// Drain the initial dispatch.
+	<-dt.Ready()
+
+	// ReQueue with zero NotBefore (immediate dispatch).
+	err := dt.ReQueue(1, time.Time{})
+	require.NoError(t, err)
+
+	ta := <-dt.Ready()
+	assert.Equal(t, 1, ta.Attempt, "first ReQueue should set Attempt to 1")
+
+	// ReQueue again.
+	err = dt.ReQueue(1, time.Time{})
+	require.NoError(t, err)
+
+	ta = <-dt.Ready()
+	assert.Equal(t, 2, ta.Attempt, "second ReQueue should set Attempt to 2")
+}
+
+// Validates: R-6.8.7, R-6.8.11
+func TestReQueue_SetsNotBefore(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+	t.Cleanup(dt.StopDelayed)
+
+	dt.Add(&Action{
+		Type: ActionUpload, Path: "delayed.txt",
+		DriveID: driveid.New("d"), ItemID: "i1",
+	}, 1, nil)
+
+	// Drain the initial dispatch.
+	<-dt.Ready()
+
+	// ReQueue with a future NotBefore — action should go to delayed queue,
+	// not the ready channel.
+	future := time.Now().Add(10 * time.Second)
+	err := dt.ReQueue(1, future)
+	require.NoError(t, err)
+
+	// The action should NOT be on the ready channel (it's delayed).
+	select {
+	case <-dt.Ready():
+		require.Fail(t, "action with future NotBefore should not be on ready channel")
+	case <-time.After(100 * time.Millisecond):
+		// Expected — action is in the delayed queue.
+	}
+}
+
+// Validates: R-6.8.10
+func TestReQueue_ExceedsBudget(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+	t.Cleanup(dt.StopDelayed)
+
+	dt.Add(&Action{
+		Type: ActionUpload, Path: "budget.txt",
+		DriveID: driveid.New("d"), ItemID: "i1",
+	}, 1, nil)
+
+	// Drain the initial dispatch.
+	<-dt.Ready()
+
+	// ReQueue until we hit the budget limit. defaultOneShotBudget is 5,
+	// so attempts 1 through 4 succeed, attempt 5 (>= MaxAttempts) fails.
+	for i := 1; i < defaultOneShotBudget; i++ {
+		err := dt.ReQueue(1, time.Time{})
+		require.NoError(t, err, "ReQueue attempt %d should succeed", i)
+		<-dt.Ready() // drain each re-dispatched action
+	}
+
+	// The next ReQueue should exceed the budget.
+	err := dt.ReQueue(1, time.Time{})
+	assert.ErrorIs(t, err, errBudgetExhausted,
+		"ReQueue should return errBudgetExhausted when Attempt >= MaxAttempts")
+}
+
+// Validates: R-6.8.7
+func TestReQueue_WatchModeNeverExhausts(t *testing.T) {
+	t.Parallel()
+
+	dt := NewPersistentDepTracker(testLogger(t))
+	t.Cleanup(dt.StopDelayed)
+
+	dt.Add(&Action{
+		Type: ActionUpload, Path: "infinite.txt",
+		DriveID: driveid.New("d"), ItemID: "i1",
+	}, 1, nil)
+
+	// Drain the initial dispatch.
+	<-dt.Ready()
+
+	// ReQueue many more times than the one-shot budget. All should succeed.
+	for i := 1; i <= defaultOneShotBudget*3; i++ {
+		err := dt.ReQueue(1, time.Time{})
+		require.NoError(t, err, "persistent mode ReQueue attempt %d should never fail", i)
+		<-dt.Ready()
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Delayed queue tests (R-6.8.7, R-2.10.42)
+// ---------------------------------------------------------------------------
+
+// Validates: R-6.8.7, R-2.10.42
+func TestDelayedQueue_FutureNotDispatched(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+	t.Cleanup(dt.StopDelayed)
+
+	dt.Add(&Action{
+		Type: ActionUpload, Path: "future.txt",
+		DriveID: driveid.New("d"), ItemID: "i1",
+	}, 1, nil)
+
+	// Drain the initial dispatch.
+	<-dt.Ready()
+
+	// ReQueue with a far-future NotBefore.
+	future := time.Now().Add(1 * time.Hour)
+	err := dt.ReQueue(1, future)
+	require.NoError(t, err)
+
+	// The action should NOT appear on the ready channel within a short window.
+	select {
+	case <-dt.Ready():
+		require.Fail(t, "action with far-future NotBefore should not be dispatched")
+	case <-time.After(200 * time.Millisecond):
+		// Expected — action is sitting in the delayed queue.
+	}
+}
+
+// Validates: R-2.10.42
+func TestDelayedQueue_ZeroNotBeforePassthrough(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+	t.Cleanup(dt.StopDelayed)
+
+	dt.Add(&Action{
+		Type: ActionUpload, Path: "immediate.txt",
+		DriveID: driveid.New("d"), ItemID: "i1",
+	}, 1, nil)
+
+	// Drain the initial dispatch.
+	<-dt.Ready()
+
+	// ReQueue with zero NotBefore — should go directly to ready channel.
+	err := dt.ReQueue(1, time.Time{})
+	require.NoError(t, err)
+
+	select {
+	case ta := <-dt.Ready():
+		assert.Equal(t, int64(1), ta.ID, "action with zero NotBefore should pass through to ready")
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for action with zero NotBefore on ready channel")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Scope gating tests (R-2.10.11, R-2.10.15, R-2.10.5)
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.10.11, R-2.10.15
+func TestScopeGating_BlockedActionsHeld(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+	t.Cleanup(dt.StopDelayed)
+
+	// Set up a throttle:account scope block — blocks ALL actions.
+	block := &ScopeBlock{
+		Key:       "throttle:account",
+		IssueType: "rate_limited",
+		BlockedAt: time.Now(),
+	}
+	dt.HoldScope("throttle:account", block)
+
+	// Add an action — it should be diverted to the held queue, not ready.
+	dt.Add(&Action{
+		Type: ActionUpload, Path: "blocked.txt",
+		DriveID: driveid.New("d"), ItemID: "i1",
+	}, 1, nil)
+
+	// The ready channel should be empty because the action is held.
+	select {
+	case <-dt.Ready():
+		require.Fail(t, "action matching blocked scope should not appear on ready channel")
+	case <-time.After(100 * time.Millisecond):
+		// Expected — action is in the held queue.
+	}
+}
+
+// Validates: R-2.10.15
+func TestScopeGating_UnblockedPassthrough(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+	t.Cleanup(dt.StopDelayed)
+
+	// No scope blocks registered — all actions should pass through.
+	dt.Add(&Action{
+		Type: ActionUpload, Path: "free.txt",
+		DriveID: driveid.New("d"), ItemID: "i1",
+	}, 1, nil)
+
+	select {
+	case ta := <-dt.Ready():
+		assert.Equal(t, int64(1), ta.ID, "unblocked action should pass through to ready")
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for unblocked action on ready channel")
+	}
+}
+
+// Validates: R-2.10.11
+func TestReleaseScope_DispatchesAllHeld(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+	t.Cleanup(dt.StopDelayed)
+
+	// Block the throttle:account scope.
+	block := &ScopeBlock{
+		Key:       "throttle:account",
+		IssueType: "rate_limited",
+		BlockedAt: time.Now(),
+	}
+	dt.HoldScope("throttle:account", block)
+
+	// Add three actions — all should be held.
+	for i := int64(1); i <= 3; i++ {
+		dt.Add(&Action{
+			Type:    ActionUpload,
+			Path:    fmt.Sprintf("held-%d.txt", i),
+			DriveID: driveid.New("d"),
+			ItemID:  fmt.Sprintf("i%d", i),
+		}, i, nil)
+	}
+
+	// Confirm nothing on ready channel.
+	select {
+	case <-dt.Ready():
+		require.Fail(t, "actions should be held, not ready")
+	case <-time.After(50 * time.Millisecond):
+		// Expected.
+	}
+
+	// Release the scope — all held actions should be dispatched.
+	dt.ReleaseScope("throttle:account")
+
+	dispatched := make(map[int64]bool)
+	for i := 0; i < 3; i++ {
+		select {
+		case ta := <-dt.Ready():
+			dispatched[ta.ID] = true
+		case <-time.After(time.Second):
+			require.Fail(t, fmt.Sprintf("timeout waiting for held action %d", i+1))
+		}
+	}
+
+	assert.Len(t, dispatched, 3, "all three held actions should be dispatched")
+	assert.True(t, dispatched[1], "action 1 should be dispatched")
+	assert.True(t, dispatched[2], "action 2 should be dispatched")
+	assert.True(t, dispatched[3], "action 3 should be dispatched")
+}
+
+// Validates: R-2.10.5
+func TestDispatchTrial_MarksIsTrial(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+	t.Cleanup(dt.StopDelayed)
+
+	// Block the throttle:account scope.
+	block := &ScopeBlock{
+		Key:       "throttle:account",
+		IssueType: "rate_limited",
+		BlockedAt: time.Now(),
+	}
+	dt.HoldScope("throttle:account", block)
+
+	// Add an action — it goes to the held queue.
+	dt.Add(&Action{
+		Type: ActionUpload, Path: "trial.txt",
+		DriveID: driveid.New("d"), ItemID: "i1",
+	}, 1, nil)
+
+	// Confirm it's held, not ready.
+	select {
+	case <-dt.Ready():
+		require.Fail(t, "action should be held")
+	case <-time.After(50 * time.Millisecond):
+		// Expected.
+	}
+
+	// DispatchTrial should pop from held and mark IsTrial.
+	ok := dt.DispatchTrial("throttle:account")
+	require.True(t, ok, "DispatchTrial should return true when held queue is non-empty")
+
+	select {
+	case ta := <-dt.Ready():
+		assert.True(t, ta.IsTrial, "dispatched trial action should have IsTrial=true")
+		assert.Equal(t, int64(1), ta.ID)
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for trial action on ready channel")
+	}
+
+	// After popping, the held queue should be empty.
+	ok = dt.DispatchTrial("throttle:account")
+	assert.False(t, ok, "DispatchTrial should return false when held queue is empty")
+}

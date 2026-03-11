@@ -1,16 +1,19 @@
 // store_failures.go — Sync failure recording and queries for SyncStore.
 //
+// sync_failures is a diagnostic record — it records failures for `onedrive status`
+// visibility but never drives retry scheduling. The tracker is the sole retry
+// mechanism (R-6.8.10). Transient issues get next_retry_at = NULL.
+//
 // Contents:
 //   - isActionableIssue:                classify issue types requiring user action
 //   - RecordFailure:                    unified failure recording with remote_state transition
-//   - classifyAndBackoff:               determine category + compute next retry time
+//   - classifyFailure:                  determine category (no retry computation)
 //   - transitionRemoteStateOnFailure:   downloading→download_failed, deleting→delete_failed
-//   - computeNextRetry:                 exponential backoff via retry.Reconcile
 //   - ListSyncFailures:                 all failures ordered by last_seen_at
 //   - ListActionableFailures:           user-actionable failures only
-//   - ListSyncFailuresForRetry:         transient failures ready for retry
+//   - ListSyncFailuresForRetry:         transient failures ready for retry (legacy, returns empty)
 //   - ListSyncFailuresByIssueType:      failures filtered by issue type
-//   - EarliestSyncFailureRetryAt:       minimum future retry time
+//   - EarliestSyncFailureRetryAt:       minimum future retry time (legacy, returns zero)
 //   - SyncFailureCount:                 count of transient failures
 //   - ClearSyncFailure:                 remove by path + drive
 //   - ClearSyncFailureByPath:           remove by path (any drive)
@@ -36,7 +39,6 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // Shared column list for all sync_failures SELECT queries. Must match
@@ -95,8 +97,9 @@ func (m *SyncStore) RecordFailure(ctx context.Context, p *SyncFailureParams) err
 		}
 	}
 
-	// Step 2: Classify failure and compute backoff.
-	category, nextRetryNano, currentFailures := m.classifyAndBackoff(ctx, tx, p, now)
+	// Step 2: Classify failure — no retry computation (tracker handles retry).
+	category, currentFailures := m.classifyFailure(ctx, tx, p)
+	var nextRetryNano *int64 // always nil — tracker handles all retry timing
 	newCount := currentFailures + 1
 	nowNano := now.UnixNano()
 
@@ -151,12 +154,15 @@ func (m *SyncStore) RecordFailure(ctx context.Context, p *SyncFailureParams) err
 	return nil
 }
 
-// classifyAndBackoff reads the current failure count, determines whether
-// the issue is actionable or transient, and computes the next retry time
-// for transient issues. Returns (category, nextRetryNano, currentFailures).
-func (m *SyncStore) classifyAndBackoff(
-	ctx context.Context, tx *sql.Tx, p *SyncFailureParams, now time.Time,
-) (string, *int64, int) {
+// classifyFailure reads the current failure count and determines whether the
+// issue is actionable or transient. Returns (category, currentFailures).
+//
+// next_retry_at is always NULL because the tracker is the sole retry
+// mechanism (R-6.8.10). sync_failures is diagnostic-only — it records
+// failures for `onedrive status` visibility but never drives retry scheduling.
+func (m *SyncStore) classifyFailure(
+	ctx context.Context, tx *sql.Tx, p *SyncFailureParams,
+) (string, int) {
 	var currentFailures int
 	if scanErr := tx.QueryRowContext(ctx,
 		`SELECT failure_count FROM sync_failures WHERE path = ? AND drive_id = ?`,
@@ -171,13 +177,11 @@ func (m *SyncStore) classifyAndBackoff(
 	}
 
 	if p.IssueType != "" && isActionableIssue(p.IssueType) {
-		return strActionable, nil, currentFailures
+		return strActionable, currentFailures
 	}
 
-	retryAt := computeNextRetry(now, currentFailures)
-	nanos := retryAt.UnixNano()
-
-	return strTransient, &nanos, currentFailures
+	// Transient: no next_retry_at. Tracker handles all retry timing.
+	return strTransient, currentFailures
 }
 
 // transitionRemoteStateOnFailure transitions remote_state status for
@@ -211,12 +215,6 @@ func (m *SyncStore) transitionRemoteStateOnFailure(ctx context.Context, tx *sql.
 	}
 
 	return nil
-}
-
-// computeNextRetry calculates the next retry time with exponential backoff
-// and jitter using the unified retry.Reconcile policy.
-func computeNextRetry(now time.Time, failureCount int) time.Time {
-	return now.Add(retry.Reconcile.Delay(failureCount))
 }
 
 // ListSyncFailures returns all sync_failures rows ordered by last_seen_at DESC.

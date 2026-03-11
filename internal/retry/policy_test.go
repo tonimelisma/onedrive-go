@@ -101,12 +101,6 @@ func TestNamedPolicies_MatchOriginal(t *testing.T) {
 	assert.Equal(t, 3, DriveDiscovery.MaxAttempts)
 	assert.Equal(t, 1*time.Second, DriveDiscovery.Base)
 
-	// Reconcile: sync/baseline.go — infinite retries, 30s base, 1h max, 25% jitter
-	assert.Equal(t, 0, Reconcile.MaxAttempts)
-	assert.Equal(t, 30*time.Second, Reconcile.Base)
-	assert.Equal(t, 1*time.Hour, Reconcile.Max)
-	assert.Equal(t, 0.25, Reconcile.Jitter)
-
 	// WatchLocal: observer_local.go — watchErrInitBackoff=1s, watchErrMaxBackoff=30s, watchErrBackoffMult=2
 	assert.Equal(t, 0, WatchLocal.MaxAttempts)
 	assert.Equal(t, 1*time.Second, WatchLocal.Base)
@@ -144,46 +138,6 @@ func TestTransportDelay_MatchesCalcBackoff(t *testing.T) {
 
 	for i, exp := range expected {
 		assert.Equal(t, exp, noJitter.Delay(i), "attempt %d", i)
-	}
-}
-
-// Validates: R-6.8.2
-// TestReconcileDelay_MatchesComputeNextRetry verifies the Reconcile policy
-// produces delays matching the original computeNextRetry in baseline.go.
-// Original: delaySec = min(30*(1<<failureCount), 3600)
-func TestReconcileDelay_MatchesComputeNextRetry(t *testing.T) {
-	t.Parallel()
-
-	noJitter := Policy{
-		MaxAttempts: 0,
-		Base:        30 * time.Second,
-		Max:         1 * time.Hour,
-		Multiplier:  2.0,
-		Jitter:      0.0,
-	}
-
-	// Original computeNextRetry used bit shift: 30 * (1 << failureCount)
-	// Policy.Delay uses: 30s * 2^attempt
-	// These are mathematically identical.
-	tests := []struct {
-		attempt  int
-		expected time.Duration
-	}{
-		{0, 30 * time.Second},      // 30 * 1
-		{1, 60 * time.Second},      // 30 * 2
-		{2, 120 * time.Second},     // 30 * 4
-		{3, 240 * time.Second},     // 30 * 8
-		{4, 480 * time.Second},     // 30 * 16
-		{5, 960 * time.Second},     // 30 * 32
-		{6, 1920 * time.Second},    // 30 * 64
-		{7, 3600 * time.Second},    // capped at 1h (30 * 128 = 3840 > 3600)
-		{8, 3600 * time.Second},    // still capped
-		{9, time.Duration(3600e9)}, // still capped
-	}
-
-	for _, tt := range tests {
-		got := noJitter.Delay(tt.attempt)
-		assert.Equal(t, tt.expected, got, "attempt %d", tt.attempt)
 	}
 }
 
