@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_transfer.go, internal/sync/worker.go, internal/sync/tracker.go, internal/sync/scope.go, internal/sync/issue_types.go, internal/sync/compute_status.go, status.go
 
-Implements: R-2.3 [verified], R-5.1 [verified], R-6.4 [implemented], R-6.5.3 [verified], R-6.4.9 [planned], R-6.7.25 [planned], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.10.15 [verified], R-2.10.16 [verified], R-2.10.41 [verified], R-2.10.42 [verified], R-2.10.43 [planned], R-2.10.44 [planned]
+Implements: R-2.3 [verified], R-5.1 [verified], R-6.4 [implemented], R-6.5.3 [verified], R-6.4.9 [planned], R-6.7.25 [planned], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-2.10.5 [planned], R-2.10.11 [verified], R-2.10.15 [verified], R-2.10.16 [verified], R-2.10.41 [verified], R-2.10.42 [verified], R-2.10.43 [planned], R-2.10.44 [planned]
 
 ## Executor (`executor.go`)
 
@@ -18,7 +18,7 @@ In-memory dependency graph for action ordering. Folder creates must complete bef
 
 ### Tracker Extensions
 
-Implements: R-6.8.7 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.10.15 [verified], R-2.10.42 [verified]
+Implements: R-6.8.7 [verified], R-2.10.5 [planned], R-2.10.11 [verified], R-2.10.15 [verified], R-2.10.42 [verified]
 
 - **TrackedAction extensions**: `NotBefore time.Time` (earliest dispatch time for re-queued actions), `Attempt int` (current attempt, 0 = first), `MaxAttempts int` (budget per action: 5 in one-shot, 0 = unlimited in watch), `IsTrial bool` (scope trial probe).
 - **Delayed queue**: min-heap (`delayedQueue`) ordered by `NotBefore`. Timer goroutine dispatches actions when their delay expires. Injectable `nowFunc` for deterministic tests (no real sleeps).
