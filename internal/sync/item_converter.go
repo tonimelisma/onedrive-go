@@ -374,8 +374,16 @@ func (c *itemConverter) isDescendantOfVault(
 // resolveItemDriveID returns the normalized driveID for an item, falling
 // back to the converter's driveID when the item's DriveID is empty.
 func (c *itemConverter) resolveItemDriveID(item *graph.Item) driveid.ID {
+	return resolveItemDriveIDWithFallback(item, c.driveID)
+}
+
+// resolveItemDriveIDWithFallback returns the item's DriveID when non-zero,
+// otherwise returns the fallback. This is the shared logic behind
+// itemConverter.resolveItemDriveID and detectShortcutOrphans — both need
+// the same "item DriveID or scope default" resolution.
+func resolveItemDriveIDWithFallback(item *graph.Item, fallback driveid.ID) driveid.ID {
 	if item.DriveID.IsZero() {
-		return c.driveID
+		return fallback
 	}
 
 	return item.DriveID
@@ -404,4 +412,19 @@ func convertShortcutItems(
 	conv := newShortcutConverter(bl, remoteDriveID, logger, sc)
 
 	return conv.ConvertItems(items)
+}
+
+// detectShortcutOrphans finds baseline entries belonging to a shortcut scope
+// that are no longer present in the full enumeration. Delegates to
+// Baseline.FindOrphans with a path prefix filter for the shortcut's local path.
+func detectShortcutOrphans(
+	sc *Shortcut, remoteDriveID driveid.ID, items []graph.Item, bl *Baseline,
+) []ChangeEvent {
+	seen := make(map[driveid.ItemKey]struct{}, len(items))
+	for i := range items {
+		itemDriveID := resolveItemDriveIDWithFallback(&items[i], remoteDriveID)
+		seen[driveid.NewItemKey(itemDriveID, items[i].ID)] = struct{}{}
+	}
+
+	return bl.FindOrphans(seen, remoteDriveID, sc.LocalPath)
 }
