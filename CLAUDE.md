@@ -13,7 +13,7 @@ Fast, safe OneDrive CLI and sync client in Go. Unix-style file ops (`ls`, `get`,
 | `internal/driveops/`, `get.go`, `put.go` | `spec/design/drive-transfers.md` | |
 | `pkg/quickxorhash/` | `spec/design/drive-transfers.md` | |
 | `internal/retry/` | `spec/design/retry.md` | |
-| `internal/sync/observer_*.go`, `scanner.go`, `buffer.go` | `spec/design/sync-observation.md` | `spec/reference/onedrive-sync-behavior.md` |
+| `internal/sync/observer_*.go`, `item_converter.go`, `scanner.go`, `buffer.go` | `spec/design/sync-observation.md` | `spec/reference/onedrive-sync-behavior.md` |
 | `internal/sync/planner.go`, `types.go` | `spec/design/sync-planning.md` | `spec/reference/onedrive-sync-behavior.md` |
 | `internal/sync/executor*.go`, `worker.go`, `tracker.go`, `reconciler.go` | `spec/design/sync-execution.md` | |
 | `internal/sync/engine*.go`, `orchestrator.go`, `drive_runner.go`, `sync.go` | `spec/design/sync-engine.md` | |

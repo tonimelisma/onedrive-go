@@ -5,9 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"path"
-	"slices"
-	"strings"
 	stdsync "sync"
 	"sync/atomic"
 	"time"
@@ -15,7 +12,6 @@ import (
 	"golang.org/x/text/unicode/norm"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
@@ -32,25 +28,15 @@ const (
 	specialFolderVault = "vault" // Graph API personal vault folder name
 )
 
-// inflightParent tracks a non-root item seen in the current delta batch,
-// allowing children later in the same batch to materialize paths before
-// the baseline is updated.
-type inflightParent struct {
-	name          string
-	parentID      string
-	parentDriveID driveid.ID // drive containing this item's parent
-	isRoot        bool
-	isVault       bool // true for Personal Vault folder (B-271)
-}
-
 // RemoteObserver transforms Graph API delta responses into []ChangeEvent.
 // It handles pagination, path materialization, change classification, and
-// normalization (NFC, driveID zero-padding).
+// normalization (NFC, driveID zero-padding). Delegates item conversion to
+// an embedded itemConverter configured for primary drive observation.
 type RemoteObserver struct {
 	fetcher   DeltaFetcher
-	baseline  *Baseline
-	driveID   driveid.ID
+	converter *itemConverter
 	logger    *slog.Logger
+	driveID   driveid.ID
 	sleepFunc func(ctx context.Context, d time.Duration) error
 	obsWriter ObservationWriter // nil-safe: when set, observations are committed atomically with delta token
 
@@ -86,13 +72,15 @@ type ObserverStats struct {
 // baseline must be a loaded Baseline (from SyncStore.Load); it is
 // read-only during observation. The caller must pass a normalized driveid.ID.
 func NewRemoteObserver(fetcher DeltaFetcher, baseline *Baseline, driveID driveid.ID, logger *slog.Logger) *RemoteObserver {
-	return &RemoteObserver{
+	obs := &RemoteObserver{
 		fetcher:   fetcher,
-		baseline:  baseline,
-		driveID:   driveID,
 		logger:    logger,
+		driveID:   driveID,
 		sleepFunc: timeSleep,
 	}
+	obs.converter = newPrimaryConverter(baseline, driveID, logger, &obs.stats)
+
+	return obs
 }
 
 // FullDelta fetches all delta pages and returns the accumulated change events
@@ -328,13 +316,14 @@ func (o *RemoteObserver) fetchPage(
 	// Pass 1: register all items in inflight so parent-chain walks
 	// in pass 2 see every item regardless of arrival order.
 	for i := range dp.Items {
-		o.registerInflight(&dp.Items[i], inflight)
+		o.converter.registerInflight(&dp.Items[i], inflight)
 	}
 
 	// Pass 2: classify and emit events (inflight map is fully populated).
 	var events []ChangeEvent
+
 	for i := range dp.Items {
-		if ev := o.classifyItem(&dp.Items[i], inflight); ev != nil {
+		if ev := o.converter.classifyItem(&dp.Items[i], inflight); ev != nil {
 			events = append(events, *ev)
 		}
 	}
@@ -348,257 +337,6 @@ func (o *RemoteObserver) fetchPage(
 	}
 
 	return events, dp.NextLink, false, nil
-}
-
-// registerInflight adds an item to the inflight parent map without
-// classification. Called in pass 1 of fetchPage to ensure the full page
-// is registered before any vault/classification checks (B-281).
-func (o *RemoteObserver) registerInflight(item *graph.Item, inflight map[driveid.ItemKey]inflightParent) {
-	itemDriveID := o.resolveItemDriveID(item)
-	key := driveid.NewItemKey(itemDriveID, item.ID)
-	inflight[key] = inflightParent{
-		name:          nfcNormalize(item.Name),
-		parentID:      item.ParentID,
-		parentDriveID: resolveParentDriveID(item, itemDriveID),
-		isRoot:        item.IsRoot,
-		isVault:       item.SpecialFolderName == specialFolderVault,
-	}
-}
-
-// classifyItem converts a single graph.Item into a ChangeEvent. Called in
-// pass 2 of fetchPage after all items are registered in inflight. Returns
-// nil for root items and vault descendants (B-271, B-281).
-func (o *RemoteObserver) classifyItem(item *graph.Item, inflight map[driveid.ItemKey]inflightParent) *ChangeEvent {
-	itemDriveID := o.resolveItemDriveID(item)
-
-	if item.IsRoot {
-		o.logger.Debug("skipping root item", slog.String("item_id", item.ID))
-
-		return nil
-	}
-
-	// Personal Vault exclusion (B-271): skip the vault folder itself and
-	// any items whose parent chain includes a vault folder. This prevents
-	// data loss from vault lock/unlock transitions where items appear and
-	// disappear in delta responses.
-	isVault := item.SpecialFolderName == specialFolderVault
-	if isVault || o.isDescendantOfVault(item, inflight, itemDriveID) {
-		o.logger.Info("skipping vault item",
-			slog.String("item_id", item.ID),
-			slog.String("name", item.Name),
-		)
-
-		return nil
-	}
-
-	// Shortcut detection (6.4a.2): items with a remoteItem facet pointing to
-	// another drive AND IsFolder are shortcuts. These get ChangeShortcut events
-	// instead of normal folder create/modify — the engine handles them
-	// separately for sub-scope observation.
-	if item.IsFolder && item.RemoteDriveID != "" && !item.IsDeleted {
-		return o.classifyShortcut(item, inflight, itemDriveID)
-	}
-
-	return o.classifyAndConvert(item, inflight, itemDriveID)
-}
-
-// classifyAndConvert classifies the change type and builds a ChangeEvent.
-func (o *RemoteObserver) classifyAndConvert(
-	item *graph.Item, inflight map[driveid.ItemKey]inflightParent, itemDriveID driveid.ID,
-) *ChangeEvent {
-	name := nfcNormalize(item.Name)
-	baselineKey := driveid.NewItemKey(itemDriveID, item.ID)
-	existing, _ := o.baseline.GetByID(baselineKey)
-
-	hash := driveops.SelectHash(item)
-	if hash != "" {
-		o.stats.hashesComputed.Add(1)
-	}
-
-	ev := ChangeEvent{
-		Source:    SourceRemote,
-		ItemID:    item.ID,
-		ParentID:  item.ParentID,
-		DriveID:   itemDriveID,
-		ItemType:  classifyItemType(item),
-		Name:      name,
-		Size:      item.Size,
-		Hash:      hash,
-		Mtime:     toUnixNano(item.ModifiedAt),
-		ETag:      item.ETag,
-		CTag:      item.CTag,
-		IsDeleted: item.IsDeleted,
-	}
-
-	switch {
-	case item.IsDeleted:
-		ev.Type = ChangeDelete
-		// Business API: deleted items may lack Name.
-		if ev.Name == "" && existing != nil {
-			ev.Name = path.Base(existing.Path)
-		}
-
-		if existing != nil {
-			ev.Path = existing.Path
-		}
-
-	case existing != nil:
-		ev.Path = o.materializePath(item, inflight, itemDriveID)
-		if ev.Path != existing.Path {
-			ev.Type = ChangeMove
-			ev.OldPath = existing.Path
-		} else {
-			ev.Type = ChangeModify
-		}
-
-	default:
-		ev.Type = ChangeCreate
-		ev.Path = o.materializePath(item, inflight, itemDriveID)
-	}
-
-	return &ev
-}
-
-// classifyShortcut builds a ChangeShortcut event for a shortcut/shared folder.
-// Shortcuts point to content on another drive — their children don't appear
-// in the user's own delta. The engine must observe the source drive separately.
-func (o *RemoteObserver) classifyShortcut(
-	item *graph.Item, inflight map[driveid.ItemKey]inflightParent, itemDriveID driveid.ID,
-) *ChangeEvent {
-	relPath := o.materializePath(item, inflight, itemDriveID)
-
-	o.logger.Info("detected shortcut",
-		slog.String("item_id", item.ID),
-		slog.String("name", item.Name),
-		slog.String("path", relPath),
-		slog.String("remote_drive", item.RemoteDriveID),
-		slog.String("remote_item", item.RemoteItemID),
-	)
-
-	return &ChangeEvent{
-		Source:        SourceRemote,
-		Type:          ChangeShortcut,
-		Path:          relPath,
-		ItemID:        item.ID,
-		ParentID:      item.ParentID,
-		DriveID:       itemDriveID,
-		ItemType:      ItemTypeFolder,
-		Name:          nfcNormalize(item.Name),
-		Mtime:         toUnixNano(item.ModifiedAt),
-		ETag:          item.ETag,
-		CTag:          item.CTag,
-		RemoteDriveID: item.RemoteDriveID,
-		RemoteItemID:  item.RemoteItemID,
-	}
-}
-
-// materializePath builds the full relative path by walking the parent chain.
-// It checks the inflight map first (for items in the current delta batch),
-// then the baseline. Stops at the drive root or when a baseline entry
-// provides a shortcut.
-func (o *RemoteObserver) materializePath(
-	item *graph.Item, inflight map[driveid.ItemKey]inflightParent, itemDriveID driveid.ID,
-) string {
-	segments := []string{nfcNormalize(item.Name)}
-	parentDriveID := resolveParentDriveID(item, itemDriveID)
-	parentID := item.ParentID
-
-	for range maxPathDepth {
-		if parentID == "" {
-			break
-		}
-
-		parentKey := driveid.NewItemKey(parentDriveID, parentID)
-
-		// Check inflight map first (items from current delta batch).
-		if p, ok := inflight[parentKey]; ok {
-			if p.isRoot {
-				break
-			}
-
-			segments = append(segments, p.name)
-			parentDriveID = p.parentDriveID
-			parentID = p.parentID
-
-			continue
-		}
-
-		// Baseline shortcut: prepend this item's full stored path.
-		if entry, ok := o.baseline.GetByID(parentKey); ok && entry.Path != "" {
-			slices.Reverse(segments)
-
-			return entry.Path + "/" + strings.Join(segments, "/")
-		}
-
-		// Parent not found — orphaned item.
-		o.logger.Warn("orphaned item: parent not found in inflight or baseline",
-			slog.String("item_id", item.ID),
-			slog.String("parent_id", parentID),
-			slog.String("parent_drive_id", parentDriveID.String()),
-		)
-
-		break
-	}
-
-	slices.Reverse(segments)
-
-	return strings.Join(segments, "/")
-}
-
-// isDescendantOfVault walks the parent chain in the inflight map to check
-// whether any ancestor is a vault folder. Limited to maxPathDepth to prevent
-// infinite loops in malformed data (B-271).
-func (o *RemoteObserver) isDescendantOfVault(
-	item *graph.Item, inflight map[driveid.ItemKey]inflightParent, itemDriveID driveid.ID,
-) bool {
-	parentDriveID := resolveParentDriveID(item, itemDriveID)
-	parentID := item.ParentID
-
-	for range maxPathDepth {
-		if parentID == "" {
-			return false
-		}
-
-		parentKey := driveid.NewItemKey(parentDriveID, parentID)
-
-		p, ok := inflight[parentKey]
-		if !ok {
-			return false
-		}
-
-		if p.isVault {
-			return true
-		}
-
-		if p.isRoot {
-			return false
-		}
-
-		parentDriveID = p.parentDriveID
-		parentID = p.parentID
-	}
-
-	return false
-}
-
-// resolveItemDriveID returns the normalized driveID for an item, falling
-// back to the observer's driveID when the item's DriveID is empty.
-func (o *RemoteObserver) resolveItemDriveID(item *graph.Item) driveid.ID {
-	if item.DriveID.IsZero() {
-		return o.driveID
-	}
-
-	return item.DriveID
-}
-
-// resolveParentDriveID returns the normalized driveID for the parent of an
-// item, handling cross-drive references (e.g. shared items).
-func resolveParentDriveID(item *graph.Item, itemDriveID driveid.ID) driveid.ID {
-	if !item.ParentDriveID.IsZero() {
-		return item.ParentDriveID
-	}
-
-	return itemDriveID
 }
 
 // ---------------------------------------------------------------------------
