@@ -1,6 +1,6 @@
 # Sync Observation
 
-GOVERNS: internal/sync/observer_local.go, internal/sync/observer_local_handlers.go, internal/sync/observer_remote.go, internal/sync/observer_shortcut.go, internal/sync/item_converter.go, internal/sync/scanner.go, internal/sync/buffer.go, internal/sync/shortcuts.go, internal/sync/permissions.go, internal/sync/inotify_linux.go, internal/sync/inotify_other.go
+GOVERNS: internal/sync/observer_local.go, internal/sync/observer_local_handlers.go, internal/sync/observer_remote.go, internal/sync/item_converter.go, internal/sync/scanner.go, internal/sync/buffer.go, internal/sync/shortcuts.go, internal/sync/permissions.go, internal/sync/inotify_linux.go, internal/sync/inotify_other.go
 
 Implements: R-2.1.2 [verified], R-2.4 [implemented], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.15 [planned], R-6.7.16 [planned], R-6.7.19 [planned], R-6.7.20 [verified], R-6.7.21 [planned], R-6.7.24 [verified], R-2.11 [implemented], R-2.11.5 [implemented], R-2.12 [planned], R-2.13.1 [verified], R-2.14.1 [verified], R-2.14.3 [verified], R-2.14.4 [verified]
 
@@ -32,9 +32,11 @@ Key properties:
 - Orphan items (missing parent) produce a warning log and partial path
 - The inflight map is a parameter, not a field — RemoteObserver accumulates it across pages; shortcuts populate it once per batch
 
-### Shortcut Observation (`observer_shortcut.go`)
+### Shortcut Observation (`item_converter.go`, `engine_shortcuts.go`)
 
 Shared folder shortcuts require separate delta scopes. Personal drives use delta (shortcuts appear in the delta stream). Business drives use folder enumeration (no shortcut support in Business delta). Observation method recorded per-shortcut for correct dispatch. Shortcut observation uses the unified `itemConverter` pipeline via `convertShortcutItems`, ensuring identical NFC normalization, move detection, and deleted-item name recovery as the primary drive.
+
+Shortcut helper functions are co-located with their primary concern: `detectShortcutOrphans` and `resolveItemDriveIDWithFallback` live in `item_converter.go` (DriveID resolution and baseline comparison); `filterOutShortcuts` and concurrency scaffolding live in `engine_shortcuts.go` (engine orchestration). The former `observer_shortcut.go` was dissolved — its functions were redistributed to eliminate a vestigial single-purpose file.
 
 ## Local Observer (`observer_local.go`)
 

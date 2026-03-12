@@ -57,34 +57,6 @@ func TestFilterOutShortcuts_RemovesShortcuts(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// mapShortcutPath
-// ---------------------------------------------------------------------------
-
-func TestMapShortcutPath(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		shortcut string
-		relPath  string
-		wantPath string
-	}{
-		{"direct child", "Shared/TeamDocs", "report.xlsx", "Shared/TeamDocs/report.xlsx"},
-		{"nested child", "SharedFolder", "sub/file.txt", "SharedFolder/sub/file.txt"},
-		{"deep nesting", "A/B", "C/D/E.txt", "A/B/C/D/E.txt"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := mapShortcutPath(tt.shortcut, tt.relPath)
-			assert.Equal(t, tt.wantPath, got)
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
 // convertShortcutItems (unified item conversion for shortcut scopes)
 // ---------------------------------------------------------------------------
 

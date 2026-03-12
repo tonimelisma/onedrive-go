@@ -537,3 +537,130 @@ func TestConvertShortcutItems_NilLoggerPassedDefault(t *testing.T) {
 	events := convertShortcutItems(items, sc, remoteDriveID, emptyBaseline(), (*slog.Logger)(nil))
 	require.Len(t, events, 1)
 }
+
+// ---------------------------------------------------------------------------
+// Edge-case tests
+// ---------------------------------------------------------------------------
+
+// TestShortcutConverter_CrossSubfolderMove verifies that a file moving between
+// two subfolders within the same shortcut scope produces a ChangeMove event
+// with correct Path and OldPath.
+func TestShortcutConverter_CrossSubfolderMove(t *testing.T) {
+	t.Parallel()
+
+	remoteDriveID := driveid.New("0000000000000099")
+
+	sc := &Shortcut{
+		ItemID:      "sc-1",
+		RemoteDrive: "0000000000000099",
+		RemoteItem:  "scope-root",
+		LocalPath:   "Shared",
+	}
+
+	// Baseline: file was under Shared/FolderA.
+	bl := baselineWith(&BaselineEntry{
+		Path:    "Shared/FolderA/file.txt",
+		DriveID: remoteDriveID,
+		ItemID:  "f1",
+	})
+
+	// Delta batch: scope root, two subfolders, and the file now under FolderB.
+	items := []graph.Item{
+		{ID: "scope-root", Name: "ScopeRoot", DriveID: remoteDriveID, IsFolder: true},
+		{ID: "d1", Name: "FolderA", ParentID: "scope-root", DriveID: remoteDriveID, IsFolder: true},
+		{ID: "d2", Name: "FolderB", ParentID: "scope-root", DriveID: remoteDriveID, IsFolder: true},
+		{ID: "f1", Name: "file.txt", ParentID: "d2", DriveID: remoteDriveID, Size: 200},
+	}
+
+	events := convertShortcutItems(items, sc, remoteDriveID, bl, testLogger(t))
+
+	// Find the file event (folders also produce events).
+	var fileEvent *ChangeEvent
+	for i := range events {
+		if events[i].ItemID == "f1" {
+			fileEvent = &events[i]
+
+			break
+		}
+	}
+
+	require.NotNil(t, fileEvent, "file event should be emitted")
+	assert.Equal(t, ChangeMove, fileEvent.Type, "cross-subfolder move should be ChangeMove")
+	assert.Equal(t, "Shared/FolderB/file.txt", fileEvent.Path, "new path under FolderB")
+	assert.Equal(t, "Shared/FolderA/file.txt", fileEvent.OldPath, "old path under FolderA")
+}
+
+// TestShortcutConverter_MixedDriveIDs verifies correct DriveID resolution when
+// items in a shortcut scope have mixed DriveIDs: one with a zero DriveID
+// (inherits remoteDriveID) and one with an explicit cross-drive DriveID.
+func TestShortcutConverter_MixedDriveIDs(t *testing.T) {
+	t.Parallel()
+
+	remoteDriveID := driveid.New("0000000000000099")
+	crossDriveID := driveid.New("0000000000000077")
+
+	sc := &Shortcut{
+		ItemID:      "sc-1",
+		RemoteDrive: "0000000000000099",
+		RemoteItem:  "scope-root",
+		LocalPath:   "Shared",
+	}
+
+	items := []graph.Item{
+		// Scope root — needed for parent-chain resolution.
+		{ID: "scope-root", Name: "ScopeRoot", DriveID: remoteDriveID, IsFolder: true},
+		// Item with zero DriveID — should inherit remoteDriveID.
+		{ID: "f1", Name: "inherited.txt", ParentID: "scope-root", Size: 100},
+		// Item with explicit cross-drive DriveID.
+		{ID: "f2", Name: "cross.txt", ParentID: "scope-root", DriveID: crossDriveID, Size: 200},
+	}
+
+	events := convertShortcutItems(items, sc, remoteDriveID, emptyBaseline(), testLogger(t))
+
+	require.Len(t, events, 2)
+
+	// Build a map for order-independent assertions.
+	byID := make(map[string]*ChangeEvent, 2)
+	for i := range events {
+		byID[events[i].ItemID] = &events[i]
+	}
+
+	assert.Equal(t, remoteDriveID, byID["f1"].DriveID, "zero-DriveID item should inherit remoteDriveID")
+	assert.Equal(t, crossDriveID, byID["f2"].DriveID, "explicit DriveID should be preserved")
+}
+
+// TestShortcutConverter_VaultItemsPassThrough verifies that vault folders and
+// their children within a shortcut scope are NOT filtered — vault exclusion
+// is disabled for shortcut converters because shortcuts never actually contain
+// Personal Vault content (the vault is per-user, on the primary drive).
+func TestShortcutConverter_VaultItemsPassThrough(t *testing.T) {
+	t.Parallel()
+
+	remoteDriveID := driveid.New("0000000000000099")
+
+	sc := &Shortcut{
+		ItemID:      "sc-1",
+		RemoteDrive: "0000000000000099",
+		RemoteItem:  "scope-root",
+		LocalPath:   "Shared",
+	}
+
+	// Scope root + a folder named like a vault + a child. In shortcut scope,
+	// neither should be filtered because enableVaultFilter is false.
+	items := []graph.Item{
+		{ID: "scope-root", Name: "ScopeRoot", DriveID: remoteDriveID, IsFolder: true},
+		{
+			ID: "v1", Name: "Personal Vault", ParentID: "scope-root",
+			DriveID: remoteDriveID, IsFolder: true,
+			SpecialFolderName: "vault",
+		},
+		{
+			ID: "f1", Name: "secret.pdf", ParentID: "v1",
+			DriveID: remoteDriveID, Size: 5000,
+		},
+	}
+
+	events := convertShortcutItems(items, sc, remoteDriveID, emptyBaseline(), testLogger(t))
+
+	assert.Len(t, events, 2, "vault items should pass through in shortcut scope")
+}
