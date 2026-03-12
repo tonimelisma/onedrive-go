@@ -75,7 +75,12 @@ func newPrimaryConverter(baseline *Baseline, driveID driveid.ID, logger *slog.Lo
 
 // newShortcutConverter creates an itemConverter for shortcut scope observation.
 // Path prefix, scope root skip, and nested shortcut skip are enabled.
+// A nil logger is replaced with slog.Default() to prevent panics.
 func newShortcutConverter(baseline *Baseline, remoteDriveID driveid.ID, logger *slog.Logger, sc *Shortcut) *itemConverter {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	return &itemConverter{
 		baseline:            baseline,
 		driveID:             remoteDriveID,
@@ -405,10 +410,6 @@ func resolveParentDriveID(item *graph.Item, itemDriveID driveid.ID) driveid.ID {
 func convertShortcutItems(
 	items []graph.Item, sc *Shortcut, remoteDriveID driveid.ID, bl *Baseline, logger *slog.Logger,
 ) []ChangeEvent {
-	if logger == nil {
-		logger = slog.Default()
-	}
-
 	conv := newShortcutConverter(bl, remoteDriveID, logger, sc)
 
 	return conv.ConvertItems(items)
