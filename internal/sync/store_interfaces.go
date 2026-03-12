@@ -81,7 +81,7 @@ type SyncFailureRecorder interface {
 type StateAdmin interface {
 	ResetFailure(ctx context.Context, path string) error
 	ResetAllFailures(ctx context.Context) error
-	ResetInProgressStates(ctx context.Context, syncRoot string) error
+	ResetInProgressStates(ctx context.Context, syncRoot string, delayFn func(int) time.Duration) error
 }
 
 // SyncFailureRow represents a row from the sync_failures table.

@@ -1011,7 +1011,8 @@ func TestResetInProgressStates(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	err := mgr.ResetInProgressStates(ctx, syncRoot)
+	testDelay := func(_ int) time.Duration { return time.Second }
+	err := mgr.ResetInProgressStates(ctx, syncRoot, testDelay)
 	require.NoError(t, err)
 
 	rowA := readRemoteStateRow(t, mgr.rawDB(), "a")
