@@ -126,6 +126,11 @@ type Engine struct {
 	// nil in one-shot mode — failed items are retried on the next `onedrive sync`.
 	retrier *FailureRetrier
 
+	// trialTimer fires when the next scope trial is due (R-2.10.5).
+	// Protected by trialMu. Nil when no trials are pending.
+	trialTimer *time.Timer
+	trialMu    stdsync.Mutex
+
 	// Engine-owned result counters. Workers are pure executors — the engine
 	// classifies results and owns all final disposition counts (R-6.8.9).
 	succeeded    atomic.Int32
@@ -1121,7 +1126,7 @@ func isOutagePattern(err error) bool {
 func (e *Engine) processWorkerResult(ctx context.Context, r *WorkerResult, bl *Baseline, shortcuts []Shortcut) {
 	// Handle trial results — check if a scope trial succeeded or failed.
 	if r.IsTrial && r.TrialScopeKey != "" {
-		e.handleTrialResult(r)
+		e.handleTrialResult(ctx, r)
 	}
 
 	class, _ := classifyResult(r)
@@ -1176,17 +1181,35 @@ func (e *Engine) processWorkerResult(ctx context.Context, r *WorkerResult, bl *B
 }
 
 // handleTrialResult processes the result of a scope trial action. On
-// success, releases the scope. On failure, extends the trial interval
-// with backoff.
-func (e *Engine) handleTrialResult(r *WorkerResult) {
+// success, releases the scope and triggers thundering herd (reset backoff
+// for sync_failures in this scope). On failure, doubles the trial interval
+// with per-scope-type caps (R-2.10.6, R-2.10.8, R-2.10.14).
+func (e *Engine) handleTrialResult(ctx context.Context, r *WorkerResult) {
 	class, _ := classifyResult(r)
 	if class == resultSuccess {
 		e.tracker.ReleaseScope(r.TrialScopeKey)
+		// Thundering herd: reset sync_failures backoff so retrier picks them up.
+		e.resetScopeRetryTimes(ctx, r.TrialScopeKey)
+		e.armTrialTimer()
 		return
 	}
 
-	// Trial failed — extend the interval with 2× backoff.
-	e.tracker.ExtendTrial(r.TrialScopeKey, e.nowFunc().Add(r.RetryAfter*2+time.Second))
+	// Trial failed — double the interval, capped per scope type.
+	block, ok := e.tracker.GetScopeBlock(r.TrialScopeKey)
+	if !ok {
+		return // scope was released between dispatch and result
+	}
+
+	newInterval := block.TrialInterval * 2
+	maxInterval := maxTrialIntervalForIssueType(block.IssueType)
+	if newInterval > maxInterval {
+		newInterval = maxInterval
+	}
+
+	// Update the block's TrialInterval for next doubling.
+	block.TrialInterval = newInterval
+	e.tracker.ExtendTrial(r.TrialScopeKey, e.nowFunc().Add(newInterval))
+	e.armTrialTimer()
 }
 
 // feedScopeDetection feeds a worker result into scope detection sliding
@@ -1221,6 +1244,7 @@ func (e *Engine) applyScopeBlock(sr ScopeUpdateResult) {
 		NextTrialAt:   now.Add(sr.TrialInterval),
 	}
 	e.tracker.HoldScope(sr.ScopeKey, block)
+	e.armTrialTimer() // arm so the first trial fires at NextTrialAt (R-2.10.5)
 }
 
 // recordError increments the failed counter and appends the error to the
@@ -1259,11 +1283,52 @@ func (e *Engine) recordFailure(ctx context.Context, r *WorkerResult, delayFn fun
 		Category:   category,
 		ErrMsg:     r.ErrMsg,
 		HTTPStatus: r.HTTPStatus,
+		ScopeKey:   deriveScopeKey(r),
 	}, delayFn); recErr != nil {
 		e.logger.Warn("failed to record failure",
 			slog.String("path", r.Path),
 			slog.String("error", recErr.Error()),
 		)
+	}
+}
+
+// deriveScopeKey returns the scope key for a failed worker result based on
+// HTTP status and shortcut context. Returns "" for non-scope failures.
+// Uses the same classification logic as ScopeState.UpdateScope (scope.go).
+func deriveScopeKey(r *WorkerResult) string {
+	switch {
+	case r.HTTPStatus == http.StatusTooManyRequests:
+		return scopeKeyThrottleAccount
+	case r.HTTPStatus == http.StatusServiceUnavailable:
+		return scopeKeyService
+	case r.HTTPStatus == http.StatusInsufficientStorage:
+		if r.ShortcutKey != "" {
+			return scopeKeyQuotaShortcut + r.ShortcutKey
+		}
+		return scopeKeyQuotaOwn
+	case r.HTTPStatus >= http.StatusInternalServerError:
+		return scopeKeyService
+	default:
+		return ""
+	}
+}
+
+// resetScopeRetryTimes resets next_retry_at for all sync_failures matching
+// the given scope key. This is the "thundering herd" — when a scope trial
+// succeeds, all items with future backoff for that scope become immediately
+// retriable. Kicks the retrier so it picks them up promptly.
+func (e *Engine) resetScopeRetryTimes(ctx context.Context, scopeKey string) {
+	if err := e.baseline.ResetRetryTimesForScope(ctx, scopeKey); err != nil {
+		e.logger.Warn("failed to reset retry times for scope",
+			slog.String("scope_key", scopeKey),
+			slog.String("error", err.Error()),
+		)
+
+		return
+	}
+
+	if e.retrier != nil {
+		e.retrier.Kick()
 	}
 }
 
@@ -1303,11 +1368,65 @@ func directionFromAction(at ActionType) string {
 	}
 }
 
+// armTrialTimer sets (or resets) the trial timer to fire at the earliest
+// NextTrialAt across all scope blocks. Follows the same pattern as
+// FailureRetrier.armTimer. Called after scope blocks are created, trials
+// dispatched, or trial results processed (R-2.10.5).
+func (e *Engine) armTrialTimer() {
+	e.trialMu.Lock()
+	defer e.trialMu.Unlock()
+
+	if e.trialTimer != nil {
+		e.trialTimer.Stop()
+		e.trialTimer = nil
+	}
+
+	earliest, ok := e.tracker.EarliestTrialAt()
+	if !ok {
+		return
+	}
+
+	delay := time.Until(earliest)
+	if delay <= 0 {
+		delay = 1 * time.Millisecond // fire immediately
+	}
+
+	e.trialTimer = time.NewTimer(delay)
+}
+
+// trialTimerChan returns the trial timer's channel, or nil if no timer is
+// set. A nil channel in a select blocks forever — desired when no trials
+// are pending.
+func (e *Engine) trialTimerChan() <-chan time.Time {
+	e.trialMu.Lock()
+	defer e.trialMu.Unlock()
+
+	if e.trialTimer == nil {
+		return nil
+	}
+
+	return e.trialTimer.C
+}
+
+// stopTrialTimer stops and clears the trial timer. Called on shutdown.
+func (e *Engine) stopTrialTimer() {
+	e.trialMu.Lock()
+	defer e.trialMu.Unlock()
+
+	if e.trialTimer != nil {
+		e.trialTimer.Stop()
+		e.trialTimer = nil
+	}
+}
+
 // drainWorkerResults reads from the worker result channel and persists
 // failures to remote_state for durable retry tracking. Used by watch mode.
 // Baseline is passed explicitly. Shortcuts are read from the synchronized
 // watchShortcuts field on each result to pick up newly discovered shortcuts.
+// The trial timer fires DispatchTrial when scope trials become due (R-2.10.5).
 func (e *Engine) drainWorkerResults(ctx context.Context, results <-chan WorkerResult, bl *Baseline) {
+	defer e.stopTrialTimer()
+
 	for {
 		select {
 		case r, ok := <-results:
@@ -1316,6 +1435,17 @@ func (e *Engine) drainWorkerResults(ctx context.Context, results <-chan WorkerRe
 			}
 
 			e.processWorkerResult(ctx, &r, bl, e.getWatchShortcuts())
+
+		case <-e.trialTimerChan():
+			now := e.nowFunc()
+			for {
+				key, _, ok := e.tracker.NextDueTrial(now)
+				if !ok {
+					break
+				}
+				e.tracker.DispatchTrial(key)
+			}
+			e.armTrialTimer()
 
 		case <-ctx.Done():
 			return

@@ -12,6 +12,7 @@ Key operations:
 - `CommitObservation()`: atomically writes `remote_state` rows + advances delta token in a single transaction
 - `CommitOutcome()`: updates baseline + `remote_state` status per action
 - `RecordFailure(ctx, SyncFailureParams, delayFn func(int) time.Duration)`: unified failure recording — always transactional, handles all failure types. For download/delete: atomically transitions `remote_state` and records `sync_failures`. The `delayFn` parameter computes `next_retry_at` from failure count: non-nil → transient (computes delay for retry scheduling), nil → actionable (no `next_retry_at`, no retry). The store does not classify failures or import the retry package — category is set by the engine caller. UPSERT with COALESCE preserves existing `file_size`, `local_hash`, `item_id` on conflict. Auto-resolves `item_id` from `remote_state` for download/delete when not provided
+- `ResetRetryTimesForScope(ctx, scopeKey)`: thundering herd mechanism — sets `next_retry_at` to now for all transient `sync_failures` matching `scopeKey` whose `next_retry_at` is in the future. Called by the engine when a scope trial succeeds, making all backoff-delayed failures immediately retriable (R-2.10.11, R-2.10.15)
 
 All write methods use optimistic concurrency (WHERE clauses preventing stale updates). Concurrency safety from SQLite WAL mode with 5-second busy timeout. Implements: R-6.3.2 [verified]
 

@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/engine.go, internal/sync/engine_shortcuts.go, internal/sync/delete_counter.go, internal/sync/orchestrator.go, internal/sync/drive_runner.go, sync.go, sync_helpers.go
 
-Implements: R-2.1 [verified], R-2.6 [verified], R-2.8 [verified], R-3.4.2 [verified], R-2.10.1 [verified], R-2.10.2 [planned], R-2.10.3 [verified], R-2.10.4 [planned], R-2.10.7 [planned], R-2.10.9 [planned], R-2.10.10 [planned], R-2.10.12 [planned], R-2.10.13 [planned], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [planned], R-2.10.24 [planned], R-2.10.25 [planned], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified], R-2.10.30 [planned], R-2.10.31 [planned], R-2.10.35 [verified], R-2.10.36 [verified], R-2.10.37 [verified], R-2.10.38 [planned], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.6.7 [planned], R-6.6.8 [planned], R-6.6.9 [planned], R-6.6.10 [planned], R-6.6.12 [planned], R-6.7.27 [planned], R-6.8.15 [verified]
+Implements: R-2.1 [verified], R-2.6 [verified], R-2.8 [verified], R-3.4.2 [verified], R-2.10.1 [verified], R-2.10.2 [planned], R-2.10.3 [verified], R-2.10.4 [planned], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.9 [planned], R-2.10.10 [planned], R-2.10.12 [planned], R-2.10.13 [planned], R-2.10.14 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [planned], R-2.10.24 [planned], R-2.10.25 [planned], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified], R-2.10.30 [planned], R-2.10.31 [planned], R-2.10.35 [verified], R-2.10.36 [verified], R-2.10.37 [verified], R-2.10.38 [planned], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.6.7 [planned], R-6.6.8 [planned], R-6.6.9 [planned], R-6.6.10 [planned], R-6.6.12 [planned], R-6.7.27 [planned], R-6.8.15 [verified]
 
 ## Engine (`engine.go`)
 
@@ -43,13 +43,15 @@ Implements: R-2.10.3 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2
 - **shutdown** → `Complete` (no failure recorded)
 - **fatal** (401) → `recordFailure` with nil delayFn + `Complete`
 
-Trial result routing: `handleTrialResult()` runs before classification. Trial success → `tracker.ReleaseScope(scopeKey)` (unblocks all held actions). Trial failure → `tracker.ExtendTrial(scopeKey, nextAt)` with 2× backoff.
+Trial result routing: `handleTrialResult()` runs before classification. Trial success → `tracker.ReleaseScope(scopeKey)` + `resetScopeRetryTimes(scopeKey)` (thundering herd: resets `next_retry_at` for all sync_failures matching the scope, then kicks the retrier) + `armTrialTimer()`. Trial failure → reads block's current `TrialInterval`, doubles it, caps per scope type (`maxTrialIntervalForIssueType`), updates the block, calls `tracker.ExtendTrial(scopeKey, nextAt)` + `armTrialTimer()`. Per-scope caps: quota 1h, rate_limited 10m, service 10m (R-2.10.6/R-2.10.8/R-2.10.14).
 
-`feedScopeDetection()` feeds results into `ScopeState.UpdateScope()`. When a threshold is crossed, creates a scope block via `applyScopeBlock()` which calls `tracker.HoldScope()`.
+**Trial timer**: `armTrialTimer()` sets a `time.Timer` to fire at the earliest `NextTrialAt` across all scope blocks (via `tracker.EarliestTrialAt()`). The timer fires in `drainWorkerResults`'s select loop, calling `tracker.NextDueTrial(now)` + `tracker.DispatchTrial(key)` in a loop until no more trials are due. Called after `applyScopeBlock()`, `handleTrialResult()`, and trial dispatch. Same pattern as `FailureRetrier.armTimer`.
+
+`feedScopeDetection()` feeds results into `ScopeState.UpdateScope()`. When a threshold is crossed, creates a scope block via `applyScopeBlock()` which calls `tracker.HoldScope()` + `armTrialTimer()`.
 
 The engine owns all completion decisions — workers are pure executors. Engine-owned counters (`succeeded`, `failed` atomics) replace the worker-owned counters removed in this refactoring. `drainWorkerResults()` processes results concurrently for both one-shot and watch modes.
 
-`recordFailure()` sets category based on `delayFn`: non-nil → `"transient"`, nil → `"actionable"`. Delegates to `SyncStore.RecordFailure()` which computes `next_retry_at` via the `delayFn`. The `FailureRetrier` sweeps `sync_failures` for due items and re-injects them via buffer → planner → tracker.
+`recordFailure()` sets category based on `delayFn`: non-nil → `"transient"`, nil → `"actionable"`. Populates `ScopeKey` via `deriveScopeKey(r)` from HTTP status and shortcut context. Delegates to `SyncStore.RecordFailure()` which computes `next_retry_at` via the `delayFn`. The `FailureRetrier` sweeps `sync_failures` for due items and re-injects them via buffer → planner → tracker.
 
 ### ScopeState
 

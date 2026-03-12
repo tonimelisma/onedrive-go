@@ -447,3 +447,27 @@ func TestScope_SuccessResetsServiceWindow(t *testing.T) {
 	result := ss.UpdateScope(&r)
 	assert.False(t, result.Block, "first failure after service window reset should not trigger")
 }
+
+// ---------------------------------------------------------------------------
+// maxTrialIntervalForIssueType (R-2.10.14)
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.10.6, R-2.10.8, R-2.10.14
+func TestMaxTrialIntervalForIssueType(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		issueType string
+		want      time.Duration
+	}{
+		{"quota_exceeded", 1 * time.Hour},
+		{"rate_limited", 10 * time.Minute},
+		{"service_outage", 10 * time.Minute},
+		{"unknown_type", 10 * time.Minute}, // default
+	}
+
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, maxTrialIntervalForIssueType(tt.issueType),
+			"maxTrialIntervalForIssueType(%q)", tt.issueType)
+	}
+}

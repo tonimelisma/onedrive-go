@@ -655,6 +655,77 @@ func TestRecordFailure_SetsIssueTypeAndScopeKey(t *testing.T) {
 // sync_failures no longer drives retry scheduling.
 
 // ---------------------------------------------------------------------------
+// ResetRetryTimesForScope (R-2.10.11, R-2.10.15)
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.10.11, R-2.10.15
+func TestResetRetryTimesForScope(t *testing.T) {
+	t.Parallel()
+
+	now := time.Unix(2000, 0)
+	mgr := newTestManager(t)
+	mgr.nowFunc = func() time.Time { return now }
+	ctx := context.Background()
+
+	futureNano := now.Add(10 * time.Minute).UnixNano()
+	pastNano := now.Add(-1 * time.Minute).UnixNano()
+
+	// Insert failures: one with future retry (matching scope), one with past retry (matching scope),
+	// one with future retry (different scope), one actionable (matching scope).
+	for _, tc := range []struct {
+		path, scope, category string
+		retryAt               int64
+	}{
+		{"future-match.txt", "throttle:account", "transient", futureNano},
+		{"past-match.txt", "throttle:account", "transient", pastNano},
+		{"future-other.txt", "service", "transient", futureNano},
+		{"actionable-match.txt", "throttle:account", "actionable", futureNano},
+	} {
+		_, err := mgr.rawDB().ExecContext(ctx,
+			`INSERT INTO sync_failures
+				(path, drive_id, direction, category, failure_count, next_retry_at,
+				 last_error, http_status, first_seen_at, last_seen_at, scope_key)
+			VALUES (?, ?, 'download', ?, 1, ?, 'err', 429, ?, ?, ?)`,
+			tc.path, testDriveID, tc.category, tc.retryAt,
+			now.UnixNano(), now.UnixNano(), tc.scope,
+		)
+		require.NoError(t, err, "inserting %s", tc.path)
+	}
+
+	err := mgr.ResetRetryTimesForScope(ctx, "throttle:account")
+	require.NoError(t, err)
+
+	// future-match.txt: transient + matching scope + future retry → should be reset to now
+	var retryAt int64
+	err = mgr.rawDB().QueryRowContext(ctx,
+		"SELECT next_retry_at FROM sync_failures WHERE path = ?", "future-match.txt",
+	).Scan(&retryAt)
+	require.NoError(t, err)
+	assert.Equal(t, now.UnixNano(), retryAt, "future transient matching scope should be reset to now")
+
+	// past-match.txt: retry already in the past → should NOT be changed
+	err = mgr.rawDB().QueryRowContext(ctx,
+		"SELECT next_retry_at FROM sync_failures WHERE path = ?", "past-match.txt",
+	).Scan(&retryAt)
+	require.NoError(t, err)
+	assert.Equal(t, pastNano, retryAt, "past retry should not be changed")
+
+	// future-other.txt: different scope → should NOT be changed
+	err = mgr.rawDB().QueryRowContext(ctx,
+		"SELECT next_retry_at FROM sync_failures WHERE path = ?", "future-other.txt",
+	).Scan(&retryAt)
+	require.NoError(t, err)
+	assert.Equal(t, futureNano, retryAt, "different scope should not be changed")
+
+	// actionable-match.txt: actionable category → should NOT be changed
+	err = mgr.rawDB().QueryRowContext(ctx,
+		"SELECT next_retry_at FROM sync_failures WHERE path = ?", "actionable-match.txt",
+	).Scan(&retryAt)
+	require.NoError(t, err)
+	assert.Equal(t, futureNano, retryAt, "actionable failures should not be changed")
+}
+
+// ---------------------------------------------------------------------------
 // CommitOutcome remote_state extension tests
 // ---------------------------------------------------------------------------
 

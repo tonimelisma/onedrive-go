@@ -74,6 +74,7 @@ type SyncFailureRecorder interface {
 	MarkSyncFailureActionable(ctx context.Context, path string, driveID driveid.ID) error
 	UpsertActionableFailures(ctx context.Context, failures []ActionableFailure) error
 	ClearResolvedActionableFailures(ctx context.Context, issueType string, currentPaths []string) error
+	ResetRetryTimesForScope(ctx context.Context, scopeKey string) error
 }
 
 // StateAdmin is called by CLI commands and daemon maintenance.
