@@ -49,6 +49,7 @@ type SyncFailureParams struct {
 	DriveID    driveid.ID // required
 	Direction  string     // "upload", "download", "delete"
 	IssueType  string     // e.g. IssueQuotaExceeded; empty = generic transient
+	Category   string     // "transient" or "actionable" — set by the engine, never by the store
 	ErrMsg     string
 	HTTPStatus int
 	FileSize   int64  // optional, for upload validation context
@@ -59,8 +60,12 @@ type SyncFailureParams struct {
 
 // SyncFailureRecorder is called by the engine to persist all failure types
 // (upload, download, delete) in the unified sync_failures table.
+// The delayFn parameter computes backoff from failure count: engine passes
+// retry.Reconcile.Delay for transient failures, nil for actionable (no retry).
+// The store calls delayFn atomically inside the transaction — it never imports
+// the retry package.
 type SyncFailureRecorder interface {
-	RecordFailure(ctx context.Context, p *SyncFailureParams) error
+	RecordFailure(ctx context.Context, p *SyncFailureParams, delayFn func(int) time.Duration) error
 	ListSyncFailures(ctx context.Context) ([]SyncFailureRow, error)
 	ListSyncFailuresByIssueType(ctx context.Context, issueType string) ([]SyncFailureRow, error)
 	ListActionableFailures(ctx context.Context) ([]SyncFailureRow, error)

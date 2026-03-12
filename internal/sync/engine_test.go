@@ -2402,7 +2402,6 @@ func TestDrainWorkerResults_MultipleResults(t *testing.T) {
 		tracker.Add(&Action{Path: fmt.Sprintf("action-%d", id), Type: ActionUpload}, id, nil)
 	}
 	eng.tracker = tracker
-	t.Cleanup(func() { tracker.StopDelayed() })
 
 	results := make(chan WorkerResult, 3)
 	results <- WorkerResult{Path: "a.txt", ActionType: ActionUpload, Success: false, ErrMsg: "fail1", HTTPStatus: 500, ActionID: 1}
@@ -2424,14 +2423,13 @@ func TestDrainWorkerResults_MultipleResults(t *testing.T) {
 
 // setupEngineTracker creates a one-shot DepTracker on the engine and adds a
 // dummy action for the given actionID so that processWorkerResult can call
-// Complete/ReQueue without panicking on nil tracker or unknown ID.
+// Complete without panicking on nil tracker or unknown ID.
 func setupEngineTracker(t *testing.T, eng *Engine, actionID int64) {
 	t.Helper()
 	tracker := NewDepTracker(16, eng.logger)
 	dummyAction := &Action{Path: "dummy", Type: ActionDownload}
 	tracker.Add(dummyAction, actionID, nil)
 	eng.tracker = tracker
-	t.Cleanup(func() { tracker.StopDelayed() })
 }
 
 func TestProcessWorkerResult_UploadFailure_RecordsLocalIssue(t *testing.T) {
@@ -2723,33 +2721,5 @@ func TestClassifyResult(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// computeBackoff — exponential backoff with 5-minute cap (R-6.8.11)
-// ---------------------------------------------------------------------------
-
-// Validates: R-6.8.11
-func TestComputeBackoff(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		attempt int
-		want    time.Duration
-	}{
-		{attempt: 0, want: 1 * time.Second},
-		{attempt: 1, want: 2 * time.Second},
-		{attempt: 2, want: 4 * time.Second},
-		{attempt: 5, want: 32 * time.Second},
-		{attempt: 8, want: 256 * time.Second},
-		{attempt: 9, want: 5 * time.Minute},  // 512s exceeds cap → clamped
-		{attempt: 20, want: 5 * time.Minute}, // stays at cap
-	}
-
-	for _, tt := range tests {
-		t.Run(fmt.Sprintf("attempt_%d", tt.attempt), func(t *testing.T) {
-			t.Parallel()
-
-			got := computeBackoff(tt.attempt)
-			assert.Equal(t, tt.want, got, "backoff for attempt %d", tt.attempt)
-		})
-	}
-}
+// computeBackoff tests removed — backoff is now handled by retry.Reconcile
+// policy via sync_failures + FailureRetrier. See internal/retry/named_test.go.

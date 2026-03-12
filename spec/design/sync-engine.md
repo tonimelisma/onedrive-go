@@ -34,13 +34,22 @@ Classification table: 401 → fatal, 403 → skip (with handle403 side effect), 
 
 Implements: R-2.10.3 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [planned], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified]
 
-`processWorkerResult()` classifies each result and routes it: success → Complete + counter, requeue → ReQueue with backoff, scopeBlock → feed scope detection + ReQueue, skip → handle403 side effect + Complete, shutdown → Complete (no failure), fatal → Complete.
+`processWorkerResult()` classifies each result and routes it — all cases call `tracker.Complete()` (never `ReQueue`):
+
+- **success** → `Complete` + `RecordSuccess` (scope window reset) + counter
+- **requeue** (transient) → `recordFailure` with `retry.Reconcile.Delay` + `Complete` + `feedScopeDetection` + `retrier.Kick()`
+- **scopeBlock** (429, 507) → `recordFailure` with `retry.Reconcile.Delay` + `feedScopeDetection` + `Complete` + `retrier.Kick()`
+- **skip** (non-retryable) → handle403 side effect + `recordFailure` with nil delayFn (no `next_retry_at`) + `Complete`
+- **shutdown** → `Complete` (no failure recorded)
+- **fatal** (401) → `recordFailure` with nil delayFn + `Complete`
+
+Trial result routing: `handleTrialResult()` runs before classification. Trial success → `tracker.ReleaseScope(scopeKey)` (unblocks all held actions). Trial failure → `tracker.ExtendTrial(scopeKey, nextAt)` with 2× backoff.
 
 `feedScopeDetection()` feeds results into `ScopeState.UpdateScope()`. When a threshold is crossed, creates a scope block via `applyScopeBlock()` which calls `tracker.HoldScope()`.
 
 The engine owns all completion decisions — workers are pure executors. Engine-owned counters (`succeeded`, `failed` atomics) replace the worker-owned counters removed in this refactoring. `drainWorkerResults()` processes results concurrently for both one-shot and watch modes.
 
-Unified backoff: `min(1s * 2^attempt, 5min)` via `computeBackoff()`. Single mechanism — no reconciler handoff. `recordDiagnosticFailure()` writes to `sync_failures` for `onedrive status` visibility without retry scheduling.
+`recordFailure()` sets category based on `delayFn`: non-nil → `"transient"`, nil → `"actionable"`. Delegates to `SyncStore.RecordFailure()` which computes `next_retry_at` via the `delayFn`. The `FailureRetrier` sweeps `sync_failures` for due items and re-injects them via buffer → planner → tracker.
 
 ### ScopeState
 

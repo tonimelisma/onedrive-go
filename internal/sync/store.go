@@ -22,6 +22,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	stdsync "sync"
 	"time"
 
 	// Pure-Go SQLite driver (no CGO).
@@ -40,10 +41,11 @@ var (
 // SyncStore is the sole writer to the sync database. It loads the
 // baseline at pass start and commits outcomes at pass end.
 type SyncStore struct {
-	db       *sql.DB
-	baseline *Baseline
-	logger   *slog.Logger
-	nowFunc  func() time.Time // injectable for deterministic tests
+	db         *sql.DB
+	baseline   *Baseline
+	baselineMu stdsync.Mutex // guards baseline cache (Load is called from multiple workers)
+	logger     *slog.Logger
+	nowFunc    func() time.Time // injectable for deterministic tests
 }
 
 // NewSyncStore opens the SQLite database at dbPath, runs migrations,

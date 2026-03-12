@@ -381,7 +381,7 @@ func TestRecordFailure_TransitionsDownloading(t *testing.T) {
 		Direction:  "download",
 		ErrMsg:     "connection reset",
 		HTTPStatus: 500,
-	})
+	}, nil)
 	require.NoError(t, err)
 
 	row := readRemoteStateRow(t, mgr.rawDB(), "item1")
@@ -428,7 +428,7 @@ func TestRecordFailure_OptimisticConcurrency_NoMatch(t *testing.T) {
 		Direction:  "download",
 		ErrMsg:     "some error",
 		HTTPStatus: 500,
-	})
+	}, nil)
 	require.NoError(t, err)
 
 	// Status should remain synced.
@@ -463,7 +463,7 @@ func TestRecordFailure_IncreasesFailureCount(t *testing.T) {
 		Direction:  "download",
 		ErrMsg:     "err1",
 		HTTPStatus: 500,
-	})
+	}, nil)
 	require.NoError(t, err)
 
 	// Failure count is now in sync_failures.
@@ -486,7 +486,7 @@ func TestRecordFailure_IncreasesFailureCount(t *testing.T) {
 		Direction:  "download",
 		ErrMsg:     "err2",
 		HTTPStatus: 503,
-	})
+	}, nil)
 	require.NoError(t, err)
 
 	err = mgr.rawDB().QueryRowContext(ctx,
@@ -517,7 +517,7 @@ func TestRecordFailure_DeleteTransitionsDeleting(t *testing.T) {
 		Direction:  "download",
 		ErrMsg:     "permission denied",
 		HTTPStatus: 403,
-	})
+	}, nil)
 	require.NoError(t, err)
 
 	row := readRemoteStateRow(t, mgr.rawDB(), "item1")
@@ -560,7 +560,7 @@ func TestRecordFailure_Download(t *testing.T) {
 		Direction:  "download",
 		ErrMsg:     "connection reset",
 		HTTPStatus: 500,
-	})
+	}, nil)
 	require.NoError(t, err)
 
 	// remote_state should transition to download_failed.
@@ -603,7 +603,7 @@ func TestRecordFailure_Delete(t *testing.T) {
 		Direction:  "delete",
 		ErrMsg:     "permission denied",
 		HTTPStatus: 403,
-	})
+	}, nil)
 	require.NoError(t, err)
 
 	row := readRemoteStateRow(t, mgr.rawDB(), "item1")
@@ -631,10 +631,11 @@ func TestRecordFailure_SetsIssueTypeAndScopeKey(t *testing.T) {
 		DriveID:    driveid.New(testDriveID),
 		Direction:  "download",
 		IssueType:  IssueQuotaExceeded,
+		Category:   "actionable",
 		ErrMsg:     "quota full",
 		HTTPStatus: 507,
 		ScopeKey:   "quota:own",
-	})
+	}, nil)
 	require.NoError(t, err)
 
 	// Verify issue_type, scope_key, and category are set correctly.

@@ -17,6 +17,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // forceSafetyMax is the maximum threshold used when --force is set,
@@ -111,9 +112,13 @@ type Engine struct {
 	scopeState *ScopeState
 
 	// tracker is a reference to the active DepTracker, needed by
-	// processWorkerResult to call Complete/ReQueue. Set during executePlan
+	// processWorkerResult to call Complete. Set during executePlan
 	// (one-shot) or RunWatch (watch mode).
 	tracker *DepTracker
+
+	// retrier re-injects failed items from sync_failures into the pipeline.
+	// nil in one-shot mode — failed items are retried on the next `onedrive sync`.
+	retrier *FailureRetrier
 
 	// Engine-owned result counters. Workers are pure executors — the engine
 	// classifies results and owns all final disposition counts (R-6.8.9).
@@ -357,7 +362,7 @@ func (e *Engine) postSyncHousekeeping() {
 
 // executePlan populates the dependency tracker and runs the worker pool.
 // The engine processes results concurrently while workers run, classifying
-// each result and calling tracker.Complete or tracker.ReQueue (R-6.8.9).
+// each result and calling tracker.Complete (R-6.8.9).
 func (e *Engine) executePlan(
 	ctx context.Context, plan *ActionPlan, report *SyncReport,
 	bl *Baseline,
@@ -383,7 +388,8 @@ func (e *Engine) executePlan(
 
 	// Reset engine counters for this pass.
 	e.resetResultStats()
-	e.scopeState = NewScopeState(e.nowFunc, e.logger)
+	// Scope detection is watch-mode only. In one-shot, feedScopeDetection
+	// is nil-guarded (e.scopeState == nil → no-op).
 
 	tracker := NewDepTracker(len(plan.Actions), e.logger)
 	e.tracker = tracker
@@ -405,14 +411,12 @@ func (e *Engine) executePlan(
 	pool := NewWorkerPool(e.execCfg, tracker, e.baseline, e.logger, len(plan.Actions))
 	pool.Start(ctx, e.transferWorkers)
 
-	// Process results concurrently — engine classifies and calls Complete/ReQueue.
+	// Process results concurrently — engine classifies and calls Complete.
 	// The drain goroutine reads from the results channel while workers run.
 	go e.drainWorkerResults(ctx, pool.Results(), bl)
 
 	pool.Wait() // blocks until tracker.Done() (all actions at terminal state)
 	pool.Stop() // cancels workers, closes results → drain goroutine exits
-
-	tracker.StopDelayed() // stop delayed queue timer
 
 	report.Succeeded, report.Failed, report.Errors = e.resultStats()
 }
@@ -879,22 +883,22 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 		}
 
 		pool.Stop()
-		tracker.StopDelayed()
 
 		e.logger.Info("watch mode stopped")
 	}()
 
 	// Drain worker results in a background goroutine. The engine classifies
-	// results and calls tracker.Complete or tracker.ReQueue (R-6.8.9).
+	// results and calls tracker.Complete (R-6.8.9).
 	go e.drainWorkerResults(ctx, pool.Results(), bl)
 
 	// Step 4: Create buffer and debounced output.
 	buf := NewBuffer(e.logger)
 	ready := buf.FlushDebounced(ctx, e.resolveDebounce(opts))
 
-	// Note: FailureRetrier retry loop is eliminated. The tracker is the sole
-	// retry mechanism (R-6.8.10). Crash recovery is handled by RunWatch's
-	// initial RunOnce + ResetInProgressStates.
+	// Step 4b: Start the failure retrier — sole retry mechanism (R-6.8.10).
+	// Re-injects due sync_failures via buffer → planner → tracker.
+	e.retrier = NewFailureRetrier(e.baseline, buf, tracker, e.logger)
+	go e.retrier.Run(ctx)
 
 	// Step 5: Start observer goroutines.
 	errs, activeObservers := e.startObservers(ctx, bl, mode, buf, opts)
@@ -1042,24 +1046,23 @@ func isOutagePattern(err error) bool {
 	return strings.Contains(ge.Message, "ObjectHandle is Invalid")
 }
 
-// maxBackoffDuration caps the exponential backoff delay at 5 minutes.
-const maxBackoffDuration = 5 * time.Minute
-
-// computeBackoff returns the delay for a re-queued action based on its
-// attempt number. Unified non-compounding backoff: min(1s * 2^attempt, 5min)
-// (R-6.8.11). Single curve, no handoff between mechanisms.
-func computeBackoff(attempt int) time.Duration {
-	return min(time.Second<<uint(attempt), maxBackoffDuration)
-}
-
 // processWorkerResult handles a single worker result: classifies via
-// classifyResult, routes to tracker.Complete or tracker.ReQueue, and
-// records diagnostic failures. The engine owns all completion decisions —
-// workers execute and report, the engine classifies and routes (R-6.8.9).
+// classifyResult, records failure in sync_failures, and calls
+// tracker.Complete. The engine owns all completion decisions — workers
+// execute and report, the engine classifies and routes (R-6.8.9).
+//
+// No ReQueue — failed items are persisted in sync_failures with
+// next_retry_at. The FailureRetrier re-injects them via buffer → planner →
+// tracker when due (R-6.8.10).
 //
 // Shared by both one-shot (executePlan drain goroutine) and watch
 // (drainWorkerResults) paths.
 func (e *Engine) processWorkerResult(ctx context.Context, r *WorkerResult, bl *Baseline, shortcuts []Shortcut) {
+	// Handle trial results — check if a scope trial succeeded or failed.
+	if r.IsTrial && r.TrialScopeKey != "" {
+		e.handleTrialResult(r)
+	}
+
 	class, _ := classifyResult(r)
 
 	switch class {
@@ -1071,29 +1074,31 @@ func (e *Engine) processWorkerResult(ctx context.Context, r *WorkerResult, bl *B
 		e.succeeded.Add(1)
 
 	case resultRequeue:
-		e.recordDiagnosticFailure(ctx, r)
-		backoff := computeBackoff(r.Attempt)
-		if err := e.tracker.ReQueue(r.ActionID, e.nowFunc().Add(backoff)); err != nil {
-			// Budget exhausted (one-shot mode only). Complete as failed.
-			e.tracker.Complete(r.ActionID)
-			e.recordError(r)
-		}
+		// Transient failure: record with backoff, complete, kick reconciler.
+		e.recordFailure(ctx, r, retry.Reconcile.Delay)
+		e.tracker.Complete(r.ActionID)
+		e.recordError(r)
 		e.feedScopeDetection(r)
+		if e.retrier != nil {
+			e.retrier.Kick()
+		}
 
 	case resultScopeBlock:
-		e.recordDiagnosticFailure(ctx, r)
+		// Scope-level failure (429, 507): record with backoff, detect scope.
+		e.recordFailure(ctx, r, retry.Reconcile.Delay)
 		e.feedScopeDetection(r)
-		// Re-queue the action — it will be caught by the scope gate in dispatch().
-		if err := e.tracker.ReQueue(r.ActionID, time.Time{}); err != nil {
-			e.tracker.Complete(r.ActionID)
-			e.recordError(r)
+		e.tracker.Complete(r.ActionID)
+		e.recordError(r)
+		if e.retrier != nil {
+			e.retrier.Kick()
 		}
 
 	case resultSkip:
 		if r.HTTPStatus == http.StatusForbidden && e.permChecker != nil {
 			e.handle403(ctx, bl, r.Path, shortcuts)
 		}
-		e.recordDiagnosticFailure(ctx, r)
+		// Non-retryable: record with nil delayFn (no next_retry_at).
+		e.recordFailure(ctx, r, nil)
 		e.tracker.Complete(r.ActionID)
 		e.recordError(r)
 
@@ -1102,10 +1107,25 @@ func (e *Engine) processWorkerResult(ctx context.Context, r *WorkerResult, bl *B
 		e.tracker.Complete(r.ActionID)
 
 	case resultFatal:
-		e.recordDiagnosticFailure(ctx, r)
+		// Fatal (e.g., 401): record with nil delayFn, no retry.
+		e.recordFailure(ctx, r, nil)
 		e.tracker.Complete(r.ActionID)
 		e.recordError(r)
 	}
+}
+
+// handleTrialResult processes the result of a scope trial action. On
+// success, releases the scope. On failure, extends the trial interval
+// with backoff.
+func (e *Engine) handleTrialResult(r *WorkerResult) {
+	class, _ := classifyResult(r)
+	if class == resultSuccess {
+		e.tracker.ReleaseScope(r.TrialScopeKey)
+		return
+	}
+
+	// Trial failed — extend the interval with 2× backoff.
+	e.tracker.ExtendTrial(r.TrialScopeKey, e.nowFunc().Add(r.RetryAfter*2+time.Second))
 }
 
 // feedScopeDetection feeds a worker result into scope detection sliding
@@ -1153,11 +1173,10 @@ func (e *Engine) recordError(r *WorkerResult) {
 	}
 }
 
-// recordDiagnosticFailure writes a failure to sync_failures for diagnostic
-// visibility (onedrive status). No retry scheduling — the tracker handles
-// all retry timing. This replaces the old RecordFailure which computed
-// all retry timing.
-func (e *Engine) recordDiagnosticFailure(ctx context.Context, r *WorkerResult) {
+// recordFailure writes a failure to sync_failures with the given delay
+// function for computing next_retry_at. For transient failures, pass
+// retry.Reconcile.Delay; for actionable/fatal, pass nil (no retry).
+func (e *Engine) recordFailure(ctx context.Context, r *WorkerResult, delayFn func(int) time.Duration) {
 	direction := directionFromAction(r.ActionType)
 
 	driveID := r.DriveID
@@ -1165,14 +1184,22 @@ func (e *Engine) recordDiagnosticFailure(ctx context.Context, r *WorkerResult) {
 		driveID = e.driveID
 	}
 
+	// The engine's routing already classifies each result — delayFn is non-nil
+	// for transient failures (retryable) and nil for actionable/fatal ones.
+	category := strTransient
+	if delayFn == nil {
+		category = strActionable
+	}
+
 	if recErr := e.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:       r.Path,
 		DriveID:    driveID,
 		Direction:  direction,
+		Category:   category,
 		ErrMsg:     r.ErrMsg,
 		HTTPStatus: r.HTTPStatus,
-	}); recErr != nil {
-		e.logger.Warn("failed to record diagnostic failure",
+	}, delayFn); recErr != nil {
+		e.logger.Warn("failed to record failure",
 			slog.String("path", r.Path),
 			slog.String("error", recErr.Error()),
 		)

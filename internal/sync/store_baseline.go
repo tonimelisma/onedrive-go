@@ -82,6 +82,9 @@ const (
 // because SyncStore exclusively owns the database (sole-writer
 // pattern with SetMaxOpenConns(1)).
 func (m *SyncStore) Load(ctx context.Context) (*Baseline, error) {
+	m.baselineMu.Lock()
+	defer m.baselineMu.Unlock()
+
 	if m.baseline != nil {
 		return m.baseline, nil
 	}

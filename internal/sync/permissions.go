@@ -169,7 +169,7 @@ func (e *Engine) handle403(ctx context.Context, bl *Baseline, failedPath string,
 		IssueType:  IssuePermissionDenied,
 		ErrMsg:     "folder is read-only (no write access)",
 		HTTPStatus: http.StatusForbidden,
-	}); issueErr != nil {
+	}, nil); issueErr != nil {
 		e.logger.Warn("handle403: failed to record permission issue",
 			slog.String("path", boundary),
 			slog.String("error", issueErr.Error()),
@@ -203,7 +203,7 @@ func (e *Engine) handlePermissionCheckError(ctx context.Context, err error, fail
 			IssueType:  IssuePermissionDenied,
 			ErrMsg:     "folder not found on remote (deleted or inaccessible)",
 			HTTPStatus: http.StatusNotFound,
-		}); issueErr != nil {
+		}, nil); issueErr != nil {
 			e.logger.Warn("handle403: failed to record issue for missing folder",
 				slog.String("path", parentFolder),
 				slog.String("error", issueErr.Error()),

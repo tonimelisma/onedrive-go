@@ -35,11 +35,11 @@ What each error is, how it's classified, and what scope it maps to.
 | `service_outage` | HTTP 503 with `Retry-After` | transient | `service` | Service (all drives) | All actions, all drives + shortcuts | R-2.10.28 |
 | `service_outage` | HTTP 400 with `innerError.code == "invalidRequest"` and known outage body (e.g., "ObjectHandle is Invalid") (disambiguated from phantom drive 400s (R-6.7.11) by error body inspection — phantom drives fail on one specific drive ID; outage 400s affect all endpoints) | transient | `service` | Service (all drives) | All actions, all drives + shortcuts | R-6.7.14 |
 | `auth_expired` | HTTP 401 after token refresh fails | fatal | — | Session | Sync terminates | R-6.8.14 |
-| `server_error` | HTTP 5xx (individual, before scope triggers) | transient | — (file-scoped) | File | Nothing (re-queued via tracker) | R-6.8.10 |
-| `request_timeout` | HTTP 408 (individual) | transient | — (file-scoped) | File | Nothing (re-queued via tracker) | R-6.8.10 |
-| `transient_conflict` | HTTP 412 (individual) | transient | — (file-scoped) | File | Nothing (re-queued via tracker) | R-6.8.10 |
-| `transient_not_found` | HTTP 404 (individual, resolves after delta reordering) | transient | — (file-scoped) | File | Nothing (re-queued via tracker) | R-6.8.10 |
-| `resource_locked` | HTTP 423 (SharePoint co-authoring lock) | transient | — (file-scoped) | File | Nothing (re-queued via tracker) | R-6.8.10 |
+| `server_error` | HTTP 5xx (individual, before scope triggers) | transient | — (file-scoped) | File | Nothing (retried via sync_failures + reconciler) | R-6.8.10 |
+| `request_timeout` | HTTP 408 (individual) | transient | — (file-scoped) | File | Nothing (retried via sync_failures + reconciler) | R-6.8.10 |
+| `transient_conflict` | HTTP 412 (individual) | transient | — (file-scoped) | File | Nothing (retried via sync_failures + reconciler) | R-6.8.10 |
+| `transient_not_found` | HTTP 404 (individual, resolves after delta reordering) | transient | — (file-scoped) | File | Nothing (retried via sync_failures + reconciler) | R-6.8.10 |
+| `resource_locked` | HTTP 423 (SharePoint co-authoring lock) | transient | — (file-scoped) | File | Nothing (retried via sync_failures + reconciler) | R-6.8.10 |
 | — (shutdown) | context.Canceled or context.DeadlineExceeded | — | — | Session | Nothing (action discarded, not recorded) | R-2.8.3 |
 
 Note: context.Canceled/DeadlineExceeded actions are discarded during graceful shutdown — they do not appear in Tables 2, 3, or 4 because no sync_failures entry is created. See R-2.8.3 (two-signal shutdown).
@@ -53,7 +53,7 @@ How each failure is detected and how the system recovers. The "Mechanism" column
 | Scope Key | Mechanism | Detection | Threshold | Recovery | First Trial | Backoff | Max Interval | Persist Scope? |
 |---|---|---|---|---|---|---|---|---|
 | — (file-scoped, observation) | Scanner filter | Scanner walk | Immediate | Auto-clear when file renamed/deleted/excluded | — | — | — | sync_failures only |
-| — (file-scoped, transient) | ScopeState + tracker | Single HTTP error | Immediate | Tracker re-queue (5 attempts: 1s, 2s, 4s, 8s, 16s) then escalate to sync_failures for reconciler (30s, 60s, 120s... max 1h) | — | — | — | sync_failures after budget |
+| — (file-scoped, transient) | ScopeState + sync_failures | Single HTTP error | Immediate | sync_failures with next_retry_at (1s, 2s, 4s... max 1h). Reconciler re-injects via buffer→planner→tracker. | — | — | — | sync_failures immediately |
 | `quota:own` | ScopeState + trial | Pattern | 3 unique own-drive paths with 507 in 10s | Trial (real upload to own drive) | 5 min | 2× | 1 hour | No (rediscover: 3 requests) |
 | `quota:shortcut:{d}:{i}` | ScopeState + trial | Pattern | 3 unique paths to same shortcut with 507 in 10s | Trial (real upload to that shortcut) | 5 min | 2× | 1 hour | No |
 | `perm:remote:*` | permissionCache + recheck | `handle403` + `walkPermissionBoundary` | Single 403 + boundary walk | Queryable: `recheckPermissions()` each sync pass | — | — | — | Via sync_failures |
@@ -109,7 +109,7 @@ When each failure type is automatically removed without user intervention.
 | `rate_limited` | Trial succeeds after `Retry-After` | Scope block cleared (no sync_failures entry for transient) | R-2.10.7 |
 | `service_outage` | Trial succeeds | Scope block cleared | R-2.10.8 |
 | `auth_expired` | Never (fatal) | User must run `onedrive login` | — |
-| `server_error` | Retry succeeds (in-memory or reconciler) | In-memory: tracker re-queue succeeds, no sync_failures written. Exhausted: reconciler retry succeeds, sync_failures entry cleared | R-6.8.10, R-2.10.41 |
+| `server_error` | Retry succeeds | Reconciler retry succeeds, sync_failures entry cleared | R-6.8.10, R-2.10.41 |
 | `request_timeout` | Same as `server_error` | Same as above | R-6.8.10, R-2.10.41 |
 | `transient_conflict` | Same as `server_error` | Same as above | R-6.8.10, R-2.10.41 |
 | `transient_not_found` | Same as `server_error` | Same as above | R-6.8.10, R-2.10.41 |
@@ -147,13 +147,13 @@ What gets deleted from the old architecture. Ensures no remnants.
 
 | What | Where | Replaced By | Requirement |
 |---|---|---|---|
-| `withRetry()` loop | `sync/executor.go` | Tracker re-queue + engine classification | R-6.8.9 |
+| `withRetry()` loop | `sync/executor.go` | Engine classification + sync_failures + reconciler | R-6.8.9 |
 | `classifyError()` | `sync/executor.go` | Engine `classifyResult()` | R-6.8.9 |
 | `classifyStatusCode()` | `sync/executor.go` | Engine `classifyResult()` | R-6.8.9 |
-| `sleepFunc` field | `sync/executor.go` | Non-blocking tracker delayed queue | R-6.8.7 |
+| `sleepFunc` field | `sync/executor.go` | Non-blocking sync_failures + reconciler retry | R-6.8.7 |
 | `errClassRetryable/Fatal/Skip` | `sync/executor.go` | Engine `resultClass` enum | R-6.8.9 |
-| `executorMaxRetries` const | `sync/executor.go` | Tracker `MaxAttempts` (default 5) | R-6.8.10 |
-| `retry.Action` policy | `internal/retry/named.go` | Tracker backoff schedule | R-6.8.10 |
+| `executorMaxRetries` const | `sync/executor.go` | Reconciler backoff (sync_failures `next_retry_at`) | R-6.8.10 |
+| `retry.Action` policy | `internal/retry/named.go` | Reconciler backoff schedule (1s→1h) | R-6.8.10 |
 | `circuit.go` + test | `internal/retry/` | Scope-based blocking with trial actions | — (dead code) |
 | Circuit breaker docs | `internal/retry/doc.go` | Remove section (references deleted code) | — |
 | `FailureRecorder` interface | `sync/store_interfaces.go` | Consolidated into `SyncFailureRecorder` | — (consolidation) |
@@ -364,7 +364,6 @@ The system has three independent retry loops that nest and compound:
     ├─ [Tracker] ← actions from ActionPlan
     │     ├─ dependency resolution (existing, unchanged)
     │     ├─ scope gate: if scope blocked → held queue
-    │     ├─ NotBefore gate: if not yet due → delayed queue (priority queue)
     │     ├─ trial dispatch: when trial timer fires → release ONE held action
     │     └─ Ready() → workers
     │
@@ -375,8 +374,8 @@ The system has three independent retry loops that nest and compound:
     │
     ├─ classifyResult(WorkerResult)  ← SINGLE classification point
     │     ├─ success → commitOutcome, Tracker.Complete(id)
-    │     ├─ transient → Tracker.ReQueue(id, backoff), then check scope
-    │     │                └─ if attempts >= budget → sync_failures (persistent retry)
+    │     ├─ transient → Tracker.Complete(id), record in sync_failures with next_retry_at, check scope
+    │     │                └─ reconciler re-injects when next_retry_at is due
     │     ├─ actionable → sync_failures (no retry), then check scope escalation
     │     ├─ scopeSignal → set ScopeBlock (429 immediate, 507/5xx pattern-based)
     │     └─ skip/fatal → record, Tracker.Complete(id)
@@ -395,10 +394,10 @@ The system has three independent retry loops that nest and compound:
 | Graph client (CLI) | 5 retries, blocking sleep | **Unchanged** — CLI `ls`/`get`/`put` need standalone retry (no tracker) | CLI is a different use case with different constraints |
 | Executor `withRetry` | 3-attempt retry loop with `sleepFunc` | **Deleted entirely** — executor becomes thin action dispatch | *"Functions do one thing"* — execute, don't schedule |
 | Executor `classifyError` | Error classification in executor | **Moved to engine** `classifyResult()` | Single classification point eliminates contradictions between layers |
-| `retry.Action` policy | Used by executor withRetry | **Deleted** — tracker handles all retry timing | No executor retry → no executor retry policy |
+| `retry.Action` policy | Used by executor withRetry | **Deleted** — reconciler handles all retry timing via sync_failures | No executor retry → no executor retry policy |
 | `retry.SyncTransport` | N/A | **Created then deleted** — sync callers use raw `http.DefaultTransport` directly | No named policy constant needed; sync gets raw result without transport blocking |
-| Tracker | Dependency dispatch only | **Extended**: delayed queue (NotBefore), scope gating, trial dispatch, sole retry mechanism | *"Prefer large, long-term solutions"* — tracker becomes the unified scheduler |
-| Reconciler (FailureRetrier) | Primary retry mechanism (30s-1h) | **Eliminated**: retry loop deleted. Tracker handles all retry. sync_failures is diagnostic-only. Crash recovery via `ResetInProgressStates`. | One retry mechanism, not two. |
+| Tracker | Dependency dispatch only | **Extended**: scope gating and dispatch gates. No retry logic — retry handled by sync_failures + reconciler. | *"Prefer large, long-term solutions"* — tracker is the scope-aware dispatch gate |
+| Reconciler (FailureRetrier) | Primary retry mechanism (30s-1h) | **Restored**: sole retry mechanism. Re-injects from sync_failures via buffer→planner→tracker. Single backoff curve (1s→1h). Crash recovery via `ResetInProgressStates`. | One retry mechanism, not two. |
 | Engine result processing | Records failures, handles 403 | **Extended**: classification, scope detection, retry-vs-record decisions | *"Functions do one thing"* — engine orchestrates, everything else executes |
 
 **Eng Philosophy: "App hasn't been launched yet. No backwards compatibility."** The executor retry loop, transport retry in the sync path, and the `retry.Action` policy are deleted. No compatibility shims. No fallback paths. The new architecture replaces the old one completely.
@@ -448,7 +447,7 @@ type ScopeBlock struct {
 // Translation from internal IDs to local paths happens at recording time.
 ```
 
-**When a scope block is set.** The tracker moves all matching actions from its ready/delayed queues to a per-scope **held queue**. No new actions for the blocked scope are dispatched. Workers that were already executing in-flight actions complete naturally — their results route through the standard path and end up held if the scope is still blocked.
+**When a scope block is set.** The tracker moves all matching actions from its ready queue to a per-scope **held queue**. No new actions for the blocked scope are dispatched. Workers that were already executing in-flight actions complete naturally — their results route through the standard path and end up held if the scope is still blocked.
 
 **Trial actions — not probes.** When a scope block is active, the tracker periodically releases exactly ONE action from the held queue as a **trial**. This is a real sync action — an actual upload, download, or delete — not a synthetic health check.
 
@@ -536,7 +535,7 @@ Partially. Microsoft doesn't explicitly say "per-user limit" vs "per-tenant limi
 
 **Proactive rate reduction:** Parse `RateLimit-Remaining` headers when present. When remaining quota falls below 20%, reduce request rate before hitting 429. This is an optimization layered on top, not part of the retry architecture.
 
-**Component assignment (deferred):** The graph client parses RateLimit-Remaining from response headers and exposes it on GraphError. The engine reads it after each WorkerResult and, when remaining quota falls below 20%, reduces dispatch rate by inserting artificial NotBefore delays on queued actions. This prevents 429s proactively rather than reacting to them. Implementation is deferred to a post-launch optimization pass — the scope-based retry architecture handles 429s reactively as the primary mechanism. R-6.8.5 status remains [planned].
+**Component assignment (deferred):** The graph client parses RateLimit-Remaining from response headers and exposes it on GraphError. The engine reads it after each WorkerResult and, when remaining quota falls below 20%, reduces dispatch rate (e.g., by throttling the tracker's ready channel). This prevents 429s proactively rather than reacting to them. Implementation is deferred to a post-launch optimization pass — the scope-based retry architecture handles 429s reactively as the primary mechanism. R-6.8.5 status remains [planned].
 
 ### 7.4.1: Shared Drives and Scope Boundaries
 
@@ -604,37 +603,35 @@ func (s *ScopeState) IsBlocked(action Action) string {
 
 ### 7.5: Unified Backoff Schedule
 
-One non-compounding backoff schedule for all transient errors. No nested loops. Each phase is sequential, not multiplied.
+One non-compounding backoff schedule for all transient errors. No nested loops. A single mechanism: sync_failures + reconciler.
 
-| Phase | Attempt | Backoff Before | Worker Blocks? | Mechanism |
-|-------|---------|----------------|----------------|-----------|
-| 1st attempt | 1 | — | HTTP RTT only (~100-500ms) | Worker → Graph client (single attempt) |
-| 1st re-queue | — | 1s | No | Tracker delayed queue |
-| 2nd attempt | 2 | — | HTTP RTT only | Worker → Graph client |
-| 2nd re-queue | — | 2s | No | Tracker delayed queue |
-| 3rd attempt | 3 | — | HTTP RTT only | Worker → Graph client |
-| 3rd re-queue | — | 4s | No | Tracker delayed queue |
-| 4th attempt | 4 | — | HTTP RTT only | Worker → Graph client |
-| 4th re-queue | — | 8s | No | Tracker delayed queue |
-| 5th attempt | 5 | — | HTTP RTT only | Worker → Graph client |
-| Escalate | — | — | No | Record in sync_failures, next_retry_at = now + 30s |
-| 1st reconciler | 6 | 30s | No | Reconciler timer re-injection |
-| 2nd reconciler | 7 | 60s | No | Reconciler timer |
-| ... | ... | doubles | No | Up to 1 hour max |
+| Attempt | Backoff (next_retry_at) | Worker Blocks? | Mechanism |
+|---------|------------------------|----------------|-----------|
+| 1st attempt | — | HTTP RTT only (~100-500ms) | Worker → Graph client (single attempt) |
+| Failure recorded | 1s | No | sync_failures with next_retry_at = now + 1s |
+| 2nd attempt | — | HTTP RTT only | Reconciler re-injects → buffer → planner → tracker → worker |
+| Failure recorded | 2s | No | sync_failures with next_retry_at = now + 2s |
+| 3rd attempt | — | HTTP RTT only | Reconciler re-injects |
+| Failure recorded | 4s | No | sync_failures with next_retry_at = now + 4s |
+| 4th attempt | — | HTTP RTT only | Reconciler re-injects |
+| Failure recorded | 8s | No | sync_failures with next_retry_at = now + 8s |
+| ... | doubles | No | Up to 1 hour max |
+
+All retry is via sync_failures + reconciler. There is no in-memory retry budget, no tracker re-queue, no escalation between mechanisms. The backoff curve is: 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s, 256s, 512s, 1024s, 2048s, 3600s (capped at 1h), with ±25% jitter.
 
 **Comparison with current architecture:**
 
 | Metric | Current (nested) | Redesigned (unified) |
 |--------|-----------------|---------------------|
-| HTTP attempts before escalation | 20 (5 transport × 4 executor) | 5 |
-| Time to exhaust in-memory budget | ~5 minutes | ~15 seconds |
-| Worker blocked per action | ~5 minutes | ~2.5 seconds (HTTP RTT only) |
+| HTTP attempts before persistent record | 20 (5 transport × 4 executor) | 1 |
+| Time to first persistent record | ~5 minutes | Immediate (after first failure) |
+| Worker blocked per action | ~5 minutes | ~500ms (HTTP RTT only) |
 | Worker blocked during outage (8 workers) | All 8 for ~5 min each | All 8 for ~500ms each |
 | Wasted requests for 100k files during outage | 2,000,000 | 3-5 (scope detection) + periodic trials |
 
 **If scope detection triggers** (e.g., after 3 consecutive failures from different files), remaining actions never attempt. They sit in the held queue until a trial action succeeds. Total wasted work during a 30-minute outage: 3 scope detection requests + ~15 trial actions = ~18 requests. Compare to current: 2M requests.
 
-**In-memory vs persistent retry.** The tracker's delayed queue is in-memory. If the process crashes, these re-queued actions are lost. This is fine: on restart, the reconciler resets stuck items, the delta observer re-observes changes, and the idempotent planner re-creates actions. The existing crash recovery path handles this without any changes. Actions that exhausted their in-memory budget (5 attempts) are recorded in `sync_failures` with `next_retry_at` and survive crashes via the reconciler.
+**Crash recovery.** All retry state is in sync_failures (SQLite), so it survives crashes. On restart, the reconciler resets stuck items, the delta observer re-observes changes, and the idempotent planner re-creates actions. No in-memory retry state to lose.
 
 ### 7.6: Component Details
 
@@ -648,38 +645,32 @@ type TrackedAction struct {
     depsLeft    atomic.Int32
     dependents  []*TrackedAction
 
-    // New fields for unified retry
-    NotBefore   time.Time  // don't dispatch until this time
-    Attempt     int        // total attempt count across re-queues (starts at 0)
-    MaxAttempts int        // max before escalating to sync_failures (default: 5)
-    IsTrial     bool       // true when released as a scope trial action
+    // New fields for scope gating
+    IsTrial       bool    // true when released as a scope trial action
+    TrialScopeKey string  // scope key this trial is testing (empty if not a trial)
 }
 ```
+
+The tracker has no retry logic — no NotBefore, no Attempt, no MaxAttempts. Retry is handled entirely by sync_failures + reconciler. The tracker's role is dependency resolution, scope-aware dispatch gating, and trial action dispatch.
 
 The `Action` field already contains target drive information needed for scope matching. The tracker's `ScopeState.IsBlocked(action)` (§7.4.1) reads `action.TargetsOwnDrive()` and `action.RemoteDrive`/`action.RemoteItem` to match against scope keys. No additional fields needed on `TrackedAction` — the scope context flows from the action itself.
 
 **Tracker dispatch changes (pseudocode):**
 
-**Integration with DepTracker.** The scope and timing gates are inserted AFTER dependency resolution, not as a top-level entry point. In the existing codebase, `DepTracker.dispatch()` is called when `depsLeft` reaches 0 (all dependencies satisfied). The new gates wrap this dispatch point:
+**Integration with DepTracker.** The scope gate is inserted AFTER dependency resolution, not as a top-level entry point. In the existing codebase, `DepTracker.dispatch()` is called when `depsLeft` reaches 0 (all dependencies satisfied). The scope gate wraps this dispatch point:
 
 ```go
 // dispatch is called when all dependencies are satisfied (depsLeft == 0).
 // This is the ONLY dispatch point — called from Add() (no deps) and
 // Complete() (dependent's last dep satisfied).
 func (dt *DepTracker) dispatch(ta *TrackedAction) {
-    // Gate 1: Scope block. If scope is blocked, hold the action.
+    // Single gate: Scope block. If scope is blocked, hold the action.
     // When scope clears, releaseScope() re-calls dispatch() for each held action.
     if scopeKey := dt.scopeState.BlockedScope(ta.Action); scopeKey != "" {
         dt.held[scopeKey] = append(dt.held[scopeKey], ta)
         return
     }
-    // Gate 2: Timing. If NotBefore is in the future, delay.
-    // Timer goroutine re-calls dispatch() when NotBefore expires.
-    if ta.NotBefore.After(dt.clock.Now()) {
-        dt.delayed.Push(ta)  // min-heap ordered by NotBefore
-        return
-    }
-    // All gates passed: send to workers.
+    // Gate passed: send to workers.
     dt.ready <- ta
 }
 
@@ -689,6 +680,7 @@ func (dt *DepTracker) dispatchTrial(scopeKey string) {
     if len(items) == 0 { return }
     trial := items[0]
     trial.IsTrial = true
+    trial.TrialScopeKey = scopeKey
     dt.held[scopeKey] = items[1:]
     dt.ready <- trial
 }
@@ -697,13 +689,14 @@ func (dt *DepTracker) dispatchTrial(scopeKey string) {
 func (dt *DepTracker) releaseScope(scopeKey string) {
     for _, ta := range dt.held[scopeKey] {
         ta.IsTrial = false
-        dt.dispatch(ta)  // re-evaluate: check other scopes, NotBefore, etc.
+        ta.TrialScopeKey = ""
+        dt.dispatch(ta)  // re-evaluate: check other scopes
     }
     delete(dt.held, scopeKey)
 }
 ```
 
-A timer goroutine monitors the delayed queue and moves actions to ready when NotBefore expires. A separate timer per scope block fires trial dispatches at the configured interval.
+A timer per scope block fires trial dispatches at the configured interval. There is no delayed queue — retry timing is managed by sync_failures `next_retry_at` + reconciler.
 
 **WorkerResult struct (carries target drive context):**
 
@@ -833,13 +826,13 @@ For CLI callers (`ls`, `get`, `put`), the graph client continues to use `retry.T
 | `SyncTransport` | Was MaxAttempts: 0, used by sync workers | **Deleted** — sync callers use raw `http.DefaultTransport` directly (no named policy constant needed) |
 | `DriveDiscovery` | Drive initialization (3 attempts) | **Unchanged** — not part of sync action path |
 | `Action` | Executor `withRetry` (3 attempts) | **Deleted** — executor retry loop removed |
-| `Reconcile` | Reconciler persistent retry (infinite, 30s-1h) | **Deleted** — tracker is the sole retry mechanism. sync_failures is diagnostic-only. FailureRetrier eliminated. |
+| `Reconcile` | Reconciler persistent retry (infinite, 30s-1h) | **Restored**: Base=1s, Max=1h, 2× multiplier, ±25% jitter. Single retry curve for all sync failures. FailureRetrier is the sole retry mechanism. |
 | `WatchLocal` | Local observer retry (infinite, 1-30s) | **Unchanged** — observer-level, not action-level |
 | `WatchRemote` | Remote observer retry (infinite, 5s-5min) | **Unchanged** — observer-level, not action-level |
 
 ### 7.8: Requirements
 
-**R-6.8.7 (revised):** During sync operations, workers shall never block on retry backoff. When a transient error occurs, the action shall be returned to the tracker with a `NotBefore` timestamp and incremented attempt counter. The worker shall immediately pull the next available action. Workers block only for HTTP round-trip time (~100-500ms per attempt), never for backoff sleeps.
+**R-6.8.7 (revised):** During sync operations, workers shall never block on retry backoff. When a transient error occurs, the action shall be completed in the tracker and the failure recorded in sync_failures with a `next_retry_at` timestamp. The worker shall immediately pull the next available action. Workers block only for HTTP round-trip time (~100-500ms per attempt), never for backoff sleeps.
 
 **R-6.8.8 (new):** For sync operations, the graph client shall use a zero-retry transport policy (`SyncTransport`, `MaxAttempts: 0`). Each worker dispatch results in exactly one HTTP request. The graph client shall retain its full retry policy (`Transport`, `MaxAttempts: 5`) for standalone CLI operations. The transport policy shall be a constructor parameter.
 
@@ -859,9 +852,9 @@ Scope blocks shall prevent the tracker from dispatching new actions matching the
 
 **R-2.10.15 (new):** When a scope block is set, at most `transfer_workers` actions may be in-flight. These complete normally and route through standard retry. This bounded waste (equal to worker count) is accepted as the cost of lock-free dispatch. No locking between result processing and action dispatch.
 
-**R-6.8.10 (new):** Each sync action shall have an in-memory retry budget (default: 5 attempts via tracker re-queue with backoff 1s, 2s, 4s, 8s, 16s). After exhausting this budget, the action shall be recorded in `sync_failures` with `next_retry_at` for reconciler-based persistent retry. In-memory retry uses the tracker's delayed queue; persistent retry uses the reconciler's timer-driven re-injection.
+**R-6.8.10 (new):** When a transient error occurs, the action shall be immediately recorded in `sync_failures` with a `next_retry_at` timestamp. There is no in-memory retry budget — all retry is via sync_failures + reconciler. The reconciler periodically checks for entries where `next_retry_at <= now` and re-injects them into the normal pipeline (buffer → planner → tracker → worker). On success, the sync_failures entry is cleared.
 
-**R-6.8.11 (new):** The unified backoff schedule shall be non-compounding: tracker re-queue phase (1s, 2s, 4s, 8s, 16s) followed by reconciler phase (30s, 60s, 120s, 240s... up to 1 hour). These are sequential phases with escalation, not nested loops. No retry duration shall be multiplied by another retry duration.
+**R-6.8.11 (new):** The unified backoff schedule shall be a single exponential curve via sync_failures + reconciler: 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s, 256s, 512s, 1024s, 2048s, 3600s (capped at 1 hour), with ±25% jitter. There is no two-phase escalation — one mechanism, one curve. No retry duration shall be multiplied by another retry duration.
 
 **R-6.8.4 (unchanged):** The system shall treat HTTP 429 as account-scoped: when any drive receives 429, all drives under the same account shall respect the `Retry-After` deadline.
 
@@ -1035,7 +1028,7 @@ This is a scope-aware retry scenario. The first few failures detect a shared cau
 
 **Phase 2: Scope Detection (target-drive-aware)**
 
-6. Engine receives result 1. `classifyResult()` → 507 → `resultActionable` (issue_type: `quota_exceeded`).
+6. Engine receives result 1. `classifyResult()` → 507 → `resultActionable` (issue_type: `quota_exceeded`). Engine completes action 1 in tracker, records in sync_failures with `next_retry_at = now + 1s`, kicks reconciler.
 7. Engine checks action's target drive: this upload targets the user's own drive (not a shortcut).
 8. Engine records in sync_failures: `category='actionable', issue_type='quota_exceeded'`.
 9. Engine `updateScope()`: adds to own-drive sliding window. 1 of 3 needed for pattern.
@@ -1133,7 +1126,7 @@ If a 507 occurs on a shared folder shortcut instead:
     INFO Rate limit cleared, resuming sync.
     ```
 17. No WARN. 429 is transient and self-resolving. Individual retry attempts logged at DEBUG.
-18. `onedrive issues` shows nothing (429 is transient, not actionable, not persisted to sync_failures unless scope block persists beyond reconciler threshold).
+18. `onedrive issues` shows nothing (429 is transient, not actionable). Individual actions that failed with 429 are recorded in sync_failures with `next_retry_at` for reconciler-based retry, but are cleared on success.
 
 **Scope:** Account-level. All drives (own drive AND all shortcuts), all action types. Duration bounded by Retry-After from server. Workers idle (correct — API rejects all requests during throttle, regardless of target drive). No wasted requests. This is the ONLY scope type where shortcuts and own-drive actions are blocked identically — because the bottleneck is the OAuth token, not the target drive's resources.
 
@@ -1231,9 +1224,9 @@ This is the primary retry + scope scenario. The system must detect an outage, st
 **Phase 2: Transient Retry via Tracker**
 
 5. Engine `classifyResult()` → 502 → `resultTransient`.
-6. Engine tells tracker: re-queue action 1 with `NotBefore = now + 1s`, `Attempt = 1`.
+6. Engine completes action 1 in tracker, records failure in sync_failures with `next_retry_at = now + 1s`, kicks reconciler.
 7. Engine `updateScope()`: adds to sliding window. 1 of 5 needed for service-scope.
-8. Workers 2-5 also fail with 5xx. Engine re-queues each.
+8. Workers 2-5 also fail with 5xx. Engine completes each, records each in sync_failures.
 9. After result 5: 5 consecutive 5xx from different files within 30 seconds.
 
 **Phase 3: Service-Scope Block**
@@ -1245,7 +1238,7 @@ This is the primary retry + scope scenario. The system must detect an outage, st
 
 **Phase 4: Trial Actions**
 
-14. Re-queued actions 1-5 (from step 6) have `NotBefore` timestamps, but the scope block prevents dispatch even after `NotBefore` expires. They're moved to the held queue.
+14. Actions 1-5 (from step 6) are recorded in sync_failures with `next_retry_at` timestamps. When the reconciler re-injects them, they flow through buffer → planner → tracker. If the scope block is still active, the tracker holds them in the held queue until a trial succeeds.
 15. 60 seconds pass. Trial timer fires.
 16. Tracker releases ONE action as trial. Worker executes → 502 (outage continues).
 17. Engine: trial failed, same scope error. `TrialInterval` doubles to 120s. Re-hold action.
@@ -1641,12 +1634,12 @@ Everything that gets deleted during this redesign. *Eng Philosophy: "Ensure afte
 | `internal/retry/circuit_test.go` | **Entire file** | Tests for dead code. |
 | `internal/retry/doc.go` | Circuit breaker documentation section | References deleted code. |
 | `internal/retry/named.go` | `Action` policy definition | Executor retry loop removed — no consumer. |
-| `internal/sync/executor.go` | `withRetry()` function | Retry loop replaced by tracker re-queue + engine classification. |
+| `internal/sync/executor.go` | `withRetry()` function | Retry loop replaced by engine classification + sync_failures + reconciler. |
 | `internal/sync/executor.go` | `classifyError()` function | Classification moved to engine `classifyResult()`. |
 | `internal/sync/executor.go` | `classifyStatusCode()` function | Classification moved to engine `classifyResult()`. |
 | `internal/sync/executor.go` | `sleepFunc` field and injection | No more blocking sleep in executor. |
 | `internal/sync/executor.go` | `errClassRetryable`, `errClassFatal`, `errClassSkip` constants | Engine uses `resultClass` enum instead. |
-| `internal/sync/executor.go` | `executorMaxRetries` constant | No executor retry budget — tracker handles retry budget. |
+| `internal/sync/executor.go` | `executorMaxRetries` constant | No executor retry budget — reconciler handles retry via sync_failures. |
 | `internal/sync/executor.go` | 423 `errClassSkip` handling | Reclassified: 423 is transient in engine `classifyResult()`. Non-blocking retry handles multi-hour SharePoint locks. |
 | `internal/sync/observer_remote.go` | `isValidOneDriveName()` call (line ~405) | Wrong: applies upload naming rules to downloads. OneDrive enforces its own rules server-side. |
 | `internal/sync/upload_validation.go` | **Entire file** | Upload validator deleted. All validation moved to observation layer (`shouldObserve()` + Stage 2 size check). |
@@ -1665,14 +1658,14 @@ The store has two overlapping failure recording interfaces: `FailureRecorder` (o
 
 | Component | Why Unchanged |
 |-----------|---------------|
-| Hash mismatch retry (`driveops/transfer_manager.go downloadWithHashRetry`, max 2 retries) | Data integrity mechanism, not transient error retry. Operates on successful HTTP responses where content hash doesn't match remote. Orthogonal to the failure redesign. The tracker does not see hash retry iterations. The 5-attempt in-memory budget (§7.5) is for transport/API errors only; hash mismatches are a separate concern with their own bounded retry (3 attempts, no backoff). |
+| Hash mismatch retry (`driveops/transfer_manager.go downloadWithHashRetry`, max 2 retries) | Data integrity mechanism, not transient error retry. Operates on successful HTTP responses where content hash doesn't match remote. Orthogonal to the failure redesign. The tracker does not see hash retry iterations. The sync_failures + reconciler retry (§7.5) is for transport/API errors only; hash mismatches are a separate concern with their own bounded retry (3 attempts, no backoff). |
 | `waitForThrottle()` in graph client | **Demoted from primary gate to defense-in-depth safety net.** The primary 429 gate is the tracker's scope block. `waitForThrottle` catches the race window (up to `transfer_workers` in-flight requests). NOT deleted — retained as a second layer. See §7.6. |
 
 ### Policy Deletions
 
 | Policy | Current Use | Replacement |
 |--------|------------|-------------|
-| `retry.Action` | Executor `withRetry` (3 attempts, 1s-unbounded) | Tracker re-queue (5 attempts, 1s-16s) + reconciler (30s-1h) |
+| `retry.Action` | Executor `withRetry` (3 attempts, 1s-unbounded) | sync_failures + reconciler (single curve: 1s→1h) |
 | `retry.CircuitBreaker` | Unused (dead code) | Scope-based blocking with trial actions |
 
 ### Behavioral Removals
@@ -1681,10 +1674,10 @@ The store has two overlapping failure recording interfaces: `FailureRecorder` (o
 |----------|---------|----------------|
 | Executor retry loop | 3 attempts with blocking sleep per action | **Removed.** Executor dispatches once, returns result. |
 | Transport retry in sync path | 5 HTTP attempts with 1-60s blocking sleep | **Removed for sync.** `SyncTransport` (MaxAttempts: 0) = single HTTP attempt. CLI retains 5-attempt `Transport`. |
-| Nested retry multiplication | 5 transport × 4 executor = 20 attempts per action | **Eliminated.** One attempt per dispatch. 5 in-memory re-queues max before escalation. |
+| Nested retry multiplication | 5 transport × 4 executor = 20 attempts per action | **Eliminated.** One attempt per dispatch. Failures go to sync_failures immediately for reconciler retry. |
 | Three-way error classification | `graph/errors.go isRetryable()` + `executor.go classifyError()` + `engine.go processWorkerResult()` | **Collapsed to one.** Engine `classifyResult()` is the single classification point. |
-| Per-action blocking backoff | Worker sleeps 1-60s between retries | **Eliminated.** Workers never sleep. Backoff is in tracker delayed queue (non-blocking). |
-| 423 skip (no retry) | `errClassSkip` — SharePoint locks silently dropped | **Reclassified as transient.** Non-blocking retry via tracker handles multi-hour locks naturally. Reconciler backoff (30s→1h) matches lock durations. |
+| Per-action blocking backoff | Worker sleeps 1-60s between retries | **Eliminated.** Workers never sleep. Backoff is in sync_failures `next_retry_at` (non-blocking, reconciler-driven). |
+| 423 skip (no retry) | `errClassSkip` — SharePoint locks silently dropped | **Reclassified as transient.** Non-blocking retry via sync_failures + reconciler handles multi-hour locks naturally. Backoff (1s→1h) matches lock durations. |
 
 ### Spec/Design Removals
 
@@ -1777,12 +1770,10 @@ The big one. This is the architectural heart of the redesign — tracker extensi
 - Delete `retry.Action` policy
 
 **Additions/Changes:**
-1. **TrackedAction extensions:** `NotBefore`, `Attempt`, `MaxAttempts`, `IsTrial`.
-2. **Tracker delayed queue:** Min-heap ordered by NotBefore. Timer goroutine dispatches when due.
-3. **Tracker held queue:** Per-scope-key map. Scope gating in `dispatch()` (after dependency resolution).
-4. **Tracker `ReQueue()`:** Increment attempt, set NotBefore, re-enter dispatch pipeline.
-5. **Tracker `releaseScope()`:** Release all held actions for a scope key.
-6. **Tracker `dispatchTrial()`:** Release one action marked IsTrial from held queue.
+1. **TrackedAction extensions:** `IsTrial`, `TrialScopeKey`.
+2. **Tracker held queue:** Per-scope-key map. Scope gating in `dispatch()` (after dependency resolution).
+3. **Tracker `releaseScope()`:** Release all held actions for a scope key.
+4. **Tracker `dispatchTrial()`:** Release one action marked IsTrial from held queue.
 7. **WorkerResult extensions:** `TargetDriveID`, `ShortcutKey`, `RetryAfter`. Worker populates from action.
 8. **Engine `classifyResult()`:** Single classification point. Maps HTTP codes + error types → result class.
 9. **Engine `updateScope()`:** Target-drive-aware routing. Sliding window detection. ScopeBlock management.
@@ -1791,7 +1782,7 @@ The big one. This is the architectural heart of the redesign — tracker extensi
 12. **Graph client sync callers:** Use `SyncTransport` (0 retries) instead of `Transport`. This applies to both `doRetry` and `doPreAuthRetry` (upload chunks, download streams) via the parameterized policy from Phase 2.
 13. **Engine result recording:** `processWorkerResult` calls `RecordSyncFailure` (from Phase 2 interface consolidation) instead of the deleted `RecordFailure`.
 
-TDD: Extensive test suite for tracker re-queue, scope gating, held/delayed queues, trial dispatch, engine classification, scope detection windows, WorkerResult routing.
+TDD: Extensive test suite for scope gating, held queues, trial dispatch, engine classification, scope detection windows, WorkerResult routing, sync_failures recording and reconciler re-injection.
 
 ### Phase 5: Specific Scopes (1 PR)
 
@@ -1865,7 +1856,7 @@ All proposed new/changed requirements, organized by area. Failure handling princ
 | R-2.10.8 | For `service_outage`: trial timing starts at 60 seconds (or `Retry-After` if present), doubles on failure, max 10 minutes. A successful trial action proves the service is available and clears the scope. | **new** | 7.3 |
 | R-2.10.9 | When `recheckPermissions()` discovers a previously-denied folder is now writable, the system shall clear the scope block and release all held actions under that folder immediately. | **new** (enhance existing) | 8 |
 | R-2.10.10 | When the scanner observes a previously-blocked file or directory is now accessible, the system shall clear the failure and release held actions. | **new** | 8 |
-| R-2.10.11 | When a scope block clears (via trial success or recheck), the system shall release all held actions immediately. Individual action `failure_count` is preserved (backoff resumes from previous level if the scope re-blocks), but `NotBefore` is set to now (immediate dispatch). | **new** | 7.3 |
+| R-2.10.11 | When a scope block clears (via trial success or recheck), the system shall release all held actions immediately for dispatch. | **new** | 7.3 |
 | R-2.10.12 | When a local file operation fails with `os.ErrPermission`, the system shall check parent directory accessibility. If the directory is inaccessible: record one `local_permission_denied` at directory level and suppress all operations under it. If the directory is accessible: record at file level. | **new** | 8 |
 | R-2.10.13 | The system shall recheck `local_permission_denied` directory-level issues at the start of each sync pass, and auto-clear when accessible. | **new** | 8 |
 | R-2.10.14 | Trial timing per scope type: `rate_limited` starts at Retry-After (max 10 min); `quota_exceeded` starts at 5 min (2× backoff, max 1 hour); `service_outage` starts at 60s or Retry-After (2× backoff, max 10 min). | **new** | 7.3 |
@@ -1954,22 +1945,22 @@ All proposed new/changed requirements, organized by area. Failure handling princ
 | R-6.8.4 | Treat HTTP 429 as account-scoped: all drives under the same account share the throttle. | **new** | 7.4 |
 | R-6.8.5 | Parse `RateLimit-Remaining` headers; proactively slow when <20% remaining. | **new** | 7.4 |
 | R-6.8.6 | Honor `Retry-After` from both 429 and 503 responses. Populate `GraphError.RetryAfter` field. | **new** | 7.4 |
-| R-6.8.7 | During sync, workers shall never block on retry backoff. Actions returned to tracker with `NotBefore` and incremented attempt. Workers block only for HTTP RTT (~100-500ms). | **new** (revised) | 7.2 |
+| R-6.8.7 | During sync, workers shall never block on retry backoff. Failures recorded in sync_failures with `next_retry_at`; reconciler re-injects when due. Workers block only for HTTP RTT (~100-500ms). | **new** (revised) | 7.2 |
 | R-6.8.8 | For sync operations, graph client shall use `SyncTransport` policy (`MaxAttempts: 0`). Each dispatch = one HTTP request. CLI retains `Transport` policy (`MaxAttempts: 5`). Policy is a constructor parameter. | **new** | 7.2 |
 | R-6.8.9 | The executor shall not contain a retry loop. `withRetry`, `classifyError`, `classifyStatusCode`, `sleepFunc`, and `errClass` constants removed. Executor dispatches; engine classifies and schedules. | **new** | 7.2 |
-| R-6.8.10 | Each sync action has an in-memory retry budget (default: 5 attempts). Budget exhaustion → escalate to sync_failures with `next_retry_at` for reconciler-based persistent retry. | **new** | 7.5 |
-| R-6.8.11 | Unified non-compounding backoff: tracker re-queue (1s, 2s, 4s, 8s, 16s) then reconciler (30s, 60s, 120s... max 1h). Sequential phases, not nested loops. | **new** | 7.5 |
+| R-6.8.10 | Transient failures recorded immediately in sync_failures with `next_retry_at`. All retry via sync_failures + reconciler. No in-memory retry budget. | **new** | 7.5 |
+| R-6.8.11 | Unified non-compounding backoff: single curve via sync_failures + reconciler (1s, 2s, 4s... max 1h, ±25% jitter). One mechanism, one curve. | **new** | 7.5 |
 | R-6.8.12 | Target drive identity flows through the pipeline without lookup: planner → Action → TrackedAction → WorkerResult → engine. No component queries drive identity from DB or API during failure handling. | **new** | 11.9 |
 | R-6.8.13 | `Action` shall expose `TargetsOwnDrive() bool` and `ShortcutKey() string`. These are the only drive-identity accessors for scope matching and routing. Internal drive/item IDs are encapsulated. | **new** | 11.9 |
 | R-6.8.14 | `SyncTransport` (`MaxAttempts: 0`) shall still perform transparent 401 token refresh inside `doOnce()`. Auth refresh is lifecycle, not transient retry. If refresh fails, return `ErrUnauthorized` (fatal). | **new** | 12.7 |
-| R-6.8.15 | The engine shall classify the following HTTP status codes as transient: 5xx (`server_error`), 408 (`request_timeout`), 412 (`transient_conflict`), 404 (`transient_not_found`), 423 (`resource_locked`). Transient errors are retried via tracker re-queue (5 attempts: 1s, 2s, 4s, 8s, 16s). When exhausted, recorded in sync_failures with the specific issue_type for reconciler-based persistent retry. 423 reclassified from skip to transient — non-blocking retry handles multi-hour locks naturally. | **new** | Table 1, 7.2 |
+| R-6.8.15 | The engine shall classify the following HTTP status codes as transient: 5xx (`server_error`), 408 (`request_timeout`), 412 (`transient_conflict`), 404 (`transient_not_found`), 423 (`resource_locked`). Transient errors are recorded immediately in sync_failures with the specific issue_type and retried via reconciler (single curve: 1s→1h). 423 reclassified from skip to transient — non-blocking retry via reconciler handles multi-hour locks naturally. | **new** | Table 1, 7.2 |
 
 ### Design Document Changes
 
 | Document | Changes |
 |----------|---------|
 | `spec/design/retry.md` | Add `SyncTransport` policy. Delete `Action` policy. Delete `CircuitBreaker` (dead code, superseded by scope-based blocking). Document unified backoff schedule. Document scope-classified retry with trial actions. |
-| `spec/design/sync-execution.md` | Delete executor `withRetry`, `classifyError`, `classifyStatusCode`, `sleepFunc`, `errClass`. Executor becomes thin action dispatcher. Document TrackedAction extensions (NotBefore, Attempt, IsTrial). Document tracker delayed queue, held queue, scope gating, trial dispatch. |
+| `spec/design/sync-execution.md` | Delete executor `withRetry`, `classifyError`, `classifyStatusCode`, `sleepFunc`, `errClass`. Executor becomes thin action dispatcher. Document TrackedAction extensions (IsTrial, TrialScopeKey). Document tracker held queue, scope gating, trial dispatch. Retry via sync_failures + reconciler (no tracker delayed queue). |
 | `spec/design/sync-engine.md` | Add `classifyResult()` (single classification point, target-drive-aware). Add `updateScope()` (scope pattern detection, routes to correct scope key based on target drive). Add `WorkerResult` struct with `TargetDriveID` and `ShortcutKey`. Add `ScopeState` data structure. Add stale failure cleanup step. Add aggregated logging. Add scanner `ScanResult` contract (Events + Skipped). |
 | `spec/design/sync-observation.md` | Scanner returns `ScanResult{Events, Skipped}` instead of `[]ChangeEvent`. Add `SkippedItem` struct. Scanner remains a pure observer with no DB dependency. Remove `isValidOneDriveName()` call from remote observer (observer_remote.go:405) — OneDrive enforces its own naming rules server-side; upload naming rules should not apply to downloads. |
 | `spec/design/sync-store.md` | Add new issue types: `quota_exceeded`, `local_permission_denied`, `case_collision`, `disk_full`, `service_outage`. Add scope key column to `sync_failures` (e.g., `"quota:own"`, `"quota:shortcut:$drive:$item"`) for per-scope grouping in `issues` display. Add `UpsertActionableFailures` batch method. Add `ClearResolvedActionableFailures` method. |
@@ -1988,7 +1979,7 @@ All proposed new/changed requirements, organized by area. Failure handling princ
 | **Executor** | `sync/executor.go` | Delete `withRetry`, `classifyError`, `classifyStatusCode`, `sleepFunc`, `errClassRetryable/Fatal/Skip`. Action methods call graph client directly, return Outcome. |
 | **Engine classification** | `sync/engine.go` | Add `classifyResult()`. Move all error classification here. |
 | **Engine scope** | `sync/engine.go` | Add `ScopeState`, `updateScope()` (target-drive-aware: routes 507/403 to per-drive scope keys, 429/5xx to account/service keys), sliding window detection, scope block management. |
-| **Tracker** | `sync/tracker.go` | Add `NotBefore`, `Attempt`, `IsTrial` to `TrackedAction`. Add delayed queue (min-heap). Add held queue (per scope key). Add scope gating in dispatch. Add trial timer. Add `ReQueue()`, `releaseScope()`, `dispatchTrial()`. |
+| **Tracker** | `sync/tracker.go` | Add `IsTrial`, `TrialScopeKey` to `TrackedAction`. Add held queue (per scope key). Add scope gating in dispatch. Add trial timer. Add `releaseScope()`, `dispatchTrial()`. No delayed queue, no ReQueue — retry handled by sync_failures + reconciler. |
 | **Scanner** | `sync/scanner.go` | Return `ScanResult{Events, Skipped}` instead of `[]ChangeEvent`. Add `SkippedItem` struct. |
 | **Engine observation** | `sync/engine.go` | Process `ScanResult.Skipped`: `recordSkippedItems()`, `clearResolvedActionableFailures()`. Aggregated logging. |
 | **Engine permissions** | `sync/engine.go`, `permissions.go` | Add `os.ErrPermission` detection. Add parent directory check. Add directory-scope block. |
@@ -2012,8 +2003,8 @@ All proposed new/changed requirements, organized by area. Failure handling princ
 | 507 not retried at transport level | R-2.10.1 |
 | Executor has no retry loop, returns result directly | R-6.8.9 |
 | Engine `classifyResult` correctly maps all HTTP codes and error types | R-6.8.9 |
-| Tracker re-queue with NotBefore: action not dispatched before time | R-6.8.7 |
-| Tracker re-queue: worker picks up next action immediately | R-6.8.7 |
+| Transient failure recorded in sync_failures with next_retry_at | R-6.8.7, R-6.8.10 |
+| Reconciler re-injects from sync_failures when next_retry_at due | R-6.8.7 |
 | Tracker scope block: matching actions moved to held queue | R-2.10.3 |
 | Scope detection: 3 consecutive 507 from different files → account block | R-2.10.3 |
 | Scope detection: 5 consecutive 5xx from different files → service block | R-2.10.3 |
@@ -2023,7 +2014,7 @@ All proposed new/changed requirements, organized by area. Failure handling princ
 | Trial failure: interval doubled, action re-held | R-2.10.5, R-2.10.14 |
 | Trial timing per scope type | R-2.10.14 |
 | Race bound: max worker-count in-flight during scope set | R-2.10.15 |
-| In-memory budget exhausted → escalate to sync_failures | R-6.8.10 |
+| Failure recorded in sync_failures immediately on transient error | R-6.8.10 |
 | Unified backoff: non-compounding, sequential phases | R-6.8.11 |
 | Scanner returns ScanResult with Skipped items | R-2.11.5 |
 | Engine records skipped items as actionable failures | R-2.11.5 |

@@ -20,8 +20,7 @@ const minWorkers = 4
 // WorkerPool spawns goroutines that pull TrackedActions from the DepTracker's
 // ready channel, execute them, persist success outcomes, and send results
 // back to the engine. Workers are pure executors — they NEVER call
-// tracker.Complete() or tracker.ReQueue(). The engine owns all completion
-// decisions (R-6.8.9).
+// tracker.Complete(). The engine owns all completion decisions (R-6.8.9).
 type WorkerPool struct {
 	cfg      *ExecutorConfig
 	tracker  *DepTracker
@@ -29,8 +28,8 @@ type WorkerPool struct {
 	logger   *slog.Logger
 
 	// results reports per-action outcomes back to the engine. The engine
-	// reads from this channel, classifies results, and calls Complete or
-	// ReQueue on the tracker.
+	// reads from this channel, classifies results, and calls Complete on
+	// the tracker. Failed items are recorded in sync_failures for retry.
 	results chan WorkerResult
 
 	cancel context.CancelFunc
@@ -38,8 +37,9 @@ type WorkerPool struct {
 }
 
 // WorkerResult reports the outcome of a single action execution. The engine
-// reads these from the Results channel, classifies them via classifyResult,
-// and routes to tracker.Complete or tracker.ReQueue.
+// reads these from the Results channel, classifies them, and calls
+// tracker.Complete. Failed items are recorded in sync_failures for retry
+// by the FailureRetrier.
 type WorkerResult struct {
 	Path       string
 	DriveID    driveid.ID
@@ -66,12 +66,14 @@ type WorkerResult struct {
 	// Empty for own-drive actions. Used by updateScope for 507 scope keys (R-2.10.16).
 	ShortcutKey string
 
-	// Attempt is the attempt number from TrackedAction (0 = first). Used by
-	// computeBackoff to determine the delay for re-queued actions (R-6.8.11).
-	Attempt int
+	// IsTrial is true if this was a scope trial action (R-2.10.5).
+	IsTrial bool
 
-	// ActionID is the TrackedAction.ID for the engine to call Complete or
-	// ReQueue on the tracker.
+	// TrialScopeKey identifies the scope being tested by this trial.
+	TrialScopeKey string
+
+	// ActionID is the TrackedAction.ID for the engine to call Complete on
+	// the tracker.
 	ActionID int64
 }
 
@@ -183,7 +185,7 @@ func (wp *WorkerPool) safeExecuteAction(ctx context.Context, ta *TrackedAction) 
 
 // executeAction runs a single tracked action: execute, persist success
 // outcomes, and send the result to the engine. Workers are pure executors —
-// they NEVER call tracker.Complete() or tracker.ReQueue().
+// they NEVER call tracker.Complete().
 func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 	// Per-action cancellable context.
 	actionCtx, cancel := context.WithCancel(ctx)
@@ -260,8 +262,8 @@ func (wp *WorkerPool) dispatchAction(
 }
 
 // Results returns a read-only channel of per-action results. The engine
-// reads from this channel, classifies each result, and routes to
-// tracker.Complete or tracker.ReQueue.
+// reads from this channel, classifies each result, and calls
+// tracker.Complete. Failed items go to sync_failures for reconciler retry.
 func (wp *WorkerPool) Results() <-chan WorkerResult {
 	return wp.results
 }
@@ -284,7 +286,8 @@ func (wp *WorkerPool) sendResult(ctx context.Context, ta *TrackedAction, outcome
 		RetryAfter:    extractRetryAfter(actionErr),
 		TargetDriveID: ta.Action.TargetDriveID(),
 		ShortcutKey:   ta.Action.ShortcutKey(),
-		Attempt:       ta.Attempt,
+		IsTrial:       ta.IsTrial,
+		TrialScopeKey: ta.TrialScopeKey,
 		ActionID:      ta.ID,
 	}
 

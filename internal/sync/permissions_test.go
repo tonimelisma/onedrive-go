@@ -367,7 +367,7 @@ func TestRecheckPermissions_GrantDetected_IssueCleared(t *testing.T) {
 		IssueType:  IssuePermissionDenied,
 		ErrMsg:     "folder is read-only",
 		HTTPStatus: http.StatusForbidden,
-	}))
+	}, nil))
 
 	// Verify issue exists.
 	before, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssuePermissionDenied)
@@ -415,7 +415,7 @@ func TestRecheckPermissions_StillDenied_NoChange(t *testing.T) {
 		IssueType:  IssuePermissionDenied,
 		ErrMsg:     "folder is read-only",
 		HTTPStatus: http.StatusForbidden,
-	}))
+	}, nil))
 
 	eng.recheckPermissions(ctx, bl, shortcuts)
 
@@ -458,14 +458,14 @@ func TestRecheckPermissions_UnresolvableIssues_CachedAsDenied(t *testing.T) {
 		IssueType:  IssuePermissionDenied,
 		ErrMsg:     "folder is read-only",
 		HTTPStatus: http.StatusForbidden,
-	}))
+	}, nil))
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "Shared/Other/locked",
 		Direction:  "upload",
 		IssueType:  IssuePermissionDenied,
 		ErrMsg:     "folder is read-only",
 		HTTPStatus: http.StatusForbidden,
-	}))
+	}, nil))
 
 	// Recheck with no shortcuts — both issues have sc == nil.
 	eng.recheckPermissions(ctx, bl, nil)
@@ -512,7 +512,7 @@ func TestRecheckPermissions_UnresolvedItemID_CachedAsDenied(t *testing.T) {
 		IssueType:  IssuePermissionDenied,
 		ErrMsg:     "folder is read-only",
 		HTTPStatus: http.StatusForbidden,
-	}))
+	}, nil))
 
 	eng.recheckPermissions(ctx, bl, shortcuts)
 
@@ -757,7 +757,7 @@ func TestRecheckPermissions_PopulatesCache(t *testing.T) {
 		IssueType:  IssuePermissionDenied,
 		ErrMsg:     "folder is read-only",
 		HTTPStatus: http.StatusForbidden,
-	}))
+	}, nil))
 
 	eng.recheckPermissions(ctx, bl, shortcuts)
 
