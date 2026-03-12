@@ -448,7 +448,7 @@ func (e *Engine) observeShortcutDelta(
 		}
 	}
 
-	events := shortcutItemsToEventsWithLog(items, sc, remoteDriveID, bl, e.logger)
+	events := convertShortcutItems(items, sc, remoteDriveID, bl, e.logger)
 
 	return scopeResult{
 		events:     events,
@@ -470,7 +470,7 @@ func (e *Engine) observeShortcutEnumerate(
 		return scopeResult{}, fmt.Errorf("sync: shortcut enumerate: %w", err)
 	}
 
-	events := shortcutItemsToEventsWithLog(items, sc, remoteDriveID, bl, e.logger)
+	events := convertShortcutItems(items, sc, remoteDriveID, bl, e.logger)
 
 	// Detect deletions: items in baseline under this scope but not in enumeration.
 	orphans := detectShortcutOrphans(sc, remoteDriveID, items, bl)
@@ -588,7 +588,7 @@ func (e *Engine) reconcileShortcutDelta(
 		return scopeResult{}, fmt.Errorf("sync: shortcut full reconciliation delta: %w", err)
 	}
 
-	events := shortcutItemsToEventsWithLog(items, sc, remoteDriveID, bl, e.logger)
+	events := convertShortcutItems(items, sc, remoteDriveID, bl, e.logger)
 	orphans := detectShortcutOrphans(sc, remoteDriveID, items, bl)
 	events = append(events, orphans...)
 

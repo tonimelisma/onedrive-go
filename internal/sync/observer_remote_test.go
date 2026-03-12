@@ -1479,7 +1479,7 @@ func TestClassifyItem_RemoteTrustsServer(t *testing.T) {
 				IsDeleted: tt.isDeleted,
 			}
 
-			ev := obs.classifyItem(item, inflight)
+			ev := obs.converter.classifyItem(item, inflight)
 			assert.NotNil(t, ev, "remote observer must produce event for %q (server data is authoritative)", tt.itemName)
 		})
 	}
@@ -1668,7 +1668,7 @@ func TestClassifyItem_ShortcutDetection(t *testing.T) {
 		RemoteItemID:  "source-item-123",
 	}
 
-	ev := obs.classifyItem(item, inflight)
+	ev := obs.converter.classifyItem(item, inflight)
 	require.NotNil(t, ev, "shortcut should produce an event")
 
 	assert.Equal(t, ChangeShortcut, ev.Type, "shortcut should be classified as ChangeShortcut")
@@ -1705,7 +1705,7 @@ func TestClassifyItem_ShortcutDetection_NotFolder(t *testing.T) {
 		QuickXorHash:  "hash123",
 	}
 
-	ev := obs.classifyItem(item, inflight)
+	ev := obs.converter.classifyItem(item, inflight)
 	require.NotNil(t, ev, "shared file should produce an event")
 
 	assert.Equal(t, ChangeCreate, ev.Type, "shared file should be ChangeCreate, not ChangeShortcut")
@@ -1739,7 +1739,7 @@ func TestClassifyItem_ShortcutDeleted(t *testing.T) {
 		RemoteItemID:  "source-item-123",
 	}
 
-	ev := obs.classifyItem(item, inflight)
+	ev := obs.converter.classifyItem(item, inflight)
 	require.NotNil(t, ev, "deleted shortcut should produce an event")
 
 	assert.Equal(t, ChangeDelete, ev.Type, "deleted shortcut should be ChangeDelete")

@@ -85,80 +85,10 @@ func TestMapShortcutPath(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// buildShortcutPathMap (O(n) memoized path building)
+// convertShortcutItems (unified item conversion for shortcut scopes)
 // ---------------------------------------------------------------------------
 
-func TestBuildShortcutPathMap_DirectChild(t *testing.T) {
-	t.Parallel()
-
-	items := []graph.Item{
-		{ID: "file-1", Name: "report.xlsx", ParentID: "root-folder"},
-	}
-
-	pathMap := buildShortcutPathMap(items, "root-folder")
-	assert.Equal(t, "report.xlsx", pathMap["file-1"])
-}
-
-func TestBuildShortcutPathMap_NestedChild(t *testing.T) {
-	t.Parallel()
-
-	items := []graph.Item{
-		{ID: "subfolder-1", Name: "Documents", ParentID: "root-folder", IsFolder: true},
-		{ID: "file-1", Name: "report.xlsx", ParentID: "subfolder-1"},
-	}
-
-	pathMap := buildShortcutPathMap(items, "root-folder")
-	assert.Equal(t, "Documents", pathMap["subfolder-1"])
-	assert.Equal(t, "Documents/report.xlsx", pathMap["file-1"])
-}
-
-func TestBuildShortcutPathMap_DeeplyNested(t *testing.T) {
-	t.Parallel()
-
-	items := []graph.Item{
-		{ID: "folder-b", Name: "B", ParentID: "root-folder", IsFolder: true},
-		{ID: "folder-c", Name: "C", ParentID: "folder-b", IsFolder: true},
-		{ID: "file-1", Name: "data.csv", ParentID: "folder-c"},
-	}
-
-	pathMap := buildShortcutPathMap(items, "root-folder")
-	assert.Equal(t, "B/C/data.csv", pathMap["file-1"])
-}
-
-func TestBuildShortcutPathMap_MemoizesCorrectly(t *testing.T) {
-	t.Parallel()
-
-	// Multiple files under the same subfolder — parent path resolved once.
-	items := []graph.Item{
-		{ID: "sub", Name: "Sub", ParentID: "root", IsFolder: true},
-		{ID: "f1", Name: "a.txt", ParentID: "sub"},
-		{ID: "f2", Name: "b.txt", ParentID: "sub"},
-	}
-
-	pathMap := buildShortcutPathMap(items, "root")
-	assert.Equal(t, "Sub/a.txt", pathMap["f1"])
-	assert.Equal(t, "Sub/b.txt", pathMap["f2"])
-}
-
-func TestBuildShortcutPathMap_SkipsRoot(t *testing.T) {
-	t.Parallel()
-
-	items := []graph.Item{
-		{ID: "root-folder", Name: "root", ParentID: "", IsRoot: true},
-		{ID: "f1", Name: "file.txt", ParentID: "root-folder"},
-	}
-
-	pathMap := buildShortcutPathMap(items, "root-folder")
-	_, hasRoot := pathMap["root-folder"]
-	assert.False(t, hasRoot, "root item should not be in path map")
-	assert.Equal(t, "file.txt", pathMap["f1"])
-}
-
-// ---------------------------------------------------------------------------
-// shortcutItemsToEvents
-// ---------------------------------------------------------------------------
-
-func TestShortcutItemsToEvents_NewFiles(t *testing.T) {
+func TestConvertShortcutItems_NewFiles(t *testing.T) {
 	t.Parallel()
 
 	remoteDriveID := driveid.New("0000000000000099")
@@ -189,7 +119,7 @@ func TestShortcutItemsToEvents_NewFiles(t *testing.T) {
 	}
 
 	bl := emptyBaseline()
-	events := shortcutItemsToEvents(items, sc, remoteDriveID, bl)
+	events := convertShortcutItems(items, sc, remoteDriveID, bl, testLogger(t))
 
 	require.Len(t, events, 2)
 
@@ -205,7 +135,7 @@ func TestShortcutItemsToEvents_NewFiles(t *testing.T) {
 	assert.Equal(t, ItemTypeFolder, events[1].ItemType)
 }
 
-func TestShortcutItemsToEvents_ExistingModified(t *testing.T) {
+func TestConvertShortcutItems_ExistingModified(t *testing.T) {
 	t.Parallel()
 
 	remoteDriveID := driveid.New("0000000000000099")
@@ -232,13 +162,13 @@ func TestShortcutItemsToEvents_ExistingModified(t *testing.T) {
 		ItemID:  "f1",
 	})
 
-	events := shortcutItemsToEvents(items, sc, remoteDriveID, bl)
+	events := convertShortcutItems(items, sc, remoteDriveID, bl, testLogger(t))
 	require.Len(t, events, 1)
 	assert.Equal(t, ChangeModify, events[0].Type)
 	assert.Equal(t, "SharedFolder/report.xlsx", events[0].Path)
 }
 
-func TestShortcutItemsToEvents_DeletedItem(t *testing.T) {
+func TestConvertShortcutItems_DeletedItem(t *testing.T) {
 	t.Parallel()
 
 	remoteDriveID := driveid.New("0000000000000099")
@@ -265,14 +195,14 @@ func TestShortcutItemsToEvents_DeletedItem(t *testing.T) {
 		ItemID:  "f1",
 	})
 
-	events := shortcutItemsToEvents(items, sc, remoteDriveID, bl)
+	events := convertShortcutItems(items, sc, remoteDriveID, bl, testLogger(t))
 	require.Len(t, events, 1)
 	assert.Equal(t, ChangeDelete, events[0].Type)
 	assert.Equal(t, "SharedFolder/report.xlsx", events[0].Path)
 	assert.True(t, events[0].IsDeleted)
 }
 
-func TestShortcutItemsToEvents_SkipsRoot(t *testing.T) {
+func TestConvertShortcutItems_SkipsRoot(t *testing.T) {
 	t.Parallel()
 
 	remoteDriveID := driveid.New("0000000000000099")
@@ -289,7 +219,7 @@ func TestShortcutItemsToEvents_SkipsRoot(t *testing.T) {
 	}
 
 	bl := emptyBaseline()
-	events := shortcutItemsToEvents(items, sc, remoteDriveID, bl)
+	events := convertShortcutItems(items, sc, remoteDriveID, bl, testLogger(t))
 	require.Len(t, events, 1)
 	assert.Equal(t, "f1", events[0].ItemID)
 }
@@ -1485,7 +1415,7 @@ func TestDetectShortcutCollisions_DuplicateSourceFolder(t *testing.T) {
 // Nested shortcut skip tests
 // ---------------------------------------------------------------------------
 
-func TestShortcutItemsToEvents_NestedShortcut_SkippedWithWarning(t *testing.T) {
+func TestConvertShortcutItems_NestedShortcut_SkippedWithWarning(t *testing.T) {
 	t.Parallel()
 
 	remoteDriveID := driveid.New("0000000000000099")
@@ -1505,7 +1435,7 @@ func TestShortcutItemsToEvents_NestedShortcut_SkippedWithWarning(t *testing.T) {
 		LocalPath: "SharedFolder",
 	}
 
-	events := shortcutItemsToEventsWithLog(items, sc, remoteDriveID, emptyBaseline(), testLogger(t))
+	events := convertShortcutItems(items, sc, remoteDriveID, emptyBaseline(), testLogger(t))
 
 	// Only the normal file should produce an event.
 	require.Len(t, events, 1)
