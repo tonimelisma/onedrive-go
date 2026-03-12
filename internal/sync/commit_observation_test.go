@@ -692,7 +692,7 @@ func TestResetRetryTimesForScope(t *testing.T) {
 		require.NoError(t, err, "inserting %s", tc.path)
 	}
 
-	err := mgr.ResetRetryTimesForScope(ctx, "throttle:account")
+	err := mgr.ResetRetryTimesForScope(ctx, "throttle:account", now)
 	require.NoError(t, err)
 
 	// future-match.txt: transient + matching scope + future retry → should be reset to now
