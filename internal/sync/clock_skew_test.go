@@ -77,7 +77,7 @@ func TestClockSkew_BackwardJump_SyncFailureTimestamp(t *testing.T) {
 		IssueType:  "upload_failed",
 		ErrMsg:     "err",
 		HTTPStatus: 500,
-	}))
+	}, nil))
 
 	// Jump backward to t=1000.
 	mgr.nowFunc = func() time.Time { return time.Unix(1000, 0) }
@@ -89,7 +89,7 @@ func TestClockSkew_BackwardJump_SyncFailureTimestamp(t *testing.T) {
 		IssueType:  "upload_failed",
 		ErrMsg:     "err",
 		HTTPStatus: 500,
-	}))
+	}, nil))
 
 	issues, err := mgr.ListSyncFailuresByIssueType(ctx, "upload_failed")
 	require.NoError(t, err)

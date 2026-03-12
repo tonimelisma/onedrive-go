@@ -716,8 +716,9 @@ func newSeededIssuesCmd(t *testing.T) (*cobra.Command, string) {
 		Path:      "docs/CON",
 		Direction: "upload",
 		IssueType: "invalid_filename",
+		Category:  "actionable",
 		ErrMsg:    "reserved name",
-	})
+	}, nil)
 	require.NoError(t, err)
 
 	// Transient failure (upload_failed — will be targeted by "retry").
@@ -728,7 +729,7 @@ func newSeededIssuesCmd(t *testing.T) (*cobra.Command, string) {
 		ErrMsg:     "connection reset",
 		HTTPStatus: 500,
 		FileSize:   1024,
-	})
+	}, nil)
 	require.NoError(t, err)
 
 	// Second actionable failure for testing --all.
@@ -736,8 +737,9 @@ func newSeededIssuesCmd(t *testing.T) (*cobra.Command, string) {
 		Path:      "docs/NUL.txt",
 		Direction: "upload",
 		IssueType: "invalid_filename",
+		Category:  "actionable",
 		ErrMsg:    "reserved name",
-	})
+	}, nil)
 	require.NoError(t, err)
 
 	mgr.Close()

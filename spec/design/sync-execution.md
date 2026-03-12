@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_transfer.go, internal/sync/worker.go, internal/sync/tracker.go, internal/sync/scope.go, internal/sync/issue_types.go, internal/sync/compute_status.go, status.go
 
-Implements: R-2.3 [verified], R-5.1 [verified], R-6.4 [implemented], R-6.5.3 [verified], R-6.4.9 [planned], R-6.7.25 [planned], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-2.10.5 [planned], R-2.10.11 [verified], R-2.10.15 [verified], R-2.10.16 [verified], R-2.10.41 [verified], R-2.10.42 [verified], R-2.10.43 [planned], R-2.10.44 [planned]
+Implements: R-2.3 [verified], R-5.1 [verified], R-6.4 [implemented], R-6.5.3 [verified], R-6.4.9 [planned], R-6.7.25 [planned], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.10.15 [verified], R-2.10.16 [verified], R-2.10.41 [verified], R-2.10.42 [verified], R-2.10.43 [planned], R-2.10.44 [planned]
 
 ## Executor (`executor.go`)
 
@@ -18,19 +18,19 @@ In-memory dependency graph for action ordering. Folder creates must complete bef
 
 ### Tracker Extensions
 
-Implements: R-6.8.7 [verified], R-2.10.5 [planned], R-2.10.11 [verified], R-2.10.15 [verified], R-2.10.42 [verified]
+Implements: R-6.8.7 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.10.15 [verified], R-2.10.42 [verified]
 
-- **TrackedAction extensions**: `NotBefore time.Time` (earliest dispatch time for re-queued actions), `Attempt int` (current attempt, 0 = first), `MaxAttempts int` (budget per action: 5 in one-shot, 0 = unlimited in watch), `IsTrial bool` (scope trial probe).
-- **Delayed queue**: min-heap (`delayedQueue`) ordered by `NotBefore`. Timer goroutine dispatches actions when their delay expires. Injectable `nowFunc` for deterministic tests (no real sleeps).
+- **TrackedAction extensions**: `IsTrial bool` (scope trial probe), `TrialScopeKey string` (which scope a trial is testing — set by `DispatchTrial`, propagated through `WorkerResult`).
 - **Held queue**: `held map[string][]*TrackedAction` — per-scope-key map. After dependency resolution, if the action's scope is blocked, it moves to the held queue instead of the worker pool.
 - **Scope blocks**: `scopeBlocks map[string]*ScopeBlock` — active scope blocks with trial timing.
-- **`ReQueue(id, notBefore)`**: increment `Attempt`, set `NotBefore`, re-enter dispatch pipeline. In one-shot mode (MaxAttempts > 0): returns error when budget exhausted. In watch mode (MaxAttempts = 0): always succeeds, retries forever. Does NOT increment `completed` counter — action stays in-flight.
 - **`HoldScope(key, block)`**: set scope block, future dispatches matching scope go to held queue.
-- **`releaseScope(key)`**: clear block, dispatch all held actions.
-- **`dispatchTrial(key)`**: pop one from held queue, mark `IsTrial=true`, dispatch.
-- **`dispatch()` rewrite**: Two-gate pipeline: (1) scope gate — blocked actions go to held queue; (2) NotBefore gate — delayed actions go to min-heap. Only unblocked, due actions reach the ready channel.
+- **`ReleaseScope(key)`**: clear block, dispatch all held actions.
+- **`DispatchTrial(key)`**: pop one from held queue, mark `IsTrial=true`, set `TrialScopeKey`, dispatch.
+- **`NextDueTrial(now)`**: returns the scope key and `NextTrialAt` of the first scope block whose trial is due.
+- **`ExtendTrial(key, nextAt)`**: updates a scope block's `NextTrialAt` and increments its trial attempt counter on trial failure.
+- **`dispatch()` gate**: scope gate — blocked actions go to held queue. Unblocked actions reach the ready channel.
 - Existing dependency graph behavior unchanged.
-- The tracker is the sole retry mechanism — `FailureRetrier` has been eliminated. `sync_failures` is diagnostic-only.
+- The tracker does NOT handle retry. All retry is via `sync_failures` + `FailureRetrier` (R-6.8.10). The engine calls `Complete` on every result; failed items are recorded in `sync_failures` with `next_retry_at`, and the `FailureRetrier` re-injects them via buffer → planner → tracker.
 
 ## Scope Detection (`scope.go`)
 
@@ -47,9 +47,9 @@ Implements: R-2.10.3 [verified], R-2.10.26 [verified], R-2.10.42 [verified]
 
 Implements: R-2.10.16 [verified], R-6.8.12 [verified]
 
-Flat pool of `transfer_workers` goroutines. Workers are pure executors — they execute actions, persist success outcomes, and send `WorkerResult` to the engine. Workers NEVER call `tracker.Complete()` or `tracker.ReQueue()` — the engine owns all completion decisions.
+Flat pool of `transfer_workers` goroutines. Workers are pure executors — they execute actions, persist success outcomes, and send `WorkerResult` to the engine. Workers NEVER call `tracker.Complete()` — the engine owns all completion decisions.
 
-`WorkerResult` carries target drive identity (`TargetDriveID`, `ShortcutKey`) from the action, `RetryAfter` from `GraphError`, the full `error` for classification, and the `ActionID` for tracker routing. The engine classifies and routes each result.
+`WorkerResult` carries target drive identity (`TargetDriveID`, `ShortcutKey`) from the action, `RetryAfter` from `GraphError`, the full `error` for classification, `ActionID` for tracker routing, `IsTrial` and `TrialScopeKey` for scope trial routing. The engine classifies and routes each result.
 
 ## Action Execution
 
@@ -77,7 +77,7 @@ Implements: R-2.10.41 [verified]
 
 `ResetInProgressStates()` handles crash recovery: on startup, resets items stuck in `downloading`/`deleting` state to `pending_download`/`pending_delete`. In watch mode, `RunWatch` calls `RunOnce` on startup which calls `ResetInProgressStates`, rediscovering all pending items.
 
-The `FailureRetrier` (formerly `reconciler.go`) has been eliminated. The tracker is the sole retry mechanism. `sync_failures` is a diagnostic record for `onedrive status` visibility — it never drives retry scheduling. `CommitOutcome` success cleanup clears `sync_failures` for all action types (upload, download, delete, move).
+The `FailureRetrier` (`reconciler.go`) is the sole retry mechanism for sync actions. It periodically sweeps `sync_failures` for items whose `next_retry_at` has expired and re-injects them into the pipeline via buffer → planner → tracker. The engine calls `Complete` on every worker result (never `ReQueue`) and records failures in `sync_failures` with exponential backoff via `retry.Reconcile.Delay`. `CommitOutcome` success cleanup clears `sync_failures` for all action types (upload, download, delete, move).
 
 ## Status Computation (`compute_status.go`)
 
