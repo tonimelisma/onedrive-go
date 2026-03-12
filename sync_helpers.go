@@ -25,18 +25,19 @@ func newSyncEngine(session *driveops.Session, resolved *config.ResolvedDrive, ve
 	}
 
 	ecfg := &sync.EngineConfig{
-		DBPath:          dbPath,
-		SyncRoot:        syncDir,
-		DataDir:         config.DefaultDataDir(),
-		DriveID:         session.DriveID,
-		Fetcher:         session.Meta,
-		Items:           session.Meta,
-		Downloads:       session.Transfer,
-		Uploads:         session.Transfer,
-		Logger:          logger,
-		UseLocalTrash:   resolved.UseLocalTrash,
-		TransferWorkers: resolved.TransferWorkers,
-		CheckWorkers:    resolved.CheckWorkers,
+		DBPath:             dbPath,
+		SyncRoot:           syncDir,
+		DataDir:            config.DefaultDataDir(),
+		DriveID:            session.DriveID,
+		Fetcher:            session.Meta,
+		Items:              session.Meta,
+		Downloads:          session.Transfer,
+		Uploads:            session.Transfer,
+		Logger:             logger,
+		UseLocalTrash:      resolved.UseLocalTrash,
+		TransferWorkers:    resolved.TransferWorkers,
+		CheckWorkers:       resolved.CheckWorkers,
+		BigDeleteThreshold: resolved.BigDeleteThreshold,
 	}
 
 	if verifyDrive {

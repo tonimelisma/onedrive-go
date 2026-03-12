@@ -135,33 +135,12 @@ func TestValidate_TransferOrder_AllValid(t *testing.T) {
 	}
 }
 
-func TestValidate_BigDeletePercentage_OutOfRange(t *testing.T) {
-	cfg := validConfig()
-	cfg.BigDeletePercentage = 0
-	err := Validate(cfg)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "big_delete_percentage")
-
-	cfg.BigDeletePercentage = 101
-	err = Validate(cfg)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "big_delete_percentage")
-}
-
 func TestValidate_BigDeleteThreshold_BelowMin(t *testing.T) {
 	cfg := validConfig()
 	cfg.BigDeleteThreshold = 0
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "big_delete_threshold")
-}
-
-func TestValidate_BigDeleteMinItems_BelowMin(t *testing.T) {
-	cfg := validConfig()
-	cfg.BigDeleteMinItems = 0
-	err := Validate(cfg)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "big_delete_min_items")
 }
 
 // Validates: R-6.2.9

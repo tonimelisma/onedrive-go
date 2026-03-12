@@ -137,19 +137,20 @@ func (o *Orchestrator) buildEngineWork(
 	rd *config.ResolvedDrive, session *driveops.Session, mode SyncMode, opts RunOpts,
 ) driveWork {
 	engine, engineErr := o.engineFactory(&EngineConfig{
-		DBPath:          rd.StatePath(),
-		SyncRoot:        rd.SyncDir,
-		DataDir:         config.DefaultDataDir(),
-		DriveID:         session.DriveID,
-		Fetcher:         session.Meta,
-		Items:           session.Meta,
-		Downloads:       session.Transfer,
-		Uploads:         session.Transfer,
-		DriveVerifier:   session.Meta,
-		Logger:          o.logger,
-		UseLocalTrash:   rd.UseLocalTrash,
-		TransferWorkers: rd.TransferWorkers,
-		CheckWorkers:    rd.CheckWorkers,
+		DBPath:             rd.StatePath(),
+		SyncRoot:           rd.SyncDir,
+		DataDir:            config.DefaultDataDir(),
+		DriveID:            session.DriveID,
+		Fetcher:            session.Meta,
+		Items:              session.Meta,
+		Downloads:          session.Transfer,
+		Uploads:            session.Transfer,
+		DriveVerifier:      session.Meta,
+		Logger:             o.logger,
+		UseLocalTrash:      rd.UseLocalTrash,
+		TransferWorkers:    rd.TransferWorkers,
+		CheckWorkers:       rd.CheckWorkers,
+		BigDeleteThreshold: rd.BigDeleteThreshold,
 	})
 	if engineErr != nil {
 		capturedErr := engineErr
@@ -274,19 +275,20 @@ func (o *Orchestrator) startWatchRunner(
 	}
 
 	engine, engineErr := o.engineFactory(&EngineConfig{
-		DBPath:          rd.StatePath(),
-		SyncRoot:        rd.SyncDir,
-		DataDir:         config.DefaultDataDir(),
-		DriveID:         session.DriveID,
-		Fetcher:         session.Meta,
-		Items:           session.Meta,
-		Downloads:       session.Transfer,
-		Uploads:         session.Transfer,
-		DriveVerifier:   session.Meta,
-		Logger:          o.logger,
-		UseLocalTrash:   rd.UseLocalTrash,
-		TransferWorkers: rd.TransferWorkers,
-		CheckWorkers:    rd.CheckWorkers,
+		DBPath:             rd.StatePath(),
+		SyncRoot:           rd.SyncDir,
+		DataDir:            config.DefaultDataDir(),
+		DriveID:            session.DriveID,
+		Fetcher:            session.Meta,
+		Items:              session.Meta,
+		Downloads:          session.Transfer,
+		Uploads:            session.Transfer,
+		DriveVerifier:      session.Meta,
+		Logger:             o.logger,
+		UseLocalTrash:      rd.UseLocalTrash,
+		TransferWorkers:    rd.TransferWorkers,
+		CheckWorkers:       rd.CheckWorkers,
+		BigDeleteThreshold: rd.BigDeleteThreshold,
 	})
 	if engineErr != nil {
 		return nil, fmt.Errorf("engine creation failed for %s: %w", rd.CanonicalID, engineErr)

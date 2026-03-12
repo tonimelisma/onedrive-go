@@ -17,8 +17,6 @@ const (
 	maxTransferWorkers = 64
 	minCheckWorkers    = 1
 	maxCheckWorkers    = 16
-	minPercentage      = 1
-	maxPercentage      = 100
 	minBigDelete       = 1
 	minLogRetention    = 1
 	minFullscanNonZero = 2
@@ -233,16 +231,6 @@ func validateSafety(s *SafetyConfig) []error {
 	if s.BigDeleteThreshold < minBigDelete {
 		errs = append(errs, fmt.Errorf("big_delete_threshold: must be >= %d, got %d",
 			minBigDelete, s.BigDeleteThreshold))
-	}
-
-	if s.BigDeletePercentage < minPercentage || s.BigDeletePercentage > maxPercentage {
-		errs = append(errs, fmt.Errorf("big_delete_percentage: must be between %d and %d, got %d",
-			minPercentage, maxPercentage, s.BigDeletePercentage))
-	}
-
-	if s.BigDeleteMinItems < minBigDelete {
-		errs = append(errs, fmt.Errorf("big_delete_min_items: must be >= %d, got %d",
-			minBigDelete, s.BigDeleteMinItems))
 	}
 
 	errs = append(errs, validateSafetyRemaining(s)...)

@@ -416,10 +416,11 @@ func TestRunOnce_BigDelete_WithoutForce(t *testing.T) {
 	driveID := driveid.New(engineTestDriveID)
 
 	// Upload-only mode with no local files → local observer sees all baseline
-	// entries as deleted → EF6 → ActionRemoteDelete. 20 remote deletes on a
-	// 20-entry baseline = 100% > 50% threshold → ErrBigDeleteTriggered.
+	// entries as deleted → EF6 → ActionRemoteDelete. With threshold=10,
+	// 20 remote deletes > 10 → ErrBigDeleteTriggered.
 	mock := &engineMockClient{}
 	eng, _ := newTestEngine(t, mock)
+	eng.bigDeleteThreshold = 10 // low threshold for test
 	ctx := t.Context()
 
 	seedOutcomes := make([]Outcome, 20)
@@ -452,6 +453,7 @@ func TestRunOnce_BigDelete_WithForce(t *testing.T) {
 	// entries → 20 RemoteDeletes. Force bypasses the safety threshold.
 	mock := &engineMockClient{}
 	eng, _ := newTestEngine(t, mock)
+	eng.bigDeleteThreshold = 10 // low threshold for test
 	ctx := t.Context()
 
 	seedOutcomes := make([]Outcome, 20)
@@ -835,21 +837,30 @@ func TestRunOnce_CrashRecovery_ResetsInProgressStates(t *testing.T) {
 func TestResolveSafetyConfig_Default(t *testing.T) {
 	t.Parallel()
 
-	eng := &Engine{}
+	eng := &Engine{bigDeleteThreshold: defaultBigDeleteThreshold}
 	cfg := eng.resolveSafetyConfig(RunOpts{})
 
-	def := DefaultSafetyConfig()
-	assert.Equal(t, def.BigDeleteMaxCount, cfg.BigDeleteMaxCount)
-	assert.Equal(t, def.BigDeleteMaxPercent, cfg.BigDeleteMaxPercent)
+	assert.Equal(t, defaultBigDeleteThreshold, cfg.BigDeleteThreshold)
 }
 
 func TestResolveSafetyConfig_Force(t *testing.T) {
 	t.Parallel()
 
-	eng := &Engine{}
+	eng := &Engine{bigDeleteThreshold: defaultBigDeleteThreshold}
 	cfg := eng.resolveSafetyConfig(RunOpts{Force: true})
 
-	assert.Equal(t, forceSafetyMax, cfg.BigDeleteMaxCount)
+	assert.Equal(t, forceSafetyMax, cfg.BigDeleteThreshold)
+}
+
+func TestResolveSafetyConfig_UsesConfiguredThreshold(t *testing.T) {
+	t.Parallel()
+
+	// Verify the config bug is fixed: engine uses the configured threshold,
+	// not a hardcoded default.
+	eng := &Engine{bigDeleteThreshold: 500}
+	cfg := eng.resolveSafetyConfig(RunOpts{})
+
+	assert.Equal(t, 500, cfg.BigDeleteThreshold)
 }
 
 // ---------------------------------------------------------------------------
@@ -1173,8 +1184,9 @@ func TestRunWatch_UploadOnly_SkipsRemoteObserver(t *testing.T) {
 	assert.Nil(t, eng.remoteObs, "remoteObs should be nil in upload-only mode")
 }
 
-// TestRunWatch_ProcessBatch_BigDelete verifies that big-delete protection
-// triggers are handled gracefully (batch is skipped, loop continues).
+// TestRunWatch_ProcessBatch_BigDelete verifies that the rolling delete
+// counter in watch mode holds delete actions when the threshold is exceeded,
+// records them as actionable issues, and prevents dispatch.
 func TestRunWatch_ProcessBatch_BigDelete(t *testing.T) {
 	t.Parallel()
 
@@ -1212,7 +1224,7 @@ func TestRunWatch_ProcessBatch_BigDelete(t *testing.T) {
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err, "Load")
 
-	// Build a batch that would delete all 20 files (100% > threshold).
+	// Build a batch that would delete all 20 files.
 	var batch []PathChanges
 	for _, o := range seedOutcomes {
 		batch = append(batch, PathChanges{
@@ -1227,18 +1239,313 @@ func TestRunWatch_ProcessBatch_BigDelete(t *testing.T) {
 	}
 
 	tracker := NewPersistentDepTracker(testLogger(t))
-	safety := DefaultSafetyConfig()
 
-	// processBatch should log a warning and return without panicking.
+	// Install a rolling delete counter with threshold=10 on the engine.
+	// The planner-level check is disabled (forceSafetyMax) — the counter
+	// handles protection in watch mode.
+	eng.deleteCounter = newDeleteCounter(10, 5*time.Minute, time.Now)
+	safety := &SafetyConfig{BigDeleteThreshold: forceSafetyMax}
+
 	eng.processBatch(ctx, batch, bl, SyncBidirectional, safety, tracker)
 
-	// Verify no actions were dispatched (big-delete skipped the batch).
+	// Verify no actions were dispatched (all 20 are deletes and counter tripped).
 	select {
 	case ta := <-tracker.Ready():
 		assert.Fail(t, "unexpected action dispatched", "path: %s", ta.Action.Path)
 	default:
 		// Good — no actions.
 	}
+
+	// Verify counter is now held.
+	assert.True(t, eng.deleteCounter.IsHeld(), "counter should be held")
+
+	// Verify held deletes were recorded as actionable issues.
+	rows, listErr := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueBigDeleteHeld)
+	require.NoError(t, listErr, "ListSyncFailuresByIssueType")
+	assert.Equal(t, 20, len(rows), "should have 20 big_delete_held entries")
+}
+
+// TestRunWatch_ProcessBatch_BigDelete_NonDeletesFlow verifies that non-delete
+// actions are dispatched even when the delete counter is held.
+func TestRunWatch_ProcessBatch_BigDelete_NonDeletesFlow(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	// Seed baseline with files that will be "deleted" plus one path that
+	// will produce a download (new remote file).
+	seedOutcomes := make([]Outcome, 15)
+	for i := range 15 {
+		seedOutcomes[i] = Outcome{
+			Action:     ActionDownload,
+			Success:    true,
+			Path:       fmt.Sprintf("file%02d.txt", i),
+			DriveID:    driveID,
+			ItemID:     fmt.Sprintf("item-%02d", i),
+			ItemType:   ItemTypeFile,
+			RemoteHash: fmt.Sprintf("hash%02d", i),
+			LocalHash:  fmt.Sprintf("hash%02d", i),
+			Size:       100,
+		}
+	}
+
+	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "")
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err, "Load")
+
+	// Build batch: 15 deletes + 1 new remote file (download).
+	var batch []PathChanges
+	for _, o := range seedOutcomes {
+		batch = append(batch, PathChanges{
+			Path: o.Path,
+			RemoteEvents: []ChangeEvent{{
+				Source:    SourceRemote,
+				Type:      ChangeDelete,
+				Path:      o.Path,
+				IsDeleted: true,
+			}},
+		})
+	}
+
+	// Add a new remote file that should produce a download.
+	batch = append(batch, PathChanges{
+		Path: "newfile.txt",
+		RemoteEvents: []ChangeEvent{{
+			Source:   SourceRemote,
+			Type:     ChangeCreate,
+			Path:     "newfile.txt",
+			ItemID:   "item-new",
+			DriveID:  driveID,
+			Hash:     "newhash",
+			Size:     50,
+			ItemType: ItemTypeFile,
+		}},
+	})
+
+	tracker := NewPersistentDepTracker(testLogger(t))
+
+	// Install counter with threshold=10. 15 deletes > 10 → trips.
+	eng.deleteCounter = newDeleteCounter(10, 5*time.Minute, time.Now)
+	safety := &SafetyConfig{BigDeleteThreshold: forceSafetyMax}
+
+	eng.processBatch(ctx, batch, bl, SyncBidirectional, safety, tracker)
+
+	// Counter should be held.
+	assert.True(t, eng.deleteCounter.IsHeld(), "counter should be held")
+
+	// One download action should have been dispatched.
+	dispatched := 0
+	for range 5 {
+		select {
+		case <-tracker.Ready():
+			dispatched++
+		default:
+		}
+	}
+
+	assert.Equal(t, 1, dispatched, "one non-delete action should be dispatched")
+
+	// 15 held delete entries should exist.
+	rows, listErr := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueBigDeleteHeld)
+	require.NoError(t, listErr, "ListSyncFailuresByIssueType")
+	assert.Equal(t, 15, len(rows), "should have 15 big_delete_held entries")
+}
+
+// TestRunWatch_ProcessBatch_BigDelete_BelowThreshold verifies that the
+// rolling counter allows deletes through when below the threshold.
+func TestRunWatch_ProcessBatch_BigDelete_BelowThreshold(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	// Seed baseline with 5 files.
+	seedOutcomes := make([]Outcome, 5)
+	for i := range 5 {
+		seedOutcomes[i] = Outcome{
+			Action:     ActionDownload,
+			Success:    true,
+			Path:       fmt.Sprintf("file%02d.txt", i),
+			DriveID:    driveID,
+			ItemID:     fmt.Sprintf("item-%02d", i),
+			ItemType:   ItemTypeFile,
+			RemoteHash: fmt.Sprintf("hash%02d", i),
+			LocalHash:  fmt.Sprintf("hash%02d", i),
+			Size:       100,
+		}
+	}
+
+	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "")
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err, "Load")
+
+	// Build batch: 5 deletes — below threshold of 10.
+	var batch []PathChanges
+	for _, o := range seedOutcomes {
+		batch = append(batch, PathChanges{
+			Path: o.Path,
+			RemoteEvents: []ChangeEvent{{
+				Source:    SourceRemote,
+				Type:      ChangeDelete,
+				Path:      o.Path,
+				IsDeleted: true,
+			}},
+		})
+	}
+
+	tracker := NewPersistentDepTracker(testLogger(t))
+
+	eng.deleteCounter = newDeleteCounter(10, 5*time.Minute, time.Now)
+	safety := &SafetyConfig{BigDeleteThreshold: forceSafetyMax}
+
+	eng.processBatch(ctx, batch, bl, SyncBidirectional, safety, tracker)
+
+	// Counter should NOT be held.
+	assert.False(t, eng.deleteCounter.IsHeld(), "counter should not trip at 5 < 10")
+
+	// All 5 deletes should have been dispatched.
+	dispatched := 0
+	for range 10 {
+		select {
+		case <-tracker.Ready():
+			dispatched++
+		default:
+		}
+	}
+
+	assert.Equal(t, 5, dispatched, "all 5 delete actions should be dispatched")
+}
+
+// TestEngine_ExternalDBChanged verifies the PRAGMA data_version detection.
+func TestEngine_ExternalDBChanged(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	// Seed the initial data_version.
+	dv, err := eng.baseline.DataVersion(ctx)
+	require.NoError(t, err)
+	eng.lastDataVersion = dv
+
+	// No external changes yet — should return false.
+	assert.False(t, eng.externalDBChanged(ctx), "no external changes")
+
+	// Engine's own writes don't change data_version, so repeated checks
+	// should still return false.
+	assert.False(t, eng.externalDBChanged(ctx), "still no external changes")
+}
+
+// TestEngine_HandleExternalChanges_BigDeleteClearance verifies that
+// handleExternalChanges releases the delete counter when all
+// big_delete_held entries have been cleared.
+func TestEngine_HandleExternalChanges_BigDeleteClearance(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	// Install a held delete counter.
+	eng.deleteCounter = newDeleteCounter(10, 5*time.Minute, time.Now)
+	eng.deleteCounter.Add(15) // trips the counter
+	require.True(t, eng.deleteCounter.IsHeld())
+
+	// Record some big_delete_held issues.
+	failures := []ActionableFailure{
+		{Path: "file1.txt", DriveID: driveID, Direction: "delete", IssueType: IssueBigDeleteHeld, Error: "held"},
+		{Path: "file2.txt", DriveID: driveID, Direction: "delete", IssueType: IssueBigDeleteHeld, Error: "held"},
+	}
+	require.NoError(t, eng.baseline.UpsertActionableFailures(ctx, failures))
+
+	// handleExternalChanges should NOT release — rows still present.
+	eng.handleExternalChanges(ctx)
+	assert.True(t, eng.deleteCounter.IsHeld(), "should still be held with entries present")
+
+	// Clear all big_delete_held entries (simulates `issues clear --all`).
+	require.NoError(t, eng.baseline.ClearResolvedActionableFailures(ctx, IssueBigDeleteHeld, nil))
+
+	// Now handleExternalChanges should release.
+	eng.handleExternalChanges(ctx)
+	assert.False(t, eng.deleteCounter.IsHeld(), "should be released after entries cleared")
+}
+
+// TestEngine_HandleExternalChanges_PartialClear verifies that the counter
+// stays held when only some big_delete_held entries are cleared.
+func TestEngine_HandleExternalChanges_PartialClear(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	eng.deleteCounter = newDeleteCounter(10, 5*time.Minute, time.Now)
+	eng.deleteCounter.Add(15)
+	require.True(t, eng.deleteCounter.IsHeld())
+
+	// Record two big_delete_held entries.
+	failures := []ActionableFailure{
+		{Path: "file1.txt", DriveID: driveID, Direction: "delete", IssueType: IssueBigDeleteHeld, Error: "held"},
+		{Path: "file2.txt", DriveID: driveID, Direction: "delete", IssueType: IssueBigDeleteHeld, Error: "held"},
+	}
+	require.NoError(t, eng.baseline.UpsertActionableFailures(ctx, failures))
+
+	// Clear only file1.txt — one entry remains (file2.txt is the "current" path).
+	require.NoError(t, eng.baseline.ClearResolvedActionableFailures(ctx, IssueBigDeleteHeld, []string{"file2.txt"}))
+
+	eng.handleExternalChanges(ctx)
+	assert.True(t, eng.deleteCounter.IsHeld(), "should remain held with one entry still present")
 }
 
 // TestRunWatch_ProcessBatch_EmptyPlan verifies that an empty plan (all
