@@ -19,6 +19,21 @@ import (
 // maxShortcutConcurrency limits how many shortcut scopes are observed in parallel.
 const maxShortcutConcurrency = 4
 
+// filterOutShortcuts removes ChangeShortcut events from a slice — they are
+// consumed by processShortcuts and should not enter the planner as regular events.
+func filterOutShortcuts(events []ChangeEvent) []ChangeEvent {
+	n := 0
+
+	for i := range events {
+		if events[i].Type != ChangeShortcut {
+			events[n] = events[i]
+			n++
+		}
+	}
+
+	return events[:n]
+}
+
 // processShortcuts extracts shortcut events from the primary delta, updates
 // the shortcuts table, and observes content on each shortcut's source drive.
 // Returns additional ChangeEvents for shortcut content that should be fed
@@ -317,14 +332,19 @@ type scopeResult struct {
 	shortcut   *Shortcut
 }
 
-// observeShortcutContentFromList observes content for all active shortcuts
-// concurrently (up to maxShortcutConcurrency). Takes pre-loaded shortcuts
-// to avoid redundant DB queries (B-333).
-// Observes content for all active shortcuts concurrently (up to
-// maxShortcutConcurrency). Delta tokens are deferred until all scopes
-// complete, ensuring atomicity.
-func (e *Engine) observeShortcutContentFromList(
-	ctx context.Context, shortcuts []Shortcut, bl *Baseline, collisions map[string]bool,
+// shortcutDispatchFunc is the per-scope callback used by
+// observeShortcutsConcurrently. Each caller supplies a closure that performs
+// the actual observation (delta, enumerate, or reconciliation).
+type shortcutDispatchFunc func(ctx context.Context, sc *Shortcut) (scopeResult, error)
+
+// observeShortcutsConcurrently fans out shortcut observation across up to
+// maxShortcutConcurrency goroutines. It handles errgroup setup, collision
+// skipping, error logging, result collection, delta token commit, and
+// completion logging. The dispatch func contains the per-scope observation
+// strategy — callers only need to supply a closure and a log label.
+func (e *Engine) observeShortcutsConcurrently(
+	ctx context.Context, shortcuts []Shortcut, collisions map[string]bool,
+	dispatch shortcutDispatchFunc, logContext string,
 ) ([]ChangeEvent, error) {
 	if len(shortcuts) == 0 {
 		return nil, nil
@@ -351,9 +371,9 @@ func (e *Engine) observeShortcutContentFromList(
 				return nil
 			}
 
-			result, scErr := e.observeSingleShortcut(gCtx, sc, bl)
+			result, scErr := dispatch(gCtx, sc)
 			if scErr != nil {
-				e.logger.Warn("shortcut observation failed, skipping",
+				e.logger.Warn("shortcut "+logContext+" failed, skipping",
 					slog.String("item_id", sc.ItemID),
 					slog.String("remote_drive", sc.RemoteDrive),
 					slog.String("error", scErr.Error()),
@@ -374,7 +394,7 @@ func (e *Engine) observeShortcutContentFromList(
 	// errgroup goroutines never return errors (they log and continue),
 	// but we check the error to satisfy errcheck lint.
 	if err := g.Wait(); err != nil {
-		return nil, fmt.Errorf("sync: shortcut observation: %w", err)
+		return nil, fmt.Errorf("sync: shortcut %s: %w", logContext, err)
 	}
 
 	// Commit all delta tokens after all scopes are done.
@@ -395,13 +415,28 @@ func (e *Engine) observeShortcutContentFromList(
 	}
 
 	if len(allEvents) > 0 {
-		e.logger.Info("shortcut observation complete",
+		e.logger.Info("shortcut "+logContext+" complete",
 			slog.Int("shortcuts", len(shortcuts)),
 			slog.Int("events", len(allEvents)),
 		)
 	}
 
 	return allEvents, nil
+}
+
+// observeShortcutContentFromList observes content for all active shortcuts
+// concurrently. Takes pre-loaded shortcuts to avoid redundant DB queries
+// (B-333). Delta tokens are deferred until all scopes complete, ensuring
+// atomicity.
+func (e *Engine) observeShortcutContentFromList(
+	ctx context.Context, shortcuts []Shortcut, bl *Baseline, collisions map[string]bool,
+) ([]ChangeEvent, error) {
+	return e.observeShortcutsConcurrently(ctx, shortcuts, collisions,
+		func(gCtx context.Context, sc *Shortcut) (scopeResult, error) {
+			return e.observeSingleShortcut(gCtx, sc, bl)
+		},
+		"observation",
+	)
 }
 
 // observeSingleShortcut observes content for one shortcut scope.
@@ -420,6 +455,12 @@ func (e *Engine) observeSingleShortcut(ctx context.Context, sc *Shortcut, bl *Ba
 
 // observeShortcutDelta uses folder-scoped delta to observe shortcut content.
 // Returns the events and the new delta token (not committed — caller handles that).
+//
+// Orphan detection is deliberately omitted here: incremental delta only returns
+// items that changed since the last token, not the full set. Comparing that
+// partial set against the baseline would incorrectly flag unchanged items as
+// deleted. Orphan detection for delta-observed shortcuts is handled by
+// reconcileShortcutDelta, which uses an empty token to enumerate all items.
 func (e *Engine) observeShortcutDelta(
 	ctx context.Context, sc *Shortcut, remoteDriveID driveid.ID, bl *Baseline,
 ) (scopeResult, error) {
@@ -501,76 +542,20 @@ func (e *Engine) reconcileShortcutScopes(ctx context.Context, bl *Baseline) ([]C
 	}
 
 	collisions := detectShortcutCollisionsFromList(shortcuts, bl, e.logger)
-	results := make([]scopeResult, len(shortcuts))
 
-	var mu stdsync.Mutex
-
-	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(maxShortcutConcurrency)
-
-	for i := range shortcuts {
-		sc := &shortcuts[i]
-
-		g.Go(func() error {
-			mu.Lock()
-			results[i].shortcut = sc
-			mu.Unlock()
-
-			if collisions[sc.ItemID] {
-				return nil
-			}
-
+	return e.observeShortcutsConcurrently(ctx, shortcuts, collisions,
+		func(gCtx context.Context, sc *Shortcut) (scopeResult, error) {
 			remoteDriveID := driveid.New(sc.RemoteDrive)
-
-			var result scopeResult
-			var scErr error
 
 			switch sc.Observation {
 			case ObservationDelta:
-				result, scErr = e.reconcileShortcutDelta(gCtx, sc, remoteDriveID, bl)
+				return e.reconcileShortcutDelta(gCtx, sc, remoteDriveID, bl)
 			default:
-				result, scErr = e.observeShortcutEnumerate(gCtx, sc, remoteDriveID, bl)
+				return e.observeShortcutEnumerate(gCtx, sc, remoteDriveID, bl)
 			}
-
-			if scErr != nil {
-				e.logger.Warn("shortcut reconciliation failed, skipping",
-					slog.String("item_id", sc.ItemID),
-					slog.String("error", scErr.Error()),
-				)
-
-				return nil
-			}
-
-			mu.Lock()
-			results[i].events = result.events
-			results[i].deltaToken = result.deltaToken
-			mu.Unlock()
-
-			return nil
-		})
-	}
-
-	if err := g.Wait(); err != nil {
-		return nil, fmt.Errorf("sync: shortcut reconciliation: %w", err)
-	}
-
-	var allEvents []ChangeEvent
-
-	for i := range results {
-		allEvents = append(allEvents, results[i].events...)
-
-		if results[i].deltaToken != "" {
-			sc := results[i].shortcut
-			if err := e.baseline.CommitDeltaToken(ctx, results[i].deltaToken, sc.RemoteDrive, sc.RemoteItem, sc.RemoteDrive); err != nil {
-				e.logger.Warn("failed to commit reconciliation delta token",
-					slog.String("item_id", sc.ItemID),
-					slog.String("error", err.Error()),
-				)
-			}
-		}
-	}
-
-	return allEvents, nil
+		},
+		"reconciliation",
+	)
 }
 
 // reconcileShortcutDelta performs a full delta enumeration for a shortcut
