@@ -48,6 +48,7 @@ All filter settings are per-drive (no global filter defaults).
 - R-2.5.1: When the process is killed mid-sync, the next run shall resume cleanly from the last checkpoint. [verified]
 - R-2.5.2: The sync state store shall provide durable, transactional writes that survive process kill. [verified]
 - R-2.5.3: On startup, the system shall detect items stuck in `syncing` state and reset them for re-planning (reconciler). [verified]
+- R-2.5.4: When `ResetInProgressStates` resets items to pending state, the system shall create corresponding `sync_failures` entries so the `FailureRetrier` can rediscover and re-process them. Without this bridge, items that crashed mid-execution become zombies — the delta token was already advanced, so no new events arrive. [verified]
 
 ## R-2.6 Pause / Resume [verified]
 

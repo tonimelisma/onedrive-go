@@ -77,6 +77,10 @@ Implements: R-2.10.41 [verified]
 
 `ResetInProgressStates()` handles crash recovery: on startup, resets items stuck in `downloading`/`deleting` state to `pending_download`/`pending_delete`. In watch mode, `RunWatch` calls `RunOnce` on startup which calls `ResetInProgressStates`, rediscovering all pending items.
 
+Implements: R-2.5.4 [verified]
+
+After resetting `remote_state`, `ResetInProgressStates` also creates corresponding `sync_failures` entries (category=`transient`, direction matching the action, `next_retry_at` computed via `delayFn`) for each item that transitioned to a pending state. This bridges `remote_state` to the sole retry mechanism (`FailureRetrier` + `sync_failures`). Without this bridge, items that crashed mid-execution would become zombies: the delta token was already advanced (no new events), and the `FailureRetrier` only queries `sync_failures`. `RecordFailure` uses UPSERT — if a `sync_failures` entry already exists from a prior failure before the crash, the existing `failure_count` is preserved and incremented, so backoff continues from where it left off.
+
 The `FailureRetrier` (`reconciler.go`) is the sole retry mechanism for sync actions. It periodically sweeps `sync_failures` for items whose `next_retry_at` has expired and re-injects them into the pipeline via buffer → planner → tracker. The engine calls `Complete` on every worker result (never `ReQueue`) and records failures in `sync_failures` with exponential backoff via `retry.Reconcile.Delay`. `CommitOutcome` success cleanup clears `sync_failures` for all action types (upload, download, delete, move).
 
 ## Status Computation (`compute_status.go`)

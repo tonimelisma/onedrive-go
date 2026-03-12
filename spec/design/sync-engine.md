@@ -114,5 +114,5 @@ Cobra command wiring. Sets up the orchestrator, handles `--watch`, `--download-o
 
 ### Rationale
 
-- **Idempotent planner = free crash recovery**: On restart after crash, delta re-observation produces the same actions. Items completed before crash are in baseline (EF1 no-ops). Items not completed get fresh actions. No persistent action queue needed.
+- **Crash recovery requires explicit bridging**: On restart after crash, `ResetInProgressStates` resets `remote_state` items stuck mid-execution to pending, AND creates `sync_failures` entries so the `FailureRetrier`'s bootstrap sweep can rediscover them. This is necessary because the delta token was already advanced before execution — items that crashed mid-execution won't appear in the next delta response. The planner is idempotent for items that DO appear in observations, but crash recovery items need the `sync_failures` → `FailureRetrier` → buffer → planner path.
 - **Always use Orchestrator, even for single drive**: N=1 means one DriveRunner — same logic, no special case. Prevents "works for N=1 but breaks for N=2" class of bugs.

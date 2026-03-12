@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // SafetyConfig controls big-delete protection thresholds.
@@ -75,7 +77,7 @@ func (p *Planner) Plan(
 	var allActions []Action
 
 	// Step 1: detect and extract moves before per-path classification.
-	allActions = append(allActions, detectMoves(views, changes, deniedPrefixes)...)
+	allActions = append(allActions, detectMoves(views, changes, deniedPrefixes, baseline)...)
 
 	// Step 2: classify each remaining path. Sort keys for deterministic
 	// action order across runs with identical input (B-154).
@@ -170,17 +172,83 @@ func buildPathViews(changes []PathChanges, baseline *Baseline) map[string]*PathV
 	return views
 }
 
+// ---------------------------------------------------------------------------
+// Cross-drive move guard
+// ---------------------------------------------------------------------------
+
+// resolvePathDriveID determines which drive owns a path by checking the
+// baseline. If the path itself has no baseline entry, walks up parent
+// directories until an ancestor with a baseline entry is found. Returns
+// zero ID if no ancestry has a baseline entry.
+func resolvePathDriveID(p string, bl *Baseline) driveid.ID {
+	// Check the path itself first.
+	if entry, ok := bl.GetByPath(p); ok {
+		return entry.DriveID
+	}
+
+	// Walk up parent directories.
+	for dir := filepath.Dir(p); dir != "." && dir != "" && dir != "/"; dir = filepath.Dir(dir) {
+		if entry, ok := bl.GetByPath(dir); ok {
+			return entry.DriveID
+		}
+	}
+
+	return driveid.ID{}
+}
+
+// isCrossDriveLocalMove returns true when a hash-correlated delete+create
+// pair spans different drives (e.g., own drive → shortcut folder). The
+// Graph API MoveItem is a single-drive operation, so cross-drive moves
+// must be decomposed into a delete + upload.
+func isCrossDriveLocalMove(deletePath, createPath string, views map[string]*PathView, bl *Baseline) bool {
+	// Source drive comes from the deleted item's baseline.
+	deleteView := views[deletePath]
+	if deleteView == nil || deleteView.Baseline == nil {
+		return false // no baseline → can't determine source drive; don't decompose
+	}
+
+	sourceDrive := deleteView.Baseline.DriveID
+	destDrive := resolvePathDriveID(createPath, bl)
+
+	// Conservative: if either drive is unknown, don't decompose — let the
+	// normal move path handle it (it'll fail and get retried as separate ops).
+	if sourceDrive.IsZero() || destDrive.IsZero() {
+		return false
+	}
+
+	return !sourceDrive.Equal(destDrive)
+}
+
+// isCrossDriveRemoteMove returns true when a remote ChangeMove event
+// has different drive IDs in the baseline (source) and remote (destination).
+// Cross-drive remote moves from the API shouldn't happen in practice, but
+// guard defensively.
+func isCrossDriveRemoteMove(view *PathView) bool {
+	if view.Baseline == nil || view.Remote == nil {
+		return false
+	}
+
+	sourceDrive := view.Baseline.DriveID
+	destDrive := view.Remote.DriveID
+
+	if sourceDrive.IsZero() || destDrive.IsZero() {
+		return false
+	}
+
+	return !sourceDrive.Equal(destDrive)
+}
+
 // detectMoves finds remote and local moves, produces move actions, and
 // removes matched paths from the views map so they do not enter per-path
 // classification.
-func detectMoves(views map[string]*PathView, changes []PathChanges, deniedPrefixes []string) []Action {
+func detectMoves(views map[string]*PathView, changes []PathChanges, deniedPrefixes []string, bl *Baseline) []Action {
 	var actions []Action
 
 	// Remote moves: scan for ChangeMove events in remote events.
 	actions = append(actions, detectRemoteMoves(views, changes)...)
 
 	// Local moves: hash-based correlation of delete+create pairs.
-	actions = append(actions, detectLocalMoves(views, deniedPrefixes)...)
+	actions = append(actions, detectLocalMoves(views, deniedPrefixes, bl)...)
 
 	return actions
 }
@@ -201,6 +269,14 @@ func detectRemoteMoves(views map[string]*PathView, changes []PathChanges) []Acti
 			// The move event's Path is the new path; OldPath is where it was.
 			view := views[pc.Path]
 			if view == nil {
+				continue
+			}
+
+			// Cross-drive guard: if the server reports a move across drives,
+			// skip the move action and let the paths classify as separate
+			// delete + download. This shouldn't happen in practice but
+			// guards defensively.
+			if isCrossDriveRemoteMove(view) {
 				continue
 			}
 
@@ -235,20 +311,8 @@ func detectRemoteMoves(views map[string]*PathView, changes []PathChanges) []Acti
 // to detect renames. Only unique matches (exactly one delete and one
 // create with the same hash) produce move actions. Ambiguous cases are
 // skipped and fall through to separate delete+create.
-func detectLocalMoves(views map[string]*PathView, deniedPrefixes []string) []Action {
-	// Build hash-keyed maps of candidates.
-	deletesByHash := make(map[string][]string) // hash -> [paths]
-	createsByHash := make(map[string][]string) // hash -> [paths]
-
-	for p, view := range views {
-		if view.Local == nil && view.Baseline != nil && view.Baseline.LocalHash != "" {
-			deletesByHash[view.Baseline.LocalHash] = append(deletesByHash[view.Baseline.LocalHash], p)
-		}
-
-		if view.Local != nil && view.Baseline == nil && view.Local.Hash != "" {
-			createsByHash[view.Local.Hash] = append(createsByHash[view.Local.Hash], p)
-		}
-	}
+func detectLocalMoves(views map[string]*PathView, deniedPrefixes []string, bl *Baseline) []Action {
+	deletesByHash, createsByHash := buildLocalMoveHashMaps(views)
 
 	// Sort hash keys for deterministic move detection order (B-154).
 	sortedHashes := make([]string, 0, len(deletesByHash))
@@ -263,20 +327,14 @@ func detectLocalMoves(views map[string]*PathView, deniedPrefixes []string) []Act
 	for _, hash := range sortedHashes {
 		delPaths := deletesByHash[hash]
 		crePaths, ok := createsByHash[hash]
-		if !ok {
-			continue
-		}
-
-		// Unique match constraint: exactly one of each.
-		if len(delPaths) != 1 || len(crePaths) != 1 {
-			continue
+		if !ok || len(delPaths) != 1 || len(crePaths) != 1 {
+			continue // no match or ambiguous
 		}
 
 		deletePath := delPaths[0]
 		createPath := crePaths[0]
 
-		// Skip local moves under permission-denied folders — can't write to remote.
-		if isWriteDenied(deletePath, deniedPrefixes) || isWriteDenied(createPath, deniedPrefixes) {
+		if shouldSkipLocalMove(deletePath, createPath, views, deniedPrefixes, bl) {
 			continue
 		}
 
@@ -294,6 +352,43 @@ func detectLocalMoves(views map[string]*PathView, deniedPrefixes []string) []Act
 	}
 
 	return actions
+}
+
+// buildLocalMoveHashMaps indexes local deletes and creates by content hash
+// for move correlation.
+func buildLocalMoveHashMaps(views map[string]*PathView) (deletesByHash, createsByHash map[string][]string) {
+	deletesByHash = make(map[string][]string)
+	createsByHash = make(map[string][]string)
+
+	for p, view := range views {
+		if view.Local == nil && view.Baseline != nil && view.Baseline.LocalHash != "" {
+			deletesByHash[view.Baseline.LocalHash] = append(deletesByHash[view.Baseline.LocalHash], p)
+		}
+
+		if view.Local != nil && view.Baseline == nil && view.Local.Hash != "" {
+			createsByHash[view.Local.Hash] = append(createsByHash[view.Local.Hash], p)
+		}
+	}
+
+	return deletesByHash, createsByHash
+}
+
+// shouldSkipLocalMove returns true if a hash-matched delete+create pair
+// should NOT be treated as a move (permission denied or cross-drive).
+func shouldSkipLocalMove(
+	deletePath, createPath string, views map[string]*PathView,
+	deniedPrefixes []string, bl *Baseline,
+) bool {
+	// Skip local moves under permission-denied folders — can't write to remote.
+	if isWriteDenied(deletePath, deniedPrefixes) || isWriteDenied(createPath, deniedPrefixes) {
+		return true
+	}
+
+	// Cross-drive guard: MoveItem is a single-drive API call. When source
+	// and destination are on different drives, skip the move match — the
+	// paths fall through to normal per-path classification which will
+	// produce a delete + upload instead.
+	return isCrossDriveLocalMove(deletePath, createPath, views, bl)
 }
 
 // classifyPathView determines actions for a single path view based on
