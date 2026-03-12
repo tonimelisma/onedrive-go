@@ -748,3 +748,99 @@ func TestExtendTrial_UnknownScope(t *testing.T) {
 	// Should not panic on unknown scope.
 	dt.ExtendTrial("nonexistent", time.Now().Add(time.Minute))
 }
+
+// ---------------------------------------------------------------------------
+// EarliestTrialAt (R-2.10.5)
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.10.5
+func TestEarliestTrialAt_ReturnsEarliest(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+	now := time.Now()
+
+	// No blocks → no earliest.
+	_, ok := dt.EarliestTrialAt()
+	assert.False(t, ok, "no scope blocks → no earliest trial")
+
+	// Add two blocks with different NextTrialAt and held actions.
+	dt.HoldScope("service", &ScopeBlock{
+		Key:         "service",
+		IssueType:   "service_outage",
+		NextTrialAt: now.Add(5 * time.Minute),
+	})
+	dt.Add(&Action{Type: ActionDownload, Path: "a.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
+
+	dt.HoldScope("throttle:account", &ScopeBlock{
+		Key:         "throttle:account",
+		IssueType:   "rate_limited",
+		NextTrialAt: now.Add(2 * time.Minute),
+	})
+	dt.Add(&Action{Type: ActionUpload, Path: "b.txt", DriveID: driveid.New("d"), ItemID: "i2"}, 2, nil)
+
+	earliest, ok := dt.EarliestTrialAt()
+	assert.True(t, ok)
+	assert.Equal(t, now.Add(2*time.Minute), earliest, "should return the earlier of the two")
+}
+
+// Validates: R-2.10.5
+func TestEarliestTrialAt_SkipsEmptyHeldQueue(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+	now := time.Now()
+
+	// Block exists but no held actions.
+	dt.HoldScope("service", &ScopeBlock{
+		Key:         "service",
+		IssueType:   "service_outage",
+		NextTrialAt: now.Add(time.Minute),
+	})
+
+	_, ok := dt.EarliestTrialAt()
+	assert.False(t, ok, "block with no held actions should be skipped")
+}
+
+// Validates: R-2.10.5
+func TestEarliestTrialAt_SkipsZeroNextTrialAt(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+
+	// Block with zero NextTrialAt.
+	dt.HoldScope("service", &ScopeBlock{
+		Key:       "service",
+		IssueType: "service_outage",
+	})
+	dt.Add(&Action{Type: ActionDownload, Path: "a.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
+
+	_, ok := dt.EarliestTrialAt()
+	assert.False(t, ok, "zero NextTrialAt should be skipped")
+}
+
+// ---------------------------------------------------------------------------
+// GetScopeBlock
+// ---------------------------------------------------------------------------
+
+func TestGetScopeBlock(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+
+	// Unknown key → not found.
+	_, ok := dt.GetScopeBlock("nonexistent")
+	assert.False(t, ok)
+
+	// Add a block and retrieve it.
+	block := &ScopeBlock{
+		Key:           "quota:own",
+		IssueType:     "quota_exceeded",
+		TrialInterval: 5 * time.Minute,
+	}
+	dt.HoldScope("quota:own", block)
+
+	got, ok := dt.GetScopeBlock("quota:own")
+	require.True(t, ok)
+	assert.Equal(t, block, got)
+}

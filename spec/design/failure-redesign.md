@@ -373,12 +373,19 @@ The system has three independent retry loops that nest and compound:
     │     └─ send WorkerResult to Engine
     │
     ├─ classifyResult(WorkerResult)  ← SINGLE classification point
+    │     ├─ handleTrialResult (if IsTrial): success → ReleaseScope + resetScopeRetryTimes (thundering herd) + armTrialTimer
+    │     │                                  failure → GetScopeBlock, double TrialInterval (capped per scope type), ExtendTrial + armTrialTimer
     │     ├─ success → commitOutcome, Tracker.Complete(id)
-    │     ├─ transient → Tracker.Complete(id), record in sync_failures with next_retry_at, check scope
+    │     ├─ transient → Tracker.Complete(id), record in sync_failures with next_retry_at + scope_key, check scope
     │     │                └─ reconciler re-injects when next_retry_at is due
     │     ├─ actionable → sync_failures (no retry), then check scope escalation
-    │     ├─ scopeSignal → set ScopeBlock (429 immediate, 507/5xx pattern-based)
+    │     ├─ scopeSignal → applyScopeBlock: create ScopeBlock, HoldScope, armTrialTimer
     │     └─ skip/fatal → record, Tracker.Complete(id)
+    │
+    ├─ [Trial Timer] (select case in drainWorkerResults)
+    │     ├─ armTrialTimer(): sets timer to EarliestTrialAt() across all scope blocks
+    │     ├─ on fire: NextDueTrial(now) loop → DispatchTrial(key) for each due trial
+    │     └─ re-arms after dispatch
     │
     └─ [Reconciler]
           ├─ startup: reset stuck items (downloading → pending_download, etc.)
