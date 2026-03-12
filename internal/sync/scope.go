@@ -91,6 +91,28 @@ func NewScopeState(nowFunc func() time.Time, logger *slog.Logger) *ScopeState {
 	}
 }
 
+// scopeKeyForStatus maps an HTTP status code and shortcut context to a scope
+// key. Returns "" for non-scope statuses. This is the single source of truth
+// for HTTP status → scope key classification, used by both UpdateScope
+// (detection) and deriveScopeKey (sync_failures tagging).
+func scopeKeyForStatus(httpStatus int, shortcutKey string) string {
+	switch {
+	case httpStatus == http.StatusTooManyRequests:
+		return scopeKeyThrottleAccount
+	case httpStatus == http.StatusServiceUnavailable:
+		return scopeKeyService
+	case httpStatus == http.StatusInsufficientStorage:
+		if shortcutKey != "" {
+			return scopeKeyQuotaShortcut + shortcutKey
+		}
+		return scopeKeyQuotaOwn
+	case httpStatus >= http.StatusInternalServerError:
+		return scopeKeyService
+	default:
+		return ""
+	}
+}
+
 // ScopeUpdateResult describes the outcome of updateScope: whether a new scope
 // block should be created.
 type ScopeUpdateResult struct {
@@ -136,10 +158,7 @@ func (ss *ScopeState) UpdateScope(r *WorkerResult) ScopeUpdateResult {
 
 	case r.HTTPStatus == http.StatusInsufficientStorage:
 		// Quota failure — scope depends on target drive (R-2.10.1, R-2.10.17).
-		scopeKey := scopeKeyQuotaOwn
-		if r.ShortcutKey != "" {
-			scopeKey = scopeKeyQuotaShortcut + r.ShortcutKey
-		}
+		scopeKey := scopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)
 		return ss.checkWindow(scopeKey, r.Path, quotaWindowThreshold, quotaWindowDuration, "quota_exceeded", quotaInitialInterval)
 
 	case r.HTTPStatus >= http.StatusInternalServerError:

@@ -138,6 +138,10 @@ type Engine struct {
 	syncErrors   []error
 	syncErrorsMu stdsync.Mutex
 
+	// nowFn is the engine's clock. Defaults to time.Now. Tests inject a
+	// controllable clock for deterministic trial timer and scope timing.
+	nowFn func() time.Time
+
 	// localWatcherFactory overrides the default fsnotify watcher factory
 	// for the local observer. Tests inject a mock factory to simulate
 	// inotify watch limit exhaustion (ENOSPC).
@@ -1124,7 +1128,10 @@ func isOutagePattern(err error) bool {
 // Shared by both one-shot (executePlan drain goroutine) and watch
 // (drainWorkerResults) paths.
 func (e *Engine) processWorkerResult(ctx context.Context, r *WorkerResult, bl *Baseline, shortcuts []Shortcut) {
-	// Handle trial results — check if a scope trial succeeded or failed.
+	// Handle trial results first — scope release/extend runs before normal
+	// classification. A successful trial still falls through to resultSuccess
+	// below (Complete + RecordSuccess), which is correct: the action did real
+	// work and the sliding window reset is harmless for a released scope.
 	if r.IsTrial && r.TrialScopeKey != "" {
 		e.handleTrialResult(ctx, r)
 	}
@@ -1206,9 +1213,8 @@ func (e *Engine) handleTrialResult(ctx context.Context, r *WorkerResult) {
 		newInterval = maxInterval
 	}
 
-	// Update the block's TrialInterval for next doubling.
-	block.TrialInterval = newInterval
-	e.tracker.ExtendTrial(r.TrialScopeKey, e.nowFunc().Add(newInterval))
+	// All mutation happens inside the tracker under its lock.
+	e.tracker.ExtendTrialInterval(r.TrialScopeKey, e.nowFunc().Add(newInterval), newInterval)
 	e.armTrialTimer()
 }
 
@@ -1292,25 +1298,11 @@ func (e *Engine) recordFailure(ctx context.Context, r *WorkerResult, delayFn fun
 	}
 }
 
-// deriveScopeKey returns the scope key for a failed worker result based on
-// HTTP status and shortcut context. Returns "" for non-scope failures.
-// Uses the same classification logic as ScopeState.UpdateScope (scope.go).
+// deriveScopeKey returns the scope key for a failed worker result.
+// Delegates to scopeKeyForStatus (scope.go) — single source of truth for
+// HTTP status → scope key mapping.
 func deriveScopeKey(r *WorkerResult) string {
-	switch {
-	case r.HTTPStatus == http.StatusTooManyRequests:
-		return scopeKeyThrottleAccount
-	case r.HTTPStatus == http.StatusServiceUnavailable:
-		return scopeKeyService
-	case r.HTTPStatus == http.StatusInsufficientStorage:
-		if r.ShortcutKey != "" {
-			return scopeKeyQuotaShortcut + r.ShortcutKey
-		}
-		return scopeKeyQuotaOwn
-	case r.HTTPStatus >= http.StatusInternalServerError:
-		return scopeKeyService
-	default:
-		return ""
-	}
+	return scopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)
 }
 
 // resetScopeRetryTimes resets next_retry_at for all sync_failures matching
@@ -1318,7 +1310,7 @@ func deriveScopeKey(r *WorkerResult) string {
 // succeeds, all items with future backoff for that scope become immediately
 // retriable. Kicks the retrier so it picks them up promptly.
 func (e *Engine) resetScopeRetryTimes(ctx context.Context, scopeKey string) {
-	if err := e.baseline.ResetRetryTimesForScope(ctx, scopeKey); err != nil {
+	if err := e.baseline.ResetRetryTimesForScope(ctx, scopeKey, e.nowFunc()); err != nil {
 		e.logger.Warn("failed to reset retry times for scope",
 			slog.String("scope_key", scopeKey),
 			slog.String("error", err.Error()),
@@ -1332,9 +1324,12 @@ func (e *Engine) resetScopeRetryTimes(ctx context.Context, scopeKey string) {
 	}
 }
 
-// nowFunc returns the current time. Uses the engine's clock if available,
-// otherwise falls back to time.Now.
+// nowFunc returns the current time from the engine's injectable clock.
+// Defaults to time.Now; tests inject a controllable clock.
 func (e *Engine) nowFunc() time.Time {
+	if e.nowFn != nil {
+		return e.nowFn()
+	}
 	return time.Now()
 }
 

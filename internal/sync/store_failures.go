@@ -413,17 +413,17 @@ func (m *SyncStore) ClearResolvedActionableFailures(ctx context.Context, issueTy
 	return nil
 }
 
-// ResetRetryTimesForScope sets next_retry_at to now for all transient
-// sync_failures matching the given scope_key whose next_retry_at is in the
-// future. This is the "thundering herd" mechanism — when a scope trial
-// succeeds, all held-back failures for that scope become immediately
-// retriable (R-2.10.11, R-2.10.15).
-func (m *SyncStore) ResetRetryTimesForScope(ctx context.Context, scopeKey string) error {
-	now := m.nowFunc().UnixNano()
+// ResetRetryTimesForScope sets next_retry_at to the given time for all
+// transient sync_failures matching the given scope_key whose next_retry_at
+// is in the future. The caller (engine) provides the timestamp so the
+// engine's clock is authoritative — the store doesn't decide when "now" is.
+// This is the "thundering herd" mechanism (R-2.10.11, R-2.10.15).
+func (m *SyncStore) ResetRetryTimesForScope(ctx context.Context, scopeKey string, now time.Time) error {
+	nowNano := now.UnixNano()
 	_, err := m.db.ExecContext(ctx,
 		`UPDATE sync_failures SET next_retry_at = ?
 		WHERE scope_key = ? AND next_retry_at > ? AND category = 'transient'`,
-		now, scopeKey, now,
+		nowNano, scopeKey, nowNano,
 	)
 	if err != nil {
 		return fmt.Errorf("sync: resetting retry times for scope %s: %w", scopeKey, err)
