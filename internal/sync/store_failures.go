@@ -1,19 +1,18 @@
 // store_failures.go — Sync failure recording and queries for SyncStore.
 //
-// sync_failures is a diagnostic record — it records failures for `onedrive status`
-// visibility but never drives retry scheduling. The tracker is the sole retry
-// mechanism (R-6.8.10). Transient issues get next_retry_at = NULL.
+// sync_failures is the active retry queue. Transient failures get next_retry_at
+// computed by a caller-provided delayFn (retry.Reconcile.Delay). The
+// FailureRetrier re-injects due items via buffer → planner → tracker (R-6.8.10).
 //
 // Contents:
 //   - isActionableIssue:                classify issue types requiring user action
 //   - RecordFailure:                    unified failure recording with remote_state transition
-//   - classifyFailure:                  determine category (no retry computation)
 //   - transitionRemoteStateOnFailure:   downloading→download_failed, deleting→delete_failed
 //   - ListSyncFailures:                 all failures ordered by last_seen_at
 //   - ListActionableFailures:           user-actionable failures only
-//   - ListSyncFailuresForRetry:         transient failures ready for retry (legacy, returns empty)
+//   - ListSyncFailuresForRetry:         transient failures ready for retry
 //   - ListSyncFailuresByIssueType:      failures filtered by issue type
-//   - EarliestSyncFailureRetryAt:       minimum future retry time (legacy, returns zero)
+//   - EarliestSyncFailureRetryAt:       minimum future retry time
 //   - SyncFailureCount:                 count of transient failures
 //   - ClearSyncFailure:                 remove by path + drive
 //   - ClearSyncFailureByPath:           remove by path (any drive)
@@ -76,12 +75,13 @@ func isActionableIssue(issueType string) bool {
 // When ItemID is not provided and direction is download/delete, it is
 // auto-resolved from remote_state within the same transaction.
 //
-// Actionable issues (determined by isActionableIssue) get category='actionable'
-// with no next_retry_at. Transient issues use exponential backoff.
+// The engine sets p.Category ("transient" or "actionable") and provides
+// delayFn for computing next_retry_at from the current failure count.
+// Passing delayFn=nil means no retry scheduling (actionable failures).
 //
 // UPSERT ON CONFLICT uses COALESCE for issue_type, item_id, file_size,
 // local_hash to preserve existing values when new values are empty/zero.
-func (m *SyncStore) RecordFailure(ctx context.Context, p *SyncFailureParams) error {
+func (m *SyncStore) RecordFailure(ctx context.Context, p *SyncFailureParams, delayFn func(int) time.Duration) error {
 	now := m.nowFunc()
 
 	tx, err := m.db.BeginTx(ctx, nil)
@@ -97,22 +97,22 @@ func (m *SyncStore) RecordFailure(ctx context.Context, p *SyncFailureParams) err
 		}
 	}
 
-	// Step 2: Classify failure — no retry computation (tracker handles retry).
-	category, currentFailures := m.classifyFailure(ctx, tx, p)
-	var nextRetryNano *int64 // always nil — tracker handles all retry timing
+	// Step 2: Read current failure count and compute backoff.
+	category := p.Category
+	if category == "" {
+		category = strTransient
+	}
+
+	currentFailures := m.readFailureCount(ctx, tx, p)
+	nextRetryNano := m.computeNextRetry(now, currentFailures, delayFn)
 	newCount := currentFailures + 1
 	nowNano := now.UnixNano()
 
 	// Step 3: Auto-resolve item_id from remote_state for download/delete
 	// when caller didn't provide one.
-	itemID := p.ItemID
-	if itemID == "" && (p.Direction == strDownload || p.Direction == strDelete) {
-		if scanErr := tx.QueryRowContext(ctx,
-			`SELECT item_id FROM remote_state WHERE path = ? AND drive_id = ?`,
-			p.Path, p.DriveID.String(),
-		).Scan(&itemID); scanErr != nil && scanErr != sql.ErrNoRows {
-			return fmt.Errorf("sync: reading item_id for %s: %w", p.Path, scanErr)
-		}
+	itemID, resolveErr := m.resolveItemID(ctx, tx, p)
+	if resolveErr != nil {
+		return resolveErr
 	}
 
 	// Step 5: UPSERT into sync_failures with full field set.
@@ -154,34 +154,57 @@ func (m *SyncStore) RecordFailure(ctx context.Context, p *SyncFailureParams) err
 	return nil
 }
 
-// classifyFailure reads the current failure count and determines whether the
-// issue is actionable or transient. Returns (category, currentFailures).
-//
-// next_retry_at is always NULL because the tracker is the sole retry
-// mechanism (R-6.8.10). sync_failures is diagnostic-only — it records
-// failures for `onedrive status` visibility but never drives retry scheduling.
-func (m *SyncStore) classifyFailure(
-	ctx context.Context, tx *sql.Tx, p *SyncFailureParams,
-) (string, int) {
-	var currentFailures int
+// readFailureCount queries the current failure count for backoff computation.
+// Returns 0 if the row doesn't exist or the query fails (non-critical).
+func (m *SyncStore) readFailureCount(ctx context.Context, tx *sql.Tx, p *SyncFailureParams) int {
+	var count int
 	if scanErr := tx.QueryRowContext(ctx,
 		`SELECT failure_count FROM sync_failures WHERE path = ? AND drive_id = ?`,
 		p.Path, p.DriveID.String(),
-	).Scan(&currentFailures); scanErr != nil && scanErr != sql.ErrNoRows {
-		// Non-critical: if we can't read the count, start from 0.
-		// The UPSERT will still work correctly.
+	).Scan(&count); scanErr != nil && scanErr != sql.ErrNoRows {
 		m.logger.Warn("RecordFailure: failed to read failure count, using 0",
 			slog.String("path", p.Path),
 			slog.String("error", scanErr.Error()),
 		)
 	}
 
-	if p.IssueType != "" && isActionableIssue(p.IssueType) {
-		return strActionable, currentFailures
+	return count
+}
+
+// computeNextRetry returns the next_retry_at nanosecond timestamp, or nil for
+// actionable failures (no retry scheduling). Uses delayFn(currentFailures) to
+// compute the backoff duration.
+func (m *SyncStore) computeNextRetry(now time.Time, currentFailures int, delayFn func(int) time.Duration) *int64 {
+	if delayFn == nil {
+		return nil
 	}
 
-	// Transient: no next_retry_at. Tracker handles all retry timing.
-	return strTransient, currentFailures
+	delay := delayFn(currentFailures)
+	n := now.Add(delay).UnixNano()
+
+	return &n
+}
+
+// resolveItemID returns the item_id for this failure. Uses p.ItemID if set;
+// for download/delete failures, falls back to looking up remote_state.
+func (m *SyncStore) resolveItemID(ctx context.Context, tx *sql.Tx, p *SyncFailureParams) (string, error) {
+	if p.ItemID != "" {
+		return p.ItemID, nil
+	}
+
+	if p.Direction != strDownload && p.Direction != strDelete {
+		return "", nil
+	}
+
+	var itemID string
+	if scanErr := tx.QueryRowContext(ctx,
+		`SELECT item_id FROM remote_state WHERE path = ? AND drive_id = ?`,
+		p.Path, p.DriveID.String(),
+	).Scan(&itemID); scanErr != nil && scanErr != sql.ErrNoRows {
+		return "", fmt.Errorf("sync: reading item_id for %s: %w", p.Path, scanErr)
+	}
+
+	return itemID, nil
 }
 
 // transitionRemoteStateOnFailure transitions remote_state status for

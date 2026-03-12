@@ -38,6 +38,17 @@ var WatchLocal = Policy{ //nolint:gochecknoglobals // named policy singleton
 	Jitter:      0.0,
 }
 
+// Reconcile is the single retry curve for all sync failures (sync_failures + FailureRetrier).
+// Infinite attempts (reconciler runs until success or the failure becomes actionable).
+// Curve: 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s, 256s, 512s, 1024s, 2048s, 3600s cap.
+var Reconcile = Policy{ //nolint:gochecknoglobals // named policy singleton
+	MaxAttempts: 0, // infinite — reconciler retries until success or actionable
+	Base:        1 * time.Second,
+	Max:         time.Hour,
+	Multiplier:  2.0,  //nolint:mnd // standard exponential factor
+	Jitter:      0.25, //nolint:mnd // ±25% jitter fraction
+}
+
 // WatchRemote is the remote observer error backoff policy (observer_remote.go).
 // Infinite attempts, 5s base, dynamic max (poll interval), 2x multiplier, no jitter.
 // The actual max is set dynamically via Backoff.SetMaxOverride().

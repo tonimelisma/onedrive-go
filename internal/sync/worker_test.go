@@ -655,7 +655,8 @@ func TestWorkerResult_PopulatesFromAction(t *testing.T) {
 		"TargetDriveID should flow through from Action")
 	assert.Equal(t, "remoteDrive:remoteItem", result.ShortcutKey,
 		"ShortcutKey should flow through from Action")
-	assert.Equal(t, 0, result.Attempt, "first attempt should be 0")
+	assert.False(t, result.IsTrial, "should not be a trial action")
+	assert.Empty(t, result.TrialScopeKey, "no trial scope key")
 	assert.Equal(t, int64(77), result.ActionID, "ActionID should match TrackedAction.ID")
 
 	// Clean up.
