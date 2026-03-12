@@ -712,7 +712,7 @@ func TestNextDueTrial(t *testing.T) {
 }
 
 // Validates: R-2.10.5
-func TestExtendTrial(t *testing.T) {
+func TestExtendTrialInterval(t *testing.T) {
 	t.Parallel()
 
 	dt := NewDepTracker(10, testLogger(t))
@@ -729,24 +729,24 @@ func TestExtendTrial(t *testing.T) {
 	dt.HoldScope("throttle:account", block)
 
 	newAt := now.Add(30 * time.Second)
-	dt.ExtendTrial("throttle:account", newAt)
+	dt.ExtendTrialInterval("throttle:account", newAt, 20*time.Second)
 
-	// Verify the block was updated.
-	dt.mu.Lock()
-	updated := dt.scopeBlocks["throttle:account"]
-	dt.mu.Unlock()
+	// Verify the block was updated via GetScopeBlock (returns a copy).
+	updated, ok := dt.GetScopeBlock("throttle:account")
+	require.True(t, ok)
 
 	assert.Equal(t, newAt, updated.NextTrialAt, "NextTrialAt should be extended")
 	assert.Equal(t, 1, updated.TrialCount, "TrialCount should be incremented")
+	assert.Equal(t, 20*time.Second, updated.TrialInterval, "TrialInterval should be updated")
 }
 
-func TestExtendTrial_UnknownScope(t *testing.T) {
+func TestExtendTrialInterval_UnknownScope(t *testing.T) {
 	t.Parallel()
 
 	dt := NewDepTracker(10, testLogger(t))
 
 	// Should not panic on unknown scope.
-	dt.ExtendTrial("nonexistent", time.Now().Add(time.Minute))
+	dt.ExtendTrialInterval("nonexistent", time.Now().Add(time.Minute), 30*time.Second)
 }
 
 // ---------------------------------------------------------------------------
@@ -842,5 +842,12 @@ func TestGetScopeBlock(t *testing.T) {
 
 	got, ok := dt.GetScopeBlock("quota:own")
 	require.True(t, ok)
-	assert.Equal(t, block, got)
+	assert.Equal(t, *block, got)
+
+	// GetScopeBlock returns a copy — mutating it must not affect the tracker.
+	got.TrialInterval = 99 * time.Hour
+	original, ok := dt.GetScopeBlock("quota:own")
+	require.True(t, ok)
+	assert.Equal(t, 5*time.Minute, original.TrialInterval,
+		"mutating the returned copy must not affect the tracker's block")
 }

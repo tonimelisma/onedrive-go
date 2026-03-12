@@ -409,20 +409,25 @@ func (dt *DepTracker) EarliestTrialAt() (time.Time, bool) {
 	return earliest, found
 }
 
-// GetScopeBlock returns the ScopeBlock for the given key, or (nil, false)
-// if the scope is not blocked. Thread-safe.
-func (dt *DepTracker) GetScopeBlock(key string) (*ScopeBlock, bool) {
+// GetScopeBlock returns a snapshot of the ScopeBlock for the given key, or
+// (ScopeBlock{}, false) if the scope is not blocked. Returns a copy to
+// prevent unsynchronized mutation of tracker-owned state. Thread-safe.
+func (dt *DepTracker) GetScopeBlock(key string) (ScopeBlock, bool) {
 	dt.mu.Lock()
 	defer dt.mu.Unlock()
 
 	block, ok := dt.scopeBlocks[key]
-	return block, ok
+	if !ok {
+		return ScopeBlock{}, false
+	}
+	return *block, ok
 }
 
-// ExtendTrial updates a scope block's NextTrialAt and increments its
-// TrialCount. Called by the engine when a trial action fails — extends the
-// interval before the next trial. Thread-safe.
-func (dt *DepTracker) ExtendTrial(key string, nextAt time.Time) {
+// ExtendTrialInterval atomically doubles the block's TrialInterval (capped
+// at maxInterval), sets NextTrialAt, and increments TrialCount. All mutation
+// happens under the lock — callers must not mutate the block externally.
+// Thread-safe.
+func (dt *DepTracker) ExtendTrialInterval(key string, nextAt time.Time, newInterval time.Duration) {
 	dt.mu.Lock()
 	defer dt.mu.Unlock()
 
@@ -431,6 +436,7 @@ func (dt *DepTracker) ExtendTrial(key string, nextAt time.Time) {
 		return
 	}
 
+	block.TrialInterval = newInterval
 	block.NextTrialAt = nextAt
 	block.TrialCount++
 }
