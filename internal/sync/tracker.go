@@ -385,6 +385,40 @@ func (dt *DepTracker) NextDueTrial(now time.Time) (string, time.Time, bool) {
 	return "", time.Time{}, false
 }
 
+// EarliestTrialAt returns the earliest NextTrialAt across all scope blocks
+// that have non-empty held queues. Returns (time.Time{}, false) if no
+// trials are pending. Used by the engine's trial timer (R-2.10.5).
+func (dt *DepTracker) EarliestTrialAt() (time.Time, bool) {
+	dt.mu.Lock()
+	defer dt.mu.Unlock()
+
+	var earliest time.Time
+	found := false
+
+	for key, block := range dt.scopeBlocks {
+		if block.NextTrialAt.IsZero() || len(dt.held[key]) == 0 {
+			continue
+		}
+
+		if !found || block.NextTrialAt.Before(earliest) {
+			earliest = block.NextTrialAt
+			found = true
+		}
+	}
+
+	return earliest, found
+}
+
+// GetScopeBlock returns the ScopeBlock for the given key, or (nil, false)
+// if the scope is not blocked. Thread-safe.
+func (dt *DepTracker) GetScopeBlock(key string) (*ScopeBlock, bool) {
+	dt.mu.Lock()
+	defer dt.mu.Unlock()
+
+	block, ok := dt.scopeBlocks[key]
+	return block, ok
+}
+
 // ExtendTrial updates a scope block's NextTrialAt and increments its
 // TrialCount. Called by the engine when a trial action fails — extends the
 // interval before the next trial. Thread-safe.

@@ -46,12 +46,31 @@ const (
 )
 
 // Trial timing constants per scope type.
-// Max intervals and backoff multiplier are defined per R-2.10.6/R-2.10.8/R-2.10.14
-// and will be used when trial dispatch implements backoff escalation.
+// Initial intervals and max caps per R-2.10.6/R-2.10.7/R-2.10.8/R-2.10.14.
 const (
 	quotaInitialInterval   = 5 * time.Minute
 	serviceInitialInterval = 60 * time.Second
+
+	// Per-scope-type maximum trial intervals (R-2.10.6, R-2.10.8, R-2.10.14).
+	quotaMaxTrialInterval     = 1 * time.Hour
+	serviceMaxTrialInterval   = 10 * time.Minute
+	rateLimitMaxTrialInterval = 10 * time.Minute
 )
+
+// maxTrialIntervalForIssueType returns the maximum trial interval for the
+// given scope issue type. Used by handleTrialResult to cap backoff (R-2.10.14).
+func maxTrialIntervalForIssueType(issueType string) time.Duration {
+	switch issueType {
+	case "quota_exceeded":
+		return quotaMaxTrialInterval
+	case "rate_limited":
+		return rateLimitMaxTrialInterval
+	case "service_outage":
+		return serviceMaxTrialInterval
+	default:
+		return serviceMaxTrialInterval // safe default
+	}
+}
 
 // ScopeState maintains sliding windows for scope escalation detection and
 // records successes that reset windows. Thread-safety is provided by the
