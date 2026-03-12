@@ -692,6 +692,44 @@ func TestPrintIssuesText_OnlyFailures(t *testing.T) {
 	assert.Contains(t, output, "FILE ISSUES")
 }
 
+func TestPrintIssuesText_HeldDeletes(t *testing.T) {
+	t.Parallel()
+
+	failures := []sync.SyncFailureRow{
+		{Path: "file1.txt", Direction: "delete", IssueType: sync.IssueBigDeleteHeld, LastError: "held by big-delete protection", LastSeenAt: 1700000000000000000},
+		{Path: "file2.txt", Direction: "delete", IssueType: sync.IssueBigDeleteHeld, LastError: "held by big-delete protection", LastSeenAt: 1700000000000000000},
+	}
+
+	var buf bytes.Buffer
+	printIssuesText(&buf, nil, failures, false)
+
+	output := buf.String()
+	assert.Contains(t, output, "HELD DELETES")
+	assert.Contains(t, output, "2 files")
+	assert.Contains(t, output, "file1.txt")
+	assert.Contains(t, output, "file2.txt")
+	assert.NotContains(t, output, "FILE ISSUES", "held deletes should not appear under FILE ISSUES")
+}
+
+func TestPrintIssuesText_MixedHeldAndOther(t *testing.T) {
+	t.Parallel()
+
+	failures := []sync.SyncFailureRow{
+		{Path: "file1.txt", Direction: "delete", IssueType: sync.IssueBigDeleteHeld, LastError: "held", LastSeenAt: 1700000000000000000},
+		{Path: "docs/CON", Direction: "upload", IssueType: "invalid_filename", LastError: "reserved name", LastSeenAt: 1700000000000000000},
+	}
+
+	var buf bytes.Buffer
+	printIssuesText(&buf, nil, failures, false)
+
+	output := buf.String()
+	assert.Contains(t, output, "HELD DELETES")
+	assert.Contains(t, output, "1 files")
+	assert.Contains(t, output, "file1.txt")
+	assert.Contains(t, output, "FILE ISSUES")
+	assert.Contains(t, output, "docs/CON")
+}
+
 // --- issues clear / retry behavioral tests ---
 
 // newSeededIssuesCmd creates a cobra command with a CLIContext backed by a

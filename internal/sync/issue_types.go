@@ -19,6 +19,9 @@ const (
 	// Scanner-detectable (hash phase).
 	IssueHashPanic = "hash_panic"
 
+	// Big-delete protection (watch-mode).
+	IssueBigDeleteHeld = "big_delete_held"
+
 	// Runtime (execution-time).
 	IssuePermissionDenied      = "permission_denied"
 	IssueQuotaExceeded         = "quota_exceeded"

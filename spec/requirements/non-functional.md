@@ -19,7 +19,7 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.2.2: (S2) The system shall never process deletions from an incomplete enumeration (partial delta fetch or unmounted volume). [verified]
 - R-6.2.3: (S3) Downloads shall use atomic file writes (`.partial` + hash verify + rename). [verified]
 - R-6.2.4: (S4) Local deletions shall verify the file hash against baseline before deleting; on mismatch, a conflict copy is preserved. [verified]
-- R-6.2.5: (S5) Big-delete protection shall abort when planned deletions exceed configured thresholds. [verified]
+- R-6.2.5: (S5) Big-delete protection shall prevent mass accidental deletions: one-shot mode aborts when planned deletions exceed `big_delete_threshold`; watch mode holds deletes via a rolling window counter and surfaces them as actionable issues. [verified]
 - R-6.2.6: (S6) Before each download, the system shall verify available disk space. When below `min_free_space`: set a `disk:local` scope block on all downloads. When above `min_free_space` but below file size plus `min_free_space`: record a per-file failure. [planned]
 - R-6.2.7: (S7) The system shall never upload partial or temporary files (filter cascade excludes temp patterns). [verified]
 - R-6.2.8: File operations (ls, get, put, rm, mkdir, stat, mv, cp) shall work independently of sync state — no sync database involved. [verified]
@@ -35,9 +35,9 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 
 ## R-6.4 Safety [implemented]
 
-- R-6.4.1: When a sync would delete more items than `big_delete_threshold` (default: 1000), the system shall abort and require `--force`. [verified]
-- R-6.4.2: When a sync would delete more than `big_delete_percentage` (default: 50%) of baseline items, the system shall abort. [verified]
-- R-6.4.3: Big-delete protection shall apply both globally and per-folder. [verified]
+- R-6.4.1: When a one-shot sync would delete more items than `big_delete_threshold` (default: 1000), the system shall abort and require `--force`. Single absolute count threshold — no percentage or per-folder checks. [verified]
+- R-6.4.2: In watch mode, when more than `big_delete_threshold` delete actions accumulate within a rolling 5-minute window, the system shall hold all pending delete actions while continuing non-delete operations. Held deletes shall be surfaced via `onedrive-go issues` and released when the user clears all big-delete-held entries via `issues clear`. [verified]
+- R-6.4.3: The `big_delete_threshold` config setting shall be threaded from user configuration to the sync engine; the system shall not silently use hardcoded defaults. [verified]
 - R-6.4.4: Remote deletions shall go to the OneDrive recycle bin by default (`use_recycle_bin`). [verified]
 - R-6.4.5: Local deletions triggered by remote changes shall go to OS trash on macOS (`use_local_trash`). [verified]
 - R-6.4.6: On Linux, local trash shall be opt-in (default off; servers/NAS typically lack XDG trash). [verified]
