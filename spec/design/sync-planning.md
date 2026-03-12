@@ -57,16 +57,15 @@ Per-side baselines for SharePoint enrichment correctness:
 - `detectLocalChange`: compares `Local.Hash` against `Baseline.LocalHash`
 - `detectRemoteChange`: compares `Remote.Hash` against `Baseline.RemoteHash`
 
-## Big-Delete Protection
+## Big-Delete Protection (One-Shot)
 
-Implements: R-6.2.5 [verified]
+Implements: R-6.2.5 [verified], R-6.4.1 [verified]
 
-Pure function on ActionPlan + Baseline. Triggers when:
-- Global delete count exceeds `BigDeleteMaxCount` (default: 1000)
-- Global delete percentage exceeds `BigDeleteMaxPercent` (default: 50%)
-- Any single folder has ≥ max percent of its children being deleted AND that folder had ≥ min items
+Single absolute count threshold: `exceedsDeleteThreshold(deleteCount, threshold)` returns true when `deleteCount > threshold` and `threshold > 0`. No percentage checks, no per-folder checks (industry standard: rclone, rsync, abraunegg).
 
-Returns `ErrBigDeleteTriggered`. Both global and per-folder checks apply.
+`SafetyConfig` has one field: `BigDeleteThreshold int` (default: 1000, from user config). When `--force` is set, threshold is `math.MaxInt32` (effectively disabled). Returns `ErrBigDeleteTriggered` when exceeded.
+
+In watch mode, the planner-level check is disabled (`threshold=MaxInt32`) — the engine's rolling `deleteCounter` handles protection instead (see sync-engine.md).
 
 ## Design Constraints
 

@@ -32,22 +32,23 @@ const periodicScanJitterDivisor = 10
 // EngineConfig holds the options for NewEngine. Uses a struct because
 // seven fields is too many for positional parameters.
 type EngineConfig struct {
-	DBPath          string              // path to the SQLite state database
-	SyncRoot        string              // absolute path to the local sync directory
-	DataDir         string              // application data directory for session files (optional)
-	DriveID         driveid.ID          // normalized drive identifier
-	Fetcher         DeltaFetcher        // satisfied by *graph.Client
-	Items           ItemClient          // satisfied by *graph.Client
-	Downloads       driveops.Downloader // satisfied by *graph.Client
-	Uploads         driveops.Uploader   // satisfied by *graph.Client
-	DriveVerifier   DriveVerifier       // optional: verified at startup (B-074); nil skips check
-	FolderDelta     FolderDeltaFetcher  // optional: folder-scoped delta for shortcut observation (6.4b)
-	RecursiveLister RecursiveLister     // optional: recursive listing for shortcut observation (6.4b)
-	PermChecker     PermissionChecker   // optional: permission checking for shared folders (6.4c)
-	Logger          *slog.Logger
-	UseLocalTrash   bool // move deleted local files to OS trash instead of permanent delete
-	TransferWorkers int  // goroutine count for the worker pool (0 → minWorkers)
-	CheckWorkers    int  // goroutine limit for parallel file hashing (0 → 4)
+	DBPath             string              // path to the SQLite state database
+	SyncRoot           string              // absolute path to the local sync directory
+	DataDir            string              // application data directory for session files (optional)
+	DriveID            driveid.ID          // normalized drive identifier
+	Fetcher            DeltaFetcher        // satisfied by *graph.Client
+	Items              ItemClient          // satisfied by *graph.Client
+	Downloads          driveops.Downloader // satisfied by *graph.Client
+	Uploads            driveops.Uploader   // satisfied by *graph.Client
+	DriveVerifier      DriveVerifier       // optional: verified at startup (B-074); nil skips check
+	FolderDelta        FolderDeltaFetcher  // optional: folder-scoped delta for shortcut observation (6.4b)
+	RecursiveLister    RecursiveLister     // optional: recursive listing for shortcut observation (6.4b)
+	PermChecker        PermissionChecker   // optional: permission checking for shared folders (6.4c)
+	Logger             *slog.Logger
+	UseLocalTrash      bool // move deleted local files to OS trash instead of permanent delete
+	TransferWorkers    int  // goroutine count for the worker pool (0 → minWorkers)
+	CheckWorkers       int  // goroutine limit for parallel file hashing (0 → 4)
+	BigDeleteThreshold int  // max delete actions before big-delete protection triggers (0 → defaultBigDeleteThreshold)
 }
 
 // RunOpts holds per-pass options for RunOnce.
@@ -83,23 +84,28 @@ type SyncReport struct {
 // Engine orchestrates a complete sync pass: observe → plan → execute → commit.
 // Single-drive only; multi-drive orchestration is handled by the Orchestrator.
 type Engine struct {
-	baseline        *SyncStore
-	planner         *Planner
-	execCfg         *ExecutorConfig
-	fetcher         DeltaFetcher
-	driveVerifier   DriveVerifier      // optional (B-074)
-	folderDelta     FolderDeltaFetcher // optional: for shortcut observation (6.4b)
-	recursiveLister RecursiveLister    // optional: for shortcut observation (6.4b)
-	permChecker     PermissionChecker  // optional: for shared folder permission checks (6.4c)
-	permCache       *permissionCache   // per-pass in-memory cache of folder→canWrite
-	syncRoot        string
-	driveID         driveid.ID
-	logger          *slog.Logger
-	remoteObs       *RemoteObserver        // stored during RunWatch for delta token reads
-	localObs        *LocalObserver         // stored during RunWatch for drop counter reads
-	sessionStore    *driveops.SessionStore // for CleanStale() housekeeping
-	transferWorkers int                    // goroutine count for the worker pool
-	checkWorkers    int                    // goroutine limit for parallel file hashing
+	baseline           *SyncStore
+	planner            *Planner
+	execCfg            *ExecutorConfig
+	fetcher            DeltaFetcher
+	driveVerifier      DriveVerifier      // optional (B-074)
+	folderDelta        FolderDeltaFetcher // optional: for shortcut observation (6.4b)
+	recursiveLister    RecursiveLister    // optional: for shortcut observation (6.4b)
+	permChecker        PermissionChecker  // optional: for shared folder permission checks (6.4c)
+	permCache          *permissionCache   // per-pass in-memory cache of folder→canWrite
+	syncRoot           string
+	driveID            driveid.ID
+	logger             *slog.Logger
+	remoteObs          *RemoteObserver        // stored during RunWatch for delta token reads
+	localObs           *LocalObserver         // stored during RunWatch for drop counter reads
+	sessionStore       *driveops.SessionStore // for CleanStale() housekeeping
+	transferWorkers    int                    // goroutine count for the worker pool
+	checkWorkers       int                    // goroutine limit for parallel file hashing
+	bigDeleteThreshold int                    // from config; 0 means use default
+
+	// Watch-mode big-delete protection: rolling counter + external change detection.
+	deleteCounter   *deleteCounter // nil outside RunWatch
+	lastDataVersion int64          // tracks PRAGMA data_version for CLI→daemon notification
 
 	// watchShortcuts holds the latest shortcuts for use by the drain
 	// goroutine in watch mode. Updated by the watch goroutine after
@@ -161,22 +167,29 @@ func NewEngine(cfg *EngineConfig) (*Engine, error) {
 
 	execCfg.transferMgr = driveops.NewTransferManager(cfg.Downloads, cfg.Uploads, sessionStore, cfg.Logger)
 
+	// Default threshold if not set by config.
+	bdThreshold := cfg.BigDeleteThreshold
+	if bdThreshold == 0 {
+		bdThreshold = defaultBigDeleteThreshold
+	}
+
 	return &Engine{
-		baseline:        bm,
-		planner:         NewPlanner(cfg.Logger),
-		execCfg:         execCfg,
-		fetcher:         cfg.Fetcher,
-		driveVerifier:   cfg.DriveVerifier,
-		folderDelta:     cfg.FolderDelta,
-		recursiveLister: cfg.RecursiveLister,
-		permChecker:     cfg.PermChecker,
-		permCache:       newPermissionCache(),
-		sessionStore:    sessionStore,
-		syncRoot:        cfg.SyncRoot,
-		driveID:         cfg.DriveID,
-		logger:          cfg.Logger,
-		transferWorkers: cfg.TransferWorkers,
-		checkWorkers:    cfg.CheckWorkers,
+		baseline:           bm,
+		planner:            NewPlanner(cfg.Logger),
+		execCfg:            execCfg,
+		fetcher:            cfg.Fetcher,
+		driveVerifier:      cfg.DriveVerifier,
+		folderDelta:        cfg.FolderDelta,
+		recursiveLister:    cfg.RecursiveLister,
+		permChecker:        cfg.PermChecker,
+		permCache:          newPermissionCache(),
+		sessionStore:       sessionStore,
+		syncRoot:           cfg.SyncRoot,
+		driveID:            cfg.DriveID,
+		logger:             cfg.Logger,
+		transferWorkers:    cfg.TransferWorkers,
+		checkWorkers:       cfg.CheckWorkers,
+		bigDeleteThreshold: bdThreshold,
 	}, nil
 }
 
@@ -674,17 +687,18 @@ func changeEventsToObservedItems(events []ChangeEvent) []ObservedItem {
 }
 
 // resolveSafetyConfig returns the appropriate SafetyConfig based on RunOpts.
-// When Force is true, thresholds are set to max values (effectively disabled).
+// When Force is true, the threshold is set to MaxInt32 (effectively disabled).
+// Otherwise, uses the engine's configured threshold from config.
 func (e *Engine) resolveSafetyConfig(opts RunOpts) *SafetyConfig {
 	if opts.Force {
 		return &SafetyConfig{
-			BigDeleteMinItems:   0,
-			BigDeleteMaxCount:   forceSafetyMax,
-			BigDeleteMaxPercent: float64(forceSafetyMax),
+			BigDeleteThreshold: forceSafetyMax,
 		}
 	}
 
-	return DefaultSafetyConfig()
+	return &SafetyConfig{
+		BigDeleteThreshold: e.bigDeleteThreshold,
+	}
 }
 
 // ListConflicts returns all unresolved conflicts from the database.
@@ -791,6 +805,17 @@ const (
 	// watchResultBuf is the buffer size for the worker result channel in watch
 	// mode. Large enough for typical batches without blocking workers.
 	watchResultBuf = 4096
+
+	// deleteCounterWindow is the rolling time window for the watch-mode
+	// big-delete counter. Deletes within this window accumulate toward
+	// the threshold. Expired entries drop off, preventing normal sustained
+	// file management from triggering false positives.
+	deleteCounterWindow = 5 * time.Minute
+
+	// recheckInterval is how often the engine checks for external DB
+	// changes (e.g., `issues clear` via the CLI). Uses PRAGMA data_version
+	// — one integer comparison per tick, essentially free.
+	recheckInterval = 10 * time.Second
 )
 
 // defaultReconcileInterval is the default interval for periodic full
@@ -821,6 +846,26 @@ func (e *Engine) getWatchShortcuts() []Shortcut {
 	defer e.watchShortcutsMu.RUnlock()
 
 	return e.watchShortcuts
+}
+
+// initDeleteProtection sets up the rolling delete counter and clears stale
+// big_delete_held entries from a prior daemon session. Force mode disables
+// the counter (deleteCounter stays nil). Also seeds lastDataVersion so
+// the first recheck tick doesn't fire spuriously.
+func (e *Engine) initDeleteProtection(ctx context.Context, force bool) {
+	if !force {
+		e.deleteCounter = newDeleteCounter(e.bigDeleteThreshold, deleteCounterWindow, time.Now)
+	}
+
+	if err := e.baseline.ClearResolvedActionableFailures(ctx, IssueBigDeleteHeld, nil); err != nil {
+		e.logger.Warn("failed to clear stale big-delete-held entries",
+			slog.String("error", err.Error()),
+		)
+	}
+
+	if dv, dvErr := e.baseline.DataVersion(ctx); dvErr == nil {
+		e.lastDataVersion = dv
+	}
 }
 
 // loadWatchState loads the baseline and shortcuts for the watch session.
@@ -867,6 +912,9 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 	if err != nil {
 		return err
 	}
+
+	// Step 2b: Initialize watch-mode big-delete protection.
+	e.initDeleteProtection(ctx, opts.Force)
 
 	// Step 3: Create persistent tracker and worker pool.
 	tracker := NewPersistentDepTracker(e.logger)
@@ -921,6 +969,12 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 		)
 	}
 
+	// Recheck ticker: detects external DB writes (e.g., `issues clear`)
+	// via PRAGMA data_version. ~10 second latency between CLI action and
+	// engine reaction.
+	recheckTicker := time.NewTicker(recheckInterval)
+	defer recheckTicker.Stop()
+
 	for {
 		select {
 		case batch, ok := <-ready:
@@ -929,6 +983,11 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 			}
 
 			e.processBatch(ctx, batch, bl, mode, safety, tracker)
+
+		case <-recheckTicker.C:
+			if e.externalDBChanged(ctx) {
+				e.handleExternalChanges(ctx)
+			}
 
 		case <-reconcileC:
 			e.runFullReconciliation(ctx, bl, mode, safety, tracker)
@@ -1447,6 +1506,17 @@ func (e *Engine) processBatch(
 		return
 	}
 
+	// Rolling-window big-delete protection: count planned deletes and
+	// filter them out if the counter trips. Non-delete actions continue
+	// flowing. The planner-level check is disabled in watch mode
+	// (threshold=MaxInt32) — this counter replaces it.
+	if e.deleteCounter != nil {
+		plan = e.applyDeleteCounter(ctx, plan)
+		if len(plan.Actions) == 0 {
+			return
+		}
+	}
+
 	// B-122: Cancel in-flight actions for paths that appear in this batch.
 	for i := range plan.Actions {
 		if tracker.HasInFlight(plan.Actions[i].Path) {
@@ -1522,17 +1592,178 @@ func (e *Engine) resolveDebounce(opts WatchOpts) time.Duration {
 }
 
 // resolveWatchSafetyConfig returns the safety config for watch mode.
-// When Force is set, big-delete protection is disabled.
-func (e *Engine) resolveWatchSafetyConfig(opts WatchOpts) *SafetyConfig {
-	if opts.Force {
-		return &SafetyConfig{
-			BigDeleteMinItems:   0,
-			BigDeleteMaxCount:   forceSafetyMax,
-			BigDeleteMaxPercent: float64(forceSafetyMax),
+// In watch mode, the planner's big-delete check is disabled (threshold=MaxInt32)
+// because the rolling deleteCounter handles protection instead.
+// When Force is also set, both are disabled.
+func (e *Engine) resolveWatchSafetyConfig(_ WatchOpts) *SafetyConfig {
+	// Watch mode always disables the planner-level check — the rolling
+	// deleteCounter in processBatch handles big-delete protection instead.
+	return &SafetyConfig{
+		BigDeleteThreshold: forceSafetyMax,
+	}
+}
+
+// isDeleteAction returns true if the action type is a local or remote delete.
+func isDeleteAction(t ActionType) bool {
+	return t == ActionLocalDelete || t == ActionRemoteDelete
+}
+
+// applyDeleteCounter counts planned deletes in the plan, feeds them to the
+// rolling counter, and — if the counter is held — filters delete actions out
+// of the plan and records them as actionable issues. Returns the (possibly
+// filtered) plan. When all actions are filtered, returns a plan with empty
+// Actions/Deps.
+func (e *Engine) applyDeleteCounter(ctx context.Context, plan *ActionPlan) *ActionPlan {
+	// Count planned deletes.
+	deleteCount := 0
+	for i := range plan.Actions {
+		if isDeleteAction(plan.Actions[i].Type) {
+			deleteCount++
 		}
 	}
 
-	return DefaultSafetyConfig()
+	if deleteCount == 0 {
+		return plan
+	}
+
+	// Feed to the rolling counter. tripped=true means this call caused
+	// the first transition from not-held → held.
+	tripped := e.deleteCounter.Add(deleteCount)
+	if tripped {
+		e.logger.Warn("big-delete protection triggered in watch mode",
+			slog.Int("delete_count", e.deleteCounter.Count()),
+			slog.Int("threshold", e.deleteCounter.Threshold()),
+		)
+	}
+
+	if !e.deleteCounter.IsHeld() {
+		return plan
+	}
+
+	// Filter: separate deletes from non-deletes and rebuild the plan.
+	// Dependency indices must be remapped to the new action positions.
+	kept := make([]Action, 0, len(plan.Actions))
+	keptDeps := make([][]int, 0, len(plan.Deps))
+	oldToNew := make(map[int]int, len(plan.Actions))
+
+	var heldDeletes []Action
+
+	for i := range plan.Actions {
+		if isDeleteAction(plan.Actions[i].Type) {
+			heldDeletes = append(heldDeletes, plan.Actions[i])
+			continue
+		}
+
+		oldToNew[i] = len(kept)
+		kept = append(kept, plan.Actions[i])
+		keptDeps = append(keptDeps, nil) // placeholder, remap below
+	}
+
+	// Remap dependency indices for kept actions. Drop deps pointing to
+	// filtered-out (delete) actions — the non-delete action can proceed
+	// independently since the delete won't run.
+	for newIdx := range kept {
+		// Find the original index by scanning oldToNew (small N, fast enough).
+		var origIdx int
+		for oi, ni := range oldToNew {
+			if ni == newIdx {
+				origIdx = oi
+				break
+			}
+		}
+
+		for _, depOld := range plan.Deps[origIdx] {
+			if depNew, ok := oldToNew[depOld]; ok {
+				keptDeps[newIdx] = append(keptDeps[newIdx], depNew)
+			}
+		}
+	}
+
+	plan.Actions = kept
+	plan.Deps = keptDeps
+
+	// Record held deletes as actionable issues for user visibility.
+	e.recordHeldDeletes(ctx, heldDeletes)
+
+	return plan
+}
+
+// recordHeldDeletes writes held delete actions to sync_failures as actionable
+// issues with type big_delete_held. Uses UpsertActionableFailures for batch
+// upsert — idempotent when the same deletes are re-observed.
+func (e *Engine) recordHeldDeletes(ctx context.Context, actions []Action) {
+	if len(actions) == 0 {
+		return
+	}
+
+	failures := make([]ActionableFailure, len(actions))
+	for i := range actions {
+		failures[i] = ActionableFailure{
+			Path:      actions[i].Path,
+			DriveID:   actions[i].DriveID,
+			Direction: strDelete,
+			IssueType: IssueBigDeleteHeld,
+			Error:     fmt.Sprintf("held by big-delete protection (threshold: %d)", e.bigDeleteThreshold),
+		}
+	}
+
+	if err := e.baseline.UpsertActionableFailures(ctx, failures); err != nil {
+		e.logger.Error("failed to record held deletes",
+			slog.Int("count", len(failures)),
+			slog.String("error", err.Error()),
+		)
+	}
+
+	e.logger.Info("held delete actions recorded as issues",
+		slog.Int("count", len(failures)),
+	)
+}
+
+// externalDBChanged checks whether another process (e.g., the CLI) wrote to
+// the database since the last check. Uses PRAGMA data_version — changes every
+// time another connection commits a write. The engine's own writes don't
+// change it. Returns true if the version advanced.
+func (e *Engine) externalDBChanged(ctx context.Context) bool {
+	dv, err := e.baseline.DataVersion(ctx)
+	if err != nil {
+		e.logger.Warn("failed to check data_version",
+			slog.String("error", err.Error()),
+		)
+
+		return false
+	}
+
+	if dv == e.lastDataVersion {
+		return false
+	}
+
+	e.lastDataVersion = dv
+
+	return true
+}
+
+// handleExternalChanges reacts to external DB modifications detected via
+// PRAGMA data_version. Currently handles big-delete clearance: if the
+// counter is held but all big_delete_held rows have been cleared (via
+// `issues clear`), releases the counter so deletes resume on the next
+// observation cycle.
+func (e *Engine) handleExternalChanges(ctx context.Context) {
+	// Big-delete clearance: check if user approved held deletes.
+	if e.deleteCounter != nil && e.deleteCounter.IsHeld() {
+		rows, err := e.baseline.ListSyncFailuresByIssueType(ctx, IssueBigDeleteHeld)
+		if err != nil {
+			e.logger.Warn("failed to check big-delete-held entries",
+				slog.String("error", err.Error()),
+			)
+
+			return
+		}
+
+		if len(rows) == 0 {
+			e.deleteCounter.Release()
+			e.logger.Info("big-delete protection cleared by user")
+		}
+	}
 }
 
 // recordSkippedItems records observation-time rejections (invalid names,

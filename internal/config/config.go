@@ -71,8 +71,6 @@ type BandwidthScheduleEntry struct {
 // accidental data loss during sync operations.
 type SafetyConfig struct {
 	BigDeleteThreshold        int    `toml:"big_delete_threshold"`
-	BigDeletePercentage       int    `toml:"big_delete_percentage"`
-	BigDeleteMinItems         int    `toml:"big_delete_min_items"`
 	MinFreeSpace              string `toml:"min_free_space"`
 	UseRecycleBin             bool   `toml:"use_recycle_bin"`
 	UseLocalTrash             bool   `toml:"use_local_trash"`

@@ -17,6 +17,9 @@ import (
 // a capacity warning. At 80% usage, the operator should increase the limit.
 const inotifyCapacityThreshold = 0.8
 
+// percentMultiplier converts a fraction (0.0–1.0) to a percentage (0–100).
+const percentMultiplier = 100.0
+
 // cachedInotifyLimit caches the inotify max_user_watches value for the
 // process lifetime. The limit is effectively constant — runtime sysctl
 // changes require a daemon restart to take effect.

@@ -602,6 +602,26 @@ func printFailuresJSON(w io.Writer, failures []sync.SyncFailureRow) error {
 	return nil
 }
 
+// printHeldDeletesTable renders held-delete entries with a simplified table
+// (path only — direction is always "delete" and error is always the same).
+func printHeldDeletesTable(w io.Writer, failures []sync.SyncFailureRow) {
+	headers := []string{"PATH", "LAST SEEN"}
+
+	rows := make([][]string, len(failures))
+	for i := range failures {
+		row := &failures[i]
+		lastSeen := ""
+
+		if row.LastSeenAt != 0 {
+			lastSeen = formatNanoTimestamp(row.LastSeenAt)
+		}
+
+		rows[i] = []string{row.Path, lastSeen}
+	}
+
+	printTable(w, headers, rows)
+}
+
 func printFailuresTable(w io.Writer, failures []sync.SyncFailureRow) {
 	headers := []string{"PATH", "DIRECTION", "ERROR", "LAST SEEN"}
 
@@ -708,12 +728,37 @@ func printIssuesText(w io.Writer, conflicts []sync.ConflictRecord, failures []sy
 		printConflictsTable(w, conflicts, history)
 	}
 
-	if len(failures) > 0 {
-		if len(conflicts) > 0 {
+	// Separate big-delete-held entries from other failures for distinct display.
+	var heldDeletes, otherFailures []sync.SyncFailureRow
+	for i := range failures {
+		if failures[i].IssueType == sync.IssueBigDeleteHeld {
+			heldDeletes = append(heldDeletes, failures[i])
+		} else {
+			otherFailures = append(otherFailures, failures[i])
+		}
+	}
+
+	sections := 0
+	if len(conflicts) > 0 {
+		sections++
+	}
+
+	if len(heldDeletes) > 0 {
+		if sections > 0 {
+			fmt.Fprintln(w)
+		}
+
+		fmt.Fprintf(w, "HELD DELETES (%d files — big-delete protection triggered, run `issues clear` to approve)\n", len(heldDeletes))
+		printHeldDeletesTable(w, heldDeletes)
+		sections++
+	}
+
+	if len(otherFailures) > 0 {
+		if sections > 0 {
 			fmt.Fprintln(w)
 		}
 
 		fmt.Fprintln(w, "FILE ISSUES")
-		printFailuresTable(w, failures)
+		printFailuresTable(w, otherFailures)
 	}
 }

@@ -1234,44 +1234,57 @@ func TestDetectMoves_MovedPathsExcluded(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // Validates: R-6.4.1
-func TestBigDelete_BelowMinItems(t *testing.T) {
-	// Baseline has fewer items than MinItems → no trigger even at 100% deletes.
+// Validates: R-6.4.1
+func TestBigDelete_BelowThreshold(t *testing.T) {
+	// Delete count at or below threshold → no trigger.
 	planner := NewPlanner(testLogger(t))
 
-	changes := []PathChanges{
-		{
-			Path: "planner-safe-del.txt",
+	// 20 baseline items, delete 10. Threshold is 10 → exactly at threshold, allowed.
+	var entries []*BaselineEntry
+	var changes []PathChanges
+
+	for i := 0; i < 20; i++ {
+		p := fmt.Sprintf("planner-safe-%c.txt", rune('a'+i))
+		itemID := fmt.Sprintf("safe-%c", rune('a'+i))
+		entries = append(entries, &BaselineEntry{
+			Path:       p,
+			DriveID:    driveid.New(testDriveID),
+			ItemID:     itemID,
+			ItemType:   ItemTypeFile,
+			LocalHash:  "hashSafe",
+			RemoteHash: "hashSafe",
+		})
+	}
+
+	// Delete exactly 10.
+	for i := 0; i < 10; i++ {
+		changes = append(changes, PathChanges{
+			Path: entries[i].Path,
 			RemoteEvents: []ChangeEvent{
 				{
 					Source:    SourceRemote,
 					Type:      ChangeDelete,
-					Path:      "planner-safe-del.txt",
+					Path:      entries[i].Path,
 					ItemType:  ItemTypeFile,
-					ItemID:    "item8",
+					ItemID:    entries[i].ItemID,
 					IsDeleted: true,
 				},
 			},
-		},
+		})
 	}
 
-	baseline := baselineWith(&BaselineEntry{
-		Path:       "planner-safe-del.txt",
-		DriveID:    driveid.New(testDriveID),
-		ItemID:     "item8",
-		ItemType:   ItemTypeFile,
-		LocalHash:  "hashS",
-		RemoteHash: "hashS",
-	})
+	baseline := baselineWith(entries...)
 
-	// 1 item in baseline, 1 delete = 100%, but below MinItems (10).
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
-	require.NoError(t, err, "expected no error below MinItems")
-	require.NotNil(t, plan, "expected non-nil plan below MinItems")
+	config := &SafetyConfig{BigDeleteThreshold: 10}
+
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, config, nil)
+	require.NoError(t, err, "at threshold should be allowed")
+	require.NotNil(t, plan)
 }
 
 // Validates: R-6.4.1
-func TestBigDelete_ExceedsMaxCount(t *testing.T) {
-	// Delete count exceeds MaxCount → ErrBigDeleteTriggered.
+func TestBigDelete_ExceedsThreshold(t *testing.T) {
+	// Delete count exceeds threshold → ErrBigDeleteTriggered.
 	planner := NewPlanner(testLogger(t))
 
 	// Build a baseline with 20 items and create delete events for all of them.
@@ -1279,8 +1292,8 @@ func TestBigDelete_ExceedsMaxCount(t *testing.T) {
 	var changes []PathChanges
 
 	for i := 0; i < 20; i++ {
-		p := "planner-bigdel-" + string(rune('a'+i)) + ".txt"
-		itemID := "bdi-" + string(rune('a'+i))
+		p := fmt.Sprintf("planner-bigdel-%c.txt", rune('a'+i))
+		itemID := fmt.Sprintf("bdi-%c", rune('a'+i))
 		entries = append(entries, &BaselineEntry{
 			Path:       p,
 			DriveID:    driveid.New(testDriveID),
@@ -1306,64 +1319,8 @@ func TestBigDelete_ExceedsMaxCount(t *testing.T) {
 
 	baseline := baselineWith(entries...)
 
-	// Use a low MaxCount to trigger.
-	config := &SafetyConfig{
-		BigDeleteMinItems:   5,
-		BigDeleteMaxCount:   10,
-		BigDeleteMaxPercent: defaultBigDeleteMaxPercent,
-	}
-
-	_, err := planner.Plan(changes, baseline, SyncBidirectional, config, nil)
-	require.ErrorIs(t, err, ErrBigDeleteTriggered)
-}
-
-// Validates: R-6.4.2
-func TestBigDelete_ExceedsPercent(t *testing.T) {
-	// Delete percentage exceeds MaxPercent → ErrBigDeleteTriggered.
-	planner := NewPlanner(testLogger(t))
-
-	// 20 baseline items, delete 15 of them = 75%.
-	var entries []*BaselineEntry
-	var changes []PathChanges
-
-	for i := 0; i < 20; i++ {
-		p := "planner-pct-" + string(rune('a'+i)) + ".txt"
-		itemID := "pct-" + string(rune('a'+i))
-		entries = append(entries, &BaselineEntry{
-			Path:       p,
-			DriveID:    driveid.New(testDriveID),
-			ItemID:     itemID,
-			ItemType:   ItemTypeFile,
-			LocalHash:  "hashPCT",
-			RemoteHash: "hashPCT",
-		})
-	}
-
-	// Only delete the first 15.
-	for i := 0; i < 15; i++ {
-		p := entries[i].Path
-		changes = append(changes, PathChanges{
-			Path: p,
-			RemoteEvents: []ChangeEvent{
-				{
-					Source:    SourceRemote,
-					Type:      ChangeDelete,
-					Path:      p,
-					ItemType:  ItemTypeFile,
-					ItemID:    entries[i].ItemID,
-					IsDeleted: true,
-				},
-			},
-		})
-	}
-
-	baseline := baselineWith(entries...)
-
-	config := &SafetyConfig{
-		BigDeleteMinItems:   5,
-		BigDeleteMaxCount:   defaultBigDeleteMaxCount,
-		BigDeleteMaxPercent: 50.0, // 75% > 50% threshold
-	}
+	// 20 deletes > threshold of 10.
+	config := &SafetyConfig{BigDeleteThreshold: 10}
 
 	_, err := planner.Plan(changes, baseline, SyncBidirectional, config, nil)
 	require.ErrorIs(t, err, ErrBigDeleteTriggered)
@@ -1371,15 +1328,14 @@ func TestBigDelete_ExceedsPercent(t *testing.T) {
 
 // Validates: R-6.4.1
 func TestBigDelete_NoTrigger(t *testing.T) {
-	// Deletes within limits → no error.
+	// Few deletes well within threshold → no error.
 	planner := NewPlanner(testLogger(t))
 
-	// 20 baseline items, delete 2 = 10%.
 	var entries []*BaselineEntry
 
 	for i := 0; i < 20; i++ {
-		p := "planner-safe-" + string(rune('a'+i)) + ".txt"
-		itemID := "safe-" + string(rune('a'+i))
+		p := fmt.Sprintf("planner-safe-%c.txt", rune('a'+i))
+		itemID := fmt.Sprintf("safe-%c", rune('a'+i))
 		entries = append(entries, &BaselineEntry{
 			Path:       p,
 			DriveID:    driveid.New(testDriveID),
@@ -1390,7 +1346,7 @@ func TestBigDelete_NoTrigger(t *testing.T) {
 		})
 	}
 
-	// Delete only 2.
+	// Delete only 2 (well below default threshold of 1000).
 	changes := []PathChanges{
 		{
 			Path: entries[0].Path,
@@ -1422,50 +1378,30 @@ func TestBigDelete_NoTrigger(t *testing.T) {
 
 	baseline := baselineWith(entries...)
 
-	config := &SafetyConfig{
-		BigDeleteMinItems:   5,
-		BigDeleteMaxCount:   defaultBigDeleteMaxCount,
-		BigDeleteMaxPercent: defaultBigDeleteMaxPercent,
-	}
-
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, config, nil)
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 	require.NotNil(t, plan)
 }
 
-// ---------------------------------------------------------------------------
-// Per-Folder Big Delete Tests
-// ---------------------------------------------------------------------------
-
-// Validates: R-6.4.3
-func TestBigDelete_PerFolder_EntireFolderDeleted(t *testing.T) {
-	// 1000 items across 10 folders (100 each). Deleting all 100 items in one
-	// folder is 100% of that folder → triggered even though global is only 10%.
+// Validates: R-6.4.1
+func TestBigDelete_ThresholdZero_Disabled(t *testing.T) {
+	// Threshold of 0 disables big-delete protection.
 	planner := NewPlanner(testLogger(t))
 
 	var entries []*BaselineEntry
 	var changes []PathChanges
 
-	// Build 10 folders with 100 files each.
-	for folder := 0; folder < 10; folder++ {
-		for file := 0; file < 100; file++ {
-			p := fmt.Sprintf("folder%d/file%d.txt", folder, file)
-			itemID := fmt.Sprintf("item-f%d-%d", folder, file)
-			entries = append(entries, &BaselineEntry{
-				Path:       p,
-				DriveID:    driveid.New(testDriveID),
-				ItemID:     itemID,
-				ItemType:   ItemTypeFile,
-				LocalHash:  "hash",
-				RemoteHash: "hash",
-			})
-		}
-	}
-
-	// Delete all 100 items in folder0.
-	for file := 0; file < 100; file++ {
-		p := fmt.Sprintf("folder0/file%d.txt", file)
-		itemID := fmt.Sprintf("item-f0-%d", file)
+	for i := 0; i < 20; i++ {
+		p := fmt.Sprintf("planner-disabled-%c.txt", rune('a'+i))
+		itemID := fmt.Sprintf("dis-%c", rune('a'+i))
+		entries = append(entries, &BaselineEntry{
+			Path:       p,
+			DriveID:    driveid.New(testDriveID),
+			ItemID:     itemID,
+			ItemType:   ItemTypeFile,
+			LocalHash:  "hashDis",
+			RemoteHash: "hashDis",
+		})
 		changes = append(changes, PathChanges{
 			Path: p,
 			RemoteEvents: []ChangeEvent{
@@ -1479,119 +1415,10 @@ func TestBigDelete_PerFolder_EntireFolderDeleted(t *testing.T) {
 
 	baseline := baselineWith(entries...)
 
-	// Global: 100/1000 = 10%, well below 50%. But folder0: 100/100 = 100%.
-	config := &SafetyConfig{
-		BigDeleteMinItems:   10,
-		BigDeleteMaxCount:   defaultBigDeleteMaxCount,
-		BigDeleteMaxPercent: defaultBigDeleteMaxPercent,
-	}
-
-	_, err := planner.Plan(changes, baseline, SyncBidirectional, config, nil)
-	require.ErrorIs(t, err, ErrBigDeleteTriggered, "expected per-folder trigger")
-}
-
-// Validates: R-6.4.3
-func TestBigDelete_PerFolder_SpreadAcrossFolders(t *testing.T) {
-	// 100 deletes spread evenly across 10 folders (10 per folder out of 100).
-	// Per-folder: 10/100 = 10% → NOT triggered.
-	planner := NewPlanner(testLogger(t))
-
-	var entries []*BaselineEntry
-	var changes []PathChanges
-
-	for folder := 0; folder < 10; folder++ {
-		for file := 0; file < 100; file++ {
-			p := fmt.Sprintf("spread%d/file%d.txt", folder, file)
-			itemID := fmt.Sprintf("spread-f%d-%d", folder, file)
-			entries = append(entries, &BaselineEntry{
-				Path:       p,
-				DriveID:    driveid.New(testDriveID),
-				ItemID:     itemID,
-				ItemType:   ItemTypeFile,
-				LocalHash:  "hash",
-				RemoteHash: "hash",
-			})
-		}
-	}
-
-	// Delete 10 items per folder (10%).
-	for folder := 0; folder < 10; folder++ {
-		for file := 0; file < 10; file++ {
-			p := fmt.Sprintf("spread%d/file%d.txt", folder, file)
-			itemID := fmt.Sprintf("spread-f%d-%d", folder, file)
-			changes = append(changes, PathChanges{
-				Path: p,
-				RemoteEvents: []ChangeEvent{
-					{
-						Source: SourceRemote, Type: ChangeDelete, Path: p,
-						ItemType: ItemTypeFile, ItemID: itemID, IsDeleted: true,
-					},
-				},
-			})
-		}
-	}
-
-	baseline := baselineWith(entries...)
-
-	config := &SafetyConfig{
-		BigDeleteMinItems:   10,
-		BigDeleteMaxCount:   defaultBigDeleteMaxCount,
-		BigDeleteMaxPercent: defaultBigDeleteMaxPercent, // 50%
-	}
+	config := &SafetyConfig{BigDeleteThreshold: 0}
 
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, config, nil)
-	require.NoError(t, err, "deletes spread evenly")
-	require.NotNil(t, plan)
-}
-
-// Validates: R-6.4.3
-func TestBigDelete_PerFolder_SmallFolder(t *testing.T) {
-	// A folder with fewer items than BigDeleteMinItems should not trigger
-	// per-folder protection even at 100% deletion.
-	planner := NewPlanner(testLogger(t))
-
-	var entries []*BaselineEntry
-	var changes []PathChanges
-
-	// Small folder: 5 items (below MinItems=10).
-	for i := 0; i < 5; i++ {
-		p := fmt.Sprintf("small/file%d.txt", i)
-		itemID := fmt.Sprintf("small-%d", i)
-		entries = append(entries, &BaselineEntry{
-			Path: p, DriveID: driveid.New(testDriveID), ItemID: itemID,
-			ItemType: ItemTypeFile, LocalHash: "hash", RemoteHash: "hash",
-		})
-		changes = append(changes, PathChanges{
-			Path: p,
-			RemoteEvents: []ChangeEvent{
-				{
-					Source: SourceRemote, Type: ChangeDelete, Path: p,
-					ItemType: ItemTypeFile, ItemID: itemID, IsDeleted: true,
-				},
-			},
-		})
-	}
-
-	// Large folder: 100 items, no deletes (keeps global count low).
-	for i := 0; i < 100; i++ {
-		p := fmt.Sprintf("large/file%d.txt", i)
-		itemID := fmt.Sprintf("large-%d", i)
-		entries = append(entries, &BaselineEntry{
-			Path: p, DriveID: driveid.New(testDriveID), ItemID: itemID,
-			ItemType: ItemTypeFile, LocalHash: "hash", RemoteHash: "hash",
-		})
-	}
-
-	baseline := baselineWith(entries...)
-
-	config := &SafetyConfig{
-		BigDeleteMinItems:   10,
-		BigDeleteMaxCount:   defaultBigDeleteMaxCount,
-		BigDeleteMaxPercent: defaultBigDeleteMaxPercent,
-	}
-
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, config, nil)
-	require.NoError(t, err, "small folder below MinItems")
+	require.NoError(t, err, "threshold=0 disables protection")
 	require.NotNil(t, plan)
 }
 

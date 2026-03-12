@@ -57,7 +57,8 @@ func isActionableIssue(issueType string) bool {
 	switch issueType {
 	case IssueInvalidFilename, IssuePathTooLong, IssueFileTooLarge,
 		IssuePermissionDenied, IssueQuotaExceeded, IssueLocalPermissionDenied,
-		IssueCaseCollision, IssueDiskFull, IssueFileTooLargeForSpace:
+		IssueCaseCollision, IssueDiskFull, IssueFileTooLargeForSpace,
+		IssueBigDeleteHeld:
 		return true
 	default:
 		return false

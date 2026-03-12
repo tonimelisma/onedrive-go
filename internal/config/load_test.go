@@ -49,8 +49,6 @@ bandwidth_limit = "5MB/s"
 transfer_order = "size_asc"
 
 big_delete_threshold = 500
-big_delete_percentage = 25
-big_delete_min_items = 5
 min_free_space = "2GB"
 use_recycle_bin = false
 use_local_trash = false
@@ -97,8 +95,6 @@ force_http_11 = true
 	assert.Equal(t, "size_asc", cfg.TransferOrder)
 
 	assert.Equal(t, 500, cfg.BigDeleteThreshold)
-	assert.Equal(t, 25, cfg.BigDeletePercentage)
-	assert.Equal(t, 5, cfg.BigDeleteMinItems)
 	assert.Equal(t, "2GB", cfg.MinFreeSpace)
 	assert.False(t, cfg.UseRecycleBin)
 	assert.False(t, cfg.UseLocalTrash)

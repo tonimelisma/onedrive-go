@@ -52,92 +52,29 @@ func TestS1_NoRemoteDeleteWithoutBaseline(t *testing.T) {
 	assert.Len(t, downloads, 1)
 }
 
-// Validates: R-6.2.5
-// TestS5_BigDeleteThresholdBoundary validates Safety Invariant S5:
-// big-delete protection triggers at the threshold boundary.
+// Validates: R-6.4.1
+// TestS5_BigDeleteThresholdBoundary validates that big-delete protection
+// uses a simple absolute count threshold with no percentage or per-folder checks.
 func TestS5_BigDeleteThresholdBoundary(t *testing.T) {
-	// 10 items in baseline, 50% threshold = 5 deletes triggers protection.
-	baseline := emptyBaseline()
-	for i := range 10 {
-		entry := &BaselineEntry{
-			Path:      "file" + string(rune('a'+i)) + ".txt",
-			DriveID:   driveid.New(testDriveID),
-			ItemID:    "item-" + string(rune('a'+i)),
-			ItemType:  ItemTypeFile,
-			LocalHash: "hash-" + string(rune('a'+i)),
-		}
-		baseline.Put(entry)
-	}
-
-	config := DefaultSafetyConfig()
-
-	t.Run("at_threshold_blocked", func(t *testing.T) {
-		// 6 deletes out of 10 = 60% > 50% threshold.
-		assert.True(t, bigDeleteTriggered(nil, 6, baseline, config))
+	t.Run("above_threshold_blocked", func(t *testing.T) {
+		// 11 deletes > threshold of 10 → triggered.
+		assert.True(t, exceedsDeleteThreshold(11, 10))
 	})
 
 	t.Run("below_threshold_allowed", func(t *testing.T) {
-		// 4 deletes out of 10 = 40% < 50% threshold.
-		assert.False(t, bigDeleteTriggered(nil, 4, baseline, config))
+		// 9 deletes < threshold of 10 → allowed.
+		assert.False(t, exceedsDeleteThreshold(9, 10))
 	})
 
 	t.Run("exactly_at_threshold_allowed", func(t *testing.T) {
-		// 5 deletes out of 10 = exactly 50% — NOT greater than, so allowed.
-		assert.False(t, bigDeleteTriggered(nil, 5, baseline, config))
+		// 10 deletes = threshold of 10 → NOT greater than, so allowed.
+		assert.False(t, exceedsDeleteThreshold(10, 10))
 	})
-}
 
-// Validates: R-6.2.5
-// TestS5_BigDeleteMinimumGuard validates that the big-delete check does
-// not apply when the baseline has fewer items than the minimum threshold.
-func TestS5_BigDeleteMinimumGuard(t *testing.T) {
-	// 5 items in baseline (below default min of 10).
-	baseline := emptyBaseline()
-	for i := range 5 {
-		entry := &BaselineEntry{
-			Path:      "file" + string(rune('a'+i)) + ".txt",
-			DriveID:   driveid.New(testDriveID),
-			ItemID:    "item-" + string(rune('a'+i)),
-			ItemType:  ItemTypeFile,
-			LocalHash: "hash-" + string(rune('a'+i)),
-		}
-		baseline.Put(entry)
-	}
-
-	config := DefaultSafetyConfig()
-
-	// 3 deletes out of 5 = 60%, but below minimum items threshold.
-	assert.False(t, bigDeleteTriggered(nil, 3, baseline, config),
-		"S5: big-delete should not trigger below minimum items")
-}
-
-// Validates: R-6.2.5
-// TestS5_BigDeleteMaxCount validates that the absolute count threshold
-// blocks even when percentage is low.
-func TestS5_BigDeleteMaxCount(t *testing.T) {
-	config := &SafetyConfig{
-		BigDeleteMinItems:   5,
-		BigDeleteMaxCount:   10,
-		BigDeleteMaxPercent: 90.0,
-	}
-
-	// 100 items in baseline, 11 deletes = 11% (under 90%), but exceeds max count of 10.
-	baseline := emptyBaseline()
-	for i := range 100 {
-		entry := &BaselineEntry{
-			Path:      "f" + string(rune(i)) + ".txt",
-			DriveID:   driveid.New(testDriveID),
-			ItemID:    "i" + string(rune(i)),
-			ItemType:  ItemTypeFile,
-			LocalHash: "h" + string(rune(i)),
-		}
-		baseline.Put(entry)
-	}
-
-	assert.True(t, bigDeleteTriggered(nil, 11, baseline, config),
-		"S5: should trigger when exceeding max count")
-	assert.False(t, bigDeleteTriggered(nil, 10, baseline, config),
-		"S5: should not trigger at exactly max count")
+	t.Run("threshold_zero_disables", func(t *testing.T) {
+		// Threshold of 0 disables protection entirely.
+		assert.False(t, exceedsDeleteThreshold(99999, 0))
+	})
 }
 
 // TestS7_PartialFilesNeverUploaded validates Safety Invariant S7:
@@ -715,9 +652,9 @@ func TestBuildDependencies_ChildDeleteBeforeParent(t *testing.T) {
 // §3: Planner-level safety check integration
 // ---------------------------------------------------------------------------
 
-// Validates: R-6.2.5
+// Validates: R-6.4.1
 // TestPlan_BigDeleteBlocked validates that the planner returns
-// ErrBigDeleteTriggered when planned deletions exceed safety thresholds.
+// ErrBigDeleteTriggered when planned deletions exceed the threshold.
 func TestPlan_BigDeleteBlocked(t *testing.T) {
 	planner := NewPlanner(testLogger(t))
 
@@ -738,7 +675,7 @@ func TestPlan_BigDeleteBlocked(t *testing.T) {
 		baseline.Put(entry)
 	}
 
-	// Delete 6 out of 10 (60% > 50% threshold).
+	// Delete 6 out of 10. Threshold is 5 → 6 > 5 → triggered.
 	for i := range 6 {
 		path := "file" + string(rune('a'+i)) + ".txt"
 		changes = append(changes, PathChanges{
@@ -749,7 +686,9 @@ func TestPlan_BigDeleteBlocked(t *testing.T) {
 		})
 	}
 
-	_, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
+	config := &SafetyConfig{BigDeleteThreshold: 5}
+
+	_, err := planner.Plan(changes, baseline, SyncBidirectional, config, nil)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrBigDeleteTriggered)
 }

@@ -17,8 +17,6 @@ const (
 	defaultBandwidthLimit      = "0"
 	defaultTransferOrder       = "default"
 	defaultBigDeleteThreshold  = 1000
-	defaultBigDeletePercentage = 50
-	defaultBigDeleteMinItems   = 10
 	defaultMinFreeSpace        = "1GB"
 	defaultSyncDirPermissions  = "0700"
 	defaultSyncFilePermissions = "0600"
@@ -71,8 +69,6 @@ func defaultTransfersConfig() TransfersConfig {
 func defaultSafetyConfig() SafetyConfig {
 	return SafetyConfig{
 		BigDeleteThreshold:  defaultBigDeleteThreshold,
-		BigDeletePercentage: defaultBigDeletePercentage,
-		BigDeleteMinItems:   defaultBigDeleteMinItems,
 		MinFreeSpace:        defaultMinFreeSpace,
 		UseRecycleBin:       true,
 		UseLocalTrash:       defaultUseLocalTrash(),
