@@ -257,7 +257,9 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 	}
 
 	// Crash recovery: reset any in-progress states from a previous crash.
-	if err := e.baseline.ResetInProgressStates(ctx, e.syncRoot); err != nil {
+	// Also creates sync_failures entries so the FailureRetrier can rediscover
+	// items that were mid-execution when the crash occurred.
+	if err := e.baseline.ResetInProgressStates(ctx, e.syncRoot, retry.Reconcile.Delay); err != nil {
 		e.logger.Warn("failed to reset in-progress states", slog.String("error", err.Error()))
 	}
 

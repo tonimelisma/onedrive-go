@@ -71,7 +71,10 @@ func (c *Client) SimpleUpload(
 		slog.Int64("size", size),
 	)
 
-	path := fmt.Sprintf("/drives/%s/items/%s:/%s:/content", driveID, parentID, url.PathEscape(name))
+	// Explicit conflictBehavior=replace prevents reliance on undocumented API
+	// defaults. CreateUploadSession passes this in the JSON body; SimpleUpload
+	// must use a query parameter since the body is the raw file content.
+	path := fmt.Sprintf("/drives/%s/items/%s:/%s:/content?@microsoft.graph.conflictBehavior=replace", driveID, parentID, url.PathEscape(name))
 
 	resp, err := c.doRawUpload(ctx, http.MethodPut, path, "application/octet-stream", r)
 	if err != nil {

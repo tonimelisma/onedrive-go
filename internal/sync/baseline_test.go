@@ -2371,7 +2371,8 @@ func TestResetInProgressStates_DeleteFileAbsent(t *testing.T) {
 		"d!abc", "item1", "gone.txt", "file", "deleting", 1700000000)
 	require.NoError(t, err)
 
-	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot))
+	testDelay := func(_ int) time.Duration { return time.Second }
+	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot, testDelay))
 
 	var status string
 	err = mgr.db.QueryRowContext(ctx,
@@ -2400,7 +2401,8 @@ func TestResetInProgressStates_DeleteFileExists(t *testing.T) {
 		"d!abc", "item1", "exists.txt", "file", "deleting", 1700000000)
 	require.NoError(t, err)
 
-	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot))
+	testDelay := func(_ int) time.Duration { return time.Second }
+	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot, testDelay))
 
 	var status string
 	err = mgr.db.QueryRowContext(ctx,
@@ -2426,7 +2428,8 @@ func TestResetInProgressStates_DownloadStillResetsToPending(t *testing.T) {
 		"d!abc", "item1", "dl.txt", "file", "downloading", 1700000000)
 	require.NoError(t, err)
 
-	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot))
+	testDelay := func(_ int) time.Duration { return time.Second }
+	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot, testDelay))
 
 	var status string
 	err = mgr.db.QueryRowContext(ctx,
@@ -2464,7 +2467,8 @@ func TestResetInProgressStates_MixedStates(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot))
+	testDelay := func(_ int) time.Duration { return time.Second }
+	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot, testDelay))
 
 	// Verify each row.
 	expected := map[string]string{
@@ -2480,6 +2484,185 @@ func TestResetInProgressStates_MixedStates(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, want, got, "item %s", id)
 	}
+}
+
+// --- Crash recovery → sync_failures bridge tests (R-2.5.4) ---
+
+// Validates: R-2.5.4
+func TestResetInProgressStates_CreatesSyncFailures_Download(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+	syncRoot := t.TempDir()
+
+	// Insert a downloading row.
+	_, err := mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"d!abc", "item1", "dl.txt", "file", "downloading", 1700000000)
+	require.NoError(t, err)
+
+	testDelay := func(_ int) time.Duration { return time.Second }
+	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot, testDelay))
+
+	// Verify remote_state was reset.
+	var status string
+	err = mgr.db.QueryRowContext(ctx,
+		`SELECT sync_status FROM remote_state WHERE item_id = ?`, "item1").Scan(&status)
+	require.NoError(t, err)
+	assert.Equal(t, "pending_download", status)
+
+	// Verify sync_failures entry was created.
+	failures, err := mgr.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, failures, 1)
+	assert.Equal(t, "dl.txt", failures[0].Path)
+	assert.Equal(t, "download", failures[0].Direction)
+	assert.Equal(t, "transient", failures[0].Category)
+	assert.Equal(t, 1, failures[0].FailureCount)
+	assert.Contains(t, failures[0].LastError, "crash recovery")
+}
+
+// Validates: R-2.5.4
+func TestResetInProgressStates_CreatesSyncFailures_Delete(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+	syncRoot := t.TempDir()
+
+	// Create the file so it transitions to pending_delete (not deleted).
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "del.txt"), []byte("data"), 0o600))
+
+	_, err := mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"d!abc", "item1", "del.txt", "file", "deleting", 1700000000)
+	require.NoError(t, err)
+
+	testDelay := func(_ int) time.Duration { return time.Second }
+	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot, testDelay))
+
+	// Verify sync_failures entry was created for delete direction.
+	failures, err := mgr.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, failures, 1)
+	assert.Equal(t, "del.txt", failures[0].Path)
+	assert.Equal(t, "delete", failures[0].Direction)
+	assert.Equal(t, "transient", failures[0].Category)
+}
+
+// Validates: R-2.5.4
+func TestResetInProgressStates_NoSyncFailure_DeleteComplete(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+	syncRoot := t.TempDir()
+
+	// File absent → delete completed before crash → no sync_failures entry.
+	_, err := mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"d!abc", "item1", "gone.txt", "file", "deleting", 1700000000)
+	require.NoError(t, err)
+
+	testDelay := func(_ int) time.Duration { return time.Second }
+	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot, testDelay))
+
+	// Remote_state should be "deleted".
+	var status string
+	err = mgr.db.QueryRowContext(ctx,
+		`SELECT sync_status FROM remote_state WHERE item_id = ?`, "item1").Scan(&status)
+	require.NoError(t, err)
+	assert.Equal(t, "deleted", status)
+
+	// No sync_failures should exist.
+	failures, err := mgr.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, failures, "completed delete should not create sync_failures")
+}
+
+// Validates: R-2.5.4
+func TestResetInProgressStates_PreservesExistingBackoff(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+	syncRoot := t.TempDir()
+
+	driveID := driveid.New("d!abc")
+
+	// Pre-seed a sync_failures entry with failure_count=3 (simulating
+	// a prior failure before the crash).
+	testDelay := func(n int) time.Duration { return time.Duration(n+1) * time.Second }
+	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
+		Path:      "dl.txt",
+		DriveID:   driveID,
+		Direction: "download",
+		Category:  "transient",
+		ErrMsg:    "prior failure 1",
+	}, testDelay))
+	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
+		Path:      "dl.txt",
+		DriveID:   driveID,
+		Direction: "download",
+		Category:  "transient",
+		ErrMsg:    "prior failure 2",
+	}, testDelay))
+	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
+		Path:      "dl.txt",
+		DriveID:   driveID,
+		Direction: "download",
+		Category:  "transient",
+		ErrMsg:    "prior failure 3",
+	}, testDelay))
+
+	// Verify pre-condition: failure_count=3.
+	preFailures, err := mgr.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, preFailures, 1)
+	assert.Equal(t, 3, preFailures[0].FailureCount)
+
+	// Insert a downloading row and reset.
+	_, err = mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		driveID.String(), "item1", "dl.txt", "file", "downloading", 1700000000)
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot, testDelay))
+
+	// Verify the existing failure_count was incremented, not reset.
+	failures, err := mgr.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, failures, 1)
+	assert.Equal(t, 4, failures[0].FailureCount, "existing failure_count should be incremented")
+	assert.Contains(t, failures[0].LastError, "crash recovery", "error message updated")
+}
+
+// Validates: R-2.5.4
+func TestResetInProgressStates_NoPendingItems_NoSyncFailures(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+	syncRoot := t.TempDir()
+
+	// Only synced items — no in-progress states.
+	_, err := mgr.db.ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"d!abc", "item1", "synced.txt", "file", "synced", 1700000000)
+	require.NoError(t, err)
+
+	testDelay := func(_ int) time.Duration { return time.Second }
+	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot, testDelay))
+
+	failures, err := mgr.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, failures, "no pending items → no sync_failures")
 }
 
 // --- Move outcome remote_state update test (5.7.2) ---

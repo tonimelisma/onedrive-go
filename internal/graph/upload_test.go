@@ -40,6 +40,7 @@ func TestSimpleUpload_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPut, r.Method)
 		assert.Equal(t, "/drives/000000000000000d/items/parent:/upload.txt:/content", r.URL.Path)
+		assert.Equal(t, "replace", r.URL.Query().Get("@microsoft.graph.conflictBehavior"))
 
 		body, err := io.ReadAll(r.Body)
 		require.NoError(t, err)
@@ -69,6 +70,38 @@ func TestSimpleUpload_Success(t *testing.T) {
 	assert.Equal(t, "new-item-1", item.ID)
 	assert.Equal(t, "upload.txt", item.Name)
 	assert.Equal(t, int64(len(content)), item.Size)
+}
+
+// Validates: R-5.6.9
+func TestSimpleUpload_ConflictBehaviorReplace(t *testing.T) {
+	// Verify that SimpleUpload passes conflictBehavior=replace as a query
+	// parameter, matching CreateUploadSession which passes it in the JSON body.
+	// Without this, SimpleUpload relies on undocumented API default behavior.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "replace", r.URL.Query().Get("@microsoft.graph.conflictBehavior"),
+			"SimpleUpload must pass conflictBehavior=replace query param")
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{
+			"id": "cb-item",
+			"name": "conflict.txt",
+			"size": 4,
+			"createdDateTime": "2024-01-01T00:00:00Z",
+			"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+			"parentReference": {"id": "p", "driveId": "d"},
+			"file": {"mimeType": "text/plain"}
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	item, err := client.SimpleUpload(
+		t.Context(), driveid.New("d"), "p", "conflict.txt",
+		strings.NewReader("data"), 4,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "cb-item", item.ID)
 }
 
 func TestSimpleUpload_ContentType(t *testing.T) {

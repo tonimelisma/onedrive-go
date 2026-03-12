@@ -76,6 +76,20 @@ Returns `ErrBigDeleteTriggered`. Both global and per-folder checks apply.
 - The planner detects action dependency cycles using DFS with white/gray/black node coloring after `buildDependencies()`. Cycle detection prevents deadlock in the DepTracker.
 - Property-based tests for planner with random inputs — verify DAG invariant holds under all generated scenarios. [planned]
 
+## Cross-Drive Move Guard
+
+Implements: R-6.7.21 [verified]
+
+`detectLocalMoves()` correlates local deletes+creates by hash to detect renames. `detectRemoteMoves()` processes `ChangeMove` events from the delta API. Both can match moves that cross drive boundaries (e.g., own drive → shared folder shortcut). However, `MoveItem` is a single-drive API call — cross-drive moves fail.
+
+**Guard logic**: Before emitting a move action, the planner checks whether the source and destination paths belong to different drives:
+- `isCrossDriveLocalMove()`: source drive from `views[deletePath].Baseline.DriveID`; destination drive from `resolvePathDriveID(createPath, baseline)` which walks up parent directories in the baseline to find the owning drive.
+- `isCrossDriveRemoteMove()`: compares `view.Baseline.DriveID` with `view.Remote.DriveID`.
+
+When a cross-drive move is detected, the match is skipped — paths fall through to normal per-path classification which produces a delete + upload (the correct decomposition for cross-drive operations).
+
+**Conservative zero-guard**: If either drive ID is unknown (zero), the guard returns `false` (don't decompose). This prevents false positives for items with incomplete baseline data.
+
 ## Types (`types.go`)
 
 Core types: `ChangeEvent`, `ChangeSource`, `ChangeType`, `ItemType`, `BaselineEntry`, `PathView`, `RemoteState`, `LocalState`, `Action`, `ActionPlan`, `Outcome`, `SyncMode`.
