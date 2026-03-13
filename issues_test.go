@@ -138,55 +138,6 @@ func TestIssuesResolveCmd_Structure(t *testing.T) {
 	}
 }
 
-// --- printConflictsJSON ---
-
-func TestPrintConflictsJSON_EmptyList(t *testing.T) {
-	t.Parallel()
-
-	var buf bytes.Buffer
-	err := printConflictsJSON(&buf, nil)
-	require.NoError(t, err)
-
-	var result []conflictJSON
-	require.NoError(t, json.Unmarshal(buf.Bytes(), &result))
-	assert.Empty(t, result)
-}
-
-func TestPrintConflictsJSON_WithConflicts(t *testing.T) {
-	t.Parallel()
-
-	conflicts := []sync.ConflictRecord{
-		{
-			ID:           "conflict-001",
-			Path:         "/docs/readme.txt",
-			ConflictType: "edit_edit",
-			DetectedAt:   1700000000000000000,
-			LocalHash:    "local-hash",
-			RemoteHash:   "remote-hash",
-		},
-		{
-			ID:           "conflict-002",
-			Path:         "/photos/cat.jpg",
-			ConflictType: "delete_edit",
-			DetectedAt:   1700000001000000000,
-			Resolution:   "keep_local",
-			ResolvedBy:   "user",
-			ResolvedAt:   1700000002000000000,
-		},
-	}
-
-	var buf bytes.Buffer
-	err := printConflictsJSON(&buf, conflicts)
-	require.NoError(t, err)
-
-	var result []conflictJSON
-	require.NoError(t, json.Unmarshal(buf.Bytes(), &result))
-	require.Len(t, result, 2)
-	assert.Equal(t, "conflict-001", result[0].ID)
-	assert.Equal(t, "edit_edit", result[0].ConflictType)
-	assert.Equal(t, "keep_local", result[1].Resolution)
-}
-
 // --- printConflictsTable ---
 
 // Validates: R-2.3.3
@@ -234,143 +185,6 @@ func TestPrintConflictsTable_WithHistory(t *testing.T) {
 	assert.Contains(t, output, "keep_local")
 	assert.Contains(t, output, "user")
 	assert.Contains(t, output, "/resolved.txt")
-}
-
-// --- failure output ---
-
-func TestToFailureJSON(t *testing.T) {
-	t.Parallel()
-
-	row := &sync.SyncFailureRow{
-		Path:         "docs/CON",
-		DriveID:      driveid.New("test-drive-id"),
-		Direction:    "upload",
-		Category:     "actionable",
-		IssueType:    "invalid_filename",
-		ItemID:       "item-123",
-		FailureCount: 1,
-		LastError:    "file name is not valid for OneDrive: CON",
-		HTTPStatus:   0,
-		FileSize:     1024,
-		FirstSeenAt:  1700000000000000000,
-		LastSeenAt:   1700000001000000000,
-	}
-
-	j := toFailureJSON(row)
-	assert.Equal(t, "docs/CON", j.Path)
-	assert.Equal(t, "upload", j.Direction)
-	assert.Equal(t, "actionable", j.Category)
-	assert.Equal(t, "invalid_filename", j.IssueType)
-	assert.Equal(t, 1, j.FailureCount)
-	assert.Equal(t, "file name is not valid for OneDrive: CON", j.LastError)
-	assert.Equal(t, int64(1024), j.FileSize)
-	assert.NotEmpty(t, j.FirstSeenAt)
-	assert.NotEmpty(t, j.LastSeenAt)
-}
-
-func TestPrintFailuresJSON_EmptyList(t *testing.T) {
-	t.Parallel()
-
-	var buf bytes.Buffer
-	err := printFailuresJSON(&buf, nil)
-	require.NoError(t, err)
-
-	var result []failureJSON
-	require.NoError(t, json.Unmarshal(buf.Bytes(), &result))
-	assert.Empty(t, result)
-}
-
-func TestPrintFailuresJSON_WithFailures(t *testing.T) {
-	t.Parallel()
-
-	failures := []sync.SyncFailureRow{
-		{
-			Path:         "docs/CON",
-			DriveID:      driveid.New("drive-1"),
-			Direction:    "upload",
-			Category:     "actionable",
-			IssueType:    "invalid_filename",
-			FailureCount: 1,
-			LastError:    "reserved name",
-			FirstSeenAt:  1700000000000000000,
-			LastSeenAt:   1700000000000000000,
-		},
-		{
-			Path:         "data/huge.bin",
-			DriveID:      driveid.New("drive-1"),
-			Direction:    "upload",
-			Category:     "actionable",
-			IssueType:    "file_too_large",
-			FailureCount: 1,
-			LastError:    "exceeds 250 GB",
-			FileSize:     300 * 1024 * 1024 * 1024,
-			FirstSeenAt:  1700000001000000000,
-			LastSeenAt:   1700000001000000000,
-		},
-	}
-
-	var buf bytes.Buffer
-	err := printFailuresJSON(&buf, failures)
-	require.NoError(t, err)
-
-	var result []failureJSON
-	require.NoError(t, json.Unmarshal(buf.Bytes(), &result))
-	require.Len(t, result, 2)
-	assert.Equal(t, "docs/CON", result[0].Path)
-	assert.Equal(t, "invalid_filename", result[0].IssueType)
-	assert.Equal(t, "file_too_large", result[1].IssueType)
-	assert.Equal(t, int64(300*1024*1024*1024), result[1].FileSize)
-}
-
-func TestPrintFailuresTable(t *testing.T) {
-	t.Parallel()
-
-	failures := []sync.SyncFailureRow{
-		{
-			Path:         "docs/CON",
-			DriveID:      driveid.New("drive-1"),
-			Direction:    "upload",
-			Category:     "actionable",
-			IssueType:    "invalid_filename",
-			FailureCount: 1,
-			LastError:    "reserved name",
-			LastSeenAt:   1700000000000000000,
-		},
-	}
-
-	var buf bytes.Buffer
-	printFailuresTable(&buf, failures)
-
-	output := buf.String()
-	assert.Contains(t, output, "PATH")
-	assert.Contains(t, output, "DIRECTION")
-	assert.Contains(t, output, "docs/CON")
-	assert.Contains(t, output, "upload")
-}
-
-func TestPrintFailuresTable_TruncatesLongErrors(t *testing.T) {
-	t.Parallel()
-
-	longErr := "this is a very long error message that should be truncated to sixty characters total for table display purposes"
-	failures := []sync.SyncFailureRow{
-		{
-			Path:         "file.txt",
-			DriveID:      driveid.New("drive-1"),
-			Direction:    "upload",
-			Category:     "transient",
-			IssueType:    "upload_failed",
-			FailureCount: 3,
-			LastError:    longErr,
-			LastSeenAt:   1700000000000000000,
-		},
-	}
-
-	var buf bytes.Buffer
-	printFailuresTable(&buf, failures)
-
-	output := buf.String()
-	assert.Contains(t, output, longErr[:maxFailureErrorLen-3]+"...")
-	assert.NotContains(t, output, longErr) // full message should not appear
 }
 
 // --- findConflict ---
@@ -602,7 +416,8 @@ func TestResolveStrategy_NoFlag(t *testing.T) {
 
 // --- unified issues JSON ---
 
-func TestPrintIssuesJSON_MixedOutput(t *testing.T) {
+// Validates: R-2.3.9
+func TestPrintGroupedIssuesJSON_MixedOutput(t *testing.T) {
 	t.Parallel()
 
 	conflicts := []sync.ConflictRecord{
@@ -614,55 +429,58 @@ func TestPrintIssuesJSON_MixedOutput(t *testing.T) {
 		},
 	}
 
-	failures := []sync.SyncFailureRow{
+	groups := []failureGroup{
 		{
-			Path:        "docs/CON",
-			Direction:   "upload",
-			Category:    "actionable",
-			IssueType:   "invalid_filename",
-			LastError:   "reserved name",
-			FirstSeenAt: 1700000000000000000,
-			LastSeenAt:  1700000000000000000,
+			IssueType: sync.IssueInvalidFilename,
+			Message:   sync.MessageForIssueType(sync.IssueInvalidFilename),
+			Paths:     []string{"docs/CON"},
+			Count:     1,
 		},
 	}
 
 	var buf bytes.Buffer
-	err := printIssuesJSON(&buf, conflicts, failures)
+	err := printGroupedIssuesJSON(&buf, conflicts, groups, nil)
 	require.NoError(t, err)
 
-	var result []issueJSON
+	var result issuesOutputJSON
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &result))
-	require.Len(t, result, 2)
-	assert.Equal(t, "conflict", result[0].Kind)
-	assert.Equal(t, "conflict-001", result[0].ID)
-	assert.Equal(t, "failure", result[1].Kind)
-	assert.Equal(t, "docs/CON", result[1].Path)
+	require.Len(t, result.Conflicts, 1)
+	assert.Equal(t, "conflict-001", result.Conflicts[0].ID)
+	require.Len(t, result.FailureGroups, 1)
+	assert.Equal(t, "INVALID FILENAME", result.FailureGroups[0].Title)
+	assert.Contains(t, result.FailureGroups[0].Paths, "docs/CON")
 }
 
-// --- unified issues text ---
+// --- grouped issues text ---
 
-func TestPrintIssuesText_BothSections(t *testing.T) {
+// Validates: R-2.3.7, R-2.3.8
+func TestPrintGroupedIssuesTextVerbose_BothSections(t *testing.T) {
 	t.Parallel()
 
 	conflicts := []sync.ConflictRecord{
 		{ID: "abcdefghijklmnop", Path: "/test.txt", ConflictType: "edit_edit", DetectedAt: 1700000000000000000},
 	}
 
-	failures := []sync.SyncFailureRow{
-		{Path: "docs/CON", Direction: "upload", LastError: "reserved name", LastSeenAt: 1700000000000000000},
+	groups := []failureGroup{
+		{
+			IssueType: sync.IssueInvalidFilename,
+			Message:   sync.MessageForIssueType(sync.IssueInvalidFilename),
+			Paths:     []string{"docs/CON"},
+			Count:     1,
+		},
 	}
 
 	var buf bytes.Buffer
-	printIssuesText(&buf, conflicts, failures, false)
+	printGroupedIssuesTextVerbose(&buf, conflicts, groups, nil, false, false)
 
 	output := buf.String()
 	assert.Contains(t, output, "CONFLICTS")
 	assert.Contains(t, output, "/test.txt")
-	assert.Contains(t, output, "FILE ISSUES")
+	assert.Contains(t, output, "INVALID FILENAME")
 	assert.Contains(t, output, "docs/CON")
 }
 
-func TestPrintIssuesText_OnlyConflicts(t *testing.T) {
+func TestPrintGroupedIssuesTextVerbose_OnlyConflicts(t *testing.T) {
 	t.Parallel()
 
 	conflicts := []sync.ConflictRecord{
@@ -670,63 +488,74 @@ func TestPrintIssuesText_OnlyConflicts(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printIssuesText(&buf, conflicts, nil, false)
+	printGroupedIssuesTextVerbose(&buf, conflicts, nil, nil, false, false)
 
 	output := buf.String()
 	assert.Contains(t, output, "CONFLICTS")
-	assert.NotContains(t, output, "FILE ISSUES")
 }
 
-func TestPrintIssuesText_OnlyFailures(t *testing.T) {
+func TestPrintGroupedIssuesTextVerbose_OnlyFailures(t *testing.T) {
 	t.Parallel()
 
-	failures := []sync.SyncFailureRow{
-		{Path: "docs/CON", Direction: "upload", LastError: "reserved name", LastSeenAt: 1700000000000000000},
+	groups := []failureGroup{
+		{
+			IssueType: sync.IssueInvalidFilename,
+			Message:   sync.MessageForIssueType(sync.IssueInvalidFilename),
+			Paths:     []string{"docs/CON"},
+			Count:     1,
+		},
 	}
 
 	var buf bytes.Buffer
-	printIssuesText(&buf, nil, failures, false)
+	printGroupedIssuesTextVerbose(&buf, nil, groups, nil, false, false)
 
 	output := buf.String()
 	assert.NotContains(t, output, "CONFLICTS")
-	assert.Contains(t, output, "FILE ISSUES")
+	assert.Contains(t, output, "INVALID FILENAME")
 }
 
-func TestPrintIssuesText_HeldDeletes(t *testing.T) {
+func TestPrintGroupedIssuesTextVerbose_HeldDeletes(t *testing.T) {
 	t.Parallel()
 
-	failures := []sync.SyncFailureRow{
-		{Path: "file1.txt", Direction: "delete", IssueType: sync.IssueBigDeleteHeld, LastError: "held by big-delete protection", LastSeenAt: 1700000000000000000},
-		{Path: "file2.txt", Direction: "delete", IssueType: sync.IssueBigDeleteHeld, LastError: "held by big-delete protection", LastSeenAt: 1700000000000000000},
+	heldDeletes := []sync.SyncFailureRow{
+		{Path: "file1.txt", Direction: "delete", IssueType: sync.IssueBigDeleteHeld, LastSeenAt: 1700000000000000000},
+		{Path: "file2.txt", Direction: "delete", IssueType: sync.IssueBigDeleteHeld, LastSeenAt: 1700000000000000000},
 	}
 
 	var buf bytes.Buffer
-	printIssuesText(&buf, nil, failures, false)
+	printGroupedIssuesTextVerbose(&buf, nil, nil, heldDeletes, false, false)
 
 	output := buf.String()
 	assert.Contains(t, output, "HELD DELETES")
 	assert.Contains(t, output, "2 files")
 	assert.Contains(t, output, "file1.txt")
 	assert.Contains(t, output, "file2.txt")
-	assert.NotContains(t, output, "FILE ISSUES", "held deletes should not appear under FILE ISSUES")
 }
 
-func TestPrintIssuesText_MixedHeldAndOther(t *testing.T) {
+func TestPrintGroupedIssuesTextVerbose_MixedHeldAndOther(t *testing.T) {
 	t.Parallel()
 
-	failures := []sync.SyncFailureRow{
-		{Path: "file1.txt", Direction: "delete", IssueType: sync.IssueBigDeleteHeld, LastError: "held", LastSeenAt: 1700000000000000000},
-		{Path: "docs/CON", Direction: "upload", IssueType: "invalid_filename", LastError: "reserved name", LastSeenAt: 1700000000000000000},
+	groups := []failureGroup{
+		{
+			IssueType: sync.IssueInvalidFilename,
+			Message:   sync.MessageForIssueType(sync.IssueInvalidFilename),
+			Paths:     []string{"docs/CON"},
+			Count:     1,
+		},
+	}
+
+	heldDeletes := []sync.SyncFailureRow{
+		{Path: "file1.txt", Direction: "delete", IssueType: sync.IssueBigDeleteHeld, LastSeenAt: 1700000000000000000},
 	}
 
 	var buf bytes.Buffer
-	printIssuesText(&buf, nil, failures, false)
+	printGroupedIssuesTextVerbose(&buf, nil, groups, heldDeletes, false, false)
 
 	output := buf.String()
 	assert.Contains(t, output, "HELD DELETES")
 	assert.Contains(t, output, "1 files")
 	assert.Contains(t, output, "file1.txt")
-	assert.Contains(t, output, "FILE ISSUES")
+	assert.Contains(t, output, "INVALID FILENAME")
 	assert.Contains(t, output, "docs/CON")
 }
 

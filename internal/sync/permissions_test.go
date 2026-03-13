@@ -142,7 +142,7 @@ func newTestEngineWithPerms(t *testing.T, checker PermissionChecker, shortcuts [
 	return eng, bl, syncRoot
 }
 
-// Validates: R-2.14.1
+// Validates: R-2.14.1, R-2.10.23
 func TestHandle403_ReadOnlyFolder_RecordsIssueAtBoundary(t *testing.T) {
 	t.Parallel()
 
@@ -232,7 +232,7 @@ func TestHandle403_TransientError_NoSuppression(t *testing.T) {
 	assert.Empty(t, issues)
 }
 
-// Validates: R-2.14.1
+// Validates: R-2.14.1, R-2.10.25, R-2.10.40
 func TestHandle403_WholeShareReadOnly_BoundaryAtRoot(t *testing.T) {
 	t.Parallel()
 
@@ -332,7 +332,7 @@ func TestHandle403_NoShortcutMatch_Ignored(t *testing.T) {
 // recheckPermissions tests
 // ---------------------------------------------------------------------------
 
-// Validates: R-2.14.1
+// Validates: R-2.14.1, R-2.10.25
 func TestRecheckPermissions_GrantDetected_IssueCleared(t *testing.T) {
 	t.Parallel()
 
@@ -765,4 +765,427 @@ func TestRecheckPermissions_PopulatesCache(t *testing.T) {
 	canWrite, ok := eng.permCache.get("Shared/TeamDocs/sub")
 	assert.True(t, ok, "cache should contain the checked path")
 	assert.False(t, canWrite, "should be cached as read-only")
+}
+
+// ---------------------------------------------------------------------------
+// R-2.10.21: handle403 uses shortcut's RemoteDriveID for permission queries
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.10.21
+func TestHandle403_ShortcutUsesRemoteDrive(t *testing.T) {
+	t.Parallel()
+
+	remoteDriveID := "remote-drive-special"
+
+	checker := &mockPermChecker{
+		perms: map[string][]graph.Permission{
+			// Parent folder on the shortcut's remote drive is read-only.
+			driveid.New(remoteDriveID).String() + ":parent-id": {{ID: "p1", Roles: []string{"read"}}},
+			// Shortcut root is also read-only.
+			driveid.New(remoteDriveID).String() + ":root-id": {{ID: "p2", Roles: []string{"read"}}},
+		},
+	}
+
+	shortcuts := []Shortcut{{
+		ItemID: "sc-1", RemoteDrive: remoteDriveID, RemoteItem: "root-id",
+		LocalPath: "Shared/Special", Observation: ObservationDelta, DiscoveredAt: 1000,
+	}}
+
+	baselineEntries := []Outcome{
+		{
+			Action: ActionDownload, Success: true, Path: "Shared/Special",
+			DriveID: driveid.New(remoteDriveID), ItemID: "root-id", ParentID: "root", ItemType: ItemTypeFolder,
+		},
+		{
+			Action: ActionDownload, Success: true, Path: "Shared/Special/sub",
+			DriveID: driveid.New(remoteDriveID), ItemID: "parent-id", ParentID: "root-id", ItemType: ItemTypeFolder,
+		},
+	}
+
+	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+	ctx := t.Context()
+
+	result := eng.handle403(ctx, bl, "Shared/Special/sub/file.txt", shortcuts)
+	assert.True(t, result, "handle403 should return true for read-only folder")
+
+	// Verify ALL API calls used the shortcut's remote drive, not the engine's primary drive.
+	remoteDriveStr := driveid.New(remoteDriveID).String()
+	for _, call := range checker.calls {
+		assert.Contains(t, call, remoteDriveStr,
+			"every ListItemPermissions call should use the shortcut's RemoteDriveID, got: %s", call)
+	}
+
+	// Verify at least one API call was made.
+	assert.NotEmpty(t, checker.calls, "should have made at least one API call")
+}
+
+// ---------------------------------------------------------------------------
+// R-2.10.24: permissionCache checked before API call
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.10.24
+func TestPermissionCache_HitAvoidAPICall(t *testing.T) {
+	t.Parallel()
+
+	pc := newPermissionCache()
+
+	// Set a cache entry.
+	pc.set("Shared/Folder", false)
+
+	// Cache hit returns value without needing API.
+	canWrite, ok := pc.get("Shared/Folder")
+	assert.True(t, ok, "cache should hit")
+	assert.False(t, canWrite)
+
+	// Cache miss.
+	_, ok = pc.get("Shared/Other")
+	assert.False(t, ok, "cache should miss for unknown path")
+}
+
+// Validates: R-2.10.24
+func TestPermissionCache_MapsWritableAndDenied(t *testing.T) {
+	t.Parallel()
+
+	pc := newPermissionCache()
+
+	// Cache both writable and denied folders.
+	pc.set("Shared/Writable", true)
+	pc.set("Shared/Denied", false)
+
+	canWrite, ok := pc.get("Shared/Writable")
+	assert.True(t, ok)
+	assert.True(t, canWrite, "writable folder should be cached as writable")
+
+	canWrite, ok = pc.get("Shared/Denied")
+	assert.True(t, ok)
+	assert.False(t, canWrite, "denied folder should be cached as denied")
+
+	// deniedPrefixes should only include denied entries.
+	prefixes := pc.deniedPrefixes()
+	assert.Contains(t, prefixes, "Shared/Denied")
+	assert.NotContains(t, prefixes, "Shared/Writable")
+}
+
+// ---------------------------------------------------------------------------
+// R-2.10.40: walkPermissionBoundary stops at shortcut root
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.10.40
+func TestWalkPermissionBoundary_StopsAtShortcutRoot(t *testing.T) {
+	t.Parallel()
+
+	remoteDriveID := "remote-drive-1"
+
+	// All folders including root are read-only. The walk MUST stop at the
+	// shortcut root and not try to go above it.
+	checker := &mockPermChecker{
+		perms: map[string][]graph.Permission{
+			driveid.New(remoteDriveID).String() + ":deep-id":    {{ID: "p1", Roles: []string{"read"}}},
+			driveid.New(remoteDriveID).String() + ":mid-id":     {{ID: "p2", Roles: []string{"read"}}},
+			driveid.New(remoteDriveID).String() + ":root-id":    {{ID: "p3", Roles: []string{"read"}}},
+			driveid.New(remoteDriveID).String() + ":above-root": {{ID: "p4", Roles: []string{"read"}}},
+		},
+	}
+
+	sc := &Shortcut{
+		ItemID: "sc-1", RemoteDrive: remoteDriveID, RemoteItem: "root-id",
+		LocalPath: "Shared/TeamDocs", Observation: ObservationDelta, DiscoveredAt: 1000,
+	}
+
+	baselineEntries := []Outcome{
+		{
+			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs",
+			DriveID: driveid.New(remoteDriveID), ItemID: "root-id", ParentID: "root", ItemType: ItemTypeFolder,
+		},
+		{
+			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs/mid",
+			DriveID: driveid.New(remoteDriveID), ItemID: "mid-id", ParentID: "root-id", ItemType: ItemTypeFolder,
+		},
+		{
+			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs/mid/deep",
+			DriveID: driveid.New(remoteDriveID), ItemID: "deep-id", ParentID: "mid-id", ItemType: ItemTypeFolder,
+		},
+		// Parent above the shortcut root — should never be queried.
+		{
+			Action: ActionDownload, Success: true, Path: "Shared",
+			DriveID: driveid.New(remoteDriveID), ItemID: "above-root", ParentID: "root", ItemType: ItemTypeFolder,
+		},
+	}
+
+	eng, bl, _ := newTestEngineWithPerms(t, checker, []Shortcut{*sc}, baselineEntries)
+	ctx := t.Context()
+
+	boundary := eng.walkPermissionBoundary(ctx, bl, "Shared/TeamDocs/mid/deep", sc, driveid.New(remoteDriveID))
+
+	// Boundary should be the shortcut root, NOT "Shared" (above root).
+	assert.Equal(t, "Shared/TeamDocs", boundary, "walk must stop at shortcut root")
+
+	// Verify that the "above-root" key was never queried.
+	aboveRootKey := driveid.New(remoteDriveID).String() + ":above-root"
+	for _, call := range checker.calls {
+		assert.NotEqual(t, aboveRootKey, call,
+			"walkPermissionBoundary must not query above the shortcut root")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// R-2.10.25: recheckPermissions re-queries and clears/updates cache
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.10.25
+func TestRecheckPermissions_MultipleIssues_PartialResolution(t *testing.T) {
+	t.Parallel()
+
+	remoteDriveID := "remote-drive-1"
+
+	checker := &mockPermChecker{
+		perms: map[string][]graph.Permission{
+			// Folder A is now writable — permission restored.
+			driveid.New(remoteDriveID).String() + ":folder-a-id": {{ID: "p1", Roles: []string{"write"}}},
+			// Folder B is still read-only.
+			driveid.New(remoteDriveID).String() + ":folder-b-id": {{ID: "p2", Roles: []string{"read"}}},
+		},
+	}
+
+	shortcuts := []Shortcut{{
+		ItemID: "sc-1", RemoteDrive: remoteDriveID, RemoteItem: "root-id",
+		LocalPath: "Shared/TeamDocs", Observation: ObservationDelta, DiscoveredAt: 1000,
+	}}
+
+	baselineEntries := []Outcome{
+		{
+			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs/folderA",
+			DriveID: driveid.New(remoteDriveID), ItemID: "folder-a-id", ParentID: "root-id", ItemType: ItemTypeFolder,
+		},
+		{
+			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs/folderB",
+			DriveID: driveid.New(remoteDriveID), ItemID: "folder-b-id", ParentID: "root-id", ItemType: ItemTypeFolder,
+		},
+	}
+
+	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+	ctx := t.Context()
+
+	// Record two permission_denied issues.
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path: "Shared/TeamDocs/folderA", Direction: "upload",
+		IssueType: IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: http.StatusForbidden,
+	}, nil))
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path: "Shared/TeamDocs/folderB", Direction: "upload",
+		IssueType: IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: http.StatusForbidden,
+	}, nil))
+
+	eng.recheckPermissions(ctx, bl, shortcuts)
+
+	// Folder A should be cleared (now writable).
+	// Folder B should remain (still read-only).
+	remaining, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssuePermissionDenied)
+	require.NoError(t, err)
+	require.Len(t, remaining, 1)
+	assert.Equal(t, "Shared/TeamDocs/folderB", remaining[0].Path)
+
+	// Cache should reflect both states.
+	canWrite, ok := eng.permCache.get("Shared/TeamDocs/folderA")
+	assert.True(t, ok)
+	assert.True(t, canWrite, "folderA should be cached as writable after recheck")
+
+	canWrite, ok = eng.permCache.get("Shared/TeamDocs/folderB")
+	assert.True(t, ok)
+	assert.False(t, canWrite, "folderB should remain cached as denied")
+}
+
+// Validates: R-2.10.25
+func TestRecheckPermissions_ResetsCache(t *testing.T) {
+	t.Parallel()
+
+	checker := &mockPermChecker{}
+
+	eng, bl, _ := newTestEngineWithPerms(t, checker, nil, nil)
+	ctx := t.Context()
+
+	// Pre-populate cache with stale entries.
+	eng.permCache.set("Shared/Stale", false)
+
+	// recheckPermissions should reset the cache at the start.
+	eng.recheckPermissions(ctx, bl, nil)
+
+	// Stale entry should be gone.
+	_, ok := eng.permCache.get("Shared/Stale")
+	assert.False(t, ok, "stale cache entries should be cleared at pass start")
+}
+
+// ---------------------------------------------------------------------------
+// handleLocalPermission tests (R-2.10.12)
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.10.12
+func TestHandleLocalPermission_DirectoryLevel(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	// Create a directory, then make it inaccessible.
+	deniedDir := filepath.Join(syncRoot, "Private")
+	require.NoError(t, os.MkdirAll(deniedDir, 0o755))
+	require.NoError(t, os.Chmod(deniedDir, 0o000))
+
+	t.Cleanup(func() {
+		// Restore permissions so t.TempDir cleanup works.
+		_ = os.Chmod(deniedDir, 0o755)
+	})
+
+	// Set up tracker (needed for HoldScope).
+	tracker := NewDepTracker(16, eng.logger)
+	eng.tracker = tracker
+
+	// Simulate a worker result with os.ErrPermission.
+	r := &WorkerResult{
+		Path:       "Private/file.txt",
+		ActionType: ActionDownload,
+		Err:        os.ErrPermission,
+		ErrMsg:     "permission denied",
+	}
+
+	eng.handleLocalPermission(ctx, r)
+
+	// Should have recorded a directory-level local_permission_denied.
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+	assert.Equal(t, "Private", issues[0].Path)
+	assert.Equal(t, scopeKeyPermDir+"Private", issues[0].ScopeKey)
+
+	// Should have created a scope block.
+	_, blocked := tracker.GetScopeBlock(scopeKeyPermDir + "Private")
+	assert.True(t, blocked, "should create a scope block for the denied directory")
+}
+
+// Validates: R-2.10.12
+func TestHandleLocalPermission_FileLevel(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	// Create a directory (accessible) with an inaccessible file.
+	dir := filepath.Join(syncRoot, "Docs")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+
+	tracker := NewDepTracker(16, eng.logger)
+	eng.tracker = tracker
+
+	// Parent dir is accessible — this should be file-level only.
+	r := &WorkerResult{
+		Path:       "Docs/secret.txt",
+		ActionType: ActionUpload,
+		Err:        os.ErrPermission,
+		ErrMsg:     "permission denied",
+	}
+
+	eng.handleLocalPermission(ctx, r)
+
+	// Should have recorded a file-level local_permission_denied (no scope key).
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+	assert.Equal(t, "Docs/secret.txt", issues[0].Path)
+	assert.Empty(t, issues[0].ScopeKey, "file-level issues should have no scope key")
+}
+
+// ---------------------------------------------------------------------------
+// recheckLocalPermissions tests (R-2.10.13)
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.10.13
+func TestRecheckLocalPermissions_Restored(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	deniedDir := filepath.Join(syncRoot, "Private")
+	require.NoError(t, os.MkdirAll(deniedDir, 0o755))
+
+	// Set up tracker.
+	tracker := NewDepTracker(16, eng.logger)
+	eng.tracker = tracker
+
+	scopeKey := scopeKeyPermDir + "Private"
+
+	// Simulate a prior denial: record failure + scope block.
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path:      "Private",
+		DriveID:   eng.driveID,
+		Direction: "download",
+		IssueType: IssueLocalPermissionDenied,
+		Category:  "actionable",
+		ErrMsg:    "directory not accessible",
+		ScopeKey:  scopeKey,
+	}, nil))
+
+	block := &ScopeBlock{Key: scopeKey, IssueType: IssueLocalPermissionDenied}
+	tracker.HoldScope(scopeKey, block)
+
+	// Directory is now accessible (we didn't chmod 000 it).
+	eng.recheckLocalPermissions(ctx)
+
+	// Failure should be cleared.
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
+	require.NoError(t, err)
+	assert.Empty(t, issues, "failure should be cleared when directory is accessible")
+
+	// Scope block should be released.
+	_, blocked := tracker.GetScopeBlock(scopeKey)
+	assert.False(t, blocked, "scope block should be released when directory is accessible")
+}
+
+// Validates: R-2.10.13
+func TestRecheckLocalPermissions_StillDenied(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	deniedDir := filepath.Join(syncRoot, "Private")
+	require.NoError(t, os.MkdirAll(deniedDir, 0o755))
+	require.NoError(t, os.Chmod(deniedDir, 0o000))
+
+	t.Cleanup(func() {
+		_ = os.Chmod(deniedDir, 0o755)
+	})
+
+	tracker := NewDepTracker(16, eng.logger)
+	eng.tracker = tracker
+
+	scopeKey := scopeKeyPermDir + "Private"
+
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path:      "Private",
+		DriveID:   eng.driveID,
+		Direction: "download",
+		IssueType: IssueLocalPermissionDenied,
+		Category:  "actionable",
+		ErrMsg:    "directory not accessible",
+		ScopeKey:  scopeKey,
+	}, nil))
+
+	block := &ScopeBlock{Key: scopeKey, IssueType: IssueLocalPermissionDenied}
+	tracker.HoldScope(scopeKey, block)
+
+	eng.recheckLocalPermissions(ctx)
+
+	// Failure should remain.
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
+	require.NoError(t, err)
+	assert.Len(t, issues, 1, "failure should remain when directory is still inaccessible")
+
+	// Scope block should still be active.
+	_, blocked := tracker.GetScopeBlock(scopeKey)
+	assert.True(t, blocked, "scope block should remain when directory is still inaccessible")
 }

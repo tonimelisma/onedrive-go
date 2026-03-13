@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"log/slog"
+	"strings"
 	stdsync "sync"
 	"sync/atomic"
 	"time"
@@ -298,6 +299,20 @@ func (dt *DepTracker) blockedScope(ta *TrackedAction) string {
 		}
 	}
 
+	// perm:dir:$path blocks all actions whose path falls under the denied
+	// directory (R-2.10.12). O(n) over active perm:dir blocks — expected
+	// to be tiny (1-3 typically).
+	for key := range dt.scopeBlocks {
+		if !strings.HasPrefix(key, scopeKeyPermDir) {
+			continue
+		}
+
+		dirPath := strings.TrimPrefix(key, scopeKeyPermDir)
+		if ta.Action.Path == dirPath || strings.HasPrefix(ta.Action.Path, dirPath+"/") {
+			return key
+		}
+	}
+
 	return ""
 }
 
@@ -333,6 +348,33 @@ func (dt *DepTracker) ReleaseScope(key string) {
 
 	for _, ta := range held {
 		dt.dispatch(ta)
+	}
+}
+
+// DiscardScope clears a scope block and completes all held actions for that
+// scope key without dispatching them. Used when the scope's source is removed
+// (e.g., shortcut deleted) and held actions are no longer valid (R-2.10.38).
+// Unlike ReleaseScope, discarded actions are never dispatched to workers.
+func (dt *DepTracker) DiscardScope(key string) {
+	dt.mu.Lock()
+	held := dt.held[key]
+	delete(dt.held, key)
+	delete(dt.scopeBlocks, key)
+	dt.mu.Unlock()
+
+	if len(held) > 0 {
+		dt.logger.Info("tracker: scope discarded, completing held actions without dispatch",
+			slog.String("scope_key", key),
+			slog.Int("count", len(held)),
+		)
+	}
+
+	for range held {
+		// Mark completed without dispatching — these actions are orphaned.
+		newCompleted := dt.completed.Add(1)
+		if !dt.persistent && newCompleted == dt.total.Load() {
+			close(dt.done)
+		}
 	}
 }
 

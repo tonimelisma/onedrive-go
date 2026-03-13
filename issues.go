@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -17,9 +16,6 @@ import (
 // in table output. 8 hex chars = 32 bits of entropy = 4 billion values,
 // sufficient for uniqueness in any realistic conflict set.
 const conflictIDPrefixLen = 8
-
-// maxFailureErrorLen is the maximum error message length in table output.
-const maxFailureErrorLen = 60
 
 // Resolution strategy aliases (re-export from sync package for CLI use).
 const (
@@ -88,7 +84,15 @@ func runIssuesList(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	if len(conflicts) == 0 && len(failures) == 0 {
+	// Load shortcuts for humanizing scope keys in the grouped display (R-2.10.22).
+	shortcuts, err := mgr.ListShortcuts(ctx)
+	if err != nil {
+		return err
+	}
+
+	groups, heldDeletes := groupFailures(failures, shortcuts)
+
+	if len(conflicts) == 0 && len(groups) == 0 && len(heldDeletes) == 0 {
 		if history {
 			fmt.Println("No issues in history.")
 		} else {
@@ -99,10 +103,10 @@ func runIssuesList(cmd *cobra.Command, _ []string) error {
 	}
 
 	if cc.Flags.JSON {
-		return printIssuesJSON(os.Stdout, conflicts, failures)
+		return printGroupedIssuesJSON(os.Stdout, conflicts, groups, heldDeletes)
 	}
 
-	printIssuesText(os.Stdout, conflicts, failures, history)
+	printGroupedIssuesTextVerbose(os.Stdout, conflicts, groups, heldDeletes, history, cc.Flags.Verbose)
 
 	return nil
 }
@@ -516,22 +520,6 @@ func toConflictJSON(c *sync.ConflictRecord) conflictJSON {
 	}
 }
 
-func printConflictsJSON(w io.Writer, conflicts []sync.ConflictRecord) error {
-	items := make([]conflictJSON, len(conflicts))
-	for i := range conflicts {
-		items[i] = toConflictJSON(&conflicts[i])
-	}
-
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-
-	if err := enc.Encode(items); err != nil {
-		return fmt.Errorf("encoding JSON output: %w", err)
-	}
-
-	return nil
-}
-
 func printConflictsTable(w io.Writer, conflicts []sync.ConflictRecord, history bool) {
 	var headers []string
 	if history {
@@ -556,52 +544,6 @@ func printConflictsTable(w io.Writer, conflicts []sync.ConflictRecord, history b
 	printTable(w, headers, rows)
 }
 
-// --- failure JSON/table ---
-
-type failureJSON struct {
-	Path         string `json:"path"`
-	Direction    string `json:"direction"`
-	Category     string `json:"category"`
-	IssueType    string `json:"issue_type,omitempty"`
-	FailureCount int    `json:"failure_count"`
-	LastError    string `json:"last_error"`
-	HTTPStatus   int    `json:"http_status,omitempty"`
-	FileSize     int64  `json:"file_size,omitempty"`
-	FirstSeenAt  string `json:"first_seen_at"`
-	LastSeenAt   string `json:"last_seen_at"`
-}
-
-func toFailureJSON(row *sync.SyncFailureRow) failureJSON {
-	return failureJSON{
-		Path:         row.Path,
-		Direction:    row.Direction,
-		Category:     row.Category,
-		IssueType:    row.IssueType,
-		FailureCount: row.FailureCount,
-		LastError:    row.LastError,
-		HTTPStatus:   row.HTTPStatus,
-		FileSize:     row.FileSize,
-		FirstSeenAt:  formatNanoTimestamp(row.FirstSeenAt),
-		LastSeenAt:   formatNanoTimestamp(row.LastSeenAt),
-	}
-}
-
-func printFailuresJSON(w io.Writer, failures []sync.SyncFailureRow) error {
-	items := make([]failureJSON, len(failures))
-	for i := range failures {
-		items[i] = toFailureJSON(&failures[i])
-	}
-
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-
-	if err := enc.Encode(items); err != nil {
-		return fmt.Errorf("encoding JSON output: %w", err)
-	}
-
-	return nil
-}
-
 // printHeldDeletesTable renders held-delete entries with a simplified table
 // (path only — direction is always "delete" and error is always the same).
 func printHeldDeletesTable(w io.Writer, failures []sync.SyncFailureRow) {
@@ -620,145 +562,4 @@ func printHeldDeletesTable(w io.Writer, failures []sync.SyncFailureRow) {
 	}
 
 	printTable(w, headers, rows)
-}
-
-func printFailuresTable(w io.Writer, failures []sync.SyncFailureRow) {
-	headers := []string{"PATH", "DIRECTION", "ERROR", "LAST SEEN"}
-
-	rows := make([][]string, len(failures))
-	for i := range failures {
-		row := &failures[i]
-		lastSeen := ""
-
-		if row.LastSeenAt != 0 {
-			lastSeen = formatNanoTimestamp(row.LastSeenAt)
-		}
-
-		errMsg := row.LastError
-		if len(errMsg) > maxFailureErrorLen {
-			errMsg = errMsg[:maxFailureErrorLen-3] + "..."
-		}
-
-		rows[i] = []string{row.Path, row.Direction, errMsg, lastSeen}
-	}
-
-	printTable(w, headers, rows)
-}
-
-// --- unified issues output ---
-
-// issueJSON is a discriminated union for the JSON output of the issues list.
-type issueJSON struct {
-	Kind string `json:"kind"` // "conflict" or "failure"
-
-	// Conflict fields (present when kind == "conflict").
-	ID           string `json:"id,omitempty"`
-	ConflictType string `json:"conflict_type,omitempty"`
-	DetectedAt   string `json:"detected_at,omitempty"`
-	LocalHash    string `json:"local_hash,omitempty"`
-	RemoteHash   string `json:"remote_hash,omitempty"`
-	Resolution   string `json:"resolution,omitempty"`
-	ResolvedAt   string `json:"resolved_at,omitempty"`
-	ResolvedBy   string `json:"resolved_by,omitempty"`
-
-	// Shared fields.
-	Path string `json:"path"`
-
-	// Failure fields (present when kind == "failure").
-	Direction    string `json:"direction,omitempty"`
-	Category     string `json:"category,omitempty"`
-	IssueType    string `json:"issue_type,omitempty"`
-	FailureCount int    `json:"failure_count,omitempty"`
-	LastError    string `json:"last_error,omitempty"`
-	HTTPStatus   int    `json:"http_status,omitempty"`
-	FileSize     int64  `json:"file_size,omitempty"`
-	FirstSeenAt  string `json:"first_seen_at,omitempty"`
-	LastSeenAt   string `json:"last_seen_at,omitempty"`
-}
-
-func printIssuesJSON(w io.Writer, conflicts []sync.ConflictRecord, failures []sync.SyncFailureRow) error {
-	items := make([]issueJSON, 0, len(conflicts)+len(failures))
-
-	for i := range conflicts {
-		c := &conflicts[i]
-		items = append(items, issueJSON{
-			Kind:         "conflict",
-			ID:           c.ID,
-			Path:         c.Path,
-			ConflictType: c.ConflictType,
-			DetectedAt:   formatNanoTimestamp(c.DetectedAt),
-			LocalHash:    c.LocalHash,
-			RemoteHash:   c.RemoteHash,
-			Resolution:   c.Resolution,
-			ResolvedBy:   c.ResolvedBy,
-			ResolvedAt:   formatNanoTimestamp(c.ResolvedAt),
-		})
-	}
-
-	for i := range failures {
-		f := &failures[i]
-		items = append(items, issueJSON{
-			Kind:         "failure",
-			Path:         f.Path,
-			Direction:    f.Direction,
-			Category:     f.Category,
-			IssueType:    f.IssueType,
-			FailureCount: f.FailureCount,
-			LastError:    f.LastError,
-			HTTPStatus:   f.HTTPStatus,
-			FileSize:     f.FileSize,
-			FirstSeenAt:  formatNanoTimestamp(f.FirstSeenAt),
-			LastSeenAt:   formatNanoTimestamp(f.LastSeenAt),
-		})
-	}
-
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-
-	if err := enc.Encode(items); err != nil {
-		return fmt.Errorf("encoding JSON output: %w", err)
-	}
-
-	return nil
-}
-
-func printIssuesText(w io.Writer, conflicts []sync.ConflictRecord, failures []sync.SyncFailureRow, history bool) {
-	if len(conflicts) > 0 {
-		fmt.Fprintln(w, "CONFLICTS")
-		printConflictsTable(w, conflicts, history)
-	}
-
-	// Separate big-delete-held entries from other failures for distinct display.
-	var heldDeletes, otherFailures []sync.SyncFailureRow
-	for i := range failures {
-		if failures[i].IssueType == sync.IssueBigDeleteHeld {
-			heldDeletes = append(heldDeletes, failures[i])
-		} else {
-			otherFailures = append(otherFailures, failures[i])
-		}
-	}
-
-	sections := 0
-	if len(conflicts) > 0 {
-		sections++
-	}
-
-	if len(heldDeletes) > 0 {
-		if sections > 0 {
-			fmt.Fprintln(w)
-		}
-
-		fmt.Fprintf(w, "HELD DELETES (%d files — big-delete protection triggered, run `issues clear` to approve)\n", len(heldDeletes))
-		printHeldDeletesTable(w, heldDeletes)
-		sections++
-	}
-
-	if len(otherFailures) > 0 {
-		if sections > 0 {
-			fmt.Fprintln(w)
-		}
-
-		fmt.Fprintln(w, "FILE ISSUES")
-		printFailuresTable(w, otherFailures)
-	}
 }

@@ -29,6 +29,11 @@ const (
 	scopeKeyQuotaOwn        = "quota:own"
 	scopeKeyQuotaShortcut   = "quota:shortcut:"
 	scopeKeyService         = "service"
+
+	// scopeKeyPermDir is the prefix for local directory permission scope
+	// blocks. The full key is "perm:dir:" + absolute-or-relative directory path.
+	// These blocks hold all actions whose path falls under the denied directory.
+	scopeKeyPermDir = "perm:dir:"
 )
 
 // Scope detection thresholds.

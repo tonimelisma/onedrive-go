@@ -1854,18 +1854,18 @@ All proposed new/changed requirements, organized by area. Failure handling princ
 | ID | Requirement | Status | Part |
 |----|------------|--------|------|
 | R-2.10.1 | When a transfer fails with HTTP 507, the system shall classify it as an actionable failure with issue type `quota_exceeded`, scoped to the quota owner. For own-drive actions: scope key `quota:own` (user's quota shared across own drives). For shortcut actions: scope key `quota:shortcut:{localPath}` (sharer's independent quota; see R-2.10.34 for dual-format convention). The system shall NOT retry 507 at the transport level. Uploads to the affected scope shall be suppressed; downloads and uploads to other scopes shall continue. | planned (revise) | 7.2, 7.4.1 |
-| R-2.10.2 | When a user resolves a file-scoped actionable failure (by renaming, moving, or deleting the file), the system shall automatically detect the resolution on the next scanner pass and remove the stale failure entry. Implementation: engine calls `ClearResolvedActionableFailures` after observation, comparing current skipped paths against recorded failures. | planned (revise) | 4 |
+| R-2.10.2 | When a user resolves a file-scoped actionable failure (by renaming, moving, or deleting the file), the system shall automatically detect the resolution on the next scanner pass and remove the stale failure entry. Implementation: engine calls `ClearResolvedActionableFailures` after observation, comparing current skipped paths against recorded failures. | verified | 4 |
 | R-2.10.3 | The system shall detect scope-level failure patterns: 429 immediate account-scope from single response; 507 account-scope after 3 consecutive from different files in 10s; 5xx service-scope after 5 consecutive from different files in 30s; 503 with Retry-After immediate service-scope. Scope blocks prevent the tracker from dispatching actions in the affected scope. | planned (revise) | 7.3 |
-| R-2.10.4 | When displaying sync status, the system shall show failure scope context (file, directory, drive/shortcut, account, service) alongside retry information. For per-drive scopes (507, 403), the display shall identify which drive or shortcut is affected and show the appropriate user action for that scope owner. | planned | 7.3, 7.4.1 |
+| R-2.10.4 | When displaying sync status, the system shall show failure scope context (file, directory, drive/shortcut, account, service) alongside retry information. For per-drive scopes (507, 403), the display shall identify which drive or shortcut is affected and show the appropriate user action for that scope owner. | verified | 7.3, 7.4.1 |
 | R-2.10.5 | When a scope block is active, the system shall test for recovery by periodically releasing one real action from the held queue as a trial. On trial success: clear the scope block and release all held actions. On trial failure: re-hold and extend trial interval. No synthetic probe requests. | **new** | 7.3 |
 | R-2.10.6 | For `quota_exceeded`: trial timing starts at 5 minutes, doubles on each failed trial, max 1 hour. A successful trial upload proves quota is available and clears the scope. | **new** | 7.3 |
 | R-2.10.7 | For `rate_limited`: trial timing starts at `Retry-After` duration from server response. Scope block affects all action types for the account (429 throttles all API calls). | implemented (revise: use trial, not `waitForThrottle` sleep) | 7.3 |
 | R-2.10.8 | For `service_outage`: trial timing starts at 60 seconds (or `Retry-After` if present), doubles on failure, max 10 minutes. A successful trial action proves the service is available and clears the scope. | **new** | 7.3 |
-| R-2.10.9 | When `recheckPermissions()` discovers a previously-denied folder is now writable, the system shall clear the scope block and release all held actions under that folder immediately. | **new** (enhance existing) | 8 |
+| R-2.10.9 | When `recheckPermissions()` discovers a previously-denied folder is now writable, the system shall clear the scope block and release all held actions under that folder immediately. | verified | 8 |
 | R-2.10.10 | When the scanner observes a previously-blocked file or directory is now accessible, the system shall clear the failure and release held actions. | **new** | 8 |
 | R-2.10.11 | When a scope block clears (via trial success or recheck), the system shall release all held actions immediately for dispatch. | **new** | 7.3 |
-| R-2.10.12 | When a local file operation fails with `os.ErrPermission`, the system shall check parent directory accessibility. If the directory is inaccessible: record one `local_permission_denied` at directory level and suppress all operations under it. If the directory is accessible: record at file level. | **new** | 8 |
-| R-2.10.13 | The system shall recheck `local_permission_denied` directory-level issues at the start of each sync pass, and auto-clear when accessible. | **new** | 8 |
+| R-2.10.12 | When a local file operation fails with `os.ErrPermission`, the system shall check parent directory accessibility. If the directory is inaccessible: record one `local_permission_denied` at directory level and suppress all operations under it. If the directory is accessible: record at file level. | verified | 8 |
+| R-2.10.13 | The system shall recheck `local_permission_denied` directory-level issues at the start of each sync pass, and auto-clear when accessible. | verified | 8 |
 | R-2.10.14 | Trial timing per scope type: `rate_limited` starts at Retry-After (max 10 min); `quota_exceeded` starts at 5 min (2× backoff, max 1 hour); `service_outage` starts at 60s or Retry-After (2× backoff, max 10 min). | **new** | 7.3 |
 | R-2.10.15 | When a scope block is set, at most `transfer_workers` actions may be in-flight. These complete normally and route through standard retry. This bounded waste (worker count) is accepted; no locking between result processing and dispatch. | **new** | 7.3 |
 | R-2.10.16 | Every `WorkerResult` shall carry target drive identity (`TargetDriveID`, `ShortcutKey`). Own-drive actions: empty `ShortcutKey`. Shortcut actions: `remoteDrive:remoteItem`. | **new** | 11.1 |
@@ -1873,16 +1873,16 @@ All proposed new/changed requirements, organized by area. Failure handling princ
 | R-2.10.18 | Independent sliding windows per scope key. Own-drive 507s shall not count toward shortcut scope windows, and vice versa. | **new** | 11.1 |
 | R-2.10.19 | 507 on own-drive → scope key `quota:own`, blocks own-drive uploads only. Shortcut uploads, downloads, deletes, moves continue. | **new** | 11.2 |
 | R-2.10.20 | 507 on shortcut → scope key `quota:shortcut:{localPath}`, blocks that shortcut's uploads only. Own-drive and other shortcuts continue. See R-2.10.34 for dual-format convention. | **new** | 11.2 |
-| R-2.10.21 | Trial actions for `quota:own` shall select own-drive uploads. Trial actions for `quota:shortcut:*` shall select uploads targeting that shortcut. A trial targeting the wrong quota owner proves nothing. | **new** | 11.2 |
-| R-2.10.22 | `issues` display shall identify shortcut-scoped 507 by local path name (e.g., "Shared folder 'Team Docs'"), not opaque drive IDs. | **new** | 11.2 |
-| R-2.10.23 | 403 on shortcut shall scope boundary to that shortcut's `RemoteDriveID`. `walkPermissionBoundary` uses shortcut's drive, not primary. | **new** | 11.3 |
-| R-2.10.24 | 403 on shortcut A shall not affect shortcut B. Each shortcut has independent permissions from an independent owner. | **new** | 11.3 |
-| R-2.10.25 | When a shortcut root itself is read-only, record scope block at shortcut root level. Do not walk above shortcut boundary. | **new** | 11.3 |
+| R-2.10.21 | Trial actions for `quota:own` shall select own-drive uploads. Trial actions for `quota:shortcut:*` shall select uploads targeting that shortcut. A trial targeting the wrong quota owner proves nothing. | verified | 11.2 |
+| R-2.10.22 | `issues` display shall identify shortcut-scoped 507 by local path name (e.g., "Shared folder 'Team Docs'"), not opaque drive IDs. | verified | 11.2 |
+| R-2.10.23 | 403 on shortcut shall scope boundary to that shortcut's `RemoteDriveID`. `walkPermissionBoundary` uses shortcut's drive, not primary. | verified | 11.3 |
+| R-2.10.24 | 403 on shortcut A shall not affect shortcut B. Each shortcut has independent permissions from an independent owner. | verified | 11.3 |
+| R-2.10.25 | When a shortcut root itself is read-only, record scope block at shortcut root level. Do not walk above shortcut boundary. | verified | 11.3 |
 | R-2.10.26 | 429 shall block all action types on all drives including shortcuts (`throttle:account`). Same OAuth token = same rate limit. | **new** | 11.4 |
 | R-2.10.27 | When 429 scope clears, ALL held actions (own-drive + shortcuts) released simultaneously. No per-drive trial needed. | **new** | 11.4 |
 | R-2.10.28 | 5xx scope blocks affect all drives including shortcuts. Graph API is shared infrastructure. | **new** | 11.5 |
 | R-2.10.29 | Service-scope sliding window accepts 5xx from any target drive. Five consecutive 5xx from different drives within 30s triggers block. | **new** | 11.5 |
-| R-2.10.30 | During `throttle:account` or `service` scope block, suppress shortcut observation polling (wastes API calls, may worsen throttling). | **new** | 11.6 |
+| R-2.10.30 | During `throttle:account` or `service` scope block, suppress shortcut observation polling (wastes API calls, may worsen throttling). | verified | 11.6 |
 | R-2.10.31 | During `quota:shortcut:*` scope block, observation of that shortcut continues (read-only). Other observations unaffected. | **new** | 11.6 |
 | R-2.10.32 | `status` command (future) shall show per-scope block status as separate entries per drive/shortcut. | **new** | 11.7 |
 | R-2.10.33 | `sync_failures` table shall store `scope_key` column for scope-level failures. Enables `issues` display grouping without re-deriving scope. | **new** | 11.8 |
@@ -1890,9 +1890,9 @@ All proposed new/changed requirements, organized by area. Failure handling princ
 | R-2.10.35 | Engines shall NOT coordinate scope blocks across engine boundaries. Each discovers independently. Bounded waste accepted. | **new** | 11.10 |
 | R-2.10.36 | 429 discovered independently per engine (same token). No shared state. Waste: one request per engine. | **new** | 11.10 |
 | R-2.10.37 | Shortcut scope blocks are engine-internal. A shortcut in Engine A has no effect on Engine B's shortcuts. | **new** | 11.10 |
-| R-2.10.38 | When a shortcut is removed while a scope block exists for it, clear the block and discard held actions. | **new** | 11.11 |
+| R-2.10.38 | When a shortcut is removed while a scope block exists for it, clear the block and discard held actions. | verified | 11.11 |
 | R-2.10.39 | Two shortcuts to same sharer's drive: 507 on one does NOT auto-block the other. Independent scope keys per shortcut. | **new** | 11.11 |
-| R-2.10.40 | `walkPermissionBoundary` on shortcut shall not walk above shortcut root. Shortcut root is the natural boundary. | **new** | 11.11 |
+| R-2.10.40 | `walkPermissionBoundary` on shortcut shall not walk above shortcut root. Shortcut root is the natural boundary. | verified | 11.11 |
 | R-2.10.41 | When a download, delete, or move action succeeds, the system shall clear any corresponding `sync_failures` entry for that path, matching the auto-clear behavior already implemented for uploads. All action types must clear on success. | **new** | 12.3 |
 | R-2.10.42 | The scope detection sliding window shall accept results from concurrent workers. A success from any path in the scope resets the unique-path failure counter. This prevents false scope blocks from interleaved results. Pattern-based detection requires N unique-path failures with no intervening success within T seconds. | **new** | 12.6, 7.3.1 |
 | R-2.10.43 | `disk_full` scope: when available disk space falls below `min_free_space`, the system shall set a `disk:local` scope block suppressing all downloads. Detection: immediate from single pre-check failure (deterministic signal). Trial: real download at 5 min, 2× backoff, max 1 hour. | **new** | 13.1 |
@@ -1902,9 +1902,9 @@ All proposed new/changed requirements, organized by area. Failure handling princ
 
 | ID | Requirement | Status | Part |
 |----|------------|--------|------|
-| R-2.3.7 | When the `issues` command encounters more than 10 failures of the same issue_type, it shall group them under a single heading with count, showing the first 5 paths. `--verbose` shows all. | **new** | 3 |
-| R-2.3.8 | For scope-level issues where drives have independent scopes (507 quota, 403 permissions), `issues` shall sub-group by scope (own drive vs each shortcut). Different scopes have different owners and different user actions. | **new** | 3, 11.7 |
-| R-2.3.9 | `issues` shall display shortcut-scoped failures using the shortcut's local path name (human-readable), not internal drive IDs or scope keys. | **new** | 11.7 |
+| R-2.3.7 | When the `issues` command encounters more than 10 failures of the same issue_type, it shall group them under a single heading with count, showing the first 5 paths. `--verbose` shows all. | verified | 3 |
+| R-2.3.8 | For scope-level issues where drives have independent scopes (507 quota, 403 permissions), `issues` shall sub-group by scope (own drive vs each shortcut). Different scopes have different owners and different user actions. | verified | 3, 11.7 |
+| R-2.3.9 | `issues` shall display shortcut-scoped failures using the shortcut's local path name (human-readable), not internal drive IDs or scope keys. | verified | 11.7 |
 
 ### R-2 Sync — Filename Validation (R-2.11)
 
@@ -1930,14 +1930,14 @@ All proposed new/changed requirements, organized by area. Failure handling princ
 | R-6.6.8 | Individual retry attempts for transient errors logged at DEBUG, not WARN. Only final outcome logged at WARN or higher. | **new** | 5 |
 | R-6.6.9 | Transient errors that resolve within retry budget shall not emit WARN. Log at INFO with attempt count. | **new** | 5 |
 | R-6.6.10 | Exhausted retries: single WARN with final error, attempt count, and next retry time. | **new** | 5 |
-| R-6.6.11 | Every failure shown to user includes plain-language reason AND concrete user action. Per-error-type reason and action text shall cover all failure categories, with scope-owner-specific variants for shortcut-scoped failures. Table 3 (User Communication) is the canonical per-error-type reference. | **new** | 6, Table 3 |
+| R-6.6.11 | Every failure shown to user includes plain-language reason AND concrete user action. Per-error-type reason and action text shall cover all failure categories, with scope-owner-specific variants for shortcut-scoped failures. Table 3 (User Communication) is the canonical per-error-type reference. | verified | 6, Table 3 |
 | R-6.6.12 | When >10 transient failures of the same issue_type exhaust their retry budget in a single sync pass, aggregate into 1 WARN summary with count, individual paths at DEBUG. Extends R-6.6.7 pattern to execution-time transient failures. | **new** | Table 1 |
 ### R-6.7 Technical Requirements
 
 | ID | Requirement | Status | Part |
 |----|------------|--------|------|
 | R-6.7.14 | When the Graph API returns HTTP 400 with `innerError.code == "invalidRequest"` and known outage message patterns (e.g., "ObjectHandle is Invalid"), classify as transient (service outage), not generic skip. | planned (revise) | 9, J7 |
-| R-6.7.27 | When classifying errors, the engine shall handle empty `TargetDriveID` (local-only operations like `os.ErrPermission`) by skipping remote scope routing. Only remote API errors require drive-aware scope routing. | **new** | 11.11 |
+| R-6.7.27 | When classifying errors, the engine shall handle empty `TargetDriveID` (local-only operations like `os.ErrPermission`) by skipping remote scope routing. Only remote API errors require drive-aware scope routing. | verified | 11.11 |
 ### R-6.2 Data Integrity (Disk Space)
 
 | ID | Requirement | Status | Part |
