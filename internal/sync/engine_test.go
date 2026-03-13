@@ -3224,17 +3224,23 @@ func TestDeriveScopeKey(t *testing.T) {
 func TestApplyScopeBlock_ArmsTrialTimer(t *testing.T) {
 	t.Parallel()
 
+	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	mock := &engineMockClient{}
 	eng, _ := newTestEngine(t, mock)
+	eng.nowFn = func() time.Time { return now }
 
 	tracker := NewDepTracker(16, eng.logger)
 	eng.tracker = tracker
 
-	// Add an action that will be held.
+	// Pre-hold an action so the held queue is non-empty when applyScopeBlock
+	// arms the timer. In production this happens because actions arrive
+	// continuously — after HoldScope, new dispatches go to held.
+	dummyBlock := &ScopeBlock{Key: "throttle:account", IssueType: "rate_limited"}
+	tracker.HoldScope("throttle:account", dummyBlock)
 	tracker.Add(&Action{Type: ActionUpload, Path: "test.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
-	// Drain it from ready.
-	<-tracker.Ready()
 
+	// applyScopeBlock replaces the block with one that has NextTrialAt set,
+	// then calls armTrialTimer which reads EarliestTrialAt.
 	eng.applyScopeBlock(ScopeUpdateResult{
 		Block:         true,
 		ScopeKey:      "throttle:account",
@@ -3242,27 +3248,16 @@ func TestApplyScopeBlock_ArmsTrialTimer(t *testing.T) {
 		TrialInterval: 30 * time.Second,
 	})
 
+	// Verify the block has the correct NextTrialAt from the injectable clock.
+	earliest, ok := tracker.EarliestTrialAt()
+	require.True(t, ok, "EarliestTrialAt should find the block with held actions")
+	assert.Equal(t, now.Add(30*time.Second), earliest, "NextTrialAt should be now + trial interval")
+
 	// Trial timer should be armed.
 	eng.trialMu.Lock()
 	timerSet := eng.trialTimer != nil
 	eng.trialMu.Unlock()
-
-	// The action went to ready (not held) because the block was created
-	// after dispatch. But we can verify the timer was armed by checking
-	// that EarliestTrialAt returns the block's NextTrialAt.
-	earliest, ok := tracker.EarliestTrialAt()
-	// No held actions = no earliest trial — the timer arm may be nil.
-	// But the block itself should exist.
-	_, blockOk := tracker.GetScopeBlock("throttle:account")
-	assert.True(t, blockOk, "scope block should exist")
-
-	// If there are held actions, timer should be set.
-	// Since the action was dispatched before HoldScope, the held queue is empty,
-	// so EarliestTrialAt returns false and the timer won't be armed.
-	// This is correct behavior.
-	_ = earliest
-	_ = ok
-	_ = timerSet
+	assert.True(t, timerSet, "trial timer should be armed after applyScopeBlock")
 }
 
 // ---------------------------------------------------------------------------
