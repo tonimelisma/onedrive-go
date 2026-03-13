@@ -70,7 +70,7 @@ type WorkerResult struct {
 	IsTrial bool
 
 	// TrialScopeKey identifies the scope being tested by this trial.
-	TrialScopeKey string
+	TrialScopeKey ScopeKey
 
 	// ActionID is the TrackedAction.ID for the engine to call Complete on
 	// the tracker.

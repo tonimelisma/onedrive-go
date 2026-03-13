@@ -20,9 +20,9 @@ In-memory dependency graph for action ordering. Folder creates must complete bef
 
 Implements: R-6.8.7 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.10.15 [verified], R-2.10.42 [verified]
 
-- **TrackedAction extensions**: `IsTrial bool` (scope trial probe), `TrialScopeKey string` (which scope a trial is testing — set by `DispatchTrial`, propagated through `WorkerResult`).
-- **Held queue**: `held map[string][]*TrackedAction` — per-scope-key map. After dependency resolution, if the action's scope is blocked, it moves to the held queue instead of the worker pool.
-- **Scope blocks**: `scopeBlocks map[string]*ScopeBlock` — active scope blocks with trial timing.
+- **TrackedAction extensions**: `IsTrial bool` (scope trial probe), `TrialScopeKey ScopeKey` (which scope a trial is testing — set by `DispatchTrial`, propagated through `WorkerResult`). `ScopeKey` is a typed struct (see Scope Detection below), not a raw string.
+- **Held queue**: `held map[ScopeKey][]*TrackedAction` — per-scope-key map. `ScopeKey` is comparable and usable as a map key. After dependency resolution, if the action's scope is blocked, it moves to the held queue instead of the worker pool.
+- **Scope blocks**: `scopeBlocks map[ScopeKey]*ScopeBlock` — active scope blocks with trial timing. `ScopeBlock.Key` is typed `ScopeKey`.
 - **`HoldScope(key, block)`**: set scope block, future dispatches matching scope go to held queue.
 - **`ReleaseScope(key)`**: clear block, dispatch all held actions.
 - **`DispatchTrial(key)`**: pop one from held queue, mark `IsTrial=true`, set `TrialScopeKey`, clear `NextTrialAt` (prevents re-dispatch until trial result re-arms via `armTrialTimer`), dispatch.
@@ -33,7 +33,7 @@ Implements: R-6.8.7 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.1
 - **`GetScopeBlock(key)`**: returns a value copy of the `ScopeBlock` for a given scope key (not a pointer, preventing mutation outside the lock). Used by `handleTrialResult` to read current `TrialInterval` for backoff doubling.
 - **`dispatch()` gate**: scope gate — blocked actions go to held queue. Returns `bool` (was-held) so callers can fire the `onHeld` callback outside the lock.
 - **`onHeld` callback**: called when `dispatch()` diverts an action to a held queue. The engine sets this to `armTrialTimer` so the trial timer re-arms when the held queue becomes non-empty. Must NOT be called under `dt.mu` — callers invoke it after releasing the lock.
-- **`blockedScope()` table-driven dispatch**: Fixed-key scope rules are defined in the `scopeRules` slice (`scopeRule{key, blocks}` pairs), evaluated in priority order. Dynamic-key scopes (shortcut quota, perm:dir) are checked after the table. Adding a new fixed-key scope type requires one struct literal — no cyclomatic complexity growth.
+- **`blockedScope()` dispatch via `ScopeKey.BlocksAction()`**: Fixed-key scopes are checked in priority order (throttle, service, disk, quota:own), then dynamic-key scopes (shortcut quota, perm:dir) via O(n) scan. Each check delegates to `ScopeKey.BlocksAction(path, shortcutKey, actionType, targetsOwnDrive)` — scope-specific blocking logic lives on the `ScopeKey` type, not in the tracker. Adding a new scope kind requires implementing `BlocksAction` for that kind.
 - Existing dependency graph behavior unchanged.
 - The tracker does NOT handle retry. All retry is via `sync_failures` + `FailureRetrier` (R-6.8.10). The engine calls `Complete` on every result; failed items are recorded in `sync_failures` with `next_retry_at`, and the `FailureRetrier` re-injects them via buffer → planner → tracker.
 
@@ -41,13 +41,29 @@ Implements: R-6.8.7 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.1
 
 Implements: R-2.10.3 [verified], R-2.10.26 [verified], R-2.10.42 [verified]
 
-`ScopeState` maintains sliding windows for scope escalation detection and records successes that reset windows. Thread-safety is provided by the engine's single-goroutine drain loop.
+### ScopeKey Type System
 
-- **Immediate blocks** (server signals): 429 → `throttle:account` (single response triggers). 503 with Retry-After → `service` (single response triggers).
-- **Sliding window detection**: 507 → 3 unique paths in 10s → `quota:own` or `quota:shortcut:$key`. 5xx → 5 unique paths in 30s → `service`.
+All scope keys are typed `ScopeKey{Kind ScopeKeyKind, Param string}` — a comparable value type usable as map key. Six kinds: `ScopeThrottleAccount`, `ScopeService`, `ScopeQuotaOwn`, `ScopeQuotaShortcut` (Param = "remoteDrive:remoteItem"), `ScopePermDir` (Param = relative dir path), `ScopeDiskLocal`. Pre-built singletons for non-parameterized scopes (`SKThrottleAccount`, `SKService`, `SKQuotaOwn`, `SKDiskLocal`); constructor functions for parameterized scopes (`SKQuotaShortcut(key)`, `SKPermDir(path)`).
+
+Methods on `ScopeKey` centralize logic that was previously scattered across 9+ files:
+- **`BlocksAction(path, shortcutKey, actionType, targetsOwnDrive)`** — scope-specific action blocking (used by `blockedScope()`)
+- **`MaxTrialInterval()`** — per-scope-type trial interval cap
+- **`Humanize(shortcuts)`** — user-friendly description for display
+- **`IssueType()`** — maps scope kind to `sync_failures.issue_type` constant
+- **`IsGlobal()`** — true for scopes that block ALL actions (throttle, service)
+- **`IsPermDir()` / `DirPath()`** — type-safe access for permission scopes
+- **`IsZero()`** — detects the zero-value (invalid) key
+- **`String()` / `ParseScopeKey(s)`** — wire format serialization for SQLite `scope_key` columns. The wire format is unchanged (`"throttle:account"`, `"service"`, `"quota:own"`, `"quota:shortcut:X"`, `"perm:dir:X"`, `"disk:local"`), preserving compatibility at the SQLite boundary.
+- **`ScopeKeyForStatus(httpStatus, shortcutKey)`** — single source of truth for HTTP status → scope key classification, replacing scattered switch/if chains in `classifyResult` and `deriveScopeKey`.
+
+### Scope Escalation
+
+`ScopeState` maintains sliding windows for scope escalation detection and records successes that reset windows. Thread-safety is provided by the engine's single-goroutine drain loop. Windows are keyed by `ScopeKey` (not string).
+
+- **Immediate blocks** (server signals): 429 → `SKThrottleAccount` (single response triggers). 503 with Retry-After → `SKService` (single response triggers).
+- **Sliding window detection**: 507 → 3 unique paths in 10s → `SKQuotaOwn` or `SKQuotaShortcut(key)`. 5xx → 5 unique paths in 30s → `SKService`.
 - **400 outage patterns**: `UpdateScopeOutagePattern()` feeds 400 outage patterns (e.g., "ObjectHandle is Invalid") into the service sliding window.
 - **Success resets**: `RecordSuccess()` clears sliding windows for the relevant scope — a successful request proves the service is up.
-- **`shortcutScopeKey(compositeKey)`**: helper that constructs the quota scope key for a shortcut (`scopeKeyQuotaShortcut + compositeKey`). Used consistently across `scopeKeyForStatus`, `blockedScope`, `handleRemovedShortcuts`, and display code.
 
 ## Worker Pool (`worker.go`)
 
@@ -55,7 +71,7 @@ Implements: R-2.10.16 [verified], R-6.8.12 [verified]
 
 Flat pool of `transfer_workers` goroutines. Workers are pure executors — they execute actions, persist success outcomes, and send `WorkerResult` to the engine. Workers NEVER call `tracker.Complete()` — the engine owns all completion decisions.
 
-`WorkerResult` carries target drive identity (`TargetDriveID`, `ShortcutKey`) from the action, `RetryAfter` from `GraphError`, the full `error` for classification, `ActionID` for tracker routing, `IsTrial` and `TrialScopeKey` for scope trial routing. The engine classifies and routes each result.
+`WorkerResult` carries target drive identity (`TargetDriveID`, `ShortcutKey`) from the action, `RetryAfter` from `GraphError`, the full `error` for classification, `ActionID` for tracker routing, `IsTrial` and `TrialScopeKey ScopeKey` for scope trial routing. The engine classifies and routes each result.
 
 ## Action Execution
 

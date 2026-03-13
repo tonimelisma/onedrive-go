@@ -502,11 +502,11 @@ func TestScopeGating_BlockedActionsHeld(t *testing.T) {
 
 	// Set up a throttle:account scope block — blocks ALL actions.
 	block := &ScopeBlock{
-		Key:       "throttle:account",
+		Key:       SKThrottleAccount,
 		IssueType: "rate_limited",
 		BlockedAt: time.Now(),
 	}
-	dt.HoldScope("throttle:account", block)
+	dt.HoldScope(SKThrottleAccount, block)
 
 	// Add an action — it should be diverted to the held queue, not ready.
 	dt.Add(&Action{
@@ -551,11 +551,11 @@ func TestReleaseScope_DispatchesAllHeld(t *testing.T) {
 
 	// Block the throttle:account scope.
 	block := &ScopeBlock{
-		Key:       "throttle:account",
+		Key:       SKThrottleAccount,
 		IssueType: "rate_limited",
 		BlockedAt: time.Now(),
 	}
-	dt.HoldScope("throttle:account", block)
+	dt.HoldScope(SKThrottleAccount, block)
 
 	// Add three actions — all should be held.
 	for i := int64(1); i <= 3; i++ {
@@ -576,7 +576,7 @@ func TestReleaseScope_DispatchesAllHeld(t *testing.T) {
 	}
 
 	// Release the scope — all held actions should be dispatched.
-	dt.ReleaseScope("throttle:account")
+	dt.ReleaseScope(SKThrottleAccount)
 
 	dispatched := make(map[int64]bool)
 	for i := 0; i < 3; i++ {
@@ -602,11 +602,11 @@ func TestDispatchTrial_MarksIsTrial(t *testing.T) {
 
 	// Block the throttle:account scope.
 	block := &ScopeBlock{
-		Key:       "throttle:account",
+		Key:       SKThrottleAccount,
 		IssueType: "rate_limited",
 		BlockedAt: time.Now(),
 	}
-	dt.HoldScope("throttle:account", block)
+	dt.HoldScope(SKThrottleAccount, block)
 
 	// Add an action — it goes to the held queue.
 	dt.Add(&Action{
@@ -623,7 +623,7 @@ func TestDispatchTrial_MarksIsTrial(t *testing.T) {
 	}
 
 	// DispatchTrial should pop from held and mark IsTrial.
-	ok := dt.DispatchTrial("throttle:account")
+	ok := dt.DispatchTrial(SKThrottleAccount)
 	require.True(t, ok, "DispatchTrial should return true when held queue is non-empty")
 
 	select {
@@ -635,7 +635,7 @@ func TestDispatchTrial_MarksIsTrial(t *testing.T) {
 	}
 
 	// After popping, the held queue should be empty.
-	ok = dt.DispatchTrial("throttle:account")
+	ok = dt.DispatchTrial(SKThrottleAccount)
 	assert.False(t, ok, "DispatchTrial should return false when held queue is empty")
 }
 
@@ -650,24 +650,24 @@ func TestDispatchTrial_SetsTrialScopeKey(t *testing.T) {
 	dt := NewDepTracker(10, testLogger(t))
 
 	block := &ScopeBlock{
-		Key:       "quota:own",
+		Key:       SKQuotaOwn,
 		IssueType: "quota_exceeded",
 		BlockedAt: time.Now(),
 	}
-	dt.HoldScope("quota:own", block)
+	dt.HoldScope(SKQuotaOwn, block)
 
 	dt.Add(&Action{
 		Type: ActionUpload, Path: "big.zip",
 		DriveID: driveid.New("d"), ItemID: "i1",
 	}, 1, nil)
 
-	ok := dt.DispatchTrial("quota:own")
+	ok := dt.DispatchTrial(SKQuotaOwn)
 	require.True(t, ok)
 
 	select {
 	case ta := <-dt.Ready():
 		assert.True(t, ta.IsTrial, "should be marked as trial")
-		assert.Equal(t, "quota:own", ta.TrialScopeKey, "should carry scope key")
+		assert.Equal(t, SKQuotaOwn, ta.TrialScopeKey, "should carry scope key")
 	case <-time.After(time.Second):
 		require.Fail(t, "timeout waiting for trial action")
 	}
@@ -683,16 +683,16 @@ func TestNextDueTrial(t *testing.T) {
 	// No scope blocks — no due trials.
 	key, _, ok := dt.NextDueTrial(now)
 	assert.False(t, ok, "no scope blocks → no due trials")
-	assert.Empty(t, key)
+	assert.True(t, key.IsZero())
 
 	// Add a scope block with NextTrialAt in the past.
 	block := &ScopeBlock{
-		Key:         "throttle:account",
+		Key:         SKThrottleAccount,
 		IssueType:   "rate_limited",
 		BlockedAt:   now.Add(-time.Minute),
 		NextTrialAt: now.Add(-time.Second),
 	}
-	dt.HoldScope("throttle:account", block)
+	dt.HoldScope(SKThrottleAccount, block)
 
 	// Add a held action (NextDueTrial requires a non-empty held queue).
 	dt.Add(&Action{
@@ -702,14 +702,14 @@ func TestNextDueTrial(t *testing.T) {
 
 	key, trialAt, ok := dt.NextDueTrial(now)
 	assert.True(t, ok, "past NextTrialAt with held actions → due trial")
-	assert.Equal(t, "throttle:account", key)
+	assert.Equal(t, SKThrottleAccount, key)
 	assert.Equal(t, block.NextTrialAt, trialAt)
 
 	// NextTrialAt in the future — not due.
 	block.NextTrialAt = now.Add(time.Hour)
 	key, _, ok = dt.NextDueTrial(now)
 	assert.False(t, ok, "future NextTrialAt → not due")
-	assert.Empty(t, key)
+	assert.True(t, key.IsZero())
 }
 
 // Validates: R-2.10.5
@@ -720,20 +720,20 @@ func TestExtendTrialInterval(t *testing.T) {
 	now := time.Now()
 
 	block := &ScopeBlock{
-		Key:           "throttle:account",
+		Key:           SKThrottleAccount,
 		IssueType:     "rate_limited",
 		BlockedAt:     now,
 		NextTrialAt:   now.Add(10 * time.Second),
 		TrialCount:    0,
 		TrialInterval: 10 * time.Second,
 	}
-	dt.HoldScope("throttle:account", block)
+	dt.HoldScope(SKThrottleAccount, block)
 
 	newAt := now.Add(30 * time.Second)
-	dt.ExtendTrialInterval("throttle:account", newAt, 20*time.Second)
+	dt.ExtendTrialInterval(SKThrottleAccount, newAt, 20*time.Second)
 
 	// Verify the block was updated via GetScopeBlock (returns a copy).
-	updated, ok := dt.GetScopeBlock("throttle:account")
+	updated, ok := dt.GetScopeBlock(SKThrottleAccount)
 	require.True(t, ok)
 
 	assert.Equal(t, newAt, updated.NextTrialAt, "NextTrialAt should be extended")
@@ -747,7 +747,7 @@ func TestExtendTrialInterval_UnknownScope(t *testing.T) {
 	dt := NewDepTracker(10, testLogger(t))
 
 	// Should not panic on unknown scope.
-	dt.ExtendTrialInterval("nonexistent", time.Now().Add(time.Minute), 30*time.Second)
+	dt.ExtendTrialInterval(ScopeKey{Kind: ScopeThrottleAccount, Param: "nonexistent"}, time.Now().Add(time.Minute), 30*time.Second)
 }
 
 // ---------------------------------------------------------------------------
@@ -766,15 +766,15 @@ func TestEarliestTrialAt_ReturnsEarliest(t *testing.T) {
 	assert.False(t, ok, "no scope blocks → no earliest trial")
 
 	// Add two blocks with different NextTrialAt and held actions.
-	dt.HoldScope("service", &ScopeBlock{
-		Key:         "service",
+	dt.HoldScope(SKService, &ScopeBlock{
+		Key:         SKService,
 		IssueType:   "service_outage",
 		NextTrialAt: now.Add(5 * time.Minute),
 	})
 	dt.Add(&Action{Type: ActionDownload, Path: "a.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
 
-	dt.HoldScope("throttle:account", &ScopeBlock{
-		Key:         "throttle:account",
+	dt.HoldScope(SKThrottleAccount, &ScopeBlock{
+		Key:         SKThrottleAccount,
 		IssueType:   "rate_limited",
 		NextTrialAt: now.Add(2 * time.Minute),
 	})
@@ -793,8 +793,8 @@ func TestEarliestTrialAt_SkipsEmptyHeldQueue(t *testing.T) {
 	now := time.Now()
 
 	// Block exists but no held actions.
-	dt.HoldScope("service", &ScopeBlock{
-		Key:         "service",
+	dt.HoldScope(SKService, &ScopeBlock{
+		Key:         SKService,
 		IssueType:   "service_outage",
 		NextTrialAt: now.Add(time.Minute),
 	})
@@ -810,8 +810,8 @@ func TestEarliestTrialAt_SkipsZeroNextTrialAt(t *testing.T) {
 	dt := NewDepTracker(10, testLogger(t))
 
 	// Block with zero NextTrialAt.
-	dt.HoldScope("service", &ScopeBlock{
-		Key:       "service",
+	dt.HoldScope(SKService, &ScopeBlock{
+		Key:       SKService,
 		IssueType: "service_outage",
 	})
 	dt.Add(&Action{Type: ActionDownload, Path: "a.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
@@ -830,24 +830,24 @@ func TestGetScopeBlock(t *testing.T) {
 	dt := NewDepTracker(10, testLogger(t))
 
 	// Unknown key → not found.
-	_, ok := dt.GetScopeBlock("nonexistent")
+	_, ok := dt.GetScopeBlock(ScopeKey{Kind: ScopeThrottleAccount, Param: "nonexistent"})
 	assert.False(t, ok)
 
 	// Add a block and retrieve it.
 	block := &ScopeBlock{
-		Key:           "quota:own",
+		Key:           SKQuotaOwn,
 		IssueType:     "quota_exceeded",
 		TrialInterval: 5 * time.Minute,
 	}
-	dt.HoldScope("quota:own", block)
+	dt.HoldScope(SKQuotaOwn, block)
 
-	got, ok := dt.GetScopeBlock("quota:own")
+	got, ok := dt.GetScopeBlock(SKQuotaOwn)
 	require.True(t, ok)
 	assert.Equal(t, *block, got)
 
 	// GetScopeBlock returns a copy — mutating it must not affect the tracker.
 	got.TrialInterval = 99 * time.Hour
-	original, ok := dt.GetScopeBlock("quota:own")
+	original, ok := dt.GetScopeBlock(SKQuotaOwn)
 	require.True(t, ok)
 	assert.Equal(t, 5*time.Minute, original.TrialInterval,
 		"mutating the returned copy must not affect the tracker's block")
@@ -866,8 +866,8 @@ func TestOnHeldCallback_FiresOnAdd(t *testing.T) {
 	var count atomic.Int32
 	dt.onHeld = func() { count.Add(1) }
 
-	dt.HoldScope("throttle:account", &ScopeBlock{
-		Key:       "throttle:account",
+	dt.HoldScope(SKThrottleAccount, &ScopeBlock{
+		Key:       SKThrottleAccount,
 		IssueType: "rate_limited",
 	})
 
@@ -909,8 +909,8 @@ func TestOnHeldCallback_FiresFromComplete(t *testing.T) {
 
 	// Now block the service scope — when A completes, B's deps are
 	// satisfied and dispatch sends it to held.
-	dt.HoldScope("service", &ScopeBlock{
-		Key:       "service",
+	dt.HoldScope(SKService, &ScopeBlock{
+		Key:       SKService,
 		IssueType: "service_outage",
 	})
 
@@ -928,8 +928,8 @@ func TestOnHeldCallback_NoDeadlock(t *testing.T) {
 	// were called under the lock, this would self-deadlock.
 	dt.onHeld = func() { dt.EarliestTrialAt() }
 
-	dt.HoldScope("throttle:account", &ScopeBlock{
-		Key:           "throttle:account",
+	dt.HoldScope(SKThrottleAccount, &ScopeBlock{
+		Key:           SKThrottleAccount,
 		IssueType:     "rate_limited",
 		NextTrialAt:   time.Now().Add(time.Minute),
 		TrialInterval: time.Minute,
@@ -960,15 +960,15 @@ func TestOnHeldCallback_FiresFromReleaseScope_CrossScope(t *testing.T) {
 	dt.onHeld = func() { count.Add(1) }
 
 	// Block both throttle:account and service.
-	dt.HoldScope("throttle:account", &ScopeBlock{Key: "throttle:account", IssueType: "rate_limited"})
-	dt.HoldScope("service", &ScopeBlock{Key: "service", IssueType: "service_outage"})
+	dt.HoldScope(SKThrottleAccount, &ScopeBlock{Key: SKThrottleAccount, IssueType: "rate_limited"})
+	dt.HoldScope(SKService, &ScopeBlock{Key: SKService, IssueType: "service_outage"})
 
 	// Add action → goes to held under throttle:account (checked first).
 	dt.Add(&Action{Type: ActionDownload, Path: "a.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
 	assert.Equal(t, int32(1), count.Load(), "initial add should fire onHeld")
 
 	// Release throttle:account → dispatch re-checks → blocked by service → held again.
-	dt.ReleaseScope("throttle:account")
+	dt.ReleaseScope(SKThrottleAccount)
 	assert.Equal(t, int32(2), count.Load(), "cross-scope re-hold should fire onHeld again")
 }
 
@@ -982,10 +982,10 @@ func TestBlockedScope_PermDir_PathPrefixMatching(t *testing.T) {
 
 	// Block a directory via perm:dir: scope.
 	block := &ScopeBlock{
-		Key:       scopeKeyPermDir + "Private",
+		Key:       SKPermDir("Private"),
 		IssueType: IssueLocalPermissionDenied,
 	}
-	dt.HoldScope(scopeKeyPermDir+"Private", block)
+	dt.HoldScope(SKPermDir("Private"), block)
 
 	// An action UNDER the blocked directory should be held.
 	dt.Add(&Action{
@@ -1021,10 +1021,10 @@ func TestBlockedScope_PermDir_ExactMatch(t *testing.T) {
 	dt := NewDepTracker(10, testLogger(t))
 
 	block := &ScopeBlock{
-		Key:       scopeKeyPermDir + "Private",
+		Key:       SKPermDir("Private"),
 		IssueType: IssueLocalPermissionDenied,
 	}
-	dt.HoldScope(scopeKeyPermDir+"Private", block)
+	dt.HoldScope(SKPermDir("Private"), block)
 
 	// Action at the exact directory path should also be held.
 	dt.Add(&Action{
@@ -1047,10 +1047,10 @@ func TestBlockedScope_PermDir_PrefixMismatch(t *testing.T) {
 	dt := NewDepTracker(10, testLogger(t))
 
 	block := &ScopeBlock{
-		Key:       scopeKeyPermDir + "Private",
+		Key:       SKPermDir("Private"),
 		IssueType: IssueLocalPermissionDenied,
 	}
-	dt.HoldScope(scopeKeyPermDir+"Private", block)
+	dt.HoldScope(SKPermDir("Private"), block)
 
 	// "PrivateExtra/file.txt" is NOT under "Private" (partial prefix).
 	dt.Add(&Action{
@@ -1073,7 +1073,8 @@ func TestDiscardScope_CompletesWithoutDispatch(t *testing.T) {
 	dt := NewDepTracker(10, testLogger(t))
 
 	// Set a scope block first, then add actions that will be held.
-	dt.HoldScope(scopeKeyQuotaShortcut+"drive1:item1", &ScopeBlock{
+	dt.HoldScope(SKQuotaShortcut("drive1:item1"), &ScopeBlock{
+		Key:           SKQuotaShortcut("drive1:item1"),
 		TrialInterval: 5 * time.Minute,
 	})
 
@@ -1098,10 +1099,10 @@ func TestDiscardScope_CompletesWithoutDispatch(t *testing.T) {
 	}
 
 	// Discard the scope — should complete without dispatching.
-	dt.DiscardScope(scopeKeyQuotaShortcut + "drive1:item1")
+	dt.DiscardScope(SKQuotaShortcut("drive1:item1"))
 
 	// Verify scope block is gone.
-	_, ok := dt.GetScopeBlock(scopeKeyQuotaShortcut + "drive1:item1")
+	_, ok := dt.GetScopeBlock(SKQuotaShortcut("drive1:item1"))
 	assert.False(t, ok, "scope block should be cleared after discard")
 
 	// Ready channel should still be empty — actions were completed, not dispatched.
@@ -1125,13 +1126,13 @@ func TestDispatchTrial_ClearsNextTrialAt(t *testing.T) {
 
 	// Block the throttle:account scope with NextTrialAt in the past.
 	block := &ScopeBlock{
-		Key:           "throttle:account",
+		Key:           SKThrottleAccount,
 		IssueType:     "rate_limited",
 		BlockedAt:     now.Add(-time.Minute),
 		NextTrialAt:   now.Add(-time.Second),
 		TrialInterval: 30 * time.Second,
 	}
-	dt.HoldScope("throttle:account", block)
+	dt.HoldScope(SKThrottleAccount, block)
 
 	// Add 5 actions — all should be held.
 	for i := int64(1); i <= 5; i++ {
@@ -1144,11 +1145,11 @@ func TestDispatchTrial_ClearsNextTrialAt(t *testing.T) {
 	}
 
 	// First DispatchTrial should succeed and clear NextTrialAt.
-	ok := dt.DispatchTrial("throttle:account")
+	ok := dt.DispatchTrial(SKThrottleAccount)
 	require.True(t, ok, "first DispatchTrial should succeed")
 
 	// After DispatchTrial, NextTrialAt should be zero.
-	updated, exists := dt.GetScopeBlock("throttle:account")
+	updated, exists := dt.GetScopeBlock(SKThrottleAccount)
 	require.True(t, exists)
 	assert.True(t, updated.NextTrialAt.IsZero(),
 		"NextTrialAt should be cleared after DispatchTrial to prevent re-dispatch")
@@ -1156,7 +1157,7 @@ func TestDispatchTrial_ClearsNextTrialAt(t *testing.T) {
 	// NextDueTrial should NOT return this scope because NextTrialAt is zero.
 	key, _, due := dt.NextDueTrial(now)
 	assert.False(t, due, "NextDueTrial should not return scope with zero NextTrialAt")
-	assert.Empty(t, key)
+	assert.True(t, key.IsZero())
 
 	// Drain the dispatched trial.
 	select {
@@ -1176,8 +1177,8 @@ func TestDispatchTrial_OnlyOnePerDrainLoop(t *testing.T) {
 	dt := NewDepTracker(10, testLogger(t))
 	now := time.Now()
 
-	dt.HoldScope("throttle:account", &ScopeBlock{
-		Key:           "throttle:account",
+	dt.HoldScope(SKThrottleAccount, &ScopeBlock{
+		Key:           SKThrottleAccount,
 		IssueType:     "rate_limited",
 		BlockedAt:     now.Add(-time.Minute),
 		NextTrialAt:   now.Add(-time.Second),
@@ -1221,19 +1222,19 @@ func TestScopeBlockKeys(t *testing.T) {
 	assert.Empty(t, keys, "no scope blocks → empty keys")
 
 	// Add two blocks.
-	dt.HoldScope("throttle:account", &ScopeBlock{Key: "throttle:account", IssueType: "rate_limited"})
-	dt.HoldScope("service", &ScopeBlock{Key: "service", IssueType: "service_outage"})
+	dt.HoldScope(SKThrottleAccount, &ScopeBlock{Key: SKThrottleAccount, IssueType: "rate_limited"})
+	dt.HoldScope(SKService, &ScopeBlock{Key: SKService, IssueType: "service_outage"})
 
 	keys = dt.ScopeBlockKeys()
 	assert.Len(t, keys, 2)
-	assert.Contains(t, keys, "throttle:account")
-	assert.Contains(t, keys, "service")
+	assert.Contains(t, keys, SKThrottleAccount)
+	assert.Contains(t, keys, SKService)
 
 	// Release one — should return only the remaining.
-	dt.ReleaseScope("throttle:account")
+	dt.ReleaseScope(SKThrottleAccount)
 	keys = dt.ScopeBlockKeys()
 	assert.Len(t, keys, 1)
-	assert.Contains(t, keys, "service")
+	assert.Contains(t, keys, SKService)
 }
 
 // Validates: R-2.10.38
@@ -1245,10 +1246,10 @@ func TestBlockedScope_DiskLocal_BlocksDownloadsOnly(t *testing.T) {
 
 	// Block disk:local scope — should only hold download actions.
 	block := &ScopeBlock{
-		Key:       scopeKeyDiskLocal,
+		Key:       SKDiskLocal,
 		IssueType: IssueDiskFull,
 	}
-	dt.HoldScope(scopeKeyDiskLocal, block)
+	dt.HoldScope(SKDiskLocal, block)
 
 	// Download should be held.
 	dt.Add(&Action{
@@ -1309,70 +1310,18 @@ func TestDiscardScope_NoOpWhenEmpty(t *testing.T) {
 	dt := NewDepTracker(10, testLogger(t))
 
 	// Discarding a non-existent scope should not panic.
-	dt.DiscardScope("nonexistent:scope")
+	dt.DiscardScope(ScopeKey{Kind: ScopeThrottleAccount, Param: "nonexistent"})
 
-	_, ok := dt.GetScopeBlock("nonexistent:scope")
+	_, ok := dt.GetScopeBlock(ScopeKey{Kind: ScopeThrottleAccount, Param: "nonexistent"})
 	assert.False(t, ok)
 }
 
 // ---------------------------------------------------------------------------
-// scopeRules predicate tests — validates each rule independently
+// ScopeKey.BlocksAction predicate tests — validates each scope key independently
 // ---------------------------------------------------------------------------
 
-// TestScopeRules_Predicates validates the blocking predicate for each
-// fixed-key scope rule. Table-driven so adding a new scope rule only
-// requires adding a new test case row.
-func TestScopeRules_Predicates(t *testing.T) {
-	t.Parallel()
-
-	ownDriveAction := func(at ActionType) *TrackedAction {
-		return &TrackedAction{Action: Action{Type: at, DriveID: driveid.New("d")}}
-	}
-
-	cases := []struct {
-		name    string
-		key     string
-		action  *TrackedAction
-		blocked bool
-	}{
-		// throttle:account blocks everything.
-		{"throttle_blocks_upload", scopeKeyThrottleAccount, ownDriveAction(ActionUpload), true},
-		{"throttle_blocks_download", scopeKeyThrottleAccount, ownDriveAction(ActionDownload), true},
-		{"throttle_blocks_delete", scopeKeyThrottleAccount, ownDriveAction(ActionRemoteDelete), true},
-
-		// service blocks everything.
-		{"service_blocks_upload", scopeKeyService, ownDriveAction(ActionUpload), true},
-		{"service_blocks_download", scopeKeyService, ownDriveAction(ActionDownload), true},
-
-		// disk:local blocks downloads only.
-		{"disk_blocks_download", scopeKeyDiskLocal, ownDriveAction(ActionDownload), true},
-		{"disk_passes_upload", scopeKeyDiskLocal, ownDriveAction(ActionUpload), false},
-		{"disk_passes_delete", scopeKeyDiskLocal, ownDriveAction(ActionRemoteDelete), false},
-		{"disk_passes_move", scopeKeyDiskLocal, ownDriveAction(ActionLocalMove), false},
-
-		// quota:own blocks own-drive uploads only.
-		{"quota_own_blocks_upload", scopeKeyQuotaOwn, ownDriveAction(ActionUpload), true},
-		{"quota_own_passes_download", scopeKeyQuotaOwn, ownDriveAction(ActionDownload), false},
-		{"quota_own_passes_delete", scopeKeyQuotaOwn, ownDriveAction(ActionRemoteDelete), false},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			// Find the matching rule for this scope key.
-			var matched *scopeRule
-			for i := range scopeRules {
-				if scopeRules[i].key == tc.key {
-					matched = &scopeRules[i]
-					break
-				}
-			}
-			require.NotNil(t, matched, "no scopeRule found for key %q", tc.key)
-
-			got := matched.blocks(tc.action)
-			assert.Equal(t, tc.blocked, got,
-				"scopeRule[%s].blocks() for action type %s", tc.key, tc.action.Action.Type)
-		})
-	}
-}
+// TestScopeKey_BlocksAction validates the blocking predicate for each
+// fixed-key scope. Table-driven so adding a new scope key only requires
+// adding a new test case row.
+// TestScopeKey_BlocksAction is in scope_test.go — comprehensive coverage
+// for all scope kinds including shortcut and perm:dir.

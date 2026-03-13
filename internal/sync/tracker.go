@@ -3,7 +3,6 @@ package sync
 import (
 	"context"
 	"log/slog"
-	"strings"
 	stdsync "sync"
 	"sync/atomic"
 	"time"
@@ -51,7 +50,7 @@ type TrackedAction struct {
 	// TrialScopeKey identifies which scope this trial is testing. Set by
 	// DispatchTrial, propagated through WorkerResult so the engine knows
 	// which scope to release on trial success.
-	TrialScopeKey string
+	TrialScopeKey ScopeKey
 
 	depsLeft   atomic.Int32
 	dependents []*TrackedAction
@@ -76,13 +75,13 @@ type DepTracker struct {
 	logger     *slog.Logger
 
 	// held stores actions blocked by scope-level failures (429, 507, 5xx).
-	// Key is the scope key (e.g. "throttle:account", "quota:own").
-	// Released when the scope block clears (R-2.10.11, R-2.10.15).
-	held map[string][]*TrackedAction
+	// Key is the typed scope key. Released when the scope block clears
+	// (R-2.10.11, R-2.10.15).
+	held map[ScopeKey][]*TrackedAction
 
 	// scopeBlocks tracks active scope-level blocks. An action matching a
 	// blocked scope is diverted to the held queue instead of ready.
-	scopeBlocks map[string]*ScopeBlock
+	scopeBlocks map[ScopeKey]*ScopeBlock
 
 	// onHeld is called when dispatch() diverts an action to a held queue.
 	// The engine sets this to armTrialTimer so the trial timer re-arms when
@@ -100,8 +99,8 @@ func NewDepTracker(bufSize int, logger *slog.Logger) *DepTracker {
 		ready:       make(chan *TrackedAction, bufSize),
 		done:        make(chan struct{}),
 		logger:      logger,
-		held:        make(map[string][]*TrackedAction),
-		scopeBlocks: make(map[string]*ScopeBlock),
+		held:        make(map[ScopeKey][]*TrackedAction),
+		scopeBlocks: make(map[ScopeKey]*ScopeBlock),
 	}
 }
 
@@ -116,8 +115,8 @@ func NewPersistentDepTracker(logger *slog.Logger) *DepTracker {
 		done:        make(chan struct{}),
 		persistent:  true,
 		logger:      logger,
-		held:        make(map[string][]*TrackedAction),
-		scopeBlocks: make(map[string]*ScopeBlock),
+		held:        make(map[ScopeKey][]*TrackedAction),
+		scopeBlocks: make(map[ScopeKey]*ScopeBlock),
 	}
 }
 
@@ -273,7 +272,7 @@ func (dt *DepTracker) Done() <-chan struct{} {
 func (dt *DepTracker) dispatch(ta *TrackedAction) bool {
 	// Scope block — prevent wasted requests to blocked scopes.
 	// An action matching a blocked scope goes to the held queue instead.
-	if key := dt.blockedScope(ta); key != "" {
+	if key := dt.blockedScope(ta); !key.IsZero() {
 		dt.held[key] = append(dt.held[key], ta)
 		return true
 	}
@@ -289,96 +288,64 @@ func (dt *DepTracker) dispatchReady(ta *TrackedAction) {
 	dt.ready <- ta
 }
 
-// scopeRule defines a single scope blocking rule. Each rule has a fixed
-// scope key and a predicate that determines whether a given action is
-// affected. Evaluated in priority order — first matching rule wins.
-type scopeRule struct {
-	key    string                       // scope key to check in dt.scopeBlocks
-	blocks func(ta *TrackedAction) bool // true if this action should be held
-}
-
-// scopeRules is the ordered table of scope blocking rules. Priority is
-// top-to-bottom — global blocks first, then progressively narrower scopes.
-// New scope types are added here as a single struct literal.
-var scopeRules = []scopeRule{
-	// throttle:account blocks ALL actions across all drives (R-6.8.4, R-2.10.26).
-	{key: scopeKeyThrottleAccount, blocks: func(*TrackedAction) bool { return true }},
-
-	// service blocks ALL actions across all drives (R-2.10.28).
-	{key: scopeKeyService, blocks: func(*TrackedAction) bool { return true }},
-
-	// disk:local blocks downloads only — uploads, deletes, and moves continue
-	// even when disk is full because they free space or don't consume it (R-2.10.43).
-	{key: scopeKeyDiskLocal, blocks: func(ta *TrackedAction) bool {
-		return ta.Action.Type == ActionDownload
-	}},
-
-	// quota:own blocks own-drive uploads only (R-2.10.19).
-	{key: scopeKeyQuotaOwn, blocks: func(ta *TrackedAction) bool {
-		return ta.Action.TargetsOwnDrive() && ta.Action.Type == ActionUpload
-	}},
-}
-
-// blockedScope returns the scope key blocking this action, or "" if none.
-// Evaluates scopeRules in priority order, then checks dynamic scope keys
-// (shortcut quota and perm:dir) that depend on action context.
-func (dt *DepTracker) blockedScope(ta *TrackedAction) string {
+// blockedScope returns the scope key blocking this action, or the zero-value
+// ScopeKey if none. Evaluates all active scope blocks using
+// ScopeKey.BlocksAction(), returning the first match. Priority is enforced
+// by checking global blocks first, then progressively narrower scopes.
+func (dt *DepTracker) blockedScope(ta *TrackedAction) ScopeKey {
 	if len(dt.scopeBlocks) == 0 {
-		return ""
+		return ScopeKey{}
 	}
 
-	// Fixed-key rules: evaluated in priority order from scopeRules table.
-	for i := range scopeRules {
-		rule := &scopeRules[i]
-		if _, ok := dt.scopeBlocks[rule.key]; ok && rule.blocks(ta) {
-			return rule.key
+	// Priority-ordered fixed keys: global blocks first, then narrower scopes.
+	// New scope types are added here.
+	priorityKeys := [...]ScopeKey{
+		SKThrottleAccount, // blocks ALL actions (R-6.8.4, R-2.10.26)
+		SKService,         // blocks ALL actions (R-2.10.28)
+		SKDiskLocal,       // blocks downloads only (R-2.10.43)
+		SKQuotaOwn,        // blocks own-drive uploads (R-2.10.19)
+	}
+
+	scKey := ta.Action.ShortcutKey()
+	targetsOwn := ta.Action.TargetsOwnDrive()
+
+	for _, sk := range priorityKeys {
+		if _, ok := dt.scopeBlocks[sk]; ok && sk.BlocksAction(ta.Action.Path, scKey, ta.Action.Type, targetsOwn) {
+			return sk
 		}
 	}
 
-	// Dynamic-key rules: scope key depends on the action's context.
-
-	// quota:shortcut:$key blocks uploads to that specific shortcut (R-2.10.20).
-	if scKey := ta.Action.ShortcutKey(); scKey != "" {
-		scopeKey := shortcutScopeKey(scKey)
-		if _, ok := dt.scopeBlocks[scopeKey]; ok && ta.Action.Type == ActionUpload {
-			return scopeKey
+	// Dynamic-key scopes: shortcut quota and perm:dir depend on action context.
+	// O(n) over active scope blocks — expected to be tiny (1-5 typically).
+	for sk := range dt.scopeBlocks {
+		switch sk.Kind { //nolint:exhaustive // only parameterized scopes need per-action checking
+		case ScopeQuotaShortcut, ScopePermDir:
+			if sk.BlocksAction(ta.Action.Path, scKey, ta.Action.Type, targetsOwn) {
+				return sk
+			}
 		}
 	}
 
-	// perm:dir:$path blocks all actions whose path falls under the denied
-	// directory (R-2.10.12). O(n) over active perm:dir blocks — expected
-	// to be tiny (1-3 typically).
-	for key := range dt.scopeBlocks {
-		if !strings.HasPrefix(key, scopeKeyPermDir) {
-			continue
-		}
-
-		dirPath := strings.TrimPrefix(key, scopeKeyPermDir)
-		if ta.Action.Path == dirPath || strings.HasPrefix(ta.Action.Path, dirPath+"/") {
-			return key
-		}
-	}
-
-	return ""
+	return ScopeKey{}
 }
 
 // HoldScope registers a scope block. Future dispatches matching this scope
 // key are diverted to the held queue. If there's an existing block for the
 // same key, it is replaced (updated trial timing).
-func (dt *DepTracker) HoldScope(key string, block *ScopeBlock) {
+func (dt *DepTracker) HoldScope(key ScopeKey, block *ScopeBlock) {
 	dt.mu.Lock()
 	defer dt.mu.Unlock()
 
 	dt.scopeBlocks[key] = block
 	dt.logger.Info("tracker: scope blocked",
-		slog.String("scope_key", key),
+		slog.String("scope_key", key.String()),
 		slog.String("issue_type", block.IssueType),
 	)
 }
 
 // ReleaseScope clears a scope block and dispatches all held actions for
 // that scope key (R-2.10.11, R-2.10.27).
-func (dt *DepTracker) ReleaseScope(key string) {
+func (dt *DepTracker) ReleaseScope(key ScopeKey) {
 	dt.mu.Lock()
 	held := dt.held[key]
 	delete(dt.held, key)
@@ -387,7 +354,7 @@ func (dt *DepTracker) ReleaseScope(key string) {
 
 	if len(held) > 0 {
 		dt.logger.Info("tracker: scope released, dispatching held actions",
-			slog.String("scope_key", key),
+			slog.String("scope_key", key.String()),
 			slog.Int("count", len(held)),
 		)
 	}
@@ -409,7 +376,7 @@ func (dt *DepTracker) ReleaseScope(key string) {
 // scope key without dispatching them. Used when the scope's source is removed
 // (e.g., shortcut deleted) and held actions are no longer valid (R-2.10.38).
 // Unlike ReleaseScope, discarded actions are never dispatched to workers.
-func (dt *DepTracker) DiscardScope(key string) {
+func (dt *DepTracker) DiscardScope(key ScopeKey) {
 	dt.mu.Lock()
 	held := dt.held[key]
 	delete(dt.held, key)
@@ -418,7 +385,7 @@ func (dt *DepTracker) DiscardScope(key string) {
 
 	if len(held) > 0 {
 		dt.logger.Info("tracker: scope discarded, completing held actions without dispatch",
-			slog.String("scope_key", key),
+			slog.String("scope_key", key.String()),
 			slog.Int("count", len(held)),
 		)
 	}
@@ -436,7 +403,7 @@ func (dt *DepTracker) DiscardScope(key string) {
 // marks it as a trial (IsTrial=true) with TrialScopeKey set, and dispatches
 // it directly to the ready channel. Returns false if the held queue is
 // empty (R-2.10.5).
-func (dt *DepTracker) DispatchTrial(key string) bool {
+func (dt *DepTracker) DispatchTrial(key ScopeKey) bool {
 	dt.mu.Lock()
 	defer dt.mu.Unlock()
 
@@ -452,7 +419,7 @@ func (dt *DepTracker) DispatchTrial(key string) bool {
 	ta.TrialScopeKey = key
 
 	// Clear NextTrialAt so NextDueTrial won't return this scope again
-	// until the trial result re-arms via handleTrialResult → armTrialTimer.
+	// until the trial result re-arms via processTrialResult → armTrialTimer.
 	// Without this, the drain loop would dispatch ALL held actions as
 	// simultaneous trials (R-2.10.5 requires one real action per tick).
 	block := dt.scopeBlocks[key]
@@ -461,7 +428,7 @@ func (dt *DepTracker) DispatchTrial(key string) bool {
 	}
 
 	dt.logger.Debug("tracker: dispatching trial action",
-		slog.String("scope_key", key),
+		slog.String("scope_key", key.String()),
 		slog.String("path", ta.Action.Path),
 	)
 
@@ -471,9 +438,9 @@ func (dt *DepTracker) DispatchTrial(key string) bool {
 }
 
 // NextDueTrial returns the scope key and NextTrialAt of the first scope
-// block where now >= block.NextTrialAt, or ("", time.Time{}, false) if
-// no trials are due. Thread-safe.
-func (dt *DepTracker) NextDueTrial(now time.Time) (string, time.Time, bool) {
+// block where now >= block.NextTrialAt, or (ScopeKey{}, time.Time{}, false)
+// if no trials are due. Thread-safe.
+func (dt *DepTracker) NextDueTrial(now time.Time) (ScopeKey, time.Time, bool) {
 	dt.mu.Lock()
 	defer dt.mu.Unlock()
 
@@ -487,7 +454,7 @@ func (dt *DepTracker) NextDueTrial(now time.Time) (string, time.Time, bool) {
 		}
 	}
 
-	return "", time.Time{}, false
+	return ScopeKey{}, time.Time{}, false
 }
 
 // EarliestTrialAt returns the earliest NextTrialAt across all scope blocks
@@ -517,7 +484,7 @@ func (dt *DepTracker) EarliestTrialAt() (time.Time, bool) {
 // GetScopeBlock returns a snapshot of the ScopeBlock for the given key, or
 // (ScopeBlock{}, false) if the scope is not blocked. Returns a copy to
 // prevent unsynchronized mutation of tracker-owned state. Thread-safe.
-func (dt *DepTracker) GetScopeBlock(key string) (ScopeBlock, bool) {
+func (dt *DepTracker) GetScopeBlock(key ScopeKey) (ScopeBlock, bool) {
 	dt.mu.Lock()
 	defer dt.mu.Unlock()
 
@@ -532,7 +499,7 @@ func (dt *DepTracker) GetScopeBlock(key string) (ScopeBlock, bool) {
 // at maxInterval), sets NextTrialAt, and increments TrialCount. All mutation
 // happens under the lock — callers must not mutate the block externally.
 // Thread-safe.
-func (dt *DepTracker) ExtendTrialInterval(key string, nextAt time.Time, newInterval time.Duration) {
+func (dt *DepTracker) ExtendTrialInterval(key ScopeKey, nextAt time.Time, newInterval time.Duration) {
 	dt.mu.Lock()
 	defer dt.mu.Unlock()
 
@@ -549,11 +516,11 @@ func (dt *DepTracker) ExtendTrialInterval(key string, nextAt time.Time, newInter
 // ScopeBlockKeys returns the keys of all active scope blocks. Used by
 // handleExternalChanges to detect when perm:dir failures have been cleared
 // via CLI. Thread-safe.
-func (dt *DepTracker) ScopeBlockKeys() []string {
+func (dt *DepTracker) ScopeBlockKeys() []ScopeKey {
 	dt.mu.Lock()
 	defer dt.mu.Unlock()
 
-	keys := make([]string, 0, len(dt.scopeBlocks))
+	keys := make([]ScopeKey, 0, len(dt.scopeBlocks))
 	for k := range dt.scopeBlocks {
 		keys = append(keys, k)
 	}
@@ -569,8 +536,8 @@ func (dt *DepTracker) ScopeBlockKeys() []string {
 // blocked, new actions matching that scope are diverted to the held queue
 // instead of being dispatched to workers.
 type ScopeBlock struct {
-	Key       string // scope key (e.g. "throttle:account", "quota:own")
-	IssueType string // "service_outage", "quota_exceeded", "rate_limited"
+	Key       ScopeKey // typed scope key
+	IssueType string   // "service_outage", "quota_exceeded", "rate_limited"
 
 	BlockedAt     time.Time     // when the block was created
 	TrialInterval time.Duration // current interval between trial actions (grows with backoff)

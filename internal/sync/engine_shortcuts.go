@@ -324,13 +324,13 @@ func (e *Engine) handleRemovedShortcuts(ctx context.Context, deletedItemIDs map[
 		// actions are no longer valid — discard instead of dispatch (R-2.10.38).
 		if e.tracker != nil {
 			scKey := sc.RemoteDrive + ":" + sc.RemoteItem
-			scopeKey := shortcutScopeKey(scKey)
+			scopeKey := SKQuotaShortcut(scKey)
 			e.tracker.DiscardScope(scopeKey)
 
 			// Clear orphaned sync_failures for the removed shortcut's scope.
-			if err := e.baseline.DeleteSyncFailuresByScope(ctx, scopeKey); err != nil {
+			if err := e.baseline.DeleteSyncFailuresByScope(ctx, scopeKey.String()); err != nil {
 				e.logger.Warn("failed to clear sync_failures for removed shortcut",
-					slog.String("scope_key", scopeKey),
+					slog.String("scope_key", scopeKey.String()),
 					slog.String("error", err.Error()),
 				)
 			}

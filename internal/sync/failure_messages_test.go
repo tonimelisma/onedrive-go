@@ -43,17 +43,17 @@ func TestMessageForIssueType_UnknownType(t *testing.T) {
 
 func TestHumanizeScopeKey_ThrottleAccount(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, "your OneDrive account (rate limited)", HumanizeScopeKey(scopeKeyThrottleAccount, nil))
+	assert.Equal(t, "your OneDrive account (rate limited)", HumanizeScopeKey(SKThrottleAccount.String(), nil))
 }
 
 func TestHumanizeScopeKey_Service(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, "OneDrive service", HumanizeScopeKey(scopeKeyService, nil))
+	assert.Equal(t, "OneDrive service", HumanizeScopeKey(SKService.String(), nil))
 }
 
 func TestHumanizeScopeKey_QuotaOwn(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, "your OneDrive storage", HumanizeScopeKey(scopeKeyQuotaOwn, nil))
+	assert.Equal(t, "your OneDrive storage", HumanizeScopeKey(SKQuotaOwn.String(), nil))
 }
 
 // Validates: R-2.10.22
@@ -69,7 +69,7 @@ func TestHumanizeScopeKey_QuotaShortcut_FoundByLocalPath(t *testing.T) {
 		},
 	}
 
-	result := HumanizeScopeKey(scopeKeyQuotaShortcut+"driveAAA:itemBBB", shortcuts)
+	result := HumanizeScopeKey(SKQuotaShortcut("driveAAA:itemBBB").String(), shortcuts)
 	assert.Equal(t, "Team Docs", result)
 }
 
@@ -77,14 +77,14 @@ func TestHumanizeScopeKey_QuotaShortcut_NotFound(t *testing.T) {
 	t.Parallel()
 
 	// No shortcuts provided — falls back to the raw key suffix.
-	result := HumanizeScopeKey(scopeKeyQuotaShortcut+"driveXXX:itemYYY", nil)
+	result := HumanizeScopeKey(SKQuotaShortcut("driveXXX:itemYYY").String(), nil)
 	assert.Equal(t, "driveXXX:itemYYY", result)
 }
 
 func TestHumanizeScopeKey_PermDir(t *testing.T) {
 	t.Parallel()
 
-	result := HumanizeScopeKey(scopeKeyPermDir+"/home/user/OneDrive/Private", nil)
+	result := HumanizeScopeKey(SKPermDir("/home/user/OneDrive/Private").String(), nil)
 	assert.Equal(t, "/home/user/OneDrive/Private", result)
 }
 

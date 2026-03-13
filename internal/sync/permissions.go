@@ -422,7 +422,7 @@ func (e *Engine) handleLocalPermission(ctx context.Context, r *WorkerResult) {
 		return
 	}
 
-	scopeKey := scopeKeyPermDir + relBoundary
+	scopeKey := SKPermDir(relBoundary)
 
 	// Record one failure at the boundary directory level.
 	if recErr := e.baseline.RecordFailure(ctx, &SyncFailureParams{
@@ -432,7 +432,7 @@ func (e *Engine) handleLocalPermission(ctx context.Context, r *WorkerResult) {
 		IssueType: IssueLocalPermissionDenied,
 		Category:  "actionable",
 		ErrMsg:    "directory not accessible (check filesystem permissions)",
-		ScopeKey:  scopeKey,
+		ScopeKey:  scopeKey.String(),
 	}, nil); recErr != nil {
 		e.logger.Warn("handleLocalPermission: failed to record directory-level issue",
 			slog.String("path", relBoundary),
@@ -469,11 +469,12 @@ func (e *Engine) recheckLocalPermissions(ctx context.Context) {
 		issue := &issues[i]
 
 		// Only recheck directory-level issues (those with a perm:dir: scope key).
-		if !strings.HasPrefix(issue.ScopeKey, scopeKeyPermDir) {
+		sk := ParseScopeKey(issue.ScopeKey)
+		if !sk.IsPermDir() {
 			continue
 		}
 
-		dirPath := strings.TrimPrefix(issue.ScopeKey, scopeKeyPermDir)
+		dirPath := sk.DirPath()
 		absDir := filepath.Join(e.syncRoot, dirPath)
 
 		if !isDirAccessible(absDir) {
@@ -492,12 +493,12 @@ func (e *Engine) recheckLocalPermissions(ctx context.Context) {
 		}
 
 		if e.tracker != nil {
-			e.tracker.ReleaseScope(issue.ScopeKey)
+			e.tracker.ReleaseScope(sk)
 		}
 
 		e.logger.Info("local permission restored, clearing denial",
 			slog.String("path", issue.Path),
-			slog.String("scope_key", issue.ScopeKey),
+			slog.String("scope_key", sk.String()),
 		)
 	}
 }
@@ -522,9 +523,10 @@ func (e *Engine) clearScannerResolvedPermissions(ctx context.Context, observedPa
 		issue := &issues[i]
 
 		resolved := false
-		if strings.HasPrefix(issue.ScopeKey, scopeKeyPermDir) {
+		sk := ParseScopeKey(issue.ScopeKey)
+		if sk.IsPermDir() {
 			// Directory-level: resolved if any observed path falls under the directory.
-			dirPath := strings.TrimPrefix(issue.ScopeKey, scopeKeyPermDir)
+			dirPath := sk.DirPath()
 			for p := range observedPaths {
 				if p == dirPath || strings.HasPrefix(p, dirPath+"/") {
 					resolved = true
@@ -549,13 +551,13 @@ func (e *Engine) clearScannerResolvedPermissions(ctx context.Context, observedPa
 			continue
 		}
 
-		if e.tracker != nil && issue.ScopeKey != "" {
-			e.tracker.ReleaseScope(issue.ScopeKey)
+		if e.tracker != nil && !sk.IsZero() {
+			e.tracker.ReleaseScope(sk)
 		}
 
 		e.logger.Info("scanner resolved permission denial",
 			slog.String("path", issue.Path),
-			slog.String("scope_key", issue.ScopeKey),
+			slog.String("scope_key", sk.String()),
 		)
 	}
 }
