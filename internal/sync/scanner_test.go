@@ -3,6 +3,7 @@ package sync
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -200,5 +201,87 @@ func TestFullScan_CaseCollision_NoFalseDeletion(t *testing.T) {
 			assert.NotEqual(t, "Doc.pdf", ev.Path, "collider should not generate false delete")
 			assert.NotEqual(t, "doc.pdf", ev.Path, "collider should not generate false delete")
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Platform-aware case collision tests (R-2.12.1)
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.12.1 — on case-insensitive FS (macOS), creating File.txt
+// and file.txt results in a single file. No collision can occur at the FS
+// level because the OS prevents it. FullScan should not report any collision.
+func TestDetectCaseCollisions_CaseInsensitiveFS(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "linux" {
+		t.Skip("Linux uses case-sensitive FS by default")
+	}
+
+	syncRoot := t.TempDir()
+
+	// Write File.txt — on case-insensitive FS, a subsequent write to
+	// file.txt overwrites this (same inode), so only one file exists.
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "File.txt"), []byte("content"), 0o644))
+
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
+
+	result, err := obs.FullScan(t.Context(), syncRoot)
+	require.NoError(t, err)
+
+	// No collision — the FS itself prevents the scenario from arising.
+	for _, si := range result.Skipped {
+		assert.NotEqual(t, IssueCaseCollision, si.Reason,
+			"case-insensitive FS should not report collisions for a single file")
+	}
+
+	// The file should appear normally in events.
+	assert.Len(t, result.Events, 1, "single file should produce one event")
+}
+
+// Validates: R-2.12.1 — on case-sensitive FS (Linux), both File.txt and
+// file.txt can coexist. detectCaseCollisions removes both from the event
+// set and places them in Skipped.
+func TestDetectCaseCollisions_CaseSensitiveFS(t *testing.T) {
+	t.Parallel()
+
+	syncRoot := t.TempDir()
+
+	f1 := filepath.Join(syncRoot, "File.txt")
+	f2 := filepath.Join(syncRoot, "file.txt")
+
+	require.NoError(t, os.WriteFile(f1, []byte("content1"), 0o644))
+
+	if err := os.WriteFile(f2, []byte("content2"), 0o644); err != nil {
+		t.Skip("case-insensitive filesystem — cannot create case-colliding files")
+	}
+
+	// Verify both files exist with distinct inodes.
+	info1, err1 := os.Lstat(f1)
+	info2, err2 := os.Lstat(f2)
+	if err1 != nil || err2 != nil || os.SameFile(info1, info2) {
+		t.Skip("case-insensitive filesystem — files are the same inode")
+	}
+
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
+
+	result, err := obs.FullScan(t.Context(), syncRoot)
+	require.NoError(t, err)
+
+	// Both files should appear in Skipped with IssueCaseCollision.
+	var collisions []SkippedItem
+	for _, si := range result.Skipped {
+		if si.Reason == IssueCaseCollision {
+			collisions = append(collisions, si)
+		}
+	}
+
+	assert.Len(t, collisions, 2,
+		"both case-colliding files should be skipped on case-sensitive FS")
+
+	// No events for the colliding files.
+	for _, ev := range result.Events {
+		assert.NotEqual(t, "File.txt", ev.Path)
+		assert.NotEqual(t, "file.txt", ev.Path)
 	}
 }
