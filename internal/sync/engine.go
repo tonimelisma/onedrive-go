@@ -595,6 +595,11 @@ func (e *Engine) observeChanges(
 		// Record observation-time issues (invalid names, path too long, file too large).
 		e.recordSkippedItems(ctx, localResult.Skipped)
 		e.clearResolvedSkippedItems(ctx, localResult.Skipped)
+
+		// R-2.10.10: If the scanner observed paths that were previously blocked
+		// by local permission denials, clear the failures (scanner success = proof
+		// of accessibility).
+		e.clearScannerResolvedPermissions(ctx, pathSetFromEvents(localResult.Events))
 	}
 
 	buf := NewBuffer(e.logger)
@@ -1170,15 +1175,17 @@ func isOutagePattern(err error) bool {
 //
 // Shared by both one-shot (executePlan drain goroutine) and watch
 // (drainWorkerResults) paths.
+//
+// Trial results are handled entirely by processTrialResult with an early
+// return — they never enter the normal switch. This prevents future logic
+// added to the normal switch cases from accidentally applying to failed
+// trials (Group A separation).
 func (e *Engine) processWorkerResult(ctx context.Context, r *WorkerResult, bl *Baseline, shortcuts []Shortcut) {
-	// Handle trial results first — scope release/extend runs before normal
-	// classification. A successful trial falls through to resultSuccess
-	// below (Complete + RecordSuccess): the action did real work, and the
-	// sliding window reset is harmless for a released scope. A failed trial
-	// falls through to recordFailure: the sync_failures entry gets scope_key
-	// set, so ResetRetryTimesForScope clears its backoff on eventual release.
+	// Trial results are fully self-contained — early return prevents
+	// fallthrough into the normal switch (Group A: trial path separation).
 	if r.IsTrial && r.TrialScopeKey != "" {
-		e.handleTrialResult(ctx, r)
+		e.processTrialResult(ctx, r)
+		return
 	}
 
 	class, _ := classifyResult(r)
@@ -1196,7 +1203,7 @@ func (e *Engine) processWorkerResult(ctx context.Context, r *WorkerResult, bl *B
 		e.recordFailure(ctx, r, retry.Reconcile.Delay)
 		e.tracker.Complete(r.ActionID)
 		e.recordError(r)
-		e.maybeFeedScopeDetection(r)
+		e.feedScopeDetection(r)
 		if e.retrier != nil {
 			e.retrier.Kick()
 		}
@@ -1204,7 +1211,7 @@ func (e *Engine) processWorkerResult(ctx context.Context, r *WorkerResult, bl *B
 	case resultScopeBlock:
 		// Scope-level failure (429, 507): record with backoff, detect scope.
 		e.recordFailure(ctx, r, retry.Reconcile.Delay)
-		e.maybeFeedScopeDetection(r)
+		e.feedScopeDetection(r)
 		e.tracker.Complete(r.ActionID)
 		e.armTrialTimer() // catch dependents that just entered held
 		e.recordError(r)
@@ -1243,30 +1250,63 @@ func (e *Engine) processWorkerResult(ctx context.Context, r *WorkerResult, bl *B
 	}
 }
 
-// handleTrialResult processes the result of a scope trial action. On
-// success, releases the scope and triggers thundering herd (reset backoff
-// for sync_failures in this scope). On failure, doubles the trial interval
-// with per-scope-type caps (R-2.10.6, R-2.10.8, R-2.10.14).
-func (e *Engine) handleTrialResult(ctx context.Context, r *WorkerResult) {
+// processTrialResult handles the result of a scope trial action entirely.
+// On success: releases the scope, triggers thundering herd, completes the
+// action. On failure: extends the trial interval with per-scope-type caps.
+// On shutdown: just completes. Trial results NEVER enter the normal
+// processWorkerResult switch — this is the full handler (Group A).
+//
+// Scope detection is intentionally NOT called — the scope is already blocked,
+// and re-detecting would overwrite the doubled interval (A2 bug prevention).
+func (e *Engine) processTrialResult(ctx context.Context, r *WorkerResult) {
 	class, _ := classifyResult(r)
+
 	if class == resultSuccess {
 		e.tracker.ReleaseScope(r.TrialScopeKey)
-		// Thundering herd: reset sync_failures backoff so retrier picks them up
-		// immediately. We do NOT delete failures here — items must re-execute
-		// to confirm the scope has truly recovered. CommitOutcome clears the
-		// failure on success.
 		e.resetScopeRetryTimes(ctx, r.TrialScopeKey)
+		e.armTrialTimer()
+		e.tracker.Complete(r.ActionID)
+		if e.scopeState != nil {
+			e.scopeState.RecordSuccess(r)
+		}
+		e.succeeded.Add(1)
 
 		e.logger.Info("scope block cleared — actions released",
 			slog.String("scope_key", r.TrialScopeKey),
 		)
 
-		e.armTrialTimer()
 		return
 	}
 
-	// Trial failed — double the interval, capped per scope type.
-	block, ok := e.tracker.GetScopeBlock(r.TrialScopeKey)
+	if class == resultShutdown {
+		e.tracker.Complete(r.ActionID)
+		return
+	}
+
+	// Trial failure: extend interval. Scope detection is NOT called — the scope
+	// is already blocked, and re-detecting would overwrite the doubled interval
+	// with a fresh initial interval from applyScopeBlock (A2 bug prevention).
+	e.extendTrialInterval(r.TrialScopeKey)
+
+	var delayFn func(int) time.Duration
+	if class == resultRequeue || class == resultScopeBlock {
+		delayFn = retry.Reconcile.Delay
+	}
+
+	e.recordFailure(ctx, r, delayFn)
+	e.tracker.Complete(r.ActionID)
+	e.recordError(r)
+
+	if e.retrier != nil {
+		e.retrier.Kick()
+	}
+}
+
+// extendTrialInterval doubles the trial interval for the given scope key,
+// capped at the per-scope-type maximum. Sets NextTrialAt and re-arms the
+// trial timer.
+func (e *Engine) extendTrialInterval(scopeKey string) {
+	block, ok := e.tracker.GetScopeBlock(scopeKey)
 	if !ok {
 		return // scope was released between dispatch and result
 	}
@@ -1278,29 +1318,14 @@ func (e *Engine) handleTrialResult(ctx context.Context, r *WorkerResult) {
 	}
 
 	e.logger.Debug("trial failed — extending interval",
-		slog.String("scope_key", r.TrialScopeKey),
+		slog.String("scope_key", scopeKey),
 		slog.Duration("new_interval", newInterval),
 	)
 
-	// All mutation happens inside the tracker under its lock.
-	e.tracker.ExtendTrialInterval(r.TrialScopeKey, e.nowFunc().Add(newInterval), newInterval)
+	e.tracker.ExtendTrialInterval(scopeKey, e.nowFunc().Add(newInterval), newInterval)
 	e.armTrialTimer()
 }
 
-// maybeFeedScopeDetection feeds a worker result into scope detection,
-// skipping trial results. Trial results should not re-detect the scope
-// because the scope is already blocked and re-detecting would overwrite
-// the doubled trial interval with a fresh initial interval from
-// applyScopeBlock (A2 bug fix).
-func (e *Engine) maybeFeedScopeDetection(r *WorkerResult) {
-	if !r.IsTrial {
-		e.feedScopeDetection(r)
-	}
-}
-
-// feedScopeDetection feeds a worker result into scope detection sliding
-// windows. If a threshold is crossed, creates a scope block. Handles both
-// regular failures and 400 outage patterns.
 // isObservationSuppressed returns true if a global scope block
 // (throttle:account or service) is active, meaning shortcut observation
 // polling should be skipped to avoid wasting API calls (R-2.10.30).
@@ -1315,6 +1340,11 @@ func (e *Engine) isObservationSuppressed() bool {
 	return throttled || serviceDown
 }
 
+// feedScopeDetection feeds a worker result into scope detection sliding
+// windows. If a threshold is crossed, creates a scope block. Handles both
+// regular failures and 400 outage patterns. Called directly from the normal
+// processWorkerResult switch — never called for trial results (the scope is
+// already blocked, and re-detecting would overwrite the doubled interval).
 func (e *Engine) feedScopeDetection(r *WorkerResult) {
 	if e.scopeState == nil {
 		return
@@ -1850,6 +1880,10 @@ func (e *Engine) processBatch(
 
 		e.recheckLocalPermissions(ctx)
 	}
+
+	// R-2.10.10: use scanner output as proof-of-accessibility to clear
+	// permission denials for paths observed in this batch.
+	e.clearScannerResolvedPermissions(ctx, pathSetFromBatch(batch))
 
 	denied := e.permCache.deniedPrefixes()
 	plan, err := e.planner.Plan(batch, bl, mode, safety, denied)

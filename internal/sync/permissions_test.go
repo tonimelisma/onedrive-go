@@ -1189,3 +1189,168 @@ func TestRecheckLocalPermissions_StillDenied(t *testing.T) {
 	_, blocked := tracker.GetScopeBlock(scopeKey)
 	assert.True(t, blocked, "scope block should remain when directory is still inaccessible")
 }
+
+// ---------------------------------------------------------------------------
+// clearScannerResolvedPermissions tests (R-2.10.10)
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.10.10
+func TestClearScannerResolvedPermissions_FileLevel(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	// Record a file-level permission failure (no scope key = file-level).
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path:      "secret.txt",
+		DriveID:   eng.driveID,
+		Direction: "upload",
+		IssueType: IssueLocalPermissionDenied,
+		Category:  "actionable",
+		ErrMsg:    "permission denied",
+	}, nil))
+
+	// Scanner observes the file — proof of accessibility.
+	observed := map[string]bool{"secret.txt": true}
+	eng.clearScannerResolvedPermissions(ctx, observed)
+
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
+	require.NoError(t, err)
+	assert.Empty(t, issues, "file-level failure should be cleared when scanner observes the file")
+}
+
+// Validates: R-2.10.10
+func TestClearScannerResolvedPermissions_DirLevel(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	tracker := NewDepTracker(16, eng.logger)
+	eng.tracker = tracker
+
+	scopeKey := scopeKeyPermDir + "Private"
+
+	// Record a directory-level permission failure with scope block.
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path:      "Private",
+		DriveID:   eng.driveID,
+		Direction: "download",
+		IssueType: IssueLocalPermissionDenied,
+		Category:  "actionable",
+		ErrMsg:    "directory not accessible",
+		ScopeKey:  scopeKey,
+	}, nil))
+
+	block := &ScopeBlock{Key: scopeKey, IssueType: IssueLocalPermissionDenied}
+	tracker.HoldScope(scopeKey, block)
+
+	// Scanner observes a file under the blocked directory — proof that the
+	// directory is now traversable.
+	observed := map[string]bool{"Private/doc.txt": true}
+	eng.clearScannerResolvedPermissions(ctx, observed)
+
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
+	require.NoError(t, err)
+	assert.Empty(t, issues, "dir-level failure should be cleared when scanner observes a child path")
+
+	_, blocked := tracker.GetScopeBlock(scopeKey)
+	assert.False(t, blocked, "scope block should be released when scanner proves directory is accessible")
+}
+
+// Validates: R-2.10.10
+func TestClearScannerResolvedPermissions_NoFalsePositives(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	tracker := NewDepTracker(16, eng.logger)
+	eng.tracker = tracker
+
+	scopeKey := scopeKeyPermDir + "Private"
+
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path:      "Private",
+		DriveID:   eng.driveID,
+		Direction: "download",
+		IssueType: IssueLocalPermissionDenied,
+		Category:  "actionable",
+		ErrMsg:    "directory not accessible",
+		ScopeKey:  scopeKey,
+	}, nil))
+
+	block := &ScopeBlock{Key: scopeKey, IssueType: IssueLocalPermissionDenied}
+	tracker.HoldScope(scopeKey, block)
+
+	// Scanner observes an unrelated path — should NOT clear the permission failure.
+	observed := map[string]bool{"Public/readme.txt": true}
+	eng.clearScannerResolvedPermissions(ctx, observed)
+
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
+	require.NoError(t, err)
+	assert.Len(t, issues, 1, "failure should remain when scanner didn't observe the blocked path")
+
+	_, blocked := tracker.GetScopeBlock(scopeKey)
+	assert.True(t, blocked, "scope block should remain when scanner didn't observe the blocked path")
+}
+
+func TestPathSetFromEvents(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil_events", func(t *testing.T) {
+		result := pathSetFromEvents(nil)
+		assert.Nil(t, result)
+	})
+
+	t.Run("empty_events", func(t *testing.T) {
+		result := pathSetFromEvents([]ChangeEvent{})
+		assert.Nil(t, result)
+	})
+
+	t.Run("extracts_paths", func(t *testing.T) {
+		events := []ChangeEvent{
+			{Path: "a.txt"},
+			{Path: "dir/b.txt"},
+			{Path: ""}, // empty path should be skipped
+			{Path: "c.txt"},
+		}
+		result := pathSetFromEvents(events)
+		assert.Equal(t, map[string]bool{
+			"a.txt":     true,
+			"dir/b.txt": true,
+			"c.txt":     true,
+		}, result)
+	})
+}
+
+func TestPathSetFromBatch(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil_batch", func(t *testing.T) {
+		result := pathSetFromBatch(nil)
+		assert.Nil(t, result)
+	})
+
+	t.Run("empty_batch", func(t *testing.T) {
+		result := pathSetFromBatch([]PathChanges{})
+		assert.Nil(t, result)
+	})
+
+	t.Run("extracts_paths", func(t *testing.T) {
+		batch := []PathChanges{
+			{Path: "x.txt"},
+			{Path: ""},
+			{Path: "y/z.txt"},
+		}
+		result := pathSetFromBatch(batch)
+		assert.Equal(t, map[string]bool{
+			"x.txt":   true,
+			"y/z.txt": true,
+		}, result)
+	})
+}
