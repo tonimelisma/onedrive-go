@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	stdsync "sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -850,4 +851,124 @@ func TestGetScopeBlock(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, 5*time.Minute, original.TrialInterval,
 		"mutating the returned copy must not affect the tracker's block")
+}
+
+// ---------------------------------------------------------------------------
+// onHeld callback tests (R-2.10.5 — trial timer re-arm gap fix)
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.10.5
+func TestOnHeldCallback_FiresOnAdd(t *testing.T) {
+	t.Parallel()
+
+	logger := testLogger(t)
+	dt := NewDepTracker(16, logger)
+
+	var count atomic.Int32
+	dt.onHeld = func() { count.Add(1) }
+
+	dt.HoldScope("throttle:account", &ScopeBlock{
+		Key:       "throttle:account",
+		IssueType: "rate_limited",
+	})
+
+	// Action dispatched with no deps → goes to held → onHeld fires.
+	dt.Add(&Action{Type: ActionUpload, Path: "a.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
+	assert.Equal(t, int32(1), count.Load(), "onHeld should fire when action enters held queue")
+}
+
+func TestOnHeldCallback_NotFiredWhenNotBlocked(t *testing.T) {
+	t.Parallel()
+
+	logger := testLogger(t)
+	dt := NewDepTracker(16, logger)
+
+	var count atomic.Int32
+	dt.onHeld = func() { count.Add(1) }
+
+	// No scope block — action goes to ready.
+	dt.Add(&Action{Type: ActionUpload, Path: "a.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
+	assert.Equal(t, int32(0), count.Load(), "onHeld should not fire when action goes to ready")
+}
+
+// Validates: R-2.10.5
+func TestOnHeldCallback_FiresFromComplete(t *testing.T) {
+	t.Parallel()
+
+	logger := testLogger(t)
+	dt := NewDepTracker(16, logger)
+
+	var count atomic.Int32
+	dt.onHeld = func() { count.Add(1) }
+
+	// Add A with no deps (goes to ready), then B depending on A.
+	dt.Add(&Action{Type: ActionDownload, Path: "a.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 0, nil)
+	dt.Add(&Action{Type: ActionDownload, Path: "b.txt", DriveID: driveid.New("d"), ItemID: "i2"}, 1, []int64{0})
+
+	// Drain A from ready channel.
+	<-dt.Ready()
+
+	// Now block the service scope — when A completes, B's deps are
+	// satisfied and dispatch sends it to held.
+	dt.HoldScope("service", &ScopeBlock{
+		Key:       "service",
+		IssueType: "service_outage",
+	})
+
+	dt.Complete(0) // B becomes ready → blocked by service → held
+	assert.Equal(t, int32(1), count.Load(), "onHeld should fire when dependent enters held from Complete")
+}
+
+func TestOnHeldCallback_NoDeadlock(t *testing.T) {
+	t.Parallel()
+
+	logger := testLogger(t)
+	dt := NewDepTracker(16, logger)
+
+	// Set onHeld to call EarliestTrialAt (acquires dt.mu). If the callback
+	// were called under the lock, this would self-deadlock.
+	dt.onHeld = func() { dt.EarliestTrialAt() }
+
+	dt.HoldScope("throttle:account", &ScopeBlock{
+		Key:           "throttle:account",
+		IssueType:     "rate_limited",
+		NextTrialAt:   time.Now().Add(time.Minute),
+		TrialInterval: time.Minute,
+	})
+
+	// Must complete without deadlock.
+	done := make(chan struct{})
+	go func() {
+		dt.Add(&Action{Type: ActionUpload, Path: "a.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// OK — no deadlock.
+	case <-time.After(3 * time.Second):
+		t.Fatal("deadlock: onHeld callback must not be called under dt.mu")
+	}
+}
+
+func TestOnHeldCallback_FiresFromReleaseScope_CrossScope(t *testing.T) {
+	t.Parallel()
+
+	logger := testLogger(t)
+	dt := NewDepTracker(16, logger)
+
+	var count atomic.Int32
+	dt.onHeld = func() { count.Add(1) }
+
+	// Block both throttle:account and service.
+	dt.HoldScope("throttle:account", &ScopeBlock{Key: "throttle:account", IssueType: "rate_limited"})
+	dt.HoldScope("service", &ScopeBlock{Key: "service", IssueType: "service_outage"})
+
+	// Add action → goes to held under throttle:account (checked first).
+	dt.Add(&Action{Type: ActionDownload, Path: "a.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
+	assert.Equal(t, int32(1), count.Load(), "initial add should fire onHeld")
+
+	// Release throttle:account → dispatch re-checks → blocked by service → held again.
+	dt.ReleaseScope("throttle:account")
+	assert.Equal(t, int32(2), count.Load(), "cross-scope re-hold should fire onHeld again")
 }

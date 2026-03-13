@@ -82,6 +82,12 @@ type DepTracker struct {
 	// scopeBlocks tracks active scope-level blocks. An action matching a
 	// blocked scope is diverted to the held queue instead of ready.
 	scopeBlocks map[string]*ScopeBlock
+
+	// onHeld is called when dispatch() diverts an action to a held queue.
+	// The engine sets this to armTrialTimer so the trial timer re-arms when
+	// the held queue becomes non-empty. Must NOT be called under dt.mu —
+	// callers invoke it after releasing the lock.
+	onHeld func()
 }
 
 // NewDepTracker creates a tracker for one-shot mode with the given channel
@@ -124,8 +130,9 @@ func (dt *DepTracker) Add(action *Action, id int64, depIDs []int64) {
 		ID:     id,
 	}
 
+	var wasHeld bool
+
 	dt.mu.Lock()
-	defer dt.mu.Unlock()
 
 	dt.actions[id] = ta
 	dt.byPath[action.Path] = ta
@@ -147,7 +154,13 @@ func (dt *DepTracker) Add(action *Action, id int64, depIDs []int64) {
 	ta.depsLeft.Store(depsRemaining)
 
 	if depsRemaining == 0 {
-		dt.dispatch(ta)
+		wasHeld = dt.dispatch(ta)
+	}
+
+	dt.mu.Unlock()
+
+	if wasHeld && dt.onHeld != nil {
+		dt.onHeld()
 	}
 }
 
@@ -185,10 +198,18 @@ func (dt *DepTracker) Complete(id int64) {
 	delete(dt.byPath, ta.Action.Path)
 	dt.mu.Unlock()
 
+	var anyHeld bool
+
 	for _, dep := range dependents {
 		if dep.depsLeft.Add(-1) == 0 {
-			dt.dispatch(dep)
+			if dt.dispatch(dep) {
+				anyHeld = true
+			}
 		}
+	}
+
+	if anyHeld && dt.onHeld != nil {
+		dt.onHeld()
 	}
 
 	// In persistent mode, the global done channel never fires — workers
@@ -244,17 +265,20 @@ func (dt *DepTracker) Done() <-chan struct{} {
 }
 
 // dispatch routes a ready action through the scope gate before sending it
-// to the ready channel. This is the central dispatch point — called by Add,
+// to the ready channel. Returns true if the action was diverted to a held
+// queue (scope blocked). Callers use the return value to fire onHeld
+// outside the lock. This is the central dispatch point — called by Add,
 // Complete (for dependents), and ReleaseScope.
-func (dt *DepTracker) dispatch(ta *TrackedAction) {
+func (dt *DepTracker) dispatch(ta *TrackedAction) bool {
 	// Scope block — prevent wasted requests to blocked scopes.
 	// An action matching a blocked scope goes to the held queue instead.
 	if key := dt.blockedScope(ta); key != "" {
 		dt.held[key] = append(dt.held[key], ta)
-		return
+		return true
 	}
 
 	dt.dispatchReady(ta)
+	return false
 }
 
 // dispatchReady sends an action directly to the ready channel, bypassing
@@ -331,8 +355,16 @@ func (dt *DepTracker) ReleaseScope(key string) {
 		)
 	}
 
+	var anyHeld bool
+
 	for _, ta := range held {
-		dt.dispatch(ta)
+		if dt.dispatch(ta) {
+			anyHeld = true
+		}
+	}
+
+	if anyHeld && dt.onHeld != nil {
+		dt.onHeld()
 	}
 }
 
