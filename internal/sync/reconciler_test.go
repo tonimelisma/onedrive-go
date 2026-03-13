@@ -550,6 +550,93 @@ func TestReconcile_ClearsDispatchedOnInFlight(t *testing.T) {
 		"in-flight path should be cleared from dispatch tracking")
 }
 
+func TestReconcile_PrunesStaleDispatchedEntries(t *testing.T) {
+	rows := []SyncFailureRow{
+		makeFailedRow("a.txt", strDownload, 2),
+		makeFailedRow("b.txt", strUpload, 1),
+	}
+	state := &mockStateReader{failureRows: rows}
+	adder := &mockEventAdder{}
+	r := testFailureRetrier(state, adder, newMockInFlightChecker())
+	r.nowFunc = func() time.Time { return time.Unix(1000, 0) }
+
+	// First reconcile dispatches both.
+	r.reconcile(context.Background())
+	require.Len(t, r.dispatchedRetryAt, 2)
+
+	// Simulate: a.txt succeeded (row cleared from sync_failures).
+	state.mu.Lock()
+	state.failureRows = []SyncFailureRow{rows[1]}
+	state.mu.Unlock()
+
+	r.reconcile(context.Background())
+	assert.NotContains(t, r.dispatchedRetryAt, "a.txt",
+		"resolved path should be pruned from dispatch tracking")
+	assert.Contains(t, r.dispatchedRetryAt, "b.txt",
+		"active path should remain in dispatch tracking")
+}
+
+func TestReconcile_PrunesAllWhenNoRows(t *testing.T) {
+	rows := []SyncFailureRow{
+		makeFailedRow("a.txt", strDownload, 2),
+	}
+	state := &mockStateReader{failureRows: rows}
+	adder := &mockEventAdder{}
+	r := testFailureRetrier(state, adder, newMockInFlightChecker())
+	r.nowFunc = func() time.Time { return time.Unix(1000, 0) }
+
+	// First reconcile dispatches.
+	r.reconcile(context.Background())
+	require.Len(t, r.dispatchedRetryAt, 1)
+
+	// All failures resolved.
+	state.mu.Lock()
+	state.failureRows = nil
+	state.mu.Unlock()
+
+	r.reconcile(context.Background())
+	assert.Empty(t, r.dispatchedRetryAt,
+		"all entries should be pruned when no rows remain")
+}
+
+func TestRun_BootstrapKickRace_NoDuplicateDispatch(t *testing.T) {
+	// Reproduces the bootstrap-vs-kick race: a failure is recorded and
+	// Kick() is called before Run() starts. Both bootstrap reconcile and
+	// the pending kick see the same row. The dispatchedRetryAt guard
+	// ensures only one event is buffered.
+	rows := []SyncFailureRow{
+		makeFailedRow("race.txt", strUpload, 1),
+	}
+	state := &mockStateReader{failureRows: rows}
+	adder := &mockEventAdder{}
+	r := testFailureRetrier(state, adder, newMockInFlightChecker())
+	r.nowFunc = func() time.Time { return time.Unix(1000, 0) }
+
+	// Pre-load kick signal before Run starts — simulates the race where
+	// processWorkerResult calls Kick() before the retrier goroutine executes.
+	r.Kick()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		r.Run(ctx)
+		close(done)
+	}()
+
+	// Wait for both bootstrap and kick reconcile to complete.
+	time.Sleep(100 * time.Millisecond)
+
+	adder.mu.Lock()
+	assert.Len(t, adder.events, 1,
+		"bootstrap + kick should produce exactly one dispatch, not two")
+	adder.mu.Unlock()
+
+	cancel()
+	<-done
+}
+
 func TestReconcile_MixedDirections(t *testing.T) {
 	rows := []SyncFailureRow{
 		makeFailedRow("remote.txt", strDownload, 2),

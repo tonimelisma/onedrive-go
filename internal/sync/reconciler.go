@@ -145,6 +145,12 @@ func (r *FailureRetrier) reconcileSyncFailures(ctx context.Context, now time.Tim
 		return
 	}
 
+	// Prune stale entries: paths whose sync_failures rows were resolved
+	// (cleared by CommitOutcome) or reclassified (no longer transient/due)
+	// no longer need tracking. Without this, the map grows monotonically
+	// with the number of unique paths that ever failed.
+	r.pruneDispatchedRetryAt(rows)
+
 	if len(rows) == 0 {
 		return
 	}
@@ -180,6 +186,27 @@ func (r *FailureRetrier) reconcileSyncFailures(ctx context.Context, now time.Tim
 		r.logger.Info("failure retrier sweep",
 			slog.Int("dispatched", dispatched),
 		)
+	}
+}
+
+// pruneDispatchedRetryAt removes entries from dispatchedRetryAt for paths
+// that are no longer in the current sweep's result set. This happens when a
+// failure is resolved (CommitOutcome clears the row) or reclassified (e.g.,
+// promoted to actionable). Without pruning, the map grows monotonically.
+func (r *FailureRetrier) pruneDispatchedRetryAt(currentRows []SyncFailureRow) {
+	if len(r.dispatchedRetryAt) == 0 {
+		return
+	}
+
+	active := make(map[string]struct{}, len(currentRows))
+	for i := range currentRows {
+		active[currentRows[i].Path] = struct{}{}
+	}
+
+	for path := range r.dispatchedRetryAt {
+		if _, ok := active[path]; !ok {
+			delete(r.dispatchedRetryAt, path)
+		}
 	}
 }
 
