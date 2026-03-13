@@ -9,11 +9,6 @@ package sync
 
 import "syscall"
 
-// diskAvailableFunc is the package-level function for querying available
-// disk space. Set to diskAvailable by default; tests override it to inject
-// controlled values.
-var diskAvailableFunc = diskAvailable
-
 // diskAvailable returns the number of bytes available to unprivileged users
 // on the filesystem containing path. Uses statfs(2) which is supported on
 // both Darwin and Linux.

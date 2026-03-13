@@ -1776,3 +1776,70 @@ func TestHandleFsEvent_DeletePassesFsPath(t *testing.T) {
 	assert.Equal(t, dirPath, removed[0],
 		"should pass original fsEvent.Name to watcher.Remove()")
 }
+
+// ---------------------------------------------------------------------------
+// hasCaseCollision tests (R-2.12.2)
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.12.2
+func TestHasCaseCollision_Detected(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	// Create a file named "File.txt".
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "File.txt"), []byte("a"), 0o644))
+
+	// On case-sensitive FS, "file.txt" differs from "File.txt" → collision.
+	// On case-insensitive FS (macOS), creating "File.txt" means "file.txt"
+	// refers to the same inode, so os.ReadDir returns "File.txt" and the
+	// exact-match check (entry.Name() != name) fails → no collision detected.
+	// This is correct: on case-insensitive FS there is no collision risk.
+	collidingName, found := hasCaseCollision(dir, "file.txt")
+	if found {
+		assert.Equal(t, "File.txt", collidingName,
+			"should return the name of the existing colliding file")
+	}
+}
+
+// Validates: R-2.12.2
+func TestHasCaseCollision_NoCollision(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "other.txt"), []byte("a"), 0o644))
+
+	_, found := hasCaseCollision(dir, "newfile.txt")
+	assert.False(t, found, "unrelated files should not trigger collision")
+}
+
+// Validates: R-2.12.2
+func TestHasCaseCollision_ExactMatch_NotCollision(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "same.txt"), []byte("a"), 0o644))
+
+	// Same exact name is not a collision — it's the same file.
+	_, found := hasCaseCollision(dir, "same.txt")
+	assert.False(t, found, "exact name match should not be a collision")
+}
+
+// Validates: R-2.12.2
+func TestHasCaseCollision_UnreadableDir_FailOpen(t *testing.T) {
+	t.Parallel()
+
+	// Non-existent directory → ReadDir fails → function returns false (fail-open).
+	_, found := hasCaseCollision("/nonexistent/path", "anything.txt")
+	assert.False(t, found, "unreadable directory should fail open")
+}
+
+// Validates: R-2.12.2
+func TestHasCaseCollision_EmptyDir(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	_, found := hasCaseCollision(dir, "anything.txt")
+	assert.False(t, found, "empty directory should have no collisions")
+}

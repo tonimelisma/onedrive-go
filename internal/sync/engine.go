@@ -183,6 +183,7 @@ func NewEngine(cfg *EngineConfig) (*Engine, error) {
 	}
 
 	execCfg.minFreeSpace = cfg.MinFreeSpace
+	execCfg.diskAvailableFunc = diskAvailable
 
 	// Construct sessionStore and TransferManager together so the TM is
 	// immutable after creation (no post-hoc field mutation).
