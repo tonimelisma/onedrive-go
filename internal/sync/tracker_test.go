@@ -947,7 +947,7 @@ func TestOnHeldCallback_NoDeadlock(t *testing.T) {
 	case <-done:
 		// OK — no deadlock.
 	case <-time.After(3 * time.Second):
-		t.Fatal("deadlock: onHeld callback must not be called under dt.mu")
+		require.Fail(t, "deadlock: onHeld callback must not be called under dt.mu")
 	}
 }
 

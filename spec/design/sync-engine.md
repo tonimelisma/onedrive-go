@@ -38,7 +38,7 @@ Implements: R-2.10.3 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2
 
 - **success** → `Complete` + `RecordSuccess` (scope window reset) + counter
 - **requeue** (transient) → `recordFailure` with `retry.Reconcile.Delay` + `Complete` + `feedScopeDetection` + `retrier.Kick()`
-- **scopeBlock** (429, 507) → `recordFailure` with `retry.Reconcile.Delay` + `feedScopeDetection` + `Complete` + `retrier.Kick()`
+- **scopeBlock** (429, 507) → `recordFailure` with `retry.Reconcile.Delay` + `feedScopeDetection` + `Complete` + `armTrialTimer()` (belt-and-suspenders) + `retrier.Kick()`
 - **skip** (non-retryable) → handle403 side effect + `recordFailure` with nil delayFn (no `next_retry_at`) + `Complete`
 - **shutdown** → `Complete` (no failure recorded)
 - **fatal** (401) → `recordFailure` with nil delayFn + `Complete`

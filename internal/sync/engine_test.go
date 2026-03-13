@@ -3379,7 +3379,7 @@ func readReady(t *testing.T, ready <-chan *TrackedAction) *TrackedAction {
 	case ta := <-ready:
 		return ta
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for action on ready channel")
+		require.Fail(t, "timed out waiting for action on ready channel")
 		return nil
 	}
 }
@@ -4017,7 +4017,7 @@ func TestTrialTimer_RateLimited_BlocksAllActionTypes(t *testing.T) {
 	// None should appear on the ready channel.
 	select {
 	case ta := <-dt.Ready():
-		t.Fatalf("action should be held, got: %s (type %d)", ta.Action.Path, ta.Action.Type)
+		require.Fail(t, fmt.Sprintf("action should be held, got: %s (type %d)", ta.Action.Path, ta.Action.Type))
 	case <-time.After(20 * time.Millisecond):
 		// Expected — all held.
 	}
