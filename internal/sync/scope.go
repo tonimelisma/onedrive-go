@@ -168,7 +168,10 @@ func (ss *ScopeState) UpdateScope(r *WorkerResult) ScopeUpdateResult {
 
 	case r.HTTPStatus >= http.StatusInternalServerError:
 		// Service error — feed into service sliding window (R-2.10.28, R-2.10.29).
-		return ss.checkWindow(scopeKeyService, r.Path, serviceWindowThreshold, serviceWindowDuration, "service_outage", serviceInitialInterval)
+		key := scopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)
+		return ss.checkWindow(key, r.Path,
+			serviceWindowThreshold, serviceWindowDuration,
+			"service_outage", serviceInitialInterval)
 
 	default:
 		return ScopeUpdateResult{}

@@ -38,14 +38,14 @@ Implements: R-2.10.3 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2
 
 - **success** → `Complete` + `RecordSuccess` (scope window reset) + counter
 - **requeue** (transient) → `recordFailure` with `retry.Reconcile.Delay` + `Complete` + `feedScopeDetection` + `retrier.Kick()`
-- **scopeBlock** (429, 507) → `recordFailure` with `retry.Reconcile.Delay` + `feedScopeDetection` + `Complete` + `retrier.Kick()`
+- **scopeBlock** (429, 507) → `recordFailure` with `retry.Reconcile.Delay` + `feedScopeDetection` + `Complete` + `armTrialTimer()` (belt-and-suspenders) + `retrier.Kick()`
 - **skip** (non-retryable) → handle403 side effect + `recordFailure` with nil delayFn (no `next_retry_at`) + `Complete`
 - **shutdown** → `Complete` (no failure recorded)
 - **fatal** (401) → `recordFailure` with nil delayFn + `Complete`
 
 Trial result routing: `handleTrialResult()` runs before classification. Trial success → `tracker.ReleaseScope(scopeKey)` + `resetScopeRetryTimes(scopeKey, now)` (thundering herd: resets `next_retry_at` for all sync_failures matching the scope, then kicks the retrier) + `armTrialTimer()`. Trial failure → reads block's current `TrialInterval` via `tracker.GetScopeBlock(scopeKey)` (value copy), doubles it, caps per scope type (`maxTrialIntervalForIssueType`), calls `tracker.ExtendTrialInterval(scopeKey, nextAt, newInterval)` (encapsulates mutation under lock) + `armTrialTimer()`. Per-scope caps: quota 1h, rate_limited 10m, service 10m (R-2.10.6/R-2.10.8/R-2.10.14).
 
-**Trial timer**: `armTrialTimer()` sets a `time.Timer` to fire at the earliest `NextTrialAt` across all scope blocks (via `tracker.EarliestTrialAt()`). The timer fires in `drainWorkerResults`'s select loop, calling `tracker.NextDueTrial(now)` + `tracker.DispatchTrial(key)` in a loop until no more trials are due. Called after `applyScopeBlock()`, `handleTrialResult()`, and trial dispatch. Same pattern as `FailureRetrier.armTimer`.
+**Trial timer**: `armTrialTimer()` uses `time.AfterFunc` to send to a persistent `trialCh` channel when the earliest `NextTrialAt` across all scope blocks is reached (via `tracker.EarliestTrialAt()`). Using a persistent channel avoids a race where `onHeld` (called from external goroutines via `tracker.Add`) replaces the timer while the drain loop's select watches the old timer's channel. The `trialCh` fires in `drainWorkerResults`'s select loop, calling `tracker.NextDueTrial(now)` + `tracker.DispatchTrial(key)` in a loop until no more trials are due. Called after `applyScopeBlock()`, `handleTrialResult()`, trial dispatch, and via the `onHeld` callback when actions enter held queues. Belt-and-suspenders: `armTrialTimer()` is also called after `tracker.Complete` in the `resultScopeBlock` case to catch dependents that entered held.
 
 `feedScopeDetection()` feeds results into `ScopeState.UpdateScope()`. When a threshold is crossed, creates a scope block via `applyScopeBlock()` which calls `tracker.HoldScope()` + `armTrialTimer()`.
 
