@@ -3453,3 +3453,34 @@ func TestClearResolvedSkippedItems_DoesNotAffectRuntimeIssues(t *testing.T) {
 	require.Len(t, remaining, 1)
 	assert.Equal(t, IssuePermissionDenied, remaining[0].IssueType)
 }
+
+// ---------------------------------------------------------------------------
+// feedScopeDetection guard: local errors must not feed scope windows
+// ---------------------------------------------------------------------------
+
+// Validates: R-6.7.27
+func TestFeedScopeDetection_LocalErrorIgnored(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	eng.scopeState = NewScopeState(time.Now, eng.logger)
+	eng.tracker = NewDepTracker(16, eng.logger)
+
+	// Feed several local errors (HTTPStatus=0) — should not trigger a scope block.
+	for i := range 10 {
+		eng.feedScopeDetection(&WorkerResult{
+			Path:       fmt.Sprintf("file-%d.txt", i),
+			ActionType: ActionDownload,
+			HTTPStatus: 0, // local error — no HTTP status
+			Err:        os.ErrPermission,
+			ErrMsg:     "permission denied",
+		})
+	}
+
+	// No scope block should have been created.
+	_, blocked := eng.tracker.GetScopeBlock(scopeKeyService)
+	assert.False(t, blocked, "local errors with HTTPStatus=0 must not trigger service scope")
+	_, blocked = eng.tracker.GetScopeBlock(scopeKeyThrottleAccount)
+	assert.False(t, blocked, "local errors with HTTPStatus=0 must not trigger throttle scope")
+}

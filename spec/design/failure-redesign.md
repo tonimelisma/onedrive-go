@@ -1864,8 +1864,8 @@ All proposed new/changed requirements, organized by area. Failure handling princ
 | R-2.10.9 | When `recheckPermissions()` discovers a previously-denied folder is now writable, the system shall clear the scope block and release all held actions under that folder immediately. | **new** (enhance existing) | 8 |
 | R-2.10.10 | When the scanner observes a previously-blocked file or directory is now accessible, the system shall clear the failure and release held actions. | **new** | 8 |
 | R-2.10.11 | When a scope block clears (via trial success or recheck), the system shall release all held actions immediately for dispatch. | **new** | 7.3 |
-| R-2.10.12 | When a local file operation fails with `os.ErrPermission`, the system shall check parent directory accessibility. If the directory is inaccessible: record one `local_permission_denied` at directory level and suppress all operations under it. If the directory is accessible: record at file level. | **new** | 8 |
-| R-2.10.13 | The system shall recheck `local_permission_denied` directory-level issues at the start of each sync pass, and auto-clear when accessible. | **new** | 8 |
+| R-2.10.12 | When a local file operation fails with `os.ErrPermission`, the system shall check parent directory accessibility. If the directory is inaccessible: record one `local_permission_denied` at directory level and suppress all operations under it. If the directory is accessible: record at file level. | verified | 8 |
+| R-2.10.13 | The system shall recheck `local_permission_denied` directory-level issues at the start of each sync pass, and auto-clear when accessible. | verified | 8 |
 | R-2.10.14 | Trial timing per scope type: `rate_limited` starts at Retry-After (max 10 min); `quota_exceeded` starts at 5 min (2× backoff, max 1 hour); `service_outage` starts at 60s or Retry-After (2× backoff, max 10 min). | **new** | 7.3 |
 | R-2.10.15 | When a scope block is set, at most `transfer_workers` actions may be in-flight. These complete normally and route through standard retry. This bounded waste (worker count) is accepted; no locking between result processing and dispatch. | **new** | 7.3 |
 | R-2.10.16 | Every `WorkerResult` shall carry target drive identity (`TargetDriveID`, `ShortcutKey`). Own-drive actions: empty `ShortcutKey`. Shortcut actions: `remoteDrive:remoteItem`. | **new** | 11.1 |
@@ -1937,7 +1937,7 @@ All proposed new/changed requirements, organized by area. Failure handling princ
 | ID | Requirement | Status | Part |
 |----|------------|--------|------|
 | R-6.7.14 | When the Graph API returns HTTP 400 with `innerError.code == "invalidRequest"` and known outage message patterns (e.g., "ObjectHandle is Invalid"), classify as transient (service outage), not generic skip. | planned (revise) | 9, J7 |
-| R-6.7.27 | When classifying errors, the engine shall handle empty `TargetDriveID` (local-only operations like `os.ErrPermission`) by skipping remote scope routing. Only remote API errors require drive-aware scope routing. | **new** | 11.11 |
+| R-6.7.27 | When classifying errors, the engine shall handle empty `TargetDriveID` (local-only operations like `os.ErrPermission`) by skipping remote scope routing. Only remote API errors require drive-aware scope routing. | verified | 11.11 |
 ### R-6.2 Data Integrity (Disk Space)
 
 | ID | Requirement | Status | Part |

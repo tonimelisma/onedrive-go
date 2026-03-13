@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"log/slog"
+	"strings"
 	stdsync "sync"
 	"sync/atomic"
 	"time"
@@ -295,6 +296,20 @@ func (dt *DepTracker) blockedScope(ta *TrackedAction) string {
 			if ta.Action.Type == ActionUpload {
 				return scopeKey
 			}
+		}
+	}
+
+	// perm:dir:$path blocks all actions whose path falls under the denied
+	// directory (R-2.10.12). O(n) over active perm:dir blocks — expected
+	// to be tiny (1-3 typically).
+	for key := range dt.scopeBlocks {
+		if !strings.HasPrefix(key, scopeKeyPermDir) {
+			continue
+		}
+
+		dirPath := strings.TrimPrefix(key, scopeKeyPermDir)
+		if ta.Action.Path == dirPath || strings.HasPrefix(ta.Action.Path, dirPath+"/") {
+			return key
 		}
 	}
 

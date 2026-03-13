@@ -305,6 +305,10 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 		e.recheckPermissions(ctx, bl, shortcuts)
 	}
 
+	// Recheck local permission denials — clear scope blocks for
+	// directories that have become accessible since the last pass (R-2.10.13).
+	e.recheckLocalPermissions(ctx)
+
 	// Steps 2-4: Observe remote + local, buffer, and flush.
 	changes, err := e.observeChanges(ctx, bl, mode, opts.DryRun, opts.FullReconcile)
 	if err != nil {
@@ -1167,6 +1171,16 @@ func (e *Engine) processWorkerResult(ctx context.Context, r *WorkerResult, bl *B
 		}
 
 	case resultSkip:
+		// Local permission errors get special handling — walk up to find the
+		// denied directory and create a scope block (R-2.10.12).
+		if errors.Is(r.Err, os.ErrPermission) {
+			e.handleLocalPermission(ctx, r)
+			e.tracker.Complete(r.ActionID)
+			e.recordError(r)
+
+			break
+		}
+
 		if r.HTTPStatus == http.StatusForbidden && e.permChecker != nil {
 			e.handle403(ctx, bl, r.Path, shortcuts)
 		}
@@ -1225,6 +1239,13 @@ func (e *Engine) feedScopeDetection(r *WorkerResult) {
 	if e.scopeState == nil {
 		return
 	}
+
+	// Local errors (HTTPStatus==0) must not feed scope detection windows.
+	// Only remote API errors should increment service/quota counters (R-6.7.27).
+	if r.HTTPStatus == 0 {
+		return
+	}
+
 	sr := e.scopeState.UpdateScope(r)
 	if sr.Block {
 		e.applyScopeBlock(sr)

@@ -1014,3 +1014,178 @@ func TestRecheckPermissions_ResetsCache(t *testing.T) {
 	_, ok := eng.permCache.get("Shared/Stale")
 	assert.False(t, ok, "stale cache entries should be cleared at pass start")
 }
+
+// ---------------------------------------------------------------------------
+// handleLocalPermission tests (R-2.10.12)
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.10.12
+func TestHandleLocalPermission_DirectoryLevel(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	// Create a directory, then make it inaccessible.
+	deniedDir := filepath.Join(syncRoot, "Private")
+	require.NoError(t, os.MkdirAll(deniedDir, 0o755))
+	require.NoError(t, os.Chmod(deniedDir, 0o000))
+
+	t.Cleanup(func() {
+		// Restore permissions so t.TempDir cleanup works.
+		_ = os.Chmod(deniedDir, 0o755)
+	})
+
+	// Set up tracker (needed for HoldScope).
+	tracker := NewDepTracker(16, eng.logger)
+	eng.tracker = tracker
+
+	// Simulate a worker result with os.ErrPermission.
+	r := &WorkerResult{
+		Path:       "Private/file.txt",
+		ActionType: ActionDownload,
+		Err:        os.ErrPermission,
+		ErrMsg:     "permission denied",
+	}
+
+	eng.handleLocalPermission(ctx, r)
+
+	// Should have recorded a directory-level local_permission_denied.
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+	assert.Equal(t, "Private", issues[0].Path)
+	assert.Equal(t, scopeKeyPermDir+"Private", issues[0].ScopeKey)
+
+	// Should have created a scope block.
+	_, blocked := tracker.GetScopeBlock(scopeKeyPermDir + "Private")
+	assert.True(t, blocked, "should create a scope block for the denied directory")
+}
+
+// Validates: R-2.10.12
+func TestHandleLocalPermission_FileLevel(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	// Create a directory (accessible) with an inaccessible file.
+	dir := filepath.Join(syncRoot, "Docs")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+
+	tracker := NewDepTracker(16, eng.logger)
+	eng.tracker = tracker
+
+	// Parent dir is accessible — this should be file-level only.
+	r := &WorkerResult{
+		Path:       "Docs/secret.txt",
+		ActionType: ActionUpload,
+		Err:        os.ErrPermission,
+		ErrMsg:     "permission denied",
+	}
+
+	eng.handleLocalPermission(ctx, r)
+
+	// Should have recorded a file-level local_permission_denied (no scope key).
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+	assert.Equal(t, "Docs/secret.txt", issues[0].Path)
+	assert.Empty(t, issues[0].ScopeKey, "file-level issues should have no scope key")
+}
+
+// ---------------------------------------------------------------------------
+// recheckLocalPermissions tests (R-2.10.13)
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.10.13
+func TestRecheckLocalPermissions_Restored(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	deniedDir := filepath.Join(syncRoot, "Private")
+	require.NoError(t, os.MkdirAll(deniedDir, 0o755))
+
+	// Set up tracker.
+	tracker := NewDepTracker(16, eng.logger)
+	eng.tracker = tracker
+
+	scopeKey := scopeKeyPermDir + "Private"
+
+	// Simulate a prior denial: record failure + scope block.
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path:      "Private",
+		DriveID:   eng.driveID,
+		Direction: "download",
+		IssueType: IssueLocalPermissionDenied,
+		Category:  "actionable",
+		ErrMsg:    "directory not accessible",
+		ScopeKey:  scopeKey,
+	}, nil))
+
+	block := &ScopeBlock{Key: scopeKey, IssueType: IssueLocalPermissionDenied}
+	tracker.HoldScope(scopeKey, block)
+
+	// Directory is now accessible (we didn't chmod 000 it).
+	eng.recheckLocalPermissions(ctx)
+
+	// Failure should be cleared.
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
+	require.NoError(t, err)
+	assert.Empty(t, issues, "failure should be cleared when directory is accessible")
+
+	// Scope block should be released.
+	_, blocked := tracker.GetScopeBlock(scopeKey)
+	assert.False(t, blocked, "scope block should be released when directory is accessible")
+}
+
+// Validates: R-2.10.13
+func TestRecheckLocalPermissions_StillDenied(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	deniedDir := filepath.Join(syncRoot, "Private")
+	require.NoError(t, os.MkdirAll(deniedDir, 0o755))
+	require.NoError(t, os.Chmod(deniedDir, 0o000))
+
+	t.Cleanup(func() {
+		_ = os.Chmod(deniedDir, 0o755)
+	})
+
+	tracker := NewDepTracker(16, eng.logger)
+	eng.tracker = tracker
+
+	scopeKey := scopeKeyPermDir + "Private"
+
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path:      "Private",
+		DriveID:   eng.driveID,
+		Direction: "download",
+		IssueType: IssueLocalPermissionDenied,
+		Category:  "actionable",
+		ErrMsg:    "directory not accessible",
+		ScopeKey:  scopeKey,
+	}, nil))
+
+	block := &ScopeBlock{Key: scopeKey, IssueType: IssueLocalPermissionDenied}
+	tracker.HoldScope(scopeKey, block)
+
+	eng.recheckLocalPermissions(ctx)
+
+	// Failure should remain.
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
+	require.NoError(t, err)
+	assert.Len(t, issues, 1, "failure should remain when directory is still inaccessible")
+
+	// Scope block should still be active.
+	_, blocked := tracker.GetScopeBlock(scopeKey)
+	assert.True(t, blocked, "scope block should remain when directory is still inaccessible")
+}

@@ -851,3 +851,99 @@ func TestGetScopeBlock(t *testing.T) {
 	assert.Equal(t, 5*time.Minute, original.TrialInterval,
 		"mutating the returned copy must not affect the tracker's block")
 }
+
+// ---------------------------------------------------------------------------
+// Path-prefix scope blocking (R-2.10.12)
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.10.12
+func TestBlockedScope_PermDir_PathPrefixMatching(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+
+	// Block a directory via perm:dir: scope.
+	block := &ScopeBlock{
+		Key:       scopeKeyPermDir + "Private",
+		IssueType: IssueLocalPermissionDenied,
+	}
+	dt.HoldScope(scopeKeyPermDir+"Private", block)
+
+	// An action UNDER the blocked directory should be held.
+	dt.Add(&Action{
+		Type: ActionDownload, Path: "Private/sub/file.txt",
+		DriveID: driveid.New("d"), ItemID: "i1",
+	}, 1, nil)
+
+	select {
+	case <-dt.Ready():
+		require.Fail(t, "action under blocked perm:dir should be held, not dispatched")
+	case <-time.After(50 * time.Millisecond):
+		// Expected — held.
+	}
+
+	// An action OUTSIDE the blocked directory should pass through.
+	dt.Add(&Action{
+		Type: ActionDownload, Path: "Public/file.txt",
+		DriveID: driveid.New("d"), ItemID: "i2",
+	}, 2, nil)
+
+	select {
+	case ta := <-dt.Ready():
+		assert.Equal(t, int64(2), ta.ID, "action outside blocked dir should pass through")
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for unblocked action")
+	}
+}
+
+// Validates: R-2.10.12
+func TestBlockedScope_PermDir_ExactMatch(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+
+	block := &ScopeBlock{
+		Key:       scopeKeyPermDir + "Private",
+		IssueType: IssueLocalPermissionDenied,
+	}
+	dt.HoldScope(scopeKeyPermDir+"Private", block)
+
+	// Action at the exact directory path should also be held.
+	dt.Add(&Action{
+		Type: ActionDownload, Path: "Private",
+		DriveID: driveid.New("d"), ItemID: "i1",
+	}, 1, nil)
+
+	select {
+	case <-dt.Ready():
+		require.Fail(t, "action at exact perm:dir path should be held")
+	case <-time.After(50 * time.Millisecond):
+		// Expected — held.
+	}
+}
+
+// Validates: R-2.10.12
+func TestBlockedScope_PermDir_PrefixMismatch(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+
+	block := &ScopeBlock{
+		Key:       scopeKeyPermDir + "Private",
+		IssueType: IssueLocalPermissionDenied,
+	}
+	dt.HoldScope(scopeKeyPermDir+"Private", block)
+
+	// "PrivateExtra/file.txt" is NOT under "Private" (partial prefix).
+	dt.Add(&Action{
+		Type: ActionDownload, Path: "PrivateExtra/file.txt",
+		DriveID: driveid.New("d"), ItemID: "i1",
+	}, 1, nil)
+
+	select {
+	case ta := <-dt.Ready():
+		assert.Equal(t, int64(1), ta.ID, "partial prefix mismatch should NOT be held")
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout — partial prefix was incorrectly held")
+	}
+}
