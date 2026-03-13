@@ -52,10 +52,10 @@ type SyncFailureParams struct {
 	Category   string     // "transient" or "actionable" — set by the engine, never by the store
 	ErrMsg     string
 	HTTPStatus int
-	FileSize   int64  // optional, for upload validation context
-	LocalHash  string // optional, for upload validation context
-	ItemID     string // optional; auto-resolved from remote_state when empty
-	ScopeKey   string // e.g. "quota:own", "perm:remote:/path"
+	FileSize   int64    // optional, for upload validation context
+	LocalHash  string   // optional, for upload validation context
+	ItemID     string   // optional; auto-resolved from remote_state when empty
+	ScopeKey   ScopeKey // typed scope key; zero value = unscoped
 }
 
 // SyncFailureRecorder is called by the engine to persist all failure types
@@ -74,7 +74,7 @@ type SyncFailureRecorder interface {
 	MarkSyncFailureActionable(ctx context.Context, path string, driveID driveid.ID) error
 	UpsertActionableFailures(ctx context.Context, failures []ActionableFailure) error
 	ClearResolvedActionableFailures(ctx context.Context, issueType string, currentPaths []string) error
-	ResetRetryTimesForScope(ctx context.Context, scopeKey string, now time.Time) error
+	ResetRetryTimesForScope(ctx context.Context, scopeKey ScopeKey, now time.Time) error
 }
 
 // StateAdmin is called by CLI commands and daemon maintenance.
@@ -101,7 +101,7 @@ type SyncFailureRow struct {
 	LastSeenAt   int64
 	FileSize     int64
 	LocalHash    string
-	ScopeKey     string // e.g. "quota:own", "throttle:account", "perm:remote:/path"
+	ScopeKey     ScopeKey // typed scope key; zero value = unscoped
 }
 
 // ActionableFailure represents a scanner-detected issue to batch-upsert into
@@ -112,7 +112,7 @@ type ActionableFailure struct {
 	Direction string
 	IssueType string
 	Error     string
-	ScopeKey  string
+	ScopeKey  ScopeKey // typed scope key; zero value = unscoped
 	FileSize  int64
 }
 

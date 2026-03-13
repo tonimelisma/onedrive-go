@@ -142,7 +142,7 @@ func (m *SyncStore) RecordFailure(ctx context.Context, p *SyncFailureParams, del
 		p.Path, p.DriveID.String(), p.Direction, category,
 		nullString(p.IssueType), nullString(itemID),
 		newCount, nextRetryNano, p.ErrMsg, p.HTTPStatus,
-		nowNano, nowNano, nullInt64(p.FileSize), nullString(p.LocalHash), p.ScopeKey,
+		nowNano, nowNano, nullInt64(p.FileSize), nullString(p.LocalHash), p.ScopeKey.String(),
 	)
 	if err != nil {
 		return fmt.Errorf("sync: recording sync failure for %s: %w", p.Path, err)
@@ -362,7 +362,7 @@ func (m *SyncStore) UpsertActionableFailures(ctx context.Context, failures []Act
 		if _, err := stmt.ExecContext(ctx,
 			f.Path, f.DriveID.String(), f.Direction,
 			nullString(f.IssueType), f.Error,
-			nowNano, nowNano, f.FileSize, f.ScopeKey,
+			nowNano, nowNano, f.FileSize, f.ScopeKey.String(),
 		); err != nil {
 			return fmt.Errorf("sync: upsert actionable failure for %s: %w", f.Path, err)
 		}
@@ -416,11 +416,13 @@ func (m *SyncStore) ClearResolvedActionableFailures(ctx context.Context, issueTy
 // DeleteSyncFailuresByScope removes all sync_failures rows matching the
 // given scope_key. Used when a scope source is removed (e.g., shortcut
 // deleted) to clean up orphaned failure records.
-func (m *SyncStore) DeleteSyncFailuresByScope(ctx context.Context, scopeKey string) error {
+func (m *SyncStore) DeleteSyncFailuresByScope(ctx context.Context, scopeKey ScopeKey) error {
+	wire := scopeKey.String()
+
 	_, err := m.db.ExecContext(ctx,
-		`DELETE FROM sync_failures WHERE scope_key = ?`, scopeKey)
+		`DELETE FROM sync_failures WHERE scope_key = ?`, wire)
 	if err != nil {
-		return fmt.Errorf("sync: deleting failures for scope %s: %w", scopeKey, err)
+		return fmt.Errorf("sync: deleting failures for scope %s: %w", wire, err)
 	}
 
 	return nil
@@ -431,15 +433,17 @@ func (m *SyncStore) DeleteSyncFailuresByScope(ctx context.Context, scopeKey stri
 // is in the future. The caller (engine) provides the timestamp so the
 // engine's clock is authoritative — the store doesn't decide when "now" is.
 // This is the "thundering herd" mechanism (R-2.10.11, R-2.10.15).
-func (m *SyncStore) ResetRetryTimesForScope(ctx context.Context, scopeKey string, now time.Time) error {
+func (m *SyncStore) ResetRetryTimesForScope(ctx context.Context, scopeKey ScopeKey, now time.Time) error {
+	wire := scopeKey.String()
 	nowNano := now.UnixNano()
+
 	_, err := m.db.ExecContext(ctx,
 		`UPDATE sync_failures SET next_retry_at = ?
 		WHERE scope_key = ? AND next_retry_at > ? AND category = 'transient'`,
-		nowNano, scopeKey, nowNano,
+		nowNano, wire, nowNano,
 	)
 	if err != nil {
-		return fmt.Errorf("sync: resetting retry times for scope %s: %w", scopeKey, err)
+		return fmt.Errorf("sync: resetting retry times for scope %s: %w", wire, err)
 	}
 
 	return nil
@@ -448,7 +452,7 @@ func (m *SyncStore) ResetRetryTimesForScope(ctx context.Context, scopeKey string
 // PendingRetryGroup holds aggregated counts of transient failures grouped
 // by scope_key, with the earliest next_retry_at per group.
 type PendingRetryGroup struct {
-	ScopeKey     string
+	ScopeKey     ScopeKey // typed scope key; zero value = unscoped
 	Count        int
 	EarliestNext time.Time
 }
@@ -473,10 +477,13 @@ func (m *SyncStore) PendingRetrySummary(ctx context.Context) ([]PendingRetryGrou
 	for rows.Next() {
 		var g PendingRetryGroup
 		var minNano int64
+		var wireScopeKey string
 
-		if scanErr := rows.Scan(&g.ScopeKey, &g.Count, &minNano); scanErr != nil {
+		if scanErr := rows.Scan(&wireScopeKey, &g.Count, &minNano); scanErr != nil {
 			return nil, fmt.Errorf("sync: scanning pending retry group: %w", scanErr)
 		}
+
+		g.ScopeKey = ParseScopeKey(wireScopeKey)
 
 		if minNano > 0 {
 			g.EarliestNext = time.Unix(0, minNano)
@@ -580,6 +587,7 @@ func scanSyncFailureRows(rows *sql.Rows) ([]SyncFailureRow, error) {
 
 	for rows.Next() {
 		var r SyncFailureRow
+		var wireScopeKey string
 		if scanErr := rows.Scan(
 			&r.Path, &r.DriveID, &r.Direction, &r.Category,
 			&r.IssueType, &r.ItemID,
@@ -587,11 +595,12 @@ func scanSyncFailureRows(rows *sql.Rows) ([]SyncFailureRow, error) {
 			&r.LastError, &r.HTTPStatus,
 			&r.FirstSeenAt, &r.LastSeenAt,
 			&r.FileSize, &r.LocalHash,
-			&r.ScopeKey,
+			&wireScopeKey,
 		); scanErr != nil {
 			return nil, fmt.Errorf("sync: scanning sync failure row: %w", scanErr)
 		}
 
+		r.ScopeKey = ParseScopeKey(wireScopeKey)
 		result = append(result, r)
 	}
 
