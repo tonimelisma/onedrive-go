@@ -318,6 +318,14 @@ func (e *Engine) handleRemovedShortcuts(ctx context.Context, deletedItemIDs map[
 		if err := e.baseline.DeleteShortcut(ctx, sc.ItemID); err != nil {
 			return fmt.Errorf("sync: deleting shortcut %s: %w", sc.ItemID, err)
 		}
+
+		// Discard any held actions for this shortcut's quota scope.
+		// When a shortcut is removed while a scope block exists, held
+		// actions are no longer valid — discard instead of dispatch (R-2.10.38).
+		if e.tracker != nil {
+			scKey := sc.RemoteDrive + ":" + sc.RemoteItem
+			e.tracker.DiscardScope(scopeKeyQuotaShortcut + scKey)
+		}
 	}
 
 	return nil

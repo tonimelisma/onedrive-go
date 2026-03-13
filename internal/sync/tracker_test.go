@@ -853,7 +853,6 @@ func TestGetScopeBlock(t *testing.T) {
 		"mutating the returned copy must not affect the tracker's block")
 }
 
-// ---------------------------------------------------------------------------
 // onHeld callback tests (R-2.10.5 — trial timer re-arm gap fix)
 // ---------------------------------------------------------------------------
 
@@ -971,4 +970,158 @@ func TestOnHeldCallback_FiresFromReleaseScope_CrossScope(t *testing.T) {
 	// Release throttle:account → dispatch re-checks → blocked by service → held again.
 	dt.ReleaseScope("throttle:account")
 	assert.Equal(t, int32(2), count.Load(), "cross-scope re-hold should fire onHeld again")
+}
+
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.10.12
+func TestBlockedScope_PermDir_PathPrefixMatching(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+
+	// Block a directory via perm:dir: scope.
+	block := &ScopeBlock{
+		Key:       scopeKeyPermDir + "Private",
+		IssueType: IssueLocalPermissionDenied,
+	}
+	dt.HoldScope(scopeKeyPermDir+"Private", block)
+
+	// An action UNDER the blocked directory should be held.
+	dt.Add(&Action{
+		Type: ActionDownload, Path: "Private/sub/file.txt",
+		DriveID: driveid.New("d"), ItemID: "i1",
+	}, 1, nil)
+
+	select {
+	case <-dt.Ready():
+		require.Fail(t, "action under blocked perm:dir should be held, not dispatched")
+	case <-time.After(50 * time.Millisecond):
+		// Expected — held.
+	}
+
+	// An action OUTSIDE the blocked directory should pass through.
+	dt.Add(&Action{
+		Type: ActionDownload, Path: "Public/file.txt",
+		DriveID: driveid.New("d"), ItemID: "i2",
+	}, 2, nil)
+
+	select {
+	case ta := <-dt.Ready():
+		assert.Equal(t, int64(2), ta.ID, "action outside blocked dir should pass through")
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for unblocked action")
+	}
+}
+
+// Validates: R-2.10.12
+func TestBlockedScope_PermDir_ExactMatch(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+
+	block := &ScopeBlock{
+		Key:       scopeKeyPermDir + "Private",
+		IssueType: IssueLocalPermissionDenied,
+	}
+	dt.HoldScope(scopeKeyPermDir+"Private", block)
+
+	// Action at the exact directory path should also be held.
+	dt.Add(&Action{
+		Type: ActionDownload, Path: "Private",
+		DriveID: driveid.New("d"), ItemID: "i1",
+	}, 1, nil)
+
+	select {
+	case <-dt.Ready():
+		require.Fail(t, "action at exact perm:dir path should be held")
+	case <-time.After(50 * time.Millisecond):
+		// Expected — held.
+	}
+}
+
+// Validates: R-2.10.12
+func TestBlockedScope_PermDir_PrefixMismatch(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+
+	block := &ScopeBlock{
+		Key:       scopeKeyPermDir + "Private",
+		IssueType: IssueLocalPermissionDenied,
+	}
+	dt.HoldScope(scopeKeyPermDir+"Private", block)
+
+	// "PrivateExtra/file.txt" is NOT under "Private" (partial prefix).
+	dt.Add(&Action{
+		Type: ActionDownload, Path: "PrivateExtra/file.txt",
+		DriveID: driveid.New("d"), ItemID: "i1",
+	}, 1, nil)
+
+	select {
+	case ta := <-dt.Ready():
+		assert.Equal(t, int64(1), ta.ID, "partial prefix mismatch should NOT be held")
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout — partial prefix was incorrectly held")
+	}
+}
+
+// Validates: R-2.10.38
+func TestDiscardScope_CompletesWithoutDispatch(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+
+	// Set a scope block first, then add actions that will be held.
+	dt.HoldScope(scopeKeyQuotaShortcut+"drive1:item1", &ScopeBlock{
+		TrialInterval: 5 * time.Minute,
+	})
+
+	// Add two actions targeting the blocked shortcut — they will be held.
+	dt.Add(&Action{
+		Path: "/Team Docs/c.txt", Type: ActionUpload,
+		DriveID: driveid.New("d"), ItemID: "i3",
+		targetShortcutKey: "drive1:item1",
+	}, 0, nil)
+	dt.Add(&Action{
+		Path: "/Team Docs/d.txt", Type: ActionUpload,
+		DriveID: driveid.New("d"), ItemID: "i4",
+		targetShortcutKey: "drive1:item1",
+	}, 0, nil)
+
+	// Both should be held — ready should be empty.
+	select {
+	case ta := <-dt.Ready():
+		require.Fail(t, "expected empty ready channel", "got action %d", ta.ID)
+	default:
+		// Good — nothing dispatched.
+	}
+
+	// Discard the scope — should complete without dispatching.
+	dt.DiscardScope(scopeKeyQuotaShortcut + "drive1:item1")
+
+	// Verify scope block is gone.
+	_, ok := dt.GetScopeBlock(scopeKeyQuotaShortcut + "drive1:item1")
+	assert.False(t, ok, "scope block should be cleared after discard")
+
+	// Ready channel should still be empty — actions were completed, not dispatched.
+	select {
+	case ta := <-dt.Ready():
+		require.Fail(t, "DiscardScope should NOT dispatch held actions", "got action %d", ta.ID)
+	default:
+		// Good — nothing dispatched.
+	}
+}
+
+// Validates: R-2.10.38
+func TestDiscardScope_NoOpWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+
+	// Discarding a non-existent scope should not panic.
+	dt.DiscardScope("nonexistent:scope")
+
+	_, ok := dt.GetScopeBlock("nonexistent:scope")
+	assert.False(t, ok)
 }

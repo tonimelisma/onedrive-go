@@ -3188,6 +3188,7 @@ func TestHandleTrialResult_Failure_CapsService10m(t *testing.T) {
 // deriveScopeKey
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10.2
 func TestDeriveScopeKey(t *testing.T) {
 	t.Parallel()
 
@@ -3337,8 +3338,6 @@ func TestRecordFailure_PopulatesScopeKey_507Shortcut(t *testing.T) {
 	assert.Equal(t, "quota:shortcut:driveA:item42", issues[0].ScopeKey)
 }
 
-// ---------------------------------------------------------------------------
-// E2E tests — real drainWorkerResults goroutine exercising the full flow:
 // results channel → processWorkerResult → scope detection → scope block →
 // held queue → timer fires → DispatchTrial → trial action on ready channel →
 // trial result sent back → scope release/extend.
@@ -4132,4 +4131,206 @@ func TestTrialTimer_Service_CapsAt10m(t *testing.T) {
 	got, ok := tracker.GetScopeBlock("service")
 	require.True(t, ok)
 	assert.Equal(t, 10*time.Minute, got.TrialInterval, "service should cap at 10m")
+}
+
+// clearResolvedSkippedItems
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.10.2
+func TestClearResolvedSkippedItems_AllThreeIssueTypes(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	// Record failures for each scanner-detectable issue type.
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path: "bad\x01name.txt", DriveID: driveID, Direction: "upload",
+		IssueType: IssueInvalidFilename, Category: "actionable", ErrMsg: "invalid character",
+	}, nil))
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path: "still-bad\x02.txt", DriveID: driveID, Direction: "upload",
+		IssueType: IssueInvalidFilename, Category: "actionable", ErrMsg: "invalid character",
+	}, nil))
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path: "very/long/path.txt", DriveID: driveID, Direction: "upload",
+		IssueType: IssuePathTooLong, Category: "actionable", ErrMsg: "path exceeds limit",
+	}, nil))
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path: "huge-file.bin", DriveID: driveID, Direction: "upload",
+		IssueType: IssueFileTooLarge, Category: "actionable", ErrMsg: "file too large",
+	}, nil))
+
+	// Verify all 4 failures exist.
+	all, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, all, 4)
+
+	// Simulate a new scan where only "still-bad\x02.txt" still exists as skipped.
+	// "bad\x01name.txt" was renamed, "very/long/path.txt" was shortened,
+	// "huge-file.bin" was deleted.
+	currentSkipped := []SkippedItem{
+		{Path: "still-bad\x02.txt", Reason: IssueInvalidFilename},
+	}
+
+	eng.clearResolvedSkippedItems(ctx, currentSkipped)
+
+	// Only the still-existing invalid filename should remain.
+	remaining, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, remaining, 1)
+	assert.Equal(t, "still-bad\x02.txt", remaining[0].Path)
+	assert.Equal(t, IssueInvalidFilename, remaining[0].IssueType)
+}
+
+// Validates: R-2.10.2
+func TestClearResolvedSkippedItems_EmptySkipped_ClearsAll(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	// Record one failure per type.
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path: "bad.txt", DriveID: driveID, Direction: "upload",
+		IssueType: IssueInvalidFilename, Category: "actionable", ErrMsg: "invalid",
+	}, nil))
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path: "long.txt", DriveID: driveID, Direction: "upload",
+		IssueType: IssuePathTooLong, Category: "actionable", ErrMsg: "too long",
+	}, nil))
+
+	// Empty scan — all problematic files were resolved.
+	eng.clearResolvedSkippedItems(ctx, nil)
+
+	remaining, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, remaining, "all scanner-detectable failures should be cleared when no skipped items remain")
+}
+
+// Validates: R-2.10.2
+func TestClearResolvedSkippedItems_DoesNotAffectRuntimeIssues(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	// Record a scanner-detectable failure.
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path: "bad.txt", DriveID: driveID, Direction: "upload",
+		IssueType: IssueInvalidFilename, Category: "actionable", ErrMsg: "invalid",
+	}, nil))
+
+	// Record a runtime failure (permission denied — not scanner-detectable).
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path: "Shared/folder", DriveID: driveID, Direction: "upload",
+		IssueType: IssuePermissionDenied, Category: "actionable", ErrMsg: "read-only",
+		HTTPStatus: 403,
+	}, nil))
+
+	// Clear all scanner-detectable items (empty = all resolved).
+	eng.clearResolvedSkippedItems(ctx, nil)
+
+	// Runtime failure should survive — clearResolvedSkippedItems only
+	// clears invalid_filename, path_too_long, file_too_large.
+	remaining, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, remaining, 1)
+	assert.Equal(t, IssuePermissionDenied, remaining[0].IssueType)
+}
+
+// ---------------------------------------------------------------------------
+// feedScopeDetection guard: local errors must not feed scope windows
+// ---------------------------------------------------------------------------
+
+// Validates: R-6.7.27
+func TestFeedScopeDetection_LocalErrorIgnored(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	eng.scopeState = NewScopeState(time.Now, eng.logger)
+	eng.tracker = NewDepTracker(16, eng.logger)
+
+	// Feed several local errors (HTTPStatus=0) — should not trigger a scope block.
+	for i := range 10 {
+		eng.feedScopeDetection(&WorkerResult{
+			Path:       fmt.Sprintf("file-%d.txt", i),
+			ActionType: ActionDownload,
+			HTTPStatus: 0, // local error — no HTTP status
+			Err:        os.ErrPermission,
+			ErrMsg:     "permission denied",
+		})
+	}
+
+	// No scope block should have been created.
+	_, blocked := eng.tracker.GetScopeBlock(scopeKeyService)
+	assert.False(t, blocked, "local errors with HTTPStatus=0 must not trigger service scope")
+	_, blocked = eng.tracker.GetScopeBlock(scopeKeyThrottleAccount)
+	assert.False(t, blocked, "local errors with HTTPStatus=0 must not trigger throttle scope")
+}
+
+// Validates: R-2.10.30
+func TestIsObservationSuppressed_Throttled(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng.tracker = NewDepTracker(16, eng.logger)
+
+	// Initially not suppressed.
+	assert.False(t, eng.isObservationSuppressed())
+
+	// After throttle block, should be suppressed.
+	eng.tracker.HoldScope(scopeKeyThrottleAccount, &ScopeBlock{
+		TrialInterval: 30 * time.Second,
+	})
+	assert.True(t, eng.isObservationSuppressed())
+}
+
+// Validates: R-2.10.30
+func TestIsObservationSuppressed_ServiceOutage(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng.tracker = NewDepTracker(16, eng.logger)
+
+	// Service outage should also suppress.
+	eng.tracker.HoldScope(scopeKeyService, &ScopeBlock{
+		TrialInterval: 60 * time.Second,
+	})
+	assert.True(t, eng.isObservationSuppressed())
+}
+
+// Validates: R-2.10.30
+func TestIsObservationSuppressed_NilTracker(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng.tracker = nil
+
+	// With nil tracker, should not panic and should return false.
+	assert.False(t, eng.isObservationSuppressed())
+}
+
+// Validates: R-2.10.30
+func TestIsObservationSuppressed_QuotaDoesNotSuppress(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng.tracker = NewDepTracker(16, eng.logger)
+
+	// Quota scope block should NOT suppress observation (R-2.10.31).
+	eng.tracker.HoldScope(scopeKeyQuotaOwn, &ScopeBlock{
+		TrialInterval: 5 * time.Minute,
+	})
+	assert.False(t, eng.isObservationSuppressed())
 }

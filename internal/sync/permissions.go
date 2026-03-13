@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	stdsync "sync"
@@ -316,5 +317,159 @@ func (e *Engine) recheckPermissions(ctx context.Context, bl *Baseline, shortcuts
 				slog.String("path", issue.Path),
 			)
 		}
+	}
+}
+
+// isDirAccessible returns true if the directory can be opened for reading.
+// os.Stat is insufficient — it succeeds on chmod 000 dirs because stat()
+// only requires execute on the parent. os.Open tests actual read access.
+func isDirAccessible(dir string) bool {
+	f, err := os.Open(dir)
+	if err != nil {
+		return false
+	}
+
+	f.Close()
+
+	return true
+}
+
+// handleLocalPermission processes os.ErrPermission results from workers.
+// It walks up from the failed path to find the deepest inaccessible ancestor
+// directory, records a local_permission_denied failure, and creates a scope
+// block for the directory subtree (R-2.10.12).
+func (e *Engine) handleLocalPermission(ctx context.Context, r *WorkerResult) {
+	// Walk up from the file's parent directory to find the deepest inaccessible ancestor.
+	absPath := filepath.Join(e.syncRoot, r.Path)
+	parentDir := filepath.Dir(absPath)
+
+	// Check if the parent directory is accessible (readable). os.Stat is
+	// insufficient — it succeeds on chmod 000 dirs because stat() only needs
+	// parent execute permission. os.Open tests actual read access.
+	if isDirAccessible(parentDir) {
+		// Parent directory is accessible — this is a file-level permission issue.
+		// Record the failure at file level with no scope block.
+		if recErr := e.baseline.RecordFailure(ctx, &SyncFailureParams{
+			Path:      r.Path,
+			DriveID:   e.driveID,
+			Direction: directionFromAction(r.ActionType),
+			IssueType: IssueLocalPermissionDenied,
+			Category:  "actionable",
+			ErrMsg:    "file not accessible (check filesystem permissions)",
+		}, nil); recErr != nil {
+			e.logger.Warn("handleLocalPermission: failed to record file-level issue",
+				slog.String("path", r.Path),
+				slog.String("error", recErr.Error()),
+			)
+		}
+
+		return
+	}
+
+	// Parent directory is inaccessible — walk up to find the deepest denied ancestor.
+	boundary := parentDir
+	for {
+		parent := filepath.Dir(boundary)
+		if parent == boundary {
+			break // reached filesystem root
+		}
+
+		if isDirAccessible(parent) {
+			// Parent is accessible — boundary is the deepest inaccessible dir.
+			break
+		}
+
+		boundary = parent
+	}
+
+	// Convert boundary to relative path for recording.
+	relBoundary, relErr := filepath.Rel(e.syncRoot, boundary)
+	if relErr != nil {
+		// Shouldn't happen — boundary is under syncRoot. Fall back to recording at file level.
+		e.logger.Warn("handleLocalPermission: failed to relativize boundary path",
+			slog.String("boundary", boundary),
+			slog.String("error", relErr.Error()),
+		)
+
+		return
+	}
+
+	scopeKey := scopeKeyPermDir + relBoundary
+
+	// Record one failure at the boundary directory level.
+	if recErr := e.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path:      relBoundary,
+		DriveID:   e.driveID,
+		Direction: directionFromAction(r.ActionType),
+		IssueType: IssueLocalPermissionDenied,
+		Category:  "actionable",
+		ErrMsg:    "directory not accessible (check filesystem permissions)",
+		ScopeKey:  scopeKey,
+	}, nil); recErr != nil {
+		e.logger.Warn("handleLocalPermission: failed to record directory-level issue",
+			slog.String("path", relBoundary),
+			slog.String("error", recErr.Error()),
+		)
+	}
+
+	// Create a scope block to hold all actions under this directory.
+	// TrialInterval=0 and NextTrialAt=zero: no trials — rechecked per-pass
+	// by recheckLocalPermissions() instead.
+	block := &ScopeBlock{
+		Key:       scopeKey,
+		IssueType: IssueLocalPermissionDenied,
+		BlockedAt: e.nowFunc(),
+	}
+	e.tracker.HoldScope(scopeKey, block)
+
+	e.logger.Info("local permission denied: directory blocked",
+		slog.String("boundary", relBoundary),
+		slog.String("trigger_path", r.Path),
+	)
+}
+
+// recheckLocalPermissions rechecks directory-level local permission denials
+// at the start of each sync pass. If a directory is now accessible, clears
+// the failure and releases the scope block (R-2.10.13).
+func (e *Engine) recheckLocalPermissions(ctx context.Context) {
+	issues, err := e.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
+	if err != nil || len(issues) == 0 {
+		return
+	}
+
+	for i := range issues {
+		issue := &issues[i]
+
+		// Only recheck directory-level issues (those with a perm:dir: scope key).
+		if !strings.HasPrefix(issue.ScopeKey, scopeKeyPermDir) {
+			continue
+		}
+
+		dirPath := strings.TrimPrefix(issue.ScopeKey, scopeKeyPermDir)
+		absDir := filepath.Join(e.syncRoot, dirPath)
+
+		if !isDirAccessible(absDir) {
+			// Still inaccessible — keep the block.
+			continue
+		}
+
+		// Directory is accessible again — clear the failure and release the scope.
+		if clearErr := e.baseline.ClearSyncFailure(ctx, issue.Path, issue.DriveID); clearErr != nil {
+			e.logger.Warn("recheckLocalPermissions: failed to clear failure",
+				slog.String("path", issue.Path),
+				slog.String("error", clearErr.Error()),
+			)
+
+			continue
+		}
+
+		if e.tracker != nil {
+			e.tracker.ReleaseScope(issue.ScopeKey)
+		}
+
+		e.logger.Info("local permission restored, clearing denial",
+			slog.String("path", issue.Path),
+			slog.String("scope_key", issue.ScopeKey),
+		)
 	}
 }

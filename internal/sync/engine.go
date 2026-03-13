@@ -136,6 +136,10 @@ type Engine struct {
 	trialMu    stdsync.Mutex
 	trialCh    chan struct{} // persistent, buffered(1); trial timer signals here
 
+	// lastPermRecheck tracks the last time recheckPermissions was called
+	// in watch mode, to throttle API calls to at most once per 60 seconds (R-2.10.9).
+	lastPermRecheck time.Time
+
 	// Engine-owned result counters. Workers are pure executors — the engine
 	// classifies results and owns all final disposition counts (R-6.8.9).
 	succeeded    atomic.Int32
@@ -311,6 +315,10 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 	if e.permChecker != nil && scErr == nil {
 		e.recheckPermissions(ctx, bl, shortcuts)
 	}
+
+	// Recheck local permission denials — clear scope blocks for
+	// directories that have become accessible since the last pass (R-2.10.13).
+	e.recheckLocalPermissions(ctx)
 
 	// Steps 2-4: Observe remote + local, buffer, and flush.
 	changes, err := e.observeChanges(ctx, bl, mode, opts.DryRun, opts.FullReconcile)
@@ -544,11 +552,19 @@ func (e *Engine) observeChanges(
 	}
 
 	// Process shortcuts: register new ones, remove deleted ones, observe content.
-	shortcutEvents, err := e.processShortcuts(ctx, remoteEvents, bl, dryRun)
-	if err != nil {
-		e.logger.Warn("shortcut processing failed, continuing without shortcut content",
-			slog.String("error", err.Error()),
-		)
+	// During throttle:account or service scope blocks, suppress shortcut
+	// observation to avoid wasting API calls (R-2.10.30).
+	var shortcutEvents []ChangeEvent
+
+	if e.isObservationSuppressed() {
+		e.logger.Debug("suppressing shortcut observation — global scope block active")
+	} else {
+		shortcutEvents, err = e.processShortcuts(ctx, remoteEvents, bl, dryRun)
+		if err != nil {
+			e.logger.Warn("shortcut processing failed, continuing without shortcut content",
+				slog.String("error", err.Error()),
+			)
+		}
 	}
 
 	// Filter out ChangeShortcut events from primary events — they were consumed
@@ -1178,6 +1194,16 @@ func (e *Engine) processWorkerResult(ctx context.Context, r *WorkerResult, bl *B
 		}
 
 	case resultSkip:
+		// Local permission errors get special handling — walk up to find the
+		// denied directory and create a scope block (R-2.10.12).
+		if errors.Is(r.Err, os.ErrPermission) {
+			e.handleLocalPermission(ctx, r)
+			e.tracker.Complete(r.ActionID)
+			e.recordError(r)
+
+			break
+		}
+
 		if r.HTTPStatus == http.StatusForbidden && e.permChecker != nil {
 			e.handle403(ctx, bl, r.Path, shortcuts)
 		}
@@ -1232,10 +1258,31 @@ func (e *Engine) handleTrialResult(ctx context.Context, r *WorkerResult) {
 // feedScopeDetection feeds a worker result into scope detection sliding
 // windows. If a threshold is crossed, creates a scope block. Handles both
 // regular failures and 400 outage patterns.
+// isObservationSuppressed returns true if a global scope block
+// (throttle:account or service) is active, meaning shortcut observation
+// polling should be skipped to avoid wasting API calls (R-2.10.30).
+func (e *Engine) isObservationSuppressed() bool {
+	if e.tracker == nil {
+		return false
+	}
+
+	_, throttled := e.tracker.GetScopeBlock(scopeKeyThrottleAccount)
+	_, serviceDown := e.tracker.GetScopeBlock(scopeKeyService)
+
+	return throttled || serviceDown
+}
+
 func (e *Engine) feedScopeDetection(r *WorkerResult) {
 	if e.scopeState == nil {
 		return
 	}
+
+	// Local errors (HTTPStatus==0) must not feed scope detection windows.
+	// Only remote API errors should increment service/quota counters (R-6.7.27).
+	if r.HTTPStatus == 0 {
+		return
+	}
+
 	sr := e.scopeState.UpdateScope(r)
 	if sr.Block {
 		e.applyScopeBlock(sr)
@@ -1615,6 +1662,24 @@ func (e *Engine) processBatch(
 	e.logger.Info("processing watch batch",
 		slog.Int("paths", len(batch)),
 	)
+
+	// Periodically recheck permissions in watch mode (R-2.10.9).
+	// Throttled to at most once per 60 seconds to avoid API hammering.
+	const permRecheckInterval = 60 * time.Second
+
+	now := time.Now()
+	if now.Sub(e.lastPermRecheck) >= permRecheckInterval {
+		e.lastPermRecheck = now
+
+		if e.permChecker != nil {
+			shortcuts, err := e.baseline.ListShortcuts(ctx)
+			if err == nil {
+				e.recheckPermissions(ctx, bl, shortcuts)
+			}
+		}
+
+		e.recheckLocalPermissions(ctx)
+	}
 
 	denied := e.permCache.deniedPrefixes()
 	plan, err := e.planner.Plan(batch, bl, mode, safety, denied)
