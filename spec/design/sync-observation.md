@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/observer_local.go, internal/sync/observer_local_handlers.go, internal/sync/observer_remote.go, internal/sync/item_converter.go, internal/sync/scanner.go, internal/sync/buffer.go, internal/sync/shortcuts.go, internal/sync/permissions.go, internal/sync/inotify_linux.go, internal/sync/inotify_other.go
 
-Implements: R-2.1.2 [verified], R-2.4 [implemented], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.15 [planned], R-6.7.16 [planned], R-6.7.19 [planned], R-6.7.20 [verified], R-6.7.21 [planned], R-6.7.24 [verified], R-2.11 [implemented], R-2.11.5 [implemented], R-2.12 [planned], R-2.13.1 [verified], R-2.14.1 [verified], R-2.14.3 [verified], R-2.14.4 [verified]
+Implements: R-2.1.2 [verified], R-2.4 [implemented], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.15 [planned], R-6.7.16 [planned], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [planned], R-6.7.24 [verified], R-2.11 [implemented], R-2.11.5 [implemented], R-2.12 [planned], R-2.13.1 [verified], R-2.14.1 [verified], R-2.14.3 [verified], R-2.14.4 [verified]
 
 ## Remote Observer (`observer_remote.go`)
 
@@ -97,7 +97,6 @@ Implements: R-6.2.7 [verified]
 
 - Debounce semantics under load: write coalescing implemented, load-testing and tuning remaining. [planned]
 - Streaming delta processing: process pages as they arrive rather than buffering all pages. Modest win (~1ms per page vs ~100-300ms API call). [planned]
-- Total item cap during delta enumeration to bound memory from unbounded API pages. [planned]
 - Per-path event cap in Buffer: `defaultBufferMaxPaths` caps path count but not events-per-path. [planned]
 - Nil guards on all Item field accesses in `observer_remote.go`: delta items may have missing `Name`, `ParentReference`, etc. [planned]
 - Buffer overflow test with drop metric verification. [planned]

@@ -22,10 +22,10 @@ var ErrDeltaExpired = errors.New("sync: delta token expired (resync required)")
 
 // Constants for the remote observer (satisfy mnd linter).
 const (
-	maxObserverPages   = 10000
-	maxPathDepth       = 256
-	minPollInterval    = 30 * time.Second
-	specialFolderVault = "vault" // Graph API personal vault folder name
+	maxDeltaPaginationGuard = 10000
+	maxPathDepth            = 256
+	minPollInterval         = 30 * time.Second
+	specialFolderVault      = "vault" // Graph API personal vault folder name
 )
 
 // RemoteObserver transforms Graph API delta responses into []ChangeEvent.
@@ -95,7 +95,7 @@ func (o *RemoteObserver) FullDelta(ctx context.Context, savedToken string) ([]Ch
 	inflight := make(map[driveid.ItemKey]inflightParent)
 	token := savedToken
 
-	for page := range maxObserverPages {
+	for page := range maxDeltaPaginationGuard {
 		pageEvents, newToken, done, err := o.fetchPage(ctx, token, page, inflight)
 		if err != nil {
 			o.stats.errors.Add(1)
@@ -121,7 +121,7 @@ func (o *RemoteObserver) FullDelta(ctx context.Context, savedToken string) ([]Ch
 		token = newToken
 	}
 
-	return nil, "", fmt.Errorf("sync: exceeded maximum page count (%d)", maxObserverPages)
+	return nil, "", fmt.Errorf("sync: exceeded maximum page count (%d)", maxDeltaPaginationGuard)
 }
 
 // Watch continuously polls for remote delta changes and sends events to the
