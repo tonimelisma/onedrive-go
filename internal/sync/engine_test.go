@@ -2136,6 +2136,7 @@ func TestChangeEventsToObservedItems_MapsAllFields(t *testing.T) {
 // Zero-event guard tests (Step 1)
 // ---------------------------------------------------------------------------
 
+// Validates: R-6.7.19
 func TestObserveAndCommitRemote_ZeroEvents_NoTokenAdvance(t *testing.T) {
 	t.Parallel()
 
@@ -2839,7 +2840,7 @@ func TestProcessWorkerResult_Success_NoRecords(t *testing.T) {
 // classifyResult — pure classification of WorkerResult (R-6.8.15)
 // ---------------------------------------------------------------------------
 
-// Validates: R-6.8.15
+// Validates: R-6.8.15, R-6.7.12
 func TestClassifyResult(t *testing.T) {
 	t.Parallel()
 

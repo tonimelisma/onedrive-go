@@ -270,7 +270,7 @@ func TestCreateUploadSession_DecodeError(t *testing.T) {
 	assert.Contains(t, err.Error(), "decoding upload session response")
 }
 
-// Validates: R-5.3
+// Validates: R-5.3, R-5.6.6
 func TestUploadChunk_Intermediate(t *testing.T) {
 	chunkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPut, r.Method)
@@ -475,6 +475,7 @@ func TestSimpleUploadMaxSize(t *testing.T) {
 	assert.Equal(t, 4194304, SimpleUploadMaxSize)
 }
 
+// Validates: R-5.6.4
 func TestCreateUploadSession_WithFileSystemInfo(t *testing.T) {
 	mtime := time.Date(2024, 6, 15, 10, 30, 0, 0, time.UTC)
 
@@ -504,6 +505,7 @@ func TestCreateUploadSession_WithFileSystemInfo(t *testing.T) {
 	assert.Equal(t, UploadURL("https://upload.example.com/session/fsi"), session.UploadURL)
 }
 
+// Validates: R-5.6.4
 func TestCreateUploadSession_WithoutFileSystemInfo(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
@@ -726,6 +728,7 @@ func TestUpload_SimpleForSmallFile(t *testing.T) {
 	assert.Equal(t, "small.txt", item.Name)
 }
 
+// Validates: R-5.6.5
 func TestUpload_SimplePreservesMtime(t *testing.T) {
 	// When mtime is non-zero, Upload() should call UpdateFileSystemInfo
 	// after the simple upload to preserve local mtime on the server.
@@ -1239,6 +1242,162 @@ func TestResumeUpload_SessionExpired(t *testing.T) {
 	_, err := client.ResumeUpload(t.Context(), session, bytes.NewReader(nil), 1024, nil)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrUploadSessionExpired)
+}
+
+// Validates: R-5.6.2
+func TestCreateUploadSession_NoIfMatchHeader(t *testing.T) {
+	// Upload session creation must NOT include an If-Match header.
+	// The eTag can change during session creation itself (server-side race),
+	// causing an immediate 412 Precondition Failed that cascades into 416 errors.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Empty(t, r.Header.Get("If-Match"),
+			"CreateUploadSession must not send If-Match header")
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{
+			"uploadUrl": "https://upload.example.com/session/no-if-match",
+			"expirationDateTime": "2024-12-31T23:59:59Z"
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.CreateUploadSession(
+		t.Context(), driveid.New("d"), "parent", "file.bin", 10485760, time.Time{},
+	)
+	require.NoError(t, err)
+}
+
+// Validates: R-5.6.3
+func TestUpload_ChunkedCancelsSession_CanceledContext(t *testing.T) {
+	// When the parent context is canceled during a chunked upload, the session
+	// cancel request must still fire using context.Background(). This prevents
+	// server-side quota leaks from orphaned upload sessions.
+	fileSize := int64(SimpleUploadMaxSize + 1)
+	content := bytes.Repeat([]byte("Z"), int(fileSize))
+
+	ctx, cancel := context.WithCancel(t.Context())
+
+	var sessionCanceled atomic.Int32
+
+	chunkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			sessionCanceled.Add(1)
+			w.WriteHeader(http.StatusNoContent)
+
+			return
+		}
+
+		// Cancel the parent context before responding to the chunk upload.
+		// This simulates a context cancellation during upload.
+		cancel()
+
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, `{"error":"server error"}`)
+	}))
+	defer chunkSrv.Close()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `{
+			"uploadUrl": "%s/upload",
+			"expirationDateTime": "2024-12-31T23:59:59Z"
+		}`, chunkSrv.URL)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.Upload(
+		ctx, driveid.New("d"), "parent", "cancel-test.bin",
+		bytes.NewReader(content), fileSize, time.Time{}, nil,
+	)
+	require.Error(t, err)
+	assert.Equal(t, int32(1), sessionCanceled.Load(),
+		"session cancel DELETE must fire even when parent context is canceled")
+}
+
+// Validates: R-5.6.7
+func TestUpload_ZeroByte_UsesSimple(t *testing.T) {
+	// Zero-byte files must use simple PUT upload, not create an upload session.
+	// The upload session API requires at least one non-empty fragment.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPut, r.Method,
+			"zero-byte upload should use PUT (simple upload)")
+		assert.Contains(t, r.URL.Path, "/content",
+			"zero-byte upload should target /content endpoint")
+		assert.NotContains(t, r.URL.Path, "createUploadSession",
+			"zero-byte upload must not create an upload session")
+
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		assert.Empty(t, body, "zero-byte upload body should be empty")
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{
+			"id": "zero-byte-item",
+			"name": "empty.txt",
+			"size": 0,
+			"createdDateTime": "2024-06-01T12:00:00Z",
+			"lastModifiedDateTime": "2024-06-01T12:00:00Z",
+			"parentReference": {"id": "parent", "driveId": "d"},
+			"file": {"mimeType": "text/plain"}
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	item, err := client.Upload(
+		t.Context(), driveid.New("d"), "parent", "empty.txt",
+		bytes.NewReader(nil), 0, time.Time{}, nil,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "zero-byte-item", item.ID)
+	assert.Equal(t, int64(0), item.Size)
+}
+
+// Validates: R-5.6.8
+func TestUpload_NoPostUploadMetadataQuery(t *testing.T) {
+	// After upload completion, the system must NOT re-query file metadata.
+	// Server-side processing (virus scan, indexing) can temporarily show incorrect
+	// values. The upload completion response itself contains the correct metadata.
+	var requestCount atomic.Int32
+
+	content := []byte("no-requery-content")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+
+		if r.Method == http.MethodGet {
+			assert.Fail(t, "unexpected GET request after upload",
+				"path=%s — must not re-query metadata after upload", r.URL.Path)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprintf(w, `{
+			"id": "no-requery-item",
+			"name": "norequery.txt",
+			"size": %d,
+			"createdDateTime": "2024-06-01T12:00:00Z",
+			"lastModifiedDateTime": "2024-06-01T12:00:00Z",
+			"parentReference": {"id": "parent", "driveId": "d"},
+			"file": {"mimeType": "text/plain"}
+		}`, len(content))
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	item, err := client.Upload(
+		t.Context(), driveid.New("d"), "parent", "norequery.txt",
+		bytes.NewReader(content), int64(len(content)), time.Time{}, nil,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "no-requery-item", item.ID)
+	assert.Equal(t, int32(1), requestCount.Load(),
+		"only 1 request (the PUT upload) should be made — no GET for metadata")
 }
 
 func TestQueryUploadSession_RetriesOn429(t *testing.T) {

@@ -574,6 +574,7 @@ func TestToSite_AllFields(t *testing.T) {
 
 // --- Drives 403 retry tests ---
 
+// Validates: R-6.7.13
 func TestDrives_Transient403_Recovers(t *testing.T) {
 	// Microsoft Graph occasionally returns transient 403 on /me/drives
 	// during token propagation. Drives() should retry and succeed.
