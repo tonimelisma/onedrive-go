@@ -4475,3 +4475,143 @@ func TestLogFailureSummary_NoErrors(t *testing.T) {
 	assert.Empty(t, eng.syncErrors)
 	eng.syncErrorsMu.Unlock()
 }
+
+// ---------------------------------------------------------------------------
+// Transient retry pipeline integration test
+//
+// Exercises the end-to-end path: action dispatch → 503 failure →
+// sync_failures persistence → FailureRetrier picks up due row →
+// re-injects synthesized ChangeEvent into Buffer.
+//
+// Individual components (recordFailure, FailureRetrier.reconcile, Buffer.Add)
+// are unit-tested separately; this test verifies the full wiring.
+// ---------------------------------------------------------------------------
+
+// startDrainLoopWithRetrier extends startDrainLoop by adding a real Buffer
+// and FailureRetrier, creating the full transient retry pipeline. Clock
+// control ensures deterministic retrier behavior without real sleeps.
+func startDrainLoopWithRetrier(t *testing.T) (chan WorkerResult, <-chan *TrackedAction, context.CancelFunc, *Engine, *Buffer) {
+	t.Helper()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+
+	// Fix the SyncStore clock so RecordFailure computes a known next_retry_at.
+	// With retry.Reconcile.Delay(0) ≈ 1s (±25% jitter), next_retry_at will be
+	// at most time.Unix(1000,0) + 1.25s = time.Unix(1001, 250_000_000).
+	storeTime := time.Unix(1000, 0)
+	eng.baseline.nowFunc = func() time.Time { return storeTime }
+
+	// Engine clock matches the store clock for scope detection consistency.
+	eng.nowFn = func() time.Time { return storeTime }
+
+	tracker := NewPersistentDepTracker(eng.logger)
+	tracker.onHeld = func() { eng.armTrialTimer() }
+	eng.tracker = tracker
+	eng.scopeState = NewScopeState(eng.nowFunc, eng.logger)
+
+	buf := NewBuffer(eng.logger)
+
+	// Retrier clock is 5s ahead — always past the first backoff delay,
+	// so ListSyncFailuresForRetry returns the row on first sweep after Kick().
+	retrierTime := time.Unix(1005, 0)
+	retrier := NewFailureRetrier(eng.baseline, buf, tracker, eng.logger)
+	retrier.nowFunc = func() time.Time { return retrierTime }
+	eng.retrier = retrier
+
+	results := make(chan WorkerResult, 16)
+	ready := tracker.Ready()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	go eng.drainWorkerResults(ctx, results, nil)
+	go retrier.Run(ctx)
+
+	return results, ready, cancel, eng, buf
+}
+
+// Validates: R-6.8.10, R-6.8.11, R-6.8.7
+func TestRetryPipeline_TransientFailure_RetrierReinjects(t *testing.T) {
+	t.Parallel()
+
+	results, ready, cancel, eng, buf := startDrainLoopWithRetrier(t)
+	defer cancel()
+
+	ctx := t.Context()
+	driveID := driveid.New(engineTestDriveID)
+	testPath := "docs/report.pdf"
+
+	// ---------------------------------------------------------------
+	// Phase A: 503 failure → sync_failures → retrier re-injection
+	// ---------------------------------------------------------------
+
+	// Dispatch a download action and simulate a worker picking it up.
+	eng.tracker.Add(&Action{
+		Type:    ActionDownload,
+		Path:    testPath,
+		DriveID: driveID,
+		ItemID:  "item-abc",
+	}, 0, nil)
+	readReady(t, ready)
+
+	// Send a 503 result — classifies as resultRequeue (transient).
+	results <- WorkerResult{
+		ActionID:   0,
+		Path:       testPath,
+		ActionType: ActionDownload,
+		DriveID:    driveID,
+		Success:    false,
+		HTTPStatus: http.StatusServiceUnavailable,
+		ErrMsg:     "service unavailable",
+		Err:        fmt.Errorf("service unavailable"),
+	}
+
+	// Verify: sync_failures row created with correct fields.
+	require.Eventually(t, func() bool {
+		rows, err := eng.baseline.ListSyncFailures(ctx)
+		return err == nil && len(rows) == 1
+	}, time.Second, time.Millisecond, "sync_failures row should be created")
+
+	rows, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+
+	row := rows[0]
+	assert.Equal(t, testPath, row.Path, "failure path")
+	assert.Equal(t, "download", row.Direction, "failure direction")
+	assert.Equal(t, "transient", row.Category, "failure category")
+	assert.Equal(t, http.StatusServiceUnavailable, row.HTTPStatus, "HTTP status")
+	assert.Equal(t, 1, row.FailureCount, "failure count")
+	assert.Greater(t, row.NextRetryAt, int64(0), "next_retry_at should be set for transient failures")
+
+	// Verify: tracker completed the action (no longer in-flight).
+	require.Eventually(t, func() bool {
+		return !eng.tracker.HasInFlight(testPath)
+	}, time.Second, time.Millisecond, "action should be completed in tracker")
+
+	// Verify: retrier picked up the due row and re-injected into the buffer.
+	// The retrier runs on Kick() from processWorkerResult, and its clock (t=1005)
+	// is past the next_retry_at (≈t=1001), so the row is due immediately.
+	require.Eventually(t, func() bool {
+		return buf.Len() > 0
+	}, 2*time.Second, 5*time.Millisecond, "retrier should inject event into buffer")
+
+	// Verify: the synthesized event matches what the planner expects.
+	flushed := buf.FlushImmediate()
+	require.Len(t, flushed, 1, "should have exactly one path in buffer")
+	assert.Equal(t, testPath, flushed[0].Path, "buffered path")
+
+	// Download failures produce SourceRemote + ChangeModify events.
+	require.Len(t, flushed[0].RemoteEvents, 1, "should have one remote event")
+	ev := flushed[0].RemoteEvents[0]
+	assert.Equal(t, SourceRemote, ev.Source, "event source")
+	assert.Equal(t, ChangeModify, ev.Type, "event type")
+	assert.Equal(t, testPath, ev.Path, "event path")
+
+	// ---------------------------------------------------------------
+	// Phase B: Verify engine counters reflect the failure
+	// ---------------------------------------------------------------
+
+	// The 503 increments the failed counter via recordError.
+	assert.Equal(t, int32(1), eng.failed.Load(), "failed counter")
+	assert.Equal(t, int32(0), eng.succeeded.Load(), "succeeded counter (no success yet)")
+}
