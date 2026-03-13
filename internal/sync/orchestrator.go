@@ -136,6 +136,18 @@ func (o *Orchestrator) prepareDriveWork(ctx context.Context, mode SyncMode, opts
 func (o *Orchestrator) buildEngineWork(
 	rd *config.ResolvedDrive, session *driveops.Session, mode SyncMode, opts RunOpts,
 ) driveWork {
+	minFree, parseErr := config.ParseSize(rd.MinFreeSpace)
+	if parseErr != nil {
+		capturedErr := fmt.Errorf("invalid min_free_space %q: %w", rd.MinFreeSpace, parseErr)
+
+		return driveWork{
+			runner: &DriveRunner{canonID: rd.CanonicalID, displayName: rd.DisplayName},
+			fn: func(_ context.Context) (*SyncReport, error) {
+				return nil, capturedErr
+			},
+		}
+	}
+
 	engine, engineErr := o.engineFactory(&EngineConfig{
 		DBPath:             rd.StatePath(),
 		SyncRoot:           rd.SyncDir,
@@ -151,6 +163,7 @@ func (o *Orchestrator) buildEngineWork(
 		TransferWorkers:    rd.TransferWorkers,
 		CheckWorkers:       rd.CheckWorkers,
 		BigDeleteThreshold: rd.BigDeleteThreshold,
+		MinFreeSpace:       minFree,
 	})
 	if engineErr != nil {
 		capturedErr := engineErr
@@ -274,6 +287,11 @@ func (o *Orchestrator) startWatchRunner(
 		return nil, fmt.Errorf("session error for drive %s: %w", rd.CanonicalID, err)
 	}
 
+	minFreeW, parseErr := config.ParseSize(rd.MinFreeSpace)
+	if parseErr != nil {
+		return nil, fmt.Errorf("invalid min_free_space %q for %s: %w", rd.MinFreeSpace, rd.CanonicalID, parseErr)
+	}
+
 	engine, engineErr := o.engineFactory(&EngineConfig{
 		DBPath:             rd.StatePath(),
 		SyncRoot:           rd.SyncDir,
@@ -289,6 +307,7 @@ func (o *Orchestrator) startWatchRunner(
 		TransferWorkers:    rd.TransferWorkers,
 		CheckWorkers:       rd.CheckWorkers,
 		BigDeleteThreshold: rd.BigDeleteThreshold,
+		MinFreeSpace:       minFreeW,
 	})
 	if engineErr != nil {
 		return nil, fmt.Errorf("engine creation failed for %s: %w", rd.CanonicalID, engineErr)

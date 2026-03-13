@@ -121,8 +121,8 @@ Failure tracking, scope-based classification, and lifecycle management. Each fai
 - R-2.10.40: Permission boundary walking on shortcuts shall not walk above the shortcut root. The shortcut root is the natural boundary. [verified]
 - R-2.10.41: When a download, delete, or move action succeeds, the system shall clear any corresponding `sync_failures` entry for that path. [verified]
 - R-2.10.42: The scope detection sliding window shall accept results from concurrent workers. A success from any path in the scope shall reset the unique-path failure counter, preventing false scope blocks from interleaved results. [verified]
-- R-2.10.43: When available disk space falls below `min_free_space`, the system shall set a `disk:local` scope block suppressing all downloads. Trial timing shall start at 5 minutes, double on failure, with a maximum of 1 hour. [planned]
-- R-2.10.44: When available disk space is above `min_free_space` but below file size plus `min_free_space`, the system shall record a per-file failure without scope escalation. Smaller files that fit within available space may still download. [planned]
+- R-2.10.43: When available disk space falls below `min_free_space`, the system shall set a `disk:local` scope block suppressing all downloads. Trial timing shall start at 5 minutes, double on failure, with a maximum of 1 hour. [verified]
+- R-2.10.44: When available disk space is above `min_free_space` but below file size plus `min_free_space`, the system shall record a per-file failure without scope escalation. Smaller files that fit within available space may still download. [verified]
 
 ## R-2.11 Filename Validation [implemented]
 
@@ -134,10 +134,10 @@ The system shall validate filenames against OneDrive naming restrictions before 
 - R-2.11.4: The system shall reject local files with trailing dots or leading/trailing whitespace. [implemented]
 - R-2.11.5: When the scanner filters a file due to naming restrictions, the system shall record it as an actionable issue (not silently skip with only a DEBUG log). [implemented]
 
-## R-2.12 Case Collision Handling [planned]
+## R-2.12 Case Collision Handling [verified]
 
-- R-2.12.1: Before uploading, the system shall detect local case-insensitive filename collisions (e.g., `file.txt` vs `File.txt`) and flag them as conflicts rather than attempting upload. [planned]
-- R-2.12.2: When a case collision is detected, neither colliding file shall be uploaded until the collision is resolved. [planned]
+- R-2.12.1: Before uploading, the system shall detect local case-insensitive filename collisions (e.g., `file.txt` vs `File.txt`) and flag them as conflicts rather than attempting upload. [verified]
+- R-2.12.2: When a case collision is detected, neither colliding file shall be uploaded until the collision is resolved. [verified]
 
 ## R-2.13 Unicode Normalization [verified]
 

@@ -147,6 +147,14 @@ func (o *LocalObserver) FullScan(ctx context.Context, syncRoot string) (ScanResu
 		skipped = append(skipped, hashSkipped...)
 	}
 
+	// Phase 2.5: Case collision detection — run after hashing (events finalized)
+	// but before deletion detection. Colliding files stay in the observed map
+	// (set in Phase 1) to prevent Phase 3 from generating spurious ChangeDelete
+	// events for files that exist locally but were excluded from events (R-2.12.1).
+	var caseSkipped []SkippedItem
+	events, caseSkipped = detectCaseCollisions(events)
+	skipped = append(skipped, caseSkipped...)
+
 	// Phase 3: Deletion detection.
 	deletions := o.detectDeletions(observed)
 	events = append(events, deletions...)
@@ -448,6 +456,79 @@ func (o *LocalObserver) classifyFileChange(
 	})
 
 	return nil
+}
+
+// detectCaseCollisions finds events where two paths in the same directory
+// differ only in case. Both colliders are removed from events and returned
+// as SkippedItems. OneDrive uses a case-insensitive namespace — uploading
+// both would cause one to silently overwrite the other (R-2.12.1).
+//
+// O(n) time, O(n) memory. Pure function — no side effects.
+func detectCaseCollisions(events []ChangeEvent) (clean []ChangeEvent, collisions []SkippedItem) {
+	if len(events) == 0 {
+		return nil, nil
+	}
+
+	// Group event indices by (directory, lowercase name).
+	type groupKey struct {
+		dir     string
+		lowName string
+	}
+	groups := make(map[groupKey][]int, len(events))
+
+	for i := range events {
+		dir := filepath.Dir(events[i].Path)
+		lowName := strings.ToLower(filepath.Base(events[i].Path))
+		key := groupKey{dir: dir, lowName: lowName}
+		groups[key] = append(groups[key], i)
+	}
+
+	// Build the collider set — all indices that participate in a collision.
+	colliderSet := make(map[int]struct{})
+	for _, indices := range groups {
+		if len(indices) <= 1 {
+			continue
+		}
+		for _, idx := range indices {
+			colliderSet[idx] = struct{}{}
+		}
+	}
+
+	if len(colliderSet) == 0 {
+		return events, nil
+	}
+
+	// Build SkippedItems with Detail naming the other collider(s).
+	collisions = make([]SkippedItem, 0, len(colliderSet))
+	for _, indices := range groups {
+		if len(indices) <= 1 {
+			continue
+		}
+		for i, idx := range indices {
+			// Collect names of the OTHER colliders for the Detail field.
+			var others []string
+			for j, otherIdx := range indices {
+				if j != i {
+					others = append(others, filepath.Base(events[otherIdx].Path))
+				}
+			}
+			collisions = append(collisions, SkippedItem{
+				Path:   events[idx].Path,
+				Reason: IssueCaseCollision,
+				Detail: fmt.Sprintf("conflicts with %s", strings.Join(others, ", ")),
+			})
+		}
+	}
+
+	// Build clean events — those not in the collider set.
+	clean = make([]ChangeEvent, 0, len(events)-len(colliderSet))
+	for i := range events {
+		if _, collider := colliderSet[i]; !collider {
+			clean = append(clean, events[i])
+		}
+	}
+
+	return clean, collisions
 }
 
 // detectDeletions finds baseline entries that were not observed during the

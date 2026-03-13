@@ -461,6 +461,8 @@ func TestMaxTrialIntervalForIssueType(t *testing.T) {
 		want      time.Duration
 	}{
 		{"quota_exceeded", 1 * time.Hour},
+		// Validates: R-2.10.43
+		{IssueDiskFull, 1 * time.Hour}, // same cap as quota — disk free changes slowly
 		{"rate_limited", 10 * time.Minute},
 		{"service_outage", 10 * time.Minute},
 		{"unknown_type", 10 * time.Minute}, // default

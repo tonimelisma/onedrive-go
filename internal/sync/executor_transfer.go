@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -22,6 +23,14 @@ func (e *Executor) executeDownload(ctx context.Context, action *Action) Outcome 
 	targetPath, err := containedPath(e.syncRoot, action.Path)
 	if err != nil {
 		return e.failedOutcome(action, ActionDownload, err)
+	}
+
+	// Disk space pre-check (R-6.2.6, R-2.10.43, R-2.10.44).
+	// Runs before the download to avoid partial writes and .partial cleanup.
+	if e.minFreeSpace > 0 {
+		if o, blocked := e.checkDiskSpace(action); blocked {
+			return o
+		}
 	}
 
 	driveID := e.resolveDriveID(action)
@@ -110,4 +119,41 @@ func (e *Executor) executeUpload(ctx context.Context, action *Action) Outcome {
 		Mtime:      result.Mtime.UnixNano(),
 		ETag:       result.Item.ETag,
 	}
+}
+
+// checkDiskSpace verifies sufficient disk space before a download. Returns
+// (outcome, true) if the download should be blocked, (zero, false) otherwise.
+//
+// Two-tier check (R-6.2.6):
+//   - Available < minFreeSpace → ErrDiskFull (scope block)
+//   - Available >= minFreeSpace but < fileSize + minFreeSpace → ErrFileTooLargeForSpace (per-file skip)
+func (e *Executor) checkDiskSpace(action *Action) (Outcome, bool) {
+	available, err := diskAvailableFunc(e.syncRoot)
+	if err != nil {
+		// If we can't query disk space, proceed with the download rather
+		// than blocking all downloads due to a transient statfs error.
+		return Outcome{}, false
+	}
+
+	minFree := uint64(e.minFreeSpace)
+	if available < minFree {
+		return e.failedOutcome(action, ActionDownload,
+			fmt.Errorf("%w: available %d bytes < min_free_space %d bytes", ErrDiskFull, available, minFree),
+		), true
+	}
+
+	// Check per-file: can this specific file fit within available - minFreeSpace?
+	var remoteSize int64
+	if action.View != nil && action.View.Remote != nil {
+		remoteSize = action.View.Remote.Size
+	}
+
+	if remoteSize > 0 && available < uint64(remoteSize)+minFree {
+		return e.failedOutcome(action, ActionDownload,
+			fmt.Errorf("%w: need %d bytes, available %d bytes (after reserving %d)",
+				ErrFileTooLargeForSpace, remoteSize, available-minFree, minFree),
+		), true
+	}
+
+	return Outcome{}, false
 }

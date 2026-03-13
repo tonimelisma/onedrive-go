@@ -3018,6 +3018,20 @@ func TestClassifyResult(t *testing.T) {
 			wantClass: resultSkip,
 			wantScope: "",
 		},
+		// Validates: R-2.10.43
+		{
+			name:      "disk_full",
+			result:    WorkerResult{Err: fmt.Errorf("download failed: %w", ErrDiskFull)},
+			wantClass: resultScopeBlock,
+			wantScope: "disk:local",
+		},
+		// Validates: R-2.10.44
+		{
+			name:      "file_too_large_for_space",
+			result:    WorkerResult{Err: fmt.Errorf("download failed: %w", ErrFileTooLargeForSpace)},
+			wantClass: resultSkip,
+			wantScope: "",
+		},
 	}
 
 	for _, tt := range tests {
@@ -4250,6 +4264,42 @@ func TestClearResolvedSkippedItems_DoesNotAffectRuntimeIssues(t *testing.T) {
 	assert.Equal(t, IssuePermissionDenied, remaining[0].IssueType)
 }
 
+// Validates: R-2.12.2
+func TestClearResolvedSkippedItems_CaseCollision(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	// Record case collision failures.
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path: "File.txt", DriveID: driveID, Direction: "upload",
+		IssueType: IssueCaseCollision, Category: "actionable",
+		ErrMsg: "conflicts with file.txt",
+	}, nil))
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path: "file.txt", DriveID: driveID, Direction: "upload",
+		IssueType: IssueCaseCollision, Category: "actionable",
+		ErrMsg: "conflicts with File.txt",
+	}, nil))
+
+	// Verify both exist.
+	all, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, all, 2)
+
+	// Simulate user renaming one collider — next scan finds zero case collisions.
+	eng.clearResolvedSkippedItems(ctx, nil)
+
+	// Both case collision entries should be cleared.
+	remaining, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, remaining, "case collision failures should be auto-cleared when resolved")
+}
+
 // ---------------------------------------------------------------------------
 // feedScopeDetection guard: local errors must not feed scope windows
 // ---------------------------------------------------------------------------
@@ -4369,6 +4419,11 @@ func TestIssueTypeForHTTPStatus(t *testing.T) {
 		{"404_transient_not_found", http.StatusNotFound, nil, "transient_not_found"},
 		{"423_resource_locked", http.StatusLocked, nil, "resource_locked"},
 		{"permission_error", 0, os.ErrPermission, IssueLocalPermissionDenied},
+		// Validates: R-2.10.43
+		{"disk_full", 0, ErrDiskFull, IssueDiskFull},
+		{"wrapped_disk_full", 0, fmt.Errorf("download: %w", ErrDiskFull), IssueDiskFull},
+		// Validates: R-2.10.44
+		{"file_too_large_for_space", 0, ErrFileTooLargeForSpace, IssueFileTooLargeForSpace},
 		{"unknown_status", 418, nil, ""},
 		{"zero_status_no_error", 0, nil, ""},
 	}

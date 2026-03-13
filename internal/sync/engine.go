@@ -46,10 +46,11 @@ type EngineConfig struct {
 	RecursiveLister    RecursiveLister     // optional: recursive listing for shortcut observation (6.4b)
 	PermChecker        PermissionChecker   // optional: permission checking for shared folders (6.4c)
 	Logger             *slog.Logger
-	UseLocalTrash      bool // move deleted local files to OS trash instead of permanent delete
-	TransferWorkers    int  // goroutine count for the worker pool (0 → minWorkers)
-	CheckWorkers       int  // goroutine limit for parallel file hashing (0 → 4)
-	BigDeleteThreshold int  // max delete actions before big-delete protection triggers (0 → defaultBigDeleteThreshold)
+	UseLocalTrash      bool  // move deleted local files to OS trash instead of permanent delete
+	TransferWorkers    int   // goroutine count for the worker pool (0 → minWorkers)
+	CheckWorkers       int   // goroutine limit for parallel file hashing (0 → 4)
+	BigDeleteThreshold int   // max delete actions before big-delete protection triggers (0 → defaultBigDeleteThreshold)
+	MinFreeSpace       int64 // minimum free disk space (bytes) before downloads; 0 disables (R-6.4.7)
 }
 
 // RunOpts holds per-pass options for RunOnce.
@@ -180,6 +181,8 @@ func NewEngine(cfg *EngineConfig) (*Engine, error) {
 	if cfg.UseLocalTrash {
 		execCfg.trashFunc = defaultTrashFunc
 	}
+
+	execCfg.minFreeSpace = cfg.MinFreeSpace
 
 	// Construct sessionStore and TransferManager together so the TM is
 	// immutable after creation (no post-hoc field mutation).
@@ -1114,6 +1117,14 @@ func classifyResult(r *WorkerResult) (resultClass, string) {
 		r.HTTPStatus == http.StatusLocked:
 		return resultRequeue, ""
 
+	case errors.Is(r.Err, ErrDiskFull):
+		// Deterministic signal — immediate scope block, no sliding window (R-2.10.43).
+		return resultScopeBlock, scopeKeyDiskLocal
+
+	case errors.Is(r.Err, ErrFileTooLargeForSpace):
+		// Per-file failure, no scope escalation — smaller files may fit (R-2.10.44).
+		return resultSkip, ""
+
 	case errors.Is(r.Err, os.ErrPermission):
 		return resultSkip, ""
 
@@ -1502,6 +1513,10 @@ func issueTypeForHTTPStatus(httpStatus int, err error) string {
 		return "transient_not_found"
 	case httpStatus == http.StatusLocked:
 		return "resource_locked"
+	case errors.Is(err, ErrDiskFull):
+		return IssueDiskFull
+	case errors.Is(err, ErrFileTooLargeForSpace):
+		return IssueFileTooLargeForSpace
 	case errors.Is(err, os.ErrPermission):
 		return IssueLocalPermissionDenied
 	default:
@@ -2278,7 +2293,7 @@ func (e *Engine) clearResolvedSkippedItems(ctx context.Context, skipped []Skippe
 
 	// For each scanner-detectable issue type, clear entries not in the current scan.
 	// If no items of that type were found, pass empty slice (clears all of that type).
-	for _, issueType := range []string{IssueInvalidFilename, IssuePathTooLong, IssueFileTooLarge} {
+	for _, issueType := range []string{IssueInvalidFilename, IssuePathTooLong, IssueFileTooLarge, IssueCaseCollision} {
 		paths := currentByType[issueType] // nil if no items — that's fine (clears all)
 		if err := e.baseline.ClearResolvedActionableFailures(ctx, issueType, paths); err != nil {
 			e.logger.Error("failed to clear resolved failures",
