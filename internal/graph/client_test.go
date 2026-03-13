@@ -709,7 +709,7 @@ func TestDo_CustomPolicy_LimitsAttempts(t *testing.T) {
 	})
 }
 
-// Validates: R-6.8.5, R-6.8.6
+// Validates: R-6.8.6
 func TestTerminalError_RetryAfter(t *testing.T) {
 	t.Parallel()
 

@@ -110,7 +110,7 @@ Microsoft Graph API throttling scope behavior (not in official docs, discovered 
 - **Per-tenant limit**: All users in an organization share a higher aggregate limit.
 - **Per-app-per-tenant limit**: Each registered app has its own per-tenant quota.
 - **Implication for sync**: HTTP 429 on any drive (including shortcuts) means the entire account is throttled. Shortcut drives that belong to different users still share the caller's rate limit (the caller's token is used, not the sharer's).
-- `RateLimit-Remaining` and `RateLimit-Limit` headers provide real-time visibility. `Retry-After` on 429/503 provides server-mandated wait time.
+- `Retry-After` on 429/503 provides server-mandated wait time. `RateLimit-Remaining` and `RateLimit-Limit` headers exist but only cover per-app 1-minute resource units — not reliable enough for proactive throttling.
 
 ## Shared Folder Issues
 

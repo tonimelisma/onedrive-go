@@ -540,9 +540,7 @@ Partially. Microsoft doesn't explicitly say "per-user limit" vs "per-tenant limi
 
 **Decision:** Treat all 429s as account-scoped. Our app syncs for a single user. Microsoft's per-user limit (3,000 req/5min) is the most likely trigger. Single Retry-After deadline shared across all drives for the same account.
 
-**Proactive rate reduction:** Parse `RateLimit-Remaining` headers when present. When remaining quota falls below 20%, reduce request rate before hitting 429. This is an optimization layered on top, not part of the retry architecture.
-
-**Component assignment (deferred):** The graph client parses RateLimit-Remaining from response headers and exposes it on GraphError. The engine reads it after each WorkerResult and, when remaining quota falls below 20%, reduces dispatch rate (e.g., by throttling the tracker's ready channel). This prevents 429s proactively rather than reacting to them. Implementation is deferred to a post-launch optimization pass — the scope-based retry architecture handles 429s reactively as the primary mechanism. R-6.8.5 status remains [planned].
+**Proactive rate reduction (cancelled):** RateLimit-Remaining proactive slowdown was evaluated and cancelled. The `RateLimit-*` headers only cover one specific limit (per-app 1-minute resource units) and are not reliable enough to base throttling on. The scope-based reactive retry architecture handles 429s effectively without proactive rate reduction.
 
 ### 7.4.1: Shared Drives and Scope Boundaries
 
@@ -865,7 +863,7 @@ Scope blocks shall prevent the tracker from dispatching new actions matching the
 
 **R-6.8.4 (unchanged):** The system shall treat HTTP 429 as account-scoped: when any drive receives 429, all drives under the same account shall respect the `Retry-After` deadline.
 
-**R-6.8.5 (unchanged):** The system shall parse `RateLimit-Remaining` headers (when present) and proactively reduce request rate when remaining quota falls below 20%.
+**R-6.8.5 (cancelled):** RateLimit-Remaining proactive slowdown was evaluated and cancelled — the headers only cover one specific rate limit and are not reliable enough. The reactive scope-based 429 handling is sufficient.
 
 **R-6.8.6 (unchanged):** The system shall extract and honor `Retry-After` headers from both 429 and 503 responses.
 
@@ -1720,7 +1718,7 @@ Post-taxonomy additions (added after initial Phase 0 scope):
 - R-6.6.12: Aggregated transient failure logging (same pattern as R-6.6.7 for execution-time failures)
 - R-2.10.34: Dual scope key format (internal IDs in ScopeState, local paths in sync_failures)
 - context.Canceled/DeadlineExceeded: Graceful shutdown handling in classifyResult
-- R-6.8.5: RateLimit-Remaining component assignment (deferred to post-launch)
+- R-6.8.5: RateLimit-Remaining component assignment — cancelled (headers unreliable, reactive 429 handling sufficient)
 
 ### Phase 1: Design Docs (1 PR)
 
@@ -1936,7 +1934,7 @@ All proposed new/changed requirements, organized by area. Failure handling princ
 
 | ID | Requirement | Status | Part |
 |----|------------|--------|------|
-| R-6.7.14 | When the Graph API returns HTTP 400 with `innerError.code == "invalidRequest"` and known outage message patterns (e.g., "ObjectHandle is Invalid"), classify as transient (service outage), not generic skip. | planned (revise) | 9, J7 |
+| R-6.7.14 | When the Graph API returns HTTP 400 with `innerError.code == "invalidRequest"` and known outage message patterns (e.g., "ObjectHandle is Invalid"), classify as transient (service outage), not generic skip. | **verified** | 9, J7 |
 | R-6.7.27 | When classifying errors, the engine shall handle empty `TargetDriveID` (local-only operations like `os.ErrPermission`) by skipping remote scope routing. Only remote API errors require drive-aware scope routing. | verified | 11.11 |
 ### R-6.2 Data Integrity (Disk Space)
 
@@ -1950,7 +1948,7 @@ All proposed new/changed requirements, organized by area. Failure handling princ
 | ID | Requirement | Status | Part |
 |----|------------|--------|------|
 | R-6.8.4 | Treat HTTP 429 as account-scoped: all drives under the same account share the throttle. | **new** | 7.4 |
-| R-6.8.5 | Parse `RateLimit-Remaining` headers; proactively slow when <20% remaining. | **new** | 7.4 |
+| R-6.8.5 | ~~Parse `RateLimit-Remaining` headers; proactively slow when <20% remaining.~~ **Cancelled** — headers unreliable, reactive 429 handling sufficient. | **cancelled** | 7.4 |
 | R-6.8.6 | Honor `Retry-After` from both 429 and 503 responses. Populate `GraphError.RetryAfter` field. | **new** | 7.4 |
 | R-6.8.7 | During sync, workers shall never block on retry backoff. Failures recorded in sync_failures with `next_retry_at`; reconciler re-injects when due. Workers block only for HTTP RTT (~100-500ms). | **new** (revised) | 7.2 |
 | R-6.8.8 | For sync operations, graph client shall use `SyncTransport` policy (`MaxAttempts: 0`). Each dispatch = one HTTP request. CLI retains `Transport` policy (`MaxAttempts: 5`). Policy is a constructor parameter. | **new** | 7.2 |
@@ -1981,7 +1979,7 @@ All proposed new/changed requirements, organized by area. Failure handling princ
 |------|-------|---------|
 | **Retry policies** | `internal/retry/named.go` | Add `SyncTransport` (MaxAttempts: 0). Delete `Action`. |
 | **Graph client policy** | `graph/client.go` | Add `retryPolicy retry.Policy` field to `Client`. Accept as constructor parameter (default: `retry.Transport`). Replace all 4 hardcoded `retry.Transport.MaxAttempts` references in `doRetry` (lines 124, 166) and `doPreAuthRetry` (lines 318, 352) with `c.retryPolicy.MaxAttempts`. Sync callers pass `SyncTransport`. |
-| **Graph client RetryAfter** | `graph/client.go`, `graph/errors.go` | Add `RetryAfter time.Duration` to `GraphError`. Parse `Retry-After` header for 429 and 503. Parse `RateLimit-Remaining` headers. |
+| **Graph client RetryAfter** | `graph/client.go`, `graph/errors.go` | Add `RetryAfter time.Duration` to `GraphError`. Parse `Retry-After` header for 429 and 503. |
 | **Store interfaces** | `sync/store_interfaces.go`, `sync/baseline.go` | Delete `FailureRecorder` interface and `RecordFailure` method. Consolidate to `SyncFailureRecorder.RecordSyncFailure` for all callers. Move `remote_state` failure transitions from `RecordFailure` into `CommitOutcome`. |
 | **Executor** | `sync/executor.go` | Delete `withRetry`, `classifyError`, `classifyStatusCode`, `sleepFunc`, `errClassRetryable/Fatal/Skip`. Action methods call graph client directly, return Outcome. |
 | **Engine classification** | `sync/engine.go` | Add `classifyResult()`. Move all error classification here. |
@@ -2035,7 +2033,7 @@ All proposed new/changed requirements, organized by area. Failure handling princ
 | Issues display groups >10 items | R-2.3.7 |
 | Per-error-type user action text present | R-6.6.11 |
 | `Retry-After` parsed for 429 and 503, populates `GraphError.RetryAfter` | R-6.8.6 |
-| `RateLimit-Remaining` proactive slowdown | R-6.8.5 |
+| ~~`RateLimit-Remaining` proactive slowdown~~ (cancelled) | ~~R-6.8.5~~ |
 | `GraphError` 400 with outage signature classified as transient | R-6.7.14 |
 | 507 on own drive → `quota:own` scope; shortcut uploads continue | R-2.10.1, R-2.10.3 |
 | 507 on shortcut → `quota:shortcut:$drive:$item` scope; own-drive uploads continue | R-2.10.1, R-2.10.3 |
