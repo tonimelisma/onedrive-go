@@ -33,6 +33,7 @@ Implements: R-6.8.7 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.1
 - **`GetScopeBlock(key)`**: returns a value copy of the `ScopeBlock` for a given scope key (not a pointer, preventing mutation outside the lock). Used by `handleTrialResult` to read current `TrialInterval` for backoff doubling.
 - **`dispatch()` gate**: scope gate — blocked actions go to held queue. Returns `bool` (was-held) so callers can fire the `onHeld` callback outside the lock.
 - **`onHeld` callback**: called when `dispatch()` diverts an action to a held queue. The engine sets this to `armTrialTimer` so the trial timer re-arms when the held queue becomes non-empty. Must NOT be called under `dt.mu` — callers invoke it after releasing the lock.
+- **`blockedScope()` table-driven dispatch**: Fixed-key scope rules are defined in the `scopeRules` slice (`scopeRule{key, blocks}` pairs), evaluated in priority order. Dynamic-key scopes (shortcut quota, perm:dir) are checked after the table. Adding a new fixed-key scope type requires one struct literal — no cyclomatic complexity growth.
 - Existing dependency graph behavior unchanged.
 - The tracker does NOT handle retry. All retry is via `sync_failures` + `FailureRetrier` (R-6.8.10). The engine calls `Complete` on every result; failed items are recorded in `sync_failures` with `next_retry_at`, and the `FailureRetrier` re-injects them via buffer → planner → tracker.
 
@@ -102,7 +103,7 @@ Pre-check available disk space in executor before download. Two-level check:
 - **Critical**: available space < `min_free_space` → `ErrDiskFull` → `disk:local` scope block, all downloads held until space recovers. Uploads, deletes, and moves continue.
 - **Per-file**: available space ≥ `min_free_space` but < file_size + `min_free_space` → `ErrFileTooLargeForSpace` → per-file skip in `sync_failures`, no scope escalation (other smaller files can still download).
 
-Config wiring: `min_free_space` string (default "1GB") is parsed via `config.ParseSize()` and threaded from `ResolvedDrive` through `EngineConfig.MinFreeSpace` to `ExecutorConfig.minFreeSpace`. Zero disables the check (R-6.4.7). Disk availability uses `syscall.Statfs` via `diskAvailableFunc` (injectable for testing). Statfs errors fail open — downloads continue rather than blocking on a transient syscall failure.
+Config wiring: `min_free_space` string (default "1GB") is parsed via `config.ParseSize()` and threaded from `ResolvedDrive` through `EngineConfig.MinFreeSpace` to `ExecutorConfig.minFreeSpace`. Zero disables the check (R-6.4.7). Disk availability uses `syscall.Statfs` via `ExecutorConfig.diskAvailableFunc` (struct field, injectable for testing — no package-level mutable state). The engine sets this to `diskAvailable` in `NewEngine`; tests inject controlled functions per-executor. `nil` skips the check. Statfs errors fail open — downloads continue rather than blocking on a transient syscall failure.
 
 ## Design Constraints
 
