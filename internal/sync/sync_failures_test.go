@@ -991,3 +991,106 @@ func TestRecordFailure_PreservesExistingValuesOnConflict(t *testing.T) {
 	assert.Equal(t, 2, issues[0].FailureCount)
 	assert.Equal(t, "new error", issues[0].LastError)
 }
+
+func TestDeleteSyncFailuresByScope(t *testing.T) {
+	mgr, _ := newTestSyncStoreForFailures(t)
+	ctx := context.Background()
+
+	// Insert failures with different scope keys.
+	for _, p := range []struct {
+		path     string
+		scopeKey string
+	}{
+		{"a.txt", "quota:shortcut:drive1:item1"},
+		{"b.txt", "quota:shortcut:drive1:item1"},
+		{"c.txt", "throttle:account"},
+		{"d.txt", "quota:shortcut:drive2:item2"},
+	} {
+		err := mgr.RecordFailure(ctx, &SyncFailureParams{
+			Path:      p.path,
+			DriveID:   driveid.ID{},
+			Direction: "upload",
+			IssueType: "upload_failed",
+			ErrMsg:    "timeout",
+			ScopeKey:  p.scopeKey,
+		}, nil)
+		require.NoError(t, err)
+	}
+
+	// Verify 4 failures exist.
+	all, err := mgr.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, all, 4)
+
+	// Delete by scope key.
+	err = mgr.DeleteSyncFailuresByScope(ctx, "quota:shortcut:drive1:item1")
+	require.NoError(t, err)
+
+	// Verify only 2 remain (c.txt and d.txt).
+	remaining, err := mgr.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, remaining, 2)
+
+	paths := make(map[string]bool)
+	for _, r := range remaining {
+		paths[r.Path] = true
+	}
+
+	assert.True(t, paths["c.txt"], "c.txt should remain (different scope)")
+	assert.True(t, paths["d.txt"], "d.txt should remain (different scope)")
+}
+
+func TestPendingRetrySummary(t *testing.T) {
+	mgr, fixedTime := newTestSyncStoreForFailures(t)
+	ctx := context.Background()
+
+	// No failures → empty summary.
+	groups, err := mgr.PendingRetrySummary(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, groups)
+
+	// Insert transient failures with different scope keys and retry times.
+	for _, p := range []struct {
+		path     string
+		scopeKey string
+	}{
+		{"a.txt", "throttle:account"},
+		{"b.txt", "throttle:account"},
+		{"c.txt", "throttle:account"},
+		{"d.txt", "quota:own"},
+		{"e.txt", "quota:own"},
+	} {
+		recErr := mgr.RecordFailure(ctx, &SyncFailureParams{
+			Path:      p.path,
+			DriveID:   driveid.ID{},
+			Direction: "upload",
+			IssueType: "upload_failed",
+			ErrMsg:    "timeout",
+			ScopeKey:  p.scopeKey,
+		}, retry.Reconcile.Delay)
+		require.NoError(t, recErr)
+	}
+
+	// Also insert an actionable failure — should NOT appear in summary.
+	err = mgr.RecordFailure(ctx, &SyncFailureParams{
+		Path:      "actionable.txt",
+		DriveID:   driveid.ID{},
+		Direction: "upload",
+		IssueType: "invalid_filename",
+		Category:  "actionable",
+		ErrMsg:    "bad name",
+	}, nil)
+	require.NoError(t, err)
+
+	groups, err = mgr.PendingRetrySummary(ctx)
+	require.NoError(t, err)
+	require.Len(t, groups, 2, "should have 2 scope groups")
+
+	// Ordered by count DESC, so throttle:account (3) comes first.
+	assert.Equal(t, "throttle:account", groups[0].ScopeKey)
+	assert.Equal(t, 3, groups[0].Count)
+	assert.True(t, groups[0].EarliestNext.After(fixedTime), "earliest retry should be after now")
+
+	assert.Equal(t, "quota:own", groups[1].ScopeKey)
+	assert.Equal(t, 2, groups[1].Count)
+}

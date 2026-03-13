@@ -25,10 +25,11 @@ Implements: R-6.8.7 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.1
 - **Scope blocks**: `scopeBlocks map[string]*ScopeBlock` — active scope blocks with trial timing.
 - **`HoldScope(key, block)`**: set scope block, future dispatches matching scope go to held queue.
 - **`ReleaseScope(key)`**: clear block, dispatch all held actions.
-- **`DispatchTrial(key)`**: pop one from held queue, mark `IsTrial=true`, set `TrialScopeKey`, dispatch.
+- **`DispatchTrial(key)`**: pop one from held queue, mark `IsTrial=true`, set `TrialScopeKey`, clear `NextTrialAt` (prevents re-dispatch until trial result re-arms via `armTrialTimer`), dispatch.
 - **`NextDueTrial(now)`**: returns the scope key and `NextTrialAt` of the first scope block whose trial is due.
 - **`ExtendTrialInterval(key, nextAt, interval)`**: updates a scope block's `NextTrialAt`, `TrialInterval`, and increments its trial attempt counter on trial failure. Encapsulates the mutation under the tracker's lock.
 - **`EarliestTrialAt()`**: scans all scope blocks for the earliest `NextTrialAt` with non-empty held queue. Used by the engine's trial timer.
+- **`ScopeBlockKeys()`**: returns all active scope block keys. Used by `handleExternalChanges` to detect when `perm:dir` failures have been cleared via CLI.
 - **`GetScopeBlock(key)`**: returns a value copy of the `ScopeBlock` for a given scope key (not a pointer, preventing mutation outside the lock). Used by `handleTrialResult` to read current `TrialInterval` for backoff doubling.
 - **`dispatch()` gate**: scope gate — blocked actions go to held queue. Returns `bool` (was-held) so callers can fire the `onHeld` callback outside the lock.
 - **`onHeld` callback**: called when `dispatch()` diverts an action to a held queue. The engine sets this to `armTrialTimer` so the trial timer re-arms when the held queue becomes non-empty. Must NOT be called under `dt.mu` — callers invoke it after releasing the lock.
@@ -45,6 +46,7 @@ Implements: R-2.10.3 [verified], R-2.10.26 [verified], R-2.10.42 [verified]
 - **Sliding window detection**: 507 → 3 unique paths in 10s → `quota:own` or `quota:shortcut:$key`. 5xx → 5 unique paths in 30s → `service`.
 - **400 outage patterns**: `UpdateScopeOutagePattern()` feeds 400 outage patterns (e.g., "ObjectHandle is Invalid") into the service sliding window.
 - **Success resets**: `RecordSuccess()` clears sliding windows for the relevant scope — a successful request proves the service is up.
+- **`shortcutScopeKey(compositeKey)`**: helper that constructs the quota scope key for a shortcut (`scopeKeyQuotaShortcut + compositeKey`). Used consistently across `scopeKeyForStatus`, `blockedScope`, `handleRemovedShortcuts`, and display code.
 
 ## Worker Pool (`worker.go`)
 

@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	stdsync "sync"
 	"sync/atomic"
@@ -139,6 +140,10 @@ type Engine struct {
 	// lastPermRecheck tracks the last time recheckPermissions was called
 	// in watch mode, to throttle API calls to at most once per 60 seconds (R-2.10.9).
 	lastPermRecheck time.Time
+
+	// lastSummaryTotal caches the last actionable issue count to avoid
+	// logging duplicate watch mode summaries on every recheck tick.
+	lastSummaryTotal int
 
 	// Engine-owned result counters. Workers are pure executors — the engine
 	// classifies results and owns all final disposition counts (R-6.8.9).
@@ -1018,9 +1023,7 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 			e.processBatch(ctx, batch, bl, mode, safety, tracker)
 
 		case <-recheckTicker.C:
-			if e.externalDBChanged(ctx) {
-				e.handleExternalChanges(ctx)
-			}
+			e.handleRecheckTick(ctx)
 
 		case <-reconcileC:
 			e.runFullReconciliation(ctx, bl, mode, safety, tracker)
@@ -1177,7 +1180,7 @@ func (e *Engine) processWorkerResult(ctx context.Context, r *WorkerResult, bl *B
 		e.recordFailure(ctx, r, retry.Reconcile.Delay)
 		e.tracker.Complete(r.ActionID)
 		e.recordError(r)
-		e.feedScopeDetection(r)
+		e.maybeFeedScopeDetection(r)
 		if e.retrier != nil {
 			e.retrier.Kick()
 		}
@@ -1185,7 +1188,7 @@ func (e *Engine) processWorkerResult(ctx context.Context, r *WorkerResult, bl *B
 	case resultScopeBlock:
 		// Scope-level failure (429, 507): record with backoff, detect scope.
 		e.recordFailure(ctx, r, retry.Reconcile.Delay)
-		e.feedScopeDetection(r)
+		e.maybeFeedScopeDetection(r)
 		e.tracker.Complete(r.ActionID)
 		e.armTrialTimer() // catch dependents that just entered held
 		e.recordError(r)
@@ -1232,7 +1235,10 @@ func (e *Engine) handleTrialResult(ctx context.Context, r *WorkerResult) {
 	class, _ := classifyResult(r)
 	if class == resultSuccess {
 		e.tracker.ReleaseScope(r.TrialScopeKey)
-		// Thundering herd: reset sync_failures backoff so retrier picks them up.
+		// Thundering herd: reset sync_failures backoff so retrier picks them up
+		// immediately. We do NOT delete failures here — items must re-execute
+		// to confirm the scope has truly recovered. CommitOutcome clears the
+		// failure on success.
 		e.resetScopeRetryTimes(ctx, r.TrialScopeKey)
 		e.armTrialTimer()
 		return
@@ -1253,6 +1259,17 @@ func (e *Engine) handleTrialResult(ctx context.Context, r *WorkerResult) {
 	// All mutation happens inside the tracker under its lock.
 	e.tracker.ExtendTrialInterval(r.TrialScopeKey, e.nowFunc().Add(newInterval), newInterval)
 	e.armTrialTimer()
+}
+
+// maybeFeedScopeDetection feeds a worker result into scope detection,
+// skipping trial results. Trial results should not re-detect the scope
+// because the scope is already blocked and re-detecting would overwrite
+// the doubled trial interval with a fresh initial interval from
+// applyScopeBlock (A2 bug fix).
+func (e *Engine) maybeFeedScopeDetection(r *WorkerResult) {
+	if !r.IsTrial {
+		e.feedScopeDetection(r)
+	}
 }
 
 // feedScopeDetection feeds a worker result into scope detection sliding
@@ -1443,6 +1460,11 @@ func (e *Engine) armTrialTimer() {
 		delay = 1 * time.Millisecond // fire immediately
 	}
 
+	// Non-blocking send to the buffered(1) channel. If a signal is already
+	// pending, the new one is coalesced (dropped). This is self-healing:
+	// drainWorkerResults calls NextDueTrial in a loop, so even if a second
+	// AfterFunc fires while a signal is pending, all due scopes are still
+	// processed on the next drain iteration.
 	e.trialTimer = time.AfterFunc(delay, func() {
 		select {
 		case e.trialCh <- struct{}{}:
@@ -1671,7 +1693,10 @@ func (e *Engine) processBatch(
 	if now.Sub(e.lastPermRecheck) >= permRecheckInterval {
 		e.lastPermRecheck = now
 
-		if e.permChecker != nil {
+		// recheckPermissions calls the Graph API — skip during outage or
+		// throttle to avoid wasting API calls (R-2.10.30). Local permission
+		// rechecks (filesystem-only) proceed regardless.
+		if e.permChecker != nil && !e.isObservationSuppressed() {
 			shortcuts, err := e.baseline.ListShortcuts(ctx)
 			if err == nil {
 				e.recheckPermissions(ctx, bl, shortcuts)
@@ -1945,6 +1970,16 @@ func (e *Engine) externalDBChanged(ctx context.Context) bool {
 // counter is held but all big_delete_held rows have been cleared (via
 // `issues clear`), releases the counter so deletes resume on the next
 // observation cycle.
+// handleRecheckTick processes a recheck timer tick: detects external DB
+// changes (e.g., `issues clear`) and logs a watch summary.
+func (e *Engine) handleRecheckTick(ctx context.Context) {
+	if e.externalDBChanged(ctx) {
+		e.handleExternalChanges(ctx)
+	}
+
+	e.logWatchSummary(ctx)
+}
+
 func (e *Engine) handleExternalChanges(ctx context.Context) {
 	// Big-delete clearance: check if user approved held deletes.
 	if e.deleteCounter != nil && e.deleteCounter.IsHeld() {
@@ -1962,6 +1997,76 @@ func (e *Engine) handleExternalChanges(ctx context.Context) {
 			e.logger.Info("big-delete protection cleared by user")
 		}
 	}
+
+	// Permission clearance: if user cleared perm:dir failures via CLI,
+	// release the corresponding in-memory scope blocks.
+	if e.tracker != nil {
+		issues, err := e.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
+		if err != nil {
+			e.logger.Warn("failed to check permission failures",
+				slog.String("error", err.Error()),
+			)
+
+			return
+		}
+
+		// Build set of still-active scope keys from DB.
+		activeScopes := make(map[string]bool, len(issues))
+		for i := range issues {
+			if strings.HasPrefix(issues[i].ScopeKey, scopeKeyPermDir) {
+				activeScopes[issues[i].ScopeKey] = true
+			}
+		}
+
+		// Release any tracker scope blocks whose failures were cleared.
+		for _, key := range e.tracker.ScopeBlockKeys() {
+			if strings.HasPrefix(key, scopeKeyPermDir) && !activeScopes[key] {
+				e.tracker.ReleaseScope(key)
+				e.logger.Info("permission scope block cleared by user",
+					slog.String("scope", key),
+				)
+			}
+		}
+	}
+}
+
+// logWatchSummary logs a periodic one-liner summary of actionable issues
+// in watch mode. Only logs when the count changes since the last summary
+// to avoid noisy repeated output.
+func (e *Engine) logWatchSummary(ctx context.Context) {
+	issues, err := e.baseline.ListActionableFailures(ctx)
+	if err != nil || len(issues) == 0 {
+		if e.lastSummaryTotal != 0 {
+			e.lastSummaryTotal = 0
+		}
+
+		return
+	}
+
+	// Only log if count changed since last summary.
+	if len(issues) == e.lastSummaryTotal {
+		return
+	}
+
+	e.lastSummaryTotal = len(issues)
+
+	// Group by issue_type, emit one-liner.
+	counts := make(map[string]int)
+	for i := range issues {
+		counts[issues[i].IssueType]++
+	}
+
+	parts := make([]string, 0, len(counts))
+	for typ, n := range counts {
+		parts = append(parts, fmt.Sprintf("%d %s", n, typ))
+	}
+
+	sort.Strings(parts)
+
+	e.logger.Warn("actionable issues",
+		slog.Int("total", len(issues)),
+		slog.String("breakdown", strings.Join(parts, ", ")),
+	)
 }
 
 // recordSkippedItems records observation-time rejections (invalid names,

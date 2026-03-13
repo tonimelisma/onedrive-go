@@ -454,7 +454,7 @@ func TestPrintGroupedIssuesJSON_MixedOutput(t *testing.T) {
 // --- grouped issues text ---
 
 // Validates: R-2.3.7, R-2.3.8
-func TestPrintGroupedIssuesTextVerbose_BothSections(t *testing.T) {
+func TestPrintGroupedIssuesText_BothSections(t *testing.T) {
 	t.Parallel()
 
 	conflicts := []sync.ConflictRecord{
@@ -471,7 +471,7 @@ func TestPrintGroupedIssuesTextVerbose_BothSections(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printGroupedIssuesTextVerbose(&buf, conflicts, groups, nil, false, false)
+	printGroupedIssuesText(&buf, conflicts, groups, nil, nil, nil, false, false)
 
 	output := buf.String()
 	assert.Contains(t, output, "CONFLICTS")
@@ -480,7 +480,7 @@ func TestPrintGroupedIssuesTextVerbose_BothSections(t *testing.T) {
 	assert.Contains(t, output, "docs/CON")
 }
 
-func TestPrintGroupedIssuesTextVerbose_OnlyConflicts(t *testing.T) {
+func TestPrintGroupedIssuesText_OnlyConflicts(t *testing.T) {
 	t.Parallel()
 
 	conflicts := []sync.ConflictRecord{
@@ -488,13 +488,13 @@ func TestPrintGroupedIssuesTextVerbose_OnlyConflicts(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printGroupedIssuesTextVerbose(&buf, conflicts, nil, nil, false, false)
+	printGroupedIssuesText(&buf, conflicts, nil, nil, nil, nil, false, false)
 
 	output := buf.String()
 	assert.Contains(t, output, "CONFLICTS")
 }
 
-func TestPrintGroupedIssuesTextVerbose_OnlyFailures(t *testing.T) {
+func TestPrintGroupedIssuesText_OnlyFailures(t *testing.T) {
 	t.Parallel()
 
 	groups := []failureGroup{
@@ -507,14 +507,14 @@ func TestPrintGroupedIssuesTextVerbose_OnlyFailures(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printGroupedIssuesTextVerbose(&buf, nil, groups, nil, false, false)
+	printGroupedIssuesText(&buf, nil, groups, nil, nil, nil, false, false)
 
 	output := buf.String()
 	assert.NotContains(t, output, "CONFLICTS")
 	assert.Contains(t, output, "INVALID FILENAME")
 }
 
-func TestPrintGroupedIssuesTextVerbose_HeldDeletes(t *testing.T) {
+func TestPrintGroupedIssuesText_HeldDeletes(t *testing.T) {
 	t.Parallel()
 
 	heldDeletes := []sync.SyncFailureRow{
@@ -523,7 +523,7 @@ func TestPrintGroupedIssuesTextVerbose_HeldDeletes(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printGroupedIssuesTextVerbose(&buf, nil, nil, heldDeletes, false, false)
+	printGroupedIssuesText(&buf, nil, nil, heldDeletes, nil, nil, false, false)
 
 	output := buf.String()
 	assert.Contains(t, output, "HELD DELETES")
@@ -532,7 +532,7 @@ func TestPrintGroupedIssuesTextVerbose_HeldDeletes(t *testing.T) {
 	assert.Contains(t, output, "file2.txt")
 }
 
-func TestPrintGroupedIssuesTextVerbose_MixedHeldAndOther(t *testing.T) {
+func TestPrintGroupedIssuesText_MixedHeldAndOther(t *testing.T) {
 	t.Parallel()
 
 	groups := []failureGroup{
@@ -549,7 +549,7 @@ func TestPrintGroupedIssuesTextVerbose_MixedHeldAndOther(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printGroupedIssuesTextVerbose(&buf, nil, groups, heldDeletes, false, false)
+	printGroupedIssuesText(&buf, nil, groups, heldDeletes, nil, nil, false, false)
 
 	output := buf.String()
 	assert.Contains(t, output, "HELD DELETES")

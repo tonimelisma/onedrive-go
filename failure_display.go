@@ -9,7 +9,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/sync"
 )
@@ -91,12 +93,7 @@ func printGroupedFailures(w io.Writer, groups []failureGroup, verbose bool) {
 		}
 
 		// Header: TITLE (N items)
-		noun := "items"
-		if g.Count == 1 {
-			noun = "item"
-		}
-
-		fmt.Fprintf(w, "%s (%d %s)\n", g.Message.Title, g.Count, noun)
+		fmt.Fprintf(w, "%s (%d %s)\n", g.Message.Title, g.Count, itemNoun(g.Count))
 
 		// Reason + action.
 		fmt.Fprintf(w, "  %s %s\n", g.Message.Reason, g.Message.Action)
@@ -122,6 +119,123 @@ func printGroupedFailures(w io.Writer, groups []failureGroup, verbose bool) {
 			fmt.Fprintf(w, "  ... and %d more (use --verbose to see all)\n", remaining)
 		}
 	}
+}
+
+// heldDeleteDirGroupThreshold is the number of held deletes above which
+// the display groups by parent directory instead of listing individually.
+const heldDeleteDirGroupThreshold = 20
+
+// printPendingRetries renders a summary of pending retries grouped by scope.
+func printPendingRetries(w io.Writer, groups []sync.PendingRetryGroup, shortcuts []sync.Shortcut) {
+	total := 0
+	for _, g := range groups {
+		total += g.Count
+	}
+
+	fmt.Fprintf(w, "PENDING RETRIES (%d %s)\n", total, itemNoun(total))
+
+	for _, g := range groups {
+		humanScope := sync.HumanizeScopeKey(g.ScopeKey, shortcuts)
+		if humanScope == "" {
+			humanScope = "(unscoped)"
+		}
+
+		remaining := time.Until(g.EarliestNext)
+		if remaining < 0 {
+			remaining = 0
+		}
+
+		fmt.Fprintf(w, "  %-30s — %d %s, next attempt in %s\n",
+			humanScope, g.Count, itemNoun(g.Count), formatDuration(remaining))
+	}
+}
+
+// printHeldDeletesGrouped renders held deletes grouped by parent directory
+// when the count exceeds the threshold, or individually when small.
+func printHeldDeletesGrouped(w io.Writer, heldDeletes []sync.SyncFailureRow, verbose bool) {
+	fmt.Fprintf(w, "HELD DELETES (%d files — big-delete protection triggered, run `issues clear` to approve)\n",
+		len(heldDeletes))
+
+	// When verbose or small count, show individual paths via the table.
+	if verbose || len(heldDeletes) <= heldDeleteDirGroupThreshold {
+		printHeldDeletesTable(w, heldDeletes)
+		return
+	}
+
+	// Group by parent directory for large sets.
+	dirCounts := make(map[string]int)
+	for i := range heldDeletes {
+		dir := filepath.Dir(heldDeletes[i].Path)
+		if dir == "." {
+			dir = "(root)"
+		}
+
+		dirCounts[dir]++
+	}
+
+	// Sort by count descending, then path ascending.
+	type dirEntry struct {
+		dir   string
+		count int
+	}
+
+	entries := make([]dirEntry, 0, len(dirCounts))
+	for dir, count := range dirCounts {
+		entries = append(entries, dirEntry{dir: dir, count: count})
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].count != entries[j].count {
+			return entries[i].count > entries[j].count
+		}
+
+		return entries[i].dir < entries[j].dir
+	})
+
+	for _, e := range entries {
+		fmt.Fprintf(w, "  %-40s — %d %s\n", e.dir+"/", e.count, itemNoun(e.count))
+	}
+
+	fmt.Fprintf(w, "  (use --verbose to see individual paths)\n")
+}
+
+func itemNoun(n int) string {
+	if n == 1 {
+		return "item"
+	}
+
+	return "items"
+}
+
+func formatDuration(d time.Duration) string {
+	if d < time.Second {
+		return "now"
+	}
+
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+
+	const secsPerMin = 60
+
+	if d < time.Hour {
+		m := int(d.Minutes())
+		s := int(d.Seconds()) - m*secsPerMin
+		if s > 0 {
+			return fmt.Sprintf("%dm%ds", m, s)
+		}
+
+		return fmt.Sprintf("%dm", m)
+	}
+
+	h := int(d.Hours())
+	m := int(d.Minutes()) - h*secsPerMin
+
+	if m > 0 {
+		return fmt.Sprintf("%dh%dm", h, m)
+	}
+
+	return fmt.Sprintf("%dh", h)
 }
 
 // failureGroupJSON is the JSON representation of a grouped failure set.
@@ -188,12 +302,13 @@ func printGroupedIssuesJSON(w io.Writer, conflicts []sync.ConflictRecord, groups
 	return nil
 }
 
-// printGroupedIssuesTextVerbose renders the full text output for the issues
+// printGroupedIssuesText renders the full text output for the issues
 // command using grouped failure display. When verbose is true, all paths are
 // shown; otherwise only the first defaultVisiblePaths per group are shown.
-func printGroupedIssuesTextVerbose(
+func printGroupedIssuesText(
 	w io.Writer, conflicts []sync.ConflictRecord,
 	groups []failureGroup, heldDeletes []sync.SyncFailureRow,
+	pendingRetries []sync.PendingRetryGroup, shortcuts []sync.Shortcut,
 	history, verbose bool,
 ) {
 	sections := 0
@@ -204,21 +319,29 @@ func printGroupedIssuesTextVerbose(
 		sections++
 	}
 
-	if len(heldDeletes) > 0 {
-		if sections > 0 {
-			fmt.Fprintln(w)
-		}
-
-		fmt.Fprintf(w, "HELD DELETES (%d files — big-delete protection triggered, run `issues clear` to approve)\n", len(heldDeletes))
-		printHeldDeletesTable(w, heldDeletes)
-		sections++
-	}
-
 	if len(groups) > 0 {
 		if sections > 0 {
 			fmt.Fprintln(w)
 		}
 
 		printGroupedFailures(w, groups, verbose)
+		sections++
+	}
+
+	if len(pendingRetries) > 0 {
+		if sections > 0 {
+			fmt.Fprintln(w)
+		}
+
+		printPendingRetries(w, pendingRetries, shortcuts)
+		sections++
+	}
+
+	if len(heldDeletes) > 0 {
+		if sections > 0 {
+			fmt.Fprintln(w)
+		}
+
+		printHeldDeletesGrouped(w, heldDeletes, verbose)
 	}
 }

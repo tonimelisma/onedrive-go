@@ -32,7 +32,7 @@ Classification table: 401 → fatal, 403 → skip (with handle403 side effect), 
 
 ### Scope Detection and Management
 
-Implements: R-2.10.3 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [planned], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified]
+Implements: R-2.10.3 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [verified], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified]
 
 `processWorkerResult()` classifies each result and routes it — all cases call `tracker.Complete()` (never `ReQueue`):
 
@@ -85,6 +85,16 @@ Implements: R-2.10.12 [planned], R-2.10.13 [planned]
 Implements: R-2.10.30 [verified], R-2.10.31 [planned]
 
 During `throttle:account` or `service` scope block, suppress shortcut observation polling (wastes API calls). During `quota:shortcut:*` block, observation continues (read-only).
+
+Observation suppression (`isObservationSuppressed()`) suppresses the entire `processShortcuts()` call, which includes both shortcut discovery and delta polling. Also suppresses `recheckPermissions()` API calls since those are equally wasteful during an outage. Suppressing discovery is acceptable — new shortcuts during an outage would fail immediately anyway. Discovery resumes when the scope clears. Local permission rechecks (`recheckLocalPermissions`) proceed regardless since they are filesystem-only.
+
+**Trial dispatch correctness**: `DispatchTrial()` clears `NextTrialAt` after popping a trial action. Without this, `NextDueTrial()` would return the same scope repeatedly, causing the drain loop to dispatch ALL held actions as simultaneous trials. R-2.10.5 requires one real action per trial tick. The timer re-arms after the trial result via `handleTrialResult()` → `armTrialTimer()`.
+
+**Trial scope detection guard**: `processWorkerResult()` skips `feedScopeDetection()` for trial results (`r.IsTrial`). Without this, a failed 429 trial would go through `handleTrialResult()` (doubling the interval), then fall through to `feedScopeDetection()` → `UpdateScope(429)` → `applyScopeBlock()`, which replaces the block and overwrites the doubled interval with the original `RetryAfter`.
+
+**External perm:dir clearance**: `handleExternalChanges()` checks whether `local_permission_denied` failures were cleared via CLI (`issues clear`). If so, releases the corresponding in-memory `perm:dir:` scope blocks via `tracker.ReleaseScope()`.
+
+**Watch mode summary**: `logWatchSummary()` logs a periodic one-liner at the recheck interval (10s) showing actionable issue counts by type. Only logs when the count changes to avoid noisy output.
 
 ### Shortcut Integration (`engine_shortcuts.go`)
 
