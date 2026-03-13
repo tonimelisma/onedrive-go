@@ -43,9 +43,9 @@ Implements: R-2.10.3 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2
 - **shutdown** → `Complete` (no failure recorded)
 - **fatal** (401) → `recordFailure` with nil delayFn + `Complete`
 
-Trial result routing: `handleTrialResult()` runs before classification. Trial success → `tracker.ReleaseScope(scopeKey)` + `resetScopeRetryTimes(scopeKey, now)` (thundering herd: resets `next_retry_at` for all sync_failures matching the scope, then kicks the retrier) + `armTrialTimer()`. Trial failure → reads block's current `TrialInterval` via `tracker.GetScopeBlock(scopeKey)` (value copy), doubles it, caps per scope type (`maxTrialIntervalForIssueType`), calls `tracker.ExtendTrialInterval(scopeKey, nextAt, newInterval)` (encapsulates mutation under lock) + `armTrialTimer()`. Per-scope caps: quota 1h, rate_limited 10m, service 10m (R-2.10.6/R-2.10.8/R-2.10.14).
+Trial result routing: `processTrialResult()` handles all trial outcomes with an early return — trial results never enter the normal `processWorkerResult()` switch. Trial success → `tracker.ReleaseScope(scopeKey)` + `resetScopeRetryTimes(scopeKey, now)` (thundering herd: resets `next_retry_at` for all sync_failures matching the scope, then kicks the retrier) + `armTrialTimer()`. Trial failure → `extendTrialInterval(scopeKey)` reads block's current `TrialInterval` via `tracker.GetScopeBlock(scopeKey)` (value copy), doubles it, caps per scope type (`maxTrialIntervalForIssueType`), calls `tracker.ExtendTrialInterval(scopeKey, nextAt, newInterval)` (encapsulates mutation under lock). Scope detection is intentionally NOT called for trial failures — the scope is already blocked, and re-detecting would overwrite the doubled interval. Per-scope caps: quota 1h, rate_limited 10m, service 10m (R-2.10.6/R-2.10.8/R-2.10.14).
 
-**Trial timer**: `armTrialTimer()` uses `time.AfterFunc` to send to a persistent `trialCh` channel when the earliest `NextTrialAt` across all scope blocks is reached (via `tracker.EarliestTrialAt()`). Using a persistent channel avoids a race where `onHeld` (called from external goroutines via `tracker.Add`) replaces the timer while the drain loop's select watches the old timer's channel. The `trialCh` fires in `drainWorkerResults`'s select loop, calling `tracker.NextDueTrial(now)` + `tracker.DispatchTrial(key)` in a loop until no more trials are due. Called after `applyScopeBlock()`, `handleTrialResult()`, trial dispatch, and via the `onHeld` callback when actions enter held queues. Belt-and-suspenders: `armTrialTimer()` is also called after `tracker.Complete` in the `resultScopeBlock` case to catch dependents that entered held.
+**Trial timer**: `armTrialTimer()` uses `time.AfterFunc` to send to a persistent `trialCh` channel when the earliest `NextTrialAt` across all scope blocks is reached (via `tracker.EarliestTrialAt()`). Using a persistent channel avoids a race where `onHeld` (called from external goroutines via `tracker.Add`) replaces the timer while the drain loop's select watches the old timer's channel. The `trialCh` fires in `drainWorkerResults`'s select loop, calling `tracker.NextDueTrial(now)` + `tracker.DispatchTrial(key)` in a loop until no more trials are due. Called after `applyScopeBlock()`, `processTrialResult()`, trial dispatch, and via the `onHeld` callback when actions enter held queues. Belt-and-suspenders: `armTrialTimer()` is also called after `tracker.Complete` in the `resultScopeBlock` case to catch dependents that entered held.
 
 `feedScopeDetection()` feeds results into `ScopeState.UpdateScope()`. When a threshold is crossed, creates a scope block via `applyScopeBlock()` which calls `tracker.HoldScope()` + `armTrialTimer()`.
 
@@ -80,11 +80,13 @@ Implements: R-6.6.7 [verified], R-6.6.8 [verified], R-6.6.9 [planned], R-6.6.10 
 
 When >10 items share the same warning category, log 1 WARN summary with count and sample paths + individual paths at DEBUG. When <=10 items, log each as an individual WARN. This pattern is implemented in `recordSkippedItems()` for scanner-time validation failures. Transient retries at DEBUG, resolved at INFO, exhausted at WARN. Extends to execution-time transient failures: when >10 transient failures of the same `issue_type` exhaust their retry budget in a single sync pass, aggregate into 1 WARN summary with count, individual paths at DEBUG (R-6.6.12).
 
-### Planned: Local Permission Handling
+### Local Permission Handling
 
-Implements: R-2.10.12 [planned], R-2.10.13 [planned]
+Implements: R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.10 [verified]
 
-`os.ErrPermission` → check parent directory accessibility. Inaccessible directory: one `local_permission_denied` at directory level, suppress operations under it. Accessible directory: file-level failure. Recheck directory-level issues at start of each sync pass.
+`os.ErrPermission` → check parent directory accessibility via `handleLocalPermission()`. Inaccessible directory: one `local_permission_denied` at directory level with `perm:dir:` scope block, suppress operations under it. Accessible directory: file-level failure. Recheck directory-level issues at start of each sync pass via `recheckLocalPermissions()`.
+
+**Scanner-driven auto-clear** (R-2.10.10): `clearScannerResolvedPermissions()` checks whether the scanner observed paths that were previously blocked by `local_permission_denied` failures. If the scanner successfully accessed a path (it appeared in events), the permission issue is resolved — clear the failure and release any scope block. File-level: cleared if the path itself was observed. Directory-level (`perm:dir:` scope): cleared if any observed path falls under the directory prefix. Called after `clearResolvedSkippedItems()` in one-shot mode, and after `recheckLocalPermissions()` in watch mode. Complements `recheckLocalPermissions()` — both may clear the same failure (idempotent).
 
 ### Planned: Observation Suppression
 
@@ -94,9 +96,9 @@ During `throttle:account` or `service` scope block, suppress shortcut observatio
 
 Observation suppression (`isObservationSuppressed()`) suppresses the entire `processShortcuts()` call, which includes both shortcut discovery and delta polling. Also suppresses `recheckPermissions()` API calls since those are equally wasteful during an outage. Suppressing discovery is acceptable — new shortcuts during an outage would fail immediately anyway. Discovery resumes when the scope clears. Local permission rechecks (`recheckLocalPermissions`) proceed regardless since they are filesystem-only.
 
-**Trial dispatch correctness**: `DispatchTrial()` clears `NextTrialAt` after popping a trial action. Without this, `NextDueTrial()` would return the same scope repeatedly, causing the drain loop to dispatch ALL held actions as simultaneous trials. R-2.10.5 requires one real action per trial tick. The timer re-arms after the trial result via `handleTrialResult()` → `armTrialTimer()`.
+**Trial dispatch correctness**: `DispatchTrial()` clears `NextTrialAt` after popping a trial action. Without this, `NextDueTrial()` would return the same scope repeatedly, causing the drain loop to dispatch ALL held actions as simultaneous trials. R-2.10.5 requires one real action per trial tick. The timer re-arms after the trial result via `processTrialResult()` → `armTrialTimer()`.
 
-**Trial scope detection guard**: `processWorkerResult()` skips `feedScopeDetection()` for trial results (`r.IsTrial`). Without this, a failed 429 trial would go through `handleTrialResult()` (doubling the interval), then fall through to `feedScopeDetection()` → `UpdateScope(429)` → `applyScopeBlock()`, which replaces the block and overwrites the doubled interval with the original `RetryAfter`.
+**Trial path separation**: `processWorkerResult()` checks `IsTrial` and returns early via `processTrialResult()` — trial results never enter the normal switch. This eliminates the prior fragile pattern where trial failures fell through into the normal result switch and required `maybeFeedScopeDetection` guards. `processTrialResult()` handles all trial outcomes self-contained: success releases the scope, failure extends the interval via `extendTrialInterval()`, and scope detection is never called (the scope is already blocked).
 
 **External perm:dir clearance**: `handleExternalChanges()` checks whether `local_permission_denied` failures were cleared via CLI (`issues clear`). If so, releases the corresponding in-memory `perm:dir:` scope blocks via `tracker.ReleaseScope()`.
 
@@ -110,8 +112,8 @@ Sync failure logging follows a tiered approach matching CLAUDE.md policy — ind
 
 - **Per-failure DEBUG**: `recordFailure()` logs each failure with path, action, HTTP status, error, and scope_key. This is the per-item detail (matching CLAUDE.md Debug = "file read/write").
 - **Scope block WARN**: `applyScopeBlock()` logs when a scope block activates with scope_key, issue_type, and trial_interval. This is a degraded-but-recoverable event (matching CLAUDE.md Warn).
-- **Scope release INFO**: `handleTrialResult()` logs when a scope block clears. This is a lifecycle state transition (matching CLAUDE.md Info).
-- **Trial failure DEBUG**: `handleTrialResult()` logs failed trials with scope_key and new_interval. This is retry detail.
+- **Scope release INFO**: `processTrialResult()` logs when a scope block clears. This is a lifecycle state transition (matching CLAUDE.md Info).
+- **Trial failure DEBUG**: `processTrialResult()` logs failed trials with scope_key and new_interval. This is retry detail.
 - **End-of-pass summary**: `logFailureSummary()` aggregates syncErrors by error message prefix. Groups with >10 items get one WARN with count + 3 samples. Groups with ≤10 items get per-item WARN. Mirrors the scanner aggregation in `recordSkippedItems()` (R-6.6.7). Called at end of `executePlan()`.
 - **IssueType population**: `recordFailure()` derives issue_type from HTTP status via `issueTypeForHTTPStatus()` and stores it in sync_failures for display grouping.
 

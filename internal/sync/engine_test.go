@@ -3049,11 +3049,11 @@ func TestClassifyResult(t *testing.T) {
 // policy via sync_failures + FailureRetrier. See internal/retry/named_test.go.
 
 // ---------------------------------------------------------------------------
-// handleTrialResult (R-2.10.5, R-2.10.6, R-2.10.8, R-2.10.14)
+// processTrialResult (R-2.10.5, R-2.10.6, R-2.10.8, R-2.10.14)
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.10.5
-func TestHandleTrialResult_Success_ReleasesScope(t *testing.T) {
+func TestProcessTrialResult_Success_ReleasesScope(t *testing.T) {
 	t.Parallel()
 
 	mock := &engineMockClient{}
@@ -3082,8 +3082,10 @@ func TestHandleTrialResult_Success_ReleasesScope(t *testing.T) {
 	ta := <-tracker.Ready()
 	assert.Equal(t, "first.txt", ta.Action.Path, "trial should pop the first held action")
 
-	// Simulate successful trial result.
-	eng.handleTrialResult(t.Context(), &WorkerResult{
+	// Simulate successful trial result. ActionID=1 matches the dispatched trial action.
+	eng.processTrialResult(t.Context(), &WorkerResult{
+		ActionID:      1,
+		IsTrial:       true,
 		TrialScopeKey: "throttle:account",
 		Success:       true,
 	})
@@ -3102,7 +3104,7 @@ func TestHandleTrialResult_Success_ReleasesScope(t *testing.T) {
 }
 
 // Validates: R-2.10.14
-func TestHandleTrialResult_Failure_DoublesInterval(t *testing.T) {
+func TestProcessTrialResult_Failure_DoublesInterval(t *testing.T) {
 	t.Parallel()
 
 	mock := &engineMockClient{}
@@ -3120,8 +3122,11 @@ func TestHandleTrialResult_Failure_DoublesInterval(t *testing.T) {
 	}
 	tracker.HoldScope("service", block)
 	tracker.Add(&Action{Type: ActionDownload, Path: "test.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
+	tracker.Add(&Action{Type: ActionDownload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i2"}, 99, nil)
 
-	eng.handleTrialResult(t.Context(), &WorkerResult{
+	eng.processTrialResult(t.Context(), &WorkerResult{
+		ActionID:      99,
+		IsTrial:       true,
 		TrialScopeKey: "service",
 		Success:       false,
 		HTTPStatus:    503,
@@ -3136,7 +3141,7 @@ func TestHandleTrialResult_Failure_DoublesInterval(t *testing.T) {
 }
 
 // Validates: R-2.10.6
-func TestHandleTrialResult_Failure_CapsQuota1h(t *testing.T) {
+func TestProcessTrialResult_Failure_CapsQuota1h(t *testing.T) {
 	t.Parallel()
 
 	mock := &engineMockClient{}
@@ -3155,8 +3160,11 @@ func TestHandleTrialResult_Failure_CapsQuota1h(t *testing.T) {
 	}
 	tracker.HoldScope("quota:own", block)
 	tracker.Add(&Action{Type: ActionUpload, Path: "big.zip", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
+	tracker.Add(&Action{Type: ActionUpload, Path: "trial.zip", DriveID: driveid.New("d"), ItemID: "i2"}, 99, nil)
 
-	eng.handleTrialResult(t.Context(), &WorkerResult{
+	eng.processTrialResult(t.Context(), &WorkerResult{
+		ActionID:      99,
+		IsTrial:       true,
 		TrialScopeKey: "quota:own",
 		Success:       false,
 		HTTPStatus:    507,
@@ -3169,7 +3177,7 @@ func TestHandleTrialResult_Failure_CapsQuota1h(t *testing.T) {
 }
 
 // Validates: R-2.10.8
-func TestHandleTrialResult_Failure_CapsService10m(t *testing.T) {
+func TestProcessTrialResult_Failure_CapsService10m(t *testing.T) {
 	t.Parallel()
 
 	mock := &engineMockClient{}
@@ -3187,8 +3195,11 @@ func TestHandleTrialResult_Failure_CapsService10m(t *testing.T) {
 	}
 	tracker.HoldScope("service", block)
 	tracker.Add(&Action{Type: ActionDownload, Path: "test.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
+	tracker.Add(&Action{Type: ActionDownload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i2"}, 99, nil)
 
-	eng.handleTrialResult(t.Context(), &WorkerResult{
+	eng.processTrialResult(t.Context(), &WorkerResult{
+		ActionID:      99,
+		IsTrial:       true,
 		TrialScopeKey: "service",
 		Success:       false,
 		HTTPStatus:    500,
@@ -3198,6 +3209,45 @@ func TestHandleTrialResult_Failure_CapsService10m(t *testing.T) {
 	got, ok := tracker.GetScopeBlock("service")
 	require.True(t, ok)
 	assert.Equal(t, 10*time.Minute, got.TrialInterval, "service interval should cap at 10m")
+}
+
+// Validates: Group A — trial failure must NOT trigger scope detection.
+func TestProcessTrialResult_Failure_NoScopeDetection(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+
+	tracker := NewDepTracker(16, eng.logger)
+	eng.tracker = tracker
+
+	ss := NewScopeState(eng.nowFn, eng.logger)
+	eng.scopeState = ss
+
+	block := &ScopeBlock{
+		Key:           "service",
+		IssueType:     "service_outage",
+		BlockedAt:     time.Now(),
+		TrialInterval: 30 * time.Second,
+		NextTrialAt:   time.Now().Add(30 * time.Second),
+	}
+	tracker.HoldScope("service", block)
+	tracker.Add(&Action{Type: ActionDownload, Path: "held.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
+	tracker.Add(&Action{Type: ActionDownload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i2"}, 99, nil)
+
+	eng.processTrialResult(t.Context(), &WorkerResult{
+		ActionID:      99,
+		IsTrial:       true,
+		TrialScopeKey: "service",
+		Success:       false,
+		HTTPStatus:    500,
+		ErrMsg:        "internal server error",
+	})
+
+	got, ok := tracker.GetScopeBlock("service")
+	require.True(t, ok, "scope block should still exist")
+	assert.Equal(t, 60*time.Second, got.TrialInterval, "interval should be doubled, not reset")
+	assert.Equal(t, 1, got.TrialCount, "trial count should be incremented by extendTrialInterval")
 }
 
 // ---------------------------------------------------------------------------
@@ -3478,11 +3528,9 @@ func TestE2E_429_TrialFailure_DoublesInterval(t *testing.T) {
 	trial1 := readReady(t, ready)
 	assert.True(t, trial1.IsTrial)
 
-	// Send failure result back. Note: 429 trial failures go through both
-	// handleTrialResult (doubles interval) AND feedScopeDetection (re-creates
-	// block from UpdateScope). The re-created block uses RetryAfter as interval,
-	// so we set RetryAfter=4ms to keep the test fast. The net effect: the
-	// scope block is re-created with interval=4ms from the server signal.
+	// Send failure result back. Trial failures go through processTrialResult
+	// which doubles the interval (2ms → 4ms) without calling feedScopeDetection.
+	// The scope is already blocked, so re-detecting would be redundant.
 	results <- WorkerResult{
 		ActionID:      trial1.ID,
 		Path:          trial1.Action.Path,
@@ -3957,8 +4005,12 @@ func TestTrialTimer_QuotaBackoff_CapsAt1h(t *testing.T) {
 	}
 	tracker.HoldScope("quota:own", block)
 	tracker.Add(&Action{Type: ActionUpload, Path: "big.zip", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
+	tracker.Add(&Action{Type: ActionUpload, Path: "trial1.zip", DriveID: driveid.New("d"), ItemID: "t1"}, 90, nil)
+	tracker.Add(&Action{Type: ActionUpload, Path: "trial2.zip", DriveID: driveid.New("d"), ItemID: "t2"}, 91, nil)
 
-	eng.handleTrialResult(t.Context(), &WorkerResult{
+	eng.processTrialResult(t.Context(), &WorkerResult{
+		ActionID:      90,
+		IsTrial:       true,
 		TrialScopeKey: "quota:own",
 		Success:       false,
 		HTTPStatus:    507,
@@ -3970,7 +4022,9 @@ func TestTrialTimer_QuotaBackoff_CapsAt1h(t *testing.T) {
 	assert.Equal(t, 1*time.Hour, got.TrialInterval, "should cap at 1h")
 
 	// Double again — should stay at 1h.
-	eng.handleTrialResult(t.Context(), &WorkerResult{
+	eng.processTrialResult(t.Context(), &WorkerResult{
+		ActionID:      91,
+		IsTrial:       true,
 		TrialScopeKey: "quota:own",
 		Success:       false,
 		HTTPStatus:    507,
@@ -4057,8 +4111,11 @@ func TestTrialTimer_RateLimited_CapsAt10m(t *testing.T) {
 	}
 	tracker.HoldScope("throttle:account", block)
 	tracker.Add(&Action{Type: ActionUpload, Path: "a.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
+	tracker.Add(&Action{Type: ActionUpload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "t1"}, 99, nil)
 
-	eng.handleTrialResult(t.Context(), &WorkerResult{
+	eng.processTrialResult(t.Context(), &WorkerResult{
+		ActionID:      99,
+		IsTrial:       true,
 		TrialScopeKey: "throttle:account",
 		Success:       false,
 		HTTPStatus:    429,
@@ -4136,8 +4193,11 @@ func TestTrialTimer_Service_CapsAt10m(t *testing.T) {
 	}
 	tracker.HoldScope("service", block)
 	tracker.Add(&Action{Type: ActionDownload, Path: "a.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
+	tracker.Add(&Action{Type: ActionDownload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "t1"}, 99, nil)
 
-	eng.handleTrialResult(t.Context(), &WorkerResult{
+	eng.processTrialResult(t.Context(), &WorkerResult{
+		ActionID:      99,
+		IsTrial:       true,
 		TrialScopeKey: "service",
 		Success:       false,
 		HTTPStatus:    500,
