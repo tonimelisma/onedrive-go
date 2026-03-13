@@ -17,7 +17,7 @@ Watch mode uses a unified tick loop: filesystem events are debounced by the chan
 
 Implements: R-6.8.9 [verified], R-6.8.15 [verified], R-6.7.27 [verified]
 
-Pure function `classifyResult(*WorkerResult) → (resultClass, scopeKey)`. Single classification point for all worker results. No side effects — classification is separate from routing ("functions do one thing"). Six result classes:
+Pure function `classifyResult(*WorkerResult) → (resultClass, ScopeKey)`. Single classification point for all worker results. Returns a typed `ScopeKey` (not a string) for scope-block results; zero-value `ScopeKey` for non-scope classes. No side effects — classification is separate from routing ("functions do one thing"). Six result classes:
 
 - `resultSuccess`: action succeeded
 - `resultRequeue`: transient failure — re-queue with backoff
@@ -26,7 +26,7 @@ Pure function `classifyResult(*WorkerResult) → (resultClass, scopeKey)`. Singl
 - `resultShutdown`: context canceled — discard silently, no failure recorded
 - `resultFatal`: abort sync pass (401 unrecoverable auth)
 
-Classification table: 401 → fatal, 403 → skip (with handle403 side effect), 429 → scopeBlock `throttle:account`, 507 → scopeBlock `quota:own` or `quota:shortcut:$key`, 400 + outage pattern → requeue, 5xx → requeue, 408/412/404/423 → requeue, context.Canceled → shutdown, os.ErrPermission → skip.
+Classification uses `ScopeKeyForStatus(httpStatus, shortcutKey)` as the single source of truth for HTTP status → scope key mapping: 401 → fatal, 403 → skip (with handle403 side effect), 429 → scopeBlock `SKThrottleAccount`, 507 → scopeBlock `SKQuotaOwn` or `SKQuotaShortcut(key)`, 400 + outage pattern → requeue, 5xx → requeue, 408/412/404/423 → requeue, context.Canceled → shutdown, os.ErrPermission → skip.
 
 `isOutagePattern()` detects known 400 outage patterns (e.g., "ObjectHandle is Invalid") that are actually transient service outages. Distinguished from phantom drive 400s (R-6.7.11) by error body inspection.
 
@@ -43,7 +43,7 @@ Implements: R-2.10.3 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2
 - **shutdown** → `Complete` (no failure recorded)
 - **fatal** (401) → `recordFailure` with nil delayFn + `Complete`
 
-Trial result routing: `processTrialResult()` handles all trial outcomes with an early return — trial results never enter the normal `processWorkerResult()` switch. Trial success → `tracker.ReleaseScope(scopeKey)` + `resetScopeRetryTimes(scopeKey, now)` (thundering herd: resets `next_retry_at` for all sync_failures matching the scope, then kicks the retrier) + `armTrialTimer()`. Trial failure → `extendTrialInterval(scopeKey)` reads block's current `TrialInterval` via `tracker.GetScopeBlock(scopeKey)` (value copy), doubles it, caps per scope type (`maxTrialIntervalForIssueType`), calls `tracker.ExtendTrialInterval(scopeKey, nextAt, newInterval)` (encapsulates mutation under lock). Scope detection is intentionally NOT called for trial failures — the scope is already blocked, and re-detecting would overwrite the doubled interval. Per-scope caps: quota 1h, rate_limited 10m, service 10m (R-2.10.6/R-2.10.8/R-2.10.14).
+Trial result routing: `processTrialResult()` handles all trial outcomes with an early return — trial results never enter the normal `processWorkerResult()` switch. The `TrialScopeKey ScopeKey` from `WorkerResult` identifies the scope. Trial success → `tracker.ReleaseScope(scopeKey)` + `resetScopeRetryTimes(scopeKey, now)` (thundering herd: resets `next_retry_at` for all sync_failures matching the scope, then kicks the retrier) + `armTrialTimer()`. Trial failure → `extendTrialInterval(scopeKey)` reads block's current `TrialInterval` via `tracker.GetScopeBlock(scopeKey)` (value copy), doubles it, caps per scope type via `ScopeKey.MaxTrialInterval()` (replaces the old `maxTrialIntervalForIssueType` function), calls `tracker.ExtendTrialInterval(scopeKey, nextAt, newInterval)` (encapsulates mutation under lock). Scope detection is intentionally NOT called for trial failures — the scope is already blocked, and re-detecting would overwrite the doubled interval. Per-scope caps: quota 1h, rate_limited 10m, service 10m (R-2.10.6/R-2.10.8/R-2.10.14).
 
 **Trial timer**: `armTrialTimer()` uses `time.AfterFunc` to send to a persistent `trialCh` channel when the earliest `NextTrialAt` across all scope blocks is reached (via `tracker.EarliestTrialAt()`). Using a persistent channel avoids a race where `onHeld` (called from external goroutines via `tracker.Add`) replaces the timer while the drain loop's select watches the old timer's channel. The `trialCh` fires in `drainWorkerResults`'s select loop, calling `tracker.NextDueTrial(now)` + `tracker.DispatchTrial(key)` in a loop until no more trials are due. Called after `applyScopeBlock()`, `processTrialResult()`, trial dispatch, and via the `onHeld` callback when actions enter held queues. Belt-and-suspenders: `armTrialTimer()` is also called after `tracker.Complete` in the `resultScopeBlock` case to catch dependents that entered held.
 
@@ -51,19 +51,19 @@ Trial result routing: `processTrialResult()` handles all trial outcomes with an 
 
 The engine owns all completion decisions — workers are pure executors. Engine-owned counters (`succeeded`, `failed` atomics) replace the worker-owned counters removed in this refactoring. `drainWorkerResults()` processes results concurrently for both one-shot and watch modes.
 
-`recordFailure()` sets category based on `delayFn`: non-nil → `"transient"`, nil → `"actionable"`. Populates `ScopeKey` via `deriveScopeKey(r)` from HTTP status and shortcut context. Delegates to `SyncStore.RecordFailure()` which computes `next_retry_at` via the `delayFn`. The `FailureRetrier` sweeps `sync_failures` for due items and re-injects them via buffer → planner → tracker.
+`recordFailure()` sets category based on `delayFn`: non-nil → `"transient"`, nil → `"actionable"`. Populates `scope_key` via `ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)` — returns a typed `ScopeKey`, serialized to wire format via `String()` for SQLite storage. Delegates to `SyncStore.RecordFailure()` which computes `next_retry_at` via the `delayFn`. The `FailureRetrier` sweeps `sync_failures` for due items and re-injects them via buffer → planner → tracker.
 
 ### ScopeState
 
 Implements: R-2.10.35 [verified], R-2.10.36 [verified], R-2.10.37 [verified]
 
-In-memory data structure in `scope.go`: sliding windows (scope_key → `slidingWindow`) for scope escalation detection. Engine-internal — no cross-engine coordination (each engine discovers independently). Scope blocks are stored in the tracker's `scopeBlocks` map and enforce held queuing.
+In-memory data structure in `scope.go`: sliding windows (`ScopeKey` → `slidingWindow`) for scope escalation detection. All keys are typed `ScopeKey` structs (see sync-execution.md § ScopeKey Type System). Engine-internal — no cross-engine coordination (each engine discovers independently). Scope blocks are stored in the tracker's `scopeBlocks map[ScopeKey]*ScopeBlock` and enforce held queuing.
 
 ### `disk:local` Scope Block
 
 Implements: R-2.10.43 [verified]
 
-Scope key `disk:local` is created by `classifyResult()` when a download fails with `ErrDiskFull` (deterministic signal — immediate, no sliding window). Unlike `throttle:account` and `service` which block ALL actions, `disk:local` blocks downloads only — uploads, deletes, and moves continue because they either free space or don't consume it. This filtering is in `tracker.blockedScope()`, between the `service` and `quota:own` checks. Trial timing uses quota parameters: 5-minute initial interval, 2× backoff, 1-hour max cap (`maxTrialIntervalForIssueType(IssueDiskFull)` returns `quotaMaxTrialInterval`).
+Scope key `SKDiskLocal` is created by `classifyResult()` when a download fails with `ErrDiskFull` (deterministic signal — immediate, no sliding window). Unlike `SKThrottleAccount` and `SKService` which block ALL actions (via `ScopeKey.IsGlobal()`), `SKDiskLocal` blocks downloads only — `ScopeKey.BlocksAction()` returns true only for `ActionDownload`. Uploads, deletes, and moves continue because they either free space or don't consume it. In `blockedScope()`, `SKDiskLocal` is checked in priority order between `SKService` and `SKQuotaOwn`. Trial timing uses quota parameters: 5-minute initial interval, 2× backoff, 1-hour max cap (`ScopeKey.MaxTrialInterval()` returns `quotaMaxTrialInterval` for `ScopeDiskLocal`).
 
 ### Scanner ScanResult Contract
 
@@ -84,15 +84,15 @@ When >10 items share the same warning category, log 1 WARN summary with count an
 
 Implements: R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.10 [verified]
 
-`os.ErrPermission` → check parent directory accessibility via `handleLocalPermission()`. Inaccessible directory: one `local_permission_denied` at directory level with `perm:dir:` scope block, suppress operations under it. Accessible directory: file-level failure. Recheck directory-level issues at start of each sync pass via `recheckLocalPermissions()`.
+`os.ErrPermission` → check parent directory accessibility via `handleLocalPermission()`. Inaccessible directory: one `local_permission_denied` at directory level with `SKPermDir(path)` scope block, suppress operations under it. Accessible directory: file-level failure. Recheck directory-level issues at start of each sync pass via `recheckLocalPermissions()`.
 
-**Scanner-driven auto-clear** (R-2.10.10): `clearScannerResolvedPermissions()` checks whether the scanner observed paths that were previously blocked by `local_permission_denied` failures. If the scanner successfully accessed a path (it appeared in events), the permission issue is resolved — clear the failure and release any scope block. File-level: cleared if the path itself was observed. Directory-level (`perm:dir:` scope): cleared if any observed path falls under the directory prefix. Called after `clearResolvedSkippedItems()` in one-shot mode, and after `recheckLocalPermissions()` in watch mode. Complements `recheckLocalPermissions()` — both may clear the same failure (idempotent).
+**Scanner-driven auto-clear** (R-2.10.10): `clearScannerResolvedPermissions()` checks whether the scanner observed paths that were previously blocked by `local_permission_denied` failures. If the scanner successfully accessed a path (it appeared in events), the permission issue is resolved — clear the failure and release any scope block. File-level: cleared if the path itself was observed. Directory-level (`ScopePermDir` scope): cleared if any observed path falls under the directory prefix (checked via `ScopeKey.IsPermDir()` and `ScopeKey.DirPath()`). Called after `clearResolvedSkippedItems()` in one-shot mode, and after `recheckLocalPermissions()` in watch mode. Complements `recheckLocalPermissions()` — both may clear the same failure (idempotent).
 
 ### Planned: Observation Suppression
 
 Implements: R-2.10.30 [verified], R-2.10.31 [verified]
 
-During `throttle:account` or `service` scope block, suppress shortcut observation polling (wastes API calls). During `quota:shortcut:*` block, observation continues (read-only).
+During `SKThrottleAccount` or `SKService` scope block (detected via `ScopeKey.IsGlobal()`), suppress shortcut observation polling (wastes API calls). During `quota:shortcut:*` block, observation continues (read-only).
 
 Observation suppression (`isObservationSuppressed()`) suppresses the entire `processShortcuts()` call, which includes both shortcut discovery and delta polling. Also suppresses `recheckPermissions()` API calls since those are equally wasteful during an outage. Suppressing discovery is acceptable — new shortcuts during an outage would fail immediately anyway. Discovery resumes when the scope clears. Local permission rechecks (`recheckLocalPermissions`) proceed regardless since they are filesystem-only.
 
@@ -100,7 +100,7 @@ Observation suppression (`isObservationSuppressed()`) suppresses the entire `pro
 
 **Trial path separation**: `processWorkerResult()` checks `IsTrial` and returns early via `processTrialResult()` — trial results never enter the normal switch. This eliminates the prior fragile pattern where trial failures fell through into the normal result switch and required `maybeFeedScopeDetection` guards. `processTrialResult()` handles all trial outcomes self-contained: success releases the scope, failure extends the interval via `extendTrialInterval()`, and scope detection is never called (the scope is already blocked).
 
-**External perm:dir clearance**: `handleExternalChanges()` checks whether `local_permission_denied` failures were cleared via CLI (`issues clear`). If so, releases the corresponding in-memory `perm:dir:` scope blocks via `tracker.ReleaseScope()`.
+**External perm:dir clearance**: `handleExternalChanges()` checks whether `local_permission_denied` failures were cleared via CLI (`issues clear`). Iterates `tracker.ScopeBlockKeys()`, filters via `ScopeKey.IsPermDir()`, and releases cleared blocks via `tracker.ReleaseScope()`.
 
 **Watch mode summary**: `logWatchSummary()` logs a periodic one-liner at the recheck interval (10s) showing actionable issue counts by type. Only logs when the count changes to avoid noisy output.
 

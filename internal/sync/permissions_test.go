@@ -1056,10 +1056,10 @@ func TestHandleLocalPermission_DirectoryLevel(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 	assert.Equal(t, "Private", issues[0].Path)
-	assert.Equal(t, scopeKeyPermDir+"Private", issues[0].ScopeKey)
+	assert.Equal(t, SKPermDir("Private").String(), issues[0].ScopeKey)
 
 	// Should have created a scope block.
-	_, blocked := tracker.GetScopeBlock(scopeKeyPermDir + "Private")
+	_, blocked := tracker.GetScopeBlock(SKPermDir("Private"))
 	assert.True(t, blocked, "should create a scope block for the denied directory")
 }
 
@@ -1115,7 +1115,7 @@ func TestRecheckLocalPermissions_Restored(t *testing.T) {
 	tracker := NewDepTracker(16, eng.logger)
 	eng.tracker = tracker
 
-	scopeKey := scopeKeyPermDir + "Private"
+	scopeKey := SKPermDir("Private")
 
 	// Simulate a prior denial: record failure + scope block.
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
@@ -1125,7 +1125,7 @@ func TestRecheckLocalPermissions_Restored(t *testing.T) {
 		IssueType: IssueLocalPermissionDenied,
 		Category:  "actionable",
 		ErrMsg:    "directory not accessible",
-		ScopeKey:  scopeKey,
+		ScopeKey:  scopeKey.String(),
 	}, nil))
 
 	block := &ScopeBlock{Key: scopeKey, IssueType: IssueLocalPermissionDenied}
@@ -1163,7 +1163,7 @@ func TestRecheckLocalPermissions_StillDenied(t *testing.T) {
 	tracker := NewDepTracker(16, eng.logger)
 	eng.tracker = tracker
 
-	scopeKey := scopeKeyPermDir + "Private"
+	scopeKey := SKPermDir("Private")
 
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:      "Private",
@@ -1172,7 +1172,7 @@ func TestRecheckLocalPermissions_StillDenied(t *testing.T) {
 		IssueType: IssueLocalPermissionDenied,
 		Category:  "actionable",
 		ErrMsg:    "directory not accessible",
-		ScopeKey:  scopeKey,
+		ScopeKey:  scopeKey.String(),
 	}, nil))
 
 	block := &ScopeBlock{Key: scopeKey, IssueType: IssueLocalPermissionDenied}
@@ -1232,7 +1232,7 @@ func TestClearScannerResolvedPermissions_DirLevel(t *testing.T) {
 	tracker := NewDepTracker(16, eng.logger)
 	eng.tracker = tracker
 
-	scopeKey := scopeKeyPermDir + "Private"
+	scopeKey := SKPermDir("Private")
 
 	// Record a directory-level permission failure with scope block.
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
@@ -1242,7 +1242,7 @@ func TestClearScannerResolvedPermissions_DirLevel(t *testing.T) {
 		IssueType: IssueLocalPermissionDenied,
 		Category:  "actionable",
 		ErrMsg:    "directory not accessible",
-		ScopeKey:  scopeKey,
+		ScopeKey:  scopeKey.String(),
 	}, nil))
 
 	block := &ScopeBlock{Key: scopeKey, IssueType: IssueLocalPermissionDenied}
@@ -1272,7 +1272,7 @@ func TestClearScannerResolvedPermissions_NoFalsePositives(t *testing.T) {
 	tracker := NewDepTracker(16, eng.logger)
 	eng.tracker = tracker
 
-	scopeKey := scopeKeyPermDir + "Private"
+	scopeKey := SKPermDir("Private")
 
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:      "Private",
@@ -1281,7 +1281,7 @@ func TestClearScannerResolvedPermissions_NoFalsePositives(t *testing.T) {
 		IssueType: IssueLocalPermissionDenied,
 		Category:  "actionable",
 		ErrMsg:    "directory not accessible",
-		ScopeKey:  scopeKey,
+		ScopeKey:  scopeKey.String(),
 	}, nil))
 
 	block := &ScopeBlock{Key: scopeKey, IssueType: IssueLocalPermissionDenied}

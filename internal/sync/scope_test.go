@@ -39,7 +39,7 @@ func TestScope_429Immediate(t *testing.T) {
 	result := ss.UpdateScope(&r)
 
 	require.True(t, result.Block, "single 429 must trigger immediate block")
-	assert.Equal(t, "throttle:account", result.ScopeKey)
+	assert.Equal(t, SKThrottleAccount, result.ScopeKey)
 	assert.Equal(t, "rate_limited", result.IssueType)
 	assert.Equal(t, 90*time.Second, result.TrialInterval, "trial interval should honor Retry-After")
 }
@@ -59,7 +59,7 @@ func TestScope_429FallbackInterval(t *testing.T) {
 	result := ss.UpdateScope(&r)
 
 	require.True(t, result.Block)
-	assert.Equal(t, "throttle:account", result.ScopeKey)
+	assert.Equal(t, SKThrottleAccount, result.ScopeKey)
 	assert.Equal(t, serviceInitialInterval, result.TrialInterval, "429 without Retry-After must fall back to serviceInitialInterval")
 }
 
@@ -79,7 +79,7 @@ func TestScope_503WithRetryAfter(t *testing.T) {
 	result := ss.UpdateScope(&r)
 
 	require.True(t, result.Block, "503 with Retry-After must trigger immediate service block")
-	assert.Equal(t, "service", result.ScopeKey)
+	assert.Equal(t, SKService, result.ScopeKey)
 	assert.Equal(t, "service_outage", result.IssueType)
 	assert.Equal(t, 120*time.Second, result.TrialInterval, "trial interval should use Retry-After value")
 }
@@ -121,7 +121,7 @@ func TestScope_507OwnDrive(t *testing.T) {
 			assert.False(t, result.Block, "path %d (%s) should not trigger block yet", i, p)
 		} else {
 			require.True(t, result.Block, "third unique path must trigger quota:own block")
-			assert.Equal(t, "quota:own", result.ScopeKey)
+			assert.Equal(t, SKQuotaOwn, result.ScopeKey)
 			assert.Equal(t, "quota_exceeded", result.IssueType)
 			assert.Equal(t, quotaInitialInterval, result.TrialInterval)
 		}
@@ -149,7 +149,7 @@ func TestScope_507Shortcut(t *testing.T) {
 			assert.False(t, result.Block, "path %d should not trigger block yet", i)
 		} else {
 			require.True(t, result.Block, "third unique shortcut path must trigger quota:shortcut block")
-			assert.Equal(t, "quota:shortcut:"+shortcutKey, result.ScopeKey)
+			assert.Equal(t, SKQuotaShortcut(shortcutKey), result.ScopeKey)
 			assert.Equal(t, "quota_exceeded", result.IssueType)
 			assert.Equal(t, quotaInitialInterval, result.TrialInterval)
 		}
@@ -183,7 +183,7 @@ func TestScope_507IndependentShortcuts(t *testing.T) {
 			assert.False(t, result.Block)
 		} else {
 			require.True(t, result.Block, "shortcut B must trigger independently")
-			assert.Equal(t, "quota:shortcut:"+keyB, result.ScopeKey)
+			assert.Equal(t, SKQuotaShortcut(keyB), result.ScopeKey)
 		}
 		advance(1 * time.Second)
 	}
@@ -194,7 +194,7 @@ func TestScope_507IndependentShortcuts(t *testing.T) {
 	rA3 := WorkerResult{Path: "/shared-a/3.txt", HTTPStatus: 507, ShortcutKey: keyA}
 	resultA3 := ss.UpdateScope(&rA3)
 	require.True(t, resultA3.Block, "third unique path on shortcut A should now trigger")
-	assert.Equal(t, "quota:shortcut:"+keyA, resultA3.ScopeKey,
+	assert.Equal(t, SKQuotaShortcut(keyA), resultA3.ScopeKey,
 		"shortcut A block must be independent from shortcut B")
 }
 
@@ -217,7 +217,7 @@ func TestScope_5xxSlidingWindow(t *testing.T) {
 			assert.False(t, result.Block, "path %d should not trigger block yet", i)
 		} else {
 			require.True(t, result.Block, "fifth unique path must trigger service block")
-			assert.Equal(t, "service", result.ScopeKey)
+			assert.Equal(t, SKService, result.ScopeKey)
 			assert.Equal(t, "service_outage", result.IssueType)
 			assert.Equal(t, serviceInitialInterval, result.TrialInterval)
 		}
@@ -282,7 +282,7 @@ func TestScope_SuccessResetsWindow(t *testing.T) {
 	r := WorkerResult{Path: "/e.txt", HTTPStatus: 507}
 	result := ss.UpdateScope(&r)
 	require.True(t, result.Block, "third unique path after reset should trigger quota:own")
-	assert.Equal(t, "quota:own", result.ScopeKey)
+	assert.Equal(t, SKQuotaOwn, result.ScopeKey)
 }
 
 // Validates: R-2.10.42
@@ -315,7 +315,7 @@ func TestScope_SuccessResetsShortcutWindow(t *testing.T) {
 	r := WorkerResult{Path: "/sh/e.txt", HTTPStatus: 507, ShortcutKey: shortcutKey}
 	result := ss.UpdateScope(&r)
 	require.True(t, result.Block)
-	assert.Equal(t, "quota:shortcut:"+shortcutKey, result.ScopeKey)
+	assert.Equal(t, SKQuotaShortcut(shortcutKey), result.ScopeKey)
 }
 
 // TestScope_SameFileDoesNotEscalate verifies that repeated failures from
@@ -355,7 +355,7 @@ func TestScope_UpdateScopeOutagePattern(t *testing.T) {
 			assert.False(t, result.Block, "outage pattern path %d should not trigger block yet", i)
 		} else {
 			require.True(t, result.Block, "fifth unique outage-pattern path must trigger service block")
-			assert.Equal(t, "service", result.ScopeKey)
+			assert.Equal(t, SKService, result.ScopeKey)
 			assert.Equal(t, "service_outage", result.IssueType)
 			assert.Equal(t, serviceInitialInterval, result.TrialInterval)
 		}
@@ -388,7 +388,7 @@ func TestScope_OutagePatternSharesWindowWith5xx(t *testing.T) {
 	// 5xx and outage patterns share the same "service" window.
 	result = ss.UpdateScopeOutagePattern("/e.txt")
 	require.True(t, result.Block, "outage patterns and 5xx share the service window")
-	assert.Equal(t, "service", result.ScopeKey)
+	assert.Equal(t, SKService, result.ScopeKey)
 }
 
 // TestScope_NonScopeStatusReturnsEmpty verifies that non-scope HTTP
@@ -449,27 +449,205 @@ func TestScope_SuccessResetsServiceWindow(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// maxTrialIntervalForIssueType (R-2.10.14)
+// ScopeKey.MaxTrialInterval (R-2.10.14)
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.10.6, R-2.10.8, R-2.10.14
-func TestMaxTrialIntervalForIssueType(t *testing.T) {
+func TestScopeKey_MaxTrialInterval(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		issueType string
-		want      time.Duration
+		name string
+		key  ScopeKey
+		want time.Duration
 	}{
-		{"quota_exceeded", 1 * time.Hour},
+		{"quota:own", SKQuotaOwn, 1 * time.Hour},
+		{"quota:shortcut", SKQuotaShortcut("driveX:itemY"), 1 * time.Hour},
 		// Validates: R-2.10.43
-		{IssueDiskFull, 1 * time.Hour}, // same cap as quota — disk free changes slowly
-		{"rate_limited", 10 * time.Minute},
-		{"service_outage", 10 * time.Minute},
-		{"unknown_type", 10 * time.Minute}, // default
+		{"disk:local", SKDiskLocal, 1 * time.Hour}, // same cap as quota — disk free changes slowly
+		{"throttle:account", SKThrottleAccount, 10 * time.Minute},
+		{"service", SKService, 10 * time.Minute},
+		{"zero-value (unknown)", ScopeKey{}, 10 * time.Minute}, // default
 	}
 
 	for _, tt := range tests {
-		assert.Equal(t, tt.want, maxTrialIntervalForIssueType(tt.issueType),
-			"maxTrialIntervalForIssueType(%q)", tt.issueType)
+		assert.Equal(t, tt.want, tt.key.MaxTrialInterval(),
+			"ScopeKey(%s).MaxTrialInterval()", tt.name)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// ScopeKey type system tests
+// ---------------------------------------------------------------------------
+
+func TestScopeKey_StringRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		key  ScopeKey
+		wire string
+	}{
+		{"throttle:account", SKThrottleAccount, "throttle:account"},
+		{"service", SKService, "service"},
+		{"quota:own", SKQuotaOwn, "quota:own"},
+		{"disk:local", SKDiskLocal, "disk:local"},
+		{"quota:shortcut", SKQuotaShortcut("driveA:itemB"), "quota:shortcut:driveA:itemB"},
+		{"perm:dir", SKPermDir("Documents/Private"), "perm:dir:Documents/Private"},
+	}
+
+	for _, tt := range tests {
+		// String() produces the expected wire format.
+		assert.Equal(t, tt.wire, tt.key.String(), "%s String()", tt.name)
+
+		// ParseScopeKey round-trips back to the original key.
+		parsed := ParseScopeKey(tt.wire)
+		assert.Equal(t, tt.key, parsed, "%s ParseScopeKey round-trip", tt.name)
+	}
+}
+
+func TestParseScopeKey_Unknown(t *testing.T) {
+	t.Parallel()
+
+	// Unknown wire format produces zero-value ScopeKey.
+	sk := ParseScopeKey("unknown:format")
+	assert.True(t, sk.IsZero(), "unknown format should produce zero ScopeKey")
+
+	sk = ParseScopeKey("")
+	assert.True(t, sk.IsZero(), "empty string should produce zero ScopeKey")
+}
+
+func TestScopeKey_IsZero(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, ScopeKey{}.IsZero())
+	assert.False(t, SKThrottleAccount.IsZero())
+	assert.False(t, SKPermDir("x").IsZero())
+}
+
+func TestScopeKey_IsGlobal(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, SKThrottleAccount.IsGlobal())
+	assert.True(t, SKService.IsGlobal())
+	assert.False(t, SKQuotaOwn.IsGlobal())
+	assert.False(t, SKQuotaShortcut("a:b").IsGlobal())
+	assert.False(t, SKPermDir("x").IsGlobal())
+	assert.False(t, SKDiskLocal.IsGlobal())
+}
+
+func TestScopeKey_IsPermDir(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, SKPermDir("Documents").IsPermDir())
+	assert.False(t, SKThrottleAccount.IsPermDir())
+	assert.False(t, SKQuotaOwn.IsPermDir())
+}
+
+func TestScopeKey_DirPath(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "Documents/Private", SKPermDir("Documents/Private").DirPath())
+
+	// DirPath on non-PermDir should panic.
+	assert.Panics(t, func() { SKThrottleAccount.DirPath() })
+}
+
+func TestScopeKey_IssueType(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		key  ScopeKey
+		want string
+	}{
+		{SKThrottleAccount, IssueRateLimited},
+		{SKService, IssueServiceOutage},
+		{SKQuotaOwn, IssueQuotaExceeded},
+		{SKQuotaShortcut("a:b"), IssueQuotaExceeded},
+		{SKPermDir("x"), IssueLocalPermissionDenied},
+		{SKDiskLocal, IssueDiskFull},
+		{ScopeKey{}, ""}, // zero value
+	}
+
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, tt.key.IssueType(), "IssueType for %s", tt.key)
+	}
+}
+
+func TestScopeKey_Humanize(t *testing.T) {
+	t.Parallel()
+
+	shortcuts := []Shortcut{
+		{RemoteDrive: "driveA", RemoteItem: "itemB", LocalPath: "/mnt/shared/TeamDocs"},
+	}
+
+	assert.Equal(t, "your OneDrive account (rate limited)", SKThrottleAccount.Humanize(nil))
+	assert.Equal(t, "OneDrive service", SKService.Humanize(nil))
+	assert.Equal(t, "your OneDrive storage", SKQuotaOwn.Humanize(nil))
+	assert.Equal(t, "local disk", SKDiskLocal.Humanize(nil))
+	assert.Equal(t, "Documents/Private", SKPermDir("Documents/Private").Humanize(nil))
+
+	// Shortcut found by local path.
+	assert.Equal(t, "/mnt/shared/TeamDocs", SKQuotaShortcut("driveA:itemB").Humanize(shortcuts))
+
+	// Shortcut not found — falls back to composite key.
+	assert.Equal(t, "driveX:itemY", SKQuotaShortcut("driveX:itemY").Humanize(nil))
+}
+
+func TestScopeKey_BlocksAction(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		key             ScopeKey
+		path            string
+		shortcutKey     string
+		actionType      ActionType
+		targetsOwnDrive bool
+		want            bool
+	}{
+		// Global scopes block everything.
+		{"throttle blocks upload", SKThrottleAccount, "/a.txt", "", ActionUpload, true, true},
+		{"throttle blocks download", SKThrottleAccount, "/a.txt", "", ActionDownload, true, true},
+		{"service blocks all", SKService, "/a.txt", "sc:1", ActionUpload, false, true},
+
+		// Disk:local blocks downloads only.
+		{"disk blocks download", SKDiskLocal, "/a.txt", "", ActionDownload, true, true},
+		{"disk passes upload", SKDiskLocal, "/a.txt", "", ActionUpload, true, false},
+
+		// Quota:own blocks own-drive uploads.
+		{"quota own blocks own upload", SKQuotaOwn, "/a.txt", "", ActionUpload, true, true},
+		{"quota own passes download", SKQuotaOwn, "/a.txt", "", ActionDownload, true, false},
+		{"quota own passes shortcut upload", SKQuotaOwn, "/a.txt", "sc:1", ActionUpload, false, false},
+
+		// Quota:shortcut blocks matching shortcut uploads.
+		{"shortcut blocks matching upload", SKQuotaShortcut("sc:1"), "/a.txt", "sc:1", ActionUpload, false, true},
+		{"shortcut passes wrong shortcut", SKQuotaShortcut("sc:1"), "/a.txt", "sc:2", ActionUpload, false, false},
+		{"shortcut passes download", SKQuotaShortcut("sc:1"), "/a.txt", "sc:1", ActionDownload, false, false},
+
+		// Perm:dir blocks paths under the directory.
+		{"perm blocks exact dir", SKPermDir("Private"), "Private", "", ActionUpload, true, true},
+		{"perm blocks subpath", SKPermDir("Private"), "Private/secret.txt", "", ActionUpload, true, true},
+		{"perm passes outside", SKPermDir("Private"), "Public/readme.txt", "", ActionUpload, true, false},
+	}
+
+	for _, tt := range tests {
+		got := tt.key.BlocksAction(tt.path, tt.shortcutKey, tt.actionType, tt.targetsOwnDrive)
+		assert.Equal(t, tt.want, got, tt.name)
+	}
+}
+
+// Validates: R-2.10.1, R-2.10.3
+func TestScopeKeyForStatus(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, SKThrottleAccount, ScopeKeyForStatus(429, ""))
+	assert.Equal(t, SKThrottleAccount, ScopeKeyForStatus(429, "sc:1")) // 429 is always account-level
+	assert.Equal(t, SKService, ScopeKeyForStatus(503, ""))
+	assert.Equal(t, SKService, ScopeKeyForStatus(500, ""))
+	assert.Equal(t, SKService, ScopeKeyForStatus(502, ""))
+	assert.Equal(t, SKQuotaOwn, ScopeKeyForStatus(507, ""))
+	assert.Equal(t, SKQuotaShortcut("drive1:item1"), ScopeKeyForStatus(507, "drive1:item1"))
+	assert.True(t, ScopeKeyForStatus(404, "").IsZero(), "non-scope status should be zero")
+	assert.True(t, ScopeKeyForStatus(200, "").IsZero(), "success status should be zero")
 }

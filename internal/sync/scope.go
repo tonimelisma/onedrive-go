@@ -20,30 +20,232 @@ package sync
 import (
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 )
 
-// Scope key constants used throughout scope detection and classification.
+// ---------------------------------------------------------------------------
+// ScopeKey — typed scope key replacing raw string keys
+// ---------------------------------------------------------------------------
+
+// ScopeKeyKind discriminates the type of scope block. Value-typed (usable
+// as map key), exhaustive via switch. Zero value is invalid by construction.
+type ScopeKeyKind int
+
 const (
-	scopeKeyThrottleAccount = "throttle:account"
-	scopeKeyQuotaOwn        = "quota:own"
-	scopeKeyQuotaShortcut   = "quota:shortcut:"
-	scopeKeyService         = "service"
-
-	// scopeKeyDiskLocal is the scope key for local disk space exhaustion.
-	// Blocks downloads only — uploads, deletes, and moves continue (R-2.10.43).
-	scopeKeyDiskLocal = "disk:local"
-
-	// scopeKeyPermDir is the prefix for local directory permission scope
-	// blocks. The full key is "perm:dir:" + absolute-or-relative directory path.
-	// These blocks hold all actions whose path falls under the denied directory.
-	scopeKeyPermDir = "perm:dir:"
+	ScopeThrottleAccount ScopeKeyKind = iota + 1 // no Param
+	ScopeService                                 // no Param
+	ScopeQuotaOwn                                // no Param
+	ScopeQuotaShortcut                           // Param = "remoteDrive:remoteItem"
+	ScopePermDir                                 // Param = relative directory path
+	ScopeDiskLocal                               // no Param
 )
 
-// shortcutScopeKey returns the quota scope key for a shortcut identified
-// by its composite key (remoteDrive:remoteItem).
-func shortcutScopeKey(compositeKey string) string {
-	return scopeKeyQuotaShortcut + compositeKey
+// ScopeKey identifies a scope block. The Kind discriminator determines the
+// semantics; Param carries per-instance data for parameterized scopes
+// (ScopeQuotaShortcut, ScopePermDir). Comparable, so usable as a map key.
+type ScopeKey struct {
+	Kind  ScopeKeyKind
+	Param string
+}
+
+// Pre-built scope keys for non-parameterized scopes. Use these instead of
+// constructing ScopeKey{Kind: ...} literals for readability.
+var (
+	SKThrottleAccount = ScopeKey{Kind: ScopeThrottleAccount}
+	SKService         = ScopeKey{Kind: ScopeService}
+	SKQuotaOwn        = ScopeKey{Kind: ScopeQuotaOwn}
+	SKDiskLocal       = ScopeKey{Kind: ScopeDiskLocal}
+)
+
+// SKQuotaShortcut returns the scope key for a shortcut quota block.
+func SKQuotaShortcut(compositeKey string) ScopeKey {
+	return ScopeKey{Kind: ScopeQuotaShortcut, Param: compositeKey}
+}
+
+// SKPermDir returns the scope key for a local directory permission block.
+func SKPermDir(dirPath string) ScopeKey {
+	return ScopeKey{Kind: ScopePermDir, Param: dirPath}
+}
+
+// IsZero returns true for the zero-value ScopeKey (Kind == 0).
+func (sk ScopeKey) IsZero() bool {
+	return sk.Kind == 0
+}
+
+// Wire-format strings for scope keys stored in SQLite scope_key columns.
+// Used by String() and ParseScopeKey() — the only serialization boundary.
+const (
+	wireThrottleAccount = "throttle:account"
+	wireService         = "service"
+	wireQuotaOwn        = "quota:own"
+	wireQuotaShortcut   = "quota:shortcut:" // prefix for parameterized key
+	wirePermDir         = "perm:dir:"       // prefix for parameterized key
+	wireDiskLocal       = "disk:local"
+)
+
+// String serializes to the wire format stored in SQLite scope_key columns.
+// ParseScopeKey is the inverse.
+func (sk ScopeKey) String() string {
+	switch sk.Kind {
+	case ScopeThrottleAccount:
+		return wireThrottleAccount
+	case ScopeService:
+		return wireService
+	case ScopeQuotaOwn:
+		return wireQuotaOwn
+	case ScopeQuotaShortcut:
+		return wireQuotaShortcut + sk.Param
+	case ScopePermDir:
+		return wirePermDir + sk.Param
+	case ScopeDiskLocal:
+		return wireDiskLocal
+	default:
+		return ""
+	}
+}
+
+// ParseScopeKey deserializes a wire-format string into a ScopeKey.
+// Returns the zero-value ScopeKey for unknown formats.
+func ParseScopeKey(s string) ScopeKey {
+	switch {
+	case s == wireThrottleAccount:
+		return SKThrottleAccount
+	case s == wireService:
+		return SKService
+	case s == wireQuotaOwn:
+		return SKQuotaOwn
+	case s == wireDiskLocal:
+		return SKDiskLocal
+	case len(s) > len(wireQuotaShortcut) && s[:len(wireQuotaShortcut)] == wireQuotaShortcut:
+		return SKQuotaShortcut(s[len(wireQuotaShortcut):])
+	case len(s) > len(wirePermDir) && s[:len(wirePermDir)] == wirePermDir:
+		return SKPermDir(s[len(wirePermDir):])
+	default:
+		return ScopeKey{}
+	}
+}
+
+// IsGlobal returns true for scope blocks that affect ALL actions (throttle,
+// service). Used by isObservationSuppressed to skip API calls during outages.
+func (sk ScopeKey) IsGlobal() bool {
+	return sk.Kind == ScopeThrottleAccount || sk.Kind == ScopeService
+}
+
+// IsPermDir returns true for local directory permission scope blocks.
+func (sk ScopeKey) IsPermDir() bool {
+	return sk.Kind == ScopePermDir
+}
+
+// DirPath returns the directory path for a ScopePermDir key.
+// Panics if called on a non-PermDir key (defensive — caller bug).
+func (sk ScopeKey) DirPath() string {
+	if sk.Kind != ScopePermDir {
+		panic("ScopeKey.DirPath() called on non-PermDir key")
+	}
+	return sk.Param
+}
+
+// IssueType returns the issue_type constant for this scope key's kind.
+// Used to populate sync_failures.issue_type consistently.
+func (sk ScopeKey) IssueType() string {
+	switch sk.Kind {
+	case ScopeThrottleAccount:
+		return IssueRateLimited
+	case ScopeService:
+		return IssueServiceOutage
+	case ScopeQuotaOwn, ScopeQuotaShortcut:
+		return IssueQuotaExceeded
+	case ScopePermDir:
+		return IssueLocalPermissionDenied
+	case ScopeDiskLocal:
+		return IssueDiskFull
+	default:
+		return ""
+	}
+}
+
+// MaxTrialInterval returns the per-scope-type maximum trial interval cap
+// (R-2.10.6, R-2.10.8, R-2.10.14, R-2.10.43).
+func (sk ScopeKey) MaxTrialInterval() time.Duration {
+	switch sk.Kind { //nolint:exhaustive // ScopePermDir has no trials; default handles unknown kinds
+	case ScopeQuotaOwn, ScopeQuotaShortcut, ScopeDiskLocal:
+		return quotaMaxTrialInterval
+	case ScopeThrottleAccount:
+		return rateLimitMaxTrialInterval
+	case ScopeService:
+		return serviceMaxTrialInterval
+	default:
+		return serviceMaxTrialInterval // safe default
+	}
+}
+
+// Humanize translates a scope key to a user-friendly description (R-2.10.22).
+// For shortcut scopes, looks up the shortcut's local path from the provided
+// list. For perm:dir, returns the directory path. For global scopes, returns
+// a plain English description.
+func (sk ScopeKey) Humanize(shortcuts []Shortcut) string {
+	switch sk.Kind {
+	case ScopeThrottleAccount:
+		return "your OneDrive account (rate limited)"
+	case ScopeService:
+		return "OneDrive service"
+	case ScopeQuotaOwn:
+		return "your OneDrive storage"
+	case ScopeQuotaShortcut:
+		for i := range shortcuts {
+			if shortcuts[i].RemoteDrive+":"+shortcuts[i].RemoteItem == sk.Param {
+				return shortcuts[i].LocalPath
+			}
+		}
+		return sk.Param // fallback to composite key
+	case ScopePermDir:
+		return sk.Param
+	case ScopeDiskLocal:
+		return "local disk"
+	default:
+		return sk.String()
+	}
+}
+
+// BlocksAction returns true if this scope key blocks the given action.
+// Replaces the scattered string-matching logic from blockedScope().
+func (sk ScopeKey) BlocksAction(path, shortcutKey string, actionType ActionType, targetsOwnDrive bool) bool {
+	switch sk.Kind {
+	case ScopeThrottleAccount, ScopeService:
+		return true // global blocks
+	case ScopeDiskLocal:
+		return actionType == ActionDownload
+	case ScopeQuotaOwn:
+		return targetsOwnDrive && actionType == ActionUpload
+	case ScopeQuotaShortcut:
+		return shortcutKey == sk.Param && actionType == ActionUpload
+	case ScopePermDir:
+		return path == sk.Param || strings.HasPrefix(path, sk.Param+"/")
+	default:
+		return false
+	}
+}
+
+// ScopeKeyForStatus maps an HTTP status code and shortcut context to a
+// ScopeKey. Returns the zero-value for non-scope statuses. Single source
+// of truth for HTTP status → scope key classification.
+func ScopeKeyForStatus(httpStatus int, shortcutKey string) ScopeKey {
+	switch {
+	case httpStatus == http.StatusTooManyRequests:
+		return SKThrottleAccount
+	case httpStatus == http.StatusServiceUnavailable:
+		return SKService
+	case httpStatus == http.StatusInsufficientStorage:
+		if shortcutKey != "" {
+			return SKQuotaShortcut(shortcutKey)
+		}
+		return SKQuotaOwn
+	case httpStatus >= http.StatusInternalServerError:
+		return SKService
+	default:
+		return ScopeKey{}
+	}
 }
 
 // Scope detection thresholds.
@@ -72,29 +274,12 @@ const (
 	rateLimitMaxTrialInterval = 10 * time.Minute
 )
 
-// maxTrialIntervalForIssueType returns the maximum trial interval for the
-// given scope issue type. Used by handleTrialResult to cap backoff (R-2.10.14).
-func maxTrialIntervalForIssueType(issueType string) time.Duration {
-	switch issueType {
-	case IssueQuotaExceeded:
-		return quotaMaxTrialInterval
-	case IssueDiskFull:
-		return quotaMaxTrialInterval // same 1h max as quota (R-2.10.43)
-	case IssueRateLimited:
-		return rateLimitMaxTrialInterval
-	case IssueServiceOutage:
-		return serviceMaxTrialInterval
-	default:
-		return serviceMaxTrialInterval // safe default
-	}
-}
-
 // ScopeState maintains sliding windows for scope escalation detection and
 // records successes that reset windows. Thread-safety is provided by the
 // engine's single-goroutine drain loop — all calls come from
 // processWorkerResult which runs on one goroutine.
 type ScopeState struct {
-	windows map[string]*slidingWindow
+	windows map[ScopeKey]*slidingWindow
 	nowFunc func() time.Time
 	logger  *slog.Logger
 }
@@ -102,31 +287,9 @@ type ScopeState struct {
 // NewScopeState creates a ScopeState with the given clock and logger.
 func NewScopeState(nowFunc func() time.Time, logger *slog.Logger) *ScopeState {
 	return &ScopeState{
-		windows: make(map[string]*slidingWindow),
+		windows: make(map[ScopeKey]*slidingWindow),
 		nowFunc: nowFunc,
 		logger:  logger,
-	}
-}
-
-// scopeKeyForStatus maps an HTTP status code and shortcut context to a scope
-// key. Returns "" for non-scope statuses. This is the single source of truth
-// for HTTP status → scope key classification, used by both UpdateScope
-// (detection) and deriveScopeKey (sync_failures tagging).
-func scopeKeyForStatus(httpStatus int, shortcutKey string) string {
-	switch {
-	case httpStatus == http.StatusTooManyRequests:
-		return scopeKeyThrottleAccount
-	case httpStatus == http.StatusServiceUnavailable:
-		return scopeKeyService
-	case httpStatus == http.StatusInsufficientStorage:
-		if shortcutKey != "" {
-			return shortcutScopeKey(shortcutKey)
-		}
-		return scopeKeyQuotaOwn
-	case httpStatus >= http.StatusInternalServerError:
-		return scopeKeyService
-	default:
-		return ""
 	}
 }
 
@@ -134,7 +297,7 @@ func scopeKeyForStatus(httpStatus int, shortcutKey string) string {
 // block should be created.
 type ScopeUpdateResult struct {
 	Block         bool          // true if threshold crossed → create block
-	ScopeKey      string        // scope key for the block
+	ScopeKey      ScopeKey      // scope key for the block
 	IssueType     string        // "rate_limited", IssueQuotaExceeded, IssueServiceOutage
 	TrialInterval time.Duration // initial trial interval for the block
 }
@@ -159,7 +322,7 @@ func (ss *ScopeState) UpdateScope(r *WorkerResult) ScopeUpdateResult {
 		}
 		return ScopeUpdateResult{
 			Block:         true,
-			ScopeKey:      scopeKeyThrottleAccount,
+			ScopeKey:      SKThrottleAccount,
 			IssueType:     IssueRateLimited,
 			TrialInterval: interval,
 		}
@@ -168,20 +331,20 @@ func (ss *ScopeState) UpdateScope(r *WorkerResult) ScopeUpdateResult {
 		// Immediate block — 503 with Retry-After is a server signal (R-2.10.3).
 		return ScopeUpdateResult{
 			Block:         true,
-			ScopeKey:      scopeKeyService,
+			ScopeKey:      SKService,
 			IssueType:     IssueServiceOutage,
 			TrialInterval: r.RetryAfter,
 		}
 
 	case r.HTTPStatus == http.StatusInsufficientStorage:
 		// Quota failure — scope depends on target drive (R-2.10.1, R-2.10.17).
-		scopeKey := scopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)
-		return ss.checkWindow(scopeKey, r.Path, quotaWindowThreshold, quotaWindowDuration, IssueQuotaExceeded, quotaInitialInterval)
+		sk := ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)
+		return ss.checkWindow(sk, r.Path, quotaWindowThreshold, quotaWindowDuration, IssueQuotaExceeded, quotaInitialInterval)
 
 	case r.HTTPStatus >= http.StatusInternalServerError:
 		// Service error — feed into service sliding window (R-2.10.28, R-2.10.29).
-		key := scopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)
-		return ss.checkWindow(key, r.Path,
+		sk := ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)
+		return ss.checkWindow(sk, r.Path,
 			serviceWindowThreshold, serviceWindowDuration,
 			IssueServiceOutage, serviceInitialInterval)
 
@@ -195,7 +358,7 @@ func (ss *ScopeState) UpdateScope(r *WorkerResult) ScopeUpdateResult {
 // outage patterns are classified as resultRequeue (not resultScopeBlock)
 // by classifyResult but still need to feed scope detection.
 func (ss *ScopeState) UpdateScopeOutagePattern(path string) ScopeUpdateResult {
-	return ss.checkWindow(scopeKeyService, path, serviceWindowThreshold, serviceWindowDuration, IssueServiceOutage, serviceInitialInterval)
+	return ss.checkWindow(SKService, path, serviceWindowThreshold, serviceWindowDuration, IssueServiceOutage, serviceInitialInterval)
 }
 
 // RecordSuccess resets the sliding window for scopes relevant to the
@@ -204,42 +367,42 @@ func (ss *ScopeState) UpdateScopeOutagePattern(path string) ScopeUpdateResult {
 func (ss *ScopeState) RecordSuccess(r *WorkerResult) {
 	// Success resets all potentially-relevant windows for this action's scope.
 	if r.ShortcutKey != "" {
-		delete(ss.windows, scopeKeyQuotaShortcut+r.ShortcutKey)
+		delete(ss.windows, SKQuotaShortcut(r.ShortcutKey))
 	} else {
-		delete(ss.windows, scopeKeyQuotaOwn)
+		delete(ss.windows, SKQuotaOwn)
 	}
 	// Also reset service window — a successful request proves the service is up.
-	delete(ss.windows, scopeKeyService)
+	delete(ss.windows, SKService)
 }
 
 // checkWindow adds a failure to the named sliding window and returns a
 // ScopeUpdateResult indicating whether the threshold was crossed.
 func (ss *ScopeState) checkWindow(
-	scopeKey, path string, threshold int, window time.Duration,
+	sk ScopeKey, path string, threshold int, window time.Duration,
 	issueType string, initialInterval time.Duration,
 ) ScopeUpdateResult {
 	now := ss.nowFunc()
 
-	w, ok := ss.windows[scopeKey]
+	w, ok := ss.windows[sk]
 	if !ok {
 		w = &slidingWindow{
 			window:    window,
 			threshold: threshold,
 		}
-		ss.windows[scopeKey] = w
+		ss.windows[sk] = w
 	}
 
 	triggered := w.add(path, now)
 	if triggered {
 		ss.logger.Info("scope threshold crossed",
-			slog.String("scope_key", scopeKey),
+			slog.String("scope_key", sk.String()),
 			slog.Int("unique_paths", w.uniqueCount(now)),
 		)
 		// Reset window after triggering to avoid re-triggering on next failure.
-		delete(ss.windows, scopeKey)
+		delete(ss.windows, sk)
 		return ScopeUpdateResult{
 			Block:         true,
-			ScopeKey:      scopeKey,
+			ScopeKey:      sk,
 			IssueType:     issueType,
 			TrialInterval: initialInterval,
 		}
