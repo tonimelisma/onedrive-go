@@ -413,6 +413,19 @@ func (m *SyncStore) ClearResolvedActionableFailures(ctx context.Context, issueTy
 	return nil
 }
 
+// DeleteSyncFailuresByScope removes all sync_failures rows matching the
+// given scope_key. Used when a scope source is removed (e.g., shortcut
+// deleted) to clean up orphaned failure records.
+func (m *SyncStore) DeleteSyncFailuresByScope(ctx context.Context, scopeKey string) error {
+	_, err := m.db.ExecContext(ctx,
+		`DELETE FROM sync_failures WHERE scope_key = ?`, scopeKey)
+	if err != nil {
+		return fmt.Errorf("sync: deleting failures for scope %s: %w", scopeKey, err)
+	}
+
+	return nil
+}
+
 // ResetRetryTimesForScope sets next_retry_at to the given time for all
 // transient sync_failures matching the given scope_key whose next_retry_at
 // is in the future. The caller (engine) provides the timestamp so the
@@ -430,6 +443,53 @@ func (m *SyncStore) ResetRetryTimesForScope(ctx context.Context, scopeKey string
 	}
 
 	return nil
+}
+
+// PendingRetryGroup holds aggregated counts of transient failures grouped
+// by scope_key, with the earliest next_retry_at per group.
+type PendingRetryGroup struct {
+	ScopeKey     string
+	Count        int
+	EarliestNext time.Time
+}
+
+// PendingRetrySummary returns aggregated counts of transient failures
+// grouped by scope_key, with the earliest next_retry_at per group.
+// Used by the issues command to show pending retries (R-2.10.22).
+func (m *SyncStore) PendingRetrySummary(ctx context.Context) ([]PendingRetryGroup, error) {
+	rows, err := m.db.QueryContext(ctx,
+		`SELECT COALESCE(scope_key, ''), COUNT(*), MIN(next_retry_at)
+		 FROM sync_failures
+		 WHERE category = 'transient' AND next_retry_at > 0
+		 GROUP BY scope_key
+		 ORDER BY COUNT(*) DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("sync: querying pending retry summary: %w", err)
+	}
+	defer rows.Close()
+
+	var result []PendingRetryGroup
+
+	for rows.Next() {
+		var g PendingRetryGroup
+		var minNano int64
+
+		if scanErr := rows.Scan(&g.ScopeKey, &g.Count, &minNano); scanErr != nil {
+			return nil, fmt.Errorf("sync: scanning pending retry group: %w", scanErr)
+		}
+
+		if minNano > 0 {
+			g.EarliestNext = time.Unix(0, minNano)
+		}
+
+		result = append(result, g)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sync: iterating pending retry groups: %w", err)
+	}
+
+	return result, nil
 }
 
 // ListSyncFailuresForRetry returns transient sync_failures rows whose

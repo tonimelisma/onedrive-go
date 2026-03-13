@@ -315,7 +315,7 @@ func (dt *DepTracker) blockedScope(ta *TrackedAction) string {
 
 	// quota:shortcut:$key blocks uploads to that specific shortcut (R-2.10.20).
 	if scKey := ta.Action.ShortcutKey(); scKey != "" {
-		scopeKey := scopeKeyQuotaShortcut + scKey
+		scopeKey := shortcutScopeKey(scKey)
 		if _, ok := dt.scopeBlocks[scopeKey]; ok {
 			if ta.Action.Type == ActionUpload {
 				return scopeKey
@@ -429,6 +429,15 @@ func (dt *DepTracker) DispatchTrial(key string) bool {
 	ta.IsTrial = true
 	ta.TrialScopeKey = key
 
+	// Clear NextTrialAt so NextDueTrial won't return this scope again
+	// until the trial result re-arms via handleTrialResult → armTrialTimer.
+	// Without this, the drain loop would dispatch ALL held actions as
+	// simultaneous trials (R-2.10.5 requires one real action per tick).
+	block := dt.scopeBlocks[key]
+	if block != nil {
+		block.NextTrialAt = time.Time{}
+	}
+
 	dt.logger.Debug("tracker: dispatching trial action",
 		slog.String("scope_key", key),
 		slog.String("path", ta.Action.Path),
@@ -513,6 +522,21 @@ func (dt *DepTracker) ExtendTrialInterval(key string, nextAt time.Time, newInter
 	block.TrialInterval = newInterval
 	block.NextTrialAt = nextAt
 	block.TrialCount++
+}
+
+// ScopeBlockKeys returns the keys of all active scope blocks. Used by
+// handleExternalChanges to detect when perm:dir failures have been cleared
+// via CLI. Thread-safe.
+func (dt *DepTracker) ScopeBlockKeys() []string {
+	dt.mu.Lock()
+	defer dt.mu.Unlock()
+
+	keys := make([]string, 0, len(dt.scopeBlocks))
+	for k := range dt.scopeBlocks {
+		keys = append(keys, k)
+	}
+
+	return keys
 }
 
 // ---------------------------------------------------------------------------
