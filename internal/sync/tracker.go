@@ -351,6 +351,33 @@ func (dt *DepTracker) ReleaseScope(key string) {
 	}
 }
 
+// DiscardScope clears a scope block and completes all held actions for that
+// scope key without dispatching them. Used when the scope's source is removed
+// (e.g., shortcut deleted) and held actions are no longer valid (R-2.10.38).
+// Unlike ReleaseScope, discarded actions are never dispatched to workers.
+func (dt *DepTracker) DiscardScope(key string) {
+	dt.mu.Lock()
+	held := dt.held[key]
+	delete(dt.held, key)
+	delete(dt.scopeBlocks, key)
+	dt.mu.Unlock()
+
+	if len(held) > 0 {
+		dt.logger.Info("tracker: scope discarded, completing held actions without dispatch",
+			slog.String("scope_key", key),
+			slog.Int("count", len(held)),
+		)
+	}
+
+	for range held {
+		// Mark completed without dispatching — these actions are orphaned.
+		newCompleted := dt.completed.Add(1)
+		if !dt.persistent && newCompleted == dt.total.Load() {
+			close(dt.done)
+		}
+	}
+}
+
 // DispatchTrial pops one action from the held queue for the given scope key,
 // marks it as a trial (IsTrial=true) with TrialScopeKey set, and dispatches
 // it directly to the ready channel. Returns false if the held queue is

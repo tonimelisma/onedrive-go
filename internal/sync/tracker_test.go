@@ -947,3 +947,63 @@ func TestBlockedScope_PermDir_PrefixMismatch(t *testing.T) {
 		require.Fail(t, "timeout — partial prefix was incorrectly held")
 	}
 }
+
+// Validates: R-2.10.38
+func TestDiscardScope_CompletesWithoutDispatch(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+
+	// Set a scope block first, then add actions that will be held.
+	dt.HoldScope(scopeKeyQuotaShortcut+"drive1:item1", &ScopeBlock{
+		TrialInterval: 5 * time.Minute,
+	})
+
+	// Add two actions targeting the blocked shortcut — they will be held.
+	dt.Add(&Action{
+		Path: "/Team Docs/c.txt", Type: ActionUpload,
+		DriveID: driveid.New("d"), ItemID: "i3",
+		targetShortcutKey: "drive1:item1",
+	}, 0, nil)
+	dt.Add(&Action{
+		Path: "/Team Docs/d.txt", Type: ActionUpload,
+		DriveID: driveid.New("d"), ItemID: "i4",
+		targetShortcutKey: "drive1:item1",
+	}, 0, nil)
+
+	// Both should be held — ready should be empty.
+	select {
+	case ta := <-dt.Ready():
+		require.Fail(t, "expected empty ready channel", "got action %d", ta.ID)
+	default:
+		// Good — nothing dispatched.
+	}
+
+	// Discard the scope — should complete without dispatching.
+	dt.DiscardScope(scopeKeyQuotaShortcut + "drive1:item1")
+
+	// Verify scope block is gone.
+	_, ok := dt.GetScopeBlock(scopeKeyQuotaShortcut + "drive1:item1")
+	assert.False(t, ok, "scope block should be cleared after discard")
+
+	// Ready channel should still be empty — actions were completed, not dispatched.
+	select {
+	case ta := <-dt.Ready():
+		require.Fail(t, "DiscardScope should NOT dispatch held actions", "got action %d", ta.ID)
+	default:
+		// Good — nothing dispatched.
+	}
+}
+
+// Validates: R-2.10.38
+func TestDiscardScope_NoOpWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+
+	// Discarding a non-existent scope should not panic.
+	dt.DiscardScope("nonexistent:scope")
+
+	_, ok := dt.GetScopeBlock("nonexistent:scope")
+	assert.False(t, ok)
+}

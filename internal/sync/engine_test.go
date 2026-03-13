@@ -3484,3 +3484,59 @@ func TestFeedScopeDetection_LocalErrorIgnored(t *testing.T) {
 	_, blocked = eng.tracker.GetScopeBlock(scopeKeyThrottleAccount)
 	assert.False(t, blocked, "local errors with HTTPStatus=0 must not trigger throttle scope")
 }
+
+// Validates: R-2.10.30
+func TestIsObservationSuppressed_Throttled(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng.tracker = NewDepTracker(16, eng.logger)
+
+	// Initially not suppressed.
+	assert.False(t, eng.isObservationSuppressed())
+
+	// After throttle block, should be suppressed.
+	eng.tracker.HoldScope(scopeKeyThrottleAccount, &ScopeBlock{
+		TrialInterval: 30 * time.Second,
+	})
+	assert.True(t, eng.isObservationSuppressed())
+}
+
+// Validates: R-2.10.30
+func TestIsObservationSuppressed_ServiceOutage(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng.tracker = NewDepTracker(16, eng.logger)
+
+	// Service outage should also suppress.
+	eng.tracker.HoldScope(scopeKeyService, &ScopeBlock{
+		TrialInterval: 60 * time.Second,
+	})
+	assert.True(t, eng.isObservationSuppressed())
+}
+
+// Validates: R-2.10.30
+func TestIsObservationSuppressed_NilTracker(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng.tracker = nil
+
+	// With nil tracker, should not panic and should return false.
+	assert.False(t, eng.isObservationSuppressed())
+}
+
+// Validates: R-2.10.30
+func TestIsObservationSuppressed_QuotaDoesNotSuppress(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng.tracker = NewDepTracker(16, eng.logger)
+
+	// Quota scope block should NOT suppress observation (R-2.10.31).
+	eng.tracker.HoldScope(scopeKeyQuotaOwn, &ScopeBlock{
+		TrialInterval: 5 * time.Minute,
+	})
+	assert.False(t, eng.isObservationSuppressed())
+}

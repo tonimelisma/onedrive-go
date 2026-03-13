@@ -1861,7 +1861,7 @@ All proposed new/changed requirements, organized by area. Failure handling princ
 | R-2.10.6 | For `quota_exceeded`: trial timing starts at 5 minutes, doubles on each failed trial, max 1 hour. A successful trial upload proves quota is available and clears the scope. | **new** | 7.3 |
 | R-2.10.7 | For `rate_limited`: trial timing starts at `Retry-After` duration from server response. Scope block affects all action types for the account (429 throttles all API calls). | implemented (revise: use trial, not `waitForThrottle` sleep) | 7.3 |
 | R-2.10.8 | For `service_outage`: trial timing starts at 60 seconds (or `Retry-After` if present), doubles on failure, max 10 minutes. A successful trial action proves the service is available and clears the scope. | **new** | 7.3 |
-| R-2.10.9 | When `recheckPermissions()` discovers a previously-denied folder is now writable, the system shall clear the scope block and release all held actions under that folder immediately. | **new** (enhance existing) | 8 |
+| R-2.10.9 | When `recheckPermissions()` discovers a previously-denied folder is now writable, the system shall clear the scope block and release all held actions under that folder immediately. | verified | 8 |
 | R-2.10.10 | When the scanner observes a previously-blocked file or directory is now accessible, the system shall clear the failure and release held actions. | **new** | 8 |
 | R-2.10.11 | When a scope block clears (via trial success or recheck), the system shall release all held actions immediately for dispatch. | **new** | 7.3 |
 | R-2.10.12 | When a local file operation fails with `os.ErrPermission`, the system shall check parent directory accessibility. If the directory is inaccessible: record one `local_permission_denied` at directory level and suppress all operations under it. If the directory is accessible: record at file level. | verified | 8 |
@@ -1882,7 +1882,7 @@ All proposed new/changed requirements, organized by area. Failure handling princ
 | R-2.10.27 | When 429 scope clears, ALL held actions (own-drive + shortcuts) released simultaneously. No per-drive trial needed. | **new** | 11.4 |
 | R-2.10.28 | 5xx scope blocks affect all drives including shortcuts. Graph API is shared infrastructure. | **new** | 11.5 |
 | R-2.10.29 | Service-scope sliding window accepts 5xx from any target drive. Five consecutive 5xx from different drives within 30s triggers block. | **new** | 11.5 |
-| R-2.10.30 | During `throttle:account` or `service` scope block, suppress shortcut observation polling (wastes API calls, may worsen throttling). | **new** | 11.6 |
+| R-2.10.30 | During `throttle:account` or `service` scope block, suppress shortcut observation polling (wastes API calls, may worsen throttling). | verified | 11.6 |
 | R-2.10.31 | During `quota:shortcut:*` scope block, observation of that shortcut continues (read-only). Other observations unaffected. | **new** | 11.6 |
 | R-2.10.32 | `status` command (future) shall show per-scope block status as separate entries per drive/shortcut. | **new** | 11.7 |
 | R-2.10.33 | `sync_failures` table shall store `scope_key` column for scope-level failures. Enables `issues` display grouping without re-deriving scope. | **new** | 11.8 |
@@ -1890,7 +1890,7 @@ All proposed new/changed requirements, organized by area. Failure handling princ
 | R-2.10.35 | Engines shall NOT coordinate scope blocks across engine boundaries. Each discovers independently. Bounded waste accepted. | **new** | 11.10 |
 | R-2.10.36 | 429 discovered independently per engine (same token). No shared state. Waste: one request per engine. | **new** | 11.10 |
 | R-2.10.37 | Shortcut scope blocks are engine-internal. A shortcut in Engine A has no effect on Engine B's shortcuts. | **new** | 11.10 |
-| R-2.10.38 | When a shortcut is removed while a scope block exists for it, clear the block and discard held actions. | **new** | 11.11 |
+| R-2.10.38 | When a shortcut is removed while a scope block exists for it, clear the block and discard held actions. | verified | 11.11 |
 | R-2.10.39 | Two shortcuts to same sharer's drive: 507 on one does NOT auto-block the other. Independent scope keys per shortcut. | **new** | 11.11 |
 | R-2.10.40 | `walkPermissionBoundary` on shortcut shall not walk above shortcut root. Shortcut root is the natural boundary. | verified | 11.11 |
 | R-2.10.41 | When a download, delete, or move action succeeds, the system shall clear any corresponding `sync_failures` entry for that path, matching the auto-clear behavior already implemented for uploads. All action types must clear on success. | **new** | 12.3 |
