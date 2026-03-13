@@ -3188,6 +3188,7 @@ func TestHandleTrialResult_Failure_CapsService10m(t *testing.T) {
 // deriveScopeKey
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10.2
 func TestDeriveScopeKey(t *testing.T) {
 	t.Parallel()
 
@@ -3335,4 +3336,120 @@ func TestRecordFailure_PopulatesScopeKey_507Shortcut(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 	assert.Equal(t, "quota:shortcut:driveA:item42", issues[0].ScopeKey)
+}
+
+// ---------------------------------------------------------------------------
+// clearResolvedSkippedItems
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.10.2
+func TestClearResolvedSkippedItems_AllThreeIssueTypes(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	// Record failures for each scanner-detectable issue type.
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path: "bad\x01name.txt", DriveID: driveID, Direction: "upload",
+		IssueType: IssueInvalidFilename, Category: "actionable", ErrMsg: "invalid character",
+	}, nil))
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path: "still-bad\x02.txt", DriveID: driveID, Direction: "upload",
+		IssueType: IssueInvalidFilename, Category: "actionable", ErrMsg: "invalid character",
+	}, nil))
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path: "very/long/path.txt", DriveID: driveID, Direction: "upload",
+		IssueType: IssuePathTooLong, Category: "actionable", ErrMsg: "path exceeds limit",
+	}, nil))
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path: "huge-file.bin", DriveID: driveID, Direction: "upload",
+		IssueType: IssueFileTooLarge, Category: "actionable", ErrMsg: "file too large",
+	}, nil))
+
+	// Verify all 4 failures exist.
+	all, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, all, 4)
+
+	// Simulate a new scan where only "still-bad\x02.txt" still exists as skipped.
+	// "bad\x01name.txt" was renamed, "very/long/path.txt" was shortened,
+	// "huge-file.bin" was deleted.
+	currentSkipped := []SkippedItem{
+		{Path: "still-bad\x02.txt", Reason: IssueInvalidFilename},
+	}
+
+	eng.clearResolvedSkippedItems(ctx, currentSkipped)
+
+	// Only the still-existing invalid filename should remain.
+	remaining, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, remaining, 1)
+	assert.Equal(t, "still-bad\x02.txt", remaining[0].Path)
+	assert.Equal(t, IssueInvalidFilename, remaining[0].IssueType)
+}
+
+// Validates: R-2.10.2
+func TestClearResolvedSkippedItems_EmptySkipped_ClearsAll(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	// Record one failure per type.
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path: "bad.txt", DriveID: driveID, Direction: "upload",
+		IssueType: IssueInvalidFilename, Category: "actionable", ErrMsg: "invalid",
+	}, nil))
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path: "long.txt", DriveID: driveID, Direction: "upload",
+		IssueType: IssuePathTooLong, Category: "actionable", ErrMsg: "too long",
+	}, nil))
+
+	// Empty scan — all problematic files were resolved.
+	eng.clearResolvedSkippedItems(ctx, nil)
+
+	remaining, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, remaining, "all scanner-detectable failures should be cleared when no skipped items remain")
+}
+
+// Validates: R-2.10.2
+func TestClearResolvedSkippedItems_DoesNotAffectRuntimeIssues(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	// Record a scanner-detectable failure.
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path: "bad.txt", DriveID: driveID, Direction: "upload",
+		IssueType: IssueInvalidFilename, Category: "actionable", ErrMsg: "invalid",
+	}, nil))
+
+	// Record a runtime failure (permission denied — not scanner-detectable).
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path: "Shared/folder", DriveID: driveID, Direction: "upload",
+		IssueType: IssuePermissionDenied, Category: "actionable", ErrMsg: "read-only",
+		HTTPStatus: 403,
+	}, nil))
+
+	// Clear all scanner-detectable items (empty = all resolved).
+	eng.clearResolvedSkippedItems(ctx, nil)
+
+	// Runtime failure should survive — clearResolvedSkippedItems only
+	// clears invalid_filename, path_too_long, file_too_large.
+	remaining, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, remaining, 1)
+	assert.Equal(t, IssuePermissionDenied, remaining[0].IssueType)
 }
