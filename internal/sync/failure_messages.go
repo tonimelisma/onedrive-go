@@ -96,35 +96,20 @@ func MessageForIssueType(issueType string) IssueMessage {
 	}
 }
 
-// HumanizeScopeKey translates internal scope keys to user-friendly descriptions.
-// For shortcut scope keys, looks up the shortcut's local path from the provided
-// shortcut list. For perm:dir:, strips the prefix. For global scopes, returns
-// a plain English description (R-2.10.22).
+// HumanizeScopeKey translates internal scope key wire-format strings to
+// user-friendly descriptions. Parses the string into a ScopeKey and delegates
+// to the Humanize method. Kept as a free function for the public API surface
+// (called by failure_display.go in the root package). See ScopeKey.Humanize()
+// for the actual logic (R-2.10.22).
 func HumanizeScopeKey(key string, shortcuts []Shortcut) string {
-	switch {
-	case key == scopeKeyThrottleAccount:
-		return "your OneDrive account (rate limited)"
-	case key == scopeKeyService:
-		return "OneDrive service"
-	case key == scopeKeyQuotaOwn:
-		return "your OneDrive storage"
-	case len(key) > len(scopeKeyQuotaShortcut) && key[:len(scopeKeyQuotaShortcut)] == scopeKeyQuotaShortcut:
-		// Try to find the shortcut's local path.
-		scKey := key[len(scopeKeyQuotaShortcut):]
-		for i := range shortcuts {
-			if shortcuts[i].RemoteDrive+":"+shortcuts[i].RemoteItem == scKey {
-				return shortcuts[i].LocalPath
-			}
-		}
-
-		return scKey // fallback to internal key
-	case len(key) > len(scopeKeyPermDir) && key[:len(scopeKeyPermDir)] == scopeKeyPermDir:
-		return key[len(scopeKeyPermDir):]
-	default:
-		if key == "" {
-			return ""
-		}
-
-		return key // fallback
+	if key == "" {
+		return ""
 	}
+
+	sk := ParseScopeKey(key)
+	if sk.IsZero() {
+		return key // unknown format — return as-is
+	}
+
+	return sk.Humanize(shortcuts)
 }

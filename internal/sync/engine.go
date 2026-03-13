@@ -1084,68 +1084,59 @@ const (
 // separate from routing ("functions do one thing").
 //
 //nolint:gocyclo // classification table — each HTTP status code is a distinct case
-func classifyResult(r *WorkerResult) (resultClass, string) {
+func classifyResult(r *WorkerResult) (resultClass, ScopeKey) {
 	if r.Success {
-		return resultSuccess, ""
+		return resultSuccess, ScopeKey{}
 	}
 
 	// Shutdown: context canceled or deadline exceeded — graceful drain.
 	// NOT a failure — just a canceled operation. Don't record in sync_failures.
 	if errors.Is(r.Err, context.Canceled) || errors.Is(r.Err, context.DeadlineExceeded) {
-		return resultShutdown, ""
+		return resultShutdown, ScopeKey{}
 	}
 
 	switch {
 	case r.HTTPStatus == http.StatusUnauthorized:
-		return resultFatal, ""
+		return resultFatal, ScopeKey{}
 
 	case r.HTTPStatus == http.StatusForbidden:
-		return resultSkip, ""
+		return resultSkip, ScopeKey{}
 
 	case r.HTTPStatus == http.StatusTooManyRequests:
-		return resultScopeBlock, scopeKeyThrottleAccount
+		return resultScopeBlock, SKThrottleAccount
 
 	case r.HTTPStatus == http.StatusInsufficientStorage:
-		return resultScopeBlock, scopeKeyForQuota(r)
+		return resultScopeBlock, ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)
 
 	case r.HTTPStatus == http.StatusBadRequest && isOutagePattern(r.Err):
 		// Known outage pattern (e.g., "ObjectHandle is Invalid") — transient,
 		// feeds scope detection. Distinguished from phantom drive 400s
 		// (R-6.7.11) which are handled by drive filtering.
-		return resultRequeue, ""
+		return resultRequeue, ScopeKey{}
 
 	case r.HTTPStatus >= 500:
-		return resultRequeue, ""
+		return resultRequeue, ScopeKey{}
 
 	case r.HTTPStatus == http.StatusRequestTimeout ||
 		r.HTTPStatus == http.StatusPreconditionFailed ||
 		r.HTTPStatus == http.StatusNotFound ||
 		r.HTTPStatus == http.StatusLocked:
-		return resultRequeue, ""
+		return resultRequeue, ScopeKey{}
 
 	case errors.Is(r.Err, ErrDiskFull):
 		// Deterministic signal — immediate scope block, no sliding window (R-2.10.43).
-		return resultScopeBlock, scopeKeyDiskLocal
+		return resultScopeBlock, SKDiskLocal
 
 	case errors.Is(r.Err, ErrFileTooLargeForSpace):
 		// Per-file failure, no scope escalation — smaller files may fit (R-2.10.44).
-		return resultSkip, ""
+		return resultSkip, ScopeKey{}
 
 	case errors.Is(r.Err, os.ErrPermission):
-		return resultSkip, ""
+		return resultSkip, ScopeKey{}
 
 	default:
-		return resultSkip, ""
+		return resultSkip, ScopeKey{}
 	}
-}
-
-// scopeKeyForQuota returns the scope key for a 507 quota error based on
-// the target drive context (R-2.10.1, R-2.10.17).
-func scopeKeyForQuota(r *WorkerResult) string {
-	if r.ShortcutKey != "" {
-		return scopeKeyQuotaShortcut + r.ShortcutKey
-	}
-	return scopeKeyQuotaOwn
 }
 
 // isOutagePattern returns true if the error matches known transient 400
@@ -1183,7 +1174,7 @@ func isOutagePattern(err error) bool {
 func (e *Engine) processWorkerResult(ctx context.Context, r *WorkerResult, bl *Baseline, shortcuts []Shortcut) {
 	// Trial results are fully self-contained — early return prevents
 	// fallthrough into the normal switch (Group A: trial path separation).
-	if r.IsTrial && r.TrialScopeKey != "" {
+	if r.IsTrial && !r.TrialScopeKey.IsZero() {
 		e.processTrialResult(ctx, r)
 		return
 	}
@@ -1273,7 +1264,7 @@ func (e *Engine) processTrialResult(ctx context.Context, r *WorkerResult) {
 		e.succeeded.Add(1)
 
 		e.logger.Info("scope block cleared — actions released",
-			slog.String("scope_key", r.TrialScopeKey),
+			slog.String("scope_key", r.TrialScopeKey.String()),
 		)
 
 		return
@@ -1306,20 +1297,20 @@ func (e *Engine) processTrialResult(ctx context.Context, r *WorkerResult) {
 // extendTrialInterval doubles the trial interval for the given scope key,
 // capped at the per-scope-type maximum. Sets NextTrialAt and re-arms the
 // trial timer.
-func (e *Engine) extendTrialInterval(scopeKey string) {
+func (e *Engine) extendTrialInterval(scopeKey ScopeKey) {
 	block, ok := e.tracker.GetScopeBlock(scopeKey)
 	if !ok {
 		return // scope was released between dispatch and result
 	}
 
 	newInterval := block.TrialInterval * 2
-	maxInterval := maxTrialIntervalForIssueType(block.IssueType)
+	maxInterval := scopeKey.MaxTrialInterval()
 	if newInterval > maxInterval {
 		newInterval = maxInterval
 	}
 
 	e.logger.Debug("trial failed — extending interval",
-		slog.String("scope_key", scopeKey),
+		slog.String("scope_key", scopeKey.String()),
 		slog.Duration("new_interval", newInterval),
 	)
 
@@ -1335,8 +1326,8 @@ func (e *Engine) isObservationSuppressed() bool {
 		return false
 	}
 
-	_, throttled := e.tracker.GetScopeBlock(scopeKeyThrottleAccount)
-	_, serviceDown := e.tracker.GetScopeBlock(scopeKeyService)
+	_, throttled := e.tracker.GetScopeBlock(SKThrottleAccount)
+	_, serviceDown := e.tracker.GetScopeBlock(SKService)
 
 	return throttled || serviceDown
 }
@@ -1385,7 +1376,7 @@ func (e *Engine) applyScopeBlock(sr ScopeUpdateResult) {
 	e.tracker.HoldScope(sr.ScopeKey, block)
 
 	e.logger.Warn("scope block active — actions held",
-		slog.String("scope_key", sr.ScopeKey),
+		slog.String("scope_key", sr.ScopeKey.String()),
 		slog.String("issue_type", sr.IssueType),
 		slog.Duration("trial_interval", sr.TrialInterval),
 	)
@@ -1534,10 +1525,11 @@ func (e *Engine) recordFailure(ctx context.Context, r *WorkerResult, delayFn fun
 }
 
 // deriveScopeKey returns the scope key for a failed worker result.
-// Delegates to scopeKeyForStatus (scope.go) — single source of truth for
-// HTTP status → scope key mapping.
+// Delegates to ScopeKeyForStatus — single source of truth for HTTP status
+// → scope key mapping. Returns the string wire format for storage in
+// sync_failures.scope_key.
 func deriveScopeKey(r *WorkerResult) string {
-	return scopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)
+	return ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey).String()
 }
 
 // issueTypeForHTTPStatus maps an HTTP status code and error to a sync
@@ -1578,10 +1570,10 @@ func issueTypeForHTTPStatus(httpStatus int, err error) string {
 // the given scope key. This is the "thundering herd" — when a scope trial
 // succeeds, all items with future backoff for that scope become immediately
 // retriable. Kicks the retrier so it picks them up promptly.
-func (e *Engine) resetScopeRetryTimes(ctx context.Context, scopeKey string) {
-	if err := e.baseline.ResetRetryTimesForScope(ctx, scopeKey, e.nowFunc()); err != nil {
+func (e *Engine) resetScopeRetryTimes(ctx context.Context, scopeKey ScopeKey) {
+	if err := e.baseline.ResetRetryTimesForScope(ctx, scopeKey.String(), e.nowFunc()); err != nil {
 		e.logger.Warn("failed to reset retry times for scope",
-			slog.String("scope_key", scopeKey),
+			slog.String("scope_key", scopeKey.String()),
 			slog.String("error", err.Error()),
 		)
 
@@ -2209,19 +2201,20 @@ func (e *Engine) handleExternalChanges(ctx context.Context) {
 		}
 
 		// Build set of still-active scope keys from DB.
-		activeScopes := make(map[string]bool, len(issues))
+		activeScopes := make(map[ScopeKey]bool, len(issues))
 		for i := range issues {
-			if strings.HasPrefix(issues[i].ScopeKey, scopeKeyPermDir) {
-				activeScopes[issues[i].ScopeKey] = true
+			sk := ParseScopeKey(issues[i].ScopeKey)
+			if sk.IsPermDir() {
+				activeScopes[sk] = true
 			}
 		}
 
 		// Release any tracker scope blocks whose failures were cleared.
 		for _, key := range e.tracker.ScopeBlockKeys() {
-			if strings.HasPrefix(key, scopeKeyPermDir) && !activeScopes[key] {
+			if key.IsPermDir() && !activeScopes[key] {
 				e.tracker.ReleaseScope(key)
 				e.logger.Info("permission scope block cleared by user",
-					slog.String("scope", key),
+					slog.String("scope", key.String()),
 				)
 			}
 		}
