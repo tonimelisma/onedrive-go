@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -279,7 +280,7 @@ func TestPrintGroupedIssuesJSON_StructuredOutput(t *testing.T) {
 	assert.Equal(t, "/deleted.txt", out.HeldDeletes[0].Path)
 }
 
-func TestPrintGroupedIssuesTextVerbose_AllSections(t *testing.T) {
+func TestPrintGroupedIssuesText_AllSections(t *testing.T) {
 	t.Parallel()
 
 	conflicts := []sync.ConflictRecord{
@@ -300,10 +301,108 @@ func TestPrintGroupedIssuesTextVerbose_AllSections(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printGroupedIssuesTextVerbose(&buf, conflicts, groups, heldDeletes, false, false)
+	printGroupedIssuesText(&buf, conflicts, groups, heldDeletes, nil, nil, false, false)
 	output := buf.String()
 
 	assert.True(t, strings.Contains(output, "CONFLICTS"))
 	assert.True(t, strings.Contains(output, "HELD DELETES"))
 	assert.True(t, strings.Contains(output, "QUOTA EXCEEDED"))
+}
+
+func TestPrintPendingRetries(t *testing.T) {
+	t.Parallel()
+
+	groups := []sync.PendingRetryGroup{
+		{ScopeKey: "throttle:account", Count: 8, EarliestNext: time.Now().Add(2*time.Minute + 30*time.Second)},
+		{ScopeKey: "quota:own", Count: 4, EarliestNext: time.Now().Add(4*time.Minute + 15*time.Second)},
+	}
+
+	var buf bytes.Buffer
+	printPendingRetries(&buf, groups, nil)
+	output := buf.String()
+
+	assert.Contains(t, output, "PENDING RETRIES (12 items)")
+	assert.Contains(t, output, "8 items")
+	assert.Contains(t, output, "4 items")
+}
+
+func TestPrintHeldDeletesGrouped_SmallCount(t *testing.T) {
+	t.Parallel()
+
+	// Under threshold: should show individual paths.
+	var heldDeletes []sync.SyncFailureRow
+	for i := range 5 {
+		heldDeletes = append(heldDeletes, sync.SyncFailureRow{
+			Path:       fmt.Sprintf("dir/file%d.txt", i),
+			LastSeenAt: 1700000000000000000,
+		})
+	}
+
+	var buf bytes.Buffer
+	printHeldDeletesGrouped(&buf, heldDeletes, false)
+	output := buf.String()
+
+	assert.Contains(t, output, "HELD DELETES (5 files")
+	assert.Contains(t, output, "dir/file0.txt")
+}
+
+func TestPrintHeldDeletesGrouped_LargeCount(t *testing.T) {
+	t.Parallel()
+
+	// Over threshold: should group by directory.
+	var heldDeletes []sync.SyncFailureRow
+	for i := range 30 {
+		dir := "Documents/Archive"
+		if i >= 20 {
+			dir = "Photos/2024"
+		}
+
+		heldDeletes = append(heldDeletes, sync.SyncFailureRow{
+			Path:       fmt.Sprintf("%s/file%d.txt", dir, i),
+			LastSeenAt: 1700000000000000000,
+		})
+	}
+
+	var buf bytes.Buffer
+	printHeldDeletesGrouped(&buf, heldDeletes, false)
+	output := buf.String()
+
+	assert.Contains(t, output, "HELD DELETES (30 files")
+	assert.Contains(t, output, "Documents/Archive/")
+	assert.Contains(t, output, "Photos/2024/")
+	// Should NOT show individual files.
+	assert.NotContains(t, output, "file0.txt")
+	assert.Contains(t, output, "--verbose")
+}
+
+func TestPrintHeldDeletesGrouped_LargeCountVerbose(t *testing.T) {
+	t.Parallel()
+
+	// Over threshold but verbose: should show individual paths.
+	var heldDeletes []sync.SyncFailureRow
+	for i := range 25 {
+		heldDeletes = append(heldDeletes, sync.SyncFailureRow{
+			Path:       fmt.Sprintf("dir/file%d.txt", i),
+			LastSeenAt: 1700000000000000000,
+		})
+	}
+
+	var buf bytes.Buffer
+	printHeldDeletesGrouped(&buf, heldDeletes, true)
+	output := buf.String()
+
+	// Verbose mode should show individual paths.
+	assert.Contains(t, output, "dir/file0.txt")
+}
+
+func TestFormatDuration(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "now", formatDuration(0))
+	assert.Equal(t, "now", formatDuration(500*time.Millisecond))
+	assert.Equal(t, "30s", formatDuration(30*time.Second))
+	assert.Equal(t, "2m30s", formatDuration(2*time.Minute+30*time.Second))
+	assert.Equal(t, "5m", formatDuration(5*time.Minute))
+	assert.Equal(t, "1h30m", formatDuration(90*time.Minute))
+	assert.Equal(t, "2h", formatDuration(2*time.Hour))
 }

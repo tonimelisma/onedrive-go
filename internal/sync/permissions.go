@@ -339,6 +339,34 @@ func isDirAccessible(dir string) bool {
 // directory, records a local_permission_denied failure, and creates a scope
 // block for the directory subtree (R-2.10.12).
 func (e *Engine) handleLocalPermission(ctx context.Context, r *WorkerResult) {
+	// If the sync root itself is inaccessible, WARN loudly — don't silently
+	// block everything behind a scope block. The sync root being inaccessible
+	// is fundamentally different from a subdirectory denial: ALL operations
+	// will fail, and the user needs a clear, actionable message.
+	if !isDirAccessible(e.syncRoot) {
+		e.logger.Warn("sync root directory is inaccessible",
+			slog.String("path", e.syncRoot),
+			slog.String("error", r.ErrMsg),
+		)
+
+		// Record as a top-level actionable failure, not a scope block.
+		if recErr := e.baseline.RecordFailure(ctx, &SyncFailureParams{
+			Path:      r.Path,
+			DriveID:   e.driveID,
+			Direction: directionFromAction(r.ActionType),
+			IssueType: IssueLocalPermissionDenied,
+			Category:  "actionable",
+			ErrMsg:    "sync root directory not accessible (check filesystem permissions)",
+		}, nil); recErr != nil {
+			e.logger.Warn("handleLocalPermission: failed to record sync root issue",
+				slog.String("path", r.Path),
+				slog.String("error", recErr.Error()),
+			)
+		}
+
+		return
+	}
+
 	// Walk up from the file's parent directory to find the deepest inaccessible ancestor.
 	absPath := filepath.Join(e.syncRoot, r.Path)
 	parentDir := filepath.Dir(absPath)

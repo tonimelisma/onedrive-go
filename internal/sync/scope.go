@@ -36,6 +36,12 @@ const (
 	scopeKeyPermDir = "perm:dir:"
 )
 
+// shortcutScopeKey returns the quota scope key for a shortcut identified
+// by its composite key (remoteDrive:remoteItem).
+func shortcutScopeKey(compositeKey string) string {
+	return scopeKeyQuotaShortcut + compositeKey
+}
+
 // Scope detection thresholds.
 const (
 	// quotaWindowThreshold is the number of unique paths that must fail with
@@ -108,7 +114,7 @@ func scopeKeyForStatus(httpStatus int, shortcutKey string) string {
 		return scopeKeyService
 	case httpStatus == http.StatusInsufficientStorage:
 		if shortcutKey != "" {
-			return scopeKeyQuotaShortcut + shortcutKey
+			return shortcutScopeKey(shortcutKey)
 		}
 		return scopeKeyQuotaOwn
 	case httpStatus >= http.StatusInternalServerError:

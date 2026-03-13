@@ -92,7 +92,13 @@ func runIssuesList(cmd *cobra.Command, _ []string) error {
 
 	groups, heldDeletes := groupFailures(failures, shortcuts)
 
-	if len(conflicts) == 0 && len(groups) == 0 && len(heldDeletes) == 0 {
+	// Query pending retries for the PENDING RETRIES section.
+	pendingRetries, err := mgr.PendingRetrySummary(ctx)
+	if err != nil {
+		return err
+	}
+
+	if len(conflicts) == 0 && len(groups) == 0 && len(heldDeletes) == 0 && len(pendingRetries) == 0 {
 		if history {
 			fmt.Println("No issues in history.")
 		} else {
@@ -106,7 +112,7 @@ func runIssuesList(cmd *cobra.Command, _ []string) error {
 		return printGroupedIssuesJSON(os.Stdout, conflicts, groups, heldDeletes)
 	}
 
-	printGroupedIssuesTextVerbose(os.Stdout, conflicts, groups, heldDeletes, history, cc.Flags.Verbose)
+	printGroupedIssuesText(os.Stdout, conflicts, groups, heldDeletes, pendingRetries, shortcuts, history, cc.Flags.Verbose)
 
 	return nil
 }

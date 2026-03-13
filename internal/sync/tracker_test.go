@@ -1113,6 +1113,129 @@ func TestDiscardScope_CompletesWithoutDispatch(t *testing.T) {
 	}
 }
 
+// Validates: R-2.10.5
+// TestDispatchTrial_ClearsNextTrialAt verifies that DispatchTrial clears
+// NextTrialAt so the drain loop dispatches only ONE trial per scope per
+// tick, not all held actions simultaneously.
+func TestDispatchTrial_ClearsNextTrialAt(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+	now := time.Now()
+
+	// Block the throttle:account scope with NextTrialAt in the past.
+	block := &ScopeBlock{
+		Key:           "throttle:account",
+		IssueType:     "rate_limited",
+		BlockedAt:     now.Add(-time.Minute),
+		NextTrialAt:   now.Add(-time.Second),
+		TrialInterval: 30 * time.Second,
+	}
+	dt.HoldScope("throttle:account", block)
+
+	// Add 5 actions — all should be held.
+	for i := int64(1); i <= 5; i++ {
+		dt.Add(&Action{
+			Type:    ActionUpload,
+			Path:    fmt.Sprintf("held-%d.txt", i),
+			DriveID: driveid.New("d"),
+			ItemID:  fmt.Sprintf("i%d", i),
+		}, i, nil)
+	}
+
+	// First DispatchTrial should succeed and clear NextTrialAt.
+	ok := dt.DispatchTrial("throttle:account")
+	require.True(t, ok, "first DispatchTrial should succeed")
+
+	// After DispatchTrial, NextTrialAt should be zero.
+	updated, exists := dt.GetScopeBlock("throttle:account")
+	require.True(t, exists)
+	assert.True(t, updated.NextTrialAt.IsZero(),
+		"NextTrialAt should be cleared after DispatchTrial to prevent re-dispatch")
+
+	// NextDueTrial should NOT return this scope because NextTrialAt is zero.
+	key, _, due := dt.NextDueTrial(now)
+	assert.False(t, due, "NextDueTrial should not return scope with zero NextTrialAt")
+	assert.Empty(t, key)
+
+	// Drain the dispatched trial.
+	select {
+	case ta := <-dt.Ready():
+		assert.True(t, ta.IsTrial)
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for trial action")
+	}
+}
+
+// Validates: R-2.10.5
+// TestDispatchTrial_OnlyOnePerDrainLoop simulates the drain loop pattern and
+// verifies that only one trial is dispatched per scope per tick.
+func TestDispatchTrial_OnlyOnePerDrainLoop(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+	now := time.Now()
+
+	dt.HoldScope("throttle:account", &ScopeBlock{
+		Key:           "throttle:account",
+		IssueType:     "rate_limited",
+		BlockedAt:     now.Add(-time.Minute),
+		NextTrialAt:   now.Add(-time.Second),
+		TrialInterval: 30 * time.Second,
+	})
+
+	// Add 5 held actions.
+	for i := int64(1); i <= 5; i++ {
+		dt.Add(&Action{
+			Type: ActionUpload, Path: fmt.Sprintf("file-%d.txt", i),
+			DriveID: driveid.New("d"), ItemID: fmt.Sprintf("i%d", i),
+		}, i, nil)
+	}
+
+	// Simulate the drain loop: call NextDueTrial + DispatchTrial in a loop
+	// (mirrors drainWorkerResults). Should dispatch exactly 1 trial.
+	dispatched := 0
+	for {
+		key, _, ok := dt.NextDueTrial(now)
+		if !ok {
+			break
+		}
+
+		dt.DispatchTrial(key)
+		dispatched++
+	}
+
+	assert.Equal(t, 1, dispatched,
+		"drain loop should dispatch exactly 1 trial per scope per tick")
+}
+
+// TestScopeBlockKeys verifies the ScopeBlockKeys method returns all active
+// scope block keys.
+func TestScopeBlockKeys(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+
+	// No blocks — should return empty.
+	keys := dt.ScopeBlockKeys()
+	assert.Empty(t, keys, "no scope blocks → empty keys")
+
+	// Add two blocks.
+	dt.HoldScope("throttle:account", &ScopeBlock{Key: "throttle:account", IssueType: "rate_limited"})
+	dt.HoldScope("service", &ScopeBlock{Key: "service", IssueType: "service_outage"})
+
+	keys = dt.ScopeBlockKeys()
+	assert.Len(t, keys, 2)
+	assert.Contains(t, keys, "throttle:account")
+	assert.Contains(t, keys, "service")
+
+	// Release one — should return only the remaining.
+	dt.ReleaseScope("throttle:account")
+	keys = dt.ScopeBlockKeys()
+	assert.Len(t, keys, 1)
+	assert.Contains(t, keys, "service")
+}
+
 // Validates: R-2.10.38
 func TestDiscardScope_NoOpWhenEmpty(t *testing.T) {
 	t.Parallel()
