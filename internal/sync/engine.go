@@ -127,9 +127,14 @@ type Engine struct {
 	retrier *FailureRetrier
 
 	// trialTimer fires when the next scope trial is due (R-2.10.5).
+	// Uses time.AfterFunc to send to trialCh — a persistent channel that
+	// the drain loop always watches. This avoids a race where armTrialTimer
+	// (called from onHeld on a different goroutine) replaces the timer and
+	// the drain loop's select watches the old timer's channel.
 	// Protected by trialMu. Nil when no trials are pending.
 	trialTimer *time.Timer
 	trialMu    stdsync.Mutex
+	trialCh    chan struct{} // persistent, buffered(1); trial timer signals here
 
 	// lastPermRecheck tracks the last time recheckPermissions was called
 	// in watch mode, to throttle API calls to at most once per 60 seconds (R-2.10.9).
@@ -203,6 +208,8 @@ func NewEngine(cfg *EngineConfig) (*Engine, error) {
 		transferWorkers:    cfg.TransferWorkers,
 		checkWorkers:       cfg.CheckWorkers,
 		bigDeleteThreshold: bdThreshold,
+		nowFn:              time.Now,
+		trialCh:            make(chan struct{}, 1),
 	}, nil
 }
 
@@ -424,6 +431,7 @@ func (e *Engine) executePlan(
 	// is nil-guarded (e.scopeState == nil → no-op).
 
 	tracker := NewDepTracker(len(plan.Actions), e.logger)
+	tracker.onHeld = func() { e.armTrialTimer() }
 	e.tracker = tracker
 
 	for i := range plan.Actions {
@@ -943,8 +951,8 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 
 	// Step 3: Create persistent tracker and worker pool.
 	tracker := NewPersistentDepTracker(e.logger)
-	e.tracker = tracker
-	e.scopeState = NewScopeState(e.nowFunc, e.logger)
+	tracker.onHeld = func() { e.armTrialTimer() }
+	e.tracker, e.scopeState = tracker, NewScopeState(e.nowFunc, e.logger)
 
 	pool := NewWorkerPool(e.execCfg, tracker, e.baseline, e.logger, watchResultBuf)
 	pool.Start(ctx, e.transferWorkers)
@@ -1145,9 +1153,11 @@ func isOutagePattern(err error) bool {
 // (drainWorkerResults) paths.
 func (e *Engine) processWorkerResult(ctx context.Context, r *WorkerResult, bl *Baseline, shortcuts []Shortcut) {
 	// Handle trial results first — scope release/extend runs before normal
-	// classification. A successful trial still falls through to resultSuccess
-	// below (Complete + RecordSuccess), which is correct: the action did real
-	// work and the sliding window reset is harmless for a released scope.
+	// classification. A successful trial falls through to resultSuccess
+	// below (Complete + RecordSuccess): the action did real work, and the
+	// sliding window reset is harmless for a released scope. A failed trial
+	// falls through to recordFailure: the sync_failures entry gets scope_key
+	// set, so ResetRetryTimesForScope clears its backoff on eventual release.
 	if r.IsTrial && r.TrialScopeKey != "" {
 		e.handleTrialResult(ctx, r)
 	}
@@ -1177,6 +1187,7 @@ func (e *Engine) processWorkerResult(ctx context.Context, r *WorkerResult, bl *B
 		e.recordFailure(ctx, r, retry.Reconcile.Delay)
 		e.feedScopeDetection(r)
 		e.tracker.Complete(r.ActionID)
+		e.armTrialTimer() // catch dependents that just entered held
 		e.recordError(r)
 		if e.retrier != nil {
 			e.retrier.Kick()
@@ -1372,12 +1383,9 @@ func (e *Engine) resetScopeRetryTimes(ctx context.Context, scopeKey string) {
 }
 
 // nowFunc returns the current time from the engine's injectable clock.
-// Defaults to time.Now; tests inject a controllable clock.
+// Always set by NewEngine; tests overwrite with a controllable clock.
 func (e *Engine) nowFunc() time.Time {
-	if e.nowFn != nil {
-		return e.nowFn()
-	}
-	return time.Now()
+	return e.nowFn()
 }
 
 // resultStats returns the engine-owned counters and error list.
@@ -1411,9 +1419,11 @@ func directionFromAction(at ActionType) string {
 }
 
 // armTrialTimer sets (or resets) the trial timer to fire at the earliest
-// NextTrialAt across all scope blocks. Follows the same pattern as
-// FailureRetrier.armTimer. Called after scope blocks are created, trials
-// dispatched, or trial results processed (R-2.10.5).
+// NextTrialAt across all scope blocks. Uses time.AfterFunc to send to the
+// persistent trialCh channel, avoiding a race where the drain loop's select
+// watches the old timer's channel after replacement. Called after scope blocks
+// are created, trials dispatched, trial results processed, or when onHeld
+// signals that an action entered a held queue (R-2.10.5).
 func (e *Engine) armTrialTimer() {
 	e.trialMu.Lock()
 	defer e.trialMu.Unlock()
@@ -1433,21 +1443,19 @@ func (e *Engine) armTrialTimer() {
 		delay = 1 * time.Millisecond // fire immediately
 	}
 
-	e.trialTimer = time.NewTimer(delay)
+	e.trialTimer = time.AfterFunc(delay, func() {
+		select {
+		case e.trialCh <- struct{}{}:
+		default:
+		}
+	})
 }
 
-// trialTimerChan returns the trial timer's channel, or nil if no timer is
-// set. A nil channel in a select blocks forever — desired when no trials
-// are pending.
-func (e *Engine) trialTimerChan() <-chan time.Time {
-	e.trialMu.Lock()
-	defer e.trialMu.Unlock()
-
-	if e.trialTimer == nil {
-		return nil
-	}
-
-	return e.trialTimer.C
+// trialTimerChan returns the persistent trial notification channel.
+// time.AfterFunc sends to this channel when a trial timer fires.
+// The channel is always non-nil after NewEngine.
+func (e *Engine) trialTimerChan() <-chan struct{} {
+	return e.trialCh
 }
 
 // stopTrialTimer stops and clears the trial timer. Called on shutdown.

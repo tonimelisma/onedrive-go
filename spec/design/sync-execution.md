@@ -30,7 +30,8 @@ Implements: R-6.8.7 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.1
 - **`ExtendTrialInterval(key, nextAt, interval)`**: updates a scope block's `NextTrialAt`, `TrialInterval`, and increments its trial attempt counter on trial failure. Encapsulates the mutation under the tracker's lock.
 - **`EarliestTrialAt()`**: scans all scope blocks for the earliest `NextTrialAt` with non-empty held queue. Used by the engine's trial timer.
 - **`GetScopeBlock(key)`**: returns a value copy of the `ScopeBlock` for a given scope key (not a pointer, preventing mutation outside the lock). Used by `handleTrialResult` to read current `TrialInterval` for backoff doubling.
-- **`dispatch()` gate**: scope gate — blocked actions go to held queue. Unblocked actions reach the ready channel.
+- **`dispatch()` gate**: scope gate — blocked actions go to held queue. Returns `bool` (was-held) so callers can fire the `onHeld` callback outside the lock.
+- **`onHeld` callback**: called when `dispatch()` diverts an action to a held queue. The engine sets this to `armTrialTimer` so the trial timer re-arms when the held queue becomes non-empty. Must NOT be called under `dt.mu` — callers invoke it after releasing the lock.
 - Existing dependency graph behavior unchanged.
 - The tracker does NOT handle retry. All retry is via `sync_failures` + `FailureRetrier` (R-6.8.10). The engine calls `Complete` on every result; failed items are recorded in `sync_failures` with `next_retry_at`, and the `FailureRetrier` re-injects them via buffer → planner → tracker.
 

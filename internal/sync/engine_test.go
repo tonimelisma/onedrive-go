@@ -3338,7 +3338,801 @@ func TestRecordFailure_PopulatesScopeKey_507Shortcut(t *testing.T) {
 	assert.Equal(t, "quota:shortcut:driveA:item42", issues[0].ScopeKey)
 }
 
+// results channel → processWorkerResult → scope detection → scope block →
+// held queue → timer fires → DispatchTrial → trial action on ready channel →
+// trial result sent back → scope release/extend.
 // ---------------------------------------------------------------------------
+
+// startDrainLoop creates a real engine with store, tracker, scopeState,
+// and starts drainWorkerResults. Returns:
+//   - results chan: test sends WorkerResults here (simulating workers)
+//   - ready chan: test reads trial/released actions from tracker.Ready()
+//   - cancel func: stops the drain goroutine
+//   - eng: the engine (for state inspection)
+func startDrainLoop(t *testing.T) (chan WorkerResult, <-chan *TrackedAction, context.CancelFunc, *Engine) {
+	t.Helper()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+
+	tracker := NewPersistentDepTracker(eng.logger)
+	tracker.onHeld = func() { eng.armTrialTimer() }
+	eng.tracker = tracker
+	eng.scopeState = NewScopeState(eng.nowFunc, eng.logger)
+
+	results := make(chan WorkerResult, 16)
+	ready := tracker.Ready()
+
+	ctx, cancel := context.WithCancel(t.Context())
+
+	go eng.drainWorkerResults(ctx, results, nil)
+
+	return results, ready, cancel, eng
+}
+
+// readReady reads one TrackedAction from the ready channel with a 1s timeout.
+func readReady(t *testing.T, ready <-chan *TrackedAction) *TrackedAction {
+	t.Helper()
+
+	select {
+	case ta := <-ready:
+		return ta
+	case <-time.After(time.Second):
+		require.Fail(t, "timed out waiting for action on ready channel")
+		return nil
+	}
+}
+
+// Validates: R-2.10.5, R-2.10.7
+func TestE2E_429_ScopeBlock_TrialSuccess_Release(t *testing.T) {
+	t.Parallel()
+
+	results, ready, cancel, eng := startDrainLoop(t)
+	defer cancel()
+
+	// Add an action and drain it from the ready channel (simulating a worker picking it up).
+	eng.tracker.Add(&Action{Type: ActionUpload, Path: "a.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 0, nil)
+	readReady(t, ready)
+
+	// Send a 429 result — triggers immediate scope block.
+	results <- WorkerResult{
+		ActionID:   0,
+		Path:       "a.txt",
+		ActionType: ActionUpload,
+		DriveID:    driveid.New(engineTestDriveID),
+		Success:    false,
+		HTTPStatus: 429,
+		RetryAfter: 5 * time.Millisecond,
+		ErrMsg:     "rate limited",
+		Err:        fmt.Errorf("rate limited"),
+	}
+
+	// Wait for the scope block to be created.
+	require.Eventually(t, func() bool {
+		_, ok := eng.tracker.GetScopeBlock("throttle:account")
+		return ok
+	}, time.Second, time.Millisecond)
+
+	// Add one action AFTER the block — it goes to held.
+	eng.tracker.Add(&Action{Type: ActionUpload, Path: "b.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i2"}, 1, nil)
+
+	// Trial timer fires (~5ms) — trial action appears on ready channel.
+	trial := readReady(t, ready)
+	assert.True(t, trial.IsTrial, "dispatched action should be a trial")
+	assert.Equal(t, "throttle:account", trial.TrialScopeKey)
+
+	// Send success result back — scope should be released.
+	results <- WorkerResult{
+		ActionID:      trial.ID,
+		Path:          trial.Action.Path,
+		ActionType:    trial.Action.Type,
+		DriveID:       driveid.New(engineTestDriveID),
+		Success:       true,
+		IsTrial:       true,
+		TrialScopeKey: "throttle:account",
+	}
+
+	// Scope block should be gone.
+	require.Eventually(t, func() bool {
+		_, ok := eng.tracker.GetScopeBlock("throttle:account")
+		return !ok
+	}, time.Second, time.Millisecond)
+}
+
+// Validates: R-2.10.5, R-2.10.7
+func TestE2E_429_TrialFailure_DoublesInterval(t *testing.T) {
+	t.Parallel()
+
+	results, ready, cancel, eng := startDrainLoop(t)
+	defer cancel()
+
+	// Manually create a short-interval block.
+	eng.tracker.HoldScope("throttle:account", &ScopeBlock{
+		Key:           "throttle:account",
+		IssueType:     "rate_limited",
+		BlockedAt:     eng.nowFunc(),
+		TrialInterval: 2 * time.Millisecond,
+		NextTrialAt:   eng.nowFunc().Add(2 * time.Millisecond),
+	})
+
+	// Add action → goes to held → onHeld → armTrialTimer.
+	eng.tracker.Add(&Action{Type: ActionUpload, Path: "a.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 0, nil)
+
+	// Trial 1 fires — pops a.txt from held.
+	trial1 := readReady(t, ready)
+	assert.True(t, trial1.IsTrial)
+
+	// Send failure result back. Note: 429 trial failures go through both
+	// handleTrialResult (doubles interval) AND feedScopeDetection (re-creates
+	// block from UpdateScope). The re-created block uses RetryAfter as interval,
+	// so we set RetryAfter=4ms to keep the test fast. The net effect: the
+	// scope block is re-created with interval=4ms from the server signal.
+	results <- WorkerResult{
+		ActionID:      trial1.ID,
+		Path:          trial1.Action.Path,
+		ActionType:    trial1.Action.Type,
+		DriveID:       driveid.New(engineTestDriveID),
+		Success:       false,
+		HTTPStatus:    429,
+		RetryAfter:    4 * time.Millisecond,
+		ErrMsg:        "still rate limited",
+		Err:           fmt.Errorf("still rate limited"),
+		IsTrial:       true,
+		TrialScopeKey: "throttle:account",
+	}
+
+	// Wait for the scope block to be re-created with the new interval.
+	require.Eventually(t, func() bool {
+		block, ok := eng.tracker.GetScopeBlock("throttle:account")
+		return ok && block.TrialInterval == 4*time.Millisecond
+	}, time.Second, time.Millisecond)
+
+	// Add another action for the second trial (held queue was emptied by first trial).
+	eng.tracker.Add(&Action{Type: ActionUpload, Path: "b.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i2"}, 1, nil)
+
+	// Trial 2 fires (~4ms later).
+	trial2 := readReady(t, ready)
+	assert.True(t, trial2.IsTrial, "second trial should fire with doubled interval")
+
+	// Send success to release.
+	results <- WorkerResult{
+		ActionID:      trial2.ID,
+		Path:          trial2.Action.Path,
+		ActionType:    trial2.Action.Type,
+		DriveID:       driveid.New(engineTestDriveID),
+		Success:       true,
+		IsTrial:       true,
+		TrialScopeKey: "throttle:account",
+	}
+
+	require.Eventually(t, func() bool {
+		_, ok := eng.tracker.GetScopeBlock("throttle:account")
+		return !ok
+	}, time.Second, time.Millisecond)
+}
+
+// Validates: R-2.10.5, R-2.10.6
+func TestE2E_507_ScopeBlock_TrialCycle(t *testing.T) {
+	t.Parallel()
+
+	results, ready, cancel, eng := startDrainLoop(t)
+	defer cancel()
+
+	// Manually create a quota:own block with short interval (the production
+	// interval of 5min is tested in unit tests — here we test the full cycle).
+	eng.tracker.HoldScope("quota:own", &ScopeBlock{
+		Key:           "quota:own",
+		IssueType:     "quota_exceeded",
+		BlockedAt:     eng.nowFunc(),
+		TrialInterval: 3 * time.Millisecond,
+		NextTrialAt:   eng.nowFunc().Add(3 * time.Millisecond),
+	})
+
+	// Add an upload action (quota:own blocks own-drive uploads) → held.
+	eng.tracker.Add(&Action{
+		Type:    ActionUpload,
+		Path:    "big.zip",
+		DriveID: driveid.New(engineTestDriveID),
+		ItemID:  "i1",
+	}, 0, nil)
+
+	// Trial fires.
+	trial := readReady(t, ready)
+	assert.True(t, trial.IsTrial)
+	assert.Equal(t, "quota:own", trial.TrialScopeKey)
+
+	// Send success → scope released.
+	results <- WorkerResult{
+		ActionID:      trial.ID,
+		Path:          trial.Action.Path,
+		ActionType:    trial.Action.Type,
+		DriveID:       driveid.New(engineTestDriveID),
+		Success:       true,
+		IsTrial:       true,
+		TrialScopeKey: "quota:own",
+	}
+
+	require.Eventually(t, func() bool {
+		_, ok := eng.tracker.GetScopeBlock("quota:own")
+		return !ok
+	}, time.Second, time.Millisecond)
+}
+
+// Validates: R-2.10.5, R-2.10.8
+func TestE2E_Service_TrialFailure_BackoffAndRetry(t *testing.T) {
+	t.Parallel()
+
+	results, ready, cancel, eng := startDrainLoop(t)
+	defer cancel()
+
+	eng.tracker.HoldScope("service", &ScopeBlock{
+		Key:           "service",
+		IssueType:     "service_outage",
+		BlockedAt:     eng.nowFunc(),
+		TrialInterval: 2 * time.Millisecond,
+		NextTrialAt:   eng.nowFunc().Add(2 * time.Millisecond),
+	})
+
+	// Add 1 action → held.
+	eng.tracker.Add(&Action{Type: ActionDownload, Path: "a.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 0, nil)
+
+	// Trial 1 fires → send failure.
+	trial1 := readReady(t, ready)
+	assert.True(t, trial1.IsTrial)
+
+	results <- WorkerResult{
+		ActionID:      trial1.ID,
+		Path:          trial1.Action.Path,
+		ActionType:    trial1.Action.Type,
+		DriveID:       driveid.New(engineTestDriveID),
+		Success:       false,
+		HTTPStatus:    500,
+		ErrMsg:        "internal server error",
+		Err:           fmt.Errorf("internal server error"),
+		IsTrial:       true,
+		TrialScopeKey: "service",
+	}
+
+	// Verify interval doubled.
+	require.Eventually(t, func() bool {
+		block, ok := eng.tracker.GetScopeBlock("service")
+		return ok && block.TrialInterval == 4*time.Millisecond && block.TrialCount == 1
+	}, time.Second, time.Millisecond)
+
+	// Add another action for the second trial (held queue was emptied).
+	eng.tracker.Add(&Action{Type: ActionDownload, Path: "b.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i2"}, 1, nil)
+
+	// Trial 2 fires (~4ms) → send success.
+	trial2 := readReady(t, ready)
+	assert.True(t, trial2.IsTrial)
+
+	results <- WorkerResult{
+		ActionID:      trial2.ID,
+		Path:          trial2.Action.Path,
+		ActionType:    trial2.Action.Type,
+		DriveID:       driveid.New(engineTestDriveID),
+		Success:       true,
+		IsTrial:       true,
+		TrialScopeKey: "service",
+	}
+
+	require.Eventually(t, func() bool {
+		_, ok := eng.tracker.GetScopeBlock("service")
+		return !ok
+	}, time.Second, time.Millisecond)
+}
+
+// Validates: R-2.10.5
+func TestE2E_MultipleScopes_EarliestTrialFires(t *testing.T) {
+	t.Parallel()
+
+	results, ready, cancel, eng := startDrainLoop(t)
+	defer cancel()
+
+	now := eng.nowFunc()
+
+	// Service block fires first (2ms), quota fires later (200ms).
+	// Stagger enough so the service trial completes before quota trial fires.
+	eng.tracker.HoldScope("service", &ScopeBlock{
+		Key:           "service",
+		IssueType:     "service_outage",
+		BlockedAt:     now,
+		TrialInterval: 2 * time.Millisecond,
+		NextTrialAt:   now.Add(2 * time.Millisecond),
+	})
+
+	// Service action: downloads are blocked by service scope.
+	eng.tracker.Add(&Action{Type: ActionDownload, Path: "a.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 0, nil)
+
+	// First trial → service (earlier).
+	trial1 := readReady(t, ready)
+	assert.True(t, trial1.IsTrial)
+	assert.Equal(t, "service", trial1.TrialScopeKey)
+
+	// Release service scope.
+	results <- WorkerResult{
+		ActionID:      trial1.ID,
+		Path:          trial1.Action.Path,
+		ActionType:    trial1.Action.Type,
+		DriveID:       driveid.New(engineTestDriveID),
+		Success:       true,
+		IsTrial:       true,
+		TrialScopeKey: "service",
+	}
+
+	// Wait for service scope to be released before adding quota scope.
+	require.Eventually(t, func() bool {
+		_, ok := eng.tracker.GetScopeBlock("service")
+		return !ok
+	}, time.Second, time.Millisecond)
+
+	// Now add quota scope + upload action.
+	eng.tracker.HoldScope("quota:own", &ScopeBlock{
+		Key:           "quota:own",
+		IssueType:     "quota_exceeded",
+		BlockedAt:     eng.nowFunc(),
+		TrialInterval: 2 * time.Millisecond,
+		NextTrialAt:   eng.nowFunc().Add(2 * time.Millisecond),
+	})
+	eng.tracker.Add(&Action{
+		Type:    ActionUpload,
+		Path:    "b.txt",
+		DriveID: driveid.New(engineTestDriveID),
+		ItemID:  "i2",
+	}, 1, nil)
+
+	// Second trial → quota:own.
+	trial2 := readReady(t, ready)
+	assert.True(t, trial2.IsTrial)
+	assert.Equal(t, "quota:own", trial2.TrialScopeKey)
+
+	// Release quota scope.
+	results <- WorkerResult{
+		ActionID:      trial2.ID,
+		Path:          trial2.Action.Path,
+		ActionType:    trial2.Action.Type,
+		DriveID:       driveid.New(engineTestDriveID),
+		Success:       true,
+		IsTrial:       true,
+		TrialScopeKey: "quota:own",
+	}
+
+	require.Eventually(t, func() bool {
+		_, ok := eng.tracker.GetScopeBlock("quota:own")
+		return !ok
+	}, time.Second, time.Millisecond)
+}
+
+// Validates: R-2.10.5 — proves the onHeld callback fixes the gap:
+// timer arms when action enters held after empty applyScopeBlock.
+func TestE2E_GapFixed_TimerArmsFromAdd(t *testing.T) {
+	t.Parallel()
+
+	_, ready, cancel, eng := startDrainLoop(t)
+	defer cancel()
+
+	// Create scope block with short interval — held queue is EMPTY.
+	eng.applyScopeBlock(ScopeUpdateResult{
+		Block:         true,
+		ScopeKey:      "throttle:account",
+		IssueType:     "rate_limited",
+		TrialInterval: 5 * time.Millisecond,
+	})
+
+	// Timer should NOT be armed (held queue empty → EarliestTrialAt returns false).
+	eng.trialMu.Lock()
+	timerBeforeAdd := eng.trialTimer
+	eng.trialMu.Unlock()
+	assert.Nil(t, timerBeforeAdd, "timer should not arm with empty held queue")
+
+	// Add action → held → onHeld → armTrialTimer.
+	eng.tracker.Add(&Action{Type: ActionUpload, Path: "a.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 0, nil)
+
+	// Timer should now be armed.
+	require.Eventually(t, func() bool {
+		eng.trialMu.Lock()
+		defer eng.trialMu.Unlock()
+		return eng.trialTimer != nil
+	}, time.Second, time.Millisecond)
+
+	// Trial fires.
+	trial := readReady(t, ready)
+	assert.True(t, trial.IsTrial, "trial should fire from timer armed by onHeld")
+}
+
+// Validates: R-2.10.5 — proves dependents entering held also arm the timer.
+func TestE2E_GapFixed_TimerArmsFromCompleteDependents(t *testing.T) {
+	t.Parallel()
+
+	results, ready, cancel, eng := startDrainLoop(t)
+	defer cancel()
+
+	// A has no deps → goes to ready. B depends on A → waits.
+	eng.tracker.Add(&Action{Type: ActionDownload, Path: "a.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 0, nil)
+	eng.tracker.Add(&Action{Type: ActionDownload, Path: "b.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i2"}, 1, []int64{0})
+
+	// Drain A from ready.
+	readReady(t, ready)
+
+	// Block service scope — when A completes, B's deps are satisfied,
+	// dispatch sends it to held, onHeld fires armTrialTimer.
+	eng.tracker.HoldScope("service", &ScopeBlock{
+		Key:           "service",
+		IssueType:     "service_outage",
+		BlockedAt:     eng.nowFunc(),
+		TrialInterval: 5 * time.Millisecond,
+		NextTrialAt:   eng.nowFunc().Add(5 * time.Millisecond),
+	})
+
+	// Send success for A → processWorkerResult → Complete(0) → B dispatched → held.
+	results <- WorkerResult{
+		ActionID:   0,
+		Path:       "a.txt",
+		ActionType: ActionDownload,
+		DriveID:    driveid.New(engineTestDriveID),
+		Success:    true,
+	}
+
+	// Trial fires with B.
+	trial := readReady(t, ready)
+	assert.True(t, trial.IsTrial, "trial should fire for dependent that entered held")
+	assert.Equal(t, "b.txt", trial.Action.Path)
+}
+
+// Validates: R-2.10.5 — thundering herd: sync_failures reset on trial success.
+func TestE2E_ThunderingHerd_SyncFailuresReset(t *testing.T) {
+	t.Parallel()
+
+	results, ready, cancel, eng := startDrainLoop(t)
+	defer cancel()
+
+	ctx := t.Context()
+
+	// Insert sync_failures rows with future next_retry_at.
+	farFuture := eng.nowFunc().Add(time.Hour)
+	for i, path := range []string{"x.txt", "y.txt"} {
+		require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+			Path:       path,
+			DriveID:    driveid.New(engineTestDriveID),
+			Direction:  "upload",
+			Category:   "transient",
+			ErrMsg:     "rate limited",
+			HTTPStatus: 429,
+			ScopeKey:   "throttle:account",
+		}, func(int) time.Duration { return time.Duration(i+1) * time.Hour }))
+
+		// Verify it was recorded with a future next_retry_at.
+		rows, err := eng.baseline.ListSyncFailures(ctx)
+		require.NoError(t, err)
+		found := false
+		for _, r := range rows {
+			if r.Path == path {
+				found = true
+				assert.Greater(t, r.NextRetryAt, farFuture.Add(-2*time.Hour).Unix(),
+					"failure should have future next_retry_at")
+			}
+		}
+		require.True(t, found, "failure should exist: %s", path)
+	}
+
+	// Create scope block and add action.
+	eng.tracker.HoldScope("throttle:account", &ScopeBlock{
+		Key:           "throttle:account",
+		IssueType:     "rate_limited",
+		BlockedAt:     eng.nowFunc(),
+		TrialInterval: 2 * time.Millisecond,
+		NextTrialAt:   eng.nowFunc().Add(2 * time.Millisecond),
+	})
+	eng.tracker.Add(&Action{Type: ActionUpload, Path: "trial.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 10, nil)
+
+	// Trial fires → send success.
+	trial := readReady(t, ready)
+	results <- WorkerResult{
+		ActionID:      trial.ID,
+		Path:          trial.Action.Path,
+		ActionType:    trial.Action.Type,
+		DriveID:       driveid.New(engineTestDriveID),
+		Success:       true,
+		IsTrial:       true,
+		TrialScopeKey: "throttle:account",
+	}
+
+	// Wait for scope release.
+	require.Eventually(t, func() bool {
+		_, ok := eng.tracker.GetScopeBlock("throttle:account")
+		return !ok
+	}, time.Second, time.Millisecond)
+
+	// Verify sync_failures next_retry_at was reset to approximately now.
+	// NextRetryAt is stored as nanoseconds (UnixNano).
+	rows, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	now := eng.nowFunc()
+	for _, r := range rows {
+		if r.ScopeKey == "throttle:account" && r.Category == "transient" {
+			resetTime := time.Unix(0, r.NextRetryAt)
+			assert.WithinDuration(t, now, resetTime, 5*time.Second,
+				"next_retry_at for %s should be reset to ~now", r.Path)
+		}
+	}
+}
+
+func TestE2E_DrainExit_StopsTimer(t *testing.T) {
+	t.Parallel()
+
+	results, _, cancel, eng := startDrainLoop(t)
+	defer cancel()
+
+	// Create scope block + held action → timer armed.
+	eng.tracker.HoldScope("service", &ScopeBlock{
+		Key:           "service",
+		IssueType:     "service_outage",
+		BlockedAt:     eng.nowFunc(),
+		TrialInterval: time.Hour, // long interval so it doesn't fire during test
+		NextTrialAt:   eng.nowFunc().Add(time.Hour),
+	})
+	eng.tracker.Add(&Action{Type: ActionDownload, Path: "a.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 0, nil)
+
+	// Verify timer is armed.
+	require.Eventually(t, func() bool {
+		eng.trialMu.Lock()
+		defer eng.trialMu.Unlock()
+		return eng.trialTimer != nil
+	}, time.Second, time.Millisecond)
+
+	// Close results channel → drainWorkerResults returns → defer stopTrialTimer.
+	close(results)
+
+	// Timer should be cleared.
+	require.Eventually(t, func() bool {
+		eng.trialMu.Lock()
+		defer eng.trialMu.Unlock()
+		return eng.trialTimer == nil
+	}, time.Second, time.Millisecond)
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests — trial timing initial intervals and caps (R-2.10.6, R-2.10.7, R-2.10.8)
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.10.6
+func TestTrialTimer_QuotaStartsAt5Min(t *testing.T) {
+	t.Parallel()
+
+	clock, _ := controllableClock()
+	ss := NewScopeState(clock, discardLogger())
+
+	// Feed 3 unique paths with 507 within 10s → triggers quota:own block.
+	for i := range 3 {
+		r := &WorkerResult{
+			Path:       fmt.Sprintf("/file-%d.txt", i),
+			HTTPStatus: 507,
+		}
+		sr := ss.UpdateScope(r)
+		if i < 2 {
+			assert.False(t, sr.Block, "should not trigger before threshold")
+		} else {
+			require.True(t, sr.Block, "should trigger at threshold")
+			assert.Equal(t, "quota:own", sr.ScopeKey)
+			assert.Equal(t, "quota_exceeded", sr.IssueType)
+			assert.Equal(t, 5*time.Minute, sr.TrialInterval,
+				"quota initial interval should be 5 minutes")
+		}
+	}
+}
+
+// Validates: R-2.10.6
+func TestTrialTimer_QuotaBackoff_CapsAt1h(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+
+	tracker := NewDepTracker(16, eng.logger)
+	eng.tracker = tracker
+
+	// Start at 45min — doubling gives 90min → capped to 1h.
+	block := &ScopeBlock{
+		Key:           "quota:own",
+		IssueType:     "quota_exceeded",
+		BlockedAt:     time.Now(),
+		TrialInterval: 45 * time.Minute,
+		NextTrialAt:   time.Now().Add(45 * time.Minute),
+	}
+	tracker.HoldScope("quota:own", block)
+	tracker.Add(&Action{Type: ActionUpload, Path: "big.zip", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
+
+	eng.handleTrialResult(t.Context(), &WorkerResult{
+		TrialScopeKey: "quota:own",
+		Success:       false,
+		HTTPStatus:    507,
+		ErrMsg:        "quota exceeded",
+	})
+
+	got, ok := tracker.GetScopeBlock("quota:own")
+	require.True(t, ok)
+	assert.Equal(t, 1*time.Hour, got.TrialInterval, "should cap at 1h")
+
+	// Double again — should stay at 1h.
+	eng.handleTrialResult(t.Context(), &WorkerResult{
+		TrialScopeKey: "quota:own",
+		Success:       false,
+		HTTPStatus:    507,
+		ErrMsg:        "still exceeded",
+	})
+
+	got, ok = tracker.GetScopeBlock("quota:own")
+	require.True(t, ok)
+	assert.Equal(t, 1*time.Hour, got.TrialInterval, "should remain capped at 1h")
+}
+
+// Validates: R-2.10.7
+func TestTrialTimer_RateLimited_StartsAtRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	clock, _ := controllableClock()
+	ss := NewScopeState(clock, discardLogger())
+
+	r := &WorkerResult{
+		Path:       "/file.txt",
+		HTTPStatus: 429,
+		RetryAfter: 90 * time.Second,
+	}
+
+	sr := ss.UpdateScope(r)
+	require.True(t, sr.Block, "429 should immediately trigger block")
+	assert.Equal(t, "throttle:account", sr.ScopeKey)
+	assert.Equal(t, "rate_limited", sr.IssueType)
+	assert.Equal(t, 90*time.Second, sr.TrialInterval,
+		"rate_limited initial interval should equal Retry-After")
+}
+
+// Validates: R-2.10.7
+func TestTrialTimer_RateLimited_BlocksAllActionTypes(t *testing.T) {
+	t.Parallel()
+
+	logger := testLogger(t)
+	dt := NewDepTracker(16, logger)
+
+	dt.HoldScope("throttle:account", &ScopeBlock{
+		Key:       "throttle:account",
+		IssueType: "rate_limited",
+	})
+
+	actions := []struct {
+		typ  ActionType
+		path string
+	}{
+		{ActionUpload, "upload.txt"},
+		{ActionDownload, "download.txt"},
+		{ActionFolderCreate, "folder/"},
+		{ActionLocalDelete, "delete.txt"},
+	}
+
+	for i, a := range actions {
+		dt.Add(&Action{Type: a.typ, Path: a.path, DriveID: driveid.New("d"), ItemID: fmt.Sprintf("i%d", i)}, int64(i), nil)
+	}
+
+	// None should appear on the ready channel.
+	select {
+	case ta := <-dt.Ready():
+		require.Fail(t, fmt.Sprintf("action should be held, got: %s (type %d)", ta.Action.Path, ta.Action.Type))
+	case <-time.After(20 * time.Millisecond):
+		// Expected — all held.
+	}
+}
+
+// Validates: R-2.10.7
+func TestTrialTimer_RateLimited_CapsAt10m(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+
+	tracker := NewDepTracker(16, eng.logger)
+	eng.tracker = tracker
+
+	block := &ScopeBlock{
+		Key:           "throttle:account",
+		IssueType:     "rate_limited",
+		BlockedAt:     time.Now(),
+		TrialInterval: 8 * time.Minute,
+		NextTrialAt:   time.Now().Add(8 * time.Minute),
+	}
+	tracker.HoldScope("throttle:account", block)
+	tracker.Add(&Action{Type: ActionUpload, Path: "a.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
+
+	eng.handleTrialResult(t.Context(), &WorkerResult{
+		TrialScopeKey: "throttle:account",
+		Success:       false,
+		HTTPStatus:    429,
+		ErrMsg:        "rate limited",
+	})
+
+	got, ok := tracker.GetScopeBlock("throttle:account")
+	require.True(t, ok)
+	assert.Equal(t, 10*time.Minute, got.TrialInterval, "rate_limited should cap at 10m")
+}
+
+// Validates: R-2.10.8
+func TestTrialTimer_Service_StartsAt60s(t *testing.T) {
+	t.Parallel()
+
+	clock, _ := controllableClock()
+	ss := NewScopeState(clock, discardLogger())
+
+	// Feed 5 unique paths with 500 within 30s → triggers service block.
+	for i := range 5 {
+		r := &WorkerResult{
+			Path:       fmt.Sprintf("/file-%d.txt", i),
+			HTTPStatus: 500,
+		}
+		sr := ss.UpdateScope(r)
+		if i < 4 {
+			assert.False(t, sr.Block, "should not trigger before threshold")
+		} else {
+			require.True(t, sr.Block, "should trigger at threshold")
+			assert.Equal(t, "service", sr.ScopeKey)
+			assert.Equal(t, "service_outage", sr.IssueType)
+			assert.Equal(t, 60*time.Second, sr.TrialInterval,
+				"service initial interval should be 60s")
+		}
+	}
+}
+
+// Validates: R-2.10.8
+func TestTrialTimer_Service_503RetryAfterOverride(t *testing.T) {
+	t.Parallel()
+
+	clock, _ := controllableClock()
+	ss := NewScopeState(clock, discardLogger())
+
+	r := &WorkerResult{
+		Path:       "/file.txt",
+		HTTPStatus: 503,
+		RetryAfter: 120 * time.Second,
+	}
+
+	sr := ss.UpdateScope(r)
+	require.True(t, sr.Block, "503 with Retry-After should immediately trigger block")
+	assert.Equal(t, "service", sr.ScopeKey)
+	assert.Equal(t, "service_outage", sr.IssueType)
+	assert.Equal(t, 120*time.Second, sr.TrialInterval,
+		"503+Retry-After should use Retry-After as initial interval")
+}
+
+// Validates: R-2.10.8
+func TestTrialTimer_Service_CapsAt10m(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+
+	tracker := NewDepTracker(16, eng.logger)
+	eng.tracker = tracker
+
+	block := &ScopeBlock{
+		Key:           "service",
+		IssueType:     "service_outage",
+		BlockedAt:     time.Now(),
+		TrialInterval: 8 * time.Minute,
+		NextTrialAt:   time.Now().Add(8 * time.Minute),
+	}
+	tracker.HoldScope("service", block)
+	tracker.Add(&Action{Type: ActionDownload, Path: "a.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
+
+	eng.handleTrialResult(t.Context(), &WorkerResult{
+		TrialScopeKey: "service",
+		Success:       false,
+		HTTPStatus:    500,
+		ErrMsg:        "internal server error",
+	})
+
+	got, ok := tracker.GetScopeBlock("service")
+	require.True(t, ok)
+	assert.Equal(t, 10*time.Minute, got.TrialInterval, "service should cap at 10m")
+}
+
 // clearResolvedSkippedItems
 // ---------------------------------------------------------------------------
 
