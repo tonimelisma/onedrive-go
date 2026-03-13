@@ -2840,7 +2840,7 @@ func TestProcessWorkerResult_Success_NoRecords(t *testing.T) {
 // classifyResult — pure classification of WorkerResult (R-6.8.15)
 // ---------------------------------------------------------------------------
 
-// Validates: R-6.8.15, R-6.7.12
+// Validates: R-6.8.15, R-6.7.12, R-6.7.14
 func TestClassifyResult(t *testing.T) {
 	t.Parallel()
 
@@ -4321,7 +4321,7 @@ func TestIsObservationSuppressed_NilTracker(t *testing.T) {
 	assert.False(t, eng.isObservationSuppressed())
 }
 
-// Validates: R-2.10.30
+// Validates: R-2.10.30, R-2.10.31
 func TestIsObservationSuppressed_QuotaDoesNotSuppress(t *testing.T) {
 	t.Parallel()
 

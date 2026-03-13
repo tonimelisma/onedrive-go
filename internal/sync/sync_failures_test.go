@@ -245,6 +245,7 @@ func TestCommitOutcome_UploadSuccess_NoIssue_NoError(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// Validates: R-2.10.41, R-2.10.10
 func TestCommitOutcome_DownloadSuccess_ClearsSyncFailures(t *testing.T) {
 	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
@@ -287,6 +288,7 @@ func TestCommitOutcome_DownloadSuccess_ClearsSyncFailures(t *testing.T) {
 	assert.Empty(t, issues)
 }
 
+// Validates: R-2.10.41
 func TestCommitOutcome_DeleteSuccess_ClearsSyncFailures(t *testing.T) {
 	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
@@ -326,6 +328,7 @@ func TestCommitOutcome_DeleteSuccess_ClearsSyncFailures(t *testing.T) {
 	assert.Empty(t, issues)
 }
 
+// Validates: R-2.10.41
 func TestCommitOutcome_MoveSuccess_ClearsSyncFailures(t *testing.T) {
 	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
