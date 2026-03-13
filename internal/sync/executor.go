@@ -50,9 +50,10 @@ type ExecutorConfig struct {
 	minFreeSpace int64
 
 	// Injectable for testing.
-	nowFunc   func() time.Time
-	hashFunc  func(filePath string) (string, error)
-	trashFunc func(absPath string) error // nil = permanent delete (os.Remove)
+	nowFunc           func() time.Time
+	hashFunc          func(filePath string) (string, error)
+	trashFunc         func(absPath string) error        // nil = permanent delete (os.Remove)
+	diskAvailableFunc func(path string) (uint64, error) // nil = skip disk check (non-unix or unconfigured)
 }
 
 // Executor executes individual actions against the Graph API and local

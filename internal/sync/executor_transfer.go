@@ -128,7 +128,11 @@ func (e *Executor) executeUpload(ctx context.Context, action *Action) Outcome {
 //   - Available < minFreeSpace → ErrDiskFull (scope block)
 //   - Available >= minFreeSpace but < fileSize + minFreeSpace → ErrFileTooLargeForSpace (per-file skip)
 func (e *Executor) checkDiskSpace(action *Action) (Outcome, bool) {
-	available, err := diskAvailableFunc(e.syncRoot)
+	if e.diskAvailableFunc == nil {
+		return Outcome{}, false
+	}
+
+	available, err := e.diskAvailableFunc(e.syncRoot)
 	if err != nil {
 		// If we can't query disk space, proceed with the download rather
 		// than blocking all downloads due to a transient statfs error.

@@ -289,55 +289,65 @@ func (dt *DepTracker) dispatchReady(ta *TrackedAction) {
 	dt.ready <- ta
 }
 
+// scopeRule defines a single scope blocking rule. Each rule has a fixed
+// scope key and a predicate that determines whether a given action is
+// affected. Evaluated in priority order — first matching rule wins.
+type scopeRule struct {
+	key    string                       // scope key to check in dt.scopeBlocks
+	blocks func(ta *TrackedAction) bool // true if this action should be held
+}
+
+// scopeRules is the ordered table of scope blocking rules. Priority is
+// top-to-bottom — global blocks first, then progressively narrower scopes.
+// New scope types are added here as a single struct literal.
+var scopeRules = []scopeRule{
+	// throttle:account blocks ALL actions across all drives (R-6.8.4, R-2.10.26).
+	{key: scopeKeyThrottleAccount, blocks: func(*TrackedAction) bool { return true }},
+
+	// service blocks ALL actions across all drives (R-2.10.28).
+	{key: scopeKeyService, blocks: func(*TrackedAction) bool { return true }},
+
+	// disk:local blocks downloads only — uploads, deletes, and moves continue
+	// even when disk is full because they free space or don't consume it (R-2.10.43).
+	{key: scopeKeyDiskLocal, blocks: func(ta *TrackedAction) bool {
+		return ta.Action.Type == ActionDownload
+	}},
+
+	// quota:own blocks own-drive uploads only (R-2.10.19).
+	{key: scopeKeyQuotaOwn, blocks: func(ta *TrackedAction) bool {
+		return ta.Action.TargetsOwnDrive() && ta.Action.Type == ActionUpload
+	}},
+}
+
 // blockedScope returns the scope key blocking this action, or "" if none.
-// Checks the action's target drive against active scope blocks.
+// Evaluates scopeRules in priority order, then checks dynamic scope keys
+// (shortcut quota and perm:dir) that depend on action context.
 func (dt *DepTracker) blockedScope(ta *TrackedAction) string {
 	if len(dt.scopeBlocks) == 0 {
 		return ""
 	}
 
-	// throttle:account blocks ALL actions across all drives (R-6.8.4, R-2.10.26).
-	if _, ok := dt.scopeBlocks[scopeKeyThrottleAccount]; ok {
-		return scopeKeyThrottleAccount
-	}
-
-	// service blocks ALL actions across all drives (R-2.10.28).
-	if _, ok := dt.scopeBlocks[scopeKeyService]; ok {
-		return scopeKeyService
-	}
-
-	// disk:local blocks downloads only — uploads, deletes, and moves continue
-	// even when disk is full because they free space or don't consume it (R-2.10.43).
-	if _, ok := dt.scopeBlocks[scopeKeyDiskLocal]; ok {
-		if ta.Action.Type == ActionDownload {
-			return scopeKeyDiskLocal
+	// Fixed-key rules: evaluated in priority order from scopeRules table.
+	for i := range scopeRules {
+		rule := &scopeRules[i]
+		if _, ok := dt.scopeBlocks[rule.key]; ok && rule.blocks(ta) {
+			return rule.key
 		}
 	}
 
-	// quota:own blocks own-drive uploads only (R-2.10.19).
-	if _, ok := dt.scopeBlocks[scopeKeyQuotaOwn]; ok {
-		if ta.Action.TargetsOwnDrive() && ta.Action.Type == ActionUpload {
-			return scopeKeyQuotaOwn
-		}
-	}
+	// Dynamic-key rules: scope key depends on the action's context.
 
 	// quota:shortcut:$key blocks uploads to that specific shortcut (R-2.10.20).
 	if scKey := ta.Action.ShortcutKey(); scKey != "" {
 		scopeKey := shortcutScopeKey(scKey)
-		if _, ok := dt.scopeBlocks[scopeKey]; ok {
-			if ta.Action.Type == ActionUpload {
-				return scopeKey
-			}
+		if _, ok := dt.scopeBlocks[scopeKey]; ok && ta.Action.Type == ActionUpload {
+			return scopeKey
 		}
 	}
 
-	return dt.blockedByPermDir(ta)
-}
-
-// blockedByPermDir checks whether any perm:dir scope block covers this
-// action's path. Returns the scope key if blocked, "" otherwise.
-// O(n) over active perm:dir blocks — expected to be tiny (1-3 typically).
-func (dt *DepTracker) blockedByPermDir(ta *TrackedAction) string {
+	// perm:dir:$path blocks all actions whose path falls under the denied
+	// directory (R-2.10.12). O(n) over active perm:dir blocks — expected
+	// to be tiny (1-3 typically).
 	for key := range dt.scopeBlocks {
 		if !strings.HasPrefix(key, scopeKeyPermDir) {
 			continue

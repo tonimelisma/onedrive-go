@@ -1314,3 +1314,65 @@ func TestDiscardScope_NoOpWhenEmpty(t *testing.T) {
 	_, ok := dt.GetScopeBlock("nonexistent:scope")
 	assert.False(t, ok)
 }
+
+// ---------------------------------------------------------------------------
+// scopeRules predicate tests — validates each rule independently
+// ---------------------------------------------------------------------------
+
+// TestScopeRules_Predicates validates the blocking predicate for each
+// fixed-key scope rule. Table-driven so adding a new scope rule only
+// requires adding a new test case row.
+func TestScopeRules_Predicates(t *testing.T) {
+	t.Parallel()
+
+	ownDriveAction := func(at ActionType) *TrackedAction {
+		return &TrackedAction{Action: Action{Type: at, DriveID: driveid.New("d")}}
+	}
+
+	cases := []struct {
+		name    string
+		key     string
+		action  *TrackedAction
+		blocked bool
+	}{
+		// throttle:account blocks everything.
+		{"throttle_blocks_upload", scopeKeyThrottleAccount, ownDriveAction(ActionUpload), true},
+		{"throttle_blocks_download", scopeKeyThrottleAccount, ownDriveAction(ActionDownload), true},
+		{"throttle_blocks_delete", scopeKeyThrottleAccount, ownDriveAction(ActionRemoteDelete), true},
+
+		// service blocks everything.
+		{"service_blocks_upload", scopeKeyService, ownDriveAction(ActionUpload), true},
+		{"service_blocks_download", scopeKeyService, ownDriveAction(ActionDownload), true},
+
+		// disk:local blocks downloads only.
+		{"disk_blocks_download", scopeKeyDiskLocal, ownDriveAction(ActionDownload), true},
+		{"disk_passes_upload", scopeKeyDiskLocal, ownDriveAction(ActionUpload), false},
+		{"disk_passes_delete", scopeKeyDiskLocal, ownDriveAction(ActionRemoteDelete), false},
+		{"disk_passes_move", scopeKeyDiskLocal, ownDriveAction(ActionLocalMove), false},
+
+		// quota:own blocks own-drive uploads only.
+		{"quota_own_blocks_upload", scopeKeyQuotaOwn, ownDriveAction(ActionUpload), true},
+		{"quota_own_passes_download", scopeKeyQuotaOwn, ownDriveAction(ActionDownload), false},
+		{"quota_own_passes_delete", scopeKeyQuotaOwn, ownDriveAction(ActionRemoteDelete), false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Find the matching rule for this scope key.
+			var matched *scopeRule
+			for i := range scopeRules {
+				if scopeRules[i].key == tc.key {
+					matched = &scopeRules[i]
+					break
+				}
+			}
+			require.NotNil(t, matched, "no scopeRule found for key %q", tc.key)
+
+			got := matched.blocks(tc.action)
+			assert.Equal(t, tc.blocked, got,
+				"scopeRule[%s].blocks() for action type %s", tc.key, tc.action.Action.Type)
+		})
+	}
+}
