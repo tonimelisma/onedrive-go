@@ -137,9 +137,9 @@ type failureGroupJSON struct {
 
 // issuesOutputJSON is the top-level JSON structure for the issues command.
 type issuesOutputJSON struct {
-	Conflicts     []conflictJSON      `json:"conflicts"`
-	FailureGroups []failureGroupJSON  `json:"failure_groups"`
-	HeldDeletes   []heldDeleteJSON    `json:"held_deletes,omitempty"`
+	Conflicts     []conflictJSON     `json:"conflicts"`
+	FailureGroups []failureGroupJSON `json:"failure_groups"`
+	HeldDeletes   []heldDeleteJSON   `json:"held_deletes,omitempty"`
 }
 
 // heldDeleteJSON is the JSON representation of a held delete entry.
@@ -191,7 +191,11 @@ func printGroupedIssuesJSON(w io.Writer, conflicts []sync.ConflictRecord, groups
 // printGroupedIssuesTextVerbose renders the full text output for the issues
 // command using grouped failure display. When verbose is true, all paths are
 // shown; otherwise only the first defaultVisiblePaths per group are shown.
-func printGroupedIssuesTextVerbose(w io.Writer, conflicts []sync.ConflictRecord, groups []failureGroup, heldDeletes []sync.SyncFailureRow, history, verbose bool) {
+func printGroupedIssuesTextVerbose(
+	w io.Writer, conflicts []sync.ConflictRecord,
+	groups []failureGroup, heldDeletes []sync.SyncFailureRow,
+	history, verbose bool,
+) {
 	sections := 0
 
 	if len(conflicts) > 0 {

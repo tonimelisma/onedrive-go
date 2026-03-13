@@ -563,4 +563,3 @@ func printHeldDeletesTable(w io.Writer, failures []sync.SyncFailureRow) {
 
 	printTable(w, headers, rows)
 }
-

@@ -880,9 +880,9 @@ func TestWalkPermissionBoundary_StopsAtShortcutRoot(t *testing.T) {
 	// shortcut root and not try to go above it.
 	checker := &mockPermChecker{
 		perms: map[string][]graph.Permission{
-			driveid.New(remoteDriveID).String() + ":deep-id":   {{ID: "p1", Roles: []string{"read"}}},
-			driveid.New(remoteDriveID).String() + ":mid-id":    {{ID: "p2", Roles: []string{"read"}}},
-			driveid.New(remoteDriveID).String() + ":root-id":   {{ID: "p3", Roles: []string{"read"}}},
+			driveid.New(remoteDriveID).String() + ":deep-id":    {{ID: "p1", Roles: []string{"read"}}},
+			driveid.New(remoteDriveID).String() + ":mid-id":     {{ID: "p2", Roles: []string{"read"}}},
+			driveid.New(remoteDriveID).String() + ":root-id":    {{ID: "p3", Roles: []string{"read"}}},
 			driveid.New(remoteDriveID).String() + ":above-root": {{ID: "p4", Roles: []string{"read"}}},
 		},
 	}

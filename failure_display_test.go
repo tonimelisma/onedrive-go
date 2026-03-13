@@ -307,4 +307,3 @@ func TestPrintGroupedIssuesTextVerbose_AllSections(t *testing.T) {
 	assert.True(t, strings.Contains(output, "HELD DELETES"))
 	assert.True(t, strings.Contains(output, "QUOTA EXCEEDED"))
 }
-
