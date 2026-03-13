@@ -501,3 +501,93 @@ func (e *Engine) recheckLocalPermissions(ctx context.Context) {
 		)
 	}
 }
+
+// clearScannerResolvedPermissions checks whether the scanner observed paths
+// that were previously blocked by local_permission_denied failures. If the
+// scanner successfully accessed a path (it appeared in events), the
+// permission issue is resolved — clear the failure and release any scope block.
+//
+// Implements R-2.10.10. Complements recheckLocalPermissions (R-2.10.13).
+func (e *Engine) clearScannerResolvedPermissions(ctx context.Context, observedPaths map[string]bool) {
+	if len(observedPaths) == 0 {
+		return
+	}
+
+	issues, err := e.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
+	if err != nil || len(issues) == 0 {
+		return
+	}
+
+	for i := range issues {
+		issue := &issues[i]
+
+		resolved := false
+		if strings.HasPrefix(issue.ScopeKey, scopeKeyPermDir) {
+			// Directory-level: resolved if any observed path falls under the directory.
+			dirPath := strings.TrimPrefix(issue.ScopeKey, scopeKeyPermDir)
+			for p := range observedPaths {
+				if p == dirPath || strings.HasPrefix(p, dirPath+"/") {
+					resolved = true
+					break
+				}
+			}
+		} else {
+			// File-level: resolved if the file itself was observed.
+			resolved = observedPaths[issue.Path]
+		}
+
+		if !resolved {
+			continue
+		}
+
+		if clearErr := e.baseline.ClearSyncFailure(ctx, issue.Path, issue.DriveID); clearErr != nil {
+			e.logger.Warn("clearScannerResolvedPermissions: failed to clear failure",
+				slog.String("path", issue.Path),
+				slog.String("error", clearErr.Error()),
+			)
+
+			continue
+		}
+
+		if e.tracker != nil && issue.ScopeKey != "" {
+			e.tracker.ReleaseScope(issue.ScopeKey)
+		}
+
+		e.logger.Info("scanner resolved permission denial",
+			slog.String("path", issue.Path),
+			slog.String("scope_key", issue.ScopeKey),
+		)
+	}
+}
+
+// pathSetFromEvents builds a set of paths from scanner change events.
+func pathSetFromEvents(events []ChangeEvent) map[string]bool {
+	if len(events) == 0 {
+		return nil
+	}
+
+	paths := make(map[string]bool, len(events))
+	for i := range events {
+		if events[i].Path != "" {
+			paths[events[i].Path] = true
+		}
+	}
+
+	return paths
+}
+
+// pathSetFromBatch builds a set of paths from watch-mode batch entries.
+func pathSetFromBatch(batch []PathChanges) map[string]bool {
+	if len(batch) == 0 {
+		return nil
+	}
+
+	paths := make(map[string]bool, len(batch))
+	for i := range batch {
+		if batch[i].Path != "" {
+			paths[batch[i].Path] = true
+		}
+	}
+
+	return paths
+}

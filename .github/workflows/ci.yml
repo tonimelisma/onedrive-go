@@ -79,7 +79,17 @@ jobs:
       - name: Build
         run: go build ./...
 
-      - name: Azure OIDC login
+      - name: Azure OIDC login (attempt 1)
+        id: azure_login_integration
+        uses: azure/login@v2
+        continue-on-error: true
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Azure OIDC login (retry)
+        if: steps.azure_login_integration.outcome == 'failure'
         uses: azure/login@v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
@@ -182,7 +192,17 @@ jobs:
       - name: Build
         run: go build ./...
 
-      - name: Azure OIDC login
+      - name: Azure OIDC login (attempt 1)
+        id: azure_login_e2e
+        uses: azure/login@v2
+        continue-on-error: true
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Azure OIDC login (retry)
+        if: steps.azure_login_e2e.outcome == 'failure'
         uses: azure/login@v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
