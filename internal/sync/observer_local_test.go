@@ -1107,38 +1107,32 @@ func TestShouldObserve_AllCases(t *testing.T) {
 		name       string
 		fileName   string
 		path       string
-		wantOK     bool
-		wantSkip   bool   // expect non-nil SkippedItem
-		wantReason string // expected Reason if wantSkip is true
+		wantNil    bool   // expect nil (observe)
+		wantReason string // expected Reason if non-nil; "" for internal exclusions
 	}{
 		{
 			name:     "normal file",
 			fileName: "hello.txt",
 			path:     "hello.txt",
-			wantOK:   true,
-			wantSkip: false,
+			wantNil:  true,
 		},
 		{
 			name:     "always-excluded file (.tmp)",
 			fileName: "temp.tmp",
 			path:     "temp.tmp",
-			wantOK:   false,
-			wantSkip: false, // internal exclusion, no SkippedItem
+			wantNil:  false,
+			// internal exclusion → Reason==""
 		},
 		{
 			name:       "invalid name (CON)",
 			fileName:   "CON",
 			path:       "CON",
-			wantOK:     false,
-			wantSkip:   true,
 			wantReason: IssueInvalidFilename,
 		},
 		{
 			name:       "path too long (>400 chars)",
 			fileName:   "file.txt",
 			path:       strings.Repeat("a", 401),
-			wantOK:     false,
-			wantSkip:   true,
 			wantReason: IssuePathTooLong,
 		},
 	}
@@ -1147,16 +1141,18 @@ func TestShouldObserve_AllCases(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			ok, skip := shouldObserve(tt.fileName, tt.path)
-			assert.Equal(t, tt.wantOK, ok, "shouldObserve(%q, %q) ok", tt.fileName, tt.path)
+			skip := shouldObserve(tt.fileName, tt.path)
 
-			if tt.wantSkip {
-				require.NotNil(t, skip, "expected non-nil SkippedItem")
-				assert.Equal(t, tt.wantReason, skip.Reason)
-				assert.Equal(t, tt.path, skip.Path)
-				assert.NotEmpty(t, skip.Detail)
+			if tt.wantNil {
+				assert.Nil(t, skip, "shouldObserve(%q, %q) should return nil", tt.fileName, tt.path)
 			} else {
-				assert.Nil(t, skip, "expected nil SkippedItem")
+				require.NotNil(t, skip, "shouldObserve(%q, %q) should return non-nil", tt.fileName, tt.path)
+				assert.Equal(t, tt.wantReason, skip.Reason)
+
+				if tt.wantReason != "" {
+					assert.Equal(t, tt.path, skip.Path)
+					assert.NotEmpty(t, skip.Detail)
+				}
 			}
 		})
 	}
@@ -1351,4 +1347,17 @@ func TestFullScan_HashPanicDoesNotAbort(t *testing.T) {
 	require.NotNil(t, badSkip, "panicking file should be in Skipped")
 	assert.Equal(t, IssueHashPanic, badSkip.Reason)
 	assert.Contains(t, badSkip.Detail, "corrupted file")
+}
+
+// ---------------------------------------------------------------------------
+// Constructor tests
+// ---------------------------------------------------------------------------
+
+// Validates that maps are initialized in constructor, not Watch().
+func TestNewLocalObserver_MapsInitialized(t *testing.T) {
+	t.Parallel()
+
+	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
+	assert.NotNil(t, obs.pendingTimers, "pendingTimers should be initialized in constructor")
+	assert.NotNil(t, obs.hashRequests, "hashRequests should be initialized in constructor")
 }

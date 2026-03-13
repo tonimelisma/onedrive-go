@@ -133,9 +133,8 @@ func (o *LocalObserver) handleFsEvent(
 	// Unified observation filter (Stage 1: name + path length).
 	// Watch handlers don't collect SkippedItems — the safety scan (FullScan
 	// every 5 min) catches them for recording to sync_failures.
-	ok, skip := shouldObserve(name, dbRelPath)
-	if !ok {
-		if skip != nil {
+	if skip := shouldObserve(name, dbRelPath); skip != nil {
+		if skip.Reason != "" {
 			o.logger.Debug("watch: skipping file",
 				slog.String("path", dbRelPath),
 				slog.String("reason", skip.Reason))
@@ -285,8 +284,7 @@ func (o *LocalObserver) scanNewDirectory(
 		entryRelPath := dirRelPath + "/" + entryName
 
 		// Unified observation filter (Stage 1).
-		ok, _ := shouldObserve(entryName, entryRelPath)
-		if !ok {
+		if shouldObserve(entryName, entryRelPath) != nil {
 			continue
 		}
 
@@ -324,6 +322,15 @@ func (o *LocalObserver) scanNewDirectory(
 
 		// Stage 2 observation filter: file size check (requires stat).
 		if o.isOversizedFile(info.Size(), entryRelPath) {
+			continue
+		}
+
+		// Early rejection for case collisions in directory scan (R-2.12.2).
+		if collidingName, hasCollision := hasCaseCollision(dirPath, entryName); hasCollision {
+			o.logger.Debug("case collision detected in directory scan, skipping",
+				slog.String("path", entryRelPath),
+				slog.String("collides_with", collidingName))
+
 			continue
 		}
 
@@ -384,7 +391,9 @@ func (o *LocalObserver) handleWrite(fsPath, dbRelPath, name string) {
 		select {
 		case o.hashRequests <- req:
 		default:
-			// Channel full — safety scan will catch up.
+			o.droppedRetries.Add(1)
+			o.logger.Debug("hash request dropped, channel full (safety scan will catch up)",
+				slog.String("path", dbRelPath))
 		}
 	})
 }
@@ -432,6 +441,10 @@ func (o *LocalObserver) hashAndEmit(ctx context.Context, req hashRequest, events
 				select {
 				case o.hashRequests <- req2:
 				default:
+					o.droppedRetries.Add(1)
+					o.logger.Debug("hash retry dropped, channel full (safety scan will catch up)",
+						slog.String("path", req.dbRelPath),
+						slog.Int("retry", req2.retries))
 				}
 			})
 

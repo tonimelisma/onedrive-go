@@ -3228,6 +3228,69 @@ func TestProcessTrialResult_Failure_NoScopeDetection(t *testing.T) {
 	assert.Equal(t, 1, got.TrialCount, "trial count should be incremented by extendTrialInterval")
 }
 
+// Validates: R-2.10.43 — full disk:local scope-block lifecycle:
+// ErrDiskFull → classifyResult → HoldScope → downloads held → trial → release.
+func TestDiskLocalScopeBlock_FullCycle(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+
+	tracker := NewDepTracker(16, eng.logger)
+	eng.tracker = tracker
+
+	// 1. classifyResult maps ErrDiskFull to disk:local scope block.
+	class, scope := classifyResult(&WorkerResult{
+		Err: fmt.Errorf("download failed: %w", ErrDiskFull),
+	})
+	require.Equal(t, resultScopeBlock, class)
+	require.Equal(t, SKDiskLocal, scope)
+
+	// 2. Establish the scope block.
+	block := &ScopeBlock{
+		Key:           SKDiskLocal,
+		IssueType:     "disk_full",
+		BlockedAt:     time.Now(),
+		TrialInterval: 10 * time.Second,
+		NextTrialAt:   time.Now().Add(10 * time.Second),
+	}
+	tracker.HoldScope(SKDiskLocal, block)
+
+	// 3. Add download and upload actions.
+	dlAction := &Action{Type: ActionDownload, Path: "big.zip", DriveID: driveid.New("d"), ItemID: "dl1"}
+	ulAction := &Action{Type: ActionUpload, Path: "small.txt", DriveID: driveid.New("d"), ItemID: "ul1"}
+	tracker.Add(dlAction, 1, nil)
+	tracker.Add(ulAction, 2, nil)
+
+	// 4. Download should be held (disk:local blocks downloads).
+	//    Upload should be ready (disk:local does NOT block uploads).
+	var readyIDs []int64
+	for {
+		select {
+		case ta := <-tracker.Ready():
+			readyIDs = append(readyIDs, ta.ID)
+			tracker.Complete(ta.ID)
+		default:
+			goto doneCollecting
+		}
+	}
+doneCollecting:
+	assert.Contains(t, readyIDs, int64(2), "upload should be dispatched (not blocked by disk:local)")
+	assert.NotContains(t, readyIDs, int64(1), "download should be held by disk:local scope block")
+
+	// 5. Release scope block (simulating trial success / disk space freed).
+	tracker.ReleaseScope(SKDiskLocal)
+
+	// 6. Download should now be ready.
+	select {
+	case ta := <-tracker.Ready():
+		assert.Equal(t, int64(1), ta.ID, "download should be released after scope unblock")
+		tracker.Complete(ta.ID)
+	case <-time.After(time.Second):
+		t.Fatal("download not released after scope unblock")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // deriveScopeKey
 // ---------------------------------------------------------------------------
