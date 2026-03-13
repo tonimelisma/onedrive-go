@@ -3410,12 +3410,19 @@ func TestRecordFailure_PopulatesScopeKey_507Shortcut(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // startDrainLoop creates a real engine with store, tracker, scopeState,
-// and starts drainWorkerResults. Returns:
+// buffer, and retrier — the full transient retry pipeline — and starts
+// drainWorkerResults. Returns:
 //   - results chan: test sends WorkerResults here (simulating workers)
 //   - ready chan: test reads trial/released actions from tracker.Ready()
 //   - cancel func: stops the drain goroutine
 //   - eng: the engine (for state inspection)
-func startDrainLoop(t *testing.T) (chan WorkerResult, <-chan *TrackedAction, context.CancelFunc, *Engine) {
+//   - buf: the Buffer (for verifying retrier re-injection)
+//
+// Clock control: store and engine clocks are fixed at storeTime. The retrier
+// clock is storeTime+1h — obviously past any backoff delay (which caps at 1h
+// for high attempt counts and ~1.25s for attempt 0), so
+// ListSyncFailuresForRetry returns due rows on first sweep after Kick().
+func startDrainLoop(t *testing.T) (chan WorkerResult, <-chan *TrackedAction, context.CancelFunc, *Engine, *Buffer) {
 	t.Helper()
 
 	mock := &engineMockClient{}
@@ -3426,14 +3433,25 @@ func startDrainLoop(t *testing.T) (chan WorkerResult, <-chan *TrackedAction, con
 	eng.tracker = tracker
 	eng.scopeState = NewScopeState(eng.nowFunc, eng.logger)
 
+	buf := NewBuffer(eng.logger)
+
+	// Retrier clock is 1h ahead of real time — obviously past any backoff
+	// delay (which caps at 1h for high attempt counts and ~1.25s for attempt
+	// 0). Store and engine clocks use real time: scope/trial tests rely on
+	// real time for time.AfterFunc / NextDueTrial coordination.
+	futureTime := time.Now().Add(time.Hour)
+	retrier := NewFailureRetrier(eng.baseline, buf, tracker, eng.logger)
+	retrier.nowFunc = func() time.Time { return futureTime }
+	eng.retrier = retrier
+
 	results := make(chan WorkerResult, 16)
 	ready := tracker.Ready()
 
 	ctx, cancel := context.WithCancel(t.Context())
-
 	go eng.drainWorkerResults(ctx, results, nil)
+	go retrier.Run(ctx)
 
-	return results, ready, cancel, eng
+	return results, ready, cancel, eng, buf
 }
 
 // readReady reads one TrackedAction from the ready channel with a 1s timeout.
@@ -3453,7 +3471,7 @@ func readReady(t *testing.T, ready <-chan *TrackedAction) *TrackedAction {
 func TestE2E_429_ScopeBlock_TrialSuccess_Release(t *testing.T) {
 	t.Parallel()
 
-	results, ready, cancel, eng := startDrainLoop(t)
+	results, ready, cancel, eng, _ := startDrainLoop(t)
 	defer cancel()
 
 	// Add an action and drain it from the ready channel (simulating a worker picking it up).
@@ -3509,7 +3527,7 @@ func TestE2E_429_ScopeBlock_TrialSuccess_Release(t *testing.T) {
 func TestE2E_429_TrialFailure_DoublesInterval(t *testing.T) {
 	t.Parallel()
 
-	results, ready, cancel, eng := startDrainLoop(t)
+	results, ready, cancel, eng, _ := startDrainLoop(t)
 	defer cancel()
 
 	// Manually create a short-interval block.
@@ -3579,7 +3597,7 @@ func TestE2E_429_TrialFailure_DoublesInterval(t *testing.T) {
 func TestE2E_507_ScopeBlock_TrialCycle(t *testing.T) {
 	t.Parallel()
 
-	results, ready, cancel, eng := startDrainLoop(t)
+	results, ready, cancel, eng, _ := startDrainLoop(t)
 	defer cancel()
 
 	// Manually create a quota:own block with short interval (the production
@@ -3626,7 +3644,7 @@ func TestE2E_507_ScopeBlock_TrialCycle(t *testing.T) {
 func TestE2E_Service_TrialFailure_BackoffAndRetry(t *testing.T) {
 	t.Parallel()
 
-	results, ready, cancel, eng := startDrainLoop(t)
+	results, ready, cancel, eng, _ := startDrainLoop(t)
 	defer cancel()
 
 	eng.tracker.HoldScope("service", &ScopeBlock{
@@ -3690,7 +3708,7 @@ func TestE2E_Service_TrialFailure_BackoffAndRetry(t *testing.T) {
 func TestE2E_MultipleScopes_EarliestTrialFires(t *testing.T) {
 	t.Parallel()
 
-	results, ready, cancel, eng := startDrainLoop(t)
+	results, ready, cancel, eng, _ := startDrainLoop(t)
 	defer cancel()
 
 	now := eng.nowFunc()
@@ -3772,7 +3790,7 @@ func TestE2E_MultipleScopes_EarliestTrialFires(t *testing.T) {
 func TestE2E_GapFixed_TimerArmsFromAdd(t *testing.T) {
 	t.Parallel()
 
-	_, ready, cancel, eng := startDrainLoop(t)
+	_, ready, cancel, eng, _ := startDrainLoop(t)
 	defer cancel()
 
 	// Create scope block with short interval — held queue is EMPTY.
@@ -3808,7 +3826,7 @@ func TestE2E_GapFixed_TimerArmsFromAdd(t *testing.T) {
 func TestE2E_GapFixed_TimerArmsFromCompleteDependents(t *testing.T) {
 	t.Parallel()
 
-	results, ready, cancel, eng := startDrainLoop(t)
+	results, ready, cancel, eng, _ := startDrainLoop(t)
 	defer cancel()
 
 	// A has no deps → goes to ready. B depends on A → waits.
@@ -3847,7 +3865,7 @@ func TestE2E_GapFixed_TimerArmsFromCompleteDependents(t *testing.T) {
 func TestE2E_ThunderingHerd_SyncFailuresReset(t *testing.T) {
 	t.Parallel()
 
-	results, ready, cancel, eng := startDrainLoop(t)
+	results, ready, cancel, eng, _ := startDrainLoop(t)
 	defer cancel()
 
 	ctx := t.Context()
@@ -3902,29 +3920,38 @@ func TestE2E_ThunderingHerd_SyncFailuresReset(t *testing.T) {
 	}
 
 	// Wait for scope release.
+	// Poll for the actual condition: next_retry_at values reset to ~now.
+	// Polling this directly avoids a race between scope release (which
+	// removes the scope block) and resetScopeRetryTimes (which updates
+	// the DB rows) — both run sequentially in the drain goroutine, but
+	// the test goroutine can observe the scope release before the DB
+	// update completes.
 	require.Eventually(t, func() bool {
-		_, ok := eng.tracker.GetScopeBlock("throttle:account")
-		return !ok
-	}, time.Second, time.Millisecond)
-
-	// Verify sync_failures next_retry_at was reset to approximately now.
-	// NextRetryAt is stored as nanoseconds (UnixNano).
-	rows, err := eng.baseline.ListSyncFailures(ctx)
-	require.NoError(t, err)
-	now := eng.nowFunc()
-	for _, r := range rows {
-		if r.ScopeKey == "throttle:account" && r.Category == "transient" {
-			resetTime := time.Unix(0, r.NextRetryAt)
-			assert.WithinDuration(t, now, resetTime, 5*time.Second,
-				"next_retry_at for %s should be reset to ~now", r.Path)
+		rows, err := eng.baseline.ListSyncFailures(ctx)
+		if err != nil || len(rows) == 0 {
+			return false
 		}
-	}
+		now := time.Now()
+		for _, r := range rows {
+			if r.ScopeKey == "throttle:account" && r.Category == "transient" {
+				resetTime := time.Unix(0, r.NextRetryAt)
+				if now.Sub(resetTime).Abs() > 5*time.Second {
+					return false
+				}
+			}
+		}
+		return true
+	}, 2*time.Second, time.Millisecond, "sync_failures next_retry_at should be reset to ~now")
+
+	// Also verify scope block was cleared.
+	_, ok := eng.tracker.GetScopeBlock("throttle:account")
+	assert.False(t, ok, "scope block should be released")
 }
 
 func TestE2E_DrainExit_StopsTimer(t *testing.T) {
 	t.Parallel()
 
-	results, _, cancel, eng := startDrainLoop(t)
+	results, _, cancel, eng, _ := startDrainLoop(t)
 	defer cancel()
 
 	// Create scope block + held action → timer armed.
@@ -4547,53 +4574,11 @@ func TestLogFailureSummary_NoErrors(t *testing.T) {
 // are unit-tested separately; this test verifies the full wiring.
 // ---------------------------------------------------------------------------
 
-// startDrainLoopWithRetrier extends startDrainLoop by adding a real Buffer
-// and FailureRetrier, creating the full transient retry pipeline. Clock
-// control ensures deterministic retrier behavior without real sleeps.
-func startDrainLoopWithRetrier(t *testing.T) (chan WorkerResult, <-chan *TrackedAction, context.CancelFunc, *Engine, *Buffer) {
-	t.Helper()
-
-	mock := &engineMockClient{}
-	eng, _ := newTestEngine(t, mock)
-
-	// Fix the SyncStore clock so RecordFailure computes a known next_retry_at.
-	// With retry.Reconcile.Delay(0) ≈ 1s (±25% jitter), next_retry_at will be
-	// at most time.Unix(1000,0) + 1.25s = time.Unix(1001, 250_000_000).
-	storeTime := time.Unix(1000, 0)
-	eng.baseline.nowFunc = func() time.Time { return storeTime }
-
-	// Engine clock matches the store clock for scope detection consistency.
-	eng.nowFn = func() time.Time { return storeTime }
-
-	tracker := NewPersistentDepTracker(eng.logger)
-	tracker.onHeld = func() { eng.armTrialTimer() }
-	eng.tracker = tracker
-	eng.scopeState = NewScopeState(eng.nowFunc, eng.logger)
-
-	buf := NewBuffer(eng.logger)
-
-	// Retrier clock is 5s ahead — always past the first backoff delay,
-	// so ListSyncFailuresForRetry returns the row on first sweep after Kick().
-	retrierTime := time.Unix(1005, 0)
-	retrier := NewFailureRetrier(eng.baseline, buf, tracker, eng.logger)
-	retrier.nowFunc = func() time.Time { return retrierTime }
-	eng.retrier = retrier
-
-	results := make(chan WorkerResult, 16)
-	ready := tracker.Ready()
-
-	ctx, cancel := context.WithCancel(t.Context())
-	go eng.drainWorkerResults(ctx, results, nil)
-	go retrier.Run(ctx)
-
-	return results, ready, cancel, eng, buf
-}
-
 // Validates: R-6.8.10, R-6.8.11, R-6.8.7
 func TestRetryPipeline_TransientFailure_RetrierReinjects(t *testing.T) {
 	t.Parallel()
 
-	results, ready, cancel, eng, buf := startDrainLoopWithRetrier(t)
+	results, ready, cancel, eng, buf := startDrainLoop(t)
 	defer cancel()
 
 	ctx := t.Context()
@@ -4674,4 +4659,218 @@ func TestRetryPipeline_TransientFailure_RetrierReinjects(t *testing.T) {
 	// The 503 increments the failed counter via recordError.
 	assert.Equal(t, int32(1), eng.failed.Load(), "failed counter")
 	assert.Equal(t, int32(0), eng.succeeded.Load(), "succeeded counter (no success yet)")
+}
+
+// Validates: R-6.8.10, R-6.8.11, R-6.8.7
+func TestRetryPipeline_Upload_RetrierReinjects(t *testing.T) {
+	t.Parallel()
+
+	results, ready, cancel, eng, buf := startDrainLoop(t)
+	defer cancel()
+
+	ctx := t.Context()
+	driveID := driveid.New(engineTestDriveID)
+	testPath := "photos/vacation.jpg"
+
+	// Dispatch an upload action and simulate a worker picking it up.
+	// Upload actions have no ItemID (new files don't have server-side IDs yet).
+	eng.tracker.Add(&Action{
+		Type:    ActionUpload,
+		Path:    testPath,
+		DriveID: driveID,
+	}, 0, nil)
+	readReady(t, ready)
+
+	// Send a 503 result — classifies as resultRequeue (transient).
+	results <- WorkerResult{
+		ActionID:   0,
+		Path:       testPath,
+		ActionType: ActionUpload,
+		DriveID:    driveID,
+		Success:    false,
+		HTTPStatus: http.StatusServiceUnavailable,
+		ErrMsg:     "service unavailable",
+		Err:        fmt.Errorf("service unavailable"),
+	}
+
+	// Verify: sync_failures row created with correct fields.
+	require.Eventually(t, func() bool {
+		rows, err := eng.baseline.ListSyncFailures(ctx)
+		return err == nil && len(rows) == 1
+	}, time.Second, time.Millisecond, "sync_failures row should be created")
+
+	rows, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+
+	row := rows[0]
+	assert.Equal(t, testPath, row.Path, "failure path")
+	assert.Equal(t, "upload", row.Direction, "failure direction")
+	assert.Equal(t, "transient", row.Category, "failure category")
+	assert.Equal(t, http.StatusServiceUnavailable, row.HTTPStatus, "HTTP status")
+	assert.Equal(t, 1, row.FailureCount, "failure count")
+
+	// Verify: tracker completed the action (no longer in-flight).
+	require.Eventually(t, func() bool {
+		return !eng.tracker.HasInFlight(testPath)
+	}, time.Second, time.Millisecond, "action should be completed in tracker")
+
+	// Verify: retrier picked up the due row and re-injected into the buffer.
+	require.Eventually(t, func() bool {
+		return buf.Len() > 0
+	}, 2*time.Second, 5*time.Millisecond, "retrier should inject event into buffer")
+
+	// Verify: the synthesized event matches the upload path through
+	// synthesizeFailureEvent — SourceLocal + ChangeModify (not RemoteEvents).
+	flushed := buf.FlushImmediate()
+	require.Len(t, flushed, 1, "should have exactly one path in buffer")
+	assert.Equal(t, testPath, flushed[0].Path, "buffered path")
+
+	require.Len(t, flushed[0].LocalEvents, 1, "upload failures produce local events")
+	ev := flushed[0].LocalEvents[0]
+	assert.Equal(t, SourceLocal, ev.Source, "event source")
+	assert.Equal(t, ChangeModify, ev.Type, "event type")
+	assert.Equal(t, testPath, ev.Path, "event path")
+
+	assert.Equal(t, int32(1), eng.failed.Load(), "failed counter")
+}
+
+// Validates: R-6.8.10, R-6.8.11, R-6.8.7
+func TestRetryPipeline_Delete_RetrierReinjects(t *testing.T) {
+	t.Parallel()
+
+	results, ready, cancel, eng, buf := startDrainLoop(t)
+	defer cancel()
+
+	ctx := t.Context()
+	driveID := driveid.New(engineTestDriveID)
+	testPath := "old/removed.txt"
+
+	// Seed remote_state so resolveItemID can find the item_id — in production,
+	// delete actions always reference an existing remote item with a remote_state row.
+	_, seedErr := eng.baseline.rawDB().ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		driveID.String(), "item-del", testPath, "file", "synced", time.Now().UnixNano())
+	require.NoError(t, seedErr, "seed remote_state")
+
+	// Dispatch a remote delete action with ItemID and DriveID populated
+	// (delete actions always reference an existing remote item).
+	eng.tracker.Add(&Action{
+		Type:    ActionRemoteDelete,
+		Path:    testPath,
+		DriveID: driveID,
+		ItemID:  "item-del",
+	}, 0, nil)
+	readReady(t, ready)
+
+	// Send a 503 result — classifies as resultRequeue (transient).
+	results <- WorkerResult{
+		ActionID:   0,
+		Path:       testPath,
+		ActionType: ActionRemoteDelete,
+		DriveID:    driveID,
+		Success:    false,
+		HTTPStatus: http.StatusServiceUnavailable,
+		ErrMsg:     "service unavailable",
+		Err:        fmt.Errorf("service unavailable"),
+	}
+
+	// Verify: sync_failures row created with correct fields.
+	require.Eventually(t, func() bool {
+		rows, err := eng.baseline.ListSyncFailures(ctx)
+		return err == nil && len(rows) == 1
+	}, time.Second, time.Millisecond, "sync_failures row should be created")
+
+	rows, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+
+	row := rows[0]
+	assert.Equal(t, testPath, row.Path, "failure path")
+	assert.Equal(t, "delete", row.Direction, "failure direction")
+	assert.Equal(t, "transient", row.Category, "failure category")
+	assert.Equal(t, http.StatusServiceUnavailable, row.HTTPStatus, "HTTP status")
+	assert.Equal(t, 1, row.FailureCount, "failure count")
+
+	// Verify: tracker completed the action (no longer in-flight).
+	require.Eventually(t, func() bool {
+		return !eng.tracker.HasInFlight(testPath)
+	}, time.Second, time.Millisecond, "action should be completed in tracker")
+
+	// Verify: retrier picked up the due row and re-injected into the buffer.
+	require.Eventually(t, func() bool {
+		return buf.Len() > 0
+	}, 2*time.Second, 5*time.Millisecond, "retrier should inject event into buffer")
+
+	// Verify: the synthesized event matches the delete path through
+	// synthesizeFailureEvent — SourceRemote + ChangeDelete + IsDeleted,
+	// with ItemID and DriveID populated for server-side deletion.
+	flushed := buf.FlushImmediate()
+	require.Len(t, flushed, 1, "should have exactly one path in buffer")
+	assert.Equal(t, testPath, flushed[0].Path, "buffered path")
+
+	require.Len(t, flushed[0].RemoteEvents, 1, "delete failures produce remote events")
+	ev := flushed[0].RemoteEvents[0]
+	assert.Equal(t, SourceRemote, ev.Source, "event source")
+	assert.Equal(t, ChangeDelete, ev.Type, "event type")
+	assert.Equal(t, testPath, ev.Path, "event path")
+	assert.True(t, ev.IsDeleted, "event should be marked as deleted")
+	assert.NotEmpty(t, ev.ItemID, "event should have ItemID for server-side delete")
+	assert.NotEmpty(t, ev.DriveID.String(), "event should have DriveID")
+
+	assert.Equal(t, int32(1), eng.failed.Load(), "failed counter")
+}
+
+// Validates: R-6.8.10
+func TestProcessWorkerResult_Success_ClearsSyncFailure(t *testing.T) {
+	t.Parallel()
+
+	results, ready, cancel, eng, _ := startDrainLoop(t)
+	defer cancel()
+
+	ctx := t.Context()
+	driveID := driveid.New(engineTestDriveID)
+	testPath := "docs/stale-failure.txt"
+
+	// Seed a sync_failures row — simulates a previous transient failure.
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path:       testPath,
+		DriveID:    driveID,
+		Direction:  "download",
+		Category:   "transient",
+		ErrMsg:     "previous failure",
+		HTTPStatus: http.StatusServiceUnavailable,
+	}, func(int) time.Duration { return time.Hour }))
+
+	// Confirm the row exists.
+	rows, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "seeded failure should exist")
+
+	// Dispatch the same path as a new action and read it from ready.
+	eng.tracker.Add(&Action{
+		Type:    ActionDownload,
+		Path:    testPath,
+		DriveID: driveID,
+		ItemID:  "item-ok",
+	}, 0, nil)
+	readReady(t, ready)
+
+	// Send a success result — the defensive clear should remove the row.
+	results <- WorkerResult{
+		ActionID:   0,
+		Path:       testPath,
+		ActionType: ActionDownload,
+		DriveID:    driveID,
+		Success:    true,
+	}
+
+	// Verify: sync_failures row cleared by the defensive ClearSyncFailure.
+	require.Eventually(t, func() bool {
+		rows, err := eng.baseline.ListSyncFailures(ctx)
+		return err == nil && len(rows) == 0
+	}, time.Second, time.Millisecond, "sync_failures row should be cleared on success")
+
+	assert.Equal(t, int32(1), eng.succeeded.Load(), "succeeded counter")
 }

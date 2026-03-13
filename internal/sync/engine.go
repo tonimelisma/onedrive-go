@@ -1197,6 +1197,7 @@ func (e *Engine) processWorkerResult(ctx context.Context, r *WorkerResult, bl *B
 			e.scopeState.RecordSuccess(r)
 		}
 		e.succeeded.Add(1)
+		e.defensiveClearFailure(ctx, r)
 
 	case resultRequeue:
 		// Transient failure: record with backoff, complete, kick reconciler.
@@ -1461,6 +1462,24 @@ func (e *Engine) logFailureSummary() {
 				)
 			}
 		}
+	}
+}
+
+// defensiveClearFailure removes any stale sync_failures row for a
+// successfully completed action. CommitOutcome (worker.go) already deletes
+// the row inside its transaction, but this guards against edge cases where
+// the worker path was bypassed or interrupted.
+func (e *Engine) defensiveClearFailure(ctx context.Context, r *WorkerResult) {
+	driveID := r.DriveID
+	if driveID.String() == "" {
+		driveID = e.driveID
+	}
+
+	if clearErr := e.baseline.ClearSyncFailure(ctx, r.Path, driveID); clearErr != nil {
+		e.logger.Warn("failed to clear sync failure on success",
+			slog.String("path", r.Path),
+			slog.String("error", clearErr.Error()),
+		)
 	}
 }
 
