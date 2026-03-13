@@ -27,10 +27,8 @@ func (e *Executor) executeDownload(ctx context.Context, action *Action) Outcome 
 
 	// Disk space pre-check (R-6.2.6, R-2.10.43, R-2.10.44).
 	// Runs before the download to avoid partial writes and .partial cleanup.
-	if e.minFreeSpace > 0 {
-		if o, blocked := e.checkDiskSpace(action); blocked {
-			return o
-		}
+	if o, blocked := e.checkDiskSpace(action); blocked {
+		return o
 	}
 
 	driveID := e.resolveDriveID(action)

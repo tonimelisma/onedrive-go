@@ -2,7 +2,6 @@ package sync
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -13,19 +12,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 )
-
-// ErrPathEscapesSyncRoot is returned when a relative path would resolve
-// outside the sync root directory (path traversal attack prevention).
-var ErrPathEscapesSyncRoot = errors.New("sync: path escapes sync root")
-
-// ErrDiskFull is returned when available disk space is below the configured
-// min_free_space threshold. Triggers a disk:local scope block (R-2.10.43).
-var ErrDiskFull = errors.New("sync: local disk full")
-
-// ErrFileTooLargeForSpace is returned when available disk space is above
-// min_free_space but below file size + min_free_space. Per-file failure,
-// no scope escalation — smaller files may still fit (R-2.10.44).
-var ErrFileTooLargeForSpace = errors.New("sync: insufficient space for file")
 
 // graphRootID is the Graph API parent reference for top-level items.
 // Distinct from strRoot in types.go which serializes the ItemTypeRoot enum.

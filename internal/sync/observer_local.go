@@ -27,14 +27,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 )
 
-// ErrSyncRootDeleted is returned when the sync root directory has been deleted
-// or become inaccessible while a watch was running.
-var ErrSyncRootDeleted = errors.New("sync: sync root directory deleted or inaccessible")
-
-// ErrWatchLimitExhausted is returned when the inotify watch limit is
-// exhausted (Linux ENOSPC). The engine falls back to periodic full scans.
-var ErrWatchLimitExhausted = errors.New("sync: inotify watch limit exhausted")
-
 // Constants for the local observer (watch mode).
 const (
 	safetyScanInterval = 5 * time.Minute
@@ -94,6 +86,7 @@ type LocalObserver struct {
 	checkWorkers       int // parallel hash goroutine limit for FullScan (0 → defaultCheckWorkers)
 	watcherFactory     func() (FsWatcher, error)
 	droppedEvents      atomic.Int64                                     // events dropped by trySend due to full channel
+	droppedRetries     atomic.Int64                                     // hash requests dropped due to full channel
 	lastActivityNano   atomic.Int64                                     // liveness: updated on each event emit (B-125)
 	sleepFunc          func(ctx context.Context, d time.Duration) error // injectable for testing
 	safetyTickFunc     func(d time.Duration) (<-chan time.Time, func()) // injectable for testing; returns tick channel + stop func
@@ -103,8 +96,8 @@ type LocalObserver struct {
 	// (e.g., to simulate panics in the hash phase).
 	hashFunc func(path string) (string, error)
 
-	// Write coalescing fields (B-107). Initialized in Watch(), not the
-	// constructor, since FullScan doesn't use coalescing.
+	// Write coalescing fields (B-107). Maps initialized in constructor;
+	// channel initialized in constructor so methods are safe before Watch().
 	writeCoalesceCooldown time.Duration          // 0 → defaultWriteCoalesceCooldown; injectable for tests
 	pendingTimers         map[string]*time.Timer // per-path timers; watchLoop-only (no mutex needed)
 	hashRequests          chan hashRequest       // timer callback → watchLoop
@@ -116,11 +109,13 @@ type LocalObserver struct {
 // during observation.
 func NewLocalObserver(baseline *Baseline, logger *slog.Logger, checkWorkers int) *LocalObserver {
 	return &LocalObserver{
-		baseline:     baseline,
-		logger:       logger,
-		checkWorkers: checkWorkers,
-		hashFunc:     driveops.ComputeQuickXorHash,
-		sleepFunc:    timeSleep,
+		baseline:      baseline,
+		logger:        logger,
+		checkWorkers:  checkWorkers,
+		hashFunc:      driveops.ComputeQuickXorHash,
+		sleepFunc:     timeSleep,
+		pendingTimers: make(map[string]*time.Timer),
+		hashRequests:  make(chan hashRequest, hashRequestBufSize),
 		safetyTickFunc: func(d time.Duration) (<-chan time.Time, func()) {
 			t := time.NewTicker(d)
 			return t.C, t.Stop
@@ -164,6 +159,12 @@ func (o *LocalObserver) DroppedEvents() int64 {
 // engine to log per-pass drops without double-counting across passes.
 func (o *LocalObserver) ResetDroppedEvents() int64 {
 	return o.droppedEvents.Swap(0)
+}
+
+// DroppedRetries returns the cumulative number of hash requests dropped
+// because the hashRequests channel was full. Safety scans catch these.
+func (o *LocalObserver) DroppedRetries() int64 {
+	return o.droppedRetries.Load()
 }
 
 // LastActivity returns the time of the most recent event emission.
@@ -225,11 +226,6 @@ func (o *LocalObserver) Watch(ctx context.Context, syncRoot string, events chan<
 		return fmt.Errorf("sync: creating filesystem watcher: %w", err)
 	}
 	defer watcher.Close()
-
-	// Initialize write coalescing (B-107). These are watch-only structures;
-	// FullScan doesn't use coalescing.
-	o.pendingTimers = make(map[string]*time.Timer)
-	o.hashRequests = make(chan hashRequest, hashRequestBufSize)
 
 	defer o.cancelPendingTimers()
 
@@ -301,8 +297,7 @@ func (o *LocalObserver) addWatchesRecursive(watcher FsWatcher, syncRoot string) 
 
 			dbRelPath := nfcNormalize(filepath.ToSlash(relPath))
 
-			ok, _ := shouldObserve(name, dbRelPath)
-			if !ok {
+			if shouldObserve(name, dbRelPath) != nil {
 				return filepath.SkipDir
 			}
 		}

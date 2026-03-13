@@ -16,10 +16,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
-// ErrDeltaExpired indicates the saved delta token has expired and a full
-// resync is required. Returned when the Graph API responds with HTTP 410.
-var ErrDeltaExpired = errors.New("sync: delta token expired (resync required)")
-
 // Constants for the remote observer (satisfy mnd linter).
 const (
 	maxDeltaPaginationGuard = 10000

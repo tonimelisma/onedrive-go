@@ -37,6 +37,13 @@ type FailureRetrier struct {
 	kickCh chan struct{} // 1-buffered
 	timer  *time.Timer
 	mu     stdsync.Mutex
+
+	// dispatchedRetryAt tracks the last-dispatched next_retry_at for each path.
+	// Prevents double-dispatch when bootstrap reconcile and kick signals race:
+	// if a row's NextRetryAt matches the tracked value, it was already injected
+	// into the buffer. When RecordFailure sets a new next_retry_at (re-failure),
+	// the mismatch naturally allows re-dispatch.
+	dispatchedRetryAt map[string]int64
 }
 
 // NewFailureRetrier creates a FailureRetrier. It does not start until
@@ -48,12 +55,13 @@ func NewFailureRetrier(
 	logger *slog.Logger,
 ) *FailureRetrier {
 	return &FailureRetrier{
-		state:   state,
-		buf:     buf,
-		tracker: tracker,
-		logger:  logger,
-		nowFunc: time.Now,
-		kickCh:  make(chan struct{}, 1),
+		state:             state,
+		buf:               buf,
+		tracker:           tracker,
+		logger:            logger,
+		nowFunc:           time.Now,
+		kickCh:            make(chan struct{}, 1),
+		dispatchedRetryAt: make(map[string]int64),
 	}
 }
 
@@ -148,12 +156,23 @@ func (r *FailureRetrier) reconcileSyncFailures(ctx context.Context, now time.Tim
 
 		// Skip items already being processed.
 		if r.tracker.HasInFlight(row.Path) {
+			delete(r.dispatchedRetryAt, row.Path) // pipeline consumed it
+			continue
+		}
+
+		// Prevent double-dispatch: if this exact row (same next_retry_at)
+		// was already injected into the buffer, skip it. This guards
+		// against bootstrap reconcile + kick signal racing on the same row.
+		// When RecordFailure sets a new next_retry_at (re-failure), the
+		// mismatch allows the updated row to be dispatched.
+		if lastRetryAt, ok := r.dispatchedRetryAt[row.Path]; ok && lastRetryAt == row.NextRetryAt {
 			continue
 		}
 
 		// Synthesize event based on direction and inject into the buffer.
 		ev := r.synthesizeFailureEvent(row)
 		r.buf.Add(ev)
+		r.dispatchedRetryAt[row.Path] = row.NextRetryAt
 		dispatched++
 	}
 

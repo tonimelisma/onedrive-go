@@ -19,7 +19,6 @@ package sync
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -34,14 +33,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 )
-
-// ErrSyncRootMissing is returned when the sync root directory does not exist
-// or is not a directory. Callers can match with errors.Is.
-var ErrSyncRootMissing = errors.New("sync: sync root directory does not exist")
-
-// ErrNosyncGuard is returned when a .nosync guard file is present in the
-// sync root, indicating the sync directory may be unmounted or guarded.
-var ErrNosyncGuard = errors.New("sync: .nosync guard file present (sync dir may be unmounted)")
 
 // Constants for the local scanner.
 const (
@@ -317,9 +308,8 @@ func (o *LocalObserver) makeWalkFunc(
 		}
 
 		// Stage 1 observation filter: name validation + path length (cheap, no syscall).
-		ok, skipItem := shouldObserve(name, dbRelPath)
-		if !ok {
-			if skipItem != nil {
+		if skipItem := shouldObserve(name, dbRelPath); skipItem != nil {
+			if skipItem.Reason != "" {
 				*skipped = append(*skipped, *skipItem)
 				o.logger.Debug("skipping invalid entry",
 					slog.String("path", dbRelPath),
@@ -568,10 +558,6 @@ func (o *LocalObserver) detectDeletions(observed map[string]bool) []ChangeEvent 
 // File hashing
 // ---------------------------------------------------------------------------
 
-// errFileChangedDuringHash is returned when a file's metadata changes between
-// pre-hash stat and post-hash stat, indicating active writing (B-119).
-var errFileChangedDuringHash = errors.New("sync: file changed during hashing")
-
 // computeStableHash hashes a file and verifies it was not modified during the
 // hash operation by comparing pre/post stat results. Returns errFileChangedDuringHash
 // if the file changed (B-119). Caller-specific handling: handleWrite skips
@@ -623,32 +609,33 @@ func (o *LocalObserver) isOversizedFile(size int64, path string) bool {
 }
 
 // shouldObserve checks whether a local filesystem entry should enter the sync
-// pipeline. Returns (true, nil) for valid entries. Returns (false, nil) for
-// internal exclusions (temp files — not user-actionable). Returns (false, skip)
-// for user-actionable rejections that should be recorded.
+// pipeline. Returns nil for valid entries (observe). Returns a non-nil
+// *SkippedItem for rejected entries: Reason=="" for internal exclusions
+// (temp files — not user-actionable), Reason!="" for user-actionable
+// rejections that should be recorded.
 //
 // Called from FullScan walk, watch event handlers, and watch setup.
 // Expects NFC-normalized name and path. This is Stage 1 of the two-stage
 // observation filter — cheap string checks only (no syscall). Stage 2
 // (file size > 250GB) is checked after stat in processEntry/hashAndEmit.
-func shouldObserve(name, path string) (ok bool, skip *SkippedItem) {
+func shouldObserve(name, path string) *SkippedItem {
 	if isAlwaysExcluded(name) {
-		return false, nil // internal exclusion, not reportable
+		return &SkippedItem{} // internal exclusion, not reportable
 	}
 
 	if reason, detail := validateOneDriveName(name); reason != "" {
-		return false, &SkippedItem{Path: path, Reason: reason, Detail: detail}
+		return &SkippedItem{Path: path, Reason: reason, Detail: detail}
 	}
 
 	if len(path) > maxOneDrivePathLength {
-		return false, &SkippedItem{
+		return &SkippedItem{
 			Path:   path,
 			Reason: IssuePathTooLong,
 			Detail: fmt.Sprintf("path length %d exceeds %d-character limit", len(path), maxOneDrivePathLength),
 		}
 	}
 
-	return true, nil
+	return nil
 }
 
 // validateOneDriveName checks whether a filename is valid for OneDrive.

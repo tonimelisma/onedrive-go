@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"errors"
 	"log/slog"
 	"path"
 	"path/filepath"
@@ -27,16 +26,6 @@ func DefaultSafetyConfig() *SafetyConfig {
 		BigDeleteThreshold: defaultBigDeleteThreshold,
 	}
 }
-
-// ErrBigDeleteTriggered indicates that the planned number of deletions
-// exceeds safety thresholds. The sync pass should halt and require
-// user confirmation before proceeding.
-var ErrBigDeleteTriggered = errors.New("sync: big-delete protection triggered")
-
-// ErrDependencyCycle indicates that the action plan contains a dependency
-// cycle, making topological ordering impossible. This is a planner bug —
-// well-formed sync actions should always form a DAG (B-313).
-var ErrDependencyCycle = errors.New("sync: dependency cycle detected in action plan")
 
 // Planner is a pure decision engine that transforms change events and
 // baseline state into an ordered ActionPlan. It performs no I/O.
