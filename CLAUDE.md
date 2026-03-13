@@ -58,7 +58,9 @@ Planned work: search `spec/` for `[planned]`. Reference docs: `spec/reference/`.
 **Logging** (`log/slog` with structured fields):
 - **Debug**: HTTP request/response, token acquisition, file read/write
 - **Info**: Lifecycle events — login/logout, sync start/complete, config load
-- **Warn**: Degraded but recoverable — retries, expired tokens, fallbacks
+- **Warn**: Degraded but recoverable — retries, expired tokens, fallbacks.
+  For bulk sync operations, scope-level events and end-of-pass failure
+  summaries replace per-item warnings. Individual items logged at Debug.
 - **Error**: Terminal failures — request failed after all retries, unrecoverable auth
 - Minimum per code path: function entry with key params, state transitions, error paths, external calls. Never log secrets.
 

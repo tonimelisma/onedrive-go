@@ -20,7 +20,7 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.2.3: (S3) Downloads shall use atomic file writes (`.partial` + hash verify + rename). [verified]
 - R-6.2.4: (S4) Local deletions shall verify the file hash against baseline before deleting; on mismatch, a conflict copy is preserved. [verified]
 - R-6.2.5: (S5) Big-delete protection shall prevent mass accidental deletions: one-shot mode aborts when planned deletions exceed `big_delete_threshold`; watch mode holds deletes via a rolling window counter and surfaces them as actionable issues. [verified]
-- R-6.2.6: (S6) Before each download, the system shall verify available disk space. When below `min_free_space`: set a `disk:local` scope block on all downloads. When above `min_free_space` but below file size plus `min_free_space`: record a per-file failure. [planned]
+- R-6.2.6: (S6) Before each download, the system shall verify available disk space. When below `min_free_space`: set a `disk:local` scope block on all downloads. When above `min_free_space` but below file size plus `min_free_space`: record a per-file failure. [verified]
 - R-6.2.7: (S7) The system shall never upload partial or temporary files (filter cascade excludes temp patterns). [verified]
 - R-6.2.8: File operations (ls, get, put, rm, mkdir, stat, mv, cp) shall work independently of sync state — no sync database involved. [verified]
 - R-6.2.9: The system shall support configurable file permissions (`sync_file_permissions`) and directory permissions (`sync_dir_permissions`) for synced content. [verified]
@@ -40,7 +40,7 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.4.4: Remote deletions shall go to the OneDrive recycle bin by default (`use_recycle_bin`). [verified]
 - R-6.4.5: Local deletions triggered by remote changes shall go to OS trash on macOS (`use_local_trash`). [verified]
 - R-6.4.6: On Linux, local trash shall be opt-in (default off; servers/NAS typically lack XDG trash). [verified]
-- R-6.4.7: The system shall support configurable disk space reservation (`min_free_space`, default 1 GB). When available space falls below this threshold, downloads shall be scope-blocked. Set to 0 to disable. [planned]
+- R-6.4.7: The system shall support configurable disk space reservation (`min_free_space`, default 1 GB). When available space falls below this threshold, downloads shall be scope-blocked. Set to 0 to disable. [verified]
 - R-6.4.8: All local filesystem writes shall be confined to the sync root directory. The executor validates resolved paths via `containedPath()` to prevent escape from path reconstruction bugs. [verified]
 - R-6.4.9: When a requested permanent deletion fails (e.g., National Clouds that do not support it), the system shall fall back to recycle bin deletion. [planned]
 
@@ -59,11 +59,11 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.6.5: The system shall support progress bars and color-coded transfer output. [future]
 - R-6.6.6: The system shall support a TUI (terminal UI) for real-time status. [future]
 - R-6.6.7: When more than 10 items share the same warning category in a sync pass, the system shall log one WARN summary with count and individual items at DEBUG. [verified]
-- R-6.6.8: Individual retry attempts for transient errors shall be logged at DEBUG, not WARN. Only the final outcome shall be logged at WARN or higher. [planned]
-- R-6.6.9: When transient errors resolve within the retry budget, the system shall log at INFO with attempt count (not WARN). [planned]
-- R-6.6.10: When retries are exhausted, the system shall log a single WARN with final error, attempt count, and next retry time. [planned]
+- R-6.6.8: Individual retry attempts for transient errors shall be logged at DEBUG, not WARN. Only the final outcome shall be logged at WARN or higher. [verified]
+- R-6.6.9: When transient errors resolve within the retry budget, the system shall log at INFO with attempt count (not WARN). [planned — deferred: per-path resolution logging adds per-success DB query; scope block/release INFO provides equivalent visibility]
+- R-6.6.10: When retries are exhausted, the system shall log a single WARN with final error, attempt count, and next retry time. [verified]
 - R-6.6.11: Every failure shown to the user shall include a plain-language reason and a concrete user action. Per-error-type reason and action text shall cover all failure categories (quota, permissions, disk space, service outage, rate limiting, naming violations, case collisions, network errors, auth failures, unknown errors), with scope-owner-specific variants for shortcut-scoped failures. [verified]
-- R-6.6.12: When more than 10 transient failures of the same issue_type exhaust their retry budget within a single sync pass, the system shall aggregate them into a single summary WARN log line with count, logging individual paths at DEBUG. This extends the scanner-skipped aggregation pattern (R-6.6.7) to execution-time transient failures. [planned]
+- R-6.6.12: When more than 10 transient failures of the same issue_type exhaust their retry budget within a single sync pass, the system shall aggregate them into a single summary WARN log line with count, logging individual paths at DEBUG. This extends the scanner-skipped aggregation pattern (R-6.6.7) to execution-time transient failures. [verified]
 
 ## R-6.7 Technical Requirements [implemented]
 

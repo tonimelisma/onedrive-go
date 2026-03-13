@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -200,11 +201,42 @@ func (o *LocalObserver) handleCreate(
 			return
 		}
 
+		// Early rejection for case collisions in watch mode (R-2.12.2).
+		// The authoritative check is FullScan's post-walk detectCaseCollisions;
+		// this rejects obvious collisions between safety scans.
+		if collidingName, hasCollision := hasCaseCollision(filepath.Dir(fsPath), name); hasCollision {
+			o.logger.Debug("case collision detected in watch mode, skipping event",
+				slog.String("path", dbRelPath),
+				slog.String("collides_with", collidingName))
+			return
+		}
+
 		ev.ItemType = ItemTypeFile
 		ev.Hash = o.stableHashOrEmpty(fsPath, dbRelPath)
 	}
 
 	o.trySend(ctx, events, &ev)
+}
+
+// hasCaseCollision checks if name collides with an existing sibling in the
+// same directory (case-insensitive comparison). Returns the colliding name
+// if found. Uses os.ReadDir for filesystem truth — the authoritative check
+// is FullScan's post-walk detectCaseCollisions pass (R-2.12.2).
+func hasCaseCollision(dirPath, name string) (string, bool) {
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		// If we can't read the directory, skip the check — FullScan
+		// will catch it authoritatively on the next safety scan.
+		return "", false
+	}
+
+	for _, entry := range entries {
+		if strings.EqualFold(entry.Name(), name) && entry.Name() != name {
+			return entry.Name(), true
+		}
+	}
+
+	return "", false
 }
 
 // stableHashOrEmpty computes a stable hash for a file, returning an empty

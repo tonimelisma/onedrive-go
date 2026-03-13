@@ -30,6 +30,10 @@ const (
 	scopeKeyQuotaShortcut   = "quota:shortcut:"
 	scopeKeyService         = "service"
 
+	// scopeKeyDiskLocal is the scope key for local disk space exhaustion.
+	// Blocks downloads only — uploads, deletes, and moves continue (R-2.10.43).
+	scopeKeyDiskLocal = "disk:local"
+
 	// scopeKeyPermDir is the prefix for local directory permission scope
 	// blocks. The full key is "perm:dir:" + absolute-or-relative directory path.
 	// These blocks hold all actions whose path falls under the denied directory.
@@ -72,11 +76,13 @@ const (
 // given scope issue type. Used by handleTrialResult to cap backoff (R-2.10.14).
 func maxTrialIntervalForIssueType(issueType string) time.Duration {
 	switch issueType {
-	case "quota_exceeded":
+	case IssueQuotaExceeded:
 		return quotaMaxTrialInterval
-	case "rate_limited":
+	case IssueDiskFull:
+		return quotaMaxTrialInterval // same 1h max as quota (R-2.10.43)
+	case IssueRateLimited:
 		return rateLimitMaxTrialInterval
-	case "service_outage":
+	case IssueServiceOutage:
 		return serviceMaxTrialInterval
 	default:
 		return serviceMaxTrialInterval // safe default
@@ -129,7 +135,7 @@ func scopeKeyForStatus(httpStatus int, shortcutKey string) string {
 type ScopeUpdateResult struct {
 	Block         bool          // true if threshold crossed → create block
 	ScopeKey      string        // scope key for the block
-	IssueType     string        // "rate_limited", "quota_exceeded", "service_outage"
+	IssueType     string        // "rate_limited", IssueQuotaExceeded, IssueServiceOutage
 	TrialInterval time.Duration // initial trial interval for the block
 }
 
@@ -154,7 +160,7 @@ func (ss *ScopeState) UpdateScope(r *WorkerResult) ScopeUpdateResult {
 		return ScopeUpdateResult{
 			Block:         true,
 			ScopeKey:      scopeKeyThrottleAccount,
-			IssueType:     "rate_limited",
+			IssueType:     IssueRateLimited,
 			TrialInterval: interval,
 		}
 
@@ -163,21 +169,21 @@ func (ss *ScopeState) UpdateScope(r *WorkerResult) ScopeUpdateResult {
 		return ScopeUpdateResult{
 			Block:         true,
 			ScopeKey:      scopeKeyService,
-			IssueType:     "service_outage",
+			IssueType:     IssueServiceOutage,
 			TrialInterval: r.RetryAfter,
 		}
 
 	case r.HTTPStatus == http.StatusInsufficientStorage:
 		// Quota failure — scope depends on target drive (R-2.10.1, R-2.10.17).
 		scopeKey := scopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)
-		return ss.checkWindow(scopeKey, r.Path, quotaWindowThreshold, quotaWindowDuration, "quota_exceeded", quotaInitialInterval)
+		return ss.checkWindow(scopeKey, r.Path, quotaWindowThreshold, quotaWindowDuration, IssueQuotaExceeded, quotaInitialInterval)
 
 	case r.HTTPStatus >= http.StatusInternalServerError:
 		// Service error — feed into service sliding window (R-2.10.28, R-2.10.29).
 		key := scopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)
 		return ss.checkWindow(key, r.Path,
 			serviceWindowThreshold, serviceWindowDuration,
-			"service_outage", serviceInitialInterval)
+			IssueServiceOutage, serviceInitialInterval)
 
 	default:
 		return ScopeUpdateResult{}
@@ -189,7 +195,7 @@ func (ss *ScopeState) UpdateScope(r *WorkerResult) ScopeUpdateResult {
 // outage patterns are classified as resultRequeue (not resultScopeBlock)
 // by classifyResult but still need to feed scope detection.
 func (ss *ScopeState) UpdateScopeOutagePattern(path string) ScopeUpdateResult {
-	return ss.checkWindow(scopeKeyService, path, serviceWindowThreshold, serviceWindowDuration, "service_outage", serviceInitialInterval)
+	return ss.checkWindow(scopeKeyService, path, serviceWindowThreshold, serviceWindowDuration, IssueServiceOutage, serviceInitialInterval)
 }
 
 // RecordSuccess resets the sliding window for scopes relevant to the

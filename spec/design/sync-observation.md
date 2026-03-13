@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/observer_local.go, internal/sync/observer_local_handlers.go, internal/sync/observer_remote.go, internal/sync/item_converter.go, internal/sync/scanner.go, internal/sync/buffer.go, internal/sync/shortcuts.go, internal/sync/permissions.go, internal/sync/inotify_linux.go, internal/sync/inotify_other.go
 
-Implements: R-2.1.2 [verified], R-2.4 [implemented], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.15 [planned], R-6.7.16 [planned], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [planned], R-6.7.24 [verified], R-2.11 [implemented], R-2.11.5 [implemented], R-2.12 [planned], R-2.13.1 [verified], R-2.14.1 [verified], R-2.14.3 [verified], R-2.14.4 [verified]
+Implements: R-2.1.2 [verified], R-2.4 [implemented], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.15 [planned], R-6.7.16 [planned], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [planned], R-6.7.24 [verified], R-2.11 [implemented], R-2.11.5 [implemented], R-2.12 [verified], R-2.13.1 [verified], R-2.14.1 [verified], R-2.14.3 [verified], R-2.14.4 [verified]
 
 ## Remote Observer (`observer_remote.go`)
 
@@ -69,6 +69,13 @@ Extracted filesystem walker for full-scan mode. Produces change events by walkin
 
 **`SkippedItem`** — Defined in `types.go`: `{Path string, Reason string, Detail string, FileSize int64}`. Represents a file that was observed but excluded from the event stream due to validation failure. `FileSize` is populated for `IssueFileTooLarge` (after stat). Collected during full scan and returned in `ScanResult.Skipped`. The engine processes these via `recordSkippedItems()` and `clearResolvedSkippedItems()`.
 
+**Case Collision Detection** (`detectCaseCollisions`) — Post-walk pure function that detects local files whose names differ only in case. OneDrive uses a case-insensitive namespace — uploading both would cause one to silently overwrite the other. Implements: R-2.12 [verified]
+
+- Runs as Phase 2.5 in `FullScan`, between hash completion and deletion detection. Groups event indices by `(directory, lowercase name)`. Keys with more than one entry are collisions — all colliders become `SkippedItem{Reason: IssueCaseCollision}` with `Detail` naming the other collider(s). O(n) time, O(n) memory.
+- Colliders stay in the `observed` map (populated in Phase 1). Only their `ChangeEvent` entries are removed. This prevents Phase 3 (`detectDeletions`) from generating spurious `ChangeDelete` events for files that exist locally but were excluded due to collision.
+- **Watch mode**: `hasCaseCollision()` in `handleCreate` (`observer_local_handlers.go`) performs early rejection by scanning the directory via `os.ReadDir`. This is an optimization — the authoritative check is the next `FullScan` pass (every 5 minutes in watch mode).
+- **Auto-clear**: `clearResolvedSkippedItems()` includes `IssueCaseCollision` in its scanner-detectable issue types. When the user renames one collider, the next `FullScan` won't flag either file, and both `sync_failures` entries are cleared.
+
 ## Change Buffer (`buffer.go`)
 
 Collects events from both observers, deduplicates, debounces (default 2 seconds), and produces `[]PathChanges` batches grouped by path. Thread-safe (mutex-protected). Move events are dual-keyed: stored at new path AND synthetic delete at old path.
@@ -87,7 +94,7 @@ Implements: R-6.2.7 [verified]
 - The always-excluded suffix checks in `isAlwaysExcluded()` do NOT include `.db`/`.db-wal`/`.db-shm` — those caused false positives on legitimate data files. The sync engine's state DB lives outside the sync root by design.
 - Delta processing uses two-pass page handling to ensure vault parent folders are classified before their children, preventing path materialization failures.
 - Personal Vault items (`specialFolder.name == "vault"`) are unconditionally excluded. Vault auto-locks after 20 minutes → locked items appear deleted in delta → phantom deletions.
-- FullScan uses three sequential phases: (1) Walk (readdir + Lstat + classify), (2) Hash (parallel QuickXorHash via `errgroup.SetLimit(checkWorkers)`), (3) Deletion detection (compare observed paths vs baseline).
+- FullScan uses four sequential phases: (1) Walk (readdir + Lstat + classify), (2) Hash (parallel QuickXorHash via `errgroup.SetLimit(checkWorkers)`), (2.5) Case collision detection (`detectCaseCollisions` — colliders removed from events, kept in observed map), (3) Deletion detection (compare observed paths vs baseline).
 
 ### Rationale
 

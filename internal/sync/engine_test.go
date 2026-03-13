@@ -2801,10 +2801,12 @@ func TestProcessWorkerResult_403ReadOnly_SkipsRemoteState(t *testing.T) {
 		HTTPStatus: 403,
 	}, bl, shortcuts)
 
-	// Permission-denied should be recorded in sync_failures.
+	// Permission-denied should be recorded in sync_failures: one for the
+	// file itself (from recordFailure) and one for the boundary directory
+	// (from handle403). Both carry issue_type "permission_denied".
 	permIssues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssuePermissionDenied)
 	require.NoError(t, err)
-	assert.Len(t, permIssues, 1, "should record permission_denied issue")
+	assert.Len(t, permIssues, 2, "should record permission_denied for file + boundary directory")
 
 	// remote_state should be empty.
 	failed, err := eng.baseline.ListActionableRemoteState(ctx)
@@ -3013,6 +3015,20 @@ func TestClassifyResult(t *testing.T) {
 		{
 			name:      "wrapped_os_err_permission",
 			result:    WorkerResult{Err: fmt.Errorf("cannot write: %w", os.ErrPermission)},
+			wantClass: resultSkip,
+			wantScope: "",
+		},
+		// Validates: R-2.10.43
+		{
+			name:      "disk_full",
+			result:    WorkerResult{Err: fmt.Errorf("download failed: %w", ErrDiskFull)},
+			wantClass: resultScopeBlock,
+			wantScope: "disk:local",
+		},
+		// Validates: R-2.10.44
+		{
+			name:      "file_too_large_for_space",
+			result:    WorkerResult{Err: fmt.Errorf("download failed: %w", ErrFileTooLargeForSpace)},
 			wantClass: resultSkip,
 			wantScope: "",
 		},
@@ -4248,6 +4264,42 @@ func TestClearResolvedSkippedItems_DoesNotAffectRuntimeIssues(t *testing.T) {
 	assert.Equal(t, IssuePermissionDenied, remaining[0].IssueType)
 }
 
+// Validates: R-2.12.2
+func TestClearResolvedSkippedItems_CaseCollision(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	// Record case collision failures.
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path: "File.txt", DriveID: driveID, Direction: "upload",
+		IssueType: IssueCaseCollision, Category: "actionable",
+		ErrMsg: "conflicts with file.txt",
+	}, nil))
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path: "file.txt", DriveID: driveID, Direction: "upload",
+		IssueType: IssueCaseCollision, Category: "actionable",
+		ErrMsg: "conflicts with File.txt",
+	}, nil))
+
+	// Verify both exist.
+	all, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, all, 2)
+
+	// Simulate user renaming one collider — next scan finds zero case collisions.
+	eng.clearResolvedSkippedItems(ctx, nil)
+
+	// Both case collision entries should be cleared.
+	remaining, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, remaining, "case collision failures should be auto-cleared when resolved")
+}
+
 // ---------------------------------------------------------------------------
 // feedScopeDetection guard: local errors must not feed scope windows
 // ---------------------------------------------------------------------------
@@ -4333,4 +4385,93 @@ func TestIsObservationSuppressed_QuotaDoesNotSuppress(t *testing.T) {
 		TrialInterval: 5 * time.Minute,
 	})
 	assert.False(t, eng.isObservationSuppressed())
+}
+
+// ---------------------------------------------------------------------------
+// issueTypeForHTTPStatus — maps HTTP status to issue type (R-6.6.10)
+// ---------------------------------------------------------------------------
+
+// Validates: R-6.6.10
+func TestIssueTypeForHTTPStatus(t *testing.T) {
+	t.Parallel()
+
+	outageErr := &graph.GraphError{
+		StatusCode: http.StatusBadRequest,
+		Message:    "ObjectHandle is Invalid for operation",
+		Err:        graph.ErrBadRequest,
+	}
+
+	tests := []struct {
+		name       string
+		httpStatus int
+		err        error
+		want       string
+	}{
+		{"429_rate_limited", http.StatusTooManyRequests, nil, IssueRateLimited},
+		{"507_quota_exceeded", http.StatusInsufficientStorage, nil, IssueQuotaExceeded},
+		{"403_permission_denied", http.StatusForbidden, nil, IssuePermissionDenied},
+		{"400_outage_pattern", http.StatusBadRequest, outageErr, IssueServiceOutage},
+		{"400_normal", http.StatusBadRequest, errors.New("bad request"), ""},
+		{"500_service_outage", http.StatusInternalServerError, nil, IssueServiceOutage},
+		{"503_service_outage", http.StatusServiceUnavailable, nil, IssueServiceOutage},
+		{"408_request_timeout", http.StatusRequestTimeout, nil, "request_timeout"},
+		{"412_transient_conflict", http.StatusPreconditionFailed, nil, "transient_conflict"},
+		{"404_transient_not_found", http.StatusNotFound, nil, "transient_not_found"},
+		{"423_resource_locked", http.StatusLocked, nil, "resource_locked"},
+		{"permission_error", 0, os.ErrPermission, IssueLocalPermissionDenied},
+		// Validates: R-2.10.43
+		{"disk_full", 0, ErrDiskFull, IssueDiskFull},
+		{"wrapped_disk_full", 0, fmt.Errorf("download: %w", ErrDiskFull), IssueDiskFull},
+		// Validates: R-2.10.44
+		{"file_too_large_for_space", 0, ErrFileTooLargeForSpace, IssueFileTooLargeForSpace},
+		{"unknown_status", 418, nil, ""},
+		{"zero_status_no_error", 0, nil, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := issueTypeForHTTPStatus(tt.httpStatus, tt.err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// logFailureSummary — aggregated failure logging (R-6.6.12)
+// ---------------------------------------------------------------------------
+
+// Validates: R-6.6.12
+func TestLogFailureSummary_AggregatesAboveThreshold(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+
+	// Add 15 errors with the same message prefix — should aggregate.
+	eng.syncErrorsMu.Lock()
+	for i := range 15 {
+		eng.syncErrors = append(eng.syncErrors, fmt.Errorf("quota_exceeded: upload failed for file %d", i))
+	}
+	eng.syncErrorsMu.Unlock()
+
+	// Should not panic; clears syncErrors after logging.
+	eng.logFailureSummary()
+
+	eng.syncErrorsMu.Lock()
+	assert.Empty(t, eng.syncErrors, "syncErrors should be cleared after summary")
+	eng.syncErrorsMu.Unlock()
+}
+
+// Validates: R-6.6.12
+func TestLogFailureSummary_NoErrors(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+
+	// Should be a no-op with no errors.
+	eng.logFailureSummary()
+
+	eng.syncErrorsMu.Lock()
+	assert.Empty(t, eng.syncErrors)
+	eng.syncErrorsMu.Unlock()
 }
