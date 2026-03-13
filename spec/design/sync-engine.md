@@ -36,7 +36,7 @@ Implements: R-2.10.3 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2
 
 `processWorkerResult()` classifies each result and routes it — all cases call `tracker.Complete()` (never `ReQueue`):
 
-- **success** → `Complete` + `RecordSuccess` (scope window reset) + counter
+- **success** → `Complete` + `RecordSuccess` (scope window reset) + counter + defensive `ClearSyncFailure` (belt-and-suspenders with `CommitOutcome`)
 - **requeue** (transient) → `recordFailure` with `retry.Reconcile.Delay` + `Complete` + `feedScopeDetection` + `retrier.Kick()`
 - **scopeBlock** (429, 507) → `recordFailure` with `retry.Reconcile.Delay` + `feedScopeDetection` + `Complete` + `armTrialTimer()` (belt-and-suspenders) + `retrier.Kick()`
 - **skip** (non-retryable) → handle403 side effect + `recordFailure` with nil delayFn (no `next_retry_at`) + `Complete`
