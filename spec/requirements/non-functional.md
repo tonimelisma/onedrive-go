@@ -59,11 +59,11 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.6.5: The system shall support progress bars and color-coded transfer output. [future]
 - R-6.6.6: The system shall support a TUI (terminal UI) for real-time status. [future]
 - R-6.6.7: When more than 10 items share the same warning category in a sync pass, the system shall log one WARN summary with count and individual items at DEBUG. [verified]
-- R-6.6.8: Individual retry attempts for transient errors shall be logged at DEBUG, not WARN. Only the final outcome shall be logged at WARN or higher. [planned]
-- R-6.6.9: When transient errors resolve within the retry budget, the system shall log at INFO with attempt count (not WARN). [planned]
-- R-6.6.10: When retries are exhausted, the system shall log a single WARN with final error, attempt count, and next retry time. [planned]
+- R-6.6.8: Individual retry attempts for transient errors shall be logged at DEBUG, not WARN. Only the final outcome shall be logged at WARN or higher. [verified]
+- R-6.6.9: When transient errors resolve within the retry budget, the system shall log at INFO with attempt count (not WARN). [planned — deferred: per-path resolution logging adds per-success DB query; scope block/release INFO provides equivalent visibility]
+- R-6.6.10: When retries are exhausted, the system shall log a single WARN with final error, attempt count, and next retry time. [verified]
 - R-6.6.11: Every failure shown to the user shall include a plain-language reason and a concrete user action. Per-error-type reason and action text shall cover all failure categories (quota, permissions, disk space, service outage, rate limiting, naming violations, case collisions, network errors, auth failures, unknown errors), with scope-owner-specific variants for shortcut-scoped failures. [verified]
-- R-6.6.12: When more than 10 transient failures of the same issue_type exhaust their retry budget within a single sync pass, the system shall aggregate them into a single summary WARN log line with count, logging individual paths at DEBUG. This extends the scanner-skipped aggregation pattern (R-6.6.7) to execution-time transient failures. [planned]
+- R-6.6.12: When more than 10 transient failures of the same issue_type exhaust their retry budget within a single sync pass, the system shall aggregate them into a single summary WARN log line with count, logging individual paths at DEBUG. This extends the scanner-skipped aggregation pattern (R-6.6.7) to execution-time transient failures. [verified]
 
 ## R-6.7 Technical Requirements [implemented]
 

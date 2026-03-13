@@ -74,7 +74,7 @@ func maxTrialIntervalForIssueType(issueType string) time.Duration {
 	switch issueType {
 	case "quota_exceeded":
 		return quotaMaxTrialInterval
-	case "rate_limited":
+	case IssueRateLimited:
 		return rateLimitMaxTrialInterval
 	case "service_outage":
 		return serviceMaxTrialInterval
@@ -154,7 +154,7 @@ func (ss *ScopeState) UpdateScope(r *WorkerResult) ScopeUpdateResult {
 		return ScopeUpdateResult{
 			Block:         true,
 			ScopeKey:      scopeKeyThrottleAccount,
-			IssueType:     "rate_limited",
+			IssueType:     IssueRateLimited,
 			TrialInterval: interval,
 		}
 

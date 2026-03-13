@@ -463,6 +463,10 @@ func (e *Engine) executePlan(
 	pool.Wait() // blocks until tracker.Done() (all actions at terminal state)
 	pool.Stop() // cancels workers, closes results → drain goroutine exits
 
+	// End-of-pass failure summary — aggregates failures by issue type so
+	// bulk sync produces WARN summaries instead of per-item noise (R-6.6.12).
+	e.logFailureSummary()
+
 	report.Succeeded, report.Failed, report.Errors = e.resultStats()
 }
 
@@ -1240,6 +1244,11 @@ func (e *Engine) handleTrialResult(ctx context.Context, r *WorkerResult) {
 		// to confirm the scope has truly recovered. CommitOutcome clears the
 		// failure on success.
 		e.resetScopeRetryTimes(ctx, r.TrialScopeKey)
+
+		e.logger.Info("scope block cleared — actions released",
+			slog.String("scope_key", r.TrialScopeKey),
+		)
+
 		e.armTrialTimer()
 		return
 	}
@@ -1255,6 +1264,11 @@ func (e *Engine) handleTrialResult(ctx context.Context, r *WorkerResult) {
 	if newInterval > maxInterval {
 		newInterval = maxInterval
 	}
+
+	e.logger.Debug("trial failed — extending interval",
+		slog.String("scope_key", r.TrialScopeKey),
+		slog.Duration("new_interval", newInterval),
+	)
 
 	// All mutation happens inside the tracker under its lock.
 	e.tracker.ExtendTrialInterval(r.TrialScopeKey, e.nowFunc().Add(newInterval), newInterval)
@@ -1314,7 +1328,8 @@ func (e *Engine) feedScopeDetection(r *WorkerResult) {
 }
 
 // applyScopeBlock creates a ScopeBlock and tells the tracker to hold
-// affected actions.
+// affected actions. Logs a WARN because a scope block is a degraded-but-
+// recoverable state (R-6.6.10).
 func (e *Engine) applyScopeBlock(sr ScopeUpdateResult) {
 	now := e.nowFunc()
 	block := &ScopeBlock{
@@ -1325,6 +1340,13 @@ func (e *Engine) applyScopeBlock(sr ScopeUpdateResult) {
 		NextTrialAt:   now.Add(sr.TrialInterval),
 	}
 	e.tracker.HoldScope(sr.ScopeKey, block)
+
+	e.logger.Warn("scope block active — actions held",
+		slog.String("scope_key", sr.ScopeKey),
+		slog.String("issue_type", sr.IssueType),
+		slog.Duration("trial_interval", sr.TrialInterval),
+	)
+
 	e.armTrialTimer() // arm so the first trial fires at NextTrialAt (R-2.10.5)
 }
 
@@ -1336,6 +1358,67 @@ func (e *Engine) recordError(r *WorkerResult) {
 		e.syncErrorsMu.Lock()
 		e.syncErrors = append(e.syncErrors, r.Err)
 		e.syncErrorsMu.Unlock()
+	}
+}
+
+// logFailureSummary logs an aggregated summary of sync errors from the
+// current pass. Groups errors by message prefix (first 80 chars) and logs
+// one WARN per group with count + sample paths when count > 10, or per-item
+// WARN otherwise. Mirrors the scanner aggregation pattern in
+// recordSkippedItems (R-6.6.12). Resets syncErrors after logging.
+func (e *Engine) logFailureSummary() {
+	e.syncErrorsMu.Lock()
+	errs := e.syncErrors
+	e.syncErrors = nil
+	e.syncErrorsMu.Unlock()
+
+	if len(errs) == 0 {
+		return
+	}
+
+	// Group by error message for aggregation. Use the first errorGroupKeyLen
+	// chars of the error message as the group key — detailed enough to
+	// distinguish issue types without creating too many groups.
+	const errorGroupKeyLen = 80
+	type group struct {
+		msgs  []string
+		count int
+	}
+	groups := make(map[string]*group)
+	for _, err := range errs {
+		msg := err.Error()
+		key := msg
+		if len(key) > errorGroupKeyLen {
+			key = key[:errorGroupKeyLen]
+		}
+		g, ok := groups[key]
+		if !ok {
+			g = &group{}
+			groups[key] = g
+		}
+		g.count++
+		// Keep first 3 unique messages as samples.
+		const sampleCount = 3
+		if len(g.msgs) < sampleCount {
+			g.msgs = append(g.msgs, msg)
+		}
+	}
+
+	const aggregateThreshold = 10
+	for key, g := range groups {
+		if g.count > aggregateThreshold {
+			e.logger.Warn("sync failures (aggregated)",
+				slog.String("error_prefix", key),
+				slog.Int("count", g.count),
+				slog.Any("samples", g.msgs),
+			)
+		} else {
+			for _, msg := range g.msgs {
+				e.logger.Warn("sync failure",
+					slog.String("error", msg),
+				)
+			}
+		}
 	}
 }
 
@@ -1357,20 +1440,36 @@ func (e *Engine) recordFailure(ctx context.Context, r *WorkerResult, delayFn fun
 		category = strActionable
 	}
 
+	issueType := issueTypeForHTTPStatus(r.HTTPStatus, r.Err)
+	scopeKey := deriveScopeKey(r)
+
 	if recErr := e.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:       r.Path,
 		DriveID:    driveID,
 		Direction:  direction,
 		Category:   category,
+		IssueType:  issueType,
 		ErrMsg:     r.ErrMsg,
 		HTTPStatus: r.HTTPStatus,
-		ScopeKey:   deriveScopeKey(r),
+		ScopeKey:   scopeKey,
 	}, delayFn); recErr != nil {
 		e.logger.Warn("failed to record failure",
 			slog.String("path", r.Path),
 			slog.String("error", recErr.Error()),
 		)
+
+		return
 	}
+
+	// Per-item failure detail at DEBUG. Bulk sync logs individual items at
+	// DEBUG and aggregates at WARN in logFailureSummary (R-6.6.10).
+	e.logger.Debug("sync failure recorded",
+		slog.String("path", r.Path),
+		slog.String("action", r.ActionType.String()),
+		slog.Int("http_status", r.HTTPStatus),
+		slog.String("error", r.ErrMsg),
+		slog.String("scope_key", scopeKey),
+	)
 }
 
 // deriveScopeKey returns the scope key for a failed worker result.
@@ -1378,6 +1477,36 @@ func (e *Engine) recordFailure(ctx context.Context, r *WorkerResult, delayFn fun
 // HTTP status → scope key mapping.
 func deriveScopeKey(r *WorkerResult) string {
 	return scopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)
+}
+
+// issueTypeForHTTPStatus maps an HTTP status code and error to a sync
+// failure issue type. Used by recordFailure to populate the issue_type
+// column. Returns empty string for generic/unknown failures.
+func issueTypeForHTTPStatus(httpStatus int, err error) string {
+	switch {
+	case httpStatus == http.StatusTooManyRequests:
+		return IssueRateLimited
+	case httpStatus == http.StatusInsufficientStorage:
+		return IssueQuotaExceeded
+	case httpStatus == http.StatusForbidden:
+		return IssuePermissionDenied
+	case httpStatus == http.StatusBadRequest && isOutagePattern(err):
+		return IssueServiceOutage
+	case httpStatus >= http.StatusInternalServerError:
+		return IssueServiceOutage
+	case httpStatus == http.StatusRequestTimeout:
+		return "request_timeout"
+	case httpStatus == http.StatusPreconditionFailed:
+		return "transient_conflict"
+	case httpStatus == http.StatusNotFound:
+		return "transient_not_found"
+	case httpStatus == http.StatusLocked:
+		return "resource_locked"
+	case errors.Is(err, os.ErrPermission):
+		return IssueLocalPermissionDenied
+	default:
+		return ""
+	}
 }
 
 // resetScopeRetryTimes resets next_retry_at for all sync_failures matching
