@@ -23,7 +23,7 @@ func TestGroupFailures_MoreThanTen(t *testing.T) {
 		failures = append(failures, sync.SyncFailureRow{
 			Path:      fmt.Sprintf("/docs/file%02d.docx", i),
 			IssueType: sync.IssueQuotaExceeded,
-			ScopeKey:  "quota:own",
+			ScopeKey:  sync.SKQuotaOwn,
 			Category:  "actionable",
 		})
 	}
@@ -41,8 +41,8 @@ func TestGroupFailures_HumanReadableMessages(t *testing.T) {
 	t.Parallel()
 
 	failures := []sync.SyncFailureRow{
-		{Path: "/a.txt", IssueType: sync.IssueQuotaExceeded, ScopeKey: "quota:own", Category: "actionable"},
-		{Path: "/b.txt", IssueType: sync.IssuePermissionDenied, ScopeKey: "", Category: "actionable"},
+		{Path: "/a.txt", IssueType: sync.IssueQuotaExceeded, ScopeKey: sync.SKQuotaOwn, Category: "actionable"},
+		{Path: "/b.txt", IssueType: sync.IssuePermissionDenied, Category: "actionable"},
 	}
 
 	groups, _ := groupFailures(failures, nil)
@@ -88,7 +88,7 @@ func TestGroupFailures_ShortcutScopeKeyHumanized(t *testing.T) {
 		{
 			Path:      "/Team Docs/report.docx",
 			IssueType: sync.IssueQuotaExceeded,
-			ScopeKey:  "quota:shortcut:driveAAA:itemBBB",
+			ScopeKey:  sync.SKQuotaShortcut("driveAAA:itemBBB"),
 			Category:  "actionable",
 		},
 	}
@@ -103,8 +103,8 @@ func TestGroupFailures_GroupsByScopeKey(t *testing.T) {
 	t.Parallel()
 
 	failures := []sync.SyncFailureRow{
-		{Path: "/a.txt", IssueType: sync.IssueQuotaExceeded, ScopeKey: "quota:own", Category: "actionable"},
-		{Path: "/b.txt", IssueType: sync.IssueQuotaExceeded, ScopeKey: "quota:shortcut:drive1:item1", Category: "actionable"},
+		{Path: "/a.txt", IssueType: sync.IssueQuotaExceeded, ScopeKey: sync.SKQuotaOwn, Category: "actionable"},
+		{Path: "/b.txt", IssueType: sync.IssueQuotaExceeded, ScopeKey: sync.SKQuotaShortcut("drive1:item1"), Category: "actionable"},
 	}
 
 	groups, _ := groupFailures(failures, nil)
@@ -118,9 +118,9 @@ func TestGroupFailures_SortedLargestFirst(t *testing.T) {
 
 	failures := []sync.SyncFailureRow{
 		{Path: "/a.txt", IssueType: sync.IssuePermissionDenied, Category: "actionable"},
-		{Path: "/b.txt", IssueType: sync.IssueQuotaExceeded, ScopeKey: "quota:own", Category: "actionable"},
-		{Path: "/c.txt", IssueType: sync.IssueQuotaExceeded, ScopeKey: "quota:own", Category: "actionable"},
-		{Path: "/d.txt", IssueType: sync.IssueQuotaExceeded, ScopeKey: "quota:own", Category: "actionable"},
+		{Path: "/b.txt", IssueType: sync.IssueQuotaExceeded, ScopeKey: sync.SKQuotaOwn, Category: "actionable"},
+		{Path: "/c.txt", IssueType: sync.IssueQuotaExceeded, ScopeKey: sync.SKQuotaOwn, Category: "actionable"},
+		{Path: "/d.txt", IssueType: sync.IssueQuotaExceeded, ScopeKey: sync.SKQuotaOwn, Category: "actionable"},
 	}
 
 	groups, _ := groupFailures(failures, nil)
@@ -313,8 +313,8 @@ func TestPrintPendingRetries(t *testing.T) {
 	t.Parallel()
 
 	groups := []sync.PendingRetryGroup{
-		{ScopeKey: "throttle:account", Count: 8, EarliestNext: time.Now().Add(2*time.Minute + 30*time.Second)},
-		{ScopeKey: "quota:own", Count: 4, EarliestNext: time.Now().Add(4*time.Minute + 15*time.Second)},
+		{ScopeKey: sync.SKThrottleAccount, Count: 8, EarliestNext: time.Now().Add(2*time.Minute + 30*time.Second)},
+		{ScopeKey: sync.SKQuotaOwn, Count: 4, EarliestNext: time.Now().Add(4*time.Minute + 15*time.Second)},
 	}
 
 	var buf bytes.Buffer

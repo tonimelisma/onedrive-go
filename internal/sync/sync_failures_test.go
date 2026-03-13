@@ -667,14 +667,14 @@ func TestRecordFailure_ScopeKeyStored(t *testing.T) {
 		IssueType: IssueQuotaExceeded,
 		ErrMsg:    "quota exceeded",
 		FileSize:  5000,
-		ScopeKey:  "quota:own",
+		ScopeKey:  SKQuotaOwn,
 	}, nil)
 	require.NoError(t, err)
 
 	issues, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
-	assert.Equal(t, "quota:own", issues[0].ScopeKey)
+	assert.Equal(t, SKQuotaOwn, issues[0].ScopeKey)
 }
 
 func TestRecordFailure_ScopeKeyDefaultEmpty(t *testing.T) {
@@ -693,7 +693,7 @@ func TestRecordFailure_ScopeKeyDefaultEmpty(t *testing.T) {
 	issues, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
-	assert.Equal(t, "", issues[0].ScopeKey)
+	assert.True(t, issues[0].ScopeKey.IsZero(), "default scope key should be zero")
 }
 
 func TestUpsertActionableFailures(t *testing.T) {
@@ -701,8 +701,8 @@ func TestUpsertActionableFailures(t *testing.T) {
 	ctx := context.Background()
 
 	failures := []ActionableFailure{
-		{Path: "CON.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: IssueInvalidFilename, Error: "reserved name", ScopeKey: ""},
-		{Path: "long/path.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: IssuePathTooLong, Error: "too long", ScopeKey: ""},
+		{Path: "CON.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: IssueInvalidFilename, Error: "reserved name"},
+		{Path: "long/path.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: IssuePathTooLong, Error: "too long"},
 	}
 
 	err := mgr.UpsertActionableFailures(ctx, failures)
@@ -724,7 +724,7 @@ func TestUpsertActionableFailures_UpdateExisting(t *testing.T) {
 
 	// Insert initial failure.
 	failures := []ActionableFailure{
-		{Path: "CON.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: IssueInvalidFilename, Error: "reserved name v1", ScopeKey: ""},
+		{Path: "CON.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: IssueInvalidFilename, Error: "reserved name v1"},
 	}
 	err := mgr.UpsertActionableFailures(ctx, failures)
 	require.NoError(t, err)
@@ -756,9 +756,9 @@ func TestClearResolvedActionableFailures(t *testing.T) {
 
 	// Upsert 3 actionable failures of the same type.
 	failures := []ActionableFailure{
-		{Path: "CON.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: IssueInvalidFilename, Error: "reserved", ScopeKey: ""},
-		{Path: "NUL.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: IssueInvalidFilename, Error: "reserved", ScopeKey: ""},
-		{Path: "PRN.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: IssueInvalidFilename, Error: "reserved", ScopeKey: ""},
+		{Path: "CON.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: IssueInvalidFilename, Error: "reserved"},
+		{Path: "NUL.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: IssueInvalidFilename, Error: "reserved"},
+		{Path: "PRN.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: IssueInvalidFilename, Error: "reserved"},
 	}
 	err := mgr.UpsertActionableFailures(ctx, failures)
 	require.NoError(t, err)
@@ -784,8 +784,8 @@ func TestClearResolvedActionableFailures_DifferentTypeNotCleared(t *testing.T) {
 
 	// Upsert failures of two different types.
 	failures := []ActionableFailure{
-		{Path: "CON.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: IssueInvalidFilename, Error: "reserved", ScopeKey: ""},
-		{Path: "long/path.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: IssuePathTooLong, Error: "too long", ScopeKey: ""},
+		{Path: "CON.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: IssueInvalidFilename, Error: "reserved"},
+		{Path: "long/path.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: IssuePathTooLong, Error: "too long"},
 	}
 	err := mgr.UpsertActionableFailures(ctx, failures)
 	require.NoError(t, err)
@@ -1002,12 +1002,12 @@ func TestDeleteSyncFailuresByScope(t *testing.T) {
 	// Insert failures with different scope keys.
 	for _, p := range []struct {
 		path     string
-		scopeKey string
+		scopeKey ScopeKey
 	}{
-		{"a.txt", "quota:shortcut:drive1:item1"},
-		{"b.txt", "quota:shortcut:drive1:item1"},
-		{"c.txt", "throttle:account"},
-		{"d.txt", "quota:shortcut:drive2:item2"},
+		{"a.txt", SKQuotaShortcut("drive1:item1")},
+		{"b.txt", SKQuotaShortcut("drive1:item1")},
+		{"c.txt", SKThrottleAccount},
+		{"d.txt", SKQuotaShortcut("drive2:item2")},
 	} {
 		err := mgr.RecordFailure(ctx, &SyncFailureParams{
 			Path:      p.path,
@@ -1026,7 +1026,7 @@ func TestDeleteSyncFailuresByScope(t *testing.T) {
 	require.Len(t, all, 4)
 
 	// Delete by scope key.
-	err = mgr.DeleteSyncFailuresByScope(ctx, "quota:shortcut:drive1:item1")
+	err = mgr.DeleteSyncFailuresByScope(ctx, SKQuotaShortcut("drive1:item1"))
 	require.NoError(t, err)
 
 	// Verify only 2 remain (c.txt and d.txt).
@@ -1055,13 +1055,13 @@ func TestPendingRetrySummary(t *testing.T) {
 	// Insert transient failures with different scope keys and retry times.
 	for _, p := range []struct {
 		path     string
-		scopeKey string
+		scopeKey ScopeKey
 	}{
-		{"a.txt", "throttle:account"},
-		{"b.txt", "throttle:account"},
-		{"c.txt", "throttle:account"},
-		{"d.txt", "quota:own"},
-		{"e.txt", "quota:own"},
+		{"a.txt", SKThrottleAccount},
+		{"b.txt", SKThrottleAccount},
+		{"c.txt", SKThrottleAccount},
+		{"d.txt", SKQuotaOwn},
+		{"e.txt", SKQuotaOwn},
 	} {
 		recErr := mgr.RecordFailure(ctx, &SyncFailureParams{
 			Path:      p.path,
@@ -1090,10 +1090,10 @@ func TestPendingRetrySummary(t *testing.T) {
 	require.Len(t, groups, 2, "should have 2 scope groups")
 
 	// Ordered by count DESC, so throttle:account (3) comes first.
-	assert.Equal(t, "throttle:account", groups[0].ScopeKey)
+	assert.Equal(t, SKThrottleAccount, groups[0].ScopeKey)
 	assert.Equal(t, 3, groups[0].Count)
 	assert.True(t, groups[0].EarliestNext.After(fixedTime), "earliest retry should be after now")
 
-	assert.Equal(t, "quota:own", groups[1].ScopeKey)
+	assert.Equal(t, SKQuotaOwn, groups[1].ScopeKey)
 	assert.Equal(t, 2, groups[1].Count)
 }

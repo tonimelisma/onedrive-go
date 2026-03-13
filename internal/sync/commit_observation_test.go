@@ -634,7 +634,7 @@ func TestRecordFailure_SetsIssueTypeAndScopeKey(t *testing.T) {
 		Category:   "actionable",
 		ErrMsg:     "quota full",
 		HTTPStatus: 507,
-		ScopeKey:   "quota:own",
+		ScopeKey:   SKQuotaOwn,
 	}, nil)
 	require.NoError(t, err)
 
@@ -692,7 +692,7 @@ func TestResetRetryTimesForScope(t *testing.T) {
 		require.NoError(t, err, "inserting %s", tc.path)
 	}
 
-	err := mgr.ResetRetryTimesForScope(ctx, "throttle:account", now)
+	err := mgr.ResetRetryTimesForScope(ctx, SKThrottleAccount, now)
 	require.NoError(t, err)
 
 	// future-match.txt: transient + matching scope + future retry → should be reset to now

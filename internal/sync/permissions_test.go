@@ -1056,7 +1056,7 @@ func TestHandleLocalPermission_DirectoryLevel(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 	assert.Equal(t, "Private", issues[0].Path)
-	assert.Equal(t, SKPermDir("Private").String(), issues[0].ScopeKey)
+	assert.Equal(t, SKPermDir("Private"), issues[0].ScopeKey)
 
 	// Should have created a scope block.
 	_, blocked := tracker.GetScopeBlock(SKPermDir("Private"))
@@ -1093,7 +1093,7 @@ func TestHandleLocalPermission_FileLevel(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 	assert.Equal(t, "Docs/secret.txt", issues[0].Path)
-	assert.Empty(t, issues[0].ScopeKey, "file-level issues should have no scope key")
+	assert.True(t, issues[0].ScopeKey.IsZero(), "file-level issues should have no scope key")
 }
 
 // ---------------------------------------------------------------------------
@@ -1125,7 +1125,7 @@ func TestRecheckLocalPermissions_Restored(t *testing.T) {
 		IssueType: IssueLocalPermissionDenied,
 		Category:  "actionable",
 		ErrMsg:    "directory not accessible",
-		ScopeKey:  scopeKey.String(),
+		ScopeKey:  scopeKey,
 	}, nil))
 
 	block := &ScopeBlock{Key: scopeKey, IssueType: IssueLocalPermissionDenied}
@@ -1172,7 +1172,7 @@ func TestRecheckLocalPermissions_StillDenied(t *testing.T) {
 		IssueType: IssueLocalPermissionDenied,
 		Category:  "actionable",
 		ErrMsg:    "directory not accessible",
-		ScopeKey:  scopeKey.String(),
+		ScopeKey:  scopeKey,
 	}, nil))
 
 	block := &ScopeBlock{Key: scopeKey, IssueType: IssueLocalPermissionDenied}
@@ -1242,7 +1242,7 @@ func TestClearScannerResolvedPermissions_DirLevel(t *testing.T) {
 		IssueType: IssueLocalPermissionDenied,
 		Category:  "actionable",
 		ErrMsg:    "directory not accessible",
-		ScopeKey:  scopeKey.String(),
+		ScopeKey:  scopeKey,
 	}, nil))
 
 	block := &ScopeBlock{Key: scopeKey, IssueType: IssueLocalPermissionDenied}
@@ -1281,7 +1281,7 @@ func TestClearScannerResolvedPermissions_NoFalsePositives(t *testing.T) {
 		IssueType: IssueLocalPermissionDenied,
 		Category:  "actionable",
 		ErrMsg:    "directory not accessible",
-		ScopeKey:  scopeKey.String(),
+		ScopeKey:  scopeKey,
 	}, nil))
 
 	block := &ScopeBlock{Key: scopeKey, IssueType: IssueLocalPermissionDenied}

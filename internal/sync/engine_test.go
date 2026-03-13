@@ -3240,16 +3240,16 @@ func TestDeriveScopeKey(t *testing.T) {
 		name        string
 		httpStatus  int
 		shortcutKey string
-		want        string
+		want        ScopeKey
 	}{
-		{"429_throttle", 429, "", "throttle:account"},
-		{"503_service", 503, "", "service"},
-		{"507_own", 507, "", "quota:own"},
-		{"507_shortcut", 507, "drive1:item1", "quota:shortcut:drive1:item1"},
-		{"500_service", 500, "", "service"},
-		{"502_service", 502, "", "service"},
-		{"200_empty", 200, "", ""},
-		{"404_empty", 404, "", ""},
+		{"429_throttle", 429, "", SKThrottleAccount},
+		{"503_service", 503, "", SKService},
+		{"507_own", 507, "", SKQuotaOwn},
+		{"507_shortcut", 507, "drive1:item1", SKQuotaShortcut("drive1:item1")},
+		{"500_service", 500, "", SKService},
+		{"502_service", 502, "", SKService},
+		{"200_empty", 200, "", ScopeKey{}},
+		{"404_empty", 404, "", ScopeKey{}},
 	}
 
 	for _, tt := range tests {
@@ -3330,7 +3330,7 @@ func TestRecordFailure_PopulatesScopeKey(t *testing.T) {
 	issues, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
-	assert.Equal(t, "quota:own", issues[0].ScopeKey, "507 own-drive should populate scope key")
+	assert.Equal(t, SKQuotaOwn, issues[0].ScopeKey, "507 own-drive should populate scope key")
 }
 
 // Validates: R-2.10.11
@@ -3354,7 +3354,7 @@ func TestRecordFailure_PopulatesScopeKey_429(t *testing.T) {
 	issues, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
-	assert.Equal(t, "throttle:account", issues[0].ScopeKey)
+	assert.Equal(t, SKThrottleAccount, issues[0].ScopeKey)
 }
 
 // Validates: R-2.10.11
@@ -3379,7 +3379,7 @@ func TestRecordFailure_PopulatesScopeKey_507Shortcut(t *testing.T) {
 	issues, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
-	assert.Equal(t, "quota:shortcut:driveA:item42", issues[0].ScopeKey)
+	assert.Equal(t, SKQuotaShortcut("driveA:item42"), issues[0].ScopeKey)
 }
 
 // results channel → processWorkerResult → scope detection → scope block →
@@ -3858,7 +3858,7 @@ func TestE2E_ThunderingHerd_SyncFailuresReset(t *testing.T) {
 			Category:   "transient",
 			ErrMsg:     "rate limited",
 			HTTPStatus: 429,
-			ScopeKey:   "throttle:account",
+			ScopeKey:   SKThrottleAccount,
 		}, func(int) time.Duration { return time.Duration(i+1) * time.Hour }))
 
 		// Verify it was recorded with a future next_retry_at.
@@ -3911,7 +3911,7 @@ func TestE2E_ThunderingHerd_SyncFailuresReset(t *testing.T) {
 		}
 		now := time.Now()
 		for _, r := range rows {
-			if r.ScopeKey == "throttle:account" && r.Category == "transient" {
+			if r.ScopeKey == SKThrottleAccount && r.Category == "transient" {
 				resetTime := time.Unix(0, r.NextRetryAt)
 				if now.Sub(resetTime).Abs() > 5*time.Second {
 					return false

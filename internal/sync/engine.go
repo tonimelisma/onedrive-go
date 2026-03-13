@@ -1520,16 +1520,16 @@ func (e *Engine) recordFailure(ctx context.Context, r *WorkerResult, delayFn fun
 		slog.String("action", r.ActionType.String()),
 		slog.Int("http_status", r.HTTPStatus),
 		slog.String("error", r.ErrMsg),
-		slog.String("scope_key", scopeKey),
+		slog.String("scope_key", scopeKey.String()),
 	)
 }
 
 // deriveScopeKey returns the scope key for a failed worker result.
-// Delegates to ScopeKeyForStatus — single source of truth for HTTP status
-// → scope key mapping. Returns the string wire format for storage in
-// sync_failures.scope_key.
-func deriveScopeKey(r *WorkerResult) string {
-	return ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey).String()
+// deriveScopeKey maps a worker result to its typed scope key. Delegates to
+// ScopeKeyForStatus — single source of truth for HTTP status → scope key
+// mapping. Returns the zero-value ScopeKey for non-scope statuses.
+func deriveScopeKey(r *WorkerResult) ScopeKey {
+	return ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)
 }
 
 // issueTypeForHTTPStatus maps an HTTP status code and error to a sync
@@ -1571,7 +1571,7 @@ func issueTypeForHTTPStatus(httpStatus int, err error) string {
 // succeeds, all items with future backoff for that scope become immediately
 // retriable. Kicks the retrier so it picks them up promptly.
 func (e *Engine) resetScopeRetryTimes(ctx context.Context, scopeKey ScopeKey) {
-	if err := e.baseline.ResetRetryTimesForScope(ctx, scopeKey.String(), e.nowFunc()); err != nil {
+	if err := e.baseline.ResetRetryTimesForScope(ctx, scopeKey, e.nowFunc()); err != nil {
 		e.logger.Warn("failed to reset retry times for scope",
 			slog.String("scope_key", scopeKey.String()),
 			slog.String("error", err.Error()),
@@ -2203,9 +2203,8 @@ func (e *Engine) handleExternalChanges(ctx context.Context) {
 		// Build set of still-active scope keys from DB.
 		activeScopes := make(map[ScopeKey]bool, len(issues))
 		for i := range issues {
-			sk := ParseScopeKey(issues[i].ScopeKey)
-			if sk.IsPermDir() {
-				activeScopes[sk] = true
+			if issues[i].ScopeKey.IsPermDir() {
+				activeScopes[issues[i].ScopeKey] = true
 			}
 		}
 
