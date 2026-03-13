@@ -633,3 +633,99 @@ func TestRetryTransport_StripeRetryCount(t *testing.T) {
 	assert.Equal(t, "1", retryHeaders[1])
 	assert.Equal(t, "2", retryHeaders[2])
 }
+
+// Validates: R-6.6.8
+func TestRetryTransport_NetworkError_ExhaustionLogsError(t *testing.T) {
+	t.Parallel()
+
+	// Use a log handler that captures log records to verify the ERROR log.
+	var logRecords []slog.Record
+	handler := &captureHandler{records: &logRecords}
+	logger := slog.New(handler)
+
+	var attempts atomic.Int32
+	inner := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		attempts.Add(1)
+		return nil, assert.AnError
+	})
+
+	rt := &retry.RetryTransport{
+		Inner:  inner,
+		Policy: testPolicy,
+		Logger: logger,
+		Sleep:  noopSleep,
+	}
+
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://example.com", nil)
+	_, err := rt.RoundTrip(req)
+	require.Error(t, err)
+
+	// All retries exhausted (1 initial + 3 retries = 4 attempts).
+	assert.Equal(t, int32(4), attempts.Load())
+
+	// Verify that an ERROR log was emitted.
+	var foundError bool
+	for _, rec := range logRecords {
+		if rec.Level == slog.LevelError && rec.Message == "request failed after all retries" {
+			foundError = true
+			break
+		}
+	}
+	assert.True(t, foundError, "expected ERROR log on retry exhaustion")
+}
+
+// Validates: R-6.6.8
+func TestRetryTransport_HTTPError_ExhaustionLogsError(t *testing.T) {
+	t.Parallel()
+
+	var logRecords []slog.Record
+	handler := &captureHandler{records: &logRecords}
+	logger := slog.New(handler)
+
+	var attempts atomic.Int32
+	inner := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		attempts.Add(1)
+		return &http.Response{
+			StatusCode: http.StatusInternalServerError,
+			Body:       io.NopCloser(bytes.NewReader(nil)),
+		}, nil
+	})
+
+	rt := &retry.RetryTransport{
+		Inner:  inner,
+		Policy: testPolicy,
+		Logger: logger,
+		Sleep:  noopSleep,
+	}
+
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://example.com", nil)
+	resp, err := rt.RoundTrip(req)
+	require.NoError(t, err)
+	resp.Body.Close()
+
+	// All retries exhausted (1 initial + 3 retries = 4 attempts).
+	assert.Equal(t, int32(4), attempts.Load())
+
+	// Verify that an ERROR log was emitted.
+	var foundError bool
+	for _, rec := range logRecords {
+		if rec.Level == slog.LevelError && rec.Message == "request failed after all retries" {
+			foundError = true
+			break
+		}
+	}
+	assert.True(t, foundError, "expected ERROR log on HTTP retry exhaustion")
+}
+
+// captureHandler is a slog.Handler that captures log records for assertion.
+type captureHandler struct {
+	records *[]slog.Record
+}
+
+func (h *captureHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
+	*h.records = append(*h.records, r)
+	return nil
+}
+func (h *captureHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *captureHandler) WithGroup(_ string) slog.Handler      { return h }

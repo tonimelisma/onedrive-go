@@ -1237,6 +1237,72 @@ func TestScopeBlockKeys(t *testing.T) {
 }
 
 // Validates: R-2.10.38
+// Validates: R-2.10.43
+func TestBlockedScope_DiskLocal_BlocksDownloadsOnly(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+
+	// Block disk:local scope — should only hold download actions.
+	block := &ScopeBlock{
+		Key:       scopeKeyDiskLocal,
+		IssueType: IssueDiskFull,
+	}
+	dt.HoldScope(scopeKeyDiskLocal, block)
+
+	// Download should be held.
+	dt.Add(&Action{
+		Type: ActionDownload, Path: "file.txt",
+		DriveID: driveid.New("d"), ItemID: "i1",
+	}, 1, nil)
+
+	select {
+	case <-dt.Ready():
+		require.Fail(t, "download should be held by disk:local scope")
+	case <-time.After(50 * time.Millisecond):
+		// Expected — held.
+	}
+
+	// Upload should pass through (disk:local only blocks downloads).
+	dt.Add(&Action{
+		Type: ActionUpload, Path: "upload.txt",
+		DriveID: driveid.New("d"), ItemID: "i2",
+	}, 2, nil)
+
+	select {
+	case ta := <-dt.Ready():
+		assert.Equal(t, int64(2), ta.ID, "upload should not be blocked by disk:local")
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for upload to pass through disk:local scope")
+	}
+
+	// Delete should pass through.
+	dt.Add(&Action{
+		Type: ActionRemoteDelete, Path: "del.txt",
+		DriveID: driveid.New("d"), ItemID: "i3",
+	}, 3, nil)
+
+	select {
+	case ta := <-dt.Ready():
+		assert.Equal(t, int64(3), ta.ID, "delete should not be blocked by disk:local")
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for delete to pass through disk:local scope")
+	}
+
+	// Move should pass through.
+	dt.Add(&Action{
+		Type: ActionLocalMove, Path: "moved.txt",
+		DriveID: driveid.New("d"), ItemID: "i4",
+	}, 4, nil)
+
+	select {
+	case ta := <-dt.Ready():
+		assert.Equal(t, int64(4), ta.ID, "move should not be blocked by disk:local")
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for move to pass through disk:local scope")
+	}
+}
+
 func TestDiscardScope_NoOpWhenEmpty(t *testing.T) {
 	t.Parallel()
 

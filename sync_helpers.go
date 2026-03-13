@@ -24,6 +24,11 @@ func newSyncEngine(session *driveops.Session, resolved *config.ResolvedDrive, ve
 		return nil, fmt.Errorf("cannot determine state DB path for drive %q", resolved.CanonicalID)
 	}
 
+	minFree, err := config.ParseSize(resolved.MinFreeSpace)
+	if err != nil {
+		return nil, fmt.Errorf("invalid min_free_space %q: %w", resolved.MinFreeSpace, err)
+	}
+
 	ecfg := &sync.EngineConfig{
 		DBPath:             dbPath,
 		SyncRoot:           syncDir,
@@ -38,6 +43,7 @@ func newSyncEngine(session *driveops.Session, resolved *config.ResolvedDrive, ve
 		TransferWorkers:    resolved.TransferWorkers,
 		CheckWorkers:       resolved.CheckWorkers,
 		BigDeleteThreshold: resolved.BigDeleteThreshold,
+		MinFreeSpace:       minFree,
 	}
 
 	if verifyDrive {

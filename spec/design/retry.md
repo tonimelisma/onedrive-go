@@ -2,7 +2,7 @@
 
 GOVERNS: internal/retry/backoff.go, internal/retry/doc.go, internal/retry/named.go, internal/retry/policy.go, internal/retry/transport.go
 
-Implements: R-6.8.1 [verified], R-6.8.2 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.10 [verified], R-6.8.11 [verified]
+Implements: R-6.8.1 [verified], R-6.8.2 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.10 [verified], R-6.8.11 [verified], R-6.6.8 [verified]
 
 ## Overview
 
@@ -47,6 +47,7 @@ Features:
 - Seekable body rewinding between attempts (via `req.GetBody` or `io.Seeker` fallback)
 - `X-Retry-Count` header annotation on retried requests
 - Retryable status codes: 408, 429, 500, 502, 503, 504, 509
+- ERROR log on retry exhaustion: when all attempts are spent (network error or retryable HTTP status), logs "request failed after all retries" at ERROR with method, URL, attempt count, and error/status. Implements: R-6.6.8 [verified]
 
 Thread-safe. All mutable state (throttle deadline) is mutex-protected.
 

@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_transfer.go, internal/sync/worker.go, internal/sync/tracker.go, internal/sync/scope.go, internal/sync/issue_types.go, internal/sync/compute_status.go, status.go
 
-Implements: R-2.3 [verified], R-5.1 [verified], R-6.4 [implemented], R-6.5.3 [verified], R-6.4.9 [planned], R-6.7.25 [planned], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.10.15 [verified], R-2.10.16 [verified], R-2.10.41 [verified], R-2.10.42 [verified], R-2.10.43 [planned], R-2.10.44 [planned]
+Implements: R-2.3 [verified], R-5.1 [verified], R-6.4 [implemented], R-6.5.3 [verified], R-6.4.9 [planned], R-6.7.25 [planned], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.10.15 [verified], R-2.10.16 [verified], R-2.10.41 [verified], R-2.10.42 [verified], R-2.10.43 [verified], R-2.10.44 [verified]
 
 ## Executor (`executor.go`)
 
@@ -94,13 +94,15 @@ The `FailureRetrier` (`reconciler.go`) is the sole retry mechanism for sync acti
 
 Pure function `computeNewStatus()` determines the new `sync_status` for a `remote_state` row based on the action outcome. Used by `CommitObservation`.
 
-## Planned: Disk Space Pre-Check
+## Disk Space Pre-Check (`executor_transfer.go`, `disk_unix.go`)
 
-Implements: R-2.10.43 [planned], R-2.10.44 [planned], R-6.2.6 [planned]
+Implements: R-2.10.43 [verified], R-2.10.44 [verified], R-6.2.6 [verified], R-6.4.7 [verified]
 
 Pre-check available disk space in executor before download. Two-level check:
-- **Critical**: available space < `min_free_space` → `disk:local` scope block, all downloads held until space recovers.
-- **Per-file**: available space < file_size + `min_free_space` → per-file failure recorded in `sync_failures`, no scope escalation (other smaller files can still download).
+- **Critical**: available space < `min_free_space` → `ErrDiskFull` → `disk:local` scope block, all downloads held until space recovers. Uploads, deletes, and moves continue.
+- **Per-file**: available space ≥ `min_free_space` but < file_size + `min_free_space` → `ErrFileTooLargeForSpace` → per-file skip in `sync_failures`, no scope escalation (other smaller files can still download).
+
+Config wiring: `min_free_space` string (default "1GB") is parsed via `config.ParseSize()` and threaded from `ResolvedDrive` through `EngineConfig.MinFreeSpace` to `ExecutorConfig.minFreeSpace`. Zero disables the check (R-6.4.7). Disk availability uses `syscall.Statfs` via `diskAvailableFunc` (injectable for testing). Statfs errors fail open — downloads continue rather than blocking on a transient syscall failure.
 
 ## Design Constraints
 

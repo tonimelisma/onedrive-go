@@ -306,6 +306,14 @@ func (dt *DepTracker) blockedScope(ta *TrackedAction) string {
 		return scopeKeyService
 	}
 
+	// disk:local blocks downloads only — uploads, deletes, and moves continue
+	// even when disk is full because they free space or don't consume it (R-2.10.43).
+	if _, ok := dt.scopeBlocks[scopeKeyDiskLocal]; ok {
+		if ta.Action.Type == ActionDownload {
+			return scopeKeyDiskLocal
+		}
+	}
+
 	// quota:own blocks own-drive uploads only (R-2.10.19).
 	if _, ok := dt.scopeBlocks[scopeKeyQuotaOwn]; ok {
 		if ta.Action.TargetsOwnDrive() && ta.Action.Type == ActionUpload {
@@ -323,9 +331,13 @@ func (dt *DepTracker) blockedScope(ta *TrackedAction) string {
 		}
 	}
 
-	// perm:dir:$path blocks all actions whose path falls under the denied
-	// directory (R-2.10.12). O(n) over active perm:dir blocks — expected
-	// to be tiny (1-3 typically).
+	return dt.blockedByPermDir(ta)
+}
+
+// blockedByPermDir checks whether any perm:dir scope block covers this
+// action's path. Returns the scope key if blocked, "" otherwise.
+// O(n) over active perm:dir blocks — expected to be tiny (1-3 typically).
+func (dt *DepTracker) blockedByPermDir(ta *TrackedAction) string {
 	for key := range dt.scopeBlocks {
 		if !strings.HasPrefix(key, scopeKeyPermDir) {
 			continue

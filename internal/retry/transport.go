@@ -94,6 +94,14 @@ func (rt *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 				continue
 			}
 
+			// All retries exhausted — terminal failure (R-6.6.8).
+			rt.Logger.Error("request failed after all retries",
+				slog.String("method", req.Method),
+				slog.String("url", req.URL.String()),
+				slog.Int("attempts", attempt+1),
+				slog.String("error", lastErr.Error()),
+			)
+
 			return nil, lastErr
 		}
 
@@ -103,7 +111,17 @@ func (rt *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 
 		// --- Non-retryable status (4xx except 408/429, 507) → return as-is ---
-		if !isRetryable(resp.StatusCode) || attempt >= rt.Policy.MaxAttempts {
+		if !isRetryable(resp.StatusCode) {
+			return resp, nil
+		}
+		// Retryable but exhausted — terminal failure (R-6.6.8).
+		if attempt >= rt.Policy.MaxAttempts {
+			rt.Logger.Error("request failed after all retries",
+				slog.String("method", req.Method),
+				slog.String("url", req.URL.String()),
+				slog.Int("attempts", attempt+1),
+				slog.Int("status", resp.StatusCode),
+			)
 			return resp, nil
 		}
 
