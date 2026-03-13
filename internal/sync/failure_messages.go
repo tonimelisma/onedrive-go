@@ -95,21 +95,3 @@ func MessageForIssueType(issueType string) IssueMessage {
 		}
 	}
 }
-
-// HumanizeScopeKey translates internal scope key wire-format strings to
-// user-friendly descriptions. Parses the string into a ScopeKey and delegates
-// to the Humanize method. Kept as a free function for the public API surface
-// (called by failure_display.go in the root package). See ScopeKey.Humanize()
-// for the actual logic (R-2.10.22).
-func HumanizeScopeKey(key string, shortcuts []Shortcut) string {
-	if key == "" {
-		return ""
-	}
-
-	sk := ParseScopeKey(key)
-	if sk.IsZero() {
-		return key // unknown format — return as-is
-	}
-
-	return sk.Humanize(shortcuts)
-}

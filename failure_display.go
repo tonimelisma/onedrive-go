@@ -48,7 +48,7 @@ func groupFailures(failures []sync.SyncFailureRow, shortcuts []sync.Shortcut) (g
 			continue
 		}
 
-		humanScope := sync.HumanizeScopeKey(f.ScopeKey, shortcuts)
+		humanScope := f.ScopeKey.Humanize(shortcuts)
 		gk := groupKey{issueType: f.IssueType, scopeKey: humanScope}
 
 		if j, ok := idx[gk]; ok {
@@ -135,7 +135,7 @@ func printPendingRetries(w io.Writer, groups []sync.PendingRetryGroup, shortcuts
 	fmt.Fprintf(w, "PENDING RETRIES (%d %s)\n", total, itemNoun(total))
 
 	for _, g := range groups {
-		humanScope := sync.HumanizeScopeKey(g.ScopeKey, shortcuts)
+		humanScope := g.ScopeKey.Humanize(shortcuts)
 		if humanScope == "" {
 			humanScope = "(unscoped)"
 		}
