@@ -392,15 +392,19 @@ func TestRun_KickTriggersReconcile(t *testing.T) {
 		close(done)
 	}()
 
-	// Bootstrap reconcile dispatches the row. Clear it so the kick dispatches
-	// fresh rows.
+	// Bootstrap reconcile dispatches the row. Clear events and simulate
+	// re-failure (new NextRetryAt) so the kick dispatches the updated row.
 	time.Sleep(50 * time.Millisecond)
 
 	adder.mu.Lock()
 	adder.events = nil
 	adder.mu.Unlock()
 
-	// Kick triggers another reconcile.
+	state.mu.Lock()
+	state.failureRows[0].NextRetryAt = 2000000000 // simulate re-failure with new backoff
+	state.mu.Unlock()
+
+	// Kick triggers another reconcile — row has new NextRetryAt, so it's dispatched.
 	r.Kick()
 	time.Sleep(100 * time.Millisecond)
 
@@ -462,6 +466,88 @@ func TestReconcile_DispatchUploadFailures(t *testing.T) {
 	assert.Equal(t, SourceLocal, adder.events[0].Source)
 	assert.Equal(t, ChangeModify, adder.events[0].Type)
 	assert.Equal(t, "b.txt", adder.events[1].Path)
+}
+
+func TestReconcile_PreventsDoubleDispatch(t *testing.T) {
+	rows := []SyncFailureRow{
+		makeFailedRow("a.txt", strDownload, 2),
+	}
+	state := &mockStateReader{failureRows: rows}
+	adder := &mockEventAdder{}
+	r := testFailureRetrier(state, adder, newMockInFlightChecker())
+	r.nowFunc = func() time.Time { return time.Unix(1000, 0) }
+
+	// First reconcile dispatches the row.
+	r.reconcile(context.Background())
+
+	adder.mu.Lock()
+	require.Len(t, adder.events, 1)
+	adder.mu.Unlock()
+
+	// Second reconcile with same row (same NextRetryAt) — should not
+	// re-dispatch. This is the bootstrap-vs-kick race guard.
+	r.reconcile(context.Background())
+
+	adder.mu.Lock()
+	assert.Len(t, adder.events, 1, "same row should not be dispatched twice")
+	adder.mu.Unlock()
+}
+
+func TestReconcile_ReDispatchesAfterRetryAtChange(t *testing.T) {
+	rows := []SyncFailureRow{
+		makeFailedRow("a.txt", strDownload, 2),
+	}
+	state := &mockStateReader{failureRows: rows}
+	adder := &mockEventAdder{}
+	r := testFailureRetrier(state, adder, newMockInFlightChecker())
+	r.nowFunc = func() time.Time { return time.Unix(1000, 0) }
+
+	// First reconcile dispatches the row.
+	r.reconcile(context.Background())
+
+	adder.mu.Lock()
+	require.Len(t, adder.events, 1)
+	adder.mu.Unlock()
+
+	// Simulate re-failure: RecordFailure sets a new next_retry_at.
+	state.mu.Lock()
+	state.failureRows[0].NextRetryAt = 2000000000
+	state.mu.Unlock()
+
+	// Second reconcile should dispatch (different NextRetryAt).
+	r.reconcile(context.Background())
+
+	adder.mu.Lock()
+	assert.Len(t, adder.events, 2, "row with new NextRetryAt should be re-dispatched")
+	adder.mu.Unlock()
+}
+
+func TestReconcile_ClearsDispatchedOnInFlight(t *testing.T) {
+	rows := []SyncFailureRow{
+		makeFailedRow("a.txt", strDownload, 2),
+	}
+	state := &mockStateReader{failureRows: rows}
+	adder := &mockEventAdder{}
+	checker := newMockInFlightChecker()
+	r := testFailureRetrier(state, adder, checker)
+	r.nowFunc = func() time.Time { return time.Unix(1000, 0) }
+
+	// First reconcile dispatches.
+	r.reconcile(context.Background())
+
+	adder.mu.Lock()
+	require.Len(t, adder.events, 1)
+	adder.mu.Unlock()
+	require.Contains(t, r.dispatchedRetryAt, "a.txt")
+
+	// Path goes in-flight (pipeline consumed it).
+	checker.mu.Lock()
+	checker.paths["a.txt"] = true
+	checker.mu.Unlock()
+
+	r.reconcile(context.Background())
+	assert.NotContains(t, r.dispatchedRetryAt, "a.txt",
+		"in-flight path should be cleared from dispatch tracking")
 }
 
 func TestReconcile_MixedDirections(t *testing.T) {
