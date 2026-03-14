@@ -1002,22 +1002,14 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 	go e.retrier.Run(ctx)
 
 	// Step 5: Start observer goroutines.
-	errs, activeObservers := e.startObservers(ctx, bl, mode, buf, opts)
+	errs, activeObservers, skippedCh := e.startObservers(ctx, bl, mode, buf, opts)
 
 	// Step 6: Main select loop.
 	safety := e.resolveWatchSafetyConfig(opts)
 
-	// Periodic full reconciliation timer (safety net for missed delta deletions).
-	reconcileInterval := e.resolveReconcileInterval(opts)
-	reconcileTicker := e.newReconcileTicker(reconcileInterval)
-	var reconcileC <-chan time.Time
-	if reconcileTicker != nil {
-		reconcileC = reconcileTicker.C
-		defer reconcileTicker.Stop()
-
-		e.logger.Info("periodic full reconciliation enabled",
-			slog.Duration("interval", reconcileInterval),
-		)
+	reconcileC, stopReconcile := e.initReconcileTicker(opts)
+	if stopReconcile != nil {
+		defer stopReconcile()
 	}
 
 	// Recheck ticker: detects external DB writes (e.g., `issues clear`)
@@ -1034,6 +1026,11 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 			}
 
 			e.processBatch(ctx, batch, bl, mode, safety, tracker)
+
+		case skipped := <-skippedCh:
+			// Safety scan detected SkippedItems — record and auto-clear.
+			e.recordSkippedItems(ctx, skipped)
+			e.clearResolvedSkippedItems(ctx, skipped)
 
 		case <-recheckTicker.C:
 			e.handleRecheckTick(ctx)
@@ -1717,7 +1714,7 @@ func (e *Engine) drainWorkerResults(ctx context.Context, results <-chan WorkerRe
 // when all observers exit, allowing the bridge goroutine to drain cleanly.
 func (e *Engine) startObservers(
 	ctx context.Context, bl *Baseline, mode SyncMode, buf *Buffer, opts WatchOpts,
-) (<-chan error, int) {
+) (<-chan error, int, <-chan []SkippedItem) {
 	events := make(chan ChangeEvent, watchEventBuf)
 	errs := make(chan error, 2)
 
@@ -1764,10 +1761,15 @@ func (e *Engine) startObservers(
 		}()
 	}
 
+	// Channel for forwarding SkippedItems from safety scans to the engine.
+	// Buffered(2) — at most 2 safety scans could overlap before draining.
+	skippedCh := make(chan []SkippedItem, 2)
+
 	// Local observer (skip for download-only mode).
 	if mode != SyncDownloadOnly {
 		localObs := NewLocalObserver(bl, e.logger, e.checkWorkers)
 		localObs.safetyScanInterval = opts.SafetyScanInterval
+		localObs.SetSkippedChannel(skippedCh)
 
 		if e.localWatcherFactory != nil {
 			localObs.watcherFactory = e.localWatcherFactory
@@ -1804,7 +1806,7 @@ func (e *Engine) startObservers(
 		close(events)
 	}()
 
-	return errs, count
+	return errs, count, skippedCh
 }
 
 // runPeriodicFullScan runs periodic full filesystem scans as a fallback when
@@ -2387,6 +2389,24 @@ func (e *Engine) newReconcileTicker(interval time.Duration) *time.Ticker {
 	}
 
 	return time.NewTicker(interval)
+}
+
+// initReconcileTicker creates the periodic full-reconciliation timer and
+// returns its channel plus a stop function. If reconciliation is disabled,
+// both the channel and stop function are nil.
+func (e *Engine) initReconcileTicker(opts WatchOpts) (<-chan time.Time, func()) {
+	interval := e.resolveReconcileInterval(opts)
+	ticker := e.newReconcileTicker(interval)
+
+	if ticker == nil {
+		return nil, nil
+	}
+
+	e.logger.Info("periodic full reconciliation enabled",
+		slog.Duration("interval", interval),
+	)
+
+	return ticker.C, ticker.Stop
 }
 
 // runFullReconciliation performs a full delta enumeration + orphan detection,

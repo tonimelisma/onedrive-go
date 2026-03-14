@@ -7,6 +7,7 @@ package sync
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	stdsync "sync"
 
@@ -303,15 +304,33 @@ type BaselineEntry struct {
 	ETag       string
 }
 
+// dirLowerKey groups baseline entries by (directory, lowercase name) for
+// O(1) case-insensitive sibling lookups. Used by detectCaseCollisions to
+// find collisions between new files and already-synced baseline entries.
+type dirLowerKey struct {
+	dir     string
+	lowName string
+}
+
+// dirLowerKeyFromPath computes the case-insensitive grouping key for a path.
+func dirLowerKeyFromPath(path string) dirLowerKey {
+	return dirLowerKey{
+		dir:     filepath.Dir(path),
+		lowName: strings.ToLower(filepath.Base(path)),
+	}
+}
+
 // Baseline is the in-memory container for all baseline entries, providing
-// dual-key access by path (primary) and by item ID (for move detection).
+// triple-key access: by path (primary), by item ID (for move detection),
+// and by (directory, lowercase name) for case collision detection.
 // Maps remain public for test setup convenience; production code MUST use
-// the locked accessor methods (GetByPath, GetByID, Put, Delete, Len,
-// ForEachPath) which hold mu during access.
+// the locked accessor methods (GetByPath, GetByID, GetCaseVariants, Put,
+// Delete, Len, ForEachPath) which hold mu during access.
 type Baseline struct {
-	mu     stdsync.RWMutex
-	byPath map[string]*BaselineEntry
-	byID   map[driveid.ItemKey]*BaselineEntry // keyed by (driveID, itemID) pair
+	mu         stdsync.RWMutex
+	byPath     map[string]*BaselineEntry
+	byID       map[driveid.ItemKey]*BaselineEntry // keyed by (driveID, itemID) pair
+	byDirLower map[dirLowerKey][]*BaselineEntry   // case-insensitive sibling index
 }
 
 // GetByPath returns the baseline entry for the given relative path.
@@ -338,6 +357,18 @@ func (b *Baseline) GetByID(key driveid.ItemKey) (*BaselineEntry, bool) {
 	return entry, ok
 }
 
+// GetCaseVariants returns all baseline entries in the same directory whose
+// name matches case-insensitively. Used by detectCaseCollisions to find
+// collisions between new files and already-synced baseline entries.
+// The caller must filter out exact path matches (same casing = not a collision).
+// Thread-safe: holds a read lock during access.
+func (b *Baseline) GetCaseVariants(dir, name string) []*BaselineEntry {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	return b.byDirLower[dirLowerKey{dir: dir, lowName: strings.ToLower(name)}]
+}
+
 // Put inserts or updates a baseline entry in both maps. If the path already
 // exists with a different (driveID, itemID), the stale ByID entry is removed
 // first to prevent orphaned entries (e.g., server-side delete+recreate
@@ -359,9 +390,26 @@ func (b *Baseline) Put(entry *BaselineEntry) {
 
 	b.byPath[entry.Path] = entry
 	b.byID[newKey] = entry
+
+	// Maintain byDirLower index: update existing entry or append new one.
+	dlk := dirLowerKeyFromPath(entry.Path)
+	found := false
+
+	for i, e := range b.byDirLower[dlk] {
+		if e.Path == entry.Path {
+			b.byDirLower[dlk][i] = entry
+			found = true
+
+			break
+		}
+	}
+
+	if !found {
+		b.byDirLower[dlk] = append(b.byDirLower[dlk], entry)
+	}
 }
 
-// Delete removes a baseline entry from both maps by path.
+// Delete removes a baseline entry from all three maps by path.
 // Thread-safe: holds a write lock during access.
 func (b *Baseline) Delete(path string) {
 	b.mu.Lock()
@@ -372,6 +420,21 @@ func (b *Baseline) Delete(path string) {
 	}
 
 	delete(b.byPath, path)
+
+	// Maintain byDirLower index: remove the entry for this exact path.
+	dlk := dirLowerKeyFromPath(path)
+	entries := b.byDirLower[dlk]
+
+	for i, e := range entries {
+		if e.Path == path {
+			b.byDirLower[dlk] = append(entries[:i], entries[i+1:]...)
+			if len(b.byDirLower[dlk]) == 0 {
+				delete(b.byDirLower, dlk)
+			}
+
+			break
+		}
+	}
 }
 
 // Len returns the number of entries in the baseline.
@@ -444,13 +507,17 @@ func (b *Baseline) FindOrphans(seen map[driveid.ItemKey]struct{}, driveID drivei
 // Exported for test files within the package; not intended for production use.
 func NewBaselineForTest(entries []*BaselineEntry) *Baseline {
 	bl := &Baseline{
-		byPath: make(map[string]*BaselineEntry, len(entries)),
-		byID:   make(map[driveid.ItemKey]*BaselineEntry, len(entries)),
+		byPath:     make(map[string]*BaselineEntry, len(entries)),
+		byID:       make(map[driveid.ItemKey]*BaselineEntry, len(entries)),
+		byDirLower: make(map[dirLowerKey][]*BaselineEntry, len(entries)),
 	}
 
 	for _, e := range entries {
 		bl.byPath[e.Path] = e
 		bl.byID[driveid.NewItemKey(e.DriveID, e.ItemID)] = e
+
+		dlk := dirLowerKeyFromPath(e.Path)
+		bl.byDirLower[dlk] = append(bl.byDirLower[dlk], e)
 	}
 
 	return bl

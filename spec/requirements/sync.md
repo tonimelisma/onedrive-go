@@ -136,8 +136,8 @@ The system shall validate filenames against OneDrive naming restrictions before 
 
 ## R-2.12 Case Collision Handling [verified]
 
-- R-2.12.1: Before uploading, the system shall detect local case-insensitive filename collisions (e.g., `file.txt` vs `File.txt`) and flag them as conflicts rather than attempting upload. [verified]
-- R-2.12.2: When a case collision is detected, neither colliding file shall be uploaded until the collision is resolved. [verified]
+- R-2.12.1: Before uploading, the system shall detect local case-insensitive filename collisions (e.g., `file.txt` vs `File.txt`) — including collisions between a new local file and an already-synced file in the baseline — and flag them as conflicts rather than attempting upload. [verified]
+- R-2.12.2: When a case collision is detected, neither colliding file shall be uploaded until the collision is resolved. Children of a colliding directory shall also be suppressed, since the parent path is unresolvable. [verified]
 
 ## R-2.13 Unicode Normalization [verified]
 

@@ -101,6 +101,22 @@ type LocalObserver struct {
 	writeCoalesceCooldown time.Duration          // 0 → defaultWriteCoalesceCooldown; injectable for tests
 	pendingTimers         map[string]*time.Timer // per-path timers; watchLoop-only (no mutex needed)
 	hashRequests          chan hashRequest       // timer callback → watchLoop
+
+	// skippedCh forwards SkippedItems from safety scans to the engine for
+	// recording in sync_failures. Nil disables forwarding (pre-existing behavior).
+	// Set via SetSkippedChannel before Watch.
+	skippedCh chan<- []SkippedItem
+
+	// dirNameCache caches lowercase→original name mappings per directory for
+	// O(1) case collision lookups. Built lazily on first check; invalidated
+	// by Create/Delete events. Single-goroutine access (watchLoop) — no mutex.
+	dirNameCache map[string]map[string][]string // dirPath → lowName → []originalNames
+
+	// collisionPeers tracks pairwise collision relationships detected in watch
+	// mode. When a collider is deleted, the surviving peer is re-emitted as
+	// ChangeCreate. Cleared on safety scan (authoritative detectCaseCollisions
+	// replaces this). Single-goroutine access (watchLoop) — no mutex.
+	collisionPeers map[string]string // dbRelPath → peer dbRelPath
 }
 
 // NewLocalObserver creates a LocalObserver. checkWorkers controls the number
@@ -109,13 +125,15 @@ type LocalObserver struct {
 // during observation.
 func NewLocalObserver(baseline *Baseline, logger *slog.Logger, checkWorkers int) *LocalObserver {
 	return &LocalObserver{
-		baseline:      baseline,
-		logger:        logger,
-		checkWorkers:  checkWorkers,
-		hashFunc:      driveops.ComputeQuickXorHash,
-		sleepFunc:     timeSleep,
-		pendingTimers: make(map[string]*time.Timer),
-		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+		baseline:       baseline,
+		logger:         logger,
+		checkWorkers:   checkWorkers,
+		hashFunc:       driveops.ComputeQuickXorHash,
+		sleepFunc:      timeSleep,
+		pendingTimers:  make(map[string]*time.Timer),
+		hashRequests:   make(chan hashRequest, hashRequestBufSize),
+		dirNameCache:   make(map[string]map[string][]string),
+		collisionPeers: make(map[string]string),
 		safetyTickFunc: func(d time.Duration) (<-chan time.Time, func()) {
 			t := time.NewTicker(d)
 			return t.C, t.Stop
@@ -128,6 +146,12 @@ func NewLocalObserver(baseline *Baseline, logger *slog.Logger, checkWorkers int)
 			return &fsnotifyWrapper{w: w}, nil
 		},
 	}
+}
+
+// SetSkippedChannel sets the channel for forwarding SkippedItems from safety
+// scans to the engine. Must be called before Watch. Nil disables forwarding.
+func (o *LocalObserver) SetSkippedChannel(ch chan<- []SkippedItem) {
+	o.skippedCh = ch
 }
 
 // trySend sends a ChangeEvent to the events channel without blocking. If the

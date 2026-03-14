@@ -31,6 +31,7 @@ func TestVerifyBaseline_AllMatch(t *testing.T) {
 				ItemType: ItemTypeFile, LocalHash: hash, Size: int64(len(content)),
 			},
 		},
+		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
 	}
 
 	ctx := t.Context()
@@ -56,6 +57,7 @@ func TestVerifyBaseline_MissingFile(t *testing.T) {
 				ItemType: ItemTypeFile, LocalHash: "somehash", Size: 100,
 			},
 		},
+		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
 	}
 
 	ctx := t.Context()
@@ -85,6 +87,7 @@ func TestVerifyBaseline_HashMismatch(t *testing.T) {
 				ItemType: ItemTypeFile, LocalHash: "wrong-hash", Size: int64(len(content)),
 			},
 		},
+		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
 	}
 
 	ctx := t.Context()
@@ -106,7 +109,8 @@ func TestVerifyBaseline_EmptyBaseline(t *testing.T) {
 
 	dir := t.TempDir()
 	bl := &Baseline{
-		byPath: make(map[string]*BaselineEntry),
+		byPath:     make(map[string]*BaselineEntry),
+		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
 	}
 
 	ctx := t.Context()
@@ -138,6 +142,7 @@ func TestVerifyBaseline_SkipsFolders(t *testing.T) {
 				ItemType: ItemTypeFile, LocalHash: hash, Size: int64(len(content)),
 			},
 		},
+		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
 	}
 
 	ctx := t.Context()
@@ -165,6 +170,7 @@ func TestVerifyBaseline_SizeMismatch(t *testing.T) {
 				ItemType: ItemTypeFile, LocalHash: "somehash", Size: 99999,
 			},
 		},
+		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
 	}
 
 	ctx := t.Context()
