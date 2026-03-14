@@ -209,7 +209,7 @@ func TestWorkerPool_FolderCreate(t *testing.T) {
 	tracker := NewDepTracker(10, testLogger(t))
 	tracker.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
+	pool := NewWorkerPool(cfg, tracker.Ready(), tracker.Done(), mgr, testLogger(t), 10)
 	results := runPoolWithDrain(ctx, pool, tracker)
 
 	succeeded, failed := countResults(results)
@@ -273,7 +273,7 @@ func TestWorkerPool_DependencyChain(t *testing.T) {
 	tracker.Add(&actions[0], 0, nil)
 	tracker.Add(&actions[1], 1, []int64{0})
 
-	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
+	pool := NewWorkerPool(cfg, tracker.Ready(), tracker.Done(), mgr, testLogger(t), 10)
 	results := runPoolWithDrain(ctx, pool, tracker)
 
 	succeeded, failed := countResults(results)
@@ -311,7 +311,7 @@ func TestWorkerPool_StopCancelsWork(t *testing.T) {
 	tracker := NewDepTracker(10, testLogger(t))
 	tracker.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
+	pool := NewWorkerPool(cfg, tracker.Ready(), tracker.Done(), mgr, testLogger(t), 10)
 	pool.Start(ctx, 4)
 
 	// Give workers a moment to pick up the action.
@@ -352,7 +352,7 @@ func TestWorkerPool_ResultChannel(t *testing.T) {
 	tracker := NewDepTracker(10, testLogger(t))
 	tracker.Add(&actions[0], 42, nil)
 
-	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
+	pool := NewWorkerPool(cfg, tracker.Ready(), tracker.Done(), mgr, testLogger(t), 10)
 	results := runPoolWithDrain(ctx, pool, tracker)
 
 	// Verify result for the action.
@@ -403,7 +403,7 @@ func TestWorkerPool_FailedOutcome(t *testing.T) {
 	tracker := NewDepTracker(10, testLogger(t))
 	tracker.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
+	pool := NewWorkerPool(cfg, tracker.Ready(), tracker.Done(), mgr, testLogger(t), 10)
 	results := runPoolWithDrain(ctx, pool, tracker)
 
 	succeeded, failed := countResults(results)
@@ -481,7 +481,7 @@ func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing
 	tracker.Add(&actions[0], 0, nil)
 	tracker.Add(&actions[1], 1, []int64{0})
 
-	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
+	pool := NewWorkerPool(cfg, tracker.Ready(), tracker.Done(), mgr, testLogger(t), 10)
 	results := runPoolWithDrain(ctx, pool, tracker)
 
 	succeeded, failed := countResults(results)
@@ -531,7 +531,7 @@ func TestWorkerPool_PanicRecovery(t *testing.T) {
 	tracker := NewDepTracker(10, testLogger(t))
 	tracker.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
+	pool := NewWorkerPool(cfg, tracker.Ready(), tracker.Done(), mgr, testLogger(t), 10)
 	results := runPoolWithDrain(ctx, pool, tracker)
 
 	// If we got here, the panic was recovered — the process didn't crash.
@@ -574,7 +574,7 @@ func TestWorker_NeverCallsComplete(t *testing.T) {
 	tracker := NewDepTracker(10, testLogger(t))
 	tracker.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
+	pool := NewWorkerPool(cfg, tracker.Ready(), tracker.Done(), mgr, testLogger(t), 10)
 	pool.Start(ctx, 4)
 
 	// Read one result from the channel — worker must send a result.
@@ -638,7 +638,7 @@ func TestWorkerResult_PopulatesFromAction(t *testing.T) {
 	tracker := NewDepTracker(10, testLogger(t))
 	tracker.Add(&actions[0], 77, nil)
 
-	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
+	pool := NewWorkerPool(cfg, tracker.Ready(), tracker.Done(), mgr, testLogger(t), 10)
 	pool.Start(ctx, 4)
 
 	var result WorkerResult
@@ -702,7 +702,7 @@ func TestWorkerResult_HTTPStatusAndRetryAfter(t *testing.T) {
 	tracker := NewDepTracker(10, testLogger(t))
 	tracker.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
+	pool := NewWorkerPool(cfg, tracker.Ready(), tracker.Done(), mgr, testLogger(t), 10)
 	pool.Start(ctx, 4)
 
 	var result WorkerResult
@@ -848,7 +848,7 @@ func TestEngineOwnsCounters(t *testing.T) {
 	tracker.Add(&actions[0], 0, nil)
 	tracker.Add(&actions[1], 1, nil)
 
-	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
+	pool := NewWorkerPool(cfg, tracker.Ready(), tracker.Done(), mgr, testLogger(t), 10)
 
 	// Simulate engine-owned counters.
 	var succeeded, failed atomic.Int32

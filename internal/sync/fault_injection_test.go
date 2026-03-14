@@ -33,7 +33,7 @@ func TestFault_ContextCancel_WorkerPool(t *testing.T) {
 
 	tracker := NewDepTracker(1, testLogger(t))
 	mgr := newTestManager(t)
-	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
+	pool := NewWorkerPool(cfg, tracker.Ready(), tracker.Done(), mgr, testLogger(t), 10)
 
 	ctx, cancel := context.WithCancel(t.Context())
 

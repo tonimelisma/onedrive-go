@@ -10,6 +10,7 @@
 //   - SetDispatchStatus:         transition pending→in-progress before dispatch
 //   - WriteSyncMetadata:         persist sync report after RunOnce
 //   - ReadSyncMetadata:          retrieve all sync metadata key-value pairs
+//   - ClearScopeAndUnblockFailures: atomic scope clear + failure unblock
 //   - BaselineEntryCount:        count of entries in baseline table
 //
 // Related files:
@@ -389,6 +390,50 @@ func (m *SyncStore) ReadSyncMetadata(ctx context.Context) (map[string]string, er
 	}
 
 	return result, rows.Err()
+}
+
+// ClearScopeAndUnblockFailures atomically clears a scope block and makes all
+// scope-blocked failures for that scope retryable. This is the single method
+// the engine calls when a scope trial succeeds or when a scope condition
+// resolves externally (permission grant, quota freed, etc.).
+//
+// In a single transaction:
+//  1. DELETE FROM scope_blocks WHERE scope_key = ?
+//  2. UPDATE sync_failures SET next_retry_at = now WHERE scope_key = ? AND next_retry_at IS NULL
+//
+// This ensures no window where failures are unblocked but the scope block
+// is still present (or vice versa).
+func (m *SyncStore) ClearScopeAndUnblockFailures(ctx context.Context, scopeKey ScopeKey, now time.Time) error {
+	wire := scopeKey.String()
+	nowNano := now.UnixNano()
+
+	tx, err := m.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("sync: begin clear-scope tx for %s: %w", wire, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Step 1: Delete the scope block.
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM scope_blocks WHERE scope_key = ?`, wire,
+	); err != nil {
+		return fmt.Errorf("sync: deleting scope block %s: %w", wire, err)
+	}
+
+	// Step 2: Make scope-blocked failures retryable.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE sync_failures SET next_retry_at = ?
+		WHERE scope_key = ? AND next_retry_at IS NULL AND category = 'transient'`,
+		nowNano, wire,
+	); err != nil {
+		return fmt.Errorf("sync: unblocking failures for scope %s: %w", wire, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sync: committing clear-scope for %s: %w", wire, err)
+	}
+
+	return nil
 }
 
 // BaselineEntryCount returns the number of entries in the baseline table.

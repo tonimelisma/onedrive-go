@@ -17,19 +17,23 @@ var errUnknownActionType = errors.New("sync: unknown action type in worker dispa
 // minWorkers is the floor for total worker count.
 const minWorkers = 4
 
-// WorkerPool spawns goroutines that pull TrackedActions from the DepTracker's
-// ready channel, execute them, persist success outcomes, and send results
-// back to the engine. Workers are pure executors — they NEVER call
-// tracker.Complete(). The engine owns all completion decisions (R-6.8.9).
+// WorkerPool spawns goroutines that pull TrackedActions from a ready channel,
+// execute them, persist success outcomes, and send results back to the engine.
+// Workers are pure executors — they NEVER call tracker.Complete(). The engine
+// owns all completion decisions (R-6.8.9).
+//
+// Decoupled from DepTracker: workers read from readyCh and wait on doneCh,
+// which may be backed by DepTracker, DepGraph, or any other dispatch source.
 type WorkerPool struct {
 	cfg      *ExecutorConfig
-	tracker  *DepTracker
+	readyCh  <-chan *TrackedAction
+	doneCh   <-chan struct{}
 	baseline *SyncStore
 	logger   *slog.Logger
 
 	// results reports per-action outcomes back to the engine. The engine
 	// reads from this channel, classifies results, and calls Complete on
-	// the tracker. Failed items are recorded in sync_failures for retry.
+	// the graph/tracker. Failed items are recorded in sync_failures for retry.
 	results chan WorkerResult
 
 	cancel context.CancelFunc
@@ -80,9 +84,13 @@ type WorkerResult struct {
 // NewWorkerPool creates a pool without starting any workers. planSize
 // determines the result channel buffer (use the number of actions in the
 // plan for one-shot mode, or a generous buffer for watch mode).
+//
+// readyCh provides actions ready for execution. doneCh signals when all work
+// is complete (workers exit when doneCh closes or ctx is canceled).
 func NewWorkerPool(
 	cfg *ExecutorConfig,
-	tracker *DepTracker,
+	readyCh <-chan *TrackedAction,
+	doneCh <-chan struct{},
 	baseline *SyncStore,
 	logger *slog.Logger,
 	planSize int,
@@ -93,7 +101,8 @@ func NewWorkerPool(
 
 	return &WorkerPool{
 		cfg:      cfg,
-		tracker:  tracker,
+		readyCh:  readyCh,
+		doneCh:   doneCh,
 		baseline: baseline,
 		logger:   logger,
 		// Buffer sizing contract: one-shot mode uses planSize (equal to
@@ -125,9 +134,9 @@ func (wp *WorkerPool) Start(ctx context.Context, total int) {
 	)
 }
 
-// Wait blocks until all tracked actions are complete (tracker.Done signal).
+// Wait blocks until the done signal fires (all actions complete).
 func (wp *WorkerPool) Wait() {
-	<-wp.tracker.Done()
+	<-wp.doneCh
 }
 
 // Stop cancels all in-flight work, waits for goroutines to exit, and closes
@@ -141,9 +150,8 @@ func (wp *WorkerPool) Stop() {
 	close(wp.results)
 }
 
-// worker is the main loop for a single goroutine. It reads from the
-// tracker's single ready channel until the context is canceled or all
-// actions are done.
+// worker is the main loop for a single goroutine. It reads from the ready
+// channel until the context is canceled or all actions are done.
 func (wp *WorkerPool) worker(ctx context.Context) {
 	defer wp.wg.Done()
 
@@ -151,9 +159,9 @@ func (wp *WorkerPool) worker(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-wp.tracker.Done():
+		case <-wp.doneCh:
 			return
-		case ta := <-wp.tracker.Ready():
+		case ta := <-wp.readyCh:
 			if ta == nil {
 				continue
 			}
