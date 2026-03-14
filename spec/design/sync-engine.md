@@ -67,7 +67,7 @@ In-memory data structure in `scope.go`: sliding windows (`ScopeKey` → `sliding
 
 Implements: R-2.10.43 [verified]
 
-Scope key `SKDiskLocal` is created by `classifyResult()` when a download fails with `ErrDiskFull` (deterministic signal — immediate, no sliding window). Unlike `SKThrottleAccount` and `SKService` which block ALL actions (via `ScopeKey.IsGlobal()`), `SKDiskLocal` blocks downloads only — `ScopeKey.BlocksAction()` returns true only for `ActionDownload`. Uploads, deletes, and moves continue because they either free space or don't consume it. In `blockedScope()`, `SKDiskLocal` is checked in priority order between `SKService` and `SKQuotaOwn`. Trial timing uses unified parameters: 5-second initial interval, 2× backoff, 5-minute max cap (computed by `computeTrialInterval()` in engine.go).
+Scope key `SKDiskLocal` is created by `classifyResult()` when a download fails with `ErrDiskFull` (deterministic signal — immediate, no sliding window). Unlike `SKThrottleAccount` and `SKService` which block ALL actions (via `ScopeKey.IsGlobal()`), `SKDiskLocal` blocks downloads only — `ScopeKey.BlocksAction()` returns true only for `ActionDownload`. Uploads, deletes, and moves continue because they either free space or don't consume it. In `ScopeGate.Admit()`, `SKDiskLocal` is checked in priority order between `SKService` and `SKQuotaOwn`. Trial timing uses unified parameters: 5-second initial interval, 2× backoff, 5-minute max cap (computed by `computeTrialInterval()` in engine.go).
 
 ### Scanner ScanResult Contract
 
@@ -161,7 +161,7 @@ In watch mode, the planner-level big-delete check is disabled (`threshold=MaxInt
 
 **Flow in `processBatch()`**: After `planner.Plan()` returns, the engine counts `ActionLocalDelete` + `ActionRemoteDelete` actions and calls `counter.Add(count)`. If `counter.IsHeld()`:
 1. Delete actions are filtered out of the plan (via `applyDeleteCounter()`)
-2. Non-delete actions continue to the tracker and execute normally
+2. Non-delete actions continue to DepGraph and execute normally
 3. Held deletes are recorded as `sync_failures` rows with `issue_type=big_delete_held` via `UpsertActionableFailures()`
 
 **CLI notification**: `issues list` shows held deletes in a dedicated "HELD DELETES" section. User approves via `issues clear --all` (or `issues clear <path>` for individual files).
