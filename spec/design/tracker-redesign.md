@@ -75,10 +75,6 @@ OBSERVED (ChangeEvent from observer or retrier)
     ▼
 PLANNED (Action + PathView from planner)
     │
-    │ setDispatch (remote_state for downloads/deletes)
-    ▼
-DISPATCHED
-    │
     │ depGraph.Add()
     ▼
 GRAPH_ADDED
@@ -97,7 +93,6 @@ scopeGate.Admit()
     │                 │
     │                 │ engine records sync_failure (scope_key set,
     │                 │   next_retry_at = NULL)
-    │                 │ engine resets dispatch status
     │                 │ depGraph.Complete → dependents cascade
     │                 │
     │                 │ ... scope clears (trial succeeds) ...
@@ -108,7 +103,9 @@ scopeGate.Admit()
     │                 ▼
     │             OBSERVED (from retrier, using DB state)
     │
-    └── not blocked → READY (readyCh)
+    └── not blocked → setDispatch (remote_state for downloads/deletes)
+                          │
+                      DISPATCHED → READY (readyCh)
                           │
                           │ worker pulls
                           ▼
@@ -228,8 +225,13 @@ When `Admit` returns a blocking key, the engine records the action as a sync_fai
 
 ```go
 // In processBatch / executePlan (MAIN goroutine), after depGraph.Add returns a ready action:
-// Uses admitAndDispatch — no trial interception (trialPending is drain-goroutine-only state).
+// Scope gate check BEFORE setDispatch — avoids writing remote_state for actions that
+// will be immediately scope-blocked (3× fewer SQLite writes under bulk scope blocks).
 e.admitAndDispatch(ctx, []*TrackedAction{ta})
+
+// Inside admitAndDispatch:
+//   scopeGate.Admit(ta) → blocked? → recordScopeBlockedFailure + Complete (NO setDispatch)
+//   scopeGate.Admit(ta) → not blocked? → setDispatch + readyCh
 ```
 
 `cascadeRecordAndComplete` is a BFS that records each action (and all its transitive dependents) as sync_failures and completes them in the graph:
@@ -250,7 +252,8 @@ func (e *Engine) cascadeRecordAndComplete(ctx context.Context,
         seen[current.ID] = true
 
         e.recordScopeBlockedFailure(ctx, &current.Action, scopeKey)
-        e.resetDispatchStatus(ctx, &current.Action)
+        // No resetDispatchStatus — setDispatch was never called for blocked actions
+        // (scope gate is checked BEFORE setDispatch, per section 2.2).
         ready := e.depGraph.Complete(current.ID)
         queue = append(queue, ready...)
     }
@@ -273,20 +276,46 @@ When a worker result comes back, the engine decides what to do with dependents b
 ready := e.depGraph.Complete(r.ActionID)
 
 if r.Success {
-    e.routeReadyActions(ready)
+    e.routeReadyActions(ctx, ready)
 } else {
     // Parent failed — children would fail too (e.g., folder doesn't exist).
-    // Record each as sync_failure with exponential backoff and complete.
+    // Record each as sync_failure and complete.
     for _, dep := range ready {
-        e.recordFailure(ctx, depToWorkerResult(dep, r), retry.Reconcile.Delay)
+        e.recordCascadeFailure(ctx, &dep.Action, r)
         e.depGraph.Complete(dep.ID)
     }
 }
 ```
 
-Cascade-failed dependents get `next_retry_at` set by `retry.Reconcile.Delay` (exponential backoff), NOT `NULL`. They are independently retriable by the retrier. When the retrier picks up a cascade-failed child (e.g., an upload whose parent folder create failed), `createEventFromDB` calls `observeLocal` → the planner builds a PathView → discovers the parent folder doesn't exist in the baseline → creates BOTH a folder create AND the upload with the dependency edge. The planner re-discovers the full dependency tree from current state.
+**`recordCascadeFailure` specification:**
 
-The parent has its own sync_failure entry (recorded by `processWorkerResult` when the worker failed). The children have separate entries (from cascade). Each has independent `next_retry_at` with exponential backoff. The retrier processes them as separate items. When the retrier picks up a child, the planner re-discovers the parent dependency and creates both actions with the dependency edge — the parent folder create is re-attempted, then the child upload. When the retrier picks up the parent, the planner creates the parent action. If both land in the same retrier batch, the planner batch has both paths → both actions created with the correct dependency edge → one execution of each. No duplication — the planner deduplicates by path (PathChanges merge), `HasInFlight` prevents double-dispatch, and the dependency graph ensures ordering. `setDispatch` only writes remote_state for downloads and local deletes, NOT for folder creates — so no stale dispatch status concern for folder create retries.
+```go
+func (e *Engine) recordCascadeFailure(ctx context.Context, action *Action, parentResult *WorkerResult) {
+    e.baseline.RecordFailure(ctx, &SyncFailureParams{
+        Path:      action.Path,
+        DriveID:   action.DriveID,
+        Direction: actionTypeToDirection(action.Type), // dependent's OWN direction
+        Category:  strTransient,                       // retriable
+        IssueType: parentResult.IssueType,             // inherit parent's issue type
+        ScopeKey:  ScopeKey{},                         // empty — not scope-blocked
+        ErrMsg:    "parent action failed: " + parentResult.ErrMsg,
+    }, retry.Reconcile.Delay)
+    // Uses retry.Reconcile.Delay for next_retry_at — exponential backoff.
+    // failure_count starts at 1 (first recording). This is the dependent's
+    // first failure; it was never executed. The retrier applies normal backoff
+    // based on failure_count, which is correct — cascaded dependents should
+    // retry on the same schedule as any other first-time failure.
+}
+```
+
+- **scope_key**: Empty — this is not a scope block. The parent just failed (500, timeout, etc.).
+- **next_retry_at**: Exponential backoff via `retry.Reconcile.Delay`. The dependent retries independently.
+- **direction**: The dependent's OWN direction (upload, download, delete), not the parent's.
+- **failure_count**: 1 (first recording via UPSERT). The dependent was never executed — this is its first failure. Normal backoff applies.
+
+Cascade-failed dependents are independently retriable. When the retrier picks up a cascade-failed child (e.g., an upload whose parent folder create failed), `createEventFromDB` calls `observeLocal` → the planner builds a PathView → discovers the parent folder doesn't exist in the baseline → creates BOTH a folder create AND the upload with the dependency edge. The planner re-discovers the full dependency tree from current state.
+
+The parent has its own sync_failure entry (from `processWorkerResult`). The children have separate entries (from cascade). The retrier processes them as separate items. When a child is picked up, the planner re-discovers the parent dependency and creates both actions. When the parent is picked up, the planner creates the parent action. If both land in the same retrier batch, the planner merges them into one plan with the correct dependency edge. No duplication — the planner deduplicates by path, `HasInFlight` prevents double-dispatch.
 
 This prevents N children each making doomed API calls when a folder create fails.
 
@@ -296,9 +325,12 @@ When a trial succeeds, `onScopeClear` does NOT re-observe items inline. Inline r
 
 ```go
 func (e *Engine) onScopeClear(ctx context.Context, key ScopeKey) {
-    e.scopeGate.ClearScopeBlock(key) // persists: deletes from scope_blocks table
-    e.baseline.SetScopeRetryAtNow(ctx, key) // sets next_retry_at = NOW for all items in scope
-    e.armRetryTimer() // retrier picks them up on next sweep
+    // Atomic: ClearScopeBlock + SetScopeRetryAtNow in a single transaction.
+    // If crash between them, sync_failures would be orphaned (NULL next_retry_at,
+    // no scope block to trigger re-processing). Single transaction prevents this.
+    e.baseline.ClearScopeAndUnblockFailures(ctx, key) // deletes scope_blocks row + sets next_retry_at = NOW
+    e.scopeGate.ClearScopeBlockInMemory(key)          // update in-memory cache
+    e.armRetryTimer()                                  // retrier picks them up on next sweep
 }
 ```
 
@@ -657,7 +689,7 @@ Independent. Can be done first (see ordering note above).
 4. Create `createEventFromDB`, `remoteStateToChangeEvent` (retrier use)
 5. Create `isFailureResolved` (stale sync_failure detection — D-11)
 6. Create `admitAndDispatch` (main goroutine — no trial interception) and `routeReadyActions` (drain goroutine — with trial interception via `trialPending` map). `trialPending` is drain-goroutine-only state — no cross-goroutine access.
-7. Create `cascadeRecordAndComplete`, `recordScopeBlockedFailure`, `resetDispatchStatus`
+7. Create `cascadeRecordAndComplete`, `recordScopeBlockedFailure`, `recordCascadeFailure`
 8. Create `onScopeClear` — `ClearScopeBlock` + `SetScopeRetryAtNow` + `armRetryTimer` (no inline re-observation)
 9. Rewrite `processWorkerResult` with failure-aware dependent dispatch (section 3.5)
 10. Rewrite `processTrialResult` — success calls `onScopeClear`, failure extends interval
@@ -667,7 +699,7 @@ Independent. Can be done first (see ordering note above).
 14. Rewrite `handleExternalChanges`: `ClearScopeBlock` → `onScopeClear`
 15. Remove `onHeld` callback, `trialCh` channel
 16. On startup: `scopeGate.LoadFromStore(ctx)`, arm trial timer
-17. Create `ResetDispatchStatus` in `SyncStore`
+17. Create `ClearScopeAndUnblockFailures` in `SyncStore` (atomic scope clear + retry-at reset)
 18. Create `PickTrialCandidate` in `SyncStore`
 19. Create `SetScopeRetryAtNow` in `SyncStore` — `UPDATE sync_failures SET next_retry_at = ? WHERE scope_key = ?`
 20. Update `WorkerPool` to accept `readyCh <-chan *TrackedAction` and `done <-chan struct{}`
@@ -734,7 +766,7 @@ Independent. Can be done first (see ordering note above).
 
 9. **Failure-aware dependent dispatch.** Parent fails → children cascade-completed and recorded as sync_failures. Parent succeeds → children dispatched. The graph doesn't know about failure; the engine applies policy.
 
-10. **Persistent state is always cleaned up.** `setDispatch` writes are reversed by `resetDispatchStatus` when actions are scope-blocked or cascade-completed.
+10. **No unnecessary persistent state.** Scope gate is checked BEFORE `setDispatch` — scope-blocked actions never write to remote_state. Cascade-failed children (section 3.5) never had setDispatch called (they were waiting on deps). Only actions that pass the scope gate and are dispatched to workers have remote_state entries, and those follow the normal execution lifecycle.
 
 11. **Stale sync_failures are detected and cleared.** `isFailureResolved` checks DB state (remote_state, baseline, local filesystem) before re-injecting. Items whose underlying condition resolved through the normal pipeline are cleared, not retried forever.
 
@@ -755,7 +787,7 @@ Independent. Can be done first (see ordering note above).
 | `internal/sync/scope_gate_test.go` | **New** | 3 |
 | `internal/sync/migrations.go` | Add `scope_blocks` table | 3 |
 | `internal/sync/store_failures.go` | Add `PickTrialCandidate`, `SetScopeRetryAtNow` | 4 |
-| `internal/sync/store_admin.go` | Add `ResetDispatchStatus` | 4 |
+| `internal/sync/store_admin.go` | Add `ClearScopeAndUnblockFailures` (atomic scope clear + retry-at reset) | 4 |
 | `internal/sync/engine.go` | Replace tracker with DepGraph + ScopeGate + readyCh. Promote `buf` to engine field. Add `reobserve` (trials only), `createEventFromDB`, `isFailureResolved`, `admitAndDispatch` (main goroutine), `routeReadyActions` (drain goroutine, trial interception), `cascadeRecordAndComplete`, `onScopeClear`. Failure-aware dispatch. Retrier in drain loop (batch-limited, zero-delay re-arm). Startup loads scope blocks. | 4 |
 | `internal/sync/engine_test.go` | Rewrite for new types | 4 |
 | `internal/sync/engine_shortcuts.go` | `ClearScopeBlock` + `DeleteSyncFailuresByScope` | 4 |
@@ -783,7 +815,7 @@ Independent. Can be done first (see ordering note above).
 **Mitigation**: `reobserve` returns 404 → planner produces no matching action → `trialPending` entry times out → next candidate is tried. If all candidates are stale, `PickTrialCandidate` eventually returns nil → scope block cleared.
 
 **Risk**: Trial `trialPending` entry lingers (planner produces no action for the path).
-**Mitigation**: TTL-based cleanup (30 seconds = 2× debounce window). Trials serialized — only one pending at a time per engine.
+**Mitigation**: TTL-based cleanup (30 seconds = 2× debounce window). Trials serialized — only one pending at a time per engine. Additionally, `routeReadyActions` cleans stale entries when checking `trialPending[ta.Action.Path]` — not just on trial timer fire.
 
 **Risk**: Uncapped Retry-After header (malformed → decades-long block).
 **Accepted**: User explicitly decided to trust the server. No cap applied.
@@ -799,3 +831,6 @@ Independent. Can be done first (see ordering note above).
 
 **Risk**: `isFailureResolved` adds DB queries per item in retrier sweep.
 **Mitigation**: Local SQLite queries — microseconds per item. Bounded by `retryBatchSize`. The check prevents infinite retries of stale sync_failures, which would waste more resources than the check itself.
+
+**Risk**: `cascadeRecordAndComplete` calls `depGraph.Complete()` in a loop — concurrent `Add()` could interleave.
+**Constraint**: In watch mode, `cascadeRecordAndComplete` is called from `admitAndDispatch` (main goroutine) or `routeReadyActions` (drain goroutine). `depGraph.Add` is called from `processBatch` (main goroutine). Both `cascadeRecordAndComplete` and `Add` on the main goroutine are sequential — no interleaving. The drain goroutine's `routeReadyActions` and the main goroutine's `processBatch` are concurrent, but `depGraph.mu` serializes access. If the engine pipeline redesign introduces async reconciliation feeding events concurrently, this invariant must be preserved — async recon feeds the buffer, not the graph directly.
