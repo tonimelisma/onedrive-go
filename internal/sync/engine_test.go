@@ -177,6 +177,17 @@ func newTestEngine(t *testing.T, mock *engineMockClient) (*Engine, string) {
 	return eng, syncRoot
 }
 
+// setupWatchEngine initializes an engine with DepGraph + readyCh for
+// processBatch tests. Returns the readyCh for reading dispatched actions.
+func setupWatchEngine(t *testing.T, eng *Engine) <-chan *TrackedAction {
+	t.Helper()
+
+	eng.depGraph = NewDepGraph(eng.logger)
+	eng.readyCh = make(chan *TrackedAction, 1024)
+
+	return eng.readyCh
+}
+
 // deltaPageWithItems returns a DeltaPage with the given items and a delta link.
 func deltaPageWithItems(items []graph.Item, deltaLink string) *graph.DeltaPage {
 	return &graph.DeltaPage{
@@ -1238,7 +1249,7 @@ func TestRunWatch_ProcessBatch_BigDelete(t *testing.T) {
 		})
 	}
 
-	tracker := NewPersistentDepTracker(testLogger(t))
+	ready := setupWatchEngine(t, eng)
 
 	// Install a rolling delete counter with threshold=10 on the engine.
 	// The planner-level check is disabled (forceSafetyMax) — the counter
@@ -1246,11 +1257,11 @@ func TestRunWatch_ProcessBatch_BigDelete(t *testing.T) {
 	eng.deleteCounter = newDeleteCounter(10, 5*time.Minute, time.Now)
 	safety := &SafetyConfig{BigDeleteThreshold: forceSafetyMax}
 
-	eng.processBatch(ctx, batch, bl, SyncBidirectional, safety, tracker)
+	eng.processBatch(ctx, batch, bl, SyncBidirectional, safety)
 
 	// Verify no actions were dispatched (all 20 are deletes and counter tripped).
 	select {
-	case ta := <-tracker.Ready():
+	case ta := <-ready:
 		assert.Fail(t, "unexpected action dispatched", "path: %s", ta.Action.Path)
 	default:
 		// Good — no actions.
@@ -1334,13 +1345,13 @@ func TestRunWatch_ProcessBatch_BigDelete_NonDeletesFlow(t *testing.T) {
 		}},
 	})
 
-	tracker := NewPersistentDepTracker(testLogger(t))
+	ready := setupWatchEngine(t, eng)
 
 	// Install counter with threshold=10. 15 deletes > 10 → trips.
 	eng.deleteCounter = newDeleteCounter(10, 5*time.Minute, time.Now)
 	safety := &SafetyConfig{BigDeleteThreshold: forceSafetyMax}
 
-	eng.processBatch(ctx, batch, bl, SyncBidirectional, safety, tracker)
+	eng.processBatch(ctx, batch, bl, SyncBidirectional, safety)
 
 	// Counter should be held.
 	assert.True(t, eng.deleteCounter.IsHeld(), "counter should be held")
@@ -1349,7 +1360,7 @@ func TestRunWatch_ProcessBatch_BigDelete_NonDeletesFlow(t *testing.T) {
 	dispatched := 0
 	for range 5 {
 		select {
-		case <-tracker.Ready():
+		case <-ready:
 			dispatched++
 		default:
 		}
@@ -1416,12 +1427,12 @@ func TestRunWatch_ProcessBatch_BigDelete_BelowThreshold(t *testing.T) {
 		})
 	}
 
-	tracker := NewPersistentDepTracker(testLogger(t))
+	ready := setupWatchEngine(t, eng)
 
 	eng.deleteCounter = newDeleteCounter(10, 5*time.Minute, time.Now)
 	safety := &SafetyConfig{BigDeleteThreshold: forceSafetyMax}
 
-	eng.processBatch(ctx, batch, bl, SyncBidirectional, safety, tracker)
+	eng.processBatch(ctx, batch, bl, SyncBidirectional, safety)
 
 	// Counter should NOT be held.
 	assert.False(t, eng.deleteCounter.IsHeld(), "counter should not trip at 5 < 10")
@@ -1430,7 +1441,7 @@ func TestRunWatch_ProcessBatch_BigDelete_BelowThreshold(t *testing.T) {
 	dispatched := 0
 	for range 10 {
 		select {
-		case <-tracker.Ready():
+		case <-ready:
 			dispatched++
 		default:
 		}
@@ -1597,11 +1608,11 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 		}},
 	}}
 
-	tracker := NewPersistentDepTracker(testLogger(t))
+	setupWatchEngine(t, eng)
 	safety := DefaultSafetyConfig()
 
 	// Should return without error or dispatching actions.
-	eng.processBatch(ctx, batch, bl, SyncBidirectional, safety, tracker)
+	eng.processBatch(ctx, batch, bl, SyncBidirectional, safety)
 }
 
 // TestRunWatch_Deduplication verifies that processBatch cancels in-flight
@@ -1626,7 +1637,7 @@ func TestRunWatch_Deduplication(t *testing.T) {
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err, "Load")
 
-	tracker := NewPersistentDepTracker(testLogger(t))
+	setupWatchEngine(t, eng)
 	safety := DefaultSafetyConfig()
 
 	// First batch: download a file.
@@ -1643,10 +1654,10 @@ func TestRunWatch_Deduplication(t *testing.T) {
 		}},
 	}}
 
-	eng.processBatch(ctx, batch1, bl, SyncBidirectional, safety, tracker)
+	eng.processBatch(ctx, batch1, bl, SyncBidirectional, safety)
 
 	// Verify the action is in-flight.
-	require.True(t, tracker.HasInFlight("overlapping.txt"), "expected in-flight action for overlapping.txt after first batch")
+	require.True(t, eng.depGraph.HasInFlight("overlapping.txt"), "expected in-flight action for overlapping.txt after first batch")
 
 	// Second batch: same path, different content. Should cancel the first.
 	batch2 := []PathChanges{{
@@ -1662,12 +1673,12 @@ func TestRunWatch_Deduplication(t *testing.T) {
 		}},
 	}}
 
-	eng.processBatch(ctx, batch2, bl, SyncBidirectional, safety, tracker)
+	eng.processBatch(ctx, batch2, bl, SyncBidirectional, safety)
 
 	// The second batch should have replaced the first.
 	// We can't easily verify cancellation directly, but we can verify
 	// the path is still tracked (new action replaced old one).
-	assert.True(t, tracker.HasInFlight("overlapping.txt"), "expected in-flight action for overlapping.txt after second batch")
+	assert.True(t, eng.depGraph.HasInFlight("overlapping.txt"), "expected in-flight action for overlapping.txt after second batch")
 }
 
 // TestRunWatch_DownloadOnly_SkipsLocalObserver verifies that download-only mode
@@ -2606,11 +2617,11 @@ func TestRunFullReconciliation_NoChanges(t *testing.T) {
 	bl.Put(&BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: ItemTypeFile})
 
 	safety := DefaultSafetyConfig()
-	tracker := NewDepTracker(10, testLogger(t))
+	setupWatchEngine(t, e)
 
 	// Should complete without panic; events exist but planner produces no
 	// actions because nothing is different from baseline.
-	e.runFullReconciliation(ctx, bl, SyncDownloadOnly, safety, tracker)
+	e.runFullReconciliation(ctx, bl, SyncDownloadOnly, safety)
 }
 
 // Validates: R-2.1.6
@@ -2630,10 +2641,10 @@ func TestRunFullReconciliation_DeltaError(t *testing.T) {
 	require.NoError(t, err)
 
 	safety := DefaultSafetyConfig()
-	tracker := NewDepTracker(10, testLogger(t))
+	setupWatchEngine(t, e)
 
 	// Should not panic — error is logged and function returns.
-	e.runFullReconciliation(ctx, bl, SyncDownloadOnly, safety, tracker)
+	e.runFullReconciliation(ctx, bl, SyncDownloadOnly, safety)
 }
 
 // ---------------------------------------------------------------------------
