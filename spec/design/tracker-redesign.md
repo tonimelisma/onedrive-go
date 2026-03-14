@@ -1,6 +1,6 @@
 # Scope & Tracker Redesign
 
-**Status**: Proposed
+**Status**: In Progress (Phase 4 partial — store methods, WorkerPool decoupling, engine scaffolding complete)
 **Scope**: `internal/sync/tracker.go`, `internal/sync/engine.go`, `internal/sync/scope.go`, `internal/sync/planner.go`, `internal/sync/worker.go`, `internal/sync/engine_shortcuts.go`, `internal/sync/reconciler.go`, `internal/sync/store_failures.go`, `internal/sync/store_admin.go`
 **Governs**: All files currently governed by sync-execution.md's Tracker and Executor sections
 **Continued by**: `engine-pipeline-redesign.md` (Phases 8-11 — watchState, bootstrap, async reconciliation). That document depends on this one completing through Phase 5.
@@ -829,7 +829,7 @@ Independent. Can be done first (see ordering note above).
 9. Created `ScopeBlockStore` interface + `SyncStore` implementation in `store_scope_blocks.go`
 10. Added compile-time `ScopeBlockStore` satisfaction check on `SyncStore`
 
-### Phase 4: Rewire Engine
+### Phase 4: Rewire Engine [in progress]
 
 1. Replace `tracker *DepTracker` with `depGraph *DepGraph`, `scopeGate *ScopeGate`, `readyCh chan *TrackedAction`
 2. Promote `buf` from local variable to engine field (currently local in `initWatchPipeline`, engine.go:1012; retrier in drain loop needs `e.buf.Add`)
