@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
@@ -147,7 +148,7 @@ func buildConfiguredDriveEntries(cfg *config.Config, logger *slog.Logger) []driv
 	for id := range cfg.Drives {
 		d := cfg.Drives[id]
 		state := driveStateReady
-		if d.Paused != nil && *d.Paused {
+		if d.IsPaused(time.Now()) {
 			state = driveStatePaused
 		}
 

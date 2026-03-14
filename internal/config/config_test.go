@@ -3,6 +3,7 @@ package config
 import (
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -69,6 +70,62 @@ func TestDefaultConfig_PassesValidation(t *testing.T) {
 	cfg := DefaultConfig()
 	err := Validate(cfg)
 	assert.NoError(t, err)
+}
+
+// --- IsPaused ---
+
+// Validates: R-2.6.1
+func TestDrive_IsPaused(t *testing.T) {
+	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+	future := now.Add(1 * time.Hour).Format(time.RFC3339)
+	past := now.Add(-1 * time.Hour).Format(time.RFC3339)
+	garbage := "not-a-timestamp"
+
+	boolTrue := true
+	boolFalse := false
+
+	tests := []struct {
+		name   string
+		drive  Drive
+		expect bool
+	}{
+		{
+			name:   "nil Paused → not paused",
+			drive:  Drive{},
+			expect: false,
+		},
+		{
+			name:   "explicit false → not paused",
+			drive:  Drive{Paused: &boolFalse},
+			expect: false,
+		},
+		{
+			name:   "indefinite pause (no PausedUntil) → paused",
+			drive:  Drive{Paused: &boolTrue},
+			expect: true,
+		},
+		{
+			name:   "timed pause still active (future) → paused",
+			drive:  Drive{Paused: &boolTrue, PausedUntil: &future},
+			expect: true,
+		},
+		{
+			name:   "timed pause expired (past) → not paused",
+			drive:  Drive{Paused: &boolTrue, PausedUntil: &past},
+			expect: false,
+		},
+		{
+			name:   "unparseable PausedUntil → indefinite (safe default)",
+			drive:  Drive{Paused: &boolTrue, PausedUntil: &garbage},
+			expect: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expect, tc.drive.IsPaused(now))
+		})
+	}
 }
 
 func TestConfig_EmbeddedStructPromotion(t *testing.T) {

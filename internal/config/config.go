@@ -8,6 +8,8 @@
 package config
 
 import (
+	"time"
+
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
@@ -125,6 +127,36 @@ type Drive struct {
 	SkipDirs     []string `toml:"skip_dirs,omitempty"`
 	SkipFiles    []string `toml:"skip_files,omitempty"`
 	PollInterval string   `toml:"poll_interval,omitempty"`
+}
+
+// IsPaused returns whether this drive is currently paused. This is the single
+// source of truth for pause state — all callers should use this instead of
+// checking Paused/PausedUntil fields directly.
+//
+// Logic:
+//   - Paused nil or false → not paused
+//   - Paused true, no PausedUntil → indefinitely paused
+//   - Paused true, PausedUntil in the future → timed pause still active
+//   - Paused true, PausedUntil in the past → timed pause expired → not paused
+//   - Paused true, PausedUntil unparseable → treated as indefinite (safe default)
+func (d *Drive) IsPaused(now time.Time) bool {
+	if d.Paused == nil || !*d.Paused {
+		return false
+	}
+
+	// No expiry timestamp → indefinite pause.
+	if d.PausedUntil == nil {
+		return true
+	}
+
+	until, err := time.Parse(time.RFC3339, *d.PausedUntil)
+	if err != nil {
+		// Unparseable timestamp → treat as indefinite to avoid accidentally
+		// resuming a drive with a corrupt config value.
+		return true
+	}
+
+	return now.Before(until)
 }
 
 // CLIOverrides holds values from CLI flags that override config file and

@@ -9,6 +9,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 
@@ -390,6 +391,43 @@ func ResolveDrives(cfg *Config, selectors []string, includePaused bool, logger *
 	logger.Debug("resolved drives", "count", len(resolved), "total", len(cfg.Drives))
 
 	return resolved, nil
+}
+
+// ClearExpiredPauses removes paused/paused_until keys from drives whose timed
+// pause has expired. This allows the drive to participate in the next resolve.
+// Operates on both the in-memory config (so ResolveDrives sees the change
+// immediately) and the on-disk config file (so the stale keys don't persist).
+func ClearExpiredPauses(cfgPath string, cfg *Config, now time.Time, logger *slog.Logger) {
+	for cid := range cfg.Drives {
+		d := cfg.Drives[cid]
+
+		// Skip drives that aren't paused or are still actively paused.
+		// IsPaused handles all the expiry logic — if it returns true, the
+		// pause is still valid and should not be cleared.
+		rawPaused := d.Paused != nil && *d.Paused
+		if !rawPaused || d.IsPaused(now) {
+			continue
+		}
+
+		// Timed pause has expired — clean up config file and in-memory state.
+		logger.Info("clearing expired timed pause",
+			slog.String("drive", cid.String()),
+		)
+
+		if delErr := DeleteDriveKey(cfgPath, cid, "paused"); delErr != nil {
+			logger.Warn("could not clear paused key", slog.String("error", delErr.Error()))
+		}
+
+		if delErr := DeleteDriveKey(cfgPath, cid, "paused_until"); delErr != nil {
+			logger.Warn("could not clear paused_until key", slog.String("error", delErr.Error()))
+		}
+
+		// Update in-memory config so ResolveDrives sees the unpaused state
+		// without requiring a re-load.
+		d.Paused = nil
+		d.PausedUntil = nil
+		cfg.Drives[cid] = d
+	}
 }
 
 // ResolveConfigPath determines the config file path using the three-layer

@@ -11,6 +11,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -325,9 +326,10 @@ func checkTokenState(ctx context.Context, account string, driveIDs []driveid.Can
 }
 
 // driveState returns the human-readable state for a drive based on its
-// paused flag and token status.
+// paused flag and token status. Uses IsPaused for expiry-aware pause checks —
+// expired timed pauses correctly report as "ready" rather than "paused."
 func driveState(d *config.Drive, tokenState string) string {
-	if d.Paused != nil && *d.Paused {
+	if d.IsPaused(time.Now()) {
 		return driveStatePaused
 	}
 
