@@ -539,3 +539,72 @@ func TestHashAndEmit_BaselineMatch_NoEvent(t *testing.T) {
 		// Good — no event for no-op write.
 	}
 }
+
+// ---------------------------------------------------------------------------
+// hashAndEmit case collision suppression (R-2.12.2)
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.12.2
+func TestHashAndEmit_CaseCollision_Suppressed(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	// Create two files differing only in case.
+	writeTestFile(t, dir, "Existing.txt", "content1")
+	filePath := writeTestFile(t, dir, "existing.txt", "content2")
+
+	// On case-insensitive FS, only one file exists — skip test.
+	info1, err1 := os.Lstat(filepath.Join(dir, "Existing.txt"))
+	info2, err2 := os.Lstat(filepath.Join(dir, "existing.txt"))
+	if err1 != nil || err2 != nil || os.SameFile(info1, info2) {
+		t.Skip("case-insensitive filesystem — cannot create case-colliding files")
+	}
+
+	baseline := baselineWith(&BaselineEntry{
+		Path: "existing.txt", DriveID: driveid.New("d"), ItemID: "i1",
+		ItemType: ItemTypeFile, LocalHash: hashContent(t, "old"),
+	})
+
+	mockWatcher := newMockFsWatcher()
+	obs := &LocalObserver{
+		baseline:              baseline,
+		logger:                testLogger(t),
+		writeCoalesceCooldown: 50 * time.Millisecond,
+		sleepFunc:             func(_ context.Context, _ time.Duration) error { return nil },
+		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+			return make(chan time.Time), func() {}
+		},
+		watcherFactory: func() (FsWatcher, error) {
+			return mockWatcher, nil
+		},
+		pendingTimers: make(map[string]*time.Timer),
+		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+	}
+
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, dir, events)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Send a Write event for the lowercase file.
+	mockWatcher.events <- fsnotify.Event{
+		Name: filePath, Op: fsnotify.Write,
+	}
+
+	// No event should be emitted — the case collision suppresses it.
+	select {
+	case ev := <-events:
+		t.Fatalf("expected no event due to case collision, got %+v", ev)
+	case <-time.After(500 * time.Millisecond):
+		// Good — no event emitted.
+	}
+
+	cancel()
+	<-done
+}

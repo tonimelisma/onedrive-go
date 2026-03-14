@@ -96,8 +96,9 @@ func (m *SyncStore) Load(ctx context.Context) (*Baseline, error) {
 	defer rows.Close()
 
 	b := &Baseline{
-		byPath: make(map[string]*BaselineEntry),
-		byID:   make(map[driveid.ItemKey]*BaselineEntry),
+		byPath:     make(map[string]*BaselineEntry),
+		byID:       make(map[driveid.ItemKey]*BaselineEntry),
+		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
 	}
 
 	for rows.Next() {
@@ -108,6 +109,9 @@ func (m *SyncStore) Load(ctx context.Context) (*Baseline, error) {
 
 		b.byPath[entry.Path] = entry
 		b.byID[driveid.NewItemKey(entry.DriveID, entry.ItemID)] = entry
+
+		dlk := dirLowerKeyFromPath(entry.Path)
+		b.byDirLower[dlk] = append(b.byDirLower[dlk], entry)
 	}
 
 	if err := rows.Err(); err != nil {

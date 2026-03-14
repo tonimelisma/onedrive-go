@@ -1617,7 +1617,8 @@ func TestBaseline_GetByPath(t *testing.T) {
 		byPath: map[string]*BaselineEntry{
 			"docs/readme.md": {Path: "docs/readme.md", ItemID: "item1", DriveID: driveid.New("d1")},
 		},
-		byID: make(map[driveid.ItemKey]*BaselineEntry),
+		byID:       make(map[driveid.ItemKey]*BaselineEntry),
+		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
 	}
 
 	entry, ok := b.GetByPath("docs/readme.md")
@@ -1636,8 +1637,9 @@ func TestBaseline_GetByID(t *testing.T) {
 	entry := &BaselineEntry{Path: "test.txt", ItemID: "item1", DriveID: driveID}
 
 	b := &Baseline{
-		byPath: make(map[string]*BaselineEntry),
-		byID:   map[driveid.ItemKey]*BaselineEntry{key: entry},
+		byPath:     make(map[string]*BaselineEntry),
+		byID:       map[driveid.ItemKey]*BaselineEntry{key: entry},
+		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
 	}
 
 	got, ok := b.GetByID(key)
@@ -1653,8 +1655,9 @@ func TestBaseline_Put(t *testing.T) {
 	t.Parallel()
 
 	b := &Baseline{
-		byPath: make(map[string]*BaselineEntry),
-		byID:   make(map[driveid.ItemKey]*BaselineEntry),
+		byPath:     make(map[string]*BaselineEntry),
+		byID:       make(map[driveid.ItemKey]*BaselineEntry),
+		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
 	}
 
 	entry := &BaselineEntry{
@@ -1685,8 +1688,9 @@ func TestBaseline_Put_ReplacesStaleID(t *testing.T) {
 	oldKey := driveid.NewItemKey(driveID, "old-id")
 
 	b := &Baseline{
-		byPath: map[string]*BaselineEntry{"file.txt": oldEntry},
-		byID:   map[driveid.ItemKey]*BaselineEntry{oldKey: oldEntry},
+		byPath:     map[string]*BaselineEntry{"file.txt": oldEntry},
+		byID:       map[driveid.ItemKey]*BaselineEntry{oldKey: oldEntry},
+		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
 	}
 
 	// Put a new entry at the same path but different item_id.
@@ -1718,8 +1722,9 @@ func TestBaseline_Delete(t *testing.T) {
 	key := driveid.NewItemKey(driveID, "item-del")
 
 	b := &Baseline{
-		byPath: map[string]*BaselineEntry{"delete-me.txt": entry},
-		byID:   map[driveid.ItemKey]*BaselineEntry{key: entry},
+		byPath:     map[string]*BaselineEntry{"delete-me.txt": entry},
+		byID:       map[driveid.ItemKey]*BaselineEntry{key: entry},
+		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
 	}
 
 	b.Delete("delete-me.txt")
@@ -1742,7 +1747,8 @@ func TestBaseline_Len(t *testing.T) {
 			"a.txt": {Path: "a.txt"},
 			"b.txt": {Path: "b.txt"},
 		},
-		byID: make(map[driveid.ItemKey]*BaselineEntry),
+		byID:       make(map[driveid.ItemKey]*BaselineEntry),
+		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
 	}
 
 	assert.Equal(t, 2, b.Len())
@@ -1756,7 +1762,8 @@ func TestBaseline_ForEachPath(t *testing.T) {
 			"a.txt": {Path: "a.txt", ItemID: "i1"},
 			"b.txt": {Path: "b.txt", ItemID: "i2"},
 		},
-		byID: make(map[driveid.ItemKey]*BaselineEntry),
+		byID:       make(map[driveid.ItemKey]*BaselineEntry),
+		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
 	}
 
 	paths := make(map[string]bool)
@@ -1773,8 +1780,9 @@ func TestBaseline_ConcurrentAccess(t *testing.T) {
 	t.Parallel()
 
 	b := &Baseline{
-		byPath: make(map[string]*BaselineEntry),
-		byID:   make(map[driveid.ItemKey]*BaselineEntry),
+		byPath:     make(map[string]*BaselineEntry),
+		byID:       make(map[driveid.ItemKey]*BaselineEntry),
+		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
 	}
 
 	// Seed some entries.
@@ -2764,4 +2772,139 @@ func TestEarliestSyncFailureRetryAt_PastRetry(t *testing.T) {
 	retryAt, err := mgr.EarliestSyncFailureRetryAt(ctx, now)
 	require.NoError(t, err)
 	assert.True(t, retryAt.IsZero(), "past retry should not be returned")
+}
+
+// ---------------------------------------------------------------------------
+// byDirLower index — GetCaseVariants, Put, Delete (R-2.12.1)
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.12.1
+func TestBaseline_GetCaseVariants_SameDir(t *testing.T) {
+	t.Parallel()
+
+	b := NewBaselineForTest([]*BaselineEntry{
+		{Path: "docs/File.txt", DriveID: driveid.New("d1"), ItemID: "id1"},
+		{Path: "docs/file.txt", DriveID: driveid.New("d1"), ItemID: "id2"},
+		{Path: "docs/FILE.txt", DriveID: driveid.New("d1"), ItemID: "id3"},
+	})
+
+	variants := b.GetCaseVariants("docs", "file.txt")
+	require.Len(t, variants, 3, "all three case variants should be returned")
+
+	paths := make(map[string]bool)
+	for _, v := range variants {
+		paths[v.Path] = true
+	}
+	assert.True(t, paths["docs/File.txt"])
+	assert.True(t, paths["docs/file.txt"])
+	assert.True(t, paths["docs/FILE.txt"])
+}
+
+// Validates: R-2.12.1
+func TestBaseline_GetCaseVariants_DifferentDirs(t *testing.T) {
+	t.Parallel()
+
+	b := NewBaselineForTest([]*BaselineEntry{
+		{Path: "dir1/File.txt", DriveID: driveid.New("d1"), ItemID: "id1"},
+		{Path: "dir2/file.txt", DriveID: driveid.New("d1"), ItemID: "id2"},
+	})
+
+	variants := b.GetCaseVariants("dir1", "file.txt")
+	require.Len(t, variants, 1, "different directories should not match")
+	assert.Equal(t, "dir1/File.txt", variants[0].Path)
+}
+
+// Validates: R-2.12.1
+func TestBaseline_GetCaseVariants_ExactMatch(t *testing.T) {
+	t.Parallel()
+
+	b := NewBaselineForTest([]*BaselineEntry{
+		{Path: "docs/readme.md", DriveID: driveid.New("d1"), ItemID: "id1"},
+	})
+
+	// Exact casing returns the entry itself — caller must filter for collision.
+	variants := b.GetCaseVariants("docs", "readme.md")
+	require.Len(t, variants, 1)
+	assert.Equal(t, "docs/readme.md", variants[0].Path)
+}
+
+// Validates: R-2.12.1
+func TestBaseline_GetCaseVariants_RootDir(t *testing.T) {
+	t.Parallel()
+
+	b := NewBaselineForTest([]*BaselineEntry{
+		{Path: "File.txt", DriveID: driveid.New("d1"), ItemID: "id1"},
+		{Path: "file.txt", DriveID: driveid.New("d1"), ItemID: "id2"},
+	})
+
+	variants := b.GetCaseVariants(".", "file.txt")
+	require.Len(t, variants, 2, "root-level files should match")
+}
+
+// Validates: R-2.12.1
+func TestBaseline_GetCaseVariants_Empty(t *testing.T) {
+	t.Parallel()
+
+	b := NewBaselineForTest(nil)
+
+	variants := b.GetCaseVariants("docs", "file.txt")
+	assert.Empty(t, variants)
+}
+
+// Validates: R-2.12.1
+func TestBaseline_Put_MaintainsDirLowerIndex(t *testing.T) {
+	t.Parallel()
+
+	b := NewBaselineForTest(nil)
+
+	b.Put(&BaselineEntry{Path: "docs/File.txt", DriveID: driveid.New("d1"), ItemID: "id1"})
+	b.Put(&BaselineEntry{Path: "docs/file.txt", DriveID: driveid.New("d1"), ItemID: "id2"})
+
+	variants := b.GetCaseVariants("docs", "file.txt")
+	assert.Len(t, variants, 2, "Put should maintain byDirLower index")
+}
+
+// Validates: R-2.12.1
+func TestBaseline_Put_UpdateExisting(t *testing.T) {
+	t.Parallel()
+
+	b := NewBaselineForTest(nil)
+
+	// Insert then update the same entry.
+	b.Put(&BaselineEntry{Path: "docs/File.txt", DriveID: driveid.New("d1"), ItemID: "id1", Size: 100})
+	b.Put(&BaselineEntry{Path: "docs/File.txt", DriveID: driveid.New("d1"), ItemID: "id1", Size: 200})
+
+	variants := b.GetCaseVariants("docs", "file.txt")
+	require.Len(t, variants, 1, "update should not duplicate index entry")
+	assert.Equal(t, int64(200), variants[0].Size, "entry should be updated")
+}
+
+// Validates: R-2.12.1
+func TestBaseline_Delete_MaintainsDirLowerIndex(t *testing.T) {
+	t.Parallel()
+
+	b := NewBaselineForTest([]*BaselineEntry{
+		{Path: "docs/File.txt", DriveID: driveid.New("d1"), ItemID: "id1"},
+		{Path: "docs/file.txt", DriveID: driveid.New("d1"), ItemID: "id2"},
+	})
+
+	b.Delete("docs/File.txt")
+
+	variants := b.GetCaseVariants("docs", "file.txt")
+	require.Len(t, variants, 1, "Delete should remove from byDirLower index")
+	assert.Equal(t, "docs/file.txt", variants[0].Path)
+}
+
+// Validates: R-2.12.1
+func TestBaseline_Delete_LastVariant_CleansUpKey(t *testing.T) {
+	t.Parallel()
+
+	b := NewBaselineForTest([]*BaselineEntry{
+		{Path: "docs/File.txt", DriveID: driveid.New("d1"), ItemID: "id1"},
+	})
+
+	b.Delete("docs/File.txt")
+
+	variants := b.GetCaseVariants("docs", "file.txt")
+	assert.Empty(t, variants, "deleting last variant should clean up the key")
 }
