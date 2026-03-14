@@ -131,7 +131,7 @@ func (dt *DepTracker) Add(action *Action, id int64, depIDs []int64) {
 // D-1 fix: dispatch is always called under dt.mu, preventing the data race
 // where the old Complete() called dispatch() after releasing the lock.
 func (dt *DepTracker) Complete(id int64) {
-	ready, known := dt.dg.Complete(id)
+	ready, _ := dt.dg.Complete(id)
 
 	// Route all newly-ready dependents through the scope gate under lock.
 	var anyHeld bool
@@ -151,9 +151,8 @@ func (dt *DepTracker) Complete(id int64) {
 	}
 
 	// Always increment completed — even for unknown IDs — to prevent
-	// deadlock if total was already incremented by Add. The unknown-ID
-	// warning is logged by DepGraph.Complete.
-	_ = known // DepGraph already logged the warning for unknown IDs.
+	// deadlock if total was already incremented by Add. DepGraph.Complete
+	// already logged the warning for unknown IDs.
 	newCompleted := dt.completed.Add(1)
 	if !dt.persistent && newCompleted == dt.total.Load() {
 		close(dt.done)
@@ -309,6 +308,11 @@ func (dt *DepTracker) ReleaseScope(key ScopeKey) {
 // scope key without dispatching them. Used when the scope's source is removed
 // (e.g., shortcut deleted) and held actions are no longer valid (R-2.10.38).
 // Unlike ReleaseScope, discarded actions are never dispatched to workers.
+//
+// D-3 fix: each held action is completed in the dependency graph so that
+// dependents' depsLeft is decremented and the actions/byPath maps are cleaned.
+// Newly-ready dependents are also completed without dispatch (they belong to
+// the same removed scope and would fail if dispatched).
 func (dt *DepTracker) DiscardScope(key ScopeKey) {
 	dt.mu.Lock()
 	held := dt.held[key]
@@ -323,8 +327,21 @@ func (dt *DepTracker) DiscardScope(key ScopeKey) {
 		)
 	}
 
-	for range held {
-		// Mark completed without dispatching — these actions are orphaned.
+	// D-3 fix: complete each held action in the graph to clean up maps
+	// and release dependents. Process as a queue — newly-ready dependents
+	// are appended and also completed without dispatch.
+	queue := make([]*TrackedAction, len(held))
+	copy(queue, held)
+
+	for len(queue) > 0 {
+		ta := queue[0]
+		queue = queue[1:]
+
+		// Complete in the graph — cleans actions/byPath, returns ready dependents.
+		ready, _ := dt.dg.Complete(ta.ID)
+		queue = append(queue, ready...)
+
+		// Mark completed in the tracker's lifecycle counter.
 		newCompleted := dt.completed.Add(1)
 		if !dt.persistent && newCompleted == dt.total.Load() {
 			close(dt.done)
