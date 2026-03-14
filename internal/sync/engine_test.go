@@ -3118,75 +3118,59 @@ func TestProcessTrialResult_Failure_DoublesInterval(t *testing.T) {
 	assert.Equal(t, 1, got.TrialCount, "trial count should be incremented")
 }
 
-// Validates: R-2.10.6
+// Validates: R-2.10.6, R-2.10.8, R-2.10.14 — unified cap for all scope types.
 func TestProcessTrialResult_Failure_CapsAt5m(t *testing.T) {
 	t.Parallel()
 
-	mock := &engineMockClient{}
-	eng, _ := newTestEngine(t, mock)
-
-	tracker := NewDepTracker(16, eng.logger)
-	eng.tracker = tracker
-
-	// Start with an interval that would exceed 5m when doubled.
-	block := &ScopeBlock{
-		Key:           SKQuotaOwn,
-		IssueType:     "quota_exceeded",
-		BlockedAt:     time.Now(),
-		TrialInterval: 4 * time.Minute,
-		NextTrialAt:   time.Now().Add(4 * time.Minute),
+	tests := []struct {
+		name       string
+		scopeKey   ScopeKey
+		issueType  string
+		httpStatus int
+		actionType ActionType
+	}{
+		{"quota", SKQuotaOwn, "quota_exceeded", 507, ActionUpload},
+		{"service", SKService, "service_outage", 500, ActionDownload},
+		{"throttle", SKThrottleAccount, "rate_limited", 429, ActionUpload},
 	}
-	tracker.HoldScope(SKQuotaOwn, block)
-	tracker.Add(&Action{Type: ActionUpload, Path: "big.zip", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
-	tracker.Add(&Action{Type: ActionUpload, Path: "trial.zip", DriveID: driveid.New("d"), ItemID: "i2"}, 99, nil)
 
-	eng.processTrialResult(t.Context(), &WorkerResult{
-		ActionID:      99,
-		IsTrial:       true,
-		TrialScopeKey: SKQuotaOwn,
-		Success:       false,
-		HTTPStatus:    507,
-		ErrMsg:        "quota exceeded",
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	got, ok := tracker.GetScopeBlock(SKQuotaOwn)
-	require.True(t, ok)
-	assert.Equal(t, defaultMaxTrialInterval, got.TrialInterval, "quota interval should cap at 5m")
-}
+			mock := &engineMockClient{}
+			eng, _ := newTestEngine(t, mock)
 
-// Validates: R-2.10.8
-func TestProcessTrialResult_Failure_CapsService5m(t *testing.T) {
-	t.Parallel()
+			tracker := NewDepTracker(16, eng.logger)
+			eng.tracker = tracker
 
-	mock := &engineMockClient{}
-	eng, _ := newTestEngine(t, mock)
+			// Start with an interval that would exceed 5m when doubled.
+			block := &ScopeBlock{
+				Key:           tt.scopeKey,
+				IssueType:     tt.issueType,
+				BlockedAt:     time.Now(),
+				TrialInterval: 4 * time.Minute,
+				NextTrialAt:   time.Now().Add(4 * time.Minute),
+			}
+			tracker.HoldScope(tt.scopeKey, block)
+			tracker.Add(&Action{Type: tt.actionType, Path: "held.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
+			tracker.Add(&Action{Type: tt.actionType, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i2"}, 99, nil)
 
-	tracker := NewDepTracker(16, eng.logger)
-	eng.tracker = tracker
+			eng.processTrialResult(t.Context(), &WorkerResult{
+				ActionID:      99,
+				IsTrial:       true,
+				TrialScopeKey: tt.scopeKey,
+				Success:       false,
+				HTTPStatus:    tt.httpStatus,
+				ErrMsg:        "test failure",
+			})
 
-	block := &ScopeBlock{
-		Key:           SKService,
-		IssueType:     "service_outage",
-		BlockedAt:     time.Now(),
-		TrialInterval: 4 * time.Minute,
-		NextTrialAt:   time.Now().Add(4 * time.Minute),
+			got, ok := tracker.GetScopeBlock(tt.scopeKey)
+			require.True(t, ok)
+			assert.Equal(t, defaultMaxTrialInterval, got.TrialInterval,
+				"%s interval should cap at %v", tt.name, defaultMaxTrialInterval)
+		})
 	}
-	tracker.HoldScope(SKService, block)
-	tracker.Add(&Action{Type: ActionDownload, Path: "test.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
-	tracker.Add(&Action{Type: ActionDownload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i2"}, 99, nil)
-
-	eng.processTrialResult(t.Context(), &WorkerResult{
-		ActionID:      99,
-		IsTrial:       true,
-		TrialScopeKey: SKService,
-		Success:       false,
-		HTTPStatus:    500,
-		ErrMsg:        "internal server error",
-	})
-
-	got, ok := tracker.GetScopeBlock(SKService)
-	require.True(t, ok)
-	assert.Equal(t, defaultMaxTrialInterval, got.TrialInterval, "service interval should cap at 5m")
 }
 
 // Validates: Group A — trial failure must NOT trigger scope detection.
@@ -3226,6 +3210,39 @@ func TestProcessTrialResult_Failure_NoScopeDetection(t *testing.T) {
 	require.True(t, ok, "scope block should still exist")
 	assert.Equal(t, 60*time.Second, got.TrialInterval, "interval should be doubled, not reset")
 	assert.Equal(t, 1, got.TrialCount, "trial count should be incremented by extendTrialInterval")
+}
+
+// Validates: R-2.10.14 — computeTrialInterval is the single source of truth
+// for initial intervals and backoff extensions.
+func TestComputeTrialInterval(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		retryAfter      time.Duration
+		currentInterval time.Duration
+		want            time.Duration
+	}{
+		// Retry-After: used directly, no cap (R-2.10.7).
+		{"retry-after honored", 90 * time.Second, 0, 90 * time.Second},
+		{"retry-after exceeds max", 30 * time.Minute, 0, 30 * time.Minute},
+		{"retry-after with current", 2 * time.Minute, 30 * time.Second, 2 * time.Minute},
+
+		// No Retry-After, no current: initial interval.
+		{"initial interval", 0, 0, defaultInitialTrialInterval},
+
+		// No Retry-After, with current: double + cap.
+		{"double interval", 0, 30 * time.Second, 60 * time.Second},
+		{"double caps at max", 0, 4 * time.Minute, defaultMaxTrialInterval},
+		{"already at max stays", 0, defaultMaxTrialInterval, defaultMaxTrialInterval},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := computeTrialInterval(tt.retryAfter, tt.currentInterval)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 // Validates: R-2.10.7 — Retry-After is used directly with no cap.
@@ -3389,10 +3406,10 @@ func TestApplyScopeBlock_ArmsTrialTimer(t *testing.T) {
 	// applyScopeBlock replaces the block with one that has NextTrialAt set,
 	// then calls armTrialTimer which reads EarliestTrialAt.
 	eng.applyScopeBlock(ScopeUpdateResult{
-		Block:         true,
-		ScopeKey:      SKThrottleAccount,
-		IssueType:     "rate_limited",
-		TrialInterval: 30 * time.Second,
+		Block:      true,
+		ScopeKey:   SKThrottleAccount,
+		IssueType:  "rate_limited",
+		RetryAfter: 30 * time.Second,
 	})
 
 	// Verify the block has the correct NextTrialAt from the injectable clock.
@@ -3875,10 +3892,10 @@ func TestE2E_GapFixed_TimerArmsFromAdd(t *testing.T) {
 
 	// Create scope block with short interval — held queue is EMPTY.
 	eng.applyScopeBlock(ScopeUpdateResult{
-		Block:         true,
-		ScopeKey:      SKThrottleAccount,
-		IssueType:     "rate_limited",
-		TrialInterval: 5 * time.Millisecond,
+		Block:      true,
+		ScopeKey:   SKThrottleAccount,
+		IssueType:  "rate_limited",
+		RetryAfter: 5 * time.Millisecond,
 	})
 
 	// Timer should NOT be armed (held queue empty → EarliestTrialAt returns false).
@@ -4086,61 +4103,79 @@ func TestTrialTimer_QuotaStartsAt5s(t *testing.T) {
 			require.True(t, sr.Block, "should trigger at threshold")
 			assert.Equal(t, SKQuotaOwn, sr.ScopeKey)
 			assert.Equal(t, "quota_exceeded", sr.IssueType)
-			assert.Equal(t, defaultInitialTrialInterval, sr.TrialInterval,
-				"quota initial interval should be 5 seconds")
+			assert.Zero(t, sr.RetryAfter,
+				"sliding window trigger should have zero RetryAfter")
 		}
 	}
 }
 
-// Validates: R-2.10.6
-func TestTrialTimer_QuotaBackoff_CapsAt5m(t *testing.T) {
+// Validates: R-2.10.6, R-2.10.7, R-2.10.8, R-2.10.14 — unified cap across scope types.
+func TestTrialTimer_BackoffCapsAt5m(t *testing.T) {
 	t.Parallel()
 
-	mock := &engineMockClient{}
-	eng, _ := newTestEngine(t, mock)
-
-	tracker := NewDepTracker(16, eng.logger)
-	eng.tracker = tracker
-
-	// Start at 4min — doubling gives 8min → capped to 5min.
-	block := &ScopeBlock{
-		Key:           SKQuotaOwn,
-		IssueType:     "quota_exceeded",
-		BlockedAt:     time.Now(),
-		TrialInterval: 4 * time.Minute,
-		NextTrialAt:   time.Now().Add(4 * time.Minute),
+	tests := []struct {
+		name       string
+		scopeKey   ScopeKey
+		issueType  string
+		httpStatus int
+		actionType ActionType
+	}{
+		{"quota", SKQuotaOwn, "quota_exceeded", 507, ActionUpload},
+		{"service", SKService, "service_outage", 500, ActionDownload},
+		{"throttle", SKThrottleAccount, "rate_limited", 429, ActionUpload},
 	}
-	tracker.HoldScope(SKQuotaOwn, block)
-	tracker.Add(&Action{Type: ActionUpload, Path: "big.zip", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
-	tracker.Add(&Action{Type: ActionUpload, Path: "trial1.zip", DriveID: driveid.New("d"), ItemID: "t1"}, 90, nil)
-	tracker.Add(&Action{Type: ActionUpload, Path: "trial2.zip", DriveID: driveid.New("d"), ItemID: "t2"}, 91, nil)
 
-	eng.processTrialResult(t.Context(), &WorkerResult{
-		ActionID:      90,
-		IsTrial:       true,
-		TrialScopeKey: SKQuotaOwn,
-		Success:       false,
-		HTTPStatus:    507,
-		ErrMsg:        "quota exceeded",
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	got, ok := tracker.GetScopeBlock(SKQuotaOwn)
-	require.True(t, ok)
-	assert.Equal(t, defaultMaxTrialInterval, got.TrialInterval, "should cap at 5m")
+			mock := &engineMockClient{}
+			eng, _ := newTestEngine(t, mock)
 
-	// Double again — should stay at 5m.
-	eng.processTrialResult(t.Context(), &WorkerResult{
-		ActionID:      91,
-		IsTrial:       true,
-		TrialScopeKey: SKQuotaOwn,
-		Success:       false,
-		HTTPStatus:    507,
-		ErrMsg:        "still exceeded",
-	})
+			tracker := NewDepTracker(16, eng.logger)
+			eng.tracker = tracker
 
-	got, ok = tracker.GetScopeBlock(SKQuotaOwn)
-	require.True(t, ok)
-	assert.Equal(t, defaultMaxTrialInterval, got.TrialInterval, "should remain capped at 5m")
+			// Start at 4min — doubling gives 8min → capped to 5min.
+			block := &ScopeBlock{
+				Key:           tt.scopeKey,
+				IssueType:     tt.issueType,
+				BlockedAt:     time.Now(),
+				TrialInterval: 4 * time.Minute,
+				NextTrialAt:   time.Now().Add(4 * time.Minute),
+			}
+			tracker.HoldScope(tt.scopeKey, block)
+			tracker.Add(&Action{Type: tt.actionType, Path: "held.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
+			tracker.Add(&Action{Type: tt.actionType, Path: "trial1.txt", DriveID: driveid.New("d"), ItemID: "t1"}, 90, nil)
+			tracker.Add(&Action{Type: tt.actionType, Path: "trial2.txt", DriveID: driveid.New("d"), ItemID: "t2"}, 91, nil)
+
+			eng.processTrialResult(t.Context(), &WorkerResult{
+				ActionID:      90,
+				IsTrial:       true,
+				TrialScopeKey: tt.scopeKey,
+				Success:       false,
+				HTTPStatus:    tt.httpStatus,
+				ErrMsg:        "test failure",
+			})
+
+			got, ok := tracker.GetScopeBlock(tt.scopeKey)
+			require.True(t, ok)
+			assert.Equal(t, defaultMaxTrialInterval, got.TrialInterval, "should cap at 5m")
+
+			// Double again — should stay at 5m.
+			eng.processTrialResult(t.Context(), &WorkerResult{
+				ActionID:      91,
+				IsTrial:       true,
+				TrialScopeKey: tt.scopeKey,
+				Success:       false,
+				HTTPStatus:    tt.httpStatus,
+				ErrMsg:        "still failing",
+			})
+
+			got, ok = tracker.GetScopeBlock(tt.scopeKey)
+			require.True(t, ok)
+			assert.Equal(t, defaultMaxTrialInterval, got.TrialInterval, "should remain capped at 5m")
+		})
+	}
 }
 
 // Validates: R-2.10.7
@@ -4160,8 +4195,8 @@ func TestTrialTimer_RateLimited_StartsAtRetryAfter(t *testing.T) {
 	require.True(t, sr.Block, "429 should immediately trigger block")
 	assert.Equal(t, SKThrottleAccount, sr.ScopeKey)
 	assert.Equal(t, "rate_limited", sr.IssueType)
-	assert.Equal(t, 90*time.Second, sr.TrialInterval,
-		"rate_limited initial interval should equal Retry-After")
+	assert.Equal(t, 90*time.Second, sr.RetryAfter,
+		"rate_limited RetryAfter should pass through server value")
 }
 
 // Validates: R-2.10.7
@@ -4199,41 +4234,6 @@ func TestTrialTimer_RateLimited_BlocksAllActionTypes(t *testing.T) {
 	}
 }
 
-// Validates: R-2.10.7
-func TestTrialTimer_RateLimited_CapsAt5m(t *testing.T) {
-	t.Parallel()
-
-	mock := &engineMockClient{}
-	eng, _ := newTestEngine(t, mock)
-
-	tracker := NewDepTracker(16, eng.logger)
-	eng.tracker = tracker
-
-	block := &ScopeBlock{
-		Key:           SKThrottleAccount,
-		IssueType:     "rate_limited",
-		BlockedAt:     time.Now(),
-		TrialInterval: 4 * time.Minute,
-		NextTrialAt:   time.Now().Add(4 * time.Minute),
-	}
-	tracker.HoldScope(SKThrottleAccount, block)
-	tracker.Add(&Action{Type: ActionUpload, Path: "a.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
-	tracker.Add(&Action{Type: ActionUpload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "t1"}, 99, nil)
-
-	eng.processTrialResult(t.Context(), &WorkerResult{
-		ActionID:      99,
-		IsTrial:       true,
-		TrialScopeKey: SKThrottleAccount,
-		Success:       false,
-		HTTPStatus:    429,
-		ErrMsg:        "rate limited",
-	})
-
-	got, ok := tracker.GetScopeBlock(SKThrottleAccount)
-	require.True(t, ok)
-	assert.Equal(t, defaultMaxTrialInterval, got.TrialInterval, "rate_limited should cap at 5m")
-}
-
 // Validates: R-2.10.8
 func TestTrialTimer_Service_StartsAt5s(t *testing.T) {
 	t.Parallel()
@@ -4254,8 +4254,8 @@ func TestTrialTimer_Service_StartsAt5s(t *testing.T) {
 			require.True(t, sr.Block, "should trigger at threshold")
 			assert.Equal(t, SKService, sr.ScopeKey)
 			assert.Equal(t, "service_outage", sr.IssueType)
-			assert.Equal(t, defaultInitialTrialInterval, sr.TrialInterval,
-				"service initial interval should be 5s")
+			assert.Zero(t, sr.RetryAfter,
+				"sliding window trigger should have zero RetryAfter")
 		}
 	}
 }
@@ -4277,43 +4277,8 @@ func TestTrialTimer_Service_503RetryAfterOverride(t *testing.T) {
 	require.True(t, sr.Block, "503 with Retry-After should immediately trigger block")
 	assert.Equal(t, SKService, sr.ScopeKey)
 	assert.Equal(t, "service_outage", sr.IssueType)
-	assert.Equal(t, 120*time.Second, sr.TrialInterval,
-		"503+Retry-After should use Retry-After as initial interval")
-}
-
-// Validates: R-2.10.8
-func TestTrialTimer_Service_CapsAt5m(t *testing.T) {
-	t.Parallel()
-
-	mock := &engineMockClient{}
-	eng, _ := newTestEngine(t, mock)
-
-	tracker := NewDepTracker(16, eng.logger)
-	eng.tracker = tracker
-
-	block := &ScopeBlock{
-		Key:           SKService,
-		IssueType:     "service_outage",
-		BlockedAt:     time.Now(),
-		TrialInterval: 4 * time.Minute,
-		NextTrialAt:   time.Now().Add(4 * time.Minute),
-	}
-	tracker.HoldScope(SKService, block)
-	tracker.Add(&Action{Type: ActionDownload, Path: "a.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
-	tracker.Add(&Action{Type: ActionDownload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "t1"}, 99, nil)
-
-	eng.processTrialResult(t.Context(), &WorkerResult{
-		ActionID:      99,
-		IsTrial:       true,
-		TrialScopeKey: SKService,
-		Success:       false,
-		HTTPStatus:    500,
-		ErrMsg:        "internal server error",
-	})
-
-	got, ok := tracker.GetScopeBlock(SKService)
-	require.True(t, ok)
-	assert.Equal(t, defaultMaxTrialInterval, got.TrialInterval, "service should cap at 5m")
+	assert.Equal(t, 120*time.Second, sr.RetryAfter,
+		"503+Retry-After should pass through server value")
 }
 
 // clearResolvedSkippedItems

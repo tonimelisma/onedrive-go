@@ -1325,26 +1325,16 @@ func (e *Engine) processTrialResult(ctx context.Context, r *WorkerResult) {
 }
 
 // extendTrialInterval extends the trial interval for the given scope key.
-// If retryAfter > 0, the server-provided value is used directly with no cap
-// (server is ground truth per R-2.10.7). Otherwise doubles the current
-// interval, capped at defaultMaxTrialInterval.
+// Delegates to computeTrialInterval for the actual computation — the same
+// function used by applyScopeBlock for initial intervals, ensuring a single
+// code path for the Retry-After-vs-backoff policy.
 func (e *Engine) extendTrialInterval(scopeKey ScopeKey, retryAfter time.Duration) {
 	block, ok := e.tracker.GetScopeBlock(scopeKey)
 	if !ok {
 		return // scope was released between dispatch and result
 	}
 
-	var newInterval time.Duration
-	if retryAfter > 0 {
-		// Server-provided Retry-After: honor exactly, no cap.
-		newInterval = retryAfter
-	} else {
-		// No Retry-After: exponential backoff with unified cap.
-		newInterval = block.TrialInterval * 2
-		if maxInterval := scopeKey.MaxTrialInterval(); newInterval > maxInterval {
-			newInterval = maxInterval
-		}
-	}
+	newInterval := computeTrialInterval(retryAfter, block.TrialInterval)
 
 	e.logger.Debug("trial failed — extending interval",
 		slog.String("scope_key", scopeKey.String()),
@@ -1353,6 +1343,27 @@ func (e *Engine) extendTrialInterval(scopeKey ScopeKey, retryAfter time.Duration
 
 	e.tracker.ExtendTrialInterval(scopeKey, e.nowFunc().Add(newInterval), newInterval)
 	e.armTrialTimer()
+}
+
+// computeTrialInterval is the single source of truth for trial interval
+// computation (R-2.10.14). Both initial scope block creation and subsequent
+// trial extensions use this function, preventing policy divergence.
+//
+//   - retryAfter > 0: server-provided value used directly, no cap (R-2.10.7)
+//   - retryAfter == 0, currentInterval > 0: double current, cap at defaultMaxTrialInterval
+//   - retryAfter == 0, currentInterval == 0: use defaultInitialTrialInterval
+func computeTrialInterval(retryAfter, currentInterval time.Duration) time.Duration {
+	if retryAfter > 0 {
+		return retryAfter
+	}
+	if currentInterval > 0 {
+		doubled := currentInterval * 2
+		if doubled > defaultMaxTrialInterval {
+			return defaultMaxTrialInterval
+		}
+		return doubled
+	}
+	return defaultInitialTrialInterval
 }
 
 // isObservationSuppressed returns true if a global scope block
@@ -1399,23 +1410,26 @@ func (e *Engine) feedScopeDetection(r *WorkerResult) {
 }
 
 // applyScopeBlock creates a ScopeBlock and tells the tracker to hold
-// affected actions. Logs a WARN because a scope block is a degraded-but-
-// recoverable state (R-6.6.10).
+// affected actions. Uses computeTrialInterval for the initial interval,
+// ensuring the same Retry-After-vs-backoff policy as extendTrialInterval.
+// Logs a WARN because a scope block is a degraded-but-recoverable state
+// (R-6.6.10).
 func (e *Engine) applyScopeBlock(sr ScopeUpdateResult) {
 	now := e.nowFunc()
+	interval := computeTrialInterval(sr.RetryAfter, 0)
 	block := &ScopeBlock{
 		Key:           sr.ScopeKey,
 		IssueType:     sr.IssueType,
 		BlockedAt:     now,
-		TrialInterval: sr.TrialInterval,
-		NextTrialAt:   now.Add(sr.TrialInterval),
+		TrialInterval: interval,
+		NextTrialAt:   now.Add(interval),
 	}
 	e.tracker.HoldScope(sr.ScopeKey, block)
 
 	e.logger.Warn("scope block active — actions held",
 		slog.String("scope_key", sr.ScopeKey.String()),
 		slog.String("issue_type", sr.IssueType),
-		slog.Duration("trial_interval", sr.TrialInterval),
+		slog.Duration("trial_interval", interval),
 	)
 
 	e.armTrialTimer() // arm so the first trial fires at NextTrialAt (R-2.10.5)

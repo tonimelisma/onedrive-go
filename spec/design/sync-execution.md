@@ -47,7 +47,7 @@ All scope keys are typed `ScopeKey{Kind ScopeKeyKind, Param string}` — a compa
 
 Methods on `ScopeKey` centralize logic that was previously scattered across 9+ files:
 - **`BlocksAction(path, shortcutKey, actionType, targetsOwnDrive)`** — scope-specific action blocking (used by `blockedScope()`)
-- **`MaxTrialInterval()`** — unified trial interval cap (5 minutes for all scope types; server Retry-After bypasses this cap)
+- ~~`MaxTrialInterval()`~~ — removed; interval computation centralized in `computeTrialInterval()` (engine.go)
 - **`Humanize(shortcuts)`** — user-friendly description for display
 - **`IssueType()`** — maps scope kind to `sync_failures.issue_type` constant
 - **`IsGlobal()`** — true for scopes that block ALL actions (throttle, service)

@@ -63,7 +63,7 @@ In-memory data structure in `scope.go`: sliding windows (`ScopeKey` → `sliding
 
 Implements: R-2.10.43 [verified]
 
-Scope key `SKDiskLocal` is created by `classifyResult()` when a download fails with `ErrDiskFull` (deterministic signal — immediate, no sliding window). Unlike `SKThrottleAccount` and `SKService` which block ALL actions (via `ScopeKey.IsGlobal()`), `SKDiskLocal` blocks downloads only — `ScopeKey.BlocksAction()` returns true only for `ActionDownload`. Uploads, deletes, and moves continue because they either free space or don't consume it. In `blockedScope()`, `SKDiskLocal` is checked in priority order between `SKService` and `SKQuotaOwn`. Trial timing uses unified parameters: 5-second initial interval, 2× backoff, 5-minute max cap (`ScopeKey.MaxTrialInterval()` returns `defaultMaxTrialInterval`).
+Scope key `SKDiskLocal` is created by `classifyResult()` when a download fails with `ErrDiskFull` (deterministic signal — immediate, no sliding window). Unlike `SKThrottleAccount` and `SKService` which block ALL actions (via `ScopeKey.IsGlobal()`), `SKDiskLocal` blocks downloads only — `ScopeKey.BlocksAction()` returns true only for `ActionDownload`. Uploads, deletes, and moves continue because they either free space or don't consume it. In `blockedScope()`, `SKDiskLocal` is checked in priority order between `SKService` and `SKQuotaOwn`. Trial timing uses unified parameters: 5-second initial interval, 2× backoff, 5-minute max cap (computed by `computeTrialInterval()` in engine.go).
 
 ### Scanner ScanResult Contract
 
