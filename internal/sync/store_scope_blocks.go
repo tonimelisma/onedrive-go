@@ -10,7 +10,7 @@
 // Related files:
 //   - scope_gate.go:    ScopeGate type and ScopeBlockStore interface
 //   - scope.go:         ScopeKey, ParseScopeKey, ScopeKey.String()
-//   - tracker.go:       ScopeBlock struct definition (moves here in Phase 5)
+//   - tracker.go:       ScopeBlock struct definition (moves to scope_gate.go in Phase 5)
 //   - migrations/:      00003_scope_blocks.sql creates the table
 package sync
 
