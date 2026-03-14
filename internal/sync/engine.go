@@ -182,17 +182,18 @@ func NewEngine(cfg *EngineConfig) (*Engine, error) {
 		execCfg.trashFunc = defaultTrashFunc
 	}
 
-	execCfg.minFreeSpace = cfg.MinFreeSpace
-	execCfg.diskAvailableFunc = diskAvailable
-
 	// Construct sessionStore and TransferManager together so the TM is
-	// immutable after creation (no post-hoc field mutation).
+	// immutable after creation (no post-hoc field mutation). Disk space
+	// checking is configured via WithDiskCheck so every download (sync
+	// and CLI) gets automatic protection (R-6.2.6).
 	var sessionStore *driveops.SessionStore
 	if cfg.DataDir != "" {
 		sessionStore = driveops.NewSessionStore(cfg.DataDir, cfg.Logger)
 	}
 
-	execCfg.transferMgr = driveops.NewTransferManager(cfg.Downloads, cfg.Uploads, sessionStore, cfg.Logger)
+	execCfg.transferMgr = driveops.NewTransferManager(cfg.Downloads, cfg.Uploads, sessionStore, cfg.Logger,
+		driveops.WithDiskCheck(cfg.MinFreeSpace, driveops.DiskAvailable),
+	)
 
 	// Default threshold if not set by config.
 	bdThreshold := cfg.BigDeleteThreshold
@@ -1152,11 +1153,11 @@ func classifyResult(r *WorkerResult) (resultClass, ScopeKey) {
 		r.HTTPStatus == http.StatusLocked:
 		return resultRequeue, ScopeKey{}
 
-	case errors.Is(r.Err, ErrDiskFull):
+	case errors.Is(r.Err, driveops.ErrDiskFull):
 		// Deterministic signal — immediate scope block, no sliding window (R-2.10.43).
 		return resultScopeBlock, SKDiskLocal
 
-	case errors.Is(r.Err, ErrFileTooLargeForSpace):
+	case errors.Is(r.Err, driveops.ErrFileTooLargeForSpace):
 		// Per-file failure, no scope escalation — smaller files may fit (R-2.10.44).
 		return resultSkip, ScopeKey{}
 
@@ -1584,9 +1585,9 @@ func issueTypeForHTTPStatus(httpStatus int, err error) string {
 		return "transient_not_found"
 	case httpStatus == http.StatusLocked:
 		return "resource_locked"
-	case errors.Is(err, ErrDiskFull):
+	case errors.Is(err, driveops.ErrDiskFull):
 		return IssueDiskFull
-	case errors.Is(err, ErrFileTooLargeForSpace):
+	case errors.Is(err, driveops.ErrFileTooLargeForSpace):
 		return IssueFileTooLargeForSpace
 	case errors.Is(err, os.ErrPermission):
 		return IssueLocalPermissionDenied

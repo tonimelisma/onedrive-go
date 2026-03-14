@@ -83,10 +83,23 @@ func runGet(cmd *cobra.Command, args []string) error {
 		localPath = args[1]
 	}
 
-	tm := driveops.NewTransferManager(session.Transfer, session.Transfer, nil, logger)
+	// Parse min_free_space from config for disk space pre-check (R-6.2.6).
+	// Config is validated at load time, so ParseSize won't fail here;
+	// on error we leave minFree at 0 which disables the check (safe default).
+	var minFree int64
+	if cc.Cfg != nil && cc.Cfg.MinFreeSpace != "" {
+		if parsed, parseErr := config.ParseSize(cc.Cfg.MinFreeSpace); parseErr == nil {
+			minFree = parsed
+		}
+	}
+
+	tm := driveops.NewTransferManager(session.Transfer, session.Transfer, nil, logger,
+		driveops.WithDiskCheck(minFree, driveops.DiskAvailable),
+	)
 
 	result, err := tm.DownloadToFile(ctx, session.DriveID, item.ID, localPath, driveops.DownloadOpts{
 		RemoteHash: item.QuickXorHash,
+		RemoteSize: item.Size,
 	})
 	if err != nil {
 		partialPath := localPath + ".partial"
@@ -160,8 +173,20 @@ func downloadFolder(
 		return err
 	}
 
+	// Parse min_free_space from config for disk space pre-check (R-6.2.6).
+	// Config is validated at load time, so ParseSize won't fail here;
+	// on error we leave minFree at 0 which disables the check (safe default).
+	var minFree int64
+	if cc.Cfg != nil && cc.Cfg.MinFreeSpace != "" {
+		if parsed, parseErr := config.ParseSize(cc.Cfg.MinFreeSpace); parseErr == nil {
+			minFree = parsed
+		}
+	}
+
 	store := driveops.NewSessionStore(config.DefaultDataDir(), logger)
-	tm := driveops.NewTransferManager(session.Transfer, session.Transfer, store, logger)
+	tm := driveops.NewTransferManager(session.Transfer, session.Transfer, store, logger,
+		driveops.WithDiskCheck(minFree, driveops.DiskAvailable),
+	)
 
 	// Propagate non-fatal counting errors to the result.
 	state.result.Errors = append(state.result.Errors, state.countErrors...)
@@ -276,6 +301,7 @@ func downloadRecursive(
 
 			dlResult, dlErr := tm.DownloadToFile(ctx, session.DriveID, child.ID, childLocal, driveops.DownloadOpts{
 				RemoteHash: child.QuickXorHash,
+				RemoteSize: child.Size,
 			})
 
 			state.mu.Lock()

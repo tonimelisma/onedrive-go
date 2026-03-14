@@ -113,15 +113,15 @@ The `FailureRetrier` (`reconciler.go`) is the sole retry mechanism for sync acti
 
 Pure function `computeNewStatus()` determines the new `sync_status` for a `remote_state` row based on the action outcome. Used by `CommitObservation`.
 
-## Disk Space Pre-Check (`executor_transfer.go`, `disk_unix.go`)
+## Disk Space Pre-Check
 
 Implements: R-2.10.43 [verified], R-2.10.44 [verified], R-6.2.6 [verified], R-6.4.7 [verified]
 
-Pre-check available disk space in executor before download. Two-level check:
-- **Critical**: available space < `min_free_space` → `ErrDiskFull` → `disk:local` scope block, all downloads held until space recovers. Uploads, deletes, and moves continue.
-- **Per-file**: available space ≥ `min_free_space` but < file_size + `min_free_space` → `ErrFileTooLargeForSpace` → per-file skip in `sync_failures`, no scope escalation (other smaller files can still download).
+Disk space pre-checks now live in `TransferManager.DownloadToFile` (see [drive-transfers.md](drive-transfers.md#disk-space-pre-check)), giving every download caller automatic protection. The sync engine wires the check via `driveops.WithDiskCheck(cfg.MinFreeSpace, driveops.DiskAvailable)` when constructing the TransferManager in `NewEngine`.
 
-Config wiring: `min_free_space` string (default "1GB") is parsed via `config.ParseSize()` and threaded from `ResolvedDrive` through `EngineConfig.MinFreeSpace` to `ExecutorConfig.minFreeSpace`. Zero disables the check (R-6.4.7). Disk availability uses `syscall.Statfs` via `ExecutorConfig.diskAvailableFunc` (struct field, injectable for testing — no package-level mutable state). The engine sets this to `diskAvailable` in `NewEngine`; tests inject controlled functions per-executor. `nil` skips the check. Statfs errors fail open — downloads continue rather than blocking on a transient syscall failure.
+Config wiring: `min_free_space` string (default "1GB") is parsed via `config.ParseSize()` and threaded from `ResolvedDrive` through `EngineConfig.MinFreeSpace` to `TransferManager` via `WithDiskCheck`. Zero disables the check (R-6.4.7).
+
+Scope block classification remains in the sync engine: `classifyResult` maps `driveops.ErrDiskFull` → `disk:local` scope block, `driveops.ErrFileTooLargeForSpace` → per-file skip.
 
 ## Design Constraints
 

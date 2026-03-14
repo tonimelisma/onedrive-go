@@ -3000,14 +3000,14 @@ func TestClassifyResult(t *testing.T) {
 		// Validates: R-2.10.43
 		{
 			name:      "disk_full",
-			result:    WorkerResult{Err: fmt.Errorf("download failed: %w", ErrDiskFull)},
+			result:    WorkerResult{Err: fmt.Errorf("download failed: %w", driveops.ErrDiskFull)},
 			wantClass: resultScopeBlock,
 			wantScope: SKDiskLocal,
 		},
 		// Validates: R-2.10.44
 		{
 			name:      "file_too_large_for_space",
-			result:    WorkerResult{Err: fmt.Errorf("download failed: %w", ErrFileTooLargeForSpace)},
+			result:    WorkerResult{Err: fmt.Errorf("download failed: %w", driveops.ErrFileTooLargeForSpace)},
 			wantClass: resultSkip,
 		},
 	}
@@ -3241,7 +3241,7 @@ func TestDiskLocalScopeBlock_FullCycle(t *testing.T) {
 
 	// 1. classifyResult maps ErrDiskFull to disk:local scope block.
 	class, scope := classifyResult(&WorkerResult{
-		Err: fmt.Errorf("download failed: %w", ErrDiskFull),
+		Err: fmt.Errorf("download failed: %w", driveops.ErrDiskFull),
 	})
 	require.Equal(t, resultScopeBlock, class)
 	require.Equal(t, SKDiskLocal, scope)
@@ -4548,10 +4548,10 @@ func TestIssueTypeForHTTPStatus(t *testing.T) {
 		{"423_resource_locked", http.StatusLocked, nil, "resource_locked"},
 		{"permission_error", 0, os.ErrPermission, IssueLocalPermissionDenied},
 		// Validates: R-2.10.43
-		{"disk_full", 0, ErrDiskFull, IssueDiskFull},
-		{"wrapped_disk_full", 0, fmt.Errorf("download: %w", ErrDiskFull), IssueDiskFull},
+		{"disk_full", 0, driveops.ErrDiskFull, IssueDiskFull},
+		{"wrapped_disk_full", 0, fmt.Errorf("download: %w", driveops.ErrDiskFull), IssueDiskFull},
 		// Validates: R-2.10.44
-		{"file_too_large_for_space", 0, ErrFileTooLargeForSpace, IssueFileTooLargeForSpace},
+		{"file_too_large_for_space", 0, driveops.ErrFileTooLargeForSpace, IssueFileTooLargeForSpace},
 		{"unknown_status", 418, nil, ""},
 		{"zero_status_no_error", 0, nil, ""},
 	}

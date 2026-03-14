@@ -1,8 +1,8 @@
 # Drive Transfers
 
-GOVERNS: internal/driveops/cleanup.go, internal/driveops/doc.go, internal/driveops/hash.go, internal/driveops/interfaces.go, internal/driveops/session.go, internal/driveops/session_store.go, internal/driveops/stale_partials.go, internal/driveops/transfer_manager.go, pkg/quickxorhash/quickxorhash.go, get.go, put.go
+GOVERNS: internal/driveops/cleanup.go, internal/driveops/disk_unix.go, internal/driveops/doc.go, internal/driveops/errors.go, internal/driveops/hash.go, internal/driveops/interfaces.go, internal/driveops/session.go, internal/driveops/session_store.go, internal/driveops/stale_partials.go, internal/driveops/transfer_manager.go, pkg/quickxorhash/quickxorhash.go, get.go, put.go
 
-Implements: R-5.1 [verified], R-5.2 [verified], R-5.3 [implemented], R-5.5 [verified], R-1.2 [verified], R-1.3 [verified], R-5.6 [implemented], R-5.7 [verified], R-5.8 [planned], R-6.8.3 [verified]
+Implements: R-5.1 [verified], R-5.2 [verified], R-5.3 [implemented], R-5.5 [verified], R-1.2 [verified], R-1.3 [verified], R-5.6 [implemented], R-5.7 [verified], R-5.8 [planned], R-6.8.3 [verified], R-6.2.6 [verified], R-6.4.7 [verified]
 
 ## TransferManager
 
@@ -39,6 +39,22 @@ QuickXorHash computation for local files (`hash.go`). The `pkg/quickxorhash/` pa
 ## Cleanup
 
 `cleanup.go` removes stale `.partial` files and expired upload sessions on startup. `stale_partials.go` detects orphaned partial files from interrupted downloads.
+
+## Disk Space Pre-Check
+
+Implements: R-6.2.6 [verified], R-6.4.7 [verified], R-2.10.43 [verified], R-2.10.44 [verified]
+
+`TransferManager.DownloadToFile` runs a disk space pre-check before every download — both sync engine and CLI `get` benefit automatically. Configured via `WithDiskCheck(minFreeSpace, diskAvailableFunc)` functional option at construction time. Two-tier check:
+
+- **Critical**: available space < `min_free_space` → `ErrDiskFull`. In the sync engine, this triggers a `disk:local` scope block. In CLI `get`, it simply fails the download.
+- **Per-file**: available space ≥ `min_free_space` but < file_size + `min_free_space` → `ErrFileTooLargeForSpace`. Per-file skip; other smaller files can still download.
+
+Design properties:
+- **Zero/nil disables**: `WithDiskCheck(0, fn)` or omitting the option entirely skips the check (R-6.4.7).
+- **Fail-open**: statfs errors are logged and the download proceeds — a transient syscall failure should not block all downloads.
+- **Path accuracy**: checks `filepath.Dir(targetPath)` rather than the sync root, correctly handling cross-filesystem mounts.
+- **Error sentinels** (`errors.go`): `ErrDiskFull` and `ErrFileTooLargeForSpace` are in the `driveops` package. The sync engine matches them via `errors.Is` in `classifyResult` and `issueTypeForHTTPStatus`.
+- **DiskAvailable** (`disk_unix.go`): exported function using `syscall.Statfs` — `f_bavail * f_bsize` (blocks available to unprivileged users). Build-tagged `darwin || linux`.
 
 ## Design Constraints
 

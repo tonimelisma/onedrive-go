@@ -1125,3 +1125,126 @@ func TestDownloadToFile_EmptyRemoteHash_HashVerifiedFalse(t *testing.T) {
 
 	assert.Equal(t, content, got, "file content mismatch")
 }
+
+// ---------------------------------------------------------------------------
+// Disk space pre-check tests (R-2.10.43, R-2.10.44, R-6.2.6, R-6.4.7)
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.10.43, R-2.10.44, R-6.2.6, R-6.4.7
+func TestTransferManager_DiskSpaceCheck(t *testing.T) {
+	t.Parallel()
+
+	content := []byte("disk-check-content")
+	expectedHash := tmHashBytes(content)
+
+	okDownloader := &tmSimpleDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			n, err := w.Write(content)
+			return int64(n), err
+		},
+	}
+
+	// Validates: R-2.10.43
+	t.Run("DiskFull", func(t *testing.T) {
+		t.Parallel()
+
+		tm := NewTransferManager(okDownloader, &tmMockUploader{}, nil, slog.Default(),
+			WithDiskCheck(1000, func(string) (uint64, error) { return 500, nil }),
+		)
+
+		targetPath := filepath.Join(t.TempDir(), "file.txt")
+		_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+			RemoteHash: expectedHash,
+			RemoteSize: 100,
+		})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrDiskFull)
+	})
+
+	// Validates: R-2.10.44
+	t.Run("FileTooLarge", func(t *testing.T) {
+		t.Parallel()
+
+		// available (2000) >= minFreeSpace (1000) but < fileSize (1500) + minFreeSpace (1000)
+		tm := NewTransferManager(okDownloader, &tmMockUploader{}, nil, slog.Default(),
+			WithDiskCheck(1000, func(string) (uint64, error) { return 2000, nil }),
+		)
+
+		targetPath := filepath.Join(t.TempDir(), "file.txt")
+		_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+			RemoteHash: expectedHash,
+			RemoteSize: 1500,
+		})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrFileTooLargeForSpace)
+	})
+
+	// Validates: R-6.4.7
+	t.Run("Disabled_NilFunc", func(t *testing.T) {
+		t.Parallel()
+
+		// No WithDiskCheck option → download proceeds normally.
+		tm := NewTransferManager(okDownloader, &tmMockUploader{}, nil, slog.Default())
+
+		targetPath := filepath.Join(t.TempDir(), "file.txt")
+		result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+			RemoteHash: expectedHash,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, expectedHash, result.LocalHash)
+	})
+
+	// Validates: R-6.4.7
+	t.Run("Disabled_ZeroMinFreeSpace", func(t *testing.T) {
+		t.Parallel()
+
+		// WithDiskCheck(0, fn) → download proceeds (zero disables check).
+		tm := NewTransferManager(okDownloader, &tmMockUploader{}, nil, slog.Default(),
+			WithDiskCheck(0, func(string) (uint64, error) { return 100, nil }),
+		)
+
+		targetPath := filepath.Join(t.TempDir(), "file.txt")
+		result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+			RemoteHash: expectedHash,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, expectedHash, result.LocalHash)
+	})
+
+	// Validates: R-6.2.6
+	t.Run("StatfsError_FailOpen", func(t *testing.T) {
+		t.Parallel()
+
+		// When statfs fails, the check should fail open (not block downloads).
+		tm := NewTransferManager(okDownloader, &tmMockUploader{}, nil, slog.Default(),
+			WithDiskCheck(1000, func(string) (uint64, error) {
+				return 0, fmt.Errorf("simulated statfs error")
+			}),
+		)
+
+		targetPath := filepath.Join(t.TempDir(), "file.txt")
+		result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+			RemoteHash: expectedHash,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, expectedHash, result.LocalHash)
+	})
+
+	// Validates: R-6.2.6
+	t.Run("SufficientSpace", func(t *testing.T) {
+		t.Parallel()
+
+		// available (5000) >= fileSize (2000) + minFreeSpace (1000) — download proceeds.
+		tm := NewTransferManager(okDownloader, &tmMockUploader{}, nil, slog.Default(),
+			WithDiskCheck(1000, func(string) (uint64, error) { return 5000, nil }),
+		)
+
+		targetPath := filepath.Join(t.TempDir(), "file.txt")
+		result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+			RemoteHash: expectedHash,
+			RemoteSize: 2000,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, expectedHash, result.LocalHash)
+	})
+}

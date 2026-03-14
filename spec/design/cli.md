@@ -16,7 +16,7 @@ Implements: R-6.2.8 [verified]
 |---------|------|-------------|
 | `login`, `logout`, `whoami` | `auth.go` | Authentication (device code, PKCE, token management) |
 | `ls` | `ls.go` | List remote files |
-| `get` | `get.go` | Download files (via `driveops.TransferManager`) |
+| `get` | `get.go` | Download files (via `driveops.TransferManager`, with disk space pre-check) |
 | `put` | `put.go` | Upload files (via `driveops.TransferManager`) |
 | `rm` | `rm.go` | Delete remote items (recycle bin by default) |
 | `mkdir` | `mkdir.go` | Create remote folders |
