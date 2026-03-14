@@ -268,24 +268,109 @@ ALL dependents are cascade-completed, regardless of their own scope status. A do
 
 **Fixes D-3** (no `DiscardScope` — `Complete` is the single terminal path), **D-7** (no stale dispatch — blocked actions are never dispatched), **D-8** (everything in sync_failures, crash-safe).
 
-### 3.5 Failure-Aware Dependent Dispatch
+### 3.5 Drain Loop — Actor-With-Outbox Pattern
 
-When a worker result comes back, the engine decides what to do with dependents based on the parent's outcome:
+**Deadlock proof**: A folder with 100k files produces 100k ready dependents from a single `Complete()`. The drain goroutine tries to send them to readyCh (buffer 1024). After 1024, readyCh is full. Workers drain readyCh and send results, but the drain goroutine can't read results (it's blocked on readyCh send). After ~5120 items (readyCh buffer + results buffer), workers block on results send. **Deadlock.** Any folder with more than `readyCh_buffer + results_buffer` files triggers it.
+
+**Solution**: The drain goroutine NEVER blocks on readyCh. Ready actions go to an internal outbox (slice). The drain loop's `select` interleaves outbox draining with result processing:
 
 ```go
-ready := e.depGraph.Complete(r.ActionID)
+var outbox []*TrackedAction
 
-if r.Success {
-    e.routeReadyActions(ctx, ready)
-} else {
-    // Parent failed — children would fail too (e.g., folder doesn't exist).
-    // Record each as sync_failure and complete.
+for {
+    // If outbox has items and readyCh has space, include a send case.
+    // If readyCh is full, the nil channel disables this case and the
+    // select falls through to result reading — which frees readyCh
+    // slots (workers complete → pull more from readyCh).
+    var outCh chan<- *TrackedAction
+    var outVal *TrackedAction
+    if len(outbox) > 0 {
+        outCh = e.readyCh
+        outVal = outbox[0]
+    }
+
+    select {
+    case outCh <- outVal:
+        outbox = outbox[1:]
+
+    case r, ok := <-results:
+        if !ok {
+            return
+        }
+        dispatched := e.processAndRoute(ctx, &r)
+        outbox = append(outbox, dispatched...)
+
+    case <-retryTimerCh:
+        e.runRetrierSweep(ctx)
+
+    case <-trialTimerCh:
+        e.runTrialDispatch(ctx)
+
+    case <-ctx.Done():
+        return
+    }
+}
+```
+
+**`processAndRoute`** replaces `processWorkerResult` + `routeReadyActions`. It returns actions for the outbox instead of sending to readyCh:
+
+```go
+func (e *Engine) processAndRoute(ctx context.Context, r *WorkerResult) []*TrackedAction {
+    // ... classify result, record failure/success, scope detection ...
+
+    ready := e.depGraph.Complete(r.ActionID)
+
+    if r.Success {
+        return e.admitReady(ctx, ready)
+    }
+    // Failure-aware: cascade-record children, return nothing for outbox
     for _, dep := range ready {
         e.recordCascadeFailure(ctx, &dep.Action, r)
         e.depGraph.Complete(dep.ID)
     }
+    return nil
+}
+
+func (e *Engine) admitReady(ctx context.Context, ready []*TrackedAction) []*TrackedAction {
+    var dispatch []*TrackedAction
+    for _, ta := range ready {
+        // Trial interception (trialPending is drain-goroutine-only state)
+        if entry, isTrial := e.trialPending[ta.Action.Path]; isTrial {
+            delete(e.trialPending, ta.Action.Path)
+            if entry.scopeKey.BlocksAction(ta.Action.Path,
+                ta.Action.ShortcutKey(), ta.Action.Type,
+                ta.Action.TargetsOwnDrive()) {
+                ta.IsTrial = true
+                ta.TrialScopeKey = entry.scopeKey
+                dispatch = append(dispatch, ta)
+            } else {
+                e.baseline.ClearSyncFailure(ctx, ta.Action.Path, ta.Action.DriveID)
+                // Re-planned as different type — admit normally
+                if key := e.scopeGate.Admit(ta); key.IsZero() {
+                    e.setDispatch(ctx, &ta.Action)
+                    dispatch = append(dispatch, ta)
+                }
+                e.armTrialTimer()
+            }
+            continue
+        }
+        // Normal scope admission
+        if key := e.scopeGate.Admit(ta); !key.IsZero() {
+            e.cascadeRecordAndComplete(ctx, ta, key)
+        } else {
+            e.setDispatch(ctx, &ta.Action)
+            dispatch = append(dispatch, ta)
+        }
+    }
+    return dispatch
 }
 ```
+
+**Outbox memory**: Maximum size = total ready dependents across all in-flight completions. For a 100k-file folder, the outbox grows to ~100k pointers (~800KB). This is transient — as workers drain readyCh, the outbox shrinks. The memory is equivalent to what a larger readyCh buffer would consume, but as a dynamic slice.
+
+**Main goroutine (`admitAndDispatch`)**: Called from `processBatch`. Still sends directly to readyCh (no outbox). Can block if readyCh is full. This does NOT deadlock: the drain goroutine is always making progress (outbox pattern guarantees it), workers keep draining readyCh, and the main goroutine's block resolves. The main goroutine only sends root-level actions (no dependencies) — typically a small number per batch.
+
+### 3.6 Failure-Aware Dependent Dispatch
 
 **`recordCascadeFailure` specification:**
 
@@ -319,7 +404,7 @@ The parent has its own sync_failure entry (from `processWorkerResult`). The chil
 
 This prevents N children each making doomed API calls when a folder create fails.
 
-### 3.6 Scope Clear — No Inline Re-Observation
+### 3.7 Scope Clear — No Inline Re-Observation
 
 When a trial succeeds, `onScopeClear` does NOT re-observe items inline. Inline re-observation would block the drain loop (100k GetItem calls = minutes of stall) and could re-trigger the rate limit that just cleared. Instead, it makes the sync_failures retryable and lets the retrier handle re-processing at its own pace:
 
@@ -538,36 +623,32 @@ case <-trialTimerCh:
     e.armTrialTimer()
 ```
 
-**Stage 2: Fresh action arrives at `routeReadyActions`.** Intercept, validate, mark as trial.
+**Stage 2: Fresh action arrives at `admitReady` (via drain loop outbox).**
 
-**Goroutine separation**: `routeReadyActions` accesses the `trialPending` map. It is called from the drain goroutine (`processWorkerResult` → `Complete` → dependents). The main goroutine (`processBatch` → `Add` → ready action) must NOT call `routeReadyActions` — it would create a data race on `trialPending`. The main goroutine calls `admitAndDispatch` instead, which does scope admission without trial interception. `trialPending` is drain-goroutine-only state.
+The trial's re-observed event goes through the buffer → planner → `depGraph.Add` (main goroutine) → `admitAndDispatch`. `admitAndDispatch` sends the action to readyCh. The drain goroutine's outbox pattern (section 3.5) pulls it from there... wait, no — `admitAndDispatch` is on the main goroutine, which sends directly to readyCh. The drain goroutine's `processAndRoute` → `admitReady` handles trial interception when dependents become ready.
+
+Actually, the trial flow is: trial timer fires (drain goroutine) → `reobserve` → `buf.Add(ev)` → buffer → planner → `processBatch` (main goroutine) → `depGraph.Add` → ready action → `admitAndDispatch` → readyCh. The main goroutine doesn't check `trialPending` — it just sends to readyCh.
+
+The drain goroutine's `admitReady` (section 3.5) checks `trialPending` when processing worker result dependents. But the trial action doesn't arrive as a dependent — it arrives as a new action from the planner.
+
+**Resolution**: The trial action arrives at `admitAndDispatch` on the main goroutine. `admitAndDispatch` must also check `trialPending` for trial interception. But `trialPending` is drain-goroutine state — accessing it from the main goroutine is a data race.
+
+**Fix**: `trialPending` is protected by a mutex (not goroutine-scoped). Both goroutines can read/write it safely:
 
 ```go
 // admitAndDispatch — called by main goroutine (processBatch, executePlan).
-// No trial interception. No trialPending access. Safe for main goroutine.
+// Checks trialPending (mutex-protected) for trial interception.
 func (e *Engine) admitAndDispatch(ctx context.Context, ready []*TrackedAction) {
-    anyHeld := false
     for _, ta := range ready {
-        if key := e.scopeGate.Admit(ta); !key.IsZero() {
-            e.cascadeRecordAndComplete(ctx, ta, key)
-            anyHeld = true
-        } else {
-            e.readyCh <- ta
-        }
-    }
-    if anyHeld {
-        e.armTrialTimer()
-    }
-}
-
-// routeReadyActions — called by drain goroutine (processWorkerResult) ONLY.
-// Includes trial interception via trialPending map. NOT safe for main goroutine.
-func (e *Engine) routeReadyActions(ctx context.Context, ready []*TrackedAction) {
-    anyHeld := false
-    for _, ta := range ready {
-        if entry, isTrial := e.trialPending[ta.Action.Path]; isTrial {
+        // Trial interception — mutex-protected, safe from any goroutine
+        e.trialMu.Lock()
+        entry, isTrial := e.trialPending[ta.Action.Path]
+        if isTrial {
             delete(e.trialPending, ta.Action.Path)
-            // Verify the re-planned action tests the blocked scope
+        }
+        e.trialMu.Unlock()
+
+        if isTrial {
             if entry.scopeKey.BlocksAction(ta.Action.Path,
                 ta.Action.ShortcutKey(), ta.Action.Type,
                 ta.Action.TargetsOwnDrive()) {
@@ -575,11 +656,9 @@ func (e *Engine) routeReadyActions(ctx context.Context, ready []*TrackedAction) 
                 ta.TrialScopeKey = entry.scopeKey
                 e.readyCh <- ta // bypass scope gate
             } else {
-                // Re-planned as different type — doesn't test scope.
-                // Clear stale sync_failure, re-arm to try next candidate.
                 e.baseline.ClearSyncFailure(ctx, ta.Action.Path, ta.Action.DriveID)
-                // Admit normally (won't be blocked — wrong type for scope)
                 if key := e.scopeGate.Admit(ta); key.IsZero() {
+                    e.setDispatch(ctx, &ta.Action)
                     e.readyCh <- ta
                 }
                 e.armTrialTimer()
@@ -587,19 +666,19 @@ func (e *Engine) routeReadyActions(ctx context.Context, ready []*TrackedAction) 
             continue
         }
 
-        // Normal admission (same as admitAndDispatch)
+        // Normal scope admission
         if key := e.scopeGate.Admit(ta); !key.IsZero() {
             e.cascadeRecordAndComplete(ctx, ta, key)
-            anyHeld = true
+            e.armTrialTimer()
         } else {
+            e.setDispatch(ctx, &ta.Action)
             e.readyCh <- ta
         }
     }
-    if anyHeld {
-        e.armTrialTimer()
-    }
 }
 ```
+
+`admitReady` (drain goroutine, section 3.5) does the same `trialPending` check with the same mutex. Both goroutines are safe.
 
 **Stage 3: Worker executes trial.** Unchanged from current design:
 - Success → `onScopeClear(key)` → `SetScopeRetryAtNow` → retrier picks up remaining items
@@ -823,8 +902,8 @@ Independent. Can be done first (see ordering note above).
 **Risk**: Scope-blocked sync_failures accumulate if scope block is never cleared (API permanently broken).
 **Mitigation**: Scope blocks have trial intervals that cap at 5 minutes. Trials continue indefinitely. If the API never recovers, the items sit in sync_failures and are visible to the user via `onedrive issues`. This is correct behavior — the system reports the problem and keeps trying.
 
-**Risk**: `routeReadyActions` blocking on `readyCh` could block the drain loop.
-**Resolution**: Blocking is self-resolving backpressure, not a deadlock. Workers drain readyCh, freeing space. The drain goroutine stalls temporarily but resumes. Deadlock requires `results buffer (4096) + readyCh buffer (1024)` to be exhausted by concurrent completions — but with 8 workers, at most 8 results queue during a stall. 8 << 5120. **Invariant**: `results buffer + readyCh buffer >> transferWorkers`. Current values provide massive headroom. No code change needed.
+**Risk**: Drain goroutine blocking on `readyCh` deadlocks the system.
+**Resolution**: Actor-with-outbox pattern (section 3.5). The drain goroutine NEVER blocks on readyCh. Ready actions go to an internal outbox slice. The drain loop's `select` interleaves outbox draining with result processing. If readyCh is full, the select falls through to result reading, which frees readyCh slots. Deadlock is eliminated by construction. The main goroutine's `admitAndDispatch` still sends directly to readyCh and can block — this does NOT deadlock because the drain goroutine always makes progress (outbox pattern guarantees it).
 
 **Risk**: Retrier batch size for scope clears.
 **Resolution**: `retryBatchSize = 1024` (readyCh buffer size). Each sweep fills readyCh. Workers drain at their pace. When `len(rows) == retryBatchSize`, the retrier signals its channel immediately (non-blocking send to buffered(1) `retryTimerCh`) — the next drain loop select iteration processes another batch, interleaved with worker results and trial timers. Workers are never idle. Recovery pace is worker-throughput-limited, not retrier-limited.
