@@ -1308,7 +1308,7 @@ func (e *Engine) processTrialResult(ctx context.Context, r *WorkerResult) {
 	// Trial failure: extend interval. Scope detection is NOT called — the scope
 	// is already blocked, and re-detecting would overwrite the doubled interval
 	// with a fresh initial interval from applyScopeBlock (A2 bug prevention).
-	e.extendTrialInterval(r.TrialScopeKey)
+	e.extendTrialInterval(r.TrialScopeKey, r.RetryAfter)
 
 	var delayFn func(int) time.Duration
 	if class == resultRequeue || class == resultScopeBlock {
@@ -1324,19 +1324,26 @@ func (e *Engine) processTrialResult(ctx context.Context, r *WorkerResult) {
 	}
 }
 
-// extendTrialInterval doubles the trial interval for the given scope key,
-// capped at the per-scope-type maximum. Sets NextTrialAt and re-arms the
-// trial timer.
-func (e *Engine) extendTrialInterval(scopeKey ScopeKey) {
+// extendTrialInterval extends the trial interval for the given scope key.
+// If retryAfter > 0, the server-provided value is used directly with no cap
+// (server is ground truth per R-2.10.7). Otherwise doubles the current
+// interval, capped at defaultMaxTrialInterval.
+func (e *Engine) extendTrialInterval(scopeKey ScopeKey, retryAfter time.Duration) {
 	block, ok := e.tracker.GetScopeBlock(scopeKey)
 	if !ok {
 		return // scope was released between dispatch and result
 	}
 
-	newInterval := block.TrialInterval * 2
-	maxInterval := scopeKey.MaxTrialInterval()
-	if newInterval > maxInterval {
-		newInterval = maxInterval
+	var newInterval time.Duration
+	if retryAfter > 0 {
+		// Server-provided Retry-After: honor exactly, no cap.
+		newInterval = retryAfter
+	} else {
+		// No Retry-After: exponential backoff with unified cap.
+		newInterval = block.TrialInterval * 2
+		if maxInterval := scopeKey.MaxTrialInterval(); newInterval > maxInterval {
+			newInterval = maxInterval
+		}
 	}
 
 	e.logger.Debug("trial failed — extending interval",

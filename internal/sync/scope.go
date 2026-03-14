@@ -11,10 +11,9 @@
 //   - quota:own (507, own-drive) — 3 unique paths in 10s
 //   - quota:shortcut:$key (507, shortcut) — 3 unique paths in 10s
 //
-// Trial timing constants (R-2.10.6, R-2.10.7, R-2.10.8, R-2.10.14):
-//   - rate_limited: starts at Retry-After, 2× backoff, max 10min
-//   - quota_exceeded: 5min start, 2× backoff, max 1h
-//   - service_outage: 60s start (or Retry-After), 2× backoff, max 10min
+// Trial timing (R-2.10.6, R-2.10.7, R-2.10.8, R-2.10.14):
+//   - Unified: 5s initial, 2× backoff, 5min max cap
+//   - Retry-After from server: used directly, no cap (server is ground truth)
 package sync
 
 import (
@@ -165,19 +164,11 @@ func (sk ScopeKey) IssueType() string {
 	}
 }
 
-// MaxTrialInterval returns the per-scope-type maximum trial interval cap
-// (R-2.10.6, R-2.10.8, R-2.10.14, R-2.10.43).
+// MaxTrialInterval returns the unified maximum trial interval cap
+// (R-2.10.6, R-2.10.8, R-2.10.14, R-2.10.43). All scope types share the
+// same cap. Server-provided Retry-After values bypass this cap.
 func (sk ScopeKey) MaxTrialInterval() time.Duration {
-	switch sk.Kind { //nolint:exhaustive // ScopePermDir has no trials; default handles unknown kinds
-	case ScopeQuotaOwn, ScopeQuotaShortcut, ScopeDiskLocal:
-		return quotaMaxTrialInterval
-	case ScopeThrottleAccount:
-		return rateLimitMaxTrialInterval
-	case ScopeService:
-		return serviceMaxTrialInterval
-	default:
-		return serviceMaxTrialInterval // safe default
-	}
+	return defaultMaxTrialInterval
 }
 
 // Humanize translates a scope key to a user-friendly description (R-2.10.22).
@@ -262,16 +253,12 @@ const (
 	serviceWindowDuration  = 30 * time.Second
 )
 
-// Trial timing constants per scope type.
-// Initial intervals and max caps per R-2.10.6/R-2.10.7/R-2.10.8/R-2.10.14.
+// Unified trial timing constants (R-2.10.6, R-2.10.7, R-2.10.8, R-2.10.14).
+// All scope types share the same initial interval and cap. Server-provided
+// Retry-After values bypass the cap entirely (server is ground truth).
 const (
-	quotaInitialInterval   = 5 * time.Minute
-	serviceInitialInterval = 60 * time.Second
-
-	// Per-scope-type maximum trial intervals (R-2.10.6, R-2.10.8, R-2.10.14).
-	quotaMaxTrialInterval     = 1 * time.Hour
-	serviceMaxTrialInterval   = 10 * time.Minute
-	rateLimitMaxTrialInterval = 10 * time.Minute
+	defaultInitialTrialInterval = 5 * time.Second
+	defaultMaxTrialInterval     = 5 * time.Minute
 )
 
 // ScopeState maintains sliding windows for scope escalation detection and
@@ -318,7 +305,7 @@ func (ss *ScopeState) UpdateScope(r *WorkerResult) ScopeUpdateResult {
 		// Immediate block — server signal, single response triggers (R-2.10.26).
 		interval := r.RetryAfter
 		if interval <= 0 {
-			interval = serviceInitialInterval // fallback
+			interval = defaultInitialTrialInterval // fallback
 		}
 		return ScopeUpdateResult{
 			Block:         true,
@@ -339,14 +326,14 @@ func (ss *ScopeState) UpdateScope(r *WorkerResult) ScopeUpdateResult {
 	case r.HTTPStatus == http.StatusInsufficientStorage:
 		// Quota failure — scope depends on target drive (R-2.10.1, R-2.10.17).
 		sk := ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)
-		return ss.checkWindow(sk, r.Path, quotaWindowThreshold, quotaWindowDuration, IssueQuotaExceeded, quotaInitialInterval)
+		return ss.checkWindow(sk, r.Path, quotaWindowThreshold, quotaWindowDuration, IssueQuotaExceeded, defaultInitialTrialInterval)
 
 	case r.HTTPStatus >= http.StatusInternalServerError:
 		// Service error — feed into service sliding window (R-2.10.28, R-2.10.29).
 		sk := ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)
 		return ss.checkWindow(sk, r.Path,
 			serviceWindowThreshold, serviceWindowDuration,
-			IssueServiceOutage, serviceInitialInterval)
+			IssueServiceOutage, defaultInitialTrialInterval)
 
 	default:
 		return ScopeUpdateResult{}
@@ -358,7 +345,7 @@ func (ss *ScopeState) UpdateScope(r *WorkerResult) ScopeUpdateResult {
 // outage patterns are classified as resultRequeue (not resultScopeBlock)
 // by classifyResult but still need to feed scope detection.
 func (ss *ScopeState) UpdateScopeOutagePattern(path string) ScopeUpdateResult {
-	return ss.checkWindow(SKService, path, serviceWindowThreshold, serviceWindowDuration, IssueServiceOutage, serviceInitialInterval)
+	return ss.checkWindow(SKService, path, serviceWindowThreshold, serviceWindowDuration, IssueServiceOutage, defaultInitialTrialInterval)
 }
 
 // RecordSuccess resets the sliding window for scopes relevant to the
