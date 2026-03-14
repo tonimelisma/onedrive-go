@@ -36,6 +36,7 @@ var (
 	_ StateReader         = (*SyncStore)(nil)
 	_ StateAdmin          = (*SyncStore)(nil)
 	_ SyncFailureRecorder = (*SyncStore)(nil)
+	_ ScopeBlockStore     = (*SyncStore)(nil)
 )
 
 // SyncStore is the sole writer to the sync database. It loads the

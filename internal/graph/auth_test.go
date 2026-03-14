@@ -507,6 +507,10 @@ func TestDoLogin_DeviceAuthError(t *testing.T) {
 }
 
 func TestSaveToken_CreateTempError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root bypasses permission checks")
+	}
+
 	tmpDir := t.TempDir()
 	tokDir := filepath.Join(tmpDir, "tokens")
 	require.NoError(t, os.MkdirAll(tokDir, tokenfile.DirPerms))

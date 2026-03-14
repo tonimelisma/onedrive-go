@@ -51,6 +51,47 @@ Implements: R-6.8.7 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.1
 - **`blockedScope()` dispatch via `ScopeKey.BlocksAction()`**: Fixed-key scopes are checked in priority order (throttle, service, disk, quota:own), then dynamic-key scopes (shortcut quota, perm:dir) via O(n) scan. Each check delegates to `ScopeKey.BlocksAction(path, shortcutKey, actionType, targetsOwnDrive)` — scope-specific blocking logic lives on the `ScopeKey` type, not in the tracker. Adding a new scope kind requires implementing `BlocksAction` for that kind.
 - The tracker does NOT handle retry. All retry is via `sync_failures` + `FailureRetrier` (R-6.8.10). The engine calls `Complete` on every result; failed items are recorded in `sync_failures` with `next_retry_at`, and the `FailureRetrier` re-injects them via buffer → planner → tracker.
 
+## ScopeGate (`scope_gate.go`)
+
+Scope-based admission control with persistent scope blocks. No held queue, no dependency awareness, no channels. Extracted from DepTracker in Phase 3 of the tracker redesign.
+
+- **`Admit(ta) ScopeKey`**: Check if an action matches any active scope block. Returns blocking key or zero. Priority-ordered: global scopes (throttle, service) first, then narrow scopes (disk, quota), then dynamic-key scopes (shortcut quota, perm:dir). Same logic as `DepTracker.blockedScope()`.
+- **`SetScopeBlock(ctx, key, block) error`**: Write-through: persist to `scope_blocks` table first, then update in-memory map. On store error, memory unchanged.
+- **`ClearScopeBlock(ctx, key) error`**: Delete from store first, then memory.
+- **`IsScopeBlocked(key) bool`**: Simple map lookup.
+- **`GetScopeBlock(key) (ScopeBlock, bool)`**: Returns a value copy (not pointer) to prevent unsynchronized mutation.
+- **`ExtendTrialInterval(ctx, key, nextAt, interval) error`**: Update + persist. Increments `TrialCount`.
+- **`NextDueTrial(now) (ScopeKey, time.Time, bool)`**: Returns the first scope block whose trial is due. **No held-queue check** — any block with non-zero `NextTrialAt` is eligible. The engine uses `PickTrialCandidate` from `sync_failures` to find actual items.
+- **`EarliestTrialAt() (time.Time, bool)`**: Earliest `NextTrialAt` across all blocks. **No held-queue check**.
+- **`ScopeBlockKeys() []ScopeKey`**: All active scope block keys.
+- **`LoadFromStore(ctx) error`**: Startup: load all `scope_blocks` rows into memory. Replaces existing state.
+
+### Persisted Scope Blocks (`scope_blocks` table)
+
+Scope blocks survive crashes. The `scope_blocks` table is the source of truth; the in-memory map is a write-through cache. Typically 0-5 rows.
+
+```sql
+CREATE TABLE scope_blocks (
+    scope_key      TEXT PRIMARY KEY,
+    issue_type     TEXT NOT NULL,
+    blocked_at     INTEGER NOT NULL,     -- unix nanos
+    trial_interval INTEGER NOT NULL,     -- nanoseconds
+    next_trial_at  INTEGER NOT NULL,     -- unix nanos
+    trial_count    INTEGER NOT NULL DEFAULT 0
+);
+```
+
+No FK between `scope_blocks` and `sync_failures` — intentional. `sync_failures` rows must survive `scope_blocks` deletion (`onScopeClear` queries them AFTER deleting the scope block).
+
+### ScopeBlockStore Interface
+
+`ScopeBlockStore` is the persistence interface consumed by `ScopeGate`. Implemented by `SyncStore` in `store_scope_blocks.go`:
+- `UpsertScopeBlock(ctx, block) error` — INSERT OR REPLACE
+- `DeleteScopeBlock(ctx, key) error` — DELETE WHERE
+- `ListScopeBlocks(ctx) ([]*ScopeBlock, error)` — SELECT all rows
+
+Fixes D-2 (no `onHeld` callback, no cross-lock paths), D-8 (scope blocks persisted, survive crash).
+
 ## Scope Detection (`scope.go`)
 
 Implements: R-2.10.3 [verified], R-2.10.26 [verified], R-2.10.42 [verified]

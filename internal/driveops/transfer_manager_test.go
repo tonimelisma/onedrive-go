@@ -925,6 +925,10 @@ func TestDownloadToFile_RenameFailure_PreservesPartial(t *testing.T) {
 func TestSessionUpload_SaveFailure_StillCompletes(t *testing.T) {
 	t.Parallel()
 
+	if os.Getuid() == 0 {
+		t.Skip("root bypasses permission checks")
+	}
+
 	dir := t.TempDir()
 	store := NewSessionStore(dir, slog.Default())
 

@@ -175,7 +175,7 @@ func countResults(results []WorkerResult) (succeeded, failed int) {
 			failed++
 		}
 	}
-	return
+	return succeeded, failed
 }
 
 // ---------------------------------------------------------------------------

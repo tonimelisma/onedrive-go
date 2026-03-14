@@ -816,16 +816,18 @@ Independent. Can be done first (see ordering note above).
 8. 14 tests in `dep_graph_test.go`, 12 pure graph tests removed from `tracker_test.go`
 9. `DepTracker` external API unchanged — no changes needed in engine, worker, or other callers
 
-### Phase 3: Extract ScopeGate + Persist Scope Blocks
+### Phase 3: Extract ScopeGate + Persist Scope Blocks [done]
 
-1. Create `scope_gate.go` with `ScopeGate` type (no held queue)
-2. Create `scope_blocks` table (migration in `migrations.go`)
-3. Move from `tracker.go`: `HoldScope` → `SetScopeBlock` (persists), `blockedScope` → `Admit`, scope block methods
-4. Remove: `ReleaseScope`, `DiscardScope`, `DispatchTrial`, `PopTrial` (all depended on held queue)
-5. Remove: `held map[ScopeKey][]*TrackedAction`, `onHeld func()`
-6. Add: `IsScopeBlocked`, `LoadFromStore`
-7. `NextDueTrial` / `EarliestTrialAt` — remove held-queue-length checks
-8. Unit tests in `scope_gate_test.go`
+1. Created `scope_gate.go` with `ScopeGate` type (no held queue)
+2. Created `scope_blocks` table (migration `00003_scope_blocks.sql`)
+3. Extracted from `tracker.go`: `HoldScope` → `SetScopeBlock` (persists), `blockedScope` → `Admit`, scope block methods
+4. Phase 4 will remove from tracker: `ReleaseScope`, `DiscardScope`, `DispatchTrial` (all depend on held queue)
+5. Phase 4 will remove from tracker: `held map[ScopeKey][]*TrackedAction`, `onHeld func()`
+6. Added: `IsScopeBlocked`, `LoadFromStore`, `ClearScopeBlock`
+7. `NextDueTrial` / `EarliestTrialAt` — no held-queue-length checks (key behavioral change)
+8. Unit tests in `scope_gate_test.go`, store tests in `store_scope_blocks_test.go`
+9. Created `ScopeBlockStore` interface + `SyncStore` implementation in `store_scope_blocks.go`
+10. Added compile-time `ScopeBlockStore` satisfaction check on `SyncStore`
 
 ### Phase 4: Rewire Engine
 
