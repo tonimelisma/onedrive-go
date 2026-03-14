@@ -608,3 +608,70 @@ func TestHashAndEmit_CaseCollision_Suppressed(t *testing.T) {
 	cancel()
 	<-done
 }
+
+// Validates: R-2.12.2 — platform-independent hashAndEmit collision test.
+// Uses pre-populated dirNameCache instead of relying on filesystem case sensitivity.
+func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	// Create a single file — the collision is injected via the cache.
+	writeTestFile(t, dir, "existing.txt", "content")
+
+	mockWatcher := newMockFsWatcher()
+	obs := &LocalObserver{
+		baseline:       emptyBaseline(),
+		logger:         testLogger(t),
+		collisionPeers: make(map[string]map[string]struct{}),
+		// Pre-populate dirNameCache with a different-cased entry.
+		// This simulates a collision without requiring a case-sensitive FS.
+		dirNameCache: map[string]map[string][]string{
+			dir: {
+				"existing.txt": {"existing.txt", "Existing.txt"},
+			},
+		},
+		writeCoalesceCooldown: 50 * time.Millisecond,
+		sleepFunc: func(_ context.Context, _ time.Duration) error {
+			return nil
+		},
+		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+			return make(chan time.Time), func() {}
+		},
+		watcherFactory: func() (FsWatcher, error) {
+			return mockWatcher, nil
+		},
+		pendingTimers: make(map[string]*time.Timer),
+		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+	}
+
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, dir, events)
+	}()
+
+	// Wait for watcher setup.
+	time.Sleep(100 * time.Millisecond)
+
+	// Send a Write event for "existing.txt" — hashAndEmit should detect
+	// the collision via the pre-populated cache and suppress the event.
+	mockWatcher.events <- fsnotify.Event{
+		Name: filepath.Join(dir, "existing.txt"),
+		Op:   fsnotify.Write,
+	}
+
+	// Wait for write coalesce cooldown + processing.
+	select {
+	case ev := <-events:
+		t.Fatalf("expected no event (collision via cached lookup), got %+v", ev)
+	case <-time.After(500 * time.Millisecond):
+		// Good — no event emitted.
+	}
+
+	cancel()
+	<-done
+}
