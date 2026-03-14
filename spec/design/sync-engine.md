@@ -34,22 +34,26 @@ Classification uses `ScopeKeyForStatus(httpStatus, shortcutKey)` as the single s
 
 Implements: R-2.10.3 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [verified], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified]
 
-`processWorkerResult()` classifies each result and routes it — all cases call `tracker.Complete()` (never `ReQueue`):
+`processWorkerResult()` classifies each result and routes it — all cases call `depGraph.Complete()`:
 
 - **success** → `Complete` + `RecordSuccess` (scope window reset) + counter + defensive `ClearSyncFailure` (belt-and-suspenders with `CommitOutcome`)
-- **requeue** (transient) → `recordFailure` with `retry.Reconcile.Delay` + `Complete` + `feedScopeDetection` + `retrier.Kick()`
-- **scopeBlock** (429, 507) → `recordFailure` with `retry.Reconcile.Delay` + `feedScopeDetection` + `Complete` + `armTrialTimer()` (belt-and-suspenders) + `retrier.Kick()`
+- **requeue** (transient) → `recordFailure` with `retry.Reconcile.Delay` + `Complete` + `feedScopeDetection` + arm retry timer
+- **scopeBlock** (429, 507) → `recordFailure` with `retry.Reconcile.Delay` + `feedScopeDetection` + `Complete` + `armTrialTimer()` (belt-and-suspenders)
 - **skip** (non-retryable) → handle403 side effect + `recordFailure` with nil delayFn (no `next_retry_at`) + `Complete`
 - **shutdown** → `Complete` (no failure recorded)
 - **fatal** (401) → `recordFailure` with nil delayFn + `Complete`
 
-Trial result routing: `processTrialResult()` handles all trial outcomes with an early return — trial results never enter the normal `processWorkerResult()` switch. The `TrialScopeKey ScopeKey` from `WorkerResult` identifies the scope. Trial success → `tracker.ReleaseScope(scopeKey)` + `resetScopeRetryTimes(scopeKey, now)` (thundering herd: resets `next_retry_at` for all sync_failures matching the scope, then kicks the retrier) + `armTrialTimer()`. Trial failure → `extendTrialInterval(scopeKey)` reads block's current `TrialInterval` via `tracker.GetScopeBlock(scopeKey)` (value copy), doubles it, caps per scope type via `ScopeKey.MaxTrialInterval()` (replaces the old `maxTrialIntervalForIssueType` function), calls `tracker.ExtendTrialInterval(scopeKey, nextAt, newInterval)` (encapsulates mutation under lock). Scope detection is intentionally NOT called for trial failures — the scope is already blocked, and re-detecting would overwrite the doubled interval. Per-scope caps: quota 1h, rate_limited 10m, service 10m (R-2.10.6/R-2.10.8/R-2.10.14).
+Scope-blocked actions are not held in memory. Instead, `processWorkerResult` records the failure in `sync_failures` and calls `depGraph.Complete()`. When the scope clears, `onScopeClear` resets `next_retry_at` for matching `sync_failures` rows, and the drain-loop retrier re-injects them via buffer, planner, and DepGraph.
 
-**Trial timer**: `armTrialTimer()` uses `time.AfterFunc` to send to a persistent `trialCh` channel when the earliest `NextTrialAt` across all scope blocks is reached (via `tracker.EarliestTrialAt()`). Using a persistent channel avoids a race where `onHeld` (called from external goroutines via `tracker.Add`) replaces the timer while the drain loop's select watches the old timer's channel. The `trialCh` fires in `drainWorkerResults`'s select loop, calling `tracker.NextDueTrial(now)` + `tracker.DispatchTrial(key)` in a loop until no more trials are due. Called after `applyScopeBlock()`, `processTrialResult()`, trial dispatch, and via the `onHeld` callback when actions enter held queues. Belt-and-suspenders: `armTrialTimer()` is also called after `tracker.Complete` in the `resultScopeBlock` case to catch dependents that entered held.
+Trial result routing: `processTrialResult()` handles all trial outcomes with an early return — trial results never enter the normal `processWorkerResult()` switch. The `TrialScopeKey ScopeKey` from `WorkerResult` identifies the scope. Trial success → `onScopeClear(scopeKey)` (`ClearScopeBlock` + `SetScopeRetryAtNow` + arm retry timer) + `armTrialTimer()`. Trial failure → `extendTrialInterval(scopeKey)` reads block's current `TrialInterval` via `scopeGate.GetScopeBlock(scopeKey)` (value copy), doubles it, caps per scope type via `computeTrialInterval()`, calls `scopeGate.ExtendTrialInterval(scopeKey, nextAt, newInterval)`. Scope detection is intentionally NOT called for trial failures — the scope is already blocked, and re-detecting would overwrite the doubled interval. Per-scope caps: quota 1h, rate_limited 10m, service 10m (R-2.10.6/R-2.10.8/R-2.10.14).
 
-`feedScopeDetection()` feeds results into `ScopeState.UpdateScope()`. When a threshold is crossed, creates a scope block via `applyScopeBlock()` which calls `tracker.HoldScope()` + `armTrialTimer()`.
+**Trial dispatch**: `runTrialDispatch()` is called from the drain loop's select when the trial timer fires. Uses `scopeGate.NextDueTrial(now)` to find due scope blocks, then `PickTrialCandidate` from `sync_failures` to find an actual item for re-observation and dispatch. Trial actions are marked `IsTrial=true` with `TrialScopeKey` set. `armTrialTimer()` uses `time.AfterFunc` to send to a persistent `trialCh` channel when the earliest `NextTrialAt` across all scope blocks is reached (via `scopeGate.EarliestTrialAt()`). Called after `applyScopeBlock()`, `processTrialResult()`, and trial dispatch.
 
-The engine owns all completion decisions — workers are pure executors. Engine-owned counters (`succeeded`, `failed` atomics) replace the worker-owned counters removed in this refactoring. `drainWorkerResults()` processes results concurrently for both one-shot and watch modes.
+**Drain-loop retrier**: Retry is integrated directly into the drain loop via `runRetrierSweep()` — no separate goroutine. The drain loop's select includes a retry timer that triggers sweeps of `sync_failures` for items whose `next_retry_at` has expired. Each sweep is batch-limited with zero-delay re-arm when the batch is full. Items are checked via `isFailureResolved()` before re-injection (D-11 fix: prevents re-dispatching items whose underlying condition has resolved). Re-injection uses `createEventFromDB` (full `remote_state` for downloads, `observeLocal` for uploads) to feed items through the normal buffer, planner, and DepGraph pipeline.
+
+`feedScopeDetection()` feeds results into `ScopeState.UpdateScope()`. When a threshold is crossed, creates a scope block via `applyScopeBlock()` which calls `scopeGate.SetScopeBlock()` + `armTrialTimer()`.
+
+The engine owns all completion decisions — workers are pure executors. The drain loop uses an actor-with-outbox pattern: results are processed single-threaded within the drain goroutine, and ready actions are collected into an outbox slice before being sent to the `readyCh` channel. This prevents deadlock that would occur if the drain loop tried to send to a full `readyCh` while workers tried to send to a full `resultCh`. Engine-owned counters (`succeeded`, `failed` atomics) track progress. `drainWorkerResults()` processes results for both one-shot and watch modes.
 
 `recordFailure()` sets category based on `delayFn`: non-nil → `"transient"`, nil → `"actionable"`. Populates `scope_key` via `ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)` — returns a typed `ScopeKey`, serialized to wire format via `String()` for SQLite storage. Delegates to `SyncStore.RecordFailure()` which computes `next_retry_at` via the `delayFn`. The drain-loop retrier sweeps `sync_failures` for due items and re-injects them via buffer → planner → DepGraph.
 
@@ -57,7 +61,7 @@ The engine owns all completion decisions — workers are pure executors. Engine-
 
 Implements: R-2.10.35 [verified], R-2.10.36 [verified], R-2.10.37 [verified]
 
-In-memory data structure in `scope.go`: sliding windows (`ScopeKey` → `slidingWindow`) for scope escalation detection. All keys are typed `ScopeKey` structs (see sync-execution.md § ScopeKey Type System). Engine-internal — no cross-engine coordination (each engine discovers independently). Scope blocks are stored in the tracker's `scopeBlocks map[ScopeKey]*ScopeBlock` and enforce held queuing.
+In-memory data structure in `scope.go`: sliding windows (`ScopeKey` → `slidingWindow`) for scope escalation detection. All keys are typed `ScopeKey` structs (see sync-execution.md § ScopeKey Type System). Engine-internal — no cross-engine coordination (each engine discovers independently). Scope blocks are managed by `ScopeGate` with write-through persistence to the `scope_blocks` table.
 
 ### `disk:local` Scope Block
 
@@ -100,7 +104,7 @@ Observation suppression (`isObservationSuppressed()`) suppresses the entire `pro
 
 **Trial path separation**: `processWorkerResult()` checks `IsTrial` and returns early via `processTrialResult()` — trial results never enter the normal switch. This eliminates the prior fragile pattern where trial failures fell through into the normal result switch and required `maybeFeedScopeDetection` guards. `processTrialResult()` handles all trial outcomes self-contained: success releases the scope, failure extends the interval via `extendTrialInterval()`, and scope detection is never called (the scope is already blocked).
 
-**External perm:dir clearance**: `handleExternalChanges()` checks whether `local_permission_denied` failures were cleared via CLI (`issues clear`). Iterates `tracker.ScopeBlockKeys()`, filters via `ScopeKey.IsPermDir()`, and releases cleared blocks via `tracker.ReleaseScope()`.
+**External perm:dir clearance**: `handleExternalChanges()` checks whether `local_permission_denied` failures were cleared via CLI (`issues clear`). Iterates `scopeGate.ScopeBlockKeys()`, filters via `ScopeKey.IsPermDir()`, and releases cleared blocks via `onScopeClear()`.
 
 **Watch mode summary**: `logWatchSummary()` logs a periodic one-liner at the recheck interval (10s) showing actionable issue counts by type. Only logs when the count changes to avoid noisy output.
 
