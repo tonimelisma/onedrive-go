@@ -804,13 +804,17 @@ Independent. Can be done first (see ordering note above).
 5. Update requirements: R-2.10.6, R-2.10.7, R-2.10.8, R-2.10.14
 6. Update design docs: sync-execution.md, sync-engine.md
 
-### Phase 2: Extract DepGraph
+### Phase 2: Extract DepGraph [done]
 
-1. Create `dep_graph.go` with `DepGraph` type
-2. Move from `tracker.go`: `Add` (modified to return `*TrackedAction`), `Complete` (modified to return `[]*TrackedAction`), `HasInFlight`, `CancelByPath`, `InFlightCount`, `Done`
-3. Fix: `Complete` must `delete(dt.actions, id)` (currently missing — D-10)
-4. Move `TrackedAction` struct
-5. Unit tests in `dep_graph_test.go`
+1. Created `dep_graph.go` with `DepGraph` type — pure dependency graph, no channels, no callbacks, no scope awareness
+2. Moved `TrackedAction` struct to `dep_graph.go`
+3. `DepGraph.Add()` returns `*TrackedAction` if immediately ready, nil if waiting
+4. `DepGraph.Complete()` returns `([]*TrackedAction, bool)` — newly-ready dependents + known flag
+5. Fixed D-10: `Complete` now deletes from both `actions` AND `byPath` maps
+6. Fixed D-1: `DepTracker.dispatch()` always called under `dt.mu` (Add, Complete, ReleaseScope)
+7. `DepTracker` wraps `*DepGraph` via composition, delegates graph ops, adds scope gating
+8. 14 tests in `dep_graph_test.go`, 12 pure graph tests removed from `tracker_test.go`
+9. `DepTracker` external API unchanged — no changes needed in engine, worker, or other callers
 
 ### Phase 3: Extract ScopeGate + Persist Scope Blocks
 

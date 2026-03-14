@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"log/slog"
 	stdsync "sync"
 	"sync/atomic"
@@ -10,16 +9,15 @@ import (
 
 // Package-level API documentation for tracker.go (B-145):
 //
-// DepTracker is an in-memory dependency graph + scope-aware dispatch gate
-// that dispatches sync actions to a single ready channel as their
-// dependencies are satisfied. It bridges the planner's ActionPlan and the
-// WorkerPool:
+// DepTracker is a scope-aware dispatch gate that wraps a DepGraph (pure
+// dependency graph) and dispatches sync actions to a single ready channel.
+// It bridges the planner's ActionPlan and the WorkerPool:
 //
-//   - Add(): Insert an action with its sequential ID and dependency IDs.
-//     If all deps are satisfied, the action is dispatched immediately.
-//   - Complete(): Mark an action done, decrement dependents' counters,
-//     and dispatch any dependents that become ready.
-//   - HasInFlight() / CancelByPath(): Deduplication for watch mode (B-122).
+//   - Add(): Insert an action into the dependency graph. If immediately
+//     ready, route through the scope gate and dispatch.
+//   - Complete(): Mark an action done in the graph, then route any
+//     newly-ready dependents through the scope gate.
+//   - HasInFlight() / CancelByPath(): Delegated to DepGraph (B-122).
 //   - Ready(): Single channel consumed by WorkerPool.
 //
 // The tracker does NOT handle retry. All retry is via sync_failures +
@@ -34,39 +32,16 @@ import (
 // Large enough to absorb typical watch batches without blocking dispatch.
 const watchChanBuf = 1024
 
-// TrackedAction pairs an Action with an ID and a per-action cancel function.
-// Workers pull TrackedActions from the ready channel. The ID is a sequential
-// counter (assigned by the engine) used as a unique key for the tracker's
-// internal maps.
-type TrackedAction struct {
-	Action Action
-	ID     int64
-	Cancel context.CancelFunc
-
-	// IsTrial marks this action as a scope trial — a real action dispatched
-	// from the held queue to test whether a blocked scope has recovered (R-2.10.5).
-	IsTrial bool
-
-	// TrialScopeKey identifies which scope this trial is testing. Set by
-	// DispatchTrial, propagated through WorkerResult so the engine knows
-	// which scope to release on trial success.
-	TrialScopeKey ScopeKey
-
-	depsLeft   atomic.Int32
-	dependents []*TrackedAction
-}
-
-// DepTracker is an in-memory dependency graph that dispatches actions to a
-// single ready channel as their dependencies are satisfied. It is populated
-// from the planner's ActionPlan and driven to completion by worker
-// Complete() calls.
+// DepTracker wraps a DepGraph with scope-based admission control and channel
+// dispatch. The DepGraph handles pure dependency resolution (no channels, no
+// callbacks, no scope awareness). DepTracker adds scope gating, held queues,
+// trial dispatch, and the ready channel.
 //
-// The tracker is a pure dispatch gate — dependency graph + scope blocks.
+// The tracker is a dispatch gate — dependency graph + scope blocks.
 // Retry is handled entirely by sync_failures + FailureRetrier (R-6.8.10).
 type DepTracker struct {
 	mu         stdsync.Mutex
-	actions    map[int64]*TrackedAction // sequential ID → tracked action
-	byPath     map[string]*TrackedAction
+	dg         *DepGraph // pure dependency graph — no channels, no scope awareness
 	ready      chan *TrackedAction
 	done       chan struct{} // closed when all actions complete (one-shot mode only)
 	total      atomic.Int32
@@ -94,8 +69,7 @@ type DepTracker struct {
 // buffer size.
 func NewDepTracker(bufSize int, logger *slog.Logger) *DepTracker {
 	return &DepTracker{
-		actions:     make(map[int64]*TrackedAction),
-		byPath:      make(map[string]*TrackedAction),
+		dg:          NewDepGraph(logger),
 		ready:       make(chan *TrackedAction, bufSize),
 		done:        make(chan struct{}),
 		logger:      logger,
@@ -109,8 +83,7 @@ func NewDepTracker(bufSize int, logger *slog.Logger) *DepTracker {
 // instead.
 func NewPersistentDepTracker(logger *slog.Logger) *DepTracker {
 	return &DepTracker{
-		actions:     make(map[int64]*TrackedAction),
-		byPath:      make(map[string]*TrackedAction),
+		dg:          NewDepGraph(logger),
 		ready:       make(chan *TrackedAction, watchChanBuf),
 		done:        make(chan struct{}),
 		persistent:  true,
@@ -120,43 +93,27 @@ func NewPersistentDepTracker(logger *slog.Logger) *DepTracker {
 	}
 }
 
-// Add inserts an action into the tracker. If all dependencies are already
-// satisfied (depIDs is empty or all deps already completed), the action is
-// dispatched immediately. Otherwise it waits until Complete() decrements
-// its depsLeft to zero.
+// Add inserts an action into the dependency graph. If all dependencies are
+// already satisfied, the action is routed through the scope gate and
+// dispatched. Otherwise it waits until Complete() decrements its depsLeft
+// to zero.
+//
+// D-1 fix: dispatch is always called under dt.mu, preventing the data race
+// where dispatch() reads scopeBlocks/held without synchronization.
 func (dt *DepTracker) Add(action *Action, id int64, depIDs []int64) {
-	ta := &TrackedAction{
-		Action: *action,
-		ID:     id,
+	ta := dt.dg.Add(action, id, depIDs)
+	dt.total.Add(1)
+
+	if ta == nil {
+		// Action is waiting on dependencies — nothing to dispatch yet.
+		return
 	}
 
+	// Action is immediately ready — route through scope gate under lock.
 	var wasHeld bool
 
 	dt.mu.Lock()
-
-	dt.actions[id] = ta
-	dt.byPath[action.Path] = ta
-	dt.total.Add(1)
-
-	var depsRemaining int32
-
-	for _, depID := range depIDs {
-		dep, ok := dt.actions[depID]
-		if !ok {
-			// Dependency not tracked (already completed or unknown) — skip.
-			continue
-		}
-
-		dep.dependents = append(dep.dependents, ta)
-		depsRemaining++
-	}
-
-	ta.depsLeft.Store(depsRemaining)
-
-	if depsRemaining == 0 {
-		wasHeld = dt.dispatch(ta)
-	}
-
+	wasHeld = dt.dispatch(ta)
 	dt.mu.Unlock()
 
 	if wasHeld && dt.onHeld != nil {
@@ -164,56 +121,39 @@ func (dt *DepTracker) Add(action *Action, id int64, depIDs []int64) {
 	}
 }
 
-// Complete marks an action as done and decrements the depsLeft counter on
-// all dependents. Any dependent that reaches zero is dispatched. When all
-// actions are complete (one-shot mode only), the done channel is closed.
+// Complete marks an action as done in the dependency graph and dispatches
+// any newly-ready dependents through the scope gate. When all actions are
+// complete (one-shot mode only), the done channel is closed.
 //
-// If id is unknown (not in the tracker), the completed counter is still
-// incremented to prevent deadlock, and a warning is logged. This should
-// never happen in normal operation but guards against subtle bugs in
-// tracker population.
+// If id is unknown (not in the graph), the completed counter is still
+// incremented to prevent deadlock, and a warning is logged.
+//
+// D-1 fix: dispatch is always called under dt.mu, preventing the data race
+// where the old Complete() called dispatch() after releasing the lock.
 func (dt *DepTracker) Complete(id int64) {
-	dt.mu.Lock()
-	ta, ok := dt.actions[id]
-	if !ok {
-		dt.mu.Unlock()
-		dt.logger.Warn("tracker: Complete called with unknown ID",
-			slog.Int64("id", id),
-		)
+	ready, known := dt.dg.Complete(id)
 
-		if !dt.persistent && dt.completed.Add(1) == dt.total.Load() {
-			close(dt.done)
-		}
-
-		return
-	}
-
-	// Copy dependents under the lock to prevent races with Add() appending
-	// to the same slice in watch mode (overlapping passes).
-	dependents := make([]*TrackedAction, len(ta.dependents))
-	copy(dependents, ta.dependents)
-
-	// Clean up byPath so long-lived trackers (watch mode) don't cancel
-	// the wrong action if the same path appears in a subsequent pass.
-	delete(dt.byPath, ta.Action.Path)
-	dt.mu.Unlock()
-
+	// Route all newly-ready dependents through the scope gate under lock.
 	var anyHeld bool
 
-	for _, dep := range dependents {
-		if dep.depsLeft.Add(-1) == 0 {
+	if len(ready) > 0 {
+		dt.mu.Lock()
+		for _, dep := range ready {
 			if dt.dispatch(dep) {
 				anyHeld = true
 			}
 		}
+		dt.mu.Unlock()
 	}
 
 	if anyHeld && dt.onHeld != nil {
 		dt.onHeld()
 	}
 
-	// In persistent mode, the global done channel never fires — workers
-	// exit via context cancellation instead.
+	// Always increment completed — even for unknown IDs — to prevent
+	// deadlock if total was already incremented by Add. The unknown-ID
+	// warning is logged by DepGraph.Complete.
+	_ = known // DepGraph already logged the warning for unknown IDs.
 	newCompleted := dt.completed.Add(1)
 	if !dt.persistent && newCompleted == dt.total.Load() {
 		close(dt.done)
@@ -221,33 +161,21 @@ func (dt *DepTracker) Complete(id int64) {
 }
 
 // HasInFlight returns true if the given path has an in-flight action
-// tracked by the tracker (B-122). Thread-safe.
+// tracked by the graph (B-122). Thread-safe.
 func (dt *DepTracker) HasInFlight(path string) bool {
-	dt.mu.Lock()
-	defer dt.mu.Unlock()
-
-	_, ok := dt.byPath[path]
-	return ok
+	return dt.dg.HasInFlight(path)
 }
 
 // CancelByPath cancels the in-flight action for the given path, if any.
-// Removes the byPath entry so long-lived trackers don't cancel the wrong
-// action if the same path is re-added in a subsequent pass.
+// Delegates to DepGraph which removes the byPath entry so long-lived
+// trackers don't cancel the wrong action if the same path is re-added.
 func (dt *DepTracker) CancelByPath(path string) {
-	dt.mu.Lock()
-	ta, ok := dt.byPath[path]
-	if ok {
-		delete(dt.byPath, path)
-	}
-	dt.mu.Unlock()
-
-	if ok && ta.Cancel != nil {
-		ta.Cancel()
-	}
+	dt.dg.CancelByPath(path)
 }
 
 // InFlightCount returns the number of actions currently in the tracker that
-// have not yet completed. Used for shutdown logging.
+// have not yet completed. Uses the tracker's own total/completed atomics
+// because DiscardScope increments completed without graph knowledge.
 func (dt *DepTracker) InFlightCount() int {
 	return int(dt.total.Load() - dt.completed.Load())
 }
@@ -267,8 +195,11 @@ func (dt *DepTracker) Done() <-chan struct{} {
 // dispatch routes a ready action through the scope gate before sending it
 // to the ready channel. Returns true if the action was diverted to a held
 // queue (scope blocked). Callers use the return value to fire onHeld
-// outside the lock. This is the central dispatch point — called by Add,
-// Complete (for dependents), and ReleaseScope.
+// outside the lock.
+//
+// MUST be called under dt.mu — reads scopeBlocks and writes held maps.
+// This is the central dispatch point — called by Add, Complete (for
+// dependents), and ReleaseScope.
 func (dt *DepTracker) dispatch(ta *TrackedAction) bool {
 	// Scope block — prevent wasted requests to blocked scopes.
 	// An action matching a blocked scope goes to the held queue instead.
@@ -344,13 +275,13 @@ func (dt *DepTracker) HoldScope(key ScopeKey, block *ScopeBlock) {
 }
 
 // ReleaseScope clears a scope block and dispatches all held actions for
-// that scope key (R-2.10.11, R-2.10.27).
+// that scope key through the scope gate (R-2.10.11, R-2.10.27). Released
+// actions may be re-held if another scope blocks them.
 func (dt *DepTracker) ReleaseScope(key ScopeKey) {
 	dt.mu.Lock()
 	held := dt.held[key]
 	delete(dt.held, key)
 	delete(dt.scopeBlocks, key)
-	dt.mu.Unlock()
 
 	if len(held) > 0 {
 		dt.logger.Info("tracker: scope released, dispatching held actions",
@@ -366,6 +297,8 @@ func (dt *DepTracker) ReleaseScope(key ScopeKey) {
 			anyHeld = true
 		}
 	}
+
+	dt.mu.Unlock()
 
 	if anyHeld && dt.onHeld != nil {
 		dt.onHeld()
