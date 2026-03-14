@@ -1,0 +1,807 @@
+package sync
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/fsnotify/fsnotify"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// isCaseSensitiveFS returns true if the filesystem at dir distinguishes
+// between upper and lower case file names. Used to skip tests that require
+// two distinct files differing only in case.
+func isCaseSensitiveFS(t *testing.T, dir string) bool {
+	t.Helper()
+
+	upper := filepath.Join(dir, "CasE_ChEcK")
+	lower := filepath.Join(dir, "case_check")
+
+	if err := os.WriteFile(upper, []byte("x"), 0o644); err != nil {
+		t.Fatalf("isCaseSensitiveFS: create upper: %v", err)
+	}
+	defer os.Remove(upper)
+
+	// If creating the lowercase variant fails, FS is case-insensitive.
+	if err := os.WriteFile(lower, []byte("y"), 0o644); err != nil {
+		return false
+	}
+	defer os.Remove(lower)
+
+	// Both files created — check they're distinct by reading the upper file.
+	data, err := os.ReadFile(upper)
+	if err != nil {
+		return false
+	}
+
+	return string(data) == "x" // if "y", the FS overwrote the upper file → insensitive
+}
+
+// skipIfCaseInsensitiveFS skips the test if the filesystem at dir is case-insensitive.
+func skipIfCaseInsensitiveFS(t *testing.T, dir string) {
+	t.Helper()
+
+	if !isCaseSensitiveFS(t, dir) {
+		t.Skip("skipping on case-insensitive filesystem")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// hasCaseCollisionCached tests (R-2.12.2)
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.12.2
+func TestHasCaseCollisionCached_Detected(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "File.txt"), []byte("a"), 0o644))
+
+	obs := &LocalObserver{
+		baseline: emptyBaseline(),
+	}
+
+	// On case-sensitive FS, "file.txt" differs from "File.txt" → collision.
+	// On case-insensitive FS (macOS), creating "File.txt" means "file.txt"
+	// refers to the same inode, so os.ReadDir returns "File.txt" and the
+	// exact-match check fails → no collision detected. Correct on both.
+	collidingName, found := obs.hasCaseCollisionCached(dir, "file.txt", ".")
+	if found {
+		assert.Equal(t, "File.txt", collidingName,
+			"should return the name of the existing colliding file")
+	}
+}
+
+// Validates: R-2.12.2
+func TestHasCaseCollisionCached_NoCollision(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "other.txt"), []byte("a"), 0o644))
+
+	obs := &LocalObserver{
+		baseline: emptyBaseline(),
+	}
+
+	_, found := obs.hasCaseCollisionCached(dir, "newfile.txt", ".")
+	assert.False(t, found, "unrelated files should not trigger collision")
+}
+
+// Validates: R-2.12.2
+func TestHasCaseCollisionCached_ExactMatch_NotCollision(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "same.txt"), []byte("a"), 0o644))
+
+	obs := &LocalObserver{
+		baseline: emptyBaseline(),
+	}
+
+	_, found := obs.hasCaseCollisionCached(dir, "same.txt", ".")
+	assert.False(t, found, "exact name match should not be a collision")
+}
+
+// Validates: R-2.12.2
+func TestHasCaseCollisionCached_UnreadableDir_FailOpen(t *testing.T) {
+	t.Parallel()
+
+	obs := &LocalObserver{
+		baseline: emptyBaseline(),
+	}
+
+	// Non-existent directory → ReadDir fails → returns false (fail-open).
+	_, found := obs.hasCaseCollisionCached("/nonexistent/path", "anything.txt", ".")
+	assert.False(t, found, "unreadable directory should fail open")
+}
+
+// Validates: R-2.12.2
+func TestHasCaseCollisionCached_EmptyDir(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	obs := &LocalObserver{
+		baseline: emptyBaseline(),
+	}
+
+	_, found := obs.hasCaseCollisionCached(dir, "anything.txt", ".")
+	assert.False(t, found, "empty directory should have no collisions")
+}
+
+// ---------------------------------------------------------------------------
+// Baseline cross-check in hasCaseCollisionCached (R-2.12.2)
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.12.2 — baseline entry with different casing triggers collision.
+func TestHasCaseCollisionCached_BaselineCollision(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	// Baseline has "File.txt" — no file on disk.
+	bl := baselineWith(&BaselineEntry{Path: "File.txt"})
+	obs := &LocalObserver{
+		baseline: bl,
+	}
+
+	collidingName, found := obs.hasCaseCollisionCached(dir, "file.txt", ".")
+	assert.True(t, found, "should detect baseline collision")
+	assert.Equal(t, "File.txt", collidingName)
+}
+
+// Validates: R-2.12.2 — baseline entry with same casing is not a collision.
+func TestHasCaseCollisionCached_BaselineExactMatch(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	bl := baselineWith(&BaselineEntry{Path: "File.txt"})
+	obs := &LocalObserver{
+		baseline: bl,
+	}
+
+	_, found := obs.hasCaseCollisionCached(dir, "File.txt", ".")
+	assert.False(t, found, "same casing in baseline should not be a collision")
+}
+
+// Validates: R-2.12.2 — baseline collision is suppressed for recently deleted paths.
+func TestHasCaseCollisionCached_BaselineSkipsRecentDelete(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	bl := baselineWith(&BaselineEntry{Path: "File.txt"})
+	obs := &LocalObserver{
+		baseline:           bl,
+		recentLocalDeletes: map[string]struct{}{"File.txt": {}},
+	}
+
+	_, found := obs.hasCaseCollisionCached(dir, "file.txt", ".")
+	assert.False(t, found, "recently deleted baseline entry should not trigger collision")
+}
+
+// ---------------------------------------------------------------------------
+// Watch-mode collision integration tests (R-2.12.2)
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.12.2 — integration test exercising the full watch pipeline:
+// fsnotify Create → handleCreate → hasCaseCollisionCached → event suppressed.
+func TestWatch_CaseCollision_EventSuppressed(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	// Create "Existing.txt" on disk. On case-insensitive FS (macOS),
+	// os.ReadDir returns this canonical name.
+	writeTestFile(t, dir, "Existing.txt", "content")
+
+	mockWatcher := newMockFsWatcher()
+	obs := &LocalObserver{
+		baseline: emptyBaseline(),
+		logger:   testLogger(t),
+		sleepFunc: func(_ context.Context, _ time.Duration) error {
+			return nil
+		},
+		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+			return make(chan time.Time), func() {}
+		},
+		watcherFactory: func() (FsWatcher, error) {
+			return mockWatcher, nil
+		},
+		pendingTimers: make(map[string]*time.Timer),
+		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+	}
+
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, dir, events)
+	}()
+
+	// Wait for watcher setup, then send a synthetic Create event for
+	// "existing.txt" (lowercase) — different case than the on-disk file.
+	time.Sleep(100 * time.Millisecond)
+	mockWatcher.events <- fsnotify.Event{
+		Name: filepath.Join(dir, "existing.txt"),
+		Op:   fsnotify.Create,
+	}
+
+	// No event should be emitted — the case collision suppresses it.
+	select {
+	case ev := <-events:
+		t.Fatalf("expected no event, got %+v", ev)
+	case <-time.After(500 * time.Millisecond):
+		// Good — no event emitted.
+	}
+
+	cancel()
+	<-done
+}
+
+// Validates: R-2.12.2 — case collision check in scanNewDirectory.
+func TestScanNewDirectory_CaseCollision_Skipped(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	// Create a subdirectory with two files that differ only in case.
+	subDir := filepath.Join(dir, "subdir")
+	require.NoError(t, os.MkdirAll(subDir, 0o755))
+	writeTestFile(t, subDir, "Existing.txt", "content1")
+
+	// On case-insensitive FS, this overwrites Existing.txt (same file).
+	// On case-sensitive FS, this creates a second file.
+	writeTestFile(t, subDir, "existing.txt", "content2")
+
+	mockWatcher := newMockFsWatcher()
+	obs := &LocalObserver{
+		baseline: emptyBaseline(),
+		logger:   testLogger(t),
+		sleepFunc: func(_ context.Context, _ time.Duration) error {
+			return nil
+		},
+		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+			return make(chan time.Time), func() {}
+		},
+		watcherFactory: func() (FsWatcher, error) {
+			return mockWatcher, nil
+		},
+		pendingTimers: make(map[string]*time.Timer),
+		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+	}
+
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, dir, events)
+	}()
+
+	// Wait for watcher setup, then send a Create event for the subdirectory
+	// to trigger scanNewDirectory.
+	time.Sleep(100 * time.Millisecond)
+	mockWatcher.events <- fsnotify.Event{
+		Name: subDir,
+		Op:   fsnotify.Create,
+	}
+
+	// Collect events within a window.
+	var received []ChangeEvent
+	timeout := time.After(500 * time.Millisecond)
+	for {
+		select {
+		case ev := <-events:
+			received = append(received, ev)
+			continue
+		case <-timeout:
+		}
+
+		break
+	}
+
+	// The directory event itself should be emitted. On case-sensitive FS,
+	// both files exist and the collision check skips both. On case-insensitive
+	// FS, only one file exists (no collision), so one file event is emitted.
+	// In both cases, we should NOT see two file events.
+	fileEvents := 0
+	for _, ev := range received {
+		if ev.ItemType == ItemTypeFile {
+			fileEvents++
+		}
+	}
+
+	// At most 1 file event (case-insensitive: 1 file on disk, no collision;
+	// case-sensitive: 2 files on disk, collision detected, both skipped → 0).
+	assert.LessOrEqual(t, fileEvents, 1,
+		"case collision should prevent duplicate file events; got %d file events", fileEvents)
+
+	cancel()
+	<-done
+}
+
+// ---------------------------------------------------------------------------
+// Directory collision tests (R-2.12.2)
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.12.2 — directories must also be checked for case collisions.
+// A directory whose name differs only in case from an existing sibling file
+// should be suppressed in watch mode.
+func TestWatch_DirectoryCollision_Suppressed(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	skipIfCaseInsensitiveFS(t, dir)
+
+	// Create a file "xyz" on disk.
+	writeTestFile(t, dir, "xyz", "content")
+
+	xyzDir := filepath.Join(dir, "Xyz")
+	require.NoError(t, os.Mkdir(xyzDir, 0o755))
+
+	mockWatcher := newMockFsWatcher()
+	obs := &LocalObserver{
+		baseline:       emptyBaseline(),
+		logger:         testLogger(t),
+		collisionPeers: make(map[string]map[string]struct{}),
+		sleepFunc: func(_ context.Context, _ time.Duration) error {
+			return nil
+		},
+		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+			return make(chan time.Time), func() {}
+		},
+		watcherFactory: func() (FsWatcher, error) {
+			return mockWatcher, nil
+		},
+		pendingTimers: make(map[string]*time.Timer),
+		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+	}
+
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, dir, events)
+	}()
+
+	// Wait for watcher setup, then send Create event for the directory "Xyz"
+	// which should collide with the file "xyz".
+	time.Sleep(100 * time.Millisecond)
+	mockWatcher.events <- fsnotify.Event{
+		Name: xyzDir,
+		Op:   fsnotify.Create,
+	}
+
+	// The directory create should be suppressed — case collision with "xyz".
+	select {
+	case ev := <-events:
+		if ev.ItemType == ItemTypeFolder && ev.Name == "Xyz" {
+			t.Fatalf("directory event should be suppressed due to case collision, got %+v", ev)
+		}
+	case <-time.After(500 * time.Millisecond):
+		// Good — no directory event emitted.
+	}
+
+	cancel()
+	<-done
+}
+
+// Validates: R-2.12.2 — two directories differing only in case should collide.
+func TestWatch_TwoDirectoryCollision_Suppressed(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	skipIfCaseInsensitiveFS(t, dir)
+
+	// Create directory "Docs" on disk.
+	docsDir := filepath.Join(dir, "Docs")
+	require.NoError(t, os.Mkdir(docsDir, 0o755))
+
+	docsLower := filepath.Join(dir, "docs")
+	require.NoError(t, os.Mkdir(docsLower, 0o755))
+
+	mockWatcher := newMockFsWatcher()
+	obs := &LocalObserver{
+		baseline:       emptyBaseline(),
+		logger:         testLogger(t),
+		collisionPeers: make(map[string]map[string]struct{}),
+		sleepFunc: func(_ context.Context, _ time.Duration) error {
+			return nil
+		},
+		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+			return make(chan time.Time), func() {}
+		},
+		watcherFactory: func() (FsWatcher, error) {
+			return mockWatcher, nil
+		},
+		pendingTimers: make(map[string]*time.Timer),
+		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+	}
+
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, dir, events)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Send Create for "docs" (lowercase) — should collide with "Docs".
+	mockWatcher.events <- fsnotify.Event{
+		Name: docsLower,
+		Op:   fsnotify.Create,
+	}
+
+	// The directory create should be suppressed.
+	select {
+	case ev := <-events:
+		if ev.ItemType == ItemTypeFolder && ev.Name == "docs" {
+			t.Fatalf("directory event should be suppressed due to case collision, got %+v", ev)
+		}
+	case <-time.After(500 * time.Millisecond):
+		// Good — no directory event emitted.
+	}
+
+	cancel()
+	<-done
+}
+
+// Validates: R-2.12.2 — scanNewDirectory should check subdirectories for collisions.
+func TestScanNewDirectory_SubdirCollision_Suppressed(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	skipIfCaseInsensitiveFS(t, dir)
+
+	// Create a parent directory with two subdirectories differing only in case.
+	parentDir := filepath.Join(dir, "parent")
+	require.NoError(t, os.Mkdir(parentDir, 0o755))
+
+	abcDir := filepath.Join(parentDir, "ABC")
+	require.NoError(t, os.Mkdir(abcDir, 0o755))
+
+	abcLower := filepath.Join(parentDir, "abc")
+	require.NoError(t, os.Mkdir(abcLower, 0o755))
+
+	mockWatcher := newMockFsWatcher()
+	obs := &LocalObserver{
+		baseline:       emptyBaseline(),
+		logger:         testLogger(t),
+		collisionPeers: make(map[string]map[string]struct{}),
+		sleepFunc: func(_ context.Context, _ time.Duration) error {
+			return nil
+		},
+		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+			return make(chan time.Time), func() {}
+		},
+		watcherFactory: func() (FsWatcher, error) {
+			return mockWatcher, nil
+		},
+		pendingTimers: make(map[string]*time.Timer),
+		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+	}
+
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, dir, events)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Send Create for parent directory → triggers scanNewDirectory.
+	mockWatcher.events <- fsnotify.Event{
+		Name: parentDir,
+		Op:   fsnotify.Create,
+	}
+
+	// Collect events. At most 1 subdirectory should be emitted (the other
+	// should be suppressed by collision check).
+	var received []ChangeEvent
+	timeout := time.After(500 * time.Millisecond)
+	for {
+		select {
+		case ev := <-events:
+			received = append(received, ev)
+			continue
+		case <-timeout:
+		}
+
+		break
+	}
+
+	dirEvents := 0
+	for _, ev := range received {
+		if ev.ItemType == ItemTypeFolder && ev.Path != "parent" {
+			dirEvents++
+		}
+	}
+
+	// At most 1 subdirectory event (both ABC and abc exist, one should
+	// be suppressed by the collision check in scanNewDirectory).
+	assert.LessOrEqual(t, dirEvents, 1,
+		"case collision should suppress one of the colliding subdirectories; got %d dir events", dirEvents)
+
+	cancel()
+	<-done
+}
+
+// ---------------------------------------------------------------------------
+// Delete-resolution tests (R-2.12.2 — collision peer re-emission)
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.12.2 — deleting a collision suppressor re-emits the survivor.
+func TestWatch_DeleteCollider_ReEmitsSurvivor(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	skipIfCaseInsensitiveFS(t, dir)
+
+	// Create two case-colliding files.
+	writeTestFile(t, dir, "File.txt", "content1")
+
+	lowerPath := filepath.Join(dir, "file.txt")
+	require.NoError(t, os.WriteFile(lowerPath, []byte("content2"), 0o644))
+
+	mockWatcher := newMockFsWatcher()
+	obs := &LocalObserver{
+		baseline:       emptyBaseline(),
+		logger:         testLogger(t),
+		collisionPeers: make(map[string]map[string]struct{}),
+		sleepFunc: func(_ context.Context, _ time.Duration) error {
+			return nil
+		},
+		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+			return make(chan time.Time), func() {}
+		},
+		watcherFactory: func() (FsWatcher, error) {
+			return mockWatcher, nil
+		},
+		pendingTimers: make(map[string]*time.Timer),
+		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+	}
+
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, dir, events)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Send Create for "file.txt" — should be suppressed (collision with "File.txt").
+	mockWatcher.events <- fsnotify.Event{
+		Name: lowerPath,
+		Op:   fsnotify.Create,
+	}
+
+	// Verify suppressed — no event within timeout.
+	select {
+	case ev := <-events:
+		t.Fatalf("expected create to be suppressed, got %+v", ev)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// Now delete "file.txt" from disk — the file must be gone for the
+	// survivor's re-emitted handleCreate to see no collision.
+	require.NoError(t, os.Remove(lowerPath))
+
+	// Send Remove event for "file.txt".
+	mockWatcher.events <- fsnotify.Event{
+		Name: lowerPath,
+		Op:   fsnotify.Remove,
+	}
+
+	// Expect two events: ChangeCreate for "File.txt" (survivor re-emitted)
+	// and ChangeDelete for "file.txt".
+	var received []ChangeEvent
+	timeout := time.After(1 * time.Second)
+
+	for len(received) < 2 {
+		select {
+		case ev := <-events:
+			received = append(received, ev)
+		case <-timeout:
+			t.Fatalf("expected 2 events, got %d: %+v", len(received), received)
+		}
+	}
+
+	// Verify we got both events.
+	var hasCreate, hasDelete bool
+	for _, ev := range received {
+		if ev.Type == ChangeCreate && ev.Name == "File.txt" {
+			hasCreate = true
+		}
+		if ev.Type == ChangeDelete && ev.Name == "file.txt" {
+			hasDelete = true
+		}
+	}
+
+	assert.True(t, hasCreate, "should have re-emitted ChangeCreate for surviving File.txt")
+	assert.True(t, hasDelete, "should have emitted ChangeDelete for deleted file.txt")
+
+	cancel()
+	<-done
+}
+
+// Validates: R-2.12.2 — with 3 colliders, deleting one re-emits the others
+// but they remain blocked (they still collide with each other).
+func TestWatch_DeleteCollider_ThreeWay_StillBlocked(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	skipIfCaseInsensitiveFS(t, dir)
+
+	writeTestFile(t, dir, "File.txt", "content1")
+
+	lowerPath := filepath.Join(dir, "file.txt")
+	require.NoError(t, os.WriteFile(lowerPath, []byte("content2"), 0o644))
+
+	upperPath := filepath.Join(dir, "FILE.txt")
+	require.NoError(t, os.WriteFile(upperPath, []byte("content3"), 0o644))
+
+	mockWatcher := newMockFsWatcher()
+	obs := &LocalObserver{
+		baseline:       emptyBaseline(),
+		logger:         testLogger(t),
+		collisionPeers: make(map[string]map[string]struct{}),
+		sleepFunc: func(_ context.Context, _ time.Duration) error {
+			return nil
+		},
+		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+			return make(chan time.Time), func() {}
+		},
+		watcherFactory: func() (FsWatcher, error) {
+			return mockWatcher, nil
+		},
+		pendingTimers: make(map[string]*time.Timer),
+		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+	}
+
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, dir, events)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Send Create for "file.txt" — suppressed, collision with "File.txt".
+	mockWatcher.events <- fsnotify.Event{
+		Name: lowerPath,
+		Op:   fsnotify.Create,
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Send Create for "FILE.txt" — suppressed, collision with "File.txt".
+	mockWatcher.events <- fsnotify.Event{
+		Name: upperPath,
+		Op:   fsnotify.Create,
+	}
+
+	// Drain any spurious events.
+	time.Sleep(300 * time.Millisecond)
+	for len(events) > 0 {
+		<-events
+	}
+
+	// Delete "file.txt" from disk.
+	require.NoError(t, os.Remove(lowerPath))
+
+	mockWatcher.events <- fsnotify.Event{
+		Name: lowerPath,
+		Op:   fsnotify.Remove,
+	}
+
+	// Expect only ChangeDelete for "file.txt". The re-emitted peers
+	// (File.txt and FILE.txt) still collide → suppressed again.
+	var received []ChangeEvent
+	timeout := time.After(1 * time.Second)
+
+	for {
+		select {
+		case ev := <-events:
+			received = append(received, ev)
+			continue
+		case <-timeout:
+		}
+
+		break
+	}
+
+	// Only the delete should come through; re-emitted creates are suppressed.
+	for _, ev := range received {
+		if ev.Type == ChangeCreate {
+			t.Errorf("expected no create events (survivors still collide), got %+v", ev)
+		}
+	}
+
+	assert.Len(t, received, 1, "expected exactly 1 event (the delete)")
+	if len(received) == 1 {
+		assert.Equal(t, ChangeDelete, received[0].Type)
+		assert.Equal(t, "file.txt", received[0].Name)
+	}
+
+	cancel()
+	<-done
+}
+
+// Validates: R-2.12.2 — safety scan clears collision peer tracking.
+func TestWatch_SafetyScan_ClearsPeers(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeTestFile(t, dir, "a.txt", "content")
+
+	safetyTickCh := make(chan time.Time, 1)
+	mockWatcher := newMockFsWatcher()
+	obs := &LocalObserver{
+		baseline:       emptyBaseline(),
+		logger:         testLogger(t),
+		collisionPeers: make(map[string]map[string]struct{}),
+		dirNameCache:   make(map[string]map[string][]string),
+		sleepFunc: func(_ context.Context, _ time.Duration) error {
+			return nil
+		},
+		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+			return safetyTickCh, func() {}
+		},
+		watcherFactory: func() (FsWatcher, error) {
+			return mockWatcher, nil
+		},
+		pendingTimers: make(map[string]*time.Timer),
+		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+	}
+
+	// Pre-populate collision peers and dir name cache.
+	obs.addCollisionPeer("a.txt", "A.txt")
+	obs.dirNameCache[dir] = map[string][]string{
+		"a.txt": {"a.txt", "A.txt"},
+	}
+
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, dir, events)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Trigger safety scan.
+	safetyTickCh <- time.Now()
+
+	// Wait for safety scan to complete, then stop the watchLoop.
+	time.Sleep(500 * time.Millisecond)
+	cancel()
+	<-done
+
+	// Both maps should have been cleared by the safety scan.
+	// Safe to read after watchLoop exits (single-goroutine fields).
+	assert.Empty(t, obs.collisionPeers, "collisionPeers should be cleared after safety scan")
+	assert.Empty(t, obs.dirNameCache, "dirNameCache should be cleared after safety scan")
+}

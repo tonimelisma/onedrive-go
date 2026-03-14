@@ -952,22 +952,52 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 	)
 
 	// Step 1: Run initial one-shot sync to establish baseline.
-	_, err := e.RunOnce(ctx, mode, RunOpts{Force: opts.Force})
-	if err != nil {
+	if _, err := e.RunOnce(ctx, mode, RunOpts{Force: opts.Force}); err != nil {
 		return fmt.Errorf("sync: initial sync failed: %w", err)
 	}
 
-	// Step 2: Load baseline (cached, mutated in-place under RWMutex) and
-	// shortcuts (stored in synchronized field, updated when shortcuts change).
-	bl, err := e.loadWatchState(ctx)
+	// Steps 2–5: Set up the watch pipeline (baseline, tracker, pool,
+	// buffer, retrier, observers, tickers).
+	pipe, err := e.initWatchPipeline(ctx, mode, opts)
 	if err != nil {
 		return err
 	}
+	defer pipe.cleanup()
 
-	// Step 2b: Initialize watch-mode big-delete protection.
+	return e.runWatchLoop(ctx, pipe)
+}
+
+// watchPipeline holds all handles needed by the watch select loop.
+// Created by initWatchPipeline; cleaned up by its cleanup method.
+type watchPipeline struct {
+	bl         *Baseline
+	tracker    *DepTracker
+	safety     *SafetyConfig
+	ready      <-chan []PathChanges
+	errs       <-chan error
+	skippedCh  <-chan []SkippedItem
+	reconcileC <-chan time.Time
+	recheckC   <-chan time.Time
+	activeObs  int
+	mode       SyncMode
+	cleanup    func()
+}
+
+// initWatchPipeline sets up all watch-mode subsystems: baseline, tracker,
+// worker pool, buffer, retrier, observers, and tickers. Returns a
+// watchPipeline with a cleanup function that stops everything in order.
+func (e *Engine) initWatchPipeline(
+	ctx context.Context, mode SyncMode, opts WatchOpts,
+) (*watchPipeline, error) {
+	// Load baseline and shortcuts.
+	bl, err := e.loadWatchState(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	e.initDeleteProtection(ctx, opts.Force)
 
-	// Step 3: Create persistent tracker and worker pool.
+	// Tracker and worker pool.
 	tracker := NewPersistentDepTracker(e.logger)
 	tracker.onHeld = func() { e.armTrialTimer() }
 	e.tracker, e.scopeState = tracker, NewScopeState(e.nowFunc, e.logger)
@@ -975,81 +1005,83 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 	pool := NewWorkerPool(e.execCfg, tracker, e.baseline, e.logger, watchResultBuf)
 	pool.Start(ctx, e.transferWorkers)
 
-	defer func() {
-		inFlight := tracker.InFlightCount()
-		if inFlight > 0 {
-			e.logger.Info("graceful shutdown: draining in-flight actions",
-				slog.Int("in_flight", inFlight),
-			)
-		}
-
-		pool.Stop()
-
-		e.logger.Info("watch mode stopped")
-	}()
-
-	// Drain worker results in a background goroutine. The engine classifies
-	// results and calls tracker.Complete (R-6.8.9).
 	go e.drainWorkerResults(ctx, pool.Results(), bl)
 
-	// Step 4: Create buffer and debounced output.
+	// Buffer and retrier.
 	buf := NewBuffer(e.logger)
 	ready := buf.FlushDebounced(ctx, e.resolveDebounce(opts))
 
-	// Step 4b: Start the failure retrier — sole retry mechanism (R-6.8.10).
-	// Re-injects due sync_failures via buffer → planner → tracker.
 	e.retrier = NewFailureRetrier(e.baseline, buf, tracker, e.logger)
 	go e.retrier.Run(ctx)
 
-	// Step 5: Start observer goroutines.
-	errs, activeObservers, skippedCh := e.startObservers(ctx, bl, mode, buf, opts)
+	// Observers.
+	errs, activeObs, skippedCh := e.startObservers(ctx, bl, mode, buf, opts)
 
-	// Step 6: Main select loop.
-	safety := e.resolveWatchSafetyConfig(opts)
-
+	// Tickers.
 	reconcileC, stopReconcile := e.initReconcileTicker(opts)
-	if stopReconcile != nil {
-		defer stopReconcile()
-	}
-
-	// Recheck ticker: detects external DB writes (e.g., `issues clear`)
-	// via PRAGMA data_version. ~10 second latency between CLI action and
-	// engine reaction.
 	recheckTicker := time.NewTicker(recheckInterval)
-	defer recheckTicker.Stop()
 
+	return &watchPipeline{
+		bl:         bl,
+		tracker:    tracker,
+		safety:     e.resolveWatchSafetyConfig(opts),
+		ready:      ready,
+		errs:       errs,
+		skippedCh:  skippedCh,
+		reconcileC: reconcileC,
+		recheckC:   recheckTicker.C,
+		activeObs:  activeObs,
+		mode:       mode,
+		cleanup: func() {
+			recheckTicker.Stop()
+			if stopReconcile != nil {
+				stopReconcile()
+			}
+
+			inFlight := tracker.InFlightCount()
+			if inFlight > 0 {
+				e.logger.Info("graceful shutdown: draining in-flight actions",
+					slog.Int("in_flight", inFlight),
+				)
+			}
+
+			pool.Stop()
+			e.logger.Info("watch mode stopped")
+		},
+	}, nil
+}
+
+// runWatchLoop runs the main watch-mode select loop. Blocks until context
+// is canceled or all observers exit.
+func (e *Engine) runWatchLoop(ctx context.Context, p *watchPipeline) error {
 	for {
 		select {
-		case batch, ok := <-ready:
+		case batch, ok := <-p.ready:
 			if !ok {
 				return nil
 			}
 
-			e.processBatch(ctx, batch, bl, mode, safety, tracker)
+			e.processBatch(ctx, batch, p.bl, p.mode, p.safety, p.tracker)
 
-		case skipped := <-skippedCh:
-			// Safety scan detected SkippedItems — record and auto-clear.
+		case skipped := <-p.skippedCh:
 			e.recordSkippedItems(ctx, skipped)
 			e.clearResolvedSkippedItems(ctx, skipped)
 
-		case <-recheckTicker.C:
+		case <-p.recheckC:
 			e.handleRecheckTick(ctx)
 
-		case <-reconcileC:
-			e.runFullReconciliation(ctx, bl, mode, safety, tracker)
+		case <-p.reconcileC:
+			e.runFullReconciliation(ctx, p.bl, p.mode, p.safety, p.tracker)
 
-		case obsErr := <-errs:
-			// Observers return nil on clean context cancellation and non-nil
-			// on genuine failures (e.g., nosync guard, watcher creation error).
-			// RemoteObserver retries indefinitely and only exits on ctx cancel.
+		case obsErr := <-p.errs:
 			if obsErr != nil {
 				e.logger.Warn("observer error",
 					slog.String("error", obsErr.Error()),
 				)
 			}
 
-			activeObservers--
-			if activeObservers == 0 {
+			p.activeObs--
+			if p.activeObs == 0 {
 				e.logger.Error("all observers have exited, stopping watch mode")
 				return fmt.Errorf("sync: all observers exited")
 			}

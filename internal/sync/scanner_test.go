@@ -447,3 +447,34 @@ func TestDetectCaseCollisions_CaseSensitiveFS(t *testing.T) {
 		assert.NotEqual(t, "file.txt", ev.Path)
 	}
 }
+
+// Validates: R-2.12.1 — defensive test: a child of a colliding directory
+// that also participates in a multi-event collision group should appear
+// exactly once in SkippedItems (no duplicate from both the child pass
+// and the group pass).
+func TestDetectCaseCollisions_ChildInMultiGroup_NoDuplicate(t *testing.T) {
+	t.Parallel()
+
+	events := []ChangeEvent{
+		{Path: "Docs", ItemType: ItemTypeFolder},
+		{Path: "docs", ItemType: ItemTypeFile},
+		// These are children of "Docs/" AND collide with each other.
+		{Path: "Docs/readme.txt", ItemType: ItemTypeFile},
+		{Path: "Docs/README.txt", ItemType: ItemTypeFile},
+	}
+
+	_, collisions := detectCaseCollisions(events, nil)
+
+	// Count occurrences of each path in SkippedItems.
+	pathCounts := make(map[string]int)
+	for _, s := range collisions {
+		pathCounts[s.Path]++
+	}
+
+	for path, count := range pathCounts {
+		assert.Equal(t, 1, count, "path %q should appear exactly once in SkippedItems, got %d", path, count)
+	}
+
+	// All 4 events should be in SkippedItems.
+	assert.Len(t, collisions, 4, "all 4 events should be skipped")
+}
