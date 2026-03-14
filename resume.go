@@ -60,6 +60,19 @@ func resumeSingleDrive(cc *CLIContext, cfg *config.Config, selector string) erro
 	}
 
 	if !d.IsPaused(time.Now()) {
+		// Clean up stale keys from expired timed pauses. The drive is
+		// functionally unpaused, but the user explicitly asked to resume,
+		// so remove leftover config keys.
+		if d.Paused != nil && *d.Paused {
+			if err := clearPausedKeys(cc.CfgPath, cid); err != nil {
+				return err
+			}
+
+			cc.Statusf("Drive %s: expired timed pause cleared\n", cid.String())
+
+			return nil
+		}
+
 		cc.Statusf("Drive %s is not paused\n", cid.String())
 
 		return nil
@@ -86,6 +99,16 @@ func resumeAllDrives(cc *CLIContext, cfg *config.Config) error {
 	for cid := range cfg.Drives {
 		d := cfg.Drives[cid]
 		if !d.IsPaused(time.Now()) {
+			// Clean up stale keys from expired timed pauses.
+			if d.Paused != nil && *d.Paused {
+				if err := clearPausedKeys(cc.CfgPath, cid); err != nil {
+					return fmt.Errorf("clearing expired pause for %s: %w", cid.String(), err)
+				}
+
+				cc.Statusf("Drive %s: expired timed pause cleared\n", cid.String())
+				resumed++
+			}
+
 			continue
 		}
 

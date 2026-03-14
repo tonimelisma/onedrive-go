@@ -1,9 +1,12 @@
 package main
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -49,6 +52,48 @@ func TestClearPausedKeys_RemovesBothKeys(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(data), "paused")
 	assert.NotContains(t, string(data), "paused_until")
+}
+
+// Validates: R-2.6
+func TestClearPausedKeys_ExpiredTimedPause_ClearedByResume(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	cid := driveid.MustCanonicalID("personal:expired@example.com")
+
+	// Create config with an expired timed pause (paused=true + past paused_until).
+	err := config.AppendDriveSection(cfgPath, cid, "~/OneDrive")
+	require.NoError(t, err)
+	require.NoError(t, config.SetDriveKey(cfgPath, cid, "paused", "true"))
+	require.NoError(t, config.SetDriveKey(cfgPath, cid, "paused_until", "2000-01-01T00:00:00Z"))
+
+	// Verify IsPaused returns false (expired), but raw keys are present.
+	cfg, err := config.LoadOrDefault(cfgPath, slog.Default())
+	require.NoError(t, err)
+	d := cfg.Drives[cid]
+	assert.False(t, d.IsPaused(time.Now()), "expired timed pause should not be considered paused")
+	require.NotNil(t, d.Paused)
+	assert.True(t, *d.Paused, "raw paused flag should still be true")
+
+	// Run resumeSingleDrive — should clean up stale keys.
+	var statusBuf strings.Builder
+	cc := &CLIContext{
+		CfgPath:      cfgPath,
+		Logger:       slog.Default(),
+		StatusWriter: &statusBuf,
+	}
+
+	require.NoError(t, resumeSingleDrive(cc, cfg, cid.String()))
+
+	// Verify stale keys were removed from config file.
+	data, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "paused")
+	assert.NotContains(t, string(data), "paused_until")
+
+	// Verify status message.
+	assert.Contains(t, statusBuf.String(), "expired timed pause cleared")
 }
 
 func TestClearPausedKeys_IdempotentWhenNoKeys(t *testing.T) {

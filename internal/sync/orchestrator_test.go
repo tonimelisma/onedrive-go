@@ -22,6 +22,23 @@ import (
 
 // --- helpers ---
 
+// setupXDGIsolation sets XDG_DATA_HOME to a temp dir and creates drive
+// metadata files for each CID. This gives buildResolvedDrive (called during
+// SIGHUP reload → ResolveDrives) a non-zero DriveID, which is required for
+// Session() to succeed.
+func setupXDGIsolation(t *testing.T, cids ...driveid.CanonicalID) {
+	t.Helper()
+
+	xdgDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", xdgDir)
+
+	for _, cid := range cids {
+		require.NoError(t, config.SaveDriveMetadata(cid, &config.DriveMetadata{
+			DriveID: "test-drive-id",
+		}))
+	}
+}
+
 func testOrchestratorConfig(t *testing.T, drives ...*config.ResolvedDrive) *OrchestratorConfig {
 	t.Helper()
 
@@ -401,9 +418,12 @@ func TestOrchestrator_RunWatch_MultiDrive(t *testing.T) {
 }
 
 func TestOrchestrator_Reload_AddDrive(t *testing.T) {
-	t.Skip("requires E2E test isolation (token + metadata in temp dir) — see e2e/ test suite")
-
 	rd1 := testResolvedDrive(t, "personal:existing@example.com", "Existing")
+	rd2CID := driveid.MustCanonicalID("personal:added@example.com")
+
+	// XDG isolation so buildResolvedDrive finds drive metadata during reload.
+	setupXDGIsolation(t, rd1.CanonicalID, rd2CID)
+
 	cfgPath := writeTestConfig(t, rd1.CanonicalID)
 	sighup := make(chan os.Signal, 1)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd1)
@@ -438,7 +458,6 @@ func TestOrchestrator_Reload_AddDrive(t *testing.T) {
 	}, 5*time.Second, 10*time.Millisecond)
 
 	// Add a second drive to the config and send SIGHUP.
-	rd2CID := driveid.MustCanonicalID("personal:added@example.com")
 	writeTestConfigMulti(t, cfgPath, rd1.CanonicalID, rd1.SyncDir, rd2CID, t.TempDir())
 
 	sighup <- os.Interrupt
@@ -625,9 +644,12 @@ func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 }
 
 func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
-	t.Skip("requires E2E test isolation (token + metadata in temp dir) — see e2e/ test suite")
-
 	rd := testResolvedDrive(t, "personal:timedpause@example.com", "TimedPause")
+
+	// XDG isolation — defensive, so buildResolvedDrive during reload can
+	// find metadata if needed.
+	setupXDGIsolation(t, rd.CanonicalID)
+
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	sighup := make(chan os.Signal, 1)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
@@ -668,13 +690,14 @@ func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
 	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused_until", "2000-01-01T00:00:00Z"))
 	sighup <- os.Interrupt
 
-	// The old runner should stop, and reload should clear expired pause,
-	// then start a new runner.
-	require.Eventually(t, func() bool {
-		return started.Load() >= 2
-	}, 5*time.Second, 10*time.Millisecond)
+	// The expired timed pause is cleared by ClearExpiredPauses during reload.
+	// The drive is already running and remains in newActive, so it is NOT
+	// stopped and NOT restarted — avoiding unnecessary downtime.
+	time.Sleep(200 * time.Millisecond)
+	assert.Equal(t, int32(0), stopped.Load(), "drive should NOT be stopped — expired pause is cleared, drive stays running")
+	assert.Equal(t, int32(1), started.Load(), "drive should NOT be restarted — it was already running")
 
-	// Verify paused keys were cleared from config.
+	// Verify paused keys were cleared from config file.
 	reloadedCfg, err := config.LoadOrDefault(cfgPath, slog.Default())
 	require.NoError(t, err)
 	d := reloadedCfg.Drives[rd.CanonicalID]
