@@ -1394,7 +1394,16 @@ func (e *Engine) processTrialResult(ctx context.Context, r *WorkerResult) {
 // function used by applyScopeBlock for initial intervals, ensuring a single
 // code path for the Retry-After-vs-backoff policy.
 func (e *Engine) extendTrialInterval(scopeKey ScopeKey, retryAfter time.Duration) {
-	block, ok := e.tracker.GetScopeBlock(scopeKey)
+	// ScopeGate is the primary source; fall back to legacy tracker during migration.
+	var block ScopeBlock
+	var ok bool
+
+	if e.scopeGate != nil {
+		block, ok = e.scopeGate.GetScopeBlock(scopeKey)
+	} else if e.tracker != nil {
+		block, ok = e.tracker.GetScopeBlock(scopeKey)
+	}
+
 	if !ok {
 		return // scope was released between dispatch and result
 	}
@@ -1406,7 +1415,17 @@ func (e *Engine) extendTrialInterval(scopeKey ScopeKey, retryAfter time.Duration
 		slog.Duration("new_interval", newInterval),
 	)
 
-	e.tracker.ExtendTrialInterval(scopeKey, e.nowFunc().Add(newInterval), newInterval)
+	if e.scopeGate != nil {
+		if err := e.scopeGate.ExtendTrialInterval(context.Background(), scopeKey, e.nowFunc().Add(newInterval), newInterval); err != nil {
+			e.logger.Warn("extendTrialInterval: failed to persist interval extension",
+				slog.String("scope_key", scopeKey.String()),
+				slog.String("error", err.Error()),
+			)
+		}
+	} else if e.tracker != nil {
+		e.tracker.ExtendTrialInterval(scopeKey, e.nowFunc().Add(newInterval), newInterval)
+	}
+
 	e.armTrialTimer()
 }
 
@@ -1435,14 +1454,19 @@ func computeTrialInterval(retryAfter, currentInterval time.Duration) time.Durati
 // (throttle:account or service) is active, meaning shortcut observation
 // polling should be skipped to avoid wasting API calls (R-2.10.30).
 func (e *Engine) isObservationSuppressed() bool {
-	if e.tracker == nil {
-		return false
+	// ScopeGate is the primary source; fall back to legacy tracker during migration.
+	if e.scopeGate != nil {
+		return e.scopeGate.IsScopeBlocked(SKThrottleAccount) || e.scopeGate.IsScopeBlocked(SKService)
 	}
 
-	_, throttled := e.tracker.GetScopeBlock(SKThrottleAccount)
-	_, serviceDown := e.tracker.GetScopeBlock(SKService)
+	if e.tracker != nil {
+		_, throttled := e.tracker.GetScopeBlock(SKThrottleAccount)
+		_, serviceDown := e.tracker.GetScopeBlock(SKService)
 
-	return throttled || serviceDown
+		return throttled || serviceDown
+	}
+
+	return false
 }
 
 // feedScopeDetection feeds a worker result into scope detection sliding
@@ -1474,6 +1498,21 @@ func (e *Engine) feedScopeDetection(r *WorkerResult) {
 	}
 }
 
+// setScopeBlock writes a scope block to the ScopeGate (preferred) or legacy
+// tracker. Dual-path during migration — removed when tracker is deleted.
+func (e *Engine) setScopeBlock(key ScopeKey, block *ScopeBlock) {
+	if e.scopeGate != nil {
+		if err := e.scopeGate.SetScopeBlock(context.Background(), key, block); err != nil {
+			e.logger.Warn("setScopeBlock: failed to persist scope block",
+				slog.String("scope_key", key.String()),
+				slog.String("error", err.Error()),
+			)
+		}
+	} else if e.tracker != nil {
+		e.tracker.HoldScope(key, block)
+	}
+}
+
 // applyScopeBlock creates a ScopeBlock and tells the tracker to hold
 // affected actions. Uses computeTrialInterval for the initial interval,
 // ensuring the same Retry-After-vs-backoff policy as extendTrialInterval.
@@ -1482,14 +1521,14 @@ func (e *Engine) feedScopeDetection(r *WorkerResult) {
 func (e *Engine) applyScopeBlock(sr ScopeUpdateResult) {
 	now := e.nowFunc()
 	interval := computeTrialInterval(sr.RetryAfter, 0)
-	block := &ScopeBlock{
+
+	e.setScopeBlock(sr.ScopeKey, &ScopeBlock{
 		Key:           sr.ScopeKey,
 		IssueType:     sr.IssueType,
 		BlockedAt:     now,
 		TrialInterval: interval,
 		NextTrialAt:   now.Add(interval),
-	}
-	e.tracker.HoldScope(sr.ScopeKey, block)
+	})
 
 	e.logger.Warn("scope block active — actions held",
 		slog.String("scope_key", sr.ScopeKey.String()),
@@ -2241,7 +2280,16 @@ func (e *Engine) armTrialTimer() {
 		e.trialTimer = nil
 	}
 
-	earliest, ok := e.tracker.EarliestTrialAt()
+	// ScopeGate is the primary source; fall back to legacy tracker during migration.
+	var earliest time.Time
+	var ok bool
+
+	if e.scopeGate != nil {
+		earliest, ok = e.scopeGate.EarliestTrialAt()
+	} else if e.tracker != nil {
+		earliest, ok = e.tracker.EarliestTrialAt()
+	}
+
 	if !ok {
 		return
 	}
@@ -2833,32 +2881,55 @@ func (e *Engine) handleExternalChanges(ctx context.Context) {
 
 	// Permission clearance: if user cleared perm:dir failures via CLI,
 	// release the corresponding in-memory scope blocks.
-	if e.tracker != nil {
-		issues, err := e.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
-		if err != nil {
-			e.logger.Warn("failed to check permission failures",
-				slog.String("error", err.Error()),
-			)
+	e.clearResolvedPermissionScopes(ctx)
+}
 
-			return
+// clearResolvedPermissionScopes checks if any perm:dir scope blocks have
+// had their sync_failures cleared (by user action via CLI), and releases
+// the corresponding scope blocks.
+func (e *Engine) clearResolvedPermissionScopes(ctx context.Context) {
+	// ScopeGate is the primary path; fall back to legacy tracker during migration.
+	var scopeKeys []ScopeKey
+
+	if e.scopeGate != nil {
+		scopeKeys = e.scopeGate.ScopeBlockKeys()
+	} else if e.tracker != nil {
+		scopeKeys = e.tracker.ScopeBlockKeys()
+	}
+
+	if len(scopeKeys) == 0 {
+		return
+	}
+
+	issues, err := e.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
+	if err != nil {
+		e.logger.Warn("failed to check permission failures",
+			slog.String("error", err.Error()),
+		)
+
+		return
+	}
+
+	// Build set of still-active scope keys from DB.
+	activeScopes := make(map[ScopeKey]bool, len(issues))
+	for i := range issues {
+		if issues[i].ScopeKey.IsPermDir() {
+			activeScopes[issues[i].ScopeKey] = true
 		}
+	}
 
-		// Build set of still-active scope keys from DB.
-		activeScopes := make(map[ScopeKey]bool, len(issues))
-		for i := range issues {
-			if issues[i].ScopeKey.IsPermDir() {
-				activeScopes[issues[i].ScopeKey] = true
-			}
-		}
-
-		// Release any tracker scope blocks whose failures were cleared.
-		for _, key := range e.tracker.ScopeBlockKeys() {
-			if key.IsPermDir() && !activeScopes[key] {
+	// Release any scope blocks whose failures were cleared.
+	for _, key := range scopeKeys {
+		if key.IsPermDir() && !activeScopes[key] {
+			if e.scopeGate != nil {
+				e.onScopeClear(ctx, key)
+			} else if e.tracker != nil {
 				e.tracker.ReleaseScope(key)
-				e.logger.Info("permission scope block cleared by user",
-					slog.String("scope", key.String()),
-				)
 			}
+
+			e.logger.Info("permission scope block cleared by user",
+				slog.String("scope", key.String()),
+			)
 		}
 	}
 }
