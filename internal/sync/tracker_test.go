@@ -1,9 +1,7 @@
 package sync
 
 import (
-	"context"
 	"fmt"
-	stdsync "sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,67 +12,9 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-func TestDepTracker_NoDeps(t *testing.T) {
-	t.Parallel()
-
-	dt := NewDepTracker(10, testLogger(t))
-
-	dt.Add(&Action{
-		Type: ActionFolderCreate, Path: "dir",
-		DriveID: driveid.New("d"), ItemID: "i1",
-	}, 1, nil)
-
-	select {
-	case ta := <-dt.Ready():
-		assert.Equal(t, int64(1), ta.ID)
-	case <-time.After(time.Second):
-		require.Fail(t, "timeout waiting for action on ready channel")
-	}
-}
-
-func TestDepTracker_DependencyChain(t *testing.T) {
-	t.Parallel()
-
-	dt := NewDepTracker(10, testLogger(t))
-
-	// Action 1: no deps.
-	dt.Add(&Action{
-		Type: ActionFolderCreate, Path: "parent",
-		DriveID: driveid.New("d"), ItemID: "i1",
-	}, 1, nil)
-
-	// Action 2: depends on action 1.
-	dt.Add(&Action{
-		Type: ActionDownload, Path: "parent/child.txt",
-		DriveID: driveid.New("d"), ItemID: "i2",
-	}, 2, []int64{1})
-
-	// Only action 1 should be dispatched.
-	select {
-	case ta := <-dt.Ready():
-		require.Equal(t, int64(1), ta.ID, "expected action 1")
-	case <-time.After(time.Second):
-		require.Fail(t, "timeout waiting for action 1")
-	}
-
-	// Action 2 should not be dispatched yet.
-	select {
-	case ta := <-dt.Ready():
-		require.Fail(t, fmt.Sprintf("action %d dispatched too early", ta.ID))
-	case <-time.After(50 * time.Millisecond):
-		// Expected — action 2 still blocked.
-	}
-
-	// Complete action 1 — action 2 should become ready.
-	dt.Complete(1)
-
-	select {
-	case ta := <-dt.Ready():
-		require.Equal(t, int64(2), ta.ID, "expected action 2")
-	case <-time.After(time.Second):
-		require.Fail(t, "timeout waiting for action 2")
-	}
-}
+// ---------------------------------------------------------------------------
+// Lifecycle tests (Done channel, persistent mode, unknown-ID deadlock guard)
+// ---------------------------------------------------------------------------
 
 func TestDepTracker_DoneSignal(t *testing.T) {
 	t.Parallel()
@@ -105,79 +45,26 @@ func TestDepTracker_DoneSignal(t *testing.T) {
 	}
 }
 
-func TestDepTracker_CancelByPath(t *testing.T) {
+func TestDepTracker_PersistentMode(t *testing.T) {
 	t.Parallel()
 
-	dt := NewDepTracker(10, testLogger(t))
+	dt := NewPersistentDepTracker(testLogger(t))
 
 	dt.Add(&Action{
-		Type: ActionDownload, Path: "cancel-me.txt",
+		Type: ActionFolderCreate, Path: "dir",
 		DriveID: driveid.New("d"), ItemID: "i1",
 	}, 1, nil)
 
-	ta := <-dt.Ready()
-
-	// Simulate a worker setting the cancel func.
-	ctx, cancel := context.WithCancel(t.Context())
-	ta.Cancel = cancel
-
-	dt.CancelByPath("cancel-me.txt")
-
-	select {
-	case <-ctx.Done():
-		// Context was canceled.
-	case <-time.After(time.Second):
-		require.Fail(t, "context should have been canceled")
-	}
-}
-
-func TestDepTracker_ConcurrentComplete(t *testing.T) {
-	t.Parallel()
-
-	dt := NewDepTracker(100, testLogger(t))
-
-	// Fan-out: action 0 has no deps; actions 1-49 depend on action 0.
-	dt.Add(&Action{
-		Type: ActionFolderCreate, Path: "root",
-		DriveID: driveid.New("d"), ItemID: "i0",
-	}, 0, nil)
-
-	for i := int64(1); i <= 49; i++ {
-		dt.Add(&Action{
-			Type: ActionDownload, Path: "file",
-			DriveID: driveid.New("d"), ItemID: "i",
-		}, i, []int64{0})
-	}
-
-	// Drain the root action.
 	<-dt.Ready()
-	dt.Complete(0)
+	dt.Complete(1)
 
-	// Concurrently drain and complete all dependents.
-	var wg stdsync.WaitGroup
-
-	for i := int64(1); i <= 49; i++ {
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-
-			select {
-			case ta := <-dt.Ready():
-				dt.Complete(ta.ID)
-			case <-time.After(5 * time.Second):
-				assert.Fail(t, "timeout draining dependent action")
-			}
-		}()
-	}
-
-	wg.Wait()
-
+	// In persistent mode, Done() should NOT fire even though all actions
+	// are complete. Workers exit via context cancellation instead.
 	select {
 	case <-dt.Done():
-		// All complete.
-	case <-time.After(time.Second):
-		require.Fail(t, "timeout waiting for done signal")
+		require.Fail(t, "Done() fired in persistent mode — should never close")
+	case <-time.After(100 * time.Millisecond):
+		// Expected — Done() never fires in persistent mode.
 	}
 }
 
@@ -223,271 +110,6 @@ func TestDepTracker_CompleteUnknownID_NoPanic(t *testing.T) {
 
 	// Should not panic on unknown ID with zero total.
 	dt.Complete(999)
-}
-
-// TestDepTracker_ConcurrentAddAndComplete verifies that Complete() safely
-// copies the dependents slice before iterating, preventing a data race with
-// Add() appending to the same slice. Under -race this would fail if
-// Complete() iterated the original slice without copying.
-// Regression test for: Complete() read ta.dependents under lock, released
-// lock, then iterated — racing with Add() appending to the same slice.
-func TestDepTracker_ConcurrentAddAndComplete(t *testing.T) {
-	t.Parallel()
-
-	// Use large buffer to prevent dispatch blocking during the race window.
-	dt := NewDepTracker(200, testLogger(t))
-
-	// Root action with no deps — will be completed while Add appends dependents.
-	dt.Add(&Action{
-		Type: ActionFolderCreate, Path: "root",
-		DriveID: driveid.New("d"), ItemID: "i0",
-	}, 0, nil)
-
-	// Seed some initial dependents so Complete has a non-empty slice to iterate.
-	for i := int64(1); i <= 20; i++ {
-		dt.Add(&Action{
-			Type: ActionDownload, Path: fmt.Sprintf("file-%d", i),
-			DriveID: driveid.New("d"), ItemID: fmt.Sprintf("i%d", i),
-		}, i, []int64{0})
-	}
-
-	// Concurrently: Complete root (iterates dependents) while Add
-	// appends more dependents to the root action's dependents slice.
-	// Under -race, a data race on the slice would be detected here.
-	var wg stdsync.WaitGroup
-	wg.Add(2)
-
-	go func() {
-		defer wg.Done()
-		<-dt.Ready() // drain root
-		dt.Complete(0)
-	}()
-
-	go func() {
-		defer wg.Done()
-		for i := int64(21); i <= 40; i++ {
-			dt.Add(&Action{
-				Type: ActionDownload, Path: fmt.Sprintf("file-%d", i),
-				DriveID: driveid.New("d"), ItemID: fmt.Sprintf("i%d", i),
-			}, i, []int64{0})
-		}
-	}()
-
-	wg.Wait()
-
-	// Drain whatever was dispatched (at least the initial 20 dependents).
-	// Actions added after Complete's copy won't be dispatched — that's by
-	// design (the tracker is populated before workers start in RunOnce).
-	drained := 0
-
-	for {
-		select {
-		case ta := <-dt.Ready():
-			dt.Complete(ta.ID)
-			drained++
-		case <-time.After(200 * time.Millisecond):
-			// No more actions to drain.
-			require.GreaterOrEqual(t, drained, 20,
-				"expected at least 20 dispatched actions")
-
-			return
-		}
-	}
-}
-
-// TestDepTracker_CompleteCleansByPath verifies that Complete() removes the
-// byPath entry so a subsequent CancelByPath on the same path is a no-op.
-// Regression test for B-095: stale byPath entries in long-lived trackers.
-func TestDepTracker_CompleteCleansByPath(t *testing.T) {
-	t.Parallel()
-
-	dt := NewDepTracker(10, testLogger(t))
-
-	dt.Add(&Action{
-		Type: ActionDownload, Path: "file.txt",
-		DriveID: driveid.New("d"), ItemID: "i1",
-	}, 1, nil)
-
-	<-dt.Ready()
-	dt.Complete(1)
-
-	// After Complete, CancelByPath should be a no-op (byPath entry removed).
-	// Verify by adding a new action at the same path — if byPath was NOT
-	// cleaned, CancelByPath would have stale reference to action 1.
-	dt.Add(&Action{
-		Type: ActionUpload, Path: "file.txt",
-		DriveID: driveid.New("d"), ItemID: "i2",
-	}, 2, nil)
-
-	ta := <-dt.Ready()
-
-	// Set up cancel on the new action.
-	ctx, cancel := context.WithCancel(t.Context())
-	ta.Cancel = cancel
-
-	// CancelByPath should cancel action 2 (the new one), not be a no-op
-	// from a stale action 1 entry.
-	dt.CancelByPath("file.txt")
-
-	select {
-	case <-ctx.Done():
-		// Success — the new action's context was canceled.
-	case <-time.After(time.Second):
-		require.Fail(t, "CancelByPath should cancel the new action, not be a no-op")
-	}
-}
-
-// TestDepTracker_CancelByPathCleansUp verifies that CancelByPath removes
-// the byPath entry so a subsequent Add at the same path gets a fresh entry.
-// Regression test for B-095.
-func TestDepTracker_CancelByPathCleansUp(t *testing.T) {
-	t.Parallel()
-
-	dt := NewDepTracker(10, testLogger(t))
-
-	dt.Add(&Action{
-		Type: ActionDownload, Path: "cancel-me.txt",
-		DriveID: driveid.New("d"), ItemID: "i1",
-	}, 1, nil)
-
-	ta := <-dt.Ready()
-	ctx1, cancel1 := context.WithCancel(t.Context())
-	ta.Cancel = cancel1
-
-	dt.CancelByPath("cancel-me.txt")
-
-	// Verify action 1 was canceled.
-	select {
-	case <-ctx1.Done():
-		// Good.
-	case <-time.After(time.Second):
-		require.Fail(t, "action 1 context should have been canceled")
-	}
-
-	// Add a new action at the same path. If byPath was cleaned, this works
-	// correctly — CancelByPath on the new action should cancel action 2.
-	dt.Add(&Action{
-		Type: ActionUpload, Path: "cancel-me.txt",
-		DriveID: driveid.New("d"), ItemID: "i2",
-	}, 2, nil)
-
-	ta2 := <-dt.Ready()
-	ctx2, cancel2 := context.WithCancel(t.Context())
-	ta2.Cancel = cancel2
-
-	dt.CancelByPath("cancel-me.txt")
-
-	select {
-	case <-ctx2.Done():
-		// Success — action 2's context was canceled.
-	case <-time.After(time.Second):
-		require.Fail(t, "action 2 context should have been canceled")
-	}
-}
-
-func TestDepTracker_SkipCompletedDeps(t *testing.T) {
-	t.Parallel()
-
-	dt := NewDepTracker(10, testLogger(t))
-
-	// Action 2 depends on action 1, but action 1 is not added to the tracker
-	// (simulating it was already completed before tracker was populated).
-	dt.Add(&Action{
-		Type: ActionDownload, Path: "orphan.txt",
-		DriveID: driveid.New("d"), ItemID: "i2",
-	}, 2, []int64{1})
-
-	// Should dispatch immediately since dep 1 is unknown/completed.
-	select {
-	case ta := <-dt.Ready():
-		assert.Equal(t, int64(2), ta.ID)
-	case <-time.After(time.Second):
-		require.Fail(t, "timeout waiting for action with unknown dep")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// HasInFlight tests (B-122)
-// ---------------------------------------------------------------------------
-
-func TestDepTracker_HasInFlight(t *testing.T) {
-	t.Parallel()
-
-	dt := NewDepTracker(10, testLogger(t))
-
-	// No actions — HasInFlight should be false.
-	assert.False(t, dt.HasInFlight("file.txt"), "HasInFlight returned true for empty tracker")
-
-	dt.Add(&Action{
-		Type: ActionDownload, Path: "file.txt",
-		DriveID: driveid.New("d"), ItemID: "i1",
-	}, 1, nil)
-
-	// Action added — HasInFlight should be true.
-	assert.True(t, dt.HasInFlight("file.txt"), "HasInFlight returned false for in-flight path")
-
-	// Drain and complete the action.
-	<-dt.Ready()
-	dt.Complete(1)
-
-	// After Complete, HasInFlight should be false (byPath cleaned up).
-	assert.False(t, dt.HasInFlight("file.txt"), "HasInFlight returned true after Complete")
-}
-
-// ---------------------------------------------------------------------------
-// Persistent mode tests
-// ---------------------------------------------------------------------------
-
-func TestDepTracker_PersistentMode(t *testing.T) {
-	t.Parallel()
-
-	dt := NewPersistentDepTracker(testLogger(t))
-
-	dt.Add(&Action{
-		Type: ActionFolderCreate, Path: "dir",
-		DriveID: driveid.New("d"), ItemID: "i1",
-	}, 1, nil)
-
-	<-dt.Ready()
-	dt.Complete(1)
-
-	// In persistent mode, Done() should NOT fire even though all actions
-	// are complete. Workers exit via context cancellation instead.
-	select {
-	case <-dt.Done():
-		require.Fail(t, "Done() fired in persistent mode — should never close")
-	case <-time.After(100 * time.Millisecond):
-		// Expected — Done() never fires in persistent mode.
-	}
-}
-
-// TestDepTracker_SuppressedDepFilteredByEngine verifies that when a dependency
-// index is omitted (because the engine suppressed it), the dependent action
-// dispatches immediately. Before the fix, the engine passed phantom dep IDs
-// for suppressed actions — the tracker silently ignored them, causing dependents
-// to dispatch without waiting for (non-existent) completions.
-func TestDepTracker_SuppressedDepFilteredByEngine(t *testing.T) {
-	t.Parallel()
-
-	dt := NewDepTracker(10, testLogger(t))
-
-	// Simulate engine's processBatch: action 0 is suppressed (not added),
-	// action 1 depends on action 0 but the engine filters out the suppressed
-	// dep ID before calling Add.
-	dt.Add(&Action{
-		Type: ActionDownload, Path: "child.txt",
-		DriveID: driveid.New("d"), ItemID: "i2",
-	}, 1, nil) // no deps — the suppressed dep was filtered out
-
-	// Action 1 should dispatch immediately (no dependencies).
-	select {
-	case ta := <-dt.Ready():
-		require.Equal(t, int64(1), ta.ID, "expected action 1")
-	case <-time.After(time.Second):
-		require.Fail(t, "action with filtered-out suppressed dep should dispatch immediately")
-	}
-
-	dt.Complete(1)
 }
 
 // ---------------------------------------------------------------------------

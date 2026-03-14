@@ -1,6 +1,6 @@
 # Sync Execution
 
-GOVERNS: internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_transfer.go, internal/sync/worker.go, internal/sync/tracker.go, internal/sync/scope.go, internal/sync/issue_types.go, internal/sync/compute_status.go, status.go
+GOVERNS: internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_transfer.go, internal/sync/worker.go, internal/sync/dep_graph.go, internal/sync/tracker.go, internal/sync/scope.go, internal/sync/issue_types.go, internal/sync/compute_status.go, status.go
 
 Implements: R-2.3 [verified], R-5.1 [verified], R-6.4 [implemented], R-6.5.3 [verified], R-6.4.9 [planned], R-6.7.25 [planned], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.10.15 [verified], R-2.10.16 [verified], R-2.10.41 [verified], R-2.10.42 [verified], R-2.10.43 [verified], R-2.10.44 [verified]
 
@@ -12,29 +12,43 @@ Thin action dispatcher. Takes an `ActionPlan` and dispatches actions to workers 
 
 Action methods call the graph client directly and return `Outcome` — no retry loop, no error classification, no sleep. The following were removed as part of the retry-to-transport refactoring: `withRetry()`, `classifyError()`, `classifyStatusCode()`, `calcExecBackoff()`, `errClass` type + constants, `sleepFunc` field. Hash mismatch retry (`downloadWithHashRetry`) is unchanged — it's a data integrity mechanism orthogonal to the retry redesign.
 
+## DepGraph (`dep_graph.go`)
+
+Pure dependency graph with no channels, no callbacks, and no scope awareness. Tracks actions by sequential ID and resolves dependency edges. Methods return data — callers decide what to do with ready actions.
+
+- **`Add(action, id, depIDs) *TrackedAction`**: Insert an action. Returns the action if immediately ready (all deps satisfied or unknown), nil if waiting on dependencies.
+- **`Complete(id) ([]*TrackedAction, bool)`**: Mark done, delete from both `actions` and `byPath` maps (D-10 fix), return newly-ready dependents. Returns `(nil, false)` for unknown IDs.
+- **`HasInFlight(path) bool`**: Check if a path has an in-flight action.
+- **`CancelByPath(path)`**: Cancel and clean up byPath entry for a path.
+- **`InFlightCount() int`**: Returns `len(actions)` — accurate because `Complete` deletes from the map.
+
+The D-10 fix ensures completed actions are removed from the `actions` map. Without this deletion, a completed action would linger, and a subsequent `Add` could wire a dependency edge to it, causing the dependent to wait forever.
+
+`TrackedAction` struct is defined here: pairs an `Action` with an ID, cancel function, trial metadata (`IsTrial`, `TrialScopeKey`), and dependency tracking (`depsLeft`, `dependents`).
+
 ## Tracker (`tracker.go`)
 
-In-memory dependency graph for action ordering. Folder creates must complete before their children. Depth-first ordering for deletes. Actions are released for execution when all dependencies are satisfied.
+Scope-aware dispatch gate wrapping `DepGraph`. Adds scope gating, held queues, trial dispatch, and the ready channel. Actions flow: `DepGraph.Add/Complete` → scope gate check → ready channel or held queue.
 
 ### Tracker Extensions
 
 Implements: R-6.8.7 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.10.15 [verified], R-2.10.42 [verified]
 
-- **TrackedAction extensions**: `IsTrial bool` (scope trial probe), `TrialScopeKey ScopeKey` (which scope a trial is testing — set by `DispatchTrial`, propagated through `WorkerResult`). `ScopeKey` is a typed struct (see Scope Detection below), not a raw string.
+- **Composition**: `DepTracker` holds a `*DepGraph` field. Graph operations (`Add`, `Complete`, `HasInFlight`, `CancelByPath`) delegate to DepGraph, then DepTracker applies scope logic on the returned data.
+- **D-1 fix**: `dispatch()` is always called under `dt.mu`. The old code called `dispatch()` from `Complete()` after releasing the lock, causing a data race on `scopeBlocks` and `held` maps.
 - **Held queue**: `held map[ScopeKey][]*TrackedAction` — per-scope-key map. `ScopeKey` is comparable and usable as a map key. After dependency resolution, if the action's scope is blocked, it moves to the held queue instead of the worker pool.
 - **Scope blocks**: `scopeBlocks map[ScopeKey]*ScopeBlock` — active scope blocks with trial timing. `ScopeBlock.Key` is typed `ScopeKey`.
 - **`HoldScope(key, block)`**: set scope block, future dispatches matching scope go to held queue.
-- **`ReleaseScope(key)`**: clear block, dispatch all held actions.
+- **`ReleaseScope(key)`**: clear block, dispatch all held actions through scope gate under lock.
 - **`DispatchTrial(key)`**: pop one from held queue, mark `IsTrial=true`, set `TrialScopeKey`, clear `NextTrialAt` (prevents re-dispatch until trial result re-arms via `armTrialTimer`), dispatch.
 - **`NextDueTrial(now)`**: returns the scope key and `NextTrialAt` of the first scope block whose trial is due.
 - **`ExtendTrialInterval(key, nextAt, interval)`**: updates a scope block's `NextTrialAt`, `TrialInterval`, and increments its trial attempt counter on trial failure. Encapsulates the mutation under the tracker's lock.
 - **`EarliestTrialAt()`**: scans all scope blocks for the earliest `NextTrialAt` with non-empty held queue. Used by the engine's trial timer.
 - **`ScopeBlockKeys()`**: returns all active scope block keys. Used by `handleExternalChanges` to detect when `perm:dir` failures have been cleared via CLI.
 - **`GetScopeBlock(key)`**: returns a value copy of the `ScopeBlock` for a given scope key (not a pointer, preventing mutation outside the lock). Used by `handleTrialResult` to read current `TrialInterval` for backoff doubling.
-- **`dispatch()` gate**: scope gate — blocked actions go to held queue. Returns `bool` (was-held) so callers can fire the `onHeld` callback outside the lock.
+- **`dispatch()` gate**: scope gate — blocked actions go to held queue. Returns `bool` (was-held) so callers can fire the `onHeld` callback outside the lock. Always called under `dt.mu`.
 - **`onHeld` callback**: called when `dispatch()` diverts an action to a held queue. The engine sets this to `armTrialTimer` so the trial timer re-arms when the held queue becomes non-empty. Must NOT be called under `dt.mu` — callers invoke it after releasing the lock.
 - **`blockedScope()` dispatch via `ScopeKey.BlocksAction()`**: Fixed-key scopes are checked in priority order (throttle, service, disk, quota:own), then dynamic-key scopes (shortcut quota, perm:dir) via O(n) scan. Each check delegates to `ScopeKey.BlocksAction(path, shortcutKey, actionType, targetsOwnDrive)` — scope-specific blocking logic lives on the `ScopeKey` type, not in the tracker. Adding a new scope kind requires implementing `BlocksAction` for that kind.
-- Existing dependency graph behavior unchanged.
 - The tracker does NOT handle retry. All retry is via `sync_failures` + `FailureRetrier` (R-6.8.10). The engine calls `Complete` on every result; failed items are recorded in `sync_failures` with `next_retry_at`, and the `FailureRetrier` re-injects them via buffer → planner → tracker.
 
 ## Scope Detection (`scope.go`)
