@@ -335,8 +335,12 @@ func (e *Engine) processAndRoute(ctx context.Context, r *WorkerResult) []*Tracke
         // Context canceled — silently complete all dependents.
         // Don't dispatch (workers are shutting down), don't record
         // failures (not a failure — operation was canceled).
+        // Note: Complete(dep.ID) returns grandchildren whose return
+        // value is discarded. This is intentional — the graph is being
+        // torn down, grandchildren are GC'd, no code waits on Done()
+        // during shutdown.
         for _, dep := range ready {
-            e.depGraph.Complete(dep.ID) // silent completion
+            e.depGraph.Complete(dep.ID)
         }
     default: // resultRequeue, resultScopeBlock, resultSkip, resultFatal
         // Parent failed — cascade-record children as sync_failures
@@ -646,13 +650,18 @@ func (m *SyncStore) PickTrialCandidate(ctx context.Context,
 
 ```go
 case <-trialTimerCh:
-    // Clean stale trial entries (TTL = 2× debounce window)
-    e.cleanStaleTrialPending(now)
-    if len(e.trialPending) > 0 {
+    now := e.nowFunc()
+
+    // Clean stale trial entries and check for pending (mutex-protected)
+    e.trialMu.Lock()
+    e.cleanStaleTrialPendingLocked(now)
+    hasPending := len(e.trialPending) > 0
+    e.trialMu.Unlock()
+
+    if hasPending {
         break // trial already in pipeline, wait for it
     }
 
-    now := e.nowFunc()
     key, _, ok := e.scopeGate.NextDueTrial(now)
     if !ok {
         break
@@ -674,22 +683,20 @@ case <-trialTimerCh:
         break
     }
 
+    // Mark for interception (mutex-protected)
+    e.trialMu.Lock()
     e.trialPending[row.Path] = trialEntry{scopeKey: key, created: now}
+    e.trialMu.Unlock()
+
     e.buf.Add(ev) // → planner → fresh action
     e.armTrialTimer()
 ```
 
-**Stage 2: Fresh action arrives at `admitReady` (via drain loop outbox).**
+**Stage 2: Fresh action arrives at `admitAndDispatch` (main goroutine).**
 
-The trial's re-observed event goes through the buffer → planner → `depGraph.Add` (main goroutine) → `admitAndDispatch`. `admitAndDispatch` sends the action to readyCh. The drain goroutine's outbox pattern (section 3.5) pulls it from there... wait, no — `admitAndDispatch` is on the main goroutine, which sends directly to readyCh. The drain goroutine's `processAndRoute` → `admitReady` handles trial interception when dependents become ready.
+The trial's re-observed event flows: `buf.Add(ev)` → buffer → planner → `processBatch` (main goroutine) → `depGraph.Add` → ready action → `admitAndDispatch`.
 
-Actually, the trial flow is: trial timer fires (drain goroutine) → `reobserve` → `buf.Add(ev)` → buffer → planner → `processBatch` (main goroutine) → `depGraph.Add` → ready action → `admitAndDispatch` → readyCh. The main goroutine doesn't check `trialPending` — it just sends to readyCh.
-
-The drain goroutine's `admitReady` (section 3.5) checks `trialPending` when processing worker result dependents. But the trial action doesn't arrive as a dependent — it arrives as a new action from the planner.
-
-**Resolution**: The trial action arrives at `admitAndDispatch` on the main goroutine. `admitAndDispatch` must also check `trialPending` for trial interception. But `trialPending` is drain-goroutine state — accessing it from the main goroutine is a data race.
-
-**Fix**: `trialPending` is protected by a mutex (not goroutine-scoped). Both goroutines can read/write it safely:
+`admitAndDispatch` checks `trialPending` (mutex-protected via `trialMu`) for trial interception. If the path matches, the action is marked as a trial and sent to readyCh bypassing the scope gate:
 
 ```go
 // admitAndDispatch — called by main goroutine (processBatch, executePlan).
@@ -823,7 +830,7 @@ Independent. Can be done first (see ordering note above).
 3. Create `reobserve`, `observeLocal`, `observeRemote` (trial use only)
 4. Create `createEventFromDB`, `remoteStateToChangeEvent` (retrier use)
 5. Create `isFailureResolved` (stale sync_failure detection — D-11)
-6. Create `admitAndDispatch` (main goroutine — no trial interception) and `routeReadyActions` (drain goroutine — with trial interception via `trialPending` map). `trialPending` is drain-goroutine-only state — no cross-goroutine access.
+6. Create `admitAndDispatch` (main goroutine, watch-only — accesses `trialPending` and `scopeGate` via `e.watch`) and `admitReady` (drain goroutine — also accesses `trialPending` via `e.watch`). `trialPending` is mutex-protected (`trialMu`) — both goroutines access it safely. One-shot mode uses a direct readyCh send in `executePlan` (no `admitAndDispatch`, no scope gate).
 7. Create `cascadeRecordAndComplete`, `recordScopeBlockedFailure`, `recordCascadeFailure`
 8. Create `onScopeClear` — `ClearScopeBlock` + `SetScopeRetryAtNow` + `armRetryTimer` (no inline re-observation)
 9. Rewrite `processWorkerResult` with failure-aware dependent dispatch (section 3.5)
@@ -838,8 +845,8 @@ Independent. Can be done first (see ordering note above).
 18. Create `PickTrialCandidate` in `SyncStore`
 19. Create `SetScopeRetryAtNow` in `SyncStore` — `UPDATE sync_failures SET next_retry_at = ? WHERE scope_key = ?`
 20. Update `WorkerPool` to accept `readyCh <-chan *TrackedAction` and `done <-chan struct{}`
-20. Rewrite `executePlan` (one-shot): no scope gate (section 2.3)
-21. Rewrite `processBatch` (watch): scope gate checks after Add
+21. Rewrite `executePlan` (one-shot): no scope gate, no `admitAndDispatch` — sends directly to readyCh (section 2.3)
+22. Rewrite `processBatch` (watch): scope gate checks via `admitAndDispatch` after Add
 
 ### Phase 5: Delete Old Code
 

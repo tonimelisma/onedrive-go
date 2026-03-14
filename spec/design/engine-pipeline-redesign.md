@@ -307,6 +307,8 @@ All phases in this document execute AFTER tracker-redesign.md Phases 1-5. The co
 7. Move `setWatchShortcuts`/`getWatchShortcuts` to watchState methods
 8. Update all engine_test.go helpers
 
+7. Note: `admitAndDispatch` is watch-only (accesses `e.watch.scopeGate`, `e.watch.trialPending`). One-shot mode's `executePlan` has its own dispatch path that sends directly to readyCh — no scope gate, no trial interception, no watchState access.
+
 **Code**: `engine.go` (field reorganization, nil guard replacement), `engine_shortcuts.go` (shortcut access), `engine_test.go`
 **Design docs**: `sync-engine.md` (Engine struct documentation)
 **Requirements**: None
@@ -382,7 +384,7 @@ This is the authoritative execution order. Each increment is a PR that leaves th
 ## 6. Risks and Mitigations
 
 **Risk**: `bootstrapSync` + `waitForQuiescence` — `WaitForEmpty()` never fires if a scope block holds actions during bootstrap.
-**Mitigation**: Bootstrap has empty scope detection windows — no historical failures to trigger blocks. Rare case: multiple 429s during first pass. Trial timer eventually clears. 30-minute timeout on `waitForQuiescence` prevents hanging.
+**Resolution**: With the tracker redesign in place (completed before Phase 9), scope-blocked actions are immediately completed in the graph via `cascadeRecordAndComplete`. `total == completed` always becomes true — `WaitForEmpty()` WILL fire. This scenario cannot occur. The 30-minute timeout on `waitForQuiescence` is a safety measure only — it should never trigger in normal operation.
 
 **Risk**: Observer startup after bootstrap may miss events.
 **Mitigation**: Same window as current design. Delta token from bootstrap is committed; observer starts from that token. Next poll catches the gap.
