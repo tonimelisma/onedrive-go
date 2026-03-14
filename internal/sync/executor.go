@@ -28,18 +28,15 @@ type ExecutorConfig struct {
 	driveID   driveid.ID // per-drive context (B-068)
 	logger    *slog.Logger
 
-	// transferMgr handles unified download/upload with resume.
+	// transferMgr handles unified download/upload with resume and disk
+	// space pre-checks (R-6.2.6). Disk check is configured via
+	// driveops.WithDiskCheck when constructing the TransferManager.
 	transferMgr *driveops.TransferManager
 
-	// minFreeSpace is the minimum free disk space (bytes) required before
-	// downloads. Zero disables the check (R-6.4.7). Set from config.Safety.MinFreeSpace.
-	minFreeSpace int64
-
 	// Injectable for testing.
-	nowFunc           func() time.Time
-	hashFunc          func(filePath string) (string, error)
-	trashFunc         func(absPath string) error        // nil = permanent delete (os.Remove)
-	diskAvailableFunc func(path string) (uint64, error) // nil = skip disk check (non-unix or unconfigured)
+	nowFunc   func() time.Time
+	hashFunc  func(filePath string) (string, error)
+	trashFunc func(absPath string) error // nil = permanent delete (os.Remove)
 }
 
 // Executor executes individual actions against the Graph API and local

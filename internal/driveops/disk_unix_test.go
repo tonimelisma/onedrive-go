@@ -1,6 +1,6 @@
 //go:build darwin || linux
 
-package sync
+package driveops
 
 import (
 	"testing"
@@ -13,7 +13,7 @@ import (
 func TestDiskAvailable_ReturnsPositiveValue(t *testing.T) {
 	t.Parallel()
 
-	avail, err := diskAvailable(".")
+	avail, err := DiskAvailable(".")
 	require.NoError(t, err)
 	assert.Greater(t, avail, uint64(0), "disk available should be > 0 for current directory")
 }
