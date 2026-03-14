@@ -125,9 +125,11 @@ Detects shortcuts to shared folders in the delta stream. Creates additional delt
 
 Multi-drive coordination. Runs one `DriveRunner` per configured, non-paused drive. Each drive gets its own goroutine, state DB, and sync engine instance. Engines do not coordinate scope blocks across engine boundaries — each engine discovers independently. Bounded waste accepted (one request per engine for 429). Implements: R-2.10.35 [planned]
 
+Pause semantics are delegated to `config.Drive.IsPaused()` and `config.ClearExpiredPauses()` — the orchestrator is a consumer, not an implementor, of pause logic. The initial RunWatch loop checks `ResolvedDrive.Paused` (which is expiry-aware). On SIGHUP reload, `ClearExpiredPauses` clears stale keys before `ResolveDrives` determines the active set.
+
 Handles:
 - Drive add/remove via SIGHUP config reload
-- Pause/resume per drive
+- Pause/resume per drive (via config package pause APIs)
 - Graceful shutdown (drain all drives)
 
 ## DriveRunner (`drive_runner.go`)
