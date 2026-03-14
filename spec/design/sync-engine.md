@@ -51,7 +51,7 @@ Trial result routing: `processTrialResult()` handles all trial outcomes with an 
 
 The engine owns all completion decisions — workers are pure executors. Engine-owned counters (`succeeded`, `failed` atomics) replace the worker-owned counters removed in this refactoring. `drainWorkerResults()` processes results concurrently for both one-shot and watch modes.
 
-`recordFailure()` sets category based on `delayFn`: non-nil → `"transient"`, nil → `"actionable"`. Populates `scope_key` via `ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)` — returns a typed `ScopeKey`, serialized to wire format via `String()` for SQLite storage. Delegates to `SyncStore.RecordFailure()` which computes `next_retry_at` via the `delayFn`. The `FailureRetrier` sweeps `sync_failures` for due items and re-injects them via buffer → planner → tracker.
+`recordFailure()` sets category based on `delayFn`: non-nil → `"transient"`, nil → `"actionable"`. Populates `scope_key` via `ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)` — returns a typed `ScopeKey`, serialized to wire format via `String()` for SQLite storage. Delegates to `SyncStore.RecordFailure()` which computes `next_retry_at` via the `delayFn`. The drain-loop retrier sweeps `sync_failures` for due items and re-injects them via buffer → planner → DepGraph.
 
 ### ScopeState
 
@@ -170,5 +170,5 @@ In watch mode, the planner-level big-delete check is disabled (`threshold=MaxInt
 
 ### Rationale
 
-- **Crash recovery requires explicit bridging**: On restart after crash, `ResetInProgressStates` resets `remote_state` items stuck mid-execution to pending, AND creates `sync_failures` entries so the `FailureRetrier`'s bootstrap sweep can rediscover them. This is necessary because the delta token was already advanced before execution — items that crashed mid-execution won't appear in the next delta response. The planner is idempotent for items that DO appear in observations, but crash recovery items need the `sync_failures` → `FailureRetrier` → buffer → planner path.
+- **Crash recovery requires explicit bridging**: On restart after crash, `ResetInProgressStates` resets `remote_state` items stuck mid-execution to pending, AND creates `sync_failures` entries so the drain-loop retrier's bootstrap sweep can rediscover them. This is necessary because the delta token was already advanced before execution — items that crashed mid-execution won't appear in the next delta response. The planner is idempotent for items that DO appear in observations, but crash recovery items need the `sync_failures` → retrier → buffer → planner path.
 - **Always use Orchestrator, even for single drive**: N=1 means one DriveRunner — same logic, no special case. Prevents "works for N=1 but breaks for N=2" class of bugs.
