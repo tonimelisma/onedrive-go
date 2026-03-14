@@ -143,7 +143,7 @@ func (o *LocalObserver) FullScan(ctx context.Context, syncRoot string) (ScanResu
 	// (set in Phase 1) to prevent Phase 3 from generating spurious ChangeDelete
 	// events for files that exist locally but were excluded from events (R-2.12.1).
 	var caseSkipped []SkippedItem
-	events, caseSkipped = detectCaseCollisions(events)
+	events, caseSkipped = detectCaseCollisions(events, o.baseline)
 	skipped = append(skipped, caseSkipped...)
 
 	// Phase 3: Deletion detection.
@@ -454,61 +454,43 @@ func (o *LocalObserver) classifyFileChange(
 // both would cause one to silently overwrite the other (R-2.12.1).
 //
 // O(n) time, O(n) memory. Pure function — no side effects.
-func detectCaseCollisions(events []ChangeEvent) (clean []ChangeEvent, collisions []SkippedItem) {
+func detectCaseCollisions(events []ChangeEvent, baseline *Baseline) (clean []ChangeEvent, collisions []SkippedItem) {
 	if len(events) == 0 {
 		return nil, nil
 	}
 
 	// Group event indices by (directory, lowercase name).
-	type groupKey struct {
-		dir     string
-		lowName string
-	}
-	groups := make(map[groupKey][]int, len(events))
-
+	groups := make(map[caseGroupKey][]int, len(events))
 	for i := range events {
 		dir := filepath.Dir(events[i].Path)
 		lowName := strings.ToLower(filepath.Base(events[i].Path))
-		key := groupKey{dir: dir, lowName: lowName}
+		key := caseGroupKey{dir: dir, lowName: lowName}
 		groups[key] = append(groups[key], i)
 	}
 
 	// Build the collider set — all indices that participate in a collision.
 	colliderSet := make(map[int]struct{})
 	for _, indices := range groups {
-		if len(indices) <= 1 {
-			continue
-		}
-		for _, idx := range indices {
-			colliderSet[idx] = struct{}{}
+		if len(indices) > 1 {
+			for _, idx := range indices {
+				colliderSet[idx] = struct{}{}
+			}
 		}
 	}
+
+	// Cross-check single-event groups against baseline.
+	crossCheckBaseline(events, groups, baseline, colliderSet)
+
+	// Suppress children of colliding directories.
+	childColliderSet, collidingDirPrefixes := suppressDirectoryChildren(events, colliderSet)
 
 	if len(colliderSet) == 0 {
 		return events, nil
 	}
 
 	// Build SkippedItems with Detail naming the other collider(s).
-	collisions = make([]SkippedItem, 0, len(colliderSet))
-	for _, indices := range groups {
-		if len(indices) <= 1 {
-			continue
-		}
-		for i, idx := range indices {
-			// Collect names of the OTHER colliders for the Detail field.
-			var others []string
-			for j, otherIdx := range indices {
-				if j != i {
-					others = append(others, filepath.Base(events[otherIdx].Path))
-				}
-			}
-			collisions = append(collisions, SkippedItem{
-				Path:   events[idx].Path,
-				Reason: IssueCaseCollision,
-				Detail: fmt.Sprintf("conflicts with %s", strings.Join(others, ", ")),
-			})
-		}
-	}
+	collisions = buildCollisionSkippedItems(
+		events, groups, colliderSet, childColliderSet, collidingDirPrefixes, baseline)
 
 	// Build clean events — those not in the collider set.
 	clean = make([]ChangeEvent, 0, len(events)-len(colliderSet))
@@ -519,6 +501,197 @@ func detectCaseCollisions(events []ChangeEvent) (clean []ChangeEvent, collisions
 	}
 
 	return clean, collisions
+}
+
+// caseGroupKey groups events by (directory, lowercase name) for case collision detection.
+type caseGroupKey struct {
+	dir     string
+	lowName string
+}
+
+// crossCheckBaseline flags single-event groups that collide with already-synced
+// baseline entries. A new file whose lowercased name matches a baseline entry
+// with different exact casing is a collision (the baseline file produced no event
+// because it was unchanged — fast-path skip in classifyFileChange).
+func crossCheckBaseline(
+	events []ChangeEvent,
+	groups map[caseGroupKey][]int,
+	baseline *Baseline,
+	colliderSet map[int]struct{},
+) {
+	if baseline == nil {
+		return
+	}
+
+	for key, indices := range groups {
+		if len(indices) != 1 {
+			continue
+		}
+
+		if _, already := colliderSet[indices[0]]; already {
+			continue
+		}
+
+		ev := &events[indices[0]]
+		variants := baseline.GetCaseVariants(key.dir, filepath.Base(ev.Path))
+
+		for _, v := range variants {
+			if v.Path != ev.Path {
+				colliderSet[indices[0]] = struct{}{}
+
+				break
+			}
+		}
+	}
+}
+
+// suppressDirectoryChildren marks children of colliding directories as colliders.
+// They can't be uploaded to a folder that won't exist on OneDrive.
+func suppressDirectoryChildren(
+	events []ChangeEvent, colliderSet map[int]struct{},
+) (childColliderSet map[int]struct{}, collidingDirPrefixes []string) {
+	childColliderSet = make(map[int]struct{})
+
+	for idx := range colliderSet {
+		if events[idx].ItemType == ItemTypeFolder {
+			collidingDirPrefixes = append(collidingDirPrefixes, events[idx].Path+"/")
+		}
+	}
+
+	for i := range events {
+		if _, already := colliderSet[i]; already {
+			continue
+		}
+
+		for _, prefix := range collidingDirPrefixes {
+			if strings.HasPrefix(events[i].Path, prefix) {
+				colliderSet[i] = struct{}{}
+				childColliderSet[i] = struct{}{}
+
+				break
+			}
+		}
+	}
+
+	return childColliderSet, collidingDirPrefixes
+}
+
+// buildCollisionSkippedItems constructs SkippedItems with Detail messages for
+// event-vs-event collisions, baseline cross-check collisions, and child collisions.
+func buildCollisionSkippedItems(
+	events []ChangeEvent,
+	groups map[caseGroupKey][]int,
+	colliderSet, childColliderSet map[int]struct{},
+	collidingDirPrefixes []string,
+	baseline *Baseline,
+) []SkippedItem {
+	collisions := make([]SkippedItem, 0, len(colliderSet))
+
+	// Event-vs-event and baseline collisions.
+	for _, indices := range groups {
+		if len(indices) <= 1 {
+			collisions = appendSingleGroupCollision(
+				collisions, events, indices, colliderSet, childColliderSet, baseline)
+
+			continue
+		}
+
+		collisions = appendMultiGroupCollisions(
+			collisions, events, indices, childColliderSet)
+	}
+
+	// Child collisions — distinct Detail indicating the parent directory collision.
+	for idx := range childColliderSet {
+		ev := &events[idx]
+
+		parentDir := ""
+		for _, prefix := range collidingDirPrefixes {
+			if strings.HasPrefix(ev.Path, prefix) {
+				parentDir = strings.TrimSuffix(prefix, "/")
+
+				break
+			}
+		}
+
+		collisions = append(collisions, SkippedItem{
+			Path:   ev.Path,
+			Reason: IssueCaseCollision,
+			Detail: fmt.Sprintf("parent directory %q has a case collision",
+				filepath.Base(parentDir)),
+		})
+	}
+
+	return collisions
+}
+
+// appendSingleGroupCollision handles SkippedItem construction for a group with
+// exactly one event (flagged by baseline cross-check).
+func appendSingleGroupCollision(
+	collisions []SkippedItem,
+	events []ChangeEvent,
+	indices []int,
+	colliderSet, childColliderSet map[int]struct{},
+	baseline *Baseline,
+) []SkippedItem {
+	idx := indices[0]
+
+	if _, flagged := colliderSet[idx]; !flagged {
+		return collisions
+	}
+
+	if _, isChild := childColliderSet[idx]; isChild {
+		return collisions // handled in child pass
+	}
+
+	ev := &events[idx]
+
+	if baseline == nil {
+		return collisions
+	}
+
+	variants := baseline.GetCaseVariants(filepath.Dir(ev.Path), filepath.Base(ev.Path))
+	for _, v := range variants {
+		if v.Path != ev.Path {
+			return append(collisions, SkippedItem{
+				Path:   ev.Path,
+				Reason: IssueCaseCollision,
+				Detail: fmt.Sprintf("conflicts with synced file %s",
+					filepath.Base(v.Path)),
+			})
+		}
+	}
+
+	return collisions
+}
+
+// appendMultiGroupCollisions handles SkippedItem construction for groups with
+// multiple events (event-vs-event collisions).
+func appendMultiGroupCollisions(
+	collisions []SkippedItem,
+	events []ChangeEvent,
+	indices []int,
+	childColliderSet map[int]struct{},
+) []SkippedItem {
+	for i, idx := range indices {
+		if _, isChild := childColliderSet[idx]; isChild {
+			continue
+		}
+
+		var others []string
+		for j, otherIdx := range indices {
+			if j != i {
+				others = append(others, filepath.Base(events[otherIdx].Path))
+			}
+		}
+
+		collisions = append(collisions, SkippedItem{
+			Path:   events[idx].Path,
+			Reason: IssueCaseCollision,
+			Detail: fmt.Sprintf("conflicts with %s", strings.Join(others, ", ")),
+		})
+	}
+
+	return collisions
 }
 
 // detectDeletions finds baseline entries that were not observed during the
