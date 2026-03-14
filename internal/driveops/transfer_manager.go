@@ -71,27 +71,55 @@ type UploadResult struct {
 // TransferManager provides unified download/upload with resume, shared between
 // the CLI (files.go) and the sync engine (executor_transfer.go). Handles
 // .partial files, range-based resume, hash verification with retry, session
-// persistence for uploads, and atomic rename.
+// persistence for uploads, disk space pre-checks, and atomic rename.
 type TransferManager struct {
 	downloads    Downloader
 	uploads      Uploader
 	sessionStore *SessionStore // nil = no session persistence for uploads
 	logger       *slog.Logger
 	hashFunc     func(string) (string, error)
+
+	// minFreeSpace is the minimum free disk space (bytes) required before
+	// downloads. Zero disables the check (R-6.4.7). Configured via WithDiskCheck.
+	minFreeSpace int64
+
+	// diskAvailableFunc queries available disk space. nil = skip disk check.
+	// Injected via WithDiskCheck to allow testing without real statfs calls.
+	diskAvailableFunc func(string) (uint64, error)
+}
+
+// Option configures a TransferManager. Pass to NewTransferManager.
+type Option func(*TransferManager)
+
+// WithDiskCheck enables disk space pre-checks before each download (R-6.2.6).
+// minFreeSpace is the minimum free space in bytes; zero disables the check
+// (R-6.4.7). fn queries available disk space for a path — typically DiskAvailable.
+func WithDiskCheck(minFreeSpace int64, fn func(string) (uint64, error)) Option {
+	return func(tm *TransferManager) {
+		tm.minFreeSpace = minFreeSpace
+		tm.diskAvailableFunc = fn
+	}
 }
 
 // NewTransferManager creates a TransferManager. sessionStore may be nil if
 // upload session persistence is not needed (e.g., small-file-only workflows).
+// Options configure optional behaviors like disk space checking.
 func NewTransferManager(
-	dl Downloader, ul Uploader, store *SessionStore, logger *slog.Logger,
+	dl Downloader, ul Uploader, store *SessionStore, logger *slog.Logger, opts ...Option,
 ) *TransferManager {
-	return &TransferManager{
+	tm := &TransferManager{
 		downloads:    dl,
 		uploads:      ul,
 		sessionStore: store,
 		logger:       logger,
 		hashFunc:     ComputeQuickXorHash,
 	}
+
+	for _, opt := range opts {
+		opt(tm)
+	}
+
+	return tm
 }
 
 // DownloadToFile downloads a remote file to targetPath with .partial safety:
@@ -113,6 +141,12 @@ func (tm *TransferManager) DownloadToFile(
 		slog.String("target", targetPath),
 		slog.String("item_id", itemID),
 	)
+
+	// Disk space pre-check (R-6.2.6, R-2.10.43, R-2.10.44).
+	// Runs before directory creation or download to avoid partial writes.
+	if err := tm.checkDiskSpace(targetPath, opts.RemoteSize); err != nil {
+		return nil, err
+	}
 
 	// Ensure parent directory exists.
 	if err := os.MkdirAll(filepath.Dir(targetPath), 0o700); err != nil { //nolint:mnd // owner-only dir perms
@@ -535,6 +569,48 @@ func (tm *TransferManager) sessionUpload(
 	tm.deleteSession(driveStr, localPath)
 
 	return item, nil
+}
+
+// checkDiskSpace verifies sufficient disk space before a download (R-6.2.6).
+// No-op when diskAvailableFunc is nil or minFreeSpace is 0.
+//
+// Two-tier check:
+//   - Available < minFreeSpace → ErrDiskFull (scope block in sync engine)
+//   - Available ≥ minFreeSpace but < fileSize + minFreeSpace → ErrFileTooLargeForSpace (per-file skip)
+//
+// Fails open on statfs errors: a transient statfs failure should not block
+// all downloads.
+func (tm *TransferManager) checkDiskSpace(targetPath string, fileSize int64) error {
+	if tm.diskAvailableFunc == nil || tm.minFreeSpace == 0 {
+		return nil
+	}
+
+	// Check the filesystem containing the target's parent directory.
+	checkPath := filepath.Dir(targetPath)
+
+	available, err := tm.diskAvailableFunc(checkPath)
+	if err != nil {
+		// Fail open: a transient statfs error should not block downloads.
+		tm.logger.Warn("disk space check failed, proceeding with download",
+			slog.String("path", checkPath),
+			slog.String("error", err.Error()),
+		)
+
+		return nil
+	}
+
+	minFree := uint64(tm.minFreeSpace)
+	if available < minFree {
+		return fmt.Errorf("%w: available %d bytes < min_free_space %d bytes", ErrDiskFull, available, minFree)
+	}
+
+	// Per-file check: can this specific file fit within available - minFreeSpace?
+	if fileSize > 0 && available < uint64(fileSize)+minFree {
+		return fmt.Errorf("%w: need %d bytes, available %d bytes (after reserving %d)",
+			ErrFileTooLargeForSpace, fileSize, available-minFree, minFree)
+	}
+
+	return nil
 }
 
 // deleteSession removes an upload session file, logging on failure. Callers
