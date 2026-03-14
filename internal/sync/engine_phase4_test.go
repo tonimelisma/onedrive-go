@@ -197,7 +197,7 @@ func TestEngine_AdmitReady_ScopeBlocked(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// processAndRoute — success path
+// processWorkerResult — success path
 // ---------------------------------------------------------------------------
 
 func TestEngine_ProcessAndRoute_Success(t *testing.T) {
@@ -226,7 +226,7 @@ func TestEngine_ProcessAndRoute_Success(t *testing.T) {
 		ActionID:   1,
 	}
 
-	dispatched := eng.processAndRoute(ctx, r, bl)
+	dispatched := eng.processWorkerResult(ctx, r, bl)
 
 	// Child should be returned as ready (no scope gate → dispatched).
 	assert.Len(t, dispatched, 1)
@@ -264,7 +264,7 @@ func TestEngine_ProcessAndRoute_FailureCascadesChildren(t *testing.T) {
 		ActionID:   1,
 	}
 
-	dispatched := eng.processAndRoute(ctx, r, bl)
+	dispatched := eng.processWorkerResult(ctx, r, bl)
 
 	// Child should NOT be dispatched — it's cascade-recorded.
 	assert.Empty(t, dispatched)

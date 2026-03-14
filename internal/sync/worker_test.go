@@ -135,14 +135,48 @@ func newWorkerTestSetup(t *testing.T) (
 	return cfg, mgr, syncRoot
 }
 
-// drainAndComplete drains the worker result channel, calling tracker.Complete
-// for each result. Returns the collected results. This simulates the engine's
-// drain goroutine in tests.
-func drainAndComplete(results <-chan WorkerResult, tracker *DepTracker) []WorkerResult {
+// testDepGraphHelper wraps a DepGraph for worker tests, providing the readyCh
+// and doneCh channels that WorkerPool expects. Add sends ready actions to
+// readyCh; drainAndComplete calls dg.Complete and sends newly-ready
+// dependents to readyCh.
+type testDepGraphHelper struct {
+	dg      *DepGraph
+	readyCh chan *TrackedAction
+}
+
+func newTestDepGraphHelper(t *testing.T) *testDepGraphHelper {
+	t.Helper()
+	return &testDepGraphHelper{
+		dg:      NewDepGraph(testLogger(t)),
+		readyCh: make(chan *TrackedAction, 64),
+	}
+}
+
+// Add wraps DepGraph.Add and sends ready actions to readyCh.
+func (h *testDepGraphHelper) Add(action *Action, id int64, deps []int64) {
+	ta := h.dg.Add(action, id, deps)
+	if ta != nil {
+		h.readyCh <- ta
+	}
+}
+
+// Ready returns the readyCh for WorkerPool.
+func (h *testDepGraphHelper) Ready() <-chan *TrackedAction { return h.readyCh }
+
+// Done returns the DepGraph's Done channel.
+func (h *testDepGraphHelper) Done() <-chan struct{} { return h.dg.Done() }
+
+// drainAndComplete drains the worker result channel, calling dg.Complete
+// for each result and sending newly-ready dependents to readyCh. Returns
+// the collected results. This simulates the engine's drain goroutine.
+func (h *testDepGraphHelper) drainAndComplete(results <-chan WorkerResult) []WorkerResult {
 	var collected []WorkerResult
 	for r := range results {
 		collected = append(collected, r)
-		tracker.Complete(r.ActionID)
+		ready, _ := h.dg.Complete(r.ActionID)
+		for _, ta := range ready {
+			h.readyCh <- ta
+		}
 	}
 	return collected
 }
@@ -150,13 +184,13 @@ func drainAndComplete(results <-chan WorkerResult, tracker *DepTracker) []Worker
 // runPoolWithDrain starts the pool, drains results in a goroutine (calling
 // Complete on each), waits for all actions to finish, then stops the pool
 // and returns the collected results.
-func runPoolWithDrain(ctx context.Context, pool *WorkerPool, tracker *DepTracker) []WorkerResult {
+func runPoolWithDrain(ctx context.Context, pool *WorkerPool, dgh *testDepGraphHelper) []WorkerResult {
 	pool.Start(ctx, 4)
 
 	var results []WorkerResult
 	done := make(chan struct{})
 	go func() {
-		results = drainAndComplete(pool.Results(), tracker)
+		results = dgh.drainAndComplete(pool.Results())
 		close(done)
 	}()
 
@@ -206,11 +240,11 @@ func TestWorkerPool_FolderCreate(t *testing.T) {
 		},
 	}
 
-	tracker := NewDepTracker(10, testLogger(t))
-	tracker.Add(&actions[0], 0, nil)
+	dgh := newTestDepGraphHelper(t)
+	dgh.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, tracker.Ready(), tracker.Done(), mgr, testLogger(t), 10)
-	results := runPoolWithDrain(ctx, pool, tracker)
+	pool := NewWorkerPool(cfg, dgh.Ready(), dgh.Done(), mgr, testLogger(t), 10)
+	results := runPoolWithDrain(ctx, pool, dgh)
 
 	succeeded, failed := countResults(results)
 	assert.Equal(t, 0, failed, "failed actions")
@@ -269,12 +303,12 @@ func TestWorkerPool_DependencyChain(t *testing.T) {
 		},
 	}
 
-	tracker := NewDepTracker(10, testLogger(t))
-	tracker.Add(&actions[0], 0, nil)
-	tracker.Add(&actions[1], 1, []int64{0})
+	dgh := newTestDepGraphHelper(t)
+	dgh.Add(&actions[0], 0, nil)
+	dgh.Add(&actions[1], 1, []int64{0})
 
-	pool := NewWorkerPool(cfg, tracker.Ready(), tracker.Done(), mgr, testLogger(t), 10)
-	results := runPoolWithDrain(ctx, pool, tracker)
+	pool := NewWorkerPool(cfg, dgh.Ready(), dgh.Done(), mgr, testLogger(t), 10)
+	results := runPoolWithDrain(ctx, pool, dgh)
 
 	succeeded, failed := countResults(results)
 	assert.Equal(t, 0, failed, "failed actions")
@@ -308,10 +342,10 @@ func TestWorkerPool_StopCancelsWork(t *testing.T) {
 		},
 	}
 
-	tracker := NewDepTracker(10, testLogger(t))
-	tracker.Add(&actions[0], 0, nil)
+	dgh := newTestDepGraphHelper(t)
+	dgh.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, tracker.Ready(), tracker.Done(), mgr, testLogger(t), 10)
+	pool := NewWorkerPool(cfg, dgh.Ready(), dgh.Done(), mgr, testLogger(t), 10)
 	pool.Start(ctx, 4)
 
 	// Give workers a moment to pick up the action.
@@ -349,11 +383,11 @@ func TestWorkerPool_ResultChannel(t *testing.T) {
 		},
 	}
 
-	tracker := NewDepTracker(10, testLogger(t))
-	tracker.Add(&actions[0], 42, nil)
+	dgh := newTestDepGraphHelper(t)
+	dgh.Add(&actions[0], 42, nil)
 
-	pool := NewWorkerPool(cfg, tracker.Ready(), tracker.Done(), mgr, testLogger(t), 10)
-	results := runPoolWithDrain(ctx, pool, tracker)
+	pool := NewWorkerPool(cfg, dgh.Ready(), dgh.Done(), mgr, testLogger(t), 10)
+	results := runPoolWithDrain(ctx, pool, dgh)
 
 	// Verify result for the action.
 	var found bool
@@ -400,11 +434,11 @@ func TestWorkerPool_FailedOutcome(t *testing.T) {
 		},
 	}
 
-	tracker := NewDepTracker(10, testLogger(t))
-	tracker.Add(&actions[0], 0, nil)
+	dgh := newTestDepGraphHelper(t)
+	dgh.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, tracker.Ready(), tracker.Done(), mgr, testLogger(t), 10)
-	results := runPoolWithDrain(ctx, pool, tracker)
+	pool := NewWorkerPool(cfg, dgh.Ready(), dgh.Done(), mgr, testLogger(t), 10)
+	results := runPoolWithDrain(ctx, pool, dgh)
 
 	succeeded, failed := countResults(results)
 	assert.Equal(t, 0, succeeded)
@@ -477,12 +511,12 @@ func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing
 	require.NoError(t, os.MkdirAll(filepath.Dir(absPath), 0o755))
 	require.NoError(t, os.WriteFile(absPath, []byte("upload content"), 0o644))
 
-	tracker := NewDepTracker(10, testLogger(t))
-	tracker.Add(&actions[0], 0, nil)
-	tracker.Add(&actions[1], 1, []int64{0})
+	dgh := newTestDepGraphHelper(t)
+	dgh.Add(&actions[0], 0, nil)
+	dgh.Add(&actions[1], 1, []int64{0})
 
-	pool := NewWorkerPool(cfg, tracker.Ready(), tracker.Done(), mgr, testLogger(t), 10)
-	results := runPoolWithDrain(ctx, pool, tracker)
+	pool := NewWorkerPool(cfg, dgh.Ready(), dgh.Done(), mgr, testLogger(t), 10)
+	results := runPoolWithDrain(ctx, pool, dgh)
 
 	succeeded, failed := countResults(results)
 	assert.Equal(t, 0, failed, "failed actions")
@@ -528,11 +562,11 @@ func TestWorkerPool_PanicRecovery(t *testing.T) {
 		},
 	}
 
-	tracker := NewDepTracker(10, testLogger(t))
-	tracker.Add(&actions[0], 0, nil)
+	dgh := newTestDepGraphHelper(t)
+	dgh.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, tracker.Ready(), tracker.Done(), mgr, testLogger(t), 10)
-	results := runPoolWithDrain(ctx, pool, tracker)
+	pool := NewWorkerPool(cfg, dgh.Ready(), dgh.Done(), mgr, testLogger(t), 10)
+	results := runPoolWithDrain(ctx, pool, dgh)
 
 	// If we got here, the panic was recovered — the process didn't crash.
 	_, failed := countResults(results)
@@ -571,10 +605,10 @@ func TestWorker_NeverCallsComplete(t *testing.T) {
 		},
 	}
 
-	tracker := NewDepTracker(10, testLogger(t))
-	tracker.Add(&actions[0], 0, nil)
+	dgh := newTestDepGraphHelper(t)
+	dgh.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, tracker.Ready(), tracker.Done(), mgr, testLogger(t), 10)
+	pool := NewWorkerPool(cfg, dgh.Ready(), dgh.Done(), mgr, testLogger(t), 10)
 	pool.Start(ctx, 4)
 
 	// Read one result from the channel — worker must send a result.
@@ -586,11 +620,11 @@ func TestWorker_NeverCallsComplete(t *testing.T) {
 		require.Fail(t, "timeout waiting for worker result")
 	}
 
-	// Worker sent the result but did NOT call Complete — tracker.Done should
+	// Worker sent the result but did NOT call Complete — dgh.Done should
 	// NOT have fired (the action is still in-flight from tracker's perspective).
 	select {
-	case <-tracker.Done():
-		require.Fail(t, "tracker.Done fired — worker must not call Complete")
+	case <-dgh.Done():
+		require.Fail(t, "dgh.Done fired — worker must not call Complete")
 	default:
 		// Expected: Done not fired because Complete was not called.
 	}
@@ -600,13 +634,13 @@ func TestWorker_NeverCallsComplete(t *testing.T) {
 	assert.Equal(t, int64(0), result.ActionID, "ActionID should match TrackedAction.ID")
 
 	// Now WE call Complete (simulating the engine), which should fire Done.
-	tracker.Complete(result.ActionID)
+	_, _ = dgh.dg.Complete(result.ActionID)
 
 	select {
-	case <-tracker.Done():
+	case <-dgh.Done():
 		// Expected: Done fires after engine calls Complete.
 	case <-time.After(5 * time.Second):
-		require.Fail(t, "tracker.Done did not fire after Complete")
+		require.Fail(t, "dgh.Done did not fire after Complete")
 	}
 
 	pool.Stop()
@@ -635,10 +669,10 @@ func TestWorkerResult_PopulatesFromAction(t *testing.T) {
 		},
 	}
 
-	tracker := NewDepTracker(10, testLogger(t))
-	tracker.Add(&actions[0], 77, nil)
+	dgh := newTestDepGraphHelper(t)
+	dgh.Add(&actions[0], 77, nil)
 
-	pool := NewWorkerPool(cfg, tracker.Ready(), tracker.Done(), mgr, testLogger(t), 10)
+	pool := NewWorkerPool(cfg, dgh.Ready(), dgh.Done(), mgr, testLogger(t), 10)
 	pool.Start(ctx, 4)
 
 	var result WorkerResult
@@ -660,7 +694,7 @@ func TestWorkerResult_PopulatesFromAction(t *testing.T) {
 	assert.Equal(t, int64(77), result.ActionID, "ActionID should match TrackedAction.ID")
 
 	// Clean up.
-	tracker.Complete(result.ActionID)
+	_, _ = dgh.dg.Complete(result.ActionID)
 	pool.Stop()
 }
 
@@ -699,10 +733,10 @@ func TestWorkerResult_HTTPStatusAndRetryAfter(t *testing.T) {
 		},
 	}
 
-	tracker := NewDepTracker(10, testLogger(t))
-	tracker.Add(&actions[0], 0, nil)
+	dgh := newTestDepGraphHelper(t)
+	dgh.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, tracker.Ready(), tracker.Done(), mgr, testLogger(t), 10)
+	pool := NewWorkerPool(cfg, dgh.Ready(), dgh.Done(), mgr, testLogger(t), 10)
 	pool.Start(ctx, 4)
 
 	var result WorkerResult
@@ -718,7 +752,7 @@ func TestWorkerResult_HTTPStatusAndRetryAfter(t *testing.T) {
 	assert.Equal(t, 30*time.Second, result.RetryAfter,
 		"RetryAfter should be extracted from GraphError")
 
-	tracker.Complete(result.ActionID)
+	_, _ = dgh.dg.Complete(result.ActionID)
 	pool.Stop()
 }
 
@@ -844,11 +878,11 @@ func TestEngineOwnsCounters(t *testing.T) {
 		},
 	}
 
-	tracker := NewDepTracker(10, testLogger(t))
-	tracker.Add(&actions[0], 0, nil)
-	tracker.Add(&actions[1], 1, nil)
+	dgh := newTestDepGraphHelper(t)
+	dgh.Add(&actions[0], 0, nil)
+	dgh.Add(&actions[1], 1, nil)
 
-	pool := NewWorkerPool(cfg, tracker.Ready(), tracker.Done(), mgr, testLogger(t), 10)
+	pool := NewWorkerPool(cfg, dgh.Ready(), dgh.Done(), mgr, testLogger(t), 10)
 
 	// Simulate engine-owned counters.
 	var succeeded, failed atomic.Int32
@@ -862,7 +896,7 @@ func TestEngineOwnsCounters(t *testing.T) {
 			} else {
 				failed.Add(1)
 			}
-			tracker.Complete(r.ActionID)
+			_, _ = dgh.dg.Complete(r.ActionID)
 		}
 		close(done)
 	}()

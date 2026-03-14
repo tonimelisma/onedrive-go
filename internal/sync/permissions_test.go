@@ -1041,9 +1041,8 @@ func TestHandleLocalPermission_DirectoryLevel(t *testing.T) {
 		_ = os.Chmod(deniedDir, 0o755)
 	})
 
-	// Set up tracker (needed for HoldScope).
-	tracker := NewDepTracker(16, eng.logger)
-	eng.tracker = tracker
+	// Set up scope gate (needed for setScopeBlock).
+	eng.scopeGate = NewScopeGate(eng.baseline, eng.logger)
 
 	// Simulate a worker result with os.ErrPermission.
 	r := &WorkerResult{
@@ -1063,8 +1062,7 @@ func TestHandleLocalPermission_DirectoryLevel(t *testing.T) {
 	assert.Equal(t, SKPermDir("Private"), issues[0].ScopeKey)
 
 	// Should have created a scope block.
-	_, blocked := tracker.GetScopeBlock(SKPermDir("Private"))
-	assert.True(t, blocked, "should create a scope block for the denied directory")
+	assert.True(t, eng.scopeGate.IsScopeBlocked(SKPermDir("Private")), "should create a scope block for the denied directory")
 }
 
 // Validates: R-2.10.12
@@ -1078,9 +1076,6 @@ func TestHandleLocalPermission_FileLevel(t *testing.T) {
 	// Create a directory (accessible) with an inaccessible file.
 	dir := filepath.Join(syncRoot, "Docs")
 	require.NoError(t, os.MkdirAll(dir, 0o755))
-
-	tracker := NewDepTracker(16, eng.logger)
-	eng.tracker = tracker
 
 	// Parent dir is accessible — this should be file-level only.
 	r := &WorkerResult{
@@ -1115,9 +1110,8 @@ func TestRecheckLocalPermissions_Restored(t *testing.T) {
 	deniedDir := filepath.Join(syncRoot, "Private")
 	require.NoError(t, os.MkdirAll(deniedDir, 0o755))
 
-	// Set up tracker.
-	tracker := NewDepTracker(16, eng.logger)
-	eng.tracker = tracker
+	// Set up scope gate.
+	eng.scopeGate = NewScopeGate(eng.baseline, eng.logger)
 
 	scopeKey := SKPermDir("Private")
 
@@ -1132,8 +1126,9 @@ func TestRecheckLocalPermissions_Restored(t *testing.T) {
 		ScopeKey:  scopeKey,
 	}, nil))
 
-	block := &ScopeBlock{Key: scopeKey, IssueType: IssueLocalPermissionDenied}
-	tracker.HoldScope(scopeKey, block)
+	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, scopeKey, &ScopeBlock{
+		Key: scopeKey, IssueType: IssueLocalPermissionDenied,
+	}))
 
 	// Directory is now accessible (we didn't chmod 000 it).
 	eng.recheckLocalPermissions(ctx)
@@ -1144,8 +1139,7 @@ func TestRecheckLocalPermissions_Restored(t *testing.T) {
 	assert.Empty(t, issues, "failure should be cleared when directory is accessible")
 
 	// Scope block should be released.
-	_, blocked := tracker.GetScopeBlock(scopeKey)
-	assert.False(t, blocked, "scope block should be released when directory is accessible")
+	assert.False(t, eng.scopeGate.IsScopeBlocked(scopeKey), "scope block should be released when directory is accessible")
 }
 
 // Validates: R-2.10.13
@@ -1168,8 +1162,7 @@ func TestRecheckLocalPermissions_StillDenied(t *testing.T) {
 		_ = os.Chmod(deniedDir, 0o755)
 	})
 
-	tracker := NewDepTracker(16, eng.logger)
-	eng.tracker = tracker
+	eng.scopeGate = NewScopeGate(eng.baseline, eng.logger)
 
 	scopeKey := SKPermDir("Private")
 
@@ -1183,8 +1176,9 @@ func TestRecheckLocalPermissions_StillDenied(t *testing.T) {
 		ScopeKey:  scopeKey,
 	}, nil))
 
-	block := &ScopeBlock{Key: scopeKey, IssueType: IssueLocalPermissionDenied}
-	tracker.HoldScope(scopeKey, block)
+	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, scopeKey, &ScopeBlock{
+		Key: scopeKey, IssueType: IssueLocalPermissionDenied,
+	}))
 
 	eng.recheckLocalPermissions(ctx)
 
@@ -1194,8 +1188,7 @@ func TestRecheckLocalPermissions_StillDenied(t *testing.T) {
 	assert.Len(t, issues, 1, "failure should remain when directory is still inaccessible")
 
 	// Scope block should still be active.
-	_, blocked := tracker.GetScopeBlock(scopeKey)
-	assert.True(t, blocked, "scope block should remain when directory is still inaccessible")
+	assert.True(t, eng.scopeGate.IsScopeBlocked(scopeKey), "scope block should remain when directory is still inaccessible")
 }
 
 // ---------------------------------------------------------------------------
@@ -1237,8 +1230,7 @@ func TestClearScannerResolvedPermissions_DirLevel(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	tracker := NewDepTracker(16, eng.logger)
-	eng.tracker = tracker
+	eng.scopeGate = NewScopeGate(eng.baseline, eng.logger)
 
 	scopeKey := SKPermDir("Private")
 
@@ -1253,8 +1245,9 @@ func TestClearScannerResolvedPermissions_DirLevel(t *testing.T) {
 		ScopeKey:  scopeKey,
 	}, nil))
 
-	block := &ScopeBlock{Key: scopeKey, IssueType: IssueLocalPermissionDenied}
-	tracker.HoldScope(scopeKey, block)
+	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, scopeKey, &ScopeBlock{
+		Key: scopeKey, IssueType: IssueLocalPermissionDenied,
+	}))
 
 	// Scanner observes a file under the blocked directory — proof that the
 	// directory is now traversable.
@@ -1265,8 +1258,7 @@ func TestClearScannerResolvedPermissions_DirLevel(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, issues, "dir-level failure should be cleared when scanner observes a child path")
 
-	_, blocked := tracker.GetScopeBlock(scopeKey)
-	assert.False(t, blocked, "scope block should be released when scanner proves directory is accessible")
+	assert.False(t, eng.scopeGate.IsScopeBlocked(scopeKey), "scope block should be released when scanner proves directory is accessible")
 }
 
 // Validates: R-2.10.10
@@ -1277,8 +1269,7 @@ func TestClearScannerResolvedPermissions_NoFalsePositives(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	tracker := NewDepTracker(16, eng.logger)
-	eng.tracker = tracker
+	eng.scopeGate = NewScopeGate(eng.baseline, eng.logger)
 
 	scopeKey := SKPermDir("Private")
 
@@ -1292,8 +1283,9 @@ func TestClearScannerResolvedPermissions_NoFalsePositives(t *testing.T) {
 		ScopeKey:  scopeKey,
 	}, nil))
 
-	block := &ScopeBlock{Key: scopeKey, IssueType: IssueLocalPermissionDenied}
-	tracker.HoldScope(scopeKey, block)
+	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, scopeKey, &ScopeBlock{
+		Key: scopeKey, IssueType: IssueLocalPermissionDenied,
+	}))
 
 	// Scanner observes an unrelated path — should NOT clear the permission failure.
 	observed := map[string]bool{"Public/readme.txt": true}
@@ -1303,8 +1295,7 @@ func TestClearScannerResolvedPermissions_NoFalsePositives(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, issues, 1, "failure should remain when scanner didn't observe the blocked path")
 
-	_, blocked := tracker.GetScopeBlock(scopeKey)
-	assert.True(t, blocked, "scope block should remain when scanner didn't observe the blocked path")
+	assert.True(t, eng.scopeGate.IsScopeBlocked(scopeKey), "scope block should remain when scanner didn't observe the blocked path")
 }
 
 func TestPathSetFromEvents(t *testing.T) {

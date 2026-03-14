@@ -2,7 +2,7 @@
 //
 // sync_failures is the active retry queue. Transient failures get next_retry_at
 // computed by a caller-provided delayFn (retry.Reconcile.Delay). The
-// FailureRetrier re-injects due items via buffer → planner → tracker (R-6.8.10).
+// The drain-loop retrier re-injects due items via buffer → planner → executor (R-6.8.10).
 //
 // Contents:
 //   - isActionableIssue:                classify issue types requiring user action

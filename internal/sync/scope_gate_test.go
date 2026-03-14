@@ -543,9 +543,9 @@ func TestScopeGate_NextDueTrial_SkipsZeroNextTrialAt(t *testing.T) {
 }
 
 // TestScopeGate_NextDueTrial_NoHeldQueueCheck verifies that NextDueTrial
-// returns a due scope even without any held actions. This is the key
-// behavioral difference from DepTracker.NextDueTrial which required a
-// non-empty held queue.
+// returns a due scope even without any held actions. ScopeGate does not
+// require a non-empty held queue — any scope block with a due trial time
+// is eligible.
 // Validates: R-2.10.5
 func TestScopeGate_NextDueTrial_NoHeldQueueCheck(t *testing.T) {
 	t.Parallel()

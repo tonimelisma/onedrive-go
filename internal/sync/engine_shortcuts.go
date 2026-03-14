@@ -325,7 +325,6 @@ func (e *Engine) handleRemovedShortcuts(ctx context.Context, deletedItemIDs map[
 		scKey := sc.RemoteDrive + ":" + sc.RemoteItem
 		scopeKey := SKQuotaShortcut(scKey)
 
-		// ScopeGate is the primary path; fall back to legacy tracker during migration.
 		if e.scopeGate != nil {
 			if err := e.scopeGate.ClearScopeBlock(ctx, scopeKey); err != nil {
 				e.logger.Debug("handleRemovedShortcuts: failed to clear scope block",
@@ -333,8 +332,6 @@ func (e *Engine) handleRemovedShortcuts(ctx context.Context, deletedItemIDs map[
 					slog.String("error", err.Error()),
 				)
 			}
-		} else if e.tracker != nil {
-			e.tracker.DiscardScope(scopeKey)
 		}
 
 		// Clear orphaned sync_failures for the removed shortcut's scope.

@@ -172,10 +172,10 @@ func (m *SyncStore) ResetAllFailures(ctx context.Context) error {
 //
 // After resetting remote_state, creates corresponding sync_failures entries
 // for items that transitioned to pending states. This bridges remote_state
-// to the sole retry mechanism (FailureRetrier + sync_failures): without
+// to the sole retry mechanism (drain-loop retrier + sync_failures): without
 // these entries, items stuck mid-execution during a crash would become
 // zombies — the delta token was already advanced, so no new events arrive,
-// and the FailureRetrier only queries sync_failures.
+// and the retrier only queries sync_failures.
 //
 // delayFn computes backoff from failure count (engine passes retry.Reconcile.Delay).
 func (m *SyncStore) ResetInProgressStates(ctx context.Context, syncRoot string, delayFn func(int) time.Duration) error {
@@ -227,7 +227,7 @@ func (m *SyncStore) ResetInProgressStates(ctx context.Context, syncRoot string, 
 	}
 
 	// Phase 2: Create sync_failures entries for reset items so the
-	// FailureRetrier can rediscover them. RecordFailure uses UPSERT —
+	// retrier can rediscover them. RecordFailure uses UPSERT —
 	// if a sync_failures entry already exists (from a prior failure before
 	// the crash), the existing failure_count is preserved and incremented,
 	// so backoff continues from where it left off.
@@ -275,8 +275,8 @@ func (m *SyncStore) queryResetCandidates(ctx context.Context, status string) ([]
 }
 
 // createCrashRecoveryFailures creates sync_failures entries for items that
-// were reset during crash recovery. This ensures the FailureRetrier can
-// rediscover them on the next bootstrap sweep.
+// were reset during crash recovery. This ensures the retrier can rediscover
+// them on the next bootstrap sweep.
 func (m *SyncStore) createCrashRecoveryFailures(
 	ctx context.Context, candidates []resetCandidate, direction string, delayFn func(int) time.Duration,
 ) error {

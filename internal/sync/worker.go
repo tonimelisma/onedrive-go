@@ -22,8 +22,8 @@ const minWorkers = 4
 // Workers are pure executors — they NEVER call tracker.Complete(). The engine
 // owns all completion decisions (R-6.8.9).
 //
-// Decoupled from DepTracker: workers read from readyCh and wait on doneCh,
-// which may be backed by DepTracker, DepGraph, or any other dispatch source.
+// Workers read from readyCh and wait on doneCh, which may be backed by
+// DepGraph or any other dispatch source.
 type WorkerPool struct {
 	cfg      *ExecutorConfig
 	readyCh  <-chan *TrackedAction
@@ -43,7 +43,7 @@ type WorkerPool struct {
 // WorkerResult reports the outcome of a single action execution. The engine
 // reads these from the Results channel, classifies them, and calls
 // tracker.Complete. Failed items are recorded in sync_failures for retry
-// by the FailureRetrier.
+// by the retrier.
 type WorkerResult struct {
 	Path       string
 	DriveID    driveid.ID

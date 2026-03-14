@@ -489,11 +489,8 @@ func (e *Engine) recheckLocalPermissions(ctx context.Context) {
 			continue
 		}
 
-		// ScopeGate is the primary path; fall back to legacy tracker during migration.
 		if e.scopeGate != nil {
 			e.onScopeClear(ctx, issue.ScopeKey)
-		} else if e.tracker != nil {
-			e.tracker.ReleaseScope(issue.ScopeKey)
 		}
 
 		e.logger.Info("local permission restored, clearing denial",
@@ -550,13 +547,8 @@ func (e *Engine) clearScannerResolvedPermissions(ctx context.Context, observedPa
 			continue
 		}
 
-		// ScopeGate is the primary path; fall back to legacy tracker during migration.
-		if !issue.ScopeKey.IsZero() {
-			if e.scopeGate != nil {
-				e.onScopeClear(ctx, issue.ScopeKey)
-			} else if e.tracker != nil {
-				e.tracker.ReleaseScope(issue.ScopeKey)
-			}
+		if !issue.ScopeKey.IsZero() && e.scopeGate != nil {
+			e.onScopeClear(ctx, issue.ScopeKey)
 		}
 
 		e.logger.Info("scanner resolved permission denial",

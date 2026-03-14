@@ -12,8 +12,8 @@ import (
 // edges: when all of an action's dependencies are satisfied, it becomes ready.
 //
 // Methods return data — callers decide what to do with ready actions (dispatch
-// to channels, check scope gates, etc.). This separation enables the
-// DepTracker to wrap DepGraph with scope logic without mixing concerns.
+// to channels, check scope gates, etc.). This separation keeps dependency
+// tracking independent from scope admission (ScopeGate).
 type DepGraph struct {
 	mu        stdsync.Mutex
 	actions   map[int64]*TrackedAction
