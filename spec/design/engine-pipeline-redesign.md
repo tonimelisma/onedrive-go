@@ -35,7 +35,7 @@ Each has its own delta commitment, shortcut handling, permission rechecking, saf
 
 **O-1: 24-hour reconciliation blocks the watch loop.** `runFullReconciliation` runs synchronously inside the `runWatchLoop` select. For a drive with 100K+ items, full delta enumeration can take minutes. Normal batches, recheck ticks, observer errors — all queue up.
 
-**O-3: Bootstrap failure is fatal.** If `RunOnce` fails during the initial sync in `RunWatch`, the daemon exits. Transient failures during startup should be recoverable.
+**O-3: Bootstrap failure is fatal (DEFERRED).** If `RunOnce` fails during the initial sync in `RunWatch`, the daemon exits. Transient failures during startup should be recoverable. This redesign preserves the current behavior — bootstrap failure kills the daemon. The improvement is structural: `bootstrapSync` uses the same pipeline as steady-state, making a future retry loop with backoff straightforward to add. The retry loop is explicitly deferred — not required for launch.
 
 ---
 
@@ -65,10 +65,14 @@ type Engine struct {
     checkWorkers    int
     bigDeleteThreshold int
 
-    // From tracker redesign
+    // From tracker redesign — shared across modes
     depGraph  *DepGraph
-    scopeGate *ScopeGate
     readyCh   chan *TrackedAction
+    // Note: depGraph and readyCh have different lifetimes per mode.
+    // One-shot: created in executePlan, stale after pool.Stop.
+    // Watch: created in initWatchInfra, lives until shutdown.
+    // Same as current e.tracker field. Passing as parameters would
+    // propagate through too many method signatures.
 
     // Engine-owned result counters
     succeeded    atomic.Int32
@@ -85,6 +89,10 @@ type Engine struct {
 }
 
 type watchState struct {
+    // Scope gate — watch-mode only (tracker-redesign.md §2.3: scope blocking
+    // is watch-mode only; one-shot never creates scope blocks)
+    scopeGate *ScopeGate
+
     // Buffer — promoted from local variable per tracker-redesign.md Phase 4
     buf *Buffer
 
@@ -183,8 +191,11 @@ func (e *Engine) bootstrapSync(ctx context.Context, mode SyncMode, pipe *watchPi
 `waitForQuiescence` blocks until all in-flight actions complete. Requires `DepGraph.WaitForEmpty()`:
 
 ```go
-// WaitForEmpty returns a channel closed when total == completed.
-// In persistent mode, re-creates the channel when new actions are added.
+// WaitForEmpty returns a channel that is closed when the graph transitions
+// to empty (total == completed). If the graph is already empty at call time,
+// returns an already-closed channel. In persistent mode, the channel is
+// one-shot — caller must call WaitForEmpty() again for subsequent emptiness
+// events. This matches bootstrapSync's use: call once, wait, proceed.
 func (g *DepGraph) WaitForEmpty() <-chan struct{}
 ```
 
@@ -236,28 +247,37 @@ Concurrency is safe: SQLite WAL mode handles concurrent writers (CommitObservati
 
 ### 2.4 Mode-Conditional Result Processing
 
-After tracker redesign + watchState:
+After tracker redesign + watchState, result processing uses `processAndRoute` (tracker-redesign.md §3.5) which structures dependent routing at the `Complete` level across all result classes. The `e.watch != nil` guard replaces scattered nil checks:
 
 ```go
-case resultRequeue:
-    e.recordFailure(ctx, r, retry.Reconcile.Delay)
-    e.recordError(r)
-    ready := e.depGraph.Complete(r.ActionID)
-    if r.Success {
-        e.routeReadyActions(ctx, ready)  // drain goroutine
-    } else {
-        // Failure-aware dispatch (tracker-redesign.md §3.5)
-        for _, dep := range ready {
-            e.recordFailure(ctx, depToWorkerResult(dep, r), retry.Reconcile.Delay)
-            e.depGraph.Complete(dep.ID)
-        }
+// Inside processAndRoute — dependent routing by result class:
+ready := e.depGraph.Complete(r.ActionID)
+
+switch class {
+case resultSuccess:
+    dispatched = e.admitReady(ctx, ready) // → outbox → readyCh
+case resultShutdown:
+    // Silently complete — don't dispatch, don't record failures
+    for _, dep := range ready { e.depGraph.Complete(dep.ID) }
+default: // requeue, scopeBlock, skip, fatal
+    for _, dep := range ready {
+        e.recordCascadeFailure(ctx, &dep.Action, r)
+        e.depGraph.Complete(dep.ID)
     }
-    if e.watch != nil {
+}
+
+// Per-class side effects with single watch guard:
+if e.watch != nil {
+    switch class {
+    case resultSuccess:
+        e.watch.scopeState.RecordSuccess(r)
+    case resultRequeue, resultScopeBlock:
         e.watch.scopeState.UpdateScope(r)
     }
+}
 ```
 
-One `e.watch != nil` guard at a clear boundary. `routeReadyActions` is drain-goroutine-only (tracker-redesign.md §3.9).
+One `e.watch != nil` guard at a clear boundary. The drain loop uses the actor-with-outbox pattern (tracker-redesign.md §3.5) — `processAndRoute` returns actions for the outbox, never sends directly to readyCh.
 
 ### 2.5 Safety Config Unification
 
@@ -343,7 +363,7 @@ This is the authoritative execution order. Each increment is a PR that leaves th
 | **10. Async Reconciliation** | pipeline-redesign Phase 10 | Non-blocking reconciliation goroutine | `engine.go`, `engine_test.go` | `sync-engine.md` | None |
 | **11. Safety Config** | pipeline-redesign Phase 11 | Merge two methods into one | `engine.go` | None | None |
 
-**Parallelization**: Increments 1-5 (tracker redesign) are strictly sequential — each builds on the previous. Increments 6, 7 (tracker cleanup) can run in parallel with each other but require increment 5 to be complete. Increments 8-11 (pipeline redesign) are strictly sequential and require increment 5 (or at minimum increment 4) to be complete. Increments 6-7 can run in parallel with increments 8-11 since they touch different files.
+**Parallelization**: Increments 1-5 (tracker redesign) are strictly sequential — each builds on the previous. Increments 6, 7 (tracker cleanup) can run in parallel with each other but require increment 5 to be complete. Increments 8-11 (pipeline redesign) are strictly sequential and require increment 5 to be complete. Increments 6-7 can run in parallel with increments 8-11 since they touch different files. Phase 8 (watchState) is sequenced after Phase 5 to minimize merge conflicts in engine.go, not because of a hard dependency — watchState extraction is a mechanical rename that could be done on the current codebase.
 
 ---
 

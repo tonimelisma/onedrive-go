@@ -312,31 +312,87 @@ for {
 }
 ```
 
-**`processAndRoute`** replaces `processWorkerResult` + `routeReadyActions`. It returns actions for the outbox instead of sending to readyCh:
+**`processAndRoute`** replaces `processWorkerResult` + `routeReadyActions`. It returns actions for the outbox instead of sending to readyCh. Dependent routing is structured at the `Complete` level, shared across all result classes:
 
 ```go
 func (e *Engine) processAndRoute(ctx context.Context, r *WorkerResult) []*TrackedAction {
-    // ... classify result, record failure/success, scope detection ...
+    class, scopeKey := classifyResult(r)
 
+    // Trial results handled separately (early return)
+    if r.IsTrial && !r.TrialScopeKey.IsZero() {
+        return e.processTrialResult(ctx, r, class)
+    }
+
+    // Graph completion — all result classes call Complete
     ready := e.depGraph.Complete(r.ActionID)
 
-    if r.Success {
-        return e.admitReady(ctx, ready)
+    // Dependent routing — based on result class, NOT r.Success
+    var dispatched []*TrackedAction
+    switch class {
+    case resultSuccess:
+        dispatched = e.admitReady(ctx, ready)
+    case resultShutdown:
+        // Context canceled — silently complete all dependents.
+        // Don't dispatch (workers are shutting down), don't record
+        // failures (not a failure — operation was canceled).
+        for _, dep := range ready {
+            e.depGraph.Complete(dep.ID) // silent completion
+        }
+    default: // resultRequeue, resultScopeBlock, resultSkip, resultFatal
+        // Parent failed — cascade-record children as sync_failures
+        for _, dep := range ready {
+            e.recordCascadeFailure(ctx, &dep.Action, r)
+            e.depGraph.Complete(dep.ID)
+        }
     }
-    // Failure-aware: cascade-record children, return nothing for outbox
-    for _, dep := range ready {
-        e.recordCascadeFailure(ctx, &dep.Action, r)
-        e.depGraph.Complete(dep.ID)
+
+    // Per-class side effects (after dependent routing)
+    switch class {
+    case resultSuccess:
+        e.succeeded.Add(1)
+        e.clearFailureOnSuccess(ctx, r)
+        if e.watch != nil {
+            e.watch.scopeState.RecordSuccess(r)
+        }
+    case resultRequeue:
+        e.recordFailure(ctx, r, retry.Reconcile.Delay)
+        e.recordError(r)
+        if e.watch != nil {
+            e.watch.scopeState.UpdateScope(r)
+        }
+    case resultScopeBlock:
+        e.recordFailure(ctx, r, retry.Reconcile.Delay)
+        e.recordError(r)
+        if e.watch != nil {
+            e.watch.scopeState.UpdateScope(r)
+            e.applyScopeBlock(ctx, scopeKey, r)
+        }
+    case resultSkip:
+        e.recordFailure(ctx, r, nil) // no retry
+        e.recordError(r)
+    case resultFatal:
+        e.recordFailure(ctx, r, nil)
+        e.recordError(r)
+    case resultShutdown:
+        // no failure recording
     }
-    return nil
+
+    return dispatched
 }
 
 func (e *Engine) admitReady(ctx context.Context, ready []*TrackedAction) []*TrackedAction {
     var dispatch []*TrackedAction
     for _, ta := range ready {
-        // Trial interception (trialPending is drain-goroutine-only state)
-        if entry, isTrial := e.trialPending[ta.Action.Path]; isTrial {
+        // Trial interception — mutex-protected (trialPending accessed from
+        // both main goroutine via admitAndDispatch and drain goroutine here)
+        e.trialMu.Lock()
+        entry, isTrial := e.trialPending[ta.Action.Path]
+        if isTrial {
             delete(e.trialPending, ta.Action.Path)
+        }
+        e.trialMu.Unlock()
+
+        if isTrial {
             if entry.scopeKey.BlocksAction(ta.Action.Path,
                 ta.Action.ShortcutKey(), ta.Action.Type,
                 ta.Action.TargetsOwnDrive()) {
@@ -345,7 +401,6 @@ func (e *Engine) admitReady(ctx context.Context, ready []*TrackedAction) []*Trac
                 dispatch = append(dispatch, ta)
             } else {
                 e.baseline.ClearSyncFailure(ctx, ta.Action.Path, ta.Action.DriveID)
-                // Re-planned as different type — admit normally
                 if key := e.scopeGate.Admit(ta); key.IsZero() {
                     e.setDispatch(ctx, &ta.Action)
                     dispatch = append(dispatch, ta)
@@ -354,6 +409,7 @@ func (e *Engine) admitReady(ctx context.Context, ready []*TrackedAction) []*Trac
             }
             continue
         }
+
         // Normal scope admission
         if key := e.scopeGate.Admit(ta); !key.IsZero() {
             e.cascadeRecordAndComplete(ctx, ta, key)
@@ -843,7 +899,11 @@ Independent. Can be done first (see ordering note above).
 
 8. **Retrier and scope clear don't overlap.** Retrier handles per-item failures (`next_retry_at`). Scope-blocked items have `next_retry_at = NULL` — invisible to retrier. `onScopeClear` sets `next_retry_at = NOW` to make them visible, then the retrier handles them like any other item.
 
-9. **Failure-aware dependent dispatch.** Parent fails → children cascade-completed and recorded as sync_failures. Parent succeeds → children dispatched. The graph doesn't know about failure; the engine applies policy.
+9. **Failure-aware dependent dispatch.** Parent succeeds → children dispatched via outbox. Parent fails (requeue, scope block, skip, fatal) → children cascade-recorded as sync_failures. Parent shutdown (context canceled) → children silently completed without dispatch or failure recording. The graph doesn't know about failure; the engine applies policy per result class.
+
+9a. **Drain loop never blocks on readyCh.** Actor-with-outbox pattern (section 3.5). Ready actions go to an outbox slice. The select interleaves outbox draining with result processing. Deadlock is eliminated by construction.
+
+9b. **Concurrent cascadeRecordAndComplete is safe.** `admitAndDispatch` (main goroutine) and `admitReady` (drain goroutine) can both call `cascadeRecordAndComplete` concurrently. `depGraph.Complete` uses a mutex. `depsLeft` is atomic — the last parent to complete returns the dependent. The same dependent cannot be returned by two different `Complete` calls.
 
 10. **No unnecessary persistent state.** Scope gate is checked BEFORE `setDispatch` — scope-blocked actions never write to remote_state. Cascade-failed children (section 3.5) never had setDispatch called (they were waiting on deps). Only actions that pass the scope gate and are dispatched to workers have remote_state entries, and those follow the normal execution lifecycle.
 
