@@ -51,7 +51,7 @@ func TestScope_429FallbackInterval(t *testing.T) {
 	clock, _ := controllableClock()
 	ss := NewScopeState(clock, discardLogger())
 
-	// 429 without Retry-After should use the serviceInitialInterval fallback.
+	// 429 without Retry-After should use the defaultInitialTrialInterval fallback.
 	r := WorkerResult{
 		Path:       "/file-a.txt",
 		HTTPStatus: 429,
@@ -60,7 +60,7 @@ func TestScope_429FallbackInterval(t *testing.T) {
 
 	require.True(t, result.Block)
 	assert.Equal(t, SKThrottleAccount, result.ScopeKey)
-	assert.Equal(t, serviceInitialInterval, result.TrialInterval, "429 without Retry-After must fall back to serviceInitialInterval")
+	assert.Equal(t, defaultInitialTrialInterval, result.TrialInterval, "429 without Retry-After must fall back to defaultInitialTrialInterval")
 }
 
 // Validates: R-2.10.3
@@ -123,7 +123,7 @@ func TestScope_507OwnDrive(t *testing.T) {
 			require.True(t, result.Block, "third unique path must trigger quota:own block")
 			assert.Equal(t, SKQuotaOwn, result.ScopeKey)
 			assert.Equal(t, "quota_exceeded", result.IssueType)
-			assert.Equal(t, quotaInitialInterval, result.TrialInterval)
+			assert.Equal(t, defaultInitialTrialInterval, result.TrialInterval)
 		}
 		advance(1 * time.Second) // stay well within the 10s window
 	}
@@ -151,7 +151,7 @@ func TestScope_507Shortcut(t *testing.T) {
 			require.True(t, result.Block, "third unique shortcut path must trigger quota:shortcut block")
 			assert.Equal(t, SKQuotaShortcut(shortcutKey), result.ScopeKey)
 			assert.Equal(t, "quota_exceeded", result.IssueType)
-			assert.Equal(t, quotaInitialInterval, result.TrialInterval)
+			assert.Equal(t, defaultInitialTrialInterval, result.TrialInterval)
 		}
 		advance(1 * time.Second)
 	}
@@ -219,7 +219,7 @@ func TestScope_5xxSlidingWindow(t *testing.T) {
 			require.True(t, result.Block, "fifth unique path must trigger service block")
 			assert.Equal(t, SKService, result.ScopeKey)
 			assert.Equal(t, "service_outage", result.IssueType)
-			assert.Equal(t, serviceInitialInterval, result.TrialInterval)
+			assert.Equal(t, defaultInitialTrialInterval, result.TrialInterval)
 		}
 		advance(2 * time.Second) // total 8s, well within 30s window
 	}
@@ -357,7 +357,7 @@ func TestScope_UpdateScopeOutagePattern(t *testing.T) {
 			require.True(t, result.Block, "fifth unique outage-pattern path must trigger service block")
 			assert.Equal(t, SKService, result.ScopeKey)
 			assert.Equal(t, "service_outage", result.IssueType)
-			assert.Equal(t, serviceInitialInterval, result.TrialInterval)
+			assert.Equal(t, defaultInitialTrialInterval, result.TrialInterval)
 		}
 		advance(2 * time.Second)
 	}
@@ -461,13 +461,13 @@ func TestScopeKey_MaxTrialInterval(t *testing.T) {
 		key  ScopeKey
 		want time.Duration
 	}{
-		{"quota:own", SKQuotaOwn, 1 * time.Hour},
-		{"quota:shortcut", SKQuotaShortcut("driveX:itemY"), 1 * time.Hour},
+		{"quota:own", SKQuotaOwn, defaultMaxTrialInterval},
+		{"quota:shortcut", SKQuotaShortcut("driveX:itemY"), defaultMaxTrialInterval},
 		// Validates: R-2.10.43
-		{"disk:local", SKDiskLocal, 1 * time.Hour}, // same cap as quota — disk free changes slowly
-		{"throttle:account", SKThrottleAccount, 10 * time.Minute},
-		{"service", SKService, 10 * time.Minute},
-		{"zero-value (unknown)", ScopeKey{}, 10 * time.Minute}, // default
+		{"disk:local", SKDiskLocal, defaultMaxTrialInterval},
+		{"throttle:account", SKThrottleAccount, defaultMaxTrialInterval},
+		{"service", SKService, defaultMaxTrialInterval},
+		{"zero-value (unknown)", ScopeKey{}, defaultMaxTrialInterval},
 	}
 
 	for _, tt := range tests {
