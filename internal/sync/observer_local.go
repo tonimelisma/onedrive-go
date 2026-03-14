@@ -7,8 +7,9 @@
 //   - Event channel management (trySend, DroppedEvents, LastActivity)
 //
 // Related files:
-//   - observer_local_handlers.go: watch event loop + fsnotify event handlers
-//   - scanner.go:                 FullScan, walk/hash/filter logic
+//   - observer_local_handlers.go:  watch event loop + fsnotify event handlers
+//   - observer_local_collisions.go: case collision detection helpers (cache, peers)
+//   - scanner.go:                   FullScan, walk/hash/filter logic
 package sync
 
 import (
@@ -112,11 +113,19 @@ type LocalObserver struct {
 	// by Create/Delete events. Single-goroutine access (watchLoop) — no mutex.
 	dirNameCache map[string]map[string][]string // dirPath → lowName → []originalNames
 
-	// collisionPeers tracks pairwise collision relationships detected in watch
-	// mode. When a collider is deleted, the surviving peer is re-emitted as
-	// ChangeCreate. Cleared on safety scan (authoritative detectCaseCollisions
-	// replaces this). Single-goroutine access (watchLoop) — no mutex.
-	collisionPeers map[string]string // dbRelPath → peer dbRelPath
+	// recentLocalDeletes tracks dbRelPaths of files deleted locally in the
+	// current watch session. Used to suppress false-positive baseline
+	// collisions during case-only renames: the Delete event removes the
+	// old name but baseline isn't updated until the action executes (async).
+	// Cleared on safety scan. Single-goroutine access (watchLoop).
+	recentLocalDeletes map[string]struct{}
+
+	// collisionPeers tracks N-way collision relationships detected in watch
+	// mode. When a collider is deleted, all surviving peers are re-emitted
+	// via handleCreate (which re-checks and re-records any remaining collisions).
+	// Cleared on safety scan (authoritative detectCaseCollisions replaces this).
+	// Single-goroutine access (watchLoop) — no mutex.
+	collisionPeers map[string]map[string]struct{} // dbRelPath → set of peer dbRelPaths
 }
 
 // NewLocalObserver creates a LocalObserver. checkWorkers controls the number
@@ -125,15 +134,16 @@ type LocalObserver struct {
 // during observation.
 func NewLocalObserver(baseline *Baseline, logger *slog.Logger, checkWorkers int) *LocalObserver {
 	return &LocalObserver{
-		baseline:       baseline,
-		logger:         logger,
-		checkWorkers:   checkWorkers,
-		hashFunc:       driveops.ComputeQuickXorHash,
-		sleepFunc:      timeSleep,
-		pendingTimers:  make(map[string]*time.Timer),
-		hashRequests:   make(chan hashRequest, hashRequestBufSize),
-		dirNameCache:   make(map[string]map[string][]string),
-		collisionPeers: make(map[string]string),
+		baseline:           baseline,
+		logger:             logger,
+		checkWorkers:       checkWorkers,
+		hashFunc:           driveops.ComputeQuickXorHash,
+		sleepFunc:          timeSleep,
+		pendingTimers:      make(map[string]*time.Timer),
+		hashRequests:       make(chan hashRequest, hashRequestBufSize),
+		dirNameCache:       make(map[string]map[string][]string),
+		recentLocalDeletes: make(map[string]struct{}),
+		collisionPeers:     make(map[string]map[string]struct{}),
 		safetyTickFunc: func(d time.Duration) (<-chan time.Time, func()) {
 			t := time.NewTicker(d)
 			return t.C, t.Stop

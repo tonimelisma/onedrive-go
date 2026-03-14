@@ -9,8 +9,9 @@
 //   - hashAndEmit:  hash computation with retry + event emission
 //
 // Related files:
-//   - observer_local.go: LocalObserver struct, constructor, Watch() entry point
-//   - scanner.go:         FullScan, walk/hash/filter logic
+//   - observer_local.go:            LocalObserver struct, constructor, Watch() entry point
+//   - observer_local_collisions.go: case collision detection helpers (cache, peers)
+//   - scanner.go:                   FullScan, walk/hash/filter logic
 package sync
 
 import (
@@ -19,8 +20,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"slices"
-	"strings"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -174,6 +173,23 @@ func (o *LocalObserver) handleCreate(
 		return
 	}
 
+	// Early rejection for case collisions in watch mode (R-2.12.2).
+	// Applies to both files and directories — OneDrive's case-insensitive
+	// namespace cannot host both Xyz/ and xyz in the same parent.
+	// The authoritative check is FullScan's post-walk detectCaseCollisions;
+	// this rejects obvious collisions between safety scans.
+	if collidingName, hasCollision := o.hasCaseCollisionCached(filepath.Dir(fsPath), name, filepath.Dir(dbRelPath)); hasCollision {
+		// Track peer for re-emission when the collider is deleted.
+		peerRelPath := o.buildPeerRelPath(dbRelPath, collidingName)
+		o.addCollisionPeer(dbRelPath, peerRelPath)
+
+		o.logger.Debug("case collision detected in watch mode, skipping event",
+			slog.String("path", dbRelPath),
+			slog.String("collides_with", collidingName))
+
+		return
+	}
+
 	ev := ChangeEvent{
 		Source: SourceLocal,
 		Type:   ChangeCreate,
@@ -201,147 +217,14 @@ func (o *LocalObserver) handleCreate(
 			return
 		}
 
-		// Early rejection for case collisions in watch mode (R-2.12.2).
-		// The authoritative check is FullScan's post-walk detectCaseCollisions;
-		// this rejects obvious collisions between safety scans.
-		if collidingName, hasCollision := o.hasCaseCollisionCached(filepath.Dir(fsPath), name); hasCollision {
-			// Track peer for re-emission when the collider is deleted.
-			peerRelPath := o.buildPeerRelPath(dbRelPath, collidingName)
-			if o.collisionPeers != nil {
-				o.collisionPeers[dbRelPath] = peerRelPath
-				o.collisionPeers[peerRelPath] = dbRelPath
-			}
-
-			o.logger.Debug("case collision detected in watch mode, skipping event",
-				slog.String("path", dbRelPath),
-				slog.String("collides_with", collidingName))
-
-			return
-		}
-
 		ev.ItemType = ItemTypeFile
 		ev.Hash = o.stableHashOrEmpty(fsPath, dbRelPath)
 	}
 
 	o.trySend(ctx, events, &ev)
 
-	// Update directory name cache so subsequent collision checks see this file.
+	// Update directory name cache so subsequent collision checks see this entry.
 	o.updateDirNameCache(filepath.Dir(fsPath), name)
-}
-
-// buildPeerRelPath constructs the db-relative path for a collision peer
-// given the current file's dbRelPath and the colliding file's name.
-func (o *LocalObserver) buildPeerRelPath(dbRelPath, collidingName string) string {
-	dir := filepath.Dir(dbRelPath)
-	if dir == "." {
-		return collidingName
-	}
-
-	return dir + "/" + collidingName
-}
-
-// hasCaseCollisionCached checks if name collides with an existing sibling
-// using a per-directory name cache. Falls back to os.ReadDir on cache miss.
-// Single-goroutine (watchLoop) access — no mutex needed.
-func (o *LocalObserver) hasCaseCollisionCached(dirPath, name string) (string, bool) {
-	if o.dirNameCache == nil {
-		o.dirNameCache = make(map[string]map[string][]string)
-	}
-
-	cache, ok := o.dirNameCache[dirPath]
-	if !ok {
-		entries, err := os.ReadDir(dirPath)
-		if err != nil {
-			return "", false
-		}
-
-		cache = make(map[string][]string, len(entries))
-
-		for _, e := range entries {
-			low := strings.ToLower(e.Name())
-			cache[low] = append(cache[low], e.Name())
-		}
-
-		o.dirNameCache[dirPath] = cache
-	}
-
-	low := strings.ToLower(name)
-
-	for _, existing := range cache[low] {
-		if existing != name {
-			return existing, true
-		}
-	}
-
-	return "", false
-}
-
-// updateDirNameCache adds a name to the cache for the given directory.
-// Called after successfully processing a Create event.
-func (o *LocalObserver) updateDirNameCache(dirPath, name string) {
-	cache, ok := o.dirNameCache[dirPath]
-	if !ok {
-		return // not cached yet — will be populated lazily on next check
-	}
-
-	low := strings.ToLower(name)
-
-	if slices.Contains(cache[low], name) {
-		return // already present
-	}
-
-	cache[low] = append(cache[low], name)
-}
-
-// removeDirNameCache removes a name from the cache for the given directory.
-// Called after processing a Delete event.
-func (o *LocalObserver) removeDirNameCache(dirPath, name string) {
-	cache, ok := o.dirNameCache[dirPath]
-	if !ok {
-		return
-	}
-
-	low := strings.ToLower(name)
-	names := cache[low]
-
-	for i, n := range names {
-		if n == name {
-			cache[low] = append(names[:i], names[i+1:]...)
-
-			if len(cache[low]) == 0 {
-				delete(cache, low)
-			}
-
-			break
-		}
-	}
-}
-
-// hasCaseCollision checks if name collides with an existing sibling in the
-// same directory (case-insensitive comparison). Returns the colliding name
-// if found. Uses os.ReadDir for filesystem truth — the authoritative check
-// is FullScan's post-walk detectCaseCollisions pass (R-2.12.2).
-func hasCaseCollision(dirPath, name string) (string, bool) {
-	entries, err := os.ReadDir(dirPath)
-	if err != nil {
-		// If we can't read the directory, skip the check — FullScan
-		// will catch it authoritatively on the next safety scan.
-		return "", false
-	}
-
-	// Case comparison uses strings.ToLower for consistency with
-	// detectCaseCollisions (scanner.go) and Baseline.byDirLower index.
-	// OneDrive's case-insensitive namespace is modeled on NTFS (simple
-	// uppercase mapping), making ToLower sufficient for practical use.
-	lowName := strings.ToLower(name)
-
-	for _, entry := range entries {
-		if strings.ToLower(entry.Name()) == lowName && entry.Name() != name {
-			return entry.Name(), true
-		}
-	}
-
-	return "", false
 }
 
 // stableHashOrEmpty computes a stable hash for a file, returning an empty
@@ -381,6 +264,10 @@ func (o *LocalObserver) scanNewDirectory(
 		return
 	}
 
+	// Pre-populate directory name cache from entries we just read,
+	// avoiding a redundant os.ReadDir in hasCaseCollisionCached.
+	o.populateDirNameCache(dirPath, entries)
+
 	for _, entry := range entries {
 		if ctx.Err() != nil {
 			return
@@ -395,6 +282,16 @@ func (o *LocalObserver) scanNewDirectory(
 		}
 
 		entryFsPath := filepath.Join(dirPath, entry.Name())
+
+		// Early rejection for case collisions in directory scan (R-2.12.2).
+		// Applies to both files and directories — checked before branching.
+		if collidingName, hasCollision := o.hasCaseCollisionCached(dirPath, entryName, dirRelPath); hasCollision {
+			o.logger.Debug("case collision detected in directory scan, skipping",
+				slog.String("path", entryRelPath),
+				slog.String("collides_with", collidingName))
+
+			continue
+		}
 
 		// Recurse into subdirectories: add watch and scan contents.
 		if entry.IsDir() {
@@ -428,15 +325,6 @@ func (o *LocalObserver) scanNewDirectory(
 
 		// Stage 2 observation filter: file size check (requires stat).
 		if o.isOversizedFile(info.Size(), entryRelPath) {
-			continue
-		}
-
-		// Early rejection for case collisions in directory scan (R-2.12.2).
-		if collidingName, hasCollision := o.hasCaseCollisionCached(dirPath, entryName); hasCollision {
-			o.logger.Debug("case collision detected in directory scan, skipping",
-				slog.String("path", entryRelPath),
-				slog.String("collides_with", collidingName))
-
 			continue
 		}
 
@@ -531,7 +419,7 @@ func (o *LocalObserver) hashAndEmit(ctx context.Context, req hashRequest, events
 	// The authoritative check is FullScan's detectCaseCollisions; this
 	// rejects obvious collisions between safety scans.
 	if collidingName, hasCollision := o.hasCaseCollisionCached(
-		filepath.Dir(req.fsPath), filepath.Base(req.fsPath),
+		filepath.Dir(req.fsPath), filepath.Base(req.fsPath), filepath.Dir(req.dbRelPath),
 	); hasCollision {
 		o.logger.Debug("case collision detected for modified file, skipping event",
 			slog.String("path", req.dbRelPath),
@@ -623,19 +511,23 @@ func (o *LocalObserver) handleDelete(
 	// Invalidate directory name cache so collision checks see the deletion.
 	o.removeDirNameCache(filepath.Dir(fsPath), name)
 
-	// Re-emit surviving collision peer — when a user resolves a case collision
-	// by deleting one file, the surviving peer should sync immediately instead
-	// of waiting for the next safety scan (up to 5 minutes). The re-emitted
-	// handleCreate will re-check hasCaseCollisionCached — if more colliders
-	// remain, the peer stays blocked.
-	if o.collisionPeers != nil {
-		if peerRelPath, ok := o.collisionPeers[dbRelPath]; ok {
-			delete(o.collisionPeers, dbRelPath)
-			delete(o.collisionPeers, peerRelPath)
+	// Track recent deletion so baseline cross-check doesn't false-positive
+	// on case-only renames (File.txt → file.txt). The baseline is updated
+	// asynchronously after the delete action executes.
+	if o.recentLocalDeletes != nil {
+		o.recentLocalDeletes[dbRelPath] = struct{}{}
+	}
 
-			peerFsPath := filepath.Join(filepath.Dir(fsPath), filepath.Base(peerRelPath))
-			peerName := filepath.Base(peerRelPath)
-			o.handleCreate(ctx, peerFsPath, peerRelPath, peerName, watcher, events)
+	// Re-emit surviving collision peers — when a user resolves a case collision
+	// by deleting one file, the surviving peers should sync immediately instead
+	// of waiting for the next safety scan (up to 5 minutes). Each re-emitted
+	// handleCreate re-checks hasCaseCollisionCached — if collisions remain
+	// among the surviving peers, they are re-recorded and stay blocked.
+	if peers := o.removeCollisionPeersFor(dbRelPath); len(peers) > 0 {
+		for peerPath := range peers {
+			peerFsPath := filepath.Join(filepath.Dir(fsPath), filepath.Base(peerPath))
+			peerName := filepath.Base(peerPath)
+			o.handleCreate(ctx, peerFsPath, peerPath, peerName, watcher, events)
 		}
 	}
 
@@ -709,10 +601,11 @@ func (o *LocalObserver) runSafetyScan(ctx context.Context, syncRoot string, even
 		}
 	}
 
-	// Clear directory name cache and collision peers — safety scan rebuilds
-	// state from scratch, so any cached state may be stale.
+	// Clear directory name cache, collision peers, and recent deletes —
+	// safety scan rebuilds state from scratch, so any cached state may be stale.
 	o.dirNameCache = make(map[string]map[string][]string)
-	o.collisionPeers = make(map[string]string)
+	o.collisionPeers = make(map[string]map[string]struct{})
+	o.recentLocalDeletes = make(map[string]struct{})
 
 	// Log timing and resource counts for operational visibility (B-101).
 	elapsed := time.Since(start)
