@@ -115,7 +115,7 @@ scopeGate.Admit()
                           │
                           ├── success → COMMITTED → TERMINAL
                           │     engine calls Complete
-                          │     dependents returned → routeReadyActions
+                          │     dependents returned → routeReadyActions (drain goroutine)
                           │
                           └── failure → TERMINAL
                                 engine records sync_failure
@@ -226,12 +226,9 @@ On startup: `LoadFromStore` reads all rows into the in-memory map. Trial timer a
 When `Admit` returns a blocking key, the engine records the action as a sync_failure and completes it in the graph immediately. No held queue. Everything is persistent.
 
 ```go
-// In processBatch / executePlan, after depGraph.Add returns a ready action:
-if scopeKey := e.scopeGate.Admit(ta); !scopeKey.IsZero() {
-    e.cascadeRecordAndComplete(ctx, ta, scopeKey)
-} else {
-    e.readyCh <- ta
-}
+// In processBatch / executePlan (MAIN goroutine), after depGraph.Add returns a ready action:
+// Uses admitAndDispatch — no trial interception (trialPending is drain-goroutine-only state).
+e.admitAndDispatch(ctx, []*TrackedAction{ta})
 ```
 
 `cascadeRecordAndComplete` is a BFS that records each action (and all its transitive dependents) as sync_failures and completes them in the graph:
@@ -278,11 +275,17 @@ if r.Success {
     e.routeReadyActions(ready)
 } else {
     // Parent failed — children would fail too (e.g., folder doesn't exist).
-    // Record each as sync_failure and complete. When the parent is retried
-    // and succeeds, the planner re-creates dependents from current state.
-    e.cascadeRecordFailure(ctx, ready, r)
+    // Record each as sync_failure with exponential backoff and complete.
+    for _, dep := range ready {
+        e.recordFailure(ctx, depToWorkerResult(dep, r), retry.Reconcile.Delay)
+        e.depGraph.Complete(dep.ID)
+    }
 }
 ```
+
+Cascade-failed dependents get `next_retry_at` set by `retry.Reconcile.Delay` (exponential backoff), NOT `NULL`. They are independently retriable by the retrier. When the retrier picks up a cascade-failed child (e.g., an upload whose parent folder create failed), `createEventFromDB` calls `observeLocal` → the planner builds a PathView → discovers the parent folder doesn't exist in the baseline → creates BOTH a folder create AND the upload with the dependency edge. The planner re-discovers the full dependency tree from current state.
+
+The parent has its own sync_failure entry (recorded by `processWorkerResult` when the worker failed). The children have separate entries (from cascade). Each has independent `next_retry_at` with exponential backoff. The retrier processes them as separate items. When the retrier picks up a child, the planner re-discovers the parent dependency and creates both actions with the dependency edge — the parent folder create is re-attempted, then the child upload. When the retrier picks up the parent, the planner creates the parent action. If both land in the same retrier batch, the planner batch has both paths → both actions created with the correct dependency edge → one execution of each. No duplication — the planner deduplicates by path (PathChanges merge), `HasInFlight` prevents double-dispatch, and the dependency graph ensures ordering. `setDispatch` only writes remote_state for downloads and local deletes, NOT for folder creates — so no stale dispatch status concern for folder create retries.
 
 This prevents N children each making doomed API calls when a folder create fails.
 
@@ -393,6 +396,10 @@ case <-retryTimerCh:
 
 **Batch limiting**: `retryBatchSize` limits how many items are processed per sweep (e.g., `2 × transferWorkers`). This prevents drain loop stalls. Workers consume the batch, retrier fires again, processes the next batch. After a scope clear with 100k items, the retrier feeds the pipeline in steady batches — workers are always busy, the drain loop isn't stalled.
 
+**Pacing**: When the batch is full (`len(rows) == retryBatchSize`), `armRetryTimer()` re-arms with **zero delay** — the timer fires on the next drain loop iteration. This means back-to-back sweeps when there are items due, giving maximum throughput. Each sweep is bounded by `retryBatchSize`, so the drain loop processes one batch, handles any pending worker results or trial timers in the select, then immediately sweeps the next batch. When the batch is NOT full (`len(rows) < retryBatchSize`), `armRetryTimerFromDB()` queries `EarliestSyncFailureRetryAt` and arms the timer for that future time — normal idle behavior.
+
+**Recovery pace after scope clear**: 100k items at `retryBatchSize = 32`: each sweep processes 32 items (~milliseconds for DB reads + `observeLocal` stat/hash), injects into buffer, drain loop returns to select. Workers pull from readyCh and execute. The retrier is NOT the bottleneck — worker throughput is (8 workers × ~2s/item = ~4 items/sec). The retrier keeps readyCh full; workers drain it at their pace. Total recovery: 100k / 8 workers / ~2s = ~7 hours, dominated by worker speed, not retrier pacing.
+
 **Stale-item detection (`isFailureResolved`)** — catches D-11:
 
 ```go
@@ -500,10 +507,29 @@ case <-trialTimerCh:
 
 **Stage 2: Fresh action arrives at `routeReadyActions`.** Intercept, validate, mark as trial.
 
-`routeReadyActions` has two branches: dispatch (channel send, no DB) and scope-blocked (`cascadeRecordAndComplete` — DB writes + graph mutations). The blocked path calls `depGraph.Complete` for each blocked descendant, which may be a different action ID than the one the caller already completed. Both branches are self-contained — the blocked path's BFS terminates without recursing back into `routeReadyActions`.
+**Goroutine separation**: `routeReadyActions` accesses the `trialPending` map. It is called from the drain goroutine (`processWorkerResult` → `Complete` → dependents). The main goroutine (`processBatch` → `Add` → ready action) must NOT call `routeReadyActions` — it would create a data race on `trialPending`. The main goroutine calls `admitAndDispatch` instead, which does scope admission without trial interception. `trialPending` is drain-goroutine-only state.
 
 ```go
-func (e *Engine) routeReadyActions(ready []*TrackedAction) {
+// admitAndDispatch — called by main goroutine (processBatch, executePlan).
+// No trial interception. No trialPending access. Safe for main goroutine.
+func (e *Engine) admitAndDispatch(ctx context.Context, ready []*TrackedAction) {
+    anyHeld := false
+    for _, ta := range ready {
+        if key := e.scopeGate.Admit(ta); !key.IsZero() {
+            e.cascadeRecordAndComplete(ctx, ta, key)
+            anyHeld = true
+        } else {
+            e.readyCh <- ta
+        }
+    }
+    if anyHeld {
+        e.armTrialTimer()
+    }
+}
+
+// routeReadyActions — called by drain goroutine (processWorkerResult) ONLY.
+// Includes trial interception via trialPending map. NOT safe for main goroutine.
+func (e *Engine) routeReadyActions(ctx context.Context, ready []*TrackedAction) {
     anyHeld := false
     for _, ta := range ready {
         if entry, isTrial := e.trialPending[ta.Action.Path]; isTrial {
@@ -528,7 +554,7 @@ func (e *Engine) routeReadyActions(ready []*TrackedAction) {
             continue
         }
 
-        // Normal admission
+        // Normal admission (same as admitAndDispatch)
         if key := e.scopeGate.Admit(ta); !key.IsZero() {
             e.cascadeRecordAndComplete(ctx, ta, key)
             anyHeld = true
@@ -623,24 +649,25 @@ Independent. Can be done first (see ordering note above).
 ### Phase 4: Rewire Engine
 
 1. Replace `tracker *DepTracker` with `depGraph *DepGraph`, `scopeGate *ScopeGate`, `readyCh chan *TrackedAction`
-2. Create `reobserve`, `observeLocal`, `observeRemote` (trial use only)
-3. Create `createEventFromDB`, `remoteStateToChangeEvent` (retrier use)
-4. Create `isFailureResolved` (stale sync_failure detection — D-11)
-5. Create `routeReadyActions` with trial interception (`trialPending` map)
-6. Create `cascadeRecordAndComplete`, `recordScopeBlockedFailure`, `resetDispatchStatus`
-7. Create `onScopeClear` — `ClearScopeBlock` + `SetScopeRetryAtNow` + `armRetryTimer` (no inline re-observation)
-8. Rewrite `processWorkerResult` with failure-aware dependent dispatch
-9. Rewrite `processTrialResult` — success calls `onScopeClear`, failure extends interval
-10. Integrate retrier into drain loop: retry timer in select, batch-limited, `isFailureResolved` check, `createEventFromDB`
-11. Rewrite trial timer: `PickTrialCandidate` + `reobserve` + `trialPending`
-12. Rewrite `handleRemovedShortcuts`: `ClearScopeBlock` + `DeleteSyncFailuresByScope`
-13. Rewrite `handleExternalChanges`: `ClearScopeBlock` → `onScopeClear`
-14. Remove `onHeld` callback, `trialCh` channel
-15. On startup: `scopeGate.LoadFromStore(ctx)`, arm trial timer
-16. Create `ResetDispatchStatus` in `SyncStore`
-17. Create `PickTrialCandidate` in `SyncStore`
-18. Create `SetScopeRetryAtNow` in `SyncStore` — `UPDATE sync_failures SET next_retry_at = NOW WHERE scope_key = ?`
-19. Update `WorkerPool` to accept `readyCh <-chan *TrackedAction` and `done <-chan struct{}`
+2. Promote `buf` from local variable to engine field (currently local in `initWatchPipeline`, engine.go:1012; retrier in drain loop needs `e.buf.Add`)
+3. Create `reobserve`, `observeLocal`, `observeRemote` (trial use only)
+4. Create `createEventFromDB`, `remoteStateToChangeEvent` (retrier use)
+5. Create `isFailureResolved` (stale sync_failure detection — D-11)
+6. Create `admitAndDispatch` (main goroutine — no trial interception) and `routeReadyActions` (drain goroutine — with trial interception via `trialPending` map). `trialPending` is drain-goroutine-only state — no cross-goroutine access.
+7. Create `cascadeRecordAndComplete`, `recordScopeBlockedFailure`, `resetDispatchStatus`
+8. Create `onScopeClear` — `ClearScopeBlock` + `SetScopeRetryAtNow` + `armRetryTimer` (no inline re-observation)
+9. Rewrite `processWorkerResult` with failure-aware dependent dispatch (section 3.5)
+10. Rewrite `processTrialResult` — success calls `onScopeClear`, failure extends interval
+11. Integrate retrier into drain loop: retry timer in select, batch-limited (zero-delay re-arm when batch full), `isFailureResolved` check, `createEventFromDB`
+12. Rewrite trial timer: `PickTrialCandidate` + `reobserve` + `trialPending`
+13. Rewrite `handleRemovedShortcuts`: `ClearScopeBlock` + `DeleteSyncFailuresByScope`
+14. Rewrite `handleExternalChanges`: `ClearScopeBlock` → `onScopeClear`
+15. Remove `onHeld` callback, `trialCh` channel
+16. On startup: `scopeGate.LoadFromStore(ctx)`, arm trial timer
+17. Create `ResetDispatchStatus` in `SyncStore`
+18. Create `PickTrialCandidate` in `SyncStore`
+19. Create `SetScopeRetryAtNow` in `SyncStore` — `UPDATE sync_failures SET next_retry_at = ? WHERE scope_key = ?`
+20. Update `WorkerPool` to accept `readyCh <-chan *TrackedAction` and `done <-chan struct{}`
 20. Rewrite `executePlan` (one-shot): no scope gate (section 2.3)
 21. Rewrite `processBatch` (watch): scope gate checks after Add
 
@@ -726,7 +753,7 @@ Independent. Can be done first (see ordering note above).
 | `internal/sync/migrations.go` | Add `scope_blocks` table | 3 |
 | `internal/sync/store_failures.go` | Add `PickTrialCandidate`, `SetScopeRetryAtNow` | 4 |
 | `internal/sync/store_admin.go` | Add `ResetDispatchStatus` | 4 |
-| `internal/sync/engine.go` | Replace tracker with DepGraph + ScopeGate + readyCh. Add `reobserve` (trials only), `createEventFromDB`, `isFailureResolved`, `routeReadyActions`, `cascadeRecordAndComplete`, `onScopeClear`. Failure-aware dispatch. Retrier in drain loop (batch-limited). Trial interception. Startup loads scope blocks. | 4 |
+| `internal/sync/engine.go` | Replace tracker with DepGraph + ScopeGate + readyCh. Promote `buf` to engine field. Add `reobserve` (trials only), `createEventFromDB`, `isFailureResolved`, `admitAndDispatch` (main goroutine), `routeReadyActions` (drain goroutine, trial interception), `cascadeRecordAndComplete`, `onScopeClear`. Failure-aware dispatch. Retrier in drain loop (batch-limited, zero-delay re-arm). Startup loads scope blocks. | 4 |
 | `internal/sync/engine_test.go` | Rewrite for new types | 4 |
 | `internal/sync/engine_shortcuts.go` | `ClearScopeBlock` + `DeleteSyncFailuresByScope` | 4 |
 | `internal/sync/worker.go` | Accept `readyCh` and `done` channels | 4 |
