@@ -1,19 +1,17 @@
-// scope.go — Scope-level failure detection and blocking for the sync engine.
+// scope.go — Scope-level failure detection for the sync engine.
 //
-// ScopeState maintains sliding windows for scope escalation and active scope
-// blocks. The engine calls updateScope after each worker result; when a
-// threshold is crossed, the engine creates a ScopeBlock and tells the tracker
-// to hold affected actions.
+// ScopeState maintains sliding windows for scope escalation. The engine
+// calls UpdateScope after each worker result; when a threshold is crossed,
+// it returns a ScopeUpdateResult and the engine creates a ScopeBlock.
 //
-// Scope types and their detection thresholds (failure-redesign.md §7.3.1):
-//   - throttle:account (429) — immediate, single response triggers block
+// Detection thresholds (failure-redesign.md §7.3.1):
+//   - throttle:account (429) — immediate, single response
 //   - service (5xx, 503+Retry-After, 400+outage) — 5 unique paths in 30s
 //   - quota:own (507, own-drive) — 3 unique paths in 10s
 //   - quota:shortcut:$key (507, shortcut) — 3 unique paths in 10s
 //
-// Trial timing (R-2.10.6, R-2.10.7, R-2.10.8, R-2.10.14):
-//   - Unified: 5s initial, 2× backoff, 5min max cap
-//   - Retry-After from server: used directly, no cap (server is ground truth)
+// Trial interval computation is centralized in computeTrialInterval()
+// (engine.go), not here. See R-2.10.14.
 package sync
 
 import (
@@ -164,13 +162,6 @@ func (sk ScopeKey) IssueType() string {
 	}
 }
 
-// MaxTrialInterval returns the unified maximum trial interval cap
-// (R-2.10.6, R-2.10.8, R-2.10.14, R-2.10.43). All scope types share the
-// same cap. Server-provided Retry-After values bypass this cap.
-func (sk ScopeKey) MaxTrialInterval() time.Duration {
-	return defaultMaxTrialInterval
-}
-
 // Humanize translates a scope key to a user-friendly description (R-2.10.22).
 // For shortcut scopes, looks up the shortcut's local path from the provided
 // list. For perm:dir, returns the directory path. For global scopes, returns
@@ -281,12 +272,14 @@ func NewScopeState(nowFunc func() time.Time, logger *slog.Logger) *ScopeState {
 }
 
 // ScopeUpdateResult describes the outcome of updateScope: whether a new scope
-// block should be created.
+// block should be created. Does NOT contain the computed trial interval —
+// interval computation is centralized in computeTrialInterval() to prevent
+// divergence between initial block creation and subsequent trial extensions.
 type ScopeUpdateResult struct {
-	Block         bool          // true if threshold crossed → create block
-	ScopeKey      ScopeKey      // scope key for the block
-	IssueType     string        // "rate_limited", IssueQuotaExceeded, IssueServiceOutage
-	TrialInterval time.Duration // initial trial interval for the block
+	Block      bool          // true if threshold crossed → create block
+	ScopeKey   ScopeKey      // scope key for the block
+	IssueType  string        // "rate_limited", IssueQuotaExceeded, IssueServiceOutage
+	RetryAfter time.Duration // server-provided Retry-After (0 if absent)
 }
 
 // UpdateScope feeds a worker result into scope detection. Returns a
@@ -303,37 +296,33 @@ func (ss *ScopeState) UpdateScope(r *WorkerResult) ScopeUpdateResult {
 	switch {
 	case r.HTTPStatus == http.StatusTooManyRequests:
 		// Immediate block — server signal, single response triggers (R-2.10.26).
-		interval := r.RetryAfter
-		if interval <= 0 {
-			interval = defaultInitialTrialInterval // fallback
-		}
 		return ScopeUpdateResult{
-			Block:         true,
-			ScopeKey:      SKThrottleAccount,
-			IssueType:     IssueRateLimited,
-			TrialInterval: interval,
+			Block:      true,
+			ScopeKey:   SKThrottleAccount,
+			IssueType:  IssueRateLimited,
+			RetryAfter: r.RetryAfter,
 		}
 
 	case r.HTTPStatus == http.StatusServiceUnavailable && r.RetryAfter > 0:
 		// Immediate block — 503 with Retry-After is a server signal (R-2.10.3).
 		return ScopeUpdateResult{
-			Block:         true,
-			ScopeKey:      SKService,
-			IssueType:     IssueServiceOutage,
-			TrialInterval: r.RetryAfter,
+			Block:      true,
+			ScopeKey:   SKService,
+			IssueType:  IssueServiceOutage,
+			RetryAfter: r.RetryAfter,
 		}
 
 	case r.HTTPStatus == http.StatusInsufficientStorage:
 		// Quota failure — scope depends on target drive (R-2.10.1, R-2.10.17).
 		sk := ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)
-		return ss.checkWindow(sk, r.Path, quotaWindowThreshold, quotaWindowDuration, IssueQuotaExceeded, defaultInitialTrialInterval)
+		return ss.checkWindow(sk, r.Path, quotaWindowThreshold, quotaWindowDuration, IssueQuotaExceeded)
 
 	case r.HTTPStatus >= http.StatusInternalServerError:
 		// Service error — feed into service sliding window (R-2.10.28, R-2.10.29).
 		sk := ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)
 		return ss.checkWindow(sk, r.Path,
 			serviceWindowThreshold, serviceWindowDuration,
-			IssueServiceOutage, defaultInitialTrialInterval)
+			IssueServiceOutage)
 
 	default:
 		return ScopeUpdateResult{}
@@ -345,7 +334,7 @@ func (ss *ScopeState) UpdateScope(r *WorkerResult) ScopeUpdateResult {
 // outage patterns are classified as resultRequeue (not resultScopeBlock)
 // by classifyResult but still need to feed scope detection.
 func (ss *ScopeState) UpdateScopeOutagePattern(path string) ScopeUpdateResult {
-	return ss.checkWindow(SKService, path, serviceWindowThreshold, serviceWindowDuration, IssueServiceOutage, defaultInitialTrialInterval)
+	return ss.checkWindow(SKService, path, serviceWindowThreshold, serviceWindowDuration, IssueServiceOutage)
 }
 
 // RecordSuccess resets the sliding window for scopes relevant to the
@@ -366,7 +355,7 @@ func (ss *ScopeState) RecordSuccess(r *WorkerResult) {
 // ScopeUpdateResult indicating whether the threshold was crossed.
 func (ss *ScopeState) checkWindow(
 	sk ScopeKey, path string, threshold int, window time.Duration,
-	issueType string, initialInterval time.Duration,
+	issueType string,
 ) ScopeUpdateResult {
 	now := ss.nowFunc()
 
@@ -388,10 +377,9 @@ func (ss *ScopeState) checkWindow(
 		// Reset window after triggering to avoid re-triggering on next failure.
 		delete(ss.windows, sk)
 		return ScopeUpdateResult{
-			Block:         true,
-			ScopeKey:      sk,
-			IssueType:     issueType,
-			TrialInterval: initialInterval,
+			Block:     true,
+			ScopeKey:  sk,
+			IssueType: issueType,
 		}
 	}
 

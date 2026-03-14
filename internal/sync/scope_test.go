@@ -41,7 +41,7 @@ func TestScope_429Immediate(t *testing.T) {
 	require.True(t, result.Block, "single 429 must trigger immediate block")
 	assert.Equal(t, SKThrottleAccount, result.ScopeKey)
 	assert.Equal(t, "rate_limited", result.IssueType)
-	assert.Equal(t, 90*time.Second, result.TrialInterval, "trial interval should honor Retry-After")
+	assert.Equal(t, 90*time.Second, result.RetryAfter, "RetryAfter should be passed through")
 }
 
 // Validates: R-2.10.3, R-2.10.26
@@ -60,7 +60,7 @@ func TestScope_429FallbackInterval(t *testing.T) {
 
 	require.True(t, result.Block)
 	assert.Equal(t, SKThrottleAccount, result.ScopeKey)
-	assert.Equal(t, defaultInitialTrialInterval, result.TrialInterval, "429 without Retry-After must fall back to defaultInitialTrialInterval")
+	assert.Zero(t, result.RetryAfter, "429 without Retry-After should have zero RetryAfter")
 }
 
 // Validates: R-2.10.3
@@ -81,7 +81,7 @@ func TestScope_503WithRetryAfter(t *testing.T) {
 	require.True(t, result.Block, "503 with Retry-After must trigger immediate service block")
 	assert.Equal(t, SKService, result.ScopeKey)
 	assert.Equal(t, "service_outage", result.IssueType)
-	assert.Equal(t, 120*time.Second, result.TrialInterval, "trial interval should use Retry-After value")
+	assert.Equal(t, 120*time.Second, result.RetryAfter, "RetryAfter should be passed through")
 }
 
 // Validates: R-2.10.3
@@ -123,7 +123,7 @@ func TestScope_507OwnDrive(t *testing.T) {
 			require.True(t, result.Block, "third unique path must trigger quota:own block")
 			assert.Equal(t, SKQuotaOwn, result.ScopeKey)
 			assert.Equal(t, "quota_exceeded", result.IssueType)
-			assert.Equal(t, defaultInitialTrialInterval, result.TrialInterval)
+			assert.Zero(t, result.RetryAfter)
 		}
 		advance(1 * time.Second) // stay well within the 10s window
 	}
@@ -151,7 +151,7 @@ func TestScope_507Shortcut(t *testing.T) {
 			require.True(t, result.Block, "third unique shortcut path must trigger quota:shortcut block")
 			assert.Equal(t, SKQuotaShortcut(shortcutKey), result.ScopeKey)
 			assert.Equal(t, "quota_exceeded", result.IssueType)
-			assert.Equal(t, defaultInitialTrialInterval, result.TrialInterval)
+			assert.Zero(t, result.RetryAfter)
 		}
 		advance(1 * time.Second)
 	}
@@ -219,7 +219,7 @@ func TestScope_5xxSlidingWindow(t *testing.T) {
 			require.True(t, result.Block, "fifth unique path must trigger service block")
 			assert.Equal(t, SKService, result.ScopeKey)
 			assert.Equal(t, "service_outage", result.IssueType)
-			assert.Equal(t, defaultInitialTrialInterval, result.TrialInterval)
+			assert.Zero(t, result.RetryAfter)
 		}
 		advance(2 * time.Second) // total 8s, well within 30s window
 	}
@@ -357,7 +357,7 @@ func TestScope_UpdateScopeOutagePattern(t *testing.T) {
 			require.True(t, result.Block, "fifth unique outage-pattern path must trigger service block")
 			assert.Equal(t, SKService, result.ScopeKey)
 			assert.Equal(t, "service_outage", result.IssueType)
-			assert.Equal(t, defaultInitialTrialInterval, result.TrialInterval)
+			assert.Zero(t, result.RetryAfter)
 		}
 		advance(2 * time.Second)
 	}
@@ -446,34 +446,6 @@ func TestScope_SuccessResetsServiceWindow(t *testing.T) {
 	r := WorkerResult{Path: "/e.txt", HTTPStatus: 500}
 	result := ss.UpdateScope(&r)
 	assert.False(t, result.Block, "first failure after service window reset should not trigger")
-}
-
-// ---------------------------------------------------------------------------
-// ScopeKey.MaxTrialInterval (R-2.10.14)
-// ---------------------------------------------------------------------------
-
-// Validates: R-2.10.6, R-2.10.8, R-2.10.14
-func TestScopeKey_MaxTrialInterval(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		key  ScopeKey
-		want time.Duration
-	}{
-		{"quota:own", SKQuotaOwn, defaultMaxTrialInterval},
-		{"quota:shortcut", SKQuotaShortcut("driveX:itemY"), defaultMaxTrialInterval},
-		// Validates: R-2.10.43
-		{"disk:local", SKDiskLocal, defaultMaxTrialInterval},
-		{"throttle:account", SKThrottleAccount, defaultMaxTrialInterval},
-		{"service", SKService, defaultMaxTrialInterval},
-		{"zero-value (unknown)", ScopeKey{}, defaultMaxTrialInterval},
-	}
-
-	for _, tt := range tests {
-		assert.Equal(t, tt.want, tt.key.MaxTrialInterval(),
-			"ScopeKey(%s).MaxTrialInterval()", tt.name)
-	}
 }
 
 // ---------------------------------------------------------------------------
