@@ -33,18 +33,20 @@ const periodicScanJitterDivisor = 10
 // retryBatchSize limits how many sync_failures are processed per retrier
 // sweep in the drain loop. Prevents drain loop stalls when thousands of
 // items become retryable at once (e.g., after a scope clear).
-const retryBatchSize = 1024
+// Activated in Increment 3 (watch mode swap).
+const retryBatchSize = 1024 //nolint:unused // activated in watch mode (Increment 3)
 
 // trialPendingTTL is the maximum time a trial entry lingers in trialPending
 // before being considered stale and cleaned up. 15× the debounce window.
-const trialPendingTTL = 30 * time.Second
+// Activated in Increment 3 (watch mode swap).
+const trialPendingTTL = 30 * time.Second //nolint:unused // activated in watch mode (Increment 3)
 
 // trialEntry tracks a pending trial action in the pipeline. Created when
 // the trial timer fires and reobserve succeeds, consumed when the planner's
 // fresh action arrives at admitAndDispatch or admitReady.
 type trialEntry struct {
 	scopeKey ScopeKey
-	created  time.Time
+	created  time.Time //nolint:unused // read by cleanStaleTrialPending (Increment 3)
 }
 
 // EngineConfig holds the options for NewEngine. Uses a struct because
@@ -154,7 +156,8 @@ type Engine struct {
 	// buf is the event buffer for watch mode. Promoted from local variable
 	// in initWatchPipeline so the retrier (integrated into the drain loop)
 	// can inject events via e.buf.Add(). Nil in one-shot mode.
-	buf *Buffer
+	// Activated in Increment 3 (watch mode swap).
+	buf *Buffer //nolint:unused // activated in watch mode (Increment 3)
 
 	// tracker is the legacy DepTracker, retained during Phase 4 migration.
 	// Will be removed in Phase 5 along with tracker.go. Currently used
@@ -485,19 +488,17 @@ func (e *Engine) executePlan(
 	// Reset engine counters for this pass.
 	e.resetResultStats()
 
-	// Phase 4 migration: executePlan still uses the legacy DepTracker for
-	// the full dispatch/complete cycle. processWorkerResult calls
-	// e.tracker.Complete(), which drives both the worker pool Done() signal
-	// and dependent dispatch via the tracker's ready channel.
-	//
-	// DepGraph and readyCh are set on the engine struct for new code paths
-	// (admitAndDispatch, processAndRoute) that other methods may reference.
-	// They are not actively used in one-shot mode yet — full migration
-	// completes when processWorkerResult is replaced by processAndRoute.
-	tracker := NewDepTracker(len(plan.Actions), e.logger)
-	tracker.onHeld = func() { e.armTrialTimer() }
-	e.tracker = tracker
+	// One-shot mode: DepGraph + readyCh, no scope gate. Actions that pass
+	// dependency resolution go straight to workers. Scope blocking is
+	// watch-mode only (§2.3).
+	depGraph := NewDepGraph(e.logger)
+	e.depGraph = depGraph
+	e.readyCh = make(chan *TrackedAction, len(plan.Actions))
+	e.scopeGate = nil // explicit: one-shot has no scope gate
 
+	// Add all actions to the graph. Immediately-ready actions (no deps)
+	// are sent to readyCh before workers start — workers begin consuming
+	// the moment they launch.
 	for i := range plan.Actions {
 		id := int64(i)
 
@@ -509,18 +510,28 @@ func (e *Engine) executePlan(
 		// Dispatch state transition: pending/failed → in-progress.
 		e.setDispatch(ctx, &plan.Actions[i])
 
-		tracker.Add(&plan.Actions[i], id, depIDs)
+		if ta := depGraph.Add(&plan.Actions[i], id, depIDs); ta != nil {
+			e.readyCh <- ta
+		}
 	}
 
-	pool := NewWorkerPool(e.execCfg, tracker.Ready(), tracker.Done(), e.baseline, e.logger, len(plan.Actions))
+	pool := NewWorkerPool(e.execCfg, e.readyCh, depGraph.Done(), e.baseline, e.logger, len(plan.Actions))
 	pool.Start(ctx, e.transferWorkers)
 
 	// Process results concurrently — engine classifies and calls Complete.
 	// The drain goroutine reads from the results channel while workers run.
-	go e.drainWorkerResults(ctx, pool.Results(), bl)
+	// drainDone signals when the drain goroutine has finished processing all
+	// results, including side effects (counter updates, failure recording).
+	// Without this, resultStats() could race with the drain goroutine.
+	drainDone := make(chan struct{})
+	go func() {
+		defer close(drainDone)
+		e.drainWorkerResults(ctx, pool.Results(), bl)
+	}()
 
 	pool.Wait() // blocks until depGraph.Done() (all actions at terminal state)
 	pool.Stop() // cancels workers, closes results → drain goroutine exits
+	<-drainDone // wait for drain goroutine to finish all side effects
 
 	// End-of-pass failure summary — aggregates failures by issue type so
 	// bulk sync produces WARN summaries instead of per-item noise (R-6.6.12).
@@ -1499,7 +1510,7 @@ func (e *Engine) applyScopeBlock(sr ScopeUpdateResult) {
 // (processBatch, executePlan for watch mode).
 //
 // In one-shot mode, scope gate is not initialized — all actions pass through.
-func (e *Engine) admitAndDispatch(ctx context.Context, ready []*TrackedAction) {
+func (e *Engine) admitAndDispatch(ctx context.Context, ready []*TrackedAction) { //nolint:unused // activated in watch mode (Increment 3)
 	for _, ta := range ready {
 		// Trial interception — mutex-protected, safe from any goroutine.
 		e.trialMu.Lock()
@@ -1559,8 +1570,13 @@ func (e *Engine) admitReady(ctx context.Context, ready []*TrackedAction) []*Trac
 				dispatch = append(dispatch, ta)
 			} else {
 				// Trial candidate no longer matches scope — clear stale failure,
-				// run normal admission.
-				_ = e.baseline.ClearSyncFailure(ctx, ta.Action.Path, ta.Action.DriveID)
+				// run normal admission. Best-effort: log on error, don't abort.
+				if err := e.baseline.ClearSyncFailure(ctx, ta.Action.Path, ta.Action.DriveID); err != nil {
+					e.logger.Debug("admitReady: failed to clear stale trial failure",
+						slog.String("path", ta.Action.Path),
+						slog.String("error", err.Error()),
+					)
+				}
 				if e.scopeGate == nil {
 					e.setDispatch(ctx, &ta.Action)
 					dispatch = append(dispatch, ta)
@@ -1590,7 +1606,9 @@ func (e *Engine) admitReady(ctx context.Context, ready []*TrackedAction) []*Trac
 }
 
 // handleTrialInterception handles a trial-intercepted action in
-// admitAndDispatch (main goroutine path).
+// admitAndDispatch (main goroutine path). Called by admitAndDispatch (Increment 3).
+//
+//nolint:unused
 func (e *Engine) handleTrialInterception(ctx context.Context, ta *TrackedAction, entry trialEntry) {
 	if entry.scopeKey.BlocksAction(ta.Action.Path,
 		ta.Action.ShortcutKey(), ta.Action.Type,
@@ -1607,8 +1625,13 @@ func (e *Engine) handleTrialInterception(ctx context.Context, ta *TrackedAction,
 	}
 
 	// Trial candidate no longer matches scope — clear stale failure,
-	// run normal admission.
-	_ = e.baseline.ClearSyncFailure(ctx, ta.Action.Path, ta.Action.DriveID)
+	// run normal admission. Best-effort: log on error, don't abort.
+	if err := e.baseline.ClearSyncFailure(ctx, ta.Action.Path, ta.Action.DriveID); err != nil {
+		e.logger.Debug("handleTrialInterception: failed to clear stale trial failure",
+			slog.String("path", ta.Action.Path),
+			slog.String("error", err.Error()),
+		)
+	}
 	if e.scopeGate == nil {
 		e.setDispatch(ctx, &ta.Action)
 
@@ -1734,7 +1757,12 @@ func (e *Engine) onScopeClear(ctx context.Context, key ScopeKey) {
 	// Update in-memory cache. ClearScopeBlock tries to delete from DB again
 	// (harmless — row already gone). We call it for the in-memory map update.
 	if e.scopeGate != nil {
-		_ = e.scopeGate.ClearScopeBlock(ctx, key)
+		if err := e.scopeGate.ClearScopeBlock(ctx, key); err != nil {
+			e.logger.Debug("onScopeClear: in-memory cache update failed (non-fatal)",
+				slog.String("scope_key", key.String()),
+				slog.String("error", err.Error()),
+			)
+		}
 	}
 
 	e.armRetryTimer()
@@ -1777,7 +1805,7 @@ func (e *Engine) processAndRoute(ctx context.Context, r *WorkerResult, bl *Basel
 			e.depGraph.Complete(dep.ID)
 		}
 
-	default: // resultRequeue, resultScopeBlock, resultSkip, resultFatal
+	case resultRequeue, resultScopeBlock, resultSkip, resultFatal:
 		// Parent failed — cascade-record children as sync_failures.
 		for _, dep := range ready {
 			e.recordCascadeFailure(ctx, &dep.Action, r)
@@ -1786,6 +1814,15 @@ func (e *Engine) processAndRoute(ctx context.Context, r *WorkerResult, bl *Basel
 	}
 
 	// Per-class side effects (after dependent routing).
+	e.applyResultSideEffects(ctx, class, r, bl)
+
+	return dispatched
+}
+
+// applyResultSideEffects handles per-class side effects: counter updates,
+// failure recording, scope detection, and retrier kicks. Called after
+// dependent routing is complete.
+func (e *Engine) applyResultSideEffects(ctx context.Context, class resultClass, r *WorkerResult, bl *Baseline) {
 	switch class {
 	case resultSuccess:
 		e.succeeded.Add(1)
@@ -1819,7 +1856,8 @@ func (e *Engine) processAndRoute(ctx context.Context, r *WorkerResult, bl *Basel
 		if errors.Is(r.Err, os.ErrPermission) {
 			e.handleLocalPermission(ctx, r)
 			e.recordError(r)
-			break
+
+			return
 		}
 		if r.HTTPStatus == http.StatusForbidden && e.permChecker != nil {
 			e.handle403(ctx, bl, r.Path, e.getWatchShortcuts())
@@ -1835,8 +1873,6 @@ func (e *Engine) processAndRoute(ctx context.Context, r *WorkerResult, bl *Basel
 	case resultShutdown:
 		// no failure recording
 	}
-
-	return dispatched
 }
 
 // processTrialResultV2 handles trial results using the new architecture.
@@ -1932,6 +1968,8 @@ func (e *Engine) armRetryTimer() {
 // cleanStaleTrialPending removes stale entries from trialPending. Called
 // under trialMu. Entries older than trialPendingTTL are cleared and the
 // corresponding sync_failure is deleted (item is stale).
+//
+//nolint:unused // activated in watch mode trial dispatch (Increment 3)
 func (e *Engine) cleanStaleTrialPending(now time.Time) {
 	e.trialMu.Lock()
 	defer e.trialMu.Unlock()
@@ -1940,8 +1978,13 @@ func (e *Engine) cleanStaleTrialPending(now time.Time) {
 		if now.Sub(entry.created) > trialPendingTTL {
 			delete(e.trialPending, path)
 			// Clear the stale sync_failure — this trial candidate was never
-			// intercepted by the planner (item may have been deleted).
-			_ = e.baseline.ClearSyncFailureByPath(context.Background(), path)
+			// intercepted by the planner (item may have been deleted). Best-effort.
+			if err := e.baseline.ClearSyncFailureByPath(context.Background(), path); err != nil {
+				e.logger.Debug("cleanStaleTrialPending: failed to clear stale failure",
+					slog.String("path", path),
+					slog.String("error", err.Error()),
+				)
+			}
 		}
 	}
 }
@@ -2239,33 +2282,66 @@ func (e *Engine) stopTrialTimer() {
 	}
 }
 
-// drainWorkerResults reads from the worker result channel and persists
-// failures to remote_state for durable retry tracking. Used by watch mode.
-// Baseline is passed explicitly. Shortcuts are read from the synchronized
-// watchShortcuts field on each result to pick up newly discovered shortcuts.
-// The trial timer fires DispatchTrial when scope trials become due (R-2.10.5).
+// drainWorkerResults reads from the worker result channel and processes
+// results using failure-aware dependent dispatch. Uses the actor-with-outbox
+// pattern (§3.5): ready dependents go to an in-memory outbox, and the select
+// interleaves outbox draining with result processing to prevent deadlock
+// when Complete returns many dependents and readyCh is full.
+//
+// The trial timer fires scope trial dispatch when trials become due (R-2.10.5).
+// In one-shot mode (scopeGate == nil), trial dispatch is a no-op.
 func (e *Engine) drainWorkerResults(ctx context.Context, results <-chan WorkerResult, bl *Baseline) {
 	defer e.stopTrialTimer()
 
+	var outbox []*TrackedAction
+
 	for {
+		// Actor-with-outbox: if outbox has items, include a send case for
+		// readyCh. The nil channel pattern disables the case when outbox is
+		// empty — Go's select on a nil channel blocks, effectively removing
+		// it from the select.
+		var outCh chan<- *TrackedAction
+		var outVal *TrackedAction
+		if len(outbox) > 0 {
+			outCh = e.readyCh
+			outVal = outbox[0]
+		}
+
 		select {
+		case outCh <- outVal:
+			// Drained one item from outbox to readyCh.
+			outbox = outbox[1:]
+
 		case r, ok := <-results:
 			if !ok {
 				return
 			}
 
-			e.processWorkerResult(ctx, &r, bl, e.getWatchShortcuts())
+			// Phase 4 migration: use processAndRoute (new architecture) when
+			// the engine has a depGraph and no legacy tracker. Watch mode
+			// still uses the legacy tracker until Increment 3 migrates it.
+			if e.depGraph != nil && e.tracker == nil {
+				dispatched := e.processAndRoute(ctx, &r, bl)
+				outbox = append(outbox, dispatched...)
+			} else {
+				e.processWorkerResult(ctx, &r, bl, e.getWatchShortcuts())
+			}
 
 		case <-e.trialTimerChan():
-			now := e.nowFunc()
-			for {
-				key, _, ok := e.tracker.NextDueTrial(now)
-				if !ok {
-					break
+			// Legacy trial dispatch via DepTracker — still used by watch mode
+			// until Increment 3 migrates initWatchPipeline. In one-shot mode
+			// (tracker == nil), this is a no-op.
+			if e.tracker != nil {
+				now := e.nowFunc()
+				for {
+					key, _, ok := e.tracker.NextDueTrial(now)
+					if !ok {
+						break
+					}
+					e.tracker.DispatchTrial(key)
 				}
-				e.tracker.DispatchTrial(key)
+				e.armTrialTimer()
 			}
-			e.armTrialTimer()
 
 		case <-ctx.Done():
 			return
