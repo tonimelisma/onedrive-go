@@ -53,7 +53,7 @@ CLI wiring for the verification command. Opens state DB read-only, runs verifica
 ## SyncStore Planned Improvements
 
 - Audit `ForEachPath` callers for re-entrancy safety: holds read lock during callback — write from callback causes deadlock. [planned]
-- Mutex or `sync.Once` on `SyncStore.Load`: concurrent `Load` calls race on `m.baseline = b`. [planned]
+- ~~Mutex or `sync.Once` on `SyncStore.Load`~~: resolved — `Load` is protected by `baselineMu` (`sync.Mutex`). [verified]
 - Disk full during baseline commit: in-memory cache consistency when SQLite write fails. [planned]
 - Evaluate `BaselineStore` interface abstraction for storage backend flexibility. [planned]
 
