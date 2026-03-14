@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
@@ -151,7 +152,7 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 		CanonicalID:     canonicalID,
 		DisplayName:     drive.DisplayName,
 		Owner:           drive.Owner,
-		Paused:          drive.Paused != nil && *drive.Paused,
+		Paused:          drive.IsPaused(time.Now()),
 		PausedUntil:     pausedUntil,
 		SyncDir:         expandTilde(drive.SyncDir),
 		FilterConfig:    cfg.FilterConfig,

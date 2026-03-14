@@ -28,6 +28,14 @@ Implements: R-3.4.1 [verified], R-3.4.3 [verified], R-6.2.9 [verified]
 
 Each drive section contains per-drive settings (sync_dir, filters, paused state). Drive resolution (`ResolveDrive`) matches by exact canonical ID → exact display_name (case-insensitive) → substring. Ambiguous matches produce an error with suggestions. `ResolveDrive()` returns both `*ResolvedDrive` and `*Config` — the raw config is needed by shared drive token resolution.
 
+### Pause State
+
+`Drive.IsPaused(now time.Time) bool` is the single source of truth for whether a drive is currently paused. All callers (CLI commands, orchestrator, drive resolution) use this method instead of checking `Paused`/`PausedUntil` fields directly. Logic: nil/false → not paused; true without expiry → indefinite; true with future expiry → active; true with past expiry → expired (not paused); true with unparseable expiry → indefinite (safe default).
+
+`ResolvedDrive.Paused` is expiry-aware: `buildResolvedDrive` calls `IsPaused(time.Now())`, so `ResolveDrives(includePaused=false)` correctly includes drives with expired timed pauses.
+
+`ClearExpiredPauses(cfgPath, cfg, now, logger)` is config-level housekeeping: removes stale `paused`/`paused_until` keys from config for drives whose timed pause has expired. Updates both in-memory config and on-disk file. Called by the orchestrator's reload path before resolving drives.
+
 Default sync directories are computed deterministically from the canonical ID + cached metadata using a two-level collision scheme: base name → + display_name → + email. `DefaultSyncDir()` is the single entry point.
 
 ## Token Resolution

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -58,7 +59,7 @@ func resumeSingleDrive(cc *CLIContext, cfg *config.Config, selector string) erro
 		return fmt.Errorf("drive %q not found in config", selector)
 	}
 
-	if d.Paused == nil || !*d.Paused {
+	if !d.IsPaused(time.Now()) {
 		cc.Statusf("Drive %s is not paused\n", cid.String())
 
 		return nil
@@ -84,7 +85,7 @@ func resumeAllDrives(cc *CLIContext, cfg *config.Config) error {
 
 	for cid := range cfg.Drives {
 		d := cfg.Drives[cid]
-		if d.Paused == nil || !*d.Paused {
+		if !d.IsPaused(time.Now()) {
 			continue
 		}
 

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -818,6 +819,102 @@ func TestLogWarnings_EmptySlice_NoLogs(t *testing.T) {
 	LogWarnings(nil, logger)
 
 	assert.Empty(t, h.records)
+}
+
+// --- ClearExpiredPauses ---
+
+// Validates: R-2.6.1
+func TestClearExpiredPauses_ClearsExpired(t *testing.T) {
+	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+	expired := now.Add(-1 * time.Hour).Format(time.RFC3339)
+
+	cid := driveid.MustCanonicalID("personal:expired@example.com")
+	cfgPath := writeTestConfig(t, `
+["personal:expired@example.com"]
+sync_dir = "~/OneDrive"
+paused = true
+paused_until = "`+expired+`"
+`)
+	cfg, err := Load(cfgPath, testLogger(t))
+	require.NoError(t, err)
+
+	ClearExpiredPauses(cfgPath, cfg, now, testLogger(t))
+
+	// In-memory config should have paused fields cleared.
+	d := cfg.Drives[cid]
+	assert.Nil(t, d.Paused, "paused should be nil after clearing expired pause")
+	assert.Nil(t, d.PausedUntil, "paused_until should be nil after clearing expired pause")
+
+	// On-disk config should also have the keys removed.
+	reloaded, err := Load(cfgPath, testLogger(t))
+	require.NoError(t, err)
+	rd := reloaded.Drives[cid]
+	assert.Nil(t, rd.Paused, "paused should be removed from config file")
+	assert.Nil(t, rd.PausedUntil, "paused_until should be removed from config file")
+}
+
+// Validates: R-2.6.1
+func TestClearExpiredPauses_KeepsActive(t *testing.T) {
+	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+	future := now.Add(1 * time.Hour).Format(time.RFC3339)
+
+	cid := driveid.MustCanonicalID("personal:active@example.com")
+	cfgPath := writeTestConfig(t, `
+["personal:active@example.com"]
+sync_dir = "~/OneDrive"
+paused = true
+paused_until = "`+future+`"
+`)
+	cfg, err := Load(cfgPath, testLogger(t))
+	require.NoError(t, err)
+
+	ClearExpiredPauses(cfgPath, cfg, now, testLogger(t))
+
+	// Active timed pause should be preserved.
+	d := cfg.Drives[cid]
+	require.NotNil(t, d.Paused)
+	assert.True(t, *d.Paused)
+	require.NotNil(t, d.PausedUntil)
+	assert.Equal(t, future, *d.PausedUntil)
+}
+
+// Validates: R-2.6.1
+func TestClearExpiredPauses_KeepsIndefinite(t *testing.T) {
+	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+
+	cid := driveid.MustCanonicalID("personal:indefinite@example.com")
+	cfgPath := writeTestConfig(t, `
+["personal:indefinite@example.com"]
+sync_dir = "~/OneDrive"
+paused = true
+`)
+	cfg, err := Load(cfgPath, testLogger(t))
+	require.NoError(t, err)
+
+	ClearExpiredPauses(cfgPath, cfg, now, testLogger(t))
+
+	// Indefinite pause should be preserved.
+	d := cfg.Drives[cid]
+	require.NotNil(t, d.Paused)
+	assert.True(t, *d.Paused)
+}
+
+// Validates: R-2.6.1
+func TestClearExpiredPauses_NoPausedDrives(t *testing.T) {
+	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+
+	cfgPath := writeTestConfig(t, `
+["personal:active@example.com"]
+sync_dir = "~/OneDrive"
+`)
+	cfg, err := Load(cfgPath, testLogger(t))
+	require.NoError(t, err)
+
+	// Should be a no-op, no errors.
+	ClearExpiredPauses(cfgPath, cfg, now, testLogger(t))
+
+	// Drive should still be present and unmodified.
+	assert.Len(t, cfg.Drives, 1)
 }
 
 // TestDecodeDriveSections_StrictAndLenient_IdenticalOutput verifies that valid

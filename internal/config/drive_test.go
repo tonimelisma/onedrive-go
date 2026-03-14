@@ -167,6 +167,17 @@ func TestBuildResolvedDrive_PausedExplicitTrue(t *testing.T) {
 	assert.True(t, resolved.Paused)
 }
 
+// Validates: R-2.6.1
+func TestBuildResolvedDrive_TimedPauseExpired(t *testing.T) {
+	cfg := DefaultConfig()
+	paused := true
+	past := "2000-01-01T00:00:00Z"
+	drive := &Drive{SyncDir: "~/OneDrive", Paused: &paused, PausedUntil: &past}
+
+	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("personal:toni@outlook.com"), drive, testLogger(t))
+	assert.False(t, resolved.Paused, "expired timed pause should resolve to Paused=false")
+}
+
 func TestBuildResolvedDrive_PausedExplicitFalse(t *testing.T) {
 	cfg := DefaultConfig()
 	paused := false

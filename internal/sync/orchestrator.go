@@ -222,7 +222,10 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode SyncMode, opts WatchOp
 	runners := make(map[driveid.CanonicalID]*watchRunner)
 
 	for _, rd := range drives {
-		if o.isDrivePaused(rd.CanonicalID) {
+		// Pause semantics are handled by config.Drive.IsPaused() — the
+		// ResolvedDrive.Paused field is already expiry-aware after
+		// buildResolvedDrive uses IsPaused(time.Now()).
+		if rd.Paused {
 			o.logger.Info("skipping paused drive",
 				slog.String("drive", rd.CanonicalID.String()),
 			)
@@ -360,8 +363,9 @@ func (o *Orchestrator) reload(
 	}
 
 	// Clear expired timed pauses before resolving, so newly unpaused drives
-	// are included in the active set.
-	o.clearExpiredPauses(newCfg)
+	// are included in the active set. Pause semantics are owned by the config
+	// package — the orchestrator is a consumer, not an implementor.
+	config.ClearExpiredPauses(o.cfg.Holder.Path(), newCfg, time.Now(), o.logger)
 
 	// Resolve non-paused drives from the new config. Use the same selectors
 	// as initial startup (none — all drives).
@@ -441,68 +445,4 @@ func (o *Orchestrator) reload(
 		slog.Int("stopped", stopped),
 		slog.Int("active", len(runners)),
 	)
-}
-
-// isDrivePaused checks whether a drive is currently paused in the config.
-func (o *Orchestrator) isDrivePaused(cid driveid.CanonicalID) bool {
-	d, ok := o.cfg.Holder.Config().Drives[cid]
-	if !ok {
-		return false
-	}
-
-	if d.Paused == nil || !*d.Paused {
-		return false
-	}
-
-	// Check timed pause expiry.
-	if d.PausedUntil != nil {
-		until, err := time.Parse(time.RFC3339, *d.PausedUntil)
-		if err == nil && !until.After(time.Now()) {
-			return false // timed pause has expired
-		}
-	}
-
-	return true
-}
-
-// clearExpiredPauses removes paused/paused_until keys from drives whose timed
-// pause has expired. This allows the drive to be started on the next resolve.
-func (o *Orchestrator) clearExpiredPauses(cfg *config.Config) {
-	for cid := range cfg.Drives {
-		d := cfg.Drives[cid]
-
-		if d.Paused == nil || !*d.Paused {
-			continue
-		}
-
-		if d.PausedUntil == nil {
-			continue
-		}
-
-		until, err := time.Parse(time.RFC3339, *d.PausedUntil)
-		if err != nil {
-			continue
-		}
-
-		if until.After(time.Now()) {
-			continue
-		}
-
-		o.logger.Info("clearing expired timed pause",
-			slog.String("drive", cid.String()),
-		)
-
-		if delErr := config.DeleteDriveKey(o.cfg.Holder.Path(), cid, "paused"); delErr != nil {
-			o.logger.Warn("could not clear paused key", slog.String("error", delErr.Error()))
-		}
-
-		if delErr := config.DeleteDriveKey(o.cfg.Holder.Path(), cid, "paused_until"); delErr != nil {
-			o.logger.Warn("could not clear paused_until key", slog.String("error", delErr.Error()))
-		}
-
-		// Write modified value back to the map so ResolveDrives sees unpaused state.
-		d.Paused = nil
-		d.PausedUntil = nil
-		cfg.Drives[cid] = d
-	}
 }
