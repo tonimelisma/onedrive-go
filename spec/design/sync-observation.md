@@ -32,11 +32,11 @@ Key properties:
 - Orphan items (missing parent) produce a warning log and partial path
 - The inflight map is a parameter, not a field — RemoteObserver accumulates it across pages; shortcuts populate it once per batch
 
-### Shortcut Observation (`item_converter.go`, `engine_shortcuts.go`)
+### Shortcut Observation (`item_converter.go`)
 
 Shared folder shortcuts require separate delta scopes. Personal drives use delta (shortcuts appear in the delta stream). Business drives use folder enumeration (no shortcut support in Business delta). Observation method recorded per-shortcut for correct dispatch. Shortcut observation uses the unified `itemConverter` pipeline via `convertShortcutItems`, ensuring identical NFC normalization, move detection, and deleted-item name recovery as the primary drive.
 
-Shortcut helper functions are co-located with their primary concern: `detectShortcutOrphans` and `resolveItemDriveIDWithFallback` live in `item_converter.go` (DriveID resolution and baseline comparison); `filterOutShortcuts` and concurrency scaffolding live in `engine_shortcuts.go` (engine orchestration). The former `observer_shortcut.go` was dissolved — its functions were redistributed to eliminate a vestigial single-purpose file.
+Shortcut helper functions are co-located with their primary concern: `detectShortcutOrphans` and `resolveItemDriveIDWithFallback` live in `item_converter.go` (DriveID resolution and baseline comparison); `filterOutShortcuts` and concurrency scaffolding live in `engine_shortcuts.go` (governed by [sync-engine.md](sync-engine.md), not this doc — engine orchestration, not observation). The former `observer_shortcut.go` was dissolved — its functions were redistributed to eliminate a vestigial single-purpose file.
 
 ## Local Observer (`observer_local.go`)
 
