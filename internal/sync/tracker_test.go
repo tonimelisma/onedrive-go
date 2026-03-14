@@ -926,6 +926,92 @@ func TestBlockedScope_DiskLocal_BlocksDownloadsOnly(t *testing.T) {
 	}
 }
 
+// TestDiscardScope_ReleasesDependents verifies that DiscardScope completes
+// actions in the dependency graph so their dependents' depsLeft is
+// decremented. Without this, dependents of discarded actions become zombies
+// (depsLeft never reaches 0 → never dispatched → done channel never closes).
+// Regression test for D-3.
+func TestDiscardScope_ReleasesDependents(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+
+	// Block quota:shortcut scope.
+	dt.HoldScope(SKQuotaShortcut("drive1:item1"), &ScopeBlock{
+		Key:       SKQuotaShortcut("drive1:item1"),
+		IssueType: "quota_exceeded",
+	})
+
+	// Action 1: upload targeting the blocked shortcut — goes to held.
+	dt.Add(&Action{
+		Type: ActionUpload, Path: "Team Docs/a.txt",
+		DriveID: driveid.New("d"), ItemID: "i1",
+		targetShortcutKey: "drive1:item1",
+	}, 1, nil)
+
+	// Action 2: upload depending on action 1 — waiting on dep, not held yet.
+	dt.Add(&Action{
+		Type: ActionUpload, Path: "Team Docs/b.txt",
+		DriveID: driveid.New("d"), ItemID: "i2",
+		targetShortcutKey: "drive1:item1",
+	}, 2, []int64{1})
+
+	// Nothing should be on the ready channel.
+	select {
+	case ta := <-dt.Ready():
+		require.Fail(t, "nothing should be dispatched yet", "got action %d", ta.ID)
+	default:
+	}
+
+	// Discard the scope — action 1 should be completed in the graph,
+	// which decrements action 2's depsLeft. Action 2 should also be
+	// completed (it targets the same discarded scope).
+	dt.DiscardScope(SKQuotaShortcut("drive1:item1"))
+
+	// The done channel should close because all actions are completed.
+	select {
+	case <-dt.Done():
+		// Success — D-3 fixed: dependents were properly released.
+	case <-time.After(time.Second):
+		require.Fail(t, "done channel not closed — D-3: DiscardScope orphaned dependents")
+	}
+
+	// Graph should be clean — no lingering entries.
+	assert.False(t, dt.HasInFlight("Team Docs/a.txt"),
+		"discarded action should be removed from graph byPath")
+	assert.False(t, dt.HasInFlight("Team Docs/b.txt"),
+		"dependent of discarded action should be removed from graph byPath")
+}
+
+// TestDiscardScope_CleansGraphMaps verifies that DiscardScope removes
+// discarded actions from the DepGraph's actions and byPath maps, preventing
+// stale entries in long-lived (watch mode) trackers.
+func TestDiscardScope_CleansGraphMaps(t *testing.T) {
+	t.Parallel()
+
+	dt := NewDepTracker(10, testLogger(t))
+
+	dt.HoldScope(SKQuotaShortcut("drive1:item1"), &ScopeBlock{
+		Key:       SKQuotaShortcut("drive1:item1"),
+		IssueType: "quota_exceeded",
+	})
+
+	dt.Add(&Action{
+		Type: ActionUpload, Path: "Team Docs/a.txt",
+		DriveID: driveid.New("d"), ItemID: "i1",
+		targetShortcutKey: "drive1:item1",
+	}, 1, nil)
+
+	// Before discard: action is in-flight (in the graph).
+	assert.True(t, dt.HasInFlight("Team Docs/a.txt"))
+
+	dt.DiscardScope(SKQuotaShortcut("drive1:item1"))
+
+	// After discard: action should be cleaned from the graph.
+	assert.False(t, dt.HasInFlight("Team Docs/a.txt"),
+		"discarded action should be removed from graph")
+}
+
 func TestDiscardScope_NoOpWhenEmpty(t *testing.T) {
 	t.Parallel()
 

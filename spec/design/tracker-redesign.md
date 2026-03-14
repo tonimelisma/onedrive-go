@@ -17,7 +17,7 @@ The sync engine's action dispatch system has eleven correctness, safety, and mai
 
 **D-2: Lock ordering fragility.** `onHeld` callback (tracker.go:86-90) calls `armTrialTimer()` which acquires `trialMu`. To prevent `dt.mu → trialMu` ordering, `onHeld` is called after releasing `dt.mu`. This constraint is documented in a comment, not enforced by the type system.
 
-**D-3: `DiscardScope` orphans dependents.** `DiscardScope` (tracker.go:379-400) increments `completed` but doesn't decrement dependents' `depsLeft`, doesn't remove from `dt.actions`, doesn't clean `dt.byPath`. Second terminal path that bypasses the dependency graph.
+**D-3: `DiscardScope` orphans dependents.** `DiscardScope` (tracker.go:379-400) increments `completed` but doesn't decrement dependents' `depsLeft`, doesn't remove from `dt.actions`, doesn't clean `dt.byPath`. Second terminal path that bypasses the dependency graph. **Fixed in Phase 2**: `DiscardScope` now calls `dg.Complete()` for each held action, cascading to dependents via a queue.
 
 **D-4: Channel-send-under-lock in `Add()`.** `Add()` calls `dispatch()` under `dt.mu`. `dispatch()` may block on `dt.ready <- ta`. Workers can't call `Complete` (needs `dt.mu`). Deadlock. Avoided only by buffer sizing.
 
