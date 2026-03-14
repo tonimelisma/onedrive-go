@@ -1023,6 +1023,10 @@ func TestRecheckPermissions_ResetsCache(t *testing.T) {
 func TestHandleLocalPermission_DirectoryLevel(t *testing.T) {
 	t.Parallel()
 
+	if os.Getuid() == 0 {
+		t.Skip("root bypasses permission checks")
+	}
+
 	mock := &engineMockClient{}
 	eng, syncRoot := newTestEngine(t, mock)
 	ctx := t.Context()
@@ -1147,6 +1151,10 @@ func TestRecheckLocalPermissions_Restored(t *testing.T) {
 // Validates: R-2.10.13
 func TestRecheckLocalPermissions_StillDenied(t *testing.T) {
 	t.Parallel()
+
+	if os.Getuid() == 0 {
+		t.Skip("root bypasses permission checks")
+	}
 
 	mock := &engineMockClient{}
 	eng, syncRoot := newTestEngine(t, mock)
