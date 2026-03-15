@@ -618,17 +618,19 @@ func classifyFolderNoBaseline(view *PathView, mode SyncMode) []Action {
 // remoteStateFromEvent constructs a RemoteState from a ChangeEvent.
 func remoteStateFromEvent(ev *ChangeEvent) *RemoteState {
 	return &RemoteState{
-		ItemID:    ev.ItemID,
-		DriveID:   ev.DriveID,
-		ParentID:  ev.ParentID,
-		Name:      ev.Name,
-		ItemType:  ev.ItemType,
-		Size:      ev.Size,
-		Hash:      ev.Hash,
-		Mtime:     ev.Mtime,
-		ETag:      ev.ETag,
-		CTag:      ev.CTag,
-		IsDeleted: ev.IsDeleted,
+		ItemID:        ev.ItemID,
+		DriveID:       ev.DriveID,
+		ParentID:      ev.ParentID,
+		Name:          ev.Name,
+		ItemType:      ev.ItemType,
+		Size:          ev.Size,
+		Hash:          ev.Hash,
+		Mtime:         ev.Mtime,
+		ETag:          ev.ETag,
+		CTag:          ev.CTag,
+		IsDeleted:     ev.IsDeleted,
+		RemoteDriveID: ev.RemoteDriveID,
+		RemoteItemID:  ev.RemoteItemID,
 	}
 }
 
@@ -760,6 +762,14 @@ func makeAction(actionType ActionType, view *PathView) Action {
 	// Baseline provides a fallback ItemID when Remote is absent.
 	if a.ItemID == "" && view.Baseline != nil {
 		a.ItemID = view.Baseline.ItemID
+	}
+
+	// Shortcut scope enrichment (D-5): flow shortcut identity from
+	// observation through to the action so ScopeGate can distinguish
+	// own-drive vs shortcut-scoped failures (R-6.8.12, R-6.8.13).
+	if view.Remote != nil && view.Remote.RemoteDriveID != "" {
+		a.targetShortcutKey = view.Remote.RemoteDriveID + ":" + view.Remote.RemoteItemID
+		a.targetDriveID = driveid.New(view.Remote.RemoteDriveID)
 	}
 
 	return a

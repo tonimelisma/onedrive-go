@@ -545,6 +545,12 @@ type RemoteState struct {
 	ETag      string
 	CTag      string
 	IsDeleted bool
+
+	// Shortcut scope identity — populated for items observed through a
+	// shortcut converter, empty for own-drive items. Transient: not
+	// persisted in the remote_state table.
+	RemoteDriveID string // shortcut source drive
+	RemoteItemID  string // shortcut source folder
 }
 
 // LocalState captures the current state of a path as observed from
