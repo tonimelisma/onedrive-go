@@ -22,12 +22,8 @@ func newPhase4Engine(t *testing.T) *Engine {
 
 	mock := &engineMockClient{}
 	eng, _ := newTestEngine(t, mock)
-
-	// Initialize Phase 4 fields.
-	eng.depGraph = NewDepGraph(eng.logger)
-	eng.readyCh = make(chan *TrackedAction, 1024)
 	eng.nowFn = func() time.Time { return time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC) }
-	newTestWatchState(t, eng)
+	setupWatchEngine(t, eng)
 
 	return eng
 }
@@ -1357,10 +1353,8 @@ func TestTrialDispatch_UsesReobserve(t *testing.T) {
 	}
 
 	eng, _ := newTestEngine(t, mock)
-	eng.depGraph = NewDepGraph(eng.logger)
-	eng.readyCh = make(chan *TrackedAction, 1024)
 	eng.nowFn = func() time.Time { return time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC) }
-	newTestWatchState(t, eng)
+	setupWatchEngine(t, eng)
 	eng.watch.buf = NewBuffer(eng.logger)
 
 	ctx := context.Background()
@@ -1438,10 +1432,8 @@ func TestTrialDispatch_ForwardsRetryAfter(t *testing.T) {
 	}
 
 	eng, _ := newTestEngine(t, mock)
-	eng.depGraph = NewDepGraph(eng.logger)
-	eng.readyCh = make(chan *TrackedAction, 1024)
 	eng.nowFn = func() time.Time { return time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC) }
-	newTestWatchState(t, eng)
+	setupWatchEngine(t, eng)
 	eng.watch.buf = NewBuffer(eng.logger)
 
 	ctx := context.Background()

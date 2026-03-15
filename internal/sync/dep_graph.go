@@ -23,6 +23,12 @@ type DepGraph struct {
 	done      chan struct{} // closed when completed == total && total > 0
 	closeOnce stdsync.Once  // ensures done is closed exactly once
 	logger    *slog.Logger
+
+	// emptyCh is closed when actions map hits 0 after a WaitForEmpty call.
+	// Nil until WaitForEmpty is called. One-shot per call — callers must
+	// call WaitForEmpty again for subsequent emptiness checks.
+	emptyCh   chan struct{}
+	emptyOnce *stdsync.Once
 }
 
 // TrackedAction pairs an Action with an ID and a per-action cancel function.
@@ -63,6 +69,24 @@ func NewDepGraph(logger *slog.Logger) *DepGraph {
 // if total is 0 (no actions added).
 func (g *DepGraph) Done() <-chan struct{} {
 	return g.done
+}
+
+// WaitForEmpty returns a channel that is closed when InFlightCount drops
+// to zero. If the graph is already empty, returns a pre-closed channel.
+// One-shot: call again for subsequent emptiness checks.
+func (g *DepGraph) WaitForEmpty() <-chan struct{} {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if len(g.actions) == 0 {
+		ch := make(chan struct{})
+		close(ch)
+		return ch
+	}
+
+	g.emptyCh = make(chan struct{})
+	g.emptyOnce = &stdsync.Once{}
+	return g.emptyCh
 }
 
 // Add inserts an action into the graph. If all dependencies are already
@@ -135,6 +159,13 @@ func (g *DepGraph) Complete(id int64) ([]*TrackedAction, bool) {
 	delete(g.actions, id)
 	delete(g.byPath, ta.Action.Path)
 
+	// Snapshot emptiness while holding lock — the len check is consistent
+	// with the delete above. emptyOnce/emptyCh are only set by WaitForEmpty
+	// (also under mu), so capturing them here is race-free.
+	empty := len(g.actions) == 0
+	emptyOnce := g.emptyOnce
+	emptyCh := g.emptyCh
+
 	g.mu.Unlock()
 
 	ready := make([]*TrackedAction, 0, len(dependents))
@@ -148,6 +179,11 @@ func (g *DepGraph) Complete(id int64) ([]*TrackedAction, bool) {
 	// Check if all actions are done. Close the done channel exactly once.
 	if g.completed.Add(1) >= g.total.Load() && g.total.Load() > 0 {
 		g.closeOnce.Do(func() { close(g.done) })
+	}
+
+	// Signal WaitForEmpty watchers when the actions map is drained.
+	if empty && emptyOnce != nil {
+		emptyOnce.Do(func() { close(emptyCh) })
 	}
 
 	return ready, true

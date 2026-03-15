@@ -1007,9 +1007,14 @@ func (e *Engine) loadWatchState(ctx context.Context) (*Baseline, error) {
 	return bl, nil
 }
 
-// RunWatch runs a continuous sync loop: initial one-shot sync, then
-// watches for remote and local changes, processing them in batches.
+// RunWatch runs a continuous sync loop: bootstrap sync through the watch
+// pipeline, then watches for remote and local changes in batches.
 // Blocks until the context is canceled, returning nil on clean shutdown.
+//
+// Flow: initWatchInfra → bootstrapSync → startObservers → runWatchLoop.
+// Unlike the old approach (calling RunOnce with throwaway infrastructure),
+// bootstrapSync dispatches through the same DepGraph, ScopeGate, and
+// WorkerPool that the watch loop uses.
 func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) error {
 	e.logger.Info("watch mode starting",
 		slog.String("mode", mode.String()),
@@ -1018,24 +1023,30 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 		slog.Duration("debounce", e.resolveDebounce(opts)),
 	)
 
-	// Step 1: Run initial one-shot sync to establish baseline.
-	if _, err := e.RunOnce(ctx, mode, RunOpts{Force: opts.Force}); err != nil {
-		return fmt.Errorf("sync: initial sync failed: %w", err)
-	}
-
-	// Steps 2–5: Set up the watch pipeline (baseline, tracker, pool,
-	// buffer, retrier, observers, tickers).
-	pipe, err := e.initWatchPipeline(ctx, mode, opts)
+	// Step 1: Set up watch infrastructure (no observers yet).
+	pipe, err := e.initWatchInfra(ctx, mode, opts)
 	if err != nil {
 		return err
 	}
 	defer pipe.cleanup()
 
+	// Step 2: Bootstrap — observe, plan, execute through watch pipeline.
+	if err := e.bootstrapSync(ctx, mode, pipe); err != nil {
+		return fmt.Errorf("sync: initial sync failed: %w", err)
+	}
+
+	// Step 3: Start observers AFTER bootstrap — they see the post-bootstrap baseline.
+	errs, activeObs, skippedCh := e.startObservers(ctx, pipe.bl, mode, e.watch.buf, opts)
+	pipe.errs = errs
+	pipe.activeObs = activeObs
+	pipe.skippedCh = skippedCh
+
+	// Step 4: Run the watch loop.
 	return e.runWatchLoop(ctx, pipe)
 }
 
 // watchPipeline holds all handles needed by the watch select loop.
-// Created by initWatchPipeline; cleaned up by its cleanup method.
+// Created by initWatchInfra; cleaned up by its cleanup method.
 type watchPipeline struct {
 	bl         *Baseline
 	safety     *SafetyConfig
@@ -1046,12 +1057,14 @@ type watchPipeline struct {
 	recheckC   <-chan time.Time
 	activeObs  int
 	mode       SyncMode
+	pool       *WorkerPool // for bootstrapSync to access Results()
 	cleanup    func()
 }
 
-// initWatchPipeline sets up all watch-mode subsystems: baseline, DepGraph,
-// ScopeGate, worker pool, buffer, observers, and tickers. Returns a
-// watchPipeline with a cleanup function that stops everything in order.
+// initWatchInfra sets up watch-mode infrastructure: watchState, DepGraph,
+// ScopeGate, worker pool, buffer, and tickers. Does NOT load baseline,
+// start observers, or launch the drain goroutine — those happen in
+// bootstrapSync and RunWatch.
 //
 // Key differences from one-shot mode (executePlan):
 //   - ScopeGate is initialized and loaded from DB (scope blocks survive restart)
@@ -1060,15 +1073,9 @@ type watchPipeline struct {
 //   - Retrier logic is integrated into the drain loop (retryTimerCh case) to
 //     eliminate coordination problems (D-11).
 //   - Buffer is promoted to e.watch.buf so the drain-loop retrier can inject events.
-func (e *Engine) initWatchPipeline(
+func (e *Engine) initWatchInfra(
 	ctx context.Context, mode SyncMode, opts WatchOpts,
 ) (*watchPipeline, error) {
-	// Load baseline and shortcuts.
-	bl, err := e.loadWatchState(ctx)
-	if err != nil {
-		return nil, err
-	}
-
 	// Create watchState — all watch-mode-only fields live here.
 	e.watch = &watchState{
 		trialPending: make(map[string]trialEntry),
@@ -1102,17 +1109,12 @@ func (e *Engine) initWatchPipeline(
 	pool := NewWorkerPool(e.execCfg, e.readyCh, neverDone, e.baseline, e.logger, watchResultBuf)
 	pool.Start(ctx, e.transferWorkers)
 
-	go e.drainWorkerResults(ctx, pool.Results(), bl)
-
 	// Buffer promoted to watchState — drain-loop retrier injects events
 	// via e.watch.buf.Add(). Retrier logic runs inside the drain loop's
 	// retryTimerCh case.
 	buf := NewBuffer(e.logger)
 	e.watch.buf = buf
 	ready := buf.FlushDebounced(ctx, e.resolveDebounce(opts))
-
-	// Observers.
-	errs, activeObs, skippedCh := e.startObservers(ctx, bl, mode, buf, opts)
 
 	// Tickers.
 	reconcileC, stopReconcile := e.initReconcileTicker(opts)
@@ -1123,15 +1125,12 @@ func (e *Engine) initWatchPipeline(
 	e.armTrialTimer()
 
 	return &watchPipeline{
-		bl:         bl,
 		safety:     e.resolveSafetyConfig(opts.Force),
 		ready:      ready,
-		errs:       errs,
-		skippedCh:  skippedCh,
 		reconcileC: reconcileC,
 		recheckC:   recheckTicker.C,
-		activeObs:  activeObs,
 		mode:       mode,
+		pool:       pool,
 		cleanup: func() {
 			recheckTicker.Stop()
 			if stopReconcile != nil {
@@ -1149,6 +1148,102 @@ func (e *Engine) initWatchPipeline(
 			e.logger.Info("watch mode stopped")
 		},
 	}, nil
+}
+
+// bootstrapTimeout is the maximum time bootstrapSync will wait for all
+// in-flight actions to complete. Prevents infinite hangs from lost results.
+const bootstrapTimeout = 30 * time.Minute
+
+// quiescenceLogInterval is how often bootstrapSync logs while waiting.
+const quiescenceLogInterval = 30 * time.Second
+
+// bootstrapSync performs the initial sync using the watch pipeline. Unlike
+// the old approach (calling RunOnce with throwaway infrastructure), this
+// dispatches through the same DepGraph, ScopeGate, and WorkerPool that
+// the watch loop uses. Blocks until all bootstrap actions complete.
+//
+// Must be called after initWatchInfra and before startObservers.
+func (e *Engine) bootstrapSync(ctx context.Context, mode SyncMode, pipe *watchPipeline) error {
+	e.logger.Info("bootstrap sync starting", slog.String("mode", mode.String()))
+
+	// Drive identity check (B-074).
+	if err := e.verifyDriveIdentity(ctx); err != nil {
+		return err
+	}
+
+	// Crash recovery: reset in-progress states from prior crash.
+	if err := e.baseline.ResetInProgressStates(ctx, e.syncRoot, retry.Reconcile.Delay); err != nil {
+		e.logger.Warn("failed to reset in-progress states", slog.String("error", err.Error()))
+	}
+
+	// Load baseline + shortcuts.
+	bl, err := e.loadWatchState(ctx)
+	if err != nil {
+		return err
+	}
+	pipe.bl = bl
+
+	// Start drain goroutine — needs bl for processWorkerResult.
+	go e.drainWorkerResults(ctx, pipe.pool.Results(), bl)
+
+	// Permission rechecks.
+	if e.permChecker != nil {
+		shortcuts := e.getWatchShortcuts()
+		e.recheckPermissions(ctx, bl, shortcuts)
+	}
+	e.recheckLocalPermissions(ctx)
+
+	// Observe changes.
+	changes, err := e.observeChanges(ctx, bl, mode, false, false)
+	if err != nil {
+		return fmt.Errorf("sync: bootstrap observation failed: %w", err)
+	}
+
+	if len(changes) == 0 {
+		e.logger.Info("bootstrap sync complete: no changes detected")
+		return nil
+	}
+
+	// Dispatch through watch pipeline (same path as steady-state batches).
+	e.processBatch(ctx, changes, bl, mode, pipe.safety)
+
+	// Wait for all bootstrap actions to complete.
+	if err := e.waitForQuiescence(ctx); err != nil {
+		return fmt.Errorf("sync: bootstrap quiescence failed: %w", err)
+	}
+
+	e.postSyncHousekeeping()
+	e.logger.Info("bootstrap sync complete")
+	return nil
+}
+
+// waitForQuiescence blocks until all in-flight actions in the DepGraph
+// complete. Used by bootstrapSync to ensure the initial sync finishes
+// before starting observers. Safety timeout prevents infinite hangs.
+func (e *Engine) waitForQuiescence(ctx context.Context) error {
+	emptyCh := e.depGraph.WaitForEmpty()
+
+	timer := time.NewTimer(bootstrapTimeout)
+	defer timer.Stop()
+
+	ticker := time.NewTicker(quiescenceLogInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-emptyCh:
+			return nil
+		case <-ticker.C:
+			e.logger.Info("bootstrap: waiting for in-flight actions",
+				slog.Int("in_flight", e.depGraph.InFlightCount()),
+			)
+		case <-timer.C:
+			return fmt.Errorf("sync: bootstrap timed out after %v with %d actions in-flight",
+				bootstrapTimeout, e.depGraph.InFlightCount())
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
 
 // runWatchLoop runs the main watch-mode select loop. Blocks until context
@@ -1499,10 +1594,10 @@ func (e *Engine) admitReady(ctx context.Context, ready []*TrackedAction) []*Trac
 						slog.String("error", err.Error()),
 					)
 				}
-				if e.watch == nil {
-					e.setDispatch(ctx, &ta.Action)
-					dispatch = append(dispatch, ta)
-				} else if key := e.watch.scopeGate.Admit(ta); key.IsZero() {
+
+				// e.watch is guaranteed non-nil — admitReady is only
+				// called from processBatch (watch-mode only).
+				if key := e.watch.scopeGate.Admit(ta); key.IsZero() {
 					e.setDispatch(ctx, &ta.Action)
 					dispatch = append(dispatch, ta)
 				}
@@ -1553,14 +1648,10 @@ func (e *Engine) handleTrialInterception(ctx context.Context, ta *TrackedAction,
 			slog.String("error", err.Error()),
 		)
 	}
-	if e.watch == nil {
-		e.setDispatch(ctx, &ta.Action)
 
-		select {
-		case e.readyCh <- ta:
-		case <-ctx.Done():
-		}
-	} else if key := e.watch.scopeGate.Admit(ta); key.IsZero() {
+	// e.watch is guaranteed non-nil — handleTrialInterception is only called
+	// from admitAndDispatch, which runs inside processBatch (watch-mode only).
+	if key := e.watch.scopeGate.Admit(ta); key.IsZero() {
 		e.setDispatch(ctx, &ta.Action)
 
 		select {
