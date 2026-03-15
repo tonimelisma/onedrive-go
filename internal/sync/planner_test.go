@@ -1243,7 +1243,7 @@ func TestBigDelete_BelowThreshold(t *testing.T) {
 	var entries []*BaselineEntry
 	var changes []PathChanges
 
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		p := fmt.Sprintf("planner-safe-%c.txt", rune('a'+i))
 		itemID := fmt.Sprintf("safe-%c", rune('a'+i))
 		entries = append(entries, &BaselineEntry{
@@ -1257,7 +1257,7 @@ func TestBigDelete_BelowThreshold(t *testing.T) {
 	}
 
 	// Delete exactly 10.
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		changes = append(changes, PathChanges{
 			Path: entries[i].Path,
 			RemoteEvents: []ChangeEvent{
@@ -1291,7 +1291,7 @@ func TestBigDelete_ExceedsThreshold(t *testing.T) {
 	var entries []*BaselineEntry
 	var changes []PathChanges
 
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		p := fmt.Sprintf("planner-bigdel-%c.txt", rune('a'+i))
 		itemID := fmt.Sprintf("bdi-%c", rune('a'+i))
 		entries = append(entries, &BaselineEntry{
@@ -1333,7 +1333,7 @@ func TestBigDelete_NoTrigger(t *testing.T) {
 
 	var entries []*BaselineEntry
 
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		p := fmt.Sprintf("planner-safe-%c.txt", rune('a'+i))
 		itemID := fmt.Sprintf("safe-%c", rune('a'+i))
 		entries = append(entries, &BaselineEntry{
@@ -1391,7 +1391,7 @@ func TestBigDelete_ThresholdZero_Disabled(t *testing.T) {
 	var entries []*BaselineEntry
 	var changes []PathChanges
 
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		p := fmt.Sprintf("planner-disabled-%c.txt", rune('a'+i))
 		itemID := fmt.Sprintf("dis-%c", rune('a'+i))
 		entries = append(entries, &BaselineEntry{
@@ -2356,6 +2356,71 @@ func TestPlan_DeniedPrefix_LocalMove_Suppressed(t *testing.T) {
 	// Should NOT produce a remote move — can't write to remote under denied prefix.
 	remoteMoves := ActionsOfType(plan.Actions, ActionRemoteMove)
 	assert.Empty(t, remoteMoves, "local move under denied prefix should not produce remote move")
+}
+
+// Validates: R-6.8.12, R-6.8.13
+func TestPlan_ShortcutAction_HasTargetShortcutKey(t *testing.T) {
+	// Integration test: a shortcut ChangeEvent flows through Plan() and the
+	// resulting Action carries targetShortcutKey and targetDriveID so that
+	// ScopeGate can distinguish own-drive vs shortcut-scoped failures.
+	t.Parallel()
+
+	const (
+		shortcutPath    = "Shortcuts/shared/doc.txt"
+		remoteDriveID   = "AAAA000000000099" // sharer's drive
+		remoteItemID    = "shortcut-folder-id"
+		fileItemID      = "file-item-1"
+		fileParentID    = "parent-1"
+		ownDriveIDValue = testDriveID
+	)
+
+	planner := NewPlanner(testLogger(t))
+
+	// Baseline entry for the file under the shortcut path — represents
+	// a previously synced shortcut item living on the sharer's drive.
+	baseline := baselineWith(&BaselineEntry{
+		Path:       shortcutPath,
+		DriveID:    driveid.New(remoteDriveID),
+		ItemID:     fileItemID,
+		ItemType:   ItemTypeFile,
+		LocalHash:  "hashOld",
+		RemoteHash: "hashOld",
+	})
+
+	// Simulate a remote modify event as produced by the shortcut converter:
+	// the ChangeEvent carries RemoteDriveID/RemoteItemID identifying the
+	// shortcut scope, and a new hash to trigger a download action.
+	changes := []PathChanges{
+		{
+			Path: shortcutPath,
+			RemoteEvents: []ChangeEvent{
+				{
+					Source:        SourceRemote,
+					Type:          ChangeModify,
+					Path:          shortcutPath,
+					ItemType:      ItemTypeFile,
+					ItemID:        fileItemID,
+					DriveID:       driveid.New(remoteDriveID),
+					ParentID:      fileParentID,
+					Hash:          "hashNew",
+					RemoteDriveID: remoteDriveID,
+					RemoteItemID:  remoteItemID,
+				},
+			},
+		},
+	}
+
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
+	require.NoError(t, err)
+	require.NotNil(t, plan)
+	require.NotEmpty(t, plan.Actions, "expected at least one action for shortcut change")
+
+	action := plan.Actions[0]
+	assert.False(t, action.TargetsOwnDrive(), "shortcut action should NOT target own drive")
+	assert.Equal(t, remoteDriveID+":"+remoteItemID, action.ShortcutKey(),
+		"ShortcutKey should be remoteDrive:remoteItem")
+	assert.Equal(t, driveid.New(remoteDriveID), action.TargetDriveID(),
+		"TargetDriveID should be the sharer's drive")
 }
 
 func TestIsWriteDenied(t *testing.T) {
