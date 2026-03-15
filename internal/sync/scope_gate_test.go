@@ -486,48 +486,43 @@ func TestScopeGate_ExtendTrialInterval_UnknownScope(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// NextDueTrial (no held-queue check)
+// AllDueTrials (no held-queue check)
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.10.5
-func TestScopeGate_NextDueTrial_NowAfterNextTrialAt(t *testing.T) {
+func TestScopeGate_AllDueTrials_ReturnsDueScopes(t *testing.T) {
 	t.Parallel()
 
 	gate, _ := newTestScopeGate(t)
 	ctx := context.Background()
 	now := time.Now()
 
+	// Two scopes due (NextTrialAt in the past), one not due (future).
 	require.NoError(t, gate.SetScopeBlock(ctx, SKThrottleAccount, &ScopeBlock{
 		Key:         SKThrottleAccount,
 		IssueType:   IssueRateLimited,
 		BlockedAt:   now.Add(-time.Minute),
-		NextTrialAt: now.Add(-time.Second), // in the past
+		NextTrialAt: now.Add(-time.Second), // due
+	}))
+	require.NoError(t, gate.SetScopeBlock(ctx, SKService, &ScopeBlock{
+		Key:         SKService,
+		IssueType:   IssueServiceOutage,
+		BlockedAt:   now.Add(-time.Minute),
+		NextTrialAt: now.Add(-2 * time.Second), // due
+	}))
+	require.NoError(t, gate.SetScopeBlock(ctx, SKQuotaOwn, &ScopeBlock{
+		Key:         SKQuotaOwn,
+		IssueType:   IssueQuotaExceeded,
+		NextTrialAt: now.Add(time.Hour), // NOT due
 	}))
 
-	key, trialAt, ok := gate.NextDueTrial(now)
-	assert.True(t, ok, "past NextTrialAt → trial is due")
-	assert.Equal(t, SKThrottleAccount, key)
-	assert.Equal(t, now.Add(-time.Second), trialAt)
+	due := gate.AllDueTrials(now)
+	assert.Len(t, due, 2, "should return exactly 2 due scopes")
+	assert.Contains(t, due, SKThrottleAccount)
+	assert.Contains(t, due, SKService)
 }
 
-func TestScopeGate_NextDueTrial_NowBeforeNextTrialAt(t *testing.T) {
-	t.Parallel()
-
-	gate, _ := newTestScopeGate(t)
-	ctx := context.Background()
-	now := time.Now()
-
-	require.NoError(t, gate.SetScopeBlock(ctx, SKThrottleAccount, &ScopeBlock{
-		Key:         SKThrottleAccount,
-		IssueType:   IssueRateLimited,
-		NextTrialAt: now.Add(time.Hour), // in the future
-	}))
-
-	_, _, ok := gate.NextDueTrial(now)
-	assert.False(t, ok, "future NextTrialAt → not due")
-}
-
-func TestScopeGate_NextDueTrial_SkipsZeroNextTrialAt(t *testing.T) {
+func TestScopeGate_AllDueTrials_SkipsZeroNextTrialAt(t *testing.T) {
 	t.Parallel()
 
 	gate, _ := newTestScopeGate(t)
@@ -536,36 +531,29 @@ func TestScopeGate_NextDueTrial_SkipsZeroNextTrialAt(t *testing.T) {
 	require.NoError(t, gate.SetScopeBlock(ctx, SKThrottleAccount, &ScopeBlock{
 		Key:       SKThrottleAccount,
 		IssueType: IssueRateLimited,
-		// NextTrialAt is zero.
+		// NextTrialAt is zero — not trial-eligible.
 	}))
 
-	_, _, ok := gate.NextDueTrial(time.Now())
-	assert.False(t, ok, "zero NextTrialAt should be skipped")
+	due := gate.AllDueTrials(time.Now())
+	assert.Empty(t, due, "zero NextTrialAt should be excluded")
 }
 
-// TestScopeGate_NextDueTrial_NoHeldQueueCheck verifies that NextDueTrial
-// returns a due scope even without any held actions. ScopeGate does not
-// require a non-empty held queue — any scope block with a due trial time
-// is eligible.
-// Validates: R-2.10.5
-func TestScopeGate_NextDueTrial_NoHeldQueueCheck(t *testing.T) {
+func TestScopeGate_AllDueTrials_NoneReturnsEmpty(t *testing.T) {
 	t.Parallel()
 
 	gate, _ := newTestScopeGate(t)
 	ctx := context.Background()
 	now := time.Now()
 
-	// Block with NextTrialAt in the past — but no held actions exist
-	// (ScopeGate doesn't have a held queue at all).
-	require.NoError(t, gate.SetScopeBlock(ctx, SKService, &ScopeBlock{
-		Key:         SKService,
-		IssueType:   IssueServiceOutage,
-		NextTrialAt: now.Add(-time.Second),
+	// Only a future scope block — no due trials.
+	require.NoError(t, gate.SetScopeBlock(ctx, SKThrottleAccount, &ScopeBlock{
+		Key:         SKThrottleAccount,
+		IssueType:   IssueRateLimited,
+		NextTrialAt: now.Add(time.Hour),
 	}))
 
-	key, _, ok := gate.NextDueTrial(now)
-	assert.True(t, ok, "ScopeGate.NextDueTrial should return due scope without held queue check")
-	assert.Equal(t, SKService, key)
+	due := gate.AllDueTrials(now)
+	assert.Empty(t, due, "no due scopes → empty slice")
 }
 
 // ---------------------------------------------------------------------------
@@ -806,7 +794,7 @@ func TestScopeGate_ConcurrentAdmitDuringSetBlock(t *testing.T) {
 	wg.Wait()
 }
 
-func TestScopeGate_ConcurrentExtendAndNextDueTrial(t *testing.T) {
+func TestScopeGate_ConcurrentExtendAndAllDueTrials(t *testing.T) {
 	t.Parallel()
 
 	gate, _ := newTestScopeGate(t)
@@ -835,12 +823,12 @@ func TestScopeGate_ConcurrentExtendAndNextDueTrial(t *testing.T) {
 		}
 	}()
 
-	// Goroutine 2: call NextDueTrial 100 times.
+	// Goroutine 2: call AllDueTrials 100 times.
 	go func() {
 		defer wg.Done()
 
 		for range 100 {
-			gate.NextDueTrial(now)
+			gate.AllDueTrials(now)
 		}
 	}()
 

@@ -36,7 +36,7 @@ Scope-based admission control with persistent scope blocks. No held queue, no de
 - **`IsScopeBlocked(key) bool`**: Simple map lookup.
 - **`GetScopeBlock(key) (ScopeBlock, bool)`**: Returns a value copy (not pointer) to prevent unsynchronized mutation.
 - **`ExtendTrialInterval(ctx, key, nextAt, interval) error`**: Update + persist. Increments `TrialCount`.
-- **`NextDueTrial(now) (ScopeKey, time.Time, bool)`**: Returns the first scope block whose trial is due. **No held-queue check** — any block with non-zero `NextTrialAt` is eligible. The engine uses `PickTrialCandidate` from `sync_failures` to find actual items.
+- **`AllDueTrials(now) []ScopeKey`**: Returns a snapshot of all scope keys whose trial is due (`now >= NextTrialAt`). **No held-queue check** — any block with non-zero `NextTrialAt` is eligible. The engine uses `PickTrialCandidate` from `sync_failures` to find actual items. Snapshot pattern prevents infinite iteration.
 - **`EarliestTrialAt() (time.Time, bool)`**: Earliest `NextTrialAt` across all blocks. **No held-queue check**.
 - **`ScopeBlockKeys() []ScopeKey`**: All active scope block keys.
 - **`LoadFromStore(ctx) error`**: Startup: load all `scope_blocks` rows into memory. Replaces existing state.

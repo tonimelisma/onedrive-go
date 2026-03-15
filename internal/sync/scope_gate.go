@@ -12,7 +12,7 @@
 // persist to DB first, then update memory. On store error, memory is unchanged.
 // LoadFromStore reads all rows on startup.
 //
-// NextDueTrial and EarliestTrialAt do NOT check held queue length (there is
+// AllDueTrials and EarliestTrialAt do NOT check held queue length (there is
 // no held queue). Any scope block with non-zero NextTrialAt is eligible for
 // trials. The engine uses PickTrialCandidate from sync_failures to find
 // actual items to retry.
@@ -226,28 +226,30 @@ func (g *ScopeGate) ExtendTrialInterval(ctx context.Context, key ScopeKey, nextA
 	return nil
 }
 
-// NextDueTrial returns the scope key and NextTrialAt of the first scope
-// block where now >= block.NextTrialAt, or (ScopeKey{}, time.Time{}, false)
-// if no trials are due.
+// AllDueTrials returns all scope keys whose NextTrialAt is due (now >= NextTrialAt).
+// Returns a snapshot — the caller iterates each scope exactly once, making
+// the loop structurally incapable of infinite iteration.
+// Scopes with zero NextTrialAt are excluded (not trial-eligible).
 //
 // Does NOT check held queue length — any scope block with non-zero
 // NextTrialAt is eligible. The engine uses
 // PickTrialCandidate from sync_failures to find actual items.
-func (g *ScopeGate) NextDueTrial(now time.Time) (ScopeKey, time.Time, bool) {
+func (g *ScopeGate) AllDueTrials(now time.Time) []ScopeKey {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
+	var due []ScopeKey
 	for key, block := range g.blocks {
 		if block.NextTrialAt.IsZero() {
 			continue
 		}
 
 		if !now.Before(block.NextTrialAt) {
-			return key, block.NextTrialAt, true
+			due = append(due, key)
 		}
 	}
 
-	return ScopeKey{}, time.Time{}, false
+	return due
 }
 
 // EarliestTrialAt returns the earliest NextTrialAt across all scope blocks.
