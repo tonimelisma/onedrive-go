@@ -90,6 +90,7 @@ func (o *RemoteObserver) FullDelta(ctx context.Context, savedToken string) ([]Ch
 	var events []ChangeEvent
 	inflight := make(map[driveid.ItemKey]inflightParent)
 	token := savedToken
+	lastProgressLog := time.Now()
 
 	for page := range maxDeltaPaginationGuard {
 		pageEvents, newToken, done, err := o.fetchPage(ctx, token, page, inflight)
@@ -100,6 +101,18 @@ func (o *RemoteObserver) FullDelta(ctx context.Context, savedToken string) ([]Ch
 		}
 
 		events = append(events, pageEvents...)
+
+		// Periodic progress logging for long-running enumerations (100K+ item
+		// drives can take minutes). Time-based (30s) rather than page-based to
+		// produce evenly-spaced logs regardless of page size or API latency.
+		if !done && time.Since(lastProgressLog) >= 30*time.Second {
+			o.logger.Info("remote observer delta enumeration in progress",
+				slog.Int("pages_fetched", page+1),
+				slog.Int("events_so_far", len(events)),
+			)
+
+			lastProgressLog = time.Now()
+		}
 
 		if done {
 			o.recordActivity()
