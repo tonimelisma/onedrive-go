@@ -19,7 +19,7 @@ const minWorkers = 4
 
 // WorkerPool spawns goroutines that pull TrackedActions from a ready channel,
 // execute them, persist success outcomes, and send results back to the engine.
-// Workers are pure executors — they NEVER call tracker.Complete(). The engine
+// Workers are pure executors — they NEVER call depGraph.Complete(). The engine
 // owns all completion decisions (R-6.8.9).
 //
 // Workers read from readyCh and wait on doneCh, which may be backed by
@@ -32,8 +32,8 @@ type WorkerPool struct {
 	logger   *slog.Logger
 
 	// results reports per-action outcomes back to the engine. The engine
-	// reads from this channel, classifies results, and calls Complete on
-	// the graph/tracker. Failed items are recorded in sync_failures for retry.
+	// reads from this channel, classifies results, and calls depGraph.Complete.
+	// Failed items are recorded in sync_failures for retry.
 	results chan WorkerResult
 
 	cancel context.CancelFunc
@@ -42,8 +42,8 @@ type WorkerPool struct {
 
 // WorkerResult reports the outcome of a single action execution. The engine
 // reads these from the Results channel, classifies them, and calls
-// tracker.Complete. Failed items are recorded in sync_failures for retry
-// by the retrier.
+// depGraph.Complete. Failed items are recorded in sync_failures for retry
+// by the drain-loop retrier.
 type WorkerResult struct {
 	Path       string
 	DriveID    driveid.ID
@@ -184,7 +184,7 @@ func (wp *WorkerPool) safeExecuteAction(ctx context.Context, ta *TrackedAction) 
 			)
 			panicErr := fmt.Errorf("panic: %v", r)
 			wp.sendResult(ctx, ta, nil, panicErr)
-			// NO tracker.Complete() — engine owns completion decisions.
+			// NO depGraph.Complete() — engine owns completion decisions.
 		}
 	}()
 
@@ -193,7 +193,7 @@ func (wp *WorkerPool) safeExecuteAction(ctx context.Context, ta *TrackedAction) 
 
 // executeAction runs a single tracked action: execute, persist success
 // outcomes, and send the result to the engine. Workers are pure executors —
-// they NEVER call tracker.Complete().
+// they NEVER call depGraph.Complete().
 func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 	// Per-action cancellable context.
 	actionCtx, cancel := context.WithCancel(ctx)
@@ -231,7 +231,7 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 	}
 
 	wp.sendResult(ctx, ta, &outcome, outcome.Error)
-	// NO tracker.Complete() — engine owns completion decisions.
+	// NO depGraph.Complete() — engine owns completion decisions.
 }
 
 // dispatchAction routes a tracked action to the appropriate executor method.
@@ -271,7 +271,7 @@ func (wp *WorkerPool) dispatchAction(
 
 // Results returns a read-only channel of per-action results. The engine
 // reads from this channel, classifies each result, and calls
-// tracker.Complete. Failed items go to sync_failures for reconciler retry.
+// depGraph.Complete. Failed items go to sync_failures for drain-loop retry.
 func (wp *WorkerPool) Results() <-chan WorkerResult {
 	return wp.results
 }

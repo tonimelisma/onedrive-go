@@ -2270,8 +2270,7 @@ func directionFromAction(at ActionType) string {
 // NextTrialAt across all scope blocks. Uses time.AfterFunc to send to the
 // persistent trialCh channel, avoiding a race where the drain loop's select
 // watches the old timer's channel after replacement. Called after scope blocks
-// are created, trials dispatched, trial results processed, or when onHeld
-// signals that an action entered a held queue (R-2.10.5).
+// are created, trials dispatched, or trial results processed (R-2.10.5).
 func (e *Engine) armTrialTimer() {
 	e.trialMu.Lock()
 	defer e.trialMu.Unlock()

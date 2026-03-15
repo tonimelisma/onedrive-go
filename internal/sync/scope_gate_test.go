@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	stdsync "sync"
 	"testing"
 	"time"
 
@@ -758,4 +759,149 @@ func TestScopeGate_LoadFromStore_ReplacesExisting(t *testing.T) {
 	// Old block should be gone, new block should be present.
 	assert.False(t, gate.IsScopeBlocked(SKQuotaOwn), "old block should be replaced")
 	assert.True(t, gate.IsScopeBlocked(SKService), "new block from store should be loaded")
+}
+
+// ---------------------------------------------------------------------------
+// Concurrency / race detector tests
+// ---------------------------------------------------------------------------
+
+func TestScopeGate_ConcurrentAdmitDuringSetBlock(t *testing.T) {
+	t.Parallel()
+
+	gate, _ := newTestScopeGate(t)
+	ctx := context.Background()
+
+	var wg stdsync.WaitGroup
+
+	// Goroutine 1: toggle throttle:account block 100 times.
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+
+		for range 100 {
+			_ = gate.SetScopeBlock(ctx, SKThrottleAccount, &ScopeBlock{
+				Key:       SKThrottleAccount,
+				IssueType: IssueRateLimited,
+			})
+			_ = gate.ClearScopeBlock(ctx, SKThrottleAccount)
+		}
+	}()
+
+	// Goroutines 2-6: call Admit concurrently.
+	for i := range 5 {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			ta := makeTrackedAction(ActionUpload, fmt.Sprintf("file-%d.txt", i))
+
+			for range 100 {
+				gate.Admit(ta)
+			}
+		}()
+	}
+
+	wg.Wait()
+}
+
+func TestScopeGate_ConcurrentExtendAndNextDueTrial(t *testing.T) {
+	t.Parallel()
+
+	gate, _ := newTestScopeGate(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	// Set a scope block with NextTrialAt in the past.
+	require.NoError(t, gate.SetScopeBlock(ctx, SKThrottleAccount, &ScopeBlock{
+		Key:           SKThrottleAccount,
+		IssueType:     IssueRateLimited,
+		BlockedAt:     now.Add(-time.Minute),
+		NextTrialAt:   now.Add(-time.Second),
+		TrialInterval: 10 * time.Second,
+	}))
+
+	var wg stdsync.WaitGroup
+	wg.Add(2)
+
+	// Goroutine 1: extend trial interval 100 times.
+	go func() {
+		defer wg.Done()
+
+		for i := range 100 {
+			nextAt := now.Add(time.Duration(i+1) * time.Second)
+			_ = gate.ExtendTrialInterval(ctx, SKThrottleAccount, nextAt, time.Duration(i+1)*time.Second)
+		}
+	}()
+
+	// Goroutine 2: call NextDueTrial 100 times.
+	go func() {
+		defer wg.Done()
+
+		for range 100 {
+			gate.NextDueTrial(now)
+		}
+	}()
+
+	wg.Wait()
+}
+
+func TestScopeGate_ConcurrentLoadFromStore(t *testing.T) {
+	t.Parallel()
+
+	store := newMockScopeBlockStore()
+	gate := NewScopeGate(store, testLogger(t))
+	ctx := context.Background()
+	now := time.Now()
+
+	// Seed the store with 5 scope blocks.
+	store.blocks[SKThrottleAccount.String()] = &ScopeBlock{
+		Key: SKThrottleAccount, IssueType: IssueRateLimited,
+		BlockedAt: now, NextTrialAt: now.Add(10 * time.Second),
+	}
+	store.blocks[SKService.String()] = &ScopeBlock{
+		Key: SKService, IssueType: IssueServiceOutage,
+		BlockedAt: now,
+	}
+	store.blocks[SKDiskLocal.String()] = &ScopeBlock{
+		Key: SKDiskLocal, IssueType: IssueDiskFull,
+		BlockedAt: now,
+	}
+	store.blocks[SKQuotaOwn.String()] = &ScopeBlock{
+		Key: SKQuotaOwn, IssueType: IssueQuotaExceeded,
+		BlockedAt: now,
+	}
+	store.blocks[SKPermDir("Private").String()] = &ScopeBlock{
+		Key: SKPermDir("Private"), IssueType: IssueLocalPermissionDenied,
+		BlockedAt: now,
+	}
+
+	var wg stdsync.WaitGroup
+
+	// Goroutine 1: LoadFromStore.
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+		_ = gate.LoadFromStore(ctx)
+	}()
+
+	// Goroutines 2-4: concurrent Admit and IsScopeBlocked.
+	for i := range 3 {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			ta := makeTrackedAction(ActionUpload, fmt.Sprintf("file-%d.txt", i))
+
+			for range 50 {
+				gate.Admit(ta)
+				gate.IsScopeBlocked(SKThrottleAccount)
+			}
+		}()
+	}
+
+	wg.Wait()
 }

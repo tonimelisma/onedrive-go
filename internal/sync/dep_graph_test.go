@@ -438,6 +438,140 @@ func TestDepGraph_InFlightCount(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Concurrent multi-add (race detector coverage)
+// ---------------------------------------------------------------------------
+
+func TestDepGraph_ConcurrentMultiAdd(t *testing.T) {
+	t.Parallel()
+
+	dg := NewDepGraph(testLogger(t))
+
+	// 10 goroutines each add 50 independent actions (unique IDs).
+	var wg stdsync.WaitGroup
+
+	for g := range 10 {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			for i := range 50 {
+				id := int64(g*100 + i)
+				dg.Add(&Action{
+					Type:    ActionDownload,
+					Path:    fmt.Sprintf("file-%d-%d", g, i),
+					DriveID: driveid.New("d"),
+					ItemID:  fmt.Sprintf("i%d", id),
+				}, id, nil)
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	assert.Equal(t, 500, dg.InFlightCount(),
+		"all 500 actions should be in-flight after concurrent adds")
+}
+
+// ---------------------------------------------------------------------------
+// Concurrent HasInFlight during Complete (race detector coverage)
+// ---------------------------------------------------------------------------
+
+func TestDepGraph_ConcurrentHasInFlightDuringComplete(t *testing.T) {
+	t.Parallel()
+
+	dg := NewDepGraph(testLogger(t))
+
+	// Add 100 independent actions.
+	for i := range int64(100) {
+		dg.Add(&Action{
+			Type:    ActionDownload,
+			Path:    fmt.Sprintf("file-%d", i),
+			DriveID: driveid.New("d"),
+			ItemID:  fmt.Sprintf("i%d", i),
+		}, i, nil)
+	}
+
+	var wg stdsync.WaitGroup
+	wg.Add(2)
+
+	// Goroutine 1: complete all actions sequentially.
+	go func() {
+		defer wg.Done()
+
+		for i := range int64(100) {
+			dg.Complete(i)
+		}
+	}()
+
+	// Goroutine 2: call HasInFlight in a tight loop.
+	go func() {
+		defer wg.Done()
+
+		for i := range int64(100) {
+			dg.HasInFlight(fmt.Sprintf("file-%d", i))
+		}
+	}()
+
+	wg.Wait()
+
+	assert.Equal(t, 0, dg.InFlightCount(),
+		"all actions should be completed")
+}
+
+// ---------------------------------------------------------------------------
+// Concurrent CancelByPath and Complete (race detector coverage)
+// ---------------------------------------------------------------------------
+
+func TestDepGraph_ConcurrentCancelAndComplete(t *testing.T) {
+	t.Parallel()
+
+	dg := NewDepGraph(testLogger(t))
+
+	// Add 50 independent actions.
+	for i := range int64(50) {
+		ta := dg.Add(&Action{
+			Type:    ActionDownload,
+			Path:    fmt.Sprintf("file-%d", i),
+			DriveID: driveid.New("d"),
+			ItemID:  fmt.Sprintf("i%d", i),
+		}, i, nil)
+
+		// Set a Cancel func so CancelByPath has something to call.
+		_, cancel := context.WithCancel(context.Background())
+		ta.Cancel = cancel
+	}
+
+	var wg stdsync.WaitGroup
+	wg.Add(2)
+
+	// Goroutine 1: cancel by path.
+	go func() {
+		defer wg.Done()
+
+		for i := range int64(50) {
+			dg.CancelByPath(fmt.Sprintf("file-%d", i))
+		}
+	}()
+
+	// Goroutine 2: complete by ID.
+	go func() {
+		defer wg.Done()
+
+		for i := range int64(50) {
+			dg.Complete(i)
+		}
+	}()
+
+	wg.Wait()
+
+	// Both goroutines race on the same set — some will be canceled first,
+	// some completed first. Either way, the graph should be drained.
+	assert.Equal(t, 0, dg.InFlightCount(),
+		"all actions should be removed from the graph")
+}
+
+// ---------------------------------------------------------------------------
 // D-10 regression: completed dep treated as satisfied for new action
 // ---------------------------------------------------------------------------
 

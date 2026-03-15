@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -318,4 +319,220 @@ func TestDepGraph_DoneClosesWhenAllComplete(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Done should be closed when all actions are complete")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// synthesizeFailureEvent
+// ---------------------------------------------------------------------------
+
+func TestSynthesizeFailureEvent(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		direction     string
+		wantSource    ChangeSource
+		wantType      ChangeType
+		wantItemID    bool
+		wantIsDeleted bool
+	}{
+		{
+			name:       "upload → SourceLocal ChangeModify",
+			direction:  strUpload,
+			wantSource: SourceLocal,
+			wantType:   ChangeModify,
+		},
+		{
+			name:       "download → SourceRemote ChangeModify",
+			direction:  strDownload,
+			wantSource: SourceRemote,
+			wantType:   ChangeModify,
+			wantItemID: true,
+		},
+		{
+			name:          "delete → SourceRemote ChangeDelete",
+			direction:     strDelete,
+			wantSource:    SourceRemote,
+			wantType:      ChangeDelete,
+			wantItemID:    true,
+			wantIsDeleted: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			row := &SyncFailureRow{
+				Path:      "test/file.txt",
+				DriveID:   driveid.New("drive1"),
+				ItemID:    "item42",
+				Direction: tt.direction,
+			}
+
+			ev := synthesizeFailureEvent(row)
+
+			assert.Equal(t, tt.wantSource, ev.Source)
+			assert.Equal(t, tt.wantType, ev.Type)
+			assert.Equal(t, "test/file.txt", ev.Path)
+
+			if tt.wantItemID {
+				assert.Equal(t, "item42", ev.ItemID)
+				assert.Equal(t, driveid.New("drive1"), ev.DriveID)
+			}
+
+			assert.Equal(t, tt.wantIsDeleted, ev.IsDeleted)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// runRetrierSweep
+// ---------------------------------------------------------------------------
+
+func TestRetrierSweep_BatchLimit(t *testing.T) {
+	t.Parallel()
+
+	eng := newPhase4Engine(t)
+	ctx := context.Background()
+
+	driveID := driveid.New("drive1")
+	now := eng.nowFn()
+
+	// Align store clock with engine clock so next_retry_at is computed
+	// relative to the same fixed time.
+	eng.baseline.nowFunc = eng.nowFn
+
+	// Seed retryBatchSize + 5 sync_failures with past next_retry_at.
+	// delayFn returns -1 minute so next_retry_at = now - 1m (in the past).
+	for i := range retryBatchSize + 5 {
+		require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+			Path:      fmt.Sprintf("file-%d.txt", i),
+			DriveID:   driveID,
+			Direction: strDownload,
+			Category:  strTransient,
+		}, func(_ int) time.Duration {
+			return -time.Minute
+		}))
+	}
+
+	// Verify seeding — all rows should be retryable.
+	rows, err := eng.baseline.ListSyncFailuresForRetry(ctx, now)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(rows), retryBatchSize+5)
+
+	eng.buf = NewBuffer(eng.logger)
+
+	eng.runRetrierSweep(ctx)
+
+	// Should dispatch exactly retryBatchSize items.
+	assert.Equal(t, retryBatchSize, eng.buf.Len(),
+		"sweep should be batch-limited to retryBatchSize")
+
+	// retryTimerCh should have a signal for remaining items.
+	select {
+	case <-eng.retryTimerCh:
+		// Good — re-arm signal sent.
+	default:
+		t.Fatal("retryTimerCh should have a signal for remaining batch items")
+	}
+}
+
+func TestRetrierSweep_SkipsInFlight(t *testing.T) {
+	t.Parallel()
+
+	eng := newPhase4Engine(t)
+	ctx := context.Background()
+
+	driveID := driveid.New("drive1")
+
+	// Align store clock with engine clock.
+	eng.baseline.nowFunc = eng.nowFn
+
+	// Seed 3 sync_failures.
+	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
+		require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+			Path:      name,
+			DriveID:   driveID,
+			Direction: strDownload,
+			Category:  strTransient,
+		}, func(_ int) time.Duration {
+			return -time.Minute
+		}))
+	}
+
+	// Add "b.txt" to the DepGraph so it's in-flight.
+	eng.depGraph.Add(&Action{
+		Type:    ActionDownload,
+		Path:    "b.txt",
+		DriveID: driveID,
+		ItemID:  "in-flight-item",
+	}, 1, nil)
+
+	eng.buf = NewBuffer(eng.logger)
+
+	eng.runRetrierSweep(ctx)
+
+	// Should dispatch 2 items (a.txt and c.txt), skipping b.txt.
+	assert.Equal(t, 2, eng.buf.Len(),
+		"sweep should skip in-flight items")
+}
+
+// ---------------------------------------------------------------------------
+// runTrialDispatch
+// ---------------------------------------------------------------------------
+
+func TestTrialDispatch_NoCandidates_ClearsScope(t *testing.T) {
+	t.Parallel()
+
+	eng := newPhase4Engine(t)
+	ctx := context.Background()
+	now := eng.nowFn()
+
+	// Set a scope block with NextTrialAt in the past.
+	sk := SKQuotaOwn
+	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, sk, &ScopeBlock{
+		Key:           sk,
+		IssueType:     IssueQuotaExceeded,
+		BlockedAt:     now.Add(-time.Minute),
+		NextTrialAt:   now.Add(-time.Second),
+		TrialInterval: 10 * time.Second,
+	}))
+
+	// Do NOT seed any sync_failures for this scope — no candidates.
+	eng.buf = NewBuffer(eng.logger)
+
+	eng.runTrialDispatch(ctx)
+
+	// Scope should be cleared because there are no candidates.
+	assert.False(t, eng.scopeGate.IsScopeBlocked(sk),
+		"scope should be cleared when no trial candidates exist")
+}
+
+func TestTrialDispatch_CleansStaleTrialPending(t *testing.T) {
+	t.Parallel()
+
+	eng := newPhase4Engine(t)
+	ctx := context.Background()
+	now := eng.nowFn()
+
+	// Insert a stale trial entry (older than trialPendingTTL).
+	eng.trialMu.Lock()
+	eng.trialPending["stale.txt"] = trialEntry{
+		scopeKey: SKQuotaOwn,
+		created:  now.Add(-2 * trialPendingTTL),
+	}
+	eng.trialMu.Unlock()
+
+	eng.buf = NewBuffer(eng.logger)
+
+	// No due scopes needed — stale cleanup runs first in runTrialDispatch.
+	eng.runTrialDispatch(ctx)
+
+	eng.trialMu.Lock()
+	remaining := len(eng.trialPending)
+	eng.trialMu.Unlock()
+
+	assert.Equal(t, 0, remaining,
+		"stale trial entries should be cleaned up")
 }
