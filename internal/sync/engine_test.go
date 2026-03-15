@@ -4097,7 +4097,7 @@ func TestLogFailureSummary_NoErrors(t *testing.T) {
 // Retrier pipeline integration test (Phase 4 architecture)
 //
 // Exercises the drain-loop integrated retrier: action → failure → sync_failures
-// → retry timer fires → runRetrierSweep → synthesizeFailureEvent → Buffer.
+// → retry timer fires → runRetrierSweep → createEventFromDB → Buffer.
 // ---------------------------------------------------------------------------
 
 // Validates: R-6.8.10, R-6.8.11, R-6.8.7
@@ -4110,6 +4110,19 @@ func TestRetryPipeline_TransientFailure_DrainLoopRetrier(t *testing.T) {
 	ctx := t.Context()
 	driveID := driveid.New(engineTestDriveID)
 	testPath := "docs/report.pdf"
+
+	// Seed remote_state so createEventFromDB can build a full event when
+	// the retrier sweep processes this failure.
+	require.NoError(t, eng.baseline.CommitObservation(ctx, []ObservedItem{
+		{
+			DriveID:  driveID,
+			ItemID:   "item-abc",
+			Path:     testPath,
+			ItemType: strFile,
+			Hash:     "report-hash",
+			Size:     4096,
+		},
+	}, "", driveID))
 
 	// Add action to depGraph, send to readyCh, drain it.
 	ta := eng.depGraph.Add(&Action{
