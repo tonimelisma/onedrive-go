@@ -128,14 +128,14 @@ func TestBuildGlobalKeyError_UnknownParent_SubField(t *testing.T) {
 	assert.Contains(t, err.Error(), "unknown config key")
 }
 
-func TestKnownGlobalKeysList_Sorted(t *testing.T) {
+func TestNewKnownGlobalKeysList_Sorted(t *testing.T) {
 	// Verify the list is sorted for deterministic Levenshtein suggestions.
-	assert.True(t, sort.StringsAreSorted(knownGlobalKeysList),
-		"knownGlobalKeysList must be sorted")
+	assert.True(t, sort.StringsAreSorted(newKnownGlobalKeysList()),
+		"newKnownGlobalKeysList() must be sorted")
 }
 
-func TestKnownDriveKeysList_Sorted(t *testing.T) {
+func TestNewKnownDriveKeysList_Sorted(t *testing.T) {
 	// Verify the list is sorted for deterministic Levenshtein suggestions.
-	assert.True(t, sort.StringsAreSorted(knownDriveKeysList),
-		"knownDriveKeysList must be sorted")
+	assert.True(t, sort.StringsAreSorted(newKnownDriveKeysList()),
+		"newKnownDriveKeysList() must be sorted")
 }
