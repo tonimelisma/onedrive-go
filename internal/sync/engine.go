@@ -120,12 +120,12 @@ type watchState struct {
 	deleteCounter   *deleteCounter
 	lastDataVersion int64
 
-	// Trial management (drain-goroutine-only state per tracker-redesign.md §3.9).
+	// Trial management (drain-goroutine-only state).
 	trialPending map[string]trialEntry
 	trialTimer   *time.Timer
 	trialMu      stdsync.Mutex
 
-	// Retry timer (replaces FailureRetrier per tracker-redesign.md §3.8).
+	// Retry timer — drain-loop retrier sweeps sync_failures on each tick.
 	retryTimer   *time.Timer
 	retryTimerCh chan struct{} // persistent, buffered(1)
 
