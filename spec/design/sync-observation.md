@@ -14,6 +14,7 @@ Key properties:
 - Normalization (driveId casing, missing fields, timestamps) happens here
 - Within each delta page, deletions are buffered and processed before creations (API reordering bug)
 - HTTP 410 (expired delta token) returns `ErrGone` sentinel; engine restarts with full delta
+- **Progress logging**: `FullDelta` emits periodic Info-level progress logs every 30 seconds during enumeration, reporting pages fetched and events accumulated so far. For 100K+ item drives where enumeration can take minutes, this gives operators visibility between the start and completion logs. Time-based rather than page-based to produce evenly-spaced logs regardless of page size or API latency.
 
 **Server-trusted observation**: The remote observer does NOT filter items by name validity or always-excluded patterns. If OneDrive sends an item in a delta response, it exists on OneDrive — filtering it would be silent data loss. Name-based filtering is a local-only concern (upload validation). Only root items and vault descendants are excluded from remote observation.
 

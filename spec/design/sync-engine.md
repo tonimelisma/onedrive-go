@@ -194,9 +194,11 @@ Cobra command wiring. Sets up the orchestrator, handles `--watch`, `--download-o
 
 **Event flow**: Events are fed into the watch buffer via `buf.Add()` (mutex-protected), then flow through `FlushDebounced → processBatch` in the watch loop. This avoids calling `processBatch` directly from the goroutine, which would race with the watch loop's own `processBatch` calls.
 
-**Concurrency guard**: `watchState.reconcileRunning` (`atomic.Bool`) prevents overlapping reconciliations. `CompareAndSwap(false, true)` at entry; `Store(false)` in defer. If a previous reconciliation is still running when the next tick fires, it is skipped.
+**Concurrency guard**: `watchState.reconcileRunning` (`atomic.Bool`) prevents overlapping reconciliations. `CompareAndSwap(false, true)` at entry; `Store(false)` in defer. If a previous reconciliation is still running when the next tick fires, it is skipped and logged at Info level (lifecycle event, not debug detail).
 
-**Shutdown awareness**: Error logging is suppressed when `ctx.Err() != nil` — context cancellation during shutdown is not a terminal failure.
+**Shutdown awareness**: After `CommitObservation` succeeds, a `ctx.Err()` check detects shutdown — if the context is canceled, the function returns immediately without feeding events to the buffer (the watch loop is also shutting down and won't process them). Next startup re-observes idempotently. Error logging during delta observation is also suppressed when `ctx.Err() != nil` — context cancellation during shutdown is not a terminal failure.
+
+**Duration logging**: Both completion paths (events found / no changes) include `slog.Duration("duration", ...)` in the completion log. Operators can grep for duration to assess reconciliation performance on large drives.
 
 ### Watch-Mode Big-Delete Protection (`delete_counter.go`)
 
