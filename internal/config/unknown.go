@@ -13,65 +13,75 @@ import (
 // suggestions when unknown config keys are detected.
 const maxLevenshteinDistance = 3
 
-// knownGlobalKeys are the valid flat top-level keys in the config file.
-// These correspond to fields in the embedded sub-config structs.
-var knownGlobalKeys = map[string]bool{
-	// Filter settings
-	"skip_files": true, "skip_dirs": true, "skip_dotfiles": true,
-	"skip_symlinks": true, "sync_paths": true, "ignore_marker": true,
-	// Transfer settings
-	"transfer_workers": true, "check_workers": true,
-	"chunk_size": true, "bandwidth_limit": true, "bandwidth_schedule": true, "transfer_order": true,
-	// Deprecated transfer settings (kept to produce deprecation warning instead of unknown-key error)
-	"parallel_downloads": true, "parallel_uploads": true, "parallel_checkers": true,
-	// Safety settings
-	"big_delete_threshold": true,
-	"min_free_space":       true, "use_local_trash": true,
-	"disable_download_validation": true, "disable_upload_validation": true,
-	"sync_dir_permissions": true, "sync_file_permissions": true,
-	// Sync settings
-	"poll_interval": true, "fullscan_frequency": true, "websocket": true,
-	"conflict_strategy": true, "conflict_reminder_interval": true, "dry_run": true,
-	"verify_interval": true, "shutdown_timeout": true,
-	// Logging settings
-	"log_level": true, "log_file": true, "log_format": true, "log_retention_days": true,
-	// Network settings
-	"connect_timeout": true, "data_timeout": true, "user_agent": true, "force_http_11": true,
+// newKnownGlobalKeys returns the set of valid flat top-level keys in the
+// config file. Returns a fresh map each call to avoid package-level mutable
+// state — config loading is infrequent so the allocation is negligible.
+func newKnownGlobalKeys() map[string]bool {
+	return map[string]bool{
+		// Filter settings
+		"skip_files": true, "skip_dirs": true, "skip_dotfiles": true,
+		"skip_symlinks": true, "sync_paths": true, "ignore_marker": true,
+		// Transfer settings
+		"transfer_workers": true, "check_workers": true,
+		"chunk_size": true, "bandwidth_limit": true, "bandwidth_schedule": true, "transfer_order": true,
+		// Deprecated transfer settings (kept to produce deprecation warning instead of unknown-key error)
+		"parallel_downloads": true, "parallel_uploads": true, "parallel_checkers": true,
+		// Safety settings
+		"big_delete_threshold": true,
+		"min_free_space":       true, "use_local_trash": true,
+		"disable_download_validation": true, "disable_upload_validation": true,
+		"sync_dir_permissions": true, "sync_file_permissions": true,
+		// Sync settings
+		"poll_interval": true, "fullscan_frequency": true, "websocket": true,
+		"conflict_strategy": true, "conflict_reminder_interval": true, "dry_run": true,
+		"verify_interval": true, "shutdown_timeout": true,
+		// Logging settings
+		"log_level": true, "log_file": true, "log_format": true, "log_retention_days": true,
+		// Network settings
+		"connect_timeout": true, "data_timeout": true, "user_agent": true, "force_http_11": true,
+	}
 }
 
-// knownGlobalKeysList is the sorted slice form of knownGlobalKeys for
-// Levenshtein matching. Sorted for deterministic suggestions when two
+// newKnownGlobalKeysList returns the sorted slice form of known global keys
+// for Levenshtein matching. Sorted for deterministic suggestions when two
 // candidates have the same edit distance.
-var knownGlobalKeysList = func() []string {
-	keys := make([]string, 0, len(knownGlobalKeys))
-	for k := range knownGlobalKeys {
+func newKnownGlobalKeysList() []string {
+	m := newKnownGlobalKeys()
+	keys := make([]string, 0, len(m))
+
+	for k := range m {
 		keys = append(keys, k)
 	}
 
 	sort.Strings(keys)
 
 	return keys
-}()
-
-// knownDriveKeys are the valid keys inside a drive section.
-var knownDriveKeys = map[string]bool{
-	"sync_dir": true, "paused": true, "paused_until": true, "display_name": true, "owner": true,
-	"skip_dotfiles": true, "skip_dirs": true, "skip_files": true, "poll_interval": true,
 }
 
-// knownDriveKeysList is the sorted slice form for Levenshtein matching.
-// Sorted for deterministic suggestions when two candidates have the same
-// edit distance.
-var knownDriveKeysList = func() []string {
-	keys := make([]string, 0, len(knownDriveKeys))
-	for k := range knownDriveKeys {
+// newKnownDriveKeys returns the set of valid keys inside a drive section.
+// Returns a fresh map each call to avoid package-level mutable state.
+func newKnownDriveKeys() map[string]bool {
+	return map[string]bool{
+		"sync_dir": true, "paused": true, "paused_until": true, "display_name": true, "owner": true,
+		"skip_dotfiles": true, "skip_dirs": true, "skip_files": true, "poll_interval": true,
+	}
+}
+
+// newKnownDriveKeysList returns the sorted slice form of known drive keys
+// for Levenshtein matching. Sorted for deterministic suggestions when two
+// candidates have the same edit distance.
+func newKnownDriveKeysList() []string {
+	m := newKnownDriveKeys()
+	keys := make([]string, 0, len(m))
+
+	for k := range m {
 		keys = append(keys, k)
 	}
 
 	sort.Strings(keys)
 
 	return keys
-}()
+}
 
 // collectUnknownGlobalKeyErrors inspects TOML metadata for undecoded keys
 // and returns individual errors for each unknown global key. Drive sections
@@ -120,14 +130,14 @@ func buildGlobalKeyError(keyStr string) error {
 
 	// Known key (possibly deprecated — accepted but value ignored).
 	// This handles deprecated keys like parallel_downloads that are in
-	// knownGlobalKeys but no longer have struct fields.
-	if knownGlobalKeys[fieldName] {
+	// the known set but no longer have struct fields.
+	if newKnownGlobalKeys()[fieldName] {
 		return nil
 	}
 
 	// Nested unknown keys (sub-fields of bandwidth_schedule, etc.) fall
 	// through to the suggestion path — parent was already checked above.
-	suggestion := closestMatch(fieldName, knownGlobalKeysList)
+	suggestion := closestMatch(fieldName, newKnownGlobalKeysList())
 	if suggestion != "" {
 		return fmt.Errorf("unknown config key %q — did you mean %q?", fieldName, suggestion)
 	}
@@ -141,12 +151,15 @@ func buildGlobalKeyError(keyStr string) error {
 func collectDriveUnknownKeyErrors(driveMap map[string]any, canonicalID string) []error {
 	var errs []error
 
+	known := newKnownDriveKeys()
+	knownList := newKnownDriveKeysList()
+
 	for key := range driveMap {
-		if knownDriveKeys[key] {
+		if known[key] {
 			continue
 		}
 
-		suggestion := closestMatch(key, knownDriveKeysList)
+		suggestion := closestMatch(key, knownList)
 		if suggestion != "" {
 			errs = append(errs, fmt.Errorf(
 				"unknown key %q in drive [%q] — did you mean %q?", key, canonicalID, suggestion))
