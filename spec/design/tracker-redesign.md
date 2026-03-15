@@ -179,7 +179,7 @@ func (g *ScopeGate) Admit(ta *TrackedAction) ScopeKey
 func (g *ScopeGate) SetScopeBlock(key ScopeKey, block *ScopeBlock)
 func (g *ScopeGate) ClearScopeBlock(key ScopeKey)
 func (g *ScopeGate) IsScopeBlocked(key ScopeKey) bool
-func (g *ScopeGate) NextDueTrial(now time.Time) (ScopeKey, time.Time, bool)
+func (g *ScopeGate) AllDueTrials(now time.Time) []ScopeKey
 func (g *ScopeGate) EarliestTrialAt() (time.Time, bool)
 func (g *ScopeGate) GetScopeBlock(key ScopeKey) (ScopeBlock, bool)
 func (g *ScopeGate) ExtendTrialInterval(key ScopeKey, nextAt time.Time, newInterval time.Duration)
@@ -191,7 +191,9 @@ func (g *ScopeGate) LoadFromStore(ctx context.Context) error  // startup
 
 `SetScopeBlock`, `ClearScopeBlock`, `ExtendTrialInterval` persist to the `scope_blocks` table. In-memory map is the cache; database is the source of truth.
 
-`NextDueTrial` no longer checks held queue length — if a scope block exists with non-zero `NextTrialAt`, a trial is due. If `PickTrialCandidate` returns nil (no sync_failures for this scope), the engine clears the scope block.
+`AllDueTrials` returns a snapshot of all scope keys whose `NextTrialAt` is due. The caller iterates each exactly once — structurally incapable of infinite iteration. No held-queue-length check — any scope block with non-zero `NextTrialAt` is eligible. If `PickTrialCandidate` returns nil (no sync_failures for this scope), the engine clears the scope block.
+
+`reobserve` returns `(*ChangeEvent, time.Duration)` — the second value is the `RetryAfter` from the server's 429/503/507 response. On successful dispatch, `runTrialDispatch` does NOT extend the trial interval (the worker result handler does that). On scope-persists (nil event), the `RetryAfter` is forwarded to `extendTrialInterval` so the server-mandated wait is used directly (R-2.10.7).
 
 **Fixes D-2** (no `onHeld` callback — `armTrialTimer` called inline by engine), **D-8** (scope blocks persisted, survive crash).
 
@@ -662,26 +664,20 @@ case <-trialTimerCh:
         break // trial already in pipeline, wait for it
     }
 
-    key, _, ok := e.scopeGate.NextDueTrial(now)
-    if !ok {
-        break
-    }
+    // Snapshot all due scopes — each visited exactly once.
+    for _, key := range e.scopeGate.AllDueTrials(now) {
+        row, _ := e.baseline.PickTrialCandidate(ctx, key)
+        if row == nil {
+            e.onScopeClear(ctx, key)
+            continue
+        }
 
-    row, _ := e.baseline.PickTrialCandidate(ctx, key)
-    if row == nil {
-        // No candidates — scope has no retriable items. Clear block.
-        e.onScopeClear(ctx, key)
-        break
-    }
-
-    ev := e.reobserve(ctx, row.Path, row.ItemID, row.DriveID,
-        actionTypeFromDirection(row.Direction))
-    if ev == nil {
-        // Re-observation failed (429/507 for global scopes) — still blocked.
-        e.scopeGate.ExtendTrialInterval(key, ...)
-        e.armTrialTimer()
-        break
-    }
+        ev, retryAfter := e.reobserve(ctx, row)
+        if ev == nil {
+            // Scope still blocked — forward server's Retry-After (R-2.10.7).
+            e.extendTrialInterval(key, retryAfter)
+            continue
+        }
 
     // Mark for interception (mutex-protected)
     e.trialMu.Lock()
@@ -824,7 +820,7 @@ Independent. Can be done first (see ordering note above).
 4. Phase 4 will remove from tracker: `ReleaseScope`, `DiscardScope`, `DispatchTrial` (all depend on held queue)
 5. Phase 4 will remove from tracker: `held map[ScopeKey][]*TrackedAction`, `onHeld func()`
 6. Added: `IsScopeBlocked`, `LoadFromStore`, `ClearScopeBlock`
-7. `NextDueTrial` / `EarliestTrialAt` — no held-queue-length checks (key behavioral change)
+7. `AllDueTrials` / `EarliestTrialAt` — no held-queue-length checks (key behavioral change). `NextDueTrial` replaced by `AllDueTrials` (snapshot pattern, structurally bounded iteration).
 8. Unit tests in `scope_gate_test.go`, store tests in `store_scope_blocks_test.go`
 9. Created `ScopeBlockStore` interface + `SyncStore` implementation in `store_scope_blocks.go`
 10. Added compile-time `ScopeBlockStore` satisfaction check on `SyncStore`

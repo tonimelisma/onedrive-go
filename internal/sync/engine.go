@@ -1289,9 +1289,10 @@ func (e *Engine) extendTrialInterval(scopeKey ScopeKey, retryAfter time.Duration
 
 	newInterval := computeTrialInterval(retryAfter, block.TrialInterval)
 
-	e.logger.Debug("trial failed — extending interval",
+	e.logger.Debug("extending trial interval",
 		slog.String("scope_key", scopeKey.String()),
 		slog.Duration("new_interval", newInterval),
+		slog.Duration("retry_after", retryAfter),
 	)
 
 	if err := e.scopeGate.ExtendTrialInterval(context.Background(), scopeKey, e.nowFunc().Add(newInterval), newInterval); err != nil {
@@ -1872,6 +1873,11 @@ func (e *Engine) retryTimerChan() <-chan struct{} {
 // re-observation event into the buffer. If no candidates exist for a scope,
 // the scope is cleared (no items left to trial — condition resolved).
 //
+// Uses AllDueTrials to snapshot all due scopes at once, then iterates each
+// exactly once. This is structurally incapable of infinite iteration —
+// unlike the old NextDueTrial-in-a-loop approach which required state
+// mutation (extendTrialInterval) as iteration control.
+//
 // Called from the drain loop when the trial timer fires.
 func (e *Engine) runTrialDispatch(ctx context.Context) {
 	now := e.nowFunc()
@@ -1879,12 +1885,8 @@ func (e *Engine) runTrialDispatch(ctx context.Context) {
 	// Clean stale trial entries before dispatching new ones.
 	e.cleanStaleTrialPending(now)
 
-	for {
-		key, _, ok := e.scopeGate.NextDueTrial(now)
-		if !ok {
-			break
-		}
-
+	// Snapshot all due scopes — each visited exactly once.
+	for _, key := range e.scopeGate.AllDueTrials(now) {
 		// Pick oldest scope-blocked failure for this scope.
 		row, err := e.baseline.PickTrialCandidate(ctx, key)
 		if err != nil {
@@ -1915,12 +1917,12 @@ func (e *Engine) runTrialDispatch(ctx context.Context) {
 		// Re-observe the item with a real API call / FS access to confirm
 		// whether the scope condition has cleared. Unlike the retrier (which
 		// uses cached DB state), trials hit the live source of truth.
-		ev := e.reobserve(ctx, row)
+		ev, retryAfter := e.reobserve(ctx, row)
 		if ev == nil {
-			// Scope condition persists — extend the trial interval and
-			// re-arm so the next trial fires later.
-			e.extendTrialInterval(key, 0)
-			e.armTrialTimer()
+			// Scope condition persists — extend the trial interval using
+			// the server's Retry-After if provided (R-2.10.7), otherwise
+			// exponential backoff.
+			e.extendTrialInterval(key, retryAfter)
 
 			continue
 		}
@@ -1928,11 +1930,6 @@ func (e *Engine) runTrialDispatch(ctx context.Context) {
 		if e.buf != nil {
 			e.buf.Add(ev)
 		}
-
-		// Advance NextTrialAt so the same scope isn't picked again in this
-		// iteration. The trial result handler will either clear the scope
-		// (on success) or extend the interval further (on failure).
-		e.extendTrialInterval(key, 0)
 
 		e.logger.Debug("trial dispatched",
 			slog.String("scope_key", key.String()),
@@ -2224,11 +2221,14 @@ func (e *Engine) isFailureResolved(ctx context.Context, row *SyncFailureRow) boo
 //   - Upload: stat + hash local file. Exists → full ChangeEvent. Gone → ChangeDelete.
 //     Error → nil.
 //
-// Returns nil when the scope condition persists — caller extends the trial interval.
-func (e *Engine) reobserve(ctx context.Context, row *SyncFailureRow) *ChangeEvent {
+// Returns (nil, retryAfter) when the scope condition persists — caller
+// forwards retryAfter to extendTrialInterval for server-driven backoff.
+// Returns (event, 0) on success or when the item is gone.
+func (e *Engine) reobserve(ctx context.Context, row *SyncFailureRow) (*ChangeEvent, time.Duration) {
 	switch row.Direction {
 	case strUpload:
-		return e.observeLocalFile(row.Path, "reobserve")
+		// Local FS — no RetryAfter concept.
+		return e.observeLocalFile(row.Path, "reobserve"), 0
 
 	default: // "download" or "delete"
 		item, err := e.execCfg.items.GetItem(ctx, row.DriveID, row.ItemID)
@@ -2248,19 +2248,22 @@ func (e *Engine) reobserve(ctx context.Context, row *SyncFailureRow) *ChangeEven
 						ItemType:  ItemTypeFile,
 						Name:      filepath.Base(row.Path),
 						IsDeleted: true,
-					}
+					}, 0
 				}
 
 				// 429, 507, 5xx — scope condition persists; return nil so the
-				// caller extends the trial interval.
+				// caller extends the trial interval. Forward RetryAfter from
+				// the server response (R-2.10.7) so the caller uses the
+				// server-mandated wait instead of exponential backoff.
 				if errors.Is(ge.Err, graph.ErrThrottled) || errors.Is(ge.Err, graph.ErrServerError) ||
 					ge.StatusCode == http.StatusInsufficientStorage {
 					e.logger.Debug("reobserve: scope condition persists",
 						slog.String("path", row.Path),
 						slog.Int("status", ge.StatusCode),
+						slog.Duration("retry_after", ge.RetryAfter),
 					)
 
-					return nil
+					return nil, ge.RetryAfter
 				}
 			}
 
@@ -2270,7 +2273,7 @@ func (e *Engine) reobserve(ctx context.Context, row *SyncFailureRow) *ChangeEven
 				slog.String("error", err.Error()),
 			)
 
-			return nil
+			return nil, 0
 		}
 
 		// 200 — build a full ChangeEvent from the live API response.
@@ -2303,7 +2306,7 @@ func (e *Engine) reobserve(ctx context.Context, row *SyncFailureRow) *ChangeEven
 			Mtime:     item.ModifiedAt.UnixNano(),
 			ETag:      item.ETag,
 			IsDeleted: isDeleted,
-		}
+		}, 0
 	}
 }
 
@@ -2577,9 +2580,9 @@ func (e *Engine) armTrialTimer() {
 
 	// Non-blocking send to the buffered(1) channel. If a signal is already
 	// pending, the new one is coalesced (dropped). This is self-healing:
-	// drainWorkerResults calls NextDueTrial in a loop, so even if a second
-	// AfterFunc fires while a signal is pending, all due scopes are still
-	// processed on the next drain iteration.
+	// drainWorkerResults calls AllDueTrials, so even if a second AfterFunc
+	// fires while a signal is pending, all due scopes are still processed
+	// on the next drain iteration.
 	e.trialTimer = time.AfterFunc(delay, func() {
 		select {
 		case e.trialCh <- struct{}{}:
