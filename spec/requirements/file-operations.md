@@ -33,7 +33,7 @@ When the user runs `put <local> [remote]`, the system shall upload the specified
 When the user runs `rm <path>`, the system shall delete the item (to recycle bin by default).
 
 - R-1.4.1: When the path is a folder, the system shall delete recursively. [verified]
-- R-1.4.2: Deletions shall go to the OneDrive recycle bin by default (`use_recycle_bin`). [verified]
+- R-1.4.2: Deletions shall go to the OneDrive recycle bin by default. [verified]
 - R-1.4.3: When `--json` is passed, the system shall output structured JSON with the deleted path. [verified]
 
 ## R-1.5 Create Folder (`mkdir`) [verified]
