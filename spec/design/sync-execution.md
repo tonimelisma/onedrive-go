@@ -1,6 +1,6 @@
 # Sync Execution
 
-GOVERNS: internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_transfer.go, internal/sync/worker.go, internal/sync/dep_graph.go, internal/sync/tracker.go, internal/sync/scope.go, internal/sync/issue_types.go, internal/sync/compute_status.go, status.go
+GOVERNS: internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_transfer.go, internal/sync/worker.go, internal/sync/dep_graph.go, internal/sync/scope_gate.go, internal/sync/scope.go, internal/sync/issue_types.go, internal/sync/compute_status.go, status.go
 
 Implements: R-2.3 [verified], R-5.1 [verified], R-6.4 [implemented], R-6.5.3 [verified], R-6.4.9 [planned], R-6.7.25 [planned], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.10.15 [verified], R-2.10.16 [verified], R-2.10.41 [verified], R-2.10.42 [verified], R-2.10.43 [verified], R-2.10.44 [verified]
 
@@ -8,7 +8,7 @@ Implements: R-2.3 [verified], R-5.1 [verified], R-6.4 [implemented], R-6.5.3 [ve
 
 Implements: R-6.8.9 [verified]
 
-Thin action dispatcher. Takes an `ActionPlan` and dispatches actions to workers via the DepTracker. Actions dispatched based on dependency satisfaction, not fixed phase ordering. Workers produce individual `Outcome` values committed per-action by the SyncStore.
+Thin action dispatcher. Takes an `ActionPlan` and dispatches actions to workers via `DepGraph` + `ScopeGate`. Actions dispatched based on dependency satisfaction, not fixed phase ordering. Workers produce individual `Outcome` values committed per-action by the SyncStore.
 
 Action methods call the graph client directly and return `Outcome` — no retry loop, no error classification, no sleep. The following were removed as part of the retry-to-transport refactoring: `withRetry()`, `classifyError()`, `classifyStatusCode()`, `calcExecBackoff()`, `errClass` type + constants, `sleepFunc` field. Hash mismatch retry (`downloadWithHashRetry`) is unchanged — it's a data integrity mechanism orthogonal to the retry redesign.
 
@@ -26,36 +26,11 @@ The D-10 fix ensures completed actions are removed from the `actions` map. Witho
 
 `TrackedAction` struct is defined here: pairs an `Action` with an ID, cancel function, trial metadata (`IsTrial`, `TrialScopeKey`), and dependency tracking (`depsLeft`, `dependents`).
 
-## Tracker (`tracker.go`)
-
-Scope-aware dispatch gate wrapping `DepGraph`. Adds scope gating, held queues, trial dispatch, and the ready channel. Actions flow: `DepGraph.Add/Complete` → scope gate check → ready channel or held queue.
-
-### Tracker Extensions
-
-Implements: R-6.8.7 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.10.15 [verified], R-2.10.42 [verified]
-
-- **Composition**: `DepTracker` holds a `*DepGraph` field. Graph operations (`Add`, `Complete`, `HasInFlight`, `CancelByPath`) delegate to DepGraph, then DepTracker applies scope logic on the returned data.
-- **D-1 fix**: `dispatch()` is always called under `dt.mu`. The old code called `dispatch()` from `Complete()` after releasing the lock, causing a data race on `scopeBlocks` and `held` maps.
-- **Held queue**: `held map[ScopeKey][]*TrackedAction` — per-scope-key map. `ScopeKey` is comparable and usable as a map key. After dependency resolution, if the action's scope is blocked, it moves to the held queue instead of the worker pool.
-- **Scope blocks**: `scopeBlocks map[ScopeKey]*ScopeBlock` — active scope blocks with trial timing. `ScopeBlock.Key` is typed `ScopeKey`.
-- **`HoldScope(key, block)`**: set scope block, future dispatches matching scope go to held queue.
-- **`ReleaseScope(key)`**: clear block, dispatch all held actions through scope gate under lock.
-- **`DispatchTrial(key)`**: pop one from held queue, mark `IsTrial=true`, set `TrialScopeKey`, clear `NextTrialAt` (prevents re-dispatch until trial result re-arms via `armTrialTimer`), dispatch.
-- **`NextDueTrial(now)`**: returns the scope key and `NextTrialAt` of the first scope block whose trial is due.
-- **`ExtendTrialInterval(key, nextAt, interval)`**: updates a scope block's `NextTrialAt`, `TrialInterval`, and increments its trial attempt counter on trial failure. Encapsulates the mutation under the tracker's lock.
-- **`EarliestTrialAt()`**: scans all scope blocks for the earliest `NextTrialAt` with non-empty held queue. Used by the engine's trial timer.
-- **`ScopeBlockKeys()`**: returns all active scope block keys. Used by `handleExternalChanges` to detect when `perm:dir` failures have been cleared via CLI.
-- **`GetScopeBlock(key)`**: returns a value copy of the `ScopeBlock` for a given scope key (not a pointer, preventing mutation outside the lock). Used by `handleTrialResult` to read current `TrialInterval` for backoff doubling.
-- **`dispatch()` gate**: scope gate — blocked actions go to held queue. Returns `bool` (was-held) so callers can fire the `onHeld` callback outside the lock. Always called under `dt.mu`.
-- **`onHeld` callback**: called when `dispatch()` diverts an action to a held queue. The engine sets this to `armTrialTimer` so the trial timer re-arms when the held queue becomes non-empty. Must NOT be called under `dt.mu` — callers invoke it after releasing the lock.
-- **`blockedScope()` dispatch via `ScopeKey.BlocksAction()`**: Fixed-key scopes are checked in priority order (throttle, service, disk, quota:own), then dynamic-key scopes (shortcut quota, perm:dir) via O(n) scan. Each check delegates to `ScopeKey.BlocksAction(path, shortcutKey, actionType, targetsOwnDrive)` — scope-specific blocking logic lives on the `ScopeKey` type, not in the tracker. Adding a new scope kind requires implementing `BlocksAction` for that kind.
-- The tracker does NOT handle retry. All retry is via `sync_failures` + `FailureRetrier` (R-6.8.10). The engine calls `Complete` on every result; failed items are recorded in `sync_failures` with `next_retry_at`, and the `FailureRetrier` re-injects them via buffer → planner → tracker.
-
 ## ScopeGate (`scope_gate.go`)
 
-Scope-based admission control with persistent scope blocks. No held queue, no dependency awareness, no channels. Extracted from DepTracker in Phase 3 of the tracker redesign.
+Scope-based admission control with persistent scope blocks. No held queue, no dependency awareness, no channels. Paired with `DepGraph` to form the dispatch architecture: DepGraph resolves dependencies and returns ready actions, ScopeGate gates admission based on active scope blocks.
 
-- **`Admit(ta) ScopeKey`**: Check if an action matches any active scope block. Returns blocking key or zero. Priority-ordered: global scopes (throttle, service) first, then narrow scopes (disk, quota), then dynamic-key scopes (shortcut quota, perm:dir). Same logic as `DepTracker.blockedScope()`.
+- **`Admit(ta) ScopeKey`**: Check if an action matches any active scope block. Returns blocking key or zero. Priority-ordered: global scopes (throttle, service) first, then narrow scopes (disk, quota), then dynamic-key scopes (shortcut quota, perm:dir). Blocking logic lives on `ScopeKey.BlocksAction()`.
 - **`SetScopeBlock(ctx, key, block) error`**: Write-through: persist to `scope_blocks` table first, then update in-memory map. On store error, memory unchanged.
 - **`ClearScopeBlock(ctx, key) error`**: Delete from store first, then memory.
 - **`IsScopeBlocked(key) bool`**: Simple map lookup.
@@ -124,9 +99,9 @@ Methods on `ScopeKey` centralize logic that was previously scattered across 9+ f
 
 Implements: R-2.10.16 [verified], R-6.8.12 [verified]
 
-Flat pool of `transfer_workers` goroutines. Workers are pure executors — they execute actions, persist success outcomes, and send `WorkerResult` to the engine. Workers NEVER call `tracker.Complete()` — the engine owns all completion decisions.
+Flat pool of `transfer_workers` goroutines. Decoupled from dispatch infrastructure: accepts `readyCh <-chan *TrackedAction` (actions to execute) and `doneCh <-chan struct{}` (shutdown signal) as constructor parameters instead of holding a reference to the dispatch infrastructure. Workers are pure executors — they execute actions, persist success outcomes, and send `WorkerResult` to the engine. Workers never call `DepGraph.Complete()` — the engine owns all completion decisions.
 
-`WorkerResult` carries target drive identity (`TargetDriveID`, `ShortcutKey`) from the action, `RetryAfter` from `GraphError`, the full `error` for classification, `ActionID` for tracker routing, `IsTrial` and `TrialScopeKey ScopeKey` for scope trial routing. The engine classifies and routes each result.
+`WorkerResult` carries target drive identity (`TargetDriveID`, `ShortcutKey`) from the action, `RetryAfter` from `GraphError`, the full `error` for classification, `ActionID` for DepGraph routing, `IsTrial` and `TrialScopeKey ScopeKey` for scope trial routing. The engine classifies and routes each result.
 
 ## Action Execution
 
@@ -158,11 +133,9 @@ Implements: R-2.10.41 [verified]
 
 Implements: R-2.5.4 [verified]
 
-After resetting `remote_state`, `ResetInProgressStates` also creates corresponding `sync_failures` entries (category=`transient`, direction matching the action, `next_retry_at` computed via `delayFn`) for each item that transitioned to a pending state. This bridges `remote_state` to the sole retry mechanism (`FailureRetrier` + `sync_failures`). Without this bridge, items that crashed mid-execution would become zombies: the delta token was already advanced (no new events), and the `FailureRetrier` only queries `sync_failures`. `RecordFailure` uses UPSERT — if a `sync_failures` entry already exists from a prior failure before the crash, the existing `failure_count` is preserved and incremented, so backoff continues from where it left off.
+After resetting `remote_state`, `ResetInProgressStates` also creates corresponding `sync_failures` entries (category=`transient`, direction matching the action, `next_retry_at` computed via `delayFn`) for each item that transitioned to a pending state. This bridges `remote_state` to the drain-loop retrier (`sync_failures`). Without this bridge, items that crashed mid-execution would become zombies: the delta token was already advanced (no new events), and the retrier only queries `sync_failures`. `RecordFailure` uses UPSERT — if a `sync_failures` entry already exists from a prior failure before the crash, the existing `failure_count` is preserved and incremented, so backoff continues from where it left off.
 
-The `FailureRetrier` (`reconciler.go`) is the sole retry mechanism for sync actions. It periodically sweeps `sync_failures` for items whose `next_retry_at` has expired and re-injects them into the pipeline via buffer → planner → tracker. The engine calls `Complete` on every worker result (never `ReQueue`) and records failures in `sync_failures` with exponential backoff via `retry.Reconcile.Delay`. `CommitOutcome` success cleanup clears `sync_failures` for all action types (upload, download, delete, move).
-
-**Double-dispatch prevention**: The retrier tracks the last-dispatched `next_retry_at` for each path in `dispatchedRetryAt`. If a row's `NextRetryAt` matches the tracked value, the row was already injected into the buffer and is skipped. This guards against the bootstrap-vs-kick race: when `Run()` starts, the bootstrap reconcile may dispatch a row that arrived between goroutine creation and bootstrap execution, while the kick signal (from `processWorkerResult`) is still pending in the channel. Without this guard, both sweeps dispatch the same row. When `RecordFailure` sets a new `next_retry_at` (re-failure after planner re-evaluation), the mismatch naturally allows re-dispatch. Entries are cleared when the path becomes in-flight (pipeline consumed it). Stale entries (paths whose `sync_failures` rows were resolved or reclassified) are pruned each sweep via `pruneDispatchedRetryAt` to prevent monotonic map growth.
+The drain-loop retrier is the sole retry mechanism for sync actions. Integrated directly into the engine's drain loop (no separate goroutine), it uses `runRetrierSweep()` to periodically sweep `sync_failures` for items whose `next_retry_at` has expired and re-injects them into the pipeline via buffer → planner → DepGraph. The engine calls `DepGraph.Complete` on every worker result and records failures in `sync_failures` with exponential backoff via `retry.Reconcile.Delay`. `CommitOutcome` success cleanup clears `sync_failures` for all action types (upload, download, delete, move). `runTrialDispatch()` handles scope trial candidate selection via `PickTrialCandidate` and re-observation.
 
 ## Status Computation (`compute_status.go`)
 
@@ -188,7 +161,7 @@ Scope block classification remains in the sync engine: `classifyResult` maps `dr
 - Two concurrency knobs: `transfer_workers` (default 8, range 4-64) for file operations, `check_workers` (default 4, range 1-16) for QuickXorHash computation.
 - All executor write operations use `containedPath()` with `filepath.IsLocal()` to confine local filesystem writes to the sync root directory. This is defense-in-depth against path reconstruction bugs, not input validation (the OneDrive API is the source of truth, not an attacker). Symlink escape is prevented by resolving symlinks on the parent directory via `filepath.EvalSymlinks`.
 - Concurrent folder creates via Graph API `$batch` for sibling folders at same depth. Diminishing returns after first sync. [planned]
-- Targeted `-race` stress tests for DepTracker, Buffer, WorkerPool. [planned]
+- Targeted `-race` stress tests for DepGraph, ScopeGate, Buffer, WorkerPool. [planned]
 - Sub-second uniqueness in `conflictCopyPath`: second-precision timestamps mean two conflicts in the same second collide. [planned]
 - Explicit error for unknown `ActionType` in `applySingleOutcome`: default case currently returns nil, silently dropping outcomes. [planned]
 - Graceful shutdown test under active worker pool: verify SIGTERM during active transfers drains correctly. [planned]
