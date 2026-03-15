@@ -849,7 +849,7 @@ func TestResolveSafetyConfig_Default(t *testing.T) {
 	t.Parallel()
 
 	eng := &Engine{bigDeleteThreshold: defaultBigDeleteThreshold}
-	cfg := eng.resolveSafetyConfig(RunOpts{})
+	cfg := eng.resolveSafetyConfig(false)
 
 	assert.Equal(t, defaultBigDeleteThreshold, cfg.BigDeleteThreshold)
 }
@@ -858,7 +858,7 @@ func TestResolveSafetyConfig_Force(t *testing.T) {
 	t.Parallel()
 
 	eng := &Engine{bigDeleteThreshold: defaultBigDeleteThreshold}
-	cfg := eng.resolveSafetyConfig(RunOpts{Force: true})
+	cfg := eng.resolveSafetyConfig(true)
 
 	assert.Equal(t, forceSafetyMax, cfg.BigDeleteThreshold)
 }
@@ -869,9 +869,24 @@ func TestResolveSafetyConfig_UsesConfiguredThreshold(t *testing.T) {
 	// Verify the config bug is fixed: engine uses the configured threshold,
 	// not a hardcoded default.
 	eng := &Engine{bigDeleteThreshold: 500}
-	cfg := eng.resolveSafetyConfig(RunOpts{})
+	cfg := eng.resolveSafetyConfig(false)
 
 	assert.Equal(t, 500, cfg.BigDeleteThreshold)
+}
+
+func TestResolveSafetyConfig_WatchMode_DisablesThreshold(t *testing.T) {
+	t.Parallel()
+
+	// When deleteCounter is non-nil (watch mode), the planner-level
+	// big-delete threshold is disabled regardless of force flag.
+	eng := &Engine{
+		bigDeleteThreshold: 500,
+		deleteCounter:      newDeleteCounter(500, 5*time.Minute, time.Now),
+	}
+	cfg := eng.resolveSafetyConfig(false)
+
+	assert.Equal(t, forceSafetyMax, cfg.BigDeleteThreshold,
+		"watch mode should disable planner-level big-delete threshold")
 }
 
 // ---------------------------------------------------------------------------

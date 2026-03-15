@@ -336,10 +336,10 @@ All phases in this document execute AFTER tracker-redesign.md Phases 1-5. The co
 **Design docs**: `sync-engine.md` (reconciliation behavior)
 **Requirements**: None
 
-### Phase 11: Safety Config Unification
+### ~~Phase 11: Safety Config Unification~~ [done]
 
-1. Merge `resolveSafetyConfig` + `resolveWatchSafetyConfig` → one method
-2. Update callers
+1. ~~Merge `resolveSafetyConfig` + `resolveWatchSafetyConfig` → one method~~ — unified `resolveSafetyConfig(force bool)` checks `force || e.deleteCounter != nil`
+2. ~~Update callers~~ — `RunOnce` and watch pipeline both call `e.resolveSafetyConfig(opts.Force)`
 
 **Code**: `engine.go` (two methods → one)
 **Design docs**: None
@@ -358,12 +358,12 @@ This is the authoritative execution order. Each increment is a PR that leaves th
 | **3. Extract ScopeGate + Persist** [done] | tracker-redesign Phase 3 | Scope blocks persisted, no held queue, `Admit`/`SetScopeBlock`/`ClearScopeBlock` | `scope_gate.go` (new), `scope_gate_test.go` (new), `store_scope_blocks.go` (new), `store_scope_blocks_test.go` (new), `migrations/00003_scope_blocks.sql` (new) | `sync-execution.md` (ScopeGate section) | R-2.10.5, R-2.10.11 |
 | **4. Rewire Engine** | tracker-redesign Phase 4 | DepGraph + ScopeGate + readyCh. `admitAndDispatch`, `routeReadyActions`, `cascadeRecordAndComplete`, `onScopeClear`, `reobserve`, `createEventFromDB`, `isFailureResolved`. Retrier in drain loop. Trial interception. Failure-aware dispatch. | `engine.go`, `engine_test.go`, `engine_shortcuts.go`, `worker.go`, `worker_test.go`, `store_failures.go`, `store_admin.go` | `sync-execution.md`, `sync-engine.md` (state machine, scope clear, retrier, trials, failure-aware dispatch) | R-2.10.5-8, R-2.10.11, R-2.10.14 |
 | **5. Delete Old Code** | tracker-redesign Phase 5 | Remove tracker.go, FailureRetrier, synthesizeFailureEvent | `tracker.go` (deleted), `tracker_test.go` (deleted), `reconciler.go`, `reconciler_test.go` | None | None |
-| **6. Shortcut Enrichment** | tracker-redesign Phase 6 | Populate `targetShortcutKey` and `targetDriveID` in planner | `types.go`, `planner.go`, `planner_test.go` | `sync-execution.md` | R-2.10.1, R-2.10.16-31, R-6.8.12, R-6.8.13 |
-| **7. sync_failures Ownership** | tracker-redesign Phase 7 | Engine owns failure lifecycle, store owns baseline | `store_baseline.go`, `engine.go` | `sync-engine.md` | None |
+| **6. Shortcut Enrichment** [done] | tracker-redesign Phase 6 | Populate `targetShortcutKey` and `targetDriveID` in planner | `types.go`, `planner.go`, `item_converter.go`, tests | `sync-execution.md` | R-6.8.12, R-6.8.13 |
+| **7. sync_failures Ownership** [done] | tracker-redesign Phase 7 | Engine owns failure lifecycle, store owns baseline | `store_baseline.go`, `engine.go` | `sync-engine.md` | None |
 | **8. Extract watchState** | pipeline-redesign Phase 8 | Bundle watch-only fields, 1 nil guard replaces 15 | `engine.go`, `engine_shortcuts.go`, `engine_test.go` | `sync-engine.md` | None |
 | **9. Unified Bootstrap** | pipeline-redesign Phase 9 | `bootstrapSync` replaces `RunOnce` in `RunWatch`, `WaitForEmpty` | `engine.go`, `dep_graph.go`, `dep_graph_test.go` | `sync-engine.md` | None |
 | **10. Async Reconciliation** | pipeline-redesign Phase 10 | Non-blocking reconciliation goroutine | `engine.go`, `engine_test.go` | `sync-engine.md` | None |
-| **11. Safety Config** | pipeline-redesign Phase 11 | Merge two methods into one | `engine.go` | None | None |
+| **11. Safety Config** [done] | pipeline-redesign Phase 11 | Merge two methods into one | `engine.go` | None | None |
 
 **Parallelization**: Increments 1-5 (tracker redesign) are strictly sequential — each builds on the previous. Increments 6, 7 (tracker cleanup) can run in parallel with each other but require increment 5 to be complete. Increments 8-11 (pipeline redesign) are strictly sequential and require increment 5 to be complete. Increments 6-7 can run in parallel with increments 8-11 since they touch different files. Phase 8 (watchState) is sequenced after Phase 5 to minimize merge conflicts in engine.go, not because of a hard dependency — watchState extraction is a mechanical rename that could be done on the current codebase.
 

@@ -192,7 +192,8 @@ func TestClearResolvedLocalIssues(t *testing.T) {
 	assert.Contains(t, paths, "c.txt")
 }
 
-func TestCommitOutcome_UploadSuccess_ClearsLocalIssue(t *testing.T) {
+// Validates: D-6 (engine owns failure lifecycle)
+func TestCommitOutcome_UploadSuccess_DoesNotClearSyncFailures(t *testing.T) {
 	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
@@ -220,10 +221,11 @@ func TestCommitOutcome_UploadSuccess_ClearsLocalIssue(t *testing.T) {
 	err = mgr.CommitOutcome(ctx, outcome)
 	require.NoError(t, err)
 
-	// Verify issue is gone.
+	// D-6: CommitOutcome does NOT clear sync_failures — that's the engine's
+	// responsibility via clearFailureOnSuccess.
 	issues, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
-	assert.Empty(t, issues)
+	assert.Len(t, issues, 1, "sync_failures should survive CommitOutcome")
 }
 
 func TestCommitOutcome_UploadSuccess_NoIssue_NoError(t *testing.T) {
@@ -245,8 +247,8 @@ func TestCommitOutcome_UploadSuccess_NoIssue_NoError(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// Validates: R-2.10.41, R-2.10.10
-func TestCommitOutcome_DownloadSuccess_ClearsSyncFailures(t *testing.T) {
+// Validates: R-2.10.41, R-2.10.10, D-6
+func TestCommitOutcome_DownloadSuccess_DoesNotClearSyncFailures(t *testing.T) {
 	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
@@ -282,14 +284,14 @@ func TestCommitOutcome_DownloadSuccess_ClearsSyncFailures(t *testing.T) {
 	err = mgr.CommitOutcome(ctx, outcome)
 	require.NoError(t, err)
 
-	// Download success should clear sync_failures for the path.
+	// D-6: CommitOutcome does NOT clear sync_failures — engine owns that.
 	issues, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
-	assert.Empty(t, issues)
+	assert.Len(t, issues, 1, "sync_failures should survive CommitOutcome")
 }
 
-// Validates: R-2.10.41
-func TestCommitOutcome_DeleteSuccess_ClearsSyncFailures(t *testing.T) {
+// Validates: R-2.10.41, D-6
+func TestCommitOutcome_DeleteSuccess_DoesNotClearSyncFailures(t *testing.T) {
 	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
@@ -322,14 +324,14 @@ func TestCommitOutcome_DeleteSuccess_ClearsSyncFailures(t *testing.T) {
 	err = mgr.CommitOutcome(ctx, outcome)
 	require.NoError(t, err)
 
-	// Delete success should clear sync_failures for the path.
+	// D-6: CommitOutcome does NOT clear sync_failures — engine owns that.
 	issues, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
-	assert.Empty(t, issues)
+	assert.Len(t, issues, 1, "sync_failures should survive CommitOutcome")
 }
 
-// Validates: R-2.10.41
-func TestCommitOutcome_MoveSuccess_ClearsSyncFailures(t *testing.T) {
+// Validates: R-2.10.41, D-6
+func TestCommitOutcome_MoveSuccess_DoesNotClearSyncFailures(t *testing.T) {
 	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
@@ -362,10 +364,10 @@ func TestCommitOutcome_MoveSuccess_ClearsSyncFailures(t *testing.T) {
 	err = mgr.CommitOutcome(ctx, outcome)
 	require.NoError(t, err)
 
-	// Move success should clear sync_failures for the path.
+	// D-6: CommitOutcome does NOT clear sync_failures — engine owns that.
 	issues, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
-	assert.Empty(t, issues)
+	assert.Len(t, issues, 1, "sync_failures should survive CommitOutcome")
 }
 
 func TestLocalIssueSyncStatus(t *testing.T) {
