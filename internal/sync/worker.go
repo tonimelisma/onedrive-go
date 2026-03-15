@@ -77,7 +77,7 @@ type WorkerResult struct {
 	TrialScopeKey ScopeKey
 
 	// ActionID is the TrackedAction.ID for the engine to call Complete on
-	// the tracker.
+	// the DepGraph.
 	ActionID int64
 }
 
@@ -113,9 +113,9 @@ func NewWorkerPool(
 	}
 }
 
-// Start spawns a flat pool of goroutines, all reading from the tracker's
-// single ready channel. total is the desired concurrency (typically
-// cfg.TransferWorkers). Minimum 4 workers.
+// Start spawns a flat pool of goroutines, all reading from the single ready
+// channel. total is the desired concurrency (typically cfg.TransferWorkers).
+// Minimum 4 workers.
 func (wp *WorkerPool) Start(ctx context.Context, total int) {
 	if total < minWorkers {
 		total = minWorkers

@@ -789,7 +789,7 @@ Remove `DELETE FROM sync_failures` from `updateRemoteStateOnOutcome()` (store_ba
 
 **Phase ordering note**: Phase 1 modifies `scope.go` and `engine.go`. Phases 2-4 also heavily modify `engine.go`. If Phase 1 is merged to main before Phases 2-4 start, Phases 2-4 will have merge conflicts in `engine.go`. Recommendation: do Phase 1 in the same worktree/branch as Phases 2-4 to avoid conflicts, or accept that Phase 4's engine rewrite will need to incorporate Phase 1's constant changes.
 
-### Phase 1: Backoff Timing
+### Phase 1: Backoff Timing [done]
 
 Independent. Can be done first (see ordering note above).
 

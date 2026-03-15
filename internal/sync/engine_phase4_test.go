@@ -278,6 +278,143 @@ func TestEngine_ProcessAndRoute_FailureCascadesChildren(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Grandchild cascade tests (Fix 1: BFS prevents grandchild stranding)
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.10.5
+func TestCascadeFailAndComplete_Grandchildren(t *testing.T) {
+	t.Parallel()
+	eng := newPhase4Engine(t)
+	ctx := context.Background()
+
+	driveID := driveid.New("drive1")
+
+	// 3-level chain: A → B → C
+	a := Action{Type: ActionFolderCreate, Path: "a", DriveID: driveID}
+	eng.depGraph.Add(&a, 1, nil)
+
+	b := Action{Type: ActionFolderCreate, Path: "a/b", DriveID: driveID}
+	eng.depGraph.Add(&b, 2, []int64{1})
+
+	c := Action{Type: ActionDownload, Path: "a/b/c.txt", DriveID: driveID, ItemID: "ic"}
+	eng.depGraph.Add(&c, 3, []int64{2})
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	// Fail parent A — B and C should both be cascade-failed and completed.
+	r := &WorkerResult{
+		Path:       "a",
+		DriveID:    driveID,
+		ActionType: ActionFolderCreate,
+		Success:    false,
+		ErrMsg:     "server error",
+		HTTPStatus: 500,
+		ActionID:   1,
+	}
+
+	dispatched := eng.processWorkerResult(ctx, r, bl)
+	assert.Empty(t, dispatched, "no actions should be dispatched on failure")
+
+	// All 3 actions should be completed — none stranded.
+	assert.Equal(t, 0, eng.depGraph.InFlightCount(),
+		"grandchild must not be stranded in DepGraph")
+
+	// B and C should both have cascade sync_failures.
+	failures, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	// Parent's failure + B's cascade + C's cascade = 3.
+	assert.GreaterOrEqual(t, len(failures), 3)
+}
+
+// Validates: R-6.8.9
+func TestCompleteSubtree_Grandchildren(t *testing.T) {
+	t.Parallel()
+	eng := newPhase4Engine(t)
+	ctx := context.Background()
+
+	driveID := driveid.New("drive1")
+
+	// 3-level chain: A → B → C
+	a := Action{Type: ActionFolderCreate, Path: "a", DriveID: driveID}
+	eng.depGraph.Add(&a, 1, nil)
+
+	b := Action{Type: ActionFolderCreate, Path: "a/b", DriveID: driveID}
+	eng.depGraph.Add(&b, 2, []int64{1})
+
+	c := Action{Type: ActionDownload, Path: "a/b/c.txt", DriveID: driveID, ItemID: "ic"}
+	eng.depGraph.Add(&c, 3, []int64{2})
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	// Shutdown parent A — B and C should be silently completed.
+	r := &WorkerResult{
+		Path:       "a",
+		DriveID:    driveID,
+		ActionType: ActionFolderCreate,
+		Success:    false,
+		Err:        context.Canceled,
+		ActionID:   1,
+	}
+
+	dispatched := eng.processWorkerResult(ctx, r, bl)
+	assert.Empty(t, dispatched)
+
+	// All 3 actions should be completed.
+	assert.Equal(t, 0, eng.depGraph.InFlightCount(),
+		"grandchild must not be stranded on shutdown")
+
+	// No cascade failures should be recorded (shutdown is not a failure).
+	failures, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, failures, "shutdown should not record failures")
+}
+
+// Validates: R-2.10.5
+func TestCascadeFailAndComplete_Diamond(t *testing.T) {
+	t.Parallel()
+	eng := newPhase4Engine(t)
+	ctx := context.Background()
+
+	driveID := driveid.New("drive1")
+
+	// Diamond: A → B, A → C, B → D, C → D
+	a := Action{Type: ActionFolderCreate, Path: "a", DriveID: driveID}
+	eng.depGraph.Add(&a, 1, nil)
+
+	b := Action{Type: ActionFolderCreate, Path: "a/b", DriveID: driveID}
+	eng.depGraph.Add(&b, 2, []int64{1})
+
+	c := Action{Type: ActionFolderCreate, Path: "a/c", DriveID: driveID}
+	eng.depGraph.Add(&c, 3, []int64{1})
+
+	d := Action{Type: ActionDownload, Path: "a/d.txt", DriveID: driveID, ItemID: "id"}
+	eng.depGraph.Add(&d, 4, []int64{2, 3})
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	// Fail parent A — B, C, and D should all be cascade-failed.
+	r := &WorkerResult{
+		Path:       "a",
+		DriveID:    driveID,
+		ActionType: ActionFolderCreate,
+		Success:    false,
+		ErrMsg:     "server error",
+		HTTPStatus: 500,
+		ActionID:   1,
+	}
+
+	dispatched := eng.processWorkerResult(ctx, r, bl)
+	assert.Empty(t, dispatched)
+
+	// All 4 actions should be completed — D completed exactly once.
+	assert.Equal(t, 0, eng.depGraph.InFlightCount(),
+		"diamond dependency must not strand any action")
+}
+
+// ---------------------------------------------------------------------------
 // DepGraph.Done
 // ---------------------------------------------------------------------------
 
@@ -294,7 +431,7 @@ func TestDepGraph_DoneClosesWhenAllComplete(t *testing.T) {
 	// Done should not be closed yet.
 	select {
 	case <-dg.Done():
-		t.Fatal("Done should not be closed before all actions complete")
+		require.Fail(t, "Done should not be closed before all actions complete")
 	default:
 	}
 
@@ -303,7 +440,7 @@ func TestDepGraph_DoneClosesWhenAllComplete(t *testing.T) {
 	// Still not done.
 	select {
 	case <-dg.Done():
-		t.Fatal("Done should not be closed with 1 action remaining")
+		require.Fail(t, "Done should not be closed with 1 action remaining")
 	default:
 	}
 
@@ -314,7 +451,7 @@ func TestDepGraph_DoneClosesWhenAllComplete(t *testing.T) {
 	case <-dg.Done():
 		// expected
 	case <-time.After(time.Second):
-		t.Fatal("Done should be closed when all actions are complete")
+		require.Fail(t, "Done should be closed when all actions are complete")
 	}
 }
 
@@ -384,7 +521,7 @@ func TestRetrierSweep_BatchLimit(t *testing.T) {
 	case <-eng.watch.retryTimerCh:
 		// Good — re-arm signal sent.
 	default:
-		t.Fatal("retryTimerCh should have a signal for remaining batch items")
+		require.Fail(t, "retryTimerCh should have a signal for remaining batch items")
 	}
 }
 

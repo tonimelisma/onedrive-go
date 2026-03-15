@@ -392,7 +392,7 @@ func TestRecordFailure_TransitionsDownloading(t *testing.T) {
 	var sfCount int
 	var sfError string
 	var sfHTTP int
-	var sfRetry *int64 // nullable — tracker handles retry, not sync_failures
+	var sfRetry *int64 // nullable — retrier handles retry, not sync_failures
 	err = mgr.rawDB().QueryRowContext(ctx,
 		"SELECT failure_count, last_error, http_status, next_retry_at FROM sync_failures WHERE path = ?",
 		"hello.txt",
@@ -401,7 +401,7 @@ func TestRecordFailure_TransitionsDownloading(t *testing.T) {
 	assert.Equal(t, 1, sfCount)
 	assert.Equal(t, "connection reset", sfError)
 	assert.Equal(t, 500, sfHTTP)
-	assert.Nil(t, sfRetry, "transient issues have no next_retry_at (tracker handles retry)")
+	assert.Nil(t, sfRetry, "transient issues have no next_retry_at (retrier handles retry)")
 }
 
 func TestRecordFailure_OptimisticConcurrency_NoMatch(t *testing.T) {
@@ -651,7 +651,7 @@ func TestRecordFailure_SetsIssueTypeAndScopeKey(t *testing.T) {
 }
 
 // TestRecordFailure_BackoffCalculation was removed: computeNextRetry is
-// deleted because the tracker is the sole retry mechanism (R-6.8.10).
+// deleted because the retrier is the sole retry mechanism (R-6.8.10).
 // sync_failures no longer drives retry scheduling.
 
 // ---------------------------------------------------------------------------
@@ -1012,6 +1012,49 @@ func TestResetFailure(t *testing.T) {
 	var sfCount int
 	err = mgr.rawDB().QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM sync_failures WHERE path = ?", "hello.txt",
+	).Scan(&sfCount)
+	require.NoError(t, err)
+	assert.Equal(t, 0, sfCount, "sync_failures row should be removed")
+}
+
+// Validates: R-2.10.1
+func TestResetFailure_DeleteFailedTransitionsToPendingDelete(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := context.Background()
+	nowNano := time.Now().UnixNano()
+
+	// Insert a delete_failed item.
+	_, err := mgr.rawDB().ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		VALUES (?, ?, ?, 'file', ?, ?)`,
+		testDriveID, "del-item", "deleted.txt", statusDeleteFailed, 999,
+	)
+	require.NoError(t, err)
+
+	// Insert corresponding sync_failures row.
+	_, err = mgr.rawDB().ExecContext(ctx,
+		`INSERT INTO sync_failures (path, drive_id, direction, category, failure_count,
+			next_retry_at, last_error, first_seen_at, last_seen_at)
+		VALUES (?, ?, 'delete', 'transient', 3, 9999, 'delete failed', ?, ?)`,
+		"deleted.txt", testDriveID, nowNano, nowNano,
+	)
+	require.NoError(t, err)
+
+	err = mgr.ResetFailure(ctx, "deleted.txt")
+	require.NoError(t, err)
+
+	// delete_failed should transition to pending_delete (NOT pending_download).
+	row := readRemoteStateRow(t, mgr.rawDB(), "del-item")
+	require.NotNil(t, row)
+	assert.Equal(t, statusPendingDelete, row.SyncStatus,
+		"delete_failed must transition to pending_delete, not pending_download")
+
+	// sync_failures row should be deleted.
+	var sfCount int
+	err = mgr.rawDB().QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM sync_failures WHERE path = ?", "deleted.txt",
 	).Scan(&sfCount)
 	require.NoError(t, err)
 	assert.Equal(t, 0, sfCount, "sync_failures row should be removed")
