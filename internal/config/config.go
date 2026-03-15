@@ -74,7 +74,6 @@ type BandwidthScheduleEntry struct {
 type SafetyConfig struct {
 	BigDeleteThreshold        int    `toml:"big_delete_threshold"`
 	MinFreeSpace              string `toml:"min_free_space"`
-	UseRecycleBin             bool   `toml:"use_recycle_bin"`
 	UseLocalTrash             bool   `toml:"use_local_trash"`
 	DisableDownloadValidation bool   `toml:"disable_download_validation"`
 	DisableUploadValidation   bool   `toml:"disable_upload_validation"`

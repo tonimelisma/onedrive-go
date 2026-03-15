@@ -26,7 +26,7 @@ var knownGlobalKeys = map[string]bool{
 	"parallel_downloads": true, "parallel_uploads": true, "parallel_checkers": true,
 	// Safety settings
 	"big_delete_threshold": true,
-	"min_free_space":       true, "use_recycle_bin": true, "use_local_trash": true,
+	"min_free_space":       true, "use_local_trash": true,
 	"disable_download_validation": true, "disable_upload_validation": true,
 	"sync_dir_permissions": true, "sync_file_permissions": true,
 	// Sync settings

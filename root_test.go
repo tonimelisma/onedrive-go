@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // --- buildLogger tests ---
@@ -358,10 +360,20 @@ func TestDefaultHTTPClient_HasTimeout(t *testing.T) {
 	assert.NotNil(t, client.Transport, "should have RetryTransport")
 }
 
+// Validates: R-6.2.10
 func TestTransferHTTPClient_NoTimeout(t *testing.T) {
 	client := transferHTTPClient(slog.Default())
-	assert.Zero(t, client.Timeout)
+	assert.Zero(t, client.Timeout, "client-level timeout must be zero for large transfers")
 	assert.NotNil(t, client.Transport, "should have RetryTransport")
+
+	// Unwrap RetryTransport to verify transport-level protection.
+	rt, ok := client.Transport.(*retry.RetryTransport)
+	require.True(t, ok, "transport should be *retry.RetryTransport")
+
+	inner, ok := rt.Inner.(*http.Transport)
+	require.True(t, ok, "inner transport should be *http.Transport")
+	assert.Equal(t, transferResponseHeaderTimeout, inner.ResponseHeaderTimeout,
+		"transport must have ResponseHeaderTimeout to detect stalled connections")
 }
 
 func TestSyncMetaHTTPClient_NoRetryTransport(t *testing.T) {
@@ -370,10 +382,17 @@ func TestSyncMetaHTTPClient_NoRetryTransport(t *testing.T) {
 	assert.Nil(t, client.Transport, "sync client should have no RetryTransport")
 }
 
+// Validates: R-6.2.10
 func TestSyncTransferHTTPClient_NoRetryTransport(t *testing.T) {
 	client := syncTransferHTTPClient()
-	assert.Zero(t, client.Timeout)
-	assert.Nil(t, client.Transport, "sync client should have no RetryTransport")
+	assert.Zero(t, client.Timeout, "client-level timeout must be zero for large transfers")
+
+	// syncTransferHTTPClient has no RetryTransport but still needs
+	// transport-level protection via transferTransport().
+	inner, ok := client.Transport.(*http.Transport)
+	require.True(t, ok, "transport should be *http.Transport with ResponseHeaderTimeout")
+	assert.Equal(t, transferResponseHeaderTimeout, inner.ResponseHeaderTimeout,
+		"transport must have ResponseHeaderTimeout to detect stalled connections")
 }
 
 // --- loadAndResolve tests ---

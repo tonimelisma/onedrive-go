@@ -51,7 +51,6 @@ transfer_order = "size_asc"
 
 big_delete_threshold = 500
 min_free_space = "2GB"
-use_recycle_bin = false
 use_local_trash = false
 disable_download_validation = true
 disable_upload_validation = true
@@ -97,7 +96,6 @@ force_http_11 = true
 
 	assert.Equal(t, 500, cfg.BigDeleteThreshold)
 	assert.Equal(t, "2GB", cfg.MinFreeSpace)
-	assert.False(t, cfg.UseRecycleBin)
 	assert.False(t, cfg.UseLocalTrash)
 	assert.True(t, cfg.DisableDownloadValidation)
 	assert.True(t, cfg.DisableUploadValidation)

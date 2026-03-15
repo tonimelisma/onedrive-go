@@ -23,10 +23,14 @@ func syncMetaHTTPClient() *http.Client {
 }
 
 // syncTransferHTTPClient returns an HTTP client for sync transfers. Same
-// rationale as syncMetaHTTPClient — no RetryTransport. Large file transfers
-// are bounded by context cancellation instead of timeout.
+// rationale as syncMetaHTTPClient — no RetryTransport. No client-level
+// timeout. Connection-level protection via transferTransport()
+// (ResponseHeaderTimeout + TCP keepalives) prevents indefinite hangs.
 func syncTransferHTTPClient() *http.Client {
-	return &http.Client{Timeout: 0}
+	return &http.Client{
+		Timeout:   0,
+		Transport: transferTransport(),
+	}
 }
 
 func newSyncCmd() *cobra.Command {

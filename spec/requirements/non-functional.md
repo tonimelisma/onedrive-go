@@ -24,7 +24,7 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.2.7: (S7) The system shall never upload partial or temporary files (filter cascade excludes temp patterns). [verified]
 - R-6.2.8: File operations (ls, get, put, rm, mkdir, stat, mv, cp) shall work independently of sync state — no sync database involved. [verified]
 - R-6.2.9: The system shall support configurable file permissions (`sync_file_permissions`) and directory permissions (`sync_dir_permissions`) for synced content. [verified]
-- R-6.2.10: When a transfer connection stalls without context cancellation, the system shall enforce a per-transfer timeout or connection-level deadline to prevent indefinite hangs. [planned]
+- R-6.2.10: When a transfer connection stalls without context cancellation, the system shall enforce a per-transfer timeout or connection-level deadline to prevent indefinite hangs. [implemented]
 
 ## R-6.3 Process Model [verified]
 
@@ -37,12 +37,11 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.4.1: When a one-shot sync would delete more items than `big_delete_threshold` (default: 1000), the system shall abort and require `--force`. Single absolute count threshold — no percentage or per-folder checks. [verified]
 - R-6.4.2: In watch mode, when more than `big_delete_threshold` delete actions accumulate within a rolling 5-minute window, the system shall hold all pending delete actions while continuing non-delete operations. Held deletes shall be surfaced via `onedrive-go issues` and released when the user clears all big-delete-held entries via `issues clear`. [verified]
 - R-6.4.3: The `big_delete_threshold` config setting shall be threaded from user configuration to the sync engine; the system shall not silently use hardcoded defaults. [verified]
-- R-6.4.4: Remote deletions shall go to the OneDrive recycle bin by default (`use_recycle_bin`). [verified]
+- R-6.4.4: Remote deletions shall go to the OneDrive recycle bin by default. [verified]
 - R-6.4.5: Local deletions triggered by remote changes shall go to OS trash on macOS (`use_local_trash`). [verified]
 - R-6.4.6: On Linux, local trash shall be opt-in (default off; servers/NAS typically lack XDG trash). [verified]
 - R-6.4.7: The system shall support configurable disk space reservation (`min_free_space`, default 1 GB). When available space falls below this threshold, downloads shall be scope-blocked. Set to 0 to disable. [verified]
 - R-6.4.8: All local filesystem writes shall be confined to the sync root directory. The executor validates resolved paths via `containedPath()` to prevent escape from path reconstruction bugs. [verified]
-- R-6.4.9: When a requested permanent deletion fails (e.g., National Clouds that do not support it), the system shall fall back to recycle bin deletion. [planned]
 
 ## R-6.5 Crash Recovery [verified]
 
