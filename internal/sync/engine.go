@@ -143,6 +143,11 @@ type watchState struct {
 
 	// Deduplication: caches last actionable issue count for watch summaries.
 	lastSummaryTotal int
+
+	// Async reconciliation guard — prevents concurrent full reconciliations.
+	// CompareAndSwap(false, true) at start, Store(false) in defer.
+	// Zero value (false) is the correct initial state.
+	reconcileRunning atomic.Bool
 }
 
 // Engine orchestrates a complete sync pass: observe → plan → execute → commit.
@@ -1150,11 +1155,8 @@ func (e *Engine) initWatchInfra(
 	}, nil
 }
 
-// bootstrapTimeout is the maximum time bootstrapSync will wait for all
-// in-flight actions to complete. Prevents infinite hangs from lost results.
-const bootstrapTimeout = 30 * time.Minute
-
-// quiescenceLogInterval is how often bootstrapSync logs while waiting.
+// quiescenceLogInterval is how often bootstrapSync logs while waiting
+// for in-flight actions to complete.
 const quiescenceLogInterval = 30 * time.Second
 
 // bootstrapSync performs the initial sync using the watch pipeline. Unlike
@@ -1219,12 +1221,16 @@ func (e *Engine) bootstrapSync(ctx context.Context, mode SyncMode, pipe *watchPi
 
 // waitForQuiescence blocks until all in-flight actions in the DepGraph
 // complete. Used by bootstrapSync to ensure the initial sync finishes
-// before starting observers. Safety timeout prevents infinite hangs.
+// before starting observers. Returns when the graph empties or the
+// context is canceled (SIGTERM/SIGINT).
+//
+// No timeout: every dispatched action produces exactly one WorkerResult
+// (worker.go guarantees this), drainWorkerResults reads every result,
+// and processWorkerResult calls depGraph.Complete for every result.
+// There is no code path where an action enters the DepGraph without
+// being completed. Context cancellation handles daemon shutdown.
 func (e *Engine) waitForQuiescence(ctx context.Context) error {
 	emptyCh := e.depGraph.WaitForEmpty()
-
-	timer := time.NewTimer(bootstrapTimeout)
-	defer timer.Stop()
 
 	ticker := time.NewTicker(quiescenceLogInterval)
 	defer ticker.Stop()
@@ -1237,9 +1243,6 @@ func (e *Engine) waitForQuiescence(ctx context.Context) error {
 			e.logger.Info("bootstrap: waiting for in-flight actions",
 				slog.Int("in_flight", e.depGraph.InFlightCount()),
 			)
-		case <-timer.C:
-			return fmt.Errorf("sync: bootstrap timed out after %v with %d actions in-flight",
-				bootstrapTimeout, e.depGraph.InFlightCount())
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -1266,7 +1269,7 @@ func (e *Engine) runWatchLoop(ctx context.Context, p *watchPipeline) error {
 			e.handleRecheckTick(ctx)
 
 		case <-p.reconcileC:
-			e.runFullReconciliation(ctx, p.bl, p.mode, p.safety)
+			e.runFullReconciliationAsync(ctx, p.bl)
 
 		case obsErr := <-p.errs:
 			if obsErr != nil {
@@ -3528,65 +3531,86 @@ func (e *Engine) initReconcileTicker(opts WatchOpts) (<-chan time.Time, func()) 
 	return ticker.C, ticker.Stop
 }
 
-// runFullReconciliation performs a full delta enumeration + orphan detection,
-// then feeds the resulting events through the normal planner + executor
-// pipeline. Called periodically in watch mode to recover from missed delta
-// deletions.
-func (e *Engine) runFullReconciliation(
-	ctx context.Context, bl *Baseline, mode SyncMode, safety *SafetyConfig,
-) {
-	e.logger.Info("periodic full reconciliation starting")
-
-	events, deltaToken, err := e.observeRemoteFull(ctx, bl)
-	if err != nil {
-		e.logger.Error("full reconciliation failed",
-			slog.String("error", err.Error()),
-		)
-
+// runFullReconciliationAsync spawns a goroutine for full delta enumeration +
+// orphan detection. Non-blocking — the watch loop continues processing events
+// while reconciliation runs. Events are fed into the watch buffer so they flow
+// through the normal pipeline (FlushDebounced → processBatch).
+//
+// Concurrency safety:
+//   - reconcileRunning atomic.Bool prevents overlapping reconciliations
+//   - SQLite WAL mode serializes CommitObservation + CommitOutcome
+//   - Buffer.Add is mutex-protected (buffer.go:41)
+//   - Planner is idempotent on duplicate events
+//   - DepGraph.HasInFlight + CancelByPath prevent duplicate dispatch
+func (e *Engine) runFullReconciliationAsync(ctx context.Context, bl *Baseline) {
+	if !e.watch.reconcileRunning.CompareAndSwap(false, true) {
+		e.logger.Debug("full reconciliation skipped — previous still running")
 		return
 	}
 
-	// Commit observations and delta token.
-	observed := changeEventsToObservedItems(events)
-	if commitErr := e.baseline.CommitObservation(ctx, observed, deltaToken, e.driveID); commitErr != nil {
-		e.logger.Error("failed to commit full reconciliation observations",
-			slog.String("error", commitErr.Error()),
+	go func() {
+		defer e.watch.reconcileRunning.Store(false)
+
+		e.logger.Info("periodic full reconciliation starting")
+
+		events, deltaToken, err := e.observeRemoteFull(ctx, bl)
+		if err != nil {
+			// Suppress error logging during shutdown — context cancellation
+			// is expected when the daemon is stopping.
+			if ctx.Err() == nil {
+				e.logger.Error("full reconciliation failed",
+					slog.String("error", err.Error()),
+				)
+			}
+
+			return
+		}
+
+		// Commit observations and delta token.
+		observed := changeEventsToObservedItems(events)
+		if commitErr := e.baseline.CommitObservation(
+			ctx, observed, deltaToken, e.driveID,
+		); commitErr != nil {
+			e.logger.Error("failed to commit full reconciliation observations",
+				slog.String("error", commitErr.Error()),
+			)
+
+			return
+		}
+
+		// Filter out shortcut events and process shortcut scopes.
+		events = filterOutShortcuts(events)
+
+		shortcutEvents, scErr := e.reconcileShortcutScopes(ctx, bl)
+		if scErr != nil {
+			e.logger.Warn("shortcut reconciliation failed during full reconciliation",
+				slog.String("error", scErr.Error()),
+			)
+		}
+
+		events = append(events, shortcutEvents...)
+
+		if len(events) == 0 {
+			e.logger.Info("periodic full reconciliation complete: no changes")
+			return
+		}
+
+		// Feed events into the watch buffer — they flow through
+		// FlushDebounced → processBatch in the watch loop. This avoids
+		// calling processBatch directly from this goroutine, which would
+		// race with the watch loop's own processBatch calls.
+		for i := range events {
+			e.watch.buf.Add(&events[i])
+		}
+
+		// Refresh watch shortcuts — reconcileShortcutScopes may have
+		// added or removed shortcuts.
+		if refreshed, refreshErr := e.baseline.ListShortcuts(ctx); refreshErr == nil {
+			e.setWatchShortcuts(refreshed)
+		}
+
+		e.logger.Info("periodic full reconciliation complete",
+			slog.Int("events", len(events)),
 		)
-
-		return
-	}
-
-	// Filter out shortcut events and process shortcut scopes.
-	events = filterOutShortcuts(events)
-
-	shortcutEvents, scErr := e.reconcileShortcutScopes(ctx, bl)
-	if scErr != nil {
-		e.logger.Warn("shortcut reconciliation failed during full reconciliation",
-			slog.String("error", scErr.Error()),
-		)
-	}
-
-	events = append(events, shortcutEvents...)
-
-	// Buffer and flush through the normal pipeline.
-	buf := NewBuffer(e.logger)
-	buf.AddAll(events)
-	batch := buf.FlushImmediate()
-
-	if len(batch) == 0 {
-		e.logger.Info("periodic full reconciliation complete: no changes")
-		return
-	}
-
-	e.processBatch(ctx, batch, bl, mode, safety)
-
-	// Refresh watch shortcuts after reconciliation — reconcileShortcutScopes
-	// may have added or removed shortcuts.
-	if refreshed, refreshErr := e.baseline.ListShortcuts(ctx); refreshErr == nil {
-		e.setWatchShortcuts(refreshed)
-	}
-
-	e.logger.Info("periodic full reconciliation complete",
-		slog.Int("paths", len(batch)),
-	)
+	}()
 }

@@ -22,7 +22,7 @@ Watch mode uses a unified tick loop: filesystem events are debounced by the chan
 3. **`startObservers`** launches remote and local observers AFTER bootstrap — they see the post-bootstrap baseline.
 4. **`runWatchLoop`** runs the steady-state select loop.
 
-**`waitForQuiescence`** blocks until `DepGraph.WaitForEmpty()` fires, with a 30-minute safety timeout and periodic progress logging. `WaitForEmpty` is a one-shot channel: closed when `len(actions) == 0` after `Complete()` deletes an entry.
+**`waitForQuiescence`** blocks until `DepGraph.WaitForEmpty()` fires, with periodic progress logging (30s interval). No timeout — every dispatched action produces exactly one `WorkerResult`, so the DepGraph always drains. Context cancellation (SIGTERM/SIGINT) handles shutdown. `WaitForEmpty` is a one-shot channel: closed when `len(actions) == 0` after `Complete()` deletes an entry.
 
 **Why not RunOnce?** The old approach created throwaway infrastructure (DepGraph, workers, readyCh) in `RunOnce`, then `initWatchPipeline` created a completely new set. Unified bootstrap creates infrastructure once and reuses it for both the initial sync and steady-state.
 
@@ -186,7 +186,17 @@ Cobra command wiring. Sets up the orchestrator, handles `--watch`, `--download-o
 - SIGHUP → reload `config.toml`, apply drive changes immediately
 - PID file with flock for single-instance enforcement
 - Two-signal shutdown (drain, then force)
-- Periodic full reconciliation (default 24h)
+- Periodic full reconciliation (default 24h, async — see below)
+
+### Async Full Reconciliation (Engine Pipeline Redesign Phase 10)
+
+`runFullReconciliationAsync` spawns a goroutine for full delta enumeration + orphan detection. Non-blocking — the watch loop continues processing events while reconciliation runs.
+
+**Event flow**: Events are fed into the watch buffer via `buf.Add()` (mutex-protected), then flow through `FlushDebounced → processBatch` in the watch loop. This avoids calling `processBatch` directly from the goroutine, which would race with the watch loop's own `processBatch` calls.
+
+**Concurrency guard**: `watchState.reconcileRunning` (`atomic.Bool`) prevents overlapping reconciliations. `CompareAndSwap(false, true)` at entry; `Store(false)` in defer. If a previous reconciliation is still running when the next tick fires, it is skipped.
+
+**Shutdown awareness**: Error logging is suppressed when `ctx.Err() != nil` — context cancellation during shutdown is not a terminal failure.
 
 ### Watch-Mode Big-Delete Protection (`delete_counter.go`)
 
