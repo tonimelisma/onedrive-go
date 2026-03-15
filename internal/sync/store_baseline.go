@@ -454,6 +454,9 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx *sql.Tx, o *Outcome) err
 		return nil
 	}
 
+	// Note: sync_failures cleanup is handled exclusively by the engine's
+	// clearFailureOnSuccess method (D-6). The store owns only baseline and
+	// remote_state commits.
 	switch o.Action { //nolint:exhaustive // only action types that touch remote_state
 	case ActionDownload:
 		// Hash guard: only transition if the remote_state hash matches the
@@ -469,13 +472,6 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx *sql.Tx, o *Outcome) err
 			return fmt.Errorf("sync: updating remote_state for download %s: %w", o.Path, err)
 		}
 
-		// Clear any prior sync_failures for this path on download success.
-		if _, delErr := tx.ExecContext(ctx,
-			`DELETE FROM sync_failures WHERE path = ?`, o.Path,
-		); delErr != nil {
-			return fmt.Errorf("sync: clearing sync failure on download success for %s: %w", o.Path, delErr)
-		}
-
 	case ActionLocalDelete:
 		_, err := tx.ExecContext(ctx,
 			`UPDATE remote_state SET sync_status = ?
@@ -485,13 +481,6 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx *sql.Tx, o *Outcome) err
 		)
 		if err != nil {
 			return fmt.Errorf("sync: updating remote_state for local delete %s: %w", o.Path, err)
-		}
-
-		// Clear any prior sync_failures for this path on delete success.
-		if _, delErr := tx.ExecContext(ctx,
-			`DELETE FROM sync_failures WHERE path = ?`, o.Path,
-		); delErr != nil {
-			return fmt.Errorf("sync: clearing sync failure on delete success for %s: %w", o.Path, delErr)
 		}
 
 	case ActionUpload, ActionFolderCreate:
@@ -506,16 +495,6 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx *sql.Tx, o *Outcome) err
 			return fmt.Errorf("sync: updating remote_state for upload %s: %w", o.Path, err)
 		}
 
-		// Clear any prior sync_failures for this path on upload success. Uses
-		// path-only match because the failure may have been recorded with an
-		// empty drive_id (CLI, pre-migration data) while the outcome has a
-		// real drive_id. A successful upload resolves all prior failures.
-		if _, delErr := tx.ExecContext(ctx,
-			`DELETE FROM sync_failures WHERE path = ?`, o.Path,
-		); delErr != nil {
-			return fmt.Errorf("sync: clearing sync failure on upload success for %s: %w", o.Path, delErr)
-		}
-
 	case ActionLocalMove, ActionRemoteMove:
 		// Move success: update path and mark synced.
 		_, err := tx.ExecContext(ctx,
@@ -526,13 +505,6 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx *sql.Tx, o *Outcome) err
 		)
 		if err != nil {
 			return fmt.Errorf("sync: updating remote_state for move %s: %w", o.Path, err)
-		}
-
-		// Clear any prior sync_failures for this path on move success.
-		if _, delErr := tx.ExecContext(ctx,
-			`DELETE FROM sync_failures WHERE path = ?`, o.Path,
-		); delErr != nil {
-			return fmt.Errorf("sync: clearing sync failure on move success for %s: %w", o.Path, delErr)
 		}
 	}
 

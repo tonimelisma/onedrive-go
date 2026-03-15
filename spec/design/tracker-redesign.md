@@ -1,6 +1,6 @@
 # Scope & Tracker Redesign
 
-**Status**: In Progress (Phases 1-5 done — DepTracker replaced by DepGraph + ScopeGate, drain-loop retrier, tracker.go and reconciler.go deleted)
+**Status**: Complete (all phases done — DepTracker replaced by DepGraph + ScopeGate, drain-loop retrier, shortcut enrichment, sync_failures ownership)
 **Scope**: `internal/sync/dep_graph.go`, `internal/sync/scope_gate.go`, `internal/sync/engine.go`, `internal/sync/scope.go`, `internal/sync/planner.go`, `internal/sync/worker.go`, `internal/sync/engine_shortcuts.go`, `internal/sync/store_failures.go`, `internal/sync/store_admin.go`
 **Governs**: All files currently governed by sync-execution.md's Tracker and Executor sections
 **Continued by**: `engine-pipeline-redesign.md` (Phases 8-11 — watchState, bootstrap, async reconciliation). That document depends on this one completing through Phase 5.
@@ -858,17 +858,17 @@ Independent. Can be done first (see ordering note above).
 4. ~~Delete `dispatchedRetryAt` dedup map~~ — deleted
 5. ~~Keep `InFlightChecker` interface (or move to engine)~~ — resolved
 
-### Phase 6: Shortcut Enrichment (D-5)
+### ~~Phase 6: Shortcut Enrichment (D-5)~~
 
-1. Add `RemoteDriveID`, `RemoteItemID` to `RemoteState`
-2. Populate in `remoteStateFromEvent()` and `makeAction()`
-3. Tests for shortcut scope blocking
+1. ~~Add `RemoteDriveID`, `RemoteItemID` to `RemoteState`~~ — done
+2. ~~Populate in `remoteStateFromEvent()` and `makeAction()`~~ — done
+3. ~~Tests for shortcut scope blocking~~ — done: item_converter_test.go + planner_test.go
 
-### Phase 7: sync_failures Ownership (D-6)
+### ~~Phase 7: sync_failures Ownership (D-6)~~
 
-1. Remove `DELETE FROM sync_failures` from `updateRemoteStateOnOutcome()`
-2. Rename `defensiveClearFailure` → `clearFailureOnSuccess`
-3. Update design docs
+1. ~~Remove `DELETE FROM sync_failures` from `updateRemoteStateOnOutcome()`~~ — 4 blocks removed
+2. ~~Rename `defensiveClearFailure` → `clearFailureOnSuccess`~~ — done
+3. ~~Update design docs~~ — done
 
 ---
 

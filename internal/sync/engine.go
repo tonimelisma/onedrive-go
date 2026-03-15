@@ -396,7 +396,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 	}
 
 	// Step 6: Plan actions.
-	safety := e.resolveSafetyConfig(opts)
+	safety := e.resolveSafetyConfig(opts.Force)
 	denied := e.permCache.deniedPrefixes()
 
 	plan, err := e.planner.Plan(changes, bl, mode, safety, denied)
@@ -797,11 +797,12 @@ func changeEventsToObservedItems(events []ChangeEvent) []ObservedItem {
 	return items
 }
 
-// resolveSafetyConfig returns the appropriate SafetyConfig based on RunOpts.
-// When Force is true, the threshold is set to MaxInt32 (effectively disabled).
-// Otherwise, uses the engine's configured threshold from config.
-func (e *Engine) resolveSafetyConfig(opts RunOpts) *SafetyConfig {
-	if opts.Force {
+// resolveSafetyConfig returns the appropriate SafetyConfig. The planner-level
+// big-delete check is disabled (threshold=MaxInt32) when force is set or when
+// the engine has a deleteCounter (watch mode — the rolling counter handles
+// big-delete protection instead).
+func (e *Engine) resolveSafetyConfig(force bool) *SafetyConfig {
+	if force || e.deleteCounter != nil {
 		return &SafetyConfig{
 			BigDeleteThreshold: forceSafetyMax,
 		}
@@ -1113,7 +1114,7 @@ func (e *Engine) initWatchPipeline(
 
 	return &watchPipeline{
 		bl:         bl,
-		safety:     e.resolveWatchSafetyConfig(opts),
+		safety:     e.resolveSafetyConfig(opts.Force),
 		ready:      ready,
 		errs:       errs,
 		skippedCh:  skippedCh,
@@ -1731,7 +1732,7 @@ func (e *Engine) applyResultSideEffects(ctx context.Context, class resultClass, 
 	switch class {
 	case resultSuccess:
 		e.succeeded.Add(1)
-		e.defensiveClearFailure(ctx, r)
+		e.clearFailureOnSuccess(ctx, r)
 		if e.scopeState != nil {
 			e.scopeState.RecordSuccess(r)
 		}
@@ -2404,11 +2405,10 @@ func (e *Engine) logFailureSummary() {
 	}
 }
 
-// defensiveClearFailure removes any stale sync_failures row for a
-// successfully completed action. CommitOutcome (worker.go) already deletes
-// the row inside its transaction, but this guards against edge cases where
-// the worker path was bypassed or interrupted.
-func (e *Engine) defensiveClearFailure(ctx context.Context, r *WorkerResult) {
+// clearFailureOnSuccess removes the sync_failures row for a successfully
+// completed action. The engine owns failure lifecycle — store_baseline's
+// CommitOutcome handles only baseline/remote_state updates (D-6).
+func (e *Engine) clearFailureOnSuccess(ctx context.Context, r *WorkerResult) {
 	driveID := r.DriveID
 	if driveID.String() == "" {
 		driveID = e.driveID
@@ -3006,18 +3006,6 @@ func (e *Engine) resolveDebounce(opts WatchOpts) time.Duration {
 	}
 
 	return defaultDebounce
-}
-
-// resolveWatchSafetyConfig returns the safety config for watch mode.
-// In watch mode, the planner's big-delete check is disabled (threshold=MaxInt32)
-// because the rolling deleteCounter handles protection instead.
-// When Force is also set, both are disabled.
-func (e *Engine) resolveWatchSafetyConfig(_ WatchOpts) *SafetyConfig {
-	// Watch mode always disables the planner-level check — the rolling
-	// deleteCounter in processBatch handles big-delete protection instead.
-	return &SafetyConfig{
-		BigDeleteThreshold: forceSafetyMax,
-	}
 }
 
 // isDeleteAction returns true if the action type is a local or remote delete.

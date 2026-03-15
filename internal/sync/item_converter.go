@@ -58,6 +58,14 @@ type itemConverter struct {
 	// shortcuts — within a shortcut scope, these are nested shortcuts and
 	// are skipped instead.
 	enableShortcutDetect bool
+
+	// shortcutDriveID and shortcutItemID identify the shortcut scope's
+	// source drive and folder. Set for shortcut converters, empty for
+	// primary drive. Propagated to content ChangeEvents so the planner
+	// can populate Action.targetShortcutKey for scope-based failure
+	// handling (D-5, R-6.8.12, R-6.8.13).
+	shortcutDriveID string
+	shortcutItemID  string
 }
 
 // newPrimaryConverter creates an itemConverter for primary drive observation.
@@ -88,6 +96,8 @@ func newShortcutConverter(baseline *Baseline, remoteDriveID driveid.ID, logger *
 		pathPrefix:          sc.LocalPath,
 		scopeRootID:         sc.RemoteItem,
 		skipNestedShortcuts: true,
+		shortcutDriveID:     sc.RemoteDrive,
+		shortcutItemID:      sc.RemoteItem,
 	}
 }
 
@@ -198,18 +208,20 @@ func (c *itemConverter) classifyAndConvert(
 	}
 
 	ev := ChangeEvent{
-		Source:    SourceRemote,
-		ItemID:    item.ID,
-		ParentID:  item.ParentID,
-		DriveID:   itemDriveID,
-		ItemType:  classifyItemType(item),
-		Name:      name,
-		Size:      item.Size,
-		Hash:      hash,
-		Mtime:     toUnixNano(item.ModifiedAt),
-		ETag:      item.ETag,
-		CTag:      item.CTag,
-		IsDeleted: item.IsDeleted,
+		Source:        SourceRemote,
+		ItemID:        item.ID,
+		ParentID:      item.ParentID,
+		DriveID:       itemDriveID,
+		ItemType:      classifyItemType(item),
+		Name:          name,
+		Size:          item.Size,
+		Hash:          hash,
+		Mtime:         toUnixNano(item.ModifiedAt),
+		ETag:          item.ETag,
+		CTag:          item.CTag,
+		IsDeleted:     item.IsDeleted,
+		RemoteDriveID: c.shortcutDriveID,
+		RemoteItemID:  c.shortcutItemID,
 	}
 
 	switch {

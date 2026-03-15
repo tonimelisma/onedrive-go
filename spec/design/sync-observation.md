@@ -22,7 +22,7 @@ Key properties:
 The `itemConverter` struct is the single code path for converting `[]graph.Item` into `[]ChangeEvent`. Both the primary drive observer (`RemoteObserver.fetchPage`) and shortcut observation (`convertShortcutItems`) delegate to it with different configuration:
 
 - **Primary drive** (`newPrimaryConverter`): vault exclusion enabled, shortcut detection enabled, no path prefix
-- **Shortcut scope** (`newShortcutConverter`): path prefix set to shortcut's local path, scope root ID set (items with this ID are skipped), nested shortcut skip enabled
+- **Shortcut scope** (`newShortcutConverter`): path prefix set to shortcut's local path, scope root ID set (items with this ID are skipped), nested shortcut skip enabled, `shortcutDriveID`/`shortcutItemID` set from Shortcut fields — propagated to all content ChangeEvents as `RemoteDriveID`/`RemoteItemID` for downstream scope identification (D-5)
 
 Key properties:
 - Two-pass processing: register all items in inflight map, then classify (handles child-before-parent ordering)

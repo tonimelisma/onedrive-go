@@ -51,6 +51,8 @@ func TestNewShortcutConverter_EnablesShortcutBehavior(t *testing.T) {
 	assert.Equal(t, "Shared/TeamDocs", c.pathPrefix, "shortcut converter should set path prefix")
 	assert.Equal(t, "source-folder-1", c.scopeRootID, "shortcut converter should set scope root")
 	assert.True(t, c.skipNestedShortcuts, "shortcut converter should skip nested shortcuts")
+	assert.Equal(t, "0000000000000099", c.shortcutDriveID, "shortcut converter should set shortcutDriveID")
+	assert.Equal(t, "source-folder-1", c.shortcutItemID, "shortcut converter should set shortcutItemID")
 }
 
 // ---------------------------------------------------------------------------
@@ -663,4 +665,60 @@ func TestShortcutConverter_VaultItemsPassThrough(t *testing.T) {
 	events := convertShortcutItems(items, sc, remoteDriveID, emptyBaseline(), testLogger(t))
 
 	assert.Len(t, events, 2, "vault items should pass through in shortcut scope")
+}
+
+// ---------------------------------------------------------------------------
+// D-5: Shortcut identity propagation tests
+// ---------------------------------------------------------------------------
+
+// Validates: R-6.8.12, R-6.8.13
+func TestShortcutConverter_ContentEventsCarryShortcutIdentity(t *testing.T) {
+	t.Parallel()
+
+	remoteDriveID := driveid.New("0000000000000099")
+
+	sc := &Shortcut{
+		ItemID:      "sc-1",
+		RemoteDrive: "0000000000000099",
+		RemoteItem:  "source-folder-1",
+		LocalPath:   "Shared/TeamDocs",
+	}
+
+	items := []graph.Item{
+		{ID: "f1", Name: "report.txt", ParentID: "source-folder-1", DriveID: remoteDriveID, Size: 100},
+		{ID: "d1", Name: "SubDir", ParentID: "source-folder-1", DriveID: remoteDriveID, IsFolder: true},
+	}
+
+	events := convertShortcutItems(items, sc, remoteDriveID, emptyBaseline(), testLogger(t))
+
+	require.Len(t, events, 2)
+	for _, ev := range events {
+		assert.Equal(t, "0000000000000099", ev.RemoteDriveID,
+			"shortcut content event should carry RemoteDriveID")
+		assert.Equal(t, "source-folder-1", ev.RemoteItemID,
+			"shortcut content event should carry RemoteItemID")
+	}
+}
+
+// Validates: R-6.8.12, R-6.8.13
+func TestPrimaryConverter_ContentEventsHaveEmptyShortcutIdentity(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(testDriveID)
+	bl := emptyBaseline()
+	c := newPrimaryConverter(bl, driveID, testLogger(t), &observerCounters{})
+
+	inflight := map[driveid.ItemKey]inflightParent{
+		driveid.NewItemKey(driveID, "root"): {name: "", isRoot: true},
+	}
+
+	item := &graph.Item{
+		ID: "f1", Name: "own-file.txt", ParentID: "root",
+		DriveID: driveID, Size: 256,
+	}
+
+	ev := c.classifyItem(item, inflight)
+	require.NotNil(t, ev)
+	assert.Empty(t, ev.RemoteDriveID, "primary drive events should have empty RemoteDriveID")
+	assert.Empty(t, ev.RemoteItemID, "primary drive events should have empty RemoteItemID")
 }

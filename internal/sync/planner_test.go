@@ -1857,6 +1857,67 @@ func TestMakeAction_BaselineFallbackDriveID(t *testing.T) {
 	assert.Equal(t, driveid.New(testDriveID), action.DriveID, "DriveID from Baseline")
 }
 
+// Validates: R-6.8.12, R-6.8.13
+func TestMakeAction_ShortcutEnrichment(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		remote          *RemoteState
+		wantOwnDrive    bool
+		wantShortcutKey string
+		wantTargetDrive driveid.ID
+	}{
+		{
+			name: "own-drive item has empty shortcut fields",
+			remote: &RemoteState{
+				ItemID:   "item-1",
+				DriveID:  driveid.New(testDriveID),
+				ItemType: ItemTypeFile,
+			},
+			wantOwnDrive:    true,
+			wantShortcutKey: "",
+			wantTargetDrive: driveid.ID{},
+		},
+		{
+			name: "shortcut item has populated shortcut fields",
+			remote: &RemoteState{
+				ItemID:        "item-2",
+				DriveID:       driveid.New(testDriveID),
+				ItemType:      ItemTypeFile,
+				RemoteDriveID: "0000000000000099",
+				RemoteItemID:  "source-folder-1",
+			},
+			wantOwnDrive:    false,
+			wantShortcutKey: "0000000000000099:source-folder-1",
+			wantTargetDrive: driveid.New("0000000000000099"),
+		},
+		{
+			name:            "nil remote has empty shortcut fields",
+			remote:          nil,
+			wantOwnDrive:    true,
+			wantShortcutKey: "",
+			wantTargetDrive: driveid.ID{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			view := &PathView{
+				Path:   "test-file.txt",
+				Remote: tt.remote,
+			}
+
+			action := makeAction(ActionDownload, view)
+
+			assert.Equal(t, tt.wantOwnDrive, action.TargetsOwnDrive(), "TargetsOwnDrive()")
+			assert.Equal(t, tt.wantShortcutKey, action.ShortcutKey(), "ShortcutKey()")
+			assert.Equal(t, tt.wantTargetDrive, action.TargetDriveID(), "TargetDriveID()")
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Helper function unit tests
 // ---------------------------------------------------------------------------
