@@ -440,15 +440,13 @@ func (e *Engine) handleLocalPermission(ctx context.Context, r *WorkerResult) {
 		)
 	}
 
-	// Create a scope block to hold all actions under this directory.
-	// TrialInterval=0 and NextTrialAt=zero: no trials — rechecked per-pass
-	// by recheckLocalPermissions() instead.
-	block := &ScopeBlock{
+	// Create a scope block — no trials for permission blocks (rechecked per-pass
+	// by recheckLocalPermissions instead).
+	e.setScopeBlock(scopeKey, &ScopeBlock{
 		Key:       scopeKey,
 		IssueType: IssueLocalPermissionDenied,
 		BlockedAt: e.nowFunc(),
-	}
-	e.tracker.HoldScope(scopeKey, block)
+	})
 
 	e.logger.Info("local permission denied: directory blocked",
 		slog.String("boundary", relBoundary),
@@ -491,8 +489,8 @@ func (e *Engine) recheckLocalPermissions(ctx context.Context) {
 			continue
 		}
 
-		if e.tracker != nil {
-			e.tracker.ReleaseScope(issue.ScopeKey)
+		if e.scopeGate != nil {
+			e.onScopeClear(ctx, issue.ScopeKey)
 		}
 
 		e.logger.Info("local permission restored, clearing denial",
@@ -549,8 +547,8 @@ func (e *Engine) clearScannerResolvedPermissions(ctx context.Context, observedPa
 			continue
 		}
 
-		if e.tracker != nil && !issue.ScopeKey.IsZero() {
-			e.tracker.ReleaseScope(issue.ScopeKey)
+		if !issue.ScopeKey.IsZero() && e.scopeGate != nil {
+			e.onScopeClear(ctx, issue.ScopeKey)
 		}
 
 		e.logger.Info("scanner resolved permission denial",

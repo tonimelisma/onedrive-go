@@ -1,7 +1,7 @@
 # Scope & Tracker Redesign
 
-**Status**: Proposed
-**Scope**: `internal/sync/tracker.go`, `internal/sync/engine.go`, `internal/sync/scope.go`, `internal/sync/planner.go`, `internal/sync/worker.go`, `internal/sync/engine_shortcuts.go`, `internal/sync/reconciler.go`, `internal/sync/store_failures.go`, `internal/sync/store_admin.go`
+**Status**: In Progress (Phases 1-5 done — DepTracker replaced by DepGraph + ScopeGate, drain-loop retrier, tracker.go and reconciler.go deleted)
+**Scope**: `internal/sync/dep_graph.go`, `internal/sync/scope_gate.go`, `internal/sync/engine.go`, `internal/sync/scope.go`, `internal/sync/planner.go`, `internal/sync/worker.go`, `internal/sync/engine_shortcuts.go`, `internal/sync/store_failures.go`, `internal/sync/store_admin.go`
 **Governs**: All files currently governed by sync-execution.md's Tracker and Executor sections
 **Continued by**: `engine-pipeline-redesign.md` (Phases 8-11 — watchState, bootstrap, async reconciliation). That document depends on this one completing through Phase 5.
 
@@ -829,7 +829,7 @@ Independent. Can be done first (see ordering note above).
 9. Created `ScopeBlockStore` interface + `SyncStore` implementation in `store_scope_blocks.go`
 10. Added compile-time `ScopeBlockStore` satisfaction check on `SyncStore`
 
-### Phase 4: Rewire Engine
+### Phase 4: Rewire Engine [done]
 
 1. Replace `tracker *DepTracker` with `depGraph *DepGraph`, `scopeGate *ScopeGate`, `readyCh chan *TrackedAction`
 2. Promote `buf` from local variable to engine field (currently local in `initWatchPipeline`, engine.go:1012; retrier in drain loop needs `e.buf.Add`)
@@ -854,13 +854,13 @@ Independent. Can be done first (see ordering note above).
 21. Rewrite `executePlan` (one-shot): no scope gate, no `admitAndDispatch` — sends directly to readyCh (section 2.3)
 22. Rewrite `processBatch` (watch): scope gate checks via `admitAndDispatch` after Add
 
-### Phase 5: Delete Old Code
+### Phase 5: Delete Old Code [done]
 
-1. Delete `tracker.go`, `tracker_test.go`
-2. Delete `FailureRetrier` goroutine from `reconciler.go`
-3. Delete `synthesizeFailureEvent`
-4. Delete `dispatchedRetryAt` dedup map
-5. Keep `InFlightChecker` interface (or move to engine)
+1. ~~Delete `tracker.go`, `tracker_test.go`~~ — deleted
+2. ~~Delete `FailureRetrier` goroutine from `reconciler.go`~~ — `reconciler.go` deleted entirely; retrier integrated into drain loop
+3. ~~Delete `synthesizeFailureEvent`~~ — deleted
+4. ~~Delete `dispatchedRetryAt` dedup map~~ — deleted
+5. ~~Keep `InFlightChecker` interface (or move to engine)~~ — resolved
 
 ### Phase 6: Shortcut Enrichment (D-5)
 

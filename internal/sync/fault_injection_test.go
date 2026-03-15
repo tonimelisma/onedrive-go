@@ -31,9 +31,10 @@ func TestFault_ContextCancel_WorkerPool(t *testing.T) {
 	// Create a local file so the upload has something to read.
 	writeExecTestFile(t, syncRoot, "file.txt", "content")
 
-	tracker := NewDepTracker(1, testLogger(t))
+	dg := NewDepGraph(testLogger(t))
+	readyCh := make(chan *TrackedAction, 4)
 	mgr := newTestManager(t)
-	pool := NewWorkerPool(cfg, tracker, mgr, testLogger(t), 10)
+	pool := NewWorkerPool(cfg, readyCh, dg.Done(), mgr, testLogger(t), 10)
 
 	ctx, cancel := context.WithCancel(t.Context())
 
@@ -45,10 +46,13 @@ func TestFault_ContextCancel_WorkerPool(t *testing.T) {
 		ItemID: "item-1",
 		View:   &PathView{Remote: &RemoteState{ItemID: "parent", ParentID: "root"}},
 	}
-	tracker.Add(action, 0, nil)
+	ta := dg.Add(action, 0, nil)
+	if ta != nil {
+		readyCh <- ta
+	}
 
 	// Cancel immediately — should not panic or hang.
-	// pool.Wait() is not called here because it blocks on tracker.Done(),
+	// pool.Wait() is not called here because it blocks on dg.Done(),
 	// which never closes when the worker exits via ctx.Done() before
 	// picking up the action. pool.Stop() calls wp.wg.Wait() internally,
 	// which is sufficient for clean shutdown.

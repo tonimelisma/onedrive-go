@@ -17,19 +17,23 @@ var errUnknownActionType = errors.New("sync: unknown action type in worker dispa
 // minWorkers is the floor for total worker count.
 const minWorkers = 4
 
-// WorkerPool spawns goroutines that pull TrackedActions from the DepTracker's
-// ready channel, execute them, persist success outcomes, and send results
-// back to the engine. Workers are pure executors — they NEVER call
-// tracker.Complete(). The engine owns all completion decisions (R-6.8.9).
+// WorkerPool spawns goroutines that pull TrackedActions from a ready channel,
+// execute them, persist success outcomes, and send results back to the engine.
+// Workers are pure executors — they NEVER call depGraph.Complete(). The engine
+// owns all completion decisions (R-6.8.9).
+//
+// Workers read from readyCh and wait on doneCh, which may be backed by
+// DepGraph or any other dispatch source.
 type WorkerPool struct {
 	cfg      *ExecutorConfig
-	tracker  *DepTracker
+	readyCh  <-chan *TrackedAction
+	doneCh   <-chan struct{}
 	baseline *SyncStore
 	logger   *slog.Logger
 
 	// results reports per-action outcomes back to the engine. The engine
-	// reads from this channel, classifies results, and calls Complete on
-	// the tracker. Failed items are recorded in sync_failures for retry.
+	// reads from this channel, classifies results, and calls depGraph.Complete.
+	// Failed items are recorded in sync_failures for retry.
 	results chan WorkerResult
 
 	cancel context.CancelFunc
@@ -38,8 +42,8 @@ type WorkerPool struct {
 
 // WorkerResult reports the outcome of a single action execution. The engine
 // reads these from the Results channel, classifies them, and calls
-// tracker.Complete. Failed items are recorded in sync_failures for retry
-// by the FailureRetrier.
+// depGraph.Complete. Failed items are recorded in sync_failures for retry
+// by the drain-loop retrier.
 type WorkerResult struct {
 	Path       string
 	DriveID    driveid.ID
@@ -80,9 +84,13 @@ type WorkerResult struct {
 // NewWorkerPool creates a pool without starting any workers. planSize
 // determines the result channel buffer (use the number of actions in the
 // plan for one-shot mode, or a generous buffer for watch mode).
+//
+// readyCh provides actions ready for execution. doneCh signals when all work
+// is complete (workers exit when doneCh closes or ctx is canceled).
 func NewWorkerPool(
 	cfg *ExecutorConfig,
-	tracker *DepTracker,
+	readyCh <-chan *TrackedAction,
+	doneCh <-chan struct{},
 	baseline *SyncStore,
 	logger *slog.Logger,
 	planSize int,
@@ -93,7 +101,8 @@ func NewWorkerPool(
 
 	return &WorkerPool{
 		cfg:      cfg,
-		tracker:  tracker,
+		readyCh:  readyCh,
+		doneCh:   doneCh,
 		baseline: baseline,
 		logger:   logger,
 		// Buffer sizing contract: one-shot mode uses planSize (equal to
@@ -125,9 +134,9 @@ func (wp *WorkerPool) Start(ctx context.Context, total int) {
 	)
 }
 
-// Wait blocks until all tracked actions are complete (tracker.Done signal).
+// Wait blocks until the done signal fires (all actions complete).
 func (wp *WorkerPool) Wait() {
-	<-wp.tracker.Done()
+	<-wp.doneCh
 }
 
 // Stop cancels all in-flight work, waits for goroutines to exit, and closes
@@ -141,9 +150,8 @@ func (wp *WorkerPool) Stop() {
 	close(wp.results)
 }
 
-// worker is the main loop for a single goroutine. It reads from the
-// tracker's single ready channel until the context is canceled or all
-// actions are done.
+// worker is the main loop for a single goroutine. It reads from the ready
+// channel until the context is canceled or all actions are done.
 func (wp *WorkerPool) worker(ctx context.Context) {
 	defer wp.wg.Done()
 
@@ -151,9 +159,9 @@ func (wp *WorkerPool) worker(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-wp.tracker.Done():
+		case <-wp.doneCh:
 			return
-		case ta := <-wp.tracker.Ready():
+		case ta := <-wp.readyCh:
 			if ta == nil {
 				continue
 			}
@@ -176,7 +184,7 @@ func (wp *WorkerPool) safeExecuteAction(ctx context.Context, ta *TrackedAction) 
 			)
 			panicErr := fmt.Errorf("panic: %v", r)
 			wp.sendResult(ctx, ta, nil, panicErr)
-			// NO tracker.Complete() — engine owns completion decisions.
+			// NO depGraph.Complete() — engine owns completion decisions.
 		}
 	}()
 
@@ -185,7 +193,7 @@ func (wp *WorkerPool) safeExecuteAction(ctx context.Context, ta *TrackedAction) 
 
 // executeAction runs a single tracked action: execute, persist success
 // outcomes, and send the result to the engine. Workers are pure executors —
-// they NEVER call tracker.Complete().
+// they NEVER call depGraph.Complete().
 func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 	// Per-action cancellable context.
 	actionCtx, cancel := context.WithCancel(ctx)
@@ -223,7 +231,7 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 	}
 
 	wp.sendResult(ctx, ta, &outcome, outcome.Error)
-	// NO tracker.Complete() — engine owns completion decisions.
+	// NO depGraph.Complete() — engine owns completion decisions.
 }
 
 // dispatchAction routes a tracked action to the appropriate executor method.
@@ -263,7 +271,7 @@ func (wp *WorkerPool) dispatchAction(
 
 // Results returns a read-only channel of per-action results. The engine
 // reads from this channel, classifies each result, and calls
-// tracker.Complete. Failed items go to sync_failures for reconciler retry.
+// depGraph.Complete. Failed items go to sync_failures for drain-loop retry.
 func (wp *WorkerPool) Results() <-chan WorkerResult {
 	return wp.results
 }

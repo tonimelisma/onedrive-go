@@ -111,7 +111,7 @@ func (e *Executor) createLocalFolder(action *Action) Outcome {
 
 // createRemoteFolder creates a folder on OneDrive. The DAG guarantees parent
 // folder creates complete before children, so resolveParentID finds the parent
-// in the baseline (committed by CommitOutcome before tracker.Complete).
+// in the baseline (committed by CommitOutcome before depGraph.Complete).
 func (e *Executor) createRemoteFolder(ctx context.Context, action *Action) Outcome {
 	parentID, err := e.resolveParentID(action.Path)
 	if err != nil {

@@ -1,8 +1,7 @@
 // scope_gate.go — Scope-based admission control with persistent scope blocks.
 //
-// ScopeGate is the second component extracted from DepTracker (Phase 3 of
-// tracker-redesign.md). It owns scope block state and admission decisions.
-// No held queue, no dependency awareness, no channels.
+// ScopeGate owns scope block state and admission decisions. No held queue,
+// no dependency awareness, no channels.
 //
 // Admit checks if an action matches any active scope block. The caller
 // (engine) decides what to do with blocked actions — typically record as
@@ -30,6 +29,19 @@ import (
 	stdsync "sync"
 	"time"
 )
+
+// ScopeBlock represents an active scope-level block (e.g., quota exceeded,
+// service outage, rate limited). While a block is active, all actions matching
+// that scope are deferred (recorded as sync_failures with scope_key).
+type ScopeBlock struct {
+	Key       ScopeKey // typed scope key
+	IssueType string   // "service_outage", "quota_exceeded", "rate_limited"
+
+	BlockedAt     time.Time     // when the block was created
+	TrialInterval time.Duration // current interval between trial actions (grows with backoff)
+	NextTrialAt   time.Time     // when to dispatch the next trial
+	TrialCount    int           // consecutive failed trials (for backoff)
+}
 
 // ScopeBlockStore persists scope blocks to durable storage. ScopeGate uses
 // this interface for write-through caching — memory is the hot path, DB is
@@ -70,7 +82,7 @@ func NewScopeGate(store ScopeBlockStore, logger *slog.Logger) *ScopeGate {
 // Dynamic-key scopes (quota:shortcut, perm:dir) are checked last via O(n)
 // iteration over active blocks — expected to be tiny (1-5 typically).
 //
-// Logic is identical to DepTracker.blockedScope (tracker.go:225-260).
+// Checks global blocks first, then progressively narrower scopes.
 func (g *ScopeGate) Admit(ta *TrackedAction) ScopeKey {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -218,8 +230,8 @@ func (g *ScopeGate) ExtendTrialInterval(ctx context.Context, key ScopeKey, nextA
 // block where now >= block.NextTrialAt, or (ScopeKey{}, time.Time{}, false)
 // if no trials are due.
 //
-// Unlike DepTracker.NextDueTrial, this does NOT check held queue length.
-// Any scope block with non-zero NextTrialAt is eligible. The engine uses
+// Does NOT check held queue length — any scope block with non-zero
+// NextTrialAt is eligible. The engine uses
 // PickTrialCandidate from sync_failures to find actual items.
 func (g *ScopeGate) NextDueTrial(now time.Time) (ScopeKey, time.Time, bool) {
 	g.mu.Lock()
@@ -241,8 +253,8 @@ func (g *ScopeGate) NextDueTrial(now time.Time) (ScopeKey, time.Time, bool) {
 // EarliestTrialAt returns the earliest NextTrialAt across all scope blocks.
 // Returns (time.Time{}, false) if no trials are pending.
 //
-// Unlike DepTracker.EarliestTrialAt, this does NOT check held queue length.
-// Any scope block with non-zero NextTrialAt is eligible.
+// Does NOT check held queue length — any scope block with non-zero
+// NextTrialAt is eligible.
 func (g *ScopeGate) EarliestTrialAt() (time.Time, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()

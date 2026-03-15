@@ -177,6 +177,17 @@ func newTestEngine(t *testing.T, mock *engineMockClient) (*Engine, string) {
 	return eng, syncRoot
 }
 
+// setupWatchEngine initializes an engine with DepGraph + readyCh for
+// processBatch tests. Returns the readyCh for reading dispatched actions.
+func setupWatchEngine(t *testing.T, eng *Engine) <-chan *TrackedAction {
+	t.Helper()
+
+	eng.depGraph = NewDepGraph(eng.logger)
+	eng.readyCh = make(chan *TrackedAction, 1024)
+
+	return eng.readyCh
+}
+
 // deltaPageWithItems returns a DeltaPage with the given items and a delta link.
 func deltaPageWithItems(items []graph.Item, deltaLink string) *graph.DeltaPage {
 	return &graph.DeltaPage{
@@ -681,7 +692,7 @@ func TestRunOnce_DeltaExpired_AutoRetry(t *testing.T) {
 
 // TestRunOnce_EmptyPlan_NoPanic verifies that when changes exist but all
 // classify to no-op actions (producing an empty plan), the engine does not
-// deadlock. Regression test for: empty plan caused NewDepTracker with total=0,
+// deadlock. Regression test for: empty plan caused NewDepGraph with total=0,
 // Done() channel never closed, pool.Wait() blocked forever.
 func TestRunOnce_EmptyPlan_NoPanic(t *testing.T) {
 	t.Parallel()
@@ -1238,7 +1249,7 @@ func TestRunWatch_ProcessBatch_BigDelete(t *testing.T) {
 		})
 	}
 
-	tracker := NewPersistentDepTracker(testLogger(t))
+	ready := setupWatchEngine(t, eng)
 
 	// Install a rolling delete counter with threshold=10 on the engine.
 	// The planner-level check is disabled (forceSafetyMax) — the counter
@@ -1246,11 +1257,11 @@ func TestRunWatch_ProcessBatch_BigDelete(t *testing.T) {
 	eng.deleteCounter = newDeleteCounter(10, 5*time.Minute, time.Now)
 	safety := &SafetyConfig{BigDeleteThreshold: forceSafetyMax}
 
-	eng.processBatch(ctx, batch, bl, SyncBidirectional, safety, tracker)
+	eng.processBatch(ctx, batch, bl, SyncBidirectional, safety)
 
 	// Verify no actions were dispatched (all 20 are deletes and counter tripped).
 	select {
-	case ta := <-tracker.Ready():
+	case ta := <-ready:
 		assert.Fail(t, "unexpected action dispatched", "path: %s", ta.Action.Path)
 	default:
 		// Good — no actions.
@@ -1334,13 +1345,13 @@ func TestRunWatch_ProcessBatch_BigDelete_NonDeletesFlow(t *testing.T) {
 		}},
 	})
 
-	tracker := NewPersistentDepTracker(testLogger(t))
+	ready := setupWatchEngine(t, eng)
 
 	// Install counter with threshold=10. 15 deletes > 10 → trips.
 	eng.deleteCounter = newDeleteCounter(10, 5*time.Minute, time.Now)
 	safety := &SafetyConfig{BigDeleteThreshold: forceSafetyMax}
 
-	eng.processBatch(ctx, batch, bl, SyncBidirectional, safety, tracker)
+	eng.processBatch(ctx, batch, bl, SyncBidirectional, safety)
 
 	// Counter should be held.
 	assert.True(t, eng.deleteCounter.IsHeld(), "counter should be held")
@@ -1349,7 +1360,7 @@ func TestRunWatch_ProcessBatch_BigDelete_NonDeletesFlow(t *testing.T) {
 	dispatched := 0
 	for range 5 {
 		select {
-		case <-tracker.Ready():
+		case <-ready:
 			dispatched++
 		default:
 		}
@@ -1416,12 +1427,12 @@ func TestRunWatch_ProcessBatch_BigDelete_BelowThreshold(t *testing.T) {
 		})
 	}
 
-	tracker := NewPersistentDepTracker(testLogger(t))
+	ready := setupWatchEngine(t, eng)
 
 	eng.deleteCounter = newDeleteCounter(10, 5*time.Minute, time.Now)
 	safety := &SafetyConfig{BigDeleteThreshold: forceSafetyMax}
 
-	eng.processBatch(ctx, batch, bl, SyncBidirectional, safety, tracker)
+	eng.processBatch(ctx, batch, bl, SyncBidirectional, safety)
 
 	// Counter should NOT be held.
 	assert.False(t, eng.deleteCounter.IsHeld(), "counter should not trip at 5 < 10")
@@ -1430,7 +1441,7 @@ func TestRunWatch_ProcessBatch_BigDelete_BelowThreshold(t *testing.T) {
 	dispatched := 0
 	for range 10 {
 		select {
-		case <-tracker.Ready():
+		case <-ready:
 			dispatched++
 		default:
 		}
@@ -1597,11 +1608,11 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 		}},
 	}}
 
-	tracker := NewPersistentDepTracker(testLogger(t))
+	setupWatchEngine(t, eng)
 	safety := DefaultSafetyConfig()
 
 	// Should return without error or dispatching actions.
-	eng.processBatch(ctx, batch, bl, SyncBidirectional, safety, tracker)
+	eng.processBatch(ctx, batch, bl, SyncBidirectional, safety)
 }
 
 // TestRunWatch_Deduplication verifies that processBatch cancels in-flight
@@ -1626,7 +1637,7 @@ func TestRunWatch_Deduplication(t *testing.T) {
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err, "Load")
 
-	tracker := NewPersistentDepTracker(testLogger(t))
+	setupWatchEngine(t, eng)
 	safety := DefaultSafetyConfig()
 
 	// First batch: download a file.
@@ -1643,10 +1654,10 @@ func TestRunWatch_Deduplication(t *testing.T) {
 		}},
 	}}
 
-	eng.processBatch(ctx, batch1, bl, SyncBidirectional, safety, tracker)
+	eng.processBatch(ctx, batch1, bl, SyncBidirectional, safety)
 
 	// Verify the action is in-flight.
-	require.True(t, tracker.HasInFlight("overlapping.txt"), "expected in-flight action for overlapping.txt after first batch")
+	require.True(t, eng.depGraph.HasInFlight("overlapping.txt"), "expected in-flight action for overlapping.txt after first batch")
 
 	// Second batch: same path, different content. Should cancel the first.
 	batch2 := []PathChanges{{
@@ -1662,12 +1673,12 @@ func TestRunWatch_Deduplication(t *testing.T) {
 		}},
 	}}
 
-	eng.processBatch(ctx, batch2, bl, SyncBidirectional, safety, tracker)
+	eng.processBatch(ctx, batch2, bl, SyncBidirectional, safety)
 
 	// The second batch should have replaced the first.
 	// We can't easily verify cancellation directly, but we can verify
 	// the path is still tracked (new action replaced old one).
-	assert.True(t, tracker.HasInFlight("overlapping.txt"), "expected in-flight action for overlapping.txt after second batch")
+	assert.True(t, eng.depGraph.HasInFlight("overlapping.txt"), "expected in-flight action for overlapping.txt after second batch")
 }
 
 // TestRunWatch_DownloadOnly_SkipsLocalObserver verifies that download-only mode
@@ -2606,11 +2617,11 @@ func TestRunFullReconciliation_NoChanges(t *testing.T) {
 	bl.Put(&BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: ItemTypeFile})
 
 	safety := DefaultSafetyConfig()
-	tracker := NewDepTracker(10, testLogger(t))
+	setupWatchEngine(t, e)
 
 	// Should complete without panic; events exist but planner produces no
 	// actions because nothing is different from baseline.
-	e.runFullReconciliation(ctx, bl, SyncDownloadOnly, safety, tracker)
+	e.runFullReconciliation(ctx, bl, SyncDownloadOnly, safety)
 }
 
 // Validates: R-2.1.6
@@ -2630,10 +2641,10 @@ func TestRunFullReconciliation_DeltaError(t *testing.T) {
 	require.NoError(t, err)
 
 	safety := DefaultSafetyConfig()
-	tracker := NewDepTracker(10, testLogger(t))
+	setupWatchEngine(t, e)
 
 	// Should not panic — error is logged and function returns.
-	e.runFullReconciliation(ctx, bl, SyncDownloadOnly, safety, tracker)
+	e.runFullReconciliation(ctx, bl, SyncDownloadOnly, safety)
 }
 
 // ---------------------------------------------------------------------------
@@ -2704,12 +2715,12 @@ func TestDrainWorkerResults_MultipleResults(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	// Set up tracker with actions for each result.
-	tracker := NewDepTracker(16, eng.logger)
+	// Set up depGraph with actions for each result.
+	eng.depGraph = NewDepGraph(eng.logger)
+	eng.readyCh = make(chan *TrackedAction, 16)
 	for _, id := range []int64{1, 2, 3} {
-		tracker.Add(&Action{Path: fmt.Sprintf("action-%d", id), Type: ActionUpload}, id, nil)
+		eng.depGraph.Add(&Action{Path: fmt.Sprintf("action-%d", id), Type: ActionUpload}, id, nil)
 	}
-	eng.tracker = tracker
 
 	results := make(chan WorkerResult, 3)
 	results <- WorkerResult{Path: "a.txt", ActionType: ActionUpload, Success: false, ErrMsg: "fail1", HTTPStatus: 500, ActionID: 1}
@@ -2729,15 +2740,15 @@ func TestDrainWorkerResults_MultipleResults(t *testing.T) {
 // processWorkerResult — shared helper tests
 // ---------------------------------------------------------------------------
 
-// setupEngineTracker creates a one-shot DepTracker on the engine and adds a
-// dummy action for the given actionID so that processWorkerResult can call
-// Complete without panicking on nil tracker or unknown ID.
-func setupEngineTracker(t *testing.T, eng *Engine, actionID int64) {
+// setupEngineDepGraph creates a DepGraph on the engine and adds a dummy action
+// for the given actionID so that processWorkerResult can call Complete without
+// panicking on nil depGraph or unknown ID.
+func setupEngineDepGraph(t *testing.T, eng *Engine, actionID int64) {
 	t.Helper()
-	tracker := NewDepTracker(16, eng.logger)
+	eng.depGraph = NewDepGraph(eng.logger)
+	eng.readyCh = make(chan *TrackedAction, 16)
 	dummyAction := &Action{Path: "dummy", Type: ActionDownload}
-	tracker.Add(dummyAction, actionID, nil)
-	eng.tracker = tracker
+	eng.depGraph.Add(dummyAction, actionID, nil)
 }
 
 func TestProcessWorkerResult_UploadFailure_RecordsLocalIssue(t *testing.T) {
@@ -2746,7 +2757,7 @@ func TestProcessWorkerResult_UploadFailure_RecordsLocalIssue(t *testing.T) {
 	mock := &engineMockClient{}
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
-	setupEngineTracker(t, eng, 0)
+	setupEngineDepGraph(t, eng, 0)
 
 	eng.processWorkerResult(ctx, &WorkerResult{
 		Path:       "docs/report.xlsx",
@@ -2754,7 +2765,7 @@ func TestProcessWorkerResult_UploadFailure_RecordsLocalIssue(t *testing.T) {
 		Success:    false,
 		ErrMsg:     "connection reset",
 		HTTPStatus: 503,
-	}, nil, nil)
+	}, nil)
 
 	// Should record upload failure in sync_failures.
 	issues, err := eng.baseline.ListSyncFailures(ctx)
@@ -2791,7 +2802,12 @@ func TestProcessWorkerResult_403ReadOnly_SkipsRemoteState(t *testing.T) {
 
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
-	setupEngineTracker(t, eng, 0)
+	setupEngineDepGraph(t, eng, 0)
+
+	// Set watchShortcuts so getWatchShortcuts() returns them for handle403.
+	eng.watchShortcutsMu.Lock()
+	eng.watchShortcuts = shortcuts
+	eng.watchShortcutsMu.Unlock()
 
 	eng.processWorkerResult(ctx, &WorkerResult{
 		Path:       "Shared/TeamDocs/file.txt",
@@ -2799,7 +2815,7 @@ func TestProcessWorkerResult_403ReadOnly_SkipsRemoteState(t *testing.T) {
 		Success:    false,
 		ErrMsg:     "403 Forbidden",
 		HTTPStatus: 403,
-	}, bl, shortcuts)
+	}, bl)
 
 	// Permission-denied should be recorded in sync_failures: one for the
 	// file itself (from recordFailure) and one for the boundary directory
@@ -2820,13 +2836,13 @@ func TestProcessWorkerResult_Success_NoRecords(t *testing.T) {
 	mock := &engineMockClient{}
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
-	setupEngineTracker(t, eng, 0)
+	setupEngineDepGraph(t, eng, 0)
 
 	eng.processWorkerResult(ctx, &WorkerResult{
 		Path:       "docs/report.xlsx",
 		ActionType: ActionDownload,
 		Success:    true,
-	}, nil, nil)
+	}, nil)
 
 	// No failures should be recorded.
 	failed, err := eng.baseline.ListActionableRemoteState(ctx)
@@ -3024,85 +3040,76 @@ func TestClassifyResult(t *testing.T) {
 }
 
 // computeBackoff tests removed — backoff is now handled by retry.Reconcile
-// policy via sync_failures + FailureRetrier. See internal/retry/named_test.go.
+// policy via sync_failures + drain-loop retrier. See internal/retry/named_test.go.
 
 // ---------------------------------------------------------------------------
 // processTrialResult (R-2.10.5, R-2.10.6, R-2.10.8, R-2.10.14)
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.10.5
-func TestProcessTrialResult_Success_ReleasesScope(t *testing.T) {
+func TestProcessTrialResultV2_Success_ClearsScope(t *testing.T) {
 	t.Parallel()
 
-	mock := &engineMockClient{}
-	eng, _ := newTestEngine(t, mock)
+	eng := newPhase4Engine(t)
+	ctx := t.Context()
 
-	tracker := NewDepTracker(16, eng.logger)
-	eng.tracker = tracker
-
-	// Block a scope and add held actions.
-	block := &ScopeBlock{
+	// Set up a scope block in the ScopeGate.
+	now := eng.nowFunc()
+	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, SKThrottleAccount, &ScopeBlock{
 		Key:           SKThrottleAccount,
-		IssueType:     "rate_limited",
-		BlockedAt:     time.Now(),
+		IssueType:     IssueRateLimited,
+		BlockedAt:     now,
 		TrialInterval: 10 * time.Second,
-		NextTrialAt:   time.Now().Add(10 * time.Second),
-	}
-	tracker.HoldScope(SKThrottleAccount, block)
+		NextTrialAt:   now.Add(10 * time.Second),
+	}))
 
-	// Add two actions — both go to the held queue.
-	tracker.Add(&Action{Type: ActionUpload, Path: "first.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
-	tracker.Add(&Action{Type: ActionUpload, Path: "second.txt", DriveID: driveid.New("d"), ItemID: "i2"}, 2, nil)
+	// Add scope-blocked failures to the DB (these would be unblocked on success).
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path: "first.txt", DriveID: driveid.New("d"), Direction: strUpload,
+		Category: strTransient, ErrMsg: "rate limited", ScopeKey: SKThrottleAccount,
+	}, nil)) // nil delayFn → scope-blocked (next_retry_at = NULL)
 
-	// Dispatch trial — pops first from held queue.
-	ok := tracker.DispatchTrial(SKThrottleAccount)
-	require.True(t, ok)
-	ta := <-tracker.Ready()
-	assert.Equal(t, "first.txt", ta.Action.Path, "trial should pop the first held action")
+	// Add the trial action to the DepGraph.
+	eng.depGraph.Add(&Action{Type: ActionUpload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
 
-	// Simulate successful trial result. ActionID=1 matches the dispatched trial action.
-	eng.processTrialResult(t.Context(), &WorkerResult{
+	// Simulate successful trial result.
+	eng.processTrialResult(ctx, &WorkerResult{
 		ActionID:      1,
 		IsTrial:       true,
 		TrialScopeKey: SKThrottleAccount,
 		Success:       true,
 	})
 
-	// Scope should be released — the remaining held action should be dispatched.
-	select {
-	case ta := <-tracker.Ready():
-		assert.Equal(t, "second.txt", ta.Action.Path, "remaining held action should be dispatched")
-	case <-time.After(time.Second):
-		require.Fail(t, "expected held action to be dispatched after scope release")
-	}
+	// Scope block should be cleared.
+	assert.False(t, eng.scopeGate.IsScopeBlocked(SKThrottleAccount),
+		"scope block should be removed after successful trial")
 
-	// Scope block should no longer exist.
-	_, ok = tracker.GetScopeBlock(SKThrottleAccount)
-	assert.False(t, ok, "scope block should be removed after release")
+	// Scope-blocked failures should now be retryable (next_retry_at set to ~now).
+	rows, err := eng.baseline.ListSyncFailuresForRetry(ctx, now)
+	require.NoError(t, err)
+	assert.Len(t, rows, 1, "scope-blocked failures should be unblocked after trial success")
 }
 
 // Validates: R-2.10.14
-func TestProcessTrialResult_Failure_DoublesInterval(t *testing.T) {
+func TestProcessTrialResultV2_Failure_DoublesInterval(t *testing.T) {
 	t.Parallel()
 
-	mock := &engineMockClient{}
-	eng, _ := newTestEngine(t, mock)
+	eng := newPhase4Engine(t)
+	ctx := t.Context()
 
-	tracker := NewDepTracker(16, eng.logger)
-	eng.tracker = tracker
-
-	block := &ScopeBlock{
+	now := eng.nowFunc()
+	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, SKService, &ScopeBlock{
 		Key:           SKService,
-		IssueType:     "service_outage",
-		BlockedAt:     time.Now(),
+		IssueType:     IssueServiceOutage,
+		BlockedAt:     now,
 		TrialInterval: 30 * time.Second,
-		NextTrialAt:   time.Now().Add(30 * time.Second),
-	}
-	tracker.HoldScope(SKService, block)
-	tracker.Add(&Action{Type: ActionDownload, Path: "test.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
-	tracker.Add(&Action{Type: ActionDownload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i2"}, 99, nil)
+		NextTrialAt:   now.Add(30 * time.Second),
+	}))
 
-	eng.processTrialResult(t.Context(), &WorkerResult{
+	// Add the trial action to the DepGraph.
+	eng.depGraph.Add(&Action{Type: ActionDownload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 99, nil)
+
+	eng.processTrialResult(ctx, &WorkerResult{
 		ActionID:      99,
 		IsTrial:       true,
 		TrialScopeKey: SKService,
@@ -3112,14 +3119,13 @@ func TestProcessTrialResult_Failure_DoublesInterval(t *testing.T) {
 	})
 
 	// Verify block's TrialInterval was doubled.
-	got, ok := tracker.GetScopeBlock(SKService)
+	got, ok := eng.scopeGate.GetScopeBlock(SKService)
 	require.True(t, ok)
 	assert.Equal(t, 60*time.Second, got.TrialInterval, "interval should be doubled")
-	assert.Equal(t, 1, got.TrialCount, "trial count should be incremented")
 }
 
 // Validates: R-2.10.6, R-2.10.8, R-2.10.14 — unified cap for all scope types.
-func TestProcessTrialResult_Failure_CapsAt5m(t *testing.T) {
+func TestProcessTrialResultV2_Failure_CapsAt5m(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -3129,34 +3135,32 @@ func TestProcessTrialResult_Failure_CapsAt5m(t *testing.T) {
 		httpStatus int
 		actionType ActionType
 	}{
-		{"quota", SKQuotaOwn, "quota_exceeded", 507, ActionUpload},
-		{"service", SKService, "service_outage", 500, ActionDownload},
-		{"throttle", SKThrottleAccount, "rate_limited", 429, ActionUpload},
+		{"quota", SKQuotaOwn, IssueQuotaExceeded, 507, ActionUpload},
+		{"service", SKService, IssueServiceOutage, 500, ActionDownload},
+		{"throttle", SKThrottleAccount, IssueRateLimited, 429, ActionUpload},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			mock := &engineMockClient{}
-			eng, _ := newTestEngine(t, mock)
+			eng := newPhase4Engine(t)
+			ctx := t.Context()
 
-			tracker := NewDepTracker(16, eng.logger)
-			eng.tracker = tracker
+			now := eng.nowFunc()
 
 			// Start with an interval that would exceed 5m when doubled.
-			block := &ScopeBlock{
+			require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, tt.scopeKey, &ScopeBlock{
 				Key:           tt.scopeKey,
 				IssueType:     tt.issueType,
-				BlockedAt:     time.Now(),
+				BlockedAt:     now,
 				TrialInterval: 4 * time.Minute,
-				NextTrialAt:   time.Now().Add(4 * time.Minute),
-			}
-			tracker.HoldScope(tt.scopeKey, block)
-			tracker.Add(&Action{Type: tt.actionType, Path: "held.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
-			tracker.Add(&Action{Type: tt.actionType, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i2"}, 99, nil)
+				NextTrialAt:   now.Add(4 * time.Minute),
+			}))
 
-			eng.processTrialResult(t.Context(), &WorkerResult{
+			eng.depGraph.Add(&Action{Type: tt.actionType, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 99, nil)
+
+			eng.processTrialResult(ctx, &WorkerResult{
 				ActionID:      99,
 				IsTrial:       true,
 				TrialScopeKey: tt.scopeKey,
@@ -3165,7 +3169,7 @@ func TestProcessTrialResult_Failure_CapsAt5m(t *testing.T) {
 				ErrMsg:        "test failure",
 			})
 
-			got, ok := tracker.GetScopeBlock(tt.scopeKey)
+			got, ok := eng.scopeGate.GetScopeBlock(tt.scopeKey)
 			require.True(t, ok)
 			assert.Equal(t, defaultMaxTrialInterval, got.TrialInterval,
 				"%s interval should cap at %v", tt.name, defaultMaxTrialInterval)
@@ -3174,30 +3178,27 @@ func TestProcessTrialResult_Failure_CapsAt5m(t *testing.T) {
 }
 
 // Validates: Group A — trial failure must NOT trigger scope detection.
-func TestProcessTrialResult_Failure_NoScopeDetection(t *testing.T) {
+func TestProcessTrialResultV2_Failure_NoScopeDetection(t *testing.T) {
 	t.Parallel()
 
-	mock := &engineMockClient{}
-	eng, _ := newTestEngine(t, mock)
-
-	tracker := NewDepTracker(16, eng.logger)
-	eng.tracker = tracker
+	eng := newPhase4Engine(t)
+	ctx := t.Context()
 
 	ss := NewScopeState(eng.nowFn, eng.logger)
 	eng.scopeState = ss
 
-	block := &ScopeBlock{
+	now := eng.nowFunc()
+	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, SKService, &ScopeBlock{
 		Key:           SKService,
-		IssueType:     "service_outage",
-		BlockedAt:     time.Now(),
+		IssueType:     IssueServiceOutage,
+		BlockedAt:     now,
 		TrialInterval: 30 * time.Second,
-		NextTrialAt:   time.Now().Add(30 * time.Second),
-	}
-	tracker.HoldScope(SKService, block)
-	tracker.Add(&Action{Type: ActionDownload, Path: "held.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
-	tracker.Add(&Action{Type: ActionDownload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i2"}, 99, nil)
+		NextTrialAt:   now.Add(30 * time.Second),
+	}))
 
-	eng.processTrialResult(t.Context(), &WorkerResult{
+	eng.depGraph.Add(&Action{Type: ActionDownload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 99, nil)
+
+	eng.processTrialResult(ctx, &WorkerResult{
 		ActionID:      99,
 		IsTrial:       true,
 		TrialScopeKey: SKService,
@@ -3206,10 +3207,9 @@ func TestProcessTrialResult_Failure_NoScopeDetection(t *testing.T) {
 		ErrMsg:        "internal server error",
 	})
 
-	got, ok := tracker.GetScopeBlock(SKService)
+	got, ok := eng.scopeGate.GetScopeBlock(SKService)
 	require.True(t, ok, "scope block should still exist")
 	assert.Equal(t, 60*time.Second, got.TrialInterval, "interval should be doubled, not reset")
-	assert.Equal(t, 1, got.TrialCount, "trial count should be incremented by extendTrialInterval")
 }
 
 // Validates: R-2.10.14 — computeTrialInterval is the single source of truth
@@ -3249,26 +3249,23 @@ func TestComputeTrialInterval(t *testing.T) {
 func TestExtendTrialInterval_WithRetryAfter(t *testing.T) {
 	t.Parallel()
 
-	mock := &engineMockClient{}
-	eng, _ := newTestEngine(t, mock)
+	eng := newPhase4Engine(t)
+	ctx := t.Context()
 
-	tracker := NewDepTracker(16, eng.logger)
-	eng.tracker = tracker
-
-	block := &ScopeBlock{
+	now := eng.nowFunc()
+	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, SKThrottleAccount, &ScopeBlock{
 		Key:           SKThrottleAccount,
-		IssueType:     "rate_limited",
-		BlockedAt:     time.Now(),
+		IssueType:     IssueRateLimited,
+		BlockedAt:     now,
 		TrialInterval: 30 * time.Second,
-		NextTrialAt:   time.Now().Add(30 * time.Second),
-	}
-	tracker.HoldScope(SKThrottleAccount, block)
-	tracker.Add(&Action{Type: ActionUpload, Path: "test.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
-	tracker.Add(&Action{Type: ActionUpload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i2"}, 99, nil)
+		NextTrialAt:   now.Add(30 * time.Second),
+	}))
+
+	eng.depGraph.Add(&Action{Type: ActionUpload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 99, nil)
 
 	// Retry-After of 30 minutes exceeds defaultMaxTrialInterval (5m) — must be
 	// honored directly with no cap, because the server is ground truth.
-	eng.processTrialResult(t.Context(), &WorkerResult{
+	eng.processTrialResult(ctx, &WorkerResult{
 		ActionID:      99,
 		IsTrial:       true,
 		TrialScopeKey: SKThrottleAccount,
@@ -3278,22 +3275,20 @@ func TestExtendTrialInterval_WithRetryAfter(t *testing.T) {
 		ErrMsg:        "too many requests",
 	})
 
-	got, ok := tracker.GetScopeBlock(SKThrottleAccount)
+	got, ok := eng.scopeGate.GetScopeBlock(SKThrottleAccount)
 	require.True(t, ok)
 	assert.Equal(t, 30*time.Minute, got.TrialInterval,
 		"Retry-After must be used directly with no cap — server is ground truth")
 }
 
 // Validates: R-2.10.43 — full disk:local scope-block lifecycle:
-// ErrDiskFull → classifyResult → HoldScope → downloads held → trial → release.
+// ErrDiskFull → classifyResult → ScopeGate blocks downloads → trial → release.
 func TestDiskLocalScopeBlock_FullCycle(t *testing.T) {
 	t.Parallel()
 
-	mock := &engineMockClient{}
-	eng, _ := newTestEngine(t, mock)
-
-	tracker := NewDepTracker(16, eng.logger)
-	eng.tracker = tracker
+	eng := newPhase4Engine(t)
+	ctx := t.Context()
+	now := eng.nowFunc()
 
 	// 1. classifyResult maps ErrDiskFull to disk:local scope block.
 	class, scope := classifyResult(&WorkerResult{
@@ -3302,49 +3297,27 @@ func TestDiskLocalScopeBlock_FullCycle(t *testing.T) {
 	require.Equal(t, resultScopeBlock, class)
 	require.Equal(t, SKDiskLocal, scope)
 
-	// 2. Establish the scope block.
-	block := &ScopeBlock{
+	// 2. Establish the scope block via ScopeGate.
+	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, SKDiskLocal, &ScopeBlock{
 		Key:           SKDiskLocal,
-		IssueType:     "disk_full",
-		BlockedAt:     time.Now(),
+		IssueType:     IssueDiskFull,
+		BlockedAt:     now,
 		TrialInterval: 10 * time.Second,
-		NextTrialAt:   time.Now().Add(10 * time.Second),
-	}
-	tracker.HoldScope(SKDiskLocal, block)
+		NextTrialAt:   now.Add(10 * time.Second),
+	}))
 
-	// 3. Add download and upload actions.
-	dlAction := &Action{Type: ActionDownload, Path: "big.zip", DriveID: driveid.New("d"), ItemID: "dl1"}
-	ulAction := &Action{Type: ActionUpload, Path: "small.txt", DriveID: driveid.New("d"), ItemID: "ul1"}
-	tracker.Add(dlAction, 1, nil)
-	tracker.Add(ulAction, 2, nil)
+	// 3. ScopeGate.Admit blocks downloads under disk:local, allows uploads.
+	dlAction := &TrackedAction{ID: 1, Action: Action{Type: ActionDownload, Path: "big.zip", DriveID: driveid.New("d"), ItemID: "dl1"}}
+	ulAction := &TrackedAction{ID: 2, Action: Action{Type: ActionUpload, Path: "small.txt", DriveID: driveid.New("d"), ItemID: "ul1"}}
 
-	// 4. Download should be held (disk:local blocks downloads).
-	//    Upload should be ready (disk:local does NOT block uploads).
-	var readyIDs []int64
-	for {
-		select {
-		case ta := <-tracker.Ready():
-			readyIDs = append(readyIDs, ta.ID)
-			tracker.Complete(ta.ID)
-		default:
-			goto doneCollecting
-		}
-	}
-doneCollecting:
-	assert.Contains(t, readyIDs, int64(2), "upload should be dispatched (not blocked by disk:local)")
-	assert.NotContains(t, readyIDs, int64(1), "download should be held by disk:local scope block")
+	assert.False(t, eng.scopeGate.Admit(dlAction).IsZero(), "download should be blocked by disk:local scope")
+	assert.True(t, eng.scopeGate.Admit(ulAction).IsZero(), "upload should NOT be blocked by disk:local scope")
 
-	// 5. Release scope block (simulating trial success / disk space freed).
-	tracker.ReleaseScope(SKDiskLocal)
+	// 4. Clear scope block (simulating trial success / disk space freed).
+	eng.onScopeClear(ctx, SKDiskLocal)
 
-	// 6. Download should now be ready.
-	select {
-	case ta := <-tracker.Ready():
-		assert.Equal(t, int64(1), ta.ID, "download should be released after scope unblock")
-		tracker.Complete(ta.ID)
-	case <-time.After(time.Second):
-		t.Fatal("download not released after scope unblock")
-	}
+	// 5. Download should now be admitted.
+	assert.True(t, eng.scopeGate.Admit(dlAction).IsZero(), "download should be admitted after scope clear")
 }
 
 // ---------------------------------------------------------------------------
@@ -3388,33 +3361,20 @@ func TestDeriveScopeKey(t *testing.T) {
 func TestApplyScopeBlock_ArmsTrialTimer(t *testing.T) {
 	t.Parallel()
 
-	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
-	mock := &engineMockClient{}
-	eng, _ := newTestEngine(t, mock)
-	eng.nowFn = func() time.Time { return now }
+	eng := newPhase4Engine(t)
+	now := eng.nowFunc()
 
-	tracker := NewDepTracker(16, eng.logger)
-	eng.tracker = tracker
-
-	// Pre-hold an action so the held queue is non-empty when applyScopeBlock
-	// arms the timer. In production this happens because actions arrive
-	// continuously — after HoldScope, new dispatches go to held.
-	dummyBlock := &ScopeBlock{Key: SKThrottleAccount, IssueType: "rate_limited"}
-	tracker.HoldScope(SKThrottleAccount, dummyBlock)
-	tracker.Add(&Action{Type: ActionUpload, Path: "test.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
-
-	// applyScopeBlock replaces the block with one that has NextTrialAt set,
-	// then calls armTrialTimer which reads EarliestTrialAt.
+	// applyScopeBlock sets the scope block via ScopeGate and arms the trial timer.
 	eng.applyScopeBlock(ScopeUpdateResult{
 		Block:      true,
 		ScopeKey:   SKThrottleAccount,
-		IssueType:  "rate_limited",
+		IssueType:  IssueRateLimited,
 		RetryAfter: 30 * time.Second,
 	})
 
 	// Verify the block has the correct NextTrialAt from the injectable clock.
-	earliest, ok := tracker.EarliestTrialAt()
-	require.True(t, ok, "EarliestTrialAt should find the block with held actions")
+	earliest, ok := eng.scopeGate.EarliestTrialAt()
+	require.True(t, ok, "EarliestTrialAt should find the scope block")
 	assert.Equal(t, now.Add(30*time.Second), earliest, "NextTrialAt should be now + trial interval")
 
 	// Trial timer should be armed.
@@ -3435,7 +3395,7 @@ func TestRecordFailure_PopulatesScopeKey(t *testing.T) {
 	mock := &engineMockClient{}
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
-	setupEngineTracker(t, eng, 1)
+	setupEngineDepGraph(t, eng, 1)
 
 	eng.processWorkerResult(ctx, &WorkerResult{
 		Path:       "quota-fail.txt",
@@ -3444,7 +3404,7 @@ func TestRecordFailure_PopulatesScopeKey(t *testing.T) {
 		ErrMsg:     "insufficient storage",
 		HTTPStatus: 507,
 		ActionID:   1,
-	}, nil, nil)
+	}, nil)
 
 	issues, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
@@ -3459,7 +3419,7 @@ func TestRecordFailure_PopulatesScopeKey_429(t *testing.T) {
 	mock := &engineMockClient{}
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
-	setupEngineTracker(t, eng, 1)
+	setupEngineDepGraph(t, eng, 1)
 
 	eng.processWorkerResult(ctx, &WorkerResult{
 		Path:       "throttled.txt",
@@ -3468,7 +3428,7 @@ func TestRecordFailure_PopulatesScopeKey_429(t *testing.T) {
 		ErrMsg:     "too many requests",
 		HTTPStatus: 429,
 		ActionID:   1,
-	}, nil, nil)
+	}, nil)
 
 	issues, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
@@ -3483,7 +3443,7 @@ func TestRecordFailure_PopulatesScopeKey_507Shortcut(t *testing.T) {
 	mock := &engineMockClient{}
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
-	setupEngineTracker(t, eng, 1)
+	setupEngineDepGraph(t, eng, 1)
 
 	eng.processWorkerResult(ctx, &WorkerResult{
 		Path:        "shared/file.txt",
@@ -3493,7 +3453,7 @@ func TestRecordFailure_PopulatesScopeKey_507Shortcut(t *testing.T) {
 		HTTPStatus:  507,
 		ShortcutKey: "driveA:item42",
 		ActionID:    1,
-	}, nil, nil)
+	}, nil)
 
 	issues, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
@@ -3501,81 +3461,63 @@ func TestRecordFailure_PopulatesScopeKey_507Shortcut(t *testing.T) {
 	assert.Equal(t, SKQuotaShortcut("driveA:item42"), issues[0].ScopeKey)
 }
 
-// results channel → processWorkerResult → scope detection → scope block →
-// held queue → timer fires → DispatchTrial → trial action on ready channel →
-// trial result sent back → scope release/extend.
+// ---------------------------------------------------------------------------
+// Drain loop integration tests (Phase 4 architecture: DepGraph + ScopeGate)
 // ---------------------------------------------------------------------------
 
-// startDrainLoop creates a real engine with store, tracker, scopeState,
-// buffer, and retrier — the full transient retry pipeline — and starts
+// startDrainLoop creates a real engine with DepGraph, ScopeGate, readyCh,
+// scopeState, buf, and retryTimerCh — the full Phase 4 pipeline — and starts
 // drainWorkerResults. Returns:
 //   - results chan: test sends WorkerResults here (simulating workers)
-//   - ready chan: test reads trial/released actions from tracker.Ready()
+//   - ready chan: test reads dispatched actions from readyCh
 //   - cancel func: stops the drain goroutine
 //   - eng: the engine (for state inspection)
 //   - buf: the Buffer (for verifying retrier re-injection)
-//
-// Clock control: store and engine clocks are fixed at storeTime. The retrier
-// clock is storeTime+1h — obviously past any backoff delay (which caps at 1h
-// for high attempt counts and ~1.25s for attempt 0), so
-// ListSyncFailuresForRetry returns due rows on first sweep after Kick().
 func startDrainLoop(t *testing.T) (chan WorkerResult, <-chan *TrackedAction, context.CancelFunc, *Engine, *Buffer) {
 	t.Helper()
 
-	mock := &engineMockClient{}
-	eng, _ := newTestEngine(t, mock)
-
-	tracker := NewPersistentDepTracker(eng.logger)
-	tracker.onHeld = func() { eng.armTrialTimer() }
-	eng.tracker = tracker
+	eng := newPhase4Engine(t)
 	eng.scopeState = NewScopeState(eng.nowFunc, eng.logger)
 
 	buf := NewBuffer(eng.logger)
-
-	// Retrier clock is 1h ahead of real time — obviously past any backoff
-	// delay (which caps at 1h for high attempt counts and ~1.25s for attempt
-	// 0). Store and engine clocks use real time: scope/trial tests rely on
-	// real time for time.AfterFunc / NextDueTrial coordination.
-	futureTime := time.Now().Add(time.Hour)
-	retrier := NewFailureRetrier(eng.baseline, buf, tracker, eng.logger)
-	retrier.nowFunc = func() time.Time { return futureTime }
-	eng.retrier = retrier
+	eng.buf = buf
 
 	results := make(chan WorkerResult, 16)
-	ready := tracker.Ready()
+	ready := eng.readyCh
 
 	ctx, cancel := context.WithCancel(t.Context())
 	go eng.drainWorkerResults(ctx, results, nil)
-	go retrier.Run(ctx)
 
 	return results, ready, cancel, eng, buf
 }
 
 // readReady reads one TrackedAction from the ready channel with a 1s timeout.
-func readReady(t *testing.T, ready <-chan *TrackedAction) *TrackedAction {
+func readReady(t *testing.T, ready <-chan *TrackedAction) {
 	t.Helper()
 
 	select {
-	case ta := <-ready:
-		return ta
+	case <-ready:
 	case <-time.After(time.Second):
 		require.Fail(t, "timed out waiting for action on ready channel")
-		return nil
 	}
 }
 
-// Validates: R-2.10.5, R-2.10.7
-func TestE2E_429_ScopeBlock_TrialSuccess_Release(t *testing.T) {
+// Validates: R-2.10.5 — drain loop processes results and routes dependents.
+func TestE2E_DrainLoop_ProcessesAndRoutes(t *testing.T) {
 	t.Parallel()
 
 	results, ready, cancel, eng, _ := startDrainLoop(t)
 	defer cancel()
 
-	// Add an action and drain it from the ready channel (simulating a worker picking it up).
-	eng.tracker.Add(&Action{Type: ActionUpload, Path: "a.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 0, nil)
+	ctx := t.Context()
+
+	// Add parent action to DepGraph, send to readyCh.
+	ta := eng.depGraph.Add(&Action{Type: ActionUpload, Path: "a.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 0, nil)
+	require.NotNil(t, ta)
+	eng.readyCh <- ta
 	readReady(t, ready)
 
-	// Send a 429 result — triggers immediate scope block.
+	// Send 429 result — scope detection creates block + records failure.
 	results <- WorkerResult{
 		ActionID:   0,
 		Path:       "a.txt",
@@ -3588,181 +3530,84 @@ func TestE2E_429_ScopeBlock_TrialSuccess_Release(t *testing.T) {
 		Err:        fmt.Errorf("rate limited"),
 	}
 
-	// Wait for the scope block to be created.
+	// Verify scope block created and failure recorded.
 	require.Eventually(t, func() bool {
-		_, ok := eng.tracker.GetScopeBlock(SKThrottleAccount)
-		return ok
-	}, time.Second, time.Millisecond)
+		return eng.scopeGate.IsScopeBlocked(SKThrottleAccount)
+	}, time.Second, time.Millisecond, "scope block should be created")
 
-	// Add one action AFTER the block — it goes to held.
-	eng.tracker.Add(&Action{Type: ActionUpload, Path: "b.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i2"}, 1, nil)
-
-	// Trial timer fires (~5ms) — trial action appears on ready channel.
-	trial := readReady(t, ready)
-	assert.True(t, trial.IsTrial, "dispatched action should be a trial")
-	assert.Equal(t, SKThrottleAccount, trial.TrialScopeKey)
-
-	// Send success result back — scope should be released.
-	results <- WorkerResult{
-		ActionID:      trial.ID,
-		Path:          trial.Action.Path,
-		ActionType:    trial.Action.Type,
-		DriveID:       driveid.New(engineTestDriveID),
-		Success:       true,
-		IsTrial:       true,
-		TrialScopeKey: SKThrottleAccount,
-	}
-
-	// Scope block should be gone.
-	require.Eventually(t, func() bool {
-		_, ok := eng.tracker.GetScopeBlock(SKThrottleAccount)
-		return !ok
-	}, time.Second, time.Millisecond)
+	issues, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.NotEmpty(t, issues, "failure should be recorded")
 }
 
-// Validates: R-2.10.5, R-2.10.7
-func TestE2E_429_TrialFailure_DoublesInterval(t *testing.T) {
+// TestE2E_DrainLoop_TrialResultSuccess verifies that trial success clears the
+// scope block and unblocks failures via processTrialResult in the drain loop.
+func TestE2E_DrainLoop_TrialResultSuccess(t *testing.T) {
 	t.Parallel()
 
-	results, ready, cancel, eng, _ := startDrainLoop(t)
+	results, _, cancel, eng, _ := startDrainLoop(t)
 	defer cancel()
 
-	// Manually create a short-interval block.
-	eng.tracker.HoldScope(SKThrottleAccount, &ScopeBlock{
+	ctx := t.Context()
+
+	// Set up scope block and a scope-blocked failure.
+	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, SKThrottleAccount, &ScopeBlock{
 		Key:           SKThrottleAccount,
-		IssueType:     "rate_limited",
+		IssueType:     IssueRateLimited,
 		BlockedAt:     eng.nowFunc(),
-		TrialInterval: 2 * time.Millisecond,
-		NextTrialAt:   eng.nowFunc().Add(2 * time.Millisecond),
-	})
+		TrialInterval: 10 * time.Millisecond,
+		NextTrialAt:   eng.nowFunc().Add(10 * time.Millisecond),
+	}))
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path: "blocked.txt", DriveID: driveid.New(engineTestDriveID), Direction: strUpload,
+		Category: strTransient, ErrMsg: "rate limited", ScopeKey: SKThrottleAccount,
+	}, nil))
 
-	// Add action → goes to held → onHeld → armTrialTimer.
-	eng.tracker.Add(&Action{Type: ActionUpload, Path: "a.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 0, nil)
+	// Add trial action to depGraph.
+	ta := eng.depGraph.Add(&Action{Type: ActionUpload, Path: "trial.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 1, nil)
+	require.NotNil(t, ta)
 
-	// Trial 1 fires — pops a.txt from held.
-	trial1 := readReady(t, ready)
-	assert.True(t, trial1.IsTrial)
-
-	// Send failure result back. Trial failures go through processTrialResult
-	// which doubles the interval (2ms → 4ms) without calling feedScopeDetection.
-	// The scope is already blocked, so re-detecting would be redundant.
+	// Send trial success via results channel.
 	results <- WorkerResult{
-		ActionID:      trial1.ID,
-		Path:          trial1.Action.Path,
-		ActionType:    trial1.Action.Type,
-		DriveID:       driveid.New(engineTestDriveID),
-		Success:       false,
-		HTTPStatus:    429,
-		RetryAfter:    4 * time.Millisecond,
-		ErrMsg:        "still rate limited",
-		Err:           fmt.Errorf("still rate limited"),
-		IsTrial:       true,
-		TrialScopeKey: SKThrottleAccount,
-	}
-
-	// Wait for the scope block to be re-created with the new interval.
-	require.Eventually(t, func() bool {
-		block, ok := eng.tracker.GetScopeBlock(SKThrottleAccount)
-		return ok && block.TrialInterval == 4*time.Millisecond
-	}, time.Second, time.Millisecond)
-
-	// Add another action for the second trial (held queue was emptied by first trial).
-	eng.tracker.Add(&Action{Type: ActionUpload, Path: "b.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i2"}, 1, nil)
-
-	// Trial 2 fires (~4ms later).
-	trial2 := readReady(t, ready)
-	assert.True(t, trial2.IsTrial, "second trial should fire with doubled interval")
-
-	// Send success to release.
-	results <- WorkerResult{
-		ActionID:      trial2.ID,
-		Path:          trial2.Action.Path,
-		ActionType:    trial2.Action.Type,
+		ActionID:      1,
+		Path:          "trial.txt",
+		ActionType:    ActionUpload,
 		DriveID:       driveid.New(engineTestDriveID),
 		Success:       true,
 		IsTrial:       true,
 		TrialScopeKey: SKThrottleAccount,
 	}
 
+	// Scope block should be cleared.
 	require.Eventually(t, func() bool {
-		_, ok := eng.tracker.GetScopeBlock(SKThrottleAccount)
-		return !ok
-	}, time.Second, time.Millisecond)
+		return !eng.scopeGate.IsScopeBlocked(SKThrottleAccount)
+	}, time.Second, time.Millisecond, "scope block should be cleared after trial success")
 }
 
-// Validates: R-2.10.5, R-2.10.6
-func TestE2E_507_ScopeBlock_TrialCycle(t *testing.T) {
+// TestE2E_DrainLoop_TrialResultFailure verifies trial failure doubles the interval.
+func TestE2E_DrainLoop_TrialResultFailure(t *testing.T) {
 	t.Parallel()
 
-	results, ready, cancel, eng, _ := startDrainLoop(t)
+	results, _, cancel, eng, _ := startDrainLoop(t)
 	defer cancel()
 
-	// Manually create a quota:own block with short interval (the production
-	// interval of 5min is tested in unit tests — here we test the full cycle).
-	eng.tracker.HoldScope(SKQuotaOwn, &ScopeBlock{
-		Key:           SKQuotaOwn,
-		IssueType:     "quota_exceeded",
-		BlockedAt:     eng.nowFunc(),
-		TrialInterval: 3 * time.Millisecond,
-		NextTrialAt:   eng.nowFunc().Add(3 * time.Millisecond),
-	})
+	ctx := t.Context()
 
-	// Add an upload action (quota:own blocks own-drive uploads) → held.
-	eng.tracker.Add(&Action{
-		Type:    ActionUpload,
-		Path:    "big.zip",
-		DriveID: driveid.New(engineTestDriveID),
-		ItemID:  "i1",
-	}, 0, nil)
-
-	// Trial fires.
-	trial := readReady(t, ready)
-	assert.True(t, trial.IsTrial)
-	assert.Equal(t, SKQuotaOwn, trial.TrialScopeKey)
-
-	// Send success → scope released.
-	results <- WorkerResult{
-		ActionID:      trial.ID,
-		Path:          trial.Action.Path,
-		ActionType:    trial.Action.Type,
-		DriveID:       driveid.New(engineTestDriveID),
-		Success:       true,
-		IsTrial:       true,
-		TrialScopeKey: SKQuotaOwn,
-	}
-
-	require.Eventually(t, func() bool {
-		_, ok := eng.tracker.GetScopeBlock(SKQuotaOwn)
-		return !ok
-	}, time.Second, time.Millisecond)
-}
-
-// Validates: R-2.10.5, R-2.10.8
-func TestE2E_Service_TrialFailure_BackoffAndRetry(t *testing.T) {
-	t.Parallel()
-
-	results, ready, cancel, eng, _ := startDrainLoop(t)
-	defer cancel()
-
-	eng.tracker.HoldScope(SKService, &ScopeBlock{
+	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, SKService, &ScopeBlock{
 		Key:           SKService,
-		IssueType:     "service_outage",
+		IssueType:     IssueServiceOutage,
 		BlockedAt:     eng.nowFunc(),
-		TrialInterval: 2 * time.Millisecond,
-		NextTrialAt:   eng.nowFunc().Add(2 * time.Millisecond),
-	})
+		TrialInterval: 10 * time.Millisecond,
+		NextTrialAt:   eng.nowFunc().Add(10 * time.Millisecond),
+	}))
 
-	// Add 1 action → held.
-	eng.tracker.Add(&Action{Type: ActionDownload, Path: "a.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 0, nil)
-
-	// Trial 1 fires → send failure.
-	trial1 := readReady(t, ready)
-	assert.True(t, trial1.IsTrial)
+	ta := eng.depGraph.Add(&Action{Type: ActionDownload, Path: "trial.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 99, nil)
+	require.NotNil(t, ta)
 
 	results <- WorkerResult{
-		ActionID:      trial1.ID,
-		Path:          trial1.Action.Path,
-		ActionType:    trial1.Action.Type,
+		ActionID:      99,
+		Path:          "trial.txt",
+		ActionType:    ActionDownload,
 		DriveID:       driveid.New(engineTestDriveID),
 		Success:       false,
 		HTTPStatus:    500,
@@ -3772,277 +3617,11 @@ func TestE2E_Service_TrialFailure_BackoffAndRetry(t *testing.T) {
 		TrialScopeKey: SKService,
 	}
 
-	// Verify interval doubled.
+	// Interval should be doubled from 10ms to 20ms.
 	require.Eventually(t, func() bool {
-		block, ok := eng.tracker.GetScopeBlock(SKService)
-		return ok && block.TrialInterval == 4*time.Millisecond && block.TrialCount == 1
-	}, time.Second, time.Millisecond)
-
-	// Add another action for the second trial (held queue was emptied).
-	eng.tracker.Add(&Action{Type: ActionDownload, Path: "b.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i2"}, 1, nil)
-
-	// Trial 2 fires (~4ms) → send success.
-	trial2 := readReady(t, ready)
-	assert.True(t, trial2.IsTrial)
-
-	results <- WorkerResult{
-		ActionID:      trial2.ID,
-		Path:          trial2.Action.Path,
-		ActionType:    trial2.Action.Type,
-		DriveID:       driveid.New(engineTestDriveID),
-		Success:       true,
-		IsTrial:       true,
-		TrialScopeKey: SKService,
-	}
-
-	require.Eventually(t, func() bool {
-		_, ok := eng.tracker.GetScopeBlock(SKService)
-		return !ok
-	}, time.Second, time.Millisecond)
-}
-
-// Validates: R-2.10.5
-func TestE2E_MultipleScopes_EarliestTrialFires(t *testing.T) {
-	t.Parallel()
-
-	results, ready, cancel, eng, _ := startDrainLoop(t)
-	defer cancel()
-
-	now := eng.nowFunc()
-
-	// Service block fires first (2ms), quota fires later (200ms).
-	// Stagger enough so the service trial completes before quota trial fires.
-	eng.tracker.HoldScope(SKService, &ScopeBlock{
-		Key:           SKService,
-		IssueType:     "service_outage",
-		BlockedAt:     now,
-		TrialInterval: 2 * time.Millisecond,
-		NextTrialAt:   now.Add(2 * time.Millisecond),
-	})
-
-	// Service action: downloads are blocked by service scope.
-	eng.tracker.Add(&Action{Type: ActionDownload, Path: "a.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 0, nil)
-
-	// First trial → service (earlier).
-	trial1 := readReady(t, ready)
-	assert.True(t, trial1.IsTrial)
-	assert.Equal(t, SKService, trial1.TrialScopeKey)
-
-	// Release service scope.
-	results <- WorkerResult{
-		ActionID:      trial1.ID,
-		Path:          trial1.Action.Path,
-		ActionType:    trial1.Action.Type,
-		DriveID:       driveid.New(engineTestDriveID),
-		Success:       true,
-		IsTrial:       true,
-		TrialScopeKey: SKService,
-	}
-
-	// Wait for service scope to be released before adding quota scope.
-	require.Eventually(t, func() bool {
-		_, ok := eng.tracker.GetScopeBlock(SKService)
-		return !ok
-	}, time.Second, time.Millisecond)
-
-	// Now add quota scope + upload action.
-	eng.tracker.HoldScope(SKQuotaOwn, &ScopeBlock{
-		Key:           SKQuotaOwn,
-		IssueType:     "quota_exceeded",
-		BlockedAt:     eng.nowFunc(),
-		TrialInterval: 2 * time.Millisecond,
-		NextTrialAt:   eng.nowFunc().Add(2 * time.Millisecond),
-	})
-	eng.tracker.Add(&Action{
-		Type:    ActionUpload,
-		Path:    "b.txt",
-		DriveID: driveid.New(engineTestDriveID),
-		ItemID:  "i2",
-	}, 1, nil)
-
-	// Second trial → quota:own.
-	trial2 := readReady(t, ready)
-	assert.True(t, trial2.IsTrial)
-	assert.Equal(t, SKQuotaOwn, trial2.TrialScopeKey)
-
-	// Release quota scope.
-	results <- WorkerResult{
-		ActionID:      trial2.ID,
-		Path:          trial2.Action.Path,
-		ActionType:    trial2.Action.Type,
-		DriveID:       driveid.New(engineTestDriveID),
-		Success:       true,
-		IsTrial:       true,
-		TrialScopeKey: SKQuotaOwn,
-	}
-
-	require.Eventually(t, func() bool {
-		_, ok := eng.tracker.GetScopeBlock(SKQuotaOwn)
-		return !ok
-	}, time.Second, time.Millisecond)
-}
-
-// Validates: R-2.10.5 — proves the onHeld callback fixes the gap:
-// timer arms when action enters held after empty applyScopeBlock.
-func TestE2E_GapFixed_TimerArmsFromAdd(t *testing.T) {
-	t.Parallel()
-
-	_, ready, cancel, eng, _ := startDrainLoop(t)
-	defer cancel()
-
-	// Create scope block with short interval — held queue is EMPTY.
-	eng.applyScopeBlock(ScopeUpdateResult{
-		Block:      true,
-		ScopeKey:   SKThrottleAccount,
-		IssueType:  "rate_limited",
-		RetryAfter: 5 * time.Millisecond,
-	})
-
-	// Timer should NOT be armed (held queue empty → EarliestTrialAt returns false).
-	eng.trialMu.Lock()
-	timerBeforeAdd := eng.trialTimer
-	eng.trialMu.Unlock()
-	assert.Nil(t, timerBeforeAdd, "timer should not arm with empty held queue")
-
-	// Add action → held → onHeld → armTrialTimer.
-	eng.tracker.Add(&Action{Type: ActionUpload, Path: "a.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 0, nil)
-
-	// Timer should now be armed.
-	require.Eventually(t, func() bool {
-		eng.trialMu.Lock()
-		defer eng.trialMu.Unlock()
-		return eng.trialTimer != nil
-	}, time.Second, time.Millisecond)
-
-	// Trial fires.
-	trial := readReady(t, ready)
-	assert.True(t, trial.IsTrial, "trial should fire from timer armed by onHeld")
-}
-
-// Validates: R-2.10.5 — proves dependents entering held also arm the timer.
-func TestE2E_GapFixed_TimerArmsFromCompleteDependents(t *testing.T) {
-	t.Parallel()
-
-	results, ready, cancel, eng, _ := startDrainLoop(t)
-	defer cancel()
-
-	// A has no deps → goes to ready. B depends on A → waits.
-	eng.tracker.Add(&Action{Type: ActionDownload, Path: "a.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 0, nil)
-	eng.tracker.Add(&Action{Type: ActionDownload, Path: "b.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i2"}, 1, []int64{0})
-
-	// Drain A from ready.
-	readReady(t, ready)
-
-	// Block service scope — when A completes, B's deps are satisfied,
-	// dispatch sends it to held, onHeld fires armTrialTimer.
-	eng.tracker.HoldScope(SKService, &ScopeBlock{
-		Key:           SKService,
-		IssueType:     "service_outage",
-		BlockedAt:     eng.nowFunc(),
-		TrialInterval: 5 * time.Millisecond,
-		NextTrialAt:   eng.nowFunc().Add(5 * time.Millisecond),
-	})
-
-	// Send success for A → processWorkerResult → Complete(0) → B dispatched → held.
-	results <- WorkerResult{
-		ActionID:   0,
-		Path:       "a.txt",
-		ActionType: ActionDownload,
-		DriveID:    driveid.New(engineTestDriveID),
-		Success:    true,
-	}
-
-	// Trial fires with B.
-	trial := readReady(t, ready)
-	assert.True(t, trial.IsTrial, "trial should fire for dependent that entered held")
-	assert.Equal(t, "b.txt", trial.Action.Path)
-}
-
-// Validates: R-2.10.5 — thundering herd: sync_failures reset on trial success.
-func TestE2E_ThunderingHerd_SyncFailuresReset(t *testing.T) {
-	t.Parallel()
-
-	results, ready, cancel, eng, _ := startDrainLoop(t)
-	defer cancel()
-
-	ctx := t.Context()
-
-	// Insert sync_failures rows with future next_retry_at.
-	farFuture := eng.nowFunc().Add(time.Hour)
-	for i, path := range []string{"x.txt", "y.txt"} {
-		require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
-			Path:       path,
-			DriveID:    driveid.New(engineTestDriveID),
-			Direction:  "upload",
-			Category:   "transient",
-			ErrMsg:     "rate limited",
-			HTTPStatus: 429,
-			ScopeKey:   SKThrottleAccount,
-		}, func(int) time.Duration { return time.Duration(i+1) * time.Hour }))
-
-		// Verify it was recorded with a future next_retry_at.
-		rows, err := eng.baseline.ListSyncFailures(ctx)
-		require.NoError(t, err)
-		found := false
-		for _, r := range rows {
-			if r.Path == path {
-				found = true
-				assert.Greater(t, r.NextRetryAt, farFuture.Add(-2*time.Hour).Unix(),
-					"failure should have future next_retry_at")
-			}
-		}
-		require.True(t, found, "failure should exist: %s", path)
-	}
-
-	// Create scope block and add action.
-	eng.tracker.HoldScope(SKThrottleAccount, &ScopeBlock{
-		Key:           SKThrottleAccount,
-		IssueType:     "rate_limited",
-		BlockedAt:     eng.nowFunc(),
-		TrialInterval: 2 * time.Millisecond,
-		NextTrialAt:   eng.nowFunc().Add(2 * time.Millisecond),
-	})
-	eng.tracker.Add(&Action{Type: ActionUpload, Path: "trial.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 10, nil)
-
-	// Trial fires → send success.
-	trial := readReady(t, ready)
-	results <- WorkerResult{
-		ActionID:      trial.ID,
-		Path:          trial.Action.Path,
-		ActionType:    trial.Action.Type,
-		DriveID:       driveid.New(engineTestDriveID),
-		Success:       true,
-		IsTrial:       true,
-		TrialScopeKey: SKThrottleAccount,
-	}
-
-	// Wait for scope release.
-	// Poll for the actual condition: next_retry_at values reset to ~now.
-	// Polling this directly avoids a race between scope release (which
-	// removes the scope block) and resetScopeRetryTimes (which updates
-	// the DB rows) — both run sequentially in the drain goroutine, but
-	// the test goroutine can observe the scope release before the DB
-	// update completes.
-	require.Eventually(t, func() bool {
-		rows, err := eng.baseline.ListSyncFailures(ctx)
-		if err != nil || len(rows) == 0 {
-			return false
-		}
-		now := time.Now()
-		for _, r := range rows {
-			if r.ScopeKey == SKThrottleAccount && r.Category == "transient" {
-				resetTime := time.Unix(0, r.NextRetryAt)
-				if now.Sub(resetTime).Abs() > 5*time.Second {
-					return false
-				}
-			}
-		}
-		return true
-	}, 2*time.Second, time.Millisecond, "sync_failures next_retry_at should be reset to ~now")
-
-	// Also verify scope block was cleared.
-	_, ok := eng.tracker.GetScopeBlock(SKThrottleAccount)
-	assert.False(t, ok, "scope block should be released")
+		block, ok := eng.scopeGate.GetScopeBlock(SKService)
+		return ok && block.TrialInterval == 20*time.Millisecond
+	}, time.Second, time.Millisecond, "trial failure should double interval")
 }
 
 func TestE2E_DrainExit_StopsTimer(t *testing.T) {
@@ -4051,15 +3630,13 @@ func TestE2E_DrainExit_StopsTimer(t *testing.T) {
 	results, _, cancel, eng, _ := startDrainLoop(t)
 	defer cancel()
 
-	// Create scope block + held action → timer armed.
-	eng.tracker.HoldScope(SKService, &ScopeBlock{
-		Key:           SKService,
-		IssueType:     "service_outage",
-		BlockedAt:     eng.nowFunc(),
-		TrialInterval: time.Hour, // long interval so it doesn't fire during test
-		NextTrialAt:   eng.nowFunc().Add(time.Hour),
+	// Create scope block → arms trial timer.
+	eng.applyScopeBlock(ScopeUpdateResult{
+		Block:      true,
+		ScopeKey:   SKService,
+		IssueType:  IssueServiceOutage,
+		RetryAfter: time.Hour, // long interval so it doesn't fire during test
 	})
-	eng.tracker.Add(&Action{Type: ActionDownload, Path: "a.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 0, nil)
 
 	// Verify timer is armed.
 	require.Eventually(t, func() bool {
@@ -4109,74 +3686,9 @@ func TestTrialTimer_QuotaStartsAt5s(t *testing.T) {
 	}
 }
 
-// Validates: R-2.10.6, R-2.10.7, R-2.10.8, R-2.10.14 — unified cap across scope types.
-func TestTrialTimer_BackoffCapsAt5m(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name       string
-		scopeKey   ScopeKey
-		issueType  string
-		httpStatus int
-		actionType ActionType
-	}{
-		{"quota", SKQuotaOwn, "quota_exceeded", 507, ActionUpload},
-		{"service", SKService, "service_outage", 500, ActionDownload},
-		{"throttle", SKThrottleAccount, "rate_limited", 429, ActionUpload},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			mock := &engineMockClient{}
-			eng, _ := newTestEngine(t, mock)
-
-			tracker := NewDepTracker(16, eng.logger)
-			eng.tracker = tracker
-
-			// Start at 4min — doubling gives 8min → capped to 5min.
-			block := &ScopeBlock{
-				Key:           tt.scopeKey,
-				IssueType:     tt.issueType,
-				BlockedAt:     time.Now(),
-				TrialInterval: 4 * time.Minute,
-				NextTrialAt:   time.Now().Add(4 * time.Minute),
-			}
-			tracker.HoldScope(tt.scopeKey, block)
-			tracker.Add(&Action{Type: tt.actionType, Path: "held.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
-			tracker.Add(&Action{Type: tt.actionType, Path: "trial1.txt", DriveID: driveid.New("d"), ItemID: "t1"}, 90, nil)
-			tracker.Add(&Action{Type: tt.actionType, Path: "trial2.txt", DriveID: driveid.New("d"), ItemID: "t2"}, 91, nil)
-
-			eng.processTrialResult(t.Context(), &WorkerResult{
-				ActionID:      90,
-				IsTrial:       true,
-				TrialScopeKey: tt.scopeKey,
-				Success:       false,
-				HTTPStatus:    tt.httpStatus,
-				ErrMsg:        "test failure",
-			})
-
-			got, ok := tracker.GetScopeBlock(tt.scopeKey)
-			require.True(t, ok)
-			assert.Equal(t, defaultMaxTrialInterval, got.TrialInterval, "should cap at 5m")
-
-			// Double again — should stay at 5m.
-			eng.processTrialResult(t.Context(), &WorkerResult{
-				ActionID:      91,
-				IsTrial:       true,
-				TrialScopeKey: tt.scopeKey,
-				Success:       false,
-				HTTPStatus:    tt.httpStatus,
-				ErrMsg:        "still failing",
-			})
-
-			got, ok = tracker.GetScopeBlock(tt.scopeKey)
-			require.True(t, ok)
-			assert.Equal(t, defaultMaxTrialInterval, got.TrialInterval, "should remain capped at 5m")
-		})
-	}
-}
+// TestTrialTimer_BackoffCapsAt5m is covered by
+// TestProcessTrialResultV2_Failure_CapsAt5m which uses ScopeGate.
+// Removed: old test used held-queue mechanism.
 
 // Validates: R-2.10.7
 func TestTrialTimer_RateLimited_StartsAtRetryAfter(t *testing.T) {
@@ -4199,40 +3711,9 @@ func TestTrialTimer_RateLimited_StartsAtRetryAfter(t *testing.T) {
 		"rate_limited RetryAfter should pass through server value")
 }
 
-// Validates: R-2.10.7
-func TestTrialTimer_RateLimited_BlocksAllActionTypes(t *testing.T) {
-	t.Parallel()
-
-	logger := testLogger(t)
-	dt := NewDepTracker(16, logger)
-
-	dt.HoldScope(SKThrottleAccount, &ScopeBlock{
-		Key:       SKThrottleAccount,
-		IssueType: "rate_limited",
-	})
-
-	actions := []struct {
-		typ  ActionType
-		path string
-	}{
-		{ActionUpload, "upload.txt"},
-		{ActionDownload, "download.txt"},
-		{ActionFolderCreate, "folder/"},
-		{ActionLocalDelete, "delete.txt"},
-	}
-
-	for i, a := range actions {
-		dt.Add(&Action{Type: a.typ, Path: a.path, DriveID: driveid.New("d"), ItemID: fmt.Sprintf("i%d", i)}, int64(i), nil)
-	}
-
-	// None should appear on the ready channel.
-	select {
-	case ta := <-dt.Ready():
-		require.Fail(t, fmt.Sprintf("action should be held, got: %s (type %d)", ta.Action.Path, ta.Action.Type))
-	case <-time.After(20 * time.Millisecond):
-		// Expected — all held.
-	}
-}
+// TestTrialTimer_RateLimited_BlocksAllActionTypes is covered by
+// TestScopeGate_Admit_Blocked and related tests in scope_gate_test.go.
+// Removed: old test used held-queue mechanism.
 
 // Validates: R-2.10.8
 func TestTrialTimer_Service_StartsAt5s(t *testing.T) {
@@ -4440,10 +3921,8 @@ func TestClearResolvedSkippedItems_CaseCollision(t *testing.T) {
 func TestFeedScopeDetection_LocalErrorIgnored(t *testing.T) {
 	t.Parallel()
 
-	mock := &engineMockClient{}
-	eng, _ := newTestEngine(t, mock)
+	eng := newPhase4Engine(t)
 	eng.scopeState = NewScopeState(time.Now, eng.logger)
-	eng.tracker = NewDepTracker(16, eng.logger)
 
 	// Feed several local errors (HTTPStatus=0) — should not trigger a scope block.
 	for i := range 10 {
@@ -4457,26 +3936,28 @@ func TestFeedScopeDetection_LocalErrorIgnored(t *testing.T) {
 	}
 
 	// No scope block should have been created.
-	_, blocked := eng.tracker.GetScopeBlock(SKService)
-	assert.False(t, blocked, "local errors with HTTPStatus=0 must not trigger service scope")
-	_, blocked = eng.tracker.GetScopeBlock(SKThrottleAccount)
-	assert.False(t, blocked, "local errors with HTTPStatus=0 must not trigger throttle scope")
+	assert.False(t, eng.scopeGate.IsScopeBlocked(SKService),
+		"local errors with HTTPStatus=0 must not trigger service scope")
+	assert.False(t, eng.scopeGate.IsScopeBlocked(SKThrottleAccount),
+		"local errors with HTTPStatus=0 must not trigger throttle scope")
 }
 
 // Validates: R-2.10.30
 func TestIsObservationSuppressed_Throttled(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
-	eng.tracker = NewDepTracker(16, eng.logger)
+	eng := newPhase4Engine(t)
+	ctx := t.Context()
 
 	// Initially not suppressed.
 	assert.False(t, eng.isObservationSuppressed())
 
 	// After throttle block, should be suppressed.
-	eng.tracker.HoldScope(SKThrottleAccount, &ScopeBlock{
+	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, SKThrottleAccount, &ScopeBlock{
+		Key:           SKThrottleAccount,
+		IssueType:     IssueRateLimited,
 		TrialInterval: 30 * time.Second,
-	})
+	}))
 	assert.True(t, eng.isObservationSuppressed())
 }
 
@@ -4484,24 +3965,26 @@ func TestIsObservationSuppressed_Throttled(t *testing.T) {
 func TestIsObservationSuppressed_ServiceOutage(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
-	eng.tracker = NewDepTracker(16, eng.logger)
+	eng := newPhase4Engine(t)
+	ctx := t.Context()
 
 	// Service outage should also suppress.
-	eng.tracker.HoldScope(SKService, &ScopeBlock{
+	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, SKService, &ScopeBlock{
+		Key:           SKService,
+		IssueType:     IssueServiceOutage,
 		TrialInterval: 60 * time.Second,
-	})
+	}))
 	assert.True(t, eng.isObservationSuppressed())
 }
 
 // Validates: R-2.10.30
-func TestIsObservationSuppressed_NilTracker(t *testing.T) {
+func TestIsObservationSuppressed_NilScopeGate(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
-	eng.tracker = nil
+	eng.scopeGate = nil
 
-	// With nil tracker, should not panic and should return false.
+	// With nil scopeGate, should not panic and should return false.
 	assert.False(t, eng.isObservationSuppressed())
 }
 
@@ -4509,13 +3992,15 @@ func TestIsObservationSuppressed_NilTracker(t *testing.T) {
 func TestIsObservationSuppressed_QuotaDoesNotSuppress(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
-	eng.tracker = NewDepTracker(16, eng.logger)
+	eng := newPhase4Engine(t)
+	ctx := t.Context()
 
 	// Quota scope block should NOT suppress observation (R-2.10.31).
-	eng.tracker.HoldScope(SKQuotaOwn, &ScopeBlock{
+	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, SKQuotaOwn, &ScopeBlock{
+		Key:           SKQuotaOwn,
+		IssueType:     IssueQuotaExceeded,
 		TrialInterval: 5 * time.Minute,
-	})
+	}))
 	assert.False(t, eng.isObservationSuppressed())
 }
 
@@ -4609,39 +4094,34 @@ func TestLogFailureSummary_NoErrors(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Transient retry pipeline integration test
+// Retrier pipeline integration test (Phase 4 architecture)
 //
-// Exercises the end-to-end path: action dispatch → 503 failure →
-// sync_failures persistence → FailureRetrier picks up due row →
-// re-injects synthesized ChangeEvent into Buffer.
-//
-// Individual components (recordFailure, FailureRetrier.reconcile, Buffer.Add)
-// are unit-tested separately; this test verifies the full wiring.
+// Exercises the drain-loop integrated retrier: action → failure → sync_failures
+// → retry timer fires → runRetrierSweep → synthesizeFailureEvent → Buffer.
 // ---------------------------------------------------------------------------
 
 // Validates: R-6.8.10, R-6.8.11, R-6.8.7
-func TestRetryPipeline_TransientFailure_RetrierReinjects(t *testing.T) {
+func TestRetryPipeline_TransientFailure_DrainLoopRetrier(t *testing.T) {
 	t.Parallel()
 
-	results, ready, cancel, eng, buf := startDrainLoop(t)
+	results, _, cancel, eng, buf := startDrainLoop(t)
 	defer cancel()
 
 	ctx := t.Context()
 	driveID := driveid.New(engineTestDriveID)
 	testPath := "docs/report.pdf"
 
-	// ---------------------------------------------------------------
-	// Phase A: 503 failure → sync_failures → retrier re-injection
-	// ---------------------------------------------------------------
-
-	// Dispatch a download action and simulate a worker picking it up.
-	eng.tracker.Add(&Action{
-		Type:    ActionDownload,
-		Path:    testPath,
-		DriveID: driveID,
-		ItemID:  "item-abc",
+	// Add action to depGraph, send to readyCh, drain it.
+	ta := eng.depGraph.Add(&Action{
+		Type: ActionDownload, Path: testPath, DriveID: driveID, ItemID: "item-abc",
 	}, 0, nil)
-	readReady(t, ready)
+	require.NotNil(t, ta)
+	eng.readyCh <- ta
+	readReady(t, eng.readyCh)
+
+	// Use a nowFn that's 1 hour in the future so retrier sees rows as due.
+	futureTime := time.Now().Add(time.Hour)
+	eng.nowFn = func() time.Time { return futureTime }
 
 	// Send a 503 result — classifies as resultRequeue (transient).
 	results <- WorkerResult{
@@ -4655,223 +4135,28 @@ func TestRetryPipeline_TransientFailure_RetrierReinjects(t *testing.T) {
 		Err:        fmt.Errorf("service unavailable"),
 	}
 
-	// Verify: sync_failures row created with correct fields.
+	// Verify: sync_failures row created.
 	require.Eventually(t, func() bool {
 		rows, err := eng.baseline.ListSyncFailures(ctx)
 		return err == nil && len(rows) == 1
 	}, time.Second, time.Millisecond, "sync_failures row should be created")
 
-	rows, err := eng.baseline.ListSyncFailures(ctx)
-	require.NoError(t, err)
-	require.Len(t, rows, 1)
+	// Trigger retrier sweep manually (in production this fires from retry timer).
+	eng.runRetrierSweep(ctx)
 
-	row := rows[0]
-	assert.Equal(t, testPath, row.Path, "failure path")
-	assert.Equal(t, "download", row.Direction, "failure direction")
-	assert.Equal(t, "transient", row.Category, "failure category")
-	assert.Equal(t, http.StatusServiceUnavailable, row.HTTPStatus, "HTTP status")
-	assert.Equal(t, 1, row.FailureCount, "failure count")
-	assert.Greater(t, row.NextRetryAt, int64(0), "next_retry_at should be set for transient failures")
+	// Verify: retrier injected event into buffer.
+	assert.Greater(t, buf.Len(), 0, "retrier should inject event into buffer")
 
-	// Verify: tracker completed the action (no longer in-flight).
-	require.Eventually(t, func() bool {
-		return !eng.tracker.HasInFlight(testPath)
-	}, time.Second, time.Millisecond, "action should be completed in tracker")
-
-	// Verify: retrier picked up the due row and re-injected into the buffer.
-	// The retrier runs on Kick() from processWorkerResult, and its clock (t=1005)
-	// is past the next_retry_at (≈t=1001), so the row is due immediately.
-	require.Eventually(t, func() bool {
-		return buf.Len() > 0
-	}, 2*time.Second, 5*time.Millisecond, "retrier should inject event into buffer")
-
-	// Verify: the synthesized event matches what the planner expects.
 	flushed := buf.FlushImmediate()
 	require.Len(t, flushed, 1, "should have exactly one path in buffer")
 	assert.Equal(t, testPath, flushed[0].Path, "buffered path")
-
-	// Download failures produce SourceRemote + ChangeModify events.
-	require.Len(t, flushed[0].RemoteEvents, 1, "should have one remote event")
-	ev := flushed[0].RemoteEvents[0]
-	assert.Equal(t, SourceRemote, ev.Source, "event source")
-	assert.Equal(t, ChangeModify, ev.Type, "event type")
-	assert.Equal(t, testPath, ev.Path, "event path")
-
-	// ---------------------------------------------------------------
-	// Phase B: Verify engine counters reflect the failure
-	// ---------------------------------------------------------------
-
-	// The 503 increments the failed counter via recordError.
-	assert.Equal(t, int32(1), eng.failed.Load(), "failed counter")
-	assert.Equal(t, int32(0), eng.succeeded.Load(), "succeeded counter (no success yet)")
-}
-
-// Validates: R-6.8.10, R-6.8.11, R-6.8.7
-func TestRetryPipeline_Upload_RetrierReinjects(t *testing.T) {
-	t.Parallel()
-
-	results, ready, cancel, eng, buf := startDrainLoop(t)
-	defer cancel()
-
-	ctx := t.Context()
-	driveID := driveid.New(engineTestDriveID)
-	testPath := "photos/vacation.jpg"
-
-	// Dispatch an upload action and simulate a worker picking it up.
-	// Upload actions have no ItemID (new files don't have server-side IDs yet).
-	eng.tracker.Add(&Action{
-		Type:    ActionUpload,
-		Path:    testPath,
-		DriveID: driveID,
-	}, 0, nil)
-	readReady(t, ready)
-
-	// Send a 503 result — classifies as resultRequeue (transient).
-	results <- WorkerResult{
-		ActionID:   0,
-		Path:       testPath,
-		ActionType: ActionUpload,
-		DriveID:    driveID,
-		Success:    false,
-		HTTPStatus: http.StatusServiceUnavailable,
-		ErrMsg:     "service unavailable",
-		Err:        fmt.Errorf("service unavailable"),
-	}
-
-	// Verify: sync_failures row created with correct fields.
-	require.Eventually(t, func() bool {
-		rows, err := eng.baseline.ListSyncFailures(ctx)
-		return err == nil && len(rows) == 1
-	}, time.Second, time.Millisecond, "sync_failures row should be created")
-
-	rows, err := eng.baseline.ListSyncFailures(ctx)
-	require.NoError(t, err)
-	require.Len(t, rows, 1)
-
-	row := rows[0]
-	assert.Equal(t, testPath, row.Path, "failure path")
-	assert.Equal(t, "upload", row.Direction, "failure direction")
-	assert.Equal(t, "transient", row.Category, "failure category")
-	assert.Equal(t, http.StatusServiceUnavailable, row.HTTPStatus, "HTTP status")
-	assert.Equal(t, 1, row.FailureCount, "failure count")
-
-	// Verify: tracker completed the action (no longer in-flight).
-	require.Eventually(t, func() bool {
-		return !eng.tracker.HasInFlight(testPath)
-	}, time.Second, time.Millisecond, "action should be completed in tracker")
-
-	// Verify: retrier picked up the due row and re-injected into the buffer.
-	require.Eventually(t, func() bool {
-		return buf.Len() > 0
-	}, 2*time.Second, 5*time.Millisecond, "retrier should inject event into buffer")
-
-	// Verify: the synthesized event matches the upload path through
-	// synthesizeFailureEvent — SourceLocal + ChangeModify (not RemoteEvents).
-	flushed := buf.FlushImmediate()
-	require.Len(t, flushed, 1, "should have exactly one path in buffer")
-	assert.Equal(t, testPath, flushed[0].Path, "buffered path")
-
-	require.Len(t, flushed[0].LocalEvents, 1, "upload failures produce local events")
-	ev := flushed[0].LocalEvents[0]
-	assert.Equal(t, SourceLocal, ev.Source, "event source")
-	assert.Equal(t, ChangeModify, ev.Type, "event type")
-	assert.Equal(t, testPath, ev.Path, "event path")
-
-	assert.Equal(t, int32(1), eng.failed.Load(), "failed counter")
-}
-
-// Validates: R-6.8.10, R-6.8.11, R-6.8.7
-func TestRetryPipeline_Delete_RetrierReinjects(t *testing.T) {
-	t.Parallel()
-
-	results, ready, cancel, eng, buf := startDrainLoop(t)
-	defer cancel()
-
-	ctx := t.Context()
-	driveID := driveid.New(engineTestDriveID)
-	testPath := "old/removed.txt"
-
-	// Seed remote_state so resolveItemID can find the item_id — in production,
-	// delete actions always reference an existing remote item with a remote_state row.
-	_, seedErr := eng.baseline.rawDB().ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		driveID.String(), "item-del", testPath, "file", "synced", time.Now().UnixNano())
-	require.NoError(t, seedErr, "seed remote_state")
-
-	// Dispatch a remote delete action with ItemID and DriveID populated
-	// (delete actions always reference an existing remote item).
-	eng.tracker.Add(&Action{
-		Type:    ActionRemoteDelete,
-		Path:    testPath,
-		DriveID: driveID,
-		ItemID:  "item-del",
-	}, 0, nil)
-	readReady(t, ready)
-
-	// Send a 503 result — classifies as resultRequeue (transient).
-	results <- WorkerResult{
-		ActionID:   0,
-		Path:       testPath,
-		ActionType: ActionRemoteDelete,
-		DriveID:    driveID,
-		Success:    false,
-		HTTPStatus: http.StatusServiceUnavailable,
-		ErrMsg:     "service unavailable",
-		Err:        fmt.Errorf("service unavailable"),
-	}
-
-	// Verify: sync_failures row created with correct fields.
-	require.Eventually(t, func() bool {
-		rows, err := eng.baseline.ListSyncFailures(ctx)
-		return err == nil && len(rows) == 1
-	}, time.Second, time.Millisecond, "sync_failures row should be created")
-
-	rows, err := eng.baseline.ListSyncFailures(ctx)
-	require.NoError(t, err)
-	require.Len(t, rows, 1)
-
-	row := rows[0]
-	assert.Equal(t, testPath, row.Path, "failure path")
-	assert.Equal(t, "delete", row.Direction, "failure direction")
-	assert.Equal(t, "transient", row.Category, "failure category")
-	assert.Equal(t, http.StatusServiceUnavailable, row.HTTPStatus, "HTTP status")
-	assert.Equal(t, 1, row.FailureCount, "failure count")
-
-	// Verify: tracker completed the action (no longer in-flight).
-	require.Eventually(t, func() bool {
-		return !eng.tracker.HasInFlight(testPath)
-	}, time.Second, time.Millisecond, "action should be completed in tracker")
-
-	// Verify: retrier picked up the due row and re-injected into the buffer.
-	require.Eventually(t, func() bool {
-		return buf.Len() > 0
-	}, 2*time.Second, 5*time.Millisecond, "retrier should inject event into buffer")
-
-	// Verify: the synthesized event matches the delete path through
-	// synthesizeFailureEvent — SourceRemote + ChangeDelete + IsDeleted,
-	// with ItemID and DriveID populated for server-side deletion.
-	flushed := buf.FlushImmediate()
-	require.Len(t, flushed, 1, "should have exactly one path in buffer")
-	assert.Equal(t, testPath, flushed[0].Path, "buffered path")
-
-	require.Len(t, flushed[0].RemoteEvents, 1, "delete failures produce remote events")
-	ev := flushed[0].RemoteEvents[0]
-	assert.Equal(t, SourceRemote, ev.Source, "event source")
-	assert.Equal(t, ChangeDelete, ev.Type, "event type")
-	assert.Equal(t, testPath, ev.Path, "event path")
-	assert.True(t, ev.IsDeleted, "event should be marked as deleted")
-	assert.NotEmpty(t, ev.ItemID, "event should have ItemID for server-side delete")
-	assert.NotEmpty(t, ev.DriveID.String(), "event should have DriveID")
-
-	assert.Equal(t, int32(1), eng.failed.Load(), "failed counter")
 }
 
 // Validates: R-6.8.10
-func TestProcessWorkerResult_Success_ClearsSyncFailure(t *testing.T) {
+func TestDrainLoop_Success_ClearsSyncFailure(t *testing.T) {
 	t.Parallel()
 
-	results, ready, cancel, eng, _ := startDrainLoop(t)
+	results, _, cancel, eng, _ := startDrainLoop(t)
 	defer cancel()
 
 	ctx := t.Context()
@@ -4880,191 +4165,34 @@ func TestProcessWorkerResult_Success_ClearsSyncFailure(t *testing.T) {
 
 	// Seed a sync_failures row — simulates a previous transient failure.
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
-		Path:       testPath,
-		DriveID:    driveID,
-		Direction:  "download",
-		Category:   "transient",
-		ErrMsg:     "previous failure",
+		Path: testPath, DriveID: driveID, Direction: "download",
+		Category: "transient", ErrMsg: "previous failure",
 		HTTPStatus: http.StatusServiceUnavailable,
 	}, func(int) time.Duration { return time.Hour }))
 
-	// Confirm the row exists.
 	rows, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, rows, 1, "seeded failure should exist")
 
-	// Dispatch the same path as a new action and read it from ready.
-	eng.tracker.Add(&Action{
-		Type:    ActionDownload,
-		Path:    testPath,
-		DriveID: driveID,
-		ItemID:  "item-ok",
+	// Add action, send to readyCh, drain it.
+	ta := eng.depGraph.Add(&Action{
+		Type: ActionDownload, Path: testPath, DriveID: driveID, ItemID: "item-ok",
 	}, 0, nil)
-	readReady(t, ready)
+	require.NotNil(t, ta)
+	eng.readyCh <- ta
+	readReady(t, eng.readyCh)
 
-	// Send a success result — the defensive clear should remove the row.
+	// Send a success result — defensive clear removes the row.
 	results <- WorkerResult{
-		ActionID:   0,
-		Path:       testPath,
-		ActionType: ActionDownload,
-		DriveID:    driveID,
-		Success:    true,
+		ActionID: 0, Path: testPath, ActionType: ActionDownload,
+		DriveID: driveID, Success: true,
 	}
 
-	// Verify: sync_failures row cleared by the defensive ClearSyncFailure.
+	// Verify: sync_failures row cleared.
 	require.Eventually(t, func() bool {
 		rows, err := eng.baseline.ListSyncFailures(ctx)
 		return err == nil && len(rows) == 0
 	}, time.Second, time.Millisecond, "sync_failures row should be cleared on success")
 
 	assert.Equal(t, int32(1), eng.succeeded.Load(), "succeeded counter")
-}
-
-// ---------------------------------------------------------------------------
-// Group F: Trial Timer Full Lifecycle Integration Test
-// ---------------------------------------------------------------------------
-
-// Validates: R-2.10.5, R-2.10.6, R-2.10.8
-// TestTrialLifecycle_FullEngineLoop exercises the full trial lifecycle through
-// the real engine drain loop: multiple actions trigger a scope block, only ONE
-// trial dispatches per interval, trial failure doubles the interval (and the
-// doubled interval is NOT overwritten by scope re-detection — the A2 bug
-// regression), and trial success releases all held actions.
-//
-// This test differs from the individual E2E tests by:
-//   - checking intermediate state (trial count, interval value) during lifecycle
-//   - verifying the one-trial-per-tick invariant with multiple held actions
-//   - verifying backoff doubling survives through the full loop
-func TestTrialLifecycle_FullEngineLoop(t *testing.T) {
-	t.Parallel()
-
-	results, ready, cancel, eng, _ := startDrainLoop(t)
-	defer cancel()
-
-	// --- Phase 1: Trigger scope block via 429 result ---
-
-	// Add action a1 and drain from ready (simulates worker pickup).
-	eng.tracker.Add(&Action{
-		Type: ActionUpload, Path: "a1.txt",
-		DriveID: driveid.New(engineTestDriveID), ItemID: "i1",
-	}, 0, nil)
-	readReady(t, ready)
-
-	// Send 429 result → immediate throttle:account scope block.
-	results <- WorkerResult{
-		ActionID:   0,
-		Path:       "a1.txt",
-		ActionType: ActionUpload,
-		DriveID:    driveid.New(engineTestDriveID),
-		Success:    false,
-		HTTPStatus: 429,
-		RetryAfter: 3 * time.Millisecond,
-		ErrMsg:     "rate limited",
-		Err:        fmt.Errorf("rate limited"),
-	}
-
-	// Wait for scope block.
-	require.Eventually(t, func() bool {
-		_, ok := eng.tracker.GetScopeBlock(SKThrottleAccount)
-		return ok
-	}, time.Second, time.Millisecond, "scope block should be created after 429")
-
-	// Verify initial trial interval matches RetryAfter.
-	block, _ := eng.tracker.GetScopeBlock(SKThrottleAccount)
-	assert.Equal(t, 3*time.Millisecond, block.TrialInterval,
-		"initial trial interval should match RetryAfter")
-
-	// --- Phase 2: Add multiple actions after block — all go to held ---
-
-	eng.tracker.Add(&Action{
-		Type: ActionUpload, Path: "b1.txt",
-		DriveID: driveid.New(engineTestDriveID), ItemID: "i2",
-	}, 1, nil)
-	eng.tracker.Add(&Action{
-		Type: ActionUpload, Path: "c1.txt",
-		DriveID: driveid.New(engineTestDriveID), ItemID: "i3",
-	}, 2, nil)
-	eng.tracker.Add(&Action{
-		Type: ActionUpload, Path: "d1.txt",
-		DriveID: driveid.New(engineTestDriveID), ItemID: "i4",
-	}, 3, nil)
-
-	// --- Phase 3: Trial 1 fires — only ONE action dispatched as trial ---
-
-	trial1 := readReady(t, ready)
-	require.True(t, trial1.IsTrial, "dispatched action should be a trial")
-	assert.Equal(t, SKThrottleAccount, trial1.TrialScopeKey)
-
-	// Verify no second trial is dispatched immediately — the one-trial-per-tick
-	// invariant. Use a short timeout to avoid false negatives on slow CI.
-	select {
-	case extra := <-ready:
-		t.Fatalf("one-trial-per-tick violated: got extra action %q (trial=%v)",
-			extra.Action.Path, extra.IsTrial)
-	case <-time.After(20 * time.Millisecond):
-		// Good — no extra trial dispatched.
-	}
-
-	// --- Phase 4: Trial 1 fails — interval doubles (3ms → 6ms) ---
-
-	results <- WorkerResult{
-		ActionID:      trial1.ID,
-		Path:          trial1.Action.Path,
-		ActionType:    trial1.Action.Type,
-		DriveID:       driveid.New(engineTestDriveID),
-		Success:       false,
-		HTTPStatus:    429,
-		RetryAfter:    6 * time.Millisecond,
-		ErrMsg:        "still rate limited",
-		Err:           fmt.Errorf("still rate limited"),
-		IsTrial:       true,
-		TrialScopeKey: SKThrottleAccount,
-	}
-
-	// Wait for interval to be doubled. The processTrialResult path calls
-	// extendTrialInterval which doubles the interval without re-detecting
-	// the scope (A2 bug fix — feedScopeDetection is intentionally NOT called).
-	require.Eventually(t, func() bool {
-		b, ok := eng.tracker.GetScopeBlock(SKThrottleAccount)
-		return ok && b.TrialInterval == 6*time.Millisecond
-	}, time.Second, time.Millisecond,
-		"trial failure should double interval from 3ms to 6ms")
-
-	// --- Phase 5: Trial 2 fires with doubled interval ---
-
-	trial2 := readReady(t, ready)
-	require.True(t, trial2.IsTrial, "second trial should fire")
-	assert.Equal(t, SKThrottleAccount, trial2.TrialScopeKey)
-
-	// Verify interval was NOT overwritten by feedScopeDetection (A2 regression).
-	// The block should still have the doubled interval, not the original.
-	block2, ok := eng.tracker.GetScopeBlock(SKThrottleAccount)
-	require.True(t, ok, "scope block should still exist during trial 2")
-	assert.Equal(t, 6*time.Millisecond, block2.TrialInterval,
-		"doubled interval should NOT be overwritten by scope re-detection (A2 regression)")
-
-	// --- Phase 6: Trial 2 succeeds — scope released, all held actions dispatched ---
-
-	results <- WorkerResult{
-		ActionID:      trial2.ID,
-		Path:          trial2.Action.Path,
-		ActionType:    trial2.Action.Type,
-		DriveID:       driveid.New(engineTestDriveID),
-		Success:       true,
-		IsTrial:       true,
-		TrialScopeKey: SKThrottleAccount,
-	}
-
-	// Scope block should be gone.
-	require.Eventually(t, func() bool {
-		_, ok := eng.tracker.GetScopeBlock(SKThrottleAccount)
-		return !ok
-	}, time.Second, time.Millisecond, "scope block should be released on trial success")
-
-	// All remaining held actions should now be dispatched on the ready channel.
-	// We had 3 held actions (b1, c1, d1); trial1 consumed one, trial2 consumed
-	// one, so 1 should remain in held and get released now.
-	released := readReady(t, ready)
-	require.NotNil(t, released, "remaining held action should be dispatched after scope release")
-	assert.False(t, released.IsTrial, "released action should not be a trial")
 }

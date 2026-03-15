@@ -319,21 +319,27 @@ func (e *Engine) handleRemovedShortcuts(ctx context.Context, deletedItemIDs map[
 			return fmt.Errorf("sync: deleting shortcut %s: %w", sc.ItemID, err)
 		}
 
-		// Discard any held actions for this shortcut's quota scope.
+		// Clear scope block + sync_failures for this shortcut's quota scope.
 		// When a shortcut is removed while a scope block exists, held
 		// actions are no longer valid — discard instead of dispatch (R-2.10.38).
-		if e.tracker != nil {
-			scKey := sc.RemoteDrive + ":" + sc.RemoteItem
-			scopeKey := SKQuotaShortcut(scKey)
-			e.tracker.DiscardScope(scopeKey)
+		scKey := sc.RemoteDrive + ":" + sc.RemoteItem
+		scopeKey := SKQuotaShortcut(scKey)
 
-			// Clear orphaned sync_failures for the removed shortcut's scope.
-			if err := e.baseline.DeleteSyncFailuresByScope(ctx, scopeKey); err != nil {
-				e.logger.Warn("failed to clear sync_failures for removed shortcut",
+		if e.scopeGate != nil {
+			if err := e.scopeGate.ClearScopeBlock(ctx, scopeKey); err != nil {
+				e.logger.Debug("handleRemovedShortcuts: failed to clear scope block",
 					slog.String("scope_key", scopeKey.String()),
 					slog.String("error", err.Error()),
 				)
 			}
+		}
+
+		// Clear orphaned sync_failures for the removed shortcut's scope.
+		if err := e.baseline.DeleteSyncFailuresByScope(ctx, scopeKey); err != nil {
+			e.logger.Warn("failed to clear sync_failures for removed shortcut",
+				slog.String("scope_key", scopeKey.String()),
+				slog.String("error", err.Error()),
+			)
 		}
 	}
 

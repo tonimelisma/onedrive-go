@@ -2,7 +2,7 @@
 //
 // sync_failures is the active retry queue. Transient failures get next_retry_at
 // computed by a caller-provided delayFn (retry.Reconcile.Delay). The
-// FailureRetrier re-injects due items via buffer → planner → tracker (R-6.8.10).
+// The drain-loop retrier re-injects due items via buffer → planner → executor (R-6.8.10).
 //
 // Contents:
 //   - isActionableIssue:                classify issue types requiring user action
@@ -21,6 +21,8 @@
 //   - ClearResolvedActionableFailures:  remove actionable failures no longer reported
 //   - MarkSyncFailureActionable:        promote transient to actionable
 //   - UpsertActionableFailures:         batch-upsert scanner-detected issues
+//   - PickTrialCandidate:               oldest scope-blocked failure for trial probing
+//   - SetScopeRetryAtNow:               unblock scope failures by setting next_retry_at
 //   - scanSyncFailureRows:              scan multiple failure rows
 //
 // Related files:
@@ -579,6 +581,77 @@ func (m *SyncStore) ClearSyncFailuresByPrefix(ctx context.Context, pathPrefix, i
 	}
 
 	return nil
+}
+
+// PickTrialCandidate returns the oldest scope-blocked failure for the given
+// scope key — i.e., a row with matching scope_key and NULL next_retry_at
+// (scope-blocked failures have no retry scheduling; they wait for the scope
+// to clear). Returns (nil, nil) if no candidates exist.
+//
+// The engine uses this to find a real action to execute as a trial probe
+// when a scope block's trial timer fires.
+func (m *SyncStore) PickTrialCandidate(ctx context.Context, scopeKey ScopeKey) (*SyncFailureRow, error) {
+	wire := scopeKey.String()
+
+	row := m.db.QueryRowContext(ctx,
+		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
+		WHERE scope_key = ? AND next_retry_at IS NULL
+		ORDER BY first_seen_at ASC
+		LIMIT 1`,
+		wire,
+	)
+
+	var r SyncFailureRow
+	var wireScopeKey string
+
+	err := row.Scan(
+		&r.Path, &r.DriveID, &r.Direction, &r.Category,
+		&r.IssueType, &r.ItemID,
+		&r.FailureCount, &r.NextRetryAt,
+		&r.LastError, &r.HTTPStatus,
+		&r.FirstSeenAt, &r.LastSeenAt,
+		&r.FileSize, &r.LocalHash,
+		&wireScopeKey,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+
+		return nil, fmt.Errorf("sync: picking trial candidate for scope %s: %w", wire, err)
+	}
+
+	r.ScopeKey = ParseScopeKey(wireScopeKey)
+
+	return &r, nil
+}
+
+// SetScopeRetryAtNow sets next_retry_at to the given time for all transient
+// sync_failures matching the given scope_key whose next_retry_at IS NULL.
+// These are the scope-blocked failures that were waiting for the scope to
+// clear. Making them retryable is the "thundering herd" mechanism that
+// re-injects all scope-blocked items when a scope clears (R-2.10.11).
+//
+// Returns the number of rows updated.
+func (m *SyncStore) SetScopeRetryAtNow(ctx context.Context, scopeKey ScopeKey, now time.Time) (int64, error) {
+	wire := scopeKey.String()
+	nowNano := now.UnixNano()
+
+	result, err := m.db.ExecContext(ctx,
+		`UPDATE sync_failures SET next_retry_at = ?
+		WHERE scope_key = ? AND next_retry_at IS NULL AND category = 'transient'`,
+		nowNano, wire,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("sync: setting scope retry-at for %s: %w", wire, err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("sync: rows affected for scope retry-at %s: %w", wire, err)
+	}
+
+	return affected, nil
 }
 
 // scanSyncFailureRows scans multiple sync_failures rows from a query result.
