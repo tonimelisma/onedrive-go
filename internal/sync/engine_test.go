@@ -4224,3 +4224,80 @@ func TestDrainLoop_Success_ClearsSyncFailure(t *testing.T) {
 
 	assert.Equal(t, int32(1), eng.succeeded.Load(), "succeeded counter")
 }
+
+// ---------------------------------------------------------------------------
+// clearFailureOnSuccess unit tests (D-6)
+// ---------------------------------------------------------------------------
+
+// Validates: D-6
+func TestClearFailureOnSuccess_RemovesFailureRow(t *testing.T) {
+	// Verify that clearFailureOnSuccess removes a previously recorded
+	// sync_failures row, confirming the engine-owns-failure-lifecycle
+	// contract from D-6.
+	ctx := context.Background()
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	driveID := driveid.New(engineTestDriveID)
+
+	// Record a failure for the test path.
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path:      "clear-test/file.txt",
+		DriveID:   driveID,
+		Direction: "download",
+		Category:  "transient",
+		ErrMsg:    "test error",
+	}, nil))
+
+	// Confirm the failure exists.
+	rows, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "failure should be recorded")
+
+	// clearFailureOnSuccess should remove it.
+	eng.clearFailureOnSuccess(ctx, &WorkerResult{
+		Path:       "clear-test/file.txt",
+		DriveID:    driveID,
+		ActionType: ActionDownload,
+		Success:    true,
+	})
+
+	// Verify the failure is gone.
+	rows, err = eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, rows, "failure should be cleared after success")
+}
+
+// Validates: D-6
+func TestClearFailureOnSuccess_FallbackDriveID(t *testing.T) {
+	// When WorkerResult.DriveID is zero, clearFailureOnSuccess falls back
+	// to the engine's own driveID. This covers own-drive actions where the
+	// worker doesn't set an explicit drive ID.
+	ctx := context.Background()
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	driveID := driveid.New(engineTestDriveID)
+
+	// Record a failure using the engine's own drive ID.
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path:      "fallback-test/file.txt",
+		DriveID:   driveID,
+		Direction: "upload",
+		Category:  "transient",
+		ErrMsg:    "quota exceeded",
+	}, nil))
+
+	rows, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "failure should be recorded")
+
+	// Call clearFailureOnSuccess with a zero DriveID — should fall back
+	// to eng.driveID and still clear the failure.
+	eng.clearFailureOnSuccess(ctx, &WorkerResult{
+		Path:       "fallback-test/file.txt",
+		DriveID:    driveid.ID{}, // zero value
+		ActionType: ActionUpload,
+		Success:    true,
+	})
+
+	rows, err = eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, rows, "failure should be cleared via fallback drive ID")
+}
