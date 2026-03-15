@@ -15,6 +15,7 @@ import (
 // PickTrialCandidate
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10.5
 func TestSyncStore_PickTrialCandidate_ReturnsOldestScopeBlockedFailure(t *testing.T) {
 	t.Parallel()
 	mgr := newTestManager(t)
@@ -52,6 +53,7 @@ func TestSyncStore_PickTrialCandidate_ReturnsOldestScopeBlockedFailure(t *testin
 	assert.Equal(t, sk, row.ScopeKey)
 }
 
+// Validates: R-2.10.5
 func TestSyncStore_PickTrialCandidate_SkipsRetriedFailures(t *testing.T) {
 	t.Parallel()
 	mgr := newTestManager(t)
@@ -76,6 +78,7 @@ func TestSyncStore_PickTrialCandidate_SkipsRetriedFailures(t *testing.T) {
 	assert.Nil(t, row, "should not return failures with next_retry_at set")
 }
 
+// Validates: R-2.10.5
 func TestSyncStore_PickTrialCandidate_NoMatches(t *testing.T) {
 	t.Parallel()
 	mgr := newTestManager(t)
@@ -91,6 +94,7 @@ func TestSyncStore_PickTrialCandidate_NoMatches(t *testing.T) {
 // SetScopeRetryAtNow
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10.11
 func TestSyncStore_SetScopeRetryAtNow_UnblocksScopeFailures(t *testing.T) {
 	t.Parallel()
 	mgr := newTestManager(t)
@@ -127,6 +131,7 @@ func TestSyncStore_SetScopeRetryAtNow_UnblocksScopeFailures(t *testing.T) {
 	assert.Len(t, rows, 2, "both scope-blocked failures should now be retryable")
 }
 
+// Validates: R-2.10.11
 func TestSyncStore_SetScopeRetryAtNow_NoMatches(t *testing.T) {
 	t.Parallel()
 	mgr := newTestManager(t)
@@ -143,6 +148,7 @@ func TestSyncStore_SetScopeRetryAtNow_NoMatches(t *testing.T) {
 // ClearScopeAndUnblockFailures
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10.11
 func TestSyncStore_ClearScopeAndUnblockFailures(t *testing.T) {
 	t.Parallel()
 	mgr := newTestManager(t)
@@ -185,6 +191,7 @@ func TestSyncStore_ClearScopeAndUnblockFailures(t *testing.T) {
 	assert.Len(t, rows, 2, "scope-blocked failures should now be retryable")
 }
 
+// Validates: R-2.10.11
 func TestSyncStore_ClearScopeAndUnblockFailures_NoScopeBlock(t *testing.T) {
 	t.Parallel()
 	mgr := newTestManager(t)

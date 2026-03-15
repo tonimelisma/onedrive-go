@@ -514,6 +514,10 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx *sql.Tx, o *Outcome) err
 // CheckCacheConsistency reloads baseline entries from the database and compares
 // them with the in-memory cache. Returns the number of mismatches found (report-only,
 // no auto-fix). Intended for periodic verification in watch mode (B-198).
+//
+// Thread-safety: called from the engine's drain loop (single-goroutine context)
+// after all workers complete. The Baseline cache is stable at this point —
+// no concurrent mutation is possible.
 func (m *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
 	if m.baseline == nil {
 		return 0, nil

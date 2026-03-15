@@ -81,8 +81,6 @@ func NewScopeGate(store ScopeBlockStore, logger *slog.Logger) *ScopeGate {
 // first, then progressively narrower scopes (disk:local, quota:own).
 // Dynamic-key scopes (quota:shortcut, perm:dir) are checked last via O(n)
 // iteration over active blocks — expected to be tiny (1-5 typically).
-//
-// Checks global blocks first, then progressively narrower scopes.
 func (g *ScopeGate) Admit(ta *TrackedAction) ScopeKey {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -213,13 +211,14 @@ func (g *ScopeGate) ExtendTrialInterval(ctx context.Context, key ScopeKey, nextA
 		return err
 	}
 
-	// Apply to memory only after successful persist.
+	// Apply to memory only after successful persist. Re-read the pointer
+	// from the map to avoid TOCTOU — if SetScopeBlock replaced the entry
+	// between locks, the captured `block` pointer is orphaned.
 	g.mu.Lock()
-	// Re-check the block still exists (could have been cleared concurrently).
-	if _, stillExists := g.blocks[key]; stillExists {
-		block.TrialInterval = newInterval
-		block.NextTrialAt = nextAt
-		block.TrialCount = updated.TrialCount
+	if current, stillExists := g.blocks[key]; stillExists && current == block {
+		current.TrialInterval = newInterval
+		current.NextTrialAt = nextAt
+		current.TrialCount = updated.TrialCount
 	}
 	g.mu.Unlock()
 

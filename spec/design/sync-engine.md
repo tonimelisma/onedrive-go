@@ -108,7 +108,7 @@ Scope key `SKDiskLocal` is created by `classifyResult()` when a download fails w
 
 ### Scanner ScanResult Contract
 
-Implements: R-2.11.5 [implemented], R-2.10.2 [planned]
+Implements: R-2.11.5 [implemented], R-2.10.2 [verified]
 
 Scanner returns `ScanResult{Events []ChangeEvent, Skipped []SkippedItem}` instead of `[]ChangeEvent`. Engine processes skipped items via two methods:
 
@@ -164,7 +164,7 @@ Detects shortcuts to shared folders in the delta stream. Creates additional delt
 
 ## Orchestrator (`orchestrator.go`)
 
-Multi-drive coordination. Runs one `DriveRunner` per configured, non-paused drive. Each drive gets its own goroutine, state DB, and sync engine instance. Engines do not coordinate scope blocks across engine boundaries — each engine discovers independently. Bounded waste accepted (one request per engine for 429). Implements: R-2.10.35 [planned]
+Multi-drive coordination. Runs one `DriveRunner` per configured, non-paused drive. Each drive gets its own goroutine, state DB, and sync engine instance. Engines do not coordinate scope blocks across engine boundaries — each engine discovers independently. Bounded waste accepted (one request per engine for 429). Implements: R-2.10.35 [verified]
 
 Pause semantics are delegated to `config.Drive.IsPaused()` and `config.ClearExpiredPauses()` — the orchestrator is a consumer, not an implementor, of pause logic. The initial RunWatch loop checks `ResolvedDrive.Paused` (which is expiry-aware). On SIGHUP reload, `ClearExpiredPauses` clears stale keys before `ResolveDrives` determines the active set. When a timed pause expires during reload, the config keys are cleaned up but the already-running drive is NOT stopped and restarted — avoiding unnecessary downtime.
 

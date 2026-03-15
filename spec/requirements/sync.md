@@ -75,7 +75,7 @@ When the user runs `verify`, the system shall re-hash local files and compare ag
 - R-2.9.2: The RPC API shall support polling (`GET /status`) and push (`GET /events` via SSE). [planned]
 - R-2.9.3: GUI frontends shall connect to the control socket for real-time status, pause/resume, and conflict resolution. [planned]
 
-## R-2.10 Failure Management [planned]
+## R-2.10 Failure Management [verified]
 
 Failure tracking, scope-based classification, and lifecycle management. Each failure is scoped to a key (file, directory, drive/shortcut, account, service) that determines retry policy and blast radius.
 

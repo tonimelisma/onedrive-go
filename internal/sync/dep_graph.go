@@ -33,7 +33,7 @@ type DepGraph struct {
 
 // TrackedAction pairs an Action with an ID and a per-action cancel function.
 // Workers pull TrackedActions from the ready channel. The ID is a sequential
-// counter (assigned by the engine) used as a unique key for the tracker's
+// counter (assigned by the engine) used as a unique key for the graph's
 // internal maps.
 type TrackedAction struct {
 	Action Action
@@ -157,7 +157,12 @@ func (g *DepGraph) Complete(id int64) ([]*TrackedAction, bool) {
 	// linger. Without this, a subsequent Add could find the completed
 	// action, wire a dependency edge to it, and the dependent waits forever.
 	delete(g.actions, id)
-	delete(g.byPath, ta.Action.Path)
+	// Only delete byPath if it still points to this action. When CancelByPath
+	// removes the old entry and Add inserts a new one for the same path,
+	// unconditionally deleting would strand the replacement action.
+	if g.byPath[ta.Action.Path] == ta {
+		delete(g.byPath, ta.Action.Path)
+	}
 
 	// Snapshot emptiness while holding lock — the len check is consistent
 	// with the delete above. emptyOnce/emptyCh are only set by WaitForEmpty
@@ -200,7 +205,7 @@ func (g *DepGraph) HasInFlight(path string) bool {
 }
 
 // CancelByPath cancels the in-flight action for the given path, if any.
-// Removes the byPath entry so long-lived trackers don't cancel the wrong
+// Removes the byPath entry so long-lived graphs don't cancel the wrong
 // action if the same path is re-added in a subsequent pass.
 func (g *DepGraph) CancelByPath(path string) {
 	g.mu.Lock()

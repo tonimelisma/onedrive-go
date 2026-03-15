@@ -621,7 +621,7 @@ func TestWorker_NeverCallsComplete(t *testing.T) {
 	}
 
 	// Worker sent the result but did NOT call Complete — dgh.Done should
-	// NOT have fired (the action is still in-flight from tracker's perspective).
+	// NOT have fired (the action is still in-flight from DepGraph's perspective).
 	select {
 	case <-dgh.Done():
 		require.Fail(t, "dgh.Done fired — worker must not call Complete")

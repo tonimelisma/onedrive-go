@@ -384,6 +384,32 @@ func TestScopeGate_ClearScopeBlock_NotFound(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// Validates: R-2.10.5
+func TestScopeGate_ClearScopeBlock_StoreError(t *testing.T) {
+	t.Parallel()
+
+	gate, store := newTestScopeGate(t)
+	ctx := context.Background()
+
+	// Set a block first.
+	require.NoError(t, gate.SetScopeBlock(ctx, SKService, &ScopeBlock{
+		Key:       SKService,
+		IssueType: IssueServiceOutage,
+	}))
+
+	// Inject store error.
+	store.deleteErr = errors.New("store failure")
+
+	// ClearScopeBlock should return the error.
+	err := gate.ClearScopeBlock(ctx, SKService)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "store failure")
+
+	// Verify block still exists in memory (store error prevents removal).
+	_, ok := gate.GetScopeBlock(SKService)
+	assert.True(t, ok, "block should remain in memory on store error")
+}
+
 // ---------------------------------------------------------------------------
 // IsScopeBlocked
 // ---------------------------------------------------------------------------

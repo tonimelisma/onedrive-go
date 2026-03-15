@@ -8,9 +8,8 @@
 // needed — single-row operations are sufficient.
 //
 // Related files:
-//   - scope_gate.go:    ScopeGate type and ScopeBlockStore interface
+//   - scope_gate.go:    ScopeGate type, ScopeBlock struct, ScopeBlockStore interface
 //   - scope.go:         ScopeKey, ParseScopeKey, ScopeKey.String()
-//   - tracker.go:       ScopeBlock struct definition (moves to scope_gate.go in Phase 5)
 //   - migrations/:      00003_scope_blocks.sql creates the table
 package sync
 

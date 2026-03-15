@@ -2165,7 +2165,7 @@ func TestChangeEventsToObservedItems_RemoteOnly(t *testing.T) {
 		{Source: SourceRemote, ItemID: "r2", Path: "remote2.txt", DriveID: driveid.New(testDriveID)},
 	}
 
-	items := changeEventsToObservedItems(events)
+	items := changeEventsToObservedItems(slog.Default(), events)
 	assert.Len(t, items, 2, "should only include remote events")
 	assert.Equal(t, "r1", items[0].ItemID)
 	assert.Equal(t, "r2", items[1].ItemID)
@@ -2199,7 +2199,7 @@ func TestChangeEventsToObservedItems_MapsAllFields(t *testing.T) {
 		},
 	}
 
-	items := changeEventsToObservedItems(events)
+	items := changeEventsToObservedItems(slog.Default(), events)
 	require.Len(t, items, 2)
 
 	assert.Equal(t, driveID, items[0].DriveID)
@@ -2498,7 +2498,7 @@ func TestChangeEventsToObservedItems_SkipsEmptyItemID(t *testing.T) {
 		{Source: SourceRemote, ItemID: "valid-2", Path: "b.txt", DriveID: driveID},
 	}
 
-	items := changeEventsToObservedItems(events)
+	items := changeEventsToObservedItems(slog.Default(), events)
 	require.Len(t, items, 2, "empty ItemID event should be skipped")
 	assert.Equal(t, "valid-1", items[0].ItemID)
 	assert.Equal(t, "valid-2", items[1].ItemID)
@@ -3244,7 +3244,7 @@ func TestProcessWorkerResult_403ReadOnly_SkipsRemoteState(t *testing.T) {
 	ctx := t.Context()
 	setupEngineDepGraph(t, eng, 0)
 
-	// Set watchShortcuts so getWatchShortcuts() returns them for handle403.
+	// Set watchShortcuts so getShortcuts() returns them for handle403.
 	eng.watchShortcutsMu.Lock()
 	eng.watchShortcuts = shortcuts
 	eng.watchShortcutsMu.Unlock()

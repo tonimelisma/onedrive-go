@@ -179,7 +179,7 @@ type Engine struct {
 	// watchShortcuts holds the latest shortcuts for use by the drain
 	// goroutine in watch mode. Updated by the watch goroutine after
 	// observation; read by drainWorkerResults for 403 handling. Stays on
-	// Engine because setWatchShortcuts is called from RunOnce (one-shot)
+	// Engine because setShortcuts is called from RunOnce (one-shot)
 	// where watch is nil.
 	watchShortcuts   []Shortcut
 	watchShortcutsMu stdsync.RWMutex
@@ -341,7 +341,7 @@ func (e *Engine) verifyDriveIdentity(ctx context.Context) error {
 //  5. Early return if no changes
 //  6. Plan actions (flat list + dependency edges)
 //  7. Return early if dry-run
-//  8. Build tracker, start worker pool
+//  8. Build DepGraph, start worker pool
 //  9. Wait for completion, commit delta token
 func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*SyncReport, error) {
 	start := time.Now()
@@ -436,8 +436,8 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 		return report, nil
 	}
 
-	// Store shortcuts so the drain goroutine can access them via getWatchShortcuts.
-	e.setWatchShortcuts(shortcuts)
+	// Store shortcuts so the drain goroutine can access them via getShortcuts.
+	e.setShortcuts(shortcuts)
 
 	// Execute plan: run workers, drain results (failures, 403s, upload issues).
 	e.executePlan(ctx, plan, report, bl)
@@ -710,7 +710,7 @@ func (e *Engine) observeAndCommitRemote(ctx context.Context, bl *Baseline) ([]Ch
 		return events, nil
 	}
 
-	observed := changeEventsToObservedItems(events)
+	observed := changeEventsToObservedItems(e.logger, events)
 	if commitErr := e.baseline.CommitObservation(ctx, observed, deltaToken, e.driveID); commitErr != nil {
 		return nil, fmt.Errorf("sync: committing observations: %w", commitErr)
 	}
@@ -770,7 +770,7 @@ func (e *Engine) observeAndCommitRemoteFull(ctx context.Context, bl *Baseline) (
 		return nil, err
 	}
 
-	observed := changeEventsToObservedItems(events)
+	observed := changeEventsToObservedItems(e.logger, events)
 	if commitErr := e.baseline.CommitObservation(ctx, observed, deltaToken, e.driveID); commitErr != nil {
 		return nil, fmt.Errorf("sync: committing full reconciliation: %w", commitErr)
 	}
@@ -781,7 +781,7 @@ func (e *Engine) observeAndCommitRemoteFull(ctx context.Context, bl *Baseline) (
 // changeEventsToObservedItems converts remote ChangeEvents into ObservedItems
 // for CommitObservation. Filters out local-source events and events with
 // empty ItemIDs (defensive guard against malformed API responses).
-func changeEventsToObservedItems(events []ChangeEvent) []ObservedItem {
+func changeEventsToObservedItems(logger *slog.Logger, events []ChangeEvent) []ObservedItem {
 	var items []ObservedItem
 
 	for i := range events {
@@ -790,7 +790,7 @@ func changeEventsToObservedItems(events []ChangeEvent) []ObservedItem {
 		}
 
 		if events[i].ItemID == "" {
-			slog.Warn("changeEventsToObservedItems: skipping event with empty ItemID",
+			logger.Warn("changeEventsToObservedItems: skipping event with empty ItemID",
 				slog.String("path", events[i].Path),
 			)
 
@@ -961,16 +961,16 @@ type WatchOpts struct {
 	ReconcileInterval  time.Duration // periodic full reconciliation (0 → 24h, negative = disabled)
 }
 
-// setWatchShortcuts updates the shortcuts used by the drain goroutine.
+// setShortcuts updates the shortcuts used by the drain goroutine.
 // Called by the watch goroutine after observation when shortcuts may have changed.
-func (e *Engine) setWatchShortcuts(shortcuts []Shortcut) {
+func (e *Engine) setShortcuts(shortcuts []Shortcut) {
 	e.watchShortcutsMu.Lock()
 	e.watchShortcuts = shortcuts
 	e.watchShortcutsMu.Unlock()
 }
 
-// getWatchShortcuts returns the latest shortcuts for drain goroutine use.
-func (e *Engine) getWatchShortcuts() []Shortcut {
+// getShortcuts returns the latest shortcuts for drain goroutine use.
+func (e *Engine) getShortcuts() []Shortcut {
 	e.watchShortcutsMu.RLock()
 	defer e.watchShortcutsMu.RUnlock()
 
@@ -999,7 +999,7 @@ func (e *Engine) initDeleteProtection(ctx context.Context, force bool) {
 
 // loadWatchState loads the baseline and shortcuts for the watch session.
 // Both are loaded once after the initial sync. Baseline is live-mutated
-// under RWMutex; shortcuts are updated via setWatchShortcuts when they change.
+// under RWMutex; shortcuts are updated via setShortcuts when they change.
 func (e *Engine) loadWatchState(ctx context.Context) (*Baseline, error) {
 	bl, err := e.baseline.Load(ctx)
 	if err != nil {
@@ -1013,7 +1013,7 @@ func (e *Engine) loadWatchState(ctx context.Context) (*Baseline, error) {
 		)
 	}
 
-	e.setWatchShortcuts(shortcuts)
+	e.setShortcuts(shortcuts)
 
 	return bl, nil
 }
@@ -1068,7 +1068,8 @@ type watchPipeline struct {
 	recheckC   <-chan time.Time
 	activeObs  int
 	mode       SyncMode
-	pool       *WorkerPool // for bootstrapSync to access Results()
+	pool       *WorkerPool     // for bootstrapSync to access Results()
+	drainDone  <-chan struct{} // closed when drain goroutine exits
 	cleanup    func()
 }
 
@@ -1135,30 +1136,39 @@ func (e *Engine) initWatchInfra(
 	e.armRetryTimer()
 	e.armTrialTimer()
 
-	return &watchPipeline{
+	pipe := &watchPipeline{
 		safety:     e.resolveSafetyConfig(opts.Force),
 		ready:      ready,
 		reconcileC: reconcileC,
 		recheckC:   recheckTicker.C,
 		mode:       mode,
 		pool:       pool,
-		cleanup: func() {
-			recheckTicker.Stop()
-			if stopReconcile != nil {
-				stopReconcile()
-			}
+	}
 
-			inFlight := depGraph.InFlightCount()
-			if inFlight > 0 {
-				e.logger.Info("graceful shutdown: draining in-flight actions",
-					slog.Int("in_flight", inFlight),
-				)
-			}
+	pipe.cleanup = func() {
+		recheckTicker.Stop()
+		if stopReconcile != nil {
+			stopReconcile()
+		}
 
-			pool.Stop()
-			e.logger.Info("watch mode stopped")
-		},
-	}, nil
+		inFlight := depGraph.InFlightCount()
+		if inFlight > 0 {
+			e.logger.Info("graceful shutdown: draining in-flight actions",
+				slog.Int("in_flight", inFlight),
+			)
+		}
+
+		pool.Stop() // closes results channel → drain goroutine exits
+		// Wait for drain goroutine to finish all side effects (same
+		// pattern as one-shot mode). drainDone is set by bootstrapSync
+		// before the watch loop starts.
+		if pipe.drainDone != nil {
+			<-pipe.drainDone
+		}
+		e.logger.Info("watch mode stopped")
+	}
+
+	return pipe, nil
 }
 
 // quiescenceLogInterval is how often bootstrapSync logs while waiting
@@ -1192,11 +1202,17 @@ func (e *Engine) bootstrapSync(ctx context.Context, mode SyncMode, pipe *watchPi
 	pipe.bl = bl
 
 	// Start drain goroutine — needs bl for processWorkerResult.
-	go e.drainWorkerResults(ctx, pipe.pool.Results(), bl)
+	// Join via pipe.drainDone in cleanup to ensure all side effects complete.
+	drainDone := make(chan struct{})
+	go func() {
+		defer close(drainDone)
+		e.drainWorkerResults(ctx, pipe.pool.Results(), bl)
+	}()
+	pipe.drainDone = drainDone
 
 	// Permission rechecks.
 	if e.permChecker != nil {
-		shortcuts := e.getWatchShortcuts()
+		shortcuts := e.getShortcuts()
 		e.recheckPermissions(ctx, bl, shortcuts)
 	}
 	e.recheckLocalPermissions(ctx)
@@ -1495,7 +1511,7 @@ func (e *Engine) setScopeBlock(key ScopeKey, block *ScopeBlock) {
 	}
 }
 
-// applyScopeBlock creates a ScopeBlock and tells the tracker to hold
+// applyScopeBlock creates a ScopeBlock and tells the ScopeGate to block
 // affected actions. Uses computeTrialInterval for the initial interval,
 // ensuring the same Retry-After-vs-backoff policy as extendTrialInterval.
 // Logs a WARN because a scope block is a degraded-but-recoverable state
@@ -1701,6 +1717,48 @@ func (e *Engine) cascadeRecordAndComplete(ctx context.Context, ta *TrackedAction
 	}
 }
 
+// cascadeFailAndComplete records each transitive dependent as a cascade
+// failure and completes it in the DepGraph. BFS ensures grandchildren are
+// not stranded. Used for worker failures (non-scope-related).
+func (e *Engine) cascadeFailAndComplete(ctx context.Context, ready []*TrackedAction, r *WorkerResult) {
+	seen := make(map[int64]bool)
+	queue := ready
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		if seen[current.ID] {
+			continue
+		}
+		seen[current.ID] = true
+
+		e.recordCascadeFailure(ctx, &current.Action, r)
+		next, _ := e.depGraph.Complete(current.ID)
+		queue = append(queue, next...)
+	}
+}
+
+// completeSubtree silently completes all transitive dependents without
+// recording failures. Used for shutdown (context canceled — not a failure).
+func (e *Engine) completeSubtree(ready []*TrackedAction) {
+	seen := make(map[int64]bool)
+	queue := ready
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		if seen[current.ID] {
+			continue
+		}
+		seen[current.ID] = true
+
+		next, _ := e.depGraph.Complete(current.ID)
+		queue = append(queue, next...)
+	}
+}
+
 // recordScopeBlockedFailure records a sync_failure for an action that was
 // blocked by a scope gate. Uses next_retry_at = NULL (nil delayFn) so the
 // retrier ignores it until onScopeClear sets next_retry_at.
@@ -1822,16 +1880,13 @@ func (e *Engine) processWorkerResult(ctx context.Context, r *WorkerResult, bl *B
 	case resultShutdown:
 		// Context canceled — silently complete all dependents. Don't dispatch
 		// (workers shutting down), don't record failures (not a failure).
-		for _, dep := range ready {
-			e.depGraph.Complete(dep.ID)
-		}
+		// BFS via completeSubtree prevents grandchild stranding.
+		e.completeSubtree(ready)
 
 	case resultRequeue, resultScopeBlock, resultSkip, resultFatal:
 		// Parent failed — cascade-record children as sync_failures.
-		for _, dep := range ready {
-			e.recordCascadeFailure(ctx, &dep.Action, r)
-			e.depGraph.Complete(dep.ID)
-		}
+		// BFS via cascadeFailAndComplete prevents grandchild stranding.
+		e.cascadeFailAndComplete(ctx, ready, r)
 	}
 
 	// Per-class side effects (after dependent routing).
@@ -1875,7 +1930,7 @@ func (e *Engine) applyResultSideEffects(ctx context.Context, class resultClass, 
 			return
 		}
 		if r.HTTPStatus == http.StatusForbidden && e.permChecker != nil {
-			e.handle403(ctx, bl, r.Path, e.getWatchShortcuts())
+			e.handle403(ctx, bl, r.Path, e.getShortcuts())
 		}
 		// Non-retryable: record with nil delayFn (no next_retry_at).
 		e.recordFailure(ctx, r, nil)
@@ -1909,9 +1964,8 @@ func (e *Engine) processTrialResult(ctx context.Context, r *WorkerResult) []*Tra
 	}
 
 	if class == resultShutdown {
-		for _, dep := range ready {
-			e.depGraph.Complete(dep.ID)
-		}
+		// BFS via completeSubtree prevents grandchild stranding.
+		e.completeSubtree(ready)
 		return nil
 	}
 
@@ -1929,10 +1983,8 @@ func (e *Engine) processTrialResult(ctx context.Context, r *WorkerResult) []*Tra
 	e.recordError(r)
 
 	// Cascade-record dependents as failures.
-	for _, dep := range ready {
-		e.recordCascadeFailure(ctx, &dep.Action, r)
-		e.depGraph.Complete(dep.ID)
-	}
+	// BFS via cascadeFailAndComplete prevents grandchild stranding.
+	e.cascadeFailAndComplete(ctx, ready, r)
 
 	e.armRetryTimer()
 
@@ -3574,7 +3626,7 @@ func (e *Engine) runFullReconciliationAsync(ctx context.Context, bl *Baseline) {
 		}
 
 		// Commit observations and delta token.
-		observed := changeEventsToObservedItems(events)
+		observed := changeEventsToObservedItems(e.logger, events)
 		if commitErr := e.baseline.CommitObservation(
 			ctx, observed, deltaToken, e.driveID,
 		); commitErr != nil {
@@ -3627,7 +3679,7 @@ func (e *Engine) runFullReconciliationAsync(ctx context.Context, bl *Baseline) {
 		// Refresh watch shortcuts — reconcileShortcutScopes may have
 		// added or removed shortcuts.
 		if refreshed, refreshErr := e.baseline.ListShortcuts(ctx); refreshErr == nil {
-			e.setWatchShortcuts(refreshed)
+			e.setShortcuts(refreshed)
 		}
 
 		e.logger.Info("periodic full reconciliation complete",

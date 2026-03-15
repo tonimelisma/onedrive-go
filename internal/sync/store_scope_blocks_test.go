@@ -13,6 +13,7 @@ import (
 // UpsertScopeBlock
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10.8
 func TestSyncStore_UpsertScopeBlock(t *testing.T) {
 	t.Parallel()
 	mgr := newTestManager(t)
@@ -55,6 +56,7 @@ func TestSyncStore_UpsertScopeBlock(t *testing.T) {
 // DeleteScopeBlock
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10.8
 func TestSyncStore_DeleteScopeBlock(t *testing.T) {
 	t.Parallel()
 	mgr := newTestManager(t)
@@ -89,6 +91,7 @@ func TestSyncStore_DeleteScopeBlock(t *testing.T) {
 // ListScopeBlocks
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10.8
 func TestSyncStore_ListScopeBlocks(t *testing.T) {
 	t.Parallel()
 	mgr := newTestManager(t)
@@ -153,6 +156,7 @@ func TestSyncStore_ListScopeBlocks(t *testing.T) {
 	assert.Equal(t, 5, qs.TrialCount)
 }
 
+// Validates: R-2.10.8
 func TestSyncStore_ListScopeBlocks_Empty(t *testing.T) {
 	t.Parallel()
 	mgr := newTestManager(t)
@@ -168,6 +172,7 @@ func TestSyncStore_ListScopeBlocks_Empty(t *testing.T) {
 // Round-trip: all field types survive serialization
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10.33, R-2.10.34
 func TestSyncStore_ScopeBlock_Roundtrip(t *testing.T) {
 	t.Parallel()
 	mgr := newTestManager(t)

@@ -1,6 +1,6 @@
 # Engine Pipeline Redesign: watchState, Bootstrap, Async Reconciliation
 
-**Status**: Proposed
+**Status**: Complete (all phases done — watchState extraction, unified bootstrap, async reconciliation, safety config unification)
 **Depends on**: `tracker-redesign.md` (Phases 1-5 must complete first)
 **Scope**: `internal/sync/engine.go`, `internal/sync/engine_shortcuts.go`, `internal/sync/dep_graph.go`
 **Related design docs**: `sync-engine.md`, `sync-observation.md`, `sync-planning.md`, `sync-execution.md`
