@@ -177,13 +177,20 @@ func newTestEngine(t *testing.T, mock *engineMockClient) (*Engine, string) {
 	return eng, syncRoot
 }
 
-// setupWatchEngine initializes an engine with DepGraph + readyCh for
-// processBatch tests. Returns the readyCh for reading dispatched actions.
+// setupWatchEngine initializes an engine with DepGraph + readyCh + watchState
+// for processBatch tests. Returns the readyCh for reading dispatched actions.
+// Replaces the old two-call pattern of setupWatchEngine + newTestWatchState.
 func setupWatchEngine(t *testing.T, eng *Engine) <-chan *TrackedAction {
 	t.Helper()
 
 	eng.depGraph = NewDepGraph(eng.logger)
 	eng.readyCh = make(chan *TrackedAction, 1024)
+	eng.watch = &watchState{
+		scopeGate:    NewScopeGate(eng.baseline, eng.logger),
+		scopeState:   NewScopeState(eng.nowFunc, eng.logger),
+		trialPending: make(map[string]trialEntry),
+		retryTimerCh: make(chan struct{}, 1),
+	}
 
 	return eng.readyCh
 }
@@ -1279,7 +1286,6 @@ func TestRunWatch_ProcessBatch_BigDelete(t *testing.T) {
 	}
 
 	ready := setupWatchEngine(t, eng)
-	newTestWatchState(t, eng)
 
 	// Install a rolling delete counter with threshold=10 on the engine.
 	// The planner-level check is disabled (forceSafetyMax) — the counter
@@ -1376,7 +1382,6 @@ func TestRunWatch_ProcessBatch_BigDelete_NonDeletesFlow(t *testing.T) {
 	})
 
 	ready := setupWatchEngine(t, eng)
-	newTestWatchState(t, eng)
 
 	// Install counter with threshold=10. 15 deletes > 10 → trips.
 	eng.watch.deleteCounter = newDeleteCounter(10, 5*time.Minute, time.Now)
@@ -1459,7 +1464,6 @@ func TestRunWatch_ProcessBatch_BigDelete_BelowThreshold(t *testing.T) {
 	}
 
 	ready := setupWatchEngine(t, eng)
-	newTestWatchState(t, eng)
 
 	eng.watch.deleteCounter = newDeleteCounter(10, 5*time.Minute, time.Now)
 	safety := &SafetyConfig{BigDeleteThreshold: forceSafetyMax}
@@ -1644,7 +1648,6 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 	}}
 
 	setupWatchEngine(t, eng)
-	newTestWatchState(t, eng)
 	safety := DefaultSafetyConfig()
 
 	// Should return without error or dispatching actions.
@@ -1674,7 +1677,6 @@ func TestRunWatch_Deduplication(t *testing.T) {
 	require.NoError(t, err, "Load")
 
 	setupWatchEngine(t, eng)
-	newTestWatchState(t, eng)
 	safety := DefaultSafetyConfig()
 
 	// First batch: download a file.
@@ -2656,7 +2658,6 @@ func TestRunFullReconciliation_NoChanges(t *testing.T) {
 
 	safety := DefaultSafetyConfig()
 	setupWatchEngine(t, e)
-	newTestWatchState(t, e)
 
 	// Should complete without panic; events exist but planner produces no
 	// actions because nothing is different from baseline.
@@ -2681,7 +2682,6 @@ func TestRunFullReconciliation_DeltaError(t *testing.T) {
 
 	safety := DefaultSafetyConfig()
 	setupWatchEngine(t, e)
-	newTestWatchState(t, e)
 
 	// Should not panic — error is logged and function returns.
 	e.runFullReconciliation(ctx, bl, SyncDownloadOnly, safety)
@@ -4355,4 +4355,144 @@ func TestClearFailureOnSuccess_FallbackDriveID(t *testing.T) {
 	rows, err = eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, rows, "failure should be cleared via fallback drive ID")
+}
+
+// ---------------------------------------------------------------------------
+// waitForQuiescence
+// ---------------------------------------------------------------------------
+
+func TestWaitForQuiescence_EmptyGraph(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	setupWatchEngine(t, eng)
+
+	ctx := t.Context()
+
+	// Empty graph — should return immediately.
+	err := eng.waitForQuiescence(ctx)
+	require.NoError(t, err)
+}
+
+func TestWaitForQuiescence_ContextCancel(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	setupWatchEngine(t, eng)
+
+	// Add an action that will never complete — quiescence depends on cancel.
+	eng.depGraph.Add(&Action{
+		Type: ActionDownload, Path: "stuck.txt",
+		DriveID: driveid.New(engineTestDriveID), ItemID: "stuck-item",
+	}, 1, nil)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel() // cancel immediately
+
+	err := eng.waitForQuiescence(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+// ---------------------------------------------------------------------------
+// bootstrapSync
+// ---------------------------------------------------------------------------
+
+func TestBootstrapSync_NoChanges(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	// Set up watch infrastructure manually (simulating initWatchInfra).
+	eng.watch = &watchState{
+		trialPending: make(map[string]trialEntry),
+		retryTimerCh: make(chan struct{}, 1),
+	}
+	eng.depGraph = NewDepGraph(eng.logger)
+	eng.readyCh = make(chan *TrackedAction, 1024)
+	eng.watch.scopeGate = NewScopeGate(eng.baseline, eng.logger)
+	eng.watch.scopeState = NewScopeState(eng.nowFunc, eng.logger)
+
+	neverDone := make(chan struct{})
+	pool := NewWorkerPool(eng.execCfg, eng.readyCh, neverDone, eng.baseline, eng.logger, 1024)
+	pool.Start(ctx, 1)
+	defer pool.Stop()
+
+	pipe := &watchPipeline{
+		safety: DefaultSafetyConfig(),
+		pool:   pool,
+		mode:   SyncBidirectional,
+	}
+
+	// No changes expected — bootstrapSync should return nil.
+	err := eng.bootstrapSync(ctx, SyncBidirectional, pipe)
+	require.NoError(t, err)
+}
+
+func TestBootstrapSync_WithChanges(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+				{
+					ID:           "item-1",
+					Name:         "newfile.txt",
+					DriveID:      driveID,
+					ParentID:     "root",
+					Size:         10,
+					QuickXorHash: "hash1",
+				},
+			}, "token-2"), nil
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	// Set up watch infrastructure manually.
+	eng.watch = &watchState{
+		trialPending: make(map[string]trialEntry),
+		retryTimerCh: make(chan struct{}, 1),
+	}
+	eng.depGraph = NewDepGraph(eng.logger)
+	eng.readyCh = make(chan *TrackedAction, 1024)
+	eng.watch.scopeGate = NewScopeGate(eng.baseline, eng.logger)
+	eng.watch.scopeState = NewScopeState(eng.nowFunc, eng.logger)
+
+	neverDone := make(chan struct{})
+	pool := NewWorkerPool(eng.execCfg, eng.readyCh, neverDone, eng.baseline, eng.logger, 1024)
+	pool.Start(ctx, 2)
+	defer pool.Stop()
+
+	pipe := &watchPipeline{
+		safety: DefaultSafetyConfig(),
+		pool:   pool,
+		mode:   SyncDownloadOnly,
+	}
+
+	err := eng.bootstrapSync(ctx, SyncDownloadOnly, pipe)
+	require.NoError(t, err)
+
+	// Verify the file was downloaded.
+	_, statErr := os.Stat(filepath.Join(syncRoot, "newfile.txt"))
+	assert.NoError(t, statErr, "newfile.txt should have been downloaded")
+
+	// DepGraph should be empty — all actions completed.
+	assert.Equal(t, 0, eng.depGraph.InFlightCount())
 }

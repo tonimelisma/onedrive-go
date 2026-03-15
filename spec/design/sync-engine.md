@@ -9,9 +9,24 @@ Implements: R-2.1 [verified], R-2.6 [verified], R-2.8 [verified], R-3.4.2 [verif
 Wires the sync pipeline: observers → buffer → planner → executor → SyncStore. Two entry points:
 
 - `RunOnce()`: one-shot sync. Observes all changes, plans, executes, returns `SyncReport`.
-- `RunWatch()`: continuous sync. Runs `RunOnce` in a loop, triggered by filesystem events and delta polling.
+- `RunWatch()`: continuous sync. Flow: `initWatchInfra → bootstrapSync → startObservers → runWatchLoop`.
 
 Watch mode uses a unified tick loop: filesystem events are debounced by the change buffer, remote changes are polled at `poll_interval` (default 5 minutes). Periodic full reconciliation runs every 24 hours to detect missed delta deletions.
+
+### Unified Bootstrap (Engine Pipeline Redesign Phase 9)
+
+`RunWatch` no longer calls `RunOnce` for its initial sync. Instead:
+
+1. **`initWatchInfra`** creates watchState, DepGraph, ScopeGate, WorkerPool, Buffer, and tickers — but does NOT load baseline, start observers, or launch the drain goroutine.
+2. **`bootstrapSync`** loads baseline, starts the drain goroutine, observes changes, and dispatches them through the same DepGraph/ScopeGate/WorkerPool that the watch loop uses. Blocks until all bootstrap actions complete via `waitForQuiescence`.
+3. **`startObservers`** launches remote and local observers AFTER bootstrap — they see the post-bootstrap baseline.
+4. **`runWatchLoop`** runs the steady-state select loop.
+
+**`waitForQuiescence`** blocks until `DepGraph.WaitForEmpty()` fires, with a 30-minute safety timeout and periodic progress logging. `WaitForEmpty` is a one-shot channel: closed when `len(actions) == 0` after `Complete()` deletes an entry.
+
+**Why not RunOnce?** The old approach created throwaway infrastructure (DepGraph, workers, readyCh) in `RunOnce`, then `initWatchPipeline` created a completely new set. Unified bootstrap creates infrastructure once and reuses it for both the initial sync and steady-state.
+
+`RunOnce` remains unchanged as a standalone one-shot entry point.
 
 ### watchState (Engine Pipeline Redesign Phase 8)
 

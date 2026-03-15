@@ -317,17 +317,22 @@ watchShortcutsMu.
 **Design docs**: `sync-engine.md` (Engine struct documentation)
 **Requirements**: None
 
-### Phase 9: Unified Bootstrap
+### ~~Phase 9: Unified Bootstrap~~ [done]
 
-1. Create `bootstrapSync` method
-2. Create `waitForQuiescence` method
-3. Add `WaitForEmpty()` to `DepGraph` (dep_graph.go)
-4. Split `initWatchPipeline` → `initWatchInfra` (no observers) + `startObservers` (already exists, just decouple)
-5. Rewrite `RunWatch` to call `bootstrapSync` instead of `RunOnce`
-6. Add `scopeGate.LoadFromStore(ctx)` call in `bootstrapSync` (was in tracker-redesign Phase 4 item 16 — moves here since bootstrap runs before the watch loop)
+1. ~~Create `bootstrapSync` method~~ — observes, plans, dispatches through watch pipeline, waits via `waitForQuiescence`
+2. ~~Create `waitForQuiescence` method~~ — blocks until `DepGraph.WaitForEmpty()` fires (30min timeout)
+3. ~~Add `WaitForEmpty()` to `DepGraph`~~ — one-shot channel closed when `len(actions) == 0` after Complete
+4. ~~Split `initWatchPipeline` → `initWatchInfra`~~ — creates infrastructure without baseline/observers/drain
+5. ~~Rewrite `RunWatch`~~ — `initWatchInfra → bootstrapSync → startObservers → runWatchLoop`
+6. ~~scopeGate.LoadFromStore(ctx) in initWatchInfra~~ — already present from Phase 4
 
-**Code**: `engine.go` (RunWatch, bootstrapSync, waitForQuiescence, initWatchInfra), `dep_graph.go` (WaitForEmpty), `dep_graph_test.go`
-**Design docs**: `sync-engine.md` (RunWatch behavior)
+**Phase 8 follow-ups also addressed**:
+- Merged `setupWatchEngine` + `newTestWatchState` — `setupWatchEngine` now creates depGraph + readyCh + watchState in one call
+- Removed dead `e.watch == nil` guard in `handleTrialInterception` and `admitReady` — watch is guaranteed non-nil in watch-mode-only call paths
+- Added `pool` field to `watchPipeline` for bootstrapSync to access `pool.Results()`
+
+**Code**: `engine.go`, `dep_graph.go`, `dep_graph_test.go`, `engine_test.go`, `engine_phase4_test.go`
+**Design docs**: `sync-engine.md` (RunWatch behavior, unified bootstrap section)
 **Requirements**: None
 
 ### Phase 10: Async Reconciliation
@@ -365,7 +370,7 @@ This is the authoritative execution order. Each increment is a PR that leaves th
 | **6. Shortcut Enrichment** [done] | tracker-redesign Phase 6 | Populate `targetShortcutKey` and `targetDriveID` in planner | `types.go`, `planner.go`, `item_converter.go`, tests | `sync-execution.md` | R-6.8.12, R-6.8.13 |
 | **7. sync_failures Ownership** [done] | tracker-redesign Phase 7 | Engine owns failure lifecycle, store owns baseline | `store_baseline.go`, `engine.go` | `sync-engine.md` | None |
 | **8. Extract watchState** [done] | pipeline-redesign Phase 8 | Bundle 15 watch-only fields into `watchState`, `e.watch != nil` replaces 22 guards | `engine.go`, `engine_shortcuts.go`, `permissions.go`, tests | `sync-engine.md` | None |
-| **9. Unified Bootstrap** | pipeline-redesign Phase 9 | `bootstrapSync` replaces `RunOnce` in `RunWatch`, `WaitForEmpty` | `engine.go`, `dep_graph.go`, `dep_graph_test.go` | `sync-engine.md` | None |
+| **9. Unified Bootstrap** [done] | pipeline-redesign Phase 9 | `bootstrapSync` replaces `RunOnce` in `RunWatch`, `WaitForEmpty` | `engine.go`, `dep_graph.go`, `dep_graph_test.go` | `sync-engine.md` | None |
 | **10. Async Reconciliation** | pipeline-redesign Phase 10 | Non-blocking reconciliation goroutine | `engine.go`, `engine_test.go` | `sync-engine.md` | None |
 | **11. Safety Config** [done] | pipeline-redesign Phase 11 | Merge two methods into one | `engine.go` | None | None |
 
