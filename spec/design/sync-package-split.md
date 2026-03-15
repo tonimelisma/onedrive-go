@@ -1,7 +1,7 @@
 # Sync Package Modularization
 
 **Status**: Planned
-**Depends on**: `tracker-redesign.md` (all phases complete), `engine-pipeline-redesign.md` (Phases 8-11 complete)
+**Depends on**: Tracker & engine pipeline redesign (complete)
 **Scope**: All files currently in `internal/sync/` — 41 production files, 15,495 lines
 **Related design docs**: `sync-observation.md`, `sync-planning.md`, `sync-execution.md`, `sync-engine.md`, `sync-store.md`, `data-model.md`
 
@@ -337,15 +337,10 @@ Move from their current locations to `synctypes`:
 
 ## 5. Execution Plan
 
-### 5.1 Prerequisites (Must Complete First)
+### 5.1 Prerequisites (Complete)
 
-1. **tracker-redesign.md Phases 1-5** — Done (DepGraph + ScopeGate replace DepTracker)
-2. **engine-pipeline-redesign.md Phases 8-11** — watchState extraction, unified bootstrap, async reconciliation, safety config unification
-
-These are prerequisites because:
-- Phases 8-11 restructure Engine fields and methods. Splitting the package while Engine internals are in flux would create merge conflicts and require re-splitting after each phase.
-- Phase 8 (watchState) bundles ~12 fields into one struct, changing which Engine fields exist. The PermissionHandler extraction (§4.1) must target the post-Phase-8 Engine.
-- Phase 9 (bootstrapSync) unifies the observe→plan→execute pipeline. The package split must target the unified pipeline, not the current three-pipeline structure.
+1. **Tracker redesign Phases 1-5** — Done (DepGraph + ScopeGate replace DepTracker)
+2. **Engine pipeline redesign Phases 8-11** — Done (watchState extraction, unified bootstrap, async reconciliation, safety config unification)
 
 ### 5.2 Execution Sequence
 
