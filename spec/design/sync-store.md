@@ -1,8 +1,8 @@
 # Sync Store
 
-GOVERNS: internal/sync/store.go, internal/sync/store_baseline.go, internal/sync/store_observation.go, internal/sync/store_conflicts.go, internal/sync/store_failures.go, internal/sync/store_admin.go, internal/sync/store_interfaces.go, internal/sync/migrations.go, internal/sync/verify.go, internal/sync/trash.go, internal/sync/failure_messages.go, issues.go, failure_display.go, verify.go
+GOVERNS: internal/sync/store.go, internal/sync/store_baseline.go, internal/sync/store_observation.go, internal/sync/store_conflicts.go, internal/sync/store_failures.go, internal/sync/store_admin.go, internal/sync/store_interfaces.go, internal/sync/store_scope_blocks.go, internal/sync/migrations.go, internal/sync/verify.go, internal/sync/trash.go, internal/sync/failure_messages.go, issues.go, failure_display.go, verify.go
 
-Implements: R-2.5 [verified], R-2.3.2 [verified], R-2.3.3 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.7 [verified], R-6.4.4 [verified], R-6.4.5 [verified], R-2.15.1 [verified], R-2.10.1 [planned], R-2.10.2 [planned], R-2.10.4 [verified], R-2.10.22 [verified], R-2.10.33 [implemented], R-2.10.34 [planned], R-2.10.41 [implemented], R-6.6.11 [verified]
+Implements: R-2.5 [verified], R-2.3.2 [verified], R-2.3.3 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.7 [verified], R-6.4.4 [verified], R-6.4.5 [verified], R-2.15.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.4 [verified], R-2.10.22 [verified], R-2.10.33 [verified], R-2.10.34 [verified], R-2.10.41 [verified], R-6.6.11 [verified]
 
 ## SyncStore (`store.go`)
 

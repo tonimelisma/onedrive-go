@@ -209,7 +209,7 @@ func (o *RemoteObserver) Watch(ctx context.Context, savedToken string, events ch
 		// events to the channel. This ensures remote state is durable even
 		// if the engine crashes before processing the events.
 		if o.obsWriter != nil {
-			observed := changeEventsToObservedItems(polledEvents)
+			observed := changeEventsToObservedItems(o.logger, polledEvents)
 			if commitErr := o.obsWriter.CommitObservation(ctx, observed, newToken, o.driveID); commitErr != nil {
 				o.logger.Error("failed to commit observations in watch",
 					slog.String("error", commitErr.Error()),

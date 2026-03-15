@@ -113,24 +113,41 @@ func (m *SyncStore) queryRemoteStateRows(ctx context.Context, query string, args
 // ---------------------------------------------------------------------------
 
 // ResetFailure resets a single failed path: transitions remote_state back to
-// pending and removes the sync_failures row.
+// pending and removes the sync_failures row. Uses a transaction to ensure
+// atomicity — crash between statements cannot leave inconsistent state.
 func (m *SyncStore) ResetFailure(ctx context.Context, path string) error {
-	_, err := m.db.ExecContext(ctx,
-		`UPDATE remote_state SET
-			sync_status = ?
-		WHERE path = ? AND sync_status IN (?, ?)`,
-		statusPendingDownload,
-		path, statusDownloadFailed, statusDeleteFailed,
-	)
+	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("sync: resetting failure for %s: %w", path, err)
+		return fmt.Errorf("sync: begin reset-failure tx for %s: %w", path, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// download_failed → pending_download
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE remote_state SET sync_status = ? WHERE path = ? AND sync_status = ?`,
+		statusPendingDownload, path, statusDownloadFailed,
+	); err != nil {
+		return fmt.Errorf("sync: resetting download failure for %s: %w", path, err)
 	}
 
-	// Also remove from sync_failures.
-	_, err = m.db.ExecContext(ctx,
-		`DELETE FROM sync_failures WHERE path = ?`, path)
-	if err != nil {
+	// delete_failed → pending_delete (not pending_download — the item
+	// should be re-attempted as a delete, not a download).
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE remote_state SET sync_status = ? WHERE path = ? AND sync_status = ?`,
+		statusPendingDelete, path, statusDeleteFailed,
+	); err != nil {
+		return fmt.Errorf("sync: resetting delete failure for %s: %w", path, err)
+	}
+
+	// Remove from sync_failures.
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM sync_failures WHERE path = ?`, path,
+	); err != nil {
 		return fmt.Errorf("sync: clearing sync failure for %s: %w", path, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sync: committing reset-failure for %s: %w", path, err)
 	}
 
 	return nil

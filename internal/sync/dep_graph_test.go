@@ -16,6 +16,7 @@ import (
 // Add — no dependencies
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10.5
 func TestDepGraph_Add_NoDeps(t *testing.T) {
 	t.Parallel()
 
@@ -34,6 +35,7 @@ func TestDepGraph_Add_NoDeps(t *testing.T) {
 // Add — with dependencies
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10.5
 func TestDepGraph_Add_WithDeps(t *testing.T) {
 	t.Parallel()
 
@@ -58,6 +60,7 @@ func TestDepGraph_Add_WithDeps(t *testing.T) {
 // Complete — returns dependents
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10.5
 func TestDepGraph_Complete_ReturnsDependents(t *testing.T) {
 	t.Parallel()
 
@@ -98,6 +101,7 @@ func TestDepGraph_Complete_ReturnsDependents(t *testing.T) {
 // Complete — deletes from actions map (D-10 fix)
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10.5
 func TestDepGraph_Complete_DeletesFromActions(t *testing.T) {
 	t.Parallel()
 
@@ -131,6 +135,7 @@ func TestDepGraph_Complete_DeletesFromActions(t *testing.T) {
 // Complete — unknown ID
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10.5
 func TestDepGraph_Complete_UnknownID(t *testing.T) {
 	t.Parallel()
 
@@ -148,6 +153,7 @@ func TestDepGraph_Complete_UnknownID(t *testing.T) {
 	assert.Nil(t, ready, "Complete with unknown ID should return nil ready list")
 }
 
+// Validates: R-2.10.5
 func TestDepGraph_Complete_UnknownID_NoPanic(t *testing.T) {
 	t.Parallel()
 
@@ -163,6 +169,7 @@ func TestDepGraph_Complete_UnknownID_NoPanic(t *testing.T) {
 // Complete — cleans byPath
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10.5
 func TestDepGraph_Complete_CleansByPath(t *testing.T) {
 	t.Parallel()
 
@@ -181,10 +188,41 @@ func TestDepGraph_Complete_CleansByPath(t *testing.T) {
 		"byPath should be cleaned after Complete")
 }
 
+// Validates: R-2.10.5
+func TestDepGraph_Complete_DoesNotDeleteReplacedByPath(t *testing.T) {
+	t.Parallel()
+
+	dg := NewDepGraph(testLogger(t))
+
+	// Add action 1 for pathA.
+	dg.Add(&Action{
+		Type: ActionDownload, Path: "pathA",
+		DriveID: driveid.New("d"), ItemID: "i1",
+	}, 1, nil)
+
+	// Cancel pathA (simulates supersede) and add action 2 for the same path.
+	dg.CancelByPath("pathA")
+	dg.Add(&Action{
+		Type: ActionDownload, Path: "pathA",
+		DriveID: driveid.New("d"), ItemID: "i2",
+	}, 2, nil)
+
+	// Complete the old action 1 — must NOT delete the new byPath entry.
+	_, ok := dg.Complete(1)
+	require.True(t, ok)
+
+	// Action 2 should still be in-flight.
+	assert.True(t, dg.HasInFlight("pathA"),
+		"completing old action must not delete replacement byPath entry")
+	assert.Equal(t, 1, dg.InFlightCount(),
+		"replacement action should still be tracked")
+}
+
 // ---------------------------------------------------------------------------
 // Concurrent Complete
 // ---------------------------------------------------------------------------
 
+// Validates: R-6.4
 func TestDepGraph_ConcurrentComplete(t *testing.T) {
 	t.Parallel()
 
@@ -226,6 +264,7 @@ func TestDepGraph_ConcurrentComplete(t *testing.T) {
 // Concurrent Add and Complete
 // ---------------------------------------------------------------------------
 
+// Validates: R-6.4
 func TestDepGraph_ConcurrentAddAndComplete(t *testing.T) {
 	t.Parallel()
 
@@ -278,6 +317,7 @@ func TestDepGraph_ConcurrentAddAndComplete(t *testing.T) {
 // HasInFlight
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10.5
 func TestDepGraph_HasInFlight(t *testing.T) {
 	t.Parallel()
 
@@ -302,6 +342,7 @@ func TestDepGraph_HasInFlight(t *testing.T) {
 // CancelByPath
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10.5
 func TestDepGraph_CancelByPath(t *testing.T) {
 	t.Parallel()
 
@@ -336,6 +377,7 @@ func TestDepGraph_CancelByPath(t *testing.T) {
 	}
 }
 
+// Validates: R-2.10.5
 func TestDepGraph_CancelByPath_CleansUp(t *testing.T) {
 	t.Parallel()
 
@@ -388,13 +430,14 @@ func TestDepGraph_CancelByPath_CleansUp(t *testing.T) {
 // SkipCompletedDeps — dependency not in actions map
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10.5
 func TestDepGraph_SkipCompletedDeps(t *testing.T) {
 	t.Parallel()
 
 	dg := NewDepGraph(testLogger(t))
 
 	// Action 2 depends on action 1, but action 1 is not in the graph
-	// (simulating it was already completed before tracker was populated).
+	// (simulating it was already completed before graph was populated).
 	ta := dg.Add(&Action{
 		Type: ActionDownload, Path: "orphan.txt",
 		DriveID: driveid.New("d"), ItemID: "i2",
@@ -409,6 +452,7 @@ func TestDepGraph_SkipCompletedDeps(t *testing.T) {
 // InFlightCount
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10.5
 func TestDepGraph_InFlightCount(t *testing.T) {
 	t.Parallel()
 
@@ -441,6 +485,7 @@ func TestDepGraph_InFlightCount(t *testing.T) {
 // Concurrent multi-add (race detector coverage)
 // ---------------------------------------------------------------------------
 
+// Validates: R-6.4
 func TestDepGraph_ConcurrentMultiAdd(t *testing.T) {
 	t.Parallel()
 
@@ -477,6 +522,7 @@ func TestDepGraph_ConcurrentMultiAdd(t *testing.T) {
 // Concurrent HasInFlight during Complete (race detector coverage)
 // ---------------------------------------------------------------------------
 
+// Validates: R-6.4
 func TestDepGraph_ConcurrentHasInFlightDuringComplete(t *testing.T) {
 	t.Parallel()
 
@@ -523,6 +569,7 @@ func TestDepGraph_ConcurrentHasInFlightDuringComplete(t *testing.T) {
 // Concurrent CancelByPath and Complete (race detector coverage)
 // ---------------------------------------------------------------------------
 
+// Validates: R-6.4
 func TestDepGraph_ConcurrentCancelAndComplete(t *testing.T) {
 	t.Parallel()
 
@@ -575,6 +622,7 @@ func TestDepGraph_ConcurrentCancelAndComplete(t *testing.T) {
 // D-10 regression: completed dep treated as satisfied for new action
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10.5
 func TestDepGraph_D10_CompletedDepSatisfiedForNewAction(t *testing.T) {
 	t.Parallel()
 
@@ -604,6 +652,7 @@ func TestDepGraph_D10_CompletedDepSatisfiedForNewAction(t *testing.T) {
 // WaitForEmpty
 // ---------------------------------------------------------------------------
 
+// Validates: R-6.8.9
 func TestDepGraph_WaitForEmpty_AlreadyEmpty(t *testing.T) {
 	t.Parallel()
 
@@ -619,6 +668,7 @@ func TestDepGraph_WaitForEmpty_AlreadyEmpty(t *testing.T) {
 	}
 }
 
+// Validates: R-6.8.9
 func TestDepGraph_WaitForEmpty_FiresAfterAllComplete(t *testing.T) {
 	t.Parallel()
 
@@ -660,6 +710,7 @@ func TestDepGraph_WaitForEmpty_FiresAfterAllComplete(t *testing.T) {
 	}
 }
 
+// Validates: R-6.8.9
 func TestDepGraph_WaitForEmpty_WithDependencies(t *testing.T) {
 	t.Parallel()
 
@@ -700,6 +751,7 @@ func TestDepGraph_WaitForEmpty_WithDependencies(t *testing.T) {
 	}
 }
 
+// Validates: R-6.4, R-6.8.9
 func TestDepGraph_WaitForEmpty_Concurrent(t *testing.T) {
 	t.Parallel()
 
@@ -735,6 +787,7 @@ func TestDepGraph_WaitForEmpty_Concurrent(t *testing.T) {
 	}
 }
 
+// Validates: R-6.8.9
 func TestDepGraph_WaitForEmpty_Reusable(t *testing.T) {
 	t.Parallel()
 
