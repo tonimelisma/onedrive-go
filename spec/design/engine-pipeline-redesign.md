@@ -296,20 +296,24 @@ func (e *Engine) resolveSafetyConfig(force bool) *SafetyConfig {
 
 All phases in this document execute AFTER tracker-redesign.md Phases 1-5. The complete roadmap across both documents is in section 4.
 
-### Phase 8: Extract watchState
+### ~~Phase 8: Extract watchState~~ [done]
 
-1. Create `watchState` struct with all watch-only fields
-2. Add `watch *watchState` field to Engine
-3. Move watch-only fields from Engine to watchState
-4. Replace all nil guards (`e.scopeState != nil`, `e.retrier != nil`, etc.) with `e.watch != nil`
-5. Move `buf` from Engine field (tracker-redesign Phase 4 item 2) to `e.watch.buf`
-6. Move `trialPending` from Engine to `e.watch.trialPending`
-7. Move `setWatchShortcuts`/`getWatchShortcuts` to watchState methods
-8. Update all engine_test.go helpers
+Bundled 15 watch-mode-only fields into a `watchState` struct. `e.watch != nil`
+replaces 22 scattered nil guards across `engine.go`, `engine_shortcuts.go`,
+and `permissions.go`.
 
-7. Note: `admitAndDispatch` is watch-only (accesses `e.watch.scopeGate`, `e.watch.trialPending`). One-shot mode's `executePlan` has its own dispatch path that sends directly to readyCh — no scope gate, no trial interception, no watchState access.
+**Deviation**: `watchShortcuts`/`watchShortcutsMu` remain on Engine (not
+watchState) because `setWatchShortcuts` is called from `RunOnce` (one-shot)
+where `e.watch == nil`. Moving them would break 403 handling in one-shot mode.
 
-**Code**: `engine.go` (field reorganization, nil guard replacement), `engine_shortcuts.go` (shortcut access), `engine_test.go`
+**Fields on watchState**: scopeGate, scopeState, buf, deleteCounter,
+lastDataVersion, trialPending, trialTimer, trialMu, retryTimer, retryTimerCh,
+remoteObs, localObs, nextActionID, lastPermRecheck, lastSummaryTotal.
+
+**Fields remaining on Engine**: depGraph, readyCh, trialCh, watchShortcuts,
+watchShortcutsMu.
+
+**Code**: `engine.go`, `engine_shortcuts.go`, `permissions.go`, `engine_test.go`, `engine_phase4_test.go`, `permissions_test.go`
 **Design docs**: `sync-engine.md` (Engine struct documentation)
 **Requirements**: None
 
@@ -360,7 +364,7 @@ This is the authoritative execution order. Each increment is a PR that leaves th
 | **5. Delete Old Code** | tracker-redesign Phase 5 | Remove tracker.go, FailureRetrier, synthesizeFailureEvent | `tracker.go` (deleted), `tracker_test.go` (deleted), `reconciler.go`, `reconciler_test.go` | None | None |
 | **6. Shortcut Enrichment** [done] | tracker-redesign Phase 6 | Populate `targetShortcutKey` and `targetDriveID` in planner | `types.go`, `planner.go`, `item_converter.go`, tests | `sync-execution.md` | R-6.8.12, R-6.8.13 |
 | **7. sync_failures Ownership** [done] | tracker-redesign Phase 7 | Engine owns failure lifecycle, store owns baseline | `store_baseline.go`, `engine.go` | `sync-engine.md` | None |
-| **8. Extract watchState** | pipeline-redesign Phase 8 | Bundle watch-only fields, 1 nil guard replaces 15 | `engine.go`, `engine_shortcuts.go`, `engine_test.go` | `sync-engine.md` | None |
+| **8. Extract watchState** [done] | pipeline-redesign Phase 8 | Bundle 15 watch-only fields into `watchState`, `e.watch != nil` replaces 22 guards | `engine.go`, `engine_shortcuts.go`, `permissions.go`, tests | `sync-engine.md` | None |
 | **9. Unified Bootstrap** | pipeline-redesign Phase 9 | `bootstrapSync` replaces `RunOnce` in `RunWatch`, `WaitForEmpty` | `engine.go`, `dep_graph.go`, `dep_graph_test.go` | `sync-engine.md` | None |
 | **10. Async Reconciliation** | pipeline-redesign Phase 10 | Non-blocking reconciliation goroutine | `engine.go`, `engine_test.go` | `sync-engine.md` | None |
 | **11. Safety Config** [done] | pipeline-redesign Phase 11 | Merge two methods into one | `engine.go` | None | None |

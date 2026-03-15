@@ -13,6 +13,28 @@ Wires the sync pipeline: observers → buffer → planner → executor → SyncS
 
 Watch mode uses a unified tick loop: filesystem events are debounced by the change buffer, remote changes are polled at `poll_interval` (default 5 minutes). Periodic full reconciliation runs every 24 hours to detect missed delta deletions.
 
+### watchState (Engine Pipeline Redesign Phase 8)
+
+`watchState` bundles all watch-mode-only Engine fields. `e.watch` is nil in
+one-shot mode (`RunOnce`), non-nil in watch mode (`RunWatch`). Methods use
+`e.watch != nil` as a single guard replacing individual field nil-checks.
+
+Fields on watchState: scopeGate, scopeState, buf, deleteCounter,
+lastDataVersion, trialPending, trialTimer, trialMu, retryTimer,
+retryTimerCh, remoteObs, localObs, nextActionID, lastPermRecheck,
+lastSummaryTotal.
+
+Fields remaining on Engine (used in both modes): depGraph, readyCh,
+trialCh, watchShortcuts, watchShortcutsMu. `watchShortcuts` stays on Engine
+because `setWatchShortcuts` is called from `RunOnce` where `e.watch == nil`;
+moving it would break 403 handling in one-shot mode.
+
+`deleteCounter` requires a double guard (`e.watch != nil &&
+e.watch.deleteCounter != nil`) because watch mode with `force=true` skips
+delete counter creation. `retryTimer` requires a specific nil check
+(`e.watch.retryTimer != nil`) because it is lazily created via
+`time.AfterFunc`.
+
 ### Error Classification (`classifyResult()`)
 
 Implements: R-6.8.9 [verified], R-6.8.15 [verified], R-6.7.27 [verified]
