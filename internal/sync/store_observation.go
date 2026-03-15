@@ -36,6 +36,16 @@ const (
 		path = ?, parent_id = ?, item_type = ?, hash = ?, size = ?, mtime = ?, etag = ?,
 		previous_path = ?, sync_status = ?, observed_at = ?
 		WHERE drive_id = ? AND item_id = ?`
+
+	// sqlGetRemoteStateByPath uses the idx_remote_state_active_path unique
+	// partial index (excludes deleted/pending_delete rows). Retrier and
+	// isFailureResolved use this to look up the current remote state for a
+	// path without knowing the item_id.
+	sqlGetRemoteStateByPath = `SELECT drive_id, item_id, path, parent_id, item_type,
+		hash, size, mtime, etag, previous_path, sync_status, observed_at
+		FROM remote_state
+		WHERE path = ? AND drive_id = ?
+		AND sync_status NOT IN ('deleted', 'pending_delete')`
 )
 
 // CommitObservation atomically persists observed remote state and advances the
@@ -152,6 +162,55 @@ func (m *SyncStore) scanRemoteStateRow(ctx context.Context, tx *sql.Tx, driveID,
 	}
 
 	return &row
+}
+
+// GetRemoteStateByPath looks up the active remote_state row for a path+drive
+// combination. Uses the idx_remote_state_active_path partial index, which
+// excludes deleted/pending_delete rows. Returns (nil, nil) when no active
+// row exists — the caller must check for nil.
+//
+// Used by:
+//   - isFailureResolved: to detect whether a download failure's underlying
+//     remote state has been resolved (synced/deleted/filtered).
+//   - createEventFromDB: to build full-fidelity ChangeEvents for the retrier.
+func (m *SyncStore) GetRemoteStateByPath(ctx context.Context, path string, driveID driveid.ID) (*RemoteStateRow, error) {
+	var (
+		row      RemoteStateRow
+		parentID sql.NullString
+		hash     sql.NullString
+		size     sql.NullInt64
+		mtime    sql.NullInt64
+		etag     sql.NullString
+		prevPath sql.NullString
+	)
+
+	err := m.db.QueryRowContext(ctx, sqlGetRemoteStateByPath, path, driveID.String()).Scan(
+		&row.DriveID, &row.ItemID, &row.Path, &parentID, &row.ItemType,
+		&hash, &size, &mtime, &etag,
+		&prevPath, &row.SyncStatus, &row.ObservedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+
+		return nil, fmt.Errorf("sync: GetRemoteStateByPath %s: %w", path, err)
+	}
+
+	row.ParentID = parentID.String
+	row.Hash = hash.String
+	row.ETag = etag.String
+	row.PreviousPath = prevPath.String
+
+	if size.Valid {
+		row.Size = size.Int64
+	}
+
+	if mtime.Valid {
+		row.Mtime = mtime.Int64
+	}
+
+	return &row, nil
 }
 
 // insertRemoteState inserts a new remote_state row for a newly observed item.

@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	stdsync "sync"
@@ -1364,8 +1365,7 @@ func (e *Engine) feedScopeDetection(r *WorkerResult) {
 	}
 }
 
-// setScopeBlock writes a scope block to the ScopeGate (preferred) or legacy
-// tracker. Dual-path during migration — removed when tracker is deleted.
+// setScopeBlock writes a scope block to the ScopeGate.
 func (e *Engine) setScopeBlock(key ScopeKey, block *ScopeBlock) {
 	if e.scopeGate == nil {
 		return
@@ -1912,13 +1912,27 @@ func (e *Engine) runTrialDispatch(ctx context.Context) {
 		}
 		e.trialMu.Unlock()
 
-		// Synthesize an event to re-observe the item. The buffer → planner
-		// pipeline will produce a fresh action, which admitAndDispatch
-		// intercepts via the trialPending map.
-		ev := synthesizeFailureEvent(row)
+		// Re-observe the item with a real API call / FS access to confirm
+		// whether the scope condition has cleared. Unlike the retrier (which
+		// uses cached DB state), trials hit the live source of truth.
+		ev := e.reobserve(ctx, row)
+		if ev == nil {
+			// Scope condition persists — extend the trial interval and
+			// re-arm so the next trial fires later.
+			e.extendTrialInterval(key, 0)
+			e.armTrialTimer()
+
+			continue
+		}
+
 		if e.buf != nil {
 			e.buf.Add(ev)
 		}
+
+		// Advance NextTrialAt so the same scope isn't picked again in this
+		// iteration. The trial result handler will either clear the scope
+		// (on success) or extend the interval further (on failure).
+		e.extendTrialInterval(key, 0)
 
 		e.logger.Debug("trial dispatched",
 			slog.String("scope_key", key.String()),
@@ -1973,8 +1987,20 @@ func (e *Engine) runRetrierSweep(ctx context.Context) {
 			continue
 		}
 
-		// Synthesize event and inject into the buffer → planner pipeline.
-		ev := synthesizeFailureEvent(row)
+		// D-11: skip stale failures whose underlying condition has resolved
+		// through the normal pipeline (e.g., delta poll downloaded the file,
+		// local file was deleted). Clears the sync_failure from DB.
+		if e.isFailureResolved(ctx, row) {
+			continue
+		}
+
+		// D-9: build a full-fidelity event from DB state (remote_state for
+		// downloads, local FS for uploads) instead of sparse synthesized events.
+		ev := e.createEventFromDB(ctx, row)
+		if ev == nil {
+			continue
+		}
+
 		if e.buf != nil {
 			e.buf.Add(ev)
 		}
@@ -1992,36 +2018,291 @@ func (e *Engine) runRetrierSweep(ctx context.Context) {
 	e.armRetryTimer()
 }
 
-// synthesizeFailureEvent creates a ChangeEvent from a sync_failures row.
-// Upload failures become SourceLocal ChangeModify events; download failures
-// become SourceRemote ChangeModify; delete failures become SourceRemote
-// ChangeDelete. Shared between runRetrierSweep and runTrialDispatch.
-func synthesizeFailureEvent(row *SyncFailureRow) *ChangeEvent {
+// remoteStateToChangeEvent converts a RemoteStateRow into a full-fidelity
+// ChangeEvent. Pure function — no I/O. Used by createEventFromDB for
+// download/delete failures where the DB-cached remote_state provides all
+// fields the planner needs (D-9 fix).
+func remoteStateToChangeEvent(rs *RemoteStateRow, path string) *ChangeEvent {
+	// Determine change type from sync_status: delete-family statuses
+	// become ChangeDelete, everything else becomes ChangeModify.
+	ct := ChangeModify
+	isDeleted := false
+
+	switch rs.SyncStatus {
+	case statusDeleted, statusDeleting, statusDeleteFailed, statusPendingDelete:
+		ct = ChangeDelete
+		isDeleted = true
+	}
+
+	// Parse item type from the database string; default to file on error
+	// (defensive — the DB value should always be valid).
+	it, err := ParseItemType(rs.ItemType)
+	if err != nil {
+		it = ItemTypeFile
+	}
+
+	return &ChangeEvent{
+		Source:    SourceRemote,
+		Type:      ct,
+		Path:      path,
+		ItemID:    rs.ItemID,
+		ParentID:  rs.ParentID,
+		DriveID:   rs.DriveID,
+		ItemType:  it,
+		Name:      filepath.Base(path),
+		Size:      rs.Size,
+		Hash:      rs.Hash,
+		Mtime:     rs.Mtime,
+		ETag:      rs.ETag,
+		IsDeleted: isDeleted,
+	}
+}
+
+// observeLocalFile stats and hashes a local file, returning a ChangeEvent.
+// File gone → ChangeDelete. Transient FS error → nil. Used by both
+// createEventFromDB and reobserve to avoid duplicating the upload path.
+func (e *Engine) observeLocalFile(path, caller string) *ChangeEvent {
+	absPath := filepath.Join(e.syncRoot, path)
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return &ChangeEvent{
+				Source:    SourceLocal,
+				Type:      ChangeDelete,
+				Path:      path,
+				Name:      filepath.Base(path),
+				ItemType:  ItemTypeFile,
+				IsDeleted: true,
+			}
+		}
+
+		e.logger.Debug(caller+": stat failed",
+			slog.String("path", path),
+			slog.String("error", err.Error()),
+		)
+
+		return nil
+	}
+
+	it := ItemTypeFile
+	if info.IsDir() {
+		it = ItemTypeFolder
+	}
+
+	var hash string
+	if it == ItemTypeFile {
+		hash, err = computeStableHash(absPath)
+		if err != nil {
+			e.logger.Debug(caller+": hash failed",
+				slog.String("path", path),
+				slog.String("error", err.Error()),
+			)
+
+			return nil
+		}
+	}
+
+	return &ChangeEvent{
+		Source:   SourceLocal,
+		Type:     ChangeModify,
+		Path:     path,
+		Name:     filepath.Base(path),
+		ItemType: it,
+		Size:     info.Size(),
+		Hash:     hash,
+		Mtime:    info.ModTime().UnixNano(),
+	}
+}
+
+// createEventFromDB builds a full-fidelity ChangeEvent from database state
+// and the local filesystem. Direction-based dispatch:
+//   - Upload: stat + hash the local file. File gone → ChangeDelete. Error → nil.
+//   - Download/Delete: query remote_state from DB. Nil → nil (resolved).
+//     Otherwise remoteStateToChangeEvent.
+//
+// No API calls — uploads use the local FS; downloads use DB-cached
+// remote_state (kept fresh by delta polls). Fixes D-9: the planner receives
+// complete PathViews with hash, size, mtime, etag, and name.
+func (e *Engine) createEventFromDB(ctx context.Context, row *SyncFailureRow) *ChangeEvent {
 	switch row.Direction {
 	case strUpload:
-		return &ChangeEvent{
-			Source: SourceLocal,
-			Type:   ChangeModify,
-			Path:   row.Path,
+		return e.observeLocalFile(row.Path, "createEventFromDB")
+
+	default: // "download" or "delete"
+		rs, err := e.baseline.GetRemoteStateByPath(ctx, row.Path, row.DriveID)
+		if err != nil {
+			e.logger.Debug("createEventFromDB: remote state lookup failed",
+				slog.String("path", row.Path),
+				slog.String("error", err.Error()),
+			)
+
+			return nil
 		}
+
+		if rs == nil {
+			// No active remote_state → item was resolved through the normal
+			// pipeline (delta poll downloaded it, or it was deleted remotely).
+			return nil
+		}
+
+		return remoteStateToChangeEvent(rs, row.Path)
+	}
+}
+
+// isFailureResolved checks whether a sync_failure's underlying condition has
+// been resolved through the normal pipeline, making the failure stale. When
+// resolved, the failure is cleared from the database. Fixes D-11: prevents
+// the retrier from re-injecting events for items that no longer need action.
+//
+// Resolution conditions by direction:
+//   - Download: remote_state is nil (deleted) OR sync_status is synced/deleted/filtered.
+//   - Upload: local file no longer exists (os.ErrNotExist).
+//   - Delete: no baseline entry exists for the path (already cleaned up).
+func (e *Engine) isFailureResolved(ctx context.Context, row *SyncFailureRow) bool {
+	var resolved bool
+
+	switch row.Direction {
+	case strDownload:
+		rs, err := e.baseline.GetRemoteStateByPath(ctx, row.Path, row.DriveID)
+		if err != nil {
+			// DB error — can't determine resolution, treat as unresolved.
+			return false
+		}
+
+		// No active row means the item was deleted or never existed.
+		if rs == nil {
+			resolved = true
+		} else {
+			switch rs.SyncStatus {
+			case statusSynced, statusDeleted, statusFiltered:
+				resolved = true
+			}
+		}
+
+	case strUpload:
+		absPath := filepath.Join(e.syncRoot, row.Path)
+
+		_, err := os.Stat(absPath)
+		if errors.Is(err, os.ErrNotExist) {
+			resolved = true
+		}
+
 	case strDelete:
+		// Load baseline to check if the entry still exists.
+		bl, err := e.baseline.Load(ctx)
+		if err != nil {
+			return false
+		}
+
+		_, exists := bl.GetByPath(row.Path)
+		if !exists {
+			resolved = true
+		}
+	}
+
+	if resolved {
+		if err := e.baseline.ClearSyncFailure(ctx, row.Path, row.DriveID); err != nil {
+			e.logger.Debug("isFailureResolved: failed to clear resolved failure",
+				slog.String("path", row.Path),
+				slog.String("error", err.Error()),
+			)
+		}
+	}
+
+	return resolved
+}
+
+// reobserve makes a real API call or filesystem access to re-observe an item
+// for trial dispatch. Unlike createEventFromDB (which reads cached DB state),
+// reobserve hits the live source of truth to confirm whether a scope condition
+// has actually cleared.
+//
+// Direction-based dispatch:
+//   - Download/Delete: GetItem API call. 200 → full ChangeEvent. 404 → ChangeDelete.
+//     429/507/5xx → nil (scope still blocked).
+//   - Upload: stat + hash local file. Exists → full ChangeEvent. Gone → ChangeDelete.
+//     Error → nil.
+//
+// Returns nil when the scope condition persists — caller extends the trial interval.
+func (e *Engine) reobserve(ctx context.Context, row *SyncFailureRow) *ChangeEvent {
+	switch row.Direction {
+	case strUpload:
+		return e.observeLocalFile(row.Path, "reobserve")
+
+	default: // "download" or "delete"
+		item, err := e.execCfg.items.GetItem(ctx, row.DriveID, row.ItemID)
+		if err != nil {
+			// Classify the error to determine whether the scope is still blocked
+			// or the item is truly gone.
+			var ge *graph.GraphError
+			if errors.As(err, &ge) {
+				if errors.Is(ge.Err, graph.ErrNotFound) {
+					// Item was deleted remotely — return a delete event.
+					return &ChangeEvent{
+						Source:    SourceRemote,
+						Type:      ChangeDelete,
+						Path:      row.Path,
+						ItemID:    row.ItemID,
+						DriveID:   row.DriveID,
+						ItemType:  ItemTypeFile,
+						Name:      filepath.Base(row.Path),
+						IsDeleted: true,
+					}
+				}
+
+				// 429, 507, 5xx — scope condition persists; return nil so the
+				// caller extends the trial interval.
+				if errors.Is(ge.Err, graph.ErrThrottled) || errors.Is(ge.Err, graph.ErrServerError) ||
+					ge.StatusCode == http.StatusInsufficientStorage {
+					e.logger.Debug("reobserve: scope condition persists",
+						slog.String("path", row.Path),
+						slog.Int("status", ge.StatusCode),
+					)
+
+					return nil
+				}
+			}
+
+			// Unexpected error — log and return nil (skip this trial).
+			e.logger.Debug("reobserve: GetItem failed",
+				slog.String("path", row.Path),
+				slog.String("error", err.Error()),
+			)
+
+			return nil
+		}
+
+		// 200 — build a full ChangeEvent from the live API response.
+		it := ItemTypeFile
+		if item.IsFolder {
+			it = ItemTypeFolder
+		} else if item.IsRoot {
+			it = ItemTypeRoot
+		}
+
+		ct := ChangeModify
+		isDeleted := false
+
+		if item.IsDeleted {
+			ct = ChangeDelete
+			isDeleted = true
+		}
+
 		return &ChangeEvent{
 			Source:    SourceRemote,
-			Type:      ChangeDelete,
+			Type:      ct,
 			Path:      row.Path,
-			ItemID:    row.ItemID,
-			DriveID:   row.DriveID,
-			ItemType:  ItemTypeFile,
-			IsDeleted: true,
-		}
-	default: // "download"
-		return &ChangeEvent{
-			Source:   SourceRemote,
-			Type:     ChangeModify,
-			Path:     row.Path,
-			ItemID:   row.ItemID,
-			DriveID:  row.DriveID,
-			ItemType: ItemTypeFile,
+			ItemID:    item.ID,
+			ParentID:  item.ParentID,
+			DriveID:   item.DriveID,
+			ItemType:  it,
+			Name:      item.Name,
+			Size:      item.Size,
+			Hash:      item.QuickXorHash,
+			Mtime:     item.ModifiedAt.UnixNano(),
+			ETag:      item.ETag,
+			IsDeleted: isDeleted,
 		}
 	}
 }

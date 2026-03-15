@@ -833,9 +833,9 @@ Independent. Can be done first (see ordering note above).
 
 1. Replace `tracker *DepTracker` with `depGraph *DepGraph`, `scopeGate *ScopeGate`, `readyCh chan *TrackedAction`
 2. Promote `buf` from local variable to engine field (currently local in `initWatchPipeline`, engine.go:1012; retrier in drain loop needs `e.buf.Add`)
-3. Create `reobserve`, `observeLocal`, `observeRemote` (trial use only)
-4. Create `createEventFromDB`, `remoteStateToChangeEvent` (retrier use)
-5. Create `isFailureResolved` (stale sync_failure detection — D-11)
+3. Create `reobserve`, `observeLocalFile` (trial + retrier shared helper) — `reobserve` for trials (live API for downloads, `observeLocalFile` for uploads); no separate `observeRemote` (GetItem call inlined in `reobserve`)
+4. Create `createEventFromDB`, `remoteStateToChangeEvent` (retrier use), `GetRemoteStateByPath` (store method)
+5. Create `isFailureResolved` (stale sync_failure detection — D-11). Buffer path cap removed (OS is natural limit).
 6. Create `admitAndDispatch` (main goroutine, watch-only — accesses `trialPending` and `scopeGate` via `e.watch`) and `admitReady` (drain goroutine — also accesses `trialPending` via `e.watch`). `trialPending` is mutex-protected (`trialMu`) — both goroutines access it safely. One-shot mode uses a direct readyCh send in `executePlan` (no `admitAndDispatch`, no scope gate).
 7. Create `cascadeRecordAndComplete`, `recordScopeBlockedFailure`, `recordCascadeFailure`
 8. Create `onScopeClear` — `ClearScopeBlock` + `SetScopeRetryAtNow` + `armRetryTimer` (no inline re-observation)
@@ -888,7 +888,7 @@ Independent. Can be done first (see ordering note above).
 | D-6: Dual sync_failures clearing | 7 | Engine owns failure lifecycle. Store owns baseline commits. No overlap. |
 | D-7: Stale held actions dispatched | 3, 4 | No held queue. Blocked actions → sync_failures + Complete. Scope clear → retrier re-processes from DB state. |
 | D-8: Held queue lost on crash | 3 | No held queue. sync_failures are persistent. Scope blocks are persisted in `scope_blocks` table. |
-| D-9: Sparse fake events in retrier | 4 | `synthesizeFailureEvent` replaced by `createEventFromDB` (full remote_state for downloads, `observeLocal` for uploads). |
+| D-9: Sparse fake events in retrier | 4 | `synthesizeFailureEvent` replaced by `createEventFromDB` (full remote_state for downloads, `observeLocalFile` for uploads). Trial dispatch uses `reobserve` (live API calls for downloads, `observeLocalFile` for uploads). |
 | D-10: `Complete` doesn't delete from `dt.actions` | 2 | `DepGraph.Complete` deletes from `actions` map after copying dependents. Prerequisite for scope-blocked immediate completion. |
 | D-11: Orphaned sync_failures | 4 | `isFailureResolved` check in retrier sweep: verifies item still needs action before re-injecting. Clears resolved sync_failures. |
 

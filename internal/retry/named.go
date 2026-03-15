@@ -39,10 +39,10 @@ var WatchLocal = Policy{ //nolint:gochecknoglobals // named policy singleton
 }
 
 // Reconcile is the single retry curve for all sync failures (sync_failures table + drain-loop retrier).
-// Infinite attempts (reconciler runs until success or the failure becomes actionable).
+// Infinite attempts (drain-loop retrier runs until success or the failure becomes actionable).
 // Curve: 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s, 256s, 512s, 1024s, 2048s, 3600s cap.
 var Reconcile = Policy{ //nolint:gochecknoglobals // named policy singleton
-	MaxAttempts: 0, // infinite — reconciler retries until success or actionable
+	MaxAttempts: 0, // infinite — drain-loop retrier retries until success or actionable
 	Base:        1 * time.Second,
 	Max:         time.Hour,
 	Multiplier:  2.0,  //nolint:mnd // standard exponential factor
