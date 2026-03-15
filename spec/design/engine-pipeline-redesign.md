@@ -335,14 +335,18 @@ watchShortcutsMu.
 **Design docs**: `sync-engine.md` (RunWatch behavior, unified bootstrap section)
 **Requirements**: None
 
-### Phase 10: Async Reconciliation
+### ~~Phase 10: Async Reconciliation~~ [done]
 
-1. Replace `runFullReconciliation` with `runFullReconciliationAsync`
-2. Add `reconcileRunning atomic.Bool` to `watchState`
-3. Update `runWatchLoop` select case
+1. ~~Replace `runFullReconciliation` with `runFullReconciliationAsync`~~
+2. ~~Add `reconcileRunning atomic.Bool` to `watchState`~~
+3. ~~Update `runWatchLoop` select case~~
 
-**Code**: `engine.go` (reconciliation methods, watch loop), `engine_test.go` (non-blocking test)
-**Design docs**: `sync-engine.md` (reconciliation behavior)
+Also removed `bootstrapTimeout` (30-minute absolute timer) from `waitForQuiescence` — it was defensive against a non-existent bug and actively broke large initial syncs.
+
+**Deviation**: Design doc §2.3 line 240 used `e.watch.setShortcuts(refreshed)` — the actual method is `e.setWatchShortcuts(refreshed)` because `watchShortcuts` lives on Engine (see Phase 8 deviation). Implementation uses the correct method.
+
+**Code**: `engine.go` (reconciliation methods, watch loop, timeout removal), `engine_test.go` (5 async tests)
+**Design docs**: `sync-engine.md` (async reconciliation section, waitForQuiescence update)
 **Requirements**: None
 
 ### ~~Phase 11: Safety Config Unification~~ [done]
@@ -371,7 +375,7 @@ This is the authoritative execution order. Each increment is a PR that leaves th
 | **7. sync_failures Ownership** [done] | tracker-redesign Phase 7 | Engine owns failure lifecycle, store owns baseline | `store_baseline.go`, `engine.go` | `sync-engine.md` | None |
 | **8. Extract watchState** [done] | pipeline-redesign Phase 8 | Bundle 15 watch-only fields into `watchState`, `e.watch != nil` replaces 22 guards | `engine.go`, `engine_shortcuts.go`, `permissions.go`, tests | `sync-engine.md` | None |
 | **9. Unified Bootstrap** [done] | pipeline-redesign Phase 9 | `bootstrapSync` replaces `RunOnce` in `RunWatch`, `WaitForEmpty` | `engine.go`, `dep_graph.go`, `dep_graph_test.go` | `sync-engine.md` | None |
-| **10. Async Reconciliation** | pipeline-redesign Phase 10 | Non-blocking reconciliation goroutine | `engine.go`, `engine_test.go` | `sync-engine.md` | None |
+| **10. Async Reconciliation** [done] | pipeline-redesign Phase 10 | Non-blocking reconciliation goroutine + bootstrap timeout removal | `engine.go`, `engine_test.go` | `sync-engine.md` | None |
 | **11. Safety Config** [done] | pipeline-redesign Phase 11 | Merge two methods into one | `engine.go` | None | None |
 
 **Parallelization**: Increments 1-5 (tracker redesign) are strictly sequential — each builds on the previous. Increments 6, 7 (tracker cleanup) can run in parallel with each other but require increment 5 to be complete. Increments 8-11 (pipeline redesign) are strictly sequential and require increment 5 to be complete. Increments 6-7 can run in parallel with increments 8-11 since they touch different files. Phase 8 (watchState) is sequenced after Phase 5 to minimize merge conflicts in engine.go, not because of a hard dependency — watchState extraction is a mechanical rename that could be done on the current codebase.
