@@ -70,7 +70,6 @@ func defaultSafetyConfig() SafetyConfig {
 	return SafetyConfig{
 		BigDeleteThreshold:  defaultBigDeleteThreshold,
 		MinFreeSpace:        defaultMinFreeSpace,
-		UseRecycleBin:       true,
 		UseLocalTrash:       defaultUseLocalTrash(),
 		SyncDirPermissions:  defaultSyncDirPermissions,
 		SyncFilePermissions: defaultSyncFilePermissions,

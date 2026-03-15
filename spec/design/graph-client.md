@@ -81,4 +81,4 @@ Transparent token refresh on 401 inside `doOnce()`, independent of retry transpo
 - Test that captures log output and verifies no tokens or pre-auth URLs appear. [planned]
 - Evaluate unexporting `graph.Client.Do`/`DoWithHeaders` if unused outside the package. [planned]
 - Monitor `search(q='*')` reliability on business accounts for shared item discovery. [planned]
-- The `PermanentDeleteItem` 405→`DeleteItem` fallback for Personal accounts is a workaround. Remove when MS adds Personal support. [planned]
+- `PermanentDeleteItem` 405→`DeleteItem` fallback for Personal accounts is a workaround. Remove when MS adds Personal support.
